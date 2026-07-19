@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-19**
+> Última actualización: **2026-07-19** (repo GitHub creado)
 
 ## Qué es el proyecto
 
@@ -20,7 +20,7 @@ Requerimientos de Producto (CPO): `~/Downloads/QUIVOcontrol.md` (RF-01..84, RNF,
 | Deliberación council | ✅ Sesión `council-20260719-083140` (Claude + Gemini, chairman synthesis, confianza media) |
 | Plan maestro | ✅ `docs/plan-maestro.md` |
 | Documento técnico CTO | ✅ `docs/documento-tecnico-cto.md` (responde las 18 preguntas del CPO) |
-| Repo / monorepo | ❌ **NO creado** — no hay código todavía |
+| Repo / monorepo | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — solo docs; scaffold pnpm+Turborepo = QUI-211 |
 | Fase 0 | ⏸ En espera de instrucciones del usuario para arrancar |
 | Linear MCP | ✅ Conectado y autenticado (OAuth completado 2026-07-19) |
 | Preguntas de Producto (5) | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo |
@@ -89,7 +89,7 @@ Detalle completo en `docs/documento-tecnico-cto.md` §15.
 ## Próximos pasos
 
 1. Devs arrancan Sprint 1 el lunes 2026-07-20 con el board de Linear (cycle 12).
-2. Al arrancar Fase 0: crear monorepo `quivo-control` (pnpm + Turborepo), copiar `plan-maestro.md` al repo como `docs/plan-stack-quivo.md`, git flow (rama → PR → CI → merge, **sin atribución de IA** en commits/PRs).
+2. Repo GitHub ✅ creado: `Quivo-enterprise/quivo-control` (privado, un solo monorepo — NO repos backend/frontend separados). Commit inicial solo docs en `main` (bootstrap); desde ahora git flow estricto: rama por issue → PR → CI → merge, **sin atribución de IA** en commits/PRs. Scaffold pnpm+Turborepo = QUI-211 (comentario con URL dejado en el issue).
 3. Spike GPS Transistorsoft (QUI-216) en paralelo desde día 1 — gate go/no-go del stack móvil; comprar licencia Transistorsoft (~US$400).
 4. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (viernes), refinement de M1 durante cycle 13.
 
