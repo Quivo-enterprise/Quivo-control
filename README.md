@@ -20,9 +20,9 @@ quivo-control/
 └── docs/                 handoff, plan maestro, documento técnico
 ```
 
-> Scaffold creado (QUI-211). `apps/api`, `apps/web` y `apps/mobile` son placeholders
-> mínimos hasta que se implementen QUI-214 (esqueleto NestJS), M1/QUI-227 (Next.js) y
-> QUI-216 (spike GPS Expo) respectivamente. `packages/db` (Prisma) llega en QUI-217.
+> Scaffold creado (QUI-211). `apps/api` tiene el esqueleto NestJS real (QUI-214) y
+> `apps/mobile` el arnés del spike GPS (QUI-216) — ver `docs/spike-gps.md`. `apps/web`
+> sigue siendo placeholder hasta M1/QUI-227 (Next.js). `packages/db` (Prisma) llega en QUI-217.
 
 ## Desarrollo
 
@@ -46,5 +46,5 @@ pnpm test           # turbo run test
 
 ## Gestión
 
-- **Linear:** [QUIVO Control — MVP](https://linear.app/quivo-tech/project/quivo-control-mvp-1d41fa072abf) — 6 milestones (M0–M5), cycles semanales, Sprint 1: 2026-07-20 → 2026-08-02.
+- **Linear:** [QUIVO Control — MVP](https://linear.app/quivo-tech/project/quivo-control-mvp-1d41fa072abf) — 6 milestones (M0–M5), cycles de 2 semanas, Sprint 1 = Cycle 12: 2026-07-20 → 2026-08-03.
 - **Flujo git:** rama por issue → PR → CI → merge a `main`. Nunca commit directo a `main`.
