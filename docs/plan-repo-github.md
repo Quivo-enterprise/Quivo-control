@@ -6,6 +6,7 @@ Linear ya montado (proyecto MVP, 43 issues, Sprint 1 arranca 2026-07-20). Falta 
 Usuario pide crearlo en la org "quivo tech department" y pregunta si uno o dos (backend/frontend).
 
 **Recon hecho:**
+
 - No hay MCP de GitHub en la sesión; **`gh` CLI autenticado** (JoseluisLarrazabal, scope `repo`) — se usa eso.
 - Org: **`Quivo-enterprise`** (display name "Quivo Tech Department"). Repos existentes:
   Quivo-backend, Quivo-frontend, Quivo-landing-page, Quivo-landing-page-backend-temporal, Quivo-UI-UX (proyecto ERP, no chocan).

@@ -20,14 +20,28 @@ quivo-control/
 └── docs/                 handoff, plan maestro, documento técnico
 ```
 
-> El scaffold de `apps/` y `packages/` se crea en el Sprint 1 (issue QUI-211).
+> Scaffold creado (QUI-211). `apps/api`, `apps/web` y `apps/mobile` son placeholders
+> mínimos hasta que se implementen QUI-214 (esqueleto NestJS), M1/QUI-227 (Next.js) y
+> QUI-216 (spike GPS Expo) respectivamente. `packages/db` (Prisma) llega en QUI-217.
+
+## Desarrollo
+
+Requisitos: Node 22.x (ver `.nvmrc`), pnpm 11.x, Docker (para Postgres+PostGIS y Redis locales).
+
+```bash
+pnpm install        # instala los 5 workspaces
+pnpm build          # turbo run build
+pnpm lint           # turbo run lint
+pnpm typecheck      # turbo run typecheck
+pnpm test           # turbo run test
+```
 
 ## Documentación
 
-| Doc | Contenido |
-|---|---|
-| [`docs/handoff.md`](docs/handoff.md) | Estado vivo del proyecto: qué hay, decisiones, próximos pasos |
-| [`docs/plan-maestro.md`](docs/plan-maestro.md) | Stack aprobado, arquitectura, fases, verificación |
+| Doc                                                              | Contenido                                                        |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- |
+| [`docs/handoff.md`](docs/handoff.md)                             | Estado vivo del proyecto: qué hay, decisiones, próximos pasos    |
+| [`docs/plan-maestro.md`](docs/plan-maestro.md)                   | Stack aprobado, arquitectura, fases, verificación                |
 | [`docs/documento-tecnico-cto.md`](docs/documento-tecnico-cto.md) | Documento técnico completo (modelo de datos, API, sync, riesgos) |
 
 ## Gestión

@@ -1,3 +1,20 @@
 node_modules/
 .env*
 .claude/
+
+# build outputs
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# test / coverage
+coverage/
+
+# expo / mobile
+.expo/
+apps/mobile/android/
+apps/mobile/ios/
+
+# editors / os
+.DS_Store

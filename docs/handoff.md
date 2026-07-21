@@ -14,17 +14,17 @@ Requerimientos de Producto (CPO): `~/Downloads/QUIVOcontrol.md` (RF-01..84, RNF,
 
 ## Estado actual
 
-| Ítem | Estado |
-|---|---|
-| Decisión de stack | ✅ Aprobada por el usuario (2026-07-19) |
-| Deliberación council | ✅ Sesión `council-20260719-083140` (Claude + Gemini, chairman synthesis, confianza media) |
-| Plan maestro | ✅ `docs/plan-maestro.md` |
-| Documento técnico CTO | ✅ `docs/documento-tecnico-cto.md` (responde las 18 preguntas del CPO) |
-| Repo / monorepo | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — solo docs; scaffold pnpm+Turborepo = QUI-211 |
-| Fase 0 | ⏸ En espera de instrucciones del usuario para arrancar |
-| Linear MCP | ✅ Conectado y autenticado (OAuth completado 2026-07-19) |
-| Preguntas de Producto (5) | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo |
-| Proyecto en Linear | ✅ **QUIVO Control — MVP** creado (2026-07-19): 6 milestones, 43 issues (QUI-211..253), Sprint 1 planificado — ver sección Linear abajo |
+| Ítem                      | Estado                                                                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Decisión de stack         | ✅ Aprobada por el usuario (2026-07-19)                                                                                                                                   |
+| Deliberación council      | ✅ Sesión `council-20260719-083140` (Claude + Gemini, chairman synthesis, confianza media)                                                                                |
+| Plan maestro              | ✅ `docs/plan-maestro.md`                                                                                                                                                 |
+| Documento técnico CTO     | ✅ `docs/documento-tecnico-cto.md` (responde las 18 preguntas del CPO)                                                                                                    |
+| Repo / monorepo           | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — solo docs; scaffold pnpm+Turborepo = QUI-211 |
+| Fase 0                    | ⏸ En espera de instrucciones del usuario para arrancar                                                                                                                    |
+| Linear MCP                | ✅ Conectado y autenticado (OAuth completado 2026-07-19)                                                                                                                  |
+| Preguntas de Producto (5) | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo                                                                                                                |
+| Proyecto en Linear        | ✅ **QUIVO Control — MVP** creado (2026-07-19): 6 milestones, 43 issues (QUI-211..253), Sprint 1 planificado — ver sección Linear abajo                                   |
 
 ## Stack aprobado (resumen)
 
