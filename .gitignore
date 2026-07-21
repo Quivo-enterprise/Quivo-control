@@ -11,6 +11,9 @@ build/
 # test / coverage
 coverage/
 
+# generado por packages/shared/src/openapi/generate.ts
+packages/shared/openapi.json
+
 # expo / mobile
 .expo/
 apps/mobile/android/
