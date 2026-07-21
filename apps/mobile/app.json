@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "QUIVO Conductor (spike GPS)",
+    "slug": "quivo-conductor-spike",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "platforms": ["android"],
+    "android": {
+      "package": "com.quivotech.conductor",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "plugins": [
+      [
+        "react-native-background-geolocation",
+        {
+          "license": ""
+        }
+      ]
+    ]
+  }
+}
