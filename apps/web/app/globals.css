@@ -1,0 +1,16 @@
+@import 'tailwindcss';
+@import '@quivo/design-system/styles.css';
+
+/*
+ * El design system expone --qv-font-display/--qv-font-body como variables (sin @font-face
+ * propio) — acá se conectan a las fuentes reales cargadas con next/font/google en
+ * app/layout.tsx, sin tocar el paquete @quivo/design-system.
+ */
+:root {
+  --qv-font-display: var(--font-oxanium), system-ui, sans-serif;
+  --qv-font-body: var(--font-montserrat), system-ui, sans-serif;
+}
+
+body {
+  font-family: var(--qv-font-body);
+}
