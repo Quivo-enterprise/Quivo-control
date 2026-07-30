@@ -151,6 +151,11 @@ model Vehiculo {
   color       String
   capacidad   Int
   estado      String   @default("activo")
+  // Login por vehículo (M3, doc técnico §15.3): credencial emitida por el sindicato, el
+  // conductor se identifica al iniciar la sesión operativa. Solo el campo por ahora — sin
+  // lógica de login (llega con QUI-235). Nunca hashear en la app: Better-Auth es quien
+  // define el algoritmo de hash usado en todo el resto del sistema (doc técnico §5).
+  credencialHash String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

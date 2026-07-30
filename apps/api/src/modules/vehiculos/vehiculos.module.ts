@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
+import { VehiculosController } from './vehiculos.controller.js';
+import { VehiculosService } from './vehiculos.service.js';
 
-// Esqueleto — CRUD real (RF-10..14) llega en QUI-222.
-@Module({})
+@Module({
+  controllers: [VehiculosController],
+  providers: [VehiculosService],
+})
 export class VehiculosModule {}

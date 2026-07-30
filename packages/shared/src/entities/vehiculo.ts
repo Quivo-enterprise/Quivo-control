@@ -20,3 +20,8 @@ export const CrearVehiculoSchema = VehiculoSchema.omit({ id: true, estado: true 
   estado: EstadoVehiculoSchema.default('activo'),
 });
 export type CrearVehiculo = z.infer<typeof CrearVehiculoSchema>;
+
+// Sin `sindicatoId` (mover de tenant no es un caso de uso) — `estado` se valida además con
+// una máquina de transiciones en el service (QUI-222), esto solo valida el shape/enum.
+export const ActualizarVehiculoSchema = VehiculoSchema.omit({ id: true, sindicatoId: true }).partial();
+export type ActualizarVehiculo = z.infer<typeof ActualizarVehiculoSchema>;
