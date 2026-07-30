@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { RolSchema, SindicatoSchema, EventoSyncSchema } from './index.js';
+import {
+  RolSchema,
+  SindicatoSchema,
+  EventoSyncSchema,
+  LoginRequestSchema,
+  LoginResponseSchema,
+} from './index.js';
 
 describe('@quivo/shared contract', () => {
   it('acepta un rol válido y rechaza uno inválido', () => {
@@ -39,5 +45,40 @@ describe('@quivo/shared contract', () => {
         payload: { lat: -17.78, lng: -63.18 },
       }).success,
     ).toBe(true);
+  });
+
+  it('exige email y password en el login, y rechaza un sindicatoId que no sea UUID', () => {
+    expect(LoginRequestSchema.safeParse({ email: 'no-es-un-email', password: 'x' }).success).toBe(
+      false,
+    );
+    expect(
+      LoginRequestSchema.safeParse({ email: 'admin@quivo.local', password: 'Quivo123!' }).success,
+    ).toBe(true);
+
+    expect(
+      LoginResponseSchema.safeParse({
+        accessToken: 'jwt.token.aqui',
+        refreshToken: 'refresh-token-opaco',
+        user: {
+          id: 'user-1',
+          email: 'admin@quivo.local',
+          rol: 'admin_quivo',
+          sindicatoId: null,
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      LoginResponseSchema.safeParse({
+        accessToken: 'jwt.token.aqui',
+        refreshToken: 'refresh-token-opaco',
+        user: {
+          id: 'user-2',
+          email: 'admin@sindicato.local',
+          rol: 'admin_sindicato',
+          sindicatoId: 'no-es-un-uuid',
+        },
+      }).success,
+    ).toBe(false);
   });
 });
