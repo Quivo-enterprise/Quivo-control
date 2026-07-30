@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
+import { SindicatosController } from './sindicatos.controller.js';
+import { SindicatosService } from './sindicatos.service.js';
 
-// Esqueleto — CRUD real (RF-01..04) llega en QUI-220.
-@Module({})
+@Module({
+  controllers: [SindicatosController],
+  providers: [SindicatosService],
+})
 export class SindicatosModule {}

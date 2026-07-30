@@ -42,10 +42,12 @@ jobs:
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://quivo:quivo_dev@localhost:5432/quivo_control
+      RUNTIME_DATABASE_URL: postgresql://quivo_app:quivo_app_dev@localhost:5432/quivo_control
       REDIS_URL: redis://localhost:6379
       JWT_SECRET: ci-only-secret-never-use-in-production-000000
       JWT_ACCESS_TTL: 15m
       JWT_REFRESH_TTL: 30d
+      BETTER_AUTH_URL: http://localhost:3001
 
     steps:
       - name: Checkout

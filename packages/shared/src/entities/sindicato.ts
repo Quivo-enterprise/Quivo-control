@@ -13,3 +13,6 @@ export const CrearSindicatoSchema = SindicatoSchema.omit({ id: true, estado: tru
   estado: EstadoSindicatoSchema.default('activo'),
 });
 export type CrearSindicato = z.infer<typeof CrearSindicatoSchema>;
+
+export const ActualizarSindicatoSchema = SindicatoSchema.omit({ id: true }).partial();
+export type ActualizarSindicato = z.infer<typeof ActualizarSindicatoSchema>;
