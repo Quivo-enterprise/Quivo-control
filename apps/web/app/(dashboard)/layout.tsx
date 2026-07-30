@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AdminLayout, Button, DashboardHeader, SegmentedControl, SidebarNav } from '@quivo/design-system';
+import { BrandLogo } from '../../src/components/brand-logo';
 import { RequireAuth } from '../../src/components/require-auth';
 import { useAuth } from '../../src/lib/auth/auth-context';
 import { filterNavItemsByRole, NAV_ITEMS } from '../../src/lib/nav-items';
@@ -32,6 +33,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
     <AdminLayout
       sidebar={
         <SidebarNav
+          brand={<BrandLogo variant="logotipo" height={24} />}
           role={user?.rol}
           items={items}
           footer={

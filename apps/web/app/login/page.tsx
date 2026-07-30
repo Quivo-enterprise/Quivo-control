@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { AuthLayout, LoginForm } from '@quivo/design-system';
+import { BrandLogo } from '../../src/components/brand-logo';
 import { useAuth } from '../../src/lib/auth/auth-context';
 
 export default function LoginPage() {
@@ -18,7 +19,11 @@ export default function LoginPage() {
   };
 
   return (
-    <AuthLayout title="QUIVO Control" subtitle="Panel administrativo">
+    <AuthLayout
+      logo={<BrandLogo variant="logotipo" height={32} />}
+      title="QUIVO Control"
+      subtitle="Panel administrativo"
+    >
       <LoginForm onSubmit={handleSubmit} loading={loading} error={error ?? undefined} />
     </AuthLayout>
   );

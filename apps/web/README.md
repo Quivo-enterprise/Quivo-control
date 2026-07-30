@@ -25,6 +25,17 @@ en `package.json` o migrar a un paquete publicado/tarball.
   (`app/layout.tsx`) y sobreescribe `--qv-font-display`/`--qv-font-body` en `globals.css` —
   el paquete del design system no trae `@font-face` propio.
 
+## Logo de marca
+
+`src/components/brand-logo.tsx` (`<BrandLogo />`) resuelve isotipo/logotipo con variante
+clara/oscura según `prefers-color-scheme` (misma media query que ya usa
+`@quivo/design-system` para sus tokens de color, así que quedan sincronizados). Los
+archivos en `public/brand/` y el favicon (`app/favicon.ico`, `app/icon.svg`) vienen del kit
+de marca del proyecto de landing (`/home/jairomgr/Proyectos/Web/landing_pageQUIVO/quivo-landing/public/img/{LOGOTIPO,ISOTIPO}/`,
+`MANUAL DE MARCA QUIVO V1.pdf`) — son una copia, no un symlink, porque son assets
+estáticos (no código que deba seguir cambios del repo hermano). Si el manual de marca
+cambia el isotipo/logotipo, hay que volver a copiar los archivos actualizados acá.
+
 ## Auth (QUI-227) — estado actual
 
 El backend real de auth (`POST /v1/auth/login`, `POST /v1/auth/refresh`, QUI-219)
