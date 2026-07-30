@@ -2,13 +2,13 @@
 
 import type { ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AdminLayout, Button, DashboardHeader, SidebarNav } from '@quivo/design-system';
+import { AdminLayout, Button, DashboardHeader, SegmentedControl, SidebarNav } from '@quivo/design-system';
 import { RequireAuth } from '../../src/components/require-auth';
 import { useAuth } from '../../src/lib/auth/auth-context';
 import { filterNavItemsByRole, NAV_ITEMS } from '../../src/lib/nav-items';
 
 function DashboardShell({ children }: { children: ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user, logout, isDevBypass, switchDevBypassRole } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -35,9 +35,33 @@ function DashboardShell({ children }: { children: ReactNode }) {
           role={user?.rol}
           items={items}
           footer={
-            <Button variant="ghost" size="sm" fullWidth onClick={handleLogout}>
-              Cerrar sesión
-            </Button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {isDevBypass ? (
+                <div>
+                  <p
+                    style={{
+                      fontSize: '0.75rem',
+                      opacity: 0.6,
+                      margin: '0 0 0.375rem',
+                    }}
+                  >
+                    Simular rol (demo)
+                  </p>
+                  <SegmentedControl
+                    size="sm"
+                    value={user?.rol ?? 'admin_quivo'}
+                    onValueChange={switchDevBypassRole}
+                    items={[
+                      { value: 'admin_quivo', label: 'Admin QUIVO' },
+                      { value: 'admin_sindicato', label: 'Admin sindicato' },
+                    ]}
+                  />
+                </div>
+              ) : null}
+              <Button variant="ghost" size="sm" fullWidth onClick={handleLogout}>
+                Cerrar sesión
+              </Button>
+            </div>
           }
         />
       }

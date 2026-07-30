@@ -58,3 +58,22 @@ export const NAV_ITEMS: NavItem[] = [
 export function filterNavItemsByRole(items: NavItem[], rol: string): NavItem[] {
   return items.filter((item) => item.roles.includes(rol));
 }
+
+/**
+ * Ítem cuyo `href` es la ruta actual o un ancestro de ella (ej. `/vehiculos/123` matchea
+ * `/vehiculos`). Usado por el guard de rutas — no filtra por rol, solo ubica el ítem.
+ */
+export function findNavItemForPath(items: NavItem[], pathname: string): NavItem | undefined {
+  return items.find(
+    (item) => item.href === pathname || (item.href !== '/' && pathname.startsWith(`${item.href}/`)),
+  );
+}
+
+/**
+ * `true` si no hay ítem de navegación para la ruta (aún no existe en M1+, no se bloquea
+ * acá) o si el rol está en la lista de roles del ítem encontrado.
+ */
+export function isRouteAllowedForRole(items: NavItem[], pathname: string, rol: string): boolean {
+  const item = findNavItemForPath(items, pathname);
+  return !item || item.roles.includes(rol);
+}

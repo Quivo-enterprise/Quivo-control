@@ -1,21 +1,32 @@
 'use client';
 
 import { useEffect, type ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { Loader } from '@quivo/design-system';
 import { useAuth } from '../lib/auth/auth-context';
+import { isRouteAllowedForRole, NAV_ITEMS } from '../lib/nav-items';
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
+  const allowed = !user || isRouteAllowedForRole(NAV_ITEMS, pathname, user.rol);
 
   useEffect(() => {
-    if (!loading && !user) {
-      router.replace('/login');
+    if (loading) {
+      return;
     }
-  }, [loading, user, router]);
+    if (!user) {
+      router.replace('/login');
+      return;
+    }
+    if (!allowed) {
+      // Rol autenticado pero sin acceso a este módulo (ej. admin_sindicato en /sindicatos).
+      router.replace('/');
+    }
+  }, [loading, user, allowed, router]);
 
-  if (loading || !user) {
+  if (loading || !user || !allowed) {
     return (
       <div
         style={{

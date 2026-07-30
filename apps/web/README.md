@@ -27,9 +27,11 @@ en `package.json` o migrar a un paquete publicado/tarball.
 
 ## Auth (QUI-227) — estado actual
 
-El backend real de auth (`POST /v1/auth/login`, QUI-219) **todavía no existe** (solo hay
-un `AuthModule` vacío en `apps/api`). `src/lib/auth/api-client.ts` ya llama al endpoint
-con el contrato correcto, pero fallará hasta que QUI-219 esté implementado.
+El backend real de auth (`POST /v1/auth/login`, `POST /v1/auth/refresh`, QUI-219)
+**todavía no existe** (solo hay un `AuthModule` vacío en `apps/api`). `src/lib/auth/api-client.ts`
+ya llama a ambos endpoints con el contrato correcto, pero fallarán hasta que QUI-219 esté
+implementado (probado en Chrome real: `Failed to fetch` al intentar login, manejado sin
+romper la UI).
 
 Para poder navegar el dashboard mientras tanto, hay un **bypass de desarrollo**:
 
@@ -39,6 +41,51 @@ cp .env.example .env.local   # trae NEXT_PUBLIC_DEV_BYPASS_AUTH=true
 
 `auth-context.tsx` solo lo respeta si `NODE_ENV !== "production"` — no tiene efecto en
 un build de producción aunque la env var quede seteada por error.
+
+### Manejo de sesión/refresh
+
+`auth-context.tsx` guarda `accessToken` + `refreshToken` (en `localStorage`, clave
+`quivo.session`) y programa un refresh automático leyendo el `exp` del JWT
+(`src/lib/auth/jwt.ts`, decodificación sin verificar firma — solo para UX, la API
+verifica la firma real). El refresh se dispara 30s antes de expirar
+(`REFRESH_MARGIN_MS`); si `POST /v1/auth/refresh` falla, la sesión se cierra. El token
+de bypass de desarrollo es opaco (no es un JWT), así que no programa refresh.
+
+### Guard por rol en rutas
+
+`RequireAuth` (`src/components/require-auth.tsx`) hace dos chequeos: sesión activa
+(igual que antes) y, si hay sesión, que el rol del usuario tenga acceso a la ruta actual
+según `NAV_ITEMS` (`src/lib/nav-items.ts` → `isRouteAllowedForRole`). Si no tiene acceso
+(ej. `admin_sindicato` navegando directo a `/sindicatos` por URL, no por el menú) se
+redirige a `/`. Rutas que todavía no existen como página (todo excepto `/` y `/login`,
+hasta M1) no se bloquean acá — no hay ítem de navegación que matchee.
+
+### Demo navegable de los módulos (Sindicatos, Socios, Vehículos, etc.)
+
+Los 8 módulos con CRUD real futuro (Sindicatos QUI-220, Socios QUI-221, Vehículos
+QUI-222, Conductores QUI-223, Líneas QUI-224, Rutas QUI-229, Rotaciones QUI-233, Reglas
+en M4) tienen una página de demo bajo `app/(dashboard)/<módulo>/`, todas montadas sobre
+`src/components/module-table-page.tsx` (`ModuleTablePage`): `PageHeader` + búsqueda +
+`DataTable` + alta/edición en `Modal`+`FormGroup` + borrado con `ConfirmDialog`, todo con
+componentes de `@quivo/design-system`. Los datos de partida están en
+`src/lib/demo-data.ts` (arrays en memoria, sin backend).
+
+**Importante — es un demo sin persistencia:** los cambios (alta/edición/borrado) viven en
+`useState` de `ModuleTablePage`, no pegan contra ninguna API ni base de datos. Se pierden
+al recargar la página. El CRUD real llega módulo por módulo con las issues de M1
+referenciadas arriba, contra `packages/db` (Prisma, QUI-217) y `apps/api`.
+
+`Auditoría` y `Reportes` quedan de solo lectura (no tiene sentido un alta manual de logs
+de auditoría o de reportes agregados) — usan `AuditLog` y `DataTable` directo, sin
+`ModuleTablePage`.
+
+Para agregar un módulo nuevo al mismo patrón: definir el tipo de fila en
+`demo-data.ts`, armar `columns: DataColumn<T>[]` (con `render` para badges) y
+`fields: EntityFieldConfig[]` (para el formulario del modal), y pasarlos a
+`<ModuleTablePage<T> />` junto con `entityLabel` (singular, minúscula) y
+`createDefaults`. La página en sí debe llevar `'use client'` — pasarle a `ModuleTablePage`
+(un client component) `columns` con funciones `render`/`actions` desde un Server
+Component no es serializable y rompe el build de producción.
 
 ## Agregar componentes faltantes al design system
 
