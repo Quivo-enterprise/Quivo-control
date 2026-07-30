@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-21** (kickoff Cycle 12 — scaffold M0 implementado en local)
+> Última actualización: **2026-07-30** (QUI-227 web admin + QUI-219 auth real verificados end-to-end; push a GitHub resuelto, PR abierto)
 
 ## Qué es el proyecto
 
@@ -20,8 +20,10 @@ Requerimientos de Producto (CPO): `~/Downloads/QUIVOcontrol.md` (RF-01..84, RNF,
 | Deliberación council      | ✅ Sesión `council-20260719-083140` (Claude + Gemini, chairman synthesis, confianza media)                                                                                                                                                     |
 | Plan maestro              | ✅ `docs/plan-maestro.md`                                                                                                                                                                                                                      |
 | Documento técnico CTO     | ✅ `docs/documento-tecnico-cto.md` (responde las 18 preguntas del CPO)                                                                                                                                                                         |
-| Repo / monorepo           | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — scaffold pnpm+Turborepo implementado en local (QUI-211), **pendiente de push** (ver "Pendientes de acceso" abajo) |
-| Fase 0 / Cycle 12         | 🔄 En curso — QUI-211/212/213/214/215 implementados y verificados en local; QUI-216 con código listo, ejecución física pendiente (ver `docs/spike-gps.md`)                                                                                     |
+| Repo / monorepo           | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — rama `qui-227-web-nextjs-scaffold` (QUI-211..219, QUI-227) **pusheada** (2026-07-30); PR hacia `main` abierto, pendiente de review/merge |
+| Fase 0 / Cycle 12         | ✅ QUI-211/212/213/214/215 implementados y verificados en local; QUI-216 con código listo, ejecución física pendiente (ver `docs/spike-gps.md`)                                                                                     |
+| M1 kickoff — QUI-227      | ✅ `apps/web` scaffold Next.js completo: login, layout por rol, guard de rutas, demo CRUD de 8 módulos, dashboard con gráficos — ver sección "QUI-227 + QUI-219" abajo                                                                        |
+| QUI-219 — auth real       | ✅ Login/refresh real (Better-Auth + Prisma) implementado y **verificado end-to-end** (backend + browser), reemplaza el bypass de desarrollo                                                                                                |
 | Linear API                | ✅ Conectado vía API key en `.Agents/.env Linear` (no MCP en esta sesión) — estado real de issues/cycles verificado 2026-07-20                                                                                                                 |
 | Preguntas de Producto (5) | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo                                                                                                                                                                                     |
 | Proyecto en Linear        | ✅ **QUIVO Control — MVP** creado (2026-07-19): 6 milestones, 43 issues (QUI-211..253), Sprint 1 planificado — ver sección Linear abajo                                                                                                        |
@@ -115,15 +117,36 @@ Implementados en local (branches separadas por issue, sin mergear — ver "Pendi
   y services Postgres+PostGIS/Redis, `timeout-minutes: 10`. **Branch protection en `main`
   queda pendiente** (requiere `gh` CLI autenticado o ajuste manual en GitHub Settings).
 
-## Pendientes de acceso (bloquean push/PR, no el código)
+## QUI-227 (web admin) + QUI-219 (auth real) — cerrado 2026-07-30
 
-- **Push a GitHub:** sin credenciales de escritura sobre `Quivo-enterprise/quivo-control` en
-  este entorno (remote HTTPS devuelve 403). El usuario configura sus propias credenciales
-  git; las 6 ramas (`qui-211-monorepo-scaffold`, `qui-215-shared-contracts`,
-  `qui-213-infra-dev`, `qui-214-api-skeleton`, `qui-212-ci-pipeline`, `qui-216-spike-gps`)
-  quedan listas localmente para pushear y abrir PR en cuanto el acceso esté resuelto.
-- **`gh` CLI:** no instalado en este entorno; instalarlo requiere `sudo` interactivo. Necesario
-  para automatizar branch protection en `main` (QUI-212) — alternativa: ajuste manual en
+`apps/web`: scaffold Next.js 15 App Router consumiendo `@quivo/design-system` (repo hermano
+`~/Proyectos/Web/Design_System_QUIVO`, symlink `link:`). Incluye login, layout con sidebar
+filtrado por rol, refresh de sesión JWT (`src/lib/auth/jwt.ts` + `auth-context.tsx`), guard de
+rutas por rol (`isRouteAllowedForRole`), demo CRUD navegable de los 8 módulos M1 (Sindicatos,
+Socios, Vehículos, Conductores, Líneas, Rutas, Rotaciones, Reglas) sobre datos en memoria, y
+dashboard con KPIs y gráficos de flota/socios. Detalle del patrón CRUD demo en `apps/web/README.md`.
+
+`apps/api`+`packages/db`: `POST /v1/auth/login` y `/v1/auth/refresh` reales vía Better-Auth +
+Prisma (reemplazan el bypass `NEXT_PUBLIC_DEV_BYPASS_AUTH` que solo debería usarse en dev local).
+Usuarios seed (`packages/db/prisma/seed.ts`): `admin@quivo.local` (rol `admin_quivo`) y
+`admin@sindicato.local` (rol `admin_sindicato`, `sindicatoId` fijo), password `Quivo123!` para
+ambos — solo para desarrollo, nunca en producción.
+
+**Verificado end-to-end (2026-07-30):** login/refresh real contra Postgres, rechazo de password
+incorrecta (401), y el guard de rutas por rol funcionando con una sesión **real** (no solo el
+bypass simulado) — `admin_sindicato` es redirigido fuera de `/sindicatos` igual que con el bypass.
+
+## Pendientes de acceso
+
+- **Push a GitHub:** ✅ resuelto (2026-07-30) — ya no hay bloqueo de credenciales de escritura
+  sobre `Quivo-enterprise/quivo-control`. Todo el trabajo de Cycle 12 + QUI-227/219 se pusheó en
+  una sola rama (`qui-227-web-nextjs-scaffold`, 13 commits) con un único PR hacia `main`
+  (ver "Próximos pasos"). Las 6 ramas individuales del kickoff (`qui-211-monorepo-scaffold`, etc.)
+  siguen existiendo localmente como puntos de referencia por issue, pero forman parte de la misma
+  cadena lineal de commits — no son ramas divergentes independientes.
+- **`gh` CLI:** sigue sin instalar en este entorno (requiere `sudo` interactivo) — el PR de arriba
+  se abrió manualmente vía el link que imprime `git push`, no con `gh pr create`. Sigue siendo
+  necesario para automatizar branch protection en `main` (QUI-212) — alternativa: ajuste manual en
   GitHub Settings → Branches.
 - **Infra cloud real (QUI-213):** Railway/Fly.io sin decidir ni aprovisionar — solo el ADR
   y el `docker-compose.yml` local están listos.
@@ -132,14 +155,15 @@ Implementados en local (branches separadas por issue, sin mergear — ver "Pendi
 
 ## Próximos pasos
 
-1. Resolver acceso de push a GitHub, pushear las 6 ramas del kickoff y abrir los PRs
-   (rama por issue → PR → CI → merge, **sin atribución de IA** en commits/PRs — regla del
-   repo, sobrescribe el comportamiento default del agente).
-2. Una vez CI (QUI-212) esté mergeado a `main`, activar branch protection.
-3. Decidir Railway vs Fly.io (ADR ya redactado) y aprovisionar cuando el usuario confirme.
-4. Conseguir licencia Transistorsoft + dispositivo Android de gama baja y correr el
+1. Revisar y mergear el PR abierto (`qui-227-web-nextjs-scaffold` → `main`) — dispara el CI
+   (QUI-212) por primera vez contra código real. **Sin atribución de IA** en commits/PRs — regla
+   del repo, sobrescribe el comportamiento default del agente.
+2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
+3. Deploy de `apps/web` en Vercel + CI (parte del criterio de aceptación de QUI-227, aún no hecho).
+4. Decidir Railway vs Fly.io (ADR ya redactado) y aprovisionar cuando el usuario confirme.
+5. Conseguir licencia Transistorsoft + dispositivo Android de gama baja y correr el
    protocolo de `docs/spike-gps.md` — gate go/no-go real de M3.
-5. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas),
+6. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas),
    refinement de M1 durante Cycle 13.
 
 ## Fuentes de verdad
@@ -147,4 +171,4 @@ Implementados en local (branches separadas por issue, sin mergear — ver "Pendi
 - `docs/plan-maestro.md` — plan aprobado (stack, arquitectura, fases, verificación).
 - `docs/documento-tecnico-cto.md` — documento técnico completo (modelo de datos, API, sync, riesgos, respuestas al CPO).
 - `~/.council/Documents/council-20260719-083140/` — deliberación completa (`viewer.html` para explorar).
-- Memoria del proyecto: `~/.claude/projects/-home-shadowfreak-Documents/memory/quivo-control-project.md`.
+- Memoria del proyecto: `~/.claude/projects/-home-jairomgr-Proyectos-QUIVO-Control-quivo-control/memory/`.
