@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-30** (QUI-227 web admin + QUI-219 auth real verificados end-to-end; push a GitHub resuelto, PR abierto)
+> Última actualización: **2026-07-30** (QUI-217/218/220 — schema núcleo, RLS multi-tenant y primer CRUD real (`/v1/sindicatos`) verificados end-to-end)
 
 ## Qué es el proyecto
 
@@ -24,6 +24,9 @@ Requerimientos de Producto (CPO): `~/Downloads/QUIVOcontrol.md` (RF-01..84, RNF,
 | Fase 0 / Cycle 12         | ✅ QUI-211/212/213/214/215 implementados y verificados en local; QUI-216 con código listo, ejecución física pendiente (ver `docs/spike-gps.md`)                                                                                     |
 | M1 kickoff — QUI-227      | ✅ `apps/web` scaffold Next.js completo: login, layout por rol, guard de rutas, demo CRUD de 8 módulos, dashboard con gráficos — ver sección "QUI-227 + QUI-219" abajo                                                                        |
 | QUI-219 — auth real       | ✅ Login/refresh real (Better-Auth + Prisma) implementado y **verificado end-to-end** (backend + browser), reemplaza el bypass de desarrollo                                                                                                |
+| QUI-217 — schema núcleo   | ✅ Modelos Prisma sindicatos/socios/vehículos/conductores/líneas/rutas+geometría/audit_log, migración + seeds — ver sección abajo                                                                                                             |
+| QUI-218 — RLS multi-tenant| ✅ Rol `quivo_app` sin bypass, políticas por tabla, contexto por request, **9 tests cross-tenant pasando** — ver sección abajo                                                                                                                |
+| QUI-220 — CRUD sindicatos | ✅ `/v1/sindicatos` real (solo `admin_quivo`), guard JWT + rol, auditoría en `audit_log`, **verificado end-to-end** (curl con y sin permiso) — ver sección abajo                                                                             |
 | Linear API                | ✅ Conectado vía API key en `.Agents/.env Linear` (no MCP en esta sesión) — estado real de issues/cycles verificado 2026-07-20                                                                                                                 |
 | Preguntas de Producto (5) | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo                                                                                                                                                                                     |
 | Proyecto en Linear        | ✅ **QUIVO Control — MVP** creado (2026-07-19): 6 milestones, 43 issues (QUI-211..253), Sprint 1 planificado — ver sección Linear abajo                                                                                                        |
@@ -136,6 +139,52 @@ ambos — solo para desarrollo, nunca en producción.
 incorrecta (401), y el guard de rutas por rol funcionando con una sesión **real** (no solo el
 bypass simulado) — `admin_sindicato` es redirigido fuera de `/sindicatos` igual que con el bypass.
 
+## QUI-217 (schema núcleo) + QUI-218 (RLS) + QUI-220 (CRUD sindicatos) — cerrado 2026-07-30
+
+QUI-220 dependía de QUI-217/218, que en Linear seguían en "Todo" sin implementar (QUI-219 se
+había adelantado fuera de orden porque solo necesitaba las tablas de Better-Auth) — se hicieron
+los tres en orden en la misma sesión.
+
+**QUI-217 — `packages/db/prisma/schema.prisma`:** modelos `Sindicato`, `Socio`, `Vehiculo`,
+`Conductor`, `Linea`, `Ruta`/`Variante`/`Parada`/`PuntoControl` (columnas `GEOGRAPHY` vía
+`Unsupported(...)`, sin CRUD todavía — llega con QUI-225/226) y `AuditLog`. `estado` queda
+como `String` libre en Prisma a propósito: la única fuente de verdad del enum es
+`EstadoXSchema` en `@quivo/shared`, no un enum nativo de Postgres. Seeds (`prisma/seed.ts`):
+2 sindicatos demo con IDs fijos (`11111111-...`/`22222222-...`, los mismos que ya usaba el
+usuario `admin@sindicato.local` de QUI-219) + un socio/vehículo/conductor/línea de prueba
+por sindicato.
+
+**QUI-218 — RLS multi-tenant:** gotcha central de Postgres — **los superusers (y cualquier
+rol con BYPASSRLS) ignoran las políticas RLS sin importar `FORCE ROW LEVEL SECURITY`**, y el
+rol `quivo` de `docker-compose.yml`/CI es superuser. Se creó un rol de runtime separado
+`quivo_app` (`NOSUPERUSER NOBYPASSRLS`, migración `20260730152500_rls_multi_tenant`) que es
+el que de verdad usa `apps/api` (`RUNTIME_DATABASE_URL`, distinto de `DATABASE_URL` que sigue
+siendo el rol de migraciones). Contexto por request vía `withTenantContext` en
+`packages/db/src/tenant-context.ts` (`SELECT set_config('app.rol'/'app.sindicato_id', $1,
+true)` dentro de una transacción — el `true` final es `SET LOCAL`, se descarta solo al
+terminar esa transacción). Políticas con bypass explícito para `admin_quivo` en `sindicatos`,
+`socios`, `vehiculos`, `conductores`, `lineas` y `audit_log`. **Deliberadamente sin RLS:**
+tablas de Better-Auth (login necesita leer `user` por email antes de conocer su
+`sindicato_id` — meterle RLS complica ese flujo sin ganancia real de aislamiento) y
+`rutas`/`variantes`/`paradas`/`puntos_control` (heredan `sindicato_id` transitivamente vía
+`lineaId`, sin API todavía). Test cross-tenant real (`packages/db/src/rls.integration.test.ts`,
+9 casos) corre en CI vía `pnpm test` — crea dos sindicatos temporales, prueba que ninguno lea
+ni escriba datos del otro, y que `admin_quivo` sí ve ambos.
+
+**QUI-220 — `POST/GET/PATCH /v1/sindicatos`:** `JwtAuthGuard` (verifica el access token corto
+vía `auth.api.verifyJWT`, stateless) + `RolesGuard`/`@Roles('admin_quivo')` — los sindicatos
+son el tenant, `admin_sindicato` no tiene acceso a este endpoint en absoluto. Auditoría directa
+en `audit_log` por acción (el interceptor genérico llega con QUI-230). Verificado con curl real:
+sin token → 401, `admin_quivo` → 200/201, `admin_sindicato` → 403.
+
+**Bug de configuración encontrado armando esto:** sin `BETTER_AUTH_URL`, el plugin `jwt` de
+Better-Auth firma `iss`/`aud` vacíos (`""`), y su propio `verifyJWT` interno rechaza cualquier
+payload con `aud` falsy — **incluso un token recién emitido y válido**. Sin esto, ningún
+endpoint protegido con `JwtAuthGuard` puede autenticar nada. Se agregó `BETTER_AUTH_URL` a
+`.env.example`/CI/los `.env` locales, y un test de integración contra Better-Auth real (no
+mockeado) para que este bug no vuelva a pasar en silencio — el test con `verifyJWT` mockeado
+no lo detecta porque nunca llega a firmar un JWT real.
+
 ## Pendientes de acceso
 
 - **Push a GitHub:** ✅ resuelto (2026-07-30) — ya no hay bloqueo de credenciales de escritura
@@ -155,15 +204,19 @@ bypass simulado) — `admin_sindicato` es redirigido fuera de `/sindicatos` igua
 
 ## Próximos pasos
 
-1. Revisar y mergear el PR abierto (`qui-227-web-nextjs-scaffold` → `main`) — dispara el CI
-   (QUI-212) por primera vez contra código real. **Sin atribución de IA** en commits/PRs — regla
+1. Revisar y mergear el PR abierto (`qui-227-web-nextjs-scaffold` → `main`, ahora incluye
+   también QUI-217/218/220) — dispara el CI (QUI-212) por primera vez contra código real,
+   incluido el test cross-tenant de RLS. **Sin atribución de IA** en commits/PRs — regla
    del repo, sobrescribe el comportamiento default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. Deploy de `apps/web` en Vercel + CI (parte del criterio de aceptación de QUI-227, aún no hecho).
-4. Decidir Railway vs Fly.io (ADR ya redactado) y aprovisionar cuando el usuario confirme.
-5. Conseguir licencia Transistorsoft + dispositivo Android de gama baja y correr el
+3. Seguir con QUI-221..226 (mismo patrón CRUD que QUI-220 para socios/vehículos/conductores/
+   líneas/rutas/puntos de control) y QUI-228 (conectar `apps/web` a los endpoints reales,
+   reemplazando `demo-data.ts`).
+4. Deploy de `apps/web` en Vercel + CI (parte del criterio de aceptación de QUI-227, aún no hecho).
+5. Decidir Railway vs Fly.io (ADR ya redactado) y aprovisionar cuando el usuario confirme.
+6. Conseguir licencia Transistorsoft + dispositivo Android de gama baja y correr el
    protocolo de `docs/spike-gps.md` — gate go/no-go real de M3.
-6. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas),
+7. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas),
    refinement de M1 durante Cycle 13.
 
 ## Fuentes de verdad
