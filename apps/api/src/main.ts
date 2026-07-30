@@ -22,6 +22,12 @@ async function bootstrap(): Promise<void> {
   app.useLogger(app.get(Logger));
   app.setGlobalPrefix('v1');
 
+  // apps/web corre en otro origen (:3000 vs :3001 de esta API) — sin esto, el browser
+  // bloquea el preflight (OPTIONS) de POST /v1/auth/login con 404 antes de que Nest
+  // llegue a manejar la request real (curl no lo sufre: CORS es una restricción del
+  // browser, no del server, por eso funcionaba probando con curl).
+  app.enableCors({ origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000' });
+
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port, '0.0.0.0');
 }

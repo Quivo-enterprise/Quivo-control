@@ -36,15 +36,17 @@ de marca del proyecto de landing (`/home/jairomgr/Proyectos/Web/landing_pageQUIV
 estáticos (no código que deba seguir cambios del repo hermano). Si el manual de marca
 cambia el isotipo/logotipo, hay que volver a copiar los archivos actualizados acá.
 
-## Auth (QUI-227) — estado actual
+## Auth (QUI-227 + QUI-219) — estado actual
 
-El backend real de auth (`POST /v1/auth/login`, `POST /v1/auth/refresh`, QUI-219)
-**todavía no existe** (solo hay un `AuthModule` vacío en `apps/api`). `src/lib/auth/api-client.ts`
-ya llama a ambos endpoints con el contrato correcto, pero fallarán hasta que QUI-219 esté
-implementado (probado en Chrome real: `Failed to fetch` al intentar login, manejado sin
-romper la UI).
+El backend real de auth (`POST /v1/auth/login`, `POST /v1/auth/refresh`) ya existe en
+`apps/api` (Better-Auth + JWT, ver `apps/api/README.md` para cómo levantarlo local con
+Postgres). `src/lib/auth/api-client.ts` llama a ambos endpoints con el contrato de
+`@quivo/shared` (`LoginResponse`/`RefreshResponse`). Para loguearte de verdad necesitás la
+API corriendo en `NEXT_PUBLIC_API_URL` (por defecto `http://localhost:3001`) con la base
+migrada y sembrada — credenciales demo en `apps/api/README.md`.
 
-Para poder navegar el dashboard mientras tanto, hay un **bypass de desarrollo**:
+Si no querés levantar Postgres/la API solo para navegar el panel, sigue disponible el
+**bypass de desarrollo**:
 
 ```bash
 cp .env.example .env.local   # trae NEXT_PUBLIC_DEV_BYPASS_AUTH=true

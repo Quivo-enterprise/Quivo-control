@@ -5,11 +5,17 @@ Esqueleto NestJS (adapter Fastify) — monolito modular por dominio (doc técnic
 ## Correr en local
 
 ```bash
-docker compose up -d           # Postgres+PostGIS (puerto 5434) + Redis, desde la raíz del repo
-cp .env.example .env           # y ajustar DATABASE_URL al puerto 5434 si difiere
+docker compose up -d              # Postgres+PostGIS (puerto 5434) + Redis, desde la raíz del repo
+cp ../../.env.example .env        # relativo a apps/api/ — ajustar DATABASE_URL al puerto 5434 si difiere
+pnpm --filter @quivo/db prisma:migrate:dev  # crea las tablas (una vez, o tras cambiar el schema)
+pnpm --filter @quivo/db prisma:seed         # usuarios demo (ver sección Auth más abajo)
 pnpm --filter @quivo/api build
-pnpm --filter @quivo/api start  # node dist/main.js
+pnpm --filter @quivo/api start     # node dist/main.js — sirve en :3001 (PORT en .env)
 ```
+
+> Puerto **3001**, no 3000: `apps/web` (`next dev`) ya usa el 3000. Si corrés ambas apps
+> al mismo tiempo para probar el login end-to-end, necesitan puertos distintos —
+> `NEXT_PUBLIC_API_URL` en `apps/web/.env.local` ya apunta a `http://localhost:3001`.
 
 > El script `dev` (`tsx watch`) sirve para las apps `web`/`mobile`, pero **no** para `api`:
 > `tsx`/esbuild no emiten metadata de decoradores TypeScript, y NestJS la necesita para
@@ -27,6 +33,49 @@ pnpm --filter @quivo/api start  # node dist/main.js
 - `POST /v1/_internal/validate-demo` — endpoint de diagnóstico: valida el body contra
   `CrearSindicatoSchema` de `@quivo/shared` usando el pipe global de Zod. Se retira cuando
   el módulo `sindicatos` real (QUI-220) exponga su propio CRUD.
+- `POST /v1/auth/login` / `POST /v1/auth/refresh` (QUI-219) — ver sección Auth abajo.
+
+## Auth (QUI-219)
+
+Better-Auth + JWT (doc técnico §5: "no construir auth a mano"). La instancia de
+Better-Auth vive en `packages/db/src/auth.ts` (no acá) porque tanto el seed como
+`@better-auth/cli generate` — que produce `packages/db/prisma/schema.prisma` — necesitan
+importarla, y `packages/db` no puede depender de `apps/api`; este módulo (`auth.controller.ts`/
+`auth.service.ts`) solo llama a `auth.api.*` y reempaqueta la respuesta al contrato que
+espera `apps/web` (`accessToken`/`refreshToken`/`user`, ver `@quivo/shared`).
+
+- El **access token** es un JWT de vida corta (`JWT_ACCESS_TTL`, default 15m) firmado con
+  un par de claves asimétrico (JWKS) que Better-Auth genera y guarda cifrado en la DB — no
+  es un HMAC con `JWT_SECRET` directo. Trae `rol`/`sindicatoId` como claims custom.
+- El **refresh token** es el token de sesión opaco de Better-Auth (`JWT_REFRESH_TTL`,
+  default 30d) — `POST /v1/auth/refresh` lo valida y emite un access token nuevo.
+- Solo hay rutas de `login`/`refresh` — no hay ruta pública de sign-up (el control de
+  acceso real es "la ruta no existe", no un flag de Better-Auth).
+- Guards de autorización por rol y RLS de Postgres quedan para QUI-220+, cuando existan
+  endpoints/tablas de dominio reales que proteger.
+
+### Levantar la base y sembrar usuarios demo
+
+```bash
+pnpm --filter @quivo/db prisma:migrate:dev   # crea las tablas (User/Session/Account/Verification/Jwks)
+pnpm --filter @quivo/db prisma:seed          # 2 usuarios demo, ver abajo
+```
+
+| Email | Password | Rol | sindicatoId |
+| --- | --- | --- | --- |
+| `admin@quivo.local` | `Quivo123!` | `admin_quivo` | — |
+| `admin@sindicato.local` | `Quivo123!` | `admin_sindicato` | `11111111-1111-4111-8111-111111111111` |
+
+El seed es idempotente (si el usuario ya existe, lo omite) — se puede correr de nuevo sin
+problema. Si cambia `packages/db/src/auth.ts` (nuevos `additionalFields`, un plugin
+nuevo), hay que regenerar el schema con
+`pnpm --filter @quivo/db exec better-auth generate --config src/auth.ts --output prisma/schema.prisma`
+y crear una migración nueva (`prisma:migrate:dev`) — no editar `schema.prisma` a mano.
+
+> `@better-auth/cli` está pineado en `1.4.22` (igual que `better-auth`): es la versión más
+> reciente publicada del CLI y todavía no soporta la línea `1.6.x` de `better-auth` (bug de
+> compatibilidad conocido en el paquete). Si se sube `better-auth`, hay que verificar que
+> el CLI ya lo soporte.
 
 ## Estructura
 

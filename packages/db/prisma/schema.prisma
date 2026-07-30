@@ -1,0 +1,101 @@
+// Modelos User/Session/Account/Verification/Jwks generados por
+// `pnpm --filter @quivo/db exec better-auth generate --config src/auth.ts --output prisma/schema.prisma`
+// a partir de la config de Better-Auth en src/auth.ts (QUI-219) — no se escriben a mano
+// (doc técnico §5: "no construir auth a mano"). `rol`/`sindicatoId` en `User` vienen de
+// `user.additionalFields` en esa config. Si `auth.ts` cambia (nuevos additionalFields, un
+// plugin nuevo, etc.), volver a correr ese comando y generar una migración nueva — no
+// editar los modelos de abajo directamente.
+//
+// @better-auth/cli quedó pineado en 1.4.22 (igual que `better-auth`, ver package.json):
+// es la versión más reciente publicada del CLI y no soporta la línea 1.6.x de
+// `better-auth` (bug de compatibilidad conocido — el CLI no se actualizó). Si en el
+// futuro se sube `better-auth` a 1.6.x, hay que volver a generar el schema a mano
+// (comparando contra la doc de Better-Auth) o esperar a que el CLI publique una versión
+// compatible.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// La URL de conexión vive en prisma.config.ts (Prisma 7 ya no la acepta acá, ver
+// https://pris.ly/d/config-datasource) — el driver adapter (@prisma/adapter-pg) en
+// src/client.ts es quien conecta en runtime.
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String    @id
+  name          String
+  email         String
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  rol           String
+  sindicatoId   String?
+  sessions      Session[]
+  accounts      Account[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model Jwks {
+  id         String    @id
+  publicKey  String
+  privateKey String
+  createdAt  DateTime
+  expiresAt  DateTime?
+
+  @@map("jwks")
+}
