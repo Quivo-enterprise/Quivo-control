@@ -99,3 +99,173 @@ model Jwks {
 
   @@map("jwks")
 }
+
+// Entidades núcleo (QUI-217, doc técnico §4.2). `estado` queda como String libre en vez de
+// un enum nativo de Postgres porque la única fuente de verdad de los valores permitidos es
+// el enum Zod en packages/shared (`EstadoXSchema`) — evita mantener el mismo enum en dos
+// lugares. RLS (políticas + FORCE) se agrega en una migración separada (QUI-218) sobre estas
+// mismas tablas.
+
+model Sindicato {
+  id        String   @id @default(uuid())
+  nombre    String
+  estado    String   @default("activo")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  socios      Socio[]
+  vehiculos   Vehiculo[]
+  conductores Conductor[]
+  lineas      Linea[]
+  auditLogs   AuditLog[]
+
+  @@map("sindicatos")
+}
+
+model Socio {
+  id                 String   @id @default(uuid())
+  sindicatoId        String
+  sindicato          Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  nombre             String
+  documentoIdentidad String
+  estado             String   @default("activo")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  vehiculos Vehiculo[]
+
+  @@index([sindicatoId])
+  @@map("socios")
+}
+
+model Vehiculo {
+  id          String   @id @default(uuid())
+  sindicatoId String
+  sindicato   Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  socioId     String?
+  socio       Socio?   @relation(fields: [socioId], references: [id], onDelete: SetNull)
+  placa       String
+  tipo        String
+  marca       String
+  modelo      String
+  color       String
+  capacidad   Int
+  estado      String   @default("activo")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([sindicatoId, placa])
+  @@index([sindicatoId])
+  @@map("vehiculos")
+}
+
+model Conductor {
+  id                 String   @id @default(uuid())
+  sindicatoId        String
+  sindicato          Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  nombre             String
+  documentoIdentidad String
+  licenciaConducir   String
+  estado             String   @default("activo")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([sindicatoId])
+  @@map("conductores")
+}
+
+model Linea {
+  id          String   @id @default(uuid())
+  sindicatoId String
+  sindicato   Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  codigo      String
+  nombre      String
+  color       String?
+  descripcion String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rutas Ruta[]
+
+  @@unique([sindicatoId, codigo])
+  @@index([sindicatoId])
+  @@map("lineas")
+}
+
+// `geometria`/`coord`: Prisma no tipa GEOGRAPHY nativo — `Unsupported(...)` deja el tipo SQL
+// crudo tal cual en la migración (PostGIS ya está habilitado en la DB, ver docker-compose.yml).
+// Sin CRUD todavía (llega con QUI-225/226) — este es solo el shape de la tabla.
+model Ruta {
+  id        String                @id @default(uuid())
+  lineaId   String
+  linea     Linea                 @relation(fields: [lineaId], references: [id], onDelete: Cascade)
+  sentido   String
+  geometria Unsupported("geography(LineString,4326)")
+  estado    String                @default("activo")
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  variantes     Variante[]
+  paradas       Parada[]
+  puntosControl PuntoControl[]
+
+  @@index([lineaId])
+  @@map("rutas")
+}
+
+model Variante {
+  id        String   @id @default(uuid())
+  rutaId    String
+  ruta      Ruta     @relation(fields: [rutaId], references: [id], onDelete: Cascade)
+  nombre    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([rutaId])
+  @@map("variantes")
+}
+
+model Parada {
+  id        String                          @id @default(uuid())
+  rutaId    String
+  ruta      Ruta                            @relation(fields: [rutaId], references: [id], onDelete: Cascade)
+  tipo      String
+  orden     Int
+  coord     Unsupported("geography(Point,4326)")
+  createdAt DateTime                        @default(now())
+  updatedAt DateTime                        @updatedAt
+
+  @@index([rutaId])
+  @@map("paradas")
+}
+
+model PuntoControl {
+  id                String                          @id @default(uuid())
+  rutaId            String
+  ruta              Ruta                            @relation(fields: [rutaId], references: [id], onDelete: Cascade)
+  orden             Int
+  coord             Unsupported("geography(Point,4326)")
+  radioToleranciaM  Int
+  obligatorio       Boolean                         @default(true)
+  createdAt         DateTime                        @default(now())
+  updatedAt         DateTime                        @updatedAt
+
+  @@index([rutaId])
+  @@map("puntos_control")
+}
+
+// `sindicatoId` nullable: acciones de `admin_quivo` (sin tenant propio) también se auditan.
+model AuditLog {
+  id          String    @id @default(uuid())
+  sindicatoId String?
+  sindicato   Sindicato? @relation(fields: [sindicatoId], references: [id], onDelete: SetNull)
+  usuarioId   String
+  entidad     String
+  entidadId   String
+  accion      String
+  diff        Json?
+  ts          DateTime  @default(now())
+
+  @@index([sindicatoId, ts])
+  @@map("audit_log")
+}
