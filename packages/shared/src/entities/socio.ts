@@ -15,3 +15,8 @@ export const CrearSocioSchema = SocioSchema.omit({ id: true, estado: true }).ext
   estado: EstadoSocioSchema.default('activo'),
 });
 export type CrearSocio = z.infer<typeof CrearSocioSchema>;
+
+// Sin `sindicatoId`: mover un socio entre sindicatos no es un PATCH simple, queda fuera de
+// alcance (no hay caso de uso definido en el doc técnico).
+export const ActualizarSocioSchema = SocioSchema.omit({ id: true, sindicatoId: true }).partial();
+export type ActualizarSocio = z.infer<typeof ActualizarSocioSchema>;
