@@ -21,10 +21,18 @@ config();
  * Prisma 7 ya no acepta la URL de conexión en `schema.prisma` (ver prisma.config.ts) ni
  * en el constructor de `PrismaClient` directamente — el cliente en runtime se conecta
  * vía un driver adapter (`@prisma/adapter-pg`, sobre `pg`), no el motor Rust embebido.
+ *
+ * `RUNTIME_DATABASE_URL` (rol `quivo_app`, sin superuser/BYPASSRLS) es intencionalmente
+ * distinto de `DATABASE_URL` (rol de migraciones, dueño de las tablas): Postgres ignora
+ * RLS para superusers/roles con BYPASSRLS sin importar `FORCE ROW LEVEL SECURITY` (QUI-218,
+ * ver la migración `20260730152500_rls_multi_tenant`) — si este cliente usara el mismo rol
+ * que las migraciones, las políticas RLS serían un no-op silencioso. Cae a `DATABASE_URL`
+ * si no está seteada para no romper entornos que todavía no la configuraron, pero en ese
+ * caso RLS no se está probando de verdad.
  */
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-const adapter = new PrismaPg(process.env.DATABASE_URL ?? '');
+const adapter = new PrismaPg(process.env.RUNTIME_DATABASE_URL ?? process.env.DATABASE_URL ?? '');
 
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({ adapter });
 
