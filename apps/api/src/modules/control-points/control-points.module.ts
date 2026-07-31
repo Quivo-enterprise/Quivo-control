@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
+import { ControlPointsController, RutaControlPointsController } from './control-points.controller.js';
+import { ControlPointsService } from './control-points.service.js';
 
-// Esqueleto — puntos de control (RF-34..39) llega en QUI-226.
-@Module({})
+@Module({
+  controllers: [RutaControlPointsController, ControlPointsController],
+  providers: [ControlPointsService],
+})
 export class ControlPointsModule {}

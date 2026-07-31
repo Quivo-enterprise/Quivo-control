@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
 import type { Prisma } from '@quivo/db';
-import { ParadaSchema, type ActualizarParada, type CrearParada, type Parada, type PuntoGeoJson } from '@quivo/shared';
+import { ParadaSchema, type ActualizarParada, type CrearParada, type Parada } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { asegurarRutaVisible } from '../../common/geo/tenant-checks.js';
+import { validarCercaniaARuta } from '../../common/geo/proximidad-ruta.js';
 
 interface ParadaRow {
   id: string;
@@ -13,13 +14,6 @@ interface ParadaRow {
   orden: number;
   coord: string; // GeoJSON como texto (ST_AsGeoJSON devuelve `text`).
 }
-
-/**
- * Radio de tolerancia para "parada cercana a la ruta" (RF-24..33, ST_DWithin) — no está
- * especificado en el doc técnico, 100m es una asunción razonable para una parada de
- * colectivo respecto de la geometría de su línea, no una decisión de Producto confirmada.
- */
-const TOLERANCIA_CERCANIA_METROS = 100;
 
 /** Mismo patrón que rutas.service.ts: sin RLS propia (hereda tenant vía rutaId → linea),
  * `coord` es GEOGRAPHY(POINT) → SQL crudo con ST_GeomFromGeoJSON/ST_AsGeoJSON. */
@@ -100,26 +94,6 @@ async function obtenerFila(tx: Prisma.TransactionClient, id: string): Promise<Pa
     throw new NotFoundException('Parada no encontrada');
   }
   return row;
-}
-
-async function validarCercaniaARuta(
-  tx: Prisma.TransactionClient,
-  rutaId: string,
-  coord: PuntoGeoJson,
-): Promise<void> {
-  const rows = await tx.$queryRaw<[{ cerca: boolean }]>`
-    SELECT ST_DWithin(
-      geometria,
-      ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(coord)}), 4326)::geography,
-      ${TOLERANCIA_CERCANIA_METROS}
-    ) as cerca
-    FROM rutas WHERE id = ${rutaId}
-  `;
-  if (!rows[0]?.cerca) {
-    throw new BadRequestException(
-      `La parada está a más de ${TOLERANCIA_CERCANIA_METROS}m de la geometría de la ruta`,
-    );
-  }
 }
 
 function toTenantContext(actor: AuthenticatedUser): { rol: string; sindicatoId: string | null } {
