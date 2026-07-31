@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-30** (M1 núcleo administrativo completo: QUI-217/218/220..226 — CRUD real de sindicatos/socios/vehículos/conductores/líneas/rutas/variantes/paradas/puntos de control, todo verificado end-to-end)
+> Última actualización: **2026-07-30** (M1 completo de punta a punta: backend QUI-217/218/220..226 + `apps/web` conectada al API real en QUI-228 — verificado en browser real, sin bypass de dev)
 
 ## Qué es el proyecto
 
@@ -29,6 +29,7 @@ Requerimientos de Producto (CPO): `~/Downloads/QUIVOcontrol.md` (RF-01..84, RNF,
 | QUI-220 — CRUD sindicatos | ✅ `/v1/sindicatos` real (solo `admin_quivo`), guard JWT + rol, auditoría en `audit_log`, **verificado end-to-end** (curl con y sin permiso) — ver sección abajo                                                                             |
 | QUI-221..224 — CRUD M1    | ✅ `/v1/socios`, `/v1/vehiculos`, `/v1/conductores`, `/v1/lineas` — mismo patrón que sindicatos, tenant-scoping real (`admin_sindicato`/`operador` forzados a su propio sindicato), **55 tests de integración pasando** — ver sección abajo   |
 | QUI-225/226 — geometría   | ✅ `/v1/lineas/:id/rutas`, `/v1/rutas/:id/variantes`, `/v1/rutas/:id/paradas`, `/v1/rutas/:id/puntos-control` — GEOGRAPHY vía SQL crudo, GeoJSON in/out, validación de geometría y de cercanía (ST_DWithin) — ver sección abajo                |
+| QUI-228 — web conectada   | ✅ Sindicatos/socios/vehículos/conductores/líneas de `apps/web` contra el API real (ya no `demo-data.ts`) — **verificado en browser real** (crear/editar sindicato, crear socio con selector de tenant) — ver sección abajo                  |
 | Linear API                | ✅ Conectado vía API key en `.Agents/.env Linear` (no MCP en esta sesión) — estado real de issues/cycles verificado 2026-07-20                                                                                                                 |
 | Preguntas de Producto (5) | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo                                                                                                                                                                                     |
 | Proyecto en Linear        | ✅ **QUIVO Control — MVP** creado (2026-07-19): 6 milestones, 43 issues (QUI-211..253), Sprint 1 planificado — ver sección Linear abajo                                                                                                        |
@@ -229,6 +230,40 @@ otro tenant). Variantes y paradas viven dentro de `RutasModule` (no son módulos
 así lo agrupaba ya el esqueleto de QUI-214 bajo RF-24..33); `control-points` sí es su propio
 módulo (RF-34..39/QUI-226, issue separada).
 
+## QUI-228 — apps/web conectada al API real — cerrado 2026-07-30
+
+Sindicatos, socios, vehículos, conductores y líneas ya no usan `demo-data.ts` — pegan contra
+`apps/api` de verdad. Rutas (editor de mapa, QUI-229), rotaciones, reglas y auditoría siguen
+en modo demo (sin API real todavía para lo que necesitan). `ModuleTablePage` ahora soporta un
+prop `dataSource` opcional (`list`/`create`/`update`) que activa el modo real; sin `dataSource`
+sigue funcionando exactamente como antes (`useState` local), así que las páginas que siguen en
+demo no cambiaron. **Sin botón de borrar en modo real** — ningún endpoint de M1 expone
+`DELETE` (las entidades se desactivan vía `estado`, nunca se borran de la DB).
+
+Los formularios muestran exactamente los campos del contrato real de `@quivo/shared` — se
+sacaron los campos inventados de la demo (`ciudad`, conteos de `socios`/`vehiculos` en
+sindicatos, nombre de sindicato como texto libre en vez de FK) que no existen en la API.
+`admin_quivo` elige el sindicato desde un `<Select>` poblado con `/v1/sindicatos`
+(`src/lib/api/use-sindicato-options.ts`, que además resuelve `sindicatoId → nombre` para las
+columnas de tabla); `admin_sindicato`/`operador` no ven ese selector — el service ya los
+fuerza a su propio tenant sin importar qué mande el formulario.
+
+**Bug real encontrado y arreglado armando esto:** la config de CORS de `apps/api`
+(`app.enableCors({ origin })`, sin `methods` explícito) solo dejaba pasar `GET,HEAD,POST` en
+`Access-Control-Allow-Methods` — **todo PATCH quedaba bloqueado por el browser** con
+`Failed to fetch`, aunque el preflight (OPTIONS) respondiera 204 igual. `curl` nunca lo sufrió
+(CORS es una restricción del browser, no del server) por eso pasó desapercibido durante todo
+QUI-220..226 hasta que `apps/web` hizo el primer PATCH real desde un browser de verdad. Se
+agregó `methods: ['GET','POST','PATCH','PUT','DELETE']` explícito en `main.ts`.
+
+**Verificado en browser real** (Chrome vía automatización, sesión inyectada con un login real
+de `admin@quivo.local`, `NEXT_PUBLIC_DEV_BYPASS_AUTH=false` temporalmente): crear y editar un
+sindicato, crear un socio con el selector de tenant, y carga correcta de vehículos/
+conductores/líneas con el nombre de sindicato resuelto. Nota: durante esta sesión quedaron
+sindicatos de prueba huérfanos en la DB local (de corridas de test interrumpidas) que había
+que limpiar a mano — si aparecen filas raras tipo "Rutas Test A"/"Paradas Test B" etc. en la
+DB local, son de eso, no de datos reales.
+
 ## Pendientes de acceso
 
 - **Push a GitHub:** ✅ resuelto (2026-07-30) — ya no hay bloqueo de credenciales de escritura
@@ -254,8 +289,7 @@ módulo (RF-34..39/QUI-226, issue separada).
    atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
    default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. QUI-228: conectar `apps/web` a los endpoints reales de M1, reemplazando `demo-data.ts`
-   — todo el backend ya está listo y probado.
+3. QUI-229: editor de rutas sobre mapa (MapLibre) — el backend (QUI-225) ya está listo.
 4. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
    control cerca de una ruta (`common/geo/proximidad-ruta.ts`), taxonomía de `tipo` en
