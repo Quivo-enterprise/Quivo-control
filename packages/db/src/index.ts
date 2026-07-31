@@ -5,5 +5,8 @@ export { prisma } from './client.js';
 export { auth } from './auth.js';
 export { withTenantContext } from './tenant-context.js';
 export type { TenantContext } from './tenant-context.js';
-export type { Prisma, PrismaClient } from '@prisma/client';
+// `Prisma` como valor (no `export type`): `Prisma.PrismaClientKnownRequestError` se usa en
+// checks `instanceof` en runtime (ver lineas.service.ts) — un export type-only no serviría.
+export { Prisma } from '@prisma/client';
+export type { PrismaClient } from '@prisma/client';
 

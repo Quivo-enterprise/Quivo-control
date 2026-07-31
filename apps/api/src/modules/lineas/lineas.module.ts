@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
+import { LineasController } from './lineas.controller.js';
+import { LineasService } from './lineas.service.js';
 
-// Esqueleto — CRUD real (RF-20..23) llega en QUI-224.
-@Module({})
+@Module({
+  controllers: [LineasController],
+  providers: [LineasService],
+})
 export class LineasModule {}
