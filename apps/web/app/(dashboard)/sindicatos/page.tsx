@@ -1,46 +1,53 @@
 'use client';
 
+import { useMemo } from 'react';
 import { StatusBadge } from '@quivo/design-system';
-import { ModuleTablePage, type EntityFieldConfig } from '../../../src/components/module-table-page';
-import { SINDICATOS, type SindicatoDemo } from '../../../src/lib/demo-data';
+import type { Sindicato } from '@quivo/shared';
+import { ModuleTablePage, type EntityFieldConfig, type ModuleDataSource } from '../../../src/components/module-table-page';
+import { useAuth } from '../../../src/lib/auth/auth-context';
+import { sindicatosApi } from '../../../src/lib/api/sindicatos';
 
 const FIELDS: EntityFieldConfig[] = [
   { key: 'nombre', label: 'Nombre', kind: 'text', required: true },
-  { key: 'ciudad', label: 'Ciudad', kind: 'text', required: true },
-  { key: 'socios', label: 'Socios', kind: 'number' },
-  { key: 'vehiculos', label: 'Vehículos', kind: 'number' },
   {
     key: 'estado',
     label: 'Estado',
     kind: 'select',
     options: [
-      { label: 'Activo', value: 'active' },
-      { label: 'Pendiente', value: 'pending' },
-      { label: 'Inactivo', value: 'inactive' },
+      { label: 'Activo', value: 'activo' },
+      { label: 'Inactivo', value: 'inactivo' },
     ],
   },
 ];
 
 export default function SindicatosPage() {
+  const { token } = useAuth();
+
+  const dataSource = useMemo<ModuleDataSource<Sindicato>>(
+    () => ({
+      list: () => sindicatosApi.listar(token ?? ''),
+      create: (values) => sindicatosApi.crear(token ?? '', values as never),
+      update: (id, values) => sindicatosApi.actualizar(token ?? '', id, values as never),
+    }),
+    [token],
+  );
+
   return (
-    <ModuleTablePage<SindicatoDemo>
+    <ModuleTablePage<Sindicato>
       title="Sindicatos"
-      subtitle="Datos de ejemplo — el CRUD real llega con QUI-220 (M1)."
+      subtitle="Solo administrador QUIVO — RF-01..04."
       entityLabel="sindicato"
       searchPlaceholder="Buscar sindicato..."
-      searchKeys={['nombre', 'ciudad']}
-      initialRows={SINDICATOS}
+      searchKeys={['nombre']}
       fields={FIELDS}
-      createDefaults={{ estado: 'pending', socios: 0, vehiculos: 0 }}
+      createDefaults={{ estado: 'activo' }}
+      dataSource={dataSource}
       columns={[
         { key: 'nombre', header: 'Nombre' },
-        { key: 'ciudad', header: 'Ciudad' },
-        { key: 'socios', header: 'Socios', align: 'right' },
-        { key: 'vehiculos', header: 'Vehículos', align: 'right' },
         {
           key: 'estado',
           header: 'Estado',
-          render: (row) => <StatusBadge status={row.estado} />,
+          render: (row) => <StatusBadge status={row.estado === 'activo' ? 'active' : 'inactive'} />,
         },
       ]}
     />

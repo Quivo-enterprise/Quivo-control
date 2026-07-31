@@ -1,13 +1,15 @@
 'use client';
 
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
+  Alert,
   Button,
   ConfirmDialog,
   DataTable,
   FormField,
   FormGroup,
   Input,
+  Loader,
   Modal,
   PageHeader,
   SearchInput,
@@ -24,17 +26,28 @@ export interface EntityFieldConfig {
   required?: boolean;
 }
 
+/** CRUD real contra `apps/api` (QUI-220..224) — sin `delete` porque ningún endpoint de M1
+ * lo expone (los registros se desactivan vía `estado`, nunca se borran). Cuando se pasa
+ * `dataSource`, `ModuleTablePage` reemplaza el `useState` local por estas tres funciones. */
+export interface ModuleDataSource<T> {
+  list: () => Promise<T[]>;
+  create: (values: Record<string, unknown>) => Promise<T>;
+  update: (id: string, values: Record<string, unknown>) => Promise<T>;
+}
+
 interface ModuleTablePageProps<T extends Record<string, unknown>> {
   title: string;
   subtitle?: string;
   /** Singular, en minúscula (ej. "sindicato") — se usa en los botones y diálogos. */
   entityLabel: string;
   columns: DataColumn<T>[];
-  initialRows: T[];
+  /** Ignorado si se pasa `dataSource` — ese caso arranca vacío y hace `list()` al montar. */
+  initialRows?: T[];
   searchPlaceholder?: string;
   searchKeys: (keyof T)[];
   fields: EntityFieldConfig[];
   createDefaults?: Record<string, unknown>;
+  dataSource?: ModuleDataSource<T>;
 }
 
 function toFormValues(row: Record<string, unknown> | null, fields: EntityFieldConfig[]): Record<string, string> {
@@ -47,13 +60,14 @@ function toFormValues(row: Record<string, unknown> | null, fields: EntityFieldCo
 }
 
 /**
- * Patrón compartido de lista+CRUD para los módulos de M1 (Sindicatos, Socios,
- * Vehículos, etc.): PageHeader + búsqueda + DataTable + modal de alta/edición +
- * confirmación de borrado, todo con componentes de @quivo/design-system.
+ * Patrón compartido de lista+CRUD para los módulos de M1 (Sindicatos, Socios, Vehículos,
+ * etc.): PageHeader + búsqueda + DataTable + modal de alta/edición, con componentes de
+ * @quivo/design-system. Dos modos:
  *
- * Los datos viven en `useState` de este componente — es un demo sin backend real
- * (QUI-220 en adelante trae el CRUD contra la API). Los cambios se pierden al
- * recargar la página.
+ * - **Demo** (sin `dataSource`): todo vive en `useState` de este componente — se usa en los
+ *   módulos que todavía no tienen API real (rotaciones, reglas, auditoría). Incluye borrado.
+ * - **Real** (con `dataSource`): `list()` al montar, `create`/`update` contra la API. Sin
+ *   borrado (ningún endpoint de M1 lo expone — se desactiva vía el campo `estado`).
  */
 export function ModuleTablePage<T extends Record<string, unknown>>({
   title,
@@ -65,13 +79,47 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
   searchKeys,
   fields,
   createDefaults = {},
+  dataSource,
 }: ModuleTablePageProps<T>) {
-  const [rows, setRows] = useState<T[]>(initialRows);
+  const [rows, setRows] = useState<T[]>(initialRows ?? []);
   const [query, setQuery] = useState('');
   const [editingRow, setEditingRow] = useState<T | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [deletingRow, setDeletingRow] = useState<T | null>(null);
+  const [isLoading, setIsLoading] = useState(dataSource !== undefined);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (!dataSource) {
+      return;
+    }
+    let cancelled = false;
+    setIsLoading(true);
+    setLoadError(null);
+    dataSource
+      .list()
+      .then((data) => {
+        if (!cancelled) {
+          setRows(data);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : 'Error al cargar los datos');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dataSource]);
 
   const filteredRows = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -84,11 +132,13 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
   }, [rows, query, searchKeys]);
 
   const openCreate = () => {
+    setFormError(null);
     setFormValues(toFormValues(createDefaults, fields));
     setIsCreating(true);
   };
 
   const openEdit = (row: T) => {
+    setFormError(null);
     setFormValues(toFormValues(row, fields));
     setEditingRow(row);
   };
@@ -96,6 +146,7 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
   const closeForm = () => {
     setIsCreating(false);
     setEditingRow(null);
+    setFormError(null);
   };
 
   const handleFieldChange = (key: string, value: string) => {
@@ -108,6 +159,26 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
     for (const field of fields) {
       const raw = formValues[field.key] ?? '';
       parsed[field.key] = field.kind === 'number' ? Number(raw) : raw;
+    }
+
+    if (dataSource) {
+      setIsSaving(true);
+      setFormError(null);
+      const request = editingRow
+        ? dataSource.update(String(editingRow.id), parsed)
+        : dataSource.create({ ...createDefaults, ...parsed });
+      request
+        .then((saved) => {
+          setRows((prev) =>
+            editingRow ? prev.map((row) => (row === editingRow ? saved : row)) : [saved, ...prev],
+          );
+          closeForm();
+        })
+        .catch((error: unknown) => {
+          setFormError(error instanceof Error ? error.message : 'Error al guardar');
+        })
+        .finally(() => setIsSaving(false));
+      return;
     }
 
     if (editingRow) {
@@ -151,38 +222,54 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
         onChange={(event) => setQuery(event.target.value)}
         onClear={() => setQuery('')}
       />
-      <DataTable
-        columns={columns}
-        rows={filteredRows}
-        empty={query ? `Sin resultados para "${query}".` : 'Sin registros para mostrar.'}
-        actions={(row) => (
-          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-            <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
-              Editar
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setDeletingRow(row)}>
-              Eliminar
-            </Button>
-          </div>
-        )}
-      />
+      {loadError && <Alert variant="danger" title="No se pudo cargar">{loadError}</Alert>}
+      {isLoading ? (
+        <Loader label={`Cargando ${entityLabel}s...`} />
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={filteredRows}
+          empty={query ? `Sin resultados para "${query}".` : 'Sin registros para mostrar.'}
+          actions={(row) => (
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+              <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
+                Editar
+              </Button>
+              {!dataSource && (
+                <Button variant="ghost" size="sm" onClick={() => setDeletingRow(row)}>
+                  Eliminar
+                </Button>
+              )}
+            </div>
+          )}
+        />
+      )}
 
       <Modal
         open={isFormOpen}
         title={editingRow ? `Editar ${entityLabel}` : `Nuevo ${entityLabel}`}
-        description="Cambios de demo — no se persisten en un backend real (llega con QUI-220 en adelante)."
+        description={
+          dataSource
+            ? undefined
+            : 'Cambios de demo — no se persisten en un backend real.'
+        }
         onClose={closeForm}
         footer={
           <>
-            <Button variant="ghost" onClick={closeForm}>
+            <Button variant="ghost" onClick={closeForm} disabled={isSaving}>
               Cancelar
             </Button>
-            <Button type="submit" form="entity-form">
-              Guardar
+            <Button type="submit" form="entity-form" disabled={isSaving}>
+              {isSaving ? 'Guardando...' : 'Guardar'}
             </Button>
           </>
         }
       >
+        {formError && (
+          <Alert variant="danger" title="No se pudo guardar" style={{ marginBottom: '1rem' }}>
+            {formError}
+          </Alert>
+        )}
         <FormGroup id="entity-form" onSubmit={handleSubmit}>
           {fields.map((field) => (
             <FormField key={field.key} label={field.label} htmlFor={field.key} required={field.required}>
@@ -209,14 +296,16 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
         </FormGroup>
       </Modal>
 
-      <ConfirmDialog
-        open={deletingRow !== null}
-        title={`Eliminar ${entityLabel}`}
-        message="Acción de demo — no borra nada real; recargá la página para restaurar los datos de ejemplo."
-        confirmLabel="Eliminar"
-        onConfirm={handleDeleteConfirm}
-        onCancel={() => setDeletingRow(null)}
-      />
+      {!dataSource && (
+        <ConfirmDialog
+          open={deletingRow !== null}
+          title={`Eliminar ${entityLabel}`}
+          message="Acción de demo — no borra nada real; recargá la página para restaurar los datos de ejemplo."
+          confirmLabel="Eliminar"
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setDeletingRow(null)}
+        />
+      )}
     </div>
   );
 }
