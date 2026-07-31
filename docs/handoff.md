@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M1 (núcleo administrativo) cerrado de punta a punta, incluido QUI-229 — editor de rutas sobre mapa. Arrancando M2 — Rotaciones.)
+> Última actualización: **2026-07-31** (M2 — Rotaciones en curso: QUI-230 interceptor de auditoría y QUI-231 schema rotaciones/asignaciones cerrados, QUI-232 API en curso.)
 
 ## Qué es el proyecto
 
@@ -282,6 +282,38 @@ guardar una ruta de 3 puntos, agregar una parada, y un punto de control — la p
 rechazado por "lejos de la ruta" (ST_DWithin del backend funcionando en vivo), aceptado al
 clickear más cerca, con el círculo de 30m visible en el mapa.
 
+## QUI-230 (interceptor de auditoría genérico) + QUI-231 (schema rotaciones/asignaciones) — cerrado 2026-07-31
+
+Arranca M2 (Rotaciones, RF-51..57). Plan completo: QUI-230 → QUI-231 → QUI-232 → QUI-233 → QUI-234.
+
+**QUI-230 — `AuditInterceptor` global reemplaza los `auditar()` manuales de QUI-220..226:**
+interceptor único (`APP_INTERCEPTOR`) + decorador `@Auditable('entidad')` por método de
+controller. Usa `concatMap` (no `tap`) para que el `await` a `audit_log` bloquee la respuesta
+— si la auditoría falla, la request falla (fail-loud, no fire-and-forget). Resolución de
+`sindicatoId` en el log: el de la propia entidad devuelta → el propio `id` si `entidad ===
+'sindicato'` → el del actor como fallback (imprecisión documentada para los 4 módulos de
+geometría sin `sindicatoId` propio). Se sumó `GET /v1/auditoria` (`auditoria.service.ts`) con
+filtros `entidad`/`accion`/`desde`/`hasta`, protegido por `@Roles('admin_quivo',
+'admin_sindicato')` y RLS existente — sin lógica de tenant-scoping propia, RLS ya lo resuelve.
+
+**QUI-231 — `Rotacion` + `Asignacion` (`packages/db/prisma/schema.prisma`):** el constraint
+`@@unique([vehiculoId, fecha, horario])` en `asignaciones` es la barrera real contra el riesgo
+#12 del doc técnico ("conflicto operativo real en la calle") — un vehículo no puede tener dos
+asignaciones el mismo día en el mismo horario sin importar la rotación. `conductorId` nullable
+(la rotación puede publicarse con el vehículo asignado y el conductor por confirmar después).
+`TurnoSchema` nuevo en `@quivo/shared` (`manana`/`tarde`/`noche` — asunción no confirmada por
+Producto, el doc técnico deja `horario` como texto libre). Migración escrita a mano
+(`20260731060000_rotaciones_asignaciones`, mismo patrón que el resto de la sesión — `prisma
+migrate dev` sigue roto por el gap de PostGIS en la shadow DB desde que existe la primera
+columna `Unsupported("geography(...)")`). RLS agregada a `rotaciones` (tiene `sindicatoId`
+propio, mismo patrón que socios/vehículos/conductores/líneas); `asignaciones` queda sin RLS
+propia a propósito — no tiene `sindicatoId` directo (lo hereda vía `rotacionId →
+rotacion.sindicatoId`), mismo caso que rutas/paradas, el tenant-check en código llega con
+QUI-232. Test de integración contra Postgres real (`packages/db/src/asignaciones-constraint.test.ts`)
+prueba que el constraint rechaza la segunda asignación en conflicto y permite variaciones
+válidas (mismo vehículo, mismo día, horario distinto). Seed extendido con una ruta + rotación +
+2 asignaciones demo para el Sindicato 1º de Mayo.
+
 ## Pendientes de acceso
 
 - **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
@@ -308,12 +340,12 @@ clickear más cerca, con el círculo de 30m visible en el mapa.
    atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
    default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. **M2 — Rotaciones (RF-51..57), en curso:** QUI-230 (interceptor de auditoría genérico,
-   reemplaza las llamadas manuales a `audit_log` de QUI-220..226) → QUI-231 (schema
-   `rotaciones`/`asignaciones` + constraint anti doble-asignación) → QUI-232 (API generar
-   borrador/editar/publicar atómico) → QUI-233 (UI grilla vehículo×fecha) → QUI-234
-   (vencimiento de asignaciones, job BullMQ — necesita resolver el choque de puerto de
-   Redis con otro proyecto de esta máquina, ver memoria de sesión).
+3. **M2 — Rotaciones (RF-51..57), en curso:** QUI-230 (interceptor de auditoría genérico) y
+   QUI-231 (schema `rotaciones`/`asignaciones` + constraint anti doble-asignación) ✅
+   cerrados. Sigue QUI-232 (API generar borrador/editar/publicar atómico) → QUI-233 (UI
+   grilla vehículo×fecha) → QUI-234 (vencimiento de asignaciones, job BullMQ — necesita
+   resolver el choque de puerto de Redis con otro proyecto de esta máquina, ver memoria
+   de sesión).
 4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
 5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
