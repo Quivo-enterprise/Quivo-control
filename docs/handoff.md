@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M2 completo. M4: QUI-248, QUI-244 y QUI-245 cerrados — auditoría, reglas/sanciones (API + UI web) reales. Quedan QUI-246/247/249, bloqueados por M3.)
+> Última actualización: **2026-07-31** (M2 completo. M4: QUI-248, QUI-244 y QUI-245 cerrados. Repaso M1-M4 hecho — ver sección propia. Quedan QUI-246/247/249, bloqueados por M3.)
 
 ## Qué es el proyecto
 
@@ -509,6 +509,39 @@ confirmar que los botones de acción cambiaron correctamente a los de una sanci�
 recorridos) y QUI-249 (reportes operativos) necesitan datos reales de `gps_points`/sesiones
 que solo van a existir con M3 armado — quedan pendientes hasta que se resuelva el bloqueo de
 hardware de QUI-216 (licencia Transistorsoft + Android real).
+
+## Repaso M1-M4 (a pedido explícito, tras cerrar M2 y la parte de M4 sin M3) — 2026-07-31
+
+Con M2 y la parte de M4 independiente de M3 cerradas, se hizo un repaso completo de todo lo
+construido buscando huecos en vez de seguir a QUI-251 (que es un gate de pre-release, tiene
+más sentido correrlo una sola vez cerca del release real, no ahora). Encontrado y corregido:
+
+- **Bug real: el dashboard (`/`) seguía mostrando datos de `demo-data.ts`** (sindicatos/
+  vehículos/conductores/socios de ejemplo) — nadie lo había migrado a las APIs reales al
+  cerrar QUI-220..224, a pesar de ser la primera pantalla que ve cualquier admin. Ahora pega
+  contra las 4 APIs reales; "sin socio asignado" se calcula de `socioId == null` (no de un
+  `estado` que no existe en el modelo real); la tarjeta "Sindicatos activos" queda oculta
+  para `admin_sindicato`/`operador` (no pueden llamar `GET /v1/sindicatos`, QUI-220 es
+  `admin_quivo`-only). `src/lib/demo-data.ts` quedó huérfano y se borró.
+- **Documentación desactualizada** en dos lugares: `apps/api/src/modules/README.md` seguía
+  marcando "esqueleto" a 10 módulos que llevan sesiones enteras siendo reales (nunca se
+  actualizó módulo por módulo); `apps/web/README.md` describía un modo demo (`ModuleTablePage`
+  sin `dataSource`) que ya ninguna página usa. Ambos corregidos para reflejar el estado real.
+- **Asimetría de API real: `variantes` (QUI-225) no tenía `GET /v1/variantes/:id`**, a
+  diferencia de paradas/puntos-control/rutas que sí lo exponen — agregado
+  service+controller+test siguiendo el mismo patrón (tenant-check vía `asegurarRutaVisible`).
+- **`seed.ts` no tenía datos de ejemplo de reglas/sanciones** (QUI-244, llegó después del
+  último seed) — agregada una regla + una sanción `pendiente` para el Sindicato 1º de Mayo.
+- `/reportes` tenía un subtítulo desactualizado ("el dashboard real llega en M4" — ya estamos
+  en M4 con partes reales) — corregido para nombrar específicamente QUI-246/249 como lo
+  bloqueado, y por qué (necesitan datos de tracking que solo van a existir con M3).
+
+**Encontrado pero deliberadamente NO implementado (para no salirme de "buscar huecos" hacia
+"construir features nuevas" sin que se pida):** la mitad de QUI-249 (reportes operativos)
+podría hacerse hoy sin M3 — "sanciones por sujeto/estado" ya tiene datos 100% reales
+(QUI-244), a diferencia de "recorridos por periodo" que sí necesita tracking. Si se quiere
+adelantar esa parte de QUI-249, es una decisión de alcance a tomar explícitamente, no algo
+que se coló en este repaso.
 
 ## Pendientes de acceso
 
