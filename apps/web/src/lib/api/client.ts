@@ -17,13 +17,17 @@ export async function apiFetch<T>(
   token: string,
   init?: { method?: string; body?: unknown },
 ): Promise<T> {
+  const tieneBody = init?.body !== undefined;
   const response = await fetch(`${API_URL}/v1${path}`, {
     method: init?.method ?? 'GET',
     headers: {
-      'Content-Type': 'application/json',
+      // Fastify rechaza un body vacío si el header dice `application/json` (ej. los `POST`
+      // sin body de rotaciones/:id/publicar y /anular, QUI-232) — solo se manda si hay algo
+      // que mandar.
+      ...(tieneBody ? { 'Content-Type': 'application/json' } : {}),
       Authorization: `Bearer ${token}`,
     },
-    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+    body: tieneBody ? JSON.stringify(init.body) : undefined,
   });
 
   if (!response.ok) {
