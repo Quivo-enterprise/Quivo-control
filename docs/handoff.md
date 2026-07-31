@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M2 — Rotaciones en curso: QUI-230/231/232 cerrados — interceptor de auditoría, schema y API de rotaciones. Arrancando QUI-233 — UI web.)
+> Última actualización: **2026-07-31** (M2 — Rotaciones en curso: QUI-230/231/232/233 cerrados — interceptor de auditoría, schema, API y UI web de rotaciones. Arrancando QUI-234 — vencimiento de asignaciones.)
 
 ## Qué es el proyecto
 
@@ -352,6 +352,37 @@ borrador de 4 asignaciones, publicar, intentar publicar de nuevo (400), anular, 
 en `GET /v1/auditoria?entidad=rotacion` que las 3 acciones (`crear`/`publicar`/`anular`)
 quedan bien etiquetadas.
 
+## QUI-233 — web admin: UI de rotaciones — cerrado 2026-07-31
+
+`/rotaciones` deja de ser demo (`useState` local) y pasa a consumir el API real de QUI-232.
+Layout igual al de `/rutas` (QUI-229): panel izquierdo con selector de sindicato
+(`admin_quivo` únicamente, mismo patrón de `useSindicatoOptions` que socios/vehículos) +
+formulario de generación (periodo, rango desde/hasta que se expande a la lista de días,
+checkboxes de horarios y de rutas) + lista de rotaciones existentes; panel derecho con la
+**grilla vehículo × fecha/horario** que pide el ticket — filas y columnas se derivan de las
+asignaciones reales de la rotación seleccionada (no de un catálogo completo de vehículos),
+cada celda clickeable abre un `Modal` de edición (ruta/conductor/horario + botón "Quitar")
+mientras la rotación esté en `borrador`; publicar/anular usan `ConfirmDialog`. El error 409
+de doble-asignación se muestra dentro del modal con el mensaje tal cual lo devuelve el
+service (`"Ese vehículo ya tiene una asignación en esa fecha y horario"` — ya es lenguaje
+llano de por sí, no necesitó traducción adicional en el frontend, que era el criterio de
+aceptación del ticket).
+
+**Bug real encontrado y arreglado armando esto:** `apiFetch` (cliente HTTP compartido,
+`apps/web/src/lib/api/client.ts`) mandaba `Content-Type: application/json` en **toda**
+request, incluidos los `POST /v1/rotaciones/:id/publicar`/`/anular` que no llevan body —
+Fastify rechaza esa combinación con 400 (`"Body cannot be empty when content-type is set to
+'application/json'"`). No había aparecido antes porque QUI-228/229 solo hicieron `POST`s con
+body real. Fix: el header solo se manda si `init.body` está definido — afecta a cualquier
+futuro endpoint sin body, no solo a rotaciones.
+
+**Verificado en browser real** (mismo método que QUI-228/229: `next build && next start`
+para que `NODE_ENV=production` desactive el bypass de dev automáticamente, sesión real de
+`admin@quivo.local`): generar un borrador de 4 asignaciones (1 vehículo × 2 fechas × 2
+horarios), editar una celda a un horario ya ocupado por el mismo vehículo y ver el error 409
+en línea, publicar (badge cambia a verde "publicada", desaparecen los controles de edición),
+y anular (vuelve a "borrador").
+
 ## Pendientes de acceso
 
 - **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
@@ -379,8 +410,8 @@ quedan bien etiquetadas.
    default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
 3. **M2 — Rotaciones (RF-51..57), en curso:** QUI-230 (interceptor de auditoría genérico),
-   QUI-231 (schema `rotaciones`/`asignaciones`) y QUI-232 (API generar/editar/publicar/anular)
-   ✅ cerrados. Sigue QUI-233 (UI grilla vehículo×fecha) → QUI-234 (vencimiento de
+   QUI-231 (schema `rotaciones`/`asignaciones`), QUI-232 (API generar/editar/publicar/anular)
+   y QUI-233 (UI web, grilla vehículo×fecha) ✅ cerrados. Sigue QUI-234 (vencimiento de
    asignaciones, job BullMQ — necesita resolver el choque de puerto de Redis con otro
    proyecto de esta máquina, ver memoria de sesión).
 4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
