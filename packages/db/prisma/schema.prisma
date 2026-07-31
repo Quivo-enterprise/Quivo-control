@@ -118,6 +118,7 @@ model Sindicato {
   conductores Conductor[]
   lineas      Linea[]
   auditLogs   AuditLog[]
+  rotaciones  Rotacion[]
 
   @@map("sindicatos")
 }
@@ -159,6 +160,8 @@ model Vehiculo {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  asignaciones Asignacion[]
+
   @@unique([sindicatoId, placa])
   @@index([sindicatoId])
   @@map("vehiculos")
@@ -174,6 +177,8 @@ model Conductor {
   estado             String   @default("activo")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+
+  asignaciones Asignacion[]
 
   @@index([sindicatoId])
   @@map("conductores")
@@ -213,6 +218,7 @@ model Ruta {
   variantes     Variante[]
   paradas       Parada[]
   puntosControl PuntoControl[]
+  asignaciones  Asignacion[]
 
   @@index([lineaId])
   @@map("rutas")
@@ -273,4 +279,51 @@ model AuditLog {
 
   @@index([sindicatoId, ts])
   @@map("audit_log")
+}
+
+// M2 — Rotaciones (RF-51..57, QUI-231). `estado`: borrador | publicada — solo las
+// publicadas alimentan la app móvil (QUI-232). `periodo` es texto libre (ej. "2026-08"),
+// el doc técnico no fija un formato exacto.
+model Rotacion {
+  id          String   @id @default(uuid())
+  sindicatoId String
+  sindicato   Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  periodo     String
+  estado      String   @default("borrador")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  asignaciones Asignacion[]
+
+  @@index([sindicatoId])
+  @@map("rotaciones")
+}
+
+// `@@unique([vehiculoId, fecha, horario])`: la barrera real contra doble-asignación
+// (doc técnico §12, riesgo "conflicto operativo real en la calle") — un vehículo no puede
+// tener dos asignaciones el mismo día en el mismo horario, sin importar qué rotación las
+// contenga. `conductorId` nullable: la rotación puede publicarse con el vehículo asignado
+// y el conductor por confirmar después. `horario` es texto libre (ver
+// packages/shared/src/enums/estados.ts `TurnoSchema` para los 3 valores usados por la UI —
+// asunción no confirmada por Producto, igual que las transiciones de estado de vehículos).
+model Asignacion {
+  id          String    @id @default(uuid())
+  rotacionId  String
+  rotacion    Rotacion  @relation(fields: [rotacionId], references: [id], onDelete: Cascade)
+  vehiculoId  String
+  vehiculo    Vehiculo  @relation(fields: [vehiculoId], references: [id], onDelete: Restrict)
+  conductorId String?
+  conductor   Conductor? @relation(fields: [conductorId], references: [id], onDelete: SetNull)
+  rutaId      String
+  ruta        Ruta      @relation(fields: [rutaId], references: [id], onDelete: Restrict)
+  fecha       DateTime  @db.Date
+  horario     String
+  orden       Int
+  venceAt     DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([vehiculoId, fecha, horario])
+  @@index([rotacionId])
+  @@map("asignaciones")
 }

@@ -127,12 +127,80 @@ async function seedDatosDePrueba(tx: Prisma.TransactionClient): Promise<void> {
   }
 }
 
+const RUTA_A_ID = 'aaaaaaaa-0000-4000-8000-000000000001';
+const ROTACION_A_ID = 'aaaaaaaa-0000-4000-8000-000000000002';
+const GEOMETRIA_DEMO = JSON.stringify({
+  type: 'LineString',
+  coordinates: [
+    [-58.4, -34.6],
+    [-58.39, -34.6],
+    [-58.38, -34.61],
+  ],
+});
+
+/** Una ruta + rotación + 2 asignaciones de ejemplo para el sindicato A — solo para tener
+ * algo real que mostrar en la UI de rotaciones (QUI-233) sin depender de altas manuales.
+ * `geometria` es raw SQL porque Prisma no tipa GEOGRAPHY (ver comentario en schema.prisma). */
+async function seedRotaciones(tx: Prisma.TransactionClient): Promise<void> {
+  const linea = await tx.linea.findUniqueOrThrow({
+    where: { sindicatoId_codigo: { sindicatoId: SINDICATO_A_ID, codigo: 'L1' } },
+  });
+  const vehiculo = await tx.vehiculo.findUniqueOrThrow({
+    where: { sindicatoId_placa: { sindicatoId: SINDICATO_A_ID, placa: `AB${SINDICATO_A_ID.slice(0, 3)}` } },
+  });
+  const conductor = await tx.conductor.findUniqueOrThrow({
+    where: { id: `${SINDICATO_A_ID.slice(0, 8)}-0000-4000-8000-000000000002` },
+  });
+
+  await tx.$executeRaw`
+    INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+    VALUES (${RUTA_A_ID}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_DEMO}), 4326)::geography, 'activo', now(), now())
+    ON CONFLICT (id) DO NOTHING
+  `;
+
+  await tx.rotacion.upsert({
+    where: { id: ROTACION_A_ID },
+    update: {},
+    create: { id: ROTACION_A_ID, sindicatoId: SINDICATO_A_ID, periodo: '2026-08', estado: 'borrador' },
+  });
+
+  const ASIGNACIONES_DEMO = [
+    { horario: 'manana' as const, orden: 1 },
+    { horario: 'tarde' as const, orden: 2 },
+  ];
+  for (const asignacion of ASIGNACIONES_DEMO) {
+    await tx.asignacion.upsert({
+      where: {
+        vehiculoId_fecha_horario: {
+          vehiculoId: vehiculo.id,
+          fecha: new Date('2026-08-03'),
+          horario: asignacion.horario,
+        },
+      },
+      update: {},
+      create: {
+        rotacionId: ROTACION_A_ID,
+        vehiculoId: vehiculo.id,
+        conductorId: conductor.id,
+        rutaId: RUTA_A_ID,
+        fecha: new Date('2026-08-03'),
+        horario: asignacion.horario,
+        orden: asignacion.orden,
+        venceAt: new Date('2026-08-03T23:59:59Z'),
+      },
+    });
+  }
+
+  console.log('Rotación + asignaciones de prueba listas para Sindicato 1º de Mayo');
+}
+
 async function seed(): Promise<void> {
   // admin_quivo: única forma de bypassear RLS (QUI-218) sin depender de qué rol de
   // Postgres esté conectado — ver packages/db/src/tenant-context.ts.
   await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
     await seedSindicatos(tx);
     await seedDatosDePrueba(tx);
+    await seedRotaciones(tx);
   });
   // Better-Auth usa su propio adapter Prisma (no pasa por `tx`) pero sus tablas no tienen
   // RLS (ver comentario en la migración `rls_multi_tenant`), así que corre bien afuera.
