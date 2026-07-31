@@ -9,8 +9,8 @@ import { AuditoriaService } from './auditoria.service.js';
 
 class AuditoriaQueryDto extends createZodDto(AuditoriaQuerySchema) {}
 
-/** RF-81..84 — solo lectura, filtros básicos (entidad/acción/rango de fecha); la UI
- * completa con más filtros llega en QUI-248 (M4). */
+/** RF-81..84 (QUI-230/248) — solo lectura, filtros por entidad/acción/usuario/rango de
+ * fecha. UI real en `apps/web` (QUI-248). */
 @Controller('auditoria')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin_quivo', 'admin_sindicato')

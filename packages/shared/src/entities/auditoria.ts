@@ -15,10 +15,11 @@ export const AuditLogEntrySchema = z.object({
 });
 export type AuditLogEntry = z.infer<typeof AuditLogEntrySchema>;
 
-/** Filtros de `GET /v1/auditoria` — todos opcionales, la UI completa llega en QUI-248 (M4). */
+/** Filtros de `GET /v1/auditoria` — todos opcionales (RF-81..84, UI completa en QUI-248). */
 export const AuditoriaQuerySchema = z.object({
   entidad: z.string().min(1).optional(),
   accion: z.string().min(1).optional(),
+  usuarioId: z.string().min(1).optional(),
   desde: z.coerce.date().optional(),
   hasta: z.coerce.date().optional(),
 });

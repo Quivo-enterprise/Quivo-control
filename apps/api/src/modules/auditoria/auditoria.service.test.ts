@@ -73,4 +73,10 @@ describe('AuditoriaService', () => {
     const filas = await service.listar(adminQuivo, { accion: 'editar' });
     expect(filas.every((f) => f.accion === 'editar')).toBe(true);
   });
+
+  it('filtra por usuario (QUI-248)', async () => {
+    const filas = await service.listar(adminQuivo, { usuarioId: 'u-1' });
+    expect(filas.length).toBeGreaterThan(0);
+    expect(filas.every((f) => f.usuarioId === 'u-1')).toBe(true);
+  });
 });
