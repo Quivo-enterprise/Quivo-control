@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M2 — Rotaciones en curso: QUI-230/231/232/233 cerrados — interceptor de auditoría, schema, API y UI web de rotaciones. Arrancando QUI-234 — vencimiento de asignaciones.)
+> Última actualización: **2026-07-31** (M2 — Rotaciones **cerrado de punta a punta** — QUI-230/231/232/233/234. Definiendo próximo milestone: M3 móvil+sync o M4 dashboard/reglas.)
 
 ## Qué es el proyecto
 
@@ -383,6 +383,41 @@ horarios), editar una celda a un horario ya ocupado por el mismo vehículo y ver
 en línea, publicar (badge cambia a verde "publicada", desaparecen los controles de edición),
 y anular (vuelve a "borrador").
 
+## QUI-234 — vencimiento de asignaciones por jornada (RF-57) — cerrado 2026-07-31, M2 completo
+
+Job **BullMQ repeatable** (cada 5 min, `upsertJobScheduler` — idempotente entre reinicios,
+no acumula schedulers duplicados) que marca `vencida` toda asignación `vigente` cuya
+`venceAt` ya pasó. Nueva columna `Asignacion.estado` (`vigente`/`vencida`, default
+`vigente`) + índice `(estado, venceAt)` para esa query.
+
+**Bug real encontrado escribiendo los tests de borde de zona horaria que pedía el ticket:**
+`venceAt` (QUI-232) se calculaba como `23:59:59 UTC` del mismo `fecha` — pero Bolivia es
+**UTC-4 sin horario de verano** (único mercado del MVP), así que eso vencía una asignación
+a las 19:59:59 hora local, **4 horas antes de lo real**. Nuevo helper
+`apps/api/src/common/tiempo/jornada.ts` (`finDeJornadaBolivia`) calcula el instante UTC
+correcto (03:59:59 del día siguiente al `fecha`) — 5 tests de borde (cambio de mes, de año,
+29 de febrero de un bisiesto, "sin DST") lo verifican.
+
+**Redis local desbloqueado:** el puerto 6379 lo tenía tomado otro proyecto de esta máquina
+(`quivo-control-redis-1` no podía publicar su puerto) — bloqueo que venía arrastrándose
+desde el plan inicial de M2. Redis de este proyecto ahora corre en el puerto host **6380**
+(`docker-compose.yml`, `.env.example`, `.env` local), mismo patrón que el 5434 de Postgres.
+De paso, `pnpm-workspace.yaml` necesitó aprobar el build script de `msgpackr-extract`
+(dependencia nativa opcional de `bullmq`/`ioredis`) que pnpm empezó a ignorar por default.
+
+**Fuera de alcance (documentado, no una decisión de Producto):** "API de consulta solo
+devuelve vigentes" del ticket se refiere al futuro `GET /v1/mobile/asignacion-del-dia`
+(RF-73, módulos `tracking`/`sync`, M3, QUI-240/241) — no existe todavía, así que no hay nada
+que filtrar hoy. Los endpoints admin (`GET /v1/rotaciones*`, QUI-232/233) siguen devolviendo
+**todas** las asignaciones con su `estado` visible en la respuesta — la UI de rotaciones
+necesita ver el historial completo para poder editar/republicar, no solo lo vigente; filtrar
+ahí habría roto esa pantalla. Verificado en vivo: la API arranca con Redis en 6380
+(`"redis":"up"` en `/v1/health`) y el job corre al boot sin errores.
+
+**M2 — Rotaciones (RF-51..57) queda completo:** QUI-230 (interceptor de auditoría genérico)
+→ QUI-231 (schema + constraint anti doble-asignación) → QUI-232 (API generar/editar/
+publicar/anular) → QUI-233 (UI web, grilla vehículo×fecha) → QUI-234 (vencimiento, este).
+
 ## Pendientes de acceso
 
 - **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
@@ -409,11 +444,12 @@ y anular (vuelve a "borrador").
    atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
    default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. **M2 — Rotaciones (RF-51..57), en curso:** QUI-230 (interceptor de auditoría genérico),
-   QUI-231 (schema `rotaciones`/`asignaciones`), QUI-232 (API generar/editar/publicar/anular)
-   y QUI-233 (UI web, grilla vehículo×fecha) ✅ cerrados. Sigue QUI-234 (vencimiento de
-   asignaciones, job BullMQ — necesita resolver el choque de puerto de Redis con otro
-   proyecto de esta máquina, ver memoria de sesión).
+3. **M2 — Rotaciones (RF-51..57): ✅ completo.** QUI-230/231/232/233/234 cerrados — ver
+   secciones arriba. Definir con el usuario cuál sigue: **M3 — App móvil + offline + sync**
+   (RF-58..73, requiere resolver primero QUI-216 spike GPS — licencia Transistorsoft +
+   Android real, sigue pendiente de recursos) o **M4 — Dashboard + reglas/sanciones +
+   reportes** (RF-40..50, RF-74..84, no depende de hardware, se puede avanzar ya en el
+   backend/web). Sin ese hardware, M4 es la ruta con menos bloqueos externos.
 4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
 5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
