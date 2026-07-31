@@ -320,10 +320,14 @@ model Asignacion {
   horario     String
   orden       Int
   venceAt     DateTime
+  // vigente | vencida (RF-57, QUI-234) — la marca un job BullMQ repeatable
+  // (RotacionesModule) cuando `venceAt` ya pasó, no el request que la creó.
+  estado      String    @default("vigente")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   @@unique([vehiculoId, fecha, horario])
   @@index([rotacionId])
+  @@index([estado, venceAt])
   @@map("asignaciones")
 }

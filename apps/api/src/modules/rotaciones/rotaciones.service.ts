@@ -10,6 +10,7 @@ import {
   type Rotacion,
 } from '@quivo/shared';
 import { asegurarRutaVisible } from '../../common/geo/tenant-checks.js';
+import { finDeJornadaBolivia } from '../../common/tiempo/jornada.js';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
 const CONFLICTO_UNICIDAD = 'P2002';
@@ -90,7 +91,7 @@ export class RotacionesService {
                   fecha,
                   horario,
                   orden: orden++,
-                  venceAt: finDeJornada(fecha),
+                  venceAt: finDeJornadaBolivia(fecha),
                 },
               });
               ocupados.add(clave);
@@ -169,7 +170,7 @@ export class RotacionesService {
             fecha: data.fecha,
             horario: data.horario,
             orden: data.orden,
-            venceAt: finDeJornada(data.fecha),
+            venceAt: finDeJornadaBolivia(data.fecha),
           },
         });
         return toAsignacion(creada);
@@ -212,6 +213,20 @@ export class RotacionesService {
     });
     return { id: asignacionId };
   }
+
+  /** RF-57 (QUI-234): marca `vencida` toda asignación `vigente` cuya `venceAt` ya pasó — la
+   * llama el job repeatable de `vencimiento.processor.ts`, no un request de usuario, así que
+   * corre cross-tenant como `admin_quivo` (no hay un "actor" real detrás de un cron). Devuelve
+   * cuántas filas marcó, para que el processor lo loguee. */
+  async marcarVencidas(ahora: Date = new Date()): Promise<number> {
+    const { count } = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.asignacion.updateMany({
+        where: { estado: 'vigente', venceAt: { lt: ahora } },
+        data: { estado: 'vencida' },
+      }),
+    );
+    return count;
+  }
 }
 
 async function obtenerRotacionOFallar(
@@ -241,12 +256,6 @@ async function asegurarRotacionEditable(tx: Prisma.TransactionClient, rotacionId
   if (rotacion.estado !== 'borrador') {
     throw new BadRequestException('Solo se pueden editar asignaciones de una rotación en borrador');
   }
-}
-
-/** RF-57: la asignación vence al fin de la jornada de su `fecha` (no a una hora fija de
- * turno — el doc técnico no la especifica), 23:59:59 UTC del mismo día. */
-function finDeJornada(fecha: Date): Date {
-  return new Date(Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate(), 23, 59, 59));
 }
 
 function claveOcupacion(vehiculoId: string, fecha: Date, horario: string): string {
@@ -294,6 +303,7 @@ function toAsignacion(row: {
   horario: string;
   orden: number;
   venceAt: Date;
+  estado: string;
 }): Asignacion {
   return AsignacionSchema.parse(row);
 }

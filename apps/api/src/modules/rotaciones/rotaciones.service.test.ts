@@ -107,7 +107,9 @@ describe('RotacionesService', () => {
     expect(rotacion.asignaciones).toHaveLength(2);
     const vehiculosUsados = rotacion.asignaciones.map((a) => a.vehiculoId).sort();
     expect(vehiculosUsados).toEqual([vehiculoA1Id, vehiculoA2Id].sort());
-    expect(rotacion.asignaciones[0]?.venceAt.toISOString()).toContain('2027-01-05');
+    // Fin de jornada en Bolivia (UTC-4, sin DST) = 03:59:59 UTC del día siguiente al `fecha`
+    // — ver QUI-234 y apps/api/src/common/tiempo/jornada.ts.
+    expect(rotacion.asignaciones[0]?.venceAt.toISOString()).toBe('2027-01-06T03:59:59.000Z');
   });
 
   it('deja un slot sin cubrir si el único vehículo activo ya está ocupado esa fecha/horario', async () => {
@@ -319,5 +321,36 @@ describe('RotacionesService', () => {
       horarios: ['manana'],
     });
     expect(rotacion.sindicatoId).toBe(sindicatoAId);
+  });
+
+  describe('marcarVencidas (QUI-234)', () => {
+    it('marca vencida solo la asignación cuyo venceAt ya pasó, no la futura', async () => {
+      const rotacion = await service.generar(adminSindicatoA, {
+        periodo: '2027-12-vencimiento',
+        rutaIds: [rutaAId],
+        fechas: [new Date('2020-01-01'), new Date('2099-01-01')],
+        horarios: ['noche'],
+      });
+      const [vencida, vigente] = rotacion.asignaciones;
+      expect(vencida?.estado).toBe('vigente');
+      expect(vigente?.estado).toBe('vigente');
+
+      // `venceAt` de la primera (fecha 2020-01-01) ya pasó hace años; la segunda
+      // (2099-01-01) no va a pasar en la vida útil de este repo.
+      const marcadas = await service.marcarVencidas();
+      expect(marcadas).toBeGreaterThanOrEqual(1);
+
+      const detalle = await service.obtener(adminSindicatoA, rotacion.id);
+      const vencidaActualizada = detalle.asignaciones.find((a) => a.id === vencida!.id);
+      const vigenteActualizada = detalle.asignaciones.find((a) => a.id === vigente!.id);
+      expect(vencidaActualizada?.estado).toBe('vencida');
+      expect(vigenteActualizada?.estado).toBe('vigente');
+    });
+
+    it('es idempotente — correrlo de nuevo no cambia nada ya marcado', async () => {
+      const primera = await service.marcarVencidas();
+      const segunda = await service.marcarVencidas();
+      expect(segunda).toBeLessThanOrEqual(primera);
+    });
   });
 });

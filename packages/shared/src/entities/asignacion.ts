@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EstadoAsignacionSchema } from '../enums/estados.js';
 import { TurnoSchema } from '../enums/turno.js';
 import { uuidSchema } from '../primitives.js';
 
@@ -12,6 +13,9 @@ export const AsignacionSchema = z.object({
   horario: TurnoSchema,
   orden: z.number().int().positive(),
   venceAt: z.coerce.date(),
+  // La marca un job BullMQ repeatable (RF-57, QUI-234), no el request que crea/edita la
+  // asignación — ver rotaciones.service.ts `marcarVencidas`.
+  estado: EstadoAsignacionSchema,
 });
 export type Asignacion = z.infer<typeof AsignacionSchema>;
 

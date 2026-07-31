@@ -28,3 +28,6 @@ export type EstadoSancion = z.infer<typeof EstadoSancionSchema>;
 
 export const EstadoRotacionSchema = z.enum(['borrador', 'publicada']);
 export type EstadoRotacion = z.infer<typeof EstadoRotacionSchema>;
+
+export const EstadoAsignacionSchema = z.enum(['vigente', 'vencida']);
+export type EstadoAsignacion = z.infer<typeof EstadoAsignacionSchema>;
