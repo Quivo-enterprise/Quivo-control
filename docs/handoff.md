@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M2 — Rotaciones cerrado. M4 en curso: QUI-248 (auditoría real) cerrado. Arrancando QUI-244 — reglas y sanciones.)
+> Última actualización: **2026-07-31** (M2 — Rotaciones cerrado. M4 en curso: QUI-248 y QUI-244 cerrados — auditoría real y reglas/sanciones. Arrancando QUI-245 — UI web de reglas/sanciones.)
 
 ## Qué es el proyecto
 
@@ -440,6 +440,48 @@ el contenido correcto (incluida una fila vieja pre-QUI-230 con el shape `{antes,
 de cuando la auditoría todavía era manual en cada service — se muestra tal cual está en la
 DB, sin normalizar formatos históricos).
 
+## QUI-244 — reglas y sanciones: modelo + API + transiciones — cerrado 2026-07-31
+
+`Regla` (estatutos: nombre/tipo/gravedad/aplicaA/descripcion/estado) y `Sancion` (sujeto
+polimórfico `vehiculo`/`conductor`/`socio` sin FK — mismo patrón que `AuditLog.entidadId`).
+El doc técnico deja el modelo muy comprimido (`estatutos/reglas(id, sindicato_id, tipo,
+gravedad, aplica_a, relacion)`) — se agregaron `nombre`/`descripcion` por usabilidad admin y
+`gravedad` (`leve`/`grave`/`gravisima`) como asunciones de este equipo, no confirmadas por
+Producto. RLS en ambas tablas (tienen `sindicatoId` propio, mismo patrón que rotaciones).
+
+**Máquina de transiciones de `Sancion`** (el doc técnico solo lista los 5 estados —
+`pendiente`/`aplicada`/`anulada`/`apelada`/`pagada` — sin definir las transiciones válidas
+entre ellos, así que esto es una asunción de este equipo, mismo criterio que las
+transiciones de vehículos de QUI-222):
+
+```
+pendiente → aplicada | anulada
+aplicada  → apelada | pagada | anulada
+apelada   → aplicada | anulada
+pagada, anulada → (terminales)
+```
+
+Endpoints dedicados `POST /v1/sanciones/:id/{aplicar,anular,apelar,pagar}` (no un PATCH de
+estado genérico), todos auditados con el override de acción de `@Auditable` (mismo mecanismo
+de QUI-232). Edición (`PATCH /v1/sanciones/:id`) restringida a `motivo`/`evidenciaRef` y solo
+mientras está `pendiente`.
+
+**Límite conocido, documentado:** "evidencia = datos de recorrido auto-vinculados" (doc
+técnico §15.5) necesita tracking real (M3: sesiones, `gps_points`, `cumplimientos_pc`), que
+esta sesión no llegó a construir — `evidenciaRef` queda como texto libre que carga quien
+registra la sanción, sin auto-vinculación todavía.
+
+**Nota de consistencia de API:** `CrearReglaSchema`/`CrearSancionSchema` exigen `sindicatoId`
+en el body (no opcional) — se alinearon con el patrón mayoritario de
+vehículos/líneas/socios/conductores (el frontend lo autocompleta vía `createDefaults`,
+`admin_quivo` lo elige en un `<Select>`), no con el patrón de `GenerarRotacionSchema`
+(QUI-232) que lo dejó opcional. Ambos patrones funcionan (el service igual fuerza el tenant
+real vía `resolverSindicatoId`), pero para evitar que conviva un tercer estilo, QUI-244 usa
+el más extendido en la base de código.
+
+Verificado end-to-end contra el API real (curl): crear regla → crear sanción (`pendiente`) →
+aplicar → pagar → confirmar que `pagada` es terminal (`anular` devuelve 400).
+
 ## Pendientes de acceso
 
 - **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
@@ -468,9 +510,9 @@ DB, sin normalizar formatos históricos).
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
 3. **M2 — Rotaciones (RF-51..57): ✅ completo** (QUI-230..234). **M4, en curso** (elegido
    sobre M3 porque M3 sigue bloqueado por hardware que nadie consiguió — licencia
-   Transistorsoft + Android real, QUI-216): QUI-248 (auditoría) ✅ → QUI-244 (reglas/
-   sanciones, modelo+API) → QUI-245 (UI reglas/sanciones). QUI-246/247/249 quedan para
-   después de M3 (necesitan datos reales de tracking).
+   Transistorsoft + Android real, QUI-216): QUI-248 (auditoría) ✅ y QUI-244 (reglas/
+   sanciones, modelo+API) ✅ cerrados. Sigue QUI-245 (UI reglas/sanciones). QUI-246/247/249
+   quedan para después de M3 (necesitan datos reales de tracking).
 4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
 5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
