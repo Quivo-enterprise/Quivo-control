@@ -83,21 +83,6 @@ export const LINEAS: LineaDemo[] = [
   { id: 'l-3', codigo: 'L-315', nombre: 'Plaza Central — Villa Este', sindicato: 'Sindicato 1º de Mayo', paradas: 18, estado: 'pending' },
 ];
 
-export interface RutaDemo extends Record<string, unknown> {
-  id: string;
-  nombre: string;
-  linea: string;
-  variante: string;
-  distanciaKm: number;
-  estado: StatusBadgeStatus;
-}
-
-export const RUTAS: RutaDemo[] = [
-  { id: 'r-1', nombre: 'Ida', linea: 'L-101', variante: 'A', distanciaKm: 12.4, estado: 'active' },
-  { id: 'r-2', nombre: 'Vuelta', linea: 'L-101', variante: 'A', distanciaKm: 12.1, estado: 'active' },
-  { id: 'r-3', nombre: 'Ida (feriados)', linea: 'L-204', variante: 'B', distanciaKm: 15.7, estado: 'idle' },
-];
-
 export interface RotacionDemo extends Record<string, unknown> {
   id: string;
   conductor: string;
