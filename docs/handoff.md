@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M2 — Rotaciones en curso: QUI-230 interceptor de auditoría y QUI-231 schema rotaciones/asignaciones cerrados, QUI-232 API en curso.)
+> Última actualización: **2026-07-31** (M2 — Rotaciones en curso: QUI-230/231/232 cerrados — interceptor de auditoría, schema y API de rotaciones. Arrancando QUI-233 — UI web.)
 
 ## Qué es el proyecto
 
@@ -314,6 +314,44 @@ prueba que el constraint rechaza la segunda asignación en conflicto y permite v
 válidas (mismo vehículo, mismo día, horario distinto). Seed extendido con una ruta + rotación +
 2 asignaciones demo para el Sindicato 1º de Mayo.
 
+## QUI-232 — API de rotaciones (generar/editar/publicar/anular) — cerrado 2026-07-31
+
+`POST /v1/rotaciones` genera un borrador repartiendo **round-robin** los vehículos y
+conductores activos del sindicato entre las rutas/fechas/horarios pedidos (`GenerarRotacionSchema`)
+— "regla de reparto" no está detallada en el doc técnico más allá de mencionarla, así que
+round-robin con mejor esfuerzo es una asunción de este equipo: si el vehículo que le toca en
+el turno ya está ocupado esa fecha/horario (por cualquier rotación), se prueba con el
+siguiente; si se agotan todos, el slot queda sin cubrir en vez de abortar el resto de la
+generación. **Gotcha real encontrado armando esto:** el chequeo de disponibilidad tiene que
+ser en memoria *antes* de insertar, no capturando el error del constraint único — Postgres
+aborta la transacción completa apenas falla un statement (`25P02: current transaction is
+aborted`), así que intentar seguir insertando después de un `23505` capturado dentro de la
+misma transacción de `withTenantContext` no funciona (a diferencia de
+`crearAsignacion`/`actualizarAsignacion`, que sí pueden traducir ese error a un 409 porque
+cada una corre en su propia transacción y no necesita seguir haciendo más inserts después).
+
+`POST /v1/rotaciones/:id/publicar` y `/anular` son transiciones de estado atómicas
+(`borrador` ⇄ `publicada`) — atómicas porque viven dentro de la misma transacción que ya arma
+`withTenantContext`, no por lógica extra. "Anular" es una asunción de este equipo: vuelve la
+rotación a `borrador` para poder corregirla antes de que la app móvil la consuma, no es un
+estado nuevo (`EstadoRotacionSchema` sigue siendo solo `borrador`/`publicada`). Edición manual
+de asignaciones (alta/edición/borrado, `POST`/`PATCH`/`DELETE /v1/rotaciones/:id/asignaciones`)
+solo mientras la rotación está en `borrador`.
+
+**Extensión al interceptor de auditoría (QUI-230):** `@Auditable('entidad', 'accion')` ahora
+acepta un override opcional — `publicar` y `anular` son ambos `POST` por contrato de API
+(`docs/documento-tecnico-cto.md` §8) pero no son un alta; sin el override, el interceptor
+genérico los etiquetaba como `crear` en `audit_log` (inferido solo del método HTTP), lo cual
+es justo lo que pedía el ticket evitar ("Auditoría de publicar/anular"). Verificado en
+`audit.interceptor.test.ts`.
+
+Roles con acceso: `admin_quivo`/`admin_sindicato` (no `operador` — asunción de este equipo,
+rotaciones es una función de planificación, no de operación diaria, a diferencia del resto de
+M1 que sí incluye `operador`). Verificado end-to-end contra el API real (curl): generar un
+borrador de 4 asignaciones, publicar, intentar publicar de nuevo (400), anular, y confirmar
+en `GET /v1/auditoria?entidad=rotacion` que las 3 acciones (`crear`/`publicar`/`anular`)
+quedan bien etiquetadas.
+
 ## Pendientes de acceso
 
 - **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
@@ -340,12 +378,11 @@ válidas (mismo vehículo, mismo día, horario distinto). Seed extendido con una
    atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
    default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. **M2 — Rotaciones (RF-51..57), en curso:** QUI-230 (interceptor de auditoría genérico) y
-   QUI-231 (schema `rotaciones`/`asignaciones` + constraint anti doble-asignación) ✅
-   cerrados. Sigue QUI-232 (API generar borrador/editar/publicar atómico) → QUI-233 (UI
-   grilla vehículo×fecha) → QUI-234 (vencimiento de asignaciones, job BullMQ — necesita
-   resolver el choque de puerto de Redis con otro proyecto de esta máquina, ver memoria
-   de sesión).
+3. **M2 — Rotaciones (RF-51..57), en curso:** QUI-230 (interceptor de auditoría genérico),
+   QUI-231 (schema `rotaciones`/`asignaciones`) y QUI-232 (API generar/editar/publicar/anular)
+   ✅ cerrados. Sigue QUI-233 (UI grilla vehículo×fecha) → QUI-234 (vencimiento de
+   asignaciones, job BullMQ — necesita resolver el choque de puerto de Redis con otro
+   proyecto de esta máquina, ver memoria de sesión).
 4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
 5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
