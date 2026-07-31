@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M2 — Rotaciones cerrado. M4 en curso: QUI-248 y QUI-244 cerrados — auditoría real y reglas/sanciones. Arrancando QUI-245 — UI web de reglas/sanciones.)
+> Última actualización: **2026-07-31** (M2 completo. M4: QUI-248, QUI-244 y QUI-245 cerrados — auditoría, reglas/sanciones (API + UI web) reales. Quedan QUI-246/247/249, bloqueados por M3.)
 
 ## Qué es el proyecto
 
@@ -482,6 +482,34 @@ el más extendido en la base de código.
 Verificado end-to-end contra el API real (curl): crear regla → crear sanción (`pendiente`) →
 aplicar → pagar → confirmar que `pagada` es terminal (`anular` devuelve 400).
 
+## QUI-245 — web admin: UI de reglas y sanciones — cerrado 2026-07-31
+
+`/reglas` deja de ser demo. Dos pestañas (`Tabs` del design system) sobre el mismo layout:
+**Reglas** reutiliza `ModuleTablePage` con `dataSource` real (mismo patrón que
+vehículos/líneas, QUI-228) — CRUD simple, sin lógica propia. **Sanciones** es una vista a
+medida (mismo criterio que rotaciones, QUI-233): filtros por estado/regla, tabla con botones
+de transición que cambian según el `estado` actual de cada fila (p. ej. `pendiente` muestra
+Aplicar/Anular; `aplicada` muestra Apelar/Marcar pagada/Anular), cada transición con
+`ConfirmDialog`, y un modal de alta con selector de sujeto dependiente del `sujetoTipo`
+elegido (vehículo/conductor/socio).
+
+**Bug real encontrado y arreglado armando esto:** `fechaHecho` es una fecha "pura" (guardada
+como medianoche UTC), pero `toLocaleDateString('es-BO')` sin fijar `timeZone: 'UTC'` usa la
+zona horaria del browser para convertir — en cualquier navegador al oeste de UTC (incluida
+Bolivia, UTC-4) esto corre la fecha mostrada un día para atrás. Se vio en vivo: una sanción
+con `fechaHecho: 2026-08-01` se mostraba como "31/7/2026" hasta forzar `timeZone: 'UTC'` en
+el formateo. El campo `ts` de auditoría (QUI-248) no tiene este problema — es un timestamp
+real, no una fecha pura, así que mostrarlo en hora local del browser es lo correcto ahí.
+
+Verificado en browser real (Chrome, sesión `admin_quivo`): crear una regla con el selector de
+sindicato, cambiar a la pestaña Sanciones, crear una sanción, aplicarla (con confirmación), y
+confirmar que los botones de acción cambiaron correctamente a los de una sanción `aplicada`.
+
+**M4 sigue así:** QUI-246 (dashboard de cumplimiento), QUI-247 (reconstrucción de
+recorridos) y QUI-249 (reportes operativos) necesitan datos reales de `gps_points`/sesiones
+que solo van a existir con M3 armado — quedan pendientes hasta que se resuelva el bloqueo de
+hardware de QUI-216 (licencia Transistorsoft + Android real).
+
 ## Pendientes de acceso
 
 - **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
@@ -508,11 +536,17 @@ aplicar → pagar → confirmar que `pagada` es terminal (`anular` devuelve 400)
    atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
    default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. **M2 — Rotaciones (RF-51..57): ✅ completo** (QUI-230..234). **M4, en curso** (elegido
-   sobre M3 porque M3 sigue bloqueado por hardware que nadie consiguió — licencia
-   Transistorsoft + Android real, QUI-216): QUI-248 (auditoría) ✅ y QUI-244 (reglas/
-   sanciones, modelo+API) ✅ cerrados. Sigue QUI-245 (UI reglas/sanciones). QUI-246/247/249
-   quedan para después de M3 (necesitan datos reales de tracking).
+3. **M2 — Rotaciones (RF-51..57): ✅ completo** (QUI-230..234). **M4** (elegido sobre M3
+   porque M3 sigue bloqueado por hardware que nadie consiguió — licencia Transistorsoft +
+   Android real, QUI-216): QUI-248 (auditoría), QUI-244 (reglas/sanciones API) y QUI-245
+   (reglas/sanciones UI) ✅ cerrados. QUI-246/247/249 quedan bloqueados hasta que exista M3
+   (necesitan datos reales de `gps_points`/sesiones). **Con esto, todo lo que se podía
+   avanzar en M4 sin M3 está hecho.** De M5 (hardening), QUI-250 (load test de ingesta) y
+   QUI-252 (retención GPS) también dependen de que exista la tabla `gps_points`/el worker de
+   ingesta (M3) — solo **QUI-251 (auditoría RLS + security review)** es genuinamente
+   independiente, porque audita lo que ya existe (M1/M2/M4). Próximo paso real: decidir con
+   el usuario entre conseguir el hardware para desbloquear M3, o adelantar QUI-251 mientras
+   tanto.
 4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
 5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
