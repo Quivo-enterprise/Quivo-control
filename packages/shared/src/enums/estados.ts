@@ -14,6 +14,9 @@ export type EstadoSocio = z.infer<typeof EstadoSocioSchema>;
 export const EstadoConductorSchema = z.enum(['activo', 'inactivo']);
 export type EstadoConductor = z.infer<typeof EstadoConductorSchema>;
 
+export const EstadoRutaSchema = z.enum(['activo', 'inactivo']);
+export type EstadoRuta = z.infer<typeof EstadoRutaSchema>;
+
 export const EstadoSancionSchema = z.enum([
   'pendiente',
   'aplicada',

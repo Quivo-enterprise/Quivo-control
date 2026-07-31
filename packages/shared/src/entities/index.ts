@@ -3,3 +3,6 @@ export * from './socio.js';
 export * from './vehiculo.js';
 export * from './conductor.js';
 export * from './linea.js';
+export * from './ruta.js';
+export * from './variante.js';
+export * from './parada.js';
