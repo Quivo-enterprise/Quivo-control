@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-30** (QUI-217/218/220 — schema núcleo, RLS multi-tenant y primer CRUD real (`/v1/sindicatos`) verificados end-to-end)
+> Última actualización: **2026-07-30** (M1 núcleo administrativo completo: QUI-217/218/220..226 — CRUD real de sindicatos/socios/vehículos/conductores/líneas/rutas/variantes/paradas/puntos de control, todo verificado end-to-end)
 
 ## Qué es el proyecto
 
@@ -27,6 +27,8 @@ Requerimientos de Producto (CPO): `~/Downloads/QUIVOcontrol.md` (RF-01..84, RNF,
 | QUI-217 — schema núcleo   | ✅ Modelos Prisma sindicatos/socios/vehículos/conductores/líneas/rutas+geometría/audit_log, migración + seeds — ver sección abajo                                                                                                             |
 | QUI-218 — RLS multi-tenant| ✅ Rol `quivo_app` sin bypass, políticas por tabla, contexto por request, **9 tests cross-tenant pasando** — ver sección abajo                                                                                                                |
 | QUI-220 — CRUD sindicatos | ✅ `/v1/sindicatos` real (solo `admin_quivo`), guard JWT + rol, auditoría en `audit_log`, **verificado end-to-end** (curl con y sin permiso) — ver sección abajo                                                                             |
+| QUI-221..224 — CRUD M1    | ✅ `/v1/socios`, `/v1/vehiculos`, `/v1/conductores`, `/v1/lineas` — mismo patrón que sindicatos, tenant-scoping real (`admin_sindicato`/`operador` forzados a su propio sindicato), **55 tests de integración pasando** — ver sección abajo   |
+| QUI-225/226 — geometría   | ✅ `/v1/lineas/:id/rutas`, `/v1/rutas/:id/variantes`, `/v1/rutas/:id/paradas`, `/v1/rutas/:id/puntos-control` — GEOGRAPHY vía SQL crudo, GeoJSON in/out, validación de geometría y de cercanía (ST_DWithin) — ver sección abajo                |
 | Linear API                | ✅ Conectado vía API key en `.Agents/.env Linear` (no MCP en esta sesión) — estado real de issues/cycles verificado 2026-07-20                                                                                                                 |
 | Preguntas de Producto (5) | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo                                                                                                                                                                                     |
 | Proyecto en Linear        | ✅ **QUIVO Control — MVP** creado (2026-07-19): 6 milestones, 43 issues (QUI-211..253), Sprint 1 planificado — ver sección Linear abajo                                                                                                        |
@@ -185,6 +187,48 @@ endpoint protegido con `JwtAuthGuard` puede autenticar nada. Se agregó `BETTER_
 mockeado) para que este bug no vuelva a pasar en silencio — el test con `verifyJWT` mockeado
 no lo detecta porque nunca llega a firmar un JWT real.
 
+## QUI-221..226 — resto del núcleo administrativo (M1) — cerrado 2026-07-30
+
+Mismo día que QUI-217/218/220, se completó el resto de M1 en el mismo PR: **QUI-221**
+(`/v1/socios`), **QUI-222** (`/v1/vehiculos`), **QUI-223** (`/v1/conductores`), **QUI-224**
+(`/v1/lineas`), **QUI-225** (`/v1/lineas/:id/rutas` + variantes + paradas, con geometría
+PostGIS) y **QUI-226** (`/v1/rutas/:id/puntos-control`). 55 tests de integración corriendo
+contra Postgres real (con RLS activo donde aplica).
+
+**Tenant-scoping real (no solo `admin_quivo`):** a diferencia de sindicatos (QUI-220, único
+módulo restringido a `admin_quivo`), socios/vehículos/conductores/líneas los usan también
+`admin_sindicato`/`operador`. Cada service resuelve `sindicatoId`: si el actor tiene uno
+propio, se lo fuerza sin importar qué mande el body (nunca confiar en el cliente para elegir
+de qué tenant es un alta — verificado con test: mandar el `sindicatoId` de otro sindicato en
+el body no cuela); si es `admin_quivo` (sin tenant propio), lo toma del body o rechaza con 400.
+
+**QUI-222 — máquina de transiciones de estado para vehículos:** `activo` puede ir a
+cualquier otro estado; `inactivo`/`suspendido`/`mantenimiento` solo pueden volver a
+`activo` (sin transiciones directas entre esos tres). **Asunción no confirmada por
+Producto** — el doc técnico solo lista los 4 estados posibles, no las transiciones válidas;
+ajustar en `vehiculos.service.ts` si Producto define otra cosa. También se agregó
+`credencialHash` (nullable) al modelo `Vehiculo` para el login por vehículo de M3 (QUI-235)
+— solo el campo, sin lógica de login, nunca expuesto en las respuestas del API.
+
+**QUI-225/226 — geometría PostGIS vía SQL crudo:** las columnas `GEOGRAPHY` (`rutas.geometria`,
+`paradas.coord`, `puntos_control.coord`) son `Unsupported(...)` en Prisma — el Client normal
+ni siquiera expone esos campos, así que todo el CRUD de geometría usa `$queryRaw`/`$executeRaw`
+con `ST_GeomFromGeoJSON`/`ST_AsGeoJSON` (GeoJSON in/out por la API, nunca WKT). Dos
+validaciones geoespaciales: `ST_IsValid` antes de grabar la geometría de una ruta, y
+`ST_DWithin` (100m, **asunción no confirmada por Producto**, en
+`common/geo/proximidad-ruta.ts`) para que paradas y puntos de control no puedan crearse lejos
+de la geometría de su ruta.
+
+**Tenant-scoping sin RLS propia para rutas/variantes/paradas/puntos_control:** estas tablas
+no tienen columna `sindicatoId` directa (la heredan transitivamente vía `lineaId` →
+`linea.sindicatoId`), así que QUI-218 deliberadamente no les puso políticas RLS (ver esa
+migración). La barrera de tenant vive en el código: `common/geo/tenant-checks.ts` resuelve
+toda operación hacia arriba hasta `linea` (que sí tiene RLS) — si no es visible para el
+actor, se trata como inexistente (**404, nunca 403** — no revela que el recurso existe en
+otro tenant). Variantes y paradas viven dentro de `RutasModule` (no son módulos Nest propios,
+así lo agrupaba ya el esqueleto de QUI-214 bajo RF-24..33); `control-points` sí es su propio
+módulo (RF-34..39/QUI-226, issue separada).
+
 ## Pendientes de acceso
 
 - **Push a GitHub:** ✅ resuelto (2026-07-30) — ya no hay bloqueo de credenciales de escritura
@@ -205,18 +249,22 @@ no lo detecta porque nunca llega a firmar un JWT real.
 ## Próximos pasos
 
 1. Revisar y mergear el PR abierto (`qui-227-web-nextjs-scaffold` → `main`, ahora incluye
-   también QUI-217/218/220) — dispara el CI (QUI-212) por primera vez contra código real,
-   incluido el test cross-tenant de RLS. **Sin atribución de IA** en commits/PRs — regla
-   del repo, sobrescribe el comportamiento default del agente.
+   todo M1: QUI-217/218/220..226) — dispara el CI (QUI-212) por primera vez contra código
+   real, incluidos los 55+ tests de integración (RLS, geometría, tenant-scoping). **Sin
+   atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
+   default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. Seguir con QUI-221..226 (mismo patrón CRUD que QUI-220 para socios/vehículos/conductores/
-   líneas/rutas/puntos de control) y QUI-228 (conectar `apps/web` a los endpoints reales,
-   reemplazando `demo-data.ts`).
-4. Deploy de `apps/web` en Vercel + CI (parte del criterio de aceptación de QUI-227, aún no hecho).
-5. Decidir Railway vs Fly.io (ADR ya redactado) y aprovisionar cuando el usuario confirme.
-6. Conseguir licencia Transistorsoft + dispositivo Android de gama baja y correr el
+3. QUI-228: conectar `apps/web` a los endpoints reales de M1, reemplazando `demo-data.ts`
+   — todo el backend ya está listo y probado.
+4. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
+   de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
+   control cerca de una ruta (`common/geo/proximidad-ruta.ts`), taxonomía de `tipo` en
+   paradas (`packages/shared/src/entities/parada.ts`).
+5. Deploy de `apps/web` en Vercel + CI (parte del criterio de aceptación de QUI-227, aún no hecho).
+6. Decidir Railway vs Fly.io (ADR ya redactado) y aprovisionar cuando el usuario confirme.
+7. Conseguir licencia Transistorsoft + dispositivo Android de gama baja y correr el
    protocolo de `docs/spike-gps.md` — gate go/no-go real de M3.
-7. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas),
+8. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas),
    refinement de M1 durante Cycle 13.
 
 ## Fuentes de verdad
