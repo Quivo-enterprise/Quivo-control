@@ -26,7 +26,16 @@ async function bootstrap(): Promise<void> {
   // bloquea el preflight (OPTIONS) de POST /v1/auth/login con 404 antes de que Nest
   // llegue a manejar la request real (curl no lo sufre: CORS es una restricción del
   // browser, no del server, por eso funcionaba probando con curl).
-  app.enableCors({ origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000' });
+  //
+  // `methods` explícito: sin esto, el default de @fastify/cors solo deja pasar
+  // GET/HEAD/POST en `Access-Control-Allow-Methods` — cualquier PATCH (QUI-220 en
+  // adelante, todos los endpoints de edición) queda bloqueado en el browser con
+  // "Failed to fetch" aunque el preflight responda 204 y curl (que no aplica CORS)
+  // funcione perfecto. Encontrado probando QUI-228 (apps/web) contra la API real.
+  app.enableCors({
+    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+  });
 
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port, '0.0.0.0');
