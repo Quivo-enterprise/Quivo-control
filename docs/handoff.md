@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-30** (M1 completo de punta a punta: backend QUI-217/218/220..226 + `apps/web` conectada al API real en QUI-228 — verificado en browser real, sin bypass de dev)
+> Última actualización: **2026-07-31** (M1 (núcleo administrativo) cerrado de punta a punta, incluido QUI-229 — editor de rutas sobre mapa. Arrancando M2 — Rotaciones.)
 
 ## Qué es el proyecto
 
@@ -264,8 +264,27 @@ sindicatos de prueba huérfanos en la DB local (de corridas de test interrumpida
 que limpiar a mano — si aparecen filas raras tipo "Rutas Test A"/"Paradas Test B" etc. en la
 DB local, son de eso, no de datos reales.
 
+## QUI-229 — editor de rutas sobre mapa — cerrado 2026-07-31
+
+M1 (núcleo administrativo) queda **completo de punta a punta**. Reutiliza `RouteMap` del
+design system (`~/Proyectos/Web/Design_System_QUIVO`) — que usa **Leaflet, no MapLibre**
+(la decisión original del doc técnico §1 nunca se implementó así; se decidió no duplicar
+ese trabajo construyendo un componente MapLibre nuevo desde cero cuando uno funcional ya
+existía). Se le agregó un prop `zones` (commit aparte en ese repo, **no pusheado
+todavía** — solo local) para dibujar círculos a escala real en metros (radio de tolerancia
+de un punto de control), distinto de los `stops` (radio fijo en píxeles).
+
+Flujo: elegir línea real → ver/crear rutas de esa línea dibujando la geometría con clicks
+sucesivos sobre el mapa → sobre una ruta seleccionada, agregar paradas y puntos de control
+con un click + formulario mínimo → variantes como lista simple (sin geometría propia).
+Todo contra los endpoints reales de QUI-225/226. **Verificado en browser real**: dibujar y
+guardar una ruta de 3 puntos, agregar una parada, y un punto de control — la primera vez
+rechazado por "lejos de la ruta" (ST_DWithin del backend funcionando en vivo), aceptado al
+clickear más cerca, con el círculo de 30m visible en el mapa.
+
 ## Pendientes de acceso
 
+- **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
 - **Push a GitHub:** ✅ resuelto (2026-07-30) — ya no hay bloqueo de credenciales de escritura
   sobre `Quivo-enterprise/quivo-control`. Todo el trabajo de Cycle 12 + QUI-227/219 se pusheó en
   una sola rama (`qui-227-web-nextjs-scaffold`, 13 commits) con un único PR hacia `main`
@@ -289,16 +308,22 @@ DB local, son de eso, no de datos reales.
    atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
    default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. QUI-229: editor de rutas sobre mapa (MapLibre) — el backend (QUI-225) ya está listo.
-4. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
+3. **M2 — Rotaciones (RF-51..57), en curso:** QUI-230 (interceptor de auditoría genérico,
+   reemplaza las llamadas manuales a `audit_log` de QUI-220..226) → QUI-231 (schema
+   `rotaciones`/`asignaciones` + constraint anti doble-asignación) → QUI-232 (API generar
+   borrador/editar/publicar atómico) → QUI-233 (UI grilla vehículo×fecha) → QUI-234
+   (vencimiento de asignaciones, job BullMQ — necesita resolver el choque de puerto de
+   Redis con otro proyecto de esta máquina, ver memoria de sesión).
+4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
+5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
    control cerca de una ruta (`common/geo/proximidad-ruta.ts`), taxonomía de `tipo` en
    paradas (`packages/shared/src/entities/parada.ts`).
-5. Deploy de `apps/web` en Vercel + CI (parte del criterio de aceptación de QUI-227, aún no hecho).
-6. Decidir Railway vs Fly.io (ADR ya redactado) y aprovisionar cuando el usuario confirme.
-7. Conseguir licencia Transistorsoft + dispositivo Android de gama baja y correr el
+6. Deploy de `apps/web` en Vercel + CI (parte del criterio de aceptación de QUI-227, aún no hecho).
+7. Decidir Railway vs Fly.io (ADR ya redactado) y aprovisionar cuando el usuario confirme.
+8. Conseguir licencia Transistorsoft + dispositivo Android de gama baja y correr el
    protocolo de `docs/spike-gps.md` — gate go/no-go real de M3.
-8. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas),
+9. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas),
    refinement de M1 durante Cycle 13.
 
 ## Fuentes de verdad
