@@ -1,0 +1,101 @@
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { withTenantContext } from '@quivo/db';
+import type { Prisma } from '@quivo/db';
+import { ConductorSchema, type ActualizarConductor, type Conductor, type CrearConductor } from '@quivo/shared';
+import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+
+/**
+ * Sin FK fija a vehículo/socio a propósito: un conductor rota entre vehículos (doc técnico
+ * §15.3) — esa relación vive en `asignaciones`/rotaciones (M2, QUI-231/232), no como campo
+ * fijo acá. Mismo tenant-scoping que socios/vehículos (QUI-221/222).
+ */
+@Injectable()
+export class ConductoresService {
+  async listar(actor: AuthenticatedUser): Promise<Conductor[]> {
+    const rows = await withTenantContext(toTenantContext(actor), (tx) =>
+      tx.conductor.findMany({
+        where: actor.sindicatoId ? { sindicatoId: actor.sindicatoId } : undefined,
+        orderBy: { nombre: 'asc' },
+      }),
+    );
+    return rows.map(toConductor);
+  }
+
+  async obtener(actor: AuthenticatedUser, id: string): Promise<Conductor> {
+    const conductor = await withTenantContext(toTenantContext(actor), (tx) =>
+      tx.conductor.findUnique({ where: { id } }),
+    );
+    if (!conductor) {
+      throw new NotFoundException('Conductor no encontrado');
+    }
+    return toConductor(conductor);
+  }
+
+  async crear(actor: AuthenticatedUser, data: CrearConductor): Promise<Conductor> {
+    const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
+    const conductor = await withTenantContext(toTenantContext(actor), async (tx) => {
+      const creado = await tx.conductor.create({ data: { ...data, sindicatoId } });
+      await auditar(tx, actor, 'crear', creado.id, sindicatoId, data);
+      return creado;
+    });
+    return toConductor(conductor);
+  }
+
+  async actualizar(actor: AuthenticatedUser, id: string, data: ActualizarConductor): Promise<Conductor> {
+    const conductor = await withTenantContext(toTenantContext(actor), async (tx) => {
+      const anterior = await tx.conductor.findUnique({ where: { id } });
+      if (!anterior) {
+        throw new NotFoundException('Conductor no encontrado');
+      }
+      const actualizado = await tx.conductor.update({ where: { id }, data });
+      await auditar(tx, actor, 'editar', id, anterior.sindicatoId, { antes: anterior, cambios: data });
+      return actualizado;
+    });
+    return toConductor(conductor);
+  }
+}
+
+function toTenantContext(actor: AuthenticatedUser): { rol: string; sindicatoId: string | null } {
+  return { rol: actor.rol, sindicatoId: actor.sindicatoId };
+}
+
+function resolverSindicatoId(actor: AuthenticatedUser, sindicatoIdDelBody: string): string {
+  if (actor.sindicatoId) {
+    return actor.sindicatoId;
+  }
+  if (!sindicatoIdDelBody) {
+    throw new BadRequestException('sindicatoId es obligatorio para admin_quivo');
+  }
+  return sindicatoIdDelBody;
+}
+
+function toConductor(row: {
+  id: string;
+  sindicatoId: string;
+  nombre: string;
+  documentoIdentidad: string;
+  licenciaConducir: string;
+  estado: string;
+}): Conductor {
+  return ConductorSchema.parse(row);
+}
+
+async function auditar(
+  tx: Prisma.TransactionClient,
+  actor: AuthenticatedUser,
+  accion: string,
+  entidadId: string,
+  sindicatoId: string,
+  diff: unknown,
+): Promise<void> {
+  await tx.auditLog.create({
+    data: {
+      sindicatoId,
+      usuarioId: actor.userId,
+      entidad: 'conductor',
+      entidadId,
+      accion,
+      diff: diff as Prisma.InputJsonValue,
+    },
+  });
+}

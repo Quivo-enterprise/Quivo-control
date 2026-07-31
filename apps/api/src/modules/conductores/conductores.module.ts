@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
+import { ConductoresController } from './conductores.controller.js';
+import { ConductoresService } from './conductores.service.js';
 
-// Esqueleto — CRUD real (RF-15..19) llega en QUI-223.
-@Module({})
+@Module({
+  controllers: [ConductoresController],
+  providers: [ConductoresService],
+})
 export class ConductoresModule {}

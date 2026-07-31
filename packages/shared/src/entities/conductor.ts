@@ -16,3 +16,6 @@ export const CrearConductorSchema = ConductorSchema.omit({ id: true, estado: tru
   estado: EstadoConductorSchema.default('activo'),
 });
 export type CrearConductor = z.infer<typeof CrearConductorSchema>;
+
+export const ActualizarConductorSchema = ConductorSchema.omit({ id: true, sindicatoId: true }).partial();
+export type ActualizarConductor = z.infer<typeof ActualizarConductorSchema>;
