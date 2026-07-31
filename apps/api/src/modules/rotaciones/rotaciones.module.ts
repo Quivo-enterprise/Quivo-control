@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
+import { RotacionesController } from './rotaciones.controller.js';
+import { RotacionesService } from './rotaciones.service.js';
 
-// Esqueleto — generar/editar/publicar rotaciones (RF-51..57) llega en QUI-231/232.
-@Module({})
+@Module({
+  controllers: [RotacionesController],
+  providers: [RotacionesService],
+})
 export class RotacionesModule {}

@@ -4,6 +4,7 @@ import { Reflector } from '@nestjs/core';
 import { prisma, withTenantContext } from '@quivo/db';
 import { firstValueFrom, of } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AUDIT_ACCION_KEY, AUDIT_ENTIDAD_KEY } from './audit.decorator.js';
 import { AuditInterceptor } from './audit.interceptor.js';
 import type { AuthenticatedUser } from '../auth/jwt-auth.guard.js';
 
@@ -24,8 +25,17 @@ function handlerQueDevuelve(resultado: unknown): CallHandler {
   return { handle: () => of(resultado) };
 }
 
-function interceptorConEntidad(entidad: string | undefined): AuditInterceptor {
-  const reflector = { get: vi.fn().mockReturnValue(entidad) } as unknown as Reflector;
+// El mock del `Reflector` distingue por key (como el real): sin esto, pedir
+// `AUDIT_ACCION_KEY` devolvería `entidad` también, pisando el `crear`/`editar` inferido del
+// método HTTP (bug real que hizo fallar este test al agregar el override de QUI-232).
+function interceptorConEntidad(entidad: string | undefined, accion?: string): AuditInterceptor {
+  const reflector = {
+    get: vi.fn((key: string) => {
+      if (key === AUDIT_ENTIDAD_KEY) return entidad;
+      if (key === AUDIT_ACCION_KEY) return accion;
+      return undefined;
+    }),
+  } as unknown as Reflector;
   return new AuditInterceptor(reflector);
 }
 
@@ -133,5 +143,21 @@ describe('AuditInterceptor', () => {
       tx.auditLog.findFirst({ where: { entidadId: sindicatoId } }),
     );
     expect(fila?.sindicatoId).toBe(sindicatoId);
+  });
+
+  it('usa el override de acción del decorador en vez de inferirla del método HTTP (QUI-232)', async () => {
+    const interceptor = interceptorConEntidad('rotacion', 'publicar');
+    const entidadId = randomUUID();
+    const resultado = { id: entidadId, sindicatoId, periodo: '2026-08', estado: 'publicada' };
+
+    await firstValueFrom(
+      interceptor.intercept(contexto({ method: 'POST', user: adminQuivo() }), handlerQueDevuelve(resultado)),
+    );
+    creadosAuditLog.push(entidadId);
+
+    const fila = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.auditLog.findFirst({ where: { entidadId } }),
+    );
+    expect(fila?.accion).toBe('publicar');
   });
 });

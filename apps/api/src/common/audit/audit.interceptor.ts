@@ -3,7 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { withTenantContext } from '@quivo/db';
 import type { Observable } from 'rxjs';
 import { concatMap } from 'rxjs/operators';
-import { AUDIT_ENTIDAD_KEY } from './audit.decorator.js';
+import { AUDIT_ACCION_KEY, AUDIT_ENTIDAD_KEY } from './audit.decorator.js';
 import type { AuthenticatedUser } from '../auth/jwt-auth.guard.js';
 
 const ACCION_POR_METODO: Record<string, string> = {
@@ -50,7 +50,8 @@ export class AuditInterceptor implements NestInterceptor {
     }
 
     const request = context.switchToHttp().getRequest<RequestConAuditoria>();
-    const accion = ACCION_POR_METODO[request.method];
+    const accionOverride = this.reflector.get<string | undefined>(AUDIT_ACCION_KEY, context.getHandler());
+    const accion = accionOverride ?? ACCION_POR_METODO[request.method];
     const actor = request.user;
     if (!accion || !actor) {
       return next.handle();
