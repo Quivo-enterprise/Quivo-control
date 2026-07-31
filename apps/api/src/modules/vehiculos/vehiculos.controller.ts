@@ -6,6 +6,7 @@ import {
   type CrearVehiculo,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
+import { Auditable } from '../../common/audit/audit.decorator.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
@@ -34,11 +35,13 @@ export class VehiculosController {
   }
 
   @Post()
+  @Auditable('vehiculo')
   crear(@CurrentUser() actor: AuthenticatedUser, @Body() body: CrearVehiculoDto) {
     return this.vehiculosService.crear(actor, body as CrearVehiculo);
   }
 
   @Patch(':id')
+  @Auditable('vehiculo')
   actualizar(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id') id: string,

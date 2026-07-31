@@ -1,8 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_PIPE } from '@nestjs/core';
+import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodValidationPipe } from './common/validation/zod-validation.pipe.js';
+import { AuditInterceptor } from './common/audit/audit.interceptor.js';
 import { PingController } from './common/ping/ping.controller.js';
 import { HealthModule } from './health/health.module.js';
 import { AuthModule } from './modules/auth/index.js';
@@ -49,6 +50,9 @@ import { AuditoriaModule } from './modules/auditoria/index.js';
     AuditoriaModule,
   ],
   controllers: [PingController],
-  providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],
+  providers: [
+    { provide: APP_PIPE, useClass: ZodValidationPipe },
+    { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
+  ],
 })
 export class AppModule {}

@@ -1,6 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
-import type { Prisma } from '@quivo/db';
 import { SindicatoSchema, type ActualizarSindicato, type CrearSindicato, type Sindicato } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
@@ -9,6 +8,9 @@ import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
  * (el guard de rol ya lo garantiza, ver sindicatos.controller.ts) — es el mismo helper que
  * van a usar los módulos de socios/vehículos/etc. cuando `admin_sindicato` sí necesite el
  * filtro real, y ejercita la política de RLS en vez de esquivarla.
+ *
+ * Auditoría: la maneja `AuditInterceptor` (QUI-230, `@Auditable('sindicato')` en el
+ * controller) — este service ya no escribe en `audit_log` directamente.
  */
 @Injectable()
 export class SindicatosService {
@@ -30,11 +32,7 @@ export class SindicatosService {
   }
 
   async crear(actor: AuthenticatedUser, data: CrearSindicato): Promise<Sindicato> {
-    const sindicato = await withTenantContext(toTenantContext(actor), async (tx) => {
-      const creado = await tx.sindicato.create({ data });
-      await auditar(tx, actor, 'crear', creado.id, data);
-      return creado;
-    });
+    const sindicato = await withTenantContext(toTenantContext(actor), (tx) => tx.sindicato.create({ data }));
     return toSindicato(sindicato);
   }
 
@@ -44,9 +42,7 @@ export class SindicatosService {
       if (!anterior) {
         throw new NotFoundException('Sindicato no encontrado');
       }
-      const actualizado = await tx.sindicato.update({ where: { id }, data });
-      await auditar(tx, actor, 'editar', id, { antes: anterior, cambios: data });
-      return actualizado;
+      return tx.sindicato.update({ where: { id }, data });
     });
     return toSindicato(sindicato);
   }
@@ -62,25 +58,4 @@ function toTenantContext(actor: AuthenticatedUser): { rol: string; sindicatoId: 
  * entra un valor de `estado` que ya no es válido. */
 function toSindicato(row: { id: string; nombre: string; estado: string }): Sindicato {
   return SindicatoSchema.parse(row);
-}
-
-/** Auditoría directa (RF-81..84 llega completo con el interceptor genérico de QUI-230) —
- * acá alcanza con dejar constancia de las acciones de este módulo sobre `audit_log`. */
-async function auditar(
-  tx: Prisma.TransactionClient,
-  actor: AuthenticatedUser,
-  accion: string,
-  entidadId: string,
-  diff: unknown,
-): Promise<void> {
-  await tx.auditLog.create({
-    data: {
-      sindicatoId: actor.sindicatoId,
-      usuarioId: actor.userId,
-      entidad: 'sindicato',
-      entidadId,
-      accion,
-      diff: diff as Prisma.InputJsonValue,
-    },
-  });
 }

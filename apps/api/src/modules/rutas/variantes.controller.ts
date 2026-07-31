@@ -6,6 +6,7 @@ import {
   type CrearVariante,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
+import { Auditable } from '../../common/audit/audit.decorator.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
@@ -30,6 +31,7 @@ export class RutaVariantesController {
   }
 
   @Post()
+  @Auditable('variante')
   crear(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('rutaId') rutaId: string,
@@ -47,6 +49,7 @@ export class VariantesController {
   constructor(private readonly variantesService: VariantesService) {}
 
   @Patch(':id')
+  @Auditable('variante')
   actualizar(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id') id: string,

@@ -1,6 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
-import type { Prisma } from '@quivo/db';
 import { SocioSchema, type ActualizarSocio, type CrearSocio, type Socio } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
@@ -36,11 +35,9 @@ export class SociosService {
 
   async crear(actor: AuthenticatedUser, data: CrearSocio): Promise<Socio> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
-    const socio = await withTenantContext(toTenantContext(actor), async (tx) => {
-      const creado = await tx.socio.create({ data: { ...data, sindicatoId } });
-      await auditar(tx, actor, 'crear', creado.id, sindicatoId, data);
-      return creado;
-    });
+    const socio = await withTenantContext(toTenantContext(actor), (tx) =>
+      tx.socio.create({ data: { ...data, sindicatoId } }),
+    );
     return toSocio(socio);
   }
 
@@ -50,9 +47,7 @@ export class SociosService {
       if (!anterior) {
         throw new NotFoundException('Socio no encontrado');
       }
-      const actualizado = await tx.socio.update({ where: { id }, data });
-      await auditar(tx, actor, 'editar', id, anterior.sindicatoId, { antes: anterior, cambios: data });
-      return actualizado;
+      return tx.socio.update({ where: { id }, data });
     });
     return toSocio(socio);
   }
@@ -83,24 +78,4 @@ function toSocio(row: {
   estado: string;
 }): Socio {
   return SocioSchema.parse(row);
-}
-
-async function auditar(
-  tx: Prisma.TransactionClient,
-  actor: AuthenticatedUser,
-  accion: string,
-  entidadId: string,
-  sindicatoId: string,
-  diff: unknown,
-): Promise<void> {
-  await tx.auditLog.create({
-    data: {
-      sindicatoId,
-      usuarioId: actor.userId,
-      entidad: 'socio',
-      entidadId,
-      accion,
-      diff: diff as Prisma.InputJsonValue,
-    },
-  });
 }

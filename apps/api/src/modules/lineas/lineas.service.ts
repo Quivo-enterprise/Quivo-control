@@ -31,11 +31,9 @@ export class LineasService {
   async crear(actor: AuthenticatedUser, data: CrearLinea): Promise<Linea> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
     try {
-      const linea = await withTenantContext(toTenantContext(actor), async (tx) => {
-        const creada = await tx.linea.create({ data: { ...data, sindicatoId } });
-        await auditar(tx, actor, 'crear', creada.id, sindicatoId, data);
-        return creada;
-      });
+      const linea = await withTenantContext(toTenantContext(actor), (tx) =>
+        tx.linea.create({ data: { ...data, sindicatoId } }),
+      );
       return toLinea(linea);
     } catch (error) {
       throw traducirErrorUnicidad(error, data.codigo);
@@ -49,9 +47,7 @@ export class LineasService {
         if (!anterior) {
           throw new NotFoundException('Línea no encontrada');
         }
-        const actualizada = await tx.linea.update({ where: { id }, data });
-        await auditar(tx, actor, 'editar', id, anterior.sindicatoId, { antes: anterior, cambios: data });
-        return actualizada;
+        return tx.linea.update({ where: { id }, data });
       });
       return toLinea(linea);
     } catch (error) {
@@ -92,24 +88,4 @@ function toLinea(row: {
   descripcion: string | null;
 }): Linea {
   return LineaSchema.parse(row);
-}
-
-async function auditar(
-  tx: Prisma.TransactionClient,
-  actor: AuthenticatedUser,
-  accion: string,
-  entidadId: string,
-  sindicatoId: string,
-  diff: unknown,
-): Promise<void> {
-  await tx.auditLog.create({
-    data: {
-      sindicatoId,
-      usuarioId: actor.userId,
-      entidad: 'linea',
-      entidadId,
-      accion,
-      diff: diff as Prisma.InputJsonValue,
-    },
-  });
 }

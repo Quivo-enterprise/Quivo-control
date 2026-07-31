@@ -6,6 +6,7 @@ import {
   type CrearRuta,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
+import { Auditable } from '../../common/audit/audit.decorator.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
@@ -30,6 +31,7 @@ export class LineaRutasController {
   }
 
   @Post()
+  @Auditable('ruta')
   crear(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('lineaId') lineaId: string,
@@ -53,6 +55,7 @@ export class RutasController {
   }
 
   @Patch(':id')
+  @Auditable('ruta')
   actualizar(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id') id: string,

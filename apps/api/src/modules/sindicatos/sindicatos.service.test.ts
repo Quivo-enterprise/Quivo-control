@@ -23,19 +23,13 @@ describe('SindicatosService', () => {
     await prisma.$disconnect();
   });
 
-  it('crea un sindicato y lo audita', async () => {
+  it('crea un sindicato', async () => {
     const nombre = `Test ${randomUUID()}`;
     const sindicato = await service.crear(adminQuivo, { nombre, estado: 'activo' });
     creados.push(sindicato.id);
 
     expect(sindicato.nombre).toBe(nombre);
     expect(sindicato.estado).toBe('activo');
-
-    const auditoria = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
-      tx.auditLog.findFirst({ where: { entidadId: sindicato.id, accion: 'crear' } }),
-    );
-    expect(auditoria).not.toBeNull();
-    expect(auditoria?.usuarioId).toBe(adminQuivo.userId);
   });
 
   it('lista y obtiene el sindicato creado', async () => {
@@ -49,17 +43,12 @@ describe('SindicatosService', () => {
     expect(obtenido.id).toBe(sindicato.id);
   });
 
-  it('actualiza el estado y audita el cambio', async () => {
+  it('actualiza el estado', async () => {
     const sindicato = await service.crear(adminQuivo, { nombre: `Test ${randomUUID()}`, estado: 'activo' });
     creados.push(sindicato.id);
 
     const actualizado = await service.actualizar(adminQuivo, sindicato.id, { estado: 'inactivo' });
     expect(actualizado.estado).toBe('inactivo');
-
-    const auditoria = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
-      tx.auditLog.findFirst({ where: { entidadId: sindicato.id, accion: 'editar' } }),
-    );
-    expect(auditoria).not.toBeNull();
   });
 
   it('lanza NotFoundException al obtener un id inexistente', async () => {

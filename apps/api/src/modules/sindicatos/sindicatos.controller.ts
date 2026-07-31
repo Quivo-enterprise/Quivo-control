@@ -6,6 +6,7 @@ import {
   type CrearSindicato,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
+import { Auditable } from '../../common/audit/audit.decorator.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
@@ -34,6 +35,7 @@ export class SindicatosController {
   }
 
   @Post()
+  @Auditable('sindicato')
   crear(@CurrentUser() actor: AuthenticatedUser, @Body() body: CrearSindicatoDto) {
     // `body` ya pasó por ZodValidationPipe (CrearSindicatoSchema, con default de `estado`
     // aplicado) — el cast es solo porque `createZodDto` infiere el tipo de entrada del
@@ -42,6 +44,7 @@ export class SindicatosController {
   }
 
   @Patch(':id')
+  @Auditable('sindicato')
   actualizar(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id') id: string,

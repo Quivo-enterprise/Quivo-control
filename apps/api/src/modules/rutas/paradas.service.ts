@@ -40,7 +40,7 @@ export class ParadasService {
 
   async crear(actor: AuthenticatedUser, rutaId: string, data: CrearParada): Promise<Parada> {
     return withTenantContext(toTenantContext(actor), async (tx) => {
-      const ruta = await asegurarRutaVisible(tx, rutaId);
+      await asegurarRutaVisible(tx, rutaId);
       await validarCercaniaARuta(tx, rutaId, data.coord);
 
       const id = randomUUID();
@@ -52,7 +52,6 @@ export class ParadasService {
           now(), now()
         )
       `;
-      await auditar(tx, actor, 'crear', id, ruta.sindicatoId, data);
       return toParada(await obtenerFila(tx, id));
     });
   }
@@ -60,7 +59,7 @@ export class ParadasService {
   async actualizar(actor: AuthenticatedUser, id: string, data: ActualizarParada): Promise<Parada> {
     return withTenantContext(toTenantContext(actor), async (tx) => {
       const anterior = await obtenerFila(tx, id);
-      const ruta = await asegurarRutaVisible(tx, anterior.rutaId);
+      await asegurarRutaVisible(tx, anterior.rutaId);
 
       if (data.coord) {
         await validarCercaniaARuta(tx, anterior.rutaId, data.coord);
@@ -78,7 +77,6 @@ export class ParadasService {
         await tx.$executeRaw`UPDATE paradas SET orden = ${data.orden}, "updatedAt" = now() WHERE id = ${id}`;
       }
 
-      await auditar(tx, actor, 'editar', id, ruta.sindicatoId, { antes: anterior, cambios: data });
       return toParada(await obtenerFila(tx, id));
     });
   }
@@ -102,24 +100,4 @@ function toTenantContext(actor: AuthenticatedUser): { rol: string; sindicatoId: 
 
 function toParada(row: ParadaRow): Parada {
   return ParadaSchema.parse({ ...row, coord: JSON.parse(row.coord) });
-}
-
-async function auditar(
-  tx: Prisma.TransactionClient,
-  actor: AuthenticatedUser,
-  accion: string,
-  entidadId: string,
-  sindicatoId: string,
-  diff: unknown,
-): Promise<void> {
-  await tx.auditLog.create({
-    data: {
-      sindicatoId,
-      usuarioId: actor.userId,
-      entidad: 'parada',
-      entidadId,
-      accion,
-      diff: diff as Prisma.InputJsonValue,
-    },
-  });
 }

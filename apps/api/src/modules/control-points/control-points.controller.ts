@@ -6,6 +6,7 @@ import {
   type CrearPuntoControl,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
+import { Auditable } from '../../common/audit/audit.decorator.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
@@ -30,6 +31,7 @@ export class RutaControlPointsController {
   }
 
   @Post()
+  @Auditable('punto_control')
   crear(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('rutaId') rutaId: string,
@@ -53,6 +55,7 @@ export class ControlPointsController {
   }
 
   @Patch(':id')
+  @Auditable('punto_control')
   actualizar(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id') id: string,

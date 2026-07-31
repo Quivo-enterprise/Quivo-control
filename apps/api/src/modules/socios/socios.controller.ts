@@ -6,6 +6,7 @@ import {
   type CrearSocio,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
+import { Auditable } from '../../common/audit/audit.decorator.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
@@ -35,11 +36,13 @@ export class SociosController {
   }
 
   @Post()
+  @Auditable('socio')
   crear(@CurrentUser() actor: AuthenticatedUser, @Body() body: CrearSocioDto) {
     return this.sociosService.crear(actor, body as CrearSocio);
   }
 
   @Patch(':id')
+  @Auditable('socio')
   actualizar(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id') id: string,

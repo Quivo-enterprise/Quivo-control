@@ -1,6 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
-import type { Prisma } from '@quivo/db';
 import { ConductorSchema, type ActualizarConductor, type Conductor, type CrearConductor } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
@@ -33,11 +32,9 @@ export class ConductoresService {
 
   async crear(actor: AuthenticatedUser, data: CrearConductor): Promise<Conductor> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
-    const conductor = await withTenantContext(toTenantContext(actor), async (tx) => {
-      const creado = await tx.conductor.create({ data: { ...data, sindicatoId } });
-      await auditar(tx, actor, 'crear', creado.id, sindicatoId, data);
-      return creado;
-    });
+    const conductor = await withTenantContext(toTenantContext(actor), (tx) =>
+      tx.conductor.create({ data: { ...data, sindicatoId } }),
+    );
     return toConductor(conductor);
   }
 
@@ -47,9 +44,7 @@ export class ConductoresService {
       if (!anterior) {
         throw new NotFoundException('Conductor no encontrado');
       }
-      const actualizado = await tx.conductor.update({ where: { id }, data });
-      await auditar(tx, actor, 'editar', id, anterior.sindicatoId, { antes: anterior, cambios: data });
-      return actualizado;
+      return tx.conductor.update({ where: { id }, data });
     });
     return toConductor(conductor);
   }
@@ -78,24 +73,4 @@ function toConductor(row: {
   estado: string;
 }): Conductor {
   return ConductorSchema.parse(row);
-}
-
-async function auditar(
-  tx: Prisma.TransactionClient,
-  actor: AuthenticatedUser,
-  accion: string,
-  entidadId: string,
-  sindicatoId: string,
-  diff: unknown,
-): Promise<void> {
-  await tx.auditLog.create({
-    data: {
-      sindicatoId,
-      usuarioId: actor.userId,
-      entidad: 'conductor',
-      entidadId,
-      accion,
-      diff: diff as Prisma.InputJsonValue,
-    },
-  });
 }

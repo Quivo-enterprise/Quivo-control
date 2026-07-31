@@ -55,7 +55,7 @@ describe('LineasService', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('actualiza nombre/color y audita el cambio', async () => {
+  it('actualiza nombre/color', async () => {
     const linea = await service.crear(adminSindicatoA, { sindicatoId: sindicatoAId, codigo: 'L9', nombre: 'Vieja' });
     const actualizada = await service.actualizar(adminSindicatoA, linea.id, { nombre: 'Nueva', color: '#000000' });
     expect(actualizada.nombre).toBe('Nueva');

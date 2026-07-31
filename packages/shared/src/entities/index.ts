@@ -7,3 +7,4 @@ export * from './ruta.js';
 export * from './variante.js';
 export * from './parada.js';
 export * from './punto-control.js';
+export * from './auditoria.js';

@@ -58,7 +58,7 @@ describe('ConductoresService', () => {
     expect(lista.every((c) => c.sindicatoId === sindicatoAId)).toBe(true);
   });
 
-  it('actualiza estado y audita el cambio', async () => {
+  it('actualiza estado', async () => {
     const conductor = await service.crear(adminSindicatoA, {
       sindicatoId: sindicatoAId,
       nombre: 'A editar',

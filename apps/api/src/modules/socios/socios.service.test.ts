@@ -85,7 +85,7 @@ describe('SociosService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('actualizar audita el cambio con el sindicatoId original', async () => {
+  it('actualizar mantiene el sindicatoId original', async () => {
     const socio = await service.crear(adminSindicatoA, {
       sindicatoId: sindicatoAId,
       nombre: 'Socio a editar',
@@ -95,10 +95,6 @@ describe('SociosService', () => {
 
     const actualizado = await service.actualizar(adminSindicatoA, socio.id, { estado: 'inactivo' });
     expect(actualizado.estado).toBe('inactivo');
-
-    const auditoria = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
-      tx.auditLog.findFirst({ where: { entidadId: socio.id, accion: 'editar' } }),
-    );
-    expect(auditoria?.sindicatoId).toBe(sindicatoAId);
+    expect(actualizado.sindicatoId).toBe(sindicatoAId);
   });
 });

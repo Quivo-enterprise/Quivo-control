@@ -1,6 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
-import type { Prisma } from '@quivo/db';
 import {
   VehiculoSchema,
   type ActualizarVehiculo,
@@ -49,11 +48,9 @@ export class VehiculosService {
 
   async crear(actor: AuthenticatedUser, data: CrearVehiculo): Promise<Vehiculo> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
-    const vehiculo = await withTenantContext(toTenantContext(actor), async (tx) => {
-      const creado = await tx.vehiculo.create({ data: { ...data, sindicatoId } });
-      await auditar(tx, actor, 'crear', creado.id, sindicatoId, data);
-      return creado;
-    });
+    const vehiculo = await withTenantContext(toTenantContext(actor), (tx) =>
+      tx.vehiculo.create({ data: { ...data, sindicatoId } }),
+    );
     return toVehiculo(vehiculo);
   }
 
@@ -66,9 +63,7 @@ export class VehiculosService {
       if (data.estado) {
         validarTransicion(anterior.estado as EstadoVehiculo, data.estado);
       }
-      const actualizado = await tx.vehiculo.update({ where: { id }, data });
-      await auditar(tx, actor, 'editar', id, anterior.sindicatoId, { antes: anterior, cambios: data });
-      return actualizado;
+      return tx.vehiculo.update({ where: { id }, data });
     });
     return toVehiculo(vehiculo);
   }
@@ -109,24 +104,4 @@ function toVehiculo(row: {
   estado: string;
 }): Vehiculo {
   return VehiculoSchema.parse(row);
-}
-
-async function auditar(
-  tx: Prisma.TransactionClient,
-  actor: AuthenticatedUser,
-  accion: string,
-  entidadId: string,
-  sindicatoId: string,
-  diff: unknown,
-): Promise<void> {
-  await tx.auditLog.create({
-    data: {
-      sindicatoId,
-      usuarioId: actor.userId,
-      entidad: 'vehiculo',
-      entidadId,
-      accion,
-      diff: diff as Prisma.InputJsonValue,
-    },
-  });
 }

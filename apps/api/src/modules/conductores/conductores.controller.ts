@@ -6,6 +6,7 @@ import {
   type CrearConductor,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
+import { Auditable } from '../../common/audit/audit.decorator.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
@@ -33,11 +34,13 @@ export class ConductoresController {
   }
 
   @Post()
+  @Auditable('conductor')
   crear(@CurrentUser() actor: AuthenticatedUser, @Body() body: CrearConductorDto) {
     return this.conductoresService.crear(actor, body as CrearConductor);
   }
 
   @Patch(':id')
+  @Auditable('conductor')
   actualizar(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id') id: string,

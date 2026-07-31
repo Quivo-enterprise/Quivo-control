@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
+import { AuditoriaController } from './auditoria.controller.js';
+import { AuditoriaService } from './auditoria.service.js';
 
-// Esqueleto — audit_log e interceptor de auditoría (RF-81..84) llega en QUI-230/248.
-@Module({})
+@Module({
+  controllers: [AuditoriaController],
+  providers: [AuditoriaService],
+})
 export class AuditoriaModule {}
