@@ -1,5 +1,11 @@
 import { Module } from '@nestjs/common';
+import { ReglasController } from './reglas.controller.js';
+import { ReglasService } from './reglas.service.js';
+import { SancionesController } from './sanciones.controller.js';
+import { SancionesService } from './sanciones.service.js';
 
-// Esqueleto — estatutos, reglas y sanciones (RF-40..50) llega en QUI-244.
-@Module({})
+@Module({
+  controllers: [ReglasController, SancionesController],
+  providers: [ReglasService, SancionesService],
+})
 export class ReglasModule {}

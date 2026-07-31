@@ -119,6 +119,8 @@ model Sindicato {
   lineas      Linea[]
   auditLogs   AuditLog[]
   rotaciones  Rotacion[]
+  reglas      Regla[]
+  sanciones   Sancion[]
 
   @@map("sindicatos")
 }
@@ -330,4 +332,55 @@ model Asignacion {
   @@index([rotacionId])
   @@index([estado, venceAt])
   @@map("asignaciones")
+}
+
+// M4 — Reglas y sanciones (RF-40..50, QUI-244). El doc técnico (§4.2) deja el modelo muy
+// comprimido ("estatutos/reglas(id, sindicato_id, tipo, gravedad, aplica_a, relacion)") sin
+// especificar campos como `nombre`/`descripcion` — se agregan acá por usabilidad admin
+// (asunción de este equipo, no una decisión de Producto confirmada), igual que
+// `gravedad` (`leve`/`grave`/`gravisima`, tampoco especificado).
+model Regla {
+  id          String   @id @default(uuid())
+  sindicatoId String
+  sindicato   Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  nombre      String
+  tipo        String
+  gravedad    String
+  // A qué tipo de sujeto aplica esta regla — mismo dominio que `Sancion.sujetoTipo`.
+  aplicaA     String
+  descripcion String?
+  estado      String   @default("activo")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sanciones Sancion[]
+
+  @@index([sindicatoId])
+  @@map("reglas")
+}
+
+// `sujetoId` sin FK (a propósito): puede apuntar a `vehiculos`, `conductores` o `socios`
+// según `sujetoTipo` — mismo patrón polimórfico sin FK que `AuditLog.entidadId`.
+// `evidenciaRef` queda como texto libre por ahora: "evidencia auto-vinculada" (doc técnico
+// §15.5: sesión/cumplimientos_pc/desvíos) requiere que exista tracking real (M3), que esta
+// sesión no llegó a construir — ver rotaciones.service.ts / módulos tracking/sync.
+model Sancion {
+  id           String    @id @default(uuid())
+  sindicatoId  String
+  sindicato    Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  reglaId      String
+  regla        Regla     @relation(fields: [reglaId], references: [id], onDelete: Restrict)
+  sujetoTipo   String
+  sujetoId     String
+  motivo       String
+  fechaHecho   DateTime  @db.Date
+  evidenciaRef String?
+  estado       String    @default("pendiente")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([sindicatoId])
+  @@index([reglaId])
+  @@index([sujetoTipo, sujetoId])
+  @@map("sanciones")
 }

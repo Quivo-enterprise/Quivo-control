@@ -10,3 +10,5 @@ export * from './punto-control.js';
 export * from './auditoria.js';
 export * from './rotacion.js';
 export * from './asignacion.js';
+export * from './regla.js';
+export * from './sancion.js';
