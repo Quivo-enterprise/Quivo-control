@@ -41,12 +41,18 @@ export class RutaVariantesController {
   }
 }
 
-/** `PATCH /v1/variantes/:id` — igual que rutas, el id ya identifica el recurso. */
+/** `GET/PATCH /v1/variantes/:id` — igual que paradas/puntos-control, doc técnico §8 lista
+ * `/rutas/:id/variantes` como recurso plano una vez identificado por id. */
 @Controller('variantes')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_VARIANTES)
 export class VariantesController {
   constructor(private readonly variantesService: VariantesService) {}
+
+  @Get(':id')
+  obtener(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {
+    return this.variantesService.obtener(actor, id);
+  }
 
   @Patch(':id')
   @Auditable('variante')

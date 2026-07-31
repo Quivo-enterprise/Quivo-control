@@ -73,32 +73,34 @@ según `NAV_ITEMS` (`src/lib/nav-items.ts` → `isRouteAllowedForRole`). Si no t
 redirige a `/`. Rutas que todavía no existen como página (todo excepto `/` y `/login`,
 hasta M1) no se bloquean acá — no hay ítem de navegación que matchee.
 
-### Demo navegable de los módulos (Sindicatos, Socios, Vehículos, etc.)
+### Módulos CRUD contra el API real
 
-Los 8 módulos con CRUD real futuro (Sindicatos QUI-220, Socios QUI-221, Vehículos
-QUI-222, Conductores QUI-223, Líneas QUI-224, Rutas QUI-229, Rotaciones QUI-233, Reglas
-en M4) tienen una página de demo bajo `app/(dashboard)/<módulo>/`, todas montadas sobre
-`src/components/module-table-page.tsx` (`ModuleTablePage`): `PageHeader` + búsqueda +
-`DataTable` + alta/edición en `Modal`+`FormGroup` + borrado con `ConfirmDialog`, todo con
-componentes de `@quivo/design-system`. Los datos de partida están en
-`src/lib/demo-data.ts` (arrays en memoria, sin backend).
+Todos los módulos administrativos ya pegan contra `apps/api` de verdad — no queda ningún
+modo demo (`src/lib/demo-data.ts` se borró; el último módulo en migrar fue el dashboard
+`/`, que hasta esta limpieza seguía mostrando KPIs de ejemplo aunque las 4 APIs que
+necesita ya eran reales). Sindicatos/Socios/Vehículos/Conductores/Líneas/Reglas usan
+`src/components/module-table-page.tsx` (`ModuleTablePage`) con su prop `dataSource:
+{list, create, update}` — `PageHeader` + búsqueda + `DataTable` + alta/edición en
+`Modal`+`FormGroup`, contra el API real (ver `src/lib/api/*.ts`, un cliente delgado por
+entidad). **Sin borrado en ningún módulo**: ningún endpoint de M1/M4 expone `DELETE` (las
+entidades se desactivan vía `estado`, nunca se borran de la DB).
 
-**Importante — es un demo sin persistencia:** los cambios (alta/edición/borrado) viven en
-`useState` de `ModuleTablePage`, no pegan contra ninguna API ni base de datos. Se pierden
-al recargar la página. El CRUD real llega módulo por módulo con las issues de M1
-referenciadas arriba, contra `packages/db` (Prisma, QUI-217) y `apps/api`.
+Rutas (QUI-229), Rotaciones (QUI-233), Sanciones (dentro de `/reglas`, QUI-245) y
+Auditoría (QUI-248) tienen páginas a medida (no `ModuleTablePage`) porque su interacción
+no es un CRUD tabular simple: mapa interactivo, grilla vehículo×fecha con transiciones de
+estado, flujo de transiciones con confirmación, y filtros de solo-lectura respectivamente.
+`Reportes` es la única página que sigue sin datos reales — bloqueada por M3 (necesita
+`gps_points`/sesiones que no existen todavía).
 
-`Auditoría` y `Reportes` quedan de solo lectura (no tiene sentido un alta manual de logs
-de auditoría o de reportes agregados) — usan `AuditLog` y `DataTable` directo, sin
-`ModuleTablePage`.
-
-Para agregar un módulo nuevo al mismo patrón: definir el tipo de fila en
-`demo-data.ts`, armar `columns: DataColumn<T>[]` (con `render` para badges) y
-`fields: EntityFieldConfig[]` (para el formulario del modal), y pasarlos a
-`<ModuleTablePage<T> />` junto con `entityLabel` (singular, minúscula) y
-`createDefaults`. La página en sí debe llevar `'use client'` — pasarle a `ModuleTablePage`
-(un client component) `columns` con funciones `render`/`actions` desde un Server
-Component no es serializable y rompe el build de producción.
+Para agregar un módulo CRUD simple nuevo al patrón `ModuleTablePage`: armar `columns:
+DataColumn<T>[]` (con `render` para badges) y `fields: EntityFieldConfig[]` (para el
+formulario del modal), un cliente en `src/lib/api/<entidad>.ts` que exponga
+`{list, create, update}` contra `apps/api`, y pasarlos a `<ModuleTablePage<T> />` junto con
+`entityLabel` (singular, minúscula), `dataSource`, y `createDefaults` (incluyendo
+`sindicatoId: user?.sindicatoId ?? ''` si la entidad es multi-tenant). La página en sí debe
+llevar `'use client'` — pasarle a `ModuleTablePage` (un client component) `columns` con
+funciones `render`/`actions` desde un Server Component no es serializable y rompe el build
+de producción.
 
 ## Agregar componentes faltantes al design system
 

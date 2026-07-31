@@ -24,6 +24,17 @@ export class VariantesService {
     });
   }
 
+  async obtener(actor: AuthenticatedUser, id: string): Promise<Variante> {
+    return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
+      const variante = await tx.variante.findUnique({ where: { id } });
+      if (!variante) {
+        throw new NotFoundException('Variante no encontrada');
+      }
+      await asegurarRutaVisible(tx, variante.rutaId);
+      return VarianteSchema.parse(variante);
+    });
+  }
+
   async actualizar(actor: AuthenticatedUser, id: string, data: ActualizarVariante): Promise<Variante> {
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
       const anterior = await tx.variante.findUnique({ where: { id } });

@@ -88,4 +88,17 @@ describe('VariantesService', () => {
     const actualizada = await variantesService.actualizar(adminSindicatoA, variante.id, { nombre: 'Nueva' });
     expect(actualizada.nombre).toBe('Nueva');
   });
+
+  it('obtiene una variante propia por id y 404 si es de otro tenant', async () => {
+    const variante = await variantesService.crear(adminSindicatoA, rutaAId, { nombre: 'Obtenible' });
+    const obtenida = await variantesService.obtener(adminSindicatoA, variante.id);
+    expect(obtenida.id).toBe(variante.id);
+
+    const deB = await variantesService.crear(
+      { userId: 'setup', rol: 'admin_quivo', sindicatoId: null },
+      rutaBId,
+      { nombre: 'De otro tenant' },
+    );
+    await expect(variantesService.obtener(adminSindicatoA, deB.id)).rejects.toBeInstanceOf(NotFoundException);
+  });
 });

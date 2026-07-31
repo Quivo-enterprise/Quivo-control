@@ -194,6 +194,48 @@ async function seedRotaciones(tx: Prisma.TransactionClient): Promise<void> {
   console.log('Rotación + asignaciones de prueba listas para Sindicato 1º de Mayo');
 }
 
+const REGLA_A_ID = 'aaaaaaaa-0000-4000-8000-000000000003';
+const SANCION_A_ID = 'aaaaaaaa-0000-4000-8000-000000000004';
+
+/** Una regla + una sanción de ejemplo (RF-40..50, QUI-244) — mismo motivo que
+ * seedRotaciones: tener algo real que mostrar en `/reglas` sin depender de altas manuales. */
+async function seedReglas(tx: Prisma.TransactionClient): Promise<void> {
+  const vehiculo = await tx.vehiculo.findUniqueOrThrow({
+    where: { sindicatoId_placa: { sindicatoId: SINDICATO_A_ID, placa: `AB${SINDICATO_A_ID.slice(0, 3)}` } },
+  });
+
+  await tx.regla.upsert({
+    where: { id: REGLA_A_ID },
+    update: {},
+    create: {
+      id: REGLA_A_ID,
+      sindicatoId: SINDICATO_A_ID,
+      nombre: 'Retraso injustificado',
+      tipo: 'puntualidad',
+      gravedad: 'leve',
+      aplicaA: 'vehiculo',
+      estado: 'activo',
+    },
+  });
+
+  await tx.sancion.upsert({
+    where: { id: SANCION_A_ID },
+    update: {},
+    create: {
+      id: SANCION_A_ID,
+      sindicatoId: SINDICATO_A_ID,
+      reglaId: REGLA_A_ID,
+      sujetoTipo: 'vehiculo',
+      sujetoId: vehiculo.id,
+      motivo: 'Llegó 25 minutos tarde al inicio del turno',
+      fechaHecho: new Date('2026-08-01'),
+      estado: 'pendiente',
+    },
+  });
+
+  console.log('Regla + sanción de prueba listas para Sindicato 1º de Mayo');
+}
+
 async function seed(): Promise<void> {
   // admin_quivo: única forma de bypassear RLS (QUI-218) sin depender de qué rol de
   // Postgres esté conectado — ver packages/db/src/tenant-context.ts.
@@ -201,6 +243,7 @@ async function seed(): Promise<void> {
     await seedSindicatos(tx);
     await seedDatosDePrueba(tx);
     await seedRotaciones(tx);
+    await seedReglas(tx);
   });
   // Better-Auth usa su propio adapter Prisma (no pasa por `tx`) pero sus tablas no tienen
   // RLS (ver comentario en la migración `rls_multi_tenant`), así que corre bien afuera.

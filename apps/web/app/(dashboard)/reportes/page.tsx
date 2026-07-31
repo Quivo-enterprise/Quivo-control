@@ -20,7 +20,7 @@ export default function ReportesPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       <PageHeader
         title="Reportes"
-        subtitle="Datos de ejemplo — el dashboard de cumplimiento real llega en M4 (RF-74..84)."
+        subtitle="Datos de ejemplo — QUI-246 (dashboard de cumplimiento) y QUI-249 (reportes operativos) necesitan datos reales de tracking (gps_points/sesiones), bloqueados hasta que exista M3."
       />
       <Grid columns={3} gap="md">
         <KpiCard label="Cumplimiento de recorridos" value="—" tone="primary" />
@@ -36,7 +36,7 @@ export default function ReportesPage() {
         rows={REPORTES_DISPONIBLES}
         actions={() => (
           <Button variant="ghost" size="sm" disabled>
-            Generar (M4)
+            Generar (M3+M4)
           </Button>
         )}
       />
