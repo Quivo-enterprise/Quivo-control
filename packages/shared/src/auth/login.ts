@@ -38,3 +38,11 @@ export const RefreshResponseSchema = z.object({
   refreshToken: z.string().min(1),
 });
 export type RefreshResponse = z.infer<typeof RefreshResponseSchema>;
+
+/** Contrato de POST /v1/auth/logout (QUI-251) — revoca la sesión server-side. Antes de
+ * esto, "cerrar sesión" solo borraba el token del browser; el `refreshToken` robado
+ * seguía siendo válido hasta su expiración (hasta 30 días, `JWT_REFRESH_TTL`). */
+export const LogoutRequestSchema = z.object({
+  refreshToken: z.string().min(1),
+});
+export type LogoutRequest = z.infer<typeof LogoutRequestSchema>;

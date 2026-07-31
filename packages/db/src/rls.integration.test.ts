@@ -14,6 +14,8 @@ import { withTenantContext } from './tenant-context.js';
 describe('RLS multi-tenant', () => {
   const sindicatoAId = randomUUID();
   const sindicatoBId = randomUUID();
+  let reglaAId: string;
+  let reglaBId: string;
 
   beforeAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
@@ -73,12 +75,66 @@ describe('RLS multi-tenant', () => {
 
       await tx.linea.create({ data: { sindicatoId: sindicatoAId, codigo: 'RLSL1', nombre: 'Línea A' } });
       await tx.linea.create({ data: { sindicatoId: sindicatoBId, codigo: 'RLSL1', nombre: 'Línea B' } });
+
+      // M2 (rotaciones) y M4 (reglas/sanciones) llegaron después de este archivo (QUI-218)
+      // y nunca se sumaron acá — QUI-251 lo corrige, mismo criterio que las tablas de M1.
+      await tx.rotacion.create({ data: { sindicatoId: sindicatoAId, periodo: 'RLS-A', estado: 'borrador' } });
+      await tx.rotacion.create({ data: { sindicatoId: sindicatoBId, periodo: 'RLS-B', estado: 'borrador' } });
+
+      const reglaA = await tx.regla.create({
+        data: {
+          sindicatoId: sindicatoAId,
+          nombre: 'Regla A',
+          tipo: 'x',
+          gravedad: 'leve',
+          aplicaA: 'vehiculo',
+          estado: 'activo',
+        },
+      });
+      const reglaB = await tx.regla.create({
+        data: {
+          sindicatoId: sindicatoBId,
+          nombre: 'Regla B',
+          tipo: 'x',
+          gravedad: 'leve',
+          aplicaA: 'vehiculo',
+          estado: 'activo',
+        },
+      });
+      reglaAId = reglaA.id;
+      reglaBId = reglaB.id;
+
+      await tx.sancion.create({
+        data: {
+          sindicatoId: sindicatoAId,
+          reglaId: reglaAId,
+          sujetoTipo: 'vehiculo',
+          sujetoId: randomUUID(),
+          motivo: 'x',
+          fechaHecho: new Date('2026-01-01'),
+          estado: 'pendiente',
+        },
+      });
+      await tx.sancion.create({
+        data: {
+          sindicatoId: sindicatoBId,
+          reglaId: reglaBId,
+          sujetoTipo: 'vehiculo',
+          sujetoId: randomUUID(),
+          motivo: 'x',
+          fechaHecho: new Date('2026-01-01'),
+          estado: 'pendiente',
+        },
+      });
     });
   });
 
   afterAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
       const sindicatoIds = { in: [sindicatoAId, sindicatoBId] };
+      await tx.sancion.deleteMany({ where: { sindicatoId: sindicatoIds } });
+      await tx.regla.deleteMany({ where: { sindicatoId: sindicatoIds } });
+      await tx.rotacion.deleteMany({ where: { sindicatoId: sindicatoIds } });
       await tx.linea.deleteMany({ where: { sindicatoId: sindicatoIds } });
       await tx.conductor.deleteMany({ where: { sindicatoId: sindicatoIds } });
       await tx.vehiculo.deleteMany({ where: { sindicatoId: sindicatoIds } });
@@ -150,5 +206,41 @@ describe('RLS multi-tenant', () => {
       tx.socio.findMany({ where: { sindicatoId: sindicatoAId } }),
     );
     expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it('sindicato A no ve rotaciones de sindicato B', async () => {
+    const rows = await withTenantContext({ rol: 'admin_sindicato', sindicatoId: sindicatoAId }, (tx) =>
+      tx.rotacion.findMany({ where: { sindicatoId: sindicatoBId } }),
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('sindicato A no ve reglas de sindicato B', async () => {
+    const rows = await withTenantContext({ rol: 'admin_sindicato', sindicatoId: sindicatoAId }, (tx) =>
+      tx.regla.findMany({ where: { sindicatoId: sindicatoBId } }),
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('sindicato A no ve sanciones de sindicato B', async () => {
+    const rows = await withTenantContext({ rol: 'admin_sindicato', sindicatoId: sindicatoAId }, (tx) =>
+      tx.sancion.findMany({ where: { sindicatoId: sindicatoBId } }),
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('sindicato A no puede modificar (UPDATE) reglas de sindicato B', async () => {
+    const result = await withTenantContext({ rol: 'admin_sindicato', sindicatoId: sindicatoAId }, (tx) =>
+      tx.regla.updateMany({ where: { sindicatoId: sindicatoBId }, data: { nombre: 'hackeado' } }),
+    );
+    expect(result.count).toBe(0);
+  });
+
+  it('sindicato A no puede crear (INSERT) una rotación a nombre de sindicato B', async () => {
+    await expect(
+      withTenantContext({ rol: 'admin_sindicato', sindicatoId: sindicatoAId }, (tx) =>
+        tx.rotacion.create({ data: { sindicatoId: sindicatoBId, periodo: 'HACK', estado: 'borrador' } }),
+      ),
+    ).rejects.toThrow();
   });
 });

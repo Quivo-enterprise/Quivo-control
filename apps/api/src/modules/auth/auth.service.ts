@@ -4,6 +4,7 @@ import { auth } from '@quivo/db';
 import type {
   LoginRequest,
   LoginResponse,
+  LogoutRequest,
   RefreshRequest,
   RefreshResponse,
   Rol,
@@ -51,6 +52,14 @@ export class AuthService {
       accessToken: await this.mintAccessToken(refreshToken),
       refreshToken,
     };
+  }
+
+  /** POST /v1/auth/logout (QUI-251) — revoca la sesión de verdad en la DB (`auth.api.signOut`),
+   * no solo un borrado del lado del cliente. Sin esto, un `refreshToken` robado seguía
+   * siendo válido hasta su expiración natural (hasta 30 días) aunque el usuario ya hubiera
+   * "cerrado sesión" en su browser. */
+  async logout({ refreshToken }: LogoutRequest): Promise<void> {
+    await auth.api.signOut({ headers: this.bearerHeaders(refreshToken) });
   }
 
   /** El token corto (`jwt` plugin) requiere una sesión válida — se la pasamos vía Bearer (plugin `bearer`, no hay cookies server-to-server). */

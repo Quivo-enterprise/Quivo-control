@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { loginRequest, refreshRequest } from './api-client';
+import { loginRequest, logoutRequest, refreshRequest } from './api-client';
 import { getJwtExpiryMs } from './jwt';
 
 export interface AuthUser {
@@ -207,6 +207,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = (): void => {
+    // QUI-251: revocar la sesión server-side es best-effort — no bloquea el cierre de
+    // sesión local si la API no responde (offline, token ya vencido, etc.), pero cuando
+    // sí funciona, el `refreshToken` deja de servir aunque alguien lo haya copiado antes.
+    const { refreshToken } = sessionRef.current;
+    if (refreshToken) {
+      void logoutRequest(refreshToken).catch(() => {
+        // Nada que hacer si falla — el cierre de sesión local igual continúa.
+      });
+    }
     clearSession();
   };
 

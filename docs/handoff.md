@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M2 completo. M4: QUI-248, QUI-244 y QUI-245 cerrados. Repaso M1-M4 hecho — ver sección propia. Quedan QUI-246/247/249, bloqueados por M3.)
+> Última actualización: **2026-07-31** (M2 completo. M4 (parte sin M3) completo. QUI-251 (security review) cerrado — ver sección propia. Quedan QUI-246/247/249, bloqueados por M3.)
 
 ## Qué es el proyecto
 
@@ -543,6 +543,97 @@ podría hacerse hoy sin M3 — "sanciones por sujeto/estado" ya tiene datos 100%
 adelantar esa parte de QUI-249, es una decisión de alcance a tomar explícitamente, no algo
 que se coló en este repaso.
 
+## QUI-251 — Auditoría RLS + security review pre-release — cerrado 2026-07-31
+
+Alcance del ticket: RLS en todas las tablas (M1-M4), test cross-tenant extendido, auth
+(expiración/refresh), rate limiting, manejo de secrets, dependency audit, superficie de API.
+
+**Encontrado y corregido (huecos reales):**
+
+1. **No había rate limiting en ninguna parte de la API** — `/v1/auth/login` aceptaba fuerza
+   bruta ilimitada por IP. Agregado `@nestjs/throttler`: límite global 100 req/min/IP, y uno
+   mucho más estricto en `login` (5/min) vía `@Throttle`. Verificado en vivo: 6º intento de
+   login devuelve `429`, `/v1/health` no se ve afectado (usa el límite general).
+2. **"Cerrar sesión" no revocaba nada server-side** — `auth-context.tsx`'s `logout()` solo
+   borraba `localStorage`; un `refreshToken` robado seguía siendo válido hasta su expiración
+   natural (hasta 30 días) aunque el usuario ya hubiera "cerrado sesión". Nuevo
+   `POST /v1/auth/logout` (`auth.api.signOut` de Better-Auth, revoca la fila real en
+   `session`) + wiring del frontend (best-effort: si la API no responde, igual limpia la
+   sesión local). Verificado tres formas: test de integración contra Better-Auth real
+   (`auth.service.test.ts`), curl+conteo de filas en `session` antes/después, y click real
+   en el botón (confirmado en los logs del server, aunque la extensión de Chrome reportó un
+   503 fantasma que no coincidía con los logs reales del server — ver nota abajo).
+3. **Next.js tenía 8 CVEs conocidos** (DoS/SSRF en Server Actions, SSRF en rewrites, DoS en
+   Image Optimization con SVG, cache confusion) — verificado que ninguno aplica de verdad
+   (esta app no usa Server Actions, no tiene `rewrites` custom, y su único `next/image` es un
+   logo estático `.webp`, no SVG ni URL dinámica), pero se bumpeó igual a `15.5.22`
+   (>=15.5.21 = parcheado) porque es un patch del mismo minor, sin riesgo.
+4. **La matriz de roles por controller nunca quedó como test automático** — solo se había
+   verificado a mano con curl (QUI-220..226). Nuevo `roles-matrix.test.ts` lee la metadata
+   real de `@Roles(...)` de los 17 controllers vía `Reflect.getMetadata` y la compara contra
+   la matriz documentada — si alguien afloja un rol sin querer, este test es el primero en
+   romper.
+5. **El test canónico de RLS cross-tenant (`packages/db/src/rls.integration.test.ts`,
+   QUI-218) nunca se extendió a las tablas de M2/M4** — cubría sindicatos/socios/vehículos/
+   conductores/líneas pero no `rotaciones`/`reglas`/`sanciones` (llegaron después). Ya
+   tenían cobertura cross-tenant a nivel de sus propios módulos, pero no en el archivo que
+   es la prueba canónica "RLS es la barrera real, no el código de arriba". Extendido con 5
+   casos más (14 en total).
+
+**Evaluado y confirmado que NO aplica (dependency audit, `pnpm audit --prod`):**
+
+- **`better-auth` tiene un CVE crítico y varios altos** — todos son de plugins que esta app
+  no usa (OAuth, OIDC provider, organization, admin, anonymous, SCIM, magic-link, email-OTP;
+  `packages/db/src/auth.ts` solo tiene `emailAndPassword` + `bearer` + `jwt`). No existe un
+  1.4.x parcheado (1.4.22 es el último de esa línea) — subir a 1.6.x rompería la
+  compatibilidad con `@better-auth/cli` ya documentada. Riesgo real hoy: ninguno, dado el uso
+  actual — **re-evaluar si alguna vez se habilita un plugin nuevo de Better-Auth**.
+- **`drizzle-orm`, `@xmldom/xmldom`, `tar`, `postcss`, `brace-expansion` (vía
+  `better-auth>drizzle-orm>expo-sqlite>expo>@expo/cli>...`)** — better-auth declara
+  `drizzle-orm` como dependencia real (adapter opcional que este proyecto no usa, Prisma es
+  el único ORM acá) y `drizzle-orm` a su vez arrastra el toolchain de `@expo/cli` como
+  dependencia de UNO de sus muchos adapters posibles. Código muerto: ninguna de esas rutas
+  se ejecuta nunca en este repo. Mismo origen para el `tar`/`postcss`/`brace-expansion` que
+  aparecen vía `apps/mobile`'s propias devDependencies de Expo (tooling de build, no corre
+  en el dispositivo final).
+- **`find-my-way` (router de Fastify): DDoS vía HTTP2** — HTTP2 no está habilitado en
+  `FastifyAdapter` (`apps/api/src/main.ts`), así que no es explotable con la config actual.
+  Fastify mismo sigue fijando `find-my-way@9.6.0` internamente incluso en su versión más
+  nueva (9.7.0 ya está parcheado y coexiste en el lockfile vía otra dependencia) — no hay
+  override limpio sin arriesgar el comportamiento de ruteo interno de Fastify para un riesgo
+  que hoy es cero.
+- **`sharp` (CVEs de libvips heredadas)** — vía `next`'s Image Optimization opcional; esta
+  app no procesa imágenes de usuarios ni URLs externas, solo el logo estático del branding.
+- **`@opentelemetry/core` (memoria sin límite en W3C Baggage)** — vía `@sentry/node`
+  (`apps/api`), ya en su última versión 8.x disponible (8.55.2); no hay nada más para
+  actualizar hasta que Sentry libere un fix upstream. Exposición baja: requiere headers
+  `baggage` controlados por el atacante Y `SENTRY_DSN` configurado.
+
+**Confirmado correcto, sin hallazgos:**
+
+- RLS habilitado+forzado exactamente en las 8 tablas con `sindicatoId` propio
+  (`sindicatos`/`socios`/`vehiculos`/`conductores`/`lineas`/`rotaciones`/`reglas`/
+  `sanciones`), ausente donde corresponde (tablas de Better-Auth, `rutas`/`variantes`/
+  `paradas`/`puntos_control`/`asignaciones` con tenant-check transitivo en código) —
+  verificado consultando `pg_class.relrowsecurity`/`relforcerowsecurity` directo en Postgres.
+- Los 17 controllers de negocio tienen `JwtAuthGuard`+`RolesGuard`; solo `/v1/health` y
+  `/v1/_internal/ping` quedan públicos, a propósito (liveness/readiness, sin datos).
+- Sin secrets committeados (`.gitignore` cubre `.env*` con excepción explícita de
+  `.env.example`); `JWT_SECRET` se referencia una sola vez, nunca se loggea.
+- CORS con origen explícito (no wildcard) y métodos explícitos (sin `credentials`, no hace
+  falta — la app usa Bearer, no cookies cross-origin).
+
+**Nota metodológica:** al verificar el logout en un browser real, la extensión de Chrome
+usada para automatizar reportó un `503` en la request a `/v1/auth/logout`, pero los logs
+reales del server (pino, en `apps/api`) mostraban `204` para esa misma request tanto en
+tiempo como en `requestId`. Se verificó de forma independiente contando filas en la tabla
+`session` antes/después de un login+logout real vía curl: 47→48→47, confirmando que el
+`503` fue un artefacto de la herramienta de automatización (probablemente por la
+navegación de SPA disparándose mientras el fetch fire-and-forget seguía en vuelo), no un
+fallo real del servidor. Vale la pena recordar esto si alguna vez se ve una discrepancia
+similar entre lo que reporta el browser automatizado y lo que dicen los logs del server —
+los logs del server son la fuente de verdad.
+
 ## Pendientes de acceso
 
 - **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
@@ -572,14 +663,13 @@ que se coló en este repaso.
 3. **M2 — Rotaciones (RF-51..57): ✅ completo** (QUI-230..234). **M4** (elegido sobre M3
    porque M3 sigue bloqueado por hardware que nadie consiguió — licencia Transistorsoft +
    Android real, QUI-216): QUI-248 (auditoría), QUI-244 (reglas/sanciones API) y QUI-245
-   (reglas/sanciones UI) ✅ cerrados. QUI-246/247/249 quedan bloqueados hasta que exista M3
-   (necesitan datos reales de `gps_points`/sesiones). **Con esto, todo lo que se podía
-   avanzar en M4 sin M3 está hecho.** De M5 (hardening), QUI-250 (load test de ingesta) y
-   QUI-252 (retención GPS) también dependen de que exista la tabla `gps_points`/el worker de
-   ingesta (M3) — solo **QUI-251 (auditoría RLS + security review)** es genuinamente
-   independiente, porque audita lo que ya existe (M1/M2/M4). Próximo paso real: decidir con
-   el usuario entre conseguir el hardware para desbloquear M3, o adelantar QUI-251 mientras
-   tanto.
+   (reglas/sanciones UI) ✅ cerrados. **QUI-251 (auditoría RLS + security review) ✅
+   cerrado** — rate limiting agregado, logout ahora revoca sesión de verdad, Next.js
+   parchado, matriz de roles y RLS cross-tenant con test automático extendido a M2/M4 (ver
+   sección propia arriba). **No queda nada más por avanzar sin M3**: QUI-246/247/249 (M4) y
+   QUI-250/252 (M5) necesitan `gps_points`/el worker de ingesta, que solo existen con M3
+   armado. Único camino hacia adelante real: conseguir el hardware de QUI-216 (licencia
+   Transistorsoft + Android de gama baja) para desbloquear M3.
 4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
 5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de

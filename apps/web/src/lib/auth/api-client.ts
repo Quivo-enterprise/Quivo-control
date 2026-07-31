@@ -31,3 +31,13 @@ export async function refreshRequest(refreshToken: string): Promise<RefreshRespo
 
   return (await response.json()) as RefreshResponse;
 }
+
+/** QUI-251 — revoca la sesión server-side al cerrar sesión (antes solo se borraba el
+ * token del browser, dejando el `refreshToken` robado válido hasta su expiración natural). */
+export async function logoutRequest(refreshToken: string): Promise<void> {
+  await fetch(`${API_URL}/v1/auth/logout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  });
+}
