@@ -1,7 +1,7 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M2 — Rotaciones **cerrado de punta a punta** — QUI-230/231/232/233/234. Definiendo próximo milestone: M3 móvil+sync o M4 dashboard/reglas.)
+> Última actualización: **2026-07-31** (M2 — Rotaciones cerrado. M4 en curso: QUI-248 (auditoría real) cerrado. Arrancando QUI-244 — reglas y sanciones.)
 
 ## Qué es el proyecto
 
@@ -418,6 +418,28 @@ ahí habría roto esa pantalla. Verificado en vivo: la API arranca con Redis en 
 → QUI-231 (schema + constraint anti doble-asignación) → QUI-232 (API generar/editar/
 publicar/anular) → QUI-233 (UI web, grilla vehículo×fecha) → QUI-234 (vencimiento, este).
 
+## M4 — dashboard/reglas/reportes: arrancado 2026-07-31
+
+M3 (app móvil + offline + sync, RF-58..73) sigue bloqueado por recursos físicos que nadie
+consiguió todavía (licencia Transistorsoft + Android real de gama baja, QUI-216). M4 no
+depende de eso, así que se sigue por ahí: QUI-248 (auditoría) → QUI-244 (reglas/sanciones,
+modelo+API) → QUI-245 (UI reglas/sanciones). QUI-246/247/249 (dashboard de cumplimiento,
+reconstrucción de recorridos, reportes operativos) sí necesitan datos reales de
+`gps_points`/sesiones que solo existen una vez que M3 esté armado — quedan para después.
+
+## QUI-248 — web admin: auditoría con filtros — cerrado 2026-07-31
+
+`/auditoria` deja de ser demo y consume `GET /v1/auditoria` (QUI-230) de verdad. Filtros por
+entidad/acción/usuario/rango de fecha (se sumó `usuarioId` al `AuditoriaQuerySchema` y al
+service — QUI-230 solo tenía entidad/acción/fecha). Tabla vía el componente `AuditLog` del
+design system; cada fila tiene un botón "Ver diff" que abre un `Modal` con el diff completo
+formateado (JSON pretty-printed) — alcanza para "legible" sin necesitar reconstruir un
+`{antes, cambios}` estructurado (mismo criterio de simplicidad que QUI-230 ya había asumido).
+Verificado en browser real: filas reales de `audit_log` cargando, modal de diff abriendo con
+el contenido correcto (incluida una fila vieja pre-QUI-230 con el shape `{antes, cambios}`
+de cuando la auditoría todavía era manual en cada service — se muestra tal cual está en la
+DB, sin normalizar formatos históricos).
+
 ## Pendientes de acceso
 
 - **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
@@ -444,12 +466,11 @@ publicar/anular) → QUI-233 (UI web, grilla vehículo×fecha) → QUI-234 (venc
    atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
    default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. **M2 — Rotaciones (RF-51..57): ✅ completo.** QUI-230/231/232/233/234 cerrados — ver
-   secciones arriba. Definir con el usuario cuál sigue: **M3 — App móvil + offline + sync**
-   (RF-58..73, requiere resolver primero QUI-216 spike GPS — licencia Transistorsoft +
-   Android real, sigue pendiente de recursos) o **M4 — Dashboard + reglas/sanciones +
-   reportes** (RF-40..50, RF-74..84, no depende de hardware, se puede avanzar ya en el
-   backend/web). Sin ese hardware, M4 es la ruta con menos bloqueos externos.
+3. **M2 — Rotaciones (RF-51..57): ✅ completo** (QUI-230..234). **M4, en curso** (elegido
+   sobre M3 porque M3 sigue bloqueado por hardware que nadie consiguió — licencia
+   Transistorsoft + Android real, QUI-216): QUI-248 (auditoría) ✅ → QUI-244 (reglas/
+   sanciones, modelo+API) → QUI-245 (UI reglas/sanciones). QUI-246/247/249 quedan para
+   después de M3 (necesitan datos reales de tracking).
 4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
 5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
