@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { prisma, withTenantContext } from '@quivo/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ConductoresService } from './conductores.service.js';
@@ -9,7 +9,11 @@ describe('ConductoresService', () => {
   const service = new ConductoresService();
   const sindicatoAId = randomUUID();
   const sindicatoBId = randomUUID();
-  const adminQuivo: AuthenticatedUser = { userId: 'test-admin-quivo', rol: 'admin_quivo', sindicatoId: null };
+  const adminQuivo: AuthenticatedUser = {
+    userId: 'test-admin-quivo',
+    rol: 'admin_quivo',
+    sindicatoId: null,
+  };
   const adminSindicatoA: AuthenticatedUser = {
     userId: 'test-admin-sindicato-a',
     rol: 'admin_sindicato',
@@ -18,8 +22,12 @@ describe('ConductoresService', () => {
 
   beforeAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      await tx.sindicato.create({ data: { id: sindicatoAId, nombre: 'Conductores Test A', estado: 'activo' } });
-      await tx.sindicato.create({ data: { id: sindicatoBId, nombre: 'Conductores Test B', estado: 'activo' } });
+      await tx.sindicato.create({
+        data: { id: sindicatoAId, nombre: 'Conductores Test A', estado: 'activo' },
+      });
+      await tx.sindicato.create({
+        data: { id: sindicatoBId, nombre: 'Conductores Test B', estado: 'activo' },
+      });
     });
   });
 
@@ -50,7 +58,9 @@ describe('ConductoresService', () => {
       licenciaConducir: 'LIC-2',
       estado: 'activo',
     });
-    await expect(service.obtener(adminSindicatoA, deB.id)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.obtener(adminSindicatoA, deB.id)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 
   it('lista solo los conductores del propio tenant', async () => {
@@ -66,7 +76,9 @@ describe('ConductoresService', () => {
       licenciaConducir: 'LIC-3',
       estado: 'activo',
     });
-    const actualizado = await service.actualizar(adminSindicatoA, conductor.id, { estado: 'inactivo' });
+    const actualizado = await service.actualizar(adminSindicatoA, conductor.id, {
+      estado: 'inactivo',
+    });
     expect(actualizado.estado).toBe('inactivo');
   });
 
@@ -74,5 +86,26 @@ describe('ConductoresService', () => {
     await expect(
       service.actualizar(adminSindicatoA, randomUUID(), { estado: 'inactivo' }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rechaza dos conductores con el mismo CI dentro del mismo sindicato', async () => {
+    const documentoIdentidad = '876543210 SC';
+    await service.crear(adminSindicatoA, {
+      sindicatoId: sindicatoAId,
+      nombre: 'Conductor CI único',
+      documentoIdentidad,
+      licenciaConducir: 'LIC-UNICA-1',
+      estado: 'activo',
+    });
+
+    await expect(
+      service.crear(adminSindicatoA, {
+        sindicatoId: sindicatoAId,
+        nombre: 'Conductor CI duplicado',
+        documentoIdentidad,
+        licenciaConducir: 'LIC-UNICA-2',
+        estado: 'activo',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 });

@@ -5,7 +5,13 @@ import { z } from 'zod';
 export const EstadoSindicatoSchema = z.enum(['activo', 'inactivo']);
 export type EstadoSindicato = z.infer<typeof EstadoSindicatoSchema>;
 
-export const EstadoVehiculoSchema = z.enum(['activo', 'inactivo', 'suspendido', 'mantenimiento']);
+export const EstadoVehiculoSchema = z.enum([
+  'pendiente',
+  'activo',
+  'inactivo',
+  'suspendido',
+  'mantenimiento',
+]);
 export type EstadoVehiculo = z.infer<typeof EstadoVehiculoSchema>;
 
 export const EstadoSocioSchema = z.enum(['activo', 'inactivo']);

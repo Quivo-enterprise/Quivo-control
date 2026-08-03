@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { prisma, withTenantContext } from '@quivo/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SociosService } from './socios.service.js';
@@ -9,7 +9,11 @@ describe('SociosService', () => {
   const service = new SociosService();
   const sindicatoAId = randomUUID();
   const sindicatoBId = randomUUID();
-  const adminQuivo: AuthenticatedUser = { userId: 'test-admin-quivo', rol: 'admin_quivo', sindicatoId: null };
+  const adminQuivo: AuthenticatedUser = {
+    userId: 'test-admin-quivo',
+    rol: 'admin_quivo',
+    sindicatoId: null,
+  };
   const adminSindicatoA: AuthenticatedUser = {
     userId: 'test-admin-sindicato-a',
     rol: 'admin_sindicato',
@@ -18,8 +22,12 @@ describe('SociosService', () => {
 
   beforeAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      await tx.sindicato.create({ data: { id: sindicatoAId, nombre: 'Socios Test A', estado: 'activo' } });
-      await tx.sindicato.create({ data: { id: sindicatoBId, nombre: 'Socios Test B', estado: 'activo' } });
+      await tx.sindicato.create({
+        data: { id: sindicatoAId, nombre: 'Socios Test A', estado: 'activo' },
+      });
+      await tx.sindicato.create({
+        data: { id: sindicatoBId, nombre: 'Socios Test B', estado: 'activo' },
+      });
     });
   });
 
@@ -52,7 +60,9 @@ describe('SociosService', () => {
       estado: 'activo',
     });
 
-    await expect(service.obtener(adminSindicatoA, socioDeB.id)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.obtener(adminSindicatoA, socioDeB.id)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 
   it('admin_sindicato solo lista socios de su propio tenant', async () => {
@@ -96,5 +106,24 @@ describe('SociosService', () => {
     const actualizado = await service.actualizar(adminSindicatoA, socio.id, { estado: 'inactivo' });
     expect(actualizado.estado).toBe('inactivo');
     expect(actualizado.sindicatoId).toBe(sindicatoAId);
+  });
+
+  it('rechaza dos socios con el mismo CI dentro del mismo sindicato', async () => {
+    const documentoIdentidad = '987654321 LP';
+    await service.crear(adminSindicatoA, {
+      sindicatoId: sindicatoAId,
+      nombre: 'Socio CI único',
+      documentoIdentidad,
+      estado: 'activo',
+    });
+
+    await expect(
+      service.crear(adminSindicatoA, {
+        sindicatoId: sindicatoAId,
+        nombre: 'Socio CI duplicado',
+        documentoIdentidad,
+        estado: 'activo',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 });

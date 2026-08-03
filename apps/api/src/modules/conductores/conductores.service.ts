@@ -1,6 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { withTenantContext } from '@quivo/db';
-import { ConductorSchema, type ActualizarConductor, type Conductor, type CrearConductor } from '@quivo/shared';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, withTenantContext } from '@quivo/db';
+import {
+  ConductorSchema,
+  type ActualizarConductor,
+  type Conductor,
+  type CrearConductor,
+} from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
 /**
@@ -32,21 +42,33 @@ export class ConductoresService {
 
   async crear(actor: AuthenticatedUser, data: CrearConductor): Promise<Conductor> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
-    const conductor = await withTenantContext(toTenantContext(actor), (tx) =>
-      tx.conductor.create({ data: { ...data, sindicatoId } }),
-    );
-    return toConductor(conductor);
+    try {
+      const conductor = await withTenantContext(toTenantContext(actor), (tx) =>
+        tx.conductor.create({ data: { ...data, sindicatoId } }),
+      );
+      return toConductor(conductor);
+    } catch (error: unknown) {
+      throw traducirCiDuplicado(error);
+    }
   }
 
-  async actualizar(actor: AuthenticatedUser, id: string, data: ActualizarConductor): Promise<Conductor> {
-    const conductor = await withTenantContext(toTenantContext(actor), async (tx) => {
-      const anterior = await tx.conductor.findUnique({ where: { id } });
-      if (!anterior) {
-        throw new NotFoundException('Conductor no encontrado');
-      }
-      return tx.conductor.update({ where: { id }, data });
-    });
-    return toConductor(conductor);
+  async actualizar(
+    actor: AuthenticatedUser,
+    id: string,
+    data: ActualizarConductor,
+  ): Promise<Conductor> {
+    try {
+      const conductor = await withTenantContext(toTenantContext(actor), async (tx) => {
+        const anterior = await tx.conductor.findUnique({ where: { id } });
+        if (!anterior) {
+          throw new NotFoundException('Conductor no encontrado');
+        }
+        return tx.conductor.update({ where: { id }, data });
+      });
+      return toConductor(conductor);
+    } catch (error: unknown) {
+      throw traducirCiDuplicado(error);
+    }
   }
 }
 
@@ -62,6 +84,13 @@ function resolverSindicatoId(actor: AuthenticatedUser, sindicatoIdDelBody: strin
     throw new BadRequestException('sindicatoId es obligatorio para admin_quivo');
   }
   return sindicatoIdDelBody;
+}
+
+function traducirCiDuplicado(error: unknown): unknown {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+    return new ConflictException('Ya existe un conductor con ese CI en este sindicato');
+  }
+  return error;
 }
 
 function toConductor(row: {

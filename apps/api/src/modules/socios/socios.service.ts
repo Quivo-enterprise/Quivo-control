@@ -1,5 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { withTenantContext } from '@quivo/db';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, withTenantContext } from '@quivo/db';
 import { SocioSchema, type ActualizarSocio, type CrearSocio, type Socio } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
@@ -35,21 +40,29 @@ export class SociosService {
 
   async crear(actor: AuthenticatedUser, data: CrearSocio): Promise<Socio> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
-    const socio = await withTenantContext(toTenantContext(actor), (tx) =>
-      tx.socio.create({ data: { ...data, sindicatoId } }),
-    );
-    return toSocio(socio);
+    try {
+      const socio = await withTenantContext(toTenantContext(actor), (tx) =>
+        tx.socio.create({ data: { ...data, sindicatoId } }),
+      );
+      return toSocio(socio);
+    } catch (error: unknown) {
+      throw traducirCiDuplicado(error);
+    }
   }
 
   async actualizar(actor: AuthenticatedUser, id: string, data: ActualizarSocio): Promise<Socio> {
-    const socio = await withTenantContext(toTenantContext(actor), async (tx) => {
-      const anterior = await tx.socio.findUnique({ where: { id } });
-      if (!anterior) {
-        throw new NotFoundException('Socio no encontrado');
-      }
-      return tx.socio.update({ where: { id }, data });
-    });
-    return toSocio(socio);
+    try {
+      const socio = await withTenantContext(toTenantContext(actor), async (tx) => {
+        const anterior = await tx.socio.findUnique({ where: { id } });
+        if (!anterior) {
+          throw new NotFoundException('Socio no encontrado');
+        }
+        return tx.socio.update({ where: { id }, data });
+      });
+      return toSocio(socio);
+    } catch (error: unknown) {
+      throw traducirCiDuplicado(error);
+    }
   }
 }
 
@@ -68,6 +81,13 @@ function resolverSindicatoId(actor: AuthenticatedUser, sindicatoIdDelBody: strin
     throw new BadRequestException('sindicatoId es obligatorio para admin_quivo');
   }
   return sindicatoIdDelBody;
+}
+
+function traducirCiDuplicado(error: unknown): unknown {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+    return new ConflictException('Ya existe un socio con ese CI en este sindicato');
+  }
+  return error;
 }
 
 function toSocio(row: {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { EstadoSocioSchema } from '../enums/estados.js';
 import { sindicatoIdSchema, uuidSchema } from '../primitives.js';
+import { DocumentoIdentidadBoliviaSchema, NombrePersonaSchema } from '../identidad-bolivia.js';
 
 export const SocioSchema = z.object({
   id: uuidSchema,
@@ -12,11 +13,13 @@ export const SocioSchema = z.object({
 export type Socio = z.infer<typeof SocioSchema>;
 
 export const CrearSocioSchema = SocioSchema.omit({ id: true, estado: true }).extend({
+  nombre: NombrePersonaSchema,
+  documentoIdentidad: DocumentoIdentidadBoliviaSchema,
   estado: EstadoSocioSchema.default('activo'),
 });
 export type CrearSocio = z.infer<typeof CrearSocioSchema>;
 
 // Sin `sindicatoId`: mover un socio entre sindicatos no es un PATCH simple, queda fuera de
 // alcance (no hay caso de uso definido en el doc técnico).
-export const ActualizarSocioSchema = SocioSchema.omit({ id: true, sindicatoId: true }).partial();
+export const ActualizarSocioSchema = CrearSocioSchema.omit({ sindicatoId: true }).partial();
 export type ActualizarSocio = z.infer<typeof ActualizarSocioSchema>;
