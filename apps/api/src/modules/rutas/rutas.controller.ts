@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarRutaSchema,
   CrearRutaSchema,
@@ -23,7 +23,7 @@ const ROLES_RUTAS = ['admin_quivo', 'admin_sindicato', 'operador'] as const;
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_RUTAS)
 export class LineaRutasController {
-  constructor(private readonly rutasService: RutasService) {}
+  constructor(@Inject(RutasService) private readonly rutasService: RutasService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser, @Param('lineaId') lineaId: string) {
@@ -47,7 +47,7 @@ export class LineaRutasController {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_RUTAS)
 export class RutasController {
-  constructor(private readonly rutasService: RutasService) {}
+  constructor(@Inject(RutasService) private readonly rutasService: RutasService) {}
 
   @Get(':id')
   obtener(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {

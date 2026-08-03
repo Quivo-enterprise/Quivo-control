@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarReglaSchema,
   CrearReglaSchema,
@@ -25,7 +25,7 @@ const ROLES_REGLAS = ['admin_quivo', 'admin_sindicato'] as const;
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_REGLAS)
 export class ReglasController {
-  constructor(private readonly reglasService: ReglasService) {}
+  constructor(@Inject(ReglasService) private readonly reglasService: ReglasService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser) {

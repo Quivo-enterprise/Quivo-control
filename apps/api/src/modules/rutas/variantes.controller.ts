@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarVarianteSchema,
   CrearVarianteSchema,
@@ -23,7 +23,7 @@ const ROLES_VARIANTES = ['admin_quivo', 'admin_sindicato', 'operador'] as const;
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_VARIANTES)
 export class RutaVariantesController {
-  constructor(private readonly variantesService: VariantesService) {}
+  constructor(@Inject(VariantesService) private readonly variantesService: VariantesService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser, @Param('rutaId') rutaId: string) {
@@ -47,7 +47,7 @@ export class RutaVariantesController {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_VARIANTES)
 export class VariantesController {
-  constructor(private readonly variantesService: VariantesService) {}
+  constructor(@Inject(VariantesService) private readonly variantesService: VariantesService) {}
 
   @Get(':id')
   obtener(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {

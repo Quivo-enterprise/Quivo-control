@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarParadaSchema,
   CrearParadaSchema,
@@ -23,7 +23,7 @@ const ROLES_PARADAS = ['admin_quivo', 'admin_sindicato', 'operador'] as const;
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_PARADAS)
 export class RutaParadasController {
-  constructor(private readonly paradasService: ParadasService) {}
+  constructor(@Inject(ParadasService) private readonly paradasService: ParadasService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser, @Param('rutaId') rutaId: string) {
@@ -46,7 +46,7 @@ export class RutaParadasController {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_PARADAS)
 export class ParadasController {
-  constructor(private readonly paradasService: ParadasService) {}
+  constructor(@Inject(ParadasService) private readonly paradasService: ParadasService) {}
 
   @Get(':id')
   obtener(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {

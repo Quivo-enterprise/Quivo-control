@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
@@ -24,9 +24,13 @@ export class VencimientoProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly queue: Queue;
   private readonly worker: Worker;
 
+  // `@Inject(...)` explícito en ambos parámetros: `tsx`/esbuild (usado por `dev`) no
+  // implementa `emitDecoratorMetadata` (evanw/esbuild#257) — sin esto, `design:paramtypes`
+  // queda vacío y Nest no puede resolver NINGUNO de los dos por tipo (ver mismo fix en
+  // `health.service.ts`).
   constructor(
-    config: ConfigService,
-    private readonly rotacionesService: RotacionesService,
+    @Inject(ConfigService) config: ConfigService,
+    @Inject(RotacionesService) private readonly rotacionesService: RotacionesService,
   ) {
     const redisUrl = config.get<string>('REDIS_URL') ?? 'redis://localhost:6380';
     this.connection = new Redis(redisUrl, { maxRetriesPerRequest: null });

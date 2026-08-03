@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarSancionSchema,
   CrearSancionSchema,
@@ -24,7 +24,7 @@ const ROLES_SANCIONES = ['admin_quivo', 'admin_sindicato'] as const;
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_SANCIONES)
 export class SancionesController {
-  constructor(private readonly sancionesService: SancionesService) {}
+  constructor(@Inject(SancionesService) private readonly sancionesService: SancionesService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser) {

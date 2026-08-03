@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
 import { AuditoriaQuerySchema, type AuditoriaQuery } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
@@ -15,7 +15,7 @@ class AuditoriaQueryDto extends createZodDto(AuditoriaQuerySchema) {}
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin_quivo', 'admin_sindicato')
 export class AuditoriaController {
-  constructor(private readonly auditoriaService: AuditoriaService) {}
+  constructor(@Inject(AuditoriaService) private readonly auditoriaService: AuditoriaService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser, @Query() query: AuditoriaQueryDto) {

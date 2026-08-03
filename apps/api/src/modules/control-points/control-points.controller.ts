@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarPuntoControlSchema,
   CrearPuntoControlSchema,
@@ -23,7 +23,7 @@ const ROLES_PUNTOS_CONTROL = ['admin_quivo', 'admin_sindicato', 'operador'] as c
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_PUNTOS_CONTROL)
 export class RutaControlPointsController {
-  constructor(private readonly controlPointsService: ControlPointsService) {}
+  constructor(@Inject(ControlPointsService) private readonly controlPointsService: ControlPointsService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser, @Param('rutaId') rutaId: string) {
@@ -47,7 +47,7 @@ export class RutaControlPointsController {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_PUNTOS_CONTROL)
 export class ControlPointsController {
-  constructor(private readonly controlPointsService: ControlPointsService) {}
+  constructor(@Inject(ControlPointsService) private readonly controlPointsService: ControlPointsService) {}
 
   @Get(':id')
   obtener(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {

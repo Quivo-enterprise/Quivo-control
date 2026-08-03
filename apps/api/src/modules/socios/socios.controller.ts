@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarSocioSchema,
   CrearSocioSchema,
@@ -23,7 +23,7 @@ class ActualizarSocioDto extends createZodDto(ActualizarSocioSchema) {}
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin_quivo', 'admin_sindicato', 'operador')
 export class SociosController {
-  constructor(private readonly sociosService: SociosService) {}
+  constructor(@Inject(SociosService) private readonly sociosService: SociosService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser) {

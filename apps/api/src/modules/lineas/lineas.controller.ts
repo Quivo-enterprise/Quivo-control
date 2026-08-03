@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarLineaSchema,
   CrearLineaSchema,
@@ -21,7 +21,7 @@ class ActualizarLineaDto extends createZodDto(ActualizarLineaSchema) {}
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin_quivo', 'admin_sindicato', 'operador')
 export class LineasController {
-  constructor(private readonly lineasService: LineasService) {}
+  constructor(@Inject(LineasService) private readonly lineasService: LineasService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser) {

@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Inject, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { LoginRequestSchema, LogoutRequestSchema, RefreshRequestSchema } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
@@ -10,7 +10,7 @@ class LogoutDto extends createZodDto(LogoutRequestSchema) {}
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
   /** POST /v1/auth/login — contrato en apps/web/src/lib/auth/api-client.ts. Límite mucho
    * más estricto que el default global (QUI-251): sin esto, un login con contraseña

@@ -1,4 +1,4 @@
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { CallHandler, ExecutionContext, Inject, Injectable, NestInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { withTenantContext } from '@quivo/db';
 import type { Observable } from 'rxjs';
@@ -41,7 +41,11 @@ interface RequestConAuditoria {
  */
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
-  constructor(private readonly reflector: Reflector) {}
+  // `@Inject(Reflector)` explícito: `tsx`/esbuild (usado por `dev`) no emite
+  // `design:paramtypes` de forma confiable para clases importadas de paquetes externos
+  // (evanw/esbuild#257) — sin esto, `reflector` llega `undefined` y ESTE interceptor global
+  // (`APP_INTERCEPTOR`, corre en cada request) rompe TODA la API con 500, no solo /health.
+  constructor(@Inject(Reflector) private readonly reflector: Reflector) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const entidad = this.reflector.get<string | undefined>(AUDIT_ENTIDAD_KEY, context.getHandler());

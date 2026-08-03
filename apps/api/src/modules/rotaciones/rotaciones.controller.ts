@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarAsignacionSchema,
   CrearAsignacionManualSchema,
@@ -29,7 +29,7 @@ const ROLES_ROTACIONES = ['admin_quivo', 'admin_sindicato'] as const;
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(...ROLES_ROTACIONES)
 export class RotacionesController {
-  constructor(private readonly rotacionesService: RotacionesService) {}
+  constructor(@Inject(RotacionesService) private readonly rotacionesService: RotacionesService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser) {

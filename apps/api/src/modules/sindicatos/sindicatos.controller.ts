@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarSindicatoSchema,
   CrearSindicatoSchema,
@@ -22,7 +22,7 @@ class ActualizarSindicatoDto extends createZodDto(ActualizarSindicatoSchema) {}
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin_quivo')
 export class SindicatosController {
-  constructor(private readonly sindicatosService: SindicatosService) {}
+  constructor(@Inject(SindicatosService) private readonly sindicatosService: SindicatosService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser) {
