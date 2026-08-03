@@ -7,8 +7,14 @@ import { VehiculosController } from '../../modules/vehiculos/vehiculos.controlle
 import { ConductoresController } from '../../modules/conductores/conductores.controller.js';
 import { LineasController } from '../../modules/lineas/lineas.controller.js';
 import { LineaRutasController, RutasController } from '../../modules/rutas/rutas.controller.js';
-import { RutaVariantesController, VariantesController } from '../../modules/rutas/variantes.controller.js';
-import { RutaParadasController, ParadasController } from '../../modules/rutas/paradas.controller.js';
+import {
+  RutaVariantesController,
+  VariantesController,
+} from '../../modules/rutas/variantes.controller.js';
+import {
+  RutaParadasController,
+  ParadasController,
+} from '../../modules/rutas/paradas.controller.js';
 import {
   RutaControlPointsController,
   ControlPointsController,
@@ -17,6 +23,11 @@ import { ReglasController } from '../../modules/reglas/reglas.controller.js';
 import { SancionesController } from '../../modules/reglas/sanciones.controller.js';
 import { RotacionesController } from '../../modules/rotaciones/rotaciones.controller.js';
 import { AuditoriaController } from '../../modules/auditoria/auditoria.controller.js';
+import { CredencialesMovilesController } from '../../modules/auth-movil/credenciales-moviles.controller.js';
+import { SyncErroresController } from '../../modules/sync/sync-errores.controller.js';
+import { CumplimientoController } from '../../modules/reportes/cumplimiento.controller.js';
+import { RecorridosController } from '../../modules/reportes/recorridos.controller.js';
+import { ExportesController } from '../../modules/reportes/exportes.controller.js';
 
 const ADMIN_QUIVO_ONLY = ['admin_quivo'];
 const CRUD_NUCLEO = ['admin_quivo', 'admin_sindicato', 'operador'];
@@ -49,10 +60,16 @@ describe('Matriz de roles por controller (QUI-251)', () => {
     ['SancionesController', SancionesController, PLANIFICACION],
     ['RotacionesController', RotacionesController, PLANIFICACION],
     ['AuditoriaController', AuditoriaController, PLANIFICACION],
+    ['CredencialesMovilesController', CredencialesMovilesController, PLANIFICACION],
+    ['SyncErroresController', SyncErroresController, PLANIFICACION],
+    ['CumplimientoController', CumplimientoController, PLANIFICACION],
+    ['RecorridosController', RecorridosController, PLANIFICACION],
+    ['ExportesController', ExportesController, PLANIFICACION],
   ];
 
   it.each(casos)('%s exige exactamente %j', (_nombre, controller, rolesEsperados) => {
-    const rolesReales = Reflect.getMetadata(ROLES_KEY, controller as object) as string[] | undefined;
+    const rolesReales = Reflect.getMetadata(ROLES_KEY, controller as object) as
+      string[] | undefined;
     expect(rolesReales).toBeDefined();
     expect([...(rolesReales ?? [])].sort()).toEqual([...rolesEsperados].sort());
   });

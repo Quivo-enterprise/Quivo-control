@@ -12,3 +12,5 @@ export * from './rotacion.js';
 export * from './asignacion.js';
 export * from './regla.js';
 export * from './sancion.js';
+export * from './reportes.js';
+export * from './recorrido.js';
