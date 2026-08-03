@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { APIError } from 'better-auth';
+import { hashPassword } from 'better-auth/crypto';
 import type { Prisma } from '@prisma/client';
 import { auth } from '../src/auth.js';
 import { withTenantContext } from '../src/tenant-context.js';
@@ -12,6 +13,8 @@ import { withTenantContext } from '../src/tenant-context.js';
  * a mano) para que Better-Auth siga siendo quien hashea la contraseña.
  */
 const SEED_PASSWORD = 'Quivo123!';
+const SEED_PIN_VEHICULO = process.env.MOBILE_SEED_VEHICLE_PIN ?? '246810';
+const SEED_PIN_CONDUCTOR = process.env.MOBILE_SEED_DRIVER_PIN ?? '135790';
 
 /** IDs fijos (no aleatorios) para que el seed sea idempotente y para que el test
  * cross-tenant de RLS (QUI-218) pueda referenciarlos sin tener que leerlos primero. */
@@ -22,6 +25,21 @@ const SINDICATOS = [
   { id: SINDICATO_A_ID, nombre: 'Sindicato 1º de Mayo', estado: 'activo' },
   { id: SINDICATO_B_ID, nombre: 'Sindicato Unificado del Norte', estado: 'activo' },
 ] as const;
+
+const PLACA_POR_SINDICATO = {
+  [SINDICATO_A_ID]: '1001ABC',
+  [SINDICATO_B_ID]: '2002DEF',
+} as const;
+
+const CI_SOCIO_POR_SINDICATO = {
+  [SINDICATO_A_ID]: '1000001 LP',
+  [SINDICATO_B_ID]: '2000002 SC',
+} as const;
+
+const CI_CONDUCTOR_POR_SINDICATO = {
+  [SINDICATO_A_ID]: '1000101 LP',
+  [SINDICATO_B_ID]: '2000202 SC',
+} as const;
 
 const USERS = [
   { email: 'admin@quivo.local', name: 'Admin QUIVO', rol: 'admin_quivo', sindicatoId: null },
@@ -69,46 +87,72 @@ async function seedUsuarios(): Promise<void> {
 
 /** Un vehículo, un conductor y una línea de prueba por sindicato — solo para tener datos
  * reales sobre los que probar CRUD y RLS, no representan un catálogo completo. */
-async function seedDatosDePrueba(tx: Prisma.TransactionClient): Promise<void> {
+async function seedDatosDePrueba(
+  tx: Prisma.TransactionClient,
+  credenciales: { vehiculoHash: string; conductorHash: string },
+): Promise<void> {
   for (const sindicato of SINDICATOS) {
+    const placa = PLACA_POR_SINDICATO[sindicato.id];
+    const ciSocio = CI_SOCIO_POR_SINDICATO[sindicato.id];
+    const ciConductor = CI_CONDUCTOR_POR_SINDICATO[sindicato.id];
+    const placaDemoAnterior = `AB${sindicato.id.slice(0, 3)}`;
     const socio = await tx.socio.upsert({
       where: { id: `${sindicato.id.slice(0, 8)}-0000-4000-8000-000000000001` },
-      update: {},
+      update: { documentoIdentidad: ciSocio },
       create: {
         id: `${sindicato.id.slice(0, 8)}-0000-4000-8000-000000000001`,
         sindicatoId: sindicato.id,
         nombre: `Socio de prueba (${sindicato.nombre})`,
-        documentoIdentidad: `DOC-${sindicato.id.slice(0, 8)}`,
+        documentoIdentidad: ciSocio,
         estado: 'activo',
       },
     });
 
-    await tx.vehiculo.upsert({
-      where: { sindicatoId_placa: { sindicatoId: sindicato.id, placa: `AB${sindicato.id.slice(0, 3)}` } },
-      update: {},
-      create: {
-        sindicatoId: sindicato.id,
-        socioId: socio.id,
-        placa: `AB${sindicato.id.slice(0, 3)}`,
-        tipo: 'bus',
-        marca: 'Mercedes-Benz',
-        modelo: 'OF-1721',
-        color: 'blanco',
-        capacidad: 40,
-        estado: 'activo',
-      },
+    const vehiculoDemo = await tx.vehiculo.findFirst({
+      where: { sindicatoId: sindicato.id, placa: { in: [placa, placaDemoAnterior] } },
     });
+    if (vehiculoDemo) {
+      await tx.vehiculo.update({
+        where: { id: vehiculoDemo.id },
+        data: {
+          placa,
+          placaNormalizada: placa,
+          credencialHash: credenciales.vehiculoHash,
+        },
+      });
+    } else {
+      await tx.vehiculo.create({
+        data: {
+          sindicatoId: sindicato.id,
+          socioId: socio.id,
+          placa,
+          placaNormalizada: placa,
+          tipo: 'bus_urbano',
+          marca: 'Mercedes-Benz',
+          modelo: 'OF-1721',
+          color: 'blanco',
+          capacidad: 40,
+          estado: 'activo',
+          credencialHash: credenciales.vehiculoHash,
+        },
+      });
+    }
 
     await tx.conductor.upsert({
       where: { id: `${sindicato.id.slice(0, 8)}-0000-4000-8000-000000000002` },
-      update: {},
+      update: {
+        documentoIdentidad: ciConductor,
+        licenciaConducir: ciConductor,
+        credencialHash: credenciales.conductorHash,
+      },
       create: {
         id: `${sindicato.id.slice(0, 8)}-0000-4000-8000-000000000002`,
         sindicatoId: sindicato.id,
         nombre: `Conductor de prueba (${sindicato.nombre})`,
-        documentoIdentidad: `LIC-${sindicato.id.slice(0, 8)}`,
-        licenciaConducir: `LIC-${sindicato.id.slice(0, 8)}`,
+        documentoIdentidad: ciConductor,
+        licenciaConducir: ciConductor,
         estado: 'activo',
+        credencialHash: credenciales.conductorHash,
       },
     });
 
@@ -126,9 +170,9 @@ async function seedDatosDePrueba(tx: Prisma.TransactionClient): Promise<void> {
     console.log(`Datos de prueba listos para ${sindicato.nombre}`);
   }
 }
-
 const RUTA_A_ID = 'aaaaaaaa-0000-4000-8000-000000000001';
 const ROTACION_A_ID = 'aaaaaaaa-0000-4000-8000-000000000002';
+const ROTACION_MOVIL_ID = 'aaaaaaaa-0000-4000-8000-000000000005';
 const GEOMETRIA_DEMO = JSON.stringify({
   type: 'LineString',
   coordinates: [
@@ -146,7 +190,12 @@ async function seedRotaciones(tx: Prisma.TransactionClient): Promise<void> {
     where: { sindicatoId_codigo: { sindicatoId: SINDICATO_A_ID, codigo: 'L1' } },
   });
   const vehiculo = await tx.vehiculo.findUniqueOrThrow({
-    where: { sindicatoId_placa: { sindicatoId: SINDICATO_A_ID, placa: `AB${SINDICATO_A_ID.slice(0, 3)}` } },
+    where: {
+      sindicatoId_placa: {
+        sindicatoId: SINDICATO_A_ID,
+        placa: PLACA_POR_SINDICATO[SINDICATO_A_ID],
+      },
+    },
   });
   const conductor = await tx.conductor.findUniqueOrThrow({
     where: { id: `${SINDICATO_A_ID.slice(0, 8)}-0000-4000-8000-000000000002` },
@@ -161,7 +210,12 @@ async function seedRotaciones(tx: Prisma.TransactionClient): Promise<void> {
   await tx.rotacion.upsert({
     where: { id: ROTACION_A_ID },
     update: {},
-    create: { id: ROTACION_A_ID, sindicatoId: SINDICATO_A_ID, periodo: '2026-08', estado: 'borrador' },
+    create: {
+      id: ROTACION_A_ID,
+      sindicatoId: SINDICATO_A_ID,
+      periodo: '2026-08',
+      estado: 'borrador',
+    },
   });
 
   const ASIGNACIONES_DEMO = [
@@ -186,12 +240,52 @@ async function seedRotaciones(tx: Prisma.TransactionClient): Promise<void> {
         fecha: new Date('2026-08-03'),
         horario: asignacion.horario,
         orden: asignacion.orden,
-        venceAt: new Date('2026-08-03T23:59:59Z'),
+        venceAt: new Date('2026-08-04T03:59:59Z'),
       },
     });
   }
 
-  console.log('Rotación + asignaciones de prueba listas para Sindicato 1º de Mayo');
+  const fechaMovil = fechaActualBolivia();
+  await tx.rotacion.upsert({
+    where: { id: ROTACION_MOVIL_ID },
+    update: { estado: 'publicada' },
+    create: {
+      id: ROTACION_MOVIL_ID,
+      sindicatoId: SINDICATO_A_ID,
+      periodo: 'prueba-movil',
+      estado: 'publicada',
+    },
+  });
+  await tx.asignacion.upsert({
+    where: {
+      vehiculoId_fecha_horario: {
+        vehiculoId: vehiculo.id,
+        fecha: fechaMovil,
+        horario: 'manana',
+      },
+    },
+    update: {
+      rotacionId: ROTACION_MOVIL_ID,
+      conductorId: conductor.id,
+      rutaId: RUTA_A_ID,
+      orden: 1,
+      venceAt: finDeJornadaBolivia(fechaMovil),
+      estado: 'vigente',
+    },
+    create: {
+      rotacionId: ROTACION_MOVIL_ID,
+      vehiculoId: vehiculo.id,
+      conductorId: conductor.id,
+      rutaId: RUTA_A_ID,
+      fecha: fechaMovil,
+      horario: 'manana',
+      orden: 1,
+      venceAt: finDeJornadaBolivia(fechaMovil),
+      estado: 'vigente',
+    },
+  });
+
+  console.log('Rotaciones web/móvil de prueba listas para Sindicato 1º de Mayo');
 }
 
 const REGLA_A_ID = 'aaaaaaaa-0000-4000-8000-000000000003';
@@ -201,7 +295,12 @@ const SANCION_A_ID = 'aaaaaaaa-0000-4000-8000-000000000004';
  * seedRotaciones: tener algo real que mostrar en `/reglas` sin depender de altas manuales. */
 async function seedReglas(tx: Prisma.TransactionClient): Promise<void> {
   const vehiculo = await tx.vehiculo.findUniqueOrThrow({
-    where: { sindicatoId_placa: { sindicatoId: SINDICATO_A_ID, placa: `AB${SINDICATO_A_ID.slice(0, 3)}` } },
+    where: {
+      sindicatoId_placa: {
+        sindicatoId: SINDICATO_A_ID,
+        placa: PLACA_POR_SINDICATO[SINDICATO_A_ID],
+      },
+    },
   });
 
   await tx.regla.upsert({
@@ -237,17 +336,32 @@ async function seedReglas(tx: Prisma.TransactionClient): Promise<void> {
 }
 
 async function seed(): Promise<void> {
+  const [vehiculoHash, conductorHash] = await Promise.all([
+    hashPassword(SEED_PIN_VEHICULO),
+    hashPassword(SEED_PIN_CONDUCTOR),
+  ]);
   // admin_quivo: única forma de bypassear RLS (QUI-218) sin depender de qué rol de
   // Postgres esté conectado — ver packages/db/src/tenant-context.ts.
   await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
     await seedSindicatos(tx);
-    await seedDatosDePrueba(tx);
+    await seedDatosDePrueba(tx, { vehiculoHash, conductorHash });
     await seedRotaciones(tx);
     await seedReglas(tx);
   });
   // Better-Auth usa su propio adapter Prisma (no pasa por `tx`) pero sus tablas no tienen
   // RLS (ver comentario en la migración `rls_multi_tenant`), así que corre bien afuera.
   await seedUsuarios();
+}
+
+function fechaActualBolivia(ahora: Date = new Date()): Date {
+  const bolivia = new Date(ahora.getTime() - 4 * 3_600_000);
+  return new Date(Date.UTC(bolivia.getUTCFullYear(), bolivia.getUTCMonth(), bolivia.getUTCDate()));
+}
+
+function finDeJornadaBolivia(fecha: Date): Date {
+  return new Date(
+    Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate() + 1, 3, 59, 59),
+  );
 }
 
 seed()

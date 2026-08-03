@@ -8,6 +8,13 @@
  */
 const BOLIVIA_UTC_OFFSET_HOURS = 4;
 
+/** Fecha calendario actual de Bolivia representada como medianoche UTC, compatible con
+ * columnas Prisma `@db.Date`. Acepta `ahora` para permitir tests deterministas. */
+export function fechaActualBolivia(ahora: Date = new Date()): Date {
+  const bolivia = new Date(ahora.getTime() - BOLIVIA_UTC_OFFSET_HOURS * 3_600_000);
+  return new Date(Date.UTC(bolivia.getUTCFullYear(), bolivia.getUTCMonth(), bolivia.getUTCDate()));
+}
+
 /** Instante UTC que corresponde a las 23:59:59 hora de Bolivia del `fecha` dado (que llega
  * como una fecha "pura", típicamente medianoche UTC — ver `z.coerce.date()` en
  * `GenerarRotacionSchema`/`CrearAsignacionManualSchema`). */

@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { finDeJornadaBolivia } from './jornada.js';
+import { fechaActualBolivia, finDeJornadaBolivia } from './jornada.js';
+
+describe('fechaActualBolivia', () => {
+  it('mantiene la fecha local antes de medianoche UTC', () => {
+    expect(fechaActualBolivia(new Date('2026-08-02T02:30:00Z')).toISOString()).toBe(
+      '2026-08-01T00:00:00.000Z',
+    );
+  });
+
+  it('avanza al siguiente día después de medianoche en Bolivia', () => {
+    expect(fechaActualBolivia(new Date('2026-08-02T04:30:00Z')).toISOString()).toBe(
+      '2026-08-02T00:00:00.000Z',
+    );
+  });
+});
 
 describe('finDeJornadaBolivia', () => {
   it('vence a las 03:59:59 UTC del día siguiente (= 23:59:59 en Bolivia, UTC-4)', () => {

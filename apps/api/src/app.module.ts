@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
+import { pinoHttpRedaction } from './common/logging/pino-http-redaction.js';
 import { ZodValidationPipe } from './common/validation/zod-validation.pipe.js';
 import { AuditInterceptor } from './common/audit/audit.interceptor.js';
 import { PingController } from './common/ping/ping.controller.js';
@@ -21,6 +22,7 @@ import { TrackingModule } from './modules/tracking/index.js';
 import { SyncModule } from './modules/sync/index.js';
 import { ReportesModule } from './modules/reportes/index.js';
 import { AuditoriaModule } from './modules/auditoria/index.js';
+import { AuthMovilModule } from './modules/auth-movil/index.js';
 
 @Module({
   imports: [
@@ -31,6 +33,7 @@ import { AuditoriaModule } from './modules/auditoria/index.js';
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 100 }]),
     LoggerModule.forRoot({
       pinoHttp: {
+        redact: pinoHttpRedaction,
         // req.id ya viene de Fastify (genReqId configurado en main.ts).
         customProps: (req) => ({ requestId: (req as { id?: string }).id }),
         formatters: {
@@ -40,6 +43,7 @@ import { AuditoriaModule } from './modules/auditoria/index.js';
     }),
     HealthModule,
     AuthModule,
+    AuthMovilModule,
     SindicatosModule,
     SociosModule,
     VehiculosModule,
