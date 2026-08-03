@@ -53,6 +53,12 @@ export const NAV_ITEMS: NavItem[] = [
     href: '/auditoria',
     roles: ['admin_quivo', 'admin_sindicato'],
   },
+  {
+    id: 'sync-errores',
+    label: 'Errores de sync',
+    href: '/sync-errores',
+    roles: ['admin_quivo', 'admin_sindicato'],
+  },
 ];
 
 export function filterNavItemsByRole(items: NavItem[], rol: string): NavItem[] {
