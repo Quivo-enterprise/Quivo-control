@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   Alert,
   Button,
+  ColorPicker,
   ConfirmDialog,
   DataTable,
   FormField,
@@ -21,9 +22,17 @@ import {
 export interface EntityFieldConfig {
   key: string;
   label: string;
-  kind: 'text' | 'number' | 'select';
+  kind: 'text' | 'number' | 'select' | 'color';
   options?: SelectOption[];
   required?: boolean;
+  helperText?: string;
+  placeholder?: string;
+  maxLength?: number;
+  pattern?: string;
+  inputMode?: 'text' | 'numeric' | 'decimal' | 'tel' | 'email' | 'search' | 'url' | 'none';
+  autoComplete?: string;
+  normalize?: (value: string) => string;
+  validate?: (value: string, values: Record<string, string>) => string | undefined;
 }
 
 /** CRUD real contra `apps/api` (QUI-220..224) — sin `delete` porque ningún endpoint de M1
@@ -50,7 +59,10 @@ interface ModuleTablePageProps<T extends Record<string, unknown>> {
   dataSource?: ModuleDataSource<T>;
 }
 
-function toFormValues(row: Record<string, unknown> | null, fields: EntityFieldConfig[]): Record<string, string> {
+function toFormValues(
+  row: Record<string, unknown> | null,
+  fields: EntityFieldConfig[],
+): Record<string, string> {
   const values: Record<string, string> = {};
   for (const field of fields) {
     const raw = row ? row[field.key] : undefined;
@@ -90,6 +102,7 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
   const [isLoading, setIsLoading] = useState(dataSource !== undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -127,18 +140,24 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
       return rows;
     }
     return rows.filter((row) =>
-      searchKeys.some((key) => String(row[key] ?? '').toLowerCase().includes(normalized)),
+      searchKeys.some((key) =>
+        String(row[key] ?? '')
+          .toLowerCase()
+          .includes(normalized),
+      ),
     );
   }, [rows, query, searchKeys]);
 
   const openCreate = () => {
     setFormError(null);
+    setFieldErrors({});
     setFormValues(toFormValues(createDefaults, fields));
     setIsCreating(true);
   };
 
   const openEdit = (row: T) => {
     setFormError(null);
+    setFieldErrors({});
     setFormValues(toFormValues(row, fields));
     setEditingRow(row);
   };
@@ -147,17 +166,51 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
     setIsCreating(false);
     setEditingRow(null);
     setFormError(null);
+    setFieldErrors({});
   };
 
   const handleFieldChange = (key: string, value: string) => {
     setFormValues((prev) => ({ ...prev, [key]: value }));
+    setFieldErrors((previous) => {
+      if (!previous[key]) return previous;
+      const next = { ...previous };
+      delete next[key];
+      return next;
+    });
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const normalizedValues = { ...formValues };
+    const nextFieldErrors: Record<string, string> = {};
+    for (const field of fields) {
+      const raw = normalizedValues[field.key] ?? '';
+      normalizedValues[field.key] = field.normalize ? field.normalize(raw) : raw;
+    }
+
+    for (const field of fields) {
+      const value = normalizedValues[field.key] ?? '';
+      if (field.required && value.trim() === '') {
+        nextFieldErrors[field.key] = `${field.label} es obligatorio`;
+        continue;
+      }
+      if (value !== '' && field.validate) {
+        const message = field.validate(value, normalizedValues);
+        if (message) nextFieldErrors[field.key] = message;
+      }
+    }
+
+    setFormValues(normalizedValues);
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
+      const firstInvalidKey = fields.find((field) => nextFieldErrors[field.key])?.key;
+      if (firstInvalidKey) document.getElementById(firstInvalidKey)?.focus();
+      return;
+    }
+
     const parsed: Record<string, unknown> = {};
     for (const field of fields) {
-      const raw = formValues[field.key] ?? '';
+      const raw = normalizedValues[field.key] ?? '';
       parsed[field.key] = field.kind === 'number' ? Number(raw) : raw;
     }
 
@@ -222,7 +275,11 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
         onChange={(event) => setQuery(event.target.value)}
         onClear={() => setQuery('')}
       />
-      {loadError && <Alert variant="danger" title="No se pudo cargar">{loadError}</Alert>}
+      {loadError && (
+        <Alert variant="danger" title="No se pudo cargar">
+          {loadError}
+        </Alert>
+      )}
       {isLoading ? (
         <Loader label={`Cargando ${entityLabel}s...`} />
       ) : (
@@ -249,9 +306,7 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
         open={isFormOpen}
         title={editingRow ? `Editar ${entityLabel}` : `Nuevo ${entityLabel}`}
         description={
-          dataSource
-            ? undefined
-            : 'Cambios de demo — no se persisten en un backend real.'
+          dataSource ? undefined : 'Cambios de demo — no se persisten en un backend real.'
         }
         onClose={closeForm}
         footer={
@@ -270,9 +325,16 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
             {formError}
           </Alert>
         )}
-        <FormGroup id="entity-form" onSubmit={handleSubmit}>
+        <FormGroup id="entity-form" onSubmit={handleSubmit} noValidate>
           {fields.map((field) => (
-            <FormField key={field.key} label={field.label} htmlFor={field.key} required={field.required}>
+            <FormField
+              key={field.key}
+              label={field.label}
+              htmlFor={field.key}
+              required={field.required}
+              error={fieldErrors[field.key]}
+              helperText={field.helperText}
+            >
               {field.kind === 'select' ? (
                 <Select
                   id={field.key}
@@ -280,6 +342,14 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
                   options={field.options ?? []}
                   value={formValues[field.key] ?? ''}
                   onChange={(event) => handleFieldChange(field.key, event.target.value)}
+                  aria-invalid={Boolean(fieldErrors[field.key])}
+                />
+              ) : field.kind === 'color' ? (
+                <ColorPicker
+                  id={field.key}
+                  name={field.key}
+                  value={formValues[field.key] ?? ''}
+                  onChange={(next) => handleFieldChange(field.key, next)}
                 />
               ) : (
                 <Input
@@ -288,7 +358,17 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
                   type={field.kind === 'number' ? 'number' : 'text'}
                   value={formValues[field.key] ?? ''}
                   onChange={(event) => handleFieldChange(field.key, event.target.value)}
+                  onBlur={(event) => {
+                    if (field.normalize)
+                      handleFieldChange(field.key, field.normalize(event.target.value));
+                  }}
                   required={field.required}
+                  placeholder={field.placeholder}
+                  maxLength={field.maxLength}
+                  pattern={field.pattern}
+                  inputMode={field.inputMode}
+                  autoComplete={field.autoComplete}
+                  aria-invalid={Boolean(fieldErrors[field.key])}
                 />
               )}
             </FormField>

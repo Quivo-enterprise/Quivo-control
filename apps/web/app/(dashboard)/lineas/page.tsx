@@ -15,7 +15,12 @@ export default function LineasPage() {
     const base: EntityFieldConfig[] = [
       { key: 'codigo', label: 'Código', kind: 'text', required: true },
       { key: 'nombre', label: 'Nombre', kind: 'text', required: true },
-      { key: 'color', label: 'Color (hex, opcional)', kind: 'text' },
+      {
+        key: 'color',
+        label: 'Color de la línea',
+        kind: 'color',
+        helperText: 'Se usa para diferenciar la línea y sus rutas en el mapa.',
+      },
     ];
     if (user?.rol === 'admin_quivo') {
       base.push({ key: 'sindicatoId', label: 'Sindicato', kind: 'select', options: sindicatoOptions, required: true });
@@ -45,6 +50,29 @@ export default function LineasPage() {
       columns={[
         { key: 'codigo', header: 'Código' },
         { key: 'nombre', header: 'Nombre' },
+        {
+          key: 'color',
+          header: 'Color',
+          render: (row) =>
+            row.color ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: 'inline-block',
+                    width: '0.85rem',
+                    height: '0.85rem',
+                    borderRadius: '999px',
+                    background: row.color,
+                    border: '1px solid var(--qv-border-strong)',
+                  }}
+                />
+                {row.color}
+              </span>
+            ) : (
+              <span style={{ color: 'var(--qv-text-muted)' }}>Sin color</span>
+            ),
+        },
         {
           key: 'sindicatoId',
           header: 'Sindicato',

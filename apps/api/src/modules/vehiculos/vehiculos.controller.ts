@@ -1,8 +1,10 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import {
   ActualizarVehiculoSchema,
+  CambiarEstadoVehiculoSchema,
   CrearVehiculoSchema,
   type ActualizarVehiculo,
+  type CambiarEstadoVehiculo,
   type CrearVehiculo,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
@@ -15,6 +17,7 @@ import { VehiculosService } from './vehiculos.service.js';
 
 class CrearVehiculoDto extends createZodDto(CrearVehiculoSchema) {}
 class ActualizarVehiculoDto extends createZodDto(ActualizarVehiculoSchema) {}
+class CambiarEstadoVehiculoDto extends createZodDto(CambiarEstadoVehiculoSchema) {}
 
 /** RF-10..14 — CRUD de vehículos por sindicato (QUI-222). Mismo esquema de tenant-scoping
  * que socios (QUI-221): admin_quivo manda sindicatoId, el resto queda forzado al propio. */
@@ -22,11 +25,21 @@ class ActualizarVehiculoDto extends createZodDto(ActualizarVehiculoSchema) {}
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin_quivo', 'admin_sindicato', 'operador')
 export class VehiculosController {
-  constructor(private readonly vehiculosService: VehiculosService) {}
+  constructor(@Inject(VehiculosService) private readonly vehiculosService: VehiculosService) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser) {
     return this.vehiculosService.listar(actor);
+  }
+
+  @Get('verificar-placa')
+  verificarPlaca(@CurrentUser() actor: AuthenticatedUser, @Query('placa') placa: string) {
+    return this.vehiculosService.verificarPlaca(actor, placa);
+  }
+
+  @Get(':id/historial-estados')
+  historialEstados(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {
+    return this.vehiculosService.historialEstados(actor, id);
   }
 
   @Get(':id')
@@ -38,6 +51,16 @@ export class VehiculosController {
   @Auditable('vehiculo')
   crear(@CurrentUser() actor: AuthenticatedUser, @Body() body: CrearVehiculoDto) {
     return this.vehiculosService.crear(actor, body as CrearVehiculo);
+  }
+
+  @Patch(':id/estado')
+  @Auditable('vehiculo')
+  cambiarEstado(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: CambiarEstadoVehiculoDto,
+  ) {
+    return this.vehiculosService.cambiarEstado(actor, id, body as CambiarEstadoVehiculo);
   }
 
   @Patch(':id')

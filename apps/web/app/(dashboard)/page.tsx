@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { ProgressBarProps } from '@quivo/design-system';
-import { Alert, ChartCard, DataPanel, Grid, KpiCard, Loader, ProgressBar } from '@quivo/design-system';
+import {
+  Alert,
+  ChartCard,
+  DataPanel,
+  Grid,
+  KpiCard,
+  Loader,
+  ProgressBar,
+} from '@quivo/design-system';
 import type { Conductor, Sindicato, Socio, Vehiculo } from '@quivo/shared';
 import { useAuth } from '../../src/lib/auth/auth-context';
 import { ApiError } from '../../src/lib/api/client';
@@ -12,6 +20,7 @@ import { vehiculosApi } from '../../src/lib/api/vehiculos';
 import { conductoresApi } from '../../src/lib/api/conductores';
 
 const VEHICULO_VARIANT: Record<Vehiculo['estado'], ProgressBarProps['variant']> = {
+  pendiente: 'primary',
   activo: 'success',
   inactivo: 'danger',
   suspendido: 'warning',
@@ -80,7 +89,11 @@ export default function DashboardHomePage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {error && <Alert variant="danger" title="Error">{error}</Alert>}
+      {error && (
+        <Alert variant="danger" title="Error">
+          {error}
+        </Alert>
+      )}
       <Grid columns={user?.rol === 'admin_quivo' ? 4 : 3} gap="md">
         {user?.rol === 'admin_quivo' && (
           <KpiCard label="Sindicatos activos" value={sindicatosActivos} tone="primary" />
@@ -123,7 +136,10 @@ export default function DashboardHomePage() {
             </div>
           )}
         </ChartCard>
-        <ChartCard title="Conductores por estado" subtitle={`${conductores.length} conductores registrados`}>
+        <ChartCard
+          title="Conductores por estado"
+          subtitle={`${conductores.length} conductores registrados`}
+        >
           {conductoresPorEstado.length === 0 ? (
             <span>Sin conductores todavía.</span>
           ) : (
@@ -142,7 +158,10 @@ export default function DashboardHomePage() {
           )}
         </ChartCard>
       </Grid>
-      <DataPanel title="Bienvenido a QUIVO Control" description="Panel administrativo con datos reales.">
+      <DataPanel
+        title="Bienvenido a QUIVO Control"
+        description="Panel administrativo con datos reales."
+      >
         <p>Usá el menú lateral para navegar entre los módulos habilitados para tu rol.</p>
       </DataPanel>
     </div>
