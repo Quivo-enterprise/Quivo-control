@@ -1,12 +1,13 @@
 {
   "expo": {
-    "name": "QUIVO Conductor (spike GPS)",
-    "slug": "quivo-conductor-spike",
-    "version": "0.0.1",
+    "name": "QUIVO Conductor",
+    "slug": "quivo-conductor",
+    "version": "0.1.0",
     "orientation": "portrait",
     "platforms": ["android"],
     "android": {
       "package": "com.quivotech.conductor",
+      "usesCleartextTraffic": true,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
@@ -21,7 +22,9 @@
         {
           "license": ""
         }
-      ]
+      ],
+      "expo-sqlite",
+      "expo-secure-store"
     ]
   }
 }

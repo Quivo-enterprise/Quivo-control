@@ -1,0 +1,94 @@
+import { useState } from 'react';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { QuivoButton } from '../../shared/components/quivo-button';
+import { QuivoCard } from '../../shared/components/quivo-card';
+import { QuivoHeader } from '../../shared/components/quivo-header';
+import { QuivoStepIndicator } from '../../shared/components/quivo-step-indicator';
+import { QuivoTextField } from '../../shared/components/quivo-text-field';
+import { quivoColors, quivoFonts, quivoSpacing } from '../../shared/theme/quivo-theme';
+
+interface VehicleLoginScreenProps {
+  loading: boolean;
+  error: string | null;
+  onSubmit: (placa: string, pin: string) => Promise<void>;
+}
+
+export function VehicleLoginScreen({ loading, error, onSubmit }: VehicleLoginScreenProps) {
+  const [placa, setPlaca] = useState('');
+  const [pin, setPin] = useState('');
+  const puedeContinuar = placa.trim().length >= 3 && /^\d{6,12}$/.test(pin);
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'android' ? 'height' : 'padding'}
+      style={styles.flex}
+    >
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <QuivoHeader
+          title="Conecta tu vehículo"
+          subtitle="Ingresa la credencial entregada por tu sindicato para comenzar la jornada."
+        />
+        <QuivoStepIndicator current={1} />
+        <QuivoCard style={styles.form}>
+          <QuivoTextField
+            label="Placa del vehículo"
+            placeholder="Ej. 1234-ABC"
+            autoCapitalize="characters"
+            autoCorrect={false}
+            returnKeyType="next"
+            value={placa}
+            onChangeText={setPlaca}
+          />
+          <QuivoTextField
+            label="PIN del vehículo"
+            placeholder="6 a 12 dígitos"
+            help="Este PIN identifica al vehículo, no al chofer."
+            keyboardType="number-pad"
+            secureTextEntry
+            maxLength={12}
+            value={pin}
+            onChangeText={setPin}
+          />
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+          <QuivoButton
+            label="Validar vehículo"
+            loading={loading}
+            disabled={!puedeContinuar}
+            onPress={() => void onSubmit(placa, pin)}
+          />
+        </QuivoCard>
+        <View style={styles.security}>
+          <Text style={styles.securityTitle}>ACCESO OPERATIVO SEGURO</Text>
+          <Text style={styles.securityText}>
+            Después validarás tu identidad personal como chofer.
+          </Text>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  content: { padding: quivoSpacing.xl, gap: quivoSpacing.xl, paddingBottom: quivoSpacing.xxxl },
+  form: { gap: quivoSpacing.xl },
+  error: {
+    color: quivoColors.danger,
+    fontFamily: quivoFonts.bodyMedium,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  security: { alignItems: 'center', gap: quivoSpacing.xs, paddingHorizontal: quivoSpacing.lg },
+  securityTitle: {
+    color: quivoColors.primary,
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 11,
+    letterSpacing: 1,
+  },
+  securityText: {
+    color: quivoColors.textMuted,
+    fontFamily: quivoFonts.bodyRegular,
+    fontSize: 12,
+    textAlign: 'center',
+  },
+});

@@ -3,7 +3,7 @@ import {
   bateriaConsumidaPorcentaje,
   detectarHuecos,
   evaluarCriteriosGo,
-} from './battery-gap-monitor.js';
+} from './battery-gap-monitor';
 
 const MIN = 60_000;
 
