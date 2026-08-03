@@ -1,7 +1,21 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-07-31** (M2 completo. M4 (parte sin M3) completo. QUI-251 (security review) cerrado — ver sección propia. Quedan QUI-246/247/249, bloqueados por M3.)
+> Última actualización: **2026-08-01** (autenticación operativa móvil y port QUIVO
+> implementados/verificados; pipeline GPS productivo continúa sujeto al gate Transistorsoft.)
+>
+> **Implementación móvil (2026-08-01):** autenticación vehículo (placa+PIN) -> chofer
+> (documento+PIN), contexto por asignación e identidad visual QUIVO. Codex mantiene el
+> alcance móvil/auth y Claude trabaja `apps/web`. Resultado y contratos definitivos en
+> [`plan-auth-movil-quivo.md`](plan-auth-movil-quivo.md).
+>
+> **Claude (2026-08-01), dentro del alcance `apps/web` del plan de arriba:** verificado en
+> browser real que `/rutas` (QUI-229) funciona de punta a punta (login real, dibujar ruta,
+> paradas origen/destino). Cambio chico en el mismo módulo: `sentido` en el editor de rutas
+> pasó de `Input` de texto libre a `Select` fijo (Ida/Vuelta) —
+> `apps/web/app/(dashboard)/rutas/page.tsx`, sin tocar `packages/shared` (`RutaSchema.sentido`
+> sigue siendo `string` libre a propósito, ver comentario en `packages/shared/src/entities/ruta.ts`).
+> No toca nada del alcance de Codex.
 
 ## Qué es el proyecto
 
@@ -14,25 +28,25 @@ Requerimientos de Producto (CPO): `~/Downloads/QUIVOcontrol.md` (RF-01..84, RNF,
 
 ## Estado actual
 
-| Ítem                      | Estado                                                                                                                                                                                                                                         |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Decisión de stack         | ✅ Aprobada por el usuario (2026-07-19)                                                                                                                                                                                                        |
-| Deliberación council      | ✅ Sesión `council-20260719-083140` (Claude + Gemini, chairman synthesis, confianza media)                                                                                                                                                     |
-| Plan maestro              | ✅ `docs/plan-maestro.md`                                                                                                                                                                                                                      |
-| Documento técnico CTO     | ✅ `docs/documento-tecnico-cto.md` (responde las 18 preguntas del CPO)                                                                                                                                                                         |
-| Repo / monorepo           | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — rama `qui-227-web-nextjs-scaffold` (QUI-211..219, QUI-227) **pusheada** (2026-07-30); PR hacia `main` abierto, pendiente de review/merge |
-| Fase 0 / Cycle 12         | ✅ QUI-211/212/213/214/215 implementados y verificados en local; QUI-216 con código listo, ejecución física pendiente (ver `docs/spike-gps.md`)                                                                                     |
-| M1 kickoff — QUI-227      | ✅ `apps/web` scaffold Next.js completo: login, layout por rol, guard de rutas, demo CRUD de 8 módulos, dashboard con gráficos — ver sección "QUI-227 + QUI-219" abajo                                                                        |
-| QUI-219 — auth real       | ✅ Login/refresh real (Better-Auth + Prisma) implementado y **verificado end-to-end** (backend + browser), reemplaza el bypass de desarrollo                                                                                                |
-| QUI-217 — schema núcleo   | ✅ Modelos Prisma sindicatos/socios/vehículos/conductores/líneas/rutas+geometría/audit_log, migración + seeds — ver sección abajo                                                                                                             |
-| QUI-218 — RLS multi-tenant| ✅ Rol `quivo_app` sin bypass, políticas por tabla, contexto por request, **9 tests cross-tenant pasando** — ver sección abajo                                                                                                                |
-| QUI-220 — CRUD sindicatos | ✅ `/v1/sindicatos` real (solo `admin_quivo`), guard JWT + rol, auditoría en `audit_log`, **verificado end-to-end** (curl con y sin permiso) — ver sección abajo                                                                             |
-| QUI-221..224 — CRUD M1    | ✅ `/v1/socios`, `/v1/vehiculos`, `/v1/conductores`, `/v1/lineas` — mismo patrón que sindicatos, tenant-scoping real (`admin_sindicato`/`operador` forzados a su propio sindicato), **55 tests de integración pasando** — ver sección abajo   |
-| QUI-225/226 — geometría   | ✅ `/v1/lineas/:id/rutas`, `/v1/rutas/:id/variantes`, `/v1/rutas/:id/paradas`, `/v1/rutas/:id/puntos-control` — GEOGRAPHY vía SQL crudo, GeoJSON in/out, validación de geometría y de cercanía (ST_DWithin) — ver sección abajo                |
-| QUI-228 — web conectada   | ✅ Sindicatos/socios/vehículos/conductores/líneas de `apps/web` contra el API real (ya no `demo-data.ts`) — **verificado en browser real** (crear/editar sindicato, crear socio con selector de tenant) — ver sección abajo                  |
-| Linear API                | ✅ Conectado vía API key en `.Agents/.env Linear` (no MCP en esta sesión) — estado real de issues/cycles verificado 2026-07-20                                                                                                                 |
-| Preguntas de Producto (5) | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo                                                                                                                                                                                     |
-| Proyecto en Linear        | ✅ **QUIVO Control — MVP** creado (2026-07-19): 6 milestones, 43 issues (QUI-211..253), Sprint 1 planificado — ver sección Linear abajo                                                                                                        |
+| Ítem                       | Estado                                                                                                                                                                                                                                                                |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Decisión de stack          | ✅ Aprobada por el usuario (2026-07-19)                                                                                                                                                                                                                               |
+| Deliberación council       | ✅ Sesión `council-20260719-083140` (Claude + Gemini, chairman synthesis, confianza media)                                                                                                                                                                            |
+| Plan maestro               | ✅ `docs/plan-maestro.md`                                                                                                                                                                                                                                             |
+| Documento técnico CTO      | ✅ `docs/documento-tecnico-cto.md` (responde las 18 preguntas del CPO)                                                                                                                                                                                                |
+| Repo / monorepo            | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — rama `qui-227-web-nextjs-scaffold` (QUI-211..219, QUI-227) **pusheada** (2026-07-30); PR hacia `main` abierto, pendiente de review/merge |
+| Fase 0 / Cycle 12          | ✅ QUI-211/212/213/214/215 implementados y verificados en local; QUI-216 con código listo, ejecución física pendiente (ver `docs/spike-gps.md`)                                                                                                                       |
+| M1 kickoff — QUI-227       | ✅ `apps/web` scaffold Next.js completo: login, layout por rol, guard de rutas, demo CRUD de 8 módulos, dashboard con gráficos — ver sección "QUI-227 + QUI-219" abajo                                                                                                |
+| QUI-219 — auth real        | ✅ Login/refresh real (Better-Auth + Prisma) implementado y **verificado end-to-end** (backend + browser), reemplaza el bypass de desarrollo                                                                                                                          |
+| QUI-217 — schema núcleo    | ✅ Modelos Prisma sindicatos/socios/vehículos/conductores/líneas/rutas+geometría/audit_log, migración + seeds — ver sección abajo                                                                                                                                     |
+| QUI-218 — RLS multi-tenant | ✅ Rol `quivo_app` sin bypass, políticas por tabla, contexto por request, **9 tests cross-tenant pasando** — ver sección abajo                                                                                                                                        |
+| QUI-220 — CRUD sindicatos  | ✅ `/v1/sindicatos` real (solo `admin_quivo`), guard JWT + rol, auditoría en `audit_log`, **verificado end-to-end** (curl con y sin permiso) — ver sección abajo                                                                                                      |
+| QUI-221..224 — CRUD M1     | ✅ `/v1/socios`, `/v1/vehiculos`, `/v1/conductores`, `/v1/lineas` — mismo patrón que sindicatos, tenant-scoping real (`admin_sindicato`/`operador` forzados a su propio sindicato), **55 tests de integración pasando** — ver sección abajo                           |
+| QUI-225/226 — geometría    | ✅ `/v1/lineas/:id/rutas`, `/v1/rutas/:id/variantes`, `/v1/rutas/:id/paradas`, `/v1/rutas/:id/puntos-control` — GEOGRAPHY vía SQL crudo, GeoJSON in/out, validación de geometría y de cercanía (ST_DWithin) — ver sección abajo                                       |
+| QUI-228 — web conectada    | ✅ Sindicatos/socios/vehículos/conductores/líneas de `apps/web` contra el API real (ya no `demo-data.ts`) — **verificado en browser real** (crear/editar sindicato, crear socio con selector de tenant) — ver sección abajo                                           |
+| Linear API                 | ✅ Conectado vía API key en `.Agents/.env Linear` (no MCP en esta sesión) — estado real de issues/cycles verificado 2026-07-20                                                                                                                                        |
+| Preguntas de Producto (5)  | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo                                                                                                                                                                                                            |
+| Proyecto en Linear         | ✅ **QUIVO Control — MVP** creado (2026-07-19): 6 milestones, 43 issues (QUI-211..253), Sprint 1 planificado — ver sección Linear abajo                                                                                                                               |
 
 ## Stack aprobado (resumen)
 
@@ -323,7 +337,7 @@ round-robin con mejor esfuerzo es una asunción de este equipo: si el vehículo 
 el turno ya está ocupado esa fecha/horario (por cualquier rotación), se prueba con el
 siguiente; si se agotan todos, el slot queda sin cubrir en vez de abortar el resto de la
 generación. **Gotcha real encontrado armando esto:** el chequeo de disponibilidad tiene que
-ser en memoria *antes* de insertar, no capturando el error del constraint único — Postgres
+ser en memoria _antes_ de insertar, no capturando el error del constraint único — Postgres
 aborta la transacción completa apenas falla un statement (`25P02: current transaction is
 aborted`), así que intentar seguir insertando después de un `23505` capturado dentro de la
 misma transacción de `withTenantContext` no funciona (a diferencia de
@@ -634,6 +648,26 @@ fallo real del servidor. Vale la pena recordar esto si alguna vez se ve una disc
 similar entre lo que reporta el browser automatizado y lo que dicen los logs del server —
 los logs del server son la fuente de verdad.
 
+## Autenticación operativa móvil + identidad QUIVO — cerrado 2026-08-01
+
+`apps/mobile` ya compone el flujo vehículo -> chofer -> operación con componentes nativos
+basados en el Design System QUIVO. La sesión y el identificador de instalación viven en
+SecureStore; reiniciar el proceso recupera el contexto y lo reconcilia con la API. El
+GPS/outbox previo se conserva detrás de una sesión autenticada y ahora etiqueta eventos con
+`sesionId`/`deviceId`.
+
+El módulo `apps/api/src/modules/auth-movil` usa desafío corto de un solo uso y tokens
+access/refresh opacos; Postgres guarda sólo hashes. La línea se deriva de
+`asignacion -> ruta -> linea`. Refresh rota ambos tokens, logout revoca y un cambio de PIN
+invalida desafíos/sesiones relacionadas con auditoría libre de credenciales. Los endpoints
+y el modelo final están en `docs/plan-auth-movil-quivo.md`.
+
+Verificado en `Pixel_10_Pro`: APK debug instalado, bundle Metro HTTP 200, ambos pasos de
+login contra API LAN, contexto completo y restauración tras cold start. El logger Pino fue
+endurecido globalmente para eliminar Authorization/cookies. El monorepo completo pasó
+typecheck, lint, tests y build. El gate pendiente de licencia/hardware corresponde al
+tracking GPS productivo, no al login/contexto móvil.
+
 ## Pendientes de acceso
 
 - **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
@@ -660,16 +694,12 @@ los logs del server son la fuente de verdad.
    atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
    default del agente.
 2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. **M2 — Rotaciones (RF-51..57): ✅ completo** (QUI-230..234). **M4** (elegido sobre M3
-   porque M3 sigue bloqueado por hardware que nadie consiguió — licencia Transistorsoft +
-   Android real, QUI-216): QUI-248 (auditoría), QUI-244 (reglas/sanciones API) y QUI-245
-   (reglas/sanciones UI) ✅ cerrados. **QUI-251 (auditoría RLS + security review) ✅
-   cerrado** — rate limiting agregado, logout ahora revoca sesión de verdad, Next.js
-   parchado, matriz de roles y RLS cross-tenant con test automático extendido a M2/M4 (ver
-   sección propia arriba). **No queda nada más por avanzar sin M3**: QUI-246/247/249 (M4) y
-   QUI-250/252 (M5) necesitan `gps_points`/el worker de ingesta, que solo existen con M3
-   armado. Único camino hacia adelante real: conseguir el hardware de QUI-216 (licencia
-   Transistorsoft + Android de gama baja) para desbloquear M3.
+3. **M2 — Rotaciones (RF-51..57): ✅ completo** (QUI-230..234). **M4**: QUI-248
+   (auditoría), QUI-244 (reglas/sanciones API), QUI-245 (reglas/sanciones UI) y QUI-251
+   (security review) ✅ cerrados. **M3 autenticación/sesión/contexto móvil: ✅ completo** el
+   2026-08-01. QUI-246/247/249 (M4) y QUI-250/252 (M5) aún necesitan `gps_points`, sync y
+   worker de ingesta; para cerrar esa parte del tracking productivo sigue pendiente el gate
+   de licencia Transistorsoft + prueba en Android físico de gama baja (QUI-216).
 4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
 5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
    de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de

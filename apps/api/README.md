@@ -35,6 +35,19 @@ pnpm --filter @quivo/api start     # node dist/main.js — sirve en :3001 (PORT 
   el módulo `sindicatos` real (QUI-220) exponga su propio CRUD.
 - `POST /v1/auth/login` / `POST /v1/auth/refresh` (QUI-219) — ver sección Auth abajo.
 
+### Auth operativa móvil
+
+- `POST /v1/mobile/auth/vehiculo` — placa + PIN + dispositivo; emite desafío corto.
+- `POST /v1/mobile/auth/conductor` — documento + PIN + desafío; crea sesión operativa.
+- `POST /v1/mobile/auth/refresh` — rota access y refresh opacos.
+- `POST /v1/mobile/auth/logout` — revoca la sesión.
+- `GET /v1/mobile/auth/contexto-operativo` — recupera asignación, línea y ruta.
+- `PUT /v1/mobile/credenciales/{vehiculos|conductores}/:id` — provisiona/rota PIN con
+  sesión administrativa autorizada; nunca devuelve la credencial.
+
+Los secretos móviles se persisten sólo como hashes. Rotar un PIN revoca sesiones activas
+relacionadas. Pino elimina `Authorization`, cookies y `Set-Cookie` de todos los logs HTTP.
+
 ## Auth (QUI-219)
 
 Better-Auth + JWT (doc técnico §5: "no construir auth a mano"). La instancia de
@@ -61,9 +74,9 @@ pnpm --filter @quivo/db prisma:migrate:dev   # crea las tablas (User/Session/Acc
 pnpm --filter @quivo/db prisma:seed          # 2 usuarios demo, ver abajo
 ```
 
-| Email | Password | Rol | sindicatoId |
-| --- | --- | --- | --- |
-| `admin@quivo.local` | `Quivo123!` | `admin_quivo` | — |
+| Email                   | Password    | Rol               | sindicatoId                            |
+| ----------------------- | ----------- | ----------------- | -------------------------------------- |
+| `admin@quivo.local`     | `Quivo123!` | `admin_quivo`     | —                                      |
 | `admin@sindicato.local` | `Quivo123!` | `admin_sindicato` | `11111111-1111-4111-8111-111111111111` |
 
 El seed es idempotente (si el usuario ya existe, lo omite) — se puede correr de nuevo sin

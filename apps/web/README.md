@@ -45,15 +45,16 @@ Postgres). `src/lib/auth/api-client.ts` llama a ambos endpoints con el contrato 
 API corriendo en `NEXT_PUBLIC_API_URL` (por defecto `http://localhost:3001`) con la base
 migrada y sembrada — credenciales demo en `apps/api/README.md`.
 
-Si no querés levantar Postgres/la API solo para navegar el panel, sigue disponible el
-**bypass de desarrollo**:
+Si no querés levantar Postgres/la API y solo necesitás navegar visualmente el panel,
+sigue disponible el **bypass de desarrollo**:
 
 ```bash
-cp .env.example .env.local   # trae NEXT_PUBLIC_DEV_BYPASS_AUTH=true
+NEXT_PUBLIC_DEV_BYPASS_AUTH=true pnpm --filter @quivo/web dev
 ```
 
 `auth-context.tsx` solo lo respeta si `NODE_ENV !== "production"` — no tiene efecto en
-un build de producción aunque la env var quede seteada por error.
+un build de producción aunque la env var quede seteada por error. Su token es ficticio:
+los CRUD, catálogos y combos que consultan la API real no funcionan bajo este modo.
 
 ### Manejo de sesión/refresh
 

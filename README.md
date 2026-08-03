@@ -20,9 +20,9 @@ quivo-control/
 └── docs/                 handoff, plan maestro, documento técnico
 ```
 
-> Scaffold creado (QUI-211). `apps/api` tiene el esqueleto NestJS real (QUI-214) y
-> `apps/mobile` el arnés del spike GPS (QUI-216) — ver `docs/spike-gps.md`. `apps/web`
-> sigue siendo placeholder hasta M1/QUI-227 (Next.js). `packages/db` (Prisma) llega en QUI-217.
+La API, el panel administrativo y la aplicación Android ya tienen implementación funcional.
+La app móvil incorpora login vehículo -> chofer, contexto de asignación, sesión segura y el
+arnés GPS/outbox original; ver `docs/plan-auth-movil-quivo.md` y `docs/spike-gps.md`.
 
 ## Desarrollo
 
@@ -30,11 +30,27 @@ Requisitos: Node 22.x (ver `.nvmrc`), pnpm 11.x, Docker (para Postgres+PostGIS y
 
 ```bash
 pnpm install        # instala los 5 workspaces
+pnpm dev            # levanta Postgres, Redis, API, web y la app móvil
 pnpm build          # turbo run build
 pnpm lint           # turbo run lint
 pnpm typecheck      # turbo run typecheck
 pnpm test           # turbo run test
 ```
+
+`pnpm dev` aplica las migraciones, ejecuta el seed idempotente y abre API, web y app móvil
+en tres terminales independientes (Konsole o Alacritty). Cada ventana se puede detener
+con `Ctrl+C` o cerrar por separado. Sin entorno gráfico usa una sola terminal; este modo
+también se puede forzar con `QUIVO_SINGLE_TERMINAL=1 pnpm dev`. Los contenedores quedan
+activos y se pueden apagar con `docker compose down`.
+
+El lanzador detecta la IP LAN de la PC y configura Expo para conectarse al backend mediante
+`http://<ip-lan>:3001`. Se puede indicar otra interfaz con
+`QUIVO_HOST_IP=192.168.x.x pnpm dev`.
+
+La app usa un módulo GPS nativo y no funciona dentro de Expo Go. Antes del primer arranque
+en un Android nuevo hay que conectar el dispositivo por ADB y ejecutar
+`pnpm --filter @quivo/mobile android`; después `pnpm dev` reutiliza ese cliente de desarrollo.
+El firewall de la PC debe aceptar TCP `3001` y `8081` desde la red local del teléfono.
 
 ## Documentación
 
@@ -43,6 +59,8 @@ pnpm test           # turbo run test
 | [`docs/handoff.md`](docs/handoff.md)                             | Estado vivo del proyecto: qué hay, decisiones, próximos pasos    |
 | [`docs/plan-maestro.md`](docs/plan-maestro.md)                   | Stack aprobado, arquitectura, fases, verificación                |
 | [`docs/documento-tecnico-cto.md`](docs/documento-tecnico-cto.md) | Documento técnico completo (modelo de datos, API, sync, riesgos) |
+| [`docs/plan-auth-movil-quivo.md`](docs/plan-auth-movil-quivo.md) | Plan activo: login móvil, diseño QUIVO y coordinación con web    |
+| [`docs/coordinacion-agentes.md`](docs/coordinacion-agentes.md)   | Chat en vivo para coordinar cambios concurrentes Codex/Claude    |
 
 ## Gestión
 
