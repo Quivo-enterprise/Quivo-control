@@ -9,9 +9,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "dev": "tsx watch src/main.ts",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "dev:worker": "tsx watch src/worker.ts",
+    "start:worker": "node dist/worker.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1101.0",
+    "@aws-sdk/lib-storage": "^3.1101.0",
     "@nestjs/common": "^11.0.6",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.6",

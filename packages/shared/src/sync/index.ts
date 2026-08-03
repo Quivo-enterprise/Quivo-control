@@ -1,1 +1,3 @@
 export * from './evento.js';
+export * from './paquete-dia.js';
+export * from './sync-error.js';

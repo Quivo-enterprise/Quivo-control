@@ -33,3 +33,14 @@ export const SyncBatchSchema = z.object({
   eventos: z.array(EventoSyncSchema).min(1).max(500),
 });
 export type SyncBatch = z.infer<typeof SyncBatchSchema>;
+
+/**
+ * Respuesta de `POST /v1/sync/batches` (RF-69..72, RNF-33/34, QUI-240): `aceptados` son los
+ * `eventId` que quedaron encolados para el worker de ingesta (QUI-241) — el cliente móvil
+ * SOLO debe marcar como sincronizado (`acusado`, QUI-238) lo que aparezca acá. Reenviar el
+ * mismo lote N veces no duplica nada (idempotencia por UUIDv7 en el worker).
+ */
+export const SyncBatchResponseSchema = z.object({
+  aceptados: z.array(uuidV7Schema),
+});
+export type SyncBatchResponse = z.infer<typeof SyncBatchResponseSchema>;
