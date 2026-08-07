@@ -22,7 +22,9 @@ import { DriverLoginScreen } from './src/features/auth/driver-login-screen';
 import { contextoDe, useAuthMovil } from './src/features/auth/use-auth-movil';
 import { VehicleLoginScreen } from './src/features/auth/vehicle-login-screen';
 import { OperationScreen } from './src/features/operacion/operation-screen';
+import { SplashScreen } from './src/features/auth/splash-screen';
 import { quivoColors, quivoFonts, quivoSpacing } from './src/shared/theme/quivo-theme';
+import { useState } from 'react';
 
 export default function App() {
   return (
@@ -44,20 +46,25 @@ function QuivoApp() {
     Oxanium_700Bold,
   });
   const [monoLoaded, monoError] = useJetBrainsMono({ JetBrainsMono_400Regular });
+
   const auth = useAuthMovil();
   const fontsLoaded = montserratLoaded && oxaniumLoaded && monoLoaded;
   const fontError = montserratError ?? oxaniumError ?? monoError;
 
+  const [splashReady, setSplashReady] = useState(false);
+
   if (!fontsLoaded && !fontError) {
-    return <LoadingScreen label="Preparando QUIVO…" />;
+    // Show nothing or a solid color until fonts load to avoid flicker before splash
+    return <View style={{ flex: 1, backgroundColor: '#0F1B5C' }} />;
   }
   if (fontError) {
+    console.error('Font load error:', fontError);
     return <LoadingScreen label="No se pudieron cargar los recursos visuales de QUIVO." error />;
   }
 
   const contenido = (() => {
     if (auth.estado.etapa === 'restaurando')
-      return <LoadingScreen label="Recuperando tu jornada…" />;
+      return <View style={styles.page} />; // Will be covered by SplashScreen
     if (auth.estado.etapa === 'vehiculo') {
       return (
         <VehicleLoginScreen
@@ -111,6 +118,16 @@ function QuivoApp() {
       <StatusBar style="light" backgroundColor={quivoColors.primaryStrong} />
       <View accessibilityElementsHidden style={styles.systemBarBoundary} />
       <View style={styles.page}>{contenido}</View>
+      {!splashReady && (
+        <SplashScreen
+          onLoadData={async () => {
+            // Give auth hook time to finish restoring if it hasn't already
+            // We just wait a minimum time for the animation to look nice (e.g., 2 seconds)
+            await new Promise(r => setTimeout(r, 2000));
+          }}
+          onReady={() => setSplashReady(true)}
+        />
+      )}
     </SafeAreaView>
   );
 }

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import type { ContextoOperativoMovil } from '@quivo/shared';
-import { QuivoButton } from '../../shared/components/quivo-button';
+import { Button } from '../../shared/components/Button';
 import { QuivoIcon, type QuivoIconName } from '../../shared/components/quivo-icon';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 
@@ -109,12 +109,13 @@ export function TripControlSheet(props: TripControlSheetProps) {
                   label="Turno"
                   value={turnLabel(props.contexto.asignacion.horario)}
                 />
-                <QuivoButton
-                  label={props.tracking ? 'Finalizar recorrido' : 'Iniciar recorrido'}
+                <Button
                   variant={props.tracking ? 'danger' : 'primary'}
                   disabled={!props.tracking && !props.canStart}
                   onPress={props.tracking ? props.onFinish : props.onStart}
-                />
+                >
+                  {props.tracking ? 'Finalizar recorrido' : 'Iniciar recorrido'}
+                </Button>
                 {props.gpsError ? <Text style={styles.error}>{props.gpsError}</Text> : null}
                 {props.syncError ? <Text style={styles.error}>{props.syncError}</Text> : null}
               </>
@@ -135,13 +136,14 @@ export function TripControlSheet(props: TripControlSheetProps) {
                   onChangeText={props.onObservationChange}
                   multiline
                 />
-                <QuivoButton
-                  label="Guardar novedad"
+                <Button
                   variant="primary"
                   loading={props.sendingObservation}
                   disabled={!props.observation.trim()}
                   onPress={props.onSendObservation}
-                />
+                >
+                  Guardar novedad
+                </Button>
                 {props.observationSent ? (
                   <Text style={styles.success}>Novedad guardada en el dispositivo</Text>
                 ) : null}
@@ -161,8 +163,7 @@ export function TripControlSheet(props: TripControlSheetProps) {
                   value={`${props.contexto.vehiculo.placa} · ${props.contexto.vehiculo.marca} ${props.contexto.vehiculo.modelo}`}
                 />
                 <InfoRow label="Sindicato" value={props.contexto.sindicato.nombre} />
-                <QuivoButton
-                  label="Cerrar sesión"
+                <Button
                   variant="secondary"
                   loading={props.loading}
                   disabled={props.tracking}
@@ -170,7 +171,9 @@ export function TripControlSheet(props: TripControlSheetProps) {
                     props.tracking ? 'Finaliza el recorrido antes de cerrar sesión' : undefined
                   }
                   onPress={props.onLogout}
-                />
+                >
+                  Cerrar sesión
+                </Button>
               </>
             ) : null}
           </ScrollView>
@@ -257,8 +260,7 @@ export function TripControlSheet(props: TripControlSheetProps) {
               ]}
             />
           </View>
-          <QuivoButton
-            label={props.tracking ? 'Finalizar recorrido' : 'Iniciar recorrido'}
+          <Button
             variant={props.tracking ? 'danger' : 'primary'}
             disabled={!props.tracking && !props.canStart}
             accessibilityHint={
@@ -267,7 +269,9 @@ export function TripControlSheet(props: TripControlSheetProps) {
                 : 'Activa el seguimiento GPS y el modo navegación'
             }
             onPress={props.tracking ? props.onFinish : props.onStart}
-          />
+          >
+            {props.tracking ? 'Finalizar recorrido' : 'Iniciar recorrido'}
+          </Button>
           {props.gpsError ? <Text style={styles.error}>{props.gpsError}</Text> : null}
         </>
       )}

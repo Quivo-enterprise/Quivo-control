@@ -1,7 +1,7 @@
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ResumenAsignacionMovil } from '@quivo/shared';
-import { QuivoButton } from '../../shared/components/quivo-button';
-import { QuivoCard } from '../../shared/components/quivo-card';
+import { Button } from '../../shared/components/Button';
+import { Card } from '../../shared/components/Card';
 import { QuivoHeader } from '../../shared/components/quivo-header';
 import { quivoColors, quivoFonts, quivoSpacing } from '../../shared/theme/quivo-theme';
 
@@ -28,7 +28,7 @@ export function AssignmentSelectionScreen({
       />
       <View accessibilityRole="list" style={styles.list}>
         {asignaciones.map((asignacion) => (
-          <QuivoCard
+          <Card
             key={asignacion.id}
             accessibilityLabel={`${asignacion.horario}, ${asignacion.linea.nombre}`}
           >
@@ -37,22 +37,24 @@ export function AssignmentSelectionScreen({
               {asignacion.linea.codigo} · {asignacion.linea.nombre}
             </Text>
             <Text style={styles.ruta}>Ruta {asignacion.ruta.sentido}</Text>
-            <QuivoButton
-              label="Seleccionar turno"
+            <Button
               loading={loading}
               onPress={() => void onSelect(asignacion.id)}
               style={styles.button}
-            />
-          </QuivoCard>
+            >
+              Seleccionar turno
+            </Button>
+          </Card>
         ))}
       </View>
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <QuivoButton
-        label="Volver a comenzar"
+      <Button
         variant="secondary"
         disabled={loading}
         onPress={onBack}
-      />
+      >
+        Volver a comenzar
+      </Button>
     </ScrollView>
   );
 }

@@ -4,11 +4,11 @@ import {
   DocumentoIdentidadBoliviaSchema,
   normalizarDocumentoIdentidadBolivia,
 } from '@quivo/shared';
-import { QuivoButton } from '../../shared/components/quivo-button';
-import { QuivoCard } from '../../shared/components/quivo-card';
+import { Button } from '../../shared/components/Button';
+import { Card } from '../../shared/components/Card';
 import { QuivoHeader } from '../../shared/components/quivo-header';
 import { QuivoStepIndicator } from '../../shared/components/quivo-step-indicator';
-import { QuivoTextField } from '../../shared/components/quivo-text-field';
+import { Input } from '../../shared/components/Input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 
 interface DriverLoginScreenProps {
@@ -50,8 +50,8 @@ export function DriverLoginScreen({
           <Text style={styles.vehicleLabel}>VEHÍCULO VALIDADO</Text>
           <Text style={styles.vehiclePlate}>{placa}</Text>
         </View>
-        <QuivoCard style={styles.form}>
-          <QuivoTextField
+        <Card style={styles.form}>
+          <Input
             label="CI boliviano"
             placeholder="Ej.: 1234567-1A LP"
             autoCapitalize="characters"
@@ -61,9 +61,9 @@ export function DriverLoginScreen({
             onChangeText={setDocumento}
             onBlur={() => setDocumento(normalizarDocumentoIdentidadBolivia(documento))}
             error={documentoError}
-            help="Incluye complemento y expedición solo si figuran en tu cédula."
+            helperText="Incluye complemento y expedición solo si figuran en tu cédula."
           />
-          <QuivoTextField
+          <Input
             label="PIN personal"
             placeholder="6 a 12 dígitos"
             keyboardType="number-pad"
@@ -73,21 +73,23 @@ export function DriverLoginScreen({
             onChangeText={setPin}
           />
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <QuivoButton
-            label="Ingresar a mi jornada"
+          <Button
             loading={loading}
             disabled={!puedeContinuar}
             onPress={() => {
               if (documentoValidado.success) void onSubmit(documentoValidado.data, pin);
             }}
-          />
-          <QuivoButton
-            label="Cambiar vehículo"
+          >
+            Ingresar a mi jornada
+          </Button>
+          <Button
             variant="secondary"
             disabled={loading}
             onPress={onBack}
-          />
-        </QuivoCard>
+          >
+            Cambiar vehículo
+          </Button>
+        </Card>
       </ScrollView>
     </KeyboardAvoidingView>
   );

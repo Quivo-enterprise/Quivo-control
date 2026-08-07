@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { QuivoButton } from '../../shared/components/quivo-button';
-import { QuivoCard } from '../../shared/components/quivo-card';
+import { Button } from '../../shared/components/Button';
+import { Card } from '../../shared/components/Card';
 import { QuivoHeader } from '../../shared/components/quivo-header';
 import { QuivoStepIndicator } from '../../shared/components/quivo-step-indicator';
-import { QuivoTextField } from '../../shared/components/quivo-text-field';
+import { Input } from '../../shared/components/Input';
 import { quivoColors, quivoFonts, quivoSpacing } from '../../shared/theme/quivo-theme';
 
 interface VehicleLoginScreenProps {
@@ -29,8 +29,8 @@ export function VehicleLoginScreen({ loading, error, onSubmit }: VehicleLoginScr
           subtitle="Ingresa la credencial entregada por tu sindicato para comenzar la jornada."
         />
         <QuivoStepIndicator current={1} />
-        <QuivoCard style={styles.form}>
-          <QuivoTextField
+        <Card style={styles.form}>
+          <Input
             label="Placa del vehículo"
             placeholder="Ej. 1234-ABC"
             autoCapitalize="characters"
@@ -39,10 +39,10 @@ export function VehicleLoginScreen({ loading, error, onSubmit }: VehicleLoginScr
             value={placa}
             onChangeText={setPlaca}
           />
-          <QuivoTextField
+          <Input
             label="PIN del vehículo"
             placeholder="6 a 12 dígitos"
-            help="Este PIN identifica al vehículo, no al chofer."
+            helperText="Este PIN identifica al vehículo, no al chofer."
             keyboardType="number-pad"
             secureTextEntry
             maxLength={12}
@@ -50,13 +50,14 @@ export function VehicleLoginScreen({ loading, error, onSubmit }: VehicleLoginScr
             onChangeText={setPin}
           />
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <QuivoButton
-            label="Validar vehículo"
+          <Button
             loading={loading}
             disabled={!puedeContinuar}
             onPress={() => void onSubmit(placa, pin)}
-          />
-        </QuivoCard>
+          >
+            Validar vehículo
+          </Button>
+        </Card>
         <View style={styles.security}>
           <Text style={styles.securityTitle}>ACCESO OPERATIVO SEGURO</Text>
           <Text style={styles.securityText}>
