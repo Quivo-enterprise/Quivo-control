@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, Image } from 'react-native';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../theme/quivo-theme';
 
 interface QuivoHeaderProps {
@@ -11,10 +11,11 @@ export function QuivoHeader({ eyebrow = 'QUIVO CONTROL', title, subtitle }: Quiv
   return (
     <View style={styles.container}>
       <View style={styles.brandRow}>
-        <View style={styles.mark} accessibilityElementsHidden>
-          <Text style={styles.markText}>Q</Text>
-        </View>
-        <Text style={styles.eyebrow}>{eyebrow}</Text>
+        <Image 
+          source={require('../../../assets/images/logo.png')} 
+          style={styles.logo} 
+          resizeMode="contain" 
+        />
       </View>
       <Text accessibilityRole="header" style={styles.title}>
         {title}
@@ -32,20 +33,9 @@ const styles = StyleSheet.create({
     gap: quivoSpacing.md,
     marginBottom: quivoSpacing.sm,
   },
-  mark: {
-    width: 38,
+  logo: {
     height: 38,
-    borderRadius: quivoRadius.md,
-    backgroundColor: quivoColors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  markText: { color: quivoColors.text, fontFamily: quivoFonts.displayBold, fontSize: 23 },
-  eyebrow: {
-    color: quivoColors.primary,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 13,
-    letterSpacing: 1.4,
+    width: 150, // adjust width based on aspect ratio
   },
   title: {
     color: quivoColors.text,

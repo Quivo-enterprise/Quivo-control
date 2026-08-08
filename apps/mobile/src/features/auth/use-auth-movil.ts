@@ -56,7 +56,14 @@ export function useAuthMovil() {
         setEstado((actual) => ({ ...actual, deviceId: deviceId.current }));
         const guardada = await cargarSesionMovil();
         if (!mounted.current) return;
-        if (!guardada || new Date(guardada.refreshTokenExpiresAt) <= new Date()) {
+        
+        // Validar que la sesión no esté vencida y que no tenga una estructura corrupta
+        if (
+          !guardada || 
+          !guardada.contexto?.conductor || 
+          !guardada.contexto?.asignacion?.horario ||
+          new Date(guardada.refreshTokenExpiresAt) <= new Date()
+        ) {
           if (guardada) await borrarSesionMovil();
           setEstado((actual) => ({ ...actual, etapa: 'vehiculo', sesion: null }));
           return;

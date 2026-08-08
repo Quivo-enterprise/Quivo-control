@@ -33,13 +33,25 @@ export function useGpsOperativo(
   const puntosControlDetectados = useRef<Set<string>>(new Set());
   const subscription = useRef<{ remove: () => void } | null>(null);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Attempt to get the initial location without starting the tracker
+    BackgroundGeolocation.getCurrentPosition({
+      samples: 1,
+      persist: false,
+    }).then((location) => {
+      setPosicionActual({
+        lat: location.coords.latitude,
+        lng: location.coords.longitude,
+      });
+    }).catch(() => {
+      // Ignorar fallo silencioso (puede que no tenga permisos aún)
+    });
+
+    return () => {
       subscription.current?.remove();
       subscription.current = null;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const onLocation = useCallback(
     async (location: Location) => {

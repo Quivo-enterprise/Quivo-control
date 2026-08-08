@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
+import MaskInput, { type Mask } from 'react-native-mask-input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../theme/quivo-theme';
 
 export interface InputProps extends Omit<TextInputProps, 'size'> {
@@ -11,6 +12,7 @@ export interface InputProps extends Omit<TextInputProps, 'size'> {
   leftSlot?: ReactNode;
   rightSlot?: ReactNode;
   containerStyle?: ViewStyle | ViewStyle[];
+  mask?: Mask;
 }
 
 export function Input({
@@ -23,6 +25,7 @@ export function Input({
   rightSlot,
   style,
   containerStyle,
+  mask,
   ...props
 }: InputProps) {
   const description = error ?? helperText;
@@ -40,18 +43,34 @@ export function Input({
       >
         {leftSlot ? <View style={styles.slot}>{leftSlot}</View> : null}
         
-        <TextInput
-          accessibilityLabel={label}
-          accessibilityHint={description}
-          placeholderTextColor={quivoColors.textMuted}
-          selectionColor={quivoColors.primary}
-          style={[
-            styles.input,
-            styles[`input_${controlSize}` as keyof typeof styles] || styles.input_md,
-            style
-          ] as any}
-          {...props}
-        />
+        {mask ? (
+          <MaskInput
+            mask={mask}
+            accessibilityLabel={label}
+            accessibilityHint={description}
+            placeholderTextColor={quivoColors.textMuted}
+            selectionColor={quivoColors.primary}
+            style={[
+              styles.input,
+              styles[`input_${controlSize}` as keyof typeof styles] || styles.input_md,
+              style
+            ] as any}
+            {...(props as any)}
+          />
+        ) : (
+          <TextInput
+            accessibilityLabel={label}
+            accessibilityHint={description}
+            placeholderTextColor={quivoColors.textMuted}
+            selectionColor={quivoColors.primary}
+            style={[
+              styles.input,
+              styles[`input_${controlSize}` as keyof typeof styles] || styles.input_md,
+              style
+            ] as any}
+            {...props}
+          />
+        )}
         
         {rightSlot ? <View style={styles.slot}>{rightSlot}</View> : null}
       </View>

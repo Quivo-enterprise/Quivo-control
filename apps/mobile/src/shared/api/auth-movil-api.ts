@@ -13,7 +13,6 @@ import {
 
 const REQUEST_TIMEOUT_MS = 12_000;
 const API_URL = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, '');
-
 export class AuthMovilApiError extends Error {
   constructor(
     public readonly kind: 'configuration' | 'network' | 'http' | 'contract',
@@ -40,6 +39,7 @@ export class AuthMovilApiError extends Error {
 
 export const authMovilApi = {
   async autenticarVehiculo(data: AuthVehiculoMovilRequest): Promise<AuthVehiculoMovilResponse> {
+
     const payload = await request('/v1/mobile/auth/vehiculo', { method: 'POST', body: data });
     return parseResponse(AuthVehiculoMovilResponseSchema, payload);
   },

@@ -3,6 +3,8 @@ import { ApiError as PaqueteDiaApiError, parseResponse, request } from './http-c
 
 export { PaqueteDiaApiError };
 
+
+
 export const paqueteDiaApi = {
   async obtenerAsignacionDelDia(accessToken: string): Promise<PaqueteDia> {
     const payload = await request('/v1/mobile/asignacion-del-dia', {
