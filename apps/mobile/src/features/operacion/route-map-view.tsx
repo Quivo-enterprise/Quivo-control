@@ -10,6 +10,9 @@ interface RouteMapViewProps {
   posicionActual: { lat: number; lng: number } | null;
   tracking: boolean;
   recenterTick: number;
+  /** Ruta real siguiendo calles (OSRM), o `null` si no hay ninguna calculada aún o falló
+   * — el mapa cae a la línea recta entre la posición actual y la ruta trazada. */
+  rutaCalculada: [number, number][] | null;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -31,6 +34,7 @@ export function RouteMapView({
   posicionActual,
   tracking,
   recenterTick,
+  rutaCalculada,
   style,
 }: RouteMapViewProps) {
   const webViewRef = useRef<WebView>(null);
@@ -57,6 +61,12 @@ export function RouteMapView({
     }
   }, [recenterTick]);
 
+  useEffect(() => {
+    webViewRef.current?.postMessage(
+      JSON.stringify({ type: 'ruta-calculada', coordinates: rutaCalculada }),
+    );
+  }, [rutaCalculada]);
+
   return (
     <View style={[styles.container, style]}>
       <WebView
@@ -74,6 +84,10 @@ export function RouteMapView({
 
 function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null): string {
   const coordenadasRuta = paquete.ruta.geometria.coordinates.map(([lng, lat]) => [lat, lng]);
+  const proximoPuntoControl = paquete.puntosControl.find((pc) => pc.id === proximoPuntoControlId);
+  const proximoPuntoLatLng = proximoPuntoControl
+    ? [proximoPuntoControl.coord.coordinates[1], proximoPuntoControl.coord.coordinates[0]]
+    : null;
 
   const marcadoresParadas = paquete.paradas
     .map((parada) => {
@@ -153,13 +167,86 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
   <script>
     var map = L.map('map', { zoomControl: false, attributionControl: false });
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-    var ruta = L.polyline(${JSON.stringify(coordenadasRuta)}, { color: ${JSON.stringify(paquete.linea.color)}, weight: 4 }).addTo(map);
+    var coordenadasRuta = ${JSON.stringify(coordenadasRuta)};
+    var ruta = L.polyline(coordenadasRuta, { color: ${JSON.stringify(paquete.linea.color)}, weight: 4 }).addTo(map);
     ${marcadoresParadas}
     ${marcadoresPc}
+    var proximoPuntoLatLng = ${JSON.stringify(proximoPuntoLatLng)};
+    var caminoResaltado = null;
+    var conectorFueraDeRuta = null;
+    var rutaCalculadaCoords = null;
     var posicion = null;
     var seguimientoActivo = false;
     var currentHeading = 0;
     var prevLatLng = null;
+
+    // Índice del punto más cercano de la ruta trazada a una coordenada dada — no es un
+    // proyector geométrico real sobre el segmento, pero alcanza para resaltar el tramo
+    // pendiente porque coordenadasRuta ya viene con vértices densos (ver geometria de ruta).
+    function indiceMasCercano(latlng) {
+      var mejorIndice = 0;
+      var mejorDistancia = Infinity;
+      for (var i = 0; i < coordenadasRuta.length; i++) {
+        var dLat = coordenadasRuta[i][0] - latlng[0];
+        var dLng = coordenadasRuta[i][1] - latlng[1];
+        var distancia = dLat * dLat + dLng * dLng;
+        if (distancia < mejorDistancia) {
+          mejorDistancia = distancia;
+          mejorIndice = i;
+        }
+      }
+      return mejorIndice;
+    }
+
+    function actualizarCaminoAlProximoPunto(latlngActual) {
+      if (caminoResaltado) {
+        map.removeLayer(caminoResaltado);
+        caminoResaltado = null;
+      }
+      if (conectorFueraDeRuta) {
+        map.removeLayer(conectorFueraDeRuta);
+        conectorFueraDeRuta = null;
+      }
+      if (!seguimientoActivo || !latlngActual || coordenadasRuta.length < 2) return;
+
+      // Si ya tenemos una ruta real siguiendo calles (OSRM), la dibujamos tal cual y no
+      // hace falta el conector recto ni el resaltado del tramo trazado — es más precisa.
+      if (rutaCalculadaCoords && rutaCalculadaCoords.length >= 2) {
+        caminoResaltado = L.polyline(rutaCalculadaCoords, { color: '#FD9E15', weight: 6, opacity: 0.9 }).addTo(map);
+        caminoResaltado.bringToFront();
+        return;
+      }
+
+      var desde = indiceMasCercano(latlngActual);
+      var puntoMasCercanoEnRuta = coordenadasRuta[desde];
+
+      // Conector punteado: de la posición real del vehículo al punto más cercano de la ruta
+      // trazada. Sirve tanto para "cómo llegar al inicio del recorrido" (si todavía no está
+      // sobre la ruta) como para "cómo volver" si se desvía en el camino — misma lógica,
+      // se recalcula en cada actualización de posición.
+      var dLat = latlngActual[0] - puntoMasCercanoEnRuta[0];
+      var dLng = latlngActual[1] - puntoMasCercanoEnRuta[1];
+      var fueraDeRuta = Math.sqrt(dLat * dLat + dLng * dLng) > 0.00005; // ~5 m
+      if (fueraDeRuta) {
+        conectorFueraDeRuta = L.polyline([latlngActual, puntoMasCercanoEnRuta], {
+          color: '#C53B4A',
+          weight: 4,
+          dashArray: '8 8',
+        }).addTo(map);
+      }
+
+      // Preferimos el próximo punto de control como destino del tramo resaltado; si la ruta
+      // no tiene puntos de control cargados, igual mostramos cómo llegar trazando hasta el
+      // final del recorrido con las coordenadas reales de la ruta.
+      var destino = proximoPuntoLatLng || coordenadasRuta[coordenadasRuta.length - 1];
+      var hasta = indiceMasCercano(destino);
+      var inicio = Math.min(desde, hasta);
+      var fin = Math.max(desde, hasta);
+      var segmento = coordenadasRuta.slice(inicio, fin + 1);
+      if (segmento.length < 2) return;
+      caminoResaltado = L.polyline(segmento, { color: '#FD9E15', weight: 6, opacity: 0.9 }).addTo(map);
+      caminoResaltado.bringToFront();
+    }
 
     function getArrowIcon() {
       var html = '<div class="nav-arrow-marker" style="transform: rotate(' + currentHeading + 'deg)">' +
@@ -185,6 +272,13 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
 
     function updateMap(data) {
       if (!data) return;
+      if (data.type === 'ruta-calculada') {
+        rutaCalculadaCoords = Array.isArray(data.coordinates) && data.coordinates.length >= 2
+          ? data.coordinates
+          : null;
+        actualizarCaminoAlProximoPunto(posicion ? [posicion.getLatLng().lat, posicion.getLatLng().lng] : null);
+        return;
+      }
       if (data.type === 'recenter') {
         if (!posicion) {
           map.fitBounds(ruta.getBounds(), { paddingTopLeft: [36, 100], paddingBottomRight: [36, 230] });
@@ -199,17 +293,18 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
         var didChange = seguimientoActivo !== (data.active === true);
         seguimientoActivo = data.active === true;
         if (didChange) updateMarkerIcon();
-        
+
         if (seguimientoActivo && posicion) {
           map.flyTo(posicion.getLatLng(), 18, { duration: 0.7 });
         } else if (!seguimientoActivo) {
           map.fitBounds(ruta.getBounds(), { paddingTopLeft: [36, 100], paddingBottomRight: [36, 230] });
         }
+        actualizarCaminoAlProximoPunto(posicion ? [posicion.getLatLng().lat, posicion.getLatLng().lng] : null);
         return;
       }
       if (data.type !== 'position') return;
       var latlng = [data.lat, data.lng];
-      
+
       if (prevLatLng && (prevLatLng[0] !== latlng[0] || prevLatLng[1] !== latlng[1])) {
         currentHeading = calcHeading(prevLatLng[0], prevLatLng[1], latlng[0], latlng[1]);
       }
@@ -222,6 +317,7 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
         if (seguimientoActivo) updateMarkerIcon();
       }
       if (seguimientoActivo) map.flyTo(latlng, 18, { duration: 0.6 });
+      actualizarCaminoAlProximoPunto(latlng);
     }
     function receiveMessage(event) {
       try { updateMap(JSON.parse(event.data)); } catch (_) {}

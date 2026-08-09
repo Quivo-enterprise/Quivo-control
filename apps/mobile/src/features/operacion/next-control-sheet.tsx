@@ -4,11 +4,14 @@ import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button } from '../../shared/components/Button';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { formatearDistancia } from './format-distancia';
 
 export interface NextControlSheetProps {
   contexto: ContextoOperativoMovil;
   tracking: boolean;
   nextPointOrder: number | null;
+  totalPoints: number;
+  distanciaMetros: number | null;
   pendingEvents: number;
   canStart: boolean;
   gpsError: string | null;
@@ -18,8 +21,9 @@ export interface NextControlSheetProps {
 }
 
 export function NextControlSheet(props: NextControlSheetProps) {
-  const isFinished = props.nextPointOrder === null && props.tracking;
-  
+  const sinPuntosControl = props.totalPoints === 0;
+  const isFinished = props.tracking && !sinPuntosControl && props.nextPointOrder === null;
+
   const { panY } = props;
   const [minimized, setMinimized] = useState(false);
   const snapOffset = 80; // Adjusted so the title is still visible when minimized
@@ -66,23 +70,27 @@ export function NextControlSheet(props: NextControlSheetProps) {
         <Text style={styles.title}>
           {isFinished
             ? 'Recorrido finalizado'
-            : `Próximo control · #${(props.nextPointOrder ?? 0) + 1}`}
+            : sinPuntosControl
+              ? 'Recorrido en curso'
+              : `Próximo control · #${(props.nextPointOrder ?? 0) + 1}`}
         </Text>
-        
+
         {props.pendingEvents > 0 && (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{props.pendingEvents} pendientes</Text>
           </View>
         )}
       </View>
-      
-      {!isFinished && (
+
+      {!isFinished && !sinPuntosControl && (
         <View style={styles.locationContainer}>
           <Ionicons name="location" size={20} color={quivoColors.primary} style={styles.locationIcon} />
           <View style={styles.locationTextContainer}>
-            <Text style={styles.address}>Av. 6 de Agosto & Héroes del Acre</Text>
+            <Text style={styles.address}>Punto de control · #{(props.nextPointOrder ?? 0) + 1}</Text>
             <Text style={styles.distance}>
-              {props.tracking ? 'A 120 m · Llegada estimada 11:45' : 'A 120 m de tu ubicación'}
+              {props.distanciaMetros === null
+                ? 'Calculando distancia…'
+                : `A ${formatearDistancia(props.distanciaMetros)} de tu ubicación`}
             </Text>
           </View>
         </View>

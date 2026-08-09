@@ -24,3 +24,6 @@ apps/mobile/ios/
 
 # editors / os
 .DS_Store
+
+# OSRM: extracto vial descargado + archivos procesados (scripts/setup-osrm.sh), pesan GBs
+osrm-data/

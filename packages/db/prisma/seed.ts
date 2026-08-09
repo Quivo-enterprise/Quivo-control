@@ -173,12 +173,43 @@ async function seedDatosDePrueba(
 const RUTA_A_ID = 'aaaaaaaa-0000-4000-8000-000000000001';
 const ROTACION_A_ID = 'aaaaaaaa-0000-4000-8000-000000000002';
 const ROTACION_MOVIL_ID = 'aaaaaaaa-0000-4000-8000-000000000005';
+const PUNTO_CONTROL_1_ID = 'aaaaaaaa-0000-4000-8000-000000000010';
+const PUNTO_CONTROL_2_ID = 'aaaaaaaa-0000-4000-8000-000000000011';
+// Ruta real en Cochabamba (Plaza Colón → La Cancha), generada con OSRM local siguiendo
+// calles reales — antes esto apuntaba a coordenadas de Buenos Aires (placeholder de
+// scaffolding inicial), lo que hacía imposible probar geofencing/ruteo en un dispositivo
+// físico en Bolivia (la app siempre reportaba miles de km de distancia).
 const GEOMETRIA_DEMO = JSON.stringify({
   type: 'LineString',
   coordinates: [
-    [-58.4, -34.6],
-    [-58.39, -34.6],
-    [-58.38, -34.61],
+    [-66.157283, -17.385423], [-66.157584, -17.385017], [-66.157653, -17.384924],
+    [-66.157675, -17.384894], [-66.157692, -17.38487], [-66.157737, -17.384856],
+    [-66.15778, -17.384853], [-66.15783, -17.384867], [-66.157888, -17.384899],
+    [-66.157941, -17.384942], [-66.157965, -17.384985], [-66.157974, -17.385026],
+    [-66.157971, -17.385072], [-66.15796, -17.385086], [-66.157936, -17.385118],
+    [-66.157861, -17.385215], [-66.157761, -17.385339], [-66.157508, -17.385663],
+    [-66.156861, -17.38651], [-66.156791, -17.386605], [-66.156745, -17.386658],
+    [-66.156462, -17.38703], [-66.156066, -17.387551], [-66.156053, -17.387598],
+    [-66.15605, -17.387649], [-66.156049, -17.38771], [-66.156298, -17.387754],
+    [-66.156277, -17.387878], [-66.156214, -17.388445], [-66.156169, -17.388719],
+    [-66.156157, -17.388816], [-66.156146, -17.388882], [-66.155989, -17.389806],
+    [-66.155978, -17.389865], [-66.155974, -17.389891], [-66.155971, -17.389909],
+    [-66.1558, -17.390905], [-66.155613, -17.391912], [-66.155607, -17.391979],
+    [-66.155589, -17.392068], [-66.155571, -17.392144], [-66.155511, -17.392419],
+    [-66.155395, -17.392975], [-66.155383, -17.39301], [-66.155373, -17.393045],
+    [-66.155272, -17.393581], [-66.155193, -17.394003], [-66.155185, -17.394046],
+    [-66.15519, -17.39411], [-66.155102, -17.394555], [-66.155099, -17.394569],
+    [-66.155095, -17.394591], [-66.155047, -17.394856], [-66.155014, -17.395035],
+    [-66.155006, -17.395068], [-66.154837, -17.39592], [-66.15481, -17.396053],
+    [-66.154794, -17.396134], [-66.15467, -17.396758], [-66.15458, -17.397192],
+    [-66.154417, -17.398099], [-66.154389, -17.398223], [-66.154228, -17.398993],
+    [-66.154206, -17.399084], [-66.154149, -17.39907], [-66.153193, -17.398846],
+    [-66.153125, -17.398831], [-66.152748, -17.398736], [-66.15272, -17.398727],
+    [-66.152659, -17.398707], [-66.152219, -17.398546], [-66.152079, -17.398506],
+    [-66.151998, -17.398495], [-66.151842, -17.398499], [-66.151085, -17.39854],
+    [-66.150657, -17.398596], [-66.150467, -17.398591], [-66.149941, -17.398553],
+    [-66.149907, -17.399004], [-66.149849, -17.399867], [-66.149846, -17.399962],
+    [-66.149783, -17.400029], [-66.149705, -17.400128], [-66.149377, -17.400468],
   ],
 });
 
@@ -204,7 +235,19 @@ async function seedRotaciones(tx: Prisma.TransactionClient): Promise<void> {
   await tx.$executeRaw`
     INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
     VALUES (${RUTA_A_ID}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_DEMO}), 4326)::geography, 'activo', now(), now())
-    ON CONFLICT (id) DO NOTHING
+    ON CONFLICT (id) DO UPDATE SET geometria = EXCLUDED.geometria
+  `;
+
+  // Puntos de control sobre el tramo 1/3 y 2/3 de GEOMETRIA_DEMO (misma ruta real) — sin
+  // esto el paquete del día móvil no tiene ningún punto al que trazarle el camino ni
+  // detectar cumplimiento (RF-64..66), y la UI del conductor no puede demostrarse
+  // end-to-end.
+  await tx.$executeRaw`
+    INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, "createdAt", "updatedAt")
+    VALUES
+      (${PUNTO_CONTROL_1_ID}, ${RUTA_A_ID}, 0, ST_SetSRID(ST_MakePoint(-66.156214, -17.388445), 4326)::geography, 100, true, now(), now()),
+      (${PUNTO_CONTROL_2_ID}, ${RUTA_A_ID}, 1, ST_SetSRID(ST_MakePoint(-66.15481, -17.396053), 4326)::geography, 100, true, now(), now())
+    ON CONFLICT (id) DO UPDATE SET coord = EXCLUDED.coord, orden = EXCLUDED.orden
   `;
 
   await tx.rotacion.upsert({

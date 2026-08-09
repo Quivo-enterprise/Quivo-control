@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, Animated, Modal, Pressable, StyleSheet, Text,
 import { useKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
 import { Svg, Circle, Line } from 'react-native-svg';
-import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
+import { haversineMetros, type ContextoOperativoMovil, type PaqueteDia } from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
 import { QuivoGlassCard } from '../../shared/components/quivo-glass-card';
 import { Button } from '../../shared/components/Button';
@@ -15,6 +15,9 @@ import { NextControlSheet } from './next-control-sheet';
 import { useGpsOperativo } from './use-gps-operativo';
 import { usePaqueteDia } from './use-paquete-dia';
 import { useSyncStatus } from './use-sync-status';
+import { PerfilScreen } from '../perfil/perfil-screen';
+import { formatearDistancia } from './format-distancia';
+import { ruteoApi } from '../../shared/api/ruteo-api';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -40,6 +43,7 @@ export function OperationScreen(props: OperationScreenProps) {
   const [observacionEnviada, setObservacionEnviada] = useState(false);
   const [recenterTick, setRecenterTick] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -54,6 +58,51 @@ export function OperationScreen(props: OperationScreenProps) {
     () => proximoPuntoControlPendiente(puntosControl, completados),
     [puntosControl, completados],
   );
+
+  const distanciaProximoPunto = useMemo(() => {
+    if (!proximoPuntoControl || !gps.posicionActual) return null;
+    const actual: [number, number] = [gps.posicionActual.lng, gps.posicionActual.lat];
+    return haversineMetros(actual, proximoPuntoControl.coord.coordinates);
+  }, [proximoPuntoControl, gps.posicionActual]);
+
+  // Ruta real siguiendo calles (OSRM self-hosted) hacia el próximo punto de control, o
+  // hacia el final del recorrido si no hay ninguno cargado — reemplaza la línea recta que
+  // dibuja el mapa mientras esta petición está en curso o si falla (offline / OSRM caído).
+  // Throttleada por distancia/tiempo para no golpear el backend en cada lectura de GPS.
+  const [rutaCalculada, setRutaCalculada] = useState<[number, number][] | null>(null);
+  const ultimoFetchRuta = useRef<{ ts: number; lat: number; lng: number } | null>(null);
+  const destinoRuteo = proximoPuntoControl?.coord.coordinates ??
+    paqueteDia.paquete?.ruta.geometria.coordinates.at(-1) ??
+    null;
+  useEffect(() => {
+    if (!gps.tracking || !gps.posicionActual || !destinoRuteo) {
+      setRutaCalculada(null);
+      return;
+    }
+    const posicion = gps.posicionActual;
+    const anterior = ultimoFetchRuta.current;
+    const ahora = Date.now();
+    const distanciaDesdeUltimoFetch = anterior
+      ? haversineMetros([posicion.lng, posicion.lat], [anterior.lng, anterior.lat])
+      : Infinity;
+    if (anterior && distanciaDesdeUltimoFetch < 50 && ahora - anterior.ts < 15_000) return;
+
+    ultimoFetchRuta.current = { ts: ahora, lat: posicion.lat, lng: posicion.lng };
+    let cancelado = false;
+    void (async () => {
+      const token = await props.obtenerAccessToken();
+      if (!token || cancelado) return;
+      const resultado = await ruteoApi.rutaAPunto(
+        posicion,
+        { lat: destinoRuteo[1], lng: destinoRuteo[0] },
+        token,
+      );
+      if (!cancelado) setRutaCalculada(resultado?.coordenadas ?? null);
+    })();
+    return () => {
+      cancelado = true;
+    };
+  }, [gps.tracking, gps.posicionActual, destinoRuteo, props.obtenerAccessToken]);
 
   const enviarObservacion = useCallback(async () => {
     const texto = observacion.trim();
@@ -84,6 +133,32 @@ export function OperationScreen(props: OperationScreenProps) {
     );
   }, [gps]);
 
+  const confirmarCierreSesion = useCallback(() => {
+    Alert.alert('¿Cerrar sesión?', 'Deberás volver a validar el vehículo y tu identidad.', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Cerrar sesión',
+        style: 'destructive',
+        onPress: () => {
+          setShowProfile(false);
+          void props.onLogout();
+        },
+      },
+    ]);
+  }, [props]);
+
+  if (showProfile) {
+    return (
+      <PerfilScreen
+        contexto={props.contexto}
+        tracking={gps.tracking}
+        pendingEvents={pendientes}
+        onBack={() => setShowProfile(false)}
+        onLogout={confirmarCierreSesion}
+      />
+    );
+  }
+
   return (
     <View style={styles.container}>
       <MapLayer
@@ -93,17 +168,23 @@ export function OperationScreen(props: OperationScreenProps) {
         position={gps.posicionActual}
         tracking={gps.tracking}
         recenterTick={recenterTick}
+        rutaCalculada={rutaCalculada}
       />
 
       <View pointerEvents="box-none" style={styles.topOverlay}>
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: quivoSpacing.md }}>
-          <View style={{ flex: 1 }}>
+          <Pressable
+            style={{ flex: 1 }}
+            accessibilityRole="button"
+            accessibilityLabel="Perfil y configuración"
+            onPress={() => setShowProfile(true)}
+          >
             <DriverRouteCard contexto={props.contexto} tracking={gps.tracking} />
-          </View>
+          </Pressable>
         </View>
         
-        {gps.tracking && (
-          <NavigationInstructionCard />
+        {gps.tracking && proximoPuntoControl && (
+          <NavigationInstructionCard distanciaMetros={distanciaProximoPunto} />
         )}
 
         {props.aviso ? <Text style={styles.notice}>{props.aviso}</Text> : null}
@@ -165,6 +246,8 @@ export function OperationScreen(props: OperationScreenProps) {
         contexto={props.contexto}
         tracking={gps.tracking}
         nextPointOrder={proximoPuntoControl?.orden ?? null}
+        totalPoints={puntosControl.length}
+        distanciaMetros={distanciaProximoPunto}
         pendingEvents={pendientes}
         canStart={!paqueteDia.vencido && Boolean(paqueteDia.paquete)}
         gpsError={gps.errorGps}
@@ -229,15 +312,17 @@ function DriverRouteCard({
   );
 }
 
-function NavigationInstructionCard() {
+function NavigationInstructionCard({ distanciaMetros }: { distanciaMetros: number | null }) {
   return (
     <View style={styles.navInstructionCard}>
       <View style={styles.navIconContainer}>
         <Ionicons name="arrow-up" size={36} color={quivoColors.white} />
       </View>
       <View style={styles.navInstructionText}>
-        <Text style={styles.navDistance}>120 m</Text>
-        <Text style={styles.navAction}>Sigue de frente</Text>
+        <Text style={styles.navDistance}>
+          {distanciaMetros === null ? '—' : formatearDistancia(distanciaMetros)}
+        </Text>
+        <Text style={styles.navAction}>Dirígete al punto de control</Text>
       </View>
     </View>
   );
@@ -250,6 +335,7 @@ function MapLayer({
   position,
   tracking,
   recenterTick,
+  rutaCalculada,
 }: {
   loading: boolean;
   paquete: PaqueteDia | null;
@@ -257,6 +343,7 @@ function MapLayer({
   position: { lat: number; lng: number } | null;
   tracking: boolean;
   recenterTick: number;
+  rutaCalculada: [number, number][] | null;
 }) {
   if (loading) {
     return (
@@ -275,6 +362,7 @@ function MapLayer({
         posicionActual={position}
         tracking={tracking}
         recenterTick={recenterTick}
+        rutaCalculada={rutaCalculada}
         style={styles.fullMap}
       />
     </MapErrorBoundary>
