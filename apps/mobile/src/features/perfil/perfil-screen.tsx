@@ -1,8 +1,10 @@
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button } from '../../shared/components/Button';
+import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 
 export interface PerfilScreenProps {
@@ -15,6 +17,7 @@ export interface PerfilScreenProps {
 
 export function PerfilScreen(props: PerfilScreenProps) {
   const { contexto } = props;
+  const [avisoProximamente, setAvisoProximamente] = useState<'ajustes' | 'sync' | null>(null);
 
   return (
     <View style={styles.container}>
@@ -55,9 +58,7 @@ export function PerfilScreen(props: PerfilScreenProps) {
             icon="settings-outline"
             title="Ajustes de operación"
             description="Configura cómo opera la app"
-            onPress={() =>
-              Alert.alert('Ajustes de operación', 'Esta sección estará disponible próximamente (QUI-263).')
-            }
+            onPress={() => setAvisoProximamente('ajustes')}
           />
           <MenuRow
             icon="sync-outline"
@@ -67,9 +68,7 @@ export function PerfilScreen(props: PerfilScreenProps) {
                 ? `${props.pendingEvents} eventos pendientes de sincronizar`
                 : 'Revisa servicios y ayuda'
             }
-            onPress={() =>
-              Alert.alert('Sincronización y soporte', 'Esta sección estará disponible próximamente.')
-            }
+            onPress={() => setAvisoProximamente('sync')}
           />
           <MenuRow
             icon="shield-checkmark-outline"
@@ -96,6 +95,21 @@ export function PerfilScreen(props: PerfilScreenProps) {
           </Button>
         </View>
       </ScrollView>
+
+      <QuivoConfirmDialog
+        visible={avisoProximamente === 'ajustes'}
+        title="Ajustes de operación"
+        message="Esta sección estará disponible próximamente (QUI-263)."
+        confirmLabel="Entendido"
+        onConfirm={() => setAvisoProximamente(null)}
+      />
+      <QuivoConfirmDialog
+        visible={avisoProximamente === 'sync'}
+        title="Sincronización y soporte"
+        message="Esta sección estará disponible próximamente."
+        confirmLabel="Entendido"
+        onConfirm={() => setAvisoProximamente(null)}
+      />
     </View>
   );
 }

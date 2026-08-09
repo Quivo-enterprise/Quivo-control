@@ -211,6 +211,9 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
 
       // Si ya tenemos una ruta real siguiendo calles (OSRM), la dibujamos tal cual y no
       // hace falta el conector recto ni el resaltado del tramo trazado — es más precisa.
+      // Estilo sólido naranja intencional: distinto del resaltado punteado de abajo (que es
+      // una estimación mientras no hay ruta OSRM todavía), para que se note a simple vista
+      // cuál de los dos está activo.
       if (rutaCalculadaCoords && rutaCalculadaCoords.length >= 2) {
         caminoResaltado = L.polyline(rutaCalculadaCoords, { color: '#FD9E15', weight: 6, opacity: 0.9 }).addTo(map);
         caminoResaltado.bringToFront();
@@ -244,7 +247,14 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
       var fin = Math.max(desde, hasta);
       var segmento = coordenadasRuta.slice(inicio, fin + 1);
       if (segmento.length < 2) return;
-      caminoResaltado = L.polyline(segmento, { color: '#FD9E15', weight: 6, opacity: 0.9 }).addTo(map);
+      // Estimación (todavía sin ruta real de OSRM): gris punteado, para no confundirla con
+      // el trazado sólido naranja de arriba, que sí sigue calles reales.
+      caminoResaltado = L.polyline(segmento, {
+        color: '#9191B0',
+        weight: 5,
+        opacity: 0.85,
+        dashArray: '2 10',
+      }).addTo(map);
       caminoResaltado.bringToFront();
     }
 

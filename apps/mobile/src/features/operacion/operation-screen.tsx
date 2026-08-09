@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
 import { Svg, Circle, Line } from 'react-native-svg';
@@ -20,6 +20,7 @@ import { formatearDistancia } from './format-distancia';
 import { ruteoApi } from '../../shared/api/ruteo-api';
 import { ControlFeedbackToast } from './control-feedback-toast';
 import { OfflineBanner } from './offline-banner';
+import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -72,7 +73,9 @@ export function OperationScreen(props: OperationScreenProps) {
   // dibuja el mapa mientras esta petición está en curso o si falla (offline / OSRM caído).
   // Throttleada por distancia/tiempo para no golpear el backend en cada lectura de GPS.
   const [rutaCalculada, setRutaCalculada] = useState<[number, number][] | null>(null);
-  const ultimoFetchRuta = useRef<{ ts: number; lat: number; lng: number } | null>(null);
+  const ultimoFetchRuta = useRef<{ ts: number; lat: number; lng: number; destino: [number, number] } | null>(
+    null,
+  );
   const destinoRuteo = proximoPuntoControl?.coord.coordinates ??
     paqueteDia.paquete?.ruta.geometria.coordinates.at(-1) ??
     null;
@@ -84,12 +87,17 @@ export function OperationScreen(props: OperationScreenProps) {
     const posicion = gps.posicionActual;
     const anterior = ultimoFetchRuta.current;
     const ahora = Date.now();
+    // Si el destino cambió (se completó un punto de control y avanzamos al siguiente),
+    // el throttle por distancia/tiempo no aplica: sin esto, el mapa seguía mostrando la
+    // ruta OSRM calculada para el punto anterior hasta que el conductor se movía 50m.
+    const mismoDestino =
+      anterior?.destino[0] === destinoRuteo[0] && anterior?.destino[1] === destinoRuteo[1];
     const distanciaDesdeUltimoFetch = anterior
       ? haversineMetros([posicion.lng, posicion.lat], [anterior.lng, anterior.lat])
       : Infinity;
-    if (anterior && distanciaDesdeUltimoFetch < 50 && ahora - anterior.ts < 15_000) return;
+    if (mismoDestino && anterior && distanciaDesdeUltimoFetch < 50 && ahora - anterior.ts < 15_000) return;
 
-    ultimoFetchRuta.current = { ts: ahora, lat: posicion.lat, lng: posicion.lng };
+    ultimoFetchRuta.current = { ts: ahora, lat: posicion.lat, lng: posicion.lng, destino: destinoRuteo };
     let cancelado = false;
     void (async () => {
       const token = await props.obtenerAccessToken();
@@ -124,40 +132,37 @@ export function OperationScreen(props: OperationScreenProps) {
     }
   }, [observacion, props.contexto.sesionId, props.deviceId]);
 
-  const confirmarFinalizacion = useCallback(() => {
-    Alert.alert(
-      '¿Finalizar el recorrido?',
-      'El GPS dejará de registrar la jornada. Esta acción requiere confirmación.',
-      [
-        { text: 'Seguir recorriendo', style: 'cancel' },
-        { text: 'Finalizar', style: 'destructive', onPress: () => void gps.detener() },
-      ],
-    );
-  }, [gps]);
+  const [confirmarFinVisible, setConfirmarFinVisible] = useState(false);
+  const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
 
-  const confirmarCierreSesion = useCallback(() => {
-    Alert.alert('¿Cerrar sesión?', 'Deberás volver a validar el vehículo y tu identidad.', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Cerrar sesión',
-        style: 'destructive',
-        onPress: () => {
-          setShowProfile(false);
-          void props.onLogout();
-        },
-      },
-    ]);
-  }, [props]);
+  const confirmarFinalizacion = useCallback(() => setConfirmarFinVisible(true), []);
+  const confirmarCierreSesion = useCallback(() => setConfirmarLogoutVisible(true), []);
 
   if (showProfile) {
     return (
-      <PerfilScreen
-        contexto={props.contexto}
-        tracking={gps.tracking}
-        pendingEvents={pendientes}
-        onBack={() => setShowProfile(false)}
-        onLogout={confirmarCierreSesion}
-      />
+      <>
+        <PerfilScreen
+          contexto={props.contexto}
+          tracking={gps.tracking}
+          pendingEvents={pendientes}
+          onBack={() => setShowProfile(false)}
+          onLogout={confirmarCierreSesion}
+        />
+        <QuivoConfirmDialog
+          visible={confirmarLogoutVisible}
+          variant="danger"
+          title="¿Cerrar sesión?"
+          message="Deberás volver a validar el vehículo y tu identidad."
+          cancelLabel="Cancelar"
+          confirmLabel="Cerrar sesión"
+          onCancel={() => setConfirmarLogoutVisible(false)}
+          onConfirm={() => {
+            setConfirmarLogoutVisible(false);
+            setShowProfile(false);
+            void props.onLogout();
+          }}
+        />
+      </>
     );
   }
 
@@ -291,6 +296,20 @@ export function OperationScreen(props: OperationScreenProps) {
       </Modal>
 
       <ControlFeedbackToast ultimaDeteccion={gps.ultimaDeteccion} />
+
+      <QuivoConfirmDialog
+        visible={confirmarFinVisible}
+        variant="danger"
+        title="¿Finalizar el recorrido?"
+        message="El GPS dejará de registrar la jornada. Esta acción requiere confirmación."
+        cancelLabel="Seguir recorriendo"
+        confirmLabel="Finalizar"
+        onCancel={() => setConfirmarFinVisible(false)}
+        onConfirm={() => {
+          setConfirmarFinVisible(false);
+          void gps.detener();
+        }}
+      />
     </View>
   );
 }
