@@ -23,7 +23,12 @@ export type AuthVehiculoMovilRequest = z.infer<typeof AuthVehiculoMovilRequestSc
 export const AuthVehiculoMovilResponseSchema = z.object({
   challengeToken: z.string().min(32),
   expiresAt: z.string().datetime(),
-  vehiculo: z.object({ placa: z.string().min(1) }),
+  vehiculo: z.object({ 
+    placa: z.string().min(1),
+    tipo: z.string().min(1),
+    marca: z.string().min(1),
+    modelo: z.string().min(1),
+  }),
 });
 export type AuthVehiculoMovilResponse = z.infer<typeof AuthVehiculoMovilResponseSchema>;
 

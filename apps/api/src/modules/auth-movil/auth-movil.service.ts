@@ -29,6 +29,9 @@ type VehiculoCredencial = {
   id: string;
   sindicatoId: string;
   placa: string;
+  tipo: string;
+  marca: string;
+  modelo: string;
   credencialHash: string | null;
 };
 
@@ -49,7 +52,7 @@ export class AuthMovilService {
       CONTEXTO_ADMIN,
       (tx) =>
         tx.$queryRaw<VehiculoCredencial[]>`
-        SELECT id, "sindicatoId", placa, "credencialHash"
+        SELECT id, "sindicatoId", placa, tipo, marca, modelo, "credencialHash"
         FROM vehiculos
         WHERE estado = 'activo'
           AND (
@@ -101,7 +104,7 @@ export class AuthMovilService {
     return {
       challengeToken: token.value,
       expiresAt: expiresAt.toISOString(),
-      vehiculo: { placa: vehiculo.placa },
+      vehiculo: { placa: vehiculo.placa, tipo: vehiculo.tipo, marca: vehiculo.marca, modelo: vehiculo.modelo },
     };
   }
 
