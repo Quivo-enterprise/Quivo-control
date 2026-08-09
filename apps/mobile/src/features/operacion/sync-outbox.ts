@@ -59,6 +59,7 @@ export type ResultadoSync = { enviados: number } | { error: string };
 export function iniciarSyncAutomatico(
   obtenerAccessToken: () => string | null,
   onResultado?: (resultado: ResultadoSync) => void,
+  onSyncStart?: () => void,
 ): () => void {
   let backoffMs = BACKOFF_INICIAL_MS;
   let detenido = false;
@@ -70,6 +71,7 @@ export function iniciarSyncAutomatico(
     if (!accessToken) return;
 
     try {
+      onSyncStart?.();
       const resultado = await sincronizarPendientes(accessToken);
       backoffMs = BACKOFF_INICIAL_MS;
       onResultado?.(resultado);

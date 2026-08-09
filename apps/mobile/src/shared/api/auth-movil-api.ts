@@ -39,7 +39,6 @@ export class AuthMovilApiError extends Error {
 
 export const authMovilApi = {
   async autenticarVehiculo(data: AuthVehiculoMovilRequest): Promise<AuthVehiculoMovilResponse> {
-
     const payload = await request('/v1/mobile/auth/vehiculo', { method: 'POST', body: data });
     return parseResponse(AuthVehiculoMovilResponseSchema, payload);
   },

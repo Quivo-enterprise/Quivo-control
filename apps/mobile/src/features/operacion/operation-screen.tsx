@@ -15,6 +15,8 @@ import { NextControlSheet } from './next-control-sheet';
 import { useGpsOperativo } from './use-gps-operativo';
 import { usePaqueteDia } from './use-paquete-dia';
 import { useSyncStatus } from './use-sync-status';
+import { ControlFeedbackToast } from './control-feedback-toast';
+import { OfflineBanner } from './offline-banner';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -28,7 +30,7 @@ interface OperationScreenProps {
 export function OperationScreen(props: OperationScreenProps) {
   useKeepAwake();
   const paqueteDia = usePaqueteDia(props.obtenerAccessToken);
-  const { pendientes, errorSync } = useSyncStatus(props.obtenerAccessToken);
+  const { pendientes, errorSync, isOffline, isSyncing } = useSyncStatus(props.obtenerAccessToken);
   const puntosControl = useMemo(
     () => paqueteDia.paquete?.puntosControl ?? [],
     [paqueteDia.paquete],
@@ -96,10 +98,13 @@ export function OperationScreen(props: OperationScreenProps) {
       />
 
       <View pointerEvents="box-none" style={styles.topOverlay}>
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: quivoSpacing.md }}>
-          <View style={{ flex: 1 }}>
-            <DriverRouteCard contexto={props.contexto} tracking={gps.tracking} />
+        <View style={{ flexDirection: 'column', gap: quivoSpacing.sm }}>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: quivoSpacing.md }}>
+            <View style={{ flex: 1 }}>
+              <DriverRouteCard contexto={props.contexto} tracking={gps.tracking} isOffline={isOffline} />
+            </View>
           </View>
+          <OfflineBanner isOffline={isOffline} />
         </View>
         
         {gps.tracking && (
@@ -107,6 +112,11 @@ export function OperationScreen(props: OperationScreenProps) {
         )}
 
         {props.aviso ? <Text style={styles.notice}>{props.aviso}</Text> : null}
+        {pendientes >= 800 ? (
+          <Text accessibilityRole="alert" style={styles.dangerNotice}>
+            Almacenamiento local casi lleno (80%). Conéctate pronto para sincronizar.
+          </Text>
+        ) : null}
         {paqueteDia.vencido ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             Asignación vencida. Reconecta antes de iniciar otro recorrido.
@@ -115,11 +125,6 @@ export function OperationScreen(props: OperationScreenProps) {
         {paqueteDia.error ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             {paqueteDia.error}
-          </Text>
-        ) : null}
-        {gps.ultimaDeteccion?.cumplido ? (
-          <Text accessibilityLiveRegion="polite" style={styles.successNotice}>
-            Punto de control registrado
           </Text>
         ) : null}
       </View>
@@ -145,6 +150,16 @@ export function OperationScreen(props: OperationScreenProps) {
             <Ionicons name="chatbubble-ellipses" size={24} color={quivoColors.primary} />
           </Pressable>
         )}
+        {__DEV__ && gps.tracking && proximoPuntoControl && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Simular detección (Debug)"
+            style={[styles.recenterButton, { backgroundColor: quivoColors.accentSoft }]}
+            onPress={() => gps.simularDeteccion(proximoPuntoControl.id)}
+          >
+            <Ionicons name="bug" size={24} color={quivoColors.accentStrong} />
+          </Pressable>
+        )}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Centrar en mi ubicación"
@@ -163,14 +178,17 @@ export function OperationScreen(props: OperationScreenProps) {
 
       <NextControlSheet
         contexto={props.contexto}
-        tracking={gps.tracking}
         nextPointOrder={proximoPuntoControl?.orden ?? null}
+        totalPoints={puntosControl.length}
+        tracking={gps.tracking}
+        canStart={!paqueteDia.vencido && !paqueteDia.cargando && !paqueteDia.error}
         pendingEvents={pendientes}
-        canStart={!paqueteDia.vencido && Boolean(paqueteDia.paquete)}
-        gpsError={gps.errorGps}
+        isOffline={isOffline}
+        isSyncing={isSyncing}
         onStart={() => void gps.iniciar()}
         onFinish={confirmarFinalizacion}
         panY={sheetPanY}
+        gpsError={gps.errorGps}
       />
 
       <Modal visible={showInfo} transparent={true} animationType="fade" onRequestClose={() => setShowInfo(false)}>
@@ -189,6 +207,8 @@ export function OperationScreen(props: OperationScreenProps) {
           </View>
         </View>
       </Modal>
+
+      <ControlFeedbackToast ultimaDeteccion={gps.ultimaDeteccion} />
     </View>
   );
 }
@@ -196,9 +216,11 @@ export function OperationScreen(props: OperationScreenProps) {
 function DriverRouteCard({
   contexto,
   tracking,
+  isOffline,
 }: {
   contexto: ContextoOperativoMovil;
   tracking: boolean;
+  isOffline: boolean;
 }) {
   return (
     <View style={styles.identityCard}>
@@ -219,9 +241,14 @@ function DriverRouteCard({
       <View style={styles.routeBadge}>
         <Text style={styles.lineCode}>{contexto.linea.codigo}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-          {tracking && <Ionicons name="wifi" size={10} color={quivoColors.success} />}
-          <Text style={[styles.gpsStatus, tracking ? styles.gpsStatusActive : null]}>
-            {tracking ? 'EN LÍNEA' : 'EN ESPERA'}
+          {tracking && !isOffline && <Ionicons name="wifi" size={10} color={quivoColors.success} />}
+          {isOffline && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#FF9500' }} />}
+          <Text style={[
+            styles.gpsStatus, 
+            tracking && !isOffline ? styles.gpsStatusActive : null,
+            isOffline ? { color: '#FF9500' } : null
+          ]}>
+            {isOffline ? 'OFFLINE' : tracking ? 'EN LÍNEA' : 'EN ESPERA'}
           </Text>
         </View>
       </View>

@@ -8,7 +8,7 @@ import {
   type RefreshMovilResponse,
 } from '@quivo/shared';
 
-const SESSION_KEY = 'quivo.mobile.session.v1';
+const SESSION_KEY = 'quivo.mobile.session.v2';
 const DEVICE_KEY = 'quivo.mobile.device.v1';
 const OPTIONS: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,

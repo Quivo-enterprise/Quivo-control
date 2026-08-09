@@ -7,6 +7,8 @@ const REFRESCO_MS = 15_000;
 export interface EstadoSyncStatus {
   pendientes: number;
   errorSync: string | null;
+  isOffline: boolean;
+  isSyncing: boolean;
 }
 
 /**
@@ -23,10 +25,27 @@ export interface EstadoSyncStatus {
  * releer el contador) como red de seguridad — NetInfo puede comportarse distinto entre
  * fabricantes, sobre todo en los dispositivos de gama baja a los que apunta esta app.
  */
+import NetInfo, { useNetInfo } from '@react-native-community/netinfo';
+import { Vibration } from 'react-native';
+
 export function useSyncStatus(obtenerAccessToken: () => Promise<string | null>): EstadoSyncStatus {
   const [pendientes, setPendientes] = useState(0);
   const [errorSync, setErrorSync] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const netInfo = useNetInfo();
+  const isOffline = netInfo.isConnected === false && netInfo.isInternetReachable === false;
   const tokenRef = useRef<string | null>(null);
+
+  // Efecto para vibración al recuperar conexión
+  const wasOffline = useRef(false);
+  useEffect(() => {
+    if (isOffline) {
+      wasOffline.current = true;
+    } else if (wasOffline.current) {
+      wasOffline.current = false;
+      Vibration.vibrate([0, 100, 100, 100]); // Patrón de reconexión
+    }
+  }, [isOffline]);
 
   const actualizarPendientes = useCallback(async () => {
     const db = await abrirOutbox();
@@ -51,9 +70,13 @@ export function useSyncStatus(obtenerAccessToken: () => Promise<string | null>):
         () => tokenRef.current,
         (resultado: ResultadoSync) => {
           if (!activo) return;
+          setIsSyncing(false);
           setErrorSync('error' in resultado ? resultado.error : null);
           void actualizarPendientes();
         },
+        () => {
+          if (activo) setIsSyncing(true);
+        }
       );
     };
     void iniciar();
@@ -61,12 +84,15 @@ export function useSyncStatus(obtenerAccessToken: () => Promise<string | null>):
     const intervalo = setInterval(() => {
       void (async () => {
         const token = await releerToken();
-        if (token) {
+        if (token && !isOffline) {
           try {
+            setIsSyncing(true);
             await sincronizarPendientes(token);
             setErrorSync(null);
           } catch (error) {
             setErrorSync(error instanceof Error ? error.message : 'Error de sincronización');
+          } finally {
+            setIsSyncing(false);
           }
         }
         await actualizarPendientes();
@@ -78,7 +104,7 @@ export function useSyncStatus(obtenerAccessToken: () => Promise<string | null>):
       detenerSync();
       clearInterval(intervalo);
     };
-  }, [obtenerAccessToken, actualizarPendientes]);
+  }, [obtenerAccessToken, actualizarPendientes, isOffline]);
 
-  return { pendientes, errorSync };
+  return { pendientes, errorSync, isOffline, isSyncing };
 }

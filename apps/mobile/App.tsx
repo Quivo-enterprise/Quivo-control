@@ -77,7 +77,7 @@ function QuivoApp() {
     if (auth.estado.etapa === 'conductor' && auth.estado.vehiculo) {
       return (
         <DriverLoginScreen
-          placa={auth.estado.vehiculo.vehiculo.placa}
+          vehiculo={auth.estado.vehiculo.vehiculo}
           loading={auth.estado.cargando}
           error={auth.estado.error}
           onSubmit={auth.autenticarConductor}

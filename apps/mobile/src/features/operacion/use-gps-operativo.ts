@@ -169,6 +169,16 @@ export function useGpsOperativo(
     }
   }, [deviceId, sesionId]);
 
+  const simularDeteccion = useCallback((puntoControlId: string) => {
+    const deteccion: DeteccionPuntoControl = {
+      puntoControlId,
+      distanciaM: 15,
+      cumplido: true,
+    };
+    puntosControlDetectados.current.add(puntoControlId);
+    setUltimaDeteccion(deteccion);
+  }, []);
+
   return {
     tracking,
     puntos,
@@ -178,5 +188,6 @@ export function useGpsOperativo(
     posicionActual,
     iniciar,
     detener,
+    simularDeteccion,
   };
 }
