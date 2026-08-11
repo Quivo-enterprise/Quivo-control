@@ -1,5 +1,13 @@
 import { ReactNode } from 'react';
-import { StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type TextInputProps,
+  type TextStyle,
+  type ViewStyle,
+} from 'react-native';
 import MaskInput, { type Mask } from 'react-native-mask-input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../theme/quivo-theme';
 
@@ -37,9 +45,9 @@ export function Input({
       <View
         style={[
           styles.inputShell,
-          styles[`shell_${controlSize}` as keyof typeof styles] || styles.shell_md,
+          (styles[`shell_${controlSize}` as keyof typeof styles] as ViewStyle) || styles.shell_md,
           error ? styles.inputShellError : null,
-        ] as any}
+        ]}
       >
         {leftSlot ? <View style={styles.slot}>{leftSlot}</View> : null}
         
@@ -52,10 +60,10 @@ export function Input({
             selectionColor={quivoColors.primary}
             style={[
               styles.input,
-              styles[`input_${controlSize}` as keyof typeof styles] || styles.input_md,
-              style
-            ] as any}
-            {...(props as any)}
+              (styles[`input_${controlSize}` as keyof typeof styles] as TextStyle) || styles.input_md,
+              style,
+            ]}
+            {...props}
           />
         ) : (
           <TextInput
@@ -65,9 +73,9 @@ export function Input({
             selectionColor={quivoColors.primary}
             style={[
               styles.input,
-              styles[`input_${controlSize}` as keyof typeof styles] || styles.input_md,
-              style
-            ] as any}
+              (styles[`input_${controlSize}` as keyof typeof styles] as TextStyle) || styles.input_md,
+              style,
+            ]}
             {...props}
           />
         )}
@@ -78,7 +86,7 @@ export function Input({
       {description ? (
         <Text
           accessibilityLiveRegion={error ? 'polite' : 'none'}
-          style={([styles.help, error ? styles.error : null]) as any}
+          style={[styles.help, error ? styles.error : null]}
         >
           {description}
         </Text>

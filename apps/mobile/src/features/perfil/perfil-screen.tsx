@@ -1,26 +1,50 @@
-import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { PanResponder, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button } from '../../shared/components/Button';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { AjustesOperacionScreen } from './ajustes-operacion-screen';
 
 export interface PerfilScreenProps {
   contexto: ContextoOperativoMovil;
   tracking: boolean;
+  isOffline: boolean;
   pendingEvents: number;
   onBack: () => void;
   onLogout: () => void;
 }
 
+const SWIPE_BACK_THRESHOLD = 80;
+
 export function PerfilScreen(props: PerfilScreenProps) {
   const { contexto } = props;
-  const [avisoProximamente, setAvisoProximamente] = useState<'ajustes' | 'sync' | null>(null);
+  const [avisoProximamente, setAvisoProximamente] = useState<'sync' | null>(null);
+  const [showAjustes, setShowAjustes] = useState(false);
+
+  // Swipe back (QUI-262): un gesto horizontal claro (dx dominante sobre dy) desde cualquier
+  // punto de la pantalla vuelve a la ruta. El umbral de activación (dx > 20 y dx > 2*|dy|)
+  // evita robarle el gesto al scroll vertical del ScrollView.
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_evento, gesto) =>
+        gesto.dx > 20 && Math.abs(gesto.dx) > Math.abs(gesto.dy) * 2,
+      onPanResponderRelease: (_evento, gesto) => {
+        if (gesto.dx > SWIPE_BACK_THRESHOLD && Math.abs(gesto.dx) > Math.abs(gesto.dy) * 2) {
+          props.onBack();
+        }
+      },
+    }),
+  ).current;
+
+  if (showAjustes) {
+    return <AjustesOperacionScreen onBack={() => setShowAjustes(false)} />;
+  }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} {...panResponder.panHandlers}>
       <View style={styles.header}>
         <Pressable
           accessibilityRole="button"
@@ -50,6 +74,7 @@ export function PerfilScreen(props: PerfilScreenProps) {
               {props.tracking ? `Recorrido en curso · ${contexto.linea.codigo}` : 'EN ESPERA'}
             </Text>
           </View>
+          <ConexionEstado isOffline={props.isOffline} pendingEvents={props.pendingEvents} />
         </View>
 
         <Text style={styles.sectionTitle}>Navegación de perfil</Text>
@@ -58,7 +83,7 @@ export function PerfilScreen(props: PerfilScreenProps) {
             icon="settings-outline"
             title="Ajustes de operación"
             description="Configura cómo opera la app"
-            onPress={() => setAvisoProximamente('ajustes')}
+            onPress={() => setShowAjustes(true)}
           />
           <MenuRow
             icon="sync-outline"
@@ -97,19 +122,38 @@ export function PerfilScreen(props: PerfilScreenProps) {
       </ScrollView>
 
       <QuivoConfirmDialog
-        visible={avisoProximamente === 'ajustes'}
-        title="Ajustes de operación"
-        message="Esta sección estará disponible próximamente (QUI-263)."
-        confirmLabel="Entendido"
-        onConfirm={() => setAvisoProximamente(null)}
-      />
-      <QuivoConfirmDialog
         visible={avisoProximamente === 'sync'}
         title="Sincronización y soporte"
         message="Esta sección estará disponible próximamente."
         confirmLabel="Entendido"
         onConfirm={() => setAvisoProximamente(null)}
       />
+    </View>
+  );
+}
+
+function ConexionEstado({
+  isOffline,
+  pendingEvents,
+}: {
+  isOffline: boolean;
+  pendingEvents: number;
+}) {
+  const estado = isOffline ? 'offline' : pendingEvents > 0 ? 'sincronizando' : 'conectado';
+  const config = {
+    conectado: { color: quivoColors.success, label: 'Conectado', icon: 'wifi' as const },
+    sincronizando: { color: '#FF9500', label: `Sincronizando (${pendingEvents})`, icon: 'sync' as const },
+    offline: { color: quivoColors.danger, label: 'Sin conexión', icon: 'cloud-offline' as const },
+  }[estado];
+
+  return (
+    <View
+      accessibilityLabel={`Estado de conexión: ${config.label}`}
+      style={styles.conexionEstado}
+    >
+      <View style={[styles.conexionDot, { backgroundColor: config.color }]} />
+      <Ionicons name={config.icon} size={11} color={config.color} />
+      <Text style={[styles.conexionText, { color: config.color }]}>{config.label}</Text>
     </View>
   );
 }
@@ -205,6 +249,14 @@ const styles = StyleSheet.create({
   badgeIdle: { backgroundColor: quivoColors.primarySubtle },
   badgeText: { fontFamily: quivoFonts.bodySemiBold, fontSize: 12, color: quivoColors.textMuted },
   badgeTextActive: { color: quivoColors.success },
+  conexionEstado: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: quivoSpacing.xs,
+  },
+  conexionDot: { width: 6, height: 6, borderRadius: 3 },
+  conexionText: { fontFamily: quivoFonts.bodyMedium, fontSize: 11 },
   sectionTitle: {
     fontFamily: quivoFonts.bodySemiBold,
     fontSize: 12,

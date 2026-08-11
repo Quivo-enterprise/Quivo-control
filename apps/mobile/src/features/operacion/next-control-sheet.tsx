@@ -1,10 +1,13 @@
 import { useRef, useState } from 'react';
-import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Linking, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button } from '../../shared/components/Button';
+import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { formatearDistancia } from './format-distancia';
+
+const NUMERO_EMERGENCIAS = '911';
 
 export interface NextControlSheetProps {
   contexto: ContextoOperativoMovil;
@@ -28,6 +31,7 @@ export function NextControlSheet(props: NextControlSheetProps) {
 
   const { panY } = props;
   const [minimized, setMinimized] = useState(false);
+  const [confirmarEmergencia, setConfirmarEmergencia] = useState(false);
   const snapOffset = 80; // Adjusted so the title is still visible when minimized
 
   const panResponder = useRef(
@@ -122,7 +126,7 @@ export function NextControlSheet(props: NextControlSheetProps) {
         {props.tracking && (
           <Pressable
             style={styles.emergencyIconButton}
-            onPress={() => {}}
+            onPress={() => setConfirmarEmergencia(true)}
             accessibilityLabel="Llamada de emergencia"
             accessibilityRole="button"
           >
@@ -130,6 +134,21 @@ export function NextControlSheet(props: NextControlSheetProps) {
           </Pressable>
         )}
       </View>
+
+      <QuivoConfirmDialog
+        visible={confirmarEmergencia}
+        variant="danger"
+        icon="call"
+        title="¿Llamar a emergencias?"
+        message={`Se abrirá el marcador de tu teléfono con el número de emergencias (${NUMERO_EMERGENCIAS}).`}
+        cancelLabel="Cancelar"
+        confirmLabel="Llamar"
+        onCancel={() => setConfirmarEmergencia(false)}
+        onConfirm={() => {
+          setConfirmarEmergencia(false);
+          void Linking.openURL(`tel:${NUMERO_EMERGENCIAS}`);
+        }}
+      />
     </Animated.View>
   );
 }

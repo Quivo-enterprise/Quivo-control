@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
 import Svg, { Path, G } from 'react-native-svg';
 import Animated, {
   useSharedValue,
@@ -7,7 +7,6 @@ import Animated, {
   withTiming,
   withDelay,
   withSequence,
-  interpolateColor,
   interpolate,
   Easing,
 } from 'react-native-reanimated';

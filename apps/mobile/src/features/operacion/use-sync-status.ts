@@ -25,7 +25,7 @@ export interface EstadoSyncStatus {
  * releer el contador) como red de seguridad — NetInfo puede comportarse distinto entre
  * fabricantes, sobre todo en los dispositivos de gama baja a los que apunta esta app.
  */
-import NetInfo, { useNetInfo } from '@react-native-community/netinfo';
+import { useNetInfo } from '@react-native-community/netinfo';
 import { Vibration } from 'react-native';
 
 export function useSyncStatus(obtenerAccessToken: () => Promise<string | null>): EstadoSyncStatus {

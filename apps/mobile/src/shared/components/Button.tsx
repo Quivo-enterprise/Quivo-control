@@ -1,5 +1,13 @@
 import { ReactNode } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, type ViewStyle } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  type StyleProp,
+  type TextStyle,
+  type ViewStyle,
+} from 'react-native';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../theme/quivo-theme';
 
 export type ButtonVariant =
@@ -52,10 +60,10 @@ export function Button({
 }: ButtonProps) {
   const bloqueado = disabled || loading;
 
-  const buttonStyles = [
+  const buttonStyles: StyleProp<ViewStyle>[] = [
     styles.base,
-    styles[`variant_${variant}` as keyof typeof styles] || styles.variant_primary,
-    styles[`size_${size}` as keyof typeof styles] || styles.size_md,
+    (styles[`variant_${variant}` as keyof typeof styles] as ViewStyle) || styles.variant_primary,
+    (styles[`size_${size}` as keyof typeof styles] as ViewStyle) || styles.size_md,
     fullWidth && styles.fullWidth,
     rounded && styles.rounded,
     elevated && styles.elevated,
@@ -70,11 +78,11 @@ export function Button({
       accessibilityState={{ disabled: bloqueado, busy: loading }}
       disabled={bloqueado}
       onPress={onPress}
-      style={({ pressed }) => ([
+      style={({ pressed }) => [
         ...buttonStyles,
         pressed && !bloqueado ? styles.pressed : null,
         bloqueado ? styles.disabled : null,
-      ] as any)}
+      ]}
     >
       {loading ? (
         <ActivityIndicator
@@ -91,8 +99,9 @@ export function Button({
             <Text
               style={[
                 styles.label,
-                styles[`label_size_${size}` as keyof typeof styles] || styles.label_size_md,
-                styles[`label_variant_${variant}` as keyof typeof styles] || styles.label_variant_primary,
+                (styles[`label_size_${size}` as keyof typeof styles] as TextStyle) || styles.label_size_md,
+                (styles[`label_variant_${variant}` as keyof typeof styles] as TextStyle) ||
+                  styles.label_variant_primary,
               ]}
             >
               {children}

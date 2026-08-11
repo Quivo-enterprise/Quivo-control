@@ -126,10 +126,24 @@ export function DriverLoginScreen({
         style={styles.flex}
       >
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <QuivoHeader
-            title="Confirma tu identidad"
-            subtitle="Ingresa tu cédula y PIN personal."
-          />
+          <View style={styles.headerRow}>
+            <Pressable
+              onPress={onBack}
+              disabled={loading}
+              accessibilityRole="button"
+              accessibilityLabel="Volver a validar vehículo"
+              hitSlop={10}
+              style={styles.backButton}
+            >
+              <Ionicons name="chevron-back" size={24} color={quivoColors.text} />
+            </Pressable>
+            <View style={styles.headerRowContent}>
+              <QuivoHeader
+                title="Confirma tu identidad"
+                subtitle="Ingresa tu cédula y PIN personal."
+              />
+            </View>
+          </View>
           <QuivoStepIndicator current={2} />
           
           <View style={styles.vehiclePill}>
@@ -257,6 +271,9 @@ export function DriverLoginScreen({
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: quivoColors.page },
   content: { padding: quivoSpacing.xl, gap: quivoSpacing.xl, paddingBottom: quivoSpacing.xxxl },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: quivoSpacing.sm },
+  backButton: { paddingTop: quivoSpacing.xs },
+  headerRowContent: { flex: 1 },
   form: { gap: quivoSpacing.lg },
   
   // Transition styles

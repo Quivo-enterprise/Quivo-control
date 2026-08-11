@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, Image } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   Easing,
@@ -25,7 +25,6 @@ export interface SplashScreenProps {
 export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
   const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<'verificando' | 'error'>('verificando');
-  const [fadingOut, setFadingOut] = useState(false);
 
   const rotation = useSharedValue(0);
 
@@ -51,8 +50,7 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
   const checkConnectionAndData = async () => {
     const startTime = Date.now();
     setStatus('verificando');
-    setFadingOut(false);
-    
+
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error('timeout')), 5000);
     });
@@ -74,19 +72,17 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
       const remainingTime = Math.max(0, 2500 - elapsed);
 
       setTimeout(() => {
-        setFadingOut(true);
         setTimeout(() => {
           onReady();
         }, 300);
       }, remainingTime);
-    } catch (e) {
+    } catch {
       setStatus('error');
     }
   };
 
   useEffect(() => {
     void checkConnectionAndData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

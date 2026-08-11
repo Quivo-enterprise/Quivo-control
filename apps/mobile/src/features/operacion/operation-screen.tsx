@@ -5,8 +5,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Svg, Circle, Line } from 'react-native-svg';
 import { haversineMetros, type ContextoOperativoMovil, type PaqueteDia } from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
-import { QuivoGlassCard } from '../../shared/components/quivo-glass-card';
 import { Button } from '../../shared/components/Button';
+import { Input } from '../../shared/components/Input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { MapErrorBoundary } from './map-error-boundary';
 import { proximoPuntoControlPendiente } from './proximo-punto-control';
@@ -46,6 +46,7 @@ export function OperationScreen(props: OperationScreenProps) {
   const [observacionEnviada, setObservacionEnviada] = useState(false);
   const [recenterTick, setRecenterTick] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
+  const [showObservacion, setShowObservacion] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
 
@@ -132,6 +133,12 @@ export function OperationScreen(props: OperationScreenProps) {
     }
   }, [observacion, props.contexto.sesionId, props.deviceId]);
 
+  const cerrarModalObservacion = useCallback(() => {
+    setShowObservacion(false);
+    setObservacion('');
+    setObservacionEnviada(false);
+  }, []);
+
   const [confirmarFinVisible, setConfirmarFinVisible] = useState(false);
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
 
@@ -144,6 +151,7 @@ export function OperationScreen(props: OperationScreenProps) {
         <PerfilScreen
           contexto={props.contexto}
           tracking={gps.tracking}
+          isOffline={isOffline}
           pendingEvents={pendientes}
           onBack={() => setShowProfile(false)}
           onLogout={confirmarCierreSesion}
@@ -203,6 +211,11 @@ export function OperationScreen(props: OperationScreenProps) {
             Almacenamiento local casi lleno (80%). Conéctate pronto para sincronizar.
           </Text>
         ) : null}
+        {errorSync && !isOffline ? (
+          <Text accessibilityRole="alert" style={styles.dangerNotice}>
+            No se pudo sincronizar: {errorSync}. Se reintentará automáticamente.
+          </Text>
+        ) : null}
         {paqueteDia.vencido ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             Asignación vencida. Reconecta antes de iniciar otro recorrido.
@@ -231,7 +244,7 @@ export function OperationScreen(props: OperationScreenProps) {
             accessibilityRole="button"
             accessibilityLabel="Registrar observación"
             style={styles.recenterButton}
-            onPress={() => {}}
+            onPress={() => setShowObservacion(true)}
           >
             <Ionicons name="chatbubble-ellipses" size={24} color={quivoColors.primary} />
           </Pressable>
@@ -291,6 +304,59 @@ export function OperationScreen(props: OperationScreenProps) {
             <Button variant="primary" onPress={() => setShowInfo(false)} style={{ marginTop: quivoSpacing.xl }}>
               Entendido
             </Button>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showObservacion}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={cerrarModalObservacion}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="chatbubble-ellipses" size={32} color={quivoColors.primary} />
+              <Text style={styles.modalTitle}>Registrar observación</Text>
+            </View>
+            {observacionEnviada ? (
+              <Text style={styles.modalText}>
+                Observación guardada. Se enviará junto con el resto de la jornada al sincronizar.
+              </Text>
+            ) : (
+              <>
+                <Text style={styles.modalText}>
+                  Describe cualquier incidencia del recorrido (tráfico, desvío, problema del
+                  vehículo, etc.). Queda guardada en el dispositivo y no requiere conexión.
+                </Text>
+                <Input
+                  multiline
+                  numberOfLines={4}
+                  value={observacion}
+                  onChangeText={setObservacion}
+                  placeholder="Ej: desvío por obras en Av. Circunvalación"
+                  containerStyle={styles.observacionInput}
+                  style={styles.observacionInputText}
+                />
+              </>
+            )}
+            <View style={styles.modalActions}>
+              {!observacionEnviada && (
+                <Button variant="outline" onPress={cerrarModalObservacion}>
+                  Cancelar
+                </Button>
+              )}
+              <Button
+                variant="primary"
+                loading={enviandoObservacion}
+                disabled={!observacionEnviada && !observacion.trim()}
+                onPress={observacionEnviada ? cerrarModalObservacion : () => void enviarObservacion()}
+                style={styles.modalActionButton}
+              >
+                {observacionEnviada ? 'Listo' : 'Enviar'}
+              </Button>
+            </View>
           </View>
         </View>
       </Modal>
@@ -610,5 +676,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: quivoColors.textSecondary,
     lineHeight: 22,
+  },
+  observacionInput: {
+    marginTop: quivoSpacing.md,
+  },
+  observacionInputText: {
+    minHeight: 96,
+    textAlignVertical: 'top',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: quivoSpacing.sm,
+    marginTop: quivoSpacing.xl,
+  },
+  modalActionButton: {
+    minWidth: 120,
   },
 });

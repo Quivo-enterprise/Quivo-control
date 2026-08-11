@@ -23,26 +23,41 @@ export function Card({
   ...props
 }: CardProps) {
   return (
-    <View 
+    <View
       style={[
-        styles.card, 
-        styles[`variant_${variant}` as keyof typeof styles] || styles.variant_surface,
-        style
-      ] as any} 
+        styles.card,
+        (styles[`variant_${variant}` as keyof typeof styles] as ViewStyle) || styles.variant_surface,
+        style,
+      ]}
       {...props}
     >
       {header ? (
-        <View style={([styles.header, styles[`padding_${padding}` as keyof typeof styles] || styles.padding_md]) as any}>
+        <View
+          style={[
+            styles.header,
+            (styles[`padding_${padding}` as keyof typeof styles] as ViewStyle) || styles.padding_md,
+          ]}
+        >
           {header}
         </View>
       ) : null}
-      
-      <View style={([styles.body, styles[`padding_${padding}` as keyof typeof styles] || styles.padding_md]) as any}>
+
+      <View
+        style={[
+          styles.body,
+          (styles[`padding_${padding}` as keyof typeof styles] as ViewStyle) || styles.padding_md,
+        ]}
+      >
         {children}
       </View>
-      
+
       {footer ? (
-        <View style={([styles.footer, styles[`padding_${padding}` as keyof typeof styles] || styles.padding_md]) as any}>
+        <View
+          style={[
+            styles.footer,
+            (styles[`padding_${padding}` as keyof typeof styles] as ViewStyle) || styles.padding_md,
+          ]}
+        >
           {footer}
         </View>
       ) : null}

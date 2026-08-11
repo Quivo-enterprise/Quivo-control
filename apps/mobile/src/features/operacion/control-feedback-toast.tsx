@@ -5,12 +5,10 @@ import Animated, {
   useSharedValue,
   withRepeat,
   withTiming,
-  withSequence,
   Easing,
-  withDelay,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { quivoColors, quivoFonts, quivoSpacing } from '../../shared/theme/quivo-theme';
 import type { DeteccionPuntoControl } from '../../gps/geofence';
 
 interface ControlFeedbackToastProps {

@@ -1,20 +1,20 @@
 import { StyleSheet, Text, View, Image } from 'react-native';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../theme/quivo-theme';
+import { quivoColors, quivoFonts, quivoSpacing } from '../theme/quivo-theme';
+import logo from '../../../assets/images/logo.png';
 
 interface QuivoHeaderProps {
-  eyebrow?: string;
   title: string;
   subtitle?: string;
 }
 
-export function QuivoHeader({ eyebrow = 'QUIVO CONTROL', title, subtitle }: QuivoHeaderProps) {
+export function QuivoHeader({ title, subtitle }: QuivoHeaderProps) {
   return (
     <View style={styles.container}>
       <View style={styles.brandRow}>
-        <Image 
-          source={require('../../../assets/images/logo.png')} 
-          style={styles.logo} 
-          resizeMode="contain" 
+        <Image
+          source={logo}
+          style={styles.logo}
+          resizeMode="contain"
         />
       </View>
       <Text accessibilityRole="header" style={styles.title}>
