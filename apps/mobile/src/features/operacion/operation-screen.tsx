@@ -12,15 +12,16 @@ import { MapErrorBoundary } from './map-error-boundary';
 import { proximoPuntoControlPendiente } from './proximo-punto-control';
 import { RouteMapView } from './route-map-view';
 import { NextControlSheet } from './next-control-sheet';
-import { useGpsOperativo } from './use-gps-operativo';
-import { usePaqueteDia } from './use-paquete-dia';
 import { useSyncStatus } from './use-sync-status';
-import { PerfilScreen } from '../perfil/perfil-screen';
 import { formatearDistancia } from './format-distancia';
 import { ruteoApi } from '../../shared/api/ruteo-api';
 import { ControlFeedbackToast } from './control-feedback-toast';
 import { OfflineBanner } from './offline-banner';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
+import { useGpsContext } from './gps-provider';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { OperationStackParamList } from '../../app/operation-navigator';
+import { useOperacionSettings } from '../perfil/use-operacion-settings';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -31,22 +32,21 @@ interface OperationScreenProps {
   onLogout: () => Promise<void>;
 }
 
-export function OperationScreen(props: OperationScreenProps) {
+export function OperationScreen(props: OperationScreenProps & NativeStackScreenProps<OperationStackParamList, 'Map'>) {
   useKeepAwake();
-  const paqueteDia = usePaqueteDia(props.obtenerAccessToken);
+  const { gps, paqueteDia } = useGpsContext();
   const { pendientes, errorSync, isOffline, isSyncing } = useSyncStatus(props.obtenerAccessToken);
+  const { settings } = useOperacionSettings();
   const puntosControl = useMemo(
     () => paqueteDia.paquete?.puntosControl ?? [],
     [paqueteDia.paquete],
   );
-  const gps = useGpsOperativo(props.contexto.sesionId, props.deviceId, puntosControl);
   const [completados, setCompletados] = useState<Set<string>>(new Set());
   const [observacion, setObservacion] = useState('');
   const [enviandoObservacion, setEnviandoObservacion] = useState(false);
   const [observacionEnviada, setObservacionEnviada] = useState(false);
   const [recenterTick, setRecenterTick] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -138,34 +138,6 @@ export function OperationScreen(props: OperationScreenProps) {
   const confirmarFinalizacion = useCallback(() => setConfirmarFinVisible(true), []);
   const confirmarCierreSesion = useCallback(() => setConfirmarLogoutVisible(true), []);
 
-  if (showProfile) {
-    return (
-      <>
-        <PerfilScreen
-          contexto={props.contexto}
-          tracking={gps.tracking}
-          pendingEvents={pendientes}
-          onBack={() => setShowProfile(false)}
-          onLogout={confirmarCierreSesion}
-        />
-        <QuivoConfirmDialog
-          visible={confirmarLogoutVisible}
-          variant="danger"
-          title="¿Cerrar sesión?"
-          message="Deberás volver a validar el vehículo y tu identidad."
-          cancelLabel="Cancelar"
-          confirmLabel="Cerrar sesión"
-          onCancel={() => setConfirmarLogoutVisible(false)}
-          onConfirm={() => {
-            setConfirmarLogoutVisible(false);
-            setShowProfile(false);
-            void props.onLogout();
-          }}
-        />
-      </>
-    );
-  }
-
   return (
     <View style={styles.container}>
       <MapLayer
@@ -185,7 +157,7 @@ export function OperationScreen(props: OperationScreenProps) {
               style={{ flex: 1 }}
               accessibilityRole="button"
               accessibilityLabel="Perfil y configuración"
-              onPress={() => setShowProfile(true)}
+              onPress={() => props.navigation.navigate('Perfil')}
             >
               <DriverRouteCard contexto={props.contexto} tracking={gps.tracking} isOffline={isOffline} />
             </Pressable>
@@ -211,6 +183,11 @@ export function OperationScreen(props: OperationScreenProps) {
         {paqueteDia.error ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             {paqueteDia.error}
+          </Text>
+        ) : null}
+        {(!settings.trabajarOffline && isOffline) ? (
+          <Text accessibilityRole="alert" style={styles.dangerNotice}>
+            Modo offline desactivado en tus Ajustes. Conéctate a internet para iniciar.
           </Text>
         ) : null}
       </View>
@@ -268,7 +245,7 @@ export function OperationScreen(props: OperationScreenProps) {
         totalPoints={puntosControl.length}
         distanciaMetros={distanciaProximoPunto}
         tracking={gps.tracking}
-        canStart={!paqueteDia.vencido && !paqueteDia.cargando && !paqueteDia.error}
+        canStart={!paqueteDia.vencido && !paqueteDia.cargando && !paqueteDia.error && !(!settings.trabajarOffline && isOffline)}
         pendingEvents={pendientes}
         isOffline={isOffline}
         isSyncing={isSyncing}

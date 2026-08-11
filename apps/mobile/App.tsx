@@ -17,19 +17,27 @@ import {
   JetBrainsMono_400Regular,
   useFonts as useJetBrainsMono,
 } from '@expo-google-fonts/jetbrains-mono';
+import { NavigationContainer } from '@react-navigation/native';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AssignmentSelectionScreen } from './src/features/auth/assignment-selection-screen';
 import { DriverLoginScreen } from './src/features/auth/driver-login-screen';
 import { contextoDe, useAuthMovil } from './src/features/auth/use-auth-movil';
 import { VehicleLoginScreen } from './src/features/auth/vehicle-login-screen';
-import { OperationScreen } from './src/features/operacion/operation-screen';
+import { OperationNavigator } from './src/app/operation-navigator';
 import { SplashScreen } from './src/features/auth/splash-screen';
 import { quivoColors, quivoFonts, quivoSpacing } from './src/shared/theme/quivo-theme';
 import { useState } from 'react';
 
+const queryClient = new QueryClient();
+
 export default function App() {
   return (
     <SafeAreaProvider>
-      <QuivoApp />
+      <QueryClientProvider client={queryClient}>
+        <NavigationContainer>
+          <QuivoApp />
+        </NavigationContainer>
+      </QueryClientProvider>
     </SafeAreaProvider>
   );
 }
@@ -100,7 +108,7 @@ function QuivoApp() {
     const contexto = contextoDe(auth.estado);
     if (auth.estado.etapa === 'operacion' && contexto && auth.estado.deviceId) {
       return (
-        <OperationScreen
+        <OperationNavigator
           contexto={contexto}
           deviceId={auth.estado.deviceId}
           aviso={auth.estado.aviso}
