@@ -36,6 +36,12 @@ const CLAVES: Record<AgrupacionCumplimiento, { id: Prisma.Sql; nombre: Prisma.Sq
  * Una sola query con CTEs: `base` fija el universo de agrupaciones (asignaciones del
  * período) y los `LEFT JOIN` traen los agregados con `COALESCE` a 0 — así una línea con
  * asignaciones pero sin ningún cumplimiento todavía no desaparece del reporte.
+ *
+ * `recorridos_completados` cuenta `DISTINCT a.id` (asignaciones), no `DISTINCT so.id`
+ * (sesiones) — una asignación puede tener más de una `sesionOperativa` (reintentos: el
+ * conductor cierra y reabre la app, o corta y retoma el recorrido), y contar sesiones
+ * inflaba el completado por encima del asignado (ej. "3/2" en el dashboard, encontrado en
+ * auditoría 2026-08-11 con datos reales de dispositivo).
  */
 @Injectable()
 export class CumplimientoService {
@@ -57,7 +63,7 @@ export class CumplimientoService {
         recorridos AS (
           SELECT ${clave.id} as id,
             COUNT(DISTINCT a.id) as recorridos_asignados,
-            COUNT(DISTINCT so.id) FILTER (WHERE so.fin IS NOT NULL) as recorridos_completados
+            COUNT(DISTINCT a.id) FILTER (WHERE so.fin IS NOT NULL) as recorridos_completados
           FROM asignaciones a
           JOIN vehiculos v ON v.id = a."vehiculoId"
           JOIN rutas r ON r.id = a."rutaId"

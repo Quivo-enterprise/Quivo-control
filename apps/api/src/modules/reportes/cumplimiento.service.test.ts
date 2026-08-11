@@ -20,6 +20,7 @@ describe('CumplimientoService', () => {
   let rutaId: string;
   let puntoControlId: string;
   let vehiculoId: string;
+  let conductorId: string;
   const adminQuivo: AuthenticatedUser = { userId: 'test-admin-quivo', rol: 'admin_quivo', sindicatoId: null };
   const adminSindicatoA: AuthenticatedUser = {
     userId: 'test-admin-a',
@@ -67,6 +68,7 @@ describe('CumplimientoService', () => {
           licenciaConducir: 'LIC-1',
         },
       });
+      conductorId = conductor.id;
       const rotacion = await tx.rotacion.create({
         data: { sindicatoId: sindicatoAId, periodo: '2026-08', estado: 'publicada' },
       });
@@ -164,6 +166,35 @@ describe('CumplimientoService', () => {
     expect(fila?.puntosTotales).toBe(2);
     expect(fila?.puntosCumplidos).toBe(1);
     expect(fila?.porcentajeCumplimiento).toBe(50);
+  });
+
+  it('una asignación con más de una sesión finalizada (reintento) no infla recorridosCompletados por encima de recorridosAsignados', async () => {
+    const ahora = new Date();
+    const asignacion = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.asignacion.findFirstOrThrow({ where: { vehiculoId } }),
+    );
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.sesionOperativa.create({
+        data: {
+          sindicatoId: sindicatoAId,
+          asignacionId: asignacion.id,
+          vehiculoId,
+          conductorId,
+          deviceId: 'device-cmp-retry',
+          fin: ahora,
+          estado: 'finalizada',
+          accessTokenHash: randomUUID(),
+          refreshTokenHash: randomUUID(),
+          accessExpiresAt: new Date(ahora.getTime() + 60 * 60 * 1000),
+          refreshExpiresAt: new Date(ahora.getTime() + 60 * 60 * 1000),
+        },
+      }),
+    );
+
+    const filas = await service.obtener(adminQuivo, { por: 'linea' });
+    const fila = filas.find((f) => f.nombre === 'Línea Cumplimiento');
+    expect(fila?.recorridosAsignados).toBe(1);
+    expect(fila?.recorridosCompletados).toBe(1);
   });
 
   it('agrupa por vehículo usando la placa como nombre', async () => {
