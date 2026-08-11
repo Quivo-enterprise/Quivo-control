@@ -4,12 +4,12 @@ const BRAND_LOGOS = {
   logotipo: {
     light: '/brand/logotipo-principal.webp',
     dark: '/brand/logotipo-blanco.webp',
-    ratio: 1000 / 300,
+    ratio: 859.8 / 274.49,
   },
   isotipo: {
     light: '/brand/isotipo-principal.webp',
     dark: '/brand/isotipo-blanco.webp',
-    ratio: 300 / 199,
+    ratio: 650 / 487.46,
   },
 } as const;
 
@@ -20,9 +20,11 @@ export interface BrandLogoProps {
 }
 
 /**
- * Logo de QUIVO (assets del proyecto de landing, `MANUAL DE MARCA QUIVO V1.pdf`) con
- * variante clara/oscura según `prefers-color-scheme` — el design system ya cambia sus
- * propios tokens de color por el mismo media query, así que el logo debe seguirlo.
+ * Logo de la submarca QUIVO Control (carpeta de assets entregada aparte del manual de
+ * marca general de QUIVO) con variante clara/oscura según `prefers-color-scheme` — el
+ * design system ya cambia sus propios tokens de color por el mismo media query, así que
+ * el logo debe seguirlo. La variante oscura es el trazo invertido a blanco puro (los SVG
+ * fuente no traen una versión "blanco" separada).
  */
 export function BrandLogo({ variant = 'logotipo', height = 28, className }: BrandLogoProps) {
   const { light, dark, ratio } = BRAND_LOGOS[variant];
@@ -32,7 +34,7 @@ export function BrandLogo({ variant = 'logotipo', height = 28, className }: Bran
     <span className={className} style={{ display: 'inline-flex', alignItems: 'center', height }}>
       <Image
         src={light}
-        alt="QUIVO"
+        alt="QUIVO Control"
         height={height}
         width={width}
         style={{ height: '100%', width: 'auto' }}
@@ -41,7 +43,7 @@ export function BrandLogo({ variant = 'logotipo', height = 28, className }: Bran
       />
       <Image
         src={dark}
-        alt="QUIVO"
+        alt="QUIVO Control"
         height={height}
         width={width}
         style={{ height: '100%', width: 'auto' }}

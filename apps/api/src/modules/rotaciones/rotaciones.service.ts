@@ -5,19 +5,28 @@ import {
   RotacionSchema,
   type ActualizarAsignacion,
   type Asignacion,
+  type ConfigHorario,
   type CrearAsignacionManual,
   type GenerarRotacion,
   type Rotacion,
 } from '@quivo/shared';
 import { asegurarRutaVisible } from '../../common/geo/tenant-checks.js';
-import { finDeJornadaBolivia } from '../../common/tiempo/jornada.js';
+import { finDeJornadaBolivia, horaEnBolivia } from '../../common/tiempo/jornada.js';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
 const CONFLICTO_UNICIDAD = 'P2002';
 
+export interface SinCobertura {
+  vehiculoId: string;
+  rutaId: string;
+}
+
 @Injectable()
 export class RotacionesService {
-  async generar(actor: AuthenticatedUser, data: GenerarRotacion): Promise<Rotacion & { asignaciones: Asignacion[] }> {
+  async generar(
+    actor: AuthenticatedUser,
+    data: GenerarRotacion,
+  ): Promise<Rotacion & { asignaciones: Asignacion[]; sinCobertura: SinCobertura[] }> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
 
     return withTenantContext(toTenantContext(actor), async (tx) => {
@@ -56,54 +65,104 @@ export class RotacionesService {
           horario: { in: data.horarios },
           fecha: { in: fechasOrdenadas },
         },
-        select: { vehiculoId: true, fecha: true, horario: true },
+        select: { vehiculoId: true, fecha: true, horario: true, rutaId: true },
       });
       const ocupados = new Set(existentes.map((a) => claveOcupacion(a.vehiculoId, a.fecha, a.horario)));
 
-      // Reparto round-robin con mejor esfuerzo (ver comentario en GenerarRotacionSchema):
-      // si el vehículo que le toca en el turno ya está ocupado esa fecha/horario, se prueba
-      // con el siguiente; si se agotan todos, el slot queda sin cubrir en vez de abortar el
-      // resto de la generación.
       let vIdx = 0;
       let cIdx = 0;
       let orden = 1;
       const asignaciones: Asignacion[] = [];
 
+      const crear = async (
+        vehiculoId: string,
+        rutaId: string,
+        fecha: Date,
+        horario: string,
+        horaSalida: Date | null,
+        horaPresentacion: Date | null,
+      ) => {
+        const conductor = conductores.length > 0 ? conductores[cIdx % conductores.length] : null;
+        const creada = await tx.asignacion.create({
+          data: {
+            rotacionId: rotacion.id,
+            vehiculoId,
+            conductorId: conductor?.id ?? null,
+            rutaId,
+            fecha,
+            horario,
+            horaSalida,
+            horaPresentacion,
+            orden: orden++,
+            venceAt: finDeJornadaBolivia(fecha),
+          },
+        });
+        ocupados.add(claveOcupacion(vehiculoId, fecha, horario));
+        if (conductor) cIdx++;
+        asignaciones.push(toAsignacion(creada));
+      };
+
+      // Cobertura ya cubierta por asignaciones existentes (de cualquier rotación previa)
+      // dentro de este mismo período — cuenta para no repetir de más.
+      const cobertura = new Map<string, Set<string>>(vehiculos.map((v) => [v.id, new Set<string>()]));
+      for (const e of existentes) {
+        if (data.rutaIds.includes(e.rutaId)) cobertura.get(e.vehiculoId)?.add(e.rutaId);
+      }
+
+      // Reparto con mejor esfuerzo (ver comentario en GenerarRotacionSchema): un sub-slot
+      // recibe como máximo un vehículo, igual que antes. La única diferencia frente a un
+      // round-robin ciego es la prioridad al elegir *cuál* vehículo libre se lo lleva —
+      // modelo operativo Línea 120 (piloto Tiquipaya): se prefiere el que todavía no cubrió
+      // esa ruta/variante de línea, para que ningún vehículo activo quede sin pisar, al
+      // menos una vez en el período, cada ruta pedida. Si ya todos los vehículos libres la
+      // cubrieron, cae al primero libre (comportamiento original). Con suficiente capacidad
+      // de slots esto termina cubriendo todas las combinaciones vehículo×ruta sin inflar el
+      // total de asignaciones — sigue siendo un sub-slot, un vehículo. `vIdx` nunca se
+      // reinicia entre fechas: como los sub-slots de cada día se procesan siempre en el
+      // mismo orden (por horaSalida cuando hay horario pico), el puntero round-robin sigue
+      // avanzando día a día — el vehículo que salió primero hoy no vuelve a ser el primero
+      // mañana, sin necesitar una regla de equidad aparte.
       for (const fecha of fechasOrdenadas) {
         for (const horario of data.horarios) {
-          for (const rutaId of data.rutaIds) {
+          const subSlots = construirSubSlots(fecha, horario, data.rutaIds, data.configHorarios?.[horario]);
+          for (const subSlot of subSlots) {
+            let elegido: { vehiculoId: string; intento: number } | null = null;
+            let elegidoLibre: { vehiculoId: string; intento: number } | null = null;
             for (let intento = 0; intento < vehiculos.length; intento++) {
-              // `vIdx % vehiculos.length` siempre cae dentro del array (ya se validó
-              // `vehiculos.length > 0` más arriba) — TS no lo puede inferir solo.
-              const vehiculo = vehiculos[vIdx % vehiculos.length]!;
-              vIdx++;
-              const clave = claveOcupacion(vehiculo.id, fecha, horario);
-              if (ocupados.has(clave)) {
-                continue;
+              // `(vIdx + intento) % vehiculos.length` siempre cae dentro del array (ya se
+              // validó `vehiculos.length > 0` más arriba) — TS no lo puede inferir solo.
+              const candidato = vehiculos[(vIdx + intento) % vehiculos.length]!;
+              if (ocupados.has(claveOcupacion(candidato.id, fecha, horario))) continue;
+              elegidoLibre ??= { vehiculoId: candidato.id, intento };
+              if (!cobertura.get(candidato.id)!.has(subSlot.rutaId)) {
+                elegido = { vehiculoId: candidato.id, intento };
+                break;
               }
-              const conductor = conductores.length > 0 ? conductores[cIdx % conductores.length] : null;
-              const creada = await tx.asignacion.create({
-                data: {
-                  rotacionId: rotacion.id,
-                  vehiculoId: vehiculo.id,
-                  conductorId: conductor?.id ?? null,
-                  rutaId,
-                  fecha,
-                  horario,
-                  orden: orden++,
-                  venceAt: finDeJornadaBolivia(fecha),
-                },
-              });
-              ocupados.add(clave);
-              if (conductor) cIdx++;
-              asignaciones.push(toAsignacion(creada));
-              break;
             }
+            elegido ??= elegidoLibre;
+            if (!elegido) continue; // sin vehículo libre para este sub-slot — queda sin cubrir
+            await crear(
+              elegido.vehiculoId,
+              subSlot.rutaId,
+              fecha,
+              horario,
+              subSlot.horaSalida,
+              subSlot.horaPresentacion,
+            );
+            cobertura.get(elegido.vehiculoId)!.add(subSlot.rutaId);
+            vIdx += elegido.intento + 1;
           }
         }
       }
 
-      return { ...toRotacion(rotacion), asignaciones };
+      const sinCobertura: SinCobertura[] = [];
+      for (const vehiculo of vehiculos) {
+        for (const rutaId of data.rutaIds) {
+          if (!cobertura.get(vehiculo.id)!.has(rutaId)) sinCobertura.push({ vehiculoId: vehiculo.id, rutaId });
+        }
+      }
+
+      return { ...toRotacion(rotacion), asignaciones, sinCobertura };
     });
   }
 
@@ -262,6 +321,45 @@ function claveOcupacion(vehiculoId: string, fecha: Date, horario: string): strin
   return `${vehiculoId}|${fecha.toISOString().slice(0, 10)}|${horario}`;
 }
 
+interface SubSlot {
+  rutaId: string;
+  horaSalida: Date | null;
+  horaPresentacion: Date | null;
+}
+
+/** Sin `config` (horario sin horario pico configurado): un sub-slot por ruta, sin hora
+ * exacta — comportamiento previo, sin cambios. Con `config`: una salida cada
+ * `headwayMinutos` entre `horaInicio` y `horaFin` (inclusive), cicladas entre `rutaIds` en
+ * orden — "modo frecuencia combinada de línea" del modelo Línea 120 — cada una con su
+ * `horaPresentacion` (`horaSalida` menos el buffer). Más salidas = más vehículos distintos
+ * necesarios para cubrirlas (la unicidad `[vehiculoId, fecha, horario]` sigue permitiendo
+ * un solo sub-slot por vehículo en ese horario). */
+function construirSubSlots(
+  fecha: Date,
+  horario: string,
+  rutaIds: string[],
+  config: ConfigHorario | undefined,
+): SubSlot[] {
+  if (!config) {
+    return rutaIds.map((rutaId) => ({ rutaId, horaSalida: null, horaPresentacion: null }));
+  }
+  const [horaInicioH, horaInicioM] = config.horaInicio.split(':').map(Number);
+  const [horaFinH, horaFinM] = config.horaFin.split(':').map(Number);
+  const inicioMin = horaInicioH! * 60 + horaInicioM!;
+  const finMin = horaFinH! * 60 + horaFinM!;
+
+  const subSlots: SubSlot[] = [];
+  let i = 0;
+  for (let minuto = inicioMin; minuto <= finMin; minuto += config.headwayMinutos) {
+    const horaHHmm = `${String(Math.floor(minuto / 60)).padStart(2, '0')}:${String(minuto % 60).padStart(2, '0')}`;
+    const horaSalida = horaEnBolivia(fecha, horaHHmm);
+    const horaPresentacion = new Date(horaSalida.getTime() - config.bufferPresentacionMinutos * 60_000);
+    subSlots.push({ rutaId: rutaIds[i % rutaIds.length]!, horaSalida, horaPresentacion });
+    i++;
+  }
+  return subSlots;
+}
+
 function esConflictoUnicidad(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === CONFLICTO_UNICIDAD;
 }
@@ -301,6 +399,8 @@ function toAsignacion(row: {
   rutaId: string;
   fecha: Date;
   horario: string;
+  horaSalida: Date | null;
+  horaPresentacion: Date | null;
   orden: number;
   venceAt: Date;
   estado: string;

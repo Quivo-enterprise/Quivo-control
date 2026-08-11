@@ -15,12 +15,15 @@ export const AuditLogEntrySchema = z.object({
 });
 export type AuditLogEntry = z.infer<typeof AuditLogEntrySchema>;
 
-/** Filtros de `GET /v1/auditoria` — todos opcionales (RF-81..84, UI completa en QUI-248). */
+/** Filtros de `GET /v1/auditoria` — todos opcionales (RF-81..84, UI completa en QUI-248).
+ * `skip` pagina por offset sobre el resultado ordenado por `ts desc` (mismo límite fijo de
+ * 200 filas por página que ya tenía el service, ver auditoria.service.ts). */
 export const AuditoriaQuerySchema = z.object({
   entidad: z.string().min(1).optional(),
   accion: z.string().min(1).optional(),
   usuarioId: z.string().min(1).optional(),
   desde: z.coerce.date().optional(),
   hasta: z.coerce.date().optional(),
+  skip: z.coerce.number().int().min(0).optional(),
 });
 export type AuditoriaQuery = z.infer<typeof AuditoriaQuerySchema>;

@@ -15,11 +15,14 @@ export const SyncErrorEntrySchema = z.object({
 });
 export type SyncErrorEntry = z.infer<typeof SyncErrorEntrySchema>;
 
-/** Filtros de `GET /v1/sync-errores` — todos opcionales, mismo criterio que `AuditoriaQuerySchema`. */
+/** Filtros de `GET /v1/sync-errores` — todos opcionales, mismo criterio que `AuditoriaQuerySchema`.
+ * `skip` pagina por offset sobre el resultado ordenado por `ts desc` (mismo límite fijo de
+ * 200 filas por página que ya tenía el service, ver sync-errores.service.ts). */
 export const SyncErroresQuerySchema = z.object({
   deviceId: z.string().min(1).optional(),
   sesionId: uuidSchema.optional(),
   desde: z.coerce.date().optional(),
   hasta: z.coerce.date().optional(),
+  skip: z.coerce.number().int().min(0).optional(),
 });
 export type SyncErroresQuery = z.infer<typeof SyncErroresQuerySchema>;

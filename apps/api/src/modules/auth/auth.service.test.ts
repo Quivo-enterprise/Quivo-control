@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import { AuthService } from './auth.service.js';
 
@@ -32,5 +32,51 @@ describe('AuthService (contra Better-Auth real)', () => {
     await expect(
       authService.login({ email: 'admin@quivo.local', password: 'contraseña-incorrecta' }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  // Objetivo `admin@sindicato.local` (no `admin@quivo.local`, que usan los tests de arriba)
+  // — y se restaura la contraseña al final para no dejar el seed mutado entre corridas.
+  it('reset asistido: revoca sesiones existentes y permite login con la contraseña nueva', async () => {
+    const authService = new AuthService();
+    const actor = { userId: 'test-admin', rol: 'admin_quivo', sindicatoId: null };
+
+    const sesionPrevia = await authService.login({
+      email: 'admin@sindicato.local',
+      password: 'Quivo123!',
+    });
+
+    await authService.resetPasswordComoAdmin(actor, {
+      email: 'admin@sindicato.local',
+      newPassword: 'NuevaClave123!',
+    });
+
+    // La sesión que existía antes del reset queda revocada.
+    await expect(authService.refresh({ refreshToken: sesionPrevia.refreshToken })).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+
+    // La contraseña vieja ya no sirve; la nueva sí.
+    await expect(
+      authService.login({ email: 'admin@sindicato.local', password: 'Quivo123!' }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(
+      authService.login({ email: 'admin@sindicato.local', password: 'NuevaClave123!' }),
+    ).resolves.toMatchObject({ accessToken: expect.any(String) });
+
+    await authService.resetPasswordComoAdmin(actor, {
+      email: 'admin@sindicato.local',
+      newPassword: 'Quivo123!',
+    });
+  });
+
+  it('reset asistido: 404 si el email no existe', async () => {
+    const authService = new AuthService();
+    const actor = { userId: 'test-admin', rol: 'admin_quivo', sindicatoId: null };
+    await expect(
+      authService.resetPasswordComoAdmin(actor, {
+        email: 'no-existe@quivo.local',
+        newPassword: 'NuevaClave123!',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

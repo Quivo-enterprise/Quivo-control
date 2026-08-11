@@ -13,6 +13,7 @@ interface ParadaRow {
   tipo: string;
   orden: number;
   coord: string; // GeoJSON como texto (ST_AsGeoJSON devuelve `text`).
+  estado: string;
 }
 
 /** Mismo patrón que rutas.service.ts: sin RLS propia (hereda tenant vía rutaId → linea),
@@ -23,7 +24,7 @@ export class ParadasService {
     return withTenantContext(toTenantContext(actor), async (tx) => {
       await asegurarRutaVisible(tx, rutaId);
       const rows = await tx.$queryRaw<ParadaRow[]>`
-        SELECT id, "rutaId", tipo, orden, ST_AsGeoJSON(coord) as coord
+        SELECT id, "rutaId", tipo, orden, ST_AsGeoJSON(coord) as coord, estado
         FROM paradas WHERE "rutaId" = ${rutaId} ORDER BY orden ASC
       `;
       return rows.map(toParada);
@@ -45,11 +46,11 @@ export class ParadasService {
 
       const id = randomUUID();
       await tx.$executeRaw`
-        INSERT INTO paradas (id, "rutaId", tipo, orden, coord, "createdAt", "updatedAt")
+        INSERT INTO paradas (id, "rutaId", tipo, orden, coord, estado, "createdAt", "updatedAt")
         VALUES (
           ${id}, ${rutaId}, ${data.tipo}, ${data.orden},
           ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(data.coord)}), 4326)::geography,
-          now(), now()
+          ${data.estado}, now(), now()
         )
       `;
       return toParada(await obtenerFila(tx, id));
@@ -76,6 +77,9 @@ export class ParadasService {
       if (data.orden !== undefined) {
         await tx.$executeRaw`UPDATE paradas SET orden = ${data.orden}, "updatedAt" = now() WHERE id = ${id}`;
       }
+      if (data.estado !== undefined) {
+        await tx.$executeRaw`UPDATE paradas SET estado = ${data.estado}, "updatedAt" = now() WHERE id = ${id}`;
+      }
 
       return toParada(await obtenerFila(tx, id));
     });
@@ -84,7 +88,7 @@ export class ParadasService {
 
 async function obtenerFila(tx: Prisma.TransactionClient, id: string): Promise<ParadaRow> {
   const rows = await tx.$queryRaw<ParadaRow[]>`
-    SELECT id, "rutaId", tipo, orden, ST_AsGeoJSON(coord) as coord
+    SELECT id, "rutaId", tipo, orden, ST_AsGeoJSON(coord) as coord, estado
     FROM paradas WHERE id = ${id}
   `;
   const row = rows[0];

@@ -53,6 +53,11 @@ export async function apiFetch<T>(
     );
   }
 
+  // 204 (ej. POST /auth/admin/reset-password) no trae body — `.json()` sobre eso tira.
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }
 

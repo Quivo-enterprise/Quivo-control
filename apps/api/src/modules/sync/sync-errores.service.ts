@@ -21,7 +21,7 @@ export class SyncErroresService {
     };
 
     const rows = await withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, (tx) =>
-      tx.syncError.findMany({ where, orderBy: { ts: 'desc' }, take: LIMITE_FILAS }),
+      tx.syncError.findMany({ where, orderBy: { ts: 'desc' }, skip: filtros.skip ?? 0, take: LIMITE_FILAS }),
     );
     return rows.map((row) => SyncErrorEntrySchema.parse(row));
   }

@@ -8,6 +8,7 @@ function aQueryString(filtros: AuditoriaQuery): string {
   if (filtros.usuarioId) params.set('usuarioId', filtros.usuarioId);
   if (filtros.desde) params.set('desde', filtros.desde.toISOString());
   if (filtros.hasta) params.set('hasta', filtros.hasta.toISOString());
+  if (filtros.skip) params.set('skip', String(filtros.skip));
   const qs = params.toString();
   return qs ? `?${qs}` : '';
 }

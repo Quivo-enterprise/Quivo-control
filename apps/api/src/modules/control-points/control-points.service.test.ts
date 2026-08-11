@@ -69,6 +69,7 @@ describe('ControlPointsService', () => {
       coord: { type: 'Point', coordinates: [-58.4, -34.6] },
       radioToleranciaM: 20,
       obligatorio: true,
+      estado: 'activo',
     });
     expect(punto.rutaId).toBe(rutaAId);
     expect(punto.radioToleranciaM).toBe(20);
@@ -82,6 +83,7 @@ describe('ControlPointsService', () => {
         coord: { type: 'Point', coordinates: [-58.4, -34.65] },
         radioToleranciaM: 20,
         obligatorio: true,
+        estado: 'activo',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -93,6 +95,7 @@ describe('ControlPointsService', () => {
         coord: { type: 'Point', coordinates: [-58.4, -34.6] },
         radioToleranciaM: 20,
         obligatorio: true,
+        estado: 'activo',
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
@@ -109,6 +112,7 @@ describe('ControlPointsService', () => {
       coord: { type: 'Point', coordinates: [-58.395, -34.6] },
       radioToleranciaM: 15,
       obligatorio: true,
+      estado: 'activo',
     });
     const actualizado = await service.actualizar(adminSindicatoA, punto.id, {
       radioToleranciaM: 30,

@@ -39,3 +39,15 @@ export const ActualizarSancionSchema = z.object({
   evidenciaRef: z.string().max(2000).nullable().optional(),
 });
 export type ActualizarSancion = z.infer<typeof ActualizarSancionSchema>;
+
+/** Filtros de `GET /v1/sanciones` — `sindicatoId` solo lo usa `admin_quivo` (a `admin_sindicato`
+ * ya lo limita RLS a su propio tenant, ver sanciones.service.ts). `skip` pagina por offset
+ * sobre el resultado ordenado por `fechaHecho desc`, mismo límite fijo de 200 filas por
+ * página que `AuditoriaQuerySchema`/`SyncErroresQuerySchema`. */
+export const SancionesQuerySchema = z.object({
+  sindicatoId: sindicatoIdSchema.optional(),
+  estado: EstadoSancionSchema.optional(),
+  reglaId: uuidSchema.optional(),
+  skip: z.coerce.number().int().min(0).optional(),
+});
+export type SancionesQuery = z.infer<typeof SancionesQuerySchema>;

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PuntoGeoJsonSchema } from '../geo.js';
+import { EstadoParadaSchema } from '../enums/estados.js';
 import { uuidSchema } from '../primitives.js';
 
 // El doc técnico (§4.2) no especifica los valores de `tipo` para paradas — estos tres son
@@ -16,10 +17,13 @@ export const ParadaSchema = z.object({
   tipo: TipoParadaSchema,
   orden: z.number().int().nonnegative(),
   coord: PuntoGeoJsonSchema,
+  estado: EstadoParadaSchema,
 });
 export type Parada = z.infer<typeof ParadaSchema>;
 
-export const CrearParadaSchema = ParadaSchema.omit({ id: true, rutaId: true });
+export const CrearParadaSchema = ParadaSchema.omit({ id: true, rutaId: true, estado: true }).extend({
+  estado: EstadoParadaSchema.default('activo'),
+});
 export type CrearParada = z.infer<typeof CrearParadaSchema>;
 
 export const ActualizarParadaSchema = ParadaSchema.omit({ id: true, rutaId: true }).partial();

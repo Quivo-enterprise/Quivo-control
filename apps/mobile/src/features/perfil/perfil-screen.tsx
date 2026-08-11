@@ -71,9 +71,9 @@ export function PerfilScreen(props: PerfilScreenProps) {
             onPress={() => setAvisoProximamente('sync')}
           />
           <MenuRow
-            icon="shield-checkmark-outline"
-            title="Seguridad y salida"
-            description="Protege tu cuenta"
+            icon="log-out-outline"
+            title="Cerrar sesión"
+            description="Salir de tu cuenta en este dispositivo"
             onPress={props.onLogout}
           />
         </View>

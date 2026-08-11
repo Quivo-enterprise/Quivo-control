@@ -19,6 +19,7 @@ interface PuntoControlRow {
   coord: string; // GeoJSON como texto (ST_AsGeoJSON devuelve `text`).
   radioToleranciaM: number;
   obligatorio: boolean;
+  estado: string;
 }
 
 /**
@@ -33,7 +34,7 @@ export class ControlPointsService {
     return withTenantContext(toTenantContext(actor), async (tx) => {
       await asegurarRutaVisible(tx, rutaId);
       const rows = await tx.$queryRaw<PuntoControlRow[]>`
-        SELECT id, "rutaId", orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio
+        SELECT id, "rutaId", orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio, estado
         FROM puntos_control WHERE "rutaId" = ${rutaId} ORDER BY orden ASC
       `;
       return rows.map(toPuntoControl);
@@ -55,11 +56,11 @@ export class ControlPointsService {
 
       const id = randomUUID();
       await tx.$executeRaw`
-        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, "createdAt", "updatedAt")
+        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado, "createdAt", "updatedAt")
         VALUES (
           ${id}, ${rutaId}, ${data.orden},
           ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(data.coord)}), 4326)::geography,
-          ${data.radioToleranciaM}, ${data.obligatorio}, now(), now()
+          ${data.radioToleranciaM}, ${data.obligatorio}, ${data.estado}, now(), now()
         )
       `;
       return toPuntoControl(await obtenerFila(tx, id));
@@ -97,6 +98,9 @@ export class ControlPointsService {
           UPDATE puntos_control SET obligatorio = ${data.obligatorio}, "updatedAt" = now() WHERE id = ${id}
         `;
       }
+      if (data.estado !== undefined) {
+        await tx.$executeRaw`UPDATE puntos_control SET estado = ${data.estado}, "updatedAt" = now() WHERE id = ${id}`;
+      }
 
       return toPuntoControl(await obtenerFila(tx, id));
     });
@@ -105,7 +109,7 @@ export class ControlPointsService {
 
 async function obtenerFila(tx: Prisma.TransactionClient, id: string): Promise<PuntoControlRow> {
   const rows = await tx.$queryRaw<PuntoControlRow[]>`
-    SELECT id, "rutaId", orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio
+    SELECT id, "rutaId", orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio, estado
     FROM puntos_control WHERE id = ${id}
   `;
   const row = rows[0];

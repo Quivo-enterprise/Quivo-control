@@ -157,12 +157,27 @@ export default function RotacionesPage() {
       });
       setRotaciones((prev) => [nueva, ...prev]);
       setRotacionActual(nueva);
+      const avisos: string[] = [];
       const totalPedido = fechas.length * horariosSeleccionados.length * rutasSeleccionadas.length;
       if (nueva.asignaciones.length < totalPedido) {
-        setAvisoGeneracion(
+        avisos.push(
           `Se generaron ${nueva.asignaciones.length} de ${totalPedido} asignaciones — el resto quedó sin vehículo disponible en esa fecha y horario.`,
         );
       }
+      if (nueva.sinCobertura.length > 0) {
+        const detalle = nueva.sinCobertura
+          .map(({ vehiculoId, rutaId }) => {
+            const placa = vehiculoPorId.get(vehiculoId)?.placa ?? vehiculoId;
+            const ruta = rutas.find((r) => r.id === rutaId);
+            const etiquetaRuta = ruta ? `${ruta.linea.nombre} (${ruta.sentido})` : rutaId;
+            return `${placa} → ${etiquetaRuta}`;
+          })
+          .join(', ');
+        avisos.push(
+          `${nueva.sinCobertura.length} vehículo(s) no llegaron a cubrir alguna ruta pedida en este período (agenda sin slots libres): ${detalle}.`,
+        );
+      }
+      if (avisos.length > 0) setAvisoGeneracion(avisos.join(' '));
       setPeriodo('');
       setFechaInicio('');
       setFechaFin('');
@@ -488,6 +503,7 @@ function AsignacionModal(props: {
   const [horario, setHorario] = useState<Turno>(asignacion.horario);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmarQuitar, setConfirmarQuitar] = useState(false);
 
   async function guardar() {
     if (!token) return;
@@ -509,6 +525,7 @@ function AsignacionModal(props: {
 
   async function quitar() {
     if (!token) return;
+    setConfirmarQuitar(false);
     setGuardando(true);
     setError(null);
     try {
@@ -522,48 +539,60 @@ function AsignacionModal(props: {
   }
 
   return (
-    <Modal
-      open
-      title={`Editar asignación — ${vehiculos.find((v) => v.id === asignacion.vehiculoId)?.placa ?? ''}`}
-      onClose={onClose}
-      footer={
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'space-between', width: '100%' }}>
-          <Button variant="danger" onClick={quitar} disabled={guardando}>
-            Quitar
-          </Button>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <Button variant="ghost" onClick={onClose} disabled={guardando}>
-              Cancelar
+    <>
+      <Modal
+        open
+        title={`Editar asignación — ${vehiculos.find((v) => v.id === asignacion.vehiculoId)?.placa ?? ''}`}
+        onClose={onClose}
+        footer={
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'space-between', width: '100%' }}>
+            <Button variant="danger" onClick={() => setConfirmarQuitar(true)} disabled={guardando}>
+              Quitar
             </Button>
-            <Button onClick={guardar} disabled={guardando}>
-              {guardando ? 'Guardando...' : 'Guardar'}
-            </Button>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <Button variant="ghost" onClick={onClose} disabled={guardando}>
+                Cancelar
+              </Button>
+              <Button onClick={guardar} disabled={guardando}>
+                {guardando ? 'Guardando...' : 'Guardar'}
+              </Button>
+            </div>
           </div>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {error && <Alert variant="danger" title="No se pudo guardar">{error}</Alert>}
+          <Select
+            label="Ruta"
+            options={rutas.map((r) => ({ label: `${r.linea.codigo} — ${r.sentido}`, value: r.id }))}
+            value={rutaId}
+            onChange={(e) => setRutaId(e.target.value)}
+          />
+          <Select
+            label="Conductor"
+            options={[{ label: 'Sin conductor', value: '' }, ...conductores.map((c) => ({ label: c.nombre, value: c.id }))]}
+            value={conductorId}
+            onChange={(e) => setConductorId(e.target.value)}
+          />
+          <Select
+            label="Horario"
+            options={HORARIOS}
+            value={horario}
+            onChange={(e) => setHorario(e.target.value as Turno)}
+          />
         </div>
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {error && <Alert variant="danger" title="No se pudo guardar">{error}</Alert>}
-        <Select
-          label="Ruta"
-          options={rutas.map((r) => ({ label: `${r.linea.codigo} — ${r.sentido}`, value: r.id }))}
-          value={rutaId}
-          onChange={(e) => setRutaId(e.target.value)}
-        />
-        <Select
-          label="Conductor"
-          options={[{ label: 'Sin conductor', value: '' }, ...conductores.map((c) => ({ label: c.nombre, value: c.id }))]}
-          value={conductorId}
-          onChange={(e) => setConductorId(e.target.value)}
-        />
-        <Select
-          label="Horario"
-          options={HORARIOS}
-          value={horario}
-          onChange={(e) => setHorario(e.target.value as Turno)}
-        />
-      </div>
-    </Modal>
+      </Modal>
+
+      <ConfirmDialog
+        open={confirmarQuitar}
+        title="Quitar asignación"
+        message="Esta asignación se elimina de la rotación. Esta acción no se puede deshacer."
+        variant="danger"
+        confirmLabel={guardando ? 'Quitando...' : 'Quitar'}
+        onConfirm={quitar}
+        onCancel={() => setConfirmarQuitar(false)}
+      />
+    </>
   );
 }
 

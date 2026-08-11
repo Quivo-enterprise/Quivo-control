@@ -31,6 +31,10 @@ export interface EntityFieldConfig {
   pattern?: string;
   inputMode?: 'text' | 'numeric' | 'decimal' | 'tel' | 'email' | 'search' | 'url' | 'none';
   autoComplete?: string;
+  /** Sugerencias vía <datalist> para campos `text` sin catálogo fijo (ej. valores ya usados
+   * en otros registros) — no restringe el valor, solo evita que el usuario reescriba variantes
+   * del mismo texto libre. */
+  suggestions?: string[];
   normalize?: (value: string) => string;
   validate?: (value: string, values: Record<string, string>) => string | undefined;
 }
@@ -352,24 +356,34 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
                   onChange={(next) => handleFieldChange(field.key, next)}
                 />
               ) : (
-                <Input
-                  id={field.key}
-                  name={field.key}
-                  type={field.kind === 'number' ? 'number' : 'text'}
-                  value={formValues[field.key] ?? ''}
-                  onChange={(event) => handleFieldChange(field.key, event.target.value)}
-                  onBlur={(event) => {
-                    if (field.normalize)
-                      handleFieldChange(field.key, field.normalize(event.target.value));
-                  }}
-                  required={field.required}
-                  placeholder={field.placeholder}
-                  maxLength={field.maxLength}
-                  pattern={field.pattern}
-                  inputMode={field.inputMode}
-                  autoComplete={field.autoComplete}
-                  aria-invalid={Boolean(fieldErrors[field.key])}
-                />
+                <>
+                  <Input
+                    id={field.key}
+                    name={field.key}
+                    type={field.kind === 'number' ? 'number' : 'text'}
+                    value={formValues[field.key] ?? ''}
+                    onChange={(event) => handleFieldChange(field.key, event.target.value)}
+                    onBlur={(event) => {
+                      if (field.normalize)
+                        handleFieldChange(field.key, field.normalize(event.target.value));
+                    }}
+                    required={field.required}
+                    placeholder={field.placeholder}
+                    maxLength={field.maxLength}
+                    pattern={field.pattern}
+                    inputMode={field.inputMode}
+                    autoComplete={field.autoComplete}
+                    list={field.suggestions?.length ? `${field.key}-suggestions` : undefined}
+                    aria-invalid={Boolean(fieldErrors[field.key])}
+                  />
+                  {field.suggestions?.length ? (
+                    <datalist id={`${field.key}-suggestions`}>
+                      {field.suggestions.map((value) => (
+                        <option key={value} value={value} />
+                      ))}
+                    </datalist>
+                  ) : null}
+                </>
               )}
             </FormField>
           ))}

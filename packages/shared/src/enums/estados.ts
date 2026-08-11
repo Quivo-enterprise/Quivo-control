@@ -41,6 +41,19 @@ export type EstadoAsignacion = z.infer<typeof EstadoAsignacionSchema>;
 export const EstadoReglaSchema = z.enum(['activo', 'inactivo']);
 export type EstadoRegla = z.infer<typeof EstadoReglaSchema>;
 
+// Paradas/puntos de control/variantes no tenían estado — solo crear/actualizar, sin forma
+// de sacar de circulación un punto duplicado o mal ubicado (mismo criterio de soft-delete
+// que el resto del dominio: nunca DELETE real, porque `CumplimientoPc.puntoControlId` lo
+// referencia sin FK — un hard delete dejaría ese historial apuntando a un id inexistente).
+export const EstadoParadaSchema = z.enum(['activo', 'inactivo']);
+export type EstadoParada = z.infer<typeof EstadoParadaSchema>;
+
+export const EstadoPuntoControlSchema = z.enum(['activo', 'inactivo']);
+export type EstadoPuntoControl = z.infer<typeof EstadoPuntoControlSchema>;
+
+export const EstadoVarianteSchema = z.enum(['activo', 'inactivo']);
+export type EstadoVariante = z.infer<typeof EstadoVarianteSchema>;
+
 // Ninguno de los dos está detallado en el doc técnico más allá de mencionar "gravedad" y
 // "sujeto" — asunción de este equipo (RF-40..50, QUI-244).
 export const GravedadReglaSchema = z.enum(['leve', 'grave', 'gravisima']);

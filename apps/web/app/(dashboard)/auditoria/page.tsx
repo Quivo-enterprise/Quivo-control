@@ -23,6 +23,10 @@ const ENTIDADES = [
 
 const ACCIONES = ['crear', 'editar', 'anular', 'publicar'];
 
+// Mismo límite fijo que auditoria.service.ts — si una página viene completa, asumimos que
+// puede haber más y habilitamos "Cargar más" (no pedimos un COUNT aparte solo para eso).
+const TAMANO_PAGINA = 200;
+
 /** RF-81..84 (QUI-248) — reemplaza el modo demo, consume `GET /v1/auditoria` (QUI-230). */
 export default function AuditoriaPage() {
   const { token } = useAuth();
@@ -35,6 +39,8 @@ export default function AuditoriaPage() {
 
   const [filas, setFilas] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [cargandoMas, setCargandoMas] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detalle, setDetalle] = useState<AuditLogEntry | null>(null);
 
@@ -50,10 +56,35 @@ export default function AuditoriaPage() {
         desde: desde ? new Date(desde) : undefined,
         hasta: hasta ? new Date(hasta) : undefined,
       })
-      .then(setFilas)
+      .then((rows) => {
+        setFilas(rows);
+        setHasMore(rows.length === TAMANO_PAGINA);
+      })
       .catch((err: unknown) => setError(mensajeError(err)))
       .finally(() => setLoading(false));
   }, [token, entidad, accion, usuarioId, desde, hasta]);
+
+  async function cargarMas() {
+    if (!token) return;
+    setCargandoMas(true);
+    setError(null);
+    try {
+      const rows = await auditoriaApi.listar(token, {
+        entidad: entidad || undefined,
+        accion: accion || undefined,
+        usuarioId: usuarioId.trim() || undefined,
+        desde: desde ? new Date(desde) : undefined,
+        hasta: hasta ? new Date(hasta) : undefined,
+        skip: filas.length,
+      });
+      setFilas((actual) => [...actual, ...rows]);
+      setHasMore(rows.length === TAMANO_PAGINA);
+    } catch (err) {
+      setError(mensajeError(err));
+    } finally {
+      setCargandoMas(false);
+    }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -98,6 +129,14 @@ export default function AuditoriaPage() {
           ) : null;
         }}
       />
+
+      {hasMore && (
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <Button variant="secondary" onClick={cargarMas} disabled={cargandoMas}>
+            {cargandoMas ? 'Cargando...' : 'Cargar más'}
+          </Button>
+        </div>
+      )}
 
       <Modal
         open={detalle !== null}

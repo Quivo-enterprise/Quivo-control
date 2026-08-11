@@ -1,12 +1,22 @@
-import { Body, Controller, HttpCode, Inject, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Inject, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { LoginRequestSchema, LogoutRequestSchema, RefreshRequestSchema } from '@quivo/shared';
+import {
+  AdminResetPasswordRequestSchema,
+  LoginRequestSchema,
+  LogoutRequestSchema,
+  RefreshRequestSchema,
+} from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
+import { CurrentUser } from '../../common/auth/current-user.decorator.js';
+import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import { Roles } from '../../common/auth/roles.decorator.js';
+import { RolesGuard } from '../../common/auth/roles.guard.js';
 import { AuthService } from './auth.service.js';
 
 class LoginDto extends createZodDto(LoginRequestSchema) {}
 class RefreshDto extends createZodDto(RefreshRequestSchema) {}
 class LogoutDto extends createZodDto(LogoutRequestSchema) {}
+class AdminResetPasswordDto extends createZodDto(AdminResetPasswordRequestSchema) {}
 
 @Controller('auth')
 export class AuthController {
@@ -33,5 +43,19 @@ export class AuthController {
   @HttpCode(204)
   async logout(@Body() body: LogoutDto): Promise<void> {
     await this.authService.logout(body);
+  }
+
+  /** POST /v1/auth/admin/reset-password — reset asistido, sin flujo de email (ver
+   * AuthService.resetPasswordComoAdmin para el porqué). Solo `admin_quivo`: reinicia la
+   * contraseña de cualquier usuario, no solo de su propio sindicato. */
+  @Post('admin/reset-password')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin_quivo')
+  @HttpCode(204)
+  async resetPasswordComoAdmin(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() body: AdminResetPasswordDto,
+  ): Promise<void> {
+    await this.authService.resetPasswordComoAdmin(actor, body);
   }
 }

@@ -124,8 +124,8 @@ run_terminal_service() {
       run_backend_terminal
       ;;
     web)
-      info "Web disponible en http://localhost:3000"
-      exec env NEXT_PUBLIC_DEV_BYPASS_AUTH=false pnpm --filter @quivo/web dev --port 3000
+      info "Web disponible en http://localhost:3100"
+      exec env NEXT_PUBLIC_DEV_BYPASS_AUTH=false pnpm --filter @quivo/web dev --port 3100
       ;;
     mobile)
       info "Expo/Metro (cliente de desarrollo) disponible en http://localhost:8081"
@@ -233,7 +233,7 @@ export EXPO_PUBLIC_API_URL="${EXPO_PUBLIC_API_URL:-http://${QUIVO_HOST_IP}:3001}
 info "IP LAN detectada: $QUIVO_HOST_IP"
 info "La app móvil apuntará a $EXPO_PUBLIC_API_URL"
 
-require_free_port 3000 "web"
+require_free_port 3100 "web"
 require_free_port 3001 "backend"
 require_free_port 8081 "Expo/Metro"
 
@@ -273,8 +273,8 @@ start_service "compilador del backend" \
   pnpm --filter @quivo/api exec tsc -p tsconfig.json --watch --preserveWatchOutput
 start_service "backend (http://localhost:3001)" \
   pnpm --filter @quivo/api exec node --watch dist/main.js
-start_service "web (http://localhost:3000)" \
-  env NEXT_PUBLIC_DEV_BYPASS_AUTH=false pnpm --filter @quivo/web dev --port 3000
+start_service "web (http://localhost:3100)" \
+  env NEXT_PUBLIC_DEV_BYPASS_AUTH=false pnpm --filter @quivo/web dev --port 3100
 
 if [[ -r /dev/tty ]]; then
   info "Iniciando app móvil (Expo)..."

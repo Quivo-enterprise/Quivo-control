@@ -23,7 +23,7 @@ export class AuditoriaService {
     };
 
     const rows = await withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, (tx) =>
-      tx.auditLog.findMany({ where, orderBy: { ts: 'desc' }, take: LIMITE_FILAS }),
+      tx.auditLog.findMany({ where, orderBy: { ts: 'desc' }, skip: filtros.skip ?? 0, take: LIMITE_FILAS }),
     );
     return rows.map((row) => AuditLogEntrySchema.parse(row));
   }

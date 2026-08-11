@@ -11,6 +11,11 @@ export const AsignacionSchema = z.object({
   rutaId: uuidSchema,
   fecha: z.coerce.date(),
   horario: TurnoSchema,
+  // Hora exacta de despacho/presentación (modelo operativo Línea 120, piloto Tiquipaya) —
+  // `null` salvo que la generación haya recibido `configHorarios` para este `horario` (ver
+  // GenerarRotacionSchema). `horario` sigue siendo el dato obligatorio.
+  horaSalida: z.coerce.date().nullable(),
+  horaPresentacion: z.coerce.date().nullable(),
   orden: z.number().int().positive(),
   venceAt: z.coerce.date(),
   // La marca un job BullMQ repeatable (RF-57, QUI-234), no el request que crea/edita la

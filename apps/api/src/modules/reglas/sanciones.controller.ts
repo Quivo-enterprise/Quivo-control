@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import {
   ActualizarSancionSchema,
   CrearSancionSchema,
+  SancionesQuerySchema,
   type ActualizarSancion,
   type CrearSancion,
+  type SancionesQuery,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { Auditable } from '../../common/audit/audit.decorator.js';
@@ -15,6 +17,7 @@ import { SancionesService } from './sanciones.service.js';
 
 class CrearSancionDto extends createZodDto(CrearSancionSchema) {}
 class ActualizarSancionDto extends createZodDto(ActualizarSancionSchema) {}
+class SancionesQueryDto extends createZodDto(SancionesQuerySchema) {}
 
 const ROLES_SANCIONES = ['admin_quivo', 'admin_sindicato'] as const;
 
@@ -27,8 +30,8 @@ export class SancionesController {
   constructor(@Inject(SancionesService) private readonly sancionesService: SancionesService) {}
 
   @Get()
-  listar(@CurrentUser() actor: AuthenticatedUser) {
-    return this.sancionesService.listar(actor);
+  listar(@CurrentUser() actor: AuthenticatedUser, @Query() query: SancionesQueryDto) {
+    return this.sancionesService.listar(actor, query as SancionesQuery);
   }
 
   @Get(':id')

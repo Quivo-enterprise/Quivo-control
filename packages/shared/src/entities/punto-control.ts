@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PuntoGeoJsonSchema } from '../geo.js';
+import { EstadoPuntoControlSchema } from '../enums/estados.js';
 import { uuidSchema } from '../primitives.js';
 
 /** `coord` viaja como GeoJSON Point in/out — la columna real es `GEOGRAPHY(POINT)`
@@ -13,12 +14,19 @@ export const PuntoControlSchema = z.object({
   coord: PuntoGeoJsonSchema,
   radioToleranciaM: z.number().int().positive(),
   obligatorio: z.boolean(),
+  estado: EstadoPuntoControlSchema,
 });
 export type PuntoControl = z.infer<typeof PuntoControlSchema>;
 
-export const CrearPuntoControlSchema = PuntoControlSchema.omit({ id: true, rutaId: true, obligatorio: true }).extend(
-  { obligatorio: z.boolean().default(true) },
-);
+export const CrearPuntoControlSchema = PuntoControlSchema.omit({
+  id: true,
+  rutaId: true,
+  obligatorio: true,
+  estado: true,
+}).extend({
+  obligatorio: z.boolean().default(true),
+  estado: EstadoPuntoControlSchema.default('activo'),
+});
 export type CrearPuntoControl = z.infer<typeof CrearPuntoControlSchema>;
 
 export const ActualizarPuntoControlSchema = PuntoControlSchema.omit({ id: true, rutaId: true }).partial();

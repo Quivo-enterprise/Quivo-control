@@ -199,6 +199,243 @@ describe('RotacionesService', () => {
     expect(rotacionNueva.asignaciones[0]?.vehiculoId).not.toBe(vehiculoOcupado);
   });
 
+  it('cada vehículo cubre al menos una vez cada ruta pedida, sin inflar el total de asignaciones (modelo Línea 120)', async () => {
+    const sindicatoDId = randomUUID();
+    const fechaUno = new Date('2027-02-20');
+    const fechaDos = new Date('2027-02-21');
+    const { rutaD1Id, rutaD2Id, vehiculoD1Id, vehiculoD2Id } = await withTenantContext(
+      { rol: 'admin_quivo', sindicatoId: null },
+      async (tx) => {
+        await tx.sindicato.create({ data: { id: sindicatoDId, nombre: 'Rotaciones Test D', estado: 'activo' } });
+        const linea = await tx.linea.create({ data: { sindicatoId: sindicatoDId, codigo: '120', nombre: 'Línea 120' } });
+        const rutaD1 = randomUUID();
+        const rutaD2 = randomUUID();
+        await tx.$executeRaw`
+          INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+          VALUES (${rutaD1}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())
+        `;
+        await tx.$executeRaw`
+          INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+          VALUES (${rutaD2}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())
+        `;
+        const v1 = await tx.vehiculo.create({
+          data: {
+            sindicatoId: sindicatoDId,
+            placa: 'ROTD01',
+            tipo: 'bus',
+            marca: 'x',
+            modelo: 'x',
+            color: 'x',
+            capacidad: 10,
+            estado: 'activo',
+          },
+        });
+        const v2 = await tx.vehiculo.create({
+          data: {
+            sindicatoId: sindicatoDId,
+            placa: 'ROTD02',
+            tipo: 'bus',
+            marca: 'x',
+            modelo: 'x',
+            color: 'x',
+            capacidad: 10,
+            estado: 'activo',
+          },
+        });
+        return { rutaD1Id: rutaD1, rutaD2Id: rutaD2, vehiculoD1Id: v1.id, vehiculoD2Id: v2.id };
+      },
+    );
+    const adminSindicatoD: AuthenticatedUser = {
+      userId: 'test-admin-sindicato-d',
+      rol: 'admin_sindicato',
+      sindicatoId: sindicatoDId,
+    };
+
+    const rotacion = await service.generar(adminSindicatoD, {
+      periodo: '2027-02-linea120',
+      rutaIds: [rutaD1Id, rutaD2Id],
+      fechas: [fechaUno, fechaDos],
+      horarios: ['manana', 'tarde'],
+    });
+
+    // 2 fechas × 2 horarios × 2 rutas = 8 slots, cada uno con exactamente un vehículo — el
+    // total de asignaciones no cambia por agregar la preferencia de cobertura.
+    expect(rotacion.asignaciones).toHaveLength(8);
+    expect(rotacion.sinCobertura).toEqual([]);
+
+    const rutasPorVehiculo = new Map<string, Set<string>>([
+      [vehiculoD1Id, new Set()],
+      [vehiculoD2Id, new Set()],
+    ]);
+    for (const a of rotacion.asignaciones) {
+      rutasPorVehiculo.get(a.vehiculoId)?.add(a.rutaId);
+    }
+    expect(rutasPorVehiculo.get(vehiculoD1Id)).toEqual(new Set([rutaD1Id, rutaD2Id]));
+    expect(rutasPorVehiculo.get(vehiculoD2Id)).toEqual(new Set([rutaD1Id, rutaD2Id]));
+
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      await tx.asignacion.deleteMany({ where: { vehiculoId: { in: [vehiculoD1Id, vehiculoD2Id] } } });
+      await tx.rotacion.deleteMany({ where: { sindicatoId: sindicatoDId } });
+      await tx.vehiculo.deleteMany({ where: { sindicatoId: sindicatoDId } });
+      await tx.$executeRaw`DELETE FROM rutas WHERE id IN (${rutaD1Id}, ${rutaD2Id})`;
+      await tx.linea.deleteMany({ where: { sindicatoId: sindicatoDId } });
+      await tx.sindicato.delete({ where: { id: sindicatoDId } });
+    });
+  });
+
+  it('reporta en sinCobertura la ruta que un vehículo no llegó a cubrir por falta de slots libres', async () => {
+    const sindicatoEId = randomUUID();
+    const fecha = new Date('2027-02-22');
+    const { rutaE1Id, rutaE2Id, vehiculoE1Id } = await withTenantContext(
+      { rol: 'admin_quivo', sindicatoId: null },
+      async (tx) => {
+        await tx.sindicato.create({ data: { id: sindicatoEId, nombre: 'Rotaciones Test E', estado: 'activo' } });
+        const linea = await tx.linea.create({ data: { sindicatoId: sindicatoEId, codigo: '120', nombre: 'Línea 120' } });
+        const rutaE1 = randomUUID();
+        const rutaE2 = randomUUID();
+        await tx.$executeRaw`
+          INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+          VALUES (${rutaE1}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())
+        `;
+        await tx.$executeRaw`
+          INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+          VALUES (${rutaE2}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())
+        `;
+        const v1 = await tx.vehiculo.create({
+          data: {
+            sindicatoId: sindicatoEId,
+            placa: 'ROTE01',
+            tipo: 'bus',
+            marca: 'x',
+            modelo: 'x',
+            color: 'x',
+            capacidad: 10,
+            estado: 'activo',
+          },
+        });
+        return { rutaE1Id: rutaE1, rutaE2Id: rutaE2, vehiculoE1Id: v1.id };
+      },
+    );
+    const adminSindicatoE: AuthenticatedUser = {
+      userId: 'test-admin-sindicato-e',
+      rol: 'admin_sindicato',
+      sindicatoId: sindicatoEId,
+    };
+
+    // Un solo vehículo, un solo horario: solo hay un slot disponible para dos rutas — como
+    // mucho una de las dos queda cubierta en este período.
+    const rotacion = await service.generar(adminSindicatoE, {
+      periodo: '2027-02-e-sincov',
+      rutaIds: [rutaE1Id, rutaE2Id],
+      fechas: [fecha],
+      horarios: ['noche'],
+    });
+
+    expect(rotacion.asignaciones).toHaveLength(1);
+    expect(rotacion.sinCobertura).toEqual([{ vehiculoId: vehiculoE1Id, rutaId: rutaE2Id }]);
+
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      await tx.asignacion.deleteMany({ where: { vehiculoId: vehiculoE1Id } });
+      await tx.rotacion.deleteMany({ where: { sindicatoId: sindicatoEId } });
+      await tx.vehiculo.deleteMany({ where: { sindicatoId: sindicatoEId } });
+      await tx.$executeRaw`DELETE FROM rutas WHERE id IN (${rutaE1Id}, ${rutaE2Id})`;
+      await tx.linea.deleteMany({ where: { sindicatoId: sindicatoEId } });
+      await tx.sindicato.delete({ where: { id: sindicatoEId } });
+    });
+  });
+
+  it('con configHorarios genera varias salidas espaciadas por headway, cicladas entre rutas, con hora de presentación', async () => {
+    const sindicatoFId = randomUUID();
+    const fecha = new Date('2027-02-23');
+    const { rutaF1Id, rutaF2Id, vehiculoIds } = await withTenantContext(
+      { rol: 'admin_quivo', sindicatoId: null },
+      async (tx) => {
+        await tx.sindicato.create({ data: { id: sindicatoFId, nombre: 'Rotaciones Test F', estado: 'activo' } });
+        const linea = await tx.linea.create({ data: { sindicatoId: sindicatoFId, codigo: '120', nombre: 'Línea 120' } });
+        const rutaF1 = randomUUID();
+        const rutaF2 = randomUUID();
+        await tx.$executeRaw`
+          INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+          VALUES (${rutaF1}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())
+        `;
+        await tx.$executeRaw`
+          INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+          VALUES (${rutaF2}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())
+        `;
+        const placas = ['ROTF01', 'ROTF02', 'ROTF03'];
+        const ids: string[] = [];
+        for (const placa of placas) {
+          const v = await tx.vehiculo.create({
+            data: {
+              sindicatoId: sindicatoFId,
+              placa,
+              tipo: 'bus',
+              marca: 'x',
+              modelo: 'x',
+              color: 'x',
+              capacidad: 10,
+              estado: 'activo',
+            },
+          });
+          ids.push(v.id);
+        }
+        return { rutaF1Id: rutaF1, rutaF2Id: rutaF2, vehiculoIds: ids };
+      },
+    );
+    const adminSindicatoF: AuthenticatedUser = {
+      userId: 'test-admin-sindicato-f',
+      rol: 'admin_sindicato',
+      sindicatoId: sindicatoFId,
+    };
+
+    const rotacion = await service.generar(adminSindicatoF, {
+      periodo: '2027-02-headway',
+      rutaIds: [rutaF1Id, rutaF2Id],
+      fechas: [fecha],
+      horarios: ['manana'],
+      configHorarios: {
+        manana: { horaInicio: '05:30', horaFin: '05:40', headwayMinutos: 5, bufferPresentacionMinutos: 10 },
+      },
+    });
+
+    // 05:30, 05:35, 05:40 → 3 salidas, una por cada vehículo activo (headway corto = hora
+    // pico, más trufis seguidos), cicladas entre las 2 rutas.
+    expect(rotacion.asignaciones).toHaveLength(3);
+    const vehiculosUsados = new Set(rotacion.asignaciones.map((a) => a.vehiculoId));
+    expect(vehiculosUsados.size).toBe(3);
+
+    const ordenadas = [...rotacion.asignaciones].sort(
+      (a, b) => a.horaSalida!.getTime() - b.horaSalida!.getTime(),
+    );
+    // Bolivia UTC-4: 05:30 local → 09:30Z, buffer de 10 min → presentación 09:20Z.
+    expect(ordenadas[0]?.horaSalida?.toISOString()).toBe('2027-02-23T09:30:00.000Z');
+    expect(ordenadas[0]?.horaPresentacion?.toISOString()).toBe('2027-02-23T09:20:00.000Z');
+    expect(ordenadas[1]?.horaSalida?.toISOString()).toBe('2027-02-23T09:35:00.000Z');
+    expect(ordenadas[2]?.horaSalida?.toISOString()).toBe('2027-02-23T09:40:00.000Z');
+    // Cicladas entre las 2 rutas en orden: F1, F2, F1.
+    expect(ordenadas.map((a) => a.rutaId)).toEqual([rutaF1Id, rutaF2Id, rutaF1Id]);
+
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      await tx.asignacion.deleteMany({ where: { vehiculoId: { in: vehiculoIds } } });
+      await tx.rotacion.deleteMany({ where: { sindicatoId: sindicatoFId } });
+      await tx.vehiculo.deleteMany({ where: { sindicatoId: sindicatoFId } });
+      await tx.$executeRaw`DELETE FROM rutas WHERE id IN (${rutaF1Id}, ${rutaF2Id})`;
+      await tx.linea.deleteMany({ where: { sindicatoId: sindicatoFId } });
+      await tx.sindicato.delete({ where: { id: sindicatoFId } });
+    });
+  });
+
+  it('sin configHorarios para ese horario, horaSalida/horaPresentacion quedan null (comportamiento previo)', async () => {
+    const rotacion = await service.generar(adminSindicatoA, {
+      periodo: '2027-02-sinhw',
+      rutaIds: [rutaAId],
+      fechas: [new Date('2027-02-24')],
+      horarios: ['manana'],
+    });
+    expect(rotacion.asignaciones[0]?.horaSalida).toBeNull();
+    expect(rotacion.asignaciones[0]?.horaPresentacion).toBeNull();
+  });
+
   it('rechaza rutas que no son del tenant del actor', async () => {
     await expect(
       service.generar(adminSindicatoA, {

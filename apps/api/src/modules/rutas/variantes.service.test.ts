@@ -68,14 +68,17 @@ describe('VariantesService', () => {
   });
 
   it('crea una variante bajo una ruta propia', async () => {
-    const variante = await variantesService.crear(adminSindicatoA, rutaAId, { nombre: 'Feriado' });
+    const variante = await variantesService.crear(adminSindicatoA, rutaAId, {
+      nombre: 'Feriado',
+      estado: 'activo',
+    });
     expect(variante.rutaId).toBe(rutaAId);
   });
 
   it('no puede crear una variante en una ruta de otro tenant (404)', async () => {
-    await expect(variantesService.crear(adminSindicatoA, rutaBId, { nombre: 'Hack' })).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    await expect(
+      variantesService.crear(adminSindicatoA, rutaBId, { nombre: 'Hack', estado: 'activo' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('lista solo las variantes de la ruta pedida', async () => {
@@ -84,20 +87,23 @@ describe('VariantesService', () => {
   });
 
   it('actualiza el nombre de una variante', async () => {
-    const variante = await variantesService.crear(adminSindicatoA, rutaAId, { nombre: 'Vieja' });
+    const variante = await variantesService.crear(adminSindicatoA, rutaAId, { nombre: 'Vieja', estado: 'activo' });
     const actualizada = await variantesService.actualizar(adminSindicatoA, variante.id, { nombre: 'Nueva' });
     expect(actualizada.nombre).toBe('Nueva');
   });
 
   it('obtiene una variante propia por id y 404 si es de otro tenant', async () => {
-    const variante = await variantesService.crear(adminSindicatoA, rutaAId, { nombre: 'Obtenible' });
+    const variante = await variantesService.crear(adminSindicatoA, rutaAId, {
+      nombre: 'Obtenible',
+      estado: 'activo',
+    });
     const obtenida = await variantesService.obtener(adminSindicatoA, variante.id);
     expect(obtenida.id).toBe(variante.id);
 
     const deB = await variantesService.crear(
       { userId: 'setup', rol: 'admin_quivo', sindicatoId: null },
       rutaBId,
-      { nombre: 'De otro tenant' },
+      { nombre: 'De otro tenant', estado: 'activo' },
     );
     await expect(variantesService.obtener(adminSindicatoA, deB.id)).rejects.toBeInstanceOf(NotFoundException);
   });

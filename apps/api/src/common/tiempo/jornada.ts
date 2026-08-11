@@ -30,3 +30,14 @@ export function finDeJornadaBolivia(fecha: Date): Date {
     ),
   );
 }
+
+/** Instante UTC que corresponde a una hora local de Bolivia (`"HH:mm"`) del `fecha` dado —
+ * mismo criterio que `finDeJornadaBolivia`, para horarios de despacho/presentación exactos
+ * (modelo operativo Línea 120, RF-ROT-004). `horaHHmm` ya viene validada por
+ * `ConfigHorarioSchema` (`@quivo/shared`), no se revalida acá. */
+export function horaEnBolivia(fecha: Date, horaHHmm: string): Date {
+  const [horas, minutos] = horaHHmm.split(':').map(Number) as [number, number];
+  return new Date(
+    Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate(), horas + BOLIVIA_UTC_OFFSET_HOURS, minutos, 0),
+  );
+}

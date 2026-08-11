@@ -53,6 +53,9 @@ const SUJETO_TIPOS: { label: string; value: SujetoTipo }[] = [
   { label: 'Socio', value: 'socio' },
 ];
 
+// Mismo límite fijo que sanciones.service.ts.
+const TAMANO_PAGINA = 200;
+
 type Transicion = 'aplicar' | 'anular' | 'apelar' | 'pagar';
 
 const TRANSICIONES_POR_ESTADO: Record<EstadoSancion, Transicion[]> = {
@@ -96,10 +99,22 @@ function ReglasTab() {
   const { token, user } = useAuth();
   const { options: sindicatoOptions, nombrePorId } = useSindicatoOptions();
 
+  // Sin catálogo fijo de tipos de regla (decisión explícita — ver QUI-245): sugerimos los
+  // valores ya usados vía <datalist> para evitar variantes del mismo texto ("puntualidad" vs
+  // "Puntualidad") sin bloquear tipos nuevos que un sindicato quiera dar de alta.
+  const [tiposExistentes, setTiposExistentes] = useState<string[]>([]);
+  useEffect(() => {
+    if (!token) return;
+    reglasApi
+      .listar(token)
+      .then((reglas) => setTiposExistentes(Array.from(new Set(reglas.map((r) => r.tipo))).sort()))
+      .catch(() => {});
+  }, [token]);
+
   const fields = useMemo<EntityFieldConfig[]>(() => {
     const base: EntityFieldConfig[] = [
       { key: 'nombre', label: 'Nombre', kind: 'text', required: true },
-      { key: 'tipo', label: 'Tipo', kind: 'text', required: true },
+      { key: 'tipo', label: 'Tipo', kind: 'text', required: true, suggestions: tiposExistentes },
       {
         key: 'gravedad',
         label: 'Gravedad',
@@ -133,7 +148,7 @@ function ReglasTab() {
       ],
     });
     return base;
-  }, [user?.rol, sindicatoOptions]);
+  }, [user?.rol, sindicatoOptions, tiposExistentes]);
 
   const dataSource = useMemo<ModuleDataSource<Regla>>(
     () => ({
@@ -192,6 +207,8 @@ function SancionesTab() {
   const [sanciones, setSanciones] = useState<Sancion[]>([]);
 
   const [loading, setLoading] = useState(true);
+  const [cargandoMas, setCargandoMas] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalNueva, setModalNueva] = useState(false);
   const [confirmacion, setConfirmacion] = useState<{ sancion: Sancion; transicion: Transicion } | null>(null);
@@ -200,27 +217,45 @@ function SancionesTab() {
   const [filtroEstado, setFiltroEstado] = useState('');
   const [filtroReglaId, setFiltroReglaId] = useState('');
 
+  // Reglas/vehículos/conductores/socios: catálogos chicos, se recargan solo al cambiar de
+  // sindicato (los usa el modal de nueva sanción para poblar selects).
   useEffect(() => {
     if (!token || !sindicatoId) return;
-    setLoading(true);
     setError(null);
     Promise.all([
       reglasApi.listar(token),
       vehiculosApi.listar(token),
       conductoresApi.listar(token),
       sociosApi.listar(token),
-      sancionesApi.listar(token),
     ])
-      .then(([r, v, c, s, sc]) => {
+      .then(([r, v, c, s]) => {
         setReglas(r.filter((x) => x.sindicatoId === sindicatoId));
         setVehiculos(v.filter((x) => x.sindicatoId === sindicatoId));
         setConductores(c.filter((x) => x.sindicatoId === sindicatoId));
         setSocios(s.filter((x) => x.sindicatoId === sindicatoId));
-        setSanciones(sc.filter((x) => x.sindicatoId === sindicatoId));
+      })
+      .catch((err: unknown) => setError(mensajeError(err)));
+  }, [token, sindicatoId]);
+
+  // Sanciones: filtradas y paginadas server-side (puede crecer sin límite con el tiempo, a
+  // diferencia de los catálogos de arriba) — se recarga también al cambiar de filtro.
+  useEffect(() => {
+    if (!token || !sindicatoId) return;
+    setLoading(true);
+    setError(null);
+    sancionesApi
+      .listar(token, {
+        sindicatoId,
+        estado: (filtroEstado || undefined) as EstadoSancion | undefined,
+        reglaId: filtroReglaId || undefined,
+      })
+      .then((rows) => {
+        setSanciones(rows);
+        setHasMore(rows.length === TAMANO_PAGINA);
       })
       .catch((err: unknown) => setError(mensajeError(err)))
       .finally(() => setLoading(false));
-  }, [token, sindicatoId]);
+  }, [token, sindicatoId, filtroEstado, filtroReglaId]);
 
   const reglaPorId = useMemo(() => new Map(reglas.map((r) => [r.id, r])), [reglas]);
   const sujetoLabel = useMemo(() => {
@@ -234,14 +269,35 @@ function SancionesTab() {
     };
   }, [vehiculos, conductores, socios]);
 
-  const sancionesFiltradas = sanciones.filter(
-    (s) => (!filtroEstado || s.estado === filtroEstado) && (!filtroReglaId || s.reglaId === filtroReglaId),
-  );
+  async function cargarMasSanciones() {
+    if (!token || !sindicatoId) return;
+    setCargandoMas(true);
+    setError(null);
+    try {
+      const rows = await sancionesApi.listar(token, {
+        sindicatoId,
+        estado: (filtroEstado || undefined) as EstadoSancion | undefined,
+        reglaId: filtroReglaId || undefined,
+        skip: sanciones.length,
+      });
+      setSanciones((actual) => [...actual, ...rows]);
+      setHasMore(rows.length === TAMANO_PAGINA);
+    } catch (err) {
+      setError(mensajeError(err));
+    } finally {
+      setCargandoMas(false);
+    }
+  }
 
   async function refrescar() {
-    if (!token) return;
-    const lista = await sancionesApi.listar(token);
-    setSanciones(lista.filter((x) => x.sindicatoId === sindicatoId));
+    if (!token || !sindicatoId) return;
+    const lista = await sancionesApi.listar(token, {
+      sindicatoId,
+      estado: (filtroEstado || undefined) as EstadoSancion | undefined,
+      reglaId: filtroReglaId || undefined,
+    });
+    setSanciones(lista);
+    setHasMore(lista.length === TAMANO_PAGINA);
   }
 
   async function confirmarTransicion() {
@@ -302,7 +358,7 @@ function SancionesTab() {
 
           {loading ? (
             <Loader label="Cargando sanciones..." />
-          ) : sancionesFiltradas.length === 0 ? (
+          ) : sanciones.length === 0 ? (
             <Card header="Sanciones">
               <span>Sin sanciones para estos filtros.</span>
             </Card>
@@ -320,7 +376,7 @@ function SancionesTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sancionesFiltradas.map((s) => (
+                  {sanciones.map((s) => (
                     <tr key={s.id}>
                       <td style={celdaCuerpo}>{formatearFecha(s.fechaHecho)}</td>
                       <td style={celdaCuerpo}>{reglaPorId.get(s.reglaId)?.nombre ?? s.reglaId}</td>
@@ -349,6 +405,14 @@ function SancionesTab() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {hasMore && (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <Button variant="secondary" onClick={cargarMasSanciones} disabled={cargandoMas}>
+                {cargandoMas ? 'Cargando...' : 'Cargar más'}
+              </Button>
             </div>
           )}
         </>

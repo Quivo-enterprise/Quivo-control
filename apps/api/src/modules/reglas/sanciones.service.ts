@@ -1,7 +1,18 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, withTenantContext } from '@quivo/db';
-import { SancionSchema, type ActualizarSancion, type CrearSancion, type EstadoSancion, type Sancion } from '@quivo/shared';
+import {
+  SancionSchema,
+  type ActualizarSancion,
+  type CrearSancion,
+  type EstadoSancion,
+  type Sancion,
+  type SancionesQuery,
+} from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+
+/** Mismo límite fijo que auditoria.service.ts/sync-errores.service.ts — evita traer tablas
+ * completas a memoria; el cliente pagina con `skip` sobre `fechaHecho desc`. */
+const LIMITE_FILAS = 200;
 
 /**
  * Transiciones válidas (RF-40..50) — el doc técnico solo lista los 5 estados posibles, no
@@ -19,11 +30,21 @@ const TRANSICIONES_VALIDAS: Record<EstadoSancion, EstadoSancion[]> = {
 
 @Injectable()
 export class SancionesService {
-  async listar(actor: AuthenticatedUser): Promise<Sancion[]> {
+  async listar(actor: AuthenticatedUser, filtros: SancionesQuery = {}): Promise<Sancion[]> {
+    // `admin_sindicato` queda limitado a su propio tenant sin importar `filtros.sindicatoId`
+    // (RLS + este `where` explícito); `admin_quivo` puede filtrar por cualquier sindicato o
+    // pedir todos (queda igual de acotado por LIMITE_FILAS en ambos casos).
+    const where: Prisma.SancionWhereInput = {
+      sindicatoId: actor.sindicatoId ?? filtros.sindicatoId,
+      estado: filtros.estado,
+      reglaId: filtros.reglaId,
+    };
     const rows = await withTenantContext(toTenantContext(actor), (tx) =>
       tx.sancion.findMany({
-        where: actor.sindicatoId ? { sindicatoId: actor.sindicatoId } : undefined,
+        where,
         orderBy: { fechaHecho: 'desc' },
+        skip: filtros.skip ?? 0,
+        take: LIMITE_FILAS,
       }),
     );
     return rows.map(toSancion);

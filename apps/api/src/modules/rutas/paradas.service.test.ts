@@ -72,6 +72,7 @@ describe('ParadasService', () => {
       tipo: 'origen',
       orden: 0,
       coord: { type: 'Point', coordinates: [-58.4, -34.6] }, // sobre el primer punto de la línea
+      estado: 'activo',
     });
     expect(parada.coord.type).toBe('Point');
     expect(parada.coord.coordinates[0]).toBeCloseTo(-58.4, 5);
@@ -83,6 +84,7 @@ describe('ParadasService', () => {
         tipo: 'intermedia',
         orden: 1,
         coord: { type: 'Point', coordinates: [-58.4, -34.65] }, // ~5.5km de la ruta
+        estado: 'activo',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -93,6 +95,7 @@ describe('ParadasService', () => {
         tipo: 'origen',
         orden: 0,
         coord: { type: 'Point', coordinates: [-58.4, -34.6] },
+        estado: 'activo',
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
@@ -102,6 +105,7 @@ describe('ParadasService', () => {
       tipo: 'destino',
       orden: 2,
       coord: { type: 'Point', coordinates: [-58.39, -34.6] },
+      estado: 'activo',
     });
     const lista = await paradasService.listarPorRuta(adminSindicatoA, rutaAId);
     expect(lista.length).toBeGreaterThanOrEqual(2);
@@ -113,6 +117,7 @@ describe('ParadasService', () => {
       tipo: 'intermedia',
       orden: 5,
       coord: { type: 'Point', coordinates: [-58.395, -34.6] },
+      estado: 'activo',
     });
     const actualizada = await paradasService.actualizar(adminSindicatoA, parada.id, { orden: 10 });
     expect(actualizada.orden).toBe(10);

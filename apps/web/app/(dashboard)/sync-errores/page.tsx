@@ -11,6 +11,9 @@ import { ApiError } from '../../../src/lib/api/client';
  * descarta en silencio: queda visible acá con motivo. Mismo patrón de página que
  * `/auditoria` (QUI-248), con `DataTable` genérico en vez del componente `AuditLog`
  * (pensado específicamente para el shape de `audit_log`). */
+// Mismo límite fijo que sync-errores.service.ts.
+const TAMANO_PAGINA = 200;
+
 export default function SyncErroresPage() {
   const { token } = useAuth();
 
@@ -21,6 +24,8 @@ export default function SyncErroresPage() {
 
   const [filas, setFilas] = useState<SyncErrorEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [cargandoMas, setCargandoMas] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detalle, setDetalle] = useState<SyncErrorEntry | null>(null);
 
@@ -35,10 +40,34 @@ export default function SyncErroresPage() {
         desde: desde ? new Date(desde) : undefined,
         hasta: hasta ? new Date(hasta) : undefined,
       })
-      .then(setFilas)
+      .then((rows) => {
+        setFilas(rows);
+        setHasMore(rows.length === TAMANO_PAGINA);
+      })
       .catch((err: unknown) => setError(mensajeError(err)))
       .finally(() => setLoading(false));
   }, [token, deviceId, sesionId, desde, hasta]);
+
+  async function cargarMas() {
+    if (!token) return;
+    setCargandoMas(true);
+    setError(null);
+    try {
+      const rows = await syncErroresApi.listar(token, {
+        deviceId: deviceId.trim() || undefined,
+        sesionId: sesionId.trim() || undefined,
+        desde: desde ? new Date(desde) : undefined,
+        hasta: hasta ? new Date(hasta) : undefined,
+        skip: filas.length,
+      });
+      setFilas((actual) => [...actual, ...rows]);
+      setHasMore(rows.length === TAMANO_PAGINA);
+    } catch (err) {
+      setError(mensajeError(err));
+    } finally {
+      setCargandoMas(false);
+    }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -73,6 +102,14 @@ export default function SyncErroresPage() {
           </Button>
         )}
       />
+
+      {hasMore && (
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <Button variant="secondary" onClick={cargarMas} disabled={cargandoMas}>
+            {cargandoMas ? 'Cargando...' : 'Cargar más'}
+          </Button>
+        </div>
+      )}
 
       <Modal
         open={detalle !== null}

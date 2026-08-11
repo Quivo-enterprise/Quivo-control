@@ -46,3 +46,13 @@ export const LogoutRequestSchema = z.object({
   refreshToken: z.string().min(1),
 });
 export type LogoutRequest = z.infer<typeof LogoutRequestSchema>;
+
+/** Contrato de POST /v1/auth/admin/reset-password — reset asistido, sin flujo de email
+ * (el proyecto no tiene proveedor de email configurado). Solo `admin_quivo` puede llamarlo
+ * (ver RolesGuard en el controller); la contraseña nueva se comunica fuera de banda al
+ * usuario. 8 caracteres mínimo, igual que el default de Better-Auth. */
+export const AdminResetPasswordRequestSchema = z.object({
+  email: z.string().email(),
+  newPassword: z.string().min(8).max(128),
+});
+export type AdminResetPasswordRequest = z.infer<typeof AdminResetPasswordRequestSchema>;

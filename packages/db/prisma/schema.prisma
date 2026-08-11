@@ -270,6 +270,8 @@ model Variante {
   rutaId    String
   ruta      Ruta     @relation(fields: [rutaId], references: [id], onDelete: Cascade)
   nombre    String
+  // Soft-delete (nunca DELETE real): mismo criterio que el resto del dominio.
+  estado    String   @default("activo")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -284,6 +286,8 @@ model Parada {
   tipo      String
   orden     Int
   coord     Unsupported("geography(Point,4326)")
+  // Soft-delete (nunca DELETE real): mismo criterio que el resto del dominio.
+  estado    String                               @default("activo")
   createdAt DateTime                             @default(now())
   updatedAt DateTime                             @updatedAt
 
@@ -299,6 +303,10 @@ model PuntoControl {
   coord            Unsupported("geography(Point,4326)")
   radioToleranciaM Int
   obligatorio      Boolean                              @default(true)
+  // Soft-delete (nunca DELETE real): `CumplimientoPc.puntoControlId` referencia este id sin
+  // FK (mismo patrón polimórfico que Sancion.sujetoId/AuditLog.entidadId) — un DELETE real
+  // dejaría ese historial apuntando a un id inexistente.
+  estado           String                               @default("activo")
   createdAt        DateTime                             @default(now())
   updatedAt        DateTime                             @updatedAt
 
@@ -348,24 +356,31 @@ model Rotacion {
 // packages/shared/src/enums/estados.ts `TurnoSchema` para los 3 valores usados por la UI —
 // asunción no confirmada por Producto, igual que las transiciones de estado de vehículos).
 model Asignacion {
-  id          String     @id @default(uuid())
-  rotacionId  String
-  rotacion    Rotacion   @relation(fields: [rotacionId], references: [id], onDelete: Cascade)
-  vehiculoId  String
-  vehiculo    Vehiculo   @relation(fields: [vehiculoId], references: [id], onDelete: Restrict)
-  conductorId String?
-  conductor   Conductor? @relation(fields: [conductorId], references: [id], onDelete: SetNull)
-  rutaId      String
-  ruta        Ruta       @relation(fields: [rutaId], references: [id], onDelete: Restrict)
-  fecha       DateTime   @db.Date
-  horario     String
-  orden       Int
-  venceAt     DateTime
+  id               String     @id @default(uuid())
+  rotacionId       String
+  rotacion         Rotacion   @relation(fields: [rotacionId], references: [id], onDelete: Cascade)
+  vehiculoId       String
+  vehiculo         Vehiculo   @relation(fields: [vehiculoId], references: [id], onDelete: Restrict)
+  conductorId      String?
+  conductor        Conductor? @relation(fields: [conductorId], references: [id], onDelete: SetNull)
+  rutaId           String
+  ruta             Ruta       @relation(fields: [rutaId], references: [id], onDelete: Restrict)
+  fecha            DateTime   @db.Date
+  horario          String
+  // Hora exacta de despacho y presentación (modelo operativo Línea 120, piloto Tiquipaya)
+  // — opcionales: `horario` (mañana/tarde/noche) sigue siendo el único dato obligatorio y
+  // el que rige el constraint de unicidad de abajo; estas dos solo se completan cuando la
+  // generación recibe configuración de horario pico (headway) para ese `horario`. Filas
+  // creadas antes de este cambio, o creadas a mano sin esa config, quedan en null.
+  horaSalida       DateTime?
+  horaPresentacion DateTime?
+  orden            Int
+  venceAt          DateTime
   // vigente | vencida (RF-57, QUI-234) — la marca un job BullMQ repeatable
   // (RotacionesModule) cuando `venceAt` ya pasó, no el request que la creó.
-  estado      String     @default("vigente")
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  estado           String     @default("vigente")
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   sesionesOperativas SesionOperativa[]
 
