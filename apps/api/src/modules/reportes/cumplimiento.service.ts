@@ -7,6 +7,10 @@ import {
   type CumplimientoQuery,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import {
+  inicioDeJornadaBolivia,
+  inicioDeJornadaSiguienteBolivia,
+} from '../../common/tiempo/jornada.js';
 
 interface FilaCumplimiento {
   id: string;
@@ -47,8 +51,15 @@ const CLAVES: Record<AgrupacionCumplimiento, { id: Prisma.Sql; nombre: Prisma.Sq
 export class CumplimientoService {
   async obtener(actor: AuthenticatedUser, query: CumplimientoQuery): Promise<CumplimientoFila[]> {
     const clave = CLAVES[query.por];
-    const desde = query.desde ?? new Date(0);
-    const hasta = query.hasta ?? new Date('9999-12-31');
+    // `asignaciones.fecha` es una fecha operativa pura (`@db.Date`); los cumplimientos,
+    // en cambio, son instantes. Cada uno requiere su propio límite para incluir el día
+    // calendario boliviano completo sin desplazar las asignaciones al día anterior.
+    const desdeFecha = query.desde ?? new Date(0);
+    const hastaFecha = query.hasta ?? new Date('9999-12-31');
+    const desdeInstante = query.desde ? inicioDeJornadaBolivia(query.desde) : new Date(0);
+    const hastaInstante = query.hasta
+      ? inicioDeJornadaSiguienteBolivia(query.hasta)
+      : new Date('9999-12-31T23:59:59.999Z');
 
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
       const filas = await tx.$queryRaw<FilaCumplimiento[]>`
@@ -58,7 +69,7 @@ export class CumplimientoService {
           JOIN vehiculos v ON v.id = a."vehiculoId"
           JOIN rutas r ON r.id = a."rutaId"
           JOIN lineas l ON l.id = r."lineaId"
-          WHERE a.fecha >= ${desde} AND a.fecha <= ${hasta}
+          WHERE a.fecha >= ${desdeFecha} AND a.fecha <= ${hastaFecha}
         ),
         recorridos AS (
           SELECT ${clave.id} as id,
@@ -69,7 +80,7 @@ export class CumplimientoService {
           JOIN rutas r ON r.id = a."rutaId"
           JOIN lineas l ON l.id = r."lineaId"
           LEFT JOIN sesiones_operativas so ON so."asignacionId" = a.id
-          WHERE a.fecha >= ${desde} AND a.fecha <= ${hasta}
+          WHERE a.fecha >= ${desdeFecha} AND a.fecha <= ${hastaFecha}
           GROUP BY ${clave.id}
         ),
         puntos AS (
@@ -82,7 +93,8 @@ export class CumplimientoService {
           JOIN vehiculos v ON v.id = a."vehiculoId"
           JOIN rutas r ON r.id = a."rutaId"
           JOIN lineas l ON l.id = r."lineaId"
-          WHERE cpc."validadoPor" = 'worker' AND cpc.ts >= ${desde} AND cpc.ts <= ${hasta}
+          WHERE cpc."validadoPor" = 'worker'
+            AND cpc.ts >= ${desdeInstante} AND cpc.ts < ${hastaInstante}
           GROUP BY ${clave.id}
         )
         SELECT

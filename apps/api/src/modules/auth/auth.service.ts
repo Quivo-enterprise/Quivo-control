@@ -11,6 +11,7 @@ import type {
   RefreshRequest,
   RefreshResponse,
   Rol,
+  UsuarioAdministrativo,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
@@ -64,6 +65,22 @@ export class AuthService {
    * "cerrado sesión" en su browser. */
   async logout({ refreshToken }: LogoutRequest): Promise<void> {
     await auth.api.signOut({ headers: this.bearerHeaders(refreshToken) });
+  }
+
+  /** GET /v1/auth/admin/users — directorio mínimo para preparar el reset asistido. La
+   * autorización vive en el controller; esta consulta no devuelve hashes, cuentas ni
+   * sesiones de Better Auth. */
+  async listarUsuarios(): Promise<UsuarioAdministrativo[]> {
+    return prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        rol: true,
+        sindicatoId: true,
+      },
+      orderBy: [{ rol: 'asc' }, { email: 'asc' }],
+    }) as Promise<UsuarioAdministrativo[]>;
   }
 
   /** POST /v1/auth/admin/reset-password — reset asistido por `admin_quivo` (ver RolesGuard

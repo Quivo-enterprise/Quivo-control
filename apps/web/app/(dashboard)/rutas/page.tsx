@@ -113,9 +113,10 @@ export default function RutasPage() {
   const [borradorInverso, setBorradorInverso] = useState<BorradorInverso | null>(null);
   const [copiarParadasInversas, setCopiarParadasInversas] = useState(true);
   const [copiarControlesInversos, setCopiarControlesInversos] = useState(true);
-  const [confirmarBaja, setConfirmarBaja] = useState<
-    { tipo: 'parada' | 'puntoControl' | 'variante'; id: string } | null
-  >(null);
+  const [confirmarBaja, setConfirmarBaja] = useState<{
+    tipo: 'parada' | 'puntoControl' | 'variante';
+    id: string;
+  } | null>(null);
   const [cambiandoEstado, setCambiandoEstado] = useState(false);
 
   const [loadingLineas, setLoadingLineas] = useState(true);
@@ -127,29 +128,56 @@ export default function RutasPage() {
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      setLineas([]);
+      setLoadingLineas(false);
+      return;
+    }
+    let cancelado = false;
     setLoadingLineas(true);
+    setError(null);
     lineasApi
       .listar(token)
-      .then(setLineas)
-      .catch((err: unknown) => setError(mensajeError(err)))
-      .finally(() => setLoadingLineas(false));
+      .then((lista) => {
+        if (!cancelado) setLineas(lista);
+      })
+      .catch((err: unknown) => {
+        if (!cancelado) setError(mensajeError(err));
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingLineas(false);
+      });
+    return () => {
+      cancelado = true;
+    };
   }, [token]);
 
   useEffect(() => {
     if (!token || !lineaId) {
       setRutas([]);
+      setRutaId('');
+      setLoadingRutas(false);
       return;
     }
+    let cancelado = false;
     setLoadingRutas(true);
+    setError(null);
     rutasApi
       .listarPorLinea(token, lineaId)
       .then((lista) => {
+        if (cancelado) return;
         setRutas(lista);
         setRutaId((actual) => (lista.some((ruta) => ruta.id === actual) ? actual : ''));
       })
-      .catch((err: unknown) => setError(mensajeError(err)))
-      .finally(() => setLoadingRutas(false));
+      .catch((err: unknown) => {
+        if (!cancelado) setError(mensajeError(err));
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingRutas(false);
+      });
+    return () => {
+      cancelado = true;
+    };
   }, [token, lineaId, revision]);
 
   useEffect(() => {
@@ -157,21 +185,32 @@ export default function RutasPage() {
       setParadas([]);
       setPuntosControl([]);
       setVariantes([]);
+      setLoadingDetalle(false);
       return;
     }
+    let cancelado = false;
     setLoadingDetalle(true);
+    setError(null);
     Promise.all([
       paradasApi.listarPorRuta(token, rutaId),
       puntosControlApi.listarPorRuta(token, rutaId),
       variantesApi.listarPorRuta(token, rutaId),
     ])
       .then(([p, pc, v]) => {
+        if (cancelado) return;
         setParadas(p);
         setPuntosControl(pc);
         setVariantes(v);
       })
-      .catch((err: unknown) => setError(mensajeError(err)))
-      .finally(() => setLoadingDetalle(false));
+      .catch((err: unknown) => {
+        if (!cancelado) setError(mensajeError(err));
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingDetalle(false);
+      });
+    return () => {
+      cancelado = true;
+    };
   }, [token, rutaId, revision]);
 
   const rutaSeleccionada = useMemo(
@@ -303,6 +342,14 @@ export default function RutasPage() {
     setEditandoPuntoControlId(null);
     setBorradorInverso(null);
     setError(null);
+  }
+
+  function limpiarDetalleRuta() {
+    setParadas([]);
+    setPuntosControl([]);
+    setVariantes([]);
+    setBorradorInverso(null);
+    setConfirmarBaja(null);
   }
 
   function onMapClick(point: MapPoint) {
@@ -438,9 +485,7 @@ export default function RutasPage() {
             );
           }
         } else {
-          setAviso(
-            'Ruta creada correctamente. Ahora puedes agregar paradas y puntos de control.',
-          );
+          setAviso('Ruta creada correctamente. Ahora puedes agregar paradas y puntos de control.');
         }
       }
     } catch (err) {
@@ -544,7 +589,10 @@ export default function RutasPage() {
         );
         setPuntosControl((prev) => prev.map((pc) => (pc.id === actualizado.id ? actualizado : pc)));
       } else {
-        const creado = await puntosControlApi.crear(token, rutaId, { ...payload, estado: 'activo' });
+        const creado = await puntosControlApi.crear(token, rutaId, {
+          ...payload,
+          estado: 'activo',
+        });
         setPuntosControl((prev) => [...prev, creado]);
       }
       setAviso(
@@ -699,27 +747,27 @@ export default function RutasPage() {
           },
         ]
       : modo === 'dibujar-ruta' && primerPuntoPendiente
-      ? [
-          {
-            ...primerPuntoPendiente,
-            label: 'Inicio del recorrido',
-            description: 'Nodo 1',
-            pinType: 'pin',
-            color: '#2e7d32',
-          },
-          ...(ultimoPuntoPendiente && puntosPendientes.length > 1
-            ? [
-                {
-                  ...ultimoPuntoPendiente,
-                  label: 'Final del recorrido',
-                  description: `Nodo ${puntosPendientes.length}`,
-                  pinType: 'pin' as const,
-                  color: '#c62828',
-                },
-              ]
-            : []),
-        ]
-      : [];
+        ? [
+            {
+              ...primerPuntoPendiente,
+              label: 'Inicio del recorrido',
+              description: 'Nodo 1',
+              pinType: 'pin',
+              color: '#2e7d32',
+            },
+            ...(ultimoPuntoPendiente && puntosPendientes.length > 1
+              ? [
+                  {
+                    ...ultimoPuntoPendiente,
+                    label: 'Final del recorrido',
+                    description: `Nodo ${puntosPendientes.length}`,
+                    pinType: 'pin' as const,
+                    color: '#c62828',
+                  },
+                ]
+              : []),
+          ]
+        : [];
 
   const distanciaSeleccionada = rutaSeleccionada
     ? calcularDistanciaRutaKm(rutaSeleccionada.geometria.coordinates)
@@ -802,6 +850,7 @@ export default function RutasPage() {
                 onChange={(event) => {
                   setLineaId(event.target.value);
                   setRutaId('');
+                  limpiarDetalleRuta();
                   setFiltroSentido('todos');
                   setFiltroEstado('todos');
                   setMostrarTodas(true);
@@ -880,6 +929,7 @@ export default function RutasPage() {
                         aria-pressed={r.id === rutaId}
                         onClick={() => {
                           setRutaId(r.id);
+                          limpiarDetalleRuta();
                           setMostrarTodas(false);
                           cancelarModo();
                         }}
@@ -973,15 +1023,11 @@ export default function RutasPage() {
                   <span>
                     <strong>Moviendo nodo {nodoSeleccionadoIndex + 1}</strong>
                     <small>
-                      El mapa está enfocado en este tramo. Haz clic en la nueva ubicación
-                      para mover el nodo.
+                      El mapa está enfocado en este tramo. Haz clic en la nueva ubicación para mover
+                      el nodo.
                     </small>
                   </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setNodoSeleccionadoIndex(null)}
-                  >
+                  <Button size="sm" variant="ghost" onClick={() => setNodoSeleccionadoIndex(null)}>
                     Ver recorrido completo
                   </Button>
                 </div>
@@ -1139,7 +1185,9 @@ export default function RutasPage() {
                             <strong>
                               #{p.orden} — {capitalizar(p.tipo)}
                             </strong>{' '}
-                            {p.estado === 'inactivo' && <StatusBadge status="inactive" label="Inactiva" />}
+                            {p.estado === 'inactivo' && (
+                              <StatusBadge status="inactive" label="Inactiva" />
+                            )}
                             <br />
                             <small className="routes-coordinate">
                               {p.coord.coordinates[1].toFixed(5)},{' '}
@@ -1147,7 +1195,11 @@ export default function RutasPage() {
                             </small>
                           </span>
                           <div style={{ display: 'flex', gap: '0.25rem' }}>
-                            <Button size="sm" variant="ghost" onClick={() => empezarEdicionParada(p)}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => empezarEdicionParada(p)}
+                            >
                               Editar
                             </Button>
                             {p.estado === 'inactivo' ? (
@@ -1207,7 +1259,9 @@ export default function RutasPage() {
                             <strong>
                               #{pc.orden} — radio {pc.radioToleranciaM} m
                             </strong>{' '}
-                            {pc.estado === 'inactivo' && <StatusBadge status="inactive" label="Inactivo" />}
+                            {pc.estado === 'inactivo' && (
+                              <StatusBadge status="inactive" label="Inactivo" />
+                            )}
                             <br />
                             <small className="routes-coordinate">
                               {pc.obligatorio ? 'Obligatorio' : 'Opcional'} ·{' '}
@@ -1237,7 +1291,9 @@ export default function RutasPage() {
                                 size="sm"
                                 variant="danger"
                                 disabled={cambiandoEstado}
-                                onClick={() => setConfirmarBaja({ tipo: 'puntoControl', id: pc.id })}
+                                onClick={() =>
+                                  setConfirmarBaja({ tipo: 'puntoControl', id: pc.id })
+                                }
                               >
                                 Eliminar
                               </Button>
@@ -1264,7 +1320,9 @@ export default function RutasPage() {
                     >
                       <span style={{ opacity: v.estado === 'inactivo' ? 0.5 : 1 }}>
                         <Tag>{v.nombre}</Tag>{' '}
-                        {v.estado === 'inactivo' && <StatusBadge status="inactive" label="Inactiva" />}
+                        {v.estado === 'inactivo' && (
+                          <StatusBadge status="inactive" label="Inactiva" />
+                        )}
                       </span>
                       {v.estado === 'inactivo' ? (
                         <Button

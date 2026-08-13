@@ -28,11 +28,17 @@ describe('ExportesService', () => {
   let puntoControlId: string;
   let vehiculoId: string;
   let conductorId: string;
-  const adminQuivo: AuthenticatedUser = { userId: 'test-admin-quivo', rol: 'admin_quivo', sindicatoId: null };
+  const adminQuivo: AuthenticatedUser = {
+    userId: 'test-admin-quivo',
+    rol: 'admin_quivo',
+    sindicatoId: null,
+  };
 
   beforeAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      await tx.sindicato.create({ data: { id: sindicatoId, nombre: 'Exportes Test', estado: 'activo' } });
+      await tx.sindicato.create({
+        data: { id: sindicatoId, nombre: 'Exportes Test', estado: 'activo' },
+      });
       const linea = await tx.linea.create({
         data: { sindicatoId, codigo: 'EX1', nombre: 'Línea Exportes' },
       });
@@ -197,21 +203,27 @@ describe('ExportesService', () => {
   });
 
   it('sancionesPorSujetoEstado: filtra por estado', async () => {
-    const filas = await drenar(service.sancionesPorSujetoEstado(adminQuivo, { estado: 'pendiente' }));
+    const filas = await drenar(
+      service.sancionesPorSujetoEstado(adminQuivo, { estado: 'pendiente' }),
+    );
     const propias = filas.filter((f) => f[1] === 'Regla Exportes');
     expect(propias).toHaveLength(1);
     expect(propias[0]?.[5]).toBe('pendiente');
   });
 
   it('sancionesPorSujetoEstado: filtra por sujetoTipo', async () => {
-    const filas = await drenar(service.sancionesPorSujetoEstado(adminQuivo, { sujetoTipo: 'vehiculo' }));
+    const filas = await drenar(
+      service.sancionesPorSujetoEstado(adminQuivo, { sujetoTipo: 'vehiculo' }),
+    );
     const propias = filas.filter((f) => f[1] === 'Regla Exportes');
     expect(propias).toHaveLength(1);
     expect(propias[0]?.[2]).toBe('vehiculo');
   });
 
   it('actividadPorVehiculoConductor: agrupa por vehículo con horas operadas y cumplimientos', async () => {
-    const filas = await drenar(service.actividadPorVehiculoConductor(adminQuivo, { por: 'vehiculo' }));
+    const filas = await drenar(
+      service.actividadPorVehiculoConductor(adminQuivo, { por: 'vehiculo' }),
+    );
     const fila = filas.find((f) => f[0] === vehiculoId);
     expect(fila).toBeDefined();
     expect(fila?.[1]).toBe('EXP001');
@@ -222,9 +234,32 @@ describe('ExportesService', () => {
   });
 
   it('actividadPorVehiculoConductor: agrupa por conductor', async () => {
-    const filas = await drenar(service.actividadPorVehiculoConductor(adminQuivo, { por: 'conductor' }));
+    const filas = await drenar(
+      service.actividadPorVehiculoConductor(adminQuivo, { por: 'conductor' }),
+    );
     const fila = filas.find((f) => f[0] === conductorId);
     expect(fila).toBeDefined();
     expect(fila?.[1]).toBe('Conductor Exportes');
+  });
+
+  it('exporta sesiones del cierre del día calendario boliviano', async () => {
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.sesionOperativa.updateMany({
+        where: { sindicatoId, deviceId: 'device-export' },
+        data: { inicio: new Date('2026-08-13T03:59:59.999Z') },
+      }),
+    );
+    const rango = {
+      desde: new Date('2026-08-12T00:00:00.000Z'),
+      hasta: new Date('2026-08-12T00:00:00.000Z'),
+    };
+
+    const recorridos = await drenar(service.recorridosPorPeriodo(adminQuivo, rango));
+    const actividad = await drenar(
+      service.actividadPorVehiculoConductor(adminQuivo, { ...rango, por: 'vehiculo' }),
+    );
+
+    expect(recorridos.some((fila) => fila[3] === 'EXP001')).toBe(true);
+    expect(actividad.some((fila) => fila[0] === vehiculoId)).toBe(true);
   });
 });

@@ -1,7 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Alert, Button, Card, DataTable, DatePicker, Input, Modal, PageHeader } from '@quivo/design-system';
+import {
+  Alert,
+  Button,
+  Card,
+  DataTable,
+  DatePicker,
+  Input,
+  Modal,
+  PageHeader,
+} from '@quivo/design-system';
 import type { SyncErrorEntry } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { syncErroresApi } from '../../../src/lib/api/sync-errores';
@@ -13,6 +22,21 @@ import { ApiError } from '../../../src/lib/api/client';
  * (pensado específicamente para el shape de `audit_log`). */
 // Mismo límite fijo que sync-errores.service.ts.
 const TAMANO_PAGINA = 200;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+interface FiltrosSync {
+  deviceId: string;
+  sesionId: string;
+  desde: string;
+  hasta: string;
+}
+
+const FILTROS_VACIOS: FiltrosSync = {
+  deviceId: '',
+  sesionId: '',
+  desde: '',
+  hasta: '',
+};
 
 export default function SyncErroresPage() {
   const { token } = useAuth();
@@ -21,6 +45,7 @@ export default function SyncErroresPage() {
   const [sesionId, setSesionId] = useState('');
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
+  const [filtrosAplicados, setFiltrosAplicados] = useState<FiltrosSync>(FILTROS_VACIOS);
 
   const [filas, setFilas] = useState<SyncErrorEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,24 +54,46 @@ export default function SyncErroresPage() {
   const [error, setError] = useState<string | null>(null);
   const [detalle, setDetalle] = useState<SyncErrorEntry | null>(null);
 
+  const sesionIdInvalida = sesionId.trim() !== '' && !UUID_REGEX.test(sesionId.trim());
+  const rangoFechasInvalido = Boolean(desde && hasta && desde > hasta);
+  const filtrosInvalidos = sesionIdInvalida || rangoFechasInvalido;
+
   useEffect(() => {
     if (!token) return;
+    let cancelado = false;
     setLoading(true);
     setError(null);
+    setHasMore(false);
     syncErroresApi
-      .listar(token, {
-        deviceId: deviceId.trim() || undefined,
-        sesionId: sesionId.trim() || undefined,
-        desde: desde ? new Date(desde) : undefined,
-        hasta: hasta ? new Date(hasta) : undefined,
-      })
+      .listar(token, aFiltrosDeConsulta(filtrosAplicados))
       .then((rows) => {
+        if (cancelado) return;
         setFilas(rows);
         setHasMore(rows.length === TAMANO_PAGINA);
       })
-      .catch((err: unknown) => setError(mensajeError(err)))
-      .finally(() => setLoading(false));
-  }, [token, deviceId, sesionId, desde, hasta]);
+      .catch((err: unknown) => {
+        if (!cancelado) setError(mensajeError(err));
+      })
+      .finally(() => {
+        if (!cancelado) setLoading(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [token, filtrosAplicados]);
+
+  function aplicarFiltros() {
+    if (filtrosInvalidos) return;
+    setFiltrosAplicados({ deviceId, sesionId, desde, hasta });
+  }
+
+  function limpiarFiltros() {
+    setDeviceId('');
+    setSesionId('');
+    setDesde('');
+    setHasta('');
+    setFiltrosAplicados(FILTROS_VACIOS);
+  }
 
   async function cargarMas() {
     if (!token) return;
@@ -54,10 +101,7 @@ export default function SyncErroresPage() {
     setError(null);
     try {
       const rows = await syncErroresApi.listar(token, {
-        deviceId: deviceId.trim() || undefined,
-        sesionId: sesionId.trim() || undefined,
-        desde: desde ? new Date(desde) : undefined,
-        hasta: hasta ? new Date(hasta) : undefined,
+        ...aFiltrosDeConsulta(filtrosAplicados),
         skip: filas.length,
       });
       setFilas((actual) => [...actual, ...rows]);
@@ -75,14 +119,41 @@ export default function SyncErroresPage() {
         title="Errores de sync"
         subtitle="RNF-35 — lotes/eventos móviles rechazados por el worker de ingesta (QUI-241)."
       />
-      {error && <Alert variant="danger" title="Error">{error}</Alert>}
+      {error && (
+        <Alert variant="danger" title="Error">
+          {error}
+        </Alert>
+      )}
 
       <Card header="Filtros">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
-          <Input label="Dispositivo" value={deviceId} onChange={(e) => setDeviceId(e.target.value)} />
-          <Input label="Sesión (id)" value={sesionId} onChange={(e) => setSesionId(e.target.value)} />
+          <Input
+            label="Dispositivo"
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+          />
+          <Input
+            label="Sesión (id)"
+            value={sesionId}
+            onChange={(e) => setSesionId(e.target.value)}
+            aria-invalid={sesionIdInvalida}
+            helperText={sesionIdInvalida ? 'Ingresá un UUID de sesión válido.' : undefined}
+          />
           <DatePicker label="Desde" value={desde} onChange={(e) => setDesde(e.target.value)} />
           <DatePicker label="Hasta" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+        </div>
+        {rangoFechasInvalido && (
+          <Alert variant="warning" title="Revisá el rango de fechas" style={{ marginTop: '1rem' }}>
+            La fecha de inicio no puede ser posterior a la fecha de fin.
+          </Alert>
+        )}
+        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+          <Button onClick={aplicarFiltros} disabled={filtrosInvalidos}>
+            Aplicar filtros
+          </Button>
+          <Button variant="ghost" onClick={limpiarFiltros}>
+            Limpiar filtros
+          </Button>
         </div>
       </Card>
 
@@ -133,7 +204,15 @@ export default function SyncErroresPage() {
             <span>
               <strong>Motivo:</strong> {detalle.error}
             </span>
-            <pre style={{ whiteSpace: 'pre-wrap', overflowX: 'auto', background: 'rgba(0,0,0,0.15)', padding: '0.75rem', borderRadius: '0.5rem' }}>
+            <pre
+              style={{
+                whiteSpace: 'pre-wrap',
+                overflowX: 'auto',
+                background: 'rgba(0,0,0,0.15)',
+                padding: '0.75rem',
+                borderRadius: '0.5rem',
+              }}
+            >
               {JSON.stringify(detalle.payload, null, 2)}
             </pre>
           </div>
@@ -141,6 +220,15 @@ export default function SyncErroresPage() {
       </Modal>
     </div>
   );
+}
+
+function aFiltrosDeConsulta({ deviceId, sesionId, desde, hasta }: FiltrosSync) {
+  return {
+    deviceId: deviceId.trim() || undefined,
+    sesionId: sesionId.trim() || undefined,
+    desde: desde ? new Date(desde) : undefined,
+    hasta: hasta ? new Date(hasta) : undefined,
+  };
 }
 
 function mensajeError(err: unknown): string {

@@ -41,6 +41,16 @@ const CI_CONDUCTOR_POR_SINDICATO = {
   [SINDICATO_B_ID]: '2000202 SC',
 } as const;
 
+const NOMBRE_SOCIO_POR_SINDICATO = {
+  [SINDICATO_A_ID]: 'María Quispe Mamani',
+  [SINDICATO_B_ID]: 'José Choque Mamani',
+} as const;
+
+const NOMBRE_CONDUCTOR_POR_SINDICATO = {
+  [SINDICATO_A_ID]: 'Pedro Quispe Mamani',
+  [SINDICATO_B_ID]: 'Lucía Choque Mamani',
+} as const;
+
 const USERS = [
   { email: 'admin@quivo.local', name: 'Admin QUIVO', rol: 'admin_quivo', sindicatoId: null },
   {
@@ -95,14 +105,16 @@ async function seedDatosDePrueba(
     const placa = PLACA_POR_SINDICATO[sindicato.id];
     const ciSocio = CI_SOCIO_POR_SINDICATO[sindicato.id];
     const ciConductor = CI_CONDUCTOR_POR_SINDICATO[sindicato.id];
+    const nombreSocio = NOMBRE_SOCIO_POR_SINDICATO[sindicato.id];
+    const nombreConductor = NOMBRE_CONDUCTOR_POR_SINDICATO[sindicato.id];
     const placaDemoAnterior = `AB${sindicato.id.slice(0, 3)}`;
     const socio = await tx.socio.upsert({
       where: { id: `${sindicato.id.slice(0, 8)}-0000-4000-8000-000000000001` },
-      update: { documentoIdentidad: ciSocio },
+      update: { nombre: nombreSocio, documentoIdentidad: ciSocio },
       create: {
         id: `${sindicato.id.slice(0, 8)}-0000-4000-8000-000000000001`,
         sindicatoId: sindicato.id,
-        nombre: `Socio de prueba (${sindicato.nombre})`,
+        nombre: nombreSocio,
         documentoIdentidad: ciSocio,
         estado: 'activo',
       },
@@ -141,6 +153,7 @@ async function seedDatosDePrueba(
     await tx.conductor.upsert({
       where: { id: `${sindicato.id.slice(0, 8)}-0000-4000-8000-000000000002` },
       update: {
+        nombre: nombreConductor,
         documentoIdentidad: ciConductor,
         licenciaConducir: ciConductor,
         credencialHash: credenciales.conductorHash,
@@ -148,7 +161,7 @@ async function seedDatosDePrueba(
       create: {
         id: `${sindicato.id.slice(0, 8)}-0000-4000-8000-000000000002`,
         sindicatoId: sindicato.id,
-        nombre: `Conductor de prueba (${sindicato.nombre})`,
+        nombre: nombreConductor,
         documentoIdentidad: ciConductor,
         licenciaConducir: ciConductor,
         estado: 'activo',

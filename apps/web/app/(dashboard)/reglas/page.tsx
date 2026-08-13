@@ -17,8 +17,20 @@ import {
   TextArea,
   type StatusBadgeStatus,
 } from '@quivo/design-system';
-import type { Conductor, EstadoSancion, Regla, Sancion, Socio, SujetoTipo, Vehiculo } from '@quivo/shared';
-import { ModuleTablePage, type EntityFieldConfig, type ModuleDataSource } from '../../../src/components/module-table-page';
+import type {
+  Conductor,
+  EstadoSancion,
+  Regla,
+  Sancion,
+  Socio,
+  SujetoTipo,
+  Vehiculo,
+} from '@quivo/shared';
+import {
+  ModuleTablePage,
+  type EntityFieldConfig,
+  type ModuleDataSource,
+} from '../../../src/components/module-table-page';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { ApiError } from '../../../src/lib/api/client';
 import { reglasApi } from '../../../src/lib/api/reglas';
@@ -57,6 +69,13 @@ const SUJETO_TIPOS: { label: string; value: SujetoTipo }[] = [
 const TAMANO_PAGINA = 200;
 
 type Transicion = 'aplicar' | 'anular' | 'apelar' | 'pagar';
+
+interface FiltrosSanciones {
+  estado: EstadoSancion | '';
+  reglaId: string;
+}
+
+const FILTROS_SANCIONES_VACIOS: FiltrosSanciones = { estado: '', reglaId: '' };
 
 const TRANSICIONES_POR_ESTADO: Record<EstadoSancion, Transicion[]> = {
   pendiente: ['aplicar', 'anular'],
@@ -136,7 +155,13 @@ function ReglasTab() {
       { key: 'descripcion', label: 'Descripción', kind: 'text' },
     ];
     if (user?.rol === 'admin_quivo') {
-      base.push({ key: 'sindicatoId', label: 'Sindicato', kind: 'select', options: sindicatoOptions, required: true });
+      base.push({
+        key: 'sindicatoId',
+        label: 'Sindicato',
+        kind: 'select',
+        options: sindicatoOptions,
+        required: true,
+      });
     }
     base.push({
       key: 'estado',
@@ -167,7 +192,12 @@ function ReglasTab() {
       searchPlaceholder="Buscar por nombre o tipo..."
       searchKeys={['nombre', 'tipo']}
       fields={fields}
-      createDefaults={{ gravedad: 'leve', aplicaA: 'conductor', estado: 'activo', sindicatoId: user?.sindicatoId ?? '' }}
+      createDefaults={{
+        gravedad: 'leve',
+        aplicaA: 'conductor',
+        estado: 'activo',
+        sindicatoId: user?.sindicatoId ?? '',
+      }}
       dataSource={dataSource}
       columns={[
         { key: 'nombre', header: 'Nombre' },
@@ -180,7 +210,9 @@ function ReglasTab() {
         {
           key: 'gravedad',
           header: 'Gravedad',
-          render: (row) => <StatusBadge status={GRAVEDAD_BADGE[row.gravedad]} label={row.gravedad} />,
+          render: (row) => (
+            <StatusBadge status={GRAVEDAD_BADGE[row.gravedad]} label={row.gravedad} />
+          ),
         },
         { key: 'aplicaA', header: 'Aplica a' },
         {
@@ -198,7 +230,8 @@ function SancionesTab() {
   const { options: sindicatoOptions } = useSindicatoOptions();
 
   const [sindicatoSeleccionado, setSindicatoSeleccionado] = useState('');
-  const sindicatoId = user?.rol === 'admin_quivo' ? sindicatoSeleccionado : (user?.sindicatoId ?? '');
+  const sindicatoId =
+    user?.rol === 'admin_quivo' ? sindicatoSeleccionado : (user?.sindicatoId ?? '');
 
   const [reglas, setReglas] = useState<Regla[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
@@ -211,16 +244,28 @@ function SancionesTab() {
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalNueva, setModalNueva] = useState(false);
-  const [confirmacion, setConfirmacion] = useState<{ sancion: Sancion; transicion: Transicion } | null>(null);
+  const [confirmacion, setConfirmacion] = useState<{
+    sancion: Sancion;
+    transicion: Transicion;
+  } | null>(null);
   const [procesando, setProcesando] = useState(false);
 
   const [filtroEstado, setFiltroEstado] = useState('');
   const [filtroReglaId, setFiltroReglaId] = useState('');
+  const [filtrosAplicados, setFiltrosAplicados] =
+    useState<FiltrosSanciones>(FILTROS_SANCIONES_VACIOS);
 
   // Reglas/vehículos/conductores/socios: catálogos chicos, se recargan solo al cambiar de
   // sindicato (los usa el modal de nueva sanción para poblar selects).
   useEffect(() => {
-    if (!token || !sindicatoId) return;
+    if (!token || !sindicatoId) {
+      setReglas([]);
+      setVehiculos([]);
+      setConductores([]);
+      setSocios([]);
+      return;
+    }
+    let cancelado = false;
     setError(null);
     Promise.all([
       reglasApi.listar(token),
@@ -229,33 +274,64 @@ function SancionesTab() {
       sociosApi.listar(token),
     ])
       .then(([r, v, c, s]) => {
+        if (cancelado) return;
         setReglas(r.filter((x) => x.sindicatoId === sindicatoId));
         setVehiculos(v.filter((x) => x.sindicatoId === sindicatoId));
         setConductores(c.filter((x) => x.sindicatoId === sindicatoId));
         setSocios(s.filter((x) => x.sindicatoId === sindicatoId));
       })
-      .catch((err: unknown) => setError(mensajeError(err)));
+      .catch((err: unknown) => {
+        if (!cancelado) setError(mensajeError(err));
+      });
+    return () => {
+      cancelado = true;
+    };
   }, [token, sindicatoId]);
 
   // Sanciones: filtradas y paginadas server-side (puede crecer sin límite con el tiempo, a
-  // diferencia de los catálogos de arriba) — se recarga también al cambiar de filtro.
+  // diferencia de los catálogos). Los filtros se aplican explícitamente para no consultar
+  // mientras se está eligiendo un estado o una regla.
   useEffect(() => {
-    if (!token || !sindicatoId) return;
+    if (!token || !sindicatoId) {
+      setSanciones([]);
+      setHasMore(false);
+      setLoading(false);
+      return;
+    }
+    let cancelado = false;
     setLoading(true);
     setError(null);
+    setHasMore(false);
     sancionesApi
-      .listar(token, {
-        sindicatoId,
-        estado: (filtroEstado || undefined) as EstadoSancion | undefined,
-        reglaId: filtroReglaId || undefined,
-      })
+      .listar(token, aFiltrosSanciones(sindicatoId, filtrosAplicados))
       .then((rows) => {
+        if (cancelado) return;
         setSanciones(rows);
         setHasMore(rows.length === TAMANO_PAGINA);
       })
-      .catch((err: unknown) => setError(mensajeError(err)))
-      .finally(() => setLoading(false));
-  }, [token, sindicatoId, filtroEstado, filtroReglaId]);
+      .catch((err: unknown) => {
+        if (!cancelado) setError(mensajeError(err));
+      })
+      .finally(() => {
+        if (!cancelado) setLoading(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [token, sindicatoId, filtrosAplicados]);
+
+  function aplicarFiltros() {
+    setFiltrosAplicados({
+      estado: filtroEstado as EstadoSancion | '',
+      reglaId: filtroReglaId,
+    });
+  }
+
+  function limpiarFiltros() {
+    setFiltroEstado('');
+    setFiltroReglaId('');
+    setFiltrosAplicados(FILTROS_SANCIONES_VACIOS);
+  }
 
   const reglaPorId = useMemo(() => new Map(reglas.map((r) => [r.id, r])), [reglas]);
   const sujetoLabel = useMemo(() => {
@@ -275,9 +351,7 @@ function SancionesTab() {
     setError(null);
     try {
       const rows = await sancionesApi.listar(token, {
-        sindicatoId,
-        estado: (filtroEstado || undefined) as EstadoSancion | undefined,
-        reglaId: filtroReglaId || undefined,
+        ...aFiltrosSanciones(sindicatoId, filtrosAplicados),
         skip: sanciones.length,
       });
       setSanciones((actual) => [...actual, ...rows]);
@@ -291,11 +365,10 @@ function SancionesTab() {
 
   async function refrescar() {
     if (!token || !sindicatoId) return;
-    const lista = await sancionesApi.listar(token, {
-      sindicatoId,
-      estado: (filtroEstado || undefined) as EstadoSancion | undefined,
-      reglaId: filtroReglaId || undefined,
-    });
+    const lista = await sancionesApi.listar(
+      token,
+      aFiltrosSanciones(sindicatoId, filtrosAplicados),
+    );
     setSanciones(lista);
     setHasMore(lista.length === TAMANO_PAGINA);
   }
@@ -317,22 +390,45 @@ function SancionesTab() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {error && <Alert variant="danger" title="Error">{error}</Alert>}
+      {error && (
+        <Alert variant="danger" title="Error">
+          {error}
+        </Alert>
+      )}
 
       {user?.rol === 'admin_quivo' && (
         <Card header="Sindicato">
           <Select
             options={[{ label: 'Seleccionar...', value: '' }, ...sindicatoOptions]}
             value={sindicatoSeleccionado}
-            onChange={(e) => setSindicatoSeleccionado(e.target.value)}
+            onChange={(e) => {
+              setSindicatoSeleccionado(e.target.value);
+              setFiltroEstado('');
+              setFiltroReglaId('');
+              setFiltrosAplicados(FILTROS_SANCIONES_VACIOS);
+              setModalNueva(false);
+            }}
           />
         </Card>
+      )}
+
+      {user?.rol === 'admin_quivo' && !sindicatoId && (
+        <Alert variant="info" title="Seleccioná un sindicato">
+          Elegí un sindicato para consultar sus sanciones o registrar una nueva.
+        </Alert>
       )}
 
       {sindicatoId && (
         <>
           <Card header="Filtros">
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', alignItems: 'end' }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '1rem',
+                alignItems: 'end',
+              }}
+            >
               <Select
                 label="Estado"
                 options={[
@@ -348,10 +444,19 @@ function SancionesTab() {
               />
               <Select
                 label="Regla"
-                options={[{ label: 'Todas', value: '' }, ...reglas.map((r) => ({ label: r.nombre, value: r.id }))]}
+                options={[
+                  { label: 'Todas', value: '' },
+                  ...reglas.map((r) => ({ label: r.nombre, value: r.id })),
+                ]}
                 value={filtroReglaId}
                 onChange={(e) => setFiltroReglaId(e.target.value)}
               />
+              <Button onClick={aplicarFiltros}>Aplicar filtros</Button>
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+              <Button variant="ghost" onClick={limpiarFiltros}>
+                Limpiar filtros
+              </Button>
               <Button onClick={() => setModalNueva(true)}>+ Nueva sanción</Button>
             </div>
           </Card>
@@ -453,6 +558,14 @@ function SancionesTab() {
   );
 }
 
+function aFiltrosSanciones(sindicatoId: string, { estado, reglaId }: FiltrosSanciones) {
+  return {
+    sindicatoId,
+    estado: estado || undefined,
+    reglaId: reglaId || undefined,
+  };
+}
+
 function NuevaSancionModal(props: {
   token: string | null;
   sindicatoId: string;
@@ -512,14 +625,21 @@ function NuevaSancionModal(props: {
           <Button variant="ghost" onClick={onClose} disabled={guardando}>
             Cancelar
           </Button>
-          <Button onClick={guardar} disabled={guardando || !reglaId || !sujetoId || !motivo.trim() || !fechaHecho}>
+          <Button
+            onClick={guardar}
+            disabled={guardando || !reglaId || !sujetoId || !motivo.trim() || !fechaHecho}
+          >
             {guardando ? 'Guardando...' : 'Guardar'}
           </Button>
         </div>
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {error && <Alert variant="danger" title="No se pudo guardar">{error}</Alert>}
+        {error && (
+          <Alert variant="danger" title="No se pudo guardar">
+            {error}
+          </Alert>
+        )}
         <Select
           label="Regla"
           options={reglas.map((r) => ({ label: `${r.nombre} (${r.gravedad})`, value: r.id }))}
@@ -542,7 +662,11 @@ function NuevaSancionModal(props: {
           onChange={(e) => setSujetoId(e.target.value)}
         />
         <TextArea label="Motivo" value={motivo} onChange={(e) => setMotivo(e.target.value)} />
-        <DatePicker label="Fecha del hecho" value={fechaHecho} onChange={(e) => setFechaHecho(e.target.value)} />
+        <DatePicker
+          label="Fecha del hecho"
+          value={fechaHecho}
+          onChange={(e) => setFechaHecho(e.target.value)}
+        />
         <Input
           label="Referencia de evidencia (opcional)"
           value={evidenciaRef}

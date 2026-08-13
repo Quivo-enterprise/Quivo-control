@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Inject, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
   AdminResetPasswordRequestSchema,
@@ -43,6 +43,15 @@ export class AuthController {
   @HttpCode(204)
   async logout(@Body() body: LogoutDto): Promise<void> {
     await this.authService.logout(body);
+  }
+
+  /** Directorio administrativo sin credenciales ni sesiones. El guard coincide con el del
+   * reset para que solo `admin_quivo` pueda conocer y seleccionar usuarios de otros tenants. */
+  @Get('admin/users')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin_quivo')
+  listarUsuarios() {
+    return this.authService.listarUsuarios();
   }
 
   /** POST /v1/auth/admin/reset-password — reset asistido, sin flujo de email (ver

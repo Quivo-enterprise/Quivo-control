@@ -20,6 +20,20 @@ export const AuthUserSchema = z.object({
 });
 export type AuthUser = z.infer<typeof AuthUserSchema>;
 
+/**
+ * Vista mínima del directorio de usuarios para el administrador de QUIVO. No expone
+ * credenciales, sesiones ni datos de cuentas de Better Auth; sirve para seleccionar con
+ * precisión a quién se le hará un restablecimiento asistido de contraseña.
+ */
+export const UsuarioAdministrativoSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  email: z.string().email(),
+  rol: RolSchema,
+  sindicatoId: sindicatoIdSchema.nullable(),
+});
+export type UsuarioAdministrativo = z.infer<typeof UsuarioAdministrativoSchema>;
+
 export const LoginResponseSchema = z.object({
   accessToken: z.string().min(1),
   refreshToken: z.string().min(1),

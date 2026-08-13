@@ -21,7 +21,11 @@ describe('RecorridosService', () => {
   let rutaId: string;
   let puntoControlId: string;
   let sesionId: string;
-  const adminQuivo: AuthenticatedUser = { userId: 'test-admin-quivo', rol: 'admin_quivo', sindicatoId: null };
+  const adminQuivo: AuthenticatedUser = {
+    userId: 'test-admin-quivo',
+    rol: 'admin_quivo',
+    sindicatoId: null,
+  };
   const adminSindicatoA: AuthenticatedUser = {
     userId: 'test-admin-a',
     rol: 'admin_sindicato',
@@ -35,11 +39,20 @@ describe('RecorridosService', () => {
 
   beforeAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      await tx.sindicato.create({ data: { id: sindicatoAId, nombre: 'Recorridos Test A', estado: 'activo' } });
-      await tx.sindicato.create({ data: { id: sindicatoBId, nombre: 'Recorridos Test B', estado: 'activo' } });
+      await tx.sindicato.create({
+        data: { id: sindicatoAId, nombre: 'Recorridos Test A', estado: 'activo' },
+      });
+      await tx.sindicato.create({
+        data: { id: sindicatoBId, nombre: 'Recorridos Test B', estado: 'activo' },
+      });
 
       const linea = await tx.linea.create({
-        data: { sindicatoId: sindicatoAId, codigo: 'RC1', nombre: 'Línea Recorridos', color: '#FD9E15' },
+        data: {
+          sindicatoId: sindicatoAId,
+          codigo: 'RC1',
+          nombre: 'Línea Recorridos',
+          color: '#FD9E15',
+        },
       });
       rutaId = randomUUID();
       await tx.$executeRaw`
@@ -180,11 +193,15 @@ describe('RecorridosService', () => {
   });
 
   it('admin_sindicato de otro tenant recibe 404 (RLS, no 403)', async () => {
-    await expect(service.obtener(adminSindicatoB, sesionId)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.obtener(adminSindicatoB, sesionId)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 
   it('una sesión inexistente devuelve 404', async () => {
-    await expect(service.obtener(adminQuivo, randomUUID())).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.obtener(adminQuivo, randomUUID())).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 
   it('listar devuelve la sesión con datos de vehículo/conductor/línea resueltos', async () => {
@@ -194,5 +211,21 @@ describe('RecorridosService', () => {
     expect(fila?.vehiculoPlaca).toBe('RCD001');
     expect(fila?.conductorNombre).toBe('Conductor Recorrido');
     expect(fila?.lineaNombre).toBe('Línea Recorridos');
+  });
+
+  it('incluye una sesión del cierre del día calendario boliviano', async () => {
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.sesionOperativa.update({
+        where: { id: sesionId },
+        data: { inicio: new Date('2026-08-13T03:59:59.999Z') },
+      }),
+    );
+
+    const filas = await service.listar(adminQuivo, {
+      desde: new Date('2026-08-12T00:00:00.000Z'),
+      hasta: new Date('2026-08-12T00:00:00.000Z'),
+    });
+
+    expect(filas.some((fila) => fila.id === sesionId)).toBe(true);
   });
 });

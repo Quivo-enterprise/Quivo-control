@@ -3,6 +3,10 @@ import { withTenantContext } from '@quivo/db';
 import type { Prisma } from '@quivo/db';
 import { SyncErrorEntrySchema, type SyncErrorEntry, type SyncErroresQuery } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import {
+  inicioDeJornadaBolivia,
+  inicioDeJornadaSiguienteBolivia,
+} from '../../common/tiempo/jornada.js';
 
 const LIMITE_FILAS = 200;
 
@@ -11,17 +15,21 @@ const LIMITE_FILAS = 200;
 @Injectable()
 export class SyncErroresService {
   async listar(actor: AuthenticatedUser, filtros: SyncErroresQuery): Promise<SyncErrorEntry[]> {
+    const desde = filtros.desde ? inicioDeJornadaBolivia(filtros.desde) : undefined;
+    const hasta = filtros.hasta ? inicioDeJornadaSiguienteBolivia(filtros.hasta) : undefined;
     const where: Prisma.SyncErrorWhereInput = {
       deviceId: filtros.deviceId,
       sesionId: filtros.sesionId,
-      ts:
-        filtros.desde || filtros.hasta
-          ? { gte: filtros.desde, lte: filtros.hasta }
-          : undefined,
+      ts: desde || hasta ? { gte: desde, lt: hasta } : undefined,
     };
 
     const rows = await withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, (tx) =>
-      tx.syncError.findMany({ where, orderBy: { ts: 'desc' }, skip: filtros.skip ?? 0, take: LIMITE_FILAS }),
+      tx.syncError.findMany({
+        where,
+        orderBy: { ts: 'desc' },
+        skip: filtros.skip ?? 0,
+        take: LIMITE_FILAS,
+      }),
     );
     return rows.map((row) => SyncErrorEntrySchema.parse(row));
   }

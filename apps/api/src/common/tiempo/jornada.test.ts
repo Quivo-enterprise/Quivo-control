@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { fechaActualBolivia, finDeJornadaBolivia } from './jornada.js';
+import {
+  fechaActualBolivia,
+  finDeJornadaBolivia,
+  inicioDeJornadaBolivia,
+  inicioDeJornadaSiguienteBolivia,
+} from './jornada.js';
 
 describe('fechaActualBolivia', () => {
   it('mantiene la fecha local antes de medianoche UTC', () => {
@@ -44,5 +49,19 @@ describe('finDeJornadaBolivia', () => {
     const finInvierno = finDeJornadaBolivia(new Date('2027-07-15T00:00:00.000Z'));
     expect(finVerano.getUTCHours()).toBe(3);
     expect(finInvierno.getUTCHours()).toBe(3);
+  });
+});
+
+describe('inicioDeJornadaBolivia', () => {
+  it('inicia a las 04:00 UTC (= 00:00 en Bolivia, UTC-4)', () => {
+    const inicio = inicioDeJornadaBolivia(new Date('2027-01-05T00:00:00.000Z'));
+    expect(inicio.toISOString()).toBe('2027-01-05T04:00:00.000Z');
+  });
+});
+
+describe('inicioDeJornadaSiguienteBolivia', () => {
+  it('avanza al primer instante del día siguiente, incluso al cruzar un mes', () => {
+    const inicio = inicioDeJornadaSiguienteBolivia(new Date('2027-01-31T00:00:00.000Z'));
+    expect(inicio.toISOString()).toBe('2027-02-01T04:00:00.000Z');
   });
 });

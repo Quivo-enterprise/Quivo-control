@@ -21,7 +21,11 @@ describe('CumplimientoService', () => {
   let puntoControlId: string;
   let vehiculoId: string;
   let conductorId: string;
-  const adminQuivo: AuthenticatedUser = { userId: 'test-admin-quivo', rol: 'admin_quivo', sindicatoId: null };
+  const adminQuivo: AuthenticatedUser = {
+    userId: 'test-admin-quivo',
+    rol: 'admin_quivo',
+    sindicatoId: null,
+  };
   const adminSindicatoA: AuthenticatedUser = {
     userId: 'test-admin-a',
     rol: 'admin_sindicato',
@@ -30,11 +34,20 @@ describe('CumplimientoService', () => {
 
   beforeAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      await tx.sindicato.create({ data: { id: sindicatoAId, nombre: 'Cumplimiento Test A', estado: 'activo' } });
-      await tx.sindicato.create({ data: { id: sindicatoBId, nombre: 'Cumplimiento Test B', estado: 'activo' } });
+      await tx.sindicato.create({
+        data: { id: sindicatoAId, nombre: 'Cumplimiento Test A', estado: 'activo' },
+      });
+      await tx.sindicato.create({
+        data: { id: sindicatoBId, nombre: 'Cumplimiento Test B', estado: 'activo' },
+      });
 
       const linea = await tx.linea.create({
-        data: { sindicatoId: sindicatoAId, codigo: 'CT1', nombre: 'Línea Cumplimiento', color: '#FD9E15' },
+        data: {
+          sindicatoId: sindicatoAId,
+          codigo: 'CT1',
+          nombre: 'Línea Cumplimiento',
+          color: '#FD9E15',
+        },
       });
       rutaId = randomUUID();
       await tx.$executeRaw`
@@ -73,17 +86,18 @@ describe('CumplimientoService', () => {
         data: { sindicatoId: sindicatoAId, periodo: '2026-08', estado: 'publicada' },
       });
 
-      const ahora = new Date();
+      const fechaOperacion = new Date('2026-08-12T00:00:00.000Z');
+      const cierreJornadaBoliviana = new Date('2026-08-13T03:59:59.999Z');
       const asignacion = await tx.asignacion.create({
         data: {
           rotacionId: rotacion.id,
           vehiculoId: vehiculo.id,
           conductorId: conductor.id,
           rutaId,
-          fecha: ahora,
+          fecha: fechaOperacion,
           horario: 'manana',
           orden: 1,
-          venceAt: new Date(ahora.getTime() + 60 * 60 * 1000),
+          venceAt: new Date(fechaOperacion.getTime() + 60 * 60 * 1000),
           estado: 'vigente',
         },
       });
@@ -95,12 +109,12 @@ describe('CumplimientoService', () => {
           vehiculoId: vehiculo.id,
           conductorId: conductor.id,
           deviceId: 'device-cmp',
-          fin: ahora,
+          fin: cierreJornadaBoliviana,
           estado: 'finalizada',
           accessTokenHash: randomUUID(),
           refreshTokenHash: randomUUID(),
-          accessExpiresAt: new Date(ahora.getTime() + 60 * 60 * 1000),
-          refreshExpiresAt: new Date(ahora.getTime() + 60 * 60 * 1000),
+          accessExpiresAt: new Date(cierreJornadaBoliviana.getTime() + 60 * 60 * 1000),
+          refreshExpiresAt: new Date(cierreJornadaBoliviana.getTime() + 60 * 60 * 1000),
         },
       });
       await tx.cumplimientoPc.create({
@@ -109,7 +123,7 @@ describe('CumplimientoService', () => {
           sindicatoId: sindicatoAId,
           sesionId: sesionCompleta.id,
           puntoControlId,
-          ts: ahora,
+          ts: cierreJornadaBoliviana,
           distanciaM: 10,
           cumplido: true,
           validadoPor: 'worker',
@@ -121,7 +135,7 @@ describe('CumplimientoService', () => {
           sindicatoId: sindicatoAId,
           sesionId: sesionCompleta.id,
           puntoControlId,
-          ts: ahora,
+          ts: cierreJornadaBoliviana,
           distanciaM: 80,
           cumplido: false,
           validadoPor: 'worker',
@@ -134,7 +148,7 @@ describe('CumplimientoService', () => {
           sindicatoId: sindicatoAId,
           sesionId: sesionCompleta.id,
           puntoControlId,
-          ts: ahora,
+          ts: cierreJornadaBoliviana,
           distanciaM: 5,
           cumplido: true,
           validadoPor: 'app',
@@ -226,6 +240,18 @@ describe('CumplimientoService', () => {
     });
     const fila = filas.find((f) => f.nombre === 'Línea Cumplimiento');
     expect(fila).toBeUndefined();
+  });
+
+  it('incluye los cumplimientos del cierre del día calendario boliviano', async () => {
+    const filas = await service.obtener(adminQuivo, {
+      por: 'linea',
+      desde: new Date('2026-08-12T00:00:00.000Z'),
+      hasta: new Date('2026-08-12T00:00:00.000Z'),
+    });
+    const fila = filas.find((f) => f.nombre === 'Línea Cumplimiento');
+
+    expect(fila?.puntosTotales).toBe(2);
+    expect(fila?.puntosCumplidos).toBe(1);
   });
 
   it('la sesión con validadoPor=app no infla el conteo de puntos totales', async () => {

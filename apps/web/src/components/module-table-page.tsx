@@ -108,6 +108,10 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [desactivacionPendiente, setDesactivacionPendiente] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
 
   useEffect(() => {
     if (!dataSource) {
@@ -171,6 +175,7 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
     setEditingRow(null);
     setFormError(null);
     setFieldErrors({});
+    setDesactivacionPendiente(null);
   };
 
   const handleFieldChange = (key: string, value: string) => {
@@ -182,6 +187,41 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
       return next;
     });
   };
+
+  function guardar(parsed: Record<string, unknown>) {
+    if (dataSource) {
+      setIsSaving(true);
+      setFormError(null);
+      const request = editingRow
+        ? dataSource.update(String(editingRow.id), parsed)
+        : dataSource.create({ ...createDefaults, ...parsed });
+      request
+        .then((saved) => {
+          setRows((prev) =>
+            editingRow ? prev.map((row) => (row === editingRow ? saved : row)) : [saved, ...prev],
+          );
+          closeForm();
+        })
+        .catch((error: unknown) => {
+          setFormError(error instanceof Error ? error.message : 'Error al guardar');
+        })
+        .finally(() => setIsSaving(false));
+      return;
+    }
+
+    if (editingRow) {
+      const updated = { ...editingRow, ...parsed } as T;
+      setRows((prev) => prev.map((row) => (row === editingRow ? updated : row)));
+    } else {
+      const newRow = {
+        id: `${entityLabel}-${Date.now()}`,
+        ...createDefaults,
+        ...parsed,
+      } as unknown as T;
+      setRows((prev) => [newRow, ...prev]);
+    }
+    closeForm();
+  }
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -218,38 +258,18 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
       parsed[field.key] = field.kind === 'number' ? Number(raw) : raw;
     }
 
-    if (dataSource) {
-      setIsSaving(true);
-      setFormError(null);
-      const request = editingRow
-        ? dataSource.update(String(editingRow.id), parsed)
-        : dataSource.create({ ...createDefaults, ...parsed });
-      request
-        .then((saved) => {
-          setRows((prev) =>
-            editingRow ? prev.map((row) => (row === editingRow ? saved : row)) : [saved, ...prev],
-          );
-          closeForm();
-        })
-        .catch((error: unknown) => {
-          setFormError(error instanceof Error ? error.message : 'Error al guardar');
-        })
-        .finally(() => setIsSaving(false));
+    const estadoActual = String(editingRow?.estado ?? '')
+      .trim()
+      .toLowerCase();
+    const estadoPropuesto = String(parsed.estado ?? '')
+      .trim()
+      .toLowerCase();
+    if (estadoActual === 'activo' && estadoPropuesto === 'inactivo') {
+      setDesactivacionPendiente(parsed);
       return;
     }
 
-    if (editingRow) {
-      const updated = { ...editingRow, ...parsed } as T;
-      setRows((prev) => prev.map((row) => (row === editingRow ? updated : row)));
-    } else {
-      const newRow = {
-        id: `${entityLabel}-${Date.now()}`,
-        ...createDefaults,
-        ...parsed,
-      } as unknown as T;
-      setRows((prev) => [newRow, ...prev]);
-    }
-    closeForm();
+    guardar(parsed);
   };
 
   const handleDeleteConfirm = () => {
@@ -400,6 +420,18 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
           onCancel={() => setDeletingRow(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={desactivacionPendiente !== null}
+        title={`Desactivar ${entityLabel}`}
+        message={`Este cambio marcará el ${entityLabel} como inactivo. Verificá que no afecte operaciones planificadas antes de confirmar.`}
+        variant="danger"
+        confirmLabel={isSaving ? 'Guardando...' : 'Desactivar'}
+        onConfirm={() => {
+          if (desactivacionPendiente) guardar(desactivacionPendiente);
+        }}
+        onCancel={() => setDesactivacionPendiente(null)}
+      />
     </div>
   );
 }

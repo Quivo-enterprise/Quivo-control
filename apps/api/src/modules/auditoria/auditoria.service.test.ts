@@ -8,7 +8,16 @@ describe('AuditoriaService', () => {
   const service = new AuditoriaService();
   const sindicatoAId = randomUUID();
   const sindicatoBId = randomUUID();
-  const adminQuivo: AuthenticatedUser = { userId: 'test-admin-quivo', rol: 'admin_quivo', sindicatoId: null };
+  const usuarioRangoFechas = `u-rango-${randomUUID()}`;
+  const auditAntesDelDiaId = randomUUID();
+  const auditInicioDelDiaId = randomUUID();
+  const auditFinDelDiaId = randomUUID();
+  const auditDespuesDelDiaId = randomUUID();
+  const adminQuivo: AuthenticatedUser = {
+    userId: 'test-admin-quivo',
+    rol: 'admin_quivo',
+    sindicatoId: null,
+  };
   const adminSindicatoA: AuthenticatedUser = {
     userId: 'test-admin-a',
     rol: 'admin_sindicato',
@@ -17,8 +26,12 @@ describe('AuditoriaService', () => {
 
   beforeAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      await tx.sindicato.create({ data: { id: sindicatoAId, nombre: 'Auditoria Test A', estado: 'activo' } });
-      await tx.sindicato.create({ data: { id: sindicatoBId, nombre: 'Auditoria Test B', estado: 'activo' } });
+      await tx.sindicato.create({
+        data: { id: sindicatoAId, nombre: 'Auditoria Test A', estado: 'activo' },
+      });
+      await tx.sindicato.create({
+        data: { id: sindicatoBId, nombre: 'Auditoria Test B', estado: 'activo' },
+      });
       await tx.auditLog.create({
         data: {
           sindicatoId: sindicatoAId,
@@ -38,6 +51,46 @@ describe('AuditoriaService', () => {
           accion: 'editar',
           diff: { estado: 'inactivo' },
         },
+      });
+      await tx.auditLog.createMany({
+        data: [
+          {
+            sindicatoId: sindicatoAId,
+            usuarioId: usuarioRangoFechas,
+            entidad: 'vehiculo',
+            entidadId: auditAntesDelDiaId,
+            accion: 'editar',
+            diff: { limite: 'antes' },
+            ts: new Date('2026-08-12T03:59:59.999Z'),
+          },
+          {
+            sindicatoId: sindicatoAId,
+            usuarioId: usuarioRangoFechas,
+            entidad: 'vehiculo',
+            entidadId: auditInicioDelDiaId,
+            accion: 'editar',
+            diff: { limite: 'inicio' },
+            ts: new Date('2026-08-12T04:00:00.000Z'),
+          },
+          {
+            sindicatoId: sindicatoAId,
+            usuarioId: usuarioRangoFechas,
+            entidad: 'vehiculo',
+            entidadId: auditFinDelDiaId,
+            accion: 'editar',
+            diff: { limite: 'fin' },
+            ts: new Date('2026-08-13T03:59:59.999Z'),
+          },
+          {
+            sindicatoId: sindicatoAId,
+            usuarioId: usuarioRangoFechas,
+            entidad: 'vehiculo',
+            entidadId: auditDespuesDelDiaId,
+            accion: 'editar',
+            diff: { limite: 'despues' },
+            ts: new Date('2026-08-13T04:00:00.000Z'),
+          },
+        ],
       });
     });
   });
@@ -78,5 +131,15 @@ describe('AuditoriaService', () => {
     const filas = await service.listar(adminQuivo, { usuarioId: 'u-1' });
     expect(filas.length).toBeGreaterThan(0);
     expect(filas.every((f) => f.usuarioId === 'u-1')).toBe(true);
+  });
+
+  it('incluye el día calendario completo de Bolivia en los filtros de fecha', async () => {
+    const filas = await service.listar(adminQuivo, {
+      usuarioId: usuarioRangoFechas,
+      desde: new Date('2026-08-12T00:00:00.000Z'),
+      hasta: new Date('2026-08-12T00:00:00.000Z'),
+    });
+
+    expect(filas.map((fila) => fila.entidadId)).toEqual([auditFinDelDiaId, auditInicioDelDiaId]);
   });
 });

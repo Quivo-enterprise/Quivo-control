@@ -90,8 +90,9 @@ Rutas (QUI-229), Rotaciones (QUI-233), Sanciones (dentro de `/reglas`, QUI-245) 
 Auditoría (QUI-248) tienen páginas a medida (no `ModuleTablePage`) porque su interacción
 no es un CRUD tabular simple: mapa interactivo, grilla vehículo×fecha con transiciones de
 estado, flujo de transiciones con confirmación, y filtros de solo-lectura respectivamente.
-`Reportes` es la única página que sigue sin datos reales — bloqueada por M3 (necesita
-`gps_points`/sesiones que no existen todavía).
+`Reportes` consume datos reales de cumplimiento, recorridos y exportaciones CSV desde
+`apps/api`. Cuando no hay GPS o recorridos para el rango elegido, la interfaz muestra el
+estado vacío correspondiente.
 
 Para agregar un módulo CRUD simple nuevo al patrón `ModuleTablePage`: armar `columns:
 DataColumn<T>[]` (con `render` para badges) y `fields: EntityFieldConfig[]` (para el

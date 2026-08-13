@@ -15,7 +15,15 @@ import {
   Select,
   StatusBadge,
 } from '@quivo/design-system';
-import type { Asignacion, Conductor, Linea, Ruta, Turno, Vehiculo } from '@quivo/shared';
+import type {
+  Asignacion,
+  Conductor,
+  EstadoRotacion,
+  Linea,
+  Ruta,
+  Turno,
+  Vehiculo,
+} from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { ApiError } from '../../../src/lib/api/client';
 import { lineasApi } from '../../../src/lib/api/lineas';
@@ -39,6 +47,13 @@ interface EdicionAsignacion {
   asignacion: Asignacion;
 }
 
+interface FiltrosRotaciones {
+  periodo: string;
+  estado: EstadoRotacion | '';
+}
+
+const FILTROS_ROTACIONES_VACIOS: FiltrosRotaciones = { periodo: '', estado: '' };
+
 /** RF-51..57 (QUI-233) — vista de rotación por periodo: grilla vehículo × fecha/horario
  * contra el API real de QUI-232. `admin_quivo` no tiene sindicato propio, así que necesita
  * elegir uno antes de poder generar o ver rutas/vehículos (mismo patrón que socios/vehículos,
@@ -48,7 +63,8 @@ export default function RotacionesPage() {
   const { options: sindicatoOptions } = useSindicatoOptions();
 
   const [sindicatoSeleccionado, setSindicatoSeleccionado] = useState('');
-  const sindicatoId = user?.rol === 'admin_quivo' ? sindicatoSeleccionado : (user?.sindicatoId ?? '');
+  const sindicatoId =
+    user?.rol === 'admin_quivo' ? sindicatoSeleccionado : (user?.sindicatoId ?? '');
 
   const [rutas, setRutas] = useState<RutaConLinea[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
@@ -69,6 +85,11 @@ export default function RotacionesPage() {
   const [horariosSeleccionados, setHorariosSeleccionados] = useState<Turno[]>(['manana']);
   const [rutasSeleccionadas, setRutasSeleccionadas] = useState<string[]>([]);
 
+  const [filtrosRotaciones, setFiltrosRotaciones] =
+    useState<FiltrosRotaciones>(FILTROS_ROTACIONES_VACIOS);
+  const [filtrosRotacionesAplicados, setFiltrosRotacionesAplicados] =
+    useState<FiltrosRotaciones>(FILTROS_ROTACIONES_VACIOS);
+
   const [confirmacion, setConfirmacion] = useState<'publicar' | 'anular' | null>(null);
   const [modalAsignacion, setModalAsignacion] = useState<EdicionAsignacion | null>(null);
   const [modalNuevaAsignacion, setModalNuevaAsignacion] = useState(false);
@@ -81,48 +102,108 @@ export default function RotacionesPage() {
       setRutas([]);
       setVehiculos([]);
       setConductores([]);
+      setLoadingCatalogo(false);
       return;
     }
+    let cancelado = false;
     setLoadingCatalogo(true);
     setError(null);
     Promise.all([lineasApi.listar(token), vehiculosApi.listar(token), conductoresApi.listar(token)])
       .then(async ([todasLineas, todosVehiculos, todosConductores]) => {
         const lineasDelSindicato = todasLineas.filter((l) => l.sindicatoId === sindicatoId);
-        setVehiculos(todosVehiculos.filter((v) => v.sindicatoId === sindicatoId));
-        setConductores(todosConductores.filter((c) => c.sindicatoId === sindicatoId));
 
         const rutasPorLinea = await Promise.all(
           lineasDelSindicato.map((linea) =>
             rutasApi.listarPorLinea(token, linea.id).then((rs) => rs.map((r) => ({ ...r, linea }))),
           ),
         );
+        if (cancelado) return;
+        setVehiculos(todosVehiculos.filter((v) => v.sindicatoId === sindicatoId));
+        setConductores(todosConductores.filter((c) => c.sindicatoId === sindicatoId));
         setRutas(rutasPorLinea.flat());
       })
-      .catch((err: unknown) => setError(mensajeError(err)))
-      .finally(() => setLoadingCatalogo(false));
+      .catch((err: unknown) => {
+        if (!cancelado) setError(mensajeError(err));
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingCatalogo(false);
+      });
+    return () => {
+      cancelado = true;
+    };
   }, [token, sindicatoId]);
 
   useEffect(() => {
     if (!token || !sindicatoId) {
       setRotaciones([]);
       setRotacionActual(null);
+      setLoadingRotaciones(false);
       return;
     }
+    let cancelado = false;
     setLoadingRotaciones(true);
     rotacionesApi
       .listar(token)
       .then(async (lista) => {
         const propias = lista.filter((r) => r.sindicatoId === sindicatoId);
-        const conDetalle = await Promise.all(propias.map((r) => rotacionesApi.obtener(token, r.id)));
+        const conDetalle = await Promise.all(
+          propias.map((r) => rotacionesApi.obtener(token, r.id)),
+        );
+        if (cancelado) return;
         setRotaciones(conDetalle);
+        setRotacionActual((actual) =>
+          actual ? (conDetalle.find((rotacion) => rotacion.id === actual.id) ?? null) : null,
+        );
       })
-      .catch((err: unknown) => setError(mensajeError(err)))
-      .finally(() => setLoadingRotaciones(false));
+      .catch((err: unknown) => {
+        if (!cancelado) setError(mensajeError(err));
+      })
+      .finally(() => {
+        if (!cancelado) setLoadingRotaciones(false);
+      });
+    return () => {
+      cancelado = true;
+    };
   }, [token, sindicatoId]);
 
   const vehiculoPorId = useMemo(() => new Map(vehiculos.map((v) => [v.id, v])), [vehiculos]);
   const rutaPorId = useMemo(() => new Map(rutas.map((r) => [r.id, r])), [rutas]);
   const conductorPorId = useMemo(() => new Map(conductores.map((c) => [c.id, c])), [conductores]);
+  const rotacionesFiltradas = useMemo(() => {
+    const periodoBuscado = filtrosRotacionesAplicados.periodo.trim().toLocaleLowerCase();
+    return rotaciones.filter(
+      (rotacion) =>
+        (!periodoBuscado || rotacion.periodo.toLocaleLowerCase().includes(periodoBuscado)) &&
+        (!filtrosRotacionesAplicados.estado ||
+          rotacion.estado === filtrosRotacionesAplicados.estado),
+    );
+  }, [filtrosRotacionesAplicados, rotaciones]);
+  const rangoFechasInvalido = Boolean(fechaInicio && fechaFin && fechaFin < fechaInicio);
+
+  function seleccionarSindicato(siguienteSindicatoId: string) {
+    setSindicatoSeleccionado(siguienteSindicatoId);
+    setRutas([]);
+    setVehiculos([]);
+    setConductores([]);
+    setRotaciones([]);
+    setRotacionActual(null);
+    setConfirmacion(null);
+    setModalAsignacion(null);
+    setModalNuevaAsignacion(false);
+    setAvisoGeneracion(null);
+    setError(null);
+    setFiltrosRotaciones(FILTROS_ROTACIONES_VACIOS);
+    setFiltrosRotacionesAplicados(FILTROS_ROTACIONES_VACIOS);
+  }
+
+  function aplicarFiltrosRotaciones() {
+    setFiltrosRotacionesAplicados({ ...filtrosRotaciones });
+  }
+
+  function limpiarFiltrosRotaciones() {
+    setFiltrosRotaciones(FILTROS_ROTACIONES_VACIOS);
+    setFiltrosRotacionesAplicados(FILTROS_ROTACIONES_VACIOS);
+  }
 
   function toggleHorario(horario: Turno) {
     setHorariosSeleccionados((prev) =>
@@ -131,7 +212,9 @@ export default function RotacionesPage() {
   }
 
   function toggleRuta(rutaId: string) {
-    setRutasSeleccionadas((prev) => (prev.includes(rutaId) ? prev.filter((r) => r !== rutaId) : [...prev, rutaId]));
+    setRutasSeleccionadas((prev) =>
+      prev.includes(rutaId) ? prev.filter((r) => r !== rutaId) : [...prev, rutaId],
+    );
   }
 
   async function refrescarRotacion(id: string) {
@@ -142,7 +225,18 @@ export default function RotacionesPage() {
   }
 
   async function generarRotacion() {
-    if (!token || !sindicatoId || !periodo || !fechaInicio || !fechaFin || rutasSeleccionadas.length === 0) return;
+    if (
+      !token ||
+      !sindicatoId ||
+      !periodo.trim() ||
+      !fechaInicio ||
+      !fechaFin ||
+      rangoFechasInvalido ||
+      rutasSeleccionadas.length === 0 ||
+      horariosSeleccionados.length === 0
+    ) {
+      return;
+    }
     setGenerando(true);
     setError(null);
     setAvisoGeneracion(null);
@@ -150,13 +244,15 @@ export default function RotacionesPage() {
       const fechas = rangoDeFechas(fechaInicio, fechaFin);
       const nueva = await rotacionesApi.generar(token, {
         sindicatoId: user?.rol === 'admin_quivo' ? sindicatoId : undefined,
-        periodo,
+        periodo: periodo.trim(),
         rutaIds: rutasSeleccionadas,
         fechas,
         horarios: horariosSeleccionados,
       });
       setRotaciones((prev) => [nueva, ...prev]);
       setRotacionActual(nueva);
+      setFiltrosRotaciones(FILTROS_ROTACIONES_VACIOS);
+      setFiltrosRotacionesAplicados(FILTROS_ROTACIONES_VACIOS);
       const avisos: string[] = [];
       const totalPedido = fechas.length * horariosSeleccionados.length * rutasSeleccionadas.length;
       if (nueva.asignaciones.length < totalPedido) {
@@ -223,19 +319,31 @@ export default function RotacionesPage() {
   const filasGrilla = useMemo(() => {
     if (!rotacionActual) return [];
     const vehiculoIds = [...new Set(rotacionActual.asignaciones.map((a) => a.vehiculoId))];
-    return vehiculoIds.sort((a, b) => (vehiculoPorId.get(a)?.placa ?? '').localeCompare(vehiculoPorId.get(b)?.placa ?? ''));
+    return vehiculoIds.sort((a, b) =>
+      (vehiculoPorId.get(a)?.placa ?? '').localeCompare(vehiculoPorId.get(b)?.placa ?? ''),
+    );
   }, [rotacionActual, vehiculoPorId]);
 
   function celda(vehiculoId: string, fecha: string, horario: Turno): Asignacion | undefined {
     return rotacionActual?.asignaciones.find(
-      (a) => a.vehiculoId === vehiculoId && new Date(a.fecha).toISOString().slice(0, 10) === fecha && a.horario === horario,
+      (a) =>
+        a.vehiculoId === vehiculoId &&
+        new Date(a.fecha).toISOString().slice(0, 10) === fecha &&
+        a.horario === horario,
     );
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <PageHeader title="Rotaciones" subtitle="RF-51..57 — generar, editar y publicar rotaciones (QUI-233)." />
-      {error && <Alert variant="danger" title="Error">{error}</Alert>}
+      <PageHeader
+        title="Rotaciones"
+        subtitle="RF-51..57 — generar, editar y publicar rotaciones (QUI-233)."
+      />
+      {error && (
+        <Alert variant="danger" title="Error">
+          {error}
+        </Alert>
+      )}
       {avisoGeneracion && (
         <Alert variant="warning" title="Reparto parcial">
           {avisoGeneracion}
@@ -249,22 +357,53 @@ export default function RotacionesPage() {
             name="sindicato"
             options={[{ label: 'Seleccionar...', value: '' }, ...sindicatoOptions]}
             value={sindicatoSeleccionado}
-            onChange={(event) => setSindicatoSeleccionado(event.target.value)}
+            onChange={(event) => seleccionarSindicato(event.target.value)}
           />
         </Card>
       )}
 
+      {user?.rol === 'admin_quivo' && !sindicatoId && (
+        <Alert variant="info" title="Seleccioná un sindicato">
+          Elegí un sindicato para consultar o gestionar sus rotaciones.
+        </Alert>
+      )}
+
       {sindicatoId && (
-        <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '1.5rem', alignItems: 'start' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '340px 1fr',
+            gap: '1.5rem',
+            alignItems: 'start',
+          }}
+        >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <Card header="Generar rotación">
               {loadingCatalogo ? (
                 <Loader label="Cargando catálogo..." />
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  <Input label="Periodo" placeholder="2026-09" value={periodo} onChange={(e) => setPeriodo(e.target.value)} />
-                  <DatePicker label="Desde" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} />
-                  <DatePicker label="Hasta" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)} />
+                  <Input
+                    label="Periodo"
+                    placeholder="2026-09"
+                    value={periodo}
+                    onChange={(e) => setPeriodo(e.target.value)}
+                  />
+                  <DatePicker
+                    label="Desde"
+                    value={fechaInicio}
+                    onChange={(e) => setFechaInicio(e.target.value)}
+                  />
+                  <DatePicker
+                    label="Hasta"
+                    value={fechaFin}
+                    onChange={(e) => setFechaFin(e.target.value)}
+                  />
+                  {rangoFechasInvalido && (
+                    <Alert variant="warning" title="Rango de fechas inválido">
+                      La fecha final debe ser igual o posterior a la fecha inicial.
+                    </Alert>
+                  )}
                   <div>
                     <span className="qv-field__label">Horarios</span>
                     <div style={{ display: 'flex', gap: '1rem', marginTop: '0.25rem' }}>
@@ -283,7 +422,14 @@ export default function RotacionesPage() {
                     {rutas.length === 0 ? (
                       <p>Sin rutas en este sindicato todavía.</p>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: '0.25rem' }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.25rem',
+                          marginTop: '0.25rem',
+                        }}
+                      >
                         {rutas.map((r) => (
                           <Checkbox
                             key={r.id}
@@ -302,6 +448,7 @@ export default function RotacionesPage() {
                       !periodo ||
                       !fechaInicio ||
                       !fechaFin ||
+                      rangoFechasInvalido ||
                       rutasSeleccionadas.length === 0 ||
                       horariosSeleccionados.length === 0
                     }
@@ -315,31 +462,76 @@ export default function RotacionesPage() {
             <Card header="Rotaciones">
               {loadingRotaciones ? (
                 <Loader label="Cargando..." />
-              ) : rotaciones.length === 0 ? (
-                <span>Sin rotaciones todavía.</span>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {rotaciones.map((r) => (
-                    <button
-                      key={r.id}
-                      onClick={() => setRotacionActual(r)}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        textAlign: 'left',
-                        padding: '0.5rem',
-                        borderRadius: '0.5rem',
-                        border: 'none',
-                        cursor: 'pointer',
-                        background: r.id === rotacionActual?.id ? 'var(--qv-color-primary)' : 'transparent',
-                        color: r.id === rotacionActual?.id ? '#fff' : 'inherit',
-                      }}
-                    >
-                      <span>{r.periodo}</span>
-                      <StatusBadge status={r.estado === 'publicada' ? 'active' : 'pending'} label={r.estado} />
-                    </button>
-                  ))}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  <Input
+                    label="Buscar por período"
+                    placeholder="Ej. 2026-08"
+                    value={filtrosRotaciones.periodo}
+                    onChange={(event) =>
+                      setFiltrosRotaciones((actual) => ({ ...actual, periodo: event.target.value }))
+                    }
+                  />
+                  <Select
+                    label="Estado"
+                    options={[
+                      { label: 'Todos', value: '' },
+                      { label: 'Borrador', value: 'borrador' },
+                      { label: 'Publicada', value: 'publicada' },
+                    ]}
+                    value={filtrosRotaciones.estado}
+                    onChange={(event) =>
+                      setFiltrosRotaciones((actual) => ({
+                        ...actual,
+                        estado: event.target.value as EstadoRotacion | '',
+                      }))
+                    }
+                  />
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <Button size="sm" onClick={aplicarFiltrosRotaciones}>
+                      Aplicar filtros
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={limpiarFiltrosRotaciones}>
+                      Limpiar filtros
+                    </Button>
+                  </div>
+                  {rotacionesFiltradas.length === 0 ? (
+                    <span>
+                      {rotaciones.length === 0
+                        ? 'Sin rotaciones todavía.'
+                        : 'No hay rotaciones que coincidan con los filtros aplicados.'}
+                    </span>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {rotacionesFiltradas.map((r) => (
+                        <button
+                          key={r.id}
+                          onClick={() => setRotacionActual(r)}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            textAlign: 'left',
+                            padding: '0.5rem',
+                            borderRadius: '0.5rem',
+                            border: 'none',
+                            cursor: 'pointer',
+                            background:
+                              r.id === rotacionActual?.id
+                                ? 'var(--qv-color-primary)'
+                                : 'transparent',
+                            color: r.id === rotacionActual?.id ? '#fff' : 'inherit',
+                          }}
+                        >
+                          <span>{r.periodo}</span>
+                          <StatusBadge
+                            status={r.estado === 'publicada' ? 'active' : 'pending'}
+                            label={r.estado}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </Card>
@@ -355,7 +547,11 @@ export default function RotacionesPage() {
                       <Button size="sm" onClick={() => setModalNuevaAsignacion(true)}>
                         + Agregar asignación
                       </Button>
-                      <Button size="sm" variant="accent" onClick={() => setConfirmacion('publicar')}>
+                      <Button
+                        size="sm"
+                        variant="accent"
+                        onClick={() => setConfirmacion('publicar')}
+                      >
                         Publicar
                       </Button>
                     </>
@@ -395,7 +591,9 @@ export default function RotacionesPage() {
                       <tbody>
                         {filasGrilla.map((vehiculoId) => (
                           <tr key={vehiculoId}>
-                            <td style={celdaCuerpo}>{vehiculoPorId.get(vehiculoId)?.placa ?? vehiculoId}</td>
+                            <td style={celdaCuerpo}>
+                              {vehiculoPorId.get(vehiculoId)?.placa ?? vehiculoId}
+                            </td>
                             {columnasGrilla.map((col) => {
                               const asignacion = celda(vehiculoId, col.fecha, col.horario);
                               return (
@@ -409,15 +607,22 @@ export default function RotacionesPage() {
                                       style={{
                                         border: 'none',
                                         background: 'transparent',
-                                        cursor: rotacionActual.estado === 'borrador' ? 'pointer' : 'default',
+                                        cursor:
+                                          rotacionActual.estado === 'borrador'
+                                            ? 'pointer'
+                                            : 'default',
                                         textAlign: 'left',
                                         padding: 0,
                                       }}
                                     >
-                                      <div>{rutaPorId.get(asignacion.rutaId)?.sentido ?? asignacion.rutaId}</div>
+                                      <div>
+                                        {rutaPorId.get(asignacion.rutaId)?.sentido ??
+                                          asignacion.rutaId}
+                                      </div>
                                       <div style={{ fontSize: '0.8em', opacity: 0.7 }}>
                                         {asignacion.conductorId
-                                          ? (conductorPorId.get(asignacion.conductorId)?.nombre ?? 'Conductor')
+                                          ? (conductorPorId.get(asignacion.conductorId)?.nombre ??
+                                            'Conductor')
                                           : 'Sin conductor'}
                                       </div>
                                     </button>
@@ -545,7 +750,14 @@ function AsignacionModal(props: {
         title={`Editar asignación — ${vehiculos.find((v) => v.id === asignacion.vehiculoId)?.placa ?? ''}`}
         onClose={onClose}
         footer={
-          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'space-between', width: '100%' }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.5rem',
+              justifyContent: 'space-between',
+              width: '100%',
+            }}
+          >
             <Button variant="danger" onClick={() => setConfirmarQuitar(true)} disabled={guardando}>
               Quitar
             </Button>
@@ -561,7 +773,11 @@ function AsignacionModal(props: {
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {error && <Alert variant="danger" title="No se pudo guardar">{error}</Alert>}
+          {error && (
+            <Alert variant="danger" title="No se pudo guardar">
+              {error}
+            </Alert>
+          )}
           <Select
             label="Ruta"
             options={rutas.map((r) => ({ label: `${r.linea.codigo} — ${r.sentido}`, value: r.id }))}
@@ -570,7 +786,10 @@ function AsignacionModal(props: {
           />
           <Select
             label="Conductor"
-            options={[{ label: 'Sin conductor', value: '' }, ...conductores.map((c) => ({ label: c.nombre, value: c.id }))]}
+            options={[
+              { label: 'Sin conductor', value: '' },
+              ...conductores.map((c) => ({ label: c.nombre, value: c.id })),
+            ]}
             value={conductorId}
             onChange={(e) => setConductorId(e.target.value)}
           />
@@ -653,7 +872,11 @@ function NuevaAsignacionModal(props: {
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {error && <Alert variant="danger" title="No se pudo guardar">{error}</Alert>}
+        {error && (
+          <Alert variant="danger" title="No se pudo guardar">
+            {error}
+          </Alert>
+        )}
         <Select
           label="Vehículo"
           options={vehiculos.map((v) => ({ label: v.placa, value: v.id }))}
@@ -668,13 +891,26 @@ function NuevaAsignacionModal(props: {
         />
         <Select
           label="Conductor"
-          options={[{ label: 'Sin conductor', value: '' }, ...conductores.map((c) => ({ label: c.nombre, value: c.id }))]}
+          options={[
+            { label: 'Sin conductor', value: '' },
+            ...conductores.map((c) => ({ label: c.nombre, value: c.id })),
+          ]}
           value={conductorId}
           onChange={(e) => setConductorId(e.target.value)}
         />
         <DatePicker label="Fecha" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-        <Select label="Horario" options={HORARIOS} value={horario} onChange={(e) => setHorario(e.target.value as Turno)} />
-        <Input label="Orden" type="number" value={orden} onChange={(e) => setOrden(e.target.value)} />
+        <Select
+          label="Horario"
+          options={HORARIOS}
+          value={horario}
+          onChange={(e) => setHorario(e.target.value as Turno)}
+        />
+        <Input
+          label="Orden"
+          type="number"
+          value={orden}
+          onChange={(e) => setOrden(e.target.value)}
+        />
       </div>
     </Modal>
   );

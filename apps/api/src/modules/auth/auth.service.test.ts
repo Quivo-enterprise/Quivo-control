@@ -24,7 +24,9 @@ describe('AuthService (contra Better-Auth real)', () => {
     await authService.logout({ refreshToken });
 
     // Después de logout, la sesión ya no existe — el mismo refresh token debe fallar.
-    await expect(authService.refresh({ refreshToken })).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(authService.refresh({ refreshToken })).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
   });
 
   it('rechaza login con contraseña incorrecta', async () => {
@@ -32,6 +34,21 @@ describe('AuthService (contra Better-Auth real)', () => {
     await expect(
       authService.login({ email: 'admin@quivo.local', password: 'contraseña-incorrecta' }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('lista el directorio administrativo sin exponer credenciales ni sesiones', async () => {
+    const authService = new AuthService();
+
+    await expect(authService.listarUsuarios()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          email: 'admin@quivo.local',
+          rol: 'admin_quivo',
+          sindicatoId: null,
+        }),
+        expect.objectContaining({ email: 'admin@sindicato.local', rol: 'admin_sindicato' }),
+      ]),
+    );
   });
 
   // Objetivo `admin@sindicato.local` (no `admin@quivo.local`, que usan los tests de arriba)
@@ -51,9 +68,9 @@ describe('AuthService (contra Better-Auth real)', () => {
     });
 
     // La sesión que existía antes del reset queda revocada.
-    await expect(authService.refresh({ refreshToken: sesionPrevia.refreshToken })).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
+    await expect(
+      authService.refresh({ refreshToken: sesionPrevia.refreshToken }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
 
     // La contraseña vieja ya no sirve; la nueva sí.
     await expect(

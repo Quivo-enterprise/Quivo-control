@@ -7,6 +7,10 @@ import type {
   ExportarSancionesQuery,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import {
+  inicioDeJornadaBolivia,
+  inicioDeJornadaSiguienteBolivia,
+} from '../../common/tiempo/jornada.js';
 
 const TAMANO_PAGINA = 500;
 
@@ -55,8 +59,10 @@ export class ExportesService {
     actor: AuthenticatedUser,
     query: ExportarRecorridosQuery,
   ): AsyncGenerator<(string | number | boolean | null)[]> {
-    const desde = query.desde ?? new Date(0);
-    const hasta = query.hasta ?? new Date('9999-12-31');
+    const desde = query.desde ? inicioDeJornadaBolivia(query.desde) : new Date(0);
+    const hasta = query.hasta
+      ? inicioDeJornadaSiguienteBolivia(query.hasta)
+      : new Date('9999-12-31T23:59:59.999Z');
 
     for (let offset = 0; ; offset += TAMANO_PAGINA) {
       const filas: RecorridoExportRow[] = await withTenantContext(
@@ -77,7 +83,7 @@ export class ExportesService {
               FROM cumplimientos_pc cpc
               WHERE cpc."sesionId" = so.id AND cpc."validadoPor" = 'worker'
             ) cp ON true
-            WHERE so.inicio >= ${desde} AND so.inicio <= ${hasta}
+            WHERE so.inicio >= ${desde} AND so.inicio < ${hasta}
             ORDER BY so.inicio DESC, so.id ASC
             LIMIT ${TAMANO_PAGINA} OFFSET ${offset}
           `,
@@ -141,8 +147,10 @@ export class ExportesService {
     actor: AuthenticatedUser,
     query: ExportarActividadQuery,
   ): AsyncGenerator<(string | number | boolean | null)[]> {
-    const desde = query.desde ?? new Date(0);
-    const hasta = query.hasta ?? new Date('9999-12-31');
+    const desde = query.desde ? inicioDeJornadaBolivia(query.desde) : new Date(0);
+    const hasta = query.hasta
+      ? inicioDeJornadaSiguienteBolivia(query.hasta)
+      : new Date('9999-12-31T23:59:59.999Z');
     const clave = agrupacionAActividadSql(query.por);
 
     for (let offset = 0; ; offset += TAMANO_PAGINA) {
@@ -162,7 +170,7 @@ export class ExportesService {
               FROM cumplimientos_pc cpc
               WHERE cpc."sesionId" = so.id AND cpc."validadoPor" = 'worker'
             ) cp ON true
-            WHERE so.inicio >= ${desde} AND so.inicio <= ${hasta}
+            WHERE so.inicio >= ${desde} AND so.inicio < ${hasta}
             GROUP BY ${clave.id}, ${clave.nombre}
             ORDER BY ${clave.nombre} ASC
             LIMIT ${TAMANO_PAGINA} OFFSET ${offset}

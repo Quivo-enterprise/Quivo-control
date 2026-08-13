@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ProgressBarProps } from '@quivo/design-system';
 import {
+  ActionButton,
   Alert,
   ChartCard,
   DataPanel,
@@ -11,13 +12,24 @@ import {
   Loader,
   ProgressBar,
 } from '@quivo/design-system';
-import type { Conductor, Sindicato, Socio, Vehiculo } from '@quivo/shared';
+import type {
+  Conductor,
+  Rotacion,
+  Sancion,
+  Sindicato,
+  Socio,
+  SyncErrorEntry,
+  Vehiculo,
+} from '@quivo/shared';
 import { useAuth } from '../../src/lib/auth/auth-context';
 import { ApiError } from '../../src/lib/api/client';
 import { sindicatosApi } from '../../src/lib/api/sindicatos';
 import { sociosApi } from '../../src/lib/api/socios';
 import { vehiculosApi } from '../../src/lib/api/vehiculos';
 import { conductoresApi } from '../../src/lib/api/conductores';
+import { rotacionesApi } from '../../src/lib/api/rotaciones';
+import { sancionesApi } from '../../src/lib/api/sanciones';
+import { syncErroresApi } from '../../src/lib/api/sync-errores';
 
 const VEHICULO_VARIANT: Record<Vehiculo['estado'], ProgressBarProps['variant']> = {
   pendiente: 'primary',
@@ -52,6 +64,9 @@ export default function DashboardHomePage() {
   const [socios, setSocios] = useState<Socio[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
   const [conductores, setConductores] = useState<Conductor[]>([]);
+  const [rotaciones, setRotaciones] = useState<Rotacion[]>([]);
+  const [sancionesPendientes, setSancionesPendientes] = useState<Sancion[]>([]);
+  const [erroresSync, setErroresSync] = useState<SyncErrorEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,12 +79,18 @@ export default function DashboardHomePage() {
       sociosApi.listar(token),
       vehiculosApi.listar(token),
       conductoresApi.listar(token),
+      rotacionesApi.listar(token),
+      sancionesApi.listar(token, { estado: 'pendiente' }),
+      syncErroresApi.listar(token, { desde: haceSieteDias() }),
     ])
-      .then(([s, so, v, c]) => {
+      .then(([s, so, v, c, r, sa, es]) => {
         setSindicatos(s);
         setSocios(so);
         setVehiculos(v);
         setConductores(c);
+        setRotaciones(r);
+        setSancionesPendientes(sa);
+        setErroresSync(es);
       })
       .catch((err: unknown) => setError(mensajeError(err)))
       .finally(() => setLoading(false));
@@ -79,6 +100,10 @@ export default function DashboardHomePage() {
   const vehiculosSinAsignar = vehiculos.filter((v) => !v.socioId).length;
   const conductoresActivos = conductores.filter((c) => c.estado === 'activo').length;
   const sociosActivos = socios.filter((s) => s.estado === 'activo').length;
+  const rotacionesBorrador = rotaciones.filter((rotacion) => rotacion.estado === 'borrador').length;
+  const vehiculosQueRequierenAtencion = vehiculos.filter(
+    (vehiculo) => vehiculo.estado !== 'activo',
+  ).length;
 
   const flotaPorEstado = useMemo(() => contarPorEstado(vehiculos), [vehiculos]);
   const conductoresPorEstado = useMemo(() => contarPorEstado(conductores), [conductores]);
@@ -117,6 +142,59 @@ export default function DashboardHomePage() {
           tone="neutral"
         />
       </Grid>
+      <DataPanel
+        title="Acciones prioritarias"
+        description="Resumen operativo con accesos directos a los pendientes que requieren seguimiento."
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(15rem, 1fr))',
+            gap: '1rem',
+          }}
+        >
+          <AccionPrioritaria
+            titulo="Borradores de rotación"
+            detalle={
+              rotacionesBorrador === 0
+                ? 'No hay rotaciones pendientes de publicación.'
+                : `${rotacionesBorrador} ${rotacionesBorrador === 1 ? 'borrador requiere' : 'borradores requieren'} revisión.`
+            }
+            accion="Revisar rotaciones"
+            href="/rotaciones"
+          />
+          <AccionPrioritaria
+            titulo="Sanciones pendientes"
+            detalle={
+              sancionesPendientes.length === 0
+                ? 'No hay sanciones pendientes de resolución.'
+                : `${sancionesPendientes.length} ${sancionesPendientes.length === 1 ? 'sanción espera' : 'sanciones esperan'} una decisión.`
+            }
+            accion="Revisar sanciones"
+            href="/reglas"
+          />
+          <AccionPrioritaria
+            titulo="Errores de sincronización"
+            detalle={
+              erroresSync.length === 0
+                ? 'No se registraron errores en los últimos 7 días.'
+                : `${erroresSync.length} ${erroresSync.length === 1 ? 'error fue reportado' : 'errores fueron reportados'} en los últimos 7 días.`
+            }
+            accion="Ver errores de sync"
+            href="/sync-errores"
+          />
+          <AccionPrioritaria
+            titulo="Flota para regularizar"
+            detalle={
+              vehiculosQueRequierenAtencion === 0
+                ? 'Toda la flota registrada está activa.'
+                : `${vehiculosQueRequierenAtencion} ${vehiculosQueRequierenAtencion === 1 ? 'vehículo requiere' : 'vehículos requieren'} seguimiento de estado.`
+            }
+            accion="Revisar flota"
+            href="/vehiculos"
+          />
+        </div>
+      </DataPanel>
       <Grid columns={2} gap="md">
         <ChartCard title="Flota por estado" subtitle={`${vehiculos.length} vehículos registrados`}>
           {flotaPorEstado.length === 0 ? (
@@ -166,6 +244,44 @@ export default function DashboardHomePage() {
       </DataPanel>
     </div>
   );
+}
+
+function AccionPrioritaria({
+  titulo,
+  detalle,
+  accion,
+  href,
+}: {
+  titulo: string;
+  detalle: string;
+  accion: string;
+  href: string;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        minHeight: '10rem',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: '0.75rem',
+        justifyContent: 'space-between',
+        padding: '1rem',
+        border: '1px solid var(--qv-border-subtle, #d8dde6)',
+        borderRadius: '0.75rem',
+      }}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+        <strong>{titulo}</strong>
+        <span>{detalle}</span>
+      </div>
+      <ActionButton href={href} label={accion} size="sm" />
+    </div>
+  );
+}
+
+function haceSieteDias(): Date {
+  return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 }
 
 function mensajeError(err: unknown): string {

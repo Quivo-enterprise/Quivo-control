@@ -1,7 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Alert, AuditLog, Button, Card, DatePicker, Input, Modal, PageHeader, Select } from '@quivo/design-system';
+import {
+  Alert,
+  AuditLog,
+  Button,
+  Card,
+  DatePicker,
+  Input,
+  Modal,
+  PageHeader,
+  Select,
+} from '@quivo/design-system';
 import type { AuditLogEntry } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { auditoriaApi } from '../../../src/lib/api/auditoria';
@@ -27,6 +37,22 @@ const ACCIONES = ['crear', 'editar', 'anular', 'publicar'];
 // puede haber más y habilitamos "Cargar más" (no pedimos un COUNT aparte solo para eso).
 const TAMANO_PAGINA = 200;
 
+interface FiltrosAuditoria {
+  entidad: string;
+  accion: string;
+  usuarioId: string;
+  desde: string;
+  hasta: string;
+}
+
+const FILTROS_VACIOS: FiltrosAuditoria = {
+  entidad: '',
+  accion: '',
+  usuarioId: '',
+  desde: '',
+  hasta: '',
+};
+
 /** RF-81..84 (QUI-248) — reemplaza el modo demo, consume `GET /v1/auditoria` (QUI-230). */
 export default function AuditoriaPage() {
   const { token } = useAuth();
@@ -36,6 +62,7 @@ export default function AuditoriaPage() {
   const [usuarioId, setUsuarioId] = useState('');
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
+  const [filtrosAplicados, setFiltrosAplicados] = useState<FiltrosAuditoria>(FILTROS_VACIOS);
 
   const [filas, setFilas] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,25 +71,45 @@ export default function AuditoriaPage() {
   const [error, setError] = useState<string | null>(null);
   const [detalle, setDetalle] = useState<AuditLogEntry | null>(null);
 
+  const rangoFechasInvalido = Boolean(desde && hasta && desde > hasta);
+
   useEffect(() => {
     if (!token) return;
+    let cancelado = false;
     setLoading(true);
     setError(null);
+    setHasMore(false);
     auditoriaApi
-      .listar(token, {
-        entidad: entidad || undefined,
-        accion: accion || undefined,
-        usuarioId: usuarioId.trim() || undefined,
-        desde: desde ? new Date(desde) : undefined,
-        hasta: hasta ? new Date(hasta) : undefined,
-      })
+      .listar(token, aFiltrosDeConsulta(filtrosAplicados))
       .then((rows) => {
+        if (cancelado) return;
         setFilas(rows);
         setHasMore(rows.length === TAMANO_PAGINA);
       })
-      .catch((err: unknown) => setError(mensajeError(err)))
-      .finally(() => setLoading(false));
-  }, [token, entidad, accion, usuarioId, desde, hasta]);
+      .catch((err: unknown) => {
+        if (!cancelado) setError(mensajeError(err));
+      })
+      .finally(() => {
+        if (!cancelado) setLoading(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [token, filtrosAplicados]);
+
+  function aplicarFiltros() {
+    if (rangoFechasInvalido) return;
+    setFiltrosAplicados({ entidad, accion, usuarioId, desde, hasta });
+  }
+
+  function limpiarFiltros() {
+    setEntidad('');
+    setAccion('');
+    setUsuarioId('');
+    setDesde('');
+    setHasta('');
+    setFiltrosAplicados(FILTROS_VACIOS);
+  }
 
   async function cargarMas() {
     if (!token) return;
@@ -70,11 +117,7 @@ export default function AuditoriaPage() {
     setError(null);
     try {
       const rows = await auditoriaApi.listar(token, {
-        entidad: entidad || undefined,
-        accion: accion || undefined,
-        usuarioId: usuarioId.trim() || undefined,
-        desde: desde ? new Date(desde) : undefined,
-        hasta: hasta ? new Date(hasta) : undefined,
+        ...aFiltrosDeConsulta(filtrosAplicados),
         skip: filas.length,
       });
       setFilas((actual) => [...actual, ...rows]);
@@ -88,26 +131,56 @@ export default function AuditoriaPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <PageHeader title="Auditoría" subtitle="RF-81..84 — historial de acciones críticas (QUI-248)." />
-      {error && <Alert variant="danger" title="Error">{error}</Alert>}
+      <PageHeader
+        title="Auditoría"
+        subtitle="RF-81..84 — historial de acciones críticas (QUI-248)."
+      />
+      {error && (
+        <Alert variant="danger" title="Error">
+          {error}
+        </Alert>
+      )}
 
       <Card header="Filtros">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem' }}>
           <Select
             label="Entidad"
-            options={[{ label: 'Todas', value: '' }, ...ENTIDADES.map((e) => ({ label: e, value: e }))]}
+            options={[
+              { label: 'Todas', value: '' },
+              ...ENTIDADES.map((e) => ({ label: e, value: e })),
+            ]}
             value={entidad}
             onChange={(e) => setEntidad(e.target.value)}
           />
           <Select
             label="Acción"
-            options={[{ label: 'Todas', value: '' }, ...ACCIONES.map((a) => ({ label: a, value: a }))]}
+            options={[
+              { label: 'Todas', value: '' },
+              ...ACCIONES.map((a) => ({ label: a, value: a })),
+            ]}
             value={accion}
             onChange={(e) => setAccion(e.target.value)}
           />
-          <Input label="Usuario (id)" value={usuarioId} onChange={(e) => setUsuarioId(e.target.value)} />
+          <Input
+            label="Usuario (id)"
+            value={usuarioId}
+            onChange={(e) => setUsuarioId(e.target.value)}
+          />
           <DatePicker label="Desde" value={desde} onChange={(e) => setDesde(e.target.value)} />
           <DatePicker label="Hasta" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+        </div>
+        {rangoFechasInvalido && (
+          <Alert variant="warning" title="Revisá el rango de fechas" style={{ marginTop: '1rem' }}>
+            La fecha de inicio no puede ser posterior a la fecha de fin.
+          </Alert>
+        )}
+        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+          <Button onClick={aplicarFiltros} disabled={rangoFechasInvalido}>
+            Aplicar filtros
+          </Button>
+          <Button variant="ghost" onClick={limpiarFiltros}>
+            Limpiar filtros
+          </Button>
         </div>
       </Card>
 
@@ -154,7 +227,15 @@ export default function AuditoriaPage() {
             <span>
               <strong>Fecha:</strong> {new Date(detalle.ts).toLocaleString('es-BO')}
             </span>
-            <pre style={{ whiteSpace: 'pre-wrap', overflowX: 'auto', background: 'rgba(0,0,0,0.15)', padding: '0.75rem', borderRadius: '0.5rem' }}>
+            <pre
+              style={{
+                whiteSpace: 'pre-wrap',
+                overflowX: 'auto',
+                background: 'rgba(0,0,0,0.15)',
+                padding: '0.75rem',
+                borderRadius: '0.5rem',
+              }}
+            >
               {JSON.stringify(detalle.diff, null, 2)}
             </pre>
           </div>
@@ -162,6 +243,16 @@ export default function AuditoriaPage() {
       </Modal>
     </div>
   );
+}
+
+function aFiltrosDeConsulta({ entidad, accion, usuarioId, desde, hasta }: FiltrosAuditoria) {
+  return {
+    entidad: entidad || undefined,
+    accion: accion || undefined,
+    usuarioId: usuarioId.trim() || undefined,
+    desde: desde ? new Date(desde) : undefined,
+    hasta: hasta ? new Date(hasta) : undefined,
+  };
 }
 
 function mensajeError(err: unknown): string {

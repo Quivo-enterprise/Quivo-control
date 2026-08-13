@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Alert,
   Button,
@@ -78,6 +78,7 @@ export default function VehiculosPage() {
   const [historyRows, setHistoryRows] = useState<HistorialEstadoVehiculo[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const historyRequestId = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,17 +187,29 @@ export default function VehiculosPage() {
   };
 
   const openHistory = async (vehicle: Vehiculo) => {
+    const requestId = ++historyRequestId.current;
     setHistoryVehicle(vehicle);
     setHistoryRows([]);
     setHistoryError(null);
     setIsLoadingHistory(true);
     try {
-      setHistoryRows(await vehiculosApi.historialEstados(token ?? '', vehicle.id));
+      const history = await vehiculosApi.historialEstados(token ?? '', vehicle.id);
+      if (requestId === historyRequestId.current) setHistoryRows(history);
     } catch (error: unknown) {
-      setHistoryError(error instanceof Error ? error.message : 'No se pudo cargar el historial.');
+      if (requestId === historyRequestId.current) {
+        setHistoryError(error instanceof Error ? error.message : 'No se pudo cargar el historial.');
+      }
     } finally {
-      setIsLoadingHistory(false);
+      if (requestId === historyRequestId.current) setIsLoadingHistory(false);
     }
+  };
+
+  const closeHistory = () => {
+    historyRequestId.current += 1;
+    setHistoryVehicle(null);
+    setHistoryRows([]);
+    setHistoryError(null);
+    setIsLoadingHistory(false);
   };
 
   return (
@@ -447,7 +460,7 @@ export default function VehiculosPage() {
         rows={historyRows}
         isLoading={isLoadingHistory}
         error={historyError}
-        onClose={() => setHistoryVehicle(null)}
+        onClose={closeHistory}
       />
     </div>
   );
@@ -641,7 +654,20 @@ function VehicleHistoryModal({
                   }).format(new Date(row.createdAt))}
                 </time>
                 {row.motivo && <p>{row.motivo}</p>}
-                <small>Responsable: {row.actorId}</small>
+                {row.observacion && <p>Observación: {row.observacion}</p>}
+                {row.retornoEstimado && (
+                  <p>
+                    Retorno estimado:{' '}
+                    <time dateTime={row.retornoEstimado}>
+                      {new Intl.DateTimeFormat('es-BO', { dateStyle: 'medium' }).format(
+                        new Date(row.retornoEstimado),
+                      )}
+                    </time>
+                  </p>
+                )}
+                <small>
+                  Responsable: {row.actorId} · Origen: {row.origen}
+                </small>
               </div>
             </li>
           ))}

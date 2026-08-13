@@ -15,6 +15,30 @@ export function fechaActualBolivia(ahora: Date = new Date()): Date {
   return new Date(Date.UTC(bolivia.getUTCFullYear(), bolivia.getUTCMonth(), bolivia.getUTCDate()));
 }
 
+/** Instante UTC que corresponde a las 00:00:00 hora de Bolivia del `fecha` dado. Los
+ * filtros administrativos trabajan con días calendario, así que este límite evita incluir
+ * las últimas cuatro horas del día anterior cuando la UI envía una fecha pura. */
+export function inicioDeJornadaBolivia(fecha: Date): Date {
+  return new Date(
+    Date.UTC(
+      fecha.getUTCFullYear(),
+      fecha.getUTCMonth(),
+      fecha.getUTCDate(),
+      BOLIVIA_UTC_OFFSET_HOURS,
+    ),
+  );
+}
+
+/** Inicio de la jornada boliviana siguiente a `fecha`. Usar un límite superior exclusivo
+ * preserva todos los eventos del día pedido, incluidos los milisegundos finales, y permite
+ * concatenar rangos diarios sin duplicar registros. */
+export function inicioDeJornadaSiguienteBolivia(fecha: Date): Date {
+  const siguiente = new Date(
+    Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate() + 1),
+  );
+  return inicioDeJornadaBolivia(siguiente);
+}
+
 /** Instante UTC que corresponde a las 23:59:59 hora de Bolivia del `fecha` dado (que llega
  * como una fecha "pura", típicamente medianoche UTC — ver `z.coerce.date()` en
  * `GenerarRotacionSchema`/`CrearAsignacionManualSchema`). */
@@ -38,6 +62,13 @@ export function finDeJornadaBolivia(fecha: Date): Date {
 export function horaEnBolivia(fecha: Date, horaHHmm: string): Date {
   const [horas, minutos] = horaHHmm.split(':').map(Number) as [number, number];
   return new Date(
-    Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate(), horas + BOLIVIA_UTC_OFFSET_HOURS, minutos, 0),
+    Date.UTC(
+      fecha.getUTCFullYear(),
+      fecha.getUTCMonth(),
+      fecha.getUTCDate(),
+      horas + BOLIVIA_UTC_OFFSET_HOURS,
+      minutos,
+      0,
+    ),
   );
 }
