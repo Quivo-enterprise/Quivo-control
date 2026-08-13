@@ -51,3 +51,16 @@ export class AuthMovilController {
     return this.authMovilService.obtenerContexto(sesion);
   }
 }
+
+@Controller('mobile')
+export class PerfilMovilController {
+  constructor(@Inject(AuthMovilService) private readonly authMovilService: AuthMovilService) {}
+
+  @Get('perfil')
+  @UseGuards(AuthMovilGuard)
+  obtenerPerfil(@CurrentMobileSession() sesion: SesionMovilAutenticada) {
+    // El perfil retorna la misma estructura rica que el contexto operativo,
+    // que incluye toda la información del conductor, vehículo, sindicato y asignación.
+    return this.authMovilService.obtenerContexto(sesion);
+  }
+}

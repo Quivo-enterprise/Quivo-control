@@ -6,21 +6,21 @@ import { Svg, Circle, Line } from 'react-native-svg';
 import { haversineMetros, type ContextoOperativoMovil, type PaqueteDia } from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
 import { Button } from '../../shared/components/Button';
-import { Input } from '../../shared/components/Input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { MapErrorBoundary } from './map-error-boundary';
 import { proximoPuntoControlPendiente } from './proximo-punto-control';
 import { RouteMapView } from './route-map-view';
 import { NextControlSheet } from './next-control-sheet';
-import { useGpsOperativo } from './use-gps-operativo';
-import { usePaqueteDia } from './use-paquete-dia';
 import { useSyncStatus } from './use-sync-status';
-import { PerfilScreen } from '../perfil/perfil-screen';
 import { formatearDistancia } from './format-distancia';
 import { ruteoApi } from '../../shared/api/ruteo-api';
 import { ControlFeedbackToast } from './control-feedback-toast';
 import { OfflineBanner } from './offline-banner';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
+import { useGpsContext } from './gps-provider';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { OperationStackParamList } from '../../app/operation-navigator';
+import { useOperacionSettings } from '../perfil/use-operacion-settings';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -31,23 +31,21 @@ interface OperationScreenProps {
   onLogout: () => Promise<void>;
 }
 
-export function OperationScreen(props: OperationScreenProps) {
+export function OperationScreen(props: OperationScreenProps & NativeStackScreenProps<OperationStackParamList, 'Map'>) {
   useKeepAwake();
-  const paqueteDia = usePaqueteDia(props.obtenerAccessToken);
+  const { gps, paqueteDia } = useGpsContext();
   const { pendientes, errorSync, isOffline, isSyncing } = useSyncStatus(props.obtenerAccessToken);
+  const { settings } = useOperacionSettings();
   const puntosControl = useMemo(
     () => paqueteDia.paquete?.puntosControl ?? [],
     [paqueteDia.paquete],
   );
-  const gps = useGpsOperativo(props.contexto.sesionId, props.deviceId, puntosControl);
   const [completados, setCompletados] = useState<Set<string>>(new Set());
   const [observacion, setObservacion] = useState('');
   const [enviandoObservacion, setEnviandoObservacion] = useState(false);
   const [observacionEnviada, setObservacionEnviada] = useState(false);
   const [recenterTick, setRecenterTick] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
-  const [showObservacion, setShowObservacion] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -133,46 +131,11 @@ export function OperationScreen(props: OperationScreenProps) {
     }
   }, [observacion, props.contexto.sesionId, props.deviceId]);
 
-  const cerrarModalObservacion = useCallback(() => {
-    setShowObservacion(false);
-    setObservacion('');
-    setObservacionEnviada(false);
-  }, []);
-
   const [confirmarFinVisible, setConfirmarFinVisible] = useState(false);
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
 
   const confirmarFinalizacion = useCallback(() => setConfirmarFinVisible(true), []);
   const confirmarCierreSesion = useCallback(() => setConfirmarLogoutVisible(true), []);
-
-  if (showProfile) {
-    return (
-      <>
-        <PerfilScreen
-          contexto={props.contexto}
-          tracking={gps.tracking}
-          isOffline={isOffline}
-          pendingEvents={pendientes}
-          onBack={() => setShowProfile(false)}
-          onLogout={confirmarCierreSesion}
-        />
-        <QuivoConfirmDialog
-          visible={confirmarLogoutVisible}
-          variant="danger"
-          title="¿Cerrar sesión?"
-          message="Deberás volver a validar el vehículo y tu identidad."
-          cancelLabel="Cancelar"
-          confirmLabel="Cerrar sesión"
-          onCancel={() => setConfirmarLogoutVisible(false)}
-          onConfirm={() => {
-            setConfirmarLogoutVisible(false);
-            setShowProfile(false);
-            void props.onLogout();
-          }}
-        />
-      </>
-    );
-  }
 
   return (
     <View style={styles.container}>
@@ -193,7 +156,7 @@ export function OperationScreen(props: OperationScreenProps) {
               style={{ flex: 1 }}
               accessibilityRole="button"
               accessibilityLabel="Perfil y configuración"
-              onPress={() => setShowProfile(true)}
+              onPress={() => props.navigation.navigate('Perfil')}
             >
               <DriverRouteCard contexto={props.contexto} tracking={gps.tracking} isOffline={isOffline} />
             </Pressable>
@@ -211,11 +174,6 @@ export function OperationScreen(props: OperationScreenProps) {
             Almacenamiento local casi lleno (80%). Conéctate pronto para sincronizar.
           </Text>
         ) : null}
-        {errorSync && !isOffline ? (
-          <Text accessibilityRole="alert" style={styles.dangerNotice}>
-            No se pudo sincronizar: {errorSync}. Se reintentará automáticamente.
-          </Text>
-        ) : null}
         {paqueteDia.vencido ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             Asignación vencida. Reconecta antes de iniciar otro recorrido.
@@ -224,6 +182,11 @@ export function OperationScreen(props: OperationScreenProps) {
         {paqueteDia.error ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             {paqueteDia.error}
+          </Text>
+        ) : null}
+        {(!settings.trabajarOffline && isOffline) ? (
+          <Text accessibilityRole="alert" style={styles.dangerNotice}>
+            Modo offline desactivado en tus Ajustes. Conéctate a internet para iniciar.
           </Text>
         ) : null}
       </View>
@@ -244,7 +207,7 @@ export function OperationScreen(props: OperationScreenProps) {
             accessibilityRole="button"
             accessibilityLabel="Registrar observación"
             style={styles.recenterButton}
-            onPress={() => setShowObservacion(true)}
+            onPress={() => {}}
           >
             <Ionicons name="chatbubble-ellipses" size={24} color={quivoColors.primary} />
           </Pressable>
@@ -281,7 +244,7 @@ export function OperationScreen(props: OperationScreenProps) {
         totalPoints={puntosControl.length}
         distanciaMetros={distanciaProximoPunto}
         tracking={gps.tracking}
-        canStart={!paqueteDia.vencido && !paqueteDia.cargando && !paqueteDia.error}
+        canStart={!paqueteDia.vencido && !paqueteDia.cargando && !paqueteDia.error && !(!settings.trabajarOffline && isOffline)}
         pendingEvents={pendientes}
         isOffline={isOffline}
         isSyncing={isSyncing}
@@ -304,59 +267,6 @@ export function OperationScreen(props: OperationScreenProps) {
             <Button variant="primary" onPress={() => setShowInfo(false)} style={{ marginTop: quivoSpacing.xl }}>
               Entendido
             </Button>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={showObservacion}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={cerrarModalObservacion}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Ionicons name="chatbubble-ellipses" size={32} color={quivoColors.primary} />
-              <Text style={styles.modalTitle}>Registrar observación</Text>
-            </View>
-            {observacionEnviada ? (
-              <Text style={styles.modalText}>
-                Observación guardada. Se enviará junto con el resto de la jornada al sincronizar.
-              </Text>
-            ) : (
-              <>
-                <Text style={styles.modalText}>
-                  Describe cualquier incidencia del recorrido (tráfico, desvío, problema del
-                  vehículo, etc.). Queda guardada en el dispositivo y no requiere conexión.
-                </Text>
-                <Input
-                  multiline
-                  numberOfLines={4}
-                  value={observacion}
-                  onChangeText={setObservacion}
-                  placeholder="Ej: desvío por obras en Av. Circunvalación"
-                  containerStyle={styles.observacionInput}
-                  style={styles.observacionInputText}
-                />
-              </>
-            )}
-            <View style={styles.modalActions}>
-              {!observacionEnviada && (
-                <Button variant="outline" onPress={cerrarModalObservacion}>
-                  Cancelar
-                </Button>
-              )}
-              <Button
-                variant="primary"
-                loading={enviandoObservacion}
-                disabled={!observacionEnviada && !observacion.trim()}
-                onPress={observacionEnviada ? cerrarModalObservacion : () => void enviarObservacion()}
-                style={styles.modalActionButton}
-              >
-                {observacionEnviada ? 'Listo' : 'Enviar'}
-              </Button>
-            </View>
           </View>
         </View>
       </Modal>
@@ -676,21 +586,5 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: quivoColors.textSecondary,
     lineHeight: 22,
-  },
-  observacionInput: {
-    marginTop: quivoSpacing.md,
-  },
-  observacionInputText: {
-    minHeight: 96,
-    textAlignVertical: 'top',
-  },
-  modalActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: quivoSpacing.sm,
-    marginTop: quivoSpacing.xl,
-  },
-  modalActionButton: {
-    minWidth: 120,
   },
 });
