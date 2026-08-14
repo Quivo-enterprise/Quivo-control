@@ -1,7 +1,14 @@
 # ADR 0001 — Railway vs Fly.io para staging/producción inicial
 
-**Estado:** propuesto, sin aprovisionar (decisión pendiente de confirmación del usuario antes
-de crear cuenta/recursos reales — ver `docs/handoff.md`).
+> **⚠️ ANULADO el 2026-08-14. Sustituido por [ADR 0002 — GCP](0002-gcp.md).**
+>
+> Nunca se ejecutó: no se creó cuenta ni se aprovisionó ningún recurso en Railway ni en Fly.io.
+> Quedó obsoleto por un hecho externo — la cuenta de GCP de la organización se reactivó, y con
+> facturación ya resuelta ahí, evaluar dos proveedores nuevos era trabajo sin retorno. Se
+> conserva como registro histórico de por qué la infra estuvo sin decidir desde el Cycle 12;
+> **no usar nada de este documento como guía de despliegue.**
+
+**Estado:** ~~propuesto, sin aprovisionar~~ → **anulado** (2026-08-14), reemplazado por ADR 0002.
 **Fecha:** 2026-07-20
 **Contexto:** QUI-213, doc técnico §10.
 
@@ -32,7 +39,6 @@ real lo justifican — no requiere reescritura (Docker-based en ambos).
 
 ## Decisión final
 
-**Pendiente.** No se crea cuenta ni se aprovisiona ningún recurso cloud en este cycle
-(Cycle 12) — el usuario confirmó "solo local por ahora" durante el kickoff. El
-`docker-compose.yml` de la raíz cubre el entorno de desarrollo; el deploy automático a
-staging se diseña (workflow de CI) pero queda inactivo hasta esta decisión.
+**Ninguna de las dos.** En el Cycle 12 quedó pendiente (no se creó cuenta ni se aprovisionó
+ningún recurso cloud — el usuario confirmó "solo local por ahora" durante el kickoff), y el
+2026-08-14 el CTO decidió **GCP**: ver [ADR 0002](0002-gcp.md).

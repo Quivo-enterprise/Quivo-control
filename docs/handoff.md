@@ -1,7 +1,9 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-08-14** (PR #1 y PR #2 mergeados a `main`; **CI verde por
+> Última actualización: **2026-08-14** — **PR #7: ADR 0002 (GCP), cierra el código de F0**; el
+> ADR 0001 (Railway vs Fly.io) queda anulado. Antes: PR #6 (desbloqueo del gate GPS, N1).
+> Estado anterior: (PR #1 y PR #2 mergeados a `main`; **CI verde por
 > primera vez en la historia del repo**, tras 8 de 8 corridas fallidas; `@quivo/design-system`
 > reconstruido como paquete del monorepo porque el repo hermano que lo alojaba se perdió.)
 >
@@ -82,7 +84,7 @@ TypeScript punta a punta. Detalle y justificación completa en `docs/plan-maestr
 - **Móvil**: Expo (React Native) + EAS Build; GPS background con Transistorsoft `react-native-background-geolocation` (licencia única ~US$400); expo-sqlite como outbox.
 - **Sync idempotente**: UUIDv7 generado en cliente + `INSERT ... ON CONFLICT (event_id) DO NOTHING`.
 - **Mapas**: MapLibre GL + tiles OSM.
-- **Infra**: Railway o Fly.io (API + worker + Redis) + Postgres gestionado + Vercel (web) + EAS (móvil).
+- **Infra**: **GCP** — Cloud Run (API) + Cloud Run Worker Pool (ingesta GPS) + Cloud SQL PG16/PostGIS + Memorystore Redis + Secret Manager, `apps/web` en Firebase App Hosting, archivado GPS en Cloudflare R2, IaC con Terraform ([ADR 0002](adr/0002-gcp.md), 2026-08-14 — anula el ADR 0001 Railway vs Fly.io). EAS para móvil.
 
 ## Decisiones clave y por qué
 
@@ -1253,6 +1255,41 @@ orden de sus pasos, y no por una garantía estructural, no es un pipeline*. Vale
 en mente el resto del workflow — el paso `Test` sigue dependiendo de que `Seed database` haya
 corrido antes.
 
+## PR #7 — ADR 0002: GCP (N19) — 2026-08-14
+
+Cierra **F0**. Único ítem de la fase que no era trámite externo del CTO.
+
+`docs/adr/0001-railway-vs-flyio.md` queda **anulado** (banner al principio + "Decisión final"
+reescrita) y se conserva como registro histórico de por qué la infra estuvo sin decidir desde el
+Cycle 12 — nunca se creó cuenta ni se aprovisionó nada en Railway ni en Fly.io, así que no hay
+recursos que dar de baja. Lo sustituye `docs/adr/0002-gcp.md`, que fija la arquitectura de
+despliegue del plan de finalización como decisión formal: Cloud Run para `apps/api`
+(`min-instances=1`), **Cloud Run Worker Pool** para el worker de ingesta —GA desde abril de 2026,
+y la razón concreta de la elección: un Cloud Run *service* normal moriría por falta de tráfico—,
+Cloud Run Job + Scheduler para la retención, Cloud SQL PG16 con PostGIS, Memorystore, Secret
+Manager, `apps/web` en Firebase App Hosting y archivado en Cloudflare R2.
+
+Tres cosas que el ADR deja escritas porque son las que muerden después:
+
+- **RLS en Cloud SQL depende de un detalle no obvio:** el usuario `postgres` de Cloud SQL no es
+  superusuario real (es `cloudsqlsuperuser`), así que `quivo_app` sin BYPASSRLS y `FORCE ROW LEVEL
+  SECURITY` se comportan como en Postgres vanilla — que es el supuesto sobre el que se construyó
+  todo QUI-218. Queda como verificación obligatoria correr `rls.integration.test.ts` **contra la
+  instancia real**, no contra el Docker local.
+- **R2 en vez de GCS es deliberado**, no un descuido de coherencia: egreso $0 permanente contra
+  ~$0,12/GB, y evita el footgun de los checksums del AWS SDK contra GCS. Cero cambio de código.
+- **El objetivo de costo del doc técnico (US$50–150/mes) es inalcanzable** con servicios
+  gestionados en región sudamericana: ~US$160–230/mes en el piloto, ~US$1.200–2.800/mes en
+  régimen. El ADR lo acepta explícito en vez de dejar el número viejo flotando.
+
+Queda **abierta la región**: lean por `southamerica-east1`, pero sin dato duro de latencia desde
+Bolivia. Hoy revertirlo es gratis (no hay nada aprovisionado); después de cargar datos, no.
+
+Los documentos de stack que seguían diciendo "Railway o Fly.io + Vercel" se corrigieron
+(`plan-maestro.md` §Stack, `documento-tecnico-cto.md` §1/§10 y la respuesta 14 del §15, y el
+resumen de stack de este handoff). **No** se tocó `plan-continuidad-quivo-control.md`: es el
+registro cerrado del diagnóstico del PR #2 y sus menciones son históricas.
+
 ## Insumos para el plan de finalización — resueltos
 
 Los 4 puntos que quedaron abiertos el 2026-08-14 antes de planificar (revisar Linear issue por
@@ -1263,18 +1300,21 @@ ejecución; el plan registra la intención.
 
 ## Dónde retomar
 
-**Fase F0 (ciclo 14), 7 pts.** Estado:
+**Fase F0 (ciclo 14), 7 pts — cerrada del lado del código; solo quedan trámites externos.** Estado:
 
 | Ítem | Estado |
 |---|---|
 | **N1** — `docs/spike-gps.md` + 3 bugs de config + headless task | **Hecho** (PR #6) |
-| **N19** — anular el ADR 0001 (Railway vs Fly) y escribir el ADR 0002 (GCP) | **Pendiente — es lo único que falta de F0** |
+| **N19** — anular el ADR 0001 (Railway vs Fly) y escribir el ADR 0002 (GCP) | **Hecho** (PR #7) |
 | **N4** — licencia trial v5 en EAS secrets | Pendiente (CTO, externo) |
 | **N21** — cuenta de Play + declaración de background location + Data Safety | Pendiente (CTO, externo — **arranca el reloj de 1 a 3 semanas de revisión manual de Google**, es la dependencia más larga del plan) |
 | **QUI-212** — cerrar (branch protection imposible en plan free) | Pendiente en Linear |
 
-Después de F0 viene **F1**: migración Expo SDK 52→54 + Transistorsoft 4.19.4→**5.4.0 exacto**
-(sin `^`), y recién ahí el spike QUI-216 sobre el teléfono real — el **gate D1**.
+**Lo siguiente es F1**, y es el camino crítico entero: migración Expo SDK 52→54 +
+Transistorsoft 4.19.4→**5.4.0 exacto** (sin `^`), `newArchEnabled: false` (N2, 8 pts, la hace el
+CTO — trabajo nativo de riesgo), y recién sobre ese stack el spike QUI-216 en el teléfono real —
+el **gate D1**. Regla operativa que arranca con el PR de migración: **`apps/mobile` queda
+congelado para Valentina** hasta que mergee.
 
 Dos decisiones esperando al CTO, ninguna bloqueante hoy:
 
@@ -1288,6 +1328,8 @@ piloto. Identificarlo y comprometerlo en C14–C15, no en C21.
 
 ## Fuentes de verdad
 
+- `docs/plan-finalizacion-piloto.md` — alcance, fases, asignación y fechas hasta el piloto (el plan vigente).
+- `docs/adr/0002-gcp.md` — decisión de infraestructura (GCP). Anula el ADR 0001.
 - `docs/plan-maestro.md` — plan aprobado (stack, arquitectura, fases, verificación).
 - `docs/documento-tecnico-cto.md` — documento técnico completo (modelo de datos, API, sync, riesgos, respuestas al CPO).
 - `docs/plan-continuidad-quivo-control.md` — diagnóstico y plan del PR #2 (bloqueo de CI, reconstrucción del design system, veredicto issue por issue del roadmap viejo de Valentina).
