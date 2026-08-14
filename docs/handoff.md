@@ -1,8 +1,24 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-08-01** (autenticación operativa móvil y port QUIVO
-> implementados/verificados; pipeline GPS productivo continúa sujeto al gate Transistorsoft.)
+> Última actualización: **2026-08-14** (PR #1 y PR #2 mergeados a `main`; **CI verde por
+> primera vez en la historia del repo**, tras 8 de 8 corridas fallidas; `@quivo/design-system`
+> reconstruido como paquete del monorepo porque el repo hermano que lo alojaba se perdió.)
+>
+> **PR #2 — `fix/vendorizar-design-system-ci-verde` (mergeado 2026-08-14, commit `1c29376`):**
+> vendoriza `@quivo/design-system` en `packages/design-system`, arregla el SSR de `RouteMap`,
+> el ciclo de vida roto de `MapContainer` en `/rutas`, la fuga de `RUNTIME_DATABASE_URL` que
+> dejaba los tests de RLS sin verificar nada, el seed en CI y el cacheo del cliente Prisma en
+> Turbo, agrega el job `acceptance` (Playwright) al pipeline, y aplica los 11 hallazgos de
+> `/code-review high` (el más grave: `BaseDialog` perdía el foco en cada tecla, no se podía
+> escribir en ningún modal de alta/edición). Detalle completo en la sección
+> "PR #2 — vendorizar design system + CI verde" más abajo.
+>
+> **PR #1 — `qui-227-web-nextjs-scaffold` (mergeado 2026-08-14, commit `98bae54`):** trae
+> M1+M2+M3+M4+M5(parcial) a `main` de punta a punta — todo lo documentado en las secciones de
+> abajo hasta "Autenticación operativa móvil + identidad QUIVO" vivía en esta rama, sin
+> mergear, desde el 2026-07-30. El CI nunca corrió una vez verde contra este contenido hasta
+> el PR #2 (ver "Patrón" más abajo).
 >
 > **Implementación móvil (2026-08-01):** autenticación vehículo (placa+PIN) -> chofer
 > (documento+PIN), contexto por asignación e identidad visual QUIVO. Codex mantiene el
@@ -34,7 +50,9 @@ Requerimientos de Producto (CPO): `~/Downloads/QUIVOcontrol.md` (RF-01..84, RNF,
 | Deliberación council       | ✅ Sesión `council-20260719-083140` (Claude + Gemini, chairman synthesis, confianza media)                                                                                                                                                                            |
 | Plan maestro               | ✅ `docs/plan-maestro.md`                                                                                                                                                                                                                                             |
 | Documento técnico CTO      | ✅ `docs/documento-tecnico-cto.md` (responde las 18 preguntas del CPO)                                                                                                                                                                                                |
-| Repo / monorepo            | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — rama `qui-227-web-nextjs-scaffold` (QUI-211..219, QUI-227) **pusheada** (2026-07-30); PR hacia `main` abierto, pendiente de review/merge |
+| Repo / monorepo            | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — **PR #1** (`qui-227-web-nextjs-scaffold`, M1-M5 parcial) y **PR #2** (`fix/vendorizar-design-system-ci-verde`) mergeados a `main` (2026-08-14); solo queda `main`, las 3 ramas de trabajo se borraron del remoto tras verificar que estaban 100% mergeadas — ver `docs/ramas-sprint-m6.md` |
+| CI (`.github/workflows/ci.yml`) | ✅ **Verde en `main` por primera vez en la historia del repo** (2026-08-14) — antes: 8 de 8 corridas fallidas, siempre en el paso *Typecheck*. Job `acceptance` (Playwright) sumado al pipeline — ver sección PR #2 abajo |
+| `@quivo/design-system`     | ✅ Vendorizado como `packages/design-system` (workspace del monorepo, 2026-08-14) — el repo hermano que lo alojaba se perdió y se reconstruyó por fidelidad de uso, ver "Pendientes de acceso" y sección PR #2 |
 | Fase 0 / Cycle 12          | ✅ QUI-211/212/213/214/215 implementados y verificados en local; QUI-216 con código listo, ejecución física pendiente (ver `docs/spike-gps.md`)                                                                                                                       |
 | M1 kickoff — QUI-227       | ✅ `apps/web` scaffold Next.js completo: login, layout por rol, guard de rutas, demo CRUD de 8 módulos, dashboard con gráficos — ver sección "QUI-227 + QUI-219" abajo                                                                                                |
 | QUI-219 — auth real        | ✅ Login/refresh real (Better-Auth + Prisma) implementado y **verificado end-to-end** (backend + browser), reemplaza el bypass de desarrollo                                                                                                                          |
@@ -668,53 +686,236 @@ endurecido globalmente para eliminar Authorization/cookies. El monorepo completo
 typecheck, lint, tests y build. El gate pendiente de licencia/hardware corresponde al
 tracking GPS productivo, no al login/contexto móvil.
 
+## PR #2 — vendorizar design system + CI verde — cerrado 2026-08-14
+
+El PR #1 (`qui-227-web-nextjs-scaffold`, todo lo documentado arriba desde M0 hasta la
+autenticación móvil) se mergeó a `main` el 2026-08-14, pero **nunca había pasado un CI verde**:
+las 8 corridas de la historia del repo, incluida la del propio merge, fallaban en el paso
+*Typecheck* con 136 errores. Causa raíz única: `apps/web/package.json` dependía de
+`@quivo/design-system` vía `link:` hacia un repo hermano (`Design_System_QUIVO`), y ese repo
+se perdió junto con el acceso a la máquina donde vivía. Se buscó exhaustivamente antes de
+reconstruir nada: no está en la organización de GitHub (`Quivo-enterprise/Quivo-UI-UX` existe
+pero está vacío), no está en la cuenta personal del CTO, no está en ningún checkout local de
+`Quivo-control` (los 3 tienen el mismo symlink colgado), nunca estuvo en el historial de git
+de este repo, y la caché de Turbo no tiene ningún `turbo-build` de `apps/web` del que extraer
+el CSS/JS compilado. Diagnóstico y evidencia completos en
+[`docs/plan-continuidad-quivo-control.md`](plan-continuidad-quivo-control.md).
+
+1. **`@quivo/design-system` reconstruido como workspace del monorepo
+   (`packages/design-system`).** No es un rediseño: la API, los ~30 tokens `--qv-*` y las
+   ~13 clases `qv-*` se derivaron leyendo cada uno de los 25 archivos de `apps/web` que
+   consumían el paquete (21 componentes en total — `AdminLayout`, `DataTable`, `RouteMap`,
+   `Select`, `DatePicker`, etc.). `apps/web/package.json` solo cambió el `link:` externo por
+   `workspace:*`; los imports de la app quedaron intactos. Esto solo llevó el typecheck de
+   **136 errores a 0** (22 `TS2307` de módulo no encontrado más 114 derivados de perder la
+   inferencia de tipos sin el paquete). Se descartó migrar a shadcn/ui: habría obligado a
+   reescribir los 25 consumidores además del paquete nuevo, con más riesgo y sin resolver
+   nada que la reconstrucción no resolviera ya.
+
+2. **Bug de SSR en `RouteMap`:** el barrel de `packages/design-system` reexporta todo junto,
+   así que el import estático de Leaflet a nivel de módulo se arrastraba a cualquier página
+   que importara cualquier otro componente del design system — incluidas `/login` y
+   `/conductores`, que ni siquiera tienen mapa — y rompía en SSR con `window is not defined`.
+   `RouteMap` ahora es un wrapper client-only que carga la implementación real
+   (`route-map-impl.tsx`) con `lazy()` recién después del mount.
+
+3. **`Map container is already initialized`:** `/rutas` no cargaba en `next dev`. No era solo
+   el doble-mount de Strict Mode: `MapContainer` de `react-leaflet@4.2.1` crea el mapa dentro
+   de un ref callback cuyo `context` capturado queda `null` para siempre, y lo destruye en un
+   efecto que depende de ese mismo `context` — el cleanup **nunca corría** y los mapas se
+   acumulaban con sus listeners. Se reemplazó por un contenedor propio
+   (`route-map-impl.tsx`) que maneja el ciclo de vida con cleanup real y publica el contexto
+   con `LeafletProvider` (API pública de `@react-leaflet/core`). Dato técnico a recordar: el
+   App Router de Next 15 corre su propio **React 19** internamente aunque `package.json` fije
+   18.3.1, y es el doble-invoke de React 19 (que además desata y reata refs) el que dispara el
+   fallo.
+
+4. **RLS multi-tenant: los tests nunca habían probado nada.** Turbo corre en `envMode: strict`
+   y `turbo.json` solo declaraba `DATABASE_URL` en `globalPassThroughEnv`, así que
+   `RUNTIME_DATABASE_URL` se filtraba del entorno del proceso de test. `packages/db/src/client.ts`
+   caía **en silencio** al fallback `?? DATABASE_URL`, que apunta al rol `quivo` (superusuario
+   con `BYPASSRLS`) — Postgres ignora RLS para ese rol, y los 12 tests de aislamiento
+   fallaban. Reproducido: `turbo run test --filter=@quivo/db` da 12 fallos; el mismo comando
+   con `--env-mode=loose`, contra la misma base y en el mismo instante, da 17/17. **Las
+   políticas en sí estaban bien** — las 15 tablas tienen `FORCE ROW LEVEL SECURITY`, las 15
+   policies `tenant_isolation` existen y `quivo_app` no es superusuario ni tiene `BYPASSRLS`.
+   Se declararon las variables (`RUNTIME_DATABASE_URL`, `JWT_SECRET`, `REDIS_URL`,
+   `BETTER_AUTH_URL`, `NODE_ENV`, `JWT_ACCESS_TTL`, `JWT_REFRESH_TTL`) en `env` de la tarea
+   `test` de `turbo.json` (no en `globalPassThroughEnv`, para que entren al hash de caché:
+   cambiar de base ahora invalida la caché en vez de replayear un resultado obtenido contra
+   otra conexión). `client.ts` ahora **falla ruidosamente** fuera de `development` si falta
+   `RUNTIME_DATABASE_URL`, en vez de degradar; y `rls.integration.test.ts` verifica primero
+   como quién está conectada y aborta si detecta superusuario o `BYPASSRLS`, para que este
+   tipo de falso-verde no pueda volver a pasar inadvertido.
+
+   **Riesgo de despliegue que queda abierto, fuera del código:** no hay ningún manifiesto de
+   deploy en el repo (`Dockerfile`, `fly.toml`, `render.yaml`). Antes de este fix, un entorno
+   que olvidara `RUNTIME_DATABASE_URL` arrancaba la API sin ningún aviso con el aislamiento
+   entre sindicatos apagado; con el fix ahora falla al arrancar, lo cual es mejor pero no
+   elimina el riesgo — **hay que verificar si existe algún entorno ya desplegado y si tiene
+   esa variable seteada**. Se agrava porque
+   `apps/api/src/modules/socios/socios.service.ts:33` hace `findUnique({ where: { id } })`
+   sin filtrar por `sindicatoId`, apoyándose en RLS como única barrera. Pendiente explícito,
+   no resuelto en este PR.
+
+5. **Seed en CI:** 4 tests de auth fallaban con 401 porque corren contra Better-Auth real con
+   usuarios del seed (`admin@quivo.local`), y el job migraba la base pero nunca la sembraba.
+   Se agregó el paso `Seed database`/`Seed acceptance data` al workflow.
+
+6. **Cliente Prisma y caché de Turbo:** `@quivo/db:build` es `prisma generate && tsc`, pero
+   `turbo.json` solo declara `dist/**` como output — el cliente que genera Prisma se escribe
+   en `node_modules/.pnpm/@prisma+client@…/node_modules/.prisma`, que no se cachea. Con cache
+   hit, Turbo restauraba `dist/` sin volver a ejecutar el comando, así que el cliente nunca se
+   escribía y el seed explotaba con `"The requested module '@prisma/client' does not provide
+   an export named 'PrismaClient'"`. **El pipeline solo había funcionado hasta ahora con
+   caché fría.** Fix: `prisma:seed` corre `prisma generate` primero (se prefirió esto sobre
+   agregar un paso al workflow porque protege también a cualquiera que corra el seed en local
+   tras borrar `node_modules` o cambiar de rama, no solo a CI).
+
+7. **Job `acceptance` (Playwright) agregado al pipeline.** `playwright.config.ts` y los 3
+   tests de `tests/acceptance/admin-panel.spec.ts` ya existían en el repo pero no corrían en
+   ningún workflow. El job nuevo corre con `needs: ci` y sube el reporte de Playwright como
+   artifact si falla.
+
+8. **`/code-review high`: 11 hallazgos, los 11 aplicados.** El más grave: el efecto de foco de
+   `BaseDialog` dependía de `onClose`, recreado en cada render por todos los call sites — así
+   que **cada tecla robaba el foco al input** y no se podía escribir más de un carácter en
+   ningún modal de alta o edición. El callback pasa ahora a un `ref`, el foco solo se mueve en
+   la transición de apertura. También: fallbacks de color `var(--qv-color-primary)` en
+   atributos de presentación SVG de Leaflet, donde `var()` no se sustituye (las polilíneas se
+   dibujaban invisibles — ahora usan un hex literal); `ColorPicker` que mostraba un color
+   mientras almacenaba `''`; `Select` no operable con teclado ni con `role="combobox"`; y 10
+   clases que se renderizaban sin estilo.
+
+9. **Ramas borradas del remoto:** `qui-227-web-nextjs-scaffold`, `feat/mobile-ui-valentina` y
+   `feat/mobile-ui-sprint-valentina`, las 3 verificadas con `git merge-base --is-ancestor` como
+   100% mergeadas antes de borrarlas — ninguna tenía un commit propio pendiente de integrar.
+   Solo queda `main` en el remoto. Estado y evidencia completos por rama en
+   [`docs/ramas-sprint-m6.md`](ramas-sprint-m6.md).
+
+**Patrón que vale la pena dejar escrito:** los puntos 3 a 6 comparten una misma causa de fondo
+— **el CI nunca había pasado del paso `Typecheck`**, así que ni los tests unitarios, ni los de
+RLS, ni los de aceptación se habían ejecutado jamás en un pipeline real. Arreglar el
+typecheck no destapó "el" siguiente problema sino una serie: cada capa que por fin corría
+revelaba la siguiente que tampoco había corrido nunca. Un pipeline que nunca fue verde no es
+un pipeline — es, en el mejor de los casos, un linter.
+
+**Otros pendientes que quedaron registrados en esta sesión, sin resolver:**
+
+- **Branch protection en `main` sigue siendo imposible**: `gh api .../branches/main/protection`
+  devuelve `403 Upgrade to GitHub Pro` — el repo es privado en plan free. El criterio de
+  aceptación de QUI-212 no se puede cumplir sin cambiar de plan (hacerlo público quedó
+  descartado).
+- **Entorno local**: Turbo no propaga el `.env`, hay que exportar las variables a mano antes
+  de correr comandos sueltos; la máquina del CTO tiene Node v24 mientras el repo pide
+  `>=22 <23` (`npm_config_engine_strict=false` como workaround solo local — CI usa `.nvmrc` y
+  está bien).
+- **`test:acceptance:prepare`** hace `. apps/api/.env`, un archivo que no existe ni en local
+  ni en CI — el script fallaría con `set -e` si algo lo invoca. Sin investigar todavía.
+- **Riesgo latente de orden en el workflow de CI**: el paso `Test` depende implícitamente de
+  que `Seed database` haya corrido antes y haya dejado el cliente Prisma escrito en disco.
+  Funciona hoy por el orden de los pasos, no por una garantía estructural del workflow.
+
+**Verificación de este PR:** clon limpio + `pnpm install && pnpm typecheck && pnpm test &&
+pnpm build` sin ninguna ruta fuera del repo; `gh run list --limit 1` → primera corrida
+`success` de la historia; `pnpm test:acceptance` (Playwright) verde en CI; `git branch -a` →
+solo `main` en remoto.
+
 ## Pendientes de acceso
 
-- **Repo `Design_System_QUIVO` (sibling, `~/Proyectos/Web/Design_System_QUIVO`) tiene 1 commit local sin pushear** (el prop `zones` de `RouteMap`, QUI-229) — funciona igual en este entorno porque `apps/web` lo consume vía symlink `link:`, pero cualquier otra máquina/CI que dependa de ese repo no lo tiene todavía.
-- **Push a GitHub:** ✅ resuelto (2026-07-30) — ya no hay bloqueo de credenciales de escritura
-  sobre `Quivo-enterprise/quivo-control`. Todo el trabajo de Cycle 12 + QUI-227/219 se pusheó en
-  una sola rama (`qui-227-web-nextjs-scaffold`, 13 commits) con un único PR hacia `main`
-  (ver "Próximos pasos"). Las 6 ramas individuales del kickoff (`qui-211-monorepo-scaffold`, etc.)
-  siguen existiendo localmente como puntos de referencia por issue, pero forman parte de la misma
-  cadena lineal de commits — no son ramas divergentes independientes.
-- **`gh` CLI:** sigue sin instalar en este entorno (requiere `sudo` interactivo) — el PR de arriba
-  se abrió manualmente vía el link que imprime `git push`, no con `gh pr create`. Sigue siendo
-  necesario para automatizar branch protection en `main` (QUI-212) — alternativa: ajuste manual en
-  GitHub Settings → Branches.
+- **Repo `Design_System_QUIVO` (antes sibling en `~/Proyectos/Web/Design_System_QUIVO`): se
+  perdió, no se recuperó, y ya no es una dependencia externa.** Este documento registraba acá
+  un commit local sin pushear (`zones` de `RouteMap`, QUI-229) sobre ese repo — la máquina
+  donde vivía dejó de estar disponible antes de poder pushearlo, y una búsqueda exhaustiva
+  (organización de GitHub, cuenta personal del CTO, los 3 checkouts locales de
+  `Quivo-control`, el historial completo de git, la caché de Turbo) confirmó que el fuente no
+  existe en ningún lado. Se reconstruyó desde cero como `packages/design-system` dentro de
+  este monorepo (PR #2, 2026-08-14), derivando la API por fidelidad de cada sitio de uso en
+  `apps/web` — incluida la prop `zones` que este documento pedía no perder, ya incorporada en
+  `route-map-impl.tsx`. `apps/web` ya no depende de ningún repo externo vía `link:`; el
+  paquete es `workspace:*` y vive versionado en este mismo repo. Detalle completo en la
+  sección "PR #2 — vendorizar design system + CI verde" arriba.
+- **Push a GitHub:** ✅ resuelto (2026-07-30), sigue así.
+- **`gh` CLI:** ✅ instalado y operativo en este entorno — se usó para diagnosticar el bloqueo
+  de CI (`gh run list`), verificar los PRs (`gh pr view`) y confirmar branch protection. Único
+  bloqueo que persiste: **branch protection en `main` sigue siendo imposible**, no por falta
+  de `gh` sino porque `gh api .../branches/main/protection` devuelve `403 Upgrade to GitHub
+  Pro` — el repo es privado en plan free. El criterio de aceptación de QUI-212 no se puede
+  cumplir sin cambiar de plan (hacer el repo público quedó descartado).
 - **Infra cloud real (QUI-213):** Railway/Fly.io sin decidir ni aprovisionar — solo el ADR
   y el `docker-compose.yml` local están listos.
 - **Spike GPS físico (QUI-216):** licencia Transistorsoft (~US$400) + dispositivo Android
-  real de gama baja, ambos pendientes de que el equipo/usuario los consiga.
+  real de gama baja, ambos pendientes de que el equipo/usuario los consiga. Ver "Camino
+  crítico" en Próximos pasos — el gate ya se está bypasseando de hecho.
 
-## Próximos pasos
+## Estado del roadmap (Linear, 2026-08-14)
 
-1. Revisar y mergear el PR abierto (`qui-227-web-nextjs-scaffold` → `main`, ahora incluye
-   todo M1: QUI-217/218/220..226) — dispara el CI (QUI-212) por primera vez contra código
-   real, incluidos los 55+ tests de integración (RLS, geometría, tenant-scoping). **Sin
-   atribución de IA** en commits/PRs — regla del repo, sobrescribe el comportamiento
-   default del agente.
-2. Una vez el CI esté en verde y mergeado a `main`, activar branch protection.
-3. **M2 — Rotaciones (RF-51..57): ✅ completo** (QUI-230..234). **M4**: QUI-248
-   (auditoría), QUI-244 (reglas/sanciones API), QUI-245 (reglas/sanciones UI) y QUI-251
-   (security review) ✅ cerrados. **M3 autenticación/sesión/contexto móvil: ✅ completo** el
-   2026-08-01. QUI-246/247/249 (M4) y QUI-250/252 (M5) aún necesitan `gps_points`, sync y
-   worker de ingesta; para cerrar esa parte del tracking productivo sigue pendiente el gate
-   de licencia Transistorsoft + prueba en Android físico de gama baja (QUI-216).
-4. Pushear el commit pendiente de `Design_System_QUIVO` (prop `zones` de `RouteMap`, arriba).
-5. Validar con Producto las asunciones que quedaron documentadas sin confirmar: transiciones
-   de estado de vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de
-   control cerca de una ruta (`common/geo/proximidad-ruta.ts`), taxonomía de `tipo` en
-   paradas (`packages/shared/src/entities/parada.ts`).
-6. Deploy de `apps/web` en Vercel + CI (parte del criterio de aceptación de QUI-227, aún no hecho).
-7. Decidir Railway vs Fly.io (ADR ya redactado) y aprovisionar cuando el usuario confirme.
-8. Conseguir licencia Transistorsoft + dispositivo Android de gama baja y correr el
-   protocolo de `docs/spike-gps.md` — gate go/no-go real de M3.
-9. Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas),
-   refinement de M1 durante Cycle 13.
+Con `main` verde, el bloqueo que frenaba a cualquiera de clonar y trabajar el repo quedó
+resuelto. Estado por milestone (64 issues / 248 pts, ~73% completado por puntos):
+
+| Milestone                    | Target                      | Progreso | Qué falta                                                          |
+| ----------------------------- | ---------------------------- | -------- | -------------------------------------------------------------------- |
+| M0 Fundaciones + Spike GPS    | 2026-08-10 ❌ **vencido**     | 63,9%    | QUI-216 (gate GPS, Urgent), QUI-213 (infra)                          |
+| M1 Núcleo administrativo      | 2026-08-30                   | 100%     | —                                                                     |
+| M2 Rotaciones                 | 2026-09-13                   | 100%     | —                                                                     |
+| M3 App móvil + sync           | 2026-10-18                   | 81,8%    | QUI-237 (tracking GPS producción, Urgent, en Backlog sin ciclo)      |
+| M4 Dashboard/reglas/auditoría | 2026-11-08                   | 100%     | —                                                                     |
+| M5 Hardening + piloto         | 2026-11-20                   | 41,1%    | QUI-250 (k6), QUI-252 (retención), QUI-253 (piloto) — las 3 en curso |
+| M6 Sprint UI/UX Mobile        | 2026-08-10 ❌ vencido         | 97,6%    | resto en el roadmap nuevo de Valentina, ver abajo                    |
+
+**Camino crítico, en orden:**
+
+1. **QUI-216, gate GPS** (Urgent, vencido desde el 2026-08-10): la issue no cambió de estado
+   desde el 2026-07-19 — sigue en `Todo`, 0 comentarios, la tabla de resultados de
+   `docs/spike-gps.md` sigue vacía, sin veredicto GO/NO-GO. El código de integración ya está
+   (`react-native-background-geolocation` en uso en `use-gps-operativo.ts`, arnés de medición
+   completo en `apps/mobile/src/gps/`); falta la validación física de 8h — licencia
+   Transistorsoft (~US$400) + Android real de gama baja, ninguno de los dos disponible
+   todavía. **El gate ya se está bypasseando de hecho**: QUI-216 declara bloquear a QUI-235 y
+   QUI-237, pero QUI-235 está `Done` y toda la app móvil se construyó encima — la premisa
+   "nada de M3 arranca sin este GO" dejó de sostenerse hace tiempo. No hay ningún rastro en
+   Linear de compra, presupuesto o aprobación de la licencia ni del dispositivo. **Decisión
+   pendiente del CTO:** comprar y correr el spike, o aceptar formalmente el riesgo y
+   reescribir el gate.
+2. **QUI-213** (infra cloud, Railway vs Fly.io sin decidir, ADR ya redactado) y el **deploy de
+   `apps/web` en Vercel**, que sigue pendiente del criterio de aceptación de QUI-227.
+3. **M5 (hardening + piloto):** QUI-250 (k6), QUI-252 (retención GPS) y QUI-253 (piloto), las
+   3 en curso del CTO.
+
+**Roadmap de Valentina reescrito contra el estado real de `main`** (2026-08-13/14): de las 12
+issues abiertas, 3 se cerraron por estar ya hechas (**QUI-343** onboarding, **QUI-341** pase
+visual del app pasajero, **QUI-345** tests de contraste) y **QUI-337** (limpiar ramas) se cerró
+absorbida por el PR #2. Se rescopearon **QUI-336, 338, 340, 342 y 346** — cada una tenía partes
+ya resueltas en `main` (ej. QUI-338 "estados de error": offline y sesión expirada ya estaban,
+falta renderizar `errorSync` y distinguir permiso de ubicación denegado). Quedan **8 issues
+vivas y ~21 puntos** (antes 34, sin priorizar ni asignar a milestone), ahora todas con
+prioridad, milestone y un comentario de arranque — antes ninguna de las 12 tenía un solo
+comentario, causa directa de que Valentina no entendiera el alcance. **QUI-348** (los 4 bugs
+reales encontrados en la auditoría de mobile, closures viejas de React y timers sin limpiar)
+queda vigente sin cambios. **QUI-339/347** (accesibilidad web) quedan explícitamente
+dependientes de este `main` verde.
+
+También se cerró **QUI-264** (planning del sprint M6 del CPO): el plan repartía 21 pts a
+Estrella y 21 a Valentina, pero las 10 issues del sprint quedaron asignadas solo a Valentina —
+contexto directo de por qué la calidad del código de M6 dejó los 4 bugs de QUI-348. Queda como
+decisión abierta del CTO si Estrella se reincorpora al proyecto con carga real.
+
+**Otros pendientes que siguen abiertos, sin cambios desde antes:**
+
+- Validar con Producto las asunciones documentadas sin confirmar: transiciones de estado de
+  vehículos (`vehiculos.service.ts`), tolerancia de 100m para paradas/puntos de control cerca
+  de una ruta (`common/geo/proximidad-ruta.ts`), taxonomía de `tipo` en paradas
+  (`packages/shared/src/entities/parada.ts`).
+- Ritos Scrum sugeridos: daily corto, review/retro al cierre de cada cycle (cada 2 semanas).
+
+Plan de trabajo completo de esta iteración, con toda la evidencia verificada, en
+[`docs/plan-continuidad-quivo-control.md`](plan-continuidad-quivo-control.md).
 
 ## Fuentes de verdad
 
 - `docs/plan-maestro.md` — plan aprobado (stack, arquitectura, fases, verificación).
 - `docs/documento-tecnico-cto.md` — documento técnico completo (modelo de datos, API, sync, riesgos, respuestas al CPO).
+- `docs/plan-continuidad-quivo-control.md` — diagnóstico y plan del PR #2 (bloqueo de CI, reconstrucción del design system, veredicto issue por issue del roadmap viejo de Valentina).
+- `docs/ramas-sprint-m6.md` — estado verificado de las 3 ramas del sprint M6 antes de borrarlas del remoto.
 - `~/.council/Documents/council-20260719-083140/` — deliberación completa (`viewer.html` para explorar).
 - Memoria del proyecto: `~/.claude/projects/-home-jairomgr-Proyectos-QUIVO-Control-quivo-control/memory/`.
