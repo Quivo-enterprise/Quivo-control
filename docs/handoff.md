@@ -5,6 +5,10 @@
 > primera vez en la historia del repo**, tras 8 de 8 corridas fallidas; `@quivo/design-system`
 > reconstruido como paquete del monorepo porque el repo hermano que lo alojaba se perdió.)
 >
+> **Decisiones del CTO del 2026-08-14** y las investigaciones que las sustentan (GPS,
+> migración de Expo SDK, council sobre higiene del repo) están al final del documento, desde
+> "Decisiones del CTO". Son el insumo del plan de finalización del proyecto.
+>
 > **PR #2 — `fix/vendorizar-design-system-ci-verde` (mergeado 2026-08-14, commit `1c29376`):**
 > vendoriza `@quivo/design-system` en `packages/design-system`, arregla el SSR de `RouteMap`,
 > el ciclo de vida roto de `MapContainer` en `/rutas`, la fuga de `RUNTIME_DATABASE_URL` que
@@ -842,11 +846,16 @@ solo `main` en remoto.
   de `gh` sino porque `gh api .../branches/main/protection` devuelve `403 Upgrade to GitHub
   Pro` — el repo es privado en plan free. El criterio de aceptación de QUI-212 no se puede
   cumplir sin cambiar de plan (hacer el repo público quedó descartado).
-- **Infra cloud real (QUI-213):** Railway/Fly.io sin decidir ni aprovisionar — solo el ADR
-  y el `docker-compose.yml` local están listos.
-- **Spike GPS físico (QUI-216):** licencia Transistorsoft (~US$400) + dispositivo Android
-  real de gama baja, ambos pendientes de que el equipo/usuario los consiga. Ver "Camino
-  crítico" en Próximos pasos — el gate ya se está bypasseando de hecho.
+- **Infra cloud real (QUI-213):** sin aprovisionar. **Actualizado el 2026-08-14:** la cuenta
+  de GCP se reactivó y el destino ahora es GCP, así que el ADR
+  `docs/adr/0001-railway-vs-flyio.md` quedó **obsoleto** — hay que reescribirlo o anularlo.
+  Solo el `docker-compose.yml` local está listo.
+- **Spike GPS físico (QUI-216): ✅ desbloqueado el 2026-08-14.** El **dispositivo ya se
+  consiguió**, y la **licencia nunca fue un prerequisito real** — Transistorsoft es funcional
+  en builds debug sin key y ofrece trial de 30 días para release; el paso 1 de
+  `docs/spike-gps.md` está mal escrito y hay que corregirlo. Lo que sí falta antes de correr
+  el spike: migrar a Expo SDK 54 + Transistorsoft v5 y arreglar los tres bugs de
+  configuración. Ver "GPS y migración de Expo SDK" al final.
 
 ## Estado del roadmap (Linear, 2026-08-14)
 
@@ -863,23 +872,25 @@ resuelto. Estado por milestone (64 issues / 248 pts, ~73% completado por puntos)
 | M5 Hardening + piloto         | 2026-11-20                   | 41,1%    | QUI-250 (k6), QUI-252 (retención), QUI-253 (piloto) — las 3 en curso |
 | M6 Sprint UI/UX Mobile        | 2026-08-10 ❌ vencido         | 97,6%    | resto en el roadmap nuevo de Valentina, ver abajo                    |
 
-**Camino crítico, en orden:**
+**Camino crítico, en orden** (reordenado el 2026-08-14 tras las decisiones del CTO — ver
+"Decisiones del CTO" y "GPS y migración de Expo SDK" abajo):
 
-1. **QUI-216, gate GPS** (Urgent, vencido desde el 2026-08-10): la issue no cambió de estado
-   desde el 2026-07-19 — sigue en `Todo`, 0 comentarios, la tabla de resultados de
-   `docs/spike-gps.md` sigue vacía, sin veredicto GO/NO-GO. El código de integración ya está
-   (`react-native-background-geolocation` en uso en `use-gps-operativo.ts`, arnés de medición
-   completo en `apps/mobile/src/gps/`); falta la validación física de 8h — licencia
-   Transistorsoft (~US$400) + Android real de gama baja, ninguno de los dos disponible
-   todavía. **El gate ya se está bypasseando de hecho**: QUI-216 declara bloquear a QUI-235 y
-   QUI-237, pero QUI-235 está `Done` y toda la app móvil se construyó encima — la premisa
-   "nada de M3 arranca sin este GO" dejó de sostenerse hace tiempo. No hay ningún rastro en
-   Linear de compra, presupuesto o aprobación de la licencia ni del dispositivo. **Decisión
-   pendiente del CTO:** comprar y correr el spike, o aceptar formalmente el riesgo y
-   reescribir el gate.
-2. **QUI-213** (infra cloud, Railway vs Fly.io sin decidir, ADR ya redactado) y el **deploy de
-   `apps/web` en Vercel**, que sigue pendiente del criterio de aceptación de QUI-227.
-3. **M5 (hardening + piloto):** QUI-250 (k6), QUI-252 (retención GPS) y QUI-253 (piloto), las
+1. **Migrar a Expo SDK 54 + Transistorsoft v5.** Precondición de todo lo demás en móvil: con
+   Expo SDK 52 (`targetSdkVersion 34`) la app **no se puede publicar ni actualizar en Google
+   Play**, que exige API 36 desde el 2026-08-31. El piloto va a Play, así que la migración
+   dejó de ser opcional.
+2. **QUI-216, gate GPS** (Urgent, vencido desde el 2026-08-10): **ya no está bloqueada por la
+   licencia** — ese era un error del protocolo, no un hecho (detalle abajo). El Android de
+   gama baja ya se consiguió. Correr el spike **sobre SDK 54 + v5**, no sobre el stack actual,
+   para no validar algo que se va a tirar. Antes hay que corregir los tres bugs de
+   configuración que hoy lo harían fallar con licencia o sin ella.
+   **El gate ya se está bypasseando de hecho**: QUI-216 declara bloquear a QUI-235 y QUI-237,
+   pero QUI-235 está `Done` y toda la app móvil se construyó encima — la premisa "nada de M3
+   arranca sin este GO" dejó de sostenerse hace tiempo.
+3. **QUI-213 (infra) y deploy de `apps/web`:** ambos se reevalúan **contra GCP**, cuya cuenta
+   se reactivó. El ADR `docs/adr/0001-railway-vs-flyio.md` quedó **obsoleto** (compara Railway
+   vs Fly.io) y hay que reescribirlo o anularlo.
+4. **M5 (hardening + piloto):** QUI-250 (k6), QUI-252 (retención GPS) y QUI-253 (piloto), las
    3 en curso del CTO.
 
 **Roadmap de Valentina reescrito contra el estado real de `main`** (2026-08-13/14): de las 12
@@ -910,6 +921,190 @@ decisión abierta del CTO si Estrella se reincorpora al proyecto con carga real.
 
 Plan de trabajo completo de esta iteración, con toda la evidencia verificada, en
 [`docs/plan-continuidad-quivo-control.md`](plan-continuidad-quivo-control.md).
+
+## Decisiones del CTO — 2026-08-14
+
+Once decisiones tomadas en la misma sesión, tras el merge del PR #2. Son el insumo del plan de
+finalización.
+
+| #   | Tema                            | Decisión                                                                                                                                       |
+| --- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Entorno desplegado              | **No existe ninguno, todo es local.** El riesgo de `RUNTIME_DATABASE_URL` no está activo hoy, pero pasa a ser requisito del despliegue          |
+| 2   | GCP                             | **La cuenta se reactivó.** El destino de infra ahora es GCP                                                                                     |
+| 3   | `socios.service.ts:33`          | **Se agrega el filtro explícito por id.** RLS deja de ser la única barrera en los reads por id                                                  |
+| 4   | QUI-212 (branch protection)     | **Se cierra la issue** — requiere GitHub Pro y la decisión es no gastar. No volver a listarlo como pendiente técnico                            |
+| 5   | QUI-213 (infra)                 | **Reevaluar contra GCP**, no Railway/Fly                                                                                                        |
+| 6   | Deploy de `apps/web`            | **Reevaluar** (el plan decía Vercel)                                                                                                            |
+| 7   | Estrella                        | Sigue en otro proyecto esta semana; **no se cuenta en la capacidad todavía**                                                                    |
+| 8   | Los 3 elementos excluidos       | **Se aceptan si no rompen nada.** Verificar antes de cerrar QUI-336                                                                             |
+| 9   | Distribución del piloto         | **Se publica en Google Play.** Antes va una **demo con APK directo** al sindicato, que no pasa por Play                                        |
+| 10  | Expo SDK                        | **Se migra antes del piloto** — obligado por Play (ver abajo)                                                                                   |
+| 11  | Hardware del spike              | **El Android de gama baja ya se consiguió**                                                                                                    |
+
+Sobre la 1: si `RUNTIME_DATABASE_URL` no se setea al desplegar en GCP, la API arranca sin
+aislamiento entre sindicatos. Con el fix del PR #2 ahora **falla al arrancar** en vez de
+degradar en silencio, así que se va a notar — pero conviene que esté escrito antes de
+desplegar, no después.
+
+Sobre la 8, los tres elementos son: el endpoint `GET /v1/mobile/perfil`
+(`auth-movil.controller.ts:56-63`), el `refetchInterval` de 60s/300s en `use-perfil-query.ts:23`
+y `react-native-shimmer-placeholder` (`package.json:50`, usado 8× en `perfil-screen.tsx`).
+Entraron a `main` pese a estar excluidos del alcance original de QUI-336.
+
+## Council — tres decisiones menores (2026-08-14)
+
+Se convocó un council de cuatro voces sobre tres puntos de higiene del repo. **Unánime en los
+tres**, con el criterio explícito de "qué deja el repo más difícil de romper para gente junior
+que va a tocar esto sin el contexto de hoy":
+
+- **Divergencia de Expo SDK:** dejar divergir, pero con **política escrita, con owner y fecha**
+  — sin eso "es teatro". La app del pasajero en SDK 57 funciona como **canario** de la versión
+  nueva. ⚠️ **Esta decisión quedó superada por el deadline de Play** — ver la sección
+  siguiente. El council no tenía ese dato.
+- **Script `test:acceptance:prepare` roto** (hace `. apps/api/.env`, archivo que no existe ni
+  local ni en CI): **borrarlo**, y dejar **un solo camino que sea el que CI ejecuta**. Un
+  script que nadie corre "le enseña al junior que el repo miente". Regla que salió del council:
+  **si CI no lo ejecuta, no existe.**
+- **Dependencia implícita de orden en CI:** hacerla **estructural** (`prisma generate` como
+  precondición vía `pretest`/`postinstall`), nunca un comentario — "los comentarios no se
+  ejecutan; el junior que rompe esto no está leyendo el YAML". **No** declarar el cliente
+  generado como output de Turbo: la caché puede restaurar un cliente stale, que es exactamente
+  el bug que se pagó en este PR.
+
+**Observación que las tres voces levantaron por separado:** un CI verde por primera vez no
+prueba que los tests detecten algo; podrían estar pasando en vacío.
+
+La evidencia dice que **sí detectan**: cuando la conexión caía al rol `quivo` (superusuario con
+`BYPASSRLS`), **12 de 14 tests de RLS fallaron**; con `quivo_app`, 17/17 pasan. Límite que
+queda abierto: eso prueba que la suite detecta **RLS globalmente desactivado**, no que detecte
+**una policy mal escrita en una tabla puntual**. Vale romper una policy específica antes del
+piloto y confirmar que el test de esa tabla se pone rojo.
+
+## GPS y migración de Expo SDK — investigado 2026-08-14
+
+### El hallazgo que desbloquea QUI-216
+
+**La licencia nunca fue el bloqueo.** Transistorsoft es *fully functional en builds debug sin
+key*, y ofrece trial de 30 días para builds release. **El paso 1 de `docs/spike-gps.md` está
+mal escrito** — pone "agregar la licencia" como prerequisito, y por eso el spike quedó parado
+un mes. Los US$399 no compran la capacidad de *medir*, sino la de *distribuir un release
+firmado*. **Hay que corregir ese paso del protocolo.**
+
+Con el teléfono ya conseguido, el spike se puede correr esta semana.
+
+### Tres bugs de configuración que harían fallar el spike igual
+
+Verificados en el repo. Ninguno tiene que ver con la licencia:
+
+- `apps/mobile/src/gps/background-geolocation.config.ts` **no setea** `stopOnTerminate`,
+  `startOnBoot` ni `enableHeadless`. Los defaults de Transistorsoft son `stopOnTerminate: true`
+  / `startOnBoot: false`, o sea que **el tracking muere al cerrar la app y no vuelve tras el
+  reboot** — que es exactamente el criterio C del GO.
+- `apps/mobile/index.js` **no registra headless task** (solo `registerRootComponent`). Sin eso,
+  con la app terminada nada escribe en `quivo-outbox.db`, que es la fuente de la evidencia de
+  sanciones (RF-67..73).
+- `logLevel: LOG_LEVEL_VERBOSE` en una config marcada como de producción: escribe a SQLite en
+  cada tick durante las 8 horas de la medición.
+
+### GCP no sirve para el tracking
+
+El problema es de **proceso local en el dispositivo**: cuando Android congela el proceso, nadie
+lee el chip GPS, y ningún servicio remoto puede leerlo por él. **Fleet Engine** queda
+descartado — requiere contrato firmado, apunta a >1M viajes/año, cobra por tarea, su SDK es
+nativo sin binding de React Native, y reemplazaría Postgres+PostGIS por un backend propietario.
+**Roads API** costaría ~US$27.000/mes al volumen del proyecto. Lo que **sí** sirve de GCP es
+Cloud Run + Cloud SQL para el backend, que es la decisión 5.
+
+### Ninguna alternativa opensource cumple
+
+`expo-location` falla los tres criterios GO, con dos bugs abiertos y fechados:
+[expo/expo#46788](https://github.com/expo/expo/issues/46788) (junio 2026 — Android ignora
+`timeInterval`/`distanceInterval` en background y cae a ~3s, con el fix sin publicar) y
+[expo/expo#47595](https://github.com/expo/expo/issues/47595) (julio 2026, **abierto** — el
+foreground service se congela tras cualquier update de la app: la notificación sigue visible y
+no llega un solo punto, así que el chofer no se entera).
+
+Migrar ida y vuelta cuesta ~2 semanas que se tiran, y de paso rompe `battery-gap-monitor.ts`,
+que usa `location.battery.level` — dato que `expo-location` no provee.
+
+### Destino de la migración: **Expo SDK 54**
+
+**Play exige API 36 desde el 2026-08-31** (extensión posible hasta el 2026-11-01). Expo SDK 52
+da **API 34**, así que hoy la app no se puede publicar ni actualizar.
+
+SDK 54 (RN 0.81 / React 19.1) es la **única versión que cumple las dos condiciones a la vez**:
+la primera que da `targetSdkVersion 36`, y la última que todavía permite
+`newArchEnabled: false`. Esa intersección existe en exactamente un SDK.
+
+| Expo SDK    | RN       | React      | targetSdk    | Transistorsoft                      | New Arch obligatoria         |
+| ----------- | -------- | ---------- | ------------ | ----------------------------------- | ---------------------------- |
+| 52 (hoy)    | 0.76     | 18.3.1     | 34 ❌ Play   | v4 legacy                           | No                           |
+| 53          | 0.79     | 19.0       | 35 ❌ Play   | v5 usado                            | No                           |
+| **54** ✅   | **0.81** | **19.1**   | **36** ✅    | **v5, entorno más reportado**       | **No — último con opt-out**  |
+| 55          | 0.83     | 19.2       | 36 ✅        | v5 usado                            | Sí                           |
+| 56          | 0.85     | 19.2       | 36 ✅        | v5 usado                            | Sí                           |
+| 57          | 0.86     | 19.2       | 36 ✅        | **sin evidencia (0 reportes)**      | Sí                           |
+
+### Hallazgos que condicionan la migración
+
+- **Hay que migrar Transistorsoft v4 → v5, y es una migración aparte.** La versión instalada
+  real es **4.19.4** (el `package.json` declara `^4.17.3`, engaña) y **no tiene
+  `codegenConfig`**: es bridge legacy puro. v5 implementa TurboModules y, sobre todo, **solo v5
+  maneja bridgeless en el path del headless task** — el corazón del producto. v4 bajo New
+  Architecture es riesgo en el único camino que no puede fallar.
+- **La licencia v4 no sirve para v5** (v5 usa formato JWT). Como todavía no se compró, no hay
+  dinero perdido: **comprar directamente la key v5**. La demo por APK directo puede salir como
+  build **debug sin licencia**; el piloto en Play sí la necesita. Transistorsoft responde lento
+  a temas de licencia (hay un pedido de trial que quedó sin respuesta 30 días), así que
+  conviene comprar con margen.
+- **Los fixes de foreground service de Android 16 viven en el nativo de v5**
+  (`tslocationmanager` 4.4.x, clase `FgsLaunchGate`). Apuntar a API 36 con v4 = crashes de FGS.
+  El patrón de fallas reportado es **Motorola y Samsung de gama baja**, que es justamente el
+  hardware objetivo del proyecto.
+- **Subir `targetSdkVersion` a 36 con `expo-build-properties` quedándose en SDK 52 no es una
+  salida:** los crashes de FGS pegan en v4; edge-to-edge es obligatorio con targetSdk 36 y RN
+  0.76 no lo soporta (llegó en RN 0.81); y el toolchain (AGP/Gradle) de Expo 52 es anterior al
+  soporte de API 36. Parece que funciona hasta que corre en un teléfono real.
+
+### Plan de migración en dos PRs, con palanca de rollback
+
+1. **SDK 52 → 54 + Transistorsoft v4 → v5**, con `newArchEnabled: false`. Cumple Play sobre la
+   arquitectura vieja, que es el camino conocido para Transistorsoft.
+2. **Flip a New Architecture**, como cambio separado. Si rompe el headless task, se revierte
+   solo el (2) y se publica igual, porque el cumplimiento de Play ya está en el (1).
+
+**Verificación barata antes de comprometerse (~1 día):** build **debug** de dev-client en SDK
+54 + v5.4.0 (sin licencia), sobre el Android de gama baja real, con test de tracking con la app
+terminada 2–4 h. Si pasa, comprar la key v5 y correr el spike completo.
+
+**Riesgo principal:** no es el salto de SDK, es Transistorsoft v5 sobre Android 16 en gama
+baja — la clase de bug más viva del tracker (`ForegroundServiceDidNotStartInTimeException` en
+`FgsLaunchGate`, con issues de julio y agosto 2026). Es ortogonal al SDK elegido: viene con API
+36. Mitigación: pinear **exactamente 5.4.0** (no rango `^`) y probar en Motorola/Samsung real,
+no en emulador.
+
+**Calidad de la evidencia** (importa para decidir): SDK 54 + v5 tiene evidencia **fuerte**
+(~10 reportes de producción recientes en el tracker); SDK 55/56 **moderada**; **SDK 57 / RN
+0.86: cero reportes** — es ausencia de evidencia, no evidencia de incompatibilidad, pero para
+el módulo que es el riesgo #1 del proyecto no conviene ser el primero con un piloto encima.
+Transistorsoft **no publica matriz de compatibilidad** (sin `peerDependencies` ni `engines` en
+su `package.json`), así que la compatibilidad solo se puede leer del código y del tracker.
+
+## Insumos para el plan de finalización
+
+Lo que la próxima sesión tiene que resolver, en orden:
+
+1. **Revisar Linear issue por issue.** M0 sigue incompleto y vencido; hay que determinar qué
+   sigue vigente, qué está mal planteado y qué se puede cerrar. Las decisiones 4, 5 y 6 ya
+   cambian el estado de QUI-212, QUI-213 y el criterio pendiente de QUI-227.
+2. **Decidir el orden entre migración de SDK, spike GPS y piloto.** La migración es
+   precondición del spike (no tiene sentido validar un stack que se va a tirar), y el spike es
+   precondición del piloto. La demo por APK directo puede ir antes que todo eso, en debug.
+3. **Cerrar las decisiones de infra** (2, 5 y 6): si todo va a GCP, es una sola decisión que
+   cierra QUI-213 y el criterio pendiente de QUI-227 juntos, y obliga a reescribir o anular el
+   ADR de Railway vs Fly.io.
+4. **Aplicar lo que salió del council** (script roto, garantía estructural del cliente Prisma)
+   y la decisión 3 (filtro explícito en `socios.service.ts`).
 
 ## Fuentes de verdad
 
