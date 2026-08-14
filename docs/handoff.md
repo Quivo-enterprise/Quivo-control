@@ -84,7 +84,7 @@ TypeScript punta a punta. Detalle y justificación completa en `docs/plan-maestr
 - **Móvil**: Expo (React Native) + EAS Build; GPS background con Transistorsoft `react-native-background-geolocation` (licencia única ~US$400); expo-sqlite como outbox.
 - **Sync idempotente**: UUIDv7 generado en cliente + `INSERT ... ON CONFLICT (event_id) DO NOTHING`.
 - **Mapas**: MapLibre GL + tiles OSM.
-- **Infra**: **GCP** — Cloud Run (API) + Cloud Run Worker Pool (ingesta GPS) + Cloud SQL PG16/PostGIS + Memorystore Redis + Secret Manager, `apps/web` en Firebase App Hosting, archivado GPS en Cloudflare R2, IaC con Terraform ([ADR 0002](adr/0002-gcp.md), 2026-08-14 — anula el ADR 0001 Railway vs Fly.io). EAS para móvil.
+- **Infra**: **GCP** — Cloud Run (API) + Cloud Run Worker Pool (ingesta GPS) + Cloud SQL PG16/PostGIS + Memorystore Redis + Secret Manager, `apps/web` también en Cloud Run, archivado GPS en Cloudflare R2, IaC con Terraform, todo en **`southamerica-west1`** (Santiago) menos el Cloud Scheduler ([ADR 0002](adr/0002-gcp.md), 2026-08-14 — anula el ADR 0001 Railway vs Fly.io). EAS para móvil.
 
 ## Decisiones clave y por qué
 
@@ -1267,7 +1267,7 @@ despliegue del plan de finalización como decisión formal: Cloud Run para `apps
 (`min-instances=1`), **Cloud Run Worker Pool** para el worker de ingesta —GA desde abril de 2026,
 y la razón concreta de la elección: un Cloud Run *service* normal moriría por falta de tráfico—,
 Cloud Run Job + Scheduler para la retención, Cloud SQL PG16 con PostGIS, Memorystore, Secret
-Manager, `apps/web` en Firebase App Hosting y archivado en Cloudflare R2.
+Manager, `apps/web` también en Cloud Run y archivado en Cloudflare R2.
 
 Tres cosas que el ADR deja escritas porque son las que muerden después:
 
@@ -1279,11 +1279,71 @@ Tres cosas que el ADR deja escritas porque son las que muerden después:
 - **R2 en vez de GCS es deliberado**, no un descuido de coherencia: egreso $0 permanente contra
   ~$0,12/GB, y evita el footgun de los checksums del AWS SDK contra GCS. Cero cambio de código.
 - **El objetivo de costo del doc técnico (US$50–150/mes) es inalcanzable** con servicios
-  gestionados en región sudamericana: ~US$160–230/mes en el piloto, ~US$1.200–2.800/mes en
+  gestionados en región sudamericana: ~US$255–290/mes en el piloto, ~US$1.200–2.800/mes en
   régimen. El ADR lo acepta explícito en vez de dejar el número viejo flotando.
 
-Queda **abierta la región**: lean por `southamerica-east1`, pero sin dato duro de latencia desde
-Bolivia. Hoy revertirlo es gratis (no hay nada aprovisionado); después de cargar datos, no.
+### La región quedó cerrada: `southamerica-west1` (Santiago)
+
+El plan de finalización dejaba la región abierta con un *lean* por São Paulo apoyado en dos
+supuestos —"catálogo más completo" e intuición geográfica— y pedía explícitamente medir antes de
+comprometerse. **Se midió, y los dos supuestos eran falsos.**
+
+Latencia real desde la conexión del CTO (La Paz, AXS Bolivia `AS26210`), 12 requests HTTPS sobre
+una **única conexión TLS reusada** por región, descartando el handshake:
+
+| Región | RTT mediana |
+|---|---|
+| **`southamerica-west1`** (Santiago) | **52 ms** |
+| `southamerica-east1` (São Paulo) | 110 ms |
+| `us-east4` | 199 ms |
+| `us-central1` | 230 ms |
+
+**Trampa de medición que conviene no repetir:** medir con `time_connect` de `curl`, o con
+conexiones nuevas, da ~40 ms para *todas* las regiones por igual — eso es el borde Anycast de
+Google, no el datacenter. La diferencia aparece recién reusando la conexión.
+
+Y en costo Santiago **también** gana: Cloud Run y Worker Pools son de 2 tiers (Santiago y São
+Paulo cuestan idéntico), pero Cloud SQL es 6,7% y Memorystore 19,5% más baratos en Santiago —
+−6,5% en el total. La mitad de latencia y más barato: no hubo tradeoff que deliberar.
+
+**Los dos gaps de Santiago, y por qué ninguno bloquea:**
+
+- **Cloud Scheduler no existe en `southamerica-west1`** (verificado en la doc oficial). Acá solo
+  dispara el Job de retención GPS, **una vez por día**: se pone en `southamerica-east1` apuntando
+  al Job en Santiago —el endpoint de la Admin API es global— y cuesta ~30 ms diarios. Es la única
+  pieza multi-región y hay que dejarla explícita en el Terraform para que no se lea como error.
+- **Firebase App Hosting no tiene ninguna región sudamericana** (`us-central1`, `us-east4`,
+  `us-east5`, `asia-east1`, `asia-southeast1`, `europe-west4`). No es un gap de Santiago sino del
+  servicio, y **se resolvió sacándolo de la arquitectura** — ver abajo.
+
+**Cloud Run Worker Pools sí corre en Santiago, verificado en vivo.** Era el único gap capaz de
+descartar la región (sostiene el worker de ingesta) y no tiene tabla de regiones publicada: la
+doc no documenta restricción ni lo confirma en positivo. Se comprobó contra la API real con
+`POST .../locations/southamerica-west1/workerPools?validateOnly=true`, que valida sin crear nada
+— aceptado en ambas regiones, con `Listed 0 items` confirmado después. Control: la misma llamada
+contra una región inexistente falla. **Lección reusable: `validateOnly=true` convierte una
+inferencia de documentación en un hecho, gratis.**
+
+### Cambio de arquitectura: `apps/web` va en Cloud Run, no en Firebase App Hosting
+
+Al no existir App Hosting en Sudamérica, había que decidir si valía servir el panel desde
+`us-east4` (199 ms medidos) con un proveedor y un camino de deploy extra. Se fue a ver si dolía:
+**todo `page`/`layout` de `apps/web` salvo `app/layout.tsx` es `'use client'`**, y el fetching es
+TanStack Query contra `NEXT_PUBLIC_API_URL` desde el navegador. El panel es un SPA con cáscara
+Next.js — **el host web no está en el camino de datos**, el browser pega directo contra la API.
+Sin SSR con datos, sin Server Actions y sin ISR, App Hosting no compra nada.
+
+Servirlo como un Cloud Run más deja todo en una plataforma, un proveedor de Terraform y una
+región. **Consecuencia no prevista por N6:** son **dos** `Dockerfile` (Next.js en modo
+`standalone` además del de API+worker), no una imagen con dos `CMD`. Y si `apps/web` alguna vez
+incorpora SSR con datos reales, esta decisión hay que revisarla.
+
+### Costo corregido
+
+El ~US$160–230/mes que circulaba en el plan **estaba corto: el número verificado es ~US$255–290
+/mes**. La causa no es la región sino el sizing — **Cloud SQL 2 vCPU/8 GB es la línea dominante y
+está sobredimensionada para 40 vehículos**. El tier definitivo se decide con el resultado del k6
+(QUI-250), no antes. Corregido en el plan, el doc técnico y este handoff.
 
 Los documentos de stack que seguían diciendo "Railway o Fly.io + Vercel" se corrigieron
 (`plan-maestro.md` §Stack, `documento-tecnico-cto.md` §1/§10 y la respuesta 14 del §15, y el

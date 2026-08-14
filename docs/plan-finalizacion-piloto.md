@@ -119,19 +119,28 @@ Las brechas:
 
 ## Arquitectura de despliegue en GCP
 
-```
-Internet ──▶ Cloud Run: apps/api (min-instances=1)
-                  │ Direct VPC egress
-     ┌────────────┼──────────────┐
-     ▼            ▼              ▼
- Cloud SQL   Memorystore    Secret Manager
- PG16+PostGIS  Redis Basic   (RUNTIME_DATABASE_URL,
-                  │           JWT_SECRET, R2)
-                  │ BullMQ
-        Cloud Run WORKER POOL ── ingesta GPS (always-on, 1 instancia)
-        Cloud Run JOB + Scheduler ── retención GPS (batch) ──▶ Cloudflare R2
+> **Formalizada en [ADR 0002](adr/0002-gcp.md) (2026-08-14), con dos cambios respecto de lo que
+> decía este plan:** la región quedó en **`southamerica-west1` (Santiago)**, no São Paulo — se
+> midió la latencia y es la mitad — y **`apps/web` va en Cloud Run, no en Firebase App Hosting**,
+> que no tiene ninguna región sudamericana. El ADR es la fuente de verdad; esto queda como
+> contexto.
 
- apps/web (Next.js 15) ──▶ Firebase App Hosting
+```
+                        southamerica-west1 (Santiago)
+Internet ──▶ Cloud Run: apps/api (min-instances=1)
+     │            │ Direct VPC egress
+     │ ┌──────────┼──────────────┐
+     │ ▼          ▼              ▼
+     │ Cloud SQL  Memorystore  Secret Manager
+     │ PG16+PostGIS Redis Basic (RUNTIME_DATABASE_URL,
+     │              │            JWT_SECRET, R2)
+     │              │ BullMQ
+     │     Cloud Run WORKER POOL ── ingesta GPS (always-on, 1 instancia)
+     │     Cloud Run JOB ── retención GPS (batch) ──▶ Cloudflare R2
+     │            ▲
+     │            └── Cloud Scheduler (southamerica-east1) · 1 disparo/día
+     │
+     └──▶ Cloud Run: apps/web (Next.js 15)
 ```
 
 **Decisiones y por qué:**
@@ -167,15 +176,22 @@ horizontalmente más dos workers, un burst de reconexión de flota puede agotar 
 un tier chico. Mitigación mínima para el piloto: `connection_limit` explícito en la URL y
 `max-instances` capado.
 
-**Costo estimado:** ~US$160–230/mes para el piloto, ~US$1.200–2.800/mes en régimen de 3000
-vehículos. El objetivo declarado en el documento técnico era US$50–150/mes: **no es alcanzable**
-con servicios gestionados en región sudamericana. Palancas si el número molesta: desplegar en
-`us-central1` (~35% más barato, a costa de latencia sin medir) o Redis en una VM en vez de
-Memorystore (~US$25/mes menos, a costa de ops manual).
+**Costo (verificado contra precio de lista el 2026-08-14):** **~US$255–290/mes** para el piloto
+— el ~US$160–230 que decía este plan estaba corto. La causa no es la región (Santiago salió más
+barato que São Paulo) sino el sizing: **Cloud SQL 2 vCPU/8 GB es la línea dominante y está
+sobredimensionada para 40 vehículos**. Decidir el tier con el resultado del k6 (QUI-250). El
+objetivo del documento técnico (US$50–150/mes) **no es alcanzable** con servicios gestionados en
+región sudamericana. Detalle y palancas en el ADR 0002.
 
-**Región:** lean por `southamerica-east1` (São Paulo) — catálogo más completo y ruta terrestre
-mejorando con el Corredor Bioceánico. **Sin dato duro de latencia desde Bolivia**: correr
-`gcping.com` desde una conexión boliviana antes de comprometerse.
+**Región: `southamerica-west1` (Santiago), decidida y medida.** El lean por São Paulo de este
+plan se apoyaba en dos supuestos que resultaron falsos. Latencia real desde La Paz (AXS Bolivia,
+12 requests sobre una conexión TLS reusada): **Santiago 52 ms · São Paulo 110 ms · us-east4
+199 ms · us-central1 230 ms**. Y en precio, Cloud Run es de 2 tiers (idéntico en ambas), pero
+Cloud SQL es 6,7% y Redis 19,5% más baratos en Santiago. Gana en las dos dimensiones a la vez.
+Los dos gaps de Santiago no bloquean: **Cloud Scheduler** no existe ahí (se pone en São Paulo, es
+1 disparo diario) y **Firebase App Hosting** no tiene región sudamericana (se sacó de la
+arquitectura). **Cloud Run Worker Pools sí corre en Santiago**, verificado en vivo contra la API
+con `validateOnly=true`, no inferido de la doc.
 
 ---
 
