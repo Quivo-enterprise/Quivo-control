@@ -1,13 +1,20 @@
 // El script `prisma:seed` (package.json) es `prisma generate && tsx prisma/seed.ts`, no
-// solo `tsx prisma/seed.ts` — no lo simplifiques aunque parezca redundante con
-// `@quivo/db:build` (`prisma generate && tsc`, ver turbo.json). El motivo es Turbo: si
-// `@quivo/db:build` resulta *cache hit* (los inputs no cambiaron desde una corrida
-// anterior), Turbo restaura sus `outputs` declarados (`dist/**`) y NO reejecuta el
-// comando — o sea, `prisma generate` no corre y el cliente de Prisma nunca se escribe en
-// disco. Ese cliente vive en `node_modules/.pnpm/@prisma+client@.../node_modules/.prisma`,
-// una ruta con hash de pnpm que no es (ni conviene declarar como) un output de Turbo, así
-// que la caché de Turbo no la restaura ni la protege. Sin el `prisma generate` explícito
-// de acá, este seed —y cualquiera que lo corra tras un cache hit, en CI o en local—
+// solo `tsx prisma/seed.ts` — no lo simplifiques aunque parezca redundante. La garantía
+// real de que el cliente de Prisma existe en disco es el `postinstall` de
+// `packages/db/package.json` (corre `prisma generate` en todo `pnpm install`, incluso
+// `--frozen-lockfile`, incluso en CI), así que en teoría este `prisma generate` de acá ya
+// no hace falta. Se deja de todos modos como red de seguridad barata: protege a quien
+// corra `prisma:seed` sin haber pasado por un `pnpm install` fresco desde el último cambio
+// de schema (p. ej. tras un `git checkout` a una rama con otro `schema.prisma`, con
+// `node_modules` ya instalado). El motivo por el que hace falta *alguna* garantía es
+// Turbo: si `@quivo/db:build` (`prisma generate && tsc`, ver turbo.json) resulta *cache
+// hit* (los inputs no cambiaron desde una corrida anterior), Turbo restaura sus `outputs`
+// declarados (`dist/**`) y NO reejecuta el comando — o sea, ese `prisma generate` no corre
+// y no se puede confiar en él. El cliente generado vive en
+// `node_modules/.pnpm/@prisma+client@.../node_modules/.prisma`, una ruta con hash de pnpm
+// que no es (ni conviene declarar como) un output de Turbo, así que la caché de Turbo no
+// la restaura ni la protege. Sin alguna fuente de verdad que corra `prisma generate`, este
+// seed —y cualquiera que lo corra tras un cache hit sin `postinstall`, en CI o en local—
 // revienta al importar `PrismaClient` de '@prisma/client' con
 // "does not provide an export named 'PrismaClient'".
 import 'dotenv/config';
