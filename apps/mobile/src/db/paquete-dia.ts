@@ -23,11 +23,17 @@ export async function guardarPaqueteDia(
   db: SQLite.SQLiteDatabase,
   paquete: PaqueteDia,
 ): Promise<void> {
-  await db.execAsync('DELETE FROM paquete_dia');
-  await db.runAsync(
-    'INSERT INTO paquete_dia (asignacion_id, vence_at, payload, descargado_en) VALUES (?, ?, ?, ?)',
-    [paquete.asignacion.id, paquete.asignacion.venceAt, JSON.stringify(paquete), new Date().toISOString()],
-  );
+  // DELETE + INSERT en una transacción (hallazgo de revisión A2): sin esto, un crash o kill
+  // del proceso justo entre las dos sentencias podía dejar la tabla vacía o con un payload a
+  // medio escribir — y ese payload corrupto tumbaba, antes de este fix, el `JSON.parse` sin
+  // protección de `obtenerPaqueteDiaLocal` de abajo.
+  await db.withTransactionAsync(async () => {
+    await db.execAsync('DELETE FROM paquete_dia');
+    await db.runAsync(
+      'INSERT INTO paquete_dia (asignacion_id, vence_at, payload, descargado_en) VALUES (?, ?, ?, ?)',
+      [paquete.asignacion.id, paquete.asignacion.venceAt, JSON.stringify(paquete), new Date().toISOString()],
+    );
+  });
 }
 
 export interface PaqueteDiaLocal {
@@ -46,7 +52,20 @@ export async function obtenerPaqueteDiaLocal(
   }>('SELECT payload, vence_at, descargado_en FROM paquete_dia LIMIT 1');
   if (!row) return null;
 
-  const parsed = PaqueteDiaSchema.safeParse(JSON.parse(row.payload) as unknown);
+  // `JSON.parse` sin protección tumbaba TODO el tick headless del turno (hallazgo de revisión
+  // A2): un `throw` acá lo come el `try/catch` de `tareaHeadlessUbicacion`
+  // (`gps/headless-task.ts`), y con la app terminada nadie ve el `console.error` — cada punto
+  // GPS del resto del turno se perdía en silencio. Un payload corrupto ahora cae al mismo
+  // camino ya soportado que un paquete ausente: `obtenerContextoUbicacionPersistido` sigue
+  // registrando `gps_point` sin puntos de control (ver su comentario en `headless-task.ts`).
+  let payloadCrudo: unknown;
+  try {
+    payloadCrudo = JSON.parse(row.payload);
+  } catch {
+    return null;
+  }
+
+  const parsed = PaqueteDiaSchema.safeParse(payloadCrudo);
   if (!parsed.success) return null;
 
   return {

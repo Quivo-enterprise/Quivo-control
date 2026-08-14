@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { PuntoControlPaquete } from '@quivo/shared';
-import { detectarPuntosControlCercanos, filtrarNuevosCumplimientos } from './geofence';
+import {
+  claveCumplimiento,
+  detectarPuntosControlCercanos,
+  filtrarNuevosCumplimientos,
+} from './geofence';
 
 function puntoControl(id: string, coord: [number, number], radioToleranciaM = 30): PuntoControlPaquete {
   return {
@@ -43,13 +47,33 @@ describe('filtrarNuevosCumplimientos', () => {
       { puntoControlId: 'pc-2', distanciaM: 500, cumplido: false },
       { puntoControlId: 'pc-3', distanciaM: 2, cumplido: true },
     ];
-    const nuevos = filtrarNuevosCumplimientos(new Set(['pc-1']), detecciones);
+    const nuevos = filtrarNuevosCumplimientos(
+      new Set([claveCumplimiento('sesion-1', 'pc-1')]),
+      detecciones,
+      'sesion-1',
+    );
     expect(nuevos.map((d) => d.puntoControlId)).toEqual(['pc-3']);
   });
 
   it('no repite un punto de control ya detectado aunque siga cumplido', () => {
     const detecciones = [{ puntoControlId: 'pc-1', distanciaM: 5, cumplido: true }];
-    const nuevos = filtrarNuevosCumplimientos(new Set(['pc-1']), detecciones);
+    const nuevos = filtrarNuevosCumplimientos(
+      new Set([claveCumplimiento('sesion-1', 'pc-1')]),
+      detecciones,
+      'sesion-1',
+    );
     expect(nuevos).toHaveLength(0);
+  });
+
+  it('NO suprime el cumplimiento de otra sesión sobre el mismo punto de control', () => {
+    // Turno del día siguiente sobre la misma ruta recurrente, con el contexto JS headless
+    // todavía vivo: `pc-1` ya está en el Set, pero con la clave de la sesión anterior.
+    const detecciones = [{ puntoControlId: 'pc-1', distanciaM: 5, cumplido: true }];
+    const nuevos = filtrarNuevosCumplimientos(
+      new Set([claveCumplimiento('sesion-1', 'pc-1')]),
+      detecciones,
+      'sesion-2',
+    );
+    expect(nuevos.map((d) => d.puntoControlId)).toEqual(['pc-1']);
   });
 });

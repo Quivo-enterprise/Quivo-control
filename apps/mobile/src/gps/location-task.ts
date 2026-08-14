@@ -1,6 +1,7 @@
 import type { Location } from 'react-native-background-geolocation';
 import type { PuntoControlPaquete, TipoEventoSync } from '@quivo/shared';
 import {
+  claveCumplimiento,
   detectarPuntosControlCercanos,
   filtrarNuevosCumplimientos,
   type DeteccionPuntoControl,
@@ -53,6 +54,7 @@ export interface ResultadoConstruirEventos {
  * de algún punto de control aún no detectado en esta sesión, un `cumplimiento_punto_control`
  * adicional (RF-64..66). Muta `puntosControlDetectados` en el sitio para registrar lo
  * detectado — el caller decide de dónde viene ese Set (ver comentario de `ContextoUbicacion`).
+ * Las claves de ese Set van scopeadas por sesión (`claveCumplimiento`, ver `geofence.ts`).
  */
 export function construirEventosDeUbicacion(
   location: Location,
@@ -68,6 +70,13 @@ export function construirEventosDeUbicacion(
         lng: location.coords.longitude,
         accuracy: location.coords.accuracy,
         speed: location.coords.speed,
+        // Timestamp del FIX GPS, no el del encolado: el sobre del outbox se sella con
+        // `new Date()` en `encolarEvento`, y en el camino headless (app terminada) el SDK
+        // entrega ubicaciones bufferadas en ráfaga al salir de Doze — sin esto, un tramo
+        // entero de manejo se persistiría con timestamps casi idénticos y el recorrido
+        // reconstruido quedaría deformado. Contrato + fallback: `PayloadGpsPointSchema` /
+        // `resolverTsFix` en `@quivo/shared`.
+        tsFix: location.timestamp,
       },
     },
   ];
@@ -76,10 +85,16 @@ export function construirEventosDeUbicacion(
   if (contexto.puntosControl.length > 0) {
     const posicion: [number, number] = [location.coords.longitude, location.coords.latitude];
     const detecciones = detectarPuntosControlCercanos(posicion, contexto.puntosControl);
-    const nuevos = filtrarNuevosCumplimientos(puntosControlDetectados, detecciones);
+    const nuevos = filtrarNuevosCumplimientos(
+      puntosControlDetectados,
+      detecciones,
+      contexto.sesionId,
+    );
 
     for (const nuevaDeteccion of nuevos) {
-      puntosControlDetectados.add(nuevaDeteccion.puntoControlId);
+      puntosControlDetectados.add(
+        claveCumplimiento(contexto.sesionId, nuevaDeteccion.puntoControlId),
+      );
       deteccion = nuevaDeteccion;
       eventos.push({
         tipo: 'cumplimiento_punto_control',
@@ -93,10 +108,42 @@ export function construirEventosDeUbicacion(
           lng: location.coords.longitude,
           distanciaM: nuevaDeteccion.distanciaM,
           validadoPor: 'app',
+          // Mismo timestamp del fix GPS que dispara el `gps_point` de más arriba — misma
+          // `location`, mismo defecto de buffering headless. Acá pesa más: la hora de paso
+          // por este punto de control es el hecho que sustenta una sanción (RF-64..66).
+          // Contrato + fallback: `PayloadCumplimientoPuntoControlSchema` / `resolverTsFix`
+          // en `@quivo/shared`.
+          tsFix: location.timestamp,
         },
       });
     }
   }
 
   return { eventos, deteccion };
+}
+
+/**
+ * Reconstruye las claves de cumplimiento ya emitidas a partir de los payloads que siguen en
+ * el outbox local. Sirve para SEMBRAR el Set del headless task en su primer tick: scopear la
+ * clave por sesión evita que un cumplimiento de la ruta A suprima el de la ruta B, pero no
+ * cubre el otro lado del mismo problema — si Android recicla el contexto JS headless a mitad
+ * de turno, el Set arranca vacío y el mismo `(sesionId, puntoControlId)` se vuelve a emitir
+ * con un `eventId` nuevo. El worker deduplica `cumplimientos_pc` por `eventId` solamente
+ * (`skipDuplicates`, `ingesta-worker.service.ts`), así que esa re-emisión SÍ crea una
+ * segunda fila para el mismo punto de control — no es inofensiva.
+ *
+ * Es best-effort a propósito: si el outbox ya purgó los eventos acusados (`purgarAcusadosAntesDe`)
+ * la semilla queda incompleta y se puede repetir un cumplimiento. Sigue siendo estrictamente
+ * mejor que arrancar siempre vacío, y nunca suprime evidencia de una sesión distinta.
+ */
+export function clavesCumplimientoDesdePayloads(payloads: Record<string, unknown>[]): Set<string> {
+  const claves = new Set<string>();
+  for (const payload of payloads) {
+    const sesionId = payload['sesionId'];
+    const puntoControlId = payload['puntoControlId'];
+    if (typeof sesionId === 'string' && typeof puntoControlId === 'string') {
+      claves.add(claveCumplimiento(sesionId, puntoControlId));
+    }
+  }
+  return claves;
 }

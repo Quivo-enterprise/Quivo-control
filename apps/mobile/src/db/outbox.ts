@@ -94,6 +94,69 @@ export async function obtenerLotePendiente(
   return rows.map(toEventoOutboxRow);
 }
 
+/**
+ * Payloads de todos los eventos de un tipo que siguen en el outbox (en cualquier estado, no
+ * solo `pendiente`). Lo usa el headless task para sembrar su Set de cumplimientos ya
+ * emitidos cuando Android recicla el contexto JS a mitad de turno — sin eso, el Set arranca
+ * vacío y se reemite un `cumplimiento_punto_control` que el worker ya no puede deduplicar
+ * (lo hace por `eventId`, y la re-emisión lleva un UUIDv7 nuevo). Ignora filas con payload
+ * corrupto en vez de romper el tick entero.
+ */
+export async function obtenerPayloadsPorTipo(
+  db: SQLite.SQLiteDatabase,
+  tipo: TipoEventoSync,
+): Promise<Record<string, unknown>[]> {
+  const rows = await db.getAllAsync<{ payload: string }>(
+    'SELECT payload FROM outbox WHERE tipo = ?',
+    [tipo],
+  );
+  const payloads: Record<string, unknown>[] = [];
+  for (const row of rows) {
+    try {
+      payloads.push(JSON.parse(row.payload) as Record<string, unknown>);
+    } catch {
+      // Fila ilegible: se ignora — la semilla es best-effort, no una fuente de verdad.
+    }
+  }
+  return payloads;
+}
+
+export interface EventoOutboxTsPayload {
+  ts: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * `ts` del sobre + payload de todos los eventos de un tipo que siguen en el outbox (en
+ * cualquier estado, no solo `pendiente`) — variante de `obtenerPayloadsPorTipo` que además
+ * expone el `ts` de encolado. Lo usa el detector de huecos del spike (`use-gps-operativo.ts`,
+ * hallazgo de revisión A1) para reconstruir la ventana MEDIDA desde lo persistido en vez de
+ * un `useRef` en memoria que el headless task nunca alimenta (no hay hook, no hay React): sin
+ * esto, un chofer que mata la app a mitad de turno y la reabre deja `detectarHuecos`
+ * evaluando solo el tramo en vivo final, reportando "0 huecos" sobre una ventana que en
+ * realidad no se midió. El `ts` del sobre sirve de fallback cuando el payload no trae
+ * `tsFix` (ver `resolverTsFix`, `@quivo/shared`). Ignora filas con payload corrupto en vez de
+ * romper la lectura entera.
+ */
+export async function obtenerEventosPorTipo(
+  db: SQLite.SQLiteDatabase,
+  tipo: TipoEventoSync,
+): Promise<EventoOutboxTsPayload[]> {
+  const rows = await db.getAllAsync<{ ts: string; payload: string }>(
+    'SELECT ts, payload FROM outbox WHERE tipo = ?',
+    [tipo],
+  );
+  const eventos: EventoOutboxTsPayload[] = [];
+  for (const row of rows) {
+    try {
+      eventos.push({ ts: row.ts, payload: JSON.parse(row.payload) as Record<string, unknown> });
+    } catch {
+      // Fila ilegible: se ignora, igual que `obtenerPayloadsPorTipo`.
+    }
+  }
+  return eventos;
+}
+
 export async function marcarEnviados(db: SQLite.SQLiteDatabase, eventIds: string[]): Promise<void> {
   await actualizarEstado(db, eventIds, 'enviado');
 }

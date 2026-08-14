@@ -155,6 +155,83 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
     expect(Number(filas[0]!.total)).toBe(1);
   });
 
+  it('persiste el punto con el timestamp del FIX GPS, no con el de encolado (evidencia RF-67..73)', async () => {
+    const eventId = randomUUID();
+    // Caso headless: el SDK entrega la ubicación bufferada 20 min después del fix real, así
+    // que el `ts` del sobre (encolado) llega muy corrido respecto del recorrido real.
+    const tsFix = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    const eventoGps = evento({
+      eventId,
+      ts: new Date().toISOString(),
+      tipo: 'gps_point',
+      payload: { sesionId, lat: -17.78, lng: -63.18, accuracy: 5, speed: 10, tsFix },
+    });
+
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      insertarGpsPoints(tx, [eventoGps]),
+    );
+
+    const filas = await prisma.$queryRaw<{ ts: Date }[]>`
+      SELECT ts FROM gps_points WHERE event_id = ${eventId}::uuid
+    `;
+    expect(filas).toHaveLength(1);
+    expect(filas[0]?.ts.toISOString()).toBe(tsFix);
+  });
+
+  it('cae al ts de encolado cuando el evento no trae tsFix — retrocompatibilidad', async () => {
+    const eventId = randomUUID();
+    const ts = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    // Payload exactamente como lo produce una versión anterior de la app móvil: sin `tsFix`.
+    const eventoGps = evento({
+      eventId,
+      ts,
+      tipo: 'gps_point',
+      payload: { sesionId, lat: -17.78, lng: -63.18, accuracy: 5, speed: 10 },
+    });
+
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      insertarGpsPoints(tx, [eventoGps]),
+    );
+
+    const filas = await prisma.$queryRaw<{ ts: Date }[]>`
+      SELECT ts FROM gps_points WHERE event_id = ${eventId}::uuid
+    `;
+    expect(filas).toHaveLength(1);
+    expect(filas[0]?.ts.toISOString()).toBe(ts);
+  });
+
+  it('reporta cuántos tsFix llegaron inusables, para que el fallback no sea silencioso', async () => {
+    const tsEncolado = new Date().toISOString();
+    const descartados = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      insertarGpsPoints(tx, [
+        // Sin tsFix: comportamiento esperado de una app anterior, NO cuenta como degradación.
+        evento({
+          eventId: randomUUID(),
+          ts: tsEncolado,
+          payload: { sesionId, lat: -17.78, lng: -63.18 },
+        }),
+        // tsFix ilegible: se ingesta con el ts de encolado, pero hay que enterarse.
+        evento({
+          eventId: randomUUID(),
+          ts: tsEncolado,
+          payload: { sesionId, lat: -17.78, lng: -63.18, tsFix: 'ayer' },
+        }),
+        // tsFix usable: no cuenta.
+        evento({
+          eventId: randomUUID(),
+          ts: tsEncolado,
+          payload: {
+            sesionId,
+            lat: -17.78,
+            lng: -63.18,
+            tsFix: new Date(Date.now() - 60_000).toISOString(),
+          },
+        }),
+      ]),
+    );
+    expect(descartados).toBe(1);
+  });
+
   it('valida server-side un cumplimiento dentro del radio de tolerancia', async () => {
     const eventoCumplimiento = evento({
       eventId: randomUUID(),
@@ -172,6 +249,66 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
     expect(registro?.cumplido).toBe(true);
     expect(registro?.validadoPor).toBe('worker');
     expect(registro?.distanciaM).toBeLessThan(5);
+  });
+
+  it('persiste el cumplimiento con el timestamp del FIX GPS, no con el de encolado (evidencia RF-64..66)', async () => {
+    const eventId = randomUUID();
+    // Caso headless: el SDK entrega la ubicación bufferada 20 min después del fix real que
+    // disparó la detección del geofence, así que el `ts` del sobre (encolado) llega corrido.
+    const tsFix = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    const eventoCumplimiento = evento({
+      eventId,
+      ts: new Date().toISOString(),
+      tipo: 'cumplimiento_punto_control',
+      payload: { sesionId, puntoControlId, lat: -17.78, lng: -63.18, tsFix },
+    });
+
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      procesarCumplimientoEnTx(tx, sindicatoId, eventoCumplimiento),
+    );
+
+    const registro = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      tx.cumplimientoPc.findFirst({ where: { eventId } }),
+    );
+    expect(registro?.ts.toISOString()).toBe(tsFix);
+  });
+
+  it('cae al ts de encolado cuando el cumplimiento no trae tsFix — retrocompatibilidad', async () => {
+    const eventId = randomUUID();
+    const ts = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    // Payload exactamente como lo produce una versión anterior de la app móvil: sin `tsFix`.
+    const eventoCumplimiento = evento({
+      eventId,
+      ts,
+      tipo: 'cumplimiento_punto_control',
+      payload: { sesionId, puntoControlId, lat: -17.78, lng: -63.18 },
+    });
+
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      procesarCumplimientoEnTx(tx, sindicatoId, eventoCumplimiento),
+    );
+
+    const registro = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      tx.cumplimientoPc.findFirst({ where: { eventId } }),
+    );
+    expect(registro?.ts.toISOString()).toBe(ts);
+  });
+
+  it('reporta cuándo el tsFix del cumplimiento llegó inusable, para que el fallback no sea silencioso', async () => {
+    const eventId = randomUUID();
+    const tsEncolado = new Date().toISOString();
+    const eventoCumplimiento = evento({
+      eventId,
+      ts: tsEncolado,
+      tipo: 'cumplimiento_punto_control',
+      // tsFix ilegible: se ingesta con el ts de encolado, pero hay que enterarse.
+      payload: { sesionId, puntoControlId, lat: -17.78, lng: -63.18, tsFix: 'ayer' },
+    });
+
+    const { tsFixDescartado } = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      procesarCumplimientoEnTx(tx, sindicatoId, eventoCumplimiento),
+    );
+    expect(tsFixDescartado).toBe(true);
   });
 
   it('marca no cumplido un punto de control fuera del radio, aunque el app haya reportado que sí', async () => {
