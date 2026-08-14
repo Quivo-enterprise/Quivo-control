@@ -89,13 +89,17 @@ jobs:
       # admin@sindicato.local) en vez de mockear `auth.api.*`. `prisma:migrate:deploy`
       # deja la base migrada pero vacía, así que sin este paso esos tests fallan con 401
       # en CI aunque pasen en local (donde la base de desarrollo ya tiene el seed
-      # aplicado). No asumas que el cliente de Prisma ya existe porque el paso
-      # "Typecheck" de arriba corrió `@quivo/db:build` (`prisma generate && tsc`) vía
-      # turbo (`dependsOn: ["^build"]`): si esa tarea da *cache hit* (ver el log de
-      # Turbo), Turbo restaura solo los `outputs` declarados (`dist/**`, turbo.json) y NO
-      # reejecuta el comando, así que `prisma generate` no corre y el cliente nunca se
-      # escribe en `node_modules`. Por eso `prisma:seed` (packages/db/package.json)
-      # corre `prisma generate` por su cuenta antes del seed — ver el comentario en
+      # aplicado). El cliente de Prisma en sí ya está garantizado en este punto: el
+      # `postinstall` de `packages/db/package.json` corre `prisma generate` en todo
+      # `pnpm install` (el paso "Install dependencies" de arriba), sin depender del orden
+      # de los pasos ni de si `@quivo/db:build` da *cache hit* en Turbo — un cache hit de
+      # Turbo restaura solo los `outputs` declarados (`dist/**`, turbo.json) y NO
+      # reejecuta el comando, así que si dependiéramos de eso, `prisma generate` no
+      # correría y el cliente nunca se escribiría en `node_modules` (así fallaba antes:
+      # ver el commit que agregó este `postinstall`). El `prisma generate` explícito que
+      # sigue teniendo `prisma:seed` (packages/db/package.json) es ahora redundante con el
+      # `postinstall`, pero se deja como red de seguridad barata para quien corra el seed
+      # sin haber pasado por un `pnpm install` fresco — ver el comentario en
       # prisma/seed.ts.
       - name: Seed database
         run: pnpm --filter @quivo/db prisma:seed
@@ -179,12 +183,15 @@ jobs:
       # `@quivo/api` (build + start) y `@quivo/web` (`next dev`) por su cuenta. Ambos
       # resuelven `@quivo/db`, `@quivo/shared` y `@quivo/design-system` como paquetes de
       # workspace ya compilados (`dist/`), así que hay que compilarlos antes. Ojo: este
-      # build (`@quivo/db`: `prisma generate && tsc`) puede dar *cache hit* en Turbo, y
-      # un cache hit no reejecuta `prisma generate` (solo restaura `dist/**`, el output
-      # declarado en turbo.json) — no asumas que el cliente de Prisma queda generado acá.
-      # Quien lo garantiza es "Seed acceptance data" (`prisma:seed` corre `prisma
-      # generate` por su cuenta, ver prisma/seed.ts) corriendo antes de que arranquen las
-      # apps de "Run acceptance tests". Se excluye `@quivo/web` de este build a propósito:
+      # build (`@quivo/db`: `prisma generate && tsc`) puede dar *cache hit* en Turbo, y un
+      # cache hit no reejecuta `prisma generate` (solo restaura `dist/**`, el output
+      # declarado en turbo.json) — pero eso ya no es un problema real: el cliente de
+      # Prisma queda garantizado por el `postinstall` de `packages/db/package.json`, que
+      # corre `prisma generate` en "Install dependencies" (arriba), antes de que Turbo
+      # tenga la chance de dar cache hit. `"Seed acceptance data"` sigue corriendo su
+      # propio `prisma generate` (vía `prisma:seed`, ver prisma/seed.ts) como red de
+      # seguridad redundante, no como la garantía principal. Se excluye `@quivo/web` de
+      # este build a propósito:
       # lo levanta `next dev`, que compila sobre la marcha y no necesita un build de
       # producción previo — incluirlo acá solo alargaría este paso sin aportar nada (su
       # `next build` de producción ya se verifica aparte en el job `ci`, que corre `pnpm

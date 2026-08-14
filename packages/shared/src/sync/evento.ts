@@ -28,6 +28,127 @@ export const EventoSyncSchema = z.object({
 });
 export type EventoSync = z.infer<typeof EventoSyncSchema>;
 
+/**
+ * Payload del evento `gps_point` — la evidencia legal cruda que sustenta las sanciones
+ * (RF-67..73). Ojo con los DOS timestamps que tiene un punto GPS, que no son el mismo:
+ * - `EventoSyncSchema.ts` (el sobre): momento en que el evento se ENCOLÓ en el outbox del
+ *   dispositivo (`encolarEvento`, `db/outbox.ts`).
+ * - `tsFix` (este payload): momento del FIX GPS real, reportado por el API nativo de
+ *   ubicación (`Location.timestamp` del SDK de Transistorsoft).
+ *
+ * Coincidían aproximadamente mientras el único productor era la suscripción `onLocation` en
+ * vivo. Con el tracking headless (app terminada, QUI-216) el SDK entrega ubicaciones
+ * BUFFERADAS, tarde y en ráfaga al salir de Doze: un tramo entero de manejo se encola en
+ * segundos y, sin `tsFix`, se persiste con timestamps casi idénticos — el recorrido
+ * reconstruido (`recorridos.service.ts`, `ORDER BY ts`) queda deformado.
+ *
+ * `tsFix` es OPCIONAL a propósito y no debe volverse obligatorio: cuando esto se despliega
+ * puede haber eventos ya encolados en dispositivos con una versión anterior de la app que
+ * nunca lo van a traer. Esos siguen siendo válidos y se ingestan con el `ts` de encolado
+ * (ver `resolverTsFix`).
+ */
+export const PayloadGpsPointSchema = z.object({
+  sesionId: z.string().min(1),
+  lat: z.number(),
+  lng: z.number(),
+  accuracy: z.number().nullable().optional(),
+  speed: z.number().nullable().optional(),
+  tsFix: z.string().datetime({ offset: true }).optional(),
+});
+export type PayloadGpsPoint = z.infer<typeof PayloadGpsPointSchema>;
+
+/**
+ * Payload del evento `cumplimiento_punto_control` — mismo defecto de timestamp que
+ * `gps_point` (ver comentario de `PayloadGpsPointSchema` arriba), pero acá pesa más: el
+ * sobre trae el `ts` de ENCOLADO, no el momento del FIX GPS que disparó la detección del
+ * geofence, y bajo tracking headless ese fix puede estar minutos atrás del encolado. La hora
+ * de paso por un punto de control es precisamente el hecho que sustenta una SANCIÓN
+ * (RF-64..66) — más peso legal que un punto GPS suelto del trazado.
+ *
+ * `tsFix` es OPCIONAL por la misma razón de retrocompatibilidad que en `gps_point`: eventos
+ * ya encolados en dispositivos con una versión anterior de la app nunca lo van a traer, y
+ * siguen siendo válidos con el `ts` de encolado (ver `resolverTsFix`).
+ */
+export const PayloadCumplimientoPuntoControlSchema = z.object({
+  sesionId: z.string().min(1),
+  puntoControlId: z.string().min(1),
+  lat: z.number(),
+  lng: z.number(),
+  tsFix: z.string().datetime({ offset: true }).optional(),
+});
+export type PayloadCumplimientoPuntoControl = z.infer<typeof PayloadCumplimientoPuntoControlSchema>;
+
+// Solo valida la forma `{ tsFix?: string }` — el resto de las claves del payload (que
+// difieren entre `gps_point` y `cumplimiento_punto_control`) se ignoran (`safeParse` de zod
+// descarta claves no declaradas en vez de rechazarlas), así que sirve tal cual para cualquier
+// payload que declare un `tsFix` opcional, no solo el de `gps_point` de donde se extrajo.
+const TsFixSchema = PayloadGpsPointSchema.pick({ tsFix: true });
+
+/**
+ * Margen de reloj admitido para que `tsFix` se considere "del futuro" respecto del encolado.
+ * OJO: `tsFix` y el `ts` del sobre NO vienen del mismo reloj (a diferencia de lo que decía
+ * antes este comentario). `tsFix` es `location.timestamp`, que el SDK de Transistorsoft
+ * documenta como provisto por el API nativo de ubicación (derivado del fix GNSS/satelital) —
+ * de hecho el propio SDK expone `location.age` (ver
+ * `node_modules/.../react-native-background-geolocation/.../Location.d.ts`) precisamente
+ * porque `timestamp + age = reloj de sistema del dispositivo`: son dos fuentes distintas por
+ * diseño, no la misma. El `ts` del sobre, en cambio, sale de `new Date().toISOString()` sobre
+ * el reloj de sistema, en `encolarEvento` (`db/outbox.ts`). Esta tolerancia existe para
+ * absorber la deriva normal entre esas dos fuentes y las correcciones de NTP a mitad de
+ * camino — no porque compartan reloj.
+ *
+ * Deuda anotada, no cubierta acá: un teléfono con el RTC descargado arranca con la fecha de
+ * build del firmware, y ahí un `tsFix` GNSS correcto puede parecer "del futuro" respecto de
+ * ese reloj de sistema atrasado; reconstruirlo con `location.age` es trabajo aparte.
+ */
+const TOLERANCIA_TS_FIX_FUTURO_MS = 60_000;
+
+/**
+ * Piso de reloj admitido para `tsFix` (hallazgo de revisión QUI-216): sin esto, un `tsFix`
+ * corrupto — p. ej. un dispositivo con el RTC descargado que arranca con la fecha de
+ * fábrica/build — pasa el `safeParse` de Zod sin problema (cualquier string ISO-8601 válido
+ * cuenta, no importa cuán absurdo el año) y `gps_points` está particionada por día SIN
+ * partición `DEFAULT` (verificado: 0 hits en las migraciones). Solo existen particiones para
+ * `[fecha_de_deploy - 1, hoy + 5]`, así que un `ts` fuera de ese rango levanta `23514 no
+ * partition of relation "gps_points" found for row` — y como `insertarGpsPoints`
+ * (`ingesta-worker.service.ts`) arma un solo `INSERT ... VALUES` con hasta 500 filas, ese
+ * error tira el lote entero (los 499 puntos sanos incluidos) a `sync_errors`, que hoy no
+ * tiene reproceso: pérdida definitiva de evidencia. El buffer de Doze de Transistorsoft se
+ * mide en horas, no en años; 7 días es generoso y no castiga ningún caso legítimo de
+ * buffering headless.
+ */
+const TOLERANCIA_TS_FIX_PASADO_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Timestamp con el que un evento con `tsFix` opcional debe persistirse: el del fix GPS
+ * (`payload.tsFix`) si viene y es usable, y si no el `ts` de encolado del sobre.
+ * Retrocompatibilidad explícita — un evento viejo sin `tsFix`, o con un `tsFix` ilegible o
+ * fuera del rango admitido (futuro o pasado) respecto del encolado, NUNCA se rechaza: cae al
+ * comportamiento anterior en vez de perder evidencia.
+ *
+ * Antes se llamaba `resolverTsGpsPoint` — se generalizó (y renombró) porque el mismo defecto
+ * de buffering headless afecta a `cumplimiento_punto_control` (RF-64..66): el fix que disparó
+ * la detección del geofence es el hecho que sustenta una sanción, y sin esto la hora de paso
+ * por el punto de control quedaría corrida al momento del encolado, igual que le pasaba al
+ * `gps_point` suelto. La función en sí no cambió — solo mira `payload.tsFix`, le es
+ * indiferente de qué tipo de evento viene.
+ */
+export function resolverTsFix(payload: unknown, tsEncolado: string): string {
+  const parsed = TsFixSchema.safeParse(payload);
+  const tsFix = parsed.success ? parsed.data.tsFix : undefined;
+  if (tsFix === undefined) return tsEncolado;
+
+  const msFix = Date.parse(tsFix);
+  if (Number.isNaN(msFix)) return tsEncolado;
+
+  const msEncolado = Date.parse(tsEncolado);
+  if (!Number.isNaN(msEncolado)) {
+    if (msFix > msEncolado + TOLERANCIA_TS_FIX_FUTURO_MS) return tsEncolado;
+    if (msFix < msEncolado - TOLERANCIA_TS_FIX_PASADO_MS) return tsEncolado;
+  }
+  return new Date(msFix).toISOString();
+}
+
 /** Payload de `POST /v1/sync/batches` (hasta ~500 eventos por request, doc técnico §7). */
 export const SyncBatchSchema = z.object({
   eventos: z.array(EventoSyncSchema).min(1).max(500),

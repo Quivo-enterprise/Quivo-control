@@ -4,7 +4,12 @@ import { Prisma, withTenantContext } from '@quivo/db';
 import type { Prisma as PrismaTypes } from '@quivo/db';
 import { Queue, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
-import type { EventoSync } from '@quivo/shared';
+import {
+  resolverTsFix,
+  type EventoSync,
+  type PayloadGpsPoint,
+  type PayloadCumplimientoPuntoControl,
+} from '@quivo/shared';
 import { COLA_INGESTA_SYNC, type LoteIngestaJob } from '../sync/sync-queue.service.js';
 
 const NOMBRE_COLA_PARTICIONES = 'mantenimiento-particiones-gps';
@@ -132,7 +137,19 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
 
   private async procesarGpsPoints(sindicatoId: string, eventos: EventoSync[]): Promise<number> {
     try {
-      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) => insertarGpsPoints(tx, eventos));
+      const tsFixDescartados = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarGpsPoints(tx, eventos),
+      );
+      if (tsFixDescartados > 0) {
+        // El evento traía `tsFix` pero no se pudo usar (formato inesperado del SDK, reloj del
+        // dispositivo corrido). Se ingestó con el `ts` de encolado — que es lo correcto, pero
+        // NO debe pasar en silencio: significa que esos puntos vuelven a tener la fidelidad
+        // temporal degradada que `tsFix` existe para evitar.
+        this.logger.warn(
+          `${tsFixDescartados} de ${eventos.length} gps_point traían un tsFix inusable: ` +
+            `ingestados con el ts de encolado`,
+        );
+      }
       return 0;
     } catch (error) {
       await Promise.all(eventos.map((evento) => this.registrarErrorSync(sindicatoId, evento, error)));
@@ -142,9 +159,18 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
 
   private async procesarCumplimiento(sindicatoId: string, evento: EventoSync): Promise<number> {
     try {
-      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      const { tsFixDescartado } = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
         procesarCumplimientoEnTx(tx, sindicatoId, evento),
       );
+      if (tsFixDescartado) {
+        // Mismo criterio que `procesarGpsPoints`: el fallback al `ts` de encolado NUNCA debe
+        // pasar en silencio. Acá pesa más — es la hora de paso por un punto de control, el
+        // hecho que sustenta una sanción (RF-64..66), no solo un punto suelto del trazado.
+        this.logger.warn(
+          `Evento ${evento.eventId} (cumplimiento_punto_control) traía un tsFix inusable: ` +
+            `ingestado con el ts de encolado`,
+        );
+      }
       return 0;
     } catch (error) {
       await this.registrarErrorSync(sindicatoId, evento, error);
@@ -220,20 +246,34 @@ export function agruparPorTipo(eventos: EventoSync[]): EventosPorTipo {
   return grupos;
 }
 
-interface PayloadGpsPoint {
-  sesionId: string;
-  lat: number;
-  lng: number;
-  accuracy?: number | null;
-  speed?: number | null;
-}
-
-export async function insertarGpsPoints(tx: Tx, eventos: EventoSync[]): Promise<void> {
+/**
+ * Devuelve cuántos eventos traían `tsFix` en el payload pero NO se pudo usar (formato
+ * inesperado, o posterior al encolado): esos caen al `ts` del sobre — correcto, pero el
+ * caller lo loguea, porque un fallback silencioso es justamente el modo de fallo que este
+ * campo existe para eliminar. Un evento sin `tsFix` (app anterior) no cuenta: ahí el `ts` de
+ * encolado es el comportamiento esperado, no una degradación.
+ */
+export async function insertarGpsPoints(tx: Tx, eventos: EventoSync[]): Promise<number> {
+  let tsFixDescartados = 0;
   const filas = eventos.map((evento) => {
     const payload = evento.payload as unknown as PayloadGpsPoint;
+    // El `ts` que se persiste es el del FIX GPS (`payload.tsFix`), no el de encolado del
+    // sobre: con el tracking headless (QUI-216) el SDK entrega ubicaciones bufferadas en
+    // ráfaga al salir de Doze, y un tramo entero de manejo aterrizaría con timestamps casi
+    // idénticos — el recorrido reconstruido (`recorridos.service.ts`, `ORDER BY ts`)
+    // quedaría deformado. `resolverTsFix` (contrato en `@quivo/shared`) cae al `ts` de
+    // encolado si el evento no trae `tsFix` (app anterior) o si es ilegible: eventos viejos
+    // ya encolados en dispositivos siguen ingestando exactamente como antes.
+    const ts = resolverTsFix(evento.payload, evento.ts);
+    // Comparación por instante, no por string: `resolverTsFix` normaliza a UTC, así que
+    // un `tsFix` válido con offset (`...-04:00`) sale distinto como texto pero es el mismo
+    // momento. Solo cuenta como descartado si el instante persistido NO es el del fix.
+    if (payload.tsFix !== undefined && Date.parse(payload.tsFix) !== Date.parse(ts)) {
+      tsFixDescartados += 1;
+    }
     return Prisma.sql`(
       ${evento.eventId}::uuid, ${payload.sesionId}::uuid, ${evento.deviceId},
-      ${evento.ts}::timestamptz, ${payload.lat}, ${payload.lng},
+      ${ts}::timestamptz, ${payload.lat}, ${payload.lng},
       ${payload.accuracy ?? null}, ${payload.speed ?? null}, now()
     )`;
   });
@@ -242,21 +282,15 @@ export async function insertarGpsPoints(tx: Tx, eventos: EventoSync[]): Promise<
     VALUES ${Prisma.join(filas)}
     ON CONFLICT (event_id, ts) DO NOTHING
   `);
-}
-
-interface PayloadCumplimiento {
-  sesionId: string;
-  puntoControlId: string;
-  lat: number;
-  lng: number;
+  return tsFixDescartados;
 }
 
 export async function procesarCumplimientoEnTx(
   tx: Tx,
   sindicatoId: string,
   evento: EventoSync,
-): Promise<void> {
-  const payload = evento.payload as unknown as PayloadCumplimiento;
+): Promise<{ tsFixDescartado: boolean }> {
+  const payload = evento.payload as unknown as PayloadCumplimientoPuntoControl;
   // `puntos_control` no tiene RLS propia (hereda tenant vía rutaId -> linea, QUI-218) — el
   // join contra `lineas."sindicatoId"` es la barrera real acá: sin esto, un evento con un
   // `puntoControlId` de OTRO sindicato igual pasaría (la tabla es legible por cualquier
@@ -277,6 +311,16 @@ export async function procesarCumplimientoEnTx(
   if (!row) {
     throw new Error(`Punto de control ${payload.puntoControlId} no encontrado`);
   }
+  // El `ts` que se persiste es el del FIX GPS que disparó la detección del geofence, no el de
+  // encolado del sobre — mismo defecto de buffering headless que `gps_point` (ver
+  // `insertarGpsPoints`), pero acá la hora de paso por el punto de control es el hecho que
+  // sustenta una sanción (RF-64..66). `resolverTsFix` (contrato en `@quivo/shared`) cae al
+  // `ts` de encolado si el evento no trae `tsFix` (app anterior) o si es ilegible.
+  const ts = resolverTsFix(evento.payload, evento.ts);
+  // Idempotencia: `cumplimientos_pc.eventId` es `@unique` SOLO (no compuesto con `ts` como
+  // `gps_points.(event_id, ts)`), así que cambiar el `ts` acá no introduce el mismo riesgo —
+  // `skipDuplicates` sigue deduplicando por `eventId` sin importar qué `ts` se calculó.
+  const tsFixDescartado = payload.tsFix !== undefined && Date.parse(payload.tsFix) !== Date.parse(ts);
   // `createMany` + `skipDuplicates` (ON CONFLICT DO NOTHING sobre el unique de `eventId`),
   // no `create()` — reenviar el mismo lote (comportamiento esperado del cliente ante un
   // timeout, QUI-240) no debe duplicar el cumplimiento. Bug real encontrado en una prueba
@@ -288,7 +332,7 @@ export async function procesarCumplimientoEnTx(
         sindicatoId,
         sesionId: payload.sesionId,
         puntoControlId: payload.puntoControlId,
-        ts: new Date(evento.ts),
+        ts: new Date(ts),
         distanciaM: row.distancia_m,
         cumplido: row.cumplido,
         validadoPor: 'worker',
@@ -296,6 +340,7 @@ export async function procesarCumplimientoEnTx(
     ],
     skipDuplicates: true,
   });
+  return { tsFixDescartado };
 }
 
 export async function insertarEventoOperativoEnTx(
