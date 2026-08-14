@@ -330,6 +330,9 @@ importers:
 
   packages/design-system:
     dependencies:
+      '@react-leaflet/core':
+        specifier: ^2.1.0
+        version: 2.1.0(leaflet@1.9.4)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       leaflet:
         specifier: ^1.9.4
         version: 1.9.4

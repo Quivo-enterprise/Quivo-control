@@ -7,13 +7,18 @@
 // `React.lazy(() => import('./route-map-impl.js'))` solo después de montar en cliente, para
 // que Next.js no lo arrastre al bundle de servidor durante el prerender de SSR/SSG.
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
+  LeafletProvider,
+  createLeafletContext,
+  type LeafletContextInterface,
+} from '@react-leaflet/core';
+import {
   Circle,
   CircleMarker,
-  MapContainer,
   Marker,
   Polyline,
   Popup,
@@ -73,6 +78,72 @@ function buildDivIcon(point: MapPoint): L.DivIcon {
     iconSize: [26, 34],
     iconAnchor: [13, 34],
   });
+}
+
+/**
+ * Contenedor del mapa. Reemplaza a `<MapContainer>` de `react-leaflet@4.2.1`, que **no
+ * sobrevive el doble montaje de React Strict Mode** (`reactStrictMode: true` en
+ * `apps/web/next.config.ts`, y el App Router de Next 15 corre su propio React 19, donde el
+ * doble-invoke DESATA y REATA los refs además de los efectos).
+ *
+ * Por qué falla el de la librería: crea el `L.Map` dentro de un *ref callback*
+ * (`useCallback(..., [])`, ver `react-leaflet/lib/MapContainer.js`) y lo destruye en un
+ * `useEffect(..., [context])`. En el primer commit `context` todavía vale `null`, así que
+ * cuando Strict Mode simula el desmontaje ese cleanup es un no-op: el mapa nunca se destruye
+ * y el `<div>` conserva su `_leaflet_id`. Al reatar el ref, el callback —cuyo `context`
+ * capturado sigue siendo `null` por las deps vacías— vuelve a hacer `new L.Map(node)` sobre
+ * un nodo sucio y Leaflet tira "Map container is already initialized".
+ *
+ * Acá el ciclo de vida del mapa vive en un `useEffect` con su cleanup real: Strict Mode
+ * ejecuta crear → destruir → crear, y `Map.remove()` de Leaflet borra `_leaflet_id` del
+ * contenedor (leaflet-src.js:3865), así que el segundo montaje encuentra el nodo limpio. Es
+ * el mismo camino en dev y en producción — no hay rama condicional por entorno — y arregla
+ * de paso la fuga de la versión original (el mapa fantasma que nunca se destruía).
+ *
+ * El contexto se publica con `LeafletProvider`/`createLeafletContext` de `@react-leaflet/core`
+ * (API pública del paquete, la misma instancia física que resuelve `react-leaflet`), así que
+ * los hijos —`TileLayer`, `Polyline`, `Marker`, `useMap`, `useMapEvents`…— siguen funcionando
+ * sin cambios. Igual que `MapContainer`, los hijos solo se montan cuando el mapa ya existe.
+ */
+function MapCanvas({
+  children,
+  className,
+  style,
+}: {
+  children: ReactNode;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [context, setContext] = useState<LeafletContextInterface | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container === null) return undefined;
+
+    const map = new L.Map(container, {
+      center: DEFAULT_CENTER,
+      zoom: DEFAULT_ZOOM,
+      scrollWheelZoom: true,
+    });
+    setContext(createLeafletContext(map));
+
+    return () => {
+      // Deja el nodo reutilizable: `remove()` borra `container._leaflet_id` y desmonta los
+      // panes que Leaflet había agregado adentro del `<div>`.
+      map.remove();
+      setContext(null);
+    };
+    // Una sola instancia por montaje: `center`/`zoom` son constantes de módulo y solo fijan
+    // la vista inicial (`FitBounds` se encarga del encuadre posterior). Es el mismo contrato
+    // que `MapContainer`, que tampoco reacciona a cambios de esas props.
+  }, []);
+
+  return (
+    <div ref={containerRef} className={className} style={style}>
+      {context === null ? null : <LeafletProvider value={context}>{children}</LeafletProvider>}
+    </div>
+  );
 }
 
 function ClickHandler({
@@ -142,13 +213,7 @@ export function RouteMap({
 
   return (
     <div className={cx('qv-route-map', className)} style={{ height }}>
-      <MapContainer
-        center={DEFAULT_CENTER}
-        zoom={DEFAULT_ZOOM}
-        scrollWheelZoom
-        className="qv-route-map__canvas"
-        style={{ height: '100%', width: '100%' }}
-      >
+      <MapCanvas className="qv-route-map__canvas" style={{ height: '100%', width: '100%' }}>
         <TileLayer url={TILE_URL} attribution={TILE_ATTRIBUTION} />
         <ClickHandler interactive={interactive} onMapClick={onMapClick} />
         <FitBounds points={boundsPoints} />
@@ -214,7 +279,7 @@ export function RouteMap({
             )}
           </Marker>
         ))}
-      </MapContainer>
+      </MapCanvas>
       {loading && (
         <div className="qv-route-map__loading">
           <Loader label="Cargando mapa..." />

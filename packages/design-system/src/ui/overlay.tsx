@@ -85,7 +85,11 @@ function BaseDialog({ open, onClose, role, title, description, footer, children,
           <h2 id={titleId} className="qv-modal__title">
             {title}
           </h2>
-          <button type="button" className="qv-modal__close" onClick={onClose} aria-label="Cerrar">
+          {/* Nombre accesible distintivo: un footer de consumidor (p. ej. `vehiculos/page.tsx`)
+           * puede traer su propio botón "Cerrar" — con la misma etiqueta, Playwright/lectores
+           * de pantalla ven dos botones "Cerrar" en el mismo diálogo (violación de modo
+           * estricto). "Cerrar diálogo" sigue siendo descriptivo y no colisiona. */}
+          <button type="button" className="qv-modal__close" onClick={onClose} aria-label="Cerrar diálogo">
             <CloseIcon />
           </button>
         </header>
