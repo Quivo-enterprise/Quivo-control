@@ -3,6 +3,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from './client.js';
 import { withTenantContext } from './tenant-context.js';
 
+/** Fila cruda de la guardia de conexión — ver `beforeAll` más abajo. */
+interface ConexionRol {
+  current_user: string;
+  rolsuper: boolean;
+  rolbypassrls: boolean;
+}
+
 /**
  * Test cross-tenant de RLS (QUI-218, doc técnico §12 riesgo #2): un sindicato jamás debe
  * poder leer ni escribir filas de otro, sin importar si la query de la app "olvida" el
@@ -18,6 +25,46 @@ describe('RLS multi-tenant', () => {
   let reglaBId: string;
 
   beforeAll(async () => {
+    // Guardia de conexión: si `prisma` terminó conectado con un rol superusuario o con
+    // BYPASSRLS (p. ej. porque `RUNTIME_DATABASE_URL` no estaba seteada y `client.ts` cayó
+    // a `DATABASE_URL`, el rol de migraciones), Postgres ignora todas las políticas RLS sin
+    // importar qué tan bien estén escritas. En ese escenario, cada `it()` de este archivo
+    // "pasaría" (o fallaría) por la razón equivocada: no estarían probando aislamiento
+    // multi-tenant, sino ejecutando queries sin ninguna barrera. Abortamos acá, ruidoso y
+    // temprano, en vez de dejar que 12 asserts fallen más abajo con un mensaje que apunta a
+    // "las políticas están mal" cuando el problema real es la conexión.
+    const filasConexion = await prisma.$queryRaw<ConexionRol[]>`
+      SELECT
+        current_user,
+        (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS rolsuper,
+        (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS rolbypassrls
+    `;
+    const conexion = filasConexion[0];
+
+    if (!conexion) {
+      throw new Error(
+        'La guardia de conexión de RLS no devolvió ninguna fila — no se pudo verificar el rol.',
+      );
+    }
+
+    const {
+      current_user: currentUser,
+      rolsuper: esSuperusuario,
+      rolbypassrls: tieneBypassRls,
+    } = conexion;
+
+    if (esSuperusuario || tieneBypassRls) {
+      throw new Error(
+        `Esta suite corre conectada como "${currentUser}" (rolsuper=${String(esSuperusuario)}, ` +
+          `rolbypassrls=${String(tieneBypassRls)}) — Postgres ignora RLS para ese rol sin importar ` +
+          'FORCE ROW LEVEL SECURITY. El problema NO son las políticas de aislamiento multi-tenant: ' +
+          'es la conexión. Probablemente RUNTIME_DATABASE_URL no está seteada (o apunta al rol de ' +
+          'migraciones) y packages/db/src/client.ts cayó al fallback equivocado — conectá con el ' +
+          'rol "quivo_app" (sin BYPASSRLS) antes de correr esta suite, o los resultados de abajo no ' +
+          'significan nada.',
+      );
+    }
+
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
       await tx.sindicato.create({ data: { id: sindicatoAId, nombre: 'RLS Test A', estado: 'activo' } });
       await tx.sindicato.create({ data: { id: sindicatoBId, nombre: 'RLS Test B', estado: 'activo' } });
