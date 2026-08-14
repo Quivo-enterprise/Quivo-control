@@ -1,3 +1,15 @@
+// El script `prisma:seed` (package.json) es `prisma generate && tsx prisma/seed.ts`, no
+// solo `tsx prisma/seed.ts` — no lo simplifiques aunque parezca redundante con
+// `@quivo/db:build` (`prisma generate && tsc`, ver turbo.json). El motivo es Turbo: si
+// `@quivo/db:build` resulta *cache hit* (los inputs no cambiaron desde una corrida
+// anterior), Turbo restaura sus `outputs` declarados (`dist/**`) y NO reejecuta el
+// comando — o sea, `prisma generate` no corre y el cliente de Prisma nunca se escribe en
+// disco. Ese cliente vive en `node_modules/.pnpm/@prisma+client@.../node_modules/.prisma`,
+// una ruta con hash de pnpm que no es (ni conviene declarar como) un output de Turbo, así
+// que la caché de Turbo no la restaura ni la protege. Sin el `prisma generate` explícito
+// de acá, este seed —y cualquiera que lo corra tras un cache hit, en CI o en local—
+// revienta al importar `PrismaClient` de '@prisma/client' con
+// "does not provide an export named 'PrismaClient'".
 import 'dotenv/config';
 import { APIError } from 'better-auth';
 import { hashPassword } from 'better-auth/crypto';
