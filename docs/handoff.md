@@ -1090,21 +1090,201 @@ el módulo que es el riesgo #1 del proyecto no conviene ser el primero con un pi
 Transistorsoft **no publica matriz de compatibilidad** (sin `peerDependencies` ni `engines` en
 su `package.json`), así que la compatibilidad solo se puede leer del código y del tracker.
 
-## Insumos para el plan de finalización
+## PR #6 — desbloquear el gate GPS (N1) — 2026-08-14
 
-Lo que la próxima sesión tiene que resolver, en orden:
+Primer ítem de la fase F0 del [plan de finalización](plan-finalizacion-piloto.md). El spike
+GPS (QUI-216) es el gate go/no-go del stack móvil y llevaba **un mes parado** por una causa
+evitable: el paso 1 de `docs/spike-gps.md` afirmaba que hacía falta comprar la licencia de
+Transistorsoft, y es falso — el SDK es funcional en builds debug sin key, y hay trial de 30
+días para release. Los US$399 compran distribuir un release firmado, no medir. Ese documento
+quedó corregido.
 
-1. **Revisar Linear issue por issue.** M0 sigue incompleto y vencido; hay que determinar qué
-   sigue vigente, qué está mal planteado y qué se puede cerrar. Las decisiones 4, 5 y 6 ya
-   cambian el estado de QUI-212, QUI-213 y el criterio pendiente de QUI-227.
-2. **Decidir el orden entre migración de SDK, spike GPS y piloto.** La migración es
-   precondición del spike (no tiene sentido validar un stack que se va a tirar), y el spike es
-   precondición del piloto. La demo por APK directo puede ir antes que todo eso, en debug.
-3. **Cerrar las decisiones de infra** (2, 5 y 6): si todo va a GCP, es una sola decisión que
-   cierra QUI-213 y el criterio pendiente de QUI-227 juntos, y obliga a reescribir o anular el
-   ADR de Railway vs Fly.io.
-4. **Aplicar lo que salió del council** (script roto, garantía estructural del cliente Prisma)
-   y la decisión 3 (filtro explícito en `socios.service.ts`).
+Pero el spike **habría fallado igual, con licencia o sin ella**, y ese fue el hallazgo real
+del ciclo. Lo que se arregló se agrupa en tres capas, cada una descubierta al cerrar la
+anterior.
+
+### 1. Configuración: el tracking moría justo donde el spike mide
+
+Faltaban `stopOnTerminate: false`, `startOnBoot: true` y `enableHeadless: true`. Los defaults
+del SDK son los contrarios, así que el tracking moría al cerrar la app y no volvía tras el
+reboot — que es **exactamente el criterio C del GO**. Y `index.js` no registraba headless
+task: con la app terminada el SDK seguía grabando en su SQLite interna, pero nada copiaba esos
+puntos a `quivo-outbox.db`, la fuente de la evidencia legal (RF-67..73). `index.js` es el
+único lugar donde el SDK permite registrarlo.
+
+El headless task corre fuera de React, sin hooks ni contexto, así que la lógica de
+`onLocation` se partió en dos: `location-task.ts` con la parte pura (testeada) y
+`headless-task.ts` con la de E/S. El hook y el task comparten ahora un solo camino de
+escritura al outbox. El estado que el task necesita se lee de donde ya estaba persistido
+(`deviceId` y `sesionId` de SecureStore, puntos de control del paquete del día en SQLite), sin
+inventar almacenamiento nuevo.
+
+### 2. El timestamp de la evidencia estaba corrido
+
+`encolarEvento` sella el `ts` con el reloj del momento de **encolado**. Mientras el único
+productor fue la suscripción `onLocation` en vivo eso coincidía aproximadamente con el fix
+GPS. Con el tracking headless recién habilitado, no: el SDK entrega las ubicaciones
+**bufferadas, tarde y en ráfaga** al salir de Doze, así que un tramo entero de manejo se
+encolaba en segundos y se persistía con timestamps casi idénticos. El recorrido reconstruido
+(`recorridos.service.ts`, `ORDER BY ts`) quedaba deformado — y es evidencia legal.
+
+El payload lleva ahora `tsFix` (el `location.timestamp` del fix real) y el worker persiste ese
+instante vía `resolverTsFix` (`packages/shared/src/sync/evento.ts`). Aplica a los **dos** tipos
+de evento: `gps_point` y `cumplimiento_punto_control` — este último con más peso, porque la
+hora de paso por el punto de control es el hecho que sustenta la sanción (RF-64..66), no un
+punto suelto del trazado.
+
+Decisiones de diseño que conviene no revertir sin leer esto:
+
+- **`tsFix` es opcional a propósito.** Cuando esto se despliegue puede haber eventos ya
+  encolados en dispositivos con una versión anterior de la app que nunca lo van a traer. Esos
+  siguen siendo válidos y se ingestan con el `ts` del sobre.
+- **El fallback ya no es silencioso.** Se cuenta (`tsFixDescartados` / `tsFixDescartado`) y se
+  loguea, porque un fallback callado es justamente el modo de fallo que este campo existe para
+  eliminar.
+- **La ventana de aceptación tiene techo y piso.** Techo de 1 min (deriva de reloj / corrección
+  NTP). Piso de 7 días: sin él, un `tsFix` absurdo — zod acepta el año 500 sin chistar — caía
+  fuera del rango de particiones diarias de `gps_points`, el `INSERT` multi-fila levantaba
+  `23514 no partition found` y **se llevaba puestos los otros 499 eventos del lote** a
+  `sync_errors`, que no tiene reproceso. Pérdida definitiva de evidencia por un solo evento
+  corrupto.
+- **Idempotencia verificada, no asumida.** `resolverTsFix` es determinista sobre el payload
+  bajo cualquier zona horaria (probado bajo cuatro), así que un reenvío calcula el mismo `ts` y
+  `ON CONFLICT (event_id, ts)` deduplica igual que antes. `cumplimientos_pc` deduplica solo por
+  `eventId` (`@unique` simple, no compuesto), así que cambiar el `ts` no lo afecta.
+
+### 3. El spike podía dar GO sin haber medido nada
+
+Lo más grave del ciclo, y lo encontró la revisión, no la implementación. **Dos falsos GO**, los
+dos por la misma causa: el veredicto se calculaba desde refs de React que el camino headless no
+alimenta.
+
+- **Criterio B (huecos).** `detectarHuecos` corría sobre un `useRef` que solo llenaba el
+  `onLocation` del hook. Si el chofer mata la app a las 2 h — que es **el criterio C, lo que el
+  spike va a hacer a propósito** — el proceso que reabre arranca con el ref vacío, no hay
+  muestras que bordeen el agujero, y el criterio B reportaba `0 huecos` sobre horas que nunca
+  miró. Un battery-killer del fabricante matando el SDK 4 de esas 5 h salía como GO limpio.
+  Ahora los huecos y la duración salen del **outbox**, filtrados por sesión: cubren la ventana
+  headless y sobreviven a la muerte del proceso.
+- **Criterio A (batería).** No puede salir del outbox — el payload de `gps_point` es evidencia,
+  no instrumentación de spike. Así que se extrapola sobre **su propia ventana**, no sobre la de
+  los huecos, con piso absoluto de 1 h y cobertura mínima del 50% de la medición. Sin eso, 30
+  min de muestras contra una corrida de 8 h daban 1% estimado y GO. Arreglar solo los huecos
+  habría **agravado** este: antes las dos métricas usaban la misma ventana corta y se
+  cancelaban; después el numerador quedaba corto y el denominador largo.
+
+El veredicto imprime ahora las dos ventanas y el nivel de log con el que se midió — una corrida
+contaminada por logging `VERBOSE` (I/O extra a la SQLite nativa, que es justo lo que el
+criterio A mide) y una limpia producían el mismo string.
+
+### Otros hallazgos de la revisión
+
+- `obtenerPaqueteDiaLocal` protegía el `safeParse` pero **no el `JSON.parse`**: una fila
+  corrupta lanzaba, el throw subía hasta el catch externo del headless y **descartaba cada tick
+  del turno entero**, en silencio y con la app terminada, o sea sin nadie mirando el
+  `console.error`. Exactamente lo contrario de lo que el código promete tres archivos más
+  arriba. Devuelve `null` (el camino ya soportado, que sigue registrando `gps_point` sin puntos
+  de control) y `guardarPaqueteDia` pasó a ser transaccional — su `DELETE`+`INSERT` sin
+  transacción era la forma de corromper la fila.
+- `iniciar()` reseteaba el Set de cumplimientos a vacío. Tras un kill con cumplimientos ya
+  emitidos por el headless, un segundo paso por el mismo punto en una ruta circular generaba
+  una **segunda fila para la misma sanción** (el worker deduplica por `eventId`, y la
+  reemisión lleva uno nuevo). Ahora siembra desde el outbox, igual que el lado headless.
+- El `stop()` por paquete vencido apaga también `startOnBoot`: decisión **irreversible sin
+  intervención humana**, tomada con `Date.now()` en el camino de arranque tras reboot, donde el
+  reloj es menos confiable (RTC drift, todavía sin NTP). Se le dieron **2 h de gracia — valor
+  provisional, pendiente de confirmación del CTO**. Descartar el punto sigue siendo inmediato;
+  lo que se demora es apagar el plugin.
+- El centinela `-1` de batería entraba como `-100%` en el cálculo: con la primera muestra sin
+  lectura y la última con, `Math.max(0, -180)` daba **0% de consumo** sin importar el consumo
+  real. Las muestras sin lectura usable ya no se cuentan.
+
+### Restricción de despliegue
+
+**El API va antes que el release móvil, y no se rollbackea el API mientras haya clientes con
+`tsFix` en la calle.** Con la versión vieja del API y `tsFix` ya en dispositivos, un reenvío
+tras timeout se ingestaría una vez con `evento.ts` y otra con `tsFix` — dos `ts` distintos, y
+la PK `(event_id, ts)` deja dos filas. `cumplimientos_pc` no sufre esto.
+
+### Deuda que este PR deja abierta, a propósito
+
+| Deuda | Por qué se difirió |
+|---|---|
+| Partición `DEFAULT` en `gps_points`, o degradación fila por fila en `insertarGpsPoints` | Necesita migración y decisión de diseño. El piso de `resolverTsFix` ya cierra el camino realista; esto es defensa en profundidad |
+| Reproceso de `sync_errors` | Hoy solo hay un `@Get`: lo que cae ahí es pérdida definitiva. Duele recién cuando algo cae |
+| Reconstruir el instante con `location.age` | El caso es un teléfono con el RTC descargado que arranca con la fecha de build, y hace que el `tsFix` correcto de GNSS parezca "del futuro". Es hardware de gama baja, o sea el del piloto — pero no bloquea el spike |
+| Índice `(tipo, ts)` en el outbox + enganchar `purgarAcusadosAntesDe` | La tabla nunca se purga (la función existe y **no la llama nadie**) y el scan crece con ella, dentro del presupuesto de un tick en Doze |
+| Validar con `PayloadGpsPointSchema` los casts del worker | Ahora que el schema existe es un arreglo de dos líneas, pero cambia el comportamiento ante error |
+| Tests de `headless-task.ts` | Importa nativos. Sin cobertura quedan el gate `vencido → stop()`, el orden de la siembra y el `try/catch` externo |
+
+**Lo que este PR NO hace: correr el spike.** Eso es validación física y sigue pendiente — si
+los flags se comportan como documentan sobre un fabricante real con battery killers, si el task
+dispara de verdad tras un kill o un reboot, y los números de batería y huecos de las 8 h. Y
+debe correrse sobre **Expo SDK 54 + Transistorsoft 5.4.0**, no sobre el stack actual: validar
+un stack que se va a tirar no valida nada.
+
+Verificación del PR: `typecheck`, `lint` y `test` en 9/9, con **331 tests** (api 202, shared 52,
+mobile 38, web 22, db 17). Los conteos de shared y mobile subieron con los tests nuevos de la
+ventana de aceptación y del veredicto no concluyente.
+
+### El CI verde de ayer también era casualidad
+
+Este PR destapó el defecto que el council había señalado el 2026-08-14 y que se había
+registrado como "hacer estructural la garantía del cliente Prisma". `typecheck` depende de
+`^build`, y el build de `@quivo/db` es `prisma generate && tsc`. **Un cache hit de Turbo
+restaura `dist/**` pero no reejecuta el comando**, así que `prisma generate` no corre y el
+cliente nunca se escribe en `node_modules`. Sin cliente, los tipos de `@quivo/db` degradan a
+`unknown`/`{}` y `@quivo/api` falla el typecheck con ~40 errores que **no son errores de
+tipos**.
+
+El CI venía verde porque `@quivo/db#build` siempre había sido cache *miss*. Este PR cambió
+`apps/api` sin tocar `packages/db`: primera vez que ese build da hit mientras
+`@quivo/api#typecheck` da miss. Había dos parches previos por el mismo motivo, y los dos eran
+**comentarios largos explicando la trampa en vez de eliminarla**.
+
+Ahora `packages/db` tiene `postinstall: prisma generate`. `pnpm install` lo corre siempre —con
+`--frozen-lockfile`, en CI, con `node_modules` fresco— antes de que Turbo tenga la chance de
+servir un cache hit. **No** se declaró la ruta del cliente como `outputs` de Turbo: la caché
+puede restaurar un cliente *stale*, y eso ya rompió una corrida antes con `SyntaxError:
+@prisma/client does not provide an export named 'PrismaClient'`.
+
+Es la segunda vez en dos ciclos que aparece la misma lección: *un pipeline que pasa por el
+orden de sus pasos, y no por una garantía estructural, no es un pipeline*. Vale releer con eso
+en mente el resto del workflow — el paso `Test` sigue dependiendo de que `Seed database` haya
+corrido antes.
+
+## Insumos para el plan de finalización — resueltos
+
+Los 4 puntos que quedaron abiertos el 2026-08-14 antes de planificar (revisar Linear issue por
+issue, ordenar migración/spike/piloto, cerrar infra, aplicar el council) están **resueltos** en
+[`docs/plan-finalizacion-piloto.md`](plan-finalizacion-piloto.md), que es desde ahora la fuente
+de verdad del alcance, las fases, la asignación y las fechas. Este handoff registra la
+ejecución; el plan registra la intención.
+
+## Dónde retomar
+
+**Fase F0 (ciclo 14), 7 pts.** Estado:
+
+| Ítem | Estado |
+|---|---|
+| **N1** — `docs/spike-gps.md` + 3 bugs de config + headless task | **Hecho** (PR #6) |
+| **N19** — anular el ADR 0001 (Railway vs Fly) y escribir el ADR 0002 (GCP) | **Pendiente — es lo único que falta de F0** |
+| **N4** — licencia trial v5 en EAS secrets | Pendiente (CTO, externo) |
+| **N21** — cuenta de Play + declaración de background location + Data Safety | Pendiente (CTO, externo — **arranca el reloj de 1 a 3 semanas de revisión manual de Google**, es la dependencia más larga del plan) |
+| **QUI-212** — cerrar (branch protection imposible en plan free) | Pendiente en Linear |
+
+Después de F0 viene **F1**: migración Expo SDK 52→54 + Transistorsoft 4.19.4→**5.4.0 exacto**
+(sin `^`), y recién ahí el spike QUI-216 sobre el teléfono real — el **gate D1**.
+
+Dos decisiones esperando al CTO, ninguna bloqueante hoy:
+
+- **El margen de gracia de 2 h** antes del `stop()` irreversible por paquete vencido
+  (`GRACIA_STOP_TRAS_VENCIMIENTO_MS`). Valor provisional elegido por defecto razonable.
+- **D2 del plan: ¿cuenta de Play personal o de organización?** Si es personal, exige 12 testers
+  × 14 días de closed testing antes de producción, y el reclutamiento pasa de C20 a C16.
+
+Y un riesgo que **ninguna tarea de este plan cubre**: nadie está consiguiendo el sindicato
+piloto. Identificarlo y comprometerlo en C14–C15, no en C21.
 
 ## Fuentes de verdad
 
