@@ -84,6 +84,17 @@ jobs:
       - name: Migrate database
         run: pnpm --filter @quivo/db prisma:migrate:deploy
 
+      # Varios tests (auth.service.test.ts, jwt-auth.guard.integration.test.ts) corren
+      # contra Better-Auth real usando los usuarios seed (admin@quivo.local,
+      # admin@sindicato.local) en vez de mockear `auth.api.*`. `prisma:migrate:deploy`
+      # deja la base migrada pero vacía, así que sin este paso esos tests fallan con 401
+      # en CI aunque pasen en local (donde la base de desarrollo ya tiene el seed
+      # aplicado). El cliente de Prisma que el seed necesita ya existe para acá: el paso
+      # "Typecheck" de arriba corre vía turbo con `dependsOn: ["^build"]`, que ya
+      # construyó `@quivo/db` (`prisma generate && tsc`) como dependencia.
+      - name: Seed database
+        run: pnpm --filter @quivo/db prisma:seed
+
       - name: Test
         run: pnpm test
 
