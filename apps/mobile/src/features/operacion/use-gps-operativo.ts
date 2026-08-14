@@ -9,11 +9,8 @@ import {
   evaluarCriteriosGo,
   type MuestraBateria,
 } from '../../gps/battery-gap-monitor';
-import {
-  detectarPuntosControlCercanos,
-  filtrarNuevosCumplimientos,
-  type DeteccionPuntoControl,
-} from '../../gps/geofence';
+import type { DeteccionPuntoControl } from '../../gps/geofence';
+import { registrarPuntoGps } from '../../gps/headless-task';
 
 export function useGpsOperativo(
   sesionId: string,
@@ -38,14 +35,16 @@ export function useGpsOperativo(
     BackgroundGeolocation.getCurrentPosition({
       samples: 1,
       persist: false,
-    }).then((location) => {
-      setPosicionActual({
-        lat: location.coords.latitude,
-        lng: location.coords.longitude,
+    })
+      .then((location) => {
+        setPosicionActual({
+          lat: location.coords.latitude,
+          lng: location.coords.longitude,
+        });
+      })
+      .catch(() => {
+        // Ignorar fallo silencioso (puede que no tenga permisos aún)
       });
-    }).catch(() => {
-      // Ignorar fallo silencioso (puede que no tenga permisos aún)
-    });
 
     return () => {
       subscription.current?.remove();
@@ -54,6 +53,10 @@ export function useGpsOperativo(
   }, []);
 
   const onLocation = useCallback(
+    // La escritura al outbox (gps_point + cumplimiento_punto_control) vive en
+    // `registrarPuntoGps` (`gps/headless-task.ts`), compartida con el headless task que
+    // corre cuando la app está terminada (QUI-216) — acá solo queda lo que es
+    // genuinamente de React: estado de UI y los refs que alimentan el veredicto del spike.
     async (location: Location) => {
       setPosicionActual({
         lat: location.coords.latitude,
@@ -62,46 +65,18 @@ export function useGpsOperativo(
       const ts = new Date(location.timestamp).getTime();
       timestamps.current.push(ts);
       bateria.current.push({ ts, nivel: (location.battery?.level ?? -1) * 100 });
-      puntosRef.current += 1;
-      setPuntos(puntosRef.current);
 
       const db = await abrirOutbox();
-      await encolarEvento(db, {
-        deviceId,
-        tipo: 'gps_point',
-        payload: {
-          sesionId,
-          lat: location.coords.latitude,
-          lng: location.coords.longitude,
-          accuracy: location.coords.accuracy,
-          speed: location.coords.speed,
-        },
-      });
+      const { deteccion } = await registrarPuntoGps(
+        db,
+        location,
+        { deviceId, sesionId, puntosControl },
+        puntosControlDetectados.current,
+      );
 
-      if (puntosControl.length > 0) {
-        const posicion: [number, number] = [location.coords.longitude, location.coords.latitude];
-        const detecciones = detectarPuntosControlCercanos(posicion, puntosControl);
-        const nuevos = filtrarNuevosCumplimientos(puntosControlDetectados.current, detecciones);
-        for (const deteccion of nuevos) {
-          puntosControlDetectados.current.add(deteccion.puntoControlId);
-          setUltimaDeteccion(deteccion);
-          await encolarEvento(db, {
-            deviceId,
-            tipo: 'cumplimiento_punto_control',
-            payload: {
-              sesionId,
-              puntoControlId: deteccion.puntoControlId,
-              // lat/lng de la posición que disparó la detección — el worker (QUI-241)
-              // necesita la coordenada real para re-validar server-side (ST_DWithin,
-              // fuente de verdad RF-39), no solo confiar en `distanciaM` autoreportada.
-              lat: location.coords.latitude,
-              lng: location.coords.longitude,
-              distanciaM: deteccion.distanciaM,
-              validadoPor: 'app',
-            },
-          });
-        }
-      }
+      puntosRef.current += 1;
+      setPuntos(puntosRef.current);
+      if (deteccion) setUltimaDeteccion(deteccion);
     },
     [deviceId, sesionId, puntosControl],
   );
