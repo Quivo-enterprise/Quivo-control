@@ -89,3 +89,106 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  acceptance:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4-alpine
+        env:
+          POSTGRES_USER: quivo
+          POSTGRES_PASSWORD: quivo_dev
+          POSTGRES_DB: quivo_control
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quivo -d quivo_control"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://quivo:quivo_dev@localhost:5432/quivo_control
+      RUNTIME_DATABASE_URL: postgresql://quivo_app:quivo_app_dev@localhost:5432/quivo_control
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-only-secret-never-use-in-production-000000
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL: 30d
+      BETTER_AUTH_URL: http://localhost:3001
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ github.job }}-
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # `test:acceptance` corre `playwright test` directo (no es una tarea de turbo, no
+      # pasa por el grafo de dependencias de turbo.json) y su `webServer` levanta
+      # `@quivo/api` (build + start) y `@quivo/web` (`next dev`) por su cuenta. Ambos
+      # resuelven `@quivo/db`, `@quivo/shared` y `@quivo/design-system` como paquetes de
+      # workspace ya compilados (`dist/`), así que hay que compilarlos antes — y antes
+      # también de "Seed acceptance data": el cliente de Prisma se genera dentro de este
+      # build (`@quivo/db`: `prisma generate && tsc`) y el seed lo importa transitivamente
+      # (`prisma/seed.ts` → `src/auth.js` → `src/client.ts`); en un checkout limpio de CI
+      # ese cliente no existe todavía si el seed corre antes. Se excluye `@quivo/web` de
+      # este build a propósito: lo levanta `next dev`, que compila sobre la marcha y no
+      # necesita un build de producción previo — incluirlo acá solo alargaría este paso
+      # sin aportar nada (su `next build` de producción ya se verifica aparte en el job
+      # `ci`, que corre `pnpm build` sin filtro y es una dependencia de este job).
+      - name: Build workspace dependencies
+        run: pnpm turbo run build --filter=@quivo/db --filter=@quivo/shared --filter=@quivo/design-system
+
+      - name: Migrate database
+        run: pnpm --filter @quivo/db prisma:migrate:deploy
+
+      - name: Seed acceptance data
+        run: pnpm --filter @quivo/db prisma:seed
+
+      - name: Run acceptance tests
+        run: pnpm test:acceptance
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

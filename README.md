@@ -61,6 +61,7 @@ El firewall de la PC debe aceptar TCP `3001` y `8081` desde la red local del tel
 | [`docs/documento-tecnico-cto.md`](docs/documento-tecnico-cto.md) | Documento técnico completo (modelo de datos, API, sync, riesgos) |
 | [`docs/plan-auth-movil-quivo.md`](docs/plan-auth-movil-quivo.md) | Plan activo: login móvil, diseño QUIVO y coordinación con web    |
 | [`docs/coordinacion-agentes.md`](docs/coordinacion-agentes.md)   | Chat en vivo para coordinar cambios concurrentes Codex/Claude    |
+| [`docs/ramas-sprint-m6.md`](docs/ramas-sprint-m6.md)             | Qué contuvo cada rama del sprint M6 antes de borrarlas, verificado |
 
 ## Gestión
 

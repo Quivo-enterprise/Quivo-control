@@ -1,0 +1,104 @@
+/*
+ * Tokens de @quivo/design-system.
+ *
+ * Paleta de marca (ver apps/web/public/brand/*.webp): índigo profundo + naranja como acento —
+ * se respeta la identidad existente, no se inventa una nueva. El resto de la escala
+ * (superficie, texto, espaciado, radios, sombras) es una decisión de este paquete al no
+ * existir otra fuente — pensada para acompañar esos dos colores de marca sin competir con
+ * ellos. Claro/oscuro vía `prefers-color-scheme`, la misma media query que ya usa
+ * `BrandLogo` en `apps/web` para alternar variante de logo — quedan sincronizados.
+ */
+
+:root {
+  /* Color de marca */
+  --qv-color-primary: #4338ca;
+  --qv-color-primary-soft: #a5b4fc;
+  --qv-color-primary-subtle: #eef2ff;
+  --qv-color-accent: #f97316;
+  --qv-color-accent-subtle: #ffedd5;
+
+  /* Color semántico */
+  --qv-color-danger: #dc2626;
+  --qv-color-success: #16a34a;
+  --qv-color-warning: #d97706;
+  --qv-color-warning-soft: #fef3c7;
+  --qv-color-border: #d8dde6;
+  --qv-color-white: #ffffff;
+
+  /* Texto */
+  --qv-text-primary: #0f172a;
+  --qv-text-secondary: #64748b;
+  --qv-text-muted: #94a3b8;
+  --qv-text-xs: 0.75rem;
+  --qv-text-sm: 0.875rem;
+  --qv-text-md: 1rem;
+  --qv-text-lg: 1.25rem;
+  --qv-text-xl: 1.5rem;
+
+  /* Superficie / borde */
+  --qv-surface-card: #ffffff;
+  --qv-surface-soft: #f8fafc;
+  --qv-surface-sunken: #f1f5f9;
+  --qv-border-subtle: #e2e8f0;
+  --qv-border-strong: #cbd5e1;
+
+  /* Espaciado */
+  --qv-space-2xs: 0.25rem;
+  --qv-space-xs: 0.5rem;
+  --qv-space-sm: 0.75rem;
+  --qv-space-md: 1rem;
+  --qv-space-lg: 1.5rem;
+  --qv-space-xl: 2rem;
+
+  /* Radio */
+  --qv-radius-sm: 0.5rem;
+  --qv-radius-md: 0.75rem;
+  --qv-radius-lg: 1rem;
+  --qv-radius-full: 999px;
+
+  /* Sombra */
+  --qv-shadow-xs: 0 1px 2px rgb(15 23 42 / 6%);
+  --qv-shadow-sm: 0 2px 8px rgb(15 23 42 / 8%);
+  --qv-shadow-lg: 0 16px 40px rgb(15 23 42 / 14%);
+  --qv-shadow-focus: 0 0 0 3px color-mix(in srgb, var(--qv-color-primary) 40%, transparent);
+
+  /* Tipografía — sin @font-face propio: la app conecta estas variables a sus fuentes reales
+     (Oxanium/Montserrat vía next/font/google). Fallback de sistema mientras tanto. */
+  --qv-font-display: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --qv-font-body: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --qv-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Movimiento */
+  --qv-transition-fast: 150ms ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --qv-color-primary: #818cf8;
+    --qv-color-primary-soft: #4338ca;
+    --qv-color-primary-subtle: #1e1b4b;
+    --qv-color-accent: #fb923c;
+    --qv-color-accent-subtle: #431407;
+
+    --qv-color-danger: #f87171;
+    --qv-color-success: #4ade80;
+    --qv-color-warning: #fbbf24;
+    --qv-color-warning-soft: #451a03;
+    --qv-color-border: #2a3342;
+    --qv-color-white: #ffffff;
+
+    --qv-text-primary: #f1f5f9;
+    --qv-text-secondary: #94a3b8;
+    --qv-text-muted: #64748b;
+
+    --qv-surface-card: #111827;
+    --qv-surface-soft: #1f2937;
+    --qv-surface-sunken: #0b1220;
+    --qv-border-subtle: #1f2937;
+    --qv-border-strong: #334155;
+
+    --qv-shadow-xs: 0 1px 2px rgb(0 0 0 / 30%);
+    --qv-shadow-sm: 0 2px 10px rgb(0 0 0 / 34%);
+    --qv-shadow-lg: 0 20px 48px rgb(0 0 0 / 44%);
+  }
+}
