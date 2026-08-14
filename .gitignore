@@ -1,3 +1,32 @@
 node_modules/
 .env*
+!.env.example
 .claude/
+.claude-flow/
+
+# build outputs
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+.next/
+
+# test / coverage
+coverage/
+
+# generado por packages/shared/src/openapi/generate.ts
+packages/shared/openapi.json
+
+# expo / mobile
+.expo/
+apps/mobile/android/
+apps/mobile/ios/
+
+# editors / os
+.DS_Store
+
+# OSRM: extracto vial descargado + archivos procesados (scripts/setup-osrm.sh), pesan GBs
+osrm-data/
+
+test-results/
+artifacts/

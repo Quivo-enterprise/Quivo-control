@@ -1,0 +1,11 @@
+import { Module } from '@nestjs/common';
+import { ReglasController } from './reglas.controller.js';
+import { ReglasService } from './reglas.service.js';
+import { SancionesController } from './sanciones.controller.js';
+import { SancionesService } from './sanciones.service.js';
+
+@Module({
+  controllers: [ReglasController, SancionesController],
+  providers: [ReglasService, SancionesService],
+})
+export class ReglasModule {}

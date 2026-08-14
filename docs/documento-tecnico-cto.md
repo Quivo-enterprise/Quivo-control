@@ -12,23 +12,24 @@
 
 **Decisión: TypeScript punta a punta, monolito modular, PostgreSQL como única base de datos.**
 
-| Capa | Tecnología | Justificación |
-|---|---|---|
-| Lenguaje | TypeScript en backend, web y móvil | Un solo lenguaje para equipo pequeño = máxima velocidad de MVP. Tipos y validadores compartidos eliminan bugs de contrato API. |
-| Backend | NestJS con adapter Fastify | Estructura modular por dominio (RNF-28/29/30), inyección de dependencias, throughput HTTP alto con Fastify. |
-| ORM | Prisma (CRUD) + SQL crudo (ingesta GPS) | Prisma acelera el 90% del MVP que es CRUD; la ruta caliente de ingesta usa multi-row insert / `COPY` sin pasar por ORM. |
-| Base de datos | PostgreSQL 16+ con PostGIS | Relacional + geoespacial + series de tiempo en un solo motor operable por un equipo pequeño. |
-| Cola de trabajos | Redis + BullMQ | Absorbe ráfagas de sincronización; desacopla recepción de eventos de su procesamiento. |
-| Auth | Better-Auth + JWT + RLS de Postgres | No construir auth a mano. Doble barrera de tenant (claims + RLS). |
-| Web admin | Next.js (App Router) + Tailwind + TanStack Query | Dashboard interno; ecosistema React del equipo; CI/deploy en Vercel ya integrado al flujo. |
-| App móvil | Expo (React Native) + EAS Build | Tooling EAS operativo en el equipo; dev-builds soportan módulos nativos. |
-| GPS background | `react-native-background-geolocation` (Transistorsoft, licencia única ~US$400) | Estándar de facto en fleet tracking; nativo Swift/Kotlin; maneja Doze/App Standby; Expo config plugin. La alternativa gratuita (`expo-location`) es insuficiente en Android de gama baja. |
-| Storage local móvil | expo-sqlite (patrón outbox) | Asignación diaria + rutas + puntos de control descargados; cola de eventos pendientes de sync. |
-| Mapas | MapLibre GL + tiles OSM | Costo cero en MVP; API compatible con Mapbox si se necesita upgrade. |
-| Infra inicial | Railway o Fly.io (API + worker + Redis) + Postgres gestionado | Deploy en minutos, bajo costo, camino de escalado claro. |
-| Monorepo | pnpm workspaces + Turborepo | Paquete `shared` con schemas Zod = contrato único entre las tres apps. |
+| Capa                | Tecnología                                                                     | Justificación                                                                                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lenguaje            | TypeScript en backend, web y móvil                                             | Un solo lenguaje para equipo pequeño = máxima velocidad de MVP. Tipos y validadores compartidos eliminan bugs de contrato API.                                                            |
+| Backend             | NestJS con adapter Fastify                                                     | Estructura modular por dominio (RNF-28/29/30), inyección de dependencias, throughput HTTP alto con Fastify.                                                                               |
+| ORM                 | Prisma (CRUD) + SQL crudo (ingesta GPS)                                        | Prisma acelera el 90% del MVP que es CRUD; la ruta caliente de ingesta usa multi-row insert / `COPY` sin pasar por ORM.                                                                   |
+| Base de datos       | PostgreSQL 16+ con PostGIS                                                     | Relacional + geoespacial + series de tiempo en un solo motor operable por un equipo pequeño.                                                                                              |
+| Cola de trabajos    | Redis + BullMQ                                                                 | Absorbe ráfagas de sincronización; desacopla recepción de eventos de su procesamiento.                                                                                                    |
+| Auth                | Better-Auth + JWT + RLS de Postgres                                            | No construir auth a mano. Doble barrera de tenant (claims + RLS).                                                                                                                         |
+| Web admin           | Next.js (App Router) + Tailwind + TanStack Query                               | Dashboard interno; ecosistema React del equipo; CI/deploy en Vercel ya integrado al flujo.                                                                                                |
+| App móvil           | Expo (React Native) + EAS Build                                                | Tooling EAS operativo en el equipo; dev-builds soportan módulos nativos.                                                                                                                  |
+| GPS background      | `react-native-background-geolocation` (Transistorsoft, licencia única ~US$400) | Estándar de facto en fleet tracking; nativo Swift/Kotlin; maneja Doze/App Standby; Expo config plugin. La alternativa gratuita (`expo-location`) es insuficiente en Android de gama baja. |
+| Storage local móvil | expo-sqlite (patrón outbox)                                                    | Asignación diaria + rutas + puntos de control descargados; cola de eventos pendientes de sync.                                                                                            |
+| Mapas               | MapLibre GL + tiles OSM                                                        | Costo cero en MVP; API compatible con Mapbox si se necesita upgrade.                                                                                                                      |
+| Infra inicial       | Railway o Fly.io (API + worker + Redis) + Postgres gestionado                  | Deploy en minutos, bajo costo, camino de escalado claro.                                                                                                                                  |
+| Monorepo            | pnpm workspaces + Turborepo                                                    | Paquete `shared` con schemas Zod = contrato único entre las tres apps.                                                                                                                    |
 
 **Alternativas evaluadas y descartadas (council):**
+
 - **Go en backend** (propuesta Gemini): mayor throughput por core, pero el cuello de botella real es la base de datos, no el runtime — el batching + cola lo neutraliza. Costo: segundo lenguaje para el equipo. Descartado por criterio de velocidad.
 - **Flutter en móvil**: depende del mismo SDK nativo de Transistorsoft; no aporta ventaja que justifique aprender Dart.
 - **Microservicios día 1**: rechazado por unanimidad — destruye velocidad de MVP en equipo pequeño.
@@ -62,6 +63,7 @@
 ```
 
 Principios:
+
 - Cada módulo de dominio es autocontenido (controller + service + repository); comunicación entre módulos solo por interfaces públicas. Esto hace que extraer un módulo como servicio sea cirugía menor, no reescritura.
 - El endpoint de sync **no procesa**: valida, encola y responde. El worker procesa. Así el pico de "toda la flota sincroniza a la vez" no tumba la API.
 - La validación de puntos de control corre en dos lugares: en el móvil (feedback inmediato al conductor, offline) y en el worker (fuente de verdad auditada, RF-39).
@@ -161,6 +163,7 @@ audit_log(id, sindicato_id, usuario_id, entidad, entidad_id, accion,
 3. **Outbox:** todo evento (punto GPS, inicio/fin de recorrido, cumplimiento de PC, observación) nace con **UUIDv7 generado en el dispositivo** + `device_id` + `ts` y se escribe primero en la tabla outbox local. Nada se envía sin estar persistido localmente (RNF-09: pérdida de internet ≠ pérdida de evidencia).
 
 **GPS y batería (preguntas 11–12 de Producto):**
+
 - Frecuencia MVP: **punto cada 10 s o cada 50 m en movimiento**, con detección de movimiento del SDK (en parada prolongada no se registra — ahorro de batería). Objetivo: <5% de batería por jornada.
 - Transistorsoft usa motion-detection nativa y buffering; la app escribe en SQLite por lotes, no punto a punto.
 
@@ -211,6 +214,7 @@ GET  /v1/auditoria
 **Inicial (MVP):** Railway o Fly.io — 3 procesos (API, worker, Redis) + Postgres gestionado con PostGIS. Vercel para el web admin. EAS para builds/distribución de la app (Android primero). Costo estimado: US$50–150/mes.
 
 **Camino de escalado (en orden, sin reescritura):**
+
 1. Réplicas de lectura de Postgres para dashboard/reportes.
 2. Escalar workers de ingesta horizontalmente (ya separados por proceso).
 3. Particionado agresivo + compresión del histórico GPS (o migración a TimescaleDB/Tiger Cloud).
@@ -220,14 +224,14 @@ GET  /v1/auditoria
 
 ## 11. Orden de construcción (pregunta 16)
 
-| Fase | Contenido | RF cubiertos |
-|---|---|---|
-| 0 | Monorepo, CI, Postgres+PostGIS, auth+RLS, esqueleto API. **En paralelo: spike GPS** (gate go/no-go) | — |
-| 1 | Núcleo administrativo (CRUD completo en web admin) | RF-01..39 |
-| 2 | Rotaciones: generar, editar, publicar, consumir | RF-51..57 |
-| 3 | App móvil: login operativo, paquete offline, tracking, PC, outbox, sync | RF-58..73 |
-| 4 | Dashboard, reportes, auditoría visible, reglas/sanciones | RF-40..50, 74..84 |
-| 5 | Hardening: load test de ingesta (k6), auditoría RLS, security review | RNF |
+| Fase | Contenido                                                                                           | RF cubiertos      |
+| ---- | --------------------------------------------------------------------------------------------------- | ----------------- |
+| 0    | Monorepo, CI, Postgres+PostGIS, auth+RLS, esqueleto API. **En paralelo: spike GPS** (gate go/no-go) | —                 |
+| 1    | Núcleo administrativo (CRUD completo en web admin)                                                  | RF-01..39         |
+| 2    | Rotaciones: generar, editar, publicar, consumir                                                     | RF-51..57         |
+| 3    | App móvil: login operativo, paquete offline, tracking, PC, outbox, sync                             | RF-58..73         |
+| 4    | Dashboard, reportes, auditoría visible, reglas/sanciones                                            | RF-40..50, 74..84 |
+| 5    | Hardening: load test de ingesta (k6), auditoría RLS, security review                                | RNF               |
 
 Cada fase cierra con PR + CI + merge + actualización de `docs/handoff.md`.
 
@@ -235,14 +239,14 @@ Cada fase cierra con PR + CI + merge + actualización de `docs/handoff.md`.
 
 ## 12. Riesgos técnicos y mitigaciones (pregunta 17)
 
-| Riesgo | Impacto | Mitigación |
-|---|---|---|
-| GPS background muere en Android gama baja (Doze, battery killers de fabricantes) | Mata el corazón del producto | **Spike semana 1** con Transistorsoft en dispositivo barato real: 8h tracking, medir batería y huecos. Plan B: módulo nativo Kotlin (Foreground Service) dentro de la app Expo |
-| Fuga de datos entre sindicatos (bug de query) | Crítico de confianza | RLS activo en todas las tablas + test automatizado cross-tenant en CI + security review antes de cada release |
-| Saturación de escritura en Postgres con la flota creciendo | Degradación de ingesta | Batching + cola desde día 1; particionado; palancas de §10 en orden |
-| Doble asignación / rotación inconsistente | Conflicto operativo real en la calle | Constraints únicos por (vehículo, fecha, horario); publicación atómica de rotación |
-| Reloj del dispositivo mal configurado | Eventos con timestamps falsos | Registrar `ts` de dispositivo + `received_at` de servidor; detectar drift y marcarlo como observación |
-| Adopción por usuarios no técnicos (RNF-01..05) | Producto correcto pero no usado | Flujo móvil de máximo 2 taps para iniciar recorrido; pilotos con un sindicato real desde Fase 3 |
+| Riesgo                                                                           | Impacto                              | Mitigación                                                                                                                                                                     |
+| -------------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| GPS background muere en Android gama baja (Doze, battery killers de fabricantes) | Mata el corazón del producto         | **Spike semana 1** con Transistorsoft en dispositivo barato real: 8h tracking, medir batería y huecos. Plan B: módulo nativo Kotlin (Foreground Service) dentro de la app Expo |
+| Fuga de datos entre sindicatos (bug de query)                                    | Crítico de confianza                 | RLS activo en todas las tablas + test automatizado cross-tenant en CI + security review antes de cada release                                                                  |
+| Saturación de escritura en Postgres con la flota creciendo                       | Degradación de ingesta               | Batching + cola desde día 1; particionado; palancas de §10 en orden                                                                                                            |
+| Doble asignación / rotación inconsistente                                        | Conflicto operativo real en la calle | Constraints únicos por (vehículo, fecha, horario); publicación atómica de rotación                                                                                             |
+| Reloj del dispositivo mal configurado                                            | Eventos con timestamps falsos        | Registrar `ts` de dispositivo + `received_at` de servidor; detectar drift y marcarlo como observación                                                                          |
+| Adopción por usuarios no técnicos (RNF-01..05)                                   | Producto correcto pero no usado      | Flujo móvil de máximo 2 taps para iniciar recorrido; pilotos con un sindicato real desde Fase 3                                                                                |
 
 ---
 
@@ -252,15 +256,15 @@ Cada fase cierra con PR + CI + merge + actualización de `docs/handoff.md`.
 
 **Estimación MVP (criterios de aceptación §8 del doc de Producto):**
 
-| Fase | Duración estimada |
-|---|---|
-| 0 — Fundaciones + spike | 1–2 semanas |
-| 1 — Núcleo administrativo | 3–4 semanas |
-| 2 — Rotaciones | 2 semanas |
-| 3 — Móvil + offline + sync | 4–5 semanas |
-| 4 — Dashboard + auditoría | 2–3 semanas |
-| 5 — Hardening + piloto | 2 semanas |
-| **Total** | **~14–18 semanas** con 2–3 devs |
+| Fase                       | Duración estimada               |
+| -------------------------- | ------------------------------- |
+| 0 — Fundaciones + spike    | 1–2 semanas                     |
+| 1 — Núcleo administrativo  | 3–4 semanas                     |
+| 2 — Rotaciones             | 2 semanas                       |
+| 3 — Móvil + offline + sync | 4–5 semanas                     |
+| 4 — Dashboard + auditoría  | 2–3 semanas                     |
+| 5 — Hardening + piloto     | 2 semanas                       |
+| **Total**                  | **~14–18 semanas** con 2–3 devs |
 
 Costos no-personal: licencia Transistorsoft ~US$400 única, infra US$50–150/mes, cuentas de tiendas (Google Play US$25).
 
