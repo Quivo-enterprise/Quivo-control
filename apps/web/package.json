@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
-    "@quivo/design-system": "link:../../../Design_System_QUIVO/packages/design-system",
+    "@quivo/design-system": "workspace:*",
     "@quivo/shared": "workspace:*",
     "@tanstack/react-query": "^5.64.1",
     "gsap": "^3.15.0",

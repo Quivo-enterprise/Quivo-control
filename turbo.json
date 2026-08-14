@@ -14,7 +14,16 @@
       "dependsOn": ["^build"]
     },
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+      "env": [
+        "RUNTIME_DATABASE_URL",
+        "JWT_SECRET",
+        "REDIS_URL",
+        "BETTER_AUTH_URL",
+        "NODE_ENV",
+        "JWT_ACCESS_TTL",
+        "JWT_REFRESH_TTL"
+      ]
     }
   }
 }

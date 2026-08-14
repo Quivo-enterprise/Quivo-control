@@ -29,4 +29,5 @@ apps/mobile/ios/
 osrm-data/
 
 test-results/
+playwright-report/
 artifacts/

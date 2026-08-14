@@ -13,7 +13,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "prisma generate && tsx prisma/seed.ts"
   },
   "devDependencies": {
     "@better-auth/cli": "^1.4.22",

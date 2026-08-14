@@ -26,13 +26,46 @@ config();
  * distinto de `DATABASE_URL` (rol de migraciones, dueño de las tablas): Postgres ignora
  * RLS para superusers/roles con BYPASSRLS sin importar `FORCE ROW LEVEL SECURITY` (QUI-218,
  * ver la migración `20260730152500_rls_multi_tenant`) — si este cliente usara el mismo rol
- * que las migraciones, las políticas RLS serían un no-op silencioso. Cae a `DATABASE_URL`
- * si no está seteada para no romper entornos que todavía no la configuraron, pero en ese
- * caso RLS no se está probando de verdad.
+ * que las migraciones, las políticas RLS serían un no-op silencioso.
+ *
+ * Por eso, fuera de `development`, la ausencia de `RUNTIME_DATABASE_URL` es un error fatal
+ * y no un fallback silencioso: degradar en silencio a `DATABASE_URL` fue justo lo que
+ * disfrazó una variable de entorno faltante como "12 tests de RLS en rojo" en vez de "la
+ * conexión está mal configurada" (ver `turbo.json`, `env` de la tarea `test` — Turbo en
+ * `envMode: strict` borra del proceso cualquier variable no declarada). En `development` sí
+ * se permite el fallback, pero avisando por `console.warn`: en ese modo no hay tests de
+ * aislamiento corriendo, así que degradar no genera una señal falsa.
  */
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-const adapter = new PrismaPg(process.env.RUNTIME_DATABASE_URL ?? process.env.DATABASE_URL ?? '');
+const runtimeDatabaseUrl = process.env.RUNTIME_DATABASE_URL;
+const nodeEnv = process.env.NODE_ENV;
+
+let resolvedDatabaseUrl: string;
+
+if (runtimeDatabaseUrl) {
+  resolvedDatabaseUrl = runtimeDatabaseUrl;
+} else if (nodeEnv === 'development') {
+  console.warn(
+    '[@quivo/db] RUNTIME_DATABASE_URL no está seteada: usando DATABASE_URL (rol de migraciones, ' +
+      'con BYPASSRLS) como fallback de desarrollo. El aislamiento multi-tenant (RLS) queda ' +
+      'desactivado con este fallback — no representa el comportamiento de producción. Seteá ' +
+      'RUNTIME_DATABASE_URL para probar el aislamiento real.',
+  );
+  resolvedDatabaseUrl = process.env.DATABASE_URL ?? '';
+} else {
+  throw new Error(
+    `RUNTIME_DATABASE_URL no está seteada (NODE_ENV=${nodeEnv ?? 'sin definir'}). Esta variable ` +
+      'conecta con el rol "quivo_app" (sin BYPASSRLS), la única barrera real de aislamiento ' +
+      'multi-tenant entre sindicatos (RLS, QUI-218, migración 20260730152500_rls_multi_tenant). ' +
+      'Sin ella este cliente caería en silencio a DATABASE_URL, el rol de migraciones con ' +
+      'BYPASSRLS, y cualquier sindicato podría leer o escribir filas de otro. Seteá ' +
+      'RUNTIME_DATABASE_URL antes de arrancar (o corré con NODE_ENV=development si es un entorno ' +
+      'local sin esa variable todavía configurada).',
+  );
+}
+
+const adapter = new PrismaPg(resolvedDatabaseUrl);
 
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({ adapter });
 
