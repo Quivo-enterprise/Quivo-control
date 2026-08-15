@@ -1,7 +1,9 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-08-14** (PR #1 y PR #2 mergeados a `main`; **CI verde por
+> Última actualización: **2026-08-14** — **PR #7: ADR 0002 (GCP), cierra el código de F0**; el
+> ADR 0001 (Railway vs Fly.io) queda anulado. Antes: PR #6 (desbloqueo del gate GPS, N1).
+> Estado anterior: (PR #1 y PR #2 mergeados a `main`; **CI verde por
 > primera vez en la historia del repo**, tras 8 de 8 corridas fallidas; `@quivo/design-system`
 > reconstruido como paquete del monorepo porque el repo hermano que lo alojaba se perdió.)
 >
@@ -82,7 +84,7 @@ TypeScript punta a punta. Detalle y justificación completa en `docs/plan-maestr
 - **Móvil**: Expo (React Native) + EAS Build; GPS background con Transistorsoft `react-native-background-geolocation` (licencia única ~US$400); expo-sqlite como outbox.
 - **Sync idempotente**: UUIDv7 generado en cliente + `INSERT ... ON CONFLICT (event_id) DO NOTHING`.
 - **Mapas**: MapLibre GL + tiles OSM.
-- **Infra**: Railway o Fly.io (API + worker + Redis) + Postgres gestionado + Vercel (web) + EAS (móvil).
+- **Infra**: **GCP** — Cloud Run (API) + Cloud Run Worker Pool (ingesta GPS) + Cloud SQL PG16/PostGIS + Memorystore Redis + Secret Manager, `apps/web` también en Cloud Run, archivado GPS en Cloudflare R2, IaC con Terraform, todo en **`southamerica-west1`** (Santiago) menos el Cloud Scheduler ([ADR 0002](adr/0002-gcp.md), 2026-08-14 — anula el ADR 0001 Railway vs Fly.io). EAS para móvil.
 
 ## Decisiones clave y por qué
 
@@ -1253,6 +1255,101 @@ orden de sus pasos, y no por una garantía estructural, no es un pipeline*. Vale
 en mente el resto del workflow — el paso `Test` sigue dependiendo de que `Seed database` haya
 corrido antes.
 
+## PR #7 — ADR 0002: GCP (N19) — 2026-08-14
+
+Cierra **F0**. Único ítem de la fase que no era trámite externo del CTO.
+
+`docs/adr/0001-railway-vs-flyio.md` queda **anulado** (banner al principio + "Decisión final"
+reescrita) y se conserva como registro histórico de por qué la infra estuvo sin decidir desde el
+Cycle 12 — nunca se creó cuenta ni se aprovisionó nada en Railway ni en Fly.io, así que no hay
+recursos que dar de baja. Lo sustituye `docs/adr/0002-gcp.md`, que fija la arquitectura de
+despliegue del plan de finalización como decisión formal: Cloud Run para `apps/api`
+(`min-instances=1`), **Cloud Run Worker Pool** para el worker de ingesta —GA desde abril de 2026,
+y la razón concreta de la elección: un Cloud Run *service* normal moriría por falta de tráfico—,
+Cloud Run Job + Scheduler para la retención, Cloud SQL PG16 con PostGIS, Memorystore, Secret
+Manager, `apps/web` también en Cloud Run y archivado en Cloudflare R2.
+
+Tres cosas que el ADR deja escritas porque son las que muerden después:
+
+- **RLS en Cloud SQL depende de un detalle no obvio:** el usuario `postgres` de Cloud SQL no es
+  superusuario real (es `cloudsqlsuperuser`), así que `quivo_app` sin BYPASSRLS y `FORCE ROW LEVEL
+  SECURITY` se comportan como en Postgres vanilla — que es el supuesto sobre el que se construyó
+  todo QUI-218. Queda como verificación obligatoria correr `rls.integration.test.ts` **contra la
+  instancia real**, no contra el Docker local.
+- **R2 en vez de GCS es deliberado**, no un descuido de coherencia: egreso $0 permanente contra
+  ~$0,12/GB, y evita el footgun de los checksums del AWS SDK contra GCS. Cero cambio de código.
+- **El objetivo de costo del doc técnico (US$50–150/mes) es inalcanzable** con servicios
+  gestionados en región sudamericana: ~US$255–290/mes en el piloto, ~US$1.200–2.800/mes en
+  régimen. El ADR lo acepta explícito en vez de dejar el número viejo flotando.
+
+### La región quedó cerrada: `southamerica-west1` (Santiago)
+
+El plan de finalización dejaba la región abierta con un *lean* por São Paulo apoyado en dos
+supuestos —"catálogo más completo" e intuición geográfica— y pedía explícitamente medir antes de
+comprometerse. **Se midió, y los dos supuestos eran falsos.**
+
+Latencia real desde la conexión del CTO (La Paz, AXS Bolivia `AS26210`), 12 requests HTTPS sobre
+una **única conexión TLS reusada** por región, descartando el handshake:
+
+| Región | RTT mediana |
+|---|---|
+| **`southamerica-west1`** (Santiago) | **52 ms** |
+| `southamerica-east1` (São Paulo) | 110 ms |
+| `us-east4` | 199 ms |
+| `us-central1` | 230 ms |
+
+**Trampa de medición que conviene no repetir:** medir con `time_connect` de `curl`, o con
+conexiones nuevas, da ~40 ms para *todas* las regiones por igual — eso es el borde Anycast de
+Google, no el datacenter. La diferencia aparece recién reusando la conexión.
+
+Y en costo Santiago **también** gana: Cloud Run y Worker Pools son de 2 tiers (Santiago y São
+Paulo cuestan idéntico), pero Cloud SQL es 6,7% y Memorystore 19,5% más baratos en Santiago —
+−6,5% en el total. La mitad de latencia y más barato: no hubo tradeoff que deliberar.
+
+**Los dos gaps de Santiago, y por qué ninguno bloquea:**
+
+- **Cloud Scheduler no existe en `southamerica-west1`** (verificado en la doc oficial). Acá solo
+  dispara el Job de retención GPS, **una vez por día**: se pone en `southamerica-east1` apuntando
+  al Job en Santiago —el endpoint de la Admin API es global— y cuesta ~30 ms diarios. Es la única
+  pieza multi-región y hay que dejarla explícita en el Terraform para que no se lea como error.
+- **Firebase App Hosting no tiene ninguna región sudamericana** (`us-central1`, `us-east4`,
+  `us-east5`, `asia-east1`, `asia-southeast1`, `europe-west4`). No es un gap de Santiago sino del
+  servicio, y **se resolvió sacándolo de la arquitectura** — ver abajo.
+
+**Cloud Run Worker Pools sí corre en Santiago, verificado en vivo.** Era el único gap capaz de
+descartar la región (sostiene el worker de ingesta) y no tiene tabla de regiones publicada: la
+doc no documenta restricción ni lo confirma en positivo. Se comprobó contra la API real con
+`POST .../locations/southamerica-west1/workerPools?validateOnly=true`, que valida sin crear nada
+— aceptado en ambas regiones, con `Listed 0 items` confirmado después. Control: la misma llamada
+contra una región inexistente falla. **Lección reusable: `validateOnly=true` convierte una
+inferencia de documentación en un hecho, gratis.**
+
+### Cambio de arquitectura: `apps/web` va en Cloud Run, no en Firebase App Hosting
+
+Al no existir App Hosting en Sudamérica, había que decidir si valía servir el panel desde
+`us-east4` (199 ms medidos) con un proveedor y un camino de deploy extra. Se fue a ver si dolía:
+**todo `page`/`layout` de `apps/web` salvo `app/layout.tsx` es `'use client'`**, y el fetching es
+TanStack Query contra `NEXT_PUBLIC_API_URL` desde el navegador. El panel es un SPA con cáscara
+Next.js — **el host web no está en el camino de datos**, el browser pega directo contra la API.
+Sin SSR con datos, sin Server Actions y sin ISR, App Hosting no compra nada.
+
+Servirlo como un Cloud Run más deja todo en una plataforma, un proveedor de Terraform y una
+región. **Consecuencia no prevista por N6:** son **dos** `Dockerfile` (Next.js en modo
+`standalone` además del de API+worker), no una imagen con dos `CMD`. Y si `apps/web` alguna vez
+incorpora SSR con datos reales, esta decisión hay que revisarla.
+
+### Costo corregido
+
+El ~US$160–230/mes que circulaba en el plan **estaba corto: el número verificado es ~US$255–290
+/mes**. La causa no es la región sino el sizing — **Cloud SQL 2 vCPU/8 GB es la línea dominante y
+está sobredimensionada para 40 vehículos**. El tier definitivo se decide con el resultado del k6
+(QUI-250), no antes. Corregido en el plan, el doc técnico y este handoff.
+
+Los documentos de stack que seguían diciendo "Railway o Fly.io + Vercel" se corrigieron
+(`plan-maestro.md` §Stack, `documento-tecnico-cto.md` §1/§10 y la respuesta 14 del §15, y el
+resumen de stack de este handoff). **No** se tocó `plan-continuidad-quivo-control.md`: es el
+registro cerrado del diagnóstico del PR #2 y sus menciones son históricas.
+
 ## Insumos para el plan de finalización — resueltos
 
 Los 4 puntos que quedaron abiertos el 2026-08-14 antes de planificar (revisar Linear issue por
@@ -1263,18 +1360,21 @@ ejecución; el plan registra la intención.
 
 ## Dónde retomar
 
-**Fase F0 (ciclo 14), 7 pts.** Estado:
+**Fase F0 (ciclo 14), 7 pts — cerrada del lado del código; solo quedan trámites externos.** Estado:
 
 | Ítem | Estado |
 |---|---|
 | **N1** — `docs/spike-gps.md` + 3 bugs de config + headless task | **Hecho** (PR #6) |
-| **N19** — anular el ADR 0001 (Railway vs Fly) y escribir el ADR 0002 (GCP) | **Pendiente — es lo único que falta de F0** |
+| **N19** — anular el ADR 0001 (Railway vs Fly) y escribir el ADR 0002 (GCP) | **Hecho** (PR #7) |
 | **N4** — licencia trial v5 en EAS secrets | Pendiente (CTO, externo) |
 | **N21** — cuenta de Play + declaración de background location + Data Safety | Pendiente (CTO, externo — **arranca el reloj de 1 a 3 semanas de revisión manual de Google**, es la dependencia más larga del plan) |
 | **QUI-212** — cerrar (branch protection imposible en plan free) | Pendiente en Linear |
 
-Después de F0 viene **F1**: migración Expo SDK 52→54 + Transistorsoft 4.19.4→**5.4.0 exacto**
-(sin `^`), y recién ahí el spike QUI-216 sobre el teléfono real — el **gate D1**.
+**Lo siguiente es F1**, y es el camino crítico entero: migración Expo SDK 52→54 +
+Transistorsoft 4.19.4→**5.4.0 exacto** (sin `^`), `newArchEnabled: false` (N2, 8 pts, la hace el
+CTO — trabajo nativo de riesgo), y recién sobre ese stack el spike QUI-216 en el teléfono real —
+el **gate D1**. Regla operativa que arranca con el PR de migración: **`apps/mobile` queda
+congelado para Valentina** hasta que mergee.
 
 Dos decisiones esperando al CTO, ninguna bloqueante hoy:
 
@@ -1288,6 +1388,8 @@ piloto. Identificarlo y comprometerlo en C14–C15, no en C21.
 
 ## Fuentes de verdad
 
+- `docs/plan-finalizacion-piloto.md` — alcance, fases, asignación y fechas hasta el piloto (el plan vigente).
+- `docs/adr/0002-gcp.md` — decisión de infraestructura (GCP). Anula el ADR 0001.
 - `docs/plan-maestro.md` — plan aprobado (stack, arquitectura, fases, verificación).
 - `docs/documento-tecnico-cto.md` — documento técnico completo (modelo de datos, API, sync, riesgos, respuestas al CPO).
 - `docs/plan-continuidad-quivo-control.md` — diagnóstico y plan del PR #2 (bloqueo de CI, reconstrucción del design system, veredicto issue por issue del roadmap viejo de Valentina).

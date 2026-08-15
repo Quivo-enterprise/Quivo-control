@@ -25,7 +25,7 @@
 | GPS background      | `react-native-background-geolocation` (Transistorsoft, licencia única ~US$400) | Estándar de facto en fleet tracking; nativo Swift/Kotlin; maneja Doze/App Standby; Expo config plugin. La alternativa gratuita (`expo-location`) es insuficiente en Android de gama baja. |
 | Storage local móvil | expo-sqlite (patrón outbox)                                                    | Asignación diaria + rutas + puntos de control descargados; cola de eventos pendientes de sync.                                                                                            |
 | Mapas               | MapLibre GL + tiles OSM                                                        | Costo cero en MVP; API compatible con Mapbox si se necesita upgrade.                                                                                                                      |
-| Infra inicial       | Railway o Fly.io (API + worker + Redis) + Postgres gestionado                  | Deploy en minutos, bajo costo, camino de escalado claro.                                                                                                                                  |
+| Infra inicial       | **GCP** (ADR 0002, 2026-08-14): Cloud Run + Worker Pool + Cloud SQL PG16/PostGIS + Memorystore + Secret Manager | La cuenta de GCP se reactivó; el ADR 0001 (Railway vs Fly.io) quedó anulado sin ejecutarse. Ver §10.                                                                                       |
 | Monorepo            | pnpm workspaces + Turborepo                                                    | Paquete `shared` con schemas Zod = contrato único entre las tres apps.                                                                                                                    |
 
 **Alternativas evaluadas y descartadas (council):**
@@ -211,7 +211,11 @@ GET  /v1/auditoria
 
 ## 10. Despliegue e infraestructura
 
-**Inicial (MVP):** Railway o Fly.io — 3 procesos (API, worker, Redis) + Postgres gestionado con PostGIS. Vercel para el web admin. EAS para builds/distribución de la app (Android primero). Costo estimado: US$50–150/mes.
+**Inicial (piloto) — GCP, decidido el 2026-08-14 en [ADR 0002](adr/0002-gcp.md):** Cloud Run para `apps/api` (`min-instances=1`), **Cloud Run Worker Pool** para el worker de ingesta GPS (GA desde abril de 2026; un *service* normal moriría por falta de tráfico), Cloud Run Job para la retención (disparado por un Cloud Scheduler en `southamerica-east1`, única pieza multi-región), Cloud SQL PG16 con PostGIS, Memorystore Redis, Secret Manager, **`apps/web` también en Cloud Run** (Firebase App Hosting no tiene ninguna región sudamericana, y el panel es un SPA client-side que no usa SSR con datos), archivado GPS en Cloudflare R2 (única pieza fuera de GCP, por egreso $0), IaC con Terraform. Región **`southamerica-west1`** (Santiago): 52 ms medidos desde La Paz contra 110 ms de São Paulo, y además más barato. EAS para builds/distribución de la app (Android primero).
+
+**Costo:** ~US$255–290/mes en el piloto (verificado contra precio de lista el 2026-08-14; la línea dominante es Cloud SQL, sobredimensionada a 2 vCPU/8 GB para 40 vehículos) y ~US$1.200–2.800/mes en régimen de 3000 vehículos. El objetivo de US$50–150/mes de este documento (§13) **no es alcanzable** con servicios gestionados en región sudamericana; el ADR 0002 lo acepta explícitamente y lista las palancas (`us-central1`, Redis en VM).
+
+El ADR 0001 (Railway vs Fly.io) quedó **anulado** sin haberse ejecutado.
 
 **Camino de escalado (en orden, sin reescritura):**
 
@@ -272,7 +276,7 @@ Costos no-personal: licencia Transistorsoft ~US$400 única, infra US$50–150/me
 
 ## 14. Respuestas rápidas a las 18 preguntas de Producto (§9)
 
-1. **Stack:** ver §1. 2. **Monolito modular** (§2). 3. **Monorepo pnpm/Turborepo** (§3). 4. **Arquitectura:** §2. 5. **DB:** §4. 6. **Sí — base compartida con `sindicato_id` + RLS** (§4.1). 7. **Better-Auth + JWT + roles + RLS** (§5). 8. **Offline:** paquete del día + outbox (§6). 9. **Base local: SQLite (expo-sqlite)** (§6). 10. **UUIDv7 cliente + `ON CONFLICT DO NOTHING`** (§7). 11. **GPS: 10 s / 50 m en movimiento, adaptativo** (§6). 12. **Batería: motion-detection + lotes; objetivo <5%/jornada** (§6). 13. **Mapas: MapLibre + OSM** (§1). 14. **Despliegue: Railway/Fly.io + Vercel + EAS** (§10). 15. **Logs/errores/auditoría:** §9. 16. **Orden de módulos:** §11. 17. **Riesgos:** §12. 18. **Recursos/tiempos:** §13.
+1. **Stack:** ver §1. 2. **Monolito modular** (§2). 3. **Monorepo pnpm/Turborepo** (§3). 4. **Arquitectura:** §2. 5. **DB:** §4. 6. **Sí — base compartida con `sindicato_id` + RLS** (§4.1). 7. **Better-Auth + JWT + roles + RLS** (§5). 8. **Offline:** paquete del día + outbox (§6). 9. **Base local: SQLite (expo-sqlite)** (§6). 10. **UUIDv7 cliente + `ON CONFLICT DO NOTHING`** (§7). 11. **GPS: 10 s / 50 m en movimiento, adaptativo** (§6). 12. **Batería: motion-detection + lotes; objetivo <5%/jornada** (§6). 13. **Mapas: MapLibre + OSM** (§1). 14. **Despliegue: GCP `southamerica-west1` (Cloud Run para API, worker, retención y web + Cloud SQL + Memorystore) + EAS** (§10, ADR 0002). 15. **Logs/errores/auditoría:** §9. 16. **Orden de módulos:** §11. 17. **Riesgos:** §12. 18. **Recursos/tiempos:** §13.
 
 ---
 
