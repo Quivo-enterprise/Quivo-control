@@ -1,4 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
+import * as dotenv from 'dotenv';
+import path from 'path';
+
+dotenv.config({ path: path.resolve(__dirname, 'apps/api/.env'), override: true });
 
 const acceptanceApiURL = process.env.ACCEPTANCE_API_URL ?? 'http://localhost:3002';
 // La suite usa puertos propios: evita reutilizar chunks de un `next dev` abierto por otra

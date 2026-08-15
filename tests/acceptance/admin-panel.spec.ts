@@ -193,3 +193,70 @@ test.describe('Panel administrativo', () => {
     await expect(aplicarFiltros).toBeDisabled();
   });
 });
+
+test.describe('Altas de entidades', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  const uniqueId = Date.now().toString().slice(-6);
+  const socioCI = `99${uniqueId} LP`;
+  const socioNombre = `Socio Prueba`;
+  const conductorCI = `88${uniqueId} LP`;
+  const conductorLicencia = `88${uniqueId}`;
+  const conductorNombre = `Conductor Prueba`;
+  const vehiculoPlaca = `${uniqueId.slice(-4)}XYZ`;
+
+  test('alta de conductor exitosa', async ({ page }) => {
+    await login(page, ADMIN_SINDICATO);
+    await navigate(page, 'Conductores', '/conductores');
+
+    await page.getByRole('button', { name: 'Nuevo conductor' }).click();
+
+    await page.getByLabel('Nombre completo *').fill(conductorNombre);
+    await page.getByLabel('CI boliviano *').fill(conductorCI);
+    await page.getByLabel('Número de licencia de conducir *').fill(conductorLicencia);
+
+    await page.getByRole('button', { name: 'Guardar' }).click();
+
+    await expect(page.getByText(conductorNombre, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(conductorCI, { exact: true }).first()).toBeVisible();
+  });
+
+  test('alta de vehículo exitosa usando el socio fixture', async ({ page }) => {
+    await login(page, ADMIN_SINDICATO);
+    
+    // Seed Socio via UI
+    await navigate(page, 'Socios', '/socios');
+    await page.getByRole('button', { name: 'Nuevo socio' }).click();
+    await page.getByLabel('Nombre completo *').fill(socioNombre);
+    await page.getByLabel('CI boliviano *').fill(socioCI);
+    await page.getByRole('button', { name: 'Guardar' }).click();
+    await expect(page.getByText(socioNombre, { exact: true }).first()).toBeVisible();
+
+    // Proceed to create vehicle
+    await navigate(page, 'Vehículos', '/vehiculos');
+    await page.getByRole('button', { name: 'Nuevo vehículo' }).click();
+
+    await page.getByLabel('Placa *').fill(vehiculoPlaca);
+    await page.getByRole('radio', { name: 'Minibús' }).click();
+
+    await page.locator('button#vehiculo-socioId').click();
+    await page.getByRole('option', { name: new RegExp(socioCI) }).click();
+
+    await page.locator('button#vehiculo-color').click();
+    await page.getByRole('option', { name: 'Blanco' }).click();
+
+    await page.locator('button#vehiculo-marcaCatalogo').click();
+    await page.getByRole('option', { name: 'Toyota' }).click();
+
+    await page.getByLabel('Capacidad *').fill('14');
+
+    const modeloInput = page.getByLabel('Modelo *');
+    if (await modeloInput.isVisible()) {
+      await modeloInput.fill('Hiace');
+    }
+
+    await page.getByRole('button', { name: 'Guardar' }).click();
+
+    await expect(page.getByText(vehiculoPlaca, { exact: true }).first()).toBeVisible();
+  });
+});
