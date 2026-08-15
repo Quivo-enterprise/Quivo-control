@@ -1,44 +1,69 @@
 # Handoff — QUIVO Control
 
-> Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-08-15** — **PR #10: migración a Expo SDK 54 + Transistorsoft
-> 5.4.0 (QUI-353), primer ítem de F1**. Antes: PR #7 (ADR 0002 — GCP, cierra el código de F0)
-> y PR #6 (desbloqueo del gate GPS).
-> Estado anterior: (PR #1 y PR #2 mergeados a `main`; **CI verde por
-> primera vez en la historia del repo**, tras 8 de 8 corridas fallidas; `@quivo/design-system`
-> reconstruido como paquete del monorepo porque el repo hermano que lo alojaba se perdió.)
+> **Documento de estado.** Arriba, el estado real de hoy; abajo, el registro cronológico de
+> cómo se llegó hasta acá, PR por PR. Se actualiza al cierre de cada iteración/PR.
 >
-> **Decisiones del CTO del 2026-08-14** y las investigaciones que las sustentan (GPS,
-> migración de Expo SDK, council sobre higiene del repo) están al final del documento, desde
-> "Decisiones del CTO". Son el insumo del plan de finalización del proyecto.
->
-> **PR #2 — `fix/vendorizar-design-system-ci-verde` (mergeado 2026-08-14, commit `1c29376`):**
-> vendoriza `@quivo/design-system` en `packages/design-system`, arregla el SSR de `RouteMap`,
-> el ciclo de vida roto de `MapContainer` en `/rutas`, la fuga de `RUNTIME_DATABASE_URL` que
-> dejaba los tests de RLS sin verificar nada, el seed en CI y el cacheo del cliente Prisma en
-> Turbo, agrega el job `acceptance` (Playwright) al pipeline, y aplica los 11 hallazgos de
-> `/code-review high` (el más grave: `BaseDialog` perdía el foco en cada tecla, no se podía
-> escribir en ningún modal de alta/edición). Detalle completo en la sección
-> "PR #2 — vendorizar design system + CI verde" más abajo.
->
-> **PR #1 — `qui-227-web-nextjs-scaffold` (mergeado 2026-08-14, commit `98bae54`):** trae
-> M1+M2+M3+M4+M5(parcial) a `main` de punta a punta — todo lo documentado en las secciones de
-> abajo hasta "Autenticación operativa móvil + identidad QUIVO" vivía en esta rama, sin
-> mergear, desde el 2026-07-30. El CI nunca corrió una vez verde contra este contenido hasta
-> el PR #2 (ver "Patrón" más abajo).
->
-> **Implementación móvil (2026-08-01):** autenticación vehículo (placa+PIN) -> chofer
-> (documento+PIN), contexto por asignación e identidad visual QUIVO. Codex mantiene el
-> alcance móvil/auth y Claude trabaja `apps/web`. Resultado y contratos definitivos en
-> [`plan-auth-movil-quivo.md`](plan-auth-movil-quivo.md).
->
-> **Claude (2026-08-01), dentro del alcance `apps/web` del plan de arriba:** verificado en
-> browser real que `/rutas` (QUI-229) funciona de punta a punta (login real, dibujar ruta,
-> paradas origen/destino). Cambio chico en el mismo módulo: `sentido` en el editor de rutas
-> pasó de `Input` de texto libre a `Select` fijo (Ida/Vuelta) —
-> `apps/web/app/(dashboard)/rutas/page.tsx`, sin tocar `packages/shared` (`RutaSchema.sentido`
-> sigue siendo `string` libre a propósito, ver comentario en `packages/shared/src/entities/ruta.ts`).
-> No toca nada del alcance de Codex.
+> **Este documento registra la ejecución. La intención vive en
+> [`plan-finalizacion-piloto.md`](plan-finalizacion-piloto.md)** — alcance, fases, asignación y
+> fechas hasta el piloto. Si los dos se contradicen, el plan manda sobre qué hay que hacer y
+> este handoff sobre qué se hizo.
+
+## Estado — 2026-08-15
+
+**Repo:** [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control)
+(privado) · `main` = `3aea2c7` · **CI verde** (`ci` + `acceptance`) · solo existe `main`, sin
+ramas vivas · 12 PRs mergeados.
+
+**Dónde estamos:** el producto está **código-completo y sin validar**. M1, M2 y M4 cerrados; la
+ingesta GPS por lotes idempotente funciona de punta a punta en local. Lo que falta no es
+funcionalidad, es **validación**: el tracking en background nunca se midió en un teléfono, el
+load test nunca corrió, y **no existe ningún entorno desplegado**.
+
+**El camino crítico es una sola persona (el CTO) y no se paraleliza.** Su primer eslabón es un
+gate físico.
+
+### Milestones
+
+| Milestone | Abiertas | Pts | Estado |
+|---|---|---|---|
+| **M0** — Fundaciones + spike GPS | 3 | 17 | **Acá está el gate.** Falta QUI-216 (spike), su licencia (QUI-350) y cerrar QUI-353 en el teléfono |
+| M1 — Núcleo administrativo | 0 | — | ✅ Cerrado |
+| M2 — Rotaciones | 0 | — | ✅ Cerrado |
+| M3 — App móvil + sync | 2 | 10 | QUI-237 (tracking en producción) depende del veredicto del spike |
+| M4 — Dashboard/reglas/auditoría | 1 | 2 | Solo QUI-342 (Valentina) |
+| M5 — Hardening + piloto | 21 | 50 | El grueso: infra, seguridad de despliegue, k6, piloto |
+| M6 — Sprint UI/UX Mobile | 2 | 6 | Atrasadas por el freeze de `apps/mobile` |
+| M7 — Post-piloto | 1 | 3 | Todo lo recortado a propósito |
+
+**30 issues abiertas, 88 puntos** — 71 del CTO, 17 de Valentina. El plan contaba 53 pts
+tiqueteados contra ~95 de trabajo real; esa brecha ya se cerró: las tareas `N*` del plan
+existen ahora como QUI-349..369. **Usar esos IDs, no las `N*`.**
+
+Target del proyecto: **2026-10-26** (piloto de campo 5–19 de octubre, acta el 26).
+
+### Qué bloquea, hoy
+
+| Bloqueo | Quién | Por qué importa |
+|---|---|---|
+| **QUI-351** — cuenta de Play + declaración de background location | CTO, externo | Dispara **1 a 3 semanas de revisión manual de Google**, con rechazo frecuente en la primera vuelta. Es la dependencia más larga del proyecto y **nadie la empezó**: cada día que no arranca corre la fecha del piloto 1:1 |
+| **QUI-216** — spike GPS de 8 h en Android real | CTO, físico | **Gate D1.** Decide si el stack móvil sirve. Bloquea QUI-237 y todo M3 |
+| **QUI-350** — licencia trial v5 | CTO, externo | Necesaria para el build release del spike (el debug no la pide) |
+| **QUI-369** — conseguir el sindicato piloto | CTO, externo | Ninguna tarea del plan lo cubría. Bloquea QUI-366 y QUI-253 |
+
+**Regla operativa vigente:** `apps/mobile` estuvo congelado para Valentina durante la migración
+(PR #10). Ya mergeó — **el freeze se levanta**.
+
+### Qué se puede avanzar sin el teléfono
+
+QUI-354 (Dockerfiles + `enableShutdownHooks()` + liveness/readiness) es el único ítem de F2 que
+no depende del veredicto del spike, y es la dependencia dura de la cadena *Dockerfiles → GCP →
+k6 → piloto*. Después, F3 entera (seguridad de despliegue) es código puro: QUI-358 (RLS en
+`gps_points`), QUI-359, QUI-360, QUI-361, QUI-362, QUI-363.
+
+El hallazgo de seguridad más grave sigue abierto: **el guardarraíl de `JWT_SECRET`**
+(QUI-356). Es el único que **un solo tenant no atenúa** —RLS confía en los claims del JWT, así
+que con el secreto por default en el repo cualquiera forja un token de admin y RLS deja de ser
+barrera— y su momento de exposición es exactamente el que viene: el primer deploy a IP pública.
 
 ## Qué es el proyecto
 
@@ -49,29 +74,28 @@ Plataforma SaaS **multi-tenant** para gestión de sindicatos de transporte públ
 
 Requerimientos de Producto (CPO): `~/Downloads/QUIVOcontrol.md` (RF-01..84, RNF, MVP, criterios de aceptación §8, 18 preguntas §9, entregables §10).
 
-## Estado actual
+## Fuentes de verdad y decisiones ya cerradas
 
-| Ítem                       | Estado                                                                                                                                                                                                                                                                |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Decisión de stack          | ✅ Aprobada por el usuario (2026-07-19)                                                                                                                                                                                                                               |
-| Deliberación council       | ✅ Sesión `council-20260719-083140` (Claude + Gemini, chairman synthesis, confianza media)                                                                                                                                                                            |
-| Plan maestro               | ✅ `docs/plan-maestro.md`                                                                                                                                                                                                                                             |
-| Documento técnico CTO      | ✅ `docs/documento-tecnico-cto.md` (responde las 18 preguntas del CPO)                                                                                                                                                                                                |
-| Repo / monorepo            | ✅ Repo creado (2026-07-19): [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control) (privado) — **PR #1** (`qui-227-web-nextjs-scaffold`, M1-M5 parcial) y **PR #2** (`fix/vendorizar-design-system-ci-verde`) mergeados a `main` (2026-08-14); solo queda `main`, las 3 ramas de trabajo se borraron del remoto tras verificar que estaban 100% mergeadas — ver `docs/ramas-sprint-m6.md` |
-| CI (`.github/workflows/ci.yml`) | ✅ **Verde en `main` por primera vez en la historia del repo** (2026-08-14) — antes: 8 de 8 corridas fallidas, siempre en el paso *Typecheck*. Job `acceptance` (Playwright) sumado al pipeline — ver sección PR #2 abajo |
-| `@quivo/design-system`     | ✅ Vendorizado como `packages/design-system` (workspace del monorepo, 2026-08-14) — el repo hermano que lo alojaba se perdió y se reconstruyó por fidelidad de uso, ver "Pendientes de acceso" y sección PR #2 |
-| Fase 0 / Cycle 12          | ✅ QUI-211/212/213/214/215 implementados y verificados en local; QUI-216 con código listo, ejecución física pendiente (ver `docs/spike-gps.md`)                                                                                                                       |
-| M1 kickoff — QUI-227       | ✅ `apps/web` scaffold Next.js completo: login, layout por rol, guard de rutas, demo CRUD de 8 módulos, dashboard con gráficos — ver sección "QUI-227 + QUI-219" abajo                                                                                                |
-| QUI-219 — auth real        | ✅ Login/refresh real (Better-Auth + Prisma) implementado y **verificado end-to-end** (backend + browser), reemplaza el bypass de desarrollo                                                                                                                          |
-| QUI-217 — schema núcleo    | ✅ Modelos Prisma sindicatos/socios/vehículos/conductores/líneas/rutas+geometría/audit_log, migración + seeds — ver sección abajo                                                                                                                                     |
-| QUI-218 — RLS multi-tenant | ✅ Rol `quivo_app` sin bypass, políticas por tabla, contexto por request, **9 tests cross-tenant pasando** — ver sección abajo                                                                                                                                        |
-| QUI-220 — CRUD sindicatos  | ✅ `/v1/sindicatos` real (solo `admin_quivo`), guard JWT + rol, auditoría en `audit_log`, **verificado end-to-end** (curl con y sin permiso) — ver sección abajo                                                                                                      |
-| QUI-221..224 — CRUD M1     | ✅ `/v1/socios`, `/v1/vehiculos`, `/v1/conductores`, `/v1/lineas` — mismo patrón que sindicatos, tenant-scoping real (`admin_sindicato`/`operador` forzados a su propio sindicato), **55 tests de integración pasando** — ver sección abajo                           |
-| QUI-225/226 — geometría    | ✅ `/v1/lineas/:id/rutas`, `/v1/rutas/:id/variantes`, `/v1/rutas/:id/paradas`, `/v1/rutas/:id/puntos-control` — GEOGRAPHY vía SQL crudo, GeoJSON in/out, validación de geometría y de cercanía (ST_DWithin) — ver sección abajo                                       |
-| QUI-228 — web conectada    | ✅ Sindicatos/socios/vehículos/conductores/líneas de `apps/web` contra el API real (ya no `demo-data.ts`) — **verificado en browser real** (crear/editar sindicato, crear socio con selector de tenant) — ver sección abajo                                           |
-| Linear API                 | ✅ Conectado vía API key en `.Agents/.env Linear` (no MCP en esta sesión) — estado real de issues/cycles verificado 2026-07-20                                                                                                                                        |
-| Preguntas de Producto (5)  | ✅ Respondidas por el CPO (2026-07-19) — ver sección abajo                                                                                                                                                                                                            |
-| Proyecto en Linear         | ✅ **QUIVO Control — MVP** creado (2026-07-19): 6 milestones, 43 issues (QUI-211..253), Sprint 1 planificado — ver sección Linear abajo                                                                                                                               |
+Nada de esto se vuelve a discutir salvo que cambie una restricción real.
+
+| Qué | Dónde | Cuándo |
+|---|---|---|
+| Stack y arquitectura | [`plan-maestro.md`](plan-maestro.md) §Stack | Aprobado 2026-07-19 |
+| Modelo de datos, API, sync, riesgos, las 18 preguntas del CPO | [`documento-tecnico-cto.md`](documento-tecnico-cto.md) | 2026-07-19 |
+| Alcance, fases, asignación y fechas hasta el piloto | [`plan-finalizacion-piloto.md`](plan-finalizacion-piloto.md) | 2026-08-14 |
+| Infraestructura: **GCP**, `southamerica-west1` | [`adr/0002-gcp.md`](adr/0002-gcp.md) — anula el ADR 0001 | 2026-08-14 |
+| Deliberación inicial (council) | `~/.council/Documents/council-20260719-083140/` | 2026-07-19 |
+| Contratos de auth móvil | [`plan-auth-movil-quivo.md`](plan-auth-movil-quivo.md) | 2026-08-01 |
+| Diagnóstico del bloqueo de CI y del design system perdido | [`plan-continuidad-quivo-control.md`](plan-continuidad-quivo-control.md) | Registro cerrado |
+| Protocolo del spike GPS y sus 4 criterios de GO | [`spike-gps.md`](spike-gps.md) | Corregido en el PR #6 |
+
+**Respuestas de Producto que fijan el alcance** (detalle en el documento técnico §15): solo
+Android en el MVP · 2 sindicatos y 2000–3000 vehículos el año 1 · **login por vehículo**, el
+chofer se identifica encima · GPS crudo 6 meses caliente, después archivo, **nunca se borra
+evidencia** · evidencia de sanciones = datos de recorrido, fotos post-MVP.
+
+**Memoria del proyecto:** la del harness, bajo `~/.claude/projects/<ruta-del-repo>/memory/` — es
+local a cada máquina, así que la ruta exacta varía según dónde esté clonado el repo.
 
 ## Stack aprobado (resumen)
 
@@ -121,6 +145,14 @@ Detalle completo en `docs/documento-tecnico-cto.md` §15.
 3. **Login por vehículo** (chofer rota); credencial emitida por el sindicato, conductor se identifica al iniciar sesión operativa.
 4. **GPS crudo: 6 meses caliente** (particiones diarias) → archivo S3/R2; nunca se borra evidencia. Derivados permanentes.
 5. **Evidencia de sanciones: solo datos de recorrido** auto-vinculados; fotos post-MVP.
+
+---
+
+# Registro cronológico
+
+De acá para abajo, el histórico de cómo se construyó el producto, en orden. **El estado vigente
+está arriba** — si algo de esta sección contradice al "Estado", gana el "Estado": lo de abajo se
+escribió el día que pasó y no se retoca después.
 
 ## Linear (creado 2026-07-19)
 
@@ -1441,59 +1473,30 @@ issue, ordenar migración/spike/piloto, cerrar infra, aplicar el council) están
 de verdad del alcance, las fases, la asignación y las fechas. Este handoff registra la
 ejecución; el plan registra la intención.
 
-## Dónde retomar
+## Cierre del 2026-08-15 — higiene de Linear y decisiones abiertas
 
-**F0 cerrada del lado del código. F1 arrancada: el código de la migración está hecho, falta el
-teléfono.** Las tareas del plan ya están tiqueteadas en Linear como QUI-349..368 — usar esos IDs,
-no las `N*` del plan.
+**F0 cerrada del lado del código. F1 arrancada:** la migración está en `main`, falta el teléfono.
+El detalle vigente de qué bloquea está en "Estado" al principio del documento; acá queda lo que
+se ajustó en el tablero ese día y las decisiones que siguen esperando.
 
-| Ítem | Linear | Estado |
-|---|---|---|
-| **N1** — `docs/spike-gps.md` + 3 bugs de config + headless task | QUI-349 | **Hecho** (PR #6) |
-| **N19** — anular el ADR 0001 y escribir el ADR 0002 (GCP) | QUI-352 | **Hecho** (PR #7) |
-| **N2** — Expo SDK 52→54 + Transistorsoft 5.4.0 | QUI-353 | **Código hecho** (PR #10); el issue **no cierra** hasta la verificación en teléfono |
-| **N4** — licencia trial v5 en EAS secrets | QUI-350 | Pendiente (CTO, externo) |
-| **N21** — cuenta de Play + declaración de background location + Data Safety | QUI-351 | Pendiente (CTO, externo — **arranca el reloj de 1 a 3 semanas de revisión manual de Google**, la dependencia más larga del plan) |
-| **QUI-212** — CI | QUI-212 | Cerrado 2026-08-14 (branch protection imposible en plan free) |
+**Tablero:** las tareas `N*` del plan ya existen como **QUI-349..369** — usar esos IDs. QUI-213
+(infra GCP) se movió de M0 a M5, porque el plan lo ubica en F2, después del gate, y en M0 impedía
+cerrar el milestone hasta tener infra desplegada; su descripción decía `southamerica-east1` y
+~US$160–230/mes, corregida a Santiago y ~US$255–290 según el ADR 0002. La descripción de M0
+también estaba vieja. QUI-250/252/253 volvieron a **Todo**: habían pasado a *In Progress* en una
+operación masiva el 2026-08-03 (las tres en seis segundos), sin PR ni rama, y dependen de cosas
+que todavía no existen — el board reportaba 9 pts en curso que nadie tocaba.
 
-**Lo siguiente es el gate: QUI-216**, el spike de 8 h en el Android real de gama baja, sobre el
-stack de PR #10. Antes conviene la verificación barata (~1 día) que ya pide el plan: build debug
-de dev-client + tracking 2–4 h con la app terminada. Eso valida de una lo que el PR #10 no puede
-validar desde acá — que Android acepte el Config compuesto de v5 y que el headless task dispare
-tras un kill.
+**Los ciclos son de 1 semana** (C14 = 10–17 ago), no de 2 como decía una versión anterior de este
+documento. Con esa cadencia, el C22–C24 del plan cae exactamente en el 5 al 26 de octubre: las
+fechas del plan son consistentes.
 
-Regla operativa vigente: **`apps/mobile` queda congelado para Valentina** hasta que mergee el
-PR #10.
-
-**Higiene de Linear hecha el 2026-08-15:** QUI-213 (infra GCP) se movió de M0 a M5 — el plan lo
-ubica en F2, después del gate, y en M0 impedía cerrar el milestone hasta tener infra desplegada.
-Su descripción decía `southamerica-east1` y ~US$160–230/mes: corregida a Santiago y ~US$255–290
-según el ADR 0002. La descripción de M0 también estaba vieja (hablaba del ciclo 13 y de QUI-212
-como pendiente). **Los ciclos son de 1 semana** (C14 = 10–17 ago), no de 2 como decía este
-documento; con esa cadencia el C22–C24 del plan cae exactamente en el 5 al 26 de octubre, así que
-las fechas del plan son consistentes.
-
-Dos decisiones esperando al CTO, ninguna bloqueante hoy:
+**Decisiones esperando al CTO**, ninguna bloqueante hoy:
 
 - **El margen de gracia de 2 h** antes del `stop()` irreversible por paquete vencido
   (`GRACIA_STOP_TRAS_VENCIMIENTO_MS`). Valor provisional elegido por defecto razonable.
 - **D2 del plan: ¿cuenta de Play personal o de organización?** Si es personal, exige 12 testers
-  × 14 días de closed testing antes de producción, y el reclutamiento pasa de C20 a C16.
-
-Y el riesgo que **ninguna tarea del plan cubría**: nadie estaba consiguiendo el sindicato piloto.
-Quedó tiqueteado el 2026-08-15 como **QUI-369** (CTO, C14, Urgent), y bloquea formalmente a
-QUI-366 (seed) y QUI-253 (piloto de campo) — así el tablero muestra la dependencia real en vez de
-asumir que el sindicato aparece solo. No se cierra con código: son 2–3 candidatos, un compromiso
-por escrito con alcance y consentimiento de datos, y la línea de base manual de la primera semana.
-**En C14–C15, no en C21.**
-
-## Fuentes de verdad
-
-- `docs/plan-finalizacion-piloto.md` — alcance, fases, asignación y fechas hasta el piloto (el plan vigente).
-- `docs/adr/0002-gcp.md` — decisión de infraestructura (GCP). Anula el ADR 0001.
-- `docs/plan-maestro.md` — plan aprobado (stack, arquitectura, fases, verificación).
-- `docs/documento-tecnico-cto.md` — documento técnico completo (modelo de datos, API, sync, riesgos, respuestas al CPO).
-- `docs/plan-continuidad-quivo-control.md` — diagnóstico y plan del PR #2 (bloqueo de CI, reconstrucción del design system, veredicto issue por issue del roadmap viejo de Valentina).
-- `docs/ramas-sprint-m6.md` — estado verificado de las 3 ramas del sprint M6 antes de borrarlas del remoto.
-- `~/.council/Documents/council-20260719-083140/` — deliberación completa (`viewer.html` para explorar).
-- Memoria del proyecto: `~/.claude/projects/-home-jairomgr-Proyectos-QUIVO-Control-quivo-control/memory/`.
+  × 14 días de closed testing antes de producción, y el reclutamiento pasa de C20 a C16 — o sea
+  que la respuesta cambia el cronograma, no solo el trámite.
+- **D3: ¿padrón completo o muestra?** De esto depende que el recorte de paginación sea válido o
+  deuda que explota en campo. El plan recomienda la muestra; se decide con el sindicato en la mano.
