@@ -3,9 +3,11 @@ import {
   ExportarActividadQuerySchema,
   ExportarRecorridosQuerySchema,
   ExportarSancionesQuerySchema,
+  CumplimientoQuerySchema,
   type ExportarActividadQuery,
   type ExportarRecorridosQuery,
   type ExportarSancionesQuery,
+  type CumplimientoQuery,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
@@ -18,6 +20,7 @@ import { ExportesService } from './exportes.service.js';
 class ExportarRecorridosQueryDto extends createZodDto(ExportarRecorridosQuerySchema) {}
 class ExportarSancionesQueryDto extends createZodDto(ExportarSancionesQuerySchema) {}
 class ExportarActividadQueryDto extends createZodDto(ExportarActividadQuerySchema) {}
+class ExportarCumplimientoQueryDto extends createZodDto(CumplimientoQuerySchema) {}
 
 /** RF-78..80 (QUI-249) — reportes exportables en CSV, mismo patrón de roles que el resto de
  * `reportes`. Ver `exportes.service.ts` para el porqué de paginar en transacciones cortas. */
@@ -35,6 +38,18 @@ export class ExportesController {
     const stream = crearCsvStream(
       ['inicio', 'fin', 'linea', 'vehiculo', 'conductor', 'estado', 'puntosCumplidos', 'puntosTotales'],
       () => this.exportesService.recorridosPorPeriodo(actor, q),
+    );
+    return new StreamableFile(stream);
+  }
+
+  @Get('cumplimiento')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="cumplimiento.csv"')
+  exportarCumplimiento(@CurrentUser() actor: AuthenticatedUser, @Query() query: ExportarCumplimientoQueryDto) {
+    const q = query as CumplimientoQuery;
+    const stream = crearCsvStream(
+      ['id', 'nombre', 'puntosCumplidos', 'puntosTotales', 'porcentajeCumplimiento', 'recorridosAsignados', 'recorridosCompletados'],
+      () => this.exportesService.cumplimientoPorAgrupacion(actor, q),
     );
     return new StreamableFile(stream);
   }
