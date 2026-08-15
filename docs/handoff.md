@@ -1,8 +1,9 @@
 # Handoff — QUIVO Control
 
 > Documento vivo de traspaso. Se actualiza al cierre de cada iteración/PR.
-> Última actualización: **2026-08-14** — **PR #7: ADR 0002 (GCP), cierra el código de F0**; el
-> ADR 0001 (Railway vs Fly.io) queda anulado. Antes: PR #6 (desbloqueo del gate GPS, N1).
+> Última actualización: **2026-08-15** — **PR #10: migración a Expo SDK 54 + Transistorsoft
+> 5.4.0 (QUI-353), primer ítem de F1**. Antes: PR #7 (ADR 0002 — GCP, cierra el código de F0)
+> y PR #6 (desbloqueo del gate GPS).
 > Estado anterior: (PR #1 y PR #2 mergeados a `main`; **CI verde por
 > primera vez en la historia del repo**, tras 8 de 8 corridas fallidas; `@quivo/design-system`
 > reconstruido como paquete del monorepo porque el repo hermano que lo alojaba se perdió.)
@@ -1350,6 +1351,88 @@ Los documentos de stack que seguían diciendo "Railway o Fly.io + Vercel" se cor
 resumen de stack de este handoff). **No** se tocó `plan-continuidad-quivo-control.md`: es el
 registro cerrado del diagnóstico del PR #2 y sus menciones son históricas.
 
+## PR #10 — migración Expo SDK 54 + Transistorsoft 5.4.0 (QUI-353) — 2026-08-15
+
+Primer ítem de **F1**, el camino crítico. Desbloquea el gate: correr QUI-216 sobre SDK 52 + v4
+sería validar un stack que se va a tirar.
+
+`newArchEnabled: false` queda **explícito** en `app.json` — en SDK 54 el default es `true`, así
+que omitirlo habría activado la New Architecture sin que nadie lo pidiera, que es justo el
+riesgo que el plan difiere a M7 (QUI-368).
+
+### El `Config` de v5 es compuesto, y los tipos del paquete mienten
+
+v5 reagrupa las claves planas de v4 en `geolocation` / `app` / `http` / `activity` / `logger`.
+Los tipos canónicos viven en `@transistorsoft/background-geolocation-types@5.2.2`; el
+`src/declarations/interfaces/Config.d.ts` que **todavía trae el paquete es plano y stale**, y no
+es el que resuelve TypeScript (el entry real es `src/index.d.ts`, que re-exporta el paquete de
+tipos). Quien lo lea creyendo que es la fuente de verdad va a reintroducir la forma vieja.
+
+Las tres banderas del criterio C del spike (`stopOnTerminate: false`, `startOnBoot: true`,
+`enableHeadless: true`, todas de PR #6) viven ahora bajo `app`. `foregroundService` se quitó: el
+SDK nativo lo fuerza a `true` desde Android 8 y v5 ya no lo declara configurable.
+
+Nota para el que toque esto: **`stopOnStationary` existe en `GeoConfig` y en `ActivityConfig` a
+la vez**. Quedó en `activity`. Como el valor es `false` (el default), no cambia comportamiento
+en ninguno de los dos — pero TypeScript no marca la ambigüedad.
+
+### Tres bugs que ni `tsc` ni los tests ven
+
+Los encontró `/code-review high`, no la implementación. Dos solo aparecen en dispositivo o en CI.
+
+- **Los enums no existen en runtime.** `import { DesiredAccuracy, LogLevel } from
+  'react-native-background-geolocation'` type-chequea porque `index.d.ts` hace `export *` del
+  paquete de tipos — pero el runtime (`src/index.js:83`) exporta **solo la clase por default**, y
+  los enums son getters estáticos (`static get LogLevel()`, línea 147). Los bindings nombrados
+  quedan `undefined`: `TypeError: Cannot read property 'High' of undefined` al evaluar el módulo,
+  y como `use-gps-operativo.ts` lo importa, se cae la función GPS entera. Ahora se leen de la
+  clase. **Regla general que deja este caso: en este paquete, todo lo que se use como valor sale
+  de `BackgroundGeolocation`; los imports nombrados solo sirven para tipos.**
+- **`@types/react@19` rompía `@quivo/design-system`.** React 19.1 obliga a `@types/react` 19 en
+  `apps/mobile`, que entra al pool hoisted de pnpm
+  (`node_modules/.pnpm/node_modules/@types/react`). `react-leaflet`/`@react-leaflet/core` no
+  declaran `@types/react` como dependencia real, así que sus `.d.ts` resolvían desde ese pool en
+  vez de la 18.3.31 local: 10 errores `TS2786` en `route-map-impl.tsx`, typecheck **y** build en
+  rojo — y `@quivo/web` depende de ese build. **Una caché stale de Turbo lo tapaba: se reproduce
+  solo con `--force`.**
+- **`Location.timestamp` se ensanchó a `string | number`.** Un epoch numérico perdía el
+  `.datetime()` de `PayloadGpsPointSchema` y hacía caer `resolverTsFix` en silencio al `ts` de
+  encolado — exactamente la deformación del recorrido por buffering headless que ese campo existe
+  para evitar (PR #6). Se normaliza a ISO al construir el payload, devolviendo `undefined` ante un
+  timestamp ilegible en vez de fabricar `"Invalid Date"`. `resolverTsFix` no se tocó: es contrato
+  con el worker.
+
+### Cómo conviven las dos versiones de `@types/react`
+
+`apps/mobile` necesita la 19 (React 19.1); `design-system` y `web` se quedan en la 18.3.31 —
+migrarlos era alcance ajeno a este PR. Se **aíslan**, no se unifican: `paths` en el
+`tsconfig.json` de ambos, apuntando al **`.d.ts` concreto**, no al directorio del paquete —
+`@types/react` publica un `exports` map y la sustitución a un directorio cae de vuelta al pool
+hoisted **en silencio**. No toca el lockfile, así que sobrevive a `pnpm install --frozen-lockfile`
+con `node_modules` limpio, que es lo que hace el CI.
+
+Descartadas: `pnpm.overrides` no sirve (un override fija versión en edges que ya existen, y acá
+el edge no existe porque `react-leaflet` no declara la dependencia; además es global al lockfile
+y no puede dar 18 a unos y 19 a otro). `packageExtensions` resolvería la causa raíz pero exige
+regenerar el lockfile. **Si algún día `design-system` y `web` migran a React 19, estos `paths`
+sobran y hay que borrarlos.**
+
+### Otras decisiones
+
+- **`react-native-reanimated` fijado en `~3.19.0`**, no la 4.x que trae SDK 54: Reanimated 4
+  **solo funciona con New Architecture**. `expo-doctor` marca el mismatch — es esperado y correcto
+  mientras la arquitectura vieja siga. No "arreglarlo" subiendo a 4.
+- `expo-modules-autolinking` sigue pineado pese a que `expo-doctor` lo desaconseja: sacarlo rompe
+  la resolución real bajo el linking aislado de pnpm (probado).
+- `usesCleartextTraffic` **no se tocó**: es QUI-357, de Valentina.
+
+Verificación: `typecheck` + `build` + `lint` con `--force` en **18/18 tareas**, y **40 tests** de
+mobile (38 previos + 2 del fix de `tsFix`).
+
+**Lo que este PR NO valida:** que Android acepte de verdad el Config compuesto (el JS solo hace
+pass-through al nativo), el headless task tras kill y reboot, y la licencia JWT de v5 — las
+licencias v4 no sirven. Eso es **QUI-216**, el gate D1, en el teléfono real.
+
 ## Insumos para el plan de finalización — resueltos
 
 Los 4 puntos que quedaron abiertos el 2026-08-14 antes de planificar (revisar Linear issue por
@@ -1360,21 +1443,35 @@ ejecución; el plan registra la intención.
 
 ## Dónde retomar
 
-**Fase F0 (ciclo 14), 7 pts — cerrada del lado del código; solo quedan trámites externos.** Estado:
+**F0 cerrada del lado del código. F1 arrancada: el código de la migración está hecho, falta el
+teléfono.** Las tareas del plan ya están tiqueteadas en Linear como QUI-349..368 — usar esos IDs,
+no las `N*` del plan.
 
-| Ítem | Estado |
-|---|---|
-| **N1** — `docs/spike-gps.md` + 3 bugs de config + headless task | **Hecho** (PR #6) |
-| **N19** — anular el ADR 0001 (Railway vs Fly) y escribir el ADR 0002 (GCP) | **Hecho** (PR #7) |
-| **N4** — licencia trial v5 en EAS secrets | Pendiente (CTO, externo) |
-| **N21** — cuenta de Play + declaración de background location + Data Safety | Pendiente (CTO, externo — **arranca el reloj de 1 a 3 semanas de revisión manual de Google**, es la dependencia más larga del plan) |
-| **QUI-212** — cerrar (branch protection imposible en plan free) | Pendiente en Linear |
+| Ítem | Linear | Estado |
+|---|---|---|
+| **N1** — `docs/spike-gps.md` + 3 bugs de config + headless task | QUI-349 | **Hecho** (PR #6) |
+| **N19** — anular el ADR 0001 y escribir el ADR 0002 (GCP) | QUI-352 | **Hecho** (PR #7) |
+| **N2** — Expo SDK 52→54 + Transistorsoft 5.4.0 | QUI-353 | **Código hecho** (PR #10); el issue **no cierra** hasta la verificación en teléfono |
+| **N4** — licencia trial v5 en EAS secrets | QUI-350 | Pendiente (CTO, externo) |
+| **N21** — cuenta de Play + declaración de background location + Data Safety | QUI-351 | Pendiente (CTO, externo — **arranca el reloj de 1 a 3 semanas de revisión manual de Google**, la dependencia más larga del plan) |
+| **QUI-212** — CI | QUI-212 | Cerrado 2026-08-14 (branch protection imposible en plan free) |
 
-**Lo siguiente es F1**, y es el camino crítico entero: migración Expo SDK 52→54 +
-Transistorsoft 4.19.4→**5.4.0 exacto** (sin `^`), `newArchEnabled: false` (N2, 8 pts, la hace el
-CTO — trabajo nativo de riesgo), y recién sobre ese stack el spike QUI-216 en el teléfono real —
-el **gate D1**. Regla operativa que arranca con el PR de migración: **`apps/mobile` queda
-congelado para Valentina** hasta que mergee.
+**Lo siguiente es el gate: QUI-216**, el spike de 8 h en el Android real de gama baja, sobre el
+stack de PR #10. Antes conviene la verificación barata (~1 día) que ya pide el plan: build debug
+de dev-client + tracking 2–4 h con la app terminada. Eso valida de una lo que el PR #10 no puede
+validar desde acá — que Android acepte el Config compuesto de v5 y que el headless task dispare
+tras un kill.
+
+Regla operativa vigente: **`apps/mobile` queda congelado para Valentina** hasta que mergee el
+PR #10.
+
+**Higiene de Linear hecha el 2026-08-15:** QUI-213 (infra GCP) se movió de M0 a M5 — el plan lo
+ubica en F2, después del gate, y en M0 impedía cerrar el milestone hasta tener infra desplegada.
+Su descripción decía `southamerica-east1` y ~US$160–230/mes: corregida a Santiago y ~US$255–290
+según el ADR 0002. La descripción de M0 también estaba vieja (hablaba del ciclo 13 y de QUI-212
+como pendiente). **Los ciclos son de 1 semana** (C14 = 10–17 ago), no de 2 como decía este
+documento; con esa cadencia el C22–C24 del plan cae exactamente en el 5 al 26 de octubre, así que
+las fechas del plan son consistentes.
 
 Dos decisiones esperando al CTO, ninguna bloqueante hoy:
 
