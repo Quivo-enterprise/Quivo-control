@@ -16,7 +16,22 @@
     "incremental": true,
     "plugins": [{ "name": "next" }],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      // `next` (y `@quivo/design-system` en dist/) hacen `import ... from 'react'` en sus
+      // propios `.d.ts` sin declarar `@types/react` como dependencia real — sin este edge,
+      // TypeScript cae al pool "hoisted" compartido de pnpm
+      // (`node_modules/.pnpm/node_modules/@types/react`), que hoy resuelve a la 19.1.17 que
+      // necesita `apps/mobile` (React 19), no a la 18.3.31 que este workspace declara. Mismo
+      // mecanismo y mismo fix que `packages/design-system/tsconfig.json` — ver el comentario
+      // ahí para el detalle completo. Apuntar al `.d.ts` concreto (no al directorio del
+      // paquete) porque `@types/react` publica un `exports` map y la sustitución de `paths`
+      // a un directorio no lo resuelve bien bajo resolución moderna (probado: sustituir por
+      // el directorio deja caer la resolución de vuelta al pool hoisted).
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
+      "react/jsx-dev-runtime": ["./node_modules/@types/react/jsx-dev-runtime.d.ts"],
+      "react-dom": ["./node_modules/@types/react-dom/index.d.ts"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

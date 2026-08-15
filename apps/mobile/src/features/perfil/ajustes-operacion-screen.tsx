@@ -65,7 +65,7 @@ export function AjustesOperacionScreen({ onBack }: AjustesOperacionScreenProps) 
   const [preferencias, setPreferencias] = useState<PreferenciasOperacion>(PREFERENCIAS_DEFAULT);
   const [cargando, setCargando] = useState(true);
   const [guardado, setGuardado] = useState(false);
-  const flashTimer = useRef<ReturnType<typeof setTimeout>>();
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     let activo = true;

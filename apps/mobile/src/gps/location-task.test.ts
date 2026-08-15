@@ -8,11 +8,20 @@ import {
   type ContextoUbicacion,
 } from './location-task';
 
-function ubicacion(lat: number, lng: number, timestamp = '2026-08-14T12:00:00.000Z'): Location {
+function ubicacion(
+  lat: number,
+  lng: number,
+  timestamp: Location['timestamp'] = '2026-08-14T12:00:00.000Z',
+): Location {
   return {
     timestamp,
+    // Transistorsoft v5: `recorded_at`/`odometer_error` son campos nuevos y obligatorios del
+    // tipo `Location` (antes no existían). El código de producción no los usa — sólo se
+    // agregan acá para satisfacer el tipo del mock.
+    recorded_at: timestamp,
     age: 0,
     odometer: 0,
+    odometer_error: 0,
     is_moving: true,
     uuid: 'loc-uuid-1',
     coords: { latitude: lat, longitude: lng, accuracy: 5, speed: 0 },
@@ -74,6 +83,29 @@ describe('construirEventosDeUbicacion', () => {
       new Set(),
     );
     expect(eventos[0]?.payload['tsFix']).toBe('2026-08-14T11:42:07.500Z');
+  });
+
+  it('normaliza un timestamp numérico (epoch ms, Transistorsoft v5) a ISO-8601 en tsFix', () => {
+    // v4 tipaba `Location.timestamp` como `string`; v5 lo ensanchó a `string | number` (epoch
+    // ms en el caso numérico). Sin normalizar, `tsFix` pasaba el número tal cual y perdía el
+    // `.datetime()` de Zod en `resolverTsFix` (`@quivo/shared`), que caía en silencio al `ts`
+    // de encolado — la deformación del recorrido que `tsFix` existe para evitar.
+    const epochMs = Date.parse('2026-08-14T11:42:07.500Z');
+    const { eventos } = construirEventosDeUbicacion(
+      ubicacion(-17.78, -63.18, epochMs),
+      contexto(),
+      new Set(),
+    );
+    expect(eventos[0]?.payload['tsFix']).toBe('2026-08-14T11:42:07.500Z');
+  });
+
+  it('cae a tsFix undefined (nunca "Invalid Date") ante un timestamp ilegible', () => {
+    const { eventos } = construirEventosDeUbicacion(
+      ubicacion(-17.78, -63.18, 'no-es-una-fecha'),
+      contexto(),
+      new Set(),
+    );
+    expect(eventos[0]?.payload['tsFix']).toBeUndefined();
   });
 
   it('agrega cumplimiento_punto_control cuando el punto cae dentro del radio de un punto de control nuevo', () => {
