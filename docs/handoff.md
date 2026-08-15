@@ -1480,8 +1480,12 @@ Dos decisiones esperando al CTO, ninguna bloqueante hoy:
 - **D2 del plan: ¿cuenta de Play personal o de organización?** Si es personal, exige 12 testers
   × 14 días de closed testing antes de producción, y el reclutamiento pasa de C20 a C16.
 
-Y un riesgo que **ninguna tarea de este plan cubre**: nadie está consiguiendo el sindicato
-piloto. Identificarlo y comprometerlo en C14–C15, no en C21.
+Y el riesgo que **ninguna tarea del plan cubría**: nadie estaba consiguiendo el sindicato piloto.
+Quedó tiqueteado el 2026-08-15 como **QUI-369** (CTO, C14, Urgent), y bloquea formalmente a
+QUI-366 (seed) y QUI-253 (piloto de campo) — así el tablero muestra la dependencia real en vez de
+asumir que el sindicato aparece solo. No se cierra con código: son 2–3 candidatos, un compromiso
+por escrito con alcance y consentimiento de datos, y la línea de base manual de la primera semana.
+**En C14–C15, no en C21.**
 
 ## Fuentes de verdad
 

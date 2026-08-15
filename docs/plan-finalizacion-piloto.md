@@ -464,8 +464,12 @@ probar aislamiento contra otro sindicato, y ese sindicato no existe.
 | **D2** | C14 | **¿Cuenta de Play personal u organización?** Personal exige 12 testers × 14 días de closed testing antes de producción — si es personal, el reclutamiento arranca en C16, no en C20 |
 | **D3** | C21 | **¿Padrón completo o muestra?** De esto depende que el recorte de paginación sea válido o deuda que explota en campo. Recomendación: la muestra |
 
-**Riesgo no técnico y el menos gestionado:** ninguna tarea de este plan consigue el sindicato
-piloto. **Identificarlo y comprometerlo en C14–C15, no en C21.** Es la dependencia más larga.
+**Riesgo no técnico y el menos gestionado:** cuando se escribió este plan, ninguna de sus tareas
+conseguía el sindicato piloto. **Cerrado el 2026-08-15 con [QUI-369](https://linear.app/quivo-tech/issue/QUI-369/conseguir-y-comprometer-al-sindicato-piloto)**
+(CTO, C14, Urgent): identificar 2–3 candidatos, comprometer uno por escrito con alcance y
+consentimiento de datos, y acordar la línea de base manual de la primera semana. Bloquea a
+QUI-366 (seed) y a QUI-253 (piloto). **Identificarlo y comprometerlo en C14–C15, no en C21** —
+es la dependencia más larga y la única que no se destraba escribiendo código.
 
 ---
 
