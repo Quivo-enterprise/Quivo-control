@@ -47,6 +47,8 @@ const CLAVES: Record<AgrupacionCumplimiento, { id: Prisma.Sql; nombre: Prisma.Sq
  * inflaba el completado por encima del asignado (ej. "3/2" en el dashboard, encontrado en
  * auditoría 2026-08-11 con datos reales de dispositivo).
  */
+const parseDate = (d: unknown) => (typeof d === 'string' ? new Date(d) : (d as Date));
+
 @Injectable()
 export class CumplimientoService {
   async obtener(actor: AuthenticatedUser, query: CumplimientoQuery): Promise<CumplimientoFila[]> {
@@ -54,11 +56,13 @@ export class CumplimientoService {
     // `asignaciones.fecha` es una fecha operativa pura (`@db.Date`); los cumplimientos,
     // en cambio, son instantes. Cada uno requiere su propio límite para incluir el día
     // calendario boliviano completo sin desplazar las asignaciones al día anterior.
-    const desdeFecha = query.desde ?? new Date(0);
-    const hastaFecha = query.hasta ?? new Date('9999-12-31');
-    const desdeInstante = query.desde ? inicioDeJornadaBolivia(query.desde) : new Date(0);
-    const hastaInstante = query.hasta
-      ? inicioDeJornadaSiguienteBolivia(query.hasta)
+    const desde = query.desde ? parseDate(query.desde) : undefined;
+    const hasta = query.hasta ? parseDate(query.hasta) : undefined;
+    const desdeFecha = desde ?? new Date(0);
+    const hastaFecha = hasta ?? new Date('9999-12-31');
+    const desdeInstante = desde ? inicioDeJornadaBolivia(desde) : new Date(0);
+    const hastaInstante = hasta
+      ? inicioDeJornadaSiguienteBolivia(hasta)
       : new Date('9999-12-31T23:59:59.999Z');
 
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {

@@ -26,6 +26,7 @@ export const exportesApi = {
       token,
       'cumplimiento.csv',
     ),
+
   recorridos: (token: string, filtros: RangoFechas) =>
     apiDownload(
       `/reportes/exportar/recorridos${aQueryString(comoRecord(filtros))}`,
