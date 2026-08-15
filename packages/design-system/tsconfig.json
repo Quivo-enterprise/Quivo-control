@@ -4,7 +4,27 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    // `react-leaflet`/`@react-leaflet/core` no traen tipos propios embebidos ni declaran
+    // `@types/react` como dependencia real (solo como devDependency de SU build, que no se
+    // instala en consumidores) — así que cuando sus `.d.ts` hacen `import ... from 'react'`,
+    // pnpm no tiene ningún edge de `@types/react` en el subárbol de esos paquetes y TypeScript
+    // cae al pool "hoisted" compartido de pnpm (`node_modules/.pnpm/node_modules/@types/react`,
+    // NO el `node_modules/@types/react` local de este paquete, que sí apunta bien a 18.3.31).
+    // Ese pool es uno solo por todo el workspace y hoy gana `apps/mobile` (React 19, requerido
+    // por Expo/React Native — fuera de alcance migrarlo acá) — de ahí el TS2786 "ReactNode"
+    // con `bigint` (union que React 19 agregó y 18 no tiene). `paths` remapea la resolución de
+    // `react`/`react-dom` para TODO el programa de esta compilación — incluidos los `.d.ts` de
+    // terceros que importan `react` internamente — a la copia 18.x que este paquete SÍ declara
+    // (`devDependencies` en `package.json`), sin tocar el lockfile ni pnpm-workspace.yaml.
+    "baseUrl": ".",
+    "paths": {
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
+      "react/jsx-dev-runtime": ["./node_modules/@types/react/jsx-dev-runtime.d.ts"],
+      "react-dom": ["./node_modules/@types/react-dom/index.d.ts"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"]
+    }
   },
   "include": ["src"]
 }

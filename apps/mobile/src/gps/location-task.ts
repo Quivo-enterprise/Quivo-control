@@ -49,6 +49,31 @@ export interface ResultadoConstruirEventos {
 }
 
 /**
+ * Normaliza `location.timestamp` a ISO-8601 con offset — la forma que exigen
+ * `PayloadGpsPointSchema.tsFix` / `PayloadCumplimientoPuntoControlSchema.tsFix`
+ * (`@quivo/shared`, `z.string().datetime({ offset: true })`).
+ *
+ * Transistorsoft v4 tipaba `Location.timestamp` como `string` a secas; v5 lo ensanchó a
+ * `string | number` (epoch ms en el caso numérico — ver
+ * `@transistorsoft/background-geolocation-types`, `Location.d.ts`). Antes de este fix el
+ * valor se pasaba tal cual al payload: compilaba igual porque
+ * `EventoUbicacionConstruido.payload` es `Record<string, unknown>`, pero un epoch numérico
+ * (o cualquier string no-ISO) pierde el `.datetime()` de Zod en `resolverTsFix`
+ * (`packages/shared/src/sync/evento.ts`), que cae EN SILENCIO al `ts` de encolado del
+ * sobre — exactamente la deformación del recorrido por buffering headless que `tsFix`
+ * existe para evitar (hallazgo de revisión).
+ *
+ * Devuelve `undefined` (nunca `"Invalid Date"`) ante un timestamp ilegible: `tsFix` ya es
+ * opcional en el schema, así que un fix inválido cae al mismo camino de retrocompatibilidad
+ * que un evento viejo sin `tsFix`, en vez de fabricar una fecha basura que además pasaría el
+ * `safeParse` de Zod (`"Invalid Date"` no es ISO válido, pero mejor no arriesgarlo).
+ */
+function normalizarTsFix(timestamp: Location['timestamp']): string | undefined {
+  const fecha = new Date(timestamp);
+  return Number.isNaN(fecha.getTime()) ? undefined : fecha.toISOString();
+}
+
+/**
  * Construye los eventos de outbox correspondientes a un punto GPS: siempre un `gps_point`
  * (criterio C del spike — la evidencia legal, RF-67..73) y, si el punto cae dentro del radio
  * de algún punto de control aún no detectado en esta sesión, un `cumplimiento_punto_control`
@@ -61,6 +86,10 @@ export function construirEventosDeUbicacion(
   contexto: ContextoUbicacion,
   puntosControlDetectados: Set<string>,
 ): ResultadoConstruirEventos {
+  // Normalizado UNA sola vez: `gps_point` y, si aplica, `cumplimiento_punto_control` vienen
+  // de la misma `location` — ver `normalizarTsFix` arriba para el porqué (v5 ensanchó
+  // `Location.timestamp` a `string | number`).
+  const tsFix = normalizarTsFix(location.timestamp);
   const eventos: EventoUbicacionConstruido[] = [
     {
       tipo: 'gps_point',
@@ -76,7 +105,7 @@ export function construirEventosDeUbicacion(
         // entero de manejo se persistiría con timestamps casi idénticos y el recorrido
         // reconstruido quedaría deformado. Contrato + fallback: `PayloadGpsPointSchema` /
         // `resolverTsFix` en `@quivo/shared`.
-        tsFix: location.timestamp,
+        tsFix,
       },
     },
   ];
@@ -113,7 +142,7 @@ export function construirEventosDeUbicacion(
           // por este punto de control es el hecho que sustenta una sanción (RF-64..66).
           // Contrato + fallback: `PayloadCumplimientoPuntoControlSchema` / `resolverTsFix`
           // en `@quivo/shared`.
-          tsFix: location.timestamp,
+          tsFix,
         },
       });
     }

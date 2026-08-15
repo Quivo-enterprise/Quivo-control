@@ -18,7 +18,7 @@ interface ControlFeedbackToastProps {
 export function ControlFeedbackToast({ ultimaDeteccion }: ControlFeedbackToastProps) {
   const [queue, setQueue] = useState<DeteccionPuntoControl[]>([]);
   const [current, setCurrent] = useState<DeteccionPuntoControl | null>(null);
-  const timerRef = useRef<NodeJS.Timeout>();
+  const timerRef = useRef<NodeJS.Timeout | undefined>(undefined);
   
   // Animations for modal entry/exit
   const containerOpacity = useSharedValue(0);
@@ -31,7 +31,7 @@ export function ControlFeedbackToast({ ultimaDeteccion }: ControlFeedbackToastPr
   const rippleScale = useSharedValue(1);
   const rippleOpacity = useSharedValue(0);
 
-  const dismissTimeoutRef = useRef<NodeJS.Timeout>();
+  const dismissTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   useEffect(() => {
     if (!ultimaDeteccion || !ultimaDeteccion.cumplido) return;
