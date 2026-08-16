@@ -39,6 +39,9 @@ Bloqueantes duros — sin estos el piloto no arranca:
   Verificar en el APK instalado, no solo en el `.env` del build.
 - [ ] APK instalado por sideload en el teléfono del conductor, sin herramientas de desarrollo.
 - [ ] Sentry recibe un evento de prueba del build de release, con el tag de release correcto.
+- [ ] **Acompañante a bordo con la planilla impresa** (`planilla-acompanante.md`) y reloj
+  sincronizado por red. Sin este registro, el ítem 5 de la prueba en teléfono no es verificable
+  (ver nota abajo).
 - [ ] Key de Transistorsoft válida en el build (vence **2026-09-15**; anotar días restantes).
 - [ ] `mobile-preflight.mjs` pasa contra el API desplegado con la sesión exclusiva del piloto:
 
@@ -57,6 +60,20 @@ No bloqueantes (diferidos por el plan vigente, se registran como deuda abierta):
   aislamiento no prueba que las policies funcionen.** Compensado hoy por la verificación manual
   cross-tenant del gate previo.
 
+> ⚠️ **Por qué el ítem 5 necesita un acompañante.** El worker del servidor revalida cada
+> cumplimiento usando **las mismas coordenadas que le mandó el teléfono**, así que su veredicto
+> siempre coincide con el de la app. Medir "detecciones fuera del radio" contra ese dato es
+> comparar el sistema consigo mismo: pasa por construcción, sin importar si funcionó. Y en modo
+> headless el conductor no recibe ningún feedback, así que tampoco puede desmentirlo.
+> El registro manual del acompañante es la única verdad de campo independiente que existe.
+>
+> **Contexto que cambia el análisis:** el trufi **no se detiene** en los puntos de control salvo
+> que el tráfico lo obligue. El SDK de GPS espacia sus muestras según la velocidad (≈100 m entre
+> 18-36 km/h, ≈150 m entre 36-54 km/h), así que un paso a velocidad tiene bastante menos
+> probabilidad de ser detectado que uno frenado. Por eso la planilla registra si el vehículo
+> frenó: sin ese dato no se puede distinguir "el sistema detecta mal" de "el sistema solo detecta
+> cuando hay tráfico".
+
 ## Prueba en teléfono real — domingo 16 (reemplaza al spike de 8 h)
 
 Con el APK instalado y recorriendo la ruta real. Los 7 puntos del plan, con umbral:
@@ -67,7 +84,7 @@ Con el APK instalado y recorriendo la ruta real. Los 7 puntos del plan, con umbr
 | 2 | Sobrevive a matar la app y a un reboot | Reanuda solo en ≤5 min, sin re-login | |
 | 3 | Consumo de batería | ≤10% por hora de tracking; **objetivo ≤5%/h** | |
 | 4 | Huecos entre puntos GPS | Ningún hueco >2 min; ≥95% de intervalos ≤60 s | |
-| 5 | Detección automática de puntos de control | ≥90% de los pasos detectados; 0 detecciones fuera del radio | |
+| 5 | Detección automática de puntos de control | ≥90% de los pasos **anotados por el acompañante** detectados; 0 detecciones sin paso anotado | |
 | 6 | Outbox sincroniza contra Cloud Run | p95 de acuse ≤5 min tras recuperar red; 0 eventos perdidos | |
 | 7 | Recorrido reconstruido en el panel web | Traza completa de punta a punta, sin tramos faltantes | |
 
@@ -80,7 +97,12 @@ por la noche, no el lunes a la mañana.
 - [ ] Sindicato real creado/validado sin duplicados.
 - [ ] Vehículo y conductor del piloto cargados y revisados por el responsable.
 - [ ] Línea, ruta/variante, paradas y puntos de control coinciden con la operación real.
-- [ ] Radios de tolerancia revisados caminando/conduciendo en campo.
+- [ ] **Radio de tolerancia: 150 m** al cargar los puntos de control de Z12. **No usar los 30 m
+  que el formulario del panel propone por defecto.** El trufi pasa sin frenar, el GPS espacia sus
+  muestras ~150 m a esa velocidad, y un radio de 30 m deja un diámetro de 60 m: el vehículo cruza
+  el punto entero sin que ninguna muestra caiga adentro, y esa pasada no se recupera nunca. Un
+  radio amplio, en cambio, puede marcar cumplido hasta cuadra y media — un error medible y
+  corregible después sobre la traza cruda. Errar por ancho es reversible; errar por angosto no.
 - [ ] Rotación publicada sin doble asignación; fecha, turno y vencimiento correctos.
 - [ ] Usuario de otro sindicato no puede leer ni modificar estos datos (0 filas cruzadas).
 
@@ -99,7 +121,9 @@ por la noche, no el lunes a la mañana.
 - [ ] Estado GPS, offline y eventos pendientes visibles sin bloquear la tarea principal.
 - [ ] Tracking continúa con pantalla apagada, Doze y cambios de conectividad
   (umbral: 0 interrupciones no explicadas en toda la jornada).
-- [ ] Cada punto de control da feedback inmediato (≤2 s) y no se valida fuera del radio.
+- [ ] Cada punto de control da feedback inmediato (≤2 s) **con la app viva**. Ojo: en headless
+  (app matada) el cumplimiento se graba en silencio, sin toast ni voz — es comportamiento
+  conocido, no un fallo. El acompañante lo registra igual en su planilla.
 - [ ] Inicio, fin, GPS, cumplimiento y observaciones se persisten primero en outbox.
 - [ ] Una llamada/multitarea/reinicio recupera el estado sin inventar ni perder eventos
   (umbral: 0 eventos inventados, 0 perdidos).
@@ -152,8 +176,8 @@ la unidad es la jornada-día.
 | Teléfono llega al fin de jornada sin cargar | Sí | Sí |
 | Huecos GPS | ninguno >2 min | ninguno >60 s |
 | p95 de sincronización tras recuperar red | ≤5 min | ≤1 min |
-| Puntos de control detectados solos | ≥90% | 100% |
-| Detecciones fuera del radio configurado | **0** | 0 |
+| Pasos anotados por el acompañante que el sistema detectó | ≥90% | 100% |
+| Detecciones del sistema sin paso anotado (falsos positivos) | **0** | 0 |
 | Jornadas sin que el conductor pida ayuda | ≥90% | 100% |
 | Filas visibles cross-tenant | **0** | 0 |
 | Crashes en Sentry por jornada | ≤1 no bloqueante | 0 |
