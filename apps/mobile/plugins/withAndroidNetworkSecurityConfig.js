@@ -38,7 +38,7 @@ const NETWORK_SECURITY_CONFIG_XML = `<?xml version="1.0" encoding="utf-8"?>
 
     <!--
       QUI-357: excepcion SOLO para builds debuggable (dev client / 'expo run:android' sin
-      '--variant release'). Android descarta este bloque entero cuando el APK no es
+      pasar la bandera de variante release). Android descarta este bloque entero cuando el APK no es
       debuggable, asi que el perfil de release (el que se firma y se instala en el piloto)
       queda con cleartext bloqueado sin importar lo que diga aca.
     -->
