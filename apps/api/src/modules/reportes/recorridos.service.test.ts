@@ -122,10 +122,10 @@ describe('RecorridosService', () => {
 
       await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE)`;
       await tx.$executeRaw`
-        INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at)
+        INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
         VALUES
-          (${randomUUID()}::uuid, ${sesionId}::uuid, 'device-recorrido', ${ahora}::timestamptz, -34.6, -58.4, 5, 8.3, now()),
-          (${randomUUID()}::uuid, ${sesionId}::uuid, 'device-recorrido', ${new Date(ahora.getTime() + 1000)}::timestamptz, -34.599, -58.399, 5, 9.1, now())
+          (${randomUUID()}::uuid, ${sesionId}::uuid, 'device-recorrido', ${ahora}::timestamptz, -34.6, -58.4, 5, 8.3, now(), ${sindicatoAId}),
+          (${randomUUID()}::uuid, ${sesionId}::uuid, 'device-recorrido', ${new Date(ahora.getTime() + 1000)}::timestamptz, -34.599, -58.399, 5, 9.1, now(), ${sindicatoAId})
       `;
 
       await tx.cumplimientoPc.create({

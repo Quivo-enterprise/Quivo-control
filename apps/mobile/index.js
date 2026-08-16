@@ -1,3 +1,14 @@
+import { initSentry } from './src/shared/observability/sentry';
+
+// QUI-365: tiene que ir ANTES que cualquier otro import de la app. Este archivo es el único
+// punto de entrada que Android evalúa tanto para el JS normal (hilo de UI, ver
+// `registerRootComponent` abajo) como para el headless task de Transistorsoft (ver el bloque
+// `registerHeadlessTask` más abajo) — el SDK nativo arranca un contexto JS SEPARADO para el
+// headless task tras el kill de la app, y ese contexto también ejecuta `index.js` desde cero.
+// Inicializar Sentry acá (y no adentro de un componente de React, que nunca se monta en el
+// contexto headless) es lo único que garantiza que un crash headless también quede reportado.
+initSentry();
+
 import { registerRootComponent } from 'expo';
 import BackgroundGeolocation from 'react-native-background-geolocation';
 import App from './App';

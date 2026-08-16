@@ -15,7 +15,15 @@ if (process.env.SENTRY_DSN) {
  * para seguir vivo.
  */
 async function bootstrap(): Promise<void> {
-  await NestFactory.createApplicationContext(WorkerModule, { bufferLogs: true });
+  const app = await NestFactory.createApplicationContext(WorkerModule, { bufferLogs: true });
+
+  // QUI-354: mismo motivo que apps/api/src/main.ts — sin esto, el SIGTERM que Cloud Run
+  // manda al desplegar o escalar a cero mata este proceso sin correr `onModuleDestroy()`
+  // de IngestaWorkerService ni RetencionGpsService (ambos solo viven en este proceso
+  // worker, no en el de la API). `enableShutdownHooks()` existe también en
+  // `INestApplicationContext` (no sólo en la app HTTP), así que aplica igual acá.
+  app.enableShutdownHooks();
+
   console.log('Worker de ingesta QUIVO listo — escuchando la cola de sync.');
 }
 

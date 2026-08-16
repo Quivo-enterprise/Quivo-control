@@ -193,6 +193,72 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => clearScheduledRefresh();
   }, [scheduleRefresh, clearScheduledRefresh]);
 
+  /**
+   * QUI-359 (hallazgo de security review, regresión introducida por la rotación de
+   * refresh token): `sessionRef` vive en memoria *por pestaña* — sin este listener, una
+   * pestaña en segundo plano (que el browser puede estrangular y nunca disparar su propio
+   * refresh) se quedaba con el `refreshToken` previo a que OTRA pestaña rotara la sesión.
+   * Si el usuario cerraba sesión desde esa pestaña rezagada, mandaba ese token viejo —
+   * que ya no matchea ninguna fila en `session` (auth.service.ts, `refresh()` lo rotó) — y
+   * la sesión vigente (con el token nuevo) quedaba sin revocar pese al logout explícito, un
+   * bypass silencioso del logout server-side. Escuchar `storage` mantiene `sessionRef`
+   * (memoria) alineado con `localStorage` (que sí recibe cada rotación vía `persistSession`)
+   * entre pestañas del mismo origen, sin depender de que el timer de refresh de esta pestaña
+   * llegue a dispararse.
+   */
+  useEffect(() => {
+    function handleStorage(event: StorageEvent): void {
+      if (event.key !== STORAGE_KEY) {
+        return;
+      }
+
+      if (event.newValue === null) {
+        // Se cerró sesión (o se limpió el storage) en otra pestaña — replicarlo acá. Sin
+        // esto, esta pestaña seguía mostrando una sesión "activa" en memoria cuyo
+        // refreshToken ya fue revocado del lado servidor.
+        clearScheduledRefresh();
+        sessionRef.current = { user: null, token: null, refreshToken: null };
+        setState({ user: null, token: null, refreshToken: null, loading: false, error: null });
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(event.newValue) as {
+          user: AuthUser;
+          token: string;
+          refreshToken?: string;
+        };
+        const refreshTokenValue = parsed.refreshToken ?? null;
+        sessionRef.current = {
+          user: parsed.user,
+          token: parsed.token,
+          refreshToken: refreshTokenValue,
+        };
+        setState({
+          user: parsed.user,
+          token: parsed.token,
+          refreshToken: refreshTokenValue,
+          loading: false,
+          error: null,
+        });
+        if (refreshTokenValue) {
+          // Reprograma el auto-refresh de esta pestaña contra el token vigente — si se
+          // dejara el timer viejo (armado sobre el token previo a la rotación), su próximo
+          // disparo fallaría igual por el mismo motivo (token desactualizado).
+          scheduleRefreshRef.current(parsed.token, refreshTokenValue);
+        } else {
+          clearScheduledRefresh();
+        }
+      } catch {
+        // Valor corrupto en localStorage (no debería pasar — solo esta misma app escribe
+        // esta key) — no propagar un estado inconsistente a esta pestaña.
+      }
+    }
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [clearScheduledRefresh]);
+
   const login = async (email: string, password: string): Promise<void> => {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {

@@ -1,0 +1,46 @@
+# QUI-354/QUI-213 — contexto de build compartido por Dockerfile (apps/api) y
+# apps/web/Dockerfile. Ambos usan `turbo prune`, que necesita ver TODOS los package.json,
+# los lockfiles y turbo.json/pnpm-workspace.yaml del monorepo para calcular el grafo de
+# dependencias — no excluir esos archivos acá, sólo artefactos pesados/regenerables.
+
+# dependencias instaladas — se reinstalan dentro de la imagen desde el lockfile
+node_modules
+**/node_modules
+
+# builds/caches locales — se regeneran dentro de la imagen
+dist
+**/dist
+.next
+**/.next
+.turbo
+**/.turbo
+*.tsbuildinfo
+**/*.tsbuildinfo
+coverage
+**/coverage
+
+# control de versiones y editor/OS
+.git
+.github
+.DS_Store
+
+# tests/reportes locales, no hacen falta para build ni runtime
+playwright-report
+test-results
+tests
+docs
+
+# expo / mobile nativo — pesado, apps/mobile no participa de estas dos imágenes
+.expo
+**/.expo
+apps/mobile/android
+apps/mobile/ios
+
+# datos de OSRM (GBs) — no participa del build de api/web
+osrm-data
+
+# secretos locales — nunca deben terminar en una capa de imagen
+.env
+.env.local
+**/.env
+**/.env.local

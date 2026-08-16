@@ -14,14 +14,29 @@ if (process.env.SENTRY_DSN) {
 async function bootstrap(): Promise<void> {
   // genReqId vive en el adapter Fastify (no en pinoHttp): Fastify asigna req.id antes
   // de que nestjs-pino lo vea, así que el request_id real se fija acá.
+  //
+  // trustProxy: Cloud Run termina TLS y hace proxy de cada request hacia el contenedor —
+  // sin esto, Fastify resuelve `req.ip` a la IP interna del load balancer para TODAS las
+  // requests (mismo IP para todo el mundo). El ThrottlerGuard global (ver app.module.ts,
+  // QUI-251) usa `req.ip` como key de rate limit: sin trustProxy, todos los usuarios reales
+  // Y las probes de Cloud Run comparten un único presupuesto de 100 req/min. Con
+  // trustProxy, Fastify confía en `X-Forwarded-For` (que Cloud Run sí setea con la IP real
+  // del cliente) y `req.ip` vuelve a ser por-cliente.
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ genReqId: () => randomUUID() }),
+    new FastifyAdapter({ genReqId: () => randomUUID(), trustProxy: true }),
     { bufferLogs: true },
   );
 
   app.useLogger(app.get(Logger));
   app.setGlobalPrefix('v1');
+
+  // QUI-354: sin esto, Nest no engancha los listeners de señales del proceso — el SIGTERM
+  // que Cloud Run manda al desplegar o escalar a cero mata el proceso directo, sin correr
+  // ningún `onModuleDestroy()` (HealthService cierra su Pool/Redis, VencimientoProcessor y
+  // SyncQueueService cierran su Worker/conexiones de BullMQ). Sin drenar eso, un rolling
+  // deploy corta conexiones a mitad de request/job en vez de terminarlas prolijo.
+  app.enableShutdownHooks();
 
   // apps/web corre en otro origen (:3000 vs :3001 de esta API) — sin esto, el browser
   // bloquea el preflight (OPTIONS) de POST /v1/auth/login con 404 antes de que Nest

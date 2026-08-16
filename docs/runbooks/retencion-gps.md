@@ -43,10 +43,18 @@ SELECT * FROM gps_archives ORDER BY "partitionDate" DESC;
 
 ```sql
 CREATE TABLE gps_points_restore (LIKE gps_points INCLUDING ALL);
-\copy gps_points_restore(event_id,sesion_id,device_id,ts,lat,lng,accuracy,speed,received_at)
+\copy gps_points_restore(event_id,sesion_id,device_id,ts,lat,lng,accuracy,speed,received_at,"sindicatoId")
   FROM '/ruta/gps_points_YYYYMMDD.csv' WITH (FORMAT csv, HEADER true);
 SELECT count(*) FROM gps_points_restore;
 ```
+
+> El CSV incluye `sindicatoId` desde `20260815120000_gps_points_sindicato_rls` (hallazgo 2,
+> code-review piloto). `LIKE ... INCLUDING ALL` copia la constraint `NOT NULL` y la FK
+> `gps_points_sindicatoid_fkey → sindicatos(id)` de la tabla original, así que el `\copy`
+> de arriba **falla** si el CSV es de un archivo viejo sin esa columna, o si algún
+> `sindicatoId` del CSV ya no existe en `sindicatos`. `LIKE` no copia las policies de RLS
+> ni el `FORCE ROW LEVEL SECURITY` — `gps_points_restore` queda sin RLS propia, lo cual es
+> intencional para una tabla de staging administrada a mano.
 
 5. Comparar el conteo con `rowCount` y revisar `min(ts), max(ts)`. Para consulta puntual,
    mantener la tabla fuera del parent. Para restauración completa, crear la partición vacía,

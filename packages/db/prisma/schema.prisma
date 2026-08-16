@@ -503,6 +503,15 @@ model Sancion {
 // Por eso `gps_points` NO tiene modelo Prisma acá — mismo criterio que las columnas
 // GEOGRAPHY: lo que Prisma no puede representar bien (una tabla particionada) se maneja
 // fuera del Client, solo SQL crudo (`worker.ts`).
+//
+// QUI-358 (cierra la decisión diferida de `20260802160000_ingesta_gps_worker`, "evaluar en
+// M4 ... desnormalizar sindicatoId + RLS"): la tabla tiene `sindicatoId` propia y
+// `FORCE ROW LEVEL SECURITY`, igual que las otras 15 tablas con RLS (ver
+// `20260815120000_gps_points_sindicato_rls`). Al ser particionada, la policy del padre NO
+// alcanza un acceso directo a una partición hija por nombre (`gps_points_20260915`, no vía
+// `gps_points`) — verificado a mano, ver esa migración — así que la policy se repite
+// también en cada partición, existente y futura (`crear_particion_gps_points` quedó
+// redefinida para hacerlo sola en cada partición nueva).
 
 /**
  * Cumplimiento de un punto de control durante un recorrido — evento `cumplimiento_punto_control`

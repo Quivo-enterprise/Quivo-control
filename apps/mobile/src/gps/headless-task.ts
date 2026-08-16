@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
 import BackgroundGeolocation, {
   type HeadlessEvent,
@@ -157,6 +158,12 @@ async function asegurarSemillaCumplimientos(db: SQLite.SQLiteDatabase): Promise<
       }
     } catch (error) {
       console.error('[QUIVO][headless] No se pudo sembrar cumplimientos desde el outbox', error);
+      // QUI-365: este catch es best-effort a propósito (ver doc de la función) — sin captura
+      // explícita, un fallo acá es invisible para siempre, nadie lee la consola del teléfono
+      // de un conductor en ruta.
+      Sentry.captureException(error, {
+        tags: { contexto: 'headless-task', paso: 'sembrar-cumplimientos' },
+      });
     }
   })();
   await semillaCumplimientos;
@@ -208,6 +215,15 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     await registrarPuntoGps(db, location, contexto, puntosControlDetectadosHeadless);
   } catch (error) {
     console.error('[QUIVO][headless] No se pudo registrar la ubicación en el outbox', error);
+    // QUI-365: este es EL escenario que el ticket marca como el peor y el que menos se ve —
+    // el `try/catch` de toda la función existe para que un fallo transitorio no tumbe la
+    // promesa que el SDK nativo no reintenta (ver doc arriba), pero eso mismo lo vuelve
+    // invisible sin captura explícita: no hay UI, no hay logs que alguien vaya a mirar en el
+    // teléfono de un conductor en ruta. Sin este `captureException`, un punto GPS perdido acá
+    // (evidencia legal, RF-67..73) no dejaría NINGÚN rastro reportado.
+    Sentry.captureException(error, {
+      tags: { contexto: 'headless-task', paso: 'registrar-punto-gps', evento: event.name },
+    });
   }
 }
 
@@ -220,5 +236,8 @@ async function detenerTrackingNativo(): Promise<void> {
     await BackgroundGeolocation.stop();
   } catch (error) {
     console.error('[QUIVO][headless] No se pudo detener el tracking nativo', error);
+    Sentry.captureException(error, {
+      tags: { contexto: 'headless-task', paso: 'detener-tracking-nativo' },
+    });
   }
 }

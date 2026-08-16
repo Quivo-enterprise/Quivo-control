@@ -207,6 +207,29 @@ export class RetencionGpsService implements OnModuleInit, OnModuleDestroy {
     partitionIdentifier: string,
     filePath: string,
   ): Promise<ArchiveFile> {
+    // Hallazgo 1 (code-review piloto, previo al lunes): este `client` es un `pg.Client`
+    // crudo abierto con RUNTIME_DATABASE_URL — el rol `quivo_app`, NOSUPERUSER y
+    // NOBYPASSRLS — y nunca pasa por `withTenantContext` (eso solo existe para el
+    // `Prisma.TransactionClient`, ver `packages/db/src/tenant-context.ts`). Desde
+    // `20260815120000_gps_points_sindicato_rls`, cada partición de `gps_points` tiene
+    // `FORCE ROW LEVEL SECURITY` con la policy `tenant_isolation`. Sin fijar `app.rol` acá,
+    // `current_setting('app.rol', true)` da NULL, el `USING` es NULL (=> ninguna fila
+    // visible) para TODA la partición, y este método exportaba 0 filas de un día entero de
+    // evidencia GPS — que igual se subía, se verificaba contra sí mismo (pasaba) y
+    // `finalizar_archivo_gps()` igual hacía DETACH+DROP de la partición real (destrucción
+    // silenciosa de evidencia legal).
+    //
+    // `admin_quivo` es el rol correcto acá (no un `sindicato_id` puntual): este job archiva
+    // la partición ENTERA sin importar a qué sindicato pertenece cada fila. `set_config`
+    // con `is_local=true` es el equivalente exacto de `SET LOCAL` — se descarta solo al
+    // terminar la transacción que abre `archivePartition` (`BEGIN`/`COMMIT` alrededor de
+    // esta llamada), nunca queda pegado a la conexión. Se fija ACÁ (no solo en el caller)
+    // para que `exportPartition` sea correcto por sí mismo sin depender de que quien lo
+    // invoque se acuerde de hacerlo — y así se puede probar en aislamiento (ver
+    // `retencion-gps.service.integration.test.ts`).
+    await client.query(`SELECT set_config('app.rol', $1, true)`, ['admin_quivo']);
+    await client.query(`SELECT set_config('app.sindicato_id', $1, true)`, ['']);
+
     const gzip = createGzip({ level: 9 });
     const output = createWriteStream(filePath, { flags: 'wx' });
     const completion = pipeline(gzip, output);
@@ -220,7 +243,7 @@ export class RetencionGpsService implements OnModuleInit, OnModuleDestroy {
       const params: (Date | string | null)[] = lastTs ? [lastTs, lastEventId] : [];
       const result: QueryResult<GpsArchiveRow> = await client.query<GpsArchiveRow>(
         `SELECT event_id::text, sesion_id::text, device_id, ts, lat, lng,
-                accuracy, speed, received_at
+                accuracy, speed, received_at, "sindicatoId"
            FROM ${partitionIdentifier}
            ${pagination}
           ORDER BY ts, event_id
@@ -241,6 +264,25 @@ export class RetencionGpsService implements OnModuleInit, OnModuleDestroy {
     }
     gzip.end();
     await completion;
+
+    // Defensa en profundidad: un archivo vacío nunca es un éxito silencioso. Si el export
+    // dio 0 filas, se lo vuelve a preguntar directamente a la partición (misma conexión,
+    // mismo contexto admin_quivo recién fijado arriba) — si la partición SÍ tiene al menos
+    // una fila, algo distinto de "el día no tuvo tráfico" está pasando (una regresión futura
+    // de este mismo `set_config`, un bug de paginación, etc.) y el job debe fallar ruidoso
+    // en vez de archivar+DROPear un CSV vacío sobre datos reales.
+    if (rowCount === 0) {
+      const check = await client.query<{ has_rows: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM ${partitionIdentifier}) AS has_rows`,
+      );
+      if (check.rows[0]?.has_rows) {
+        throw new Error(
+          `${partitionIdentifier}: el export devolvió 0 filas pero la partición SÍ tiene datos — ` +
+            'posible pérdida de contexto de tenant (RLS) u otro bug de exportación. Se aborta para ' +
+            'no archivar/eliminar evidencia GPS real con un CSV vacío.',
+        );
+      }
+    }
 
     const fileStat = await stat(filePath);
     return {
