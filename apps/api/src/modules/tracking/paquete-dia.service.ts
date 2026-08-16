@@ -52,13 +52,19 @@ export class PaqueteDiaService {
         throw new NotFoundException('Ruta de la asignación no encontrada');
       }
 
+      // `paradas`/`puntos_control` son soft-delete (`estado: 'activo' | 'inactivo'`, nunca
+      // DELETE real porque `CumplimientoPc` referencia el id sin FK) — el paquete offline del
+      // chofer nunca debe incluir un punto dado de baja: no hay forma de refrescarlo hasta el
+      // próximo inicio de jornada, y un punto/parada fantasma en el mapa desorienta el
+      // recorrido real. El contrato `PaqueteDiaSchema` (paquete-dia.ts) tampoco expone
+      // `estado` — el móvil no necesita filtrar lo que el backend ya filtró.
       const paradaRows = await tx.$queryRaw<ParadaRow[]>`
         SELECT id, tipo, orden, ST_AsGeoJSON(coord) as coord
-        FROM paradas WHERE "rutaId" = ${asignacion.rutaId} ORDER BY orden ASC
+        FROM paradas WHERE "rutaId" = ${asignacion.rutaId} AND estado = 'activo' ORDER BY orden ASC
       `;
       const puntoControlRows = await tx.$queryRaw<PuntoControlRow[]>`
         SELECT id, orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio
-        FROM puntos_control WHERE "rutaId" = ${asignacion.rutaId} ORDER BY orden ASC
+        FROM puntos_control WHERE "rutaId" = ${asignacion.rutaId} AND estado = 'activo' ORDER BY orden ASC
       `;
 
       return PaqueteDiaSchema.parse({
