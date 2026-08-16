@@ -16,8 +16,11 @@
 ## Estado — 2026-08-16 (domingo, víspera del piloto)
 
 **Repo:** [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control)
-(privado) · `main` = `8884804` · **CI verde** (`ci` + `acceptance`) · 13 PRs mergeados · 3 ramas
-vivas (las tres de Valentina, congeladas).
+(privado) · `main` = `9a0e472` · **CI verde** (`ci` + `acceptance`) · 3 ramas vivas (las tres de
+Valentina, congeladas).
+
+**En producción:** API `api:v3` (revisión `quivo-api-00005-x72`) y panel web
+`quivo-web-00001-4jd`, ambos en Cloud Run `southamerica-west1`.
 
 **Dónde estamos:** el backend **está desplegado y verificado en GCP Cloud Run**
 (`southamerica-west1`). El piloto real arranca **mañana lunes 17 de agosto con un auto y un
@@ -215,27 +218,78 @@ El sindicato tiene muchas líneas y rotaciones. Se arranca con el **grupo de ant
 **alterna días entre la línea Z12 y la 120** (la troncal, la más demandada). **Mañana lunes 17
 toca Z12, con un solo vehículo**; el resto del grupo se absorbe durante la semana.
 
-**La ruta y los puntos de control reales todavía no llegaron** — el sindicato los envía hoy
-(Z12) y entre hoy y mañana (120). Hasta que se carguen, el piloto corre con la geometría demo del
-seed, lo que tiene una consecuencia concreta sobre el checklist: **los puntos 5 (puntos de control
-detectados solos) y 7 (reconstrucción del recorrido) no pueden validarse**, porque las coordenadas
-son de otra ruta. Los puntos 1, 2, 3, 4 y 6 —background, reboot, batería, huecos GPS y sync— sí
-son válidos, porque no dependen de la geometría.
+### Z12 cargada — la ruta real ya está en producción (2026-08-16, noche)
 
-**Cuando lleguen los datos:** editar en el lugar la línea `...010` y la ruta `...011` que ya
-existen, en vez de crear nuevas — así la rotación publicada sigue siendo válida. Las asignaciones
-referencian la ruta por id y nunca embeben geometría, y el sistema lee todo en vivo (listados,
-paquete del día, reconstrucción y el worker de cumplimiento), así que no hay nada que recalcular.
-**Orden obligatorio:** primero la geometría de la ruta, después los puntos de control — el
-servidor valida que cada punto esté a ≤100 m de la geometría *vigente*, así que crearlos antes
-falla contra el trazado viejo.
+El sindicato mandó los recorridos como mapas de **Google My Maps**. Se extraen por URL sin
+credenciales: `https://www.google.com/maps/d/kml?mid=<MID>&forcekml=1`. El KML usa `lon,lat` en
+su etiqueta `<coordinates>`, el mismo orden que GeoJSON, así que no hay que invertir nada — solo
+descartar la altitud si viene. **Verificado en la carga real:** todas las coordenadas caen en
+Bolivia (lat ≈ -17.3/-17.4, lon ≈ -66.15/-66.23).
 
-**Formato a pedir: KML de Google My Maps.** Su `<coordinates>` usa `lon,lat`, el mismo orden que
-GeoJSON, así que no hay riesgo de invertir el par. GPX también sirve pero sus `<trkpt>` traen
-`lat`/`lon` nombrados al revés del orden a construir — hay que invertirlos, y equivocarse ahí
-pone la ruta en el otro hemisferio sin ningún error visible. **No hay importador de GPX/KML/GeoJSON
-en el repo**: la carga es un `PATCH` con el GeoJSON en el body, o dibujar clic a clic en el editor
-del panel. Coordenadas en `[longitud, latitud]` (`packages/shared/src/geo.ts:3`).
+**Línea Z12** — Sindicato Mixto de Transportistas Tiquipaya. `codigo: Z12`, id `...010`.
+
+| Ruta | id | Vértices | Largo | Sentido |
+|---|---|---|---|---|
+| Salomón Romero → Villa Armonía | `...000000000011` (la del seed, editada en el lugar) | 117 | 20 213 m | ida |
+| Villa Armonía → Univalle | `813c6130-2c30-46e4-b533-e3ca2ba17cd2` (nueva) | 138 | 20 413 m | vuelta |
+
+La ruta de ida se **editó en el lugar** a propósito: la rotación publicada apunta a ese id, así
+que reemplazar la geometría deja todo lo demás intacto. Los 2 puntos de control demo del seed se
+dieron de baja.
+
+**Puntos de control del sindicato** (las paradas del KML), radio **150 m**, `obligatorio: true`:
+Salomón Romero y Villa Armonía en la ida; Villa Armonía y Univalle en la vuelta.
+
+Dos paradas quedaron fuera por la validación de ≤100 m a la geometría, y ambas exclusiones son
+correctas: **Univalle está a 656 m de la ruta de ida** (es el final del retorno, no de la ida), y
+**Salomón Romero a 1 740 m de la ruta de vuelta**. Esto último merece confirmación con el
+sindicato: el KML de retorno termina en Univalle, así que **si el trufi en realidad vuelve hasta
+Salomón Romero, al mapa le falta el tramo final** y ese pedazo del recorrido queda sin ruta contra
+la cual comparar.
+
+**24 puntos de medición propios**, 12 por sentido, cada ~1 555 m (ida) y ~1 570 m (vuelta),
+`orden 2..13`, radio 150 m, `obligatorio: false`. Se interpolaron sobre la polilínea: los 24
+dieron **distancia 0.000000 m** al trazado.
+
+Por qué existen: con solo 2 puntos reales por sentido no hay muestra — si detecta 1 de 2, no se
+aprende nada. Con 14 el porcentaje significa algo. Y como caen exactamente sobre la ruta, **la
+traza GPS cruda demuestra por sí sola que el vehículo pasó**, sin que nadie tenga que anotarlo: la
+tasa de detección se calcula después cruzando `cumplimientos_pc` contra `gps_points`.
+
+Dato clave para leer los resultados de mañana: la separación entre puntos de medición (~1.55 km)
+está muy por encima del espaciado del GPS (100-150 m), así que **el muestreo no puede saltarse un
+punto entero**. Si mañana alguno no se detecta, es un problema real de detección, no de que el GPS
+haya muestreado en el momento equivocado. Eso es exactamente lo que se quería aislar.
+
+**Limitación encontrada:** `puntos_control` **no tiene campo de nombre** — solo `orden`, `coord`,
+`radioToleranciaM`, `obligatorio` y `estado`. No se pudieron etiquetar como `MEDICION-01`. Se
+distinguen por `orden >= 2` (los del sindicato usan 0 y 1). Funciona, pero es frágil: cuando
+lleguen los puntos de control reales del sindicato hay que insertarlos sin romper esa convención.
+
+**El KML de la línea 120 ya está descargado también**, para cuando toque. Es más complejo: tronco
+ida y vuelta más **7 ramales a comunidades** (Molinos, Encanto Pampa, Collpapampa, Gualberto
+Villarroel, Villa Oruro, Apote, Molle Nova, Barrio Flores). La descripción del mapa lo explica:
+*"llegando a Tiquipaya la línea 120 se reparte a sus diferentes comunidades mediante letrero"*.
+Eso es exactamente lo que el modelo llama **variantes** de ruta — existen en el schema y hoy no
+las usa nadie. Decisión pendiente: hoy el sistema asigna una ruta fija por jornada y no hay forma
+de saber qué ramal tomó el conductor.
+
+### Bug encontrado al cargar la ruta, y arreglado
+
+Al dar de baja los puntos de control demo se descubrió que **el paquete del día no filtraba por
+`estado`**: la app le bajaba al conductor los 2 puntos fantasma de la zona demo junto con los
+reales. Peor, la query ni siquiera traía la columna `estado`, así que el móvil tampoco podía
+filtrarlos. Bug preexistente que nadie había visto porque hasta hoy no se había dado de baja
+ningún punto de control.
+
+Arreglado en PR #25 y **desplegado a producción** (`api:v3`, revisión `quivo-api-00005-x72`).
+Verificado en vivo: el paquete del día pasó de 16 a **14 puntos de control**, todos con radio
+150 m y órdenes 0-13 sin huecos, sobre la ruta Z12 de 117 vértices. Readiness sano tras el
+despliegue, sin rollback. El PR además encontró el **mismo patrón en `paradas`**. Se decidió a
+conciencia **no** filtrar `Ruta.estado`: es una búsqueda por id, no una lista, y filtrarla
+convertiría "geometría posiblemente vieja" en un `NotFoundException` que voltea el paquete del día
+entero si alguien desactiva una ruta a mitad de ciclo — peor modo de falla, sin incidente que lo
+justifique. Queda como follow-up.
 
 ### Brechas de modelo detectadas, para decidir después del piloto
 
@@ -249,11 +303,55 @@ del panel. Coordenadas en `[longitud, latitud]` (`packages/shared/src/geo.ts:3`)
   `SesionOperativa.asignacion` tiene `onDelete: Restrict` y `rotaciones.service.ts` solo traduce
   P2002, no P2003.
 
+### Cómo se mide el día 1 (decidido por council, 2026-08-16)
+
+Se convocó un council de cuatro voces para decidir si recompilar el APK con
+`disableElasticity: true`. **Veredicto unánime: no recompilar.** El razonamiento dominante no fue
+técnico sino de riesgo: el APK costó cinco intentos y cinco bloqueantes distintos, y un sexto
+build de madrugada sin dispositivo para probarlo, entregado a un conductor real al amanecer, es
+peor riesgo que la elasticidad.
+
+**El hallazgo que justifica el radio de 150 m:** `distanceFilter: 50` **no es fijo**. El SDK lo
+escala con la velocidad (`disableElasticity` es `false` por default), así que el espaciado real
+entre fixes es ~100 m entre 18-36 km/h y ~150 m entre 36-54 km/h. Además, en Android
+`locationUpdateInterval` se ignora cuando `distanceFilter > 0`, así que el "cada 10 segundos" que
+promete el comentario del código no aplica. **Y el trufi no frena en los puntos de control** salvo
+que el tráfico lo obligue — eso invalida el argumento intuitivo de que el vehículo desacelera
+justo donde se lo mide.
+
+Con radio 30 m (el default del formulario del panel) el diámetro es 60 m: menor que el espaciado.
+El vehículo cruza el punto entero sin que ninguna muestra caiga adentro, y **como el worker no
+hace backfill, esa pasada se pierde para siempre**. Con 150 m la cuerda es 300 m y el margen es
+real. Errar por ancho da un falso positivo medible y corregible después sobre la traza cruda;
+errar por angosto no se recupera nunca.
+
+**El umbral binario "0 detecciones fuera del radio" era infalsificable**, y lo marcaron dos voces
+por separado: el worker revalida cada cumplimiento con **las mismas coordenadas que le mandó el
+teléfono**, así que su veredicto siempre coincide con el de la app. Medir contra ese dato es
+comparar el sistema consigo mismo — pasa por construcción, funcione o no. Y en headless el
+conductor no recibe feedback, así que tampoco puede desmentirlo.
+
+Por eso el día 1 se instrumenta en dos capas:
+
+| Instrumento | Qué mide | Trabajo humano |
+|---|---|---|
+| 24 puntos de medición sobre la polilínea | Tasa de detección real, cruzando `cumplimientos_pc` contra `gps_points` | Ninguno |
+| [`planilla-acompanante.md`](piloto/planilla-acompanante.md) | Verdad de campo independiente: hora de cada paso y **si el vehículo frenó** | Anotar a mano |
+
+La columna "¿frenó?" es la que convierte un porcentaje en un diagnóstico. Si los puntos detectados
+son los que frenaron y los perdidos los que pasaron de largo, la hipótesis del espaciado elástico
+queda confirmada y se sabe exactamente qué ajustar. Sin esa columna, mañana termina con un número
+y ninguna explicación.
+
+**Post-piloto:** replay SQL sobre la traza cruda a 30/50/100/150 m para elegir el radio con datos
+reales, y recién ahí decidir si vale `disableElasticity`.
+
 ### Qué queda
 
 | Paso | Quién | Estado |
 |---|---|---|
 | **Prueba en teléfono real** — los 7 puntos del plan | CTO | ⏳ Pendiente. Es lo único que falta antes de mañana |
+| Confirmar con el sindicato si el retorno llega hasta Salomón Romero | CTO | ⏳ El KML termina en Univalle, 1 740 m antes |
 | Rotar el `SENTRY_AUTH_TOKEN` | CTO | ⏳ Se pegó en un chat; darlo por expuesto |
 
 **Rotar el token:** revocarlo en Sentry, crear uno nuevo y recargarlo con `eas env:create`. El
