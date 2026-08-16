@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
@@ -23,6 +24,7 @@ import {
   type Vehiculo,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import { mapearTolerante } from '../../common/validation/filas-tolerantes.util.js';
 
 const TRANSICIONES_VALIDAS: Record<EstadoVehiculo, EstadoVehiculo[]> = {
   pendiente: ['pendiente', 'activo', 'inactivo'],
@@ -36,6 +38,8 @@ const CONTEXTO_ADMIN = { rol: 'admin_quivo', sindicatoId: null } as const;
 
 @Injectable()
 export class VehiculosService {
+  private readonly logger = new Logger(VehiculosService.name);
+
   async listar(actor: AuthenticatedUser): Promise<Vehiculo[]> {
     const rows = await withTenantContext(toTenantContext(actor), (tx) =>
       tx.vehiculo.findMany({
@@ -43,7 +47,10 @@ export class VehiculosService {
         orderBy: { placa: 'asc' },
       }),
     );
-    return rows.map(toVehiculo);
+    // QUI-366: una fila con datos corruptos/placeholder (ej. el vehículo piloto con
+    // `color: 'PLACEHOLDER'`) no debe tumbar el listado completo — se omite y se loguea
+    // (ver mapearTolerante), el resto de las filas válidas sí llega al usuario.
+    return mapearTolerante(rows, toVehiculo, this.logger, 'Vehículo');
   }
 
   async obtener(actor: AuthenticatedUser, id: string): Promise<Vehiculo> {

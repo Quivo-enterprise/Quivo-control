@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { pinoHttpRedaction } from './common/logging/pino-http-redaction.js';
+import { ZodExceptionFilter } from './common/validation/zod-exception.filter.js';
 import { ZodValidationPipe } from './common/validation/zod-validation.pipe.js';
 import { AuditInterceptor } from './common/audit/audit.interceptor.js';
 import { PingController } from './common/ping/ping.controller.js';
@@ -63,6 +64,9 @@ import { AuthMovilModule } from './modules/auth-movil/index.js';
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // QUI-366: red de seguridad — un ZodError sin capturar en cualquier handler no debe
+    // devolver el 500 genérico de Nest (ver ZodExceptionFilter).
+    { provide: APP_FILTER, useClass: ZodExceptionFilter },
   ],
 })
 export class AppModule {}

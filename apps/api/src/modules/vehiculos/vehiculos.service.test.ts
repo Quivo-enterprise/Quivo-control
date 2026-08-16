@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { prisma, withTenantContext } from '@quivo/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { VehiculosService } from './vehiculos.service.js';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
@@ -181,5 +181,108 @@ describe('VehiculosService', () => {
     await expect(service.verificarPlaca(adminSindicatoA, 'ABC123')).rejects.toThrow(
       'formato anterior',
     );
+  });
+
+  describe('listar() ante filas corruptas (QUI-366)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('omite una fila que no pasa el schema, devuelve las válidas y no lanza', async () => {
+      const vehiculoValido = await service.crear(adminSindicatoA, {
+        ...vehiculoBase,
+        sindicatoId: sindicatoAId,
+        placa: '118HHH',
+      });
+
+      // Reproduce el incidente real: una fila con placa/color placeholder que
+      // `VehiculoSchema.parse()` rechaza, insertada directo (bypass de la validación de
+      // `crear()`) tal como puede terminar en la base por un seed o una migración a medias.
+      const vehiculoCorruptoId = randomUUID();
+      const sufijo = vehiculoCorruptoId.slice(0, 8).toUpperCase();
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+        tx.vehiculo.create({
+          data: {
+            id: vehiculoCorruptoId,
+            sindicatoId: sindicatoAId,
+            placa: `INV${sufijo}`,
+            placaNormalizada: `INV${sufijo}`,
+            tipo: 'bus_urbano',
+            marca: 'PLACEHOLDER',
+            modelo: 'PLACEHOLDER',
+            color: 'PLACEHOLDER',
+            capacidad: 40,
+            estado: 'pendiente',
+          },
+        }),
+      );
+
+      try {
+        const listado = await service.listar(adminSindicatoA);
+
+        expect(listado.some((v) => v.id === vehiculoValido.id)).toBe(true);
+        expect(listado.some((v) => v.id === vehiculoCorruptoId)).toBe(false);
+      } finally {
+        await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+          tx.vehiculo.delete({ where: { id: vehiculoCorruptoId } }),
+        );
+      }
+    });
+
+    it('deja rastro en el log de la fila corrupta (id + campos que fallaron)', async () => {
+      const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+      const vehiculoCorruptoId = randomUUID();
+      const sufijo = vehiculoCorruptoId.slice(0, 8).toUpperCase();
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+        tx.vehiculo.create({
+          data: {
+            id: vehiculoCorruptoId,
+            sindicatoId: sindicatoAId,
+            placa: `INV${sufijo}`,
+            placaNormalizada: `INV${sufijo}`,
+            tipo: 'bus_urbano',
+            marca: 'PLACEHOLDER',
+            modelo: 'PLACEHOLDER',
+            color: 'PLACEHOLDER',
+            capacidad: 40,
+            estado: 'pendiente',
+          },
+        }),
+      );
+
+      try {
+        await service.listar(adminSindicatoA);
+
+        const logueoDeLaFilaCorrupta = errorSpy.mock.calls.find(
+          (llamada) => typeof llamada[0] === 'string' && llamada[0].includes(vehiculoCorruptoId),
+        );
+        expect(logueoDeLaFilaCorrupta).toBeDefined();
+        expect(logueoDeLaFilaCorrupta?.[0]).toContain('color');
+      } finally {
+        await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+          tx.vehiculo.delete({ where: { id: vehiculoCorruptoId } }),
+        );
+      }
+    });
+
+    it('con todas las filas válidas se comporta igual que antes (sin regresión)', async () => {
+      const vehiculo1 = await service.crear(adminSindicatoA, {
+        ...vehiculoBase,
+        sindicatoId: sindicatoAId,
+        placa: '119III',
+      });
+      const vehiculo2 = await service.crear(adminSindicatoA, {
+        ...vehiculoBase,
+        sindicatoId: sindicatoAId,
+        placa: '120JJJ',
+      });
+
+      const listado = await service.listar(adminSindicatoA);
+      const ids = listado.map((v) => v.id);
+
+      expect(ids).toContain(vehiculo1.id);
+      expect(ids).toContain(vehiculo2.id);
+    });
   });
 });
