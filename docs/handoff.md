@@ -74,23 +74,56 @@ Decisión del CTO: **se va con source maps funcionando**, no con el atajo de des
 `SENTRY_AUTH_TOKEN` va como secret de EAS; `SENTRY_ORG` y `SENTRY_PROJECT` como env del perfil.
 El token nunca se commitea.
 
-### Qué queda para hoy
+### QUI-364 cerrado — el APK del piloto existe
+
+**Artefacto:** `versionCode` 6, package `com.quivotech.conductor`, firmado con el keystore remoto de
+EAS (`Build Credentials 9zSZpTExKl`), apuntando a Cloud Run.
+Build `22e5d3f0-5239-474a-b076-c57f60c48bf5`.
+
+Salió al **quinto intento**. Los cuatro anteriores murieron, cada uno más adelante que el
+anterior, y ninguno por la misma causa. Los cuatro están arreglados y mergeados:
+
+| # | Fase donde murió | Causa | Fix |
+|---|---|---|---|
+| 1 | `INSTALL_DEPENDENCIES` | Worker con Node 20; el repo declara pnpm 11.3.0, que usa `node:sqlite` | PR #17 — `base.node = "22.23.1"` |
+| 2 | `INSTALL_DEPENDENCIES` | El `postinstall` de `packages/db` corre `prisma generate`, que explota sin `DATABASE_URL` | PR #19 — placeholder en `base.env` |
+| 3 | `EAGER_BUNDLE` | `packages/shared/dist` está gitignoreado; el worker clona limpio y Metro no resolvía `@quivo/shared` | PR #20 — `eas-build-post-install` que compila las deps de workspace |
+| 4 | `RUN_GRADLEW` (585/585 tareas) | Un comentario XML con la secuencia `--` adentro; AAPT2 lo rechaza con error fatal | PR #21 — reescribir el comentario |
+
+**El fix de Sentry quedó validado por el build 4**, que lo ejercitó completo antes de morir por el
+XML: `sentry-cli` resolvió bajo pnpm, recibió org, project y token, y terminó con `Uploaded files
+to Sentry` / `File upload complete`. Los source maps del release están subidos y con Debug ID, así
+que los stack traces del piloto llegan legibles.
+
+**Verificado sobre el artefacto, no sobre la config** (lo que exige el gate previo del
+checklist): el bundle contiene la URL de Cloud Run por HTTPS una sola vez y **ninguna** referencia
+a `10.0.2.2`, `192.168.*` ni `172.16-31.*`. Los dos `localhost` que aparecen son inertes y no son
+la base del API: un path de desarrollo de Expo Google Fonts y el endpoint del overlay Spotlight
+del SDK de Sentry, que requiere `spotlight: true` para activarse. Firma verificada (RSA 2048,
+esquema v2), `android:debuggable` **ausente** —así que el bloque `debug-overrides` del network
+security config queda inerte y el cleartext sigue bloqueado—, y `ACCESS_FINE_LOCATION` +
+`ACCESS_BACKGROUND_LOCATION` declarados. SHA256 del APK:
+`b23582f48403255cefdc81f81fe41c795240f5c505caefcd8c69e040acc7dc1b`.
+
+La licencia de Transistorsoft viaja embebida en el manifest y su JWT confirma **trial, expira
+2026-09-15**. El dato del checklist es correcto: hay que decidir la compra antes de esa fecha o el
+próximo build sale sin licencia.
+
+### Qué queda
 
 | Paso | Quién | Estado |
 |---|---|---|
-| Fixes del review sobre PR #16 (dos rondas) | subagentes | ✅ Mergeado — PR #16, `8884804` |
-| Cargar `SENTRY_AUTH_TOKEN` + org/project | CTO | ✅ Secret de EAS, scope project, entorno `production` |
-| **QUI-364** — build release firmado en EAS | CTO | 🔄 Lanzado después del merge |
-| **Prueba en teléfono real** — los 7 puntos del plan | CTO | ⏳ Teléfonos disponibles hoy |
-| **QUI-367** — checklist con umbrales y criterios de aborto | — | ✅ Cerrado |
+| **Prueba en teléfono real** — los 7 puntos del plan | CTO | ⏳ Pendiente. Es lo único que falta antes de mañana |
+| Rotar el `SENTRY_AUTH_TOKEN` | CTO | ⏳ Se pegó en un chat; darlo por expuesto |
 
-**Rotar el `SENTRY_AUTH_TOKEN` cuando salga el build.** El token se pegó en un chat durante la
-sesión, así que hay que darlo por expuesto: revocarlo en Sentry, crear uno nuevo y recargarlo con
-`eas env:create`. El alcance del token es solo Sentry (lectura/escritura del proyecto y lectura de
-la org) — no toca el backend ni la base — pero los eventos de Sentry de un piloto real pueden
-traer datos de ubicación.
+**Rotar el token:** revocarlo en Sentry, crear uno nuevo y recargarlo con `eas env:create`. El
+alcance es solo Sentry —lectura/escritura del proyecto y lectura de la org, no toca el backend ni
+la base— pero los eventos de Sentry de un piloto real pueden traer datos de ubicación.
 
-### El punto ciego que dejaron los dos reviews
+### El punto ciego, ahora con cinco casos
+
+Todo lo de arriba —los tres bloqueantes que encontraron los reviews más los cuatro que encontró
+el build— vive en el mismo agujero:
 
 Los bloqueantes del build salieron todos del mismo agujero: **la CI no corre `eas build`**. Todo
 lo que solo se ejerce durante el build nativo —config plugins, resolución de binarios bajo pnpm,
@@ -111,8 +144,20 @@ alguien aprieta el botón. Los cuatro casos concretos que pasaron limpios por `l
    El repo pedía Node 22 en `engines`, en `.nvmrc` y en la CI (`node-version-file: .nvmrc`) —
    `eas.json` era el único lugar donde no estaba declarado.
 
-**Issue post-piloto:** un job de CI que al menos corra `expo prebuild` + `assembleRelease` sobre
-`apps/mobile`. No hace falta que firme ni que suba nada; alcanza con que compile.
+**Issue post-piloto, ahora con evidencia de sobra:** un job de CI que corra `expo prebuild` +
+`assembleRelease` sobre `apps/mobile`. No hace falta que firme ni que suba nada; alcanza con que
+compile. **Habría atrapado los siete.** Cada vuelta de build costó ~15 minutos y descubrió
+exactamente un bug, en serie, el día antes del piloto.
+
+**Segundo issue post-piloto:** sacar `prisma generate` del `postinstall` de `packages/db` y
+llamarlo explícitamente donde haga falta, en vez de que corra ciegamente en cualquier
+`pnpm install` del monorepo — incluidos builds que no tocan esa carpeta. El placeholder de
+`DATABASE_URL` en `eas.json` es un parche, no la solución.
+
+**Tercer issue, menor:** el worker de EAS instaló `pnpm@10.14.0` pese a que el `package.json` de
+la raíz declara `packageManager: pnpm@11.3.0` (parece leer el de `apps/mobile`, que no tiene ese
+campo). No causó problemas porque el lockfile es compatible con ambas, pero local y worker no
+coinciden.
 
 **Segunda lección, más barata de aplicar ya:** verificar contra el `node_modules` instalado, no
 contra la doc de `main` del proyecto upstream. Los dos primeros hallazgos fueron comentarios de
