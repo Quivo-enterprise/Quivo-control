@@ -13,342 +13,329 @@
 > previo; el CTO confirmó ese día que **el piloto arranca el lunes 17 de agosto con un auto**.
 > Se conserva como registro histórico de las decisiones de escala y de los recortes a M7.
 
-## Estado — 2026-08-16 (domingo, víspera del piloto)
+## Estado — 2026-08-16 (domingo, cierre de la víspera del piloto)
 
 **Repo:** [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control)
-(privado) · `main` = `8884804` · **CI verde** (`ci` + `acceptance`) · 13 PRs mergeados · 3 ramas
-vivas (las tres de Valentina, congeladas).
+(privado) · `main` = `9a0e472` · **CI verde** (`ci` + `acceptance`) · 3 ramas vivas (las tres de
+Valentina, congeladas).
 
-**Dónde estamos:** el backend **está desplegado y verificado en GCP Cloud Run**
-(`southamerica-west1`). El piloto real arranca **mañana lunes 17 de agosto con un auto y un
-conductor**. Lo que queda hoy no es código de producto: es cerrar el build del APK y probarlo en
-un teléfono en la calle.
+**En producción, GCP `southamerica-west1`, proyecto `quivo-piloto`:**
 
-### Qué se cerró el sábado 15 — PR #15 (`3876384`, mergeado a `main`)
+| Servicio | Revisión | URL |
+|---|---|---|
+| API | `quivo-api-00005-x72` (`api:v3`) | https://quivo-api-424426714260.southamerica-west1.run.app |
+| Panel web | `quivo-web-00001-4jd` (`web:v1`) | https://quivo-web-424426714260.southamerica-west1.run.app |
 
-Todo el bloque "Sábado" del plan, en un solo PR: QUI-354 (Dockerfiles de `apps/api` y `apps/web`,
-`enableShutdownHooks()`, liveness/readiness separados) · QUI-356 (guardarraíl de arranque de
-`JWT_SECRET` + purga del default publicado + `JWT_REFRESH_TTL` a 7 d) · QUI-358 (`sindicatoId` +
-RLS en `gps_points`) · QUI-357 (`usesCleartextTraffic: false`) · QUI-359 (rotación del refresh
-token en el panel web) · QUI-366 (seed del sindicato piloto: 1 línea, 1 ruta, puntos de control,
-1 vehículo, 1 conductor, más el segundo tenant de aislamiento) · QUI-365 (Sentry en
-`apps/mobile`) · QUI-348 / QUI-338 / QUI-346 (los bugs de M6 que toca el conductor).
+**Dónde estamos:** el stack completo está desplegado, verificado en vivo y con la ruta real
+cargada. El piloto arranca **mañana lunes 17 de agosto con un trufi y un conductor en la línea
+Z12**. Lo único que falta antes del arranque es físico: probar el teléfono en la calle.
 
-Verificado: lint, typecheck y 350 tests en verde; migraciones, seed y suite de RLS corridas
-**contra la instancia real de Cloud SQL**.
+> **El API tiene prefijo global `/v1`** (`main.ts:32`). Los health checks son
+> `/v1/health/live` y `/v1/health/ready` — pegarle a `/health` devuelve 404 y parece un servicio
+> caído cuando no lo está.
 
-**QUI-213 (GCP) quedó desplegado pero fuera del control de versiones.** No hay ningún `.tf` ni
-carpeta `infra/` en el repo: Cloud Run, Cloud SQL, Memorystore y Secret Manager se levantaron por
-consola/CLI. Verificado en vivo: liveness 200, readiness con `db` y `redis` arriba, login real
-contra Cloud SQL y aislamiento cross-tenant confirmado a mano. **Deuda registrada: el entorno del
-piloto no es reproducible desde el repo.** Terraform queda pendiente post-piloto.
+---
 
-### Qué está abierto hoy — PR #16 (`feat/config-movil-piloto`)
+## Lo que hay que saber para operar mañana
 
-Apunta la app móvil al backend real (`EXPO_PUBLIC_API_URL` a Cloud Run), carga el DSN de Sentry
-(antes era un no-op silencioso), agrega el plugin de Sentry y fija el `projectId` de EAS.
+### Credenciales del conductor
 
-El code review del 2026-08-16 encontró que **el build de release iba a fallar** y que la
-instrumentación no cumplía su objetivo. Los cuatro hallazgos que importan:
+| Pantalla | Campo | Valor |
+|---|---|---|
+| 1 — Vehículo | Placa | `1111AAA` |
+| | PIN | `76179397` |
+| 2 — Conductor | CI | `00000000 LP` |
+| | PIN personal | `874863` |
 
-1. **`disableAutoUpload` no existe en `@sentry/react-native` 7.2.0.** El `PluginProps` de esa
-   versión solo admite `organization`, `project`, `authToken`, `url` y `experimental_android`; la
-   clave se pasaba y se ignoraba. La tarea de subida de source maps se registra igual en
-   `sentry.gradle` (su gate real es el env var `SENTRY_DISABLE_AUTO_UPLOAD`, no el prop del
-   plugin), corre dentro de `assembleRelease` y, sin org ni token, `sentry-cli` sale con exit
-   code 1 dentro de un `exec {}` sin `ignoreExitValue`. **Rompía el build entero, no era un
-   warning.** Comprobado ejecutando a mano el binario de `sentry-cli` que trae el repo.
-2. **Faltaba `metro.config.js` con `getSentryExpoConfig`.** Sin el serializer de Sentry el bundle
-   no lleva Debug ID, así que los source maps subidos no matchean: los stack traces seguirían
-   ilegibles aunque el token estuviera bien cargado.
-3. **Sentry inicializaba tarde.** En `index.js` la llamada a `initSentry()` estaba escrita antes
-   de los imports, pero los imports ESM se hoistean: Sentry arrancaba después de evaluar
-   `react-native-background-geolocation` y el headless task de GPS — justo el escenario que
-   QUI-365 existe para cubrir.
-4. **El perfil `development` de `eas.json` apuntaba al Cloud Run de producción.** Cualquier build
-   de development manejando en la calle habría escrito GPS y jornadas de prueba en la misma base
-   que guarda la evidencia del piloto. Además ese perfil es `developmentClient: true`: no embebe
-   bundle, así que ni siquiera servía para la prueba de campo.
+Los PINs del seed original eran irrecuperables (hash de un solo sentido, se imprimen una sola vez
+en el stdout). Estos se fijaron por `PUT /v1/mobile/credenciales/{vehiculos,conductores}/:id` y se
+verificaron contra el backend real: la cadena completa devuelve sesión con contexto operativo.
 
-Decisión del CTO: **se va con source maps funcionando**, no con el atajo de desactivar la subida.
-`SENTRY_AUTH_TOKEN` va como secret de EAS; `SENTRY_ORG` y `SENTRY_PROJECT` como env del perfil.
-El token nunca se commitea.
+**El login es placa + PIN, así que cambiar la placa cambia la credencial.** Cuando se carguen los
+datos reales del vehículo hay que avisarle al conductor.
 
-### QUI-364 cerrado — el APK del piloto existe
+**Cómo funciona, por si falla en campo:** dos pasos —
+`POST /v1/mobile/auth/vehiculo` con placa+PIN devuelve un `challengeToken`, y
+`POST /v1/mobile/auth/conductor` con ese token + CI + PIN devuelve la sesión. **`deviceId` es
+obligatorio en ambos.** La búsqueda de asignación filtra por **fecha calendario exacta** de
+Bolivia — no por rango — y **no filtra por turno**. El turno solo importa porque más de una
+asignación en el mismo día hace que el login devuelva `seleccion_requerida` en vez de tokens.
+Un 404 de "no existe asignación" con credenciales correctas casi siempre es un problema de fecha,
+no de credencial: un PIN equivocado da **401**, no 404.
 
-**Artefacto:** `versionCode` 6, package `com.quivotech.conductor`, firmado con el keystore remoto de
-EAS (`Build Credentials 9zSZpTExKl`), apuntando a Cloud Run.
-Build `22e5d3f0-5239-474a-b076-c57f60c48bf5`.
+### Panel web
 
-Salió al **quinto intento**. Los cuatro anteriores murieron, cada uno más adelante que el
-anterior, y ninguno por la misma causa. Los cuatro están arreglados y mergeados:
+`admin@quivo.local` / `Quivo123!`
 
-| # | Fase donde murió | Causa | Fix |
+⚠️ **Contraseña hardcodeada en `packages/db/prisma/seed.ts:35` y publicada en `CREDENCIALES.md:52`**,
+con rol `admin_quivo` que **bypassea RLS por diseño**, ahora accesible desde internet sobre la
+base que contendrá la evidencia del piloto. Riesgo aceptado explícitamente por el CTO el
+2026-08-16 para llegar al arranque. **Rotarla es la primera tarea post-piloto** (QUI-381). Hoy
+tampoco existe ningún admin scoped al sindicato piloto: solo el global.
+
+### La línea Z12, cargada y desplegada
+
+Sindicato Mixto de Transportistas Tiquipaya. Línea `Z12`, id `...010`.
+
+| Ruta | id | Vértices | Largo | Sentido |
+|---|---|---|---|---|
+| Salomón Romero → Villa Armonía | `...000000000011` | 117 | 20 213 m | ida |
+| Villa Armonía → Univalle | `813c6130-2c30-46e4-b533-e3ca2ba17cd2` | 138 | 20 413 m | vuelta |
+
+La ruta de ida se **editó en el lugar** a propósito: la rotación publicada apunta a ese id, así
+que reemplazar la geometría deja el resto intacto. Los 2 puntos de control demo del seed se dieron
+de baja.
+
+**Puntos de control:** 4 del sindicato (las paradas del KML, `obligatorio: true`) y **24 de
+medición propios** (12 por sentido, `orden 2..13`, `obligatorio: false`). Todos con **radio
+150 m**. Los de medición se interpolaron sobre la polilínea cada ~1 555 m (ida) y ~1 570 m
+(vuelta): los 24 dieron **distancia 0.000000 m** al trazado.
+
+**Rotación:** `2026-08-piloto` (`86d20fcf-931d-40cb-8062-bf605f161709`), publicada, 15
+asignaciones del 17 al 31 de agosto, una por día.
+
+### Cómo se lee lo que pase mañana
+
+Dos instrumentos, y la separación entre ellos es deliberada:
+
+| Instrumento | Qué mide | Trabajo humano |
+|---|---|---|
+| Los 24 puntos de medición | Tasa de detección real, cruzando `cumplimientos_pc` contra `gps_points` | Ninguno |
+| [`planilla-acompanante.md`](piloto/planilla-acompanante.md) | Verdad de campo independiente: hora de cada paso y **si el vehículo frenó** | Anotar a mano |
+
+Los puntos de medición **se validan solos**: como caen exactamente sobre la polilínea, la traza
+GPS cruda demuestra por sí sola que el vehículo pasó por ahí. Con 2 puntos por sentido no había
+muestra —detectar 1 de 2 no enseña nada—; con 14 el porcentaje significa algo.
+
+Su separación (~1.55 km) está muy por encima del espaciado del GPS (100-150 m), así que **el
+muestreo no puede saltarse un punto entero**. Si mañana alguno no se detecta, es un problema real
+de detección, no de que el GPS muestreara en el momento equivocado.
+
+La columna "¿frenó?" de la planilla es lo que convierte un porcentaje en un diagnóstico: si los
+detectados son los que frenaron y los perdidos los que pasaron de largo, la hipótesis del
+espaciado elástico queda confirmada y se sabe qué ajustar.
+
+**Qué esperar y qué no:**
+
+- El mapa del conductor va a mostrar **línea recta** al próximo punto de control, no ruta por
+  calles: OSRM no está desplegado (decisión del ADR 0002) y el endpoint degrada limpio a `null`.
+- La traza reconstruida en el panel va a verse **con ruido**: no hay map matching, se dibuja GPS
+  crudo.
+- Con la app matada, el cumplimiento se graba **sin ningún feedback** al conductor — sin toast, sin
+  vibración, sin voz. Está documentado en el código, no es un fallo.
+- El mapa necesita internet para dibujarse (tiles y Leaflet vienen de CDN), aunque los **datos**
+  son offline-first. Vale verificar qué pasa si el conductor arranca sin señal.
+
+### Decisiones tomadas la víspera, con su razón
+
+**No recompilar el APK** — veredicto unánime de un council de cuatro voces. El argumento dominante
+no fue técnico: el APK costó cinco intentos y cinco bloqueantes distintos, y un sexto build de
+madrugada sin dispositivo para probarlo, entregado a un conductor real al amanecer, es peor riesgo
+que la elasticidad del GPS.
+
+**Radio 150 m, no los 30 m que propone el formulario del panel.** `distanceFilter: 50` **no es
+fijo**: el SDK lo escala con la velocidad (`disableElasticity` es `false` por default), dando ~100 m
+entre fixes a 18-36 km/h y ~150 m a 36-54 km/h. Y en Android `locationUpdateInterval` se ignora
+cuando `distanceFilter > 0`, así que el "cada 10 segundos" del comentario del código no aplica.
+**El trufi no frena en los puntos de control** salvo que el tráfico lo obligue — eso invalida el
+argumento intuitivo de que el vehículo desacelera justo donde se lo mide. Con radio 30 m el
+diámetro (60 m) es menor que el espaciado: el vehículo cruza el punto entero sin que ninguna
+muestra caiga adentro, y **como el worker no hace backfill, esa pasada se pierde para siempre**.
+Errar por ancho da un falso positivo medible y corregible después sobre la traza cruda; errar por
+angosto no se recupera nunca.
+
+**El umbral binario "0 detecciones fuera del radio" era infalsificable** y se reemplazó. Lo
+marcaron dos voces del council por separado: el worker revalida cada cumplimiento con **las mismas
+coordenadas que le mandó el teléfono**, así que su veredicto siempre coincide con el de la app.
+Medir contra ese dato es comparar el sistema consigo mismo — pasa por construcción, funcione o no.
+Ahora se mide contra el registro del acompañante.
+
+**Post-piloto:** replay SQL sobre la traza cruda a 30/50/100/150 m para elegir el radio con datos
+reales, y recién ahí decidir si vale `disableElasticity`.
+
+---
+
+## Cómo se llegó hasta acá — el domingo 16
+
+### PR #15 (sábado 15): todo el hardening del piloto
+
+QUI-354 (Dockerfiles de `apps/api` y `apps/web`, `enableShutdownHooks()`, liveness/readiness
+separados) · QUI-356 (guardarraíl de `JWT_SECRET` + purga del default publicado + `JWT_REFRESH_TTL`
+a 7 d) · QUI-358 (`sindicatoId` + RLS en `gps_points`) · QUI-357 (`usesCleartextTraffic: false`) ·
+QUI-359 (rotación del refresh token web) · QUI-366 (seed del sindicato piloto) · QUI-365 (Sentry) ·
+QUI-348 / QUI-338 / QUI-346 (bugs de M6 que toca el conductor).
+
+Migraciones, seed y suite de RLS corridas **contra la instancia real de Cloud SQL**.
+
+### PR #16 + cuatro PRs de fixes: el APK
+
+Salió **al quinto intento**. Los cuatro builds anteriores murieron, cada uno más adelante que el
+anterior y ninguno por la misma causa:
+
+| # | Fase | Causa | Fix |
 |---|---|---|---|
 | 1 | `INSTALL_DEPENDENCIES` | Worker con Node 20; el repo declara pnpm 11.3.0, que usa `node:sqlite` | PR #17 — `base.node = "22.23.1"` |
 | 2 | `INSTALL_DEPENDENCIES` | El `postinstall` de `packages/db` corre `prisma generate`, que explota sin `DATABASE_URL` | PR #19 — placeholder en `base.env` |
-| 3 | `EAGER_BUNDLE` | `packages/shared/dist` está gitignoreado; el worker clona limpio y Metro no resolvía `@quivo/shared` | PR #20 — `eas-build-post-install` que compila las deps de workspace |
+| 3 | `EAGER_BUNDLE` | `packages/shared/dist` está gitignoreado; el worker clona limpio y Metro no resolvía `@quivo/shared` | PR #20 — `eas-build-post-install` |
 | 4 | `RUN_GRADLEW` (585/585 tareas) | Un comentario XML con la secuencia `--` adentro; AAPT2 lo rechaza con error fatal | PR #21 — reescribir el comentario |
 
-**El fix de Sentry quedó validado por el build 4**, que lo ejercitó completo antes de morir por el
-XML: `sentry-cli` resolvió bajo pnpm, recibió org, project y token, y terminó con `Uploaded files
-to Sentry` / `File upload complete`. Los source maps del release están subidos y con Debug ID, así
-que los stack traces del piloto llegan legibles.
+Antes de eso, dos rondas de code review sobre PR #16 encontraron otros tres bloqueantes:
+`disableAutoUpload` no existe en `@sentry/react-native` 7.2.0 (se ignoraba en silencio y la tarea
+de subida rompía el build), `@sentry/cli` no era resoluble bajo el layout aislado de pnpm, y
+faltaba el campo `environment` del que depende que las variables secretas de EAS lleguen al job.
 
-**Verificado sobre el artefacto, no sobre la config** (lo que exige el gate previo del
-checklist): el bundle contiene la URL de Cloud Run por HTTPS una sola vez y **ninguna** referencia
-a `10.0.2.2`, `192.168.*` ni `172.16-31.*`. Los dos `localhost` que aparecen son inertes y no son
-la base del API: un path de desarrollo de Expo Google Fonts y el endpoint del overlay Spotlight
-del SDK de Sentry, que requiere `spotlight: true` para activarse. Firma verificada (RSA 2048,
-esquema v2), `android:debuggable` **ausente** —así que el bloque `debug-overrides` del network
-security config queda inerte y el cleartext sigue bloqueado—, y `ACCESS_FINE_LOCATION` +
-`ACCESS_BACKGROUND_LOCATION` declarados. SHA256 del APK:
-`b23582f48403255cefdc81f81fe41c795240f5c505caefcd8c69e040acc7dc1b`.
+**APK final:** `versionCode` 6, package `com.quivotech.conductor`, firmado con el keystore remoto
+de EAS, build `22e5d3f0-5239-474a-b076-c57f60c48bf5`. Verificado **sobre el artefacto**: la URL de
+Cloud Run embebida por HTTPS, ninguna referencia a localhost ni LAN, firma RSA 2048 esquema v2,
+`android:debuggable` ausente (así que el bloque `debug-overrides` queda inerte), y
+`ACCESS_BACKGROUND_LOCATION` declarado. Los source maps de Sentry subieron correctamente.
 
-La licencia de Transistorsoft viaja embebida en el manifest y su JWT confirma **trial, expira
-2026-09-15**. El dato del checklist es correcto: hay que decidir la compra antes de esa fecha o el
-próximo build sale sin licencia.
+### PR #23: el panel web
 
-### El panel web quedó desplegado — 2026-08-16 (noche)
+`apps/web` es un SPA con cáscara Next (todo `'use client'`, sin better-auth ni Prisma), así que su
+servicio **no lleva conector de Cloud SQL, ni VPC connector, ni secretos de base**. Solo sirve el
+bundle; el navegador pega directo contra el API.
 
-**URL:** https://quivo-web-424426714260.southamerica-west1.run.app
-Servicio `quivo-web`, revisión `quivo-web-00001-4jd`, imagen
-`southamerica-west1-docker.pkg.dev/quivo-piloto/quivo/web:v1`.
-
-El servicio es mucho más simple que el del API: `apps/web` es un SPA con cáscara Next (todo
-`'use client'`, sin `better-auth`/`@quivo/db`/`@prisma/client`), así que **no lleva conector de
-Cloud SQL, ni VPC connector, ni secretos de base**. Solo sirve el bundle; el navegador pega
-directo contra el API.
-
-**`CORS_ORIGIN` ahora acopla los dos servicios.** `apps/api/src/main.ts:51-54` usa un string
-único, no un array ni una regex, y estaba sin setear. Se agregó al servicio `quivo-api` con la
-URL exacta del panel, lo que creó la revisión `quivo-api-00004-4n4`; el readiness se verificó
-sano inmediatamente después. **Si el panel cambia de URL, el API deja de aceptarlo** y hay que
-actualizar la variable. Está documentado en `scripts/deploy-web.sh`, que automatiza todo el
-procedimiento.
-
-**Trampa del build, para quien lo repita:** `NEXT_PUBLIC_API_URL` se hornea en build time y va
-**sin** `/v1` (el código concatena el prefijo en cada llamada, `client.ts:36`). Si falta al
-buildear, Next inlinea el fallback `http://localhost:3000` y el panel sale roto sin ningún error
-visible. Por eso el script verifica los chunks de `.next/static` dentro del contenedor antes de
-desplegar — mirar el HTML servido no sirve: `/` redirige a `/login` y las `NEXT_PUBLIC_*` viven
-en el JavaScript compilado, no en el HTML.
+**`CORS_ORIGIN` ahora acopla los dos servicios.** `main.ts:51-54` usa un string único —no un array,
+no una regex— y estaba sin setear. Si el panel cambia de URL, el API deja de aceptarlo.
+`scripts/deploy-web.sh` automatiza todo el procedimiento y documenta las tres trampas:
+`NEXT_PUBLIC_API_URL` va **sin** `/v1` (el código concatena el prefijo), va como `--build-arg` y no
+como variable del servicio (las `NEXT_PUBLIC_*` se inlinean en build time; si falta, Next hornea el
+fallback `localhost:3000` sin ningún error visible), y `CORS_ORIGIN` tiene que ser la URL exacta
+sin barra final.
 
 ### Lo que el panel destapó: el seed del piloto estaba a medias
 
-Con el panel arriba, `GET /v1/vehiculos` devolvía **500** y lo dejaba vacío. La causa no era
-RLS —`withTenantContext` ya hace coalesce de `null` a string vacío, y todos los demás listados
-respondían 200 para la cuenta global— sino **los datos placeholder del seed**:
+Con el panel arriba, `GET /v1/vehiculos` devolvía **500**. La causa no era RLS —`withTenantContext`
+ya hace coalesce de `null` a string vacío— sino los datos placeholder del seed. En cadena, cada uno
+descubierto al chocarlo:
 
-- `placa: 'PILOTO001'` no matchea el regex de placa boliviana (3-4 números + 3 letras).
-- `color: 'PLACEHOLDER'` no está en `ColorVehiculoSchema`.
-- Y el vehículo **no tenía socio propietario**: el seed crea socio solo para el sindicato demo
-  (`seed.ts:155`), nunca para el piloto, así que la activación lo rechazaba.
+1. `placa: 'PILOTO001'` no matchea el regex de placa boliviana; `color: 'PLACEHOLDER'` no está en el
+   enum. Una fila inválida tumbaba el listado entero.
+2. El vehículo **no tenía socio propietario** — el seed crea socio solo para el sindicato demo.
+3. El **CI del conductor no pasaba el login**: `PILOTO-CI-001` falla el regex de CI boliviano que usa
+   el endpoint de autenticación, aunque sí pasaba la lectura.
+4. **No existía ninguna rotación** para el piloto: sin asignación publicada vigente, el login del
+   conductor devuelve 404.
+5. El **input de PIN del conductor corta en 6 dígitos** (`driver-login-screen.tsx:207`) mientras el
+   backend acepta 6-12 y el input del vehículo permite 12. Un PIN de 8 dígitos es válido, se fija sin
+   error, y es **imposible de tipear** (QUI-388).
+6. Al dar de baja los puntos de control demo se descubrió que **el paquete del día no filtraba por
+   `estado`**: le bajaba al conductor los puntos fantasma junto con los reales. Arreglado en PR #25
+   —que encontró el mismo patrón en `paradas`— y desplegado en `api:v3`: el paquete pasó de 16 a 14
+   puntos, verificado en vivo.
 
-Se corrigió **vía el API REST del propio panel**, no con SQL directo, para que pasara por
-validación y quedara en auditoría. Estado actual de los datos del piloto, **todos placeholder
-pendientes de reemplazo por el CTO**:
+Todo se corrigió **vía el API REST**, no con SQL directo, para que pasara por validación y quedara
+en auditoría.
 
-| Campo | Valor cargado |
-|---|---|
-| Placa | `1111AAA` |
-| Marca / modelo | `PLACEHOLDER` |
-| Color | `blanco` |
-| Socio propietario | `SOCIO PILOTO POR DEFINIR` (creado esta noche, no existía) |
-| Conductor | `PLACEHOLDER — conductor piloto`, CI `PILOTO-CI-001` |
+Se decidió **no** filtrar `Ruta.estado` en el paquete del día: es una búsqueda por id, no una lista,
+y filtrarla convertiría "geometría posiblemente vieja" en un `NotFoundException` que voltea el
+paquete entero si alguien desactiva una ruta a mitad de ciclo. Peor modo de falla, sin incidente que
+lo justifique.
 
-⚠️ **El login móvil es placa + PIN.** La placa pasó de `PILOTO001` a `1111AAA`, así que el
-conductor entra con **`1111AAA`** y el PIN original (que no se tocó). `auth-movil.service.ts`
-compara contra `placaNormalizada`. **Cuando se cargue la placa real, la credencial cambia otra
-vez** y hay que avisarle al conductor.
+### Fix de fondo: un dato corrupto no tumba un listado
 
-Se barrieron los 16 listados del panel: ningún otro 500. El conductor no fallaba por una
-asimetría del código — `ConductorSchema` usa `z.string()` simple para lectura, mientras
-`VehiculoSchema` aplica los schemas estrictos también al leer. Es la única entidad así.
+`listar()` ahora usa `mapearTolerante`: omite la fila que no valida y la registra en el log con su id
+y los campos que fallaron —deliberadamente ruidoso, porque una fila desaparecida en silencio es peor
+que un 500— y solo atrapa `ZodError`, re-lanzando cualquier otro error. Se suma un
+`ZodExceptionFilter` global que devuelve 422 en vez del 500 opaco.
 
-**Fix de fondo aplicado:** `listar()` ahora tolera filas corruptas (las omite y las loguea con
-id y campos fallidos) y un `ZodExceptionFilter` global devuelve 422 en vez del 500 opaco. El
-patrón vulnerable existe en 14 servicios, pero solo Vehículo tiene hoy una fila que lo dispare;
-el helper `mapearTolerante` queda listo para migrar el resto.
+Alcance limitado a propósito: el patrón existe en 14 servicios, pero **solo `VehiculoSchema` usa los
+schemas estrictos también para lectura** — el resto valida con `z.string()` al leer, así que sus
+placeholders del seed pasan. El helper queda listo para migrar el resto (QUI-386).
 
-### La cadena de login móvil, verificada de punta a punta
+### El patrón que atraviesa todo el día
 
-Preguntar por el PIN destapó tres bloqueantes más, todos del mismo origen: **el seed del piloto
-quedó a medias**. Ninguno se habría visto hasta que el conductor intentara entrar en la calle.
+**Backend y cliente validan distinto, y nada lo detecta.** El CI del conductor pasaba la lectura
+pero no el login. El PIN pasa el backend pero no el input. El vehículo acepta 12 dígitos y el
+conductor 6. Seis bugs de la misma familia, cada uno descubierto chocándolo en caliente.
 
-1. **Los PINs eran irrecuperables.** Se hashean con `better-auth/crypto`, de un solo sentido, y
-   solo se imprimen una vez en el stdout del seed. Se fijaron nuevos vía
-   `PUT /v1/mobile/credenciales/{vehiculos,conductores}/:id`.
-2. **El CI del conductor no pasaba el login.** `PILOTO-CI-001` no matchea el regex de CI
-   boliviano que usa el endpoint de autenticación. La fila sí pasaba la lectura, porque
-   `ConductorSchema` usa `z.string()` simple — la validación estricta solo vive en los schemas de
-   creación. Corregido a `00000000 LP`.
-3. **No existía ninguna rotación.** El seed nunca creó una para el piloto, y sin asignación
-   publicada vigente el login del conductor devuelve 404. Se creó la rotación `2026-08-piloto`
-   (`86d20fcf-931d-40cb-8062-bf605f161709`), publicada, con **15 asignaciones del 17 al 31 de
-   agosto**, una por día.
+**Y la CI no corre `eas build`.** Todo lo que solo se ejerce en el build nativo —config plugins,
+resolución de binarios bajo pnpm, inyección de variables de EAS, versión de Node del worker— no lo
+prueba nadie hasta que alguien aprieta el botón. Los siete bloqueantes del día pasaron limpios por
+`lint`, `typecheck`, 350 tests y CI verde. Un job que corra `expo prebuild` + `assembleRelease` los
+habría atrapado a todos (QUI-371).
 
-**Credenciales operativas del piloto** (las anteriores ya no sirven):
+**Lección operativa:** verificar contra el `node_modules` instalado, no contra la doc de `main` del
+proyecto upstream. Dos de los hallazgos fueron comentarios de código que describían una versión del
+SDK distinta de la que corre acá.
 
-| Qué | Valor |
-|---|---|
-| Placa del vehículo | `1111AAA` |
-| PIN del vehículo | `76179397` |
-| CI del conductor | `00000000 LP` |
-| PIN del conductor | `18218968` |
+---
 
-**Cómo funciona el login, por si algo falla en campo:** son dos pasos —
-`POST /v1/mobile/auth/vehiculo` con placa+PIN devuelve un `challengeToken`, y
-`POST /v1/mobile/auth/conductor` con ese token + CI + PIN devuelve la sesión. `deviceId` es
-obligatorio en **ambos**. La búsqueda de asignación filtra por **fecha calendario exacta** de
-Bolivia, no por rango, y **no filtra por turno**: el turno solo importa porque más de una
-asignación en el mismo día hace que el login devuelva `seleccion_requerida` en vez de tokens. El
-`venceAt` cubre hasta las 23:59:59 hora Bolivia, así que el horario real de trabajo no afecta.
+## Deuda y decisiones abiertas
 
-Verificado en vivo con una rotación de prueba solo para hoy (después anulada): la cadena completa
-devuelve tokens, y `GET /v1/mobile/asignacion-del-dia` responde 200 con la geometría de la ruta y
-los 2 puntos de control.
-
-### El alcance real del piloto, según el CTO (2026-08-16)
-
-El sindicato tiene muchas líneas y rotaciones. Se arranca con el **grupo de antiguos**, que
-**alterna días entre la línea Z12 y la 120** (la troncal, la más demandada). **Mañana lunes 17
-toca Z12, con un solo vehículo**; el resto del grupo se absorbe durante la semana.
-
-**La ruta y los puntos de control reales todavía no llegaron** — el sindicato los envía hoy
-(Z12) y entre hoy y mañana (120). Hasta que se carguen, el piloto corre con la geometría demo del
-seed, lo que tiene una consecuencia concreta sobre el checklist: **los puntos 5 (puntos de control
-detectados solos) y 7 (reconstrucción del recorrido) no pueden validarse**, porque las coordenadas
-son de otra ruta. Los puntos 1, 2, 3, 4 y 6 —background, reboot, batería, huecos GPS y sync— sí
-son válidos, porque no dependen de la geometría.
-
-**Cuando lleguen los datos:** editar en el lugar la línea `...010` y la ruta `...011` que ya
-existen, en vez de crear nuevas — así la rotación publicada sigue siendo válida. Las asignaciones
-referencian la ruta por id y nunca embeben geometría, y el sistema lee todo en vivo (listados,
-paquete del día, reconstrucción y el worker de cumplimiento), así que no hay nada que recalcular.
-**Orden obligatorio:** primero la geometría de la ruta, después los puntos de control — el
-servidor valida que cada punto esté a ≤100 m de la geometría *vigente*, así que crearlos antes
-falla contra el trazado viejo.
-
-**Formato a pedir: KML de Google My Maps.** Su `<coordinates>` usa `lon,lat`, el mismo orden que
-GeoJSON, así que no hay riesgo de invertir el par. GPX también sirve pero sus `<trkpt>` traen
-`lat`/`lon` nombrados al revés del orden a construir — hay que invertirlos, y equivocarse ahí
-pone la ruta en el otro hemisferio sin ningún error visible. **No hay importador de GPX/KML/GeoJSON
-en el repo**: la carga es un `PATCH` con el GeoJSON en el body, o dibujar clic a clic en el editor
-del panel. Coordenadas en `[longitud, latitud]` (`packages/shared/src/geo.ts:3`).
-
-### Brechas de modelo detectadas, para decidir después del piloto
-
-- **Las "vueltas" no existen en el modelo.** La regla operativa real del sindicato es cumplir N
-  vueltas por día, pero no hay ningún schema ni servicio que lo represente. El dato crudo queda
-  capturado (cada pasada por un punto de control se registra), así que es derivable, pero hoy el
-  sistema no calcula ni reporta "debía dar 5, dio 4".
-- **La alternancia Z12/120 no está modelada como patrón.** La rotación actual asigna la misma ruta
-  los 15 días. Cuando exista la 120 hay que rehacerla para que alterne.
-- **`DELETE` de una asignación con sesión asociada devuelve 500** en vez de un 409 legible:
-  `SesionOperativa.asignacion` tiene `onDelete: Restrict` y `rotaciones.service.ts` solo traduce
-  P2002, no P2003.
-
-### Qué queda
-
-| Paso | Quién | Estado |
-|---|---|---|
-| **Prueba en teléfono real** — los 7 puntos del plan | CTO | ⏳ Pendiente. Es lo único que falta antes de mañana |
-| Rotar el `SENTRY_AUTH_TOKEN` | CTO | ⏳ Se pegó en un chat; darlo por expuesto |
-
-**Rotar el token:** revocarlo en Sentry, crear uno nuevo y recargarlo con `eas env:create`. El
-alcance es solo Sentry —lectura/escritura del proyecto y lectura de la org, no toca el backend ni
-la base— pero los eventos de Sentry de un piloto real pueden traer datos de ubicación.
-
-### El punto ciego, ahora con cinco casos
-
-Todo lo de arriba —los tres bloqueantes que encontraron los reviews más los cuatro que encontró
-el build— vive en el mismo agujero:
-
-Los bloqueantes del build salieron todos del mismo agujero: **la CI no corre `eas build`**. Todo
-lo que solo se ejerce durante el build nativo —config plugins, resolución de binarios bajo pnpm,
-inyección de variables de EAS, versión de Node del worker— hoy no lo prueba nadie hasta que
-alguien aprieta el botón. Los cuatro casos concretos que pasaron limpios por `lint`, `typecheck`,
-350 tests y dos CI verdes:
-
-1. Una opción de config plugin que no existe en la versión instalada (`disableAutoUpload`).
-2. Un binario (`@sentry/cli`) no resoluble bajo el layout aislado de pnpm, cuyo fallo devolvía
-   `null` en Groovy sin lanzar, así que ni siquiera entraba en la rama de recuperación.
-3. Un campo faltante (`environment`) del que depende que las variables secretas de EAS lleguen al
-   job, porque se inyectan del lado del servidor.
-4. **El primer build real murió en `INSTALL_DEPENDENCIES`, antes de instalar una sola
-   dependencia**, por algo que no tenía nada que ver con Sentry: el worker de EAS corre Node
-   20.19.4 por default, el repo declara `packageManager: pnpm@11.3.0`, y pnpm 11 requiere Node
-   >= 22.13 porque usa `node:sqlite`:
-   `Error [ERR_UNKNOWN_BUILTIN_MODULE]: No such built-in module: node:sqlite`.
-   El repo pedía Node 22 en `engines`, en `.nvmrc` y en la CI (`node-version-file: .nvmrc`) —
-   `eas.json` era el único lugar donde no estaba declarado.
-
-**Issue post-piloto, ahora con evidencia de sobra:** un job de CI que corra `expo prebuild` +
-`assembleRelease` sobre `apps/mobile`. No hace falta que firme ni que suba nada; alcanza con que
-compile. **Habría atrapado los siete.** Cada vuelta de build costó ~15 minutos y descubrió
-exactamente un bug, en serie, el día antes del piloto.
-
-**Segundo issue post-piloto:** sacar `prisma generate` del `postinstall` de `packages/db` y
-llamarlo explícitamente donde haga falta, en vez de que corra ciegamente en cualquier
-`pnpm install` del monorepo — incluidos builds que no tocan esa carpeta. El placeholder de
-`DATABASE_URL` en `eas.json` es un parche, no la solución.
-
-**Tercer issue, menor:** el worker de EAS instaló `pnpm@10.14.0` pese a que el `package.json` de
-la raíz declara `packageManager: pnpm@11.3.0` (parece leer el de `apps/mobile`, que no tiene ese
-campo). No causó problemas porque el lockfile es compatible con ambas, pero local y worker no
-coinciden.
-
-**Segunda lección, más barata de aplicar ya:** verificar contra el `node_modules` instalado, no
-contra la doc de `main` del proyecto upstream. Los dos primeros hallazgos fueron comentarios de
-código que describían una versión del SDK distinta de la que corre acá.
-
-### QUI-367 — el checklist ya tiene umbrales
-
-[`piloto/checklist-aceptacion-e2e.md`](piloto/checklist-aceptacion-e2e.md) pasó de casillas
-binarias a umbrales numéricos con criterios de aborto. Lo que cambió y por qué:
-
-- **Gate previo reescrito.** Ya no pide el spike GPS de 8 h (QUI-216 quedó absorbido por la
-  prueba del domingo). Ahora exige lo que sí es bloqueante hoy: `/health` por HTTPS desde fuera,
-  aislamiento cross-tenant verificado a mano, y **que el APK firmado apunte a Cloud Run
-  verificado en el APK instalado**, no solo en el `.env` del build.
-- **Los 7 puntos de la prueba en teléfono** tienen umbral cada uno (batería ≤10%/h con objetivo
-  ≤5%/h, ningún hueco GPS >2 min, ≥90% de puntos de control detectados solos, p95 de sync
-  ≤5 min).
-- **Umbrales binarios**, que un solo caso rompe: 0 eventos perdidos, 0 duplicados tras
-  reintentos, 0 filas visibles cross-tenant, 0 detecciones fuera del radio.
-- **7 criterios de aborto (A1–A7)** que dicen qué hacer, no solo que algo salió mal. El más
-  importante: **abortar nunca significa borrar el outbox del teléfono** — los eventos pendientes
-  son la única copia de la jornada. Ante pérdida de eventos (A2) se para la sincronización y no
-  se reinstala la app. Ante fuga cross-tenant (A3) se para el piloto: es incidente de seguridad,
-  no bug de campo.
-- **Tabla de mediciones por jornada**, que es lo que después cierra QUI-253 con acta.
-
-### Deuda asumida a conciencia para llegar al lunes
-
-Ninguna bloquea el arranque, pero las tres primeras conviene no olvidarlas:
+### Asumida a conciencia para llegar al lunes
 
 | Deuda | Riesgo real |
 |---|---|
-| **QUI-363** — prueba negativa de RLS | La suite de aislamiento nunca se verificó rompiendo una policy a propósito. Mientras no exista, su verde no prueba nada. Compensado hoy solo por la verificación manual cross-tenant |
-| **QUI-213** — infra sin Terraform | El entorno del piloto no se puede recrear desde el repo |
-| **Transistorsoft** — trial, vence **2026-09-15** | `grace_builds` en cero. Decidir la compra antes de esa fecha o el próximo build no sale |
+| **`Quivo123!` en el panel público** (QUI-381) | Credencial del repo con rol que bypassea RLS, expuesta a internet sobre la base del piloto. Primera tarea post-piloto |
+| **QUI-363** — prueba negativa de RLS | La suite de aislamiento nunca se verificó rompiendo una policy a propósito. Su verde no prueba nada. Compensado solo por la verificación manual cross-tenant |
+| **QUI-370** — infra sin Terraform | **Dos** servicios de Cloud Run fuera de IaC, y el acoplamiento por `CORS_ORIGIN` entre ellos no está expresado en ningún lado |
+| **Transistorsoft** — trial, vence **2026-09-15** | `grace_builds` en cero. Decidir la compra antes de esa fecha o el próximo build no sale (QUI-374) |
 | QUI-355, 360, 361, 362, 252, 347, 250 | Hardening diferido, 16 pts |
+
+### Brechas de modelo, para decidir después del piloto
+
+- **La estructura de grupos del sindicato no existe** (QUI-382). El sindicato organiza a sus socios
+  en una jerarquía —el grupo de 80 se divide en 2 de 40, y cada uno en 2 de 20, `1a` y `1b`— y **el
+  grupo determina en qué línea trabaja cada socio**. Hoy `Socio` cuelga plano de `Sindicato`. La
+  generación de rotaciones hace round-robin sobre **todos** los vehículos y conductores activos, así
+  que con dos grupos mezclaría gente de uno en la línea del otro. No se nota con un solo vehículo.
+- **La alternancia de líneas no está modelada** (QUI-383). El grupo alterna Z12 y 120 día por medio;
+  la rotación actual asigna la misma ruta los 15 días.
+- **Las "vueltas" no existen** (QUI-384). La regla real del sindicato es cumplir N vueltas por día.
+  El dato crudo queda capturado —cada pasada se registra— pero el sistema no calcula ni reporta
+  "debía dar 5, dio 4".
+- **Los ramales de la 120 son variantes sin usar.** Su KML tiene tronco ida/vuelta más **7 ramales a
+  comunidades**; la descripción del mapa dice que *"llegando a Tiquipaya la línea 120 se reparte a
+  sus diferentes comunidades mediante letrero"*. El modelo tiene variantes de ruta y nadie las usa.
+  Hoy el sistema asigna una ruta fija por jornada y no hay forma de saber qué ramal tomó el conductor.
+- **`puntos_control` no tiene campo de nombre.** Solo `orden`, `coord`, `radioToleranciaM`,
+  `obligatorio` y `estado`. Los 24 puntos de medición se distinguen por `orden >= 2` — frágil cuando
+  lleguen los puntos reales del sindicato.
+- **`DELETE` de una asignación con sesión asociada devuelve 500** en vez de un 409 legible
+  (QUI-385): `onDelete: Restrict` y `rotaciones.service.ts` solo traduce P2002, no P2003.
+
+### Mapas: hallazgos sin resolver
+
+- **Los tiles salen directo de `tile.openstreetmap.org`**, en web y en móvil. Es el servidor de la
+  OSM Foundation, cuya política de uso lo restringe a desarrollo y volumen bajo, **no a producción**.
+  Con miles de dispositivos el riesgo es bloqueo o throttling sin aviso. Ningún ADR evaluó esto: quedó
+  como default de desarrollo. La salida no es Google — es un proveedor de tiles que sirve los mismos
+  datos de OSM por unos dólares al mes.
+- **No se usa MapLibre, se usa Leaflet.** Tres documentos de arquitectura dicen MapLibre; el grep da
+  cero. La decisión real está en el registro de QUI-229 pero los docs nunca se actualizaron.
+- **No hay map matching.** La reconstrucción dibuja GPS crudo con su ruido.
+- La investigación de costos de Google Maps quedó **cortada por límite de sesión** antes de entregar
+  resultados. Alcanzó a marcar que encontró hallazgos de términos de servicio —posibles restricciones
+  sobre persistir coordenadas y sobre telemática de flotas— pero no los detalló. **Hay que relanzarla**
+  antes de tomar cualquier decisión.
 
 ### Vía 2 — congelada por decisión del CTO
 
-Los tres PRs de Valentina (#8 QUI-339, #9 QUI-340, #14 QUI-342) siguen abiertos y **no se tocan
-hasta después del arranque**: no bloquean el lunes. Pendiente al retomar: **#14 tiene la CI en
-rojo y ese rojo esconde un bug real** — el refactor de fechas renombró variables en 2 de 4
-funciones, y `exportes.service.ts:191` y `:280` siguen interpolando `${desde}`/`${hasta}` en
-`$queryRaw`; sin filtro de fecha eso mete `undefined` en el SQL.
+Los tres PRs de Valentina (#8 QUI-339, #9 QUI-340, #14 QUI-342) siguen abiertos y no se tocan hasta
+después del arranque. Pendiente al retomar: **#14 tiene la CI en rojo y ese rojo esconde un bug
+real** — el refactor de fechas renombró variables en 2 de 4 funciones, y `exportes.service.ts:191` y
+`:280` siguen interpolando `${desde}`/`${hasta}` en `$queryRaw`; sin filtro de fecha eso mete
+`undefined` en el SQL.
 
-### Lo que sigue sin validarse
+---
 
-El tracking en background **nunca se midió en un teléfono** y el load test (k6, QUI-250) nunca
-corrió. El piloto de mañana es, en los hechos, la primera validación de campo del stack móvil.
-Atenuante de diseño: la app es offline-first con outbox SQLite — solo necesita red para bajar el
-paquete del día y sincronizar, no durante la jornada.
+## Qué falta antes del arranque
+
+| Paso | Quién | Estado |
+|---|---|---|
+| **Prueba física en el teléfono** — los 7 puntos del checklist | CTO | ⏳ Lo único que falta. Ya hay asignación publicada para hoy, así que se puede hacer |
+| Cargar los datos reales del vehículo, conductor y socio | CTO | ⏳ Todos son placeholder. **Cambiar la placa cambia la credencial de login** |
+| Confirmar si el retorno de Z12 llega hasta Salomón Romero | CTO | ⏳ El KML termina en Univalle, 1 740 m antes |
+| Rotar el `SENTRY_AUTH_TOKEN` | CTO | ⏳ Se pegó en un chat; darlo por expuesto |
+| Puntos de control reales del sindicato | Sindicato | ⏳ Prometidos; los 24 de medición no los reemplazan |
+| Cargar la línea 120 | — | ⏳ KML ya descargado. Decidir antes qué hacer con los 7 ramales |
+
+**Lo que sigue sin validarse:** el tracking en background **nunca se midió en un teléfono** y el load
+test (k6, QUI-250) nunca corrió. El piloto de mañana es, en los hechos, la primera validación de
+campo del stack móvil. Atenuante de diseño: la app es offline-first con outbox SQLite — solo necesita
+red para bajar el paquete del día y sincronizar, no durante la jornada.
 
 ## Qué es el proyecto
 
