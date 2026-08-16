@@ -16,8 +16,8 @@
 ## Estado — 2026-08-16 (domingo, víspera del piloto)
 
 **Repo:** [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control)
-(privado) · `main` = `3876384` · **CI verde** (`ci` + `acceptance`) · 12 PRs mergeados · 4 ramas
-vivas (`feat/config-movil-piloto` = PR #16, más las tres de Valentina congeladas).
+(privado) · `main` = `8884804` · **CI verde** (`ci` + `acceptance`) · 13 PRs mergeados · 3 ramas
+vivas (las tres de Valentina, congeladas).
 
 **Dónde estamos:** el backend **está desplegado y verificado en GCP Cloud Run**
 (`southamerica-west1`). El piloto real arranca **mañana lunes 17 de agosto con un auto y un
@@ -78,12 +78,45 @@ El token nunca se commitea.
 
 | Paso | Quién | Estado |
 |---|---|---|
-| Fixes del review sobre PR #16 | subagente | En curso |
-| Cargar `SENTRY_AUTH_TOKEN` + org/project como secret de EAS | CTO | Pendiente |
-| Mergear PR #16 | CTO | Bloqueado por los dos anteriores |
-| **QUI-364** — build release firmado en EAS | CTO | Pendiente. **Tiene que salir después del merge**, o el APK apunta al backend viejo |
-| **Prueba en teléfono real** — los 7 puntos del plan | CTO | Pendiente. Teléfonos disponibles hoy |
-| **QUI-367** — checklist con umbrales y criterios de aborto | — | ✅ Cerrado hoy (ver abajo) |
+| Fixes del review sobre PR #16 (dos rondas) | subagentes | ✅ Mergeado — PR #16, `8884804` |
+| Cargar `SENTRY_AUTH_TOKEN` + org/project | CTO | ✅ Secret de EAS, scope project, entorno `production` |
+| **QUI-364** — build release firmado en EAS | CTO | 🔄 Lanzado después del merge |
+| **Prueba en teléfono real** — los 7 puntos del plan | CTO | ⏳ Teléfonos disponibles hoy |
+| **QUI-367** — checklist con umbrales y criterios de aborto | — | ✅ Cerrado |
+
+**Rotar el `SENTRY_AUTH_TOKEN` cuando salga el build.** El token se pegó en un chat durante la
+sesión, así que hay que darlo por expuesto: revocarlo en Sentry, crear uno nuevo y recargarlo con
+`eas env:create`. El alcance del token es solo Sentry (lectura/escritura del proyecto y lectura de
+la org) — no toca el backend ni la base — pero los eventos de Sentry de un piloto real pueden
+traer datos de ubicación.
+
+### El punto ciego que dejaron los dos reviews
+
+Los bloqueantes del build salieron todos del mismo agujero: **la CI no corre `eas build`**. Todo
+lo que solo se ejerce durante el build nativo —config plugins, resolución de binarios bajo pnpm,
+inyección de variables de EAS, versión de Node del worker— hoy no lo prueba nadie hasta que
+alguien aprieta el botón. Los cuatro casos concretos que pasaron limpios por `lint`, `typecheck`,
+350 tests y dos CI verdes:
+
+1. Una opción de config plugin que no existe en la versión instalada (`disableAutoUpload`).
+2. Un binario (`@sentry/cli`) no resoluble bajo el layout aislado de pnpm, cuyo fallo devolvía
+   `null` en Groovy sin lanzar, así que ni siquiera entraba en la rama de recuperación.
+3. Un campo faltante (`environment`) del que depende que las variables secretas de EAS lleguen al
+   job, porque se inyectan del lado del servidor.
+4. **El primer build real murió en `INSTALL_DEPENDENCIES`, antes de instalar una sola
+   dependencia**, por algo que no tenía nada que ver con Sentry: el worker de EAS corre Node
+   20.19.4 por default, el repo declara `packageManager: pnpm@11.3.0`, y pnpm 11 requiere Node
+   >= 22.13 porque usa `node:sqlite`:
+   `Error [ERR_UNKNOWN_BUILTIN_MODULE]: No such built-in module: node:sqlite`.
+   El repo pedía Node 22 en `engines`, en `.nvmrc` y en la CI (`node-version-file: .nvmrc`) —
+   `eas.json` era el único lugar donde no estaba declarado.
+
+**Issue post-piloto:** un job de CI que al menos corra `expo prebuild` + `assembleRelease` sobre
+`apps/mobile`. No hace falta que firme ni que suba nada; alcanza con que compile.
+
+**Segunda lección, más barata de aplicar ya:** verificar contra el `node_modules` instalado, no
+contra la doc de `main` del proyecto upstream. Los dos primeros hallazgos fueron comentarios de
+código que describían una versión del SDK distinta de la que corre acá.
 
 ### QUI-367 — el checklist ya tiene umbrales
 
