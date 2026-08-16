@@ -138,7 +138,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
   private async procesarGpsPoints(sindicatoId: string, eventos: EventoSync[]): Promise<number> {
     try {
       const tsFixDescartados = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-        insertarGpsPoints(tx, eventos),
+        insertarGpsPoints(tx, sindicatoId, eventos),
       );
       if (tsFixDescartados > 0) {
         // El evento traía `tsFix` pero no se pudo usar (formato inesperado del SDK, reloj del
@@ -253,7 +253,11 @@ export function agruparPorTipo(eventos: EventoSync[]): EventosPorTipo {
  * campo existe para eliminar. Un evento sin `tsFix` (app anterior) no cuenta: ahí el `ts` de
  * encolado es el comportamiento esperado, no una degradación.
  */
-export async function insertarGpsPoints(tx: Tx, eventos: EventoSync[]): Promise<number> {
+export async function insertarGpsPoints(
+  tx: Tx,
+  sindicatoId: string,
+  eventos: EventoSync[],
+): Promise<number> {
   let tsFixDescartados = 0;
   const filas = eventos.map((evento) => {
     const payload = evento.payload as unknown as PayloadGpsPoint;
@@ -271,14 +275,20 @@ export async function insertarGpsPoints(tx: Tx, eventos: EventoSync[]): Promise<
     if (payload.tsFix !== undefined && Date.parse(payload.tsFix) !== Date.parse(ts)) {
       tsFixDescartados += 1;
     }
+    // `sindicatoId` (QUI-358): viene del job de la cola (un lote es siempre de un único
+    // sindicato, ver `LoteIngestaJob`/`procesarLote`), no del payload del evento — mismo
+    // criterio de confianza que `procesarCumplimientoEnTx`/`insertarEventoOperativoEnTx`,
+    // que tampoco confían en el cliente para el tenant. Sin esto, la policy de RLS de
+    // `gps_points` (`tenant_isolation`) rechazaría el INSERT en cuanto la tabla deje de
+    // verse desde `admin_quivo` (bypass explícito, ver `withTenantContext` acá arriba).
     return Prisma.sql`(
       ${evento.eventId}::uuid, ${payload.sesionId}::uuid, ${evento.deviceId},
       ${ts}::timestamptz, ${payload.lat}, ${payload.lng},
-      ${payload.accuracy ?? null}, ${payload.speed ?? null}, now()
+      ${payload.accuracy ?? null}, ${payload.speed ?? null}, now(), ${sindicatoId}
     )`;
   });
   await tx.$executeRaw(Prisma.sql`
-    INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at)
+    INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
     VALUES ${Prisma.join(filas)}
     ON CONFLICT (event_id, ts) DO NOTHING
   `);

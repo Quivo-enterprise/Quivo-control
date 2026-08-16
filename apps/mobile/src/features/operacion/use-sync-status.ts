@@ -1,15 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNetInfo } from '@react-native-community/netinfo';
+import { Vibration } from 'react-native';
 import { abrirOutbox, contarEventosPendientes } from '../../db/outbox';
 import { iniciarSyncAutomatico, sincronizarPendientes, type ResultadoSync } from './sync-outbox';
 
 const REFRESCO_MS = 15_000;
-
-export interface EstadoSyncStatus {
-  pendientes: number;
-  errorSync: string | null;
-  isOffline: boolean;
-  isSyncing: boolean;
-}
 
 /**
  * Estado de conexión/sync para la pantalla de operación (QUI-240/243) — pendientes en el
@@ -25,16 +20,94 @@ export interface EstadoSyncStatus {
  * releer el contador) como red de seguridad — NetInfo puede comportarse distinto entre
  * fabricantes, sobre todo en los dispositivos de gama baja a los que apunta esta app.
  */
-import { useNetInfo } from '@react-native-community/netinfo';
-import { Vibration } from 'react-native';
 
-export function useSyncStatus(obtenerAccessToken: () => Promise<string | null>): EstadoSyncStatus {
+/** A partir de cuántos fallos consecutivos de sincronización se considera "fallo definitivo"
+ * (QUI-346) — distinto de "reintentando". `sync-outbox.ts` reintenta indefinidamente con
+ * backoff hasta 60s y por diseño NUNCA se rinde (no queremos perder eventos), pero el
+ * conductor necesita una señal distinta de "sigue reintentando en silencio" cuando ya
+ * llevamos varios intentos fallidos seguidos. Exportado y puro para poder testear el umbral
+ * sin levantar el hook completo — este paquete no tiene entorno de testing con DOM/hooks. */
+export const UMBRAL_FALLO_DEFINITIVO = 3;
+export function esFalloDefinitivo(fallosConsecutivos: number): boolean {
+  return fallosConsecutivos >= UMBRAL_FALLO_DEFINITIVO;
+}
+
+/**
+ * Pura y testeada aparte (`use-sync-status.test.ts`) — acá vivía el bug real (QUI-348 #1, el
+ * que rompía QUI-261 entero). `isInternetReachable` queda en `null` mientras NetInfo todavía
+ * no resuelve la conectividad real, que es el estado más común en Android de gama baja (el
+ * target de este proyecto) apenas arranca la app o cambia de red. Con `&&` alcanzaba con que
+ * CUALQUIERA de los dos todavía no fuera exactamente `false` para que `isOffline` quedara
+ * pegado en `false` — típicamente `isConnected === false` pero `isInternetReachable === null`
+ * (sin resolver): el banner offline nunca aparecía, el badge nunca decía "(local)" y el
+ * intervalo seguía intentando sincronizar contra una red que no existe.
+ * `isConnected === false` YA es una señal suficiente y confiable de que no hay conexión — no
+ * hace falta esperar a que `isInternetReachable` también resuelva a `false`.
+ */
+export function calcularIsOffline(
+  isConnected: boolean | null,
+  isInternetReachable: boolean | null,
+): boolean {
+  return isConnected === false || isInternetReachable === false;
+}
+
+export interface EstadoSyncStatus {
+  pendientes: number;
+  errorSync: string | null;
+  /** Distingue "llevamos varios intentos fallidos seguidos" (QUI-346) de un fallo aislado —
+   * el motor de sync sigue reintentando en segundo plano; esto es solo una señal para la UI. */
+  syncFalloDefinitivo: boolean;
+  /** `null` = todavía no hubo ninguna sincronización exitosa en esta sesión de la pantalla. */
+  ultimaSyncOk: Date | null;
+  isOffline: boolean;
+  isSyncing: boolean;
+}
+
+export interface UseSyncStatusOpciones {
+  /** QUI-338 (c): flag de demo/QA para forzar un fallo de sincronización sin tener que
+   * desconectar de verdad el dispositivo. Quien la pasa es responsable de gatearla detrás de
+   * `__DEV__` (ver el botón de debug en `operation-screen.tsx`) — nunca debe quedar accesible
+   * en el build de release. */
+  simularFalloSync?: boolean;
+}
+
+export function useSyncStatus(
+  obtenerAccessToken: () => Promise<string | null>,
+  opciones?: UseSyncStatusOpciones,
+): EstadoSyncStatus {
   const [pendientes, setPendientes] = useState(0);
   const [errorSync, setErrorSync] = useState<string | null>(null);
+  const [syncFalloDefinitivo, setSyncFalloDefinitivo] = useState(false);
+  const [ultimaSyncOk, setUltimaSyncOk] = useState<Date | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const netInfo = useNetInfo();
-  const isOffline = netInfo.isConnected === false && netInfo.isInternetReachable === false;
+  const isOffline = calcularIsOffline(netInfo.isConnected, netInfo.isInternetReachable);
   const tokenRef = useRef<string | null>(null);
+  const simularFalloSync = opciones?.simularFalloSync ?? false;
+
+  // El intervalo de sync de abajo necesita el valor MÁS RECIENTE de `isOffline` en cada tick,
+  // pero sin que cada cambio de conectividad destruya y recree el motor de sync completo (el
+  // resto de QUI-348 #1): `isOffline` vivía en las dependencias del efecto de sync, así que
+  // cualquier parpadeo de red desmontaba `iniciarSyncAutomatico` y lo volvía a montar. Ahora
+  // se lee por ref dentro del intervalo en vez de por closure/dependencia del efecto.
+  const isOfflineRef = useRef(isOffline);
+  useEffect(() => {
+    isOfflineRef.current = isOffline;
+  }, [isOffline]);
+
+  // Contador de fallos consecutivos (QUI-346) — compartido entre el reintento automático de
+  // `iniciarSyncAutomatico` y el sync directo del intervalo de abajo, para que "fallo
+  // definitivo" refleje intentos reales sin importar qué camino los disparó.
+  const fallosConsecutivosRef = useRef(0);
+  const registrarExito = useCallback(() => {
+    fallosConsecutivosRef.current = 0;
+    setSyncFalloDefinitivo(false);
+    setUltimaSyncOk(new Date());
+  }, []);
+  const registrarFallo = useCallback(() => {
+    fallosConsecutivosRef.current += 1;
+    if (esFalloDefinitivo(fallosConsecutivosRef.current)) setSyncFalloDefinitivo(true);
+  }, []);
 
   // Efecto para vibración al recuperar conexión
   const wasOffline = useRef(false);
@@ -71,7 +144,13 @@ export function useSyncStatus(obtenerAccessToken: () => Promise<string | null>):
         (resultado: ResultadoSync) => {
           if (!activo) return;
           setIsSyncing(false);
-          setErrorSync('error' in resultado ? resultado.error : null);
+          if ('error' in resultado) {
+            setErrorSync(resultado.error);
+            registrarFallo();
+          } else {
+            setErrorSync(null);
+            registrarExito();
+          }
           void actualizarPendientes();
         },
         () => {
@@ -84,13 +163,19 @@ export function useSyncStatus(obtenerAccessToken: () => Promise<string | null>):
     const intervalo = setInterval(() => {
       void (async () => {
         const token = await releerToken();
-        if (token && !isOffline) {
+        if (token && !isOfflineRef.current) {
           try {
             setIsSyncing(true);
+            if (simularFalloSync) {
+              // QUI-338 (c): camino de demo/QA — nunca toca la red de verdad.
+              throw new Error('Fallo de sincronización simulado (QA)');
+            }
             await sincronizarPendientes(token);
             setErrorSync(null);
+            registrarExito();
           } catch (error) {
             setErrorSync(error instanceof Error ? error.message : 'Error de sincronización');
+            registrarFallo();
           } finally {
             setIsSyncing(false);
           }
@@ -104,7 +189,7 @@ export function useSyncStatus(obtenerAccessToken: () => Promise<string | null>):
       detenerSync();
       clearInterval(intervalo);
     };
-  }, [obtenerAccessToken, actualizarPendientes, isOffline]);
+  }, [obtenerAccessToken, actualizarPendientes, simularFalloSync, registrarExito, registrarFallo]);
 
-  return { pendientes, errorSync, isOffline, isSyncing };
+  return { pendientes, errorSync, syncFalloDefinitivo, ultimaSyncOk, isOffline, isSyncing };
 }

@@ -145,13 +145,19 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       payload: { sesionId, lat: -17.78, lng: -63.18, accuracy: 5, speed: 10 },
     });
 
-    await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) => insertarGpsPoints(tx, [eventoGps]));
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      insertarGpsPoints(tx, sindicatoId, [eventoGps]),
+    );
     // Reenviar el mismo evento (mismo event_id+ts) no debe duplicar la fila.
-    await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) => insertarGpsPoints(tx, [eventoGps]));
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      insertarGpsPoints(tx, sindicatoId, [eventoGps]),
+    );
 
-    const filas = await prisma.$queryRaw<{ total: bigint }[]>`
-      SELECT COUNT(*) as total FROM gps_points WHERE event_id = ${eventId}::uuid
-    `;
+    const filas = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      tx.$queryRaw<{ total: bigint }[]>`
+        SELECT COUNT(*) as total FROM gps_points WHERE event_id = ${eventId}::uuid
+      `,
+    );
     expect(Number(filas[0]!.total)).toBe(1);
   });
 
@@ -168,12 +174,14 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
     });
 
     await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-      insertarGpsPoints(tx, [eventoGps]),
+      insertarGpsPoints(tx, sindicatoId, [eventoGps]),
     );
 
-    const filas = await prisma.$queryRaw<{ ts: Date }[]>`
-      SELECT ts FROM gps_points WHERE event_id = ${eventId}::uuid
-    `;
+    const filas = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      tx.$queryRaw<{ ts: Date }[]>`
+        SELECT ts FROM gps_points WHERE event_id = ${eventId}::uuid
+      `,
+    );
     expect(filas).toHaveLength(1);
     expect(filas[0]?.ts.toISOString()).toBe(tsFix);
   });
@@ -190,12 +198,14 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
     });
 
     await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-      insertarGpsPoints(tx, [eventoGps]),
+      insertarGpsPoints(tx, sindicatoId, [eventoGps]),
     );
 
-    const filas = await prisma.$queryRaw<{ ts: Date }[]>`
-      SELECT ts FROM gps_points WHERE event_id = ${eventId}::uuid
-    `;
+    const filas = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      tx.$queryRaw<{ ts: Date }[]>`
+        SELECT ts FROM gps_points WHERE event_id = ${eventId}::uuid
+      `,
+    );
     expect(filas).toHaveLength(1);
     expect(filas[0]?.ts.toISOString()).toBe(ts);
   });
@@ -203,7 +213,7 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
   it('reporta cuántos tsFix llegaron inusables, para que el fallback no sea silencioso', async () => {
     const tsEncolado = new Date().toISOString();
     const descartados = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-      insertarGpsPoints(tx, [
+      insertarGpsPoints(tx, sindicatoId, [
         // Sin tsFix: comportamiento esperado de una app anterior, NO cuenta como degradación.
         evento({
           eventId: randomUUID(),

@@ -9,6 +9,12 @@ export interface GpsArchiveRow {
   accuracy: number | null;
   speed: number | null;
   received_at: Date | string;
+  // QUI-358/hallazgo 2 (code-review piloto): agregada por
+  // `20260815120000_gps_points_sindicato_rls` — sin esta columna el archivo frío pierde la
+  // atribución de tenant y no se puede restaurar a una tabla protegida por RLS sin
+  // re-derivar el dueño vía `sesiones_operativas`. Nombre de columna real en Postgres es
+  // camelCase entre comillas (`"sindicatoId"`), ver el SELECT en retencion-gps.service.ts.
+  sindicatoId: string;
 }
 
 const PARTITION_PATTERN = /^gps_points_(\d{4})(\d{2})(\d{2})$/;
@@ -36,7 +42,7 @@ export function gpsArchiveObjectKey(prefix: string, partitionName: string): stri
 }
 
 export const GPS_ARCHIVE_CSV_HEADER =
-  'event_id,sesion_id,device_id,ts,lat,lng,accuracy,speed,received_at\n';
+  'event_id,sesion_id,device_id,ts,lat,lng,accuracy,speed,received_at,sindicatoId\n';
 
 export function gpsRowToCsv(row: GpsArchiveRow): string {
   return [
@@ -49,6 +55,7 @@ export function gpsRowToCsv(row: GpsArchiveRow): string {
     row.accuracy,
     row.speed,
     isoDate(row.received_at),
+    row.sindicatoId,
   ]
     .map(csvCell)
     .join(',')

@@ -4,11 +4,24 @@
 > cómo se llegó hasta acá, PR por PR. Se actualiza al cierre de cada iteración/PR.
 >
 > **Este documento registra la ejecución. La intención vive en
-> [`plan-finalizacion-piloto.md`](plan-finalizacion-piloto.md)** — alcance, fases, asignación y
-> fechas hasta el piloto. Si los dos se contradicen, el plan manda sobre qué hay que hacer y
-> este handoff sobre qué se hizo.
+> [`plan-piloto-lunes-17-agosto.md`](plan-piloto-lunes-17-agosto.md)** — alcance, fases,
+> asignación y fechas hasta el piloto. Si los dos se contradicen, el plan manda sobre qué hay que
+> hacer y este handoff sobre qué se hizo.
+>
+> ⚠️ **[`plan-finalizacion-piloto.md`](plan-finalizacion-piloto.md) quedó obsoleto el
+> 2026-08-15.** Apunta el piloto al 5–19 de octubre y trata el spike GPS (QUI-216) como gate
+> previo; el CTO confirmó ese día que **el piloto arranca el lunes 17 de agosto con un auto**.
+> Se conserva como registro histórico de las decisiones de escala y de los recortes a M7.
 
 ## Estado — 2026-08-15
+
+> **Actualización del 2026-08-15 (tarde):** el piloto real arranca el **lunes 17 de agosto con un
+> auto**, por APK directo instalado a mano (Google Play queda fuera hasta que se pague la cuenta)
+> y con el **trial de 30 días de Transistorsoft** (vence ~16 de septiembre). Eso convierte el
+> despliegue en GCP Cloud Run en bloqueante duro — el teléfono del conductor no llega a
+> `localhost` — y absorbe el spike de 8 h (QUI-216) en la prueba del domingo en teléfono real.
+> El estado de más abajo es anterior a ese cambio; ver
+> [`plan-piloto-lunes-17-agosto.md`](plan-piloto-lunes-17-agosto.md).
 
 **Repo:** [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control)
 (privado) · `main` = `3aea2c7` · **CI verde** (`ci` + `acceptance`) · solo existe `main`, sin

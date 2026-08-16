@@ -18,6 +18,7 @@
 // revienta al importar `PrismaClient` de '@prisma/client' con
 // "does not provide an export named 'PrismaClient'".
 import 'dotenv/config';
+import { randomInt } from 'node:crypto';
 import { APIError } from 'better-auth';
 import { hashPassword } from 'better-auth/crypto';
 import type { Prisma } from '@prisma/client';
@@ -70,6 +71,22 @@ const NOMBRE_CONDUCTOR_POR_SINDICATO = {
   [SINDICATO_B_ID]: 'Lucía Choque Mamani',
 } as const;
 
+// QUI-366: sindicato del piloto real (arranca el lunes) + segundo tenant SOLO para las
+// pruebas de aislamiento que exige `docs/piloto/checklist-aceptacion-e2e.md` ("Usuario de
+// otro sindicato no puede leer ni modificar estos datos" — aparece dos veces ahí). Ninguno
+// de los dos se mezcla con `SINDICATO_A_ID`/`SINDICATO_B_ID` de arriba (esos son datos demo
+// genéricos usados por CREDENCIALES.md, tests de aceptación y RLS ad hoc desde antes; no
+// son el piloto). IDs fijos, mismo criterio de idempotencia que el resto del archivo.
+const SINDICATO_PILOTO_ID = '33333333-3333-4333-8333-333333333333';
+const SINDICATO_AISLAMIENTO_ID = '44444444-4444-4444-8444-444444444444';
+
+const LINEA_PILOTO_ID = '33333333-3333-4333-8333-000000000010';
+const RUTA_PILOTO_ID = '33333333-3333-4333-8333-000000000011';
+const PC_PILOTO_1_ID = '33333333-3333-4333-8333-000000000012';
+const PC_PILOTO_2_ID = '33333333-3333-4333-8333-000000000013';
+const VEHICULO_PILOTO_ID = '33333333-3333-4333-8333-000000000014';
+const CONDUCTOR_PILOTO_ID = '33333333-3333-4333-8333-000000000015';
+
 const USERS = [
   { email: 'admin@quivo.local', name: 'Admin QUIVO', rol: 'admin_quivo', sindicatoId: null },
   {
@@ -77,6 +94,14 @@ const USERS = [
     name: 'Admin Sindicato 1º de Mayo',
     rol: 'admin_sindicato',
     sindicatoId: SINDICATO_A_ID,
+  },
+  // Único propósito: intentar leer/modificar datos del sindicato piloto desde OTRO tenant
+  // durante el checklist de aceptación E2E (QUI-366) — no representa un sindicato real.
+  {
+    email: 'admin@aislamiento.local',
+    name: 'Admin Sindicato de Aislamiento (solo pruebas E2E)',
+    rol: 'admin_sindicato',
+    sindicatoId: SINDICATO_AISLAMIENTO_ID,
   },
 ] as const;
 
@@ -410,6 +435,186 @@ async function seedReglas(tx: Prisma.TransactionClient): Promise<void> {
   console.log('Regla + sanción de prueba listas para Sindicato 1º de Mayo');
 }
 
+/** PIN numérico aleatorio (8 dígitos, cumple `PinMovilSchema` de `@quivo/shared`: 6-12
+ * dígitos) para la credencial INICIAL del vehículo/conductor del piloto real. A propósito
+ * NUNCA es `SEED_PIN_VEHICULO`/`SEED_PIN_CONDUCTOR` (los PINs demo publicados en
+ * CREDENCIALES.md): esos alcanzan para autenticar contra la placa/CI real del piloto una
+ * vez asignados el lunes, lo que contaminaría evidencia legal de sanciones. */
+function generarPinPiloto(): string {
+  return randomInt(0, 100_000_000).toString().padStart(8, '0');
+}
+
+/** Credencial inicial de una entidad del piloto (vehículo o conductor): usa el PIN de
+ * `envVar` si el CTO ya lo fijó, si no genera uno aleatorio con `generarPinPiloto`. Se
+ * calcula SIEMPRE (aunque la fila ya exista y termine sin usarse) para que el `create` del
+ * `upsert` llamador nunca reciba un hash vacío/nulo por una carrera entre el chequeo de
+ * existencia y el upsert — el peor caso posible ahí es "generamos un PIN de más", nunca
+ * "la fila queda sin credencial". Quien decide si se imprime es el llamador, según si la
+ * fila ya existía. */
+async function generarCredencialInicialPiloto(
+  envVar: 'PILOTO_PIN_VEHICULO' | 'PILOTO_PIN_CONDUCTOR',
+): Promise<{ pin: string; hash: string; desdeEnv: boolean }> {
+  const pinDesdeEnv = process.env[envVar];
+  const pin = pinDesdeEnv ?? generarPinPiloto();
+  const hash = await hashPassword(pin);
+  return { pin, hash, desdeEnv: Boolean(pinDesdeEnv) };
+}
+
+/** Sindicato del piloto real que arranca el lunes (QUI-366): 1 línea, su ruta con
+ * geometría PostGIS, sus puntos de control, 1 vehículo y 1 conductor — el piloto arranca
+ * con UN solo auto, no con la muestra de 8-15 que pedía el ticket original (decisión
+ * explícita del CTO dado el timing: esto se siembra el sábado para un piloto del lunes).
+ * Todos los valores de identidad (nombre, placa, CI, geometría reutilizada de la ruta demo)
+ * son placeholder DELIBERADAMENTE reconocibles como tales — el CTO carga los datos reales
+ * del sindicato antes de que arranque el piloto.
+ *
+ * Seguridad (hallazgo de /security-review, High, confianza 9/10, 2026-08-15): este
+ * sindicato NO recibe las credenciales demo (`SEED_PIN_VEHICULO`/`SEED_PIN_CONDUCTOR`,
+ * publicadas en CREDENCIALES.md) — antes las reusaba vía el parámetro `credenciales` que
+ * compartía con `seedDatosDePrueba`, lo que le daba a cualquiera con lectura del repo un
+ * camino de auth-móvil completo (placa/CI hardcodeadas acá abajo + PIN publicado) hacia una
+ * sesión operativa real una vez asignado el vehículo el lunes — evidencia legal de sanciones
+ * a un conductor real. Ahora genera su propia credencial random (`generarCredencialInicialPiloto`)
+ * y, punto crítico, los dos `upsert` de abajo tienen `update: {}`: si la fila ya existe, la
+ * corrida NO toca `credencialHash` — así una corrida repetida del seed (pasa en cada build de
+ * CI, y ya corrió contra Cloud SQL productivo) no puede revertir un PIN que el CTO ya rotó a
+ * mano con `establecerPinVehiculo`/`establecerPinConductor`. */
+async function seedSindicatoPiloto(tx: Prisma.TransactionClient): Promise<void> {
+  await tx.sindicato.upsert({
+    where: { id: SINDICATO_PILOTO_ID },
+    update: {},
+    create: {
+      id: SINDICATO_PILOTO_ID,
+      nombre: 'Sindicato Piloto — PLACEHOLDER (datos reales los carga el CTO)',
+      estado: 'activo',
+    },
+  });
+
+  const linea = await tx.linea.upsert({
+    where: { id: LINEA_PILOTO_ID },
+    update: {},
+    create: {
+      id: LINEA_PILOTO_ID,
+      sindicatoId: SINDICATO_PILOTO_ID,
+      codigo: 'L1-PILOTO',
+      nombre: 'Línea 1 — PLACEHOLDER piloto',
+      color: '#FF5B4D',
+    },
+  });
+
+  // Geometría reutilizada de `GEOMETRIA_DEMO` (Cochabamba, calles reales) a propósito: es
+  // solo para que el piloto tenga algo real sobre lo que probar ruteo/geofencing antes de
+  // que el CTO cargue la ruta real del sindicato — no se genera una segunda geometría
+  // grande solo para diferenciarla visualmente de la de `RUTA_A_ID`.
+  await tx.$executeRaw`
+    INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+    VALUES (${RUTA_PILOTO_ID}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_DEMO}), 4326)::geography, 'activo', now(), now())
+    ON CONFLICT (id) DO UPDATE SET geometria = EXCLUDED.geometria
+  `;
+
+  await tx.$executeRaw`
+    INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, "createdAt", "updatedAt")
+    VALUES
+      (${PC_PILOTO_1_ID}, ${RUTA_PILOTO_ID}, 0, ST_SetSRID(ST_MakePoint(-66.156214, -17.388445), 4326)::geography, 100, true, now(), now()),
+      (${PC_PILOTO_2_ID}, ${RUTA_PILOTO_ID}, 1, ST_SetSRID(ST_MakePoint(-66.15481, -17.396053), 4326)::geography, 100, true, now(), now())
+    ON CONFLICT (id) DO UPDATE SET coord = EXCLUDED.coord, orden = EXCLUDED.orden
+  `;
+
+  const vehiculoPilotoExistente = await tx.vehiculo.findUnique({
+    where: { id: VEHICULO_PILOTO_ID },
+    select: { id: true },
+  });
+  const conductorPilotoExistente = await tx.conductor.findUnique({
+    where: { id: CONDUCTOR_PILOTO_ID },
+    select: { id: true },
+  });
+  const [credencialVehiculo, credencialConductor] = await Promise.all([
+    generarCredencialInicialPiloto('PILOTO_PIN_VEHICULO'),
+    generarCredencialInicialPiloto('PILOTO_PIN_CONDUCTOR'),
+  ]);
+
+  // `update: {}`: a propósito no toca `credencialHash` en corridas siguientes (ver
+  // comentario de seguridad arriba de esta función) — el `create` solo corre la primera
+  // vez que la fila no existe, así que el PIN generado/impreso abajo únicamente aplica
+  // cuando `*PilotoExistente` es null.
+  await tx.vehiculo.upsert({
+    where: { id: VEHICULO_PILOTO_ID },
+    update: {},
+    create: {
+      id: VEHICULO_PILOTO_ID,
+      sindicatoId: SINDICATO_PILOTO_ID,
+      placa: 'PILOTO001',
+      placaNormalizada: 'PILOTO001',
+      tipo: 'bus_urbano',
+      marca: 'PLACEHOLDER',
+      modelo: 'PLACEHOLDER',
+      color: 'PLACEHOLDER',
+      capacidad: 40,
+      estado: 'activo',
+      credencialHash: credencialVehiculo.hash,
+    },
+  });
+
+  await tx.conductor.upsert({
+    where: { id: CONDUCTOR_PILOTO_ID },
+    update: {},
+    create: {
+      id: CONDUCTOR_PILOTO_ID,
+      sindicatoId: SINDICATO_PILOTO_ID,
+      nombre: 'PLACEHOLDER — conductor piloto',
+      documentoIdentidad: 'PILOTO-CI-001',
+      licenciaConducir: 'PILOTO-LIC-001',
+      estado: 'activo',
+      credencialHash: credencialConductor.hash,
+    },
+  });
+
+  if (!vehiculoPilotoExistente) {
+    if (credencialVehiculo.desdeEnv) {
+      console.log('Vehículo piloto: credencial creada con el PIN de PILOTO_PIN_VEHICULO.');
+    } else {
+      console.log(
+        `Vehículo piloto: PIN generado = ${credencialVehiculo.pin} — ANOTALO AHORA, no ` +
+          'se vuelve a mostrar. Para rotarlo más adelante usá el endpoint de credenciales ' +
+          '(establecerPinVehiculo), no re-corras el seed: no lo va a cambiar.',
+      );
+    }
+  }
+  if (!conductorPilotoExistente) {
+    if (credencialConductor.desdeEnv) {
+      console.log('Conductor piloto: credencial creada con el PIN de PILOTO_PIN_CONDUCTOR.');
+    } else {
+      console.log(
+        `Conductor piloto: PIN generado = ${credencialConductor.pin} — ANOTALO AHORA, no ` +
+          'se vuelve a mostrar. Para rotarlo más adelante usá el endpoint de credenciales ' +
+          '(establecerPinConductor), no re-corras el seed: no lo va a cambiar.',
+      );
+    }
+  }
+
+  console.log(
+    'Sindicato piloto (placeholder) listo: 1 línea, 1 ruta, 2 puntos de control, 1 vehículo, 1 conductor',
+  );
+}
+
+/** Segundo tenant, exclusivamente para las pruebas de aislamiento que exige
+ * `docs/piloto/checklist-aceptacion-e2e.md` ("Usuario de otro sindicato no puede leer ni
+ * modificar estos datos" — dos veces en ese checklist). Sin este sindicato (y el usuario
+ * `admin@aislamiento.local` de `USERS`) esa verificación es imposible de ejecutar contra
+ * el sindicato piloto real: no existía ningún tenant separado del piloto en ningún lado. */
+async function seedSindicatoAislamiento(tx: Prisma.TransactionClient): Promise<void> {
+  await tx.sindicato.upsert({
+    where: { id: SINDICATO_AISLAMIENTO_ID },
+    update: {},
+    create: {
+      id: SINDICATO_AISLAMIENTO_ID,
+      nombre: 'Sindicato de Aislamiento — solo pruebas E2E (no es el piloto)',
+      estado: 'activo',
+    },
+  });
+  console.log('Sindicato de aislamiento listo (tenant separado para probar que no filtra datos del piloto)');
+}
+
 async function seed(): Promise<void> {
   const [vehiculoHash, conductorHash] = await Promise.all([
     hashPassword(SEED_PIN_VEHICULO),
@@ -422,6 +627,8 @@ async function seed(): Promise<void> {
     await seedDatosDePrueba(tx, { vehiculoHash, conductorHash });
     await seedRotaciones(tx);
     await seedReglas(tx);
+    await seedSindicatoPiloto(tx);
+    await seedSindicatoAislamiento(tx);
   });
   // Better-Auth usa su propio adapter Prisma (no pasa por `tx`) pero sus tablas no tienen
   // RLS (ver comentario en la migración `rls_multi_tenant`), así que corre bien afuera.

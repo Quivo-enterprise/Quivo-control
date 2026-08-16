@@ -23,4 +23,22 @@ describe('HealthController', () => {
     );
     await expect(controller.check()).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
+
+  // QUI-354: liveness/readiness separados.
+  it('live() no toca el service y siempre responde ok', () => {
+    const controller = new HealthController(fakeService({ status: 'ok', db: 'up', redis: 'up' }));
+    expect(controller.live()).toEqual({ status: 'ok' });
+  });
+
+  it('ready() devuelve el resultado cuando db y redis están up', async () => {
+    const controller = new HealthController(fakeService({ status: 'ok', db: 'up', redis: 'up' }));
+    await expect(controller.ready()).resolves.toEqual({ status: 'ok', db: 'up', redis: 'up' });
+  });
+
+  it('ready() lanza ServiceUnavailableException si algo está down', async () => {
+    const controller = new HealthController(
+      fakeService({ status: 'degraded', db: 'up', redis: 'down' }),
+    );
+    await expect(controller.ready()).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
 });

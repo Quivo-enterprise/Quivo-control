@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertGpsPartitionName,
   gpsArchiveObjectKey,
+  GPS_ARCHIVE_CSV_HEADER,
   gpsRowToCsv,
   quoteIdentifier,
 } from './retencion-gps.logic.js';
@@ -33,9 +34,16 @@ describe('retención GPS', () => {
         accuracy: null,
         speed: 5,
         received_at: new Date('2026-01-31T12:00:01.000Z'),
+        sindicatoId: 'sindicato-1',
       }),
     ).toBe(
-      'event,session,"bus,""42""",2026-01-31T12:00:00.000Z,-16.4,-68.1,,5,2026-01-31T12:00:01.000Z\n',
+      'event,session,"bus,""42""",2026-01-31T12:00:00.000Z,-16.4,-68.1,,5,2026-01-31T12:00:01.000Z,sindicato-1\n',
+    );
+  });
+
+  it('el header CSV incluye sindicatoId (QUI-358/hallazgo 2) para poder restaurar a una tabla con RLS', () => {
+    expect(GPS_ARCHIVE_CSV_HEADER).toBe(
+      'event_id,sesion_id,device_id,ts,lat,lng,accuracy,speed,received_at,sindicatoId\n',
     );
   });
 });

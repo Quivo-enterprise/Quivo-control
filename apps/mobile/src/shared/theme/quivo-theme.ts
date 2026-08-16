@@ -16,6 +16,22 @@ export const quivoColors = {
   successSoft: '#DDF4EA',
   danger: '#C53B4A',
   dangerSoft: '#FBE5E8',
+  // Familia "warning" (offline/almacenamiento casi lleno/etc.) — antes hardcodeada en varios
+  // archivos (`next-control-sheet.tsx`, `offline-banner.tsx`, `operation-screen.tsx`) como
+  // `#FF9500` / `#FFE5C5` / `#FFC480` / `#C96800` / `#8A4700` sueltos, sin token (QUI-348).
+  warning: '#FF9500',
+  warningSoft: '#FFE5C5',
+  warningBorder: '#FFC480',
+  warningStrong: '#C96800',
+  warningText: '#8A4700',
+  // Badge "sincronizando" del sheet de próximo control — antes `#E5F6FF`/`#99DBFF` sueltos.
+  syncingSoft: '#E5F6FF',
+  syncingBorder: '#99DBFF',
+  // Azul informativo (nota de seguridad en el login del conductor) — antes `#E3F2FD` suelto.
+  infoSoft: '#E3F2FD',
+  // Navy del gradiente de splash / texto sobre `infoSoft` — antes `#0F1B5C`/`#1a2d7f` sueltos.
+  navy: '#0F1B5C',
+  navySoft: '#1a2d7f',
   white: '#FFFFFF',
   blackOverlay: 'rgba(26, 26, 46, 0.12)',
   glassSurface: 'rgba(255, 255, 255, 0.76)',

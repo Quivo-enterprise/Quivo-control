@@ -23,6 +23,11 @@ describe('RLS multi-tenant', () => {
   const sindicatoBId = randomUUID();
   let reglaAId: string;
   let reglaBId: string;
+  // `gps_points` (QUI-358) no tiene modelo Prisma (tabla particionada, ver comentario en
+  // schema.prisma) — se inserta/lee con SQL crudo, mismo patrón que `worker.ts`.
+  const gpsEventAId = randomUUID();
+  const gpsEventBId = randomUUID();
+  const gpsTs = new Date();
 
   beforeAll(async () => {
     // Guardia de conexión: si `prisma` terminó conectado con un rol superusuario o con
@@ -173,12 +178,27 @@ describe('RLS multi-tenant', () => {
           estado: 'pendiente',
         },
       });
+
+      // `sesion_id` no tiene FK propia en `gps_points` (ver comentario en la migración de
+      // creación) — cualquier UUID sirve para este test, lo que importa es `sindicatoId`.
+      await tx.$executeRaw`
+        INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, received_at, "sindicatoId")
+        VALUES (${gpsEventAId}::uuid, ${randomUUID()}::uuid, 'device-rls-a', ${gpsTs}, -17.78, -63.18, now(), ${sindicatoAId})
+      `;
+      await tx.$executeRaw`
+        INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, received_at, "sindicatoId")
+        VALUES (${gpsEventBId}::uuid, ${randomUUID()}::uuid, 'device-rls-b', ${gpsTs}, -17.78, -63.18, now(), ${sindicatoBId})
+      `;
     });
   });
 
   afterAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
       const sindicatoIds = { in: [sindicatoAId, sindicatoBId] };
+      // Antes que nada: `gps_points."sindicatoId"` tiene FK `ON DELETE RESTRICT` a
+      // `sindicatos` (QUI-358) — borrar el sindicato con estas filas todavía apuntándole
+      // rompería el resto del cleanup.
+      await tx.$executeRaw`DELETE FROM gps_points WHERE event_id IN (${gpsEventAId}::uuid, ${gpsEventBId}::uuid)`;
       await tx.sancion.deleteMany({ where: { sindicatoId: sindicatoIds } });
       await tx.regla.deleteMany({ where: { sindicatoId: sindicatoIds } });
       await tx.rotacion.deleteMany({ where: { sindicatoId: sindicatoIds } });
@@ -289,5 +309,49 @@ describe('RLS multi-tenant', () => {
         tx.rotacion.create({ data: { sindicatoId: sindicatoBId, periodo: 'HACK', estado: 'borrador' } }),
       ),
     ).rejects.toThrow();
+  });
+
+  // QUI-358: gps_points no tiene modelo Prisma (tabla particionada, ver schema.prisma), así
+  // que se prueba con SQL crudo — mismo patrón que el resto de este archivo, pero vía
+  // `$queryRaw`/`$executeRaw` en vez del Client tipado.
+  it('sindicato A no ve puntos GPS de sindicato B', async () => {
+    const rows = await withTenantContext({ rol: 'admin_sindicato', sindicatoId: sindicatoAId }, (tx) =>
+      tx.$queryRaw<{ event_id: string }[]>`SELECT event_id FROM gps_points WHERE event_id = ${gpsEventBId}::uuid`,
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('sindicato A sí ve sus propios puntos GPS', async () => {
+    const rows = await withTenantContext({ rol: 'admin_sindicato', sindicatoId: sindicatoAId }, (tx) =>
+      tx.$queryRaw<{ event_id: string }[]>`SELECT event_id FROM gps_points WHERE event_id = ${gpsEventAId}::uuid`,
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it('sindicato A no puede modificar (UPDATE) un punto GPS de sindicato B', async () => {
+    const result = await withTenantContext({ rol: 'admin_sindicato', sindicatoId: sindicatoAId }, (tx) =>
+      tx.$executeRaw`UPDATE gps_points SET device_id = 'hackeado' WHERE event_id = ${gpsEventBId}::uuid`,
+    );
+    expect(result).toBe(0);
+  });
+
+  it('sindicato A no puede crear (INSERT) un punto GPS a nombre de sindicato B', async () => {
+    await expect(
+      withTenantContext({ rol: 'admin_sindicato', sindicatoId: sindicatoAId }, (tx) =>
+        tx.$executeRaw`
+          INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, received_at, "sindicatoId")
+          VALUES (${randomUUID()}::uuid, ${randomUUID()}::uuid, 'hack', ${gpsTs}, -17.78, -63.18, now(), ${sindicatoBId})
+        `,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('admin_quivo ve puntos GPS de ambos sindicatos (bypass explícito)', async () => {
+    const rows = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.$queryRaw<{ event_id: string }[]>`
+        SELECT event_id FROM gps_points WHERE event_id IN (${gpsEventAId}::uuid, ${gpsEventBId}::uuid)
+      `,
+    );
+    expect(rows).toHaveLength(2);
   });
 });
