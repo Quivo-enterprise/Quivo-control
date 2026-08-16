@@ -108,10 +108,15 @@ al día**. Los puntos de control y de medición de ese tramo inicial tienen una 
 detección, mientras el resto tiene una por vuelta. Una detección baja ahí es muestra chica, no
 falla del sistema — no confundir una cosa con la otra al calcular el porcentaje.
 
-**Duda abierta:** a partir de la segunda vuelta, saliendo de Univalle hacia Villa Armonía, ¿el
-trufi toma exactamente el trazado de la ruta de ida o hay un tramo distinto? Univalle está a 656 m
-de esa polilínea, así que tiene que empalmar en algún punto, y no está claro si ese empalme está
-dentro del KML. Verificable con la traza cruda del día 1.
+**Hipótesis de trabajo, a verificar el día 1:** según el sindicato **mantienen el mismo recorrido
+durante todo el día** — el grupo solo determina desde dónde sale cada uno en la mañana. Bajo esa
+premisa la geometría cargada sirve tal cual y no falta ningún tramo.
+
+Lo que queda por confirmar es un detalle geométrico: Univalle está a 656 m de la polilínea de ida,
+así que al salir de ahí el trufi tiene que empalmar con ese trazado en algún punto. La traza cruda
+del día 1 lo responde sin trabajo extra: si los puntos GPS caen sobre la ruta cargada desde el
+arranque de cada vuelta, la premisa se confirma; si hay un tramo sistemáticamente fuera del
+trazado, ahí está el pedazo que falta.
 
 ### Cómo se lee lo que pase mañana
 
