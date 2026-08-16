@@ -5,7 +5,10 @@
   },
   "build": {
     "base": {
-      "node": "22.23.1"
+      "node": "22.23.1",
+      "env": {
+        "DATABASE_URL": "postgresql://build:build@localhost:5432/build_placeholder"
+      }
     },
     "development": {
       "extends": "base",
