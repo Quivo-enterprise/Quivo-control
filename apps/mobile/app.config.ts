@@ -17,6 +17,12 @@ import type { ExpoConfig } from 'expo/config';
 export default (): ExpoConfig => ({
   name: 'QUIVO Conductor',
   slug: 'quivo-conductor',
+  // Cuenta dueña del proyecto de EAS (confirmado con `eas project:info`: fullName
+  // `@shadow00/quivo-conductor`, mismo ID que `extra.eas.projectId` de abajo). Sin esto, si
+  // alguien más del equipo (u otra sesión de CI) corre `eas build` logueado con otra cuenta de
+  // Expo, el error sale disfrazado de problema de credenciales en vez de decir claramente que
+  // el proyecto pertenece a otra cuenta.
+  owner: 'shadow00',
   version: '0.1.0',
   orientation: 'portrait',
   newArchEnabled: false,
@@ -46,6 +52,14 @@ export default (): ExpoConfig => ({
     // taggear el `environment` de cada evento de Sentry. `EAS_BUILD_PROFILE` solo existe en
     // el entorno de build de EAS (no en el bundle JS) — este es el puente.
     easBuildProfile: process.env.EAS_BUILD_PROFILE ?? 'local',
+    // ID del proyecto de EAS (creado para el piloto del 17/08). Va hardcodeado porque
+    // `eas init` no puede escribir en un config dinámico como este (`app.config.ts` es TS,
+    // no JSON) — falla con "Cannot automatically write to dynamic config at: app.config.ts".
+    // Sin este ID en `extra.eas.projectId`, todos los comandos de EAS (`eas secret:create`,
+    // `eas build`) no saben a qué proyecto apuntar y fallan.
+    eas: {
+      projectId: '09e5dff3-e3dc-408f-a930-bc067a8ff69a',
+    },
   },
   plugins: [
     [
@@ -73,5 +87,51 @@ export default (): ExpoConfig => ({
     ],
     'expo-font',
     './plugins/withAndroidNetworkSecurityConfig',
+    [
+      '@sentry/react-native/expo',
+      // DSN de Sentry ya cargado (perfil `production` de `eas.json`, QUI-365). Este plugin es
+      // la mitad que faltaba: aplica el Sentry Gradle plugin (`sentry.gradle`, de
+      // `@sentry/react-native`, no el "Sentry Android Gradle Plugin" oficial) sobre el
+      // `android/` que EAS Build regenera en cada corrida (`android/` está en `.gitignore` —
+      // prebuild limpio siempre). Con los `props` actuales (sin `experimental_android.
+      // enableAndroidGradlePlugin`) esto sube el bundle JS + source maps (junto con el Sentry
+      // Metro plugin, ver `metro.config.js`) — NO sube proguard mapping ni símbolos nativos
+      // (NDK): eso solo lo hace `withSentryAndroidGradlePlugin`, que `withSentry.js`
+      // (`node_modules/@sentry/react-native/plugin/build/withSentry.js`) solo aplica si se pasa
+      // `experimental_android.enableAndroidGradlePlugin`, y acá no se pasa. En la práctica hoy
+      // no importa: R8/minify está apagado en la variante de release
+      // (`android/app/build.gradle` → `enableMinifyInReleaseBuilds` no está seteado, default
+      // `false`), así que no hay nada que ofuscar. Si algún día se activa la minificación, para
+      // tener los mappings habrá que agregar `experimental_android.enableAndroidGradlePlugin`
+      // acá (no lo actives ahora, cambiaría el comportamiento del build para el piloto). Sin
+      // este plugin en general, `Sentry.init()` en `sentry.ts` sigue funcionando (captura
+      // eventos), pero cualquier stack trace de un build de release llega minificado/ofuscado a
+      // Sentry — la mitad del valor de tenerlo.
+      //
+      // Nota de versión: acá corre `@sentry/react-native` 7.2.0. `PluginProps` en esa versión
+      // (`node_modules/@sentry/react-native/plugin/build/withSentry.d.ts`) solo reconoce
+      // `organization`, `project`, `authToken`, `url` y `experimental_android` — NO existe una
+      // opción `disableAutoUpload` (quedó acá de una versión distinta del SDK): el plugin la
+      // ignoraba en silencio, y la tarea de subida se registraba igual en `sentry.gradle`, cuyo
+      // gate real (`onlyIf { shouldSentryAutoUploadGeneral() }`) depende del env var
+      // `SENTRY_DISABLE_AUTO_UPLOAD`, no de un prop del plugin. Sin `organization`/`project`
+      // configurados, `sentry-cli` salía con exit code 1 ("An organization ID or slug is
+      // required") dentro de un `exec {}` de Gradle sin `ignoreExitValue` — eso rompía el build
+      // entero, no solo la subida de source maps.
+      //
+      // `organization`/`project` se leen de env en vez de hardcodearse acá: son los slugs reales
+      // (org `quivo-de`, proyecto `quivo-control-conductor`, confirmados con el CTO), pero
+      // viven como `SENTRY_ORG`/`SENTRY_PROJECT` en `eas.json` -> build.production.env (no son
+      // secretos — sin prefijo `EXPO_PUBLIC_` porque solo hacen falta durante el build nativo,
+      // igual que `TRANSISTORSOFT_LICENSE_KEY`, nunca en el bundle JS). NO se pasa `authToken`
+      // acá: quedaría en texto plano en la config resuelta de Expo. `sentry-cli` lo toma solo de
+      // la env var `SENTRY_AUTH_TOKEN`, cargada como env var SECRETA de EAS para el entorno
+      // `production` (confirmado con `eas env:list --environment production`) — nunca
+      // commiteada.
+      {
+        organization: process.env.SENTRY_ORG,
+        project: process.env.SENTRY_PROJECT,
+      },
+    ],
   ],
 });

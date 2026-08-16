@@ -57,6 +57,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
+    "@sentry/cli": "2.55.0",
     "@types/pako": "^2.0.3",
     "@types/react": "~19.1.17",
     "babel-preset-expo": "~54.0.12",

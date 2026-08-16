@@ -1,13 +1,18 @@
-import { initSentry } from './src/shared/observability/sentry';
-
-// QUI-365: tiene que ir ANTES que cualquier otro import de la app. Este archivo es el único
-// punto de entrada que Android evalúa tanto para el JS normal (hilo de UI, ver
+// QUI-365: este import tiene que ser LA PRIMERA línea de todo el archivo, y a propósito no
+// nombra ningún binding — importa solo por su efecto de lado. Los imports ESM se hoistean por
+// encima de cualquier sentencia suelta (`babel-preset-expo` los transpila a `require(...)`
+// emitidos arriba de todo el código del archivo), así que una llamada a `initSentry()` escrita
+// como sentencia normal —aunque esté primera en el texto— terminaba corriendo DESPUÉS de que
+// los imports de abajo (`expo`, `react-native-background-geolocation`, `./App`,
+// `./src/gps/headless-task`) ya se hubieran evaluado, porque esos imports también se hoistean.
+// Por eso el init real vive en su propio módulo, que lo ejecuta como side effect al importarse
+// (ver el detalle completo en `src/shared/observability/sentry-init.ts`), y ese import va antes
+// que cualquier otro acá: así el hoisting preserva el orden real de ejecución. Este archivo es
+// el único punto de entrada que Android evalúa tanto para el JS normal (hilo de UI, ver
 // `registerRootComponent` abajo) como para el headless task de Transistorsoft (ver el bloque
 // `registerHeadlessTask` más abajo) — el SDK nativo arranca un contexto JS SEPARADO para el
 // headless task tras el kill de la app, y ese contexto también ejecuta `index.js` desde cero.
-// Inicializar Sentry acá (y no adentro de un componente de React, que nunca se monta en el
-// contexto headless) es lo único que garantiza que un crash headless también quede reportado.
-initSentry();
+import './src/shared/observability/sentry-init';
 
 import { registerRootComponent } from 'expo';
 import BackgroundGeolocation from 'react-native-background-geolocation';

@@ -13,70 +13,124 @@
 > previo; el CTO confirmó ese día que **el piloto arranca el lunes 17 de agosto con un auto**.
 > Se conserva como registro histórico de las decisiones de escala y de los recortes a M7.
 
-## Estado — 2026-08-15
-
-> **Actualización del 2026-08-15 (tarde):** el piloto real arranca el **lunes 17 de agosto con un
-> auto**, por APK directo instalado a mano (Google Play queda fuera hasta que se pague la cuenta)
-> y con el **trial de 30 días de Transistorsoft** (vence ~16 de septiembre). Eso convierte el
-> despliegue en GCP Cloud Run en bloqueante duro — el teléfono del conductor no llega a
-> `localhost` — y absorbe el spike de 8 h (QUI-216) en la prueba del domingo en teléfono real.
-> El estado de más abajo es anterior a ese cambio; ver
-> [`plan-piloto-lunes-17-agosto.md`](plan-piloto-lunes-17-agosto.md).
+## Estado — 2026-08-16 (domingo, víspera del piloto)
 
 **Repo:** [Quivo-enterprise/quivo-control](https://github.com/Quivo-enterprise/quivo-control)
-(privado) · `main` = `3aea2c7` · **CI verde** (`ci` + `acceptance`) · solo existe `main`, sin
-ramas vivas · 12 PRs mergeados.
+(privado) · `main` = `3876384` · **CI verde** (`ci` + `acceptance`) · 12 PRs mergeados · 4 ramas
+vivas (`feat/config-movil-piloto` = PR #16, más las tres de Valentina congeladas).
 
-**Dónde estamos:** el producto está **código-completo y sin validar**. M1, M2 y M4 cerrados; la
-ingesta GPS por lotes idempotente funciona de punta a punta en local. Lo que falta no es
-funcionalidad, es **validación**: el tracking en background nunca se midió en un teléfono, el
-load test nunca corrió, y **no existe ningún entorno desplegado**.
+**Dónde estamos:** el backend **está desplegado y verificado en GCP Cloud Run**
+(`southamerica-west1`). El piloto real arranca **mañana lunes 17 de agosto con un auto y un
+conductor**. Lo que queda hoy no es código de producto: es cerrar el build del APK y probarlo en
+un teléfono en la calle.
 
-**El camino crítico es una sola persona (el CTO) y no se paraleliza.** Su primer eslabón es un
-gate físico.
+### Qué se cerró el sábado 15 — PR #15 (`3876384`, mergeado a `main`)
 
-### Milestones
+Todo el bloque "Sábado" del plan, en un solo PR: QUI-354 (Dockerfiles de `apps/api` y `apps/web`,
+`enableShutdownHooks()`, liveness/readiness separados) · QUI-356 (guardarraíl de arranque de
+`JWT_SECRET` + purga del default publicado + `JWT_REFRESH_TTL` a 7 d) · QUI-358 (`sindicatoId` +
+RLS en `gps_points`) · QUI-357 (`usesCleartextTraffic: false`) · QUI-359 (rotación del refresh
+token en el panel web) · QUI-366 (seed del sindicato piloto: 1 línea, 1 ruta, puntos de control,
+1 vehículo, 1 conductor, más el segundo tenant de aislamiento) · QUI-365 (Sentry en
+`apps/mobile`) · QUI-348 / QUI-338 / QUI-346 (los bugs de M6 que toca el conductor).
 
-| Milestone | Abiertas | Pts | Estado |
-|---|---|---|---|
-| **M0** — Fundaciones + spike GPS | 3 | 17 | **Acá está el gate.** Falta QUI-216 (spike), su licencia (QUI-350) y cerrar QUI-353 en el teléfono |
-| M1 — Núcleo administrativo | 0 | — | ✅ Cerrado |
-| M2 — Rotaciones | 0 | — | ✅ Cerrado |
-| M3 — App móvil + sync | 2 | 10 | QUI-237 (tracking en producción) depende del veredicto del spike |
-| M4 — Dashboard/reglas/auditoría | 1 | 2 | Solo QUI-342 (Valentina) |
-| M5 — Hardening + piloto | 21 | 50 | El grueso: infra, seguridad de despliegue, k6, piloto |
-| M6 — Sprint UI/UX Mobile | 2 | 6 | Atrasadas por el freeze de `apps/mobile` |
-| M7 — Post-piloto | 1 | 3 | Todo lo recortado a propósito |
+Verificado: lint, typecheck y 350 tests en verde; migraciones, seed y suite de RLS corridas
+**contra la instancia real de Cloud SQL**.
 
-**30 issues abiertas, 88 puntos** — 71 del CTO, 17 de Valentina. El plan contaba 53 pts
-tiqueteados contra ~95 de trabajo real; esa brecha ya se cerró: las tareas `N*` del plan
-existen ahora como QUI-349..369. **Usar esos IDs, no las `N*`.**
+**QUI-213 (GCP) quedó desplegado pero fuera del control de versiones.** No hay ningún `.tf` ni
+carpeta `infra/` en el repo: Cloud Run, Cloud SQL, Memorystore y Secret Manager se levantaron por
+consola/CLI. Verificado en vivo: liveness 200, readiness con `db` y `redis` arriba, login real
+contra Cloud SQL y aislamiento cross-tenant confirmado a mano. **Deuda registrada: el entorno del
+piloto no es reproducible desde el repo.** Terraform queda pendiente post-piloto.
 
-Target del proyecto: **2026-10-26** (piloto de campo 5–19 de octubre, acta el 26).
+### Qué está abierto hoy — PR #16 (`feat/config-movil-piloto`)
 
-### Qué bloquea, hoy
+Apunta la app móvil al backend real (`EXPO_PUBLIC_API_URL` a Cloud Run), carga el DSN de Sentry
+(antes era un no-op silencioso), agrega el plugin de Sentry y fija el `projectId` de EAS.
 
-| Bloqueo | Quién | Por qué importa |
+El code review del 2026-08-16 encontró que **el build de release iba a fallar** y que la
+instrumentación no cumplía su objetivo. Los cuatro hallazgos que importan:
+
+1. **`disableAutoUpload` no existe en `@sentry/react-native` 7.2.0.** El `PluginProps` de esa
+   versión solo admite `organization`, `project`, `authToken`, `url` y `experimental_android`; la
+   clave se pasaba y se ignoraba. La tarea de subida de source maps se registra igual en
+   `sentry.gradle` (su gate real es el env var `SENTRY_DISABLE_AUTO_UPLOAD`, no el prop del
+   plugin), corre dentro de `assembleRelease` y, sin org ni token, `sentry-cli` sale con exit
+   code 1 dentro de un `exec {}` sin `ignoreExitValue`. **Rompía el build entero, no era un
+   warning.** Comprobado ejecutando a mano el binario de `sentry-cli` que trae el repo.
+2. **Faltaba `metro.config.js` con `getSentryExpoConfig`.** Sin el serializer de Sentry el bundle
+   no lleva Debug ID, así que los source maps subidos no matchean: los stack traces seguirían
+   ilegibles aunque el token estuviera bien cargado.
+3. **Sentry inicializaba tarde.** En `index.js` la llamada a `initSentry()` estaba escrita antes
+   de los imports, pero los imports ESM se hoistean: Sentry arrancaba después de evaluar
+   `react-native-background-geolocation` y el headless task de GPS — justo el escenario que
+   QUI-365 existe para cubrir.
+4. **El perfil `development` de `eas.json` apuntaba al Cloud Run de producción.** Cualquier build
+   de development manejando en la calle habría escrito GPS y jornadas de prueba en la misma base
+   que guarda la evidencia del piloto. Además ese perfil es `developmentClient: true`: no embebe
+   bundle, así que ni siquiera servía para la prueba de campo.
+
+Decisión del CTO: **se va con source maps funcionando**, no con el atajo de desactivar la subida.
+`SENTRY_AUTH_TOKEN` va como secret de EAS; `SENTRY_ORG` y `SENTRY_PROJECT` como env del perfil.
+El token nunca se commitea.
+
+### Qué queda para hoy
+
+| Paso | Quién | Estado |
 |---|---|---|
-| **QUI-351** — cuenta de Play + declaración de background location | CTO, externo | Dispara **1 a 3 semanas de revisión manual de Google**, con rechazo frecuente en la primera vuelta. Es la dependencia más larga del proyecto y **nadie la empezó**: cada día que no arranca corre la fecha del piloto 1:1 |
-| **QUI-216** — spike GPS de 8 h en Android real | CTO, físico | **Gate D1.** Decide si el stack móvil sirve. Bloquea QUI-237 y todo M3 |
-| **QUI-350** — licencia trial v5 | CTO, externo | Necesaria para el build release del spike (el debug no la pide) |
-| **QUI-369** — conseguir el sindicato piloto | CTO, externo | Ninguna tarea del plan lo cubría. Bloquea QUI-366 y QUI-253 |
+| Fixes del review sobre PR #16 | subagente | En curso |
+| Cargar `SENTRY_AUTH_TOKEN` + org/project como secret de EAS | CTO | Pendiente |
+| Mergear PR #16 | CTO | Bloqueado por los dos anteriores |
+| **QUI-364** — build release firmado en EAS | CTO | Pendiente. **Tiene que salir después del merge**, o el APK apunta al backend viejo |
+| **Prueba en teléfono real** — los 7 puntos del plan | CTO | Pendiente. Teléfonos disponibles hoy |
+| **QUI-367** — checklist con umbrales y criterios de aborto | — | ✅ Cerrado hoy (ver abajo) |
 
-**Regla operativa vigente:** `apps/mobile` estuvo congelado para Valentina durante la migración
-(PR #10). Ya mergeó — **el freeze se levanta**.
+### QUI-367 — el checklist ya tiene umbrales
 
-### Qué se puede avanzar sin el teléfono
+[`piloto/checklist-aceptacion-e2e.md`](piloto/checklist-aceptacion-e2e.md) pasó de casillas
+binarias a umbrales numéricos con criterios de aborto. Lo que cambió y por qué:
 
-QUI-354 (Dockerfiles + `enableShutdownHooks()` + liveness/readiness) es el único ítem de F2 que
-no depende del veredicto del spike, y es la dependencia dura de la cadena *Dockerfiles → GCP →
-k6 → piloto*. Después, F3 entera (seguridad de despliegue) es código puro: QUI-358 (RLS en
-`gps_points`), QUI-359, QUI-360, QUI-361, QUI-362, QUI-363.
+- **Gate previo reescrito.** Ya no pide el spike GPS de 8 h (QUI-216 quedó absorbido por la
+  prueba del domingo). Ahora exige lo que sí es bloqueante hoy: `/health` por HTTPS desde fuera,
+  aislamiento cross-tenant verificado a mano, y **que el APK firmado apunte a Cloud Run
+  verificado en el APK instalado**, no solo en el `.env` del build.
+- **Los 7 puntos de la prueba en teléfono** tienen umbral cada uno (batería ≤10%/h con objetivo
+  ≤5%/h, ningún hueco GPS >2 min, ≥90% de puntos de control detectados solos, p95 de sync
+  ≤5 min).
+- **Umbrales binarios**, que un solo caso rompe: 0 eventos perdidos, 0 duplicados tras
+  reintentos, 0 filas visibles cross-tenant, 0 detecciones fuera del radio.
+- **7 criterios de aborto (A1–A7)** que dicen qué hacer, no solo que algo salió mal. El más
+  importante: **abortar nunca significa borrar el outbox del teléfono** — los eventos pendientes
+  son la única copia de la jornada. Ante pérdida de eventos (A2) se para la sincronización y no
+  se reinstala la app. Ante fuga cross-tenant (A3) se para el piloto: es incidente de seguridad,
+  no bug de campo.
+- **Tabla de mediciones por jornada**, que es lo que después cierra QUI-253 con acta.
 
-El hallazgo de seguridad más grave sigue abierto: **el guardarraíl de `JWT_SECRET`**
-(QUI-356). Es el único que **un solo tenant no atenúa** —RLS confía en los claims del JWT, así
-que con el secreto por default en el repo cualquiera forja un token de admin y RLS deja de ser
-barrera— y su momento de exposición es exactamente el que viene: el primer deploy a IP pública.
+### Deuda asumida a conciencia para llegar al lunes
+
+Ninguna bloquea el arranque, pero las tres primeras conviene no olvidarlas:
+
+| Deuda | Riesgo real |
+|---|---|
+| **QUI-363** — prueba negativa de RLS | La suite de aislamiento nunca se verificó rompiendo una policy a propósito. Mientras no exista, su verde no prueba nada. Compensado hoy solo por la verificación manual cross-tenant |
+| **QUI-213** — infra sin Terraform | El entorno del piloto no se puede recrear desde el repo |
+| **Transistorsoft** — trial, vence **2026-09-15** | `grace_builds` en cero. Decidir la compra antes de esa fecha o el próximo build no sale |
+| QUI-355, 360, 361, 362, 252, 347, 250 | Hardening diferido, 16 pts |
+
+### Vía 2 — congelada por decisión del CTO
+
+Los tres PRs de Valentina (#8 QUI-339, #9 QUI-340, #14 QUI-342) siguen abiertos y **no se tocan
+hasta después del arranque**: no bloquean el lunes. Pendiente al retomar: **#14 tiene la CI en
+rojo y ese rojo esconde un bug real** — el refactor de fechas renombró variables en 2 de 4
+funciones, y `exportes.service.ts:191` y `:280` siguen interpolando `${desde}`/`${hasta}` en
+`$queryRaw`; sin filtro de fecha eso mete `undefined` en el SQL.
+
+### Lo que sigue sin validarse
+
+El tracking en background **nunca se midió en un teléfono** y el load test (k6, QUI-250) nunca
+corrió. El piloto de mañana es, en los hechos, la primera validación de campo del stack móvil.
+Atenuante de diseño: la app es offline-first con outbox SQLite — solo necesita red para bajar el
+paquete del día y sincronizar, no durante la jornada.
 
 ## Qué es el proyecto
 
@@ -95,7 +149,8 @@ Nada de esto se vuelve a discutir salvo que cambie una restricción real.
 |---|---|---|
 | Stack y arquitectura | [`plan-maestro.md`](plan-maestro.md) §Stack | Aprobado 2026-07-19 |
 | Modelo de datos, API, sync, riesgos, las 18 preguntas del CPO | [`documento-tecnico-cto.md`](documento-tecnico-cto.md) | 2026-07-19 |
-| Alcance, fases, asignación y fechas hasta el piloto | [`plan-finalizacion-piloto.md`](plan-finalizacion-piloto.md) | 2026-08-14 |
+| Alcance, fases, asignación y fechas hasta el piloto | [`plan-piloto-lunes-17-agosto.md`](plan-piloto-lunes-17-agosto.md) — anula a [`plan-finalizacion-piloto.md`](plan-finalizacion-piloto.md) | 2026-08-15 |
+| Umbrales de aceptación y criterios de aborto del piloto | [`piloto/checklist-aceptacion-e2e.md`](piloto/checklist-aceptacion-e2e.md) | 2026-08-16 |
 | Infraestructura: **GCP**, `southamerica-west1` | [`adr/0002-gcp.md`](adr/0002-gcp.md) — anula el ADR 0001 | 2026-08-14 |
 | Deliberación inicial (council) | `~/.council/Documents/council-20260719-083140/` | 2026-07-19 |
 | Contratos de auth móvil | [`plan-auth-movil-quivo.md`](plan-auth-movil-quivo.md) | 2026-08-01 |
@@ -1513,3 +1568,54 @@ fechas del plan son consistentes.
   que la respuesta cambia el cronograma, no solo el trámite.
 - **D3: ¿padrón completo o muestra?** De esto depende que el recorte de paginación sea válido o
   deuda que explota en campo. El plan recomienda la muestra; se decide con el sindicato en la mano.
+
+## Cierre del 2026-08-16 — víspera del piloto: despliegue, PR #16 y umbrales
+
+Día de dos entregas y un hallazgo que casi cuesta el arranque.
+
+**PR #15 (`3876384`) mergeado a `main`:** todo el bloque "Sábado" del plan de un saque —
+Dockerfiles, guardarraíl de `JWT_SECRET`, RLS en `gps_points`, `usesCleartextTraffic: false`,
+rotación del refresh token web, seed del sindicato piloto, Sentry, y los tres bugs de M6 que toca
+el conductor. Migraciones, seed y suite de RLS corridas contra la instancia real de Cloud SQL. El
+backend quedó **desplegado y verificado en Cloud Run**: liveness 200, readiness con `db` y `redis`
+arriba, login real y aislamiento cross-tenant confirmado a mano.
+
+**El hallazgo del día:** el code review de PR #16 encontró que el build de release **iba a
+fallar**, no a degradarse. `disableAutoUpload: true` no es una opción del config plugin de
+`@sentry/react-native` 7.2.0 — pertenece a una versión posterior. Se pasaba y se ignoraba, la
+tarea de subida de source maps se registraba igual dentro de `assembleRelease`, y sin org ni
+token `sentry-cli` salía con exit code 1 dentro de un `exec {}` sin `ignoreExitValue`. Verificado
+ejecutando a mano el `sentry-cli` que trae el repo:
+`error: An organization ID or slug is required (provide with --org)`.
+
+**Lección que conviene no repetir:** el comentario del código describía el comportamiento de una
+versión del SDK distinta de la instalada, y la CI no lo detecta porque **la CI no corre
+`eas build`**. Todo lo que solo se ejerce en el build nativo es, hoy, un punto ciego: verificarlo
+contra el `node_modules` real, no contra la doc de `main` del proyecto upstream.
+
+Otros tres hallazgos del mismo review, ya detallados en "Estado": faltaba `metro.config.js` con
+`getSentryExpoConfig` (sin Debug ID los source maps no matchean, así que el token solo no
+alcanzaba), Sentry inicializaba después de los imports hoisteados (dejando sin cubrir justo el
+headless task de GPS), y el perfil `development` de `eas.json` apuntaba al Cloud Run de
+producción — un build de development manejando en la calle habría escrito en la misma base que
+guarda la evidencia del piloto.
+
+**Decisión del CTO:** se va con **source maps funcionando**, no con el atajo de desactivar la
+subida. `SENTRY_AUTH_TOKEN` como secret de EAS, `SENTRY_ORG` y `SENTRY_PROJECT` como env del
+perfil, el token nunca en el repo.
+
+**QUI-367 cerrado:** el checklist de aceptación pasó de casillas binarias a umbrales numéricos y
+criterios de aborto A1–A7, y se le sacó el gate obsoleto del spike GPS de 8 h. Detalle en
+"Estado".
+
+**Vía 2 congelada:** los tres PRs de Valentina no se tocan hasta después del arranque.
+
+**Decisión D2 resuelta por el camino:** la cuenta de Play deja de importar para el piloto — la
+distribución es por APK sideload, así que ni el closed testing ni los 12 testers están en el
+camino crítico. Vuelve a ser relevante recién cuando se quiera distribuir por Play (QUI-351,
+diferida).
+
+**Queda pendiente para hoy mismo:** cargar el secret de Sentry, mergear PR #16, generar el build
+firmado **después** del merge —un APK buildeado antes apunta al backend viejo— y correr los 7
+puntos de la prueba en teléfono real. El fallback sigue vigente: si el tracking en background
+falla categóricamente, el lunes se corre con registro manual del conductor.
