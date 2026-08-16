@@ -109,6 +109,146 @@ La licencia de Transistorsoft viaja embebida en el manifest y su JWT confirma **
 2026-09-15**. El dato del checklist es correcto: hay que decidir la compra antes de esa fecha o el
 próximo build sale sin licencia.
 
+### El panel web quedó desplegado — 2026-08-16 (noche)
+
+**URL:** https://quivo-web-424426714260.southamerica-west1.run.app
+Servicio `quivo-web`, revisión `quivo-web-00001-4jd`, imagen
+`southamerica-west1-docker.pkg.dev/quivo-piloto/quivo/web:v1`.
+
+El servicio es mucho más simple que el del API: `apps/web` es un SPA con cáscara Next (todo
+`'use client'`, sin `better-auth`/`@quivo/db`/`@prisma/client`), así que **no lleva conector de
+Cloud SQL, ni VPC connector, ni secretos de base**. Solo sirve el bundle; el navegador pega
+directo contra el API.
+
+**`CORS_ORIGIN` ahora acopla los dos servicios.** `apps/api/src/main.ts:51-54` usa un string
+único, no un array ni una regex, y estaba sin setear. Se agregó al servicio `quivo-api` con la
+URL exacta del panel, lo que creó la revisión `quivo-api-00004-4n4`; el readiness se verificó
+sano inmediatamente después. **Si el panel cambia de URL, el API deja de aceptarlo** y hay que
+actualizar la variable. Está documentado en `scripts/deploy-web.sh`, que automatiza todo el
+procedimiento.
+
+**Trampa del build, para quien lo repita:** `NEXT_PUBLIC_API_URL` se hornea en build time y va
+**sin** `/v1` (el código concatena el prefijo en cada llamada, `client.ts:36`). Si falta al
+buildear, Next inlinea el fallback `http://localhost:3000` y el panel sale roto sin ningún error
+visible. Por eso el script verifica los chunks de `.next/static` dentro del contenedor antes de
+desplegar — mirar el HTML servido no sirve: `/` redirige a `/login` y las `NEXT_PUBLIC_*` viven
+en el JavaScript compilado, no en el HTML.
+
+### Lo que el panel destapó: el seed del piloto estaba a medias
+
+Con el panel arriba, `GET /v1/vehiculos` devolvía **500** y lo dejaba vacío. La causa no era
+RLS —`withTenantContext` ya hace coalesce de `null` a string vacío, y todos los demás listados
+respondían 200 para la cuenta global— sino **los datos placeholder del seed**:
+
+- `placa: 'PILOTO001'` no matchea el regex de placa boliviana (3-4 números + 3 letras).
+- `color: 'PLACEHOLDER'` no está en `ColorVehiculoSchema`.
+- Y el vehículo **no tenía socio propietario**: el seed crea socio solo para el sindicato demo
+  (`seed.ts:155`), nunca para el piloto, así que la activación lo rechazaba.
+
+Se corrigió **vía el API REST del propio panel**, no con SQL directo, para que pasara por
+validación y quedara en auditoría. Estado actual de los datos del piloto, **todos placeholder
+pendientes de reemplazo por el CTO**:
+
+| Campo | Valor cargado |
+|---|---|
+| Placa | `1111AAA` |
+| Marca / modelo | `PLACEHOLDER` |
+| Color | `blanco` |
+| Socio propietario | `SOCIO PILOTO POR DEFINIR` (creado esta noche, no existía) |
+| Conductor | `PLACEHOLDER — conductor piloto`, CI `PILOTO-CI-001` |
+
+⚠️ **El login móvil es placa + PIN.** La placa pasó de `PILOTO001` a `1111AAA`, así que el
+conductor entra con **`1111AAA`** y el PIN original (que no se tocó). `auth-movil.service.ts`
+compara contra `placaNormalizada`. **Cuando se cargue la placa real, la credencial cambia otra
+vez** y hay que avisarle al conductor.
+
+Se barrieron los 16 listados del panel: ningún otro 500. El conductor no fallaba por una
+asimetría del código — `ConductorSchema` usa `z.string()` simple para lectura, mientras
+`VehiculoSchema` aplica los schemas estrictos también al leer. Es la única entidad así.
+
+**Fix de fondo aplicado:** `listar()` ahora tolera filas corruptas (las omite y las loguea con
+id y campos fallidos) y un `ZodExceptionFilter` global devuelve 422 en vez del 500 opaco. El
+patrón vulnerable existe en 14 servicios, pero solo Vehículo tiene hoy una fila que lo dispare;
+el helper `mapearTolerante` queda listo para migrar el resto.
+
+### La cadena de login móvil, verificada de punta a punta
+
+Preguntar por el PIN destapó tres bloqueantes más, todos del mismo origen: **el seed del piloto
+quedó a medias**. Ninguno se habría visto hasta que el conductor intentara entrar en la calle.
+
+1. **Los PINs eran irrecuperables.** Se hashean con `better-auth/crypto`, de un solo sentido, y
+   solo se imprimen una vez en el stdout del seed. Se fijaron nuevos vía
+   `PUT /v1/mobile/credenciales/{vehiculos,conductores}/:id`.
+2. **El CI del conductor no pasaba el login.** `PILOTO-CI-001` no matchea el regex de CI
+   boliviano que usa el endpoint de autenticación. La fila sí pasaba la lectura, porque
+   `ConductorSchema` usa `z.string()` simple — la validación estricta solo vive en los schemas de
+   creación. Corregido a `00000000 LP`.
+3. **No existía ninguna rotación.** El seed nunca creó una para el piloto, y sin asignación
+   publicada vigente el login del conductor devuelve 404. Se creó la rotación `2026-08-piloto`
+   (`86d20fcf-931d-40cb-8062-bf605f161709`), publicada, con **15 asignaciones del 17 al 31 de
+   agosto**, una por día.
+
+**Credenciales operativas del piloto** (las anteriores ya no sirven):
+
+| Qué | Valor |
+|---|---|
+| Placa del vehículo | `1111AAA` |
+| PIN del vehículo | `76179397` |
+| CI del conductor | `00000000 LP` |
+| PIN del conductor | `18218968` |
+
+**Cómo funciona el login, por si algo falla en campo:** son dos pasos —
+`POST /v1/mobile/auth/vehiculo` con placa+PIN devuelve un `challengeToken`, y
+`POST /v1/mobile/auth/conductor` con ese token + CI + PIN devuelve la sesión. `deviceId` es
+obligatorio en **ambos**. La búsqueda de asignación filtra por **fecha calendario exacta** de
+Bolivia, no por rango, y **no filtra por turno**: el turno solo importa porque más de una
+asignación en el mismo día hace que el login devuelva `seleccion_requerida` en vez de tokens. El
+`venceAt` cubre hasta las 23:59:59 hora Bolivia, así que el horario real de trabajo no afecta.
+
+Verificado en vivo con una rotación de prueba solo para hoy (después anulada): la cadena completa
+devuelve tokens, y `GET /v1/mobile/asignacion-del-dia` responde 200 con la geometría de la ruta y
+los 2 puntos de control.
+
+### El alcance real del piloto, según el CTO (2026-08-16)
+
+El sindicato tiene muchas líneas y rotaciones. Se arranca con el **grupo de antiguos**, que
+**alterna días entre la línea Z12 y la 120** (la troncal, la más demandada). **Mañana lunes 17
+toca Z12, con un solo vehículo**; el resto del grupo se absorbe durante la semana.
+
+**La ruta y los puntos de control reales todavía no llegaron** — el sindicato los envía hoy
+(Z12) y entre hoy y mañana (120). Hasta que se carguen, el piloto corre con la geometría demo del
+seed, lo que tiene una consecuencia concreta sobre el checklist: **los puntos 5 (puntos de control
+detectados solos) y 7 (reconstrucción del recorrido) no pueden validarse**, porque las coordenadas
+son de otra ruta. Los puntos 1, 2, 3, 4 y 6 —background, reboot, batería, huecos GPS y sync— sí
+son válidos, porque no dependen de la geometría.
+
+**Cuando lleguen los datos:** editar en el lugar la línea `...010` y la ruta `...011` que ya
+existen, en vez de crear nuevas — así la rotación publicada sigue siendo válida. Las asignaciones
+referencian la ruta por id y nunca embeben geometría, y el sistema lee todo en vivo (listados,
+paquete del día, reconstrucción y el worker de cumplimiento), así que no hay nada que recalcular.
+**Orden obligatorio:** primero la geometría de la ruta, después los puntos de control — el
+servidor valida que cada punto esté a ≤100 m de la geometría *vigente*, así que crearlos antes
+falla contra el trazado viejo.
+
+**Formato a pedir: KML de Google My Maps.** Su `<coordinates>` usa `lon,lat`, el mismo orden que
+GeoJSON, así que no hay riesgo de invertir el par. GPX también sirve pero sus `<trkpt>` traen
+`lat`/`lon` nombrados al revés del orden a construir — hay que invertirlos, y equivocarse ahí
+pone la ruta en el otro hemisferio sin ningún error visible. **No hay importador de GPX/KML/GeoJSON
+en el repo**: la carga es un `PATCH` con el GeoJSON en el body, o dibujar clic a clic en el editor
+del panel. Coordenadas en `[longitud, latitud]` (`packages/shared/src/geo.ts:3`).
+
+### Brechas de modelo detectadas, para decidir después del piloto
+
+- **Las "vueltas" no existen en el modelo.** La regla operativa real del sindicato es cumplir N
+  vueltas por día, pero no hay ningún schema ni servicio que lo represente. El dato crudo queda
+  capturado (cada pasada por un punto de control se registra), así que es derivable, pero hoy el
+  sistema no calcula ni reporta "debía dar 5, dio 4".
+- **La alternancia Z12/120 no está modelada como patrón.** La rotación actual asigna la misma ruta
+  los 15 días. Cuando exista la 120 hay que rehacerla para que alterne.
+- **`DELETE` de una asignación con sesión asociada devuelve 500** en vez de un 409 legible:
+  `SesionOperativa.asignacion` tiene `onDelete: Restrict` y `rotaciones.service.ts` solo traduce
+  P2002, no P2003.
+
 ### Qué queda
 
 | Paso | Quién | Estado |
