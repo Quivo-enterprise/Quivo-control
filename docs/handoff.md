@@ -94,6 +94,30 @@ medición propios** (12 por sentido, `orden 2..13`, `obligatorio: false`). Todos
 **Rotación:** `2026-08-piloto` (`86d20fcf-931d-40cb-8062-bf605f161709`), publicada, 15
 asignaciones del 17 al 31 de agosto, una por día.
 
+**Cómo opera Z12 de verdad** (confirmado por el sindicato, 2026-08-16). El KML está completo — no
+le falta ningún tramo:
+
+- **Salomón Romero es solo punto de partida de la primera salida de la mañana**, no un destino de
+  retorno. El grupo 1 sale de ahí; el grupo 2 sale de Villa Armonía.
+- **A partir de ahí el circuito termina en Univalle** y se repite así el resto del día.
+- Los grupos 1 y 2 **van rotando en las paradas**.
+- El conductor de mañana (don Iver) es del **grupo 1a** — a confirmar.
+
+**Consecuencia para leer los datos:** el tramo Salomón Romero → Univalle **se recorre una sola vez
+al día**. Los puntos de control y de medición de ese tramo inicial tienen una única oportunidad de
+detección, mientras el resto tiene una por vuelta. Una detección baja ahí es muestra chica, no
+falla del sistema — no confundir una cosa con la otra al calcular el porcentaje.
+
+**Hipótesis de trabajo, a verificar el día 1:** según el sindicato **mantienen el mismo recorrido
+durante todo el día** — el grupo solo determina desde dónde sale cada uno en la mañana. Bajo esa
+premisa la geometría cargada sirve tal cual y no falta ningún tramo.
+
+Lo que queda por confirmar es un detalle geométrico: Univalle está a 656 m de la polilínea de ida,
+así que al salir de ahí el trufi tiene que empalmar con ese trazado en algún punto. La traza cruda
+del día 1 lo responde sin trabajo extra: si los puntos GPS caen sobre la ruta cargada desde el
+arranque de cada vuelta, la premisa se confirma; si hay un tramo sistemáticamente fuera del
+trazado, ahí está el pedazo que falta.
+
 ### Cómo se lee lo que pase mañana
 
 Dos instrumentos, y la separación entre ellos es deliberada:
@@ -281,6 +305,10 @@ SDK distinta de la que corre acá.
   grupo determina en qué línea trabaja cada socio**. Hoy `Socio` cuelga plano de `Sindicato`. La
   generación de rotaciones hace round-robin sobre **todos** los vehículos y conductores activos, así
   que con dos grupos mezclaría gente de uno en la línea del otro. No se nota con un solo vehículo.
+  **El grupo además define el punto de partida** —grupo 1 desde Salomón Romero, grupo 2 desde Villa
+  Armonía— y **los grupos rotan entre sí en las paradas**. O sea que el grupo no es solo una etiqueta
+  administrativa: determina qué recorrido hace el vehículo ese día. Modelarlo como una simple
+  pertenencia no alcanza.
 - **La alternancia de líneas no está modelada** (QUI-383). El grupo alterna Z12 y 120 día por medio;
   la rotación actual asigna la misma ruta los 15 días.
 - **Las "vueltas" no existen** (QUI-384). La regla real del sindicato es cumplir N vueltas por día.
@@ -327,7 +355,9 @@ real** — el refactor de fechas renombró variables en 2 de 4 funciones, y `exp
 |---|---|---|
 | **Prueba física en el teléfono** — los 7 puntos del checklist | CTO | ⏳ Lo único que falta. Ya hay asignación publicada para hoy, así que se puede hacer |
 | Cargar los datos reales del vehículo, conductor y socio | CTO | ⏳ Todos son placeholder. **Cambiar la placa cambia la credencial de login** |
-| Confirmar si el retorno de Z12 llega hasta Salomón Romero | CTO | ⏳ El KML termina en Univalle, 1 740 m antes |
+| ~~Confirmar si el retorno de Z12 llega hasta Salomón Romero~~ | — | ✅ Resuelto: no retornan. Salomón Romero es solo salida de la primera vuelta de la mañana |
+| Confirmar si el trufi empalma con la ruta de ida al salir de Univalle | CTO | ⏳ Univalle está a 656 m de esa polilínea |
+| Confirmar el grupo de don Iver (¿1a?) | CTO | ⏳ Determina el punto de partida de su primera vuelta |
 | Rotar el `SENTRY_AUTH_TOKEN` | CTO | ⏳ Se pegó en un chat; darlo por expuesto |
 | Puntos de control reales del sindicato | Sindicato | ⏳ Prometidos; los 24 de medición no los reemplazan |
 | Cargar la línea 120 | — | ⏳ KML ya descargado. Decidir antes qué hacer con los 7 ramales |
