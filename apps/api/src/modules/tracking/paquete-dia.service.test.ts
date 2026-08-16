@@ -38,9 +38,20 @@ describe('PaqueteDiaService', () => {
         INSERT INTO paradas (id, "rutaId", tipo, orden, coord, "createdAt", "updatedAt")
         VALUES (${randomUUID()}, ${rutaId}, 'origen', 0, ST_SetSRID(ST_GeomFromGeoJSON(${PARADA_COORD}), 4326)::geography, now(), now())
       `;
+      // Parada dada de baja (soft-delete): no debe viajar en el paquete del día.
+      await tx.$executeRaw`
+        INSERT INTO paradas (id, "rutaId", tipo, orden, coord, estado, "createdAt", "updatedAt")
+        VALUES (${randomUUID()}, ${rutaId}, 'intermedia', 1, ST_SetSRID(ST_GeomFromGeoJSON(${PARADA_COORD}), 4326)::geography, 'inactivo', now(), now())
+      `;
       await tx.$executeRaw`
         INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, "createdAt", "updatedAt")
         VALUES (${randomUUID()}, ${rutaId}, 0, ST_SetSRID(ST_GeomFromGeoJSON(${PC_COORD}), 4326)::geography, 30, true, now(), now())
+      `;
+      // Punto de control dado de baja (soft-delete): mismo caso que disparó el bug en
+      // producción — el paquete del día no debe devolverlo (QUI-236 hotfix).
+      await tx.$executeRaw`
+        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado, "createdAt", "updatedAt")
+        VALUES (${randomUUID()}, ${rutaId}, 1, ST_SetSRID(ST_GeomFromGeoJSON(${PC_COORD}), 4326)::geography, 100, true, 'inactivo', now(), now())
       `;
 
       const vehiculo = await tx.vehiculo.create({
@@ -135,6 +146,15 @@ describe('PaqueteDiaService', () => {
     expect(paquete.paradas[0]?.tipo).toBe('origen');
     expect(paquete.puntosControl).toHaveLength(1);
     expect(paquete.puntosControl[0]?.radioToleranciaM).toBe(30);
+  });
+
+  it('excluye paradas y puntos de control dados de baja (soft-delete)', async () => {
+    const paquete = await service.obtenerPaqueteDelDia(sesion);
+
+    // Regresión del hotfix: dar de baja un punto de control (o parada) no debe hacer que
+    // el conductor los siga viendo en el mapa — solo deben viajar los que siguen 'activo'.
+    expect(paquete.paradas.every((p) => p.tipo !== 'intermedia')).toBe(true);
+    expect(paquete.puntosControl.every((pc) => pc.radioToleranciaM !== 100)).toBe(true);
   });
 
   it('rechaza una sesión cuya asignación ya venció', async () => {
