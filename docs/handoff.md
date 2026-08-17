@@ -12,6 +12,13 @@
 > 2026-08-15.** Apunta el piloto al 5–19 de octubre y trata el spike GPS (QUI-216) como gate
 > previo; el CTO confirmó ese día que **el piloto arranca el lunes 17 de agosto con un auto**.
 > Se conserva como registro histórico de las decisiones de escala y de los recortes a M7.
+>
+> 🔴 **La sección "Cómo opera Z12 de verdad" de más abajo quedó obsoleta el 2026-08-17.** El
+> sindicato mandó datos nuevos esa madrugada que la contradicen en su punto central: el vehículo
+> **sale de Villa Armonía y en la vuelta 1 llega sí o sí hasta Salomón**, bajando después sin pasar
+> por Univalle; recién desde la vuelta 2 se queda en el circuito Villa ⇄ Univalle. La versión
+> vigente de cómo opera la línea, los 14 puntos de control reales y el plan para cargarlos están en
+> **[`plan-ruta-real-z12.md`](plan-ruta-real-z12.md)**.
 
 ## Estado — 2026-08-16 (domingo, cierre de la víspera del piloto)
 
