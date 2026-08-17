@@ -12,6 +12,63 @@
 > 2026-08-15.** Apunta el piloto al 5–19 de octubre y trata el spike GPS (QUI-216) como gate
 > previo; el CTO confirmó ese día que **el piloto arranca el lunes 17 de agosto con un auto**.
 > Se conserva como registro histórico de las decisiones de escala y de los recortes a M7.
+>
+> 🔴 **La sección "Cómo opera Z12 de verdad" de más abajo quedó obsoleta el 2026-08-17.** El
+> sindicato mandó datos nuevos esa madrugada que la contradicen en su punto central: el vehículo
+> **sale de Villa Armonía y en la vuelta 1 llega sí o sí hasta Salomón**, bajando después sin pasar
+> por Univalle; recién desde la vuelta 2 se queda en el circuito Villa ⇄ Univalle. La versión
+> vigente de cómo opera la línea, los 14 puntos de control reales y el plan para cargarlos están en
+> **[`plan-ruta-real-z12.md`](plan-ruta-real-z12.md)**.
+>
+> 🚦 **ARRANCAR ACÁ EN LA PRÓXIMA SESIÓN (aprobado por el CTO el 2026-08-17).** El trabajo
+> siguiente es **implementar [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md)**,
+> aprobado y sin empezar. Son tres entregas, en este orden:
+> **(1) Build de rescate — vence, `maxDaysToPersist` del SDK es 1 día**: el recorrido del día 1
+> está sólo en la SQLite interna de Transistorsoft y se poda solo. No desinstalar ni borrar datos
+> del S25 antes de extraerlo con `getCount()`/`getLocations()`.
+> **(2) v2 de la app**: persistencia e instrumentación, multi-vuelta, sesión/arranque/datos reales,
+> guiado y eficiencia. **(3) Mapa en vivo** `/en-vivo` en el panel.
+> El diagnóstico completo del día 1 (con causas raíz ya probadas) está en ese plan — leerlo antes de
+> tocar código, no re-investigar.
+
+## Día 1 del piloto (2026-08-17): qué falló y qué quedó aprobado
+
+El piloto arrancó y **no registró un solo punto GPS**. Tres fallos independientes, los tres
+diagnosticados con evidencia y con fix diseñado en
+[`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md):
+
+1. **La app no pudo escribir al outbox.** Regresión de `expo-sqlite@16.0.10`: se perdió el fix de
+   [expo#27748](https://github.com/expo/expo/pull/27748) (que el CHANGELOG de 13.4.0 anota como
+   *"Fixed NullPointerException on Android when opening the same database multiple times"*).
+   `NativeDatabase.sharedObjectDidRelease()` destruye el `sqlite3*` de C++ **sin chequear el
+   refcount** que sí tenía 15.1.4, así que el primer GC de Hermes sobre cualquier objeto JS viejo de
+   `quivo-outbox.db` mató el handle compartido, y el `NativeDatabase` zombi quedó cacheado del lado
+   Kotlin **con `isClosed == false` para siempre**. Desde ahí, NPE en el 100% de las llamadas
+   (Sentry `QUIVO-CONTROL-CONDUCTOR-1`, `code: ERR_UNEXPECTED`). La variable causal es **la
+   frecuencia de apertura**: `abrirOutbox()` se llama cientos de veces por jornada y
+   `abrirPaqueteDiaDb()` una sola — por eso esa otra base funcionó perfecto todo el día. Fix:
+   singleton con promesa cacheada, ~25 líneas. **Actualizar la librería no sirve: 16.0.10 es la
+   última publicada y tiene el bug.**
+2. **El worker de ingesta nunca se desplegó.** En Cloud Run sólo existen `quivo-api` y `quivo-web`:
+   cero jobs, cero worker pools. `POST /v1/sync/batches` encola en BullMQ y nada consume la cola, así
+   que `gps_points` quedaría vacía igual. La imagen `api:v3` **ya contiene**
+   `apps/api/dist/worker.js` (verificado), así que no hace falta rebuild. El gate de aceptación no lo
+   detectó porque **no tiene ningún ítem que verifique que `gps_points` recibe filas** — sólo mira
+   `/health/ready`, que reporta Postgres y Redis "up" a nivel de conexión.
+3. **La ruta asignada arrancaba en el extremo opuesto.** La asignación de hoy apunta a `…0011`
+   (Salomón Romero → Villa Armonía), cuyo PC `orden=0` está en Salomón, pero el vehículo sale de
+   Villa Armonía. La app le pedía ruta a 15 km durante toda la mañana. La ruta `813c6130-…` ya
+   arranca en Villa y tiene sus 14 puntos ordenados desde ahí.
+
+Además: **sólo se mide la primera vuelta** (el supresor de cumplimientos es durable, se reconstruye
+del outbox que nunca se poda) — el CTO pidió contar todas las pasadas; **quedaron 3 sesiones
+operativas abiertas** del mismo vehículo en dos dispositivos, y nada las cierra; y los **datos reales
+de sindicato, conductor y vehículo siguen en PLACEHOLDER** en producción, visibles en la primera
+pantalla de la app.
+
+Lo que sí funcionó: el GPS del dispositivo (los breadcrumbs muestran al trufi avanzando normal de
+Villa hacia Univalle), el paquete del día, y el acompañante a bordo con la planilla manual — hoy la
+única medición confiable del día 1.
 
 ## Estado — 2026-08-16 (domingo, cierre de la víspera del piloto)
 
