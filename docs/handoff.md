@@ -21,10 +21,14 @@
 > **[`plan-ruta-real-z12.md`](plan-ruta-real-z12.md)**.
 >
 > ✅ **PR #34 MERGEADO el 2026-08-18** (`main` = `b8fd7de`, CI + acceptance en verde, rama
-> borrada). El código de la v2 está cerrado. **Lo que falta es despliegue, no código** — arrancá
-> por el paso 2 de [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md): aplicar las dos migraciones
-> nuevas a Cloud SQL, `api:v4`, redesplegar worker y API, cerrar las 8 sesiones colgadas, y recién
-> ahí el build 7 del APK.
+> borrada). El código de la v2 está cerrado.
+>
+> 🚀 **Despliegue ejecutado el 2026-08-18 (pasos 1-5 de
+> [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md)).** Las dos migraciones nuevas están aplicadas
+> en Cloud SQL, `api:v4` está publicada, worker (`quivo-worker-00004-hk7`) y API
+> (`quivo-api-00006-pfm`) corren esa imagen, y las 8 sesiones colgadas quedaron cerradas.
+> **Lo único que queda es el build 7 del APK y la prueba en calle** — ver la sección
+> "Despliegue de la v2" más abajo.
 >
 > 🚦 **Contexto de cómo se llegó acá (2026-08-18).** Se implementó
 > [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md) (aprobado por el CTO el
@@ -39,13 +43,11 @@
 > `quivo-worker` está desplegado y escuchando la cola — verificado contra producción esta sesión.
 > La advertencia de "producción bloqueada" de la Entrega 1 quedó saldada.
 >
-> **Lo que sigue es la secuencia de despliegue, y el orden no es intercambiable** — está en
-> **[`plan-salida-apk-v2.md`](plan-salida-apk-v2.md)**: mergear #34 → aplicar las 2 migraciones
-> nuevas → `api:v4` → redesplegar worker y API → cerrar las 8 sesiones colgadas → **build 7 del
-> APK**. El APK del teléfono sigue siendo el **build 6**: los fixes de `fbfbd56` nunca se
-> compilaron. Si el APK sale antes que el worker con `api:v4`, el teléfono manda `pasada` y el
-> worker v3 la ignora en silencio: no rompe, pero no cuenta las vueltas, que es justo lo que pidió
-> el sindicato.
+> **El orden de esa secuencia ya no bloquea nada: el backend va adelante del APK.** El worker
+> corre `api:v4` y la columna `pasada` existe, así que el build 7 puede salir cuando esté listo sin
+> el riesgo de que el teléfono mande `pasada` a un worker que la ignore. El APK del teléfono sigue
+> siendo el **build 6** hasta que alguien instale el 7 a mano: los fixes de `fbfbd56` nunca se
+> compilaron.
 >
 > **El rescate del día 1 quedó cerrado por decisión del CTO**: los dos GPX de Geo Tracker del 17 de
 > agosto (1505 y 1397 puntos) son la traza de esa jornada, y de ellos salió el circuito real que
@@ -55,6 +57,63 @@
 >
 > El diagnóstico completo del día 1 (con causas raíz ya probadas) está en ese plan — leerlo antes
 > de tocar código, no re-investigar.
+
+## Despliegue de la v2 — 2026-08-18: pasos 1-5 ejecutados
+
+Se corrió la secuencia de [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md) contra producción. El
+código no se tocó: esto es todo despliegue.
+
+| Paso | Resultado |
+|---|---|
+| 2 — migraciones | ✅ `20260817140000_cumplimientos_pc_pasada` y `20260817150000_sesiones_operativas_vehiculo_estado_idx` aplicadas 17:29 UTC. `cumplimientos_pc.pasada` existe como `integer` nullable |
+| 3 — imagen | ✅ `api:v4` publicada, digest `sha256:f5f90af627d97b90268e13a7c1422b077058f85e67e32cbb5a6c080ab754409e` |
+| 4 — redespliegue | ✅ `quivo-worker-00004-hk7` y `quivo-api-00006-pfm`, ambos con `api:v4` |
+| 5 — sesiones colgadas | ✅ las 8 cerradas; `estado='activa'` = 0, 11 cerradas en total |
+| 6 — APK | ⏳ build 7 lanzado (`e1d01284-b84e-47e1-a69c-10b53985f963`), `versionCode` 6 → 7 |
+| 7 — calle | ❌ pendiente. `gps_points` sigue en **0 filas** |
+
+**Verificación real, no "el servicio figura Ready".** El worker nuevo logueó
+`Worker de ingesta QUIVO listo — escuchando la cola de sync.` a las 17:35:00 y el
+`quivo-worker-00003-xr2` (el de `api:v3`) se apagó un segundo después. La API responde
+`/v1/health/ready` con `{"status":"ok","db":"up","redis":"up"}`. La config del worker sobrevivió
+el update: `scalingMode: manual`, `manualInstanceCount: 1`, `RUNTIME_DATABASE_URL` y `JWT_SECRET`
+por secreto, `REDIS_URL`, VPC connector y Cloud SQL adjuntos — y sigue **sin** `DATABASE_URL`.
+
+### Tres cosas que el plan decía mal, y que costaron tiempo
+
+1. **La ruta del schema de Prisma es `packages/db/prisma`, no `apps/api/prisma`.**
+
+2. **`database-url` NO es un rol `BYPASSRLS`.** El handoff y el plan lo daban por hecho. `pg_roles`
+   dice `rolbypassrls = false` tanto para `postgres` como para `quivo_app`, y las tablas del tenant
+   tienen **`FORCE ROW LEVEL SECURITY`** con la policy `tenant_isolation`
+   (`current_setting('app.rol') = 'admin_quivo' OR "sindicatoId" = current_setting('app.sindicato_id')`).
+   **El modo de falla es el peligroso:** un `SELECT` manual sin `set app.rol = 'admin_quivo'`
+   devuelve **cero filas y ningún error**. Las 8 sesiones colgadas aparecieron primero como
+   "0 activas" y parecía que ya estaban cerradas. Cualquier consulta manual futura contra tablas
+   del tenant abre con `set app.rol = 'admin_quivo'` o miente.
+
+3. **La URL del secreto usa socket Unix** (`?host=/cloudsql/…`). Con el proxy TCP hay que
+   reescribirla a `127.0.0.1:5433` y sacar el parámetro `host`.
+
+### Cómo se cerraron las 8 sesiones
+
+`fin` quedó en el `updatedAt` de cada fila —el último contacto real con el servidor—, no en `now()`:
+poner la hora de hoy habría inventado recorridos de dos días en el panel. `revokedAt` y `updatedAt`
+sí van a `now()`, que es cuando efectivamente se tocó la fila. Las 8 filas originales quedaron
+respaldadas en JSON antes del `UPDATE`. Ninguna tenía cumplimientos asociados: `cumplimientos_pc`
+está vacía.
+
+### Lo que sigue
+
+El backend va **adelante** del APK, así que el orden dejó de ser un riesgo: el build 7 puede
+instalarse cuando esté. Quedan dos cosas, y ninguna es código:
+
+- **Instalar el build 7 encima del 6** en el S25 (misma firma, las dos bases SQLite sobreviven) y
+  seguir [`runbooks/alta-de-conductor-android.md`](runbooks/alta-de-conductor-android.md) —
+  incluido el permiso "Permitir todo el tiempo" desde Ajustes, que ningún diálogo puede otorgar
+  desde Android 11.
+- **La prueba en calle.** `select count(*) from gps_points` sigue en **0**. Es la única métrica que
+  prueba que la cadena completa funciona; todo lo demás ya estuvo verde el día 1 sin medir nada.
 
 ## Entrega 1 del plan v2 (2026-08-17, noche): rescate y worker de ingesta
 

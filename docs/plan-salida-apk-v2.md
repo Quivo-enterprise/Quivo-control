@@ -1,7 +1,7 @@
 # Plan de salida — APK v2 del conductor
 
-> **Estado:** en ejecución desde el 2026-08-18. Código cerrado en el PR #34; falta la secuencia
-> de despliegue de abajo.
+> **Estado:** pasos 1-5 ejecutados el 2026-08-18. Código cerrado en el PR #34. Queda el build 7
+> del APK (lanzado) y la prueba en calle.
 >
 > **Qué es esto.** El plan de la v2 —qué había que construir y por qué— vive en
 > [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md). Este documento es sólo la
@@ -24,11 +24,11 @@ No rompe nada, pero mide mal — que es el modo de falla más caro, porque parec
 | # | Paso | Verificación |
 |---|---|---|
 | ~~1~~ | ~~Mergear el PR #34 con CI en verde~~ | ✅ **hecho** 2026-08-18 — `main` = `b8fd7de` |
-| 2 | Aplicar migraciones en producción | `20260817150000_…` aparece en `_prisma_migrations` |
-| 3 | Construir y publicar `api:v4` | la imagen existe en Artifact Registry |
-| 4 | Redesplegar worker y API con `api:v4` | el worker loguea "escuchando la cola de sync" |
-| 5 | Cerrar las 8 sesiones operativas colgadas | `count(*) where estado='activa'` = 0 |
-| 6 | Build 7 del APK, perfil `production` | `versionCode` 7 > 6, misma firma |
+| ~~2~~ | ~~Aplicar migraciones en producción~~ | ✅ **hecho** 2026-08-18 17:29 UTC — las dos en `_prisma_migrations` |
+| ~~3~~ | ~~Construir y publicar `api:v4`~~ | ✅ **hecho** — `api:v4` en Artifact Registry, digest `sha256:f5f90af6…` |
+| ~~4~~ | ~~Redesplegar worker y API con `api:v4`~~ | ✅ **hecho** — `quivo-worker-00004-hk7` logueó "escuchando la cola de sync"; `quivo-api-00006-pfm` con `/v1/health/ready` `{"status":"ok","db":"up","redis":"up"}` |
+| ~~5~~ | ~~Cerrar las 8 sesiones operativas colgadas~~ | ✅ **hecho** — `count(*) where estado='activa'` = 0 (11 cerradas) |
+| 6 | Build 7 del APK, perfil `production` | `versionCode` 7 > 6, misma firma — **lanzado**, build `e1d01284-…` |
 | 7 | Instalar encima en el S25 y probar en calle | llegan filas a `gps_points` |
 
 ### 1 — Mergear el PR #34
@@ -54,6 +54,21 @@ cloud-sql-proxy --port 5433 quivo-piloto:southamerica-west1:quivo-control-db
 
 **Ojo con el rol.** `migrate deploy` necesita el rol dueño del esquema (`database-url`), no el
 runtime con RLS (`runtime-database-url`). Son secretos distintos en Secret Manager.
+
+**Aplicado el 2026-08-18 17:29 UTC.** Las dos migraciones quedaron en `_prisma_migrations` y
+`cumplimientos_pc.pasada` existe como `integer` nullable. Dos correcciones a este documento, que
+salieron de ejecutarlo:
+
+- **La ruta del schema es `packages/db/prisma`, no `apps/api/prisma`.** El comando real es
+  `DATABASE_URL=… npx prisma migrate deploy` desde `packages/db` (Prisma 7 toma el schema de
+  `prisma.config.ts`).
+- **`database-url` NO es `BYPASSRLS`.** `pg_roles` dice `rolbypassrls = false` para `postgres` y
+  para `quivo_app`, y las tablas del tenant tienen **`FORCE ROW LEVEL SECURITY`** con la policy
+  `tenant_isolation`. Consecuencia práctica: cualquier `SELECT`/`UPDATE` manual contra tablas del
+  tenant devuelve **cero filas en silencio** salvo que la sesión abra con
+  `set app.rol = 'admin_quivo'`. No es un error de conexión y no avisa — parece una tabla vacía.
+- **La URL del secreto viene por socket Unix** (`?host=/cloudsql/…`). Para usarla con el proxy TCP
+  hay que reescribir host y puerto a `127.0.0.1:5433` y sacar el parámetro `host`.
 
 ### 3 y 4 — `api:v4` y redespliegue
 
@@ -181,11 +196,12 @@ real de que la cadena completa funciona.
 |---|---|
 | Asignación de hoy | ✅ existe, rotación `86d20fcf-…` publicada, apunta a `3333…0011` |
 | Circuito Z12 | ✅ aplicado — 1255 vértices, 40,7 km, 26 puntos de control activos |
-| Worker de ingesta | ✅ desplegado, `api:v3`, escuchando la cola |
-| `gps_points` | ❌ 0 filas |
-| Migración `pasada` | ❌ sin aplicar |
-| Sesiones colgadas | ❌ 8 activas |
-| APK en el teléfono | ❌ build 6, con el bug del día 1 |
+| Worker de ingesta | ✅ desplegado, **`api:v4`** (`quivo-worker-00004-hk7`), escuchando la cola |
+| API | ✅ desplegada, **`api:v4`** (`quivo-api-00006-pfm`), `/v1/health/ready` ok |
+| Migración `pasada` | ✅ aplicada 2026-08-18 17:29 UTC |
+| Sesiones colgadas | ✅ cerradas — 0 activas |
+| APK en el teléfono | ⏳ build 7 lanzado (`versionCode` 7); el teléfono sigue con el 6 hasta instalarlo |
+| `gps_points` | ❌ 0 filas — **la única métrica que falta**, sale de la prueba en calle |
 | Datos reales | ❌ `Sindicato Piloto — PLACEHOLDER`, placa `1111AAA` |
 
 ## Lo que queda fuera de esta salida
