@@ -1,5 +1,5 @@
 import type { Location } from 'react-native-background-geolocation';
-import { generarUuidV7 } from '@quivo/shared';
+import { generarUuidV7, TOLERANCIA_TS_FIX_PASADO_MS } from '@quivo/shared';
 import { normalizarTsFix } from '../../gps/location-task';
 
 /**
@@ -65,7 +65,21 @@ export interface EventoRescatado {
  * rescate, no el del fix real. Ese punto aterrizaba en `gps_points` con la fecha de HOY, en la
  * partición equivocada, deformando el `ORDER BY ts` del recorrido reconstruido. Mejor NO
  * encolar ese punto (el caller lo cuenta aparte, en `fallidos`) que encolarlo con una fecha
- * inventada.
+ * inventada. En la práctica esta rama ya no debería dispararse desde `rescatarPuntosDia1`
+ * (`filtrarPuntosRescatables` excluye los timestamps ilegibles ANTES de llegar acá, ver
+ * `ResultadoFiltroRescatables.timestampIlegible`) — se mantiene como defensa redundante ante
+ * un caller que no pase por ese filtro (p. ej. un test unitario de este módulo en aislado).
+ *
+ * M3 (hallazgo de revisión, medio): `origen: 'rescate'` marca explícitamente que este punto
+ * NO vino del tracking en vivo, aunque lleve el `sesionId` de la sesión que corrió el rescate
+ * (H5 — puede ser una sesión distinta a la del día 1 rescatado). `use-gps-operativo.ts`
+ * (`detener()`) lo usa para excluir estos puntos de la ventana de medición del spike: sin
+ * esto, rescatar durante un turno y después "Detener" mete puntos del día 1 en el cálculo de
+ * huecos/duración de la corrida en vivo, con un NO-GO falso como resultado. `payload` en
+ * `EventoSyncSchema` (`@quivo/shared`) es `z.record(z.unknown())` — un campo extra no
+ * declarado en `PayloadGpsPointSchema` no rompe la validación del servidor (confirmado:
+ * `SyncBatchDto` valida contra `SyncBatchSchema`/`EventoSyncSchema`, sin `.strict()`, y
+ * `insertarGpsPoints` solo lee los campos que le interesan del payload).
  */
 export async function construirEventoRescatado(
   location: Location,
@@ -86,23 +100,71 @@ export async function construirEventoRescatado(
       accuracy: location.coords.accuracy ?? null,
       speed: location.coords.speed ?? null,
       tsFix,
+      origen: 'rescate',
     },
   };
 }
 
+export interface ResultadoFiltroRescatables {
+  /** Puntos que se van a intentar encolar (`construirEventoRescatado`). */
+  rescatables: Location[];
+  /** C1/M4 (hallazgo de revisión CRÍTICO): puntos con timestamp más viejo que
+   * `TOLERANCIA_TS_FIX_PASADO_MS` (`@quivo/shared`) respecto de `ahora` — NO se encolan. */
+  omitidosPorAntiguedad: Location[];
+  /** Timestamp que ni siquiera se puede parsear (`NaN`) — NO se encolan. */
+  timestampIlegible: Location[];
+}
+
 /**
- * H1.b (hallazgo de revisión CRÍTICO): solo deja pasar los puntos ANTERIORES al momento en que
- * este build empezó a funcionar (`corte`). Los puntos posteriores ya los encoló el camino
- * normal (`onLocation`/headless, `use-gps-operativo.ts`/`headless-task.ts`), ahora que el
- * outbox anda — re-encolarlos acá sería trabajo redundante que H1.a/H1.c igual absorberían,
- * pero es más simple y más barato no intentarlo.
+ * M2 (hallazgo de revisión, medio — decisión tomada, reemplaza el corte superior de H1.b que
+ * vivía acá): este módulo YA NO recibe ni aplica ningún corte "solo puntos anteriores al
+ * primer arranque de este build". Esa premisa —"los puntos posteriores ya los encoló el
+ * camino normal"— es falsa en tres casos reales, y en los tres el corte los dejaba
+ * INALCANZABLES para siempre porque el rescate es la única vía:
+ * - `obtenerContextoUbicacionPersistido` devuelve `null` por paquete del día vencido
+ *   (`headless-task.ts`) — precisamente el estado de la mañana del día 2, con el SDK
+ *   todavía grabando por `stopOnTerminate:false`/`startOnBoot:true`.
+ * - sesión cerrada (mismo archivo).
+ * - app en foreground sin `iniciar()` — no hay suscripción `onLocation`, nadie encola.
+ * La no-duplicación sigue garantizada por H1.a (`eventId` determinístico, este mismo módulo)
+ * + H1.c (una sola ejecución con confirmación, `rescate-dia1.ts`) — el corte superior era la
+ * ÚNICA de las tres defensas que podía PERDER datos: re-encolar de más es trabajo redundante
+ * acotado que `INSERT OR IGNORE` (`db/outbox.ts`) y el `ON CONFLICT` del servidor absorben;
+ * perder un punto es irreversible.
  *
- * `corte === null` (la clave de `AsyncStorage` todavía no se sembró — caso raro, ver
- * `sembrarPrimerArranqueRescate` en `rescate-dia1.ts`) no filtra nada: dejamos que las otras
- * dos defensas (`eventId` determinístico + confirmación explícita) hagan su trabajo solas.
+ * C1/M4 (hallazgo de revisión CRÍTICO): en su lugar, una cota INFERIOR — la MISMA
+ * `TOLERANCIA_TS_FIX_PASADO_MS` que `resolverTsFix` usa server-side (`@quivo/shared`) para
+ * decidir si un `tsFix` es usable. Sin esta cota, un rescate de un punto más viejo que la
+ * tolerancia igual pasa `resolverTsFix` — que NO rechaza nada, cae en silencio al `ts` de
+ * encolado (el momento del RESCATE) — y aterriza en la partición de HOY con un timestamp
+ * casi idéntico al de otros puntos rescatados: el recorrido reconstruido queda
+ * irreconstruible, se contamina la evidencia del día corriente, y un re-run duplica todo
+ * (H1.a deja de proteger porque el `ts` server-side, parte de la PK `(event_id, ts)`, cambia
+ * en cada corrida). Esta cota SÍ es segura de aplicar: a diferencia del corte superior, nunca
+ * pierde un punto rescatable de verdad — solo evita que el servidor le invente una fecha en
+ * silencio a uno que ya está fuera de rango.
+ *
+ * Separa los tres resultados en vez de descartar en silencio (A3, hallazgo de revisión alto):
+ * el caller (`rescatarPuntosDia1`) reporta cada cubo — nunca "se pierden" sin dejar rastro.
  */
-export function filtrarPuntosRescatables(locations: Location[], corte: Date | null): Location[] {
-  if (corte === null) return locations;
-  const corteMs = corte.getTime();
-  return locations.filter((location) => new Date(location.timestamp).getTime() < corteMs);
+export function filtrarPuntosRescatables(locations: Location[], ahora: Date): ResultadoFiltroRescatables {
+  const corteInferiorMs = ahora.getTime() - TOLERANCIA_TS_FIX_PASADO_MS;
+  const rescatables: Location[] = [];
+  const omitidosPorAntiguedad: Location[] = [];
+  const timestampIlegible: Location[] = [];
+
+  for (const location of locations) {
+    const ms = new Date(location.timestamp).getTime();
+    if (Number.isNaN(ms)) {
+      timestampIlegible.push(location);
+      continue;
+    }
+    if (ms < corteInferiorMs) {
+      omitidosPorAntiguedad.push(location);
+      continue;
+    }
+    rescatables.push(location);
+  }
+
+  return { rescatables, omitidosPorAntiguedad, timestampIlegible };
 }

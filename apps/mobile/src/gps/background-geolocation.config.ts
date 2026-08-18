@@ -59,8 +59,18 @@ export const gpsSpikeConfig: Config = {
     // copia sobreviviente de todo el día 1 del piloto, cuando el outbox de la app (QUI-238)
     // no grabó nada por la regresión de `expo-sqlite@16.0.10` — con 1 día de retención, un
     // fallo del outbox de más de 24h vuelve a podar esa evidencia sin dejar rastro, ANTES de
-    // que alguien llegue a correr el rescate. 14 días da margen real para detectar un fallo de
-    // sync/outbox y rescatar a mano sin apurarse.
+    // que alguien llegue a correr el rescate.
+    //
+    // OJO — 14 días de RETENCIÓN no son 14 días de ventana de RESCATE, y la diferencia importa:
+    // el rescate automático (`rescate-dia1.ts`) solo encola puntos de hasta
+    // `TOLERANCIA_TS_FIX_PASADO_MS` (7 días, `@quivo/shared`) hacia atrás, porque más allá de
+    // eso `resolverTsFix` server-side descarta el `tsFix` y cae en silencio al `ts` de encolado
+    // — o sea, el momento del rescate: el recorrido quedaría con todos los puntos apilados en
+    // el día equivocado. Los 7 días que van de la ventana de rescate a la de retención siguen
+    // valiendo igual: el dato sigue vivo en la SQLite del SDK y se puede extraer a mano, solo
+    // que no por el botón de rescate. Si algún día hay que ampliar esa ventana, hay que subir
+    // `TOLERANCIA_TS_FIX_PASADO_MS` Y crear particiones de `gps_points` hacia atrás (hoy el
+    // worker solo crea `hoy..hoy+5`), o los puntos rebotan con `23514 no partition ... for row`.
     maxDaysToPersist: 14,
   },
   http: {

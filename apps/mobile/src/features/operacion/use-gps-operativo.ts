@@ -230,6 +230,15 @@ export function useGpsOperativo(
       const eventosGps = await obtenerEventosPorTipo(db, 'gps_point');
       const timestampsMedicion = eventosGps
         .filter((evento) => evento.payload['sesionId'] === sesionId)
+        // M3 (hallazgo de revisión, medio): excluye los puntos que vinieron del rescate de
+        // emergencia del día 1 (`rescate-dia1-core.ts`, `origen: 'rescate'`). Esos puntos
+        // llevan el `sesionId` de la sesión que CORRIÓ el rescate (H5, por diseño), que puede
+        // ser esta misma sesión si el chofer rescata a mitad de turno — sin este filtro, sus
+        // `tsFix` del día 1 se mezclan con la ventana de medición de la corrida en vivo:
+        // `primerTs` salta al día 1, `duracionHoras` se dispara a 24h+, `detectarHuecos`
+        // reporta un hueco gigante y `evaluarCriteriosGo` emite un NO-GO falso sobre una
+        // corrida que en realidad estuvo bien.
+        .filter((evento) => evento.payload['origen'] !== 'rescate')
         .map((evento) => Date.parse(resolverTsFix(evento.payload, evento.ts)))
         .filter((ts) => !Number.isNaN(ts))
         .sort((a, b) => a - b);

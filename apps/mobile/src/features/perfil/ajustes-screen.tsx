@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View, Switch, Pressable, Platform, ToastAndroid, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -45,6 +45,13 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
   const [resultadoGuardado, setResultadoGuardado] = useState<ResultadoRescateGuardado | null>(null);
   const [cargandoResultadoGuardado, setCargandoResultadoGuardado] = useState(true);
   const [confirmVisible, setConfirmVisible] = useState(false);
+  // A2 (hallazgo de revisión, alto): guard reentrante SÍNCRONO. `rescatando` (state) es
+  // asíncrono — un doble tap en el mismo tick lee el mismo valor viejo dos veces antes de que
+  // el primer `setRescatando(true)` se refleje, así que por sí solo NO alcanza para bloquear
+  // la segunda invocación. El `Modal` de `QuivoConfirmDialog` usa `animationType="fade"` y
+  // sigue montado y táctil durante el fade-out, lo que hace el doble tap más fácil de
+  // gatillar de lo habitual (el botón de confirmar sigue "vivo" un instante extra).
+  const rescatandoRef = useRef(false);
 
   useEffect(() => {
     let activo = true;
@@ -85,6 +92,9 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
   }, []);
 
   const ejecutarRescate = () => {
+    // A2: guard reentrante síncrono — ver el comentario de `rescatandoRef` arriba.
+    if (rescatandoRef.current) return;
+    rescatandoRef.current = true;
     setRescatando(true);
     setErrorRescate(null);
     setProgresoRescate(null);
@@ -99,9 +109,7 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
           // el aviso de éxito por esto, el rescate en sí ya terminó bien.
           console.error('[QUIVO][ajustes] No se pudo guardar el resultado del rescate', error);
         }
-        showToast(
-          `Rescate completo: ${resultado.encolados} encolados${resultado.fallidos > 0 ? `, ${resultado.fallidos} fallidos` : ''}.`,
-        );
+        showToast(`Rescate completo: ${resultado.encolados} encolados${resumenExtra(resultado)}.`);
         // H2: re-consultar el conteo para no dejar en pantalla un número que ya no refleja lo
         // que queda en la SQLite nativa del SDK.
         try {
@@ -116,6 +124,7 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
         );
       })
       .finally(() => {
+        rescatandoRef.current = false;
         setRescatando(false);
       });
   };
@@ -135,7 +144,7 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
   const turnoAsignacion = labelTurno(contexto.asignacion.horario);
   const atribucionMensaje = `Los puntos se van a atribuir a la sesión ${sesionCorta}… (asignación del ${fechaAsignacion}, ${turnoAsignacion}).`;
   const mensajeConfirmacion = resultadoGuardado
-    ? `Ya se ejecutó este rescate el ${formatearFechaHora(resultadoGuardado.fechaIso)} · ${resultadoGuardado.encolados} puntos encolados${resultadoGuardado.fallidos > 0 ? `, ${resultadoGuardado.fallidos} fallidos` : ''}. Volver a ejecutarlo es seguro: los puntos que ya se sincronizaron NO se duplican (el sistema los reconoce y descarta solo). ${atribucionMensaje}`
+    ? `Ya se ejecutó este rescate el ${formatearFechaHora(resultadoGuardado.fechaIso)} · ${resultadoGuardado.encolados} puntos encolados${resumenExtra(resultadoGuardado)}. Volver a ejecutarlo es seguro: los puntos que ya se sincronizaron NO se duplican (el sistema los reconoce y descarta solo). ${atribucionMensaje}`
     : `Se van a copiar al outbox ${conteoRescatable ?? 0} puntos GPS que el dispositivo grabó pero todavía no se sincronizaron. No se borra nada del teléfono. ${atribucionMensaje}`;
 
   const handleToggle = (key: keyof OperacionSettings, value: boolean) => {
@@ -253,7 +262,7 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
               <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
                 Ya se ejecutó el {formatearFechaHora(resultadoGuardado.fechaIso)} ·{' '}
                 {resultadoGuardado.encolados} puntos encolados
-                {resultadoGuardado.fallidos > 0 ? ` · ${resultadoGuardado.fallidos} fallidos` : ''}
+                {resumenExtra(resultadoGuardado)}
               </Text>
               <Button
                 variant="link"
@@ -290,7 +299,7 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
           {progresoRescate && (
             <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
               Encolados {progresoRescate.encolados} de {progresoRescate.total}
-              {progresoRescate.fallidos > 0 ? ` · ${progresoRescate.fallidos} fallidos` : ''}
+              {resumenExtra(progresoRescate)}
             </Text>
           )}
 
@@ -312,6 +321,7 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
         icon="medkit-outline"
         onConfirm={confirmarRescate}
         onCancel={cancelarConfirmacion}
+        confirmDisabled={rescatando}
       />
     </View>
   );
@@ -338,6 +348,27 @@ function formatearFechaHora(fechaIso: string): string {
   const dia = fecha.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit' });
   const hora = fecha.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit', hour12: false });
   return `${dia} a las ${hora}`;
+}
+
+/**
+ * A3/B1 (hallazgo de revisión): sufijo compartido con el desglose completo de un resultado de
+ * rescate — `yaExistente` (B1, filas que `INSERT OR IGNORE` descartó por ser un re-run) y
+ * `omitidosPorAntiguedad` (A3/C1/M4, puntos fuera de la tolerancia del servidor) se muestran
+ * en la UI igual que `fallidos`, nunca se pierden en silencio. Un solo lugar para las tres
+ * pantallas que muestran un resultado (`progresoRescate` en vivo, `resultadoGuardado`
+ * persistido, y el mensaje de confirmación) — evita que se desincronicen entre sí. */
+function resumenExtra(resultado: {
+  yaExistente: number;
+  fallidos: number;
+  omitidosPorAntiguedad: number;
+}): string {
+  const partes: string[] = [];
+  if (resultado.yaExistente > 0) partes.push(`${resultado.yaExistente} ya existentes`);
+  if (resultado.fallidos > 0) partes.push(`${resultado.fallidos} fallidos`);
+  if (resultado.omitidosPorAntiguedad > 0) {
+    partes.push(`${resultado.omitidosPorAntiguedad} omitidos por antigüedad`);
+  }
+  return partes.length > 0 ? ` · ${partes.join(' · ')}` : '';
 }
 
 function SettingToggleRow({
