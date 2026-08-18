@@ -131,6 +131,37 @@ la saque de "Apps en suspensión". Ese runbook se sigue en **cada alta**, no só
 **Ojo con el teléfono del A71:** si ese conductor ya rechazó el permiso dos veces, Android no va a
 volver a mostrar el diálogo aunque instale el APK nuevo. Va a necesitar el paso manual sí o sí.
 
+### 6.c — El acuse sonoro (nuevo en el build 7)
+
+El conductor maneja y no puede mirar la pantalla para verificar que la app registró su paso. La
+voz que ya existía anuncia la llegada; el sonido nuevo **confirma que quedó registrado**: una
+campanita de dos notas ascendentes (C6 → G6, 520 ms), sintetizada en el repo — el script generador
+vive junto al `.wav` en `apps/mobile/assets/sounds/`, así que el asset es reproducible y no un
+binario huérfano.
+
+Baja el volumen de la música del conductor en vez de cortarla, y suena aunque el teléfono esté en
+silencio (es una herramienta de trabajo). Tiene su propia preferencia en ajustes, encendida por
+defecto y separada de la de voz.
+
+**Qué verificar en la prueba de calle**, porque no se puede verificar en el escritorio:
+
+1. Que se escuche **por encima del ruido del motor** con el trufi andando. Se eligió el registro de
+   1-2 kHz justamente porque el ruido de motor es de baja frecuencia, pero eso es teoría hasta que
+   alguien lo escuche en la calle.
+2. Que suene **con la pantalla apagada** y el teléfono en el soporte. Debería, mientras el proceso
+   siga vivo. Si no suena, es señal de que el fabricante está matando el proceso — y eso importa
+   mucho más que el sonido, porque significa que el tracking depende de que Android no lo mate.
+3. Que suene **en la segunda vuelta** del mismo punto de control. Es el caso que el código trata
+   explícito y el que el sindicato pidió medir.
+
+**Límite conocido:** si un battery-killer de fabricante mata el proceso, el headless task sigue
+registrando el cumplimiento pero **no hay ningún aviso audible**. La evidencia se salva; el
+conductor no se entera. Llevar el audio al headless task implica tocar el camino que escribe la
+evidencia, y no se hace por un sonido.
+
+**Pendiente:** `expo-haptics` no está instalado, así que no hay vibración de acompañamiento — que
+es lo que cubriría el teléfono en el bolsillo o el trufi muy ruidoso.
+
 ### 7 — Prueba en calle
 
 El gate de aceptación del piloto **no tenía ningún ítem que verificara que `gps_points` recibe
