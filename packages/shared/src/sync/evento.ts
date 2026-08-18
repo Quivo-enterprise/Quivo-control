@@ -116,8 +116,16 @@ const TOLERANCIA_TS_FIX_FUTURO_MS = 60_000;
  * tiene reproceso: pérdida definitiva de evidencia. El buffer de Doze de Transistorsoft se
  * mide en horas, no en años; 7 días es generoso y no castiga ningún caso legítimo de
  * buffering headless.
+ *
+ * Exportada (hallazgo de revisión C1, rescate del día 1): el rescate de emergencia
+ * (`apps/mobile/src/features/perfil/rescate-dia1-core.ts`) necesita esta MISMA cifra para su
+ * propia cota inferior — un punto rescatado más viejo que esta tolerancia igual pasaría
+ * `resolverTsFix` (que cae en silencio al `ts` de encolado, sin rechazar nada), así que el
+ * único lugar donde tiene sentido cortarlo es ANTES de encolar, del lado del móvil. Si el
+ * móvil tuviera su propia copia del número, las dos tolerancias podrían desincronizarse con
+ * el tiempo (alguien sube esta y se olvida de la otra) sin que ningún test lo detecte.
  */
-const TOLERANCIA_TS_FIX_PASADO_MS = 7 * 24 * 60 * 60 * 1000;
+export const TOLERANCIA_TS_FIX_PASADO_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Timestamp con el que un evento con `tsFix` opcional debe persistirse: el del fix GPS

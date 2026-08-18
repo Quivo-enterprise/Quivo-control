@@ -14,6 +14,14 @@ export interface QuivoConfirmDialogProps {
   icon?: keyof typeof Ionicons.glyphMap;
   onConfirm: () => void;
   onCancel?: () => void;
+  /**
+   * A2 (hallazgo de revisión, alto): deshabilita el botón de confirmar sin ocultar el
+   * diálogo — lo usa `ajustes-screen.tsx` mientras `rescatando` es `true`. `Modal` con
+   * `animationType="fade"` sigue montado y TÁCTIL durante el fade-out (no se desmonta al
+   * instante), así que un doble tap sobre el mismo botón antes de que el modal termine de
+   * cerrarse podía disparar `onConfirm` dos veces y arrancar dos rescates concurrentes.
+   */
+  confirmDisabled?: boolean;
 }
 
 /** Reemplazo con la identidad visual de QUIVO para `Alert.alert` (diálogo nativo del SO,
@@ -29,6 +37,7 @@ export function QuivoConfirmDialog({
   icon,
   onConfirm,
   onCancel,
+  confirmDisabled = false,
 }: QuivoConfirmDialogProps) {
   const iconoNombre = icon ?? (variant === 'danger' ? 'alert-circle' : 'information-circle');
   const iconoColor = variant === 'danger' ? quivoColors.danger : quivoColors.primary;
@@ -51,6 +60,7 @@ export function QuivoConfirmDialog({
             <Button
               variant={variant === 'danger' ? 'danger' : 'primary'}
               onPress={onConfirm}
+              disabled={confirmDisabled}
               style={styles.actionButton}
             >
               {confirmLabel}

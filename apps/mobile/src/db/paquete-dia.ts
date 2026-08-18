@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import * as Sentry from '@sentry/react-native';
 import { PaqueteDiaSchema, type PaqueteDia } from '@quivo/shared';
 
 /**
@@ -6,8 +7,30 @@ import { PaqueteDiaSchema, type PaqueteDia } from '@quivo/shared';
  * operativa activa a la vez (QUI-235), así que cada descarga nueva reemplaza a la anterior,
  * no hace falta historial local.
  */
-export async function abrirPaqueteDiaDb(): Promise<SQLite.SQLiteDatabase> {
-  const db = await SQLite.openDatabaseAsync('quivo-paquete-dia.db');
+const PAQUETE_DIA_DB_PATH = 'quivo-paquete-dia.db';
+
+/**
+ * Mismo singleton a nivel de módulo que `abrirOutbox()` (`db/outbox.ts`) — mismo motivo:
+ * la regresión de `expo-sqlite@16.0.10` mata el handle nativo compartido en el primer GC de
+ * Hermes sobre un objeto JS viejo de esta base, y el cache del lado Kotlin
+ * (`SQLiteModule.kt:110`) sigue sirviendo esa instancia zombi para siempre. Hoy
+ * `abrirPaqueteDiaDb()` sobrevive por PURA CASUALIDAD (se llama una sola vez por proceso) —
+ * este cambio es profilaxis, no una respuesta a un fallo observado acá.
+ */
+let paqueteDiaPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let paqueteDiaAbiertoAlgunaVez = false;
+
+async function abrirPaqueteDiaDbNueva(): Promise<SQLite.SQLiteDatabase> {
+  const esPrimeraApertura = !paqueteDiaAbiertoAlgunaVez;
+  paqueteDiaAbiertoAlgunaVez = true;
+  Sentry.addBreadcrumb({
+    category: 'sqlite',
+    message: `Apertura de ${PAQUETE_DIA_DB_PATH}`,
+    level: 'info',
+    data: { path: PAQUETE_DIA_DB_PATH, esPrimeraApertura },
+  });
+
+  const db = await SQLite.openDatabaseAsync(PAQUETE_DIA_DB_PATH);
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS paquete_dia (
       asignacion_id TEXT PRIMARY KEY,
@@ -17,6 +40,21 @@ export async function abrirPaqueteDiaDb(): Promise<SQLite.SQLiteDatabase> {
     );
   `);
   return db;
+}
+
+export function abrirPaqueteDiaDb(): Promise<SQLite.SQLiteDatabase> {
+  if (!paqueteDiaPromise) {
+    // H8 (hallazgo de revisión, bajo — mismo fix que `db/outbox.ts`): capturamos la referencia
+    // de ESTA promesa antes de instalarla, para que el `.catch` de abajo solo limpie
+    // `paqueteDiaPromise` si sigue siendo la promesa vigente. Sin esto, un rechazo TARDÍO de
+    // una apertura lenta en vuelo podría anular una conexión buena instalada mientras tanto.
+    const promesaEnCurso: Promise<SQLite.SQLiteDatabase> = abrirPaqueteDiaDbNueva().catch((error) => {
+      if (paqueteDiaPromise === promesaEnCurso) paqueteDiaPromise = null; // no cachear un rechazo: el próximo intento reintenta
+      throw error;
+    });
+    paqueteDiaPromise = promesaEnCurso;
+  }
+  return paqueteDiaPromise;
 }
 
 export async function guardarPaqueteDia(

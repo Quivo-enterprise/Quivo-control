@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import * as Sentry from '@sentry/react-native';
 import BackgroundGeolocation, { type Location } from 'react-native-background-geolocation';
 import { resolverTsFix, type PuntoControlPaquete } from '@quivo/shared';
 import {
@@ -82,6 +83,21 @@ export function useGpsOperativo(
         // rejection: evidencia perdida en silencio.
         erroresEscritura.current += 1;
         console.error('[QUIVO][gps] No se pudo guardar la ubicación en el outbox', error);
+        // Mismo motivo que los `captureException` de `headless-task.ts` (QUI-365): el único
+        // rastro que tenía este fallo antes era `console.error`, y nadie lee la consola del
+        // teléfono de un conductor en ruta — este es justo el camino en vivo (foreground) que
+        // NO estaba reportado, a diferencia del headless.
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'encolar-punto' },
+          extra: {
+            code: typeof error === 'object' && error !== null && 'code' in error ? (error as { code?: unknown }).code : undefined,
+            // H10 (hallazgo de revisión, bajo): `erroresEscritura.current` solo se resetea en
+            // `iniciar()`, nunca tras una escritura exitosa — es acumulativo DE LA CORRIDA
+            // actual, no de fallos consecutivos sin éxitos de por medio. Renombrado para que
+            // coincida con el string de UI de abajo ("... en esta corrida").
+            erroresEnCorrida: erroresEscritura.current,
+          },
+        });
         setErrorGps(
           `No se pudo guardar una ubicación en el outbox (${erroresEscritura.current} en esta corrida). La evidencia de esos puntos se perdió.`,
         );
@@ -214,6 +230,15 @@ export function useGpsOperativo(
       const eventosGps = await obtenerEventosPorTipo(db, 'gps_point');
       const timestampsMedicion = eventosGps
         .filter((evento) => evento.payload['sesionId'] === sesionId)
+        // M3 (hallazgo de revisión, medio): excluye los puntos que vinieron del rescate de
+        // emergencia del día 1 (`rescate-dia1-core.ts`, `origen: 'rescate'`). Esos puntos
+        // llevan el `sesionId` de la sesión que CORRIÓ el rescate (H5, por diseño), que puede
+        // ser esta misma sesión si el chofer rescata a mitad de turno — sin este filtro, sus
+        // `tsFix` del día 1 se mezclan con la ventana de medición de la corrida en vivo:
+        // `primerTs` salta al día 1, `duracionHoras` se dispara a 24h+, `detectarHuecos`
+        // reporta un hueco gigante y `evaluarCriteriosGo` emite un NO-GO falso sobre una
+        // corrida que en realidad estuvo bien.
+        .filter((evento) => evento.payload['origen'] !== 'rescate')
         .map((evento) => Date.parse(resolverTsFix(evento.payload, evento.ts)))
         .filter((ts) => !Number.isNaN(ts))
         .sort((a, b) => a - b);
