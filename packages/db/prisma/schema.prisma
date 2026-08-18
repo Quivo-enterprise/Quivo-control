@@ -441,6 +441,7 @@ model SesionOperativa {
   @@index([sindicatoId])
   @@index([asignacionId, estado])
   @@index([deviceId, estado])
+  @@index([vehiculoId, estado])
   @@map("sesiones_operativas")
 }
 
@@ -533,11 +534,25 @@ model CumplimientoPc {
   distanciaM     Float
   cumplido       Boolean
   validadoPor    String
+  // Multi-vuelta (plan §2.3): número de pasada de este punto de control dentro de la
+  // sesión, calculado en el móvil por la máquina de estados con histéresis
+  // (`filtrarNuevosCumplimientos`, `apps/mobile/src/gps/geofence.ts`). NULLABLE a
+  // propósito, NUNCA UNIQUE junto con (sesionId, puntoControlId): APKs anteriores a este
+  // cambio no lo mandan (queda `null`, nunca se rechaza el evento), y si la semilla del
+  // móvil falla y el contador reinicia en 1, un UNIQUE compuesto descartaría en silencio
+  // una pasada real que sí ocurrió — un constraint que borra evidencia es peor que un
+  // duplicado detectable. Ver `20260817140000_cumplimientos_pc_pasada`.
+  pasada         Int?
   receivedAt     DateTime        @default(now())
 
   @@index([sindicatoId])
   @@index([sesionId])
   @@index([puntoControlId])
+  // Multi-vuelta (plan §2.3): la consulta natural del mundo con N pasadas — "todos los
+  // cumplimientos de esta sesión y este punto de control, ordenados en el tiempo" (p. ej.
+  // `construirTimeline`/`recorridos/[id]`, "N pasadas · última a Xm") — no tenía ningún
+  // índice compuesto que la sirviera; los tres de arriba son separados.
+  @@index([sesionId, puntoControlId, ts])
   @@map("cumplimientos_pc")
 }
 

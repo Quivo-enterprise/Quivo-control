@@ -391,6 +391,33 @@ export async function procesarCumplimientoEnTx(
         distanciaM: row.distancia_m,
         cumplido: row.cumplido,
         validadoPor: 'worker',
+        // Multi-vuelta (plan §2.3): `pasada` es OPCIONAL en el payload (APKs anteriores a
+        // este cambio nunca lo mandan) — `?? null` en vez de dejarlo `undefined` para que
+        // Prisma persista explícitamente NULL, no que omita la columna del INSERT (con
+        // `createMany` un campo `undefined` se trata igual que ausente, que es el
+        // comportamiento correcto acá de todos modos, pero `?? null` lo deja inequívoco).
+        // NUNCA se usa `pasada` como parte de una clave de idempotencia — sigue siendo
+        // `eventId` solamente (`skipDuplicates` de abajo), ver el comentario de la
+        // migración `20260817140000_cumplimientos_pc_pasada` sobre por qué un UNIQUE
+        // compuesto acá sería peligroso.
+        //
+        // Hallazgo de revisión (medio): `PayloadCumplimientoPuntoControlSchema` (que declara
+        // `pasada: z.number().int().positive().optional()`) NUNCA se corre contra el payload
+        // real — `EventoSyncSchema.payload` (único schema que valida `SyncController`, vía
+        // `SyncBatchSchema`) es `z.record(z.unknown())`, así que `payload.pasada` llega acá
+        // sin validar pese a lo que decía este comentario antes. Un valor no entero o fuera
+        // de rango de INT4 (p. ej. `"3"` de un cliente con un bug, o un número gigante) hace
+        // que `createMany` lance una excepción de Postgres; `procesarCumplimiento` la atrapa
+        // como `syncError`, y como el evento ya fue acusado al dispositivo (y purgado de su
+        // outbox), ese cumplimiento se pierde para siempre. Coerciona en vez de confiar: un
+        // `pasada` inválido se persiste como NULL (falla segura) en lugar de tirar el insert.
+        pasada:
+          typeof payload.pasada === 'number' &&
+          Number.isInteger(payload.pasada) &&
+          payload.pasada > 0 &&
+          payload.pasada <= 2147483647
+            ? payload.pasada
+            : null,
       },
     ],
     skipDuplicates: true,

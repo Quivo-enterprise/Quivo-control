@@ -1,10 +1,12 @@
 import NetInfo from '@react-native-community/netinfo';
+import * as Sentry from '@sentry/react-native';
 import type { EventoSync } from '@quivo/shared';
 import {
   abrirOutbox,
   marcarAcusados,
   marcarEnviados,
   obtenerLotePendiente,
+  purgarAcusadosAntesDe,
   revertirAPendiente,
 } from '../../db/outbox';
 import { ApiError } from '../../shared/api/http-client';
@@ -16,6 +18,85 @@ const BACKOFF_INICIAL_MS = 2_000;
 const BACKOFF_MAXIMO_MS = 60_000;
 
 export { idsNoAcusados };
+
+/**
+ * Ventana de la poda del outbox (plan §2.1, "poda del outbox" — `purgarAcusadosAntesDe`,
+ * `db/outbox.ts`, no tenía UN SOLO call site en producción): con N pasadas x 36 puntos de
+ * control x todos los días sin purga, el outbox crece sin techo en un dispositivo que queda
+ * encendido semanas.
+ *
+ * 🔴 MUCHO mayor que la duración de una sesión operativa (horas, no días) a propósito: la
+ * semilla de histéresis del geofence (`clavesCumplimientoDesdePayloads`, `gps/location-task.ts`)
+ * se reconstruye leyendo los `cumplimiento_punto_control` que siguen en el outbox de la
+ * sesión activa. Si esta ventana fuera corta, podría purgar cumplimientos YA ACUSADOS de la
+ * sesión EN CURSO (acusado no significa "sesión terminada", solo "el servidor ya lo
+ * confirmó") y la semilla de una app que se reabre a mitad de turno quedaría incompleta —
+ * el contador de pasadas retrocedería en vez de continuar. 7 días es, como mínimo, un orden
+ * de magnitud mayor que cualquier turno real (el piloto Z12 son jornadas de horas).
+ */
+const VENTANA_PURGA_OUTBOX_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Memoizado a nivel de módulo — una sola purga por proceso Y POR SESIÓN. La ventana es de
+ * días, no de segundos: correr el `DELETE` de `purgarAcusadosAntesDe` en cada ciclo de sync
+ * (cada 15 s mientras hay conexión, ver `use-sync-status.ts`) sería puro ruido sin beneficio —
+ * lo que se purga hoy no vuelve a aparecer mañana. Nunca rechaza: es mantenimiento
+ * best-effort, un fallo acá no debe tumbar el motor de sync.
+ *
+ * M5 (hallazgo de revisión, medio): keyeado por `sesionIdActiva`, no un único `Promise | null`.
+ * Con la memo sin key, `??=` ataba la purga al `sesionIdActiva` del PRIMER llamador para toda
+ * la vida del proceso — y `useSyncStatus` se monta desde dos pantallas distintas
+ * (`operation-screen.tsx` y `perfil-screen.tsx`), con `sesionId` OPCIONAL en toda la cadena.
+ * Un primer montaje sin ese parámetro corría el `DELETE` sin guarda de sesión activa,
+ * borrando cumplimientos ya acusados de la sesión EN CURSO y haciendo retroceder el contador
+ * de pasadas que `clavesCumplimientoDesdePayloads` reconstruye. Keyear por sesión conserva la
+ * propiedad buscada (una sola purga por sesión, no una por ciclo de sync) sin arrastrar la
+ * guarda equivocada de una sesión a otra.
+ *
+ * Nota sobre por qué keyear y no volver obligatorio el parámetro: `iniciarSyncAutomatico` lo
+ * recibe desde `useSyncStatus(obtenerAccessToken, sesionId?)`, cuya firma pública es opcional y
+ * vive en un archivo fuera del alcance de este fix. Hacerlo obligatorio acá solo empujaría el
+ * `undefined` un nivel más arriba sin eliminarlo; la guarda de abajo lo elimina de verdad. */
+const purgasOutboxProgramadas = new Map<string, Promise<void>>();
+
+/** Clave del memo cuando NO hay sesión activa — ver la guarda en `programarPurgaOutbox`. */
+const CLAVE_PURGA_SIN_SESION = '__sin-sesion__';
+
+export function programarPurgaOutbox(sesionIdActiva?: string): Promise<void> {
+  const clave = sesionIdActiva ?? CLAVE_PURGA_SIN_SESION;
+  let purga = purgasOutboxProgramadas.get(clave);
+  if (!purga) {
+    purga = (async () => {
+      if (!sesionIdActiva) {
+        // M5: sin `sesionIdActiva` no hay forma de distinguir "no hay ninguna sesión abierta"
+        // de "el llamador no lo pasó", y el `DELETE` sin guarda puede borrar cumplimientos ya
+        // acusados de la sesión EN CURSO. La asimetría de costos es clara: postergar la purga
+        // cuesta unas filas de más en SQLite hasta el próximo llamador que sí traiga la
+        // sesión; correrla sin guarda cuesta el contador de pasadas de la jornada, que es
+        // evidencia. Se posterga.
+        Sentry.addBreadcrumb({
+          category: 'sync',
+          message: 'Purga del outbox omitida: no se recibió la sesión activa',
+          level: 'info',
+        });
+        return;
+      }
+      try {
+        const db = await abrirOutbox();
+        const antesDe = new Date(Date.now() - VENTANA_PURGA_OUTBOX_MS);
+        // M2 (hallazgo de revisión, medio, complementario): no purgar los cumplimientos de la
+        // sesión ACTIVA — ver el comentario de `purgarAcusadosAntesDe` (`db/outbox.ts`).
+        await purgarAcusadosAntesDe(db, antesDe, sesionIdActiva);
+      } catch (error) {
+        console.error('[QUIVO][sync] No se pudo podar el outbox', error);
+        Sentry.captureException(error, {
+          tags: { contexto: 'sync-outbox', paso: 'purgar-acusados' },
+        });
+      }
+    })();
+    purgasOutboxProgramadas.set(clave, purga);
+  }
+  return purga;
+}
 
 /** Un ciclo de sync: toma hasta `LOTE_MAXIMO` eventos pendientes, los manda, y marca según
  * el acuse del servidor — el cliente SOLO da por sincronizado lo que vino acusado (QUI-238). */
@@ -60,7 +141,15 @@ export function iniciarSyncAutomatico(
   obtenerAccessToken: () => string | null,
   onResultado?: (resultado: ResultadoSync) => void,
   onSyncStart?: () => void,
+  sesionIdActiva?: string,
 ): () => void {
+  // Punto sensato del ciclo de sync para la poda (plan §2.1): se dispara una vez por arranque
+  // del motor de sync, en paralelo, sin bloquear ni el `return` síncrono de esta función ni el
+  // primer intento de sync — `programarPurgaOutbox` está memoizada POR SESIÓN (M5), así que
+  // remontar la pantalla de operación no reintenta la purga, pero un cambio de sesión sí
+  // vuelve a evaluarla con la guarda correcta.
+  void programarPurgaOutbox(sesionIdActiva);
+
   let backoffMs = BACKOFF_INICIAL_MS;
   let detenido = false;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;

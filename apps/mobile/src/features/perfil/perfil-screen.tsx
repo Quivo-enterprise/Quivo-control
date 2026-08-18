@@ -9,7 +9,7 @@ import { useSyncStatus } from '../operacion/use-sync-status';
 import { usePerfilQuery } from './use-perfil-query';
 import { useTextScale, useOperacionSettings } from './use-operacion-settings';
 import { Button } from '../../shared/components/Button';
-import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
+import { CerrarSesionDialog } from '../../shared/components/cerrar-sesion-dialog';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { createShimmerPlaceholder } from 'react-native-shimmer-placeholder';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -28,7 +28,7 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   // Mantenemos la lógica de Skeletons intacta para cumplir con el requerimiento.
   const { data: contexto, isLoading, refetch } = usePerfilQuery(contextoInicial, obtenerAccessToken);
   const { gps } = useGpsContext();
-  const { pendientes, isOffline } = useSyncStatus(obtenerAccessToken);
+  const { pendientes, isOffline } = useSyncStatus(obtenerAccessToken, contextoInicial.sesionId);
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
   const scale = useTextScale();
   const { settings } = useOperacionSettings();
@@ -153,13 +153,12 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
         </View>
       </View>
 
-      <QuivoConfirmDialog
+      {/* Hallazgo 2 (ALTO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): este call site
+          llamaba al MISMO `onLogout()` que `operation-screen.tsx` (mismo `borrarSesionMovil()`
+          + `stop()` nativo irreversible del GPS) pero con un mensaje que no mencionaba que el
+          GPS deja de grabar. Unificado en `CerrarSesionDialog`. */}
+      <CerrarSesionDialog
         visible={confirmarLogoutVisible}
-        icon="log-out-outline"
-        title="¿Cerrar sesión?"
-        message="Deberás volver a validar el vehículo y tu identidad para iniciar un recorrido."
-        cancelLabel="Cancelar"
-        confirmLabel="Cerrar sesión"
         onCancel={() => setConfirmarLogoutVisible(false)}
         onConfirm={() => {
           setConfirmarLogoutVisible(false);

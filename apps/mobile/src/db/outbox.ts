@@ -338,33 +338,6 @@ export async function obtenerLotePendiente(
   return rows.map(toEventoOutboxRow);
 }
 
-/**
- * Payloads de todos los eventos de un tipo que siguen en el outbox (en cualquier estado, no
- * solo `pendiente`). Lo usa el headless task para sembrar su Set de cumplimientos ya
- * emitidos cuando Android recicla el contexto JS a mitad de turno — sin eso, el Set arranca
- * vacío y se reemite un `cumplimiento_punto_control` que el worker ya no puede deduplicar
- * (lo hace por `eventId`, y la re-emisión lleva un UUIDv7 nuevo). Ignora filas con payload
- * corrupto en vez de romper el tick entero.
- */
-export async function obtenerPayloadsPorTipo(
-  db: SQLite.SQLiteDatabase,
-  tipo: TipoEventoSync,
-): Promise<Record<string, unknown>[]> {
-  // H4: ver el comentario de `contarEventosPendientes` — mismo motivo para envolver la lectura.
-  const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.getAllAsync<{ payload: string }>('SELECT payload FROM outbox WHERE tipo = ?', [tipo]),
-  );
-  const payloads: Record<string, unknown>[] = [];
-  for (const row of rows) {
-    try {
-      payloads.push(JSON.parse(row.payload) as Record<string, unknown>);
-    } catch {
-      // Fila ilegible: se ignora — la semilla es best-effort, no una fuente de verdad.
-    }
-  }
-  return payloads;
-}
-
 export interface EventoOutboxTsPayload {
   ts: string;
   payload: Record<string, unknown>;
@@ -372,19 +345,31 @@ export interface EventoOutboxTsPayload {
 
 /**
  * `ts` del sobre + payload de todos los eventos de un tipo que siguen en el outbox (en
- * cualquier estado, no solo `pendiente`) — variante de `obtenerPayloadsPorTipo` que además
- * expone el `ts` de encolado. Lo usa el detector de huecos del spike (`use-gps-operativo.ts`,
- * hallazgo de revisión A1) para reconstruir la ventana MEDIDA desde lo persistido en vez de
- * un `useRef` en memoria que el headless task nunca alimenta (no hay hook, no hay React): sin
- * esto, un chofer que mata la app a mitad de turno y la reabre deja `detectarHuecos`
- * evaluando solo el tramo en vivo final, reportando "0 huecos" sobre una ventana que en
- * realidad no se midió. El `ts` del sobre sirve de fallback cuando el payload no trae
- * `tsFix` (ver `resolverTsFix`, `@quivo/shared`). Ignora filas con payload corrupto en vez de
- * romper la lectura entera.
+ * cualquier estado, no solo `pendiente`). Dos consumidores:
+ * - El detector de huecos del spike (`use-gps-operativo.ts`, hallazgo de revisión A1), que
+ *   reconstruye la ventana MEDIDA desde lo persistido en vez de un `useRef` en memoria que el
+ *   headless task nunca alimenta (no hay hook, no hay React): sin esto, un chofer que mata la
+ *   app a mitad de turno y la reabre deja `detectarHuecos` evaluando solo el tramo en vivo
+ *   final, reportando "0 huecos" sobre una ventana que en realidad no se midió.
+ * - `clavesCumplimientoDesdePayloads` (`gps/location-task.ts`), que siembra el estado de
+ *   histéresis del geofence (multi-vuelta, plan §2.3) al arrancar `iniciar()`/el headless
+ *   task. Necesita el `ts` del sobre (no solo el payload) porque usa `resolverTsFix`
+ *   (`@quivo/shared`) — el `ts` del sobre es el fallback cuando el payload no trae `tsFix`
+ *   (eventos de una versión anterior de la app).
+ *
+ * `sesionId`, si se pasa, filtra los eventos a esa sesión únicamente (plan §2.1, "poda del
+ * outbox": sin este filtro, `obtenerEventosPorTipo` leía la tabla entera sin importar cuántas
+ * sesiones/días acumulara el dispositivo — la semilla de cumplimientos de la sesión ACTUAL no
+ * necesita ver eventos de sesiones anteriores, y filtrarlos temprano evita cargarlos en JS
+ * solo para descartarlos después). El filtro es en JS (no en el `SELECT`, que no puede mirar
+ * dentro del `payload` sin `json_extract`) — mismo patrón que ya usaba `detener()` para
+ * `gps_point` antes de este cambio. Ignora filas con payload corrupto en vez de romper la
+ * lectura entera.
  */
 export async function obtenerEventosPorTipo(
   db: SQLite.SQLiteDatabase,
   tipo: TipoEventoSync,
+  sesionId?: string,
 ): Promise<EventoOutboxTsPayload[]> {
   // H4: ver el comentario de `contarEventosPendientes` — mismo motivo para envolver la lectura.
   const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
@@ -396,9 +381,12 @@ export async function obtenerEventosPorTipo(
   const eventos: EventoOutboxTsPayload[] = [];
   for (const row of rows) {
     try {
-      eventos.push({ ts: row.ts, payload: JSON.parse(row.payload) as Record<string, unknown> });
+      const payload = JSON.parse(row.payload) as Record<string, unknown>;
+      if (sesionId !== undefined && payload['sesionId'] !== sesionId) continue;
+      eventos.push({ ts: row.ts, payload });
     } catch {
-      // Fila ilegible: se ignora, igual que `obtenerPayloadsPorTipo`.
+      // Fila ilegible: se ignora — un consumidor best-effort (la semilla de cumplimientos) no
+      // debe romperse por esto, y el detector de huecos ya filtraba timestamps inválidos.
     }
   }
   return eventos;
@@ -424,17 +412,63 @@ export async function revertirAPendiente(
   await actualizarEstado(db, eventIds, 'pendiente');
 }
 
+/** Tipo de evento cuya evidencia local se preserva mientras la sesión siga activa: es el único
+ * del que se RECONSTRUYE estado a partir del outbox (`clavesCumplimientoDesdePayloads`,
+ * `gps/location-task.ts`, deriva de acá el contador de pasadas de la multi-vuelta). Ver
+ * `purgarAcusadosAntesDe`. */
+const TIPO_PRESERVADO_SESION_ACTIVA: TipoEventoSync = 'cumplimiento_punto_control';
+
+/**
+ * SQL de la purga, aislado como función pura para poder testear el predicado sin un módulo
+ * nativo de por medio (`expo-sqlite` no corre bajo vitest/Node). Ver `purgarAcusadosAntesDe`
+ * para el porqué de cada condición.
+ */
+export function construirPurgaAcusados(
+  antesDe: Date,
+  sesionIdActiva?: string,
+): { sql: string; params: (string | number)[] } {
+  if (!sesionIdActiva) {
+    return {
+      sql: "DELETE FROM outbox WHERE estado = 'acusado' AND ts < ?",
+      params: [antesDe.toISOString()],
+    };
+  }
+  return {
+    sql:
+      "DELETE FROM outbox WHERE estado = 'acusado' AND ts < ? " +
+      "AND NOT (tipo = ? AND COALESCE(json_extract(payload, '$.sesionId'), '') = ?)",
+    params: [antesDe.toISOString(), TIPO_PRESERVADO_SESION_ACTIVA, sesionIdActiva],
+  };
+}
+
 /** Limpieza de eventos ya acusados y viejos — evita que el outbox crezca sin límite en un
- * dispositivo que queda encendido semanas. No borra nada que no esté `acusado`. */
+ * dispositivo que queda encendido semanas. No borra nada que no esté `acusado`.
+ *
+ * M2 (hallazgo de revisión, medio, complementario — el fix principal es
+ * `Math.max(maxPasadaEnPayloads, cantidadDeFilas)` en `clavesCumplimientoDesdePayloads`,
+ * `gps/location-task.ts`): `sesionIdActiva`, si se pasa, EXCLUYE de la purga los
+ * `cumplimiento_punto_control` de esa sesión — `restaurarSesion` (`use-auth-movil.ts`) mantiene
+ * viva la misma `sesionId` mientras el refresh token siga vigente (30 días por default), así
+ * que una sesión operativa puede seguir "activa" bastante después de que la ventana de purga
+ * (7 días) empiece a comerse sus cumplimientos más viejos, haciendo retroceder el contador de
+ * pasadas que la semilla reconstruye.
+ *
+ * M4 (hallazgo de revisión, medio): esa exclusión está acotada a `tipo =
+ * 'cumplimiento_punto_control'`, NO a todo evento de la sesión. Los `gps_point` también llevan
+ * `sesionId` en el payload (`gps/location-task.ts`), y con la misma `sesionId` viva 30 días,
+ * excluirlos a todos dejaba a la purga sin poder borrar NADA de la sesión activa: ~8.600 filas
+ * de `gps_point` ya acusadas por día acumulándose para siempre — justo el crecimiento sin techo
+ * que esta función existe para evitar. De un `gps_point` acusado no se reconstruye ningún
+ * estado local (ya está en el servidor, que es la fuente de verdad auditada): una vez acusado y
+ * fuera de la ventana, se puede borrar aunque la sesión siga abierta.
+ */
 export async function purgarAcusadosAntesDe(
   db: SQLite.SQLiteDatabase,
   antesDe: Date,
+  sesionIdActiva?: string,
 ): Promise<number> {
-  const result = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.runAsync("DELETE FROM outbox WHERE estado = 'acusado' AND ts < ?", [
-      antesDe.toISOString(),
-    ]),
-  );
+  const { sql, params } = construirPurgaAcusados(antesDe, sesionIdActiva);
+  const result = await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
   return result.changes;
 }
 

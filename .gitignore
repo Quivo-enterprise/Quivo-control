@@ -31,3 +31,16 @@ osrm-data/
 test-results/
 playwright-report/
 artifacts/
+
+# scripts/cargar-circuito-z12.ts: backup + mapeo de ids escritos en cada corrida (paso 0),
+# incluye geometría/coordenadas reales de producción — nunca se commitea.
+scripts/backups-z12/
+
+# scripts/data/z12-circuito/*_simp.json: geometría GPS real de producción de la línea Z12
+# (subida/bajada simplificadas), usada como input de scripts/cargar-circuito-z12.ts —
+# datos operativos reales, no de ejemplo, nunca se commitean.
+scripts/data/z12-circuito/*_simp.json
+
+# docs/plan-v2-app-y-mapa-en-vivo.md ordena explícitamente no commitear este archivo:
+# credenciales de demo en texto plano (PINs de vehículo y conductor).
+docs/Credenciales demo day QUIVO CONTROL

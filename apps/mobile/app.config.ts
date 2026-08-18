@@ -45,6 +45,18 @@ export default (): ExpoConfig => ({
       'ACCESS_BACKGROUND_LOCATION',
       'FOREGROUND_SERVICE',
       'FOREGROUND_SERVICE_LOCATION',
+      // QUI-338: con targetSdk 36 (Android 13+), sin `POST_NOTIFICATIONS` la notificación del
+      // foreground service (`app.notification` en `background-geolocation.config.ts`) no se
+      // muestra — y esa notificación es la única señal que tiene el conductor de que el
+      // recorrido se está grabando mientras la pantalla está apagada.
+      'POST_NOTIFICATIONS',
+      // Declarados explícitamente por trazabilidad del manifest (antes probablemente los
+      // inyectaba el AAR nativo de `react-native-background-geolocation` por manifest-merge,
+      // sin confirmar): `WAKE_LOCK` lo necesita el foreground service para seguir grabando con
+      // la pantalla apagada; `RECEIVE_BOOT_COMPLETED` es el que dispara `startOnBoot: true`
+      // (`background-geolocation.config.ts`) tras un reinicio del teléfono.
+      'WAKE_LOCK',
+      'RECEIVE_BOOT_COMPLETED',
     ],
   },
   extra: {

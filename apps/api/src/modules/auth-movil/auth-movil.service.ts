@@ -202,8 +202,31 @@ export class AuthMovilService {
       if (consumido.count !== 1) {
         throw credencialesInvalidas();
       }
+      // Plan §2.4.5 ("sesiones colgadas"): cierra las sesiones ACTIVAS previas del MISMO
+      // vehículo, sin importar el dispositivo — no solo las del mismo `deviceId` como antes.
+      // Producción tuvo 3 sesiones activas simultáneas del mismo vehículo en DOS
+      // dispositivos: el filtro por `deviceId` nunca las alcanzaba porque cada login venía
+      // de un `deviceId` distinto. Se mantiene también la condición por `deviceId` (con
+      // `OR`) para no perder la cobertura original — un mismo dispositivo reutilizado para
+      // OTRO vehículo tampoco debe dejar una sesión huérfana. Solo aplica a la CREACIÓN de
+      // una sesión nueva (acá, dentro de esta misma transacción); no toca `seleccion_requerida`
+      // (esa rama retorna antes de llegar acá) ni `refresh()`/`logout()`, que son métodos
+      // aparte.
+      //
+      // M1 (hallazgo de revisión, medio): `sindicatoId: desafio.sindicatoId` FUERA del `OR`,
+      // no dentro. Esto corre bajo `CONTEXTO_ADMIN` (RLS bypasseada) — la rama `vehiculoId` es
+      // segura por sí sola (UUID PK de un solo sindicato), pero `deviceId` lo controla el
+      // CLIENTE y llega tal cual en el request: sin este scoping, alguien autenticado en el
+      // sindicato A puede mandar el `deviceId` de un dispositivo real del sindicato B (que
+      // puede observar o adivinar) y cerrarle la sesión operativa VIVA a un vehículo ajeno,
+      // cortando la evidencia del turno de otro sindicato.
       await tx.sesionOperativa.updateMany({
-        where: { deviceId: desafio.deviceId, estado: 'activa', revokedAt: null },
+        where: {
+          estado: 'activa',
+          revokedAt: null,
+          sindicatoId: desafio.sindicatoId,
+          OR: [{ vehiculoId: desafio.vehiculoId }, { deviceId: desafio.deviceId }],
+        },
         data: { estado: 'cerrada', fin: ahora, revokedAt: ahora },
       });
       return tx.sesionOperativa.create({

@@ -1,10 +1,12 @@
 import type { Location } from 'react-native-background-geolocation';
-import type { PuntoControlPaquete, TipoEventoSync } from '@quivo/shared';
+import { resolverTsFix, type PuntoControlPaquete, type TipoEventoSync } from '@quivo/shared';
 import {
-  claveCumplimiento,
   detectarPuntosControlCercanos,
   filtrarNuevosCumplimientos,
+  claveCumplimiento,
+  type AvisoPrecision,
   type DeteccionPuntoControl,
+  type EstadoPuntoControl,
 } from './geofence';
 
 /**
@@ -38,6 +40,17 @@ export interface ContextoUbicacion {
 export interface EventoUbicacionConstruido {
   tipo: TipoEventoSync;
   payload: Record<string, unknown>;
+  /** M4 (hallazgo de revisión, medio): clave (`claveCumplimiento`) cuya transición de estado
+   * queda ATADA a la persistencia de ESTE evento — presente SOLO en eventos
+   * `cumplimiento_punto_control` (`undefined` para `gps_point`, que no tiene ninguna
+   * transición de histéresis asociada). `registrarPuntoGps` (`headless-task.ts`) usa este
+   * campo para aplicar la transición correspondiente INMEDIATAMENTE después de que SU PROPIO
+   * `encolarEvento` se confirma — no al final del tick — así que si un `encolarEvento`
+   * posterior en el mismo tick falla (dos puntos de control con radios solapados, por
+   * ejemplo), los cumplimientos que SÍ se persistieron antes del fallo ya quedaron reflejados
+   * en el Map de estados y no se re-emiten como pasada 1 en el próximo fix.
+   */
+  clave?: string;
 }
 
 export interface ResultadoConstruirEventos {
@@ -46,6 +59,19 @@ export interface ResultadoConstruirEventos {
    * lo usa `useGpsOperativo` para disparar el aviso por voz (`gps-provider.tsx`). El
    * headless task lo ignora: sin React no hay UI ni `expo-speech` a la que avisar. */
   deteccion: DeteccionPuntoControl | null;
+  /**
+   * Transiciones de estado del geofence (`filtrarNuevosCumplimientos`, `geofence.ts`) que
+   * corresponde aplicar al Map de estados del caller — SOLO DESPUÉS de que `encolarEvento`
+   * confirme que `eventos` quedó persistido de verdad. Esta función NO muta nada (a
+   * diferencia de la versión anterior, que mutaba el Set de detecciones in-place ANTES de esa
+   * confirmación — plan §2.4, hallazgo de revisión: un fallo de encolado dejaba el punto
+   * marcado como emitido y suprimía su reemisión). Vacío cuando no hay transición que aplicar.
+   */
+  transicionesEstado: Map<string, EstadoPuntoControl>;
+  /** M3 (hallazgo de revisión, medio): decisiones de la máquina de estados condicionadas por la
+   * precisión del fix — `registrarPuntoGps` (`headless-task.ts`) las convierte en breadcrumbs
+   * de Sentry. Vacío en el caso normal. Ver `AvisoPrecision` en `geofence.ts`. */
+  avisosPrecision: AvisoPrecision[];
 }
 
 /**
@@ -79,21 +105,33 @@ export function normalizarTsFix(timestamp: Location['timestamp']): string | unde
 
 /**
  * Construye los eventos de outbox correspondientes a un punto GPS: siempre un `gps_point`
- * (criterio C del spike — la evidencia legal, RF-67..73) y, si el punto cae dentro del radio
- * de algún punto de control aún no detectado en esta sesión, un `cumplimiento_punto_control`
- * adicional (RF-64..66). Muta `puntosControlDetectados` en el sitio para registrar lo
- * detectado — el caller decide de dónde viene ese Set (ver comentario de `ContextoUbicacion`).
- * Las claves de ese Set van scopeadas por sesión (`claveCumplimiento`, ver `geofence.ts`).
+ * (criterio C del spike — la evidencia legal, RF-67..73) y, por cada punto de control cuya
+ * máquina de estados (`filtrarNuevosCumplimientos`, `geofence.ts`) decida que corresponde una
+ * pasada nueva (RF-64..66), un `cumplimiento_punto_control` adicional con su número de
+ * `pasada`.
+ *
+ * PURA: no muta `estadosPuntosControl` — a diferencia de la versión anterior (que mutaba el
+ * Set de detecciones in-place dentro de este mismo loop). Devuelve las `transicionesEstado`
+ * para que el caller (`registrarPuntoGps`, `headless-task.ts`) las aplique recién cuando
+ * confirme que `eventos` se encoló con éxito (ver el comentario de `ResultadoConstruirEventos`
+ * y el de `ResultadoFiltrado` en `geofence.ts`).
  */
 export function construirEventosDeUbicacion(
   location: Location,
   contexto: ContextoUbicacion,
-  puntosControlDetectados: Set<string>,
+  estadosPuntosControl: ReadonlyMap<string, EstadoPuntoControl>,
 ): ResultadoConstruirEventos {
   // Normalizado UNA sola vez: `gps_point` y, si aplica, `cumplimiento_punto_control` vienen
   // de la misma `location` — ver `normalizarTsFix` arriba para el porqué (v5 ensanchó
   // `Location.timestamp` a `string | number`).
   const tsFix = normalizarTsFix(location.timestamp);
+  // La máquina de estados (`filtrarNuevosCumplimientos`) exige medir `PASADA_MIN_MS` sobre el
+  // FIX real, nunca sobre `Date.now()` (ver el comentario de esa constante en `geofence.ts`).
+  // Si el timestamp del fix es ilegible (`tsFix === undefined`, caso raro), no hay reloj de
+  // fix del que confiar — usar `Date.now()` acá es el único fallback posible y no contradice
+  // esa regla: la regla existe para no colapsar fixes bufferados con `tsFix` VÁLIDOS pero
+  // distintos, no para este caso degenerado sin ningún timestamp usable.
+  const tsFixMs = tsFix !== undefined ? Date.parse(tsFix) : Date.now();
   const eventos: EventoUbicacionConstruido[] = [
     {
       tipo: 'gps_point',
@@ -115,22 +153,40 @@ export function construirEventosDeUbicacion(
   ];
 
   let deteccion: DeteccionPuntoControl | null = null;
+  let transicionesEstado = new Map<string, EstadoPuntoControl>();
+  let avisosPrecision: AvisoPrecision[] = [];
   if (contexto.puntosControl.length > 0) {
     const posicion: [number, number] = [location.coords.longitude, location.coords.latitude];
-    const detecciones = detectarPuntosControlCercanos(posicion, contexto.puntosControl);
-    const nuevos = filtrarNuevosCumplimientos(
-      puntosControlDetectados,
+    // M3 (hallazgo de revisión, medio): la precisión del fix viaja DENTRO de cada detección y
+    // la aplica `filtrarNuevosCumplimientos` solo al re-armado. Antes de este fix, acá se
+    // FILTRABAN (se tiraban) las detecciones cuyo fix tuviera `accuracy > radioToleranciaM`:
+    // con los radios de 100 m de la Z12 y una Android que reporta 100-500 m de rutina, una
+    // pasada genuina desaparecía entera — sin evento y sin telemetría. Ver el comentario largo
+    // de M3 en `geofence.ts` para el porqué de tratar entrada y re-armado de forma asimétrica.
+    const detecciones = detectarPuntosControlCercanos(
+      posicion,
+      contexto.puntosControl,
+      location.coords.accuracy,
+    );
+    const { emitir, transiciones, avisosPrecision: avisos } = filtrarNuevosCumplimientos(
+      estadosPuntosControl,
       detecciones,
       contexto.sesionId,
+      tsFixMs,
     );
+    transicionesEstado = transiciones;
+    avisosPrecision = avisos;
 
-    for (const nuevaDeteccion of nuevos) {
-      puntosControlDetectados.add(
-        claveCumplimiento(contexto.sesionId, nuevaDeteccion.puntoControlId),
-      );
-      deteccion = nuevaDeteccion;
+    for (const { deteccion: nuevaDeteccion, pasada, clave } of emitir) {
+      // B4 (hallazgo de revisión, bajo): la pasada viaja en la propia `DeteccionPuntoControl`
+      // — `gps-provider.tsx` la necesita para distinguir dos pasadas CONSECUTIVAS del MISMO
+      // punto de control (multi-vuelta) al decidir si repetir el aviso por voz.
+      deteccion = { ...nuevaDeteccion, pasada };
       eventos.push({
         tipo: 'cumplimiento_punto_control',
+        // M4 (hallazgo de revisión, medio): clave atada a ESTE evento — ver el comentario de
+        // `EventoUbicacionConstruido.clave`.
+        clave,
         payload: {
           sesionId: contexto.sesionId,
           puntoControlId: nuevaDeteccion.puntoControlId,
@@ -147,36 +203,121 @@ export function construirEventosDeUbicacion(
           // Contrato + fallback: `PayloadCumplimientoPuntoControlSchema` / `resolverTsFix`
           // en `@quivo/shared`.
           tsFix,
+          // Número de pasada (multi-vuelta, plan §2.3): contador incremental por clave
+          // `${sesionId}:${puntoControlId}`, empezando en 1 — ver `filtrarNuevosCumplimientos`
+          // en `geofence.ts`. `PayloadCumplimientoPuntoControlSchema.pasada` es opcional a
+          // propósito: APKs viejos nunca lo van a mandar.
+          pasada,
         },
       });
     }
   }
 
-  return { eventos, deteccion };
+  return { eventos, deteccion, transicionesEstado, avisosPrecision };
 }
 
 /**
- * Reconstruye las claves de cumplimiento ya emitidas a partir de los payloads que siguen en
- * el outbox local. Sirve para SEMBRAR el Set del headless task en su primer tick: scopear la
- * clave por sesión evita que un cumplimiento de la ruta A suprima el de la ruta B, pero no
- * cubre el otro lado del mismo problema — si Android recicla el contexto JS headless a mitad
- * de turno, el Set arranca vacío y el mismo `(sesionId, puntoControlId)` se vuelve a emitir
- * con un `eventId` nuevo. El worker deduplica `cumplimientos_pc` por `eventId` solamente
- * (`skipDuplicates`, `ingesta-worker.service.ts`), así que esa re-emisión SÍ crea una
- * segunda fila para el mismo punto de control — no es inofensiva.
+ * Reconstruye el ESTADO de histéresis (`EstadoPuntoControl`, `geofence.ts`) de cada punto de
+ * control ya visto, a partir de los eventos `cumplimiento_punto_control` que siguen en el
+ * outbox local. Sirve para SEMBRAR el Map del headless task en su primer tick, y — desde el
+ * fix de C1 — el del hook TAMBIÉN al re-enganchar al montar (no solo al arrancar `iniciar()`):
+ * scopear la clave por sesión evita que el estado de la ruta A contamine el de la ruta B, pero
+ * no cubre el otro lado del mismo problema — si Android recicla el contexto JS headless a
+ * mitad de turno (o la app se mata y se reabre), un Map vacío reiniciaría el contador de
+ * pasadas en 1 y podría reemitir la pasada que ya estaba en curso.
  *
- * Es best-effort a propósito: si el outbox ya purgó los eventos acusados (`purgarAcusadosAntesDe`)
- * la semilla queda incompleta y se puede repetir un cumplimiento. Sigue siendo estrictamente
- * mejor que arrancar siempre vacío, y nunca suprime evidencia de una sesión distinta.
+ * Recibe `{ ts, payload }` (no solo el payload) porque usa `resolverTsFix` — el mismo
+ * contrato que aplica el worker server-side (`@quivo/shared`) — para derivar el timestamp de
+ * cada cumplimiento: eventos con `tsFix` usable lo usan, y los que no (dispositivos con una
+ * versión anterior de la app, o un `tsFix` ilegible) caen al `ts` de encolado del sobre, en
+ * vez de quedar sin ningún timestamp del que derivar el estado.
+ *
+ * Por cada clave (`sesionId:puntoControlId`):
+ * - `pasadas` = `Math.max(maxPasadaEnPayloads, cantidadDeFilas)` (M2, hallazgo de revisión,
+ *   medio). Antes era solo `cantidadDeFilas` — contar filas alcanza mientras el outbox tenga
+ *   TODAS las filas de la clave, pero `restaurarSesion` mantiene viva la misma `sesionId`
+ *   mientras el refresh token siga vigente (30 días por default) y `purgarAcusadosAntesDe`
+ *   (`db/outbox.ts`, ventana de 7 días) puede borrar cumplimientos YA ACUSADOS de los
+ *   primeros días de una sesión que sigue viva más allá de esa ventana — ahí `cantidadDeFilas`
+ *   subcuenta y el contador de pasadas RETROCEDE. `pasada` ya viaja en el payload de cada
+ *   evento (`PayloadCumplimientoPuntoControlSchema.pasada`, opcional para compatibilidad con
+ *   APKs viejos) — tomar el máximo entre ambas fuentes usa la que esté más completa: si la
+ *   purga se comió filas viejas pero la más reciente que sobrevive ya traía `pasada: 8`, el
+ *   `Math.max` la respeta aunque solo quede 1 fila en el outbox.
+ * - `ultimoEmitidoMs` = el `max` de los timestamps resueltos de esa clave.
+ * - `dentro` es SIEMPRE `true` cuando hay al menos una emisión previa para la clave — nunca en
+ *   función del tiempo transcurrido (A1, hallazgo de revisión CRÍTICO; ver el porqué debajo).
+ *
+ * Es best-effort a propósito: si el outbox ya purgó TODAS las filas de una clave, la semilla
+ * queda incompleta y el contador puede arrancar más bajo de lo real — sigue siendo
+ * estrictamente mejor que arrancar siempre vacío (que reiniciaría SIEMPRE en pasada 1), y
+ * nunca suprime evidencia de una sesión distinta.
+ *
+ * ---
+ *
+ * ### Por qué `dentro` YA NO depende del tiempo transcurrido (A1)
+ *
+ * La versión anterior derivaba `dentro = ahoraMs - ultimoEmitidoMs < PASADA_MIN_MS`: si la
+ * última emisión fue hace más de `PASADA_MIN_MS` (2 min), sembraba `dentro: false` — es decir,
+ * usaba el PISO de tiempo entre pasadas como si fuera una prueba de que el vehículo ya se
+ * había ido del punto. No lo es: `PASADA_MIN_MS` existe para no colapsar dos pasadas reales
+ * separadas por un salto de reloj del fix, NO para inferir si el vehículo se movió. Con el
+ * vehículo PARADO cerca de un punto de control (layover en terminal) y la app matada/reabierta
+ * — o el contexto JS headless reciclado por Android — más de 2 minutos después, la semilla
+ * derivaba `dentro: false` y el próximo fix (a 10 m, el vehículo nunca se movió) emitía una
+ * pasada 2 FANTASMA. Pasaba en dos escenarios reales: cada vez que Android recicla el contexto
+ * JS headless durante un layover de más de 2 min en la terminal, y cada vez que el chofer
+ * aprieta "Iniciar" estando parado dentro de un punto.
+ *
+ * Sembrar `dentro: true` siempre (cuando hay pasadas previas) no pierde ninguna pasada real: la
+ * máquina de estados (`filtrarNuevosCumplimientos`, `geofence.ts`) se re-arma sola en el primer
+ * fix a más de `radio * FACTOR_REARME_RADIO` (y, desde A2, en el SEGUNDO fix consecutivo — ver
+ * `FIXES_REARME_CONSECUTIVOS`) — con `locationUpdateInterval: 10_000` eso llega en 10-20 s de
+ * movimiento real, así que la próxima pasada de verdad se habilita casi de inmediato en cuanto
+ * el vehículo sale del radio, sin que haga falta (ni corresponda) adivinar acá cuánto tiempo
+ * pasó reabriendo la app.
  */
-export function clavesCumplimientoDesdePayloads(payloads: Record<string, unknown>[]): Set<string> {
-  const claves = new Set<string>();
-  for (const payload of payloads) {
-    const sesionId = payload['sesionId'];
-    const puntoControlId = payload['puntoControlId'];
-    if (typeof sesionId === 'string' && typeof puntoControlId === 'string') {
-      claves.add(claveCumplimiento(sesionId, puntoControlId));
-    }
+export function clavesCumplimientoDesdePayloads(
+  eventos: { ts: string; payload: Record<string, unknown> }[],
+): Map<string, EstadoPuntoControl> {
+  const acumulado = new Map<
+    string,
+    { ultimoEmitidoMs: number; filas: number; maxPasadaPayload: number }
+  >();
+
+  for (const evento of eventos) {
+    const sesionId = evento.payload['sesionId'];
+    const puntoControlId = evento.payload['puntoControlId'];
+    if (typeof sesionId !== 'string' || typeof puntoControlId !== 'string') continue;
+
+    const clave = claveCumplimiento(sesionId, puntoControlId);
+    const tsResueltoMs = Date.parse(resolverTsFix(evento.payload, evento.ts));
+    const pasadaPayload = evento.payload['pasada'];
+    const pasadaNumerica =
+      typeof pasadaPayload === 'number' && Number.isFinite(pasadaPayload) ? pasadaPayload : 0;
+    const previo = acumulado.get(clave) ?? { ultimoEmitidoMs: -Infinity, filas: 0, maxPasadaPayload: 0 };
+    acumulado.set(clave, {
+      filas: previo.filas + 1,
+      maxPasadaPayload: Math.max(previo.maxPasadaPayload, pasadaNumerica),
+      ultimoEmitidoMs: Number.isNaN(tsResueltoMs)
+        ? previo.ultimoEmitidoMs
+        : Math.max(previo.ultimoEmitidoMs, tsResueltoMs),
+    });
   }
-  return claves;
+
+  const estados = new Map<string, EstadoPuntoControl>();
+  for (const [clave, { ultimoEmitidoMs, filas, maxPasadaPayload }] of acumulado) {
+    // M2: ver el comentario de arriba — el máximo entre "cuántas filas quedan" y "la pasada
+    // más alta que alguna fila sobreviviente reporta" sobrevive a una purga parcial.
+    const pasadas = Math.max(maxPasadaPayload, filas);
+    estados.set(clave, {
+      // A1: ver el comentario largo de arriba — toda clave que llega hasta acá tiene al menos
+      // una emisión previa (por construcción del loop de arriba), así que siempre es `true`.
+      dentro: true,
+      ultimoEmitidoMs,
+      pasadas,
+      ultimoFixMs: Number.isFinite(ultimoEmitidoMs) ? ultimoEmitidoMs : undefined,
+    });
+  }
+  return estados;
 }

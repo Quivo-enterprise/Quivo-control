@@ -20,18 +20,35 @@
 > vigente de cómo opera la línea, los 14 puntos de control reales y el plan para cargarlos están en
 > **[`plan-ruta-real-z12.md`](plan-ruta-real-z12.md)**.
 >
-> 🚦 **ARRANCAR ACÁ EN LA PRÓXIMA SESIÓN.** Se está implementando
+> 🚦 **ARRANCAR ACÁ (actualizado 2026-08-18).** Se está implementando
 > [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md) (aprobado por el CTO el
-> 2026-08-17). **Entrega 1 (build de rescate) está MERGEADA** — ver
-> [la sección de abajo](#entrega-1-del-plan-v2-2026-08-17-noche). Falta, en este orden:
-> **(a)** aplicar la migración `20260817130000` a Cloud SQL y redesplegar el worker
-> (⚠️ **producción bloqueada hasta que se haga**, ver abajo); **(b)** correr el build 7 de EAS e
-> instalarlo en el S25 para extraer el recorrido del día 1;
-> **(2) v2 de la app**: multi-vuelta, sesión/arranque/datos reales, guiado y eficiencia
-> (la persistencia y la instrumentación ya entraron con la Entrega 1).
-> **(3) Mapa en vivo** `/en-vivo` en el panel.
-> El diagnóstico completo del día 1 (con causas raíz ya probadas) está en ese plan — leerlo antes de
-> tocar código, no re-investigar.
+> 2026-08-17). **Entrega 1 MERGEADA** — ver
+> [la sección de abajo](#entrega-1-del-plan-v2-2026-08-17-noche). **Entrega 2 terminada** y viva en
+> el **PR #34** (rama `feat/v2-multivuelta-sesion-guiado`): multi-vuelta con histéresis, sesión
+> sostenida, arranque reordenado, el flujo de permisos de ubicación (QUI-338, el conductor del
+> Samsung A71 que no podía arrancar el recorrido) y los 15 hallazgos de dos rondas de
+> `/code-review high`. 116 tests en verde.
+>
+> ✅ **La migración `20260817130000` YA está aplicada** (Cloud SQL, 2026-08-18 01:28) y el worker
+> `quivo-worker` está desplegado y escuchando la cola — verificado contra producción esta sesión.
+> La advertencia de "producción bloqueada" de la Entrega 1 quedó saldada.
+>
+> **Lo que sigue es la secuencia de despliegue, y el orden no es intercambiable** — está en
+> **[`plan-salida-apk-v2.md`](plan-salida-apk-v2.md)**: mergear #34 → aplicar las 2 migraciones
+> nuevas → `api:v4` → redesplegar worker y API → cerrar las 8 sesiones colgadas → **build 7 del
+> APK**. El APK del teléfono sigue siendo el **build 6**: los fixes de `fbfbd56` nunca se
+> compilaron. Si el APK sale antes que el worker con `api:v4`, el teléfono manda `pasada` y el
+> worker v3 la ignora en silencio: no rompe, pero no cuenta las vueltas, que es justo lo que pidió
+> el sindicato.
+>
+> **El rescate del día 1 quedó cerrado por decisión del CTO**: los dos GPX de Geo Tracker del 17 de
+> agosto (1505 y 1397 puntos) son la traza de esa jornada, y de ellos salió el circuito real que
+> hoy está cargado en producción. El código de rescate queda en la app, pero no condiciona nada.
+> **Entrega 3 (mapa en vivo `/en-vivo`) sigue sin empezar**, y va después: sin puntos en
+> `gps_points` la pantalla sería correcta y vacía.
+>
+> El diagnóstico completo del día 1 (con causas raíz ya probadas) está en ese plan — leerlo antes
+> de tocar código, no re-investigar.
 
 ## Entrega 1 del plan v2 (2026-08-17, noche): rescate y worker de ingesta
 
@@ -164,6 +181,69 @@ pantalla de la app.
 Lo que sí funcionó: el GPS del dispositivo (los breadcrumbs muestran al trufi avanzando normal de
 Villa hacia Univalle), el paquete del día, y el acompañante a bordo con la planilla manual — hoy la
 única medición confiable del día 1.
+
+## Estado — 2026-08-18 (v2 cerrada en código, pendiente de desplegar)
+
+**PR #34**, rama `feat/v2-multivuelta-sesion-guiado`. Entrega 2 completa del plan v2. Verificación:
+`tsc` 9/9, 86 tests, eslint 0 errores. `/code-review high` devolvió 11 hallazgos (2 altos, 5
+medios, 4 bajos), todos aplicados; `/security-review` no encontró nada HIGH ni MEDIUM.
+
+**Lo que se verificó contra producción esta sesión** (túnel de Cloud SQL, sólo lectura):
+
+| Ítem | Estado |
+|---|---|
+| Asignación de hoy | ✅ existe, rotación `86d20fcf-…` publicada, apunta a `3333…0011` |
+| Circuito Z12 | ✅ **aplicado** — 1255 vértices, 40,7 km, 26 PC activos; los 14 de `813c6130-…` en `inactivo` |
+| Worker de ingesta | ✅ **desplegado** — `quivo-worker`, `api:v3`, `scalingMode: manual`, 1 instancia |
+| `gps_points` | ❌ **0 filas** |
+| Migración `pasada` | ❌ sin aplicar (última: `20260817130000`) |
+| Sesiones colgadas | ❌ **8 activas** del vehículo `…0014`, 16-17 ago |
+| APK en el teléfono | ❌ **build 6** — los builds 4 y 5 fallaron y el 7 nunca se hizo |
+| Datos reales | ❌ `Sindicato Piloto — PLACEHOLDER`, placa `1111AAA` |
+
+**Dos cosas que el handoff daba por pendientes y ya estaban hechas:** el worker de ingesta se
+desplegó la madrugada del 18 (el primer intento, 00:03, reventó por `JWT_SECRET` faltante; el
+segundo, 01:29, arrancó bien y conectó a Redis), y el circuito real de la Z12 quedó cargado en
+producción a partir de las dos trazas GPX del día 17.
+
+**Un hallazgo del review que vale registrar:** `PayloadCumplimientoPuntoControlSchema` está
+definido pero **no se ejecuta en ningún punto del repo** — `EventoSyncSchema.payload` es
+`z.record(z.unknown())`, así que los payloads de sync llegan al worker sin validación de forma. El
+cast de `ingesta-worker.service.ts:348` es puramente de tipos. Se coercionó `pasada` a mano; el
+resto de los campos del payload sigue confiando en el mismo cast.
+
+**Segunda tanda de hallazgos (auditoría de aptitud para lanzar, mismo día).** Cuatro más, los tres
+primeros ya cerrados en la misma rama:
+
+1. **QUI-338, el que reportó la calle.** Un conductor con un **Samsung Galaxy A71** inició sesión
+   sin problema y no pudo iniciar el recorrido: la app no accedía al GPS. La app pedía el permiso
+   como efecto colateral de `ready()`/`start()` —sin `requestPermission()`, sin
+   `getProviderState()`, sin ningún camino a Ajustes— y al fallar mostraba un texto genérico con
+   el botón "Iniciar recorrido" todavía habilitado. Desde Android 11 *"Permitir todo el tiempo"*
+   no se puede otorgar desde ningún diálogo, y tras dos rechazos Android deja de mostrarlo. Ahora
+   hay una máquina de decisión pura (`gps/permiso-ubicacion.ts`) con cuatro estados, cada uno con
+   su mensaje y su salida a la pantalla correcta del sistema; el botón depende del permiso.
+   Lo que no se arregla con código quedó en
+   [`runbooks/alta-de-conductor-android.md`](runbooks/alta-de-conductor-android.md).
+2. **El paquete del día viejo se servía como si fuera el de hoy.** `quivo-paquete-dia.db` guarda
+   una sola fila y sobrevivía al logout. Si la descarga fallaba por falta de señal, la app caía al
+   caché local sin verificar que fuera de la asignación actual — sólo miraba `venceAt`, el de la
+   asignación vieja. En un relevo de conductor a mitad de turno eso todavía no venció: el geofence
+   habría detectado contra los puntos de control de otra ruta, sin error y sin banner.
+   `obtenerPaqueteDiaLocal` ahora exige el `asignacionId` esperado como parámetro **obligatorio**,
+   así el compilador impide que un llamador futuro se olvide.
+3. **El fix del logout estaba en un call site de dos.** `perfil-screen.tsx` tenía su propio botón
+   con un mensaje que no advertía que el GPS deja de grabar. El diálogo se extrajo a
+   `shared/components/cerrar-sesion-dialog.tsx` y los dos lo comparten.
+4. **Sin cerrar:** Sentry no ata ningún evento a un teléfono — cero `setUser`/`setTag` en toda la
+   app. Con un vehículo se correlaciona a mano; con flota, "qué le pasó al conductor X" deja de
+   ser un filtro.
+
+**Anotado, sin arreglar:** el worker avisa `Eviction policy is volatile-lru. It should be
+"noeviction"` — con la flota, Redis puede desalojar jobs de BullMQ bajo presión de memoria, que es
+pérdida silenciosa de eventos.
+
+La secuencia de despliegue está en [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md).
 
 ## Estado — 2026-08-16 (domingo, cierre de la víspera del piloto)
 
