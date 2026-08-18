@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import * as Sentry from '@sentry/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
 import { Svg, Circle, Line } from 'react-native-svg';
 import { haversineMetros, type ContextoOperativoMovil, type PaqueteDia } from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
 import { Button } from '../../shared/components/Button';
+import { Input } from '../../shared/components/Input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { MapErrorBoundary } from './map-error-boundary';
 import { completadosTrasDeteccion, proximoPuntoControlPendiente } from './proximo-punto-control';
@@ -17,6 +19,7 @@ import { ruteoApi } from '../../shared/api/ruteo-api';
 import { ControlFeedbackToast } from './control-feedback-toast';
 import { OfflineBanner } from './offline-banner';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
+import { CerrarSesionDialog } from '../../shared/components/cerrar-sesion-dialog';
 import { useGpsContext } from './gps-provider';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OperationStackParamList } from '../../app/operation-navigator';
@@ -52,6 +55,8 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
   const [observacion, setObservacion] = useState('');
   const [enviandoObservacion, setEnviandoObservacion] = useState(false);
   const [observacionEnviada, setObservacionEnviada] = useState(false);
+  const [errorObservacion, setErrorObservacion] = useState<string | null>(null);
+  const [observacionModalVisible, setObservacionModalVisible] = useState(false);
   const [recenterTick, setRecenterTick] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
@@ -147,6 +152,7 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
     const texto = observacion.trim();
     if (!texto) return;
     setEnviandoObservacion(true);
+    setErrorObservacion(null);
     try {
       const db = await abrirOutbox();
       await encolarEvento(db, {
@@ -156,10 +162,51 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
       });
       setObservacion('');
       setObservacionEnviada(true);
+    } catch (error) {
+      // Hallazgo 4 (MEDIO, code review de este cambio): antes este `try/finally` no tenía
+      // `catch` — daba igual mientras el botón fue un no-op, pero el cambio que lo conectó
+      // (arriba, hallazgo 3 del plan) lo hizo alcanzable por primera vez. Si `abrirOutbox()` o
+      // `encolarEvento` lanzan (la regresión de `expo-sqlite@16.0.10` documentada en todo
+      // este repo), la promesa rechazaba sin manejar: `observacionEnviada` se quedaba en
+      // `false` y el modal no reaccionaba al toque de "Enviar" — el conductor volvía a tocar
+      // creyendo que se perdió. Con esto el modal muestra un error legible y deja reintentar.
+      console.error('[QUIVO][observacion] No se pudo encolar la observación', error);
+      Sentry.captureException(error, {
+        tags: { contexto: 'operation-screen', paso: 'enviar-observacion' },
+      });
+      setErrorObservacion('No se pudo guardar la observación. Vuelve a intentarlo.');
     } finally {
       setEnviandoObservacion(false);
     }
   }, [observacion, props.contexto.sesionId, props.deviceId]);
+
+  // Hallazgo 3 (MEDIO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): cierra el modal y
+  // resetea el formulario — se usa tanto al cancelar como después de confirmar el envío
+  // ("Listo"). No cierra mientras `enviandoObservacion` está en curso (ver `onRequestClose`
+  // del modal de abajo), para no perder el toque de "Enviar" que sigue en vuelo.
+  const cerrarModalObservacion = useCallback(() => {
+    setObservacionModalVisible(false);
+    setObservacion('');
+    setObservacionEnviada(false);
+    setErrorObservacion(null);
+  }, []);
+
+  // Hallazgo 8 (BAJO, code review de este cambio): `gps.abrirAjustesPermisoGps` termina en
+  // `await Linking.openSettings()` cuando el camino de `sendIntent` no aplica o falla — y ese
+  // `openSettings()` puede rechazar en dispositivos donde esa actividad no se resuelve. El
+  // `onPress` de abajo antes descartaba la promesa con `void`: el conductor tocaba el botón
+  // rojo, no se abría nada, y no quedaba ningún rastro — a diferencia del camino de
+  // `sendIntent` en `use-gps-operativo.ts`, que sí reporta a Sentry su propio fallo. Este
+  // wrapper solo agrega el `.catch` que faltaba en el call site (no se toca
+  // `use-gps-operativo.ts`, a cargo de otro cambio en curso).
+  const manejarAbrirAjustesPermisoGps = useCallback(() => {
+    gps.abrirAjustesPermisoGps(gps.permisoGps.accion).catch((error: unknown) => {
+      console.error('[QUIVO][permiso-gps] No se pudo abrir los ajustes de permiso', error);
+      Sentry.captureException(error, {
+        tags: { contexto: 'operation-screen', paso: 'abrir-ajustes-permiso-gps' },
+      });
+    });
+  }, [gps]);
 
   const [confirmarFinVisible, setConfirmarFinVisible] = useState(false);
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
@@ -199,6 +246,30 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         )}
 
         {props.aviso ? <Text style={styles.notice}>{props.aviso}</Text> : null}
+        {/* QUI-338 (reportado desde la calle: Samsung Galaxy A71, Android 10-13 — conductor
+            sin ubicación y sin ningún mensaje que le dijera qué tocar): antes, "Iniciar
+            recorrido" quedaba habilitado sin importar el permiso y `iniciar()` fallaba en
+            silencio contra un mensaje genérico sin acción. Se oculta mientras `gps.tracking`
+            porque el permiso ya estaba en orden cuando arrancó — mismo criterio que el resto
+            de los banners de esta pantalla, uno por causa raíz, sin duplicar alarmas. Reusa
+            el patrón exacto de `sesionNoRevalidada` de abajo (texto `dangerNotice` + botón de
+            acción a todo el ancho). */}
+        {!gps.tracking && gps.permisoGps.bloqueante ? (
+          <View style={styles.permisoGpsContainer}>
+            <Text accessibilityRole="alert" style={styles.dangerNotice}>
+              {gps.permisoGps.mensaje}
+            </Text>
+            {gps.permisoGps.accion ? (
+              <Button
+                variant="danger"
+                onPress={manejarAbrirAjustesPermisoGps}
+                style={styles.permisoGpsButton}
+              >
+                {gps.permisoGps.etiquetaAccion}
+              </Button>
+            ) : null}
+          </View>
+        ) : null}
         {props.sesionNoRevalidada ? (
           <View style={styles.sesionNoRevalidadaContainer}>
             <Text accessibilityRole="alert" style={styles.dangerNotice}>
@@ -265,7 +336,7 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
             accessibilityRole="button"
             accessibilityLabel="Registrar observación"
             style={styles.recenterButton}
-            onPress={() => {}}
+            onPress={() => setObservacionModalVisible(true)}
           >
             <Ionicons name="chatbubble-ellipses" size={24} color={quivoColors.primary} />
           </Pressable>
@@ -302,7 +373,17 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         totalPoints={puntosControl.length}
         distanciaMetros={distanciaProximoPunto}
         tracking={gps.tracking}
-        canStart={!paqueteDia.vencido && !paqueteDia.cargando && !paqueteDia.error && !(!settings.trabajarOffline && isOffline)}
+        canStart={
+          !paqueteDia.vencido &&
+          !paqueteDia.cargando &&
+          !paqueteDia.error &&
+          !(!settings.trabajarOffline && isOffline) &&
+          // QUI-338 (brief punto 5): "Iniciar recorrido" tiene que reflejar la realidad del
+          // permiso — `no_solicitado` NO bloquea a propósito (dispara el pedido explícito al
+          // tocar el botón, ver `iniciar()` en `use-gps-operativo.ts`); los otros cuatro
+          // estados sí, porque tocar el botón en esos casos no hacía nada.
+          !gps.permisoGps.bloqueante
+        }
         pendingEvents={pendientes}
         isOffline={isOffline}
         isSyncing={isSyncing}
@@ -325,6 +406,80 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
             <Button variant="primary" onPress={() => setShowInfo(false)} style={{ marginTop: quivoSpacing.xl }}>
               Entendido
             </Button>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Hallazgo 3 (MEDIO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): el botón de
+          "Registrar observación" era un no-op — `enviarObservacion` y su estado ya estaban
+          completos (encolan un evento `observacion` al outbox) pero nada los disparaba.
+          Reusa el mismo patrón de modal que "Registro Automático" arriba (mismos estilos
+          `modalOverlay`/`modalContent`/`modalHeader`/`modalTitle`) y los componentes del
+          design system (`Input`, `Button`, mismo que el resto de la app) — pocos toques,
+          texto grande, y un botón de cancelar siempre disponible para manejar mientras se
+          usa. */}
+      <Modal
+        visible={observacionModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!enviandoObservacion) cerrarModalObservacion();
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="chatbubble-ellipses" size={32} color={quivoColors.primary} />
+              <Text style={styles.modalTitle}>Registrar observación</Text>
+            </View>
+            {observacionEnviada ? (
+              <>
+                <Text style={styles.modalText}>
+                  Observación enviada. Se sincroniza junto con tu recorrido.
+                </Text>
+                <Button variant="primary" onPress={cerrarModalObservacion} style={{ marginTop: quivoSpacing.xl }}>
+                  Listo
+                </Button>
+              </>
+            ) : (
+              <>
+                {errorObservacion ? (
+                  <Text accessibilityRole="alert" style={[styles.dangerNotice, styles.observacionError]}>
+                    {errorObservacion}
+                  </Text>
+                ) : null}
+                <Input
+                  controlSize="lg"
+                  multiline
+                  numberOfLines={4}
+                  value={observacion}
+                  onChangeText={setObservacion}
+                  placeholder="Describe lo que pasó…"
+                  editable={!enviandoObservacion}
+                  style={styles.observacionInput}
+                  accessibilityLabel="Texto de la observación"
+                />
+                <View style={styles.observacionActions}>
+                  <Button
+                    variant="outline"
+                    onPress={cerrarModalObservacion}
+                    disabled={enviandoObservacion}
+                    style={styles.actionButton}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onPress={() => void enviarObservacion()}
+                    loading={enviandoObservacion}
+                    disabled={!observacion.trim() || enviandoObservacion}
+                    style={styles.actionButton}
+                  >
+                    Enviar
+                  </Button>
+                </View>
+              </>
+            )}
           </View>
         </View>
       </Modal>
@@ -353,14 +508,11 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
           nunca encola `fin_recorrido`) justo cuando el banner de arriba promete "El recorrido
           se sigue grabando". Mismo patrón que `confirmarFinVisible`/`onFinish` arriba: exige
           confirmación explícita antes de cortar la captura GPS de un conductor a mitad de
-          turno. */}
-      <QuivoConfirmDialog
+          turno. El mensaje del diálogo vive en `CerrarSesionDialog` (Hallazgo 2, ALTO): antes
+          este mensaje estaba duplicado acá y en `perfil-screen.tsx`, y solo este call site lo
+          tenía completo. */}
+      <CerrarSesionDialog
         visible={confirmarLogoutVisible}
-        variant="danger"
-        title="¿Cerrar sesión?"
-        message="Se va a cortar el registro del recorrido hasta que vuelvas a entrar. El GPS deja de guardar tu viaje mientras tanto."
-        cancelLabel="Seguir en la app"
-        confirmLabel="Cerrar sesión"
         onCancel={() => setConfirmarLogoutVisible(false)}
         onConfirm={() => {
           setConfirmarLogoutVisible(false);
@@ -607,6 +759,12 @@ const styles = StyleSheet.create({
   sesionNoRevalidadaButton: {
     alignSelf: 'stretch',
   },
+  permisoGpsContainer: {
+    gap: quivoSpacing.xs,
+  },
+  permisoGpsButton: {
+    alignSelf: 'stretch',
+  },
   successNotice: {
     alignSelf: 'center',
     color: quivoColors.success,
@@ -673,5 +831,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: quivoColors.textSecondary,
     lineHeight: 22,
+  },
+  observacionInput: {
+    minHeight: 96,
+    textAlignVertical: 'top',
+  },
+  observacionError: {
+    marginBottom: quivoSpacing.md,
+  },
+  observacionActions: {
+    flexDirection: 'row',
+    gap: quivoSpacing.sm,
+    marginTop: quivoSpacing.xl,
+  },
+  actionButton: {
+    flex: 1,
   },
 });

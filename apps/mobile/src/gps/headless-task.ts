@@ -285,18 +285,25 @@ async function registrarPuntoGpsInterno(
  * - **Sin sesión guardada.** El SDK nativo de Transistorsoft no depende de React ni de la
  *   sesión de la app: si el chofer cerró sesión, no hay `sesionId`, el punto sería evidencia
  *   huérfana y no hay ambigüedad de reloj que justifique esperar — se corta de inmediato.
- * - **Paquete del día vencido.** `startOnBoot: true` + `stopOnTerminate: false` hacen que el
- *   tracking sobreviva a todo salvo un `stop()` explícito, y `detener()` es el único que lo
- *   llama: un chofer que termina el turno matando la app dejaba el plugin `enabled`
- *   escribiendo `gps_point` contra un `sesionId` vencido toda la noche, y reanudándose tras
- *   cada reboot. `venceAt` del paquete es el fin real del turno operativo — pero acá el
- *   `stop()` espera el margen de gracia (`GRACIA_STOP_TRAS_VENCIMIENTO_MS`) antes de
- *   dispararse, porque este chequeo corre en el camino de arranque tras reboot, donde
- *   `Date.now()` es menos confiable.
+ * - **Sesión vencida.** `startOnBoot: true` + `stopOnTerminate: false` hacen que el tracking
+ *   sobreviva a todo salvo un `stop()` explícito, y `detener()` es el único que lo llama: un
+ *   chofer que termina el turno matando la app dejaba el plugin `enabled` escribiendo
+ *   `gps_point` contra un `sesionId` vencido toda la noche, y reanudándose tras cada reboot.
+ *   El vencimiento se evalúa contra `sesion.contexto.asignacion.venceAt` — la SESIÓN activa,
+ *   NO el paquete del día guardado en SQLite (hallazgo 3, code review de este cambio):
+ *   `obtenerPaqueteDiaLocal()` puede devolver `null` cuando la fila local es de otra
+ *   asignación (hallazgo 1, arriba), y con el paquete como fuente esa rama de vencimiento se
+ *   saltaba entera — el tracker seguía corriendo toda la noche exactamente en el escenario
+ *   que este chequeo existe para cubrir. `venceAt` de la sesión, en cambio, siempre está
+ *   disponible mientras haya sesión y es, por definición, el fin real del turno operativo al
+ *   que se le atribuiría el punto. Acá el `stop()` espera el margen de gracia
+ *   (`GRACIA_STOP_TRAS_VENCIMIENTO_MS`) antes de dispararse, porque este chequeo corre en el
+ *   camino de arranque tras reboot, donde `Date.now()` es menos confiable.
  *
- * Que NO corta: un paquete ausente o ilegible con sesión vigente. Ahí se sigue registrando
- * `gps_point` sin puntos de control (comportamiento anterior) — un fallo de descarga del
- * paquete no debe costar la evidencia GPS de la jornada, que es lo que sustenta la sanción.
+ * Que NO corta: un paquete ausente o ilegible con sesión vigente y no vencida. Ahí se sigue
+ * registrando `gps_point` sin puntos de control (comportamiento anterior) — un fallo de
+ * descarga del paquete no debe costar la evidencia GPS de la jornada, que es lo que sustenta
+ * la sanción.
  */
 export async function obtenerContextoUbicacionPersistido(): Promise<ContextoUbicacion | null> {
   // El chequeo de sesión va PRIMERO: `obtenerDeviceIdMovil()` acuña y persiste un device id
@@ -313,16 +320,31 @@ export async function obtenerContextoUbicacionPersistido(): Promise<ContextoUbic
   }
 
   const dbPaquete = await abrirPaqueteDiaDb();
-  const paqueteLocal = await obtenerPaqueteDiaLocal(dbPaquete);
-  if (paqueteLocal?.vencido === true) {
+  // Hallazgo 1 (CRÍTICO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): comparar contra la
+  // asignación de ESTA sesión (ya validada arriba), no aceptar la fila a ciegas — la fila de
+  // `paquete_dia` sobrevive al logout y puede ser de un turno anterior en el mismo teléfono.
+  const paqueteLocal = await obtenerPaqueteDiaLocal(dbPaquete, sesion.contexto.asignacion.id);
+
+  // Hallazgo 3 (MEDIO, code review de este mismo cambio): el vencimiento se evalúa contra
+  // `sesion.contexto.asignacion.venceAt` — la SESIÓN activa, ya autenticada arriba — NUNCA
+  // contra `paqueteLocal`. Antes se leía `paqueteLocal.paquete.asignacion.venceAt`, pero el
+  // hallazgo 1 de arriba hace que `obtenerPaqueteDiaLocal` devuelva `null` en cuanto la fila
+  // de SQLite es de OTRA asignación (identidad no matchea) — y con `paqueteLocal` en `null`,
+  // esta rama de vencimiento se saltaba ENTERA: ni el chequeo inmediato de descarte del
+  // punto ni, tras la gracia, el `stop()`. El resultado era el mismo bug que A8a existía
+  // para cerrar: el tracker seguía escribiendo `gps_point` toda la noche con `startOnBoot`
+  // armado, batería quemada y recorrido fantasma. `sesion.contexto.asignacion.venceAt` es la
+  // fuente correcta porque es lo único que siempre está disponible cuando hay sesión (viene
+  // del login/refresh, no de una fila de caché que puede faltar o pertenecer a otro turno) y
+  // es, exactamente, el vencimiento de la sesión a la que se le atribuiría el punto GPS si
+  // se llegara a registrar.
+  const venceAtMs = Date.parse(sesion.contexto.asignacion.venceAt);
+  const vencido = !Number.isNaN(venceAtMs) && Date.now() >= venceAtMs;
+  if (vencido) {
     // El punto se descarta ya (no hay turno vigente al que atribuirlo) — el `stop()`
     // irreversible se demora hasta que pase el margen de gracia, ver
-    // `GRACIA_STOP_TRAS_VENCIMIENTO_MS`. Si `venceAt` no se puede parsear (no debería pasar:
-    // `PaqueteDiaSchema` ya lo valida como `datetime()`) se prefiere NO apagar el plugin en
-    // vez de arriesgar un `stop()` sobre un dato en el que no se puede confiar.
-    const venceAtMs = Date.parse(paqueteLocal.paquete.asignacion.venceAt);
-    const graciaVencida =
-      !Number.isNaN(venceAtMs) && Date.now() - venceAtMs >= GRACIA_STOP_TRAS_VENCIMIENTO_MS;
+    // `GRACIA_STOP_TRAS_VENCIMIENTO_MS`.
+    const graciaVencida = Date.now() - venceAtMs >= GRACIA_STOP_TRAS_VENCIMIENTO_MS;
     if (graciaVencida) {
       await detenerTrackingNativo();
     }

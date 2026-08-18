@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState, Linking, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Sentry from '@sentry/react-native';
 import BackgroundGeolocation, { type Location } from 'react-native-background-geolocation';
 import { resolverTsFix, type PuntoControlPaquete } from '@quivo/shared';
@@ -19,6 +21,74 @@ import {
 import { claveCumplimiento, type DeteccionPuntoControl, type EstadoPuntoControl } from '../../gps/geofence';
 import { registrarPuntoGps } from '../../gps/headless-task';
 import { clavesCumplimientoDesdePayloads } from '../../gps/location-task';
+import {
+  AUTORIZACION_DENEGADA,
+  AUTORIZACION_NO_DETERMINADA,
+  AUTORIZACION_SIEMPRE,
+  decidirPermisoGps,
+  type AccionPermisoGps,
+  type DecisionPermisoGps,
+} from '../../gps/permiso-ubicacion';
+
+/** `Platform.OS` reducido a las dos plataformas que `permiso-ubicacion.ts` distingue — ver el
+ * comentario de cabecera de ese módulo para el porqué de la semántica de `status` distinta
+ * por SO (en Android solo existe ALWAYS/DENIED; NotDetermined/Restricted/WhenInUse son de
+ * iOS). Constante de módulo porque `Platform.OS` no cambia en runtime. */
+const PLATAFORMA_GPS: 'android' | 'ios' = Platform.OS === 'ios' ? 'ios' : 'android';
+
+/** Clave de `AsyncStorage` (mismo mecanismo no-sensible que usa `rescate-dia1.ts` para "esto
+ * ya pasó una vez" — no es un dato de sesión, así que no va a SecureStore) que marca si esta
+ * app YA invocó `BackgroundGeolocation.requestPermission()` alguna vez en este dispositivo.
+ *
+ * QUI-338 (hallazgo CRÍTICO de revisión): en Android, `getProviderState().status` no puede
+ * distinguir "instalación nueva, nunca se preguntó" de "el conductor ya lo rechazó" — las dos
+ * leen `DENIED` (ver `permiso-ubicacion.ts`). Sin esta flag, el chequeo pasivo que corre al
+ * montar (`verificarPermisoGpsPasivo` más abajo) no tiene forma de distinguirlas y, si se
+ * asume "denegado" por defecto, deja el botón "Iniciar recorrido" deshabilitado en una
+ * instalación nueva sin que el conductor vea jamás el diálogo del sistema — la regresión que
+ * motivó esta revisión. */
+const CLAVE_PERMISO_GPS_SOLICITADO = 'quivo-gps:permiso-solicitado';
+
+/**
+ * QUI-338 (hallazgo ALTO #2 de revisión): `RNBackgroundGeolocationModule.java`
+ * (`requestPermission`, ~línea 993) hace `response.reject("Permission request failed with
+ * status: " + status)` cuando el conductor deniega el permiso o concede solo "mientras se usa
+ * la app" — es decir, `await BackgroundGeolocation.requestPermission()` RECHAZA en el camino
+ * normal de una denegación, no solo ante un fallo real del módulo nativo. Este parser
+ * recupera el status numérico de ese mensaje para poder tratar la denegación como lo que es
+ * (`permiso_denegado`, con su acción de ir a Ajustes), en vez de como `error_nativo` genérico
+ * ("cerrá la app y volvé a abrirla", sin acción) — y para que el llamador sepa que NO hace
+ * falta reportarlo a Sentry (es un flujo esperado, no un bug).
+ *
+ * Devuelve `null` si el mensaje no tiene el formato esperado (SDK de otra versión, error de
+ * otro tipo) — en ese caso el llamador vuelve a leer el estado real con `getProviderState()`
+ * en vez de asumir un número a ciegas.
+ */
+function parsearEstadoDeRechazoPermiso(error: unknown): number | null {
+  const mensaje =
+    typeof error === 'string'
+      ? error
+      : typeof error === 'object' && error !== null && 'message' in error
+        ? String((error as { message?: unknown }).message ?? '')
+        : '';
+  const coincidencia = /status:\s*(-?\d+)/i.exec(mensaje);
+  if (!coincidencia) return null;
+  const status = Number(coincidencia[1]);
+  return Number.isFinite(status) ? status : null;
+}
+
+/** Estado inicial de `permisoGps`: no bloqueante, sin mensaje — se sobrescribe apenas corre
+ * el primer chequeo pasivo (ver el `useEffect` de permisos más abajo), pero evita que el
+ * botón arranque en un estado "bloqueado" fantasma antes de que ese chequeo resuelva.
+ * `permisoYaSolicitado: false` de entrada es intencional (aunque el dispositivo ya hubiera
+ * pedido el permiso en una sesión anterior): mantiene este default no-bloqueante en las dos
+ * plataformas hasta que el chequeo real (que sí lee la flag persistida) resuelva. */
+const PERMISO_GPS_INICIAL: DecisionPermisoGps = decidirPermisoGps({
+  servicioUbicacionActivo: true,
+  estadoPermiso: AUTORIZACION_NO_DETERMINADA,
+  plataforma: PLATAFORMA_GPS,
+  permisoYaSolicitado: false,
+});
 
 export function useGpsOperativo(
   sesionId: string,
@@ -29,6 +99,12 @@ export function useGpsOperativo(
   const [puntos, setPuntos] = useState(0);
   const [resultado, setResultado] = useState<string | null>(null);
   const [errorGps, setErrorGps] = useState<string | null>(null);
+  // QUI-338: estado del flujo de permisos de ubicación, separado de `errorGps` a propósito —
+  // `errorGps` es para fallos EN VIVO ya arrancado el tracking (escritura al outbox, stop
+  // fallido); `permisoGps` es el gate PREVIO a arrancar, con su propio mensaje por caso y una
+  // acción concreta (ver `permiso-ubicacion.ts`). Mezclarlos en un solo string le quitaba al
+  // conductor la posibilidad de saber qué botón tocar.
+  const [permisoGps, setPermisoGps] = useState<DecisionPermisoGps>(PERMISO_GPS_INICIAL);
   const [ultimaDeteccion, setUltimaDeteccion] = useState<DeteccionPuntoControl | null>(null);
   const [posicionActual, setPosicionActual] = useState<{ lat: number; lng: number } | null>(null);
   const bateria = useRef<MuestraBateria[]>([]);
@@ -36,6 +112,14 @@ export function useGpsOperativo(
   const erroresEscritura = useRef(0);
   const puntosControlDetectados = useRef<Map<string, EstadoPuntoControl>>(new Map());
   const subscription = useRef<{ remove: () => void } | null>(null);
+  // QUI-338: si esta app YA invocó `requestPermission()` alguna vez en este dispositivo,
+  // persistido en `AsyncStorage` bajo `CLAVE_PERMISO_GPS_SOLICITADO` (ver ese comentario para
+  // el porqué). Vive en un ref, no en `useState`: se lee de forma síncrona dentro de
+  // `verificarPermisoGpsPasivo`/`iniciar()`, y el valor persistido se carga UNA vez al montar
+  // (efecto de abajo) — no hace falta re-render por sí solo, solo por el resultado del chequeo
+  // de permiso que dispara después de cargarlo. Arranca en `false` (el default seguro: no
+  // bloquear) hasta que la carga desde `AsyncStorage` resuelva.
+  const permisoYaSolicitadoRef = useRef(false);
   // C1 (hallazgo de revisión CRÍTICO): promesa de la siembra en curso/completada — la
   // referencia ambos caminos que pueden necesitar sembrar (el `useEffect` de re-enganche y
   // `iniciar()`) leen para no sembrar dos veces y para no suscribirse/arrancar antes de que
@@ -235,6 +319,89 @@ export function useGpsOperativo(
     };
   }, [sesionId, suscribirUbicaciones, sembrarCumplimientos]);
 
+  /**
+   * QUI-338: chequeo PASIVO (solo lectura, nunca pide permiso) del estado real de ubicación
+   * — para que "Iniciar recorrido" refleje la realidad ANTES de que el conductor lo toque,
+   * en vez de solo descubrirla al intentar arrancar. `getProviderState()` no dispara ningún
+   * diálogo del sistema (a diferencia de `requestPermission()`, reservado para el chequeo
+   * ACTIVO de `iniciar()` más abajo), así que es seguro correrlo sin que el conductor lo pida.
+   */
+  const verificarPermisoGpsPasivo = useCallback(async () => {
+    try {
+      const providerState = await BackgroundGeolocation.getProviderState();
+      setPermisoGps(
+        decidirPermisoGps({
+          servicioUbicacionActivo: providerState.enabled,
+          estadoPermiso: providerState.status,
+          plataforma: PLATAFORMA_GPS,
+          permisoYaSolicitado: permisoYaSolicitadoRef.current,
+        }),
+      );
+    } catch {
+      // Chequeo pasivo, no interactivo: si falla acá no hay nada confiable que mostrarle al
+      // conductor todavía — el chequeo ACTIVO de `iniciar()` (que sí reporta a Sentry) es el
+      // que manda cuando el conductor realmente toca "Iniciar recorrido".
+    }
+  }, []);
+
+  useEffect(() => {
+    let montado = true;
+    // Carga `permisoYaSolicitadoRef` desde `AsyncStorage` ANTES del primer chequeo pasivo: es
+    // la única forma de que, en Android, ese primer chequeo pueda distinguir "instalación
+    // nueva" de "ya se pidió y se denegó" (ver el comentario del ref y el docblock de
+    // `permiso-ubicacion.ts`). Si la lectura falla o todavía no resolvió, el ref se queda en su
+    // default seguro (`false`, no bloquea) — nunca se asume `true` sin haberlo leído.
+    void (async () => {
+      try {
+        const valor = await AsyncStorage.getItem(CLAVE_PERMISO_GPS_SOLICITADO);
+        if (montado) permisoYaSolicitadoRef.current = valor === 'true';
+      } catch {
+        // Falla de lectura: se mantiene el default `false` (no bloquear) — un falso negativo
+        // acá en el peor caso vuelve a pedir el permiso, nunca deja a un conductor bloqueado.
+      } finally {
+        if (montado) void verificarPermisoGpsPasivo();
+      }
+    })();
+    // Repetir el chequeo cuando la app vuelve a primer plano: es el único momento en que el
+    // conductor puede haber cambiado el permiso o prendido el GPS del sistema (fue a Ajustes
+    // desde el propio flujo de esta pantalla, o desde la notificación de Android) sin que la
+    // app se haya reiniciado — sin esto, el botón se quedaba mostrando el estado bloqueado
+    // viejo hasta el próximo toque en "Iniciar recorrido".
+    const subscripcionAppState = AppState.addEventListener('change', (estadoApp) => {
+      if (estadoApp === 'active') void verificarPermisoGpsPasivo();
+    });
+    return () => {
+      montado = false;
+      subscripcionAppState.remove();
+    };
+  }, [verificarPermisoGpsPasivo]);
+
+  /**
+   * QUI-338: lleva al conductor a la pantalla del sistema que corresponde según `accion`
+   * (`permiso-ubicacion.ts`). `DeviceSettings` del SDK (`node_modules/.../core/api/
+   * DeviceSettings.d.ts`) solo cubre batería/power-manager — nada de permisos ni del
+   * interruptor de ubicación — así que para `ajustes_ubicacion_sistema` se usa el intent
+   * nativo de Android directo vía `Linking.sendIntent` (API estándar de React Native, sin
+   * dependencias nuevas). Para `ajustes_app` (y como fallback si el intent fallara) se usa
+   * `Linking.openSettings()`, que abre la pantalla de datos de la app — a un toque de
+   * Permisos → Ubicación → "Permitir todo el tiempo".
+   */
+  const abrirAjustesPermisoGps = useCallback(async (accion: AccionPermisoGps | null) => {
+    if (!accion) return;
+    if (accion === 'ajustes_ubicacion_sistema' && Platform.OS === 'android') {
+      try {
+        await Linking.sendIntent('android.settings.LOCATION_SOURCE_SETTINGS');
+        return;
+      } catch (error) {
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'abrir-ajustes-ubicacion-sistema' },
+        });
+        // Sigue al fallback de `openSettings()` de abajo.
+      }
+    }
+    await Linking.openSettings();
+  }, []);
+
   const iniciar = useCallback(async () => {
     setErrorGps(null);
     setResultado(null);
@@ -243,6 +410,94 @@ export function useGpsOperativo(
     erroresEscritura.current = 0;
     setPuntos(0);
     setUltimaDeteccion(null);
+
+    // QUI-338 — VERIFICACIÓN PREVIA (brief punto 1): consultar el estado real de permiso y
+    // servicio de ubicación ANTES de intentar `ready()`/`start()`, y ramificar según el caso
+    // en vez de intentar y fallar. Antes de este fix no había NINGÚN chequeo acá: se llamaba
+    // directo a `ready()`/`start()` y se dejaba que el SDK pidiera el permiso como efecto
+    // colateral — con targetSdk 34+ (Android 14+), arrancar un foreground service de tipo
+    // `location` sin el permiso ya otorgado tira `SecurityException` nativo en vez de
+    // simplemente no arrancar, y en versiones más viejas de Android (el caso reportado desde
+    // la calle: Samsung Galaxy A71, Android 10-13) el conductor quedaba sin ningún mensaje
+    // que le dijera qué tocar.
+    let servicioUbicacionActivo = true;
+    let estadoPermiso: number | null;
+    try {
+      const providerState = await BackgroundGeolocation.getProviderState();
+      servicioUbicacionActivo = providerState.enabled;
+      estadoPermiso = providerState.status;
+      if (servicioUbicacionActivo && estadoPermiso !== AUTORIZACION_SIEMPRE) {
+        // Marca "ya se pidió el permiso en este dispositivo" ANTES de invocar
+        // `requestPermission()` (no cuando se conoce el resultado): lo que importa para
+        // `decidirPermisoGps` es si YA se preguntó, no si la respuesta fue favorable. Se
+        // persiste en `AsyncStorage` (best-effort — un fallo de escritura acá en el peor caso
+        // vuelve a pedir el permiso la próxima vez, nunca bloquea) y nunca vuelve a `false`.
+        if (!permisoYaSolicitadoRef.current) {
+          permisoYaSolicitadoRef.current = true;
+          void AsyncStorage.setItem(CLAVE_PERMISO_GPS_SOLICITADO, 'true').catch(() => {
+            // Ver comentario de arriba: fallo silencioso, no bloqueante.
+          });
+        }
+        // PEDIDO EXPLÍCITO (brief punto 2): antes esto quedaba 100% delegado al efecto
+        // colateral de `ready()`/`start()` — acá se pide con `requestPermission()` (el único
+        // método del `.d.ts` de 5.4.0 pensado para esto,
+        // `node_modules/.../core/api/BackgroundGeolocation.d.ts:95`) y se espera la
+        // respuesta antes de seguir.
+        try {
+          estadoPermiso = await BackgroundGeolocation.requestPermission();
+        } catch (errorRechazo) {
+          // QUI-338 (hallazgo ALTO #2 de revisión): `requestPermission()` RECHAZA cuando el
+          // conductor deniega (o concede solo "mientras se usa la app") — no es un error real
+          // del módulo nativo (ver docblock de `parsearEstadoDeRechazoPermiso`). Primero se
+          // intenta recuperar el status real del propio mensaje de rechazo (funciona con el
+          // formato actual del SDK, `RNBackgroundGeolocationModule.java:993`, sin volver a
+          // cruzar el bridge nativo). Si el mensaje no tiene ese formato (otra versión del
+          // SDK, u otro tipo de error), se recurre a releer `getProviderState()` — el estado
+          // real ya debería reflejar lo que el conductor acaba de elegir — en vez de asumir un
+          // número a ciegas. Solo si ESA relectura también falla se trata como error nativo
+          // genuino y se reporta a Sentry: una denegación normal del conductor nunca llega ahí.
+          const statusParseado = parsearEstadoDeRechazoPermiso(errorRechazo);
+          if (statusParseado !== null) {
+            estadoPermiso = statusParseado;
+          } else {
+            try {
+              const estadoTrasRechazo = await BackgroundGeolocation.getProviderState();
+              estadoPermiso = estadoTrasRechazo.status;
+            } catch (errorRelectura) {
+              estadoPermiso = null;
+              Sentry.captureException(errorRelectura, {
+                tags: { contexto: 'gps-foreground', paso: 'releer-tras-rechazo-permiso' },
+              });
+            }
+          }
+        }
+        if (estadoPermiso === AUTORIZACION_NO_DETERMINADA) {
+          // El conductor cerró el diálogo del sistema sin elegir ninguna opción. El valor
+          // "no determinado" es ambiguo (es el mismo que "todavía no se preguntó"), así que
+          // ante la duda se trata como denegado (fail closed) en vez de intentar arrancar
+          // sin saber realmente si hay permiso.
+          estadoPermiso = AUTORIZACION_DENEGADA;
+        }
+      }
+    } catch (error) {
+      estadoPermiso = null;
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'verificar-permiso' },
+      });
+    }
+    const decisionPermiso = decidirPermisoGps({
+      servicioUbicacionActivo,
+      estadoPermiso,
+      plataforma: PLATAFORMA_GPS,
+      permisoYaSolicitado: permisoYaSolicitadoRef.current,
+    });
+    setPermisoGps(decisionPermiso);
+    if (decisionPermiso.bloqueante) {
+      // Ninguno de los cuatro casos bloqueantes llama a `ready()`/`start()`: la UI
+      // (`operation-screen.tsx`) muestra `decisionPermiso.mensaje` con su acción, y
+      // "Iniciar recorrido" queda sin efecto hasta que el conductor la resuelva.
+      return;
+    }
 
     // ORDEN (B1, hallazgo de revisión — corrige el reordenamiento del plan §2.4.2 sin perder
     // lo que ese reordenamiento buscaba). Las dos propiedades que este bloque tiene que
@@ -271,15 +526,28 @@ export function useGpsOperativo(
       await BackgroundGeolocation.start();
     } catch (error) {
       // Plan §2.4.4: mensaje distinto del de persistencia (bloque de abajo) — acá el módulo
-      // NATIVO no pudo arrancar (permisos del SO, licencia del plugin, Play Services): no
-      // hay nada grabándose todavía, a diferencia del catch siguiente. La suscripción que
-      // acabamos de instalar no tiene nada que escuchar: se remueve.
+      // NATIVO no pudo arrancar pese a que el permiso/servicio ya estaban en orden (licencia
+      // del plugin, Google Play Services): no hay nada grabándose todavía, a diferencia del
+      // catch siguiente. La suscripción que acabamos de instalar no tiene nada que escuchar:
+      // se remueve.
       subscription.current?.remove();
       subscription.current = null;
       Sentry.captureException(error, {
         tags: { contexto: 'gps-foreground', paso: 'iniciar-nativo' },
       });
-      setErrorGps('No se pudo iniciar el módulo nativo de GPS. Revisa permisos y licencia del dispositivo.');
+      // QUI-338 (hallazgo MEDIO de revisión): este es un fallo TRANSITORIO del módulo nativo
+      // (licencia de Transistorsoft, Google Play Services) con el permiso/servicio YA en
+      // orden — `decisionPermiso.bloqueante` es `false` para haber llegado hasta acá. Antes se
+      // reusaba el canal `permisoGps` (`decidirPermisoGps` con `estadoPermiso: null` →
+      // `error_nativo`, bloqueante), lo que dejaba `canStart` en `false` hasta que el listener
+      // de `AppState 'active'` lo limpiara — obligando al conductor a mandar la app a segundo
+      // plano y volver solo para poder reintentar. Se usa `errorGps` en su lugar: mismo canal
+      // informativo que ya usa el resto del hook para fallos en vivo, que `operation-screen.tsx`
+      // muestra sin gatear `canStart` — así "Iniciar recorrido" queda disponible para
+      // reintentar de inmediato.
+      setErrorGps(
+        'No se pudo activar el GPS en este momento. Volvé a tocar "Iniciar recorrido" para reintentar.',
+      );
       return;
     }
 
@@ -457,6 +725,11 @@ export function useGpsOperativo(
     puntos,
     resultado,
     errorGps,
+    // QUI-338: gate de permisos previo a "Iniciar recorrido" — `operation-screen.tsx` lo usa
+    // para mostrar el mensaje/acción correctos y para que el botón refleje si realmente se
+    // puede arrancar (ver `permisoGps.bloqueante`).
+    permisoGps,
+    abrirAjustesPermisoGps,
     ultimaDeteccion,
     posicionActual,
     iniciar,

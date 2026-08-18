@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import * as Sentry from '@sentry/react-native';
 import type { PaqueteDia } from '@quivo/shared';
 import { abrirPaqueteDiaDb, guardarPaqueteDia, obtenerPaqueteDiaLocal } from '../../db/paquete-dia';
 import { paqueteDiaApi, PaqueteDiaApiError } from '../../shared/api/paquete-dia-api';
+import { cargarSesionMovil } from '../../shared/security/sesion-movil-store';
 
 export interface EstadoPaqueteDia {
   cargando: boolean;
@@ -36,7 +38,32 @@ export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) 
       await guardarPaqueteDia(db, paquete);
       setEstado({ cargando: false, paquete, vencido: false, error: null });
     } catch (error) {
-      const local = await obtenerPaqueteDiaLocal(db);
+      // Hallazgo 1 (CRÍTICO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): antes de aceptar
+      // el fallback local hay que saber a qué asignación pertenece la fila en SQLite — la
+      // fila sobrevive al logout y a cualquier turno anterior en este mismo teléfono. La
+      // asignación de referencia es la de la SESIÓN GUARDADA (no la que se acaba de intentar
+      // descargar, que es justo la que falló): si no hay sesión guardada, o la fila es de
+      // otra asignación, `obtenerPaqueteDiaLocal` devuelve `null` y caemos al error de red
+      // real de abajo, en vez de servir la ruta/puntos de control de otro turno.
+      //
+      // Hallazgo 6 (MEDIO, code review de este cambio): esta lectura va en su PROPIO
+      // try/catch. Antes, si `cargarSesionMovil()` (SecureStore) lanzaba —keychain no
+      // disponible, dispositivo bloqueado— la excepción escapaba de ESTE catch (el de la
+      // descarga de red), la promesa de `cargar()` rechazaba dentro de un `void cargar()` sin
+      // manejar, y ningún `setEstado` corría: `cargando` se quedaba en `true` desde el arranque
+      // del hook y la pantalla de operación mostraba un spinner permanente con `canStart` en
+      // false. Un fallo acá cae al mismo camino que "no hay sesión guardada" — sin fallback
+      // local, error de red real de abajo — que ya está soportado.
+      let sesion: Awaited<ReturnType<typeof cargarSesionMovil>> = null;
+      try {
+        sesion = await cargarSesionMovil();
+      } catch (errorSesion) {
+        console.error('[QUIVO][paquete-dia] No se pudo leer la sesión guardada', errorSesion);
+        Sentry.captureException(errorSesion, {
+          tags: { contexto: 'paquete-dia', paso: 'leer-sesion-para-fallback-local' },
+        });
+      }
+      const local = sesion ? await obtenerPaqueteDiaLocal(db, sesion.contexto.asignacion.id) : null;
       if (local) {
         setEstado({ cargando: false, paquete: local.paquete, vencido: local.vencido, error: null });
         return;

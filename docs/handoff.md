@@ -212,10 +212,36 @@ definido pero **no se ejecuta en ningún punto del repo** — `EventoSyncSchema.
 cast de `ingesta-worker.service.ts:348` es puramente de tipos. Se coercionó `pasada` a mano; el
 resto de los campos del payload sigue confiando en el mismo cast.
 
+**Segunda tanda de hallazgos (auditoría de aptitud para lanzar, mismo día).** Cuatro más, los tres
+primeros ya cerrados en la misma rama:
+
+1. **QUI-338, el que reportó la calle.** Un conductor con un **Samsung Galaxy A71** inició sesión
+   sin problema y no pudo iniciar el recorrido: la app no accedía al GPS. La app pedía el permiso
+   como efecto colateral de `ready()`/`start()` —sin `requestPermission()`, sin
+   `getProviderState()`, sin ningún camino a Ajustes— y al fallar mostraba un texto genérico con
+   el botón "Iniciar recorrido" todavía habilitado. Desde Android 11 *"Permitir todo el tiempo"*
+   no se puede otorgar desde ningún diálogo, y tras dos rechazos Android deja de mostrarlo. Ahora
+   hay una máquina de decisión pura (`gps/permiso-ubicacion.ts`) con cuatro estados, cada uno con
+   su mensaje y su salida a la pantalla correcta del sistema; el botón depende del permiso.
+   Lo que no se arregla con código quedó en
+   [`runbooks/alta-de-conductor-android.md`](runbooks/alta-de-conductor-android.md).
+2. **El paquete del día viejo se servía como si fuera el de hoy.** `quivo-paquete-dia.db` guarda
+   una sola fila y sobrevivía al logout. Si la descarga fallaba por falta de señal, la app caía al
+   caché local sin verificar que fuera de la asignación actual — sólo miraba `venceAt`, el de la
+   asignación vieja. En un relevo de conductor a mitad de turno eso todavía no venció: el geofence
+   habría detectado contra los puntos de control de otra ruta, sin error y sin banner.
+   `obtenerPaqueteDiaLocal` ahora exige el `asignacionId` esperado como parámetro **obligatorio**,
+   así el compilador impide que un llamador futuro se olvide.
+3. **El fix del logout estaba en un call site de dos.** `perfil-screen.tsx` tenía su propio botón
+   con un mensaje que no advertía que el GPS deja de grabar. El diálogo se extrajo a
+   `shared/components/cerrar-sesion-dialog.tsx` y los dos lo comparten.
+4. **Sin cerrar:** Sentry no ata ningún evento a un teléfono — cero `setUser`/`setTag` en toda la
+   app. Con un vehículo se correlaciona a mano; con flota, "qué le pasó al conductor X" deja de
+   ser un filtro.
+
 **Anotado, sin arreglar:** el worker avisa `Eviction policy is volatile-lru. It should be
 "noeviction"` — con la flota, Redis puede desalojar jobs de BullMQ bajo presión de memoria, que es
-pérdida silenciosa de eventos. Y quedan 3 warnings de eslint en `operation-screen.tsx` por la
-feature de observación, construida y nunca cableada.
+pérdida silenciosa de eventos.
 
 La secuencia de despliegue está en [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md).
 

@@ -1,6 +1,13 @@
 import * as SQLite from 'expo-sqlite';
 import * as Sentry from '@sentry/react-native';
-import { PaqueteDiaSchema, type PaqueteDia } from '@quivo/shared';
+import type { PaqueteDia } from '@quivo/shared';
+import {
+  interpretarFilaPaqueteDia,
+  type FilaPaqueteDia,
+  type PaqueteDiaLocal,
+} from './paquete-dia-local';
+
+export type { PaqueteDiaLocal } from './paquete-dia-local';
 
 /**
  * Paquete del día (RF-68/73, QUI-236): una sola fila — el chofer solo tiene una asignación
@@ -74,41 +81,18 @@ export async function guardarPaqueteDia(
   });
 }
 
-export interface PaqueteDiaLocal {
-  paquete: PaqueteDia;
-  vencido: boolean;
-  descargadoEn: string;
-}
-
+/**
+ * Lee la fila (única) de `paquete_dia` y la valida contra la asignación de la SESIÓN
+ * ACTIVA. Ver `interpretarFilaPaqueteDia` (`db/paquete-dia-local.ts`) para el porqué del
+ * parámetro `asignacionIdEsperado` — Hallazgo 1 CRÍTICO del piloto día 1
+ * (`docs/plan-v2-app-y-mapa-en-vivo.md` §2.4).
+ */
 export async function obtenerPaqueteDiaLocal(
   db: SQLite.SQLiteDatabase,
+  asignacionIdEsperado: string,
 ): Promise<PaqueteDiaLocal | null> {
-  const row = await db.getFirstAsync<{
-    payload: string;
-    vence_at: string;
-    descargado_en: string;
-  }>('SELECT payload, vence_at, descargado_en FROM paquete_dia LIMIT 1');
-  if (!row) return null;
-
-  // `JSON.parse` sin protección tumbaba TODO el tick headless del turno (hallazgo de revisión
-  // A2): un `throw` acá lo come el `try/catch` de `tareaHeadlessUbicacion`
-  // (`gps/headless-task.ts`), y con la app terminada nadie ve el `console.error` — cada punto
-  // GPS del resto del turno se perdía en silencio. Un payload corrupto ahora cae al mismo
-  // camino ya soportado que un paquete ausente: `obtenerContextoUbicacionPersistido` sigue
-  // registrando `gps_point` sin puntos de control (ver su comentario en `headless-task.ts`).
-  let payloadCrudo: unknown;
-  try {
-    payloadCrudo = JSON.parse(row.payload);
-  } catch {
-    return null;
-  }
-
-  const parsed = PaqueteDiaSchema.safeParse(payloadCrudo);
-  if (!parsed.success) return null;
-
-  return {
-    paquete: parsed.data,
-    vencido: new Date(row.vence_at).getTime() <= Date.now(),
-    descargadoEn: row.descargado_en,
-  };
+  const row = await db.getFirstAsync<FilaPaqueteDia>(
+    'SELECT asignacion_id, payload, vence_at, descargado_en FROM paquete_dia LIMIT 1',
+  );
+  return interpretarFilaPaqueteDia(row, asignacionIdEsperado);
 }

@@ -97,6 +97,40 @@ el teléfono sigue siendo el del día 1, con el bug de `expo-sqlite`. `appVersio
 Se instala **encima** del 6: misma firma (keystore gestionado por EAS), y las dos bases SQLite
 sobreviven. Sólo desinstalar o "Borrar datos" las destruye.
 
+### 6.b — El permiso de ubicación (QUI-338, cerrado el 2026-08-18)
+
+Un conductor con un **Samsung Galaxy A71** inició sesión sin problema y **no pudo iniciar el
+recorrido**: la app no accedía al GPS. No era ese teléfono — era un agujero estructural que se
+repetía en cada alta.
+
+La app pedía el permiso como efecto colateral de `ready()`/`start()`, sin `requestPermission()`
+explícito, sin `getProviderState()`, y sin ningún camino a Ajustes. Cuando fallaba, el conductor
+veía un texto rojo genérico —*"No se pudo iniciar el módulo nativo de GPS. Revisa permisos y
+licencia del dispositivo."*— con el botón "Iniciar recorrido" todavía habilitado. Y desde
+Android 11, **"Permitir todo el tiempo" no se puede otorgar desde ningún diálogo**: el sistema
+sólo ofrece "Mientras se usa la app", y la opción que necesitamos vive únicamente en Ajustes. Si
+el conductor rechaza dos veces, Android deja de mostrar el diálogo para siempre.
+
+Ahora la app distingue cuatro estados y ofrece salida para cada uno:
+
+| Estado | Bloquea | Acción que ofrece |
+|---|---|---|
+| Servicio de ubicación del sistema apagado | Sí | abre Ajustes de Ubicación |
+| Permiso denegado | Sí | abre los Ajustes de la app |
+| Permiso "sólo mientras se usa" | Sí | abre Ajustes, con la etiqueta `Cambiar a "Permitir todo el tiempo"` |
+| Error del módulo nativo (licencia, Play Services) | Sí | sin acción — mensaje distinto de los tres anteriores |
+
+El botón de iniciar recorrido ahora depende del estado del permiso, así que deja de mentir. La
+verificación corre al montar y al volver a foreground, no sólo al primer toque.
+
+**Lo que ningún código puede resolver** está en
+[`runbooks/alta-de-conductor-android.md`](runbooks/alta-de-conductor-android.md): el toque final
+en Ajustes lo tiene que dar una persona, y Samsung mata la app en segundo plano salvo que alguien
+la saque de "Apps en suspensión". Ese runbook se sigue en **cada alta**, no sólo la primera.
+
+**Ojo con el teléfono del A71:** si ese conductor ya rechazó el permiso dos veces, Android no va a
+volver a mostrar el diálogo aunque instale el APK nuevo. Va a necesitar el paso manual sí o sí.
+
 ### 7 — Prueba en calle
 
 El gate de aceptación del piloto **no tenía ningún ítem que verificara que `gps_points` recibe
