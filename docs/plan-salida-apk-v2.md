@@ -1,7 +1,7 @@
 # Plan de salida — APK v2 del conductor
 
-> **Estado:** pasos 1-5 ejecutados el 2026-08-18. Código cerrado en el PR #34. Queda el build 7
-> del APK (lanzado) y la prueba en calle.
+> **Estado:** pasos 1-6 ejecutados el 2026-08-18. Código cerrado en el PR #34, backend en `api:v4`,
+> APK build 7 compilado. **Queda sólo el paso 7: instalar el APK y probar en calle.**
 >
 > **Qué es esto.** El plan de la v2 —qué había que construir y por qué— vive en
 > [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md). Este documento es sólo la
@@ -28,7 +28,7 @@ No rompe nada, pero mide mal — que es el modo de falla más caro, porque parec
 | ~~3~~ | ~~Construir y publicar `api:v4`~~ | ✅ **hecho** — `api:v4` en Artifact Registry, digest `sha256:f5f90af6…` |
 | ~~4~~ | ~~Redesplegar worker y API con `api:v4`~~ | ✅ **hecho** — `quivo-worker-00004-hk7` logueó "escuchando la cola de sync"; `quivo-api-00006-pfm` con `/v1/health/ready` `{"status":"ok","db":"up","redis":"up"}` |
 | ~~5~~ | ~~Cerrar las 8 sesiones operativas colgadas~~ | ✅ **hecho** — `count(*) where estado='activa'` = 0 (11 cerradas) |
-| 6 | Build 7 del APK, perfil `production` | `versionCode` 7 > 6, misma firma — **lanzado**, build `e1d01284-…` |
+| ~~6~~ | ~~Build 7 del APK, perfil `production`~~ | ✅ **hecho** — build `e1d01284-…`, `versionCode` 7, keystore `Build Credentials 9zSZpTExKl` (la misma del 6), desde `8614520`. [APK](https://expo.dev/artifacts/eas/U8pDLh_Yu67YpsypSpmoQuseoP44zrsEXsPxGkU2B28.apk) |
 | 7 | Instalar encima en el S25 y probar en calle | llegan filas a `gps_points` |
 
 ### 1 — Mergear el PR #34
@@ -200,7 +200,7 @@ real de que la cadena completa funciona.
 | API | ✅ desplegada, **`api:v4`** (`quivo-api-00006-pfm`), `/v1/health/ready` ok |
 | Migración `pasada` | ✅ aplicada 2026-08-18 17:29 UTC |
 | Sesiones colgadas | ✅ cerradas — 0 activas |
-| APK en el teléfono | ⏳ build 7 lanzado (`versionCode` 7); el teléfono sigue con el 6 hasta instalarlo |
+| APK en el teléfono | ⏳ build 7 **compilado**; el teléfono sigue con el 6 hasta que alguien lo instale |
 | `gps_points` | ❌ 0 filas — **la única métrica que falta**, sale de la prueba en calle |
 | Datos reales | ❌ `Sindicato Piloto — PLACEHOLDER`, placa `1111AAA` |
 

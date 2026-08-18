@@ -23,12 +23,13 @@
 > ✅ **PR #34 MERGEADO el 2026-08-18** (`main` = `b8fd7de`, CI + acceptance en verde, rama
 > borrada). El código de la v2 está cerrado.
 >
-> 🚀 **Despliegue ejecutado el 2026-08-18 (pasos 1-5 de
+> 🚀 **Despliegue ejecutado el 2026-08-18 (pasos 1-6 de
 > [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md)).** Las dos migraciones nuevas están aplicadas
 > en Cloud SQL, `api:v4` está publicada, worker (`quivo-worker-00004-hk7`) y API
 > (`quivo-api-00006-pfm`) corren esa imagen, y las 8 sesiones colgadas quedaron cerradas.
-> **Lo único que queda es el build 7 del APK y la prueba en calle** — ver la sección
-> "Despliegue de la v2" más abajo.
+> El **build 7 del APK está compilado** (`versionCode` 7, misma firma que el 6).
+> **Lo único que queda es físico: instalarlo y manejar** — ver la sección "Despliegue de la v2"
+> más abajo.
 >
 > 🚦 **Contexto de cómo se llegó acá (2026-08-18).** Se implementó
 > [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md) (aprobado por el CTO el
@@ -69,7 +70,7 @@ código no se tocó: esto es todo despliegue.
 | 3 — imagen | ✅ `api:v4` publicada, digest `sha256:f5f90af627d97b90268e13a7c1422b077058f85e67e32cbb5a6c080ab754409e` |
 | 4 — redespliegue | ✅ `quivo-worker-00004-hk7` y `quivo-api-00006-pfm`, ambos con `api:v4` |
 | 5 — sesiones colgadas | ✅ las 8 cerradas; `estado='activa'` = 0, 11 cerradas en total |
-| 6 — APK | ⏳ build 7 lanzado (`e1d01284-b84e-47e1-a69c-10b53985f963`), `versionCode` 6 → 7 |
+| 6 — APK | ✅ build 7 compilado (`e1d01284-b84e-47e1-a69c-10b53985f963`), `versionCode` 6 → 7, keystore `Build Credentials 9zSZpTExKl` — la misma del build 6, así que se instala encima. [APK](https://expo.dev/artifacts/eas/U8pDLh_Yu67YpsypSpmoQuseoP44zrsEXsPxGkU2B28.apk) |
 | 7 — calle | ❌ pendiente. `gps_points` sigue en **0 filas** |
 
 **Verificación real, no "el servicio figura Ready".** El worker nuevo logueó
@@ -111,7 +112,8 @@ instalarse cuando esté. Quedan dos cosas, y ninguna es código:
 - **Instalar el build 7 encima del 6** en el S25 (misma firma, las dos bases SQLite sobreviven) y
   seguir [`runbooks/alta-de-conductor-android.md`](runbooks/alta-de-conductor-android.md) —
   incluido el permiso "Permitir todo el tiempo" desde Ajustes, que ningún diálogo puede otorgar
-  desde Android 11.
+  desde Android 11. **No desinstalar el 6 primero**: eso borra las dos bases SQLite y con ellas el
+  outbox pendiente.
 - **La prueba en calle.** `select count(*) from gps_points` sigue en **0**. Es la única métrica que
   prueba que la cadena completa funciona; todo lo demás ya estuvo verde el día 1 sin medir nada.
 
