@@ -20,7 +20,13 @@
 > vigente de cómo opera la línea, los 14 puntos de control reales y el plan para cargarlos están en
 > **[`plan-ruta-real-z12.md`](plan-ruta-real-z12.md)**.
 >
-> 🚦 **ARRANCAR ACÁ (actualizado 2026-08-18).** Se está implementando
+> ✅ **PR #34 MERGEADO el 2026-08-18** (`main` = `b8fd7de`, CI + acceptance en verde, rama
+> borrada). El código de la v2 está cerrado. **Lo que falta es despliegue, no código** — arrancá
+> por el paso 2 de [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md): aplicar las dos migraciones
+> nuevas a Cloud SQL, `api:v4`, redesplegar worker y API, cerrar las 8 sesiones colgadas, y recién
+> ahí el build 7 del APK.
+>
+> 🚦 **Contexto de cómo se llegó acá (2026-08-18).** Se implementó
 > [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md) (aprobado por el CTO el
 > 2026-08-17). **Entrega 1 MERGEADA** — ver
 > [la sección de abajo](#entrega-1-del-plan-v2-2026-08-17-noche). **Entrega 2 terminada** y viva en

@@ -23,7 +23,7 @@ No rompe nada, pero mide mal — que es el modo de falla más caro, porque parec
 
 | # | Paso | Verificación |
 |---|---|---|
-| 1 | Mergear el PR #34 con CI en verde | `main` contiene las dos migraciones nuevas |
+| ~~1~~ | ~~Mergear el PR #34 con CI en verde~~ | ✅ **hecho** 2026-08-18 — `main` = `b8fd7de` |
 | 2 | Aplicar migraciones en producción | `20260817150000_…` aparece en `_prisma_migrations` |
 | 3 | Construir y publicar `api:v4` | la imagen existe en Artifact Registry |
 | 4 | Redesplegar worker y API con `api:v4` | el worker loguea "escuchando la cola de sync" |
