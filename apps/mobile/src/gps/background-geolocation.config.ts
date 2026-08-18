@@ -53,6 +53,16 @@ export const gpsSpikeConfig: Config = {
     stopOnStationary: false,
     disableMotionActivityUpdates: false,
   },
+  persistence: {
+    // H7 (hallazgo de revisión, medio): sin setear esto, `maxDaysToPersist` queda en su
+    // default de 1 día. La SQLite INTERNA del propio SDK (`rescate-dia1.ts`) fue la ÚNICA
+    // copia sobreviviente de todo el día 1 del piloto, cuando el outbox de la app (QUI-238)
+    // no grabó nada por la regresión de `expo-sqlite@16.0.10` — con 1 día de retención, un
+    // fallo del outbox de más de 24h vuelve a podar esa evidencia sin dejar rastro, ANTES de
+    // que alguien llegue a correr el rescate. 14 días da margen real para detectar un fallo de
+    // sync/outbox y rescatar a mano sin apurarse.
+    maxDaysToPersist: 14,
+  },
   http: {
     autoSync: false,
     autoSyncThreshold: 0,

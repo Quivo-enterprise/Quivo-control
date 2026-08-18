@@ -1,5 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import * as SQLite from 'expo-sqlite';
+import * as Sentry from '@sentry/react-native';
 import { generarUuidV7, type TipoEventoSync } from '@quivo/shared';
 
 /**
@@ -17,6 +18,15 @@ export interface EventoOutboxNuevo {
   deviceId: string;
   tipo: TipoEventoSync;
   payload: Record<string, unknown>;
+  /**
+   * H1.a (hallazgo de revisión, rescate del día 1): `eventId` explícito, en vez de acuñar uno
+   * nuevo con `Crypto.getRandomBytesAsync`. Lo usa el rescate de emergencia
+   * (`rescate-dia1.ts`) para derivar un `eventId` DETERMINÍSTICO desde `location.uuid`, de
+   * forma que un re-run del rescate produzca los MISMOS `eventId` y el `ON CONFLICT (event_id,
+   * ts)` del servidor los descarte solo, en vez de duplicar evidencia. Sin este campo,
+   * comportamiento intacto (se genera uno nuevo, camino normal).
+   */
+  eventId?: string;
 }
 
 export type EstadoOutbox = 'pendiente' | 'enviado' | 'acusado';
@@ -39,8 +49,42 @@ interface OutboxRowCruda {
   estado: string;
 }
 
-export async function abrirOutbox(): Promise<SQLite.SQLiteDatabase> {
-  const db = await SQLite.openDatabaseAsync('quivo-outbox.db');
+const OUTBOX_DB_PATH = 'quivo-outbox.db';
+
+/**
+ * Regresión de `expo-sqlite@16.0.10` (16.0.10 es la última publicada — actualizar no
+ * resuelve nada, el bug sigue ahí): `NativeDatabase.sharedObjectDidRelease()` destruye el
+ * `sqlite3*` de C++ sin chequear refcount, así que el primer GC de Hermes sobre CUALQUIER
+ * objeto JS viejo de `quivo-outbox.db` mata el handle nativo compartido. Del lado Kotlin
+ * (`SQLiteModule.kt:110`), `openDatabaseAsync` cachea por `(databasePath, options)` y
+ * devuelve esa instancia — ya zombi, con `isClosed == false` para siempre — mientras
+ * `!options.useNewConnection` sea cierto. `abrirOutbox()` se llamaba antes CIENTOS de veces
+ * por jornada (una por punto GPS): cada llamada abría/soltaba un objeto JS nuevo, cada uno
+ * candidato a GC, cada GC candidato a gatillar el bug. Este singleton a nivel de módulo es
+ * PARTE DEL FIX, no una optimización — mantiene vivo el único objeto JS registrado para este
+ * path, así que Hermes nunca tiene un objeto viejo de esta base que colectar.
+ */
+let outboxPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let outboxAbiertoAlgunaVez = false;
+
+async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLiteDatabase> {
+  // Breadcrumb en CADA apertura (no solo la primera): un "apertura #847 de quivo-outbox.db"
+  // habría gritado la causa raíz (frecuencia de apertura) desde el primer minuto del piloto.
+  const esPrimeraApertura = !outboxAbiertoAlgunaVez;
+  outboxAbiertoAlgunaVez = true;
+  Sentry.addBreadcrumb({
+    category: 'sqlite',
+    message: `Apertura de ${OUTBOX_DB_PATH}`,
+    level: 'info',
+    data: { path: OUTBOX_DB_PATH, esPrimeraApertura, useNewConnection },
+  });
+
+  const db = await SQLite.openDatabaseAsync(
+    OUTBOX_DB_PATH,
+    useNewConnection ? { useNewConnection: true } : undefined,
+  );
+  // DDL dentro de la promesa cacheada: corre una sola vez por proceso, nunca en el path de
+  // escritura caliente (`encolarEvento`, hasta cientos de llamadas por jornada).
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS outbox (
       event_id TEXT PRIMARY KEY,
@@ -55,41 +99,200 @@ export async function abrirOutbox(): Promise<SQLite.SQLiteDatabase> {
   return db;
 }
 
+/**
+ * Punto único de apertura de `quivo-outbox.db`: cachea la promesa a nivel de módulo (ver
+ * comentario de `outboxPromise` arriba) en vez de abrir una conexión por llamada.
+ * NO usa `useNewConnection: true` — con el singleton no aporta nada en el camino normal y
+ * arriesga una segunda conexión concurrente al mismo archivo (`SQLITE_BUSY`). Ese flag es
+ * exclusivo del escape hatch de abajo.
+ */
+export function abrirOutbox(): Promise<SQLite.SQLiteDatabase> {
+  if (!outboxPromise) {
+    // H8 (hallazgo de revisión, bajo): capturamos la referencia de ESTA promesa antes de
+    // instalarla en `outboxPromise`, para que el `.catch` de abajo solo la limpie si sigue
+    // siendo la promesa vigente. Sin esto, un rechazo TARDÍO de una apertura lenta que quedó en
+    // vuelo puede anular una conexión buena que `reabrirOutboxTrasFalloNativo()` ya instaló
+    // mientras tanto — el `??=` de arriba solo evita pisar una promesa ya cacheada al ENTRAR,
+    // no protege el `outboxPromise = null` de un `.catch` que corre después.
+    const promesaEnCurso: Promise<SQLite.SQLiteDatabase> = abrirOutboxNueva(false).catch((error) => {
+      if (outboxPromise === promesaEnCurso) outboxPromise = null; // no cachear un rechazo: el próximo intento reintenta
+      throw error;
+    });
+    outboxPromise = promesaEnCurso;
+  }
+  return outboxPromise;
+}
+
+/**
+ * Escape hatch para cuando el handle cacheado ya está muerto (NPE nativo, `code:
+ * 'ERR_UNEXPECTED'`, ver comentario de `outboxPromise`): el cache del lado Kotlin sirve esa
+ * misma instancia zombi para siempre mientras `useNewConnection` sea falsy — es la ÚNICA
+ * forma de saltear ese cache, porque el predicado de `SQLiteModule.kt:110` exige
+ * `!options.useNewConnection` para reusar la entrada cacheada.
+ *
+ * NO llama `closeAsync` sobre el handle viejo antes de reemplazarlo: sobre un handle muerto
+ * también lanza NPE, porque `closeDatabase` (`SQLiteModule.kt:513-521`) hace
+ * `sqlite3_finalize_all_statement()` (JNI) contra el `sqlite3*` ya destruido. Se abandona el
+ * handle viejo tal cual — no hay nada seguro que hacer con él del lado JS.
+ */
+export function reabrirOutboxTrasFalloNativo(): Promise<SQLite.SQLiteDatabase> {
+  // H8: mismo criterio que `abrirOutbox()` arriba — el `.catch` solo limpia `outboxPromise` si
+  // sigue siendo ESTA promesa, no una que otra llamada haya instalado después.
+  const promesaEnCurso: Promise<SQLite.SQLiteDatabase> = abrirOutboxNueva(true).catch((error) => {
+    if (outboxPromise === promesaEnCurso) outboxPromise = null; // no cachear un rechazo: el próximo intento reintenta
+    throw error;
+  });
+  outboxPromise = promesaEnCurso;
+  return promesaEnCurso;
+}
+
+/** `code` que expone `expo-modules-core` en los `CodedException` que cruzan el bridge nativo
+ * (ver `node_modules/expo-sqlite/android/.../SQLExceptions.kt` y el `UnexpectedException`
+ * genérico de expo-modules-core para NPEs no tipados). Solo `ERR_UNEXPECTED` identifica un
+ * handle nativo muerto (el bug de arriba) — vale la pena reintentar. Los otros dos NO:
+ * - `ERR_INTERNAL_SQLITE_ERROR`: el propio SQLite rechazó el SQL (constraint, sintaxis, etc.)
+ *   — reintentar con una conexión nueva ejecuta el mismo SQL roto y falla igual.
+ * - `ERR_ACCESS_CLOSED_RESOURCE`: la base está cerrada a propósito (nadie en este código llama
+ *   `closeAsync` sobre el outbox, pero el chequeo queda documentado por si cambia).
+ */
+function esHandleNativoMuerto(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
+
+  if (code === 'ERR_UNEXPECTED') return true;
+
+  // Estos dos códigos SÍ vienen tipados desde el lado nativo (ver el comentario de arriba) y
+  // NUNCA deben tratarse como handle muerto, aunque el `message` matchee NPE por casualidad —
+  // reintentar acá no arregla nada (SQL roto sigue roto, base cerrada sigue cerrada).
+  if (code === 'ERR_INTERNAL_SQLITE_ERROR' || code === 'ERR_ACCESS_CLOSED_RESOURCE') return false;
+
+  // H9 (hallazgo de revisión, bajo): el predicado original solo miraba `code ===
+  // 'ERR_UNEXPECTED'`. Si el NPE nativo aflora con otro `code` (o sin `code` ninguno) según la
+  // ruta exacta del crash del lado Kotlin, el chequeo de arriba es un pass-through: el
+  // reintento no dispara y el fix entero (singleton + escape hatch) queda de adorno. El
+  // `message` SÍ es un indicio confiable acá: es la firma de la excepción nativa concreta que
+  // dispara el bug (`sharedObjectDidRelease()` sobre un handle ya destruido).
+  const message = 'message' in error ? (error as { message?: unknown }).message : undefined;
+  return typeof message === 'string' && /NullPointerException/i.test(message);
+}
+
+/**
+ * H3 (hallazgo de revisión, alto): reabre SOLO si `outboxPromise` sigue apuntando al MISMO
+ * handle que acaba de morir. Si otra llamada concurrente (p. ej. el rescate del día 1
+ * encolando miles de puntos, o el sync automático corriendo en paralelo) ya detectó el mismo
+ * handle muerto y lo reemplazó primero, reusamos esa conexión nueva en vez de abrir OTRA con
+ * `useNewConnection: true` al lado.
+ *
+ * Sin este chequeo: `reabrirOutboxTrasFalloNativo()` SIEMPRE abre con `useNewConnection: true`
+ * y nunca cierra la anterior (ver su comentario — sobre un handle muerto, `closeAsync` también
+ * lanza NPE). Si el handle muere a mitad de un rescate de miles de puntos, cada operación
+ * restante que todavía tenía una referencia al `db` viejo cae acá, y cada una reabriría su
+ * propia conexión nueva sin cerrar la anterior: tormenta de conexiones a `quivo-outbox.db`,
+ * riesgo de `SQLITE_BUSY`, y cada objeto JS huérfano vuelve a ser candidato al GC que dispara
+ * el bug que el singleton existe para evitar.
+ */
+async function reabrirSoloSiSigueMuerto(
+  dbMuerta: SQLite.SQLiteDatabase,
+): Promise<SQLite.SQLiteDatabase> {
+  const promesaActual = outboxPromise;
+  if (promesaActual) {
+    try {
+      const dbActual = await promesaActual;
+      if (dbActual !== dbMuerta) return dbActual; // ya reemplazada por otra llamada: reusarla
+    } catch {
+      // La promesa cacheada rechazó (una apertura en curso que falló) — cae a reabrir abajo.
+    }
+  }
+  return reabrirOutboxTrasFalloNativo();
+}
+
+/**
+ * Ejecuta una operación contra `db` y, si el handle está muerto (ver `esHandleNativoMuerto`),
+ * reabre la conexión (`reabrirSoloSiSigueMuerto`) y reintenta la MISMA operación UNA sola vez
+ * con el handle nuevo. Cualquier otro `code` (SQL roto, base cerrada) se propaga tal cual —
+ * reintentar no arregla nada ahí.
+ */
+async function conReintentoSiHandleMuerto<T>(
+  db: SQLite.SQLiteDatabase,
+  operacion: (db: SQLite.SQLiteDatabase) => Promise<T>,
+): Promise<T> {
+  try {
+    return await operacion(db);
+  } catch (error) {
+    if (!esHandleNativoMuerto(error)) throw error;
+    const dbNueva = await reabrirSoloSiSigueMuerto(db);
+    return operacion(dbNueva);
+  }
+}
+
 async function generarEventId(): Promise<string> {
   const bytes = await Crypto.getRandomBytesAsync(10);
   return generarUuidV7(bytes);
 }
 
 /** Persiste un evento nuevo en estado `pendiente` — ver el contrato en el comentario de
- * arriba: esto debe ocurrir antes de cualquier intento de red, nunca después. */
+ * arriba: esto debe ocurrir antes de cualquier intento de red, nunca después.
+ * Este es EL path de escritura caliente (hasta cientos de llamadas por jornada, una por
+ * punto GPS) — por eso pasa por `conReintentoSiHandleMuerto`: si `db` es un handle zombi
+ * (ver comentario de `outboxPromise`), reintenta una vez con una conexión nueva en vez de
+ * perder el punto GPS entero.
+ *
+ * H1.a (hallazgo de revisión CRÍTICO): con `evento.eventId` explícito (rescate del día 1, ver
+ * el comentario de `EventoOutboxNuevo`), el `event_id` puede repetirse entre corridas — la
+ * tabla local `outbox` tiene `event_id TEXT PRIMARY KEY`, así que un re-run del rescate
+ * chocaría contra esa PK y `runAsync` lanzaría `SQLITE_CONSTRAINT`. `INSERT OR IGNORE` evita
+ * eso, pero SOLO cuando el `eventId` vino dado: en el camino normal (sin `eventId`, uno nuevo
+ * por llamada) un choque de PK sería un bug real que preferimos que siga reventando.
+ */
 export async function encolarEvento(
   db: SQLite.SQLiteDatabase,
   evento: EventoOutboxNuevo,
 ): Promise<string> {
-  const eventId = await generarEventId();
-  await db.runAsync(
-    "INSERT INTO outbox (event_id, device_id, ts, tipo, payload, estado) VALUES (?, ?, ?, ?, ?, 'pendiente')",
-    [eventId, evento.deviceId, new Date().toISOString(), evento.tipo, JSON.stringify(evento.payload)],
+  const eventIdProvisto = evento.eventId !== undefined;
+  const eventId = evento.eventId ?? (await generarEventId());
+  const sql = eventIdProvisto
+    ? "INSERT OR IGNORE INTO outbox (event_id, device_id, ts, tipo, payload, estado) VALUES (?, ?, ?, ?, ?, 'pendiente')"
+    : "INSERT INTO outbox (event_id, device_id, ts, tipo, payload, estado) VALUES (?, ?, ?, ?, ?, 'pendiente')";
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync(sql, [
+      eventId,
+      evento.deviceId,
+      new Date().toISOString(),
+      evento.tipo,
+      JSON.stringify(evento.payload),
+    ]),
   );
   return eventId;
 }
 
+/** H4 (hallazgo de revisión, medio): pasa por `conReintentoSiHandleMuerto` igual que los
+ * caminos de escritura. Antes de este fix, cada llamada abría una conexión nueva por su
+ * cuenta y se auto-sanaba sola ante un handle muerto; con el singleton, un handle zombi deja
+ * ESTE camino de lectura colgado para siempre — con el tracking detenido, nada dispara la
+ * reapertura porque no se intenta ninguna escritura (`sincronizarPendientes` quedaría
+ * bloqueado acá mismo, el badge de pendientes de `use-sync-status.ts` se congela). */
 export async function contarEventosPendientes(db: SQLite.SQLiteDatabase): Promise<number> {
-  const row = await db.getFirstAsync<{ total: number }>(
-    "SELECT COUNT(*) as total FROM outbox WHERE estado != 'acusado'",
+  const row = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.getFirstAsync<{ total: number }>(
+      "SELECT COUNT(*) as total FROM outbox WHERE estado != 'acusado'",
+    ),
   );
   return row?.total ?? 0;
 }
 
 /** Toma hasta `limite` eventos `pendiente` (los más viejos primero) para armar el próximo
- * lote de `POST /v1/sync/batches` (QUI-240, hasta ~500 eventos por request). */
+ * lote de `POST /v1/sync/batches` (QUI-240, hasta ~500 eventos por request).
+ * H4: ver el comentario de `contarEventosPendientes` arriba — sin `conReintentoSiHandleMuerto`
+ * acá, `sincronizarPendientes` queda tirando para siempre contra un handle zombi. */
 export async function obtenerLotePendiente(
   db: SQLite.SQLiteDatabase,
   limite = 500,
 ): Promise<EventoOutboxRow[]> {
-  const rows = await db.getAllAsync<OutboxRowCruda>(
-    "SELECT event_id, device_id, ts, tipo, payload, estado FROM outbox WHERE estado = 'pendiente' ORDER BY ts ASC LIMIT ?",
-    [limite],
+  const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.getAllAsync<OutboxRowCruda>(
+      "SELECT event_id, device_id, ts, tipo, payload, estado FROM outbox WHERE estado = 'pendiente' ORDER BY ts ASC LIMIT ?",
+      [limite],
+    ),
   );
   return rows.map(toEventoOutboxRow);
 }
@@ -106,9 +309,9 @@ export async function obtenerPayloadsPorTipo(
   db: SQLite.SQLiteDatabase,
   tipo: TipoEventoSync,
 ): Promise<Record<string, unknown>[]> {
-  const rows = await db.getAllAsync<{ payload: string }>(
-    'SELECT payload FROM outbox WHERE tipo = ?',
-    [tipo],
+  // H4: ver el comentario de `contarEventosPendientes` — mismo motivo para envolver la lectura.
+  const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.getAllAsync<{ payload: string }>('SELECT payload FROM outbox WHERE tipo = ?', [tipo]),
   );
   const payloads: Record<string, unknown>[] = [];
   for (const row of rows) {
@@ -142,9 +345,12 @@ export async function obtenerEventosPorTipo(
   db: SQLite.SQLiteDatabase,
   tipo: TipoEventoSync,
 ): Promise<EventoOutboxTsPayload[]> {
-  const rows = await db.getAllAsync<{ ts: string; payload: string }>(
-    'SELECT ts, payload FROM outbox WHERE tipo = ?',
-    [tipo],
+  // H4: ver el comentario de `contarEventosPendientes` — mismo motivo para envolver la lectura.
+  const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.getAllAsync<{ ts: string; payload: string }>(
+      'SELECT ts, payload FROM outbox WHERE tipo = ?',
+      [tipo],
+    ),
   );
   const eventos: EventoOutboxTsPayload[] = [];
   for (const row of rows) {
@@ -183,9 +389,11 @@ export async function purgarAcusadosAntesDe(
   db: SQLite.SQLiteDatabase,
   antesDe: Date,
 ): Promise<number> {
-  const result = await db.runAsync("DELETE FROM outbox WHERE estado = 'acusado' AND ts < ?", [
-    antesDe.toISOString(),
-  ]);
+  const result = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync("DELETE FROM outbox WHERE estado = 'acusado' AND ts < ?", [
+      antesDe.toISOString(),
+    ]),
+  );
   return result.changes;
 }
 
@@ -196,10 +404,12 @@ async function actualizarEstado(
 ): Promise<void> {
   if (eventIds.length === 0) return;
   const placeholders = eventIds.map(() => '?').join(',');
-  await db.runAsync(`UPDATE outbox SET estado = ? WHERE event_id IN (${placeholders})`, [
-    estado,
-    ...eventIds,
-  ]);
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync(`UPDATE outbox SET estado = ? WHERE event_id IN (${placeholders})`, [
+      estado,
+      ...eventIds,
+    ]),
+  );
 }
 
 function toEventoOutboxRow(row: OutboxRowCruda): EventoOutboxRow {

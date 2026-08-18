@@ -57,7 +57,7 @@ export function OperationNavigator(props: OperationNavigatorProps) {
           )}
         </Stack.Screen>
         <Stack.Screen name="Ajustes">
-          {(screenProps) => <AjustesScreen {...screenProps} />}
+          {(screenProps) => <AjustesScreen {...screenProps} contexto={props.contexto} />}
         </Stack.Screen>
       </Stack.Navigator>
     </GpsProvider>

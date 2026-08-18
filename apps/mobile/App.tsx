@@ -27,6 +27,14 @@ import { OperationNavigator } from './src/app/operation-navigator';
 import { SplashScreen } from './src/features/auth/splash-screen';
 import { quivoColors, quivoFonts, quivoSpacing } from './src/shared/theme/quivo-theme';
 import { useState } from 'react';
+import { sembrarPrimerArranqueRescate } from './src/features/perfil/rescate-dia1';
+
+// H1.b (hallazgo de revisión CRÍTICO, rescate del día 1): siembra el corte temporal del
+// rescate de emergencia ANTES de que la app procese cualquier punto GPS nuevo — "solo si no
+// existe" (ver `sembrarPrimerArranqueRescate`), así que abrir la app muchas veces no corre el
+// corte hacia adelante. Fire-and-forget a propósito: AsyncStorage es async y esto no debe
+// bloquear el primer render (mismo criterio que el resto de este archivo con `splashReady`).
+void sembrarPrimerArranqueRescate();
 
 const queryClient = new QueryClient();
 

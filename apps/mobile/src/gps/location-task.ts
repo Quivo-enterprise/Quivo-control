@@ -68,7 +68,11 @@ export interface ResultadoConstruirEventos {
  * que un evento viejo sin `tsFix`, en vez de fabricar una fecha basura que además pasaría el
  * `safeParse` de Zod (`"Invalid Date"` no es ISO válido, pero mejor no arriesgarlo).
  */
-function normalizarTsFix(timestamp: Location['timestamp']): string | undefined {
+// Exportada (hallazgo de revisión H6, rescate del día 1): `rescate-dia1-core.ts` la reusa tal
+// cual para decidir si un punto rescatado de la SQLite nativa se puede encolar — mismo defecto
+// de raíz (timestamp ilegible cayendo en silencio al `ts` del sobre), mismo fix, sin duplicar
+// la lógica.
+export function normalizarTsFix(timestamp: Location['timestamp']): string | undefined {
   const fecha = new Date(timestamp);
   return Number.isNaN(fecha.getTime()) ? undefined : fecha.toISOString();
 }
