@@ -59,6 +59,75 @@
 > El diagnóstico completo del día 1 (con causas raíz ya probadas) está en ese plan — leerlo antes
 > de tocar código, no re-investigar.
 
+## Línea 120 cargada y alternancia Z12/120 (2026-08-18)
+
+El CTO avisó que **la rotación de esta semana alterna Z12 y 120 día por medio** y que el 18 de
+agosto tocaba 120, no Z12. La línea 120 nunca había entrado a la base: el handoff la daba como
+"KML ya descargado", pero ese archivo no existía en el repo, ni en el disco, ni en la historia de
+git. El CTO pasó el link del Google My Maps del sindicato y de ahí salió todo.
+
+**Ahora el KML está versionado** en `scripts/data/linea-120/`, junto a los 16 puntos de control
+que el contacto del sindicato mandó por WhatsApp (`puntos-control-andry.json`, con los links
+`maps.app.goo.gl` ya resueltos a coordenadas). Dejan de depender de que sobreviva un chat.
+
+**Qué quedó en producción** (`scripts/cargar-linea-120.ts`, idempotente, dry-run por defecto):
+
+| Objeto | Estado |
+|---|---|
+| Línea 120 | `…0020`, `LINEA 120 RUTAS COMUNIDADES` |
+| Ruta asignada | `…0023`, `sentido: 'circuito'`, **146 vértices** (ida 79 + vuelta 67 concatenadas) |
+| Rutas `ida`/`vuelta` | `…0021`/`…0022`, se conservan como dato original del KML; no se asignan |
+| Ramales | 8 rutas `ramal:*` + 8 filas `variantes` colgadas de la ida |
+| Puntos de control | 12 en el circuito (17 en la línea contando los de ramal) |
+| Paradas | 10 |
+| Asignaciones | 15 por vehículo, alternando Z12/120, para el titular y el pasante |
+
+**Verificado contra el API, no contra la base:** `GET /v1/mobile/asignacion-del-dia` con la
+credencial real devuelve línea 120, ruta `circuito`, 146 vértices, 12 puntos de control y el punto
+de orden 0 en Univalle.
+
+### El bug que se atajó a tiempo
+
+La primera carga dejó el tronco como **dos rutas separadas** (`ida` y `vuelta`) y la asignación
+apuntaba sólo a `ida`. El paquete del día devolvía **7 puntos de control en vez de 12**: el
+vehículo hace ida y vuelta en la misma jornada, así que **los 4 puntos del retorno no se habrían
+registrado nunca**, incluida la terminal sur donde arranca el regreso. No tiraba error, la app
+funcionaba, y se habría descubierto al día siguiente mirando datos que no cierran — el mismo modo
+de falla del día 1. El precedente correcto era Z12, cuya ruta asignada es una sola `circuito` con
+sus 26 puntos colgando de ella; la 120 quedó igual.
+
+### Univalle es el origen, y `PARADA 120` no es lo mismo
+
+El CTO avisó que el recorrido **sale de Univalle Tiquipaya**. Medido contra el KML,
+`PARADA 120 UNIVALLE` (`-17.3327797, -66.2266681`) está a **25 m del último vértice del retorno** y
+a **856 m del primer vértice de la ida**, que arranca en `PARADA 120`. Son **dos terminales norte
+distintas**, y el KML no trae el tramo que las une — de ahí que el "circuito" no cierre en el
+norte. Ese hueco quedó documentado y medido, **sin conector inventado**: la fuente correcta va a
+ser la traza GPS real cuando el vehículo lo recorra, mismo criterio que se usó para el conector de
+Z12 (`plan-ruta-real-z12.md`).
+
+`PARADA 120 UNIVALLE` se cargó además como **punto de control de orden 0 y obligatorio**: es el
+marcador de vuelta. El conductor sale de ahí y vuelve ahí, así que es el punto que permite contar
+cada vuelta completa — justo lo que el sindicato pidió medir y lo que el build 7 recién ahora sabe
+registrar.
+
+### Lo que el KML no da
+
+El tronco es un **boceto dibujado a mano en My Maps**, no una traza: 79 vértices para 12,4 km
+(salto máximo 641 m) en la ida y 67 para 13,8 km (máximo **1348 m**) en la vuelta, contra los
+~32 m entre puntos de Z12, que salió de GPS real. **Sirve para el matcheo por radio de los puntos
+de control** —que es lo que cuenta pasadas— pero no para medir desvío de ruta ni para dibujar el
+recorrido con precisión.
+
+**Sigue abierto:** los 8 ramales están cargados pero **nadie los lee**. La 120 se reparte a las
+comunidades "mediante letrero" en el parabrisas, y hoy el sistema no tiene forma de saber qué ramal
+tomó el conductor (QUI-383). Cargar el dato no resuelve el modelo.
+
+**Limitación conocida de la alternancia:** `lineaParaFecha()` alterna por paridad del día del mes,
+que es correcto para el rango 2026-08-17..31 pero **se rompe en el cambio de mes** (31 de agosto y
+1 de septiembre son ambos impares → dos días seguidos de Z12). Hay que rehacerlo antes de generar
+la rotación de septiembre.
+
 ## Segunda credencial móvil — el pasante acompañante (2026-08-18)
 
 El CTO pidió una segunda credencial operativa para que un pasante acompañe al conductor y tome
@@ -722,7 +791,7 @@ real** — el refactor de fechas renombró variables en 2 de 4 funciones, y `exp
 | Confirmar el grupo de don Iver (¿1a?) | CTO | ⏳ Determina el punto de partida de su primera vuelta |
 | Rotar el `SENTRY_AUTH_TOKEN` | CTO | ⏳ Se pegó en un chat; darlo por expuesto |
 | Puntos de control reales del sindicato | Sindicato | ⏳ Prometidos; los 24 de medición no los reemplazan |
-| Cargar la línea 120 | — | ⏳ KML ya descargado. Decidir antes qué hacer con los 7 ramales |
+| Cargar la línea 120 | — | ✅ Script `scripts/cargar-linea-120.ts` escrito (línea, tronco ida/vuelta, 8 ramales, 16 puntos de control, 10 paradas, alternación Z12/120 día por medio QUI-383). **Falta correrlo** (`--apply`, hoy sin ejecutar). Los 8 ramales se cargan como `rutas` propias (tienen geometría) + `variantes` de catálogo colgadas de la ruta de ida — el schema de `Variante` no tiene columna de geometría. **Sigue abierto:** el sistema no puede saber qué ramal tomó el conductor (no hay UI ni lógica que use esa geometría todavía) |
 
 **Lo que sigue sin validarse:** el tracking en background **nunca se midió en un teléfono** y el load
 test (k6, QUI-250) nunca corrió. El piloto de mañana es, en los hechos, la primera validación de
