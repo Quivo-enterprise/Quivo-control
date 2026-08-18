@@ -193,6 +193,14 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
             onToggle={(v) => handleToggle('navegacionVoz', v)}
           />
           <SettingToggleRow
+            icon="notifications-outline"
+            title="Sonido de confirmación"
+            description="Una campanita al registrar un punto de control, para saber que quedó registrado sin mirar la pantalla."
+            helper="Suena aunque el teléfono esté en silencio."
+            value={settings.sonidoConfirmacion}
+            onToggle={(v) => handleToggle('sonidoConfirmacion', v)}
+          />
+          <SettingToggleRow
             icon="shield-checkmark-outline"
             title="Registro automático de controles"
             description="El registro se realiza de forma automática y segura."

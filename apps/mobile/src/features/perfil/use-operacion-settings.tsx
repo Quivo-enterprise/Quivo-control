@@ -3,6 +3,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export interface OperacionSettings {
   navegacionVoz: boolean;
+  // Sonido de confirmación al registrar un punto de control (distinto de `navegacionVoz`: el
+  // sonido da certeza de que quedó registrado, la voz informa la distancia). Preferencia propia,
+  // mismo patrón que `navegacionVoz` — ver `gps-provider.tsx` y `confirmacion-sonido.ts`.
+  sonidoConfirmacion: boolean;
   registroAutomatico: boolean;
   ahorroDatos: boolean;
   trabajarOffline: boolean;
@@ -11,6 +15,7 @@ export interface OperacionSettings {
 
 const DEFAULT_SETTINGS: OperacionSettings = {
   navegacionVoz: true,
+  sonidoConfirmacion: true,
   registroAutomatico: true,
   ahorroDatos: false,
   trabajarOffline: true,
