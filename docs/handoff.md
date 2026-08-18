@@ -59,6 +59,69 @@
 > El diagnóstico completo del día 1 (con causas raíz ya probadas) está en ese plan — leerlo antes
 > de tocar código, no re-investigar.
 
+## Segunda credencial móvil — el pasante acompañante (2026-08-18)
+
+El CTO pidió una segunda credencial operativa para que un pasante acompañe al conductor y tome
+notas, haciendo **el mismo recorrido al mismo tiempo pero desde una cuenta separada** — no
+compartiendo la del conductor, para que la evidencia GPS de cada uno quede atribuida a quien
+corresponde.
+
+**Lo que se creó** (script `scripts/crear-credencial-pasante.ts`, idempotente):
+
+| Fila | Valor |
+|---|---|
+| Vehículo | `33333333-3333-4333-8333-000000000024`, placa `2222AAA`, mismo sindicato y mismo socio que el titular |
+| Conductor | `33333333-3333-4333-8333-000000000025`, `PASANTE — acompañante piloto`, CI `00000001 LP` |
+| Asignaciones | 15, del 2026-08-17 al 2026-08-31, misma rotación (`86d20fcf-…`) y misma ruta (`…0011`) que el titular, `horario='manana'`, `orden` 101..115 |
+
+**Los PIN no están en el repo ni en este documento.** A diferencia del seed real
+(`packages/db/prisma/seed.ts`, que sí genera un PIN al azar la primera vez), este script **nunca
+genera un PIN**: los exige por variable de entorno (`PIN_VEHICULO_PASANTE` / `PIN_CONDUCTOR_PASANTE`)
+y aborta si faltan — quien lo corre los elige y ya los tiene. Misma política de almacenamiento que
+el titular, documentada en `CREDENCIALES.md`: se guardan solo como hash, se entregan una vez y sólo
+se pueden rotar (`FORZAR_PIN=1` en el script, o el endpoint `PUT /v1/mobile/credenciales/…`), nunca
+recuperar.
+
+**Verificado contra producción, no contra los tests:** login de dos pasos completo
+(`POST /v1/mobile/auth/vehiculo` → `POST /v1/mobile/auth/conductor`) y
+`GET /v1/mobile/asignacion-del-dia`, que devolvió el paquete completo — Z12, 1255 vértices,
+26 puntos de control, la asignación del 2026-08-18 venciendo a las 03:59:59 UTC del 19. La sesión
+de prueba se cerró después: 0 sesiones activas.
+
+### Por qué dos vehículos no chocan en el mismo circuito
+
+La única unicidad que protege contra doble asignación es `@@unique([vehiculoId, fecha, horario])`
+(`schema.prisma:387`) — es **por vehículo**, no por ruta ni por rotación. Nada impide dos
+asignaciones distintas sobre la misma ruta, la misma rotación, la misma fecha y el mismo horario
+mientras el `vehiculoId` difiera. Cada login arma su propia `SesionOperativa` y
+`paquete-dia.service.ts` sólo mira la sesión propia.
+
+**Lo que sí puede romper:** al autenticar, `auth-movil.service.ts:223` cierra las sesiones activas
+que compartan `vehiculoId` **o** `deviceId` dentro del sindicato. Con dos teléfonos distintos no
+pasa nada; si el pasante entrara desde el teléfono del conductor, le cerraría la sesión al
+conductor en el acto.
+
+### La trampa de zona horaria, que casi entra a producción
+
+La primera versión del script pasaba las fechas como objetos `Date`. El driver `pg` los serializa
+con el **offset local** de la máquina, no en UTC, y esta máquina está en UTC-4:
+
+```
+new Date(Date.UTC(2026,7,17))          ->  "2026-08-16T20:00:00.000-04:00"   -> date 2026-08-16
+new Date(Date.UTC(2026,7,18,3,59,59))  ->  "2026-08-17T23:59:59.000-04:00"   -> venceAt 4 h antes
+```
+
+O sea: las 15 asignaciones un día corridas y las sesiones venciendo a las 19:59:59 hora Bolivia en
+vez de a las 23:59:59. El mismo sesgo existe **al leer**: `pg` reconstruye `date` y
+`timestamp without time zone` con el constructor local, mientras que Prisma —quien lee esas
+columnas en el API real— las interpreta como UTC.
+
+La corrección: fechas y timestamps viajan como **strings explícitos** (`'YYYY-MM-DD'` y
+`'YYYY-MM-DD HH:MM:SS'` en UTC), y el `Client` sobreescribe el parser de los oids 1082/1114 para
+recibir el texto crudo. Verificado bajo tres zonas horarias distintas (UTC-4, UTC, Asia/Tokyo) con
+resultado idéntico. **Cualquier script futuro que escriba fechas a mano a esta base tiene el mismo
+problema si pasa objetos `Date`.**
+
 ## Despliegue de la v2 — 2026-08-18: pasos 1-5 ejecutados
 
 Se corrió la secuencia de [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md) contra producción. El
