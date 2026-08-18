@@ -20,16 +20,111 @@
 > vigente de cómo opera la línea, los 14 puntos de control reales y el plan para cargarlos están en
 > **[`plan-ruta-real-z12.md`](plan-ruta-real-z12.md)**.
 >
-> 🚦 **ARRANCAR ACÁ EN LA PRÓXIMA SESIÓN (aprobado por el CTO el 2026-08-17).** El trabajo
-> siguiente es **implementar [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md)**,
-> aprobado y sin empezar. Son tres entregas, en este orden:
-> **(1) Build de rescate — vence, `maxDaysToPersist` del SDK es 1 día**: el recorrido del día 1
-> está sólo en la SQLite interna de Transistorsoft y se poda solo. No desinstalar ni borrar datos
-> del S25 antes de extraerlo con `getCount()`/`getLocations()`.
-> **(2) v2 de la app**: persistencia e instrumentación, multi-vuelta, sesión/arranque/datos reales,
-> guiado y eficiencia. **(3) Mapa en vivo** `/en-vivo` en el panel.
+> 🚦 **ARRANCAR ACÁ EN LA PRÓXIMA SESIÓN.** Se está implementando
+> [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md) (aprobado por el CTO el
+> 2026-08-17). **Entrega 1 (build de rescate) está MERGEADA** — ver
+> [la sección de abajo](#entrega-1-del-plan-v2-2026-08-17-noche). Falta, en este orden:
+> **(a)** aplicar la migración `20260817130000` a Cloud SQL y redesplegar el worker
+> (⚠️ **producción bloqueada hasta que se haga**, ver abajo); **(b)** correr el build 7 de EAS e
+> instalarlo en el S25 para extraer el recorrido del día 1;
+> **(2) v2 de la app**: multi-vuelta, sesión/arranque/datos reales, guiado y eficiencia
+> (la persistencia y la instrumentación ya entraron con la Entrega 1).
+> **(3) Mapa en vivo** `/en-vivo` en el panel.
 > El diagnóstico completo del día 1 (con causas raíz ya probadas) está en ese plan — leerlo antes de
 > tocar código, no re-investigar.
+
+## Entrega 1 del plan v2 (2026-08-17, noche): rescate y worker de ingesta
+
+Dos PRs mergeados. **Producción quedó a mitad de camino** — leer "Lo que falta" antes de seguir.
+
+### PR #32 — persistencia del outbox y rescate del día 1 (`fbfbd56`)
+
+El fix de la regresión de `expo-sqlite@16.0.10`: `abrirOutbox()` pasa a **singleton con promesa
+cacheada a nivel de módulo**. La referencia de módulo *es* el fix, no una optimización — mantiene
+vivo el único objeto JS registrado, así que Hermes nunca tiene un objeto viejo de esa base que
+colectar. Se suma un escape hatch (`useNewConnection: true`, la única forma de saltear el cache de
+Kotlin), reintento sobre handle muerto en lecturas y escrituras, y `maxDaysToPersist: 14`.
+
+La pantalla de rescate (Ajustes) lee la SQLite interna de Transistorsoft y reencola por la vía
+normal. **Nunca llama `destroyLocations()`.**
+
+Lo que costó dos rondas de revisión, y hay que entender antes de tocarlo:
+
+- `getLocations()` devuelve **todo** lo persistido, no solo el día 1, y `encolarEvento` acuñaba un
+  `eventId` nuevo por llamada. Como el dedupe del servidor es por `eventId`, cada re-run habría
+  **duplicado evidencia legal** en `gps_points`. El `eventId` ahora se deriva de
+  `SHA-256(location.uuid)` + el timestamp del fix: el mismo punto produce siempre el mismo id.
+- 🔴 **La ventana de rescate automático es de 7 días, no 14.** `resolverTsFix` descarta cualquier
+  `tsFix` más viejo que `TOLERANCIA_TS_FIX_PASADO_MS` y cae **en silencio** al `ts` de encolado —
+  o sea, el momento del rescate. Un rescate tardío apilaría el día 1 en la fecha de hoy y, peor,
+  rompería la idempotencia: la PK del servidor es `(event_id, ts)`, así que con `ts` cambiante un
+  re-run duplica todo. El móvil aplica ahora la misma constante como cota inferior.
+  **No subir esa tolerancia sin crear particiones hacia atrás** — el worker solo crea `hoy..hoy+5`
+  y sin ese piso vuelve el `23514 no partition ... found for row`, que tira el lote de 500 filas.
+- Un corte "solo puntos anteriores al primer arranque del build" se probó y **se retiró**: su
+  premisa ("los posteriores ya los encoló el camino normal") es falsa con el paquete del día
+  vencido — que es el estado de la mañana del día 2 con el SDK todavía grabando — con la sesión
+  cerrada, y en foreground sin `iniciar()`. Era la única defensa que podía *perder* datos.
+- Los puntos rescatados llevan `origen: 'rescate'` y `detener()` los excluye de la ventana del
+  spike: sin eso, rescatar durante un turno daba un NO-GO falso por un hueco de 24 h.
+
+### PR #31 — el worker de ingesta, desplegado y arreglado (`11f4655`)
+
+**El worker nunca se había desplegado**: `POST /v1/sync/batches` encolaba en BullMQ y nadie
+consumía. Se creó el worker pool `quivo-worker` en Cloud Run. Dos cosas que el plan daba por
+sabidas y no eran así:
+
+- `--vpc-connector` **no existe** en `gcloud beta run worker-pools`. Va con Direct VPC egress:
+  `--network default --subnet default --vpc-egress private-ranges-only`.
+- El worker **sí necesita `JWT_SECRET`**, aunque no sirva HTTP: `@quivo/db` importa `auth.js`, que
+  resuelve el secreto en tiempo de carga. Sin él, crash loop.
+
+Con eso arrancó y crasheó de nuevo, ahora por un bug real:
+`crear_particion_gps_points` usaba check-then-act y **perdía la carrera contra sí misma**
+(`42P07`), porque `onModuleInit` la llama directo *y* `upsertJobScheduler` produce un job inmediato
+que corre lo mismo. Encima, los 6 días iban en una sola transacción, así que un solo error tumbaba
+el proceso. Ahora la creación va en un bloque con `EXCEPTION` y hay una transacción por día.
+
+La revisión de seguridad sumó, sobre esa misma función:
+
+- `SET search_path = pg_catalog, public` + identificadores calificados. Era `SECURITY DEFINER` sin
+  `search_path` fijo: escalación real desde `quivo_app` hasta el rol dueño del schema.
+- `REVOKE ALL ... FROM PUBLIC` — Postgres otorga `EXECUTE` a `PUBLIC` por defecto y nunca se había
+  revocado, así que los `GRANT` eran decorativos.
+- El fast-path miraba `pg_class` por `relname` **sin filtrar schema**: un `CREATE TEMP TABLE` con
+  el nombre de una partición hacía que el worker se saltara su creación y mandara el día entero a
+  `sync_errors`. Ahora usa `to_regclass('public.' || quote_ident(...))`.
+- RLS y policy salen del `IF` y corren siempre: la función **garantiza** su contrato en vez de
+  asumir que otra transacción lo cumplió, y repara particiones preexistentes sin aislamiento.
+- El worker **ya no arranca si falta la partición de hoy**. Antes eso lo dejaba "sano" drenando la
+  cola mientras cada `INSERT` fallaba y la evidencia del día se iba a `sync_errors` en silencio.
+  El comentario que lo justificaba era falso: el bootstrap creó `CURRENT_DATE-1..+6` relativo a la
+  fecha en que corrió la migración (2026-08-02), no al día en que arranca la instancia.
+
+### Lo que falta para que producción funcione
+
+🔴 **El worker está desplegado pero NO operativo.** La migración `20260817130000` está en `main` y
+**no está aplicada a Cloud SQL**, así que la revisión `quivo-worker-00002-n7t` sigue con la función
+vieja y muere en el bootstrap de particiones.
+
+1. **Aplicar la migración.** No hay automatización: `Dockerfile` solo corre `prisma generate`, y el
+   step de `migrate deploy` de `ci.yml` apunta al Postgres efímero de CI. Se hace a mano, con el
+   Cloud SQL Auth Proxy:
+   ```bash
+   cloud-sql-proxy --port 5433 quivo-piloto:southamerica-west1:quivo-control-db
+   # el secret `database-url` usa socket Unix: reescribir el host a 127.0.0.1:5433
+   pnpm --filter @quivo/db prisma:migrate:deploy
+   ```
+   ⚠️ El proxy usa **Application Default Credentials**, que son distintas de las de `gcloud auth
+   login`. Si tira `invalid_rapt`, correr `gcloud auth application-default login`.
+2. **Redesplegar el worker** para que tome la función nueva, y verificar **por logs y por conteo de
+   `gps_points`, nunca por el estado del servicio**: `ioredis` se crea con
+   `maxRetriesPerRequest: null`, así que sin red reintenta para siempre en silencio y un worker sin
+   Redis parece sano. El arranque limpio imprime `Worker de ingesta QUIVO listo`.
+3. **Build 7 de EAS** (`npx eas-cli build --platform android --profile production`) e instalarlo
+   **encima** en el S25 para extraer el día 1. Antes de eso, en ese teléfono está **prohibido**
+   desinstalar, borrar datos o **cerrar sesión** — el logout hace que el próximo tick headless
+   llame `detenerTrackingNativo()`. Para recargar el paquete, matar la app y reabrirla.
 
 ## Día 1 del piloto (2026-08-17): qué falló y qué quedó aprobado
 
