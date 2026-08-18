@@ -94,12 +94,57 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     this.connection.disconnect();
   }
 
+  /**
+   * Una transacción POR DÍA, no una sola para las `DIAS_ANTICIPACION_PARTICION + 1` — así un
+   * fallo en un día no aborta a los demás (Postgres aborta la transacción completa apenas
+   * falla un statement, `25P02`). El error de cada día se loguea y NO se propaga desde el
+   * bucle: mantenimiento de particiones futuras (mañana en adelante) es best-effort, un fallo
+   * ahí no debe impedir que el worker arranque y consuma la cola. `crear_particion_gps_points`
+   * ya es race-safe (`20260817130000_particion_gps_points_idempotente`), así que en el camino
+   * normal esto no debería lanzar nunca — el try/catch del bucle es defensa en profundidad ante
+   * lo inesperado (p. ej. la base caída a mitad de la corrida), no el mecanismo principal de
+   * corrección.
+   *
+   * OJO — esto NO cubre el día de HOY: la partición de hoy es la que recibe cada evento GPS
+   * que llegue mientras el worker esté arriba, así que su ausencia no es un caso best-effort —
+   * es un `INSERT` que va a fallar en CADA fila con "no partition of relation ... found for
+   * row" (`procesarGpsPoints` las manda a `sync_errors` una por una, en silencio: el worker
+   * parece sano, la cola se vacía, pero la evidencia GPS del día no se persiste en ningún
+   * lado). Una versión anterior de este comentario afirmaba que "las particiones de HOY ya
+   * existen (bootstrap inicial + corridas previas)" — es falso en general: el bootstrap de
+   * `20260802160000_ingesta_gps_worker` creó `CURRENT_DATE-1..+6` relativo a la fecha en que
+   * CORRIÓ esa migración (2026-08-02), no relativo al día en que arranca esta instancia del
+   * worker, y una instancia nueva de Cloud Run puede arrancar sin que haya corrido nunca antes
+   * este método. Por eso, después del bucle best-effort, se verifica una post-condición dura:
+   * si la partición de hoy no existe de verdad, se lanza — dejar arrancar al worker sin ella
+   * solo logra desviar toda la evidencia GPS del día a `sync_errors` en silencio, que es peor
+   * que no arrancar.
+   */
   private async asegurarParticionesFuturas(): Promise<void> {
-    await withTenantContext(CONTEXTO_ADMIN, async (tx) => {
-      for (let i = 0; i <= DIAS_ANTICIPACION_PARTICION; i++) {
-        await tx.$executeRaw`SELECT crear_particion_gps_points((CURRENT_DATE + ${i}::int)::date)`;
+    for (let i = 0; i <= DIAS_ANTICIPACION_PARTICION; i++) {
+      try {
+        await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+          tx.$executeRaw`SELECT crear_particion_gps_points((CURRENT_DATE + ${i}::int)::date)`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `No se pudo asegurar la partición de gps_points para CURRENT_DATE+${i}: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
       }
-    });
+    }
+
+    const [particionHoy] = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+      tx.$queryRaw<{ existe: boolean }[]>`
+        SELECT to_regclass('public.gps_points_' || to_char(CURRENT_DATE, 'YYYYMMDD')) IS NOT NULL AS existe
+      `,
+    );
+    if (!particionHoy?.existe) {
+      throw new Error(
+        'No existe la partición de gps_points de hoy: la ingesta GPS no puede persistir evidencia.',
+      );
+    }
   }
 
   private async procesarLote(job: Job<LoteIngestaJob>): Promise<{ procesados: number; errores: number }> {
