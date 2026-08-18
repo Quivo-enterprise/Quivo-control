@@ -94,12 +94,32 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     this.connection.disconnect();
   }
 
+  /**
+   * Una transacción POR DÍA, no una sola para las `DIAS_ANTICIPACION_PARTICION + 1` — así un
+   * fallo en un día no aborta a los demás (Postgres aborta la transacción completa apenas
+   * falla un statement, `25P02`). Y un error en un día se loguea y NO se propaga: mantenimiento
+   * de particiones futuras es best-effort, no debe impedir que el worker arranque y consuma la
+   * cola — las particiones de HOY ya existen (bootstrap inicial + corridas previas) y el
+   * trabajo urgente es ingerir, no adelantar margen de días. `crear_particion_gps_points` ya es
+   * race-safe (`20260817130000_particion_gps_points_idempotente`), así que en el camino normal
+   * esto no debería lanzar nunca — este try/catch es defensa en profundidad ante lo
+   * inesperado (p. ej. la base caída a mitad de la corrida), no el mecanismo principal de
+   * corrección.
+   */
   private async asegurarParticionesFuturas(): Promise<void> {
-    await withTenantContext(CONTEXTO_ADMIN, async (tx) => {
-      for (let i = 0; i <= DIAS_ANTICIPACION_PARTICION; i++) {
-        await tx.$executeRaw`SELECT crear_particion_gps_points((CURRENT_DATE + ${i}::int)::date)`;
+    for (let i = 0; i <= DIAS_ANTICIPACION_PARTICION; i++) {
+      try {
+        await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+          tx.$executeRaw`SELECT crear_particion_gps_points((CURRENT_DATE + ${i}::int)::date)`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `No se pudo asegurar la partición de gps_points para CURRENT_DATE+${i}: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
       }
-    });
+    }
   }
 
   private async procesarLote(job: Job<LoteIngestaJob>): Promise<{ procesados: number; errores: number }> {
