@@ -28,7 +28,7 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   // Mantenemos la lógica de Skeletons intacta para cumplir con el requerimiento.
   const { data: contexto, isLoading, refetch } = usePerfilQuery(contextoInicial, obtenerAccessToken);
   const { gps } = useGpsContext();
-  const { pendientes, isOffline } = useSyncStatus(obtenerAccessToken);
+  const { pendientes, isOffline } = useSyncStatus(obtenerAccessToken, contextoInicial.sesionId);
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
   const scale = useTextScale();
   const { settings } = useOperacionSettings();

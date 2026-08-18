@@ -192,4 +192,43 @@ describe('AuthMovilService', () => {
     expect(auditoria.diff).toEqual({ desafiosInvalidados: 0, sesionesRevocadas: 1 });
     expect(JSON.stringify(auditoria)).not.toContain(pinConductor);
   });
+
+  it('cierra la sesión activa previa del mismo vehículo al loguear desde OTRO dispositivo (plan §2.4.5)', async () => {
+    const vehiculo1 = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+    const login1 = await service.autenticarConductor({
+      challengeToken: vehiculo1.challengeToken,
+      deviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login1.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    // Producción: 3 sesiones activas simultáneas del mismo vehículo en 2 dispositivos — el
+    // cierre por `deviceId` solo nunca alcanzaba a una sesión abierta desde OTRO teléfono.
+    const otroDeviceId = `${deviceId}-otro`;
+    const vehiculo2 = await service.autenticarVehiculo({
+      placa,
+      pin: pinVehiculo,
+      deviceId: otroDeviceId,
+    });
+    const login2 = await service.autenticarConductor({
+      challengeToken: vehiculo2.challengeToken,
+      deviceId: otroDeviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login2.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    // La sesión del primer dispositivo quedó cerrada por el servidor (no por logout manual).
+    await expect(service.validarAccessToken(login1.accessToken)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    // La sesión nueva (segundo dispositivo) sigue viva y con su propio `deviceId`.
+    await expect(service.validarAccessToken(login2.accessToken)).resolves.toMatchObject({
+      deviceId: otroDeviceId,
+    });
+
+    // Limpieza: no dejar esta sesión activa para no interferir con otros tests del archivo.
+    await service.logout({ refreshToken: login2.refreshToken });
+  });
 });

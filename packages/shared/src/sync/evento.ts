@@ -68,6 +68,14 @@ export type PayloadGpsPoint = z.infer<typeof PayloadGpsPointSchema>;
  * `tsFix` es OPCIONAL por la misma razón de retrocompatibilidad que en `gps_point`: eventos
  * ya encolados en dispositivos con una versión anterior de la app nunca lo van a traer, y
  * siguen siendo válidos con el `ts` de encolado (ver `resolverTsFix`).
+ *
+ * `pasada` (multi-vuelta, plan §2.3): número de pasada por este punto de control dentro de
+ * la sesión (contador incremental desde 1, calculado en el móvil por la máquina de estados
+ * con histéresis de `filtrarNuevosCumplimientos`, `apps/mobile/src/gps/geofence.ts`) — sin
+ * esto, el servidor no puede distinguir "cumplió y se cuenta como la vuelta 3" de "cumplió
+ * una vez más y se perdió el evento". OPCIONAL a propósito, igual que `tsFix`: APKs
+ * anteriores a este cambio nunca lo van a mandar, y esos eventos siguen siendo válidos sin
+ * él (se persisten con `pasada: null`, nunca se rechazan).
  */
 export const PayloadCumplimientoPuntoControlSchema = z.object({
   sesionId: z.string().min(1),
@@ -75,6 +83,7 @@ export const PayloadCumplimientoPuntoControlSchema = z.object({
   lat: z.number(),
   lng: z.number(),
   tsFix: z.string().datetime({ offset: true }).optional(),
+  pasada: z.number().int().positive().optional(),
 });
 export type PayloadCumplimientoPuntoControl = z.infer<typeof PayloadCumplimientoPuntoControlSchema>;
 

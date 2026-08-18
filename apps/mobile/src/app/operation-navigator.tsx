@@ -19,6 +19,7 @@ interface OperationNavigatorProps {
   contexto: ContextoOperativoMovil;
   deviceId: string;
   aviso: string | null;
+  sesionNoRevalidada: boolean;
   loading: boolean;
   obtenerAccessToken: () => Promise<string | null>;
   onLogout: () => Promise<void>;
@@ -40,6 +41,7 @@ export function OperationNavigator(props: OperationNavigatorProps) {
               contexto={props.contexto}
               deviceId={props.deviceId}
               aviso={props.aviso}
+              sesionNoRevalidada={props.sesionNoRevalidada}
               loading={props.loading}
               obtenerAccessToken={props.obtenerAccessToken}
               onLogout={props.onLogout}

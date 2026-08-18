@@ -112,6 +112,7 @@ function QuivoApp() {
           contexto={contexto}
           deviceId={auth.estado.deviceId}
           aviso={auth.estado.aviso}
+          sesionNoRevalidada={auth.estado.sesionNoRevalidada}
           loading={auth.estado.cargando}
           obtenerAccessToken={auth.obtenerAccessToken}
           onLogout={auth.logout}

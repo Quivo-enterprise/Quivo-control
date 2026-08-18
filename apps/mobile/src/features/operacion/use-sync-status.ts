@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { Vibration } from 'react-native';
+import * as Sentry from '@sentry/react-native';
 import { abrirOutbox, contarEventosPendientes } from '../../db/outbox';
 import { iniciarSyncAutomatico, sincronizarPendientes, type ResultadoSync } from './sync-outbox';
 
@@ -73,6 +74,7 @@ export interface UseSyncStatusOpciones {
 
 export function useSyncStatus(
   obtenerAccessToken: () => Promise<string | null>,
+  sesionId?: string,
   opciones?: UseSyncStatusOpciones,
 ): EstadoSyncStatus {
   const [pendientes, setPendientes] = useState(0);
@@ -137,7 +139,18 @@ export function useSyncStatus(
 
     const iniciar = async () => {
       await releerToken();
-      await actualizarPendientes();
+      try {
+        await actualizarPendientes();
+      } catch (error) {
+        // Rechazo no manejado (abrirOutbox/contarEventosPendientes pueden fallar por SQLite):
+        // `iniciar` corre disparada con `void iniciar()` más abajo, así que un throw acá
+        // quedaba como unhandled promise rejection — en RN eso puede tumbar el proceso. Es
+        // solo el contador de pendientes de esta pasada; el siguiente tick del intervalo
+        // reintenta la lectura.
+        Sentry.captureException(error, {
+          tags: { contexto: 'use-sync-status', paso: 'actualizar-pendientes-inicial' },
+        });
+      }
       if (!activo) return;
       detenerSync = iniciarSyncAutomatico(
         () => tokenRef.current,
@@ -155,7 +168,8 @@ export function useSyncStatus(
         },
         () => {
           if (activo) setIsSyncing(true);
-        }
+        },
+        sesionId,
       );
     };
     void iniciar();
@@ -180,7 +194,16 @@ export function useSyncStatus(
             setIsSyncing(false);
           }
         }
-        await actualizarPendientes();
+        try {
+          await actualizarPendientes();
+        } catch (error) {
+          // Mismo motivo que el catch de `iniciar` de arriba: este `await` vive fuera del
+          // try/catch del intento de sync (ese solo cubre `sincronizarPendientes`), así que
+          // un fallo acá también quedaba como rechazo no manejado en cada tick del intervalo.
+          Sentry.captureException(error, {
+            tags: { contexto: 'use-sync-status', paso: 'actualizar-pendientes-intervalo' },
+          });
+        }
       })();
     }, REFRESCO_MS);
 
@@ -189,7 +212,14 @@ export function useSyncStatus(
       detenerSync();
       clearInterval(intervalo);
     };
-  }, [obtenerAccessToken, actualizarPendientes, simularFalloSync, registrarExito, registrarFallo]);
+  }, [
+    obtenerAccessToken,
+    sesionId,
+    actualizarPendientes,
+    simularFalloSync,
+    registrarExito,
+    registrarFallo,
+  ]);
 
   return { pendientes, errorSync, syncFalloDefinitivo, ultimaSyncOk, isOffline, isSyncing };
 }

@@ -8,7 +8,7 @@ import { abrirOutbox, encolarEvento } from '../../db/outbox';
 import { Button } from '../../shared/components/Button';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { MapErrorBoundary } from './map-error-boundary';
-import { proximoPuntoControlPendiente } from './proximo-punto-control';
+import { completadosTrasDeteccion, proximoPuntoControlPendiente } from './proximo-punto-control';
 import { RouteMapView } from './route-map-view';
 import { NextControlSheet } from './next-control-sheet';
 import { useSyncStatus } from './use-sync-status';
@@ -26,6 +26,11 @@ interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
   deviceId: string;
   aviso: string | null;
+  /** A5 (hallazgo de revisión, alto): se agotó el backoff de revalidación de sesión
+   * (`refrescarConReintentos` en `use-auth-movil.ts`) sin lograr un refresh válido — distinto
+   * del `aviso` genérico de "sin red", que es engañoso acá si la sesión fue cerrada
+   * server-side. Renderizado como alerta con CTA explícito más abajo. */
+  sesionNoRevalidada: boolean;
   loading: boolean;
   obtenerAccessToken: () => Promise<string | null>;
   onLogout: () => Promise<void>;
@@ -34,7 +39,10 @@ interface OperationScreenProps {
 export function OperationScreen(props: OperationScreenProps & NativeStackScreenProps<OperationStackParamList, 'Map'>) {
   useKeepAwake();
   const { gps, paqueteDia } = useGpsContext();
-  const { pendientes, errorSync, isOffline, isSyncing } = useSyncStatus(props.obtenerAccessToken);
+  const { pendientes, errorSync, isOffline, isSyncing } = useSyncStatus(
+    props.obtenerAccessToken,
+    props.contexto.sesionId,
+  );
   const { settings } = useOperacionSettings();
   const puntosControl = useMemo(
     () => paqueteDia.paquete?.puntosControl ?? [],
@@ -48,9 +56,31 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
   const [showInfo, setShowInfo] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
 
+  // M3 (hallazgo de revisión, medio): `puntosControl.length` se lee por REF, no como
+  // dependencia del efecto de abajo — mismo patrón que `onLocationRef` en
+  // `use-gps-operativo.ts`. Si el paquete del día se refresca a mitad de jornada (un punto de
+  // control dado de baja, commit 9a0e472) este cambio NO debe, por sí solo, reprocesar la
+  // MISMA `gps.ultimaDeteccion` con el nuevo total: con `completados` en 20 de 36 y el
+  // refresco trayendo 18, `20 >= 18` reseteaba `completados` a un Set vacío y el guiado
+  // saltaba al punto 1 con el bus a mitad de recorrido.
+  const puntosControlLengthRef = useRef(puntosControl.length);
+  useEffect(() => {
+    puntosControlLengthRef.current = puntosControl.length;
+  }, [puntosControl.length]);
+
   useEffect(() => {
     if (!gps.ultimaDeteccion) return;
-    setCompletados((actual) => new Set(actual).add(gps.ultimaDeteccion!.puntoControlId));
+    // Plan §2.5 ("reset del próximo punto por vuelta") — lógica pura y testeada en
+    // `completadosTrasDeteccion` (`proximo-punto-control.ts`): sin esto, `completados` solo
+    // crecía y nunca se limpiaba entre vueltas, así que al terminar la vuelta 1 se quedaba
+    // "sin próximo punto" el resto del día.
+    setCompletados((actual) =>
+      completadosTrasDeteccion(
+        actual,
+        gps.ultimaDeteccion!.puntoControlId,
+        puntosControlLengthRef.current,
+      ),
+    );
   }, [gps.ultimaDeteccion]);
   useEffect(() => {
     if (!gps.tracking) setCompletados(new Set());
@@ -169,6 +199,34 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         )}
 
         {props.aviso ? <Text style={styles.notice}>{props.aviso}</Text> : null}
+        {props.sesionNoRevalidada ? (
+          <View style={styles.sesionNoRevalidadaContainer}>
+            <Text accessibilityRole="alert" style={styles.dangerNotice}>
+              No se pudo revalidar tu sesión. El recorrido se sigue grabando, pero no va a
+              sincronizar hasta que vuelvas a iniciar sesión.
+            </Text>
+            <Button
+              variant="danger"
+              onPress={confirmarCierreSesion}
+              style={styles.sesionNoRevalidadaButton}
+            >
+              Vuelve a iniciar sesión para sincronizar
+            </Button>
+          </View>
+        ) : null}
+        {/* Plan §2.2, punto 3 (hallazgo de revisión): `errorSync` se leía de `useSyncStatus`
+            pero nunca se mostraba — el conductor no tenía forma de enterarse de que la
+            sincronización venía fallando. Se oculta si ya se muestra el banner de
+            `sesionNoRevalidada` arriba (ese caso ya explica, con más precisión, por qué no
+            sincroniza) para no duplicar alarmas por el mismo motivo. El texto aclara
+            explícitamente que los datos NO se pierden (el outbox los retiene) para no
+            alarmar de más a alguien manejando. */}
+        {errorSync && !props.sesionNoRevalidada ? (
+          <Text accessibilityRole="alert" style={styles.dangerNotice}>
+            No se pudo sincronizar el recorrido. Tus datos están guardados en el teléfono y se
+            van a enviar solos apenas haya conexión.
+          </Text>
+        ) : null}
         {pendientes >= 800 ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             Almacenamiento local casi lleno (80%). Conéctate pronto para sincronizar.
@@ -284,6 +342,29 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         onConfirm={() => {
           setConfirmarFinVisible(false);
           void gps.detener();
+        }}
+      />
+
+      {/* Hallazgo ALTO (piloto día 1, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): antes,
+          el botón de "Vuelve a iniciar sesión" del banner de arriba llamaba a
+          `props.onLogout()` de un solo toque. `logout()` corre `borrarSesionMovil()`, y el
+          siguiente tick headless entra por `obtenerContextoUbicacionPersistido()` → `!sesion`
+          → `detenerTrackingNativo()`: un `stop()` nativo IRREVERSIBLE (apaga `startOnBoot`,
+          nunca encola `fin_recorrido`) justo cuando el banner de arriba promete "El recorrido
+          se sigue grabando". Mismo patrón que `confirmarFinVisible`/`onFinish` arriba: exige
+          confirmación explícita antes de cortar la captura GPS de un conductor a mitad de
+          turno. */}
+      <QuivoConfirmDialog
+        visible={confirmarLogoutVisible}
+        variant="danger"
+        title="¿Cerrar sesión?"
+        message="Se va a cortar el registro del recorrido hasta que vuelvas a entrar. El GPS deja de guardar tu viaje mientras tanto."
+        cancelLabel="Seguir en la app"
+        confirmLabel="Cerrar sesión"
+        onCancel={() => setConfirmarLogoutVisible(false)}
+        onConfirm={() => {
+          setConfirmarLogoutVisible(false);
+          void props.onLogout();
         }}
       />
     </View>
@@ -519,6 +600,12 @@ const styles = StyleSheet.create({
     padding: quivoSpacing.md,
     fontFamily: quivoFonts.bodySemiBold,
     fontSize: 11,
+  },
+  sesionNoRevalidadaContainer: {
+    gap: quivoSpacing.xs,
+  },
+  sesionNoRevalidadaButton: {
+    alignSelf: 'stretch',
   },
   successNotice: {
     alignSelf: 'center',

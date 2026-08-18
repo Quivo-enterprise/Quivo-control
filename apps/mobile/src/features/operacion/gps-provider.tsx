@@ -31,13 +31,21 @@ export function GpsProvider({
 
   const gps = useGpsOperativo(sesionId, deviceId, puntosControl);
   const { settings } = useOperacionSettings();
-  const ultimoHablado = useRef<string | null>(null);
+  // B4 (hallazgo de revisión, bajo): compara también contra la PASADA, no solo el
+  // `puntoControlId` — con multi-vuelta, dos pasadas CONSECUTIVAS del mismo punto de control
+  // solo cambian `pasada`, no `puntoControlId`, así que comparar solo el id dejaba la segunda
+  // pasada muda (nunca se actualizaba `ultimoHablado`, porque ya "coincidía").
+  const ultimoHablado = useRef<{ puntoControlId: string; pasada: number } | null>(null);
 
   useEffect(() => {
     if (gps.ultimaDeteccion && settings.navegacionVoz) {
-      if (ultimoHablado.current !== gps.ultimaDeteccion.puntoControlId) {
+      const { puntoControlId, pasada = 0 } = gps.ultimaDeteccion;
+      const yaHablado =
+        ultimoHablado.current?.puntoControlId === puntoControlId &&
+        ultimoHablado.current?.pasada === pasada;
+      if (!yaHablado) {
         Speech.speak(`Punto de control alcanzado. Distancia: ${gps.ultimaDeteccion.distanciaM} metros.`);
-        ultimoHablado.current = gps.ultimaDeteccion.puntoControlId;
+        ultimoHablado.current = { puntoControlId, pasada };
       }
     }
   }, [gps.ultimaDeteccion, settings.navegacionVoz]);

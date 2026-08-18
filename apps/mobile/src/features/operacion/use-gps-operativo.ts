@@ -7,7 +7,6 @@ import {
   contarEventosPendientes,
   encolarEvento,
   obtenerEventosPorTipo,
-  obtenerPayloadsPorTipo,
 } from '../../db/outbox';
 import { gpsSpikeConfig, logVerboseHabilitado } from '../../gps/background-geolocation.config';
 import {
@@ -17,7 +16,7 @@ import {
   evaluarCriteriosGo,
   type MuestraBateria,
 } from '../../gps/battery-gap-monitor';
-import { claveCumplimiento, type DeteccionPuntoControl } from '../../gps/geofence';
+import { claveCumplimiento, type DeteccionPuntoControl, type EstadoPuntoControl } from '../../gps/geofence';
 import { registrarPuntoGps } from '../../gps/headless-task';
 import { clavesCumplimientoDesdePayloads } from '../../gps/location-task';
 
@@ -35,8 +34,13 @@ export function useGpsOperativo(
   const bateria = useRef<MuestraBateria[]>([]);
   const puntosRef = useRef(0);
   const erroresEscritura = useRef(0);
-  const puntosControlDetectados = useRef<Set<string>>(new Set());
+  const puntosControlDetectados = useRef<Map<string, EstadoPuntoControl>>(new Map());
   const subscription = useRef<{ remove: () => void } | null>(null);
+  // C1 (hallazgo de revisión CRÍTICO): promesa de la siembra en curso/completada — la
+  // referencia ambos caminos que pueden necesitar sembrar (el `useEffect` de re-enganche y
+  // `iniciar()`) leen para no sembrar dos veces y para no suscribirse/arrancar antes de que
+  // termine. Ver `sembrarCumplimientos` más abajo.
+  const semillaPromise = useRef<Promise<void> | null>(null);
 
   const onLocation = useCallback(
     // La escritura al outbox (gps_point + cumplimiento_punto_control) vive en
@@ -70,12 +74,22 @@ export function useGpsOperativo(
       }
 
       try {
+        // C1/B6: esperar la semilla ACÁ (y no antes de suscribirse) es lo que permite que la
+        // suscripción se instale ANTES de `BackgroundGeolocation.start()` sin abrir la ventana
+        // que ese orden existía para cerrar. Un fix que llegue mientras la semilla está en
+        // curso queda RETENIDO hasta que termine, en vez de procesarse contra un Map vacío
+        // (que lo re-emitiría como `pasada: 1`) o de perderse por no haber suscripción todavía.
+        // La semilla nunca rechaza (best-effort, ver `sembrarCumplimientos`).
+        await semillaPromise.current;
         const db = await abrirOutbox();
         const { deteccion } = await registrarPuntoGps(
           db,
           location,
           { deviceId, sesionId, puntosControl },
-          puntosControlDetectados.current,
+          // B6 (hallazgo de revisión, bajo): se pasa el REF, no `.current` — la cola FIFO de
+          // `registrarPuntoGps` difiere la ejecución, y `sembrarCumplimientos` puede reemplazar
+          // el Map en el medio. Ver `ContenedorEstadosPuntosControl` (`gps/headless-task.ts`).
+          puntosControlDetectados,
         );
         if (deteccion) setUltimaDeteccion(deteccion);
       } catch (error) {
@@ -127,6 +141,46 @@ export function useGpsOperativo(
     );
   }, []);
 
+  /**
+   * C1 (hallazgo de revisión CRÍTICO): siembra `puntosControlDetectados.current` desde el
+   * outbox local, reusando la misma función pura y testeada que usa el headless task
+   * (`asegurarSemillaCumplimientos` en `headless-task.ts`), incluida la histéresis (A1: la
+   * semilla siempre deriva `dentro: true` cuando hay una emisión previa — ver el comentario
+   * de `clavesCumplimientoDesdePayloads`, `location-task.ts`).
+   *
+   * Extraída a función reutilizable porque tiene que correr en DOS caminos, y los dos tienen
+   * que esperar la MISMA promesa (`semillaPromise`, arriba) en vez de sembrar cada uno por su
+   * cuenta:
+   * - El `useEffect` de re-enganche de abajo, SIEMPRE al montar — es el único lugar que puede
+   *   garantizar que la siembra corrió también cuando el chofer mata la app a mitad de turno
+   *   y la reabre SIN tocar "Iniciar": con el plugin nativo ya `enabled`, el botón pasa
+   *   directo a "Finalizar recorrido" (`next-control-sheet.tsx`) y `iniciar()` — el único
+   *   lugar que sembraba antes de este fix — se vuelve INALCANZABLE.
+   * - `iniciar()`, más abajo, para el arranque manual — ya no siembra por su cuenta, solo
+   *   espera esta promesa.
+   *
+   * Best-effort: nunca rechaza — un fallo acá (SQLite, outbox corrupto) no debe bloquear ni
+   * el re-enganche ni "Iniciar"; el Map queda como estaba (vacío en el peor caso, mismo
+   * comportamiento que antes de este fix) y se reporta a Sentry, igual que el equivalente
+   * headless (`asegurarSemillaCumplimientos`).
+   */
+  const sembrarCumplimientos = useCallback(async (): Promise<void> => {
+    try {
+      const db = await abrirOutbox();
+      const eventosCumplimiento = await obtenerEventosPorTipo(
+        db,
+        'cumplimiento_punto_control',
+        sesionId,
+      );
+      puntosControlDetectados.current = clavesCumplimientoDesdePayloads(eventosCumplimiento);
+    } catch (error) {
+      console.error('[QUIVO][gps] No se pudo sembrar cumplimientos desde el outbox', error);
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'sembrar-cumplimientos' },
+      });
+    }
+  }, [sesionId]);
+
   useEffect(() => {
     // Attempt to get the initial location without starting the tracker
     BackgroundGeolocation.getCurrentPosition({
@@ -143,6 +197,12 @@ export function useGpsOperativo(
         // Ignorar fallo silencioso (puede que no tenga permisos aún)
       });
 
+    // C1 (hallazgo de revisión CRÍTICO): la siembra corre SIEMPRE al montar (keyed por
+    // `sesionId`, ver las deps de este efecto), ANTES de decidir si re-enganchar la
+    // suscripción — no solo cuando el chofer aprieta "Iniciar" (ver el comentario de
+    // `sembrarCumplimientos` arriba para el porqué).
+    semillaPromise.current = sembrarCumplimientos();
+
     // Con `stopOnTerminate: false` + `startOnBoot: true` el tracking nativo corre
     // independiente del proceso de la app. Si el chofer mata la app a mitad de turno
     // (headless escribiendo) y después la reabre para mirar la ruta SIN tocar "Iniciar", el
@@ -151,23 +211,29 @@ export function useGpsOperativo(
     // copia puntos a `quivo-outbox.db`. Re-enganchamos la suscripción si el plugin ya está
     // `enabled`, sin re-emitir `inicio_recorrido` — el recorrido ya empezó y un segundo
     // marcador de inicio deformaría el recorrido reconstruido (QUI-247).
+    //
+    // B1: este camino YA NO espera a que termine la siembra antes de suscribirse — esa espera
+    // era una ventana de fixes perdidos (mismo defecto que en `iniciar()`), porque el plugin
+    // está emitiendo y nadie más copia esos puntos. La garantía de "ningún fix se procesa con
+    // el Map vacío" la da ahora `onLocation`, que espera `semillaPromise` antes de escribir.
     let montado = true;
-    BackgroundGeolocation.getState()
-      .then((estado) => {
+    void (async () => {
+      try {
+        const estado = await BackgroundGeolocation.getState();
         if (!montado || !estado.enabled) return;
         suscribirUbicaciones();
         setTracking(true);
-      })
-      .catch(() => {
+      } catch {
         // Sin estado del plugin no hay nada que re-enganchar: "Iniciar" sigue disponible.
-      });
+      }
+    })();
 
     return () => {
       montado = false;
       subscription.current?.remove();
       subscription.current = null;
     };
-  }, [suscribirUbicaciones]);
+  }, [sesionId, suscribirUbicaciones, sembrarCumplimientos]);
 
   const iniciar = useCallback(async () => {
     setErrorGps(null);
@@ -177,33 +243,85 @@ export function useGpsOperativo(
     erroresEscritura.current = 0;
     setPuntos(0);
     setUltimaDeteccion(null);
-    try {
-      const db = await abrirOutbox();
-      // A6 (hallazgo de revisión): sembrar el Set desde el outbox en vez de `new Set()`.
-      // Escenario que esto cierra: el chofer mata la app, el headless registra el
-      // cumplimiento de `pc-1`, reabre y aprieta "Iniciar" (comportamiento normal, el botón
-      // sigue visible) — con `new Set()` el vehículo vuelve a pasar por `pc-1` en el tramo de
-      // retorno de una ruta circular y el hook emite un SEGUNDO `cumplimiento_punto_control`
-      // con `eventId` nuevo, que el worker no puede deduplicar (dedupe es por `eventId`, no
-      // por `(sesionId, puntoControlId)`) — doble evidencia de paso para una sola sanción.
-      // Reusa la misma función pura y testeada que usa `asegurarSemillaCumplimientos` del
-      // lado headless (`location-task.ts`).
-      const payloadsCumplimiento = await obtenerPayloadsPorTipo(db, 'cumplimiento_punto_control');
-      puntosControlDetectados.current = clavesCumplimientoDesdePayloads(payloadsCumplimiento);
 
-      suscribirUbicaciones();
+    // ORDEN (B1, hallazgo de revisión — corrige el reordenamiento del plan §2.4.2 sin perder
+    // lo que ese reordenamiento buscaba). Las dos propiedades que este bloque tiene que
+    // sostener a la vez son:
+    //
+    //  (a) **El nativo arranca aunque el outbox falle** (plan §2.4.2): un fallo de SQLite (la
+    //      regresión de `expo-sqlite@16.0.10`) no debe impedir `start()`, porque el SDK de
+    //      Transistorsoft sigue grabando en su propia base nativa (`persist: true`, el mismo
+    //      mecanismo que sostuvo el rescate de la Entrega 1) y eso es lo único recuperable.
+    //  (b) **Ningún fix se pierde por llegar antes de la suscripción**: el plugin emite
+    //      `onLocation` apenas arranca, y el headless task NO corre mientras la app está viva
+    //      (Transistorsoft solo lo invoca con la app terminada). Cada fix de la ventana entre
+    //      `start()` y `suscribirUbicaciones()` no lo copia NADIE al outbox: queda solo en la
+    //      base nativa del plugin, que nada vuelve a leer.
+    //
+    // La versión anterior dejaba `start()` antes de la suscripción y metía en el medio un
+    // `await` de la semilla (una lectura COMPLETA del outbox) más `abrirOutbox()` — cientos de
+    // milisegundos, o segundos, de fixes perdidos. La solución es suscribir PRIMERO (es
+    // sincrónico y no toca SQLite) y arrancar el nativo después: `onLocation` ya espera la
+    // semilla por su cuenta (ver su comentario), así que un fix que llegue antes de que
+    // termine la siembra queda retenido, no descartado ni mal contado.
+    suscribirUbicaciones();
+
+    try {
       await BackgroundGeolocation.ready(gpsSpikeConfig);
       await BackgroundGeolocation.start();
-      setTracking(true);
+    } catch (error) {
+      // Plan §2.4.4: mensaje distinto del de persistencia (bloque de abajo) — acá el módulo
+      // NATIVO no pudo arrancar (permisos del SO, licencia del plugin, Play Services): no
+      // hay nada grabándose todavía, a diferencia del catch siguiente. La suscripción que
+      // acabamos de instalar no tiene nada que escuchar: se remueve.
+      subscription.current?.remove();
+      subscription.current = null;
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'iniciar-nativo' },
+      });
+      setErrorGps('No se pudo iniciar el módulo nativo de GPS. Revisa permisos y licencia del dispositivo.');
+      return;
+    }
+
+    try {
+      // C1 (hallazgo de revisión CRÍTICO): la siembra ya NO ocurre acá — corre en el
+      // `useEffect` de montaje de arriba (keyed por `sesionId`), que es el ÚNICO lugar que
+      // puede garantizar que corrió SIEMPRE, incluido el camino de re-enganche donde
+      // `iniciar()` nunca se invoca (con `tracking === true` el botón pasa directo a
+      // "Finalizar recorrido", ver `next-control-sheet.tsx`). Acá solo se espera esa MISMA
+      // promesa — nunca se vuelve a sembrar por cuenta propia.
+      await (semillaPromise.current ?? sembrarCumplimientos());
+      const db = await abrirOutbox();
       // RNF-24/QUI-247: marca el límite real del recorrido — sin esto, reconstruir un
       // recorrido más adelante solo tenía los puntos GPS sueltos, sin saber dónde empezó.
       await encolarEvento(db, { deviceId, tipo: 'inicio_recorrido', payload: { sesionId } });
-    } catch {
-      subscription.current?.remove();
-      subscription.current = null;
-      setErrorGps('No se pudo iniciar el GPS. Revisa permisos y licencia del módulo nativo.');
+      // Plan §2.4.3: `tracking` recién se marca `true` ACÁ, después de que la suscripción
+      // quedó conectada Y el marcador de inicio encoló con éxito.
+      setTracking(true);
+    } catch (error) {
+      // Plan §2.4.4: el GPS nativo (bloque de arriba) ya está corriendo y grabando en su
+      // propia base — este catch es SOLO el pipeline local app→outbox el que falló. No se
+      // llama `BackgroundGeolocation.stop()` acá: cortar el tracking nativo por un fallo de
+      // SQLite tiraría exactamente la evidencia que este orden existe para salvar (mismo
+      // principio que el plan §2.4.1 aplica al 401 de sesión — la evidencia local es lo único
+      // irrecuperable).
+      //
+      // B1: tampoco se REMUEVE la suscripción (antes sí se hacía). Lo único que falló acá es
+      // el marcador `inicio_recorrido`; `onLocation` abre el outbox por su cuenta en cada fix
+      // y se auto-sana vía `reabrirOutboxTrasFalloNativo` (`db/outbox.ts`). Removerla
+      // convertía un fallo puntual de encolado en la pérdida de TODOS los puntos siguientes
+      // hasta que el chofer volviera a apretar "Iniciar" — exactamente el daño que este
+      // hallazgo describe. La UI queda en "Iniciar" (`tracking` sigue false) y ese reintento
+      // es idempotente: `suscribirUbicaciones` remueve la suscripción anterior antes de
+      // instalar la nueva, y el nativo ya arrancado no se reinicia.
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'iniciar-outbox' },
+      });
+      setErrorGps(
+        'El GPS ya está grabando en el dispositivo, pero no se pudo abrir el almacenamiento local. Reintenta "Iniciar"; si persiste, revisa el espacio disponible.',
+      );
     }
-  }, [suscribirUbicaciones, deviceId, sesionId]);
+  }, [suscribirUbicaciones, sembrarCumplimientos, deviceId, sesionId]);
 
   const detener = useCallback(async () => {
     setErrorGps(null);
@@ -294,14 +412,41 @@ export function useGpsOperativo(
     }
   }, [deviceId, sesionId]);
 
+  /**
+   * B3 (hallazgo de revisión, bajo): Map SEPARADO de `puntosControlDetectados` — antes de este
+   * fix, `simularDeteccion` escribía en el MISMO Map que consulta la máquina de histéresis
+   * real (`filtrarNuevosCumplimientos`), así que apretar el botón de debug bloqueaba la pasada
+   * REAL de ese punto de control durante `PASADA_MIN_MS` (2 min). El comentario de la función
+   * decía lo contrario ("no participa en ninguna evaluación de histéresis real"), que era
+   * falso — corregido acá y, ya que salía barato, aislado de verdad: el simulador nunca más
+   * toca el estado que usa el geofence real.
+   */
+  const puntosControlSimulados = useRef<Map<string, EstadoPuntoControl>>(new Map());
+
   const simularDeteccion = useCallback(
     (puntoControlId: string) => {
+      // Botón de debug/QA (`operation-screen.tsx`, gateado por `__DEV__`): `radioToleranciaM`
+      // es un valor de relleno razonable (no viene de un punto de control real acá) solo para
+      // satisfacer el contrato de `DeteccionPuntoControl`. Escribe en `puntosControlSimulados`
+      // (B3, arriba), no en `puntosControlDetectados` — este simulador no pasa por
+      // `filtrarNuevosCumplimientos` y ya no comparte estado con lo que sí pasa por ahí.
+      const clave = claveCumplimiento(sesionId, puntoControlId);
+      const previo = puntosControlSimulados.current.get(clave);
+      const pasada = (previo?.pasadas ?? 0) + 1;
+      puntosControlSimulados.current.set(clave, {
+        dentro: true,
+        ultimoEmitidoMs: Date.now(),
+        pasadas: pasada,
+      });
+      // B4 (hallazgo de revisión, bajo): incluye `pasada` — `gps-provider.tsx` la usa para
+      // distinguir dos pasadas consecutivas del mismo punto al decidir el aviso por voz.
       const deteccion: DeteccionPuntoControl = {
         puntoControlId,
         distanciaM: 15,
         cumplido: true,
+        radioToleranciaM: 30,
+        pasada,
       };
-      puntosControlDetectados.current.add(claveCumplimiento(sesionId, puntoControlId));
       setUltimaDeteccion(deteccion);
     },
     [sesionId],
