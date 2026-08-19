@@ -10,15 +10,13 @@ import {
 
 const LIMITE_FILAS = 200;
 
-const parseDate = (d: unknown) => (typeof d === 'string' ? new Date(d) : (d as Date));
-
 /** RNF-35 (QUI-242) — `sync_errors` tiene RLS (mismo patrón que `audit_log`, QUI-218):
  * `admin_sindicato` ya queda limitado a su propio tenant por la política. */
 @Injectable()
 export class SyncErroresService {
   async listar(actor: AuthenticatedUser, filtros: SyncErroresQuery): Promise<SyncErrorEntry[]> {
-    const desde = filtros.desde ? inicioDeJornadaBolivia(parseDate(filtros.desde)) : undefined;
-    const hasta = filtros.hasta ? inicioDeJornadaSiguienteBolivia(parseDate(filtros.hasta)) : undefined;
+    const desde = filtros.desde ? inicioDeJornadaBolivia(filtros.desde) : undefined;
+    const hasta = filtros.hasta ? inicioDeJornadaSiguienteBolivia(filtros.hasta) : undefined;
     const where: Prisma.SyncErrorWhereInput = {
       deviceId: filtros.deviceId,
       sesionId: filtros.sesionId,

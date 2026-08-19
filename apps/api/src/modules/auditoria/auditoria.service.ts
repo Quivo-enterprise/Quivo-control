@@ -13,13 +13,11 @@ import {
  * `sindicatoId` acá. */
 const LIMITE_FILAS = 200;
 
-const parseDate = (d: unknown) => (typeof d === 'string' ? new Date(d) : (d as Date));
-
 @Injectable()
 export class AuditoriaService {
   async listar(actor: AuthenticatedUser, filtros: AuditoriaQuery): Promise<AuditLogEntry[]> {
-    const desde = filtros.desde ? inicioDeJornadaBolivia(parseDate(filtros.desde)) : undefined;
-    const hasta = filtros.hasta ? inicioDeJornadaSiguienteBolivia(parseDate(filtros.hasta)) : undefined;
+    const desde = filtros.desde ? inicioDeJornadaBolivia(filtros.desde) : undefined;
+    const hasta = filtros.hasta ? inicioDeJornadaSiguienteBolivia(filtros.hasta) : undefined;
     const where: Prisma.AuditLogWhereInput = {
       entidad: filtros.entidad,
       accion: filtros.accion,

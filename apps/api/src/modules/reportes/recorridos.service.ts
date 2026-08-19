@@ -55,13 +55,11 @@ interface ResumenRow {
  * la sesión no es visible para el actor, 404 antes de tocar cualquier otra tabla, mismo
  * patrón que `common/geo/tenant-checks.ts`.
  */
-const parseDate = (d: unknown) => (typeof d === 'string' ? new Date(d) : (d as Date));
-
 @Injectable()
 export class RecorridosService {
   async listar(actor: AuthenticatedUser, query: RecorridosQuery): Promise<RecorridoResumen[]> {
-    const desde = query.desde ? parseDate(query.desde) : undefined;
-    const hasta = query.hasta ? parseDate(query.hasta) : undefined;
+    const desde = query.desde;
+    const hasta = query.hasta;
     const desdeInstante = desde ? inicioDeJornadaBolivia(desde) : new Date(0);
     const hastaInstante = hasta
       ? inicioDeJornadaSiguienteBolivia(hasta)

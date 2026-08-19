@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, withTenantContext } from '@quivo/db';
 import type {
   AgrupacionActividad,
-  AgrupacionCumplimiento,
   CumplimientoQuery,
   ExportarActividadQuery,
   ExportarRecorridosQuery,
@@ -13,16 +12,13 @@ import {
   inicioDeJornadaBolivia,
   inicioDeJornadaSiguienteBolivia,
 } from '../../common/tiempo/jornada.js';
+import {
+  CLAVES_CUMPLIMIENTO,
+  consultarCumplimientoPorAgrupacion,
+  rangoCumplimiento,
+} from './cumplimiento-query.util.js';
 
 const TAMANO_PAGINA = 500;
-
-const parseDate = (d: unknown) => (typeof d === 'string' ? new Date(d) : (d as Date));
-
-const CLAVES: Record<AgrupacionCumplimiento, { id: Prisma.Sql; nombre: Prisma.Sql }> = {
-  linea: { id: Prisma.sql`l.id`, nombre: Prisma.sql`l.nombre` },
-  vehiculo: { id: Prisma.sql`v.id`, nombre: Prisma.sql`v.placa` },
-  ruta: { id: Prisma.sql`r.id`, nombre: Prisma.sql`l.codigo || ' (' || r.sentido || ')'` },
-};
 
 interface RecorridoExportRow {
   inicio: Date;
@@ -53,15 +49,6 @@ interface ActividadExportRow {
   puntosTotales: bigint;
 }
 
-interface CumplimientoExportRow {
-  id: string;
-  nombre: string;
-  puntos_cumplidos: bigint;
-  puntos_totales: bigint;
-  recorridos_asignados: bigint;
-  recorridos_completados: bigint;
-}
-
 /**
  * RF-78..80 (QUI-249): 3 reportes exportables (recorridos por periodo, sanciones por
  * sujeto/estado, actividad por vehículo/conductor). "Streaming para volúmenes grandes": cada
@@ -78,67 +65,13 @@ export class ExportesService {
     actor: AuthenticatedUser,
     query: CumplimientoQuery,
   ): AsyncGenerator<(string | number | boolean | null)[]> {
-    const clave = CLAVES[query.por];
-    const desde = query.desde ? parseDate(query.desde) : undefined;
-    const hasta = query.hasta ? parseDate(query.hasta) : undefined;
-    const desdeFecha = desde ?? new Date(0);
-    const hastaFecha = hasta ?? new Date('9999-12-31');
-    const desdeInstante = desde ? inicioDeJornadaBolivia(desde) : new Date(0);
-    const hastaInstante = hasta
-      ? inicioDeJornadaSiguienteBolivia(hasta)
-      : new Date('9999-12-31T23:59:59.999Z');
+    const clave = CLAVES_CUMPLIMIENTO[query.por];
+    const rango = rangoCumplimiento(query.desde, query.hasta);
 
     for (let offset = 0; ; offset += TAMANO_PAGINA) {
-      const filas: CumplimientoExportRow[] = await withTenantContext(
+      const filas = await withTenantContext(
         { rol: actor.rol, sindicatoId: actor.sindicatoId },
-        (tx) =>
-          tx.$queryRaw<CumplimientoExportRow[]>`
-            WITH base AS (
-              SELECT DISTINCT ${clave.id} as id, ${clave.nombre} as nombre
-              FROM asignaciones a
-              JOIN vehiculos v ON v.id = a."vehiculoId"
-              JOIN rutas r ON r.id = a."rutaId"
-              JOIN lineas l ON l.id = r."lineaId"
-              WHERE a.fecha >= ${desdeFecha} AND a.fecha <= ${hastaFecha}
-            ),
-            recorridos AS (
-              SELECT ${clave.id} as id,
-                COUNT(DISTINCT a.id) as recorridos_asignados,
-                COUNT(DISTINCT a.id) FILTER (WHERE so.fin IS NOT NULL) as recorridos_completados
-              FROM asignaciones a
-              JOIN vehiculos v ON v.id = a."vehiculoId"
-              JOIN rutas r ON r.id = a."rutaId"
-              JOIN lineas l ON l.id = r."lineaId"
-              LEFT JOIN sesiones_operativas so ON so."asignacionId" = a.id
-              WHERE a.fecha >= ${desdeFecha} AND a.fecha <= ${hastaFecha}
-              GROUP BY ${clave.id}
-            ),
-            puntos AS (
-              SELECT ${clave.id} as id,
-                COUNT(*) FILTER (WHERE cpc.cumplido) as puntos_cumplidos,
-                COUNT(*) as puntos_totales
-              FROM cumplimientos_pc cpc
-              JOIN sesiones_operativas so ON so.id = cpc."sesionId"
-              JOIN asignaciones a ON a.id = so."asignacionId"
-              JOIN vehiculos v ON v.id = a."vehiculoId"
-              JOIN rutas r ON r.id = a."rutaId"
-              JOIN lineas l ON l.id = r."lineaId"
-              WHERE cpc."validadoPor" = 'worker'
-                AND cpc.ts >= ${desdeInstante} AND cpc.ts < ${hastaInstante}
-              GROUP BY ${clave.id}
-            )
-            SELECT
-              base.id, base.nombre,
-              COALESCE(puntos.puntos_cumplidos, 0) as puntos_cumplidos,
-              COALESCE(puntos.puntos_totales, 0) as puntos_totales,
-              COALESCE(recorridos.recorridos_asignados, 0) as recorridos_asignados,
-              COALESCE(recorridos.recorridos_completados, 0) as recorridos_completados
-            FROM base
-            LEFT JOIN recorridos ON recorridos.id = base.id
-            LEFT JOIN puntos ON puntos.id = base.id
-            ORDER BY base.nombre ASC
-            LIMIT ${TAMANO_PAGINA} OFFSET ${offset}
-          `,
+        (tx) => consultarCumplimientoPorAgrupacion(tx, clave, rango, { limit: TAMANO_PAGINA, offset }),
       );
       for (const f of filas) {
         const puntosTotales = Number(f.puntos_totales);
@@ -162,8 +95,8 @@ export class ExportesService {
     actor: AuthenticatedUser,
     query: ExportarRecorridosQuery,
   ): AsyncGenerator<(string | number | boolean | null)[]> {
-    const desde = query.desde ? parseDate(query.desde) : undefined;
-    const hasta = query.hasta ? parseDate(query.hasta) : undefined;
+    const desde = query.desde;
+    const hasta = query.hasta;
     const desdeInstante = desde ? inicioDeJornadaBolivia(desde) : new Date(0);
     const hastaInstante = hasta
       ? inicioDeJornadaSiguienteBolivia(hasta)
@@ -188,7 +121,7 @@ export class ExportesService {
               FROM cumplimientos_pc cpc
               WHERE cpc."sesionId" = so.id AND cpc."validadoPor" = 'worker'
             ) cp ON true
-            WHERE so.inicio >= ${desde} AND so.inicio < ${hasta}
+            WHERE so.inicio >= ${desdeInstante} AND so.inicio < ${hastaInstante}
             ORDER BY so.inicio DESC, so.id ASC
             LIMIT ${TAMANO_PAGINA} OFFSET ${offset}
           `,
@@ -213,8 +146,8 @@ export class ExportesService {
     actor: AuthenticatedUser,
     query: ExportarSancionesQuery,
   ): AsyncGenerator<(string | number | boolean | null)[]> {
-    const desde = query.desde ? parseDate(query.desde) : new Date(0);
-    const hasta = query.hasta ? parseDate(query.hasta) : new Date('9999-12-31');
+    const desde = query.desde ?? new Date(0);
+    const hasta = query.hasta ?? new Date('9999-12-31');
     const estado = query.estado ?? null;
     const sujetoTipo = query.sujetoTipo ?? null;
 
@@ -252,8 +185,8 @@ export class ExportesService {
     actor: AuthenticatedUser,
     query: ExportarActividadQuery,
   ): AsyncGenerator<(string | number | boolean | null)[]> {
-    const desde = query.desde ? parseDate(query.desde) : undefined;
-    const hasta = query.hasta ? parseDate(query.hasta) : undefined;
+    const desde = query.desde;
+    const hasta = query.hasta;
     const desdeInstante = desde ? inicioDeJornadaBolivia(desde) : new Date(0);
     const hastaInstante = hasta
       ? inicioDeJornadaSiguienteBolivia(hasta)
@@ -277,7 +210,7 @@ export class ExportesService {
               FROM cumplimientos_pc cpc
               WHERE cpc."sesionId" = so.id AND cpc."validadoPor" = 'worker'
             ) cp ON true
-            WHERE so.inicio >= ${desde} AND so.inicio < ${hasta}
+            WHERE so.inicio >= ${desdeInstante} AND so.inicio < ${hastaInstante}
             GROUP BY ${clave.id}, ${clave.nombre}
             ORDER BY ${clave.nombre} ASC
             LIMIT ${TAMANO_PAGINA} OFFSET ${offset}
