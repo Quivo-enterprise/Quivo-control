@@ -8,9 +8,10 @@
 
 ## Estado al 2026-08-19
 
-`main` = `4677042` (PR #37). En producción: `api:v4` sobre `quivo-api-00006-pfm` y el worker pool
-`quivo-worker-00004-hk7`, ambos en Cloud Run `southamerica-west1`; el panel es `web:v1`
-(`quivo-web-00001-4jd`). Sin drift: la imagen desplegada corresponde al código de `main`.
+`main` = `2e710e3` (PR #43, solo tests — sin cambios de código de producción desde el PR #37).
+En producción: `api:v4` sobre `quivo-api-00006-pfm` y el worker pool `quivo-worker-00004-hk7`,
+ambos en Cloud Run `southamerica-west1`; el panel es `web:v1` (`quivo-web-00001-4jd`). Sin
+drift: la imagen desplegada corresponde al código de producción de `main`.
 El APK en los teléfonos es el **build 7** (`versionCode` 7, EAS `e1d01284`, perfil `production`).
 
 **El piloto salió a la calle el 2026-08-18 por la tarde** — segunda jornada real, la primera con
@@ -32,6 +33,13 @@ la variación diaria de la operación.**
   15 asignaciones propias, para que dos teléfonos operen el mismo circuito sin pisarse.
 - **Rescate del día 1**: cerrado por decisión del CTO. El código queda en la app pero no
   condiciona nada.
+- **Vía 2 completa (PR #43)**: rescatados los tres PRs de Valentina — QUI-339 (#38, auditoría de
+  accesibilidad), QUI-340 (#43, specs E2E de alta de conductor y vehículo) y QUI-342 (#42, filtros
+  de cumplimiento en URL y exportación CSV) — los tres mergeados a `main`. El #43 corrigió cuatro
+  defectos del original: lock resuelto contra `main` sin churn, `uniqueId` generado por `test()` en
+  vez de a nivel de módulo (sobrevive a `retries: 2`), `afterAll` que borra por Prisma las entidades
+  creadas, y `dotenv.config` con `override: false`. Verificado corriendo la suite de aceptación dos
+  veces seguidas contra la misma base: 5/5 en ambas pasadas, sin acumulación de filas.
 
 ### Lo que no está cerrado
 
@@ -868,13 +876,13 @@ SDK distinta de la que corre acá.
   sobre persistir coordenadas y sobre telemática de flotas— pero no los detalló. **Hay que relanzarla**
   antes de tomar cualquier decisión.
 
-### Vía 2 — congelada por decisión del CTO
+### Vía 2 — cerrada
 
-Los tres PRs de Valentina (#8 QUI-339, #9 QUI-340, #14 QUI-342) siguen abiertos y no se tocan hasta
-después del arranque. Pendiente al retomar: **#14 tiene la CI en rojo y ese rojo esconde un bug
-real** — el refactor de fechas renombró variables en 2 de 4 funciones, y `exportes.service.ts:191` y
-`:280` siguen interpolando `${desde}`/`${hasta}` en `$queryRaw`; sin filtro de fecha eso mete
-`undefined` en el SQL.
+> Nota histórica: esta sección describía el congelamiento decidido antes del arranque del piloto.
+> Los tres PRs de Valentina ya se rescataron y mergearon a `main`: #8 QUI-339 vía #38 (auditoría de
+> accesibilidad), #9 QUI-340 vía #43 (specs E2E de alta de conductor y vehículo) y #14 QUI-342 vía
+> #42 (filtros de cumplimiento en URL y exportación CSV, incluido el fix del bug real de
+> `exportes.service.ts` que interpolaba `${desde}`/`${hasta}` sin filtro de fecha).
 
 ---
 
