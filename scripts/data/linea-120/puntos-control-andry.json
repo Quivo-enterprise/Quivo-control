@@ -1,0 +1,102 @@
+{
+  "fuente": "WhatsApp de Andry (Quivo), 2026-08-16 21:26-22:11; links maps.app.goo.gl resueltos 2026-08-18",
+  "nota": "14/16 caen a <20 m del trazo del KML. C3 y N10 son las excepciones, ambas explicadas.",
+  "puntos": [
+    {
+      "id": "A1",
+      "lat": -17.3386523,
+      "lon": -66.2214916,
+      "nota": "terminal norte (PARADA 120) — compartido con inicio Collpapampa"
+    },
+    {
+      "id": "A2",
+      "lat": -17.3512512,
+      "lon": -66.2191141,
+      "nota": "sobre ramal Barrio Flores"
+    },
+    {
+      "id": "A3",
+      "lat": -17.3639152,
+      "lon": -66.2208341,
+      "nota": "sobre ramal Barrio Flores"
+    },
+    {
+      "id": "C1",
+      "lat": -17.3385196,
+      "lon": -66.2214715,
+      "nota": "inicio Collpapampa (= terminal norte)"
+    },
+    {
+      "id": "C2",
+      "lat": -17.3548939,
+      "lon": -66.2406683,
+      "nota": "Collpapampa"
+    },
+    {
+      "id": "C3",
+      "lat": -17.3533393,
+      "lon": -66.2439172,
+      "nota": "Collpapampa — la ruta se extiende hasta acá, MAS ALLA del KML (361 m)"
+    },
+    {
+      "id": "N1",
+      "lat": -17.3725412,
+      "lon": -66.1637003,
+      "nota": "tronco ida norte->sud"
+    },
+    {
+      "id": "N2",
+      "lat": -17.3732048,
+      "lon": -66.1569244,
+      "nota": "tronco ida norte->sud"
+    },
+    {
+      "id": "N3",
+      "lat": -17.3841248,
+      "lon": -66.1564755,
+      "nota": "tronco ida norte->sud"
+    },
+    {
+      "id": "N4",
+      "lat": -17.3884567,
+      "lon": -66.1540467,
+      "nota": "tronco ida norte->sud"
+    },
+    {
+      "id": "N5",
+      "lat": -17.3998534,
+      "lon": -66.1498632,
+      "nota": "tronco ida norte->sud"
+    },
+    {
+      "id": "N6",
+      "lat": -17.4023847,
+      "lon": -66.1509193,
+      "nota": "terminal sur — COMPARTIDO llegada/salida, acá arranca el retorno"
+    },
+    {
+      "id": "N7",
+      "lat": -17.3817391,
+      "lon": -66.1515157,
+      "nota": "retorno sud->norte"
+    },
+    {
+      "id": "N8",
+      "lat": -17.3781078,
+      "lon": -66.1570699,
+      "nota": "retorno sud->norte"
+    },
+    {
+      "id": "N9",
+      "lat": -17.368162,
+      "lon": -66.1638835,
+      "nota": "retorno sud->norte"
+    },
+    {
+      "id": "N10",
+      "lat": -17.3544904,
+      "lon": -66.1875726,
+      "nota": "retorno sud->norte (168 m del trazo KML)"
+    }
+  ]
+}

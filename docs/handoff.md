@@ -59,6 +59,138 @@
 > El diagnóstico completo del día 1 (con causas raíz ya probadas) está en ese plan — leerlo antes
 > de tocar código, no re-investigar.
 
+## Línea 120 cargada y alternancia Z12/120 (2026-08-18)
+
+El CTO avisó que **la rotación de esta semana alterna Z12 y 120 día por medio** y que el 18 de
+agosto tocaba 120, no Z12. La línea 120 nunca había entrado a la base: el handoff la daba como
+"KML ya descargado", pero ese archivo no existía en el repo, ni en el disco, ni en la historia de
+git. El CTO pasó el link del Google My Maps del sindicato y de ahí salió todo.
+
+**Ahora el KML está versionado** en `scripts/data/linea-120/`, junto a los 16 puntos de control
+que el contacto del sindicato mandó por WhatsApp (`puntos-control-andry.json`, con los links
+`maps.app.goo.gl` ya resueltos a coordenadas). Dejan de depender de que sobreviva un chat.
+
+**Qué quedó en producción** (`scripts/cargar-linea-120.ts`, idempotente, dry-run por defecto):
+
+| Objeto | Estado |
+|---|---|
+| Línea 120 | `…0020`, `LINEA 120 RUTAS COMUNIDADES` |
+| Ruta asignada | `…0023`, `sentido: 'circuito'`, **146 vértices** (ida 79 + vuelta 67 concatenadas) |
+| Rutas `ida`/`vuelta` | `…0021`/`…0022`, se conservan como dato original del KML; no se asignan |
+| Ramales | 8 rutas `ramal:*` + 8 filas `variantes` colgadas de la ida |
+| Puntos de control | 12 en el circuito (17 en la línea contando los de ramal) |
+| Paradas | 10 |
+| Asignaciones | 15 por vehículo, alternando Z12/120, para el titular y el pasante |
+
+**Verificado contra el API, no contra la base:** `GET /v1/mobile/asignacion-del-dia` con la
+credencial real devuelve línea 120, ruta `circuito`, 146 vértices, 12 puntos de control y el punto
+de orden 0 en Univalle.
+
+### El bug que se atajó a tiempo
+
+La primera carga dejó el tronco como **dos rutas separadas** (`ida` y `vuelta`) y la asignación
+apuntaba sólo a `ida`. El paquete del día devolvía **7 puntos de control en vez de 12**: el
+vehículo hace ida y vuelta en la misma jornada, así que **los 4 puntos del retorno no se habrían
+registrado nunca**, incluida la terminal sur donde arranca el regreso. No tiraba error, la app
+funcionaba, y se habría descubierto al día siguiente mirando datos que no cierran — el mismo modo
+de falla del día 1. El precedente correcto era Z12, cuya ruta asignada es una sola `circuito` con
+sus 26 puntos colgando de ella; la 120 quedó igual.
+
+### Univalle es el origen, y `PARADA 120` no es lo mismo
+
+El CTO avisó que el recorrido **sale de Univalle Tiquipaya**. Medido contra el KML,
+`PARADA 120 UNIVALLE` (`-17.3327797, -66.2266681`) está a **25 m del último vértice del retorno** y
+a **856 m del primer vértice de la ida**, que arranca en `PARADA 120`. Son **dos terminales norte
+distintas**, y el KML no trae el tramo que las une — de ahí que el "circuito" no cierre en el
+norte. Ese hueco quedó documentado y medido, **sin conector inventado**: la fuente correcta va a
+ser la traza GPS real cuando el vehículo lo recorra, mismo criterio que se usó para el conector de
+Z12 (`plan-ruta-real-z12.md`).
+
+`PARADA 120 UNIVALLE` se cargó además como **punto de control de orden 0 y obligatorio**: es el
+marcador de vuelta. El conductor sale de ahí y vuelve ahí, así que es el punto que permite contar
+cada vuelta completa — justo lo que el sindicato pidió medir y lo que el build 7 recién ahora sabe
+registrar.
+
+### Lo que el KML no da
+
+El tronco es un **boceto dibujado a mano en My Maps**, no una traza: 79 vértices para 12,4 km
+(salto máximo 641 m) en la ida y 67 para 13,8 km (máximo **1348 m**) en la vuelta, contra los
+~32 m entre puntos de Z12, que salió de GPS real. **Sirve para el matcheo por radio de los puntos
+de control** —que es lo que cuenta pasadas— pero no para medir desvío de ruta ni para dibujar el
+recorrido con precisión.
+
+**Sigue abierto:** los 8 ramales están cargados pero **nadie los lee**. La 120 se reparte a las
+comunidades "mediante letrero" en el parabrisas, y hoy el sistema no tiene forma de saber qué ramal
+tomó el conductor (QUI-383). Cargar el dato no resuelve el modelo.
+
+**Limitación conocida de la alternancia:** `lineaParaFecha()` alterna por paridad del día del mes,
+que es correcto para el rango 2026-08-17..31 pero **se rompe en el cambio de mes** (31 de agosto y
+1 de septiembre son ambos impares → dos días seguidos de Z12). Hay que rehacerlo antes de generar
+la rotación de septiembre.
+
+## Segunda credencial móvil — el pasante acompañante (2026-08-18)
+
+El CTO pidió una segunda credencial operativa para que un pasante acompañe al conductor y tome
+notas, haciendo **el mismo recorrido al mismo tiempo pero desde una cuenta separada** — no
+compartiendo la del conductor, para que la evidencia GPS de cada uno quede atribuida a quien
+corresponde.
+
+**Lo que se creó** (script `scripts/crear-credencial-pasante.ts`, idempotente):
+
+| Fila | Valor |
+|---|---|
+| Vehículo | `33333333-3333-4333-8333-000000000024`, placa `2222AAA`, mismo sindicato y mismo socio que el titular |
+| Conductor | `33333333-3333-4333-8333-000000000025`, `PASANTE — acompañante piloto`, CI `00000001 LP` |
+| Asignaciones | 15, del 2026-08-17 al 2026-08-31, misma rotación (`86d20fcf-…`) y misma ruta (`…0011`) que el titular, `horario='manana'`, `orden` 101..115 |
+
+**Los PIN no están en el repo ni en este documento.** A diferencia del seed real
+(`packages/db/prisma/seed.ts`, que sí genera un PIN al azar la primera vez), este script **nunca
+genera un PIN**: los exige por variable de entorno (`PIN_VEHICULO_PASANTE` / `PIN_CONDUCTOR_PASANTE`)
+y aborta si faltan — quien lo corre los elige y ya los tiene. Misma política de almacenamiento que
+el titular, documentada en `CREDENCIALES.md`: se guardan solo como hash, se entregan una vez y sólo
+se pueden rotar (`FORZAR_PIN=1` en el script, o el endpoint `PUT /v1/mobile/credenciales/…`), nunca
+recuperar.
+
+**Verificado contra producción, no contra los tests:** login de dos pasos completo
+(`POST /v1/mobile/auth/vehiculo` → `POST /v1/mobile/auth/conductor`) y
+`GET /v1/mobile/asignacion-del-dia`, que devolvió el paquete completo — Z12, 1255 vértices,
+26 puntos de control, la asignación del 2026-08-18 venciendo a las 03:59:59 UTC del 19. La sesión
+de prueba se cerró después: 0 sesiones activas.
+
+### Por qué dos vehículos no chocan en el mismo circuito
+
+La única unicidad que protege contra doble asignación es `@@unique([vehiculoId, fecha, horario])`
+(`schema.prisma:387`) — es **por vehículo**, no por ruta ni por rotación. Nada impide dos
+asignaciones distintas sobre la misma ruta, la misma rotación, la misma fecha y el mismo horario
+mientras el `vehiculoId` difiera. Cada login arma su propia `SesionOperativa` y
+`paquete-dia.service.ts` sólo mira la sesión propia.
+
+**Lo que sí puede romper:** al autenticar, `auth-movil.service.ts:223` cierra las sesiones activas
+que compartan `vehiculoId` **o** `deviceId` dentro del sindicato. Con dos teléfonos distintos no
+pasa nada; si el pasante entrara desde el teléfono del conductor, le cerraría la sesión al
+conductor en el acto.
+
+### La trampa de zona horaria, que casi entra a producción
+
+La primera versión del script pasaba las fechas como objetos `Date`. El driver `pg` los serializa
+con el **offset local** de la máquina, no en UTC, y esta máquina está en UTC-4:
+
+```
+new Date(Date.UTC(2026,7,17))          ->  "2026-08-16T20:00:00.000-04:00"   -> date 2026-08-16
+new Date(Date.UTC(2026,7,18,3,59,59))  ->  "2026-08-17T23:59:59.000-04:00"   -> venceAt 4 h antes
+```
+
+O sea: las 15 asignaciones un día corridas y las sesiones venciendo a las 19:59:59 hora Bolivia en
+vez de a las 23:59:59. El mismo sesgo existe **al leer**: `pg` reconstruye `date` y
+`timestamp without time zone` con el constructor local, mientras que Prisma —quien lee esas
+columnas en el API real— las interpreta como UTC.
+
+La corrección: fechas y timestamps viajan como **strings explícitos** (`'YYYY-MM-DD'` y
+`'YYYY-MM-DD HH:MM:SS'` en UTC), y el `Client` sobreescribe el parser de los oids 1082/1114 para
+recibir el texto crudo. Verificado bajo tres zonas horarias distintas (UTC-4, UTC, Asia/Tokyo) con
+resultado idéntico. **Cualquier script futuro que escriba fechas a mano a esta base tiene el mismo
+problema si pasa objetos `Date`.**
+
 ## Despliegue de la v2 — 2026-08-18: pasos 1-5 ejecutados
 
 Se corrió la secuencia de [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md) contra producción. El
@@ -659,7 +791,7 @@ real** — el refactor de fechas renombró variables en 2 de 4 funciones, y `exp
 | Confirmar el grupo de don Iver (¿1a?) | CTO | ⏳ Determina el punto de partida de su primera vuelta |
 | Rotar el `SENTRY_AUTH_TOKEN` | CTO | ⏳ Se pegó en un chat; darlo por expuesto |
 | Puntos de control reales del sindicato | Sindicato | ⏳ Prometidos; los 24 de medición no los reemplazan |
-| Cargar la línea 120 | — | ⏳ KML ya descargado. Decidir antes qué hacer con los 7 ramales |
+| Cargar la línea 120 | — | ✅ Script `scripts/cargar-linea-120.ts` escrito (línea, tronco ida/vuelta, 8 ramales, 16 puntos de control, 10 paradas, alternación Z12/120 día por medio QUI-383). **Falta correrlo** (`--apply`, hoy sin ejecutar). Los 8 ramales se cargan como `rutas` propias (tienen geometría) + `variantes` de catálogo colgadas de la ruta de ida — el schema de `Variante` no tiene columna de geometría. **Sigue abierto:** el sistema no puede saber qué ramal tomó el conductor (no hay UI ni lógica que use esa geometría todavía) |
 
 **Lo que sigue sin validarse:** el tracking en background **nunca se midió en un teléfono** y el load
 test (k6, QUI-250) nunca corrió. El piloto de mañana es, en los hechos, la primera validación de
