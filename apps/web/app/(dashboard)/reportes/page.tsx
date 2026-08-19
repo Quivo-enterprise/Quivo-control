@@ -83,8 +83,7 @@ function ReportesContent() {
     setPor(porParam);
     setDesde(desdeParam);
     setHasta(hastaParam);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [porParam, desdeParam, hastaParam]);
 
   const [filas, setFilas] = useState<CumplimientoFila[]>([]);
   const [loading, setLoading] = useState(true);
@@ -121,7 +120,6 @@ function ReportesContent() {
     return () => {
       cancelado = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, porParam, desdeParam, hastaParam]);
 
   const puntosTotales = filas.reduce((acc, f) => acc + f.puntosTotales, 0);
