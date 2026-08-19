@@ -28,6 +28,7 @@ describe('ExportesService', () => {
   let puntoControlId: string;
   let vehiculoId: string;
   let conductorId: string;
+  let rotacionId: string;
   const adminQuivo: AuthenticatedUser = {
     userId: 'test-admin-quivo',
     rol: 'admin_quivo',
@@ -78,6 +79,7 @@ describe('ExportesService', () => {
       const rotacion = await tx.rotacion.create({
         data: { sindicatoId, periodo: '2026-08', estado: 'publicada' },
       });
+      rotacionId = rotacion.id;
       const ahora = new Date();
       const asignacion = await tx.asignacion.create({
         data: {
@@ -261,5 +263,79 @@ describe('ExportesService', () => {
 
     expect(recorridos.some((fila) => fila[3] === 'EXP001')).toBe(true);
     expect(actividad.some((fila) => fila[0] === vehiculoId)).toBe(true);
+  });
+
+  it('cumplimientoPorAgrupacion: rinde una fila con % de cumplimiento agregado sin filtro de fecha', async () => {
+    const filas = await drenar(service.cumplimientoPorAgrupacion(adminQuivo, { por: 'vehiculo' }));
+    const fila = filas.find((f) => f[1] === 'EXP001');
+    expect(fila).toBeDefined();
+    expect(fila?.[2]).toBe(1); // puntosCumplidos
+    expect(fila?.[3]).toBe(2); // puntosTotales
+    expect(fila?.[4]).toBe(50); // porcentajeCumplimiento
+    expect(fila?.[5]).toBe(1); // recorridosAsignados
+    expect(fila?.[6]).toBe(1); // recorridosCompletados
+  });
+
+  it('cumplimientoPorAgrupacion: incluye el cumplimiento del cierre del día calendario boliviano', async () => {
+    const fechaOperacion = new Date('2026-08-12T00:00:00.000Z');
+    const cierreJornadaBoliviana = new Date('2026-08-13T03:59:59.999Z');
+
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      const asignacion = await tx.asignacion.create({
+        data: {
+          rotacionId,
+          vehiculoId,
+          conductorId,
+          rutaId,
+          fecha: fechaOperacion,
+          horario: 'tarde',
+          orden: 1,
+          venceAt: new Date(fechaOperacion.getTime() + 60 * 60 * 1000),
+          estado: 'vigente',
+        },
+      });
+      const sesion = await tx.sesionOperativa.create({
+        data: {
+          sindicatoId,
+          asignacionId: asignacion.id,
+          vehiculoId,
+          conductorId,
+          deviceId: 'device-export-bolivia',
+          inicio: cierreJornadaBoliviana,
+          fin: cierreJornadaBoliviana,
+          estado: 'finalizada',
+          accessTokenHash: randomUUID(),
+          refreshTokenHash: randomUUID(),
+          accessExpiresAt: new Date(cierreJornadaBoliviana.getTime() + 60 * 60 * 1000),
+          refreshExpiresAt: new Date(cierreJornadaBoliviana.getTime() + 60 * 60 * 1000),
+        },
+      });
+      await tx.cumplimientoPc.create({
+        data: {
+          eventId: randomUUID(),
+          sindicatoId,
+          sesionId: sesion.id,
+          puntoControlId,
+          ts: cierreJornadaBoliviana,
+          distanciaM: 10,
+          cumplido: true,
+          validadoPor: 'worker',
+        },
+      });
+    });
+
+    const filas = await drenar(
+      service.cumplimientoPorAgrupacion(adminQuivo, {
+        por: 'vehiculo',
+        desde: fechaOperacion,
+        hasta: fechaOperacion,
+      }),
+    );
+    const fila = filas.find((f) => f[1] === 'EXP001');
+    expect(fila).toBeDefined();
+    // Filtrado a solo el 12/08: excluye los 2 puntos del fixture base (ts = "ahora" del
+    // test run, fuera de rango) y cuenta únicamente el punto del cierre boliviano.
+    expect(fila?.[3]).toBe(1); // puntosTotales
+    expect(fila?.[2]).toBe(1); // puntosCumplidos
   });
 });
