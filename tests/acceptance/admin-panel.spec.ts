@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { prisma, withTenantContext } from '@quivo/db';
 
 const ADMIN_QUIVO = {
   email: 'admin@quivo.local',
@@ -24,10 +25,17 @@ async function navigate(page: Page, label: string, pathname: string) {
   await expect(page).toHaveURL(new RegExp(`${pathname === '/' ? '' : pathname}/?$`));
 }
 
+// El endpoint de login limita a cinco intentos por minuto y este archivo, entre los dos
+// `describe` de abajo, hace exactamente cinco. `mode: 'serial'` dentro de cada `describe`
+// solo serializa esos tests entre sí — con `fullyParallel: true` (playwright.config.ts) dos
+// `describe` de nivel superior igual son elegibles para correr en workers distintos al
+// mismo tiempo, así que sin este `configure` a nivel de archivo los logins de ambos grupos
+// pueden solaparse: revientan el límite de 5/min y además compiten por el `next dev` en frío
+// del webServer de aceptación. Puesto acá (antes de cualquier `describe`), fuerza que todo
+// el archivo corra en un único worker, en el orden declarado.
+test.describe.configure({ mode: 'serial' });
+
 test.describe('Panel administrativo', () => {
-  // El endpoint de login limita a cinco intentos por minuto y los escenarios comparten
-  // las dos cuentas locales. Ejecutarlos en serie conserva esa protección también en CI.
-  test.describe.configure({ mode: 'serial' });
   test('admin QUIVO accede a los módulos exclusivos', async ({ page }) => {
     await login(page, ADMIN_QUIVO);
 
@@ -191,5 +199,128 @@ test.describe('Panel administrativo', () => {
     await page.getByLabel('Sesión (id)').fill('sesion-invalida');
     await expect(page.getByText('Ingresá un UUID de sesión válido.')).toBeVisible();
     await expect(aplicarFiltros).toBeDisabled();
+  });
+});
+
+/**
+ * Identificador único solo-dígitos para esta corrida. `CI boliviano` y `placa` (patrón
+ * boliviano actual, ver `PATRON_PLACA_ACTUAL_BOLIVIA` en
+ * `packages/shared/src/entities/vehiculo.ts`) exigen dígitos en este tramo — nada de hex.
+ * Se genera **por invocación** (no a nivel de módulo) para que cada intento de
+ * `playwright.config.ts` (`retries: 2` en CI) use datos frescos: si un intento falla
+ * después de crear la entidad, el reintento no vuelve a chocar contra la restricción de
+ * unicidad de `documentoIdentidad`/`placa` con el mismo valor.
+ */
+function generarIdentificadorUnico(): string {
+  const timestamp = Date.now().toString();
+  const aleatorio = Math.floor(100 + Math.random() * 900).toString();
+  return `${timestamp}${aleatorio}`.slice(-6);
+}
+
+test.describe('Altas de entidades', () => {
+  // El modo serial ya lo fija el `test.describe.configure` a nivel de archivo, arriba.
+
+  // Documentos/placas creados por esta corrida (incluye intentos fallidos que sí llegaron
+  // a persistir antes de que la aserción posterior fallara), para borrarlos en `afterAll`
+  // y no ensuciar la base de aceptación de forma acumulativa.
+  const conductoresCreados: string[] = [];
+  const sociosCreados: string[] = [];
+  const vehiculosCreados: string[] = [];
+
+  test.afterAll(async () => {
+    try {
+      if (vehiculosCreados.length === 0 && sociosCreados.length === 0 && conductoresCreados.length === 0) {
+        return;
+      }
+      // Las tablas de socios/vehículos/conductores tienen RLS multi-tenant (migración
+      // `20260730152500_rls_multi_tenant`): sin `app.rol`/`app.sindicato_id` seteados vía
+      // `withTenantContext`, un `deleteMany` de `prisma` a secas no borra nada (ni tira
+      // error) — las filas simplemente no son visibles bajo la política. `admin_quivo` es
+      // el rol con bypass explícito de esa política, así que alcanza para borrar entre
+      // sindicatos sin necesitar el `sindicatoId` real de cada fixture.
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        if (vehiculosCreados.length > 0) {
+          await tx.vehiculo.deleteMany({ where: { placa: { in: vehiculosCreados } } });
+        }
+        if (sociosCreados.length > 0) {
+          await tx.socio.deleteMany({ where: { documentoIdentidad: { in: sociosCreados } } });
+        }
+        if (conductoresCreados.length > 0) {
+          await tx.conductor.deleteMany({
+            where: { documentoIdentidad: { in: conductoresCreados } },
+          });
+        }
+      });
+    } finally {
+      await prisma.$disconnect();
+    }
+  });
+
+  test('alta de conductor exitosa', async ({ page }) => {
+    const uniqueId = generarIdentificadorUnico();
+    const conductorCI = `88${uniqueId} LP`;
+    const conductorLicencia = `88${uniqueId}`;
+    const conductorNombre = `Conductor Prueba`;
+
+    await login(page, ADMIN_SINDICATO);
+    await navigate(page, 'Conductores', '/conductores');
+
+    await page.getByRole('button', { name: 'Nuevo conductor' }).click();
+
+    await page.getByLabel('Nombre completo *').fill(conductorNombre);
+    await page.getByLabel('CI boliviano *').fill(conductorCI);
+    await page.getByLabel('Número de licencia de conducir *').fill(conductorLicencia);
+
+    await page.getByRole('button', { name: 'Guardar' }).click();
+    conductoresCreados.push(conductorCI);
+
+    await expect(page.getByText(conductorNombre, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(conductorCI, { exact: true }).first()).toBeVisible();
+  });
+
+  test('alta de vehículo exitosa usando el socio fixture', async ({ page }) => {
+    const uniqueId = generarIdentificadorUnico();
+    const socioCI = `99${uniqueId} LP`;
+    const socioNombre = `Socio Prueba`;
+    const vehiculoPlaca = `${uniqueId.slice(-4)}XYZ`;
+
+    await login(page, ADMIN_SINDICATO);
+
+    // Seed Socio via UI
+    await navigate(page, 'Socios', '/socios');
+    await page.getByRole('button', { name: 'Nuevo socio' }).click();
+    await page.getByLabel('Nombre completo *').fill(socioNombre);
+    await page.getByLabel('CI boliviano *').fill(socioCI);
+    await page.getByRole('button', { name: 'Guardar' }).click();
+    sociosCreados.push(socioCI);
+    await expect(page.getByText(socioNombre, { exact: true }).first()).toBeVisible();
+
+    // Proceed to create vehicle
+    await navigate(page, 'Vehículos', '/vehiculos');
+    await page.getByRole('button', { name: 'Nuevo vehículo' }).click();
+
+    await page.getByLabel('Placa *').fill(vehiculoPlaca);
+    await page.getByRole('radio', { name: 'Minibús' }).click();
+
+    await page.locator('button#vehiculo-socioId').click();
+    await page.getByRole('option', { name: new RegExp(socioCI) }).click();
+
+    await page.locator('button#vehiculo-color').click();
+    await page.getByRole('option', { name: 'Blanco' }).click();
+
+    await page.locator('button#vehiculo-marcaCatalogo').click();
+    await page.getByRole('option', { name: 'Toyota' }).click();
+
+    await page.getByLabel('Capacidad *').fill('14');
+
+    const modeloInput = page.getByLabel('Modelo *');
+    if (await modeloInput.isVisible()) {
+      await modeloInput.fill('Hiace');
+    }
+
+    await page.getByRole('button', { name: 'Guardar' }).click();
+    vehiculosCreados.push(vehiculoPlaca);
+
+    await expect(page.getByText(vehiculoPlaca, { exact: true }).first()).toBeVisible();
   });
 });
