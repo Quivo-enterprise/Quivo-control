@@ -30,6 +30,7 @@ import {
 import { cx } from '../utils.js';
 import type { MapPoint, MapRoute, MapZone } from '../types.js';
 import { Loader } from './primitives.js';
+import { isWithinCentralViewport } from './route-map-geometry.js';
 
 // La Paz — centro por defecto cuando `RouteMap` se monta sin ningún punto todavía (ej.
 // "Nueva ruta" antes del primer clic). QUIVO opera transporte urbano en Bolivia; no hay una
@@ -49,6 +50,17 @@ const TILE_ATTRIBUTION =
 // tocar, ver `form.tsx`) también debe caer acá, no solo `undefined`.
 const DEFAULT_ROUTE_COLOR = '#4338ca';
 
+/** Estrategia de encuadre automático de `RouteMap`:
+ * - `'auto'` (default, comportamiento histórico) — reencuadra cada vez que cambia el conjunto
+ *   de puntos visibles (`FitBounds`). Pensado para el editor de rutas y el detalle de
+ *   recorridos, donde el consumidor ya decide qué subconjunto mostrar.
+ * - `'once'` — encuadra una sola vez (al montar, o de nuevo cuando cambia `fitKey`) y después
+ *   deja la cámara quieta. Pensado para `/en-vivo`: el usuario puede alejarse del vehículo sin
+ *   que cada punto GPS nuevo lo vuelva a centrar.
+ * - `'off'` — nunca reencuadra automáticamente; el consumidor controla la cámara a mano
+ *   (típicamente combinado con `followPoint`). */
+export type MapFitMode = 'auto' | 'once' | 'off';
+
 export interface RouteMapProps {
   routes?: MapRoute[];
   markers?: MapPoint[];
@@ -59,6 +71,22 @@ export interface RouteMapProps {
   interactive?: boolean;
   loading?: boolean;
   onMapClick?: (point: MapPoint) => void;
+  /** Ver `MapFitMode`. Opcional — default `'auto'`, idéntico al comportamiento previo a estas
+   * cuatro props, así que los consumidores existentes no cambian de comportamiento. */
+  fitMode?: MapFitMode;
+  /** Solo relevante con `fitMode='once'`: cuando cambia de valor, `FitBoundsOnce` vuelve a
+   * encuadrar una vez más (ej. pasar el `sesionId` seleccionado en `/en-vivo` para reencuadrar
+   * al cambiar de sesión). Opcional — sin `fitKey` el encuadre único ocurre solo al montar. */
+  fitKey?: string | number;
+  /** Punto a seguir con `panTo` (nunca cambia el zoom) mientras el mapa esté montado. Opcional
+   * y controlado por el consumidor: no pasar la prop (o pasar `null`/`undefined`) desactiva el
+   * seguimiento — no hay estado de "seguir" interno en `RouteMap`. Ver `FollowPoint`. */
+  followPoint?: { lat: number; lng: number } | null;
+  /** Se dispara cuando el usuario mueve el mapa a mano (arrastre o zoom con gesto) — nunca por
+   * `fitBounds`/`panTo`/`setView` programáticos. Opcional: pensado para que el consumidor apague
+   * su propio toggle de "seguir" cuando el usuario toma control manual del mapa. Ver
+   * `UserGestureWatcher`. */
+  onUserPan?: () => void;
 }
 
 function buildDivIcon(point: MapPoint): L.DivIcon {
@@ -186,6 +214,88 @@ function FitBounds({ points }: { points: { lat: number; lng: number }[] }) {
   return null;
 }
 
+/** Encuadra una sola vez — al montar, o de nuevo cuando cambia `fitKey` — en vez de en cada
+ * cambio de `points` como `FitBounds`. `fitKey` es opcional: sin ella, el "una sola vez" es
+ * literal (solo al montar). El guard vive en un ref (no en el efecto) porque el efecto sigue
+ * corriendo en cada render mientras `points` está vacío (la traza todavía no llegó) — necesita
+ * poder disparar en cuanto aparezca el primer punto, no solo en el montaje. */
+function FitBoundsOnce({
+  points,
+  fitKey,
+}: {
+  points: { lat: number; lng: number }[];
+  fitKey?: string | number;
+}) {
+  const map = useMap();
+  const stateRef = useRef<{ key: string | number | undefined; fired: boolean }>({
+    key: fitKey,
+    fired: false,
+  });
+  const signature = points.map((point) => `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`).join('|');
+
+  useEffect(() => {
+    if (stateRef.current.key !== fitKey) {
+      stateRef.current = { key: fitKey, fired: false };
+    }
+    if (stateRef.current.fired) return;
+    const [first] = points;
+    if (points.length === 0 || !first) return;
+    stateRef.current.fired = true;
+    if (points.length === 1) {
+      map.setView([first.lat, first.lng], Math.max(map.getZoom(), 14));
+      return;
+    }
+    const bounds = L.latLngBounds(points.map((point): [number, number] => [point.lat, point.lng]));
+    map.fitBounds(bounds, { padding: [32, 32], maxZoom: 17 });
+    // El efecto solo debe reaccionar a un cambio real de coordenadas o de `fitKey` — igual que
+    // en `FitBounds`, `signature` resume `points` porque su referencia cambia en cada render.
+  }, [signature, fitKey, map]);
+
+  return null;
+}
+
+/**
+ * Sigue `point` con `panTo` —nunca `setView`/`flyTo`, nunca toca el zoom— pero únicamente
+ * cuando el punto salió del 60% central del viewport (`isWithinCentralViewport`, ver
+ * `route-map-geometry.ts` para el porqué del umbral).
+ */
+function FollowPoint({ point }: { point: { lat: number; lng: number } | null | undefined }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!point) return;
+    const containerPoint = map.latLngToContainerPoint([point.lat, point.lng]);
+    const size = map.getSize();
+    if (isWithinCentralViewport(containerPoint, size)) return;
+    map.panTo([point.lat, point.lng]);
+  }, [point?.lat, point?.lng, map]);
+
+  return null;
+}
+
+/**
+ * Detecta que el usuario movió el mapa a mano y dispara `onUserPan` — pensado para que el
+ * consumidor apague su propio toggle de "seguir" cuando el usuario toma control manual.
+ *
+ * `dragstart` solo lo emite el handler de arrastre de Leaflet ante una interacción real de
+ * mouse/touch; nuestras propias llamadas programáticas (`panTo`/`fitBounds`/`setView` de
+ * `FollowPoint`/`FitBounds`/`FitBoundsOnce`) nunca lo disparan. `zoomstart` sí puede originarse
+ * tanto de un gesto del usuario (rueda, doble clic, pellizco) como de esas llamadas
+ * programáticas — se distingue por `originalEvent`, que Leaflet solo adjunta cuando el evento
+ * nace de una interacción real del navegador.
+ */
+function UserGestureWatcher({ onUserPan }: { onUserPan?: () => void }) {
+  useMapEvents({
+    dragstart() {
+      onUserPan?.();
+    },
+    zoomstart(event) {
+      if ('originalEvent' in event && event.originalEvent) onUserPan?.();
+    },
+  });
+  return null;
+}
+
 /**
  * Mapa interactivo (Leaflet) para trazado y visualización de rutas — RF-24..33 (QUI-229) y
  * el detalle de recorridos (QUI-247). Reconstruye el componente perdido del repo hermano
@@ -201,6 +311,10 @@ export function RouteMap({
   interactive = false,
   loading = false,
   onMapClick,
+  fitMode = 'auto',
+  fitKey,
+  followPoint,
+  onUserPan,
 }: RouteMapProps) {
   const boundsPoints = useMemo(() => {
     const collected: { lat: number; lng: number }[] = [];
@@ -216,7 +330,10 @@ export function RouteMap({
       <MapCanvas className="qv-route-map__canvas" style={{ height: '100%', width: '100%' }}>
         <TileLayer url={TILE_URL} attribution={TILE_ATTRIBUTION} />
         <ClickHandler interactive={interactive} onMapClick={onMapClick} />
-        <FitBounds points={boundsPoints} />
+        {fitMode === 'auto' && <FitBounds points={boundsPoints} />}
+        {fitMode === 'once' && <FitBoundsOnce points={boundsPoints} fitKey={fitKey} />}
+        {followPoint && <FollowPoint point={followPoint} />}
+        {onUserPan && <UserGestureWatcher onUserPan={onUserPan} />}
 
         {routes.map((route) => (
           <Polyline
