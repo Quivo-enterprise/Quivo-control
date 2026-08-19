@@ -3,61 +3,152 @@
 > **Documento de estado.** Arriba, el estado real de hoy; abajo, el registro cronológico de
 > cómo se llegó hasta acá, PR por PR. Se actualiza al cierre de cada iteración/PR.
 >
-> **Este documento registra la ejecución. La intención vive en
-> [`plan-piloto-lunes-17-agosto.md`](plan-piloto-lunes-17-agosto.md)** — alcance, fases,
-> asignación y fechas hasta el piloto. Si los dos se contradicen, el plan manda sobre qué hay que
-> hacer y este handoff sobre qué se hizo.
->
-> ⚠️ **[`plan-finalizacion-piloto.md`](plan-finalizacion-piloto.md) quedó obsoleto el
-> 2026-08-15.** Apunta el piloto al 5–19 de octubre y trata el spike GPS (QUI-216) como gate
-> previo; el CTO confirmó ese día que **el piloto arranca el lunes 17 de agosto con un auto**.
-> Se conserva como registro histórico de las decisiones de escala y de los recortes a M7.
->
-> 🔴 **La sección "Cómo opera Z12 de verdad" de más abajo quedó obsoleta el 2026-08-17.** El
-> sindicato mandó datos nuevos esa madrugada que la contradicen en su punto central: el vehículo
-> **sale de Villa Armonía y en la vuelta 1 llega sí o sí hasta Salomón**, bajando después sin pasar
-> por Univalle; recién desde la vuelta 2 se queda en el circuito Villa ⇄ Univalle. La versión
-> vigente de cómo opera la línea, los 14 puntos de control reales y el plan para cargarlos están en
-> **[`plan-ruta-real-z12.md`](plan-ruta-real-z12.md)**.
->
-> ✅ **PR #34 MERGEADO el 2026-08-18** (`main` = `b8fd7de`, CI + acceptance en verde, rama
-> borrada). El código de la v2 está cerrado.
->
-> 🚀 **Despliegue ejecutado el 2026-08-18 (pasos 1-6 de
-> [`plan-salida-apk-v2.md`](plan-salida-apk-v2.md)).** Las dos migraciones nuevas están aplicadas
-> en Cloud SQL, `api:v4` está publicada, worker (`quivo-worker-00004-hk7`) y API
-> (`quivo-api-00006-pfm`) corren esa imagen, y las 8 sesiones colgadas quedaron cerradas.
-> El **build 7 del APK está compilado** (`versionCode` 7, misma firma que el 6).
-> **Lo único que queda es físico: instalarlo y manejar** — ver la sección "Despliegue de la v2"
-> más abajo.
->
-> 🚦 **Contexto de cómo se llegó acá (2026-08-18).** Se implementó
-> [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md) (aprobado por el CTO el
-> 2026-08-17). **Entrega 1 MERGEADA** — ver
-> [la sección de abajo](#entrega-1-del-plan-v2-2026-08-17-noche). **Entrega 2 terminada** y viva en
-> el **PR #34** (rama `feat/v2-multivuelta-sesion-guiado`): multi-vuelta con histéresis, sesión
-> sostenida, arranque reordenado, el flujo de permisos de ubicación (QUI-338, el conductor del
-> Samsung A71 que no podía arrancar el recorrido) y los 15 hallazgos de dos rondas de
-> `/code-review high`. 116 tests en verde.
->
-> ✅ **La migración `20260817130000` YA está aplicada** (Cloud SQL, 2026-08-18 01:28) y el worker
-> `quivo-worker` está desplegado y escuchando la cola — verificado contra producción esta sesión.
-> La advertencia de "producción bloqueada" de la Entrega 1 quedó saldada.
->
-> **El orden de esa secuencia ya no bloquea nada: el backend va adelante del APK.** El worker
-> corre `api:v4` y la columna `pasada` existe, así que el build 7 puede salir cuando esté listo sin
-> el riesgo de que el teléfono mande `pasada` a un worker que la ignore. El APK del teléfono sigue
-> siendo el **build 6** hasta que alguien instale el 7 a mano: los fixes de `fbfbd56` nunca se
-> compilaron.
->
-> **El rescate del día 1 quedó cerrado por decisión del CTO**: los dos GPX de Geo Tracker del 17 de
-> agosto (1505 y 1397 puntos) son la traza de esa jornada, y de ellos salió el circuito real que
-> hoy está cargado en producción. El código de rescate queda en la app, pero no condiciona nada.
-> **Entrega 3 (mapa en vivo `/en-vivo`) sigue sin empezar**, y va después: sin puntos en
-> `gps_points` la pantalla sería correcta y vacía.
->
-> El diagnóstico completo del día 1 (con causas raíz ya probadas) está en ese plan — leerlo antes
-> de tocar código, no re-investigar.
+> **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
+> contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
+
+## Estado al 2026-08-19
+
+`main` = `4677042` (PR #37). En producción: `api:v4` sobre `quivo-api-00006-pfm` y el worker pool
+`quivo-worker-00004-hk7`, ambos en Cloud Run `southamerica-west1`; el panel es `web:v1`
+(`quivo-web-00001-4jd`). Sin drift: la imagen desplegada corresponde al código de `main`.
+El APK en los teléfonos es el **build 7** (`versionCode` 7, EAS `e1d01284`, perfil `production`).
+
+**El piloto salió a la calle el 2026-08-18 por la tarde** — segunda jornada real, la primera con
+el build 7 instalado. Lo que se aprendió de esa salida está en
+[Jornada del 18 de agosto](#jornada-del-18-de-agosto-lo-que-la-traza-real-demostró), y es el
+insumo más importante que tiene hoy el proyecto: **la geometría cargada en producción no resiste
+la variación diaria de la operación.**
+
+### Lo que está cerrado
+
+- **Código de la v2** (PR #34) y **despliegue** (pasos 1-6 de `plan-salida-apk-v2.md`): las dos
+  migraciones aplicadas en Cloud SQL, `api:v4` publicada, las 8 sesiones colgadas cerradas.
+- **Circuito Z12 real en producción**: 1255 vértices, 26 puntos de control activos, radio 150 m.
+  Salió de los GPX del 17 de agosto. Ver [`plan-ruta-real-z12.md`](plan-ruta-real-z12.md).
+- **Línea 120 y alternancia Z12/120** (PR #37): línea, tronco ida/vuelta, circuito, 8 ramales,
+  17 puntos de control, 10 paradas, y las 30 asignaciones del piloto alternando entre las dos
+  líneas. Corrido contra producción y verificado.
+- **Segunda credencial móvil** (PR #37): vehículo `2222AAA` y conductor pasante acompañante, con
+  15 asignaciones propias, para que dos teléfonos operen el mismo circuito sin pisarse.
+- **Rescate del día 1**: cerrado por decisión del CTO. El código queda en la app pero no
+  condiciona nada.
+
+### Lo que no está cerrado
+
+- **Entrega 3 — mapa en vivo `/en-vivo`**: cero líneas escritas. El diseño completo está
+  especificado en [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md) §3.
+  **No arrancarla todavía**: sobre la geometría actual, el mapa mostraría con precisión un dato
+  equivocado (ver la jornada del 18).
+- **Los 3 puntos de control obligatorios generan falsos incumplimientos.** Es la corrección más
+  urgente y la más barata que dejó el piloto.
+- **Faltan trazas GPS** de dos tramos del circuito: el lazo Univalle→Salomón (hoy geometría
+  interpolada en línea recta, no calle real) y los 5,1 km finales hasta Villa Armonía.
+- **QUI-363 — prueba negativa de RLS**: nunca se validó el aislamiento rompiendo una policy a
+  propósito. Sin eso, el verde de la suite de aislamiento no prueba nada.
+- **Hardening diferido**, todo abierto: QUI-355 (filtro `sindicatoId` en 8 servicios), QUI-360
+  (`audit_log`), QUI-361 (concurrencia del worker), QUI-362 (paginación de recorridos), QUI-252
+  (archivado — runbook listo pero `GPS_ARCHIVE_ENABLED=false`), QUI-347 (a11y web), QUI-250 (k6,
+  nunca corrido).
+- **Datos del piloto en placeholder**: sigue como `Sindicato Piloto — PLACEHOLDER`, placa
+  `1111AAA`. Ojo: **cambiar la placa cambia la credencial de login**.
+- **Licencia Transistorsoft**: trial, vence **2026-09-15**, `grace_builds` en cero. Sin comprarla
+  no sale otro build de EAS. **Decisión del CTO: se pospone hasta que se acabe el trial.**
+- **`Quivo123!` (QUI-381)** sigue hardcodeada en `packages/db/prisma/seed.ts:35`, con un rol que
+  bypassea RLS por diseño, sobre la base que ya contiene la evidencia del piloto. **Decisión del
+  CTO del 2026-08-18: no es prioridad** — la usan solo los desarrolladores y el CPO.
+- **Redis** sin política `noeviction`. **`expo-haptics`** sin instalar (vibración del acuse).
+
+### Deuda de infraestructura
+
+No hay job de despliegue: el push de imágenes y el `gcloud run deploy` son manuales, documentados
+en `plan-salida-apk-v2.md` pero fuera de CI (QUI-370, tampoco hay Terraform). Y **no existe
+registro automático de qué migraciones están aplicadas en producción** — la única fuente de verdad
+es un `.md` editado a mano, lo cual es frágil.
+
+## Jornada del 18 de agosto — lo que la traza real demostró
+
+Segunda salida a la calle, primera con el build 7. El acompañante grabó con Geo Tracker en
+paralelo al tracking propio: dos archivos contiguos (18 s de separación), 1438 puntos,
+**17:04 → 18:50 hora local**, 19,02 km, 106 minutos de los cuales 54 % en movimiento.
+
+**El hallazgo que manda sobre todo lo demás: la detección de puntos de control habría fracasado.**
+
+| | Detectados | Fallados |
+|---|---|---|
+| Jornada del 18-ago | **13 / 26** | 13, **incluidos los 3 obligatorios** |
+| Jornada del 17-ago, mismos 26 puntos | 25 / 26 | 1 (Salomón, a 202 m) |
+
+Un reporte de cumplimiento de esa jornada habría marcado 50 % de puntos omitidos y ruta
+incumplida — **con el trufi trabajando con normalidad**. Y ampliar el radio no lo arregla: a 300 m
+sube a 17/26 y a 500 m se estanca en 18/26.
+
+### Por qué falló
+
+El circuito en producción se construyó a partir de **una sola jornada** (la del 17). La segunda ya
+lo contradice en el 45 % de sus puntos:
+
+- **Una banda de ~2,5 km (lat −17,372 a −17,391) donde el trufi va por otras calles**, con
+  desvíos de hasta **745 m**. No es deriva de GPS: son 218 y 171 puntos consecutivos y coherentes,
+  por un corredor paralelo (lon ≈ −66,151 en vez de −66,158).
+- **Ida y vuelta usan calles distintas.** El ascenso del 18 coincide con su propio descenso en
+  apenas el 26 % de los puntos. Una polilínea única no puede modelar eso.
+- **El terminal sur real de esa tarde estuvo 3,58 km al norte de Villa Armonía**, el terminal
+  cargado. Los últimos 5,1 km del circuito no se recorrieron.
+- **Cero vueltas completas**: media vuelta de bajada, 30 minutos de espera en terminal, y un
+  ascenso que la grabación cortó a mitad.
+
+De los 13 puntos no detectados, 6 fallaron por poco y en calle equivocada (165–508 m) y 7 quedaron
+a más de 950 m porque ese tramo no se recorrió.
+
+La parte que sí funciona, y conviene no perderla de vista: **entre Univalle y lat −17,395 el ajuste
+es excelente** — 12 puntos detectados a menos de 15 m del trazado. El núcleo está bien; fallan los
+extremos y una banda intermedia.
+
+### Dos cosas más que dejó la traza
+
+**El GPS se durmió 12 veces durante la espera en terminal**, en ciclos de ~2 minutos, con el
+vehículo detenido. En movimiento no hubo ninguna pérdida (un solo hueco de 71 s en tráfico lento).
+Esto fue Geo Tracker, no la app propia, pero es comportamiento del sistema operativo: **la app
+propia va a "perder" al trufi cada vez que espere en terminal si no garantiza heartbeat en
+background.**
+
+**El conector Univalle→Salomón del circuito no es geometría real**: son 38 vértices interpolados
+en línea recta por `interpolarRecta` en `scripts/cargar-circuito-z12.ts`. Ninguna de las tres
+grabaciones disponibles cubre ese tramo, así que nadie lo ha validado nunca. Esto es coherente con
+que el sindicato haya confirmado que **no retornan hasta Salomón** — es solo el punto de salida de
+la primera vuelta de la mañana —, pero significa que si alguna vez se quiere medir cumplimiento
+sobre ese tramo, la geometría no sirve.
+
+### Qué hacer con esto, en orden de impacto
+
+1. **Dejar de exigir los 3 obligatorios para cerrar el turno.** Con la operación variando así,
+   Univalle + Salomón + Villa Armonía como obligatorios garantizan falsos incumplimientos. Bajar a
+   uno, o hacerlos condicionales al tipo de vuelta.
+2. **Grabar 2-3 jornadas más antes de volver a fijar geometría.** Con una sola traza se construyó
+   un circuito que la segunda jornada ya contradice. Hace falta específicamente una grabación que
+   **arranque en el terminal norte antes de que salga el trufi**, y otra que llegue hasta Villa
+   Armonía por la tarde.
+3. **Modelar ida y vuelta como dos geometrías separadas**, o aceptar una tolerancia mucho mayor.
+4. **Incorporar el corredor nuevo** de la banda −17,372/−17,391, o mover los puntos que quedaron a
+   255–358 m de la traza real.
+5. **Reubicar los puntos que fallan por 50-100 m** sobre la calzada real: Univalle (obligatorio,
+   204 m) y el de 165 m.
+6. **Blindar el tracking contra la suspensión en parada.**
+
+> Los scripts del análisis no se versionaron (son de un solo uso). Los GPX de origen son
+> `18_ago_2026_5_03_05_p._m..gpx` y `18_ago_2026_6_26_04_p._m..gpx`.
+
+### Lo que todavía no se midió
+
+**Nadie verificó aún cuántas filas tiene `gps_points` después de esta jornada.** Es la métrica que
+cierra la cadena app → outbox → API → base, y sigue pendiente porque requiere leer un secreto de
+Secret Manager. El procedimiento está en `plan-salida-apk-v2.md`; la trampa a recordar es que las
+tablas tienen `FORCE ROW LEVEL SECURITY`, así que **un `SELECT` sin `set app.rol = 'admin_quivo'`
+devuelve cero filas y ningún error** — ya pasó una vez y llevó a conclusiones falsas.
+
+Comparar ese número contra los 1438 puntos que registró Geo Tracker es lo que va a decir si el
+problema, de haberlo, está en el teléfono o en nuestra cadena de ingesta.
+
 
 ## Línea 120 cargada y alternancia Z12/120 (2026-08-18)
 
@@ -528,6 +619,13 @@ asignaciones del 17 al 31 de agosto, una por día.
 **Cómo opera Z12 de verdad** (confirmado por el sindicato, 2026-08-16). El KML está completo — no
 le falta ningún tramo:
 
+> 🔴 **Esta sección quedó obsoleta el 2026-08-17.** El sindicato mandó datos nuevos esa madrugada
+> que la contradicen en su punto central: el vehículo **sale de Villa Armonía y en la vuelta 1
+> llega sí o sí hasta Salomón**, bajando después sin pasar por Univalle; recién desde la vuelta 2
+> se queda en el circuito Villa ⇄ Univalle. La versión vigente de cómo opera la línea y los puntos
+> de control reales está en [`plan-ruta-real-z12.md`](plan-ruta-real-z12.md). La jornada del 18 de
+> agosto agregó además que la operación **varía de un día a otro** — ver el bloque de estado.
+
 - **Salomón Romero es solo punto de partida de la primera salida de la mañana**, no un destino de
   retorno. El grupo 1 sale de ahí; el grupo 2 sale de Villa Armonía.
 - **A partir de ahí el circuito termina en Univalle** y se repite así el resto del día.
@@ -782,6 +880,11 @@ real** — el refactor de fechas renombró variables en 2 de 4 funciones, y `exp
 
 ## Qué falta antes del arranque
 
+> ⚠️ **Tabla histórica, escrita la víspera del 17 de agosto.** El piloto ya arrancó y salió a la
+> calle dos veces (17 y 18 de agosto), así que "antes del arranque" ya no describe nada. Se
+> conserva porque varias filas siguen abiertas — pero el estado vigente de cada una está en el
+> bloque "Estado" del principio, no acá.
+
 | Paso | Quién | Estado |
 |---|---|---|
 | **Prueba física en el teléfono** — los 7 puntos del checklist | CTO | ⏳ Lo único que falta. Ya hay asignación publicada para hoy, así que se puede hacer |
@@ -791,7 +894,7 @@ real** — el refactor de fechas renombró variables en 2 de 4 funciones, y `exp
 | Confirmar el grupo de don Iver (¿1a?) | CTO | ⏳ Determina el punto de partida de su primera vuelta |
 | Rotar el `SENTRY_AUTH_TOKEN` | CTO | ⏳ Se pegó en un chat; darlo por expuesto |
 | Puntos de control reales del sindicato | Sindicato | ⏳ Prometidos; los 24 de medición no los reemplazan |
-| Cargar la línea 120 | — | ✅ Script `scripts/cargar-linea-120.ts` escrito (línea, tronco ida/vuelta, 8 ramales, 16 puntos de control, 10 paradas, alternación Z12/120 día por medio QUI-383). **Falta correrlo** (`--apply`, hoy sin ejecutar). Los 8 ramales se cargan como `rutas` propias (tienen geometría) + `variantes` de catálogo colgadas de la ruta de ida — el schema de `Variante` no tiene columna de geometría. **Sigue abierto:** el sistema no puede saber qué ramal tomó el conductor (no hay UI ni lógica que use esa geometría todavía) |
+| Cargar la línea 120 | — | ✅ Script `scripts/cargar-linea-120.ts` escrito (línea, tronco ida/vuelta, 8 ramales, 16 puntos de control, 10 paradas, alternación Z12/120 día por medio QUI-383). **Corrido y verificado contra producción el 2026-08-18** (PR #37; son 17 puntos de control, no 16). Los 8 ramales se cargan como `rutas` propias (tienen geometría) + `variantes` de catálogo colgadas de la ruta de ida — el schema de `Variante` no tiene columna de geometría. **Sigue abierto:** el sistema no puede saber qué ramal tomó el conductor (no hay UI ni lógica que use esa geometría todavía) |
 
 **Lo que sigue sin validarse:** el tracking en background **nunca se midió en un teléfono** y el load
 test (k6, QUI-250) nunca corrió. El piloto de mañana es, en los hechos, la primera validación de
@@ -1627,6 +1730,17 @@ solo `main` en remoto.
   configuración. Ver "GPS y migración de Expo SDK" al final.
 
 ## Estado del roadmap (Linear, 2026-08-14)
+
+> ⚠️ **Foto congelada el 2026-08-14 — desactualizada.** Los porcentajes y los milestones vencidos
+> de esta tabla no reflejan el trabajo posterior (PRs #23 a #37, el despliegue de la v2 y las dos
+> jornadas de piloto). Se conserva como registro de cómo se veía el roadmap ese día. Para el
+> estado real hay que mirar Linear, no esta tabla.
+>
+> Al 2026-08-18, Linear tiene **208 issues abiertos**, de los cuales ~49 (QUI-147 a QUI-189) son
+> ruido histórico: sin asignado, sin prioridad, congelados desde el 2026-04-06 y con títulos de
+> una landing page genérica que no tiene relación con este producto. Alguien empezó a purgarlos el
+> 2026-08-04 (33 cancelados) y dejó la otra mitad. Conviene terminar esa limpieza: distorsionan
+> cualquier lectura del backlog.
 
 Con `main` verde, el bloqueo que frenaba a cualquiera de clonar y trabajar el repo quedó
 resuelto. Estado por milestone (64 issues / 248 pts, ~73% completado por puntos):
