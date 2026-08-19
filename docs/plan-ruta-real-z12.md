@@ -1,8 +1,12 @@
 # Plan — cargar el recorrido real de la Z12
 
-> **Estado:** propuesto, pendiente de confirmación del CTO y de datos del sindicato.
-> **Ventana de ejecución:** después de que termine la jornada del lunes 17 de agosto y antes
-> de las 05:00 del martes 18.
+> **Estado:** ✅ **aplicado en producción desde el 2026-08-18.** El circuito único de este plan
+> quedó cargado sobre `3333…0011`: 1255 vértices (40,7 km), 26 puntos de control activos, radio
+> 150 m; los 14 puntos y la geometría de `813c6130-…` quedaron en `inactivo`. Verificación contra
+> producción en [`handoff.md`](handoff.md) §"Estado — 2026-08-18 (v2 cerrada en código, pendiente
+> de desplegar)".
+> **Ventana de ejecución que se usó:** después de que terminó la jornada del lunes 17 de agosto y
+> antes de las 05:00 del martes 18.
 > **Escrito:** 2026-08-17, madrugada, con los datos que el sindicato mandó el 16 por la noche.
 
 Este documento reemplaza la descripción de la operación Z12 que quedó en
@@ -99,6 +103,17 @@ Univalle del sindicato) está a 3.3 m de ese vértice 124.
 **Lo que falta de geometría:** el tramo **Univalle → Salomón** (~2.4 km), incluido el desvío a la
 parada temporal. Es justo el tramo que solo se recorre en la vuelta 1.
 
+### Cómo se extraen los recorridos del sindicato
+
+*(rescatado del PR #26, cerrado sin mergear el 2026-08-16)*
+
+El sindicato manda sus recorridos como mapas de **Google My Maps**. Se descargan por URL, sin
+credenciales: `https://www.google.com/maps/d/kml?mid=<MID>&forcekml=1`. El KML usa `lon,lat` en su
+etiqueta `<coordinates>` — el mismo orden que GeoJSON, así que no hay que invertir nada, solo
+descartar la altitud si viene. Verificado en la carga real: todas las coordenadas caen en Bolivia
+(lat ≈ -17.3/-17.4, lon ≈ -66.15/-66.23). Mismo método con el que ya se bajó el KML de la línea 120
+(ver `handoff.md` §"Brechas de modelo, para decidir después del piloto").
+
 ### OpenStreetMap como respaldo
 
 La Z12 está mapeada en OSM por el propio sindicato, en 4 relaciones completas y sin huecos:
@@ -164,6 +179,12 @@ Como cada punto se detecta **una sola vez por sesión** (§6), el universo de me
 único día en que hay muestra. Además responden preguntas distintas: los interpolados miden
 *"¿el sistema detecta?"* (son uniformes, caen a 0 m de la polilínea); los reales miden
 *"¿detecta donde al sindicato le importa?"*.
+
+**Por qué el espaciado alcanza** *(rescatado del PR #26, cerrado sin mergear el 2026-08-16)*: la
+separación entre puntos de medición (~1.55 km) está muy por encima del espaciado real del GPS
+(100-150 m, ver `handoff.md` §"Decisiones tomadas la víspera, con su razón"), así que el muestreo
+no puede saltarse un punto entero. Si algún punto no se detecta, es un problema real de detección,
+no del GPS.
 
 **La redundancia sí molesta:** dos puntos a 54 m con radio 150 m disparan del mismo fix GPS. No
 aportan medición nueva, inflan el denominador y descuadran la planilla del acompañante, que ve un
@@ -355,6 +376,25 @@ llegar a Salomón, cómo es el desvío exacto, y dónde empalman al salir de Uni
 `fin_de_Univalle → B8 → B9 → A1`. Es una poligonal que corta manzanas, pero el mapa del conductor
 ya dibuja rectas (OSRM no está desplegado), no hay detector de desvío corriendo, y la traza cruda
 sigue siendo la fuente de verdad. El costo es cosmético y de un día.
+
+### Actualización: se usó el fallback, y qué queda pendiente
+
+*(la pregunta original es del PR #26, cerrado sin mergear el 2026-08-16; esta sección la corrige y
+la actualiza con el estado real de producción al 2026-08-18)*
+
+El PR #26 dejaba abierta la pregunta de si el trufi realmente vuelve hasta Salomón Romero en algún
+punto del día. Esa pregunta **ya está resuelta**: el sindicato confirmó que no retornan por ahí —
+Salomón Romero es solo el punto de salida de la primera vuelta de la mañana (ver `handoff.md`
+§"Qué falta antes del arranque").
+
+Lo que sí sigue abierto es más acotado: **el tramo Univalle → Salomón del circuito hoy en
+producción no tiene traza GPS real detrás.** Es geometría interpolada en línea recta
+(`interpolarRecta`, `CONECTOR_ESPACIADO_M = 50`, en `scripts/cargar-circuito-z12.ts`) — es decir,
+se terminó usando el fallback de arriba, no la traza del lunes 17. Ninguna de las tres grabaciones
+disponibles (ida y vuelta del 17 de agosto, más la del 18) cubre ese tramo, y en la jornada del 18
+la traza nunca se acercó a menos de 2 049 m de Salomón. Si alguna vez hace falta medir cumplimiento
+sobre ese tramo —por ejemplo el posicionamiento matinal hacia el punto de salida— esta geometría no
+sirve: hace falta una grabación que arranque en el terminal norte antes de que salga el trufi.
 
 ---
 
