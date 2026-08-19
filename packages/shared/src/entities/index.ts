@@ -14,3 +14,4 @@ export * from './regla.js';
 export * from './sancion.js';
 export * from './reportes.js';
 export * from './recorrido.js';
+export * from './en-vivo.js';
