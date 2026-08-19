@@ -1,8 +1,6 @@
 # Pruebas de aceptación — panel administrativo
 
-Estas pruebas ejercitan el panel web en Chromium contra el API y PostgreSQL locales. Usan
-exclusivamente los datos idempotentes del seed, por lo que no crean ni cambian entidades de
-negocio.
+Estas pruebas ejercitan el panel web en Chromium contra el API y PostgreSQL locales.
 
 Cubren los criterios del primer hito administrativo:
 
@@ -11,6 +9,11 @@ Cubren los criterios del primer hito administrativo:
   propia flota.
 - El recorrido operacional sembrado es consultable desde **Rutas → Rotaciones → Reglas y
   sanciones → Reportes**.
+- El describe `Altas de entidades` da de alta un conductor y un vehículo (con su socio)
+  por UI, usando un identificador único generado por invocación de `test()` (no a nivel de
+  módulo) para no chocar con la restricción de unicidad si Playwright reintenta. Un
+  `afterAll` borra esas filas por Prisma (`@quivo/db`) al cerrar la corrida, así que sigue
+  sin dejar residuo en la base de aceptación aunque ya no dependa solo del seed.
 
 ## Ejecutar localmente
 

@@ -1,4 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
+import * as dotenv from 'dotenv';
+import path from 'path';
+
+// `override: false`: no pisar variables ya presentes en el shell (p. ej. DATABASE_URL de
+// otra sesión de desarrollo) — solo completa las que falten. En CI este archivo no existe,
+// así que la carga es un no-op.
+dotenv.config({ path: path.resolve(__dirname, 'apps/api/.env'), override: false });
 
 const acceptanceApiURL = process.env.ACCEPTANCE_API_URL ?? 'http://localhost:3002';
 // La suite usa puertos propios: evita reutilizar chunks de un `next dev` abierto por otra
