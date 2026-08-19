@@ -77,9 +77,11 @@
  *     puntos de control ni asignaciones, pero siguen sirviendo para dibujar cada sentido por
  *     separado si hace falta.
  *
- * Idempotente respecto de la corrida anterior: el `DELETE` scoped a `lineaId` del Paso 4/5 ya
- * cubre las filas viejas de `ida`/`vuelta` (misma `lineaId`), así que re-correr este script
- * termina con los 12 puntos del circuito (11 del tronco + Univalle) y ninguno duplicado.
+ * Idempotente respecto de la corrida anterior: el soft-delete (`estado = 'inactivo'`) scoped a
+ * `lineaId` del Paso 4/5 ya cubre las filas viejas de `ida`/`vuelta` (misma `lineaId`), y los
+ * ids deterministas (UUIDv5, ver "Ids deterministas") hacen que el upsert que sigue reactive
+ * exactamente las mismas filas en vez de crear otras — así que re-correr este script termina
+ * con los 12 puntos del circuito (11 del tronco + Univalle) activos y ninguno duplicado.
  *
  * ## Qué hace, en orden
  *
@@ -90,12 +92,13 @@
  *   3. Upsert de las tres rutas del tronco — ida, vuelta y circuito (ids fijos); `ida`/`vuelta`
  *      con geometría tal cual el KML, `circuito` con la concatenación.
  *   4. Upsert de los 8 ramales (ver decisión de modelado abajo) + 8 `variantes` de catálogo.
- *   5. Recrea (DELETE + INSERT, ver "Idempotencia") los puntos de control y las paradas de la
- *      línea 120 a partir de los datos verificados del sindicato — los del tronco van a
- *      `circuito`, los de ramal a su ramal.
+ *   5. Recrea (soft-delete + upsert con ids deterministas, ver "Idempotencia") los puntos de
+ *      control y las paradas de la línea 120 a partir de los datos verificados del sindicato —
+ *      los del tronco van a `circuito`, los de ramal a su ramal.
  *   6. Reasigna `rutaId` en las 30 asignaciones ya existentes del piloto (15 del vehículo
  *      titular `…0014` + 15 del pasante `…0024`, 2026-08-17..31) alternando Z12/120 por
- *      fecha PAR/impar del mes (QUI-383) — el día que toca 120 apunta a `circuito` (`…0023`).
+ *      conteo de días desde la época fija 2026-08-17 (día Z12) módulo 2 (QUI-383) — el día
+ *      que toca 120 apunta a `circuito` (`…0023`).
  *   7. Verificación de solo lectura (vértices —incluido `circuito`—, variantes, puntos de
  *      control —incluido el conteo específico de `circuito`—, paradas, y que la asignación de
  *      HOY de ambos vehículos apunte a la línea que le toca) — recién ahí decide COMMIT o
@@ -172,21 +175,23 @@
  *
  *   - Línea, las 3 rutas del tronco (ida, vuelta, circuito), las 8 rutas-ramal y las 8
  *     variantes: `id` fijo, `INSERT ... ON CONFLICT (id) DO UPDATE` — converge sin duplicar.
- *   - Puntos de control y paradas de la línea 120: SIN id fijo documentado para estas 27
- *     filas (17 puntos de control + 10 paradas). El propio brief autoriza expresamente el
- *     atajo más simple: `DELETE` + `INSERT` dentro de la misma transacción, filtrando SIEMPRE
- *     por `"rutaId" IN (SELECT id FROM rutas WHERE "lineaId" = LINEA_120_ID)` — nunca se toca
- *     una fila cuya ruta no cuelgue de la línea 120, así que los puntos/paradas de la Z12
- *     (otra `lineaId`) quedan intactos sin
- *     importar cuántas veces se corra esto. Esto también es lo que resuelve la migración de
- *     `ida`/`vuelta` → `circuito` de la corrida anterior (fix 2026-08-18): `circuito` cuelga
- *     de la misma `lineaId`, así que el `DELETE` scoped ya cubre los puntos/paradas viejos de
- *     `ida`/`vuelta` sin necesidad de un `DELETE` adicional.
- *     Excepción deliberada al comentario "Soft-delete (nunca DELETE real)" de `PuntoControl`/
- *     `Parada` en `schema.prisma`: esa convención protege historial real (`CumplimientoPc`
- *     referencia `puntoControlId` sin FK) — acá no hay ninguno todavía, porque estas 27 filas
- *     no existen hasta que corre este mismo script por primera vez. `cargar-circuito-z12.ts`,
- *     en cambio, sí preserva soft-delete porque ahí se editan puntos que YA tenían historial.
+ *   - Puntos de control y paradas de la línea 120 (17 puntos de control + 10 paradas): fix
+ *     2026-08-18 (revisión pre-merge PR #37, hallazgo CRÍTICO) — la versión original de este
+ *     script hacía `DELETE` real + `INSERT` con `randomUUID()`, lo cual violaba el contrato
+ *     de `schema.prisma:298-310` ("Soft-delete (nunca DELETE real): `CumplimientoPc.puntoControlId`
+ *     referencia este id sin FK — un DELETE real dejaría ese historial apuntando a un id
+ *     inexistente") y ni siquiera era idempotente en sentido fuerte (cada corrida generaba ids
+ *     nuevos). Ahora cada fila recibe un id UUIDv5 determinista (ver "Ids deterministas
+ *     (UUIDv5)" más abajo, derivado de `LINEA_120_ID` + un identificador de negocio estable —
+ *     "A1", "N6", el nombre de la parada, etc.), y el Paso 4/5 hace `UPDATE ... SET estado =
+ *     'inactivo'` (scoped SIEMPRE a `"rutaId" IN (SELECT id FROM rutas WHERE "lineaId" =
+ *     LINEA_120_ID)` — nunca toca una fila cuya ruta no cuelgue de la línea 120, así que los
+ *     puntos/paradas de la Z12 quedan intactos) seguido de `INSERT ... ON CONFLICT (id) DO
+ *     UPDATE` — mismo patrón que `lineas`/`rutas`/`variantes` arriba, y el mismo enfoque que ya
+ *     usa `cargar-circuito-z12.ts` (líneas ~535 y ~644) para no romper `CumplimientoPc`. Esto
+ *     también sigue resolviendo la migración de `ida`/`vuelta` → `circuito` de la corrida
+ *     anterior: `circuito` cuelga de la misma `lineaId`, así que el soft-delete scoped ya
+ *     cubre los puntos/paradas viejos de `ida`/`vuelta`.
  *   - Asignaciones: son un `UPDATE` de `rutaId` sobre filas que YA existen (creadas por
  *     `crear-credencial-pasante.ts` y el flujo normal del piloto) — repetir la corrida
  *     recalcula la misma alternación y vuelve a escribir el mismo `rutaId`, no crea filas
@@ -221,7 +226,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 // --- Resolución de 'pg' anclada a packages/db/package.json — mismo truco que
 // cargar-circuito-z12.ts y crear-credencial-pasante.ts: este script es standalone, no se
@@ -456,6 +461,66 @@ function haversineMetros(a: Coord, b: Coord): number {
 const EMPALME_TRONCO_MISMO_PUNTO_MAX_M = 2;
 
 // ============================================================================================
+// Ids deterministas (UUIDv5) — fix 2026-08-18 (revisión pre-merge PR #37, hallazgo CRÍTICO).
+//
+// `puntos_control`/`paradas` tienen el mismo contrato de soft-delete que documenta
+// `schema.prisma:298-310` para `PuntoControl` ("Soft-delete (nunca DELETE real):
+// CumplimientoPc.puntoControlId referencia este id sin FK — un DELETE real dejaría ese
+// historial apuntando a un id inexistente"). Antes de este fix, el Paso 4/5 hacía
+// `DELETE` real + `INSERT` con `randomUUID()` — violaba ese contrato Y generaba un id nuevo
+// en cada corrida, así que ni siquiera era idempotente en el sentido fuerte (dos corridas
+// dejaban dos ids distintos para "el mismo" punto físico).
+//
+// Fix: en vez de `randomUUID()`, cada punto/parada recibe un id UUIDv5 derivado de su propia
+// identidad estable (`LINEA_120_ID` + un identificador de negocio que no cambia entre
+// corridas) — re-correr el script converge al mismo id, así que el Paso 4/5 pasa a ser un
+// `UPDATE ... SET estado = 'inactivo'` (soft-delete de lo que ya no aplica, igual que
+// `cargar-circuito-z12.ts` líneas ~535 y ~644) seguido de un upsert `ON CONFLICT (id) DO
+// UPDATE` — mismo patrón que ya usa este script para `lineas`/`rutas`/`variantes`.
+//
+// No se usa la librería `uuid` porque no está en las dependencias del monorepo (verificado:
+// no aparece en ningún `package.json` del workspace ni en `pnpm-lock.yaml`) — se implementa
+// UUIDv5 a mano con `crypto.createHash('sha1')` siguiendo RFC 4122 §4.3: SHA-1 del namespace
+// (16 bytes) + nombre (UTF-8), los primeros 16 bytes del hash con el nibble de versión (5) y
+// el de variante (RFC 4122) forzados.
+
+/** Namespace fijo y arbitrario, propio de este script — no es el id de ninguna entidad real,
+ * solo tiene que ser constante entre corridas para que UUIDv5 sea determinista. */
+const UUID_NAMESPACE_LINEA_120 = '6f1d9c3a-6b2a-4f3b-8f1a-3d9b7c2e4a10';
+
+function uuidNamespaceABytes(namespace: string): Buffer {
+  const hex = namespace.replace(/-/g, '');
+  if (hex.length !== 32) throw new Error(`Namespace UUID inválido: "${namespace}" (se esperaban 32 hex chars sin guiones).`);
+  return Buffer.from(hex, 'hex');
+}
+
+/** UUIDv5 determinista (RFC 4122 §4.3), implementado a mano porque `uuid` no está entre las
+ * dependencias del monorepo (ver nota arriba). */
+function uuidv5(nombre: string, namespace: string = UUID_NAMESPACE_LINEA_120): string {
+  const nsBytes = uuidNamespaceABytes(namespace);
+  const nombreBytes = Buffer.from(nombre, 'utf8');
+  const hash = createHash('sha1').update(Buffer.concat([nsBytes, nombreBytes])).digest();
+  const bytes = Buffer.from(hash.subarray(0, 16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50; // versión 5
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80; // variante RFC 4122
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Id determinista de un punto de control de la línea 120, a partir de su identificador de
+ * negocio estable (el `id` de `puntos-control-andry.json` — p. ej. "A1", "N6" — o un literal
+ * fijo para el marcador de Univalle, que no sale de ese JSON). */
+function idPuntoControl120(identificador: string): string {
+  return uuidv5(`${LINEA_120_ID}:puntoControl:${identificador}`);
+}
+
+/** Id determinista de una parada de la línea 120, a partir de su nombre (los 10 nombres de
+ * `paradasAInsertar` son únicos entre sí — 2 del tronco + 1 por ramal). */
+function idParada120(identificador: string): string {
+  return uuidv5(`${LINEA_120_ID}:parada:${identificador}`);
+}
+
+// ============================================================================================
 // Parser del KML — regex sobre el texto crudo, no XML DOM: no hay ninguna librería XML en
 // node_modules del repo (`xml2js`/`fast-xml-parser` no están instalados) y el documento es lo
 // bastante simple y regular (20 `<Placemark>` planos, sin anidar, confirmado a mano) como para
@@ -578,10 +643,20 @@ function fechasRotacion(): Date[] {
   return Array.from({ length: dias }, (_, i) => sumarDiasUtc(primera, i));
 }
 
-/** QUI-383: "el grupo alterna Z12 y 120 día por medio" — fecha PAR del mes → 120, IMPAR →
- * Z12 (verificado contra el ejemplo del brief: 17=Z12, 18=120, 19=Z12, 20=120…). */
+/** Fix 2026-08-18 (revisión pre-merge PR #37, hallazgo ALTO): la versión original alternaba
+ * con `fecha.getUTCDate() % 2` (paridad del DÍA DEL MES) — se rompe en cualquier cambio de
+ * mes de 31 días, porque el día 31 y el día 1 siguiente son ambos impares (dos Z12 seguidos
+ * en vez de alternar). Se reemplaza por conteo de días desde una época fija, con módulo 2 —
+ * insensible a dónde cae el corte de mes. `EPOCA_ALTERNACION` = 2026-08-17, Z12 por
+ * definición (QUI-383: "el grupo alterna Z12 y 120 día por medio", ejemplo del brief:
+ * 17=Z12, 18=120, 19=Z12, 20=120…) — se eligió esa fecha exacta (y no otra) porque es la que
+ * deja la secuencia ya cargada en producción para 2026-08-17..31 sin ningún cambio (17=Z12 …
+ * 31=Z12, verificado imprimiendo ambas versiones antes de aplicar este fix). */
+const EPOCA_ALTERNACION = fechaUtcDeIso('2026-08-17');
+
 function lineaParaFecha(fecha: Date): 'Z12' | '120' {
-  return fecha.getUTCDate() % 2 === 0 ? '120' : 'Z12';
+  const dias = Math.round((fecha.getTime() - EPOCA_ALTERNACION.getTime()) / 86_400_000);
+  return ((dias % 2) + 2) % 2 === 0 ? 'Z12' : '120'; // doble módulo por si la fecha es previa a la época
 }
 
 function rutaIdParaFecha(fecha: Date): string {
@@ -766,13 +841,19 @@ async function main(): Promise<void> {
     console.log(`  ${RAMALES.length} variantes upserteadas, todas colgando de la ruta de ida (${RUTA_120_IDA_ID}).`);
 
     // ------------------------------------------------------------------------------------
-    // Paso 4 — Puntos de control: DELETE + INSERT scoped a lineaId = línea 120 (ver
-    // "Idempotencia" en la cabecera — nunca toca puntos de otra línea).
+    // Paso 4 — Puntos de control: soft-delete (estado = 'inactivo') + upsert con ids
+    // deterministas, scoped a lineaId = línea 120 (ver "Ids deterministas (UUIDv5)" y
+    // "Idempotencia" en la cabecera — nunca toca puntos de otra línea, y respeta el contrato
+    // de `schema.prisma:298-310`: nunca DELETE real de `puntos_control`).
     // ------------------------------------------------------------------------------------
     console.log('\n--- Paso 4: puntos de control (17: 16 de puntos-control-andry.json + Univalle) ---');
 
-    const borradoPc = await client.query(`DELETE FROM puntos_control WHERE "rutaId" IN (SELECT id FROM rutas WHERE "lineaId" = $1)`, [LINEA_120_ID]);
-    console.log(`  ${borradoPc.rowCount} punto(s) de control previos de la línea 120 borrados (recreación limpia).`);
+    const softDeletePc = await client.query(
+      `UPDATE puntos_control SET estado = 'inactivo', "updatedAt" = now()
+       WHERE "rutaId" IN (SELECT id FROM rutas WHERE "lineaId" = $1) AND estado = 'activo'`,
+      [LINEA_120_ID],
+    );
+    console.log(`  ${softDeletePc.rowCount} punto(s) de control previos de la línea 120 → estado 'inactivo' (soft-delete, nunca DELETE real).`);
 
     const tablaPc: { id: string; rutaId: string; orden: number; obligatorio: boolean }[] = [];
 
@@ -782,12 +863,17 @@ async function main(): Promise<void> {
     // KML que ya usamos para la parada (`paradaUnivalleCoord`, Placemark "PARADA 120
     // UNIVALLE") — dato real del sindicato, no un punto inventado. No sale de
     // puntos-control-andry.json (ese archivo no lo trae), por eso se inserta aparte del loop
-    // de abajo en lugar de vivir en PUNTOS_CONTROL_CONFIG.
+    // de abajo en lugar de vivir en PUNTOS_CONTROL_CONFIG. Identificador de negocio fijo
+    // ("UNIVALLE_MARCADOR_VUELTA") para que el id UUIDv5 sea estable entre corridas.
     {
-      const id = randomUUID();
+      const id = idPuntoControl120('UNIVALLE_MARCADOR_VUELTA');
       await client.query(
         `INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado, "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6, $7, 'activo', now(), now())`,
+         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6, $7, 'activo', now(), now())
+         ON CONFLICT (id) DO UPDATE SET
+           "rutaId" = EXCLUDED."rutaId", orden = EXCLUDED.orden, coord = EXCLUDED.coord,
+           "radioToleranciaM" = EXCLUDED."radioToleranciaM", obligatorio = EXCLUDED.obligatorio,
+           estado = 'activo', "updatedAt" = now()`,
         [id, RUTA_120_CIRCUITO_ID, 0, paradaUnivalleCoord[0], paradaUnivalleCoord[1], RADIO_TOLERANCIA_M, true],
       );
       tablaPc.push({ id: 'UNIVALLE', rutaId: RUTA_120_CIRCUITO_ID, orden: 0, obligatorio: true });
@@ -795,10 +881,14 @@ async function main(): Promise<void> {
 
     for (const p of puntosAndry) {
       const cfg = PUNTOS_CONTROL_CONFIG[p.id]!; // ya validado arriba que todo id está mapeado
-      const id = randomUUID();
+      const id = idPuntoControl120(p.id);
       await client.query(
         `INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado, "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6, $7, 'activo', now(), now())`,
+         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6, $7, 'activo', now(), now())
+         ON CONFLICT (id) DO UPDATE SET
+           "rutaId" = EXCLUDED."rutaId", orden = EXCLUDED.orden, coord = EXCLUDED.coord,
+           "radioToleranciaM" = EXCLUDED."radioToleranciaM", obligatorio = EXCLUDED.obligatorio,
+           estado = 'activo', "updatedAt" = now()`,
         [id, cfg.rutaId, cfg.orden, p.lon, p.lat, RADIO_TOLERANCIA_M, cfg.obligatorio],
       );
       tablaPc.push({ id: p.id, rutaId: cfg.rutaId, orden: cfg.orden, obligatorio: cfg.obligatorio });
@@ -806,12 +896,19 @@ async function main(): Promise<void> {
     console.table(tablaPc);
 
     // ------------------------------------------------------------------------------------
-    // Paso 5 — Paradas: DELETE + INSERT scoped a lineaId = línea 120.
+    // Paso 5 — Paradas: soft-delete (estado = 'inactivo') + upsert con ids deterministas,
+    // scoped a lineaId = línea 120 (mismo tratamiento que el Paso 4 — ver "Ids deterministas
+    // (UUIDv5)" en la cabecera; nada referencia hoy `paradaId`, pero la convención del schema
+    // es la misma que `PuntoControl`).
     // ------------------------------------------------------------------------------------
     console.log('\n--- Paso 5: paradas (10, desde el KML) ---');
 
-    const borradoParadas = await client.query(`DELETE FROM paradas WHERE "rutaId" IN (SELECT id FROM rutas WHERE "lineaId" = $1)`, [LINEA_120_ID]);
-    console.log(`  ${borradoParadas.rowCount} parada(s) previa(s) de la línea 120 borrada(s) (recreación limpia).`);
+    const softDeleteParadas = await client.query(
+      `UPDATE paradas SET estado = 'inactivo', "updatedAt" = now()
+       WHERE "rutaId" IN (SELECT id FROM rutas WHERE "lineaId" = $1) AND estado = 'activo'`,
+      [LINEA_120_ID],
+    );
+    console.log(`  ${softDeleteParadas.rowCount} parada(s) previa(s) de la línea 120 → estado 'inactivo' (soft-delete, nunca DELETE real).`);
 
     const paradasAInsertar: { nombre: string; rutaId: string; tipo: 'origen' | 'intermedia' | 'destino'; orden: number; coord: Coord }[] = [
       // Fix 2026-08-18: las 2 paradas del tronco pasan a colgar de la ruta `circuito`
@@ -830,15 +927,18 @@ async function main(): Promise<void> {
     ];
 
     for (const p of paradasAInsertar) {
-      const id = randomUUID();
+      const id = idParada120(p.nombre);
       await client.query(
         `INSERT INTO paradas (id, "rutaId", tipo, orden, coord, estado, "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography, 'activo', now(), now())`,
+         VALUES ($1, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography, 'activo', now(), now())
+         ON CONFLICT (id) DO UPDATE SET
+           "rutaId" = EXCLUDED."rutaId", tipo = EXCLUDED.tipo, orden = EXCLUDED.orden, coord = EXCLUDED.coord,
+           estado = 'activo', "updatedAt" = now()`,
         [id, p.rutaId, p.tipo, p.orden, p.coord[0], p.coord[1]],
       );
     }
     console.table(paradasAInsertar.map((p) => ({ nombre: p.nombre, rutaId: p.rutaId, tipo: p.tipo })));
-    console.log(`  ${paradasAInsertar.length} paradas insertadas.`);
+    console.log(`  ${paradasAInsertar.length} paradas upserteadas (ids deterministas — re-correr converge, no duplica).`);
 
     // ------------------------------------------------------------------------------------
     // Paso 6 — Reasignar la rotación: alternar Z12/120 día por medio (QUI-383) para las 30

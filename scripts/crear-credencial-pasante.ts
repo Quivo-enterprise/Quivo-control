@@ -523,7 +523,12 @@ async function main(): Promise<void> {
            "rutaId" = EXCLUDED."rutaId",
            orden = EXCLUDED.orden,
            "venceAt" = EXCLUDED."venceAt",
-           estado = EXCLUDED.estado,
+           -- Fix 2026-08-18 (revisión pre-merge PR #37, hallazgo MEDIO): antes pisaba
+           -- incondicionalmente a 'vigente' — una re-corrida resucitaba asignaciones que
+           -- alguien canceló a mano. Mismo criterio conservador que ya se aplica arriba a
+           -- "credencialHash": solo se escribe si la fila YA estaba 'vigente' (no-op en ese
+           -- caso); si está en cualquier otro estado (p. ej. cancelada a mano), se preserva.
+           estado = CASE WHEN asignaciones.estado = 'vigente' THEN EXCLUDED.estado ELSE asignaciones.estado END,
            "updatedAt" = now()
          RETURNING id, (xmax = 0) AS inserted`,
         [
