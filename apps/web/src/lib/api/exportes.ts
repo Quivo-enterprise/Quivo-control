@@ -1,4 +1,4 @@
-import type { AgrupacionActividad, EstadoSancion, SujetoTipo } from '@quivo/shared';
+import type { AgrupacionActividad, AgrupacionCumplimiento, EstadoSancion, SujetoTipo } from '@quivo/shared';
 import { apiDownload } from './client';
 
 interface RangoFechas {
@@ -20,6 +20,13 @@ function comoRecord<T extends object>(valor: T): Record<string, string | undefin
 }
 
 export const exportesApi = {
+  cumplimiento: (token: string, filtros: RangoFechas & { por: AgrupacionCumplimiento }) =>
+    apiDownload(
+      `/reportes/exportar/cumplimiento${aQueryString(comoRecord(filtros))}`,
+      token,
+      'cumplimiento.csv',
+    ),
+
   recorridos: (token: string, filtros: RangoFechas) =>
     apiDownload(
       `/reportes/exportar/recorridos${aQueryString(comoRecord(filtros))}`,

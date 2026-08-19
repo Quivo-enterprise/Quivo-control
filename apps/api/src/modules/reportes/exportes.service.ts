@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, withTenantContext } from '@quivo/db';
 import type {
   AgrupacionActividad,
+  CumplimientoQuery,
   ExportarActividadQuery,
   ExportarRecorridosQuery,
   ExportarSancionesQuery,
@@ -11,6 +12,11 @@ import {
   inicioDeJornadaBolivia,
   inicioDeJornadaSiguienteBolivia,
 } from '../../common/tiempo/jornada.js';
+import {
+  CLAVES_CUMPLIMIENTO,
+  consultarCumplimientoPorAgrupacion,
+  rangoCumplimiento,
+} from './cumplimiento-query.util.js';
 
 const TAMANO_PAGINA = 500;
 
@@ -55,13 +61,45 @@ interface ActividadExportRow {
  */
 @Injectable()
 export class ExportesService {
+  async *cumplimientoPorAgrupacion(
+    actor: AuthenticatedUser,
+    query: CumplimientoQuery,
+  ): AsyncGenerator<(string | number | boolean | null)[]> {
+    const clave = CLAVES_CUMPLIMIENTO[query.por];
+    const rango = rangoCumplimiento(query.desde, query.hasta);
+
+    for (let offset = 0; ; offset += TAMANO_PAGINA) {
+      const filas = await withTenantContext(
+        { rol: actor.rol, sindicatoId: actor.sindicatoId },
+        (tx) => consultarCumplimientoPorAgrupacion(tx, clave, rango, { limit: TAMANO_PAGINA, offset }),
+      );
+      for (const f of filas) {
+        const puntosTotales = Number(f.puntos_totales);
+        const puntosCumplidos = Number(f.puntos_cumplidos);
+        const porcentaje = puntosTotales > 0 ? (puntosCumplidos / puntosTotales) * 100 : 0;
+        yield [
+          f.id,
+          f.nombre,
+          puntosCumplidos,
+          puntosTotales,
+          Number(porcentaje.toFixed(2)),
+          Number(f.recorridos_asignados),
+          Number(f.recorridos_completados),
+        ];
+      }
+      if (filas.length < TAMANO_PAGINA) return;
+    }
+  }
+
   async *recorridosPorPeriodo(
     actor: AuthenticatedUser,
     query: ExportarRecorridosQuery,
   ): AsyncGenerator<(string | number | boolean | null)[]> {
-    const desde = query.desde ? inicioDeJornadaBolivia(query.desde) : new Date(0);
-    const hasta = query.hasta
-      ? inicioDeJornadaSiguienteBolivia(query.hasta)
+    const desde = query.desde;
+    const hasta = query.hasta;
+    const desdeInstante = desde ? inicioDeJornadaBolivia(desde) : new Date(0);
+    const hastaInstante = hasta
+      ? inicioDeJornadaSiguienteBolivia(hasta)
       : new Date('9999-12-31T23:59:59.999Z');
 
     for (let offset = 0; ; offset += TAMANO_PAGINA) {
@@ -83,7 +121,7 @@ export class ExportesService {
               FROM cumplimientos_pc cpc
               WHERE cpc."sesionId" = so.id AND cpc."validadoPor" = 'worker'
             ) cp ON true
-            WHERE so.inicio >= ${desde} AND so.inicio < ${hasta}
+            WHERE so.inicio >= ${desdeInstante} AND so.inicio < ${hastaInstante}
             ORDER BY so.inicio DESC, so.id ASC
             LIMIT ${TAMANO_PAGINA} OFFSET ${offset}
           `,
@@ -147,9 +185,11 @@ export class ExportesService {
     actor: AuthenticatedUser,
     query: ExportarActividadQuery,
   ): AsyncGenerator<(string | number | boolean | null)[]> {
-    const desde = query.desde ? inicioDeJornadaBolivia(query.desde) : new Date(0);
-    const hasta = query.hasta
-      ? inicioDeJornadaSiguienteBolivia(query.hasta)
+    const desde = query.desde;
+    const hasta = query.hasta;
+    const desdeInstante = desde ? inicioDeJornadaBolivia(desde) : new Date(0);
+    const hastaInstante = hasta
+      ? inicioDeJornadaSiguienteBolivia(hasta)
       : new Date('9999-12-31T23:59:59.999Z');
     const clave = agrupacionAActividadSql(query.por);
 
@@ -170,7 +210,7 @@ export class ExportesService {
               FROM cumplimientos_pc cpc
               WHERE cpc."sesionId" = so.id AND cpc."validadoPor" = 'worker'
             ) cp ON true
-            WHERE so.inicio >= ${desde} AND so.inicio < ${hasta}
+            WHERE so.inicio >= ${desdeInstante} AND so.inicio < ${hastaInstante}
             GROUP BY ${clave.id}, ${clave.nombre}
             ORDER BY ${clave.nombre} ASC
             LIMIT ${TAMANO_PAGINA} OFFSET ${offset}

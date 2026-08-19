@@ -58,9 +58,11 @@ interface ResumenRow {
 @Injectable()
 export class RecorridosService {
   async listar(actor: AuthenticatedUser, query: RecorridosQuery): Promise<RecorridoResumen[]> {
-    const desde = query.desde ? inicioDeJornadaBolivia(query.desde) : new Date(0);
-    const hasta = query.hasta
-      ? inicioDeJornadaSiguienteBolivia(query.hasta)
+    const desde = query.desde;
+    const hasta = query.hasta;
+    const desdeInstante = desde ? inicioDeJornadaBolivia(desde) : new Date(0);
+    const hastaInstante = hasta
+      ? inicioDeJornadaSiguienteBolivia(hasta)
       : new Date('9999-12-31T23:59:59.999Z');
 
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
@@ -73,7 +75,7 @@ export class RecorridosService {
         JOIN asignaciones a ON a.id = so."asignacionId"
         JOIN rutas r ON r.id = a."rutaId"
         JOIN lineas l ON l.id = r."lineaId"
-        WHERE so.inicio >= ${desde} AND so.inicio < ${hasta}
+        WHERE so.inicio >= ${desdeInstante} AND so.inicio < ${hastaInstante}
         ORDER BY so.inicio DESC
         LIMIT 100
       `;

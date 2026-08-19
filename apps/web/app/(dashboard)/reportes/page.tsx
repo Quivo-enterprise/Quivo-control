@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, useCallback, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Alert,
   Button,
@@ -52,25 +52,38 @@ const OPCIONES_SUJETO_SANCION: { label: string; value: SujetoTipo | '' }[] = [
   { label: 'Socio', value: 'socio' },
 ];
 
-interface FiltrosCumplimiento {
-  por: AgrupacionCumplimiento;
-  desde: string;
-  hasta: string;
-}
-
-const FILTROS_INICIALES: FiltrosCumplimiento = { por: 'linea', desde: '', hasta: '' };
-
 /** RF-74..77 (QUI-246) — % de puntos de control cumplidos y recorridos completados vs
  * asignados, agrupado por línea/vehículo/ruta. Fuente de verdad: `validadoPor = 'worker'`
  * (RF-39), calculado en `apps/api/src/modules/reportes/cumplimiento.service.ts`. */
 export default function ReportesPage() {
+  return (
+    <Suspense>
+      <ReportesContent />
+    </Suspense>
+  );
+}
+
+function ReportesContent() {
   const { token } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  const [por, setPor] = useState<AgrupacionCumplimiento>(FILTROS_INICIALES.por);
-  const [desde, setDesde] = useState('');
-  const [hasta, setHasta] = useState('');
-  const [filtrosAplicados, setFiltrosAplicados] = useState<FiltrosCumplimiento>(FILTROS_INICIALES);
+  // ── Filtros de cumplimiento — persistidos en query params ─────────────────
+  const porParam = (searchParams.get('por') as AgrupacionCumplimiento | null) ?? 'linea';
+  const desdeParam = searchParams.get('desde') ?? '';
+  const hastaParam = searchParams.get('hasta') ?? '';
+
+  // Controles del formulario (pueden diferir de la URL hasta "Aplicar filtros")
+  const [por, setPor] = useState<AgrupacionCumplimiento>(porParam);
+  const [desde, setDesde] = useState(desdeParam);
+  const [hasta, setHasta] = useState(hastaParam);
+
+  // Sincronizar controles si la URL cambia externamente (ej: navegar atrás)
+  useEffect(() => {
+    setPor(porParam);
+    setDesde(desdeParam);
+    setHasta(hastaParam);
+  }, [porParam, desdeParam, hastaParam]);
 
   const [filas, setFilas] = useState<CumplimientoFila[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,6 +96,7 @@ export default function ReportesPage() {
 
   const rangoFechasInvalido = Boolean(desde && hasta && desde > hasta);
 
+  // ── Carga de datos: se dispara cuando cambian los query params ────────────
   useEffect(() => {
     if (!token) return;
     let cancelado = false;
@@ -90,9 +104,9 @@ export default function ReportesPage() {
     setError(null);
     reportesApi
       .cumplimiento(token, {
-        por: filtrosAplicados.por,
-        desde: filtrosAplicados.desde ? new Date(filtrosAplicados.desde) : undefined,
-        hasta: filtrosAplicados.hasta ? new Date(filtrosAplicados.hasta) : undefined,
+        por: porParam,
+        desde: desdeParam ? new Date(desdeParam) : undefined,
+        hasta: hastaParam ? new Date(hastaParam) : undefined,
       })
       .then((rows) => {
         if (!cancelado) setFilas(rows);
@@ -106,7 +120,7 @@ export default function ReportesPage() {
     return () => {
       cancelado = true;
     };
-  }, [token, filtrosAplicados]);
+  }, [token, porParam, desdeParam, hastaParam]);
 
   const puntosTotales = filas.reduce((acc, f) => acc + f.puntosTotales, 0);
   const puntosCumplidos = filas.reduce((acc, f) => acc + f.puntosCumplidos, 0);
@@ -114,35 +128,43 @@ export default function ReportesPage() {
   const recorridosAsignados = filas.reduce((acc, f) => acc + f.recorridosAsignados, 0);
   const recorridosCompletados = filas.reduce((acc, f) => acc + f.recorridosCompletados, 0);
 
-  function aplicarFiltros() {
+  // ── Persistir filtros en la URL ───────────────────────────────────────────
+  const aplicarFiltros = useCallback(() => {
     if (rangoFechasInvalido) return;
-    setFiltrosAplicados({ por, desde, hasta });
-  }
+    const usp = new URLSearchParams();
+    usp.set('por', por);
+    if (desde) usp.set('desde', desde);
+    if (hasta) usp.set('hasta', hasta);
+    router.replace(`/reportes?${usp.toString()}`);
+  }, [rangoFechasInvalido, por, desde, hasta, router]);
 
-  function limpiarFiltros() {
-    setPor(FILTROS_INICIALES.por);
+  const limpiarFiltros = useCallback(() => {
+    setPor('linea');
     setDesde('');
     setHasta('');
-    setFiltrosAplicados(FILTROS_INICIALES);
-  }
+    router.replace('/reportes');
+  }, [router]);
 
-  async function exportar(reporte: 'recorridos' | 'sanciones' | 'actividad') {
+  // ── Exportaciones ─────────────────────────────────────────────────────────
+  async function exportar(reporte: 'cumplimiento' | 'recorridos' | 'sanciones' | 'actividad') {
     if (!token) return;
     setExportando(reporte);
     setError(null);
     try {
-      const rango = {
-        desde: filtrosAplicados.desde || undefined,
-        hasta: filtrosAplicados.hasta || undefined,
-      };
-      if (reporte === 'recorridos') await exportesApi.recorridos(token, rango);
-      else if (reporte === 'sanciones') {
+      const rango = { desde: desdeParam || undefined, hasta: hastaParam || undefined };
+      if (reporte === 'cumplimiento') {
+        await exportesApi.cumplimiento(token, { ...rango, por: porParam });
+      } else if (reporte === 'recorridos') {
+        await exportesApi.recorridos(token, rango);
+      } else if (reporte === 'sanciones') {
         await exportesApi.sanciones(token, {
           ...rango,
           estado: estadoSancion || undefined,
           sujetoTipo: sujetoTipoSancion || undefined,
         });
-      } else await exportesApi.actividad(token, { ...rango, por: porActividad });
+      } else {
+        await exportesApi.actividad(token, { ...rango, por: porActividad });
+      }
     } catch (err) {
       setError(mensajeError(err));
     } finally {
@@ -237,6 +259,13 @@ export default function ReportesPage() {
 
       <Card header="Exportar reportes (RF-78..80)">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end' }}>
+          <Button
+            variant="secondary"
+            disabled={exportando !== null}
+            onClick={() => exportar('cumplimiento')}
+          >
+            {exportando === 'cumplimiento' ? 'Exportando...' : 'Cumplimiento (CSV)'}
+          </Button>
           <Button
             variant="secondary"
             disabled={exportando !== null}

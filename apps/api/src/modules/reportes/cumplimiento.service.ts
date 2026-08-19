@@ -1,31 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, withTenantContext } from '@quivo/db';
+import { withTenantContext } from '@quivo/db';
 import {
   CumplimientoFilaSchema,
-  type AgrupacionCumplimiento,
   type CumplimientoFila,
   type CumplimientoQuery,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import {
-  inicioDeJornadaBolivia,
-  inicioDeJornadaSiguienteBolivia,
-} from '../../common/tiempo/jornada.js';
-
-interface FilaCumplimiento {
-  id: string;
-  nombre: string;
-  puntos_cumplidos: bigint;
-  puntos_totales: bigint;
-  recorridos_asignados: bigint;
-  recorridos_completados: bigint;
-}
-
-const CLAVES: Record<AgrupacionCumplimiento, { id: Prisma.Sql; nombre: Prisma.Sql }> = {
-  linea: { id: Prisma.sql`l.id`, nombre: Prisma.sql`l.nombre` },
-  vehiculo: { id: Prisma.sql`v.id`, nombre: Prisma.sql`v.placa` },
-  ruta: { id: Prisma.sql`r.id`, nombre: Prisma.sql`l.codigo || ' (' || r.sentido || ')'` },
-};
+  CLAVES_CUMPLIMIENTO,
+  consultarCumplimientoPorAgrupacion,
+  rangoCumplimiento,
+} from './cumplimiento-query.util.js';
 
 /**
  * RF-74..77 (QUI-246): % de puntos de control cumplidos y recorridos completados vs
@@ -50,64 +35,11 @@ const CLAVES: Record<AgrupacionCumplimiento, { id: Prisma.Sql; nombre: Prisma.Sq
 @Injectable()
 export class CumplimientoService {
   async obtener(actor: AuthenticatedUser, query: CumplimientoQuery): Promise<CumplimientoFila[]> {
-    const clave = CLAVES[query.por];
-    // `asignaciones.fecha` es una fecha operativa pura (`@db.Date`); los cumplimientos,
-    // en cambio, son instantes. Cada uno requiere su propio límite para incluir el día
-    // calendario boliviano completo sin desplazar las asignaciones al día anterior.
-    const desdeFecha = query.desde ?? new Date(0);
-    const hastaFecha = query.hasta ?? new Date('9999-12-31');
-    const desdeInstante = query.desde ? inicioDeJornadaBolivia(query.desde) : new Date(0);
-    const hastaInstante = query.hasta
-      ? inicioDeJornadaSiguienteBolivia(query.hasta)
-      : new Date('9999-12-31T23:59:59.999Z');
+    const clave = CLAVES_CUMPLIMIENTO[query.por];
+    const rango = rangoCumplimiento(query.desde, query.hasta);
 
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
-      const filas = await tx.$queryRaw<FilaCumplimiento[]>`
-        WITH base AS (
-          SELECT DISTINCT ${clave.id} as id, ${clave.nombre} as nombre
-          FROM asignaciones a
-          JOIN vehiculos v ON v.id = a."vehiculoId"
-          JOIN rutas r ON r.id = a."rutaId"
-          JOIN lineas l ON l.id = r."lineaId"
-          WHERE a.fecha >= ${desdeFecha} AND a.fecha <= ${hastaFecha}
-        ),
-        recorridos AS (
-          SELECT ${clave.id} as id,
-            COUNT(DISTINCT a.id) as recorridos_asignados,
-            COUNT(DISTINCT a.id) FILTER (WHERE so.fin IS NOT NULL) as recorridos_completados
-          FROM asignaciones a
-          JOIN vehiculos v ON v.id = a."vehiculoId"
-          JOIN rutas r ON r.id = a."rutaId"
-          JOIN lineas l ON l.id = r."lineaId"
-          LEFT JOIN sesiones_operativas so ON so."asignacionId" = a.id
-          WHERE a.fecha >= ${desdeFecha} AND a.fecha <= ${hastaFecha}
-          GROUP BY ${clave.id}
-        ),
-        puntos AS (
-          SELECT ${clave.id} as id,
-            COUNT(*) FILTER (WHERE cpc.cumplido) as puntos_cumplidos,
-            COUNT(*) as puntos_totales
-          FROM cumplimientos_pc cpc
-          JOIN sesiones_operativas so ON so.id = cpc."sesionId"
-          JOIN asignaciones a ON a.id = so."asignacionId"
-          JOIN vehiculos v ON v.id = a."vehiculoId"
-          JOIN rutas r ON r.id = a."rutaId"
-          JOIN lineas l ON l.id = r."lineaId"
-          WHERE cpc."validadoPor" = 'worker'
-            AND cpc.ts >= ${desdeInstante} AND cpc.ts < ${hastaInstante}
-          GROUP BY ${clave.id}
-        )
-        SELECT
-          base.id, base.nombre,
-          COALESCE(puntos.puntos_cumplidos, 0) as puntos_cumplidos,
-          COALESCE(puntos.puntos_totales, 0) as puntos_totales,
-          COALESCE(recorridos.recorridos_asignados, 0) as recorridos_asignados,
-          COALESCE(recorridos.recorridos_completados, 0) as recorridos_completados
-        FROM base
-        LEFT JOIN recorridos ON recorridos.id = base.id
-        LEFT JOIN puntos ON puntos.id = base.id
-        ORDER BY base.nombre ASC
-      `;
+      const filas = await consultarCumplimientoPorAgrupacion(tx, clave, rango);
 
       return filas.map((f) => {
         const puntosTotales = Number(f.puntos_totales);
