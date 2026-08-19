@@ -1,6 +1,6 @@
 # ADR 0001 — Railway vs Fly.io para staging/producción inicial
 
-> **⚠️ ANULADO el 2026-08-14. Sustituido por [ADR 0002 — GCP](0002-gcp.md).**
+> **⚠️ ANULADO el 2026-08-14. Sustituido por [ADR 0002 — GCP](../adr/0002-gcp.md).**
 >
 > Nunca se ejecutó: no se creó cuenta ni se aprovisionó ningún recurso en Railway ni en Fly.io.
 > Quedó obsoleto por un hecho externo — la cuenta de GCP de la organización se reactivó, y con
@@ -41,4 +41,4 @@ real lo justifican — no requiere reescritura (Docker-based en ambos).
 
 **Ninguna de las dos.** En el Cycle 12 quedó pendiente (no se creó cuenta ni se aprovisionó
 ningún recurso cloud — el usuario confirmó "solo local por ahora" durante el kickoff), y el
-2026-08-14 el CTO decidió **GCP**: ver [ADR 0002](0002-gcp.md).
+2026-08-14 el CTO decidió **GCP**: ver [ADR 0002](../adr/0002-gcp.md).

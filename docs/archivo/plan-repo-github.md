@@ -1,5 +1,8 @@
 # Plan — Crear repositorio GitHub `quivo-control` (org Quivo-enterprise)
 
+> **⚠️ ARCHIVADO el 2026-08-19.** Bootstrap del repositorio, ejecutado el 2026-07-20.
+> La estructura vigente del monorepo está en [`plan-maestro.md`](../plan-maestro.md) §Estructura.
+
 ## Contexto
 
 Linear ya montado (proyecto MVP, 43 issues, Sprint 1 arranca 2026-07-20). Falta el repo.

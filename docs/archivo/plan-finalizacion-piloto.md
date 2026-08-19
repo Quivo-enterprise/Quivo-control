@@ -1,5 +1,11 @@
 # Plan de finalización — QUIVO Control hasta el piloto
 
+> **⚠️ ARCHIVADO el 2026-08-19.** Anulado por [`plan-piloto-lunes-17-agosto.md`](../plan-piloto-lunes-17-agosto.md):
+> apuntaba el piloto al 5–19 de octubre y trataba el spike GPS como gate previo, y el piloto real
+> arrancó el 17 de agosto. **Los hallazgos que seguían abiertos se rescataron a
+> [`deuda-abierta.md`](../deuda-abierta.md)** — leer ese documento, no éste. Se conserva por el
+> razonamiento detrás de los recortes y del triaje de seguridad.
+
 > Fecha: 2026-08-14 · Estado: en revisión del CTO
 > Base: `main` = `a8c5b8b`, CI verde (`ci` + `acceptance`)
 > Meta: **piloto operativo con 1 sindicato real**, no el MVP completo
@@ -119,7 +125,7 @@ Las brechas:
 
 ## Arquitectura de despliegue en GCP
 
-> **Formalizada en [ADR 0002](adr/0002-gcp.md) (2026-08-14), con dos cambios respecto de lo que
+> **Formalizada en [ADR 0002](../adr/0002-gcp.md) (2026-08-14), con dos cambios respecto de lo que
 > decía este plan:** la región quedó en **`southamerica-west1` (Santiago)**, no São Paulo — se
 > midió la latencia y es la mitad — y **`apps/web` va en Cloud Run, no en Firebase App Hosting**,
 > que no tiene ninguna región sudamericana. El ADR es la fuente de verdad; esto queda como

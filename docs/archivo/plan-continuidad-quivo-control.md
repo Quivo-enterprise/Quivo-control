@@ -1,5 +1,8 @@
 # Plan — Retomar QUIVO Control desde `main` y reconstruir el roadmap de Valentina
 
+> **⚠️ ARCHIVADO el 2026-08-19.** Registro cerrado: el CI se destrabó, el design system se
+> reconstruyó y el roadmap de Valentina se reescribió. Estado vivo en [`handoff.md`](../handoff.md).
+
 > Fecha: 2026-08-13 · Estado: **aprobado por el CTO, en ejecución**
 > Base: `main` = `98bae54` (merge del PR #1) · Rama de trabajo:
 > `fix/vendorizar-design-system-ci-verde`

@@ -1,18 +1,29 @@
 # Spike GPS Transistorsoft — QUI-216
 
-**Gate GO/NO-GO del stack móvil.** Nada de M3 (app móvil + sync) arranca sin este resultado.
-Ver `docs/documento-tecnico-cto.md` §6 y §12, y `docs/plan-maestro.md` (riesgo #1).
+**Protocolo de medición del stack GPS móvil.** Ver `docs/documento-tecnico-cto.md` §6 y §12, y
+`docs/plan-maestro.md` (riesgo #1).
 
 ## Estado
 
+> **Actualizado el 2026-08-19.** Este documento **ya no es un gate previo**: desde el
+> `plan-piloto-lunes-17-agosto.md` (§Consecuencias) el spike se absorbió en la prueba de campo, y
+> M3 arrancó sin él. **Sigue vivo porque sus 4 criterios GO siguen sin medirse**: las trazas que
+> se analizaron de las jornadas del 17 y 18 de agosto salieron de Geo Tracker, no de la app
+> propia, y el conteo de filas de `gps_points` de esas jornadas todavía no se leyó. La tabla de
+> resultados de abajo sigue vacía. La contingencia ante un NO-GO y el costeo del Plan B están en
+> [`deuda-abierta.md`](deuda-abierta.md) §"El gate GPS".
+>
+> **El stack ya está migrado:** el repo corre Expo SDK 54 y `react-native-background-geolocation`
+> 5.4.0, así que la salvedad de la sección "Sobre el stack" ya está satisfecha — el protocolo se
+> corre tal cual sobre lo que hay hoy.
+
 **Código y protocolo de medición: listos.** Ejecución física de las 8h de tracking:
-**pendiente** — requiere un dispositivo Android real de gama baja, no disponible en este
-entorno de desarrollo. Este documento no se marca como "hecho" en Linear hasta tener los
-números reales.
+**pendiente** — requiere una jornada completa con el teléfono del conductor. Este documento no se
+marca como "hecho" en Linear hasta tener los números reales.
 
 **La licencia Transistorsoft NO es un prerequisito para correr este spike** (corregido
 2026-08-14 — la versión anterior de este documento lo pedía como paso 1 y eso costó un mes de
-bloqueo real, ver `docs/plan-finalizacion-piloto.md`). El SDK es _fully functional_ en builds
+bloqueo real, ver `docs/archivo/plan-finalizacion-piloto.md`). El SDK es _fully functional_ en builds
 **debug** sin ninguna key (README/FAQ oficiales de Transistorsoft) — el protocolo de abajo
 corre gratis, hoy, con solo un dispositivo. El detalle de licencia por escenario está en el
 protocolo.
@@ -40,7 +51,7 @@ protocolo.
 
 El repo hoy está en **Expo SDK 52 + `react-native-background-geolocation` 4.19.4**. La
 migración a **Expo SDK 54 + Transistorsoft 5.4.0** es la tarea siguiente del plan (N2 en
-`docs/plan-finalizacion-piloto.md`, que ya está en `main`) — separada de este fix. **El
+`docs/archivo/plan-finalizacion-piloto.md`, que ya está en `main`) — separada de este fix. **El
 protocolo de abajo debe correrse sobre el stack migrado (SDK 54 + v5.4.0), no sobre el
 actual**: medir batería/huecos/persistencia contra un stack que se va a tirar apenas termine
 N2 no valida nada útil para el gate D1. Si este documento se ejecuta antes de que esa

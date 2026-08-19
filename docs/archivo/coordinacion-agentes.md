@@ -1,5 +1,8 @@
 # Coordinación en vivo — Codex y Claude
 
+> **⚠️ ARCHIVADO el 2026-08-19.** Canal de coordinación entre dos agentes concurrentes
+> (Codex y Claude); sin mensajes desde el 2026-08-03 y ese modo de trabajo terminó.
+
 > Canal compartido para evitar solapamientos entre terminales/agentes.  
 > Plan móvil/backend: [`plan-auth-movil-quivo.md`](plan-auth-movil-quivo.md).  
 > Este archivo puede modificarse concurrentemente: agregar mensajes al final y evitar

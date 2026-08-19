@@ -107,6 +107,11 @@ QUI-250 (scripts de k6).
 QUI-363 no bloquea el lunes pero es la que valida a todas las demás: si se rompe una policy a
 propósito y la suite sigue verde, el aislamiento multi-tenant es teatro.
 
+> **El hallazgo detrás de cada una de esas issues está en [`deuda-abierta.md`](deuda-abierta.md)**
+> (creado el 2026-08-19 al archivar `plan-finalizacion-piloto.md`, que era su única fuente
+> escrita): qué se encontró, por qué importa y qué se decidió no hacer. Acá sólo quedan los
+> números de issue.
+
 ### Fuera de alcance
 
 QUI-216 (absorbido por el piloto) · QUI-237 (se valida en campo) · QUI-351 (Play, diferida) ·

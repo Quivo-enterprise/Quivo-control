@@ -1,5 +1,10 @@
 # Plan de implementación — autenticación móvil e identidad QUIVO
 
+> **⚠️ ARCHIVADO el 2026-08-19.** Implementado y verificado desde el 2026-08-01. Se conserva
+> porque **sigue siendo la única descripción escrita del contrato de auth móvil**
+> (vehículo → conductor): leerlo antes de tocar `auth-movil.service.ts`, y verificar contra el
+> código, que es la fuente de verdad.
+
 > Estado: **implementado y verificado en Android**  
 > Fecha de decisión: **2026-08-01**  
 > Responsable principal: **Codex**  
