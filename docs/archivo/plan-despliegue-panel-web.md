@@ -1,5 +1,8 @@
 # Despliegue del panel web admin a Cloud Run
 
+> **⚠️ ARCHIVADO el 2026-08-19.** Ejecutado el 2026-08-16 (PR #23): el panel está desplegado en
+> Cloud Run. El procedimiento vigente y automatizado es `scripts/deploy-web.sh`.
+
 ## Contexto
 
 Mañana lunes 17 de agosto arranca el piloto real de campo con un auto y un conductor. El

@@ -1,5 +1,8 @@
 # Ramas del sprint M6 — estado antes de borrarlas
 
+> **⚠️ ARCHIVADO el 2026-08-19.** Auditoría de cierre ya ejecutada: las 3 ramas del sprint M6
+> estaban íntegramente en `main` y se borraron.
+
 > Documento de cierre. Registra qué contuvo cada rama del sprint M6 (Valentina, mobile UI)
 > antes de que el chairman las borre del remoto. Cada afirmación de abajo está verificada con
 > `git merge-base --is-ancestor` y `git log`/`git rev-list` contra `origin/main` — comando y
