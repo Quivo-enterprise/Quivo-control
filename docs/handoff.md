@@ -6,12 +6,17 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Estado al 2026-08-19
+## Estado al 2026-08-22
 
-`main` = `2e710e3` (PR #43, solo tests — sin cambios de código de producción desde el PR #37).
+`main` = `df656cd` (PR #47). La **Entrega 3 está completa en código**: las tres piezas del mapa
+en vivo mergeadas — props de seguimiento en `RouteMap` (#45), backend `/en-vivo` (#46) y la
+página del panel (#47, con una segunda tanda de correcciones encima).
+
 En producción: `api:v4` sobre `quivo-api-00006-pfm` y el worker pool `quivo-worker-00004-hk7`,
-ambos en Cloud Run `southamerica-west1`; el panel es `web:v1` (`quivo-web-00001-4jd`). Sin
-drift: la imagen desplegada corresponde al código de producción de `main`.
+ambos en Cloud Run `southamerica-west1`; el panel sigue siendo `web:v1`
+(`quivo-web-00001-4jd`). **Acá sí hay drift ahora**: `main` tiene el backend y la página de
+`/en-vivo` que la imagen desplegada no tiene. Desplegar es manual (QUI-370), así que hasta que
+alguien corra el `gcloud run deploy` el mapa en vivo existe solo en el repo.
 El APK en los teléfonos es el **build 7** (`versionCode` 7, EAS `e1d01284`, perfil `production`).
 
 **El piloto salió a la calle el 2026-08-18 por la tarde** — segunda jornada real, la primera con
@@ -33,6 +38,8 @@ la variación diaria de la operación.**
   15 asignaciones propias, para que dos teléfonos operen el mismo circuito sin pisarse.
 - **Rescate del día 1**: cerrado por decisión del CTO. El código queda en la app pero no
   condiciona nada.
+- **Entrega 3 completa en código (PRs #45, #46, #47)**: mapa en vivo `/en-vivo`. Detalle y
+  hallazgos en [Entrega 3](#entrega-3--el-mapa-en-vivo-2026-08-19--22).
 - **Vía 2 completa (PR #43)**: rescatados los tres PRs de Valentina — QUI-339 (#38, auditoría de
   accesibilidad), QUI-340 (#43, specs E2E de alta de conductor y vehículo) y QUI-342 (#42, filtros
   de cumplimiento en URL y exportación CSV) — los tres mergeados a `main`. El #43 corrigió cuatro
@@ -43,10 +50,18 @@ la variación diaria de la operación.**
 
 ### Lo que no está cerrado
 
-- **Entrega 3 — mapa en vivo `/en-vivo`**: cero líneas escritas. El diseño completo está
-  especificado en [`plan-v2-app-y-mapa-en-vivo.md`](plan-v2-app-y-mapa-en-vivo.md) §3.
-  **No arrancarla todavía**: sobre la geometría actual, el mapa mostraría con precisión un dato
-  equivocado (ver la jornada del 18).
+- **`/en-vivo` está en `main` pero no en producción**, y el aviso de fondo sigue en pie: sobre
+  la geometría actual el mapa muestra con precisión un dato equivocado (ver la jornada del 18).
+  La pantalla es honesta con lo que sabe — distingue "detenido" de "sin señal" —, pero el
+  porcentaje de cumplimiento que la rodea sigue midiéndose contra una geometría que la
+  operación real contradice.
+- **Verificación en navegador de §3.6 sin re-correr** tras los fixes del PR #47. Las capturas
+  del 2026-08-19 (`en-vivo-perdido.png`, `en-vivo-reportando.png`, sin versionar) son de la
+  versión previa a esas correcciones.
+- **Tres cosas que se dejaron fuera del PR #47 a propósito**: reflejar `sesionId`/`seguir` en la
+  URL (no se puede compartir "estoy viendo el vehículo X"); el truncado de las opciones largas
+  del `Select`; y el mismo defecto de `cumplimientos.find()` que sigue vivo en
+  `reportes/recorridos/[id]/page.tsx:113`.
 - **Los 3 puntos de control obligatorios generan falsos incumplimientos.** Es la corrección más
   urgente y la más barata que dejó el piloto.
 - **Faltan trazas GPS** de dos tramos del circuito: el lazo Univalle→Salomón (hoy geometría
@@ -72,6 +87,88 @@ No hay job de despliegue: el push de imágenes y el `gcloud run deploy` son manu
 en `plan-salida-apk-v2.md` pero fuera de CI (QUI-370, tampoco hay Terraform). Y **no existe
 registro automático de qué migraciones están aplicadas en producción** — la única fuente de verdad
 es un `.md` editado a mano, lo cual es frágil.
+
+## Entrega 3 — el mapa en vivo (2026-08-19 → 22)
+
+Tres PRs, en este orden: **#45** agregó a `RouteMap` las cuatro props de seguimiento
+(`fitMode`, `fitKey`, `followPoint`, `onUserPan`), con `followPoint` haciendo `panTo` sin tocar
+nunca el zoom y `onUserPan` disparando solo ante gestos reales del usuario. **#46** puso el
+backend: tres endpoints bajo `GET /v1/reportes/en-vivo` (listado, contexto, posiciones), con
+`findUnique` primero para que un cross-tenant reciba 404, `desde` clampeado en el server y los
+GET del poll fuera de `audit_log`. **#47** cerró la entrega con la página del panel, primer
+consumidor real del `QueryClient` que estaba montado desde hacía meses sin usar.
+
+### El PR #47 llegó abierto de una sesión anterior
+
+Estaba con CI verde y sin revisar. Revisarlo antes de mergear fue lo que evitó meter a
+producción un bucle de descarga. Vale la pena registrar el detalle porque el patrón se repite:
+**las tres guardas anti-bucle que tenía el código estaban escritas y ninguna funcionaba.**
+
+1. La recarga completa (auto-heal) pedía la ventana **sin `limite`**, así que el server aplicaba
+   el default de 2000 y una jornada Z12 (~4300 puntos) volvía truncada. La traza acumulada se
+   descartaba y quedaba reemplazada por los primeros 2000: la polilínea rebobinaba a la mañana.
+2. Esa respuesta truncada trae `hayMas: true`, con lo cual `recargaFallida` **nunca** se
+   marcaba — justo la bandera que debía cortar la repetición — y `hayMas` además acelera el
+   poll a 1 s. Bucle de ~120 KB por segundo con el mapa reseteándose.
+3. La guarda comparaba `totalPuntos` entre polls, pero `totalPuntos` es un `count(*)` vivo que
+   sube en casi cada poll de un vehículo reportando: la igualdad nunca se cumplía.
+
+Quedó con dos guardas ortogonales: por **déficit** (`totalPuntos - puntos.length`), que cubre la
+reingesta colisionada donde el hueco es permanente y fijo aunque el total suba; y un **cooldown
+de 60 s**, techo duro de frecuencia. El cooldown no es redundante: cubre el caso que la guarda
+por déficit no puede — una sesión por encima de `TRAZA_EN_VIVO_LIMITE_MAX` (5000), donde la
+recarga jamás completa y el déficit crece de verdad en cada poll. **Ese caso no es hipotético:**
+"Finalizar recorrido" no cierra la `sesion_operativa`, y el 2026-08-18 había varias abiertas de
+días anteriores.
+
+### El solape del cursor estaba dimensionado contra la mediana, no contra la cola
+
+`gps_points.ts` es el timestamp del *fix*, no el de la ingesta, así que al salir de Doze llegan
+ráfagas con `ts` viejos y un cursor exclusivo las pierde para siempre. El código pedía 2 minutos
+hacia atrás, calibrado sobre la mediana del lag (153-166 s). Pero lo que decide acá es la cola:
+**p95 de 684-814 s y máximo observado de 4275 s**. Con 2 min, toda ráfaga que aterrizara más
+tarde quedaba descartada y el auto-heal —pensado como reparación excepcional— pasaba a ser el
+camino habitual. Subido a 15 min, que iguala el `UMBRAL_INGESTA_VIVA_MS` del server. El costo
+son ~90 puntos re-pedidos por poll (≈5 KB) que el dedupe absorbe.
+
+### La página no usa los umbrales de color del plan, y hace bien
+
+El plan pedía verde <90 s, ámbar 90 s-5 min, rojo >5 min. Con el lag real medido, un trufi
+andando normal se vería **rojo casi todo el tiempo** y el color dejaría de significar algo. La
+página usa el `estadoFrescura` que el server calcula cruzando `ultimoFixTs` con
+`ultimoIngresoTs`, y muestra **las dos** antigüedades por separado. La distinción que la hace
+útil es "el vehículo está parado" (normal, hasta 56 min en terminal) contra "el teléfono no
+sincroniza" (falla). Solo `perdido` se pinta como falla.
+
+Por el mismo motivo el corte del poll no usa `fin` —que queda NULL indefinidamente— sino
+`inactivaDesdeMs` con umbral de 30 min, el doble del umbral con el que el server declara
+`perdido`.
+
+### Otros defectos que la revisión encontró
+
+- El fallback de `PanelFrescura` medía la antigüedad **contra el reloj del navegador**: el bug
+  exacto que la corrección por `servidorTs` existe para evitar. Una máquina 10 minutos
+  adelantada mostraba "hace 10 min" para un vehículo que acababa de reportar.
+- `cumplimientos.find()` devolvía la **primera** pasada: un punto de control fallado en la
+  vuelta 1 y cumplido en la vuelta 2 se quedaba gris con "No cumplido" el resto del día. El
+  mismo defecto sigue en `reportes/recorridos/[id]/page.tsx:113`, de donde se copió.
+- El tick de 1 Hz del reloj re-renderizaba la página entera, y como `buildDivIcon` genera un
+  `DivIcon` nuevo por render, react-leaflet reemplazaba el nodo del DOM del marcador: la
+  animación del pulso del vehículo se reiniciaba cada segundo sin completar un ciclo.
+
+### Accesibilidad
+
+La auditoría con `web-design-guidelines` no encontró nada crítico pero sí nueve mayores, todos
+aplicados. Los dos que valen para futuras pantallas: **`Alert` fija `role="alert"`**
+(= `aria-live="assertive"`), así que usarlo para un aviso que se monta y desmonta en cada poll
+—"vehículo detenido"— interrumpe al lector de pantalla cada 10 s por algo que no es una falla;
+y **`RouteMap` no expone ningún `aria-*`**, con lo que la información de los popups de Leaflet
+es inalcanzable sin mouse — la página agrega un resumen textual oculto con
+`.qv-visually-hidden`.
+
+Token nuevo en el design system: `--qv-color-info` (con su override para tema oscuro). Las
+zonas de `Circle` quedaron con hex a propósito: van a atributos de presentación SVG de Leaflet,
+donde `var()` no resuelve.
 
 ## Jornada del 18 de agosto — lo que la traza real demostró
 
