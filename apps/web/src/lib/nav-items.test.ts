@@ -25,6 +25,22 @@ describe('filterNavItemsByRole', () => {
   });
 });
 
+describe('NAV_ITEMS (orden y permisos de "En vivo")', () => {
+  it('"En vivo" es el segundo ítem, después del dashboard', () => {
+    expect(NAV_ITEMS[1]?.id).toBe('en-vivo');
+    expect(NAV_ITEMS[1]?.href).toBe('/en-vivo');
+  });
+
+  it('los dos roles administrativos ven "En vivo"', () => {
+    expect(isRouteAllowedForRole(NAV_ITEMS, '/en-vivo', 'admin_quivo')).toBe(true);
+    expect(isRouteAllowedForRole(NAV_ITEMS, '/en-vivo', 'admin_sindicato')).toBe(true);
+  });
+
+  it('un rol fuera de la lista no puede entrar a /en-vivo', () => {
+    expect(isRouteAllowedForRole(NAV_ITEMS, '/en-vivo', 'conductor')).toBe(false);
+  });
+});
+
 describe('findNavItemForPath', () => {
   it('matchea la ruta exacta', () => {
     expect(findNavItemForPath(NAV_ITEMS, '/sindicatos')?.id).toBe('sindicatos');

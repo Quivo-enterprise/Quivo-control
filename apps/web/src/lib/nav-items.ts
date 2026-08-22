@@ -13,6 +13,9 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', href: '/', roles: ['admin_quivo', 'admin_sindicato'] },
+  // Segundo ítem a propósito: el mapa en vivo es la pantalla operativa del día a día
+  // (ENTREGA 3), así que va arriba de todo el CRUD de configuración.
+  { id: 'en-vivo', label: 'En vivo', href: '/en-vivo', roles: ['admin_quivo', 'admin_sindicato'] },
   { id: 'sindicatos', label: 'Sindicatos', href: '/sindicatos', roles: ['admin_quivo'] },
   { id: 'socios', label: 'Socios', href: '/socios', roles: ['admin_quivo', 'admin_sindicato'] },
   {
