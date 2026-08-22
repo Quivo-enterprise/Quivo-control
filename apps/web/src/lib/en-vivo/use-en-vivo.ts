@@ -1,14 +1,13 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ContextoEnVivo, SesionEnVivoResumen } from '@quivo/shared';
+import { TRAZA_EN_VIVO_LIMITE_MAX, type ContextoEnVivo, type SesionEnVivoResumen } from '@quivo/shared';
 import { enVivoApi } from '../api/en-vivo';
 import {
   debeRecargar,
   desdeConSolape,
   fusionarTraza,
   intervaloPoll,
-  necesitaRecargaCompleta,
   type TrazaAcumulada,
 } from './traza';
 
@@ -87,25 +86,54 @@ export function useTrazaEnVivo(token: string | null, sesionId: string | null) {
       const autenticacion = token as string;
       const sesion = sesionId as string;
       const previa = queryClient.getQueryData<TrazaAcumulada>(queryKey);
+      // Capturado una sola vez: es lo que se compara contra `ultimoIntentoRecargaMs` para el
+      // cooldown y, si se dispara una recarga, lo que queda grabado como el nuevo intento.
+      const ahora = Date.now();
 
       const delta = await enVivoApi.posiciones(autenticacion, sesion, {
         desde: desdeConSolape(previa?.cursor),
       });
       const fusionada = fusionarTraza(previa, delta);
-      if (!debeRecargar(previa, fusionada)) {
-        // Se arrastra la marca de "ya recargué y seguía incompleta" mientras el hueco siga
-        // ahí, para no repetir la descarga completa en cada poll.
+      if (!debeRecargar(previa, fusionada, ahora)) {
+        // Se arrastra la marca de "ya recargué y seguía incompleta" (déficit y el instante del
+        // último intento) mientras el hueco siga ahí, para no repetir la descarga completa en
+        // cada poll ni resetear el cooldown por accidente.
         return {
           ...fusionada,
           recargaFallida: !fusionada.completa && Boolean(previa?.recargaFallida),
+          deficitFallido: fusionada.completa ? null : (previa?.deficitFallido ?? null),
+          ultimoIntentoRecargaMs: fusionada.completa ? null : (previa?.ultimoIntentoRecargaMs ?? null),
         };
       }
 
       // Auto-heal, **una sola vez** por ciclo: faltan puntos respecto de `totalPuntos`, así
       // que se recarga la ventana entera y se descarta lo acumulado (que tenía el hueco).
-      const completa = await enVivoApi.posiciones(autenticacion, sesion, {});
+      //
+      // `limite: TRAZA_EN_VIVO_LIMITE_MAX` (no el default de 2000) es obligatorio acá: una
+      // jornada Z12 completa ronda 4300 puntos, así que sin el `limite` explícito el server
+      // trunca esta respuesta igual que el delta normal, `fusionarTraza(undefined, completa)`
+      // descarta la traza acumulada y la reemplaza por los primeros 2000 puntos (la polilínea
+      // rebobina a la mañana), y la respuesta trunca sigue trayendo `hayMas: true` — con lo
+      // que `recargaFallida` nunca se marca (ver abajo) y el ciclo de recarga completa se
+      // repite sin fin.
+      const completa = await enVivoApi.posiciones(autenticacion, sesion, {
+        limite: TRAZA_EN_VIVO_LIMITE_MAX,
+      });
       const recargada = fusionarTraza(undefined, completa);
-      return { ...recargada, recargaFallida: necesitaRecargaCompleta(recargada) };
+      // `recargaFallida` sale de si la recarga REALMENTE completó (`recargada.completa`), no
+      // de `necesitaRecargaCompleta` — que además de mirar lo mismo también da `false` cuando
+      // `hayMas` sigue en `true` (jornada > `TRAZA_EN_VIVO_LIMITE_MAX`), justo el caso en el
+      // que las guardas anti-bucle de `debeRecargar` (déficit + cooldown) más necesitan saber
+      // que la recarga falló. `ultimoIntentoRecargaMs` se graba siempre, haya completado o no:
+      // es lo único que impide que este caso (jornada > `TRAZA_EN_VIVO_LIMITE_MAX`, déficit
+      // creciendo de verdad en cada poll) siga disparando una recarga completa cada 10 s.
+      const completoAhora = recargada.completa;
+      return {
+        ...recargada,
+        recargaFallida: !completoAhora,
+        deficitFallido: completoAhora ? null : recargada.totalPuntos - recargada.puntos.length,
+        ultimoIntentoRecargaMs: ahora,
+      };
     },
   });
 }

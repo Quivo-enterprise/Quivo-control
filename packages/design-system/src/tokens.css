@@ -22,6 +22,7 @@
   --qv-color-success: #16a34a;
   --qv-color-warning: #d97706;
   --qv-color-warning-soft: #fef3c7;
+  --qv-color-info: #0891b2;
   --qv-color-border: #d8dde6;
   --qv-color-white: #ffffff;
 
@@ -84,6 +85,7 @@
     --qv-color-success: #4ade80;
     --qv-color-warning: #fbbf24;
     --qv-color-warning-soft: #451a03;
+    --qv-color-info: #22d3ee;
     --qv-color-border: #2a3342;
     --qv-color-white: #ffffff;
 

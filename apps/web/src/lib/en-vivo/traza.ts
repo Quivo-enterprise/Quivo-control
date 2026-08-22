@@ -11,12 +11,17 @@ import type { EstadoFrescura, PuntoTrazaGps, TrazaEnVivo } from '@quivo/shared';
  *
  * `gps_points.ts` es el timestamp del **fix** (reloj del dispositivo cuando se capturó la
  * posición), NO el de la ingesta. Al salir de Doze el teléfono descarga una ráfaga de
- * puntos con `ts` viejos — medido el 2026-08-18 contra producción: lag captura→servidor
- * con mediana 153-166 s, p95 684-814 s. Un cursor exclusivo (`desde = ultimo_ts`) los
- * descartaría **para siempre**, porque su `ts` ya quedó por debajo. Pidiendo 2 min hacia
- * atrás en cada poll esas ráfagas entran, y el dedupe por `ts|lat|lng` evita duplicarlas.
+ * puntos con `ts` viejos. Lo que importa acá no es la mediana del lag captura→servidor
+ * (153-166 s, medido el 2026-08-18 contra producción) sino su cola: p95 684-814 s, máximo
+ * observado 4275 s (~71 min). Un solape de 2 min cubre la mediana pero descarta **para
+ * siempre** cualquier ráfaga que aterrice más tarde que eso — el cursor (`desde = ultimo_ts
+ * - solape`) ya quedó por encima de su `ts`. 15 min iguala el `UMBRAL_INGESTA_VIVA_MS` que
+ * usa el server para declarar una sesión viva y cubre el p95 con margen. El costo es bajo:
+ * cada poll re-pide de nuevo los puntos de esa ventana (con el vehículo en movimiento
+ * normal, ~90 puntos / 5 KB), que el dedupe por `ts|lat|lng` de `fusionarTraza` absorbe sin
+ * duplicarlos.
  */
-export const SOLAPE_CURSOR_MS = 120_000;
+export const SOLAPE_CURSOR_MS = 900_000;
 
 /** Cadencia normal del poll de posiciones. */
 export const INTERVALO_POLL_MS = 10_000;
@@ -42,6 +47,22 @@ export const INTERVALO_POLL_RAPIDO_MS = 1_000;
  */
 export const UMBRAL_CORTE_POLL_MS = 30 * 60_000;
 
+/**
+ * Piso de tiempo entre dos disparos de la recarga completa, sin importar por qué se pidió.
+ *
+ * La guarda por déficit de `debeRecargar` corta el caso del hueco fijo (reingesta colisionada:
+ * el déficit no crece entre polls), pero NO alcanza sola cuando la ventana de la sesión supera
+ * `TRAZA_EN_VIVO_LIMITE_MAX` (5000 puntos): ahí la recarga completa nunca puede completar
+ * (`recargada.completa` da siempre `false`, ver `use-en-vivo.ts`) y el déficit
+ * (`totalPuntos - 5000`) SÍ crece en casi cada poll, porque `totalPuntos` es un `count(*)`
+ * vivo que sigue subiendo con el vehículo reportando. La guarda por déficit sola dejaría pasar
+ * eso — y volvería el bucle original: una descarga completa (~300 KB) cada 10 s, la traza
+ * acumulada descartada, la polilínea rebobinando cada vez. Este cooldown es un techo duro sobre
+ * la FRECUENCIA, independiente de la causa: como mucho una recarga completa cada
+ * `COOLDOWN_RECARGA_MS`, sea el déficit fijo o creciendo de verdad.
+ */
+export const COOLDOWN_RECARGA_MS = 60_000;
+
 /** Traza acumulada en la cache de TanStack Query: el último payload del server con los
  * puntos ya fusionados con lo que había. */
 export interface TrazaAcumulada extends TrazaEnVivo {
@@ -51,6 +72,15 @@ export interface TrazaAcumulada extends TrazaEnVivo {
   /** `true` si ya se recargó la ventana entera y AUN ASÍ quedó por debajo de `totalPuntos`.
    * Corta el bucle: ver `debeRecargar`. */
   recargaFallida: boolean;
+  /** Déficit (`totalPuntos - puntos.length`) que dejó la última recarga fallida, o `null`
+   * si no hubo ninguna (o la última recarga sí completó). Ver `debeRecargar`: la guarda
+   * compara el déficit ACTUAL contra este, no `totalPuntos` — que en una sesión viva sube
+   * en casi cada poll y nunca se queda quieto. */
+  deficitFallido: number | null;
+  /** `Date.now()` (reloj del navegador, ver `debeRecargar`) del último intento de recarga
+   * completa, exitoso o no, o `null` si todavía no se intentó ninguna. Piso de frecuencia
+   * independiente del déficit: ver `COOLDOWN_RECARGA_MS`. */
+  ultimoIntentoRecargaMs: number | null;
 }
 
 /**
@@ -88,6 +118,10 @@ export function fusionarTraza(
     cursor: ultimo?.ts ?? null,
     completa: puntos.length >= delta.totalPuntos,
     recargaFallida: false,
+    deficitFallido: null,
+    // Igual que `recargaFallida`/`deficitFallido`: el merge puro resetea, y es el llamador
+    // (`use-en-vivo.ts`) el que decide si corresponde arrastrar el valor previo o no.
+    ultimoIntentoRecargaMs: null,
   };
 }
 
@@ -112,22 +146,52 @@ export function necesitaRecargaCompleta(traza: TrazaAcumulada): boolean {
 }
 
 /**
- * Igual que `necesitaRecargaCompleta`, pero sin repetir una recarga que ya falló contra el
- * mismo `totalPuntos`.
+ * Igual que `necesitaRecargaCompleta`, pero con DOS guardas adicionales para no repetir una
+ * recarga completa sin sentido. Cada una corta un caso distinto:
  *
- * El caso que cubre: si en la base hay dos filas distintas (`event_id` distinto) con el
- * mismo `ts`, `lat` y `lng` — reingesta del mismo fix —, el dedupe del cliente las colapsa
- * y lo acumulado queda **permanentemente** por debajo de `totalPuntos`. Sin esta guarda,
- * cada poll dispararía una descarga completa de la traza para siempre. Se vuelve a intentar
- * en cuanto el total cambia, que es cuando puede haber un hueco nuevo y real.
+ * **1. Guarda por déficit fijo.** Si en la base hay dos filas distintas (`event_id`
+ * distinto) con el mismo `ts`, `lat` y `lng` — reingesta del mismo fix —, el dedupe del
+ * cliente las colapsa y lo acumulado queda **permanentemente** un punto por debajo de
+ * `totalPuntos`. Comparar `totalPuntos` entre polls (la guarda vieja) no sirve: es un
+ * `count(*)` **vivo** sobre la ventana de la sesión, sube en casi cada poll de una sesión
+ * viva, así que esa comparación nunca coincidía y no frenaba nada. Por eso se compara el
+ * **déficit** (`totalPuntos - puntos.length`), que para este caso se queda fijo aunque
+ * `totalPuntos` siga subiendo: mientras no crezca es el mismo hueco permanente y no vale la
+ * pena repetir la descarga. Si crece, apareció un hueco nuevo y real y sí conviene
+ * reintentar.
+ *
+ * **2. Cooldown temporal (`COOLDOWN_RECARGA_MS`).** La guarda 1 sola NO cubre una sesión
+ * cuya ventana supera `TRAZA_EN_VIVO_LIMITE_MAX` (5000 puntos): ahí la recarga completa
+ * nunca puede completar (`recargada.completa` da siempre `false`, ver `use-en-vivo.ts`) y el
+ * déficit (`totalPuntos - 5000`) SÍ crece en casi cada poll porque `totalPuntos` sigue
+ * subiendo con el vehículo reportando — con lo que la guarda 1 deja pasar
+ * (`deficitActual > previa.deficitFallido`) en cada ciclo y vuelve el bucle original: una
+ * descarga completa cada 10 s, la traza acumulada descartada, la polilínea rebobinando. El
+ * cooldown es un techo duro sobre la FRECUENCIA, aplicado ANTES que la guarda 1 y
+ * ortogonal a ella: no importa si el déficit está fijo o creciendo de verdad, como mucho se
+ * dispara una recarga completa cada `COOLDOWN_RECARGA_MS`.
+ *
+ * `ahoraMs` se inyecta como parámetro (nunca se llama `Date.now()` acá adentro) para que la
+ * función siga siendo pura y testeable: es una comparación de duración local entre dos polls
+ * del mismo navegador, así que el reloj del cliente es la referencia correcta (a diferencia
+ * de `antiguedadViva`, que sí corrige por el offset del servidor porque compara contra un
+ * `ts` que viajó por la red).
  */
 export function debeRecargar(
   previa: TrazaAcumulada | undefined,
   fusionada: TrazaAcumulada,
+  ahoraMs: number,
 ): boolean {
   if (!necesitaRecargaCompleta(fusionada)) return false;
-  if (previa?.recargaFallida && previa.totalPuntos === fusionada.totalPuntos) return false;
-  return true;
+  if (
+    previa?.ultimoIntentoRecargaMs != null &&
+    ahoraMs - previa.ultimoIntentoRecargaMs < COOLDOWN_RECARGA_MS
+  ) {
+    return false;
+  }
+  if (!previa?.recargaFallida || previa.deficitFallido === null) return true;
+  const deficitActual = fusionada.totalPuntos - fusionada.puntos.length;
+  return deficitActual > previa.deficitFallido;
 }
 
 /**
@@ -162,8 +226,10 @@ export function intervaloPoll(
   datos: Pick<TrazaEnVivo, 'hayMas' | 'inactivaDesdeMs'> | undefined,
 ): number | false {
   if (!datos) return INTERVALO_POLL_MS;
-  if (datos.hayMas) return INTERVALO_POLL_RAPIDO_MS;
+  // El corte por inactividad va PRIMERO: una sesión zombi cuya traza además excede `limite`
+  // (`hayMas: true`) tiene que cortar, no pollear a 1 s para siempre.
   if (datos.inactivaDesdeMs > UMBRAL_CORTE_POLL_MS) return false;
+  if (datos.hayMas) return INTERVALO_POLL_RAPIDO_MS;
   return INTERVALO_POLL_MS;
 }
 
@@ -190,26 +256,26 @@ export const PRESENTACION_FRESCURA: Record<EstadoFrescura, PresentacionFrescura>
   reportando: {
     etiqueta: 'Reportando',
     descripcion: 'El vehículo se mueve y el teléfono sincroniza.',
-    color: '#16a34a',
+    color: 'var(--qv-color-success)',
     esFalla: false,
   },
   detenido: {
     etiqueta: 'Detenido',
     descripcion:
       'El teléfono sincroniza pero no hay fixes nuevos: el vehículo está quieto (terminal o parada larga). No es una falla.',
-    color: '#0891b2',
+    color: 'var(--qv-color-info)',
     esFalla: false,
   },
   perdido: {
     etiqueta: 'Sin señal',
     descripcion: 'El teléfono no está llegando al servidor. Revisar batería, datos y permisos.',
-    color: '#dc2626',
+    color: 'var(--qv-color-danger)',
     esFalla: true,
   },
   sin_datos: {
     etiqueta: 'Sin datos',
     descripcion: 'La sesión existe pero todavía no entró ningún punto GPS.',
-    color: '#64748b',
+    color: 'var(--qv-text-secondary)',
     esFalla: false,
   },
 };

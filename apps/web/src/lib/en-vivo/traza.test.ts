@@ -3,6 +3,7 @@ import type { PuntoTrazaGps, TrazaEnVivo } from '@quivo/shared';
 import {
   antiguedadViva,
   clavePunto,
+  COOLDOWN_RECARGA_MS,
   debeRecargar,
   desdeConSolape,
   formatearAntiguedad,
@@ -17,6 +18,10 @@ import {
   INTERVALO_POLL_RAPIDO_MS,
   type TrazaAcumulada,
 } from './traza.js';
+
+/** Instante fijo de referencia para las comparaciones de cooldown (arbitrario, coherente con
+ * los `ts` de los puntos usados en el resto del archivo). */
+const AHORA_BASE_MS = Date.parse('2026-08-18T13:00:00.000Z');
 
 function punto(ts: string, lat = -17.38, lng = -66.15): PuntoTrazaGps {
   return { ts, lat, lng, accuracy: 8, speed: 5 };
@@ -209,26 +214,59 @@ describe('necesitaRecargaCompleta (auto-heal)', () => {
 });
 
 describe('debeRecargar (guarda contra el bucle de recargas)', () => {
-  const incompleta = (recargaFallida: boolean, totalPuntos = 40): TrazaAcumulada => ({
-    ...fusionarTraza(
-      undefined,
-      respuesta({ puntos: [punto('2026-08-18T13:00:00.000Z')], totalPuntos }),
-    ),
+  function puntosDe(cantidad: number): PuntoTrazaGps[] {
+    return Array.from({ length: cantidad }, (_, i) =>
+      punto(`2026-08-18T13:${String(i).padStart(2, '0')}:00.000Z`),
+    );
+  }
+
+  // `totalPuntos` sube en casi cada poll de una sesión viva (es un `count(*)` vivo sobre la
+  // ventana de la sesión) — por eso el helper deja variar `totalPuntos` y la cantidad de
+  // puntos acumulados por separado, para poder mantener el DÉFICIT fijo mientras el total
+  // cambia (el escenario real de A2). `ultimoIntentoRecargaMs` default `null` (= sin cooldown
+  // activo) para no afectar los casos que no lo ejercitan.
+  const incompleta = (
+    recargaFallida: boolean,
+    deficitFallido: number | null,
+    totalPuntos = 40,
+    puntosAcumulados = 1,
+    ultimoIntentoRecargaMs: number | null = null,
+  ): TrazaAcumulada => ({
+    ...fusionarTraza(undefined, respuesta({ puntos: puntosDe(puntosAcumulados), totalPuntos })),
     recargaFallida,
+    deficitFallido,
+    ultimoIntentoRecargaMs,
   });
 
   it('recarga la primera vez que detecta el hueco', () => {
-    expect(debeRecargar(undefined, incompleta(false))).toBe(true);
+    expect(debeRecargar(undefined, incompleta(false, null), AHORA_BASE_MS)).toBe(true);
   });
 
-  it('NO vuelve a recargar si la recarga anterior ya falló contra el mismo total', () => {
-    // Pasa con dos filas distintas en la base con el mismo ts/lat/lng (reingesta del mismo
-    // fix): el dedupe las colapsa y el acumulado nunca alcanza `totalPuntos`.
-    expect(debeRecargar(incompleta(true), incompleta(false))).toBe(false);
+  it('NO vuelve a recargar si el déficit no creció respecto de la recarga fallida anterior', () => {
+    // Dos filas distintas en la base con el mismo ts/lat/lng (reingesta del mismo fix): el
+    // dedupe las colapsa y el acumulado se queda un punto por debajo de `totalPuntos` para
+    // siempre. Déficit: 40 - 1 = 39, igual en ambos lados.
+    const previa = incompleta(true, 39, 40, 1);
+    const fusionada = incompleta(false, null, 40, 1);
+    expect(debeRecargar(previa, fusionada, AHORA_BASE_MS)).toBe(false);
   });
 
-  it('vuelve a intentar cuando el total cambió (hueco nuevo y real)', () => {
-    expect(debeRecargar(incompleta(true, 40), incompleta(false, 41))).toBe(true);
+  it('sigue SIN recargar aunque `totalPuntos` suba, mientras el déficit no crezca (A2)', () => {
+    // Escenario real de A2: la sesión sigue viva y `totalPuntos` sube de 40 a 42 entre polls,
+    // pero el hueco permanente sigue siendo el mismo (déficit 39 en ambos lados) — la guarda
+    // vieja, que comparaba `totalPuntos`, jamás frenaba esto.
+    const previa = incompleta(true, 39, 40, 1);
+    const fusionada = incompleta(false, null, 42, 3); // déficit: 42 - 3 = 39
+    expect(debeRecargar(previa, fusionada, AHORA_BASE_MS)).toBe(false);
+  });
+
+  it('vuelve a intentar cuando aparece un hueco nuevo y real (el déficit creció), fuera de cooldown', () => {
+    const previa = incompleta(true, 39, 40, 1);
+    const fusionada = incompleta(false, null, 42, 2); // déficit: 42 - 2 = 40, > 39
+    // Sin `ultimoIntentoRecargaMs` en `previa` no hay cooldown activo, así que este caso por sí
+    // solo no prueba el cooldown — eso lo cubre el describe de abajo. Acá solo se confirma que
+    // la guarda por déficit sigue funcionando con la firma nueva.
+    expect(debeRecargar(previa, fusionada, AHORA_BASE_MS)).toBe(true);
   });
 
   it('nunca recarga si la traza está completa', () => {
@@ -236,7 +274,45 @@ describe('debeRecargar (guarda contra el bucle de recargas)', () => {
       undefined,
       respuesta({ puntos: [punto('2026-08-18T13:00:00.000Z')], totalPuntos: 1 }),
     );
-    expect(debeRecargar(incompleta(true), completa)).toBe(false);
+    expect(debeRecargar(incompleta(true, 39), completa, AHORA_BASE_MS)).toBe(false);
+  });
+
+  describe('cooldown temporal (COOLDOWN_RECARGA_MS) — techo duro, independiente del déficit', () => {
+    // Escenario real: una sesión que quedó abierta (Finalizar recorrido no cierra la
+    // `sesion_operativa`) cruza `TRAZA_EN_VIVO_LIMITE_MAX` (5000 puntos). Ahí la recarga
+    // completa NUNCA puede completar (`recargada.completa` da siempre `false`) y el déficit
+    // (`totalPuntos - 5000`) crece en cada poll porque `totalPuntos` sigue subiendo — la guarda
+    // por déficit sola dejaría pasar una recarga completa cada 10 s para siempre.
+    const LIMITE = 5000;
+
+    it('NO dispara dentro del cooldown aunque el déficit haya crecido de verdad (sesión > TRAZA_EN_VIVO_LIMITE_MAX)', () => {
+      const previa = incompleta(true, 500, LIMITE + 500, LIMITE, AHORA_BASE_MS);
+      // `totalPuntos` sigue el `count(*)` vivo subiendo entre polls; el acumulado sigue topado
+      // en `LIMITE` porque la recarga completa nunca puede traer más de eso.
+      const fusionada = incompleta(false, null, LIMITE + 520, LIMITE); // déficit 520 > 500
+      const ahora = AHORA_BASE_MS + COOLDOWN_RECARGA_MS - 1; // todavía dentro del cooldown
+      expect(debeRecargar(previa, fusionada, ahora)).toBe(false);
+    });
+
+    it('vuelve a intentar una vez pasado el cooldown', () => {
+      const previa = incompleta(true, 500, LIMITE + 500, LIMITE, AHORA_BASE_MS);
+      const fusionada = incompleta(false, null, LIMITE + 520, LIMITE); // déficit 520 > 500
+      const ahora = AHORA_BASE_MS + COOLDOWN_RECARGA_MS; // cooldown recién cumplido
+      expect(debeRecargar(previa, fusionada, ahora)).toBe(true);
+    });
+
+    it('el cooldown también corta el caso de déficit fijo (no es un mecanismo nuevo y separado)', () => {
+      const previa = incompleta(true, 39, 40, 1, AHORA_BASE_MS);
+      const fusionada = incompleta(false, null, 40, 1); // déficit igual, ya frenaría sin cooldown
+      const ahora = AHORA_BASE_MS + 1_000;
+      expect(debeRecargar(previa, fusionada, ahora)).toBe(false);
+    });
+
+    it('sin un intento previo registrado (`ultimoIntentoRecargaMs: null`) no hay cooldown que aplicar', () => {
+      const previa = incompleta(true, 39, 40, 1, null);
+      const fusionada = incompleta(false, null, 42, 2); // déficit 40 > 39
+      expect(debeRecargar(previa, fusionada, AHORA_BASE_MS)).toBe(true);
+    });
   });
 });
 
@@ -290,6 +366,14 @@ describe('intervaloPoll', () => {
 
   it('corta por inactividad real (`inactivaDesdeMs`), no por `fin`', () => {
     expect(intervaloPoll({ hayMas: false, inactivaDesdeMs: UMBRAL_CORTE_POLL_MS + 1 })).toBe(false);
+  });
+
+  it('el corte por inactividad gana aunque el server siga avisando `hayMas` (A6)', () => {
+    // Una sesión zombi cuya traza excede `limite` sigue trayendo `hayMas: true` para siempre;
+    // sin este orden el poll quedaría a 1 s en vez de cortar.
+    expect(
+      intervaloPoll({ hayMas: true, inactivaDesdeMs: UMBRAL_CORTE_POLL_MS + 1 }),
+    ).toBe(false);
   });
 
   it('NO corta a un teléfono solo atrasado: el p95 del lag de ingesta (~814 s) sigue polleando', () => {
