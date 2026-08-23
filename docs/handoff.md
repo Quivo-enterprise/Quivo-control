@@ -6,17 +6,19 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Estado al 2026-08-22
+## Estado al 2026-08-23
 
-`main` = `df656cd` (PR #47). La **Entrega 3 está completa en código**: las tres piezas del mapa
-en vivo mergeadas — props de seguimiento en `RouteMap` (#45), backend `/en-vivo` (#46) y la
-página del panel (#47, con una segunda tanda de correcciones encima).
+`main` = `3abd558` (PR #48). La **Entrega 3 está completa en código y desplegada**: las tres
+piezas del mapa en vivo mergeadas — props de seguimiento en `RouteMap` (#45), backend
+`/en-vivo` (#46) y la página del panel (#47, con una segunda tanda de correcciones encima).
 
-En producción: `api:v4` sobre `quivo-api-00006-pfm` y el worker pool `quivo-worker-00004-hk7`,
-ambos en Cloud Run `southamerica-west1`; el panel sigue siendo `web:v1`
-(`quivo-web-00001-4jd`). **Acá sí hay drift ahora**: `main` tiene el backend y la página de
-`/en-vivo` que la imagen desplegada no tiene. Desplegar es manual (QUI-370), así que hasta que
-alguien corra el `gcloud run deploy` el mapa en vivo existe solo en el repo.
+En producción: **`api:v5` sobre `quivo-api-00007-pvm` y `web:v2` sobre `quivo-web-00002-55k`**,
+en Cloud Run `southamerica-west1`. **El drift del 22 de agosto está cerrado** — `/en-vivo`
+funciona en producción, verificado con login real (ver
+[Deploy de la Entrega 3](#deploy-de-la-entrega-3-2026-08-23)). El worker pool sigue en
+`quivo-worker-00004-hk7` con `api:v4`, a propósito: ningún commit de la Entrega 3 toca el
+código de ingesta y no valía la pena mover la ruta de la que depende el GPS del piloto.
+Desplegar sigue siendo manual (QUI-370).
 El APK en los teléfonos es el **build 7** (`versionCode` 7, EAS `e1d01284`, perfil `production`).
 
 **El piloto salió a la calle el 2026-08-18 por la tarde** — segunda jornada real, la primera con
@@ -50,14 +52,17 @@ la variación diaria de la operación.**
 
 ### Lo que no está cerrado
 
-- **`/en-vivo` está en `main` pero no en producción**, y el aviso de fondo sigue en pie: sobre
+- **El aviso de fondo de `/en-vivo` sigue en pie** aunque ya esté desplegado: sobre
   la geometría actual el mapa muestra con precisión un dato equivocado (ver la jornada del 18).
   La pantalla es honesta con lo que sabe — distingue "detenido" de "sin señal" —, pero el
   porcentaje de cumplimiento que la rodea sigue midiéndose contra una geometría que la
   operación real contradice.
-- **Verificación en navegador de §3.6 sin re-correr** tras los fixes del PR #47. Las capturas
-  del 2026-08-19 (`en-vivo-perdido.png`, `en-vivo-reportando.png`, sin versionar) son de la
-  versión previa a esas correcciones.
+- **`/en-vivo` nunca se vio con un vehículo reportando de verdad.** La verificación del
+  2026-08-23 se hizo sin nadie en la calle: la página resolvió bien el caso "sin datos"
+  (pausa del poll por inactividad, mapa con la ruta y los 26 puntos de control dibujados),
+  pero el camino con traza viva —`followPoint`, el solape de 15 min del cursor, las dos
+  guardas anti-bucle— **no se ejerció contra datos reales en producción**. Se cierra recién
+  en la próxima salida a la calle.
 - **Tres cosas que se dejaron fuera del PR #47 a propósito**: reflejar `sesionId`/`seguir` en la
   URL (no se puede compartir "estoy viendo el vehículo X"); el truncado de las opciones largas
   del `Select`; y el mismo defecto de `cumplimientos.find()` que sigue vivo en
@@ -2504,3 +2509,90 @@ diferida).
 firmado **después** del merge —un APK buildeado antes apunta al backend viejo— y correr los 7
 puntos de la prueba en teléfono real. El fallback sigue vigente: si el tracking en background
 falla categóricamente, el lunes se corre con registro manual del conductor.
+
+## Deploy de la Entrega 3 (2026-08-23)
+
+El mapa en vivo pasó del repo a producción. Dos servicios, no uno, y el camino destapó un
+defecto de build que llevaba cuatro días escondido.
+
+**Lo desplegado:** `api:v5` (`quivo-api-00007-pvm`) y `web:v2` (`quivo-web-00002-55k`), ambos
+en `southamerica-west1`. Sin migraciones: los PRs #45/#46/#47 no agregaron ninguna, y la última
+del repo (`20260817150000_sesiones_operativas_vehiculo_estado_idx`) ya estaba aplicada desde el
+18 de agosto.
+
+### La API también estaba atrasada, no solo el panel
+
+`api:v4` se construyó el 2026-08-18 13:24 UTC; el backend de `/en-vivo` (`fb8c5ab`, PR #46) se
+mergeó el 2026-08-19 04:44 UTC — **diez horas después**. Desplegar solo el panel lo habría
+dejado consultando rutas inexistentes: `GET /v1/reportes/en-vivo` contra producción devolvía
+**404** antes del deploy y **401** después, que es la prueba de que la ruta ahora existe y su
+guard la protege. Comparar la fecha de build de la imagen contra la del commit es el chequeo
+barato que conviene hacer siempre antes de dar por desplegado algo.
+
+`api:v5` arrastra además **`6dab41f` (QUI-342, filtros de cumplimiento en URL y exportación
+CSV)**, que no es de la Entrega 3 y toca la ruta de reportes de cumplimiento — donde vive la
+evidencia del piloto. Iba en `main` desde antes, con review y CI verde; se desplegó
+conscientemente, no por descuido. Decisión del CTO.
+
+**El worker quedó en `api:v4` a propósito.** Comparte imagen con la API por diseño (QUI-354),
+pero ningún commit de la Entrega 3 toca el código de ingesta, y el worker sostiene el GPS del
+piloto. Se prefirió la divergencia de tags antes que mover esa ruta sin necesidad.
+
+### La imagen del panel llevaba cuatro días sin poder construirse
+
+`web:v2` falló al primer intento:
+
+```
+packages/db postinstall: schema.prisma: file not found
+[ELIFECYCLE] Command failed with exit code 1
+```
+
+Causa: **`2e710e3` (PR #43, QUI-340)** agregó `"@quivo/db": "workspace:*"` a las
+`devDependencies` del `package.json` de la **raíz**, porque los specs de aceptación de Playwright
+lo necesitan para limpiar por Prisma. Como `turbo prune` incluye siempre el package.json de la
+raíz en el grafo podado, `packages/db` entró al build del panel —que no usa la base para nada— y
+su `postinstall` (`prisma generate`) reventó sin el `schema.prisma`, que `out/json/` no trae.
+
+Resuelto en `apps/web/Dockerfile` copiando el mismo remedio que la API ya tenía en
+`/Dockerfile:50`. Y al destrabarlo apareció una **segunda capa de la misma raíz**: `turbo run
+build --filter=@quivo/web...` también mete a `@quivo/db` en el scope y corre su script `build`
+(`prisma generate && tsc`), que carga `packages/db/prisma.config.ts`, que resuelve
+`DATABASE_URL` vía `env()` al cargarse — `PrismaConfigEnvError`. Mismo remedio que
+`/Dockerfile:28-40`: un `ARG DATABASE_URL` dummy de build-time. Verificado que no viaja a la
+imagen final (el stage `runner` arranca de `node:22-alpine` limpio).
+
+**La lección, que ya es la segunda vez que aparece en este proyecto:** la CI no construye
+imágenes Docker, así que **todo lo que solo se ejerce en el build de la imagen es un punto
+ciego**. Es exactamente el mismo patrón que el 2026-08-16 con `eas build` y el config plugin de
+Sentry. Un PR puede estar verde en CI y dejar una imagen inconstruible. Vale una issue para
+agregar el build de ambas imágenes a la CI.
+
+### La trampa de CORS que se esquivó
+
+`scripts/deploy-web.sh` cierra con un paso 4 que reescribe `CORS_ORIGIN` en la API con el
+`status.url` del panel. Pero Cloud Run expone el servicio en **dos URLs válidas** y no coinciden:
+`status.url` devuelve `https://quivo-web-3mrviblcia-tl.a.run.app`, mientras que `CORS_ORIGIN`
+estaba —y sigue— en `https://quivo-web-424426714260.southamerica-west1.run.app`. Como
+`apps/api/src/main.ts:52` compara **string exacto**, dejar correr ese paso habría roto el
+preflight para quien tenga el panel abierto en la URL de número-de-proyecto: sin login. El deploy
+se hizo a mano salteando el paso 4; `CORS_ORIGIN` quedó intacto y el preflight verificado
+devuelve 204 con el origen correcto.
+
+Como el servicio web no cambia de URL en un redeploy, ese paso no aportaba nada. **Queda como
+deuda**: que `CORS_ORIGIN` acepte un solo origen cuando el servicio tiene dos URLs es frágil, y
+`deploy-web.sh` debería no tocarlo o aceptar ambos.
+
+### Verificación
+
+Con login real en el panel de producción: `/en-vivo` responde 200, los tres endpoints
+(`en-vivo`, `contexto`, `posiciones`) devuelven **200**, cero errores y cero warnings de consola,
+el mapa dibuja la ruta con los 26 puntos de control y el selector carga las 2 sesiones abiertas.
+
+La página mostró **"Seguimiento en pausa — no llega nada al servidor desde hace 90 h 38 min"**,
+que es el comportamiento correcto: no hay nadie manejando desde la jornada del 18, y el panel
+corta el poll por inactividad real en vez de quedar golpeando la API. Captura en
+`en-vivo-produccion-2026-08-23.png` (sin versionar).
+
+**Lo que esta verificación NO prueba:** el camino con un vehículo reportando de verdad
+—`followPoint`, el solape de 15 minutos del cursor, las dos guardas anti-bucle— nunca se ejerció
+contra datos vivos. Eso se cierra en la próxima salida a la calle.
