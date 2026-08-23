@@ -57,12 +57,18 @@ la variación diaria de la operación.**
   La pantalla es honesta con lo que sabe — distingue "detenido" de "sin señal" —, pero el
   porcentaje de cumplimiento que la rodea sigue midiéndose contra una geometría que la
   operación real contradice.
-- **`/en-vivo` nunca se vio con un vehículo reportando de verdad.** La verificación del
-  2026-08-23 se hizo sin nadie en la calle: la página resolvió bien el caso "sin datos"
-  (pausa del poll por inactividad, mapa con la ruta y los 26 puntos de control dibujados),
-  pero el camino con traza viva —`followPoint`, el solape de 15 min del cursor, las dos
-  guardas anti-bucle— **no se ejerció contra datos reales en producción**. Se cierra recién
-  en la próxima salida a la calle.
+- **`/en-vivo` nunca se vio con un vehículo EN MOVIMIENTO.** La prueba de QA del 2026-08-23
+  sí confirmó la cadena completa con un dispositivo reportando (login → punto → worker → mapa,
+  9 s de lag), pero con el teléfono quieto: 2 puntos a 3 m de distancia. `followPoint`, el
+  solape de 15 min del cursor y las dos guardas anti-bucle **siguen sin ejercitarse contra una
+  traza que avanza**. Se cierra recién con alguien desplazándose.
+- **La app puede quedar en un bucle de refresh rechazado sin avisarle al conductor** (ver
+  [prueba de QA](#prueba-de-qa-con-la-pasante-2026-08-23--la-cadena-completa-verificada-en-vivo)).
+  Es el defecto más serio abierto hoy: reproduce el fallo silencioso del día 1 del piloto.
+- **`logout` responde 204 sin cerrar la sesión del servidor** cuando el refresh token ya era
+  inválido.
+- **La sesión de QA `9c63dda6` contaminó la evidencia** con un cumplimiento que nadie recorrió:
+  hay que excluirla de los reportes del piloto.
 - **Tres cosas que se dejaron fuera del PR #47 a propósito**: reflejar `sesionId`/`seguir` en la
   URL (no se puede compartir "estoy viendo el vehículo X"); el truncado de las opciones largas
   del `Select`; y el mismo defecto de `cumplimientos.find()` que sigue vivo en
@@ -2596,3 +2602,124 @@ corta el poll por inactividad real en vez de quedar golpeando la API. Captura en
 **Lo que esta verificación NO prueba:** el camino con un vehículo reportando de verdad
 —`followPoint`, el solape de 15 minutos del cursor, las dos guardas anti-bucle— nunca se ejerció
 contra datos vivos. Eso se cierra en la próxima salida a la calle.
+
+## El listado de `/en-vivo` miente sobre las sesiones de días anteriores (2026-08-23)
+
+Encontrado al preparar una prueba de QA, horas después de desplegar la Entrega 3. **No lo detectó
+la verificación del deploy** porque solo se mira cuando hay una sesión con puntos de otra jornada.
+
+`GET /v1/reportes/en-vivo` (listado) y `GET /v1/reportes/en-vivo/:id/posiciones` (detalle)
+devuelven datos **contradictorios para la misma sesión**. Para `07d24b22` (1111AAA, abierta desde
+el 18-ago, con 223 puntos y 15 cumplimientos reales en la base):
+
+| Campo | Listado | Detalle |
+|---|---|---|
+| `totalPuntos` | 0 | 223 |
+| `ultimoFixTs` | `null` | `2026-08-18T23:23:18Z` |
+| `estadoFrescura` | `sin_datos` | `perdido` |
+
+**Causa raíz, en `en-vivo.service.ts:199`:** el `LEFT JOIN LATERAL` del listado acota los puntos a
+la jornada boliviana **de hoy** (`trazaDesde`/`trazaHasta`), mientras que el criterio de inclusión
+de sesiones de la línea 202 admite sesiones colgadas de **cualquier día**
+(`so.fin IS NULL AND so.estado = 'activa'`). Los puntos del 18-ago quedan fuera de la ventana, el
+LATERAL agrega sobre cero filas, y con `ultimoFixTs`/`ultimoIngresoTs` en null `clasificarFrescura`
+(:111) devuelve `sin_datos` y `derivarFrescura` (:142) cae al fallback `ahora − inicio`. La cuenta
+cierra exacto: `2026-08-23T16:15:45.774Z − 2026-08-18T21:23:47.262Z = 413 518 512 ms`, que es el
+valor que devolvió el endpoint.
+
+El camino de `posiciones` (`:305-315`, `:339`) usa una ventana **anclada a la sesión**
+(`inicio − 60 s` … `min(fin ?? ahora + 2 h, inicio + 36 h)`), no al calendario. **Ese es el
+correcto**: `sin_datos` debe significar "esta sesión nunca reportó nada", y una sesión con 223
+puntos que dejó de sincronizar hace días es `perdido`. El comentario de `:89-94` afirma lo
+contrario — describe una intención que el código no implementa, y hay que corregirlo con el fix.
+
+**Alcance real: cosmético.** El mapa, la traza y el corte del poll se alimentan **solo** de
+`/posiciones` (`page.tsx:64,67`; `use-en-vivo.ts:84,93`). El `inactivaDesdeMs` del listado nunca
+llega a `intervaloPoll`, y `useSesionesEnVivo` tiene `refetchInterval` fijo de 30 s sin condición.
+Lo que sí se degrada es la **etiqueta del desplegable** (`page.tsx:456-463`) y el **orden por
+defecto** (SQL `:203`).
+
+**Trampa del fix, no obviarla:** el `ORDER BY` es `fix."ultimoFixTs" DESC NULLS LAST`. Hoy el
+zombi ordena último porque su `ultimoFixTs` es `NULL` *por el bug*. Al corregir el LATERAL pasa a
+tener fecha real y se ordena **arriba** de una sesión fresca que todavía no mandó su primer punto
+(esa sí `NULL` → NULLS LAST): el panel abriría por defecto en una sesión muerta. Hay que cambiar
+el `ORDER BY` en el mismo PR.
+
+**A verificar antes de dar el fix por bueno:** el comentario de `:175-177` justifica las cotas
+constantes por poda de particiones en tiempo de plan. Con el LATERAL correlacionado eso pasa a ser
+*runtime pruning*, que debería aplicar — pero hay que confirmarlo con `EXPLAIN (ANALYZE, BUFFERS)`
+contra producción, no darlo por sentado.
+
+**El hueco de test que lo dejó pasar:** `en-vivo.service.test.ts` (`describe('listarHoy')`,
+:296-350) no cubre una sesión con puntos fuera de la jornada de hoy.
+
+También queda anotado, del review del PR #49: el `COPY` nuevo de `apps/web/Dockerfile` depende de
+la devDependency `@quivo/db` del `package.json` de la raíz, que el propio comentario califica de
+incidental. Si algún día se saca, el build del panel falla con un `COPY ... not found` opaco. No se
+pudo dejar un comentario-guarda en el `package.json` porque JSON no admite comentarios — queda
+acá.
+
+## Prueba de QA con la pasante (2026-08-23) — la cadena completa, verificada en vivo
+
+Primera vez que `/en-vivo` se ve con un dispositivo reportando de verdad. La prueba no recorrió
+ninguna ruta: la pasante activó la app desde su casa, quieta, solo para confirmar que el dato
+llega. **Cerró el último pendiente real de la Entrega 3.**
+
+**Lo que quedó probado, con números:**
+
+```
+17:29:24  201  POST /v1/mobile/auth/vehiculo
+17:29:57  201  POST /v1/mobile/auth/conductor
+17:29:58       sesión 9c63dda6 creada, primer punto GPS
+17:31:10       estadoFrescura=reportando, antigüedadIngesta=9 s
+```
+
+Login → sesión → punto → worker validando → mapa dibujando, con **9 segundos** entre el fix y la
+ingesta. Muy por debajo de la mediana de 153-166 s del piloto (que se midió con el vehículo en
+movimiento y Doze activo; con el teléfono despierto y quieto el camino es directo).
+
+**Lo que NO quedó probado:** la traza en movimiento. Los dos únicos puntos están a 3 m uno del
+otro con `speed: -1` — el SDK deja de emitir con el dispositivo quieto, que es el comportamiento
+correcto. `followPoint`, el solape de 15 min del cursor y las dos guardas anti-bucle **siguen sin
+ejercitarse contra datos vivos**. Se cierra recién con alguien desplazándose.
+
+### Tres defectos nuevos, todos de la misma familia: fallan sin avisar
+
+Ninguno rompe fuerte. Los tres hacen que algo roto parezca sano — el patrón que ya costó el día 1
+del piloto.
+
+**1. La app reintenta un refresh rechazado para siempre, en silencio.** La pasante activó la app a
+las 16:18 y durante **42 minutos** el teléfono hizo `POST /v1/mobile/auth/refresh` cada 15 s
+obteniendo **401 todas las veces** (29 intentos en la primera ventana de 6 h medida, cero éxitos, y
+ni un solo login móvil completo en 12 h). Ella veía la pantalla de operación normal y creía estar
+grabando; no salía un solo `sync/batches`.
+
+Causa: `restaurarSesion` (`apps/mobile/src/features/auth/use-auth-movil.ts:65-86`) encuentra la
+sesión guardada en `SecureStore` y la da por válida mirando solo `refreshTokenExpiresAt` (TTL de 30
+días, `MOBILE_REFRESH_TTL_SECONDS`), así que va directo a `etapa:'operacion'` con el `sesionId`
+viejo sin pasar por login. Cuando el servidor rechaza ese refresh token, **no hay recuperación**:
+la app no manda al usuario a la pantalla de login, se queda en el bucle. Es el defecto más serio de
+los tres.
+
+**2. `logout` devuelve 204 sin cerrar la sesión del servidor.** A las 17:00:50 el logout respondió
+`204`, pero la sesión zombi siguió `estado: 'activa'`. `logout()` busca la sesión por el hash del
+refresh token, y ese token ya era inválido — no encontró nada que cerrar. Limpió el `SecureStore`
+del teléfono (que fue lo que cortó el bucle) y fue un no-op server-side, reportando éxito.
+
+**3. El listado de `/en-vivo` reporta `sin_datos` para sesiones con puntos.** Documentado en
+detalle en [la sección anterior](#el-listado-de-en-vivo-miente-sobre-las-sesiones-de-días-anteriores-2026-08-23).
+
+### Lo que sí funcionó como estaba diseñado
+
+El `updateMany` del login (`apps/api/src/modules/auth-movil/auth-movil.service.ts:223-231`)
+**cerró la sesión zombi del 19-ago** al autenticarse de nuevo, exactamente como se esperaba. El
+mecanismo agregado en `b8fd7de` para las sesiones colgadas funciona — el problema es que solo se
+dispara en un login completo, y la app puede pasar días sin hacer uno.
+
+### Deuda que deja la prueba
+
+La sesión `9c63dda6` es de QA, no de operación real, y **ya generó un cumplimiento válido**
+(`distanciaM: 72.5`, `cumplido: true`, `validadoPor: 'worker'`): la casa de la pasante cae dentro
+del radio de 150 m de un punto de control de la Z12. Esa sesión va a aparecer en los reportes como
+un recorrido con cumplimientos que nadie hizo. **Hay que excluirla al analizar la evidencia del
+piloto.** Es un caso concreto del riesgo ya conocido de mezclar pruebas con la base de producción.
