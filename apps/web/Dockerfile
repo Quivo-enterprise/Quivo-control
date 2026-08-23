@@ -33,9 +33,37 @@ FROM base AS builder
 WORKDIR /app
 RUN corepack prepare pnpm@11.3.0 --activate
 
+# Prisma 7: `packages/db/prisma.config.ts` resuelve `DATABASE_URL` vía `env()` al CARGAR el
+# config file. Por la misma trampa de root-devDependency explicada más abajo (@quivo/db
+# termina en el grafo de @quivo/web pese a que apps/web no la usa), `pnpm turbo run build
+# --filter=@quivo/web...` incluye a @quivo/db en el scope y corre su script `build`
+# (`prisma generate && tsc`), que carga ese config file igual que el `postinstall`. Sin esta
+# variable revienta con "PrismaConfigEnvError: Cannot resolve environment variable:
+# DATABASE_URL" antes de compilar nada — mismo síntoma, mismo fix que /Dockerfile:28-40
+# (stage `builder` de @quivo/api). Valor dummy, sólo de build-time, sólo en este stage
+# `builder` — el stage `runner` arranca de `node:22-alpine` de nuevo (no hereda `ENV` de
+# `builder`), así que esta URL no existe en la imagen final ni se usa para conectar a nada
+# real (apps/web tampoco tiene runtime DB access).
+ARG DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public"
+ENV DATABASE_URL=${DATABASE_URL}
+
 # Sólo los package.json podados primero — capa de `pnpm install` cacheable por Docker que
 # no se invalida por cambios en el código fuente (sólo por cambios de dependencias).
 COPY --from=pruner /app/out/json/ .
+
+# Trampa de `turbo prune`: el `package.json` de la RAÍZ (2e710e3, QUI-340) agregó
+# "@quivo/db": "workspace:*" a sus devDependencies porque los specs de aceptación de
+# Playwright lo necesitan para limpiar datos vía Prisma tras cada test — no porque @quivo/web
+# use la base de datos. `turbo prune @quivo/web --docker` SIEMPRE incluye el package.json de
+# la raíz en el grafo podado, así que packages/db entra igual, y su `postinstall`
+# (`prisma generate`, packages/db/package.json:10) corre durante el `pnpm install` de abajo.
+# `out/json/` sólo trae package.json — sin el schema real, ese postinstall revienta con
+# "Could not find Prisma Schema that is required for this command". Se copia acá, antes del
+# install, para no perder el cacheo por capas del paso de arriba salvo que el schema/las
+# migraciones cambien. Mismo fix que /Dockerfile:50 (stage `builder` de @quivo/api, que sí
+# usa Prisma de entrada).
+COPY --from=pruner /app/out/full/packages/db/prisma ./packages/db/prisma
+
 RUN pnpm install --frozen-lockfile --filter=@quivo/web...
 
 # Fuente completa podada (@quivo/web + @quivo/shared + @quivo/design-system).
