@@ -70,3 +70,36 @@ export const AdminResetPasswordRequestSchema = z.object({
   newPassword: z.string().min(8).max(128),
 });
 export type AdminResetPasswordRequest = z.infer<typeof AdminResetPasswordRequestSchema>;
+
+/** Registro público de QUIVO Rutas. El backend fija siempre `rol = pasajero`; el cliente
+ * no puede elegir un rol administrativo durante el alta. */
+export const PassengerRegisterRequestSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  email: z.string().email().max(320),
+  password: z.string().min(8).max(128),
+  termsVersion: z.string().trim().min(1).max(40),
+});
+export type PassengerRegisterRequest = z.infer<typeof PassengerRegisterRequestSchema>;
+
+export const PassengerProfileSchema = z.object({
+  id: z.string().uuid(),
+  userId: z.string().min(1),
+  email: z.string().email(),
+  name: z.string().min(1).max(120),
+  emailVerified: z.boolean(),
+  locale: z.string().min(2).max(20),
+  timezone: z.string().min(1).max(80),
+  termsVersion: z.string().min(1).max(40),
+  termsAcceptedAt: z.string().datetime(),
+  estado: z.enum(['activo', 'suspendido', 'eliminado']),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type PassengerProfile = z.infer<typeof PassengerProfileSchema>;
+
+export const UpdatePassengerProfileRequestSchema = z.object({
+  name: z.string().trim().min(2).max(120).optional(),
+  locale: z.string().trim().min(2).max(20).optional(),
+  timezone: z.string().trim().min(1).max(80).optional(),
+});
+export type UpdatePassengerProfileRequest = z.infer<typeof UpdatePassengerProfileRequestSchema>;

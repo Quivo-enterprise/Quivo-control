@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import {
   Alert,
   Button,
@@ -15,6 +15,7 @@ import {
   PageHeader,
   SearchInput,
   Select,
+  Tabs,
   type DataColumn,
   type SelectOption,
 } from '@quivo/design-system';
@@ -22,7 +23,7 @@ import {
 export interface EntityFieldConfig {
   key: string;
   label: string;
-  kind: 'text' | 'number' | 'select' | 'color';
+  kind: 'text' | 'number' | 'select' | 'color' | 'image';
   options?: SelectOption[];
   required?: boolean;
   helperText?: string;
@@ -37,6 +38,18 @@ export interface EntityFieldConfig {
   suggestions?: string[];
   normalize?: (value: string) => string;
   validate?: (value: string, values: Record<string, string>) => string | undefined;
+  accept?: string;
+  upload?: (file: File) => Promise<string>;
+  section?: string;
+  sectionDescription?: string;
+  colorPresets?: Array<{ label: string; values: Record<string, string> }>;
+}
+
+export interface FormTabConfig {
+  value: string;
+  label: string;
+  fieldKeys: string[];
+  description?: string;
 }
 
 /** CRUD real contra `apps/api` (QUI-220..224) — sin `delete` porque ningún endpoint de M1
@@ -61,6 +74,11 @@ interface ModuleTablePageProps<T extends Record<string, unknown>> {
   fields: EntityFieldConfig[];
   createDefaults?: Record<string, unknown>;
   dataSource?: ModuleDataSource<T>;
+  formTabs?: FormTabConfig[];
+  formPresentation?: 'modal' | 'inline';
+  renderFormPreview?: (values: Record<string, string>) => ReactNode;
+  /** Acciones específicas del módulo; recibe una función para reflejar la fila actualizada. */
+  renderRowActions?: (row: T, replaceRow: (updated: T) => void) => ReactNode;
 }
 
 function toFormValues(
@@ -96,6 +114,10 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
   fields,
   createDefaults = {},
   dataSource,
+  formTabs,
+  formPresentation = 'modal',
+  renderFormPreview,
+  renderRowActions,
 }: ModuleTablePageProps<T>) {
   const [rows, setRows] = useState<T[]>(initialRows ?? []);
   const [query, setQuery] = useState('');
@@ -108,10 +130,16 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [uploadingFields, setUploadingFields] = useState<Record<string, boolean>>({});
   const [desactivacionPendiente, setDesactivacionPendiente] = useState<Record<
     string,
     unknown
   > | null>(null);
+  const [activeFormTab, setActiveFormTab] = useState(formTabs?.[0]?.value ?? '');
+
+  const resetFormTab = () => {
+    setActiveFormTab(formTabs?.[0]?.value ?? '');
+  };
 
   useEffect(() => {
     if (!dataSource) {
@@ -160,6 +188,7 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
     setFormError(null);
     setFieldErrors({});
     setFormValues(toFormValues(createDefaults, fields));
+    resetFormTab();
     setIsCreating(true);
   };
 
@@ -167,6 +196,7 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
     setFormError(null);
     setFieldErrors({});
     setFormValues(toFormValues(row, fields));
+    resetFormTab();
     setEditingRow(row);
   };
 
@@ -186,6 +216,27 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
       delete next[key];
       return next;
     });
+  };
+
+  const handleImageUpload = async (field: EntityFieldConfig, file: File | undefined) => {
+    if (!file || !field.upload) return;
+    setUploadingFields((previous) => ({ ...previous, [field.key]: true }));
+    try {
+      handleFieldChange(field.key, await field.upload(file));
+    } catch (error) {
+      setFieldErrors((previous) => ({
+        ...previous,
+        [field.key]: error instanceof Error ? error.message : 'No se pudo subir la imagen.',
+      }));
+    } finally {
+      setUploadingFields((previous) => ({ ...previous, [field.key]: false }));
+    }
+  };
+
+  const applyColorPreset = (values: Record<string, string>) => {
+    for (const [key, value] of Object.entries(values)) {
+      handleFieldChange(key, value);
+    }
   };
 
   function guardar(parsed: Record<string, unknown>) {
@@ -281,6 +332,172 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
   };
 
   const isFormOpen = isCreating || editingRow !== null;
+  const formTitle = editingRow ? `Editar ${entityLabel}` : `Nuevo ${entityLabel}`;
+  const formBody = (
+    <>
+      {formError && (
+        <Alert variant="danger" title="No se pudo guardar" style={{ marginBottom: '1rem' }}>
+          {formError}
+        </Alert>
+      )}
+      {formTabs?.length ? (
+        <>
+          <Tabs
+            items={formTabs.map(({ value, label }) => ({ value, label }))}
+            value={activeFormTab}
+            onValueChange={setActiveFormTab}
+            className="module-form-tabs"
+          />
+          {formTabs.find((tab) => tab.value === activeFormTab)?.description ? (
+            <p className="module-form-tabs__description">
+              {formTabs.find((tab) => tab.value === activeFormTab)?.description}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+      <FormGroup id="entity-form" onSubmit={handleSubmit} noValidate>
+        {fields
+          .filter((field) => {
+            if (!formTabs?.length) return true;
+            return formTabs
+              .find((tab) => tab.value === activeFormTab)
+              ?.fieldKeys.includes(field.key);
+          })
+          .map((field, index, visibleFields) => (
+            <Fragment key={field.key}>
+              {field.section && field.section !== visibleFields[index - 1]?.section ? (
+                <div className="module-form-section">
+                  <strong>{field.section}</strong>
+                  {field.sectionDescription ? <span>{field.sectionDescription}</span> : null}
+                </div>
+              ) : null}
+              <FormField
+                key={field.key}
+                label={field.label}
+                htmlFor={field.key}
+                required={field.required}
+                error={fieldErrors[field.key]}
+                helperText={field.helperText}
+              >
+                {field.kind === 'select' ? (
+                  <Select
+                    id={field.key}
+                    name={field.key}
+                    options={field.options ?? []}
+                    value={formValues[field.key] ?? ''}
+                    onChange={(event) => handleFieldChange(field.key, event.target.value)}
+                    aria-invalid={Boolean(fieldErrors[field.key])}
+                  />
+                ) : field.kind === 'color' ? (
+                  <>
+                    <ColorPicker
+                      id={field.key}
+                      name={field.key}
+                      value={formValues[field.key] ?? ''}
+                      onChange={(next) => handleFieldChange(field.key, next)}
+                    />
+                    {field.colorPresets?.length ? (
+                      <div className="module-color-presets" aria-label="Paletas sugeridas">
+                        {field.colorPresets.map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            className="module-color-preset"
+                            onClick={() => applyColorPreset(preset.values)}
+                            title={`Aplicar paleta ${preset.label}`}
+                          >
+                            <span aria-hidden="true">
+                              {Object.values(preset.values)
+                                .slice(0, 4)
+                                .map((color) => (
+                                  <i key={color} style={{ background: color }} />
+                                ))}
+                            </span>
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                ) : field.kind === 'image' ? (
+                  <div className="module-image-upload">
+                    <div className="module-image-upload__preview">
+                      {formValues[field.key] ? (
+                        <img src={formValues[field.key]} alt="Vista previa del símbolo" />
+                      ) : (
+                        <span>◇</span>
+                      )}
+                    </div>
+                    <div className="module-image-upload__actions">
+                      <label className="module-image-upload__select" htmlFor={field.key}>
+                        {uploadingFields[field.key]
+                          ? 'Subiendo…'
+                          : formValues[field.key]
+                            ? 'Cambiar símbolo'
+                            : 'Subir símbolo'}
+                        <input
+                          id={field.key}
+                          name={field.key}
+                          type="file"
+                          accept={field.accept ?? 'image/png,image/jpeg,image/webp'}
+                          onChange={(event) => handleImageUpload(field, event.target.files?.[0])}
+                          disabled={uploadingFields[field.key] || isSaving}
+                          aria-invalid={Boolean(fieldErrors[field.key])}
+                        />
+                      </label>
+                      <span>
+                        {uploadingFields[field.key]
+                          ? 'Subiendo símbolo…'
+                          : 'PNG, JPG o WebP · hasta 2 MB'}
+                      </span>
+                      {formValues[field.key] ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleFieldChange(field.key, '')}
+                        >
+                          Quitar
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <Input
+                      id={field.key}
+                      name={field.key}
+                      type={field.kind === 'number' ? 'number' : 'text'}
+                      value={formValues[field.key] ?? ''}
+                      onChange={(event) => handleFieldChange(field.key, event.target.value)}
+                      onBlur={(event) => {
+                        if (field.normalize)
+                          handleFieldChange(field.key, field.normalize(event.target.value));
+                      }}
+                      required={field.required}
+                      placeholder={field.placeholder}
+                      maxLength={field.maxLength}
+                      pattern={field.pattern}
+                      inputMode={field.inputMode}
+                      autoComplete={field.autoComplete}
+                      list={field.suggestions?.length ? `${field.key}-suggestions` : undefined}
+                      aria-invalid={Boolean(fieldErrors[field.key])}
+                    />
+                    {field.suggestions?.length ? (
+                      <datalist id={`${field.key}-suggestions`}>
+                        {field.suggestions.map((value) => (
+                          <option key={value} value={value} />
+                        ))}
+                      </datalist>
+                    ) : null}
+                  </>
+                )}
+              </FormField>
+            </Fragment>
+          ))}
+      </FormGroup>
+    </>
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -288,127 +505,114 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
         title={title}
         subtitle={subtitle}
         actions={
-          <Button onClick={openCreate} style={{ textTransform: 'capitalize' }}>
-            Nuevo {entityLabel}
-          </Button>
+          !isFormOpen || formPresentation === 'modal' ? (
+            <Button onClick={openCreate} style={{ textTransform: 'capitalize' }}>
+              Nuevo {entityLabel}
+            </Button>
+          ) : undefined
         }
       />
-      <SearchInput
-        placeholder={searchPlaceholder}
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        onClear={() => setQuery('')}
-      />
-      {loadError && (
-        <Alert variant="danger" title="No se pudo cargar">
-          {loadError}
-        </Alert>
-      )}
-      {isLoading ? (
-        <Loader label={`Cargando ${entityLabel}s...`} />
-      ) : (
-        <DataTable
-          columns={columns}
-          rows={filteredRows}
-          empty={query ? `Sin resultados para "${query}".` : 'Sin registros para mostrar.'}
-          actions={(row) => (
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-              <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
-                Editar
-              </Button>
-              {!dataSource && (
-                <Button variant="ghost" size="sm" onClick={() => setDeletingRow(row)}>
-                  Eliminar
-                </Button>
-              )}
+      {formPresentation === 'inline' && isFormOpen ? (
+        <section className="module-inline-editor" aria-label={formTitle}>
+          <header className="module-inline-editor__header">
+            <div>
+              <span className="module-inline-editor__eyebrow">Edición en pantalla</span>
+              <h2>{formTitle}</h2>
+              <p>
+                {dataSource
+                  ? 'Completa los datos y guarda los cambios sin salir de esta vista.'
+                  : 'Cambios de demo — no se persisten en un backend real.'}
+              </p>
             </div>
-          )}
-        />
-      )}
-
-      <Modal
-        open={isFormOpen}
-        title={editingRow ? `Editar ${entityLabel}` : `Nuevo ${entityLabel}`}
-        description={
-          dataSource ? undefined : 'Cambios de demo — no se persisten en un backend real.'
-        }
-        onClose={closeForm}
-        footer={
-          <>
+            <Button variant="ghost" onClick={closeForm} disabled={isSaving}>
+              Volver a la lista
+            </Button>
+          </header>
+          <div
+            className={`module-inline-editor__body${renderFormPreview ? ' module-inline-editor__body--with-preview' : ''}`}
+          >
+            <div className="module-inline-editor__form">{formBody}</div>
+            {renderFormPreview ? (
+              <div className="module-inline-editor__preview">{renderFormPreview(formValues)}</div>
+            ) : null}
+          </div>
+          <footer className="module-inline-editor__footer">
             <Button variant="ghost" onClick={closeForm} disabled={isSaving}>
               Cancelar
             </Button>
-            <Button type="submit" form="entity-form" disabled={isSaving}>
+            <Button
+              type="submit"
+              form="entity-form"
+              disabled={isSaving || Object.values(uploadingFields).some(Boolean)}
+            >
               {isSaving ? 'Guardando...' : 'Guardar'}
             </Button>
-          </>
-        }
-      >
-        {formError && (
-          <Alert variant="danger" title="No se pudo guardar" style={{ marginBottom: '1rem' }}>
-            {formError}
-          </Alert>
-        )}
-        <FormGroup id="entity-form" onSubmit={handleSubmit} noValidate>
-          {fields.map((field) => (
-            <FormField
-              key={field.key}
-              label={field.label}
-              htmlFor={field.key}
-              required={field.required}
-              error={fieldErrors[field.key]}
-              helperText={field.helperText}
-            >
-              {field.kind === 'select' ? (
-                <Select
-                  id={field.key}
-                  name={field.key}
-                  options={field.options ?? []}
-                  value={formValues[field.key] ?? ''}
-                  onChange={(event) => handleFieldChange(field.key, event.target.value)}
-                  aria-invalid={Boolean(fieldErrors[field.key])}
-                />
-              ) : field.kind === 'color' ? (
-                <ColorPicker
-                  id={field.key}
-                  name={field.key}
-                  value={formValues[field.key] ?? ''}
-                  onChange={(next) => handleFieldChange(field.key, next)}
-                />
-              ) : (
-                <>
-                  <Input
-                    id={field.key}
-                    name={field.key}
-                    type={field.kind === 'number' ? 'number' : 'text'}
-                    value={formValues[field.key] ?? ''}
-                    onChange={(event) => handleFieldChange(field.key, event.target.value)}
-                    onBlur={(event) => {
-                      if (field.normalize)
-                        handleFieldChange(field.key, field.normalize(event.target.value));
-                    }}
-                    required={field.required}
-                    placeholder={field.placeholder}
-                    maxLength={field.maxLength}
-                    pattern={field.pattern}
-                    inputMode={field.inputMode}
-                    autoComplete={field.autoComplete}
-                    list={field.suggestions?.length ? `${field.key}-suggestions` : undefined}
-                    aria-invalid={Boolean(fieldErrors[field.key])}
-                  />
-                  {field.suggestions?.length ? (
-                    <datalist id={`${field.key}-suggestions`}>
-                      {field.suggestions.map((value) => (
-                        <option key={value} value={value} />
-                      ))}
-                    </datalist>
-                  ) : null}
-                </>
+          </footer>
+        </section>
+      ) : (
+        <>
+          <SearchInput
+            placeholder={searchPlaceholder}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onClear={() => setQuery('')}
+          />
+          {loadError && (
+            <Alert variant="danger" title="No se pudo cargar">
+              {loadError}
+            </Alert>
+          )}
+          {isLoading ? (
+            <Loader label={`Cargando ${entityLabel}s...`} />
+          ) : (
+            <DataTable
+              columns={columns}
+              rows={filteredRows}
+              empty={query ? `Sin resultados para "${query}".` : 'Sin registros para mostrar.'}
+              actions={(row) => (
+                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                  {renderRowActions?.(row, (updated) =>
+                    setRows((previous) =>
+                      previous.map((current) =>
+                        String(current.id) === String(updated.id) ? updated : current,
+                      ),
+                    ),
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
+                    Editar
+                  </Button>
+                  {!dataSource && (
+                    <Button variant="ghost" size="sm" onClick={() => setDeletingRow(row)}>
+                      Eliminar
+                    </Button>
+                  )}
+                </div>
               )}
-            </FormField>
-          ))}
-        </FormGroup>
-      </Modal>
+            />
+          )}
+
+          <Modal
+            open={formPresentation === 'modal' && isFormOpen}
+            title={formTitle}
+            description={
+              dataSource ? undefined : 'Cambios de demo — no se persisten en un backend real.'
+            }
+            onClose={closeForm}
+            footer={
+              <>
+                <Button variant="ghost" onClick={closeForm} disabled={isSaving}>
+                  Cancelar
+                </Button>
+                <Button type="submit" form="entity-form" disabled={isSaving}>
+                  {isSaving ? 'Guardando...' : 'Guardar'}
+                </Button>
+              </>
+            }
+          >
+            {formBody}
+          </Modal>
+        </>
+      )}
 
       {!dataSource && (
         <ConfirmDialog

@@ -23,6 +23,12 @@ import { SyncModule } from './modules/sync/index.js';
 import { ReportesModule } from './modules/reportes/index.js';
 import { AuditoriaModule } from './modules/auditoria/index.js';
 import { AuthMovilModule } from './modules/auth-movil/index.js';
+import { MediaModule } from './modules/media/index.js';
+import { PublicMobilityModule } from './modules/public-mobility/public-mobility.module.js';
+import { PasajerosModule } from './modules/pasajeros/pasajeros.module.js';
+import { NotificacionesModule } from './modules/notificaciones/notificaciones.module.js';
+import { PlanesModule } from './modules/planes/planes.module.js';
+import { PasajerosDatosModule } from './modules/pasajeros-datos/pasajeros-datos.module.js';
 
 @Module({
   imports: [
@@ -44,6 +50,12 @@ import { AuthMovilModule } from './modules/auth-movil/index.js';
     HealthModule,
     AuthModule,
     AuthMovilModule,
+    MediaModule,
+    PublicMobilityModule,
+    PasajerosModule,
+    NotificacionesModule,
+    PlanesModule,
+    PasajerosDatosModule,
     SindicatosModule,
     SociosModule,
     VehiculosModule,

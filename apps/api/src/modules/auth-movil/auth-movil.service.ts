@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/co
 import { hashPassword, verifyPassword } from 'better-auth/crypto';
 import { Prisma, withTenantContext } from '@quivo/db';
 import {
+  LineaDistintivoTipoSchema,
   TurnoSchema,
   type AuthConductorMovilRequest,
   type AuthConductorMovilResponse,
@@ -32,6 +33,9 @@ type VehiculoCredencial = {
   tipo: string;
   marca: string;
   modelo: string;
+  numeroInterno: string | null;
+  distintivo: string | null;
+  cartelSuperior: string | null;
   credencialHash: string | null;
 };
 
@@ -52,7 +56,7 @@ export class AuthMovilService {
       CONTEXTO_ADMIN,
       (tx) =>
         tx.$queryRaw<VehiculoCredencial[]>`
-        SELECT id, "sindicatoId", placa, tipo, marca, modelo, "credencialHash"
+        SELECT id, "sindicatoId", placa, tipo, marca, modelo, "numeroInterno", distintivo, "cartelSuperior", "credencialHash"
         FROM vehiculos
         WHERE estado = 'activo'
           AND (
@@ -104,7 +108,15 @@ export class AuthMovilService {
     return {
       challengeToken: token.value,
       expiresAt: expiresAt.toISOString(),
-      vehiculo: { placa: vehiculo.placa, tipo: vehiculo.tipo, marca: vehiculo.marca, modelo: vehiculo.modelo },
+      vehiculo: {
+        placa: vehiculo.placa,
+        tipo: vehiculo.tipo,
+        marca: vehiculo.marca,
+        modelo: vehiculo.modelo,
+        numeroInterno: vehiculo.numeroInterno,
+        distintivo: vehiculo.distintivo,
+        cartelSuperior: vehiculo.cartelSuperior,
+      },
     };
   }
 
@@ -469,8 +481,24 @@ function toResumenAsignacion(row: AsignacionOperativa): ResumenAsignacionMovil {
     id: row.id,
     fecha: fechaISO(row.fecha),
     horario: TurnoSchema.parse(row.horario),
+    horaSalida: row.horaSalida?.toISOString() ?? null,
+    horaPresentacion: row.horaPresentacion?.toISOString() ?? null,
     venceAt: row.venceAt.toISOString(),
-    linea: { codigo: row.ruta.linea.codigo, nombre: row.ruta.linea.nombre },
+    linea: {
+      codigo: row.ruta.linea.codigo,
+      nombre: row.ruta.linea.nombre,
+      color: row.ruta.linea.color,
+      colorSecundario: row.ruta.linea.colorSecundario,
+      colorTexto: row.ruta.linea.colorTexto,
+      colorTerciario: row.ruta.linea.colorTerciario,
+      colorFondo: row.ruta.linea.colorFondo,
+      nombreCorto: row.ruta.linea.nombreCorto,
+      lema: row.ruta.linea.lema,
+      logoUrl: row.ruta.linea.logoUrl,
+      distintivoTipo: LineaDistintivoTipoSchema.nullable().parse(row.ruta.linea.distintivoTipo),
+      distintivoValor: row.ruta.linea.distintivoValor,
+      cartelSuperior: row.ruta.linea.cartelSuperior,
+    },
     ruta: { sentido: row.ruta.sentido },
   };
 }
@@ -485,6 +513,8 @@ function toContextoOperativo(sesionId: string, row: AsignacionOperativa): Contex
       id: row.id,
       fecha: fechaISO(row.fecha),
       horario: TurnoSchema.parse(row.horario),
+      horaSalida: row.horaSalida?.toISOString() ?? null,
+      horaPresentacion: row.horaPresentacion?.toISOString() ?? null,
       venceAt: row.venceAt.toISOString(),
     },
     vehiculo: {
@@ -493,6 +523,9 @@ function toContextoOperativo(sesionId: string, row: AsignacionOperativa): Contex
       tipo: row.vehiculo.tipo,
       marca: row.vehiculo.marca,
       modelo: row.vehiculo.modelo,
+      numeroInterno: row.vehiculo.numeroInterno,
+      distintivo: row.vehiculo.distintivo,
+      cartelSuperior: row.vehiculo.cartelSuperior,
     },
     conductor: {
       id: row.conductor.id,
@@ -505,6 +538,16 @@ function toContextoOperativo(sesionId: string, row: AsignacionOperativa): Contex
       codigo: row.ruta.linea.codigo,
       nombre: row.ruta.linea.nombre,
       color: row.ruta.linea.color,
+      colorSecundario: row.ruta.linea.colorSecundario,
+      colorTexto: row.ruta.linea.colorTexto,
+      colorTerciario: row.ruta.linea.colorTerciario,
+      colorFondo: row.ruta.linea.colorFondo,
+      nombreCorto: row.ruta.linea.nombreCorto,
+      lema: row.ruta.linea.lema,
+      logoUrl: row.ruta.linea.logoUrl,
+      distintivoTipo: LineaDistintivoTipoSchema.nullable().parse(row.ruta.linea.distintivoTipo),
+      distintivoValor: row.ruta.linea.distintivoValor,
+      cartelSuperior: row.ruta.linea.cartelSuperior,
     },
     ruta: { id: row.ruta.id, sentido: row.ruta.sentido },
   };

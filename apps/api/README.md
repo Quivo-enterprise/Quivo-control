@@ -35,6 +35,20 @@ pnpm --filter @quivo/api start     # node dist/main.js — sirve en :3001 (PORT 
   el módulo `sindicatos` real (QUI-220) exponga su propio CRUD.
 - `POST /v1/auth/login` / `POST /v1/auth/refresh` (QUI-219) — ver sección Auth abajo.
 
+### Mobility pública para QUIVO Rutas
+
+- `GET /v1/public/mobility/cities` — catálogo de ciudades y estado de cobertura.
+- `GET /v1/public/mobility/lines?cityId=cochabamba&q=...` — líneas publicadas de una ciudad.
+- `GET /v1/public/mobility/stops?cityId=cochabamba&q=...` — paradas publicadas de una ciudad.
+- `GET /v1/public/mobility/lines/:id?cityId=cochabamba`, `/routes/:id` y `/stops/:id` —
+  detalles con comprobación de ciudad.
+- `POST /v1/public/mobility/journeys/search` acepta `cityId`; si se omite, conserva
+  compatibilidad y usa `cochabamba` durante la migración de clientes.
+
+La migración `20260819100000_mobility_city_scope` debe aplicarse antes de desplegar esta
+versión de la API y antes de habilitar los feature flags
+`VITE_MOBILITY_CITY_FILTER` / `EXPO_PUBLIC_MOBILITY_CITY_FILTER` en QUIVO Rutas.
+
 ### Auth operativa móvil
 
 - `POST /v1/mobile/auth/vehiculo` — placa + PIN + dispositivo; emite desafío corto.

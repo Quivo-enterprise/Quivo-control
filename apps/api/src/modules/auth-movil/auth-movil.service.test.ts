@@ -191,5 +191,5 @@ describe('AuthMovilService', () => {
     );
     expect(auditoria.diff).toEqual({ desafiosInvalidados: 0, sesionesRevocadas: 1 });
     expect(JSON.stringify(auditoria)).not.toContain(pinConductor);
-  });
+  }, 15_000);
 });

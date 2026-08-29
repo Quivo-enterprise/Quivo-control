@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Alert, Button, FormField, Input, PlateBadge, Select } from '@quivo/design-system';
+import { Alert, Button, FormField, Input, PlateBadge, Select, Tabs } from '@quivo/design-system';
 import {
   COLORES_VEHICULO,
   CrearVehiculoSchema,
@@ -61,6 +61,9 @@ interface FormValues {
   modelo: string;
   color: ColorVehiculo | '';
   colorSecundario: ColorVehiculo | '';
+  numeroInterno: string;
+  distintivo: string;
+  cartelSuperior: string;
   capacidad: string;
   estado: string;
 }
@@ -128,6 +131,9 @@ function valoresIniciales(vehicle: Vehiculo | null, sindicatoId: string | null):
     modelo: vehicle?.modelo ?? '',
     color: vehicle?.color ?? 'blanco',
     colorSecundario: vehicle?.colorSecundario ?? '',
+    numeroInterno: vehicle?.numeroInterno ?? '',
+    distintivo: vehicle?.distintivo ?? '',
+    cartelSuperior: vehicle?.cartelSuperior ?? '',
     capacidad: String(vehicle?.capacidad ?? 20),
     estado: vehicle?.estado ?? 'activo',
   };
@@ -153,12 +159,14 @@ export function VehicleFormPanel({
   const [plateVerification, setPlateVerification] = useState<VerificacionPlacaVehiculo | null>(
     null,
   );
+  const [activeFormTab, setActiveFormTab] = useState('general');
 
   useEffect(() => {
     setValues(valoresIniciales(vehicle, sindicatoIdDelActor));
     setErrors({});
     setFormError(null);
     setPlateVerification(null);
+    setActiveFormTab('general');
   }, [vehicle, sindicatoIdDelActor]);
 
   const sociosDisponibles = useMemo(
@@ -256,6 +264,9 @@ export function VehicleFormPanel({
       modelo: values.modelo,
       color: values.color,
       colorSecundario: values.colorSecundario || null,
+      numeroInterno: values.numeroInterno || null,
+      distintivo: values.distintivo || null,
+      cartelSuperior: values.cartelSuperior || null,
       capacidad,
       estado: vehicle ? (values.estado as EstadoVehiculo) : ('pendiente' as const),
     };
@@ -284,6 +295,9 @@ export function VehicleFormPanel({
           modelo: parsed.data.modelo,
           color: parsed.data.color,
           colorSecundario: parsed.data.colorSecundario,
+          numeroInterno: parsed.data.numeroInterno,
+          distintivo: parsed.data.distintivo,
+          cartelSuperior: parsed.data.cartelSuperior,
           capacidad: parsed.data.capacidad,
         };
         await onSave(update);
@@ -351,328 +365,438 @@ export function VehicleFormPanel({
 
       {/* Formulario Principal + Panel Lateral */}
       <form id="vehicle-form" className="vehicle-panel-body" onSubmit={handleSubmit} noValidate>
+        <div className="vehicle-form-tabs-row">
+          <Tabs
+            items={[
+              { value: 'general', label: 'Datos generales' },
+              { value: 'operacion', label: 'Operación y edición' },
+            ]}
+            value={activeFormTab}
+            onValueChange={setActiveFormTab}
+            className="vehicle-form-tabs"
+          />
+          <p className="vehicle-form-tabs__description">
+            {activeFormTab === 'operacion'
+              ? 'Configura la identidad visible, el uso operativo y la señalización del trufi.'
+              : 'Completa la identificación, propiedad y ficha técnica de la unidad.'}
+          </p>
+        </div>
         <div className="vehicle-panel-main">
-          {/* Fila: Placa e Insignia Boliviana */}
-          <section className="vehicle-form-section">
-            <div className="vehicle-form-section__heading">
-              <span>01</span>
-              <div>
-                <h3>Identificación de la unidad</h3>
-                <p>La placa se normaliza y verifica automáticamente en toda la red QUIVO.</p>
-              </div>
-            </div>
-            <div className="vehicle-plate-row">
-              <div className="vehicle-plate-row__input">
-                <FormField
-                  label="Placa *"
-                  htmlFor="vehiculo-placa"
-                  required
-                  error={errors.placa}
-                  helperText={
-                    isVerifyingPlate
-                      ? 'Verificando disponibilidad...'
-                      : plateVerification?.disponible
-                        ? 'Formato RUAT válido · placa disponible'
-                        : placaNormalizada === vehicle?.placaNormalizada
-                          ? 'Placa actual de esta unidad'
-                          : 'Formato RUAT: 123ABC o 1234ABC, sin espacios ni guiones'
-                  }
-                >
-                  <Input
-                    id="vehiculo-placa"
-                    value={values.placa}
-                    onChange={(event) => handlePlateChange(event.target.value)}
-                    onBlur={verifyPlate}
-                    autoComplete="off"
-                    autoCapitalize="characters"
-                    spellCheck={false}
-                    placeholder="1234ABC"
-                    maxLength={7}
-                    pattern="[0-9]{3,4}[A-Za-z]{3}"
-                    fullWidth
+          {activeFormTab === 'general' && (
+            <>
+              {/* Fila: Placa e Insignia Boliviana */}
+              <section className="vehicle-form-section">
+                <div className="vehicle-form-section__heading">
+                  <span>01</span>
+                  <div>
+                    <h3>Identificación de la unidad</h3>
+                    <p>La placa se normaliza y verifica automáticamente en toda la red QUIVO.</p>
+                  </div>
+                </div>
+                <div className="vehicle-plate-row">
+                  <div className="vehicle-plate-row__input">
+                    <FormField
+                      label="Placa *"
+                      htmlFor="vehiculo-placa"
+                      required
+                      error={errors.placa}
+                      helperText={
+                        isVerifyingPlate
+                          ? 'Verificando disponibilidad...'
+                          : plateVerification?.disponible
+                            ? 'Formato RUAT válido · placa disponible'
+                            : placaNormalizada === vehicle?.placaNormalizada
+                              ? 'Placa actual de esta unidad'
+                              : 'Formato RUAT: 123ABC o 1234ABC, sin espacios ni guiones'
+                      }
+                    >
+                      <Input
+                        id="vehiculo-placa"
+                        value={values.placa}
+                        onChange={(event) => handlePlateChange(event.target.value)}
+                        onBlur={verifyPlate}
+                        autoComplete="off"
+                        autoCapitalize="characters"
+                        spellCheck={false}
+                        placeholder="1234ABC"
+                        maxLength={7}
+                        pattern="[0-9]{3,4}[A-Za-z]{3}"
+                        fullWidth
+                      />
+                    </FormField>
+                    {plateVerification && !plateVerification.disponible && (
+                      <Alert
+                        variant="danger"
+                        title="Placa duplicada"
+                        style={{ marginTop: '0.5rem' }}
+                      >
+                        Ya registrada en{' '}
+                        {plateVerification.coincidencia?.sindicatoNombre ?? 'otro sindicato'}.
+                      </Alert>
+                    )}
+                    {plateVerification?.disponible && (
+                      <div className="vehicle-plate-validation vehicle-plate-validation--success">
+                        <Check size={15} strokeWidth={3} aria-hidden="true" />
+                        <span>La placa cumple el formato boliviano y está disponible.</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <PlateBadge
+                    plate={placaNormalizada || '123ABC'}
+                    className="vehicle-form-live-plate"
                   />
-                </FormField>
-                {plateVerification && !plateVerification.disponible && (
-                  <Alert variant="danger" title="Placa duplicada" style={{ marginTop: '0.5rem' }}>
-                    Ya registrada en{' '}
-                    {plateVerification.coincidencia?.sindicatoNombre ?? 'otro sindicato'}.
-                  </Alert>
-                )}
-                {plateVerification?.disponible && (
-                  <div className="vehicle-plate-validation vehicle-plate-validation--success">
-                    <Check size={15} strokeWidth={3} aria-hidden="true" />
-                    <span>La placa cumple el formato boliviano y está disponible.</span>
+                </div>
+              </section>
+            </>
+          )}
+
+          {activeFormTab === 'operacion' && (
+            <>
+              {/* Configuración operativa */}
+              <section className="vehicle-form-section">
+                <div className="vehicle-form-section__heading">
+                  <span>02</span>
+                  <div>
+                    <h3>Configuración operativa</h3>
+                    <p>Selecciona la carrocería para obtener referencias de capacidad y uso.</p>
+                  </div>
+                </div>
+                <div className="vehicle-type-section">
+                  <label className="vehicle-type-section__label">Tipo de vehículo *</label>
+                  <div
+                    className="vehicle-type-cards-grid"
+                    role="radiogroup"
+                    aria-label="Tipo de vehículo"
+                  >
+                    {TIPOS_VEHICULO.map((t) => {
+                      const selected = values.tipo === t.codigo;
+                      return (
+                        <button
+                          key={t.codigo}
+                          type="button"
+                          className={`vehicle-type-card-btn ${selected ? 'vehicle-type-card-btn--active' : ''}`}
+                          onClick={() => setField('tipo', t.codigo as TipoVehiculo)}
+                          role="radio"
+                          aria-checked={selected}
+                        >
+                          {selected && (
+                            <span className="vehicle-type-card-btn__badge">
+                              <Check size={12} strokeWidth={3} />
+                            </span>
+                          )}
+                          <VehicleIconIllustration tipo={t.codigo as TipoVehiculo} />
+                          <span className="vehicle-type-card-btn__title">{t.nombre}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <small className="vehicle-type-section__hint">
+                    Selecciona el tipo de vehículo que mejor lo describe.
+                  </small>
+                </div>
+              </section>
+            </>
+          )}
+
+          {activeFormTab === 'general' && (
+            <>
+              {/* Grid de Formulario de 2 Columnas (Layout Exacto del Mockup) */}
+              <section className="vehicle-form-section">
+                <div className="vehicle-form-section__heading">
+                  <span>03</span>
+                  <div>
+                    <h3>Propiedad y ficha técnica</h3>
+                    <p>Completa los datos que identificarán la unidad en controles y reportes.</p>
+                  </div>
+                </div>
+                <div className="vehicle-form-grid">
+                  {/* Fila 1: Sindicato | Color principal */}
+                  {esAdminQuivo && !vehicle ? (
+                    <FormField
+                      label="Sindicato *"
+                      htmlFor="vehiculo-sindicatoId"
+                      required
+                      error={errors.sindicatoId}
+                    >
+                      <Select
+                        id="vehiculo-sindicatoId"
+                        options={sindicatoOptions}
+                        placeholder="Selecciona un sindicato"
+                        value={values.sindicatoId}
+                        onChange={(event) => {
+                          setField('sindicatoId', event.target.value);
+                          setField('socioId', '');
+                        }}
+                        fullWidth
+                      />
+                    </FormField>
+                  ) : (
+                    <FormField label="Sindicato *" htmlFor="vehiculo-sindicato-disabled">
+                      <Input
+                        id="vehiculo-sindicato-disabled"
+                        value={
+                          sindicatoOptions.find((o) => o.value === values.sindicatoId)?.label ??
+                          'Sindicato 1º de Mayo'
+                        }
+                        disabled
+                        leftSlot={<Building2 size={16} className="input-icon" />}
+                        fullWidth
+                      />
+                    </FormField>
+                  )}
+
+                  <FormField
+                    label="Color principal *"
+                    htmlFor="vehiculo-color"
+                    required
+                    error={errors.color}
+                  >
+                    <div className="color-select-wrapper">
+                      <span
+                        className="color-dot-indicator"
+                        style={{ background: colorMuestra(values.color) }}
+                      />
+                      <Select
+                        id="vehiculo-color"
+                        options={COLORES_VEHICULO.map((c) => ({
+                          label: c.nombre,
+                          value: c.codigo,
+                        }))}
+                        value={values.color}
+                        onChange={(event) => setField('color', event.target.value as ColorVehiculo)}
+                        fullWidth
+                      />
+                    </div>
+                  </FormField>
+
+                  {/* Fila 2: Socio propietario | Color secundario */}
+                  <FormField
+                    label="Socio propietario *"
+                    htmlFor="vehiculo-socioId"
+                    error={errors.socioId}
+                    helperText={!values.socioId ? 'Sin propietario no podrá activarse' : undefined}
+                  >
+                    <Select
+                      id="vehiculo-socioId"
+                      options={sociosDisponibles.map((socio) => ({
+                        label: `${socio.nombre} · ${socio.documentoIdentidad}`,
+                        value: socio.id,
+                      }))}
+                      placeholder={
+                        values.sindicatoId
+                          ? 'Selecciona un socio'
+                          : 'Selecciona primero el sindicato'
+                      }
+                      value={values.socioId}
+                      onChange={(event) => setField('socioId', event.target.value)}
+                      disabled={!values.sindicatoId}
+                      fullWidth
+                    />
+                  </FormField>
+
+                  <FormField
+                    label="Color secundario"
+                    htmlFor="vehiculo-colorSecundario"
+                    error={errors.colorSecundario}
+                  >
+                    <div className="color-select-wrapper">
+                      <span
+                        className="color-dot-indicator"
+                        style={{
+                          background: values.colorSecundario
+                            ? colorMuestra(values.colorSecundario)
+                            : '#cbd5e1',
+                        }}
+                      />
+                      <Select
+                        id="vehiculo-colorSecundario"
+                        options={[
+                          { label: 'Ninguno', value: '' },
+                          ...COLORES_VEHICULO.map((c) => ({ label: c.nombre, value: c.codigo })),
+                        ]}
+                        value={values.colorSecundario}
+                        onChange={(event) =>
+                          setField('colorSecundario', event.target.value as ColorVehiculo)
+                        }
+                        fullWidth
+                      />
+                    </div>
+                  </FormField>
+
+                  {/* Fila 3: Marca | Capacidad */}
+                  <FormField
+                    label="Marca *"
+                    htmlFor="vehiculo-marcaCatalogo"
+                    required
+                    error={errors.marca}
+                  >
+                    <Select
+                      id="vehiculo-marcaCatalogo"
+                      options={marcaOptions}
+                      placeholder="Selecciona una marca"
+                      value={values.marcaCatalogo}
+                      onChange={(event) => {
+                        const selected = event.target.value;
+                        setField('marcaCatalogo', selected);
+                        setField('marca', selected === MARCA_OTRA ? '' : selected);
+                      }}
+                      fullWidth
+                    />
+                  </FormField>
+
+                  <FormField
+                    label="Capacidad *"
+                    htmlFor="vehiculo-capacidad"
+                    required
+                    error={errors.capacidad}
+                  >
+                    <Input
+                      id="vehiculo-capacidad"
+                      type="number"
+                      min={1}
+                      max={200}
+                      step={1}
+                      value={values.capacidad}
+                      onChange={(event) => setField('capacidad', event.target.value)}
+                      leftSlot={<Users size={16} className="input-icon" />}
+                      rightSlot="pasajeros"
+                      fullWidth
+                    />
+                  </FormField>
+
+                  {values.marcaCatalogo === MARCA_OTRA && (
+                    <FormField
+                      label="Otra marca *"
+                      htmlFor="vehiculo-marca-otra"
+                      required
+                      error={errors.marca}
+                    >
+                      <Input
+                        id="vehiculo-marca-otra"
+                        value={values.marca}
+                        onChange={(event) => setField('marca', event.target.value)}
+                        placeholder="Especifica la marca"
+                        maxLength={50}
+                        fullWidth
+                      />
+                    </FormField>
+                  )}
+
+                  <FormField
+                    label="Modelo *"
+                    htmlFor="vehiculo-modelo"
+                    required
+                    error={errors.modelo}
+                  >
+                    <Input
+                      id="vehiculo-modelo"
+                      value={values.modelo}
+                      onChange={(event) => setField('modelo', event.target.value)}
+                      placeholder="Ej. LO-915"
+                      maxLength={50}
+                      leftSlot={<Package size={16} className="input-icon" />}
+                      fullWidth
+                    />
+                  </FormField>
+
+                  <div className="vehicle-state-summary">
+                    <span
+                      className={`vehicle-state-summary__dot vehicle-state-summary__dot--${vehicle ? values.estado : 'pendiente'}`}
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <small>Estado de la unidad</small>
+                      <strong>{NOMBRE_ESTADO[vehicle ? values.estado : 'pendiente']}</strong>
+                      <span>
+                        {vehicle
+                          ? 'El estado se gestiona desde las acciones del listado.'
+                          : 'Toda unidad nueva se registra pendiente hasta completar su validación.'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {capacidadAtipica && (
+                  <div className="vehicle-capacity-warning" role="status">
+                    <AlertTriangle size={18} aria-hidden="true" />
+                    <span>
+                      La capacidad es poco habitual para el tipo seleccionado. Verifica el dato
+                      antes de guardar.
+                    </span>
                   </div>
                 )}
-              </div>
+              </section>
+            </>
+          )}
 
-              <PlateBadge
-                plate={placaNormalizada || '123ABC'}
-                className="vehicle-form-live-plate"
-              />
-            </div>
-          </section>
-
-          {/* Selector de Tipo de Vehículo */}
-          <section className="vehicle-form-section">
-            <div className="vehicle-form-section__heading">
-              <span>02</span>
-              <div>
-                <h3>Configuración operativa</h3>
-                <p>Selecciona la carrocería para obtener referencias de capacidad y uso.</p>
-              </div>
-            </div>
-            <div className="vehicle-type-section">
-              <label className="vehicle-type-section__label">Tipo de vehículo *</label>
-              <div
-                className="vehicle-type-cards-grid"
-                role="radiogroup"
-                aria-label="Tipo de vehículo"
-              >
-                {TIPOS_VEHICULO.map((t) => {
-                  const selected = values.tipo === t.codigo;
-                  return (
-                    <button
-                      key={t.codigo}
-                      type="button"
-                      className={`vehicle-type-card-btn ${selected ? 'vehicle-type-card-btn--active' : ''}`}
-                      onClick={() => setField('tipo', t.codigo as TipoVehiculo)}
-                      role="radio"
-                      aria-checked={selected}
-                    >
-                      {selected && (
-                        <span className="vehicle-type-card-btn__badge">
-                          <Check size={12} strokeWidth={3} />
-                        </span>
-                      )}
-                      <VehicleIconIllustration tipo={t.codigo as TipoVehiculo} />
-                      <span className="vehicle-type-card-btn__title">{t.nombre}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <small className="vehicle-type-section__hint">
-                Selecciona el tipo de vehículo que mejor lo describe.
-              </small>
-            </div>
-          </section>
-
-          {/* Grid de Formulario de 2 Columnas (Layout Exacto del Mockup) */}
-          <section className="vehicle-form-section">
-            <div className="vehicle-form-section__heading">
-              <span>03</span>
-              <div>
-                <h3>Propiedad y ficha técnica</h3>
-                <p>Completa los datos que identificarán la unidad en controles y reportes.</p>
-              </div>
-            </div>
-            <div className="vehicle-form-grid">
-              {/* Fila 1: Sindicato | Color principal */}
-              {esAdminQuivo && !vehicle ? (
-                <FormField
-                  label="Sindicato *"
-                  htmlFor="vehiculo-sindicatoId"
-                  required
-                  error={errors.sindicatoId}
-                >
-                  <Select
-                    id="vehiculo-sindicatoId"
-                    options={sindicatoOptions}
-                    placeholder="Selecciona un sindicato"
-                    value={values.sindicatoId}
-                    onChange={(event) => {
-                      setField('sindicatoId', event.target.value);
-                      setField('socioId', '');
-                    }}
-                    fullWidth
-                  />
-                </FormField>
-              ) : (
-                <FormField label="Sindicato *" htmlFor="vehiculo-sindicato-disabled">
-                  <Input
-                    id="vehiculo-sindicato-disabled"
-                    value={
-                      sindicatoOptions.find((o) => o.value === values.sindicatoId)?.label ??
-                      'Sindicato 1º de Mayo'
-                    }
-                    disabled
-                    leftSlot={<Building2 size={16} className="input-icon" />}
-                    fullWidth
-                  />
-                </FormField>
-              )}
-
-              <FormField
-                label="Color principal *"
-                htmlFor="vehiculo-color"
-                required
-                error={errors.color}
-              >
-                <div className="color-select-wrapper">
-                  <span
-                    className="color-dot-indicator"
-                    style={{ background: colorMuestra(values.color) }}
-                  />
-                  <Select
-                    id="vehiculo-color"
-                    options={COLORES_VEHICULO.map((c) => ({ label: c.nombre, value: c.codigo }))}
-                    value={values.color}
-                    onChange={(event) => setField('color', event.target.value as ColorVehiculo)}
-                    fullWidth
-                  />
+          {activeFormTab === 'operacion' && (
+            <>
+              <section className="vehicle-form-section vehicle-identity-section">
+                <div className="vehicle-form-section__heading">
+                  <span>04</span>
+                  <div>
+                    <h3>Identidad visible y ubicación</h3>
+                    <p>Configura lo que ayuda a reconocer este trufi en la calle y en el mapa.</p>
+                  </div>
                 </div>
-              </FormField>
+                <div className="vehicle-form-grid">
+                  <FormField
+                    label="Número interno"
+                    htmlFor="vehiculo-numeroInterno"
+                    error={errors.numeroInterno}
+                    helperText="Código corto de la unidad, por ejemplo 120-01."
+                  >
+                    <Input
+                      id="vehiculo-numeroInterno"
+                      value={values.numeroInterno}
+                      onChange={(event) => setField('numeroInterno', event.target.value)}
+                      placeholder="Ej. 120-01"
+                      maxLength={30}
+                      leftSlot={<Tag size={16} className="input-icon" />}
+                      fullWidth
+                    />
+                  </FormField>
 
-              {/* Fila 2: Socio propietario | Color secundario */}
-              <FormField
-                label="Socio propietario *"
-                htmlFor="vehiculo-socioId"
-                error={errors.socioId}
-                helperText={!values.socioId ? 'Sin propietario no podrá activarse' : undefined}
-              >
-                <Select
-                  id="vehiculo-socioId"
-                  options={sociosDisponibles.map((socio) => ({
-                    label: `${socio.nombre} · ${socio.documentoIdentidad}`,
-                    value: socio.id,
-                  }))}
-                  placeholder={
-                    values.sindicatoId ? 'Selecciona un socio' : 'Selecciona primero el sindicato'
-                  }
-                  value={values.socioId}
-                  onChange={(event) => setField('socioId', event.target.value)}
-                  disabled={!values.sindicatoId}
-                  fullWidth
-                />
-              </FormField>
+                  <FormField
+                    label="Banderita o distintivo opcional"
+                    htmlFor="vehiculo-distintivo"
+                    error={errors.distintivo}
+                    helperText="Déjalo vacío si la unidad se reconoce con placa, número interno y cartel."
+                  >
+                    <Input
+                      id="vehiculo-distintivo"
+                      value={values.distintivo}
+                      onChange={(event) => setField('distintivo', event.target.value)}
+                      placeholder="🚩, 120 o símbolo"
+                      maxLength={80}
+                      fullWidth
+                    />
+                  </FormField>
 
-              <FormField
-                label="Color secundario"
-                htmlFor="vehiculo-colorSecundario"
-                error={errors.colorSecundario}
-              >
-                <div className="color-select-wrapper">
-                  <span
-                    className="color-dot-indicator"
-                    style={{
-                      background: values.colorSecundario
-                        ? colorMuestra(values.colorSecundario)
-                        : '#cbd5e1',
-                    }}
-                  />
-                  <Select
-                    id="vehiculo-colorSecundario"
-                    options={[
-                      { label: 'Ninguno', value: '' },
-                      ...COLORES_VEHICULO.map((c) => ({ label: c.nombre, value: c.codigo })),
-                    ]}
-                    value={values.colorSecundario}
-                    onChange={(event) =>
-                      setField('colorSecundario', event.target.value as ColorVehiculo)
-                    }
-                    fullWidth
-                  />
+                  <FormField
+                    label="Cartel superior"
+                    htmlFor="vehiculo-cartelSuperior"
+                    error={errors.cartelSuperior}
+                    helperText="Opcional. Si queda vacío, se hereda el cartel configurado en la línea."
+                  >
+                    <Input
+                      id="vehiculo-cartelSuperior"
+                      value={values.cartelSuperior}
+                      onChange={(event) => setField('cartelSuperior', event.target.value)}
+                      placeholder="Ej. Plaza Colón · La Cancha"
+                      maxLength={120}
+                      fullWidth
+                    />
+                  </FormField>
                 </div>
-              </FormField>
-
-              {/* Fila 3: Marca | Capacidad */}
-              <FormField
-                label="Marca *"
-                htmlFor="vehiculo-marcaCatalogo"
-                required
-                error={errors.marca}
-              >
-                <Select
-                  id="vehiculo-marcaCatalogo"
-                  options={marcaOptions}
-                  placeholder="Selecciona una marca"
-                  value={values.marcaCatalogo}
-                  onChange={(event) => {
-                    const selected = event.target.value;
-                    setField('marcaCatalogo', selected);
-                    setField('marca', selected === MARCA_OTRA ? '' : selected);
-                  }}
-                  fullWidth
-                />
-              </FormField>
-
-              <FormField
-                label="Capacidad *"
-                htmlFor="vehiculo-capacidad"
-                required
-                error={errors.capacidad}
-              >
-                <Input
-                  id="vehiculo-capacidad"
-                  type="number"
-                  min={1}
-                  max={200}
-                  step={1}
-                  value={values.capacidad}
-                  onChange={(event) => setField('capacidad', event.target.value)}
-                  leftSlot={<Users size={16} className="input-icon" />}
-                  rightSlot="pasajeros"
-                  fullWidth
-                />
-              </FormField>
-
-              {values.marcaCatalogo === MARCA_OTRA && (
-                <FormField
-                  label="Otra marca *"
-                  htmlFor="vehiculo-marca-otra"
-                  required
-                  error={errors.marca}
-                >
-                  <Input
-                    id="vehiculo-marca-otra"
-                    value={values.marca}
-                    onChange={(event) => setField('marca', event.target.value)}
-                    placeholder="Especifica la marca"
-                    maxLength={50}
-                    fullWidth
-                  />
-                </FormField>
-              )}
-
-              <FormField label="Modelo *" htmlFor="vehiculo-modelo" required error={errors.modelo}>
-                <Input
-                  id="vehiculo-modelo"
-                  value={values.modelo}
-                  onChange={(event) => setField('modelo', event.target.value)}
-                  placeholder="Ej. LO-915"
-                  maxLength={50}
-                  leftSlot={<Package size={16} className="input-icon" />}
-                  fullWidth
-                />
-              </FormField>
-
-              <div className="vehicle-state-summary">
-                <span
-                  className={`vehicle-state-summary__dot vehicle-state-summary__dot--${vehicle ? values.estado : 'pendiente'}`}
-                  aria-hidden="true"
-                />
-                <div>
-                  <small>Estado de la unidad</small>
-                  <strong>{NOMBRE_ESTADO[vehicle ? values.estado : 'pendiente']}</strong>
-                  <span>
-                    {vehicle
-                      ? 'El estado se gestiona desde las acciones del listado.'
-                      : 'Toda unidad nueva se registra pendiente hasta completar su validación.'}
-                  </span>
+                <div className="vehicle-identity-hint" role="note">
+                  El marcador GPS mostrará la placa, el número interno y el cartel para distinguir
+                  la unidad durante la operación.
                 </div>
-              </div>
-            </div>
-
-            {capacidadAtipica && (
-              <div className="vehicle-capacity-warning" role="status">
-                <AlertTriangle size={18} aria-hidden="true" />
-                <span>
-                  La capacidad es poco habitual para el tipo seleccionado. Verifica el dato antes de
-                  guardar.
-                </span>
-              </div>
-            )}
-          </section>
+              </section>
+            </>
+          )}
         </div>
 
         {/* Panel Lateral Derecho: Vista Previa y Especificaciones */}
@@ -700,6 +824,12 @@ export function VehicleFormPanel({
           {/* Imagen / Ilustración Destacada del Vehículo */}
           <div className="vehicle-preview-sidebar__graphic">
             <VehicleDetailedIllustration tipo={values.tipo || 'minibus'} color={values.color} />
+            <div className="vehicle-preview-roof-sign" aria-label="Identificador superior">
+              <strong>
+                {values.distintivo || values.numeroInterno || placaNormalizada || 'SIN ID'}
+              </strong>
+              <span>{values.cartelSuperior || 'Cartel de la línea'}</span>
+            </div>
             <PlateBadge
               plate={placaNormalizada || 'SIN PLACA'}
               className="vehicle-preview-sidebar__plate-badge"

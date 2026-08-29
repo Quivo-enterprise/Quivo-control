@@ -342,6 +342,9 @@ function toVehiculo(row: {
   modelo: string;
   color: string;
   colorSecundario: string | null;
+  numeroInterno: string | null;
+  distintivo: string | null;
+  cartelSuperior: string | null;
   capacidad: number;
   estado: string;
 }): Vehiculo {

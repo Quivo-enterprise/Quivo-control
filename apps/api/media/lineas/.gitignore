@@ -1,0 +1,5 @@
+# Se versiona solo el emblema de referencia de la demo; los símbolos cargados en operación
+# viven en el volumen del servicio y no deben entrar al repositorio.
+*
+!.gitignore
+!linea-120-universitaria.png

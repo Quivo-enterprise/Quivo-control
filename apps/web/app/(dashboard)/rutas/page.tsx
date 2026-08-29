@@ -16,7 +16,7 @@ import {
   Tag,
   type MapPoint,
 } from '@quivo/design-system';
-import type { Linea, Parada, PuntoControl, Ruta, TipoParada, Variante } from '@quivo/shared';
+import type { EstadoPublicacion, Linea, Parada, PuntoControl, Ruta, TipoParada, Variante } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { lineasApi } from '../../../src/lib/api/lineas';
 import { rutasApi } from '../../../src/lib/api/rutas';
@@ -24,6 +24,7 @@ import { paradasApi } from '../../../src/lib/api/paradas';
 import { puntosControlApi } from '../../../src/lib/api/puntos-control';
 import { variantesApi } from '../../../src/lib/api/variantes';
 import { ApiError } from '../../../src/lib/api/client';
+import { mobilityPublicationsApi } from '../../../src/lib/api/mobility-publications';
 import {
   calcularDistanciaRutaKm,
   capitalizar,
@@ -74,6 +75,13 @@ const ESTADOS_RUTA: { label: string; value: Ruta['estado'] }[] = [
 ];
 
 const COLORES_RUTA = ['#007f86', '#ff6b35', '#6750a4', '#1976d2', '#2e7d32', '#c62828'];
+
+const SIGUIENTE_PUBLICACION: Record<EstadoPublicacion, EstadoPublicacion | null> = {
+  borrador: 'validado',
+  validado: 'publicado',
+  publicado: 'validado',
+  archivado: 'borrador',
+};
 
 /** RF-24..33 (QUI-229) — editor visual de rutas sobre `RouteMap` (Leaflet, ver design
  * system) contra el API real de QUI-225/226. Sin biblioteca de mapas nueva: se reutiliza
@@ -677,7 +685,73 @@ export default function RutasPage() {
     }
   }
 
+  async function avanzarPublicacionDelRecorrido() {
+    if (!token || !rutaSeleccionada || !lineaSeleccionada) return;
+    const nextStatus = SIGUIENTE_PUBLICACION[rutaSeleccionada.publicStatus];
+    const paradasActivas = paradas.filter((parada) => parada.estado === 'activo');
+
+    if (!nextStatus) return;
+    if (paradasActivas.length === 0) {
+      setError('Agrega al menos una parada activa antes de preparar este recorrido para pasajeros.');
+      return;
+    }
+    if (lineaSeleccionada.publicStatus !== rutaSeleccionada.publicStatus && lineaSeleccionada.publicStatus !== nextStatus) {
+      setError('La línea debe estar en el mismo estado de publicación que el recorrido.');
+      return;
+    }
+    if (paradasActivas.some((parada) => parada.publicStatus !== rutaSeleccionada.publicStatus && parada.publicStatus !== nextStatus)) {
+      setError('Todas las paradas activas deben estar en el mismo estado de publicación que el recorrido.');
+      return;
+    }
+
+    setGuardando(true);
+    setError(null);
+    try {
+      const tasks = [
+        mobilityPublicationsApi.actualizar(token, 'rutas', rutaSeleccionada.id, nextStatus),
+        ...paradasActivas
+          .filter((parada) => parada.publicStatus === rutaSeleccionada.publicStatus)
+          .map((parada) => mobilityPublicationsApi.actualizar(token, 'paradas', parada.id, nextStatus)),
+      ];
+      if (lineaSeleccionada.publicStatus === rutaSeleccionada.publicStatus) {
+        tasks.push(mobilityPublicationsApi.actualizar(token, 'lineas', lineaSeleccionada.id, nextStatus));
+      }
+      await Promise.all(tasks);
+
+      setLineas((prev) =>
+        prev.map((linea) =>
+          linea.id === lineaSeleccionada.id && linea.publicStatus === rutaSeleccionada.publicStatus
+            ? { ...linea, publicStatus: nextStatus }
+            : linea,
+        ),
+      );
+      setRutas((prev) =>
+        prev.map((ruta) =>
+          ruta.id === rutaSeleccionada.id ? { ...ruta, publicStatus: nextStatus } : ruta,
+        ),
+      );
+      setParadas((prev) =>
+        prev.map((parada) =>
+          parada.estado === 'activo' && parada.publicStatus === rutaSeleccionada.publicStatus
+            ? { ...parada, publicStatus: nextStatus }
+            : parada,
+        ),
+      );
+      setAviso(
+        nextStatus === 'publicado'
+          ? 'Recorrido, línea y paradas activas ya están visibles en la app de pasajeros.'
+          : 'Recorrido, línea y paradas activas validados. Revísalos y vuelve a presionar para publicarlos.',
+      );
+    } catch (err) {
+      setError(mensajeError(err));
+    } finally {
+      setGuardando(false);
+    }
+  }
+
   const colorLinea = lineaSeleccionada?.color || 'var(--qv-color-primary)';
+  const colorLineaSecundario = lineaSeleccionada?.colorSecundario || 'var(--qv-color-accent)';
+  const colorLineaTerciario = lineaSeleccionada?.colorTerciario || 'var(--qv-color-primary)';
   const seleccionadaCoincideConFiltros = rutasFiltradas.some(
     (ruta) => ruta.id === rutaSeleccionada?.id,
   );
@@ -729,7 +803,7 @@ export default function RutasPage() {
       lng: pc.coord.coordinates[0],
       radiusMeters: pc.radioToleranciaM,
       label: `Punto de control (orden ${pc.orden}${pc.obligatorio ? ', obligatorio' : ''})`,
-      color: colorLinea,
+      color: colorLineaSecundario,
     }));
 
   const primerPuntoPendiente = puntosPendientes[0];
@@ -859,14 +933,39 @@ export default function RutasPage() {
               />
             )}
             {lineaSeleccionada && (
-              <div className="routes-line-summary">
+              <div
+                className="routes-line-summary"
+                style={{
+                  borderTopColor: lineaSeleccionada.colorSecundario ?? undefined,
+                  background: lineaSeleccionada.colorFondo ?? undefined,
+                }}
+              >
                 <span
                   className="routes-color-dot"
                   style={{ background: colorLinea }}
                   aria-hidden="true"
                 />
+                <span
+                  className="routes-color-dot"
+                  style={{ background: colorLineaSecundario }}
+                  aria-hidden="true"
+                />
+                {lineaSeleccionada.distintivoValor && (
+                  <span
+                    className="routes-line-marker"
+                    style={{ background: colorLineaTerciario }}
+                    aria-label="Distintivo de la línea"
+                  >
+                    {lineaSeleccionada.distintivoValor}
+                  </span>
+                )}
                 <span>
                   <strong>{lineaSeleccionada.codigo}</strong>
+                  {lineaSeleccionada.nombreCorto && <small>{lineaSeleccionada.nombreCorto}</small>}
+                  {lineaSeleccionada.lema && <small>{lineaSeleccionada.lema}</small>}
+                  {lineaSeleccionada.cartelSuperior && (
+                    <small>Cartel: {lineaSeleccionada.cartelSuperior}</small>
+                  )}
                   {lineaSeleccionada.descripcion && <small>{lineaSeleccionada.descripcion}</small>}
                 </span>
               </div>
@@ -878,6 +977,22 @@ export default function RutasPage() {
               header="Rutas"
               footer={
                 <div className="routes-actions">
+                  {rutaSeleccionada && SIGUIENTE_PUBLICACION[rutaSeleccionada.publicStatus] ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={avanzarPublicacionDelRecorrido}
+                      disabled={guardando || loadingDetalle}
+                    >
+                      {guardando
+                        ? 'Actualizando app…'
+                        : rutaSeleccionada.publicStatus === 'borrador'
+                          ? 'Validar para pasajeros'
+                          : rutaSeleccionada.publicStatus === 'validado'
+                            ? 'Publicar en la app'
+                            : 'Quitar de la app'}
+                    </Button>
+                  ) : null}
                   <Button
                     size="sm"
                     variant="ghost"
@@ -954,6 +1069,9 @@ export default function RutasPage() {
                         </span>
                         <Tag variant={r.estado === 'activo' ? 'success' : 'neutral'}>
                           {r.estado}
+                        </Tag>
+                        <Tag variant={r.publicStatus === 'publicado' ? 'success' : 'neutral'}>
+                          {r.publicStatus === 'publicado' ? 'app' : 'privada'}
                         </Tag>
                       </button>
                     ))}

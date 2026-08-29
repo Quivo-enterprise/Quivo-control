@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { WebView } from 'react-native-webview';
-import type { PaqueteDia } from '@quivo/shared';
+import { resolverMarcaLinea, type ContextoOperativoMovil, type PaqueteDia } from '@quivo/shared';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
 
 interface RouteMapViewProps {
   paquete: PaqueteDia;
+  vehiculo: ContextoOperativoMovil['vehiculo'];
   proximoPuntoControlId: string | null;
   posicionActual: { lat: number; lng: number } | null;
   tracking: boolean;
@@ -30,6 +31,7 @@ interface RouteMapViewProps {
  */
 export function RouteMapView({
   paquete,
+  vehiculo,
   proximoPuntoControlId,
   posicionActual,
   tracking,
@@ -39,18 +41,19 @@ export function RouteMapView({
 }: RouteMapViewProps) {
   const webViewRef = useRef<WebView>(null);
   const html = useMemo(
-    () => construirHtml(paquete, proximoPuntoControlId),
-    [paquete, proximoPuntoControlId],
+    () => construirHtml(paquete, vehiculo, proximoPuntoControlId),
+    [paquete, vehiculo, proximoPuntoControlId],
   );
   const source = useMemo(() => ({ html }), [html]);
   const enviarEstadoMapa = useCallback(() => {
     webViewRef.current?.postMessage(JSON.stringify({ type: 'tracking', active: tracking }));
     if (posicionActual) {
-      webViewRef.current?.postMessage(
-        JSON.stringify({ type: 'position', ...posicionActual }),
-      );
+      webViewRef.current?.postMessage(JSON.stringify({ type: 'position', ...posicionActual }));
     }
-  }, [posicionActual, tracking]);
+    webViewRef.current?.postMessage(
+      JSON.stringify({ type: 'ruta-calculada', coordinates: rutaCalculada }),
+    );
+  }, [posicionActual, rutaCalculada, tracking]);
   useEffect(enviarEstadoMapa, [enviarEstadoMapa]);
 
   const lastRecenter = useRef(recenterTick);
@@ -60,12 +63,6 @@ export function RouteMapView({
       lastRecenter.current = recenterTick;
     }
   }, [recenterTick]);
-
-  useEffect(() => {
-    webViewRef.current?.postMessage(
-      JSON.stringify({ type: 'ruta-calculada', coordinates: rutaCalculada }),
-    );
-  }, [rutaCalculada]);
 
   return (
     <View style={[styles.container, style]}>
@@ -82,8 +79,32 @@ export function RouteMapView({
   );
 }
 
-function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null): string {
+function construirHtml(
+  paquete: PaqueteDia,
+  vehiculo: ContextoOperativoMovil['vehiculo'],
+  proximoPuntoControlId: string | null,
+): string {
   const coordenadasRuta = paquete.ruta.geometria.coordinates.map(([lng, lat]) => [lat, lng]);
+  const marca = resolverMarcaLinea(paquete.linea);
+  const primary = marca.primary;
+  const primaryPulse = colorConAlpha(marca.primary, 0.7);
+  const secondary = marca.secondary;
+  const brandText = marca.text;
+  const markerIdentifier = escapeHtml(vehiculo.numeroInterno || vehiculo.placa || marca.shortName);
+  const markerSymbol = escapeHtml(vehiculo.distintivo || marca.markerValue);
+  const markerRoofSign = escapeHtml(vehiculo.cartelSuperior || marca.roofSign || marca.shortName);
+  const markerPopup = escapeHtml(
+    [
+      vehiculo.numeroInterno ? `Unidad ${vehiculo.numeroInterno}` : null,
+      vehiculo.placa,
+      vehiculo.cartelSuperior || marca.roofSign || marca.shortName,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  );
+  const markerIdentifierLiteral = JSON.stringify(markerIdentifier);
+  const markerSymbolLiteral = JSON.stringify(markerSymbol);
+  const markerRoofSignLiteral = JSON.stringify(markerRoofSign);
   const proximoPuntoControl = paquete.puntosControl.find((pc) => pc.id === proximoPuntoControlId);
   const proximoPuntoLatLng = proximoPuntoControl
     ? [proximoPuntoControl.coord.coordinates[1], proximoPuntoControl.coord.coordinates[0]]
@@ -94,7 +115,9 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
       const [lng, lat] = parada.coord.coordinates;
       const etiqueta =
         parada.tipo === 'origen' ? 'Origen' : parada.tipo === 'destino' ? 'Destino' : 'Parada';
-      return `L.marker([${lat}, ${lng}]).addTo(map).bindPopup(${JSON.stringify(etiqueta)});`;
+      const markerClass = `stop-marker ${parada.tipo}`;
+      const html = `<div class="${markerClass}"></div>`;
+      return `L.marker([${lat}, ${lng}], { icon: L.divIcon({ className: '', html: \`${html}\`, iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(map).bindPopup(${JSON.stringify(etiqueta)});`;
     })
     .join('\n');
 
@@ -116,19 +139,95 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
   <style>
     html, body, #map { height: 100%; margin: 0; padding: 0; }
     @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(50, 38, 180, 0.7); }
-      70% { box-shadow: 0 0 0 15px rgba(50, 38, 180, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(50, 38, 180, 0); }
+      0% { box-shadow: 0 0 0 0 ${primaryPulse}; }
+      70% { box-shadow: 0 0 0 15px transparent; }
+      100% { box-shadow: 0 0 0 0 transparent; }
     }
     .current-location-marker {
       width: 18px; height: 18px;
-      background-color: #3226B4;
+      background-color: ${primary};
       border: 3px solid #FFFFFF;
       border-radius: 50%;
       animation: pulse 2s infinite;
       box-shadow: 0 0 4px rgba(0,0,0,0.3);
       box-sizing: border-box;
     }
+    .vehicle-location-marker {
+      height: 64px;
+      position: relative;
+      width: 92px;
+    }
+    .vehicle-marker-roof {
+      background: ${secondary};
+      border: 2px solid #FFFFFF;
+      border-radius: 7px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.28);
+      box-sizing: border-box;
+      color: ${brandText};
+      font-family: sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      left: 50%;
+      max-width: 86px;
+      overflow: hidden;
+      padding: 3px 6px;
+      position: absolute;
+      text-align: center;
+      text-overflow: ellipsis;
+      top: 0;
+      transform: translateX(-50%);
+      white-space: nowrap;
+      z-index: 2;
+    }
+    .vehicle-marker-body {
+      align-items: center;
+      background: ${primary};
+      border: 3px solid #FFFFFF;
+      border-radius: 50%;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.35);
+      box-sizing: border-box;
+      color: ${brandText};
+      display: flex;
+      font-family: sans-serif;
+      font-size: 8px;
+      font-weight: 700;
+      height: 27px;
+      justify-content: center;
+      left: 50%;
+      position: absolute;
+      top: 24px;
+      transform: translateX(-50%);
+      width: 27px;
+      z-index: 1;
+    }
+    .vehicle-marker-caption {
+      background: #FFFFFF;
+      border: 1px solid ${primary};
+      border-radius: 5px;
+      color: ${primary};
+      font-family: sans-serif;
+      font-size: 9px;
+      left: 50%;
+      max-width: 90px;
+      overflow: hidden;
+      padding: 2px 5px;
+      position: absolute;
+      text-align: center;
+      text-overflow: ellipsis;
+      top: 50px;
+      transform: translateX(-50%);
+      white-space: nowrap;
+    }
+    .stop-marker {
+      width: 18px; height: 18px;
+      background-color: ${secondary};
+      border: 3px solid ${primary};
+      border-radius: 50%;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.28);
+      box-sizing: border-box;
+    }
+    .stop-marker.origen { background-color: ${primary}; }
+    .stop-marker.destino { background-color: ${brandText}; }
     .control-point-marker {
       width: 24px; height: 24px;
       background-color: white;
@@ -141,9 +240,9 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
       box-sizing: border-box;
     }
     .control-point-marker.next {
-      border-color: #FD9E15;
-      background-color: #FD9E15;
-      color: white;
+      border-color: ${secondary};
+      background-color: ${secondary};
+      color: ${brandText};
     }
     .nav-arrow-marker {
       width: 48px; height: 48px;
@@ -152,7 +251,7 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
     }
     .nav-arrow-marker svg {
       width: 40px; height: 40px;
-      fill: #3226B4;
+      fill: ${primary};
       stroke: white;
       stroke-width: 1.5px;
       filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));
@@ -168,7 +267,7 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
     var map = L.map('map', { zoomControl: false, attributionControl: false });
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
     var coordenadasRuta = ${JSON.stringify(coordenadasRuta)};
-    var ruta = L.polyline(coordenadasRuta, { color: ${JSON.stringify(paquete.linea.color)}, weight: 4 }).addTo(map);
+    var ruta = L.polyline(coordenadasRuta, { color: ${JSON.stringify(primary)}, weight: 4 }).addTo(map);
     ${marcadoresParadas}
     ${marcadoresPc}
     var proximoPuntoLatLng = ${JSON.stringify(proximoPuntoLatLng)};
@@ -215,7 +314,7 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
       // una estimación mientras no hay ruta OSRM todavía), para que se note a simple vista
       // cuál de los dos está activo.
       if (rutaCalculadaCoords && rutaCalculadaCoords.length >= 2) {
-        caminoResaltado = L.polyline(rutaCalculadaCoords, { color: '#FD9E15', weight: 6, opacity: 0.9 }).addTo(map);
+        caminoResaltado = L.polyline(rutaCalculadaCoords, { color: ${JSON.stringify(secondary)}, weight: 6, opacity: 0.9 }).addTo(map);
         caminoResaltado.bringToFront();
         return;
       }
@@ -259,12 +358,19 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
     }
 
     function getArrowIcon() {
-      var html = '<div class="nav-arrow-marker" style="transform: rotate(' + currentHeading + 'deg)">' +
-                 '<svg viewBox="0 0 24 24"><path d="M12 2L4 21l8-4 8 4Z"/></svg></div>';
-      return L.divIcon({ className: '', html: html, iconSize: [48, 48], iconAnchor: [24, 24] });
+      var html = '<div class="vehicle-location-marker">' +
+                 '<div class="vehicle-marker-roof">' + ${markerSymbolLiteral} + '</div>' +
+                 '<div class="nav-arrow-marker" style="transform: rotate(' + currentHeading + 'deg)">' +
+                 '<svg viewBox="0 0 24 24"><path d="M12 2L4 21l8-4 8 4Z"/></svg></div>' +
+                 '<div class="vehicle-marker-caption">' + ${markerRoofSignLiteral} + '</div></div>';
+      return L.divIcon({ className: '', html: html, iconSize: [92, 64], iconAnchor: [46, 35] });
     }
     function getDotIcon() {
-      return L.divIcon({ className: '', html: '<div class="current-location-marker"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
+      var html = '<div class="vehicle-location-marker">' +
+                 '<div class="vehicle-marker-roof">' + ${markerSymbolLiteral} + '</div>' +
+                 '<div class="vehicle-marker-body">' + ${markerIdentifierLiteral} + '</div>' +
+                 '<div class="vehicle-marker-caption">' + ${markerRoofSignLiteral} + '</div></div>';
+      return L.divIcon({ className: '', html: html, iconSize: [92, 64], iconAnchor: [46, 35] });
     }
     function updateMarkerIcon() {
       if (!posicion) return;
@@ -321,7 +427,7 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
       prevLatLng = latlng;
 
       if (!posicion) {
-        posicion = L.marker(latlng, { icon: getDotIcon() }).addTo(map).bindPopup('Tu ubicación');
+        posicion = L.marker(latlng, { icon: getDotIcon() }).addTo(map).bindPopup(${JSON.stringify(markerPopup)});
       } else {
         posicion.setLatLng(latlng);
         if (seguimientoActivo) updateMarkerIcon();
@@ -339,6 +445,25 @@ function construirHtml(paquete: PaqueteDia, proximoPuntoControlId: string | null
   </script>
 </body>
 </html>`;
+}
+
+function colorConAlpha(color: string, alpha: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) return `rgba(50, 38, 180, ${alpha})`;
+  const value = match[1]!;
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] ??
+      character,
+  );
 }
 
 const styles = StyleSheet.create({
