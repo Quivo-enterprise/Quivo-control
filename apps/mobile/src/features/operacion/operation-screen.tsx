@@ -4,7 +4,13 @@ import * as Sentry from '@sentry/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
 import { Svg, Circle, Line } from 'react-native-svg';
-import { haversineMetros, type ContextoOperativoMovil, type PaqueteDia } from '@quivo/shared';
+import {
+  haversineMetros,
+  resolverMarcaLinea,
+  type ContextoOperativoMovil,
+  type LineaBrand,
+  type PaqueteDia,
+} from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
 import { Button } from '../../shared/components/Button';
 import { Input } from '../../shared/components/Input';
@@ -39,7 +45,9 @@ interface OperationScreenProps {
   onLogout: () => Promise<void>;
 }
 
-export function OperationScreen(props: OperationScreenProps & NativeStackScreenProps<OperationStackParamList, 'Map'>) {
+export function OperationScreen(
+  props: OperationScreenProps & NativeStackScreenProps<OperationStackParamList, 'Map'>,
+) {
   useKeepAwake();
   const { gps, paqueteDia } = useGpsContext();
   const { pendientes, errorSync, isOffline, isSyncing } = useSyncStatus(
@@ -47,6 +55,10 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
     props.contexto.sesionId,
   );
   const { settings } = useOperacionSettings();
+  const lineaBrand = useMemo(
+    () => resolverMarcaLinea(props.contexto.linea),
+    [props.contexto.linea],
+  );
   const puntosControl = useMemo(
     () => paqueteDia.paquete?.puntosControl ?? [],
     [paqueteDia.paquete],
@@ -107,14 +119,22 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
   // dibuja el mapa mientras esta petición está en curso o si falla (offline / OSRM caído).
   // Throttleada por distancia/tiempo para no golpear el backend en cada lectura de GPS.
   const [rutaCalculada, setRutaCalculada] = useState<[number, number][] | null>(null);
-  const ultimoFetchRuta = useRef<{ ts: number; lat: number; lng: number; destino: [number, number] } | null>(
-    null,
-  );
-  const destinoRuteo = proximoPuntoControl?.coord.coordinates ??
+  const ultimoFetchRuta = useRef<{
+    ts: number;
+    lat: number;
+    lng: number;
+    destino: [number, number];
+  } | null>(null);
+  const trackingAnterior = useRef(gps.tracking);
+  const destinoRuteo =
+    proximoPuntoControl?.coord.coordinates ??
     paqueteDia.paquete?.ruta.geometria.coordinates.at(-1) ??
     null;
   useEffect(() => {
-    if (!gps.tracking || !gps.posicionActual || !destinoRuteo) {
+    const acabaDeIniciar = gps.tracking && !trackingAnterior.current;
+    trackingAnterior.current = gps.tracking;
+
+    if (!gps.posicionActual || !destinoRuteo) {
       setRutaCalculada(null);
       return;
     }
@@ -129,9 +149,22 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
     const distanciaDesdeUltimoFetch = anterior
       ? haversineMetros([posicion.lng, posicion.lat], [anterior.lng, anterior.lat])
       : Infinity;
-    if (mismoDestino && anterior && distanciaDesdeUltimoFetch < 50 && ahora - anterior.ts < 15_000) return;
+    if (
+      !acabaDeIniciar &&
+      mismoDestino &&
+      anterior &&
+      distanciaDesdeUltimoFetch < 50 &&
+      ahora - anterior.ts < 15_000
+    ) {
+      return;
+    }
 
-    ultimoFetchRuta.current = { ts: ahora, lat: posicion.lat, lng: posicion.lng, destino: destinoRuteo };
+    ultimoFetchRuta.current = {
+      ts: ahora,
+      lat: posicion.lat,
+      lng: posicion.lng,
+      destino: destinoRuteo,
+    };
     let cancelado = false;
     void (async () => {
       const token = await props.obtenerAccessToken();
@@ -219,6 +252,7 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
       <MapLayer
         loading={paqueteDia.cargando}
         paquete={paqueteDia.paquete}
+        vehiculo={props.contexto.vehiculo}
         nextPointId={proximoPuntoControl?.id ?? null}
         position={gps.posicionActual}
         tracking={gps.tracking}
@@ -235,14 +269,19 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
               accessibilityLabel="Perfil y configuración"
               onPress={() => props.navigation.navigate('Perfil')}
             >
-              <DriverRouteCard contexto={props.contexto} tracking={gps.tracking} isOffline={isOffline} />
+              <DriverRouteCard
+                contexto={props.contexto}
+                brand={lineaBrand}
+                tracking={gps.tracking}
+                isOffline={isOffline}
+              />
             </Pressable>
           </View>
           <OfflineBanner isOffline={isOffline} />
         </View>
-        
+
         {gps.tracking && proximoPuntoControl && (
-          <NavigationInstructionCard distanciaMetros={distanciaProximoPunto} />
+          <NavigationInstructionCard distanciaMetros={distanciaProximoPunto} brand={lineaBrand} />
         )}
 
         {props.aviso ? <Text style={styles.notice}>{props.aviso}</Text> : null}
@@ -313,7 +352,7 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
             {paqueteDia.error}
           </Text>
         ) : null}
-        {(!settings.trabajarOffline && isOffline) ? (
+        {!settings.trabajarOffline && isOffline ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             Modo offline desactivado en tus Ajustes. Conéctate a internet para iniciar.
           </Text>
@@ -355,9 +394,18 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
           accessibilityRole="button"
           accessibilityLabel="Centrar en mi ubicación"
           style={styles.recenterButton}
-          onPress={() => setRecenterTick(t => t + 1)}
+          onPress={() => setRecenterTick((t) => t + 1)}
         >
-          <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={quivoColors.primary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Svg
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={quivoColors.primary}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <Circle cx="12" cy="12" r="7" />
             <Line x1="12" y1="1" x2="12" y2="5" />
             <Line x1="12" y1="19" x2="12" y2="23" />
@@ -374,6 +422,7 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         distanciaMetros={distanciaProximoPunto}
         tracking={gps.tracking}
         canStart={
+          Boolean(paqueteDia.paquete) &&
           !paqueteDia.vencido &&
           !paqueteDia.cargando &&
           !paqueteDia.error &&
@@ -393,7 +442,12 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         gpsError={gps.errorGps}
       />
 
-      <Modal visible={showInfo} transparent={true} animationType="fade" onRequestClose={() => setShowInfo(false)}>
+      <Modal
+        visible={showInfo}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowInfo(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
@@ -401,9 +455,14 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
               <Text style={styles.modalTitle}>Registro Automático</Text>
             </View>
             <Text style={styles.modalText}>
-              Al entrar al radio del punto de control, se registrará automáticamente en el sistema sin necesidad de intervención manual.
+              Al entrar al radio del punto de control, se registrará automáticamente en el sistema
+              sin necesidad de intervención manual.
             </Text>
-            <Button variant="primary" onPress={() => setShowInfo(false)} style={{ marginTop: quivoSpacing.xl }}>
+            <Button
+              variant="primary"
+              onPress={() => setShowInfo(false)}
+              style={{ marginTop: quivoSpacing.xl }}
+            >
               Entendido
             </Button>
           </View>
@@ -525,16 +584,23 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
 
 function DriverRouteCard({
   contexto,
+  brand,
   tracking,
   isOffline,
 }: {
   contexto: ContextoOperativoMovil;
+  brand: LineaBrand;
   tracking: boolean;
   isOffline: boolean;
 }) {
   return (
-    <View style={styles.identityCard}>
-      <View style={styles.avatar}>
+    <View
+      style={[
+        styles.identityCard,
+        { borderLeftColor: brand.secondary, backgroundColor: brand.background },
+      ]}
+    >
+      <View style={[styles.avatar, { backgroundColor: brand.primary }]}>
         <Text style={styles.avatarText}>{initials(contexto.conductor.nombre)}</Text>
       </View>
       <View style={styles.identityText}>
@@ -545,20 +611,27 @@ function DriverRouteCard({
           ({contexto.sindicato.nombre})
         </Text>
         <Text numberOfLines={1} style={styles.vehicleText}>
+          {contexto.vehiculo.numeroInterno ? `#${contexto.vehiculo.numeroInterno} · ` : ''}
           {contexto.vehiculo.placa} - {contexto.vehiculo.marca} {contexto.vehiculo.modelo}
         </Text>
       </View>
-      <View style={styles.routeBadge}>
-        <Text style={styles.lineCode}>{contexto.linea.codigo}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-          {tracking && !isOffline && <Ionicons name="wifi" size={10} color={quivoColors.success} />}
-          {isOffline && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#FF9500' }} />}
-          <Text style={[
-            styles.gpsStatus, 
-            tracking && !isOffline ? styles.gpsStatusActive : null,
-            isOffline ? { color: '#FF9500' } : null
-          ]}>
-            {isOffline ? 'OFFLINE' : tracking ? 'EN LÍNEA' : 'EN ESPERA'}
+      <View style={styles.routeSummary}>
+        <Text style={[styles.lineCode, { color: brand.primary }]}>{brand.shortName}</Text>
+        <Text style={styles.lineName}>Línea {contexto.linea.codigo}</Text>
+        <View style={styles.profileStatus}>
+          <View
+            style={[
+              styles.profileStatusDot,
+              tracking && !isOffline ? styles.profileStatusDotActive : null,
+            ]}
+          />
+          <Text
+            style={[
+              styles.gpsStatus,
+              tracking && !isOffline ? styles.gpsStatusActive : null,
+            ]}
+          >
+            {tracking && !isOffline ? 'En recorrido' : 'En espera'}
           </Text>
         </View>
       </View>
@@ -566,11 +639,22 @@ function DriverRouteCard({
   );
 }
 
-function NavigationInstructionCard({ distanciaMetros }: { distanciaMetros: number | null }) {
+function NavigationInstructionCard({
+  distanciaMetros,
+  brand,
+}: {
+  distanciaMetros: number | null;
+  brand: LineaBrand;
+}) {
   return (
-    <View style={styles.navInstructionCard}>
+    <View
+      style={[
+        styles.navInstructionCard,
+        { backgroundColor: brand.primary, borderLeftColor: brand.secondary },
+      ]}
+    >
       <View style={styles.navIconContainer}>
-        <Ionicons name="arrow-up" size={36} color={quivoColors.white} />
+        <Ionicons name="arrow-up" size={36} color={brand.text} />
       </View>
       <View style={styles.navInstructionText}>
         <Text style={styles.navDistance}>
@@ -585,6 +669,7 @@ function NavigationInstructionCard({ distanciaMetros }: { distanciaMetros: numbe
 function MapLayer({
   loading,
   paquete,
+  vehiculo,
   nextPointId,
   position,
   tracking,
@@ -593,6 +678,7 @@ function MapLayer({
 }: {
   loading: boolean;
   paquete: PaqueteDia | null;
+  vehiculo: ContextoOperativoMovil['vehiculo'];
   nextPointId: string | null;
   position: { lat: number; lng: number } | null;
   tracking: boolean;
@@ -612,6 +698,7 @@ function MapLayer({
     <MapErrorBoundary>
       <RouteMapView
         paquete={paquete}
+        vehiculo={vehiculo}
         proximoPuntoControlId={nextPointId}
         posicionActual={position}
         tracking={tracking}
@@ -656,6 +743,7 @@ const styles = StyleSheet.create({
   },
   identityCard: {
     backgroundColor: quivoColors.white,
+    borderLeftWidth: 5,
     borderRadius: quivoRadius.xl,
     flexDirection: 'row',
     alignItems: 'center',
@@ -690,20 +778,63 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 4,
   },
-  routeBadge: { alignItems: 'flex-end', justifyContent: 'center', paddingLeft: quivoSpacing.xs },
-  lineCode: { color: quivoColors.primary, fontFamily: quivoFonts.displayBold, fontSize: 24 },
+  routeBadge: {
+    alignItems: 'flex-end',
+    borderRadius: quivoRadius.lg,
+    justifyContent: 'center',
+    maxWidth: 104,
+    paddingHorizontal: quivoSpacing.sm,
+    paddingVertical: quivoSpacing.xs,
+  },
+  routeSummary: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    minWidth: 86,
+  },
+  roofSignBadge: {
+    borderRadius: quivoRadius.pill,
+    marginBottom: 2,
+    maxWidth: 88,
+    paddingHorizontal: quivoSpacing.xs,
+    paddingVertical: 2,
+  },
+  roofSignText: { fontFamily: quivoFonts.bodySemiBold, fontSize: 10 },
+  lineLogo: { height: 24, width: 24, borderRadius: quivoRadius.sm, marginBottom: 2 },
+  lineCode: { fontFamily: quivoFonts.displayBold, fontSize: 34, lineHeight: 38 },
+  lineName: {
+    color: quivoColors.primaryStrong,
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 14,
+    marginTop: 1,
+  },
+  lineRoofSign: { fontFamily: quivoFonts.bodyMedium, fontSize: 7, opacity: 0.9 },
+  lineTagline: { fontFamily: quivoFonts.bodyRegular, fontSize: 7, opacity: 0.86 },
   gpsStatus: {
-    color: quivoColors.success,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 9,
-    letterSpacing: 0.5,
-    marginTop: 2,
+    color: quivoColors.textMuted,
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 12,
   },
   gpsStatusActive: {
     color: quivoColors.success,
   },
+  profileStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: quivoSpacing.xs,
+  },
+  profileStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: quivoColors.textMuted,
+  },
+  profileStatusDotActive: {
+    backgroundColor: quivoColors.success,
+  },
   navInstructionCard: {
     backgroundColor: 'rgba(50, 38, 180, 0.95)',
+    borderLeftWidth: 5,
     borderRadius: quivoRadius.xl,
     flexDirection: 'row',
     alignItems: 'center',

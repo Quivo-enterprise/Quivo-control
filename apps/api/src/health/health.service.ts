@@ -23,8 +23,11 @@ export class HealthService implements OnModuleDestroy {
   // esta app no usa inyección de constructor (llaman a `withTenantContext`/`prisma`
   // directamente), por eso este bug no se había manifestado antes.
   constructor(@Inject(ConfigService) config: ConfigService) {
-    this.pool = new Pool({ connectionString: config.get<string>('DATABASE_URL') });
-    this.redis = new Redis(config.get<string>('REDIS_URL') ?? 'redis://localhost:6379', {
+    this.pool = new Pool({
+      connectionString:
+        config.get<string>('RUNTIME_DATABASE_URL') ?? config.get<string>('DATABASE_URL'),
+    });
+    this.redis = new Redis(config.get<string>('REDIS_URL') ?? 'redis://localhost:6380', {
       lazyConnect: true,
       maxRetriesPerRequest: 1,
     });

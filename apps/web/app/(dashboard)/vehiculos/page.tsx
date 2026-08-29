@@ -122,7 +122,15 @@ export default function VehiculosPage() {
       if (estadoFilter && row.estado !== estadoFilter) return false;
       if (tipoFilter && row.tipo !== tipoFilter) return false;
       if (!normalized) return true;
-      return [row.placa, row.marca, row.modelo, socioPorId[row.socioId ?? '']]
+      return [
+        row.placa,
+        row.marca,
+        row.modelo,
+        row.numeroInterno,
+        row.distintivo,
+        row.cartelSuperior,
+        socioPorId[row.socioId ?? ''],
+      ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(normalized));
     });
@@ -257,7 +265,7 @@ export default function VehiculosPage() {
           <section className="vehicles-fleet" aria-label="Listado de vehículos">
             <div className="vehicles-toolbar">
               <SearchInput
-                placeholder="Buscar por placa, marca, modelo o propietario..."
+                placeholder="Buscar por placa, número interno, cartel o propietario..."
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onClear={() => setQuery('')}
@@ -334,6 +342,16 @@ export default function VehiculosPage() {
                     key: 'placa',
                     header: 'Placa',
                     render: (row) => <PlateBadge plate={row.placaNormalizada} />,
+                  },
+                  {
+                    key: 'numeroInterno',
+                    header: 'Identificador',
+                    render: (row) => (
+                      <div className="vehicle-identity-cell">
+                        <strong>{row.numeroInterno || row.distintivo || 'Sin asignar'}</strong>
+                        <small>{row.cartelSuperior || 'Usa el cartel de la línea'}</small>
+                      </div>
+                    ),
                   },
                   {
                     key: 'tipo',

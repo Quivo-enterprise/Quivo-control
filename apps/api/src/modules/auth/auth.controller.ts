@@ -4,6 +4,7 @@ import {
   AdminResetPasswordRequestSchema,
   LoginRequestSchema,
   LogoutRequestSchema,
+  PassengerRegisterRequestSchema,
   RefreshRequestSchema,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
@@ -17,6 +18,7 @@ class LoginDto extends createZodDto(LoginRequestSchema) {}
 class RefreshDto extends createZodDto(RefreshRequestSchema) {}
 class LogoutDto extends createZodDto(LogoutRequestSchema) {}
 class AdminResetPasswordDto extends createZodDto(AdminResetPasswordRequestSchema) {}
+class PassengerRegisterDto extends createZodDto(PassengerRegisterRequestSchema) {}
 
 @Controller('auth')
 export class AuthController {
@@ -29,6 +31,13 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   login(@Body() body: LoginDto) {
     return this.authService.login(body);
+  }
+
+  /** POST /v1/auth/passenger/register — alta pública, siempre con rol pasajero. */
+  @Post('passenger/register')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  registerPassenger(@Body() body: PassengerRegisterDto) {
+    return this.authService.registerPassenger(body);
   }
 
   /** POST /v1/auth/refresh — contrato en apps/web/src/lib/auth/api-client.ts. */

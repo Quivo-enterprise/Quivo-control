@@ -5,6 +5,8 @@ import {
   EventoSyncSchema,
   LoginRequestSchema,
   LoginResponseSchema,
+  PublicMobilityCitySchema,
+  JourneySearchRequestSchema,
 } from './index.js';
 
 describe('@quivo/shared contract', () => {
@@ -80,5 +82,32 @@ describe('@quivo/shared contract', () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it('valida cobertura de ciudad y mantiene compatible la búsqueda sin cityId', () => {
+    expect(PublicMobilityCitySchema.safeParse({
+      id: 'la-paz-el-alto',
+      name: 'La Paz / El Alto',
+      departmentCode: 'BO-L',
+      departmentName: 'La Paz',
+      countryCode: 'BO',
+      timezone: 'America/La_Paz',
+      coverageStatus: 'community',
+      sourceType: 'community+municipal',
+      sourceName: 'OSM/Overpass + catálogo municipal',
+      sourceLicense: 'ODbL / referencias municipales',
+      sourceUpdatedAt: null,
+      availableModes: ['road', 'cable'],
+      auxiliaryServices: ['schedule-dependent'],
+    }).success).toBe(true);
+    expect(JourneySearchRequestSchema.safeParse({
+      origin: { type: 'Point', coordinates: [-68.15, -16.5] },
+      destination: { type: 'Point', coordinates: [-68.14, -16.51] },
+    }).success).toBe(true);
+    expect(JourneySearchRequestSchema.safeParse({
+      cityId: 'La Paz',
+      origin: { type: 'Point', coordinates: [-68.15, -16.5] },
+      destination: { type: 'Point', coordinates: [-68.14, -16.51] },
+    }).success).toBe(false);
   });
 });

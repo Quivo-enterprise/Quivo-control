@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TipoParadaSchema } from '../entities/parada.js';
+import { LineaDistintivoTipoSchema } from '../entities/linea.js';
 import { TurnoSchema } from '../enums/turno.js';
 import { LineaGeoJsonSchema, PuntoGeoJsonSchema } from '../geo.js';
 import { uuidSchema } from '../primitives.js';
@@ -37,6 +38,8 @@ export const PaqueteDiaSchema = z.object({
     id: uuidSchema,
     fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     horario: TurnoSchema,
+    horaSalida: z.string().datetime().nullable().optional(),
+    horaPresentacion: z.string().datetime().nullable().optional(),
     venceAt: z.string().datetime(),
   }),
   ruta: z.object({
@@ -49,6 +52,16 @@ export const PaqueteDiaSchema = z.object({
     codigo: z.string().min(1),
     nombre: z.string().min(1),
     color: z.string().min(1),
+    colorSecundario: z.string().nullable().optional(),
+    colorTexto: z.string().nullable().optional(),
+    colorTerciario: z.string().nullable().optional(),
+    colorFondo: z.string().nullable().optional(),
+    nombreCorto: z.string().nullable().optional(),
+    lema: z.string().nullable().optional(),
+    logoUrl: z.string().nullable().optional(),
+    distintivoTipo: LineaDistintivoTipoSchema.nullable().optional(),
+    distintivoValor: z.string().nullable().optional(),
+    cartelSuperior: z.string().nullable().optional(),
   }),
   paradas: z.array(ParadaPaqueteSchema),
   puntosControl: z.array(PuntoControlPaqueteSchema),

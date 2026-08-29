@@ -72,6 +72,8 @@ export class PaqueteDiaService {
           id: asignacion.id,
           fecha: asignacion.fecha.toISOString().slice(0, 10),
           horario: TurnoSchema.parse(asignacion.horario),
+          horaSalida: asignacion.horaSalida?.toISOString() ?? null,
+          horaPresentacion: asignacion.horaPresentacion?.toISOString() ?? null,
           venceAt: asignacion.venceAt.toISOString(),
         },
         ruta: {
@@ -87,6 +89,16 @@ export class PaqueteDiaService {
           // un color para pintar la ruta en el mapa del chofer, así que se resuelve acá con
           // el primario de marca QUIVO en vez de propagar `null` al contrato móvil.
           color: asignacion.ruta.linea.color ?? '#3226B4',
+          colorSecundario: asignacion.ruta.linea.colorSecundario,
+          colorTexto: asignacion.ruta.linea.colorTexto,
+          colorTerciario: asignacion.ruta.linea.colorTerciario,
+          colorFondo: asignacion.ruta.linea.colorFondo,
+          nombreCorto: asignacion.ruta.linea.nombreCorto,
+          lema: asignacion.ruta.linea.lema,
+          logoUrl: asignacion.ruta.linea.logoUrl,
+          distintivoTipo: asignacion.ruta.linea.distintivoTipo,
+          distintivoValor: asignacion.ruta.linea.distintivoValor,
+          cartelSuperior: asignacion.ruta.linea.cartelSuperior,
         },
         paradas: paradaRows.map((p) => ({
           id: p.id,

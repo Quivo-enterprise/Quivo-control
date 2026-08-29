@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react';
 import { Animated, Linking, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import type { ContextoOperativoMovil } from '@quivo/shared';
+import { resolverMarcaLinea, type ContextoOperativoMovil } from '@quivo/shared';
 import { Button } from '../../shared/components/Button';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
+import { formatHoraBolivia } from '../../shared/format-hora';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { formatearDistancia } from './format-distancia';
 
@@ -28,6 +29,12 @@ export interface NextControlSheetProps {
 export function NextControlSheet(props: NextControlSheetProps) {
   const sinPuntosControl = props.totalPoints === 0;
   const isFinished = props.tracking && !sinPuntosControl && props.nextPointOrder === null;
+  const listoParaIniciar = !props.tracking && props.canStart;
+  const turno = labelTurno(props.contexto.asignacion.horario);
+  const sentido = labelSentido(props.contexto.ruta.sentido);
+  const horaSalida = formatHoraBolivia(props.contexto.asignacion.horaSalida);
+  const horaPresentacion = formatHoraBolivia(props.contexto.asignacion.horaPresentacion);
+  const marca = resolverMarcaLinea(props.contexto.linea);
 
   const { panY } = props;
   const [minimized, setMinimized] = useState(false);
@@ -63,50 +70,97 @@ export function NextControlSheet(props: NextControlSheetProps) {
           }).start();
         }
       },
-    })
+    }),
   ).current;
-  
+
   return (
-    <Animated.View style={[styles.sheet, { transform: [{ translateY: panY }] }]}>
+    <Animated.View
+      style={[styles.sheet, { borderTopColor: marca.primary, transform: [{ translateY: panY }] }]}
+    >
       <View style={styles.dragArea} {...panResponder.panHandlers}>
         <View style={styles.dragHandle} />
       </View>
-      
+
       <View style={styles.headerRow}>
-        <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit>
+        <Text
+          style={[styles.title, { color: marca.primary }]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+        >
           {isFinished
             ? 'Recorrido finalizado'
-            : sinPuntosControl
-              ? 'Recorrido en curso'
-              : `Próximo control · #${(props.nextPointOrder ?? 0) + 1}`}
+            : listoParaIniciar
+              ? 'Ruta lista para iniciar'
+              : sinPuntosControl
+                ? 'Recorrido en curso'
+                : props.tracking
+                  ? `Próximo control · #${(props.nextPointOrder ?? 0) + 1}`
+                  : 'Preparando tu ruta'}
         </Text>
 
         {props.pendingEvents > 0 && (
-          <View style={[styles.badge, props.isOffline ? styles.badgeOffline : null, props.isSyncing ? styles.badgeSyncing : null]}>
+          <View
+            style={[
+              styles.badge,
+              props.isOffline ? styles.badgeOffline : null,
+              props.isSyncing ? styles.badgeSyncing : null,
+            ]}
+          >
             <Text style={styles.badgeText} numberOfLines={1}>
-              {props.isSyncing 
+              {props.isSyncing
                 ? `Sincronizando...`
-                : props.isOffline 
+                : props.isOffline
                   ? `${props.pendingEvents} pendientes (local)`
-                  : `${props.pendingEvents} pendientes`
-              }
+                  : `${props.pendingEvents} pendientes`}
             </Text>
           </View>
         )}
       </View>
 
-      {!isFinished && !sinPuntosControl && (
+      {listoParaIniciar && (
+        <View
+          accessibilityRole="text"
+          accessibilityLabel={`Ruta lista. ${turno}. Línea ${props.contexto.linea.codigo}, sentido ${sentido}.${horaSalida ? ` Salida programada a las ${horaSalida}.` : ''}`}
+          style={[styles.readyCard, { borderColor: marca.secondary }]}
+        >
+          <View style={styles.readyIcon}>
+            <Ionicons name="checkmark-circle" size={30} color={quivoColors.success} />
+          </View>
+          <View style={styles.readyCopy}>
+            <Text style={[styles.readyEyebrow, { color: marca.primary }]}>
+              RUTA CARGADA · {turno.toUpperCase()}
+            </Text>
+            <Text style={styles.readyTitle}>Es hora de iniciar tu recorrido</Text>
+            {horaSalida ? (
+              <Text style={styles.readySchedule}>
+                {horaPresentacion ? `Preséntate ${horaPresentacion} · ` : ''}Salida programada{' '}
+                {horaSalida}
+              </Text>
+            ) : null}
+            <Text style={styles.readyDescription}>
+              {props.contexto.linea.codigo} · {sentido}. Presiona el botón para activar el GPS.
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {props.tracking && !isFinished && !sinPuntosControl && (
         <View style={styles.locationContainer}>
-          <Ionicons name="location" size={20} color={quivoColors.primary} style={styles.locationIcon} />
+          <Ionicons name="location" size={20} color={marca.primary} style={styles.locationIcon} />
           <View style={styles.locationTextContainer}>
-            <Text style={styles.address}>Punto de control · #{(props.nextPointOrder ?? 0) + 1}</Text>
+            <Text style={styles.address}>
+              Punto de control · #{(props.nextPointOrder ?? 0) + 1}
+            </Text>
             <View style={styles.distanceRow}>
               <Text style={styles.distance}>
                 {props.distanciaMetros === null
                   ? 'Calculando distancia…'
                   : `A ${formatearDistancia(props.distanciaMetros)} de tu ubicación`}
               </Text>
-              <MiniStepper currentOrder={(props.nextPointOrder ?? 0) + 1} totalPoints={props.totalPoints} />
+              <MiniStepper
+                currentOrder={(props.nextPointOrder ?? 0) + 1}
+                totalPoints={props.totalPoints}
+              />
             </View>
           </View>
         </View>
@@ -119,7 +173,10 @@ export function NextControlSheet(props: NextControlSheetProps) {
           variant={props.tracking ? 'danger' : 'primary'}
           disabled={!props.tracking && !props.canStart}
           onPress={props.tracking ? props.onFinish : props.onStart}
-          style={styles.mainButton}
+          style={[
+            styles.mainButton,
+            !props.tracking ? { backgroundColor: marca.primary, borderColor: marca.primary } : {},
+          ]}
         >
           {props.tracking ? 'Finalizar recorrido' : 'Iniciar recorrido'}
         </Button>
@@ -160,6 +217,7 @@ const styles = StyleSheet.create({
     right: quivoSpacing.sm,
     bottom: quivoSpacing.sm,
     backgroundColor: quivoColors.white,
+    borderTopWidth: 4,
     borderRadius: quivoRadius.xl,
     paddingHorizontal: quivoSpacing.lg,
     paddingBottom: quivoSpacing.lg,
@@ -193,6 +251,46 @@ const styles = StyleSheet.create({
     color: quivoColors.text,
     fontFamily: quivoFonts.displayBold,
     fontSize: 20,
+  },
+  readyCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: quivoSpacing.md,
+    backgroundColor: quivoColors.successSoft,
+    borderColor: '#B6E6D0',
+    borderRadius: quivoRadius.lg,
+    borderWidth: 1,
+    padding: quivoSpacing.md,
+  },
+  readyIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readyCopy: {
+    flex: 1,
+    gap: quivoSpacing.xs,
+  },
+  readyEyebrow: {
+    color: quivoColors.success,
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 11,
+    letterSpacing: 0.4,
+  },
+  readyTitle: {
+    color: quivoColors.text,
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 15,
+  },
+  readySchedule: {
+    color: quivoColors.success,
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 12,
+  },
+  readyDescription: {
+    color: quivoColors.textSecondary,
+    fontFamily: quivoFonts.bodyMedium,
+    fontSize: 12,
+    lineHeight: 17,
   },
   badge: {
     backgroundColor: '#FFF0E5',
@@ -314,13 +412,23 @@ const styles = StyleSheet.create({
   },
 });
 
+function labelTurno(turno: ContextoOperativoMovil['asignacion']['horario']): string {
+  return { manana: 'Mañana', tarde: 'Tarde', noche: 'Noche' }[turno];
+}
+
+function labelSentido(sentido: string): string {
+  if (sentido === 'ida') return 'Ida';
+  if (sentido === 'vuelta') return 'Vuelta';
+  return sentido.charAt(0).toUpperCase() + sentido.slice(1);
+}
+
 function MiniStepper({ currentOrder, totalPoints }: { currentOrder: number; totalPoints: number }) {
   if (totalPoints === 0) return null;
-  
+
   // currentOrder viene del backend en base-1 (1, 2, 3...)
   // Lo convertimos a base-0 para lógica de arrays internos
   const zeroBasedCurrent = Math.max(0, currentOrder - 1);
-  
+
   const maxNodes = 4;
   // Paginación: avanzamos de a 4 nodos para que el usuario vea cómo se llenan las bolitas
   let startIdx = Math.floor(zeroBasedCurrent / maxNodes) * maxNodes;
@@ -333,7 +441,7 @@ function MiniStepper({ currentOrder, totalPoints }: { currentOrder: number; tota
 
   const nodes = [];
   let limit = Math.min(totalPoints - startIdx, maxNodes);
-  
+
   // Si fusionamos la página, el límite será maxNodes + 1 (ej: 5 bolitas en vez de 4)
   if (totalPoints - startIdx === maxNodes + 1) {
     limit = maxNodes + 1;
@@ -351,13 +459,17 @@ function MiniStepper({ currentOrder, totalPoints }: { currentOrder: number; tota
     <View style={styles.stepperContainer}>
       {nodes.map((node, i) => (
         <View key={node.idx} style={styles.stepperNodeWrapper}>
-          {i > 0 && <View style={[styles.stepperLine, node.isPassed ? styles.stepperLineActive : null]} />}
-          <View style={[
-            styles.stepperDot,
-            node.isPassed ? styles.stepperDotActive : null
-          ]}>
+          {i > 0 && (
+            <View style={[styles.stepperLine, node.isPassed ? styles.stepperLineActive : null]} />
+          )}
+          <View style={[styles.stepperDot, node.isPassed ? styles.stepperDotActive : null]}>
             {node.isPassed && (
-              <Ionicons name="checkmark" size={12} color={quivoColors.white} style={{ marginLeft: 1, marginTop: 1 }} />
+              <Ionicons
+                name="checkmark"
+                size={12}
+                color={quivoColors.white}
+                style={{ marginLeft: 1, marginTop: 1 }}
+              />
             )}
           </View>
         </View>

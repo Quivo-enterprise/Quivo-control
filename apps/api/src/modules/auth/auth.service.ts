@@ -8,11 +8,13 @@ import type {
   LoginRequest,
   LoginResponse,
   LogoutRequest,
+  PassengerRegisterRequest,
   RefreshRequest,
   RefreshResponse,
   Rol,
   UsuarioAdministrativo,
 } from '@quivo/shared';
+import { RolSchema } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
 /**
@@ -71,19 +73,55 @@ export class AuthService {
         body: { email, password },
       });
 
-      return {
-        accessToken: await this.mintAccessToken(sessionToken),
-        refreshToken: sessionToken,
-        user: {
-          id: user.id,
-          email: user.email,
-          rol: user.rol as Rol,
-          sindicatoId: (user.sindicatoId as string | null | undefined) ?? null,
-        },
-      };
+      return this.toLoginResponse(sessionToken, user);
     } catch (error) {
       if (error instanceof APIError) {
         throw new UnauthorizedException('Credenciales inválidas');
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Alta pública de QUIVO Rutas. El rol nunca viene del body: Better Auth recibe siempre
+   * `pasajero`, de modo que un cliente no puede autoelevarse a un rol de Control.
+   */
+  async registerPassenger(input: PassengerRegisterRequest): Promise<LoginResponse> {
+    try {
+      const result = await auth.api.signUpEmail({
+        body: {
+          email: input.email,
+          password: input.password,
+          name: input.name,
+          rol: 'pasajero',
+          sindicatoId: null,
+        },
+      });
+
+      await withTenantContext(
+        { rol: 'pasajero', sindicatoId: null, userId: result.user.id },
+        (tx) =>
+          tx.passengerProfile.create({
+            data: {
+              userId: result.user.id,
+              termsVersion: input.termsVersion,
+              termsAcceptedAt: new Date(),
+            },
+          }),
+      );
+
+      // Better Auth emite una sesión cuando el alta no requiere verificación inmediata.
+      // Si una configuración futura de email verification no la emite, reutilizamos el
+      // flujo de login para mantener estable el contrato de la API.
+      if (typeof result.token === 'string' && result.token.length > 0) {
+        return this.toLoginResponse(result.token, result.user);
+      }
+      return this.login({ email: input.email, password: input.password });
+    } catch (error) {
+      // No revelamos si el email ya existe: la respuesta pública es deliberadamente
+      // genérica para evitar enumeración de cuentas.
+      if (error instanceof APIError) {
+        throw new UnauthorizedException('No se pudo crear la cuenta');
       }
       throw error;
     }
@@ -273,6 +311,23 @@ export class AuthService {
   private async mintAccessToken(sessionToken: string): Promise<string> {
     const { token } = await auth.api.getToken({ headers: this.bearerHeaders(sessionToken) });
     return token;
+  }
+
+  private async toLoginResponse(
+    sessionToken: string,
+    user: { id: string; email: string; rol: unknown; sindicatoId?: unknown },
+  ): Promise<LoginResponse> {
+    const rol = RolSchema.parse(user.rol) as Rol;
+    return {
+      accessToken: await this.mintAccessToken(sessionToken),
+      refreshToken: sessionToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        rol,
+        sindicatoId: (user.sindicatoId as string | null | undefined) ?? null,
+      },
+    };
   }
 
   private bearerHeaders(sessionToken: string): Headers {

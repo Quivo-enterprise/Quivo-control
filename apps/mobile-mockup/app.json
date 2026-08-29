@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "QUIVO Mockup",
+    "slug": "quivo-mockup",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#3123C7"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "android": {
+      "package": "com.quivo.mockup"
+    },
+    "ios": {
+      "bundleIdentifier": "com.quivo.mockup"
+    }
+  }
+}

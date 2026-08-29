@@ -4,6 +4,7 @@ import { prisma, withTenantContext } from '@quivo/db';
 import type { LineaGeoJson } from '@quivo/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RutasService } from './rutas.service.js';
+import { ParadasService } from './paradas.service.js';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
 const GEOMETRIA_VALIDA: LineaGeoJson = {
@@ -17,6 +18,7 @@ const GEOMETRIA_VALIDA: LineaGeoJson = {
 
 describe('RutasService', () => {
   const service = new RutasService();
+  const paradasService = new ParadasService();
   const sindicatoAId = randomUUID();
   const sindicatoBId = randomUUID();
   let lineaAId: string;
@@ -41,6 +43,7 @@ describe('RutasService', () => {
 
   afterAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      await tx.$executeRaw`DELETE FROM paradas WHERE "rutaId" IN (SELECT id FROM rutas WHERE "lineaId" IN (${lineaAId}, ${lineaBId}))`;
       await tx.$executeRaw`DELETE FROM rutas WHERE "lineaId" IN (${lineaAId}, ${lineaBId})`;
       const sindicatoIds = { in: [sindicatoAId, sindicatoBId] };
       await tx.auditLog.deleteMany({ where: { sindicatoId: sindicatoIds } });
@@ -105,5 +108,31 @@ describe('RutasService', () => {
     });
     expect(actualizada.sentido).toBe('vuelta');
     expect(actualizada.estado).toBe('inactivo');
+  });
+
+  it('rechaza una nueva geometría que deja una parada fuera de la ruta', async () => {
+    const ruta = await service.crear(adminSindicatoA, lineaAId, {
+      sentido: 'ida con paradas',
+      geometria: GEOMETRIA_VALIDA,
+      estado: 'activo',
+    });
+    await paradasService.crear(adminSindicatoA, ruta.id, {
+      tipo: 'origen',
+      orden: 0,
+      coord: { type: 'Point', coordinates: [-58.4, -34.6] },
+      estado: 'activo',
+    });
+
+    await expect(
+      service.actualizar(adminSindicatoA, ruta.id, {
+        geometria: {
+          type: 'LineString',
+          coordinates: [
+            [-58.1, -34.9],
+            [-58.09, -34.9],
+          ],
+        },
+      }),
+    ).rejects.toThrow('deja la parada');
   });
 });

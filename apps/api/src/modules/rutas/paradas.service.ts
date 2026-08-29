@@ -12,8 +12,12 @@ interface ParadaRow {
   rutaId: string;
   tipo: string;
   orden: number;
+  nombre: string | null;
+  referencia: string | null;
   coord: string; // GeoJSON como texto (ST_AsGeoJSON devuelve `text`).
   estado: string;
+  publicStatus: string;
+  publishedAt: Date | null;
 }
 
 /** Mismo patrón que rutas.service.ts: sin RLS propia (hereda tenant vía rutaId → linea),
@@ -24,7 +28,7 @@ export class ParadasService {
     return withTenantContext(toTenantContext(actor), async (tx) => {
       await asegurarRutaVisible(tx, rutaId);
       const rows = await tx.$queryRaw<ParadaRow[]>`
-        SELECT id, "rutaId", tipo, orden, ST_AsGeoJSON(coord) as coord, estado
+        SELECT id, "rutaId", tipo, orden, nombre, referencia, ST_AsGeoJSON(coord) as coord, estado, "publicStatus", "publishedAt"
         FROM paradas WHERE "rutaId" = ${rutaId} ORDER BY orden ASC
       `;
       return rows.map(toParada);
@@ -46,9 +50,9 @@ export class ParadasService {
 
       const id = randomUUID();
       await tx.$executeRaw`
-        INSERT INTO paradas (id, "rutaId", tipo, orden, coord, estado, "createdAt", "updatedAt")
+        INSERT INTO paradas (id, "rutaId", tipo, orden, nombre, referencia, coord, estado, "createdAt", "updatedAt")
         VALUES (
-          ${id}, ${rutaId}, ${data.tipo}, ${data.orden},
+          ${id}, ${rutaId}, ${data.tipo}, ${data.orden}, ${data.nombre ?? null}, ${data.referencia ?? null},
           ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(data.coord)}), 4326)::geography,
           ${data.estado}, now(), now()
         )
@@ -77,6 +81,12 @@ export class ParadasService {
       if (data.orden !== undefined) {
         await tx.$executeRaw`UPDATE paradas SET orden = ${data.orden}, "updatedAt" = now() WHERE id = ${id}`;
       }
+      if (data.nombre !== undefined) {
+        await tx.$executeRaw`UPDATE paradas SET nombre = ${data.nombre}, "updatedAt" = now() WHERE id = ${id}`;
+      }
+      if (data.referencia !== undefined) {
+        await tx.$executeRaw`UPDATE paradas SET referencia = ${data.referencia}, "updatedAt" = now() WHERE id = ${id}`;
+      }
       if (data.estado !== undefined) {
         await tx.$executeRaw`UPDATE paradas SET estado = ${data.estado}, "updatedAt" = now() WHERE id = ${id}`;
       }
@@ -88,7 +98,7 @@ export class ParadasService {
 
 async function obtenerFila(tx: Prisma.TransactionClient, id: string): Promise<ParadaRow> {
   const rows = await tx.$queryRaw<ParadaRow[]>`
-    SELECT id, "rutaId", tipo, orden, ST_AsGeoJSON(coord) as coord, estado
+    SELECT id, "rutaId", tipo, orden, nombre, referencia, ST_AsGeoJSON(coord) as coord, estado, "publicStatus", "publishedAt"
     FROM paradas WHERE id = ${id}
   `;
   const row = rows[0];
@@ -103,5 +113,9 @@ function toTenantContext(actor: AuthenticatedUser): { rol: string; sindicatoId: 
 }
 
 function toParada(row: ParadaRow): Parada {
-  return ParadaSchema.parse({ ...row, coord: JSON.parse(row.coord) });
+  return ParadaSchema.parse({
+    ...row,
+    coord: JSON.parse(row.coord),
+    publishedAt: row.publishedAt?.toISOString() ?? null,
+  });
 }
