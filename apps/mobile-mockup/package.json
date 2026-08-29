@@ -4,9 +4,6 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "build": "tsc --noEmit",
-    "lint": "eslint App.tsx",
-    "typecheck": "tsc --noEmit",
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios"
