@@ -257,11 +257,12 @@ export interface TabsProps {
   items: TabItem[];
   value: string;
   onValueChange: (value: string) => void;
+  className?: string;
 }
 
-export function Tabs({ items, value, onValueChange }: TabsProps) {
+export function Tabs({ items, value, onValueChange, className }: TabsProps) {
   return (
-    <div className="qv-tabs" role="tablist">
+    <div className={cx('qv-tabs', className)} role="tablist">
       {items.map((item) => (
         <button
           key={item.value}
