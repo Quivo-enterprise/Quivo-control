@@ -40,15 +40,17 @@ export interface DataColumn<T> {
   render?: (row: T) => ReactNode;
 }
 
-/** Punto geográfico usado por `<RouteMap>` para marcadores individuales (`markers`, `stops`)
- * y como vértice de una `MapRoute`. */
 export interface MapPoint {
+  id?: string;
   lat: number;
   lng: number;
   label?: string;
   description?: string;
   color?: string;
-  pinType?: 'pin' | 'stop' | 'pulse';
+  pinType?: 'pin' | 'stop' | 'pulse' | 'node';
+  draggable?: boolean;
+  onDragEnd?: (point: { lat: number; lng: number }) => void;
+  onClick?: () => void;
 }
 
 /** Polilínea (trazado) que dibuja `<RouteMap>` — una ruta, la traza GPS real, un borrador en
@@ -59,15 +61,18 @@ export interface MapRoute {
   color?: string;
   dashed?: boolean;
   points: { lat: number; lng: number }[];
+  onClick?: () => void;
 }
 
 /** Círculo de tolerancia alrededor de un punto de control. Prop `zones` de `RouteMap` — la
  * misma que documenta `docs/handoff.md` como agregada al design system original y perdida
  * junto con el repo. */
 export interface MapZone {
+  id?: string;
   lat: number;
   lng: number;
   radiusMeters: number;
   label?: string;
   color?: string;
+  onClick?: () => void;
 }

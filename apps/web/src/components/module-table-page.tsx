@@ -12,13 +12,14 @@ import {
   Input,
   Loader,
   Modal,
-  PageHeader,
   SearchInput,
   Select,
   Tabs,
+  Tooltip,
   type DataColumn,
   type SelectOption,
 } from '@quivo/design-system';
+import { Pencil, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
 
 export interface EntityFieldConfig {
   key: string;
@@ -61,6 +62,13 @@ export interface ModuleDataSource<T> {
   update: (id: string, values: Record<string, unknown>) => Promise<T>;
 }
 
+export interface TableFilterConfig<T> {
+  key: keyof T;
+  label: string;
+  placeholder?: string;
+  options: SelectOption[];
+}
+
 interface ModuleTablePageProps<T extends Record<string, unknown>> {
   title: string;
   subtitle?: string;
@@ -71,13 +79,16 @@ interface ModuleTablePageProps<T extends Record<string, unknown>> {
   initialRows?: T[];
   searchPlaceholder?: string;
   searchKeys: (keyof T)[];
+  filters?: TableFilterConfig<T>[];
   fields: EntityFieldConfig[];
   createDefaults?: Record<string, unknown>;
   dataSource?: ModuleDataSource<T>;
   formTabs?: FormTabConfig[];
   formPresentation?: 'modal' | 'inline';
-  renderFormPreview?: (values: Record<string, string>) => ReactNode;
-  /** Acciones específicas del módulo; recibe una función para reflejar la fila actualizada. */
+  renderFormPreview?: (
+    values: Record<string, string>,
+    setFieldValue?: (key: string, value: string) => void,
+  ) => ReactNode;
   renderRowActions?: (row: T, replaceRow: (updated: T) => void) => ReactNode;
 }
 
@@ -105,12 +116,13 @@ function toFormValues(
  */
 export function ModuleTablePage<T extends Record<string, unknown>>({
   title,
-  subtitle,
+  subtitle: _subtitle,
   entityLabel,
   columns,
   initialRows,
   searchPlaceholder = 'Buscar...',
   searchKeys,
+  filters,
   fields,
   createDefaults = {},
   dataSource,
@@ -121,6 +133,7 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
 }: ModuleTablePageProps<T>) {
   const [rows, setRows] = useState<T[]>(initialRows ?? []);
   const [query, setQuery] = useState('');
+  const [activeFilters, setActiveFilters] = useState<Record<string, string>>({});
   const [editingRow, setEditingRow] = useState<T | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
@@ -172,17 +185,25 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
 
   const filteredRows = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) {
-      return rows;
-    }
-    return rows.filter((row) =>
-      searchKeys.some((key) =>
+    return rows.filter((row) => {
+      // Filtrar por filtros activos
+      for (const [key, filterValue] of Object.entries(activeFilters)) {
+        if (filterValue && String(row[key] ?? '') !== filterValue) {
+          return false;
+        }
+      }
+      if (!normalized) {
+        return true;
+      }
+      return searchKeys.some((key) =>
         String(row[key] ?? '')
           .toLowerCase()
           .includes(normalized),
-      ),
-    );
-  }, [rows, query, searchKeys]);
+      );
+    });
+  }, [rows, query, searchKeys, activeFilters]);
+
+  const hasActiveFilters = Boolean(query || Object.values(activeFilters).some(Boolean));
 
   const openCreate = () => {
     setFormError(null);
@@ -499,19 +520,13 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
     </>
   );
 
+  const ctaLabel =
+    entityLabel.toLowerCase().startsWith('l') || entityLabel.toLowerCase().startsWith('r')
+      ? `Nueva ${entityLabel}`
+      : `Nuevo ${entityLabel}`;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <PageHeader
-        title={title}
-        subtitle={subtitle}
-        actions={
-          !isFormOpen || formPresentation === 'modal' ? (
-            <Button onClick={openCreate} style={{ textTransform: 'capitalize' }}>
-              Nuevo {entityLabel}
-            </Button>
-          ) : undefined
-        }
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', position: 'relative' }}>
       {formPresentation === 'inline' && isFormOpen ? (
         <section className="module-inline-editor" aria-label={formTitle}>
           <header className="module-inline-editor__header">
@@ -533,7 +548,11 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
           >
             <div className="module-inline-editor__form">{formBody}</div>
             {renderFormPreview ? (
-              <div className="module-inline-editor__preview">{renderFormPreview(formValues)}</div>
+              <div className="module-inline-editor__preview">
+                {renderFormPreview(formValues, (key, value) => {
+                  setFormValues((prev) => ({ ...prev, [key]: value }));
+                })}
+              </div>
             ) : null}
           </div>
           <footer className="module-inline-editor__footer">
@@ -551,17 +570,129 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
         </section>
       ) : (
         <>
-          <SearchInput
-            placeholder={searchPlaceholder}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onClear={() => setQuery('')}
-          />
+          {/* Barra Unificada de Identidad, Búsqueda y Filtros */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '0.85rem',
+              flexWrap: 'wrap',
+              padding: '0.75rem 1.15rem',
+              background: 'var(--qv-surface-glass)',
+              backdropFilter: 'blur(24px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+              borderRadius: 'var(--qv-radius-xl)',
+              border: '1px solid var(--qv-border-glass)',
+              boxShadow: 'var(--qv-shadow-sm)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flex: '1 1 auto' }}>
+              <h1
+                style={{
+                  margin: 0,
+                  fontSize: '1.05rem',
+                  fontWeight: 800,
+                  color: 'var(--qv-text-primary)',
+                  letterSpacing: '-0.02em',
+                  whiteSpace: 'nowrap',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                }}
+              >
+                {title}
+              </h1>
+
+              <div style={{ width: '1px', height: '1.4rem', backgroundColor: 'var(--qv-border-glass)' }} />
+
+              <div style={{ flex: '1 1 14rem', maxWidth: '24rem' }}>
+                <SearchInput
+                  placeholder={searchPlaceholder}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onClear={() => setQuery('')}
+                />
+              </div>
+
+              {filters && filters.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '1.85rem',
+                      height: '1.85rem',
+                      borderRadius: 'var(--qv-radius-md)',
+                      backgroundColor: 'color-mix(in srgb, var(--qv-color-primary) 8%, var(--qv-surface-card))',
+                      border: '1px solid var(--qv-border-glass)',
+                      color: 'var(--qv-color-primary)',
+                    }}
+                  >
+                    <SlidersHorizontal size={14} />
+                  </span>
+
+                  {filters.map((filter) => (
+                    <div key={String(filter.key)} style={{ minWidth: '10rem' }}>
+                      <Select
+                        aria-label={filter.label}
+                        placeholder={filter.placeholder ?? `Todos (${filter.label})`}
+                        options={filter.options}
+                        value={activeFilters[String(filter.key)] ?? ''}
+                        onChange={(e) =>
+                          setActiveFilters((prev) => ({
+                            ...prev,
+                            [String(filter.key)]: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  ))}
+
+                  {hasActiveFilters && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setQuery('');
+                        setActiveFilters({});
+                      }}
+                    >
+                      Limpiar
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <span
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                color: 'var(--qv-text-secondary)',
+                padding: '0.25rem 0.65rem',
+                borderRadius: 'var(--qv-radius-full)',
+                backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 70%, transparent)',
+                border: '1px solid var(--qv-border-glass)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {filteredRows.length} {filteredRows.length === 1 ? 'registro' : 'registros'}
+              {hasActiveFilters && filteredRows.length !== rows.length && (
+                <span style={{ color: 'var(--qv-color-primary)', marginLeft: '0.25rem' }}>
+                  (de {rows.length})
+                </span>
+              )}
+            </span>
+          </div>
+
           {loadError && (
             <Alert variant="danger" title="No se pudo cargar">
               {loadError}
             </Alert>
           )}
+
           {isLoading ? (
             <Loader label={`Cargando ${entityLabel}s...`} />
           ) : (
@@ -570,7 +701,7 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
               rows={filteredRows}
               empty={query ? `Sin resultados para "${query}".` : 'Sin registros para mostrar.'}
               actions={(row) => (
-                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                <div className="qv-table-actions-capsule">
                   {renderRowActions?.(row, (updated) =>
                     setRows((previous) =>
                       previous.map((current) =>
@@ -578,17 +709,47 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
                       ),
                     ),
                   )}
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
-                    Editar
-                  </Button>
+                  {renderRowActions && <span className="qv-action-pill-divider" />}
+                  <Tooltip content="Editar registro">
+                    <button
+                      type="button"
+                      className="qv-action-pill-btn"
+                      onClick={() => openEdit(row)}
+                      aria-label="Editar"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  </Tooltip>
                   {!dataSource && (
-                    <Button variant="ghost" size="sm" onClick={() => setDeletingRow(row)}>
-                      Eliminar
-                    </Button>
+                    <>
+                      <span className="qv-action-pill-divider" />
+                      <Tooltip content="Eliminar registro">
+                        <button
+                          type="button"
+                          className="qv-action-pill-btn qv-action-pill-btn--danger"
+                          onClick={() => setDeletingRow(row)}
+                          aria-label="Eliminar"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </Tooltip>
+                    </>
                   )}
                 </div>
               )}
             />
+          )}
+
+          {/* Botón Flotante de Creación Abajo a la Derecha */}
+          {(!isFormOpen || formPresentation === 'modal') && (
+            <button
+              type="button"
+              className="qv-floating-fab-bottom-right"
+              onClick={openCreate}
+            >
+              <Plus size={18} strokeWidth={2.5} />
+              <span>{ctaLabel}</span>
+            </button>
           )}
 
           <Modal

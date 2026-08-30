@@ -246,7 +246,7 @@ export interface ColorPickerProps {
 // formulario deje de ser `''` y pase a valer lo mismo que ya se le mostraba al usuario. De
 // paso cierra el hallazgo de `route-map-impl.tsx`: una línea guardada sin tocar el picker ya
 // no persiste `''` (que ahí producía una ruta invisible en el mapa).
-const DEFAULT_COLOR_PICKER_VALUE = '#4338ca';
+const DEFAULT_COLOR_PICKER_VALUE = '#3226b4';
 
 export function ColorPicker({ id, name, label, value, onChange, className }: ColorPickerProps) {
   const generatedId = useId();
@@ -440,6 +440,10 @@ export function Select({
   }, [open, activeIndex]);
 
   function openList() {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (rect) {
+      setPosition({ top: rect.bottom + 6, left: rect.left, width: rect.width });
+    }
     setOpen(true);
     setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
   }

@@ -11,8 +11,30 @@
   --qv-font-body: var(--font-montserrat), system-ui, sans-serif;
 }
 
+*,
+*::before,
+*::after {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+*::-webkit-scrollbar,
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
 body {
   font-family: var(--qv-font-body);
+}
+
+/* Animación del punto pulsante "En vivo" */
+@keyframes qv-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
 }
 
 /* Entidad Vehículo — composición propia sobre los componentes del design system. */
@@ -97,19 +119,24 @@ body {
 }
 
 .vehicles-metrics.qv-metric-strip {
-  background: color-mix(in srgb, var(--qv-surface-card) 72%, transparent);
-  border-color: color-mix(in srgb, var(--qv-color-primary) 12%, var(--qv-border-subtle));
-  backdrop-filter: blur(10px);
+  background: var(--qv-surface-glass);
+  border: 1px solid var(--qv-border-glass);
+  border-radius: var(--qv-radius-xl);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: var(--qv-shadow-sm);
   position: relative;
   z-index: 1;
 }
 
 .vehicles-fleet {
   animation: vehicle-rise 0.45s 0.08s ease both;
-  background: var(--qv-surface-card);
-  border: 1px solid var(--qv-border-subtle);
-  border-radius: var(--qv-radius-lg);
-  box-shadow: var(--qv-shadow-xs);
+  background: var(--qv-surface-glass);
+  border: 1px solid var(--qv-border-glass);
+  border-radius: var(--qv-radius-xl);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: var(--qv-shadow-sm);
   display: flex;
   flex-direction: column;
   gap: var(--qv-space-md);
@@ -132,10 +159,10 @@ body {
 
 .vehicles-toolbar__filter-icon {
   align-items: center;
-  background: var(--qv-surface-soft);
-  border: 1px solid var(--qv-border-subtle);
-  border-radius: var(--qv-radius-sm);
-  color: var(--qv-text-secondary);
+  background: color-mix(in srgb, var(--qv-color-primary) 8%, var(--qv-surface-card));
+  border: 1px solid var(--qv-border-glass);
+  border-radius: var(--qv-radius-md);
+  color: var(--qv-color-primary);
   display: inline-flex;
   height: 2.5rem;
   justify-content: center;
@@ -1010,8 +1037,439 @@ body {
   border: 2px solid var(--qv-color-primary);
 }
 
-.routes-map-canvas {
-  border-radius: 0 0 var(--qv-radius-lg) var(--qv-radius-lg) !important;
+/* =========================================================================
+   Personalización del Mapa Quivo Rutas (Full Backdrop & Glass Theme)
+   ========================================================================= */
+
+.qv-admin-layout:has(.qv-route-builder-wrapper) {
+  padding: 0 !important;
+  gap: 0 !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+}
+
+.qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__sidebar {
+  top: 0 !important;
+  height: 100vh !important;
+  padding: var(--qv-space-sm) 0 var(--qv-space-sm) var(--qv-space-sm) !important;
+  z-index: 40 !important;
+}
+
+.qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__main {
+  gap: 0 !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+}
+
+.qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__content {
+  max-width: 100% !important;
+  width: 100% !important;
+  height: 100vh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.qv-route-builder-wrapper {
+  position: relative;
+  width: 100% !important;
+  height: 100vh !important;
+  min-height: 100vh !important;
+  border-radius: 0 !important;
+  overflow: hidden;
+  border: none !important;
+  box-shadow: none !important;
+  background: var(--qv-surface-sunken);
+}
+
+.routes-map-canvas,
+.qv-route-builder-wrapper .qv-route-map,
+.qv-route-builder-wrapper .qv-route-map__canvas,
+.qv-route-builder-wrapper .leaflet-container {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  z-index: 1 !important;
+}
+
+/* Tratamiento visual de tiles oscuro/futurista Quivo */
+.qv-route-builder-wrapper .leaflet-tile-pane,
+.qv-live-map-wrapper .leaflet-tile-pane,
+.qv-route-map .leaflet-tile-pane {
+  filter: brightness(0.95) contrast(1.15) saturate(1.1);
+  transition: filter var(--qv-transition-smooth);
+}
+
+/* Ocultar ABSOLUTAMENTE TODOS los controles nativos blancos de Leaflet (cajas de zoom, esquinas y barras de atribución) */
+.leaflet-control-container,
+.leaflet-control-container *,
+.leaflet-top,
+.leaflet-bottom,
+.leaflet-left,
+.leaflet-right,
+.leaflet-control,
+.leaflet-control-zoom,
+.leaflet-control-attribution,
+.leaflet-control-layers,
+.leaflet-control-scale {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.qv-map-pin-wrapper,
+.qv-map-node-wrapper {
+  background: transparent !important;
+  border: 0 !important;
+}
+
+.qv-map-node-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--qv-node-color, var(--qv-color-primary));
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--qv-font-body);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 10px var(--qv-node-color, var(--qv-color-primary));
+  cursor: grab;
+  user-select: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.qv-map-node-handle:hover,
+.qv-map-node-handle:active {
+  transform: scale(1.3);
+  cursor: grabbing;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6), 0 0 16px var(--qv-node-color, var(--qv-color-primary));
+}
+
+/* =========================================================================
+   Sistema Dinámico e Inteligente de Tooltips (Quivo Glass Tooltips)
+   Garantiza visibilidad 100% en Top, Bottom, Left, Right sin cortes en drawers o tablas
+   ========================================================================= */
+
+.qv-tooltip {
+  position: relative;
+  display: inline-flex;
+  z-index: 30;
+}
+
+.qv-tooltip:hover,
+.qv-tooltip:focus-within {
+  z-index: 999999 !important;
+}
+
+/* Base del globo */
+.qv-tooltip[data-qv-tooltip]::after {
+  content: attr(data-qv-tooltip);
+  position: absolute;
+  bottom: calc(100% + 0.45rem);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: #090d16;
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.8), 0 4px 12px -2px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.3rem 0.65rem;
+  border-radius: var(--qv-radius-md);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--qv-transition-fast), transform var(--qv-transition-fast);
+  z-index: 9999999 !important;
+}
+
+/* Flechita base */
+.qv-tooltip[data-qv-tooltip]::before {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 0.2rem);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  border-width: 5px 5px 0 5px;
+  border-style: solid;
+  border-color: #090d16 transparent transparent transparent;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--qv-transition-fast), transform var(--qv-transition-fast);
+  z-index: 9999999 !important;
+}
+
+.qv-tooltip:hover[data-qv-tooltip]::after,
+.qv-tooltip:hover[data-qv-tooltip]::before,
+.qv-tooltip:focus-within[data-qv-tooltip]::after,
+.qv-tooltip:focus-within[data-qv-tooltip]::before {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* --- Posicionamiento hacia ABAJO (data-position="bottom" o .qv-tooltip--bottom) --- */
+.qv-tooltip[data-position="bottom"]::after,
+.qv-tooltip--bottom::after {
+  top: calc(100% + 0.45rem) !important;
+  bottom: auto !important;
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) translateY(-4px) !important;
+}
+.qv-tooltip[data-position="bottom"]::before,
+.qv-tooltip--bottom::before {
+  top: calc(100% + 0.2rem) !important;
+  bottom: auto !important;
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) translateY(-4px) !important;
+  border-width: 0 5px 5px 5px !important;
+  border-color: transparent transparent #090d16 transparent !important;
+}
+.qv-tooltip[data-position="bottom"]:hover::after,
+.qv-tooltip[data-position="bottom"]:hover::before,
+.qv-tooltip--bottom:hover::after,
+.qv-tooltip--bottom:hover::before {
+  transform: translateX(-50%) translateY(0) !important;
+}
+
+/* --- Posicionamiento hacia la IZQUIERDA (data-position="left" o .qv-tooltip--left) --- */
+.qv-tooltip[data-position="left"]::after,
+.qv-tooltip--left::after {
+  top: 50% !important;
+  bottom: auto !important;
+  right: calc(100% + 0.5rem) !important;
+  left: auto !important;
+  transform: translateY(-50%) translateX(4px) !important;
+}
+.qv-tooltip[data-position="left"]::before,
+.qv-tooltip--left::before {
+  top: 50% !important;
+  bottom: auto !important;
+  right: calc(100% + 0.2rem) !important;
+  left: auto !important;
+  transform: translateY(-50%) translateX(4px) !important;
+  border-width: 5px 0 5px 5px !important;
+  border-color: transparent transparent transparent #090d16 !important;
+}
+.qv-tooltip[data-position="left"]:hover::after,
+.qv-tooltip[data-position="left"]:hover::before,
+.qv-tooltip--left:hover::after,
+.qv-tooltip--left:hover::before {
+  transform: translateY(-50%) translateX(0) !important;
+}
+
+/* --- Posicionamiento hacia la DERECHA (data-position="right" o .qv-tooltip--right) --- */
+.qv-tooltip[data-position="right"]::after,
+.qv-tooltip--right::after {
+  top: 50% !important;
+  bottom: auto !important;
+  left: calc(100% + 0.5rem) !important;
+  right: auto !important;
+  transform: translateY(-50%) translateX(-4px) !important;
+}
+.qv-tooltip[data-position="right"]::before,
+.qv-tooltip--right::before {
+  top: 50% !important;
+  bottom: auto !important;
+  left: calc(100% + 0.2rem) !important;
+  right: auto !important;
+  transform: translateY(-50%) translateX(-4px) !important;
+  border-width: 5px 5px 5px 0 !important;
+  border-color: transparent #090d16 transparent transparent !important;
+}
+.qv-tooltip[data-position="right"]:hover::after,
+.qv-tooltip[data-position="right"]:hover::before,
+.qv-tooltip--right:hover::after,
+.qv-tooltip--right:hover::before {
+  transform: translateY(-50%) translateX(0) !important;
+}
+
+/* --- REGLAS INTELIGENTES PARA CÁPSULAS DE ACCIONES EN FILAS Y LISTAS --- */
+/* En filas de paradas, puntos de control y nodos, los tooltips van hacia la IZQUIERDA dentro de la fila */
+.qv-table-actions-capsule .qv-tooltip[data-qv-tooltip]::after,
+.qv-table__actions .qv-tooltip[data-qv-tooltip]::after {
+  top: 50% !important;
+  bottom: auto !important;
+  right: calc(100% + 0.55rem) !important;
+  left: auto !important;
+  transform: translateY(-50%) translateX(4px) !important;
+  max-width: 16rem;
+}
+.qv-table-actions-capsule .qv-tooltip[data-qv-tooltip]::before,
+.qv-table__actions .qv-tooltip[data-qv-tooltip]::before {
+  top: 50% !important;
+  bottom: auto !important;
+  right: calc(100% + 0.22rem) !important;
+  left: auto !important;
+  border-width: 5px 0 5px 5px !important;
+  border-color: transparent transparent transparent #090d16 !important;
+  transform: translateY(-50%) translateX(4px) !important;
+}
+.qv-table-actions-capsule .qv-tooltip:hover[data-qv-tooltip]::after,
+.qv-table-actions-capsule .qv-tooltip:focus-within[data-qv-tooltip]::after,
+.qv-table__actions .qv-tooltip:hover[data-qv-tooltip]::after,
+.qv-table__actions .qv-tooltip:focus-within[data-qv-tooltip]::after {
+  transform: translateY(-50%) translateX(0) !important;
+}
+.qv-table-actions-capsule .qv-tooltip:hover[data-qv-tooltip]::before,
+.qv-table-actions-capsule .qv-tooltip:focus-within[data-qv-tooltip]::before,
+.qv-table__actions .qv-tooltip:hover[data-qv-tooltip]::before,
+.qv-table__actions .qv-tooltip:focus-within[data-qv-tooltip]::before {
+  transform: translateY(-50%) translateX(0) !important;
+}
+
+/* --- REGLAS INTELIGENTES PARA TOOLBARS HORIZONTALES (como Herramientas de Trazo) --- */
+/* Todos los botones de la toolbar horizontal abren hacia ARRIBA de forma segura dentro del drawer */
+.qv-trace-tools-toolbar .qv-tooltip[data-qv-tooltip]::after {
+  left: 50% !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: calc(100% + 0.45rem) !important;
+  transform: translateX(-50%) translateY(4px) !important;
+  max-width: 18rem !important;
+  white-space: nowrap !important;
+}
+.qv-trace-tools-toolbar .qv-tooltip:hover[data-qv-tooltip]::after,
+.qv-trace-tools-toolbar .qv-tooltip:focus-within[data-qv-tooltip]::after {
+  transform: translateX(-50%) translateY(0) !important;
+}
+.qv-trace-tools-toolbar .qv-tooltip[data-qv-tooltip]::before {
+  left: 50% !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: calc(100% + 0.2rem) !important;
+  border-width: 5px 5px 0 5px !important;
+  border-color: #090d16 transparent transparent transparent !important;
+  transform: translateX(-50%) translateY(4px) !important;
+}
+.qv-trace-tools-toolbar .qv-tooltip:hover[data-qv-tooltip]::before,
+.qv-trace-tools-toolbar .qv-tooltip:focus-within[data-qv-tooltip]::before {
+  transform: translateX(-50%) translateY(0) !important;
+}
+
+/* El primer botón de la barra de trazo se alinea a la izquierda de la cápsula para no salir del borde */
+.qv-trace-tools-toolbar > .qv-tooltip:first-of-type[data-qv-tooltip]::after {
+  left: 0 !important;
+  right: auto !important;
+  transform: translateY(4px) !important;
+}
+.qv-trace-tools-toolbar > .qv-tooltip:first-of-type:hover[data-qv-tooltip]::after,
+.qv-trace-tools-toolbar > .qv-tooltip:first-of-type:focus-within[data-qv-tooltip]::after {
+  transform: translateY(0) !important;
+}
+.qv-trace-tools-toolbar > .qv-tooltip:first-of-type[data-qv-tooltip]::before {
+  left: 0.6rem !important;
+  right: auto !important;
+  transform: translateY(4px) !important;
+}
+.qv-trace-tools-toolbar > .qv-tooltip:first-of-type:hover[data-qv-tooltip]::before,
+.qv-trace-tools-toolbar > .qv-tooltip:first-of-type:focus-within[data-qv-tooltip]::before {
+  transform: translateY(0) !important;
+}
+
+/* El último botón de la barra de trazo se alinea a la derecha de la cápsula */
+.qv-trace-tools-toolbar > .qv-tooltip:last-of-type[data-qv-tooltip]::after {
+  left: auto !important;
+  right: 0 !important;
+  transform: translateY(4px) !important;
+}
+.qv-trace-tools-toolbar > .qv-tooltip:last-of-type:hover[data-qv-tooltip]::after,
+.qv-trace-tools-toolbar > .qv-tooltip:last-of-type:focus-within[data-qv-tooltip]::after {
+  transform: translateY(0) !important;
+}
+.qv-trace-tools-toolbar > .qv-tooltip:last-of-type[data-qv-tooltip]::before {
+  left: auto !important;
+  right: 0.6rem !important;
+  transform: translateY(4px) !important;
+}
+.qv-trace-tools-toolbar > .qv-tooltip:last-of-type:hover[data-qv-tooltip]::before,
+.qv-trace-tools-toolbar > .qv-tooltip:last-of-type:focus-within[data-qv-tooltip]::before {
+  transform: translateY(0) !important;
+}
+
+/* Tooltips y Popups con Glassmorphism */
+.leaflet-popup-content-wrapper {
+  background: var(--qv-surface-glass) !important;
+  backdrop-filter: blur(28px) saturate(190%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(190%) !important;
+  border: 1px solid var(--qv-border-glass) !important;
+  border-radius: var(--qv-radius-lg) !important;
+  box-shadow: var(--qv-shadow-floating) !important;
+  color: var(--qv-text-primary) !important;
+  font-family: var(--qv-font-sans) !important;
+  font-size: var(--qv-text-xs) !important;
+  padding: 0.35rem 0.65rem !important;
+}
+
+.leaflet-popup-tip {
+  background: var(--qv-surface-card) !important;
+  border: 1px solid var(--qv-border-glass) !important;
+  box-shadow: var(--qv-shadow-sm) !important;
+}
+
+.leaflet-tooltip {
+  background: var(--qv-surface-glass) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid var(--qv-border-glass) !important;
+  border-radius: var(--qv-radius-full) !important;
+  color: var(--qv-text-primary) !important;
+  font-family: var(--qv-font-sans) !important;
+  font-size: 0.72rem !important;
+  font-weight: 700 !important;
+  box-shadow: var(--qv-shadow-md) !important;
+  padding: 0.25rem 0.65rem !important;
+}
+
+.leaflet-tooltip::before {
+  display: none !important;
+}
+
+/* Glow y remate suave en trazados de ruta */
+.qv-route-builder-wrapper path.leaflet-interactive,
+.qv-live-map-wrapper path.leaflet-interactive {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--qv-color-primary) 45%, transparent));
+}
+
+/* Modales amplios (sin scroll) */
+.qv-modal--wide {
+  max-width: 56rem !important;
+  width: 92vw !important;
+}
+
+.qv-modal--xl {
+  max-width: 66rem !important;
+  width: 94vw !important;
+}
+
+.qv-modal--2xl {
+  max-width: 76rem !important;
+  width: 96vw !important;
 }
 
 @media (max-width: 1100px) {
@@ -1095,19 +1553,55 @@ body {
 }
 
 /* ==========================================================================
-   VEHICLE FORM INLINE PANEL (REDESIGN)
+   VEHICLE & LINE FORM INLINE PANEL (FULL-WIDTH 100% LAYOUT)
    ========================================================================== */
 
-.vehicle-form-panel {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05);
+.qv-admin-layout__content {
+  max-width: 100% !important;
+  width: 100% !important;
+  margin-inline: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.qv-admin-layout__main {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.vehicle-form-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: var(--qv-space-md);
+  align-items: start;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (min-width: 1500px) {
+  .vehicle-form-layout {
+    grid-template-columns: minmax(0, 1fr) 440px;
+  }
+}
+
+@media (min-width: 1800px) {
+  .vehicle-form-layout {
+    grid-template-columns: minmax(0, 1fr) 460px;
+  }
+}
+
+.vehicle-form-main-card {
+  background: color-mix(in srgb, var(--qv-surface-card) 94%, transparent);
+  border: 1px solid var(--qv-border-subtle);
+  border-radius: var(--qv-radius-lg);
+  box-shadow: var(--qv-shadow-lg);
   display: flex;
   flex-direction: column;
-  margin-top: 1rem;
   overflow: hidden;
   position: relative;
+}
+
+.vehicle-form-panel {
+  display: contents;
 }
 
 /* Header */
@@ -1169,12 +1663,11 @@ body {
   color: #0f172a;
 }
 
-/* Body Layout */
+/* Form Sections Body */
 .vehicle-panel-body {
-  align-items: stretch;
-  display: grid;
-  gap: 2rem;
-  grid-template-columns: 1fr 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
   padding: 1.75rem;
 }
 
@@ -1187,9 +1680,10 @@ body {
 /* Placa Row & Bolivian Plate Card */
 .vehicle-plate-row {
   align-items: flex-start;
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: 1fr 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
 }
 
 /* Vehicle Type Selector Section */
@@ -1321,14 +1815,53 @@ body {
   background: #3b82f6;
 }
 
-/* Right Column Sidebar Preview */
+/* Right Column Sidebar Preview — Cápsula flotante fija y estática */
 .vehicle-preview-sidebar {
-  background: #f8fafc;
-  border: 1px solid #f1f5f9;
-  border-radius: 12px;
+  position: sticky;
+  /* top = layout padding (0.75rem) */
+  top: var(--qv-space-sm);
+  align-self: start;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  background: var(--qv-surface-glass);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid var(--qv-border-glass);
+  border-radius: var(--qv-radius-xl);
+  box-shadow: var(--qv-shadow-floating);
   display: flex;
   flex-direction: column;
-  padding: 1.25rem;
+  gap: 0.85rem;
+  padding: 1.15rem;
+  /* Alto automático por contenido; máximo = pantalla menos los márgenes del layout */
+  height: auto;
+  max-height: calc(100dvh - var(--qv-space-sm) - var(--qv-space-sm));
+  overflow-y: auto;
+  z-index: 20;
+  transition: box-shadow var(--qv-transition-smooth), border-color var(--qv-transition-smooth);
+}
+
+.vehicle-preview-sidebar .line-box-preview {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  gap: 0.85rem !important;
+  position: static !important;
+  width: 100% !important;
+}
+
+.vehicle-preview-sidebar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.vehicle-preview-sidebar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--qv-text-secondary) 25%, transparent);
+  border-radius: var(--qv-radius-full);
 }
 
 .vehicle-preview-sidebar__header h3 {
@@ -1348,22 +1881,20 @@ body {
   align-items: center;
   display: flex;
   justify-content: center;
-  margin: 0.5rem 0;
-  min-height: 140px;
+  margin: 0.35rem 0;
+  height: 120px;
+  min-height: 120px;
+  max-height: 120px;
   width: 100%;
 }
 
 .vehicle-studio-img {
-  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.08));
-  height: auto;
-  max-height: 150px;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.1));
+  height: 105px;
+  max-height: 105px;
   object-fit: contain;
-  transition: transform 0.3s ease;
-  width: 100%;
-}
-
-.vehicle-studio-img:hover {
-  transform: scale(1.03);
+  width: auto;
+  max-width: 100%;
 }
 
 .vehicle-preview-sidebar__tag {
@@ -2504,19 +3035,31 @@ body {
 }
 
 .vehicle-plate-row {
-  gap: var(--qv-space-lg);
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 210px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--qv-space-sm);
+  width: 100%;
+}
+
+.vehicle-plate-input-container {
+  display: flex;
+  align-items: center;
+  gap: var(--qv-space-md);
+  width: 100%;
 }
 
 .vehicle-form-live-plate.qv-plate {
-  align-self: end;
-  height: 4.8rem;
-  justify-self: end;
-  width: min(100%, 12.5rem);
+  align-self: center;
+  flex-shrink: 0;
+  height: 2.65rem;
+  width: auto;
+  min-width: 8rem;
+  box-shadow: 0 2px 6px -1px rgba(0, 0, 0, 0.15);
 }
 
 .vehicle-form-live-plate strong {
-  font-size: 1.65rem;
+  font-size: var(--qv-text-md);
+  letter-spacing: 0.08em;
 }
 
 .vehicle-plate-validation {
@@ -2790,12 +3333,10 @@ body {
 }
 
 .vehicle-preview-sidebar__plate-badge.qv-plate {
-  bottom: var(--qv-space-sm);
-  position: absolute;
-  right: var(--qv-space-sm);
-  transform: scale(0.76);
-  transform-origin: right bottom;
-  z-index: 1;
+  /* Inline en el nuevo layout de la tarjeta de identificación */
+  position: static;
+  transform: scale(0.85);
+  transform-origin: left center;
 }
 
 .vehicle-preview-sidebar__tags {
@@ -2856,8 +3397,14 @@ body {
 }
 
 .vehicle-panel-footer {
-  background: color-mix(in srgb, var(--qv-surface-card) 92%, transparent);
-  border-color: var(--qv-border-subtle);
+  position: sticky;
+  bottom: 0;
+  z-index: 25;
+  background: color-mix(in srgb, var(--qv-surface-card) 94%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid var(--qv-border-glass);
+  box-shadow: 0 -4px 20px -2px rgba(0, 0, 0, 0.12);
   padding: var(--qv-space-md) var(--qv-space-xl);
 }
 
@@ -3102,6 +3649,148 @@ body {
   align-items: center;
   display: inline-flex;
   gap: 0.35rem;
+}
+
+/* =========================================================================
+   Estilos visuales premium para Planificación y Rotación de Turnos
+   ========================================================================= */
+
+.qv-rotaciones-workspace {
+  display: grid;
+  grid-template-columns: 22rem minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .qv-rotaciones-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+.qv-rotacion-catalog-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--qv-radius-lg);
+  border: 1px solid var(--qv-border-glass);
+  background: var(--qv-surface-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--qv-transition-smooth);
+  position: relative;
+  overflow: hidden;
+}
+
+.qv-rotacion-catalog-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: transparent;
+  transition: background var(--qv-transition-fast);
+}
+
+.qv-rotacion-catalog-card:hover {
+  background: color-mix(in srgb, var(--qv-color-primary) 8%, var(--qv-surface-card));
+  border-color: color-mix(in srgb, var(--qv-color-primary) 35%, transparent);
+  transform: translateY(-2px);
+  box-shadow: var(--qv-shadow-md);
+}
+
+.qv-rotacion-catalog-card--active {
+  background: color-mix(in srgb, var(--qv-color-primary) 12%, var(--qv-surface-card));
+  border-color: var(--qv-color-primary);
+  box-shadow: 0 0 20px -2px color-mix(in srgb, var(--qv-color-primary) 30%, transparent);
+}
+
+.qv-rotacion-catalog-card--active::before {
+  background: var(--qv-color-primary);
+}
+
+.qv-rotacion-matrix-wrapper {
+  overflow-x: auto;
+  border-radius: var(--qv-radius-xl);
+  border: 1px solid var(--qv-border-glass);
+  background: color-mix(in srgb, var(--qv-surface-card) 60%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--qv-shadow-sm);
+}
+
+.qv-rotacion-matrix-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--qv-text-sm);
+}
+
+.qv-rotacion-matrix-th {
+  padding: 0.75rem 1rem;
+  background: color-mix(in srgb, var(--qv-color-primary) 8%, var(--qv-surface-card));
+  border-bottom: 1px solid var(--qv-border-glass);
+  border-right: 1px solid var(--qv-border-glass);
+  text-align: center;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.qv-rotacion-matrix-th:last-child {
+  border-right: none;
+}
+
+.qv-rotacion-matrix-td {
+  padding: 0.65rem;
+  border-bottom: 1px solid var(--qv-border-glass);
+  border-right: 1px solid var(--qv-border-glass);
+  vertical-align: middle;
+  min-width: 9.5rem;
+}
+
+.qv-rotacion-matrix-td:last-child {
+  border-right: none;
+}
+
+.qv-rotacion-matrix-table tbody tr:last-child .qv-rotacion-matrix-td {
+  border-bottom: none;
+}
+
+.qv-rotacion-slot-btn {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-glass);
+  background: color-mix(in srgb, var(--qv-surface-card) 85%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--qv-transition-fast);
+  box-shadow: var(--qv-shadow-xs);
+}
+
+.qv-rotacion-slot-btn:hover {
+  background: color-mix(in srgb, var(--qv-color-primary) 15%, var(--qv-surface-card));
+  border-color: var(--qv-color-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px -2px color-mix(in srgb, var(--qv-color-primary) 30%, transparent);
+}
+
+.qv-rotacion-slot-btn--readonly {
+  cursor: default;
+}
+
+.qv-rotacion-slot-btn--readonly:hover {
+  transform: none;
+  border-color: var(--qv-border-glass);
+  background: color-mix(in srgb, var(--qv-surface-card) 85%, transparent);
+  box-shadow: var(--qv-shadow-xs);
 }
 
 .line-palette-cell > span {

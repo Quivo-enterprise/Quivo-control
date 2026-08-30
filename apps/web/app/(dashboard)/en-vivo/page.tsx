@@ -2,22 +2,22 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Alert, Button, Loader, RouteMap } from '@quivo/design-system';
 import {
-  Alert,
-  Button,
-  Card,
-  Loader,
-  PageHeader,
-  RouteMap,
-  Select,
-  Tag,
-  type MapPoint,
-  type MapRoute,
-  type MapZone,
-} from '@quivo/design-system';
-import type { ContextoEnVivo, CumplimientoRecorrido, SesionEnVivoResumen } from '@quivo/shared';
+  AlertTriangle,
+  ArrowLeft,
+  Bus,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Maximize2,
+  Navigation,
+  Radio,
+  RefreshCw,
+  User,
+} from 'lucide-react';
 import { useAuth } from '../../../src/lib/auth/auth-context';
-import { ApiError } from '../../../src/lib/api/client';
 import {
   useContextoEnVivo,
   useRecargarTraza,
@@ -29,12 +29,25 @@ import {
   formatearAntiguedad,
   intervaloPoll,
   PRESENTACION_FRESCURA,
-  type TrazaAcumulada,
 } from '../../../src/lib/en-vivo/traza';
+import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
+import {
+  construirMarcadores,
+  construirRutas,
+  construirZonas,
+  mensajeError,
+  opcionDeSesion,
+  ultimaPasada,
+} from './map-builders';
 
-/** Color fijo de la traza GPS real, igual que en el detalle histórico
- * (`/reportes/recorridos/[id]`) para que las dos pantallas se lean igual. */
-const COLOR_TRAZA = '#2563eb';
+function useReloj(): number {
+  const [ahora, setAhora] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setAhora(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+  return ahora;
+}
 
 export default function EnVivoPage() {
   const { token } = useAuth();
@@ -42,13 +55,11 @@ export default function EnVivoPage() {
 
   const sesiones = useSesionesEnVivo(token);
   const [sesionId, setSesionId] = useState<string | null>(null);
-  // "Seguir" mueve la cámara detrás del vehículo. Arrastrar el mapa lo apaga (`onUserPan`)
-  // para que el panel no le pelee el control al usuario.
   const [seguir, setSeguir] = useState(true);
+  const [telemetriaExpandida, setTelemetriaExpandida] = useState(true);
+  const [fitKeyOverride, setFitKeyOverride] = useState<number>(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // La sesión por defecto es la primera del listado: el server ya ordena por último fix (no
-  // por `inicio`), así que es la que tiene datos más frescos. Se recalcula si la sesión
-  // elegida desaparece del listado.
   const listado = useMemo(() => sesiones.data ?? [], [sesiones.data]);
   useEffect(() => {
     if (listado.length === 0) return;
@@ -69,15 +80,6 @@ export default function EnVivoPage() {
   const estado = datos?.estadoFrescura ?? sesion?.estadoFrescura ?? 'sin_datos';
   const presentacion = PRESENTACION_FRESCURA[estado];
 
-  // Memoizado sobre lo que realmente cambia (contexto de la ruta, traza, color del estado) y
-  // NO sobre cada render de la página: sin esto, `RouteMap` recibe un `MapPoint[]` nuevo en
-  // cada tick de `useReloj` (1 Hz) y `buildDivIcon` genera un `L.DivIcon` nuevo cada vez —
-  // react-leaflet lo compara por referencia y reemplaza el nodo del DOM del marcador, así que
-  // la animación `qv-pulse` del vehículo se reinicia cada segundo y nunca completa un ciclo.
-  // Con el reloj movido adentro de `PanelFrescura` (ver más abajo) esto ya no pasa por el tick
-  // del reloj, pero se mantiene igual: cualquier otro cambio de estado ajeno a estos datos
-  // (ej. alternar "Seguir vehículo") tampoco debe recalcular ni la polilínea de ~4300 puntos
-  // ni los íconos.
   const routes = useMemo(
     () => (contexto.data ? construirRutas(contexto.data, datos) : []),
     [contexto.data, datos],
@@ -91,475 +93,549 @@ export default function EnVivoPage() {
   const cambiarSesion = (nuevo: string) => {
     setSesionId(nuevo);
     setSeguir(true);
+    setFitKeyOverride((prev) => prev + 1);
   };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <PageHeader
-        title="En vivo"
-        subtitle={
-          contexto.data
-            ? `${contexto.data.vehiculo.placa} · ${contexto.data.conductor.nombre} · ${contexto.data.linea.nombre}`
-            : 'Seguimiento de los vehículos de la jornada'
-        }
-        actions={
-          sesionId ? (
-            <Button
-              size="sm"
-              variant={seguir ? 'primary' : 'secondary'}
-              disabled={!ultimoPunto}
-              onClick={() => setSeguir((valor) => !valor)}
-            >
-              {seguir ? 'Siguiendo vehículo' : 'Seguir vehículo'}
-            </Button>
-          ) : undefined
-        }
-      />
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await Promise.all([sesiones.refetch(), traza.refetch()]);
+    recargarTraza();
+    setTimeout(() => setIsRefreshing(false), 500);
+  };
 
-      {sesiones.isLoading && <Loader label="Cargando sesiones…" />}
+  if (sesiones.isLoading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '75vh' }}>
+        <Loader label="Cargando flota y sesiones activas en vivo..." />
+      </div>
+    );
+  }
 
-      {sesiones.isError && (
+  if (sesiones.isError) {
+    return (
+      <div style={{ padding: '2rem', maxWidth: '40rem', margin: '0 auto' }}>
         <Alert variant="danger" title="No se pudo cargar el listado de sesiones">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             <span>{mensajeError(sesiones.error)}</span>
             <span>
-              <Button
-                size="sm"
-                variant="secondary"
-                aria-label="Reintentar cargar sesiones"
-                onClick={() => void sesiones.refetch()}
-              >
+              <Button size="sm" variant="secondary" onClick={() => void sesiones.refetch()}>
                 Reintentar
               </Button>
             </span>
           </div>
         </Alert>
-      )}
+      </div>
+    );
+  }
 
-      {!sesiones.isLoading && !sesiones.isError && listado.length === 0 && (
-        <Alert variant="info" title="No hay sesiones para mostrar">
-          Ningún vehículo inició un recorrido en la jornada de hoy y no quedaron sesiones abiertas
-          de días anteriores. La pantalla se actualiza sola en cuanto arranque una.
-        </Alert>
-      )}
+  if (listado.length === 0) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '70vh',
+          gap: '1.25rem',
+          padding: '2rem',
+          textAlign: 'center',
+        }}
+      >
+        <div
+          style={{
+            width: '4rem',
+            height: '4rem',
+            borderRadius: '50%',
+            backgroundColor: 'color-mix(in srgb, var(--qv-color-primary) 12%, transparent)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--qv-color-primary)',
+          }}
+        >
+          <Radio size={28} />
+        </div>
+        <div style={{ maxWidth: '28rem' }}>
+          <h2 style={{ fontFamily: 'var(--qv-font-display)', fontSize: '1.25rem', margin: '0 0 0.5rem 0' }}>
+            Sin vehículos en ruta activa
+          </h2>
+          <p style={{ fontSize: '0.875rem', color: 'var(--qv-text-secondary)', margin: 0 }}>
+            Ningún vehículo ha iniciado recorrido en la jornada de hoy. En cuanto una terminal móvil sincronice su
+            primer punto, aparecerá automáticamente aquí.
+          </p>
+        </div>
+        <Button size="sm" variant="primary" onClick={() => void sesiones.refetch()}>
+          <RefreshCw size={14} style={{ marginRight: '0.35rem' }} />
+          Verificar nuevamente
+        </Button>
+      </div>
+    );
+  }
 
-      {listado.length > 0 && (
-        <Card header="Sesión">
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end' }}>
-            <div style={{ minWidth: '22rem', flex: 1 }}>
-              <Select
-                label="Vehículo / dispositivo"
-                options={listado.map(opcionDeSesion)}
-                value={sesionId ?? ''}
-                onChange={(event) => cambiarSesion(event.target.value)}
-                fullWidth
-                helperText={
-                  listado.length > 1
-                    ? `${listado.length} sesiones — puede haber varias del mismo vehículo si se usó más de un teléfono.`
-                    : undefined
-                }
-              />
-            </div>
-            <PanelFrescura
-              datos={datos}
-              sesion={sesion}
-              recibidoEn={traza.dataUpdatedAt}
-              sesionesRecibidoEn={sesiones.dataUpdatedAt}
+  const adminCity = useAdminCity();
+
+  return (
+    <div className="qv-live-map-wrapper">
+      {/* MAPA PRINCIPAL A PANTALLA COMPLETA */}
+      <RouteMap
+        height="100%"
+        loading={contexto.isLoading}
+        routes={routes}
+        markers={markers}
+        zones={zones}
+        fitMode="once"
+        fitKey={`${sesionId}-${fitKeyOverride}`}
+        followPoint={seguir && ultimoPunto ? { lat: ultimoPunto.lat, lng: ultimoPunto.lng } : null}
+        onUserPan={() => setSeguir(false)}
+        defaultCenter={adminCity.centro}
+        defaultZoom={adminCity.zoom}
+      />
+
+      {/* TOP FLOATING HUD CONTROLS */}
+      <div className="qv-live-hud-top">
+        {/* Left Side: Live Badge & Session Selector */}
+        <div className="qv-live-hud-card" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => router.push('/')}
+            title="Volver al panel administrativo"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              padding: '0.25rem 0.6rem',
+              borderRadius: 'var(--qv-radius-full)',
+              backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 70%, transparent)',
+              color: 'var(--qv-text-secondary)',
+              border: '1px solid var(--qv-border-glass)',
+              fontSize: '0.6875rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'all var(--qv-transition-fast)',
+            }}
+          >
+            <ArrowLeft size={13} />
+            <span>Panel</span>
+          </button>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.2rem 0.55rem',
+              borderRadius: 'var(--qv-radius-full)',
+              backgroundColor: 'color-mix(in srgb, var(--qv-color-danger) 15%, transparent)',
+              color: 'var(--qv-color-danger)',
+              fontWeight: 800,
+              fontSize: '0.6875rem',
+              letterSpacing: '0.05em',
+              border: '1px solid color-mix(in srgb, var(--qv-color-danger) 30%, transparent)',
+            }}
+          >
+            <span
+              style={{
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--qv-color-danger)',
+                boxShadow: '0 0 6px var(--qv-color-danger)',
+              }}
             />
+            LIVE
           </div>
-        </Card>
-      )}
 
-      {sesionId && (
-        <>
-          {presentacion.esFalla && (
-            <Alert variant="danger" title={`${presentacion.etiqueta} — el teléfono no sincroniza`}>
-              {presentacion.descripcion}
-            </Alert>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <Bus size={15} style={{ color: 'var(--qv-color-primary)' }} />
+            <select
+              value={sesionId ?? ''}
+              onChange={(e) => cambiarSesion(e.target.value)}
+              aria-label="Seleccionar vehículo en vivo"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--qv-text-primary)',
+                fontWeight: 700,
+                fontSize: '0.8125rem',
+                outline: 'none',
+                cursor: 'pointer',
+                maxWidth: '22rem',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {listado.map((s) => {
+                const opt = opcionDeSesion(s);
+                return (
+                  <option key={opt.value} value={opt.value} style={{ background: 'var(--qv-surface-card)', color: 'var(--qv-text-primary)' }}>
+                    {opt.label}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        </div>
 
-          {estado === 'detenido' && (
-            // No es `Alert`: ese componente fija `role="alert"` (equivale a
-            // `aria-live="assertive"`) y este aviso se monta/desmonta en cada poll de 10 s —
-            // "vehículo detenido" no es una falla (ver `PRESENTACION_FRESCURA`), así que no
-            // amerita interrumpir al lector de pantalla cada vez. Mismo markup que `Alert`,
-            // con `aria-live="polite"` en vez de `role="alert"`.
-            <div className="qv-alert qv-alert--info" aria-live="polite">
-              <strong className="qv-alert__title">Vehículo detenido</strong>
-              <div className="qv-alert__body">{presentacion.descripcion}</div>
-            </div>
-          )}
-
-          {finalizada && (
-            <Alert variant="info" title="Sesión finalizada">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <span>Esta sesión ya cerró. El recorrido completo se ve en el histórico.</span>
-                <span>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => router.push(`/reportes/recorridos/${sesionId}`)}
-                  >
-                    Ver en el histórico
-                  </Button>
-                </span>
-              </div>
-            </Alert>
-          )}
-
-          {pollPausado && (
-            <Alert variant="warning" title="Seguimiento en pausa">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <span>
-                  No llega nada al servidor desde hace{' '}
-                  {formatearAntiguedad(datos?.inactivaDesdeMs ?? null)}, así que el panel dejó de
-                  consultar. Las sesiones no se cierran solas, por eso el corte se mide por
-                  inactividad real y no por la hora de fin.
-                </span>
-                <span>
-                  <Button size="sm" variant="secondary" onClick={() => void traza.refetch()}>
-                    Reanudar
-                  </Button>
-                </span>
-              </div>
-            </Alert>
-          )}
-
-          {traza.isError && datos && (
-            <Alert variant="warning" title="No se pudo actualizar la traza">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <span>
-                  {mensajeError(traza.error)} — se sigue mostrando la última posición conocida.
-                </span>
-                <span>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    aria-label="Reintentar cargar traza"
-                    onClick={() => void traza.refetch()}
-                  >
-                    Reintentar
-                  </Button>
-                </span>
-              </div>
-            </Alert>
-          )}
-
-          {traza.isError && !datos && (
-            <Alert variant="danger" title="No se pudo cargar la traza">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <span>{mensajeError(traza.error)}</span>
-                <span>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    aria-label="Reintentar cargar traza"
-                    onClick={() => void traza.refetch()}
-                  >
-                    Reintentar
-                  </Button>
-                </span>
-              </div>
-            </Alert>
-          )}
-
-          {datos && !datos.completa && !datos.hayMas && (
-            <Alert variant="warning" title="Traza incompleta">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <span>
-                  Se dibujaron {datos.puntos.length} de {datos.totalPuntos} puntos: falta un tramo.
-                </span>
-                <span>
-                  <Button size="sm" variant="secondary" onClick={recargarTraza}>
-                    Recargar
-                  </Button>
-                </span>
-              </div>
-            </Alert>
-          )}
-
-          {contexto.isError && (
-            <Alert variant="danger" title="No se pudo cargar la ruta de la sesión">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <span>{mensajeError(contexto.error)}</span>
-                <span>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    aria-label="Reintentar cargar ruta"
-                    onClick={() => void contexto.refetch()}
-                  >
-                    Reintentar
-                  </Button>
-                </span>
-              </div>
-            </Alert>
-          )}
-
-          {contexto.data && datos && datos.puntos.length === 0 && (
-            // No es `Alert` (ver el aviso "Vehículo detenido" más arriba, mismo motivo): esto
-            // no es una falla, solo el estado normal antes del primer fix.
-            <div className="qv-alert qv-alert--info" aria-live="polite">
-              <strong className="qv-alert__title">Esperando el primer punto GPS</strong>
-              <div className="qv-alert__body">
-                La ruta y los puntos de control ya están dibujados. En cuanto el teléfono
-                sincronice su primer fix, el vehículo aparece en el mapa.
-              </div>
-            </div>
-          )}
-
-          <RouteMap
-            height="520px"
-            loading={contexto.isLoading}
-            routes={routes}
-            markers={markers}
-            zones={zones}
-            fitMode="once"
-            fitKey={sesionId}
-            followPoint={
-              seguir && ultimoPunto ? { lat: ultimoPunto.lat, lng: ultimoPunto.lng } : null
-            }
-            onUserPan={() => setSeguir(false)}
+        {/* Right Side: Freshness Pill & Controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {/* Freshness Status Pill */}
+          <FrescuraBadgeCompact
+            datos={datos}
+            sesion={sesion}
+            recibidoEn={traza.dataUpdatedAt}
+            sesionesRecibidoEn={sesiones.dataUpdatedAt}
           />
 
-          {/* `RouteMap` no expone ningún `aria-*` propio y la única descripción de cada punto
-              de control (cumplido/distancia) vive en un popup de Leaflet, solo alcanzable con
-              mouse. Este resumen textual repite esa misma información para lectores de
-              pantalla — oculto visualmente con `.qv-visually-hidden` (ya existe en el design
-              system), no oculto del árbol de accesibilidad. */}
-          {contexto.data && (
-            <div className="qv-visually-hidden">
-              <h2>Puntos de control</h2>
-              <ul>
-                {contexto.data.puntosControl.map((pc, index) => {
-                  const cumplimiento = ultimaPasada(datos, pc.id);
-                  return (
-                    <li key={pc.id}>
-                      Punto de control {index + 1}:{' '}
-                      {cumplimiento
-                        ? `${cumplimiento.cumplido ? 'cumplido' : 'no cumplido'}, a ${cumplimiento.distanciaM.toFixed(0)} metros`
-                        : 'todavía sin pasada validada'}
-                    </li>
-                  );
-                })}
-              </ul>
-              <p>
-                {ultimoPunto
-                  ? `Última posición conocida: ${new Date(ultimoPunto.ts).toLocaleTimeString('es-BO')}.`
-                  : 'Todavía no hay ninguna posición conocida.'}
-              </p>
+          {/* Map Controls */}
+          <div className="qv-live-hud-card" style={{ gap: '0.35rem', padding: '0.3rem 0.5rem' }}>
+            <button
+              type="button"
+              onClick={() => setSeguir((v) => !v)}
+              disabled={!ultimoPunto}
+              title={seguir ? 'Dejar de seguir vehículo' : 'Seguir vehículo en tiempo real'}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.35rem 0.65rem',
+                borderRadius: 'var(--qv-radius-md)',
+                backgroundColor: seguir
+                  ? 'var(--qv-color-primary)'
+                  : 'color-mix(in srgb, var(--qv-surface-card) 60%, transparent)',
+                color: seguir ? '#ffffff' : 'var(--qv-text-secondary)',
+                border: 'none',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                cursor: ultimoPunto ? 'pointer' : 'not-allowed',
+                opacity: ultimoPunto ? 1 : 0.6,
+                transition: 'all var(--qv-transition-fast)',
+              }}
+            >
+              <Navigation size={13} style={{ transform: seguir ? 'rotate(45deg)' : 'none' }} />
+              <span>{seguir ? 'Siguiendo' : 'Seguir'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setFitKeyOverride((v) => v + 1)}
+              title="Reencuadrar ruta completa"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '1.85rem',
+                height: '1.85rem',
+                borderRadius: 'var(--qv-radius-md)',
+                backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 60%, transparent)',
+                color: 'var(--qv-text-secondary)',
+                border: 'none',
+                cursor: 'pointer',
+                transition: 'all var(--qv-transition-fast)',
+              }}
+            >
+              <Maximize2 size={13} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void handleManualRefresh()}
+              title="Actualizar datos GPS ahora"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '1.85rem',
+                height: '1.85rem',
+                borderRadius: 'var(--qv-radius-md)',
+                backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 60%, transparent)',
+                color: 'var(--qv-text-secondary)',
+                border: 'none',
+                cursor: 'pointer',
+                transition: 'all var(--qv-transition-fast)',
+              }}
+            >
+              <RefreshCw size={13} style={{ animation: isRefreshing ? 'spin 0.6s linear infinite' : 'none' }} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* FLOATING ALERT TOASTS */}
+      {presentacion.esFalla && (
+        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}>
+          <AlertTriangle size={14} />
+          <span>{presentacion.etiqueta}: El teléfono no sincroniza con el servidor</span>
+        </div>
+      )}
+
+      {estado === 'detenido' && (
+        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
+          <Clock size={14} style={{ color: 'var(--qv-color-accent)' }} />
+          <span>Vehículo detenido: Posición estacionaria registrada</span>
+        </div>
+      )}
+
+      {finalizada && (
+        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-primary)', color: 'var(--qv-text-primary)' }}>
+          <CheckCircle2 size={14} style={{ color: 'var(--qv-color-success)' }} />
+          <span>Sesión finalizada</span>
+          <button
+            type="button"
+            onClick={() => router.push(`/reportes/recorridos/${sesionId}`)}
+            style={{
+              background: 'var(--qv-color-primary)',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '999px',
+              padding: '0.15rem 0.5rem',
+              fontSize: '0.6875rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            Ver histórico →
+          </button>
+        </div>
+      )}
+
+      {pollPausado && (
+        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}>
+          <Clock size={14} style={{ color: 'var(--qv-color-warning)' }} />
+          <span>Seguimiento pausado por inactividad</span>
+          <button
+            type="button"
+            onClick={() => void traza.refetch()}
+            style={{
+              background: 'var(--qv-color-warning)',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '999px',
+              padding: '0.15rem 0.5rem',
+              fontSize: '0.6875rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            Reanudar
+          </button>
+        </div>
+      )}
+
+      {/* FLOATING TELEMETRY & CONTROL POINTS DRAWER */}
+      {contexto.data && (
+        <div className="qv-live-hud-bottom">
+          <div className="qv-live-telemetry-panel">
+            {/* Header / Summary */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '1.85rem',
+                    height: '1.85rem',
+                    borderRadius: 'var(--qv-radius-md)',
+                    backgroundColor: 'color-mix(in srgb, var(--qv-color-primary) 15%, transparent)',
+                    color: 'var(--qv-color-primary)',
+                  }}
+                >
+                  <Bus size={15} />
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
+                      {contexto.data.vehiculo.placa}
+                    </strong>
+                    <span
+                      style={{
+                        fontSize: '0.65rem',
+                        fontWeight: 700,
+                        padding: '0.1rem 0.4rem',
+                        borderRadius: 'var(--qv-radius-full)',
+                        backgroundColor: contexto.data.linea.color ?? 'var(--qv-color-primary)',
+                        color: '#ffffff',
+                      }}
+                    >
+                      {contexto.data.linea.nombre}
+                    </span>
+                  </div>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--qv-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <User size={11} /> {contexto.data.conductor.nombre}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setTelemetriaExpandida((v) => !v)}
+                title={telemetriaExpandida ? 'Minimizar detalles' : 'Expandir telemetría'}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--qv-text-muted)',
+                  cursor: 'pointer',
+                  padding: '0.25rem',
+                }}
+              >
+                {telemetriaExpandida ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+              </button>
             </div>
-          )}
-        </>
+
+            {/* Expanded Telemetry & Control Points */}
+            {telemetriaExpandida && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.625rem',
+                  paddingTop: '0.5rem',
+                  borderTop: '1px solid var(--qv-border-glass)',
+                }}
+              >
+                {/* Telemetry Stats Strip */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
+                  <div
+                    style={{
+                      padding: '0.4rem 0.6rem',
+                      borderRadius: 'var(--qv-radius-md)',
+                      backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 50%, transparent)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-muted)', fontWeight: 600 }}>
+                      Última Posición
+                    </span>
+                    <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
+                      {ultimoPunto ? new Date(ultimoPunto.ts).toLocaleTimeString('es-BO') : 'Esperando fix'}
+                    </strong>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: '0.4rem 0.6rem',
+                      borderRadius: 'var(--qv-radius-md)',
+                      backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 50%, transparent)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-muted)', fontWeight: 600 }}>
+                      Puntos GPS Traza
+                    </span>
+                    <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
+                      {datos?.puntos.length ?? 0} registrados
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Control Points Progress */}
+                {contexto.data.puntosControl.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '0.6875rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--qv-text-muted)' }}>
+                        Puntos de Control
+                      </span>
+                      <span style={{ fontSize: '0.6875rem', fontWeight: 700, color: 'var(--qv-color-success)' }}>
+                        {
+                          contexto.data.puntosControl.filter(
+                            (pc) => ultimaPasada(datos, pc.id)?.cumplido,
+                          ).length
+                        }{' '}
+                        / {contexto.data.puntosControl.length} validados
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', maxHeight: '5.5rem', overflowY: 'auto' }}>
+                      {contexto.data.puntosControl.map((pc, idx) => {
+                        const pasada = ultimaPasada(datos, pc.id);
+                        const cumplido = pasada?.cumplido;
+                        return (
+                          <div
+                            key={pc.id}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.3rem',
+                              padding: '0.2rem 0.45rem',
+                              borderRadius: 'var(--qv-radius-sm)',
+                              backgroundColor: cumplido
+                                ? 'color-mix(in srgb, var(--qv-color-success) 12%, transparent)'
+                                : 'color-mix(in srgb, var(--qv-surface-card) 60%, transparent)',
+                              border: `1px solid ${cumplido ? 'color-mix(in srgb, var(--qv-color-success) 35%, transparent)' : 'var(--qv-border-subtle)'}`,
+                              fontSize: '0.6875rem',
+                            }}
+                          >
+                            <span
+                              style={{
+                                width: '5px',
+                                height: '5px',
+                                borderRadius: '50%',
+                                backgroundColor: cumplido ? 'var(--qv-color-success)' : 'var(--qv-text-muted)',
+                              }}
+                            />
+                            <span style={{ fontWeight: 600, color: 'var(--qv-text-primary)' }}>PC {idx + 1}</span>
+                            {pasada && (
+                              <span style={{ color: 'var(--qv-text-muted)', fontSize: '0.65rem' }}>
+                                ({pasada.distanciaM.toFixed(0)}m)
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-/**
- * Las **dos** antigüedades, siempre juntas: `antiguedadFixMs` dice cuándo se capturó la
- * última posición y `antiguedadIngestaMs` cuándo llegó al servidor. Separadas distinguen
- * "el vehículo está parado" (fix viejo, ingesta fresca) de "el teléfono no sincroniza"
- * (las dos viejas), que es justo lo que hace útil la pantalla. Ambas se miden contra el
- * reloj del servidor vía `servidorTs`.
- */
-function PanelFrescura({
+function FrescuraBadgeCompact({
   datos,
   sesion,
   recibidoEn,
   sesionesRecibidoEn,
 }: {
-  datos: TrazaAcumulada | undefined;
-  sesion: SesionEnVivoResumen | undefined;
+  datos: import('../../../src/lib/en-vivo/traza').TrazaAcumulada | undefined;
+  sesion: import('@quivo/shared').SesionEnVivoResumen | undefined;
   recibidoEn: number;
   sesionesRecibidoEn: number;
 }) {
-  // El tick de 1 Hz vive ACÁ, no en `EnVivoPage`: si estuviera arriba, forzaría un re-render
-  // de toda la página (mapa incluido) cada segundo — `RouteMap` recompondría marcadores,
-  // reiniciando la animación `qv-pulse` del vehículo antes de que complete un ciclo.
-  // Confinado a esta hoja, el tick solo repinta este panel de texto.
   const ahora = useReloj();
   const fuente = datos ?? sesion;
-  if (!fuente) return <Loader label="Cargando estado…" />;
+  if (!fuente) return null;
 
-  // El listado se refresca cada 30 s y la traza cada 10 s: si los datos vienen del listado
-  // (todavía no llegó la primera respuesta de `posiciones`, o la query de traza está en error
-  // sin data), la referencia tiene que ser el `dataUpdatedAt` de ESA query — el reloj del
-  // navegador en el momento real en que esa respuesta llegó —, no `servidorTs` parseado como
-  // si fuera un `recibidoEnMs`: eso da un offset de EXACTAMENTE 0 en `offsetRelojServidorMs`
-  // (`Date.parse(servidorTs) - Date.parse(servidorTs)`), así que `antiguedadViva` termina
-  // comparando `Date.now()` contra `ts` sin corregir el reloj del navegador — el bug preciso
-  // que existe para evitar. Con `sesionesRecibidoEn` la antigüedad queda congelada hasta el
-  // próximo refresco del listado, pero nunca desincronizada del reloj del servidor.
   const referencia = datos ? recibidoEn : sesionesRecibidoEn;
   const presentacion = PRESENTACION_FRESCURA[fuente.estadoFrescura];
   const antiguedadFix = antiguedadViva(fuente.ultimoFixTs, fuente.servidorTs, referencia, ahora);
-  const antiguedadIngesta = antiguedadViva(
-    fuente.ultimoIngresoTs,
-    fuente.servidorTs,
-    referencia,
-    ahora,
-  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', minWidth: '18rem' }}>
-      <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <span
-          aria-hidden
-          style={{
-            width: '0.625rem',
-            height: '0.625rem',
-            borderRadius: '50%',
-            background: presentacion.color,
-            display: 'inline-block',
-          }}
-        />
-        {/* Solo la etiqueta va en `aria-live`: cambia por poll (cada 10 s), no cada segundo
-            como las dos líneas de antigüedad de abajo — envolverlas también spamearía al
-            lector de pantalla. */}
-        <span aria-live="polite" aria-atomic="true">
-          <strong>{presentacion.etiqueta}</strong>
-        </span>
-        {datos && (
-          <Tag variant="neutral">
-            {datos.puntos.length} punto{datos.puntos.length === 1 ? '' : 's'}
-          </Tag>
-        )}
+    <div className="qv-live-hud-card" style={{ gap: '0.45rem' }}>
+      <span
+        style={{
+          width: '7px',
+          height: '7px',
+          borderRadius: '50%',
+          backgroundColor: presentacion.color,
+          boxShadow: `0 0 6px ${presentacion.color}`,
+        }}
+      />
+      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
+        {presentacion.etiqueta}
       </span>
-      <span style={{ fontSize: '0.8125rem', opacity: 0.8 }}>
-        Última posición capturada hace{' '}
-        <strong style={{ fontVariantNumeric: 'tabular-nums' }}>
-          {formatearAntiguedad(antiguedadFix)}
-        </strong>
-      </span>
-      <span style={{ fontSize: '0.8125rem', opacity: 0.8 }}>
-        Última sincronización al servidor hace{' '}
-        <strong style={{ fontVariantNumeric: 'tabular-nums' }}>
-          {formatearAntiguedad(antiguedadIngesta)}
-        </strong>
+      <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+        • hace {formatearAntiguedad(antiguedadFix)}
       </span>
     </div>
   );
 }
 
-/** Re-renderiza cada segundo para que las antigüedades corran solas entre polls. Vive dentro
- * de `PanelFrescura` (ver el comentario ahí) para no forzar un re-render de toda la página. */
-function useReloj(): number {
-  const [ahora, setAhora] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setAhora(Date.now()), 1_000);
-    return () => clearInterval(id);
-  }, []);
-  return ahora;
-}
-
-function opcionDeSesion(sesion: SesionEnVivoResumen) {
-  const dispositivo = sesion.deviceId.slice(0, 8);
-  const estado = PRESENTACION_FRESCURA[sesion.estadoFrescura].etiqueta;
-  return {
-    value: sesion.id,
-    label: `${sesion.vehiculoPlaca} · ${sesion.lineaNombre} · ${sesion.conductorNombre} · ${dispositivo} — ${estado}`,
-  };
-}
-
-function construirRutas(contexto: ContextoEnVivo, traza: TrazaAcumulada | undefined): MapRoute[] {
-  const rutas: MapRoute[] = [
-    {
-      id: 'ruta-asignada',
-      label: 'Ruta asignada',
-      color: contexto.linea.color,
-      dashed: true,
-      points: contexto.ruta.geometria.coordinates.map(([lng, lat]) => ({ lat, lng })),
-    },
-  ];
-  if (traza && traza.puntos.length > 1) {
-    rutas.push({
-      id: 'traza-gps',
-      label: 'Recorrido real',
-      color: COLOR_TRAZA,
-      points: traza.puntos.map((p) => ({ lat: p.lat, lng: p.lng })),
-    });
-  }
-  return rutas;
-}
-
-/**
- * Última pasada validada de un punto de control (no la primera). El server ya devuelve
- * `cumplimientos` ordenado `ts asc` (`en-vivo.service.ts`), así que el último elemento que
- * matchea es el más reciente.
- *
- * `CumplimientoPc` modela explícitamente varias pasadas por `(sesionId, puntoControlId)` con
- * la columna `pasada` (multi-vuelta, `schema.prisma`): un `.find()` (primera coincidencia) se
- * queda pegado a la primera pasada de la sesión — un punto de control fallado en la vuelta 1
- * y cumplido en la vuelta 2 quedaría "No cumplido" en el mapa el resto del día.
- */
-function ultimaPasada(
-  traza: TrazaAcumulada | undefined,
-  puntoControlId: string,
-): CumplimientoRecorrido | undefined {
-  if (!traza) return undefined;
-  let ultimo: CumplimientoRecorrido | undefined;
-  for (const c of traza.cumplimientos) {
-    if (c.puntoControlId === puntoControlId && c.validadoPor === 'worker') ultimo = c;
-  }
-  return ultimo;
-}
-
-function construirMarcadores(
-  contexto: ContextoEnVivo,
-  traza: TrazaAcumulada | undefined,
-  colorVehiculo: string,
-): MapPoint[] {
-  const marcadores: MapPoint[] = contexto.puntosControl.map((pc, index) => {
-    const cumplimiento = ultimaPasada(traza, pc.id);
-    const cumplido = cumplimiento?.cumplido ?? false;
-    return {
-      lat: pc.coord.coordinates[1],
-      lng: pc.coord.coordinates[0],
-      label: `Punto de control ${index + 1}`,
-      description: cumplimiento
-        ? `${cumplido ? 'Cumplido' : 'No cumplido'} — ${cumplimiento.distanciaM.toFixed(0)} m`
-        : 'Todavía sin pasada validada',
-      // `MapPoint.color` termina en `buildDivIcon` (`route-map-impl.tsx`), que lo escribe
-      // como custom property CSS en un `style` inline (`--qv-map-pin-color:${color}`) — a
-      // diferencia de `pathOptions.color` de Leaflet (ver `construirZonas`), acá `var()` SÍ
-      // se resuelve.
-      color: cumplido ? 'var(--qv-color-success)' : 'var(--qv-text-muted)',
-      pinType: 'stop',
-    };
-  });
-
-  const ultimo = traza?.puntos.at(-1);
-  if (ultimo) {
-    marcadores.push({
-      lat: ultimo.lat,
-      lng: ultimo.lng,
-      label: `${contexto.vehiculo.placa} — última posición`,
-      description: new Date(ultimo.ts).toLocaleTimeString('es-BO'),
-      color: colorVehiculo,
-      pinType: 'pulse',
-    });
-  }
-  return marcadores;
-}
-
-function construirZonas(contexto: ContextoEnVivo): MapZone[] {
-  return contexto.puntosControl.map((pc, index) => ({
-    lat: pc.coord.coordinates[1],
-    lng: pc.coord.coordinates[0],
-    radiusMeters: pc.radioToleranciaM,
-    label: `Tolerancia PC ${index + 1}`,
-    // Hex literal a propósito, NO `var(--qv-text-muted)`: este color va a `pathOptions.color`/
-    // `fillColor` de un `Circle` de Leaflet (`route-map-impl.tsx`), que termina en los
-    // atributos de presentación SVG `stroke`/`fill` — ahí `var()` nunca se resuelve (a
-    // diferencia de `construirMarcadores`, donde el color va a un `style` inline vía
-    // `buildDivIcon`). Mismo valor que el token `--qv-text-muted` claro; no reacciona a
-    // `prefers-color-scheme` en oscuro.
-    color: '#94a3b8',
-  }));
-}
-
-function mensajeError(err: unknown): string {
-  if (err instanceof ApiError) return err.message;
-  return err instanceof Error ? err.message : 'Error inesperado';
-}

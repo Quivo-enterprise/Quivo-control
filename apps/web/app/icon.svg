@@ -3,7 +3,7 @@
     .cls-1 { fill: #2d22b2; }
     .cls-2 { fill: #f90; }
     @media (prefers-color-scheme: dark) {
-      .cls-1, .cls-2 { fill: #fff; }
+      .cls-1, .cls-2 { fill: #f90; }
     }
   </style>
   <g>
