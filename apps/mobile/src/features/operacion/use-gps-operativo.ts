@@ -77,6 +77,15 @@ function parsearEstadoDeRechazoPermiso(error: unknown): number | null {
   return Number.isFinite(status) ? status : null;
 }
 
+/** `location.coords.speed` del SDK viene en metros/segundo y es `-1` (o `undefined`) cuando el
+ * fix no trae velocidad real (ver `Location.d.ts` del SDK) — nunca un valor negativo válido en
+ * la práctica, así que cualquier negativo se trata igual que "no disponible" en vez de
+ * mostrarse como un número sin sentido en la UI. */
+function velocidadKmhDesde(speedMps: number | undefined): number | null {
+  if (typeof speedMps !== 'number' || !Number.isFinite(speedMps) || speedMps < 0) return null;
+  return speedMps * 3.6;
+}
+
 /** Estado inicial de `permisoGps`: no bloqueante, sin mensaje — se sobrescribe apenas corre
  * el primer chequeo pasivo (ver el `useEffect` de permisos más abajo), pero evita que el
  * botón arranque en un estado "bloqueado" fantasma antes de que ese chequeo resuelva.
@@ -106,7 +115,9 @@ export function useGpsOperativo(
   // conductor la posibilidad de saber qué botón tocar.
   const [permisoGps, setPermisoGps] = useState<DecisionPermisoGps>(PERMISO_GPS_INICIAL);
   const [ultimaDeteccion, setUltimaDeteccion] = useState<DeteccionPuntoControl | null>(null);
-  const [posicionActual, setPosicionActual] = useState<{ lat: number; lng: number } | null>(null);
+  const [posicionActual, setPosicionActual] = useState<
+    { lat: number; lng: number; speedKmh: number | null } | null
+  >(null);
   const bateria = useRef<MuestraBateria[]>([]);
   const puntosRef = useRef(0);
   const erroresEscritura = useRef(0);
@@ -142,6 +153,7 @@ export function useGpsOperativo(
       setPosicionActual({
         lat: location.coords.latitude,
         lng: location.coords.longitude,
+        speedKmh: velocidadKmhDesde(location.coords.speed),
       });
       const ts = new Date(location.timestamp).getTime();
       // El tipo del SDK declara `battery: Battery` (con `level: number`) NO opcional, pero
@@ -275,6 +287,7 @@ export function useGpsOperativo(
         setPosicionActual({
           lat: location.coords.latitude,
           lng: location.coords.longitude,
+          speedKmh: velocidadKmhDesde(location.coords.speed),
         });
       })
       .catch(() => {
@@ -692,12 +705,18 @@ export function useGpsOperativo(
   const puntosControlSimulados = useRef<Map<string, EstadoPuntoControl>>(new Map());
 
   const simularDeteccion = useCallback(
-    (puntoControlId: string) => {
-      // Botón de debug/QA (`operation-screen.tsx`, gateado por `__DEV__`): `radioToleranciaM`
-      // es un valor de relleno razonable (no viene de un punto de control real acá) solo para
-      // satisfacer el contrato de `DeteccionPuntoControl`. Escribe en `puntosControlSimulados`
-      // (B3, arriba), no en `puntosControlDetectados` — este simulador no pasa por
-      // `filtrarNuevosCumplimientos` y ya no comparte estado con lo que sí pasa por ahí.
+    // Botón de debug/QA (`operation-screen.tsx`, gateado por `__DEV__`). `distanciaM` recibe
+    // la distancia real ya calculada por Haversine en pantalla (`distanciaProximoPunto`) para
+    // que la voz/sonido de la simulación anuncien la distancia de verdad al punto, no un
+    // número inventado — antes esto era un `15` fijo sin relación con la posición real del
+    // conductor, que confundía al probar (siempre decía "15 metros" sin importar qué tan lejos
+    // se estuviera en realidad). Cae a `15` solo si todavía no hay ninguna distancia calculada
+    // (por ejemplo, sin fix de GPS aún), para que el botón siga siendo utilizable.
+    // `radioToleranciaM` es un valor de relleno razonable (no viene de un punto de control real
+    // acá) solo para satisfacer el contrato de `DeteccionPuntoControl`. Escribe en
+    // `puntosControlSimulados` (B3, arriba), no en `puntosControlDetectados` — este simulador
+    // no pasa por `filtrarNuevosCumplimientos` y ya no comparte estado con lo que sí pasa por ahí.
+    (puntoControlId: string, distanciaM: number | null = null) => {
       const clave = claveCumplimiento(sesionId, puntoControlId);
       const previo = puntosControlSimulados.current.get(clave);
       const pasada = (previo?.pasadas ?? 0) + 1;
@@ -710,7 +729,7 @@ export function useGpsOperativo(
       // distinguir dos pasadas consecutivas del mismo punto al decidir el aviso por voz.
       const deteccion: DeteccionPuntoControl = {
         puntoControlId,
-        distanciaM: 15,
+        distanciaM: distanciaM !== null ? Math.round(distanciaM) : 15,
         cumplido: true,
         radioToleranciaM: 30,
         pasada,

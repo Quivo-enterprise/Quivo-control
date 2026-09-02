@@ -45,7 +45,12 @@ export function GpsProvider({
         ultimoHablado.current?.puntoControlId === puntoControlId &&
         ultimoHablado.current?.pasada === pasada;
       if (!yaHablado) {
-        Speech.speak(`Punto de control alcanzado. Distancia: ${gps.ultimaDeteccion.distanciaM} metros.`);
+        // `volume: 1.0` explícito (el pedido fue "sonido super fuerte para que se escuche"):
+        // no depender del default de la plataforma, que en algunos OEM sale por debajo del
+        // volumen máximo del stream de media.
+        Speech.speak(`Punto de control alcanzado. Distancia: ${gps.ultimaDeteccion.distanciaM} metros.`, {
+          volume: 1.0,
+        });
         ultimoHablado.current = { puntoControlId, pasada };
       }
     }

@@ -1,33 +1,40 @@
 #!/usr/bin/env python3
 """
-Genera `confirmacion-chime.wav`: la campanita de confirmación que suena cuando el conductor
-pasa por un punto de control (QUI — "sonido de confirmación de registro").
+Genera `confirmacion-chime.wav`: la alerta que suena cuando el conductor pasa por un punto de
+control (QUI — "sonido de confirmación de registro").
 
 Por qué existe este script en el repo (no solo el .wav binario): el asset es 100% sintético
 —no hay conexión a internet para bajar un sonido de stock— así que este generador es la única
 fuente reproducible del audio. Si algún día hay que ajustar timbre/duración/frecuencias, se
 edita este archivo y se vuelve a correr, en vez de tocar el binario a mano.
 
-Diseño (decisión ya tomada, ver el ticket):
-- Dos notas ascendentes, quinta justa: C6 (1046.5 Hz) -> G6 (1568 Hz). Referencia mental: el
-  sonido de confirmación de una app de pagos moderna (Revolut/Apple Pay) — premium, breve,
-  inequívocamente positivo. NO un beep de electrodoméstico, NO una alarma.
-- La segunda nota entra ~120 ms después de la primera (se solapan) — es lo que da la sensación
-  de "resuelto" en vez de dos beeps sueltos.
-- Timbre de campana por síntesis aditiva: fundamental + 2do + 3er armónico, amplitudes
-  1.0 / 0.5 / 0.25 — una onda pura sonaría a beep de prueba de audiometría, no a campanita.
-- Envolvente: ataque de 5 ms (rápido pero no instantáneo — un ataque en cero produce un click
-  audible) + decaimiento exponencial suave.
-- 44.1 kHz / 16-bit / mono — es un efecto corto, el estéreo no aporta nada y duplica el peso
-  del asset.
-- Fade-out final (ventana Hann, no lineal, para que la derivada llegue a cero en el borde) que
-  fuerza el último tramo del buffer a 0 exacto — sin esto, cortar un seno con decaimiento
-  exponencial a mitad de ciclo se escucha como un click seco.
-- Normalizado a pico ~-3 dBFS. Nunca clipea (se verifica después de escribir el archivo).
+Diseño (rediseñado — pedido explícito: "debe ser un sonido super fuerte para que se escuche"):
+- El diseño ANTERIOR (dos notas de campana C6->G6, tipo confirmación de pago) sonaba premium
+  pero suave — se pierde con el motor del trufi andando y el ruido de calle. Este conductor no
+  puede mirar la pantalla mientras maneja: el sonido tiene que imponerse sobre el ambiente, no
+  sonar bonito.
+- Tres beeps cortos e idénticos (no dos notas melódicas) — un patrón repetitivo y seco se lee
+  como "alerta/atención" (mismo lenguaje que un sensor de reversa o un lector de código de
+  barras), no como un efecto decorativo.
+- Frecuencia fundamental 2200 Hz: la banda donde el oído humano es más sensible (2-4 kHz) y
+  además queda muy por encima del ruido de motor/tráfico, que es predominantemente de baja
+  frecuencia — así el beep se separa del ruido de fondo en vez de mezclarse con él.
+- Timbre "buzzer" por síntesis aditiva con armónicos IMPARES (1º, 3º, 5º — como una onda
+  cuadrada) en vez de la serie 1-2-3 tipo campana del diseño anterior: más armónicos altos se
+  perciben como más fuerte/urgente a igual amplitud de pico, y es el timbre estándar de
+  alarmas y avisadores.
+- Envolvente casi de compuerta (ataque de 2 ms, sostenido a amplitud plena, decaimiento de
+  10 ms): un beep de alerta debe sonar seco e inmediato, no tener el ataque suave de una
+  campana. El decaimiento de 10 ms sigue siendo suficiente para no chasquear al cortar.
+- 44.1 kHz / 16-bit / mono — igual que antes, es un efecto corto y el estéreo no aporta nada.
+- Normalizado a pico ~-1 dBFS (antes ~-3 dBFS): el margen que se le deja al pico es SOLO el
+  necesario para no clipear con el redondeo a PCM16, no un margen de "no sonar fuerte".
+- Fade-out final (ventana Hann) que fuerza el último tramo del buffer a 0 exacto — mismo
+  motivo que antes: cortar una onda a mitad de ciclo se escucha como un click seco.
 
 No usa numpy (no está instalado en este entorno) — `wave` + `math` de la stdlib alcanzan para
-un efecto de ~0.5 s. La verificación de abajo (duración, pico, muestras de borde, espectro por
-Goertzel) tampoco necesita numpy.
+un efecto de menos de un segundo. La verificación de abajo (duración, pico, muestras de borde,
+espectro por Goertzel) tampoco necesita numpy.
 """
 
 import math
@@ -35,52 +42,54 @@ import wave
 import struct
 import os
 
-SR = 44100  # 44.1 kHz, pedido por la spec
+SR = 44100  # 44.1 kHz
 SAMPLE_WIDTH_BYTES = 2  # 16-bit
 MAX_INT16 = 32767
 
-# --- Notas: quinta justa ascendente, C6 -> G6 ---
-NOTE1_FREQ = 1046.5  # C6
-NOTE2_FREQ = 1568.0  # G6
-NOTE1_START = 0.000
-NOTE2_START = 0.120  # la segunda nota entra a los ~120 ms de la primera (solapadas)
-NOTE_DUR = 0.400  # cada nota dura ~400 ms (dentro del rango pedido de 350-450 ms)
+# --- Patrón: 3 beeps idénticos, cortos y seguidos ---
+BEEP_FREQ = 2200.0  # Hz — banda de máxima sensibilidad auditiva, muy por encima del ruido de motor
+BEEP_DUR_S = 0.120  # cada beep dura 120 ms
+GAP_S = 0.070  # silencio entre beeps
+N_BEEPS = 3
+BEEP_STARTS = [i * (BEEP_DUR_S + GAP_S) for i in range(N_BEEPS)]
 
-# --- Envolvente ---
-ATTACK_S = 0.005  # 5 ms: rápido pero no cero, evita el click de un ataque instantáneo
-DECAY_TAU_S = 0.115  # constante de tiempo del decaimiento exponencial tras el ataque
+# --- Envolvente: casi de compuerta, no de campana ---
+ATTACK_S = 0.002  # 2 ms: ataque casi instantáneo, seco
+DECAY_S = 0.010  # 10 ms de decaimiento lineal al final de CADA beep (evita el click de corte)
 
-# --- Timbre: síntesis aditiva, cuerpo de campana ---
-HARMONICS = [(1, 1.0), (2, 0.5), (3, 0.25)]  # (multiplicador de frecuencia, amplitud relativa)
+# --- Timbre "buzzer": armónicos impares (serie de una onda cuadrada), más fuerte/urgente
+#     a igual pico que una serie de campana --- (multiplicador de frecuencia, amplitud relativa)
+HARMONICS = [(1, 1.0), (3, 1.0 / 3.0), (5, 1.0 / 5.0)]
 
-# --- Duración total y fade-out final ---
-TOTAL_DUR_S = max(NOTE1_START + NOTE_DUR, NOTE2_START + NOTE_DUR)  # 0.520 s (< 600 ms del tope)
-FINAL_FADE_S = 0.020  # 20 ms de fade-out al final, ventana Hann (derivada nula en los bordes)
+TOTAL_DUR_S = BEEP_STARTS[-1] + BEEP_DUR_S  # 0.480 s (3*120ms + 2*70ms)
+FINAL_FADE_S = 0.015  # fade-out final adicional, ventana Hann (derivada nula en el borde)
 
-# --- Normalización ---
-TARGET_PEAK_DBFS = -3.0
+# --- Normalización: pico cerca de 0 dBFS a propósito (pedido: "sonido super fuerte") ---
+TARGET_PEAK_DBFS = -1.0
 TARGET_PEAK_LINEAR = 10 ** (TARGET_PEAK_DBFS / 20.0)
 
 OUTPUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'confirmacion-chime.wav')
 
 
-def envolvente(t_rel: float) -> float:
-    """Ataque lineal de `ATTACK_S` seguido de decaimiento exponencial. `t_rel` < 0 (antes de que
-    arranque la nota) da 0 — así cada nota queda en silencio total fuera de su propia ventana."""
-    if t_rel < 0:
+def envolvente_beep(t_rel: float) -> float:
+    """Ataque lineal de `ATTACK_S`, sostenido a 1.0, decaimiento lineal de `DECAY_S` al final
+    de `BEEP_DUR_S`. `t_rel` fuera de [0, BEEP_DUR_S] da 0."""
+    if t_rel < 0 or t_rel > BEEP_DUR_S:
         return 0.0
     if t_rel < ATTACK_S:
         return t_rel / ATTACK_S
-    return math.exp(-(t_rel - ATTACK_S) / DECAY_TAU_S)
+    if t_rel > BEEP_DUR_S - DECAY_S:
+        return max(0.0, (BEEP_DUR_S - t_rel) / DECAY_S)
+    return 1.0
 
 
-def muestra_nota(t_rel: float, freq: float) -> float:
-    env = envolvente(t_rel)
+def muestra_beep(t_rel: float) -> float:
+    env = envolvente_beep(t_rel)
     if env <= 0.0:
         return 0.0
     total = 0.0
     for mult, amp in HARMONICS:
-        total += amp * math.sin(2.0 * math.pi * freq * mult * t_rel)
+        total += amp * math.sin(2.0 * math.pi * BEEP_FREQ * mult * t_rel)
     return env * total
 
 
@@ -89,17 +98,18 @@ def generar() -> list:
     buf = [0.0] * n_samples
     for i in range(n_samples):
         t = i / SR
-        buf[i] = muestra_nota(t - NOTE1_START, NOTE1_FREQ) + muestra_nota(t - NOTE2_START, NOTE2_FREQ)
+        muestra = 0.0
+        for inicio in BEEP_STARTS:
+            muestra += muestra_beep(t - inicio)
+        buf[i] = muestra
 
     # Fade-out final: ventana Hann sobre los últimos FINAL_FADE_S segundos, para terminar en 0
-    # exacto sin discontinuidad de pendiente (evita el chasquido de cortar un seno a mitad de
-    # ciclo).
+    # exacto sin discontinuidad de pendiente.
     fade_samples = int(round(FINAL_FADE_S * SR))
     for k in range(fade_samples):
         idx = n_samples - fade_samples + k
         if idx < 0:
             continue
-        # k=0 -> multiplicador ~1 (todavía sin atenuar); k=fade_samples-1 -> multiplicador 0.
         mult = 0.5 * (1.0 + math.cos(math.pi * k / (fade_samples - 1)))
         buf[idx] *= mult
 
@@ -107,10 +117,9 @@ def generar() -> list:
 
 
 def normalizar(buf: list) -> list:
-    """Escala `buf` (síntesis aditiva cruda, picos > 1.0 esperados con 3 armónicos + 2 notas
-    solapadas) a pico `TARGET_PEAK_LINEAR` (~-3 dBFS). Devuelve floats — la verificación corre
-    SIEMPRE sobre esta versión normalizada, que es la que termina en el .wav; verificar el
-    buffer crudo no dice nada del archivo real."""
+    """Escala `buf` (síntesis aditiva cruda, picos > 1.0 esperados con 3 armónicos) a pico
+    `TARGET_PEAK_LINEAR` (~-1 dBFS). Devuelve floats — la verificación corre SIEMPRE sobre esta
+    versión normalizada, que es la que termina en el .wav."""
     pico_actual = max(abs(x) for x in buf) or 1.0
     factor = TARGET_PEAK_LINEAR / pico_actual
     return [x * factor for x in buf]
@@ -142,8 +151,7 @@ def escribir_wav(frames: bytes, path: str) -> None:
 
 def goertzel_magnitud(muestras: list, freq: float, sr: int) -> float:
     """Energía de `muestras` en `freq` (algoritmo de Goertzel — DFT de un solo bin, sin
-    depender de numpy/FFT). Se usa para confirmar que el espectro tiene energía donde
-    corresponde (C6/G6 y sus armónicos) en vez de solo mirar el dominio del tiempo."""
+    depender de numpy/FFT)."""
     n = len(muestras)
     if n == 0:
         return 0.0
@@ -174,7 +182,6 @@ def verificar(buf: list) -> None:
     pico = max(abs(x) for x in buf)
     pico_dbfs = 20 * math.log10(pico) if pico > 0 else float('-inf')
     primera = buf[0]
-    ultimas_20 = buf[-20:]
     ultima = buf[-1]
 
     print('--- Verificación numérica de confirmacion-chime.wav ---')
@@ -182,38 +189,36 @@ def verificar(buf: list) -> None:
     print(f'Pico máximo: {pico:.5f}  ({pico_dbfs:.2f} dBFS)  [objetivo: ~{TARGET_PEAK_DBFS} dBFS, nunca > 0 dBFS]')
     print(f'Muestra inicial: {primera:.6f} (objetivo: ~0)')
     print(f'Muestra final: {ultima:.6f} (objetivo: ~0)')
-    print(f'Máximo |muestra| en los últimos 20 samples: {max(abs(x) for x in ultimas_20):.6f}')
 
-    # Ventana de la nota 1 sola (antes de que entre la nota 2): 15-100 ms, ya pasado el ataque.
-    ini1, fin1 = int(0.015 * SR), int(0.100 * SR)
+    # Ventana del primer beep, ya pasado el ataque [10-100 ms].
+    ini1, fin1 = int(0.010 * SR), int(0.100 * SR)
     ventana1 = buf[ini1:fin1]
     cruces1 = contar_cruces_por_cero(ventana1)
     freq_estimada1 = cruces1 / 2.0 / ((fin1 - ini1) / SR)
-    mag_c6 = goertzel_magnitud(ventana1, NOTE1_FREQ, SR)
-    mag_g6_en_ventana1 = goertzel_magnitud(ventana1, NOTE2_FREQ, SR)
-    print(f'\nVentana nota 1 sola [15-100 ms] — cruces por cero: {cruces1}, freq. fundamental estimada: {freq_estimada1:.1f} Hz (esperado ~{NOTE1_FREQ} Hz)')
-    print(f'  Goertzel @ C6 ({NOTE1_FREQ} Hz): {mag_c6:.4f}   Goertzel @ G6 ({NOTE2_FREQ} Hz): {mag_g6_en_ventana1:.4f}  (C6 debe dominar)')
+    mag_fund = goertzel_magnitud(ventana1, BEEP_FREQ, SR)
+    mag_h3 = goertzel_magnitud(ventana1, BEEP_FREQ * 3, SR)
+    mag_h5 = goertzel_magnitud(ventana1, BEEP_FREQ * 5, SR)
+    print(f'\nBeep 1 [10-100 ms] — cruces por cero: {cruces1}, freq. fundamental estimada: {freq_estimada1:.1f} Hz (esperado ~{BEEP_FREQ} Hz)')
+    print(f'  Goertzel @ fundamental ({BEEP_FREQ:.0f} Hz): {mag_fund:.4f}   @3° ({BEEP_FREQ*3:.0f} Hz): {mag_h3:.4f}   @5° ({BEEP_FREQ*5:.0f} Hz): {mag_h5:.4f}  (fundamental debe dominar, 3°/5° presentes pero menores)')
 
-    # Ventana tardía [430-500 ms]: nota 1 ya decayó casi del todo, domina la nota 2.
-    ini2, fin2 = int(0.430 * SR), int(0.500 * SR)
-    ventana2 = buf[ini2:fin2]
-    cruces2 = contar_cruces_por_cero(ventana2)
-    freq_estimada2 = cruces2 / 2.0 / ((fin2 - ini2) / SR)
-    mag_g6 = goertzel_magnitud(ventana2, NOTE2_FREQ, SR)
-    mag_c6_en_ventana2 = goertzel_magnitud(ventana2, NOTE1_FREQ, SR)
-    print(f'\nVentana tardía [430-500 ms] — cruces por cero: {cruces2}, freq. fundamental estimada: {freq_estimada2:.1f} Hz (esperado ~{NOTE2_FREQ} Hz)')
-    print(f'  Goertzel @ C6 ({NOTE1_FREQ} Hz): {mag_c6_en_ventana2:.4f}   Goertzel @ G6 ({NOTE2_FREQ} Hz): {mag_g6:.4f}  (G6 debe dominar)')
+    # Silencio entre beep 1 y beep 2: debe estar prácticamente en cero.
+    ini_gap = int((BEEP_DUR_S + GAP_S / 2) * SR)
+    fin_gap = ini_gap + int(0.01 * SR)
+    pico_gap = max(abs(x) for x in buf[ini_gap:fin_gap])
+    print(f'\nPico en el silencio entre beep 1 y 2: {pico_gap:.6f} (objetivo: ~0, confirma que hay 3 beeps separados, no un tono continuo)')
 
-    # Armónicos: energía en 2x y 3x de G6 dentro de la ventana tardía, para confirmar el cuerpo
-    # de campana (no debería ser una onda pura).
-    mag_g6_h2 = goertzel_magnitud(ventana2, NOTE2_FREQ * 2, SR)
-    mag_g6_h3 = goertzel_magnitud(ventana2, NOTE2_FREQ * 3, SR)
-    print(f'\nArmónicos de G6 en la ventana tardía: 2x ({NOTE2_FREQ * 2:.0f} Hz) = {mag_g6_h2:.4f}, 3x ({NOTE2_FREQ * 3:.0f} Hz) = {mag_g6_h3:.4f} (deben ser menores que el fundamental, no ausentes)')
+    # Tercer beep: confirma que el patrón completo (3 repeticiones) está presente.
+    ini3, fin3 = int((BEEP_STARTS[2] + 0.010) * SR), int((BEEP_STARTS[2] + 0.100) * SR)
+    ventana3 = buf[ini3:fin3]
+    mag_fund_3 = goertzel_magnitud(ventana3, BEEP_FREQ, SR)
+    print(f'Beep 3 [{BEEP_STARTS[2]*1000+10:.0f}-{BEEP_STARTS[2]*1000+100:.0f} ms] — Goertzel @ fundamental: {mag_fund_3:.4f} (debe tener energía similar al beep 1)')
 
-    assert duracion_s <= 0.6, 'la duración total no puede superar ~600 ms'
+    assert duracion_s <= 0.9, 'la duración total no puede superar ~900 ms (3 beeps cortos, no un tono largo)'
     assert pico <= 1.0, 'no puede clipear'
     assert abs(primera) < 0.001, 'la muestra inicial debe ser ~0 para no chasquear'
     assert abs(ultima) < 1e-6, 'la muestra final debe ser 0 exacto para no chasquear'
+    assert pico_gap < 0.01, 'el silencio entre beeps debe estar prácticamente en cero (deben sonar como 3 beeps separados)'
+    assert mag_fund_3 > mag_fund * 0.5, 'el tercer beep debe sonar con energía comparable al primero'
     print('\nOK — todas las aserciones pasaron.')
 
 
