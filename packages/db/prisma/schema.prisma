@@ -893,3 +893,21 @@ model PassengerRecentSearch {
   @@index([userId, createdAt])
   @@map("passenger_recent_searches")
 }
+
+// Solicitudes públicas de demostración enviadas desde la landing. No pertenecen a
+// ningún sindicato todavía: el equipo las revisa antes de convertirlas en un piloto.
+model DemoRequest {
+  id           String   @id @default(uuid())
+  name         String
+  line         String
+  city         String
+  lineCount    Int
+  vehicleCount Int?
+  source       String   @default("landing")
+  status       String   @default("new")
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@map("demo_requests")
+}
