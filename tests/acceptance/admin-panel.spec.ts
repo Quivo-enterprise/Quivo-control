@@ -26,7 +26,16 @@ async function login(page: Page, credentials: { email: string; password: string 
 
 async function navigate(page: Page, label: string, pathname: string) {
   await page.getByText(label, { exact: true }).first().click();
-  await expect(page).toHaveURL(new RegExp(`${pathname === '/' ? '' : pathname}/?$`));
+  // Timeout holgado (default de `toHaveURL` es 5000ms): en el `webServer` de aceptación
+  // (`playwright.config.ts`) el panel corre con `next dev`, que compila cada ruta la primera
+  // vez que se pide. `/rutas` (MapLibre + hooks de dibujo) es la más pesada del panel y en un
+  // runner de CI en frío su primera compilación puede superar los 5s por defecto — no es un
+  // defecto del producto, en build de producción la navegación es inmediata. Se generaliza a
+  // toda ruta (no solo `/rutas`) porque cualquier página puede ser la primera en compilarse
+  // según el orden de navegación del test.
+  await expect(page).toHaveURL(new RegExp(`${pathname === '/' ? '' : pathname}/?$`), {
+    timeout: 30_000,
+  });
 }
 
 // El endpoint de login limita a cinco intentos por minuto y este archivo, entre los dos
@@ -195,12 +204,31 @@ test.describe('Panel administrativo', () => {
     await navigate(page, 'Reglas y sanciones', '/reglas');
     await page.getByRole('tab', { name: 'Sanciones' }).click();
     await expect(page.getByRole('button', { name: 'Aplicar filtros' })).toBeEnabled();
-    await expect(page.getByRole('button', { name: 'Limpiar filtros' })).toBeVisible();
     const sancion = page.getByRole('row', { name: /Llegó 25 minutos tarde al inicio del turno/ });
     await expect(sancion).toBeVisible();
     // El seed no fuerza de vuelta un estado que el operador ya transicionó; el control
     // sigue comprobando que la sanción conserva alguna acción válida para su estado.
     await expect(sancion.getByRole('button').first()).toBeVisible();
+
+    // "Limpiar filtros" pasó a ser condicional (reglas/page.tsx:912): solo se renderiza
+    // cuando hay un filtro activo en los selects — mejora deliberada de UX del rediseño, no
+    // una regresión (antes se mostraba siempre, incluso sin nada que limpiar). Se cubre el
+    // ciclo completo: no está sin filtro activo, aparece al elegir uno, y al limpiarlo
+    // desaparece y la tabla vuelve a mostrar el universo sin filtrar.
+    await expect(page.getByRole('button', { name: 'Limpiar filtros' })).toHaveCount(0);
+    // Única regla sembrada para este sindicato (`seedReglas` en packages/db/prisma/seed.ts),
+    // así que filtrar por ella es determinístico entre corridas (a diferencia del `estado`
+    // de la sanción, que sí puede haber sido transicionado por una corrida previa).
+    await page.locator('button#filtro-regla').click();
+    await page.getByRole('option', { name: /Retraso injustificado/ }).click();
+    await expect(page.getByRole('button', { name: 'Limpiar filtros' })).toBeVisible();
+    await page.getByRole('button', { name: 'Aplicar filtros' }).click();
+    await expect(sancion).toBeVisible();
+
+    await page.getByRole('button', { name: 'Limpiar filtros' }).click();
+    await expect(page.getByRole('button', { name: 'Limpiar filtros' })).toHaveCount(0);
+    await expect(page.locator('button#filtro-regla')).toHaveText(/Todas las reglas/);
+    await expect(sancion).toBeVisible();
 
     await navigate(page, 'Reportes', '/reportes');
     await expect(page.getByRole('heading', { name: 'Reportes' })).toBeVisible();
@@ -290,9 +318,12 @@ test.describe('Altas de entidades', () => {
 
     await page.getByRole('button', { name: 'Nuevo conductor' }).click();
 
-    await page.getByLabel('Nombre completo *').fill(conductorNombre);
-    await page.getByLabel('CI boliviano *').fill(conductorCI);
-    await page.getByLabel('Número de licencia de conducir *').fill(conductorLicencia);
+    // Labels renombrados por el rediseño (apps/web/app/(dashboard)/conductores/page.tsx:34-65):
+    // "Nombre completo" → "Nombre completo del Conductor", "CI boliviano" → "Cédula de
+    // Identidad (CI)", "Número de licencia de conducir" → "Número de Licencia de Conducir".
+    await page.getByLabel('Nombre completo del Conductor *').fill(conductorNombre);
+    await page.getByLabel('Cédula de Identidad (CI) *').fill(conductorCI);
+    await page.getByLabel('Número de Licencia de Conducir *').fill(conductorLicencia);
 
     await page.getByRole('button', { name: 'Guardar' }).click();
     conductoresCreados.push(conductorCI);
@@ -313,7 +344,9 @@ test.describe('Altas de entidades', () => {
     await navigate(page, 'Socios', '/socios');
     await page.getByRole('button', { name: 'Nuevo socio' }).click();
     await page.getByLabel('Nombre completo *').fill(socioNombre);
-    await page.getByLabel('CI boliviano *').fill(socioCI);
+    // Label renombrado por el rediseño (apps/web/app/(dashboard)/socios/page.tsx:46):
+    // "CI boliviano" → "Cédula de Identidad (CI)".
+    await page.getByLabel('Cédula de Identidad (CI) *').fill(socioCI);
     await page.getByRole('button', { name: 'Guardar' }).click();
     sociosCreados.push(socioCI);
     await expect(page.getByText(socioNombre, { exact: true }).first()).toBeVisible();
@@ -321,6 +354,14 @@ test.describe('Altas de entidades', () => {
     // Proceed to create vehicle
     await navigate(page, 'Vehículos', '/vehiculos');
     await page.getByRole('button', { name: 'Nuevo vehículo' }).click();
+
+    // El formulario de alta pasó a un wizard de 3 secciones ("Identificación y Padrón",
+    // "Tipo de Carrocería", "Ficha Mecánica y Colores" — vehicle-form-panel.tsx:165,620) que
+    // solo muestra una sección a la vez. "Ver todo" (vehicle-form-panel.tsx, botón con el
+    // icono `Layers`) cambia `activeSection` a `'all'` y revela las tres a la vez sin perder
+    // datos ya cargados, así que alcanza con un click para seguir llenando el formulario de
+    // punta a punta como antes.
+    await page.getByRole('button', { name: 'Ver todo' }).click();
 
     await page.getByLabel('Placa vehicular RUAT *').fill(vehiculoPlaca);
     await page.getByRole('radio', { name: 'Minibús' }).click();
