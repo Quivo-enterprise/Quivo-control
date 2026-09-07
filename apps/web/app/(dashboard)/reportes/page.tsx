@@ -404,7 +404,7 @@ function ReportesContent() {
           </div>
         </Card>
       ) : (
-        <div className="qv-table-container">
+        <div className="qv-table-wrap">
           <table className="qv-table">
             <thead>
               <tr>

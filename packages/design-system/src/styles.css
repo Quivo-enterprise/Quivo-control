@@ -1179,6 +1179,11 @@ body::-webkit-scrollbar {
    DataTable / AuditLog
    ========================================================================= */
 
+/*
+ * No borrar `overflow-x: auto`: es lo único que impide que la tabla se
+ * desborde de esta caja y tape lo que esté al lado cuando una fila entra en
+ * `:hover` (más abajo, `.qv-table tbody tr:hover` sube a z-index: 100).
+ */
 .qv-table-wrap {
   width: 100%;
   overflow-x: auto;
