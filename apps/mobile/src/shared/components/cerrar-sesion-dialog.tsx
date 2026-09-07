@@ -10,7 +10,17 @@ export interface CerrarSesionDialogProps {
 }
 
 /**
- * Diálogo de confirmación para cerrar sesión según diseño de Figma con efecto glassmorphism.
+ * Diálogo de confirmación único para `onLogout`, con la identidad visual de Figma
+ * (`Modal` + `BlurView`, glassmorphism). El mensaje de abajo existe por el Hallazgo 2,
+ * severidad ALTA, de la auditoría post-piloto día 1: `onLogout` dispara
+ * `borrarSesionMovil()` + el `stop()` nativo IRREVERSIBLE de `detenerTrackingNativo()`
+ * (apaga `startOnBoot` y nunca encola `fin_recorrido`), así que cerrar sesión corta el
+ * registro del recorrido sin forma de deshacerlo. `operation-screen.tsx` avisaba de esto
+ * y `perfil-screen.tsx` no, pese a llamar exactamente al mismo `onLogout`.
+ *
+ * Se centralizó acá (sin prop `message` que lo permita pisar) para que un tercer call
+ * site futuro de `onLogout` no repita el olvido: el mensaje vive en un solo lugar, no en
+ * cada pantalla que decide ofrecer "Cerrar sesión".
  */
 export function CerrarSesionDialog({ visible, onConfirm, onCancel }: CerrarSesionDialogProps) {
   return (
@@ -23,7 +33,8 @@ export function CerrarSesionDialog({ visible, onConfirm, onCancel }: CerrarSesio
           </View>
 
           <Text style={styles.message}>
-            Deberas volver a ingresar tus datos para iniciar sesión
+            Se va a cortar el registro del recorrido hasta que vuelvas a entrar. El GPS
+            deja de guardar tu viaje mientras tanto.
           </Text>
 
           <View style={styles.actions}>
@@ -38,11 +49,11 @@ export function CerrarSesionDialog({ visible, onConfirm, onCancel }: CerrarSesio
 
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Confirmar"
+              accessibilityLabel="Cerrar sesión"
               onPress={onConfirm}
               style={({ pressed }) => [styles.confirmButton, pressed && styles.pressed]}
             >
-              <Text style={styles.confirmButtonText}>CONFIRMAR</Text>
+              <Text style={styles.confirmButtonText}>CERRAR SESIÓN</Text>
             </Pressable>
           </View>
         </BlurView>
