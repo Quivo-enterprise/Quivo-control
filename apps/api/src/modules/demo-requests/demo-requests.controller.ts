@@ -1,4 +1,4 @@
-import { Body, Controller, Header, Post } from '@nestjs/common';
+import { Body, Controller, Header, Inject, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { CreateDemoRequestSchema } from './demo-request.schema.js';
@@ -8,7 +8,7 @@ class CreateDemoRequestDto extends createZodDto(CreateDemoRequestSchema) {}
 
 @Controller('public')
 export class DemoRequestsController {
-  constructor(private readonly demoRequests: DemoRequestsService) {}
+  constructor(@Inject(DemoRequestsService) private readonly demoRequests: DemoRequestsService) {}
 
   /** POST /v1/public/demo-request — solicitud pública desde control.myquivo.com. */
   @Post('demo-request')

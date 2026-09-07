@@ -65,6 +65,41 @@ copy_env_if_missing() {
   fi
 }
 
+check_migration_rename_drift() {
+  # El PR #51 renombró 4 carpetas de migración (linea_branding, line_identity_markers,
+  # linea_cartel_editor, public_mobility_publication). Una base local que ya corrió esta
+  # rama con los nombres viejos queda con esos 4 nombres registrados en
+  # `_prisma_migrations`; Prisma no los reconoce con el nombre nuevo, así que reintenta su
+  # SQL (p. ej. `ALTER TABLE "lineas" ADD COLUMN` sin `IF NOT EXISTS`) y `migrate deploy`
+  # revienta con 42701 duplicate_column. Usamos `prisma migrate status` (ya es una
+  # dependencia del proyecto, no un cliente nuevo como psql) en vez de consultar la base
+  # directamente: es lo mismo que ya corre Prisma internamente y funciona igual si la base
+  # o `_prisma_migrations` todavía no existen (no hay match, no hay drift, se sigue normal).
+  local -a old_names=(
+    "20260815120000_linea_branding"
+    "20260815143000_line_identity_markers"
+    "20260815160000_linea_cartel_editor"
+    "20260817120000_public_mobility_publication"
+  )
+  local status_output
+  status_output="$(with_api_env pnpm --filter @quivo/db exec prisma migrate status 2>&1 || true)"
+
+  local name
+  for name in "${old_names[@]}"; do
+    if grep -q "$name" <<<"$status_output"; then
+      fail "$(printf '%s\n' \
+        "Tu base local tiene aplicada la migración '$name' (nombre viejo)." \
+        "El PR #51 renombró 4 carpetas de migración; con el nombre viejo todavía registrado," \
+        "Prisma va a reintentar ese SQL y 'prisma:migrate:deploy' va a fallar con 42701" \
+        "duplicate_column (la columna ya existe)." \
+        "" \
+        "Solución: resetea la base de desarrollo y vuelve a correr pnpm dev:" \
+        "  set -a && . apps/api/.env && set +a && pnpm --filter @quivo/db exec prisma migrate reset" \
+        "(corré esa línea desde la raíz del repo).")"
+    fi
+  done
+}
+
 with_api_env() (
   # Prisma 7 no carga .env automáticamente desde prisma.config.ts. El subshell evita
   # propagar PORT=3001 a Next.js y mantiene cada aplicación en su puerto correspondiente.
@@ -250,6 +285,7 @@ info "Compilando paquetes compartidos y backend..."
 with_api_env pnpm --filter '@quivo/api...' build
 
 info "Aplicando migraciones y preparando usuarios demo..."
+check_migration_rename_drift
 with_api_env pnpm --filter @quivo/db prisma:migrate:deploy
 with_api_env pnpm --filter @quivo/db prisma:seed
 
