@@ -116,7 +116,7 @@ function toFormValues(
  */
 export function ModuleTablePage<T extends Record<string, unknown>>({
   title,
-  subtitle: _subtitle,
+  subtitle,
   entityLabel,
   columns,
   initialRows,
@@ -588,21 +588,34 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flex: '1 1 auto' }}>
-              <h1
-                style={{
-                  margin: 0,
-                  fontSize: '1.05rem',
-                  fontWeight: 800,
-                  color: 'var(--qv-text-primary)',
-                  letterSpacing: '-0.02em',
-                  whiteSpace: 'nowrap',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                }}
-              >
-                {title}
-              </h1>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                <h1
+                  style={{
+                    margin: 0,
+                    fontSize: '1.05rem',
+                    fontWeight: 800,
+                    color: 'var(--qv-text-primary)',
+                    letterSpacing: '-0.02em',
+                    whiteSpace: 'nowrap',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                  }}
+                >
+                  {title}
+                </h1>
+                {subtitle && (
+                  <span
+                    style={{
+                      margin: 0,
+                      fontSize: 'var(--qv-text-sm)',
+                      color: 'var(--qv-text-secondary)',
+                    }}
+                  >
+                    {subtitle}
+                  </span>
+                )}
+              </div>
 
               <div style={{ width: '1px', height: '1.4rem', backgroundColor: 'var(--qv-border-glass)' }} />
 

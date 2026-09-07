@@ -17,7 +17,11 @@ async function login(page: Page, credentials: { email: string; password: string 
   await page.getByLabel('Contraseña').fill(credentials.password);
   await page.getByRole('button', { name: 'Iniciar Sesión' }).click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole('heading', { name: 'Panel administrativo' })).toBeVisible();
+  // `DashboardHeader` (heading "Panel administrativo") ya no existe en el layout rediseñado
+  // (`apps/web/app/(dashboard)/layout.tsx`); el `<nav>` de la barra lateral, con
+  // `aria-label="Navegación principal"` (`packages/design-system/src/ui/layout.tsx`), es el
+  // único ancla que se renderiza en TODAS las páginas del dashboard tras el login.
+  await expect(page.getByRole('navigation', { name: 'Navegación principal' })).toBeVisible();
 }
 
 async function navigate(page: Page, label: string, pathname: string) {
@@ -50,22 +54,34 @@ test.describe('Panel administrativo', () => {
     await expect(page.getByRole('heading', { name: 'Usuarios' })).toBeVisible();
     await expect(page.getByRole('cell', { name: 'admin@quivo.local' })).toBeVisible();
     await expect(page.getByRole('cell', { name: 'admin@sindicato.local' })).toBeVisible();
-    await page.getByLabel('Buscar por nombre o email').fill('admin@sindicato.local');
+    await page.getByPlaceholder('Buscar por nombre o email...').fill('admin@sindicato.local');
     await expect(page.getByRole('cell', { name: 'admin@sindicato.local' })).toBeVisible();
     await expect(page.getByRole('cell', { name: 'admin@quivo.local' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Limpiar filtros' }).click();
+    await page.getByRole('button', { name: 'Limpiar' }).click();
+    // El botón de fila ("Preparar restablecimiento") y el de envío del panel lateral
+    // (antes "Restablecer contraseña" únicamente en el submit) ahora comparten el MISMO
+    // nombre accesible "Restablecer contraseña": la fila pasó a un icon-button con
+    // aria-label="Restablecer contraseña" (usuarios/page.tsx:492) idéntico al texto del
+    // botón de envío del `Card` "Restablecer Contraseña" (usuarios/page.tsx:552). Se
+    // desambigua por orden en el DOM: la tabla se renderiza antes que ese `Card`, así que
+    // `.first()` siempre cae en un botón de fila y `.last()` siempre en el de envío.
     await expect(
-      page.getByRole('button', { name: 'Preparar restablecimiento' }).first(),
+      page.getByRole('button', { name: 'Restablecer contraseña' }).first(),
     ).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Restablecer contraseña' })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Restablecer contraseña' }).last(),
+    ).toBeVisible();
     await page.getByLabel('Email del usuario').fill('admin@sindicato.local');
     await page.getByRole('textbox', { name: /^Contraseña nueva/ }).fill('PruebaSegura123!');
     await page.getByLabel('Confirmar contraseña nueva').fill('PruebaSegura123!');
-    await page.getByRole('button', { name: 'Restablecer contraseña', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Restablecer contraseña' }).last().click();
     const confirmacionReset = page.getByRole('alertdialog');
     await expect(confirmacionReset).toBeVisible();
+    // El título de este diálogo cambió de "Restablecer contraseña" a "Confirmar
+    // restablecimiento" (usuarios/page.tsx, `ConfirmDialog title=`) — no estaba en la lista
+    // de selectores identificados como rotos, pero se verificó roto contra el código real.
     await expect(
-      confirmacionReset.getByRole('heading', { name: 'Restablecer contraseña' }),
+      confirmacionReset.getByRole('heading', { name: 'Confirmar restablecimiento' }),
     ).toBeVisible();
     await confirmacionReset.getByRole('button', { name: 'Cancelar', exact: true }).click();
   });
@@ -92,7 +108,7 @@ test.describe('Panel administrativo', () => {
     await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
 
     await navigate(page, 'Socios', '/socios');
-    await page.getByPlaceholder('Buscar socio...').fill('María Quispe Mamani');
+    await page.getByPlaceholder('Buscar socio por nombre o documento de identidad...').fill('María Quispe Mamani');
     await expect(page.getByText('María Quispe Mamani', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Editar' }).click();
     await page.locator('button#estado').click();
@@ -104,11 +120,11 @@ test.describe('Panel administrativo', () => {
     ).toBeVisible();
     await confirmacionSocio.getByRole('button', { name: 'Cancelar', exact: true }).click();
     await page.getByRole('button', { name: 'Cancelar', exact: true }).click();
-    await page.getByPlaceholder('Buscar socio...').fill('');
+    await page.getByPlaceholder('Buscar socio por nombre o documento de identidad...').fill('');
     await expect(page.getByText('José Choque Mamani', { exact: true })).toHaveCount(0);
 
     await navigate(page, 'Conductores', '/conductores');
-    await page.getByPlaceholder('Buscar conductor...').fill('Pedro Quispe Mamani');
+    await page.getByPlaceholder('Buscar conductor por nombre, CI o licencia...').fill('Pedro Quispe Mamani');
     await expect(page.getByText('Pedro Quispe Mamani', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Editar' }).click();
     await page.locator('button#estado').click();
@@ -122,27 +138,29 @@ test.describe('Panel administrativo', () => {
     ).toBeVisible();
     await confirmacionDesactivacion.getByRole('button', { name: 'Cancelar', exact: true }).click();
     await page.getByRole('button', { name: 'Cancelar', exact: true }).click();
-    await page.getByPlaceholder('Buscar conductor...').fill('');
+    await page.getByPlaceholder('Buscar conductor por nombre, CI o licencia...').fill('');
     await expect(page.getByText('Lucía Choque Mamani', { exact: true })).toHaveCount(0);
   });
 
   test('admin de sindicato puede consultar el flujo operativo sembrado', async ({ page }) => {
     await login(page, ADMIN_SINDICATO);
 
-    await expect(page.getByRole('heading', { name: 'Acciones prioritarias' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: 'Acciones Prioritarias y Atención Operativa' }),
+    ).toBeVisible();
     await expect(page.getByRole('link', { name: 'Revisar rotaciones' })).toHaveAttribute(
       'href',
       '/rotaciones',
     );
-    await expect(page.getByRole('link', { name: 'Revisar sanciones' })).toHaveAttribute(
+    await expect(page.getByRole('link', { name: 'Ver sanciones' })).toHaveAttribute(
       'href',
       '/reglas',
     );
-    await expect(page.getByRole('link', { name: 'Ver errores de sync' })).toHaveAttribute(
+    await expect(page.getByRole('link', { name: 'Auditar sync' })).toHaveAttribute(
       'href',
       '/sync-errores',
     );
-    await expect(page.getByRole('link', { name: 'Revisar flota' })).toHaveAttribute(
+    await expect(page.getByRole('link', { name: 'Gestionar flota' })).toHaveAttribute(
       'href',
       '/vehiculos',
     );
@@ -151,7 +169,12 @@ test.describe('Panel administrativo', () => {
     await page.locator('button#linea').click();
     await page.getByRole('option', { name: /L1/ }).click();
     await page.getByRole('button', { name: /Ida/ }).click();
-    await expect(page.getByText('2 obligatorios', { exact: true })).toBeVisible();
+    // El resumen "2 obligatorios" fue eliminado; ahora cada punto de control muestra un tag
+    // "Obligatorio"/"Opcional" (route-detail-cards.tsx:280). El seed de la línea L1 (sentido
+    // ida, sindicato A — ver `seedRotaciones` en packages/db/prisma/seed.ts) crea exactamente
+    // 2 puntos de control, ambos con `obligatorio: true`, así que se preserva la misma
+    // aserción contando los tags en vez del texto de resumen que ya no existe.
+    await expect(page.getByText('Obligatorio', { exact: true })).toHaveCount(2);
 
     await navigate(page, 'Rotaciones', '/rotaciones');
     await expect(page.getByRole('button', { name: 'Aplicar filtros' })).toBeEnabled();
@@ -193,7 +216,7 @@ test.describe('Panel administrativo', () => {
     await expect(page.getByRole('button', { name: 'Limpiar filtros' })).toBeVisible();
 
     await navigate(page, 'Errores de sync', '/sync-errores');
-    await expect(page.getByRole('heading', { name: 'Errores de sync' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Errores de Sincronización' })).toBeVisible();
     const aplicarFiltros = page.getByRole('button', { name: 'Aplicar filtros' });
     await expect(aplicarFiltros).toBeEnabled();
     await page.getByLabel('Sesión (id)').fill('sesion-invalida');
@@ -299,7 +322,7 @@ test.describe('Altas de entidades', () => {
     await navigate(page, 'Vehículos', '/vehiculos');
     await page.getByRole('button', { name: 'Nuevo vehículo' }).click();
 
-    await page.getByLabel('Placa *').fill(vehiculoPlaca);
+    await page.getByLabel('Placa vehicular RUAT *').fill(vehiculoPlaca);
     await page.getByRole('radio', { name: 'Minibús' }).click();
 
     await page.locator('button#vehiculo-socioId').click();
@@ -311,7 +334,7 @@ test.describe('Altas de entidades', () => {
     await page.locator('button#vehiculo-marcaCatalogo').click();
     await page.getByRole('option', { name: 'Toyota' }).click();
 
-    await page.getByLabel('Capacidad *').fill('14');
+    await page.getByLabel('Capacidad de pasajeros *').fill('14');
 
     const modeloInput = page.getByLabel('Modelo *');
     if (await modeloInput.isVisible()) {
