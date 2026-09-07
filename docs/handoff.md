@@ -6,13 +6,85 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## En curso — cierre del PR #51 (2026-09-07)
+## El rediseño de Jairo, integrado (#51, 2026-09-07)
 
-Plan vivo: [`docs/plan-cierre-pr51.md`](plan-cierre-pr51.md). Integración del rediseño de Jairo
-(`integracion/redesign-jairo`). El PR se abrió sobre `07c4a7c`; los 3 commits que faltaban
-(extirpación de Quivo Rutas + fix del crash de hooks en `/en-vivo`) se pushearon hoy, así que
-recién ahora el CI del PR corre sobre el árbol que se va a mergear. Esta sección se reemplaza por
-el registro definitivo al cerrar.
+`main` = `ca1618a`. Entró la integración de `integracion/redesign-jairo`: rediseño del panel web,
+rediseño de la app móvil y la landing pública nueva. **El backend de pasajeros de Quivo Rutas NO
+entró** — se extirpó antes de mergear (`56c753f`, −3342 líneas: módulos `media`, `notificaciones`,
+`pasajeros`, `pasajeros-datos`, `planes`, `common/crypto/secret-box.ts`, 13 modelos `Passenger*` y
+5 migraciones). De los 8 endpoints del catálogo público quedó **uno solo**,
+`GET /v1/public/mobility/lines`, para que Quivo Rutas sincronice las rutas. Decisión del CTO:
+*"no necesitamos NADA de quivo rutas"*.
+
+### Lo que costó cerrarlo, y la lección
+
+El PR se abrió sobre `07c4a7c` y su CI verde **no describía el árbol que se iba a mergear**: los
+3 commits con la extirpación y el fix del crash de hooks estaban sólo en local, en dos worktrees
+que después se borraron. Se perdió trabajo sin commitear y hubo que rehacerlo. **Lección concreta:
+un CI verde sobre un árbol que no es el de destino es peor que no tener CI**, porque da confianza
+falsa. Lo primero que se hizo al retomar fue pushear y dejar que CI corriera sobre lo real.
+
+De los 4 bloqueantes que listaba el PR, **dos ya estaban muertos** al verificarlos contra el
+código (`ModuleTablePage` lo había arreglado `4d5d414`; `secret-box.ts` se fue con la extirpación).
+Los otros dos se arreglaron acá, más dos defectos que el PR no mencionaba.
+
+### Lo que se corrigió
+
+| Área | Cambio |
+|---|---|
+| `apps/web` (15 archivos) | ~100 `color:'#ffffff'` sobre superficies claras → `var(--qv-text-primary)` |
+| `regla-preview.tsx` | `color-mix` invertido → fondo `#0c121e`; los dos textos secundarios de adentro fijados a `#94a3b8` (con el token claro daban 3.94:1, bajo el piso AA de 4.5:1) |
+| `apps/mobile` | Restaurado el aviso de que cerrar sesión corta el GPS; `CONFIRMAR` → `CERRAR SESIÓN`; `accessibilityLabel` desincronizado |
+| `packages/db` | 4 migraciones renombradas a `20260817160000`–`163000`; prefijo duplicado eliminado. Sin tocar SQL |
+| `scripts/dev-all.sh` | Guarda que detecta la deriva de migraciones y aborta explicando el reset, en vez de morir con `42701 duplicate_column` |
+| `apps/api` | `@Inject` en `demo-requests.controller.ts`, único controller del repo que rompía la convención |
+
+**El "dashboard muestra ceros" no era un bug de datos.** Los datos llegaban bien (`page.tsx:88-101`);
+los cuatro KPIs se pintaban blancos sobre vidrio claro y sólo quedaba visible el `/ total` gris al
+lado. `tokens.css` define `--qv-text-primary` para tema claro y oscuro, así que el hex fijo rompía
+los dos temas.
+
+**El hallazgo de accesibilidad que destapó `/code-review`:** al renombrar el botón de logout quedó
+`accessibilityLabel="Confirmar"` sin actualizar. En React Native ese atributo **pisa** al texto
+visible, así que un lector de pantalla anunciaba la palabra más vaga posible justo en el botón que
+corta el GPS de forma irreversible, y quien usa control por voz decía lo que veía y el botón no
+respondía (WCAG 2.5.3). Es el mismo defecto que el aviso restaurado, pero para quien no ve la
+pantalla.
+
+### Verificación
+
+`turbo lint typecheck` 17/17 sin errores. Tests sobre **base virgen** (como CI): api 264/264,
+db 27/27, web 63/63, móvil 116/116, shared 52/52, design-system 8/8. Las 30 migraciones aplican
+limpias sobre base virgen y se confirmó por SQL que el orden de aplicación ya coincide con el
+cronológico. La guarda de `dev-all.sh` se probó en los dos casos, incluida una base con deriva
+simulada. Panel verificado en vivo con login real: el dashboard muestra sus números.
+
+**Dos falsas alarmas que conviene recordar:** los errores de `tsc` sobre miembros faltantes de
+`@quivo/shared` y `@quivo/design-system` eran `dist` desactualizados, no defectos; y los fallos de
+tests eran estado sucio de la base local (JWKS cifrado con otro `JWT_SECRET`, particiones viejas).
+En base virgen pasa todo. Antes de reportar un fallo, reconstruir los paquetes y probar en base limpia.
+
+`/security-review` no encontró hallazgos por encima del umbral. Confirmó además que la migración
+`20260829180000` **repara** el aislamiento en vez de debilitarlo: le devuelve el `SET search_path`
+a una función `SECURITY DEFINER` que lo había perdido.
+
+### Ojo al desplegar
+
+- Las 4 migraciones renombradas cambian su `migration_name`. Producción corre `main` y nunca las
+  tuvo, la de CI es efímera, pero **cualquier base local que ya hubiera corrido la rama necesita
+  reset** — la guarda de `dev-all.sh` lo detecta y lo explica.
+- `20260829180000` corre `DELETE FROM gps_points WHERE "sindicatoId" IS NULL`. El comentario del
+  SQL dice que debería afectar cero filas; **no está verificado contra producción**. Contar antes.
+- `20260819100000` asigna `cityId='cochabamba'` por default a todas las líneas.
+- El rol `'pasajero'` sigue en `RolSchema` (`packages/shared/src/enums/roles.ts:5,15`), inerte.
+
+### Queda abierto, en su propio PR
+
+El pipe global de validación Zod **no valida bajo runtimes esbuild**: depende de la metadata
+`design:paramtypes`, que sólo emite `tsc`. Todo el repo usa `@Inject` explícito por esa misma
+razón, así que la inyección de dependencias sobrevive y el pipe no. Afecta a los ~25 controllers
+**en tests**; producción y el job `acceptance` compilan con `tsc` y no lo sufren. El plan detallado
+está en [`docs/plan-cierre-pr51.md`](plan-cierre-pr51.md) §Fase 4.
 
 ## Estado al 2026-08-23
 
