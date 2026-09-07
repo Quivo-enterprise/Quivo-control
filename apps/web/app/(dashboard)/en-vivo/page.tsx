@@ -59,6 +59,7 @@ export default function EnVivoPage() {
   const [telemetriaExpandida, setTelemetriaExpandida] = useState(true);
   const [fitKeyOverride, setFitKeyOverride] = useState<number>(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const adminCity = useAdminCity();
 
   const listado = useMemo(() => sesiones.data ?? [], [sesiones.data]);
   useEffect(() => {
@@ -172,8 +173,6 @@ export default function EnVivoPage() {
       </div>
     );
   }
-
-  const adminCity = useAdminCity();
 
   return (
     <div className="qv-live-map-wrapper">
