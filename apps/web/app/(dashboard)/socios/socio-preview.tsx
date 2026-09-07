@@ -63,7 +63,7 @@ export function SocioPreviewCard({ values, sindicatoOptions = [] }: SocioPreview
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Sparkles size={16} style={{ color: 'var(--qv-color-accent)' }} />
           <div>
-            <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 800, color: '#ffffff' }}>
+            <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 800, color: 'var(--qv-text-primary)' }}>
               Credencial de Socio Propietario
             </h3>
             <span style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)' }}>
@@ -169,7 +169,7 @@ export function SocioPreviewCard({ values, sindicatoOptions = [] }: SocioPreview
                 margin: '0.15rem 0 0 0',
                 fontSize: '1.05rem',
                 fontWeight: 800,
-                color: '#ffffff',
+                color: 'var(--qv-text-primary)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -201,7 +201,7 @@ export function SocioPreviewCard({ values, sindicatoOptions = [] }: SocioPreview
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.25rem' }}>
             <CreditCard size={14} style={{ color: 'var(--qv-color-accent)', flexShrink: 0 }} />
-            <strong style={{ fontSize: '0.875rem', color: '#ffffff' }}>{ci}</strong>
+            <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>{ci}</strong>
           </div>
         </div>
 
@@ -225,7 +225,7 @@ export function SocioPreviewCard({ values, sindicatoOptions = [] }: SocioPreview
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.15rem' }}>
                 <Building2 size={14} style={{ color: 'var(--qv-color-primary)' }} />
-                <strong style={{ fontSize: '0.8125rem', color: '#ffffff' }}>{sindicatoLabel}</strong>
+                <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>{sindicatoLabel}</strong>
               </div>
             </div>
             <ShieldCheck size={18} style={{ color: '#34d399' }} />

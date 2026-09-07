@@ -432,7 +432,7 @@ export default function RutasPage() {
               <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
                 Rutas Activas
               </span>
-              <strong style={{ fontSize: '0.9375rem', color: '#ffffff' }}>
+              <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
                 {rutasActivas} <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--qv-text-secondary)' }}>/ {rutas.length}</span>
               </strong>
             </div>
@@ -443,7 +443,7 @@ export default function RutasPage() {
               <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
                 Distancia
               </span>
-              <strong style={{ fontSize: '0.9375rem', color: '#ffffff' }}>
+              <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
                 {distanciaSeleccionada === null ? '—' : formatearDistancia(distanciaSeleccionada)}
               </strong>
             </div>
@@ -454,7 +454,7 @@ export default function RutasPage() {
               <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
                 Paradas
               </span>
-              <strong style={{ fontSize: '0.9375rem', color: '#ffffff' }}>
+              <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
                 {rutaSeleccionada ? paradas.length : '—'}
               </strong>
             </div>
@@ -465,7 +465,7 @@ export default function RutasPage() {
               <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
                 Controles
               </span>
-              <strong style={{ fontSize: '0.9375rem', color: '#ffffff' }}>
+              <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
                 {rutaSeleccionada ? puntosControl.length : '—'}
               </strong>
             </div>
@@ -1145,7 +1145,7 @@ export default function RutasPage() {
           title={`Ubicación operativa: ${adminCity.ciudad.nombre} (${adminCity.ciudad.departamento})`}
         >
           <MapPin size={15} style={{ color: 'var(--qv-color-primary)' }} />
-          <strong style={{ color: '#ffffff', fontSize: '0.875rem' }}>{adminCity.ciudad.nombre}</strong>
+          <strong style={{ color: 'var(--qv-text-primary)', fontSize: '0.875rem' }}>{adminCity.ciudad.nombre}</strong>
           <span
             style={{
               fontSize: '0.6875rem',
@@ -1172,19 +1172,19 @@ export default function RutasPage() {
             padding: '0.45rem 0.75rem',
           }}
         >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#ffffff' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--qv-text-primary)' }}>
             <i style={{ width: '0.625rem', height: '0.625rem', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 6px #10b981' }} />
             Origen
           </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#ffffff' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--qv-text-primary)' }}>
             <i style={{ width: '0.625rem', height: '0.625rem', borderRadius: '50%', background: colorLinea, display: 'inline-block', boxShadow: `0 0 6px ${colorLinea}` }} />
             Intermedia
           </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#ffffff' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--qv-text-primary)' }}>
             <i style={{ width: '0.625rem', height: '0.625rem', borderRadius: '50%', background: '#ef4444', display: 'inline-block', boxShadow: '0 0 6px #ef4444' }} />
             Destino
           </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#ffffff' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--qv-text-primary)' }}>
             <i style={{ width: '0.625rem', height: '0.625rem', borderRadius: '50%', background: colorLineaSecundario, display: 'inline-block', boxShadow: `0 0 6px ${colorLineaSecundario}` }} />
             Control
           </span>

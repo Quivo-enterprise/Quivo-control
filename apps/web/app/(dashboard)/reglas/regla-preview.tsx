@@ -66,7 +66,7 @@ export function ReglaPreviewCard({ values, sindicatoOptions = [] }: ReglaPreview
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Sparkles size={16} style={{ color: 'var(--qv-color-primary)' }} />
           <div>
-            <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 800, color: '#ffffff' }}>
+            <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 800, color: 'var(--qv-text-primary)' }}>
               Vista previa en tiempo real
             </h3>
             <span style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)' }}>
@@ -173,7 +173,7 @@ export function ReglaPreviewCard({ values, sindicatoOptions = [] }: ReglaPreview
               >
                 Estatuto Sindical
               </span>
-              <h4 style={{ margin: '0.15rem 0 0 0', fontSize: '1rem', fontWeight: 800, color: '#ffffff' }}>
+              <h4 style={{ margin: '0.15rem 0 0 0', fontSize: '1rem', fontWeight: 800, color: 'var(--qv-text-primary)' }}>
                 {nombre}
               </h4>
             </div>
@@ -208,7 +208,7 @@ export function ReglaPreviewCard({ values, sindicatoOptions = [] }: ReglaPreview
             <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', fontWeight: 600, textTransform: 'uppercase' }}>
               Categoría
             </span>
-            <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#ffffff', marginTop: '0.2rem' }}>
+            <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--qv-text-primary)', marginTop: '0.2rem' }}>
               {tipo}
             </div>
           </div>
@@ -226,7 +226,7 @@ export function ReglaPreviewCard({ values, sindicatoOptions = [] }: ReglaPreview
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.2rem' }}>
               <SujetoIcon size={14} style={{ color: 'var(--qv-color-primary)' }} />
-              <strong style={{ fontSize: '0.8125rem', color: '#ffffff', textTransform: 'capitalize' }}>
+              <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)', textTransform: 'capitalize' }}>
                 {aplicaA}
               </strong>
             </div>
@@ -250,7 +250,7 @@ export function ReglaPreviewCard({ values, sindicatoOptions = [] }: ReglaPreview
                   style={{
                     fontSize: '0.78rem',
                     fontWeight: 600,
-                    color: '#ffffff',
+                    color: 'var(--qv-text-primary)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -275,7 +275,7 @@ export function ReglaPreviewCard({ values, sindicatoOptions = [] }: ReglaPreview
           <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Tipificación y Causales
           </span>
-          <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8125rem', color: '#ffffff', lineHeight: 1.5 }}>
+          <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8125rem', color: 'var(--qv-text-primary)', lineHeight: 1.5 }}>
             {descripcion}
           </p>
         </div>
@@ -304,7 +304,7 @@ export function ReglaPreviewCard({ values, sindicatoOptions = [] }: ReglaPreview
           style={{
             padding: '0.85rem',
             borderRadius: 'var(--qv-radius-lg)',
-            backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 90%, black)',
+            backgroundColor: '#0c121e',
             border: '1px solid var(--qv-border-glass)',
             display: 'flex',
             alignItems: 'flex-start',
@@ -343,11 +343,11 @@ export function ReglaPreviewCard({ values, sindicatoOptions = [] }: ReglaPreview
               <strong style={{ fontSize: '0.8125rem', color: '#ffffff' }}>
                 Aviso Disciplinario
               </strong>
-              <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)' }}>
+              <span style={{ fontSize: '0.6875rem', color: '#94a3b8' }}>
                 Ahora
               </span>
             </div>
-            <span style={{ fontSize: '0.75rem', color: 'var(--qv-text-secondary)', lineHeight: 1.35 }}>
+            <span style={{ fontSize: '0.75rem', color: '#94a3b8', lineHeight: 1.35 }}>
               Se ha emitido una observación por{' '}
               <strong style={{ color: '#ffffff' }}>{nombre}</strong> ({gravedad.toUpperCase()}).
             </span>

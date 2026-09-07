@@ -112,7 +112,7 @@ export default function RecorridoDetallePage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                 <GitBranch size={16} style={{ color: detalle.linea.color ?? 'var(--qv-color-primary)' }} />
-                <strong style={{ fontSize: '0.9375rem', color: '#ffffff' }}>
+                <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
                   {detalle.linea.nombre}
                 </strong>
               </div>
@@ -128,7 +128,7 @@ export default function RecorridoDetallePage() {
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8125rem' }}>
                 <User size={15} style={{ color: 'var(--qv-color-primary)' }} />
-                <span style={{ fontWeight: 600, color: '#ffffff' }}>{detalle.conductor.nombre}</span>
+                <span style={{ fontWeight: 600, color: 'var(--qv-text-primary)' }}>{detalle.conductor.nombre}</span>
               </div>
 
               <div style={{ width: '1px', height: '1.5rem', backgroundColor: 'var(--qv-border-glass)' }} />
@@ -190,7 +190,7 @@ export default function RecorridoDetallePage() {
                   Puntos de Control
                 </span>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                  <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                  <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                     {puntosValidados}
                   </strong>
                   <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -235,7 +235,7 @@ export default function RecorridoDetallePage() {
                   Puntos GPS
                 </span>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                  <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                  <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                     {detalle.trazaGps.length}
                   </strong>
                   <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -280,7 +280,7 @@ export default function RecorridoDetallePage() {
                   Eventos Registrados
                 </span>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                  <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                  <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                     {detalle.eventos.length + detalle.cumplimientos.length}
                   </strong>
                   <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -335,7 +335,7 @@ export default function RecorridoDetallePage() {
                       <Clock size={16} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
                     )}
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#ffffff' }}>
+                      <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--qv-text-primary)' }}>
                         {item.titulo}
                       </span>
                       {item.detalle && (

@@ -179,7 +179,7 @@ export default function UsuariosPage() {
               Total de Cuentas
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {usuarios.length}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -224,7 +224,7 @@ export default function UsuariosPage() {
               Admins Centrales
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {totalAdminQuivo}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -269,7 +269,7 @@ export default function UsuariosPage() {
               Admins Sindicato
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {totalAdminSindicato}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -314,7 +314,7 @@ export default function UsuariosPage() {
               Conductores
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {totalConductores}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -436,7 +436,7 @@ export default function UsuariosPage() {
                             >
                               {inicial}
                             </div>
-                            <strong style={{ fontSize: '0.875rem', color: '#ffffff' }}>
+                            <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>
                               {u.name}
                             </strong>
                           </div>
@@ -444,7 +444,7 @@ export default function UsuariosPage() {
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8125rem', color: 'var(--qv-text-secondary)' }}>
                             <Mail size={13} style={{ color: 'var(--qv-color-primary)' }} />
-                            <span style={{ color: '#ffffff' }}>{u.email}</span>
+                            <span style={{ color: 'var(--qv-text-primary)' }}>{u.email}</span>
                           </div>
                         </td>
                         <td>

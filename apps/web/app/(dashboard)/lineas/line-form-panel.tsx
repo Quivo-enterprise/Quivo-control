@@ -476,7 +476,7 @@ export function LineaFormPanel({
                   01
                 </span>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: '#ffffff' }}>
+                  <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                     Identidad Base de la Línea
                   </h3>
                   <p style={{ margin: '0.1rem 0 0 0', fontSize: '0.75rem', color: 'var(--qv-text-secondary)' }}>
@@ -611,7 +611,7 @@ export function LineaFormPanel({
                   02
                 </span>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: '#ffffff' }}>
+                  <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                     Símbolo y Emblema Gráfico
                   </h3>
                   <p style={{ margin: '0.1rem 0 0 0', fontSize: '0.75rem', color: 'var(--qv-text-secondary)' }}>
@@ -661,7 +661,7 @@ export function LineaFormPanel({
                   </div>
 
                   <div style={{ flex: 1 }}>
-                    <strong style={{ fontSize: '1rem', color: '#ffffff', display: 'block' }}>
+                    <strong style={{ fontSize: '1rem', color: 'var(--qv-text-primary)', display: 'block' }}>
                       Emblema Oficial de la Línea
                     </strong>
                     <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8125rem', color: 'var(--qv-text-secondary)', lineHeight: 1.4 }}>
@@ -765,7 +765,7 @@ export function LineaFormPanel({
                   03
                 </span>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: '#ffffff' }}>
+                  <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                     Paleta Cromática y Colores Oficiales
                   </h3>
                   <p style={{ margin: '0.1rem 0 0 0', fontSize: '0.75rem', color: 'var(--qv-text-secondary)' }}>
@@ -813,7 +813,7 @@ export function LineaFormPanel({
                         transition: 'all var(--qv-transition-fast)',
                       }}
                     >
-                      <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#ffffff' }}>
+                      <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                         {preset.label}
                       </span>
                       <div style={{ display: 'flex', gap: '4px' }}>
@@ -908,7 +908,7 @@ export function LineaFormPanel({
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: '#ffffff' }}>
+                        <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                           Señalización y Distintivos de Recorrido
                         </h3>
                         <span
@@ -1546,7 +1546,7 @@ export function LineaFormPanel({
                   05
                 </span>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: '#ffffff' }}>
+                  <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                     Composición y Tintas del Letrero de Techo
                   </h3>
                   <p style={{ margin: '0.1rem 0 0 0', fontSize: '0.75rem', color: 'var(--qv-text-secondary)' }}>
@@ -1680,7 +1680,7 @@ export function LineaFormPanel({
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.35rem' }}>
             <span style={{ color: 'var(--qv-text-secondary)', fontWeight: 600 }}>Completitud de Ficha</span>
-            <strong style={{ color: '#ffffff', fontWeight: 800 }}>{completionPercentage}%</strong>
+            <strong style={{ color: 'var(--qv-text-primary)', fontWeight: 800 }}>{completionPercentage}%</strong>
           </div>
           <div
             style={{

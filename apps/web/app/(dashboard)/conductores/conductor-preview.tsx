@@ -66,7 +66,7 @@ export function ConductorPreviewCard({ values, sindicatoOptions = [] }: Conducto
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Sparkles size={16} style={{ color: 'var(--qv-color-primary)' }} />
           <div>
-            <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 800, color: '#ffffff' }}>
+            <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 800, color: 'var(--qv-text-primary)' }}>
               Credencial Digital del Conductor
             </h3>
             <span style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)' }}>
@@ -172,7 +172,7 @@ export function ConductorPreviewCard({ values, sindicatoOptions = [] }: Conducto
                 margin: '0.15rem 0 0 0',
                 fontSize: '1.05rem',
                 fontWeight: 800,
-                color: '#ffffff',
+                color: 'var(--qv-text-primary)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -205,7 +205,7 @@ export function ConductorPreviewCard({ values, sindicatoOptions = [] }: Conducto
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.25rem' }}>
               <CreditCard size={14} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
-              <strong style={{ fontSize: '0.875rem', color: '#ffffff' }}>{ci}</strong>
+              <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>{ci}</strong>
             </div>
           </div>
 
@@ -222,7 +222,7 @@ export function ConductorPreviewCard({ values, sindicatoOptions = [] }: Conducto
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.25rem' }}>
               <FileBadge size={14} style={{ color: 'var(--qv-color-accent)', flexShrink: 0 }} />
-              <strong style={{ fontSize: '0.875rem', color: '#ffffff' }}>{licencia}</strong>
+              <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>{licencia}</strong>
             </div>
           </div>
         </div>
@@ -247,7 +247,7 @@ export function ConductorPreviewCard({ values, sindicatoOptions = [] }: Conducto
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.15rem' }}>
                 <Building2 size={14} style={{ color: 'var(--qv-color-primary)' }} />
-                <strong style={{ fontSize: '0.8125rem', color: '#ffffff' }}>{sindicatoLabel}</strong>
+                <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>{sindicatoLabel}</strong>
               </div>
             </div>
             <ShieldCheck size={18} style={{ color: '#34d399' }} />

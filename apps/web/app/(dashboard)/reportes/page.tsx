@@ -237,7 +237,7 @@ function ReportesContent() {
               Cumplimiento General
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {porcentajeGeneral.toFixed(1)}%
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -282,7 +282,7 @@ function ReportesContent() {
               Puntos de Control
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {puntosCumplidos}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -327,7 +327,7 @@ function ReportesContent() {
               Recorridos Completados
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {recorridosCompletados}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -444,7 +444,7 @@ function ReportesContent() {
                         >
                           <Icon size={15} />
                         </div>
-                        <strong style={{ fontSize: '0.875rem', color: '#ffffff' }}>
+                        <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>
                           {f.nombre}
                         </strong>
                       </div>
@@ -452,7 +452,7 @@ function ReportesContent() {
                     <td>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '8.5rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <span style={{ fontSize: '0.875rem', fontWeight: 700, color: '#ffffff' }}>
+                          <span style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                             {f.porcentajeCumplimiento.toFixed(1)}%
                           </span>
                         </div>
@@ -479,12 +479,12 @@ function ReportesContent() {
                       </div>
                     </td>
                     <td>
-                      <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#ffffff' }}>
+                      <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                         {f.puntosCumplidos} <span style={{ color: 'var(--qv-text-secondary)', fontWeight: 500 }}>/ {f.puntosTotales}</span>
                       </span>
                     </td>
                     <td>
-                      <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#ffffff' }}>
+                      <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                         {f.recorridosCompletados} <span style={{ color: 'var(--qv-text-secondary)', fontWeight: 500 }}>/ {f.recorridosAsignados}</span>
                       </span>
                     </td>

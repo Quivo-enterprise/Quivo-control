@@ -183,7 +183,7 @@ export default function SyncErroresPage() {
               Eventos Rechazados
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {filas.length}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -228,7 +228,7 @@ export default function SyncErroresPage() {
               Terminales con Error
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {totalDispositivos}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -273,7 +273,7 @@ export default function SyncErroresPage() {
               Sesiones Afectadas
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {totalSesiones}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -373,13 +373,13 @@ export default function SyncErroresPage() {
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <Calendar size={14} style={{ color: 'var(--qv-color-primary)' }} />
-                      <span style={{ fontWeight: 600, color: '#ffffff' }}>{new Date(f.ts).toLocaleString('es-BO')}</span>
+                      <span style={{ fontWeight: 600, color: 'var(--qv-text-primary)' }}>{new Date(f.ts).toLocaleString('es-BO')}</span>
                     </div>
                   </td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <Smartphone size={14} style={{ color: 'var(--qv-color-primary)' }} />
-                      <strong style={{ color: '#ffffff' }}>{f.deviceId}</strong>
+                      <strong style={{ color: 'var(--qv-text-primary)' }}>{f.deviceId}</strong>
                     </div>
                   </td>
                   <td>
@@ -387,7 +387,7 @@ export default function SyncErroresPage() {
                       style={{
                         fontSize: '0.75rem',
                         fontFamily: 'monospace',
-                        color: f.sesionId ? '#ffffff' : 'var(--qv-text-secondary)',
+                        color: f.sesionId ? 'var(--qv-text-primary)' : 'var(--qv-text-secondary)',
                       }}
                     >
                       {f.sesionId ?? '—'}

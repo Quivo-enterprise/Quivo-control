@@ -318,7 +318,7 @@ export default function DashboardHomePage() {
                 Sindicatos Activos
               </span>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                   {sindicatosActivos}
                 </strong>
                 <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -367,7 +367,7 @@ export default function DashboardHomePage() {
               Flota de Vehículos
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {vehiculosActivos}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -415,7 +415,7 @@ export default function DashboardHomePage() {
               Conductores Operativos
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {conductoresActivos}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -463,7 +463,7 @@ export default function DashboardHomePage() {
               Socios Afiliados
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-              <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+              <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                 {sociosActivos}
               </strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>

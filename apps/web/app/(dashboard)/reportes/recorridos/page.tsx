@@ -154,13 +154,13 @@ export default function RecorridosPage() {
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <Calendar size={14} style={{ color: 'var(--qv-color-primary)' }} />
-                      <span style={{ fontWeight: 600, color: '#ffffff' }}>{new Date(f.inicio).toLocaleString('es-BO')}</span>
+                      <span style={{ fontWeight: 600, color: 'var(--qv-text-primary)' }}>{new Date(f.inicio).toLocaleString('es-BO')}</span>
                     </div>
                   </td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <GitBranch size={14} style={{ color: 'var(--qv-color-primary)' }} />
-                      <strong style={{ color: '#ffffff' }}>{f.lineaNombre}</strong>
+                      <strong style={{ color: 'var(--qv-text-primary)' }}>{f.lineaNombre}</strong>
                     </div>
                   </td>
                   <td>
@@ -172,7 +172,7 @@ export default function RecorridosPage() {
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <User size={14} style={{ color: 'var(--qv-color-primary)' }} />
-                      <span style={{ color: '#ffffff', fontWeight: 600 }}>{f.conductorNombre}</span>
+                      <span style={{ color: 'var(--qv-text-primary)', fontWeight: 600 }}>{f.conductorNombre}</span>
                     </div>
                   </td>
                   <td>

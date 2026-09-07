@@ -316,7 +316,7 @@ export default function RotacionesPage() {
                     Período Seleccionado
                   </span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
-                    <strong style={{ fontSize: '1.05rem', color: '#ffffff', letterSpacing: '0.02em' }}>
+                    <strong style={{ fontSize: '1.05rem', color: 'var(--qv-text-primary)', letterSpacing: '0.02em' }}>
                       {data.rotacionActual.periodo}
                     </strong>
                     <StatusBadge
@@ -362,7 +362,7 @@ export default function RotacionesPage() {
                     Vehículos Programados
                   </span>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                    <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                    <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                       {filasGrilla.length}
                     </strong>
                     <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -407,7 +407,7 @@ export default function RotacionesPage() {
                     Turnos / Asignaciones
                   </span>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                    <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                    <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                       {data.rotacionActual.asignaciones.length}
                     </strong>
                     <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -452,7 +452,7 @@ export default function RotacionesPage() {
                     Conductores Asignados
                   </span>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                    <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                    <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                       {totalConductoresAsignados}
                     </strong>
                     <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -527,7 +527,7 @@ export default function RotacionesPage() {
                               className={`qv-rotacion-catalog-card${activa ? ' qv-rotacion-catalog-card--active' : ''}`}
                             >
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <strong style={{ color: '#ffffff', fontSize: '0.875rem' }}>
+                                <strong style={{ color: 'var(--qv-text-primary)', fontSize: '0.875rem' }}>
                                   {r.periodo}
                                 </strong>
                                 <StatusBadge
@@ -655,7 +655,7 @@ export default function RotacionesPage() {
                                         alignItems: 'center',
                                         gap: '0.35rem',
                                         fontSize: '0.8125rem',
-                                        color: '#ffffff',
+                                        color: 'var(--qv-text-primary)',
                                         fontWeight: 700,
                                       }}
                                     >
@@ -678,7 +678,7 @@ export default function RotacionesPage() {
                                     {vehiculo ? (
                                       <PlateBadge plate={vehiculo.placaNormalizada ?? vehiculo.placa} />
                                     ) : (
-                                      <strong style={{ color: '#ffffff' }}>{vehiculoId}</strong>
+                                      <strong style={{ color: 'var(--qv-text-primary)' }}>{vehiculoId}</strong>
                                     )}
                                     {vehiculo?.numeroInterno && (
                                       <small style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)', fontWeight: 600 }}>
@@ -713,7 +713,7 @@ export default function RotacionesPage() {
                                                 flexShrink: 0,
                                               }}
                                             />
-                                            <strong style={{ fontSize: '0.8125rem', color: '#ffffff' }}>
+                                            <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
                                               {ruta?.linea.codigo ?? ''} · {capitalizar(ruta?.sentido ?? asignacion.rutaId)}
                                             </strong>
                                           </div>

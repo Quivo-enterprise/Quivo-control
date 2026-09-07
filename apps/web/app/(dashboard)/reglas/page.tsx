@@ -357,7 +357,7 @@ function ReglasTab() {
                   <Scale size={16} />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-                  <strong style={{ fontSize: '0.875rem', color: '#ffffff' }}>
+                  <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>
                     {row.nombre}
                   </strong>
                   {row.descripcion ? (
@@ -409,7 +409,7 @@ function ReglasTab() {
             render: (row) => {
               const Icon = row.aplicaA === 'conductor' ? User : row.aplicaA === 'vehiculo' ? Bus : Users;
               return (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8125rem', color: '#ffffff' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
                   <Icon size={14} style={{ color: 'var(--qv-color-primary)' }} />
                   <span style={{ textTransform: 'capitalize', fontWeight: 600 }}>{row.aplicaA}</span>
                 </div>
@@ -453,7 +453,7 @@ function ReglasTab() {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Scale size={16} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
-                <strong style={{ fontSize: '0.9375rem', color: '#ffffff' }}>
+                <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
                   {detalleRegla.nombre}
                 </strong>
               </div>
@@ -479,7 +479,7 @@ function ReglasTab() {
                 <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Categoría / Tipo
                 </span>
-                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8125rem', color: '#ffffff', fontWeight: 600 }}>
+                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8125rem', color: 'var(--qv-text-primary)', fontWeight: 600 }}>
                   {detalleRegla.tipo}
                 </p>
               </div>
@@ -495,7 +495,7 @@ function ReglasTab() {
                 <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Sujeto de Aplicación
                 </span>
-                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8125rem', color: '#ffffff', fontWeight: 600, textTransform: 'capitalize' }}>
+                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8125rem', color: 'var(--qv-text-primary)', fontWeight: 600, textTransform: 'capitalize' }}>
                   {detalleRegla.aplicaA}
                 </p>
               </div>
@@ -513,7 +513,7 @@ function ReglasTab() {
                 <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Descripción / Tipificación
                 </span>
-                <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8125rem', color: '#ffffff', lineHeight: 1.45 }}>
+                <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8125rem', color: 'var(--qv-text-primary)', lineHeight: 1.45 }}>
                   {detalleRegla.descripcion}
                 </p>
               </div>
@@ -705,7 +705,7 @@ function SancionesTab() {
                   Pendientes de Revisión
                 </span>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                  <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                  <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                     {totalPendientes}
                   </strong>
                   <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -750,7 +750,7 @@ function SancionesTab() {
                   Sanciones Aplicadas
                 </span>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                  <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                  <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                     {totalAplicadas}
                   </strong>
                   <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -795,7 +795,7 @@ function SancionesTab() {
                   En Apelación
                 </span>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                  <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                  <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                     {totalApeladas}
                   </strong>
                   <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -840,7 +840,7 @@ function SancionesTab() {
                   Pagadas / Cumplidas
                 </span>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
-                  <strong style={{ fontSize: '1.25rem', color: '#ffffff', fontWeight: 800 }}>
+                  <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
                     {totalPagadas}
                   </strong>
                   <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
@@ -968,12 +968,12 @@ function SancionesTab() {
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                             <Calendar size={14} style={{ color: 'var(--qv-color-primary)' }} />
-                            <span style={{ fontWeight: 600, color: '#ffffff' }}>{formatearFecha(s.fechaHecho)}</span>
+                            <span style={{ fontWeight: 600, color: 'var(--qv-text-primary)' }}>{formatearFecha(s.fechaHecho)}</span>
                           </div>
                         </td>
                         <td>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                            <strong style={{ fontSize: '0.875rem', color: '#ffffff' }}>
+                            <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>
                               {regla?.nombre ?? s.reglaId}
                             </strong>
                             {regla && (
@@ -992,7 +992,7 @@ function SancionesTab() {
                                   {vehiculo ? (
                                     <PlateBadge plate={vehiculo.placaNormalizada ?? vehiculo.placa} />
                                   ) : (
-                                    <span style={{ color: '#ffffff', fontWeight: 600 }}>{s.sujetoId}</span>
+                                    <span style={{ color: 'var(--qv-text-primary)', fontWeight: 600 }}>{s.sujetoId}</span>
                                   )}
                                 </div>
                               </>
@@ -1000,7 +1000,7 @@ function SancionesTab() {
                               <>
                                 <User size={15} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                  <strong style={{ fontSize: '0.8125rem', color: '#ffffff' }}>
+                                  <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
                                     {conductor?.nombre ?? s.sujetoId}
                                   </strong>
                                   <span style={{ fontSize: '0.7rem', color: 'var(--qv-text-secondary)', fontWeight: 600 }}>
@@ -1012,7 +1012,7 @@ function SancionesTab() {
                               <>
                                 <Users size={15} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                  <strong style={{ fontSize: '0.8125rem', color: '#ffffff' }}>
+                                  <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
                                     {socio?.nombre ?? s.sujetoId}
                                   </strong>
                                   <span style={{ fontSize: '0.7rem', color: 'var(--qv-text-secondary)', fontWeight: 600 }}>
@@ -1115,7 +1115,7 @@ function SancionesTab() {
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Scale size={16} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
-                  <strong style={{ fontSize: '0.9375rem', color: '#ffffff' }}>
+                  <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
                     {regla?.nombre ?? detalleSancion.reglaId}
                   </strong>
                 </div>
@@ -1149,18 +1149,18 @@ function SancionesTab() {
                         {vehiculo ? (
                           <PlateBadge plate={vehiculo.placaNormalizada ?? vehiculo.placa} />
                         ) : (
-                          <strong style={{ color: '#ffffff', fontSize: '0.8125rem' }}>{detalleSancion.sujetoId}</strong>
+                          <strong style={{ color: 'var(--qv-text-primary)', fontSize: '0.8125rem' }}>{detalleSancion.sujetoId}</strong>
                         )}
                       </>
                     ) : detalleSancion.sujetoTipo === 'conductor' ? (
                       <>
                         <User size={15} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
-                        <strong style={{ color: '#ffffff', fontSize: '0.8125rem' }}>{conductor?.nombre ?? detalleSancion.sujetoId}</strong>
+                        <strong style={{ color: 'var(--qv-text-primary)', fontSize: '0.8125rem' }}>{conductor?.nombre ?? detalleSancion.sujetoId}</strong>
                       </>
                     ) : (
                       <>
                         <Users size={15} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
-                        <strong style={{ color: '#ffffff', fontSize: '0.8125rem' }}>{socio?.nombre ?? detalleSancion.sujetoId}</strong>
+                        <strong style={{ color: 'var(--qv-text-primary)', fontSize: '0.8125rem' }}>{socio?.nombre ?? detalleSancion.sujetoId}</strong>
                       </>
                     )}
                   </div>
@@ -1179,7 +1179,7 @@ function SancionesTab() {
                   </span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.25rem' }}>
                     <Calendar size={14} style={{ color: 'var(--qv-color-primary)' }} />
-                    <strong style={{ color: '#ffffff', fontSize: '0.8125rem' }}>
+                    <strong style={{ color: 'var(--qv-text-primary)', fontSize: '0.8125rem' }}>
                       {formatearFecha(detalleSancion.fechaHecho)}
                     </strong>
                   </div>
@@ -1198,7 +1198,7 @@ function SancionesTab() {
                 <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Motivo / Descripción de la Infracción
                 </span>
-                <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8125rem', color: '#ffffff', lineHeight: 1.45 }}>
+                <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8125rem', color: 'var(--qv-text-primary)', lineHeight: 1.45 }}>
                   {detalleSancion.motivo}
                 </p>
               </div>

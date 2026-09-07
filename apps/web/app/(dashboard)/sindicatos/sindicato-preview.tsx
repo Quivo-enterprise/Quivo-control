@@ -42,7 +42,7 @@ export function SindicatoPreviewCard({ values }: SindicatoPreviewCardProps) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Sparkles size={16} style={{ color: 'var(--qv-color-primary)' }} />
           <div>
-            <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 800, color: '#ffffff' }}>
+            <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 800, color: 'var(--qv-text-primary)' }}>
               Identidad del Sindicato
             </h3>
             <span style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)' }}>
@@ -146,7 +146,7 @@ export function SindicatoPreviewCard({ values }: SindicatoPreviewCardProps) {
                 margin: '0.15rem 0 0 0',
                 fontSize: '1.05rem',
                 fontWeight: 800,
-                color: '#ffffff',
+                color: 'var(--qv-text-primary)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -179,7 +179,7 @@ export function SindicatoPreviewCard({ values }: SindicatoPreviewCardProps) {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <MapPin size={15} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
-            <span style={{ fontSize: '0.8125rem', color: '#ffffff', fontWeight: 600 }}>
+            <span style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)', fontWeight: 600 }}>
               Operador Habilitado en Quivo Control
             </span>
           </div>

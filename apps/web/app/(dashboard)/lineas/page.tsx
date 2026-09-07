@@ -306,7 +306,7 @@ export default function LineasPage() {
                           {row.nombreCorto || row.codigo}
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                          <strong style={{ fontSize: '0.875rem', color: '#ffffff' }}>
+                          <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>
                             {row.nombre}
                           </strong>
                           <div
@@ -349,7 +349,7 @@ export default function LineasPage() {
                         style={{
                           fontWeight: 600,
                           fontSize: '0.8125rem',
-                          color: '#ffffff',
+                          color: 'var(--qv-text-primary)',
                         }}
                       >
                         {row.cartelSuperior || 'Sin letrero configurado'}
