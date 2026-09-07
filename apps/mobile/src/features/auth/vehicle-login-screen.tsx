@@ -1,19 +1,18 @@
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View, Pressable } from 'react-native';
+import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Button } from '../../shared/components/Button';
 import { Card } from '../../shared/components/Card';
-import { QuivoHeader } from '../../shared/components/quivo-header';
-import { QuivoStepIndicator } from '../../shared/components/quivo-step-indicator';
 import { Input } from '../../shared/components/Input';
-import { quivoColors, quivoFonts, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import logoWhite from '../../../assets/images/logo-white.png';
 
 const vehicleLoginSchema = z.object({
   placa: z.string().regex(/^\d{4}-[A-Za-z]{3}$/, 'Formato esperado: 1234-ABC'),
-  pin: z.string().regex(/^\d{6,12}$/, 'El PIN debe tener entre 6 y 12 números'),
+  pin: z.string().min(4, 'Ingresa el PIN del vehículo').max(12, 'PIN demasiado largo'),
 });
 
 type VehicleLoginFormValues = z.infer<typeof vehicleLoginSchema>;
@@ -29,9 +28,8 @@ interface VehicleLoginScreenProps {
 }
 
 export function VehicleLoginScreen({ loading: parentLoading, error: serverError, onSubmit }: VehicleLoginScreenProps) {
-  const [showPin, setShowPin] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
-  
+
   const loading = parentLoading || isSimulating;
 
   const {
@@ -50,7 +48,6 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
   const onSubmitForm = async (data: VehicleLoginFormValues) => {
     setIsSimulating(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
       // Remove dash before sending to backend to match DB seed format (e.g. 1001ABC)
       await onSubmit(data.placa.toUpperCase().replace('-', ''), data.pin);
     } finally {
@@ -59,128 +56,211 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'android' ? 'height' : 'padding'}
-      style={styles.flex}
-    >
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <QuivoHeader
-          title="Conecta tu vehículo"
-          subtitle="Ingresa la credencial entregada por tu sindicato para comenzar la jornada."
-        />
-        <QuivoStepIndicator current={1} />
-        <Card style={styles.form}>
-          <Controller
-            control={control}
-            name="placa"
-            render={({ field: { onChange, onBlur, value }, fieldState: { isDirty } }) => {
-              const hasError = !!errors.placa;
-              const isValidField = isDirty && !hasError && value.length === 8;
-              return (
-                <Input
-                  label="Placa del vehículo"
-                  placeholder="Ej. 1234-ABC"
-                  helperText={errors.placa?.message ?? "Formato esperado: 1234-ABC"}
-                  error={errors.placa?.message}
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  returnKeyType="next"
-                  mask={placaMask}
-                  value={value}
-                  onChangeText={(masked) => onChange(masked.toUpperCase())}
-                  onBlur={onBlur}
-                  editable={!loading}
-                  leftSlot={
-                    <Ionicons 
-                      name="car-outline" 
-                      size={20} 
-                      color={hasError ? quivoColors.danger : isValidField ? quivoColors.primary : quivoColors.textMuted} 
+    <View style={styles.screen}>
+      <LinearGradient
+        colors={['#E78A1B', '#8B5962', '#3D2EA5', '#A3654F', '#F08F14']}
+        locations={[0, 0.22, 0.50, 0.78, 1]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'android' ? 'height' : 'padding'}
+        style={styles.flex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.header}>
+            <Text accessibilityRole="header" style={styles.title}>
+              Conecta tu vehículo
+            </Text>
+            <Text style={styles.subtitle}>
+              Ingresa la placa del vehículo y el credencial proporcionado por tu sindicato para comenzar la jornada.
+            </Text>
+          </View>
+
+          <Card style={styles.card} padding="none">
+            <View style={styles.formContainer}>
+              <Controller
+                control={control}
+                name="placa"
+                render={({ field: { onChange, onBlur, value } }) => {
+                  return (
+                    <Input
+                      label="Placa del vehículo"
+                      labelStyle={styles.inputLabel}
+                      placeholder="1234-ABC"
+                      placeholderTextColor="#94A3B8"
+                      error={errors.placa?.message}
+                      autoCapitalize="characters"
+                      autoCorrect={false}
+                      returnKeyType="next"
+                      mask={placaMask}
+                      value={value}
+                      onChangeText={(masked) => onChange(masked.toUpperCase())}
+                      onBlur={onBlur}
+                      editable={!loading}
+                      inputShellStyle={styles.inputShell}
+                      style={styles.inputText}
                     />
-                  }
-                  rightSlot={isValidField ? <Ionicons name="checkmark-circle" size={20} color={quivoColors.success} /> : undefined}
-                />
-              );
-            }}
-          />
-          
-          <View style={styles.divider} />
-          
-          <Controller
-            control={control}
-            name="pin"
-            render={({ field: { onChange, onBlur, value }, fieldState: { isDirty } }) => {
-              const hasError = !!errors.pin;
-              const isValidField = isDirty && !hasError && value.length >= 6;
-              return (
-                <Input
-                  label="PIN del vehículo"
-                  placeholder="6 a 12 dígitos"
-                  helperText={errors.pin?.message ?? "Este PIN identifica al vehículo, no al chofer."}
-                  error={errors.pin?.message}
-                  keyboardType="number-pad"
-                  secureTextEntry={!showPin}
-                  maxLength={12}
-                  value={value}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  editable={!loading}
-                  leftSlot={
-                    <Ionicons 
-                      name="lock-closed-outline" 
-                      size={20} 
-                      color={hasError ? quivoColors.danger : isValidField ? quivoColors.primary : quivoColors.textMuted} 
+                  );
+                }}
+              />
+
+              <Controller
+                control={control}
+                name="pin"
+                render={({ field: { onChange, onBlur, value } }) => {
+                  return (
+                    <Input
+                      label="PIN del vehículo"
+                      labelStyle={styles.inputLabel}
+                      placeholder="1234"
+                      placeholderTextColor="#94A3B8"
+                      error={errors.pin?.message}
+                      keyboardType="numeric"
+                      maxLength={12}
+                      value={value}
+                      onChangeText={onChange}
+                      onBlur={onBlur}
+                      editable={!loading}
+                      inputShellStyle={styles.inputShell}
+                      style={styles.inputText}
                     />
-                  }
-                  rightSlot={
-                    <Pressable onPress={() => setShowPin(!showPin)} disabled={loading} hitSlop={10}>
-                      <Ionicons 
-                        name={showPin ? "eye-off-outline" : "eye-outline"} 
-                        size={20} 
-                        color={quivoColors.textMuted} 
-                      />
-                    </Pressable>
-                  }
-                />
-              );
-            }}
-          />
-          
-          {serverError ? <Text style={styles.error}>{serverError}</Text> : null}
-          
-          <Button
-            variant="primary"
-            loading={loading}
-            disabled={!isValid || loading}
-            onPress={handleSubmit(onSubmitForm)}
-            style={styles.submitButton}
-            fullWidth
-          >
-            Validar vehículo
-          </Button>
-          
-        </Card>
-      </ScrollView>
-    </KeyboardAvoidingView>
+                  );
+                }}
+              />
+
+              {serverError ? <Text style={styles.error}>{serverError}</Text> : null}
+
+              <Button
+                variant="primary"
+                loading={loading}
+                disabled={!isValid || loading}
+                onPress={handleSubmit(onSubmitForm)}
+                style={styles.submitButton}
+                textStyle={styles.submitButtonText}
+                fullWidth
+              >
+                SIGUIENTE
+              </Button>
+            </View>
+          </Card>
+
+          <View style={styles.footerContainer}>
+            <Image source={logoWhite} style={styles.footerLogo} resizeMode="contain" />
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: quivoColors.page },
-  content: { padding: quivoSpacing.xl, gap: quivoSpacing.xl, paddingBottom: quivoSpacing.xxxl },
-  form: { gap: quivoSpacing.lg },
-  divider: {
-    height: 1,
-    backgroundColor: quivoColors.border,
-    marginVertical: quivoSpacing.xs,
+  screen: { flex: 1, backgroundColor: '#3D2EA5' },
+  flex: { flex: 1 },
+  content: {
+    flexGrow: 1,
+    paddingHorizontal: 28,
+    paddingTop: Platform.OS === 'ios' ? 44 : 32,
+    paddingBottom: 28,
+    justifyContent: 'space-between',
+  },
+  header: {
+    gap: quivoSpacing.sm,
+    alignItems: 'center',
+    marginBottom: quivoSpacing.xl,
+    marginTop: quivoSpacing.md,
+  },
+  title: {
+    color: quivoColors.white,
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 27,
+    lineHeight: 33,
+    textAlign: 'center',
+    letterSpacing: 0.3,
+  },
+  subtitle: {
+    color: 'rgba(255, 255, 255, 0.90)',
+    fontFamily: quivoFonts.bodyRegular,
+    fontSize: 13.5,
+    lineHeight: 19,
+    textAlign: 'center',
+    paddingHorizontal: quivoSpacing.xs,
+  },
+  card: {
+    backgroundColor: quivoColors.white,
+    borderRadius: 28,
+    borderWidth: 0,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.22,
+    shadowRadius: 20,
+    elevation: 8,
+    overflow: 'hidden',
+  },
+  formContainer: {
+    paddingHorizontal: 22,
+    paddingTop: 26,
+    paddingBottom: 24,
+    gap: 16,
+  },
+  inputLabel: {
+    color: '#334155',
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 14.5,
+    marginBottom: 2,
+  },
+  inputShell: {
+    backgroundColor: '#DCE0E8',
+    borderColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 13,
+    minHeight: 48,
+    paddingHorizontal: 14,
+  },
+  inputText: {
+    color: '#1E293B',
+    fontFamily: quivoFonts.bodyMedium,
+    fontSize: 15,
   },
   submitButton: {
-    marginTop: quivoSpacing.sm,
+    marginTop: 8,
+    backgroundColor: '#3127B1',
+    borderColor: '#3127B1',
+    borderRadius: quivoRadius.pill,
+    minHeight: 50,
+    shadowColor: '#1A0E70',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  submitButtonText: {
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 15.5,
+    letterSpacing: 0.8,
+    color: quivoColors.white,
   },
   error: {
     color: quivoColors.danger,
     fontFamily: quivoFonts.bodyMedium,
     fontSize: 13,
-    lineHeight: 20,
+    lineHeight: 18,
     textAlign: 'center',
+  },
+  footerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: quivoSpacing.xl,
+    paddingBottom: quivoSpacing.xs,
+  },
+  footerLogo: {
+    width: 115,
+    height: 46,
   },
 });

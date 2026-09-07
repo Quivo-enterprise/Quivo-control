@@ -123,9 +123,13 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
   private async asegurarParticionesFuturas(): Promise<void> {
     for (let i = 0; i <= DIAS_ANTICIPACION_PARTICION; i++) {
       try {
-        await withTenantContext(CONTEXTO_ADMIN, (tx) =>
-          tx.$executeRaw`SELECT crear_particion_gps_points((CURRENT_DATE + ${i}::int)::date)`,
-        );
+        await withTenantContext(CONTEXTO_ADMIN, async (tx) => {
+          // Multiple API/worker instances can initialize at the same time. The
+          // partition function is idempotent, but the lock also closes the
+          // check/create race between concurrent CREATE TABLE statements.
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('quivo:gps-partitions', 0))`;
+          await tx.$executeRaw`SELECT crear_particion_gps_points((CURRENT_DATE + ${i}::int)::date)`;
+        });
       } catch (error) {
         this.logger.error(
           `No se pudo asegurar la partición de gps_points para CURRENT_DATE+${i}: ` +

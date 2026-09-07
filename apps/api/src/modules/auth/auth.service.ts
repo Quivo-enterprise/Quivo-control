@@ -13,6 +13,7 @@ import type {
   Rol,
   UsuarioAdministrativo,
 } from '@quivo/shared';
+import { RolSchema } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
 /**
@@ -71,16 +72,7 @@ export class AuthService {
         body: { email, password },
       });
 
-      return {
-        accessToken: await this.mintAccessToken(sessionToken),
-        refreshToken: sessionToken,
-        user: {
-          id: user.id,
-          email: user.email,
-          rol: user.rol as Rol,
-          sindicatoId: (user.sindicatoId as string | null | undefined) ?? null,
-        },
-      };
+      return this.toLoginResponse(sessionToken, user);
     } catch (error) {
       if (error instanceof APIError) {
         throw new UnauthorizedException('Credenciales inválidas');
@@ -273,6 +265,23 @@ export class AuthService {
   private async mintAccessToken(sessionToken: string): Promise<string> {
     const { token } = await auth.api.getToken({ headers: this.bearerHeaders(sessionToken) });
     return token;
+  }
+
+  private async toLoginResponse(
+    sessionToken: string,
+    user: { id: string; email: string; rol: unknown; sindicatoId?: unknown },
+  ): Promise<LoginResponse> {
+    const rol = RolSchema.parse(user.rol) as Rol;
+    return {
+      accessToken: await this.mintAccessToken(sessionToken),
+      refreshToken: sessionToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        rol,
+        sindicatoId: (user.sindicatoId as string | null | undefined) ?? null,
+      },
+    };
   }
 
   private bearerHeaders(sessionToken: string): Headers {

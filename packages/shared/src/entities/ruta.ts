@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { EstadoRutaSchema } from '../enums/estados.js';
 import { LineaGeoJsonSchema } from '../geo.js';
 import { uuidSchema } from '../primitives.js';
+import { EstadoPublicacionSchema } from '../public-mobility.js';
 
 /** `geometria` viaja como GeoJSON in/out (RF-24..33) — la columna real es
  * `GEOGRAPHY(LINESTRING)` en Postgres, pero eso es un detalle de `apps/api`
@@ -12,13 +13,26 @@ export const RutaSchema = z.object({
   sentido: z.string().min(1).max(50),
   geometria: LineaGeoJsonSchema,
   estado: EstadoRutaSchema,
+  publicStatus: EstadoPublicacionSchema,
+  publishedAt: z.string().datetime().nullable(),
 });
 export type Ruta = z.infer<typeof RutaSchema>;
 
-export const CrearRutaSchema = RutaSchema.omit({ id: true, lineaId: true, estado: true }).extend({
+export const CrearRutaSchema = RutaSchema.omit({
+  id: true,
+  lineaId: true,
+  estado: true,
+  publicStatus: true,
+  publishedAt: true,
+}).extend({
   estado: EstadoRutaSchema.default('activo'),
 });
 export type CrearRuta = z.infer<typeof CrearRutaSchema>;
 
-export const ActualizarRutaSchema = RutaSchema.omit({ id: true, lineaId: true }).partial();
+export const ActualizarRutaSchema = RutaSchema.omit({
+  id: true,
+  lineaId: true,
+  publicStatus: true,
+  publishedAt: true,
+}).partial();
 export type ActualizarRuta = z.infer<typeof ActualizarRutaSchema>;

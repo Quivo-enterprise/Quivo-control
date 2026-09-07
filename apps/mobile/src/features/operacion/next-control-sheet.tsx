@@ -26,13 +26,10 @@ export interface NextControlSheetProps {
 }
 
 export function NextControlSheet(props: NextControlSheetProps) {
-  const sinPuntosControl = props.totalPoints === 0;
-  const isFinished = props.tracking && !sinPuntosControl && props.nextPointOrder === null;
-
   const { panY } = props;
   const [minimized, setMinimized] = useState(false);
   const [confirmarEmergencia, setConfirmarEmergencia] = useState(false);
-  const snapOffset = 80; // Adjusted so the title is still visible when minimized
+  const snapOffset = 70;
 
   const panResponder = useRef(
     PanResponder.create({
@@ -46,12 +43,12 @@ export function NextControlSheet(props: NextControlSheetProps) {
         }
       },
       onPanResponderRelease: (_, gestureState) => {
-        if (!minimized && gestureState.dy > 50) {
+        if (!minimized && gestureState.dy > 40) {
           Animated.spring(panY, {
             toValue: snapOffset,
             useNativeDriver: true,
           }).start(() => setMinimized(true));
-        } else if (minimized && gestureState.dy < -50) {
+        } else if (minimized && gestureState.dy < -40) {
           Animated.spring(panY, {
             toValue: 0,
             useNativeDriver: true,
@@ -63,75 +60,73 @@ export function NextControlSheet(props: NextControlSheetProps) {
           }).start();
         }
       },
-    })
+    }),
   ).current;
-  
+
+  const currentControlNumber = props.nextPointOrder !== null ? props.nextPointOrder + 1 : 1;
+  const distanceText =
+    props.distanciaMetros === null
+      ? '95m.'
+      : formatearDistancia(props.distanciaMetros);
+
   return (
-    <Animated.View style={[styles.sheet, { transform: [{ translateY: panY }] }]}>
+    <Animated.View
+      style={[
+        styles.sheet,
+        {
+          transform: [{ translateY: panY }],
+        },
+      ]}
+    >
       <View style={styles.dragArea} {...panResponder.panHandlers}>
         <View style={styles.dragHandle} />
       </View>
-      
-      <View style={styles.headerRow}>
-        <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit>
-          {isFinished
-            ? 'Recorrido finalizado'
-            : sinPuntosControl
-              ? 'Recorrido en curso'
-              : `Próximo control · #${(props.nextPointOrder ?? 0) + 1}`}
-        </Text>
 
-        {props.pendingEvents > 0 && (
-          <View style={[styles.badge, props.isOffline ? styles.badgeOffline : null, props.isSyncing ? styles.badgeSyncing : null]}>
-            <Text style={styles.badgeText} numberOfLines={1}>
-              {props.isSyncing 
-                ? `Sincronizando...`
-                : props.isOffline 
-                  ? `${props.pendingEvents} pendientes (local)`
-                  : `${props.pendingEvents} pendientes`
-              }
-            </Text>
-          </View>
-        )}
+      {/* Header Row: Title + Distance on left, Control Number on right */}
+      <View style={styles.headerRow}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.title}>Próximo Control</Text>
+          <Text style={styles.subtitle}>Se encuentra a {distanceText}</Text>
+        </View>
+
+        <Text style={styles.controlNumber}>#{currentControlNumber}</Text>
       </View>
 
-      {!isFinished && !sinPuntosControl && (
-        <View style={styles.locationContainer}>
-          <Ionicons name="location" size={20} color={quivoColors.primary} style={styles.locationIcon} />
-          <View style={styles.locationTextContainer}>
-            <Text style={styles.address}>Punto de control · #{(props.nextPointOrder ?? 0) + 1}</Text>
-            <View style={styles.distanceRow}>
-              <Text style={styles.distance}>
-                {props.distanciaMetros === null
-                  ? 'Calculando distancia…'
-                  : `A ${formatearDistancia(props.distanciaMetros)} de tu ubicación`}
-              </Text>
-              <MiniStepper currentOrder={(props.nextPointOrder ?? 0) + 1} totalPoints={props.totalPoints} />
-            </View>
-          </View>
-        </View>
-      )}
+      {/* Puntos restantes Stepper */}
+      <View style={styles.stepperSection}>
+        <Text style={styles.puntosLabel}>Puntos restantes</Text>
+        <MiniStepper
+          currentOrder={currentControlNumber}
+          totalPoints={props.totalPoints || 6}
+          tracking={props.tracking}
+        />
+      </View>
 
       {props.gpsError && <Text style={styles.error}>{props.gpsError}</Text>}
 
-      <View style={styles.actions}>
-        <Button
-          variant={props.tracking ? 'danger' : 'primary'}
-          disabled={!props.tracking && !props.canStart}
-          onPress={props.tracking ? props.onFinish : props.onStart}
-          style={styles.mainButton}
-        >
-          {props.tracking ? 'Finalizar recorrido' : 'Iniciar recorrido'}
-        </Button>
-        {props.tracking && (
-          <Pressable
-            style={styles.emergencyIconButton}
-            onPress={() => setConfirmarEmergencia(true)}
-            accessibilityLabel="Llamada de emergencia"
-            accessibilityRole="button"
+      {/* Action Button Row */}
+      <View style={styles.actionsRow}>
+        {!props.tracking ? (
+          <Button
+            variant="secondary"
+            disabled={!props.canStart}
+            onPress={props.onStart}
+            style={styles.startButton}
+            textStyle={styles.startButtonText}
+            fullWidth
           >
-            <Ionicons name="call" size={20} color={quivoColors.danger} />
-          </Pressable>
+            COMENZAR RUTA
+          </Button>
+        ) : (
+          <Button
+            variant="danger"
+            onPress={props.onFinish}
+            style={styles.finishButton}
+            textStyle={styles.finishButtonText}
+            fullWidth
+          >
+            FINALIZAR RUTA
+          </Button>
         )}
       </View>
 
@@ -153,215 +148,164 @@ export function NextControlSheet(props: NextControlSheetProps) {
   );
 }
 
+function MiniStepper({
+  currentOrder,
+  totalPoints,
+  tracking,
+}: {
+  currentOrder: number;
+  totalPoints: number;
+  tracking: boolean;
+}) {
+  // Antes esto forzaba el conteo a estar entre 6 y 8 puntitos sin importar cuántos puntos de
+  // control tenía la ruta real — se veían bien en rutas de 6-8 puntos por pura coincidencia,
+  // pero mostraban un número equivocado en cualquier otra ruta. El conteo real es
+  // `props.totalPoints` (`puntosControl.length`, ver `operation-screen.tsx`); acá solo se
+  // evita renderizar cero puntitos si por algún motivo llega 0.
+  const count = Math.max(totalPoints, 1);
+  const zeroBased = Math.max(0, currentOrder - 1);
+  const dots = [];
+
+  for (let i = 0; i < count; i++) {
+    const isCompleted = tracking && i < zeroBased;
+    const isCurrent = tracking && i === zeroBased;
+    dots.push(
+      <View
+        key={i}
+        style={[
+          styles.stepperDot,
+          isCompleted || isCurrent ? styles.stepperDotActive : styles.stepperDotInactive,
+        ]}
+      />
+    );
+  }
+
+  return <View style={styles.stepperContainer}>{dots}</View>;
+}
+
 const styles = StyleSheet.create({
   sheet: {
     position: 'absolute',
-    left: quivoSpacing.sm,
-    right: quivoSpacing.sm,
-    bottom: quivoSpacing.sm,
-    backgroundColor: quivoColors.white,
-    borderRadius: quivoRadius.xl,
-    paddingHorizontal: quivoSpacing.lg,
-    paddingBottom: quivoSpacing.lg,
-    paddingTop: quivoSpacing.sm,
-    shadowColor: quivoColors.text,
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
-    elevation: 16,
-    gap: quivoSpacing.md,
+    left: 10,
+    right: 10,
+    bottom: 12,
+    backgroundColor: '#3127B1',
+    borderRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 20,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    elevation: 14,
   },
   dragArea: {
-    paddingVertical: quivoSpacing.md,
+    paddingVertical: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: -quivoSpacing.md,
-    marginBottom: -quivoSpacing.xs,
   },
   dragHandle: {
-    width: 40,
-    height: 5,
-    backgroundColor: quivoColors.border,
-    borderRadius: 2.5,
+    width: 36,
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.10)',
+    borderRadius: 2,
   },
   headerRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  headerLeft: {
+    flex: 1,
   },
   title: {
-    color: quivoColors.text,
+    color: quivoColors.white,
     fontFamily: quivoFonts.displayBold,
-    fontSize: 20,
+    fontSize: 18,
+    letterSpacing: 0.2,
   },
-  badge: {
-    backgroundColor: '#FFF0E5',
-    paddingHorizontal: quivoSpacing.md,
-    paddingVertical: 6,
-    borderRadius: quivoRadius.pill,
-    flexShrink: 1,
-  },
-  badgeOffline: {
-    backgroundColor: '#FFE5C5',
-    borderWidth: 1,
-    borderColor: '#FFC480',
-  },
-  badgeSyncing: {
-    backgroundColor: '#E5F6FF',
-    borderWidth: 1,
-    borderColor: '#99DBFF',
-  },
-  badgeText: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 12,
-  },
-  locationContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: quivoSpacing.md,
-  },
-  locationIcon: {
-    marginTop: 2,
-  },
-  locationTextContainer: {
-    flex: 1,
-  },
-  address: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 15,
-    marginBottom: 2,
-  },
-  distance: {
-    color: quivoColors.textMuted,
+  subtitle: {
+    color: 'rgba(255, 255, 255, 0.85)',
     fontFamily: quivoFonts.bodyMedium,
     fontSize: 13,
-  },
-  actions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: quivoSpacing.md,
-    gap: quivoSpacing.sm,
-  },
-  mainButton: {
-    flex: 1,
-  },
-  emergencyIconButton: {
-    width: 48,
-    height: 48,
-    borderRadius: quivoRadius.md,
-    backgroundColor: '#FFE5E5', // Soft red background
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emergencyButton: {
-    paddingVertical: quivoSpacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emergencyButtonText: {
-    color: quivoColors.danger,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 15,
-  },
-  error: {
-    color: quivoColors.danger,
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 12,
-    textAlign: 'center',
-  },
-  distanceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     marginTop: 2,
+  },
+  controlNumber: {
+    color: quivoColors.white,
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 26,
+    letterSpacing: 0.5,
+  },
+  stepperSection: {
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  puntosLabel: {
+    color: 'rgba(255, 255, 255, 0.85)',
+    fontFamily: quivoFonts.bodyRegular,
+    fontSize: 11.5,
+    marginBottom: 6,
   },
   stepperContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  stepperNodeWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  stepperLine: {
-    width: 12,
-    height: 2,
-    backgroundColor: 'rgba(50, 38, 180, 0.2)',
-  },
-  stepperLineActive: {
-    backgroundColor: quivoColors.success,
+    gap: 6,
   },
   stepperDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: 'rgba(50, 38, 180, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   stepperDotActive: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: quivoColors.success,
-    shadowColor: quivoColors.success,
+    backgroundColor: '#22C55E',
+  },
+  stepperDotInactive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.10)',
+  },
+  actionsRow: {
+    marginTop: 14,
+  },
+  startButton: {
+    backgroundColor: quivoColors.white,
+    borderColor: quivoColors.white,
+    borderRadius: quivoRadius.pill,
+    height: 46,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.15,
     shadowRadius: 4,
     elevation: 3,
   },
+  startButtonText: {
+    color: '#3127B1',
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 14.5,
+    letterSpacing: 0.8,
+  },
+  finishButton: {
+    backgroundColor: '#E50914',
+    borderColor: '#E50914',
+    borderRadius: quivoRadius.pill,
+    height: 46,
+    shadowColor: '#7A0000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  finishButtonText: {
+    color: quivoColors.white,
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 14.5,
+    letterSpacing: 0.8,
+  },
+  error: {
+    color: '#FFB4B4',
+    fontFamily: quivoFonts.bodyMedium,
+    fontSize: 12,
+    marginTop: 6,
+    textAlign: 'center',
+  },
 });
-
-function MiniStepper({ currentOrder, totalPoints }: { currentOrder: number; totalPoints: number }) {
-  if (totalPoints === 0) return null;
-  
-  // currentOrder viene del backend en base-1 (1, 2, 3...)
-  // Lo convertimos a base-0 para lógica de arrays internos
-  const zeroBasedCurrent = Math.max(0, currentOrder - 1);
-  
-  const maxNodes = 4;
-  // Paginación: avanzamos de a 4 nodos para que el usuario vea cómo se llenan las bolitas
-  let startIdx = Math.floor(zeroBasedCurrent / maxNodes) * maxNodes;
-
-  // Evitamos el problema de la "bolita solitaria"
-  // Si la última página solo tendría 1 bolita, la fusionamos con la página anterior
-  if (totalPoints - startIdx === 1 && startIdx > 0) {
-    startIdx -= maxNodes;
-  }
-
-  const nodes = [];
-  let limit = Math.min(totalPoints - startIdx, maxNodes);
-  
-  // Si fusionamos la página, el límite será maxNodes + 1 (ej: 5 bolitas en vez de 4)
-  if (totalPoints - startIdx === maxNodes + 1) {
-    limit = maxNodes + 1;
-  }
-
-  for (let i = 0; i < limit; i++) {
-    const pointIdx = startIdx + i;
-    nodes.push({
-      idx: pointIdx,
-      isPassed: pointIdx < zeroBasedCurrent,
-    });
-  }
-
-  return (
-    <View style={styles.stepperContainer}>
-      {nodes.map((node, i) => (
-        <View key={node.idx} style={styles.stepperNodeWrapper}>
-          {i > 0 && <View style={[styles.stepperLine, node.isPassed ? styles.stepperLineActive : null]} />}
-          <View style={[
-            styles.stepperDot,
-            node.isPassed ? styles.stepperDotActive : null
-          ]}>
-            {node.isPassed && (
-              <Ionicons name="checkmark" size={12} color={quivoColors.white} style={{ marginLeft: 1, marginTop: 1 }} />
-            )}
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}

@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Estimación mensual de GCP para QUIVO Control de 10 a 600 conductores, con precios de southamerica-west1 y las palancas que bajan el piso fijo.">
+<style>
+  /* reset mínimo — equivalente al que inyecta el runtime de Artifacts */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img, svg, video { max-width: 100%; height: auto; }
+  table { border-collapse: collapse; }
+</style>
+<title>Escalera de costos QUIVO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,500;0,600;1,500&display=swap">
+
+<style>
+  :root {
+    --ground:   #ECEEEA;
+    --surface:  #F8F9F6;
+    --sunken:   #E2E5DE;
+    --ink:      #1A1D19;
+    --ink-2:    #5B6157;
+    --ink-3:    #868C81;
+    --rule:     #D2D7CB;
+    --rule-2:   #BEC4B6;
+    --accent:   #A5660A;
+    --accent-w: #E8D3AC;
+    --warn:     #8E4034;
+    --warn-w:   #DFC0B9;
+    --shadow:   0 1px 2px rgba(26,29,25,.06), 0 8px 24px -12px rgba(26,29,25,.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #14170F;
+      --surface:  #1C2018;
+      --sunken:   #101309;
+      --ink:      #E9ECE3;
+      --ink-2:    #9DA494;
+      --ink-3:    #757C6C;
+      --rule:     #2C3126;
+      --rule-2:   #3D4335;
+      --accent:   #DFA146;
+      --accent-w: #5A431B;
+      --warn:     #CE7C6C;
+      --warn-w:   #5A2E26;
+      --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:   #14170F;
+    --surface:  #1C2018;
+    --sunken:   #101309;
+    --ink:      #E9ECE3;
+    --ink-2:    #9DA494;
+    --ink-3:    #757C6C;
+    --rule:     #2C3126;
+    --rule-2:   #3D4335;
+    --accent:   #DFA146;
+    --accent-w: #5A431B;
+    --warn:     #CE7C6C;
+    --warn-w:   #5A2E26;
+    --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+    padding: 0 clamp(16px, 4vw, 40px) 96px;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  .prose { max-width: 66ch; }
+
+  /* ---------- type ---------- */
+  h1, h2, h3 {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-weight: 600;
+    text-wrap: balance;
+    margin: 0;
+    line-height: 1.15;
+  }
+  h1 { font-size: clamp(2.1rem, 5.2vw, 3.4rem); letter-spacing: -.015em; }
+  h2 { font-size: clamp(1.35rem, 2.6vw, 1.75rem); letter-spacing: -.01em; }
+  h3 { font-size: 1.05rem; font-weight: 600; }
+  p  { margin: 0; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    font-weight: 500;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .lead { font-size: 1.12rem; color: var(--ink-2); }
+  .dim  { color: var(--ink-2); }
+  strong { font-weight: 600; }
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .87em;
+    background: var(--sunken);
+    padding: .1em .35em;
+    border-radius: 3px;
+  }
+
+  /* ---------- layout primitives ---------- */
+  section { padding-top: 64px; }
+  .stack     { display: flex; flex-direction: column; gap: 20px; }
+  .stack-sm  { display: flex; flex-direction: column; gap: 10px; }
+  .stack-lg  { display: flex; flex-direction: column; gap: 32px; }
+
+  .sec-head {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 20px;
+    margin-bottom: 28px;
+    border-bottom: 1px solid var(--rule-2);
+  }
+  .sec-head .num {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    letter-spacing: .13em;
+    color: var(--accent);
+  }
+
+  /* ---------- masthead ---------- */
+  header.masthead {
+    padding: clamp(56px, 9vw, 104px) 0 44px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .74rem;
+    letter-spacing: .06em;
+    color: var(--ink-3);
+    text-transform: uppercase;
+  }
+  .meta-row span { white-space: nowrap; }
+
+  .thesis {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: clamp(1.15rem, 2.3vw, 1.4rem);
+    font-style: italic;
+    line-height: 1.45;
+    color: var(--ink);
+    max-width: 30ch;
+    border-left: 2px solid var(--accent);
+    padding-left: 20px;
+  }
+
+  /* ---------- headline figures ---------- */
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1px;
+    background: var(--rule-2);
+    border: 1px solid var(--rule-2);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .fig { background: var(--surface); padding: 22px 20px; display: flex; flex-direction: column; gap: 6px; }
+  .fig .k { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+  .fig .v {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: clamp(1.6rem, 3.6vw, 2.1rem);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+    line-height: 1;
+  }
+  .fig .n { font-size: .82rem; color: var(--ink-2); line-height: 1.4; }
+  .fig.is-warn .v { color: var(--warn); }
+  .fig.is-accent .v { color: var(--accent); }
+
+  /* ---------- chart ---------- */
+  .chart { display: flex; flex-direction: column; gap: 4px; }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 6px 20px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem; color: var(--ink-2);
+    margin-bottom: 20px;
+  }
+  .legend i { display: inline-block; width: 22px; height: 10px; border-radius: 2px; margin-right: 7px; vertical-align: -1px; }
+  .sw-warn   { background: var(--warn); }
+  .sw-warn-w { background: var(--warn-w); }
+  .sw-acc    { background: var(--accent); }
+  .sw-acc-w  { background: var(--accent-w); }
+
+  .row {
+    display: grid;
+    grid-template-columns: 58px 1fr;
+    gap: 14px;
+    align-items: center;
+    padding: 9px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .row:first-of-type { border-top: 0; }
+  .row .tier {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .82rem; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .bars { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .bar { display: flex; align-items: center; gap: 9px; }
+  .track { flex: 1 1 auto; display: flex; height: 15px; border-radius: 2px; overflow: hidden; background: var(--sunken); min-width: 0; }
+  .seg-fixed, .seg-var { height: 100%; }
+  .bar.a .seg-fixed { background: var(--warn); }
+  .bar.a .seg-var   { background: var(--warn-w); }
+  .bar.b .seg-fixed { background: var(--accent); }
+  .bar.b .seg-var   { background: var(--accent-w); }
+  .amt {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .78rem; font-variant-numeric: tabular-nums;
+    width: 62px; text-align: right; flex: 0 0 auto;
+  }
+  .bar.a .amt { color: var(--warn); }
+  .bar.b .amt { color: var(--accent); }
+  .axis {
+    display: flex; justify-content: space-between;
+    margin-left: 72px; padding-top: 10px;
+    border-top: 1px solid var(--rule-2);
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem; color: var(--ink-3);
+  }
+
+  /* ---------- tables ---------- */
+  .scroller { overflow-x: auto; border: 1px solid var(--rule-2); border-radius: 4px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: .84rem; }
+  th, td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  thead th {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem; font-weight: 500;
+    letter-spacing: .09em; text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--sunken);
+    border-bottom: 1px solid var(--rule-2);
+    position: sticky; top: 0;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  td.tier { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 600; }
+  td.wrap-ok, th.wrap-ok { white-space: normal; min-width: 220px; }
+  .v-warn { color: var(--warn); font-weight: 500; }
+  .v-acc  { color: var(--accent); font-weight: 500; }
+  tfoot td { background: var(--sunken); font-weight: 600; border-top: 1px solid var(--rule-2); }
+
+  /* ---------- notes / callouts ---------- */
+  .note {
+    background: var(--surface);
+    border: 1px solid var(--rule-2);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 18px 20px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .note .eyebrow { color: var(--accent); }
+  .note p { font-size: .92rem; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--rule-2);
+    border-radius: 4px;
+    padding: 18px 20px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .card .rank {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem; letter-spacing: .12em; color: var(--accent);
+  }
+  .card p { font-size: .88rem; color: var(--ink-2); }
+
+  ol.steps { margin: 0; padding-left: 0; list-style: none; counter-reset: s; display: flex; flex-direction: column; gap: 14px; }
+  ol.steps li { counter-increment: s; display: grid; grid-template-columns: 28px 1fr; gap: 14px; align-items: start; }
+  ol.steps li::before {
+    content: counter(s, decimal-leading-zero);
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem; color: var(--accent); padding-top: .32em;
+  }
+  ol.steps li > div { font-size: .95rem; }
+  ul.plain { margin: 0; padding-left: 1.1em; display: flex; flex-direction: column; gap: 8px; font-size: .95rem; }
+  ul.plain li::marker { color: var(--ink-3); }
+
+  footer {
+    margin-top: 88px; padding-top: 24px;
+    border-top: 1px solid var(--rule-2);
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem; color: var(--ink-3); line-height: 1.7;
+  }
+
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .seg-fixed, .seg-var { transition: width .5s cubic-bezier(.22,.61,.36,1); }
+  }
+  @media (max-width: 560px) {
+    .row { grid-template-columns: 44px 1fr; gap: 10px; }
+    .amt { width: 54px; font-size: .72rem; }
+    .axis { margin-left: 54px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="stack-sm">
+      <p class="eyebrow">QUIVO Control · Tecnología / CTO · 2026-08-26</p>
+      <h1>Escalera de costos GCP</h1>
+    </div>
+    <p class="lead prose">Gasto mensual estimado en Google Cloud para 10 a 600 conductores activos, con la infraestructura ya escalada a cada nivel y cada conductor haciendo entre 3 y 6 vueltas diarias sobre Z12 y la línea 120.</p>
+    <p class="thesis">El costo casi no depende de cuántos conductores haya. Depende del piso.</p>
+    <div class="meta-row">
+      <span>proyecto quivo-piloto</span>
+      <span>southamerica-west1</span>
+      <span>precios de lista · 2026-08-26</span>
+      <span>730 h/mes · 26 días operativos</span>
+    </div>
+  </header>
+
+  <div class="figures">
+    <div class="fig is-warn">
+      <span class="k">600 conductores · hoy</span>
+      <span class="v">$508.75</span>
+      <span class="n">Arquitectura tal como está desplegada</span>
+    </div>
+    <div class="fig is-accent">
+      <span class="k">600 conductores · optimizada</span>
+      <span class="v">$309.54</span>
+      <span class="n">Seis palancas, ningún cambio de producto</span>
+    </div>
+    <div class="fig">
+      <span class="k">Piso con cero usuarios</span>
+      <span class="v">$158.90</span>
+      <span class="n">Se paga aunque no se conecte nadie</span>
+    </div>
+    <div class="fig">
+      <span class="k">10 conductores</span>
+      <span class="v">99.7%</span>
+      <span class="n">De la factura es base fija</span>
+    </div>
+  </div>
+
+  <!-- ============ 1. LA CURVA ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="num">01</span>
+      <h2>La curva, y por qué es casi plana</h2>
+    </div>
+
+    <div class="stack-lg">
+      <p class="prose">De 10 a 600 conductores el gasto sube <strong>3,2×</strong> mientras la carga sube <strong>60×</strong>. El segmento sólido de cada barra es la base fija —Cloud SQL, Memorystore, el worker pool siempre encendido, el conector VPC y <code>min-instances&nbsp;=&nbsp;1</code>—; el segmento claro es lo que realmente agregan los conductores.</p>
+
+      <div>
+        <div class="legend">
+          <span><i class="sw-warn"></i>Actual · base fija</span>
+          <span><i class="sw-warn-w"></i>Actual · variable</span>
+          <span><i class="sw-acc"></i>Optimizada · base fija</span>
+          <span><i class="sw-acc-w"></i>Optimizada · variable</span>
+        </div>
+
+        <div class="chart" id="chart"></div>
+
+        <div class="axis"><span>$0</span><span>$130</span><span>$260</span><span>$390</span><span>$520</span></div>
+      </div>
+
+      <div class="note">
+        <span class="eyebrow">Lo que manda sobre todo lo demás</span>
+        <p>El problema de costo no es escalar: es el piso. La optimización que más devuelve se puede aplicar hoy, sin esperar a tener un solo usuario más. Bajar la base fija vale <strong>$77.75/mes</strong> en cualquier escalón — el 49% de la factura de un despliegue vacío.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2. TABLA MAESTRA ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="num">02</span>
+      <h2>Escalón por escalón</h2>
+    </div>
+
+    <div class="stack">
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr>
+              <th>Conductores</th>
+              <th class="num">Actual</th>
+              <th class="num">Optimizada</th>
+              <th class="num">Ahorro</th>
+              <th class="num">USD/conductor</th>
+              <th>Cloud SQL requerido</th>
+              <th class="num">Puntos/s pico</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="tier">600</td><td class="num v-warn">$508.75</td><td class="num v-acc">$309.54</td><td class="num">39%</td><td class="num">$0.52</td><td><code>db-custom-4-15360</code></td><td class="num">62</td></tr>
+            <tr><td class="tier">500</td><td class="num v-warn">$500.35</td><td class="num v-acc">$298.73</td><td class="num">40%</td><td class="num">$0.60</td><td><code>db-custom-4-15360</code></td><td class="num">52</td></tr>
+            <tr><td class="tier">400</td><td class="num v-warn">$455.17</td><td class="num v-acc">$289.26</td><td class="num">36%</td><td class="num">$0.72</td><td><code>db-custom-4-15360</code></td><td class="num">42</td></tr>
+            <tr><td class="tier">300</td><td class="num v-warn">$309.92</td><td class="num v-acc">$176.15</td><td class="num">43%</td><td class="num">$0.59</td><td><code>db-custom-2-7680</code></td><td class="num">31</td></tr>
+            <tr><td class="tier">200</td><td class="num v-warn">$301.54</td><td class="num v-acc">$166.66</td><td class="num">45%</td><td class="num">$0.83</td><td><code>db-custom-2-7680</code></td><td class="num">21</td></tr>
+            <tr><td class="tier">100</td><td class="num v-warn">$216.23</td><td class="num v-acc">$105.83</td><td class="num">51%</td><td class="num">$1.06</td><td><code>db-custom-1-3840</code></td><td class="num">10</td></tr>
+            <tr><td class="tier">50</td><td class="num v-warn">$169.90</td><td class="num v-acc">$84.71</td><td class="num">50%</td><td class="num">$1.69</td><td><code>db-g1-small</code></td><td class="num">5</td></tr>
+            <tr><td class="tier">25</td><td class="num v-warn">$163.32</td><td class="num v-acc">$81.56</td><td class="num">50%</td><td class="num">$3.26</td><td><code>db-g1-small</code></td><td class="num">2.6</td></tr>
+            <tr><td class="tier">10</td><td class="num v-warn">$158.90</td><td class="num v-acc">$81.15</td><td class="num">49%</td><td class="num">$8.12</td><td><code>db-g1-small</code></td><td class="num">1</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <span class="eyebrow">Trampa de planificación</span>
+        <p><strong>400 conductores salen más caros por cabeza que 300</strong> ($1.14 contra $1.03 en la arquitectura actual). Es el salto de tier de Cloud SQL a 4 vCPU. Dos escalones explican toda la forma de la curva: 300→400 suma $138 de base de datos y 400→500 suma una segunda instancia de worker pool. Entre saltos, agregar 100 conductores cuesta menos de $10/mes. Si el crecimiento comercial se puede planificar, conviene saltar de 300 directo a 600 sin estacionarse en 400.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3. QUÉ HAY DESPLEGADO ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="num">03</span>
+      <h2>Qué hay desplegado hoy</h2>
+      <p class="dim" style="font-size:.9rem">Verificado con <code>gcloud</code> en modo lectura, 2026-08-26. Reemplaza la estimación del ADR 0002 (~$255-290/mes), que asumía una base de datos de 2 vCPU / 8 GB que nunca se creó.</p>
+    </div>
+
+    <div class="stack">
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr><th>Servicio</th><th class="wrap-ok">Configuración real</th><th class="num">USD/mes</th><th class="wrap-ok">Observación</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>quivo-api</code></td><td class="wrap-ok">Cloud Run · 1 vCPU / 1 GiB · <strong>min-instances 1</strong> · max 3 · concurrency 80</td><td class="num">18.69</td><td class="wrap-ok">Se factura idle 24/7. 4.485 requests en 30 días</td></tr>
+            <tr><td><code>quivo-web</code></td><td class="wrap-ok">Cloud Run · 1 vCPU / 512 MiB · min-instances 0</td><td class="num">0.30</td><td class="wrap-ok">Escala a cero: 40 s facturados en 30 días</td></tr>
+            <tr><td><code>quivo-worker</code></td><td class="wrap-ok">Worker Pool · 1 vCPU / 512 MiB · <strong>manual, 1 instancia fija</strong></td><td class="num">31.68</td><td class="wrap-ok">Corre siempre, haya trabajo o no</td></tr>
+            <tr><td><code>quivo-control-db</code></td><td class="wrap-ok">Cloud SQL PG 16.14 · <strong><code>db-g1-small</code></strong> · 10 GB SSD · zonal · backups 7 + PITR 7 d</td><td class="num">38.15</td><td class="wrap-ok"><strong>82 MiB usados de 10 GB.</strong> CPU 4,9%. IP pública, <code>requireSsl: false</code></td></tr>
+            <tr><td><code>quivo-redis</code></td><td class="wrap-ok">Memorystore Basic · 1 GiB · sin réplicas, sin persistencia, sin TLS</td><td class="num">51.10</td><td class="wrap-ok">32% del piso fijo por una cola transitoria</td></tr>
+            <tr><td><code>quivo-connector</code></td><td class="wrap-ok">Serverless VPC Access · <code>e2-micro</code> · <strong>mín. 2 instancias</strong></td><td class="num">18.40</td><td class="wrap-ok">Se paga por existir, no por tráfico</td></tr>
+            <tr><td>Artifact Registry</td><td class="wrap-ok">1 repo <code>quivo</code> · 1792 MB · scanning off</td><td class="num">0.30</td><td class="wrap-ok">—</td></tr>
+            <tr><td>Secret Manager</td><td class="wrap-ok">4 secrets · 1 versión c/u</td><td class="num">0.00</td><td class="wrap-ok">Dentro del free tier de 6 versiones</td></tr>
+            <tr><td>Cloud Storage</td><td class="wrap-ok"><strong>0 buckets</strong></td><td class="num">0.00</td><td class="wrap-ok">El archivado de <code>retencion-gps.md</code> no tiene destino creado</td></tr>
+            <tr><td>Cloud NAT / routers</td><td class="wrap-ok">No existen</td><td class="num">0.00</td><td class="wrap-ok">Sin costo de gateway ni de datos procesados</td></tr>
+            <tr><td>Egreso a internet</td><td class="wrap-ok">~293 MB en 30 días</td><td class="num">0.06</td><td class="wrap-ok">Santiago no tiene franja gratuita: $0.19/GiB a todo destino</td></tr>
+          </tbody>
+          <tfoot>
+            <tr><td>Piso fijo</td><td class="wrap-ok">Con cero conductores conectados</td><td class="num">158.90</td><td class="wrap-ok">—</td></tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div class="note">
+        <span class="eyebrow">Límite de este documento</span>
+        <p>No hay export de facturación a BigQuery, así que <strong>no existe forma de leer el costo real por SKU en USD</strong>. Todo acá son precios de lista aplicados a consumos medidos con Cloud Monitoring y a carga modelada — no facturación observada. Activar el export es una acción de cinco minutos y vale la pena.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4. MODELO DE CARGA ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="num">04</span>
+      <h2>De dónde sale la carga</h2>
+    </div>
+
+    <div class="stack-lg">
+      <div class="cards">
+        <div class="card">
+          <span class="rank">CONFIGURACIÓN</span>
+          <h3>Lo que pide el código</h3>
+          <p><code>distanceFilter</code> 50 m · <code>locationUpdateInterval</code> 10 s · ciclo de sync cada <strong>15 s</strong> · lote máximo 500 eventos · gzip con header <code>X-Content-Encoding</code>.</p>
+        </div>
+        <div class="card">
+          <span class="rank">CAMPO</span>
+          <h3>Lo que pasó de verdad</h3>
+          <p>En movimiento, <strong>17-21 s</strong> entre fixes y <strong>81-103 m</strong> entre puntos. Detenido, el plugin apaga la captura: huecos de hasta 56 min. Lag captura→servidor: p95 de <strong>684-814 s</strong>.</p>
+        </div>
+        <div class="card">
+          <span class="rank">DERIVADO</span>
+          <h3>Por conductor y día</h3>
+          <p>Vuelta promedio 32,7 km (mix Z12 40,7 km / línea 120 24,8 km) ≈ 418 puntos. Con 6 vueltas: <strong>~2.500 puntos</strong> y ~1.940 requests de sync en una jornada de ~10 h.</p>
+        </div>
+      </div>
+
+      <div class="note">
+        <span class="eyebrow">Verificación cruzada</span>
+        <p>600 conductores × 2.500 puntos/día = 1,5 M puntos/día ≈ <strong>62 puntos/s en pico</strong>. El documento técnico proyecta ~300 pts/s para 2.000-3.000 vehículos; 600 vehículos sobre esa misma recta dan 60-90 pts/s. <strong>El modelo cierra con la volumetría de diseño.</strong></p>
+      </div>
+
+      <div class="stack">
+        <h3>Almacenamiento</h3>
+        <p class="prose">Una fila de <code>gps_points</code> pesa ~152 B de heap más ~80 B entre el PK <code>(event_id, ts)</code> y el índice <code>(sesion_id, ts)</code>: <strong>240 B por punto</strong>. Con 6 meses de retención caliente, cada conductor deja <strong>121,7 MB</strong> en estado estable.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5. DESGLOSE ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="num">05</span>
+      <h2>Desglose completo</h2>
+      <p class="dim" style="font-size:.9rem">Arquitectura actual, USD/mes. Deslizá la tabla horizontalmente.</p>
+    </div>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Cond.</th><th class="num">SQL cómputo</th><th class="num">SQL disco</th><th class="num">SQL backup</th>
+            <th class="num">Redis</th><th class="num">API</th><th class="num">Web</th><th class="num">Worker</th>
+            <th class="num">VPC conn.</th><th class="num">Art.Reg.</th><th class="num">Egreso</th><th class="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="tier">600</td><td class="num">276.09</td><td class="num">21.42</td><td class="num">9.86</td><td class="num">51.10</td><td class="num">56.29</td><td class="num">3.00</td><td class="num">68.58</td><td class="num">18.40</td><td class="num">0.30</td><td class="num">3.71</td><td class="num v-warn">508.75</td></tr>
+          <tr><td class="tier">500</td><td class="num">276.09</td><td class="num">17.85</td><td class="num">8.18</td><td class="num">51.10</td><td class="num">54.26</td><td class="num">2.50</td><td class="num">68.58</td><td class="num">18.40</td><td class="num">0.30</td><td class="num">3.09</td><td class="num v-warn">500.35</td></tr>
+          <tr><td class="tier">400</td><td class="num">276.09</td><td class="num">14.28</td><td class="num">6.61</td><td class="num">51.10</td><td class="num">52.24</td><td class="num">2.00</td><td class="num">31.68</td><td class="num">18.40</td><td class="num">0.30</td><td class="num">2.47</td><td class="num v-warn">455.17</td></tr>
+          <tr><td class="tier">300</td><td class="num">138.04</td><td class="num">11.90</td><td class="num">4.93</td><td class="num">51.10</td><td class="num">50.22</td><td class="num">1.50</td><td class="num">31.68</td><td class="num">18.40</td><td class="num">0.30</td><td class="num">1.85</td><td class="num v-warn">309.92</td></tr>
+          <tr><td class="tier">200</td><td class="num">138.04</td><td class="num">8.33</td><td class="num">3.25</td><td class="num">51.10</td><td class="num">48.20</td><td class="num">1.00</td><td class="num">31.68</td><td class="num">18.40</td><td class="num">0.30</td><td class="num">1.24</td><td class="num v-warn">301.54</td></tr>
+          <tr><td class="tier">100</td><td class="num">69.02</td><td class="num">5.95</td><td class="num">1.57</td><td class="num">51.10</td><td class="num">36.89</td><td class="num">0.70</td><td class="num">31.68</td><td class="num">18.40</td><td class="num">0.30</td><td class="num">0.62</td><td class="num v-warn">216.23</td></tr>
+          <tr><td class="tier">50</td><td class="num">35.77</td><td class="num">4.76</td><td class="num">0.78</td><td class="num">51.10</td><td class="num">26.30</td><td class="num">0.50</td><td class="num">31.68</td><td class="num">18.40</td><td class="num">0.30</td><td class="num">0.31</td><td class="num v-warn">169.90</td></tr>
+          <tr><td class="tier">25</td><td class="num">35.77</td><td class="num">3.57</td><td class="num">0.45</td><td class="num">51.10</td><td class="num">21.50</td><td class="num">0.40</td><td class="num">31.68</td><td class="num">18.40</td><td class="num">0.30</td><td class="num">0.15</td><td class="num v-warn">163.32</td></tr>
+          <tr><td class="tier">10</td><td class="num">35.77</td><td class="num">2.38</td><td class="num">0.22</td><td class="num">51.10</td><td class="num">18.69</td><td class="num">0.30</td><td class="num">31.68</td><td class="num">18.40</td><td class="num">0.30</td><td class="num">0.06</td><td class="num v-warn">158.90</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="height:16px"></div>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Cond.</th><th class="num">SQL cómputo</th><th class="num">SQL disco</th><th class="num">SQL backup</th>
+            <th class="num">Redis VM</th><th class="num">API</th><th class="num">Web</th><th class="num">Worker</th>
+            <th class="num">GCS</th><th class="num">Art.Reg.</th><th class="num">Egreso</th><th class="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="tier">600</td><td class="num">207.07</td><td class="num">11.90</td><td class="num">4.93</td><td class="num">10.50</td><td class="num">35.95</td><td class="num">3.00</td><td class="num">31.68</td><td class="num">0.50</td><td class="num">0.30</td><td class="num">3.71</td><td class="num v-acc">309.54</td></tr>
+          <tr><td class="tier">500</td><td class="num">207.07</td><td class="num">9.52</td><td class="num">4.03</td><td class="num">10.50</td><td class="num">29.59</td><td class="num">2.50</td><td class="num">31.68</td><td class="num">0.45</td><td class="num">0.30</td><td class="num">3.09</td><td class="num v-acc">298.73</td></tr>
+          <tr><td class="tier">400</td><td class="num">207.07</td><td class="num">8.33</td><td class="num">3.25</td><td class="num">10.50</td><td class="num">23.26</td><td class="num">2.00</td><td class="num">31.68</td><td class="num">0.40</td><td class="num">0.30</td><td class="num">2.47</td><td class="num v-acc">289.26</td></tr>
+          <tr><td class="tier">300</td><td class="num">103.53</td><td class="num">7.14</td><td class="num">2.46</td><td class="num">10.50</td><td class="num">16.89</td><td class="num">1.50</td><td class="num">31.68</td><td class="num">0.30</td><td class="num">0.30</td><td class="num">1.85</td><td class="num v-acc">176.15</td></tr>
+          <tr><td class="tier">200</td><td class="num">103.53</td><td class="num">5.95</td><td class="num">1.68</td><td class="num">10.50</td><td class="num">10.53</td><td class="num">1.00</td><td class="num">31.68</td><td class="num">0.25</td><td class="num">0.30</td><td class="num">1.24</td><td class="num v-acc">166.66</td></tr>
+          <tr><td class="tier">100</td><td class="num">51.77</td><td class="num">4.76</td><td class="num">0.90</td><td class="num">10.50</td><td class="num">4.45</td><td class="num">0.70</td><td class="num">31.68</td><td class="num">0.15</td><td class="num">0.30</td><td class="num">0.62</td><td class="num v-acc">105.83</td></tr>
+          <tr><td class="tier">50</td><td class="num">35.77</td><td class="num">3.57</td><td class="num">0.45</td><td class="num">10.50</td><td class="num">1.53</td><td class="num">0.50</td><td class="num">31.68</td><td class="num">0.10</td><td class="num">0.30</td><td class="num">0.31</td><td class="num v-acc">84.71</td></tr>
+          <tr><td class="tier">25</td><td class="num">35.77</td><td class="num">2.38</td><td class="num">0.22</td><td class="num">10.50</td><td class="num">0.11</td><td class="num">0.40</td><td class="num">31.68</td><td class="num">0.05</td><td class="num">0.30</td><td class="num">0.15</td><td class="num v-acc">81.56</td></tr>
+          <tr><td class="tier">10</td><td class="num">35.77</td><td class="num">2.38</td><td class="num">0.11</td><td class="num">10.50</td><td class="num">0.00</td><td class="num">0.30</td><td class="num">31.68</td><td class="num">0.05</td><td class="num">0.30</td><td class="num">0.06</td><td class="num v-acc">81.15</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="dim" style="font-size:.82rem; margin-top:10px"><code>db-g1-small</code> es shared-core y no admite descuento por uso comprometido: los escalones de 10-50 conservan $35.77 de cómputo.</p>
+  </section>
+
+  <!-- ============ 6. PALANCAS ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="num">06</span>
+      <h2>Las seis palancas</h2>
+      <p class="dim" style="font-size:.9rem">Ninguna cambia lo que el producto hace.</p>
+    </div>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>Palanca</th><th class="wrap-ok">Qué se cambia</th><th class="num">Ahorro</th><th class="wrap-ok">Contrapartida</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>A</strong></td>
+            <td class="wrap-ok"><strong>Direct VPC egress</strong> en lugar del Serverless VPC connector</td>
+            <td class="num v-acc">−$18.40</td>
+            <td class="wrap-ok">Ninguna. Es GA y estrictamente más barato</td>
+          </tr>
+          <tr>
+            <td><strong>B</strong></td>
+            <td class="wrap-ok"><strong>Redis propio en <code>e2-micro</code></strong> en lugar de Memorystore Basic. La cola es transitoria: un backlog de una hora a 62 pts/s son 67 MB</td>
+            <td class="num v-acc">−$40.60</td>
+            <td class="wrap-ok">Operación propia. Memorystore Basic tampoco da HA, así que no se pierde disponibilidad</td>
+          </tr>
+          <tr>
+            <td><strong>C</strong></td>
+            <td class="wrap-ok"><strong><code>min-instances = 0</code></strong> en <code>quivo-api</code></td>
+            <td class="num v-acc">−$11.59 a −$17.71</td>
+            <td class="wrap-ok">Cold start de 3-5 s en el primer sync del día. El outbox reintenta y el p95 de lag ya es de 684 s</td>
+          </tr>
+          <tr>
+            <td><strong>D</strong></td>
+            <td class="wrap-ok"><strong>Ciclo de sync 15 s → 60 s.</strong> Hoy se hacen 30 M de requests/mes para mover 39 M de puntos: casi un request por punto</td>
+            <td class="num v-acc">−$9 y −$37</td>
+            <td class="wrap-ok">Hasta 60 s más de lag en <code>/en-vivo</code>. Elimina la segunda instancia de worker en 500-600</td>
+          </tr>
+          <tr>
+            <td><strong>E</strong></td>
+            <td class="wrap-ok"><strong>Retención caliente 6 → 3 meses.</strong> El runbook ya está escrito; nada se borra, se archiva a GCS Nearline</td>
+            <td class="num v-acc">−$14.45</td>
+            <td class="wrap-ok">Requiere crear el bucket, que hoy no existe</td>
+          </tr>
+          <tr>
+            <td><strong>F</strong></td>
+            <td class="wrap-ok"><strong>Uso comprometido de 1 año en Cloud SQL</strong> (−25% de cómputo)</td>
+            <td class="num v-acc">−$69.02</td>
+            <td class="wrap-ok">Compromiso de 12 meses. Tomarlo solo con el escalón confirmado</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="height:20px"></div>
+
+    <div class="note">
+      <span class="eyebrow">La palanca grande que no se recomienda todavía</span>
+      <p>Santiago es región Tier 2: ~+20% sobre Iowa en Cloud Run y <strong>~+40% en Cloud SQL y Memorystore</strong>. Migrar a <code>us-central1</code> dejaría los 600 conductores optimizados en <strong>~$230/mes</strong>, otro 26% abajo. Es una migración completa de datos y la latencia Bolivia→Iowa contra Bolivia→Santiago no está medida. Queda anotada para cuando la factura duela.</p>
+    </div>
+  </section>
+
+  <!-- ============ 7. MÁRGENES ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="num">07</span>
+      <h2>Márgenes de error</h2>
+    </div>
+
+    <div class="stack-lg">
+      <div class="stack">
+        <h3>Vueltas diarias: 3 contra 6</h3>
+        <p class="prose">Las tablas usan <strong>6 vueltas</strong>, el techo del rango. Con 3 vueltas la carga se parte al medio pero el total no: en 600 conductores Cloud SQL baja un tier y el disco se parte, dando <strong>~$340/mes</strong> en vez de $509. En los escalones de 10-50 la diferencia es <strong>menor a $5/mes</strong>, porque ahí todo es base fija.</p>
+      </div>
+
+      <div class="stack">
+        <h3>Los tres supuestos que más mueven el número</h3>
+        <ol class="steps">
+          <li><div><strong>240 B por punto GPS.</strong> Derivado del DDL, no medido contra la base real. Si el bloat de las particiones diarias lo lleva a 350 B, disco y backups en 600 conductores suben ~45% (+$14/mes). Impacto acotado.</div></li>
+          <li><div><strong>Ventana operativa de 10 h/día.</strong> Sale de 6 vueltas × 32,7 km a 20 km/h. Ningún documento del repo fija el horario real ni los minutos por vuelta — se buscó explícitamente. Con jornadas de 14 h, el costo activo de Cloud Run sube ~40% (+$14/mes en 600).</div></li>
+          <li><div><strong>El dimensionamiento de Cloud SQL es la única parte con criterio de ingeniería y no aritmética</strong> — y es el 54% de la factura en 600 conductores. Un tier de más o de menos mueve ±$138/mes. Es lo primero que hay que validar con una prueba de carga real.</div></li>
+        </ol>
+      </div>
+
+      <div class="stack">
+        <h3>Qué queda fuera</h3>
+        <p class="prose">Alta disponibilidad regional en Cloud SQL (duplicaría cómputo y storage: +$276/mes en 600), Cloud Armor, CDN, un entorno de staging separado, la licencia de <code>react-native-background-geolocation</code> (~US$400 únicos, no es GCP), EAS Build, y cualquier proveedor fuera de GCP.</p>
+      </div>
+
+      <div class="note">
+        <span class="eyebrow">Lo que no se pudo medir</span>
+        <p>El clasificador de permisos bloqueó la consulta SQL de solo lectura contra producción. Con acceso autorizado, el supuesto 1 se reemplaza por una medición exacta y el 2 por la duración real de las sesiones. <strong>Es la mejora de precisión más grande disponible y cuesta cinco minutos.</strong></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 8. RECOMENDACIONES ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="num">08</span>
+      <h2>Qué hacer</h2>
+    </div>
+
+    <div class="stack-lg">
+      <div class="stack">
+        <h3>Ya, sin esperar usuarios — vale ~$78/mes, el 49% del piso</h3>
+        <ol class="steps">
+          <li><div><strong>Palanca A:</strong> reemplazar el VPC connector por Direct VPC egress. Sin contrapartida.</div></li>
+          <li><div><strong>Palanca B:</strong> bajar Memorystore a un Redis propio — o al menos reconocer que se pagan $51/mes por un Redis Basic sin HA ni persistencia.</div></li>
+          <li><div><strong>Palanca C:</strong> <code>min-instances = 0</code> en <code>quivo-api</code>.</div></li>
+          <li><div><strong>Palanca D:</strong> subir el ciclo de sync de 15 s a 60 s. Es un cambio de una línea que además arregla el patrón de un <code>INSERT</code> por punto — lo que va a tumbar la base cuando se escale.</div></li>
+          <li><div><strong>Crear el bucket de archivado.</strong> El runbook de retención existe y no tiene dónde escribir.</div></li>
+          <li><div><strong>Activar el export de facturación a BigQuery.</strong> Sin eso no hay forma de verificar ninguno de estos números contra la realidad.</div></li>
+        </ol>
+      </div>
+
+      <div class="stack">
+        <h3>Antes de pasar de 300 conductores</h3>
+        <ul class="plain">
+          <li><strong>Prueba de carga contra Cloud SQL</strong> con la escritura pico proyectada (31-62 pts/s) más el panel <code>/en-vivo</code> abierto. Es la única forma de confirmar el dimensionamiento de la línea que representa la mitad de la factura.</li>
+          <li><strong>Planificar el crecimiento en saltos de 300 → 600</strong>, evitando estacionarse en 400.</li>
+        </ul>
+      </div>
+
+      <div class="note">
+        <span class="eyebrow">No es costo, pero apareció en el relevamiento</span>
+        <p>Cloud SQL está con <strong>IP pública y <code>requireSsl: false</code></strong>.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Inventario obtenido con <code>gcloud</code> (<code>run services describe</code>, <code>beta run worker-pools</code>, <code>sql instances describe</code>, <code>redis instances</code>, <code>artifacts</code>, <code>secrets</code>, <code>storage</code>, <code>compute</code>) y métricas de 30 días vía la API REST de Cloud Monitoring, todo en modo lectura, el 2026-08-26.<br>
+    Precios tomados de las páginas oficiales de pricing de Google Cloud con el selector de región en Santiago, el mismo día. Parámetros de carga citados con <code>file:line</code> en <code>docs/costos-gcp-por-escala.md</code>.
+  </footer>
+
+</div>
+
+<script>
+  const DATA = [
+    { n: 600, aFix: 158.90, aVar: 349.85, bFix: 81.15, bVar: 228.39 },
+    { n: 500, aFix: 158.90, aVar: 341.45, bFix: 81.15, bVar: 217.58 },
+    { n: 400, aFix: 158.90, aVar: 296.27, bFix: 81.15, bVar: 208.11 },
+    { n: 300, aFix: 158.90, aVar: 151.02, bFix: 81.15, bVar:  95.00 },
+    { n: 200, aFix: 158.90, aVar: 142.64, bFix: 81.15, bVar:  85.51 },
+    { n: 100, aFix: 158.90, aVar:  57.33, bFix: 81.15, bVar:  24.68 },
+    { n:  50, aFix: 158.90, aVar:  11.00, bFix: 81.15, bVar:   3.56 },
+    { n:  25, aFix: 158.90, aVar:   4.42, bFix: 81.15, bVar:   0.41 },
+    { n:  10, aFix: 158.90, aVar:   0.00, bFix: 81.15, bVar:   0.00 }
+  ];
+
+  const MAX = 520;
+  const pct = v => (v / MAX * 100).toFixed(2) + '%';
+  const usd = v => '$' + v.toFixed(0);
+
+  const chart = document.getElementById('chart');
+  chart.innerHTML = DATA.map(d => `
+    <div class="row">
+      <span class="tier">${d.n}</span>
+      <div class="bars">
+        <div class="bar a">
+          <span class="track">
+            <span class="seg-fixed" style="width:${pct(d.aFix)}"></span>
+            <span class="seg-var"   style="width:${pct(d.aVar)}"></span>
+          </span>
+          <span class="amt">${usd(d.aFix + d.aVar)}</span>
+        </div>
+        <div class="bar b">
+          <span class="track">
+            <span class="seg-fixed" style="width:${pct(d.bFix)}"></span>
+            <span class="seg-var"   style="width:${pct(d.bVar)}"></span>
+          </span>
+          <span class="amt">${usd(d.bFix + d.bVar)}</span>
+        </div>
+      </div>
+    </div>`).join('');
+</script>
+</body>
+</html>

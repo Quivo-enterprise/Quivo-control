@@ -161,6 +161,9 @@ model Vehiculo {
   modelo           String
   color            String
   colorSecundario  String?
+  numeroInterno    String?
+  distintivo       String?
+  cartelSuperior   String?
   capacidad        Int
   estado           String    @default("pendiente")
   // Login por vehículo (M3, doc técnico §15.3): credencial emitida por el sindicato, el
@@ -225,21 +228,76 @@ model Conductor {
   @@map("conductores")
 }
 
+// Catálogo nacional de ciudades/áreas de cobertura. Existe para que `Linea.cityId`
+// (Control) pueda scopear cada línea a una ciudad — sin esta tabla, crear una línea
+// revienta con 500 en `lineas.service.ts` (hace `tx.mobilityCity.findUnique(...)`). La línea
+// sigue perteneciendo a un sindicato; la ciudad solo evita mezclar códigos iguales entre
+// departamentos y permite activar nuevas fuentes de forma gradual.
+model MobilityCity {
+  id                  String   @id
+  nombre              String
+  departamentoCodigo  String?
+  departamentoNombre  String?
+  paisCodigo          String   @default("BO")
+  zonaHoraria         String   @default("America/La_Paz")
+  estadoCobertura     String   @default("coming_soon")
+  fuenteTipo          String?
+  fuenteNombre        String?
+  fuenteLicencia      String?
+  fuenteActualizadaAt DateTime?
+  modosDisponibles    String[] @default([])
+  serviciosAuxiliares String[] @default([])
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @default(now()) @updatedAt
+
+  lineas Linea[]
+
+  @@index([estadoCobertura])
+  @@map("mobility_cities")
+}
+
 model Linea {
-  id          String    @id @default(uuid())
-  sindicatoId String
-  sindicato   Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
-  codigo      String
-  nombre      String
-  color       String?
-  descripcion String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id              String    @id @default(uuid())
+  sindicatoId     String
+  sindicato       Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  cityId          String    @default("cochabamba")
+  mobilityCity    MobilityCity @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  codigo          String
+  nombre          String
+  color           String?
+  colorSecundario String?
+  colorTexto      String?
+  colorTerciario  String?
+  colorFondo      String?
+  nombreCorto     String?
+  lema            String?
+  descripcion     String?
+  logoUrl         String?
+  distintivoTipo  String?
+  distintivoValor String?
+  cartelSuperior  String?
+  cartelFormato   String?
+  cartelTitulo    String?
+  cartelDetalle   String?
+  cartelNumeroPosicion String?
+  cartelLogoPosicion   String?
+  cartelColorTitulo    String?
+  cartelColorDetalle   String?
+  cartelColorNumero    String?
+  cartelColorBorde     String?
+  publicStatus         String    @default("borrador")
+  publishedAt          DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   rutas Ruta[]
 
   @@unique([sindicatoId, codigo])
   @@index([sindicatoId])
+  @@index([cityId, publicStatus])
+  @@index([publicStatus])
+  @@index([publicStatus, codigo])
+  @@index([publicStatus, nombre])
   @@map("lineas")
 }
 
@@ -253,6 +311,8 @@ model Ruta {
   sentido   String
   geometria Unsupported("geography(LineString,4326)")
   estado    String                                    @default("activo")
+  publicStatus String                                  @default("borrador")
+  publishedAt DateTime?
   createdAt DateTime                                  @default(now())
   updatedAt DateTime                                  @updatedAt
 
@@ -262,6 +322,8 @@ model Ruta {
   asignaciones  Asignacion[]
 
   @@index([lineaId])
+  @@index([publicStatus])
+  @@index([publicStatus, estado, lineaId])
   @@map("rutas")
 }
 
@@ -272,10 +334,14 @@ model Variante {
   nombre    String
   // Soft-delete (nunca DELETE real): mismo criterio que el resto del dominio.
   estado    String   @default("activo")
+  publicStatus String @default("borrador")
+  publishedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([rutaId])
+  @@index([publicStatus])
+  @@index([publicStatus, estado, rutaId])
   @@map("variantes")
 }
 
@@ -285,13 +351,19 @@ model Parada {
   ruta      Ruta                                 @relation(fields: [rutaId], references: [id], onDelete: Cascade)
   tipo      String
   orden     Int
+  nombre    String?
+  referencia String?
   coord     Unsupported("geography(Point,4326)")
   // Soft-delete (nunca DELETE real): mismo criterio que el resto del dominio.
   estado    String                               @default("activo")
+  publicStatus String                             @default("borrador")
+  publishedAt DateTime?
   createdAt DateTime                             @default(now())
   updatedAt DateTime                             @updatedAt
 
   @@index([rutaId])
+  @@index([publicStatus])
+  @@index([publicStatus, estado, rutaId, orden])
   @@map("paradas")
 }
 
@@ -387,6 +459,7 @@ model Asignacion {
   @@unique([vehiculoId, fecha, horario])
   @@index([rotacionId])
   @@index([estado, venceAt])
+  @@index([rutaId, estado, venceAt])
   @@map("asignaciones")
 }
 
@@ -442,6 +515,7 @@ model SesionOperativa {
   @@index([asignacionId, estado])
   @@index([deviceId, estado])
   @@index([vehiculoId, estado])
+  @@index([vehiculoId, estado, fin, inicio(sort: Desc)])
   @@map("sesiones_operativas")
 }
 
@@ -622,4 +696,22 @@ model GpsArchive {
 
   @@index([partitionDate])
   @@map("gps_archives")
+}
+
+// Solicitudes públicas de demostración enviadas desde la landing. No pertenecen a
+// ningún sindicato todavía: el equipo las revisa antes de convertirlas en un piloto.
+model DemoRequest {
+  id           String   @id @default(uuid())
+  name         String
+  line         String
+  city         String
+  lineCount    Int
+  vehicleCount Int?
+  source       String   @default("landing")
+  status       String   @default("new")
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@map("demo_requests")
 }

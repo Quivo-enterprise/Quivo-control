@@ -3,6 +3,7 @@ node_modules/
 !.env.example
 .claude/
 .claude-flow/
+.codebase-memory/
 
 # build outputs
 dist/

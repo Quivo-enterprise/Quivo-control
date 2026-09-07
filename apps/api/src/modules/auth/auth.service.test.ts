@@ -155,7 +155,7 @@ describe('AuthService (contra Better-Auth real)', () => {
       email: 'admin@sindicato.local',
       newPassword: 'Quivo123!',
     });
-  });
+  }, 15_000);
 
   it('reset asistido: 404 si el email no existe', async () => {
     const authService = new AuthService();

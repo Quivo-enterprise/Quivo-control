@@ -3,12 +3,12 @@ import Image from 'next/image';
 const BRAND_LOGOS = {
   logotipo: {
     light: '/brand/logotipo-principal.webp',
-    dark: '/brand/logotipo-blanco.webp',
+    dark: '/brand/logotipo-amarillo.webp',
     ratio: 859.8 / 274.49,
   },
   isotipo: {
     light: '/brand/isotipo-principal.webp',
-    dark: '/brand/isotipo-blanco.webp',
+    dark: '/brand/isotipo-amarillo.webp',
     ratio: 650 / 487.46,
   },
 } as const;
@@ -31,14 +31,14 @@ export function BrandLogo({ variant = 'logotipo', height = 28, className }: Bran
   const width = Math.round(height * ratio);
 
   return (
-    <span className={className} style={{ display: 'inline-flex', alignItems: 'center', height }}>
+    <span className={`qv-brand-logo ${className ?? ''}`} style={{ display: 'inline-flex', alignItems: 'center', height }}>
       <Image
         src={light}
         alt="QUIVO Control"
         height={height}
         width={width}
         style={{ height: '100%', width: 'auto' }}
-        className="dark:hidden"
+        className="qv-brand-logo__light dark:hidden"
         priority
       />
       <Image
@@ -47,7 +47,7 @@ export function BrandLogo({ variant = 'logotipo', height = 28, className }: Bran
         height={height}
         width={width}
         style={{ height: '100%', width: 'auto' }}
-        className="hidden dark:inline"
+        className="qv-brand-logo__dark hidden dark:inline"
         priority
       />
     </span>

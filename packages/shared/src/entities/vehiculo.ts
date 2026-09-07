@@ -72,6 +72,9 @@ export const ModeloVehiculoSchema = z
   .max(50, 'El modelo no puede superar 50 caracteres.')
   .regex(/^[\p{L}\p{N} .\-/]+$/u, 'El modelo contiene caracteres no permitidos.');
 
+const nullableVehiculoTextSchema = (max: number) =>
+  z.preprocess((value) => (value === '' ? null : value), z.string().trim().max(max).nullable());
+
 export const TIPOS_VEHICULO = [
   {
     codigo: 'taxi_trufi',
@@ -176,6 +179,9 @@ export const VehiculoSchema = z.object({
   modelo: ModeloVehiculoSchema,
   color: ColorVehiculoSchema,
   colorSecundario: ColorVehiculoSchema.nullable(),
+  numeroInterno: nullableVehiculoTextSchema(30).optional(),
+  distintivo: nullableVehiculoTextSchema(80).optional(),
+  cartelSuperior: nullableVehiculoTextSchema(120).optional(),
   capacidad: z
     .number()
     .int('La capacidad debe ser un número entero.')
@@ -189,8 +195,14 @@ export const CrearVehiculoSchema = VehiculoSchema.omit({
   id: true,
   placaNormalizada: true,
   estado: true,
+  numeroInterno: true,
+  distintivo: true,
+  cartelSuperior: true,
 }).extend({
   estado: z.literal('pendiente').default('pendiente'),
+  numeroInterno: nullableVehiculoTextSchema(30).optional(),
+  distintivo: nullableVehiculoTextSchema(80).optional(),
+  cartelSuperior: nullableVehiculoTextSchema(120).optional(),
 });
 export type CrearVehiculo = z.infer<typeof CrearVehiculoSchema>;
 

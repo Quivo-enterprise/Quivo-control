@@ -35,6 +35,9 @@ import { withTenantContext } from '../src/tenant-context.js';
 const SEED_PASSWORD = 'Quivo123!';
 const SEED_PIN_VEHICULO = process.env.MOBILE_SEED_VEHICLE_PIN ?? '246810';
 const SEED_PIN_CONDUCTOR = process.env.MOBILE_SEED_DRIVER_PIN ?? '135790';
+const HORARIO_MOVIL_DEMO = 'tarde' as const;
+const HORA_SALIDA_MOVIL_DEMO = '15:00';
+const HORA_PRESENTACION_MOVIL_DEMO = '14:45';
 
 /** IDs fijos (no aleatorios) para que el seed sea idempotente y para que el test
  * cross-tenant de RLS (QUI-218) pueda referenciarlos sin tener que leerlos primero. */
@@ -174,6 +177,9 @@ async function seedDatosDePrueba(
           placa,
           placaNormalizada: placa,
           credencialHash: credenciales.vehiculoHash,
+          numeroInterno: '120-01',
+          distintivo: 'Banderita Roja',
+          cartelSuperior: 'PLAZA COLÓN · LA CANCHA',
         },
       });
     } else {
@@ -187,6 +193,9 @@ async function seedDatosDePrueba(
           marca: 'Mercedes-Benz',
           modelo: 'OF-1721',
           color: 'blanco',
+          numeroInterno: '120-01',
+          distintivo: 'Banderita Roja',
+          cartelSuperior: 'PLAZA COLÓN · LA CANCHA',
           capacidad: 40,
           estado: 'activo',
           credencialHash: credenciales.vehiculoHash,
@@ -232,6 +241,441 @@ const ROTACION_A_ID = 'aaaaaaaa-0000-4000-8000-000000000002';
 const ROTACION_MOVIL_ID = 'aaaaaaaa-0000-4000-8000-000000000005';
 const PUNTO_CONTROL_1_ID = 'aaaaaaaa-0000-4000-8000-000000000010';
 const PUNTO_CONTROL_2_ID = 'aaaaaaaa-0000-4000-8000-000000000011';
+
+// Datos de presentación de la Línea 120 (Cochabamba): Plaza Colón ↔ La Cancha.
+// Se mantienen IDs fijos para que el seed sea idempotente y la asignación móvil pueda
+// apuntar siempre a la ruta de la prueba sin depender de lecturas previas.
+const LINEA_120_ID = '12000000-1200-4200-8200-120000000001';
+const RUTA_120_IDA_ID = '12000000-1200-4200-8200-120000000010';
+const RUTA_120_VUELTA_ID = '12000000-1200-4200-8200-120000000011';
+const VARIANTE_120_IDA_ID = '12000000-1200-4200-8200-120000000020';
+const VARIANTE_120_VUELTA_ID = '12000000-1200-4200-8200-120000000021';
+const LOGO_LINEA_120_URL = `${process.env.API_PUBLIC_URL ?? 'http://localhost:3001'}/v1/media/lineas/linea-120-universitaria.png`;
+
+function geometria120Ida(): string {
+  return GEOMETRIA_DEMO;
+}
+
+function geometria120Vuelta(): string {
+  const geometry = JSON.parse(GEOMETRIA_DEMO) as {
+    type: 'LineString';
+    coordinates: Array<[number, number]>;
+  };
+  return JSON.stringify({ ...geometry, coordinates: [...geometry.coordinates].reverse() });
+}
+
+const PUNTOS_120_IDA = [
+  {
+    id: '12000000-1200-4200-8200-120000000101',
+    tipo: 'origen',
+    orden: 0,
+    longitude: -66.157283,
+    latitude: -17.385423,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000105',
+    tipo: 'intermedia',
+    orden: 1,
+    longitude: -66.157888,
+    latitude: -17.384899,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000106',
+    tipo: 'intermedia',
+    orden: 2,
+    longitude: -66.157761,
+    latitude: -17.385339,
+    radioToleranciaM: 100,
+    esControl: false,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000107',
+    tipo: 'intermedia',
+    orden: 3,
+    longitude: -66.15605,
+    latitude: -17.387649,
+    radioToleranciaM: 100,
+    esControl: false,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000102',
+    tipo: 'intermedia',
+    orden: 4,
+    longitude: -66.156214,
+    latitude: -17.388445,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000108',
+    tipo: 'intermedia',
+    orden: 5,
+    longitude: -66.1558,
+    latitude: -17.390905,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000109',
+    tipo: 'intermedia',
+    orden: 6,
+    longitude: -66.155373,
+    latitude: -17.393045,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000110',
+    tipo: 'intermedia',
+    orden: 7,
+    longitude: -66.155047,
+    latitude: -17.394856,
+    radioToleranciaM: 100,
+    esControl: false,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000103',
+    tipo: 'intermedia',
+    orden: 8,
+    longitude: -66.15481,
+    latitude: -17.396053,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000111',
+    tipo: 'intermedia',
+    orden: 9,
+    longitude: -66.154149,
+    latitude: -17.39907,
+    radioToleranciaM: 100,
+    esControl: false,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000112',
+    tipo: 'intermedia',
+    orden: 10,
+    longitude: -66.151998,
+    latitude: -17.398495,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000104',
+    tipo: 'destino',
+    orden: 11,
+    longitude: -66.149377,
+    latitude: -17.400468,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+] as const;
+
+const PUNTOS_120_VUELTA = [
+  {
+    id: '12000000-1200-4200-8200-120000000201',
+    tipo: 'origen',
+    orden: 0,
+    longitude: -66.149377,
+    latitude: -17.400468,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000202',
+    tipo: 'intermedia',
+    orden: 1,
+    longitude: -66.151998,
+    latitude: -17.398495,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000203',
+    tipo: 'intermedia',
+    orden: 2,
+    longitude: -66.154149,
+    latitude: -17.39907,
+    radioToleranciaM: 100,
+    esControl: false,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000204',
+    tipo: 'intermedia',
+    orden: 3,
+    longitude: -66.15481,
+    latitude: -17.396053,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000205',
+    tipo: 'intermedia',
+    orden: 4,
+    longitude: -66.155047,
+    latitude: -17.394856,
+    radioToleranciaM: 100,
+    esControl: false,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000206',
+    tipo: 'intermedia',
+    orden: 5,
+    longitude: -66.155373,
+    latitude: -17.393045,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000207',
+    tipo: 'intermedia',
+    orden: 6,
+    longitude: -66.1558,
+    latitude: -17.390905,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000208',
+    tipo: 'intermedia',
+    orden: 7,
+    longitude: -66.156214,
+    latitude: -17.388445,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000209',
+    tipo: 'intermedia',
+    orden: 8,
+    longitude: -66.15605,
+    latitude: -17.387649,
+    radioToleranciaM: 100,
+    esControl: false,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000210',
+    tipo: 'intermedia',
+    orden: 9,
+    longitude: -66.157761,
+    latitude: -17.385339,
+    radioToleranciaM: 100,
+    esControl: false,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000211',
+    tipo: 'intermedia',
+    orden: 10,
+    longitude: -66.157888,
+    latitude: -17.384899,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+  {
+    id: '12000000-1200-4200-8200-120000000212',
+    tipo: 'destino',
+    orden: 11,
+    longitude: -66.157283,
+    latitude: -17.385423,
+    radioToleranciaM: 100,
+    esControl: true,
+  },
+] as const;
+
+async function seedLinea120(tx: Prisma.TransactionClient): Promise<void> {
+  await tx.linea.upsert({
+    where: { id: LINEA_120_ID },
+    update: {
+      codigo: '120',
+      nombre: 'Línea 120',
+      color: '#0f766e',
+      colorSecundario: '#f59e0b',
+      colorTexto: '#ffffff',
+      colorTerciario: '#0ea5a4',
+      colorFondo: '#f0fdfa',
+      nombreCorto: '120',
+      lema: 'Conectando Plaza Colón con La Cancha',
+      descripcion: 'Plaza Colón ↔ La Cancha · Cochabamba',
+      logoUrl: LOGO_LINEA_120_URL,
+      distintivoTipo: 'banderita',
+      distintivoValor: 'Banderita Roja',
+      cartelSuperior: 'PLAZA COLÓN · LA CANCHA',
+      cartelFormato: 'doble_clasico',
+      cartelTitulo: 'TIQUIPAYA',
+      cartelDetalle: 'UNIVALLE',
+      cartelNumeroPosicion: 'izquierda',
+      cartelLogoPosicion: 'ninguno',
+      cartelColorTitulo: '#b91c1c',
+      cartelColorDetalle: '#1d4ed8',
+      cartelColorNumero: '#b91c1c',
+      cartelColorBorde: '#64748b',
+    },
+    create: {
+      id: LINEA_120_ID,
+      sindicatoId: SINDICATO_A_ID,
+      codigo: '120',
+      nombre: 'Línea 120',
+      color: '#0f766e',
+      colorSecundario: '#f59e0b',
+      colorTexto: '#ffffff',
+      colorTerciario: '#0ea5a4',
+      colorFondo: '#f0fdfa',
+      nombreCorto: '120',
+      lema: 'Conectando Plaza Colón con La Cancha',
+      descripcion: 'Plaza Colón ↔ La Cancha · Cochabamba',
+      logoUrl: LOGO_LINEA_120_URL,
+      distintivoTipo: 'banderita',
+      distintivoValor: 'Banderita Roja',
+      cartelSuperior: 'PLAZA COLÓN · LA CANCHA',
+      cartelFormato: 'doble_clasico',
+      cartelTitulo: 'TIQUIPAYA',
+      cartelDetalle: 'UNIVALLE',
+      cartelNumeroPosicion: 'izquierda',
+      cartelLogoPosicion: 'ninguno',
+      cartelColorTitulo: '#b91c1c',
+      cartelColorDetalle: '#1d4ed8',
+      cartelColorNumero: '#b91c1c',
+      cartelColorBorde: '#64748b',
+    },
+  });
+
+  // En versiones anteriores de la demo la vuelta usaba los IDs 111–122. Se limpian
+  // únicamente esos registros antiguos para que la ampliación de la ruta no deje
+  // puntos duplicados ni robe IDs a la ida.
+  await tx.$executeRaw`
+    DELETE FROM puntos_control
+    WHERE "rutaId" = ${RUTA_120_VUELTA_ID}
+      AND id IN (
+        '12000000-1200-4200-8200-120000000111',
+        '12000000-1200-4200-8200-120000000112',
+        '12000000-1200-4200-8200-120000000113',
+        '12000000-1200-4200-8200-120000000114',
+        '12000000-1200-4200-8200-120000000115',
+        '12000000-1200-4200-8200-120000000116',
+        '12000000-1200-4200-8200-120000000117',
+        '12000000-1200-4200-8200-120000000118',
+        '12000000-1200-4200-8200-120000000119',
+        '12000000-1200-4200-8200-120000000120',
+        '12000000-1200-4200-8200-120000000121',
+        '12000000-1200-4200-8200-120000000122'
+      )
+  `;
+  await tx.$executeRaw`
+    DELETE FROM paradas
+    WHERE "rutaId" = ${RUTA_120_VUELTA_ID}
+      AND id IN (
+        '12000000-1200-4200-8200-120000000111',
+        '12000000-1200-4200-8200-120000000112',
+        '12000000-1200-4200-8200-120000000113',
+        '12000000-1200-4200-8200-120000000114',
+        '12000000-1200-4200-8200-120000000115',
+        '12000000-1200-4200-8200-120000000116',
+        '12000000-1200-4200-8200-120000000117',
+        '12000000-1200-4200-8200-120000000118',
+        '12000000-1200-4200-8200-120000000119',
+        '12000000-1200-4200-8200-120000000120',
+        '12000000-1200-4200-8200-120000000121',
+        '12000000-1200-4200-8200-120000000122'
+      )
+  `;
+
+  const sentidos = [
+    {
+      id: RUTA_120_IDA_ID,
+      sentido: 'ida',
+      varianteId: VARIANTE_120_IDA_ID,
+      geometria: geometria120Ida(),
+      puntos: PUNTOS_120_IDA,
+    },
+    {
+      id: RUTA_120_VUELTA_ID,
+      sentido: 'vuelta',
+      varianteId: VARIANTE_120_VUELTA_ID,
+      geometria: geometria120Vuelta(),
+      puntos: PUNTOS_120_VUELTA,
+    },
+  ] as const;
+
+  for (const ruta of sentidos) {
+    await tx.$executeRaw`
+      INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+      VALUES (
+        ${ruta.id}, ${LINEA_120_ID}, ${ruta.sentido},
+        ST_SetSRID(ST_GeomFromGeoJSON(${ruta.geometria}), 4326)::geography,
+        'activo', now(), now()
+      )
+      ON CONFLICT (id) DO UPDATE SET
+        "lineaId" = EXCLUDED."lineaId",
+        sentido = EXCLUDED.sentido,
+        geometria = EXCLUDED.geometria,
+        estado = 'activo',
+        "updatedAt" = now()
+    `;
+
+    await tx.variante.upsert({
+      where: { id: ruta.varianteId },
+      update: { rutaId: ruta.id, nombre: 'Ramal Central', estado: 'activo' },
+      create: {
+        id: ruta.varianteId,
+        rutaId: ruta.id,
+        nombre: 'Ramal Central',
+        estado: 'activo',
+      },
+    });
+
+    for (const punto of ruta.puntos) {
+      const coord = JSON.stringify({
+        type: 'Point',
+        coordinates: [punto.longitude, punto.latitude],
+      });
+
+      await tx.$executeRaw`
+        INSERT INTO paradas (id, "rutaId", tipo, orden, coord, estado, "createdAt", "updatedAt")
+        VALUES (
+          ${punto.id}, ${ruta.id}, ${punto.tipo}, ${punto.orden},
+          ST_SetSRID(ST_GeomFromGeoJSON(${coord}), 4326)::geography,
+          'activo', now(), now()
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          "rutaId" = EXCLUDED."rutaId",
+          tipo = EXCLUDED.tipo,
+          orden = EXCLUDED.orden,
+          coord = EXCLUDED.coord,
+          estado = 'activo',
+          "updatedAt" = now()
+      `;
+
+      if (!punto.esControl) continue;
+
+      await tx.$executeRaw`
+        INSERT INTO puntos_control (
+          id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado,
+          "createdAt", "updatedAt"
+        )
+        VALUES (
+          ${punto.id}, ${ruta.id}, ${punto.orden},
+          ST_SetSRID(ST_GeomFromGeoJSON(${coord}), 4326)::geography,
+          ${punto.radioToleranciaM}, true, 'activo', now(), now()
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          "rutaId" = EXCLUDED."rutaId",
+          orden = EXCLUDED.orden,
+          coord = EXCLUDED.coord,
+          "radioToleranciaM" = EXCLUDED."radioToleranciaM",
+          obligatorio = true,
+          estado = 'activo',
+          "updatedAt" = now()
+      `;
+    }
+  }
+
+  console.log('Línea 120 lista: ida/vuelta, Ramal Central, paradas y puntos de control');
+}
+
 // Ruta real en Cochabamba (Plaza Colón → La Cancha), generada con OSRM local siguiendo
 // calles reales — antes esto apuntaba a coordenadas de Buenos Aires (placeholder de
 // scaffolding inicial), lo que hacía imposible probar geofencing/ruteo en un dispositivo
@@ -239,34 +683,90 @@ const PUNTO_CONTROL_2_ID = 'aaaaaaaa-0000-4000-8000-000000000011';
 const GEOMETRIA_DEMO = JSON.stringify({
   type: 'LineString',
   coordinates: [
-    [-66.157283, -17.385423], [-66.157584, -17.385017], [-66.157653, -17.384924],
-    [-66.157675, -17.384894], [-66.157692, -17.38487], [-66.157737, -17.384856],
-    [-66.15778, -17.384853], [-66.15783, -17.384867], [-66.157888, -17.384899],
-    [-66.157941, -17.384942], [-66.157965, -17.384985], [-66.157974, -17.385026],
-    [-66.157971, -17.385072], [-66.15796, -17.385086], [-66.157936, -17.385118],
-    [-66.157861, -17.385215], [-66.157761, -17.385339], [-66.157508, -17.385663],
-    [-66.156861, -17.38651], [-66.156791, -17.386605], [-66.156745, -17.386658],
-    [-66.156462, -17.38703], [-66.156066, -17.387551], [-66.156053, -17.387598],
-    [-66.15605, -17.387649], [-66.156049, -17.38771], [-66.156298, -17.387754],
-    [-66.156277, -17.387878], [-66.156214, -17.388445], [-66.156169, -17.388719],
-    [-66.156157, -17.388816], [-66.156146, -17.388882], [-66.155989, -17.389806],
-    [-66.155978, -17.389865], [-66.155974, -17.389891], [-66.155971, -17.389909],
-    [-66.1558, -17.390905], [-66.155613, -17.391912], [-66.155607, -17.391979],
-    [-66.155589, -17.392068], [-66.155571, -17.392144], [-66.155511, -17.392419],
-    [-66.155395, -17.392975], [-66.155383, -17.39301], [-66.155373, -17.393045],
-    [-66.155272, -17.393581], [-66.155193, -17.394003], [-66.155185, -17.394046],
-    [-66.15519, -17.39411], [-66.155102, -17.394555], [-66.155099, -17.394569],
-    [-66.155095, -17.394591], [-66.155047, -17.394856], [-66.155014, -17.395035],
-    [-66.155006, -17.395068], [-66.154837, -17.39592], [-66.15481, -17.396053],
-    [-66.154794, -17.396134], [-66.15467, -17.396758], [-66.15458, -17.397192],
-    [-66.154417, -17.398099], [-66.154389, -17.398223], [-66.154228, -17.398993],
-    [-66.154206, -17.399084], [-66.154149, -17.39907], [-66.153193, -17.398846],
-    [-66.153125, -17.398831], [-66.152748, -17.398736], [-66.15272, -17.398727],
-    [-66.152659, -17.398707], [-66.152219, -17.398546], [-66.152079, -17.398506],
-    [-66.151998, -17.398495], [-66.151842, -17.398499], [-66.151085, -17.39854],
-    [-66.150657, -17.398596], [-66.150467, -17.398591], [-66.149941, -17.398553],
-    [-66.149907, -17.399004], [-66.149849, -17.399867], [-66.149846, -17.399962],
-    [-66.149783, -17.400029], [-66.149705, -17.400128], [-66.149377, -17.400468],
+    [-66.157283, -17.385423],
+    [-66.157584, -17.385017],
+    [-66.157653, -17.384924],
+    [-66.157675, -17.384894],
+    [-66.157692, -17.38487],
+    [-66.157737, -17.384856],
+    [-66.15778, -17.384853],
+    [-66.15783, -17.384867],
+    [-66.157888, -17.384899],
+    [-66.157941, -17.384942],
+    [-66.157965, -17.384985],
+    [-66.157974, -17.385026],
+    [-66.157971, -17.385072],
+    [-66.15796, -17.385086],
+    [-66.157936, -17.385118],
+    [-66.157861, -17.385215],
+    [-66.157761, -17.385339],
+    [-66.157508, -17.385663],
+    [-66.156861, -17.38651],
+    [-66.156791, -17.386605],
+    [-66.156745, -17.386658],
+    [-66.156462, -17.38703],
+    [-66.156066, -17.387551],
+    [-66.156053, -17.387598],
+    [-66.15605, -17.387649],
+    [-66.156049, -17.38771],
+    [-66.156298, -17.387754],
+    [-66.156277, -17.387878],
+    [-66.156214, -17.388445],
+    [-66.156169, -17.388719],
+    [-66.156157, -17.388816],
+    [-66.156146, -17.388882],
+    [-66.155989, -17.389806],
+    [-66.155978, -17.389865],
+    [-66.155974, -17.389891],
+    [-66.155971, -17.389909],
+    [-66.1558, -17.390905],
+    [-66.155613, -17.391912],
+    [-66.155607, -17.391979],
+    [-66.155589, -17.392068],
+    [-66.155571, -17.392144],
+    [-66.155511, -17.392419],
+    [-66.155395, -17.392975],
+    [-66.155383, -17.39301],
+    [-66.155373, -17.393045],
+    [-66.155272, -17.393581],
+    [-66.155193, -17.394003],
+    [-66.155185, -17.394046],
+    [-66.15519, -17.39411],
+    [-66.155102, -17.394555],
+    [-66.155099, -17.394569],
+    [-66.155095, -17.394591],
+    [-66.155047, -17.394856],
+    [-66.155014, -17.395035],
+    [-66.155006, -17.395068],
+    [-66.154837, -17.39592],
+    [-66.15481, -17.396053],
+    [-66.154794, -17.396134],
+    [-66.15467, -17.396758],
+    [-66.15458, -17.397192],
+    [-66.154417, -17.398099],
+    [-66.154389, -17.398223],
+    [-66.154228, -17.398993],
+    [-66.154206, -17.399084],
+    [-66.154149, -17.39907],
+    [-66.153193, -17.398846],
+    [-66.153125, -17.398831],
+    [-66.152748, -17.398736],
+    [-66.15272, -17.398727],
+    [-66.152659, -17.398707],
+    [-66.152219, -17.398546],
+    [-66.152079, -17.398506],
+    [-66.151998, -17.398495],
+    [-66.151842, -17.398499],
+    [-66.151085, -17.39854],
+    [-66.150657, -17.398596],
+    [-66.150467, -17.398591],
+    [-66.149941, -17.398553],
+    [-66.149907, -17.399004],
+    [-66.149849, -17.399867],
+    [-66.149846, -17.399962],
+    [-66.149783, -17.400029],
+    [-66.149705, -17.400128],
+    [-66.149377, -17.400468],
   ],
 });
 
@@ -356,19 +856,34 @@ async function seedRotaciones(tx: Prisma.TransactionClient): Promise<void> {
       estado: 'publicada',
     },
   });
+
+  // La demo móvil se prueba a las 15:00. Si quedó una asignación móvil de un seed
+  // anterior con otro turno, se marca vencida antes de crear/reutilizar la de la tarde;
+  // así el login no obliga a elegir entre dos rutas demo del mismo día.
+  await tx.asignacion.updateMany({
+    where: {
+      rotacionId: ROTACION_MOVIL_ID,
+      vehiculoId: vehiculo.id,
+      fecha: fechaMovil,
+      horario: { not: HORARIO_MOVIL_DEMO },
+    },
+    data: { estado: 'vencida', venceAt: new Date() },
+  });
   await tx.asignacion.upsert({
     where: {
       vehiculoId_fecha_horario: {
         vehiculoId: vehiculo.id,
         fecha: fechaMovil,
-        horario: 'manana',
+        horario: HORARIO_MOVIL_DEMO,
       },
     },
     update: {
       rotacionId: ROTACION_MOVIL_ID,
       conductorId: conductor.id,
-      rutaId: RUTA_A_ID,
+      rutaId: RUTA_120_IDA_ID,
       orden: 1,
+      horaSalida: horaEnBoliviaDemo(fechaMovil, HORA_SALIDA_MOVIL_DEMO),
+      horaPresentacion: horaEnBoliviaDemo(fechaMovil, HORA_PRESENTACION_MOVIL_DEMO),
       venceAt: finDeJornadaBolivia(fechaMovil),
       estado: 'vigente',
     },
@@ -376,10 +891,12 @@ async function seedRotaciones(tx: Prisma.TransactionClient): Promise<void> {
       rotacionId: ROTACION_MOVIL_ID,
       vehiculoId: vehiculo.id,
       conductorId: conductor.id,
-      rutaId: RUTA_A_ID,
+      rutaId: RUTA_120_IDA_ID,
       fecha: fechaMovil,
-      horario: 'manana',
+      horario: HORARIO_MOVIL_DEMO,
       orden: 1,
+      horaSalida: horaEnBoliviaDemo(fechaMovil, HORA_SALIDA_MOVIL_DEMO),
+      horaPresentacion: horaEnBoliviaDemo(fechaMovil, HORA_PRESENTACION_MOVIL_DEMO),
       venceAt: finDeJornadaBolivia(fechaMovil),
       estado: 'vigente',
     },
@@ -625,6 +1142,7 @@ async function seed(): Promise<void> {
   await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
     await seedSindicatos(tx);
     await seedDatosDePrueba(tx, { vehiculoHash, conductorHash });
+    await seedLinea120(tx);
     await seedRotaciones(tx);
     await seedReglas(tx);
     await seedSindicatoPiloto(tx);
@@ -643,6 +1161,13 @@ function fechaActualBolivia(ahora: Date = new Date()): Date {
 function finDeJornadaBolivia(fecha: Date): Date {
   return new Date(
     Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate() + 1, 3, 59, 59),
+  );
+}
+
+function horaEnBoliviaDemo(fecha: Date, horaHHmm: string): Date {
+  const [horas, minutos] = horaHHmm.split(':').map(Number) as [number, number];
+  return new Date(
+    Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate(), horas + 4, minutos),
   );
 }
 

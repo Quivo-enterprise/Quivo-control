@@ -24,6 +24,9 @@ import { SyncModule } from './modules/sync/index.js';
 import { ReportesModule } from './modules/reportes/index.js';
 import { AuditoriaModule } from './modules/auditoria/index.js';
 import { AuthMovilModule } from './modules/auth-movil/index.js';
+import { MediaModule } from './modules/media/index.js';
+import { PublicMobilityModule } from './modules/public-mobility/public-mobility.module.js';
+import { DemoRequestsModule } from './modules/demo-requests/index.js';
 
 @Module({
   imports: [
@@ -45,6 +48,9 @@ import { AuthMovilModule } from './modules/auth-movil/index.js';
     HealthModule,
     AuthModule,
     AuthMovilModule,
+    MediaModule,
+    PublicMobilityModule,
+    DemoRequestsModule,
     SindicatosModule,
     SociosModule,
     VehiculosModule,

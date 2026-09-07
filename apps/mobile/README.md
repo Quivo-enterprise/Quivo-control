@@ -45,12 +45,17 @@ Después de ejecutar el seed:
 
 | Entidad  | Identificador | PIN por defecto |
 | -------- | ------------- | --------------- |
-| Vehículo | `AB111`       | `246810`        |
+| Vehículo | `1001ABC`     | `246810`        |
 | Chofer   | `1000101 LP`  | `135790`        |
 
 Son valores exclusivamente locales y se pueden reemplazar mediante
 `MOBILE_SEED_VEHICLE_PIN` y `MOBILE_SEED_DRIVER_PIN`. No reutilizarlos en ambientes
 compartidos o productivos.
+
+El seed deja para el día actual una asignación móvil publicada de turno `tarde` (demo de
+las 15:00), con la ruta `Línea 120 · ida` y cuatro paradas/puntos de control entre Plaza
+Colón y La Cancha, Cochabamba. Después del login, la ruta se descarga como paquete del día
+antes de habilitar el botón **Iniciar recorrido**.
 
 ## Verificación
 

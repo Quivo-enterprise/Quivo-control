@@ -1,47 +1,40 @@
 'use client';
 
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
   Button,
   Card,
-  Checkbox,
   ConfirmDialog,
-  DatePicker,
   Input,
   Loader,
-  Modal,
   PageHeader,
+  PlateBadge,
   Select,
   StatusBadge,
 } from '@quivo/design-system';
-import type {
-  Asignacion,
-  Conductor,
-  EstadoRotacion,
-  Linea,
-  Ruta,
-  Turno,
-  Vehiculo,
-} from '@quivo/shared';
+import type { Asignacion, EstadoRotacion, Turno } from '@quivo/shared';
+import {
+  Building2,
+  Calendar,
+  CalendarDays,
+  Clock,
+  Moon,
+  Plus,
+  Route,
+  Sparkles,
+  Sun,
+  Sunrise,
+  User,
+  Users,
+} from 'lucide-react';
 import { useAuth } from '../../../src/lib/auth/auth-context';
-import { ApiError } from '../../../src/lib/api/client';
-import { lineasApi } from '../../../src/lib/api/lineas';
-import { rutasApi } from '../../../src/lib/api/rutas';
-import { vehiculosApi } from '../../../src/lib/api/vehiculos';
-import { conductoresApi } from '../../../src/lib/api/conductores';
-import { rotacionesApi, type RotacionConAsignaciones } from '../../../src/lib/api/rotaciones';
 import { useSindicatoOptions } from '../../../src/lib/api/use-sindicato-options';
-
-const HORARIOS: { label: string; value: Turno }[] = [
-  { label: 'Mañana', value: 'manana' },
-  { label: 'Tarde', value: 'tarde' },
-  { label: 'Noche', value: 'noche' },
-];
-
-interface RutaConLinea extends Ruta {
-  linea: Linea;
-}
+import { useRotaciones } from './use-rotaciones';
+import { etiquetaHorario, rangoDeFechas } from './rotacion-constants';
+import { AsignacionModal } from './asignacion-modal';
+import { NuevaAsignacionModal } from './nueva-asignacion-modal';
+import { GenerarRotacionModal } from './generar-rotacion-modal';
 
 interface EdicionAsignacion {
   asignacion: Asignacion;
@@ -54,10 +47,11 @@ interface FiltrosRotaciones {
 
 const FILTROS_ROTACIONES_VACIOS: FiltrosRotaciones = { periodo: '', estado: '' };
 
-/** RF-51..57 (QUI-233) — vista de rotación por periodo: grilla vehículo × fecha/horario
- * contra el API real de QUI-232. `admin_quivo` no tiene sindicato propio, así que necesita
- * elegir uno antes de poder generar o ver rutas/vehículos (mismo patrón que socios/vehículos,
- * QUI-228); `admin_sindicato` queda forzado al suyo. */
+function capitalizar(texto: string): string {
+  if (!texto) return '';
+  return texto.charAt(0).toUpperCase() + texto.slice(1).toLowerCase();
+}
+
 export default function RotacionesPage() {
   const { token, user } = useAuth();
   const { options: sindicatoOptions } = useSindicatoOptions();
@@ -66,24 +60,7 @@ export default function RotacionesPage() {
   const sindicatoId =
     user?.rol === 'admin_quivo' ? sindicatoSeleccionado : (user?.sindicatoId ?? '');
 
-  const [rutas, setRutas] = useState<RutaConLinea[]>([]);
-  const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
-  const [conductores, setConductores] = useState<Conductor[]>([]);
-  const [rotaciones, setRotaciones] = useState<RotacionConAsignaciones[]>([]);
-  const [rotacionActual, setRotacionActual] = useState<RotacionConAsignaciones | null>(null);
-
-  const [loadingCatalogo, setLoadingCatalogo] = useState(false);
-  const [loadingRotaciones, setLoadingRotaciones] = useState(false);
-  const [generando, setGenerando] = useState(false);
-  const [procesando, setProcesando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [avisoGeneracion, setAvisoGeneracion] = useState<string | null>(null);
-
-  const [periodo, setPeriodo] = useState('');
-  const [fechaInicio, setFechaInicio] = useState('');
-  const [fechaFin, setFechaFin] = useState('');
-  const [horariosSeleccionados, setHorariosSeleccionados] = useState<Turno[]>(['manana']);
-  const [rutasSeleccionadas, setRutasSeleccionadas] = useState<string[]>([]);
+  const data = useRotaciones(token, sindicatoId);
 
   const [filtrosRotaciones, setFiltrosRotaciones] =
     useState<FiltrosRotaciones>(FILTROS_ROTACIONES_VACIOS);
@@ -93,105 +70,35 @@ export default function RotacionesPage() {
   const [confirmacion, setConfirmacion] = useState<'publicar' | 'anular' | null>(null);
   const [modalAsignacion, setModalAsignacion] = useState<EdicionAsignacion | null>(null);
   const [modalNuevaAsignacion, setModalNuevaAsignacion] = useState(false);
+  const [modalGenerador, setModalGenerador] = useState(false);
 
-  // Catálogo del sindicato (líneas/rutas/vehículos/conductores) — todos filtrados en el
-  // cliente por `sindicatoId`, porque para `admin_quivo` esos endpoints devuelven todos los
-  // tenants mezclados (no tienen un query param de filtro, ver QUI-220..224).
-  useEffect(() => {
-    if (!token || !sindicatoId) {
-      setRutas([]);
-      setVehiculos([]);
-      setConductores([]);
-      setLoadingCatalogo(false);
-      return;
-    }
-    let cancelado = false;
-    setLoadingCatalogo(true);
-    setError(null);
-    Promise.all([lineasApi.listar(token), vehiculosApi.listar(token), conductoresApi.listar(token)])
-      .then(async ([todasLineas, todosVehiculos, todosConductores]) => {
-        const lineasDelSindicato = todasLineas.filter((l) => l.sindicatoId === sindicatoId);
+  const vehiculoPorId = useMemo(
+    () => new Map(data.vehiculos.map((v) => [v.id, v])),
+    [data.vehiculos],
+  );
+  const rutaPorId = useMemo(() => new Map(data.rutas.map((r) => [r.id, r])), [data.rutas]);
+  const conductorPorId = useMemo(
+    () => new Map(data.conductores.map((c) => [c.id, c])),
+    [data.conductores],
+  );
 
-        const rutasPorLinea = await Promise.all(
-          lineasDelSindicato.map((linea) =>
-            rutasApi.listarPorLinea(token, linea.id).then((rs) => rs.map((r) => ({ ...r, linea }))),
-          ),
-        );
-        if (cancelado) return;
-        setVehiculos(todosVehiculos.filter((v) => v.sindicatoId === sindicatoId));
-        setConductores(todosConductores.filter((c) => c.sindicatoId === sindicatoId));
-        setRutas(rutasPorLinea.flat());
-      })
-      .catch((err: unknown) => {
-        if (!cancelado) setError(mensajeError(err));
-      })
-      .finally(() => {
-        if (!cancelado) setLoadingCatalogo(false);
-      });
-    return () => {
-      cancelado = true;
-    };
-  }, [token, sindicatoId]);
-
-  useEffect(() => {
-    if (!token || !sindicatoId) {
-      setRotaciones([]);
-      setRotacionActual(null);
-      setLoadingRotaciones(false);
-      return;
-    }
-    let cancelado = false;
-    setLoadingRotaciones(true);
-    rotacionesApi
-      .listar(token)
-      .then(async (lista) => {
-        const propias = lista.filter((r) => r.sindicatoId === sindicatoId);
-        const conDetalle = await Promise.all(
-          propias.map((r) => rotacionesApi.obtener(token, r.id)),
-        );
-        if (cancelado) return;
-        setRotaciones(conDetalle);
-        setRotacionActual((actual) =>
-          actual ? (conDetalle.find((rotacion) => rotacion.id === actual.id) ?? null) : null,
-        );
-      })
-      .catch((err: unknown) => {
-        if (!cancelado) setError(mensajeError(err));
-      })
-      .finally(() => {
-        if (!cancelado) setLoadingRotaciones(false);
-      });
-    return () => {
-      cancelado = true;
-    };
-  }, [token, sindicatoId]);
-
-  const vehiculoPorId = useMemo(() => new Map(vehiculos.map((v) => [v.id, v])), [vehiculos]);
-  const rutaPorId = useMemo(() => new Map(rutas.map((r) => [r.id, r])), [rutas]);
-  const conductorPorId = useMemo(() => new Map(conductores.map((c) => [c.id, c])), [conductores]);
   const rotacionesFiltradas = useMemo(() => {
     const periodoBuscado = filtrosRotacionesAplicados.periodo.trim().toLocaleLowerCase();
-    return rotaciones.filter(
+    return data.rotaciones.filter(
       (rotacion) =>
         (!periodoBuscado || rotacion.periodo.toLocaleLowerCase().includes(periodoBuscado)) &&
         (!filtrosRotacionesAplicados.estado ||
           rotacion.estado === filtrosRotacionesAplicados.estado),
     );
-  }, [filtrosRotacionesAplicados, rotaciones]);
-  const rangoFechasInvalido = Boolean(fechaInicio && fechaFin && fechaFin < fechaInicio);
+  }, [filtrosRotacionesAplicados, data.rotaciones]);
 
   function seleccionarSindicato(siguienteSindicatoId: string) {
     setSindicatoSeleccionado(siguienteSindicatoId);
-    setRutas([]);
-    setVehiculos([]);
-    setConductores([]);
-    setRotaciones([]);
-    setRotacionActual(null);
+    data.reset();
     setConfirmacion(null);
     setModalAsignacion(null);
     setModalNuevaAsignacion(false);
-    setAvisoGeneracion(null);
-    setError(null);
+    setModalGenerador(false);
     setFiltrosRotaciones(FILTROS_ROTACIONES_VACIOS);
     setFiltrosRotacionesAplicados(FILTROS_ROTACIONES_VACIOS);
   }
@@ -205,127 +112,75 @@ export default function RotacionesPage() {
     setFiltrosRotacionesAplicados(FILTROS_ROTACIONES_VACIOS);
   }
 
-  function toggleHorario(horario: Turno) {
-    setHorariosSeleccionados((prev) =>
-      prev.includes(horario) ? prev.filter((h) => h !== horario) : [...prev, horario],
+  async function handleEjecutarGeneracion(params: {
+    periodo: string;
+    fechaInicio: string;
+    fechaFin: string;
+    horarios: Turno[];
+    rutasSeleccionadas: string[];
+  }) {
+    await data.generarRotacion(
+      {
+        esAdminQuivo: user?.rol === 'admin_quivo',
+        periodo: params.periodo,
+        fechas: rangoDeFechas(params.fechaInicio, params.fechaFin),
+        rutaIds: params.rutasSeleccionadas,
+        horarios: params.horarios,
+      },
+      () => {
+        setFiltrosRotaciones(FILTROS_ROTACIONES_VACIOS);
+        setFiltrosRotacionesAplicados(FILTROS_ROTACIONES_VACIOS);
+        setModalGenerador(false);
+      },
     );
-  }
-
-  function toggleRuta(rutaId: string) {
-    setRutasSeleccionadas((prev) =>
-      prev.includes(rutaId) ? prev.filter((r) => r !== rutaId) : [...prev, rutaId],
-    );
-  }
-
-  async function refrescarRotacion(id: string) {
-    if (!token) return;
-    const actualizada = await rotacionesApi.obtener(token, id);
-    setRotaciones((prev) => prev.map((r) => (r.id === id ? actualizada : r)));
-    setRotacionActual((prev) => (prev?.id === id ? actualizada : prev));
-  }
-
-  async function generarRotacion() {
-    if (
-      !token ||
-      !sindicatoId ||
-      !periodo.trim() ||
-      !fechaInicio ||
-      !fechaFin ||
-      rangoFechasInvalido ||
-      rutasSeleccionadas.length === 0 ||
-      horariosSeleccionados.length === 0
-    ) {
-      return;
-    }
-    setGenerando(true);
-    setError(null);
-    setAvisoGeneracion(null);
-    try {
-      const fechas = rangoDeFechas(fechaInicio, fechaFin);
-      const nueva = await rotacionesApi.generar(token, {
-        sindicatoId: user?.rol === 'admin_quivo' ? sindicatoId : undefined,
-        periodo: periodo.trim(),
-        rutaIds: rutasSeleccionadas,
-        fechas,
-        horarios: horariosSeleccionados,
-      });
-      setRotaciones((prev) => [nueva, ...prev]);
-      setRotacionActual(nueva);
-      setFiltrosRotaciones(FILTROS_ROTACIONES_VACIOS);
-      setFiltrosRotacionesAplicados(FILTROS_ROTACIONES_VACIOS);
-      const avisos: string[] = [];
-      const totalPedido = fechas.length * horariosSeleccionados.length * rutasSeleccionadas.length;
-      if (nueva.asignaciones.length < totalPedido) {
-        avisos.push(
-          `Se generaron ${nueva.asignaciones.length} de ${totalPedido} asignaciones — el resto quedó sin vehículo disponible en esa fecha y horario.`,
-        );
-      }
-      if (nueva.sinCobertura.length > 0) {
-        const detalle = nueva.sinCobertura
-          .map(({ vehiculoId, rutaId }) => {
-            const placa = vehiculoPorId.get(vehiculoId)?.placa ?? vehiculoId;
-            const ruta = rutas.find((r) => r.id === rutaId);
-            const etiquetaRuta = ruta ? `${ruta.linea.nombre} (${ruta.sentido})` : rutaId;
-            return `${placa} → ${etiquetaRuta}`;
-          })
-          .join(', ');
-        avisos.push(
-          `${nueva.sinCobertura.length} vehículo(s) no llegaron a cubrir alguna ruta pedida en este período (agenda sin slots libres): ${detalle}.`,
-        );
-      }
-      if (avisos.length > 0) setAvisoGeneracion(avisos.join(' '));
-      setPeriodo('');
-      setFechaInicio('');
-      setFechaFin('');
-      setRutasSeleccionadas([]);
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setGenerando(false);
-    }
   }
 
   async function confirmarPublicarOAnular() {
-    if (!token || !rotacionActual || !confirmacion) return;
-    setProcesando(true);
-    setError(null);
-    try {
-      if (confirmacion === 'publicar') {
-        await rotacionesApi.publicar(token, rotacionActual.id);
-      } else {
-        await rotacionesApi.anular(token, rotacionActual.id);
-      }
-      await refrescarRotacion(rotacionActual.id);
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setProcesando(false);
-      setConfirmacion(null);
+    if (!data.rotacionActual || !confirmacion) return;
+    if (confirmacion === 'publicar') {
+      await data.publicar(data.rotacionActual.id);
+    } else {
+      await data.anular(data.rotacionActual.id);
     }
+    setConfirmacion(null);
   }
 
   const columnasGrilla = useMemo(() => {
-    if (!rotacionActual) return [];
+    if (!data.rotacionActual) return [];
     const claves = new Map<string, { fecha: string; horario: Turno }>();
-    for (const asignacion of rotacionActual.asignaciones) {
+    for (const asignacion of data.rotacionActual.asignaciones) {
       const fecha = new Date(asignacion.fecha).toISOString().slice(0, 10);
       claves.set(`${fecha}|${asignacion.horario}`, { fecha, horario: asignacion.horario });
     }
     return [...claves.values()].sort(
       (a, b) => a.fecha.localeCompare(b.fecha) || a.horario.localeCompare(b.horario),
     );
-  }, [rotacionActual]);
+  }, [data.rotacionActual]);
 
   const filasGrilla = useMemo(() => {
-    if (!rotacionActual) return [];
-    const vehiculoIds = [...new Set(rotacionActual.asignaciones.map((a) => a.vehiculoId))];
+    if (!data.rotacionActual) return [];
+    const vehiculoIds = [...new Set(data.rotacionActual.asignaciones.map((a) => a.vehiculoId))];
     return vehiculoIds.sort((a, b) =>
       (vehiculoPorId.get(a)?.placa ?? '').localeCompare(vehiculoPorId.get(b)?.placa ?? ''),
     );
-  }, [rotacionActual, vehiculoPorId]);
+  }, [data.rotacionActual, vehiculoPorId]);
+
+  const totalConductoresAsignados = useMemo(() => {
+    if (!data.rotacionActual) return 0;
+    const condIds = new Set(
+      data.rotacionActual.asignaciones.map((a) => a.conductorId).filter(Boolean),
+    );
+    return condIds.size;
+  }, [data.rotacionActual]);
+
+  const totalRutasAsignadas = useMemo(() => {
+    if (!data.rotacionActual) return 0;
+    const rIds = new Set(data.rotacionActual.asignaciones.map((a) => a.rutaId).filter(Boolean));
+    return rIds.size;
+  }, [data.rotacionActual]);
 
   function celda(vehiculoId: string, fecha: string, horario: Turno): Asignacion | undefined {
-    return rotacionActual?.asignaciones.find(
+    return data.rotacionActual?.asignaciones.find(
       (a) =>
         a.vehiculoId === vehiculoId &&
         new Date(a.fecha).toISOString().slice(0, 10) === fecha &&
@@ -334,620 +189,618 @@ export default function RotacionesPage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
       <PageHeader
-        title="Rotaciones"
-        subtitle="RF-51..57 — generar, editar y publicar rotaciones (QUI-233)."
+        title="Planificación y Rotación de Turnos"
+        subtitle="Administra y publica el cronograma operativo de horarios, recorridos y conductores asignados a la flota."
+        actions={
+          sindicatoId ? (
+            <button
+              type="button"
+              className="qv-floating-cta"
+              onClick={() => setModalGenerador(true)}
+            >
+              <Sparkles size={16} />
+              <span>Nueva rotación asistida</span>
+            </button>
+          ) : undefined
+        }
       />
-      {error && (
+
+      {data.error && (
         <Alert variant="danger" title="Error">
-          {error}
+          {data.error}
         </Alert>
       )}
-      {avisoGeneracion && (
+      {data.avisoGeneracion && (
         <Alert variant="warning" title="Reparto parcial">
-          {avisoGeneracion}
+          {data.avisoGeneracion}
         </Alert>
       )}
 
+      {/* Selector de Sindicato (admin_quivo) */}
       {user?.rol === 'admin_quivo' && (
-        <Card header="Sindicato">
-          <Select
-            id="sindicato"
-            name="sindicato"
-            options={[{ label: 'Seleccionar...', value: '' }, ...sindicatoOptions]}
-            value={sindicatoSeleccionado}
-            onChange={(event) => seleccionarSindicato(event.target.value)}
-          />
-        </Card>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '1rem',
+            padding: '0.85rem 1.15rem',
+            background: 'var(--qv-surface-glass)',
+            backdropFilter: 'blur(20px)',
+            borderRadius: 'var(--qv-radius-xl)',
+            border: '1px solid var(--qv-border-glass)',
+            boxShadow: 'var(--qv-shadow-sm)',
+          }}
+        >
+          <span
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '2.25rem',
+              height: '2.25rem',
+              borderRadius: 'var(--qv-radius-lg)',
+              backgroundColor: 'color-mix(in srgb, var(--qv-color-primary) 12%, var(--qv-surface-card))',
+              color: 'var(--qv-color-primary)',
+              flexShrink: 0,
+            }}
+          >
+            <Building2 size={18} />
+          </span>
+          <div style={{ flex: '1 1 18rem' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--qv-text-muted)', textTransform: 'uppercase' }}>
+              Sindicato Activo
+            </span>
+            <Select
+              id="sindicato"
+              name="sindicato"
+              aria-label="Seleccionar sindicato"
+              options={[{ label: 'Seleccionar sindicato...', value: '' }, ...sindicatoOptions]}
+              value={sindicatoSeleccionado}
+              onChange={(event) => seleccionarSindicato(event.target.value)}
+            />
+          </div>
+        </div>
       )}
 
       {user?.rol === 'admin_quivo' && !sindicatoId && (
-        <Alert variant="info" title="Seleccioná un sindicato">
-          Elegí un sindicato para consultar o gestionar sus rotaciones.
+        <Alert variant="info" title="Selecciona un sindicato">
+          Elige una organización de transporte para consultar o generar sus rotaciones operativas.
         </Alert>
       )}
 
       {sindicatoId && (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '340px 1fr',
-            gap: '1.5rem',
-            alignItems: 'start',
-          }}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <Card header="Generar rotación">
-              {loadingCatalogo ? (
-                <Loader label="Cargando catálogo..." />
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  <Input
-                    label="Periodo"
-                    placeholder="2026-09"
-                    value={periodo}
-                    onChange={(e) => setPeriodo(e.target.value)}
-                  />
-                  <DatePicker
-                    label="Desde"
-                    value={fechaInicio}
-                    onChange={(e) => setFechaInicio(e.target.value)}
-                  />
-                  <DatePicker
-                    label="Hasta"
-                    value={fechaFin}
-                    onChange={(e) => setFechaFin(e.target.value)}
-                  />
-                  {rangoFechasInvalido && (
-                    <Alert variant="warning" title="Rango de fechas inválido">
-                      La fecha final debe ser igual o posterior a la fecha inicial.
-                    </Alert>
-                  )}
-                  <div>
-                    <span className="qv-field__label">Horarios</span>
-                    <div style={{ display: 'flex', gap: '1rem', marginTop: '0.25rem' }}>
-                      {HORARIOS.map((h) => (
-                        <Checkbox
-                          key={h.value}
-                          label={h.label}
-                          checked={horariosSeleccionados.includes(h.value)}
-                          onChange={() => toggleHorario(h.value)}
-                        />
-                      ))}
-                    </div>
+        <>
+          {/* Tira de Resumen Operativo / KPIs del Cronograma */}
+          {data.rotacionActual && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(13.5rem, 1fr))',
+                gap: '0.875rem',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.875rem',
+                  padding: '0.9rem 1.15rem',
+                  background: 'var(--qv-surface-glass)',
+                  backdropFilter: 'blur(24px) saturate(190%)',
+                  WebkitBackdropFilter: 'blur(24px) saturate(190%)',
+                  borderRadius: 'var(--qv-radius-xl)',
+                  border: '1px solid var(--qv-border-glass)',
+                  boxShadow: 'var(--qv-shadow-sm)',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '2.6rem',
+                    height: '2.6rem',
+                    borderRadius: 'var(--qv-radius-lg)',
+                    backgroundColor: 'color-mix(in srgb, var(--qv-color-primary) 14%, var(--qv-surface-card))',
+                    color: 'var(--qv-color-primary)',
+                    boxShadow: '0 0 12px color-mix(in srgb, var(--qv-color-primary) 25%, transparent)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <CalendarDays size={19} />
+                </span>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Período Seleccionado
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
+                    <strong style={{ fontSize: '1.05rem', color: 'var(--qv-text-primary)', letterSpacing: '0.02em' }}>
+                      {data.rotacionActual.periodo}
+                    </strong>
+                    <StatusBadge
+                      status={data.rotacionActual.estado === 'publicada' ? 'active' : 'pending'}
+                      label={data.rotacionActual.estado}
+                    />
                   </div>
-                  <div>
-                    <span className="qv-field__label">Rutas</span>
-                    {rutas.length === 0 ? (
-                      <p>Sin rutas en este sindicato todavía.</p>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.875rem',
+                  padding: '0.9rem 1.15rem',
+                  background: 'var(--qv-surface-glass)',
+                  backdropFilter: 'blur(24px) saturate(190%)',
+                  WebkitBackdropFilter: 'blur(24px) saturate(190%)',
+                  borderRadius: 'var(--qv-radius-xl)',
+                  border: '1px solid var(--qv-border-glass)',
+                  boxShadow: 'var(--qv-shadow-sm)',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '2.6rem',
+                    height: '2.6rem',
+                    borderRadius: 'var(--qv-radius-lg)',
+                    backgroundColor: 'color-mix(in srgb, var(--qv-color-success) 14%, var(--qv-surface-card))',
+                    color: 'var(--qv-color-success)',
+                    boxShadow: '0 0 12px color-mix(in srgb, var(--qv-color-success) 25%, transparent)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Route size={19} />
+                </span>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Vehículos Programados
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
+                    <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
+                      {filasGrilla.length}
+                    </strong>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
+                      unidades en turno
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.875rem',
+                  padding: '0.9rem 1.15rem',
+                  background: 'var(--qv-surface-glass)',
+                  backdropFilter: 'blur(24px) saturate(190%)',
+                  WebkitBackdropFilter: 'blur(24px) saturate(190%)',
+                  borderRadius: 'var(--qv-radius-xl)',
+                  border: '1px solid var(--qv-border-glass)',
+                  boxShadow: 'var(--qv-shadow-sm)',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '2.6rem',
+                    height: '2.6rem',
+                    borderRadius: 'var(--qv-radius-lg)',
+                    backgroundColor: 'color-mix(in srgb, var(--qv-color-warning) 14%, var(--qv-surface-card))',
+                    color: 'var(--qv-color-warning)',
+                    boxShadow: '0 0 12px color-mix(in srgb, var(--qv-color-warning) 25%, transparent)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Clock size={19} />
+                </span>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Turnos / Asignaciones
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
+                    <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
+                      {data.rotacionActual.asignaciones.length}
+                    </strong>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
+                      slots cubiertos
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.875rem',
+                  padding: '0.9rem 1.15rem',
+                  background: 'var(--qv-surface-glass)',
+                  backdropFilter: 'blur(24px) saturate(190%)',
+                  WebkitBackdropFilter: 'blur(24px) saturate(190%)',
+                  borderRadius: 'var(--qv-radius-xl)',
+                  border: '1px solid var(--qv-border-glass)',
+                  boxShadow: 'var(--qv-shadow-sm)',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '2.6rem',
+                    height: '2.6rem',
+                    borderRadius: 'var(--qv-radius-lg)',
+                    backgroundColor: 'color-mix(in srgb, var(--qv-color-accent) 14%, var(--qv-surface-card))',
+                    color: 'var(--qv-color-accent)',
+                    boxShadow: '0 0 12px color-mix(in srgb, var(--qv-color-accent) 25%, transparent)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Users size={19} />
+                </span>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Conductores Asignados
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginTop: '0.2rem' }}>
+                    <strong style={{ fontSize: '1.25rem', color: 'var(--qv-text-primary)', fontWeight: 800 }}>
+                      {totalConductoresAsignados}
+                    </strong>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--qv-text-secondary)', fontWeight: 500 }}>
+                      en {totalRutasAsignadas} rutas
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Espacio de Trabajo: Catálogo de Períodos + Matriz Interactiva */}
+          <div className="qv-rotaciones-workspace">
+            {/* Panel Izquierdo: Catálogo y Filtros de Periodos */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <Card header="Catálogo de Períodos">
+                {data.loadingRotaciones ? (
+                  <Loader label="Cargando cronogramas..." />
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <Input
+                      label="Buscar por período"
+                      placeholder="Ej. 2026-08"
+                      value={filtrosRotaciones.periodo}
+                      onChange={(event) =>
+                        setFiltrosRotaciones((actual) => ({ ...actual, periodo: event.target.value }))
+                      }
+                    />
+                    <Select
+                      label="Estado"
+                      options={[
+                        { label: 'Todos los estados', value: '' },
+                        { label: 'Borrador', value: 'borrador' },
+                        { label: 'Publicada', value: 'publicada' },
+                      ]}
+                      value={filtrosRotaciones.estado}
+                      onChange={(event) =>
+                        setFiltrosRotaciones((actual) => ({
+                          ...actual,
+                          estado: event.target.value as EstadoRotacion | '',
+                        }))
+                      }
+                    />
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <Button size="sm" onClick={aplicarFiltrosRotaciones}>
+                        Aplicar filtros
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={limpiarFiltrosRotaciones}>
+                        Limpiar filtros
+                      </Button>
+                    </div>
+
+                    <div style={{ margin: '0.5rem 0 0.25rem', fontSize: '0.72rem', fontWeight: 700, color: 'var(--qv-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Cronogramas ({rotacionesFiltradas.length})
+                    </div>
+
+                    {rotacionesFiltradas.length === 0 ? (
+                      <span style={{ fontSize: '0.8125rem', color: 'var(--qv-text-muted)' }}>
+                        {data.rotaciones.length === 0
+                          ? 'Sin rotaciones todavía.'
+                          : 'No hay rotaciones que coincidan con los filtros aplicados.'}
+                      </span>
                     ) : (
-                      <div
-                        style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.25rem',
-                          marginTop: '0.25rem',
-                        }}
-                      >
-                        {rutas.map((r) => (
-                          <Checkbox
-                            key={r.id}
-                            label={`${r.linea.codigo} — ${r.sentido}`}
-                            checked={rutasSeleccionadas.includes(r.id)}
-                            onChange={() => toggleRuta(r.id)}
-                          />
-                        ))}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '24rem', overflowY: 'auto' }}>
+                        {rotacionesFiltradas.map((r) => {
+                          const activa = r.id === data.rotacionActual?.id;
+                          return (
+                            <button
+                              key={r.id}
+                              type="button"
+                              onClick={() => data.setRotacionActual(r)}
+                              className={`qv-rotacion-catalog-card${activa ? ' qv-rotacion-catalog-card--active' : ''}`}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <strong style={{ color: 'var(--qv-text-primary)', fontSize: '0.875rem' }}>
+                                  {r.periodo}
+                                </strong>
+                                <StatusBadge
+                                  status={r.estado === 'publicada' ? 'active' : 'pending'}
+                                  label={r.estado}
+                                />
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--qv-text-secondary)' }}>
+                                <span>{r.asignaciones.length} asignaciones</span>
+                                <span>{new Set(r.asignaciones.map((a) => a.vehiculoId)).size} unidades</span>
+                              </div>
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
-                  </div>
-                  <Button
-                    onClick={generarRotacion}
-                    disabled={
-                      generando ||
-                      !periodo ||
-                      !fechaInicio ||
-                      !fechaFin ||
-                      rangoFechasInvalido ||
-                      rutasSeleccionadas.length === 0 ||
-                      horariosSeleccionados.length === 0
-                    }
-                  >
-                    {generando ? 'Generando...' : 'Generar borrador'}
-                  </Button>
-                </div>
-              )}
-            </Card>
 
-            <Card header="Rotaciones">
-              {loadingRotaciones ? (
-                <Loader label="Cargando..." />
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  <Input
-                    label="Buscar por período"
-                    placeholder="Ej. 2026-08"
-                    value={filtrosRotaciones.periodo}
-                    onChange={(event) =>
-                      setFiltrosRotaciones((actual) => ({ ...actual, periodo: event.target.value }))
-                    }
-                  />
-                  <Select
-                    label="Estado"
-                    options={[
-                      { label: 'Todos', value: '' },
-                      { label: 'Borrador', value: 'borrador' },
-                      { label: 'Publicada', value: 'publicada' },
-                    ]}
-                    value={filtrosRotaciones.estado}
-                    onChange={(event) =>
-                      setFiltrosRotaciones((actual) => ({
-                        ...actual,
-                        estado: event.target.value as EstadoRotacion | '',
-                      }))
-                    }
-                  />
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <Button size="sm" onClick={aplicarFiltrosRotaciones}>
-                      Aplicar filtros
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={limpiarFiltrosRotaciones}>
-                      Limpiar filtros
-                    </Button>
+                    <div style={{ borderTop: '1px solid var(--qv-border-glass)', paddingTop: '0.75rem', marginTop: '0.25rem' }}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        style={{ width: '100%', justifyContent: 'center' }}
+                        onClick={() => setModalGenerador(true)}
+                      >
+                        <Sparkles size={14} style={{ marginRight: '6px' }} />
+                        + Generar nuevo período
+                      </Button>
+                    </div>
                   </div>
-                  {rotacionesFiltradas.length === 0 ? (
-                    <span>
-                      {rotaciones.length === 0
-                        ? 'Sin rotaciones todavía.'
-                        : 'No hay rotaciones que coincidan con los filtros aplicados.'}
-                    </span>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      {rotacionesFiltradas.map((r) => (
-                        <button
-                          key={r.id}
-                          onClick={() => setRotacionActual(r)}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            textAlign: 'left',
-                            padding: '0.5rem',
-                            borderRadius: '0.5rem',
-                            border: 'none',
-                            cursor: 'pointer',
-                            background:
-                              r.id === rotacionActual?.id
-                                ? 'var(--qv-color-primary)'
-                                : 'transparent',
-                            color: r.id === rotacionActual?.id ? '#fff' : 'inherit',
-                          }}
+                )}
+              </Card>
+            </div>
+
+            {/* Panel Derecho: Matriz Visual de Asignaciones */}
+            <Card
+              header={data.rotacionActual ? `Rotación ${data.rotacionActual.periodo}` : 'Rotación'}
+              footer={
+                data.rotacionActual ? (
+                  <div style={{ display: 'flex', gap: '0.625rem', justifyContent: 'flex-end', flexWrap: 'wrap', width: '100%' }}>
+                    {data.rotacionActual.estado === 'borrador' && (
+                      <>
+                        <Button size="sm" variant="ghost" onClick={() => setModalNuevaAsignacion(true)}>
+                          <Plus size={14} style={{ marginRight: '4px' }} />
+                          + Agregar asignación
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="accent"
+                          onClick={() => setConfirmacion('publicar')}
+                          disabled={data.procesando}
                         >
-                          <span>{r.periodo}</span>
-                          <StatusBadge
-                            status={r.estado === 'publicada' ? 'active' : 'pending'}
-                            label={r.estado}
-                          />
-                        </button>
-                      ))}
+                          Publicar
+                        </Button>
+                      </>
+                    )}
+                    {data.rotacionActual.estado === 'publicada' && (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => setConfirmacion('anular')}
+                        disabled={data.procesando}
+                      >
+                        Anular
+                      </Button>
+                    )}
+                  </div>
+                ) : undefined
+              }
+            >
+              {!data.rotacionActual ? (
+                <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--qv-text-muted)' }}>
+                  <Calendar size={36} style={{ margin: '0 auto 0.75rem', opacity: 0.4 }} />
+                  <p style={{ fontSize: '0.9375rem' }}>Elegí una rotación de la lista o generá una nueva.</p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                      <StatusBadge
+                        status={data.rotacionActual.estado === 'publicada' ? 'active' : 'pending'}
+                        label={data.rotacionActual.estado}
+                      />
+                      <span style={{ fontSize: '0.8125rem', color: 'var(--qv-text-secondary)' }}>
+                        {data.rotacionActual.estado === 'borrador'
+                          ? 'Modo borrador — haz clic en cualquier celda para editar ruta o conductor.'
+                          : 'Publicada y activa — sincronizada con las apps móviles.'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {filasGrilla.length === 0 ? (
+                    <div style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--qv-text-muted)' }}>
+                      <span>Esta rotación no tiene asignaciones.</span>
+                    </div>
+                  ) : (
+                    <div className="qv-rotacion-matrix-wrapper">
+                      <table className="qv-rotacion-matrix-table">
+                        <thead>
+                          <tr>
+                            <th className="qv-rotacion-matrix-th" style={{ textAlign: 'left', minWidth: '10.5rem', paddingLeft: '1rem' }}>
+                              Vehículo
+                            </th>
+                            {columnasGrilla.map((col) => {
+                              const ShiftIcon =
+                                col.horario === 'manana'
+                                  ? Sunrise
+                                  : col.horario === 'tarde'
+                                    ? Sun
+                                    : Moon;
+                              const iconColor =
+                                col.horario === 'manana'
+                                  ? '#f59e0b'
+                                  : col.horario === 'tarde'
+                                    ? '#f97316'
+                                    : '#818cf8';
+                              return (
+                                <th key={`${col.fecha}|${col.horario}`} className="qv-rotacion-matrix-th">
+                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                                    <span style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)', fontFamily: 'monospace' }}>
+                                      {col.fecha}
+                                    </span>
+                                    <span
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.35rem',
+                                        fontSize: '0.8125rem',
+                                        color: 'var(--qv-text-primary)',
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      <ShiftIcon size={14} style={{ color: iconColor }} />
+                                      <span>{etiquetaHorario(col.horario)}</span>
+                                    </span>
+                                  </div>
+                                </th>
+                              );
+                            })}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filasGrilla.map((vehiculoId) => {
+                            const vehiculo = vehiculoPorId.get(vehiculoId);
+                            return (
+                              <tr key={vehiculoId}>
+                                <td className="qv-rotacion-matrix-td" style={{ paddingLeft: '1rem' }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                                    {vehiculo ? (
+                                      <PlateBadge plate={vehiculo.placaNormalizada ?? vehiculo.placa} />
+                                    ) : (
+                                      <strong style={{ color: 'var(--qv-text-primary)' }}>{vehiculoId}</strong>
+                                    )}
+                                    {vehiculo?.numeroInterno && (
+                                      <small style={{ fontSize: '0.72rem', color: 'var(--qv-text-secondary)', fontWeight: 600 }}>
+                                        Int. {vehiculo.numeroInterno}
+                                      </small>
+                                    )}
+                                  </div>
+                                </td>
+                                {columnasGrilla.map((col) => {
+                                  const asignacion = celda(vehiculoId, col.fecha, col.horario);
+                                  const ruta = asignacion ? rutaPorId.get(asignacion.rutaId) : null;
+                                  const conductor = asignacion?.conductorId ? conductorPorId.get(asignacion.conductorId) : null;
+                                  const esBorrador = data.rotacionActual?.estado === 'borrador';
+
+                                  return (
+                                    <td key={`${col.fecha}|${col.horario}`} className="qv-rotacion-matrix-td">
+                                      {asignacion ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => esBorrador && setModalAsignacion({ asignacion })}
+                                          className={`qv-rotacion-slot-btn${!esBorrador ? ' qv-rotacion-slot-btn--readonly' : ''}`}
+                                          title={esBorrador ? 'Clic para editar asignación' : undefined}
+                                        >
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                            <span
+                                              style={{
+                                                width: '0.55rem',
+                                                height: '0.55rem',
+                                                borderRadius: '50%',
+                                                backgroundColor: ruta?.linea.color ?? 'var(--qv-color-primary)',
+                                                boxShadow: `0 0 6px ${ruta?.linea.color ?? 'var(--qv-color-primary)'}`,
+                                                flexShrink: 0,
+                                              }}
+                                            />
+                                            <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
+                                              {ruta?.linea.codigo ?? ''} · {capitalizar(ruta?.sentido ?? asignacion.rutaId)}
+                                            </strong>
+                                          </div>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem', color: conductor ? 'var(--qv-text-secondary)' : 'var(--qv-text-muted)' }}>
+                                            <User size={12} style={{ color: conductor ? 'var(--qv-color-primary)' : 'inherit' }} />
+                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                              {conductor ? conductor.nombre : 'Sin conductor'}
+                                            </span>
+                                          </div>
+                                        </button>
+                                      ) : (
+                                        <div style={{ textAlign: 'center', color: 'var(--qv-text-muted)', fontSize: '0.875rem' }}>
+                                          —
+                                        </div>
+                                      )}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
                   )}
                 </div>
               )}
             </Card>
           </div>
-
-          <Card
-            header={rotacionActual ? `Rotación ${rotacionActual.periodo}` : 'Rotación'}
-            footer={
-              rotacionActual ? (
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  {rotacionActual.estado === 'borrador' && (
-                    <>
-                      <Button size="sm" onClick={() => setModalNuevaAsignacion(true)}>
-                        + Agregar asignación
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="accent"
-                        onClick={() => setConfirmacion('publicar')}
-                      >
-                        Publicar
-                      </Button>
-                    </>
-                  )}
-                  {rotacionActual.estado === 'publicada' && (
-                    <Button size="sm" variant="danger" onClick={() => setConfirmacion('anular')}>
-                      Anular
-                    </Button>
-                  )}
-                </div>
-              ) : undefined
-            }
-          >
-            {!rotacionActual ? (
-              <span>Elegí una rotación de la lista o generá una nueva.</span>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <StatusBadge
-                  status={rotacionActual.estado === 'publicada' ? 'active' : 'pending'}
-                  label={rotacionActual.estado}
-                />
-                {filasGrilla.length === 0 ? (
-                  <span>Esta rotación no tiene asignaciones.</span>
-                ) : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-                      <thead>
-                        <tr>
-                          <th style={celdaEncabezado}>Vehículo</th>
-                          {columnasGrilla.map((col) => (
-                            <th key={`${col.fecha}|${col.horario}`} style={celdaEncabezado}>
-                              {col.fecha} · {etiquetaHorario(col.horario)}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filasGrilla.map((vehiculoId) => (
-                          <tr key={vehiculoId}>
-                            <td style={celdaCuerpo}>
-                              {vehiculoPorId.get(vehiculoId)?.placa ?? vehiculoId}
-                            </td>
-                            {columnasGrilla.map((col) => {
-                              const asignacion = celda(vehiculoId, col.fecha, col.horario);
-                              return (
-                                <td key={`${col.fecha}|${col.horario}`} style={celdaCuerpo}>
-                                  {asignacion ? (
-                                    <button
-                                      onClick={() =>
-                                        rotacionActual.estado === 'borrador' &&
-                                        setModalAsignacion({ asignacion })
-                                      }
-                                      style={{
-                                        border: 'none',
-                                        background: 'transparent',
-                                        cursor:
-                                          rotacionActual.estado === 'borrador'
-                                            ? 'pointer'
-                                            : 'default',
-                                        textAlign: 'left',
-                                        padding: 0,
-                                      }}
-                                    >
-                                      <div>
-                                        {rutaPorId.get(asignacion.rutaId)?.sentido ??
-                                          asignacion.rutaId}
-                                      </div>
-                                      <div style={{ fontSize: '0.8em', opacity: 0.7 }}>
-                                        {asignacion.conductorId
-                                          ? (conductorPorId.get(asignacion.conductorId)?.nombre ??
-                                            'Conductor')
-                                          : 'Sin conductor'}
-                                      </div>
-                                    </button>
-                                  ) : (
-                                    '—'
-                                  )}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
-          </Card>
-        </div>
+        </>
       )}
 
+      {/* Modal Guiado de Generación Asistida */}
+      <GenerarRotacionModal
+        open={modalGenerador}
+        onClose={() => setModalGenerador(false)}
+        rutas={data.rutas}
+        generando={data.generando}
+        onGenerar={handleEjecutarGeneracion}
+      />
+
+      {/* Dialogo de Confirmación para Publicar o Anular */}
       <ConfirmDialog
         open={confirmacion !== null}
         title={confirmacion === 'publicar' ? 'Publicar rotación' : 'Anular rotación'}
         message={
           confirmacion === 'publicar'
-            ? 'Una vez publicada, esta rotación queda disponible para la app móvil.'
-            : 'La rotación vuelve a borrador y deja de alimentar la app móvil hasta que se publique de nuevo.'
+            ? 'Una vez publicada, esta rotación queda activa y disponible inmediatamente en las aplicaciones móviles de los conductores.'
+            : 'La rotación volverá a estado de borrador y dejará de alimentar las aplicaciones móviles hasta que se publique nuevamente.'
         }
         variant={confirmacion === 'anular' ? 'danger' : 'primary'}
-        confirmLabel={procesando ? 'Procesando...' : 'Confirmar'}
+        confirmLabel={data.procesando ? 'Procesando...' : 'Confirmar'}
         onConfirm={confirmarPublicarOAnular}
         onCancel={() => setConfirmacion(null)}
       />
 
-      {rotacionActual && modalAsignacion && (
+      {/* Modales de Asignación Individual */}
+      {data.rotacionActual && modalAsignacion && (
         <AsignacionModal
           token={token}
-          rotacion={rotacionActual}
+          rotacion={data.rotacionActual}
           asignacion={modalAsignacion.asignacion}
-          rutas={rutas}
-          vehiculos={vehiculos}
-          conductores={conductores}
+          rutas={data.rutas}
+          vehiculos={data.vehiculos}
+          conductores={data.conductores}
           onClose={() => setModalAsignacion(null)}
           onGuardado={() => {
             setModalAsignacion(null);
-            void refrescarRotacion(rotacionActual.id);
+            void data.refrescarRotacion(data.rotacionActual!.id);
           }}
         />
       )}
 
-      {rotacionActual && modalNuevaAsignacion && (
+      {data.rotacionActual && modalNuevaAsignacion && (
         <NuevaAsignacionModal
           token={token}
-          rotacion={rotacionActual}
-          rutas={rutas}
-          vehiculos={vehiculos}
-          conductores={conductores}
+          rotacion={data.rotacionActual}
+          rutas={data.rutas}
+          vehiculos={data.vehiculos}
+          conductores={data.conductores}
           onClose={() => setModalNuevaAsignacion(false)}
           onGuardado={() => {
             setModalNuevaAsignacion(false);
-            void refrescarRotacion(rotacionActual.id);
+            void data.refrescarRotacion(data.rotacionActual!.id);
           }}
         />
       )}
     </div>
   );
-}
-
-function AsignacionModal(props: {
-  token: string | null;
-  rotacion: RotacionConAsignaciones;
-  asignacion: Asignacion;
-  rutas: RutaConLinea[];
-  vehiculos: Vehiculo[];
-  conductores: Conductor[];
-  onClose: () => void;
-  onGuardado: () => void;
-}) {
-  const { token, rotacion, asignacion, rutas, vehiculos, conductores, onClose, onGuardado } = props;
-  const [rutaId, setRutaId] = useState(asignacion.rutaId);
-  const [conductorId, setConductorId] = useState(asignacion.conductorId ?? '');
-  const [horario, setHorario] = useState<Turno>(asignacion.horario);
-  const [guardando, setGuardando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [confirmarQuitar, setConfirmarQuitar] = useState(false);
-
-  async function guardar() {
-    if (!token) return;
-    setGuardando(true);
-    setError(null);
-    try {
-      await rotacionesApi.actualizarAsignacion(token, rotacion.id, asignacion.id, {
-        rutaId,
-        conductorId: conductorId || null,
-        horario,
-      });
-      onGuardado();
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  async function quitar() {
-    if (!token) return;
-    setConfirmarQuitar(false);
-    setGuardando(true);
-    setError(null);
-    try {
-      await rotacionesApi.eliminarAsignacion(token, rotacion.id, asignacion.id);
-      onGuardado();
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  return (
-    <>
-      <Modal
-        open
-        title={`Editar asignación — ${vehiculos.find((v) => v.id === asignacion.vehiculoId)?.placa ?? ''}`}
-        onClose={onClose}
-        footer={
-          <div
-            style={{
-              display: 'flex',
-              gap: '0.5rem',
-              justifyContent: 'space-between',
-              width: '100%',
-            }}
-          >
-            <Button variant="danger" onClick={() => setConfirmarQuitar(true)} disabled={guardando}>
-              Quitar
-            </Button>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <Button variant="ghost" onClick={onClose} disabled={guardando}>
-                Cancelar
-              </Button>
-              <Button onClick={guardar} disabled={guardando}>
-                {guardando ? 'Guardando...' : 'Guardar'}
-              </Button>
-            </div>
-          </div>
-        }
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {error && (
-            <Alert variant="danger" title="No se pudo guardar">
-              {error}
-            </Alert>
-          )}
-          <Select
-            label="Ruta"
-            options={rutas.map((r) => ({ label: `${r.linea.codigo} — ${r.sentido}`, value: r.id }))}
-            value={rutaId}
-            onChange={(e) => setRutaId(e.target.value)}
-          />
-          <Select
-            label="Conductor"
-            options={[
-              { label: 'Sin conductor', value: '' },
-              ...conductores.map((c) => ({ label: c.nombre, value: c.id })),
-            ]}
-            value={conductorId}
-            onChange={(e) => setConductorId(e.target.value)}
-          />
-          <Select
-            label="Horario"
-            options={HORARIOS}
-            value={horario}
-            onChange={(e) => setHorario(e.target.value as Turno)}
-          />
-        </div>
-      </Modal>
-
-      <ConfirmDialog
-        open={confirmarQuitar}
-        title="Quitar asignación"
-        message="Esta asignación se elimina de la rotación. Esta acción no se puede deshacer."
-        variant="danger"
-        confirmLabel={guardando ? 'Quitando...' : 'Quitar'}
-        onConfirm={quitar}
-        onCancel={() => setConfirmarQuitar(false)}
-      />
-    </>
-  );
-}
-
-function NuevaAsignacionModal(props: {
-  token: string | null;
-  rotacion: RotacionConAsignaciones;
-  rutas: RutaConLinea[];
-  vehiculos: Vehiculo[];
-  conductores: Conductor[];
-  onClose: () => void;
-  onGuardado: () => void;
-}) {
-  const { token, rotacion, rutas, vehiculos, conductores, onClose, onGuardado } = props;
-  const [vehiculoId, setVehiculoId] = useState(vehiculos[0]?.id ?? '');
-  const [rutaId, setRutaId] = useState(rutas[0]?.id ?? '');
-  const [conductorId, setConductorId] = useState('');
-  const [fecha, setFecha] = useState('');
-  const [horario, setHorario] = useState<Turno>('manana');
-  const [orden, setOrden] = useState('1');
-  const [guardando, setGuardando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function guardar() {
-    if (!token || !vehiculoId || !rutaId || !fecha) return;
-    setGuardando(true);
-    setError(null);
-    try {
-      await rotacionesApi.crearAsignacion(token, rotacion.id, {
-        vehiculoId,
-        rutaId,
-        conductorId: conductorId || undefined,
-        fecha: new Date(fecha),
-        horario,
-        orden: Number(orden),
-      });
-      onGuardado();
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  return (
-    <Modal
-      open
-      title="Agregar asignación"
-      onClose={onClose}
-      footer={
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <Button variant="ghost" onClick={onClose} disabled={guardando}>
-            Cancelar
-          </Button>
-          <Button onClick={guardar} disabled={guardando || !vehiculoId || !rutaId || !fecha}>
-            {guardando ? 'Guardando...' : 'Guardar'}
-          </Button>
-        </div>
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {error && (
-          <Alert variant="danger" title="No se pudo guardar">
-            {error}
-          </Alert>
-        )}
-        <Select
-          label="Vehículo"
-          options={vehiculos.map((v) => ({ label: v.placa, value: v.id }))}
-          value={vehiculoId}
-          onChange={(e) => setVehiculoId(e.target.value)}
-        />
-        <Select
-          label="Ruta"
-          options={rutas.map((r) => ({ label: `${r.linea.codigo} — ${r.sentido}`, value: r.id }))}
-          value={rutaId}
-          onChange={(e) => setRutaId(e.target.value)}
-        />
-        <Select
-          label="Conductor"
-          options={[
-            { label: 'Sin conductor', value: '' },
-            ...conductores.map((c) => ({ label: c.nombre, value: c.id })),
-          ]}
-          value={conductorId}
-          onChange={(e) => setConductorId(e.target.value)}
-        />
-        <DatePicker label="Fecha" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-        <Select
-          label="Horario"
-          options={HORARIOS}
-          value={horario}
-          onChange={(e) => setHorario(e.target.value as Turno)}
-        />
-        <Input
-          label="Orden"
-          type="number"
-          value={orden}
-          onChange={(e) => setOrden(e.target.value)}
-        />
-      </div>
-    </Modal>
-  );
-}
-
-const celdaEncabezado: CSSProperties = {
-  textAlign: 'left',
-  padding: '0.5rem',
-  borderBottom: '2px solid var(--qv-color-border, #ddd)',
-  whiteSpace: 'nowrap',
-};
-
-const celdaCuerpo: CSSProperties = {
-  padding: '0.5rem',
-  borderBottom: '1px solid var(--qv-color-border, #eee)',
-  whiteSpace: 'nowrap',
-};
-
-function etiquetaHorario(horario: Turno): string {
-  return HORARIOS.find((h) => h.value === horario)?.label ?? horario;
-}
-
-/** Rango inclusivo día a día — el doc técnico no especifica el formato de selección de
- * fechas para generar una rotación, así que "desde/hasta" con todos los días intermedios
- * es una asunción razonable de este equipo. */
-function rangoDeFechas(desde: string, hasta: string): Date[] {
-  const fechas: Date[] = [];
-  const cursor = new Date(`${desde}T00:00:00Z`);
-  const fin = new Date(`${hasta}T00:00:00Z`);
-  while (cursor.getTime() <= fin.getTime()) {
-    fechas.push(new Date(cursor));
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return fechas;
-}
-
-function mensajeError(err: unknown): string {
-  if (err instanceof ApiError) return err.message;
-  return err instanceof Error ? err.message : 'Error inesperado';
 }

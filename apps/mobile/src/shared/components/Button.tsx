@@ -40,6 +40,7 @@ export interface ButtonProps {
   rightIcon?: ReactNode;
   accessibilityHint?: string;
   style?: ViewStyle | ViewStyle[];
+  textStyle?: TextStyle | TextStyle[];
 }
 
 export function Button({
@@ -57,6 +58,7 @@ export function Button({
   rightIcon,
   accessibilityHint,
   style,
+  textStyle,
 }: ButtonProps) {
   const bloqueado = disabled || loading;
 
@@ -102,6 +104,7 @@ export function Button({
                 (styles[`label_size_${size}` as keyof typeof styles] as TextStyle) || styles.label_size_md,
                 (styles[`label_variant_${variant}` as keyof typeof styles] as TextStyle) ||
                   styles.label_variant_primary,
+                textStyle,
               ]}
             >
               {children}

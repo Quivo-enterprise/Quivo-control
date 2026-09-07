@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { BlurView } from 'expo-blur';
 import * as Sentry from '@sentry/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
 import { Svg, Circle, Line } from 'react-native-svg';
-import { haversineMetros, type ContextoOperativoMovil, type PaqueteDia } from '@quivo/shared';
+import {
+  haversineMetros,
+  resolverMarcaLinea,
+  type ContextoOperativoMovil,
+  type LineaBrand,
+  type PaqueteDia,
+} from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
 import { Button } from '../../shared/components/Button';
 import { Input } from '../../shared/components/Input';
@@ -39,7 +46,9 @@ interface OperationScreenProps {
   onLogout: () => Promise<void>;
 }
 
-export function OperationScreen(props: OperationScreenProps & NativeStackScreenProps<OperationStackParamList, 'Map'>) {
+export function OperationScreen(
+  props: OperationScreenProps & NativeStackScreenProps<OperationStackParamList, 'Map'>,
+) {
   useKeepAwake();
   const { gps, paqueteDia } = useGpsContext();
   const { pendientes, errorSync, isOffline, isSyncing } = useSyncStatus(
@@ -47,6 +56,10 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
     props.contexto.sesionId,
   );
   const { settings } = useOperacionSettings();
+  const lineaBrand = useMemo(
+    () => resolverMarcaLinea(props.contexto.linea),
+    [props.contexto.linea],
+  );
   const puntosControl = useMemo(
     () => paqueteDia.paquete?.puntosControl ?? [],
     [paqueteDia.paquete],
@@ -107,14 +120,22 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
   // dibuja el mapa mientras esta petición está en curso o si falla (offline / OSRM caído).
   // Throttleada por distancia/tiempo para no golpear el backend en cada lectura de GPS.
   const [rutaCalculada, setRutaCalculada] = useState<[number, number][] | null>(null);
-  const ultimoFetchRuta = useRef<{ ts: number; lat: number; lng: number; destino: [number, number] } | null>(
-    null,
-  );
-  const destinoRuteo = proximoPuntoControl?.coord.coordinates ??
+  const ultimoFetchRuta = useRef<{
+    ts: number;
+    lat: number;
+    lng: number;
+    destino: [number, number];
+  } | null>(null);
+  const trackingAnterior = useRef(gps.tracking);
+  const destinoRuteo =
+    proximoPuntoControl?.coord.coordinates ??
     paqueteDia.paquete?.ruta.geometria.coordinates.at(-1) ??
     null;
   useEffect(() => {
-    if (!gps.tracking || !gps.posicionActual || !destinoRuteo) {
+    const acabaDeIniciar = gps.tracking && !trackingAnterior.current;
+    trackingAnterior.current = gps.tracking;
+
+    if (!gps.posicionActual || !destinoRuteo) {
       setRutaCalculada(null);
       return;
     }
@@ -129,9 +150,22 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
     const distanciaDesdeUltimoFetch = anterior
       ? haversineMetros([posicion.lng, posicion.lat], [anterior.lng, anterior.lat])
       : Infinity;
-    if (mismoDestino && anterior && distanciaDesdeUltimoFetch < 50 && ahora - anterior.ts < 15_000) return;
+    if (
+      !acabaDeIniciar &&
+      mismoDestino &&
+      anterior &&
+      distanciaDesdeUltimoFetch < 50 &&
+      ahora - anterior.ts < 15_000
+    ) {
+      return;
+    }
 
-    ultimoFetchRuta.current = { ts: ahora, lat: posicion.lat, lng: posicion.lng, destino: destinoRuteo };
+    ultimoFetchRuta.current = {
+      ts: ahora,
+      lat: posicion.lat,
+      lng: posicion.lng,
+      destino: destinoRuteo,
+    };
     let cancelado = false;
     void (async () => {
       const token = await props.obtenerAccessToken();
@@ -219,6 +253,7 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
       <MapLayer
         loading={paqueteDia.cargando}
         paquete={paqueteDia.paquete}
+        vehiculo={props.contexto.vehiculo}
         nextPointId={proximoPuntoControl?.id ?? null}
         position={gps.posicionActual}
         tracking={gps.tracking}
@@ -235,14 +270,23 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
               accessibilityLabel="Perfil y configuración"
               onPress={() => props.navigation.navigate('Perfil')}
             >
-              <DriverRouteCard contexto={props.contexto} tracking={gps.tracking} isOffline={isOffline} />
+              <DriverRouteCard
+                contexto={props.contexto}
+                brand={lineaBrand}
+                tracking={gps.tracking}
+                isOffline={isOffline}
+              />
             </Pressable>
           </View>
           <OfflineBanner isOffline={isOffline} />
         </View>
-        
+
         {gps.tracking && proximoPuntoControl && (
-          <NavigationInstructionCard distanciaMetros={distanciaProximoPunto} />
+          <NavigationInstructionCard
+            distanciaMetros={distanciaProximoPunto}
+            velocidadKmh={gps.posicionActual?.speedKmh ?? null}
+            brand={lineaBrand}
+          />
         )}
 
         {props.aviso ? <Text style={styles.notice}>{props.aviso}</Text> : null}
@@ -313,7 +357,7 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
             {paqueteDia.error}
           </Text>
         ) : null}
-        {(!settings.trabajarOffline && isOffline) ? (
+        {!settings.trabajarOffline && isOffline ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             Modo offline desactivado en tus Ajustes. Conéctate a internet para iniciar.
           </Text>
@@ -321,49 +365,46 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
       </View>
 
       <Animated.View style={[styles.fabsContainer, { transform: [{ translateY: sheetPanY }] }]}>
-        {gps.tracking && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Información de registro"
-            style={styles.recenterButton}
-            onPress={() => setShowInfo(true)}
-          >
-            <Ionicons name="information" size={24} color={quivoColors.primary} />
-          </Pressable>
-        )}
-        {gps.tracking && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Registrar observación"
-            style={styles.recenterButton}
-            onPress={() => setObservacionModalVisible(true)}
-          >
-            <Ionicons name="chatbubble-ellipses" size={24} color={quivoColors.primary} />
-          </Pressable>
-        )}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Registrar observación"
+          style={styles.recenterButton}
+          onPress={() => setObservacionModalVisible(true)}
+        >
+          <Ionicons name="alert-circle-outline" size={24} color="#3127B1" />
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Información de registro"
+          style={styles.recenterButton}
+          onPress={() => setShowInfo(true)}
+        >
+          <Ionicons
+            name="checkmark-circle-outline"
+            size={24}
+            color={gps.tracking ? '#FD9E15' : '#3127B1'}
+          />
+        </Pressable>
+
         {__DEV__ && gps.tracking && proximoPuntoControl && (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Simular detección (Debug)"
             style={[styles.recenterButton, { backgroundColor: quivoColors.accentSoft }]}
-            onPress={() => gps.simularDeteccion(proximoPuntoControl.id)}
+            onPress={() => gps.simularDeteccion(proximoPuntoControl.id, distanciaProximoPunto)}
           >
-            <Ionicons name="bug" size={24} color={quivoColors.accentStrong} />
+            <Ionicons name="bug" size={22} color={quivoColors.accentStrong} />
           </Pressable>
         )}
+
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Centrar en mi ubicación"
           style={styles.recenterButton}
-          onPress={() => setRecenterTick(t => t + 1)}
+          onPress={() => setRecenterTick((t) => t + 1)}
         >
-          <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={quivoColors.primary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <Circle cx="12" cy="12" r="7" />
-            <Line x1="12" y1="1" x2="12" y2="5" />
-            <Line x1="12" y1="19" x2="12" y2="23" />
-            <Line x1="1" y1="12" x2="5" y2="12" />
-            <Line x1="19" y1="12" x2="23" y2="12" />
-          </Svg>
+          <Ionicons name="locate" size={24} color="#3127B1" />
         </Pressable>
       </Animated.View>
 
@@ -374,6 +415,7 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         distanciaMetros={distanciaProximoPunto}
         tracking={gps.tracking}
         canStart={
+          Boolean(paqueteDia.paquete) &&
           !paqueteDia.vencido &&
           !paqueteDia.cargando &&
           !paqueteDia.error &&
@@ -393,31 +435,34 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         gpsError={gps.errorGps}
       />
 
-      <Modal visible={showInfo} transparent={true} animationType="fade" onRequestClose={() => setShowInfo(false)}>
+      <Modal
+        visible={showInfo}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowInfo(false)}
+      >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <BlurView intensity={85} tint="light" style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Ionicons name="information-circle" size={32} color={quivoColors.primary} />
-              <Text style={styles.modalTitle}>Registro Automático</Text>
+              <Ionicons name="checkmark-circle-outline" size={20} color="#3127B1" />
+              <Text style={styles.modalTitle}>Registro automatico</Text>
             </View>
             <Text style={styles.modalText}>
-              Al entrar al radio del punto de control, se registrará automáticamente en el sistema sin necesidad de intervención manual.
+              Al entrar al radio del punto de control, este se registra automáticamente en el sistema
             </Text>
-            <Button variant="primary" onPress={() => setShowInfo(false)} style={{ marginTop: quivoSpacing.xl }}>
-              Entendido
-            </Button>
-          </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Entendido"
+              onPress={() => setShowInfo(false)}
+              style={({ pressed }) => [styles.modalPillButton, pressed && styles.pressedButton]}
+            >
+              <Text style={styles.modalPillButtonText}>ENTENDIDO</Text>
+            </Pressable>
+          </BlurView>
         </View>
       </Modal>
 
-      {/* Hallazgo 3 (MEDIO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): el botón de
-          "Registrar observación" era un no-op — `enviarObservacion` y su estado ya estaban
-          completos (encolan un evento `observacion` al outbox) pero nada los disparaba.
-          Reusa el mismo patrón de modal que "Registro Automático" arriba (mismos estilos
-          `modalOverlay`/`modalContent`/`modalHeader`/`modalTitle`) y los componentes del
-          design system (`Input`, `Button`, mismo que el resto de la app) — pocos toques,
-          texto grande, y un botón de cancelar siempre disponible para manejar mientras se
-          usa. */}
+      {/* Observación modal */}
       <Modal
         visible={observacionModalVisible}
         transparent
@@ -427,9 +472,9 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         }}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <BlurView intensity={85} tint="light" style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Ionicons name="chatbubble-ellipses" size={32} color={quivoColors.primary} />
+              <Ionicons name="alert-circle-outline" size={20} color="#3127B1" />
               <Text style={styles.modalTitle}>Registrar observación</Text>
             </View>
             {observacionEnviada ? (
@@ -437,9 +482,14 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
                 <Text style={styles.modalText}>
                   Observación enviada. Se sincroniza junto con tu recorrido.
                 </Text>
-                <Button variant="primary" onPress={cerrarModalObservacion} style={{ marginTop: quivoSpacing.xl }}>
-                  Listo
-                </Button>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Listo"
+                  onPress={cerrarModalObservacion}
+                  style={({ pressed }) => [styles.modalPillButton, pressed && styles.pressedButton]}
+                >
+                  <Text style={styles.modalPillButtonText}>LISTO</Text>
+                </Pressable>
               </>
             ) : (
               <>
@@ -451,36 +501,45 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
                 <Input
                   controlSize="lg"
                   multiline
-                  numberOfLines={4}
+                  numberOfLines={3}
                   value={observacion}
                   onChangeText={setObservacion}
                   placeholder="Describe lo que pasó…"
                   editable={!enviandoObservacion}
-                  style={styles.observacionInput}
+                  inputShellStyle={styles.observacionShell}
                   accessibilityLabel="Texto de la observación"
                 />
                 <View style={styles.observacionActions}>
-                  <Button
-                    variant="outline"
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancelar"
                     onPress={cerrarModalObservacion}
                     disabled={enviandoObservacion}
-                    style={styles.actionButton}
+                    style={({ pressed }) => [styles.modalCancelButton, pressed && styles.pressedButton]}
                   >
-                    Cancelar
-                  </Button>
-                  <Button
-                    variant="primary"
+                    <Text style={styles.modalCancelButtonText}>CANCELAR</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Enviar"
                     onPress={() => void enviarObservacion()}
-                    loading={enviandoObservacion}
                     disabled={!observacion.trim() || enviandoObservacion}
-                    style={styles.actionButton}
+                    style={({ pressed }) => [
+                      styles.modalConfirmButton,
+                      (!observacion.trim() || enviandoObservacion) && styles.disabledButton,
+                      pressed && styles.pressedButton,
+                    ]}
                   >
-                    Enviar
-                  </Button>
+                    {enviandoObservacion ? (
+                      <ActivityIndicator color={quivoColors.white} size="small" />
+                    ) : (
+                      <Text style={styles.modalConfirmButtonText}>ENVIAR</Text>
+                    )}
+                  </Pressable>
                 </View>
               </>
             )}
-          </View>
+          </BlurView>
         </View>
       </Modal>
 
@@ -500,17 +559,6 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
         }}
       />
 
-      {/* Hallazgo ALTO (piloto día 1, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): antes,
-          el botón de "Vuelve a iniciar sesión" del banner de arriba llamaba a
-          `props.onLogout()` de un solo toque. `logout()` corre `borrarSesionMovil()`, y el
-          siguiente tick headless entra por `obtenerContextoUbicacionPersistido()` → `!sesion`
-          → `detenerTrackingNativo()`: un `stop()` nativo IRREVERSIBLE (apaga `startOnBoot`,
-          nunca encola `fin_recorrido`) justo cuando el banner de arriba promete "El recorrido
-          se sigue grabando". Mismo patrón que `confirmarFinVisible`/`onFinish` arriba: exige
-          confirmación explícita antes de cortar la captura GPS de un conductor a mitad de
-          turno. El mensaje del diálogo vive en `CerrarSesionDialog` (Hallazgo 2, ALTO): antes
-          este mensaje estaba duplicado acá y en `perfil-screen.tsx`, y solo este call site lo
-          tenía completo. */}
       <CerrarSesionDialog
         visible={confirmarLogoutVisible}
         onCancel={() => setConfirmarLogoutVisible(false)}
@@ -526,65 +574,84 @@ export function OperationScreen(props: OperationScreenProps & NativeStackScreenP
 function DriverRouteCard({
   contexto,
   tracking,
-  isOffline,
+  brand,
 }: {
   contexto: ContextoOperativoMovil;
+  brand: LineaBrand;
   tracking: boolean;
   isOffline: boolean;
 }) {
+  const modeloVehiculo = `${contexto.vehiculo.placa} ${contexto.vehiculo.modelo || 'Toyota Hiace'}`.trim();
+  const statusLabel = tracking ? 'EN LINEA' : 'EN ESPERA';
+
   return (
-    <View style={styles.identityCard}>
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>{initials(contexto.conductor.nombre)}</Text>
-      </View>
+    // Más blur (pedido explícito) — 80 -> 100, el máximo que acepta expo-blur.
+    <BlurView intensity={100} tint="light" style={styles.identityCard}>
+      <View style={styles.avatar} />
       <View style={styles.identityText}>
         <Text numberOfLines={1} style={styles.driverName}>
           {contexto.conductor.nombre}
         </Text>
         <Text numberOfLines={1} style={styles.sindicatoText}>
-          ({contexto.sindicato.nombre})
+          {contexto.sindicato.nombre}
         </Text>
         <Text numberOfLines={1} style={styles.vehicleText}>
-          {contexto.vehiculo.placa} - {contexto.vehiculo.marca} {contexto.vehiculo.modelo}
+          {modeloVehiculo}
         </Text>
       </View>
-      <View style={styles.routeBadge}>
-        <Text style={styles.lineCode}>{contexto.linea.codigo}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-          {tracking && !isOffline && <Ionicons name="wifi" size={10} color={quivoColors.success} />}
-          {isOffline && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#FF9500' }} />}
-          <Text style={[
-            styles.gpsStatus, 
-            tracking && !isOffline ? styles.gpsStatusActive : null,
-            isOffline ? { color: '#FF9500' } : null
-          ]}>
-            {isOffline ? 'OFFLINE' : tracking ? 'EN LÍNEA' : 'EN ESPERA'}
+      <View style={styles.routeSummary}>
+        {/* Antes el "120" solo tomaba un color naranja/morado según tracking, sin relación con
+            la línea real — `resolverMarcaLinea` (@quivo/shared) ya trae hasta 3 colores de
+            marca por línea (primary/secondary/tertiary), la misma fuente que usa
+            `assignment-selection-screen.tsx`. Acá: fondo = primary, borde = tertiary, y una
+            franja inferior = secondary — así el badge sí identifica la línea, no el estado. */}
+        <View style={[styles.lineBadge, { backgroundColor: brand.primary, borderColor: brand.tertiary }]}>
+          <Text style={[styles.lineBadgeText, { color: brand.text }]}>{contexto.linea.codigo}</Text>
+          <View style={[styles.lineBadgeAccent, { backgroundColor: brand.secondary }]} />
+        </View>
+        {/* "EN LÍNEA"/"EN ESPERA" como badge con punto de estado (mismo lenguaje visual que los
+            badges de `perfil-screen.tsx`), en vez de solo texto de color — se distingue del
+            badge de línea de arriba, que ahora es sobre la marca, no sobre el estado. */}
+        <View style={[styles.statusPill, tracking ? styles.statusPillActive : styles.statusPillIdle]}>
+          <View style={[styles.statusDot, { backgroundColor: tracking ? '#22C55E' : '#94A3B8' }]} />
+          <Text style={[styles.statusPillText, tracking ? styles.statusPillTextActive : styles.statusPillTextIdle]}>
+            {statusLabel}
           </Text>
         </View>
       </View>
-    </View>
+    </BlurView>
   );
 }
 
-function NavigationInstructionCard({ distanciaMetros }: { distanciaMetros: number | null }) {
+function NavigationInstructionCard({
+  distanciaMetros,
+  velocidadKmh,
+}: {
+  distanciaMetros: number | null;
+  velocidadKmh: number | null;
+  brand: LineaBrand;
+}) {
+  const distanciaFormateada = distanciaMetros === null ? '120m' : formatearDistancia(distanciaMetros);
+  // Siempre visible mientras hay recorrido activo (antes se ocultaba del todo sin un fix de
+  // GPS con velocidad válida, así que en la práctica nunca se veía) — sin velocidad real
+  // todavía, se muestra "0 km/h" en vez de nada: el conductor espera ver el dato ahí, no que
+  // aparezca y desaparezca según la calidad del fix.
+  const velocidadRedondeada = velocidadKmh === null ? 0 : Math.round(velocidadKmh);
   return (
-    <View style={styles.navInstructionCard}>
-      <View style={styles.navIconContainer}>
-        <Ionicons name="arrow-up" size={36} color={quivoColors.white} />
-      </View>
-      <View style={styles.navInstructionText}>
-        <Text style={styles.navDistance}>
-          {distanciaMetros === null ? '—' : formatearDistancia(distanciaMetros)}
-        </Text>
-        <Text style={styles.navAction}>Dirígete al punto de control</Text>
-      </View>
-    </View>
+    <BlurView intensity={80} tint="light" style={styles.navInstructionCard}>
+      <Ionicons name="arrow-up" size={18} color="#3127B1" />
+      <Text style={styles.navDistance}>{distanciaFormateada}</Text>
+      <View style={styles.navDivider} />
+      <Ionicons name="speedometer-outline" size={16} color="#4B4B6B" />
+      <Text style={styles.navSpeed}>{velocidadRedondeada} km/h</Text>
+    </BlurView>
   );
 }
 
 function MapLayer({
   loading,
   paquete,
+  vehiculo,
   nextPointId,
   position,
   tracking,
@@ -593,6 +660,7 @@ function MapLayer({
 }: {
   loading: boolean;
   paquete: PaqueteDia | null;
+  vehiculo: ContextoOperativoMovil['vehiculo'];
   nextPointId: string | null;
   position: { lat: number; lng: number } | null;
   tracking: boolean;
@@ -612,6 +680,7 @@ function MapLayer({
     <MapErrorBoundary>
       <RouteMapView
         paquete={paquete}
+        vehiculo={vehiculo}
         proximoPuntoControlId={nextPointId}
         posicionActual={position}
         tracking={tracking}
@@ -649,94 +718,154 @@ const styles = StyleSheet.create({
   },
   topOverlay: {
     position: 'absolute',
-    top: quivoSpacing.lg,
-    left: quivoSpacing.lg,
-    right: quivoSpacing.lg,
-    gap: quivoSpacing.sm,
+    top: Platform.OS === 'ios' ? 12 : 16,
+    left: 16,
+    right: 16,
+    gap: 8,
   },
   identityCard: {
-    backgroundColor: quivoColors.white,
-    borderRadius: quivoRadius.xl,
+    backgroundColor: 'rgba(255, 255, 255, 0.88)',
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.8)',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: quivoSpacing.md,
-    padding: quivoSpacing.md,
-    shadowColor: quivoColors.text,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+    shadowColor: '#000000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 8,
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 6,
   },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: quivoRadius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: quivoColors.primary,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#3127B1',
   },
   avatarText: { color: quivoColors.white, fontFamily: quivoFonts.displayBold, fontSize: 16 },
   identityText: { flex: 1, minWidth: 0, justifyContent: 'center' },
-  driverName: { color: quivoColors.text, fontFamily: quivoFonts.bodySemiBold, fontSize: 13 },
+  driverName: {
+    color: '#3127B1',
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 15.5,
+  },
   sindicatoText: {
-    color: quivoColors.textSecondary,
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 11,
-    marginTop: 2,
+    color: '#334155',
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 10.5,
+    marginTop: 1,
   },
   vehicleText: {
-    color: quivoColors.textMuted,
+    color: '#475569',
     fontFamily: quivoFonts.bodyMedium,
-    fontSize: 10,
-    marginTop: 4,
+    fontSize: 9.5,
+    marginTop: 1,
   },
-  routeBadge: { alignItems: 'flex-end', justifyContent: 'center', paddingLeft: quivoSpacing.xs },
-  lineCode: { color: quivoColors.primary, fontFamily: quivoFonts.displayBold, fontSize: 24 },
-  gpsStatus: {
-    color: quivoColors.success,
+  routeSummary: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    minWidth: 54,
+  },
+  lineBadge: {
+    borderRadius: 10,
+    borderWidth: 1.5,
+    paddingHorizontal: 10,
+    paddingTop: 3,
+    paddingBottom: 5,
+    overflow: 'hidden',
+  },
+  lineBadgeText: {
     fontFamily: quivoFonts.displayBold,
-    fontSize: 9,
-    letterSpacing: 0.5,
-    marginTop: 2,
+    fontSize: 20,
+    lineHeight: 22,
+    textAlign: 'center',
   },
-  gpsStatusActive: {
-    color: quivoColors.success,
+  lineBadgeAccent: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 3,
   },
-  navInstructionCard: {
-    backgroundColor: 'rgba(50, 38, 180, 0.95)',
-    borderRadius: quivoRadius.xl,
+  statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: quivoSpacing.lg,
-    gap: quivoSpacing.md,
-    shadowColor: quivoColors.text,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 10,
+    gap: 4,
+    marginTop: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: quivoRadius.pill,
   },
-  navIconContainer: {
-    width: 44,
+  statusPillActive: { backgroundColor: 'rgba(34, 197, 94, 0.14)' },
+  statusPillIdle: { backgroundColor: 'rgba(49, 39, 177, 0.10)' },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusPillText: {
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 8.5,
+    letterSpacing: 0.5,
+  },
+  statusPillTextActive: { color: '#15803D' },
+  statusPillTextIdle: { color: '#3127B1' },
+  navInstructionCard: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.88)',
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.8)',
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  navInstructionText: {
-    flex: 1,
-    justifyContent: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    gap: 8,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
+    marginTop: 2,
   },
   navDistance: {
-    color: quivoColors.white,
+    color: '#3127B1',
     fontFamily: quivoFonts.displayBold,
-    fontSize: 28,
-  },
-  navAction: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.bodyMedium,
     fontSize: 16,
-    opacity: 0.9,
-    marginTop: -4,
   },
-
+  navDivider: {
+    width: 1,
+    height: 16,
+    backgroundColor: 'rgba(49, 39, 177, 0.18)',
+  },
+  navSpeed: {
+    color: '#4B4B6B',
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 13,
+  },
+  fabsContainer: {
+    position: 'absolute',
+    right: 16,
+    bottom: 180,
+    gap: 12,
+    alignItems: 'center',
+  },
+  recenterButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 5,
+  },
   notice: {
     color: quivoColors.accentStrong,
     backgroundColor: quivoColors.accentSoft,
@@ -775,76 +904,121 @@ const styles = StyleSheet.create({
     fontFamily: quivoFonts.bodySemiBold,
     fontSize: 11,
   },
-  fabsContainer: {
-    position: 'absolute',
-    right: quivoSpacing.md,
-    bottom: 280,
-    zIndex: 1000,
-    gap: quivoSpacing.md,
-  },
-  recenterButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: quivoColors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: quivoColors.text,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 6,
-  },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(25, 20, 60, 0.22)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: quivoSpacing.xl,
+    padding: quivoSpacing.lg,
   },
   modalContent: {
-    backgroundColor: quivoColors.white,
-    borderRadius: quivoRadius.xl,
-    padding: quivoSpacing.xl,
+    backgroundColor: 'rgba(236, 239, 244, 0.92)',
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.85)',
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 16,
     width: '100%',
-    maxWidth: 400,
-    shadowColor: quivoColors.text,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 20,
+    maxWidth: 290,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    elevation: 12,
   },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: quivoSpacing.sm,
-    marginBottom: quivoSpacing.md,
+    gap: 6,
+    marginBottom: 6,
   },
   modalTitle: {
     fontFamily: quivoFonts.displayBold,
-    fontSize: 20,
-    color: quivoColors.text,
+    fontSize: 16,
+    color: '#3127B1',
+    letterSpacing: 0.2,
     flex: 1,
   },
   modalText: {
     fontFamily: quivoFonts.bodyMedium,
-    fontSize: 15,
-    color: quivoColors.textSecondary,
-    lineHeight: 22,
+    fontSize: 12,
+    lineHeight: 16.5,
+    color: '#475569',
+    marginBottom: 16,
   },
-  observacionInput: {
-    minHeight: 96,
-    textAlignVertical: 'top',
+  modalPillButton: {
+    height: 38,
+    borderRadius: quivoRadius.pill,
+    backgroundColor: '#3127B1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#1A0E70',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  modalPillButtonText: {
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 13,
+    letterSpacing: 0.8,
+    color: quivoColors.white,
+  },
+  observacionShell: {
+    backgroundColor: '#DCE0E8',
+    borderRadius: 14,
+    borderWidth: 0,
   },
   observacionError: {
-    marginBottom: quivoSpacing.md,
+    marginBottom: 8,
   },
   observacionActions: {
     flexDirection: 'row',
-    gap: quivoSpacing.sm,
-    marginTop: quivoSpacing.xl,
+    gap: 10,
+    marginTop: 14,
   },
-  actionButton: {
+  modalCancelButton: {
     flex: 1,
+    height: 38,
+    borderRadius: quivoRadius.pill,
+    backgroundColor: '#DCE0E8',
+    borderWidth: 1.5,
+    borderColor: '#3127B1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCancelButtonText: {
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 12.5,
+    letterSpacing: 0.6,
+    color: '#3127B1',
+  },
+  modalConfirmButton: {
+    flex: 1,
+    height: 38,
+    borderRadius: quivoRadius.pill,
+    backgroundColor: '#3127B1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#1A0E70',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  modalConfirmButtonText: {
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 12.5,
+    letterSpacing: 0.6,
+    color: quivoColors.white,
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  pressedButton: {
+    opacity: 0.8,
+    transform: [{ scale: 0.98 }],
   },
 });

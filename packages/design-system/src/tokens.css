@@ -1,21 +1,28 @@
 /*
  * Tokens de @quivo/design-system.
  *
- * Paleta de marca (ver apps/web/public/brand/*.webp): índigo profundo + naranja como acento —
- * se respeta la identidad existente, no se inventa una nueva. El resto de la escala
- * (superficie, texto, espaciado, radios, sombras) es una decisión de este paquete al no
- * existir otra fuente — pensada para acompañar esos dos colores de marca sin competir con
- * ellos. Claro/oscuro vía `prefers-color-scheme`, la misma media query que ya usa
- * `BrandLogo` en `apps/web` para alternar variante de logo — quedan sincronizados.
+ * Paleta de marca: violeta profundo + naranja como acento, tomados directamente del logo
+ * (`apps/web/public/brand/logotipo-principal.webp`, muestreado en píxeles: `#2e21b3` /
+ * `#ff9900`) y alineados con los valores ya vigentes en `apps/mobile/src/shared/theme/
+ * quivo-theme.ts` (`quivoColors.primary`/`accent` y sus variantes `Soft`/`Subtle`) — antes
+ * este paquete tenía un índigo/naranja propio, más azulado y más rojizo que el logo real, sin
+ * ninguna otra fuente que lo respalde. Unificado para que ambos productos (panel admin y app
+ * del conductor) sigan la misma línea visual. El resto de la escala (superficie, texto,
+ * espaciado, radios, sombras) sigue siendo una decisión de este paquete al no existir otra
+ * fuente — pensada para acompañar esos dos colores de marca sin competir con ellos.
+ * Claro/oscuro vía `prefers-color-scheme`, la misma media query que ya usa `BrandLogo` en
+ * `apps/web` para alternar variante de logo — quedan sincronizados. `apps/mobile` no tiene modo
+ * oscuro, así que las variantes de abajo son una extensión de esta paleta, no una migración de
+ * un valor ya establecido ahí.
  */
 
 :root {
   /* Color de marca */
-  --qv-color-primary: #4338ca;
-  --qv-color-primary-soft: #a5b4fc;
-  --qv-color-primary-subtle: #eef2ff;
-  --qv-color-accent: #f97316;
-  --qv-color-accent-subtle: #ffedd5;
+  --qv-color-primary: #3226b4;
+  --qv-color-primary-soft: #dcd9fb;
+  --qv-color-primary-subtle: #efeefc;
+  --qv-color-accent: #fd9e15;
+  --qv-color-accent-subtle: #ffefd9;
 
   /* Color semántico */
   --qv-color-danger: #dc2626;
@@ -55,13 +62,20 @@
   --qv-radius-sm: 0.5rem;
   --qv-radius-md: 0.75rem;
   --qv-radius-lg: 1rem;
+  --qv-radius-xl: 1.25rem;
+  --qv-radius-2xl: 1.5rem;
   --qv-radius-full: 999px;
 
   /* Sombra */
   --qv-shadow-xs: 0 1px 2px rgb(15 23 42 / 6%);
   --qv-shadow-sm: 0 2px 8px rgb(15 23 42 / 8%);
   --qv-shadow-lg: 0 16px 40px rgb(15 23 42 / 14%);
+  --qv-shadow-floating: 0 20px 45px -12px rgb(15 23 42 / 12%), 0 1px 0 rgb(255 255 255 / 60%) inset;
   --qv-shadow-focus: 0 0 0 3px color-mix(in srgb, var(--qv-color-primary) 40%, transparent);
+
+  /* Superficies Glass */
+  --qv-surface-glass: rgba(255, 255, 255, 0.82);
+  --qv-border-glass: rgba(226, 232, 240, 0.8);
 
   /* Tipografía — sin @font-face propio: la app conecta estas variables a sus fuentes reales
      (Oxanium/Montserrat vía next/font/google). Fallback de sistema mientras tanto. */
@@ -71,15 +85,16 @@
 
   /* Movimiento */
   --qv-transition-fast: 150ms ease;
+  --qv-transition-smooth: 250ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --qv-color-primary: #818cf8;
-    --qv-color-primary-soft: #4338ca;
-    --qv-color-primary-subtle: #1e1b4b;
-    --qv-color-accent: #fb923c;
-    --qv-color-accent-subtle: #431407;
+    --qv-color-primary: #6672f5;
+    --qv-color-primary-soft: #3226b4;
+    --qv-color-primary-subtle: #191943;
+    --qv-color-accent: #feb83e;
+    --qv-color-accent-subtle: #412710;
 
     --qv-color-danger: #f87171;
     --qv-color-success: #4ade80;
@@ -99,8 +114,12 @@
     --qv-border-subtle: #1f2937;
     --qv-border-strong: #334155;
 
+    --qv-surface-glass: rgba(17, 24, 39, 0.82);
+    --qv-border-glass: rgba(255, 255, 255, 0.1);
+
     --qv-shadow-xs: 0 1px 2px rgb(0 0 0 / 30%);
     --qv-shadow-sm: 0 2px 10px rgb(0 0 0 / 34%);
     --qv-shadow-lg: 0 20px 48px rgb(0 0 0 / 44%);
+    --qv-shadow-floating: 0 24px 50px -12px rgb(0 0 0 / 60%), 0 1px 0 rgb(255 255 255 / 8%) inset;
   }
 }

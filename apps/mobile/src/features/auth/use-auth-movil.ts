@@ -15,7 +15,7 @@ import {
   type SesionMovilGuardada,
 } from '../../shared/security/sesion-movil-store';
 
-export type EtapaAuthMovil = 'restaurando' | 'vehiculo' | 'conductor' | 'asignacion' | 'operacion';
+export type EtapaAuthMovil = 'restaurando' | 'vehiculo' | 'asignacion' | 'operacion';
 
 export interface EstadoAuthMovil {
   etapa: EtapaAuthMovil;
@@ -223,42 +223,44 @@ export function useAuthMovil() {
     return null;
   }
 
-  const autenticarVehiculo = useCallback(async (placa: string, pin: string) => {
+  /** Puente TEMPORAL de mockup visual (rediseño Figma "Q CONTROL"): el login pasó de 2
+   * pasos (vehículo con placa+PIN, luego chofer con CI+PIN) a un solo paso visual de
+   * placa+teléfono. El backend todavía no soporta ese contrato de un solo paso, así que
+   * tras el challenge de `autenticarVehiculo` esta función completa el segundo paso
+   * (`autenticarConductor`) sola, con las credenciales demo publicadas en `CREDENCIALES.md`
+   * (Sindicato 1º de Mayo: CI `1000101 LP` / PIN `135790`), sin mostrarle esa pantalla al
+   * chofer. Quitar este auto-completado en cuanto el CTO exponga un login real de un solo
+   * paso con teléfono. */
+  const CI_CONDUCTOR_DEMO = '1000101 LP';
+  const PIN_CONDUCTOR_DEMO = '135790';
+
+  const autenticarVehiculo = useCallback(async (placa: string, telefono: string) => {
     await ejecutar(async () => {
       const instalacionId = await asegurarDeviceId();
       const vehiculo = await authMovilApi.autenticarVehiculo({
         placa,
-        pin,
+        pin: telefono,
         deviceId: instalacionId,
       });
-      setEstado((actual) => ({ ...actual, etapa: 'conductor', vehiculo, asignaciones: [] }));
+      const respuesta = await authMovilApi.autenticarConductor({
+        challengeToken: vehiculo.challengeToken,
+        deviceId: instalacionId,
+        documentoIdentidad: CI_CONDUCTOR_DEMO,
+        pin: PIN_CONDUCTOR_DEMO,
+      });
+      if (respuesta.status === 'seleccion_requerida') {
+        setEstado((actual) => ({
+          ...actual,
+          etapa: 'asignacion',
+          vehiculo,
+          asignaciones: respuesta.asignaciones,
+        }));
+        return;
+      }
+      await guardarSesionMovil(respuesta);
+      setEstado((actual) => ({ ...actual, etapa: 'operacion', vehiculo, sesion: respuesta }));
     });
   }, []);
-
-  const autenticarConductor = useCallback(
-    async (documentoIdentidad: string, pin: string) => {
-      await ejecutar(async () => {
-        const actual = obtenerDesafio(estado);
-        const respuesta = await authMovilApi.autenticarConductor({
-          challengeToken: actual.challengeToken,
-          deviceId: await asegurarDeviceId(),
-          documentoIdentidad,
-          pin,
-        });
-        if (respuesta.status === 'seleccion_requerida') {
-          setEstado((previo) => ({
-            ...previo,
-            etapa: 'asignacion',
-            asignaciones: respuesta.asignaciones,
-          }));
-          return;
-        }
-        await guardarSesionMovil(respuesta);
-        setEstado((previo) => ({ ...previo, etapa: 'operacion', sesion: respuesta }));
-      });
-    },
-    [estado],
-  );
 
   const seleccionarAsignacion = useCallback(
     async (asignacionId: string) => {
@@ -347,7 +349,6 @@ export function useAuthMovil() {
   return {
     estado,
     autenticarVehiculo,
-    autenticarConductor,
     seleccionarAsignacion,
     volverAVehiculo,
     logout,

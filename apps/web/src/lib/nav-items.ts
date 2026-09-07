@@ -9,69 +9,149 @@ export interface NavItem {
   label: string;
   href: string;
   roles: string[];
+  section?: string;
+  iconName?: string;
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { id: 'dashboard', label: 'Dashboard', href: '/', roles: ['admin_quivo', 'admin_sindicato'] },
-  // Segundo ítem a propósito: el mapa en vivo es la pantalla operativa del día a día
-  // (ENTREGA 3), así que va arriba de todo el CRUD de configuración.
-  { id: 'en-vivo', label: 'En vivo', href: '/en-vivo', roles: ['admin_quivo', 'admin_sindicato'] },
-  { id: 'sindicatos', label: 'Sindicatos', href: '/sindicatos', roles: ['admin_quivo'] },
-  { id: 'socios', label: 'Socios', href: '/socios', roles: ['admin_quivo', 'admin_sindicato'] },
+  {
+    id: 'dashboard',
+    label: 'Dashboard',
+    href: '/',
+    roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Operación',
+    iconName: 'LayoutDashboard',
+  },
+  {
+    id: 'en-vivo',
+    label: 'En vivo',
+    href: '/en-vivo',
+    roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Operación',
+    iconName: 'Radio',
+  },
+  {
+    id: 'sindicatos',
+    label: 'Sindicatos',
+    href: '/sindicatos',
+    roles: ['admin_quivo'],
+    section: 'Gestión',
+    iconName: 'Building2',
+  },
+  {
+    id: 'socios',
+    label: 'Socios',
+    href: '/socios',
+    roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Gestión',
+    iconName: 'Users',
+  },
   {
     id: 'vehiculos',
     label: 'Vehículos',
     href: '/vehiculos',
     roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Gestión',
+    iconName: 'Bus',
   },
   {
     id: 'conductores',
     label: 'Conductores',
     href: '/conductores',
     roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Gestión',
+    iconName: 'UserCheck',
   },
-  { id: 'lineas', label: 'Líneas', href: '/lineas', roles: ['admin_quivo', 'admin_sindicato'] },
-  { id: 'rutas', label: 'Rutas', href: '/rutas', roles: ['admin_quivo', 'admin_sindicato'] },
+  {
+    id: 'lineas',
+    label: 'Líneas',
+    href: '/lineas',
+    roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Planificación',
+    iconName: 'GitBranch',
+  },
+  {
+    id: 'rutas',
+    label: 'Rutas',
+    href: '/rutas',
+    roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Planificación',
+    iconName: 'MapPin',
+  },
   {
     id: 'rotaciones',
     label: 'Rotaciones',
     href: '/rotaciones',
     roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Planificación',
+    iconName: 'RotateCw',
   },
   {
     id: 'reglas',
     label: 'Reglas y sanciones',
     href: '/reglas',
     roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Control y Auditoría',
+    iconName: 'Scale',
   },
   {
     id: 'reportes',
     label: 'Reportes',
     href: '/reportes',
     roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Control y Auditoría',
+    iconName: 'FileBarChart',
   },
   {
     id: 'auditoria',
     label: 'Auditoría',
     href: '/auditoria',
     roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Control y Auditoría',
+    iconName: 'ShieldAlert',
   },
   {
     id: 'sync-errores',
     label: 'Errores de sync',
     href: '/sync-errores',
     roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Control y Auditoría',
+    iconName: 'AlertTriangle',
   },
   {
     id: 'usuarios',
     label: 'Usuarios',
     href: '/usuarios',
     roles: ['admin_quivo'],
+    section: 'Configuración',
+    iconName: 'UserCog',
   },
 ];
 
 export function filterNavItemsByRole(items: NavItem[], rol: string): NavItem[] {
   return items.filter((item) => item.roles.includes(rol));
+}
+
+export interface NavSection {
+  title?: string;
+  items: NavItem[];
+}
+
+export function groupNavItemsBySection(items: NavItem[]): NavSection[] {
+  const sectionsMap = new Map<string, NavItem[]>();
+
+  for (const item of items) {
+    const sec = item.section || '';
+    if (!sectionsMap.has(sec)) {
+      sectionsMap.set(sec, []);
+    }
+    sectionsMap.get(sec)!.push(item);
+  }
+
+  return Array.from(sectionsMap.entries()).map(([title, sectionItems]) => ({
+    title: title || undefined,
+    items: sectionItems,
+  }));
 }
 
 /**

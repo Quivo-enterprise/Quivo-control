@@ -20,6 +20,8 @@ export interface InputProps extends Omit<TextInputProps, 'size'> {
   leftSlot?: ReactNode;
   rightSlot?: ReactNode;
   containerStyle?: ViewStyle | ViewStyle[];
+  inputShellStyle?: ViewStyle | ViewStyle[];
+  labelStyle?: TextStyle | TextStyle[];
   mask?: Mask;
 }
 
@@ -33,6 +35,8 @@ export function Input({
   rightSlot,
   style,
   containerStyle,
+  inputShellStyle,
+  labelStyle,
   mask,
   ...props
 }: InputProps) {
@@ -40,13 +44,14 @@ export function Input({
   
   return (
     <View style={[styles.group, fullWidth && styles.fullWidth, containerStyle]}>
-      {label ? <Text style={styles.label}>{label}</Text> : null}
+      {label ? <Text style={[styles.label, labelStyle]}>{label}</Text> : null}
       
       <View
         style={[
           styles.inputShell,
           (styles[`shell_${controlSize}` as keyof typeof styles] as ViewStyle) || styles.shell_md,
           error ? styles.inputShellError : null,
+          inputShellStyle,
         ]}
       >
         {leftSlot ? <View style={styles.slot}>{leftSlot}</View> : null}

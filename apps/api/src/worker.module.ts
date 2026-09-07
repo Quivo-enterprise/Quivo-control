@@ -11,6 +11,10 @@ import { RetencionGpsModule } from './modules/retencion-gps/index.js';
  * comparte proceso con la API porque es liviano (un `UPDATE` cada 5 min).
  */
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), IngestaWorkerModule, RetencionGpsModule],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    IngestaWorkerModule,
+    RetencionGpsModule,
+  ],
 })
 export class WorkerModule {}

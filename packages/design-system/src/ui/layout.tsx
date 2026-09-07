@@ -11,7 +11,7 @@ import { Input } from './form.js';
 
 export interface AdminLayoutProps {
   sidebar: ReactNode;
-  header: ReactNode;
+  header?: ReactNode;
   children: ReactNode;
 }
 
@@ -20,7 +20,7 @@ export function AdminLayout({ sidebar, header, children }: AdminLayoutProps) {
     <div className="qv-admin-layout">
       <aside className="qv-admin-layout__sidebar">{sidebar}</aside>
       <div className="qv-admin-layout__main">
-        <div className="qv-admin-layout__header">{header}</div>
+        {header && <div className="qv-admin-layout__header">{header}</div>}
         <main className="qv-admin-layout__content">{children}</main>
       </div>
     </div>
@@ -45,36 +45,86 @@ export interface SidebarNavItem {
   label: string;
   href: string;
   active?: boolean;
+  icon?: ReactNode;
+  badge?: ReactNode;
+  target?: string;
+  rel?: string;
   onClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
+}
+
+export interface SidebarNavSection {
+  title?: string;
+  items: SidebarNavItem[];
 }
 
 export interface SidebarNavProps {
   brand: ReactNode;
   role?: string;
-  items: SidebarNavItem[];
+  items?: SidebarNavItem[];
+  sections?: SidebarNavSection[];
   footer?: ReactNode;
 }
 
-export function SidebarNav({ brand, role, items, footer }: SidebarNavProps) {
+export function SidebarNav({ brand, role, items, sections, footer }: SidebarNavProps) {
+  // Normalizar a lista de secciones para soportar tanto `items` como `sections`
+  const resolvedSections: SidebarNavSection[] = sections && sections.length > 0
+    ? sections
+    : items && items.length > 0
+      ? [{ items }]
+      : [];
+
   return (
     <nav className="qv-sidebar" aria-label="Navegación principal">
-      <div className="qv-sidebar__brand">{brand}</div>
-      {role && <span className="qv-sidebar__role">{ROLE_LABEL[role] ?? role}</span>}
-      <ul className="qv-sidebar__nav">
-        {items.map((item) => (
-          <li key={item.id}>
-            <a
-              href={item.href}
-              className={cx('qv-sidebar__link', item.active && 'qv-sidebar__link--active')}
-              aria-current={item.active ? 'page' : undefined}
-              onClick={item.onClick}
-            >
-              {item.label}
-            </a>
-          </li>
-        ))}
-      </ul>
-      {footer && <div className="qv-sidebar__footer">{footer}</div>}
+      <div className="qv-sidebar__capsule">
+        <div className="qv-sidebar__header">
+          <div className="qv-sidebar__brand">{brand}</div>
+          {role && (
+            <div className="qv-sidebar__role-pill">
+              <span className="qv-sidebar__role-dot" aria-hidden="true" />
+              <span className="qv-sidebar__role">{ROLE_LABEL[role] ?? role}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="qv-sidebar__scroll-area">
+          {resolvedSections.map((section, sIdx) => (
+            <div key={section.title || `section-${sIdx}`} className="qv-sidebar__section">
+              {section.title && (
+                <div className="qv-sidebar__section-title">{section.title}</div>
+              )}
+              <ul className="qv-sidebar__nav">
+                {section.items.map((item) => (
+                  <li key={item.id}>
+                    <a
+                      href={item.href}
+                      target={item.target}
+                      rel={item.rel}
+                      className={cx(
+                        'qv-sidebar__link',
+                        item.active && 'qv-sidebar__link--active',
+                      )}
+                      aria-current={item.active ? 'page' : undefined}
+                      onClick={item.onClick}
+                    >
+                      {item.icon && (
+                        <span className="qv-sidebar__link-icon" aria-hidden="true">
+                          {item.icon}
+                        </span>
+                      )}
+                      <span className="qv-sidebar__link-label">{item.label}</span>
+                      {item.badge && (
+                        <span className="qv-sidebar__link-badge">{item.badge}</span>
+                      )}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+
+        {footer && <div className="qv-sidebar__footer">{footer}</div>}
+      </div>
     </nav>
   );
 }
@@ -257,11 +307,12 @@ export interface TabsProps {
   items: TabItem[];
   value: string;
   onValueChange: (value: string) => void;
+  className?: string;
 }
 
-export function Tabs({ items, value, onValueChange }: TabsProps) {
+export function Tabs({ items, value, onValueChange, className }: TabsProps) {
   return (
-    <div className="qv-tabs" role="tablist">
+    <div className={cx('qv-tabs', className)} role="tablist">
       {items.map((item) => (
         <button
           key={item.value}

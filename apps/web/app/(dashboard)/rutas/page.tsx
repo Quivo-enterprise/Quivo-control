@@ -1,57 +1,53 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  Alert,
   Button,
   Card,
   Checkbox,
   ConfirmDialog,
   Input,
   Loader,
-  PageHeader,
   RouteMap,
   Select,
-  StatusBadge,
   Tag,
+  Tooltip,
   type MapPoint,
 } from '@quivo/design-system';
-import type { Linea, Parada, PuntoControl, Ruta, TipoParada, Variante } from '@quivo/shared';
-import { useAuth } from '../../../src/lib/auth/auth-context';
-import { lineasApi } from '../../../src/lib/api/lineas';
-import { rutasApi } from '../../../src/lib/api/rutas';
-import { paradasApi } from '../../../src/lib/api/paradas';
-import { puntosControlApi } from '../../../src/lib/api/puntos-control';
-import { variantesApi } from '../../../src/lib/api/variantes';
-import { ApiError } from '../../../src/lib/api/client';
+import type { Ruta, TipoParada } from '@quivo/shared';
 import {
-  calcularDistanciaRutaKm,
+  Check,
+  ChevronRight,
+  Compass,
+  Edit3,
+  Layers,
+  MapPin,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  Redo2,
+  RefreshCcw,
+  Repeat,
+  RotateCcw,
+  Route,
+  Trash2,
+  Undo2,
+  X,
+} from 'lucide-react';
+import { useAuth } from '../../../src/lib/auth/auth-context';
+import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
+import {
   capitalizar,
+  calcularDistanciaRutaKm,
   filtrarRutas,
   formatearDistancia,
-  invertirElementosOrdenados,
   invertirPuntosTrazado,
-  invertirTipoParada,
   type FiltroEstadoRuta,
 } from './route-utils';
 import { RoutePointList } from './route-point-list';
-
-type Modo = 'ver' | 'dibujar-ruta' | 'agregar-parada' | 'agregar-punto-control';
-
-interface BorradorInverso {
-  paradas: Parada[];
-  puntosControl: PuntoControl[];
-}
-
-interface ResultadoCopiaInversa {
-  paradas: Parada[];
-  puntosControl: PuntoControl[];
-  fallos: number;
-}
-
-function valoresCumplidos<T>(results: PromiseSettledResult<T>[]): T[] {
-  return results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
-}
+import { useRutasData } from './use-rutas-data';
+import { useRouteDrawing } from './use-route-drawing';
+import { ParadasCard, PuntosControlCard, VariantesCard } from './route-detail-cards';
 
 const TIPOS_PARADA: { label: string; value: TipoParada }[] = [
   { label: 'Origen', value: 'origen' },
@@ -59,10 +55,6 @@ const TIPOS_PARADA: { label: string; value: TipoParada }[] = [
   { label: 'Destino', value: 'destino' },
 ];
 
-// `sentido` viaja como texto libre en el contrato (RutaSchema, packages/shared) porque
-// Producto no confirmó si alguna línea puede tener más de dos sentidos (ej. circular).
-// Acá se restringe a los dos valores reales que usa hoy toda línea de colectivo urbano —
-// evita typos ("Ida"/"IDA"/"ida ") que romperían el agrupamiento visual en el mapa.
 const SENTIDOS: { label: string; value: string }[] = [
   { label: 'Ida', value: 'ida' },
   { label: 'Vuelta', value: 'vuelta' },
@@ -75,609 +67,163 @@ const ESTADOS_RUTA: { label: string; value: Ruta['estado'] }[] = [
 
 const COLORES_RUTA = ['#007f86', '#ff6b35', '#6750a4', '#1976d2', '#2e7d32', '#c62828'];
 
-/** RF-24..33 (QUI-229) — editor visual de rutas sobre `RouteMap` (Leaflet, ver design
- * system) contra el API real de QUI-225/226. Sin biblioteca de mapas nueva: se reutiliza
- * el componente ya construido en vez de duplicar esa lógica en apps/web. */
 export default function RutasPage() {
   const { token } = useAuth();
+  const data = useRutasData(token ?? '');
+  const drawing = useRouteDrawing();
 
-  const [lineas, setLineas] = useState<Linea[]>([]);
-  const [lineaId, setLineaId] = useState<string>('');
-  const [rutas, setRutas] = useState<Ruta[]>([]);
-  const [rutaId, setRutaId] = useState<string>('');
-  const [paradas, setParadas] = useState<Parada[]>([]);
-  const [puntosControl, setPuntosControl] = useState<PuntoControl[]>([]);
-  const [variantes, setVariantes] = useState<Variante[]>([]);
-
-  const [modo, setModo] = useState<Modo>('ver');
-  const [puntosPendientes, setPuntosPendientes] = useState<MapPoint[]>([]);
-  const [puntosInicialesTrazado, setPuntosInicialesTrazado] = useState<MapPoint[]>([]);
-  const [puntosRehacer, setPuntosRehacer] = useState<MapPoint[]>([]);
-  const [nodoSeleccionadoIndex, setNodoSeleccionadoIndex] = useState<number | null>(null);
-  const [puntoPendiente, setPuntoPendiente] = useState<MapPoint | null>(null);
-  const [editandoTrazado, setEditandoTrazado] = useState(false);
-  const [editandoParadaId, setEditandoParadaId] = useState<string | null>(null);
-  const [editandoPuntoControlId, setEditandoPuntoControlId] = useState<string | null>(null);
-
-  const [sentido, setSentido] = useState('ida');
   const [sentidoRutaEdit, setSentidoRutaEdit] = useState('ida');
   const [estadoRutaEdit, setEstadoRutaEdit] = useState<Ruta['estado']>('activo');
-  const [tipoParada, setTipoParada] = useState<TipoParada>('intermedia');
-  const [ordenParada, setOrdenParada] = useState('0');
-  const [radioTolerancia, setRadioTolerancia] = useState('30');
-  const [obligatorio, setObligatorio] = useState(true);
   const [nombreVariante, setNombreVariante] = useState('');
   const [filtroSentido, setFiltroSentido] = useState('todos');
   const [filtroEstado, setFiltroEstado] = useState<FiltroEstadoRuta>('todos');
   const [mostrarTodas, setMostrarTodas] = useState(true);
-  const [borradorInverso, setBorradorInverso] = useState<BorradorInverso | null>(null);
-  const [copiarParadasInversas, setCopiarParadasInversas] = useState(true);
-  const [copiarControlesInversos, setCopiarControlesInversos] = useState(true);
-  const [confirmarBaja, setConfirmarBaja] = useState<{
-    tipo: 'parada' | 'puntoControl' | 'variante';
-    id: string;
-  } | null>(null);
-  const [cambiandoEstado, setCambiandoEstado] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(true);
+  const [inspectorTab, setInspectorTab] = useState<'catalogo' | 'detalle'>('catalogo');
 
-  const [loadingLineas, setLoadingLineas] = useState(true);
-  const [loadingRutas, setLoadingRutas] = useState(false);
-  const [loadingDetalle, setLoadingDetalle] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [aviso, setAviso] = useState<string | null>(null);
-  const [guardando, setGuardando] = useState(false);
-  const [revision, setRevision] = useState(0);
+  const {
+    lineas,
+    lineaId,
+    setLineaId,
+    rutas,
+    rutaId,
+    setRutaId,
+    paradas,
+    puntosControl,
+    variantes,
+    rutaSeleccionada,
+    lineaSeleccionada,
+    confirmarBaja,
+    setConfirmarBaja,
+    cambiandoEstado,
+    loadingLineas,
+    loadingRutas,
+    loadingDetalle,
+    error,
+    setError,
+    aviso,
+    setAviso,
+    guardando,
+    limpiarDetalleRuta,
+    refrescarDatos,
+  } = data;
 
-  useEffect(() => {
-    if (!token) {
-      setLineas([]);
-      setLoadingLineas(false);
-      return;
-    }
-    let cancelado = false;
-    setLoadingLineas(true);
-    setError(null);
-    lineasApi
-      .listar(token)
-      .then((lista) => {
-        if (!cancelado) setLineas(lista);
-      })
-      .catch((err: unknown) => {
-        if (!cancelado) setError(mensajeError(err));
-      })
-      .finally(() => {
-        if (!cancelado) setLoadingLineas(false);
-      });
-    return () => {
-      cancelado = true;
-    };
-  }, [token]);
-
-  useEffect(() => {
-    if (!token || !lineaId) {
-      setRutas([]);
-      setRutaId('');
-      setLoadingRutas(false);
-      return;
-    }
-    let cancelado = false;
-    setLoadingRutas(true);
-    setError(null);
-    rutasApi
-      .listarPorLinea(token, lineaId)
-      .then((lista) => {
-        if (cancelado) return;
-        setRutas(lista);
-        setRutaId((actual) => (lista.some((ruta) => ruta.id === actual) ? actual : ''));
-      })
-      .catch((err: unknown) => {
-        if (!cancelado) setError(mensajeError(err));
-      })
-      .finally(() => {
-        if (!cancelado) setLoadingRutas(false);
-      });
-    return () => {
-      cancelado = true;
-    };
-  }, [token, lineaId, revision]);
-
-  useEffect(() => {
-    if (!token || !rutaId) {
-      setParadas([]);
-      setPuntosControl([]);
-      setVariantes([]);
-      setLoadingDetalle(false);
-      return;
-    }
-    let cancelado = false;
-    setLoadingDetalle(true);
-    setError(null);
-    Promise.all([
-      paradasApi.listarPorRuta(token, rutaId),
-      puntosControlApi.listarPorRuta(token, rutaId),
-      variantesApi.listarPorRuta(token, rutaId),
-    ])
-      .then(([p, pc, v]) => {
-        if (cancelado) return;
-        setParadas(p);
-        setPuntosControl(pc);
-        setVariantes(v);
-      })
-      .catch((err: unknown) => {
-        if (!cancelado) setError(mensajeError(err));
-      })
-      .finally(() => {
-        if (!cancelado) setLoadingDetalle(false);
-      });
-    return () => {
-      cancelado = true;
-    };
-  }, [token, rutaId, revision]);
-
-  const rutaSeleccionada = useMemo(
-    () => rutas.find((r) => r.id === rutaId) ?? null,
-    [rutas, rutaId],
-  );
-  const lineaSeleccionada = useMemo(
-    () => lineas.find((linea) => linea.id === lineaId) ?? null,
-    [lineas, lineaId],
-  );
-  const rutasFiltradas = useMemo(
-    () => filtrarRutas(rutas, filtroSentido, filtroEstado),
-    [rutas, filtroSentido, filtroEstado],
-  );
+  const rutasFiltradas = filtrarRutas(rutas, filtroSentido, filtroEstado);
+  const adminCity = useAdminCity(lineaSeleccionada?.cityId);
 
   useEffect(() => {
     if (rutaSeleccionada) {
       setSentidoRutaEdit(rutaSeleccionada.sentido);
       setEstadoRutaEdit(rutaSeleccionada.estado);
+      setInspectorTab('detalle');
     }
   }, [rutaSeleccionada]);
 
-  function empezarDibujo() {
+  function iniciarDibujo() {
     setError(null);
     setAviso(null);
     setRutaId('');
-    setPuntosPendientes([]);
-    setPuntosInicialesTrazado([]);
-    setPuntosRehacer([]);
-    setNodoSeleccionadoIndex(null);
-    setEditandoTrazado(false);
-    setBorradorInverso(null);
-    setModo('dibujar-ruta');
+    setDrawerOpen(true);
+    drawing.empezarDibujo();
   }
 
-  function empezarEdicionTrazado() {
+  function iniciarEdicionTrazado() {
     if (!rutaSeleccionada) return;
     setError(null);
     setAviso(null);
-    const puntosActuales = rutaSeleccionada.geometria.coordinates.map(([lng, lat]) => ({
-      lat,
-      lng,
-    }));
-    setPuntosPendientes(puntosActuales);
-    setPuntosInicialesTrazado(puntosActuales);
-    setPuntosRehacer([]);
-    setNodoSeleccionadoIndex(null);
-    setEditandoTrazado(true);
-    setBorradorInverso(null);
-    setModo('dibujar-ruta');
+    setDrawerOpen(true);
+    drawing.empezarEdicionTrazado(rutaSeleccionada.geometria.coordinates);
   }
 
-  function empezarRecorridoInverso() {
+  function iniciarRecorridoInverso() {
     if (!rutaSeleccionada) return;
-    const sentidoInverso = rutaSeleccionada.sentido === 'vuelta' ? 'ida' : 'vuelta';
-    const puntosInvertidos = invertirPuntosTrazado(
-      rutaSeleccionada.geometria.coordinates.map(([lng, lat]) => ({ lat, lng })),
-    );
     setError(null);
+    setDrawerOpen(true);
+    const sentidoInverso = drawing.empezarRecorridoInverso({
+      sentidoActual: rutaSeleccionada.sentido,
+      coordinates: rutaSeleccionada.geometria.coordinates,
+      paradas,
+      puntosControl,
+    });
     setAviso(
       `Se preparó un borrador de ${sentidoInverso} invirtiendo el trazado. Revísalo antes de guardar.`,
     );
-    setSentido(sentidoInverso);
-    setPuntosPendientes(puntosInvertidos);
-    setPuntosInicialesTrazado([]);
-    setPuntosRehacer([]);
-    setNodoSeleccionadoIndex(null);
-    setEditandoTrazado(false);
-    setBorradorInverso({
-      paradas: paradas.map((parada) => ({ ...parada })),
-      puntosControl: puntosControl.map((punto) => ({ ...punto })),
-    });
-    setCopiarParadasInversas(paradas.length > 0);
-    setCopiarControlesInversos(puntosControl.length > 0);
-    setModo('dibujar-ruta');
   }
 
-  function empezarAgregarParada() {
+  function iniciarAgregarParada() {
     setError(null);
     setAviso(null);
-    setEditandoParadaId(null);
-    setPuntoPendiente(null);
-    setTipoParada('intermedia');
-    setOrdenParada(String(Math.max(-1, ...paradas.map((parada) => parada.orden)) + 1));
-    setModo('agregar-parada');
+    setDrawerOpen(true);
+    drawing.empezarAgregarParada(paradas);
   }
 
-  function empezarEdicionParada(p: Parada) {
+  function iniciarEdicionParada(p: (typeof paradas)[number]) {
     setError(null);
     setAviso(null);
-    setEditandoParadaId(p.id);
-    setTipoParada(p.tipo);
-    setOrdenParada(String(p.orden));
-    setPuntoPendiente({ lat: p.coord.coordinates[1], lng: p.coord.coordinates[0] });
-    setModo('agregar-parada');
+    setDrawerOpen(true);
+    drawing.empezarEdicionParada(p);
   }
 
-  function empezarAgregarPuntoControl() {
+  function iniciarAgregarPuntoControl() {
     setError(null);
     setAviso(null);
-    setEditandoPuntoControlId(null);
-    setPuntoPendiente(null);
-    setOrdenParada(String(Math.max(-1, ...puntosControl.map((punto) => punto.orden)) + 1));
-    setRadioTolerancia('30');
-    setObligatorio(true);
-    setModo('agregar-punto-control');
+    setDrawerOpen(true);
+    drawing.empezarAgregarPuntoControl(puntosControl);
   }
 
-  function empezarEdicionPuntoControl(pc: PuntoControl) {
+  function iniciarEdicionPuntoControl(pc: (typeof puntosControl)[number]) {
     setError(null);
     setAviso(null);
-    setEditandoPuntoControlId(pc.id);
-    setOrdenParada(String(pc.orden));
-    setRadioTolerancia(String(pc.radioToleranciaM));
-    setObligatorio(pc.obligatorio);
-    setPuntoPendiente({ lat: pc.coord.coordinates[1], lng: pc.coord.coordinates[0] });
-    setModo('agregar-punto-control');
+    setDrawerOpen(true);
+    drawing.empezarEdicionPuntoControl(pc);
   }
 
   function cancelarModo() {
-    setModo('ver');
-    setPuntosPendientes([]);
-    setPuntosInicialesTrazado([]);
-    setPuntosRehacer([]);
-    setNodoSeleccionadoIndex(null);
-    setPuntoPendiente(null);
-    setEditandoTrazado(false);
-    setEditandoParadaId(null);
-    setEditandoPuntoControlId(null);
-    setBorradorInverso(null);
+    drawing.cancelarModo();
     setError(null);
   }
 
-  function limpiarDetalleRuta() {
-    setParadas([]);
-    setPuntosControl([]);
-    setVariantes([]);
-    setBorradorInverso(null);
-    setConfirmarBaja(null);
+  async function onGuardarRuta() {
+    const ok = await data.guardarRuta({
+      puntosPendientes: drawing.puntosPendientes,
+      editandoTrazado: drawing.editandoTrazado,
+      sentido: drawing.sentido,
+      borradorInverso: drawing.borradorInverso,
+      copiarParadasInversas: drawing.copiarParadasInversas,
+      copiarControlesInversos: drawing.copiarControlesInversos,
+    });
+    if (ok) cancelarModo();
   }
 
-  function onMapClick(point: MapPoint) {
-    if (modo === 'dibujar-ruta') {
-      setPuntosPendientes((prev) =>
-        nodoSeleccionadoIndex === null
-          ? [...prev, point]
-          : prev.map((currentPoint, index) =>
-              index === nodoSeleccionadoIndex ? point : currentPoint,
-            ),
-      );
-      setPuntosRehacer([]);
-    } else if (modo === 'agregar-parada' || modo === 'agregar-punto-control') {
-      setPuntoPendiente(point);
-    }
+  async function onGuardarParada() {
+    const ok = await data.guardarParada({
+      puntoPendiente: drawing.puntoPendiente,
+      ordenParada: drawing.ordenParada,
+      tipoParada: drawing.tipoParada,
+      editandoParadaId: drawing.editandoParadaId,
+    });
+    if (ok) cancelarModo();
   }
 
-  function deshacerPunto() {
-    const ultimo = puntosPendientes.at(-1);
-    if (!ultimo) return;
-    setPuntosPendientes((prev) => prev.slice(0, -1));
-    setPuntosRehacer((prev) => [...prev, ultimo]);
-    setNodoSeleccionadoIndex(null);
+  async function onGuardarPuntoControl() {
+    const ok = await data.guardarPuntoControl({
+      puntoPendiente: drawing.puntoPendiente,
+      ordenParada: drawing.ordenParada,
+      radioTolerancia: drawing.radioTolerancia,
+      obligatorio: drawing.obligatorio,
+      editandoPuntoControlId: drawing.editandoPuntoControlId,
+    });
+    if (ok) cancelarModo();
   }
 
-  function rehacerPunto() {
-    const ultimo = puntosRehacer.at(-1);
-    if (!ultimo) return;
-    setPuntosPendientes((prev) => [...prev, ultimo]);
-    setPuntosRehacer((prev) => prev.slice(0, -1));
-    setNodoSeleccionadoIndex(null);
-  }
-
-  function restaurarTrazado() {
-    setPuntosPendientes(puntosInicialesTrazado);
-    setPuntosRehacer([]);
-    setNodoSeleccionadoIndex(null);
-  }
-
-  function actualizarPuntosPendientes(points: MapPoint[]) {
-    setPuntosPendientes(points);
-    setPuntosRehacer([]);
-    setNodoSeleccionadoIndex(null);
-  }
-
-  function refrescarDatos() {
-    setError(null);
-    setAviso(null);
-    setRevision((actual) => actual + 1);
-  }
-
-  async function copiarDatosInversos(rutaDestinoId: string): Promise<ResultadoCopiaInversa> {
-    if (!token || !borradorInverso) {
-      return { paradas: [], puntosControl: [], fallos: 0 };
-    }
-    const paradasInvertidas = invertirElementosOrdenados(borradorInverso.paradas);
-    const controlesInvertidos = invertirElementosOrdenados(borradorInverso.puntosControl);
-    const [resultadosParadas, resultadosControles] = await Promise.all([
-      copiarParadasInversas
-        ? Promise.allSettled(
-            paradasInvertidas.map((parada) =>
-              paradasApi.crear(token, rutaDestinoId, {
-                tipo: invertirTipoParada(parada.tipo),
-                orden: parada.orden,
-                coord: {
-                  type: 'Point',
-                  coordinates: [...parada.coord.coordinates] as [number, number],
-                },
-                estado: 'activo',
-              }),
-            ),
-          )
-        : Promise.resolve([]),
-      copiarControlesInversos
-        ? Promise.allSettled(
-            controlesInvertidos.map((punto) =>
-              puntosControlApi.crear(token, rutaDestinoId, {
-                orden: punto.orden,
-                radioToleranciaM: punto.radioToleranciaM,
-                obligatorio: punto.obligatorio,
-                coord: {
-                  type: 'Point',
-                  coordinates: [...punto.coord.coordinates] as [number, number],
-                },
-                estado: 'activo',
-              }),
-            ),
-          )
-        : Promise.resolve([]),
-    ]);
-    return {
-      paradas: valoresCumplidos(resultadosParadas),
-      puntosControl: valoresCumplidos(resultadosControles),
-      fallos: [...resultadosParadas, ...resultadosControles].filter(
-        (result) => result.status === 'rejected',
-      ).length,
-    };
-  }
-
-  async function guardarRuta() {
-    if (!token || puntosPendientes.length < 2) return;
-    setGuardando(true);
-    setError(null);
-    try {
-      const geometria = {
-        type: 'LineString' as const,
-        coordinates: puntosPendientes.map((p): [number, number] => [p.lng, p.lat]),
-      };
-      if (editandoTrazado && rutaId) {
-        const actualizada = await rutasApi.actualizar(token, rutaId, { geometria });
-        setRutas((prev) => prev.map((r) => (r.id === actualizada.id ? actualizada : r)));
-        cancelarModo();
-        setAviso('Trazado actualizado correctamente.');
-      } else {
-        const nueva = await rutasApi.crear(token, lineaId, {
-          sentido,
-          estado: 'activo',
-          geometria,
-        });
-        setRutas((prev) => [nueva, ...prev]);
-        const resultadoCopia = await copiarDatosInversos(nueva.id);
-        setRutaId(nueva.id);
-        cancelarModo();
-        if (borradorInverso) {
-          setParadas(resultadoCopia.paradas);
-          setPuntosControl(resultadoCopia.puntosControl);
-          setAviso(
-            `Ruta inversa creada con ${resultadoCopia.paradas.length} paradas y ${resultadoCopia.puntosControl.length} puntos de control copiados.`,
-          );
-          if (resultadoCopia.fallos > 0) {
-            setError(
-              `La ruta fue creada, pero ${resultadoCopia.fallos} elemento(s) no pudieron copiarse. Revisa la ruta nueva.`,
-            );
-          }
-        } else {
-          setAviso('Ruta creada correctamente. Ahora puedes agregar paradas y puntos de control.');
-        }
-      }
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  async function guardarCambiosRuta() {
-    if (!token || !rutaId) return;
-    setGuardando(true);
-    setError(null);
-    try {
-      const actualizada = await rutasApi.actualizar(token, rutaId, {
-        sentido: sentidoRutaEdit,
-        estado: estadoRutaEdit,
-      });
-      setRutas((prev) => prev.map((r) => (r.id === actualizada.id ? actualizada : r)));
-      setAviso('Datos de la ruta actualizados.');
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  async function guardarParada() {
-    if (!token || !puntoPendiente || !rutaId) return;
-    const orden = Number(ordenParada);
-    if (!Number.isInteger(orden) || orden < 0) {
-      setError('El orden de la parada debe ser un número entero igual o mayor a cero.');
-      return;
-    }
-    if (paradas.some((parada) => parada.orden === orden && parada.id !== editandoParadaId)) {
-      setError(`Ya existe una parada con el orden ${orden}.`);
-      return;
-    }
-    setGuardando(true);
-    setError(null);
-    try {
-      const payload = {
-        tipo: tipoParada,
-        orden,
-        coord: {
-          type: 'Point' as const,
-          coordinates: [puntoPendiente.lng, puntoPendiente.lat] as [number, number],
-        },
-      };
-      if (editandoParadaId) {
-        const actualizada = await paradasApi.actualizar(token, editandoParadaId, payload);
-        setParadas((prev) => prev.map((p) => (p.id === actualizada.id ? actualizada : p)));
-      } else {
-        const creada = await paradasApi.crear(token, rutaId, { ...payload, estado: 'activo' });
-        setParadas((prev) => [...prev, creada]);
-      }
-      setAviso(editandoParadaId ? 'Parada actualizada.' : 'Parada agregada a la ruta.');
-      cancelarModo();
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  async function guardarPuntoControl() {
-    if (!token || !puntoPendiente || !rutaId) return;
-    const orden = Number(ordenParada);
-    const radio = Number(radioTolerancia);
-    if (!Number.isInteger(orden) || orden < 0) {
-      setError('El orden del punto de control debe ser un número entero igual o mayor a cero.');
-      return;
-    }
-    if (!Number.isInteger(radio) || radio <= 0) {
-      setError('El radio de tolerancia debe ser un número entero mayor a cero.');
-      return;
-    }
-    if (
-      puntosControl.some((punto) => punto.orden === orden && punto.id !== editandoPuntoControlId)
-    ) {
-      setError(`Ya existe un punto de control con el orden ${orden}.`);
-      return;
-    }
-    setGuardando(true);
-    setError(null);
-    try {
-      const payload = {
-        orden,
-        radioToleranciaM: radio,
-        obligatorio,
-        coord: {
-          type: 'Point' as const,
-          coordinates: [puntoPendiente.lng, puntoPendiente.lat] as [number, number],
-        },
-      };
-      if (editandoPuntoControlId) {
-        const actualizado = await puntosControlApi.actualizar(
-          token,
-          editandoPuntoControlId,
-          payload,
-        );
-        setPuntosControl((prev) => prev.map((pc) => (pc.id === actualizado.id ? actualizado : pc)));
-      } else {
-        const creado = await puntosControlApi.crear(token, rutaId, {
-          ...payload,
-          estado: 'activo',
-        });
-        setPuntosControl((prev) => [...prev, creado]);
-      }
-      setAviso(
-        editandoPuntoControlId ? 'Punto de control actualizado.' : 'Punto de control agregado.',
-      );
-      cancelarModo();
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  async function guardarVariante() {
-    if (!token || !rutaId || !nombreVariante.trim()) return;
-    setGuardando(true);
-    setError(null);
-    try {
-      const creada = await variantesApi.crear(token, rutaId, {
-        nombre: nombreVariante.trim(),
-        estado: 'activo',
-      });
-      setVariantes((prev) => [...prev, creada]);
-      setNombreVariante('');
-      setAviso('Variante agregada.');
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  // Sin DELETE real: paradas/puntos de control/variantes se desactivan vía `estado`, mismo
-  // criterio de soft-delete que el resto del dominio (module-table-page.tsx) — necesario acá
-  // porque `cumplimientos_pc.puntoControlId` referencia sin FK, un DELETE real dejaría
-  // historial huérfano. Reactivar no pide confirmación (no es destructivo); desactivar sí.
-  async function reactivar(tipo: 'parada' | 'puntoControl' | 'variante', id: string) {
-    if (!token) return;
-    setCambiandoEstado(true);
-    setError(null);
-    try {
-      if (tipo === 'parada') {
-        const actualizada = await paradasApi.actualizar(token, id, { estado: 'activo' });
-        setParadas((prev) => prev.map((p) => (p.id === id ? actualizada : p)));
-      } else if (tipo === 'puntoControl') {
-        const actualizado = await puntosControlApi.actualizar(token, id, { estado: 'activo' });
-        setPuntosControl((prev) => prev.map((pc) => (pc.id === id ? actualizado : pc)));
-      } else {
-        const actualizada = await variantesApi.actualizar(token, id, { estado: 'activo' });
-        setVariantes((prev) => prev.map((v) => (v.id === id ? actualizada : v)));
-      }
-      setAviso('Reactivado.');
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setCambiandoEstado(false);
-    }
-  }
-
-  async function confirmarBajaHandler() {
-    if (!token || !confirmarBaja) return;
-    setCambiandoEstado(true);
-    setError(null);
-    try {
-      const { tipo, id } = confirmarBaja;
-      if (tipo === 'parada') {
-        const actualizada = await paradasApi.actualizar(token, id, { estado: 'inactivo' });
-        setParadas((prev) => prev.map((p) => (p.id === id ? actualizada : p)));
-      } else if (tipo === 'puntoControl') {
-        const actualizado = await puntosControlApi.actualizar(token, id, { estado: 'inactivo' });
-        setPuntosControl((prev) => prev.map((pc) => (pc.id === id ? actualizado : pc)));
-      } else {
-        const actualizada = await variantesApi.actualizar(token, id, { estado: 'inactivo' });
-        setVariantes((prev) => prev.map((v) => (v.id === id ? actualizada : v)));
-      }
-      setAviso('Dado de baja. Ya no aparece en el mapa de la ruta.');
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setCambiandoEstado(false);
-      setConfirmarBaja(null);
-    }
+  async function onGuardarVariante() {
+    const ok = await data.guardarVariante(nombreVariante);
+    if (ok) setNombreVariante('');
   }
 
   const colorLinea = lineaSeleccionada?.color || 'var(--qv-color-primary)';
+  const colorLineaSecundario = lineaSeleccionada?.colorSecundario || 'var(--qv-color-accent)';
+  const colorLineaTerciario = lineaSeleccionada?.colorTerciario || 'var(--qv-color-primary)';
   const seleccionadaCoincideConFiltros = rutasFiltradas.some(
     (ruta) => ruta.id === rutaSeleccionada?.id,
   );
@@ -685,6 +231,7 @@ export default function RutasPage() {
     mostrarTodas || !rutaSeleccionada || !seleccionadaCoincideConFiltros
       ? rutasFiltradas
       : [rutaSeleccionada];
+  const { puntosPendientes, nodoSeleccionadoIndex } = drawing;
   const nodoSeleccionado =
     nodoSeleccionadoIndex === null ? null : (puntosPendientes[nodoSeleccionadoIndex] ?? null);
   const puntosPendientesParaMapa =
@@ -695,7 +242,7 @@ export default function RutasPage() {
           Math.min(puntosPendientes.length, nodoSeleccionadoIndex + 2),
         );
   const rutasParaMapa =
-    modo === 'dibujar-ruta'
+    drawing.modo === 'dibujar-ruta'
       ? [
           {
             id: 'pendiente',
@@ -709,65 +256,96 @@ export default function RutasPage() {
           label: `${capitalizar(ruta.sentido)} · ${ruta.estado}`,
           color: ruta.id === rutaId ? colorLinea : COLORES_RUTA[index % COLORES_RUTA.length],
           points: ruta.geometria.coordinates.map(([lng, lat]) => ({ lat, lng })),
+          onClick: () => {
+            setRutaId(ruta.id);
+            setDrawerOpen(true);
+            setInspectorTab('detalle');
+          },
         }));
 
   const stopsParaMapa: MapPoint[] = paradas
     .filter((p) => p.estado === 'activo')
     .map((p) => ({
+      id: p.id,
       lat: p.coord.coordinates[1],
       lng: p.coord.coordinates[0],
-      label: `Parada (${p.tipo})`,
-      description: `Orden ${p.orden}`,
+      label: `Parada #${p.orden} (${capitalizar(p.tipo)})`,
+      description: 'Clic para editar en panel derecho',
       pinType: 'stop',
-      color: p.tipo === 'origen' ? '#2e7d32' : p.tipo === 'destino' ? '#c62828' : colorLinea,
+      color: p.tipo === 'origen' ? '#10b981' : p.tipo === 'destino' ? '#ef4444' : colorLinea,
+      onClick: () => {
+        setDrawerOpen(true);
+        setInspectorTab('detalle');
+        iniciarEdicionParada(p);
+      },
     }));
 
   const zonasParaMapa = puntosControl
     .filter((pc) => pc.estado === 'activo')
     .map((pc) => ({
+      id: pc.id,
       lat: pc.coord.coordinates[1],
       lng: pc.coord.coordinates[0],
       radiusMeters: pc.radioToleranciaM,
-      label: `Punto de control (orden ${pc.orden}${pc.obligatorio ? ', obligatorio' : ''})`,
-      color: colorLinea,
+      label: `Punto de control #${pc.orden} (Radio ${pc.radioToleranciaM}m${pc.obligatorio ? ' · Obligatorio' : ''})`,
+      color: colorLineaSecundario,
+      onClick: () => {
+        setDrawerOpen(true);
+        setInspectorTab('detalle');
+        iniciarEdicionPuntoControl(pc);
+      },
     }));
 
   const primerPuntoPendiente = puntosPendientes[0];
-  const ultimoPuntoPendiente = puntosPendientes.at(-1);
+  const { puntoPendiente } = drawing;
   const markersParaMapa: MapPoint[] = puntoPendiente
-    ? [{ ...puntoPendiente, label: 'Punto marcado', pinType: 'pulse' }]
-    : modo === 'dibujar-ruta' && nodoSeleccionado && nodoSeleccionadoIndex !== null
-      ? [
-          {
-            ...nodoSeleccionado,
-            label: `Nodo ${nodoSeleccionadoIndex + 1} seleccionado`,
-            description: 'Haz clic en el mapa para moverlo',
-            pinType: 'pulse',
-            color: '#ff6b35',
-          },
-        ]
-      : modo === 'dibujar-ruta' && primerPuntoPendiente
-        ? [
-            {
-              ...primerPuntoPendiente,
-              label: 'Inicio del recorrido',
-              description: 'Nodo 1',
-              pinType: 'pin',
-              color: '#2e7d32',
+    ? [
+        {
+          ...puntoPendiente,
+          label: 'Punto marcado',
+          description: 'Arrastra para reubicar',
+          pinType: 'pulse',
+          draggable: true,
+          onDragEnd: (pos) => drawing.setPuntoPendiente(pos),
+        },
+      ]
+    : drawing.modo === 'dibujar-ruta'
+      ? puntosPendientes.map((punto, index) => {
+          const esInicio = index === 0;
+          const esFinal = index === puntosPendientes.length - 1 && puntosPendientes.length > 1;
+          const esSeleccionado = nodoSeleccionadoIndex === index;
+          return {
+            id: `nodo-${index}`,
+            lat: punto.lat,
+            lng: punto.lng,
+            label: esInicio
+              ? `Nodo 1 (Inicio)`
+              : esFinal
+                ? `Nodo ${index + 1} (Final)`
+                : `Nodo ${index + 1}`,
+            description: 'Arrastra para desplazar este punto en el mapa',
+            pinType: esSeleccionado ? ('pulse' as const) : ('node' as const),
+            color: esInicio
+              ? '#10b981'
+              : esFinal
+                ? '#ef4444'
+                : esSeleccionado
+                  ? '#ff6b35'
+                  : colorLinea,
+            draggable: true,
+            onDragEnd: (nuevaPos: { lat: number; lng: number }) => {
+              const nuevosPuntos = [...puntosPendientes];
+              nuevosPuntos[index] = nuevaPos;
+              drawing.actualizarPuntosPendientes(nuevosPuntos);
+              drawing.setNodoSeleccionadoIndex(index);
             },
-            ...(ultimoPuntoPendiente && puntosPendientes.length > 1
-              ? [
-                  {
-                    ...ultimoPuntoPendiente,
-                    label: 'Final del recorrido',
-                    description: `Nodo ${puntosPendientes.length}`,
-                    pinType: 'pin' as const,
-                    color: '#c62828',
-                  },
-                ]
-              : []),
-          ]
-        : [];
+            onClick: () => {
+              drawing.setNodoSeleccionadoIndex(index);
+              setDrawerOpen(true);
+            },
+          };
+        })
+      : [];
 
   const distanciaSeleccionada = rutaSeleccionada
     ? calcularDistanciaRutaKm(rutaSeleccionada.geometria.coordinates)
@@ -776,74 +354,32 @@ export default function RutasPage() {
     puntosPendientes.map((punto): [number, number] => [punto.lng, punto.lat]),
   );
   const rutasActivas = rutas.filter((ruta) => ruta.estado === 'activo').length;
-  const ordenNumero = Number(ordenParada);
+  const ordenNumero = Number(drawing.ordenParada);
   const ordenValido =
-    ordenParada.trim() !== '' && Number.isInteger(ordenNumero) && ordenNumero >= 0;
-  const radioNumero = Number(radioTolerancia);
+    drawing.ordenParada.trim() !== '' && Number.isInteger(ordenNumero) && ordenNumero >= 0;
+  const radioNumero = Number(drawing.radioTolerancia);
   const radioValido =
-    radioTolerancia.trim() !== '' && Number.isInteger(radioNumero) && radioNumero > 0;
+    drawing.radioTolerancia.trim() !== '' && Number.isInteger(radioNumero) && radioNumero > 0;
   const formularioUbicacionValido =
-    Boolean(puntoPendiente) && ordenValido && (modo !== 'agregar-punto-control' || radioValido);
+    Boolean(puntoPendiente) && ordenValido && (drawing.modo !== 'agregar-punto-control' || radioValido);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <PageHeader
-        title="Rutas"
-        subtitle="Diseña trazados, organiza paradas y configura puntos de control para cada línea."
-      />
-      {error && (
-        <Alert variant="danger" title="Error">
-          {error}
-        </Alert>
-      )}
-      {aviso && (
-        <Alert variant="success" title="Listo">
-          {aviso}
-        </Alert>
-      )}
-
-      {lineaId && (
-        <section className="routes-metrics" aria-label="Resumen operativo de rutas">
-          <div className="routes-metric">
-            <span>Rutas activas</span>
-            <strong>{rutasActivas}</strong>
-            <small>de {rutas.length} registradas</small>
-          </div>
-          <div className="routes-metric">
-            <span>Distancia</span>
-            <strong>
-              {distanciaSeleccionada === null ? '—' : formatearDistancia(distanciaSeleccionada)}
-            </strong>
-            <small>{rutaSeleccionada ? 'ruta seleccionada' : 'selecciona una ruta'}</small>
-          </div>
-          <div className="routes-metric">
-            <span>Paradas</span>
-            <strong>{rutaSeleccionada ? paradas.length : '—'}</strong>
-            <small>{rutaSeleccionada ? 'en esta ruta' : 'selecciona una ruta'}</small>
-          </div>
-          <div className="routes-metric">
-            <span>Controles</span>
-            <strong>{rutaSeleccionada ? puntosControl.length : '—'}</strong>
-            <small>
-              {rutaSeleccionada
-                ? `${puntosControl.filter((p) => p.obligatorio).length} obligatorios`
-                : 'selecciona una ruta'}
-            </small>
-          </div>
-        </section>
-      )}
-
-      <div className="routes-workspace">
-        <div className="routes-sidebar">
-          <Card header="Línea">
-            {loadingLineas ? (
-              <Loader label="Cargando líneas..." />
-            ) : (
+    <div className="qv-route-builder-wrapper">
+      {/* HUD Superior Superpuesto */}
+      <div className="qv-route-hud-top">
+        {/* Selector de Línea */}
+        <div className="qv-route-hud-card">
+          <Route size={18} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
+          {loadingLineas ? (
+            <span style={{ fontSize: '0.8125rem' }}>Cargando líneas...</span>
+          ) : (
+            <div style={{ minWidth: '13rem' }}>
               <Select
                 id="linea"
                 name="linea"
+                aria-label="Seleccionar Línea"
                 options={[
-                  { label: 'Seleccionar...', value: '' },
+                  { label: 'Seleccionar línea...', value: '' },
                   ...lineas.map((l) => ({ label: `${l.codigo} — ${l.nombre}`, value: l.id })),
                 ]}
                 value={lineaId}
@@ -857,36 +393,490 @@ export default function RutasPage() {
                   cancelarModo();
                 }}
               />
-            )}
-            {lineaSeleccionada && (
-              <div className="routes-line-summary">
+            </div>
+          )}
+
+          {lineaSeleccionada && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginLeft: '0.25rem' }}>
+              <span
+                style={{
+                  width: '0.75rem',
+                  height: '0.75rem',
+                  borderRadius: '50%',
+                  backgroundColor: colorLinea,
+                  display: 'inline-block',
+                }}
+              />
+              {lineaSeleccionada.distintivoValor && (
                 <span
-                  className="routes-color-dot"
-                  style={{ background: colorLinea }}
-                  aria-hidden="true"
-                />
-                <span>
-                  <strong>{lineaSeleccionada.codigo}</strong>
-                  {lineaSeleccionada.descripcion && <small>{lineaSeleccionada.descripcion}</small>}
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    padding: '0.1rem 0.4rem',
+                    borderRadius: 'var(--qv-radius-sm)',
+                    backgroundColor: colorLineaTerciario,
+                    color: '#ffffff',
+                  }}
+                >
+                  {lineaSeleccionada.distintivoValor}
                 </span>
-              </div>
-            )}
-          </Card>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* KPIs de la Línea y Ruta */}
+        {lineaId ? (
+          <div className="qv-route-hud-card" style={{ display: 'flex', gap: '0.875rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                Rutas Activas
+              </span>
+              <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
+                {rutasActivas} <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--qv-text-secondary)' }}>/ {rutas.length}</span>
+              </strong>
+            </div>
+
+            <div style={{ width: '1px', height: '1.75rem', backgroundColor: 'var(--qv-border-glass)' }} />
+
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                Distancia
+              </span>
+              <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
+                {distanciaSeleccionada === null ? '—' : formatearDistancia(distanciaSeleccionada)}
+              </strong>
+            </div>
+
+            <div style={{ width: '1px', height: '1.75rem', backgroundColor: 'var(--qv-border-glass)' }} />
+
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                Paradas
+              </span>
+              <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
+                {rutaSeleccionada ? paradas.length : '—'}
+              </strong>
+            </div>
+
+            <div style={{ width: '1px', height: '1.75rem', backgroundColor: 'var(--qv-border-glass)' }} />
+
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                Controles
+              </span>
+              <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
+                {rutaSeleccionada ? puntosControl.length : '—'}
+              </strong>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Acciones principales y Toggle de Drawer */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', pointerEvents: 'auto' }}>
+          {lineaId && (
+            <button
+              type="button"
+              className="qv-floating-cta"
+              onClick={iniciarDibujo}
+              disabled={drawing.modo === 'dibujar-ruta'}
+            >
+              <Plus size={16} />
+              <span>Nueva ruta</span>
+            </button>
+          )}
 
           {lineaId && (
-            <Card
-              header="Rutas"
-              footer={
-                <div className="routes-actions">
+            <button
+              type="button"
+              className="qv-route-hud-card"
+              onClick={refrescarDatos}
+              disabled={loadingRutas || loadingDetalle}
+              style={{ cursor: 'pointer', padding: '0.55rem' }}
+              title="Actualizar datos"
+            >
+              <RefreshCcw size={16} />
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="qv-route-hud-card"
+            onClick={() => setDrawerOpen((prev) => !prev)}
+            style={{ cursor: 'pointer', fontWeight: 600, fontSize: '0.8125rem' }}
+            title={drawerOpen ? 'Ocultar explorador de herramientas' : 'Mostrar explorador de herramientas'}
+          >
+            {drawerOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
+            <span>{drawerOpen ? 'Ocultar herramientas' : 'Herramientas'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Toasts flotantes para avisos o errores */}
+      {error && (
+        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}>
+          {error}
+        </div>
+      )}
+      {aviso && (
+        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-success)', color: 'var(--qv-color-success)' }}>
+          {aviso}
+        </div>
+      )}
+
+      {/* Explorador de Herramientas Superpuesto en el Lado Derecho */}
+      <aside
+        className={`qv-route-inspector-drawer${!drawerOpen ? ' qv-route-inspector-drawer--collapsed' : ''}`}
+        aria-label="Explorador de herramientas de trazado"
+      >
+        <div className="qv-route-inspector-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Layers size={17} style={{ color: 'var(--qv-color-primary)' }} />
+            <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>
+              {drawing.modo === 'dibujar-ruta'
+                ? 'Editor de Trazado'
+                : drawing.modo === 'agregar-parada'
+                  ? 'Marcador de Parada'
+                  : drawing.modo === 'agregar-punto-control'
+                    ? 'Punto de Control'
+                    : 'Explorador de Rutas'}
+            </strong>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(false)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--qv-text-muted)',
+              cursor: 'pointer',
+              display: 'flex',
+              padding: '0.25rem',
+            }}
+            title="Minimizar panel"
+          >
+            <ChevronRight size={18} />
+          </button>
+        </div>
+
+        {drawing.modo === 'ver' && lineaId && (
+          <div
+            style={{
+              display: 'flex',
+              padding: '0.35rem 0.5rem',
+              gap: '0.35rem',
+              backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 60%, transparent)',
+              borderBottom: '1px solid var(--qv-border-glass)',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setInspectorTab('catalogo')}
+              style={{
+                flex: 1,
+                padding: '0.4rem 0.5rem',
+                borderRadius: 'var(--qv-radius-md)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: inspectorTab === 'catalogo' ? 'var(--qv-color-primary)' : 'transparent',
+                color: inspectorTab === 'catalogo' ? '#ffffff' : 'var(--qv-text-secondary)',
+                transition: 'all var(--qv-transition-fast)',
+              }}
+            >
+              Catálogo ({rutasFiltradas.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setInspectorTab('detalle')}
+              disabled={!rutaSeleccionada}
+              style={{
+                flex: 1,
+                padding: '0.4rem 0.5rem',
+                borderRadius: 'var(--qv-radius-md)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                border: 'none',
+                cursor: rutaSeleccionada ? 'pointer' : 'not-allowed',
+                backgroundColor: inspectorTab === 'detalle' ? 'var(--qv-color-primary)' : 'transparent',
+                color: inspectorTab === 'detalle' ? '#ffffff' : 'var(--qv-text-secondary)',
+                opacity: rutaSeleccionada ? 1 : 0.4,
+                transition: 'all var(--qv-transition-fast)',
+              }}
+            >
+              Detalle {rutaSeleccionada ? `· ${capitalizar(rutaSeleccionada.sentido)}` : ''}
+            </button>
+          </div>
+        )}
+
+        <div className="qv-route-inspector-body">
+          {!lineaId ? (
+            <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--qv-text-muted)' }}>
+              <Compass size={32} style={{ margin: '0 auto 0.75rem', opacity: 0.5 }} />
+              <p style={{ fontSize: '0.875rem' }}>Selecciona una línea en la barra superior para explorar y editar sus recorridos.</p>
+            </div>
+          ) : drawing.modo === 'dibujar-ruta' ? (
+            <Card header={drawing.editandoTrazado ? 'Editar trazado' : 'Nueva ruta'}>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--qv-text-secondary)' }}>
+                {drawing.editandoTrazado
+                  ? 'El trazado actual está cargado. Puedes agregar, quitar o reordenar sus nodos sobre el mapa.'
+                  : 'Haz clic sobre el mapa para agregar secuencialmente los nodos del recorrido.'}
+              </p>
+              <div className="routes-drawing-summary" style={{ margin: '0.5rem 0' }}>
+                <span>
+                  <strong>{puntosPendientes.length}</strong> nodos
+                </span>
+                <span>
+                  <strong>{formatearDistancia(distanciaPendiente)}</strong> aproximados
+                </span>
+              </div>
+              {!drawing.editandoTrazado && (
+                <Select
+                  label="Sentido"
+                  id="sentido"
+                  name="sentido"
+                  options={SENTIDOS}
+                  value={drawing.sentido}
+                  onChange={(event) => drawing.setSentido(event.target.value)}
+                />
+              )}
+              {drawing.borradorInverso && (
+                <div className="routes-inverse-options" style={{ marginTop: '0.5rem' }}>
+                  <strong>Copiar configuración del recorrido original</strong>
+                  <Checkbox
+                    label={`Copiar ${drawing.borradorInverso.paradas.length} paradas en orden inverso`}
+                    checked={drawing.copiarParadasInversas}
+                    disabled={drawing.borradorInverso.paradas.length === 0}
+                    onChange={(event) => drawing.setCopiarParadasInversas(event.target.checked)}
+                  />
+                  <Checkbox
+                    label={`Copiar ${drawing.borradorInverso.puntosControl.length} puntos de control en orden inverso`}
+                    checked={drawing.copiarControlesInversos}
+                    disabled={drawing.borradorInverso.puntosControl.length === 0}
+                    onChange={(event) => drawing.setCopiarControlesInversos(event.target.checked)}
+                  />
+                  <small>
+                    Origen y destino intercambiarán su tipo conservando ubicaciones y radios.
+                  </small>
+                </div>
+              )}
+              <RoutePointList
+                points={puntosPendientes}
+                selectedIndex={nodoSeleccionadoIndex}
+                onChange={drawing.actualizarPuntosPendientes}
+                onSelect={drawing.setNodoSeleccionadoIndex}
+              />
+              {nodoSeleccionado && nodoSeleccionadoIndex !== null && (
+                <div className="routes-node-move-notice" role="status" style={{ margin: '0.5rem 0' }}>
+                  <span>
+                    <strong>Moviendo nodo {nodoSeleccionadoIndex + 1}</strong>
+                    <small>Haz clic en el mapa para mover este nodo a una nueva posición.</small>
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={() => drawing.setNodoSeleccionadoIndex(null)}>
+                    Ver todo
+                  </Button>
+                </div>
+              )}
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.65rem',
+                  marginTop: '0.75rem',
+                  paddingTop: '0.75rem',
+                  borderTop: '1px solid var(--qv-border-glass)',
+                }}
+              >
+                {/* Barra de herramientas encapsulada */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--qv-text-secondary)' }}>
+                    Herramientas de trazo
+                  </span>
+                  <div className="qv-table-actions-capsule qv-trace-tools-toolbar">
+                    <Tooltip content="Deshacer último nodo">
+                      <button
+                        type="button"
+                        className="qv-action-pill-btn"
+                        onClick={drawing.deshacerPunto}
+                        disabled={puntosPendientes.length === 0}
+                        aria-label="Deshacer"
+                      >
+                        <Undo2 size={13} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Rehacer nodo">
+                      <button
+                        type="button"
+                        className="qv-action-pill-btn"
+                        onClick={drawing.rehacerPunto}
+                        disabled={drawing.puntosRehacer.length === 0}
+                        aria-label="Rehacer"
+                      >
+                        <Redo2 size={13} />
+                      </button>
+                    </Tooltip>
+                    <span className="qv-action-pill-divider" />
+                    <Tooltip content="Invertir dirección del trazado">
+                      <button
+                        type="button"
+                        className="qv-action-pill-btn"
+                        onClick={() => drawing.actualizarPuntosPendientes(invertirPuntosTrazado(puntosPendientes))}
+                        disabled={puntosPendientes.length < 2}
+                        aria-label="Invertir dirección"
+                      >
+                        <Repeat size={13} />
+                      </button>
+                    </Tooltip>
+                    {drawing.editandoTrazado && (
+                      <Tooltip content="Restaurar trazado original">
+                        <button
+                          type="button"
+                          className="qv-action-pill-btn"
+                          onClick={drawing.restaurarTrazado}
+                          aria-label="Restaurar trazado"
+                        >
+                          <RotateCcw size={13} />
+                        </button>
+                      </Tooltip>
+                    )}
+                    <span className="qv-action-pill-divider" />
+                    <Tooltip content="Limpiar todos los nodos">
+                      <button
+                        type="button"
+                        className="qv-action-pill-btn qv-action-pill-btn--danger"
+                        onClick={() => drawing.actualizarPuntosPendientes([])}
+                        disabled={puntosPendientes.length === 0}
+                        aria-label="Limpiar nodos"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </Tooltip>
+                  </div>
+                </div>
+
+                {/* Botones de acción principales */}
+                <div style={{ display: 'flex', gap: '0.45rem' }}>
                   <Button
                     size="sm"
-                    variant="ghost"
-                    onClick={refrescarDatos}
-                    disabled={loadingRutas || loadingDetalle}
+                    variant="primary"
+                    onClick={onGuardarRuta}
+                    disabled={puntosPendientes.length < 2 || guardando}
+                    style={{ flex: 1 }}
                   >
-                    Actualizar
+                    <Check size={13} style={{ marginRight: '0.3rem' }} />
+                    {guardando
+                      ? 'Guardando...'
+                      : drawing.editandoTrazado
+                        ? 'Guardar trazado'
+                        : 'Guardar ruta'}
                   </Button>
-                  <Button size="sm" onClick={empezarDibujo} disabled={modo === 'dibujar-ruta'}>
+                  <Button size="sm" variant="ghost" onClick={cancelarModo}>
+                    <X size={13} style={{ marginRight: '0.25rem' }} /> Cancelar
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          ) : (drawing.modo === 'agregar-parada' || drawing.modo === 'agregar-punto-control') ? (
+            <Card
+              header={
+                drawing.modo === 'agregar-parada'
+                  ? drawing.editandoParadaId
+                    ? 'Editar parada'
+                    : 'Nueva parada'
+                  : drawing.editandoPuntoControlId
+                    ? 'Editar punto de control'
+                    : 'Nuevo punto de control'
+              }
+            >
+              <p style={{ fontSize: '0.8125rem', color: 'var(--qv-text-secondary)' }}>
+                {puntoPendiente
+                  ? 'Haz clic en el mapa para ajustar la posición o pulsa guardar.'
+                  : 'Haz clic en el mapa para marcar la ubicación deseada.'}
+              </p>
+              {puntoPendiente && (
+                <div className="routes-coordinate-box" style={{ margin: '0.5rem 0' }}>
+                  <small>Coordenadas marcadas</small>
+                  <strong>
+                    {puntoPendiente.lat.toFixed(6)}, {puntoPendiente.lng.toFixed(6)}
+                  </strong>
+                </div>
+              )}
+              {drawing.modo === 'agregar-parada' ? (
+                <Select
+                  label="Tipo"
+                  id="tipoParada"
+                  name="tipoParada"
+                  options={TIPOS_PARADA}
+                  value={drawing.tipoParada}
+                  onChange={(event) => drawing.setTipoParada(event.target.value as TipoParada)}
+                />
+              ) : (
+                <>
+                  <Input
+                    label="Radio de tolerancia (m)"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={drawing.radioTolerancia}
+                    onChange={(event) => drawing.setRadioTolerancia(event.target.value)}
+                  />
+                  <Checkbox
+                    label="Obligatorio"
+                    checked={drawing.obligatorio}
+                    onChange={(event) => drawing.setObligatorio(event.target.checked)}
+                  />
+                </>
+              )}
+              <Input
+                label="Orden"
+                type="number"
+                min="0"
+                step="1"
+                value={drawing.ordenParada}
+                onChange={(event) => drawing.setOrdenParada(event.target.value)}
+              />
+              {!ordenValido && (
+                <small className="routes-field-error">
+                  El orden debe ser un entero igual o mayor a cero.
+                </small>
+              )}
+              {drawing.modo === 'agregar-punto-control' && !radioValido && (
+                <small className="routes-field-error">
+                  El radio debe ser un entero mayor a cero.
+                </small>
+              )}
+              <div className="routes-actions" style={{ marginTop: '0.75rem' }}>
+                <Button
+                  size="sm"
+                  onClick={drawing.modo === 'agregar-parada' ? onGuardarParada : onGuardarPuntoControl}
+                  disabled={!formularioUbicacionValido || guardando}
+                >
+                  {guardando
+                    ? 'Guardando...'
+                    : drawing.editandoParadaId || drawing.editandoPuntoControlId
+                      ? 'Guardar cambios'
+                      : 'Guardar'}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={cancelarModo}>
+                  Cancelar
+                </Button>
+              </div>
+            </Card>
+          ) : inspectorTab === 'catalogo' ? (
+            <Card
+              header="Catálogo de Rutas"
+              footer={
+                <div className="routes-actions" style={{ justifyContent: 'space-between' }}>
+                  {rutaSeleccionada ? (
+                    <PublicacionAction
+                      ruta={rutaSeleccionada}
+                      guardando={guardando}
+                      loadingDetalle={loadingDetalle}
+                      onAvanzar={data.avanzarPublicacionDelRecorrido}
+                    />
+                  ) : <span />}
+                  <Button size="sm" onClick={iniciarDibujo}>
                     + Nueva ruta
                   </Button>
                 </div>
@@ -895,7 +885,7 @@ export default function RutasPage() {
               {loadingRutas ? (
                 <Loader label="Cargando rutas..." />
               ) : rutas.length === 0 ? (
-                <span>Sin rutas todavía.</span>
+                <span>Sin rutas registradas en esta línea.</span>
               ) : (
                 <div className="routes-catalog">
                   <div className="routes-filters">
@@ -932,6 +922,7 @@ export default function RutasPage() {
                           limpiarDetalleRuta();
                           setMostrarTodas(false);
                           cancelarModo();
+                          setInspectorTab('detalle');
                         }}
                         className={`routes-list-item${r.id === rutaId ? ' routes-list-item--active' : ''}`}
                       >
@@ -955,6 +946,9 @@ export default function RutasPage() {
                         <Tag variant={r.estado === 'activo' ? 'success' : 'neutral'}>
                           {r.estado}
                         </Tag>
+                        <Tag variant={r.publicStatus === 'publicado' ? 'success' : 'neutral'}>
+                          {r.publicStatus === 'publicado' ? 'app' : 'privada'}
+                        </Tag>
                       </button>
                     ))}
                     {rutasFiltradas.length === 0 && (
@@ -964,527 +958,239 @@ export default function RutasPage() {
                 </div>
               )}
             </Card>
-          )}
-
-          {modo === 'dibujar-ruta' && (
-            <Card header={editandoTrazado ? 'Editar trazado' : 'Nueva ruta'}>
-              <p>
-                {editandoTrazado
-                  ? 'El trazado actual está cargado. Puedes agregar, quitar o reordenar sus nodos.'
-                  : 'Haz clic sobre el mapa para agregar, en orden, los nodos del recorrido. Puedes corregirlos antes de guardar.'}
-              </p>
-              <div className="routes-drawing-summary">
-                <span>
-                  <strong>{puntosPendientes.length}</strong> nodos
-                </span>
-                <span>
-                  <strong>{formatearDistancia(distanciaPendiente)}</strong> aproximados
-                </span>
-              </div>
-              {!editandoTrazado && (
-                <Select
-                  label="Sentido"
-                  id="sentido"
-                  name="sentido"
-                  options={SENTIDOS}
-                  value={sentido}
-                  onChange={(event) => setSentido(event.target.value)}
-                />
-              )}
-              {borradorInverso && (
-                <div className="routes-inverse-options">
-                  <strong>Copiar configuración del recorrido original</strong>
-                  <Checkbox
-                    label={`Copiar ${borradorInverso.paradas.length} paradas en orden inverso`}
-                    checked={copiarParadasInversas}
-                    disabled={borradorInverso.paradas.length === 0}
-                    onChange={(event) => setCopiarParadasInversas(event.target.checked)}
-                  />
-                  <Checkbox
-                    label={`Copiar ${borradorInverso.puntosControl.length} puntos de control en orden inverso`}
-                    checked={copiarControlesInversos}
-                    disabled={borradorInverso.puntosControl.length === 0}
-                    onChange={(event) => setCopiarControlesInversos(event.target.checked)}
-                  />
-                  <small>
-                    Origen y destino intercambiarán su tipo. Las ubicaciones, radios y
-                    obligatoriedad se conservarán.
-                  </small>
-                </div>
-              )}
-              <RoutePointList
-                points={puntosPendientes}
-                selectedIndex={nodoSeleccionadoIndex}
-                onChange={actualizarPuntosPendientes}
-                onSelect={setNodoSeleccionadoIndex}
-              />
-              {nodoSeleccionado && nodoSeleccionadoIndex !== null && (
-                <div className="routes-node-move-notice" role="status">
-                  <span>
-                    <strong>Moviendo nodo {nodoSeleccionadoIndex + 1}</strong>
-                    <small>
-                      El mapa está enfocado en este tramo. Haz clic en la nueva ubicación para mover
-                      el nodo.
-                    </small>
-                  </span>
-                  <Button size="sm" variant="ghost" onClick={() => setNodoSeleccionadoIndex(null)}>
-                    Ver recorrido completo
-                  </Button>
-                </div>
-              )}
-              <div className="routes-actions routes-actions--drawing">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={deshacerPunto}
-                  disabled={puntosPendientes.length === 0}
-                >
-                  Deshacer
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={rehacerPunto}
-                  disabled={puntosRehacer.length === 0}
-                >
-                  Rehacer
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    actualizarPuntosPendientes(invertirPuntosTrazado(puntosPendientes))
-                  }
-                  disabled={puntosPendientes.length < 2}
-                >
-                  Invertir orden
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setPuntosPendientes([]);
-                    setPuntosRehacer([]);
-                    setNodoSeleccionadoIndex(null);
-                  }}
-                  disabled={puntosPendientes.length === 0}
-                >
-                  Limpiar
-                </Button>
-                {editandoTrazado && (
-                  <Button size="sm" variant="ghost" onClick={restaurarTrazado}>
-                    Restaurar original
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  onClick={guardarRuta}
-                  disabled={puntosPendientes.length < 2 || guardando}
-                >
-                  {guardando
-                    ? 'Guardando...'
-                    : editandoTrazado
-                      ? 'Guardar trazado'
-                      : 'Guardar ruta'}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={cancelarModo}>
-                  Cancelar
-                </Button>
-              </div>
-            </Card>
-          )}
-
-          {rutaSeleccionada && modo === 'ver' && (
+          ) : rutaSeleccionada ? (
             <>
-              <Card
-                header="Ruta seleccionada"
-                footer={
-                  <div className="routes-card-actions">
-                    <Button size="sm" variant="ghost" onClick={empezarEdicionTrazado}>
-                      Editar trazado
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={empezarRecorridoInverso}
-                      disabled={loadingDetalle}
-                    >
-                      Crear recorrido inverso
-                    </Button>
-                  </div>
-                }
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
+                  padding: '0.85rem',
+                  borderRadius: 'var(--qv-radius-lg)',
+                  backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 75%, transparent)',
+                  border: '1px solid var(--qv-border-glass)',
+                }}
               >
-                <div className="routes-selected-summary">
-                  <span>
-                    <small>Longitud aproximada</small>
-                    <strong>{formatearDistancia(distanciaSeleccionada ?? 0)}</strong>
-                  </span>
-                  <span>
-                    <small>Nodos del trazado</small>
-                    <strong>{rutaSeleccionada.geometria.coordinates.length}</strong>
-                  </span>
+                {/* Encabezado de la ruta seleccionada */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.4rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <Route size={17} style={{ color: 'var(--qv-color-primary)' }} />
+                    <strong style={{ fontSize: '0.9rem', color: 'var(--qv-text-primary)' }}>
+                      Ruta · {capitalizar(rutaSeleccionada.sentido)}
+                    </strong>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <Tag variant={rutaSeleccionada.estado === 'activo' ? 'success' : 'neutral'}>
+                      {rutaSeleccionada.estado}
+                    </Tag>
+                    <Tag variant={rutaSeleccionada.publicStatus === 'publicado' ? 'success' : 'neutral'}>
+                      {rutaSeleccionada.publicStatus === 'publicado' ? 'En App' : 'Privada'}
+                    </Tag>
+                  </div>
                 </div>
-                <Select
-                  label="Sentido"
-                  id="sentidoEdit"
-                  name="sentidoEdit"
-                  options={SENTIDOS}
-                  value={sentidoRutaEdit}
-                  onChange={(event) => setSentidoRutaEdit(event.target.value)}
-                />
-                <Select
-                  label="Estado"
-                  id="estadoEdit"
-                  name="estadoEdit"
-                  options={ESTADOS_RUTA}
-                  value={estadoRutaEdit}
-                  onChange={(event) => setEstadoRutaEdit(event.target.value as Ruta['estado'])}
-                />
-                <Button
-                  size="sm"
-                  onClick={guardarCambiosRuta}
-                  disabled={
-                    guardando ||
-                    (sentidoRutaEdit === rutaSeleccionada.sentido &&
-                      estadoRutaEdit === rutaSeleccionada.estado)
-                  }
-                  style={{ marginTop: '0.75rem' }}
-                >
-                  {guardando ? 'Guardando...' : 'Guardar cambios'}
-                </Button>
-              </Card>
 
-              <Card
-                header="Paradas"
-                footer={
-                  <Button size="sm" onClick={empezarAgregarParada}>
-                    + Agregar parada
+                {/* Métricas clave en tarjetas de alto contraste */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
+                  <div
+                    style={{
+                      padding: '0.5rem 0.65rem',
+                      borderRadius: 'var(--qv-radius-md)',
+                      backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 90%, transparent)',
+                      border: '1px solid var(--qv-border-glass)',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', fontWeight: 600, display: 'block' }}>
+                      Longitud
+                    </span>
+                    <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
+                      {formatearDistancia(distanciaSeleccionada ?? 0)}
+                    </strong>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: '0.5rem 0.65rem',
+                      borderRadius: 'var(--qv-radius-md)',
+                      backgroundColor: 'color-mix(in srgb, var(--qv-surface-card) 90%, transparent)',
+                      border: '1px solid var(--qv-border-glass)',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', fontWeight: 600, display: 'block' }}>
+                      Nodos GPS
+                    </span>
+                    <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
+                      {rutaSeleccionada.geometria.coordinates.length} vértices
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Acciones de trazado */}
+                <div style={{ display: 'flex', gap: '0.45rem' }}>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={iniciarEdicionTrazado}
+                    style={{ flex: 1 }}
+                  >
+                    <Edit3 size={13} style={{ marginRight: '0.3rem' }} />
+                    Editar trazado
                   </Button>
-                }
-              >
-                {loadingDetalle ? (
-                  <Loader label="Cargando..." />
-                ) : paradas.length === 0 ? (
-                  <span>Sin paradas todavía.</span>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {paradas
-                      .slice()
-                      .sort((a, b) => a.orden - b.orden)
-                      .map((p) => (
-                        <div
-                          key={p.id}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                          }}
-                        >
-                          <span style={{ opacity: p.estado === 'inactivo' ? 0.5 : 1 }}>
-                            <strong>
-                              #{p.orden} — {capitalizar(p.tipo)}
-                            </strong>{' '}
-                            {p.estado === 'inactivo' && (
-                              <StatusBadge status="inactive" label="Inactiva" />
-                            )}
-                            <br />
-                            <small className="routes-coordinate">
-                              {p.coord.coordinates[1].toFixed(5)},{' '}
-                              {p.coord.coordinates[0].toFixed(5)}
-                            </small>
-                          </span>
-                          <div style={{ display: 'flex', gap: '0.25rem' }}>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => empezarEdicionParada(p)}
-                            >
-                              Editar
-                            </Button>
-                            {p.estado === 'inactivo' ? (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                disabled={cambiandoEstado}
-                                onClick={() => reactivar('parada', p.id)}
-                              >
-                                Reactivar
-                              </Button>
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="danger"
-                                disabled={cambiandoEstado}
-                                onClick={() => setConfirmarBaja({ tipo: 'parada', id: p.id })}
-                              >
-                                Eliminar
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </Card>
-
-              <Card
-                header="Puntos de control"
-                footer={
-                  <Button size="sm" onClick={empezarAgregarPuntoControl}>
-                    + Agregar punto de control
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={iniciarRecorridoInverso}
+                    disabled={loadingDetalle}
+                    title="Crear borrador en sentido inverso"
+                  >
+                    <Repeat size={13} style={{ marginRight: '0.3rem' }} />
+                    Invertir
                   </Button>
-                }
-              >
-                {loadingDetalle ? (
-                  <Loader label="Cargando..." />
-                ) : puntosControl.length === 0 ? (
-                  <span>Sin puntos todavía.</span>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {puntosControl
-                      .slice()
-                      .sort((a, b) => a.orden - b.orden)
-                      .map((pc) => (
-                        <div
-                          key={pc.id}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                          }}
-                        >
-                          <span style={{ opacity: pc.estado === 'inactivo' ? 0.5 : 1 }}>
-                            <strong>
-                              #{pc.orden} — radio {pc.radioToleranciaM} m
-                            </strong>{' '}
-                            {pc.estado === 'inactivo' && (
-                              <StatusBadge status="inactive" label="Inactivo" />
-                            )}
-                            <br />
-                            <small className="routes-coordinate">
-                              {pc.obligatorio ? 'Obligatorio' : 'Opcional'} ·{' '}
-                              {pc.coord.coordinates[1].toFixed(5)},{' '}
-                              {pc.coord.coordinates[0].toFixed(5)}
-                            </small>
-                          </span>
-                          <div style={{ display: 'flex', gap: '0.25rem' }}>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => empezarEdicionPuntoControl(pc)}
-                            >
-                              Editar
-                            </Button>
-                            {pc.estado === 'inactivo' ? (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                disabled={cambiandoEstado}
-                                onClick={() => reactivar('puntoControl', pc.id)}
-                              >
-                                Reactivar
-                              </Button>
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="danger"
-                                disabled={cambiandoEstado}
-                                onClick={() =>
-                                  setConfirmarBaja({ tipo: 'puntoControl', id: pc.id })
-                                }
-                              >
-                                Eliminar
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                  </div>
+                </div>
+
+                {/* Formulario rápido de Sentido y Estado */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem', marginTop: '0.2rem' }}>
+                  <Select
+                    label="Sentido"
+                    id="sentidoEdit"
+                    name="sentidoEdit"
+                    options={SENTIDOS}
+                    value={sentidoRutaEdit}
+                    onChange={(event) => setSentidoRutaEdit(event.target.value)}
+                  />
+                  <Select
+                    label="Estado"
+                    id="estadoEdit"
+                    name="estadoEdit"
+                    options={ESTADOS_RUTA}
+                    value={estadoRutaEdit}
+                    onChange={(event) => setEstadoRutaEdit(event.target.value as Ruta['estado'])}
+                  />
+                </div>
+
+                {(sentidoRutaEdit !== rutaSeleccionada.sentido || estadoRutaEdit !== rutaSeleccionada.estado) && (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => data.guardarCambiosRuta(sentidoRutaEdit, estadoRutaEdit)}
+                    disabled={guardando}
+                    style={{ width: '100%' }}
+                  >
+                    {guardando ? 'Guardando...' : 'Guardar cambios de sentido/estado'}
+                  </Button>
                 )}
-              </Card>
-
-              <Card header="Variantes">
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {variantes.length === 0 && <small>Sin variantes registradas.</small>}
-                  {variantes.map((v) => (
-                    <div
-                      key={v.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                      }}
-                    >
-                      <span style={{ opacity: v.estado === 'inactivo' ? 0.5 : 1 }}>
-                        <Tag>{v.nombre}</Tag>{' '}
-                        {v.estado === 'inactivo' && (
-                          <StatusBadge status="inactive" label="Inactiva" />
-                        )}
-                      </span>
-                      {v.estado === 'inactivo' ? (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={cambiandoEstado}
-                          onClick={() => reactivar('variante', v.id)}
-                        >
-                          Reactivar
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          disabled={cambiandoEstado}
-                          onClick={() => setConfirmarBaja({ tipo: 'variante', id: v.id })}
-                        >
-                          Eliminar
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                  <div className="routes-inline-form">
-                    <Input
-                      placeholder="Nombre de variante"
-                      value={nombreVariante}
-                      onChange={(event) => setNombreVariante(event.target.value)}
-                    />
-                    <Button
-                      size="sm"
-                      onClick={guardarVariante}
-                      disabled={!nombreVariante.trim() || guardando}
-                    >
-                      Agregar
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-            </>
-          )}
-
-          {(modo === 'agregar-parada' || modo === 'agregar-punto-control') && (
-            <Card
-              header={
-                modo === 'agregar-parada'
-                  ? editandoParadaId
-                    ? 'Editar parada'
-                    : 'Nueva parada'
-                  : editandoPuntoControlId
-                    ? 'Editar punto de control'
-                    : 'Nuevo punto de control'
-              }
-            >
-              <p>
-                {puntoPendiente
-                  ? 'Haz clic en el mapa para mover la ubicación o guarda la posición actual.'
-                  : 'Haz clic en el mapa para marcar la ubicación.'}
-              </p>
-              {puntoPendiente && (
-                <div className="routes-coordinate-box">
-                  <small>Ubicación seleccionada</small>
-                  <strong>
-                    {puntoPendiente.lat.toFixed(6)}, {puntoPendiente.lng.toFixed(6)}
-                  </strong>
-                </div>
-              )}
-              {modo === 'agregar-parada' ? (
-                <Select
-                  label="Tipo"
-                  id="tipoParada"
-                  name="tipoParada"
-                  options={TIPOS_PARADA}
-                  value={tipoParada}
-                  onChange={(event) => setTipoParada(event.target.value as TipoParada)}
-                />
-              ) : (
-                <>
-                  <Input
-                    label="Radio de tolerancia (m)"
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={radioTolerancia}
-                    onChange={(event) => setRadioTolerancia(event.target.value)}
-                  />
-                  <Checkbox
-                    label="Obligatorio"
-                    checked={obligatorio}
-                    onChange={(event) => setObligatorio(event.target.checked)}
-                  />
-                </>
-              )}
-              <Input
-                label="Orden"
-                type="number"
-                min="0"
-                step="1"
-                value={ordenParada}
-                onChange={(event) => setOrdenParada(event.target.value)}
-              />
-              {!ordenValido && (
-                <small className="routes-field-error">
-                  El orden debe ser un entero igual o mayor a cero.
-                </small>
-              )}
-              {modo === 'agregar-punto-control' && !radioValido && (
-                <small className="routes-field-error">
-                  El radio debe ser un entero mayor a cero.
-                </small>
-              )}
-              <div className="routes-actions">
-                <Button
-                  size="sm"
-                  onClick={modo === 'agregar-parada' ? guardarParada : guardarPuntoControl}
-                  disabled={!formularioUbicacionValido || guardando}
-                >
-                  {guardando
-                    ? 'Guardando...'
-                    : editandoParadaId || editandoPuntoControlId
-                      ? 'Guardar cambios'
-                      : 'Guardar'}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={cancelarModo}>
-                  Cancelar
-                </Button>
               </div>
-            </Card>
-          )}
+
+              <ParadasCard
+                paradas={paradas}
+                loadingDetalle={loadingDetalle}
+                cambiandoEstado={cambiandoEstado}
+                onAgregar={iniciarAgregarParada}
+                onEditar={iniciarEdicionParada}
+                onReactivar={(id) => data.reactivar('parada', id)}
+                onEliminar={(id) => setConfirmarBaja({ tipo: 'parada', id })}
+              />
+
+              <PuntosControlCard
+                puntosControl={puntosControl}
+                loadingDetalle={loadingDetalle}
+                cambiandoEstado={cambiandoEstado}
+                onAgregar={iniciarAgregarPuntoControl}
+                onEditar={iniciarEdicionPuntoControl}
+                onReactivar={(id) => data.reactivar('puntoControl', id)}
+                onEliminar={(id) => setConfirmarBaja({ tipo: 'puntoControl', id })}
+              />
+
+              <VariantesCard
+                variantes={variantes}
+                cambiandoEstado={cambiandoEstado}
+                nombreVariante={nombreVariante}
+                onNombreChange={setNombreVariante}
+                onAgregar={onGuardarVariante}
+                guardando={guardando}
+                onReactivar={(id) => data.reactivar('variante', id)}
+                onEliminar={(id) => setConfirmarBaja({ tipo: 'variante', id })}
+              />
+            </>
+          ) : null}
+        </div>
+      </aside>
+
+      {/* Lienzo del Mapa */}
+      <RouteMap
+        className="routes-map-canvas"
+        height="100%"
+        interactive={drawing.modo !== 'ver'}
+        onMapClick={drawing.onMapClick}
+        routes={rutasParaMapa}
+        stops={drawing.modo === 'ver' ? stopsParaMapa : []}
+        zones={drawing.modo === 'ver' ? zonasParaMapa : []}
+        markers={markersParaMapa}
+        loading={loadingRutas && Boolean(lineaId)}
+        defaultCenter={adminCity.centro}
+        defaultZoom={adminCity.zoom}
+      />
+
+      {/* HUD Inferior - Ciudad Operativa y Leyenda de Colores */}
+      <div className="qv-route-hud-bottom" style={{ pointerEvents: 'auto' }}>
+        {/* Foco de Ciudad Operativa */}
+        <div
+          className="qv-route-hud-card"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.45rem',
+            fontSize: '0.8125rem',
+            padding: '0.45rem 0.75rem',
+          }}
+          title={`Ubicación operativa: ${adminCity.ciudad.nombre} (${adminCity.ciudad.departamento})`}
+        >
+          <MapPin size={15} style={{ color: 'var(--qv-color-primary)' }} />
+          <strong style={{ color: 'var(--qv-text-primary)', fontSize: '0.875rem' }}>{adminCity.ciudad.nombre}</strong>
+          <span
+            style={{
+              fontSize: '0.6875rem',
+              color: 'var(--qv-text-secondary)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              paddingLeft: '0.25rem',
+              borderLeft: '1px solid var(--qv-border-glass)',
+            }}
+          >
+            {adminCity.ciudad.departamento}
+          </span>
         </div>
 
-        <div className="routes-map-shell">
-          <div className="routes-map-legend" aria-label="Leyenda del mapa">
-            <span>
-              <i style={{ background: '#2e7d32' }} />
-              Origen
-            </span>
-            <span>
-              <i style={{ background: colorLinea }} />
-              Intermedia
-            </span>
-            <span>
-              <i style={{ background: '#c62828' }} />
-              Destino
-            </span>
-            <span>
-              <i className="routes-map-legend__zone" />
-              Control
-            </span>
-          </div>
-          <RouteMap
-            className="routes-map-canvas"
-            height="640px"
-            interactive={modo !== 'ver'}
-            onMapClick={onMapClick}
-            routes={rutasParaMapa}
-            stops={modo === 'ver' ? stopsParaMapa : []}
-            zones={modo === 'ver' ? zonasParaMapa : []}
-            markers={markersParaMapa}
-            loading={loadingRutas && Boolean(lineaId)}
-          />
+        {/* Leyenda de Puntos y Colores */}
+        <div
+          className="qv-route-hud-card"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            gap: '0.9rem',
+            padding: '0.45rem 0.75rem',
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--qv-text-primary)' }}>
+            <i style={{ width: '0.625rem', height: '0.625rem', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 6px #10b981' }} />
+            Origen
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--qv-text-primary)' }}>
+            <i style={{ width: '0.625rem', height: '0.625rem', borderRadius: '50%', background: colorLinea, display: 'inline-block', boxShadow: `0 0 6px ${colorLinea}` }} />
+            Intermedia
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--qv-text-primary)' }}>
+            <i style={{ width: '0.625rem', height: '0.625rem', borderRadius: '50%', background: '#ef4444', display: 'inline-block', boxShadow: '0 0 6px #ef4444' }} />
+            Destino
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--qv-text-primary)' }}>
+            <i style={{ width: '0.625rem', height: '0.625rem', borderRadius: '50%', background: colorLineaSecundario, display: 'inline-block', boxShadow: `0 0 6px ${colorLineaSecundario}` }} />
+            Control
+          </span>
         </div>
       </div>
+
 
       <ConfirmDialog
         open={confirmarBaja !== null}
@@ -1498,14 +1204,36 @@ export default function RutasPage() {
         message="Deja de aparecer en el mapa y en la ruta operativa. Se puede reactivar más adelante — no se borra el historial asociado."
         variant="danger"
         confirmLabel={cambiandoEstado ? 'Eliminando...' : 'Eliminar'}
-        onConfirm={confirmarBajaHandler}
+        onConfirm={data.confirmarBajaHandler}
         onCancel={() => setConfirmarBaja(null)}
       />
     </div>
   );
 }
 
-function mensajeError(err: unknown): string {
-  if (err instanceof ApiError) return err.message;
-  return err instanceof Error ? err.message : 'Error inesperado';
+function PublicacionAction({
+  ruta,
+  guardando,
+  loadingDetalle,
+  onAvanzar,
+}: {
+  ruta: Ruta;
+  guardando: boolean;
+  loadingDetalle: boolean;
+  onAvanzar: () => void;
+}) {
+  const siguiente: Record<Ruta['publicStatus'], string | null> = {
+    borrador: 'Validar para pasajeros',
+    validado: 'Publicar en la app',
+    publicado: 'Quitar de la app',
+    archivado: null,
+  };
+  const label = siguiente[ruta.publicStatus];
+  if (!label) return null;
+  return (
+    <Button size="sm" variant="ghost" onClick={onAvanzar} disabled={guardando || loadingDetalle}>
+      {guardando ? 'Actualizando app…' : label}
+    </Button>
+  );
 }
+

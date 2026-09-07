@@ -61,4 +61,14 @@ describe('LineasService', () => {
     expect(actualizada.nombre).toBe('Nueva');
     expect(actualizada.color).toBe('#000000');
   });
+
+  it('permite asignar una línea a una ciudad registrada', async () => {
+    const linea = await service.crear(adminSindicatoA, {
+      sindicatoId: sindicatoAId,
+      cityId: 'la-paz-el-alto',
+      codigo: 'LP1',
+      nombre: 'Línea La Paz de prueba',
+    });
+    expect(linea.cityId).toBe('la-paz-el-alto');
+  });
 });

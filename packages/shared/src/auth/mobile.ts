@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { uuidSchema } from '../primitives.js';
 import { TurnoSchema } from '../enums/turno.js';
 import { DocumentoIdentidadBoliviaSchema } from '../identidad-bolivia.js';
+import { LineaDistintivoTipoSchema } from '../entities/linea.js';
 
 export const PinMovilSchema = z
   .string()
@@ -23,11 +24,14 @@ export type AuthVehiculoMovilRequest = z.infer<typeof AuthVehiculoMovilRequestSc
 export const AuthVehiculoMovilResponseSchema = z.object({
   challengeToken: z.string().min(32),
   expiresAt: z.string().datetime(),
-  vehiculo: z.object({ 
+  vehiculo: z.object({
     placa: z.string().min(1),
     tipo: z.string().min(1),
     marca: z.string().min(1),
     modelo: z.string().min(1),
+    numeroInterno: z.string().nullable().optional(),
+    distintivo: z.string().nullable().optional(),
+    cartelSuperior: z.string().nullable().optional(),
   }),
 });
 export type AuthVehiculoMovilResponse = z.infer<typeof AuthVehiculoMovilResponseSchema>;
@@ -61,8 +65,24 @@ export const ResumenAsignacionMovilSchema = z.object({
   id: uuidSchema,
   fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   horario: TurnoSchema,
+  horaSalida: z.string().datetime().nullable().optional(),
+  horaPresentacion: z.string().datetime().nullable().optional(),
   venceAt: z.string().datetime(),
-  linea: z.object({ codigo: z.string().min(1), nombre: z.string().min(1) }),
+  linea: z.object({
+    codigo: z.string().min(1),
+    nombre: z.string().min(1),
+    color: z.string().nullable().optional(),
+    colorSecundario: z.string().nullable().optional(),
+    colorTexto: z.string().nullable().optional(),
+    colorTerciario: z.string().nullable().optional(),
+    colorFondo: z.string().nullable().optional(),
+    nombreCorto: z.string().nullable().optional(),
+    lema: z.string().nullable().optional(),
+    logoUrl: z.string().nullable().optional(),
+    distintivoTipo: LineaDistintivoTipoSchema.nullable().optional(),
+    distintivoValor: z.string().nullable().optional(),
+    cartelSuperior: z.string().nullable().optional(),
+  }),
   ruta: z.object({ sentido: z.string().min(1) }),
 });
 export type ResumenAsignacionMovil = z.infer<typeof ResumenAsignacionMovilSchema>;
@@ -73,6 +93,8 @@ export const ContextoOperativoMovilSchema = z.object({
     id: uuidSchema,
     fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     horario: TurnoSchema,
+    horaSalida: z.string().datetime().nullable().optional(),
+    horaPresentacion: z.string().datetime().nullable().optional(),
     venceAt: z.string().datetime(),
   }),
   vehiculo: z.object({
@@ -81,6 +103,9 @@ export const ContextoOperativoMovilSchema = z.object({
     tipo: z.string().min(1),
     marca: z.string().min(1),
     modelo: z.string().min(1),
+    numeroInterno: z.string().nullable().optional(),
+    distintivo: z.string().nullable().optional(),
+    cartelSuperior: z.string().nullable().optional(),
   }),
   conductor: z.object({
     id: uuidSchema,
@@ -93,6 +118,16 @@ export const ContextoOperativoMovilSchema = z.object({
     codigo: z.string().min(1),
     nombre: z.string().min(1),
     color: z.string().nullable(),
+    colorSecundario: z.string().nullable().optional(),
+    colorTexto: z.string().nullable().optional(),
+    colorTerciario: z.string().nullable().optional(),
+    colorFondo: z.string().nullable().optional(),
+    nombreCorto: z.string().nullable().optional(),
+    lema: z.string().nullable().optional(),
+    logoUrl: z.string().nullable().optional(),
+    distintivoTipo: LineaDistintivoTipoSchema.nullable().optional(),
+    distintivoValor: z.string().nullable().optional(),
+    cartelSuperior: z.string().nullable().optional(),
   }),
   ruta: z.object({ id: uuidSchema, sentido: z.string().min(1) }),
 });

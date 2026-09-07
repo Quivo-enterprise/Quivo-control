@@ -20,7 +20,6 @@ import {
 import { NavigationContainer } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AssignmentSelectionScreen } from './src/features/auth/assignment-selection-screen';
-import { DriverLoginScreen } from './src/features/auth/driver-login-screen';
 import { contextoDe, useAuthMovil } from './src/features/auth/use-auth-movil';
 import { VehicleLoginScreen } from './src/features/auth/vehicle-login-screen';
 import { OperationNavigator } from './src/app/operation-navigator';
@@ -82,17 +81,6 @@ function QuivoApp() {
         />
       );
     }
-    if (auth.estado.etapa === 'conductor' && auth.estado.vehiculo) {
-      return (
-        <DriverLoginScreen
-          vehiculo={auth.estado.vehiculo.vehiculo}
-          loading={auth.estado.cargando}
-          error={auth.estado.error}
-          onSubmit={auth.autenticarConductor}
-          onBack={auth.volverAVehiculo}
-        />
-      );
-    }
     if (auth.estado.etapa === 'asignacion') {
       return (
         <AssignmentSelectionScreen
@@ -124,8 +112,11 @@ function QuivoApp() {
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
-      <StatusBar style="light" backgroundColor={quivoColors.primaryStrong} />
-      <View accessibilityElementsHidden style={styles.systemBarBoundary} />
+      <StatusBar
+        style={auth.estado.etapa === 'operacion' ? 'dark' : 'light'}
+        backgroundColor="transparent"
+        translucent
+      />
       <View style={styles.page}>{contenido}</View>
       {!splashReady && (
         <SplashScreen
@@ -153,8 +144,7 @@ function LoadingScreen({ label, error = false }: { label: string; error?: boolea
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: quivoColors.primaryStrong },
-  systemBarBoundary: { height: 4, backgroundColor: quivoColors.accent },
+  safeArea: { flex: 1, backgroundColor: '#F4F6F8' },
   page: { flex: 1, backgroundColor: quivoColors.page },
   loading: {
     flex: 1,

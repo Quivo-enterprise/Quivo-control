@@ -33,7 +33,45 @@ pnpm --filter @quivo/api start     # node dist/main.js — sirve en :3001 (PORT 
 - `POST /v1/_internal/validate-demo` — endpoint de diagnóstico: valida el body contra
   `CrearSindicatoSchema` de `@quivo/shared` usando el pipe global de Zod. Se retira cuando
   el módulo `sindicatos` real (QUI-220) exponga su propio CRUD.
+- `POST /v1/public/demo-request` — recibe una solicitud de demostración desde
+  `control.myquivo.com`, valida y guarda nombre, sindicato, ciudad y cantidades. Devuelve
+  el mensaje preparado y el enlace de WhatsApp para que el visitante continúe la
+  conversación. Está limitado a 5 solicitudes por minuto y no requiere autenticación.
 - `POST /v1/auth/login` / `POST /v1/auth/refresh` (QUI-219) — ver sección Auth abajo.
+
+### Mobility pública para QUIVO Rutas
+
+- `GET /v1/public/mobility/cities` — catálogo de ciudades y estado de cobertura.
+- `GET /v1/public/mobility/lines?cityId=cochabamba&q=...` — líneas publicadas de una ciudad.
+- `GET /v1/public/mobility/stops?cityId=cochabamba&q=...` — paradas publicadas de una ciudad.
+- `GET /v1/public/mobility/lines/:id?cityId=cochabamba`, `/routes/:id` y `/stops/:id` —
+  detalles con comprobación de ciudad.
+- `POST /v1/public/mobility/journeys/search` acepta `cityId`; si se omite, conserva
+  compatibilidad y usa `cochabamba` durante la migración de clientes.
+
+La migración `20260819100000_mobility_city_scope` debe aplicarse antes de desplegar esta
+versión de la API y antes de habilitar los feature flags
+`VITE_MOBILITY_CITY_FILTER` / `EXPO_PUBLIC_MOBILITY_CITY_FILTER` en QUIVO Rutas.
+
+La migración `20260906120000_demo_requests` debe aplicarse antes de activar el formulario
+de la landing. En producción, `CORS_ORIGIN` debe incluir exactamente
+`https://control.myquivo.com` y `DEMO_WHATSAPP_NUMBER` debe contener el número público de
+WhatsApp en formato internacional, solo con dígitos.
+
+#### Activación de `api.myquivo.com`
+
+La API se publica como el servicio `quivo-api` de Cloud Run en
+`southamerica-west1`. Después de desplegar una imagen que incluya esta migración, crea el
+mapping de dominio personalizado `api.myquivo.com` en Cloud Run y agrega en el Zone Editor
+de cPanel el registro DNS que Google indique para ese mapping (normalmente un CNAME de
+verificación). No apuntes el subdominio a la IP compartida de HostGator: esa IP solo sirve
+la landing estática y no ejecuta este proceso NestJS.
+
+La secuencia de producción es: aplicar la migración con el usuario de migraciones, desplegar
+la imagen con `RUNTIME_DATABASE_URL` y `JWT_SECRET` desde Secret Manager, configurar
+`CORS_ORIGIN=https://control.myquivo.com,https://<panel-publico>` y comprobar primero
+`GET /v1/health/live`, luego `GET /v1/health/ready` y finalmente
+`POST /v1/public/demo-request`.
 
 ### Auth operativa móvil
 

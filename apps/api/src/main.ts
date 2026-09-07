@@ -12,6 +12,7 @@ if (process.env.SENTRY_DSN) {
 }
 
 async function bootstrap(): Promise<void> {
+  validateRuntimeConfig();
   // genReqId vive en el adapter Fastify (no en pinoHttp): Fastify asigna req.id antes
   // de que nestjs-pino lo vea, así que el request_id real se fija acá.
   //
@@ -24,7 +25,11 @@ async function bootstrap(): Promise<void> {
   // del cliente) y `req.ip` vuelve a ser por-cliente.
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ genReqId: () => randomUUID(), trustProxy: true }),
+    new FastifyAdapter({
+      genReqId: () => randomUUID(),
+      trustProxy: true,
+      bodyLimit: 3 * 1024 * 1024,
+    }),
     { bufferLogs: true },
   );
 
@@ -48,9 +53,16 @@ async function bootstrap(): Promise<void> {
   // adelante, todos los endpoints de edición) queda bloqueado en el browser con
   // "Failed to fetch" aunque el preflight responda 204 y curl (que no aplica CORS)
   // funcione perfecto. Encontrado probando QUI-228 (apps/web) contra la API real.
+  const corsOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:3000')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+    origin: corsOrigins,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Content-Encoding'],
+    exposedHeaders: ['X-Request-Id'],
+    credentials: false,
   });
 
   // QUI-240: la app móvil manda `POST /v1/sync/batches` gzip (hasta ~500 eventos por
@@ -62,22 +74,46 @@ async function bootstrap(): Promise<void> {
   // en un dispositivo real (Moto E13) que React Native (vía OkHttp en Android) descarta el
   // header `Content-Encoding` antes de mandar la request — nunca le llegaba al servidor, y
   // Fastify trataba los bytes gzip crudos como si fueran JSON de texto plano.
-  app.getHttpAdapter().getInstance().addHook('preParsing', (request, _reply, payload, done) => {
-    if (request.headers['x-content-encoding'] === 'gzip') {
-      // `content-length` describe el tamaño del body COMPRIMIDO — Fastify valida que los
-      // bytes leídos coincidan con ese header, y una vez descomprimido acá el conteo real
-      // ya no coincide (`FST_ERR_CTP_INVALID_CONTENT_LENGTH: Request body size did not
-      // match Content-Length`, encontrado probando QUI-240/241 con un lote gzip real). Sin
-      // el header, Fastify no valida por longitud y confía en el fin de stream.
-      delete request.headers['content-length'];
-      done(null, payload.pipe(createGunzip()));
-      return;
-    }
-    done(null, payload);
-  });
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .addHook('preParsing', (request, _reply, payload, done) => {
+      if (request.headers['x-content-encoding'] === 'gzip') {
+        // `content-length` describe el tamaño del body COMPRIMIDO — Fastify valida que los
+        // bytes leídos coincidan con ese header, y una vez descomprimido acá el conteo real
+        // ya no coincide (`FST_ERR_CTP_INVALID_CONTENT_LENGTH: Request body size did not
+        // match Content-Length`, encontrado probando QUI-240/241 con un lote gzip real). Sin
+        // el header, Fastify no valida por longitud y confía en el fin de stream.
+        delete request.headers['content-length'];
+        done(null, payload.pipe(createGunzip()));
+        return;
+      }
+      done(null, payload);
+    });
 
-  const port = Number(process.env.PORT ?? 3000);
+  const port = Number(process.env.PORT ?? 3001);
   await app.listen(port, '0.0.0.0');
+}
+
+function validateRuntimeConfig(): void {
+  const nodeEnv = process.env.NODE_ENV ?? 'development';
+  const missing = ['DATABASE_URL', 'JWT_SECRET'].filter((name) => !process.env[name]);
+  if (missing.length > 0) {
+    throw new Error(`Faltan variables de entorno obligatorias: ${missing.join(', ')}`);
+  }
+  if (nodeEnv === 'production') {
+    const jwtSecret = process.env.JWT_SECRET ?? '';
+    if (jwtSecret.length < 32 || jwtSecret === 'change-me-in-production') {
+      throw new Error('JWT_SECRET debe tener al menos 32 caracteres en producción');
+    }
+    if ((process.env.CORS_ORIGIN ?? '').split(',').some((origin) => origin.trim() === '*')) {
+      throw new Error('CORS_ORIGIN no puede usar * en producción');
+    }
+  }
+  const port = Number(process.env.PORT ?? 3001);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('PORT debe ser un entero entre 1 y 65535');
+  }
 }
 
 bootstrap().catch((error: unknown) => {

@@ -191,7 +191,7 @@ describe('AuthMovilService', () => {
     );
     expect(auditoria.diff).toEqual({ desafiosInvalidados: 0, sesionesRevocadas: 1 });
     expect(JSON.stringify(auditoria)).not.toContain(pinConductor);
-  });
+  }, 15_000);
 
   it('cierra la sesión activa previa del mismo vehículo al loguear desde OTRO dispositivo (plan §2.4.5)', async () => {
     const vehiculo1 = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });

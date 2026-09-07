@@ -6,6 +6,14 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## En curso — cierre del PR #51 (2026-09-07)
+
+Plan vivo: [`docs/plan-cierre-pr51.md`](plan-cierre-pr51.md). Integración del rediseño de Jairo
+(`integracion/redesign-jairo`). El PR se abrió sobre `07c4a7c`; los 3 commits que faltaban
+(extirpación de Quivo Rutas + fix del crash de hooks en `/en-vivo`) se pushearon hoy, así que
+recién ahora el CI del PR corre sobre el árbol que se va a mergear. Esta sección se reemplaza por
+el registro definitivo al cerrar.
+
 ## Estado al 2026-08-23
 
 `main` = `3abd558` (PR #48). La **Entrega 3 está completa en código y desplegada**: las tres
