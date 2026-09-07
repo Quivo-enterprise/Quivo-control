@@ -106,12 +106,6 @@ function validateRuntimeConfig(): void {
     if (jwtSecret.length < 32 || jwtSecret === 'change-me-in-production') {
       throw new Error('JWT_SECRET debe tener al menos 32 caracteres en producción');
     }
-    const notificationKey = process.env.NOTIFICATION_TOKEN_ENCRYPTION_KEY ?? '';
-    if (notificationKey.length < 32) {
-      throw new Error(
-        'NOTIFICATION_TOKEN_ENCRYPTION_KEY debe tener al menos 32 caracteres en producción',
-      );
-    }
     if ((process.env.CORS_ORIGIN ?? '').split(',').some((origin) => origin.trim() === '*')) {
       throw new Error('CORS_ORIGIN no puede usar * en producción');
     }

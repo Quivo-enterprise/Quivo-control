@@ -68,8 +68,7 @@ verificación). No apuntes el subdominio a la IP compartida de HostGator: esa IP
 la landing estática y no ejecuta este proceso NestJS.
 
 La secuencia de producción es: aplicar la migración con el usuario de migraciones, desplegar
-la imagen con `RUNTIME_DATABASE_URL`, `JWT_SECRET` y
-`NOTIFICATION_TOKEN_ENCRYPTION_KEY` desde Secret Manager, configurar
+la imagen con `RUNTIME_DATABASE_URL` y `JWT_SECRET` desde Secret Manager, configurar
 `CORS_ORIGIN=https://control.myquivo.com,https://<panel-publico>` y comprobar primero
 `GET /v1/health/live`, luego `GET /v1/health/ready` y finalmente
 `POST /v1/public/demo-request`.

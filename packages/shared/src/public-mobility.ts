@@ -6,28 +6,10 @@ import { uuidSchema } from './primitives.js';
 export const EstadoPublicacionSchema = z.enum(['borrador', 'validado', 'publicado', 'archivado']);
 export type EstadoPublicacion = z.infer<typeof EstadoPublicacionSchema>;
 
+/** Id de ciudad para el catálogo de cobertura de `MobilityCity` (Control lo usa para
+ * scopear líneas por ciudad, ver `packages/shared/src/entities/linea.ts`). */
 export const MobilityCityIdSchema = z.string().min(1).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 export type MobilityCityId = z.infer<typeof MobilityCityIdSchema>;
-
-export const MobilityCoverageStatusSchema = z.enum(['ready', 'community', 'coming_soon']);
-export type MobilityCoverageStatus = z.infer<typeof MobilityCoverageStatusSchema>;
-
-export const PublicMobilityCitySchema = z.object({
-  id: MobilityCityIdSchema,
-  name: z.string().min(1).max(200),
-  departmentCode: z.string().max(20).nullable(),
-  departmentName: z.string().max(200).nullable(),
-  countryCode: z.string().length(2).nullable(),
-  timezone: z.string().max(80).nullable(),
-  coverageStatus: MobilityCoverageStatusSchema,
-  sourceType: z.string().max(80).nullable(),
-  sourceName: z.string().max(200).nullable(),
-  sourceLicense: z.string().max(200).nullable(),
-  sourceUpdatedAt: z.string().datetime().nullable(),
-  availableModes: z.array(z.string().max(40)),
-  auxiliaryServices: z.array(z.string().max(80)),
-});
-export type PublicMobilityCity = z.infer<typeof PublicMobilityCitySchema>;
 
 export const PublicOperatorSchema = z.object({
   id: uuidSchema,
@@ -98,45 +80,3 @@ export const PublicLineDetailSchema = PublicLineSchema.extend({
   routes: z.array(PublicRouteSchema),
 });
 export type PublicLineDetail = z.infer<typeof PublicLineDetailSchema>;
-
-/** Resultado seguro de escanear un QR: sólo apunta al contenido público de la línea. */
-export const PublicVehicleQrSchema = z.object({
-  lineId: uuidSchema,
-});
-export type PublicVehicleQr = z.infer<typeof PublicVehicleQrSchema>;
-
-export const JourneySearchRequestSchema = z.object({
-  cityId: MobilityCityIdSchema.optional(),
-  origin: PuntoGeoJsonSchema,
-  destination: PuntoGeoJsonSchema,
-  maxWalkingMeters: z.number().int().min(100).max(2_000).optional().default(600),
-});
-export type JourneySearchRequest = z.infer<typeof JourneySearchRequestSchema>;
-
-export const JourneySegmentSchema = z.object({
-  type: z.enum(['walk', 'transit', 'transfer']),
-  distanceMeters: z.number().nonnegative().optional(),
-  durationMinutes: z.number().nonnegative(),
-  line: z.object({ id: uuidSchema, code: z.string(), name: z.string() }).optional(),
-  routeId: uuidSchema.optional(),
-  direction: z.string().optional(),
-});
-export type JourneySegment = z.infer<typeof JourneySegmentSchema>;
-
-export const JourneyOptionSchema = z.object({
-  id: z.string().min(1),
-  score: z.number().nonnegative(),
-  estimatedDurationMinutes: z.number().nonnegative(),
-  walkingDistanceMeters: z.number().nonnegative(),
-  transportDistanceMeters: z.number().nonnegative(),
-  transfers: z.number().int().nonnegative(),
-  segments: z.array(JourneySegmentSchema).min(1),
-});
-export type JourneyOption = z.infer<typeof JourneyOptionSchema>;
-
-export const JourneySearchResponseSchema = z.object({
-  options: z.array(JourneyOptionSchema),
-  /** Subconjunto de `options[].id` que el planner destaca como mejor alternativa por eje (más rápida, menos transbordos, menos caminata). La UI decide cómo mostrarlas, sin descartar el resto. */
-  recommendedIds: z.array(z.string().min(1)),
-});
-export type JourneySearchResponse = z.infer<typeof JourneySearchResponseSchema>;

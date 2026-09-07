@@ -26,10 +26,6 @@ import { AuditoriaModule } from './modules/auditoria/index.js';
 import { AuthMovilModule } from './modules/auth-movil/index.js';
 import { MediaModule } from './modules/media/index.js';
 import { PublicMobilityModule } from './modules/public-mobility/public-mobility.module.js';
-import { PasajerosModule } from './modules/pasajeros/pasajeros.module.js';
-import { NotificacionesModule } from './modules/notificaciones/notificaciones.module.js';
-import { PlanesModule } from './modules/planes/planes.module.js';
-import { PasajerosDatosModule } from './modules/pasajeros-datos/pasajeros-datos.module.js';
 import { DemoRequestsModule } from './modules/demo-requests/index.js';
 
 @Module({
@@ -54,10 +50,6 @@ import { DemoRequestsModule } from './modules/demo-requests/index.js';
     AuthMovilModule,
     MediaModule,
     PublicMobilityModule,
-    PasajerosModule,
-    NotificacionesModule,
-    PlanesModule,
-    PasajerosDatosModule,
     DemoRequestsModule,
     SindicatosModule,
     SociosModule,

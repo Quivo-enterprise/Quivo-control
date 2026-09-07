@@ -4,8 +4,6 @@ import { prisma } from './client.js';
 export interface TenantContext {
   rol: string;
   sindicatoId: string | null;
-  /** Identidad de experiencia; se usa para RLS de datos privados de pasajeros. */
-  userId?: string | null;
 }
 
 /**
@@ -20,13 +18,12 @@ export interface TenantContext {
  * en el SQL, no hay superficie de inyección acá.
  */
 export function withTenantContext<T>(
-  { rol, sindicatoId, userId }: TenantContext,
+  { rol, sindicatoId }: TenantContext,
   callback: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.rol', ${rol}, true)`;
     await tx.$executeRaw`SELECT set_config('app.sindicato_id', ${sindicatoId ?? ''}, true)`;
-    await tx.$executeRaw`SELECT set_config('app.user_id', ${userId ?? ''}, true)`;
     return callback(tx);
   });
 }

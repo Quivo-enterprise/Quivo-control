@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { IngestaWorkerModule } from './modules/ingesta-worker/index.js';
 import { RetencionGpsModule } from './modules/retencion-gps/index.js';
-import { NotificacionesWorkerModule } from './modules/notificaciones/notificaciones.worker.module.js';
 
 /**
  * Módulo del proceso worker (QUI-241) — deliberadamente separado de `AppModule`: no
@@ -16,7 +15,6 @@ import { NotificacionesWorkerModule } from './modules/notificaciones/notificacio
     ConfigModule.forRoot({ isGlobal: true }),
     IngestaWorkerModule,
     RetencionGpsModule,
-    NotificacionesWorkerModule,
   ],
 })
 export class WorkerModule {}

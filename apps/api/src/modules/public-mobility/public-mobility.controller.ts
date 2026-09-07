@@ -1,75 +1,44 @@
-import { Body, Controller, Get, Header, Inject, Param, Post, Query } from '@nestjs/common';
+import { Controller, Get, Header, Inject, Query } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { JourneySearchRequestSchema, type JourneySearchRequest } from '@quivo/shared';
+import { MobilityCityIdSchema } from '@quivo/shared';
+import { z } from 'zod';
 import { createZodDto } from '../../common/validation/zod-dto.js';
-import { JourneyService } from './journey.service.js';
 import { PublicMobilityService } from './public-mobility.service.js';
 
-class JourneySearchDto extends createZodDto(JourneySearchRequestSchema) {}
+/**
+ * `limit` no lleva `.max(500)`: el contrato es "se topea en 500", no "se rechaza arriba de
+ * 500" — el tope lo aplica el service (`parseLimite`). Acá sólo se exige entero positivo.
+ */
+const ListarLineasPublicasQuerySchema = z.object({
+  cityId: MobilityCityIdSchema.optional(),
+  since: z.coerce.date().optional(),
+  limit: z.coerce.number().int().min(1).optional(),
+  afterId: z.string().uuid().optional(),
+});
+
+class ListarLineasPublicasDto extends createZodDto(ListarLineasPublicasQuerySchema) {}
 
 /**
- * Catálogo de transporte apto para pasajeros. No usa guardas de tenant porque el servicio
- * filtra explícitamente cada recurso por `publicStatus = publicado` y proyecta DTOs públicos.
+ * Catálogo de sincronización masiva para QUIVO Rutas (producto/repo aparte). Un único
+ * endpoint — los siete que tenía el catálogo de lectura pública anterior (`cities`,
+ * `lines/:id`, `routes/:id`, `stops`, `stops/:id`, `vehicles/:token`, `journeys/search`)
+ * no vuelven: ese contrato era de la app de pasajeros, que ya no vive en este repo.
+ *
+ * Sin guarda de tenant — es intencional (mismo criterio que tenía el catálogo anterior):
+ * la proyección Zod (`PublicLineDetailSchema`) es la única defensa, filtrando explícito
+ * cada recurso por `publicStatus = 'publicado'` en cada nivel (línea/ruta/variante/parada).
+ *
+ * Ver el docstring de `PublicMobilityService` para la limitación de tombstones: una baja
+ * no se informa, sólo deja de aparecer.
  */
 @Controller('public/mobility')
 export class PublicMobilityController {
-  constructor(
-    @Inject(PublicMobilityService) private readonly publicMobility: PublicMobilityService,
-    @Inject(JourneyService) private readonly journeys: JourneyService,
-  ) {}
-
-  @Get('cities')
-  @Throttle({ default: { limit: 120, ttl: 60_000 } })
-  @Header('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400')
-  listarCiudades() {
-    return this.publicMobility.listarCiudades();
-  }
+  constructor(@Inject(PublicMobilityService) private readonly publicMobility: PublicMobilityService) {}
 
   @Get('lines')
   @Throttle({ default: { limit: 120, ttl: 60_000 } })
   @Header('Cache-Control', 'public, max-age=300, stale-while-revalidate=3600')
-  listarLineas(@Query('q') query?: string, @Query('limit') limit?: string, @Query('cityId') cityId?: string) {
-    return this.publicMobility.listarLineas(query, limit, cityId);
-  }
-
-  @Get('lines/:id')
-  @Throttle({ default: { limit: 120, ttl: 60_000 } })
-  @Header('Cache-Control', 'public, max-age=300, stale-while-revalidate=3600')
-  obtenerLinea(@Param('id') id: string, @Query('cityId') cityId?: string) {
-    return this.publicMobility.obtenerLinea(id, cityId);
-  }
-
-  @Get('routes/:id')
-  @Throttle({ default: { limit: 120, ttl: 60_000 } })
-  @Header('Cache-Control', 'public, max-age=300, stale-while-revalidate=3600')
-  obtenerRuta(@Param('id') id: string, @Query('cityId') cityId?: string) {
-    return this.publicMobility.obtenerRuta(id, cityId);
-  }
-
-  @Get('stops')
-  @Throttle({ default: { limit: 120, ttl: 60_000 } })
-  @Header('Cache-Control', 'public, max-age=120, stale-while-revalidate=600')
-  listarParadas(@Query('q') query?: string, @Query('limit') limit?: string, @Query('cityId') cityId?: string) {
-    return this.publicMobility.listarParadas(query, limit, cityId);
-  }
-
-  @Get('stops/:id')
-  @Throttle({ default: { limit: 120, ttl: 60_000 } })
-  @Header('Cache-Control', 'public, max-age=300, stale-while-revalidate=3600')
-  obtenerParada(@Param('id') id: string, @Query('cityId') cityId?: string) {
-    return this.publicMobility.obtenerParada(id, cityId);
-  }
-
-  @Get('vehicles/:token')
-  @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @Header('Cache-Control', 'no-store')
-  resolverQrVehiculo(@Param('token') token: string) {
-    return this.publicMobility.resolverQrVehiculo(token);
-  }
-
-  @Post('journeys/search')
-  @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  buscarViajes(@Body() body: JourneySearchDto) {
-    return this.journeys.buscarViajes(body as JourneySearchRequest);
+  listarLineas(@Query() query: ListarLineasPublicasDto) {
+    return this.publicMobility.listarLineas(query);
   }
 }

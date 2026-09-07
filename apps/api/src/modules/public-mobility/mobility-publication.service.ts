@@ -1,10 +1,9 @@
-import { BadRequestException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
 import type { Prisma } from '@quivo/db';
 import type { EstadoPublicacion } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { asegurarLineaVisible } from '../../common/geo/tenant-checks.js';
-import { NotificacionesService } from '../notificaciones/notificaciones.service.js';
 
 export const MOBILITY_RESOURCES = ['lineas', 'rutas', 'variantes', 'paradas'] as const;
 export type MobilityResource = (typeof MOBILITY_RESOURCES)[number];
@@ -18,10 +17,6 @@ const TRANSICIONES: Record<EstadoPublicacion, EstadoPublicacion[]> = {
 
 @Injectable()
 export class MobilityPublicationService {
-  constructor(
-    @Optional() @Inject(NotificacionesService) private readonly notifications?: NotificacionesService,
-  ) {}
-
   async actualizar(
     actor: AuthenticatedUser,
     resource: MobilityResource,
@@ -50,20 +45,6 @@ export class MobilityPublicationService {
         publishedAt: row.publishedAt?.toISOString() ?? null,
       };
     });
-    if (this.notifications && (nextStatus === 'publicado' || nextStatus === 'archivado')) {
-      const targetType = resource === 'lineas' ? 'line' : resource === 'rutas' ? 'route' : null;
-      if (targetType) {
-        await this.notifications.notificarSuscriptores(
-          targetType,
-          id,
-          nextStatus === 'publicado' ? 'Nueva información de transporte' : 'Cambio en tu ruta guardada',
-          nextStatus === 'publicado'
-            ? 'Se publicó información actualizada para una ruta que sigues.'
-            : 'Una ruta que sigues dejó de estar disponible públicamente.',
-          `quivo://mobility/${targetType}/${id}`,
-        );
-      }
-    }
     return response;
   }
 }

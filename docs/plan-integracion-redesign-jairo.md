@@ -124,3 +124,58 @@ El suite completo solo lo cierra CI, que levanta Postgres y Redis.
 - Los cuatro puntos de "a resolver antes de mergear" aplicados y re-verificados.
 - Los dos puntos de datos de producción confirmados por el CTO.
 - `docs/handoff.md` actualizado tras el merge.
+
+---
+
+## Corrección de alcance del CTO (2026-09-07): fuera todo Quivo Rutas
+
+Decisión textual del CTO: *"no necesitamos NADA de quivo rutas, nada, solo estamos con
+quivo control"*. Jairo confundió producto: Quivo Rutas (app de pasajeros) es un producto
+aparte con su propio repo. Nada relacionado con pasajeros se queda en este repo.
+
+Decisión complementaria sobre el flujo de publicación: **"dejarlo entero"** — se conservan
+las columnas `publicStatus`/`publishedAt`, el endpoint `PATCH /v1/mobility-publications` y
+el botón de publicar en `/lineas` y `/rutas`. Lo único que se corta ahí es la llamada a
+`NotificacionesService`.
+
+### Qué se elimina
+
+| Área | Rutas |
+|---|---|
+| API — módulos | `apps/api/src/modules/pasajeros/`, `pasajeros-datos/`, `planes/`, `notificaciones/` |
+| API — cripto | `apps/api/src/common/crypto/secret-box.ts` (solo lo usaba `notificaciones`) |
+| API — lectura pública | `public-mobility/public-mobility.controller.ts`, `public-mobility.service.ts`, `journey.service.ts` |
+| API — auth | endpoint `passenger/register` |
+| Shared | `packages/shared/src/passenger.ts` y los esquemas de pasajero dentro de `login.ts` |
+| Prisma | los 13 modelos `Passenger*` y el campo `Vehiculo.publicQrToken` |
+| Migraciones | `20260818123000_public_vehicle_qr_token`, `20260818150000_passenger_identity`, `20260818153000_passenger_experience`, `20260818160000_passenger_saved_data`, `20260818164500_gps_partition_idempotency` |
+
+### Qué se queda (y por qué)
+
+- `public-mobility/mobility-publication.{controller,service}.ts` — es **Control**: lo consumen
+  `apps/web/src/lib/api/mobility-publications.ts` y `use-rutas-data.ts`.
+- `20260819100000_mobility_city_scope` — `lineas.service.ts:71` hace
+  `tx.mobilityCity.findUnique(...)` y `:42` escribe `cityId` al crear línea. Sin la tabla,
+  crear una línea en Control revienta con 500.
+- `20260818163000_public_mobility_indexes` y `20260829180000_reconciliar_gps_points_sindicato_rls`.
+- El miembro `'pasajero'` de `RolSchema`. Quitarlo haría fallar con 500 cualquier login de un
+  usuario pasajero existente, porque `auth.service.ts:317` hace `RolSchema.parse(user.rol)`.
+
+### Riesgo mayor identificado por el análisis de Opus
+
+**Nunca quitar `20260829180000_reconciliar_gps_points_sindicato_rls` dejando
+`20260818164500_gps_partition_idempotency`**: esa combinación rompe en silencio el RLS
+multi-tenant de `gps_points`. Aquí se hace lo inverso (se va la 164500, se queda la
+20260829180000), y por eso la verificación en base virgen es obligatoria, no opcional.
+
+### Criterio de verificación (base virgen, obligatorio)
+
+1. `prisma migrate deploy` + seed sobre una Postgres vacía (`postgis/postgis:16-3.4-alpine`).
+2. `prisma migrate diff` entre las migraciones y `schema.prisma`: **cero drift**.
+3. RLS de `gps_points` sigue activo y con la política por `app.sindicato_id`.
+4. `pnpm typecheck`, `pnpm lint`, `pnpm build`, tests de API y web.
+
+### Pendientes que no bloquean el merge (decisión del CTO antes de desplegar)
+
+- `20260829180000` corre `DELETE FROM gps_points WHERE "sindicatoId" IS NULL` — contar filas antes.
+- `20260819100000` asigna `cityId='cochabamba'` a TODAS las líneas existentes.

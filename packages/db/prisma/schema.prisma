@@ -164,8 +164,6 @@ model Vehiculo {
   numeroInterno    String?
   distintivo       String?
   cartelSuperior   String?
-  // Token opaco impreso en el QR de pasajeros. No es la placa ni un identificador operativo.
-  publicQrToken    String    @unique @default(uuid())
   capacidad        Int
   estado           String    @default("pendiente")
   // Login por vehículo (M3, doc técnico §15.3): credencial emitida por el sindicato, el
@@ -230,9 +228,11 @@ model Conductor {
   @@map("conductores")
 }
 
-// Catálogo nacional de áreas de cobertura para el pasajero. La línea sigue
-// perteneciendo a un sindicato, pero su ciudad evita mezclar códigos iguales
-// entre departamentos y permite activar nuevas fuentes de forma gradual.
+// Catálogo nacional de ciudades/áreas de cobertura. Existe para que `Linea.cityId`
+// (Control) pueda scopear cada línea a una ciudad — sin esta tabla, crear una línea
+// revienta con 500 en `lineas.service.ts` (hace `tx.mobilityCity.findUnique(...)`). La línea
+// sigue perteneciendo a un sindicato; la ciudad solo evita mezclar códigos iguales entre
+// departamentos y permite activar nuevas fuentes de forma gradual.
 model MobilityCity {
   id                  String   @id
   nombre              String
@@ -248,7 +248,7 @@ model MobilityCity {
   modosDisponibles    String[] @default([])
   serviciosAuxiliares String[] @default([])
   createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  updatedAt           DateTime @default(now()) @updatedAt
 
   lineas Linea[]
 
@@ -295,6 +295,9 @@ model Linea {
   @@unique([sindicatoId, codigo])
   @@index([sindicatoId])
   @@index([cityId, publicStatus])
+  @@index([publicStatus])
+  @@index([publicStatus, codigo])
+  @@index([publicStatus, nombre])
   @@map("lineas")
 }
 
@@ -319,6 +322,8 @@ model Ruta {
   asignaciones  Asignacion[]
 
   @@index([lineaId])
+  @@index([publicStatus])
+  @@index([publicStatus, estado, lineaId])
   @@map("rutas")
 }
 
@@ -335,6 +340,8 @@ model Variante {
   updatedAt DateTime @updatedAt
 
   @@index([rutaId])
+  @@index([publicStatus])
+  @@index([publicStatus, estado, rutaId])
   @@map("variantes")
 }
 
@@ -355,6 +362,8 @@ model Parada {
   updatedAt DateTime                             @updatedAt
 
   @@index([rutaId])
+  @@index([publicStatus])
+  @@index([publicStatus, estado, rutaId, orden])
   @@map("paradas")
 }
 
@@ -450,6 +459,7 @@ model Asignacion {
   @@unique([vehiculoId, fecha, horario])
   @@index([rotacionId])
   @@index([estado, venceAt])
+  @@index([rutaId, estado, venceAt])
   @@map("asignaciones")
 }
 
@@ -505,6 +515,7 @@ model SesionOperativa {
   @@index([asignacionId, estado])
   @@index([deviceId, estado])
   @@index([vehiculoId, estado])
+  @@index([vehiculoId, estado, fin, inicio(sort: Desc)])
   @@map("sesiones_operativas")
 }
 
@@ -685,213 +696,6 @@ model GpsArchive {
 
   @@index([partitionDate])
   @@map("gps_archives")
-}
-
-// Perfil de experiencia de QUIVO Rutas. La identidad y las sesiones siguen siendo
-// propiedad de Better Auth (`User`/`Session`); este modelo contiene únicamente datos del
-// pasajero y no hereda permisos ni relaciones del dominio operativo de Control.
-model PassengerProfile {
-  id              String   @id @default(uuid())
-  userId          String   @unique
-  locale          String   @default("es-BO")
-  timezone        String   @default("America/La_Paz")
-  termsVersion    String
-  termsAcceptedAt DateTime
-  estado          String   @default("activo")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@index([estado, updatedAt])
-  @@map("passenger_profiles")
-}
-
-model PassengerDevice {
-  id              String   @id @default(uuid())
-  userId          String
-  deviceId        String
-  platform        String
-  tokenHash       String   @unique
-  tokenCiphertext String
-  appVersion      String?
-  enabled         Boolean  @default(true)
-  lastSeenAt      DateTime @default(now())
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  deliveries PassengerNotificationDelivery[]
-
-  @@unique([userId, deviceId])
-  @@index([userId, enabled])
-  @@map("passenger_devices")
-}
-
-model PassengerNotificationPreference {
-  id             String   @id @default(uuid())
-  userId         String   @unique
-  serviceAlerts  Boolean  @default(true)
-  lineChanges    Boolean  @default(true)
-  tripReminders  Boolean  @default(true)
-  campaigns      Boolean  @default(false)
-  system         Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  @@map("passenger_notification_preferences")
-}
-
-model PassengerNotification {
-  id         String   @id @default(uuid())
-  userId     String
-  category   String
-  title      String
-  body       String
-  deepLink   String?
-  payload    Json?
-  readAt     DateTime?
-  expiresAt  DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  deliveries PassengerNotificationDelivery[]
-
-  @@index([userId, createdAt])
-  @@index([userId, readAt, createdAt])
-  @@map("passenger_notifications")
-}
-
-model PassengerNotificationDelivery {
-  id                String              @id @default(uuid())
-  notificationId    String
-  notification      PassengerNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  deviceId          String
-  device            PassengerDevice       @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  status            String              @default("pending")
-  attempts          Int                 @default(0)
-  providerMessageId String?
-  lastError         String?
-  deliveredAt       DateTime?
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-
-  @@unique([notificationId, deviceId])
-  @@index([status, updatedAt])
-  @@map("passenger_notification_deliveries")
-}
-
-model PassengerAlertSubscription {
-  id         String   @id @default(uuid())
-  userId     String
-  targetType String
-  targetId   String
-  targetKey  String
-  enabled    Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  @@unique([userId, targetKey])
-  @@index([targetType, targetId, enabled])
-  @@map("passenger_alert_subscriptions")
-}
-
-model PassengerPlan {
-  id          String                 @id @default(uuid())
-  code        String                 @unique
-  name        String
-  description String?
-  priceCents  Int                    @default(0)
-  currency    String                 @default("BOB")
-  interval    String                 @default("month")
-  active      Boolean                @default(true)
-  createdAt   DateTime               @default(now())
-  updatedAt   DateTime               @updatedAt
-
-  features       PassengerPlanFeature[]
-  subscriptions PassengerSubscription[]
-
-  @@index([active, priceCents])
-  @@map("passenger_plans")
-}
-
-model PassengerPlanFeature {
-  id        String        @id @default(uuid())
-  planId    String
-  plan      PassengerPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
-  code      String
-  value     String
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
-
-  @@unique([planId, code])
-  @@map("passenger_plan_features")
-}
-
-model PassengerSubscription {
-  id                   String        @id @default(uuid())
-  userId               String
-  planId               String
-  plan                 PassengerPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
-  status               String        @default("active")
-  provider             String?
-  providerSubscriptionId String?
-  startsAt             DateTime      @default(now())
-  currentPeriodEnd     DateTime?
-  cancelAtPeriodEnd    Boolean       @default(false)
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
-
-  @@index([userId, status, currentPeriodEnd])
-  @@unique([provider, providerSubscriptionId])
-  @@map("passenger_subscriptions")
-}
-
-model PassengerEntitlementGrant {
-  id        String    @id @default(uuid())
-  userId    String
-  code      String
-  value     String
-  source    String
-  expiresAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  @@unique([userId, code, source])
-  @@index([userId, code, expiresAt])
-  @@map("passenger_entitlement_grants")
-}
-
-model PassengerFavoriteLine {
-  id        String   @id @default(uuid())
-  userId    String
-  lineId    String
-  createdAt DateTime @default(now())
-
-  @@unique([userId, lineId])
-  @@index([userId, createdAt])
-  @@map("passenger_favorite_lines")
-}
-
-model PassengerSavedPlace {
-  id         String   @id @default(uuid())
-  userId     String
-  name       String
-  coordinate Json
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  @@index([userId, updatedAt])
-  @@map("passenger_saved_places")
-}
-
-model PassengerRecentSearch {
-  id          String   @id @default(uuid())
-  userId      String
-  label       String?
-  origin      Json
-  destination Json
-  createdAt   DateTime @default(now())
-
-  @@index([userId, createdAt])
-  @@map("passenger_recent_searches")
 }
 
 // Solicitudes públicas de demostración enviadas desde la landing. No pertenecen a
