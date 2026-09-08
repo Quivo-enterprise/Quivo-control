@@ -1,19 +1,24 @@
-import { Body, Controller, Get, HttpCode, Inject, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Post, UseFilters, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
   AuthConductorMovilRequestSchema,
+  AuthSesionMovilRequestSchema,
   AuthVehiculoMovilRequestSchema,
   LogoutMovilRequestSchema,
   RefreshMovilRequestSchema,
+  SeleccionAsignacionMovilRequestSchema,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { AuthMovilGuard } from './auth-movil.guard.js';
 import { AuthMovilService } from './auth-movil.service.js';
 import { CurrentMobileSession } from './current-mobile-session.decorator.js';
+import { LockoutMovilExceptionFilter } from './lockout-movil-exception.filter.js';
 import type { SesionMovilAutenticada } from './auth-movil.types.js';
 
 class AuthVehiculoMovilDto extends createZodDto(AuthVehiculoMovilRequestSchema) {}
 class AuthConductorMovilDto extends createZodDto(AuthConductorMovilRequestSchema) {}
+class AuthSesionMovilDto extends createZodDto(AuthSesionMovilRequestSchema) {}
+class SeleccionAsignacionMovilDto extends createZodDto(SeleccionAsignacionMovilRequestSchema) {}
 class RefreshMovilDto extends createZodDto(RefreshMovilRequestSchema) {}
 class LogoutMovilDto extends createZodDto(LogoutMovilRequestSchema) {}
 
@@ -31,6 +36,23 @@ export class AuthMovilController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   autenticarConductor(@Body() body: AuthConductorMovilDto) {
     return this.authMovilService.autenticarConductor(body);
+  }
+
+  /** Login de un solo paso: placa + PIN del conductor. Reemplaza a `/vehiculo` +
+   * `/conductor` (vivos detrás de `MOBILE_LEGACY_AUTH_ENABLED`, ver ese servicio). */
+  @Post('sesion')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseFilters(LockoutMovilExceptionFilter)
+  autenticarSesion(@Body() body: AuthSesionMovilDto) {
+    return this.authMovilService.autenticarSesion(body);
+  }
+
+  @Post('sesion/asignacion')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  seleccionarAsignacion(@Body() body: SeleccionAsignacionMovilDto) {
+    return this.authMovilService.seleccionarAsignacion(body);
   }
 
   @Post('refresh')

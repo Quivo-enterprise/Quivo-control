@@ -77,7 +77,7 @@ function QuivoApp() {
         <VehicleLoginScreen
           loading={auth.estado.cargando}
           error={auth.estado.error}
-          onSubmit={auth.autenticarVehiculo}
+          onSubmit={auth.autenticarSesion}
         />
       );
     }

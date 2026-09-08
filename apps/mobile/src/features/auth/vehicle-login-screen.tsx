@@ -2,24 +2,14 @@ import { useState } from 'react';
 import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
+import { normalizarPlacaVehiculo } from '@quivo/shared';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Button } from '../../shared/components/Button';
 import { Card } from '../../shared/components/Card';
 import { Input } from '../../shared/components/Input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import logoWhite from '../../../assets/images/logo-white.png';
-
-const vehicleLoginSchema = z.object({
-  placa: z.string().regex(/^\d{4}-[A-Za-z]{3}$/, 'Formato esperado: 1234-ABC'),
-  pin: z.string().min(4, 'Ingresa el PIN del vehículo').max(12, 'PIN demasiado largo'),
-});
-
-type VehicleLoginFormValues = z.infer<typeof vehicleLoginSchema>;
-
-const placaMask = [
-  /\d/, /\d/, /\d/, /\d/, '-', /[A-Za-z]/, /[A-Za-z]/, /[A-Za-z]/
-];
+import { vehicleLoginSchema, type VehicleLoginFormValues } from './vehicle-login-schema';
 
 interface VehicleLoginScreenProps {
   loading: boolean;
@@ -48,8 +38,7 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
   const onSubmitForm = async (data: VehicleLoginFormValues) => {
     setIsSimulating(true);
     try {
-      // Remove dash before sending to backend to match DB seed format (e.g. 1001ABC)
-      await onSubmit(data.placa.toUpperCase().replace('-', ''), data.pin);
+      await onSubmit(normalizarPlacaVehiculo(data.placa), data.pin);
     } finally {
       setIsSimulating(false);
     }
@@ -93,15 +82,15 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
                     <Input
                       label="Placa del vehículo"
                       labelStyle={styles.inputLabel}
-                      placeholder="1234-ABC"
+                      placeholder="1234ABC o 123ABC"
                       placeholderTextColor="#94A3B8"
                       error={errors.placa?.message}
                       autoCapitalize="characters"
                       autoCorrect={false}
                       returnKeyType="next"
-                      mask={placaMask}
+                      maxLength={20}
                       value={value}
-                      onChangeText={(masked) => onChange(masked.toUpperCase())}
+                      onChangeText={(text) => onChange(text.toUpperCase())}
                       onBlur={onBlur}
                       editable={!loading}
                       inputShellStyle={styles.inputShell}
@@ -117,9 +106,9 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
                 render={({ field: { onChange, onBlur, value } }) => {
                   return (
                     <Input
-                      label="PIN del vehículo"
+                      label="PIN del conductor"
                       labelStyle={styles.inputLabel}
-                      placeholder="1234"
+                      placeholder="6 a 12 dígitos"
                       placeholderTextColor="#94A3B8"
                       error={errors.pin?.message}
                       keyboardType="numeric"

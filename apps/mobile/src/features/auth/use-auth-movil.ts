@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Sentry from '@sentry/react-native';
-import type {
-  AuthVehiculoMovilResponse,
-  ContextoOperativoMovil,
-  ResumenAsignacionMovil,
-} from '@quivo/shared';
+import type { ContextoOperativoMovil, ResumenAsignacionMovil } from '@quivo/shared';
 import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
 import {
   actualizarSesionMovil,
@@ -32,7 +28,12 @@ export interface EstadoAuthMovil {
    * (`obtenerAccessToken`) vuelve a tener éxito.
    */
   sesionNoRevalidada: boolean;
-  vehiculo: AuthVehiculoMovilResponse | null;
+  /** Login de un paso (`POST /sesion`): token de un solo uso que llega en la respuesta
+   * `seleccion_requerida` (≥2 asignaciones hoy) y hay que reenviar en
+   * `POST /sesion/asignacion` junto con el `asignacionId` elegido. Reemplaza al
+   * `AuthVehiculoMovilResponse` completo que el flujo viejo guardaba en `estado.vehiculo`
+   * (ver el comentario de `autenticarSesion` más abajo sobre por qué ese campo desapareció). */
+  seleccionToken: string | null;
   asignaciones: ResumenAsignacionMovil[];
   sesion: SesionMovilGuardada | null;
   deviceId: string | null;
@@ -44,7 +45,7 @@ const ESTADO_INICIAL: EstadoAuthMovil = {
   error: null,
   aviso: null,
   sesionNoRevalidada: false,
-  vehiculo: null,
+  seleccionToken: null,
   asignaciones: [],
   sesion: null,
   deviceId: null,
@@ -54,6 +55,19 @@ export function useAuthMovil() {
   const [estado, setEstado] = useState<EstadoAuthMovil>(ESTADO_INICIAL);
   const mounted = useRef(true);
   const deviceId = useRef<string | null>(null);
+  /** Contador ACUMULADO de 401 de `obtenerAccessToken` (bug QA 2026-08-23: 401 permanente
+   * cada 15s durante 42 min sin ninguna señal en pantalla) — ver `clasificarFalloAccessToken`
+   * para el porqué del umbral y por qué NO es un contador estrictamente consecutivo (H4,
+   * hallazgo de revisión: un error de red intercalado NO lo resetea a propósito). Vive en un
+   * ref (no en `estado`) porque no debe disparar renders por sí solo; sólo importa cuando
+   * cruza el umbral.
+   *
+   * H5 (hallazgo de revisión, bajo): este ref sobrevive a `ESTADO_INICIAL` — un `logout()` o
+   * un login nuevo exitoso limpian `estado`, pero no este ref, así que una racha vieja de 401
+   * (de la sesión ANTERIOR) podía combinarse con un solo 401 de la sesión nueva y disparar la
+   * alerta sin motivo. Se resetea explícitamente en `logout()` y en el camino exitoso de
+   * `autenticarSesion`/`seleccionarAsignacion` (búsqueda: `fallos401Acumulados.current = 0`). */
+  const fallos401Acumulados = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -223,69 +237,87 @@ export function useAuthMovil() {
     return null;
   }
 
-  /** Puente TEMPORAL de mockup visual (rediseño Figma "Q CONTROL"): el login pasó de 2
-   * pasos (vehículo con placa+PIN, luego chofer con CI+PIN) a un solo paso visual de
-   * placa+teléfono. El backend todavía no soporta ese contrato de un solo paso, así que
-   * tras el challenge de `autenticarVehiculo` esta función completa el segundo paso
-   * (`autenticarConductor`) sola, con las credenciales demo publicadas en `CREDENCIALES.md`
-   * (Sindicato 1º de Mayo: CI `1000101 LP` / PIN `135790`), sin mostrarle esa pantalla al
-   * chofer. Quitar este auto-completado en cuanto el CTO exponga un login real de un solo
-   * paso con teléfono. */
-  const CI_CONDUCTOR_DEMO = '1000101 LP';
-  const PIN_CONDUCTOR_DEMO = '135790';
-
-  const autenticarVehiculo = useCallback(async (placa: string, telefono: string) => {
+  /**
+   * Login de un solo paso: placa + PIN del CONDUCTOR (el parámetro se llamaba `telefono` en
+   * el puente visual temporal que esta función reemplaza — nunca fue un teléfono, era el PIN
+   * del conductor que la pantalla mandaba como segundo campo). Una sola llamada a
+   * `POST /v1/mobile/auth/sesion`: ya no hay credenciales demo ni segundo round-trip
+   * encadenado — el backend prueba la identidad del conductor en el mismo request (plan
+   * §1.d, `auth-movil.service.ts:autenticarSesion`).
+   *
+   * `estado.vehiculo` (el `AuthVehiculoMovilResponse` completo del `POST /vehiculo` legado)
+   * deja de setearse en este camino a propósito: ese contrato traía `challengeToken` +
+   * `expiresAt` para el segundo paso del flujo viejo, y acá no hay nada parecido — la
+   * identidad ya se probó en este mismo request. Si el resultado es `seleccion_requerida`,
+   * lo único que hace falta para el segundo paso es el `seleccionToken` (ver más abajo), así
+   * que ese es el único dato nuevo que entra al estado.
+   */
+  const autenticarSesion = useCallback(async (placa: string, pin: string) => {
     await ejecutar(async () => {
       const instalacionId = await asegurarDeviceId();
-      const vehiculo = await authMovilApi.autenticarVehiculo({
+      const respuesta = await authMovilApi.autenticarSesion({
         placa,
-        pin: telefono,
+        pin,
         deviceId: instalacionId,
-      });
-      const respuesta = await authMovilApi.autenticarConductor({
-        challengeToken: vehiculo.challengeToken,
-        deviceId: instalacionId,
-        documentoIdentidad: CI_CONDUCTOR_DEMO,
-        pin: PIN_CONDUCTOR_DEMO,
       });
       if (respuesta.status === 'seleccion_requerida') {
         setEstado((actual) => ({
           ...actual,
           etapa: 'asignacion',
-          vehiculo,
+          seleccionToken: respuesta.seleccionToken,
           asignaciones: respuesta.asignaciones,
         }));
         return;
       }
       await guardarSesionMovil(respuesta);
-      setEstado((actual) => ({ ...actual, etapa: 'operacion', vehiculo, sesion: respuesta }));
+      // H5: login nuevo exitoso — cortar cualquier racha de 401 heredada de la sesión
+      // anterior (el ref no lo limpia `ESTADO_INICIAL` porque vive fuera de `estado`).
+      fallos401Acumulados.current = 0;
+      setEstado((actual) => ({ ...actual, etapa: 'operacion', sesion: respuesta }));
     });
   }, []);
 
   const seleccionarAsignacion = useCallback(
     async (asignacionId: string) => {
       await ejecutar(async () => {
-        const actual = obtenerDesafio(estado);
-        const respuesta = await authMovilApi.autenticarConductor({
-          challengeToken: actual.challengeToken,
-          deviceId: await asegurarDeviceId(),
+        // A diferencia del `obtenerDesafio()` del flujo viejo, acá no hay `expiresAt` que
+        // chequear del lado del cliente: el `seleccionToken` es de un solo uso y el
+        // servidor lo valida (expirado/consumido/deviceId distinto → 401 "Placa o PIN
+        // incorrectos", ver `seleccionarAsignacion` en auth-movil.service.ts) — una
+        // validación de expiración local duplicaría esa lógica sin agregar nada, porque de
+        // todos modos hay que manejar el rechazo del servidor.
+        const seleccionToken = estado.seleccionToken;
+        if (!seleccionToken) {
+          throw new Error('La selección de turno expiró. Vuelve a comenzar.');
+        }
+        const respuesta = await authMovilApi.seleccionarAsignacionSesion({
+          seleccionToken,
           asignacionId,
+          deviceId: await asegurarDeviceId(),
         });
         if (respuesta.status !== 'autenticado') {
           throw new Error('La asignación no pudo confirmarse');
         }
         await guardarSesionMovil(respuesta);
-        setEstado((previo) => ({ ...previo, etapa: 'operacion', sesion: respuesta }));
+        // H5: misma razón que en `autenticarSesion` — este es el otro camino de login
+        // exitoso (segundo paso de `seleccion_requerida`).
+        fallos401Acumulados.current = 0;
+        setEstado((previo) => ({
+          ...previo,
+          etapa: 'operacion',
+          sesion: respuesta,
+          seleccionToken: null,
+        }));
       });
     },
-    [estado],
+    [estado.seleccionToken],
   );
 
   const volverAVehiculo = useCallback(() => {
     setEstado((actual) => ({
       ...actual,
       etapa: 'vehiculo',
-      vehiculo: null,
+      seleccionToken: null,
       asignaciones: [],
       error: null,
     }));
@@ -302,12 +334,26 @@ export function useAuthMovil() {
       }
     }
     await borrarSesionMovil();
+    // H5: `ESTADO_INICIAL` limpia `estado`, pero este ref vive fuera de `estado` — sin este
+    // reset explícito, una racha de 401 de la sesión que se está cerrando sobrevivía al
+    // logout y podía combinarse con un solo 401 de la sesión siguiente.
+    fallos401Acumulados.current = 0;
     if (mounted.current) setEstado({ ...ESTADO_INICIAL, etapa: 'vehiculo' });
   }, [estado.sesion?.refreshToken]);
 
   /** Access token vigente para llamadas propias de la pantalla de operación (paquete del
    * día QUI-236, sync QUI-240) — refresca sola si ya venció, sin duplicar la lógica de
-   * `reconciliarSesion`. Devuelve `null` sin sesión o si el refresh falla (offline). */
+   * `reconciliarSesion`. Devuelve `null` sin sesión o si el refresh falla (offline).
+   *
+   * Bug QA 2026-08-23: `use-sync-status.ts` llama a esta función cada `REFRESCO_MS` (15s), y
+   * el `catch` de acá trataba CUALQUIER falla igual (`return null` en silencio) — un 401
+   * permanente (sesión revocada de verdad) y una caída de red transitoria (offline legítimo,
+   * requisito duro del producto) rendían exactamente lo mismo. El teléfono hizo esa llamada
+   * cada 15s durante 42 minutos recibiendo 401 siempre, mientras la pantalla mostraba
+   * operación normal y cero `sync/batches` llegaban. `clasificarFalloAccessToken` (abajo)
+   * distingue los dos casos sin duplicar la lógica de reintento de `refrescarConReintentos`
+   * (esa sigue siendo la única que corre al restaurar la sesión; ésta es la que corre en el
+   * loop de sync). */
   const obtenerAccessToken = useCallback(async (): Promise<string | null> => {
     const sesion = estado.sesion;
     if (!sesion) return null;
@@ -316,6 +362,7 @@ export function useAuthMovil() {
     }
     try {
       const actualizada = await refrescar(sesion);
+      fallos401Acumulados.current = 0;
       // A5: un refresh posterior exitoso es evidencia de que la sesión SÍ es válida de nuevo
       // (el servidor la aceptó) — apaga la alerta de "no se pudo revalidar" si había quedado
       // prendida, en vez de dejarla pegada hasta el próximo login manual.
@@ -323,7 +370,17 @@ export function useAuthMovil() {
         setEstado((actual) => ({ ...actual, sesion: actualizada, sesionNoRevalidada: false }));
       }
       return actualizada.accessToken;
-    } catch {
+    } catch (error: unknown) {
+      const { fallos401Acumulados: fallosActualizados, marcarSesionNoRevalidada } =
+        clasificarFalloAccessToken(error, fallos401Acumulados.current);
+      fallos401Acumulados.current = fallosActualizados;
+      if (marcarSesionNoRevalidada && mounted.current) {
+        setEstado((actual) => ({ ...actual, sesionNoRevalidada: true }));
+      }
+      // NO se borra la sesión acá en ningún caso (401 ni network): misma decisión, mismo
+      // motivo que en `refrescarConReintentos` — ver su comentario. Un 401 aislado o
+      // repetido solo enciende la señal para que el chofer decida volver a loguearse; el
+      // borrado automático sigue siendo exclusivo de `logout()`.
       return null;
     }
   }, [estado.sesion]);
@@ -348,20 +405,12 @@ export function useAuthMovil() {
 
   return {
     estado,
-    autenticarVehiculo,
+    autenticarSesion,
     seleccionarAsignacion,
     volverAVehiculo,
     logout,
     obtenerAccessToken,
   };
-}
-
-function obtenerDesafio(estado: EstadoAuthMovil): AuthVehiculoMovilResponse {
-  if (!estado.vehiculo) throw new Error('La validación del vehículo expiró. Vuelve a comenzar.');
-  if (new Date(estado.vehiculo.expiresAt) <= new Date()) {
-    throw new Error('La validación del vehículo expiró. Vuelve a comenzar.');
-  }
-  return estado.vehiculo;
 }
 
 /** Hallazgo ALTO (piloto día 1, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): los refresh
@@ -404,6 +453,57 @@ export async function refrescar(guardada: SesionMovilGuardada): Promise<SesionMo
   } finally {
     refrescosEnVuelo.delete(clave);
   }
+}
+
+/** Umbral de 401 ACUMULADOS (NO estrictamente consecutivos — ver H4 más abajo) antes de
+ * prender `sesionNoRevalidada` desde `obtenerAccessToken` (plan Tarea B, bug QA 2026-08-23).
+ * `refrescar()` ya es single-flight por `refreshToken` (ver el comentario largo arriba de esa
+ * función), así que la rotación CONCURRENTE del mismo token no produce 401 falsos — ese caso
+ * ya está cerrado. Lo que el single-flight NO cierra es una ventana más angosta:
+ * `reconciliarSesion` (efecto de montaje) puede rotar el token con éxito y todavía no haber
+ * comiteado `setEstado({ sesion: vigente })` cuando el intervalo independiente de
+ * `use-sync-status.ts` (`REFRESCO_MS = 15_000`) llama a `obtenerAccessToken`, lee
+ * `estado.sesion` y todavía ve el refreshToken VIEJO — ya canjeado server-side. Ese intento
+ * golpea al servidor con un token que ya no es válido y recibe un 401 real, aunque la sesión
+ * esté sana. Exigir 2 fallos 401 acumulados (hasta 30 s con el intervalo actual, más si hay
+ * cortes de red en el medio — ver H4) le da tiempo de sobra a ese commit de React para
+ * asentarse antes de alarmar; un 401 de verdad (sesión revocada/expirada, como el bug de QA
+ * de 42 min) sigue prendiendo la alerta, solo que un ciclo de sync más tarde.
+ *
+ * H4 (hallazgo de revisión, medio — renombrada acá de `..._CONSECUTIVOS_...`): el nombre
+ * anterior prometía "SEGUIDOS" pero `clasificarFalloAccessToken` nunca reseteaba el contador
+ * ante un error de red, así que la promesa era falsa. Quedaban dos semánticas posibles: (a)
+ * resetear en error de red (haciendo el nombre literal), o (b) mantener la racha a través de
+ * cortes de red. Se elige (b), que es lo que el código YA hacía: una sesión revocada/expirada
+ * SIGUE revocada/expirada del otro lado de un corte de red — el corte no es evidencia de que
+ * el servidor haya cambiado de opinión. Resetear con (a) le regala al chofer legítimo que
+ * tiene mal la cobertura (CGNAT de Entel/Tigo, túnel, sótano de depósito) una ventana infinita
+ * para nunca acumular los 2 fallos y jamás enterarse de que su sesión real está revocada — el
+ * caso exactamente inverso al que motivó el umbral. Lo único que SÍ resetea el contador es un
+ * refresh REAL exitoso (evidencia positiva del servidor, ver `obtenerAccessToken` arriba) o un
+ * logout/login nuevo (H5, ver el comentario del ref `fallos401Acumulados`). */
+export const UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA = 2;
+
+/** Pura y exportada para poder testearla sin montar React (este paquete no tiene arnés
+ * jest-expo/RNTL, ver docs/plan-movil-login-y-pruebas.md ítem 7-8): clasifica el resultado de
+ * un intento fallido de `refrescar()` dentro de `obtenerAccessToken`. Distingue un 401 de
+ * verdad (`AuthMovilApiError` con `status === 401`) de cualquier otro fallo — sobre todo
+ * `kind === 'network'`, que es offline legítimo: la app tiene que poder operar sin red (
+ * requisito duro del producto), así que eso nunca debe encender la alarma. A propósito NO
+ * resetea el contador ante un error de red (decisión (b) documentada arriba, junto a la
+ * constante del umbral) — solo lo deja sin sumar. */
+export function clasificarFalloAccessToken(
+  error: unknown,
+  fallos401AcumuladosPrevios: number,
+): { fallos401Acumulados: number; marcarSesionNoRevalidada: boolean } {
+  if (error instanceof AuthMovilApiError && error.status === 401) {
+    const fallos401Acumulados = fallos401AcumuladosPrevios + 1;
+    return {
+      fallos401Acumulados,
+      marcarSesionNoRevalidada: fallos401Acumulados >= UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA,
+    };
+  }
+  return { fallos401Acumulados: fallos401AcumuladosPrevios, marcarSesionNoRevalidada: false };
 }
 
 function mensajeUsuario(error: unknown): string {

@@ -1,30 +1,62 @@
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { randomInt, randomUUID } from 'node:crypto';
+import {
+  ConflictException,
+  GoneException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { hashPassword, verifyPassword } from 'better-auth/crypto';
 import { Prisma, withTenantContext } from '@quivo/db';
+import * as Sentry from '@sentry/node';
 import {
   LineaDistintivoTipoSchema,
   TurnoSchema,
   type AuthConductorMovilRequest,
   type AuthConductorMovilResponse,
+  type AuthSesionMovilRequest,
+  type AuthSesionMovilResponse,
   type AuthVehiculoMovilRequest,
   type AuthVehiculoMovilResponse,
   type ContextoOperativoMovil,
   type EstablecerPinMovilRequest,
+  type GenerarPinMovilResponse,
   type LogoutMovilRequest,
   type RefreshMovilRequest,
   type RefreshMovilResponse,
   type ResumenAsignacionMovil,
+  type SeleccionAsignacionMovilRequest,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { fechaActualBolivia } from '../../common/tiempo/jornada.js';
+import { LockoutMovilException } from './auth-movil.exceptions.js';
 import type { SesionMovilAutenticada } from './auth-movil.types.js';
 import { emitirTokenOpaco, hashTokenOpaco } from './token-opaco.js';
 
 const CONTEXTO_ADMIN = { rol: 'admin_quivo', sindicatoId: null } as const;
 const MAX_INTENTOS_CONDUCTOR = 5;
 const DUMMY_HASH_PROMISE = hashPassword('000000');
+// Login de un paso (§1.f/§1.g del plan): cardinalidad máxima estructural de candidatos en
+// nivel 1, garantizada por `@@unique([vehiculoId, fecha, horario])` en `Asignacion`
+// (schema.prisma). El padding de tiempo siempre hace K verificaciones scrypt, reales o
+// contra `DUMMY_HASH_PROMISE`, para que el tiempo de respuesta no filtre cuántos
+// candidatos reales había.
+const K_VERIFICACIONES_PADDING = 3;
+// Tope duro de nivel 2 — scrypt es lento a propósito; comparar contra los 200-300
+// choferes de un sindicato entero en un endpoint no autenticado son decenas de segundos
+// de CPU. Nivel 2 nunca autentica, sólo decide si corresponde un 409 en vez de un 401.
+const MAX_CANDIDATOS_NIVEL_2 = 20;
+const VENTANA_NIVEL_2_DIAS_ATRAS = 30;
+const VENTANA_NIVEL_2_DIAS_ADELANTE = 7;
 
 type Tx = Prisma.TransactionClient;
+
+type ConductorCredencial = {
+  id: string;
+  nombre: string;
+  credencialHash: string | null;
+};
 
 type VehiculoCredencial = {
   id: string;
@@ -50,24 +82,14 @@ type AsignacionOperativa = Prisma.AsignacionGetPayload<{
 
 @Injectable()
 export class AuthMovilService {
+  private readonly logger = new Logger(AuthMovilService.name);
+
   async autenticarVehiculo(data: AuthVehiculoMovilRequest): Promise<AuthVehiculoMovilResponse> {
+    if (!legacyAuthMovilHabilitado()) {
+      throw endpointLegadoApagado();
+    }
     const placaNormalizada = normalizarPlaca(data.placa);
-    const candidatos = await withTenantContext(
-      CONTEXTO_ADMIN,
-      (tx) =>
-        tx.$queryRaw<VehiculoCredencial[]>`
-        SELECT id, "sindicatoId", placa, tipo, marca, modelo, "numeroInterno", distintivo, "cartelSuperior", "credencialHash"
-        FROM vehiculos
-        WHERE estado = 'activo'
-          AND (
-            "placaNormalizada" = ${placaNormalizada}
-            OR (
-              "placaNormalizada" IS NULL
-              AND regexp_replace(upper(placa), '[^A-Z0-9]', '', 'g') = ${placaNormalizada}
-            )
-          )
-      `,
-    );
+    const candidatos = await this.buscarVehiculosActivosPorPlaca(placaNormalizada);
 
     const verificaciones = await Promise.all(
       candidatos.map(async (vehiculo) => ({
@@ -121,6 +143,9 @@ export class AuthMovilService {
   }
 
   async autenticarConductor(data: AuthConductorMovilRequest): Promise<AuthConductorMovilResponse> {
+    if (!legacyAuthMovilHabilitado()) {
+      throw endpointLegadoApagado();
+    }
     const ahora = new Date();
     const desafio = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
       tx.desafioAuthMovil.findUnique({ where: { tokenHash: hashTokenOpaco(data.challengeToken) } }),
@@ -195,18 +220,7 @@ export class AuthMovilService {
       throw new NotFoundException('Asignación no disponible');
     }
 
-    const access = emitirTokenOpaco('access');
-    const refresh = emitirTokenOpaco('refresh');
-    const accessTokenExpiresAt = sumarSegundos(
-      ahora,
-      ttlSegundos('MOBILE_ACCESS_TTL_SECONDS', 15 * 60),
-    );
-    const refreshTokenExpiresAt = sumarSegundos(
-      ahora,
-      ttlSegundos('MOBILE_REFRESH_TTL_SECONDS', 30 * 24 * 60 * 60),
-    );
-
-    const sesion = await withTenantContext(CONTEXTO_ADMIN, async (tx) => {
+    return withTenantContext(CONTEXTO_ADMIN, async (tx) => {
       const consumido = await tx.desafioAuthMovil.updateMany({
         where: { id: desafio.id, consumedAt: null, expiresAt: { gt: ahora } },
         data: { consumedAt: ahora },
@@ -214,56 +228,213 @@ export class AuthMovilService {
       if (consumido.count !== 1) {
         throw credencialesInvalidas();
       }
-      // Plan §2.4.5 ("sesiones colgadas"): cierra las sesiones ACTIVAS previas del MISMO
-      // vehículo, sin importar el dispositivo — no solo las del mismo `deviceId` como antes.
-      // Producción tuvo 3 sesiones activas simultáneas del mismo vehículo en DOS
-      // dispositivos: el filtro por `deviceId` nunca las alcanzaba porque cada login venía
-      // de un `deviceId` distinto. Se mantiene también la condición por `deviceId` (con
-      // `OR`) para no perder la cobertura original — un mismo dispositivo reutilizado para
-      // OTRO vehículo tampoco debe dejar una sesión huérfana. Solo aplica a la CREACIÓN de
-      // una sesión nueva (acá, dentro de esta misma transacción); no toca `seleccion_requerida`
-      // (esa rama retorna antes de llegar acá) ni `refresh()`/`logout()`, que son métodos
-      // aparte.
-      //
-      // M1 (hallazgo de revisión, medio): `sindicatoId: desafio.sindicatoId` FUERA del `OR`,
-      // no dentro. Esto corre bajo `CONTEXTO_ADMIN` (RLS bypasseada) — la rama `vehiculoId` es
-      // segura por sí sola (UUID PK de un solo sindicato), pero `deviceId` lo controla el
-      // CLIENTE y llega tal cual en el request: sin este scoping, alguien autenticado en el
-      // sindicato A puede mandar el `deviceId` de un dispositivo real del sindicato B (que
-      // puede observar o adivinar) y cerrarle la sesión operativa VIVA a un vehículo ajeno,
-      // cortando la evidencia del turno de otro sindicato.
-      await tx.sesionOperativa.updateMany({
-        where: {
-          estado: 'activa',
-          revokedAt: null,
-          sindicatoId: desafio.sindicatoId,
-          OR: [{ vehiculoId: desafio.vehiculoId }, { deviceId: desafio.deviceId }],
-        },
-        data: { estado: 'cerrada', fin: ahora, revokedAt: ahora },
+      return this.crearSesionOperativa(tx, ahora, {
+        sindicatoId: desafio.sindicatoId,
+        vehiculoId: desafio.vehiculoId,
+        deviceId: desafio.deviceId,
+        conductorId: conductorId!,
+        asignacion,
       });
-      return tx.sesionOperativa.create({
+    });
+  }
+
+  /**
+   * DEUDA CONOCIDA — colisión de placa entre sindicatos: la migración
+   * `20260801153000_mejora_entidad_vehiculo` deja a propósito `placaNormalizada = NULL` en
+   * duplicados históricos, así que >1 vehículo activo por placa es un estado PREVISTO, y
+   * pueden pertenecer a sindicatos distintos. Hoy este método se queda con el PRIMER
+   * candidato (`candidatosVehiculo[0]`); el `ORDER BY` de `buscarVehiculosActivosPorPlaca`
+   * lo hace determinístico (siempre el mismo), pero no resuelve el conflicto de fondo. Dos
+   * consecuencias conocidas: el conductor del vehículo perdedor no puede loguearse, y sus
+   * intentos fallidos acumulan lockout sobre el vehículo del OTRO sindicato. Pendiente de
+   * arreglar; plan en `docs/handoff.md` (sección "Login móvil de un paso", PENDIENTE 1).
+   *
+   * POST /v1/mobile/auth/sesion — login de un solo paso: placa + PIN del CONDUCTOR (no del
+   * vehículo). Conserva la atribución de identidad (el producto imputa cumplimientos y
+   * sanciones a una persona) sin el segundo round-trip del login legado.
+   *
+   * Algoritmo (plan §1.d-§1.g):
+   * 1. Resolver el vehículo por placa (misma query cruda que `autenticarVehiculo`).
+   * 2. Lockout POR VEHÍCULO, antes de cualquier scrypt (429 si `bloqueadoHasta` es futuro).
+   * 3. Nivel 1: candidatos con asignación vigente HOY y rotación publicada (cardinalidad
+   *    estructural máxima 3). Verificación con padding de tiempo a K=3 scrypt siempre.
+   * 4. Si el nivel 1 no resuelve nada, nivel 2 (sólo para dar un 409 útil, nunca para
+   *    autenticar): candidatos con cualquier asignación en un rango de 38 días, tope duro
+   *    de 20 conductores. Ese costo scrypt es visible (no tiene padding) — ver el
+   *    comentario en `verificarNivel2`.
+   * 5. Con el conductor resuelto, sus asignaciones vigentes de hoy deciden entre
+   *    autenticado / seleccion_requerida / 409 (sin rotación publicada).
+   */
+  async autenticarSesion(data: AuthSesionMovilRequest): Promise<AuthSesionMovilResponse> {
+    const ahora = new Date();
+    const placaNormalizada = normalizarPlaca(data.placa);
+    const candidatosVehiculo = await this.buscarVehiculosActivosPorPlaca(placaNormalizada);
+    const vehiculo = candidatosVehiculo[0] ?? null;
+
+    if (!vehiculo) {
+      // Padding: el tiempo de respuesta no debe distinguir "placa desconocida" de "placa
+      // conocida, PIN incorrecto" — K=3 verificaciones dummy igual que si hubiera 0
+      // candidatos reales.
+      await this.verificarPinConPadding(data.pin, []);
+      throw credencialesInvalidasSesion();
+    }
+
+    await this.verificarLockout(vehiculo.id);
+
+    const candidatosNivel1 = await this.buscarCandidatosNivel1(vehiculo, ahora);
+    const resultadosNivel1 = await this.verificarPinConPadding(
+      data.pin,
+      candidatosNivel1.map((c) => c.credencialHash),
+    );
+    const validosNivel1 = candidatosNivel1.filter((_, i) => resultadosNivel1[i]);
+
+    let conductor: ConductorCredencial;
+    if (validosNivel1.length === 1) {
+      conductor = validosNivel1[0]!;
+      await this.resetearIntentos(vehiculo.id);
+    } else if (validosNivel1.length > 1) {
+      this.reportarColisionPin(vehiculo.id, validosNivel1.length);
+      await this.registrarIntentoFallidoVehiculo(vehiculo.id, vehiculo.sindicatoId);
+      throw credencialesInvalidasSesion();
+    } else {
+      const resultadoNivel2 = await this.verificarNivel2(
+        vehiculo,
+        data.pin,
+        ahora,
+        candidatosNivel1.map((c) => c.id),
+      );
+      if (!resultadoNivel2) {
+        await this.registrarIntentoFallidoVehiculo(vehiculo.id, vehiculo.sindicatoId);
+        throw credencialesInvalidasSesion();
+      }
+      // El PIN es correcto (nivel 2), pero hoy no hay rotación publicada para este
+      // vehículo con este conductor: es el bug real que este endpoint arregla — antes
+      // este caso volvía un 401 genérico y empujaba al chofer a seguir probando PINs.
+      //
+      // H1 (hallazgo de revisión, alto): a propósito NO se llama `resetearIntentos` acá.
+      // `buscarCandidatosNivel2` no filtra por `conductor.estado` (nivel 2 sólo decide si
+      // corresponde un 409, nunca autentica), así que un EX-conductor que todavía recuerda
+      // su propio PIN también cae en esta rama. Si el 409 reseteara el contador, intercalar
+      // 3 PINs errados + 1 PIN de un ex-conductor (o el suyo propio en un día sin rotación)
+      // volvía `fallos`/`bloqueadoHasta` a cero indefinidamente y el backoff exponencial de
+      // `registrarIntentoFallidoVehiculo` nunca engancharía — quedaba solo el throttle por
+      // IP de 5/60s, que bajo CGNAT (Entel/Tigo) protege poco o nada.
+      //
+      // Tampoco se llama `registrarIntentoFallidoVehiculo` acá: un 409 de nivel 2 prueba
+      // conocimiento de UN PIN real (scrypt lo verificó), no es fuerza bruta — es el chofer
+      // legítimo que se loguea un día sin rotación publicada. Sumarle un "fallo" al contador
+      // penalizaría a ESE chofer (lo acerca a su propio lockout) por un caso de uso válido
+      // que el propio endpoint existe para resolver. La postura correcta es neutral: ni
+      // resetear (perdonaría intentos previos de fuerza bruta reales) ni sumar (castigaría
+      // un login legítimo) — el contador queda exactamente donde estaba.
+      throw sinRotacionPublicada(resultadoNivel2.nombre, vehiculo.placa);
+    }
+
+    const asignaciones = await this.buscarAsignaciones(
+      { sindicatoId: vehiculo.sindicatoId, vehiculoId: vehiculo.id },
+      conductor.id,
+      ahora,
+    );
+    if (asignaciones.length === 0) {
+      throw sinRotacionPublicada(conductor.nombre, vehiculo.placa);
+    }
+    if (asignaciones.length === 1) {
+      return withTenantContext(CONTEXTO_ADMIN, (tx) =>
+        this.crearSesionOperativa(tx, ahora, {
+          sindicatoId: vehiculo.sindicatoId,
+          vehiculoId: vehiculo.id,
+          deviceId: data.deviceId,
+          conductorId: conductor.id,
+          asignacion: asignaciones[0]!,
+        }),
+      );
+    }
+
+    // >=2 asignaciones hoy: `DesafioAuthMovil` reciclado como `seleccionToken` (schema.prisma
+    // §DesafioAuthMovil) — misma tabla que el login legado, cero migración. Cambia la
+    // semántica: acá se emite DESPUÉS de probar identidad, con `conductorId` ya poblado,
+    // lo que lo vuelve inofensivo como oráculo (a diferencia del `challengeToken` legado,
+    // que se emitía antes de probar nada).
+    const token = emitirTokenOpaco('challenge');
+    const expiresAt = sumarSegundos(ahora, ttlSegundos('MOBILE_CHALLENGE_TTL_SECONDS', 300));
+    // H3 (hallazgo de revisión, bajo): réplica de la poda que ya hace el legado
+    // `autenticarVehiculo` (`:112-118` de este archivo) antes de crear su propio
+    // `DesafioAuthMovil` — acá faltaba, y nada más en el módulo borra filas de esta tabla
+    // (ni un cron, ni un `DELETE` en otro lado), así que sin esto `desafios_auth_movil` crece
+    // sin límite con cada login de un paso que resulta en `seleccion_requerida` (cualquier
+    // conductor con ≥2 asignaciones hoy). Misma transacción que el `create` para que podar y
+    // crear sean atómicos entre sí, igual que en el legado.
+    await withTenantContext(CONTEXTO_ADMIN, async (tx) => {
+      await tx.desafioAuthMovil.deleteMany({
+        where: {
+          vehiculoId: vehiculo.id,
+          OR: [{ expiresAt: { lte: new Date() } }, { consumedAt: { not: null } }],
+        },
+      });
+      await tx.desafioAuthMovil.create({
         data: {
-          sindicatoId: desafio.sindicatoId,
-          asignacionId: asignacion.id,
-          vehiculoId: desafio.vehiculoId,
-          conductorId,
-          deviceId: desafio.deviceId,
-          accessTokenHash: access.hash,
-          refreshTokenHash: refresh.hash,
-          accessExpiresAt: accessTokenExpiresAt,
-          refreshExpiresAt: refreshTokenExpiresAt,
+          sindicatoId: vehiculo.sindicatoId,
+          vehiculoId: vehiculo.id,
+          conductorId: conductor.id,
+          tokenHash: token.hash,
+          deviceId: data.deviceId,
+          expiresAt,
         },
       });
     });
-
     return {
-      status: 'autenticado',
-      accessToken: access.value,
-      refreshToken: refresh.value,
-      accessTokenExpiresAt: accessTokenExpiresAt.toISOString(),
-      refreshTokenExpiresAt: refreshTokenExpiresAt.toISOString(),
-      contexto: toContextoOperativo(sesion.id, asignacion),
+      status: 'seleccion_requerida',
+      seleccionToken: token.value,
+      asignaciones: asignaciones.map(toResumenAsignacion),
     };
+  }
+
+  /** POST /v1/mobile/auth/sesion/asignacion — segundo request cuando `autenticarSesion`
+   * devolvió `seleccion_requerida`. Consume el `DesafioAuthMovil` emitido como
+   * `seleccionToken` (ya con `conductorId` poblado) y crea la sesión operativa. */
+  async seleccionarAsignacion(
+    data: SeleccionAsignacionMovilRequest,
+  ): Promise<AuthSesionMovilResponse> {
+    const ahora = new Date();
+    const desafio = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+      tx.desafioAuthMovil.findUnique({ where: { tokenHash: hashTokenOpaco(data.seleccionToken) } }),
+    );
+    if (
+      !desafio ||
+      desafio.consumedAt ||
+      desafio.expiresAt <= ahora ||
+      desafio.deviceId !== data.deviceId ||
+      !desafio.conductorId
+    ) {
+      throw credencialesInvalidasSesion();
+    }
+
+    const asignaciones = await this.buscarAsignaciones(
+      { sindicatoId: desafio.sindicatoId, vehiculoId: desafio.vehiculoId },
+      desafio.conductorId,
+      ahora,
+    );
+    const asignacion = asignaciones.find(({ id }) => id === data.asignacionId);
+    if (!asignacion) {
+      throw credencialesInvalidasSesion();
+    }
+
+    return withTenantContext(CONTEXTO_ADMIN, async (tx) => {
+      const consumido = await tx.desafioAuthMovil.updateMany({
+        where: { id: desafio.id, consumedAt: null, expiresAt: { gt: ahora } },
+        data: { consumedAt: ahora },
+      });
+      if (consumido.count !== 1) {
+        throw credencialesInvalidasSesion();
+      }
+      return this.crearSesionOperativa(tx, ahora, {
+        sindicatoId: desafio.sindicatoId,
+        vehiculoId: desafio.vehiculoId,
+        deviceId: desafio.deviceId,
+        conductorId: desafio.conductorId!,
+        asignacion,
+      });
+    });
   }
 
   async validarAccessToken(accessToken: string): Promise<SesionMovilAutenticada> {
@@ -375,6 +546,34 @@ export class AuthMovilService {
     await this.establecerPin(actor, 'conductor', id, pin);
   }
 
+  /**
+   * POST /v1/mobile/credenciales/vehiculos/:id/generar — genera un PIN de 6 dígitos con
+   * CSPRNG (`crypto.randomInt`, sin sesgo de módulo) en vez de dejar que un admin elija
+   * `123456`. El PIN vuelve UNA sola vez en la respuesta; el backend sólo guarda su hash
+   * (misma ruta que `establecerPinVehiculo`, para heredar auditoría y revocación).
+   *
+   * Trampa operativa: rotar el PIN de un vehículo revoca sus sesiones activas y sus
+   * desafíos sin consumir (ver `establecerPin` más abajo) — hacerlo con el vehículo en el
+   * depósito, nunca a mitad de recorrido, o se corta el GPS del chofer en vivo.
+   */
+  async generarPinVehiculo(actor: AuthenticatedUser, id: string): Promise<GenerarPinMovilResponse> {
+    const pin = generarPinCsprng();
+    await this.establecerPin(actor, 'vehiculo', id, pin);
+    return { pin };
+  }
+
+  /**
+   * POST /v1/mobile/credenciales/conductores/:id/generar — igual que
+   * `generarPinVehiculo` pero para el PIN del CONDUCTOR, que con el login de un paso pasó
+   * a ser el único secreto (la placa es pública). Misma trampa operativa: rotarlo revoca
+   * las sesiones activas de ese conductor — no hacerlo con el chofer en ruta.
+   */
+  async generarPinConductor(actor: AuthenticatedUser, id: string): Promise<GenerarPinMovilResponse> {
+    const pin = generarPinCsprng();
+    await this.establecerPin(actor, 'conductor', id, pin);
+    return { pin };
+  }
+
   private async establecerPin(
     actor: AuthenticatedUser,
     entidad: 'vehiculo' | 'conductor',
@@ -467,6 +666,312 @@ export class AuthMovilService {
         orderBy: [{ orden: 'asc' }, { horario: 'asc' }],
       }),
     );
+  }
+
+  /** Sin `LIMIT`: el legado `autenticarVehiculo` comparte este helper y necesita el set
+   * COMPLETO para su chequeo de exactamente-1 sobre TODOS los candidatos. El `ORDER BY`
+   * fija un orden determinístico y estable — placas con `placaNormalizada` poblada primero
+   * (el caso sano, sin duplicado histórico), después por `createdAt` y por `id` como
+   * desempate — de modo que quien toma el primer elemento (`autenticarSesion`) obtenga
+   * siempre el mismo, y no una fila arbitraria de Postgres. */
+  private buscarVehiculosActivosPorPlaca(placaNormalizada: string): Promise<VehiculoCredencial[]> {
+    return withTenantContext(
+      CONTEXTO_ADMIN,
+      (tx) =>
+        tx.$queryRaw<VehiculoCredencial[]>`
+        SELECT id, "sindicatoId", placa, tipo, marca, modelo, "numeroInterno", distintivo, "cartelSuperior", "credencialHash"
+        FROM vehiculos
+        WHERE estado = 'activo'
+          AND (
+            "placaNormalizada" = ${placaNormalizada}
+            OR (
+              "placaNormalizada" IS NULL
+              AND regexp_replace(upper(placa), '[^A-Z0-9]', '', 'g') = ${placaNormalizada}
+            )
+          )
+        ORDER BY ("placaNormalizada" IS NULL), "createdAt", id
+      `,
+    );
+  }
+
+  /** Nivel 1 del login de un paso (plan §1.e): conductores DISTINTOS con asignación
+   * vigente hoy y rotación publicada. Cardinalidad máxima estructural 3, garantizada por
+   * `@@unique([vehiculoId, fecha, horario])` en `Asignacion`. */
+  private async buscarCandidatosNivel1(
+    vehiculo: VehiculoCredencial,
+    ahora: Date,
+  ): Promise<ConductorCredencial[]> {
+    const filas = await withTenantContext(
+      { rol: 'conductor', sindicatoId: vehiculo.sindicatoId },
+      (tx) =>
+        tx.asignacion.findMany({
+          where: {
+            vehiculoId: vehiculo.id,
+            fecha: fechaActualBolivia(ahora),
+            estado: 'vigente',
+            venceAt: { gt: ahora },
+            conductorId: { not: null },
+            rotacion: { sindicatoId: vehiculo.sindicatoId, estado: 'publicada' },
+            conductor: { estado: 'activo' },
+          },
+          select: { conductor: { select: { id: true, nombre: true, credencialHash: true } } },
+        }),
+    );
+    return dedupeConductores(filas.map((fila) => fila.conductor));
+  }
+
+  /** Nivel 2 (plan §1.e.2): SÓLO corre si el nivel 1 no matcheó nada, y SÓLO sirve para
+   * decidir si corresponde un 409 en vez de un 401 — nunca autentica. Tope duro de 20
+   * conductores distintos, excluyendo a los ya probados en el nivel 1. Sin padding de
+   * tiempo: el plan documenta esta limitación explícitamente (§1.g.3) en vez de fingir
+   * que no existe — su costo (hasta 20 scrypt) sólo es visible cuando el nivel 1 falló,
+   * que ya es una señal más débil que "la placa existe" para un atacante. */
+  private async buscarCandidatosNivel2(
+    vehiculo: VehiculoCredencial,
+    ahora: Date,
+    excluir: string[],
+  ): Promise<ConductorCredencial[]> {
+    const hoy = fechaActualBolivia(ahora);
+    const desde = new Date(hoy);
+    desde.setUTCDate(desde.getUTCDate() - VENTANA_NIVEL_2_DIAS_ATRAS);
+    const hasta = new Date(hoy);
+    hasta.setUTCDate(hasta.getUTCDate() + VENTANA_NIVEL_2_DIAS_ADELANTE);
+
+    const filas = await withTenantContext(
+      { rol: 'conductor', sindicatoId: vehiculo.sindicatoId },
+      (tx) =>
+        tx.asignacion.findMany({
+          where: {
+            vehiculoId: vehiculo.id,
+            fecha: { gte: desde, lte: hasta },
+            conductorId: { not: null },
+          },
+          select: { conductor: { select: { id: true, nombre: true, credencialHash: true } } },
+          orderBy: { fecha: 'desc' },
+        }),
+    );
+    const excluidos = new Set(excluir);
+    const vistos = new Map<string, ConductorCredencial>();
+    for (const fila of filas) {
+      const conductor = fila.conductor;
+      if (!conductor || excluidos.has(conductor.id) || vistos.has(conductor.id)) continue;
+      vistos.set(conductor.id, conductor);
+      if (vistos.size >= MAX_CANDIDATOS_NIVEL_2) break;
+    }
+    return [...vistos.values()];
+  }
+
+  private async verificarNivel2(
+    vehiculo: VehiculoCredencial,
+    pin: string,
+    ahora: Date,
+    excluirIds: string[],
+  ): Promise<{ id: string; nombre: string } | null> {
+    const candidatos = await this.buscarCandidatosNivel2(vehiculo, ahora, excluirIds);
+    const resultados = await Promise.all(
+      candidatos.map((candidato) => verificarCredencial(pin, candidato.credencialHash)),
+    );
+    const validos = candidatos.filter((_, i) => resultados[i]);
+    if (validos.length === 0) {
+      return null;
+    }
+    if (validos.length > 1) {
+      this.reportarColisionPin(vehiculo.id, validos.length);
+      return null;
+    }
+    return validos[0]!;
+  }
+
+  /** Padding de tiempo (plan §1.g.3): siempre hace K=3 verificaciones scrypt, reales o
+   * contra `DUMMY_HASH_PROMISE`, en paralelo — sin esto, el tiempo de respuesta del nivel
+   * 1 filtra si el vehículo tiene 0, 1, 2 o 3 candidatos (o sea, si tiene rotación
+   * publicada hoy) antes de tocar el PIN siquiera. */
+  private async verificarPinConPadding(
+    pin: string,
+    hashes: (string | null)[],
+  ): Promise<boolean[]> {
+    const dummies = Math.max(K_VERIFICACIONES_PADDING - hashes.length, 0);
+    const [resultados] = await Promise.all([
+      Promise.all(hashes.map((hash) => verificarCredencial(pin, hash))),
+      Promise.all(Array.from({ length: dummies }, () => verificarCredencial(pin, null))),
+    ]);
+    return resultados;
+  }
+
+  private async verificarLockout(vehiculoId: string): Promise<void> {
+    const intento = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+      tx.intentoAuthMovil.findUnique({ where: { vehiculoId } }),
+    );
+    const ahora = new Date();
+    if (intento?.bloqueadoHasta && intento.bloqueadoHasta > ahora) {
+      const retryAfterSeconds = Math.ceil(
+        (intento.bloqueadoHasta.getTime() - ahora.getTime()) / 1_000,
+      );
+      throw new LockoutMovilException(retryAfterSeconds);
+    }
+  }
+
+  /** Retraso exponencial, no bloqueo duro (plan §1.g.2): la placa está pintada en la
+   * puerta del vehículo, así que un bloqueo duro es un botón de "dejá a este trufi sin
+   * GPS" que cualquiera aprieta. `retryAfterSeconds = min(2^(fallos-3), 60)` desde el
+   * tercer fallo — antes de eso no hay espera. */
+  /**
+   * H2 (hallazgo de revisión, bajo): antes esto era `tx.intentoAuthMovil.upsert(...)`.
+   * Prisma NO traduce ese upsert a un `INSERT ... ON CONFLICT` atómico de un solo statement
+   * — internamente hace SELECT y decide create/update en la aplicación, en dos round-trips
+   * separados. Dos requests simultáneos con PIN incorrecto para el MISMO vehículo sin fila
+   * previa en `intentos_auth_movil` (el caso común: el primer PIN fallido de ese vehículo)
+   * pueden correr ambos la rama `create`; el segundo en llegar viola el índice único
+   * `intentos_auth_movil_vehiculo_key` (P2002 de Prisma) y ese error no está mapeado a nada
+   * en este módulo, así que Nest lo deja subir como 500 — justo en el endpoint de login,
+   * bajo la concurrencia más probable de todas (dos requests fallidos casi simultáneos para
+   * el mismo vehículo), en vez del 401 que el cliente espera.
+   *
+   * Fix elegido: `INSERT ... ON CONFLICT ("vehiculoId") DO UPDATE` vía `$queryRaw`, que
+   * Postgres resuelve de forma atómica a nivel de fila (sin el hueco entre SELECT y
+   * create/update que tiene el upsert de Prisma). Se prefiere sobre "capturar P2002 y
+   * reintentar el update" porque esa alternativa sigue teniendo DOS statements con una
+   * ventana entre medio (más chica, pero no cero) y necesita lógica de reintento a mano;
+   * `ON CONFLICT` es una sola ida a la base y la atomicidad la garantiza el motor, no el
+   * código de la app. `id` y `updatedAt` se generan acá porque la tabla no tiene default de
+   * DB para ninguno de los dos (ver `migration.sql` de
+   * `20260907100000_intento_auth_movil`) — el `upsert` normal de Prisma los rellena
+   * client-side, pero `$queryRaw` no pasa por esa capa. `RETURNING fallos` evita una lectura
+   * extra para decidir si corresponde el backoff de abajo.
+   */
+  private async registrarIntentoFallidoVehiculo(
+    vehiculoId: string,
+    sindicatoId: string,
+  ): Promise<void> {
+    await withTenantContext(CONTEXTO_ADMIN, async (tx) => {
+      const ahora = new Date();
+      const [actualizado] = await tx.$queryRaw<{ fallos: number }[]>`
+        INSERT INTO intentos_auth_movil (id, "sindicatoId", "vehiculoId", fallos, "updatedAt")
+        VALUES (${randomUUID()}, ${sindicatoId}, ${vehiculoId}, 1, ${ahora})
+        ON CONFLICT ("vehiculoId")
+        DO UPDATE SET fallos = intentos_auth_movil.fallos + 1, "updatedAt" = ${ahora}
+        RETURNING fallos
+      `;
+      if (!actualizado || actualizado.fallos <= 3) {
+        return;
+      }
+      const esperaSegundos = Math.min(2 ** (actualizado.fallos - 3), 60);
+      await tx.intentoAuthMovil.update({
+        where: { vehiculoId },
+        data: { bloqueadoHasta: sumarSegundos(new Date(), esperaSegundos) },
+      });
+    });
+  }
+
+  /** Reset del lockout en el primer éxito (plan §1.g.2/§1.d). "Éxito" acá es un PIN
+   * verificado como correcto (nivel 1 con exactamente 1 candidato, o nivel 2 con
+   * exactamente 1) — no depende de si además hay una asignación vigente hoy: un PIN
+   * correcto sin rotación publicada (409) es una credencial legítima, no un intento de
+   * fuerza bruta, y no debería seguir empujando el contador de fallos. */
+  private async resetearIntentos(vehiculoId: string): Promise<void> {
+    await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+      tx.intentoAuthMovil.updateMany({
+        where: { vehiculoId },
+        data: { fallos: 0, bloqueadoHasta: null },
+      }),
+    );
+  }
+
+  /** >1 PIN válido simultáneo (plan §1.f): con 3 candidatos estructurales y PIN de 6
+   * dígitos la probabilidad es ~3×10⁻⁶ por vehículo-día — si ocurre, es señal de PINs no
+   * aleatorios (o de que alguien no rotó los PINs generados por CSPRNG). No hay un
+   * wrapper de Sentry en este módulo; se importa `@sentry/node` directo, igual que
+   * `main.ts`/`worker.ts` — `captureMessage` es un no-op seguro si `Sentry.init` nunca
+   * corrió (sin `SENTRY_DSN`), así que el `Logger` de Nest queda como respaldo que no
+   * depende de esa configuración. */
+  private reportarColisionPin(vehiculoId: string, coincidencias: number): void {
+    this.logger.error(
+      `Colisión de PIN en login móvil de un paso: vehiculoId=${vehiculoId} coincidencias=${coincidencias}`,
+    );
+    Sentry.captureMessage('auth-movil: colisión de PIN en login de un paso', {
+      level: 'error',
+      tags: { vehiculoId },
+      extra: { vehiculoId, coincidencias },
+    });
+  }
+
+  /** Lógica de creación de sesión compartida por las tres rutas de login (legado
+   * `autenticarConductor`, `autenticarSesion` y `seleccionarAsignacion`). Debe correr
+   * DENTRO de la misma transacción que consumió el desafío/challenge del llamador (si
+   * corresponde) para que el cierre de sesiones previas y la creación de la nueva sean
+   * atómicos con esa consumición. */
+  private async crearSesionOperativa(
+    tx: Tx,
+    ahora: Date,
+    params: {
+      sindicatoId: string;
+      vehiculoId: string;
+      deviceId: string;
+      conductorId: string;
+      asignacion: AsignacionOperativa;
+    },
+  ): Promise<Extract<AuthSesionMovilResponse, { status: 'autenticado' }>> {
+    const access = emitirTokenOpaco('access');
+    const refresh = emitirTokenOpaco('refresh');
+    const accessTokenExpiresAt = sumarSegundos(
+      ahora,
+      ttlSegundos('MOBILE_ACCESS_TTL_SECONDS', 15 * 60),
+    );
+    const refreshTokenExpiresAt = sumarSegundos(
+      ahora,
+      ttlSegundos('MOBILE_REFRESH_TTL_SECONDS', 30 * 24 * 60 * 60),
+    );
+
+    // Plan §2.4.5 ("sesiones colgadas"): cierra las sesiones ACTIVAS previas del MISMO
+    // vehículo, sin importar el dispositivo — no solo las del mismo `deviceId` como antes.
+    // Producción tuvo 3 sesiones activas simultáneas del mismo vehículo en DOS
+    // dispositivos: el filtro por `deviceId` nunca las alcanzaba porque cada login venía
+    // de un `deviceId` distinto. Se mantiene también la condición por `deviceId` (con
+    // `OR`) para no perder la cobertura original — un mismo dispositivo reutilizado para
+    // OTRO vehículo tampoco debe dejar una sesión huérfana.
+    //
+    // M1 (hallazgo de revisión, medio): `sindicatoId: params.sindicatoId` FUERA del `OR`,
+    // no dentro. Esto corre bajo `CONTEXTO_ADMIN` (RLS bypasseada) — la rama `vehiculoId` es
+    // segura por sí sola (UUID PK de un solo sindicato), pero `deviceId` lo controla el
+    // CLIENTE y llega tal cual en el request: sin este scoping, alguien autenticado en el
+    // sindicato A puede mandar el `deviceId` de un dispositivo real del sindicato B (que
+    // puede observar o adivinar) y cerrarle la sesión operativa VIVA a un vehículo ajeno,
+    // cortando la evidencia del turno de otro sindicato.
+    //
+    // Impacto a tener presente (plan §1.g, riesgo abierto): esto revoca la sesión previa
+    // del vehículo, así que un PIN adivinado no sólo suplanta — deja al chofer real sin
+    // sesión y sin GPS. Es la razón de las compensaciones de lockout/padding de arriba.
+    await tx.sesionOperativa.updateMany({
+      where: {
+        estado: 'activa',
+        revokedAt: null,
+        sindicatoId: params.sindicatoId,
+        OR: [{ vehiculoId: params.vehiculoId }, { deviceId: params.deviceId }],
+      },
+      data: { estado: 'cerrada', fin: ahora, revokedAt: ahora },
+    });
+    const sesion = await tx.sesionOperativa.create({
+      data: {
+        sindicatoId: params.sindicatoId,
+        asignacionId: params.asignacion.id,
+        vehiculoId: params.vehiculoId,
+        conductorId: params.conductorId,
+        deviceId: params.deviceId,
+        accessTokenHash: access.hash,
+        refreshTokenHash: refresh.hash,
+        accessExpiresAt: accessTokenExpiresAt,
+        refreshExpiresAt: refreshTokenExpiresAt,
+      },
+    });
+
+    return {
+      status: 'autenticado',
+      accessToken: access.value,
+      refreshToken: refresh.value,
+      accessTokenExpiresAt: accessTokenExpiresAt.toISOString(),
+      refreshTokenExpiresAt: refreshTokenExpiresAt.toISOString(),
+      contexto: toContextoOperativo(sesion.id, params.asignacion),
+    };
   }
 }
 
@@ -595,6 +1100,51 @@ async function verificarCredencial(pin: string, hash: string | null): Promise<bo
 
 function credencialesInvalidas(): UnauthorizedException {
   return new UnauthorizedException('Credenciales inválidas');
+}
+
+/** Mensaje genérico del login de un paso (plan §1.d): cubre placa desconocida, ningún PIN
+ * coincide, y más de un PIN coincide — nunca distingue cuál de los tres pasó. */
+function credencialesInvalidasSesion(): UnauthorizedException {
+  return new UnauthorizedException('Placa o PIN incorrectos');
+}
+
+/** 409 — PIN correcto, sin asignación vigente hoy (plan §1.d/§1.e.2). Es el bug real que
+ * el login de un paso arregla: antes esto volvía un 401 genérico y el chofer se ponía a
+ * probar PINs. Mensaje unificado entre el "sin asignación tras nivel 1" y el "nivel 2
+ * matcheó, pero sin rotación publicada". */
+function sinRotacionPublicada(nombreConductor: string, placa: string): ConflictException {
+  return new ConflictException(`${nombreConductor}, hoy no tenés una rotación publicada para ${placa}`);
+}
+
+function endpointLegadoApagado(): GoneException {
+  return new GoneException(
+    'Este endpoint fue reemplazado por POST /v1/mobile/auth/sesion (login de un paso).',
+  );
+}
+
+/** Default `true`: los 2 teléfonos en la calle no dependen del contrato de login (el
+ * refresh token dura 30 días y la sesión se restaura desde SecureStore) — apagar esto es
+ * una decisión explícita, nunca el estado por defecto. */
+function legacyAuthMovilHabilitado(): boolean {
+  return process.env.MOBILE_LEGACY_AUTH_ENABLED !== 'false';
+}
+
+/** PIN de 6 dígitos con CSPRNG (plan §1.f/ítem 3): `crypto.randomInt` hace rechazo interno
+ * de muestras fuera de rango, así que no hay sesgo de módulo como con
+ * `Math.random() % 10`. Reemplaza al PIN elegido a mano por un admin (hoy puede ser
+ * '123456' o '000000'), del que depende el cálculo de colisión de PIN de nivel 1. */
+function generarPinCsprng(): string {
+  return randomInt(0, 1_000_000).toString().padStart(6, '0');
+}
+
+function dedupeConductores(conductores: (ConductorCredencial | null)[]): ConductorCredencial[] {
+  const vistos = new Map<string, ConductorCredencial>();
+  for (const conductor of conductores) {
+    if (conductor && !vistos.has(conductor.id)) {
+      vistos.set(conductor.id, conductor);
+    }
+  }
+  return [...vistos.values()];
 }
 
 function ttlSegundos(nombre: string, valorPorDefecto: number): number {
