@@ -122,6 +122,7 @@ model Sindicato {
   reglas                   Regla[]
   sanciones                Sancion[]
   desafiosAuthMovil        DesafioAuthMovil[]
+  intentosAuthMovil        IntentoAuthMovil[]
   sesionesOperativas       SesionOperativa[]
   historialEstadosVehiculo HistorialEstadoVehiculo[]
   cumplimientosPc          CumplimientoPc[]
@@ -175,6 +176,7 @@ model Vehiculo {
 
   asignaciones       Asignacion[]
   desafiosAuthMovil  DesafioAuthMovil[]
+  intentoAuthMovil   IntentoAuthMovil?
   sesionesOperativas SesionOperativa[]
   historialEstados   HistorialEstadoVehiculo[]
 
@@ -484,6 +486,25 @@ model DesafioAuthMovil {
   @@index([vehiculoId, expiresAt])
   @@index([sindicatoId])
   @@map("desafios_auth_movil")
+}
+
+// M4 — login móvil de un paso (placa + PIN del conductor). Lockout progresivo por
+// VEHÍCULO, no por IP: los choferes salen por CGNAT compartido (Entel/Tigo), así que un
+// límite por IP castiga a legítimos sin frenar a un atacante. Fórmula de espera y reseteo
+// en `auth-movil.service.ts`.
+model IntentoAuthMovil {
+  id             String    @id @default(uuid())
+  sindicatoId    String
+  sindicato      Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Cascade)
+  vehiculoId     String    @unique
+  vehiculo       Vehiculo  @relation(fields: [vehiculoId], references: [id], onDelete: Cascade)
+  fallos         Int       @default(0)
+  bloqueadoHasta DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([sindicatoId])
+  @@map("intentos_auth_movil")
 }
 
 model SesionOperativa {

@@ -3,6 +3,7 @@ import { uuidSchema } from '../primitives.js';
 import { TurnoSchema } from '../enums/turno.js';
 import { DocumentoIdentidadBoliviaSchema } from '../identidad-bolivia.js';
 import { LineaDistintivoTipoSchema } from '../entities/linea.js';
+import { PlacaVehiculoSchema } from '../entities/vehiculo.js';
 
 export const PinMovilSchema = z
   .string()
@@ -149,6 +150,50 @@ export const AuthConductorMovilResponseSchema = z.discriminatedUnion('status', [
 ]);
 export type AuthConductorMovilResponse = z.infer<typeof AuthConductorMovilResponseSchema>;
 
+/**
+ * Login móvil de un solo paso (placa + PIN del conductor). Reemplaza al login encadenado
+ * vehículo→conductor (`AuthVehiculoMovilRequestSchema`/`AuthConductorMovilRequestSchema`,
+ * que siguen vivos detrás de `MOBILE_LEGACY_AUTH_ENABLED`) conservando la atribución de
+ * identidad: el PIN sigue siendo del CONDUCTOR, no del vehículo.
+ */
+export const AuthSesionMovilRequestSchema = z.object({
+  placa: PlacaVehiculoSchema,
+  pin: PinMovilSchema,
+  deviceId: DeviceIdMovilSchema,
+});
+export type AuthSesionMovilRequest = z.infer<typeof AuthSesionMovilRequestSchema>;
+
+/**
+ * A diferencia de `AuthConductorMovilResponseSchema`, la variante `seleccion_requerida`
+ * acá lleva su propio `seleccionToken`: en el login de un paso no existe un
+ * `challengeToken` previo que reutilizar (la identidad ya se probó en el mismo request),
+ * así que el servidor emite un token nuevo, de un solo uso, para el segundo request de
+ * `POST /mobile/auth/sesion/asignacion`.
+ */
+export const AuthSesionMovilResponseSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('seleccion_requerida'),
+    seleccionToken: z.string().min(32),
+    asignaciones: z.array(ResumenAsignacionMovilSchema).min(2),
+  }),
+  z.object({
+    status: z.literal('autenticado'),
+    accessToken: z.string().min(32),
+    refreshToken: z.string().min(32),
+    accessTokenExpiresAt: z.string().datetime(),
+    refreshTokenExpiresAt: z.string().datetime(),
+    contexto: ContextoOperativoMovilSchema,
+  }),
+]);
+export type AuthSesionMovilResponse = z.infer<typeof AuthSesionMovilResponseSchema>;
+
+export const SeleccionAsignacionMovilRequestSchema = z.object({
+  seleccionToken: z.string().min(32),
+  asignacionId: uuidSchema,
+  deviceId: DeviceIdMovilSchema,
+});
+export type SeleccionAsignacionMovilRequest = z.infer<typeof SeleccionAsignacionMovilRequestSchema>;
+
 export const RefreshMovilRequestSchema = z.object({ refreshToken: z.string().min(32) });
 export type RefreshMovilRequest = z.infer<typeof RefreshMovilRequestSchema>;
 
@@ -165,3 +210,8 @@ export type LogoutMovilRequest = z.infer<typeof LogoutMovilRequestSchema>;
 
 export const EstablecerPinMovilRequestSchema = z.object({ pin: PinMovilSchema });
 export type EstablecerPinMovilRequest = z.infer<typeof EstablecerPinMovilRequestSchema>;
+
+/** Respuesta de los endpoints `POST .../generar`: el PIN generado con CSPRNG se devuelve
+ * una sola vez — el backend sólo conserva su hash. */
+export const GenerarPinMovilResponseSchema = z.object({ pin: PinMovilSchema });
+export type GenerarPinMovilResponse = z.infer<typeof GenerarPinMovilResponseSchema>;

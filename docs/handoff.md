@@ -6,6 +6,172 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Login móvil de un paso — sesión cortada por créditos (2026-09-08)
+
+**Rama `feat/login-movil-un-paso`, CERO commits: todo vive en el working tree.** Es lo primero
+que hay que saber. No hay CI, no hay PR, y un `git checkout` mal puesto borra ~1445 líneas de
+trabajo verificado. **Commitear es la primera tarea de la próxima sesión**, antes de tocar nada.
+
+### Estado verificado al cortar
+
+Corrido por el chairman, no reportado por un subagente:
+
+```
+pnpm --filter @quivo/mobile typecheck            → limpio
+pnpm --filter @quivo/mobile test                 → 145/145
+cd apps/api && vitest run src/modules/auth-movil → 17/17
+cd apps/api && tsc --noEmit                      → limpio
+```
+
+### Qué entró (completo y verificado)
+
+**Backend del login de un paso** (ya estaba al abrir la sesión): `POST /v1/mobile/auth/sesion`
+(placa + PIN del **conductor**) y `POST /v1/mobile/auth/sesion/asignacion`. Nivel 1 = asignación
+vigente hoy con rotación publicada, padding scrypt K=3. Nivel 2 = ventana de 38 días, tope 20, sin
+padding, **solo para dar un 409 útil, nunca para autenticar**. Lockout progresivo por vehículo
+(`min(2^(fallos−3), 60)` s) sobre la tabla nueva `IntentoAuthMovil`. Endpoints legado vivos detrás
+de `MOBILE_LEGACY_AUTH_ENABLED`.
+
+**Cliente móvil conectado** (ítem 2 del plan, era el gap crítico — el backend estaba listo pero
+nadie lo llamaba):
+
+- `auth-movil-api.ts`: `autenticarSesion` + `seleccionarAsignacionSesion`; `AuthMovilApiError`
+  ahora lleva `retryAfterSeconds` (del body o del header `Retry-After`) y muestra los segundos
+  reales del lockout; el 409 propaga el mensaje del backend en vez de taparlo con un genérico.
+- `use-auth-movil.ts`: **borradas las credenciales demo hardcodeadas** (`CI_CONDUCTOR_DEMO`,
+  `PIN_CONDUCTOR_DEMO`) que viajaban en el binario de producción. Una sola llamada.
+  `estado.vehiculo` eliminado y reemplazado por `seleccionToken`.
+- `vehicle-login-screen.tsx`: el campo decía "PIN del vehículo"; ahora dice "PIN del conductor",
+  que es lo que realmente se manda.
+
+**El 401 permanente dejó de ser silencioso.** Bug de QA del 23-ago: 42 minutos de refresh cada 15 s
+devolviendo 401 mientras la pantalla mostraba operación normal y no salía un solo `sync/batches`.
+La causa NO era la que decía el handoff viejo — `refrescarConReintentos` y la bandera
+`sesionNoRevalidada` ya existían desde `b8fd7de` (#34) y cubren el camino de *restauración*. El
+agujero estaba en el camino de *régimen*: `use-sync-status.ts:8` (`REFRESCO_MS = 15_000`) llama a
+`obtenerAccessToken`, y su `catch` trataba igual un 401 permanente y un corte de red. Ahora
+`clasificarFalloAccessToken` los distingue: el 401 acumula y prende la bandera con CTA; el error de
+red sigue devolviendo `null` en silencio, porque operar sin red es requisito duro del producto.
+
+### Hallazgos de revisión aplicados
+
+`/code-review high` + auditoría de seguridad con Opus. **Seguridad: cero hallazgos con confianza
+≥8.** Verificó y descartó lo que importaba — el `seleccionToken` es de un solo uso, expira, está
+atado al `deviceId` y al `conductorId` ya probado, y el `asignacionId` se re-resuelve contra
+`buscarAsignaciones` (no hay IDOR); el 409 con nombre del conductor exige PIN correcto por los dos
+caminos; la RLS de `IntentoAuthMovil` es idéntica al patrón de las migraciones previas; `randomInt`
+no tiene sesgo de módulo.
+
+| # | Dónde | Qué era | Cómo quedó |
+|---|---|---|---|
+| H1 | `auth-movil.service.ts`, rama 409 nivel 2 | `resetearIntentos` **anulaba el backoff**: nivel 2 no filtra `conductor.estado`, así que un ex-conductor con su PIN viejo intercalaba 3 fallos + 1 acierto y el lockout nunca enganchaba | El 409 ni resetea ni incrementa. Incrementar penalizaría al chofer legítimo el día sin rotación publicada — justo el caso que ese 409 existe para atender |
+| H2 | `registrarIntentoFallidoVehiculo` | `upsert` de Prisma no es atómico: dos requests concurrentes → P2002 → **500 en vez de 401** | `INSERT ... ON CONFLICT DO UPDATE` en un solo round-trip |
+| H3 | rama `seleccion_requerida` | `desafios_auth_movil` crecía sin límite; el legado sí podaba | Poda de expirados/consumidos antes del `create`, misma transacción |
+| H4 | `use-auth-movil.ts` | La constante decía `CONSECUTIVOS` pero un error de red no reseteaba el contador: `401 → red → 401` prendía la bandera. **El test cortaba un paso antes de destaparlo** | Se conservó la semántica (una sesión revocada sigue revocada tras un corte de red) y se renombró todo a `UMBRAL_401_ACUMULADOS_`. Test del tercer paso agregado |
+| H5 | `use-auth-movil.ts` | El ref `fallos401Acumulados` sobrevivía al `logout()`: racha vieja + un 401 = alerta inmediata | Reset en `logout()` y en los dos caminos de login exitoso |
+
+### PENDIENTE 1 — ambigüedad de placas duplicadas (a medio aplicar, OJO)
+
+**El subagente murió en medio de la reescritura. El árbol quedó consistente y verde, pero parcial:**
+
+- ✅ `ORDER BY ("placaNormalizada" IS NULL), "createdAt", id` aplicado (`auth-movil.service.ts:692`)
+- ⚠️ `MAX_VEHICULOS_POR_PLACA = 3` declarada en `:53` pero **sin usar** — probable error de lint
+- ❌ `candidatosVehiculo[0]` sigue en `:272`; `estadoLockout` no existe
+
+**El bug:** `buscarVehiculosActivosPorPlaca` matchea también filas con `placaNormalizada IS NULL`,
+y la migración `20260801153000` las deja así **a propósito** (duplicados históricos "conservados
+para revisión manual"). Con `[0]` arbitrario: el conductor del vehículo perdedor no puede loguearse
+nunca, y sus intentos fallidos acumulan lockout **sobre el vehículo del otro sindicato**
+— envenenamiento cruzado entre tenants. El login legado sí lo manejaba (exigía exactamente-1 sobre
+todos los candidatos, desempatando por el PIN del vehículo); en el flujo de un paso ese desempate
+ya no aplica porque el PIN es del conductor.
+
+**Plan aprobado (Opus), listo para implementar:** iterar los candidatos (nivel 1 por vehículo,
+padding K=3 por cada uno, tope 9), acumular pares `{vehículo, conductor}` y exigir uno solo;
+`verificarLockout` pasa a `estadoLockout`, que **excluye del set** los vehículos bloqueados en vez
+de abortar el request — eso es lo que corta el DoS cruzado; si todos están bloqueados, 429 con el
+`retryAfterSeconds` **mínimo**; nivel 2 con presupuesto **compartido** de 20 (no 20 por vehículo).
+Los 9 tests están especificados; el grueso del costo es un fixture de **segundo sindicato**
+(`@@unique([sindicatoId, placa])` impide duplicar la placa dentro del mismo).
+
+**Antes de dimensionar, medir.** SQL de solo lectura, contra la base que corresponda:
+
+```sql
+SELECT regexp_replace(upper(trim(placa)),'[^A-Z0-9]','','g') AS placa_norm,
+       count(*) FILTER (WHERE estado='activo') AS activos,
+       count(DISTINCT "sindicatoId") AS sindicatos
+FROM vehiculos GROUP BY 1
+HAVING count(*) FILTER (WHERE estado='activo') > 1;
+```
+
+Si da 0 filas el bug es latente, **pero el fix sigue haciendo falta**: la suite de tests crea
+vehículos sin `placaNormalizada`, o sea que vive entera en la rama de fallback.
+
+### PENDIENTE 2 — las 6 credenciales nuevas (no arrancó)
+
+Decidido por el CTO: **6 credenciales — 1 chofer + 5 pasantes**, 3 en Z12 y 3 en la 120, placas
+**ficticias con formato PTA válido** (`9001TST`–`9006TST`), **solo entorno local por ahora** (el
+GCP de producción anterior se descartó y el nuevo todavía no existe). Las credenciales viejas se
+descartan.
+
+**La trampa, verificada con IDs — no borrar `L1-PILOTO`:**
+
+```
+seed.ts:86  LINEA_PILOTO_ID = 33333333-…-000000000010   ← el seed la llama 'L1-PILOTO'
+seed.ts:87  RUTA_PILOTO_ID  = 33333333-…-000000000011
+cargar-circuito-z12.ts:97   RUTA_OBJETIVO_ID = …011     ← la misma ruta
+cargar-linea-120.ts:259     RUTA_Z12_ID      = …011     ← la misma ruta
+```
+
+**`L1-PILOTO` ES la Z12.** `cargar-circuito-z12.ts` no crea nada: edita esa ruta **en el lugar**.
+El rename a "Z12" se aplicó a mano contra producción y nunca se versionó — por eso local sigue
+diciendo `L1-PILOTO` y parece basura. Lo que sí sobra es el contenido placeholder: el vehículo
+`PILOTO001` (…014, placa que **no pasa** el patrón PTA nuevo) y sus credenciales.
+
+La 120 del piloto es una línea aparte: `…020`, rutas `…021`/`…022`/`…023`. **No confundirla** con
+la otra línea `codigo:'120'` del seed (`12000000-…001`, sindicato 1º de Mayo, Plaza Colón ↔ La
+Cancha): esa es de presentación y no tiene nada que ver.
+
+**Por qué local no tiene nada de esto:** los scripts existían desde #34 y #37 y el CTO los corrió,
+pero el merge `ca1618a` renombró 4 migraciones y forzó un `prisma migrate reset` que se llevó los
+datos locales. Los scripts siguen en el repo → se vuelven a correr y las rutas vuelven.
+
+Tareas: versionar el rename Z12 en el seed · sacar `PILOTO001` y sus credenciales conservando
+línea y ruta · `scripts/crear-credenciales-piloto.ts` (molde: `crear-credencial-pasante.ts`,
+idempotente por id fijo, PINs CSPRNG impresos una sola vez, rotación `publicada`, asignaciones de
+varios días — con uno solo, mañana nadie entra) · correr `cargar-circuito-z12.ts` y
+`cargar-linea-120.ts` contra local.
+
+### Deuda que este PR NO cierra
+
+1. **Contradicción de esquema, causa raíz de la ambigüedad de placas:**
+   `@@unique([sindicatoId, placa])` dice "única por sindicato" y `placaNormalizada @unique`
+   (`schema.prisma:159`) dice "única globalmente". Mientras convivan, un duplicado legítimo entre
+   sindicatos **es imposible de normalizar**, y por eso la opción de "arreglar el dato en vez del
+   código" no se puede ejecutar. Decisión de modelo de datos, pendiente.
+2. **El piloto no es reproducible desde el repo.** Z12 y 120 dependen de correr scripts a mano
+   contra una base. Que las 6 credenciales nazcan como script versionado corrige el patrón hacia
+   adelante, pero no lo de atrás.
+3. **Sin arnés `jest-expo`/RNTL en `apps/mobile`** (ítems 7-8 del plan). Por eso la cobertura del
+   contador de 401 está sobre una función pura exportada y no sobre el hook.
+4. **Nada verificado contra un dispositivo real.** El flujo de un paso no se probó en emulador ni
+   en teléfono; solo tests.
+5. Sigue abierto de la prueba de QA del 23-ago: `logout` devuelve 204 sin cerrar la sesión
+   server-side, y el listado de `/en-vivo` reporta `sin_datos` para sesiones con puntos
+   (`en-vivo.service.ts:199`) — con la trampa del `ORDER BY ... NULLS LAST` que hay que cambiar en
+   el mismo PR o el panel abre por defecto en una sesión muerta.
+
+### Orden sugerido para la próxima sesión
+
+1. **Commitear lo que ya está verde** (nada de esto está en git todavía).
+2. Terminar el pendiente 1 — o, si urge cerrar, borrar la constante sin usar de `:53`, quedarse
+   con el `ORDER BY` y abrir el resto como issue aparte.
+3. Pendiente 2, las 6 credenciales.
+4. Re-correr `/code-review` + `/security-review` sobre el diff final, PR, CI, merge.
+
+Los `.png` sueltos en la raíz (`en-vivo-*.png`) son de la prueba de QA del 23-ago y siguen sin
+trackear. O se archivan en `docs/` o se borran; no deberían ir al commit por accidente.
+
 ## El rediseño de Jairo, integrado (#51, 2026-09-07)
 
 `main` = `ca1618a`. Entró la integración de `integracion/redesign-jairo`: rediseño del panel web,

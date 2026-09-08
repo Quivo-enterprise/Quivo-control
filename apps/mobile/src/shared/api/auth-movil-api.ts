@@ -1,14 +1,18 @@
 import {
   AuthConductorMovilResponseSchema,
+  AuthSesionMovilResponseSchema,
   AuthVehiculoMovilResponseSchema,
   ContextoOperativoMovilSchema,
   RefreshMovilResponseSchema,
   type AuthConductorMovilRequest,
   type AuthConductorMovilResponse,
+  type AuthSesionMovilRequest,
+  type AuthSesionMovilResponse,
   type AuthVehiculoMovilRequest,
   type AuthVehiculoMovilResponse,
   type ContextoOperativoMovil,
   type RefreshMovilResponse,
+  type SeleccionAsignacionMovilRequest,
 } from '@quivo/shared';
 
 const REQUEST_TIMEOUT_MS = 12_000;
@@ -18,6 +22,9 @@ export class AuthMovilApiError extends Error {
     public readonly kind: 'configuration' | 'network' | 'http' | 'contract',
     message: string,
     public readonly status?: number,
+    /** Sólo viene poblado en un 429 de `POST /v1/mobile/auth/sesion` (lockout por vehículo,
+     * `LockoutMovilExceptionFilter`). Ver `userMessage` para cómo se usa. */
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = 'AuthMovilApiError';
@@ -28,11 +35,26 @@ export class AuthMovilApiError extends Error {
     if (this.kind === 'network') {
       return `No se pudo conectar con QUIVO${API_URL ? ` en ${API_URL}` : ''}. Revisa el Wi-Fi y vuelve a intentar.`;
     }
-    if (this.status === 429)
+    if (this.status === 429) {
+      // El lockout de POST /sesion es progresivo por vehículo, `min(2^(fallos-3), 60)`
+      // (auth-movil.service.ts) — casi nunca son 60s reales, sobre todo en los primeros
+      // fallos del backoff. Mostrar "un minuto" siempre asusta de más al chofer y no le dice
+      // cuánto esperar de verdad. Si el servidor no manda `retryAfterSeconds` (ni en el body
+      // ni en el header `Retry-After`), se mantiene el texto genérico de antes.
+      if (this.retryAfterSeconds && this.retryAfterSeconds > 0) {
+        const segundos = Math.ceil(this.retryAfterSeconds);
+        return `Demasiados intentos. Espera ${segundos} ${segundos === 1 ? 'segundo' : 'segundos'} antes de volver a intentar.`;
+      }
       return 'Demasiados intentos. Espera un minuto antes de volver a intentar.';
+    }
     if (this.status === 401) return 'Las credenciales no son válidas.';
     if (this.status === 400) return this.message;
     if (this.status === 404) return this.message;
+    // 409 = PIN correcto pero sin rotación publicada hoy (`sinRotacionPublicada`,
+    // auth-movil.service.ts) — el mensaje del backend ya trae el nombre del conductor y la
+    // placa (p. ej. "Juan Pérez, hoy no tenés una rotación publicada para 1234ABC"), así que
+    // hay que mostrarlo tal cual en vez del genérico de abajo.
+    if (this.status === 409) return this.message;
     return 'La respuesta de QUIVO no pudo procesarse. Intenta nuevamente.';
   }
 }
@@ -46,6 +68,26 @@ export const authMovilApi = {
   async autenticarConductor(data: AuthConductorMovilRequest): Promise<AuthConductorMovilResponse> {
     const payload = await request('/v1/mobile/auth/conductor', { method: 'POST', body: data });
     return parseResponse(AuthConductorMovilResponseSchema, payload);
+  },
+
+  /** Login de un solo paso (placa + PIN del conductor) — reemplaza a la pareja
+   * `autenticarVehiculo` + `autenticarConductor` de arriba en el flujo real de la app; esas
+   * dos quedan vivas sólo para el legado detrás de `MOBILE_LEGACY_AUTH_ENABLED`. */
+  async autenticarSesion(data: AuthSesionMovilRequest): Promise<AuthSesionMovilResponse> {
+    const payload = await request('/v1/mobile/auth/sesion', { method: 'POST', body: data });
+    return parseResponse(AuthSesionMovilResponseSchema, payload);
+  },
+
+  /** Segundo request cuando `autenticarSesion` devuelve `seleccion_requerida` (≥2 asignaciones
+   * hoy). `seleccionToken` es un `DesafioAuthMovil` reciclado, ya con el conductor probado. */
+  async seleccionarAsignacionSesion(
+    data: SeleccionAsignacionMovilRequest,
+  ): Promise<AuthSesionMovilResponse> {
+    const payload = await request('/v1/mobile/auth/sesion/asignacion', {
+      method: 'POST',
+      body: data,
+    });
+    return parseResponse(AuthSesionMovilResponseSchema, payload);
   },
 
   async refresh(refreshToken: string): Promise<RefreshMovilResponse> {
@@ -98,7 +140,12 @@ async function request(path: string, options: RequestOptions): Promise<unknown> 
     });
     const payload = response.status === 204 ? null : await parseJson(response);
     if (!response.ok) {
-      throw new AuthMovilApiError('http', extraerMensaje(payload), response.status);
+      throw new AuthMovilApiError(
+        'http',
+        extraerMensaje(payload),
+        response.status,
+        extraerRetryAfterSeconds(payload, response.headers.get('Retry-After')),
+      );
     }
     return payload;
   } catch (error: unknown) {
@@ -126,6 +173,23 @@ function parseResponse<T>(
     throw new AuthMovilApiError('contract', 'La respuesta de la API no cumple el contrato móvil');
   }
   return parsed.data;
+}
+
+/** `LockoutMovilExceptionFilter` (backend) manda el mismo valor dos veces: en el body
+ * (`{ retryAfterSeconds }`) y en el header `Retry-After`. Se prioriza el body por ser el
+ * contrato tipado (`AuthSesionMovilRequestSchema`-adyacente); el header es el fallback si
+ * algún proxy intermedio llegara a pelar el body de un 429. */
+function extraerRetryAfterSeconds(payload: unknown, header: string | null): number | undefined {
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    'retryAfterSeconds' in payload &&
+    typeof (payload as { retryAfterSeconds: unknown }).retryAfterSeconds === 'number'
+  ) {
+    return (payload as { retryAfterSeconds: number }).retryAfterSeconds;
+  }
+  const desdeHeader = header ? Number(header) : NaN;
+  return Number.isFinite(desdeHeader) && desdeHeader > 0 ? desdeHeader : undefined;
 }
 
 function extraerMensaje(payload: unknown): string {
