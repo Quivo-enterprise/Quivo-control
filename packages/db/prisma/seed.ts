@@ -177,8 +177,10 @@ async function seedDatosDePrueba(
       await tx.vehiculo.update({
         where: { id: vehiculoDemo.id },
         data: {
+          // `placaNormalizada` NO se escribe: es columna GENERATED ALWAYS (migración de
+          // unicidad de placa), Postgres la deriva sola de `placa` y rechaza cualquier
+          // escritura explícita.
           placa,
-          placaNormalizada: placa,
           credencialHash: credenciales.vehiculoHash,
           numeroInterno: '120-01',
           distintivo: 'Banderita Roja',
@@ -190,8 +192,9 @@ async function seedDatosDePrueba(
         data: {
           sindicatoId: sindicato.id,
           socioId: socio.id,
+          // `placaNormalizada` NO se escribe: columna GENERATED ALWAYS, la base la deriva
+          // sola de `placa`.
           placa,
-          placaNormalizada: placa,
           tipo: 'bus_urbano',
           marca: 'Mercedes-Benz',
           modelo: 'OF-1721',
@@ -780,12 +783,20 @@ async function seedRotaciones(tx: Prisma.TransactionClient): Promise<void> {
   const linea = await tx.linea.findUniqueOrThrow({
     where: { sindicatoId_codigo: { sindicatoId: SINDICATO_A_ID, codigo: 'L1' } },
   });
-  const vehiculo = await tx.vehiculo.findUniqueOrThrow({
+  const vehiculo = await tx.vehiculo.findFirstOrThrow({
     where: {
-      sindicatoId_placa: {
-        sindicatoId: SINDICATO_A_ID,
-        placa: PLACA_POR_SINDICATO[SINDICATO_A_ID],
-      },
+      // No existe `@@unique([sindicatoId, placaNormalizada])` (docs/plan-unicidad-placa.md
+      // lo eliminó A PROPÓSITO, sin reemplazo: el índice único parcial global sobre
+      // `placaNormalizada` — `WHERE estado <> 'inactivo'` — ya implica esa unicidad entre
+      // filas vigentes, y un unique total por sindicato bloquearía el ciclo baja/alta). Por
+      // eso `findFirstOrThrow`, no `findUniqueOrThrow` con clave compuesta. El filtro de
+      // `estado` es necesario: sin él la consulta podría matchear varias filas INACTIVAS con
+      // la misma placa en este sindicato (permitido por diseño) y devolver una arbitraria.
+      // `PLACA_POR_SINDICATO` ya nace en formato normalizado (mayúsculas, sin separadores),
+      // así que el valor es el mismo que `placaNormalizada`.
+      sindicatoId: SINDICATO_A_ID,
+      placaNormalizada: PLACA_POR_SINDICATO[SINDICATO_A_ID],
+      estado: { not: 'inactivo' },
     },
   });
   const conductor = await tx.conductor.findUniqueOrThrow({
@@ -914,12 +925,20 @@ const SANCION_A_ID = 'aaaaaaaa-0000-4000-8000-000000000004';
 /** Una regla + una sanción de ejemplo (RF-40..50, QUI-244) — mismo motivo que
  * seedRotaciones: tener algo real que mostrar en `/reglas` sin depender de altas manuales. */
 async function seedReglas(tx: Prisma.TransactionClient): Promise<void> {
-  const vehiculo = await tx.vehiculo.findUniqueOrThrow({
+  const vehiculo = await tx.vehiculo.findFirstOrThrow({
     where: {
-      sindicatoId_placa: {
-        sindicatoId: SINDICATO_A_ID,
-        placa: PLACA_POR_SINDICATO[SINDICATO_A_ID],
-      },
+      // No existe `@@unique([sindicatoId, placaNormalizada])` (docs/plan-unicidad-placa.md
+      // lo eliminó A PROPÓSITO, sin reemplazo: el índice único parcial global sobre
+      // `placaNormalizada` — `WHERE estado <> 'inactivo'` — ya implica esa unicidad entre
+      // filas vigentes, y un unique total por sindicato bloquearía el ciclo baja/alta). Por
+      // eso `findFirstOrThrow`, no `findUniqueOrThrow` con clave compuesta. El filtro de
+      // `estado` es necesario: sin él la consulta podría matchear varias filas INACTIVAS con
+      // la misma placa en este sindicato (permitido por diseño) y devolver una arbitraria.
+      // `PLACA_POR_SINDICATO` ya nace en formato normalizado (mayúsculas, sin separadores),
+      // así que el valor es el mismo que `placaNormalizada`.
+      sindicatoId: SINDICATO_A_ID,
+      placaNormalizada: PLACA_POR_SINDICATO[SINDICATO_A_ID],
+      estado: { not: 'inactivo' },
     },
   });
 

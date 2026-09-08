@@ -184,3 +184,60 @@ Agregar:
    alcance, pero conviene arreglar el seed en el mismo PR.
 5. **No cubre** la colisión de PIN entre conductores del mismo vehículo ni el throttle por IP bajo
    CGNAT.
+
+## Addendum 2026-09-08 — riesgo aceptado tras la revisión de seguridad
+
+La revisión de seguridad (Opus, sobre el diff ya implementado) encontró la **imagen espejo del
+riesgo 1**, y es la más grave de las dos:
+
+6. **Toma unilateral de placa liberada, sin retorno.** Con el índice parcial
+   `WHERE estado <> 'inactivo'`, en cuanto el sindicato B marca un vehículo `inactivo`, cualquier
+   `operador` del sindicato A puede quedarse con esa placa para siempre:
+   - `crear` escribe `estado: 'pendiente'`, que el predicado del índice cuenta como **vigente**, así
+     que A ni siquiera necesita cumplir los requisitos de activación — un `POST /v1/vehiculos` basta.
+   - B ya no puede reactivar su propia fila: el `UPDATE` choca con
+     `vehiculos_placa_norm_vigente_key` y sale el 409 de `cambiarEstado`.
+   - B **no tiene ninguna vía en el producto** para destrabarlo: la única acción que liberaría la
+     placa es poner la fila de A en `inactivo`, y RLS se lo impide.
+   - `verificarPlaca` empeora el silencio: devuelve `disponible: true` para una placa que en realidad
+     pertenece al vehículo retirado de otro sindicato, así que la toma también ocurre por accidente.
+
+   **Decisión: se acepta para este MVP, no se rediseña el esquema.** La toma de placa entre
+   sindicatos ES el diseño elegido — es lo que permite que un vehículo migre — y está cubierta por el
+   test 2. No hay producción, ni tenants reales, ni datos: el costo de revisarlo después sigue siendo
+   cero. Cambiar el predicado ahora sería relitigar una decisión ya tomada con criterio.
+
+   **Lo que sí entra en este PR** (barato y sin tocar el modelo): el 409 de `cambiarEstado` distingue
+   si quien bloquea es del mismo sindicato (instrucción ejecutable: dar de baja ese vehículo,
+   nombrándolo) o de otro (contactar a QUIVO), en vez de dar una orden imposible de cumplir.
+
+   **Pendiente real que esto deja abierto** (mismo pendiente que el riesgo 1, ahora con dos motivos):
+   una vía de `admin_quivo` para transferir o liberar una placa entre sindicatos. Sin eso, el primer
+   conflicto de placa en producción no tiene resolución por producto, solo por SQL a mano.
+
+### Lo que la revisión confirmó sano (verificado contra el código, no contra este plan)
+
+- **El login móvil no cruza tenants.** `buscarVehiculosActivosPorPlaca` corre bajo `CONTEXTO_ADMIN`
+  y sin predicado de sindicato, pero eso no cambió: el tenant sale siempre del vehículo resuelto
+  (`vehiculo.sindicatoId` alimenta la sesión, el JWT y todas las consultas siguientes, esas sí con
+  RLS). El tenant nunca se toma del request. El cambio **mejora**: antes dos filas `activo` con la
+  misma placa en sindicatos distintos era un estado esperado y `candidatosVehiculo[0]` elegía una
+  arbitrariamente; ahora la consulta devuelve 0 o 1 fila por construcción.
+- **El envenenamiento cruzado de lockout desaparece de verdad**, no se reubica: el estado que lo
+  hacía posible (dos filas `activo` con la misma placa normalizada) es irrepresentable.
+- **No hay divergencia posible entre `toUpperCase()` de JS y `upper()` de Postgres.** El regex
+  `^[A-Za-z0-9 -]+$` de `PlacaVehiculoSchema` es lo que la garantiza, y además `limpiarDatosVehiculo`
+  pasa a mayúsculas en JS antes de escribir. Ese regex es **load-bearing para seguridad**: si alguien
+  amplía el alfabeto, una `А` cirílica en `АBC123` se stripea y produce una `placaNormalizada`
+  distinta que escapa al índice único mientras la placa se ve idéntica. Queda comentado en el código.
+- **`verificarPlaca` no empeora la fuga del riesgo 2**: la reduce. Ya corría con `CONTEXTO_ADMIN` y
+  ya devolvía `sindicatoNombre` antes de este cambio; lo nuevo es que ahora **oculta** las filas
+  `inactivo` de los demás sindicatos.
+
+### Peligro latente, sin call site hoy
+
+`@unique(map:…, where: raw(…))` deja `placaNormalizada` dentro de `VehiculoWhereUniqueInput`, así que
+un `findUnique({ where: { placaNormalizada } })` compilaría y emitiría `WHERE ... LIMIT 1` **sin** el
+predicado parcial: puede matchear muchas filas `inactivo` y devolver una arbitraria. Hoy no existe
+ningún uso así en el repo (verificado por grep en `apps`, `packages` y `scripts`). Usar siempre
+`findFirst` con el filtro de estado explícito.

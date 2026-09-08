@@ -426,14 +426,16 @@ async function main(): Promise<void> {
     const conductorHashEraNulo = conductorHashPrevio.rows.length > 0 && conductorHashPrevio.rows[0]!.credencialhash === null;
 
     const vehiculoResultado = await client.query<ResultadoUpsert>(
+      // `placaNormalizada` NO va en el INSERT/UPDATE: desde la migración de unicidad de
+      // placa es una columna GENERATED ALWAYS (Postgres la deriva de `placa`), y escribirla
+      // a mano falla con SQLSTATE 428C9 ("cannot insert a non-DEFAULT value into column").
       `INSERT INTO vehiculos
-         (id, "sindicatoId", "socioId", placa, "placaNormalizada", tipo, marca, modelo, color, capacidad, estado, "credencialHash", "createdAt", "updatedAt")
-       VALUES ($1, $2, $3, $4, $4, 'bus_urbano', 'PLACEHOLDER', 'PLACEHOLDER', 'otro', 40, 'activo', $5, now(), now())
+         (id, "sindicatoId", "socioId", placa, tipo, marca, modelo, color, capacidad, estado, "credencialHash", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, 'bus_urbano', 'PLACEHOLDER', 'PLACEHOLDER', 'otro', 40, 'activo', $5, now(), now())
        ON CONFLICT (id) DO UPDATE SET
          "sindicatoId" = EXCLUDED."sindicatoId",
          "socioId" = EXCLUDED."socioId",
          placa = EXCLUDED.placa,
-         "placaNormalizada" = EXCLUDED."placaNormalizada",
          tipo = EXCLUDED.tipo,
          marca = EXCLUDED.marca,
          modelo = EXCLUDED.modelo,

@@ -165,6 +165,77 @@ describe('VehiculosService', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it('rechaza con 409 (no 500) reactivar un vehículo cuya placa fue tomada por OTRO sindicato mientras estaba de baja', async () => {
+    // Reproduce F2 (docs/plan-unicidad-placa.md): X se da de baja, alguien más registra la
+    // misma placa VIGENTE en otro lugar, y después se intenta reactivar X — el
+    // `tx.vehiculo.update` de `cambiarEstado` viola el índice único parcial
+    // (`vehiculos_placa_norm_vigente_key`) y sin el try/catch de F2 eso salía como un P2002
+    // sin envolver (500) en vez de un ConflictException accionable. Además, "dar de baja ese
+    // otro vehículo" es una instrucción que el operador de A NO puede ejecutar sobre un
+    // vehículo de B (RLS se lo impide) — el mensaje debe decirlo y remitir a QUIVO, no dar
+    // una instrucción imposible de seguir.
+    const x = await service.crear(adminSindicatoA, {
+      ...vehiculoBase,
+      sindicatoId: sindicatoAId,
+      placa: '121KKK',
+    });
+    await service.cambiarEstado(adminSindicatoA, x.id, { estado: 'activo' });
+    await service.cambiarEstado(adminSindicatoA, x.id, {
+      estado: 'inactivo',
+      motivo: 'Vendido',
+    });
+
+    // La placa de X ya no es VIGENTE: otro sindicato puede registrarla.
+    await service.crear(adminQuivo, {
+      ...vehiculoBase,
+      socioId: socioBId,
+      sindicatoId: sindicatoBId,
+      placa: '121 kkk',
+    });
+
+    try {
+      await service.cambiarEstado(adminSindicatoA, x.id, { estado: 'activo' });
+      expect.unreachable('debería haber lanzado ConflictException');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).message).toMatch(/Vehiculos Test B/);
+      expect((error as ConflictException).message).toMatch(/QUIVO/);
+    }
+  });
+
+  it('rechaza con 409 y nombra al vehículo que bloquea si la placa fue tomada por el MISMO sindicato', async () => {
+    // Variante de F2: a diferencia del caso "otro sindicato", acá el operador de A sí PUEDE
+    // dar de baja el vehículo que bloquea (es suyo) — el mensaje debe mantener esa
+    // instrucción, pero identificando cuál es (antes no nombraba nada).
+    const x = await service.crear(adminSindicatoA, {
+      ...vehiculoBase,
+      sindicatoId: sindicatoAId,
+      placa: '122LLL',
+    });
+    await service.cambiarEstado(adminSindicatoA, x.id, { estado: 'activo' });
+    await service.cambiarEstado(adminSindicatoA, x.id, {
+      estado: 'inactivo',
+      motivo: 'Vendido',
+    });
+
+    // La placa de X ya no es VIGENTE: el mismo sindicato puede volver a registrarla en otro
+    // vehículo (el ciclo baja/alta que el diseño permite a propósito).
+    const y = await service.crear(adminSindicatoA, {
+      ...vehiculoBase,
+      sindicatoId: sindicatoAId,
+      placa: '122 lll',
+    });
+
+    try {
+      await service.cambiarEstado(adminSindicatoA, x.id, { estado: 'activo' });
+      expect.unreachable('debería haber lanzado ConflictException');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).message).toContain(y.id);
+      expect((error as ConflictException).message).toMatch(/mismo sindicato/);
+    }
+  });
+
   it('registra cada cambio en el historial funcional', async () => {
     const vehiculo = await service.crear(adminSindicatoA, {
       ...vehiculoBase,
@@ -205,8 +276,9 @@ describe('VehiculosService', () => {
           data: {
             id: vehiculoCorruptoId,
             sindicatoId: sindicatoAId,
+            // `placaNormalizada` NO se escribe: es columna GENERATED ALWAYS (unicidad de
+            // placa, docs/plan-unicidad-placa.md) — la base la deriva sola de `placa`.
             placa: `INV${sufijo}`,
-            placaNormalizada: `INV${sufijo}`,
             tipo: 'bus_urbano',
             marca: 'PLACEHOLDER',
             modelo: 'PLACEHOLDER',
@@ -239,8 +311,9 @@ describe('VehiculosService', () => {
           data: {
             id: vehiculoCorruptoId,
             sindicatoId: sindicatoAId,
+            // `placaNormalizada` NO se escribe: es columna GENERATED ALWAYS (unicidad de
+            // placa, docs/plan-unicidad-placa.md) — la base la deriva sola de `placa`.
             placa: `INV${sufijo}`,
-            placaNormalizada: `INV${sufijo}`,
             tipo: 'bus_urbano',
             marca: 'PLACEHOLDER',
             modelo: 'PLACEHOLDER',

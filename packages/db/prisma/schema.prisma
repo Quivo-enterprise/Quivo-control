@@ -14,7 +14,11 @@
 // compatible.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // Por el índice ÚNICO PARCIAL de `Vehiculo.placaNormalizada` (`WHERE estado <> 'inactivo'`,
+  // migración de unicidad de placa) — no tiene relación con la columna generada, que Prisma
+  // soporta sin preview feature.
+  previewFeatures = ["partialIndexes"]
 }
 
 // La URL de conexión vive en prisma.config.ts (Prisma 7 ya no la acepta acá, ver
@@ -156,7 +160,17 @@ model Vehiculo {
   socioId          String?
   socio            Socio?    @relation(fields: [socioId], references: [id], onDelete: SetNull)
   placa            String
-  placaNormalizada String?   @unique
+  // Unicidad de placa (docs/plan-unicidad-placa.md): columna GENERATED ALWAYS por Postgres,
+  // NOT NULL, con índice único PARCIAL `WHERE estado <> 'inactivo'` (creado en SQL crudo en
+  // la migración — Prisma no expresa índices parciales en el datamodel, sólo via
+  // `@unique(..., where: raw(...))` con `previewFeatures = ["partialIndexes"]`). La
+  // declaración exacta de abajo está copiada LITERAL de `prisma db pull` tras aplicar la
+  // migración: las formas "obvias" (`@default(dbgenerated())` sin argumento, `String` sin
+  // default, `@ignore`) validan y generan cliente, pero producen DRIFT PERMANENTE — el
+  // próximo `migrate dev` emite un `ALTER COLUMN ... SET DEFAULT` que falla contra una
+  // columna generada ("column ... is a generated column"). No editar a mano sin volver a
+  // correr `db pull` y comparar con `prisma migrate diff` en ambas direcciones.
+  placaNormalizada String    @unique(map: "vehiculos_placa_norm_vigente_key", where: raw("(estado <> 'inactivo'::text)")) @default(dbgenerated("regexp_replace(upper(btrim(placa)), '[^A-Z0-9]'::text, ''::text, 'g'::text)"))
   tipo             String
   marca            String
   modelo           String
@@ -180,10 +194,21 @@ model Vehiculo {
   sesionesOperativas SesionOperativa[]
   historialEstados   HistorialEstadoVehiculo[]
 
-  @@unique([sindicatoId, placa])
+  // NO hay @@unique([sindicatoId, placaNormalizada]) (dropea el viejo @@unique([sindicatoId,
+  // placa]) sobre la placa CRUDA sin reemplazarlo por un equivalente sobre la normalizada):
+  // el índice único parcial global de arriba (`placaNormalizada`, `where: estado <>
+  // 'inactivo'`) ya implica esa unicidad para toda fila VIGENTE, en cualquier sindicato. Un
+  // unique TOTAL por sindicato prohibiría además dos filas INACTIVAS con la misma placa en el
+  // mismo sindicato — justo el camino de recuperación que el diseño permite a propósito (dar
+  // de baja y volver a registrar la misma placa, incluso en el mismo sindicato); con ese
+  // unique, ese ciclo baja/alta queda bloqueado para siempre.
   @@index([sindicatoId])
   @@index([tipo])
   @@index([estado])
+  // El índice parcial (`WHERE estado <> 'inactivo'`) no sirve para el lookup del login móvil
+  // por placa: depende de que el planner deduzca `estado = 'activo' ⇒ estado <> 'inactivo'`,
+  // que no es una garantía. Este índice plano sí cubre ese lookup siempre.
+  @@index([placaNormalizada])
   @@map("vehiculos")
 }
 

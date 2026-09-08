@@ -676,7 +676,7 @@ export default function RotacionesPage() {
                                 <td className="qv-rotacion-matrix-td" style={{ paddingLeft: '1rem' }}>
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
                                     {vehiculo ? (
-                                      <PlateBadge plate={vehiculo.placaNormalizada ?? vehiculo.placa} />
+                                      <PlateBadge plate={vehiculo.placaNormalizada} />
                                     ) : (
                                       <strong style={{ color: 'var(--qv-text-primary)' }}>{vehiculoId}</strong>
                                     )}
