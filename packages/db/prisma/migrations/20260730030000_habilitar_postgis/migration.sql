@@ -1,0 +1,19 @@
+-- Habilita la extensión PostGIS antes de que corra cualquier otra migración.
+--
+-- En local la extensión la trae la imagen Docker `postgis/postgis:16-3.4-alpine`
+-- (docker-compose.yml:3) — ya viene instalada en el contenedor, ninguna migración
+-- necesitó crearla nunca. `packages/db/prisma.config.ts:21-32` ya documenta este mismo
+-- gap para la shadow DB y lo tapa con `initShadowDb: 'CREATE EXTENSION IF NOT EXISTS
+-- postgis;'`. Pero Cloud SQL (prod) arranca con Postgres pelado, sin PostGIS, y no hay
+-- forma de correr ese `initShadowDb` ahí — sin esta migración, `prisma migrate deploy`
+-- muere en `20260730151939_core_entities` con `P3018 / 42704: type "geography" does not
+-- exist` al intentar crear la columna `geography(LineString,4326)` de `rutas`.
+--
+-- El timestamp de esta carpeta (20260730030000) es intencionalmente ANTERIOR al de
+-- `20260730030424_init_auth` (la primera migración existente) para que en una base
+-- Cloud SQL desde cero corra primera, antes de que cualquier otra migración necesite el
+-- tipo `geography`.
+--
+-- `IF NOT EXISTS` es obligatorio: en local y en CI la extensión ya está (la trae la
+-- imagen postgis/postgis), así que ahí esta migración debe ser no-op.
+CREATE EXTENSION IF NOT EXISTS postgis;

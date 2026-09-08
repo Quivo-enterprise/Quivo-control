@@ -17,18 +17,17 @@ export default defineConfig({
   migrations: {
     seed: 'tsx prisma/seed.ts',
     // `prisma migrate dev` recrea una shadow DB efímera y reproduce TODA la historia de
-    // migraciones desde cero contra ella. `20260730151939_core_entities` (la primera) usa
-    // `geography(...)` sin que ninguna migración haya corrido `CREATE EXTENSION postgis`
-    // antes (la extensión está pre-instalada en `quivo_control` vía la imagen Docker
-    // `postgis/postgis`, no vía migración) — la shadow DB efímera arranca sin la extensión y
-    // el replay falla con "type geography does not exist" (documentado en docs/handoff.md,
-    // sección QUI-231: "migrate dev sigue roto por el gap de PostGIS en la shadow DB").
-    // `initShadowDb` corre DESPUÉS de que Prisma resetea la shadow DB (`DROP SCHEMA public
-    // CASCADE; CREATE SCHEMA public;`, que se lleva puesta cualquier extensión ya instalada
-    // ahí) pero ANTES de reproducir la historia de migraciones — el lugar correcto para
-    // dejarla lista otra vez. Sólo `postgis`: ninguna migración usa funciones de
-    // `fuzzystrmatch` (grep sobre migrations/*.sql sin resultados), aunque esa extensión
-    // también esté instalada en `quivo_control` — no hace falta en la shadow DB.
+    // migraciones desde cero contra ella. La migración `20260730030000_habilitar_postgis`
+    // ya corre `CREATE EXTENSION IF NOT EXISTS postgis;` como primer paso de esa historia
+    // (ver su propio comentario) — pero `initShadowDb` (abajo) corre ANTES, porque Prisma
+    // lo ejecuta justo DESPUÉS de resetear la shadow DB (`DROP SCHEMA public CASCADE;
+    // CREATE SCHEMA public;`, que se lleva puesta cualquier extensión ya instalada ahí) y
+    // ANTES de reproducir la historia de migraciones. O sea: `initShadowDb` sigue siendo lo
+    // primero que toca la shadow DB en cada corrida, y queda como red de seguridad —
+    // `IF NOT EXISTS` en ambos lados (acá y en la migración) hace que sea idempotente sin
+    // importar cuál de los dos corra primero. Sólo `postgis`: ninguna migración usa
+    // funciones de `fuzzystrmatch` (grep sobre migrations/*.sql sin resultados), aunque esa
+    // extensión también esté instalada en `quivo_control` — no hace falta en la shadow DB.
     initShadowDb: 'CREATE EXTENSION IF NOT EXISTS postgis;',
   },
 });

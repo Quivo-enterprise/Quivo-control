@@ -11,6 +11,8 @@
 #     creada y el usuario "postgres" con password ya seteado.
 #   - Memorystore Redis "quivo-redis" (BASIC, 1GB, AUTH habilitado).
 #   - Serverless VPC connector "quivo-conector".
+#   (El paso 0 SÍ gestiona el rol roles/cloudsql.client del service account de cómputo
+#   sobre este proyecto — no está asumido de antemano, ver paso 0 más abajo.)
 #
 # Uso:
 #   scripts/deploy-gcp.sh [tag] [--solo api|web|worker]
@@ -19,7 +21,9 @@
 #
 # Orden de ejecución (fijo, no reordenar — ver comentarios de cada paso para el porqué):
 #   0. Preflight: valida secretos de Secret Manager (crea los que se pueden derivar/generar
-#      solos; falla con instrucciones si falta uno que no se puede inventar).
+#      solos; falla con instrucciones si falta uno que no se puede inventar) y otorga
+#      roles/cloudsql.client al service account de cómputo (lo necesita el conector de
+#      Cloud SQL de Cloud Run para el job de migraciones y quivo-api).
 #   1. Build + push de la imagen compartida API/worker (si --solo no es "web").
 #   2. Job de migraciones + rotación de password de "quivo_app" (si --solo no es "web").
 #   3. Deploy de quivo-api (si --solo es "" o "api").
@@ -85,7 +89,11 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      # Imprime el bloque de cabecera (líneas 2..N, todas comentario) hasta la primera
+      # línea que no empieza con "#" (la línea en blanco antes de `set -Eeuo pipefail`).
+      # Rango dinámico a propósito: si se agregan/quitan líneas al comentario de arriba,
+      # este --help no vuelve a cortarse a mitad de camino.
+      sed -n '2,/^[^#]/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -305,6 +313,21 @@ EOF
     grant_secret_access "$s"
   done
   info "roles/secretmanager.secretAccessor otorgado (idempotente) sobre los 5 secretos a $SERVICE_ACCOUNT."
+
+  # El conector de Cloud SQL que usa Cloud Run (job de migraciones y quivo-api) necesita
+  # `cloudsql.instances.get` para abrir el socket a la instancia — sin roles/cloudsql.client
+  # el job muere con `Error 403: boss::NOT_AUTHORIZED ... missing permission
+  # cloudsql.instances.get on resource instances/quivo-db` y Prisma lo reporta como P1001
+  # ("Can't reach database server"). Se otorga a nivel proyecto, antes de cualquier
+  # `gcloud run jobs execute`/`gcloud run deploy`, e idempotente: pedirlo dos veces no
+  # duplica el binding. `add-iam-policy-binding` a nivel proyecto imprime la política
+  # entera por stdout — se descarta como en grant_secret_access.
+  gcloud projects add-iam-policy-binding "$PROJECT" \
+    --member="serviceAccount:${SERVICE_ACCOUNT}" \
+    --role="roles/cloudsql.client" \
+    --condition=None \
+    >/dev/null
+  info "roles/cloudsql.client otorgado (idempotente) a $SERVICE_ACCOUNT sobre el proyecto."
 fi
 
 # ============================================================================

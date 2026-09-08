@@ -45,3 +45,6 @@ scripts/data/z12-circuito/*_simp.json
 # docs/plan-v2-app-y-mapa-en-vivo.md ordena explícitamente no commitear este archivo:
 # credenciales de demo en texto plano (PINs de vehículo y conductor).
 docs/Credenciales demo day QUIVO CONTROL
+
+# credenciales de producción (accesos, secretos, datos sensibles de la operación real).
+docs/DOCUMENTO DE DATOS IMPORTANTES Y CREDENCIALES DE QUIVO CONTROL
