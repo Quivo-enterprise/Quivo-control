@@ -10,7 +10,11 @@
 #   - Cloud SQL "quivo-db" (PG16, IP privada únicamente) con la base "quivo_control" ya
 #     creada y el usuario "postgres" con password ya seteado.
 #   - Memorystore Redis "quivo-redis" (BASIC, 1GB, AUTH habilitado).
-#   - Serverless VPC connector "quivo-conector".
+#   - Serverless VPC connector "quivo-conector", en la red "default" (southamerica-west1,
+#     subred "default", 10.194.0.0/20). Lo usan el job de migraciones (paso 2) y quivo-api
+#     (paso 3) — quivo-worker (paso 6) NO lo usa: `gcloud run worker-pools deploy` no
+#     soporta `--vpc-connector` (ver el comentario grande en el paso 6 para el porqué), así
+#     que llega a la misma red/subred por Direct VPC egress en vez del conector.
 #   (El paso 0 SÍ gestiona el rol roles/cloudsql.client del service account de cómputo
 #   sobre este proyecto — no está asumido de antemano, ver paso 0 más abajo.)
 #
@@ -26,8 +30,10 @@
 #      Cloud SQL de Cloud Run para el job de migraciones y quivo-api).
 #   1. Build + push de la imagen compartida API/worker (si --solo no es "web").
 #   2. Job de migraciones + rotación de password de "quivo_app" (si --solo no es "web").
-#   3. Deploy de quivo-api (si --solo es "" o "api").
-#   4. Build + push + verificación local + deploy de quivo-web (si --solo es "" o "web").
+#   3. Deploy de quivo-api (si --solo es "" o "api"), con verificación de que el binding IAM
+#      de --allow-unauthenticated quedó puesto de verdad (ver verify_allow_unauthenticated).
+#   4. Build + push + verificación local + deploy de quivo-web (si --solo es "" o "web"),
+#      con la misma verificación de --allow-unauthenticated que el paso 3.
 #   5. Actualizar CORS_ORIGIN en quivo-api con la URL real del panel (si se desplegó web).
 #   6. Deploy de quivo-worker (Worker Pool) (si --solo es "" o "worker").
 #   7. Verificación final de /v1/health/ready (si se tocó quivo-api en este run).
@@ -167,6 +173,13 @@ readonly SQL_INSTANCE="quivo-db"
 readonly DB_NAME="quivo_control"
 readonly REDIS_INSTANCE="quivo-redis"
 readonly VPC_CONNECTOR="quivo-conector"
+# Red/subred del conector de arriba (verificado con `gcloud compute networks vpc-access
+# connectors describe quivo-conector ... --format='value(network,ipCidrRange,subnet.name)'`
+# → red "default", 10.8.0.0/28; y la subred de esa red en southamerica-west1 es la única que
+# existe: "default", 10.194.0.0/20). quivo-worker (paso 6) las usa directo por Direct VPC
+# egress, sin pasar por el conector — ver el comentario grande del paso 6 para el porqué.
+readonly VPC_NETWORK="default"
+readonly VPC_SUBNET="default"
 readonly SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 readonly AR_PREFIX="${REGION}-docker.pkg.dev/${PROJECT}/quivo"
 readonly API_IMAGE="${AR_PREFIX}/api:${TAG}"
@@ -536,6 +549,84 @@ except Exception:
 '
 }
 
+# Verifica que un servicio desplegado con --allow-unauthenticated haya quedado REALMENTE
+# accesible sin autenticación, y falla ruidoso si no. Compartida por los pasos 3 y 4 (mismo
+# problema en quivo-api y quivo-web).
+#
+# Por qué hace falta: gcloud reporta la falla de "Setting IAM Policy" (el paso interno que
+# --allow-unauthenticated dispara) como WARNING, no como error — `gcloud run deploy` sigue
+# con exit 0 igual. Pasó de verdad en un deploy a este proyecto:
+#   Setting IAM Policy...............warning
+#   Completed with warnings:
+#     Setting IAM policy failed, try "gcloud beta run services add-iam-policy-binding ..."
+# El script (versión vieja, sin esta función) seguía como si nada, anunciaba "desplegado:
+# https://..." y esa URL devolvía 403 — la app quedó arriba e inalcanzable sin que nadie se
+# enterara. Causa típica: la política de organización
+# constraints/iam.allowedPolicyMemberDomains prohíbe agregar "allUsers" a cualquier IAM
+# binding.
+#
+# Dos capas, a propósito:
+#   (a) GATE DURO — leer el IAM policy real del servicio (`get-iam-policy --format=json`,
+#       parseado con python3, mismo patrón que get_current_cors_origin arriba) y confirmar
+#       que existe el binding allUsers + roles/run.invoker. Prueba la CAUSA (el permiso), es
+#       determinista, y es la única señal que decide si este chequeo hace fail().
+#   (b) diagnóstico informativo — un curl a la URL real, SOLO para loguear una segunda señal
+#       humana en el mensaje de fail (o confirmar que todo está bien). Nunca decide el
+#       resultado por sí solo: un 403 sin (a) es un falso negativo posible (servicio
+#       arrancando, 503 transitorio, o la app respondiendo 404 en "/" de forma legítima) —
+#       basarse en curl solo habría reproducido el mismo tipo de bug que este fix corrige,
+#       nomás con otro código HTTP.
+verify_allow_unauthenticated() {
+  local svc="$1" url="$2"
+  local policy_json has_all_users curl_status
+
+  info "Verificando que '$svc' quedó accesible sin autenticación (--allow-unauthenticated)..."
+
+  policy_json="$(gcloud run services get-iam-policy "$svc" --project "$PROJECT" --region "$REGION" \
+    --format=json 2>/dev/null)" || policy_json=""
+
+  has_all_users="$(printf '%s' "$policy_json" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    for b in data.get("bindings", []):
+        if b.get("role") == "roles/run.invoker" and "allUsers" in b.get("members", []):
+            print("yes")
+            break
+except Exception:
+    pass
+')"
+
+  # (b) diagnóstico informativo — nunca decide el resultado, ver comentario grande arriba.
+  curl_status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url" 2>/dev/null)" || curl_status="sin-respuesta"
+  info "  Diagnóstico informativo (no es el gate): curl a $url devolvió HTTP $curl_status."
+
+  if [[ "$has_all_users" != "yes" ]]; then
+    local iam_error
+    iam_error="$(gcloud run services get-iam-policy "$svc" --project "$PROJECT" --region "$REGION" \
+      --format=json 2>&1 >/dev/null)"
+    fail "'$svc' se desplegó pero el binding IAM allUsers/roles/run.invoker NO está presente \
+(gcloud run services get-iam-policy $svc no lo devolvió${iam_error:+ — gcloud dijo: \"$iam_error\"}). \
+--allow-unauthenticated probablemente falló como WARNING silencioso durante el deploy (gcloud lo \
+reporta como 'Setting IAM Policy...............warning' y sigue con exit 0 igual) — la causa más \
+común es una política de organización que prohíbe agregar 'allUsers' a un IAM binding:
+  constraints/iam.allowedPolicyMemberDomains
+
+Diagnosticar con:
+  gcloud resource-manager org-policies describe constraints/iam.allowedPolicyMemberDomains --project=$PROJECT --effective
+
+Si la política bloquea 'allUsers' y de verdad se necesita este servicio público, hay que
+resolverla a nivel organización/carpeta (fuera del alcance de este script) y recién después
+otorgar el binding a mano:
+  gcloud run services add-iam-policy-binding $svc --project=$PROJECT --region=$REGION --member=allUsers --role=roles/run.invoker
+
+(Diagnóstico informativo: curl a $url devolvió HTTP $curl_status — es el efecto, no la causa;
+no te quedes ahí a diagnosticar.)"
+  fi
+
+  info "'$svc' tiene el binding allUsers/roles/run.invoker — accesible sin autenticación."
+}
+
 # ============================================================================
 # Paso 3/7 — Deploy de quivo-api
 # ============================================================================
@@ -658,6 +749,11 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
     --format='value(status.url)')"
   [[ -n "$API_URL" ]] || fail "quivo-api se desplegó pero no se pudo leer su URL."
   info "quivo-api desplegado: $API_URL"
+
+  # Ver verify_allow_unauthenticated arriba: si esto falla (fail() aborta con exit 1), los
+  # pasos 5 y 7 no llegan a correr — a propósito, no tiene sentido setear CORS ni esperar el
+  # health check de un servicio que nadie puede alcanzar.
+  verify_allow_unauthenticated "quivo-api" "$API_URL"
 fi
 
 # ============================================================================
@@ -744,6 +840,9 @@ if [[ "$NEEDS_WEB_DEPLOY" == true ]]; then
   [[ -n "$WEB_URL" ]] || fail "quivo-web se desplegó pero no se pudo leer su URL."
   WEB_URL="${WEB_URL%/}"
   info "quivo-web desplegado: $WEB_URL"
+
+  # Ver verify_allow_unauthenticated arriba (misma verificación que quivo-api en el paso 3).
+  verify_allow_unauthenticated "quivo-web" "$WEB_URL"
 fi
 
 # ============================================================================
@@ -821,6 +920,29 @@ if [[ "$NEEDS_WORKER_DEPLOY" == true ]]; then
   # sola. Cargarle igual el rol dueño de las tablas a un proceso que sólo necesita el rol de
   # runtime es exactamente el mismo exceso de privilegio que en quivo-api, sin ni siquiera
   # la excusa de un gate de arranque que la exija.
+  #
+  # SIN --vpc-connector acá, a propósito — NO es un descuido ni una inconsistencia con los
+  # pasos 2 y 3 (job de migraciones y quivo-api), que sí lo usan. Es una limitación real de
+  # `gcloud run worker-pools deploy`: no tiene ese flag. Confirmado contra producción, deploy
+  # real fallido:
+  #   ERROR: (gcloud.run.worker-pools.deploy) unrecognized arguments:
+  #     --vpc-connector (did you mean '--container'?)
+  #     quivo-conector
+  # y confirmado también leyendo el SYNOPSIS de `gcloud run worker-pools deploy --help` en la
+  # versión instalada del SDK: los worker pools sólo soportan Direct VPC egress
+  # (--network/--subnet/--vpc-egress), no conectores. Se llega a la MISMA red/subred que usa
+  # el conector (`$VPC_NETWORK`/`$VPC_SUBNET`, ver el comentario junto a esas constantes)
+  # así que el worker sigue alcanzando Cloud SQL (10.60.0.3) y Memorystore Redis
+  # (10.51.123.11:6379) por el mismo peering de private services access sobre la red
+  # "default" — cambia el mecanismo de salida, no el destino.
+  #
+  # --vpc-egress=private-ranges-only (el default del flag, pero se deja explícito para que
+  # quede documentada la elección): el worker sólo necesita salir a rangos privados RFC1918
+  # (Cloud SQL y Redis, los dos IPs 10.x.x.x de arriba) — no necesita ni debe salir a
+  # internet por la VPC. La otra opción, `all-traffic`, mandaría TODO el tráfico saliente
+  # (incluida cualquier llamada a una API externa) por la VPC, lo que exigiría tener un
+  # Cloud NAT configurado para no romper esa salida — infra que no existe y que este script
+  # no aprovisiona. `private-ranges-only` no la necesita.
   gcloud run worker-pools deploy quivo-worker \
     --project "$PROJECT" \
     --region "$REGION" \
@@ -828,7 +950,9 @@ if [[ "$NEEDS_WORKER_DEPLOY" == true ]]; then
     --command=node --args=apps/api/dist/worker.js \
     --instances=1 \
     --service-account "$SERVICE_ACCOUNT" \
-    --vpc-connector "$VPC_CONNECTOR" \
+    --network "$VPC_NETWORK" \
+    --subnet "$VPC_SUBNET" \
+    --vpc-egress=private-ranges-only \
     --add-cloudsql-instances "$CONNECTION_NAME" \
     --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest" \
     --set-env-vars "NODE_ENV=production,MOBILE_LEGACY_AUTH_ENABLED=false,JWT_ACCESS_TTL=15m,JWT_REFRESH_TTL=7d"
@@ -841,6 +965,13 @@ fi
 # Corre si este run tocó quivo-api de cualquier forma (deploy directo o sólo el CORS
 # update, que también crea una revisión nueva). Si sólo se corrió --solo worker, no hay
 # nada que verificar acá (el worker no expone HTTP) — se avisa por qué se omite.
+#
+# Nota: esto NO diagnostica permisos de IAM — eso ya lo cubre (y hace fallar duro si falta)
+# verify_allow_unauthenticated en el paso 3, antes de llegar acá. Si algún día este health
+# check falla con la app devolviendo 403, NO es este bloque el que hay que mirar: es que el
+# paso 3 no atajó el caso (o alguien tocó el IAM binding a mano después del deploy). No
+# duplicar acá ese diagnóstico — este bloque asume que el acceso público ya está resuelto y
+# sólo mide si la app arrancó sana (DB/Redis).
 if [[ "$NEEDS_API_DEPLOY" == true || -n "$WEB_URL" ]]; then
   info "Paso 7/7: verificando /v1/health/ready de quivo-api..."
 
