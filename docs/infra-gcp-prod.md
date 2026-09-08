@@ -60,7 +60,7 @@ Prefijo de imágenes: `southamerica-west1-docker.pkg.dev/quivo-control-prod/quiv
 | Connection name | `quivo-control-prod:southamerica-west1:quivo-db` |
 | Backups | diarios 07:00, retención 7 |
 | Base de datos | `quivo_control` |
-| Usuario owner | `postgres` (password CSPRNG en Secret Manager) |
+| Usuario owner | `postgres` (password CSPRNG rotada 2026-09-08, en el secreto `DATABASE_URL`) |
 
 **Trampa 1 — la edición.** El default de `gcloud sql instances create` pasó a ser
 `ENTERPRISE_PLUS`, que **rechaza** los tiers compartidos:

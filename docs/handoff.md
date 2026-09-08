@@ -6,65 +6,118 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Infraestructura de producción nueva en GCP (2026-09-08, en curso)
+## Producción en GCP, desplegada y verificada (2026-09-08)
 
-El proyecto GCP anterior (`quivo-piloto`) fue descartado y borrado. Se creó
-**`quivo-control-prod`** (número `741758083365`) desde cero, en `southamerica-west1`.
+El proyecto anterior (`quivo-piloto`) fue descartado y borrado. **`quivo-control-prod`**
+(número `741758083365`, `southamerica-west1`) está creado y **con las tres cargas de trabajo
+corriendo**:
 
-La infraestructura ya existe y está verificada: Artifact Registry, private services access,
-VPC connector, Cloud SQL `quivo-db` (PG16, **solo IP privada**) y Memorystore `quivo-redis`
-(BASIC 1 GiB, **AUTH habilitado**). Falta desplegar las cargas de trabajo.
+| Servicio | URL / estado |
+|---|---|
+| `quivo-api` | https://quivo-api-hjqvfgsdnq-tl.a.run.app — `{"status":"ok","db":"up","redis":"up"}` |
+| `quivo-web` | https://quivo-web-hjqvfgsdnq-tl.a.run.app — HTTP 200 |
+| `quivo-worker` | Worker Pool, 1 instancia — `Worker de ingesta QUIVO listo — escuchando la cola de sync` |
 
-**El detalle completo — IDs, IPs, trampas y el orden obligatorio del deploy — está en
-[`docs/infra-gcp-prod.md`](infra-gcp-prod.md).** Tres cosas que conviene saber sin abrirlo:
+Base `quivo_control` con las 33 migraciones aplicadas, `quivo_app` con la password rotada,
+`CORS_ORIGIN` con las dos URLs del panel. Se despliega con `scripts/deploy-gcp.sh [tag]
+[--solo api|web|worker]` (PR #57, más los fixes #58/#59/#60 descritos abajo).
 
-1. **`--edition=ENTERPRISE` es obligatorio** al crear la instancia de Cloud SQL: el default
-   pasó a `ENTERPRISE_PLUS`, que rechaza `db-g1-small`.
-2. **Sin IP pública, `prisma migrate deploy` no corre desde la laptop** (ni con
-   `cloud-sql-proxy`). Las migraciones van en un Cloud Run Job dentro de la VPC.
-3. **`quivo_app` tiene su password en el repo** (`20260730152500_rls_multi_tenant`
-   `migration.sql:14`, `'quivo_app_dev'`). El script de deploy la rota con `ALTER ROLE`
-   después de migrar; la migración no se toca.
+El detalle de la infra — IDs, IPs, trampas de creación — sigue en
+[`docs/infra-gcp-prod.md`](infra-gcp-prod.md).
 
-Pendiente inmediato: `apps/mobile/eas.json` (`EXPO_PUBLIC_API_URL`). La rama
-`feat/deploy-gcp-prod` ya le sacó la URL del servicio borrado y le dejó un placeholder
-`.invalid` a propósito, para que falle ruidoso en vez de apuntar a algo que no existe. Se
-completa con la URL real recién después del primer deploy de `quivo-api`, y antes del APK.
-## `scripts/deploy-gcp.sh`, en rama sin PR todavía (`feat/deploy-gcp-prod`, 2026-09-08)
+### Cinco causas raíz que solo aparecen fuera de local
 
-Reemplaza a `scripts/deploy-web.sh` (apuntaba al proyecto GCP borrado `quivo-piloto`; el proyecto
-vigente es `quivo-control-prod`, `southamerica-west1`). Un solo script versionado despliega las
-tres cargas de trabajo (`quivo-api`, `quivo-web`, `quivo-worker`) contra la infra ya provista
-(Cloud SQL `quivo-db` con IP privada, Memorystore `quivo-redis` con AUTH, VPC connector
-`quivo-conector`). Sólo se escribió el script — **no se corrió contra el proyecto real**, así que
-nada de lo de abajo está verificado en vivo todavía.
+Costó **seis corridas** del script llegar de punta a punta. Ninguna de las cinco causas se
+puede reproducir en la laptop ni en CI, y esa es exactamente la razón por la que llegaron
+hasta acá. Vale leerlas antes de tocar infra nueva:
 
-Piezas nuevas que no estaban en `deploy-web.sh`:
+1. **El service account de cómputo no tenía ningún rol a nivel proyecto.** El conector de
+   Cloud SQL de Cloud Run necesita `cloudsql.instances.get`; sin `roles/cloudsql.client` el
+   job de migraciones muere con `403 boss::NOT_AUTHORIZED` y Prisma lo reporta como `P1001`
+   ("Can't reach database server"), que despista hacia la red. El paso 0 del script ahora lo
+   otorga, idempotente (PR #58).
 
-- **Cloud SQL con IP privada exclusivamente**: no hay forma de correr `prisma migrate deploy`
-  desde fuera de la VPC, así que el script crea/ejecuta un Cloud Run Job (`quivo-migraciones`,
-  con `--vpc-connector`/`--add-cloudsql-instances`, MISMA imagen que la API) que corre las
-  migraciones dentro de la VPC, con `--wait` y abortando el deploy entero si falla.
-- **Rotación de la password de `quivo_app`**: la migración `20260730152500_rls_multi_tenant`
-  crea ese rol con la password hardcodeada `quivo_app_dev` (dev-only, en el repo). El mismo Job,
-  reejecutado con otro `--args`, corre un `ALTER ROLE quivo_app PASSWORD ...` con una password
-  generada por el script (`openssl rand -hex 24`, guardada en Secret Manager como
-  `QUIVO_APP_PASSWORD`) — la migración usa `IF NOT EXISTS` así que reaplicarla nunca revierte la
-  rotación.
-- **Redis con AUTH habilitado**: `REDIS_URL` se arma en runtime con
-  `gcloud redis instances get-auth-string` (nunca se imprime).
-- **`DATABASE_URL` NO se autogenera**: la password del usuario `postgres` de Cloud SQL ya está
-  seteada fuera del script; si el secreto no existe, el script falla con el comando exacto para
-  crearlo a mano en vez de inventar una password que rompería contra el rol real.
-- **Se repite (a propósito) el fix de la trampa de CORS de dos URLs** documentada más abajo en
-  "La trampa de CORS que se esquivó" (PR #23/#49): `CORS_ORIGIN` ahora lleva las DOS URLs válidas
-  del panel (la de `status.url` y la de número-de-proyecto), separadas por coma —
-  `apps/api/src/main.ts` ya soporta una lista, así que no hace falta elegir una sola.
+2. **PostGIS existía solo por la imagen de Docker.** `docker-compose.yml` usa
+   `postgis/postgis:16-3.4-alpine`, así que en local y en CI la extensión ya está y
+   **ninguna migración la creaba**. Cloud SQL arranca con Postgres pelado y
+   `20260730151939_core_entities` moría con `P3018 / 42704: type "geography" does not exist`
+   en la columna `geography(LineString,4326)` de `rutas`. Se agregó
+   `20260730030000_habilitar_postgis` con timestamp anterior a `init_auth` para correr
+   primera, e `IF NOT EXISTS` para ser no-op donde ya está (PR #58).
 
-Pendiente / no verificado: el deploy real de punta a punta contra `quivo-control-prod`; la
-verificación manual de RLS/`quivo_app` documentada en la cabecera del script; y actualizar
-`apps/mobile/eas.json` (`EXPO_PUBLIC_API_URL`) con la URL real de `quivo-api` una vez desplegada
-(quedó con un placeholder `.invalid` a propósito, ver el script y el commit).
+3. **`gcloud` separa por coma TODOS sus flags de lista y diccionario.** `--args`,
+   `--set-env-vars`, `--update-env-vars`. El script de rotación de `quivo_app` tiene una coma
+   dentro de un string de JavaScript (`"...caracteres inesperados, abortando por seguridad"`),
+   así que `/bin/sh -c` recibió medio script y murió con `unterminated quoted string`. El
+   mismo bug estaba **garantizado** en el paso 5: `CORS_ORIGIN` son siempre dos URLs separadas
+   por coma. Todo eso pasa a usar el delimitador alternativo `^%%^`, con una guarda en código
+   que aborta si algún valor llegara a contenerlo (PR #59).
+
+4. **`gcloud run worker-pools deploy` no soporta `--vpc-connector`.** Los worker pools solo
+   tienen Direct VPC egress. El worker usa `--network default --subnet default
+   --vpc-egress=private-ranges-only`, que llega a la misma red del conector: cambia el
+   mecanismo de salida, no el destino. Los pasos 2 y 3 siguen con el conector, donde sí es
+   válido (PR #60).
+
+5. **`--allow-unauthenticated` puede fallar como *warning* y el deploy sigue.** Pasó: los dos
+   servicios se desplegaron, el script anunció sus URLs, y las dos devolvían **403**. gcloud
+   imprime `Setting IAM Policy...............warning` y devuelve 0. Los pasos 3 y 4 ahora
+   verifican el binding `allUsers`/`roles/run.invoker` con `get-iam-policy` y abortan con el
+   comando de diagnóstico. El `curl` a la URL quedó como diagnóstico informativo, **nunca**
+   como gate: un 403 es el efecto, no la causa, y daría falsos negativos por arranque en frío
+   (PR #60).
+
+### Un error de diagnóstico que costó la base
+
+Tras el fallo (2), afirmé que Prisma corre cada migración en una transacción y que por eso
+`core_entities` no había dejado nada a medias. **Es falso**: alcanzó a crear tablas antes de
+morir. Marcarla como revertida con `migrate resolve --rolled-back` limpió la fila de
+`_prisma_migrations` pero dejó las tablas huérfanas, y el reintento chocó contra su propio
+`CREATE TABLE` (`42P07: relation "sindicatos" already exists`).
+
+Se resolvió **borrando y recreando la base** `quivo_control`. Fue barato porque no había ni un
+registro de negocio — el seed no es parte del deploy. Con datos reales habría sido un
+incidente. **Regla que queda:** ante un `P3018`, verificar qué dejó a medias la migración
+antes de decidir cómo recuperar; `resolve --rolled-back` solo limpia el registro, no revierte
+el efecto.
+
+### Cambios de seguridad hechos a mano, fuera del script
+
+Quedan registrados acá porque **no** los hace `deploy-gcp.sh` y no son reproducibles desde el
+repo:
+
+- **Password del usuario `postgres` de Cloud SQL rotada.** El doc de infra decía que estaba en
+  Secret Manager; Secret Manager estaba vacío. Se perdió en una sesión anterior cortada a
+  mitad. Se generó una nueva (CSPRNG) y quedó en el secreto `DATABASE_URL`.
+- **`roles/orgpolicy.policyAdmin` otorgado a `cloud@tuquivo.com` en la organización
+  `70008428716`.** Era `organizationAdmin`, que trae `orgpolicy.policy.get` pero no `.set`.
+  Es un privilegio amplio y quedó puesto; si no se necesita más, se saca con
+  `remove-iam-policy-binding`.
+- **`constraints/iam.allowedPolicyMemberDomains` con `allowAll: true` a nivel del proyecto
+  `quivo-control-prod`.** La organización lo restringe al dominio `C03ylx347`, lo que prohíbe
+  agregar `allUsers` a cualquier IAM y por eso los servicios daban 403. El constraint **no
+  admite excepciones más finas** que "permitir todo" en un recurso dado: no se puede permitir
+  `allUsers` y nada más. El resto de la organización hereda la política original intacta, pero
+  dentro de este proyecto ahora se puede agregar cualquier principal externo. Se aplicó con
+  `gcloud org-policies set-policy` tras habilitar `orgpolicy.googleapis.com`. La propagación
+  tardó ~1 minuto: el binding falla con `FAILED_PRECONDITION` hasta que llega.
+
+### Pendiente inmediato
+
+- **`apps/mobile/eas.json` (`EXPO_PUBLIC_API_URL`)** tiene un placeholder `.invalid` puesto a
+  propósito para que falle ruidoso. Se completa con `https://quivo-api-hjqvfgsdnq-tl.a.run.app`
+  antes de generar el APK.
+- **Verificación manual dentro de la VPC**, documentada en la cabecera de
+  `scripts/deploy-gcp.sh` y todavía sin hacer: que RLS siga activo en `sindicatos`/`socios`,
+  que `quivo_app` no sea superusuario ni tenga `BYPASSRLS`, y que la password rotada sea la
+  activa.
+- **Dos avisos del worker, ninguno bloqueante.** `Eviction policy is volatile-lru. It should
+  be "noeviction"`: BullMQ lo pide porque bajo presión de memoria Redis puede desalojar claves
+  con TTL y perder jobs — con 1 GiB y volumen de MVP no debería pasar, pero es configuración
+  incorrecta de Memorystore. Y `[Better Auth]: Base URL could not be determined`: falta
+  `BETTER_AUTH_URL` en el worker; hay que ver si lo usa de verdad o solo lo arrastra por
+  importar el módulo.
+- **`apps/landing` no tiene destino de deploy documentado.** Es un hueco, no una decisión.
 
 ## Login móvil de un paso, mergeado (#53, 2026-09-08)
 
@@ -145,7 +198,13 @@ no tiene sesgo de módulo.
 | H4 | `use-auth-movil.ts` | La constante decía `CONSECUTIVOS` pero un error de red no reseteaba el contador: `401 → red → 401` prendía la bandera. **El test cortaba un paso antes de destaparlo** | Se conservó la semántica (una sesión revocada sigue revocada tras un corte de red) y se renombró todo a `UMBRAL_401_ACUMULADOS_`. Test del tercer paso agregado |
 | H5 | `use-auth-movil.ts` | El ref `fallos401Acumulados` sobrevivía al `logout()`: racha vieja + un 401 = alerta inmediata | Reset en `logout()` y en los dos caminos de login exitoso |
 
-### PENDIENTE 1 — ambigüedad de placas duplicadas (a medio aplicar, OJO)
+### PENDIENTE 1 — ambigüedad de placas duplicadas — **CANCELADO** (PR #56, 2026-09-08)
+
+> **Resuelto en la base, no en la app.** `placaNormalizada` pasó a ser una columna generada
+> `NOT NULL` con un índice único parcial sobre `estado <> 'inactivo'`, así que
+> `WHERE estado='activo' AND "placaNormalizada"=$1` devuelve 0 o 1 fila **por construcción**
+> y el envenenamiento cruzado de lockout desaparece. Ver `docs/plan-unicidad-placa.md`. Lo
+> que sigue abajo queda como registro de qué se había alcanzado a aplicar antes de eso.
 
 **El subagente murió en medio de la reescritura. El árbol quedó consistente y verde, pero parcial:**
 
