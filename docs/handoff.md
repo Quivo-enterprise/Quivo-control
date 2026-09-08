@@ -6,6 +6,30 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Infraestructura de producción nueva en GCP (2026-09-08, en curso)
+
+El proyecto GCP anterior (`quivo-piloto`) fue descartado y borrado. Se creó
+**`quivo-control-prod`** (número `741758083365`) desde cero, en `southamerica-west1`.
+
+La infraestructura ya existe y está verificada: Artifact Registry, private services access,
+VPC connector, Cloud SQL `quivo-db` (PG16, **solo IP privada**) y Memorystore `quivo-redis`
+(BASIC 1 GiB, **AUTH habilitado**). Falta desplegar las cargas de trabajo.
+
+**El detalle completo — IDs, IPs, trampas y el orden obligatorio del deploy — está en
+[`docs/infra-gcp-prod.md`](infra-gcp-prod.md).** Tres cosas que conviene saber sin abrirlo:
+
+1. **`--edition=ENTERPRISE` es obligatorio** al crear la instancia de Cloud SQL: el default
+   pasó a `ENTERPRISE_PLUS`, que rechaza `db-g1-small`.
+2. **Sin IP pública, `prisma migrate deploy` no corre desde la laptop** (ni con
+   `cloud-sql-proxy`). Las migraciones van en un Cloud Run Job dentro de la VPC.
+3. **`quivo_app` tiene su password en el repo** (`20260730152500_rls_multi_tenant`
+   `migration.sql:14`, `'quivo_app_dev'`). El script de deploy la rota con `ALTER ROLE`
+   después de migrar; la migración no se toca.
+
+Pendiente inmediato: `apps/mobile/eas.json` (`EXPO_PUBLIC_API_URL`) sigue apuntando al
+servicio borrado `https://quivo-api-424426714260.southamerica-west1.run.app`. Se actualiza
+con la URL real recién después del primer deploy de `quivo-api`, y antes de generar el APK.
+
 ## Login móvil de un paso, mergeado (#53, 2026-09-08)
 
 `main` = `c92f806`. La rama `feat/login-movil-un-paso` se cerró con CI verde (`ci` 6m28s,
