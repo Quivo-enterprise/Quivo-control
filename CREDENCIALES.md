@@ -7,10 +7,10 @@ Documento de referencia con todas las credenciales locales de acceso para desarr
 > `Sindicato 1º de Mayo` / `Sindicato Unificado del Norte` (`SINDICATO_A_ID`/`SINDICATO_B_ID`
 > en `packages/db/prisma/seed.ts`) y la cuenta `admin@aislamiento.local`. **El sindicato del
 > piloto real (QUI-366) NO está acá y sus credenciales NO se publican en ningún archivo del
-> repo.** El vehículo y el conductor del piloto usan un PIN generado al azar en el momento
-> de creación (ver sección 5) — reusar los PINs demo de abajo contra la placa/CI reales del
-> piloto no funciona: son secretos distintos, generados por separado, y el seed nunca los
-> revierte una vez rotados.
+> repo.** Las 6 credenciales de prueba del piloto (1 chofer + 5 pasantes) usan un PIN
+> generado al azar en el momento de creación (ver sección 5) — reusar los PINs demo de abajo
+> contra las placas/CI del piloto no funciona: son secretos distintos, generados por
+> separado, y ni el seed ni el script del piloto los revierten una vez creados/rotados.
 
 ---
 
@@ -85,32 +85,44 @@ La app móvil utiliza una autenticación encadenada en **dos pasos**:
 
 El sindicato piloto (arranca el lunes) es datos reales: sus eventos GPS son evidencia legal
 para sanciones a un conductor real. Por eso **no** comparte el mecanismo de PIN fijo de la
-sección 1.
+sección 1, y **no** genera vehículo/conductor desde `packages/db/prisma/seed.ts` — ese seed
+solo siembra la línea/ruta/puntos de control del sindicato piloto (placeholder hasta que el
+CTO carga el circuito real con `scripts/cargar-circuito-z12.ts`); ya no crea ninguna
+credencial (el vehículo/conductor placeholder `PILOTO001`/`PILOTO-CI-001` que existía antes
+se retiró: esa placa no pasaba la validación de placa boliviana y llegó a romper el listado
+del panel).
 
-- **Placa e identificadores** (`PILOTO001` / `PILOTO-CI-001` en `packages/db/prisma/seed.ts`)
-  siguen siendo placeholder — el CTO carga la placa/CI reales antes de que arranque el
-  piloto — pero el **PIN nunca es un valor publicado en este archivo ni en el repo**.
-- La **primera vez** que corre el seed y el vehículo/conductor piloto todavía no existen,
-  genera un PIN numérico aleatorio de 8 dígitos (`crypto.randomInt`, cumple el formato de
-  `PinMovilSchema`) por separado para el vehículo y para el conductor, y lo **imprime una
-  única vez en la salida del seed** con el aviso de que hay que anotarlo porque no se vuelve
-  a mostrar (no queda en ningún log persistente propio ni se puede recuperar después). Se
-  puede fijar a mano en vez de generarlo al azar con las variables de entorno
-  `PILOTO_PIN_VEHICULO` / `PILOTO_PIN_CONDUCTOR` (mismo mecanismo que `MOBILE_SEED_*` de la
-  sección 1, pero **exclusivo del piloto** — no lo confundas con esas).
-- **Corridas siguientes del seed NUNCA tocan una credencial ya creada.** El seed corre en
-  cada build de CI; antes de este fix, cada corrida revertía el PIN del vehículo/conductor
-  piloto al PIN demo publicado (`246810`/`135790`), incluso después de que el CTO lo
-  rotara a mano con el endpoint de credenciales. Ahora, si la fila ya existe, el seed no
-  imprime nada nuevo ni modifica `credencialHash` — la única forma de cambiar el PIN del
-  piloto después de la creación inicial es el endpoint (`establecerPinVehiculo` /
-  `establecerPinConductor`), nunca re-correr el seed.
-- **Qué tiene que hacer el CTO:** correr el seed una vez, copiar los dos PINs que imprime
-  (o pre-fijarlos con `PILOTO_PIN_VEHICULO`/`PILOTO_PIN_CONDUCTOR` antes de esa primera
-  corrida) y guardarlos fuera del repo (gestor de secretos, no un archivo versionado). Si
-  ya corrió el seed contra la base del piloto con una versión anterior de este código (antes
-  del fix), rotar el PIN a mano con el endpoint de credenciales — la corrida vieja pudo
-  haber dejado la credencial demo puesta.
+- **Fuente de las credenciales de prueba:** `scripts/crear-credenciales-piloto.ts`. Crea
+  **6 credenciales autocontenidas** — 1 chofer + 5 pasantes, con placa PTA ficticia pero
+  válida (`9001TST`..`9006TST`) — repartidas 3 en la ruta Z12 y 3 en la ruta `circuito` de la
+  línea 120. Requiere que la línea/ruta Z12 (seed) y la ruta 120-circuito
+  (`scripts/cargar-linea-120.ts --apply`) ya existan; si no, aborta con instrucciones de qué
+  correr antes.
+- **Cómo correrlo:**
+  ```bash
+  DATABASE_URL=postgresql://quivo:quivo_dev@localhost:5434/quivo_control \
+    pnpm exec tsx scripts/crear-credenciales-piloto.ts
+  ```
+  Sin flags: siempre aplica (`COMMIT`) si todo verifica.
+- **PINes:** cada conductor recibe un PIN numérico de 6 dígitos generado al azar
+  (`crypto.randomInt`). Se **imprime una única vez por consola, después del `COMMIT`**, con
+  el aviso de que hay que anotarlo porque no se vuelve a mostrar — **nunca queda en este
+  archivo ni en ningún otro archivo del repo**. Una fila que ya tenía PIN NO se vuelve a
+  imprimir en corridas siguientes (queda "SIN TOCAR (ya tenía PIN)" en la salida).
+- **Corridas siguientes son idempotentes y no pisan un PIN ya entregado.** El script es
+  seguro de re-correr (ids fijos, upserts) para extender la cobertura de asignaciones hacia
+  adelante — no duplica filas ni pisa el `credencialHash` de una fila existente. Para rotar
+  los 6 PINs a propósito (en vez de dejarlos como estaban):
+  ```bash
+  FORZAR_PIN=1 DATABASE_URL=... pnpm exec tsx scripts/crear-credenciales-piloto.ts
+  ```
+- **Qué tiene que hacer el CTO:** correr el script una vez, copiar los PINs que imprime por
+  consola (después del `COMMIT`) y guardarlos fuera del repo (gestor de secretos, no un
+  archivo versionado). El script termina con una verificación de solo lectura que confirma,
+  para las 6 credenciales, que hay una asignación vigente HOY que cumple exactamente la
+  condición de login (`buscarCandidatosNivel1`, `auth-movil.service.ts`) — si alguna falla,
+  lo avisa en la propia salida (no aborta: es diagnosticable, no necesariamente un bug del
+  script).
 
 ---
 

@@ -943,6 +943,22 @@ async function main(): Promise<void> {
     // ------------------------------------------------------------------------------------
     // Paso 6 — Reasignar la rotación: alternar Z12/120 día por medio (QUI-383) para las 30
     // asignaciones ya existentes (15 titular + 15 pasante).
+    //
+    // Fix (tarea "6 credenciales piloto", ver docs/handoff.md): estas 30 asignaciones del
+    // "titular"/"pasante" (`VEHICULO_TITULAR_ID`/`VEHICULO_PASANTE_ID` = `...014`/`...024`)
+    // NUNCA se crearon desde ningún script del repo — se armaron a mano contra Cloud SQL
+    // productivo (ya descartado), igual que el rename de la línea Z12. Además, el vehículo/
+    // conductor `...014`/`...015` se sacó de `packages/db/prisma/seed.ts` a propósito (placa
+    // `PILOTO001` no válida, ver el comentario de `seedSindicatoPiloto`), así que ese
+    // "titular" ya no existe en NINGÚN entorno alcanzable desde este repo. Sin este guard,
+    // este Paso 6 abortaba la transacción completa (BEGIN/COMMIT de todo el script, ver
+    // `main()`) apenas tocaba la primera fecha — lo que también se llevaba puesto a los Pasos
+    // 1-5 (línea 120, sus 3 rutas, variantes, puntos de control y paradas), que SÍ hacen
+    // falta para las 3 credenciales "120" de `scripts/crear-credenciales-piloto.ts`. Se
+    // cuenta cuánto de esa data legacy existe ANTES de escribir nada: 30 → comportamiento
+    // original sin cambios (por si este script se corre alguna vez contra un entorno que sí
+    // la tenga); 0 → se salta el paso entero, con aviso, en vez de abortar; cualquier otro
+    // número → aborta igual que antes, porque ahí sí hay algo raro que revisar a mano.
     // ------------------------------------------------------------------------------------
     console.log('\n--- Paso 6: alternación Z12/120 de la rotación (2026-08-17..31) ---');
 
@@ -950,23 +966,47 @@ async function main(): Promise<void> {
     const tablaAlternacion = fechas.map((f) => ({ fecha: fechaIsoDeUtc(f), linea: lineaParaFecha(f), rutaId: rutaIdParaFecha(f) }));
     console.table(tablaAlternacion);
 
-    for (const vehiculoId of [VEHICULO_TITULAR_ID, VEHICULO_PASANTE_ID]) {
-      for (const fecha of fechas) {
-        const fechaTexto = fechaIsoDeUtc(fecha);
-        const rutaId = rutaIdParaFecha(fecha);
-        const resultado = await client.query(
-          `UPDATE asignaciones SET "rutaId" = $1, "updatedAt" = now()
-           WHERE "vehiculoId" = $2 AND fecha = $3 AND horario = $4`,
-          [rutaId, vehiculoId, fechaTexto, HORARIO_ROTACION],
-        );
-        if (resultado.rowCount !== 1) {
-          throw new Error(
-            `Esperaba actualizar exactamente 1 asignación para vehiculoId=${vehiculoId}, fecha=${fechaTexto}, horario='${HORARIO_ROTACION}' ` +
-              `y se actualizaron ${resultado.rowCount}. El brief asume que las 30 asignaciones (15+15) ya existen — revisar antes de continuar.`,
+    const asignacionesLegacyCount = await contarFilas(
+      client,
+      `SELECT count(*) FROM asignaciones
+       WHERE "vehiculoId" = ANY($1::text[]) AND horario = $2 AND fecha BETWEEN $3 AND $4`,
+      [[VEHICULO_TITULAR_ID, VEHICULO_PASANTE_ID], HORARIO_ROTACION, PRIMERA_FECHA, ULTIMA_FECHA],
+    );
+    const ASIGNACIONES_LEGACY_ESPERADAS = 30; // 15 titular + 15 pasante, ver el comentario de arriba.
+
+    if (asignacionesLegacyCount === 0) {
+      console.warn(
+        '  ⚠ 0 asignaciones legacy del titular/pasante (…014/…024) en este rango — se salta la ' +
+          'alternación Z12/120 de este paso. Esperable en cualquier entorno reconstruido desde el ' +
+          'repo (local, o una producción nueva): ese titular nunca fue reproducible desde acá y ya ' +
+          'no se siembra. Las líneas/rutas/puntos de control de los Pasos 1-5 SÍ se aplican igual.',
+      );
+    } else if (asignacionesLegacyCount !== ASIGNACIONES_LEGACY_ESPERADAS) {
+      throw new Error(
+        `Se esperaban 0 (entorno sin la data legacy del titular/pasante) o ${ASIGNACIONES_LEGACY_ESPERADAS} ` +
+          `asignaciones (15+15, entorno con esa data completa) para vehiculoId IN (${VEHICULO_TITULAR_ID}, ` +
+          `${VEHICULO_PASANTE_ID}) en ${PRIMERA_FECHA}..${ULTIMA_FECHA}, y hay ${asignacionesLegacyCount}. ` +
+          'Estado intermedio inesperado — revisar a mano antes de continuar, no es seguro asumir cuál mitad falta.',
+      );
+    } else {
+      for (const vehiculoId of [VEHICULO_TITULAR_ID, VEHICULO_PASANTE_ID]) {
+        for (const fecha of fechas) {
+          const fechaTexto = fechaIsoDeUtc(fecha);
+          const rutaId = rutaIdParaFecha(fecha);
+          const resultado = await client.query(
+            `UPDATE asignaciones SET "rutaId" = $1, "updatedAt" = now()
+             WHERE "vehiculoId" = $2 AND fecha = $3 AND horario = $4`,
+            [rutaId, vehiculoId, fechaTexto, HORARIO_ROTACION],
           );
+          if (resultado.rowCount !== 1) {
+            throw new Error(
+              `Esperaba actualizar exactamente 1 asignación para vehiculoId=${vehiculoId}, fecha=${fechaTexto}, horario='${HORARIO_ROTACION}' ` +
+                `y se actualizaron ${resultado.rowCount}. El brief asume que las 30 asignaciones (15+15) ya existen — revisar antes de continuar.`,
+            );
+          }
         }
+        console.log(`  Vehículo ${vehiculoId}: 15 asignaciones reasignadas según la tabla de arriba.`);
       }
-      console.log(`  Vehículo ${vehiculoId}: 15 asignaciones reasignadas según la tabla de arriba.`);
     }
 
     // ------------------------------------------------------------------------------------
@@ -1020,7 +1060,23 @@ async function main(): Promise<void> {
     const hoyBolivia = fechaActualBolivia();
     const hoyTexto = fechaIsoDeUtc(hoyBolivia);
     const hoyDentroDeRango = hoyTexto >= PRIMERA_FECHA && hoyTexto <= ULTIMA_FECHA;
-    if (!hoyDentroDeRango) {
+    // Fix (mismo hallazgo que la guarda del Paso 6, arriba): este chequeo asume que el Paso 6
+    // escribió algo para `VEHICULO_TITULAR_ID`/`VEHICULO_PASANTE_ID` — pero cuando
+    // `asignacionesLegacyCount === 0` el Paso 6 se SALTA a propósito (ese "titular"/"pasante"
+    // legado no existe en ningún entorno reconstruido desde el repo). Sin este guard, este
+    // Paso 7 seguía exigiendo incondicionalmente una asignación de HOY para esos dos vehículos
+    // y lanzaba con `rutaIdActual === undefined`, abortando la MISMA transacción (Pasos 1-5)
+    // que la guarda del Paso 6 vino a proteger. Hoy no se dispara solo porque `hoyDentroDeRango`
+    // da `false` (`ULTIMA_FECHA` ya quedó en el pasado) — pero re-fechar `PRIMERA_FECHA`/
+    // `ULTIMA_FECHA` es la forma obvia de reusar este script, y ahí sí volvería a abortar.
+    // Reusa la misma condición que el Paso 6 para saltar también este chequeo por vehículo.
+    if (asignacionesLegacyCount === 0) {
+      console.warn(
+        '  ⚠ 0 asignaciones legacy del titular/pasante (…014/…024) — se salta también la ' +
+          'verificación de "hoy" para esos dos vehículos (mismo motivo que el Paso 6: ese ' +
+          'titular no existe en este entorno).',
+      );
+    } else if (!hoyDentroDeRango) {
       console.warn(`  ⚠ Hoy (${hoyTexto}) cae fuera del rango ${PRIMERA_FECHA}..${ULTIMA_FECHA} — no hay nada que verificar para "hoy".`);
     } else {
       const rutaEsperadaHoy = rutaIdParaFecha(hoyBolivia);
