@@ -45,6 +45,14 @@ export const PlacaVehiculoSchema = z
   .trim()
   .min(1, 'Ingresa la placa.')
   .max(20, 'La placa parece demasiado larga.')
+  // SEGURIDAD, no cosmético — NO ampliar este alfabeto sin entender qué rompe: restringir la
+  // placa a ASCII es lo único que garantiza que `toUpperCase()` de JavaScript y `upper()` de
+  // Postgres (dependiente de locale/collation) coincidan SIEMPRE, y es lo que impide un
+  // ataque de homóglifos. Ejemplo: una `А` cirílica en `АBC123` sobrevive este regex si se
+  // permitiera Unicode general, pero el `regexp_replace(..., '[^A-Z0-9]', ...)` que genera
+  // `placaNormalizada` en Postgres (schema.prisma) la stripea por no ser `A-Z` ASCII,
+  // produciendo `BC123` — una `placaNormalizada` distinta que escapa al índice único
+  // (`vehiculos_placa_norm_vigente_key`) mientras la placa se ve idéntica a la vista.
   .regex(/^[A-Za-z0-9 -]+$/, 'La placa contiene caracteres no permitidos.')
   .superRefine((placa, context) => {
     const placaNormalizada = normalizarPlacaVehiculo(placa);
@@ -271,6 +279,14 @@ export const HistorialEstadoVehiculoSchema = z.object({
 });
 export type HistorialEstadoVehiculo = z.infer<typeof HistorialEstadoVehiculoSchema>;
 
+// Alineado con la expresión que usa la base (migración de unicidad de placa,
+// `packages/db/prisma/schema.prisma`, columna `placaNormalizada` GENERATED ALWAYS AS
+// `regexp_replace(upper(btrim(placa)), '[^A-Z0-9]', '', 'g')`) y con `normalizarPlaca` de
+// `apps/api/src/modules/auth-movil/auth-movil.service.ts`. Antes borraba sólo espacios y
+// guiones (`[ -]+`); sobre input ya validado por `PlacaVehiculoSchema` (que sólo permite
+// `[A-Za-z0-9 -]`) el resultado era idéntico, pero sobre input crudo NO — con `[^A-Z0-9]`
+// las tres definiciones de "normalizar placa" del repo coinciden siempre, no sólo cuando
+// Zod ya filtró el input.
 export function normalizarPlacaVehiculo(placa: string): string {
-  return placa.trim().toUpperCase().replace(/[ -]+/g, '');
+  return placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }

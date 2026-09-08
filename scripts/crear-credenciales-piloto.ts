@@ -27,9 +27,10 @@
  *      para dejar loguear por app; no hay motivo legítimo para que esta rotación exclusiva
  *      del piloto de prueba quede en `borrador` entre corridas.
  *   3. Upsert de los 6 vehículos: `estado: 'activo'` forzado (el default del modelo es
- *      `'pendiente'`), `placaNormalizada` poblada explícitamente (ver "La trampa de
- *      placaNormalizada en NULL" más abajo) y los 5 campos obligatorios sin default
- *      (`tipo`, `marca`, `modelo`, `color`, `capacidad`). NO se toca `credencialHash` del
+ *      `'pendiente'`) y los 5 campos obligatorios sin default (`tipo`, `marca`, `modelo`,
+ *      `color`, `capacidad`). `placaNormalizada` NO se escribe: desde la migración de
+ *      unicidad de placa es columna `GENERATED ALWAYS` (la deriva Postgres de `placa`), ver
+ *      "La trampa de `placaNormalizada`" más abajo. NO se toca `credencialHash` del
  *      vehículo — ver "Por qué el vehículo no tiene PIN acá" más abajo.
  *   4. Upsert de los 6 conductores: `estado: 'activo'` forzado, `documentoIdentidad` +
  *      `licenciaConducir` (obligatorios) ficticios pero coherentes, y `credencialHash` vía
@@ -85,16 +86,18 @@
  * ejercitar). El brief de esta tarea tampoco lo pide. Se deja `credencialHash` del vehículo
  * en `NULL` a propósito, en vez de generar un PIN que nadie va a usar ni imprimir.
  *
- * ## La trampa de `placaNormalizada` en NULL
+ * ## La trampa de `placaNormalizada`
  *
- * `buscarVehiculosActivosPorPlaca` (`auth-movil.service.ts`) sólo resuelve por
- * `placaNormalizada` en el camino sano; el camino con `regexp_replace` sobre `placa` cruda es
- * el fallback pensado para duplicados históricos (ver el comentario de esa función), no algo
- * a lo que una credencial nueva debería depender para loguear. Las 6 placas ya nacen en
- * formato normalizado (mayúsculas, sin separadores), pero igual se pasa `placa` por la MISMA
- * función `normalizarPlacaVehiculo` que usa el cliente (`packages/shared/src/entities/
- * vehiculo.ts`) en vez de asumirlo, para no ser uno de los caminos de creación que la dejan
- * en NULL.
+ * Desde la migración de unicidad de placa, `placaNormalizada` es columna `GENERATED ALWAYS
+ * AS (...) STORED`: Postgres la deriva de `placa` en cada INSERT/UPDATE y rechaza (SQLSTATE
+ * 428C9) cualquier intento de escribirla a mano — por eso los upserts del Paso 3 sólo tocan
+ * `placa`. Esta era la trampa histórica que motivó la migración: antes la columna podía
+ * quedar en NULL por caminos de creación que no pasaban por `vehiculos.service`, y
+ * `buscarVehiculosActivosPorPlaca` (`auth-movil.service.ts`) necesitaba una rama de fallback
+ * con `regexp_replace` sobre `placa` cruda para esos casos. Esa rama ya no existe: la base
+ * garantiza que `placaNormalizada` está siempre poblada y sincronizada con `placa`. Las 6
+ * placas de este script igual se validan pre-normalizadas (ver el chequeo de abajo) por
+ * prolijidad, no porque haga falta para que la columna se rellene.
  *
  * ## Cuántos días cubrir, y por qué HOY y no una fecha fija
  *
@@ -342,12 +345,18 @@ function timestampUtcDeTexto(texto: string): Date {
   return new Date(`${texto.replace(' ', 'T')}Z`);
 }
 
-/** Copia de `normalizarPlacaVehiculo` (`packages/shared/src/entities/vehiculo.ts:274-276`) —
- * transcrita a mano, no importada, mismo criterio standalone que el resto del script. Se usa
- * en vez de asumir que las placas de `CREDENCIALES` ya vienen normalizadas: es exactamente la
- * garantía que pide el brief ("no seas uno de los caminos que la dejan en NULL"). */
+/** Copia de `normalizarPlacaVehiculo` (`packages/shared/src/entities/vehiculo.ts`, fuente de
+ * verdad — cualquier cambio ahí hay que reflejarlo acá a mano) — transcrita a mano, no
+ * importada, mismo criterio standalone que el resto del script (no reimporta nada de
+ * `apps/api`/`packages/db`/`packages/shared` en runtime). Se usa en vez de asumir que las
+ * placas de `CREDENCIALES` ya vienen normalizadas: es exactamente la garantía que pide el
+ * brief ("no seas uno de los caminos que la dejan en NULL"). Regex alineado con la columna
+ * generada de Postgres (unicidad de placa, docs/plan-unicidad-placa.md,
+ * `regexp_replace(upper(btrim(placa)), '[^A-Z0-9]', '', 'g')`) — antes borraba sólo espacios
+ * y guiones (`[ -]+`), que sobre placas con otra puntuación (ej. un punto) NO coincidía con
+ * lo que la base normaliza, rompiendo el pre-vuelo de `placasEsperadas` más abajo. */
 function normalizarPlaca(placa: string): string {
-  return placa.trim().toUpperCase().replace(/[ -]+/g, '');
+  return placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 // ============================================================================================
@@ -452,17 +461,25 @@ async function main(): Promise<void> {
     // Paso 1b — Pre-vuelo: ¿alguna placa/CI de CREDENCIALES ya existe con OTRO id?
     // ------------------------------------------------------------------------------------
     // Los upserts de los Pasos 3/4 sólo resuelven conflicto por `id` (`ON CONFLICT (id) DO
-    // UPDATE`). Pero `vehiculos` tiene además `@@unique([sindicatoId, placa])` y
-    // `placaNormalizada` único GLOBAL, y `conductores` tiene `@@unique([sindicatoId,
-    // documentoIdentidad])` (`packages/db/prisma/schema.prisma` — sólo se LEE esa restricción
-    // acá, no se toca el schema). Si alguna de `9001TST`..`9006TST` (o el CI
-    // `9000001 CB`..`9000006 CB`) ya existiera con OTRO id — por ejemplo creada a mano desde el
-    // panel — el INSERT de los Pasos 3/4 tira un `23505` crudo de Postgres y hace ROLLBACK de
-    // TODO (incluida la rotación del Paso 2), en vez del error guiado que este script sí da en
-    // el resto de los casos (Paso 1). Se verifica ACÁ, antes de escribir nada, con el mismo
-    // trato guiado.
+    // UPDATE`). Pero `vehiculos` tiene un índice único PARCIAL sobre `placaNormalizada`
+    // (`vehiculos_placa_norm_vigente_key`, `WHERE estado <> 'inactivo'` — único GLOBAL entre
+    // vigentes, sin importar sindicato; ya NO existe un `@@unique([sindicatoId,
+    // placaNormalizada])` compuesto — se descartó, habría bloqueado para siempre el ciclo
+    // baja/alta de una placa dentro del mismo sindicato, ver docs/plan-unicidad-placa.md), y
+    // `conductores` tiene `@@unique([sindicatoId, documentoIdentidad])`
+    // (`packages/db/prisma/schema.prisma` — sólo se LEE esa restricción acá, no se toca el
+    // schema). Si alguna de `9001TST`..`9006TST` (o el CI `9000001 CB`..`9000006 CB`) ya
+    // existiera con OTRO id — por ejemplo creada a mano desde el panel — el INSERT de los
+    // Pasos 3/4 tira un `23505` crudo de Postgres y hace ROLLBACK de TODO (incluida la
+    // rotación del Paso 2), en vez del error guiado que este script sí da en el resto de los
+    // casos (Paso 1). Se verifica ACÁ, antes de escribir nada, con el mismo trato guiado.
     console.log('\n--- Paso 1b: pre-vuelo (¿placa o CI ya usados por otro id?) ---');
 
+    // A propósito NO filtra por `estado <> 'inactivo'` aunque el índice único de la base sea
+    // parcial: acá se prefiere el chequeo más conservador (cualquier vehículo con esa placa,
+    // esté o no vigente) porque un choque con un vehículo dado de baja también amerita
+    // revisión manual antes de reusar el id — no es un falso positivo, es una fila que un
+    // operador debería mirar igual.
     const placasEsperadas = CREDENCIALES.map((c) => normalizarPlaca(c.placa));
     const vehiculoIdsEsperados = CREDENCIALES.map((c) => c.vehiculoId);
     const conflictoVehiculo = await client.query<{ id: string; placanormalizada: string }>(
@@ -520,15 +537,15 @@ async function main(): Promise<void> {
 
     const filasVehiculo: { placa: string; creado: boolean }[] = [];
     for (const c of CREDENCIALES) {
-      const placaNormalizada = normalizarPlaca(c.placa);
+      // `placaNormalizada` NO va en columnas/VALUES: es GENERATED ALWAYS, Postgres la
+      // deriva de `placa` sola (ver "La trampa de `placaNormalizada`" en la cabecera).
       const resultado = await client.query<ResultadoUpsert>(
         `INSERT INTO vehiculos
-           (id, "sindicatoId", placa, "placaNormalizada", tipo, marca, modelo, color, capacidad, estado, "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'activo', now(), now())
+           (id, "sindicatoId", placa, tipo, marca, modelo, color, capacidad, estado, "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'activo', now(), now())
          ON CONFLICT (id) DO UPDATE SET
            "sindicatoId" = EXCLUDED."sindicatoId",
            placa = EXCLUDED.placa,
-           "placaNormalizada" = EXCLUDED."placaNormalizada",
            tipo = EXCLUDED.tipo,
            marca = EXCLUDED.marca,
            modelo = EXCLUDED.modelo,
@@ -541,7 +558,7 @@ async function main(): Promise<void> {
            estado = 'activo',
            "updatedAt" = now()
          RETURNING id, (xmax = 0) AS inserted`,
-        [c.vehiculoId, SINDICATO_PILOTO_ID, c.placa, placaNormalizada, c.tipo, c.marca, c.modelo, c.color, c.capacidad],
+        [c.vehiculoId, SINDICATO_PILOTO_ID, c.placa, c.tipo, c.marca, c.modelo, c.color, c.capacidad],
       );
       filasVehiculo.push({ placa: c.placa, creado: resultado.rows[0]!.inserted });
     }

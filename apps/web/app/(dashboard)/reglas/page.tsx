@@ -990,7 +990,7 @@ function SancionesTab() {
                                 <Bus size={15} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
                                 <div>
                                   {vehiculo ? (
-                                    <PlateBadge plate={vehiculo.placaNormalizada ?? vehiculo.placa} />
+                                    <PlateBadge plate={vehiculo.placaNormalizada} />
                                   ) : (
                                     <span style={{ color: 'var(--qv-text-primary)', fontWeight: 600 }}>{s.sujetoId}</span>
                                   )}
@@ -1147,7 +1147,7 @@ function SancionesTab() {
                       <>
                         <Bus size={15} style={{ color: 'var(--qv-color-primary)', flexShrink: 0 }} />
                         {vehiculo ? (
-                          <PlateBadge plate={vehiculo.placaNormalizada ?? vehiculo.placa} />
+                          <PlateBadge plate={vehiculo.placaNormalizada} />
                         ) : (
                           <strong style={{ color: 'var(--qv-text-primary)', fontSize: '0.8125rem' }}>{detalleSancion.sujetoId}</strong>
                         )}

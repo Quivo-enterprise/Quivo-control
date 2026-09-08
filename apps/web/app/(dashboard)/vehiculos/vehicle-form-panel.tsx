@@ -319,7 +319,13 @@ export function VehicleFormPanel({
 
   const verifyPlate = async () => {
     handleBlur('placa');
-    const parsed = PlacaVehiculoSchema.safeParse(values.placa);
+    // Normalizar ANTES del safeParse (igual que el submit, más abajo): `values.placa` puede
+    // traer puntuación fuera de `[A-Za-z0-9 -]` (ej. un vehículo legado sembrado por script,
+    // sin pasar por `PlacaVehiculoSchema` — el `onChange` del input sí filtra en vivo, pero el
+    // valor inicial en modo edición viene directo de `vehicle.placa`). Sin normalizar acá,
+    // `PlacaVehiculoSchema.safeParse` rechazaba esa placa en silencio (`setPlateVerification(null)`
+    // + return mudo) y el operador nunca veía la advertencia de placa duplicada.
+    const parsed = PlacaVehiculoSchema.safeParse(placaNormalizada);
     if (!parsed.success) {
       setPlateVerification(null);
       return;
@@ -327,7 +333,10 @@ export function VehicleFormPanel({
     if (placaNormalizada === vehicle?.placaNormalizada) return;
     setIsVerifyingPlate(true);
     try {
-      setPlateVerification(await onVerifyPlate(values.placa));
+      // Misma razón que el safeParse de arriba: se manda la NORMALIZADA, no `values.placa`
+      // crudo — si no, el backend (`verificarPlaca`, que también corre `PlacaVehiculoSchema`)
+      // rechazaría con 400 la misma placa legada que acá ya decidimos aceptar.
+      setPlateVerification(await onVerifyPlate(placaNormalizada));
     } catch {
       setPlateVerification(null);
     } finally {

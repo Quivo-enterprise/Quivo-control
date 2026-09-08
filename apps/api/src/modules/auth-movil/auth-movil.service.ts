@@ -239,15 +239,17 @@ export class AuthMovilService {
   }
 
   /**
-   * DEUDA CONOCIDA — colisión de placa entre sindicatos: la migración
-   * `20260801153000_mejora_entidad_vehiculo` deja a propósito `placaNormalizada = NULL` en
-   * duplicados históricos, así que >1 vehículo activo por placa es un estado PREVISTO, y
-   * pueden pertenecer a sindicatos distintos. Hoy este método se queda con el PRIMER
-   * candidato (`candidatosVehiculo[0]`); el `ORDER BY` de `buscarVehiculosActivosPorPlaca`
-   * lo hace determinístico (siempre el mismo), pero no resuelve el conflicto de fondo. Dos
-   * consecuencias conocidas: el conductor del vehículo perdedor no puede loguearse, y sus
-   * intentos fallidos acumulan lockout sobre el vehículo del OTRO sindicato. Pendiente de
-   * arreglar; plan en `docs/handoff.md` (sección "Login móvil de un paso", PENDIENTE 1).
+   * RESUELTO EN LA BASE (docs/plan-unicidad-placa.md) — antes había acá una DEUDA CONOCIDA:
+   * la migración `20260801153000_mejora_entidad_vehiculo` dejaba a propósito
+   * `placaNormalizada = NULL` en duplicados históricos, así que >1 vehículo activo por placa
+   * era un estado PREVISTO (posiblemente de sindicatos distintos) y `candidatosVehiculo[0]`
+   * era una elección arbitraria — el conductor del vehículo perdedor no podía loguearse, y
+   * sus intentos fallidos envenenaban el lockout del vehículo del OTRO sindicato. La
+   * migración `20260908151800_unicidad_placa_generada` lo cierra en el esquema, no en la
+   * app: `placaNormalizada` es ahora NOT NULL con un índice único parcial que garantiza cero
+   * colisiones entre filas vigentes (`estado <> 'inactivo'`). `buscarVehiculosActivosPorPlaca`
+   * devuelve 0 o 1 fila por construcción, así que `candidatosVehiculo[0]` ya no es una
+   * elección entre varios — es el único resultado posible.
    *
    * POST /v1/mobile/auth/sesion — login de un solo paso: placa + PIN del CONDUCTOR (no del
    * vehículo). Conserva la atribución de identidad (el producto imputa cumplimientos y
@@ -668,30 +670,38 @@ export class AuthMovilService {
     );
   }
 
-  /** Sin `LIMIT`: el legado `autenticarVehiculo` comparte este helper y necesita el set
-   * COMPLETO para su chequeo de exactamente-1 sobre TODOS los candidatos. El `ORDER BY`
-   * fija un orden determinístico y estable — placas con `placaNormalizada` poblada primero
-   * (el caso sano, sin duplicado histórico), después por `createdAt` y por `id` como
-   * desempate — de modo que quien toma el primer elemento (`autenticarSesion`) obtenga
-   * siempre el mismo, y no una fila arbitraria de Postgres. */
-  private buscarVehiculosActivosPorPlaca(placaNormalizada: string): Promise<VehiculoCredencial[]> {
-    return withTenantContext(
-      CONTEXTO_ADMIN,
-      (tx) =>
-        tx.$queryRaw<VehiculoCredencial[]>`
-        SELECT id, "sindicatoId", placa, tipo, marca, modelo, "numeroInterno", distintivo, "cartelSuperior", "credencialHash"
-        FROM vehiculos
-        WHERE estado = 'activo'
-          AND (
-            "placaNormalizada" = ${placaNormalizada}
-            OR (
-              "placaNormalizada" IS NULL
-              AND regexp_replace(upper(placa), '[^A-Z0-9]', '', 'g') = ${placaNormalizada}
-            )
-          )
-        ORDER BY ("placaNormalizada" IS NULL), "createdAt", id
-      `,
+  /** Unicidad de placa (docs/plan-unicidad-placa.md): `placaNormalizada` es ahora una
+   * columna GENERATED ALWAYS por Postgres, NOT NULL, con un índice único parcial que
+   * garantiza cero colisiones entre filas VIGENTES (`estado <> 'inactivo'`, ver migración
+   * `20260908151800_unicidad_placa_generada`). Como `activo` es un subconjunto de "vigente",
+   * `WHERE estado = 'activo' AND placaNormalizada = $1` devuelve 0 o 1 fila POR
+   * CONSTRUCCIÓN — ya no hace falta el `$queryRaw` con la rama de fallback para
+   * `placaNormalizada IS NULL` (ese NULL ya no puede existir) ni el `ORDER BY` de
+   * desempate (no hay nada que desempatar). `autenticarVehiculo` (legado) sigue
+   * necesitando el array completo para su chequeo de "exactamente 1", que ahora es
+   * trivialmente cierto. Se envuelve el resultado de `findFirst` en un array de 0 o 1 para
+   * no tocar la firma que consumen ambos callers. */
+  private async buscarVehiculosActivosPorPlaca(
+    placaNormalizada: string,
+  ): Promise<VehiculoCredencial[]> {
+    const vehiculo = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+      tx.vehiculo.findFirst({
+        where: { estado: 'activo', placaNormalizada },
+        select: {
+          id: true,
+          sindicatoId: true,
+          placa: true,
+          tipo: true,
+          marca: true,
+          modelo: true,
+          numeroInterno: true,
+          distintivo: true,
+          cartelSuperior: true,
+          credencialHash: true,
+        },
+      }),
     );
+    return vehiculo ? [vehiculo] : [];
   }
 
   /** Nivel 1 del login de un paso (plan §1.e): conductores DISTINTOS con asignación

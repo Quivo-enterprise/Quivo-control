@@ -75,10 +75,16 @@ export class VehiculosService {
       );
     }
     const placaNormalizada = normalizarPlacaVehiculo(placaValida.data);
+    // `estado: { not: 'inactivo' }` — unicidad de placa (docs/plan-unicidad-placa.md): la
+    // base sólo garantiza (índice único parcial) que no colisionen dos filas VIGENTES; un
+    // vehículo `inactivo` con esta misma placa no es un conflicto real, es exactamente el
+    // caso de migración de sindicato que el modelo permite a propósito. Sin este filtro,
+    // `asegurarPlacaDisponible` bloquearía por error ese re-registro.
     const coincidencia = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
       tx.vehiculo.findFirst({
         where: {
           placaNormalizada,
+          estado: { not: 'inactivo' },
           ...(excluirVehiculoId ? { id: { not: excluirVehiculoId } } : {}),
         },
         select: {
@@ -106,17 +112,18 @@ export class VehiculosService {
   async crear(actor: AuthenticatedUser, data: CrearVehiculo): Promise<Vehiculo> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
     validarTipoAutorizado(actor, data.tipo);
-    const placaNormalizada = normalizarPlacaVehiculo(data.placa);
     await asegurarPlacaDisponible(this, actor, data.placa);
 
     try {
       const vehiculo = await withTenantContext(toTenantContext(actor), async (tx) => {
         await validarSocioDelSindicato(tx, data.socioId, sindicatoId);
+        // `placaNormalizada` NO se escribe: unicidad de placa (docs/plan-unicidad-placa.md)
+        // la volvió columna GENERATED ALWAYS — la base la deriva sola de `placa` y rechaza
+        // (SQLSTATE 428C9) cualquier intento de escribirla a mano.
         const creado = await tx.vehiculo.create({
           data: {
             ...limpiarDatosVehiculo(data),
             sindicatoId,
-            placaNormalizada,
             estado: 'pendiente',
           },
         });
@@ -134,7 +141,13 @@ export class VehiculosService {
       return toVehiculo(vehiculo);
     } catch (error: unknown) {
       if (esConflictoUnico(error)) {
-        throw new ConflictException('Ya existe un vehículo registrado con esta placa.');
+        // Mensaje alineado con `asegurarPlacaDisponible` (más abajo): el conflicto único
+        // sólo puede darse contra un vehículo VIGENTE (el índice es parcial, `WHERE estado
+        // <> 'inactivo'`), así que "ya existe" a secas es incompleto — el camino de salida
+        // real es dar de baja el otro vehículo, no "eliminar un duplicado".
+        throw new ConflictException(
+          'Ya existe un vehículo VIGENTE con esta placa. Para reasignar la placa, primero hay que dar de baja (estado inactivo) ese vehículo.',
+        );
       }
       throw error;
     }
@@ -158,10 +171,9 @@ export class VehiculosService {
           throw new NotFoundException('Vehículo no encontrado');
         }
         await validarSocioDelSindicato(tx, data.socioId, anterior.sindicatoId);
-        const cambios = {
-          ...limpiarDatosVehiculo(data),
-          ...(data.placa ? { placaNormalizada: normalizarPlacaVehiculo(data.placa) } : {}),
-        };
+        // `placaNormalizada` NO se escribe (ver comentario en `crear`) — cambiar `placa`
+        // alcanza, la base recalcula la columna generada sola.
+        const cambios = limpiarDatosVehiculo(data);
         if (anterior.estado === 'activo') {
           validarRequisitosActivacion({ ...anterior, ...cambios });
         }
@@ -170,7 +182,13 @@ export class VehiculosService {
       return toVehiculo(vehiculo);
     } catch (error: unknown) {
       if (esConflictoUnico(error)) {
-        throw new ConflictException('Ya existe un vehículo registrado con esta placa.');
+        // Mensaje alineado con `asegurarPlacaDisponible` (más abajo): el conflicto único
+        // sólo puede darse contra un vehículo VIGENTE (el índice es parcial, `WHERE estado
+        // <> 'inactivo'`), así que "ya existe" a secas es incompleto — el camino de salida
+        // real es dar de baja el otro vehículo, no "eliminar un duplicado".
+        throw new ConflictException(
+          'Ya existe un vehículo VIGENTE con esta placa. Para reasignar la placa, primero hay que dar de baja (estado inactivo) ese vehículo.',
+        );
       }
       throw error;
     }
@@ -181,38 +199,81 @@ export class VehiculosService {
     id: string,
     data: CambiarEstadoVehiculo,
   ): Promise<Vehiculo> {
-    const vehiculo = await withTenantContext(toTenantContext(actor), async (tx) => {
-      const anterior = await tx.vehiculo.findUnique({ where: { id } });
-      if (!anterior) {
-        throw new NotFoundException('Vehículo no encontrado');
-      }
-      const desde = anterior.estado as EstadoVehiculo;
-      validarTransicion(desde, data.estado);
-      if (data.estado === desde) {
-        return anterior;
-      }
-      if (data.estado === 'activo') {
-        validarRequisitosActivacion(anterior);
-      }
-      const actualizado = await tx.vehiculo.update({
-        where: { id },
-        data: { estado: data.estado },
+    // Capturados fuera de la transacción (que se revierte si el UPDATE choca con el índice
+    // único) para poder resolver, en el catch, quién tiene la placa hoy.
+    let placaAnterior: string | undefined;
+    let sindicatoIdAnterior: string | undefined;
+    try {
+      const vehiculo = await withTenantContext(toTenantContext(actor), async (tx) => {
+        const anterior = await tx.vehiculo.findUnique({ where: { id } });
+        if (!anterior) {
+          throw new NotFoundException('Vehículo no encontrado');
+        }
+        placaAnterior = anterior.placa;
+        sindicatoIdAnterior = anterior.sindicatoId;
+        const desde = anterior.estado as EstadoVehiculo;
+        validarTransicion(desde, data.estado);
+        if (data.estado === desde) {
+          return anterior;
+        }
+        if (data.estado === 'activo') {
+          validarRequisitosActivacion(anterior);
+        }
+        // Reactivar (`inactivo -> activo`) puede violar el índice único parcial
+        // (unicidad de placa, docs/plan-unicidad-placa.md) si, mientras este vehículo
+        // estaba de baja, alguien más registró la misma placa en otro lugar. A diferencia
+        // de `crear`/`actualizar`, acá no hay un `asegurarPlacaDisponible` previo que lo
+        // detecte antes del UPDATE — el catch de abajo es la única red.
+        const actualizado = await tx.vehiculo.update({
+          where: { id },
+          data: { estado: data.estado },
+        });
+        await tx.historialEstadoVehiculo.create({
+          data: {
+            sindicatoId: anterior.sindicatoId,
+            vehiculoId: anterior.id,
+            estadoDesde: desde,
+            estadoHasta: data.estado,
+            motivo: data.motivo || null,
+            observacion: data.observacion || null,
+            retornoEstimado: data.retornoEstimado ? new Date(data.retornoEstimado) : null,
+            actorId: actor.userId,
+          },
+        });
+        return actualizado;
       });
-      await tx.historialEstadoVehiculo.create({
-        data: {
-          sindicatoId: anterior.sindicatoId,
-          vehiculoId: anterior.id,
-          estadoDesde: desde,
-          estadoHasta: data.estado,
-          motivo: data.motivo || null,
-          observacion: data.observacion || null,
-          retornoEstimado: data.retornoEstimado ? new Date(data.retornoEstimado) : null,
-          actorId: actor.userId,
-        },
-      });
-      return actualizado;
-    });
-    return toVehiculo(vehiculo);
+      return toVehiculo(vehiculo);
+    } catch (error: unknown) {
+      if (esConflictoUnico(error)) {
+        // El vehículo que bloquea puede ser de OTRO sindicato: en ese caso "dar de baja ese
+        // vehículo" es una instrucción imposible de seguir (RLS impide tocar vehículos de
+        // otro sindicato) y deja al operador sin salida. Reusamos `verificarPlaca` (corre
+        // bajo CONTEXTO_ADMIN, ve todos los sindicatos) para distinguir los dos casos y dar
+        // una instrucción que el operador realmente pueda ejecutar.
+        if (placaAnterior) {
+          const verificacion = await this.verificarPlaca(actor, placaAnterior, id);
+          const coincidencia = verificacion.coincidencia;
+          if (coincidencia && coincidencia.sindicatoId === sindicatoIdAnterior) {
+            throw new ConflictException(
+              `No se puede reactivar este vehículo: la placa ${coincidencia.placa} ya está vigente en otro vehículo de este mismo sindicato (id ${coincidencia.vehiculoId}). Hay que dar de baja ese vehículo primero.`,
+            );
+          }
+          if (coincidencia) {
+            throw new ConflictException(
+              `No se puede reactivar este vehículo: la placa ${coincidencia.placa} ya está vigente en un vehículo de ${coincidencia.sindicatoNombre}. Este caso no se resuelve desde el panel — contactá a QUIVO para coordinarlo.`,
+            );
+          }
+        }
+        // Red de contención: no debería llegar acá (el P2002 implica que `verificarPlaca`
+        // debería haber encontrado la fila que colisiona), pero por las dudas — condición de
+        // carrera resuelta entre el UPDATE y esta segunda consulta — no dejamos al operador
+        // sin ningún mensaje.
+        throw new ConflictException(
+          'No se puede reactivar este vehículo: ya hay otro vehículo vigente con esta placa. Hay que dar de baja ese otro vehículo primero.',
+        );
+      }
+      throw error;
+    }
   }
 
   async historialEstados(actor: AuthenticatedUser, id: string): Promise<HistorialEstadoVehiculo[]> {
@@ -239,9 +300,12 @@ function validarTransicion(desde: EstadoVehiculo, hacia: EstadoVehiculo): void {
   }
 }
 
+// Perdió el chequeo `!row.placaNormalizada` — unicidad de placa (docs/plan-unicidad-placa.md)
+// volvió `placaNormalizada` una columna GENERATED ALWAYS NOT NULL: la base la rellena sola y
+// nunca puede faltar. La duplicidad tampoco puede colarse hasta acá: el índice único (parcial,
+// entre vigentes) la rechaza en el INSERT/UPDATE, antes de llegar a esta validación.
 function validarRequisitosActivacion(row: {
   socioId: string | null;
-  placaNormalizada: string | null;
   tipo: string;
   marca: string;
   modelo: string;
@@ -250,7 +314,6 @@ function validarRequisitosActivacion(row: {
 }): void {
   const faltantes: string[] = [];
   if (!row.socioId) faltantes.push('socio propietario');
-  if (!row.placaNormalizada) faltantes.push('placa válida y sin duplicidad');
   if (!TipoVehiculoSchema.safeParse(row.tipo).success) faltantes.push('tipo de vehículo');
   if (!MarcaVehiculoSchema.safeParse(row.marca).success) faltantes.push('marca');
   if (!ModeloVehiculoSchema.safeParse(row.modelo).success) faltantes.push('modelo');
@@ -326,8 +389,12 @@ async function asegurarPlacaDisponible(
 ): Promise<void> {
   const verificacion = await service.verificarPlaca(actor, placa, excluirVehiculoId);
   if (!verificacion.disponible) {
+    // "Dar de baja" y no "ya existe" a secas: `verificarPlaca` ya excluye los `inactivo`
+    // (unicidad de placa, docs/plan-unicidad-placa.md), así que si esto dispara es SIEMPRE
+    // contra un vehículo VIGENTE — el mensaje le dice al operador la única salida real
+    // (dar de baja el vehículo que tiene la placa, no "buscar el duplicado y borrarlo").
     throw new ConflictException(
-      `Ya existe un vehículo registrado con esta placa en ${verificacion.coincidencia?.sindicatoNombre ?? 'otro sindicato'}.`,
+      `Ya existe un vehículo VIGENTE con esta placa en ${verificacion.coincidencia?.sindicatoNombre ?? 'otro sindicato'}. Para reasignar la placa, primero hay que dar de baja (estado inactivo) ese vehículo.`,
     );
   }
 }
@@ -343,7 +410,7 @@ function toVehiculo(row: {
   sindicatoId: string;
   socioId: string | null;
   placa: string;
-  placaNormalizada: string | null;
+  placaNormalizada: string;
   tipo: string;
   marca: string;
   modelo: string;
@@ -355,8 +422,8 @@ function toVehiculo(row: {
   capacidad: number;
   estado: string;
 }): Vehiculo {
-  return VehiculoSchema.parse({
-    ...row,
-    placaNormalizada: row.placaNormalizada ?? normalizarPlacaVehiculo(row.placa),
-  });
+  // Sin fallback `?? normalizarPlacaVehiculo(row.placa)`: unicidad de placa
+  // (docs/plan-unicidad-placa.md) volvió `placaNormalizada` NOT NULL en la base — el
+  // fallback existía para el caso `null` que ya no puede ocurrir.
+  return VehiculoSchema.parse(row);
 }
