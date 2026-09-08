@@ -64,6 +64,25 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Falta '$1'. Instálalo antes de continuar."
 }
 
+# Guarda contra el delimitador alternativo `%%` que este script usa para esquivar el bug de
+# gcloud que separa `--args`/`--set-env-vars`/`--update-env-vars` por comas (ver el
+# comentario grande arriba de ROTATE_JS, más abajo, para el bug real de producción que lo
+# originó). Ese delimitador alternativo (`^%%^valor1%%valor2`) sólo es seguro si NINGÚN
+# valor real contiene literalmente `%%` — si algún día aparece, gcloud lo va a partir en el
+# punto equivocado, exactamente el mismo bug de la coma pero con otro carácter y sin ningún
+# aviso. Hoy esa garantía dependía nada más de un grep manual documentado en un comentario
+# — el mismo mecanismo que dejó dormida la bomba de la coma hasta que explotó en
+# producción. Esta función lo verifica en código antes de cada uso, para fallar ruidoso acá
+# y no adentro de un contenedor de Cloud Run.
+fail_if_delimiter_collision() {
+  local nombre="$1" valor="$2"
+  case "$valor" in
+    *'%%'*)
+      fail "El valor de '$nombre' contiene literalmente '%%', que es el delimitador alternativo usado para pasárselo a gcloud (\`^%%^...\`) en vez de coma. Si se pasa así tal cual, gcloud lo va a partir en el lugar equivocado — el mismo bug de la coma que rompió el deploy, sólo que con otro carácter. Solución: cambiar el delimitador (por ejemplo a '%%%' o cualquier secuencia que no aparezca en '$nombre') en el lugar donde se arma ese --args/--set-env-vars/--update-env-vars, y volver a correr el script."
+      ;;
+  esac
+}
+
 require_command git
 require_command docker
 require_command gcloud
@@ -359,7 +378,9 @@ fi
 # Lo único que cambia entre una ejecución y otra es el argumento pasado a `/bin/sh -c`, y
 # `gcloud run jobs execute --args=...` permite overridearlo por ejecución sin tocar el
 # recurso del Job — así que el Job se crea/actualiza UNA vez con --command=/bin/sh y ambos
-# secretos montados, y se ejecuta dos veces con --args distintos.
+# secretos montados, y se ejecuta dos veces con --args distintos. Los cuatro `--args` de
+# este bloque van con delimitador alternativo (`^%%^...%%...`), NO coma — el porqué
+# (bug real de producción) está en el comentario grande arriba de ROTATE_JS, más abajo.
 if [[ "$NEEDS_DB_SETUP" == true ]]; then
   info "Paso 2/7: asegurando el Cloud Run Job de migraciones ($MIGRATIONS_JOB)..."
 
@@ -403,6 +424,22 @@ if [[ "$NEEDS_DB_SETUP" == true ]]; then
   # Password generada en el paso 0 con `openssl rand -hex 24` (SOLO hex: 0-9a-f) a
   # propósito, así el regex de abajo puede rechazar cualquier otra cosa por las dudas (si
   # algún día cambia el generador) sin abrir una inyección SQL.
+  #
+  # BUG DE PRODUCCIÓN CONFIRMADO (logs reales, 2026-09): `gcloud run jobs ... --args=...`
+  # separa el valor por COMAS, igual que cualquier flag de lista de gcloud
+  # (`--args=a,b,c` son TRES argumentos, no un string con comas adentro). El mensaje de
+  # error de arriba ("...con caracteres inesperados, abortando por seguridad") tiene una
+  # coma adentro del string de JS — al pasarlo como `--args="-c,${ROTATE_SCRIPT}"` gcloud
+  # lo partió en dos argumentos de `/bin/sh -c`, que murió con
+  # "unterminated quoted string" dentro del contenedor real (Container called exit(2)).
+  # `MIGRATE_SCRIPT` se salvó de casualidad porque hoy no tiene ninguna coma — es la misma
+  # bomba, sin activar. Por eso los cuatro usos de `--args` de este bloque (jobs create,
+  # jobs update, y los dos jobs execute de más abajo) usan la sintaxis de delimitador
+  # alternativo de gcloud (`--args=^%%^valor1%%valor2`) en vez de comas. Se eligió `%%`
+  # como delimitador — no `,` por el bug de arriba, no `|` porque el JS usa `||` en
+  # `process.env.QUIVO_APP_NEW_PASSWORD||""` — verificando (grep) que `%%` no aparece en
+  # ningún lado de `ROTATE_JS` ni de `MIGRATE_SCRIPT`. NO volver a coma "para simplificar":
+  # es exactamente el bug que se comió el deploy la última vez.
   read -r -d '' ROTATE_JS <<'JS_EOF' || true
 const {Client}=require("pg");
 (async()=>{
@@ -438,16 +475,22 @@ JS_EOF
     --tasks=1
   )
 
+  # Delimitador alternativo `^%%^...%%...` en vez de coma en los 4 `--args` de este bloque:
+  # ver el comentario grande arriba de ROTATE_JS — es el bug real que partió el deploy.
+  # Guarda (fix del bug de la coma, versión "%%"): si alguna vez alguno de los dos scripts
+  # llega a contener literalmente "%%", fallar acá y no adentro del contenedor.
+  fail_if_delimiter_collision "MIGRATE_SCRIPT" "$MIGRATE_SCRIPT"
+  fail_if_delimiter_collision "ROTATE_SCRIPT" "$ROTATE_SCRIPT"
   if gcloud run jobs describe "$MIGRATIONS_JOB" --project="$PROJECT" --region="$REGION" >/dev/null 2>&1; then
-    gcloud run jobs update "$MIGRATIONS_JOB" "${JOB_COMMON_FLAGS[@]}" --args="-c,${MIGRATE_SCRIPT}" >/dev/null
+    gcloud run jobs update "$MIGRATIONS_JOB" "${JOB_COMMON_FLAGS[@]}" --args="^%%^-c%%${MIGRATE_SCRIPT}" >/dev/null
   else
-    gcloud run jobs create "$MIGRATIONS_JOB" "${JOB_COMMON_FLAGS[@]}" --args="-c,${MIGRATE_SCRIPT}" >/dev/null
+    gcloud run jobs create "$MIGRATIONS_JOB" "${JOB_COMMON_FLAGS[@]}" --args="^%%^-c%%${MIGRATE_SCRIPT}" >/dev/null
   fi
   info "Job '$MIGRATIONS_JOB' listo con la imagen recién publicada."
 
   info "Ejecutando 'prisma migrate deploy' dentro de la VPC (puede tardar)..."
   if ! gcloud run jobs execute "$MIGRATIONS_JOB" --project="$PROJECT" --region="$REGION" \
-      --args="-c,${MIGRATE_SCRIPT}" --wait; then
+      --args="^%%^-c%%${MIGRATE_SCRIPT}" --wait; then
     fail "El job de migraciones falló. Revisar logs con:
   gcloud run jobs executions list --job=$MIGRATIONS_JOB --project=$PROJECT --region=$REGION
 Abortando ANTES de tocar quivo-api/quivo-web/quivo-worker — no se desplegó nada."
@@ -456,7 +499,7 @@ Abortando ANTES de tocar quivo-api/quivo-web/quivo-worker — no se desplegó na
 
   info "Rotando la password de quivo_app (reemplaza el valor dev hardcodeado en la migración)..."
   if ! gcloud run jobs execute "$MIGRATIONS_JOB" --project="$PROJECT" --region="$REGION" \
-      --args="-c,${ROTATE_SCRIPT}" --wait; then
+      --args="^%%^-c%%${ROTATE_SCRIPT}" --wait; then
     fail "La rotación de password de 'quivo_app' falló. Revisar logs con:
   gcloud run jobs executions list --job=$MIGRATIONS_JOB --project=$PROJECT --region=$REGION
 Abortando — RUNTIME_DATABASE_URL ya tiene la password nueva en Secret Manager pero el rol
@@ -466,6 +509,32 @@ peor, funcionarían por casualidad contra la password dev. Diagnosticar antes de
   fi
   info "Password de quivo_app rotada OK."
 fi
+
+# Lee el CORS_ORIGIN actualmente seteado en quivo-api (o imprime nada). Nunca aborta: ni
+# porque el servicio no exista todavía (primer deploy de la vida — `describe` falla,
+# `2>/dev/null` lo traga) ni porque exista pero no tenga esa env var seteada (`describe`
+# funciona pero el filtro de python no encuentra la entrada, y no imprime nada tampoco).
+# Se usa `--format=json` en vez de un `--format='value(...)'` con filtro embebido porque el
+# formato de proyección de gcloud no soporta filtrar la lista `env[]` por `name` de forma
+# confiable — se resuelve con python3 (ya es dependencia dura del script, ver
+# `require_command python3` arriba) en vez de inventar un one-liner de `grep`/`sed` frágil
+# contra JSON.
+get_current_cors_origin() {
+  local json
+  json="$(gcloud run services describe quivo-api --project "$PROJECT" --region "$REGION" \
+    --format=json 2>/dev/null)" || return 0
+  printf '%s' "$json" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    for env in data["spec"]["template"]["spec"]["containers"][0].get("env", []):
+        if env.get("name") == "CORS_ORIGIN":
+            print(env.get("value", ""))
+            break
+except Exception:
+    pass
+'
+}
 
 # ============================================================================
 # Paso 3/7 — Deploy de quivo-api
@@ -500,10 +569,46 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
     info "quivo-api todavía no existe en '$PROJECT' — primer deploy, no hay revisión previa a la que volver."
   fi
 
-  # CORS_ORIGIN no se setea acá a propósito: la URL real del panel recién se conoce
-  # después de desplegarlo (paso 4), y main.ts cae al fallback 'http://localhost:3000' si
-  # falta — no bloquea el arranque (validateRuntimeConfig sólo rechaza '*', no la ausencia
-  # de la variable). El paso 5 la corrige con `services update`.
+  # CORS_ORIGIN: --set-env-vars REEMPLAZA el mapa entero de env vars (a diferencia de
+  # --update-env-vars, que mergea) — así que un `gcloud run deploy quivo-api` con
+  # --set-env-vars a secas BORRA cualquier CORS_ORIGIN que el paso 5 de un run anterior
+  # haya dejado puesto. En un run `full` no se nota (el paso 5 de ESTE MISMO run la vuelve
+  # a poner después), pero con `scripts/deploy-gcp.sh --solo api` el paso 5 no corre
+  # (NEEDS_WEB_DEPLOY=false) y CORS_ORIGIN queda borrado para siempre: apps/api/src/main.ts
+  # cae al default 'http://localhost:3000' y el panel real queda bloqueado por CORS. Bug
+  # real encontrado en la revisión de este script (mismo tipo de bug que el de la coma en
+  # --args: un flag que hace más de lo que el autor original tuvo en cuenta).
+  #
+  # Se resuelve leyendo el CORS_ORIGIN actual ANTES de este deploy (tolerando que no exista
+  # — primer deploy de la vida, o un `full` que corre paso 3 antes que paso 5 alguna vez —
+  # ver get_current_cors_origin arriba) y re-incluyéndolo en el MISMO --set-env-vars, para
+  # que la revisión nueva nazca con el valor viejo en vez de nacer sin CORS_ORIGIN y
+  # depender de que un paso 5 posterior la repare.
+  #
+  # Se prefirió esta opción (leer + re-setear en el mismo comando) por sobre usar
+  # --update-env-vars acá: --update-env-vars nunca borra nada, así que cualquier env var
+  # vieja seteada a mano fuera de este script (o de un despliegue anterior con otro juego
+  # de variables) quedaría pegada para siempre sin que nadie se dé cuenta. --set-env-vars
+  # mantiene la propiedad de que ESTE SCRIPT es la única fuente de verdad de las env vars
+  # de quivo-api — el precio es tener que re-incluir CORS_ORIGIN a mano, que es justo lo
+  # que hace este bloque.
+  #
+  # OJO: CORS_ORIGIN_EXISTENTE puede traer una coma adentro (paso 5 setea DOS URLs
+  # separadas por coma — panel + su alias por número de proyecto). No se puede meter tal
+  # cual en un --set-env-vars separado por comas (partiría la lista en el lugar
+  # equivocado — el mismo bug de la coma, otra vez). Por eso todo este --set-env-vars usa
+  # el delimitador alternativo `^%%^` (ver el comentario grande arriba de ROTATE_JS, más
+  # arriba en el script, para el bug real de producción que originó este patrón) en vez de
+  # coma, igual que el resto del script.
+  CORS_ORIGIN_EXISTENTE="$(get_current_cors_origin)"
+  fail_if_delimiter_collision "CORS_ORIGIN_EXISTENTE (leído de quivo-api antes del deploy)" "$CORS_ORIGIN_EXISTENTE"
+  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d"
+  if [[ -n "$CORS_ORIGIN_EXISTENTE" ]]; then
+    API_SET_ENV_VARS="${API_SET_ENV_VARS}%%CORS_ORIGIN=${CORS_ORIGIN_EXISTENTE}"
+    info "CORS_ORIGIN existente detectado ('$CORS_ORIGIN_EXISTENTE') — se re-incluye en este deploy para no perderlo."
+  else
+    info "Sin CORS_ORIGIN existente en quivo-api (primer deploy, o el paso 5 todavía no corrió nunca) — no hay nada que preservar."
+  fi
   #
   # MOBILE_LEGACY_AUTH_ENABLED=false explícito (no pisar con "true", instrucción del
   # brief): apps/api/src/modules/auth-movil/auth-movil.service.ts:1129 hace
@@ -547,7 +652,7 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
     --vpc-connector "$VPC_CONNECTOR" \
     --add-cloudsql-instances "$CONNECTION_NAME" \
     --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest" \
-    --set-env-vars "NODE_ENV=production,MOBILE_LEGACY_AUTH_ENABLED=false,JWT_ACCESS_TTL=15m,JWT_REFRESH_TTL=7d"
+    --set-env-vars "^%%^${API_SET_ENV_VARS}"
 
   API_URL="$(gcloud run services describe quivo-api --project "$PROJECT" --region "$REGION" \
     --format='value(status.url)')"
@@ -657,6 +762,17 @@ if [[ -n "$WEB_URL" ]]; then
   # en vez de repetir el bug con una URL "sin usar" bloqueada.
   WEB_URL_PROJECT_NUMBER="https://quivo-web-${PROJECT_NUMBER}.${REGION}.run.app"
   CORS_ORIGIN_VALUE="${WEB_URL},${WEB_URL_PROJECT_NUMBER}"
+  # CORS_ORIGIN_VALUE SIEMPRE tiene una coma adentro (las dos URLs de arriba, a propósito —
+  # ver el comentario de arriba sobre por qué son dos). `--update-env-vars` es un ArgDict de
+  # gcloud que separa por coma antes que nada, así que pasarlo tal cual como
+  # `--update-env-vars "CORS_ORIGIN=${CORS_ORIGIN_VALUE}"` lo parte en dos argumentos —
+  # gcloud entiende que hay una SEGUNDA entrada de env var sin "=" (la mitad después de la
+  # coma) y falla con `Bad syntax for dict arg`. Es el mismo bug de la coma que ya se arregló
+  # en el bloque de migraciones más arriba (ver el comentario grande arriba de ROTATE_JS) —
+  # acá vuelve a aparecer porque `--update-env-vars` es del mismo tipo ArgDict que `--args`,
+  # no un caso aislado de este flag. Se resuelve igual: delimitador alternativo `^%%^` en vez
+  # de coma.
+  fail_if_delimiter_collision "CORS_ORIGIN_VALUE" "$CORS_ORIGIN_VALUE"
   info "Paso 5/7: actualizando CORS_ORIGIN en quivo-api → $CORS_ORIGIN_VALUE"
 
   # PREV_API_REVISION ya se captura AL INICIO del paso 3 (antes de este script tocar
@@ -678,10 +794,14 @@ if [[ -n "$WEB_URL" ]]; then
   gcloud run services update quivo-api \
     --project "$PROJECT" \
     --region "$REGION" \
-    --update-env-vars "CORS_ORIGIN=${CORS_ORIGIN_VALUE}"
+    --update-env-vars "^%%^CORS_ORIGIN=${CORS_ORIGIN_VALUE}"
   info "CORS_ORIGIN actualizado. Esto crea una revisión nueva de quivo-api."
 else
-  info "Paso 5/7: omitido (no se desplegó quivo-web en este run — CORS_ORIGIN queda como estaba)."
+  # Verdad desde que el paso 3 preserva CORS_ORIGIN (lee el valor existente y lo re-incluye
+  # en su propio --set-env-vars — ver el comentario largo ahí): si el paso 3 corrió en este
+  # run, CORS_ORIGIN efectivamente queda como estaba. Si ni el paso 3 ni el paso 5 corrieron
+  # (p. ej. --solo worker), quivo-api ni se toca, así que también queda como estaba.
+  info "Paso 5/7: omitido (no se desplegó quivo-web en este run — CORS_ORIGIN queda como estaba; si el paso 3 corrió, lo preservó explícitamente)."
 fi
 
 # ============================================================================
