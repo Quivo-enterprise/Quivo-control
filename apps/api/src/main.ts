@@ -6,6 +6,7 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module.js';
+import { validateRuntimeConfig } from './config/validate-runtime-config.js';
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN, environment: process.env.NODE_ENV ?? 'development' });
@@ -93,27 +94,6 @@ async function bootstrap(): Promise<void> {
 
   const port = Number(process.env.PORT ?? 3001);
   await app.listen(port, '0.0.0.0');
-}
-
-function validateRuntimeConfig(): void {
-  const nodeEnv = process.env.NODE_ENV ?? 'development';
-  const missing = ['DATABASE_URL', 'JWT_SECRET'].filter((name) => !process.env[name]);
-  if (missing.length > 0) {
-    throw new Error(`Faltan variables de entorno obligatorias: ${missing.join(', ')}`);
-  }
-  if (nodeEnv === 'production') {
-    const jwtSecret = process.env.JWT_SECRET ?? '';
-    if (jwtSecret.length < 32 || jwtSecret === 'change-me-in-production') {
-      throw new Error('JWT_SECRET debe tener al menos 32 caracteres en producción');
-    }
-    if ((process.env.CORS_ORIGIN ?? '').split(',').some((origin) => origin.trim() === '*')) {
-      throw new Error('CORS_ORIGIN no puede usar * en producción');
-    }
-  }
-  const port = Number(process.env.PORT ?? 3001);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error('PORT debe ser un entero entre 1 y 65535');
-  }
 }
 
 bootstrap().catch((error: unknown) => {

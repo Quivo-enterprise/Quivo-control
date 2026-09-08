@@ -453,6 +453,30 @@ PREV_API_REVISION=""
 if [[ "$NEEDS_API_DEPLOY" == true ]]; then
   info "Paso 3/7: desplegando quivo-api en Cloud Run ($REGION)..."
 
+  # Capturar la revisión previa ANTES de tocar quivo-api — para CUALQUIER run que despliegue
+  # la API, no sólo cuando también se despliega el panel (D2 de la auditoría de este
+  # script). Antes, PREV_API_REVISION sólo se capturaba dentro del paso 5 (update de
+  # CORS_ORIGIN), que corre nada más si este run también desplegó quivo-web — con
+  # `--solo api`, el health check del paso 7 podía fallar sin que el script tuviera ningún
+  # rollback que imprimir, justo con producción caída y menos tiempo para buscar uno a mano.
+  #
+  # Caso especial: en el PRIMER deploy de todos, `quivo-api` todavía no existe y `describe`
+  # falla — eso NO debe abortar el script (no hay nada en producción a lo que volver
+  # todavía, así que no hay rollback que perder). Se detecta con el `describe` silencioso de
+  # abajo antes de pedir el campo real, en vez de dejar que `set -e` mate el script con el
+  # primer `describe --format=...` que devuelva vacío.
+  if gcloud run services describe quivo-api --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+    PREV_API_REVISION="$(gcloud run services describe quivo-api --project "$PROJECT" --region "$REGION" \
+      --format='value(status.latestReadyRevisionName)')"
+    if [[ -n "$PREV_API_REVISION" ]]; then
+      info "Revisión actual de quivo-api (rollback si el health check del paso 7 falla): $PREV_API_REVISION"
+    else
+      warn "quivo-api existe pero no devolvió una revisión Ready (¿deploy previo incompleto?). Sin rollback conocido para este run."
+    fi
+  else
+    info "quivo-api todavía no existe en '$PROJECT' — primer deploy, no hay revisión previa a la que volver."
+  fi
+
   # CORS_ORIGIN no se setea acá a propósito: la URL real del panel recién se conoce
   # después de desplegarlo (paso 4), y main.ts cae al fallback 'http://localhost:3000' si
   # falta — no bloquea el arranque (validateRuntimeConfig sólo rechaza '*', no la ausencia
@@ -473,6 +497,21 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
   # API_PUBLIC_URL NO se incluye: se buscó en todo apps/api/src y el único consumidor real
   # es packages/db/prisma/seed.ts (el seed, no el runtime de la API/worker) — no hace falta
   # en ninguno de los tres servicios que despliega este script.
+  #
+  # DATABASE_URL NO se monta acá a propósito (D1 de la auditoría de este script). Es el rol
+  # "postgres" de Cloud SQL: dueño de las tablas y cloudsqlsuperuser, capaz de un
+  # `ALTER TABLE ... DISABLE ROW LEVEL SECURITY` sobre todo el modelo multi-tenant. Ningún
+  # código de runtime la usa — packages/db/src/client.ts:41-66 conecta con
+  # RUNTIME_DATABASE_URL (rol "quivo_app", sin BYPASSRLS) fuera de development, y los otros
+  # dos consumidores (apps/api/src/health/health.service.ts,
+  # apps/api/src/modules/retencion-gps/retencion-gps.service.ts) hacen
+  # `RUNTIME_DATABASE_URL ?? DATABASE_URL`, así que con RUNTIME_DATABASE_URL seteada tampoco
+  # la tocan. apps/api/src/main.ts (validateRuntimeConfig) exige RUNTIME_DATABASE_URL, no
+  # DATABASE_URL — así que este --set-secrets ya no necesita cargarla para pasar ese gate.
+  # quivo-api corre con --allow-unauthenticated (expuesto a internet): montarle igual la
+  # credencial dueña de las tablas sería darle a un servicio público más blast radius del
+  # que necesita. DATABASE_URL SÍ sigue viva en Secret Manager y montada en el Job de
+  # migraciones (paso 2) — es el único lugar del script que la necesita de verdad.
   gcloud run deploy quivo-api \
     --project "$PROJECT" \
     --region "$REGION" \
@@ -484,7 +523,7 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
     --service-account "$SERVICE_ACCOUNT" \
     --vpc-connector "$VPC_CONNECTOR" \
     --add-cloudsql-instances "$CONNECTION_NAME" \
-    --set-secrets "DATABASE_URL=DATABASE_URL:latest,RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest" \
+    --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest" \
     --set-env-vars "NODE_ENV=production,MOBILE_LEGACY_AUTH_ENABLED=false,JWT_ACCESS_TTL=15m,JWT_REFRESH_TTL=7d"
 
   API_URL="$(gcloud run services describe quivo-api --project "$PROJECT" --region "$REGION" \
@@ -597,13 +636,18 @@ if [[ -n "$WEB_URL" ]]; then
   CORS_ORIGIN_VALUE="${WEB_URL},${WEB_URL_PROJECT_NUMBER}"
   info "Paso 5/7: actualizando CORS_ORIGIN en quivo-api → $CORS_ORIGIN_VALUE"
 
-  # Capturar la revisión ANTES de tocar quivo-api, para poder imprimir el rollback ya
-  # completo si el health check de más abajo falla. Si esto falla, abortamos sin tocar
-  # quivo-api — no vale la pena arriesgar el API de producción sin un rollback conocido.
-  PREV_API_REVISION="$(gcloud run services describe quivo-api --project "$PROJECT" --region "$REGION" \
-    --format='value(status.latestReadyRevisionName)')"
-  [[ -n "$PREV_API_REVISION" ]] || fail "No se pudo capturar la revisión actual de quivo-api antes de modificarlo. Abortando para no quedar sin un rollback conocido."
-  info "Revisión actual de quivo-api (rollback si algo sale mal): $PREV_API_REVISION"
+  # PREV_API_REVISION ya se captura AL INICIO del paso 3 (antes de este script tocar
+  # quivo-api de cualquier forma) para cualquier run que despliegue la API — ver el
+  # comentario largo ahí. Ese valor es el correcto: la revisión previa a TODO este run, no
+  # sólo a este update de CORS_ORIGIN. Si este run corrió con `--solo web` (NEEDS_API_DEPLOY
+  # en false), el paso 3 no corrió y PREV_API_REVISION sigue vacío acá — recién en ese caso
+  # se captura, porque este `services update` es la primera mutación de quivo-api en el run.
+  if [[ -z "$PREV_API_REVISION" ]]; then
+    PREV_API_REVISION="$(gcloud run services describe quivo-api --project "$PROJECT" --region "$REGION" \
+      --format='value(status.latestReadyRevisionName)')"
+    [[ -n "$PREV_API_REVISION" ]] || fail "No se pudo capturar la revisión actual de quivo-api antes de modificarlo. Abortando para no quedar sin un rollback conocido."
+    info "Revisión actual de quivo-api (rollback si algo sale mal): $PREV_API_REVISION"
+  fi
 
   # Cada entrada tiene que ser la URL EXACTA (sin barra final) — apps/api/src/main.ts hace
   # `.split(',').map(trim)` y la comparación de origen del browser contra cada entrada es
@@ -627,6 +671,13 @@ if [[ "$NEEDS_WORKER_DEPLOY" == true ]]; then
   # NestFactory.createApplicationContext, no escucha HTTP — por eso Worker Pool y no un
   # service normal (un service escalaría a cero sin tráfico HTTP y mataría al worker a
   # mitad de consumir la cola de BullMQ).
+  #
+  # DATABASE_URL NO se monta acá, mismo motivo que el paso 3 (deploy de quivo-api) arriba:
+  # el worker sólo usa RUNTIME_DATABASE_URL (packages/db/src/client.ts) y
+  # RUNTIME_DATABASE_URL ?? DATABASE_URL en retencion-gps.service.ts — nunca DATABASE_URL
+  # sola. Cargarle igual el rol dueño de las tablas a un proceso que sólo necesita el rol de
+  # runtime es exactamente el mismo exceso de privilegio que en quivo-api, sin ni siquiera
+  # la excusa de un gate de arranque que la exija.
   gcloud run worker-pools deploy quivo-worker \
     --project "$PROJECT" \
     --region "$REGION" \
@@ -636,7 +687,7 @@ if [[ "$NEEDS_WORKER_DEPLOY" == true ]]; then
     --service-account "$SERVICE_ACCOUNT" \
     --vpc-connector "$VPC_CONNECTOR" \
     --add-cloudsql-instances "$CONNECTION_NAME" \
-    --set-secrets "DATABASE_URL=DATABASE_URL:latest,RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest" \
+    --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest" \
     --set-env-vars "NODE_ENV=production,MOBILE_LEGACY_AUTH_ENABLED=false,JWT_ACCESS_TTL=15m,JWT_REFRESH_TTL=7d"
   info "quivo-worker desplegado (Worker Pool, 1 instancia)."
 fi
@@ -657,8 +708,18 @@ if [[ "$NEEDS_API_DEPLOY" == true || -n "$WEB_URL" ]]; then
 
   # Forma exacta confirmada en apps/api/src/health/health.service.ts (HealthStatus):
   # {"status":"ok"|"degraded","db":"up"|"down","redis":"up"|"down"}.
+  #
+  # Presupuesto: 45 intentos × 4s = 180s (3 min) de espera entre reintentos, más hasta 5s de
+  # --max-time por intento fallido (peor caso ~225s). Antes eran 10×2s=20s — ajustado para un
+  # deploy nuevo (D3 de la auditoría de este script): es el primer arranque en frío de una
+  # app Nest con Prisma, conectando a Cloud SQL por socket unix y a Redis por VPC connector,
+  # y 20s alcanzaba a disparar todo el bloque de rollback de abajo con producción en
+  # realidad sana, nomás lenta para arrancar. El mensaje de cada intento imprime cuánto
+  # lleva esperando, para que quien mira la terminal no crea que el script se colgó.
+  readonly HEALTH_MAX_ATTEMPTS=45
+  readonly HEALTH_SLEEP_SECONDS=4
   HEALTH_READY=0
-  for _ in $(seq 1 10); do
+  for attempt in $(seq 1 "$HEALTH_MAX_ATTEMPTS"); do
     if HEALTH_BODY="$(curl -fsS --max-time 5 "${API_URL}/v1/health/ready")"; then
       if echo "$HEALTH_BODY" | grep -q '"status":"ok"' \
         && echo "$HEALTH_BODY" | grep -q '"db":"up"' \
@@ -667,14 +728,17 @@ if [[ "$NEEDS_API_DEPLOY" == true || -n "$WEB_URL" ]]; then
         break
       fi
     fi
-    sleep 2
+    ELAPSED_SECONDS=$(( (attempt - 1) * HEALTH_SLEEP_SECONDS ))
+    info "  ...esperando arranque de quivo-api (intento $attempt/$HEALTH_MAX_ATTEMPTS, ${ELAPSED_SECONDS}s transcurridos)"
+    sleep "$HEALTH_SLEEP_SECONDS"
   done
 
   if (( HEALTH_READY == 0 )); then
+    TOTAL_WAIT_SECONDS=$(( HEALTH_MAX_ATTEMPTS * HEALTH_SLEEP_SECONDS ))
     warn "══════════════════════════════════════════════════════════════════"
     warn "  quivo-api NO respondió sano tras este deploy."
     warn "  /v1/health/ready no devolvió {\"status\":\"ok\",\"db\":\"up\",\"redis\":\"up\"}"
-    warn "  tras 10 intentos (20s)."
+    warn "  tras $HEALTH_MAX_ATTEMPTS intentos (~${TOTAL_WAIT_SECONDS}s)."
     warn "══════════════════════════════════════════════════════════════════"
     if [[ -n "$PREV_API_REVISION" ]]; then
       warn "  ROLLBACK — correr esto ahora mismo:"
@@ -683,7 +747,8 @@ if [[ "$NEEDS_API_DEPLOY" == true || -n "$WEB_URL" ]]; then
         "$PROJECT" "$REGION" "$PREV_API_REVISION" >&2
       warn ""
     else
-      warn "  No se capturó una revisión previa en este run (este deploy no tocó CORS_ORIGIN)."
+      warn "  No se capturó una revisión previa en este run (era el primer deploy de quivo-api —"
+      warn "  no había nada en producción antes de este run a lo que volver)."
       warn "  Ver revisiones con: gcloud run revisions list --service=quivo-api --project=$PROJECT --region=$REGION"
     fi
     fail "Deploy incompleto: quivo-api quedó en un estado no verificado."
