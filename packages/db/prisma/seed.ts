@@ -18,7 +18,6 @@
 // revienta al importar `PrismaClient` de '@prisma/client' con
 // "does not provide an export named 'PrismaClient'".
 import 'dotenv/config';
-import { randomInt } from 'node:crypto';
 import { APIError } from 'better-auth';
 import { hashPassword } from 'better-auth/crypto';
 import type { Prisma } from '@prisma/client';
@@ -87,8 +86,12 @@ const LINEA_PILOTO_ID = '33333333-3333-4333-8333-000000000010';
 const RUTA_PILOTO_ID = '33333333-3333-4333-8333-000000000011';
 const PC_PILOTO_1_ID = '33333333-3333-4333-8333-000000000012';
 const PC_PILOTO_2_ID = '33333333-3333-4333-8333-000000000013';
-const VEHICULO_PILOTO_ID = '33333333-3333-4333-8333-000000000014';
-const CONDUCTOR_PILOTO_ID = '33333333-3333-4333-8333-000000000015';
+// `...014`/`...015` (vehículo/conductor placeholder `PILOTO001`) YA NO SE SIEMBRAN — ver el
+// comentario sobre `seedSindicatoPiloto` más abajo. Los ids no se reciclan (documentados acá
+// como "en desuso" para que nadie los reasigne sin querer): `scripts/crear-credencial-pasante.ts`
+// y `scripts/cargar-linea-120.ts` los referencian por su cuenta como el "titular" que ya no
+// existe — ver la nota al pie de `crear-credencial-pasante.ts` y el fix del Paso 6 de
+// `cargar-linea-120.ts`.
 
 const USERS = [
   { email: 'admin@quivo.local', name: 'Admin QUIVO', rol: 'admin_quivo', sindicatoId: null },
@@ -952,50 +955,34 @@ async function seedReglas(tx: Prisma.TransactionClient): Promise<void> {
   console.log('Regla + sanción de prueba listas para Sindicato 1º de Mayo');
 }
 
-/** PIN numérico aleatorio (8 dígitos, cumple `PinMovilSchema` de `@quivo/shared`: 6-12
- * dígitos) para la credencial INICIAL del vehículo/conductor del piloto real. A propósito
- * NUNCA es `SEED_PIN_VEHICULO`/`SEED_PIN_CONDUCTOR` (los PINs demo publicados en
- * CREDENCIALES.md): esos alcanzan para autenticar contra la placa/CI real del piloto una
- * vez asignados el lunes, lo que contaminaría evidencia legal de sanciones. */
-function generarPinPiloto(): string {
-  return randomInt(0, 100_000_000).toString().padStart(8, '0');
-}
-
-/** Credencial inicial de una entidad del piloto (vehículo o conductor): usa el PIN de
- * `envVar` si el CTO ya lo fijó, si no genera uno aleatorio con `generarPinPiloto`. Se
- * calcula SIEMPRE (aunque la fila ya exista y termine sin usarse) para que el `create` del
- * `upsert` llamador nunca reciba un hash vacío/nulo por una carrera entre el chequeo de
- * existencia y el upsert — el peor caso posible ahí es "generamos un PIN de más", nunca
- * "la fila queda sin credencial". Quien decide si se imprime es el llamador, según si la
- * fila ya existía. */
-async function generarCredencialInicialPiloto(
-  envVar: 'PILOTO_PIN_VEHICULO' | 'PILOTO_PIN_CONDUCTOR',
-): Promise<{ pin: string; hash: string; desdeEnv: boolean }> {
-  const pinDesdeEnv = process.env[envVar];
-  const pin = pinDesdeEnv ?? generarPinPiloto();
-  const hash = await hashPassword(pin);
-  return { pin, hash, desdeEnv: Boolean(pinDesdeEnv) };
-}
-
-/** Sindicato del piloto real que arranca el lunes (QUI-366): 1 línea, su ruta con
- * geometría PostGIS, sus puntos de control, 1 vehículo y 1 conductor — el piloto arranca
- * con UN solo auto, no con la muestra de 8-15 que pedía el ticket original (decisión
- * explícita del CTO dado el timing: esto se siembra el sábado para un piloto del lunes).
- * Todos los valores de identidad (nombre, placa, CI, geometría reutilizada de la ruta demo)
- * son placeholder DELIBERADAMENTE reconocibles como tales — el CTO carga los datos reales
- * del sindicato antes de que arranque el piloto.
+/** Sindicato del piloto real (QUI-366): la línea y su ruta con geometría PostGIS + puntos de
+ * control. Ya NO siembra vehículo ni conductor — ver "Por qué esta función ya no crea
+ * vehículo/conductor" más abajo. Todos los valores de identidad de la línea (nombre,
+ * geometría reutilizada de la ruta demo) son placeholder salvo el rename de esta tarea (ver
+ * el comentario del propio `upsert` de la línea): la ruta/puntos de control reales del
+ * sindicato los carga por separado `scripts/cargar-circuito-z12.ts`.
  *
- * Seguridad (hallazgo de /security-review, High, confianza 9/10, 2026-08-15): este
- * sindicato NO recibe las credenciales demo (`SEED_PIN_VEHICULO`/`SEED_PIN_CONDUCTOR`,
- * publicadas en CREDENCIALES.md) — antes las reusaba vía el parámetro `credenciales` que
- * compartía con `seedDatosDePrueba`, lo que le daba a cualquiera con lectura del repo un
- * camino de auth-móvil completo (placa/CI hardcodeadas acá abajo + PIN publicado) hacia una
- * sesión operativa real una vez asignado el vehículo el lunes — evidencia legal de sanciones
- * a un conductor real. Ahora genera su propia credencial random (`generarCredencialInicialPiloto`)
- * y, punto crítico, los dos `upsert` de abajo tienen `update: {}`: si la fila ya existe, la
- * corrida NO toca `credencialHash` — así una corrida repetida del seed (pasa en cada build de
- * CI, y ya corrió contra Cloud SQL productivo) no puede revertir un PIN que el CTO ya rotó a
- * mano con `establecerPinVehiculo`/`establecerPinConductor`. */
+ * ## Por qué esta función ya no crea vehículo/conductor
+ *
+ * Hasta esta tarea sembraba un vehículo/conductor placeholder (`placa: 'PILOTO001'`, id
+ * `...014`/`...015`) como credencial inicial del piloto. Se descartan por decisión del CTO:
+ * `PILOTO001` no pasa `PATRON_PLACA_ACTUAL_BOLIVIA` (`packages/shared/src/entities/
+ * vehiculo.ts`) — de hecho causó un incidente real, `VehiculoSchema.parse()` reventando el
+ * listado del panel (ver `apps/api/src/common/validation/filas-tolerantes.util.ts`, que nació
+ * de ese incidente) — y las 6 credenciales de prueba con placa PTA válida que las reemplazan
+ * (`scripts/crear-credenciales-piloto.ts`, `9001TST`..`9006TST`) ya no necesitan un vehículo
+ * "cero" placeholder para que el piloto tenga algo con qué loguearse desde el arranque.
+ *
+ * Dos scripts standalone (`scripts/crear-credencial-pasante.ts`, Paso 1;
+ * `scripts/cargar-linea-120.ts`, Paso 6) siguen referenciando el vehículo/conductor `...014`/
+ * `...015` por su cuenta con la etiqueta "titular" — son artefactos de una etapa anterior del
+ * piloto (antes de que existiera el modelo de 6 credenciales) que solo corrieron contra
+ * Cloud SQL productivo (descartado) y nunca tuvieron ese "titular" reproducible en el repo:
+ * ninguna corrida de este seed lo creó jamás con 15 asignaciones ni con la rotación
+ * `86d20fcf-...` que asumen — ese dato se armó a mano contra producción, igual que el rename
+ * de la línea. `crear-credencial-pasante.ts` queda tal cual, documentado como superseded (ver
+ * su propia cabecera); `cargar-linea-120.ts` se ajustó para no exigir esa deuda vieja contra
+ * una base sin ella (ver el comentario del Paso 6 en ese archivo). */
 async function seedSindicatoPiloto(tx: Prisma.TransactionClient): Promise<void> {
   await tx.sindicato.upsert({
     where: { id: SINDICATO_PILOTO_ID },
@@ -1007,14 +994,37 @@ async function seedSindicatoPiloto(tx: Prisma.TransactionClient): Promise<void> 
     },
   });
 
+  // Rename Z12: `codigo`/`nombre` se aplicaron a mano contra producción el 2026-08-17 (junto
+  // con el resto del circuito real, ver docs/plan-ruta-real-z12.md) y NUNCA se versionaron acá
+  // — por eso, hasta esta tarea, cualquier base local nueva seguía diciendo `L1-PILOTO` /
+  // "Línea 1 — PLACEHOLDER piloto" aunque producción ya mostrara "Z12" en todos lados
+  // (`docs/handoff.md` §"La línea Z12, cargada y desplegada"). El id NO cambia:
+  // `cargar-circuito-z12.ts` y `cargar-linea-120.ts` lo referencian como
+  // `RUTA_OBJETIVO_ID`/`RUTA_Z12_ID` sobre la RUTA (`RUTA_PILOTO_ID`, `...011`), que cuelga de
+  // esta línea — tocar el id de la línea no hace falta y solo arriesgaría romper esas
+  // referencias.
+  //
+  // `update: { codigo, nombre }` (abajo) SÍ pisa una fila existente — a propósito, y es la
+  // EXCEPCIÓN al criterio de "no pisar dato real" que sigue el resto de esta función (ver el
+  // comentario de la geometría más abajo, y el de `puntos_control`). La diferencia es qué
+  // representa cada dato: acá no hay ningún valor real cargado a mano que este upsert pudiera
+  // destruir — producción YA es `Z12`/`Zona 12` (así lo puso el CTO a mano el 2026-08-17); el
+  // rename es justamente el dato que esta tarea versiona, y toda base que siga sin este fix
+  // (incluida producción si el drift no se corrigió a mano ahí también) tiene que converger a
+  // `Z12`/`Zona 12` cada vez que corre el seed. Con `update: {}` (como antes) el seed nunca
+  // corrige esa base — el drift que se quiere eliminar persiste para siempre en cualquier
+  // entorno que ya tenga la fila. La geometría de la ruta y las coordenadas de sus puntos de
+  // control son un caso distinto: ahí SÍ hay datos reales cargados por script/a mano
+  // (`cargar-circuito-z12.ts`, 1255 vértices) que este seed no originó y no puede reconstruir
+  // si los pisa — por eso esos usan `DO NOTHING`/`update: {}`, nunca este `update`.
   const linea = await tx.linea.upsert({
     where: { id: LINEA_PILOTO_ID },
-    update: {},
+    update: { codigo: 'Z12', nombre: 'Zona 12' },
     create: {
       id: LINEA_PILOTO_ID,
       sindicatoId: SINDICATO_PILOTO_ID,
-      codigo: 'L1-PILOTO',
-      nombre: 'Línea 1 — PLACEHOLDER piloto',
+      codigo: 'Z12',
+      nombre: 'Zona 12',
       color: '#FF5B4D',
     },
   });
@@ -1023,94 +1033,57 @@ async function seedSindicatoPiloto(tx: Prisma.TransactionClient): Promise<void> 
   // solo para que el piloto tenga algo real sobre lo que probar ruteo/geofencing antes de
   // que el CTO cargue la ruta real del sindicato — no se genera una segunda geometría
   // grande solo para diferenciarla visualmente de la de `RUTA_A_ID`.
+  //
+  // Fix (tarea "6 credenciales piloto", ver docs/handoff.md): `ON CONFLICT DO NOTHING`, NO
+  // `DO UPDATE SET geometria = ...` — antes pisaba la geometría en CADA corrida del seed,
+  // incluida la primera corrida sobre una base que YA tiene el circuito real cargado por
+  // `scripts/cargar-circuito-z12.ts` (1255 vértices, editado EN EL LUGAR sobre este mismo
+  // id a propósito, ver ese script). Se descubrió corriendo el seed dos veces seguidas en
+  // esta misma tarea: la segunda corrida revirtió el circuito real de 1255 vértices a los
+  // 84 de `GEOMETRIA_DEMO` — exactamente el mismo patrón de bug que el rename de la línea
+  // (T1 de esta tarea): un dato real cargado a mano/por script quedaba a merced de la
+  // próxima corrida del seed, "que pasa en cada build de CI" (ver el comentario de
+  // seguridad que sigue más abajo, sobre por qué el resto de esta función usa `update: {}`
+  // para no pisar datos reales). `DO NOTHING` deja que la primera corrida (fila nueva)
+  // siga sembrando el placeholder de siempre, y cualquier corrida siguiente respeta lo que
+  // haya — real o placeholder — igual que ya hace el upsert de la línea de arriba.
   await tx.$executeRaw`
     INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
     VALUES (${RUTA_PILOTO_ID}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_DEMO}), 4326)::geography, 'activo', now(), now())
-    ON CONFLICT (id) DO UPDATE SET geometria = EXCLUDED.geometria
+    ON CONFLICT (id) DO NOTHING
   `;
 
+  // Fix (mismo hallazgo que la geometría de arriba, una sentencia más abajo): antes este
+  // INSERT hacía `DO UPDATE SET coord = EXCLUDED.coord, orden = EXCLUDED.orden`, así que CADA
+  // corrida del seed pisaba estos dos puntos con la coordenada/orden placeholder de acá arriba
+  // — incluso cuando `cargar-circuito-z12.ts` ya corrió sobre esta misma ruta. Ese script NO
+  // desactiva `PC_PILOTO_1_ID`/`PC_PILOTO_2_ID` (su Paso 3 solo inactiva los puntos de
+  // `RUTA_VUELTA_ID`; su Paso 5 poda solo `obligatorio = false`, y estos dos son
+  // `obligatorio = true`) y su Paso 6 renumera por `ST_LineLocatePoint` TODOS los puntos
+  // activos de esta ruta — incluidos estos dos. Con `DO UPDATE`, la siguiente corrida del seed
+  // (CI la corre en cada build) revertía ese `orden` recalculado a 0/1 sin tocar el `orden` de
+  // los puntos reales que ese Paso 6 dejó ocupando esos mismos números → `orden` duplicado
+  // entre puntos activos de la misma ruta, y el paquete del día del teléfono ordena por
+  // `orden`. `DO NOTHING`, igual que el INSERT de `rutas` de arriba: dejar que la primera
+  // corrida (fila nueva) siembre el placeholder, y que cualquier corrida siguiente respete lo
+  // que haya — coord/orden placeholder si nadie corrió `cargar-circuito-z12.ts` todavía, o el
+  // `orden` real renumerado si sí. Se prefirió sobre un `DO UPDATE ... WHERE` que sólo actúe
+  // si la fila "sigue siendo el placeholder" (comparando `orden IN (0,1)` y la coordenada
+  // original) porque ese chequeo es indistinguible del estado real: el Paso 6 de
+  // `cargar-circuito-z12.ts` puede perfectamente asignarle `orden` 0 o 1 a uno de estos puntos
+  // según dónde caiga en la proyección de la geometría real — un `WHERE orden IN (0,1)`
+  // pisaría ese caso también. `DO NOTHING` no tiene esa ambigüedad.
   await tx.$executeRaw`
     INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, "createdAt", "updatedAt")
     VALUES
       (${PC_PILOTO_1_ID}, ${RUTA_PILOTO_ID}, 0, ST_SetSRID(ST_MakePoint(-66.156214, -17.388445), 4326)::geography, 100, true, now(), now()),
       (${PC_PILOTO_2_ID}, ${RUTA_PILOTO_ID}, 1, ST_SetSRID(ST_MakePoint(-66.15481, -17.396053), 4326)::geography, 100, true, now(), now())
-    ON CONFLICT (id) DO UPDATE SET coord = EXCLUDED.coord, orden = EXCLUDED.orden
+    ON CONFLICT (id) DO NOTHING
   `;
 
-  const vehiculoPilotoExistente = await tx.vehiculo.findUnique({
-    where: { id: VEHICULO_PILOTO_ID },
-    select: { id: true },
-  });
-  const conductorPilotoExistente = await tx.conductor.findUnique({
-    where: { id: CONDUCTOR_PILOTO_ID },
-    select: { id: true },
-  });
-  const [credencialVehiculo, credencialConductor] = await Promise.all([
-    generarCredencialInicialPiloto('PILOTO_PIN_VEHICULO'),
-    generarCredencialInicialPiloto('PILOTO_PIN_CONDUCTOR'),
-  ]);
-
-  // `update: {}`: a propósito no toca `credencialHash` en corridas siguientes (ver
-  // comentario de seguridad arriba de esta función) — el `create` solo corre la primera
-  // vez que la fila no existe, así que el PIN generado/impreso abajo únicamente aplica
-  // cuando `*PilotoExistente` es null.
-  await tx.vehiculo.upsert({
-    where: { id: VEHICULO_PILOTO_ID },
-    update: {},
-    create: {
-      id: VEHICULO_PILOTO_ID,
-      sindicatoId: SINDICATO_PILOTO_ID,
-      placa: 'PILOTO001',
-      placaNormalizada: 'PILOTO001',
-      tipo: 'bus_urbano',
-      marca: 'PLACEHOLDER',
-      modelo: 'PLACEHOLDER',
-      color: 'PLACEHOLDER',
-      capacidad: 40,
-      estado: 'activo',
-      credencialHash: credencialVehiculo.hash,
-    },
-  });
-
-  await tx.conductor.upsert({
-    where: { id: CONDUCTOR_PILOTO_ID },
-    update: {},
-    create: {
-      id: CONDUCTOR_PILOTO_ID,
-      sindicatoId: SINDICATO_PILOTO_ID,
-      nombre: 'PLACEHOLDER — conductor piloto',
-      documentoIdentidad: 'PILOTO-CI-001',
-      licenciaConducir: 'PILOTO-LIC-001',
-      estado: 'activo',
-      credencialHash: credencialConductor.hash,
-    },
-  });
-
-  if (!vehiculoPilotoExistente) {
-    if (credencialVehiculo.desdeEnv) {
-      console.log('Vehículo piloto: credencial creada con el PIN de PILOTO_PIN_VEHICULO.');
-    } else {
-      console.log(
-        `Vehículo piloto: PIN generado = ${credencialVehiculo.pin} — ANOTALO AHORA, no ` +
-          'se vuelve a mostrar. Para rotarlo más adelante usá el endpoint de credenciales ' +
-          '(establecerPinVehiculo), no re-corras el seed: no lo va a cambiar.',
-      );
-    }
-  }
-  if (!conductorPilotoExistente) {
-    if (credencialConductor.desdeEnv) {
-      console.log('Conductor piloto: credencial creada con el PIN de PILOTO_PIN_CONDUCTOR.');
-    } else {
-      console.log(
-        `Conductor piloto: PIN generado = ${credencialConductor.pin} — ANOTALO AHORA, no ` +
-          'se vuelve a mostrar. Para rotarlo más adelante usá el endpoint de credenciales ' +
-          '(establecerPinConductor), no re-corras el seed: no lo va a cambiar.',
-      );
-    }
-  }
-
   console.log(
-    'Sindicato piloto (placeholder) listo: 1 línea, 1 ruta, 2 puntos de control, 1 vehículo, 1 conductor',
+    'Sindicato piloto (placeholder) listo: 1 línea (Z12), 1 ruta, 2 puntos de control. ' +
+      'Vehículos/conductores/credenciales del piloto: ver scripts/crear-credenciales-piloto.ts.',
   );
 }
 

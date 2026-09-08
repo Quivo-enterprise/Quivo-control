@@ -1,4 +1,17 @@
 /**
+ * ⚠️ SUPERSEDED (tarea "6 credenciales piloto", ver docs/handoff.md). El titular que este
+ * script asume (`VEHICULO_TITULAR_ID`/`CONDUCTOR_TITULAR_ID` = `...014`/`...015`) se sacó
+ * de `packages/db/prisma/seed.ts` (`seedSindicatoPiloto`) a propósito: su placa `PILOTO001`
+ * no pasa `PATRON_PLACA_ACTUAL_BOLIVIA` y causó un incidente real (ver el comentario nuevo de
+ * `seedSindicatoPiloto`). Ese titular, además, NUNCA fue reproducible desde el repo — sus 15
+ * asignaciones y la rotación `86d20fcf-...` que el Paso 3 de acá copia se armaron a mano
+ * contra Cloud SQL productivo (descartado), igual que el rename de la línea Z12 — así que
+ * este script YA NO PUEDE correr contra ninguna base (el Paso 1 aborta: "Vehículo titular
+ * ...014 no existe"), ni local ni nueva-producción. El reemplazo es
+ * `scripts/crear-credenciales-piloto.ts` (6 credenciales nuevas, autocontenidas, no
+ * dependen de ningún "titular"). Se deja este archivo sin tocar su lógica —solo esta nota—
+ * como referencia de cómo se armaba el patrón "copiar el circuito de otra credencial".
+ *
  * Crea una SEGUNDA credencial móvil operativa (vehículo + conductor + 15 asignaciones)
  * para el sindicato piloto, equivalente a la que ya usa el conductor titular
  * (`33333333-3333-4333-8333-000000000014` / `...015`), para que un pasante haga el mismo
