@@ -6,22 +6,37 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Login móvil de un paso — sesión cortada por créditos (2026-09-08)
+## Login móvil de un paso, mergeado (#53, 2026-09-08)
 
-**Rama `feat/login-movil-un-paso`, CERO commits: todo vive en el working tree.** Es lo primero
-que hay que saber. No hay CI, no hay PR, y un `git checkout` mal puesto borra ~1445 líneas de
-trabajo verificado. **Commitear es la primera tarea de la próxima sesión**, antes de tocar nada.
+`main` = `c92f806`. La rama `feat/login-movil-un-paso` se cerró con CI verde (`ci` 6m28s,
+`acceptance` 4m26s) y se borró. **Los dos pendientes de abajo siguen abiertos** — se documentaron
+en el cuerpo del PR y en el código, no se arreglaron.
 
-### Estado verificado al cortar
+La sesión que produjo esto se cortó por créditos con todo sin commitear; la siguiente lo verificó
+de punta a punta y lo cerró. Lección que ya costó dos veces (ver también #51): **trabajo verificado
+que no está en `origin` no existe** — commitear al primer punto estable, no al final.
 
-Corrido por el chairman, no reportado por un subagente:
+### Estado verificado antes de mergear
 
-```
-pnpm --filter @quivo/mobile typecheck            → limpio
-pnpm --filter @quivo/mobile test                 → 145/145
-cd apps/api && vitest run src/modules/auth-movil → 17/17
-cd apps/api && tsc --noEmit                      → limpio
-```
+Corrido por el chairman en entorno limpio, no reportado por un subagente:
+
+| Paquete | Resultado |
+|---|---|
+| `@quivo/api` | 275/275 |
+| `@quivo/mobile` | 145/145 |
+| `@quivo/web` | 63/63 |
+| `@quivo/shared` | 52/52 |
+| `@quivo/db` | 27/27 |
+| `@quivo/design-system` | 8/8 |
+| `pnpm lint` / `pnpm typecheck` | 10/10 cada uno |
+
+**Trampa de entorno que costó media hora, anotada para no repetirla:** `packages/db/.env` y
+`apps/api/.env` apuntan a bases DISTINTAS (`quivo_control` vs `quivo_control_e2echeck`) y tienen
+secretos distintos. Hacer `set -a; . packages/db/.env` para destrabar `prisma generate` (su config
+no lee el `.env`, exige `DATABASE_URL` en el entorno) **pisa** los de `apps/api` y produce 23
+fallos fantasma: `intentos_auth_movil does not exist`, más Better-Auth con `Failed to decrypt
+private key`. No son bugs. Cargá el `.env` en un subshell solo para el comando de Prisma, y dejá
+que cada paquete use el suyo para los tests.
 
 ### Qué entró (completo y verificado)
 
@@ -163,11 +178,13 @@ varios días — con uno solo, mañana nadie entra) · correr `cargar-circuito-z
 
 ### Orden sugerido para la próxima sesión
 
-1. **Commitear lo que ya está verde** (nada de esto está en git todavía).
-2. Terminar el pendiente 1 — o, si urge cerrar, borrar la constante sin usar de `:53`, quedarse
-   con el `ORDER BY` y abrir el resto como issue aparte.
-3. Pendiente 2, las 6 credenciales.
-4. Re-correr `/code-review` + `/security-review` sobre el diff final, PR, CI, merge.
+1. **Pendiente 2, las 6 credenciales** — es lo que desbloquea a chofer y pasantes para probar en
+   campo, así que va primero. Ojo con la trampa de `L1-PILOTO`.
+2. **Pendiente 1, la ambigüedad de placas.** Correr antes el SQL de medición: si devuelve 0 filas
+   el bug es latente y se puede planificar sin apuro, pero el fix igual hace falta porque la suite
+   de tests vive entera en la rama de fallback.
+3. La decisión de modelo de datos sobre `placaNormalizada @unique` (deuda 1), que es la causa raíz
+   de lo anterior y hoy hace imposible arreglar el dato en vez del código.
 
 Los `.png` sueltos en la raíz (`en-vivo-*.png`) son de la prueba de QA del 23-ago y siguen sin
 trackear. O se archivan en `docs/` o se borran; no deberían ir al commit por accidente.
