@@ -26,9 +26,45 @@ VPC connector, Cloud SQL `quivo-db` (PG16, **solo IP privada**) y Memorystore `q
    `migration.sql:14`, `'quivo_app_dev'`). El script de deploy la rota con `ALTER ROLE`
    después de migrar; la migración no se toca.
 
-Pendiente inmediato: `apps/mobile/eas.json` (`EXPO_PUBLIC_API_URL`) sigue apuntando al
-servicio borrado `https://quivo-api-424426714260.southamerica-west1.run.app`. Se actualiza
-con la URL real recién después del primer deploy de `quivo-api`, y antes de generar el APK.
+Pendiente inmediato: `apps/mobile/eas.json` (`EXPO_PUBLIC_API_URL`). La rama
+`feat/deploy-gcp-prod` ya le sacó la URL del servicio borrado y le dejó un placeholder
+`.invalid` a propósito, para que falle ruidoso en vez de apuntar a algo que no existe. Se
+completa con la URL real recién después del primer deploy de `quivo-api`, y antes del APK.
+## `scripts/deploy-gcp.sh`, en rama sin PR todavía (`feat/deploy-gcp-prod`, 2026-09-08)
+
+Reemplaza a `scripts/deploy-web.sh` (apuntaba al proyecto GCP borrado `quivo-piloto`; el proyecto
+vigente es `quivo-control-prod`, `southamerica-west1`). Un solo script versionado despliega las
+tres cargas de trabajo (`quivo-api`, `quivo-web`, `quivo-worker`) contra la infra ya provista
+(Cloud SQL `quivo-db` con IP privada, Memorystore `quivo-redis` con AUTH, VPC connector
+`quivo-conector`). Sólo se escribió el script — **no se corrió contra el proyecto real**, así que
+nada de lo de abajo está verificado en vivo todavía.
+
+Piezas nuevas que no estaban en `deploy-web.sh`:
+
+- **Cloud SQL con IP privada exclusivamente**: no hay forma de correr `prisma migrate deploy`
+  desde fuera de la VPC, así que el script crea/ejecuta un Cloud Run Job (`quivo-migraciones`,
+  con `--vpc-connector`/`--add-cloudsql-instances`, MISMA imagen que la API) que corre las
+  migraciones dentro de la VPC, con `--wait` y abortando el deploy entero si falla.
+- **Rotación de la password de `quivo_app`**: la migración `20260730152500_rls_multi_tenant`
+  crea ese rol con la password hardcodeada `quivo_app_dev` (dev-only, en el repo). El mismo Job,
+  reejecutado con otro `--args`, corre un `ALTER ROLE quivo_app PASSWORD ...` con una password
+  generada por el script (`openssl rand -hex 24`, guardada en Secret Manager como
+  `QUIVO_APP_PASSWORD`) — la migración usa `IF NOT EXISTS` así que reaplicarla nunca revierte la
+  rotación.
+- **Redis con AUTH habilitado**: `REDIS_URL` se arma en runtime con
+  `gcloud redis instances get-auth-string` (nunca se imprime).
+- **`DATABASE_URL` NO se autogenera**: la password del usuario `postgres` de Cloud SQL ya está
+  seteada fuera del script; si el secreto no existe, el script falla con el comando exacto para
+  crearlo a mano en vez de inventar una password que rompería contra el rol real.
+- **Se repite (a propósito) el fix de la trampa de CORS de dos URLs** documentada más abajo en
+  "La trampa de CORS que se esquivó" (PR #23/#49): `CORS_ORIGIN` ahora lleva las DOS URLs válidas
+  del panel (la de `status.url` y la de número-de-proyecto), separadas por coma —
+  `apps/api/src/main.ts` ya soporta una lista, así que no hace falta elegir una sola.
+
+Pendiente / no verificado: el deploy real de punta a punta contra `quivo-control-prod`; la
+verificación manual de RLS/`quivo_app` documentada en la cabecera del script; y actualizar
+`apps/mobile/eas.json` (`EXPO_PUBLIC_API_URL`) con la URL real de `quivo-api` una vez desplegada
+(quedó con un placeholder `.invalid` a propósito, ver el script y el commit).
 
 ## Login móvil de un paso, mergeado (#53, 2026-09-08)
 
@@ -1159,6 +1195,10 @@ no una regex— y estaba sin setear. Si el panel cambia de URL, el API deja de a
 como variable del servicio (las `NEXT_PUBLIC_*` se inlinean en build time; si falta, Next hornea el
 fallback `localhost:3000` sin ningún error visible), y `CORS_ORIGIN` tiene que ser la URL exacta
 sin barra final.
+
+> **[2026-09-08] `scripts/deploy-web.sh` fue reemplazado por `scripts/deploy-gcp.sh`** (ver la
+> entrada al tope de este documento) — apuntaba al proyecto GCP borrado `quivo-piloto`. Las tres
+> trampas de arriba siguen vigentes tal cual, ahora dentro del nuevo script (pasos 2a/2b y 4).
 
 ### Lo que el panel destapó: el seed del piloto estaba a medias
 
@@ -2874,6 +2914,11 @@ devuelve 204 con el origen correcto.
 Como el servicio web no cambia de URL en un redeploy, ese paso no aportaba nada. **Queda como
 deuda**: que `CORS_ORIGIN` acepte un solo origen cuando el servicio tiene dos URLs es frágil, y
 `deploy-web.sh` debería no tocarlo o aceptar ambos.
+
+> **[2026-09-08]** Esta deuda quedó saldada del lado del código antes de esta entrada
+> (`apps/api/src/main.ts` ya acepta `CORS_ORIGIN` como lista separada por comas), y
+> `scripts/deploy-gcp.sh` (reemplaza a `deploy-web.sh`, ver el tope de este documento) ya setea
+> las DOS URLs del panel en cada deploy en vez de una sola.
 
 ### Verificación
 
