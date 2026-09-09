@@ -48,3 +48,8 @@ docs/Credenciales demo day QUIVO CONTROL
 
 # credenciales de producción (accesos, secretos, datos sensibles de la operación real).
 docs/DOCUMENTO DE DATOS IMPORTANTES Y CREDENCIALES DE QUIVO CONTROL
+
+# scripts/sembrar-piloto-produccion.ts: estado local de avance (ids devueltos por la API real
+# de producción) — permite reanudar sin duplicar filas (no hay endpoint DELETE). No son datos
+# de ejemplo, nunca se commitea.
+scripts/.estado-siembra-produccion.json
