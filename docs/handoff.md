@@ -6,6 +6,98 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## El APK no abría: dos copias de React en el bundle (2026-09-08)
+
+El build 8 (`versionCode` 8, desde `ef298d5`) se instalaba y **crasheaba al abrir** con
+`TypeError: Cannot read property 'useState' of null` dentro de `useFonts` (`App.tsx:45-55`).
+El build 7 (18-ago) funcionaba. El backend no tenía nada que ver: `GET /v1/health` respondía
+`{"status":"ok","db":"up","redis":"up"}` contra la misma URL que usa `eas.json`.
+Plan: [`plan-apk-conductor-usable.md`](plan-apk-conductor-usable.md).
+
+### La causa
+
+`apps/mobile-mockup` entró al workspace con el rediseño (**PR #51**, `ca1618a`) trayendo un
+segundo mundo entero: **Expo ~52.0.11 / RN 0.76.9 / React 18.3.1**, con los mismos
+`@expo-google-fonts/{montserrat,oxanium}` que usa `apps/mobile` (Expo 54 / RN 0.81.5 /
+React 19.1.0).
+
+Esos paquetes de fuentes **no declaran ninguna `dependencies` ni `peerDependencies`** — su
+`package.json` sólo tiene `main`. pnpm les crea entonces un `node_modules` vacío, y sus
+`import ... from 'react'` / `from 'expo-font'` caen por walk-up hasta el hoist dir oculto
+`node_modules/.pnpm/node_modules/`, que es **uno solo para todo el monorepo** y no tiene
+noción de qué app pidió qué. Ahí quedaron `expo-font` de SDK 52 y `expo-modules-core@2.2.3`.
+`expo-font@52` requiere eager `FontUtils.js`, que hace `require('react-native')` a nivel de
+módulo y arrastra RN 0.76.9 completo.
+
+Mientras hubo una sola versión de cada paquete en el store, ese walk-up acertaba **de
+casualidad**. El PR #51 rompió esa casualidad. **El PR que rompió la app móvil no tocó una sola
+línea de `apps/mobile`**: la rompió agregando otra app al workspace.
+
+### Lo que se hizo
+
+| Cambio | Por qué |
+|---|---|
+| `apps/mobile-mockup` → `archivo/mobile-mockup` | Fuera del glob `apps/*` del workspace. Elimina la causa: el segundo `expo-font`, el segundo `react-native` y `expo-modules-core@2.2.3` desaparecen del store |
+| Guardia de singletons en `apps/mobile/metro.config.js` | Sacar el mockup cierra *este* caso, no la clase: `react@18.3.1` sigue en el store por `web`/`landing`/`design-system`. La guardia fuerza ocho paquetes a resolver desde `apps/mobile/node_modules`, encadenando (nunca pisando) el `resolveRequest` de Sentry — pisarlo rompería los source maps de release |
+| `scripts/assert-bundle-singletons.mjs` + dos pasos de CI | Audita el bundle real exportado y falla si hay más de una versión de `react`, `react-dom`, `react-native`, `expo`, `expo-font`, `expo-asset`, `expo-constants` o `expo-modules-core` |
+| Test en `apps/mobile/src/shared/resolucion-singletons.test.ts` | Canario de segundos: dispara el mismo mecanismo que causó el bug |
+
+**Verificado:** `expo export --platform android --dump-sourcemap` + el canario dan exit 0 con
+una copia de cada paquete (`react@19.1.0`, `react-native@0.81.5`, `expo-modules-core@3.0.30`).
+`pnpm typecheck` 10/10, tests de móvil 147/147.
+
+**Ojo con `pnpm install` incremental:** dejaba huérfanos físicos de `react-native@0.76.9`,
+`expo-font@*expo@52*` y `expo-modules-core@2.2.3` en `node_modules/.pnpm/` aunque ya no
+estuvieran en el lockfile. pnpm no los poda solo — hizo falta borrar `node_modules` y
+reinstalar limpio.
+
+### Por qué CI estuvo en verde con la app rota un día entero
+
+**CI nunca ejecutaba Metro.** `@quivo/mobile` define `"build": "tsc --noEmit"` y
+`"test": "vitest run --passWithNoTests"`; Playwright es sólo web. Nada en el pipeline armaba
+ni ejecutaba el bundle de release, así que el rediseño se mergeó rompiendo la app y nadie se
+enteró hasta instalar el APK. Los dos pasos nuevos de CI cierran ese agujero por ~1 min de
+build, sin emulador.
+
+Regla de proceso que sale de acá: **si un PR toca `pnpm-lock.yaml` o suma una app al
+workspace, se revalida el bundle móvil** aunque no cambie una línea de `apps/mobile`.
+
+### Otros dos arreglos del mismo PR
+
+- **`App.tsx`** tenía `await new Promise(r => setTimeout(r, 2000))` en el `onLoadData` del
+  splash, con el comentario "we just wait a minimum time for the animation to look nice" —
+  residuo del rediseño. Dos segundos de espera artificial sin relación con el estado real, que
+  además podían destapar la app **antes** de que terminara la restauración de sesión y mostrar
+  una pantalla vacía. Ahora el splash espera a que `auth.estado.etapa` deje de ser
+  `restaurando`; la duración mínima de animación ya la garantizaba `splash-screen.tsx` por su
+  cuenta (2500 ms internos).
+- **`docs/runbooks/alta-de-conductor-android.md`** describía el login de dos pantallas que el
+  PR #53 eliminó. Quien diera de alta a un conductor real seguía instrucciones falsas. Ahora
+  documenta el paso único (placa + PIN del conductor), la pantalla "Elige tu turno" cuando hay
+  más de una asignación vigente, y el lockout — que ningún documento mencionaba.
+
+### Sobre el nombre "QUIVO Conductor"
+
+Ya estaba correcto y no hizo falta tocarlo: `app.config.ts` fija `name: 'QUIVO Conductor'`,
+`slug: quivo-conductor` y `package: com.quivotech.conductor` desde que se creó el archivo — la
+app móvil nunca se llamó "QUIVO Control". **Lo que sí sigue diciendo "QUIVO CONTROL" son los
+assets de marca** que ve el conductor: `logo.png` (header y Ajustes) y `logo-white.png`
+(pantalla de login), confirmado renderizando el canal alpha. Se dejaron como están por decisión
+del CTO. Nota menor: `logo-white.png` y `logo-wordmark-white.png` son byte a byte el mismo
+archivo (md5 `434722a9...`).
+
+### Pendiente
+
+- **Instalar el APK nuevo y confirmar que abre.** Hasta ahí, el fix está verificado sobre el
+  bundle, no sobre el dispositivo.
+- **Probar el login end-to-end contra producción.** Nunca se hizo: el health check sólo prueba
+  conectividad a DB y Redis, no que auth funcione.
+- **Licencia Transistorsoft: vence 2026-09-15**, `grace_builds` en cero. Decisión del CTO:
+  cortar el APK antes de esa fecha y decidir la compra después. Cada rebuild consume margen.
+- Los **4 criterios GO/NO-GO del GPS en background** siguen sin medirse con la app propia
+  (`docs/spike-gps.md:88-101`): las trazas analizadas salieron de Geo Tracker. El APK va a
+  abrir, pero la durabilidad del tracking en una jornada de 8 h no está probada.
+
 ## Producción en GCP, desplegada y verificada (2026-09-08)
 
 El proyecto anterior (`quivo-piloto`) fue descartado y borrado. **`quivo-control-prod`**
@@ -104,9 +196,11 @@ repo:
 
 ### Pendiente inmediato
 
-- **`apps/mobile/eas.json` (`EXPO_PUBLIC_API_URL`)** tiene un placeholder `.invalid` puesto a
-  propósito para que falle ruidoso. Se completa con `https://quivo-api-hjqvfgsdnq-tl.a.run.app`
-  antes de generar el APK.
+- ~~**`apps/mobile/eas.json` (`EXPO_PUBLIC_API_URL`)** tiene un placeholder `.invalid`~~ —
+  **hecho** (PR #62): quedó `https://quivo-api-741758083365.southamerica-west1.run.app`, la
+  forma con número de proyecto porque es determinista. Verificado el 2026-09-08:
+  `GET /v1/health` responde `{"status":"ok","db":"up","redis":"up"}`. Es el mismo servicio que
+  `quivo-api-hjqvfgsdnq-tl.a.run.app`, sólo otro hostname.
 - **Verificación manual dentro de la VPC**, documentada en la cabecera de
   `scripts/deploy-gcp.sh` y todavía sin hacer: que RLS siga activo en `sindicatos`/`socios`,
   que `quivo_app` no sea superusuario ni tenga `BYPASSRLS`, y que la password rotada sea la

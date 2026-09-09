@@ -24,7 +24,9 @@ export interface SplashScreenProps {
 
 export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
   const insets = useSafeAreaInsets();
-  const [status, setStatus] = useState<'verificando' | 'error'>('verificando');
+  // 'sin_conexion' es SOLO para cuando `NetInfo.fetch()` confirmó que no hay red — nunca para
+  // una restauración de sesión lenta (ver el motivo del estado 'tardanza' más abajo).
+  const [status, setStatus] = useState<'verificando' | 'sin_conexion' | 'tardanza'>('verificando');
 
   const rotation = useSharedValue(0);
 
@@ -51,6 +53,16 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
     const startTime = Date.now();
     setStatus('verificando');
 
+    // Cota de seguridad real, no estética: `onLoadData` (= `esperarRestauracion()` en App.tsx)
+    // espera a que termine la restauración de sesión (`obtenerDeviceIdMovil()` +
+    // `cargarSesionMovil()` contra SecureStore/Android Keystore), que no hace ningún request de
+    // red. Sin esta cota, un fallo real ahí (Keystore colgado, no una lentitud normal) dejaría
+    // al conductor mirando el spinner para siempre. Por eso, si esto dispara, el mensaje de
+    // abajo JAMÁS dice "revisá tu conexión" — sólo lo decimos cuando `NetInfo.fetch()` confirmó
+    // que no hay red (ver el catch). Si fue este timeout, avisamos que tardó y dejamos
+    // reintentar: gracias al fix del cleanup en App.tsx, `esperarRestauracion()` ya resuelve
+    // bien la transición de etapa, así que un reintento que llega después de que la
+    // restauración terminó resuelve al toque (no vuelve a esperar 5s).
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error('timeout')), 5000);
     });
@@ -59,7 +71,7 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
       await Promise.race([
         (async () => {
           const state = await NetInfo.fetch();
-          
+
           if (!state.isConnected) {
             throw new Error('no_network');
           }
@@ -76,8 +88,11 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
           onReady();
         }, 300);
       }, remainingTime);
-    } catch {
-      setStatus('error');
+    } catch (error) {
+      // Sólo 'no_network' viene de una verificación real de conectividad (`NetInfo.fetch()`).
+      // Cualquier otra causa —el timeout de arriba, o un error inesperado dentro de
+      // `onLoadData`— NO es evidencia de que falle la red: no le mentimos al conductor.
+      setStatus(error instanceof Error && error.message === 'no_network' ? 'sin_conexion' : 'tardanza');
     }
   };
 
@@ -111,8 +126,17 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
             </>
           ) : (
             <Animated.View entering={FadeIn}>
-              <Text style={styles.title}>Error de conexión</Text>
-              <Text style={styles.subtitle}>No pudimos verificar tus datos.{'\n'}Revisa tu conexión a internet.</Text>
+              {status === 'sin_conexion' ? (
+                <>
+                  <Text style={styles.title}>Error de conexión</Text>
+                  <Text style={styles.subtitle}>No pudimos verificar tus datos.{'\n'}Revisa tu conexión a internet.</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.title}>Esto está tardando</Text>
+                  <Text style={styles.subtitle}>Preparar tu sesión está tardando más de lo esperado.{'\n'}Puedes reintentar.</Text>
+                </>
+              )}
               <Button
                 variant="accent"
                 size="lg"
@@ -121,7 +145,7 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
                 style={styles.retryButton}
                 onPress={() => void checkConnectionAndData()}
               >
-                Reintentar Conexión
+                {status === 'sin_conexion' ? 'Reintentar Conexión' : 'Reintentar'}
               </Button>
             </Animated.View>
           )}

@@ -45,10 +45,18 @@ todavía no se haya sincronizado.
 
 ### 3. Iniciar sesión
 
-Dos pantallas: primero placa + PIN del vehículo, después CI + PIN personal del conductor.
+Una sola pantalla: **placa del vehículo + PIN del conductor**. El PIN es personal del conductor,
+no del vehículo — dos choferes que manejan la misma unidad usan cada uno el suyo.
+
+Si el conductor tiene más de una asignación vigente, aparece una segunda pantalla ("Elige tu
+turno") para confirmar cuál va a iniciar. Con una sola asignación no aparece.
 
 Si el login falla con credenciales correctas, casi siempre es que **no hay asignación cargada
 para la fecha de hoy** — no es problema del teléfono. Se resuelve desde el panel.
+
+Tras varios intentos fallidos el vehículo queda bloqueado unos segundos, y el bloqueo crece con
+cada fallo (hasta un minuto). No es una falla: es el lockout. Esperar y reintentar con el PIN
+correcto.
 
 ### 4. El permiso de ubicación — el paso que falla
 
