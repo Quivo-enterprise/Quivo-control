@@ -109,13 +109,15 @@ export function useTrazaEnVivo(token: string | null, sesionId: string | null) {
       // Auto-heal, **una sola vez** por ciclo: faltan puntos respecto de `totalPuntos`, así
       // que se recarga la ventana entera y se descarta lo acumulado (que tenía el hueco).
       //
-      // `limite: TRAZA_EN_VIVO_LIMITE_MAX` (no el default de 2000) es obligatorio acá: una
-      // jornada Z12 completa ronda 4300 puntos, así que sin el `limite` explícito el server
-      // trunca esta respuesta igual que el delta normal, `fusionarTraza(undefined, completa)`
-      // descarta la traza acumulada y la reemplaza por los primeros 2000 puntos (la polilínea
-      // rebobina a la mañana), y la respuesta trunca sigue trayendo `hayMas: true` — con lo
-      // que `recargaFallida` nunca se marca (ver abajo) y el ciclo de recarga completa se
-      // repite sin fin.
+      // `limite: TRAZA_EN_VIVO_LIMITE_MAX` (no el default) es obligatorio acá: una jornada Z12
+      // completa puede rondar 30.000-43.000 puntos con el `distanceFilter` de 15 m del móvil
+      // (ver el comentario de `TRAZA_EN_VIVO_LIMITE_MAX` en `@quivo/shared`), así que sin el
+      // `limite` explícito el server trunca esta respuesta igual que el delta normal,
+      // `fusionarTraza(undefined, completa)` descarta la traza acumulada y la reemplaza por
+      // los primeros `TRAZA_EN_VIVO_LIMITE_DEFAULT` puntos (la polilínea rebobina a la
+      // mañana), y la respuesta trunca sigue trayendo `hayMas: true` — con lo que
+      // `recargaFallida` nunca se marca (ver abajo) y el ciclo de recarga completa se repite
+      // sin fin.
       const completa = await enVivoApi.posiciones(autenticacion, sesion, {
         limite: TRAZA_EN_VIVO_LIMITE_MAX,
       });

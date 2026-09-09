@@ -52,14 +52,14 @@ export const UMBRAL_CORTE_POLL_MS = 30 * 60_000;
  *
  * La guarda por déficit de `debeRecargar` corta el caso del hueco fijo (reingesta colisionada:
  * el déficit no crece entre polls), pero NO alcanza sola cuando la ventana de la sesión supera
- * `TRAZA_EN_VIVO_LIMITE_MAX` (5000 puntos): ahí la recarga completa nunca puede completar
+ * `TRAZA_EN_VIVO_LIMITE_MAX` (50.000 puntos): ahí la recarga completa nunca puede completar
  * (`recargada.completa` da siempre `false`, ver `use-en-vivo.ts`) y el déficit
- * (`totalPuntos - 5000`) SÍ crece en casi cada poll, porque `totalPuntos` es un `count(*)`
+ * (`totalPuntos - 50000`) SÍ crece en casi cada poll, porque `totalPuntos` es un `count(*)`
  * vivo que sigue subiendo con el vehículo reportando. La guarda por déficit sola dejaría pasar
- * eso — y volvería el bucle original: una descarga completa (~300 KB) cada 10 s, la traza
- * acumulada descartada, la polilínea rebobinando cada vez. Este cooldown es un techo duro sobre
- * la FRECUENCIA, independiente de la causa: como mucho una recarga completa cada
- * `COOLDOWN_RECARGA_MS`, sea el déficit fijo o creciendo de verdad.
+ * eso — y volvería el bucle original: una descarga completa (varios MB con el volumen actual)
+ * cada 10 s, la traza acumulada descartada, la polilínea rebobinando cada vez. Este cooldown
+ * es un techo duro sobre la FRECUENCIA, independiente de la causa: como mucho una recarga
+ * completa cada `COOLDOWN_RECARGA_MS`, sea el déficit fijo o creciendo de verdad.
  */
 export const COOLDOWN_RECARGA_MS = 60_000;
 
@@ -161,9 +161,9 @@ export function necesitaRecargaCompleta(traza: TrazaAcumulada): boolean {
  * reintentar.
  *
  * **2. Cooldown temporal (`COOLDOWN_RECARGA_MS`).** La guarda 1 sola NO cubre una sesión
- * cuya ventana supera `TRAZA_EN_VIVO_LIMITE_MAX` (5000 puntos): ahí la recarga completa
+ * cuya ventana supera `TRAZA_EN_VIVO_LIMITE_MAX` (50.000 puntos): ahí la recarga completa
  * nunca puede completar (`recargada.completa` da siempre `false`, ver `use-en-vivo.ts`) y el
- * déficit (`totalPuntos - 5000`) SÍ crece en casi cada poll porque `totalPuntos` sigue
+ * déficit (`totalPuntos - 50000`) SÍ crece en casi cada poll porque `totalPuntos` sigue
  * subiendo con el vehículo reportando — con lo que la guarda 1 deja pasar
  * (`deficitActual > previa.deficitFallido`) en cada ciclo y vuelve el bucle original: una
  * descarga completa cada 10 s, la traza acumulada descartada, la polilínea rebobinando. El
