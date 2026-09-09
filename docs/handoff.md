@@ -12,6 +12,7 @@ El build 8 (`versionCode` 8, desde `ef298d5`) se instalaba y **crasheaba al abri
 `TypeError: Cannot read property 'useState' of null` dentro de `useFonts` (`App.tsx:45-55`).
 El build 7 (18-ago) funcionaba. El backend no tenía nada que ver: `GET /v1/health` respondía
 `{"status":"ok","db":"up","redis":"up"}` contra la misma URL que usa `eas.json`.
+Arreglado en el **PR #63** (`5bb2a64`).
 Plan: [`plan-apk-conductor-usable.md`](plan-apk-conductor-usable.md).
 
 ### La causa
@@ -44,7 +45,26 @@ línea de `apps/mobile`**: la rompió agregando otra app al workspace.
 
 **Verificado:** `expo export --platform android --dump-sourcemap` + el canario dan exit 0 con
 una copia de cada paquete (`react@19.1.0`, `react-native@0.81.5`, `expo-modules-core@3.0.30`).
-`pnpm typecheck` 10/10, tests de móvil 147/147.
+`pnpm typecheck` 10/10, tests de móvil 147/147. **Confirmado también en CI** (run
+`34322849355`): el bundle bajó de 2425 a 1968 módulos y el canario reportó una sola copia de
+cada uno de los ocho paquetes.
+
+**El APK de EAS también quedó auditado**, que es lo que realmente cierra el caso: el bug original
+consistió en que EAS produjo un bundle distinto al local desde el mismo lockfile. Contando las
+versiones dentro del bundle Hermes embebido en cada `.apk`:
+
+| String | Build 8 (crasheaba) | Build 9 |
+|---|---|---|
+| `19.1.0` — React de `apps/mobile` | 1 | 1 |
+| `18.3.1` — React que traía el mockup | **1** | **0** |
+
+La copia de React 18 desapareció del artefacto que se instala, no sólo del bundle local. El
+contraste contra el build 8 es lo que hace válida la lectura: si Hermes se comiera esa string,
+tampoco aparecería `19.1.0`.
+
+Build 9: `versionCode` 9, desde `5bb2a64`, mismo keystore `Build Credentials 9zSZpTExKl` que los
+builds 7 y 8 — se instala encima sin desinstalar. **Desinstalar destruye los recorridos que no se
+hayan sincronizado.**
 
 **Ojo con `pnpm install` incremental:** dejaba huérfanos físicos de `react-native@0.76.9`,
 `expo-font@*expo@52*` y `expo-modules-core@2.2.3` en `node_modules/.pnpm/` aunque ya no
