@@ -110,6 +110,17 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # CI nunca ejecutaba Metro (ni `expo export`): el `build` de arriba es sólo `tsc --noEmit`
+      # en `apps/mobile` (ver su `package.json`), así que un bundle roto —dos copias de React o
+      # de React Native mezcladas por un hoist de pnpm ambiguo— podía mergearse con CI en verde
+      # y recién se detectaba al instalar el APK real y verlo crashear al abrir. Estos dos pasos
+      # arman el bundle de verdad (con sourcemap) y lo auditan contra ese bug de vuelta.
+      - name: Exportar bundle de apps/mobile (con sourcemap)
+        run: pnpm --filter @quivo/mobile exec expo export --platform android --dump-sourcemap --output-dir /tmp/mobile-dist
+
+      - name: Verificar que el bundle no lleve paquetes duplicados
+        run: node scripts/assert-bundle-singletons.mjs /tmp/mobile-dist
+
   acceptance:
     needs: ci
     runs-on: ubuntu-latest
