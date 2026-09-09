@@ -43,15 +43,50 @@ export const logVerboseHabilitado = __DEV__ || process.env.EXPO_PUBLIC_GPS_LOG_V
 export const gpsSpikeConfig: Config = {
   geolocation: {
     desiredAccuracy: BackgroundGeolocation.DesiredAccuracy.High,
-    distanceFilter: 50,
-    locationUpdateInterval: 10_000,
-    fastestLocationUpdateInterval: 10_000,
-    stopTimeout: 5,
+    // Corrida de producción (mediana 153-166 s, p95 684-814 s de latencia captura→servidor,
+    // ver docs/plan de drenado en background): el `distanceFilter` NOMINAL de 50 m medía
+    // 81-103 m reales en el piloto, porque el SDK escala el filtro con la velocidad
+    // (`disableElasticity: false` por default — ver abajo). 15 m ≈ 1,8 s a 30 km/h una vez
+    // desactivada esa elasticidad: puntos mucho más seguidos sin depender de ningún timer JS
+    // (el fix llega por evento nativo → `onLocation`, no por polling).
+    distanceFilter: 15,
+    // Sin esto, el SDK escala `distanceFilter` automáticamente con la velocidad (a más
+    // velocidad, filtro más laxo — "highway speeds, locations are returned at ~ 1 / km"): es
+    // la causa confirmada de que 50 m nominales dieran 81-103 m medidos en el piloto.
+    // Desactivada, `distanceFilter` queda CONSTANTE en el valor configurado.
+    disableElasticity: true,
+    // Uno de los tres factores detrás de los huecos medidos de 11/17/22/56 minutos con el
+    // vehículo DETENIDO (junto con `stopTimeout` y la geocerca de 200 m del propio SDK): por
+    // default Android descarta un fix idéntico al anterior, así que un vehículo parado deja
+    // de emitir por completo hasta que algo lo mueva. `true` fuerza a registrar igual —
+    // constante que sostiene la evidencia (RF-67..73) durante un layover, no solo en
+    // movimiento.
+    allowIdenticalLocations: true,
+    // Otro de los tres factores de los huecos con el vehículo detenido (ver el comentario de
+    // `allowIdenticalLocations` arriba): minutos que la ARS (Activity Recognition System)
+    // espera tras detectar `STILL` antes de bajar la frecuencia de fixes. Subido de 5 a 10 —
+    // el tercer factor (la geocerca de 200 m del SDK) sigue siendo del SDK, no configurable
+    // acá; el hueco residual esperado con los tres ajustes de esta config baja a ~60-90 s
+    // (ver `heartbeatInterval` en `app`, abajo), lejos de los 11-56 min medidos.
+    stopTimeout: 10,
     locationAuthorizationRequest: 'Always',
+    // `locationUpdateInterval`/`fastestLocationUpdateInterval` (Android) SOLO aplican con
+    // `distanceFilter: 0` — con `distanceFilter > 0` (nuestro caso, 15 m) el SDK los ignora
+    // por completo. Estaban seteados en 10 s cada uno, lo cual no tenía ningún efecto real y
+    // solo desinformaba a quien leyera este archivo pensando que gobernaban el intervalo de
+    // fixes — se borran en vez de dejarlos como documentación falsa.
   },
   activity: {
     stopOnStationary: false,
     disableMotionActivityUpdates: false,
+    // Complementa `stopTimeout` (arriba, en `geolocation`): minutos que el sistema de
+    // stop-detection espera DESPUÉS de que el vehículo arranca antes de empezar a evaluar de
+    // nuevo si volvió a quedar quieto. Sin este margen (default 0), una parada corta en
+    // semáforo/control alcanza para reactivar el conteo de `stopTimeout` de inmediato,
+    // adelantando el paso a modo estacionario y agravando los huecos ya descriptos arriba.
+    // 2 minutos le da margen a una parada breve sin sacrificar la detección de un layover
+    // real (que dura bastante más que eso).
+    stopDetectionDelay: 2,
   },
   persistence: {
     // H7 (hallazgo de revisión, medio): sin setear esto, `maxDaysToPersist` queda en su
@@ -95,6 +130,27 @@ export const gpsSpikeConfig: Config = {
     // nativa tras el kill, pero nada copia esos puntos al outbox de la app
     // (`quivo-outbox.db`) — la fuente de verdad de la evidencia (RF-67..73) se queda vacía.
     enableHeadless: true,
+    // Complementa los tres ajustes de `geolocation`/`activity` de arriba contra los huecos de
+    // 11/17/22/56 min con el vehículo detenido: `onHeartbeat` es el único evento que sigue
+    // llegando durante un layover largo, incluso dentro de la geocerca de 200 m del SDK que
+    // ninguno de esos tres ajustes puede tocar. 60 s es además el PISO en Android — "It is
+    // impossible to have a heartbeatInterval faster than this on Android" (doc del SDK) — y
+    // coincide con el default ya vigente hoy sin declararlo, así que este cambio no altera la
+    // tasa de heartbeats respecto de la configuración actual.
+    //
+    // OJO — entrega parcial (paso 6 del brief, sin el paso 5): esta clave queda declarada
+    // pero SIN `BackgroundGeolocation.onHeartbeat(...)` suscrito todavía — ese handler (el que
+    // llamaría `getCurrentPosition` en cada heartbeat para cerrar el hueco de verdad) es la
+    // siguiente entrega. Sin handler, el evento nativo se sigue emitiendo igual que hoy (el
+    // SDK ya lo dispara a este mismo ritmo por default) pero no tiene ningún listener JS del
+    // lado de la app que lo consuma — no escribe ubicación, no reduce huecos todavía, y por
+    // ser el valor por default no cambia el consumo de batería/CPU respecto de la versión
+    // actual en producción. Confirmado contra el `.d.ts` de
+    // `@transistorsoft/background-geolocation-types@5.2.2` (`AppConfig.heartbeatInterval`,
+    // default `60`); el binario nativo (`.aar`) no se pudo inspeccionar por no traer fuente,
+    // así que esta lectura de inocuidad se apoya en la doc oficial del SDK, no en el código
+    // nativo compilado.
+    heartbeatInterval: 60,
     notification: {
       title: 'QUIVO Conductor — recorrido activo',
       text: 'Registrando tu ubicación mientras dure la jornada',
