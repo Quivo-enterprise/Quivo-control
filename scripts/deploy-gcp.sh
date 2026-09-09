@@ -185,6 +185,30 @@ readonly AR_PREFIX="${REGION}-docker.pkg.dev/${PROJECT}/quivo"
 readonly API_IMAGE="${AR_PREFIX}/api:${TAG}"
 readonly WEB_IMAGE="${AR_PREFIX}/web:${TAG}"
 readonly MIGRATIONS_JOB="quivo-migraciones"
+# URL propia de quivo-api, para BETTER_AUTH_URL (paso 3). Better-Auth toma `baseURL` de esta
+# env var cuando `betterAuth({...})` no la pasa explícita (packages/db/src/auth.ts:148) y la
+# usa para firmar `iss`/`aud` en los access tokens que emite. Sin ella, `iss`/`aud` salen
+# vacíos y `apps/api/src/common/auth/jwt-auth.guard.ts:29` (que verifica con
+# `auth.api.verifyJWT`) rechaza todo con 401 — pasó de verdad en producción: login OK, panel
+# inusable porque cada llamada autenticada devolvía 401. Mitigado a mano una vez con
+# `gcloud run services update quivo-api --update-env-vars=BETTER_AUTH_URL=...`; este bloque
+# lo hace permanente para que el próximo deploy no lo vuelva a romper.
+#
+# Igual que WEB_URL_PROJECT_NUMBER del paso 5 (más abajo), Cloud Run expone cada servicio en
+# DOS URLs válidas: la basada en hash (`status.url`, sólo se conoce DESPUÉS del primer
+# deploy) y esta, basada en el número de proyecto, calculable de antemano con constantes que
+# ya existen (PROJECT_NUMBER, REGION). Se usa la de número de proyecto — no la de hash — a
+# propósito, para no repetir acá el problema de orden que fuerza a CORS_ORIGIN a un segundo
+# `gcloud run services update` posterior al deploy: BETTER_AUTH_URL es puramente
+# autoreferencial (Better-Auth firma Y verifica los tokens con la misma instancia, dentro del
+# mismo servicio; ningún cliente externo necesita que esta URL sea la que efectivamente usa
+# el browser, a diferencia de CORS_ORIGIN) y las dos formas de URL resuelven al mismo
+# servicio, así que cualquiera de las dos es funcionalmente correcta. Con esto,
+# BETTER_AUTH_URL queda disponible desde el PRIMER deploy de quivo-api (incluido el primero
+# de todos, cuando el servicio ni siquiera existe todavía y `status.url` no se puede leer),
+# en vez de depender de un segundo update que alguien podría olvidar correr o saltear con
+# `--solo api` en un entorno nuevo.
+readonly API_URL_PROJECT_NUMBER="https://quivo-api-${PROJECT_NUMBER}.${REGION}.run.app"
 
 REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)" \
   || fail "No se pudo resolver la raíz del repo con git rev-parse. ¿Estás dentro del repo?"
@@ -693,7 +717,12 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
   # coma, igual que el resto del script.
   CORS_ORIGIN_EXISTENTE="$(get_current_cors_origin)"
   fail_if_delimiter_collision "CORS_ORIGIN_EXISTENTE (leído de quivo-api antes del deploy)" "$CORS_ORIGIN_EXISTENTE"
-  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d"
+  # BETTER_AUTH_URL: ver el comentario grande arriba de API_URL_PROJECT_NUMBER (sección
+  # "variables de infra") para el porqué hace falta y por qué se usa la URL de
+  # número-de-proyecto en vez de esperar a `status.url`. Se incluye siempre, no sólo cuando
+  # ya existe una previa (a diferencia de CORS_ORIGIN_EXISTENTE arriba) porque su valor es
+  # una constante calculada, no algo que un run anterior pudo haber seteado distinto.
+  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d%%BETTER_AUTH_URL=${API_URL_PROJECT_NUMBER}"
   if [[ -n "$CORS_ORIGIN_EXISTENTE" ]]; then
     API_SET_ENV_VARS="${API_SET_ENV_VARS}%%CORS_ORIGIN=${CORS_ORIGIN_EXISTENTE}"
     info "CORS_ORIGIN existente detectado ('$CORS_ORIGIN_EXISTENTE') — se re-incluye en este deploy para no perderlo."

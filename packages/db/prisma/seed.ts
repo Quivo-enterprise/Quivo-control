@@ -24,16 +24,51 @@ import type { Prisma } from '@prisma/client';
 import { auth } from '../src/auth.js';
 import { withTenantContext } from '../src/tenant-context.js';
 
+const NODE_ENV = process.env.NODE_ENV;
+
+/**
+ * Guarda fail-closed para los tres secretos de este seed (password de los usuarios web +
+ * PIN de vehículo/conductor), mismo patrón que `packages/db/src/client.ts:41-66`
+ * (`RUNTIME_DATABASE_URL`): fuera de `development`, la env var es obligatoria y su ausencia
+ * aborta con un error explicativo — nunca un default silencioso.
+ *
+ * Por qué es más grave acá que en `client.ts`: correr este seed contra una base compartida
+ * o de producción no deja "datos de ejemplo" inertes. `seedUsuarios()` crea `admin_quivo`
+ * (rol sin `sindicatoId`, visibilidad sobre todos los sindicatos) con esta password, y
+ * `seedRotaciones()` deja una asignación con la fecha de HOY, `estado: 'vigente'`, sobre una
+ * rotación forzada a `'publicada'` — o sea que además queda una credencial móvil REAL y
+ * FUNCIONANDO. Los tres valores demo (password y ambos PIN) están publicados en este mismo
+ * repo (`CREDENCIALES.md`, `apps/api/README.md`, `.env.example`) contra una API que en
+ * producción está expuesta a internet (`--allow-unauthenticated`, ver `scripts/deploy-gcp.sh`).
+ * En `development` sí se permite caer al valor demo documentado, para no romper el flujo
+ * local (no hay tests de aislamiento corriendo ahí, así que no genera una señal falsa).
+ */
+function resolveSeedSecret(envVar: string, devDefault: string): string {
+  const valor = process.env[envVar];
+  if (valor) return valor;
+  if (NODE_ENV === 'development') return devDefault;
+  throw new Error(
+    `${envVar} no está seteada (NODE_ENV=${NODE_ENV ?? 'sin definir'}). Este seed crea usuarios ` +
+      "y credenciales móviles REALES y funcionando (seedRotaciones deja una asignación " +
+      "'vigente' con fecha de HOY sobre una rotación 'publicada'), y fuera de development no " +
+      'se permite caer en silencio al valor demo publicado en CREDENCIALES.md / ' +
+      'apps/api/README.md / .env.example — correr este seed contra una base compartida o de ' +
+      `producción con ese valor dejaría esa credencial expuesta desde internet. Seteá ${envVar} ` +
+      'explícitamente antes de correr el seed (o corré con NODE_ENV=development si es un ' +
+      'entorno local donde el valor demo es aceptable).',
+  );
+}
+
 /**
  * Usuarios demo para probar login/refresh reales (QUI-219) sin depender de un backoffice
- * de altas todavía inexistente. Password fija documentada en apps/api/README.md — mismo
- * nivel de exposición que el resto de datos demo del repo (ver también
- * apps/web/src/lib/demo-data.ts). Se crean vía `auth.api.signUpEmail` (no insertando filas
- * a mano) para que Better-Auth siga siendo quien hashea la contraseña.
+ * de altas todavía inexistente. Password documentada en apps/api/README.md — mismo nivel de
+ * exposición que el resto de datos demo del repo (ver también apps/web/src/lib/demo-data.ts).
+ * Se crean vía `auth.api.signUpEmail` (no insertando filas a mano) para que Better-Auth siga
+ * siendo quien hashea la contraseña.
  */
-const SEED_PASSWORD = 'Quivo123!';
-const SEED_PIN_VEHICULO = process.env.MOBILE_SEED_VEHICLE_PIN ?? '246810';
-const SEED_PIN_CONDUCTOR = process.env.MOBILE_SEED_DRIVER_PIN ?? '135790';
+const SEED_PASSWORD = resolveSeedSecret('SEED_ADMIN_PASSWORD', 'Quivo123!');
+const SEED_PIN_VEHICULO = resolveSeedSecret('MOBILE_SEED_VEHICLE_PIN', '246810');
+const SEED_PIN_CONDUCTOR = resolveSeedSecret('MOBILE_SEED_DRIVER_PIN', '135790');
 const HORARIO_MOVIL_DEMO = 'tarde' as const;
 const HORA_SALIDA_MOVIL_DEMO = '15:00';
 const HORA_PRESENTACION_MOVIL_DEMO = '14:45';
