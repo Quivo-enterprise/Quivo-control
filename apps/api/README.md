@@ -117,6 +117,12 @@ pnpm --filter @quivo/db prisma:seed          # 2 usuarios demo, ver abajo
 | `admin@quivo.local`     | `Quivo123!` | `admin_quivo`     | —                                      |
 | `admin@sindicato.local` | `Quivo123!` | `admin_sindicato` | `11111111-1111-4111-8111-111111111111` |
 
+`Quivo123!` es el default de `SEED_ADMIN_PASSWORD` sólo en `NODE_ENV=development`. Fuera de
+development (staging, test, producción), `packages/db/prisma/seed.ts` exige la variable de
+entorno explícita y aborta si falta — no cae en silencio a este valor publicado. Ver también
+`MOBILE_SEED_VEHICLE_PIN`/`MOBILE_SEED_DRIVER_PIN` (mismo mecanismo, para los PIN de la app
+móvil — documentados en `CREDENCIALES.md`) y `.env.example`.
+
 El seed es idempotente (si el usuario ya existe, lo omite) — se puede correr de nuevo sin
 problema. Si cambia `packages/db/src/auth.ts` (nuevos `additionalFields`, un plugin
 nuevo), hay que regenerar el schema con

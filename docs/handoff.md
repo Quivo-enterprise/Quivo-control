@@ -6,6 +6,179 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Producción usable: panel, credenciales y GPS más fino (2026-09-09)
+
+El primer día en que la app, la API, el panel y la base funcionaron juntos contra producción,
+con conductores reales saliendo a la calle. Plan: [`plan-siembra-produccion.md`](plan-siembra-produccion.md).
+
+### El panel de producción nunca había funcionado
+
+Al entrar por primera vez, el login devolvía un token válido y **todas** las llamadas siguientes
+daban 401. No lo rompió nadie: **`BETTER_AUTH_URL` jamás se seteó en el deploy**. Está en
+`.env.example:44` y en los dos jobs de CI, pero `scripts/deploy-gcp.sh` no la pasaba. Better-auth
+toma de ahí su `baseURL` (`packages/db/src/auth.ts:148` no la declara), y sin ella firmaba los
+access tokens con `iss` y `aud` **vacíos**; el `JwtAuthGuard`, que verifica con
+`auth.api.verifyJWT` (`jwt-auth.guard.ts:29`), los rechazaba. Un servicio emitiendo tokens que él
+mismo no acepta.
+
+Nadie lo detectó porque `/v1/health` solo mira base de datos y Redis, y hasta ese día nadie había
+entrado al panel de producción. Arreglado en el servicio y en `deploy-gcp.sh`, con la URL basada
+en número de proyecto en vez de `status.url`: `BETTER_AUTH_URL` es autoreferencial —la misma
+instancia firma y verifica— así que no necesita el segundo `update` posterior al deploy que sí
+necesita `CORS_ORIGIN`.
+
+### La base de producción estaba vacía y el seed no servía
+
+`user=0 sindicatos=0 vehiculos=0 conductores=0`: solo las 33 migraciones y las 9 ciudades que
+inserta `20260819100000_mobility_city_scope`. Correr `packages/db/prisma/seed.ts` contra esa base
+era inaceptable, y no solo por `Quivo123!`: **`seedRotaciones` (`seed.ts:862-916`) crea una
+asignación con la fecha de hoy, `estado='vigente'`, sobre una rotación forzada a `'publicada'`**,
+para un vehículo cuyo conductor tiene el PIN `135790` hardcodeado. O sea que ese seed no deja
+"datos de ejemplo": deja **una credencial móvil real y funcionando con el PIN publicado en el
+repo**, contra una API expuesta a internet. Los tres secretos pasan ahora por variable de entorno
+con guarda fail-closed fuera de `development`, espejando `client.ts:41-66`.
+
+La siembra se hizo entonces **por la API**, con `scripts/sembrar-piloto-produccion.ts`. Dos
+supuestos que resultaron falsos y conviene no repetir:
+
+- **No hace falta meter `scripts/` en la imagen** ni reconstruirla. La geometría real de las rutas
+  entra por `POST /v1/lineas/:id/rutas` como GeoJSON (`bodyLimit` de 3 MB; la Z12 son 1255
+  vértices ≈ 45 KB), y encima ese camino valida con `ST_IsValid`, cosa que los scripts no hacen.
+  Lo que vive en `cargar-circuito-z12.ts`/`cargar-linea-120.ts` es la *transformación* de los
+  archivos de `scripts/data/`, que corre en la máquina de quien siembra.
+- **Los PIN se pueden fijar, no solo generar**: `PUT /v1/mobile/credenciales/conductores/:id`.
+
+Lo único que sí necesitó el Cloud Run Job fue **crear el primer usuario admin**: el signup público
+no está expuesto (`auth.controller.ts` solo registra `login`, `refresh`, `logout` y las dos rutas
+de admin), así que era huevo y gallina. Una ejecución de segundos con `auth.api.signUpEmail`,
+contraseña aleatoria en Secret Manager.
+
+### Seis conductores, seis vehículos
+
+Primero se sembraron 2 vehículos con 3 conductores cada uno (turnos mañana/tarde/noche, que es el
+**máximo estructural**: `TurnoSchema` tiene tres valores y `Asignacion` tiene
+`@@unique([vehiculoId, fecha, horario])`). Eso resultó insuficiente en la práctica por una razón
+que no estaba a la vista: **un vehículo admite una sola sesión operativa viva**, y cada login
+cierra la anterior de esa placa (`auth-movil.service.ts:954-962`). Tres personas compartiendo
+placa se sacan entre ellas y solo la última reporta GPS. Para seis en simultáneo hacen falta seis
+placas.
+
+La migración a 1:1 chocó con dos cosas que vale registrar:
+
+1. **`@@unique([vehiculoId, fecha, horario])` no incluye `rotacionId`**, así que anular la
+   rotación vieja no libera los cupos: las filas siguen existiendo. Crear una rotación nueva con
+   los mismos vehículos colisiona. La salida fue **reusar la rotación en el lugar**
+   (`publicada → anular → borrador → publicar` es un ciclo válido: ninguno de los dos chequea
+   historial, solo el estado actual).
+2. **`eliminarAsignacion` hace un `delete()` duro** (`rotaciones.service.ts:271`) y
+   `SesionOperativa.asignacion` es `onDelete: Restrict`. Cualquier asignación por la que alguien
+   ya se logueó es **imborrable**, y la API devuelve **500**, no un 409 legible. Eso cortó la
+   migración a mitad y dejó la rotación despublicada —con nadie pudiendo loguearse— hasta
+   republicarla a mano.
+
+Aprendizaje operativo: **publicar la rotación tiene que ser incondicional y anterior a cualquier
+limpieza opcional**, porque la ventana despublicada es una caída de servicio.
+
+Estado final: 1 sindicato, 6 socios, 2 líneas con geometría real, 38 puntos de control, 6
+vehículos activos, 6 conductores con PIN, 126 asignaciones (una por vehículo por día, 21 días) y
+la rotación publicada. Los seis autentican, verificado uno por uno contra la API.
+
+### GPS: el muestreo era la mitad de lo que decía el archivo
+
+Dos hallazgos que invalidan lo que el código documentaba:
+
+- **`locationUpdateInterval` se ignora cuando `distanceFilter > 0`.** El comentario decía "punto
+  cada 10 s o 50 m"; era solo cada 50 m, nunca por tiempo.
+- **El `distanceFilter` es elástico por default**: el SDK lo escala con la velocidad. Por eso el
+  piloto midió **81-103 m** entre puntos con 50 m configurados, y a 50 km/h la traza cortaba en
+  diagonal sobre las manzanas.
+
+Ahora `distanceFilter: 15` con `disableElasticity: true` — espaciado constante a cualquier
+velocidad, ~1,8 s a 30 km/h. Contra los huecos medidos de 11/17/22/**56 minutos** con el vehículo
+detenido entran `allowIdenticalLocations` (Android descartaba los fixes repetidos de un auto
+parado, que es justo la evidencia de un layover), `stopTimeout` de 5 a 10 y `stopDetectionDelay: 2`.
+El cuarto factor —la geocerca de 200 m del SDK— necesita el handler de `onHeartbeat`, pendiente.
+
+En el panel, el marcador del vehículo **se anima** entre puntos en vez de saltar: era una capa
+`circle` cuya fuente se reemplazaba con `setData`, que no interpola. La animación reparte el
+intervalo de poll vigente entre los puntos del lote, arranca desde donde está el marcador si llega
+un punto con animación en curso, y salta al último por encima de 40 pendientes. Los límites de
+puntos por respuesta subieron de 5.000 a 50.000 por el volumen ×5 del muestreo nuevo, con
+simplificación Douglas-Peucker de la polilínea por encima de 1.500 puntos.
+
+### Lo que sigue sin estar hecho, y es lo más importante
+
+**La latencia de captura a servidor es de mediana 153-166 s, p95 684-814 s, máximo 4275 s.** Aunque
+el GPS muestreara cada metro, el panel seguiría mostrando una posición de hace dos minutos y medio.
+Eso domina la experiencia mucho más que el espaciado entre puntos.
+
+La causa está diagnosticada y el diseño escrito, pero **sin implementar**:
+
+- La tarea headless (`headless-task.ts:445-479`) solo **escribe** al outbox; nunca sincroniza.
+- El motor de envío vive en un hook de React, y **React Native congela todos los timers apenas la
+  Activity pausa** (`JavaTimerManager.onHostPause`), antes incluso de Doze. Eso mata el latido de
+  15 s, el re-encadenado, el backoff y —lo más serio— el `AbortController` de `sync-api.ts:36-37`:
+  RN Android configura OkHttp sin timeouts, así que **un POST colgado en background no aborta nunca**.
+- Corrección importante sobre el diagnóstico obvio: **la tarea headless NO corre con la app viva**
+  (RN la rechaza si el contexto está `RESUMED`). El caso dominante —app en background, pantalla
+  apagada, chofer que no la mata— se atiende por `onLocation`, que sigue vivo. Colgar el envío solo
+  del headless no habría mejorado nada para ese caso.
+- Headless y foreground **comparten el mismo contexto JS** (`HeadlessTaskManager.java:184-206`),
+  así que un mutex en memoria alcanza para excluirlos; no hace falta un lock en SQLite.
+
+El diseño propone colgar el drenado del evento de ubicación en ambos caminos, con mutex + lease
+(porque el timeout HTTP no dispara en background), piso de 10 s para agrupar, y backoff calculado
+con `Date.now()` en vez de timers. Proyección: **p50 de ~6 s**.
+
+**Bug ya en producción que sale del mismo análisis:** `revertirAPendiente` (`sync-outbox.ts:126`)
+revierte por id sin mirar el estado, así que si dos envíos se pisan puede devolver a `pendiente`
+eventos que el servidor **ya acusó** — reenvío perpetuo, y `acusado` deja de significar
+"confirmado por el servidor", que es la base del contrato QUI-238.
+
+**Rate limit por IP:** el endpoint de sync hereda el límite global de 100/60 s por IP, y con
+`trustProxy` la clave es la IP real. Bajo CGNAT, tres o cuatro choferes del mismo operador se
+saturan entre ellos. Hay un guard por `deviceId` implementado (sin mergear) — y ojo con la trampa
+que destapó: el `ThrottlerGuard` global **sigue corriendo** en la ruta aunque se le ponga uno
+propio, así que ambos aplican en paralelo salvo que el nuevo use un nombre de throttler distinto
+del `'default'`.
+
+### No existe alerta de desvío de ruta
+
+Preguntado explícitamente y verificado: **no hay nada**. `estadoFrescura`
+(`reportando`/`detenido`/`perdido`/`sin_datos`) dice si llegan datos, no si el vehículo va por
+donde debe — alguien puede irse a otro barrio y figurar en verde. Lo más cercano son los
+incumplimientos de puntos de control, que detectan que *no pasó por donde debía*, no que *se fue
+por otro lado*, y de forma discreta en vez de continua. La traza sobre el mapa muestra el desvío,
+pero requiere que alguien esté mirando.
+
+La pieza de cálculo existe (`proximidad-ruta.ts`, tolerancia de 100 m) pero solo se usa al validar
+que un punto de control esté sobre la ruta; no está conectada al recorrido en vivo. Calibrar
+umbral y duración mínima necesita datos reales, para no disparar con desvíos legítimos por obras o
+tráfico.
+
+### Avisos al pasar por un punto de control
+
+Sí existen, los tres activados por default: **voz** ("Punto de control alcanzado. Distancia: X
+metros", con `volume: 1.0` forzado), **sonido** (chime sintético que hace ducking de la música del
+trufi y suena incluso en modo silencio) y aviso en pantalla. Se apagan por separado desde Ajustes.
+**Limitación:** viven en un componente de React (`gps-provider.tsx`), así que con la app cerrada el
+punto se registra pero no suena nada.
+
+### Pendientes que salen de esta jornada
+
+- **Implementar el drenado en background** — es lo que más impacta y está diseñado, sin escribir.
+- **Desplegar el rate limit por dispositivo ANTES** de repartir un APK con drenado en background.
+- **Alerta de desvío de ruta**: no existe.
+- **`eliminarAsignacion` devuelve 500** en vez de 409 cuando hay una `SesionOperativa` que
+  referencia la asignación.
+- Las credenciales `900xTST` son **reales y viven en internet**; el lockout es por vehículo, no por
+  IP. Darlas de baja cuando termine la grabación (rotación a `borrador` corta todo de una;
+  vehículos y conductores a `inactivo`, que además libera las placas por el índice único parcial).
+- Quedan 73 asignaciones viejas de `tarde`/`noche` sobre `9001TST`/`9004TST`: esas placas aceptan
+  también los PIN de otros conductores. Cosmético mientras cada uno use la suya.
+- Los 4 puntos de control `A2`, `A3`, `C2`, `C3` de la línea 120 **no se cargaron**: pertenecen a
+  ramales que la ruta troncal no cubre y quedaban a más de 1 km, fuera de la tolerancia de 100 m.
+
 ## El APK no abría: dos copias de React en el bundle (2026-09-08)
 
 El build 8 (`versionCode` 8, desde `ef298d5`) se instalaba y **crasheaba al abrir** con

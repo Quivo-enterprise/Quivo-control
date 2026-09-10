@@ -48,6 +48,13 @@ jobs:
       JWT_ACCESS_TTL: 15m
       JWT_REFRESH_TTL: 30d
       BETTER_AUTH_URL: http://localhost:3001
+      # Fuera de development, packages/db/prisma/seed.ts exige estas tres explícitas y aborta
+      # si faltan (ver resolveSeedSecret() ahí) — CI corre NODE_ENV=test, así que sin esto el
+      # paso "Seed database" fallaría. Mismos valores que el default de development: varios
+      # *.test.ts los hardcodean para loguear contra el seed (ver auth.service.test.ts).
+      SEED_ADMIN_PASSWORD: Quivo123!
+      MOBILE_SEED_VEHICLE_PIN: "246810"
+      MOBILE_SEED_DRIVER_PIN: "135790"
 
     steps:
       - name: Checkout
@@ -159,6 +166,14 @@ jobs:
       JWT_ACCESS_TTL: 15m
       JWT_REFRESH_TTL: 30d
       BETTER_AUTH_URL: http://localhost:3001
+      # Fuera de development, packages/db/prisma/seed.ts exige estas tres explícitas y aborta
+      # si faltan (ver resolveSeedSecret() ahí) — CI corre NODE_ENV=test, así que sin esto el
+      # paso "Seed acceptance data" fallaría. Mismos valores que el default de development:
+      # tests/acceptance/*.spec.ts y varios *.test.ts los hardcodean para loguear contra el
+      # seed (ver admin-panel.spec.ts, auth.service.test.ts).
+      SEED_ADMIN_PASSWORD: Quivo123!
+      MOBILE_SEED_VEHICLE_PIN: "246810"
+      MOBILE_SEED_DRIVER_PIN: "135790"
 
     steps:
       - name: Checkout

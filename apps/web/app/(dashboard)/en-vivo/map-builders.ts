@@ -2,6 +2,7 @@ import type { MapPoint, MapRoute, MapZone } from '@quivo/design-system';
 import type { ContextoEnVivo, CumplimientoRecorrido, SesionEnVivoResumen } from '@quivo/shared';
 import { ApiError } from '../../../src/lib/api/client';
 import { PRESENTACION_FRESCURA, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
+import { simplificarTrazaParaDibujo } from '../../../src/lib/en-vivo/simplificar-traza';
 
 /** Color fijo de la traza GPS real, igual que en el detalle histórico
  * (`/reportes/recorridos/[id]`) para que las dos pantallas se lean igual. */
@@ -30,11 +31,14 @@ export function construirRutas(
     },
   ];
   if (traza && traza.puntos.length > 1) {
+    // `simplificarTrazaParaDibujo`: por debajo de `UMBRAL_PUNTOS_SIMPLIFICACION` es un no-op
+    // (misma referencia) — ver el comentario de cabecera de `simplificar-traza.ts` para por
+    // qué hace falta a partir de ahí (el redibujo completo de la polilínea en cada poll).
     rutas.push({
       id: 'traza-gps',
       label: 'Recorrido real',
       color: COLOR_TRAZA,
-      points: traza.puntos.map((p) => ({ lat: p.lat, lng: p.lng })),
+      points: simplificarTrazaParaDibujo(traza.puntos).map((p) => ({ lat: p.lat, lng: p.lng })),
     });
   }
   return rutas;
@@ -89,6 +93,12 @@ export function construirMarcadores(
   const ultimo = traza?.puntos.at(-1);
   if (ultimo) {
     marcadores.push({
+      // Id ESTABLE a propósito (no el id sintético `${lat}:${lng}:${index}` que arma
+      // `resolvePointId` sin esto): la posición de este marker cambia en cada poll, así que
+      // un id derivado de lat/lng cambiaría con ella — y `RouteMap` necesita un id fijo para
+      // saber, entre un render y el siguiente, que sigue siendo "el mismo" marker al que
+      // aplicarle la animación (`animatedVehicle.markerId`, ver `route-map-impl.tsx`).
+      id: ID_MARCADOR_VEHICULO,
       lat: ultimo.lat,
       lng: ultimo.lng,
       label: `${contexto.vehiculo.placa} — última posición`,
@@ -99,6 +109,11 @@ export function construirMarcadores(
   }
   return marcadores;
 }
+
+/** Id estable del marker de "última posición" del vehículo — ver el comentario en
+ * `construirMarcadores`. Lo consume `page.tsx` para armar el `animatedVehicle` que anima ese
+ * marker en vez de dejarlo saltar de golpe en cada poll. */
+export const ID_MARCADOR_VEHICULO = 'vehiculo-en-vivo';
 
 export function construirZonas(contexto: ContextoEnVivo): MapZone[] {
   return contexto.puntosControl.map((pc, index) => ({

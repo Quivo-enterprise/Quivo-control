@@ -35,6 +35,13 @@ import { cx } from '../utils.js';
 import type { MapPoint, MapRoute, MapZone } from '../types.js';
 import { Loader } from './primitives.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
+import {
+  avanzarAnimacion,
+  encolarNuevosPuntos,
+  estadoInicialAnimacion,
+  type EstadoAnimacionVehiculo,
+  type PuntoAnimable,
+} from './vehicle-marker-animation.js';
 
 type MapLibreModule = typeof import('maplibre-gl');
 
@@ -160,6 +167,35 @@ export interface RouteMapProps {
   defaultCenter?: [number, number];
   /** Nivel de zoom inicial por defecto. */
   defaultZoom?: number;
+  /**
+   * Marcador "vivo" cuya posición se anima con una transición suave entre actualizaciones
+   * (`requestAnimationFrame`), en vez de saltar de golpe como el resto de `markers`. Pensado
+   * para el vehículo de `/en-vivo`. Ver el comentario de cabecera de
+   * `vehicle-marker-animation.ts` para la técnica completa y por qué esa es la duración de
+   * la animación.
+   *
+   * - `markerId`: debe coincidir con el `id` (o el id sintético de `resolvePointId`) de un
+   *   elemento de `markers` — RouteMap solo le pisa la posición geográfica mientras interpola;
+   *   el resto de sus propiedades (color, label, pinType…) las sigue tomando de `markers`.
+   * - `resetKey`: identifica al vehículo/sesión seguida (ej. el `sesionId`). Al cambiar,
+   *   reinicia la animación por completo (salto directo, sin arrastrar el cursor de la sesión
+   *   anterior) — evita animar una transición sin sentido entre dos vehículos distintos.
+   * - `points`: el historial COMPLETO y ordenado ascendente por `ts` del recorrido (ej.
+   *   `traza.puntos` tal cual lo deja `fusionarTraza`) — no solo los nuevos. RouteMap detecta
+   *   por sí solo, comparando contra el último `ts` ya incorporado, cuáles son los puntos
+   *   nuevos a animar.
+   * - `intervalMs`: cadencia actual de actualización (ej. `intervaloPoll(datos)`) — el
+   *   presupuesto de tiempo que se reparte entre los puntos nuevos del lote.
+   *
+   * `null`/`undefined` desactiva la animación: el marcador correspondiente (si existe en
+   * `markers`) se dibuja en su posición tal cual, sin interpolar.
+   */
+  animatedVehicle?: {
+    markerId: string;
+    resetKey: string;
+    points: PuntoAnimable[];
+    intervalMs: number;
+  } | null;
 }
 
 type MapDataSnapshot = {
@@ -295,6 +331,26 @@ function zoneFeatures(zones: MapZone[], isDark: boolean): MapFeatureCollection {
 function setSourceData(map: MapLibreMap, sourceId: string, data: MapFeatureCollection) {
   const source = map.getSource(sourceId) as GeoJSONSource | undefined;
   source?.setData(data as never);
+}
+
+/**
+ * Si hay una animación de vehículo activa (`anim.current` no `null`), pisa la posición del
+ * marker que matchea `markerId` con la posición VISUAL actual de la animación — el resto de
+ * sus propiedades (color, label, pinType…) se dejan intactas. Sin animación (`anim.current`
+ * es `null`, o no hay ningún `markerId` que buscar) devuelve `markers` tal cual: éste es el
+ * ÚNICO lugar donde se decide qué posición dibujar para el marker animado, para que los tres
+ * sitios que escriben la fuente `quivo-markers` (la carga inicial, el cambio de tema y el
+ * loop de `requestAnimationFrame`) nunca se pisen entre sí con posiciones distintas — ver el
+ * comentario de cabecera de `vehicle-marker-animation.ts`.
+ */
+function markersWithVehicleOverride(
+  markers: MapPoint[],
+  anim: EstadoAnimacionVehiculo,
+  markerId: string | undefined,
+): MapPoint[] {
+  if (!markerId || !anim.current) return markers;
+  const { lat, lng } = anim.current;
+  return markers.map((marker, index) => (resolvePointId(marker, index) === markerId ? { ...marker, lat, lng } : marker));
 }
 
 function setPaintIfPresent(map: MapLibreMap, layerId: string, property: string, value: unknown) {
@@ -767,6 +823,7 @@ export function RouteMap({
   height = '100%',
   defaultCenter,
   defaultZoom,
+  animatedVehicle,
 }: RouteMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -784,9 +841,23 @@ export function RouteMap({
   interactiveRef.current = interactive;
   const onUserPanRef = useRef(onUserPan);
   onUserPanRef.current = onUserPan;
+  const animatedVehicleRef = useRef(animatedVehicle);
+  animatedVehicleRef.current = animatedVehicle;
 
   const dragIdRef = useRef<string | null>(null);
   const fitOnceStateRef = useRef<{ key: string | number | undefined; fired: boolean }>({ key: fitKey, fired: false });
+
+  // Estado (mutable, fuera de React) de la animación del marcador de vehículo — ver
+  // `vehicle-marker-animation.ts`. `vehicleAnimRef` es la posición visual vigente,
+  // `vehicleResetKeyRef` es el último `animatedVehicle.resetKey` visto (para saber cuándo
+  // reiniciar de cero, ej. cambio de sesión) y `vehicleRafRef` el frame de
+  // `requestAnimationFrame` en vuelo, si hay alguno — `null` significa "no hay loop
+  // corriendo", que es la condición de reposo (nada consumiendo CPU) que pide el criterio de
+  // "sin sesión activa, sin animación".
+  const vehicleAnimRef = useRef<EstadoAnimacionVehiculo>(estadoInicialAnimacion());
+  const vehicleResetKeyRef = useRef<string | null>(null);
+  const vehicleRafRef = useRef<number | null>(null);
+  const reducedMotionRef = useRef(false);
 
   // Creación del mapa — una sola vez por montaje real. A diferencia de `<MapContainer>` de
   // react-leaflet, MapLibre no deja un id "sucio" en el contenedor al desmontar bajo Strict
@@ -806,6 +877,10 @@ export function RouteMap({
       isDarkRef.current =
         typeof window !== 'undefined' && window.matchMedia
           ? window.matchMedia('(prefers-color-scheme: dark)').matches
+          : false;
+      reducedMotionRef.current =
+        typeof window !== 'undefined' && window.matchMedia
+          ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
           : false;
 
       const initialCenter = defaultCenter ?? DEFAULT_CENTER;
@@ -832,7 +907,15 @@ export function RouteMap({
         const current = dataRef.current;
         setSourceData(map, 'quivo-routes', routeFeatures(current.routes, isDarkRef.current));
         setSourceData(map, 'quivo-stops', pointFeatures(current.stops, isDarkRef.current, 'stop'));
-        setSourceData(map, 'quivo-markers', pointFeatures(current.markers, isDarkRef.current, 'marker'));
+        setSourceData(
+          map,
+          'quivo-markers',
+          pointFeatures(
+            markersWithVehicleOverride(current.markers, vehicleAnimRef.current, animatedVehicleRef.current?.markerId),
+            isDarkRef.current,
+            'marker',
+          ),
+        );
         setSourceData(map, 'quivo-zones', zoneFeatures(current.zones, isDarkRef.current));
         mapReadyRef.current = true;
         setMapReady(true);
@@ -928,6 +1011,12 @@ export function RouteMap({
       mapRef.current?.remove();
       mapRef.current = null;
       maplibreRef.current = null;
+      // El mapa se destruye — cortar cualquier loop de animación del marcador de vehículo
+      // que siguiera en vuelo, si no quedaría pidiendo frames sobre un mapa ya desmontado.
+      if (vehicleRafRef.current !== null) {
+        cancelAnimationFrame(vehicleRafRef.current);
+        vehicleRafRef.current = null;
+      }
     };
     // El mapa se crea una sola vez; los cambios de viewport/datos se aplican en los efectos
     // de abajo, todos escritos para leer el estado más reciente vía refs.
@@ -943,6 +1032,21 @@ export function RouteMap({
     return () => observer.disconnect();
   }, []);
 
+  // `prefers-reduced-motion`: si el usuario lo tiene activo, `encolarNuevosPuntos` salta
+  // siempre directo al último punto (ver `vehicle-marker-animation.ts`) — acá solo se
+  // mantiene el ref al día, tanto en la carga inicial como si el usuario lo cambia en vivo
+  // desde el sistema operativo mientras la pestaña sigue abierta.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return undefined;
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    reducedMotionRef.current = media.matches;
+    const onChange = () => {
+      reducedMotionRef.current = media.matches;
+    };
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
+
   // Sigue el tema claro/oscuro del sistema operativo (mismo criterio que `tokens.css`/
   // `BrandLogo`) y vuelve a repintar el estilo base cuando cambia.
   useEffect(() => {
@@ -956,7 +1060,15 @@ export function RouteMap({
         const current = dataRef.current;
         setSourceData(map, 'quivo-routes', routeFeatures(current.routes, media.matches));
         setSourceData(map, 'quivo-stops', pointFeatures(current.stops, media.matches, 'stop'));
-        setSourceData(map, 'quivo-markers', pointFeatures(current.markers, media.matches, 'marker'));
+        setSourceData(
+          map,
+          'quivo-markers',
+          pointFeatures(
+            markersWithVehicleOverride(current.markers, vehicleAnimRef.current, animatedVehicleRef.current?.markerId),
+            media.matches,
+            'marker',
+          ),
+        );
         setSourceData(map, 'quivo-zones', zoneFeatures(current.zones, media.matches));
       }
     };
@@ -970,9 +1082,90 @@ export function RouteMap({
     if (!map || !mapReadyRef.current) return;
     setSourceData(map, 'quivo-routes', routeFeatures(routes, isDarkRef.current));
     setSourceData(map, 'quivo-stops', pointFeatures(stops, isDarkRef.current, 'stop'));
-    setSourceData(map, 'quivo-markers', pointFeatures(markers, isDarkRef.current, 'marker'));
+    setSourceData(
+      map,
+      'quivo-markers',
+      pointFeatures(
+        markersWithVehicleOverride(markers, vehicleAnimRef.current, animatedVehicle?.markerId),
+        isDarkRef.current,
+        'marker',
+      ),
+    );
     setSourceData(map, 'quivo-zones', zoneFeatures(zones, isDarkRef.current));
-  }, [routes, stops, markers, zones, mapReady]);
+  }, [routes, stops, markers, zones, mapReady, animatedVehicle?.markerId]);
+
+  // Animación del marcador de vehículo (ver `vehicle-marker-animation.ts` para la técnica y
+  // la duración). Se dispara cuando llega un lote nuevo de posiciones (`animatedVehicle.points`
+  // cambia de referencia — una vez por poll, no por frame) o cuando cambia el vehículo seguido
+  // (`resetKey`). El propio loop de `requestAnimationFrame` es lo único que corre a ~60 fps, y
+  // solo mientras hay una animación en curso — se autodetiene apenas la cola se vacía (ver
+  // `enMovimiento` en `avanzarAnimacion`), así que una sesión inactiva o sin vehículo seguido
+  // no deja nada consumiendo CPU en segundo plano.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current) return;
+
+    if (!animatedVehicle || animatedVehicle.points.length === 0) {
+      vehicleAnimRef.current = estadoInicialAnimacion();
+      vehicleResetKeyRef.current = null;
+      if (vehicleRafRef.current !== null) {
+        cancelAnimationFrame(vehicleRafRef.current);
+        vehicleRafRef.current = null;
+      }
+      return;
+    }
+
+    if (vehicleResetKeyRef.current !== animatedVehicle.resetKey) {
+      // Cambió el vehículo/sesión seguida (ej. el usuario eligió otro vehículo en el
+      // selector) — arranca de cero: salto directo, sin animar una transición sin sentido
+      // entre dos recorridos no relacionados.
+      vehicleResetKeyRef.current = animatedVehicle.resetKey;
+      vehicleAnimRef.current = estadoInicialAnimacion();
+    }
+
+    vehicleAnimRef.current = encolarNuevosPuntos(
+      vehicleAnimRef.current,
+      animatedVehicle.points,
+      animatedVehicle.intervalMs,
+      { reducirMovimiento: reducedMotionRef.current },
+    );
+    // Refleja el salto (o el arranque de una cola nueva, que todavía no mueve la posición
+    // visual) de inmediato, sin esperar al próximo frame.
+    setSourceData(
+      map,
+      'quivo-markers',
+      pointFeatures(
+        markersWithVehicleOverride(dataRef.current.markers, vehicleAnimRef.current, animatedVehicle.markerId),
+        isDarkRef.current,
+        'marker',
+      ),
+    );
+
+    const hayAnimacionPendiente = vehicleAnimRef.current.segment !== null || vehicleAnimRef.current.queue.length > 0;
+    if (vehicleRafRef.current === null && hayAnimacionPendiente) {
+      const markerId = animatedVehicle.markerId;
+      const tick = (timestamp: number) => {
+        const currentMap = mapRef.current;
+        if (!currentMap) {
+          vehicleRafRef.current = null;
+          return;
+        }
+        const resultado = avanzarAnimacion(vehicleAnimRef.current, timestamp);
+        vehicleAnimRef.current = resultado.estado;
+        setSourceData(
+          currentMap,
+          'quivo-markers',
+          pointFeatures(
+            markersWithVehicleOverride(dataRef.current.markers, vehicleAnimRef.current, markerId),
+            isDarkRef.current,
+            'marker',
+          ),
+        );
+        vehicleRafRef.current = resultado.enMovimiento ? requestAnimationFrame(tick) : null;
+      };
+      vehicleRafRef.current = requestAnimationFrame(tick);
+    }
+  }, [animatedVehicle?.resetKey, animatedVehicle?.points, animatedVehicle?.intervalMs, animatedVehicle?.markerId, mapReady]);
 
   const boundsSignature = [
     ...routes.flatMap((route) => route.points),

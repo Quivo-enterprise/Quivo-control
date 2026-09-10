@@ -2,11 +2,13 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
 import {
   ContextoEnVivoSchema,
+  PosicionEnVivoSchema,
   SesionEnVivoResumenSchema,
   TrazaEnVivoSchema,
   type ContextoEnVivo,
   type EstadoFrescura,
   type FrescuraEnVivo,
+  type PosicionEnVivo,
   type SesionEnVivoResumen,
   type TrazaEnVivo,
   type TrazaEnVivoQuery,
@@ -27,6 +29,33 @@ interface SesionEnVivoRow {
   vehiculoPlaca: string;
   conductorNombre: string;
   lineaNombre: string;
+  ultimoFixTs: Date | null;
+  ultimoIngresoTs: Date | null;
+  totalPuntos: number | null;
+}
+
+/**
+ * ENTREGA 10 — fila de `GET /reportes/en-vivo/posiciones`. A diferencia de
+ * `SesionEnVivoRow` (que agrega con `max()`), acá el LATERAL devuelve las columnas del
+ * **fix más reciente** (`lat`/`lng`/`accuracy`/`speed` de esa fila puntual), no un
+ * agregado — por eso `ultimoFixTs`/`ultimoIngresoTs`/`totalPuntos` viajan junto a la
+ * posición en la misma fila en vez de en una interfaz de agregados separada.
+ */
+interface PosicionEnVivoRow {
+  id: string;
+  inicio: Date;
+  fin: Date | null;
+  estado: string;
+  deviceId: string;
+  vehiculoPlaca: string;
+  conductorNombre: string;
+  lineaId: string;
+  lineaNombre: string;
+  rutaSentido: string;
+  lat: number | null;
+  lng: number | null;
+  accuracy: number | null;
+  speed: number | null;
   ultimoFixTs: Date | null;
   ultimoIngresoTs: Date | null;
   totalPuntos: number | null;
@@ -96,6 +125,31 @@ export const UMBRAL_FIX_EN_MOVIMIENTO_MS = 15 * MINUTO_MS;
 const PISO_ANTES_DEL_INICIO_MS = 60_000;
 const TECHO_DESPUES_DEL_FIN_MS = 2 * 60 * MINUTO_MS;
 const TECHO_MAXIMO_DESDE_INICIO_MS = 36 * 60 * MINUTO_MS;
+
+/**
+ * ENTREGA 10 — ventana y tope de `obtenerPosiciones`. `listarHoy` filtra por
+ * `so.inicio` dentro de la jornada boliviana exacta (`trazaDesde`/`trazaHasta`) con
+ * `LIMIT 100`; con sesiones colgadas de días previos (`fin IS NULL` para siempre, la
+ * app no cierra sesión al "Finalizar recorrido") ese límite puede esconder a las vivas
+ * detrás de zombies. Acá el filtro de SESIONES (`so.inicio`) es una ventana **rodante**
+ * de 24 h (no la jornada calendario) con un tope más alto: cubre un turno completo
+ * aunque cruce medianoche boliviana, y 500 sesiones es más margen del que cualquier
+ * sindicato real tiene hoy en simultáneo.
+ *
+ * CORRECCIÓN (code-review, hallazgo detectado en producción ~00:40 Bolivia): esta
+ * garantía de "cubre un turno completo aunque cruce medianoche" es sobre qué SESIONES
+ * entran, no sobre qué POSICIONES se les encuentran. Hasta este fix, el `LATERAL` de
+ * `obtenerPosiciones` seguía acotado a `trazaDesde` (arranque de la jornada calendario,
+ * no de esta ventana rodante) — un vehículo que arrancó anoche y sigue reportando sin
+ * parar SÍ entraba por este `WHERE` (`so.inicio >= sesionesDesde` o sesión abierta), pero
+ * sus fixes de antes de medianoche quedaban fuera del `LATERAL`, y si todavía no había
+ * un fix nuevo posterior a medianoche, la posición salía `NULL`/`sin_datos`: el vehículo
+ * desaparecía del mapa justo cuando más se lo necesitaba. Ver `posicionesDesde` en
+ * `obtenerPosiciones` — ahora el `LATERAL` comparte el mismo piso rodante que este
+ * `WHERE`, así que la garantía de "cubre un turno completo" aplica a AMBOS.
+ */
+const VENTANA_SESIONES_POSICIONES_MS = 24 * 60 * MINUTO_MS;
+const LIMITE_SESIONES_POSICIONES = 500;
 
 function diferenciaMs(ahora: Date, ts: Date | null): number | null {
   if (!ts) return null;
@@ -215,6 +269,104 @@ export class EnVivoService {
           vehiculoPlaca: f.vehiculoPlaca,
           conductorNombre: f.conductorNombre,
           lineaNombre: f.lineaNombre,
+          totalPuntos: f.totalPuntos ?? 0,
+          ...derivarFrescura(ahora, f.inicio, f.ultimoFixTs, f.ultimoIngresoTs),
+        }),
+      );
+    });
+  }
+
+  /**
+   * ENTREGA 10 — `GET /reportes/en-vivo/posiciones`. Última posición conocida de TODOS
+   * los vehículos con sesión activa, en **una sola query** que no escala con N: es la
+   * alternativa al patrón "una traza por sesión" (`obtenerTraza`, descartado en el plan
+   * de corrección post-piloto por costo — con 5 sesiones en poll rápido de 1 s son
+   * 300 req/min, el techo exacto del throttle del controller).
+   *
+   * Extiende el `LATERAL` de `listarHoy` con dos cambios de fondo:
+   *
+   * 1. En vez de `max()` sobre `gps_points`, trae la **fila completa** del fix más
+   *    reciente (`ORDER BY ts DESC LIMIT 1`) para tener `lat`/`lng`/`accuracy`/`speed`
+   *    de esa posición puntual — un `max(lat)` no tendría sentido. `ultimoIngresoTs` y
+   *    `totalPuntos` siguen siendo agregados de la ventana completa, calculados con
+   *    funciones de ventana (`OVER ()`, sin `PARTITION BY`) sobre el mismo conjunto de
+   *    filas que ya filtró el `WHERE`: Postgres las evalúa **antes** de aplicar
+   *    `ORDER BY`/`LIMIT`, así que quedan correctas aunque la fila devuelta sea solo 1.
+   *    Alcanza con un único acceso a `gps_points` por sesión (mismo costo que el
+   *    `max()` de `listarHoy`), no dos subqueries.
+   * 2. `l.id AS "lineaId"` y `r.sentido AS "rutaSentido"`: ambos joins (`rutas`,
+   *    `lineas`) ya estaban para resolver `lineaNombre`, así que salen gratis.
+   *
+   * La ventana de partición del `LATERAL` (`posicionesDesde`/`trazaHasta`) se calcula
+   * en JS **antes** de la query para que el planner siga podando particiones de
+   * `gps_points` — son cotas **constantes**, no correlacionadas con `so.inicio` de cada
+   * fila (igual que en `listarHoy`). `posicionesDesde` es el PISO de `trazaDesde`
+   * (arranque de la jornada calendario) y `sesionesDesde` (ventana rodante de 24 h que
+   * usa el `WHERE` de sesiones, ver `VENTANA_SESIONES_POSICIONES_MS`): tiene que cubrir
+   * AL MENOS lo mismo que `sesionesDesde`, si no, una sesión que entra por esa rama
+   * (arrancó ayer, sigue activa) puede tener CERO fixes dentro del `LATERAL` si todavía
+   * no hay un fix posterior a la medianoche boliviana — `lat`/`lng` salen `NULL` y el
+   * vehículo desaparece del mapa aunque esté reportando (bug real detectado en
+   * producción, code-review QUI-240/en-vivo). En la práctica `trazaDesde` siempre es
+   * más reciente que `sesionesDesde` (la jornada calendario nunca arranca antes que la
+   * ventana rodante de 24 h), así que `posicionesDesde` termina siendo `sesionesDesde` —
+   * pero se calcula con `Math.min` explícito, no hardcodeado, para no depender de ese
+   * razonamiento si alguna de las dos ventanas cambia de duración más adelante.
+   */
+  async obtenerPosiciones(
+    actor: AuthenticatedUser,
+    ahora: Date = new Date(),
+  ): Promise<PosicionEnVivo[]> {
+    const jornada = fechaActualBolivia(ahora);
+    const trazaDesde = inicioDeJornadaBolivia(jornada);
+    const trazaHasta = inicioDeJornadaSiguienteBolivia(jornada);
+    const sesionesDesde = new Date(ahora.getTime() - VENTANA_SESIONES_POSICIONES_MS);
+    const posicionesDesde =
+      trazaDesde.getTime() < sesionesDesde.getTime() ? trazaDesde : sesionesDesde;
+
+    return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
+      const filas = await tx.$queryRaw<PosicionEnVivoRow[]>`
+        SELECT so.id, so.inicio, so.fin, so.estado, so."deviceId",
+          v.placa as "vehiculoPlaca", c.nombre as "conductorNombre",
+          l.id as "lineaId", l.nombre as "lineaNombre", r.sentido as "rutaSentido",
+          fix.lat, fix.lng, fix.accuracy, fix.speed,
+          fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos"
+        FROM sesiones_operativas so
+        JOIN vehiculos v ON v.id = so."vehiculoId"
+        JOIN conductores c ON c.id = so."conductorId"
+        JOIN asignaciones a ON a.id = so."asignacionId"
+        JOIN rutas r ON r.id = a."rutaId"
+        JOIN lineas l ON l.id = r."lineaId"
+        LEFT JOIN LATERAL (
+          SELECT gp.lat, gp.lng, gp.accuracy, gp.speed, gp.ts AS "ultimoFixTs",
+                 max(gp.received_at) OVER () AS "ultimoIngresoTs",
+                 count(*) OVER ()::int AS "totalPuntos"
+          FROM gps_points gp
+          WHERE gp.sesion_id = so.id::uuid
+            AND gp.ts >= ${posicionesDesde} AND gp.ts < ${trazaHasta}
+          ORDER BY gp.ts DESC
+          LIMIT 1
+        ) fix ON true
+        WHERE (so.inicio >= ${sesionesDesde})
+           OR (so.fin IS NULL AND so.estado = 'activa')
+        ORDER BY (so.fin IS NULL) DESC, fix."ultimoFixTs" DESC NULLS LAST, so.inicio DESC
+        LIMIT ${LIMITE_SESIONES_POSICIONES}
+      `;
+
+      return filas.map((f) =>
+        PosicionEnVivoSchema.parse({
+          id: f.id,
+          deviceId: f.deviceId,
+          activa: f.fin === null && f.estado === 'activa',
+          vehiculoPlaca: f.vehiculoPlaca,
+          conductorNombre: f.conductorNombre,
+          lineaId: f.lineaId,
+          lineaNombre: f.lineaNombre,
+          rutaSentido: f.rutaSentido,
+          lat: f.lat,
+          lng: f.lng,
+          accuracy: f.accuracy,
+          speed: f.speed,
           totalPuntos: f.totalPuntos ?? 0,
           ...derivarFrescura(ahora, f.inicio, f.ultimoFixTs, f.ultimoIngresoTs),
         }),

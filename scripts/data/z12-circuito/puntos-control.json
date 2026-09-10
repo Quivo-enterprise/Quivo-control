@@ -1,0 +1,188 @@
+{
+  "fuente": "scripts/backups-z12/2026-09-08T14-30-54-529Z/puntos-control-ruta-objetivo-antes.json (snapshot real de produccion, tomado por cargar-circuito-z12.ts antes de una corrida idempotente sin cambios) -- son los 26 puntos de control ACTIVOS de la ruta Z12 real del sindicato piloto (33333333-...-000000000011), verificados: obligatorio=true en los 3 puntos que corresponden a Villa Armonia/Univalle/Salomon (los extremos + el punto por el que pasa el conector interpolado), radioToleranciaM=150 en todos.",
+  "nota": "orden reasignado 0..25 en el mismo orden relativo que el snapshot (ya viene ordenado por el orden real de recorrido calculado por ST_LineLocatePoint contra la geometria real). Este script los cuelga de una ruta NUEVA (no la 000000000011 real), reconstruida con la misma logica (subida+conector interpolado via Salomon+bajada) -- verificado en el momento de escribir este archivo que los 26 puntos caen a <=79m de esa geometria reconstruida (tolerancia del servidor: 100m).",
+  "puntos": [
+    {
+      "orden": 0,
+      "lon": -66.153831692,
+      "lat": -17.423916321,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 1,
+      "lon": -66.15082133,
+      "lat": -17.410456939,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 2,
+      "lon": -66.148153998,
+      "lat": -17.400471589,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 3,
+      "lon": -66.16058304,
+      "lat": -17.379653926,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 4,
+      "lon": -66.179645002,
+      "lat": -17.363779422,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 5,
+      "lon": -66.189169254,
+      "lat": -17.353302752,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 6,
+      "lon": -66.201925847,
+      "lat": -17.34627105,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 7,
+      "lon": -66.214285054,
+      "lat": -17.339899299,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 8,
+      "lon": -66.2267599,
+      "lat": -17.333952,
+      "radioToleranciaM": 150,
+      "obligatorio": true
+    },
+    {
+      "orden": 9,
+      "lon": -66.2285535,
+      "lat": -17.3174191,
+      "radioToleranciaM": 150,
+      "obligatorio": true
+    },
+    {
+      "orden": 10,
+      "lon": -66.2233106,
+      "lat": -17.3273431,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 11,
+      "lon": -66.221010344,
+      "lat": -17.338639584,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 12,
+      "lon": -66.207522553,
+      "lat": -17.344053929,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 13,
+      "lon": -66.194255164,
+      "lat": -17.349954389,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 14,
+      "lon": -66.183254527,
+      "lat": -17.358991618,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 15,
+      "lon": -66.171773175,
+      "lat": -17.365905888,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 16,
+      "lon": -66.165713691,
+      "lat": -17.366965531,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 17,
+      "lon": -66.162376114,
+      "lat": -17.373680453,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 18,
+      "lon": -66.15777364,
+      "lat": -17.386542875,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 19,
+      "lon": -66.154599958,
+      "lat": -17.391771788,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 20,
+      "lon": -66.150750234,
+      "lat": -17.394099063,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 21,
+      "lon": -66.145437443,
+      "lat": -17.406288265,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 22,
+      "lon": -66.151503619,
+      "lat": -17.414803237,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 23,
+      "lon": -66.154053652,
+      "lat": -17.426677431,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 24,
+      "lon": -66.153666316,
+      "lat": -17.432738765,
+      "radioToleranciaM": 150,
+      "obligatorio": false
+    },
+    {
+      "orden": 25,
+      "lon": -66.1507726,
+      "lat": -17.4385012,
+      "radioToleranciaM": 150,
+      "obligatorio": true
+    }
+  ]
+}

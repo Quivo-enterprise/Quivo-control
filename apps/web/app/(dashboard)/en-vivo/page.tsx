@@ -27,6 +27,7 @@ import {
 import {
   antiguedadViva,
   formatearAntiguedad,
+  INTERVALO_POLL_MS,
   intervaloPoll,
   PRESENTACION_FRESCURA,
 } from '../../../src/lib/en-vivo/traza';
@@ -35,6 +36,7 @@ import {
   construirMarcadores,
   construirRutas,
   construirZonas,
+  ID_MARCADOR_VEHICULO,
   mensajeError,
   opcionDeSesion,
   ultimaPasada,
@@ -90,6 +92,31 @@ export default function EnVivoPage() {
     [contexto.data, datos, presentacion.color],
   );
   const zones = useMemo(() => (contexto.data ? construirZonas(contexto.data) : []), [contexto.data]);
+
+  // Animación del marcador de vehículo (`route-map-impl.tsx` hace el trabajo real — ver el
+  // comentario de `animatedVehicle` en `RouteMapProps`). `points` es `datos.puntos` TAL CUAL
+  // (sin mapear a un array nuevo): ya trae `lat`/`lng`/`ts`, y con hasta
+  // `TRAZA_EN_VIVO_LIMITE_MAX` puntos copiarlo en cada render sería un gasto que no aporta
+  // nada. `resetKey = sesionId`: si el usuario cambia de vehículo en el selector, la
+  // animación arranca de cero (salto directo) en vez de intentar deslizarse entre dos
+  // recorridos no relacionados. `intervalMs` usa la cadencia de poll VIGENTE
+  // (`intervaloPoll`, no un valor fijo) como el presupuesto de tiempo a repartir entre los
+  // puntos nuevos del lote — con el poll pausado (`false`) no importa qué valor se mande acá
+  // porque no va a llegar ningún punto nuevo, pero se manda `INTERVALO_POLL_MS` de todos
+  // modos para no romper el tipo.
+  const intervaloVigente = intervaloPoll(datos);
+  const animatedVehicle = useMemo(
+    () =>
+      datos && sesionId
+        ? {
+            markerId: ID_MARCADOR_VEHICULO,
+            resetKey: sesionId,
+            points: datos.puntos,
+            intervalMs: intervaloVigente === false ? INTERVALO_POLL_MS : intervaloVigente,
+          }
+        : null,
+    [datos, sesionId, intervaloVigente],
+  );
 
   const cambiarSesion = (nuevo: string) => {
     setSesionId(nuevo);
@@ -189,6 +216,7 @@ export default function EnVivoPage() {
         onUserPan={() => setSeguir(false)}
         defaultCenter={adminCity.centro}
         defaultZoom={adminCity.zoom}
+        animatedVehicle={animatedVehicle}
       />
 
       {/* TOP FLOATING HUD CONTROLS */}
