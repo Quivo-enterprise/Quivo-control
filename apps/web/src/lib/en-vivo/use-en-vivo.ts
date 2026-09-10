@@ -1,7 +1,12 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { TRAZA_EN_VIVO_LIMITE_MAX, type ContextoEnVivo, type SesionEnVivoResumen } from '@quivo/shared';
+import {
+  TRAZA_EN_VIVO_LIMITE_MAX,
+  type ContextoEnVivo,
+  type PosicionEnVivo,
+  type SesionEnVivoResumen,
+} from '@quivo/shared';
 import { enVivoApi } from '../api/en-vivo';
 import {
   debeRecargar,
@@ -34,6 +39,31 @@ export function useSesionesEnVivo(token: string | null) {
     refetchInterval: 30_000,
     // `false` (el default) pausa el intervalo con la pestaña oculta; `refetchOnWindowFocus`
     // hace el catch-up al volver.
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: REINTENTOS,
+    retryDelay,
+  });
+}
+
+/**
+ * ENTREGA 13 — última posición de TODOS los vehículos con sesión activa/reciente
+ * (`GET /reportes/en-vivo/posiciones`, sin `sesionId`). Reemplaza a `useSesionesEnVivo` como
+ * fuente del mapa: gobierna qué se dibuja, no un `<select>` de una sola sesión.
+ *
+ * `refetchInterval: 5_000` (no los 10 s del poll de traza por sesión): acá el costo NO
+ * escala con N — siempre es una query — así que se puede pollear un poco más rápido sin
+ * acercarse al throttle (`@Throttle` de 300 req/min en `en-vivo.controller.ts`, y esto es
+ * ~12 req/min por pestaña). `refetchIntervalInBackground: false` (mismo criterio que el
+ * resto de los hooks de esta pantalla): con la pestaña oculta no tiene sentido seguir
+ * pollendo un mapa que nadie mira.
+ */
+export function usePosicionesEnVivo(token: string | null) {
+  return useQuery<PosicionEnVivo[]>({
+    queryKey: ['en-vivo', 'posiciones-todas'],
+    enabled: Boolean(token),
+    queryFn: () => enVivoApi.posicionesTodas(token as string),
+    refetchInterval: 5_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: REINTENTOS,

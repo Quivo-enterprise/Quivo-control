@@ -51,6 +51,17 @@ export interface MapPoint {
   draggable?: boolean;
   onDragEnd?: (point: { lat: number; lng: number }) => void;
   onClick?: () => void;
+  /**
+   * ENTREGA 14 (iconografía `/en-vivo`). Solo lo consume `pinType: 'pulse'`: selecciona el
+   * sprite del vehículo (`quivo-bus-${estadoFrescura}`, ver `route-map-impl.tsx`) — la FORMA
+   * cambia con el estado, no solo el color. String suelto (no `EstadoFrescura` de
+   * `@quivo/shared`) a propósito: este paquete no depende de tipos de dominio, mismo criterio
+   * que el resto de `RouteMapProps`.
+   */
+  estadoFrescura?: string;
+  /** ENTREGA 14. Placa del vehículo — el texto que se dibuja bajo su ícono/fallback en el
+   * mapa (`quivo-vehicle-labels`), para que el mapa se lea sin abrir el detalle de la sesión. */
+  placa?: string;
 }
 
 /** Polilínea (trazado) que dibuja `<RouteMap>` — una ruta, la traza GPS real, un borrador en
