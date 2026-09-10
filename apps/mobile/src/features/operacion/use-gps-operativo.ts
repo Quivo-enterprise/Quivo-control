@@ -21,6 +21,7 @@ import {
 import { claveCumplimiento, type DeteccionPuntoControl, type EstadoPuntoControl } from '../../gps/geofence';
 import { registrarPuntoGps } from '../../gps/headless-task';
 import { clavesCumplimientoDesdePayloads } from '../../gps/location-task';
+import { asegurarPermisoNotificaciones } from './anuncio-punto-control';
 import {
   AUTORIZACION_DENEGADA,
   AUTORIZACION_NO_DETERMINADA,
@@ -115,6 +116,14 @@ export function useGpsOperativo(
   // conductor la posibilidad de saber qué botón tocar.
   const [permisoGps, setPermisoGps] = useState<DecisionPermisoGps>(PERMISO_GPS_INICIAL);
   const [ultimaDeteccion, setUltimaDeteccion] = useState<DeteccionPuntoControl | null>(null);
+  // ENTREGA 6/7 (plan post-piloto 2026-09-09): aviso de aproximación (`fase: 'aproximacion'`),
+  // SEPARADO de `ultimaDeteccion` (que ahora solo lleva confirmaciones, `fase: 'confirmado'`) —
+  // `gps-provider.tsx` los consume por separado: éste dispara SOLO la voz informativa,
+  // `ultimaDeteccion` dispara vibración + notificación (+ el sonido custom foreground). Ver
+  // `deteccionAproximacion` en `ResultadoConstruirEventos` (`gps/location-task.ts`).
+  const [deteccionAproximacion, setDeteccionAproximacion] = useState<DeteccionPuntoControl | null>(
+    null,
+  );
   const [posicionActual, setPosicionActual] = useState<
     { lat: number; lng: number; speedKmh: number | null } | null
   >(null);
@@ -178,7 +187,7 @@ export function useGpsOperativo(
         // La semilla nunca rechaza (best-effort, ver `sembrarCumplimientos`).
         await semillaPromise.current;
         const db = await abrirOutbox();
-        const { deteccion } = await registrarPuntoGps(
+        const { deteccion, deteccionAproximacion: nuevaAproximacion } = await registrarPuntoGps(
           db,
           location,
           { deviceId, sesionId, puntosControl },
@@ -188,6 +197,11 @@ export function useGpsOperativo(
           puntosControlDetectados,
         );
         if (deteccion) setUltimaDeteccion(deteccion);
+        // ENTREGA 6/7: se actualiza en CADA tick con puntos de control (incluso a `null` cuando
+        // ninguno está en rango) — a diferencia de `ultimaDeteccion`, que solo cambia con una
+        // confirmación real. Sin el `null` explícito, la última aproximación anunciada quedaría
+        // "pegada" en el estado del hook después de que el vehículo se aleja.
+        setDeteccionAproximacion(nuevaAproximacion);
       } catch (error) {
         // Sin este catch, `onLocation` (async) rechazaba y el fallo quedaba como unhandled
         // rejection: evidencia perdida en silencio.
@@ -423,6 +437,18 @@ export function useGpsOperativo(
     erroresEscritura.current = 0;
     setPuntos(0);
     setUltimaDeteccion(null);
+
+    // HALLAZGO DE CAMPO (Entrega 7, Sentry build 10, Galaxy A71 Android 13): pedir
+    // `POST_NOTIFICATIONS` ACÁ, con la app en foreground y ANTES de tocar el SDK de
+    // geolocalización — `asegurarPermisoNotificaciones` (`./anuncio-punto-control.ts`) nunca
+    // rechaza (best-effort interno con su propio try/catch + Sentry), así que este `await` no
+    // necesita su propio try/catch y NUNCA bloquea "Iniciar recorrido" si el chofer deniega o
+    // el pedido falla: la vibración y la voz de aproximación no dependen de este permiso. Efecto
+    // colateral deseado: al resolverse ANTES de `BackgroundGeolocation.ready()/start()` de más
+    // abajo, si el chofer concede, la notificación NATIVA del foreground service del propio SDK
+    // (`background-geolocation.config.ts`, también gateada por este mismo permiso de Android
+    // 13+) queda visible desde el primer arranque, no solo la de confirmación de puntos.
+    await asegurarPermisoNotificaciones();
 
     // QUI-338 — VERIFICACIÓN PREVIA (brief punto 1): consultar el estado real de permiso y
     // servicio de ubicación ANTES de intentar `ready()`/`start()`, y ramificar según el caso
@@ -750,6 +776,7 @@ export function useGpsOperativo(
     permisoGps,
     abrirAjustesPermisoGps,
     ultimaDeteccion,
+    deteccionAproximacion,
     posicionActual,
     iniciar,
     detener,

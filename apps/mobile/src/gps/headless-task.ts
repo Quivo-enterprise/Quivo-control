@@ -13,6 +13,7 @@ import {
 import { abrirOutbox, encolarEvento, obtenerEventosPorTipo } from '../db/outbox';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
 import { cargarSesionMovil, obtenerDeviceIdMovil } from '../shared/security/sesion-movil-store';
+import { anunciarDeteccionesDelTick } from '../features/operacion/anuncio-punto-control';
 
 /**
  * Margen de gracia antes de apagar el plugin nativo tras vencer el paquete del día (hallazgo
@@ -143,7 +144,7 @@ export function registrarPuntoGps(
   location: Location,
   contexto: ContextoUbicacion,
   estadosPuntosControl: ContenedorEstadosPuntosControl,
-): Promise<{ deteccion: DeteccionPuntoControl | null }> {
+): Promise<{ deteccion: DeteccionPuntoControl | null; deteccionAproximacion: DeteccionPuntoControl | null }> {
   profundidadColaRegistroGps += 1;
   if (profundidadColaRegistroGps >= PROFUNDIDAD_COLA_SOSPECHOSA) {
     Sentry.addBreadcrumb({
@@ -216,16 +217,13 @@ async function registrarPuntoGpsInterno(
   location: Location,
   contexto: ContextoUbicacion,
   estadosPuntosControl: ContenedorEstadosPuntosControl,
-): Promise<{ deteccion: DeteccionPuntoControl | null }> {
+): Promise<{ deteccion: DeteccionPuntoControl | null; deteccionAproximacion: DeteccionPuntoControl | null }> {
   // B6: `.current` se lee ACÁ, ya con el turno de la cola concedido — nunca en el caller, que
   // pudo haber quedado con una referencia previa a una re-siembra (ver
   // `ContenedorEstadosPuntosControl`).
   const estados = estadosPuntosControl.current;
-  const { eventos, deteccion, transicionesEstado, avisosPrecision } = construirEventosDeUbicacion(
-    location,
-    contexto,
-    estados,
-  );
+  const { eventos, deteccion, deteccionAproximacion, transicionesEstado, avisosPrecision } =
+    construirEventosDeUbicacion(location, contexto, estados);
   // M3: la precisión degradada del fix queda registrada como breadcrumb — es la telemetría que
   // el gate de accuracy anterior NO dejaba (descartaba la pasada en silencio).
   for (const aviso of avisosPrecision) {
@@ -262,7 +260,7 @@ async function registrarPuntoGpsInterno(
       }
     }
   }
-  return { deteccion };
+  return { deteccion, deteccionAproximacion };
 }
 
 /**
@@ -464,7 +462,29 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
 
     const db = await abrirOutbox();
     await asegurarSemillaCumplimientos(db, contexto.sesionId);
-    await registrarPuntoGps(db, location, contexto, puntosControlDetectadosHeadless);
+    const { deteccion, deteccionAproximacion } = await registrarPuntoGps(
+      db,
+      location,
+      contexto,
+      puntosControlDetectadosHeadless,
+    );
+    // ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): el punto GPS y el
+    // cumplimiento YA quedaron persistidos arriba (la evidencia, RF-64..73) — el anuncio al
+    // chofer es best-effort y NUNCA debe poder tumbar ese resultado ya escrito. Por eso corre
+    // DESPUÉS del `await` de arriba (nunca antes) y con su propio `catch`: un fallo acá cae en
+    // el `paso: 'anunciar-punto-control'` de Sentry, no en el `paso:
+    // 'registrar-punto-gps'` del catch general de abajo, que hoy reporta pérdida de EVIDENCIA —
+    // mezclar los dos haría parecer perdido un punto GPS que en realidad se guardó bien.
+    await anunciarDeteccionesDelTick(
+      db,
+      { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
+      { deteccion, deteccionAproximacion },
+    ).catch((error) => {
+      console.error('[QUIVO][headless] No se pudo anunciar el punto de control', error);
+      Sentry.captureException(error, {
+        tags: { contexto: 'headless-task', paso: 'anunciar-punto-control' },
+      });
+    });
   } catch (error) {
     console.error('[QUIVO][headless] No se pudo registrar la ubicación en el outbox', error);
     // QUI-365: este es EL escenario que el ticket marca como el peor y el que menos se ve —

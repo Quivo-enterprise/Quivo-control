@@ -43,14 +43,26 @@ vi.mock('../shared/security/sesion-movil-store', () => ({
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
-import BackgroundGeolocation from 'react-native-background-geolocation';
+// ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): `anunciarDeteccionesDelTick`
+// dispara `expo-notifications`/`expo-speech`/`Vibration`, que a su vez importan `react-native`
+// (rompe bajo vitest/Node, ver `anuncio-punto-control.test.ts`) — se mockea el módulo entero
+// para que este archivo pueda seguir enfocado en la ORQUESTACIÓN (¿se llama?, ¿con qué?), no en
+// el contenido del anuncio, que ya cubre su propio test.
+vi.mock('../features/operacion/anuncio-punto-control', () => ({
+  anunciarDeteccionesDelTick: vi.fn().mockResolvedValue(undefined),
+}));
+
+import BackgroundGeolocation, { type HeadlessEvent, type Location } from 'react-native-background-geolocation';
+import type { PuntoControlPaquete } from '@quivo/shared';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal, type PaqueteDiaLocal } from '../db/paquete-dia';
+import { abrirOutbox, encolarEvento, obtenerEventosPorTipo } from '../db/outbox';
 import {
   cargarSesionMovil,
   obtenerDeviceIdMovil,
   type SesionMovilGuardada,
 } from '../shared/security/sesion-movil-store';
-import { obtenerContextoUbicacionPersistido } from './headless-task';
+import { anunciarDeteccionesDelTick } from '../features/operacion/anuncio-punto-control';
+import { obtenerContextoUbicacionPersistido, tareaHeadlessUbicacion } from './headless-task';
 
 const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
 const obtenerDeviceIdMovilMock = obtenerDeviceIdMovil as unknown as ReturnType<typeof vi.fn>;
@@ -58,6 +70,12 @@ const abrirPaqueteDiaDbMock = abrirPaqueteDiaDb as unknown as ReturnType<typeof 
 const obtenerPaqueteDiaLocalMock = obtenerPaqueteDiaLocal as unknown as ReturnType<typeof vi.fn>;
 const getStateMock = BackgroundGeolocation.getState as unknown as ReturnType<typeof vi.fn>;
 const stopMock = BackgroundGeolocation.stop as unknown as ReturnType<typeof vi.fn>;
+const abrirOutboxMock = abrirOutbox as unknown as ReturnType<typeof vi.fn>;
+const encolarEventoMock = encolarEvento as unknown as ReturnType<typeof vi.fn>;
+const obtenerEventosPorTipoMock = obtenerEventosPorTipo as unknown as ReturnType<typeof vi.fn>;
+const anunciarDeteccionesDelTickMock = anunciarDeteccionesDelTick as unknown as ReturnType<
+  typeof vi.fn
+>;
 
 /** Sesión mínima "autenticado" — sólo lo que lee `obtenerContextoUbicacionPersistido`. El
  * resto del contrato de `SesionMovilGuardada` (vehículo, conductor, sindicato, etc.) no le
@@ -146,5 +164,153 @@ describe('obtenerContextoUbicacionPersistido — hallazgo 3 (vencimiento evaluad
     expect(contexto).not.toBeNull();
     expect(contexto?.puntosControl).toEqual([{ id: 'pc-1' }]);
     expect(stopMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless" — "probablemente el arreglo
+ * más importante del plan"): cubre que `tareaHeadlessUbicacion` efectivamente llama a
+ * `anunciarDeteccionesDelTick` con lo que devuelve `registrarPuntoGps` — la razón de ser de
+ * esta entrega es exactamente esta línea de wiring, la que faltaba y dejaba "sin sonido" a un
+ * chofer con la pantalla apagada (reporte de Rosa).
+ *
+ * A propósito NO se mockea `construirEventosDeUbicacion` (`./location-task`, la máquina de
+ * detección real) ni `../db/outbox` más allá de `encolarEvento`/`obtenerEventosPorTipo`: usar
+ * un punto de control y una ubicación reales (mismo patrón que `location-task.test.ts`) prueba
+ * el camino END TO END — desde el fix GPS hasta la llamada al anuncio — en vez de solo que "la
+ * función mockeada se invocó con lo que el propio mock le dio".
+ */
+describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega 7)', () => {
+  function location(lat: number, lng: number, timestamp: string): Location {
+    return {
+      timestamp,
+      recorded_at: timestamp,
+      age: 0,
+      odometer: 0,
+      odometer_error: 0,
+      is_moving: true,
+      uuid: `loc-${timestamp}`,
+      coords: { latitude: lat, longitude: lng, accuracy: 5, speed: 0 },
+      battery: { level: 0.8, is_charging: false },
+      activity: { type: 'in_vehicle', confidence: 90 },
+    } as unknown as Location;
+  }
+
+  function eventoLocation(loc: Location): HeadlessEvent {
+    return { name: 'location', params: loc } as unknown as HeadlessEvent;
+  }
+
+  function puntoControlReal(id: string, coord: [number, number]): PuntoControlPaquete {
+    return {
+      id,
+      orden: 5,
+      coord: { type: 'Point', coordinates: coord },
+      radioToleranciaM: 30,
+      obligatorio: true,
+    };
+  }
+
+  beforeEach(() => {
+    cargarSesionMovilMock.mockReset();
+    obtenerDeviceIdMovilMock.mockReset().mockResolvedValue('device-headless-1');
+    abrirPaqueteDiaDbMock.mockReset().mockResolvedValue({});
+    obtenerPaqueteDiaLocalMock.mockReset();
+    getStateMock.mockReset().mockResolvedValue({ enabled: true });
+    stopMock.mockReset().mockResolvedValue(undefined);
+    abrirOutboxMock.mockReset().mockResolvedValue({});
+    encolarEventoMock.mockReset().mockResolvedValue({ eventId: 'evt-1', insertado: true });
+    obtenerEventosPorTipoMock.mockReset().mockResolvedValue([]);
+    anunciarDeteccionesDelTickMock.mockClear();
+  });
+
+  it('primer fix (entrada, distancia 0): avisa aproximación, todavía NO confirma', async () => {
+    const sesionId = 'sesion-headless-1';
+    const pc = puntoControlReal('pc-headless-1', [-63.18, -17.78]);
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: 'asignacion-headless-1', venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: 'asignacion-headless-1', venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z')),
+    );
+
+    expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(1);
+    const [, opciones, resultado] = anunciarDeteccionesDelTickMock.mock.calls[0]!;
+    expect(opciones).toEqual({ sesionId, puntosControl: [pc] });
+    expect(resultado.deteccion).toBeNull();
+    expect(resultado.deteccionAproximacion).toMatchObject({
+      puntoControlId: 'pc-headless-1',
+      fase: 'aproximacion',
+    });
+  });
+
+  it('segundo fix (se aleja ~33 m, distancia CRECE respecto del mínimo): confirma la pasada 1', async () => {
+    const sesionId = 'sesion-headless-2';
+    const pc = puntoControlReal('pc-headless-2', [-63.18, -17.78]);
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: 'asignacion-headless-2', venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: 'asignacion-headless-2', venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+
+    // Tick 1: entra exactamente sobre el punto — arranca el mínimo local, no confirma todavía.
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z')),
+    );
+    // Tick 2: se aleja ~33 m (sigue dentro del radio de re-armado, 30 * 1.5 = 45 m) — la
+    // distancia CRECE respecto del mínimo (0) ⇒ confirma con pasada 1.
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.7797, -63.18, '2026-09-10T12:00:10.000Z')),
+    );
+
+    expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(2);
+    const [, , resultadoSegundoTick] = anunciarDeteccionesDelTickMock.mock.calls[1]!;
+    expect(resultadoSegundoTick.deteccion).toMatchObject({
+      puntoControlId: 'pc-headless-2',
+      fase: 'confirmado',
+      pasada: 1,
+    });
+  });
+
+  it('sin turno vigente (sin sesión): descarta el punto ANTES de intentar anunciar nada', async () => {
+    cargarSesionMovilMock.mockResolvedValue(null);
+
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z')),
+    );
+
+    expect(anunciarDeteccionesDelTickMock).not.toHaveBeenCalled();
+  });
+
+  it('un fallo del anuncio (best-effort) NO impide que el evento de este test se considere resuelto sin throw', async () => {
+    const sesionId = 'sesion-headless-3';
+    const pc = puntoControlReal('pc-headless-3', [-63.18, -17.78]);
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: 'asignacion-headless-3', venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: 'asignacion-headless-3', venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+    anunciarDeteccionesDelTickMock.mockRejectedValueOnce(new Error('notificación no disponible'));
+
+    await expect(
+      tareaHeadlessUbicacion(eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z'))),
+    ).resolves.toBeUndefined();
   });
 });

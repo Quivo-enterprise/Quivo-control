@@ -95,6 +95,22 @@ async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLit
       estado TEXT NOT NULL DEFAULT 'pendiente'
     );
     CREATE INDEX IF NOT EXISTS outbox_estado_idx ON outbox(estado);
+    -- ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): dedupe PERSISTIDO del
+    -- anuncio de confirmación (sonido + vibración + notificación) por
+    -- {sesionId, puntoControlId, pasada} — un useRef de React (como el que dedupea la
+    -- voz/sonido en el GpsProvider de hoy) no sobrevive al contexto headless, que puede
+    -- reevaluarse en una invocación de motor JS distinta a la que anunció la primera vez. Vive
+    -- en esta MISMA base (no un archivo .db nuevo): ya hay una conexión abierta y saneada
+    -- (conReintentoSiHandleMuerto), y un segundo archivo SQLite sería otra superficie para el
+    -- bug de expo-sqlite@16.0.10 documentado arriba (outboxPromise). Ver
+    -- registrarAnuncioSiNuevo más abajo para el porqué de "clave" como PK en vez de las tres
+    -- columnas por separado. (Nota: sin comillas invertidas acá a propósito — este bloque es
+    -- un TEMPLATE LITERAL de JS, y una comilla invertida sin escapar lo cierra a mitad de
+    -- camino y rompe el parseo de TODO el archivo con errores TS1005 crípticos y lejanos.)
+    CREATE TABLE IF NOT EXISTS anuncios_punto_control (
+      clave TEXT PRIMARY KEY,
+      ts TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -304,6 +320,33 @@ export async function encolarEvento(
     ]),
   );
   return { eventId, insertado: result.changes > 0 };
+}
+
+/**
+ * ENTREGA 7 (plan post-piloto 2026-09-09): registra que el anuncio (sonido + vibración +
+ * notificación) de una CONFIRMACIÓN de punto de control ya salió, y devuelve si esta llamada
+ * fue la que lo registró por primera vez. `clave` es `${sesionId}:${puntoControlId}:${pasada}`
+ * (`claveAnuncio`, `features/operacion/anuncio-punto-control.ts`) — la MISMA tripleta que
+ * identifica una pasada evidenciada en `filtrarNuevosCumplimientos` (`gps/geofence.ts`), así
+ * que dos ticks que terminen confirmando la MISMA pasada (headless recicla el contexto JS
+ * justo después de escribir el evento pero antes de anunciar, por ejemplo) anuncian una sola
+ * vez.
+ *
+ * Mismo patrón que `encolarEvento` arriba (B1): `INSERT OR IGNORE` + `changes > 0`, no un
+ * SELECT-luego-INSERT — con la PK como único gate no hay ventana de TOCTOU entre leer "¿ya
+ * está?" y escribir, que sí existiría con dos pasos separados y dos ticks concurrentes.
+ */
+export async function registrarAnuncioSiNuevo(
+  db: SQLite.SQLiteDatabase,
+  clave: string,
+): Promise<boolean> {
+  const result = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync('INSERT OR IGNORE INTO anuncios_punto_control (clave, ts) VALUES (?, ?)', [
+      clave,
+      new Date().toISOString(),
+    ]),
+  );
+  return result.changes > 0;
 }
 
 /** H4 (hallazgo de revisión, medio): pasa por `conReintentoSiHandleMuerto` igual que los

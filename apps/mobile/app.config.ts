@@ -49,6 +49,18 @@ export default (): ExpoConfig => ({
       // foreground service (`app.notification` en `background-geolocation.config.ts`) no se
       // muestra — y esa notificación es la única señal que tiene el conductor de que el
       // recorrido se está grabando mientras la pantalla está apagada.
+      //
+      // HALLAZGO DE CAMPO confirmado (Entrega 7, Sentry build 10, Galaxy A71 Android 13):
+      // declararlo ACÁ solo habilita que el sistema pueda llegar a pedirlo — en Android 13+
+      // (API 33) es un permiso de RUNTIME real, igual que la ubicación. Sin el pedido
+      // explícito, `POST_NOTIFICATIONS` queda `not_granted` aunque esté en este array, y NI
+      // la notificación del foreground service de arriba NI la de confirmación de puntos de
+      // control (`anuncio-punto-control.ts`) se muestran — silenciosamente, sin error. El
+      // pedido en runtime vive en `use-gps-operativo.ts` (`asegurarPermisoNotificaciones`,
+      // llamado desde `iniciar()`, con la app en foreground, antes de arrancar el SDK de
+      // geolocalización): un solo pedido de `expo-notifications` cubre el permiso de Android
+      // para AMBAS notificaciones, la del SDK y la de QUIVO, porque `POST_NOTIFICATIONS` es un
+      // permiso a nivel de APP, no por notificación ni por librería.
       'POST_NOTIFICATIONS',
       // Declarados explícitamente por trazabilidad del manifest (antes probablemente los
       // inyectaba el AAR nativo de `react-native-background-geolocation` por manifest-merge,
@@ -88,6 +100,19 @@ export default (): ExpoConfig => ({
     ],
     'expo-sqlite',
     'expo-secure-store',
+    [
+      'expo-notifications',
+      {
+        // ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): copia dedicada del
+        // timbre de `confirmacion-sonido.ts`, con nombre SIN GUIONES a propósito — el plugin
+        // copia este archivo a `android/app/src/main/res/raw/`, y los nombres de recurso `raw`
+        // de Android solo aceptan `[a-z0-9_.]` (un guion rompe `aapt2` en el build nativo). El
+        // canal Android que lo referencia vive en
+        // `features/operacion/anuncio-punto-control.ts` (`SONIDO_NOTIFICACION_ANDROID`) — el
+        // nombre tiene que coincidir EXACTO entre los dos lugares.
+        sounds: ['./assets/sounds/confirmacion_chime_notificacion.wav'],
+      },
+    ],
     [
       'expo-splash-screen',
       {
