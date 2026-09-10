@@ -18,10 +18,20 @@ type RequestConSesionMovil = FastifyRequest & { sesionMovil?: SesionMovilAutenti
  *
  * La clave correcta acá es el dispositivo autenticado (`sesionMovil.deviceId`, resuelto por
  * `AuthMovilGuard`), no la IP: cada teléfono tiene su propio cupo, sin importar cuántos otros
- * choferes compartan su NAT. Fallback a `req.ip` si `sesionMovil` no está seteado — no
- * debería pasar en la práctica (`AuthMovilGuard` corre antes que este guard en
- * `SyncController.recibirLote` y ya habría cortado con 401 sin sesión válida), pero así una
- * request sin sesión nunca queda CON CERO límite.
+ * choferes compartan su NAT. Fallback a `req.ip` si `sesionMovil` no está seteado — pero OJO,
+ * este fallback es un cinturón defensivo que en la práctica NUNCA se ejecuta: `AuthMovilGuard`
+ * corre antes que este guard en `SyncController.recibirLote` y corta con 401 antes de llegar
+ * acá si no hay sesión válida, así que `req.sesionMovil` siempre está seteado cuando
+ * `getTracker` lee. Por lo mismo, este fallback NO protege al tráfico sin sesión — ese
+ * tráfico nunca llega a instanciar este guard (código sale por el 401 de `AuthMovilGuard`
+ * antes de que Nest siga con el resto del array de guards). Quien de verdad acota el costo
+ * de ese tráfico es `AuthMovilGuard` (`auth-movil.guard.ts`, docblock de `canActivate` —
+ * caché negativa por TOKEN agregada en QUI-240 code-review, tercera vuelta, tras descartar
+ * dos diseños por IP que terminaban castigando a choferes con credencial válida que
+ * compartían CGNAT con un teléfono en bucle de reintentos). A propósito NO es un bloqueo por
+ * IP corriendo antes que `AuthMovilGuard`: eso contaría también el tráfico autenticado
+ * legítimo contra un cupo compartido por IP y reintroduciría el mismo reventón de CGNAT que
+ * este guard existe para evitar.
  *
  * Orden de guards: en Nest, los guards se resuelven [globales] + [de clase] + [de método], en
  * ese orden — el `ThrottlerGuard` global (registrado como `APP_GUARD`) corre SIEMPRE antes

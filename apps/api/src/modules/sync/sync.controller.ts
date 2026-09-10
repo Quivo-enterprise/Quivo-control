@@ -27,6 +27,20 @@ export class SyncController {
   // orden de guards). `@SkipThrottle()` apaga acá el `ThrottlerGuard` global (100/60 por
   // IP, `app.module.ts`); `SyncDeviceThrottlerGuard` DEBE ir después de `AuthMovilGuard` en
   // este array para que `sesionMovil` ya exista cuando lee el tracker.
+  //
+  // Tráfico SIN sesión válida (Bearer ausente/inválido) queda fuera de `SkipThrottle()` Y
+  // fuera de `SyncDeviceThrottlerGuard` (nunca llega: `AuthMovilGuard` corta antes con 401).
+  // Eso NO significa costo ilimitado para ese tráfico: `AuthMovilGuard` mismo cachea (por
+  // TOKEN, no por IP — ver el docblock de `canActivate` en `auth-movil.guard.ts`, historia
+  // completa de QUI-240 con dos diseños descartados) los tokens que ya confirmó inválidos,
+  // así que un Bearer basura REPETIDO no vuelve a pagar el SHA-256 + query a Postgres. A
+  // propósito NO es un bloqueo por IP: eso tumbaría a cualquier chofer con credencial válida
+  // que comparta CGNAT con un teléfono en bucle de reintentos (caso real, documentado en
+  // `docs/handoff.md`) — exactamente el reventón que `SyncDeviceThrottlerGuard` existe para
+  // evitar del otro lado (por dispositivo autenticado). El caso no cubierto a propósito: un
+  // atacante rotando un token distinto por request nunca repite hash, así que nunca cachea y
+  // paga el costo real en cada intento — igual que sin este fix. Trade-off aceptado: ese
+  // patrón (tokens únicos ilimitados) no es el que se observó en producción.
   @Post('batches')
   @HttpCode(202)
   @SkipThrottle()
