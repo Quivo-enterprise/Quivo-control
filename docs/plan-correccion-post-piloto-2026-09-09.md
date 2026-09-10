@@ -702,6 +702,12 @@ si `now() - max(received_at) > 15 min` en horario operativo; asegurar que la exc
 **P2 · Ámbito: datos/docs · ~2 h · Depende de: 0a**
 
 - Borrar `scripts/crear-credenciales-piloto.ts` (obsoleto según `docs/plan-siembra-produccion.md:207-209`).
+- **Documentación de infraestructura desactualizada (verificado el 2026-09-10):** `docs/infra-gcp-prod.md`
+  y el documento de credenciales de demo day apuntan a `quivo-api-424426714260` / `quivo-web-424426714260`,
+  pero esa API responde **503**. El APK de producción usa `quivo-api-741758083365` (`apps/mobile/eas.json:30`),
+  que responde 200. Además, la credencial de admin documentada da 401 en la API viva: el primer admin de
+  producción se creó con contraseña aleatoria en Secret Manager. Corregir las URLs y dejar escrito dónde
+  vive la credencial, sin copiarla.
 - Actualizar `docs/plan-unicidad-placa.md:3`, que dice "sin implementar" cuando PR #56 / commit
   `878e078` ya está en main.
 - Restos conocidos sin endpoint DELETE (`PILOTO001`, `L1-PILOTO`, 73 asignaciones viejas sobre
@@ -937,6 +943,39 @@ El evento de Sentry del 10-09 (Android 13) reporta `POST_NOTIFICATIONS: not_gran
 **la notificación del anuncio de la Entrega 7 no se muestra en campo**. Pedirlo con la app en primer
 plano antes de iniciar el recorrido. Fail-open: si se niega, vibración y voz siguen. Exponer el estado
 para el preflight de la Entrega 26.
+
+---
+
+### Entrega 29 — Coerción de query sin decorator metadata en desarrollo y tests
+**P2 · Ámbito: API (entorno de desarrollo y tests) · ~3 h · Sin dependencias · No afecta producción**
+
+**Evidencia (verificación en vivo del 2026-09-10).** Con la API local levantada con `pnpm dev`
+(`tsx watch`), `GET /v1/sync-errores?desde=<ISO>` devolvió 500:
+```
+fecha.getUTCFullYear is not a function
+  at inicioDeJornadaBolivia (apps/api/src/common/tiempo/jornada.ts:24)
+  at SyncErroresService.listar (apps/api/src/modules/sync/sync-errores.service.ts:18)
+```
+**No se reproduce con el build de producción.** Compilada con `tsc` (como el Dockerfile) la misma
+request responde 200, y en auditoría el filtro por fecha excluye exactamente las filas anteriores:
+`ZodValidationPipe` devuelve el output parseado (`zod-validation.pipe.ts:28`, registrado global en
+`app.module.ts:70`) y los 53 DTOs de `@Query()`/`@Body()` están envueltos en `createZodDto`.
+
+**Causa (hipótesis en verificación):** `tsx` usa esbuild, que no emite `emitDecoratorMetadata` (el repo
+ya documenta esa limitación con los `@Inject(...)` explícitos, evanw/esbuild#257). Sin
+`design:paramtypes`, Nest no resuelve el DTO del `@Query()`, el pipe no transforma y el string llega
+crudo al servicio. **Riesgo real:** si vitest también compila con esbuild pelado, un test de
+integración que dependa de la coerción del pipe correría sin metadata y daría un resultado falso en
+CI. Hoy no existen tests de `sync-errores` ni de auditoría con filtro de fecha.
+
+**Enfoque:** confirmar la hipótesis (500 con `tsx`, 200 con `tsc`); revisar la config de vitest;
+agregar tests de regresión del filtro por fecha que corran por el mismo camino que CI; decidir el
+arreglo del entorno (runner de `dev` con decorator metadata, pipes explícitos o documentación).
+**No tocar el pipe ni código de producto sin esa decisión.**
+
+**Verificación:** los tests nuevos pasan por el camino de CI; `pnpm dev` deja de dar 500 si se elige
+cambiar el runner.
+**Rollback:** revert; sin impacto en producción.
 
 ---
 
