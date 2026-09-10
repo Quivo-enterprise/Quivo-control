@@ -780,6 +780,8 @@ ya tiene una máquina pura y testeada (`decidirPermisoGps`) que devuelve
 | Almacenamiento lleno | Escritura canaria a `quivo-outbox.db`; `SQLITE_FULL` en runtime | Sí | *"El teléfono no tiene espacio. QUIVO no puede guardar tu recorrido."* |
 | Sesión expirada sin refresh | Circuit breaker de la Entrega 3 abierto | Sí | *"Tenés que volver a ingresar tu placa y PIN."* |
 | **Paquete del día ausente** | `obtenerPaqueteDiaLocal() === null` o `puntosControl.length === 0` | **Sí** | *"No tenemos los puntos de control de tu ruta. Conectate un momento para bajarlos."* |
+| Notificaciones no concedidas (Android 13+) | Estado expuesto por la Entrega 7b (`POST_NOTIFICATIONS`) | No, advierte | *"Activá las notificaciones para escuchar los avisos de puntos de control con la pantalla apagada."* Si se niega, vibración y voz siguen |
+| Reconocimiento de actividad | `ACTIVITY_RECOGNITION` `not_granted` (visto en el evento de Sentry del 10-09) | No, advierte | Sin este permiso el SDK de GPS detecta peor cuándo el vehículo está detenido o en movimiento: más huecos o más consumo. Pedirlo en runtime |
 
 **La última es el hallazgo más grave del plan.** `headless-task.ts:358` hace
 `puntosControl: paqueteLocal?.paquete.puntosControl ?? []`. Con el paquete ausente o de otra
@@ -882,6 +884,62 @@ aproxima con pull y lo deja preparado.
 
 ---
 
+### Entrega 28 — Sesión desplazada: causa raíz del `refresh-agotado`
+**P0 · Ámbito: API + móvil · ~6 h · Depende de: 3, 24 · Evidencia: Sentry `QUIVO-CONTROL-CONDUCTOR-2`**
+
+**Evidencia (Sentry, proyecto `quivo-control-conductor`).** Tres eventos
+`AuthMovilApiError: Sesión móvil inválida o expirada`, todos con `paso: refresh-agotado` y
+`reintentos: 3`:
+
+| Cuándo (UTC) | Dispositivo (`user.id`) | Build | Contexto |
+|---|---|---|---|
+| 2026-08-23 16:19 | `948f…` | 7 | QA |
+| 2026-09-09 20:54 | `948f…` | 10 | **16:54 en Bolivia: arranque de los recorridos del piloto**, con credenciales cruzadas y cambio de APK en curso |
+| 2026-09-10 14:44 | `680a…` | 10 | Reprueba pedida por el CTO. **48 s después de abrir la app**, en primer plano, online, Galaxy A71, Android 13 |
+
+**Patrón:** siempre al **empezar** a usar la app, nunca a mitad de recorrido. La Entrega 3 (circuit
+breaker) acota los reintentos, pero **no explica por qué el servidor rechaza un refresh a los 48 s**.
+
+**Hipótesis, en orden de probabilidad:**
+- **(a) Sesión desplazada.** `auth-movil.service.ts` cierra la sesión viva de la placa en cada login
+  (un vehículo admite una sola `SesionOperativa`). Si otro teléfono entra con la misma placa
+  (credenciales cruzadas como en el piloto, reinstalación o cambio de APK), el refresh del primero
+  se rechaza **con el mismo 401 genérico que un token vencido**, y la app lo trata como transitorio.
+- **(b) Carrera de rotación del refresh token.** Dos refresh concurrentes (arranque de la app más
+  el primer sync): el segundo usa un token que el primero ya rotó.
+
+**Paso 1 — diagnóstico antes de codear.** Logs de Cloud Run de las llamadas de refresh y login móvil
+a las 20:54Z del 09-09 y a las 14:44Z del 10-09, más el historial de `sesiones_operativas` de esos
+vehículos: ¿hubo un login de la misma placa desde otro `deviceId` segundos antes? Requiere que el CTO
+reautentique `gcloud` (`gcloud auth login`). **No implementar el fix sin confirmar la causa.**
+
+**Paso 2 — fix según la causa confirmada:**
+- **Si es (a):** la API devuelve un error distinguible (`SESION_DESPLAZADA`, con placa y hora) en vez
+  del genérico, y guarda el motivo de cierre de la sesión (p. ej. `cerradaPor: 'nuevo_login'`). La app
+  lo trata como falla de **CAPTURA**: sin reintentos y con un mensaje en lenguaje de chofer, del estilo
+  *"Otra persona inició sesión con este vehículo. Si sos vos, volvé a ingresar."*. Junto con la
+  Entrega 24 (confirmar "¿Sos Betty?" al loguear) cierra la clase de error del piloto.
+- **Si es (b):** refresh *single-flight* en el cliente (una sola promesa de refresh compartida) y, en
+  el servidor, tolerancia de reuso del refresh anterior durante una ventana corta.
+
+**Verificación:** test de API: dos logins de la misma placa desde dos `deviceId` → el refresh del
+primero devuelve `SESION_DESPLAZADA`, no el 401 genérico. Test de cliente del *single-flight* si
+aplica (b). Reproducción manual con dos teléfonos.
+**Rollback:** revert. El código de error nuevo es compatible hacia atrás: un APK viejo lo ve como 401.
+
+---
+
+### Entrega 7b — Pedir `POST_NOTIFICATIONS` en runtime
+**P0 · Ámbito: móvil · ~2 h · Depende de: 7 · Evidencia: Sentry `QUIVO-CONTROL-CONDUCTOR-2`**
+
+El evento de Sentry del 10-09 (Android 13) reporta `POST_NOTIFICATIONS: not_granted` con el permiso
+**declarado** en `app.config.ts`. En Android 13+ es permiso de runtime y hoy nadie lo pide, así que
+**la notificación del anuncio de la Entrega 7 no se muestra en campo**. Pedirlo con la app en primer
+plano antes de iniciar el recorrido. Fail-open: si se niega, vibración y voz siguen. Exponer el estado
+para el preflight de la Entrega 26.
+
+---
+
 ## Auditoría offline — qué ya cumple el principio rector
 
 | Camino | ¿Toca la red? | Evidencia |
@@ -965,6 +1023,7 @@ sesión — si sale 13 sin 14, el mapa muestra N vehículos indistinguibles de l
 | **7** | **Radios configurables** | `packages/shared` para P0; mover al paquete del día en P1 (cambiar sin APK nuevo) | Entrega 6 |
 | **8** | **Push (FCM) para la rotación** | Pull oportunista ahora (Entrega 27); FCM en P1, apoyado en el `expo-notifications` que agrega la Entrega 7 | No existe infra de push hoy: ni FCM ni `expo-notifications` en `apps/mobile/package.json` |
 | **9** | **Ventana de precarga** | 7 días de asignaciones próximas | Cubre fin de semana y feriados sin inflar SQLite |
+| **10** | **Sesión desplazada** | Confirmar la causa con los logs del servidor antes de codear; si es desplazamiento por otro login, error distinguible y tratarlo como falla de captura sin reintentos | Entrega 28. Los 3 eventos de Sentry son `refresh-agotado` al arrancar la app |
 
 ---
 
