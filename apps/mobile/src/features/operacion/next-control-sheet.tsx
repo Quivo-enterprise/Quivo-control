@@ -9,15 +9,17 @@ import { formatearDistancia } from './format-distancia';
 
 const NUMERO_EMERGENCIAS = '911';
 
+// Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
+// esta interfaz tenía `pendingEvents`/`isOffline`/`isSyncing` — ninguno se leía en el render
+// de abajo (quedaron de un pasaje anterior sin uso real), y son señales de TRANSPORTE que el
+// principio rector prohíbe en cualquier widget de la pantalla del chofer. Se sacan acá para
+// que `operation-screen.tsx` no tenga que seguir calculándolas solo para pasarlas sin efecto.
 export interface NextControlSheetProps {
   contexto: ContextoOperativoMovil;
   tracking: boolean;
   nextPointOrder: number | null;
   totalPoints: number;
   distanciaMetros: number | null;
-  pendingEvents: number;
-  isOffline?: boolean;
-  isSyncing?: boolean;
   canStart: boolean;
   gpsError: string | null;
   onStart: () => void;
