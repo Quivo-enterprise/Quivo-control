@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
-import { construirHtml, convertirGeoJsonALatLng } from './route-map-html';
+import { construirHtml, convertirGeoJsonALatLng, crearControladorTiles } from './route-map-html';
 
 // Entrega 25 (plan post-piloto 2026-09-09): la navegación en ruta no puede depender de la red.
 // Estos tests cubren lo que sí es testeable fuera del WebView: (a) que Leaflet quede embebido
@@ -83,6 +83,116 @@ describe('convertirGeoJsonALatLng', () => {
   });
 });
 
+// Code-review de la Entrega 25 (2026-09-10) — hallazgo 1: el fallback documentado de tiles
+// ("sin cobertura a los 4s se remueve la capa") no se ejecutaba nunca, porque Leaflet dispara
+// `tileload` también para el GIF de `errorTileUrl` (no solo para tiles reales), y el handler
+// viejo no distinguía uno del otro. Estos tests ejercitan `crearControladorTiles` directamente
+// —la MISMA función pura que `construirHtml` serializa con `.toString()` y embebe en el
+// `<script>` del WebView (ver `route-map-html.ts`)—, así que cubren el comportamiento real, no
+// solo que cierto texto aparezca en el HTML.
+describe('crearControladorTiles — máquina de estados de la capa de tiles', () => {
+  var ERROR_TILE_URL = 'data:image/gif;base64,ERROR';
+  var TIMEOUT_MS = 4000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sin ningún tile real: a los 4s remueve la capa', () => {
+    const onRemoverCapa = vi.fn();
+    const controlador = crearControladorTiles({
+      errorTileUrl: ERROR_TILE_URL,
+      timeoutMs: TIMEOUT_MS,
+      onRemoverCapa,
+    });
+
+    controlador.onTileError();
+    expect(onRemoverCapa).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(TIMEOUT_MS);
+
+    expect(onRemoverCapa).toHaveBeenCalledTimes(1);
+    expect(controlador.estaRemovida()).toBe(true);
+  });
+
+  it('el GIF de errorTileUrl dispara tileload pero NO cuenta como tile real — sigue removiendo', () => {
+    const onRemoverCapa = vi.fn();
+    const controlador = crearControladorTiles({
+      errorTileUrl: ERROR_TILE_URL,
+      timeoutMs: TIMEOUT_MS,
+      onRemoverCapa,
+    });
+
+    controlador.onTileError();
+    // Este es exactamente el evento que Leaflet 1.9.4 dispara para el placeholder de error:
+    // un tileload cuyo e.tile.src es el errorTileUrl, no un tile real.
+    controlador.onTileLoad(ERROR_TILE_URL);
+    vi.advanceTimersByTime(TIMEOUT_MS);
+
+    expect(onRemoverCapa).toHaveBeenCalledTimes(1);
+    expect(controlador.estaRemovida()).toBe(true);
+  });
+
+  it('un tile real cancela el timeout — nunca remueve la capa', () => {
+    const onRemoverCapa = vi.fn();
+    const controlador = crearControladorTiles({
+      errorTileUrl: ERROR_TILE_URL,
+      timeoutMs: TIMEOUT_MS,
+      onRemoverCapa,
+    });
+
+    controlador.onTileError();
+    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
+    vi.advanceTimersByTime(TIMEOUT_MS);
+
+    expect(onRemoverCapa).not.toHaveBeenCalled();
+    expect(controlador.estaRemovida()).toBe(false);
+  });
+
+  it('un tileerror aislado con red intermitente no remueve nada si después carga un tile real', () => {
+    const onRemoverCapa = vi.fn();
+    const controlador = crearControladorTiles({
+      errorTileUrl: ERROR_TILE_URL,
+      timeoutMs: TIMEOUT_MS,
+      onRemoverCapa,
+    });
+
+    controlador.onTileError();
+    vi.advanceTimersByTime(TIMEOUT_MS / 2);
+    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
+    vi.advanceTimersByTime(TIMEOUT_MS);
+
+    expect(onRemoverCapa).not.toHaveBeenCalled();
+    expect(controlador.estaRemovida()).toBe(false);
+  });
+
+  it('reintentar() resetea el estado para volver a evaluar cobertura desde cero', () => {
+    const onRemoverCapa = vi.fn();
+    const controlador = crearControladorTiles({
+      errorTileUrl: ERROR_TILE_URL,
+      timeoutMs: TIMEOUT_MS,
+      onRemoverCapa,
+    });
+
+    controlador.onTileError();
+    vi.advanceTimersByTime(TIMEOUT_MS);
+    expect(controlador.estaRemovida()).toBe(true);
+
+    controlador.reintentar();
+    expect(controlador.estaRemovida()).toBe(false);
+
+    // Esta vez sí hay señal: no debe volver a removerse.
+    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
+    controlador.onTileError();
+    vi.advanceTimersByTime(TIMEOUT_MS);
+    expect(onRemoverCapa).toHaveBeenCalledTimes(1); // solo la primera vez, no de nuevo
+    expect(controlador.estaRemovida()).toBe(false);
+  });
+});
+
 describe('construirHtml — cero dependencia de red para inicializar el mapa', () => {
   const html = construirHtml(
     paqueteDePrueba(),
@@ -133,6 +243,23 @@ describe('construirHtml — cero dependencia de red para inicializar el mapa', (
 
   it('deja el punto de extensión comentado para el cache de tiles de la Entrega 27', () => {
     expect(html).toContain('Entrega 27');
+  });
+
+  it('fija un view inicial (map.setView) antes de agregar tiles/polyline/marcadores', () => {
+    // Hallazgo 2 del code-review: el comentario decía que esto existía y no era cierto. Ahora
+    // sí hay un setView real, antes de tileLayer.addTo/L.polyline — ver el comentario en
+    // route-map-html.ts para el mecanismo (capas agregadas sin view definido se posicionan mal
+    // hasta el próximo viewreset).
+    const idxSetView = html.indexOf('map.setView(');
+    const idxTileLayerAddTo = html.indexOf('tileLayer.addTo(map)');
+    expect(idxSetView).toBeGreaterThan(-1);
+    expect(idxTileLayerAddTo).toBeGreaterThan(-1);
+    expect(idxSetView).toBeLessThan(idxTileLayerAddTo);
+  });
+
+  it('embebe crearControladorTiles (la máquina de estados de tiles) dentro del script', () => {
+    expect(html).toContain('function crearControladorTiles');
+    expect(html).toContain('controladorTiles.onTileLoad');
   });
 
   it('la polyline de la ruta usa coordenadas ya convertidas a [lat, lng]', () => {

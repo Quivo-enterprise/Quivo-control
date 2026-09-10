@@ -44,6 +44,105 @@ export interface PuntoControlMapaHtml {
   lng: number;
 }
 
+/** Opciones de {@link crearControladorTiles}. */
+export interface OpcionesControladorTiles {
+  /** Debe ser EXACTAMENTE el mismo string que se le pasa a `L.tileLayer(..., { errorTileUrl })`. */
+  errorTileUrl: string;
+  timeoutMs: number;
+  /** Se invoca una sola vez cuando se decide que no hay cobertura y hay que sacar la capa. */
+  onRemoverCapa: () => void;
+}
+
+export interface ControladorTiles {
+  /** Notificar un `tileload` de Leaflet, pasando el `src` del `<img>` que cargó. */
+  onTileLoad: (tileSrc: string | null | undefined) => void;
+  /** Notificar un `tileerror` de Leaflet (no importa cuál tile — solo que falló uno). */
+  onTileError: () => void;
+  /** Reintentar: vuelve a habilitar la detección como si el mapa arrancara de cero. Se usa
+   * cuando puede haber vuelto la red (ver `intentarRecuperarTiles` en el HTML generado). */
+  reintentar: () => void;
+  /** true si ya se decidió remover la capa por falta de cobertura sostenida. */
+  estaRemovida: () => boolean;
+}
+
+/**
+ * Máquina de estados PURA (sin Leaflet, sin DOM) que decide cuándo la capa de tiles de
+ * OpenStreetMap debe darse por perdida y removerse del mapa.
+ *
+ * Por qué existe separada de `construirHtml`: el code-review de la Entrega 25 encontró que el
+ * fallback documentado ("sin tiles a los 4s se remueve la capa") **no se ejecutaba nunca**.
+ * La causa: Leaflet, cuando un tile real falla, carga el `errorTileUrl` (un GIF transparente,
+ * más abajo) como reemplazo — y ESO dispara el evento `tileload` igual que un tile real, porque
+ * para Leaflet "cargó una imagen" no distingue cuál. El handler viejo de `tileload` marcaba
+ * `tilesCargados = true` con cualquier carga, así que el primer tile fallido cancelaba el
+ * timeout y la capa nunca se removía (invisible en pantalla porque el GIF es transparente sobre
+ * el fondo liso, pero el mecanismo quedaba muerto y seguía reintentando tiles reales para
+ * siempre en cada actualización de GPS).
+ *
+ * El fix: `onTileLoad` **ignora explícitamente** cualquier carga cuyo `src` sea el propio
+ * `errorTileUrl` — esa carga es el placeholder de un fallo, nunca cuenta como "hay cobertura".
+ * Se prefirió este filtro sobre sacar `errorTileUrl` y apoyarse solo en `tileerror`
+ * (alternativa considerada) porque `errorTileUrl` sigue siendo necesario por su motivo
+ * original: sin él, Android WebView dibuja el ícono nativo de "imagen rota" en cada tile
+ * fallido mientras no hay red, en vez de quedar transparente sobre el fondo liso `#F4F6F8`.
+ *
+ * Esta función se serializa con `.toString()` dentro de `construirHtml` y su código fuente se
+ * embebe tal cual en el `<script>` del WebView (ver más abajo) — así el test de
+ * `route-map-html.test.ts` ejercita el MISMO código que corre en el mapa real, no una
+ * reimplementación en paralelo que podría divergir con el tiempo. Por eso está escrita con
+ * `function`/`var` en vez de arrow functions o destructuring: para que el texto embebido sea
+ * JS plano y no dependa de qué target de TS/Babel compiló este archivo.
+ */
+export function crearControladorTiles(opciones: OpcionesControladorTiles): ControladorTiles {
+  var cargoTileReal = false;
+  var timeoutId: ReturnType<typeof setTimeout> | null = null;
+  var removida = false;
+
+  function onTileLoad(tileSrc: string | null | undefined) {
+    if (removida) return;
+    if (tileSrc === opciones.errorTileUrl) return; // el GIF de error NUNCA cuenta como carga real
+    cargoTileReal = true;
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  }
+
+  function onTileError() {
+    if (removida || cargoTileReal || timeoutId !== null) return;
+    // Colchón antes de sacar la capa (no al primer error): un tileerror aislado con red
+    // intermitente no debe tirar los tiles para toda la sesión del mapa, solo la ausencia
+    // sostenida de éxito.
+    timeoutId = setTimeout(function () {
+      timeoutId = null;
+      if (!cargoTileReal) {
+        removida = true;
+        opciones.onRemoverCapa();
+      }
+    }, opciones.timeoutMs);
+  }
+
+  function reintentar() {
+    removida = false;
+    cargoTileReal = false;
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  }
+
+  function estaRemovida() {
+    return removida;
+  }
+
+  return {
+    onTileLoad: onTileLoad,
+    onTileError: onTileError,
+    reintentar: reintentar,
+    estaRemovida: estaRemovida,
+  };
+}
+
 export function construirHtml(
   paquete: PaqueteDia,
   _vehiculo: ContextoOperativoMovil['vehiculo'],
@@ -112,6 +211,17 @@ export function construirHtml(
   <script>
     var map = L.map('map', { zoomControl: false, attributionControl: false });
 
+    var coordenadasRuta = ${JSON.stringify(coordenadasRuta)};
+    // Fija un view inicial ANTES de agregar tiles/polyline/marcadores: L.map() de arriba se crea
+    // sin center/zoom (no los tenemos hasta convertir la ruta), y Leaflet posiciona cada capa
+    // que se agrega usando el zoom/centro que el mapa tenga EN ESE MOMENTO. Agregar capas antes
+    // de tener un view definido las proyecta con zoom indefinido — se renderizan mal ubicadas
+    // hasta que algo (acá, el fitBounds del final) fuerza un viewreset que las reacomoda. Ese
+    // "mal ubicadas y después saltan a su lugar" es exactamente la forma del síntoma 10 del
+    // piloto ("la ruta se movió sobre las casas, 2 segundos"). Por eso este setView corre ANTES
+    // de tileLayer.addTo/L.polyline/L.marker más abajo, no después.
+    map.setView(coordenadasRuta.length > 0 ? coordenadasRuta[0] : [0, 0], 15);
+
     // Tiles de OpenStreetMap: son el único recurso de este mapa que sigue viniendo de la red
     // (bundlear un mundo entero de tiles no es viable). Con cobertura, aparecen igual que
     // siempre encima del fondo liso. Sin cobertura, el fondo liso (#F4F6F8, seteado arriba en
@@ -123,13 +233,14 @@ export function construirHtml(
     // desde apps en producción con flota real. Con más de un puñado de vehículos hace falta un
     // proveedor de tiles propio o pago (p. ej. MapTiler, Mapbox, o un tile server propio).
     var TILE_ERROR_TIMEOUT_MS = 4000;
+    // Pixel transparente 1x1: evita que Android WebView dibuje el ícono de "imagen rota" en
+    // cada mosaico que falla mientras no hay red — sin esto, un mapa sin cobertura se llena
+    // de cuadrados rotos parpadeando en cada reintento en vez de quedar en el fondo liso.
+    var ERROR_TILE_URL =
+      'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBTAA7';
     var tileLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      // Pixel transparente 1x1: evita que Android WebView dibuje el ícono de "imagen rota" en
-      // cada mosaico que falla mientras no hay red — sin esto, un mapa sin cobertura se llena
-      // de cuadrados rotos parpadeando en cada reintento en vez de quedar en el fondo liso.
-      errorTileUrl:
-        'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBTAA7'
+      errorTileUrl: ERROR_TILE_URL
     });
     tileLayer.addTo(map);
 
@@ -140,29 +251,42 @@ export function construirHtml(
     // de depender del fetch en vivo de acá abajo. Cuando eso exista, esta capa pasa a ser
     // solamente el fallback de "no lo tenía cacheado".
 
-    var tilesCargados = false;
-    var tileErrorTimeoutId = null;
-    tileLayer.on('tileload', function () {
-      tilesCargados = true;
-      if (tileErrorTimeoutId) {
-        clearTimeout(tileErrorTimeoutId);
-        tileErrorTimeoutId = null;
-      }
+    // crearControladorTiles (definida arriba en route-map-html.ts, pura y testeada en
+    // route-map-html.test.ts) se embebe acá tal cual vía .toString() — es la MISMA función que
+    // corre en el test, no una reimplementación paralela.
+    ${crearControladorTiles.toString()}
+
+    var controladorTiles = crearControladorTiles({
+      errorTileUrl: ERROR_TILE_URL,
+      timeoutMs: TILE_ERROR_TIMEOUT_MS,
+      onRemoverCapa: function () { map.removeLayer(tileLayer); }
+    });
+    tileLayer.on('tileload', function (e) {
+      controladorTiles.onTileLoad(e && e.tile ? e.tile.src : null);
     });
     tileLayer.on('tileerror', function () {
-      if (tilesCargados || tileErrorTimeoutId) return;
-      // Ningún tile cargó todavía y ya falló al menos uno: asumimos que no hay cobertura. Se
-      // espera un colchón antes de sacar la capa (en vez de sacarla al primer error) porque un
-      // primer tileerror aislado con red intermitente no debe tirar los tiles para toda la
-      // sesión del mapa — solo la ausencia sostenida de éxito.
-      tileErrorTimeoutId = setTimeout(function () {
-        if (!tilesCargados) {
-          map.removeLayer(tileLayer);
-        }
-      }, TILE_ERROR_TIMEOUT_MS);
+      controladorTiles.onTileError();
     });
 
-    var coordenadasRuta = ${JSON.stringify(coordenadasRuta)};
+    // Reintento de red apoyado en el heartbeat que YA existe (el GPS), no en 'online'/'offline':
+    // esos eventos del navegador son notoriamente poco confiables en WKWebView (iOS) y no
+    // conviene depender de ellos para algo tan visible como el mapa. Cada actualización de
+    // posición (llega cada vez que el chofer se movió ~15m, ver route-map-view.tsx) es una
+    // oportunidad barata para reintentar: si la capa fue removida, se vuelve a agregar y se
+    // deja que tileload/tileerror decidan otra vez en TILE_ERROR_TIMEOUT_MS si esta vez hay
+    // señal. REINTENTO_MIN_INTERVALO_MS evita reintentar en cada GPS individual mientras se
+    // sigue sin cobertura por un rato largo.
+    var REINTENTO_MIN_INTERVALO_MS = 30000;
+    var ultimoReintentoTilesMs = 0;
+    function intentarRecuperarTiles() {
+      if (!controladorTiles.estaRemovida()) return;
+      var ahora = Date.now();
+      if (ahora - ultimoReintentoTilesMs < REINTENTO_MIN_INTERVALO_MS) return;
+      ultimoReintentoTilesMs = ahora;
+      controladorTiles.reintentar();
+      tileLayer.addTo(map);
+    }
+
     var COLOR_ESPERA = '#1E1B4B';
     var COLOR_LINEA = '#FE9B0B';
 
@@ -304,6 +428,7 @@ export function construirHtml(
 
       if (data.type === 'position') {
         var latlng = [data.lat, data.lng];
+        intentarRecuperarTiles();
 
         if (prevLatLng && (prevLatLng[0] !== latlng[0] || prevLatLng[1] !== latlng[1])) {
           currentHeading = calcHeading(prevLatLng[0], prevLatLng[1], latlng[0], latlng[1]);
@@ -330,12 +455,10 @@ export function construirHtml(
     document.addEventListener('message', receiveMessage);
     window.addEventListener('message', receiveMessage);
     map.on('dragstart', function () { seguimientoActivo = false; });
-    // Fija un view inicial ANTES de fitBounds: sin esto, entre crear el mapa (arriba) y este
-    // fitBounds el mapa no tiene centro/zoom definido, y en dispositivos lentos ese hueco es
-    // parte de lo que puede leerse como "la ruta se movió" — fitBounds ya corre de forma
-    // síncrona apenas el script se ejecuta (que ahora es inmediato, sin esperar ningún
-    // <script src> remoto), así que este hueco pasa de "depende de cuánto tarde la red" a
-    // "un frame de JS local".
+    // El view inicial ya se fijó arriba (map.setView, antes de agregar tiles/polyline/
+    // marcadores) — este fitBounds solo ajusta esa vista provisoria a los límites reales de la
+    // ruta. Corre de forma síncrona apenas el script se ejecuta (inmediato: ya no espera ningún
+    // <script src> remoto), así que el ajuste es un solo frame de JS local, no una espera de red.
     map.fitBounds(ruta.getBounds(), { paddingTopLeft: [20, 80], paddingBottomRight: [20, 180] });
   </script>
 </body>
