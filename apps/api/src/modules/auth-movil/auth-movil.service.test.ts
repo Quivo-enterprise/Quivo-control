@@ -168,6 +168,84 @@ describe('AuthMovilService', () => {
     );
   });
 
+  it('logout con un refreshToken YA ROTADO cae al fallback por deviceId y sí cierra la sesión (docs/handoff.md:3382-3385)', async () => {
+    // Reproduce el bug de QA del 2026-08-23: el cliente sostiene un refreshToken que el
+    // servidor YA rotó (un `refresh()` previo tuvo éxito acá, simulando la rotación cuya
+    // respuesta el cliente real nunca llegó a confirmar recibir) — `login.refreshToken` queda
+    // "fantasma": inválido para `refresh()`, pero la sesión sigue `'activa'` con otro hash.
+    const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+    const login = await service.autenticarConductor({
+      challengeToken: vehiculo.challengeToken,
+      deviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    const rotado = await service.refresh({ refreshToken: login.refreshToken });
+    // El token viejo ya no sirve para refrescar — confirma que quedó "fantasma".
+    await expect(service.refresh({ refreshToken: login.refreshToken })).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    // La sesión, sin embargo, sigue activa (con el hash ROTADO) — es la sesión zombi.
+    await expect(service.validarAccessToken(rotado.accessToken)).resolves.toMatchObject({
+      deviceId,
+    });
+
+    // Logout con el token VIEJO (el único que el cliente real sostenía) + deviceId: el match
+    // exacto por hash no encuentra nada, pero el fallback por deviceId sí cierra la sesión.
+    await service.logout({ refreshToken: login.refreshToken, deviceId });
+
+    await expect(service.validarAccessToken(rotado.accessToken)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
+
+  it('logout SIN deviceId (cliente viejo, compat hacia atrás) sigue siendo un no-op silencioso si el token no matchea', async () => {
+    const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+    const login = await service.autenticarConductor({
+      challengeToken: vehiculo.challengeToken,
+      deviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    const rotado = await service.refresh({ refreshToken: login.refreshToken });
+
+    // Sin `deviceId`, el comportamiento viejo se conserva: no encuentra nada, no lanza, no
+    // cierra nada.
+    await expect(service.logout({ refreshToken: login.refreshToken })).resolves.toBeUndefined();
+    await expect(service.validarAccessToken(rotado.accessToken)).resolves.toMatchObject({
+      deviceId,
+    });
+
+    // Limpieza: no dejar esta sesión activa para no interferir con otros tests del archivo.
+    await service.logout({ refreshToken: rotado.refreshToken });
+  });
+
+  it('logout con deviceId ajeno (sin match de hash) NO toca la sesión de OTRO dispositivo', async () => {
+    const otroDeviceId = `${deviceId}-fallback-scope`;
+    const vehiculo1 = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+    const login1 = await service.autenticarConductor({
+      challengeToken: vehiculo1.challengeToken,
+      deviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login1.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    // deviceId inventado, sin sesión propia — el fallback no encuentra nada que cerrar y la
+    // sesión real (otro deviceId, refreshToken tampoco coincide) queda intacta.
+    await service.logout({ refreshToken: 'x'.repeat(40), deviceId: otroDeviceId });
+    await expect(service.validarAccessToken(login1.accessToken)).resolves.toMatchObject({
+      deviceId,
+    });
+
+    // Limpieza.
+    await service.logout({ refreshToken: login1.refreshToken, deviceId });
+  });
+
   it('al rotar el PIN revoca sesiones y audita sin exponer la credencial', async () => {
     const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
     const login = await service.autenticarConductor({

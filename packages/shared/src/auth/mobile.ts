@@ -205,7 +205,21 @@ export const RefreshMovilResponseSchema = z.object({
 });
 export type RefreshMovilResponse = z.infer<typeof RefreshMovilResponseSchema>;
 
-export const LogoutMovilRequestSchema = RefreshMovilRequestSchema;
+/**
+ * `deviceId` OPCIONAL (Entrega 3, `docs/plan-correccion-post-piloto-2026-09-09.md`; ver
+ * `docs/handoff.md:3382-3385`): el logout viejo solo buscaba la sesión por el hash del
+ * `refreshToken` recibido — si ese token ya había rotado del lado del servidor (p. ej. un
+ * `refresh()` anterior tuvo éxito pero el cliente nunca confirmó recibir la respuesta, mismo
+ * patrón de ack perdido que cierra la Entrega 1 para el outbox), el hash exacto no matcheaba
+ * NINGUNA fila aunque la sesión siguiera `'activa'` con OTRO `refreshTokenHash` vigente:
+ * `logout` respondía 204 sin cerrar nada y la sesión zombi quedaba ensuciando `/en-vivo`.
+ * `deviceId` es el fallback — ver `AuthMovilService.logout` para el porqué es seguro usarlo
+ * sin autenticación adicional en este endpoint público. Opcional (no obligatorio) para no
+ * romper compatibilidad con un cliente viejo que todavía no lo manda. */
+export const LogoutMovilRequestSchema = z.object({
+  refreshToken: z.string().min(32),
+  deviceId: DeviceIdMovilSchema.optional(),
+});
 export type LogoutMovilRequest = z.infer<typeof LogoutMovilRequestSchema>;
 
 export const EstablecerPinMovilRequestSchema = z.object({ pin: PinMovilSchema });
