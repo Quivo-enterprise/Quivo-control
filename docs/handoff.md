@@ -6,6 +6,111 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Post-piloto: plan en 27 entregas y primer merge (#65, 2026-09-10)
+
+El piloto del 2026-09-09 (5 conductores, Línea 120 y Zona 12, todos desde Univalle Tiquipaya)
+funcionó como fuente de evidencia y falló como demo. **La intención vive en
+[`plan-correccion-post-piloto-2026-09-09.md`](plan-correccion-post-piloto-2026-09-09.md)**: 27
+entregas atómicas, cada una un PR con ámbito acotado, verificación, rollback y dependencias.
+Acá queda solo lo ejecutado.
+
+### Lo que el piloto mostró, y no era lo que parecía
+
+- **"Trufis duplicados" no existían.** El combo de `/en-vivo` lista *sesiones*, no vehículos
+  (`map-builders.ts`). Las ~20 entradas eran sesiones, muchas muertas. El mapa dibujaba **una**
+  por vez (`page.tsx`, `<select>` único): por eso aparecieron 2 iconos y nunca los demás.
+- **`verif-fi` / `test-ver` no los genera la app.** El único generador de `deviceId` emite
+  `android:${uuid}`. Son sesiones creadas contra producción por scripts o a mano.
+- **Los avisos "100 m antes" y "134 m antes" no son un bug de detección.** Producción tiene
+  **150 m en ambas líneas** (`scripts/data/z12-circuito/puntos-control.json`,
+  `cargar-linea-120.ts:269`); `seed.ts` siembra 100 m solo en desarrollo, y el comentario de
+  `geofence.ts` cita el lado equivocado. El defecto es de producto: **anuncio == detección**.
+- **"Sin sonido":** el anuncio vive en `gps-provider.tsx`, un componente React. Con la pantalla
+  apagada no hay árbol montado. Un chofer manejando nunca tiene la app en primer plano.
+- **"Tengo que cerrar la app para que se actualice":** `headless-task.ts` no drenaba el outbox.
+- **El round-robin de rotaciones no puede emparejar bien:** `Conductor` no tiene `lineaId`.
+- **3 de 5 no operaron su credencial:** placas y PIN cruzados al copiarlos de un grupo de WhatsApp.
+- **Sentido de ruta invertido:** dato cargado en la rotación, no bug de la app.
+
+### Qué entró en #65
+
+- **Los 5 commits del piloto (`536ad86`…`662cc97`), que estaban solo en una rama local** aunque
+  corrían en producción, incluido el APK con GPS cada 15 m que usaron 3 conductores. `main`
+  seguía con `distanceFilter: 50`.
+- **`GET /reportes/en-vivo/posiciones`** (`9096aa7`, `497dc73`): última posición de todos los
+  vehículos en una sola query, con `lineaId` y `rutaSentido`. El piso del `LATERAL` cubre el
+  cruce de medianoche boliviana; antes, un vehículo que arrancó a las 22:00 desaparecía del mapa
+  a las 00:30. `EXPLAIN ANALYZE`: solo escanea las particiones del rango.
+- **Throttling de `POST /sync/batches`** (`63a0b51`, `e364ead`): por dispositivo, no por IP. El
+  tráfico con token inválido se acota con una caché negativa **por hash de token** en
+  `AuthMovilGuard` (TTL 5 min, tope 10 000, solo `UnauthorizedException`).
+
+**Tres diseños del throttler se descartaron, y todos por la misma causa: los choferes comparten
+IP pública (CGNAT).** (1) `@SkipThrottle()` con el guard de dispositivo después de autenticar
+dejaba sin límite el tráfico no autenticado. (2) Un guard de IP antes de autenticar contaba
+también las peticiones válidas: 20 teléfonos × 6 req/min superan cualquier techo por IP. (3) Un
+bloqueo por fallos por IP antes de validar tumbaba a choferes con credencial válida detrás del
+mismo NAT que un teléfono en bucle de 401. **Cualquier control que use la IP como identidad
+castiga a inocentes en este producto.** Las tres versiones pasaban `tsc` y sus tests.
+
+**Verificación:** 45/45 tests en en-vivo, guard y sync; `/code-review` 0 hallazgos;
+`/security-review` sin vulnerabilidades altas ni medias; CI (`ci` y `acceptance`) verde. En local
+fallan 11 tests de `vehiculos`, `cumplimiento` y `paquete-dia` **con y sin estos cambios**
+(verificado con stash): datos sucios en la base de tests (`localhost:5434`). Mergear no
+despliega: el deploy es manual.
+
+### Estado de las entregas al cierre de este PR
+
+| Entrega | Estado | Dónde |
+|---|---|---|
+| 0a backup de `.estado-siembra-produccion.json` | Hecho, SHA-256 idéntico | `~/quivo-backups/` (fuera del repo) |
+| 10 endpoint de posiciones · 12 throttler | En `main` (#65) | — |
+| 1 `revertirAPendiente` · 2 drenado en background | Commiteado y pusheado, sin PR | `fix/movil-drenado-background` |
+| 25 mapa offline (Leaflet inline) | Commiteado y pusheado, sin PR | `fix/movil-mapa-offline` |
+| 5 voz redondeada · 6 anuncio separado de detección | Commiteado y pusheado, sin PR | `fix/movil-anuncio-puntos-control` |
+| 3 breaker de refresh 401 · 4 pantalla del chofer | En curso | worktree `Quivo-control-movil-drenado` |
+| 7 anuncio desde headless | En curso | worktree `Quivo-control-movil-anuncio` |
+| 13 mapa con todos los vehículos · 14 icono de vehículo | En curso | worktree `Quivo-control-web-mapa` |
+| Resto (0b, 0c, 8, 9, 11, 15–24, 26, 27) | Sin empezar | — |
+
+**Nada del lado móvil está probado en un teléfono.** Los tests del lease corren contra un `Map`
+simulado y el mapa offline no se probó en modo avión real.
+
+### Pendiente del CTO (acceso a producción)
+
+- **0b:** primero el censo de prefijos de `deviceId` (lo necesita la Entrega 11 antes de bloquear
+  dispositivos) y después cerrar las sesiones fantasma **con `UPDATE`, nunca `DELETE`**: hay
+  `gps_points` y `cumplimientos_pc` colgando de esas sesiones sin FK. SQL en el plan.
+- **0c:** la rotación del video a mano (no `POST /v1/rotaciones`) y revisar el `sentido` de cada ruta.
+- **Radio de detección:** el CTO pidió 10 m. Recomendación escrita en el plan: **150 m para
+  detectar, ~40 m para confirmar al chofer**. `RUTA_PROXIMIDAD_TOLERANCIA_METROS = 100` permite
+  plantar puntos hasta 100 m fuera de su ruta, y todo radio menor que esa distancia los pierde en
+  todas las pasadas. La Entrega 18 lo mide punto por punto.
+
+### Deuda conocida que #65 no cierra
+
+- `sembrar-piloto-produccion.ts`: los pasos 10–12 sin `try/finally` (un 429 deja la rotación en
+  `borrador` y nadie loguea), y el `catch` del borrado marca asignaciones imborrables ante
+  cualquier error.
+- `vehicle-marker-animation.ts`: la cola crece en poll rápido y el marcador se atrasa.
+- Techo de traza de 50 000 puntos sin acotar el costo de Zod y la serialización en Node.
+- El aislamiento entre sindicatos de `/reportes/en-vivo` depende de RLS **transitiva** por JOIN:
+  `sesiones_operativas`, `rutas` y `asignaciones` no tienen política propia.
+- `tile.openstreetmap.org` no admite uso intensivo de una flota en producción.
+- Posible test inestable: `CURRENT_DATE - 1` depende de la zona horaria de la conexión.
+
+### Lecciones de proceso
+
+- **El límite de uso cortó agentes tres veces**, siempre con 4 o 5 en paralelo, y cada corte dejó
+  trabajo a medias. Un intento dejó el drenado escrito pero sin conectar a ningún call site: habría
+  pasado los tests sin arreglar nada. Retomar un corte exige auditar el diff, no continuar a ciegas.
+- **Cada agente trabaja en su worktree.** Uno hizo `checkout -b` en el directorio principal y
+  desvió un commit del chairman a otra rama.
+- **Un comentario que afirma una garantía de seguridad no es evidencia.** El guard original
+  documentaba un fallback a `req.ip` que nunca se ejecutaba; se aprobó leyendo el comentario en
+  vez de trazar el orden de guards.
+- Un agente agregó `Co-Authored-By` a un commit; se reescribió antes del push.
+
 ## Producción usable: panel, credenciales y GPS más fino (2026-09-09)
 
 El primer día en que la app, la API, el panel y la base funcionaron juntos contra producción,
