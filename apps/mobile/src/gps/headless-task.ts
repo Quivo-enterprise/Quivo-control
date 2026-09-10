@@ -13,7 +13,12 @@ import {
 import { abrirOutbox, encolarEvento, obtenerEventosPorTipo } from '../db/outbox';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
-import { cargarSesionMovil, obtenerDeviceIdMovil } from '../shared/security/sesion-movil-store';
+import { intentarRefrescarConCircuito } from '../shared/api/refresh-circuit-breaker';
+import {
+  actualizarSesionMovil,
+  cargarSesionMovil,
+  obtenerDeviceIdMovil,
+} from '../shared/security/sesion-movil-store';
 
 /**
  * Margen de gracia antes de apagar el plugin nativo tras vencer el paquete del día (hallazgo
@@ -428,22 +433,31 @@ async function asegurarSemillaCumplimientos(
  * React, con estado en memoria y `useCallback`; acá no hay árbol de componentes, así que la
  * única fuente posible es SecureStore, igual que `obtenerContextoUbicacionPersistido` arriba).
  *
- * Sin refresh: si el access token venció, esta función se limita a devolver `null` y
- * `intentarDrenarOportunista` aborta el drenado en silencio (falla de TRANSPORTE, no de
- * captura — ver su docblock). El hook de foreground SÍ intenta un refresh con el refresh
- * token (`use-auth-movil.ts:357-372`) antes de rendirse; replicar esa lógica acá queda FUERA
- * del alcance de esta entrega a propósito (lo anota el encargo): un refresh que falla en loop
- * necesita el circuit breaker de la Entrega 3, que también vive en el mismo módulo de auth.
+ * Entrega 3 (cierra el punto de extensión que dejó la Entrega 2): si el access token venció,
+ * ahora SÍ se intenta un refresh — protegido por el mismo circuit breaker que usa el hook de
+ * foreground (`intentarRefrescarConCircuito`, `shared/api/refresh-circuit-breaker.ts`). El
+ * breaker vive en memoria a nivel de módulo (no en SQLite como el lease del drenado): headless
+ * y foreground pueden ser contextos JS distintos, así que en el peor caso el circuito no
+ * "ve" los fallos del otro contexto y hace un intento de más antes de abrirse — nunca se
+ * rompe nada, es la misma decisión documentada en el docblock del breaker.
  *
- * PUNTO DE EXTENSIÓN (Entrega 3): cuando el circuit breaker de refresh esté listo, acá es
- * donde intentar `authMovilApi`/refresh con el `refreshToken` de `sesion` antes de devolver
- * `null` — hoy se prefiere no duplicar esa lógica de reintento sin su circuito de corte.
+ * Sigue siendo TRANSPORTE, no captura: si el refresh falla (circuito abierto, 401 real, o
+ * simplemente sin red), esta función devuelve `null` en silencio y `intentarDrenarOportunista`
+ * aborta el drenado sin tocar la pantalla del chofer — la evidencia ya está a salvo en el
+ * outbox. El breaker ya reporta a Sentry por su cuenta cuando corresponde (ver su docblock);
+ * acá no hace falta un `captureException` adicional por cada intento fallido.
  */
-async function obtenerAccessTokenHeadless(): Promise<string | null> {
+export async function obtenerAccessTokenHeadless(): Promise<string | null> {
   const sesion = await cargarSesionMovil();
   if (!sesion) return null;
   if (new Date(sesion.accessTokenExpiresAt) > new Date()) return sesion.accessToken;
-  return null;
+  try {
+    const tokens = await intentarRefrescarConCircuito(sesion.refreshToken);
+    const actualizada = await actualizarSesionMovil(sesion, tokens);
+    return actualizada.accessToken;
+  } catch {
+    return null;
+  }
 }
 
 /**
