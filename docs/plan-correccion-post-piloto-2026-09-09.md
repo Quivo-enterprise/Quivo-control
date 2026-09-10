@@ -702,6 +702,12 @@ si `now() - max(received_at) > 15 min` en horario operativo; asegurar que la exc
 **P2 · Ámbito: datos/docs · ~2 h · Depende de: 0a**
 
 - Borrar `scripts/crear-credenciales-piloto.ts` (obsoleto según `docs/plan-siembra-produccion.md:207-209`).
+- **Documentación de infraestructura desactualizada (verificado el 2026-09-10):** `docs/infra-gcp-prod.md`
+  y el documento de credenciales de demo day apuntan a `quivo-api-424426714260` / `quivo-web-424426714260`,
+  pero esa API responde **503**. El APK de producción usa `quivo-api-741758083365` (`apps/mobile/eas.json:30`),
+  que responde 200. Además, la credencial de admin documentada da 401 en la API viva: el primer admin de
+  producción se creó con contraseña aleatoria en Secret Manager. Corregir las URLs y dejar escrito dónde
+  vive la credencial, sin copiarla.
 - Actualizar `docs/plan-unicidad-placa.md:3`, que dice "sin implementar" cuando PR #56 / commit
   `878e078` ya está en main.
 - Restos conocidos sin endpoint DELETE (`PILOTO001`, `L1-PILOTO`, 73 asignaciones viejas sobre
@@ -937,6 +943,34 @@ El evento de Sentry del 10-09 (Android 13) reporta `POST_NOTIFICATIONS: not_gran
 **la notificación del anuncio de la Entrega 7 no se muestra en campo**. Pedirlo con la app en primer
 plano antes de iniciar el recorrido. Fail-open: si se niega, vibración y voz siguen. Exponer el estado
 para el preflight de la Entrega 26.
+
+---
+
+### Entrega 29 — Coerción de query en la API (500 en `/v1/sync-errores`)
+**P0 · Ámbito: API (+ `packages/shared` si el arreglo es de infraestructura) · ~3 h · Sin dependencias · Bug en producción**
+
+**Evidencia (verificación en vivo del 2026-09-10).** `GET /v1/sync-errores?desde=<ISO>` devuelve 500:
+```
+fecha.getUTCFullYear is not a function
+  at inicioDeJornadaBolivia (apps/api/src/common/tiempo/jornada.ts:24)
+  at SyncErroresService.listar (apps/api/src/modules/sync/sync-errores.service.ts:18)
+```
+`SyncErroresQuerySchema` declara `desde: z.coerce.date().optional()`, pero el controlador pasa el
+`@Query()` crudo al servicio con `query as SyncErroresQuery`: **el valor que transforma Zod nunca
+llega**, y `inicioDeJornadaBolivia` recibe un string. Está en `main`, o sea en producción. Es la sección
+"errores de sincronización" del panel, que el CTO usó durante el piloto; el dashboard la pide con
+`desde` al cargar. El comentario del schema dice que sigue "el mismo criterio que
+`AuditoriaQuerySchema`", así que auditoría es candidata al mismo defecto.
+
+**Enfoque:** determinar si el pipe o `createZodDto` (`apps/api/src/common/validation/zod-dto.ts`) validan
+sin devolver el output parseado. Si es infraestructura, arreglarlo ahí, para todos los endpoints. Barrer
+todo `@Query()` o `@Body()` cuyo schema use `z.coerce`, `.transform`, `.default` o `.preprocess` y cuyo
+valor se trate como parseado.
+
+**Verificación:** integración de `GET /v1/sync-errores?desde=&hasta=` → 200 con el filtro aplicado,
+más un test por cada endpoint afectado.
+**Rollback:** revert. Riesgo: si el arreglo es en el pipe, cambia el valor que reciben **todos** los
+handlers (pasan a recibir el output parseado): correr la suite completa de la API.
 
 ---
 
