@@ -37,6 +37,19 @@ export class EnVivoController {
     return this.enVivoService.listarHoy(actor);
   }
 
+  /**
+   * ENTREGA 10 — última posición conocida de TODOS los vehículos con sesión activa, en
+   * una sola query (ver `EnVivoService.obtenerPosiciones`). Ruta declarada ANTES de
+   * `:sesionId/contexto` en el código fuente por legibilidad, aunque no hay colisión
+   * real: `posiciones` es un segmento literal de un solo nivel bajo `reportes/en-vivo`,
+   * mientras que las rutas con `:sesionId` tienen dos segmentos — Nest las distingue por
+   * forma, no por orden de declaración.
+   */
+  @Get('posiciones')
+  posicionesTodas(@CurrentUser() actor: AuthenticatedUser) {
+    return this.enVivoService.obtenerPosiciones(actor);
+  }
+
   @Get(':sesionId/contexto')
   contexto(@CurrentUser() actor: AuthenticatedUser, @Param('sesionId') sesionId: string) {
     return this.enVivoService.obtenerContexto(actor, sesionId);

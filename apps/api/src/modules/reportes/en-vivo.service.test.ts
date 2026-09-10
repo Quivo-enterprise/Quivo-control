@@ -49,6 +49,13 @@ describe('EnVivoService', () => {
   let inicioSesion: Date;
   /** `ts` de los 2 fixes cargados, en orden. */
   let tsFixes: [Date, Date];
+  // ENTREGA 10 — segunda línea/ruta (sentido distinto) con su propia sesión, para
+  // probar `obtenerPosiciones` con vehículos de 2 líneas distintas en una sola query.
+  let linea1Id: string;
+  let linea2Id: string;
+  let ruta2Id: string;
+  let sesionLinea2Id: string;
+  let tsFixLinea2: Date;
 
   const adminQuivo: AuthenticatedUser = {
     userId: 'test-admin-quivo',
@@ -83,6 +90,7 @@ describe('EnVivoService', () => {
           color: '#FD9E15',
         },
       });
+      linea1Id = linea.id;
       rutaId = randomUUID();
       await tx.$executeRaw`
         INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
@@ -199,21 +207,94 @@ describe('EnVivoService', () => {
           validadoPor: 'worker',
         },
       });
+
+      // ENTREGA 10 — segunda línea, con `sentido` distinto ('vuelta' vs 'ida'), su
+      // propio vehículo/conductor y una sesión con 1 fix. Prueba que `obtenerPosiciones`
+      // trae `lineaId`/`rutaSentido` correctos por fila cuando hay 2 líneas en la misma
+      // query, no solo 1 como en el resto de este archivo.
+      const linea2 = await tx.linea.create({
+        data: {
+          sindicatoId: sindicatoAId,
+          codigo: 'EV2',
+          nombre: 'Línea En Vivo 2',
+          color: '#2E7D32',
+        },
+      });
+      linea2Id = linea2.id;
+      ruta2Id = randomUUID();
+      await tx.$executeRaw`
+        INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+        VALUES (${ruta2Id}, ${linea2Id}, 'vuelta', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())
+      `;
+      const vehiculo2 = await tx.vehiculo.create({
+        data: {
+          sindicatoId: sindicatoAId,
+          placa: 'EVD002',
+          tipo: 'bus',
+          marca: 'x',
+          modelo: 'x',
+          color: 'x',
+          capacidad: 10,
+          estado: 'activo',
+        },
+      });
+      const conductor2 = await tx.conductor.create({
+        data: {
+          sindicatoId: sindicatoAId,
+          nombre: 'Conductor En Vivo 2',
+          documentoIdentidad: `EVD2-${randomUUID()}`,
+          licenciaConducir: 'LIC-EV2',
+        },
+      });
+      const rotacion2 = await tx.rotacion.create({
+        data: { sindicatoId: sindicatoAId, periodo: '2026-08', estado: 'publicada' },
+      });
+      const asignacion2 = await tx.asignacion.create({
+        data: {
+          rotacionId: rotacion2.id,
+          vehiculoId: vehiculo2.id,
+          conductorId: conductor2.id,
+          rutaId: ruta2Id,
+          fecha: ahora,
+          horario: 'manana',
+          orden: 1,
+          venceAt: new Date(ahora.getTime() + 60 * MINUTO),
+          estado: 'vigente',
+        },
+      });
+      const sesionLinea2 = await tx.sesionOperativa.create({
+        data: {
+          sindicatoId: sindicatoAId,
+          asignacionId: asignacion2.id,
+          vehiculoId: vehiculo2.id,
+          conductorId: conductor2.id,
+          deviceId: 'device-en-vivo-3',
+          inicio: new Date(ahora.getTime() - 15 * MINUTO),
+          estado: 'activa',
+          ...credenciales(),
+        },
+      });
+      sesionLinea2Id = sesionLinea2.id;
+      tsFixLinea2 = new Date(ahora.getTime() - 2 * MINUTO);
+      await tx.$executeRaw`
+        INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
+        VALUES (${randomUUID()}::uuid, ${sesionLinea2Id}::uuid, 'device-en-vivo-3', ${tsFixLinea2}::timestamptz, -34.601, -58.401, 4, 6.5, ${tsFixLinea2}::timestamptz, ${sindicatoAId})
+      `;
     });
   });
 
   afterAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id = ${sesionConPuntosId}::uuid`;
+      await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id IN (${sesionConPuntosId}::uuid, ${sesionLinea2Id}::uuid)`;
       await tx.cumplimientoPc.deleteMany({ where: { sindicatoId: sindicatoAId } });
       await tx.eventoOperativo.deleteMany({ where: { sindicatoId: sindicatoAId } });
       await tx.sesionOperativa.deleteMany({ where: { sindicatoId: sindicatoAId } });
-      await tx.asignacion.deleteMany({ where: { rutaId } });
+      await tx.asignacion.deleteMany({ where: { rutaId: { in: [rutaId, ruta2Id] } } });
       await tx.rotacion.deleteMany({ where: { sindicatoId: sindicatoAId } });
       await tx.vehiculo.deleteMany({ where: { sindicatoId: sindicatoAId } });
       await tx.conductor.deleteMany({ where: { sindicatoId: sindicatoAId } });
       await tx.$executeRaw`DELETE FROM puntos_control WHERE "rutaId" = ${rutaId}`;
-      await tx.$executeRaw`DELETE FROM rutas WHERE id = ${rutaId}`;
+      await tx.$executeRaw`DELETE FROM rutas WHERE id IN (${rutaId}, ${ruta2Id})`;
       await tx.linea.deleteMany({ where: { sindicatoId: sindicatoAId } });
       await tx.sindicato.deleteMany({ where: { id: { in: [sindicatoAId, sindicatoBId] } } });
     });
@@ -514,6 +595,80 @@ describe('EnVivoService', () => {
       await expect(
         service.obtenerTraza(adminQuivo, randomUUID(), { limite: 100 }, AHORA),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('obtenerPosiciones (ENTREGA 10 — una sola query para todos los vehículos)', () => {
+    it('devuelve las 3 sesiones de 2 líneas distintas con lineaId, sentido y última posición', async () => {
+      const filas = await service.obtenerPosiciones(adminQuivo, AHORA);
+
+      const conPuntos = filas.find((f) => f.id === sesionConPuntosId);
+      expect(conPuntos).toBeDefined();
+      expect(conPuntos?.lineaId).toBe(linea1Id);
+      expect(conPuntos?.lineaNombre).toBe('Línea En Vivo');
+      expect(conPuntos?.rutaSentido).toBe('ida');
+      // Última posición == el fix MÁS RECIENTE (tsFixes[1]), no un promedio ni el primero.
+      expect(conPuntos?.lat).toBe(-34.599);
+      expect(conPuntos?.lng).toBe(-58.399);
+      expect(conPuntos?.speed).toBe(9.1);
+      expect(conPuntos?.ultimoFixTs).toBe(tsFixes[1].toISOString());
+      expect(conPuntos?.totalPuntos).toBe(2);
+      expect(conPuntos?.estadoFrescura).toBe('reportando');
+      expect(conPuntos?.activa).toBe(true);
+
+      const sinPuntos = filas.find((f) => f.id === sesionSinPuntosId);
+      expect(sinPuntos).toBeDefined();
+      expect(sinPuntos?.lat).toBeNull();
+      expect(sinPuntos?.lng).toBeNull();
+      expect(sinPuntos?.estadoFrescura).toBe('sin_datos');
+
+      const linea2 = filas.find((f) => f.id === sesionLinea2Id);
+      expect(linea2).toBeDefined();
+      expect(linea2?.lineaId).toBe(linea2Id);
+      expect(linea2?.lineaNombre).toBe('Línea En Vivo 2');
+      expect(linea2?.rutaSentido).toBe('vuelta');
+      expect(linea2?.vehiculoPlaca).toBe('EVD002');
+      expect(linea2?.lat).toBe(-34.601);
+      expect(linea2?.lng).toBe(-58.401);
+      expect(linea2?.ultimoFixTs).toBe(tsFixLinea2.toISOString());
+    });
+
+    it('una sesión colgada de días previos (fin NULL + estado activa) sigue apareciendo', async () => {
+      // Reproduce el mismo defecto que cubre `listarHoy`: "Finalizar recorrido" no
+      // cierra la sesión, así que una sesión de hace varios días con `fin` NULL debe
+      // seguir viéndose (para no esconder un teléfono zombi que el admin necesita cerrar
+      // a mano) aunque quede fuera de la ventana rodante de 24 h por `so.inicio`.
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+        tx.sesionOperativa.update({
+          where: { id: sesionSinPuntosId },
+          data: { inicio: new Date('2026-07-01T14:00:00.000Z') },
+        }),
+      );
+
+      try {
+        const filas = await service.obtenerPosiciones(adminQuivo, AHORA);
+        expect(filas.some((f) => f.id === sesionSinPuntosId)).toBe(true);
+      } finally {
+        await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+          tx.sesionOperativa.update({
+            where: { id: sesionSinPuntosId },
+            data: { inicio: new Date(AHORA.getTime() - 10 * MINUTO) },
+          }),
+        );
+      }
+    });
+
+    it('admin_sindicato de otro tenant no ve las sesiones de este sindicato (RLS)', async () => {
+      const filas = await service.obtenerPosiciones(adminSindicatoB, AHORA);
+      expect(filas.some((f) => f.id === sesionConPuntosId)).toBe(false);
+      expect(filas.some((f) => f.id === sesionLinea2Id)).toBe(false);
+      expect(filas).toHaveLength(0);
+    });
+
+    it('admin_sindicato del sindicato dueño sí ve sus propias sesiones', async () => {
+      const filas = await service.obtenerPosiciones(adminSindicatoA, AHORA);
+      expect(filas.some((f) => f.id === sesionConPuntosId)).toBe(true);
+      expect(filas.some((f) => f.id === sesionLinea2Id)).toBe(true);
     });
   });
 });
