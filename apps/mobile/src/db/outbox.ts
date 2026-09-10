@@ -403,13 +403,45 @@ export async function marcarAcusados(db: SQLite.SQLiteDatabase, eventIds: string
   await actualizarEstado(db, eventIds, 'acusado');
 }
 
-/** Reintento tras fallo de red/timeout del lote completo: vuelve `enviado` -> `pendiente`
- * para que el próximo ciclo de sync los tome de nuevo (con backoff, ver QUI-240). */
+/**
+ * SQL de la reversión con GUARDA DE ESTADO, aislado como función pura para poder testearlo sin
+ * un módulo nativo de por medio (mismo patrón que `construirPurgaAcusados`, arriba).
+ *
+ * 🔴 BUG DE PRODUCCIÓN que este guard corrige: `sincronizarPendientes`
+ * (`features/operacion/sync-outbox.ts`) marca el lote entero `enviado`, lo manda, y en su
+ * `catch` (fallo de red/timeout) revertía el LOTE ENTERO a `pendiente` sin mirar qué pasó con
+ * cada `event_id` puntual. Si el POST llegó al servidor y se procesó (202 de QUI-240) pero la
+ * RESPUESTA se perdió en el camino de vuelta (timeout de 20 s, red boliviana), el servidor YA
+ * tiene esos eventos — pero el cliente, sin este guard, los devolvía a `pendiente` igual y los
+ * reenviaba PARA SIEMPRE, sin que nada los volviera a marcar `acusado` (el próximo acuse del
+ * servidor no vuelve a mencionar un `event_id` que ya procesó antes). `acusado` es un estado
+ * TERMINAL — es el contrato de QUI-238 ("`acusado` = confirmado por el servidor") — y nada debe
+ * sacarlo de ahí. El `AND estado = 'enviado'` hace que solo los eventos que de verdad siguen en
+ * vuelo (nadie los acusó todavía) vuelvan a `pendiente`; un `event_id` que ya está `acusado` no
+ * matchea la condición y la fila queda intacta.
+ */
+export function construirRevertirAPendiente(
+  eventIds: string[],
+): { sql: string; params: string[] } {
+  const placeholders = eventIds.map(() => '?').join(',');
+  return {
+    sql: `UPDATE outbox SET estado = 'pendiente' WHERE event_id IN (${placeholders}) AND estado = 'enviado'`,
+    params: [...eventIds],
+  };
+}
+
+/** Reintento tras fallo de red/timeout del lote completo: vuelve `enviado` -> `pendiente` para
+ * que el próximo ciclo de sync los tome de nuevo (con backoff, ver QUI-240). Ver
+ * `construirRevertirAPendiente` para el porqué del guard de estado — a diferencia de
+ * `marcarEnviados`/`marcarAcusados` (que pasan por `actualizarEstado` sin condición, porque ahí
+ * el estado de origen no importa), esta función NUNCA debe poder pisar un `acusado`. */
 export async function revertirAPendiente(
   db: SQLite.SQLiteDatabase,
   eventIds: string[],
 ): Promise<void> {
-  await actualizarEstado(db, eventIds, 'pendiente');
+  if (eventIds.length === 0) return;
+  const { sql, params } = construirRevertirAPendiente(eventIds);
+  await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
 }
 
 /** Tipo de evento cuya evidencia local se preserva mientras la sesión siga activa: es el único
