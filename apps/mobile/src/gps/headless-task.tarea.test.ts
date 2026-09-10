@@ -1,0 +1,120 @@
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+// Hallazgo 1 (CRÍTICO) y hallazgo 2 (MEDIO), code review de la Entrega 2
+// (`docs/plan-correccion-post-piloto-2026-09-09.md`): `tareaHeadlessUbicacion` tenía un
+// `return` dentro del `try` que salía de TODA la función cuando no había turno vigente
+// (`contexto === null`) — el drenado del outbox, entonces al final del cuerpo, nunca corría
+// en ese camino. Y solo procesaba el evento `location`, así que los `heartbeat` headless
+// (el único enganche cuando el vehículo está quieto y ningún fix `location` llega) tampoco
+// drenaban nunca. Este archivo cubre ambos: el drenado tiene que correr SIEMPRE, sea
+// `location` con contexto nulo, o `heartbeat`.
+//
+// Mismos mocks que `headless-task.access-token.test.ts`/`headless-task.test.ts`:
+// `expo-sqlite`/`expo-crypto`/`expo-secure-store` y `@sentry/react-native` no corren bajo
+// vitest/Node.
+vi.mock('react-native-background-geolocation', () => ({
+  default: {
+    getState: vi.fn().mockResolvedValue({ enabled: false }),
+    stop: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('@sentry/react-native', () => ({
+  captureException: vi.fn(),
+  captureMessage: vi.fn(),
+  addBreadcrumb: vi.fn(),
+}));
+
+vi.mock('../db/outbox', () => ({
+  abrirOutbox: vi.fn(),
+  encolarEvento: vi.fn(),
+  obtenerEventosPorTipo: vi.fn(),
+}));
+
+vi.mock('../db/paquete-dia', () => ({
+  abrirPaqueteDiaDb: vi.fn(),
+  obtenerPaqueteDiaLocal: vi.fn(),
+}));
+
+vi.mock('../features/operacion/drenaje-oportunista', () => ({
+  intentarDrenarOportunista: vi.fn().mockResolvedValue(undefined),
+}));
+
+// `tareaHeadlessUbicacion` ya no llama directo al circuit breaker (hallazgo 4) — reusa
+// `refrescar()` de `use-auth-movil.ts`, que este archivo no ejercita (no hay ningún caso acá
+// con `contexto` no nulo que llegue a pedir un access token). Se mockea igual para que
+// `import './headless-task'` no arrastre `use-auth-movil.ts` (React, `authMovilApi`, etc.)
+// al evaluar el módulo.
+vi.mock('../features/auth/use-auth-movil', () => ({
+  refrescar: vi.fn(),
+}));
+
+vi.mock('../shared/security/sesion-movil-store', () => ({
+  cargarSesionMovil: vi.fn(),
+  obtenerDeviceIdMovil: vi.fn(),
+}));
+
+import { abrirOutbox } from '../db/outbox';
+import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
+import { cargarSesionMovil } from '../shared/security/sesion-movil-store';
+import { tareaHeadlessUbicacion } from './headless-task';
+
+const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
+const abrirOutboxMock = abrirOutbox as unknown as ReturnType<typeof vi.fn>;
+const intentarDrenarOportunistaMock = intentarDrenarOportunista as unknown as ReturnType<
+  typeof vi.fn
+>;
+
+describe('tareaHeadlessUbicacion — hallazgo 1 (drenado saltado por el return del contexto nulo)', () => {
+  beforeEach(() => {
+    cargarSesionMovilMock.mockReset().mockResolvedValue(null); // sin sesión → contexto null
+    intentarDrenarOportunistaMock.mockClear();
+    abrirOutboxMock.mockReset();
+  });
+
+  it('con evento `location` y contexto nulo (sin sesión), el drenado corre igual', async () => {
+    await tareaHeadlessUbicacion({
+      name: 'location',
+      params: { coords: { latitude: -16.5, longitude: -68.15 } },
+    } as never);
+
+    // Antes del fix, el `return` de la rama `!contexto` (dentro del try) salía de TODA la
+    // función y esta línea nunca se ejecutaba.
+    expect(intentarDrenarOportunistaMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('no intenta escribir un punto GPS cuando no hay contexto (sesión cerrada)', async () => {
+    await tareaHeadlessUbicacion({
+      name: 'location',
+      params: { coords: { latitude: -16.5, longitude: -68.15 } },
+    } as never);
+
+    // Sin contexto, `abrirOutbox` no debería llegar a abrirse para registrar el punto — el
+    // único llamador de `abrirOutbox` en este archivo es el camino de escritura del punto.
+    expect(abrirOutboxMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('tareaHeadlessUbicacion — hallazgo 2 (heartbeat headless no drenaba)', () => {
+  beforeEach(() => {
+    cargarSesionMovilMock.mockReset();
+    intentarDrenarOportunistaMock.mockClear();
+    abrirOutboxMock.mockReset();
+  });
+
+  it('un evento `heartbeat` dispara el drenado, sin registrar ningún punto GPS', async () => {
+    await tareaHeadlessUbicacion({ name: 'heartbeat', params: {} } as never);
+
+    expect(intentarDrenarOportunistaMock).toHaveBeenCalledTimes(1);
+    // `heartbeat` nunca debe intentar escribir un punto GPS falso — ni siquiera se consulta
+    // la sesión/contexto de ubicación para ese evento.
+    expect(cargarSesionMovilMock).not.toHaveBeenCalled();
+    expect(abrirOutboxMock).not.toHaveBeenCalled();
+  });
+
+  it('un evento que no es `location` ni `heartbeat` (p. ej. `motionchange`) NO dispara el drenado', async () => {
+    await tareaHeadlessUbicacion({ name: 'motionchange', params: {} } as never);
+
+    expect(intentarDrenarOportunistaMock).not.toHaveBeenCalled();
+  });
+});

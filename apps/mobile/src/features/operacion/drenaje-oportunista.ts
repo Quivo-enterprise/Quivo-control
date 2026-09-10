@@ -4,7 +4,10 @@ import {
   abrirOutbox,
   adquirirLease,
   liberarLeaseConCooldown,
+  recuperarEnviadosHuerfanos,
   ID_LEASE_DRENAJE,
+  PISO_ENTRE_INTENTOS_DRENAJE_MS as PISO_ENTRE_INTENTOS_MS,
+  TTL_LEASE_DRENAJE_MS as TTL_LEASE_MS,
 } from '../../db/outbox';
 import { sincronizarPendientes } from './sync-outbox';
 
@@ -34,10 +37,13 @@ import { sincronizarPendientes } from './sync-outbox';
  * invoca) es quien vuelve a preguntar si ya se puede intentar.
  */
 
-/** Piso duro entre intentos EXITOSOS — evita que un GPS a alta frecuencia (distanceFilter 15 m
- * ≈ cada pocos segundos a velocidad de calle) dispare un POST por cada fix. Valor fijado en el
- * encargo. */
-const PISO_ENTRE_INTENTOS_MS = 10_000;
+// `PISO_ENTRE_INTENTOS_MS` y `TTL_LEASE_MS` viven ahora en `db/outbox.ts`
+// (`PISO_ENTRE_INTENTOS_DRENAJE_MS`/`TTL_LEASE_DRENAJE_MS`, importados arriba con alias para
+// no tocar el resto de este archivo) — `sync-outbox.ts` también los necesita para su propia
+// variante con lease (hallazgo 6) y no puede importarlos de acá sin crear un ciclo. Ver el
+// comentario de `ID_LEASE_DRENAJE` en `outbox.ts` para el detalle de cada valor: 10 s de piso
+// entre intentos exitosos (GPS a alta frecuencia no debe disparar un POST por fix) y 60 s de
+// TTL del lease (OkHttp en Android con la Activity pausada puede no respetar timeout propio).
 
 /** Backoff tras un fallo de transporte — arranca en el mismo piso y crece exponencial hasta
  * este techo, igual que el motor de sync en primer plano (`sync-outbox.ts`,
@@ -46,20 +52,13 @@ const PISO_ENTRE_INTENTOS_MS = 10_000;
 const BACKOFF_MAXIMO_MS = 60_000;
 
 /**
- * TTL del lease en sí (distinto del cooldown de arriba) — el techo de tiempo que protege contra
- * un lease HUÉRFANO: si el proceso muere a mitad del `POST` sin llegar a liberar, esta es la
- * ventana máxima que el drenado queda bloqueado antes de que un intento nuevo lo recupere solo.
- *
- * 60 s, no menos: `docs/handoff.md` documenta que en Android, con la Activity pausada, OkHttp
- * corre SIN timeout propio y el `AbortController` de `sync-api.ts` (que depende de un
- * `setTimeout` de 20 s para abortar) puede no disparar nunca — un POST puede quedar colgado de
- * verdad, más allá de su timeout nominal. El TTL tiene que ser mayor a ese peor caso conocido
- * para no reclamar como "huérfano" un intento que en realidad sigue vivo, legítimo y a punto
- * de resolver. Coincide, no por casualidad, con el `heartbeatInterval` del SDK
- * (`background-geolocation.config.ts`): en el peor caso, un lease atascado se libera solo a
- * tiempo para el próximo latido.
+ * Hallazgo 3 (code review, MEDIO): umbral para `recuperarEnviadosHuerfanos` — ver su docblock
+ * en `db/outbox.ts`. Tiene que ser mayor que AMBOS techos conocidos de "todavía en vuelo,
+ * legítimo": el timeout del propio request (`REQUEST_TIMEOUT_MS = 20_000`, `sync-api.ts`) y
+ * el TTL del lease (`TTL_LEASE_MS`, 60 s, arriba). 90 s deja 30 s de margen sobre el mayor de
+ * los dos — de sobra para no reclamar como huérfana una fila cuyo POST todavía puede resolver.
  */
-const TTL_LEASE_MS = 60_000;
+const UMBRAL_RECUPERACION_ENVIADOS_MS = 90_000;
 
 /** Backoff EN MEMORIA — a propósito no vive en SQLite como el lease. No es una garantía de
  * correctitud (eso lo da el lease, que SÍ cruza contextos): es solo una optimización para que
@@ -106,24 +105,19 @@ export async function intentarDrenarOportunista(
   obtenerAccessToken: () => Promise<string | null>,
 ): Promise<void> {
   try {
-    const accessToken = await obtenerAccessToken();
-    if (!accessToken) {
-      // PUNTO DE EXTENSIÓN (Entrega 3, circuit breaker del refresh 401 — no es el alcance de
-      // esta entrega): hoy, sin token utilizable (sesión sin restaurar o refresh vencido sin
-      // poder renovarse), abortamos el drenado EN SILENCIO. Es la decisión correcta bajo el
-      // principio rector: un token vencido es una falla de TRANSPORTE (no se puede hablar con
-      // el servidor), nunca de captura — el outbox sigue creciendo sin que el chofer se entere.
-      // Cuando la Entrega 3 traiga el circuit breaker de refresh, ESTE es el lugar donde
-      // intentar un refresh antes de rendirse (hoy `obtenerAccessToken` ya intenta un refresh
-      // normal si el access token venció pero el refresh token sigue vivo — ver
-      // `use-auth-movil.ts`; lo que falta es el circuito para cuando el refresh mismo empieza a
-      // fallar en bucle).
-      return;
-    }
-
     const db = await abrirOutbox();
     const ahoraMs = Date.now();
     const token = generarTokenLease();
+    // Hallazgo 4a (code review, causa candidata de los `refresh-agotado` de Sentry
+    // QUIVO-CONTROL-CONDUCTOR-2): el lease se adquiere ANTES de pedir el access token, no
+    // después. Antes, cada tick llamaba a `obtenerAccessToken()` primero y recién DESPUÉS
+    // intentaba el lease — con fixes a ~1/s, cada tick disparaba su propio refresh (si el
+    // access token estaba vencido) sin importar si iba a ganar el lease o no, multiplicando
+    // los refreshes concurrentes exactamente en el escenario que este mecanismo existe para
+    // evitar. Con el lease primero, solo el tick que efectivamente va a drenar pide el token
+    // — los demás desisten en el siguiente `if (!obtuvoLease)` sin tocar la red de auth. (El
+    // hallazgo 4b — single-flight del refresh en sí — se cierra en
+    // `obtenerAccessTokenHeadless`/`refrescar()`, ver `headless-task.ts`.)
     const obtuvoLease = await adquirirLease(db, ID_LEASE_DRENAJE, token, ahoraMs, TTL_LEASE_MS);
     if (!obtuvoLease) {
       // Alguien más lo tiene: o bien otro contexto (headless vs. foreground) está drenando en
@@ -133,12 +127,27 @@ export async function intentarDrenarOportunista(
       return;
     }
 
+    // Hallazgo 3 (code review): con el lease en mano (nadie más está drenando en este
+    // instante), es el momento seguro para recuperar filas `enviado` huérfanas — ver el
+    // docblock de `recuperarEnviadosHuerfanos` en `db/outbox.ts`. Best-effort: si esto
+    // rechaza, el catch externo lo reporta y el drenado normal sigue su curso igual (una
+    // pasada sin recuperar no es peor que el comportamiento de antes de este fix).
+    try {
+      await recuperarEnviadosHuerfanos(db, new Date(ahoraMs - UMBRAL_RECUPERACION_ENVIADOS_MS));
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'drenaje-oportunista', paso: 'recuperar-enviados-huerfanos' },
+      });
+    }
+
     // 🔴 `startBackgroundTask`/`stopBackgroundTask`: sin esto, Android puede matar el proceso
-    // A MITAD del `POST` en cuanto decide que la app ya "terminó" el trabajo que la despertó
-    // (el evento `location`/`heartbeat` que disparó este drenado). La evidencia no se pierde
-    // (ya está en el outbox), pero el lote quedaría marcado `enviado` sin que nadie lo revierta
-    // ni lo confirme — colgado hasta el próximo intento. Pedir la prórroga explícita es lo que
-    // le garantiza al request el tiempo de vida que necesita para llegar a su propio `catch`.
+    // A MITAD del `POST` (o del refresh de token que puede correr antes) en cuanto decide que
+    // la app ya "terminó" el trabajo que la despertó (el evento `location`/`heartbeat` que
+    // disparó este drenado). La evidencia no se pierde (ya está en el outbox), pero el lote
+    // quedaría marcado `enviado` sin que nadie lo revierta ni lo confirme — el hallazgo 3 de
+    // arriba es justamente la red de seguridad para cuando esto pasa igual. Pedir la prórroga
+    // explícita es lo que le garantiza al request el tiempo de vida que necesita para llegar a
+    // su propio `catch`.
     let taskId: number | null = null;
     try {
       taskId = await BackgroundGeolocation.startBackgroundTask();
@@ -152,6 +161,24 @@ export async function intentarDrenarOportunista(
     }
 
     try {
+      // Hallazgo 4a: el token se pide DESPUÉS de tener el lease — ver el comentario de arriba.
+      const accessToken = await obtenerAccessToken();
+      if (!accessToken) {
+        // PUNTO DE EXTENSIÓN (Entrega 3, circuit breaker del refresh 401): sin token
+        // utilizable (sesión sin restaurar o refresh vencido sin poder renovarse), abortamos
+        // el drenado EN SILENCIO — falla de TRANSPORTE, nunca de captura. Se libera el lease
+        // con el piso fijo (no el backoff completo: no hubo ningún intento de red que haya
+        // fallado, solo ausencia de credencial) para que el próximo tick reintente pronto.
+        await liberarLeaseConCooldown(
+          db,
+          ID_LEASE_DRENAJE,
+          token,
+          Date.now(),
+          PISO_ENTRE_INTENTOS_MS,
+        );
+        return;
+      }
+
       await sincronizarPendientes(accessToken);
       // Éxito: resetea el backoff en memoria (ver su comentario) y libera con el piso fijo — el
       // próximo intento, en cualquier contexto, puede volver a intentar en 10 s.
@@ -182,9 +209,9 @@ export async function intentarDrenarOportunista(
       }
     }
   } catch (error) {
-    // Cualquier fallo NO cubierto por los catches internos de arriba (p. ej. `obtenerAccessToken`,
-    // `abrirOutbox` o `adquirirLease` rechazando) — ver el docblock de la función para el porqué
-    // de este resguardo externo.
+    // Cualquier fallo NO cubierto por los catches internos de arriba (p. ej. `abrirOutbox` o
+    // `adquirirLease` rechazando) — ver el docblock de la función para el porqué de este
+    // resguardo externo.
     Sentry.captureException(error, {
       tags: { contexto: 'drenaje-oportunista', paso: 'inesperado' },
     });

@@ -3,11 +3,17 @@ import * as Sentry from '@sentry/react-native';
 import type { EventoSync } from '@quivo/shared';
 import {
   abrirOutbox,
+  adquirirLease,
+  liberarLeaseConCooldown,
   marcarAcusados,
   marcarEnviados,
   obtenerLotePendiente,
   purgarAcusadosAntesDe,
+  recuperarEnviadosHuerfanos,
   revertirAPendiente,
+  ID_LEASE_DRENAJE,
+  PISO_ENTRE_INTENTOS_DRENAJE_MS,
+  TTL_LEASE_DRENAJE_MS,
 } from '../../db/outbox';
 import { ApiError } from '../../shared/api/http-client';
 import { syncApi } from '../../shared/api/sync-api';
@@ -130,6 +136,95 @@ export async function sincronizarPendientes(accessToken: string): Promise<{ envi
   }
 }
 
+/** Mismo umbral que `UMBRAL_RECUPERACION_ENVIADOS_MS` de `drenaje-oportunista.ts` (hallazgo
+ * 3) — duplicado en vez de importado porque ese archivo importa `sincronizarPendientes` DESDE
+ * este, y este módulo no puede importar de vuelta desde `drenaje-oportunista.ts` sin crear un
+ * ciclo. 90 s: mayor que el timeout del request (20 s, `sync-api.ts`) y que el TTL del lease
+ * (60 s, `TTL_LEASE_DRENAJE_MS`). */
+const UMBRAL_RECUPERACION_ENVIADOS_MS = 90_000;
+
+function generarTokenLease(): string {
+  // Mismo criterio que `generarTokenLease` de `drenaje-oportunista.ts` — no es un
+  // identificador criptográfico, solo necesita distinguir "soy el dueño que adquirió este
+  // lease" entre intentos concurrentes de este dispositivo.
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Hallazgo 6 (code review, BAJO — `docs/plan-correccion-post-piloto-2026-09-09.md`): el lease
+ * de `drenaje-oportunista.ts` (Entrega 2) no cubre a `iniciarSyncAutomatico` (más abajo,
+ * disparado por `useSyncStatus`, montado en `operation-screen.tsx` y `perfil-screen.tsx`) ni
+ * al latido de 15 s de `use-sync-status.ts`, que llaman a `sincronizarPendientes` SIN pasar
+ * por ningún lease. En foreground, el drenado de `onLocation`/`onHeartbeat` (con lease) y
+ * estos dos caminos (sin lease) pueden mandar DOS VECES el mismo lote de hasta 500 eventos —
+ * no hay pérdida (la ingesta del servidor es idempotente por `eventId`), pero la exclusión
+ * mutua que el docblock del lease promete no se cumple, y son dos POSTs de red en vez de uno.
+ *
+ * Fix: variante de `sincronizarPendientes` que respeta el MISMO lease SQLite que usa
+ * `drenaje-oportunista.ts` (`ID_LEASE_DRENAJE`, `db/outbox.ts`) — cualquier caller que pase
+ * por acá compite por el lease en igualdad de condiciones con el drenado disparado por
+ * ubicación. No usa `startBackgroundTask` ni el backoff exponencial en memoria de
+ * `drenaje-oportunista.ts` (esos dos son necesidades del camino headless/background; un hook
+ * de pantalla en foreground no las tiene — si el POST falla, `sincronizarPendientes` ya
+ * revierte su propio lote, y el caller (`iniciarSyncAutomatico`/`use-sync-status.ts`) ya tiene
+ * su propio backoff/reintento). Si no consigue el lease (alguien más está drenando en este
+ * instante), devuelve `null` y desiste en silencio — mismo comportamiento que
+ * `intentarDrenarOportunista` en ese caso, nunca un error.
+ *
+ * También corre `recuperarEnviadosHuerfanos` (hallazgo 3) al adquirir el lease, igual que
+ * `drenaje-oportunista.ts` — cualquier camino que gane el lease es un momento seguro para esa
+ * recuperación, sin importar cuál de los tres disparadores fue.
+ */
+export async function sincronizarPendientesConLease(
+  accessToken: string,
+): Promise<{ enviados: number } | null> {
+  const db = await abrirOutbox();
+  const ahoraMs = Date.now();
+  const token = generarTokenLease();
+  const obtuvoLease = await adquirirLease(
+    db,
+    ID_LEASE_DRENAJE,
+    token,
+    ahoraMs,
+    TTL_LEASE_DRENAJE_MS,
+  );
+  if (!obtuvoLease) {
+    return null;
+  }
+
+  try {
+    await recuperarEnviadosHuerfanos(db, new Date(ahoraMs - UMBRAL_RECUPERACION_ENVIADOS_MS));
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'sync-outbox', paso: 'recuperar-enviados-huerfanos' },
+    });
+  }
+
+  try {
+    const resultado = await sincronizarPendientes(accessToken);
+    await liberarLeaseConCooldown(
+      db,
+      ID_LEASE_DRENAJE,
+      token,
+      Date.now(),
+      PISO_ENTRE_INTENTOS_DRENAJE_MS,
+    );
+    return resultado;
+  } catch (error) {
+    // El caller (`intentarSync`/el intervalo de `use-sync-status.ts`) sigue siendo responsable
+    // de reportar este fallo (backoff propio, `errorSync`) — acá solo se libera el lease para
+    // que el próximo intento (de cualquier camino) pueda tomarlo.
+    await liberarLeaseConCooldown(
+      db,
+      ID_LEASE_DRENAJE,
+      token,
+      Date.now(),
+      PISO_ENTRE_INTENTOS_DRENAJE_MS,
+    );
+    throw error;
+  }
+}
+
 export type ResultadoSync = { enviados: number } | { error: string };
 
 /**
@@ -161,10 +256,17 @@ export function iniciarSyncAutomatico(
 
     try {
       onSyncStart?.();
-      const resultado = await sincronizarPendientes(accessToken);
+      // Hallazgo 6 (code review): `sincronizarPendientesConLease`, NO `sincronizarPendientes`
+      // directo — ver su docblock. `resultado === null` significa "alguien más (el drenado
+      // por ubicación, u otro disparo de este mismo motor) tiene el lease ahora mismo": no es
+      // un fallo, así que se trata como un éxito vacío (no toca `errorSync`/el contador de
+      // fallos consecutivos) y no se agenda un reintento inmediato — el próximo disparo normal
+      // (reconexión de NetInfo, o el intervalo de `use-sync-status.ts`) ya va a volver a
+      // intentar.
+      const resultado = await sincronizarPendientesConLease(accessToken);
       backoffMs = BACKOFF_INICIAL_MS;
-      onResultado?.(resultado);
-      if (resultado.enviados > 0) {
+      onResultado?.(resultado ?? { enviados: 0 });
+      if (resultado && resultado.enviados > 0) {
         // Puede haber más pendientes que el límite de un lote — seguir de inmediato.
         timeoutId = setTimeout(() => void intentarSync(), 500);
       }

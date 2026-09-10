@@ -100,6 +100,15 @@ async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLit
       owner TEXT NOT NULL,
       expira_at INTEGER NOT NULL
     );
+    -- Hallazgo 3 (code review, MEDIO): momento en que una fila pasó a 'enviado' -- NO es lo
+    -- mismo que ts (la hora del FIX GPS/evento, que puede ser mucho más vieja que el intento
+    -- de envío que la marcó). Necesaria para poder distinguir "recién se marcó enviado, el
+    -- POST todavía puede estar en vuelo" de "quedó huérfana" -- ver recuperarEnviadosHuerfanos
+    -- más abajo. ADD COLUMN IF NOT EXISTS (soportado desde SQLite 3.35, la misma versión
+    -- mínima que ya exige el UPSERT con WHERE de construirAdquirirLease) para que
+    -- instalaciones existentes (creadas por una versión anterior de la app, sin esta columna)
+    -- la reciban sin migración aparte.
+    ALTER TABLE outbox ADD COLUMN IF NOT EXISTS enviado_at TEXT;
   `);
   return db;
 }
@@ -397,8 +406,19 @@ export async function obtenerEventosPorTipo(
   return eventos;
 }
 
+/** Distinto de `actualizarEstado` (usado por `marcarAcusados` abajo): además del estado, sella
+ * `enviado_at` con el momento REAL de este intento — lo que `recuperarEnviadosHuerfanos`
+ * necesita para decidir si una fila `enviado` es un POST todavía en vuelo o una huérfana
+ * (hallazgo 3, ver esa función). */
 export async function marcarEnviados(db: SQLite.SQLiteDatabase, eventIds: string[]): Promise<void> {
-  await actualizarEstado(db, eventIds, 'enviado');
+  if (eventIds.length === 0) return;
+  const placeholders = eventIds.map(() => '?').join(',');
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync(
+      `UPDATE outbox SET estado = 'enviado', enviado_at = ? WHERE event_id IN (${placeholders})`,
+      [new Date().toISOString(), ...eventIds],
+    ),
+  );
 }
 
 /** El servidor acusó estos `event_id` puntuales (202 de QUI-240) — quedan sincronizados de
@@ -447,6 +467,58 @@ export async function revertirAPendiente(
   if (eventIds.length === 0) return;
   const { sql, params } = construirRevertirAPendiente(eventIds);
   await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
+}
+
+/**
+ * Hallazgo 3 (code review, MEDIO — `sincronizarPendientes`, `features/operacion/sync-outbox.ts`):
+ * marca el lote `enviado` ANTES del POST, y solo lo revierte a `pendiente` en su propio
+ * `catch` (fallo de red visible). Si Android mata la tarea headless A MITAD del POST (el
+ * proceso muere entero, ningún `catch` de JS llega a correr), o el POST queda colgado más
+ * allá del TTL de 60 s del lease (`docs/handoff.md` documenta que en Android, con la Activity
+ * pausada, OkHttp puede no respetar ningún timeout propio), esas filas quedan `enviado` PARA
+ * SIEMPRE — nadie las revierte y `obtenerLotePendiente` solo mira `estado = 'pendiente'`. El
+ * comentario original de `drenaje-oportunista.ts` ("colgado hasta el próximo intento") era
+ * falso: sin este reproceso, ES pérdida definitiva de evidencia legal (RF-67..73), no una
+ * demora.
+ *
+ * Reenviar es SEGURO por construcción: la ingesta del servidor es idempotente por `eventId`
+ * (`ON CONFLICT (event_id, ts) DO NOTHING`, ver el comentario de cabecera de este archivo) —
+ * si el POST huérfano en realidad SÍ llegó a procesarse del lado del servidor antes de que el
+ * proceso muriera, reenviarlo no duplica nada, solo repite trabajo ya hecho.
+ *
+ * `antesDe` la decide el caller según SU contexto (el umbral tiene que ser mayor que el
+ * timeout del request Y que el TTL del lease de drenado — ver
+ * `UMBRAL_RECUPERACION_ENVIADOS_MS`, `drenaje-oportunista.ts` — para no reclamar como
+ * "huérfano" un POST que en realidad sigue vivo y a punto de resolver).
+ *
+ * `COALESCE(enviado_at, ts)`: filas `enviado` de una instalación de ANTES de esta columna (o
+ * de una corrida que falló entre el `ALTER TABLE` y el primer `marcarEnviados` tras
+ * actualizar) no tienen `enviado_at` — se usa `ts` (la hora de creación del evento, siempre
+ * más vieja que cuando se marcó `enviado`) como piso conservador: una fila sin `enviado_at`
+ * es, como mínimo, tan vieja como parece por su `ts`, así que cae del lado seguro de la
+ * recuperación en vez de quedar bloqueada para siempre por falta de dato.
+ *
+ * Guarda respetada (Entrega 1): solo transiciona `estado = 'enviado'` — un `acusado` nunca
+ * matchea esta condición, exactamente igual que `construirRevertirAPendiente`.
+ */
+export function construirRecuperarEnviadosHuerfanos(
+  antesDe: Date,
+): { sql: string; params: string[] } {
+  return {
+    sql: "UPDATE outbox SET estado = 'pendiente' WHERE estado = 'enviado' AND COALESCE(enviado_at, ts) < ?",
+    params: [antesDe.toISOString()],
+  };
+}
+
+/** Aplica `construirRecuperarEnviadosHuerfanos` — ver su docblock. Devuelve la cantidad de
+ * filas recuperadas (0 en el caso común: nada quedó huérfano). */
+export async function recuperarEnviadosHuerfanos(
+  db: SQLite.SQLiteDatabase,
+  antesDe: Date,
+): Promise<number> {
+  const { sql, params } = construirRecuperarEnviadosHuerfanos(antesDe);
+  const result = await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
+  return result.changes;
 }
 
 /** Tipo de evento cuya evidencia local se preserva mientras la sesión siga activa: es el único
@@ -550,6 +622,21 @@ async function actualizarEstado(
  * bloquearía el drenado para siempre y el outbox nunca más se vaciaría en background.
  */
 export const ID_LEASE_DRENAJE = 'drenaje-outbox';
+
+/**
+ * Piso duro entre intentos EXITOSOS del drenado oportunista (Entrega 2) — evita que un GPS a
+ * alta frecuencia (`distanceFilter` 15 m ≈ cada pocos segundos a velocidad de calle) dispare
+ * un POST por cada fix. Vive ACÁ (no en `drenaje-oportunista.ts`, su dueño original) porque
+ * `sync-outbox.ts` también lo necesita para su propia variante con lease (hallazgo 6, code
+ * review: `iniciarSyncAutomatico` llamaba a `sincronizarPendientes` SIN pasar por el lease) —
+ * `sync-outbox.ts` no puede importar de `drenaje-oportunista.ts` sin crear un ciclo, porque
+ * `drenaje-oportunista.ts` ya importa `sincronizarPendientes` DESDE `sync-outbox.ts`.
+ */
+export const PISO_ENTRE_INTENTOS_DRENAJE_MS = 10_000;
+
+/** TTL del lease en sí (distinto del cooldown de arriba) — ver el comentario de
+ * `ID_LEASE_DRENAJE`. Mismo motivo de ubicación que `PISO_ENTRE_INTENTOS_DRENAJE_MS`. */
+export const TTL_LEASE_DRENAJE_MS = 60_000;
 
 /**
  * UPSERT atómico con guarda temporal: adquiere la fila `id` SOLO si no existe todavía o si su
