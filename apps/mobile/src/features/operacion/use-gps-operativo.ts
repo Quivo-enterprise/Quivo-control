@@ -226,9 +226,15 @@ export function useGpsOperativo(
             erroresEnCorrida: erroresEscritura.current,
           },
         });
-        setErrorGps(
-          `No se pudo guardar una ubicación en el outbox (${erroresEscritura.current} en esta corrida). La evidencia de esos puntos se perdió.`,
-        );
+        // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
+        // ESTO ES CAPTURA, no transporte — falló la escritura a SQLite (disco lleno, handle
+        // zombi, etc.), no el envío por red, así que SÍ tiene que verse. El texto viejo
+        // ("No se pudo guardar una ubicación en el outbox... la evidencia se perdió") era
+        // jerga técnica sin acción concreta para un chofer manejando. Este es en lenguaje de
+        // chofer y apunta a la causa más común y accionable (espacio en disco) — el
+        // `Sentry.captureException` de arriba sigue mandando el detalle técnico completo
+        // (código de error, conteo de la corrida) para diagnóstico.
+        setErrorGps('El teléfono no pudo guardar tu recorrido. Revisá el espacio disponible.');
       }
 
       // Entrega 2 (drenado oportunista del outbox en background): mismo motor que
