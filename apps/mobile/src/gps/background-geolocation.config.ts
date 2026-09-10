@@ -138,14 +138,14 @@ export const gpsSpikeConfig: Config = {
     // coincide con el default ya vigente hoy sin declararlo, así que este cambio no altera la
     // tasa de heartbeats respecto de la configuración actual.
     //
-    // OJO — entrega parcial (paso 6 del brief, sin el paso 5): esta clave queda declarada
-    // pero SIN `BackgroundGeolocation.onHeartbeat(...)` suscrito todavía — ese handler (el que
-    // llamaría `getCurrentPosition` en cada heartbeat para cerrar el hueco de verdad) es la
-    // siguiente entrega. Sin handler, el evento nativo se sigue emitiendo igual que hoy (el
-    // SDK ya lo dispara a este mismo ritmo por default) pero no tiene ningún listener JS del
-    // lado de la app que lo consuma — no escribe ubicación, no reduce huecos todavía, y por
-    // ser el valor por default no cambia el consumo de batería/CPU respecto de la versión
-    // actual en producción. Confirmado contra el `.d.ts` de
+    // Entrega 2 (`docs/plan-correccion-post-piloto-2026-09-09.md`): el handler de
+    // `BackgroundGeolocation.onHeartbeat(...)` que faltaba acá ya está suscrito — vive en
+    // `use-gps-operativo.ts` (`suscribirUbicaciones`), junto a la suscripción de `onLocation`,
+    // no en este archivo de config puro. Hace `getCurrentPosition({samples:1, persist:true})`
+    // + `intentarDrenarOportunista(...)` en cada heartbeat, cerrando el hueco de verdad:
+    // segundo punto de enganche del drenado del outbox además de `onLocation`/headless,
+    // garantizado cada 60 s aunque el vehículo esté quieto y no dispare ningún evento
+    // `location`. Confirmado contra el `.d.ts` de
     // `@transistorsoft/background-geolocation-types@5.2.2` (`AppConfig.heartbeatInterval`,
     // default `60`); el binario nativo (`.aar`) no se pudo inspeccionar por no traer fuente,
     // así que esta lectura de inocuidad se apoya en la doc oficial del SDK, no en el código

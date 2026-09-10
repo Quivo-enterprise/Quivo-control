@@ -95,6 +95,11 @@ async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLit
       estado TEXT NOT NULL DEFAULT 'pendiente'
     );
     CREATE INDEX IF NOT EXISTS outbox_estado_idx ON outbox(estado);
+    CREATE TABLE IF NOT EXISTS sync_lease (
+      id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      expira_at INTEGER NOT NULL
+    );
   `);
   return db;
 }
@@ -517,6 +522,121 @@ async function actualizarEstado(
       ...eventIds,
     ]),
   );
+}
+
+/**
+ * Lease de exclusión mutua para el drenado oportunista del outbox en background (Entrega 2,
+ * `docs/plan-correccion-post-piloto-2026-09-09.md`). Vive en la propia SQLite del outbox —NO
+ * en un `let` de módulo— porque el mutex tiene que cruzar CONTEXTOS JS: la tarea headless de
+ * Transistorsoft y el hook de foreground pueden correr en procesos/contextos JS distintos en
+ * Android (a diferencia de la cola en memoria de `headless-task.ts`, que sí puede asumir un
+ * único contexto para `registrarPuntoGps` porque ese SÍ está documentado como compartido —
+ * ver `HeadlessTaskManager.java:184-206` citado en `docs/handoff.md`). Un `let` de módulo NO
+ * cubre ese caso: cada contexto JS tiene su propia copia, así que dos "mutex" en memoria
+ * distintos nunca se ven entre sí y el mismo lote se drenaría dos veces en paralelo.
+ *
+ * Una sola fila por `id` (`sync_lease.id` es PK) sirve DOS propósitos con el mismo mecanismo:
+ * - **Mutex entre contextos**: mientras `expira_at` esté en el futuro, la fila está "tomada" y
+ *   nadie más puede adquirirla.
+ * - **Piso de 10 s entre intentos + backoff**: `liberarLeaseConCooldown` no borra la fila al
+ *   terminar — la deja "tomada" hasta `ahora + cooldown`. Un éxito libera con el piso fijo
+ *   (10 s); un fallo libera con el backoff exponencial vigente. El próximo intento, sea del
+ *   mismo contexto o del otro, encuentra la fila todavía vigente y desiste sin tocar la red.
+ *
+ * El TTL es OBLIGATORIO (ver `adquirirLease`): si el proceso muere a mitad de un drenado (la
+ * app es matada por Android, un crash) sin llegar a liberar, la fila queda "tomada" con el
+ * `expira_at` que se le puso AL ADQUIRIR (el TTL de la operación, no el del cooldown) — pasado
+ * ese punto cualquier intento nuevo la recupera solo. Sin este TTL, un lease huérfano
+ * bloquearía el drenado para siempre y el outbox nunca más se vaciaría en background.
+ */
+export const ID_LEASE_DRENAJE = 'drenaje-outbox';
+
+/**
+ * UPSERT atómico con guarda temporal: adquiere la fila `id` SOLO si no existe todavía o si su
+ * `expira_at` ya pasó (`ahoraMs`) — soporta desde SQLite 3.35 (UPSERT con cláusula `WHERE` en
+ * `DO UPDATE`, muy por debajo de lo que embebe `expo-sqlite`). `changes > 0` es la señal de
+ * "adquirido": si la fila existe y su `expira_at` sigue en el futuro, la cláusula `WHERE` del
+ * `DO UPDATE` no matchea y SQLite trata el statement entero como no-op (0 filas afectadas, sin
+ * lanzar ningún error de constraint) — un solo `runAsync` resuelve "¿está libre? si sí,
+ * tomala" sin ventana entre el chequeo y la toma, que es exactamente lo que dos contextos JS
+ * compitiendo por el mismo lease necesitan.
+ *
+ * `token` identifica a ESTE intento puntual (no al proceso ni al contexto) — ver
+ * `construirLiberarLeaseConCooldown` para el porqué: solo el dueño legítimo puede liberar.
+ */
+export function construirAdquirirLease(
+  id: string,
+  token: string,
+  ahoraMs: number,
+  expiraAtMs: number,
+): { sql: string; params: (string | number)[] } {
+  return {
+    sql: `
+      INSERT INTO sync_lease (id, owner, expira_at) VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, expira_at = excluded.expira_at
+      WHERE sync_lease.expira_at <= ?
+    `,
+    params: [id, token, expiraAtMs, ahoraMs],
+  };
+}
+
+/**
+ * Intenta tomar el lease `id` para `token`. `ttlMs` es el techo de seguridad de ESTA operación
+ * (no el cooldown post-éxito, ver `liberarLeaseConCooldown`): generoso a propósito (cubre un
+ * `POST /v1/sync/batches` completo + el reintento de handle muerto de
+ * `conReintentoSiHandleMuerto`) para no expirar un drenado que sigue vivo y legítimo, pero
+ * finito — es la única red de seguridad contra un lease huérfano si el proceso muere a mitad
+ * de la operación sin liberar.
+ */
+export async function adquirirLease(
+  db: SQLite.SQLiteDatabase,
+  id: string,
+  token: string,
+  ahoraMs: number,
+  ttlMs: number,
+): Promise<boolean> {
+  const { sql, params } = construirAdquirirLease(id, token, ahoraMs, ahoraMs + ttlMs);
+  const result = await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
+  return result.changes > 0;
+}
+
+/**
+ * Condicionado por `owner = token` (no solo por `id`): entre que un contexto ADQUIERE el lease
+ * (con un TTL holgado, arriba) y lo LIBERA, otro contexto puede haber reclamado la misma fila
+ * como huérfana si el TTL alcanzó a vencer mientras el primero seguía trabajando (más lento de
+ * lo previsto, pero sin haber muerto). Sin el filtro por `owner`, la liberación tardía del
+ * primero pisaría el lease del segundo, que en ese momento sigue legítimamente en vuelo — dos
+ * drenados concurrentes, justo lo que el lease existe para impedir. Con el filtro, una
+ * liberación tardía sobre un lease que ya cambió de dueño simplemente no afecta ninguna fila
+ * (`changes === 0`), silenciosamente — no hay nada que reportar, el nuevo dueño sigue su curso.
+ */
+export function construirLiberarLeaseConCooldown(
+  id: string,
+  token: string,
+  ahoraMs: number,
+  cooldownMs: number,
+): { sql: string; params: (string | number)[] } {
+  return {
+    sql: 'UPDATE sync_lease SET expira_at = ? WHERE id = ? AND owner = ?',
+    params: [ahoraMs + cooldownMs, id, token],
+  };
+}
+
+/**
+ * Libera el lease dejándolo "tomado" hasta `ahoraMs + cooldownMs` — nunca lo borra, porque ese
+ * cooldown ES el piso de 10 s / backoff entre intentos (ver el comentario de `ID_LEASE_DRENAJE`
+ * arriba). El próximo `adquirirLease`, en cualquier contexto, ve `expira_at` todavía en el
+ * futuro y desiste sin tocar la red hasta que venza.
+ */
+export async function liberarLeaseConCooldown(
+  db: SQLite.SQLiteDatabase,
+  id: string,
+  token: string,
+  ahoraMs: number,
+  cooldownMs: number,
+): Promise<void> {
+  const { sql, params } = construirLiberarLeaseConCooldown(id, token, ahoraMs, cooldownMs);
+  await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
 }
 
 function toEventoOutboxRow(row: OutboxRowCruda): EventoOutboxRow {
