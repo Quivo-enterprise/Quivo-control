@@ -518,15 +518,44 @@ export class AuthMovilService {
     };
   }
 
-  async logout({ refreshToken }: LogoutMovilRequest): Promise<void> {
+  /**
+   * `docs/handoff.md:3382-3385`: la prueba de QA del 2026-08-23 mostró `logout` respondiendo
+   * 204 sin cerrar la sesión del servidor — el `refreshToken` que el cliente sostenía ya no
+   * matcheaba ningún `refreshTokenHash`. `refresh()` (arriba) ROTA el hash en cada llamada
+   * exitosa; si esa rotación se completó en el servidor pero el cliente nunca confirmó
+   * recibirla (timeout, app matada a mitad de respuesta — mismo patrón de ack perdido que la
+   * Entrega 1 cierra para el outbox), el cliente queda con un token "fantasma": ya inválido
+   * para `refresh()` PERO la sesión sigue `'activa'` en el servidor con OTRO
+   * `refreshTokenHash` vigente. Con el match exacto de antes, ese logout era un no-op
+   * silencioso: dejaba la sesión zombi ensuciando `/en-vivo` para siempre, porque ningún
+   * request posterior de ese dispositivo iba a traer un token que matchee.
+   *
+   * Fix: si el match por hash no cierra nada Y el cliente mandó `deviceId`, se cae a cerrar
+   * la sesión ACTIVA de ese `deviceId` sin más condición. `deviceId` no es secreto en este
+   * sistema — viaja en cada login/refresh/sync (`sync-device-throttler.guard.ts` ya lo usa
+   * como clave de rate-limit) y `crearSesionOperativa` (arriba) ya lo usa como clave de
+   * scoping equivalente al cerrar sesiones previas en el login. El peor caso de un `deviceId`
+   * filtrado/adivinado acá es que alguien fuerce el CIERRE de esa sesión (el chofer tendría
+   * que volver a loguearse) — nunca lectura ni suplantación: `logout` no devuelve datos ni
+   * emite tokens. Sigue siendo endpoint público (sin `AuthMovilGuard`) a propósito, igual que
+   * antes — tiene que poder cerrar sesión aunque el access token ya haya vencido.
+   */
+  async logout({ refreshToken, deviceId }: LogoutMovilRequest): Promise<void> {
     const ahora = new Date();
-    await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+    const cerradaPorToken = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
       tx.sesionOperativa.updateMany({
         where: {
           refreshTokenHash: hashTokenOpaco(refreshToken),
           estado: 'activa',
           revokedAt: null,
         },
+        data: { estado: 'cerrada', fin: ahora, revokedAt: ahora },
+      }),
+    );
+    if (cerradaPorToken.count > 0 || !deviceId) return;
+    await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+      tx.sesionOperativa.updateMany({
+        where: { deviceId, estado: 'activa', revokedAt: null },
         data: { estado: 'cerrada', fin: ahora, revokedAt: ahora },
       }),
     );
