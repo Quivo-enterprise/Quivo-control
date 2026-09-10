@@ -548,6 +548,13 @@ model SesionOperativa {
   estado           String     @default("activa")
   accessTokenHash  String     @unique
   refreshTokenHash String     @unique
+  // Hallazgo 5 (code review, SEGURIDAD — `docs/plan-correccion-post-piloto-2026-09-09.md`):
+  // el hash del refreshToken que `refresh()` ACABA de rotar hacia afuera, para poder probar
+  // "prueba de posesión" en el fallback de `logout()` sin necesitar una tabla de historial
+  // completa — ver el docblock de `AuthMovilService.logout`. Nullable: sesiones que nunca
+  // refrescaron (o instaladas antes de esta columna) simplemente no tienen fallback posible,
+  // que es el comportamiento seguro por defecto.
+  refreshTokenHashAnterior String?
   accessExpiresAt  DateTime
   refreshExpiresAt DateTime
   revokedAt        DateTime?

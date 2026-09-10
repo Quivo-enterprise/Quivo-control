@@ -503,6 +503,11 @@ export class AuthMovilService {
         data: {
           accessTokenHash: access.hash,
           refreshTokenHash: refreshNuevo.hash,
+          // Hallazgo 5 (code review, SEGURIDAD): se guarda el hash que ESTA rotación deja
+          // atrás — es la "prueba de posesión" que el fallback de `logout()` exige más abajo.
+          // Sin esto, un `logout` con `deviceId` + cualquier string inventado cerraba la
+          // sesión activa de cualquiera con solo conocer el `deviceId` (no es secreto).
+          refreshTokenHashAnterior: hashAnterior,
           accessExpiresAt: accessTokenExpiresAt,
         },
       }),
@@ -530,15 +535,39 @@ export class AuthMovilService {
    * silencioso: dejaba la sesión zombi ensuciando `/en-vivo` para siempre, porque ningún
    * request posterior de ese dispositivo iba a traer un token que matchee.
    *
-   * Fix: si el match por hash no cierra nada Y el cliente mandó `deviceId`, se cae a cerrar
-   * la sesión ACTIVA de ese `deviceId` sin más condición. `deviceId` no es secreto en este
-   * sistema — viaja en cada login/refresh/sync (`sync-device-throttler.guard.ts` ya lo usa
-   * como clave de rate-limit) y `crearSesionOperativa` (arriba) ya lo usa como clave de
-   * scoping equivalente al cerrar sesiones previas en el login. El peor caso de un `deviceId`
-   * filtrado/adivinado acá es que alguien fuerce el CIERRE de esa sesión (el chofer tendría
-   * que volver a loguearse) — nunca lectura ni suplantación: `logout` no devuelve datos ni
-   * emite tokens. Sigue siendo endpoint público (sin `AuthMovilGuard`) a propósito, igual que
-   * antes — tiene que poder cerrar sesión aunque el access token ya haya vencido.
+   * Hallazgo 5 (code review, SEGURIDAD — `docs/plan-correccion-post-piloto-2026-09-09.md`): el
+   * fix original de arriba caía al fallback usando SOLO `deviceId`, sin exigir NADA del
+   * `refreshToken` recibido. `deviceId` no es secreto (`en-vivo.service.ts`/
+   * `recorridos.service.ts` lo devuelven a usuarios web) pero tampoco es un secreto de un
+   * solo uso: quien lo conoce podía desloguear el mismo vehículo una y otra vez mandando
+   * CUALQUIER string de 32+ caracteres como `refreshToken` — su sync pasaba a dar 401 en
+   * bucle y la evidencia se acumulaba sin drenar en el teléfono de un chofer en ruta.
+   *
+   * Fix elegido — prueba de posesión vía historial corto de un hash (no un access token
+   * válido, ver por qué más abajo): el fallback por `deviceId` ahora exige ADEMÁS que el
+   * `refreshToken` recibido coincida con `refreshTokenHashAnterior` — el hash que la ÚLTIMA
+   * rotación exitosa de `refresh()` dejó atrás (ver ese método, arriba). Alcanza con guardar
+   * uno solo (no una tabla de historial completa): tras una rotación exitosa, el hash VIEJO
+   * deja de matchear ningún `refresh()` posterior (el `where` de `refresh()` exige el hash
+   * VIGENTE), así que un cliente real solo puede quedar "atascado" con, como mucho, el hash
+   * inmediatamente anterior al vigente — nunca uno más viejo. Cerrar así SÍ prueba que el
+   * caller alguna vez tuvo un `refreshToken` real emitido por el servidor para ESTA sesión;
+   * un string inventado no matchea ni el hash vigente (primera consulta) ni el anterior
+   * (fallback), así que ya no cierra nada.
+   *
+   * Por qué NO se eligió "exigir un access token válido (`AuthMovilGuard`)" (la otra opción
+   * que el encargo deja abierta): `refresh()` rota `accessTokenHash` Y `refreshTokenHash` en
+   * la MISMA fila, en el mismo `updateMany` — el escenario que este método existe para
+   * cerrar es exactamente el de un cliente cuyo access token TAMBIÉN quedó fantasma tras esa
+   * rotación no confirmada. Exigir un access token vigente habría dejado sin arreglar el bug
+   * real de QA que este método documenta arriba, además del hallazgo de seguridad.
+   *
+   * Compatibilidad hacia atrás intacta: un APK viejo que manda `deviceId` pero un
+   * `refreshToken` que no matchea ni el hash vigente ni el anterior sigue recibiendo 204 sin
+   * que el servidor cierre nada — mismo comportamiento observable que hoy, solo que ahora es
+   * el camino SEGURO, no un accidente de que el string no matcheara por casualidad. Sigue
+   * siendo endpoint público (sin `AuthMovilGuard`) a propósito, igual que antes — tiene que
+   * poder cerrar sesión aunque el access token ya haya vencido.
    */
   async logout({ refreshToken, deviceId }: LogoutMovilRequest): Promise<void> {
     const ahora = new Date();
@@ -555,7 +584,15 @@ export class AuthMovilService {
     if (cerradaPorToken.count > 0 || !deviceId) return;
     await withTenantContext(CONTEXTO_ADMIN, (tx) =>
       tx.sesionOperativa.updateMany({
-        where: { deviceId, estado: 'activa', revokedAt: null },
+        where: {
+          deviceId,
+          estado: 'activa',
+          revokedAt: null,
+          // Hallazgo 5: prueba de posesión — ver el docblock de arriba. Sin esto, cualquiera
+          // que conociera el `deviceId` (no es secreto) cerraba la sesión con un token
+          // inventado.
+          refreshTokenHashAnterior: hashTokenOpaco(refreshToken),
+        },
         data: { estado: 'cerrada', fin: ahora, revokedAt: ahora },
       }),
     );
