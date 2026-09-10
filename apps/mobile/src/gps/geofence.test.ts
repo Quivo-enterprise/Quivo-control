@@ -5,6 +5,7 @@ import {
   detectarPuntosControlCercanos,
   filtrarNuevosCumplimientos,
   FACTOR_REARME_RADIO,
+  FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO,
   PASADA_MIN_MS,
   type DeteccionPuntoControl,
   type EstadoPuntoControl,
@@ -45,6 +46,56 @@ function aplicarTransiciones(
   for (const [clave, estado] of transiciones) estados.set(clave, estado);
 }
 
+/**
+ * ENTREGA 6 — helper de tests: recorre una secuencia de `{ distanciaM, tsFixMs }` para UN
+ * punto de control, aplicando cada tick a `estados` en orden, y devuelve el resultado
+ * COMPLETO acumulado (todos los `emitir` y `avisosPrecision` de la secuencia, en orden). Sirve
+ * para no repetir el boilerplate de "entrar, dejar pasar unos fixes, confirmar" en cada test:
+ * bajo el modelo nuevo, confirmar una pasada YA NO es un solo call — hace falta, como mínimo,
+ * el fix de ENTRADA más un fix que muestre que la distancia volvió a crecer (o
+ * `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO` fixes sin crecer, ver el fallback).
+ */
+function correrSecuencia(
+  estados: Map<string, EstadoPuntoControl>,
+  sesionId: string,
+  fixes: { distanciaM: number; tsFixMs: number; radioToleranciaM?: number; accuracyM?: number }[],
+  puntoControlId = 'pc-1',
+) {
+  const emitir: ReturnType<typeof filtrarNuevosCumplimientos>['emitir'] = [];
+  const avisosPrecision: ReturnType<typeof filtrarNuevosCumplimientos>['avisosPrecision'] = [];
+  for (const fix of fixes) {
+    const resultado = filtrarNuevosCumplimientos(
+      estados,
+      [deteccion(fix.distanciaM, fix.radioToleranciaM ?? 150, puntoControlId, fix.accuracyM)],
+      sesionId,
+      fix.tsFixMs,
+    );
+    emitir.push(...resultado.emitir);
+    avisosPrecision.push(...resultado.avisosPrecision);
+    aplicarTransiciones(estados, resultado.transiciones);
+  }
+  return { emitir, avisosPrecision };
+}
+
+/**
+ * Establece una PRIMERA pasada ya confirmada sobre `pc-1` (entrada a `distanciaEntradaM` +
+ * un fix de crecimiento que confirma en el mínimo) — punto de partida de casi todos los tests
+ * de re-armado/piso de abajo, que antes de la ENTREGA 6 arrancaban con un solo call emitiendo
+ * de entrada. Devuelve el resultado de la confirmación (para poder inspeccionar `pasada`,
+ * `distanciaMinAproximacionM`, etc. si hace falta) y dejó `estados` ya actualizado.
+ */
+function confirmarPrimeraPasada(
+  estados: Map<string, EstadoPuntoControl>,
+  sesionId = 'sesion-1',
+  tsEntradaMs = 0,
+) {
+  const { emitir } = correrSecuencia(estados, sesionId, [
+    { distanciaM: 10, tsFixMs: tsEntradaMs },
+    { distanciaM: 15, tsFixMs: tsEntradaMs + 1_000 }, // crece desde 10 ⇒ confirma con mínimo 10
+  ]);
+  return emitir[0]!;
+}
+
 describe('detectarPuntosControlCercanos', () => {
   it('marca cumplido un punto de control dentro de su radio de tolerancia', () => {
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
@@ -70,23 +121,29 @@ describe('detectarPuntosControlCercanos', () => {
   });
 });
 
-describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (multi-vuelta)', () => {
-  it('primera pasada: sin estado previo, emite con pasada 1 y marca dentro:true', () => {
+describe('filtrarNuevosCumplimientos — entrada, SIN emitir todavía (ENTREGA 6)', () => {
+  it('primera detección cumplida: arranca el seguimiento del mínimo local, no emite en el mismo tick', () => {
     const { emitir, transiciones } = filtrarNuevosCumplimientos(
       new Map(),
       [deteccion(10)],
       'sesion-1',
       1_000,
     );
-    expect(emitir).toHaveLength(1);
-    expect(emitir[0]?.pasada).toBe(1);
-    expect(emitir[0]?.deteccion.puntoControlId).toBe('pc-1');
-    // Aserciones sobre los campos que importan (no deep-equal del objeto entero): un campo
-    // nuevo en `EstadoPuntoControl` (p. ej. `fixesFueraRadioRearme`/`ultimoFixMs`, A2/A3) no
-    // debe romper este test — eso es justo lo que rompió el `toEqual` anterior.
+    expect(emitir).toHaveLength(0);
     const estado = transiciones.get(claveCumplimiento('sesion-1', 'pc-1'));
-    expect(estado).toMatchObject({ dentro: true, ultimoEmitidoMs: 1_000, pasadas: 1 });
-    expect(estado?.fixesFueraRadioRearme).toBe(0);
+    expect(estado).toMatchObject({
+      dentro: true,
+      confirmado: false,
+      minDistanciaM: 10,
+      distanciaEntradaM: 10,
+      // Arranca en 0, no 1: el fix de ENTRADA establece el mínimo inicial, no "falla en
+      // mejorarlo" — recién el PRÓXIMO fix que no logre bajar el mínimo suma el primer punto
+      // al contador del fallback (ver el comentario de `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO`
+      // y el de esta rama en `filtrarNuevosCumplimientos`, `geofence.ts`).
+      fixesDentroSinConfirmar: 0,
+      ultimoEmitidoMs: -Infinity, // no confirmó todavía: sigue "sin emisión previa"
+      pasadas: 0,
+    });
     expect(estado?.ultimoFixMs).toBe(1_000);
   });
 
@@ -95,26 +152,141 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 0);
     expect(estados.size).toBe(0);
   });
+});
 
-  it('devuelve solo los cumplidos que no estaban ya "dentro"', () => {
-    const estados = new Map([
-      [claveCumplimiento('sesion-1', 'pc-1'), { dentro: true, ultimoEmitidoMs: 0, pasadas: 1 }],
+describe('filtrarNuevosCumplimientos — mínimo local (ENTREGA 6, "el corazón del arreglo")', () => {
+  it('confirma en el MÍNIMO real, no en la distancia de entrada (la propia cita del piloto: nada de 134 m)', () => {
+    // Trayectoria recta: un punto de control a 20 m de perpendicular de la ruta, radio 150 m,
+    // muestreado cada 15 m constantes (distanceFilter de producción). Simulado directo en
+    // distancias (la geometría lat/lng ya la cubre `detectarPuntosControlCercanos`): la
+    // detección ENTRA en el radio bien lejos del mínimo real (~148 m, geometría determinista
+    // — no un bug, ver el plan) y el mínimo real (~20 m) se alcanza varios fixes después.
+    const distancias = [148, 130, 100, 60, 30, 21, 20, 21.5, 30, 60]; // mínimo real: fix índice 6 (20 m)
+    const estados = new Map<string, EstadoPuntoControl>();
+    const { emitir } = correrSecuencia(
+      estados,
+      'sesion-1',
+      distancias.map((distanciaM, i) => ({ distanciaM, tsFixMs: i * 10_000 })),
+    );
+    expect(emitir).toHaveLength(1);
+    // El evento sale con distanciaMinAproximacionM ≈ 20 (el mínimo REAL), NO ≈134/148 (la
+    // distancia de ENTRADA al radio) — esa es la verificación explícita del plan.
+    expect(emitir[0]?.distanciaMinAproximacionM).toBeCloseTo(20, 1);
+    expect(emitir[0]?.distanciaEntradaM).toBe(148);
+    expect(emitir[0]?.pasada).toBe(1);
+    // La `deteccion` emitida también refleja el mínimo, no el fix que disparó la confirmación.
+    expect(emitir[0]?.deteccion.distanciaM).toBeCloseTo(20, 1);
+    expect(emitir[0]?.deteccion.fase).toBe('confirmado');
+  });
+
+  it('cumplido:true en el evento confirmado aunque el fix que dispara la confirmación ya esté fuera del radio de detección', () => {
+    // El fix que muestra el crecimiento puede, él mismo, haber superado `radioToleranciaM` —
+    // la confirmación no depende de que ESE fix puntual cumpla, depende de que la visita YA
+    // pasó por el mínimo. Ver el comentario de `cumplido: true` en `filtrarNuevosCumplimientos`.
+    const estados = new Map<string, EstadoPuntoControl>();
+    const { emitir } = correrSecuencia(estados, 'sesion-1', [
+      { distanciaM: 30, tsFixMs: 0 }, // entra, radio 150
+      { distanciaM: 20, tsFixMs: 10_000 }, // mínimo real
+      { distanciaM: 160, tsFixMs: 20_000 }, // creciendo, YA fuera del radio de detección (>150)
     ]);
-    const detecciones = [
-      deteccion(5, 150, 'pc-1'), // ya dentro, sigue dentro del radio de re-armado: nada
-      deteccion(500, 150, 'pc-2'), // lejos, no cumplido: nada
-      deteccion(2, 150, 'pc-3'), // nuevo, cumplido: emite
+    expect(emitir).toHaveLength(1);
+    expect(emitir[0]?.deteccion.cumplido).toBe(true);
+    expect(emitir[0]?.distanciaMinAproximacionM).toBe(20);
+  });
+
+  it('no confirma dos veces dentro de la MISMA visita aunque la distancia siga oscilando tras confirmar', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    const { emitir } = correrSecuencia(estados, 'sesion-1', [
+      { distanciaM: 30, tsFixMs: 0 },
+      { distanciaM: 20, tsFixMs: 10_000 },
+      { distanciaM: 25, tsFixMs: 20_000 }, // confirma acá (creció de 20 a 25)
+      { distanciaM: 22, tsFixMs: 30_000 }, // sigue dentro del radio de re-armado: jitter
+      { distanciaM: 28, tsFixMs: 40_000 }, // más jitter, todavía dentro de 150*1.5
+    ]);
+    expect(emitir).toHaveLength(1);
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.confirmado).toBe(true);
+  });
+});
+
+describe('filtrarNuevosCumplimientos — FALLBACK OBLIGATORIO (ENTREGA 6)', () => {
+  it('vehículo detenido DENTRO del radio (el mínimo nunca crece): confirma igual tras N fixes, no se pierde evidencia', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    // Vehículo parado a 30 m del punto, sin moverse un centímetro — la distancia NUNCA crece,
+    // así que el mínimo local por crecimiento no dispararía jamás. Sin el fallback, este
+    // cumplimiento no se emitiría NUNCA (evidencia perdida, lo único inaceptable del plan).
+    const fixes = Array.from({ length: FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO + 4 }, (_, i) => ({
+      distanciaM: 30,
+      tsFixMs: i * 10_000,
+    }));
+    const { emitir } = correrSecuencia(estados, 'sesion-1', fixes);
+    expect(emitir).toHaveLength(1); // confirma UNA vez, no revienta en cada fix tras el piso
+    expect(emitir[0]?.distanciaMinAproximacionM).toBe(30);
+    expect(emitir[0]?.distanciaEntradaM).toBe(30);
+    // Confirma exactamente cuando el contador de "fixes sin mejorar" ALCANZA el umbral: el fix
+    // de ENTRADA arranca el contador en 0 (establece el mínimo, no "falla en mejorarlo" — ver
+    // el comentario de esa rama en `filtrarNuevosCumplimientos`), así que hacen falta
+    // `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO` fixes MÁS, todos sin mejorar el mínimo, para
+    // disparar el fallback. Con 4 fixes de margen sobre ese umbral en la fixture, ya disparó.
+    expect(emitir[0]?.pasada).toBe(1);
+  });
+
+  it('si la distancia mejora un poco antes del umbral del fallback, el mínimo real gana igual', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    const fixes = [
+      { distanciaM: 30, tsFixMs: 0 }, // entra: mínimo inicial 30, contador en 0
+      { distanciaM: 30, tsFixMs: 10_000 }, // no mejora, no crece: contador del fallback a 1
+      { distanciaM: 12, tsFixMs: 20_000 }, // mejora (no "crece"): nuevo mínimo, contador vuelve a 0
+      // `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO` fixes MÁS sin mejorar el nuevo mínimo (12) ni
+      // hacer crecer la distancia ⇒ el último de esta tanda dispara el fallback igual, pero con
+      // el mínimo REAL (12), no con el de la entrada (30) — esa es la verificación del test.
+      ...Array.from({ length: FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO }, (_, i) => ({
+        distanciaM: 12,
+        tsFixMs: 30_000 + i * 10_000,
+      })),
     ];
-    const { emitir } = filtrarNuevosCumplimientos(estados, detecciones, 'sesion-1', 10_000);
-    expect(emitir.map((e) => e.deteccion.puntoControlId)).toEqual(['pc-3']);
+    const { emitir } = correrSecuencia(estados, 'sesion-1', fixes);
+    expect(emitir).toHaveLength(1);
+    expect(emitir[0]?.distanciaMinAproximacionM).toBe(12);
+  });
+});
+
+describe('filtrarNuevosCumplimientos — histéresis de re-armado (multi-vuelta), sobre una visita ya confirmada', () => {
+  it('devuelve la nueva visita SIN emitir; una detección de otro punto de control no interfiere', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    confirmarPrimeraPasada(estados, 'sesion-1', 0);
+    aplicarTransiciones(
+      estados,
+      filtrarNuevosCumplimientos(estados, [deteccion(600)], 'sesion-1', 10_000).transiciones,
+    );
+    aplicarTransiciones(
+      estados,
+      filtrarNuevosCumplimientos(estados, [deteccion(600)], 'sesion-1', 20_000).transiciones,
+    );
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(false);
+
+    const detecciones = [
+      deteccion(5, 150, 'pc-1'), // re-entra, pero PASADA_MIN_MS no venció ⇒ B5, sin emitir
+      deteccion(500, 150, 'pc-2'), // lejos, no cumplido: nada
+      deteccion(2, 150, 'pc-3'), // nuevo punto, cumplido: arranca seguimiento, SIN emitir todavía
+    ];
+    const { emitir, transiciones } = filtrarNuevosCumplimientos(estados, detecciones, 'sesion-1', 25_000);
+    expect(emitir).toHaveLength(0);
+    expect(transiciones.get(claveCumplimiento('sesion-1', 'pc-3'))).toMatchObject({
+      dentro: true,
+      confirmado: false,
+      minDistanciaM: 2,
+    });
   });
 
   it('no re-emite DENTRO DE LA MISMA PASADA aunque el punto siga cumplido en fixes sucesivos', () => {
     // Reemplaza al viejo comportamiento "solo la primera vez": la propiedad que se sigue
     // garantizando es que NO hay una segunda emisión mientras sigue siendo la misma pasada
-    // (dentro:true, sin haber re-armado por distancia).
+    // (dentro:true, ya confirmada, sin haber re-armado por distancia).
     const estados = new Map([
-      [claveCumplimiento('sesion-1', 'pc-1'), { dentro: true, ultimoEmitidoMs: 0, pasadas: 1 }],
+      [
+        claveCumplimiento('sesion-1', 'pc-1'),
+        { dentro: true, ultimoEmitidoMs: 0, pasadas: 1, confirmado: true } as EstadoPuntoControl,
+      ],
     ]);
     const { emitir } = filtrarNuevosCumplimientos(estados, [deteccion(5)], 'sesion-1', 1_000);
     expect(emitir).toHaveLength(0);
@@ -122,19 +294,25 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
 
   it('NO suprime el cumplimiento de otra sesión sobre el mismo punto de control', () => {
     // Turno del día siguiente sobre la misma ruta recurrente, con el contexto JS headless
-    // todavía vivo: `pc-1` ya está "dentro" en el Map, pero con la clave de la sesión anterior.
+    // todavía vivo: `pc-1` ya está "dentro" y CONFIRMADO en el Map, pero con la clave de la
+    // sesión anterior.
     const estados = new Map([
-      [claveCumplimiento('sesion-1', 'pc-1'), { dentro: true, ultimoEmitidoMs: 0, pasadas: 1 }],
+      [
+        claveCumplimiento('sesion-1', 'pc-1'),
+        { dentro: true, ultimoEmitidoMs: 0, pasadas: 1, confirmado: true } as EstadoPuntoControl,
+      ],
     ]);
-    const { emitir } = filtrarNuevosCumplimientos(estados, [deteccion(5)], 'sesion-2', 1_000);
-    expect(emitir.map((e) => e.deteccion.puntoControlId)).toEqual(['pc-1']);
-    expect(emitir[0]?.pasada).toBe(1);
+    const { emitir } = confirmarPrimeraPasadaEnSesion(estados, 'sesion-2');
+    expect(emitir).toHaveLength(1);
+    expect(emitir[0]?.deteccion.puntoControlId).toBe('pc-1');
+    expect(emitir[0]?.pasada).toBe(1); // pasadas de sesion-2, independiente de sesion-1
   });
 
-  it('dwell largo dentro del radio (layover) ⇒ UNA sola emisión sin importar cuántos fixes', () => {
+  it('dwell largo dentro del radio (layover) ⇒ UNA sola confirmación sin importar cuántos fixes', () => {
     let estados = new Map<string, EstadoPuntoControl>();
     let totalEmitidos = 0;
-    // 20 fixes cada 10s (~3.3 min de espera en la terminal), todos bien adentro del radio.
+    // 20 fixes cada 10s (~3.3 min de espera en la terminal), todos bien adentro del radio y sin
+    // moverse — dispara el fallback (no el crecimiento) UNA sola vez.
     for (let i = 0; i < 20; i++) {
       const tsFixMs = i * 10_000;
       const { emitir, transiciones } = filtrarNuevosCumplimientos(
@@ -151,11 +329,9 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     expect(totalEmitidos).toBe(1);
   });
 
-  it('salida a 200 m y regreso: NO re-arma (200 < radio*1.5=225) ⇒ sin segunda emisión', () => {
+  it('salida a 200 m y regreso: NO re-arma (200 < radio*1.5=225) ⇒ sin segunda confirmación', () => {
     const estados = new Map<string, EstadoPuntoControl>();
-    const paso1 = filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 0);
-    expect(paso1.emitir).toHaveLength(1);
-    aplicarTransiciones(estados, paso1.transiciones);
+    confirmarPrimeraPasada(estados, 'sesion-1', 0);
 
     // Se aleja a 200 m: no cumplido (>150), pero <= 225 (radio * FACTOR_REARME_RADIO) — no re-arma.
     expect(150 * FACTOR_REARME_RADIO).toBe(225);
@@ -169,10 +345,9 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     expect(paso3.emitir).toHaveLength(0);
   });
 
-  it('salida a 300 m y regreso: SÍ re-arma tras 2 fixes seguidos fuera de 225 m (A2) y, tras el piso, emite pasada 2', () => {
+  it('salida a 300 m y regreso: SÍ re-arma tras 2 fixes seguidos fuera de 225 m (A2) y, tras el piso, confirma pasada 2', () => {
     const estados = new Map<string, EstadoPuntoControl>();
-    const paso1 = filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 0);
-    aplicarTransiciones(estados, paso1.transiciones);
+    confirmarPrimeraPasada(estados, 'sesion-1', 0);
 
     expect(150 * FACTOR_REARME_RADIO).toBe(225);
 
@@ -188,30 +363,29 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     aplicarTransiciones(estados, paso2b.transiciones);
     expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(false);
 
-    // Regresa bien pasado el piso de 2 min desde la ÚLTIMA EMISIÓN (ts=0, no desde el re-armado).
-    const paso3 = filtrarNuevosCumplimientos(
-      estados,
-      [deteccion(10)],
-      'sesion-1',
-      PASADA_MIN_MS + 1_000,
-    );
-    expect(paso3.emitir).toHaveLength(1);
-    expect(paso3.emitir[0]?.pasada).toBe(2);
+    // Regresa bien pasado el piso de 2 min desde la ÚLTIMA CONFIRMACIÓN (ts=1000, no desde el
+    // re-armado): entra (sin emitir) y confirma en el siguiente fix que crece.
+    const { emitir } = correrSecuencia(estados, 'sesion-1', [
+      { distanciaM: 10, tsFixMs: PASADA_MIN_MS + 1_000 },
+      { distanciaM: 20, tsFixMs: PASADA_MIN_MS + 2_000 },
+    ]);
+    expect(emitir).toHaveLength(1);
+    expect(emitir[0]?.pasada).toBe(2);
   });
 
-  it('jitter de UN fix a 400 m: un outlier aislado NO re-arma (A2), y el regreso inmediato sigue sin emitir', () => {
+  it('jitter de UN fix a 400 m: un outlier aislado NO re-arma (A2), y el regreso inmediato sigue sin confirmar de nuevo', () => {
     const estados = new Map<string, EstadoPuntoControl>();
-    const paso1 = filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 0);
-    aplicarTransiciones(estados, paso1.transiciones);
+    confirmarPrimeraPasada(estados, 'sesion-1', 0);
 
-    // Jitter de un solo fix, bien lejos (400 > 225): NO alcanza para re-armar por sí solo.
+    // Jitter de un solo fix, bien lejos (400 > 225): NO alcanza para re-armar por sí solo. Como
+    // la visita YA está confirmada, este fix tampoco dispara una confirmación nueva.
     const paso2 = filtrarNuevosCumplimientos(estados, [deteccion(400)], 'sesion-1', 5_000);
     expect(paso2.emitir).toHaveLength(0);
     aplicarTransiciones(estados, paso2.transiciones);
     expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(true);
     expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.fixesFueraRadioRearme).toBe(1);
 
-    // Vuelta inmediata: sigue siendo la misma pasada (nunca re-armó), sin emitir.
+    // Vuelta inmediata: sigue siendo la misma pasada (nunca re-armó), sin confirmar de nuevo.
     const paso3 = filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 10_000);
     expect(paso3.emitir).toHaveLength(0);
     aplicarTransiciones(estados, paso3.transiciones);
@@ -219,21 +393,24 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
   });
 
   it('tras un re-armado REAL (2 fixes seguidos fuera de 225 m), el piso de 2 min bloquea la reemisión inmediata', () => {
-    // Complementa el test anterior: acá el vehículo SÍ re-arma de verdad (dos outliers seguidos,
-    // no uno), y lo que evita la pasada fantasma es el piso de tiempo (PASADA_MIN_MS) sobre la
-    // última EMISIÓN, no el re-armado por distancia.
+    // Complementa el test anterior: acá el vehículo SÍ re-arma de verdad (dos outliers
+    // seguidos, no uno), y lo que evita la pasada fantasma es el piso de tiempo
+    // (PASADA_MIN_MS) sobre la última CONFIRMACIÓN, no el re-armado por distancia.
     const estados = new Map<string, EstadoPuntoControl>();
-    const paso1 = filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 0);
-    aplicarTransiciones(estados, paso1.transiciones);
+    confirmarPrimeraPasada(estados, 'sesion-1', 0);
 
-    const paso2a = filtrarNuevosCumplimientos(estados, [deteccion(400)], 'sesion-1', 5_000);
-    aplicarTransiciones(estados, paso2a.transiciones);
-    const paso2b = filtrarNuevosCumplimientos(estados, [deteccion(400)], 'sesion-1', 6_000);
-    aplicarTransiciones(estados, paso2b.transiciones);
+    aplicarTransiciones(
+      estados,
+      filtrarNuevosCumplimientos(estados, [deteccion(400)], 'sesion-1', 5_000).transiciones,
+    );
+    aplicarTransiciones(
+      estados,
+      filtrarNuevosCumplimientos(estados, [deteccion(400)], 'sesion-1', 6_000).transiciones,
+    );
     expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(false);
 
-    // Vuelve a los 7s (muy por debajo de PASADA_MIN_MS=2min desde la última EMISIÓN real en
-    // ts=0): re-armó de verdad, pero el piso bloquea la reemisión.
+    // Vuelve a los 7s (muy por debajo de PASADA_MIN_MS=2min desde la última CONFIRMACIÓN real
+    // en ts=1000): re-armó de verdad, pero el piso bloquea la reemisión.
     const paso3 = filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 7_000);
     expect(paso3.emitir).toHaveLength(0);
   });
@@ -268,9 +445,9 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     // minutos DESPUÉS de la llegada real — un timestamp equivocado en el registro que sustenta
     // una sanción.
     const estados = new Map<string, EstadoPuntoControl>();
-    const paso1 = filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 0);
-    expect(paso1.emitir).toHaveLength(1);
-    aplicarTransiciones(estados, paso1.transiciones);
+    const confirmacion1 = confirmarPrimeraPasada(estados, 'sesion-1', 0);
+    const tsConfirmacion1 = estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.ultimoEmitidoMs;
+    expect(confirmacion1.pasada).toBe(1);
 
     // Re-armado real: dos fixes seguidos fuera de 225 m.
     aplicarTransiciones(
@@ -284,18 +461,19 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(false);
 
     // Vuelve a entrar a los 30 s (piso de 2 min NO vencido): no emite, pero queda `dentro:true`
-    // atado a la visita en curso.
+    // atado a la visita en curso, YA confirmada (B5) — no hay nada pendiente que seguir.
     const reentrada = filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 30_000);
     expect(reentrada.emitir).toHaveLength(0);
     aplicarTransiciones(estados, reentrada.transiciones);
     const estadoTrasReentrada = estados.get(claveCumplimiento('sesion-1', 'pc-1'));
     expect(estadoTrasReentrada?.dentro).toBe(true);
-    // La emisión anterior sigue siendo la que manda: el piso no se "reinicia" desde la
+    expect(estadoTrasReentrada?.confirmado).toBe(true);
+    // La confirmación anterior sigue siendo la que manda: el piso no se "reinicia" desde la
     // reentrada.
-    expect(estadoTrasReentrada?.ultimoEmitidoMs).toBe(0);
+    expect(estadoTrasReentrada?.ultimoEmitidoMs).toBe(tsConfirmacion1);
     expect(estadoTrasReentrada?.pasadas).toBe(1);
 
-    // Y se queda ahí: al vencer el piso NO aparece una emisión tardía con el ts equivocado.
+    // Y se queda ahí: al vencer el piso NO aparece una confirmación tardía con el ts equivocado.
     for (const tsFixMs of [60_000, 90_000, PASADA_MIN_MS + 1_000, PASADA_MIN_MS + 30_000]) {
       const paso = filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', tsFixMs);
       expect(paso.emitir).toHaveLength(0);
@@ -303,14 +481,11 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     }
   });
 
-  it('B5: una pasada genuina posterior (sale de verdad y vuelve pasado el piso) SIGUE emitiendo', () => {
+  it('B5: una pasada genuina posterior (sale de verdad y vuelve pasado el piso) SIGUE confirmando', () => {
     // Contracara del test anterior: marcar `dentro:true` en el fix suprimido no puede suprimir
-    // evidencia real — con una salida real y un regreso pasado el piso, la pasada 2 se emite.
+    // evidencia real — con una salida real y un regreso pasado el piso, la pasada 2 confirma.
     const estados = new Map<string, EstadoPuntoControl>();
-    aplicarTransiciones(
-      estados,
-      filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 0).transiciones,
-    );
+    confirmarPrimeraPasada(estados, 'sesion-1', 0);
     aplicarTransiciones(
       estados,
       filtrarNuevosCumplimientos(estados, [deteccion(300)], 'sesion-1', 10_000).transiciones,
@@ -319,13 +494,14 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
       estados,
       filtrarNuevosCumplimientos(estados, [deteccion(300)], 'sesion-1', 20_000).transiciones,
     );
-    // Reentrada temprana suprimida (B5): vuelve a `dentro: true`.
+    // Reentrada temprana suprimida (B5): vuelve a `dentro: true`, ya confirmada.
     aplicarTransiciones(
       estados,
       filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 30_000).transiciones,
     );
 
-    // Sale de nuevo, de verdad, y vuelve bien pasado el piso: pasada 2.
+    // Sale de nuevo, de verdad, y vuelve bien pasado el piso: entra sin emitir y confirma
+    // pasada 2 en el siguiente fix que crece.
     aplicarTransiciones(
       estados,
       filtrarNuevosCumplimientos(estados, [deteccion(300)], 'sesion-1', 40_000).transiciones,
@@ -334,30 +510,40 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
       estados,
       filtrarNuevosCumplimientos(estados, [deteccion(300)], 'sesion-1', 50_000).transiciones,
     );
-    const regreso = filtrarNuevosCumplimientos(
-      estados,
-      [deteccion(10)],
-      'sesion-1',
-      PASADA_MIN_MS + 1_000,
-    );
-    expect(regreso.emitir).toHaveLength(1);
-    expect(regreso.emitir[0]?.pasada).toBe(2);
-    // Y el `ts` de la pasada es el de SU PROPIA entrada, no un instante arrastrado.
-    expect(regreso.transiciones.get(claveCumplimiento('sesion-1', 'pc-1'))?.ultimoEmitidoMs).toBe(
-      PASADA_MIN_MS + 1_000,
+    const { emitir } = correrSecuencia(estados, 'sesion-1', [
+      { distanciaM: 10, tsFixMs: PASADA_MIN_MS + 1_000 },
+      { distanciaM: 20, tsFixMs: PASADA_MIN_MS + 2_000 },
+    ]);
+    expect(emitir).toHaveLength(1);
+    expect(emitir[0]?.pasada).toBe(2);
+    // Y el `ts` de la pasada es el de SU PROPIA confirmación, no un instante arrastrado.
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.ultimoEmitidoMs).toBe(
+      PASADA_MIN_MS + 2_000,
     );
   });
 
-  it('M3: una accuracy PEOR que el radio no impide emitir la pasada (solo la marca como degradada)', () => {
+  it('el contador de pasadas continúa desde el estado previo, no reinicia en 1', () => {
+    const estados = new Map<string, EstadoPuntoControl>([
+      [claveCumplimiento('sesion-1', 'pc-1'), { dentro: false, ultimoEmitidoMs: 0, pasadas: 4 }],
+    ]);
+    const { emitir } = correrSecuencia(estados, 'sesion-1', [
+      { distanciaM: 10, tsFixMs: PASADA_MIN_MS + 1 },
+      { distanciaM: 20, tsFixMs: PASADA_MIN_MS + 2_000 },
+    ]);
+    expect(emitir[0]?.pasada).toBe(5);
+  });
+});
+
+describe('filtrarNuevosCumplimientos — M3 (precisión del fix), sobre una visita ya confirmada', () => {
+  it('una accuracy PEOR que el radio no impide confirmar la pasada (solo la marca como degradada)', () => {
     // El gate anterior (en `location-task.ts`) descartaba la detección entera cuando
     // `accuracy > radioToleranciaM`: con radios de 100 m y una Android que reporta 100-500 m de
     // rutina, la pasada genuina desaparecía sin evento y sin telemetría.
-    const { emitir, avisosPrecision } = filtrarNuevosCumplimientos(
-      new Map(),
-      [deteccion(20, 100, 'pc-1', 250)],
-      'sesion-1',
-      1_000,
-    );
+    const estados = new Map<string, EstadoPuntoControl>();
+    const { emitir, avisosPrecision } = correrSecuencia(estados, 'sesion-1', [
+      { distanciaM: 20, radioToleranciaM: 100, accuracyM: 250, tsFixMs: 1_000 },
+      { distanciaM: 25, radioToleranciaM: 100, accuracyM: 250, tsFixMs: 2_000 }, // crece ⇒ confirma
+    ]);
     expect(emitir).toHaveLength(1);
     expect(emitir[0]?.pasada).toBe(1);
     expect(avisosPrecision).toEqual([
@@ -371,14 +557,19 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     ]);
   });
 
-  it('M3: un fix impreciso NO re-arma la histéresis (la accuracy se descuenta del radio de re-armado)', () => {
+  it('un fix impreciso NO re-arma la histéresis (la accuracy se descuenta del radio de re-armado)', () => {
     // El re-armado es el único camino por el que un fix impreciso puede INVENTAR evidencia (una
     // pasada fantasma junto con el piso de tiempo), así que ahí sí se le exige margen.
     const estados = new Map<string, EstadoPuntoControl>();
-    aplicarTransiciones(
-      estados,
-      filtrarNuevosCumplimientos(estados, [deteccion(10, 100)], 'sesion-1', 0).transiciones,
-    );
+    // Confirma la visita primero (radio 100), CERCA — para aislar el comportamiento de
+    // re-armado del de confirmación (un salto directo a 200 m dispararía "creciendo" y
+    // confirmaría antes de llegar a evaluar el re-armado impreciso, que es justo lo que este
+    // test quiere ejercitar).
+    correrSecuencia(estados, 'sesion-1', [
+      { distanciaM: 10, radioToleranciaM: 100, tsFixMs: 0 },
+      { distanciaM: 15, radioToleranciaM: 100, tsFixMs: 1_000 },
+    ]);
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.confirmado).toBe(true);
 
     // Radio 100 ⇒ radio de re-armado 150. El fix mide 200 m (fuera), pero con accuracy 300 no
     // prueba nada: ni re-arma ni suma al contador de A2.
@@ -411,12 +602,9 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(false);
   });
 
-  it('M3: sin accuracy conocida el re-armado se comporta igual que antes (margen 0)', () => {
+  it('sin accuracy conocida el re-armado se comporta igual que antes (margen 0)', () => {
     const estados = new Map<string, EstadoPuntoControl>();
-    aplicarTransiciones(
-      estados,
-      filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 0).transiciones,
-    );
+    confirmarPrimeraPasada(estados, 'sesion-1', 0);
     aplicarTransiciones(
       estados,
       filtrarNuevosCumplimientos(estados, [deteccion(300)], 'sesion-1', 10_000).transiciones,
@@ -426,17 +614,40 @@ describe('filtrarNuevosCumplimientos — máquina de estados con histéresis (mu
     aplicarTransiciones(estados, paso.transiciones);
     expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(false);
   });
+});
 
-  it('el contador de pasadas continúa desde el estado previo, no reinicia en 1', () => {
-    const estados = new Map([
-      [claveCumplimiento('sesion-1', 'pc-1'), { dentro: false, ultimoEmitidoMs: 0, pasadas: 4 }],
-    ]);
-    const { emitir } = filtrarNuevosCumplimientos(
-      estados,
-      [deteccion(10)],
-      'sesion-1',
-      PASADA_MIN_MS + 1,
-    );
-    expect(emitir[0]?.pasada).toBe(5);
+describe('filtrarNuevosCumplimientos — multi-vuelta (verificación del plan)', () => {
+  it('3 pasadas completas (acercarse, confirmar, alejarse, re-armar, esperar el piso) ⇒ 3 eventos, pasada 1/2/3, sin duplicados', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    const emitidos: number[] = [];
+
+    function unaVuelta(tsBase: number) {
+      const { emitir } = correrSecuencia(estados, 'sesion-1', [
+        { distanciaM: 140, tsFixMs: tsBase }, // entra
+        { distanciaM: 40, tsFixMs: tsBase + 10_000 }, // se acerca
+        { distanciaM: 15, tsFixMs: tsBase + 20_000 }, // mínimo
+        { distanciaM: 60, tsFixMs: tsBase + 30_000 }, // crece ⇒ confirma
+        { distanciaM: 300, tsFixMs: tsBase + 40_000 }, // se va (1/2 rearme)
+        { distanciaM: 300, tsFixMs: tsBase + 50_000 }, // se va (2/2 rearme ⇒ dentro:false)
+      ]);
+      for (const c of emitir) emitidos.push(c.pasada);
+    }
+
+    unaVuelta(0);
+    unaVuelta(PASADA_MIN_MS + 60_000);
+    unaVuelta(2 * (PASADA_MIN_MS + 60_000));
+
+    expect(emitidos).toEqual([1, 2, 3]);
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.pasadas).toBe(3);
   });
 });
+
+/** Variante de `confirmarPrimeraPasada` que arranca desde un Map SIN semilla previa para la
+ * clave de `sesionId` (usada en el test de aislamiento entre sesiones, donde el Map YA trae
+ * una entrada de OTRA sesión sobre el mismo `puntoControlId`). */
+function confirmarPrimeraPasadaEnSesion(estados: Map<string, EstadoPuntoControl>, sesionId: string) {
+  return correrSecuencia(estados, sesionId, [
+    { distanciaM: 10, tsFixMs: 0 },
+    { distanciaM: 15, tsFixMs: 1_000 },
+  ]);
+}

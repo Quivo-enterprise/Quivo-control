@@ -120,12 +120,29 @@ describe('construirEventosDeUbicacion', () => {
     expect(eventos[0]?.payload['tsFix']).toBeUndefined();
   });
 
-  it('agrega cumplimiento_punto_control con pasada:1 cuando el punto cae dentro del radio de un punto de control nuevo', () => {
+  it('agrega cumplimiento_punto_control con pasada:1 tras el mínimo local, cuando el punto cae dentro del radio de un punto de control nuevo', () => {
+    // ENTREGA 6 (plan post-piloto 2026-09-09): la ENTRADA ya no emite en el mismo tick — solo
+    // arranca el seguimiento del "mínimo local". Hace falta un segundo fix que muestre que la
+    // distancia volvió a crecer para que la confirmación salga (ver el comentario largo de
+    // `filtrarNuevosCumplimientos`, `geofence.ts`).
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
+    const t0 = Date.parse('2026-08-14T12:00:00.000Z');
+    let estados = new Map<string, EstadoPuntoControl>();
+
+    // Paso 1: entra exactamente sobre el punto (distancia 0) — solo el `gps_point`, sin
+    // confirmar todavía.
+    const paso1 = construirEventosDeUbicacion(ubicacion(-17.78, -63.18, t0), contexto([pc]), estados);
+    expect(paso1.eventos).toHaveLength(1);
+    expect(paso1.eventos[0]?.tipo).toBe('gps_point');
+    expect(paso1.deteccion).toBeNull();
+    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+
+    // Paso 2: se aleja ~33 m (sigue dentro de los 45 m de re-armado) — la distancia CRECE
+    // respecto del mínimo (0) ⇒ confirma con pasada 1.
     const { eventos, deteccion, transicionesEstado } = construirEventosDeUbicacion(
-      ubicacion(-17.78, -63.18),
+      ubicacion(-17.7797, -63.18, t0 + 10_000),
       contexto([pc]),
-      new Map(),
+      estados,
     );
     expect(eventos).toHaveLength(2);
     expect(eventos[1]?.tipo).toBe('cumplimiento_punto_control');
@@ -141,7 +158,7 @@ describe('construirEventosDeUbicacion', () => {
     // `ResultadoConstruirEventos` en `location-task.ts` y el hallazgo de revisión del plan
     // §2.4, "el Set se muta antes de confirmar la escritura").
     const clave = claveCumplimiento('sesion-1', 'pc-1');
-    expect(transicionesEstado.get(clave)).toMatchObject({ dentro: true, pasadas: 1 });
+    expect(transicionesEstado.get(clave)).toMatchObject({ dentro: true, pasadas: 1, confirmado: true });
   });
 
   it('NO muta el Map de estados recibido (la mutación es responsabilidad del caller, tras confirmar la escritura)', () => {
@@ -151,17 +168,26 @@ describe('construirEventosDeUbicacion', () => {
     expect(estados.size).toBe(0);
   });
 
-  it('propaga el timestamp del FIX GPS al payload de cumplimiento_punto_control (evidencia RF-64..66)', () => {
-    // Misma `location` que produce el `gps_point`, así que el fix ya disponible se replica
-    // tal cual — sin esto la hora de paso por el punto de control (el hecho que sustenta una
-    // sanción) quedaría corrida al momento del encolado bajo el camino headless.
+  it('propaga el timestamp del FIX GPS que confirma (no el de entrada) al payload de cumplimiento_punto_control (evidencia RF-64..66)', () => {
+    // ENTREGA 6: el evento de cumplimiento se arma con la MISMA `location` que dispara la
+    // CONFIRMACIÓN (mínimo local) — el fix de entrada solo arranca el seguimiento, no genera
+    // evidencia por sí mismo. Sin esto la hora de paso por el punto de control (el hecho que
+    // sustenta una sanción) quedaría corrida al momento del encolado bajo el camino headless.
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
-    const { eventos } = construirEventosDeUbicacion(
+    let estados = new Map<string, EstadoPuntoControl>();
+    const paso1 = construirEventosDeUbicacion(
       ubicacion(-17.78, -63.18, '2026-08-14T11:42:07.500Z'),
       contexto([pc]),
-      new Map(),
+      estados,
     );
-    expect(eventos[1]?.payload['tsFix']).toBe('2026-08-14T11:42:07.500Z');
+    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+
+    const { eventos } = construirEventosDeUbicacion(
+      ubicacion(-17.7797, -63.18, '2026-08-14T11:42:17.500Z'),
+      contexto([pc]),
+      estados,
+    );
+    expect(eventos[1]?.payload['tsFix']).toBe('2026-08-14T11:42:17.500Z');
   });
 
   it('no re-emite DENTRO DE LA MISMA PASADA si el punto de control ya estaba "dentro"', () => {
@@ -184,13 +210,23 @@ describe('construirEventosDeUbicacion', () => {
   it('emite el cumplimiento de una sesión NUEVA aunque el punto de control ya se haya registrado en la anterior', () => {
     // El estado del headless task vive todo el contexto JS y nadie lo resetea al cambiar de
     // sesión: ruta A terminada con pc-1 "dentro", y ahora arranca la ruta B (o el turno del
-    // día siguiente sobre la misma ruta recurrente) con el mismo contexto vivo.
+    // día siguiente sobre la misma ruta recurrente) con el mismo contexto vivo. La clave de
+    // sesión-2 es una entrada nueva para la máquina de estados — ENTREGA 6: dos ticks.
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
-    const estados = new Map([
+    const t0 = Date.parse('2026-08-14T12:00:00.000Z');
+    let estados = new Map([
       [claveCumplimiento('sesion-1', 'pc-1'), { dentro: true, ultimoEmitidoMs: 0, pasadas: 1 }],
     ]);
+    const paso1 = construirEventosDeUbicacion(
+      ubicacion(-17.78, -63.18, t0),
+      contexto([pc], 'sesion-2'),
+      estados,
+    );
+    expect(paso1.eventos.some((e) => e.tipo === 'cumplimiento_punto_control')).toBe(false);
+    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+
     const { eventos, deteccion, transicionesEstado } = construirEventosDeUbicacion(
-      ubicacion(-17.78, -63.18),
+      ubicacion(-17.7797, -63.18, t0 + 10_000),
       contexto([pc], 'sesion-2'),
       estados,
     );
@@ -206,6 +242,8 @@ describe('construirEventosDeUbicacion', () => {
       dentro: true,
       pasadas: 1,
     });
+    // La sesión-1 no se tocó — la clave vieja sigue intacta en el Map que el caller mantiene.
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))).toMatchObject({ pasadas: 1 });
   });
 
   it('no evalúa puntos de control cuando el paquete del día no trae ninguno', () => {
@@ -223,13 +261,21 @@ describe('construirEventosDeUbicacion', () => {
     // con los radios de 100 m de la Z12 y una Android que reporta 100-500 m de rutina en calles
     // encajonadas, una pasada genuina desaparecía por completo — sin evento y sin telemetría.
     // Ahora se emite y queda marcada como degradada (breadcrumb en `registrarPuntoGps`).
+    // ENTREGA 6: el aviso de precisión se evalúa con la accuracy del fix que CONFIRMA (el que
+    // dispara el "mínimo local"), no el de entrada — ver el comentario de `avisosPrecision` en
+    // `filtrarNuevosCumplimientos`.
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
-    const loc = ubicacion(-17.78, -63.18);
+    const t0 = Date.parse('2026-08-14T12:00:00.000Z');
+    let estados = new Map<string, EstadoPuntoControl>();
+    const paso1 = construirEventosDeUbicacion(ubicacion(-17.78, -63.18, t0), contexto([pc]), estados);
+    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+
+    const loc = ubicacion(-17.7797, -63.18, t0 + 10_000);
     const ubicacionPocoPrecisa: Location = { ...loc, coords: { ...loc.coords, accuracy: 50 } };
     const { eventos, deteccion, avisosPrecision } = construirEventosDeUbicacion(
       ubicacionPocoPrecisa,
       contexto([pc]),
-      new Map(),
+      estados,
     );
     expect(eventos).toHaveLength(2);
     expect(eventos[1]?.tipo).toBe('cumplimiento_punto_control');
@@ -245,12 +291,17 @@ describe('construirEventosDeUbicacion', () => {
 
   it('M3: un accuracy mejor que el radio emite sin ningún aviso de precisión', () => {
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
-    const loc = ubicacion(-17.78, -63.18);
+    const t0 = Date.parse('2026-08-14T12:00:00.000Z');
+    let estados = new Map<string, EstadoPuntoControl>();
+    const paso1 = construirEventosDeUbicacion(ubicacion(-17.78, -63.18, t0), contexto([pc]), estados);
+    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+
+    const loc = ubicacion(-17.7797, -63.18, t0 + 10_000);
     const ubicacionPrecisa: Location = { ...loc, coords: { ...loc.coords, accuracy: 30 } };
     const { eventos, deteccion, avisosPrecision } = construirEventosDeUbicacion(
       ubicacionPrecisa,
       contexto([pc]),
-      new Map(),
+      estados,
     );
     expect(eventos).toHaveLength(2);
     expect(deteccion?.puntoControlId).toBe('pc-1');
@@ -259,12 +310,17 @@ describe('construirEventosDeUbicacion', () => {
 
   it('M3: accuracy ausente/no finito se trata como margen 0 (comportamiento previo al campo)', () => {
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
-    const loc = ubicacion(-17.78, -63.18);
+    const t0 = Date.parse('2026-08-14T12:00:00.000Z');
+    let estados = new Map<string, EstadoPuntoControl>();
+    const paso1 = construirEventosDeUbicacion(ubicacion(-17.78, -63.18, t0), contexto([pc]), estados);
+    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+
+    const loc = ubicacion(-17.7797, -63.18, t0 + 10_000);
     const ubicacionSinAccuracy: Location = { ...loc, coords: { ...loc.coords, accuracy: NaN } };
     const { eventos, deteccion, avisosPrecision } = construirEventosDeUbicacion(
       ubicacionSinAccuracy,
       contexto([pc]),
-      new Map(),
+      estados,
     );
     expect(eventos).toHaveLength(2);
     expect(deteccion?.puntoControlId).toBe('pc-1');
@@ -279,14 +335,22 @@ describe('construirEventosDeUbicacion', () => {
     const t0 = Date.parse('2026-08-14T12:00:00.000Z');
     let estados = new Map<string, EstadoPuntoControl>();
 
-    const paso1 = construirEventosDeUbicacion(ubicacion(-17.78, -63.18, t0), contexto([pc]), estados);
-    expect(paso1.eventos[1]?.payload).toMatchObject({ pasada: 1 });
-    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+    // Entra y confirma pasada 1 (ENTREGA 6, dos ticks — ver el primer test de este describe).
+    const entrada = construirEventosDeUbicacion(ubicacion(-17.78, -63.18, t0), contexto([pc]), estados);
+    expect(entrada.eventos.some((e) => e.tipo === 'cumplimiento_punto_control')).toBe(false);
+    estados = conTransicionesAplicadas(estados, entrada.transicionesEstado);
+    const confirmacion = construirEventosDeUbicacion(
+      ubicacion(-17.7797, -63.18, t0 + 10_000),
+      contexto([pc]),
+      estados,
+    );
+    expect(confirmacion.eventos[1]?.payload).toMatchObject({ pasada: 1 });
+    estados = conTransicionesAplicadas(estados, confirmacion.transicionesEstado);
 
     // ~111 m al norte (fuera de los 45 m de re-armado) pero con accuracy 300: no concluyente.
-    const loc = ubicacion(-17.779, -63.18, t0 + 10_000);
+    const loc = ubicacion(-17.779, -63.18, t0 + 20_000);
     const impreciso: Location = { ...loc, coords: { ...loc.coords, accuracy: 300 } };
-    for (const desfase of [10_000, 20_000, 30_000]) {
+    for (const desfase of [20_000, 30_000, 40_000]) {
       const paso = construirEventosDeUbicacion(
         { ...impreciso, timestamp: t0 + desfase },
         contexto([pc]),
@@ -297,9 +361,11 @@ describe('construirEventosDeUbicacion', () => {
       expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(true);
     }
 
-    // Y con el vehículo de vuelta en el punto, pasado el piso, sigue siendo la MISMA pasada.
+    // Y con el vehículo de vuelta en el punto, pasado el piso, sigue siendo la MISMA pasada —
+    // ya estaba `confirmado: true` desde la confirmación de arriba, así que no vuelve a
+    // disparar el seguimiento del mínimo local.
     const pasoRegreso = construirEventosDeUbicacion(
-      ubicacion(-17.78, -63.18, t0 + PASADA_MIN_MS + 40_000),
+      ubicacion(-17.78, -63.18, t0 + PASADA_MIN_MS + 50_000),
       contexto([pc]),
       estados,
     );
@@ -312,15 +378,23 @@ describe('construirEventosDeUbicacion', () => {
     const pc = puntoControl('pc-1', [-63.18, -17.78], 150);
     let estados = new Map<string, EstadoPuntoControl>();
 
-    // Pasada 1: dentro del radio.
+    // Pasada 1: entra y confirma (ENTREGA 6, dos ticks — la entrada sola no emite).
     const t0 = Date.parse('2026-08-14T12:00:00.000Z');
-    const paso1 = construirEventosDeUbicacion(
+    const entrada1 = construirEventosDeUbicacion(
       ubicacion(-17.78, -63.18, t0),
       contexto([pc]),
       estados,
     );
-    expect(paso1.eventos[1]?.payload).toMatchObject({ pasada: 1 });
-    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+    expect(entrada1.eventos.some((e) => e.tipo === 'cumplimiento_punto_control')).toBe(false);
+    estados = conTransicionesAplicadas(estados, entrada1.transicionesEstado);
+
+    const confirma1 = construirEventosDeUbicacion(
+      ubicacion(-17.7797, -63.18, t0 + 10_000), // se aleja un poco: dentro de los 225 m de re-armado, confirma
+      contexto([pc]),
+      estados,
+    );
+    expect(confirma1.eventos[1]?.payload).toMatchObject({ pasada: 1 });
+    estados = conTransicionesAplicadas(estados, confirma1.transicionesEstado);
 
     // Se aleja 0.01° de latitud (~1.1 km, bien por encima de radio*1.5=225m). A2: hace falta un
     // SEGUNDO fix consecutivo fuera del radio de re-armado para re-armar de verdad — un solo
@@ -343,14 +417,22 @@ describe('construirEventosDeUbicacion', () => {
     estados = conTransicionesAplicadas(estados, paso2b.transicionesEstado);
     expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(false);
 
-    // Vuelve bien pasado el piso de 2 min.
-
-    const paso3 = construirEventosDeUbicacion(
-      ubicacion(-17.78, -63.18, t0 + PASADA_MIN_MS + 1_000),
+    // Vuelve bien pasado el piso de 2 min: entra (sin confirmar todavía) y confirma pasada 2 en
+    // el tick siguiente, mismo patrón que la pasada 1.
+    const entrada2 = construirEventosDeUbicacion(
+      ubicacion(-17.78, -63.18, t0 + PASADA_MIN_MS + 71_000),
       contexto([pc]),
       estados,
     );
-    expect(paso3.eventos[1]?.payload).toMatchObject({ pasada: 2 });
+    expect(entrada2.eventos.some((e) => e.tipo === 'cumplimiento_punto_control')).toBe(false);
+    estados = conTransicionesAplicadas(estados, entrada2.transicionesEstado);
+
+    const confirma2 = construirEventosDeUbicacion(
+      ubicacion(-17.7797, -63.18, t0 + PASADA_MIN_MS + 81_000),
+      contexto([pc]),
+      estados,
+    );
+    expect(confirma2.eventos[1]?.payload).toMatchObject({ pasada: 2 });
   });
 });
 
@@ -446,13 +528,22 @@ describe('clavesCumplimientoDesdePayloads', () => {
     expect(estadosVivos.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(false);
 
     // Vuelve, bien pasado el piso de 2 min desde la última EMISIÓN (tsFixViejo, hace horas):
-    // la evidencia NO quedó suprimida — pasada 2.
+    // la evidencia NO quedó suprimida. ENTREGA 6: entra (sin confirmar todavía) y confirma
+    // pasada 2 en el tick siguiente, mismo patrón de dos ticks que el resto del archivo.
     const pasoRegreso = construirEventosDeUbicacion(
       ubicacion(-17.78, -63.18, ahoraMs + PASADA_MIN_MS + 80_000),
       contexto([pc]),
       estadosVivos,
     );
-    expect(pasoRegreso.eventos[1]?.payload).toMatchObject({ pasada: 2 });
+    expect(pasoRegreso.eventos.some((e) => e.tipo === 'cumplimiento_punto_control')).toBe(false);
+    estadosVivos = conTransicionesAplicadas(estadosVivos, pasoRegreso.transicionesEstado);
+
+    const pasoConfirma = construirEventosDeUbicacion(
+      ubicacion(-17.7797, -63.18, ahoraMs + PASADA_MIN_MS + 90_000),
+      contexto([pc]),
+      estadosVivos,
+    );
+    expect(pasoConfirma.eventos[1]?.payload).toMatchObject({ pasada: 2 });
   });
 
   it('el contador de pasadas CONTINÚA desde la semilla (cuenta las filas ya en el outbox), no reinicia en 1', () => {
@@ -485,11 +576,21 @@ describe('clavesCumplimientoDesdePayloads', () => {
     estadosVivos = conTransicionesAplicadas(estadosVivos, pasoLejos2.transicionesEstado);
     expect(estadosVivos.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(false);
 
+    // ENTREGA 6: entra (sin confirmar todavía) y confirma pasada 4 en el tick siguiente — el
+    // contador sigue continuando desde la semilla (3), no desde 0.
     const pasoRegreso = construirEventosDeUbicacion(
       ubicacion(-17.78, -63.18, ahoraMs + PASADA_MIN_MS + 20_000),
       contexto([pc]),
       estadosVivos,
     );
-    expect(pasoRegreso.eventos[1]?.payload).toMatchObject({ pasada: 4 });
+    expect(pasoRegreso.eventos.some((e) => e.tipo === 'cumplimiento_punto_control')).toBe(false);
+    estadosVivos = conTransicionesAplicadas(estadosVivos, pasoRegreso.transicionesEstado);
+
+    const pasoConfirma = construirEventosDeUbicacion(
+      ubicacion(-17.7797, -63.18, ahoraMs + PASADA_MIN_MS + 30_000),
+      contexto([pc]),
+      estadosVivos,
+    );
+    expect(pasoConfirma.eventos[1]?.payload).toMatchObject({ pasada: 4 });
   });
 });

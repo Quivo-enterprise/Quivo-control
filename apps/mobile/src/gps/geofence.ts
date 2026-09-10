@@ -26,6 +26,17 @@ export interface DeteccionPuntoControl {
    * (`undefined`) para una `DeteccionPuntoControl` que no viene de una emisión real.
    */
   pasada?: number;
+  /**
+   * ENTREGA 6 (plan post-piloto 2026-09-09, "separar detección de anuncio"): distingue el
+   * AVISO informativo de aproximación (voz, mientras el vehículo se acerca — se calcula FUERA
+   * de esta máquina de estados, ver `construirEventosDeUbicacion` en `location-task.ts`, sobre
+   * TODAS las detecciones sin importar `cumplido`) de la CONFIRMACIÓN de paso (sonido +
+   * vibración + toast, emitida acá en `filtrarNuevosCumplimientos` recién en el "mínimo local"
+   * de la visita — ver el comentario largo de esa función). `undefined` para una
+   * `DeteccionPuntoControl` cruda de `detectarPuntosControlCercanos` que todavía no pasó por
+   * ninguna de las dos decisiones.
+   */
+  fase?: 'aproximacion' | 'confirmado';
 }
 
 /**
@@ -102,6 +113,23 @@ export const FACTOR_REARME_RADIO = 1.5;
  * cubren ~55 m, de sobra para confirmar que el vehículo realmente se está alejando.
  */
 export const FIXES_REARME_CONSECUTIVOS = 2;
+
+/**
+ * ENTREGA 6 (plan post-piloto 2026-09-09, FALLBACK OBLIGATORIO): cuántos fixes ACEPTADOS
+ * dentro del radio de detección, durante una visita que TODAVÍA no confirmó por "mínimo
+ * local" (ver el comentario largo de `filtrarNuevosCumplimientos`), fuerzan la confirmación
+ * igual — con el mínimo que se haya visto hasta ese momento, aunque la distancia nunca haya
+ * empezado a crecer.
+ *
+ * Sin este piso, un vehículo que se detiene EXACTO en su punto más cercano (semáforo, cola,
+ * layover) nunca vería la distancia crecer dentro de esa visita: el "mínimo local" no se
+ * detectaría jamás y el cumplimiento NO SE EMITIRÍA NUNCA — evidencia perdida para siempre,
+ * justo lo que este plan declara inaceptable sin excepción (aunque el vehículo esté, de
+ * hecho, exactamente sobre el punto de control). Valor PROVISIONAL, sin validar contra datos
+ * reales (pendiente de la Entrega 18 del plan, replay SQL): 6 fixes da margen para no
+ * confirmar sobre un primer fix ruidoso sin demorar la evidencia más de lo razonable.
+ */
+export const FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO = 6;
 
 /*
  * M3 (hallazgo de revisión, medio — reemplaza al gate de accuracy de `location-task.ts`): la
@@ -203,6 +231,40 @@ export interface EstadoPuntoControl {
    * `-Infinity` (nunca descarta el primer fix real).
    */
   ultimoFixMs?: number;
+  /**
+   * ENTREGA 6 ("mínimo local"): distancia MÍNIMA observada durante la visita en curso,
+   * mientras `dentro === true` y todavía NO se confirmó esta visita (`confirmado` abajo, en
+   * `false`) — el candidato a `distanciaMinAproximacionM` del próximo cumplimiento que se
+   * emita. `undefined` cuando no hay visita sin confirmar en curso: recién re-armado, o ya
+   * confirmada (ver `confirmado`).
+   */
+  minDistanciaM?: number;
+  /**
+   * ENTREGA 6: distancia del fix que hizo `cumplido = true` por primera vez en la visita en
+   * curso — viaja en el payload emitido como `distanciaEntradaM`, junto al mínimo real
+   * (`distanciaMinAproximacionM`), para que quede registro de AMBOS números: el que decía la
+   * voz vieja (distancia de entrada, 104-150 m en el piloto del 09-09) y el que dice el
+   * mínimo local nuevo. Mismo ciclo de vida que `minDistanciaM`.
+   */
+  distanciaEntradaM?: number;
+  /**
+   * ENTREGA 6 (insumo del FALLBACK OBLIGATORIO, ver `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO`):
+   * cuántos fixes ACEPTADOS lleva la visita en curso sin haber confirmado todavía. Mismo
+   * ciclo de vida que `minDistanciaM` — se limpia (`undefined`) al confirmar o al re-armar.
+   */
+  fixesDentroSinConfirmar?: number;
+  /**
+   * ENTREGA 6: ya se confirmó (emitió) el cumplimiento de la visita en curso — por
+   * crecimiento genuino de la distancia o por el fallback de fixes sin mínimo claro. Evita
+   * una segunda confirmación si la distancia sigue oscilando (jitter) dentro de la MISMA
+   * visita, sin depender de que `minDistanciaM` quede `undefined` (que también pasa al
+   * re-armar). Se resetea a `false` recién en la PRÓXIMA entrada (nueva visita, ver el primer
+   * bloque de `filtrarNuevosCumplimientos`). Opcional por el mismo motivo que los campos de
+   * arriba: ausente se trata como `false` para no romper `EstadoPuntoControl` construidos a
+   * mano (tests, semillas anteriores a esta entrega) — un estado sin este campo nunca tiene
+   * una visita en curso sin confirmar de todos modos (`dentro: false` implícito).
+   */
+  confirmado?: boolean;
 }
 
 /** B1 (hallazgo de revisión, bajo): `Object.freeze` en vez de un objeto de módulo mutable —
@@ -220,6 +282,13 @@ export interface CumplimientoAEmitir {
   deteccion: DeteccionPuntoControl;
   clave: string;
   pasada: number;
+  /** ENTREGA 6: distancia del fix de ENTRADA de esta visita (lo que antes era, sin más,
+   * `deteccion.distanciaM` de la emisión). */
+  distanciaEntradaM: number;
+  /** ENTREGA 6: distancia MÍNIMA real observada durante la visita — por qué se confirma AHORA
+   * (la distancia empezó a crecer desde acá) o, en el caso del fallback, el mínimo visto hasta
+   * el momento de forzar la confirmación. Ver `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO`. */
+  distanciaMinAproximacionM: number;
 }
 
 export interface ResultadoFiltrado {
@@ -250,15 +319,40 @@ export interface ResultadoFiltrado {
  * previo de cada punto de control — reemplaza al supresor "solo la primera vez" (un
  * `Set<string>` que nunca dejaba pasar una segunda pasada).
  *
- * | Estado actual   | Condición                                                            | Acción                                          |
- * |-----------------|-------------------------------------------------------------------------|--------------------------------------------------|
- * | (cualquiera)    | `tsFixMs <= ultimoFixMs` (fix fuera de orden, A3)                      | descarta el fix (sin transición)                 |
- * | `dentro: false` | `cumplido` y `tsFix - ultimoEmitidoMs >= PASADA_MIN_MS`                | **emitir**, `dentro = true`                      |
- * | `dentro: false` | `cumplido` pero NO pasó `PASADA_MIN_MS` (B5)                          | `dentro = true` SIN emitir (misma visita)        |
- * | `dentro: true`  | `distanciaM <= radio * FACTOR_REARME_RADIO`                            | nada (misma pasada), resetea el contador de A2   |
- * | `dentro: true`  | fuera del radio de re-armado pero dentro del margen de `accuracy` (M3)  | nada (fix no concluyente), solo aviso de precisión |
- * | `dentro: true`  | `distanciaM - accuracy > radio * FACTOR_REARME_RADIO`, < `FIXES_REARME_CONSECUTIVOS` fixes seguidos | suma un fix al contador de A2, no re-arma todavía |
- * | `dentro: true`  | `distanciaM - accuracy > radio * FACTOR_REARME_RADIO`, ya van `FIXES_REARME_CONSECUTIVOS` seguidos  | `dentro = false` (re-arma, NO emite)             |
+ * ENTREGA 6 (plan post-piloto 2026-09-09, "el corazón del arreglo") — MÍNIMO LOCAL: la
+ * detección (`radioToleranciaM`, histéresis de re-armado, `PASADA_MIN_MS`) sigue exactamente
+ * igual, pero la EMISIÓN del cumplimiento ya no ocurre en el instante de ENTRADA al radio
+ * (donde la distancia real al punto es cualquier valor entre ~104 y 150 m, según la
+ * perpendicular de paso — geometría determinista, no ruido). Ahora se DIFIERE hasta el
+ * "mínimo local": el fix más cercano al punto real de la visita en curso, detectado quien
+ * primero muestra que la distancia volvió a CRECER. Costo: ~1 fix de latencia (~15 m con el
+ * muestreo constante de producción) — imperceptible. Beneficio: `distanciaMinAproximacionM`
+ * queda cerca del paso real en vez de cerca del borde del radio de detección.
+ *
+ * FALLBACK OBLIGATORIO (`FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO`): si el vehículo se detiene
+ * DENTRO del radio (semáforo, cola, layover), la distancia nunca vuelve a crecer y el mínimo
+ * local nunca se detectaría por sí solo — sin este piso, la evidencia de esa pasada NUNCA se
+ * emitiría. Perder evidencia es inaceptable, así que tras N fixes sin confirmar se confirma
+ * igual con el mínimo visto hasta ese momento.
+ *
+ * | Estado actual                    | Condición                                                                | Acción                                                    |
+ * |-----------------------------------|---------------------------------------------------------------------------|------------------------------------------------------------|
+ * | (cualquiera)                      | `tsFixMs <= ultimoFixMs` (fix fuera de orden, A3)                        | descarta el fix (sin transición)                            |
+ * | `dentro: false`                   | `cumplido` y `tsFix - ultimoEmitidoMs >= PASADA_MIN_MS`                  | ENTRA: `dentro = true`, arranca seguimiento del mínimo local, **sin emitir todavía** |
+ * | `dentro: false`                   | `cumplido` pero NO pasó `PASADA_MIN_MS` (B5)                            | `dentro = true` SIN emitir, `confirmado = true` (visita ya cerrada, ver B5) |
+ * | `dentro: true`, `confirmado: false` | `distanciaM > mínimo visto hasta ahora` (creciendo) O ya van `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO` fixes sin confirmar | **CONFIRMA/emite** con el mínimo, `confirmado = true`, `pasadas += 1` |
+ * | `dentro: true`, `confirmado: false` | ninguna de las de arriba                                                | actualiza el mínimo visto y el contador de fixes, sigue sin confirmar |
+ * | `dentro: true`                    | `distanciaM <= radio * FACTOR_REARME_RADIO`                              | nada más (misma pasada), resetea el contador de A2          |
+ * | `dentro: true`                    | fuera del radio de re-armado pero dentro del margen de `accuracy` (M3)   | nada (fix no concluyente), solo aviso de precisión           |
+ * | `dentro: true`                    | `distanciaM - accuracy > radio * FACTOR_REARME_RADIO`, < `FIXES_REARME_CONSECUTIVOS` seguidos | suma un fix al contador de A2, no re-arma todavía            |
+ * | `dentro: true`                    | `distanciaM - accuracy > radio * FACTOR_REARME_RADIO`, ya van `FIXES_REARME_CONSECUTIVOS` seguidos | `dentro = false` (re-arma). Si no había confirmado, confirma ANTES (ver nota) |
+ *
+ * Nota sobre el orden confirmación-antes-que-rearme: un vehículo que pasa RÁPIDO (sin
+ * lingerear) puede saltar, de un fix al siguiente, de "cerca del punto" a "más allá del radio
+ * de re-armado" sin pasar por un tick intermedio "todavía cerca pero ya alejándose" — la
+ * condición de "creciendo" (arriba) sigue disparando en ESE MISMO tick porque compara contra
+ * el mínimo GUARDADO, no contra el fix anterior, así que la confirmación siempre corre antes
+ * de que el re-armado pueda cerrar la visita sin haber emitido nunca.
  */
 export function filtrarNuevosCumplimientos(
   estados: ReadonlyMap<string, EstadoPuntoControl>,
@@ -290,26 +384,23 @@ export function filtrarNuevosCumplimientos(
 
     if (!estado.dentro) {
       if (deteccion.cumplido && tsFixMs - estado.ultimoEmitidoMs >= PASADA_MIN_MS) {
-        const pasada = estado.pasadas + 1;
-        emitir.push({ deteccion, clave, pasada });
+        // ENTREGA 6: ya NO emite acá — arranca el seguimiento del "mínimo local" (ver el
+        // comentario de cabecera de la función). `pasadas` no se toca en este punto: solo se
+        // incrementa cuando la visita CONFIRMA de verdad (más abajo), así que sigue
+        // reflejando pasadas realmente evidenciadas, nunca visitas abiertas sin confirmar.
         transiciones.set(clave, {
+          ...estado,
           dentro: true,
-          ultimoEmitidoMs: tsFixMs,
-          pasadas: pasada,
           fixesFueraRadioRearme: 0,
           ultimoFixMs: tsFixMs,
+          minDistanciaM: deteccion.distanciaM,
+          distanciaEntradaM: deteccion.distanciaM,
+          // Arranca en 0, no 1: el fix de ENTRADA establece el mínimo inicial, no "falla en
+          // mejorarlo" (no hay mínimo previo contra el cual comparar) — ver el comentario del
+          // fallback más abajo.
+          fixesDentroSinConfirmar: 0,
+          confirmado: false,
         });
-        if (margenM > deteccion.radioToleranciaM) {
-          // La pasada se emite igual (M3), pero queda marcada: el fix que la sustenta tiene un
-          // error de medición mayor que el propio radio del punto de control.
-          avisosPrecision.push({
-            motivo: 'emision-con-precision-degradada',
-            puntoControlId: deteccion.puntoControlId,
-            distanciaM: deteccion.distanciaM,
-            radioToleranciaM: deteccion.radioToleranciaM,
-            accuracyM: margenM,
-          });
-        }
       } else if (deteccion.cumplido) {
         // B5 (hallazgo de revisión, bajo): CUMPLE pero todavía no pasó `PASADA_MIN_MS` desde la
         // última emisión. Antes esta rama dejaba `dentro: false`, así que el piso no atribuía
@@ -322,14 +413,24 @@ export function filtrarNuevosCumplimientos(
         // marcarla como visita en curso — `dentro: true`, sin emitir — en vez de dejar armado
         // un gatillo que dispara tarde y con el timestamp equivocado.
         //
-        // No pierde ninguna pasada real: `ultimoEmitidoMs` no se toca (la pasada ya emitida
+        // `confirmado: true` (ENTREGA 6): para llegar acá con `dentro: false` hace falta haber
+        // re-armado, y el re-armado SIEMPRE confirma la visita anterior ANTES de re-armar (ver
+        // la nota de cabecera) — así que esta reentrada NO tiene ninguna confirmación
+        // pendiente: es una continuación de una visita YA evidenciada, no una nueva. Se limpian
+        // los campos de seguimiento del mínimo (no hay nada que seguir).
+        //
+        // No pierde ninguna pasada real: `ultimoEmitidoMs` no se toca (la pasada ya confirmada
         // sigue siendo la que manda) y una vuelta genuina posterior tiene que re-armar por
-        // distancia igual que siempre, ahí sí emitiendo con el `tsFix` de su propia entrada.
+        // distancia igual que siempre, ahí sí confirmando con su propio mínimo local.
         transiciones.set(clave, {
           ...estado,
           dentro: true,
           fixesFueraRadioRearme: 0,
           ultimoFixMs: tsFixMs,
+          confirmado: true,
+          minDistanciaM: undefined,
+          distanciaEntradaM: undefined,
+          fixesDentroSinConfirmar: undefined,
         });
       } else {
         // No cumple todavía: sin cambios de fondo, pero el fix SÍ se aceptó — hay que dejar
@@ -339,6 +440,97 @@ export function filtrarNuevosCumplimientos(
       continue;
     }
 
+    // `dentro: true`: visita en curso. ENTREGA 6 — mínimo local: ANTES de evaluar el
+    // re-armado, si esta visita todavía no confirmó (`estado.confirmado === false`, puesto EXPLÍCITAMENTE
+    // por la rama de ENTRADA de arriba), chequear si corresponde confirmar AHORA. Se evalúa
+    // `=== false` (no `!estado.confirmado`) a propósito: un `EstadoPuntoControl` sin este
+    // campo (semillas del outbox vía `clavesCumplimientoDesdePayloads`, o estados construidos
+    // a mano en tests anteriores a esta entrega) representa una visita YA asentada de una
+    // pasada pasada — tratarlo como "confirmado" por default es el lado seguro; el único
+    // camino que de verdad dispara el seguimiento del mínimo es la rama de ENTRADA, que
+    // siempre deja `confirmado: false` explícito.
+    let estadoBase: EstadoPuntoControl = estado;
+    if (estado.confirmado === false) {
+      const minPrevio = estado.minDistanciaM ?? deteccion.distanciaM;
+      const creciendo = deteccion.distanciaM > minPrevio;
+      // ENTREGA 6 (fix de diseño): el contador del fallback mide fixes CONSECUTIVOS SIN
+      // MEJORAR el mínimo — NO fixes totales desde la entrada. Con "fixes totales" un
+      // acercamiento REAL y genuino que tarda más de `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO`
+      // fixes en llegar a su punto más cercano (habitual en un punto de control alejado de la
+      // ruta, ver "por qué 10 m es estructuralmente imposible" en el plan) confirmaría TARDE
+      // pero mal: con un mínimo a medio camino, no el real, exactamente el defecto que esta
+      // entrega existe para cerrar. Mejorar el mínimo (distancia estrictamente menor) resetea
+      // el contador a 0 SIEMPRE — así que una serie monótonamente decreciente, sin importar
+      // cuántos fixes tarde, nunca dispara el fallback: solo lo dispara una racha de fixes que
+      // NO logran un mínimo nuevo (vehículo detenido o prácticamente detenido).
+      const mejoraElMinimo = deteccion.distanciaM < minPrevio;
+      const fixesSinMejorar = mejoraElMinimo ? 0 : (estado.fixesDentroSinConfirmar ?? 0) + 1;
+      const fallbackPorFixes = !creciendo && fixesSinMejorar >= FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO;
+
+      if (creciendo || fallbackPorFixes) {
+        // CONFIRMA: si la distancia está creciendo, el mínimo GUARDADO (de un fix anterior) es
+        // el mínimo real de la visita — el fix ACTUAL (que ya está más lejos) no lo desplaza.
+        // Si confirma por fallback (nunca creció, pero tampoco mejoró en
+        // `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO` intentos seguidos), el mínimo guardado YA es
+        // el mejor visto — el fix actual, por definición de esta rama, no lo mejora.
+        const distanciaMinAproximacionM = minPrevio;
+        const distanciaEntradaM = estado.distanciaEntradaM ?? distanciaMinAproximacionM;
+        const pasada = estado.pasadas + 1;
+        emitir.push({
+          deteccion: {
+            ...deteccion,
+            // `cumplido: true` explícito: el fix ACTUAL (el que disparó la confirmación
+            // creciendo o por fallback) puede estar, él mismo, más allá del radio de
+            // detección — la confirmación no depende de que ESTE fix puntual cumpla, depende
+            // de que la visita YA pasó por el mínimo local. Sin este override, un consumidor
+            // que gatea en `cumplido` (`ControlFeedbackToast`, `gps-provider.tsx`) podría
+            // quedarse mudo justo en el tick que confirma la pasada real.
+            cumplido: true,
+            fase: 'confirmado',
+            pasada,
+            distanciaM: distanciaMinAproximacionM,
+          },
+          clave,
+          pasada,
+          distanciaEntradaM,
+          distanciaMinAproximacionM,
+        });
+        if (margenM > deteccion.radioToleranciaM) {
+          // La pasada se emite igual (M3), pero queda marcada: el fix que la sustenta tiene un
+          // error de medición mayor que el propio radio del punto de control. Se evalúa con la
+          // `accuracy` del fix ACTUAL (el que dispara la confirmación), no la del fix del
+          // mínimo — es el fix que efectivamente sustenta la evidencia emitida en este tick.
+          avisosPrecision.push({
+            motivo: 'emision-con-precision-degradada',
+            puntoControlId: deteccion.puntoControlId,
+            distanciaM: distanciaMinAproximacionM,
+            radioToleranciaM: deteccion.radioToleranciaM,
+            accuracyM: margenM,
+          });
+        }
+        estadoBase = {
+          ...estado,
+          ultimoEmitidoMs: tsFixMs,
+          pasadas: pasada,
+          confirmado: true,
+          minDistanciaM: undefined,
+          distanciaEntradaM: undefined,
+          fixesDentroSinConfirmar: undefined,
+        };
+      } else {
+        // Todavía no corresponde confirmar: si este fix mejoró el mínimo, lo adopta (y resetea
+        // el contador del fallback a 0 — ver el comentario de arriba); si no, mantiene el
+        // mínimo guardado y suma un fix al contador. Sigue "sin confirmar" — el re-armado de
+        // abajo se evalúa igual con este `estadoBase` (ver la nota de cabecera sobre por qué
+        // el orden es seguro).
+        estadoBase = {
+          ...estado,
+          minDistanciaM: mejoraElMinimo ? deteccion.distanciaM : minPrevio,
+          fixesDentroSinConfirmar: fixesSinMejorar,
+        };
+      }
+    }
+
     const radioRearme = deteccion.radioToleranciaM * FACTOR_REARME_RADIO;
     if (deteccion.distanciaM - margenM > radioRearme) {
       // A2 (hallazgo de revisión, alto): hacen falta `FIXES_REARME_CONSECUTIVOS` fixes
@@ -346,17 +538,17 @@ export function filtrarNuevosCumplimientos(
       // fix (jitter de GPS) suma al contador pero no re-arma por sí solo (ver el comentario de
       // la constante). M3: además el fix tiene que estar fuera CON MARGEN, descontando su
       // propia `accuracy`, para que un fix impreciso no habilite una pasada fantasma.
-      const consecutivos = (estado.fixesFueraRadioRearme ?? 0) + 1;
+      const consecutivos = (estadoBase.fixesFueraRadioRearme ?? 0) + 1;
       if (consecutivos >= FIXES_REARME_CONSECUTIVOS) {
         transiciones.set(clave, {
-          ...estado,
+          ...estadoBase,
           dentro: false,
           fixesFueraRadioRearme: 0,
           ultimoFixMs: tsFixMs,
         });
       } else {
         transiciones.set(clave, {
-          ...estado,
+          ...estadoBase,
           fixesFueraRadioRearme: consecutivos,
           ultimoFixMs: tsFixMs,
         });
@@ -373,11 +565,11 @@ export function filtrarNuevosCumplimientos(
         radioToleranciaM: deteccion.radioToleranciaM,
         accuracyM: margenM,
       });
-      transiciones.set(clave, { ...estado, ultimoFixMs: tsFixMs });
+      transiciones.set(clave, { ...estadoBase, ultimoFixMs: tsFixMs });
     } else {
       // Sigue dentro del radio de re-armado: misma pasada. Si venía acumulando outliers, este
       // fix los desmiente — resetea el contador de A2.
-      transiciones.set(clave, { ...estado, fixesFueraRadioRearme: 0, ultimoFixMs: tsFixMs });
+      transiciones.set(clave, { ...estadoBase, fixesFueraRadioRearme: 0, ultimoFixMs: tsFixMs });
     }
   }
 

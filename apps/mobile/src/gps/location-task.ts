@@ -1,5 +1,5 @@
 import type { Location } from 'react-native-background-geolocation';
-import { resolverTsFix, type PuntoControlPaquete, type TipoEventoSync } from '@quivo/shared';
+import { RADIO_AVISO_M, resolverTsFix, type PuntoControlPaquete, type TipoEventoSync } from '@quivo/shared';
 import {
   detectarPuntosControlCercanos,
   filtrarNuevosCumplimientos,
@@ -55,10 +55,23 @@ export interface EventoUbicacionConstruido {
 
 export interface ResultadoConstruirEventos {
   eventos: EventoUbicacionConstruido[];
-  /** Último punto de control recién cumplido en este tick, o `null` si no hubo ninguno —
-   * lo usa `useGpsOperativo` para disparar el aviso por voz (`gps-provider.tsx`). El
-   * headless task lo ignora: sin React no hay UI ni `expo-speech` a la que avisar. */
+  /** Último punto de control CONFIRMADO (mínimo local, `fase: 'confirmado'`) en este tick, o
+   * `null` si no hubo ninguno — lo usa `useGpsOperativo` para disparar sonido + toast
+   * (`gps-provider.tsx`, ENTREGA 6) y `anunciarPuntoControl` (`anuncio-punto-control.ts`,
+   * ENTREGA 7) para la notificación headless. Antes de la ENTREGA 6 este campo alimentaba
+   * también la voz — ya no: la voz sale de `deteccionAproximacion`, abajo. */
   deteccion: DeteccionPuntoControl | null;
+  /**
+   * ENTREGA 6 (plan post-piloto 2026-09-09): el punto de control MÁS CERCANO cuya distancia
+   * cae dentro de `RADIO_AVISO_M`, con `fase: 'aproximacion'`, o `null` si ninguno está en
+   * rango — informativo, calculado directamente sobre TODAS las detecciones de este tick
+   * (`detectarPuntosControlCercanos`, que ya trae `distanciaM` para todas), SIN pasar por la
+   * máquina de estados de `filtrarNuevosCumplimientos`: el aviso de aproximación no depende de
+   * histéresis ni de `PASADA_MIN_MS`, solo de "¿hay algún punto cerca ahora mismo?". El
+   * dedupe de "ya lo anuncié" es responsabilidad del caller (`gps-provider.tsx` en foreground,
+   * `anuncio-punto-control.ts` en headless) — acá se recalcula en cada tick sin memoria.
+   */
+  deteccionAproximacion: DeteccionPuntoControl | null;
   /**
    * Transiciones de estado del geofence (`filtrarNuevosCumplimientos`, `geofence.ts`) que
    * corresponde aplicar al Map de estados del caller — SOLO DESPUÉS de que `encolarEvento`
@@ -153,6 +166,7 @@ export function construirEventosDeUbicacion(
   ];
 
   let deteccion: DeteccionPuntoControl | null = null;
+  let deteccionAproximacion: DeteccionPuntoControl | null = null;
   let transicionesEstado = new Map<string, EstadoPuntoControl>();
   let avisosPrecision: AvisoPrecision[] = [];
   if (contexto.puntosControl.length > 0) {
@@ -168,6 +182,19 @@ export function construirEventosDeUbicacion(
       contexto.puntosControl,
       location.coords.accuracy,
     );
+
+    // ENTREGA 6: aviso de aproximación — el punto MÁS CERCANO dentro de `RADIO_AVISO_M`, sobre
+    // TODAS las detecciones del tick (no solo las `cumplido`, que usan el radio de detección
+    // propio de cada punto — `RADIO_AVISO_M` es un radio de AVISO global, independiente).
+    // Deliberadamente por fuera de `filtrarNuevosCumplimientos`: no toca la máquina de estados
+    // de detección/confirmación, así que no puede introducir un bug en la evidencia legal.
+    for (const d of detecciones) {
+      if (d.distanciaM > RADIO_AVISO_M) continue;
+      if (deteccionAproximacion === null || d.distanciaM < deteccionAproximacion.distanciaM) {
+        deteccionAproximacion = { ...d, fase: 'aproximacion' };
+      }
+    }
+
     const { emitir, transiciones, avisosPrecision: avisos } = filtrarNuevosCumplimientos(
       estadosPuntosControl,
       detecciones,
@@ -177,11 +204,11 @@ export function construirEventosDeUbicacion(
     transicionesEstado = transiciones;
     avisosPrecision = avisos;
 
-    for (const { deteccion: nuevaDeteccion, pasada, clave } of emitir) {
+    for (const { deteccion: nuevaDeteccion, pasada, clave, distanciaEntradaM, distanciaMinAproximacionM } of emitir) {
       // B4 (hallazgo de revisión, bajo): la pasada viaja en la propia `DeteccionPuntoControl`
       // — `gps-provider.tsx` la necesita para distinguir dos pasadas CONSECUTIVAS del MISMO
-      // punto de control (multi-vuelta) al decidir si repetir el aviso por voz.
-      deteccion = { ...nuevaDeteccion, pasada };
+      // punto de control (multi-vuelta) al decidir si repetir sonido/toast.
+      deteccion = nuevaDeteccion;
       eventos.push({
         tipo: 'cumplimiento_punto_control',
         // M4 (hallazgo de revisión, medio): clave atada a ESTE evento — ver el comentario de
@@ -190,12 +217,20 @@ export function construirEventosDeUbicacion(
         payload: {
           sesionId: contexto.sesionId,
           puntoControlId: nuevaDeteccion.puntoControlId,
-          // lat/lng de la posición que disparó la detección — el worker (QUI-241) necesita
-          // la coordenada real para re-validar server-side (ST_DWithin, fuente de verdad
-          // RF-39), no solo confiar en `distanciaM` autoreportada.
+          // lat/lng de la posición ACTUAL (el fix que disparó la confirmación, no el de
+          // entrada) — el worker (QUI-241) necesita la coordenada real para re-validar
+          // server-side (ST_DWithin, fuente de verdad RF-39). ENTREGA 6: con la confirmación
+          // diferida al mínimo local, esta posición está TAN cerca o más cerca del punto real
+          // que la de entrada, así que la revalidación server-side sigue pasando sin cambios.
           lat: location.coords.latitude,
           lng: location.coords.longitude,
           distanciaM: nuevaDeteccion.distanciaM,
+          // ENTREGA 6: ambos números viajan — `distanciaEntradaM` es lo que decía la voz vieja
+          // (borde del radio de detección, 104-150 m en el piloto del 09-09);
+          // `distanciaMinAproximacionM` es el mínimo real de la visita (ver el comentario largo
+          // de "mínimo local" en `filtrarNuevosCumplimientos`, `geofence.ts`).
+          distanciaEntradaM,
+          distanciaMinAproximacionM,
           validadoPor: 'app',
           // Mismo timestamp del fix GPS que dispara el `gps_point` de más arriba — misma
           // `location`, mismo defecto de buffering headless. Acá pesa más: la hora de paso
@@ -213,7 +248,7 @@ export function construirEventosDeUbicacion(
     }
   }
 
-  return { eventos, deteccion, transicionesEstado, avisosPrecision };
+  return { eventos, deteccion, deteccionAproximacion, transicionesEstado, avisosPrecision };
 }
 
 /**
@@ -316,6 +351,11 @@ export function clavesCumplimientoDesdePayloads(
       dentro: true,
       ultimoEmitidoMs,
       pasadas,
+      // ENTREGA 6: explícito (aunque el `=== false` de `filtrarNuevosCumplimientos` ya trata
+      // un campo ausente como "confirmado" por default) — toda clave sembrada acá viene de
+      // pasadas YA EMITIDAS al outbox, nunca de una visita con el mínimo local a mitad de
+      // camino (eso no se persiste hasta confirmar). No hay nada pendiente que seguir.
+      confirmado: true,
       ultimoFixMs: Number.isFinite(ultimoEmitidoMs) ? ultimoEmitidoMs : undefined,
     });
   }
