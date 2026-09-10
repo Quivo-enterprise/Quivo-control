@@ -671,4 +671,151 @@ describe('EnVivoService', () => {
       expect(filas.some((f) => f.id === sesionLinea2Id)).toBe(true);
     });
   });
+
+  /**
+   * Hallazgo 2 del code-review (producción, ~00:40 Bolivia): el `LEFT JOIN LATERAL` a
+   * `gps_points` de `obtenerPosiciones` estaba acotado a `trazaDesde` (medianoche boliviana
+   * de la jornada CALENDARIO), no a `posicionesDesde` (piso rodante, ver el docblock del
+   * método). Un vehículo que arrancó a las 22:00 de ayer y sigue reportando, consultado a
+   * las 00:30, entraba por el `WHERE` (ventana rodante de 24 h sobre `so.inicio`) pero sus
+   * fixes de ANTES de medianoche quedaban fuera del `LATERAL` — si todavía no había un fix
+   * posterior a medianoche, la posición salía `lat`/`lng` `NULL` y `estadoFrescura`
+   * `sin_datos`: el vehículo desaparecía del mapa. Este describe reproduce exactamente ese
+   * escenario contra la base real, con `ahora` inyectado a las 00:30 Bolivia.
+   */
+  describe('obtenerPosiciones — cruce de medianoche boliviana (hallazgo 2 code-review)', () => {
+    const HORA = 60 * MINUTO;
+
+    // `ahora` fijo a las 00:30 Bolivia (04:00 = medianoche Bolivia UTC) de "hoy", anclado a
+    // la fecha UTC real del día en que corre el test — mismo criterio que `AHORA` arriba —
+    // para que la partición de HOY (creada en el `beforeAll` de arriba) y la de AYER
+    // (creada acá) sean las que de verdad existen en la base.
+    const AHORA_MEDIANOCHE = (() => {
+      const hoy = new Date();
+      return new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate(), 4, 30));
+    })();
+
+    // Sesión que arranca 22:00 Bolivia de AYER (= 02:00 UTC de HOY) con un fix ANTES de
+    // medianoche boliviana (23:00 Bolivia ayer = 03:00 UTC hoy) y otro DESPUÉS (00:20
+    // Bolivia hoy = 04:20 UTC hoy). Ambos `ts` caen en la partición UTC de HOY (ya
+    // asegurada por el `beforeAll` de arriba): no hace falta partición nueva para este caso
+    // — el bug es sobre la medianoche BOLIVIANA (04:00 UTC), no sobre el borde de partición
+    // (00:00 UTC).
+    let sesionCruceId: string;
+    const inicioCruce = new Date(AHORA_MEDIANOCHE.getTime() - 150 * MINUTO); // hoy 02:00 UTC
+    const fixAntesMedianoche = new Date(AHORA_MEDIANOCHE.getTime() - 90 * MINUTO); // hoy 03:00 UTC
+    const fixDespuesMedianoche = new Date(AHORA_MEDIANOCHE.getTime() - 10 * MINUTO); // hoy 04:20 UTC
+
+    // Sesión cuyo ÚNICO fix es de AYER a la noche (19:30 Bolivia = 23:30 UTC ayer): antes
+    // de la medianoche boliviana Y antes de la medianoche UTC, así que cae en la partición
+    // `gps_points_<AYER>` — esta sí hace falta crearla explícito, es el caso que pide el
+    // encargo ("si la tabla de test necesita la partición del día anterior, crearla").
+    let sesionSoloAntesId: string;
+    const inicioSoloAntes = new Date(AHORA_MEDIANOCHE.getTime() - 330 * MINUTO); // ayer 23:00 UTC
+    const fixSoloAntes = new Date(AHORA_MEDIANOCHE.getTime() - 300 * MINUTO); // ayer 23:30 UTC
+
+    beforeAll(async () => {
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        // Partición de AYER: la de HOY ya la aseguró el `beforeAll` de arriba, pero esa
+        // corrida no cubre el día anterior — `crear_particion_gps_points` es idempotente
+        // (ver `20260817130000_particion_gps_points_idempotente`), así que es seguro
+        // llamarla aunque otro test la haya creado ya.
+        await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE - 1)`;
+
+        // Reusa vehículo/conductor/asignación de `sesionConPuntosId` (misma línea/ruta que
+        // el resto del archivo): lo único que importa para este caso es la ventana
+        // temporal de `gps_points`, no una línea/ruta distinta.
+        const base = await tx.sesionOperativa.findUniqueOrThrow({
+          where: { id: sesionConPuntosId },
+        });
+
+        const credenciales = () => ({
+          accessTokenHash: randomUUID(),
+          refreshTokenHash: randomUUID(),
+          accessExpiresAt: new Date(AHORA_MEDIANOCHE.getTime() + HORA),
+          refreshExpiresAt: new Date(AHORA_MEDIANOCHE.getTime() + HORA),
+        });
+
+        const cruce = await tx.sesionOperativa.create({
+          data: {
+            sindicatoId: sindicatoAId,
+            asignacionId: base.asignacionId,
+            vehiculoId: base.vehiculoId,
+            conductorId: base.conductorId,
+            deviceId: 'device-en-vivo-medianoche-cruce',
+            inicio: inicioCruce,
+            estado: 'activa',
+            ...credenciales(),
+          },
+        });
+        sesionCruceId = cruce.id;
+
+        const soloAntes = await tx.sesionOperativa.create({
+          data: {
+            sindicatoId: sindicatoAId,
+            asignacionId: base.asignacionId,
+            vehiculoId: base.vehiculoId,
+            conductorId: base.conductorId,
+            deviceId: 'device-en-vivo-medianoche-solo-antes',
+            inicio: inicioSoloAntes,
+            estado: 'activa',
+            ...credenciales(),
+          },
+        });
+        sesionSoloAntesId = soloAntes.id;
+
+        await tx.$executeRaw`
+          INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
+          VALUES
+            (${randomUUID()}::uuid, ${sesionCruceId}::uuid, 'device-en-vivo-medianoche-cruce', ${fixAntesMedianoche}::timestamptz, -34.61, -58.41, 5, 7.2, ${fixAntesMedianoche}::timestamptz, ${sindicatoAId}),
+            (${randomUUID()}::uuid, ${sesionCruceId}::uuid, 'device-en-vivo-medianoche-cruce', ${fixDespuesMedianoche}::timestamptz, -34.612, -58.412, 5, 7.5, ${fixDespuesMedianoche}::timestamptz, ${sindicatoAId}),
+            (${randomUUID()}::uuid, ${sesionSoloAntesId}::uuid, 'device-en-vivo-medianoche-solo-antes', ${fixSoloAntes}::timestamptz, -34.62, -58.42, 5, 0, ${fixSoloAntes}::timestamptz, ${sindicatoAId})
+        `;
+      });
+    });
+
+    afterAll(async () => {
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id IN (${sesionCruceId}::uuid, ${sesionSoloAntesId}::uuid)`;
+        await tx.sesionOperativa.deleteMany({
+          where: { id: { in: [sesionCruceId, sesionSoloAntesId] } },
+        });
+      });
+    });
+
+    it('sesión que arranca 22:00 Bolivia de ayer, con fixes a ambos lados de medianoche: devuelve el fix MÁS RECIENTE y "reportando", no "sin_datos"', async () => {
+      const filas = await service.obtenerPosiciones(adminQuivo, AHORA_MEDIANOCHE);
+      const fila = filas.find((f) => f.id === sesionCruceId);
+
+      expect(fila).toBeDefined();
+      expect(fila?.lat).toBe(-34.612);
+      expect(fila?.lng).toBe(-58.412);
+      expect(fila?.ultimoFixTs).toBe(fixDespuesMedianoche.toISOString());
+      // Diferenciador real del fix: si el `LATERAL` siguiera acotado a `trazaDesde`
+      // (medianoche boliviana calendario, bug pre-fix), el fix de ANTES de medianoche
+      // quedaría fuera de la ventana y `totalPuntos` sería 1, no 2.
+      expect(fila?.totalPuntos).toBe(2);
+      expect(fila?.estadoFrescura).toBe('reportando');
+      expect(fila?.activa).toBe(true);
+    });
+
+    it('sesión cuyo único fix es ANTERIOR a medianoche Bolivia (ninguno después): igual devuelve esa posición, no "sin_datos"', async () => {
+      const filas = await service.obtenerPosiciones(adminQuivo, AHORA_MEDIANOCHE);
+      const fila = filas.find((f) => f.id === sesionSoloAntesId);
+
+      expect(fila).toBeDefined();
+      // Reproducción directa del bug: antes del fix, el `LATERAL` acotado a `trazaDesde`
+      // (medianoche boliviana de HOY) no veía este fix (de ayer a la noche) y devolvía
+      // `lat`/`lng` `NULL` + `estadoFrescura: 'sin_datos'` — el vehículo desaparecía del
+      // mapa pese a tener una posición última conocida.
+      expect(fila?.lat).toBe(-34.62);
+      expect(fila?.lng).toBe(-58.42);
+      expect(fila?.ultimoFixTs).toBe(fixSoloAntes.toISOString());
+      expect(fila?.totalPuntos).toBe(1);
+      // El fix tiene 5 h de antigüedad: la ingesta ya no está viva, así que la clasificación
+      // correcta es "perdido" (dato viejo), NO "reportando" — lo que importa acá es que
+      // haya DATO (no sea `sin_datos`), no que parezca recién reportado.
+      expect(fila?.estadoFrescura).toBe('perdido');
+    });
+  });
 });

@@ -131,10 +131,22 @@ const TECHO_MAXIMO_DESDE_INICIO_MS = 36 * 60 * MINUTO_MS;
  * `so.inicio` dentro de la jornada boliviana exacta (`trazaDesde`/`trazaHasta`) con
  * `LIMIT 100`; con sesiones colgadas de días previos (`fin IS NULL` para siempre, la
  * app no cierra sesión al "Finalizar recorrido") ese límite puede esconder a las vivas
- * detrás de zombies. Acá el filtro es una ventana **rodante** de 24 h sobre `so.inicio`
- * (no la jornada calendario) con un tope más alto: cubre un turno completo aunque cruce
- * medianoche boliviana, y 500 sesiones es más margen del que cualquier sindicato real
- * tiene hoy en simultáneo.
+ * detrás de zombies. Acá el filtro de SESIONES (`so.inicio`) es una ventana **rodante**
+ * de 24 h (no la jornada calendario) con un tope más alto: cubre un turno completo
+ * aunque cruce medianoche boliviana, y 500 sesiones es más margen del que cualquier
+ * sindicato real tiene hoy en simultáneo.
+ *
+ * CORRECCIÓN (code-review, hallazgo detectado en producción ~00:40 Bolivia): esta
+ * garantía de "cubre un turno completo aunque cruce medianoche" es sobre qué SESIONES
+ * entran, no sobre qué POSICIONES se les encuentran. Hasta este fix, el `LATERAL` de
+ * `obtenerPosiciones` seguía acotado a `trazaDesde` (arranque de la jornada calendario,
+ * no de esta ventana rodante) — un vehículo que arrancó anoche y sigue reportando sin
+ * parar SÍ entraba por este `WHERE` (`so.inicio >= sesionesDesde` o sesión abierta), pero
+ * sus fixes de antes de medianoche quedaban fuera del `LATERAL`, y si todavía no había
+ * un fix nuevo posterior a medianoche, la posición salía `NULL`/`sin_datos`: el vehículo
+ * desaparecía del mapa justo cuando más se lo necesitaba. Ver `posicionesDesde` en
+ * `obtenerPosiciones` — ahora el `LATERAL` comparte el mismo piso rodante que este
+ * `WHERE`, así que la garantía de "cubre un turno completo" aplica a AMBOS.
  */
 const VENTANA_SESIONES_POSICIONES_MS = 24 * 60 * MINUTO_MS;
 const LIMITE_SESIONES_POSICIONES = 500;
@@ -285,9 +297,21 @@ export class EnVivoService {
    * 2. `l.id AS "lineaId"` y `r.sentido AS "rutaSentido"`: ambos joins (`rutas`,
    *    `lineas`) ya estaban para resolver `lineaNombre`, así que salen gratis.
    *
-   * La ventana de partición (`trazaDesde`/`trazaHasta`, jornada boliviana) se conserva
-   * intacta para que el planner siga podando particiones de `gps_points` — es una cota
-   * **constante**, no correlacionada con `so.inicio`, igual que en `listarHoy`.
+   * La ventana de partición del `LATERAL` (`posicionesDesde`/`trazaHasta`) se calcula
+   * en JS **antes** de la query para que el planner siga podando particiones de
+   * `gps_points` — son cotas **constantes**, no correlacionadas con `so.inicio` de cada
+   * fila (igual que en `listarHoy`). `posicionesDesde` es el PISO de `trazaDesde`
+   * (arranque de la jornada calendario) y `sesionesDesde` (ventana rodante de 24 h que
+   * usa el `WHERE` de sesiones, ver `VENTANA_SESIONES_POSICIONES_MS`): tiene que cubrir
+   * AL MENOS lo mismo que `sesionesDesde`, si no, una sesión que entra por esa rama
+   * (arrancó ayer, sigue activa) puede tener CERO fixes dentro del `LATERAL` si todavía
+   * no hay un fix posterior a la medianoche boliviana — `lat`/`lng` salen `NULL` y el
+   * vehículo desaparece del mapa aunque esté reportando (bug real detectado en
+   * producción, code-review QUI-240/en-vivo). En la práctica `trazaDesde` siempre es
+   * más reciente que `sesionesDesde` (la jornada calendario nunca arranca antes que la
+   * ventana rodante de 24 h), así que `posicionesDesde` termina siendo `sesionesDesde` —
+   * pero se calcula con `Math.min` explícito, no hardcodeado, para no depender de ese
+   * razonamiento si alguna de las dos ventanas cambia de duración más adelante.
    */
   async obtenerPosiciones(
     actor: AuthenticatedUser,
@@ -297,6 +321,8 @@ export class EnVivoService {
     const trazaDesde = inicioDeJornadaBolivia(jornada);
     const trazaHasta = inicioDeJornadaSiguienteBolivia(jornada);
     const sesionesDesde = new Date(ahora.getTime() - VENTANA_SESIONES_POSICIONES_MS);
+    const posicionesDesde =
+      trazaDesde.getTime() < sesionesDesde.getTime() ? trazaDesde : sesionesDesde;
 
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
       const filas = await tx.$queryRaw<PosicionEnVivoRow[]>`
@@ -317,7 +343,7 @@ export class EnVivoService {
                  count(*) OVER ()::int AS "totalPuntos"
           FROM gps_points gp
           WHERE gp.sesion_id = so.id::uuid
-            AND gp.ts >= ${trazaDesde} AND gp.ts < ${trazaHasta}
+            AND gp.ts >= ${posicionesDesde} AND gp.ts < ${trazaHasta}
           ORDER BY gp.ts DESC
           LIMIT 1
         ) fix ON true
