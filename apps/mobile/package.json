@@ -11,7 +11,8 @@
     "test": "vitest run --passWithNoTests",
     "start": "expo start --dev-client",
     "android": "expo run:android",
-    "ios": "expo run:ios"
+    "ios": "expo run:ios",
+    "generar:leaflet-inline": "node scripts/generar-leaflet-inline.mjs"
   },
   "dependencies": {
     "@babel/runtime": "^7.29.7",
@@ -63,6 +64,7 @@
     "@types/pako": "^2.0.3",
     "@types/react": "~19.1.17",
     "babel-preset-expo": "~54.0.12",
+    "leaflet": "1.9.4",
     "typescript": "^5.7.3"
   }
 }
