@@ -10,11 +10,15 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 // activa, siempre disponible — y no contra el paquete local, que puede faltar.
 //
 // Se mockean `../db/outbox`, `../db/paquete-dia`, `../shared/security/sesion-movil-store`,
-// `@sentry/react-native` y `react-native-background-geolocation` porque todos traen
-// dependencias nativas (`expo-sqlite`, `expo-crypto`, `expo-secure-store`) que rompen bajo
-// vitest/Node — mismo motivo documentado en `db/paquete-dia-local.ts` y en
-// `use-auth-movil.refrescar.test.ts`. `obtenerContextoUbicacionPersistido` solo orquesta
-// llamadas a esos módulos.
+// `@sentry/react-native`, `react-native-background-geolocation` y (Entrega 2)
+// `../features/operacion/drenaje-oportunista` porque todos traen, directa o
+// transitivamente (`sync-outbox.ts` → `@react-native-community/netinfo` importa `react-native`
+// entero), dependencias nativas (`expo-sqlite`, `expo-crypto`, `expo-secure-store`) que rompen
+// bajo vitest/Node — mismo motivo documentado en `db/paquete-dia-local.ts` y en
+// `use-auth-movil.refrescar.test.ts`. Este archivo solo cubre
+// `obtenerContextoUbicacionPersistido`, que ni siquiera llama al drenado — el mock de
+// `drenaje-oportunista` es puramente para que `import './headless-task'` no arrastre esa
+// cadena al evaluar el módulo.
 vi.mock('react-native-background-geolocation', () => ({
   default: {
     getState: vi.fn(),
@@ -41,6 +45,10 @@ vi.mock('../db/paquete-dia', () => ({
 vi.mock('../shared/security/sesion-movil-store', () => ({
   cargarSesionMovil: vi.fn(),
   obtenerDeviceIdMovil: vi.fn(),
+}));
+
+vi.mock('../features/operacion/drenaje-oportunista', () => ({
+  intentarDrenarOportunista: vi.fn().mockResolvedValue(undefined),
 }));
 
 import BackgroundGeolocation from 'react-native-background-geolocation';

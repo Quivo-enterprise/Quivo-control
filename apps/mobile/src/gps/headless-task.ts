@@ -12,6 +12,7 @@ import {
 } from './location-task';
 import { abrirOutbox, encolarEvento, obtenerEventosPorTipo } from '../db/outbox';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
+import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
 import { cargarSesionMovil, obtenerDeviceIdMovil } from '../shared/security/sesion-movil-store';
 
 /**
@@ -422,6 +423,30 @@ async function asegurarSemillaCumplimientos(
 }
 
 /**
+ * Access token para el drenado oportunista (Entrega 2) DESDE EL CONTEXTO HEADLESS —
+ * deliberadamente DISTINTO de `obtenerAccessToken` de `use-auth-movil.ts` (ese es un hook de
+ * React, con estado en memoria y `useCallback`; acá no hay árbol de componentes, así que la
+ * única fuente posible es SecureStore, igual que `obtenerContextoUbicacionPersistido` arriba).
+ *
+ * Sin refresh: si el access token venció, esta función se limita a devolver `null` y
+ * `intentarDrenarOportunista` aborta el drenado en silencio (falla de TRANSPORTE, no de
+ * captura — ver su docblock). El hook de foreground SÍ intenta un refresh con el refresh
+ * token (`use-auth-movil.ts:357-372`) antes de rendirse; replicar esa lógica acá queda FUERA
+ * del alcance de esta entrega a propósito (lo anota el encargo): un refresh que falla en loop
+ * necesita el circuit breaker de la Entrega 3, que también vive en el mismo módulo de auth.
+ *
+ * PUNTO DE EXTENSIÓN (Entrega 3): cuando el circuit breaker de refresh esté listo, acá es
+ * donde intentar `authMovilApi`/refresh con el `refreshToken` de `sesion` antes de devolver
+ * `null` — hoy se prefiere no duplicar esa lógica de reintento sin su circuito de corte.
+ */
+async function obtenerAccessTokenHeadless(): Promise<string | null> {
+  const sesion = await cargarSesionMovil();
+  if (!sesion) return null;
+  if (new Date(sesion.accessTokenExpiresAt) > new Date()) return sesion.accessToken;
+  return null;
+}
+
+/**
  * Headless task de Transistorsoft (QUI-216): se registra UNA sola vez desde `index.js` — es
  * el único lugar donde el SDK permite hacerlo — y sigue ejecutándose después de que el
  * usuario mata la app, siempre que la config tenga `stopOnTerminate: false` +
@@ -451,7 +476,10 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
       // No hay turno vigente (sesión cerrada o paquete del día vencido): el punto se
       // descarta. La decisión de cortar o no el tracking nativo (inmediata en un caso, con
       // margen de gracia en el otro) ya se tomó dentro de `obtenerContextoUbicacionPersistido`
-      // — ver su comentario para el porqué de cada camino.
+      // — ver su comentario para el porqué de cada camino. El `return` de acá corta SOLO el
+      // registro de este punto — el drenado del outbox de abajo corre igual: puede haber
+      // eventos pendientes de ANTES de que la sesión venciera (p. ej. un `fin_recorrido` que
+      // nunca llegó a salir), y descartar el punto de hoy no debe dejarlos sin intentar.
       return;
     }
 
@@ -472,11 +500,24 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     // promesa que el SDK nativo no reintenta (ver doc arriba), pero eso mismo lo vuelve
     // invisible sin captura explícita: no hay UI, no hay logs que alguien vaya a mirar en el
     // teléfono de un conductor en ruta. Sin este `captureException`, un punto GPS perdido acá
-    // (evidencia legal, RF-67..73) no dejaría NINGÚN rastro reportado.
+    // (evidencia legal, RF-67..73) no dejaría NINGÚN rastro reportado. El `try` NO envuelve el
+    // drenado de abajo a propósito (ver ese comentario): que este tick falle en capturar no
+    // debe impedir el intento de vaciar lo que YA estaba persistido de ticks anteriores.
     Sentry.captureException(error, {
       tags: { contexto: 'headless-task', paso: 'registrar-punto-gps', evento: event.name },
     });
   }
+
+  // Entrega 2 (`docs/plan-correccion-post-piloto-2026-09-09.md`) — causa raíz del síntoma más
+  // reportado del piloto ("tengo que cerrar la app para que se actualice la ubicación"):
+  // `headless-task.ts` escribía al outbox pero nadie lo drenaba en background. Va DESPUÉS del
+  // try/catch de arriba (no dentro) para que corra siempre — haya habido fix nuevo, contexto
+  // nulo, o error de escritura — y va con AWAIT porque el SDK de Transistorsoft da por
+  // terminada la tarea headless en cuanto se ejecuta la ÚLTIMA LÍNEA de esta función: sin este
+  // `await`, la promesa de `intentarDrenarOportunista` queda corriendo "de fondo" sobre un
+  // contexto que el SDK ya considera cerrado, y el trabajo (mutex, POST, liberar el lease) se
+  // corta a mitad de camino en cuanto el wake lock se libera.
+  await intentarDrenarOportunista(obtenerAccessTokenHeadless);
 }
 
 /** `stop()` aislado en su propio try/catch: que falle apagar el plugin no debe escalar al

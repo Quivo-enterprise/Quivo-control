@@ -21,6 +21,7 @@ import {
 import { claveCumplimiento, type DeteccionPuntoControl, type EstadoPuntoControl } from '../../gps/geofence';
 import { registrarPuntoGps } from '../../gps/headless-task';
 import { clavesCumplimientoDesdePayloads } from '../../gps/location-task';
+import { intentarDrenarOportunista } from './drenaje-oportunista';
 import {
   AUTORIZACION_DENEGADA,
   AUTORIZACION_NO_DETERMINADA,
@@ -103,6 +104,11 @@ export function useGpsOperativo(
   sesionId: string,
   deviceId: string,
   puntosControl: PuntoControlPaquete[] = [],
+  // Entrega 2 (drenado oportunista del outbox en background): el mismo `obtenerAccessToken`
+  // que ya usa `usePaqueteDia`/`useSyncStatus` (`use-auth-movil.ts`), enhebrado desde
+  // `GpsProvider` — ver el call site en `onLocation` más abajo. Requerido (sin default): las
+  // dos pantallas que montan `GpsProvider` ya tienen esta función disponible.
+  obtenerAccessToken: () => Promise<string | null>,
 ) {
   const [tracking, setTracking] = useState(false);
   const [puntos, setPuntos] = useState(0);
@@ -123,6 +129,16 @@ export function useGpsOperativo(
   const erroresEscritura = useRef(0);
   const puntosControlDetectados = useRef<Map<string, EstadoPuntoControl>>(new Map());
   const subscription = useRef<{ remove: () => void } | null>(null);
+  // Entrega 2: segundo punto de enganche del drenado oportunista, vía `onHeartbeat`
+  // (`heartbeatInterval: 60` en `background-geolocation.config.ts`, declarado ahí sin
+  // suscriptor hasta este cambio). `onLocation` (arriba) solo dispara con el vehículo en
+  // movimiento — `distanceFilter: 15` no emite nada con el motor apagado o el vehículo
+  // detenido en un control largo. El heartbeat es el único evento que sigue llegando cada 60 s
+  // pase lo que pase, así que sin él un layover prolongado podía dejar el outbox sin drenar
+  // aunque la app siguiera viva en background (no headless, no terminada). Ref separada del
+  // `subscription` de `onLocation` porque son dos suscripciones independientes al SDK, cada
+  // una con su propio ciclo de vida de limpieza.
+  const heartbeatSubscription = useRef<{ remove: () => void } | null>(null);
   // QUI-338: si esta app YA invocó `requestPermission()` alguna vez en este dispositivo,
   // persistido en `AsyncStorage` bajo `CLAVE_PERMISO_GPS_SOLICITADO` (ver ese comentario para
   // el porqué). Vive en un ref, no en `useState`: se lee de forma síncrona dentro de
@@ -189,6 +205,8 @@ export function useGpsOperativo(
         );
         if (deteccion) setUltimaDeteccion(deteccion);
       } catch (error) {
+        // (el drenado de abajo, fuera de este catch, corre igual aunque esta escritura falle
+        // — ver el comentario junto a la llamada)
         // Sin este catch, `onLocation` (async) rechazaba y el fallo quedaba como unhandled
         // rejection: evidencia perdida en silencio.
         erroresEscritura.current += 1;
@@ -212,8 +230,17 @@ export function useGpsOperativo(
           `No se pudo guardar una ubicación en el outbox (${erroresEscritura.current} en esta corrida). La evidencia de esos puntos se perdió.`,
         );
       }
+
+      // Entrega 2 (drenado oportunista del outbox en background): mismo motor que
+      // `headless-task.ts`, enganchado acá tras CADA fix de foreground — sin `await` a
+      // propósito (a diferencia del headless, acá no hay ninguna promesa de tarea del SDK
+      // esperando que esta función termine para "cerrar" nada; bloquear `onLocation` en el
+      // POST de sync solo demoraría el próximo fix sin ganar nada). `intentarDrenarOportunista`
+      // nunca rechaza (ver su docblock: todo su cuerpo vive bajo un try/catch defensivo), así
+      // que este `void` no deja una unhandled rejection colgando.
+      void intentarDrenarOportunista(obtenerAccessToken);
     },
-    [deviceId, sesionId, puntosControl],
+    [deviceId, sesionId, puntosControl, obtenerAccessToken],
   );
 
   // `onLocation` cambia de identidad cuando cambian `puntosControl`/`sesionId`, pero la
@@ -225,6 +252,15 @@ export function useGpsOperativo(
     onLocationRef.current = onLocation;
   }, [onLocation]);
 
+  // Mismo patrón de ref que `onLocationRef` arriba, para el handler de `onHeartbeat` que se
+  // registra una sola vez más abajo: sin esto, el closure quedaría atado al
+  // `obtenerAccessToken` vigente al momento de suscribirse (potencialmente stale si el
+  // caller — `GpsProvider` — lo redefine entre renders).
+  const obtenerAccessTokenRef = useRef(obtenerAccessToken);
+  useEffect(() => {
+    obtenerAccessTokenRef.current = obtenerAccessToken;
+  }, [obtenerAccessToken]);
+
   const suscribirUbicaciones = useCallback(() => {
     subscription.current?.remove();
     subscription.current = BackgroundGeolocation.onLocation(
@@ -235,6 +271,31 @@ export function useGpsOperativo(
         setErrorGps(`No se pudo registrar una ubicación (código ${String(error)}).`);
       },
     );
+
+    // Entrega 2: segundo enganche del drenado oportunista — ver el comentario de
+    // `heartbeatSubscription` arriba para el porqué. `getCurrentPosition({samples:1,
+    // persist:true})` fuerza un fix fresco (el evento de heartbeat solo trae la ÚLTIMA
+    // posición conocida, no una nueva — así lo documenta el SDK) y lo persiste igual que
+    // cualquier otro punto, ANTES de intentar drenar: si el vehículo lleva rato detenido sin
+    // emitir por `onLocation`, este es el único mecanismo que sigue dejando evidencia GPS
+    // cada 60 s durante ese layover. Ambos pasos (fix + drenado) van bajo el mismo try/catch
+    // defensivo que el resto del hook: un fallo acá es de transporte/instrumentación, nunca
+    // debe llegarle al chofer (principio rector del plan).
+    heartbeatSubscription.current?.remove();
+    heartbeatSubscription.current = BackgroundGeolocation.onHeartbeat(() => {
+      void (async () => {
+        try {
+          await BackgroundGeolocation.getCurrentPosition({ samples: 1, persist: true });
+        } catch (error) {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'heartbeat-getCurrentPosition' },
+          });
+        }
+        // `intentarDrenarOportunista` nunca rechaza (ver su docblock) — no hace falta un
+        // catch propio acá.
+        await intentarDrenarOportunista(obtenerAccessTokenRef.current);
+      })();
+    });
   }, []);
 
   /**
@@ -329,6 +390,8 @@ export function useGpsOperativo(
       montado = false;
       subscription.current?.remove();
       subscription.current = null;
+      heartbeatSubscription.current?.remove();
+      heartbeatSubscription.current = null;
     };
   }, [sesionId, suscribirUbicaciones, sembrarCumplimientos]);
 
@@ -541,10 +604,12 @@ export function useGpsOperativo(
       // Plan §2.4.4: mensaje distinto del de persistencia (bloque de abajo) — acá el módulo
       // NATIVO no pudo arrancar pese a que el permiso/servicio ya estaban en orden (licencia
       // del plugin, Google Play Services): no hay nada grabándose todavía, a diferencia del
-      // catch siguiente. La suscripción que acabamos de instalar no tiene nada que escuchar:
-      // se remueve.
+      // catch siguiente. Las suscripciones que acabamos de instalar (ubicación y heartbeat)
+      // no tienen nada que escuchar: se remueven.
       subscription.current?.remove();
       subscription.current = null;
+      heartbeatSubscription.current?.remove();
+      heartbeatSubscription.current = null;
       Sentry.captureException(error, {
         tags: { contexto: 'gps-foreground', paso: 'iniciar-nativo' },
       });
@@ -610,6 +675,8 @@ export function useGpsOperativo(
       await BackgroundGeolocation.stop();
       subscription.current?.remove();
       subscription.current = null;
+      heartbeatSubscription.current?.remove();
+      heartbeatSubscription.current = null;
       setTracking(false);
 
       const db = await abrirOutbox();
