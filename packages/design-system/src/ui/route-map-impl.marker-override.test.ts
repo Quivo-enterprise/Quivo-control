@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { MapPoint } from '../types.js';
-import { markersWithVehicleOverride, resolvePointId } from './route-map-impl.js';
+import { markersWithVehicleOverride, resolveMarkerClick, resolvePointId } from './route-map-impl.js';
 import { encolarNuevosPuntos, estadoInicialAnimacion } from './vehicle-marker-animation.js';
 
 // ENTREGA 14 — con TODOS los vehículos dibujados a la vez (Entrega 13), `markerId` deja de
@@ -80,5 +80,64 @@ describe('markersWithVehicleOverride — animación por id con varios vehículos
     const resultado = markersWithVehicleOverride(markers, anim, 'vehiculo:s2');
     expect(resultado).toEqual(markers);
     expect(resultado[0]).toEqual(markers[0]);
+  });
+});
+
+// ENTREGA 15 — bug confirmado en vivo: tocar un vehículo en `/en-vivo` no abría su detalle. La
+// Entrega 14 movió a los vehículos de `quivo-marker-points` a tres capas nuevas
+// (`quivo-vehicle-symbols`/`quivo-vehicle-fallback`/`quivo-vehicle-labels`) pero nadie enganchó
+// click/hover a esas capas — `MARKER_CLICK_LAYERS` seguía siendo solo `['quivo-marker-points']`.
+// Este test reproduce EXACTAMENTE ese escenario sin necesitar un `Map` de MapLibre (WebGL, no
+// disponible en el entorno de test): simula el evento que MapLibre ya resolvió (capa + feature)
+// y verifica que `resolveMarkerClick` encuentre y devuelva el `onClick` del vehículo. Antes del
+// fix (`MARKER_CLICK_LAYERS` sin las capas de vehículo) las tres primeras aserciones fallaban —
+// `resolveMarkerClick` devolvía `undefined` para las tres capas del vehículo aunque el marker
+// tuviera `onClick` seteado.
+describe('resolveMarkerClick — clicks sobre las capas de vehículo abren su detalle', () => {
+  it('resuelve y permite ejecutar el onClick para un click en quivo-vehicle-symbols (ícono real)', () => {
+    const onClick = vi.fn();
+    const markers: MapPoint[] = [{ ...vehiculo('s1', -17.39, -66.15), onClick }];
+
+    const resuelto = resolveMarkerClick('quivo-vehicle-symbols', 'vehiculo:s1', markers);
+
+    expect(resuelto).toBeDefined();
+    resuelto?.();
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('resuelve el onClick para un click en quivo-vehicle-fallback (círculo de respaldo, antes de que cargue el sprite)', () => {
+    const onClick = vi.fn();
+    const markers: MapPoint[] = [{ ...vehiculo('s1', -17.39, -66.15), onClick }];
+
+    resolveMarkerClick('quivo-vehicle-fallback', 'vehiculo:s1', markers)?.();
+
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('resuelve el onClick para un click en quivo-vehicle-labels (tocar la placa)', () => {
+    const onClick = vi.fn();
+    const markers: MapPoint[] = [{ ...vehiculo('s1', -17.39, -66.15), onClick }];
+
+    resolveMarkerClick('quivo-vehicle-labels', 'vehiculo:s1', markers)?.();
+
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('sigue resolviendo un punto de control en quivo-marker-points (no regresiona el caso ya andaba)', () => {
+    const onClick = vi.fn();
+    const punto: MapPoint = { id: 'pc-1', lat: -17.39, lng: -66.15, pinType: 'stop', onClick };
+
+    resolveMarkerClick('quivo-marker-points', 'pc-1', [punto])?.();
+
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('no resuelve nada para una capa ajena a los marcadores (ej. una capa de ruta)', () => {
+    const onClick = vi.fn();
+    const markers: MapPoint[] = [{ ...vehiculo('s1', -17.39, -66.15), onClick }];
+
+    const resuelto = resolveMarkerClick('quivo-route-casing', 'vehiculo:s1', markers);
+
+    expect(resuelto).toBeUndefined();
   });
 });

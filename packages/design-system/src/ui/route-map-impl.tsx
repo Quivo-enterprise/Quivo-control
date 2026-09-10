@@ -399,8 +399,17 @@ function buildVehiculoIconoSvg(spec: VehiculoIconoSpec): string {
   const size = VEHICULO_ICONO_PX;
   const center = size / 2;
   const radius = center - 4;
+  // `detenido` (hueco/punteado) perdía contraste sobre el mapa base: con `fill-opacity: 0.3`
+  // y SIN el halo blanco que sí tienen `reportando`/`perdido` (su `stroke="#ffffff"` de abajo),
+  // el badge se mezclaba con cualquier fondo claro o cian del estilo (agua, parques) y con el
+  // texto de las calles debajo. El fix agrega un disco blanco opaco de respaldo — el mismo
+  // halo de contraste que ya usan los otros dos estados, aplicado ANTES del círculo punteado
+  // en vez de como `stroke` (un stroke blanco por fuera del punteado rompería el efecto
+  // "hueco") — y sube el relleno cian de 0.3 a 0.55: visible sobre el blanco sin taparlo, la
+  // forma sigue siendo la que distingue a `detenido` (punteada) de `reportando` (sólida).
   const badge = spec.outline
-    ? `<circle cx="${center}" cy="${center}" r="${radius}" fill="${spec.background}" fill-opacity="0.3" stroke="${spec.background}" stroke-width="3.5" stroke-dasharray="6 4"/>`
+    ? `<circle cx="${center}" cy="${center}" r="${radius}" fill="#ffffff"/>` +
+      `<circle cx="${center}" cy="${center}" r="${radius}" fill="${spec.background}" fill-opacity="0.55" stroke="${spec.background}" stroke-width="4" stroke-dasharray="7 4"/>`
     : `<circle cx="${center}" cy="${center}" r="${radius}" fill="${spec.background}" stroke="#ffffff" stroke-width="3"/>`;
   // El glifo MDI vive en un viewBox de 24×24 — se centra y escala al ~58% del badge.
   const glyphSize = size * 0.58;
@@ -901,8 +910,10 @@ function ensureDataLayers(map: MapLibreMap) {
   // `ensureVehiculoIconos` termine de registrar los sprites, o si falla) para que un vehículo
   // nunca desaparezca del mapa mientras el ícono no está listo — ver
   // `setVehiculoIconoDisponible`, que lo apaga apenas el sprite real está disponible.
-  // `circle-radius: 14` (vs. los 7-11 px de paradas/nodos): un vehículo tiene que verse más
-  // grande que un punto de control aunque no haya cargado el bus.
+  // ENTREGA 15 — `circle-radius: 14→17` (+21%), en la misma proporción que el `icon-size` de
+  // abajo (0.5→0.62, +24%): el fallback es lo que el usuario ve mientras el sprite carga (o si
+  // falla), así que tiene que quedar del mismo orden de tamaño que el ícono real — si no,
+  // "flashea" un cambio de tamaño visible apenas termina `ensureVehiculoIconos`.
   if (!map.getLayer('quivo-vehicle-fallback')) {
     map.addLayer({
       id: 'quivo-vehicle-fallback',
@@ -911,7 +922,7 @@ function ensureDataLayers(map: MapLibreMap) {
       filter: ['==', ['get', 'pinType'], 'pulse'],
       layout: { visibility: 'visible' },
       paint: {
-        'circle-radius': 14,
+        'circle-radius': 17,
         'circle-color': ['get', 'color'],
         'circle-opacity': 0.98,
         'circle-stroke-color': '#ffffff',
@@ -925,6 +936,12 @@ function ensureDataLayers(map: MapLibreMap) {
   // en `true`: con N vehículos cerca uno del otro (terminal, semáforo) no queremos que MapLibre
   // esconda uno por colisión — los puntos de control sí pueden colisionar entre sí, los
   // vehículos nunca.
+  // ENTREGA 15 — `icon-size: 0.5→0.62`. A 0.5 el sprite (rasterizado a `VEHICULO_ICONO_PX: 64`)
+  // se dibuja a 32 px, el mismo orden de magnitud que los íconos de POI del estilo base
+  // (restaurantes, farmacias…) — un vehículo, que es la capa de información PRINCIPAL de
+  // `/en-vivo`, no puede leerse "igual de importante" que un ícono decorativo del mapa. 0.62
+  // (~40 px) es un salto moderado — no duplica el tamaño ni lo lleva a competir con los labels
+  // de calle — pero alcanza para que el bus se distinga del ruido del mapa base de un vistazo.
   if (!map.getLayer('quivo-vehicle-symbols')) {
     map.addLayer({
       id: 'quivo-vehicle-symbols',
@@ -934,7 +951,7 @@ function ensureDataLayers(map: MapLibreMap) {
       layout: {
         visibility: 'none',
         'icon-image': ['concat', 'quivo-bus-', ['get', 'estadoFrescura']],
-        'icon-size': 0.5,
+        'icon-size': 0.62,
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
       },
@@ -954,7 +971,10 @@ function ensureDataLayers(map: MapLibreMap) {
         'text-field': ['get', 'placa'],
         'text-font': ['Noto Sans Bold'],
         'text-size': 11,
-        'text-offset': [0, 1.7],
+        // ENTREGA 15 — `1.7em→2em`: con el ícono más grande (ver `icon-size` arriba) el borde
+        // inferior del bus queda más abajo; sin este ajuste la placa arrancaba pegada (o
+        // superpuesta) al ícono en vez de debajo de él.
+        'text-offset': [0, 2],
         'text-anchor': 'top',
         'text-allow-overlap': true,
         'text-ignore-placement': true,
@@ -1005,7 +1025,50 @@ function ensureDataLayers(map: MapLibreMap) {
 const ROUTE_CLICK_LAYERS = ['quivo-route-casing'];
 const STOP_CLICK_LAYERS = ['quivo-stop-points'];
 const ZONE_CLICK_LAYERS = ['quivo-zone-fill'];
-const MARKER_CLICK_LAYERS = ['quivo-marker-points'];
+// ENTREGA 15 — arreglo del bug de la Entrega 13/14: tocar un vehículo no abría su detalle. La
+// Entrega 14 sacó a los vehículos de `quivo-marker-points` (ver su filtro `pinType != 'pulse'`
+// más arriba) y los movió a tres capas propias, pero nadie enganchó click/hover a esas capas
+// nuevas — `wireFeatureClicks`/el `mousedown` de drag seguían escuchando solo
+// `quivo-marker-points`, así que un click sobre un vehículo nunca generaba ni un
+// `queryRenderedFeatures` hit ahí. Se agregan las tres:
+// - `quivo-vehicle-symbols` / `quivo-vehicle-fallback`: el cuerpo del vehículo (ícono real o
+//   círculo de respaldo) — nunca están las dos visibles a la vez (`setVehiculoIconoDisponible`),
+//   pero como MapLibre tolera de sobra escuchar una capa oculta u opcionalmente inexistente en
+//   el momento del registro (ver comentario de `resolveMarkerClick` más abajo), alcanza con
+//   incluir ambas siempre en vez de alternar el listener según cuál está activa.
+// - `quivo-vehicle-labels`: la placa. SÍ se suma como clickeable — es el label que se dibuja
+//   siempre (`text-allow-overlap`, sin `minzoom`), a diferencia de los labels genéricos de
+//   parada/nodo que nunca son clickeables por su cuenta. En zoom bajo el ícono del bus mide
+//   pocos píxeles y la placa (más ancha, en `Noto Sans Bold`) es a menudo el blanco de toque
+//   más grande y más fácil de acertar con el dedo — dejarla afuera haría que "tocar la placa"
+//   (un gesto natural: es lo que identifica al vehículo) no hiciera nada.
+// Drag (`mousedown` más abajo) reutiliza esta misma constante sin riesgo: los vehículos nunca
+// traen `draggable: true` (`construirMarcadoresVehiculos` en `map-builders.ts` no lo setea), así
+// que el handler de drag los descarta en su primer `if` sin efecto secundario.
+const MARKER_CLICK_LAYERS = ['quivo-marker-points', 'quivo-vehicle-symbols', 'quivo-vehicle-fallback', 'quivo-vehicle-labels'];
+
+/**
+ * Resuelve el `onClick` de un marcador (punto de control o vehículo) para un click que
+ * MapLibre ya resolvió contra una de las capas de `MARKER_CLICK_LAYERS` — extraída como
+ * función PURA (ENTREGA 15, sin `Map` de MapLibre/WebGL de por medio) para poder testear el
+ * enganche capa→feature→`onClick` sin levantar un mapa real, que es justamente lo que el bug
+ * original no tenía cubierto: los tests existentes probaban `markersWithVehicleOverride` y el
+ * `onClick` de `map-builders`, pero ninguno verificaba que la capa donde MapLibre dispara el
+ * evento estuviera efectivamente escuchada. Antes del fix, llamar a esto con
+ * `layerId: 'quivo-vehicle-symbols'` devolvía `undefined` aunque el vehículo tuviera `onClick`
+ * — el chequeo de membership de acá abajo es deliberadamente redundante con el filtro que ya
+ * aplica `map.on('click', layers, …)` (MapLibre filtra `layers` contra las capas que existen al
+ * momento del evento, no al momento del registro — ver nota en `wireFeatureClicks`), pero hace
+ * que la función sea auto-contenida y testeable sin simular ese filtrado interno de MapLibre.
+ */
+export function resolveMarkerClick(
+  layerId: string,
+  featureId: string,
+  markers: MapPoint[],
+): (() => void) | undefined {
+  if (!MARKER_CLICK_LAYERS.includes(layerId)) return undefined;
+  return markers.find((m, i) => resolvePointId(m, i) === featureId)?.onClick;
+}
 
 /**
  * Mapa interactivo (MapLibre GL) para trazado y visualización de rutas — RF-24..33 (QUI-229) y
@@ -1150,11 +1213,22 @@ export function RouteMap({
       // Click por feature (rutas/paradas/zonas/markers con `onClick` propio) — se resuelve
       // contra `dataRef.current` en el momento del evento, así siempre corre el callback
       // vigente sin tener que re-registrar listeners cuando cambian los props.
-      function wireFeatureClicks(layers: string[], resolve: (id: string) => (() => void) | undefined) {
+      // `layers` puede incluir ids que todavía no existen en el estilo al momento de este
+      // `map.on(...)` (pasa con los cuatro `wireFeatureClicks` de acá abajo: se registran de
+      // forma síncrona en `initialize()`, ANTES de que dispare `map.on('load', …)` — que es
+      // donde `ensureDataLayers` recién agrega las capas reales). No es un problema: MapLibre
+      // resuelve el listener delegado evaluando `layers` contra `this.getLayer(id)` en cada
+      // evento (no al registrarlo), así que una capa ausente en ese instante simplemente no
+      // aporta features a ese click — nunca lanza ni deja el listener a medio registrar. Por
+      // eso agregar capas nuevas a un array de arriba (como se hizo con `MARKER_CLICK_LAYERS`)
+      // no necesita reordenar nada ni esperar a que el mapa cargue.
+      function wireFeatureClicks(layers: string[], resolve: (id: string, layerId: string) => (() => void) | undefined) {
         map.on('click', layers, (event: MapLayerMouseEvent) => {
-          const id = event.features?.[0]?.properties?.id;
-          if (typeof id !== 'string') return;
-          resolve(id)?.();
+          const feature = event.features?.[0];
+          const id = feature?.properties?.id;
+          const layerId = feature?.layer?.id;
+          if (typeof id !== 'string' || typeof layerId !== 'string') return;
+          resolve(id, layerId)?.();
         });
         map.on('mouseenter', layers, (event: MapLayerMouseEvent) => {
           const clickable = event.features?.[0]?.properties?.clickable;
@@ -1168,7 +1242,7 @@ export function RouteMap({
       wireFeatureClicks(ROUTE_CLICK_LAYERS, (id) => dataRef.current.routes.find((r) => r.id === id)?.onClick);
       wireFeatureClicks(STOP_CLICK_LAYERS, (id) => dataRef.current.stops.find((p, i) => resolvePointId(p, i) === id)?.onClick);
       wireFeatureClicks(ZONE_CLICK_LAYERS, (id) => dataRef.current.zones.find((z, i) => resolvePointId(z, i) === id)?.onClick);
-      wireFeatureClicks(MARKER_CLICK_LAYERS, (id) => dataRef.current.markers.find((m, i) => resolvePointId(m, i) === id)?.onClick);
+      wireFeatureClicks(MARKER_CLICK_LAYERS, (id, layerId) => resolveMarkerClick(layerId, id, dataRef.current.markers));
 
       // Drag de markers (`draggable: true`, ej. nodos del trazado en edición o el punto
       // pendiente de parada/punto de control): sin equivalente nativo en MapLibre para capas
