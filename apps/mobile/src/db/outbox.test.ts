@@ -18,6 +18,7 @@ vi.mock('@sentry/react-native', () => ({
 import {
   construirAdquirirLease,
   construirLiberarLeaseConCooldown,
+  construirRecuperarEnviadosHuerfanos,
   construirRevertirAPendiente,
   type EstadoOutbox,
 } from './outbox';
@@ -65,6 +66,74 @@ describe('construirRevertirAPendiente (Entrega 1 — guarda de estado)', () => {
     expect(tabla.get('e1')).toBe('pendiente');
     expect(tabla.get('e2')).toBe('pendiente');
     expect(tabla.get('e3')).toBe('acusado'); // el bug de producción hacía que esto volviera a 'pendiente'
+  });
+});
+
+describe('construirRecuperarEnviadosHuerfanos (Hallazgo 3 — code review de la Entrega 2)', () => {
+  it('genera el UPDATE que recupera solo filas `enviado` más viejas que el umbral', () => {
+    const { sql, params } = construirRecuperarEnviadosHuerfanos(new Date('2026-09-10T00:00:00.000Z'));
+    expect(sql).toBe(
+      "UPDATE outbox SET estado = 'pendiente' WHERE estado = 'enviado' AND COALESCE(enviado_at, ts) < ?",
+    );
+    expect(params).toEqual(['2026-09-10T00:00:00.000Z']);
+  });
+
+  /**
+   * Escenario del hallazgo: un lote se marca `enviado` (con su `enviado_at`) y el proceso
+   * muere a mitad del POST (Android mata la tarea headless) sin llegar al `catch` que
+   * revertiría a `pendiente` — esa fila queda `enviado` PARA SIEMPRE sin este reproceso.
+   * Interpreta el SQL/params generado contra una tabla en memoria, igual que el test
+   * homólogo de `construirRevertirAPendiente` arriba, para no depender de `expo-sqlite`.
+   */
+  it('sembrar un lote enviado hace 5 min (proceso muerto a mitad del POST) → vuelve a pendiente con umbral de 90s', () => {
+    const ahora = new Date('2026-09-10T12:00:00.000Z');
+    const tabla = new Map<string, { estado: EstadoOutbox; enviadoAt: string | null }>([
+      ['e1', { estado: 'enviado', enviadoAt: new Date(ahora.getTime() - 5 * 60_000).toISOString() }], // huérfano real
+      ['e2', { estado: 'acusado', enviadoAt: new Date(ahora.getTime() - 5 * 60_000).toISOString() }], // terminal — no debe tocarse
+      ['e3', { estado: 'enviado', enviadoAt: new Date(ahora.getTime() - 5_000).toISOString() }], // recién marcado — el POST puede seguir en vuelo
+    ]);
+    const umbral = new Date(ahora.getTime() - 90_000); // UMBRAL_RECUPERACION_ENVIADOS_MS
+
+    const { params } = construirRecuperarEnviadosHuerfanos(umbral);
+    const antesDeIso = params[0]!;
+    for (const [eventId, fila] of tabla) {
+      if (fila.estado === 'enviado' && fila.enviadoAt !== null && fila.enviadoAt < antesDeIso) {
+        tabla.set(eventId, { ...fila, estado: 'pendiente' });
+      }
+    }
+
+    expect(tabla.get('e1')?.estado).toBe('pendiente'); // recuperado: huérfano de verdad
+    expect(tabla.get('e2')?.estado).toBe('acusado'); // guarda de estado respetada — terminal
+    expect(tabla.get('e3')?.estado).toBe('enviado'); // todavía dentro del umbral — no se toca
+  });
+
+  it('una fila `enviado` SIN enviado_at (instalación de antes de esta columna) cae del lado seguro: se recupera igual', () => {
+    // COALESCE(enviado_at, ts): sin `enviado_at`, se usa `ts` (siempre más vieja o igual que
+    // el momento real de envío) como piso conservador — reenviar de más es seguro
+    // (idempotencia por eventId), quedarse bloqueado para siempre no lo es.
+    const ahora = new Date('2026-09-10T12:00:00.000Z');
+    const tabla = new Map<string, { estado: EstadoOutbox; enviadoAt: string | null; ts: string }>([
+      [
+        'legado',
+        {
+          estado: 'enviado',
+          enviadoAt: null,
+          ts: new Date(ahora.getTime() - 10 * 60_000).toISOString(),
+        },
+      ],
+    ]);
+    const umbral = new Date(ahora.getTime() - 90_000);
+    const { params } = construirRecuperarEnviadosHuerfanos(umbral);
+    const antesDeIso = params[0]!;
+
+    for (const [eventId, fila] of tabla) {
+      const comparable = fila.enviadoAt ?? fila.ts; // COALESCE(enviado_at, ts)
+      if (fila.estado === 'enviado' && comparable < antesDeIso) {
+        tabla.set(eventId, { ...fila, estado: 'pendiente' });
+      }
+    }
+
+    expect(tabla.get('legado')?.estado).toBe('pendiente');
   });
 });
 

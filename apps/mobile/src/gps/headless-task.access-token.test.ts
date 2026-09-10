@@ -46,7 +46,10 @@ vi.mock('../shared/api/auth-movil-api', async () => {
 });
 
 import { authMovilApi, AuthMovilApiError } from '../shared/api/auth-movil-api';
-import { reiniciarCircuitoRefresh } from '../shared/api/refresh-circuit-breaker';
+import {
+  obtenerEstadoCircuitoRefresh,
+  reiniciarCircuitoRefresh,
+} from '../shared/api/refresh-circuit-breaker';
 import {
   actualizarSesionMovil,
   cargarSesionMovil,
@@ -115,6 +118,54 @@ describe('obtenerAccessTokenHeadless', () => {
 
     await expect(obtenerAccessTokenHeadless()).resolves.toBeNull();
     expect(actualizarSesionMovilMock).not.toHaveBeenCalled();
+  });
+
+  it('hallazgo 4: N llamadas concurrentes con token vencido comparten UN solo refresh a la API (single-flight de refrescar())', async () => {
+    // Escenario del hallazgo: con fixes headless a ~1/s y el access token vencido, ANTES cada
+    // tick llamaba `intentarRefrescarConCircuito` directo (sin dedupe) — N ticks concurrentes
+    // disparaban N refreshes reales. El servidor rota el refresh token de forma atómica: 1
+    // gana, N-1 reciben 401 real, y con 5 o más el circuito se abría EN FALSO. El fix reusa
+    // `refrescar()` (`use-auth-movil.ts`), que es single-flight por `refreshToken`.
+    const vencida = sesion();
+    cargarSesionMovilMock.mockResolvedValue(vencida);
+
+    let resolverRefresh!: (valor: unknown) => void;
+    refreshMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolverRefresh = resolve;
+        }),
+    );
+    const rotada = { ...vencida, accessToken: 'access-nueva', refreshToken: 'refresh-2' };
+    actualizarSesionMovilMock.mockResolvedValue(rotada);
+
+    // 3 llamadas concurrentes, sin await entre ellas — el escenario real es N ticks casi
+    // simultáneos del mismo (o de un token) contexto JS.
+    const llamadas = [
+      obtenerAccessTokenHeadless(),
+      obtenerAccessTokenHeadless(),
+      obtenerAccessTokenHeadless(),
+    ];
+
+    // Deja que las tres lleguen hasta el punto de espera del refresh (microtasks) antes de
+    // resolverlo.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(refreshMock).toHaveBeenCalledTimes(1); // no 3 — ver el docblock del fix.
+
+    resolverRefresh({
+      accessToken: 'access-nueva',
+      refreshToken: 'refresh-2',
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+
+    const resultados = await Promise.all(llamadas);
+    expect(resultados).toEqual(['access-nueva', 'access-nueva', 'access-nueva']);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    // El circuito no se abre por esta concurrencia (no hubo NINGÚN 401 real, solo un éxito
+    // compartido).
+    expect(obtenerEstadoCircuitoRefresh().estado).toBe('cerrado');
   });
 
   it('con el circuito ya abierto (fallos previos, p. ej. del camino de foreground), corta sin tocar la red', async () => {
