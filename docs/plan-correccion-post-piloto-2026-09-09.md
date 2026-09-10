@@ -946,31 +946,36 @@ para el preflight de la Entrega 26.
 
 ---
 
-### Entrega 29 — Coerción de query en la API (500 en `/v1/sync-errores`)
-**P0 · Ámbito: API (+ `packages/shared` si el arreglo es de infraestructura) · ~3 h · Sin dependencias · Bug en producción**
+### Entrega 29 — Coerción de query sin decorator metadata en desarrollo y tests
+**P2 · Ámbito: API (entorno de desarrollo y tests) · ~3 h · Sin dependencias · No afecta producción**
 
-**Evidencia (verificación en vivo del 2026-09-10).** `GET /v1/sync-errores?desde=<ISO>` devuelve 500:
+**Evidencia (verificación en vivo del 2026-09-10).** Con la API local levantada con `pnpm dev`
+(`tsx watch`), `GET /v1/sync-errores?desde=<ISO>` devolvió 500:
 ```
 fecha.getUTCFullYear is not a function
   at inicioDeJornadaBolivia (apps/api/src/common/tiempo/jornada.ts:24)
   at SyncErroresService.listar (apps/api/src/modules/sync/sync-errores.service.ts:18)
 ```
-`SyncErroresQuerySchema` declara `desde: z.coerce.date().optional()`, pero el controlador pasa el
-`@Query()` crudo al servicio con `query as SyncErroresQuery`: **el valor que transforma Zod nunca
-llega**, y `inicioDeJornadaBolivia` recibe un string. Está en `main`, o sea en producción. Es la sección
-"errores de sincronización" del panel, que el CTO usó durante el piloto; el dashboard la pide con
-`desde` al cargar. El comentario del schema dice que sigue "el mismo criterio que
-`AuditoriaQuerySchema`", así que auditoría es candidata al mismo defecto.
+**No se reproduce con el build de producción.** Compilada con `tsc` (como el Dockerfile) la misma
+request responde 200, y en auditoría el filtro por fecha excluye exactamente las filas anteriores:
+`ZodValidationPipe` devuelve el output parseado (`zod-validation.pipe.ts:28`, registrado global en
+`app.module.ts:70`) y los 53 DTOs de `@Query()`/`@Body()` están envueltos en `createZodDto`.
 
-**Enfoque:** determinar si el pipe o `createZodDto` (`apps/api/src/common/validation/zod-dto.ts`) validan
-sin devolver el output parseado. Si es infraestructura, arreglarlo ahí, para todos los endpoints. Barrer
-todo `@Query()` o `@Body()` cuyo schema use `z.coerce`, `.transform`, `.default` o `.preprocess` y cuyo
-valor se trate como parseado.
+**Causa (hipótesis en verificación):** `tsx` usa esbuild, que no emite `emitDecoratorMetadata` (el repo
+ya documenta esa limitación con los `@Inject(...)` explícitos, evanw/esbuild#257). Sin
+`design:paramtypes`, Nest no resuelve el DTO del `@Query()`, el pipe no transforma y el string llega
+crudo al servicio. **Riesgo real:** si vitest también compila con esbuild pelado, un test de
+integración que dependa de la coerción del pipe correría sin metadata y daría un resultado falso en
+CI. Hoy no existen tests de `sync-errores` ni de auditoría con filtro de fecha.
 
-**Verificación:** integración de `GET /v1/sync-errores?desde=&hasta=` → 200 con el filtro aplicado,
-más un test por cada endpoint afectado.
-**Rollback:** revert. Riesgo: si el arreglo es en el pipe, cambia el valor que reciben **todos** los
-handlers (pasan a recibir el output parseado): correr la suite completa de la API.
+**Enfoque:** confirmar la hipótesis (500 con `tsx`, 200 con `tsc`); revisar la config de vitest;
+agregar tests de regresión del filtro por fecha que corran por el mismo camino que CI; decidir el
+arreglo del entorno (runner de `dev` con decorator metadata, pipes explícitos o documentación).
+**No tocar el pipe ni código de producto sin esa decisión.**
+
+**Verificación:** los tests nuevos pasan por el camino de CI; `pnpm dev` deja de dar 500 si se elige
+cambiar el runner.
+**Rollback:** revert; sin impacto en producción.
 
 ---
 
