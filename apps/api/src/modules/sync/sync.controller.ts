@@ -1,9 +1,11 @@
 import { BadRequestException, Body, Controller, HttpCode, Inject, Post, UseGuards } from '@nestjs/common';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { SyncBatchSchema, type SyncBatchResponse } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { AuthMovilGuard } from '../auth-movil/auth-movil.guard.js';
 import { CurrentMobileSession } from '../auth-movil/current-mobile-session.decorator.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
+import { SyncDeviceThrottlerGuard } from './sync-device-throttler.guard.js';
 import { SyncQueueService } from './sync-queue.service.js';
 
 class SyncBatchDto extends createZodDto(SyncBatchSchema) {}
@@ -20,9 +22,16 @@ class SyncBatchDto extends createZodDto(SyncBatchSchema) {}
 export class SyncController {
   constructor(@Inject(SyncQueueService) private readonly syncQueueService: SyncQueueService) {}
 
+  // Rate limit por dispositivo, no por IP (ver el comentario largo en
+  // `sync-device-throttler.guard.ts` para el porqué — CGNAT de operadores móviles y el
+  // orden de guards). `@SkipThrottle()` apaga acá el `ThrottlerGuard` global (100/60 por
+  // IP, `app.module.ts`); `SyncDeviceThrottlerGuard` DEBE ir después de `AuthMovilGuard` en
+  // este array para que `sesionMovil` ya exista cuando lee el tracker.
   @Post('batches')
   @HttpCode(202)
-  @UseGuards(AuthMovilGuard)
+  @SkipThrottle()
+  @Throttle({ device: { ttl: 60_000, limit: 60 } })
+  @UseGuards(AuthMovilGuard, SyncDeviceThrottlerGuard)
   async recibirLote(
     @Body() body: SyncBatchDto,
     @CurrentMobileSession() sesion: SesionMovilAutenticada,
