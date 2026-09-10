@@ -3,6 +3,12 @@ import * as Sentry from '@sentry/react-native';
 import type { ContextoOperativoMovil, ResumenAsignacionMovil } from '@quivo/shared';
 import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
 import {
+  esSesionIrrecuperable,
+  intentarRefrescarConCircuito,
+  obtenerEstadoCircuitoRefresh,
+  reiniciarCircuitoRefresh,
+} from '../../shared/api/refresh-circuit-breaker';
+import {
   actualizarSesionMovil,
   borrarSesionMovil,
   cargarSesionMovil,
@@ -28,6 +34,16 @@ export interface EstadoAuthMovil {
    * (`obtenerAccessToken`) vuelve a tener éxito.
    */
   sesionNoRevalidada: boolean;
+  /** Entrega 3 (`docs/plan-correccion-post-piloto-2026-09-09.md`): distingue un 401 de refresh
+   * TRANSITORIO (el circuito sigue reintentando con backoff, el chofer no ve nada — principio
+   * rector) de una sesión REALMENTE muerta: `esSesionIrrecuperable` solo se prende cuando el
+   * circuit breaker (`shared/api/refresh-circuit-breaker.ts`) lleva ABIERTO más de
+   * `UMBRAL_MS_SESION_IRRECUPERABLE` sin que ningún probe haya tenido éxito. Es una falla de
+   * CAPTURA (la app no puede recuperar sesión de forma autónoma) y por eso SÍ debe hacerse
+   * visible — pero esta entrega solo expone el estado, no construye la UI: la consume la
+   * Entrega 26 (preflight). Se apaga con el primer refresh exitoso o con un login/logout
+   * nuevo (`reiniciarCircuitoRefresh`). */
+  sesionIrrecuperable: boolean;
   /** Login de un paso (`POST /sesion`): token de un solo uso que llega en la respuesta
    * `seleccion_requerida` (≥2 asignaciones hoy) y hay que reenviar en
    * `POST /sesion/asignacion` junto con el `asignacionId` elegido. Reemplaza al
@@ -45,6 +61,7 @@ const ESTADO_INICIAL: EstadoAuthMovil = {
   error: null,
   aviso: null,
   sesionNoRevalidada: false,
+  sesionIrrecuperable: false,
   seleccionToken: null,
   asignaciones: [],
   sesion: null,
@@ -68,6 +85,21 @@ export function useAuthMovil() {
    * alerta sin motivo. Se resetea explícitamente en `logout()` y en el camino exitoso de
    * `autenticarSesion`/`seleccionarAsignacion` (búsqueda: `fallos401Acumulados.current = 0`). */
   const fallos401Acumulados = useRef(0);
+
+  /** Entrega 3: refleja en `estado` el veredicto ACTUAL del circuit breaker
+   * (`refresh-circuit-breaker.ts`) — se llama después de cada intento de refresh (éxito o
+   * fallo), en foreground. El breaker vive fuera de React (módulo compartido con el camino
+   * headless), así que esto es lo que lo sincroniza con el estado que puede leer un
+   * componente. Barato de sobra para llamarlo en cada intento: son 4 comparaciones puras. */
+  const sincronizarSesionIrrecuperable = useCallback(() => {
+    if (!mounted.current) return;
+    const irrecuperable = esSesionIrrecuperable(obtenerEstadoCircuitoRefresh(), Date.now());
+    setEstado((actual) =>
+      actual.sesionIrrecuperable === irrecuperable
+        ? actual
+        : { ...actual, sesionIrrecuperable: irrecuperable },
+    );
+  }, []);
 
   useEffect(() => {
     mounted.current = true;
@@ -132,6 +164,7 @@ export function useAuthMovil() {
           // — sin este `setEstado` acá, los tokens rotados quedarían solo en disco (`refrescar`
           // ya los persiste vía `actualizarSesionMovil`) pero no en memoria.
           setEstado((actual) => ({ ...actual, sesion: vigente }));
+          sincronizarSesionIrrecuperable();
         }
         const contexto = await authMovilApi.obtenerContexto(vigente.accessToken);
         if (!mounted.current) return;
@@ -152,6 +185,10 @@ export function useAuthMovil() {
           // transitorio). Reintenta con `vigente` — ya rotado si el `refrescar` de arriba
           // tuvo éxito — nunca con `guardada` (A4, ver el comentario de arriba).
           const revalidada = await refrescarConReintentos(vigente);
+          // Entrega 3: sincroniza el veredicto del circuit breaker DESPUÉS de que
+          // `refrescarConReintentos` agotó (o no) sus reintentos — cubre tanto el éxito como
+          // el fallo definitivo de este camino de restauración.
+          sincronizarSesionIrrecuperable();
           if (!revalidada) {
             // A5 (hallazgo de revisión, alto): el backoff se agotó DE VERDAD (4 intentos,
             // ~40 s) sin lograr revalidar. El aviso genérico de "sin red" es FALSO acá si la
@@ -273,7 +310,16 @@ export function useAuthMovil() {
       // H5: login nuevo exitoso — cortar cualquier racha de 401 heredada de la sesión
       // anterior (el ref no lo limpia `ESTADO_INICIAL` porque vive fuera de `estado`).
       fallos401Acumulados.current = 0;
-      setEstado((actual) => ({ ...actual, etapa: 'operacion', sesion: respuesta }));
+      // Entrega 3: mismo motivo que arriba, pero para el circuit breaker del refresh — es
+      // GLOBAL al módulo (ver el docblock de `reiniciarCircuitoRefresh`), así que un login
+      // nuevo y válido no debe heredar un circuito abierto por la sesión anterior.
+      reiniciarCircuitoRefresh();
+      setEstado((actual) => ({
+        ...actual,
+        etapa: 'operacion',
+        sesion: respuesta,
+        sesionIrrecuperable: false,
+      }));
     });
   }, []);
 
@@ -302,11 +348,14 @@ export function useAuthMovil() {
         // H5: misma razón que en `autenticarSesion` — este es el otro camino de login
         // exitoso (segundo paso de `seleccion_requerida`).
         fallos401Acumulados.current = 0;
+        // Entrega 3: mismo motivo que en `autenticarSesion`.
+        reiniciarCircuitoRefresh();
         setEstado((previo) => ({
           ...previo,
           etapa: 'operacion',
           sesion: respuesta,
           seleccionToken: null,
+          sesionIrrecuperable: false,
         }));
       });
     },
@@ -328,7 +377,10 @@ export function useAuthMovil() {
     const refreshToken = estado.sesion?.refreshToken;
     if (refreshToken) {
       try {
-        await authMovilApi.logout(refreshToken);
+        // Entrega 3: se manda el `deviceId` como fallback server-side — ver el docblock de
+        // `AuthMovilService.logout` para el porqué (refresh token localmente obsoleto por una
+        // rotación cuya respuesta el cliente nunca confirmó recibir).
+        await authMovilApi.logout(refreshToken, deviceId.current ?? estado.deviceId ?? undefined);
       } catch {
         // La limpieza local siempre se ejecuta; la sesión expira/revoca server-side después.
       }
@@ -338,8 +390,10 @@ export function useAuthMovil() {
     // reset explícito, una racha de 401 de la sesión que se está cerrando sobrevivía al
     // logout y podía combinarse con un solo 401 de la sesión siguiente.
     fallos401Acumulados.current = 0;
+    // Entrega 3: mismo motivo, para el circuit breaker del refresh (global al módulo).
+    reiniciarCircuitoRefresh();
     if (mounted.current) setEstado({ ...ESTADO_INICIAL, etapa: 'vehiculo' });
-  }, [estado.sesion?.refreshToken]);
+  }, [estado.sesion?.refreshToken, estado.deviceId]);
 
   /** Access token vigente para llamadas propias de la pantalla de operación (paquete del
    * día QUI-236, sync QUI-240) — refresca sola si ya venció, sin duplicar la lógica de
@@ -369,6 +423,10 @@ export function useAuthMovil() {
       if (mounted.current) {
         setEstado((actual) => ({ ...actual, sesion: actualizada, sesionNoRevalidada: false }));
       }
+      // Entrega 3: el `refrescar` de arriba ya pasó por `intentarRefrescarConCircuito`, que
+      // cierra el circuito en un éxito — sincronizar acá apaga `sesionIrrecuperable` si había
+      // quedado prendida (mismo espíritu que el `sesionNoRevalidada: false` de arriba).
+      sincronizarSesionIrrecuperable();
       return actualizada.accessToken;
     } catch (error: unknown) {
       const { fallos401Acumulados: fallosActualizados, marcarSesionNoRevalidada } =
@@ -377,13 +435,19 @@ export function useAuthMovil() {
       if (marcarSesionNoRevalidada && mounted.current) {
         setEstado((actual) => ({ ...actual, sesionNoRevalidada: true }));
       }
+      // Entrega 3: ESTE es el camino que corría sin freno cada 15s en el bug de QA — acá es
+      // donde `sesionIrrecuperable` puede prenderse de verdad (circuito abierto hace más de
+      // `UMBRAL_MS_SESION_IRRECUPERABLE`). Bajo el principio rector, esto NO dispara ningún
+      // aviso en pantalla por sí solo — solo actualiza el estado que la Entrega 26 (preflight,
+      // fuera de este alcance) va a consumir.
+      sincronizarSesionIrrecuperable();
       // NO se borra la sesión acá en ningún caso (401 ni network): misma decisión, mismo
       // motivo que en `refrescarConReintentos` — ver su comentario. Un 401 aislado o
       // repetido solo enciende la señal para que el chofer decida volver a loguearse; el
       // borrado automático sigue siendo exclusivo de `logout()`.
       return null;
     }
-  }, [estado.sesion]);
+  }, [estado.sesion, sincronizarSesionIrrecuperable]);
 
   async function ejecutar(accion: () => Promise<void>): Promise<void> {
     setEstado((actual) => ({ ...actual, cargando: true, error: null, aviso: null }));
@@ -444,7 +508,12 @@ export async function refrescar(guardada: SesionMovilGuardada): Promise<SesionMo
   if (enVuelo) return enVuelo;
 
   const promesa = (async () => {
-    const tokens = await authMovilApi.refresh(guardada.refreshToken);
+    // Entrega 3: el circuit breaker (`shared/api/refresh-circuit-breaker.ts`) envuelve ACÁ,
+    // en el único lugar que golpea `POST /v1/mobile/auth/refresh` — cubre automáticamente a
+    // los dos callers de `refrescar` (`refrescarConReintentos` y `obtenerAccessToken`) sin
+    // duplicar el chequeo, y nunca toca el sync de datos (otro cliente HTTP por completo, ver
+    // el docblock del breaker).
+    const tokens = await intentarRefrescarConCircuito(guardada.refreshToken);
     return actualizarSesionMovil(guardada, tokens);
   })();
   refrescosEnVuelo.set(clave, promesa);
