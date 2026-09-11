@@ -34,24 +34,27 @@ import { SyncErroresService } from './sync-errores.service.js';
 class SyncErroresTestModule {}
 
 /**
- * GAP CONOCIDO DEL ENTORNO DE TEST (docs/plan-correccion-post-piloto-2026-09-09.md,
- * investigación 2026-09-10): Nest resuelve qué schema Zod validar/coerciona en `@Query()`
- * leyendo `design:paramtypes` (metadata que emite `tsc` con `emitDecoratorMetadata`, ver
- * apps/api/tsconfig.json). `vitest` (y `tsx`, que usa el mismo motor) transforma TypeScript
- * con esbuild puro, que NO emite esa metadata (evanw/esbuild#257, ya documentado en este
- * repo vía el `@Inject(Reflector)` explícito de `roles.guard.ts`/`sync-device-throttler.guard.ts`).
- * Verificado a mano: `Reflect.getMetadata('design:paramtypes', SyncErroresController.prototype,
- * 'listar')` da `undefined` bajo vitest. Sin esa metadata, `ZodValidationPipe` nunca encuentra
- * `metatype.schema` y deja pasar el string crudo de la querystring — el `inicioDeJornadaBolivia`
- * de `sync-errores.service.ts` revienta con `fecha.getUTCFullYear is not a function`. Confirmado
- * que es el entorno y no el código: el mismo request contra `node dist/main.js` (build real con
- * `tsc`, igual al Dockerfile de prod) responde 200 y filtra bien.
+ * GAP DE ENTORNO YA CERRADO (docs/plan-correccion-post-piloto-2026-09-09.md,
+ * investigación 2026-09-10, fix 2026-09-11): Nest resuelve qué schema Zod validar/coerciona
+ * en `@Query()` leyendo `design:paramtypes` (metadata que requiere `emitDecoratorMetadata`,
+ * ver apps/api/tsconfig.json). `vitest` originalmente transformaba TypeScript con esbuild
+ * puro, que NO emite esa metadata (evanw/esbuild#257) — sin ella, `ZodValidationPipe` nunca
+ * encontraba `metatype.schema` y dejaba pasar el string crudo de la querystring, y
+ * `inicioDeJornadaBolivia` de `sync-errores.service.ts` reventaba con
+ * `fecha.getUTCFullYear is not a function`.
  *
- * Por eso los tests de HTTP de abajo se activan solo si el runner que los ejecuta SÍ trae la
- * metadata (`metadataDeDecoradoresDisponible`). Si el entorno de test se arregla (ver la
- * propuesta en el handoff), estos empiezan a correr de verdad sin tocar este archivo — y si
- * alguna vez vuelve a faltar la metadata, van a aparecer como "skipped" en vez de mentir con
- * un `expect(500).toBe(200)` forzado.
+ * Ese gap se cerró configurando `unplugin-swc` en `apps/api/vitest.config.ts`: swc SÍ emite
+ * `design:paramtypes` bajo vitest, igual que `tsc` en el build real. Hoy, con esa config
+ * activa, `Reflect.getMetadata('design:paramtypes', SyncErroresController.prototype,
+ * 'listar')` YA NO da `undefined` — trae los tipos reales del handler.
+ *
+ * Este check pasa de ser un "aviso de gap conocido" a un **guardia de regresión obligatorio**:
+ * si alguien borra el plugin de swc, quita `unplugin-swc` del package.json, o una futura
+ * versión de vitest vuelve a esbuild puro por defecto, la metadata desaparece y el bug de
+ * los 500 con `@Query()` vuelve a producción sin que nadie se entere — a menos que este
+ * `expect` FALLE (no se salte) para que CI se ponga rojo. Por eso ya no hay `skipIf`: los
+ * tests HTTP de abajo corren siempre, y si la metadata falta, fallan de verdad en vez de
+ * desaparecer del reporte.
  */
 const paramTypesDeListar = Reflect.getMetadata(
   'design:paramtypes',
@@ -61,16 +64,14 @@ const paramTypesDeListar = Reflect.getMetadata(
 const metadataDeDecoradoresDisponible = Array.isArray(paramTypesDeListar) && paramTypesDeListar.length > 0;
 
 describe('GET /sync-errores — entorno de test', () => {
-  it('registra si este runner emite design:paramtypes (si no, los tests HTTP de abajo se saltean)', () => {
-    if (!metadataDeDecoradoresDisponible) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[sync-errores.controller.integration.test] este runner NO emite design:paramtypes ' +
-          '(esbuild sin emitDecoratorMetadata) — se saltean los tests HTTP de este archivo. ' +
-          'Ver docs/plan-correccion-post-piloto-2026-09-09.md.',
-      );
-    }
-    expect(typeof metadataDeDecoradoresDisponible).toBe('boolean');
+  it('el runner emite design:paramtypes vía swc (si esto falla, los tests HTTP de abajo dejan de proteger nada)', () => {
+    expect(
+      metadataDeDecoradoresDisponible,
+      '[sync-errores.controller.integration.test] falta design:paramtypes: revisá el plugin ' +
+        'de swc en apps/api/vitest.config.ts (unplugin-swc) — sin esta metadata, ' +
+        'ZodValidationPipe deja de coercionar @Query() y el 500 de producción vuelve sin que ' +
+        'CI lo note. Ver docs/plan-correccion-post-piloto-2026-09-09.md.',
+    ).toBe(true);
   });
 });
 
@@ -85,7 +86,7 @@ describe('GET /sync-errores — entorno de test', () => {
  * contra filas reales (no solo "no explota"): inserta una fila antes del corte y otra
  * después, y verifica que solo vuelve la de después.
  */
-describe.skipIf(!metadataDeDecoradoresDisponible)(
+describe(
   'GET /sync-errores (integración real: guards + DTO Zod + pipe global + Postgres/RLS)',
   () => {
     let app: NestFastifyApplication;

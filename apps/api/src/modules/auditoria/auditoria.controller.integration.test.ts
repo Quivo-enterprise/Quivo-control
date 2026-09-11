@@ -32,11 +32,16 @@ import { AuditoriaService } from './auditoria.service.js';
 class AuditoriaTestModule {}
 
 /**
- * Mismo gap de entorno que documenta `sync-errores.controller.integration.test.ts`: sin
- * `emitDecoratorMetadata` (vitest/tsx corren esbuild puro) Nest no resuelve el DTO de
- * `@Query()` y `ZodValidationPipe` deja pasar el string crudo — acá se manifestaría igual,
- * `inicioDeJornadaBolivia` recibiendo un string en vez de un `Date`. Ver el archivo hermano
- * para el detalle completo y docs/plan-correccion-post-piloto-2026-09-09.md.
+ * Mismo gap de entorno que documentaba `sync-errores.controller.integration.test.ts` — ya
+ * cerrado (2026-09-11): `unplugin-swc` en `apps/api/vitest.config.ts` hace que vitest emita
+ * `design:paramtypes` igual que `tsc`, así que `ZodValidationPipe` sí resuelve el DTO de
+ * `@Query()` bajo test. Ver el archivo hermano para el detalle completo y
+ * docs/plan-correccion-post-piloto-2026-09-09.md.
+ *
+ * Este check es un guardia de regresión obligatorio, no un aviso: si la config de swc se
+ * rompe, este `expect` tiene que FALLAR (no saltear los tests HTTP de abajo) para que CI se
+ * ponga rojo en vez de dejar pasar en silencio el 500 de `inicioDeJornadaBolivia` recibiendo
+ * un string en vez de un `Date`.
  */
 const paramTypesDeListar = Reflect.getMetadata(
   'design:paramtypes',
@@ -46,16 +51,14 @@ const paramTypesDeListar = Reflect.getMetadata(
 const metadataDeDecoradoresDisponible = Array.isArray(paramTypesDeListar) && paramTypesDeListar.length > 0;
 
 describe('GET /auditoria — entorno de test', () => {
-  it('registra si este runner emite design:paramtypes (si no, los tests HTTP de abajo se saltean)', () => {
-    if (!metadataDeDecoradoresDisponible) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[auditoria.controller.integration.test] este runner NO emite design:paramtypes ' +
-          '(esbuild sin emitDecoratorMetadata) — se saltean los tests HTTP de este archivo. ' +
-          'Ver docs/plan-correccion-post-piloto-2026-09-09.md.',
-      );
-    }
-    expect(typeof metadataDeDecoradoresDisponible).toBe('boolean');
+  it('el runner emite design:paramtypes vía swc (si esto falla, los tests HTTP de abajo dejan de proteger nada)', () => {
+    expect(
+      metadataDeDecoradoresDisponible,
+      '[auditoria.controller.integration.test] falta design:paramtypes: revisá el plugin de ' +
+        'swc en apps/api/vitest.config.ts (unplugin-swc) — sin esta metadata, ' +
+        'ZodValidationPipe deja de coercionar @Query() y el 500 de producción vuelve sin que ' +
+        'CI lo note. Ver docs/plan-correccion-post-piloto-2026-09-09.md.',
+    ).toBe(true);
   });
 });
 
@@ -64,7 +67,7 @@ describe('GET /auditoria — entorno de test', () => {
  * Postgres) de que `desde`/`hasta` coercidos por Zod realmente filtran filas reales de
  * `audit_log`, no solo "no explota" — mismo criterio que el test hermano de sync-errores.
  */
-describe.skipIf(!metadataDeDecoradoresDisponible)(
+describe(
   'GET /auditoria (integración real: guards + DTO Zod + pipe global + Postgres/RLS)',
   () => {
     let app: NestFastifyApplication;
