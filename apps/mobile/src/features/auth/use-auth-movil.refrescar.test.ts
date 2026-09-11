@@ -61,11 +61,25 @@ function sesion(refreshToken: string): SesionMovilGuardada {
   } as SesionMovilGuardada;
 }
 
+/** Tokens de refresh nuevos que devuelve el mock de `authMovilApi.refresh` en un éxito. */
+function tokensRefrescados(refreshTokenNuevo: string) {
+  return {
+    accessToken: `access-${refreshTokenNuevo}`,
+    refreshToken: refreshTokenNuevo,
+    accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+  };
+}
+
 describe('refrescar (single-flight)', () => {
   beforeEach(() => {
     refreshMock.mockReset();
     actualizarSesionMovilMock.mockReset();
-    cargarSesionMovilMock.mockReset();
+    // G3/R4: `refrescar()` ahora relee disco ANTES de cualquier intento de red (ver
+    // `reconciliarConDisco`, `use-auth-movil.ts`) — por defecto, sin sesión distinta en disco,
+    // para no alterar el comportamiento de los tests de esta primera sección (que no ejercitan
+    // la reconciliación en sí, ver la sección de abajo).
+    cargarSesionMovilMock.mockReset().mockResolvedValue(null);
     // El circuit breaker es estado a nivel de módulo (real, no mockeado acá) — sin este
     // reset, un 401 contado en un test anterior podía filtrarse al siguiente.
     reiniciarCircuitoRefresh();
@@ -87,7 +101,10 @@ describe('refrescar (single-flight)', () => {
     const p1 = refrescar(guardada);
     const p2 = refrescar(guardada);
 
-    expect(refreshMock).toHaveBeenCalledTimes(1);
+    // G3/R4: `refrescar()` ahora reconcilia contra disco (un `await` extra) ANTES de llegar al
+    // single-flight/la red — `vi.waitFor` espera esa reconciliación en vez de asumir que
+    // `refreshMock` ya fue invocado de forma síncrona.
+    await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
 
     resolverRefresh({
       accessToken: 'access-nueva',
@@ -147,7 +164,22 @@ describe('refrescar (single-flight)', () => {
   });
 });
 
-describe('refrescar — Hallazgo 3 (code review, MEDIO): carrera de refresh headless/foreground', () => {
+/**
+ * G3/R4 (hallazgo de `/codex-debug verify-fix` sobre `ea3d84e`, ALTO): el diseño ANTERIOR
+ * reconciliaba DESPUÉS de un 401 (intentaba con T0, capturaba el fallo, RECIÉN ahí releía
+ * disco y reintentaba con T1 llamando DIRECTO a `intentarRefrescarConCircuito`, salteando el
+ * single-flight de `refrescar()`). Eso tenía dos huecos:
+ * - G3: el intento con T0 SIEMPRE contaba como fallo 401 real contra el circuit breaker — con
+ *   4 fallos previos, ESE intento era el 5to y abría el circuito ANTES de poder reintentar con
+ *   T1, bloqueando el reintento con `CircuitoRefreshAbiertoError`.
+ * - R4: el reintento con T1 llamaba `intentarRefrescarConCircuito` directo, sin pasar por el
+ *   single-flight — dos llamadas concurrentes (una con T0 viejo, otra ya con T1) podían
+ *   disparar dos rotaciones en paralelo.
+ *
+ * El fix reconcilia ANTES de intentar (`reconciliarConDisco`, `use-auth-movil.ts`) — ver esa
+ * función para el detalle. Este describe cubre el comportamiento nuevo.
+ */
+describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca fuera del single-flight', () => {
   beforeEach(() => {
     refreshMock.mockReset();
     actualizarSesionMovilMock.mockReset();
@@ -155,25 +187,14 @@ describe('refrescar — Hallazgo 3 (code review, MEDIO): carrera de refresh head
     reiniciarCircuitoRefresh();
   });
 
-  /** Tokens de refresh nuevos que devuelve el mock de `authMovilApi.refresh` en un éxito. */
-  function tokensRefrescados(refreshTokenNuevo: string) {
-    return {
-      accessToken: `access-${refreshTokenNuevo}`,
-      refreshToken: refreshTokenNuevo,
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-      refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-    };
-  }
-
-  it('T0 en memoria y T1 en SecureStore: un solo 401, relee disco, reintenta con T1, y el circuito no suma fallo', async () => {
+  it('T0 en memoria y T1 en SecureStore: reconcilia ANTES de la red — T0 NUNCA se envía, refresca directo con T1', async () => {
     const t0 = sesion('T0'); // lo que tiene `estado.sesion`/`guardada` en este contexto JS
     const enDisco = sesion('T1'); // lo que otro contexto (headless) ya rotó y persistió
 
     cargarSesionMovilMock.mockResolvedValue(enDisco);
     refreshMock.mockImplementation(async (token: string) => {
       if (token === 'T0') {
-        // T0 ya fue canjeado server-side por el otro contexto — 401 real.
-        throw new AuthMovilApiError('http', 'Refresh token inválido', 401);
+        throw new Error('no debería enviarse T0 nunca — la reconciliación va ANTES de la red');
       }
       return tokensRefrescados('T2');
     });
@@ -183,29 +204,96 @@ describe('refrescar — Hallazgo 3 (code review, MEDIO): carrera de refresh head
     const resultado = await refrescar(t0);
 
     expect(resultado).toBe(rotada);
-    // UN solo 401 real (con T0) — el reintento (con T1, releído de disco) tiene éxito.
-    expect(refreshMock).toHaveBeenCalledTimes(2);
-    expect(refreshMock).toHaveBeenNthCalledWith(1, 'T0');
-    expect(refreshMock).toHaveBeenNthCalledWith(2, 'T1');
-    // El reintento persiste sobre la sesión de DISCO (T1), no sobre la vieja (T0) — si
-    // persistiera sobre `t0`, el `contexto`/resto de campos de la rotación de headless (que
-    // pudo traer más que solo los tokens) se perdería.
+    // UN solo intento de red — directo con T1, nunca con T0.
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock).toHaveBeenCalledWith('T1');
+    // Persiste sobre la sesión de DISCO (T1), no sobre la vieja (T0) — si persistiera sobre
+    // `t0`, el `contexto`/resto de campos de la rotación de headless (que pudo traer más que
+    // solo los tokens) se perdería.
     expect(actualizarSesionMovilMock).toHaveBeenCalledWith(enDisco, expect.objectContaining({ refreshToken: 'T2' }));
-    // El circuito termina COMO SI nada hubiera fallado: el 401 real sumó un fallo transitorio,
-    // pero el éxito final (`circuitoTrasExito`) lo resetea del todo — nunca llega a abrirse.
+    // El circuito nunca llega a tocarse por T0 — cierra directo con el único éxito real.
     const estado = obtenerEstadoCircuitoRefresh();
     expect(estado.estado).toBe('cerrado');
     expect(estado.fallosConsecutivos).toBe(0);
   });
 
-  it('si el token en disco es el MISMO que ya falló, el 401 es real — no reintenta en loop', async () => {
+  it('G3: con 4 fallos previos en el circuito, reconciliar ANTES evita que T0 sea el 5to fallo que abriría el circuito y bloquearía el reintento con T1', async () => {
+    // 4 fallos 401 reales previos (uno menos que UMBRAL_FALLOS_ABRIR_CIRCUITO = 5) contra un
+    // token descartable, sin sesión distinta en disco — el circuito queda cerrado pero al
+    // borde.
+    const descartable = sesion('token-agotado');
+    cargarSesionMovilMock.mockResolvedValue(null);
+    refreshMock.mockRejectedValue(new AuthMovilApiError('http', 'Sesión revocada', 401));
+    for (let intento = 0; intento < 4; intento++) {
+      await expect(refrescar(descartable)).rejects.toThrow('Sesión revocada');
+    }
+    expect(obtenerEstadoCircuitoRefresh()).toMatchObject({ estado: 'cerrado', fallosConsecutivos: 4 });
+
+    // Ahora: T0 en memoria, T1 en disco (otro contexto lo rotó mientras tanto). Con el diseño
+    // VIEJO, el 401 de T0 sería el 5to fallo — abriría el circuito ANTES de poder reintentar
+    // con T1, y el reintento hubiera quedado bloqueado por el circuito que su propio intento
+    // acababa de abrir.
+    const t0 = sesion('T0');
+    const enDisco = sesion('T1');
+    cargarSesionMovilMock.mockResolvedValue(enDisco);
+    refreshMock.mockImplementation(async (token: string) => {
+      if (token === 'T0') {
+        throw new Error('no debería enviarse T0 — sería el 5to fallo y abriría el circuito en falso');
+      }
+      return tokensRefrescados('T2');
+    });
+    const rotada = { ...enDisco, ...tokensRefrescados('T2') };
+    actualizarSesionMovilMock.mockResolvedValue(rotada);
+
+    const resultado = await refrescar(t0);
+
+    expect(resultado).toBe(rotada);
+    expect(refreshMock).not.toHaveBeenCalledWith('T0');
+    expect(refreshMock).toHaveBeenLastCalledWith('T1');
+    // El circuito NUNCA se abre — el éxito con T1 lo cierra del todo (nunca pasó por el 5to
+    // fallo que el diseño viejo hubiera contado).
+    const estado = obtenerEstadoCircuitoRefresh();
+    expect(estado.estado).toBe('cerrado');
+    expect(estado.fallosConsecutivos).toBe(0);
+  });
+
+  it('R4: dos llamadas concurrentes con T0 (viejo) en memoria reconcilian a T1 (disco) y comparten UNA sola request — nunca dos rotaciones en paralelo', async () => {
+    const enDisco = sesion('T1');
+    cargarSesionMovilMock.mockResolvedValue(enDisco);
+    let resolverRefresh!: (tokens: ReturnType<typeof tokensRefrescados>) => void;
+    refreshMock.mockImplementation((token: string) => {
+      if (token === 'T0') {
+        throw new Error('no debería enviarse T0 — dos llamadas concurrentes deben reconciliar y compartir UNA request con T1');
+      }
+      return new Promise((resolve) => {
+        resolverRefresh = resolve;
+      });
+    });
+    const rotada = { ...enDisco, ...tokensRefrescados('T2') };
+    actualizarSesionMovilMock.mockResolvedValue(rotada);
+
+    const p1 = refrescar(sesion('T0'));
+    const p2 = refrescar(sesion('T0'));
+
+    await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
+    expect(refreshMock).toHaveBeenCalledWith('T1');
+
+    resolverRefresh(tokensRefrescados('T2'));
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    expect(r1).toBe(rotada);
+    expect(r2).toBe(rotada);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('si el token en disco es el MISMO que en memoria, el 401 es real — un solo intento, sin reintento', async () => {
     const t0 = sesion('T0');
     cargarSesionMovilMock.mockResolvedValue(sesion('T0')); // disco NO tiene un token distinto
     refreshMock.mockRejectedValue(new AuthMovilApiError('http', 'Sesión revocada', 401));
 
     await expect(refrescar(t0)).rejects.toThrow('Sesión revocada');
-    // Un solo intento de red — sin el token en disco distinto, no hay evidencia de carrera y
-    // reintentar con el MISMO token que ya falló no cambiaría nada (loop inútil).
+    // Sin token distinto en disco, la reconciliación no cambia nada — un solo intento con T0,
+    // y el 401 es de verdad (no hay evidencia de carrera que justifique un valor distinto).
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 
@@ -218,12 +306,16 @@ describe('refrescar — Hallazgo 3 (code review, MEDIO): carrera de refresh head
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 
-  it('un error de RED (no 401) no dispara la relectura de disco — sigue siendo offline legítimo', async () => {
+  it('un error de RED (no 401) no dispara un segundo intento — sigue siendo offline legítimo', async () => {
     const t0 = sesion('T0');
+    // La reconciliación (lectura de disco) corre SIEMPRE, ANTES de la red — a diferencia del
+    // diseño viejo, que solo releía disco DESPUÉS de un 401. Sin token distinto en disco, eso
+    // no cambia el resultado: un error de red sigue sin disparar ningún reintento.
+    cargarSesionMovilMock.mockResolvedValue(null);
     refreshMock.mockRejectedValue(new AuthMovilApiError('network', 'Sin conexión'));
 
     await expect(refrescar(t0)).rejects.toThrow('Sin conexión');
-    expect(cargarSesionMovilMock).not.toHaveBeenCalled();
+    expect(cargarSesionMovilMock).toHaveBeenCalledTimes(1);
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 });

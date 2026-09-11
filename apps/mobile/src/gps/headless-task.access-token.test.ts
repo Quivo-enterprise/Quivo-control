@@ -147,11 +147,11 @@ describe('obtenerAccessTokenHeadless', () => {
       obtenerAccessTokenHeadless(),
     ];
 
-    // Deja que las tres lleguen hasta el punto de espera del refresh (microtasks) antes de
-    // resolverlo.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(refreshMock).toHaveBeenCalledTimes(1); // no 3 — ver el docblock del fix.
+    // Deja que las tres lleguen hasta el punto de espera del refresh antes de resolverlo.
+    // G3/R4 (`use-auth-movil.ts`): `refrescar()` ahora reconcilia contra disco (un `await`
+    // extra, `cargarSesionMovil()` de nuevo) ANTES de tocar la red — `vi.waitFor` espera esa
+    // reconciliación en vez de asumir una cantidad fija de microtask ticks.
+    await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1)); // no 3 — ver el docblock del fix.
 
     resolverRefresh({
       accessToken: 'access-nueva',
