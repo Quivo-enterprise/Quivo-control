@@ -714,6 +714,15 @@ export function useGpsOperativo(
       // la flecha no se moviera.
       await iniciarSeguimientoContinuo(BackgroundGeolocation);
     } catch (error) {
+      // RIESGO 1 (`/codex-debug verify-fix`, corregido en `iniciarSeguimientoContinuo` —
+      // `gps/seguimiento-continuo.ts`): este catch YA NO puede dispararse por un fallo de
+      // `changePace`/`setConfig` posterior a un `start()` exitoso — esa función absorbe esos
+      // rechazos internamente (los reporta a Sentry con su propio tag y los deja para el
+      // próximo `onMotionChange`) precisamente para que este bloque, que remueve suscripciones
+      // y marca `tracking=false`, quede reservado a lo único que de verdad significa "no hay
+      // nada grabándose": que `start()` mismo haya fallado. Si algún día se llega acá con el
+      // SDK nativo ya `enabled`, es un bug de `iniciarSeguimientoContinuo`, no de este catch.
+      //
       // Plan §2.4.4: mensaje distinto del de persistencia (bloque de abajo) — acá el módulo
       // NATIVO no pudo arrancar pese a que el permiso/servicio ya estaban en orden (licencia
       // del plugin, Google Play Services): no hay nada grabándose todavía, a diferencia del

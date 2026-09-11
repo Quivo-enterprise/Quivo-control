@@ -1,3 +1,5 @@
+import * as Sentry from '@sentry/react-native';
+
 /**
  * QUI-P0 (la flecha del conductor no se mueve en el mapa — pedido explícito del CTO,
  * `docs/plan-correccion-post-piloto-2026-09-09.md`, "Principio rector"): el diagnóstico
@@ -87,10 +89,33 @@ export async function reafirmarMovimiento(
  * confirma que el freeze se repite igual en el segundo arranque, así que la re-afirmación de
  * movimiento tiene que ser incondicional en cada arranque, nunca "ya se hizo una vez, no hace
  * falta de nuevo".
+ *
+ * RIESGO 1 (`/codex-debug verify-fix` sobre la Entrega 31a — `use-gps-operativo.ts` llamaba a
+ * esta función dentro de un único `try/catch` que trataba CUALQUIER rechazo, `start()` o
+ * `reafirmarMovimiento`, como "no se pudo iniciar el recorrido": removía las suscripciones y
+ * dejaba `tracking=false` en la UI aun cuando `start()` ya había arrancado el SDK nativo — el
+ * GPS (y el headless task) seguían grabando en la base nativa del plugin sin que la app tuviera
+ * forma de detenerlos. La distinción que importa es esta: `start()` es la única llamada de la
+ * que depende si hay algo grabándose; `reafirmarMovimiento` es solo la puesta a punto de la
+ * política de movimiento sobre un plugin que YA está grabando. Por eso acá adentro (no en el
+ * llamador) un fallo de `reafirmarMovimiento` se reporta a Sentry y se ABSORBE — nunca se deja
+ * subir como rechazo de `iniciarSeguimientoContinuo` — así el `try/catch` de
+ * `use-gps-operativo.ts` sigue disparando SOLO ante un fallo real de `start()` (comportamiento
+ * sin cambios: nada grabándose, subscripciones fuera, `tracking=false`) y jamás ante este otro
+ * caso, donde el recorrido sigue activo de verdad. No hace falta reintentar `changePace` desde
+ * acá: `crearManejadorReafirmarMovimiento`, ya suscrito a `onMotionChange` en cada arranque
+ * (`use-gps-operativo.ts`), vuelve a intentarlo apenas el SDK reporte el próximo cambio de
+ * movimiento — la reafirmación fallida no queda sin reintento, solo demorada al próximo evento.
  */
 export async function iniciarSeguimientoContinuo(sdk: SdkSeguimientoContinuo): Promise<void> {
   await sdk.start();
-  await reafirmarMovimiento(sdk);
+  try {
+    await reafirmarMovimiento(sdk);
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'gps-foreground', paso: 'iniciar-reafirmar-movimiento' },
+    });
+  }
 }
 
 /**
@@ -123,6 +148,12 @@ export async function restaurarComportamientoNormal(
  * SDK is provided to your callback, including those from onMotionChange, getCurrentPosition and
  * watchPosition"), así que el marcador se actualiza por el mismo camino de siempre — no hace
  * falta setear `posicionActual` acá.
+ *
+ * RIESGO 2 (`/codex-debug verify-fix`): `getCurrentPosition` puede rechazar (timeout nativo,
+ * GPS momentáneamente sin señal) y antes esa promesa quedaba suelta sin `catch` — un rechazo
+ * sin manejar, y además ningún rastro de que el fix forzado al volver a primer plano falló. Se
+ * encadena `.catch()` (nunca `await`: el handler de `AppState` tiene que devolver sincrónico,
+ * igual que antes) que reporta a Sentry con un tag que identifica este handler puntual.
  */
 export function crearManejadorForegroundActivo(
   sdk: { getCurrentPosition: (opts: { samples: number; persist: boolean }) => Promise<unknown> },
@@ -130,7 +161,11 @@ export function crearManejadorForegroundActivo(
 ): (estadoApp: string) => void {
   return (estadoApp: string) => {
     if (estadoApp === 'active' && estaEnRecorrido()) {
-      void sdk.getCurrentPosition({ samples: 1, persist: true });
+      void sdk.getCurrentPosition({ samples: 1, persist: true }).catch((error) => {
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'foreground-activo-getCurrentPosition' },
+        });
+      });
     }
   };
 }
@@ -145,6 +180,12 @@ export function crearManejadorForegroundActivo(
  * config estándar del framework) empuja el plugin a estacionario pese a la config: si eso pasa
  * mientras hay un recorrido activo, reafirma `changePace(true)` de inmediato en vez de esperar
  * a que algo más lo note.
+ *
+ * RIESGO 2 (`/codex-debug verify-fix`): mismo problema que `crearManejadorForegroundActivo` de
+ * arriba — `changePace` puede rechazar (el mismo escenario Samsung Galaxy A71 de gestión de
+ * batería agresiva documentado arriba es justo el que más probablemente lo haga fallar) y la
+ * promesa quedaba suelta sin `catch`. Se reporta a Sentry con un tag propio para poder
+ * distinguirlo en el dashboard del fallo del handler de foreground.
  */
 export function crearManejadorReafirmarMovimiento(
   sdk: Pick<SdkSeguimientoContinuo, 'changePace'>,
@@ -152,7 +193,11 @@ export function crearManejadorReafirmarMovimiento(
 ): (event: { isMoving: boolean }) => void {
   return (event: { isMoving: boolean }) => {
     if (!event.isMoving && estaEnRecorrido()) {
-      void sdk.changePace(true);
+      void sdk.changePace(true).catch((error) => {
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'motion-change-reafirmar-movimiento' },
+        });
+      });
     }
   };
 }
