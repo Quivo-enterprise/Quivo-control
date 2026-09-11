@@ -44,7 +44,8 @@ export interface PuntoControlMapaHtml {
   lng: number;
 }
 
-/** Opciones de {@link crearControladorTiles}. */
+/** Opciones de `crearControladorTiles` (ver `CONTROLADOR_TILES_JS_SOURCE`) — tipa el objeto que
+ * se le pasa a la función una vez evaluada en el WebView o en `new Function` en los tests. */
 export interface OpcionesControladorTiles {
   /** Debe ser EXACTAMENTE el mismo string que se le pasa a `L.tileLayer(..., { errorTileUrl })`. */
   errorTileUrl: string;
@@ -66,39 +67,74 @@ export interface ControladorTiles {
 }
 
 /**
- * Máquina de estados PURA (sin Leaflet, sin DOM) que decide cuándo la capa de tiles de
- * OpenStreetMap debe darse por perdida y removerse del mapa.
+ * Código fuente LITERAL (JS plano, ES5) de la máquina de estados que decide cuándo la capa de
+ * tiles de OpenStreetMap debe darse por perdida y removerse del mapa. Es un STRING, no una
+ * función TypeScript — y esa diferencia es justamente el fix del Hallazgo 1 del code-review de
+ * esta entrega (release real, no un caso de laboratorio). Ver el bloque de comentario largo más
+ * abajo, antes de `CONTROLADOR_TILES_JS_SOURCE`, para el detalle completo de por qué.
  *
- * Por qué existe separada de `construirHtml`: el code-review de la Entrega 25 encontró que el
- * fallback documentado ("sin tiles a los 4s se remueve la capa") **no se ejecutaba nunca**.
- * La causa: Leaflet, cuando un tile real falla, carga el `errorTileUrl` (un GIF transparente,
- * más abajo) como reemplazo — y ESO dispara el evento `tileload` igual que un tile real, porque
- * para Leaflet "cargó una imagen" no distingue cuál. El handler viejo de `tileload` marcaba
- * `tilesCargados = true` con cualquier carga, así que el primer tile fallido cancelaba el
- * timeout y la capa nunca se removía (invisible en pantalla porque el GIF es transparente sobre
- * el fondo liso, pero el mecanismo quedaba muerto y seguía reintentando tiles reales para
- * siempre en cada actualización de GPS).
+ * Este texto se ejecuta en DOS lugares y TIENE QUE SER exactamente el mismo en ambos:
+ *   1. Interpolado tal cual dentro del `<script>` del HTML — ver `construirHtml` más abajo.
+ *   2. Evaluado con `new Function(...)` en `route-map-html.test.ts` para poder testear el
+ *      comportamiento real sin Leaflet ni WebView (`vi.useFakeTimers()` sobre el resultado).
+ * Como es el mismo string en los dos casos, no hay forma de que el comportamiento testeado
+ * diverja del que corre en el mapa real — a diferencia de lo que pasaba antes con `.toString()`.
  *
- * El fix: `onTileLoad` **ignora explícitamente** cualquier carga cuyo `src` sea el propio
- * `errorTileUrl` — esa carga es el placeholder de un fallo, nunca cuenta como "hay cobertura".
- * Se prefirió este filtro sobre sacar `errorTileUrl` y apoyarse solo en `tileerror`
- * (alternativa considerada) porque `errorTileUrl` sigue siendo necesario por su motivo
- * original: sin él, Android WebView dibuja el ícono nativo de "imagen rota" en cada tile
- * fallido mientras no hay red, en vez de quedar transparente sobre el fondo liso `#F4F6F8`.
+ * ============================================================================================
+ * POR QUÉ NUNCA `Function.prototype.toString()` PARA INYECTAR CÓDIGO EN EL WEBVIEW
+ * (bug real verificado en el bundle de release de esta entrega — Hallazgo 1 del code-review):
  *
- * Esta función se serializa con `.toString()` dentro de `construirHtml` y su código fuente se
- * embebe tal cual en el `<script>` del WebView (ver más abajo) — así el test de
- * `route-map-html.test.ts` ejercita el MISMO código que corre en el mapa real, no una
- * reimplementación en paralelo que podría divergir con el tiempo. Por eso está escrita con
- * `function`/`var` en vez de arrow functions o destructuring: para que el texto embebido sea
- * JS plano y no dependa de qué target de TS/Babel compiló este archivo.
+ * Antes, este archivo tenía `crearControladorTiles` como función TypeScript normal, y
+ * `construirHtml` la embebía en el HTML con `${crearControladorTiles.toString()}`. Esto se ve
+ * inofensivo en dev/tests porque ahí `.toString()` sí devuelve el código fuente legible. Pero
+ * se rompe en dos capas distintas de un build de release real, cualquiera de las dos sola ya
+ * es fatal:
+ *
+ *   1. MINIFICADOR DE METRO (renombre de identificadores): en release, Metro minifica y
+ *      renombra símbolos de nivel de módulo — `crearControladorTiles` pasa a ser, por ejemplo,
+ *      `s`. `Function.prototype.toString()` de la función YA renombrada en memoria devuelve el
+ *      código CON el nombre nuevo (`function s(n){var e=!1,...}`), pero el HTML seguía
+ *      invocando `crearControladorTiles({...})` por el nombre literal viejo, escrito a mano más
+ *      abajo en este archivo. Resultado: el WebView define `s` y ejecuta
+ *      `crearControladorTiles(...)` → `ReferenceError: crearControladorTiles is not defined`.
+ *      Ese throw CORTA TODO el resto del `<script>` (no solo el controlador de tiles): nunca se
+ *      dibuja la polyline de la ruta ni los puntos de control ni la posición del vehículo, no
+ *      se registran los listeners de `message` (`document.addEventListener` / `window
+ *      .addEventListener`) y `map.fitBounds` del final tampoco corre. Pantalla gris — peor que
+ *      `main`, porque ni siquiera el fallback documentado llega a ejecutar.
+ *      Verificado contra un bundle real: `npx expo export --platform android --no-bytecode`
+ *      produce `${s.toString()}` seguido de `function s(n){...}` y CERO ocurrencias de
+ *      `function crearControladorTiles` en todo el archivo exportado.
+ *
+ *   2. BYTECODE DE HERMES: aunque el paso 1 no existiera (nombre preservado), Hermes compila el
+ *      JS de la app a bytecode antes de empaquetarlo. `Function.prototype.toString()` de una
+ *      función ya compilada a bytecode NO devuelve el código fuente — devuelve un placeholder
+ *      opaco tipo `function s(a0) { [bytecode] }`. Ese texto tampoco sería JS ejecutable si se
+ *      insertara en el HTML, sin importar qué nombre tuviera.
+ *
+ * Los tests de este archivo con `vitest` no detectaban nada de esto porque vitest corre el
+ * código de test SIN pasar por el minificador de Metro ni por Hermes — ahí `.toString()`
+ * siempre devolvía el código fuente real, con el nombre real. El bug era 100% invisible en
+ * dev/test y solo se manifestaba en un APK/AAB de release de verdad. Por eso, de ahora en más,
+ * el controlador viaja como STRING literal escrito a mano — nunca como `.toString()` de una
+ * función que el bundler puede haber transformado. Un string literal es opaco para el
+ * minificador (no le toca el contenido de texto, solo identificadores del AST), así que el
+ * nombre `crearControladorTiles` dentro de este string llega intacto al bundle de release sin
+ * importar qué haga Metro con los símbolos "de verdad" del módulo.
+ * ============================================================================================
+ *
+ * Por qué además sigue escrito en ES5 (`function`/`var`, sin arrow functions/destructuring/
+ * template strings propios): para que el texto sea JS plano interpretable por cualquier motor
+ * de WebView sin depender de qué target de TS/Babel compiló este archivo — y para que `new
+ * Function` en los tests no dependa de ninguna transformación previa.
  */
-export function crearControladorTiles(opciones: OpcionesControladorTiles): ControladorTiles {
+export const CONTROLADOR_TILES_JS_SOURCE = `
+function crearControladorTiles(opciones) {
   var cargoTileReal = false;
-  var timeoutId: ReturnType<typeof setTimeout> | null = null;
+  var timeoutId = null;
   var removida = false;
 
-  function onTileLoad(tileSrc: string | null | undefined) {
+  function onTileLoad(tileSrc) {
     if (removida) return;
     if (tileSrc === opciones.errorTileUrl) return; // el GIF de error NUNCA cuenta como carga real
     cargoTileReal = true;
@@ -139,9 +175,10 @@ export function crearControladorTiles(opciones: OpcionesControladorTiles): Contr
     onTileLoad: onTileLoad,
     onTileError: onTileError,
     reintentar: reintentar,
-    estaRemovida: estaRemovida,
+    estaRemovida: estaRemovida
   };
 }
+`;
 
 export function construirHtml(
   paquete: PaqueteDia,
@@ -251,10 +288,12 @@ export function construirHtml(
     // de depender del fetch en vivo de acá abajo. Cuando eso exista, esta capa pasa a ser
     // solamente el fallback de "no lo tenía cacheado".
 
-    // crearControladorTiles (definida arriba en route-map-html.ts, pura y testeada en
-    // route-map-html.test.ts) se embebe acá tal cual vía .toString() — es la MISMA función que
-    // corre en el test, no una reimplementación paralela.
-    ${crearControladorTiles.toString()}
+    // CONTROLADOR_TILES_JS_SOURCE (definido arriba en route-map-html.ts como STRING literal, NO
+    // como función TS) se interpola acá tal cual, texto por texto. Es EXACTAMENTE el mismo
+    // string que route-map-html.test.ts evalúa con \`new Function\` para testear el
+    // comportamiento. Ver el comentario largo sobre CONTROLADOR_TILES_JS_SOURCE más arriba en
+    // route-map-html.ts para el motivo completo (minificador de Metro + bytecode de Hermes).
+    ${CONTROLADOR_TILES_JS_SOURCE}
 
     var controladorTiles = crearControladorTiles({
       errorTileUrl: ERROR_TILE_URL,
