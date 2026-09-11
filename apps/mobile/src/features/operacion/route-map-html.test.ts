@@ -118,8 +118,8 @@ describe('convertirGeoJsonALatLng', () => {
 // WebView (ver `route-map-html.ts`), así que cubren el comportamiento real y el texto real, no
 // una función TS paralela que podría divergir del bundle de release.
 describe('crearControladorTiles — máquina de estados de la capa de tiles', () => {
-  var ERROR_TILE_URL = 'data:image/gif;base64,ERROR';
-  var TIMEOUT_MS = 4000;
+  const ERROR_TILE_URL = 'data:image/gif;base64,ERROR';
+  const TIMEOUT_MS = 4000;
 
   beforeEach(() => {
     vi.useFakeTimers();
