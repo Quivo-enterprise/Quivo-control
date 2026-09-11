@@ -12,7 +12,15 @@ vi.mock('expo-sqlite', () => ({}));
 vi.mock('expo-crypto', () => ({ randomUUID: vi.fn() }));
 vi.mock('@sentry/react-native', () => ({ captureException: vi.fn(), addBreadcrumb: vi.fn() }));
 
-import { DDL_OUTBOX, MIGRACIONES_COLUMNAS_OUTBOX, construirAgregarColumna, faltaColumna } from './outbox';
+import {
+  COTA_SANIDAD_LEASE_MS,
+  DDL_OUTBOX,
+  MIGRACIONES_COLUMNAS_OUTBOX,
+  TTL_LEASE_DRENAJE_MS,
+  construirAdquirirLease,
+  construirAgregarColumna,
+  faltaColumna,
+} from './outbox';
 
 /**
  * Guard sistémico del Hallazgo 1 (CRÍTICO, code review): ejecuta el DDL REAL de
@@ -134,6 +142,75 @@ describe('DDL real del outbox contra SQLite de verdad (Hallazgo 1, CRÍTICO)', (
     db.exec(DDL_OUTBOX);
     aplicarMigraciones(db);
     expect(() => aplicarMigraciones(db)).not.toThrow();
+    db.close();
+  });
+});
+
+/**
+ * Guard sistémico del Hallazgo 4 (code review, BAJO — reloj de pared sin cota superior en
+ * `adquirirLease`): corre el UPSERT REAL de `construirAdquirirLease` contra SQLite de verdad
+ * (`node:sqlite`), no una simulación en JS del predicado — el `ON CONFLICT ... DO UPDATE ...
+ * WHERE` con dos condiciones (`<=` y `>`) es sintaxis delicada, vale la pena probarla contra el
+ * motor real, no solo contra `outbox.test.ts` (que sí prueba la semántica con una tabla en
+ * memoria).
+ */
+describe('DDL real del lease (`sync_lease`) contra SQLite de verdad (Hallazgo 4, BAJO)', () => {
+  function crearTablaLease(db: DatabaseSync): void {
+    db.exec(DDL_OUTBOX); // incluye `CREATE TABLE IF NOT EXISTS sync_lease`
+  }
+
+  function adquirir(db: DatabaseSync, token: string, ahoraMs: number, ttlMs: number): boolean {
+    const { sql, params } = construirAdquirirLease('drenaje-outbox', token, ahoraMs, ahoraMs + ttlMs);
+    db.prepare(sql).run(...params);
+    const fila = db.prepare('SELECT owner FROM sync_lease WHERE id = ?').get('drenaje-outbox') as
+      | { owner: string }
+      | undefined;
+    return fila?.owner === token;
+  }
+
+  it('un lease vigente (reloj estable) NO se libera de más — el UPSERT real respeta el `<=`', () => {
+    const db = new DatabaseSync(':memory:');
+    crearTablaLease(db);
+
+    expect(adquirir(db, 'contexto-vivo', 0, TTL_LEASE_DRENAJE_MS)).toBe(true);
+    // 5s después, reloj estable: sigue tomado.
+    expect(adquirir(db, 'otro-contexto', 5_000, TTL_LEASE_DRENAJE_MS)).toBe(false);
+    db.close();
+  });
+
+  it('salto de reloj hacia atrás mayor a la cota → el UPSERT real libera el lease "del futuro"', () => {
+    const db = new DatabaseSync(':memory:');
+    crearTablaLease(db);
+
+    // Reloj adelantado 10 minutos al adquirir.
+    const relojAdelantadoMs = 10 * 60_000;
+    expect(adquirir(db, 'contexto-con-reloj-adelantado', relojAdelantadoMs, TTL_LEASE_DRENAJE_MS)).toBe(
+      true,
+    );
+
+    // Salta hacia atrás a t=0 real: sin el fix, `WHERE expira_at <= ?` solo (sin la segunda
+    // condición) dejaría el lease "tomado" ~10 minutos enteros pese a que nadie lo tiene de
+    // verdad. Con la cota (`COTA_SANIDAD_LEASE_MS` = TTL + 60s = 120s), el UPSERT real lo
+    // libera igual.
+    expect(adquirir(db, 'contexto-nuevo', 0, TTL_LEASE_DRENAJE_MS)).toBe(true);
+    db.close();
+  });
+
+  it('un salto de reloj CHICO (dentro de la cota) sigue respetando el lease vigente', () => {
+    const db = new DatabaseSync(':memory:');
+    crearTablaLease(db);
+
+    // Reloj apenas adelantado (30s) al adquirir — `expira_at` = 30_000 + TTL (60s) = 90_000.
+    const relojLevementeAdelantadoMs = 30_000;
+    expect(
+      adquirir(db, 'contexto-vivo', relojLevementeAdelantadoMs, TTL_LEASE_DRENAJE_MS),
+    ).toBe(true);
+
+    // Reloj corregido a t=0: `expira_at` (90_000) sigue dentro de la cota de sanidad
+    // (0 + COTA_SANIDAD_LEASE_MS = 120_000) — un lease legítimo recién adquirido no debe
+    // liberarse de más solo porque el reloj se corrigió un poco.
+    expect(90_000).toBeLessThan(COTA_SANIDAD_LEASE_MS);
+    expect(adquirir(db, 'otro-contexto', 0, TTL_LEASE_DRENAJE_MS)).toBe(false);
     db.close();
   });
 });

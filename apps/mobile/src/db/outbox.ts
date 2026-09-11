@@ -707,13 +707,38 @@ export const PISO_ENTRE_INTENTOS_DRENAJE_MS = 10_000;
 export const TTL_LEASE_DRENAJE_MS = 60_000;
 
 /**
- * UPSERT atómico con guarda temporal: adquiere la fila `id` SOLO si no existe todavía o si su
- * `expira_at` ya pasó (`ahoraMs`) — soporta desde SQLite 3.35 (UPSERT con cláusula `WHERE` en
- * `DO UPDATE`, muy por debajo de lo que embebe `expo-sqlite`). `changes > 0` es la señal de
- * "adquirido": si la fila existe y su `expira_at` sigue en el futuro, la cláusula `WHERE` del
- * `DO UPDATE` no matchea y SQLite trata el statement entero como no-op (0 filas afectadas, sin
- * lanzar ningún error de constraint) — un solo `runAsync` resuelve "¿está libre? si sí,
- * tomala" sin ventana entre el chequeo y la toma, que es exactamente lo que dos contextos JS
+ * Hallazgo 4 (code review, BAJO — reloj de pared sin cota superior): `adquirirLease` compara
+ * `expira_at` contra `Date.now()` con reloj de PARED, sin ninguna cota — si el reloj del
+ * teléfono estaba adelantado y salta hacia atrás (corrección NTP, o el chofer lo ajusta a
+ * mano) en X ms, una fila escrita bajo el reloj VIEJO (adelantado) queda con `expira_at` hasta
+ * X ms en el futuro DEL RELOJ NUEVO — `adquirirLease` la ve "tomada" y falla todo ese tiempo,
+ * aunque nadie esté drenando de verdad y el dueño original ya haya terminado (o muerto) hace
+ * rato.
+ *
+ * Fix: tratar el lease como libre TAMBIÉN si `expira_at` está a más de esta cota en el futuro
+ * — ningún camino LEGÍTIMO de este lease (adquisición con `TTL_LEASE_DRENAJE_MS`, liberación
+ * con el piso fijo de `PISO_ENTRE_INTENTOS_DRENAJE_MS` o con el backoff exponencial de
+ * `drenaje-oportunista.ts`/`sync-outbox.ts`, que topea en 60 s en los dos) escribe, bajo un
+ * reloj ESTABLE, un `expira_at` más de `TTL_LEASE_DRENAJE_MS` (60 s) en el futuro. El doble de
+ * margen sobre ese peor caso (120 s en vez de 60 s) es a propósito: un lease legítimo recién
+ * adquirido nunca se acerca a esa cota, así que nunca se libera de más por error — solo un
+ * salto de reloj hacia atrás mayor a 60 s produce un `expira_at` que la cruza.
+ *
+ * Duplicado acá en vez de importado desde `drenaje-oportunista.ts`/`sync-outbox.ts` (que YA
+ * importan de `outbox.ts` — un import en sentido contrario crearía un ciclo).
+ */
+export const COTA_SANIDAD_LEASE_MS = TTL_LEASE_DRENAJE_MS + 60_000;
+
+/**
+ * UPSERT atómico con guarda temporal: adquiere la fila `id` SOLO si no existe todavía, si su
+ * `expira_at` ya pasó (`ahoraMs`), o si `expira_at` está tan lejos en el futuro que solo puede
+ * explicarse por un salto de reloj hacia atrás (Hallazgo 4, `COTA_SANIDAD_LEASE_MS`) — soporta
+ * desde SQLite 3.35 (UPSERT con cláusula `WHERE` en `DO UPDATE`, muy por debajo de lo que
+ * embebe `expo-sqlite`). `changes > 0` es la señal de "adquirido": si la fila existe y ninguna
+ * de las dos condiciones matchea, la cláusula `WHERE` del `DO UPDATE` no matchea y SQLite
+ * trata el statement entero como no-op (0 filas afectadas, sin lanzar ningún error de
+ * constraint) — un solo `runAsync` resuelve "¿está libre (o parece corrupta)? si sí, tomala"
+ * sin ventana entre el chequeo y la toma, que es exactamente lo que dos contextos JS
  * compitiendo por el mismo lease necesitan.
  *
  * `token` identifica a ESTE intento puntual (no al proceso ni al contexto) — ver
@@ -729,9 +754,9 @@ export function construirAdquirirLease(
     sql: `
       INSERT INTO sync_lease (id, owner, expira_at) VALUES (?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, expira_at = excluded.expira_at
-      WHERE sync_lease.expira_at <= ?
+      WHERE sync_lease.expira_at <= ? OR sync_lease.expira_at > ?
     `,
-    params: [id, token, expiraAtMs, ahoraMs],
+    params: [id, token, expiraAtMs, ahoraMs, ahoraMs + COTA_SANIDAD_LEASE_MS],
   };
 }
 
