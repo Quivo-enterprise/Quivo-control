@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Linking, Platform } from 'react-native';
+import { AppState, Linking, PermissionsAndroid, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Sentry from '@sentry/react-native';
 import BackgroundGeolocation, { type Location } from 'react-native-background-geolocation';
@@ -30,6 +30,18 @@ import {
   type AccionPermisoGps,
   type DecisionPermisoGps,
 } from '../../gps/permiso-ubicacion';
+import {
+  debeSolicitarPermisoActividad,
+  estadoPermisoActividadDesde,
+  type EstadoPermisoActividad,
+} from '../../gps/permiso-actividad';
+import {
+  crearManejadorForegroundActivo,
+  crearManejadorReafirmarMovimiento,
+  iniciarSeguimientoContinuo,
+  reafirmarMovimiento,
+  restaurarComportamientoNormal,
+} from '../../gps/seguimiento-continuo';
 
 /** `Platform.OS` reducido a las dos plataformas que `permiso-ubicacion.ts` distingue — ver el
  * comentario de cabecera de ese módulo para el porqué de la semántica de `status` distinta
@@ -120,6 +132,11 @@ export function useGpsOperativo(
   // acción concreta (ver `permiso-ubicacion.ts`). Mezclarlos en un solo string le quitaba al
   // conductor la posibilidad de saber qué botón tocar.
   const [permisoGps, setPermisoGps] = useState<DecisionPermisoGps>(PERMISO_GPS_INICIAL);
+  // QUI-P0: estado del permiso ACTIVITY_RECOGNITION, expuesto para el preflight de la Entrega
+  // 26 (`gps/permiso-actividad.ts`) — esta entrega NO construye esa UI, solo deja el dato
+  // disponible. Fail-open: a diferencia de `permisoGps`, este NUNCA gatea "Iniciar recorrido".
+  const [estadoPermisoActividad, setEstadoPermisoActividad] =
+    useState<EstadoPermisoActividad>('no_solicitado');
   const [ultimaDeteccion, setUltimaDeteccion] = useState<DeteccionPuntoControl | null>(null);
   const [posicionActual, setPosicionActual] = useState<
     { lat: number; lng: number; speedKmh: number | null } | null
@@ -139,6 +156,17 @@ export function useGpsOperativo(
   // `subscription` de `onLocation` porque son dos suscripciones independientes al SDK, cada
   // una con su propio ciclo de vida de limpieza.
   const heartbeatSubscription = useRef<{ remove: () => void } | null>(null);
+  // QUI-P0: tercera suscripción al SDK, defensa en profundidad contra volver a estacionario en
+  // medio de un recorrido (ver `crearManejadorReafirmarMovimiento`, `gps/seguimiento-continuo.ts`).
+  const motionChangeSubscription = useRef<{ remove: () => void } | null>(null);
+  // QUI-P0: espejo en ref de `tracking` — los handlers de `onMotionChange`/`AppState` que se
+  // suscriben UNA sola vez (`suscribirUbicaciones`, más abajo) necesitan leer "¿hay un
+  // recorrido en curso AHORA?" en el momento en que el evento nativo dispara, no el valor de
+  // `tracking` capturado en el closure de cuando se instaló la suscripción (que quedaría
+  // siempre en `false`, el valor inicial). Se actualiza en los tres lugares donde cambia
+  // `tracking` (reenganche, `iniciar()`, `detener()`).
+  const trackingRef = useRef(false);
+  const estaEnRecorrido = useCallback(() => trackingRef.current, []);
   // QUI-338: si esta app YA invocó `requestPermission()` alguna vez en este dispositivo,
   // persistido en `AsyncStorage` bajo `CLAVE_PERMISO_GPS_SOLICITADO` (ver ese comentario para
   // el porqué). Vive en un ref, no en `useState`: se lee de forma síncrona dentro de
@@ -302,7 +330,20 @@ export function useGpsOperativo(
         await intentarDrenarOportunista(obtenerAccessTokenRef.current);
       })();
     });
-  }, []);
+
+    // QUI-P0: defensa EN PROFUNDIDAD contra volver a estacionario en medio de un recorrido —
+    // el mecanismo PRIMARIO es `disableStopDetection: true` (default estático en
+    // `gpsSpikeConfig.activity` + reafirmado en runtime por `reafirmarMovimiento`), este
+    // handler es el respaldo si algún fabricante (el reporte de campo es de un Samsung Galaxy
+    // A71, conocido por gestión de batería agresiva) empuja el plugin a estacionario pese a la
+    // config. `estaEnRecorrido` lee `trackingRef` (no `tracking` del closure) para no quedar
+    // atado al valor de cuando se instaló esta suscripción. Ver
+    // `crearManejadorReafirmarMovimiento` (`gps/seguimiento-continuo.ts`) para el detalle.
+    motionChangeSubscription.current?.remove();
+    motionChangeSubscription.current = BackgroundGeolocation.onMotionChange(
+      crearManejadorReafirmarMovimiento(BackgroundGeolocation, estaEnRecorrido),
+    );
+  }, [estaEnRecorrido]);
 
   /**
    * C1 (hallazgo de revisión CRÍTICO): siembra `puntosControlDetectados.current` desde el
@@ -387,6 +428,20 @@ export function useGpsOperativo(
         if (!montado || !estado.enabled) return;
         suscribirUbicaciones();
         setTracking(true);
+        trackingRef.current = true;
+        // QUI-P0: SEGUNDO punto de entrada de `reafirmarMovimiento` (ver su docblock,
+        // `gps/seguimiento-continuo.ts`) — este camino de re-enganche NUNCA pasa por
+        // `iniciar()` (el plugin ya está `enabled`, el botón va directo a "Finalizar
+        // recorrido"), así que sin esta llamada el freeze del CTO ("mato la app para que se
+        // actualice, la reabro, la flecha sigue sin moverse") reaparecería exactamente acá.
+        // No se llama `iniciarSeguimientoContinuo` (que además hace `start()`): el plugin YA
+        // está arrancado, volver a `start()` sería redundante e innecesario. Best-effort — un
+        // fallo acá no debe impedir que el re-enganche deje la app usable.
+        void reafirmarMovimiento(BackgroundGeolocation).catch((error) => {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'reenganche-reafirmar-movimiento' },
+          });
+        });
       } catch {
         // Sin estado del plugin no hay nada que re-enganchar: "Iniciar" sigue disponible.
       }
@@ -398,6 +453,8 @@ export function useGpsOperativo(
       subscription.current = null;
       heartbeatSubscription.current?.remove();
       heartbeatSubscription.current = null;
+      motionChangeSubscription.current?.remove();
+      motionChangeSubscription.current = null;
     };
   }, [sesionId, suscribirUbicaciones, sembrarCumplimientos]);
 
@@ -444,6 +501,15 @@ export function useGpsOperativo(
         if (montado) void verificarPermisoGpsPasivo();
       }
     })();
+    // QUI-P0 (brief punto 4): con un recorrido en curso, volver a primer plano no debe dejar
+    // el marcador con un fix viejo hasta el próximo evento natural del SDK — pide una posición
+    // fresca de inmediato. `crearManejadorForegroundActivo` ya filtra por `estadoApp ===
+    // 'active' && estaEnRecorrido()` internamente (ver `gps/seguimiento-continuo.ts`), así que
+    // es seguro invocarlo en CADA cambio de `AppState`, no solo cuando hay recorrido.
+    const manejadorForegroundActivo = crearManejadorForegroundActivo(
+      BackgroundGeolocation,
+      estaEnRecorrido,
+    );
     // Repetir el chequeo cuando la app vuelve a primer plano: es el único momento en que el
     // conductor puede haber cambiado el permiso o prendido el GPS del sistema (fue a Ajustes
     // desde el propio flujo de esta pantalla, o desde la notificación de Android) sin que la
@@ -451,12 +517,13 @@ export function useGpsOperativo(
     // viejo hasta el próximo toque en "Iniciar recorrido".
     const subscripcionAppState = AppState.addEventListener('change', (estadoApp) => {
       if (estadoApp === 'active') void verificarPermisoGpsPasivo();
+      manejadorForegroundActivo(estadoApp);
     });
     return () => {
       montado = false;
       subscripcionAppState.remove();
     };
-  }, [verificarPermisoGpsPasivo]);
+  }, [verificarPermisoGpsPasivo, estaEnRecorrido]);
 
   /**
    * QUI-338: lleva al conductor a la pantalla del sistema que corresponde según `accion`
@@ -581,6 +648,37 @@ export function useGpsOperativo(
       return;
     }
 
+    // QUI-P0: permiso ACTIVITY_RECOGNITION, fail-open — se pide ACÁ (foreground, justo antes
+    // de arrancar el tracking) para maximizar la chance de que esté concedido cuando el SDK
+    // evalúe el paso a movimiento, pero NUNCA bloquea "Iniciar recorrido": a diferencia de
+    // `permisoGps` de arriba, un resultado denegado (o un error al pedirlo) no cambia nada de
+    // lo que sigue — `changePace(true)` + `disableStopDetection: true`
+    // (`gps/seguimiento-continuo.ts`) no dependen de este permiso, solo lo hacen más
+    // responsivo cuando está concedido. Solo Android 10+ (`debeSolicitarPermisoActividad`,
+    // `gps/permiso-actividad.ts`); `Platform.Version` es `number` en Android y `string` en
+    // iOS — el `0` de fallback nunca se evalúa de verdad porque la función ya cortocircuita
+    // en `plataforma !== 'android'` antes de mirar `sdkInt`.
+    if (
+      debeSolicitarPermisoActividad(
+        PLATAFORMA_GPS,
+        typeof Platform.Version === 'number' ? Platform.Version : 0,
+      )
+    ) {
+      try {
+        const resultadoActividad = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION,
+        );
+        setEstadoPermisoActividad(estadoPermisoActividadDesde(resultadoActividad));
+      } catch (error) {
+        // Fail-open real: hasta un fallo del propio pedido (no una denegación del conductor,
+        // sino un error del módulo) tampoco bloquea nada — se reporta para diagnóstico y el
+        // flujo de abajo sigue exactamente igual.
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'pedir-permiso-actividad' },
+        });
+      }
+    }
+
     // ORDEN (B1, hallazgo de revisión — corrige el reordenamiento del plan §2.4.2 sin perder
     // lo que ese reordenamiento buscaba). Las dos propiedades que este bloque tiene que
     // sostener a la vez son:
@@ -605,17 +703,28 @@ export function useGpsOperativo(
 
     try {
       await BackgroundGeolocation.ready(gpsSpikeConfig);
-      await BackgroundGeolocation.start();
+      // QUI-P0: reemplaza el `BackgroundGeolocation.start()` suelto de antes de este fix.
+      // `iniciarSeguimientoContinuo` (`gps/seguimiento-continuo.ts`) hace `start()` y INMEDIATAMENTE
+      // después fuerza `changePace(true)` + `disableStopDetection: true` — sin guarda de "solo
+      // la primera vez", así que corre igual en un segundo/tercer recorrido tras
+      // `finalizar()` + `iniciar()` (el reporte de campo del CTO: "vuelvo a iniciar y hace lo
+      // mismo que la primera vez"). Antes de este fix, el SDK arrancaba en modo ESTACIONARIO y
+      // nada lo sacaba de ahí — dependía por completo del permiso `ACTIVITY_RECOGNITION` (ver
+      // arriba) y, sin él, caía a la geocerca estacionaria de 200-500 m: la causa raíz de que
+      // la flecha no se moviera.
+      await iniciarSeguimientoContinuo(BackgroundGeolocation);
     } catch (error) {
       // Plan §2.4.4: mensaje distinto del de persistencia (bloque de abajo) — acá el módulo
       // NATIVO no pudo arrancar pese a que el permiso/servicio ya estaban en orden (licencia
       // del plugin, Google Play Services): no hay nada grabándose todavía, a diferencia del
-      // catch siguiente. Las suscripciones que acabamos de instalar (ubicación y heartbeat)
-      // no tienen nada que escuchar: se remueven.
+      // catch siguiente. Las suscripciones que acabamos de instalar (ubicación, heartbeat y
+      // motion-change) no tienen nada que escuchar: se remueven.
       subscription.current?.remove();
       subscription.current = null;
       heartbeatSubscription.current?.remove();
       heartbeatSubscription.current = null;
+      motionChangeSubscription.current?.remove();
+      motionChangeSubscription.current = null;
       Sentry.captureException(error, {
         tags: { contexto: 'gps-foreground', paso: 'iniciar-nativo' },
       });
@@ -650,6 +759,7 @@ export function useGpsOperativo(
       // Plan §2.4.3: `tracking` recién se marca `true` ACÁ, después de que la suscripción
       // quedó conectada Y el marcador de inicio encoló con éxito.
       setTracking(true);
+      trackingRef.current = true;
     } catch (error) {
       // Plan §2.4.4: el GPS nativo (bloque de arriba) ya está corriendo y grabando en su
       // propia base — este catch es SOLO el pipeline local app→outbox el que falló. No se
@@ -683,7 +793,22 @@ export function useGpsOperativo(
       subscription.current = null;
       heartbeatSubscription.current?.remove();
       heartbeatSubscription.current = null;
+      motionChangeSubscription.current?.remove();
+      motionChangeSubscription.current = null;
       setTracking(false);
+      trackingRef.current = false;
+      // QUI-P0: reverso de `reafirmarMovimiento` — restaura `disableStopDetection: false` para
+      // que un futuro re-enganche o inspección de estado no encuentre la política "nunca
+      // apagar el GPS" activa fuera de un recorrido real (ver docblock en
+      // `gps/seguimiento-continuo.ts`). Best-effort y SIN `await`: `BackgroundGeolocation.stop()`
+      // de arriba ya cortó el tracking nativo — un fallo acá es solo de config persistida, no
+      // debe demorar ni hacer fallar el cierre del recorrido (outbox, veredicto) que sigue
+      // abajo.
+      void restaurarComportamientoNormal(BackgroundGeolocation).catch((error) => {
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'restaurar-comportamiento-normal' },
+        });
+      });
 
       const db = await abrirOutbox();
       await encolarEvento(db, { deviceId, tipo: 'fin_recorrido', payload: { sesionId } });
@@ -822,6 +947,10 @@ export function useGpsOperativo(
     // puede arrancar (ver `permisoGps.bloqueante`).
     permisoGps,
     abrirAjustesPermisoGps,
+    // QUI-P0: estado del permiso ACTIVITY_RECOGNITION — fail-open, nunca gatea nada acá. Solo
+    // para el preflight de la Entrega 26 (QUI-338 continuación); esta entrega no construye esa
+    // UI.
+    estadoPermisoActividad,
     ultimaDeteccion,
     posicionActual,
     iniciar,
