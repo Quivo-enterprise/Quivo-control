@@ -67,6 +67,94 @@ const OUTBOX_DB_PATH = 'quivo-outbox.db';
 let outboxPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let outboxAbiertoAlgunaVez = false;
 
+/**
+ * DDL de creación (tablas + índice) — todo con `IF NOT EXISTS`, que SÍ es sintaxis SQLite
+ * válida para `CREATE TABLE`/`CREATE INDEX` (a diferencia de `ALTER TABLE ... ADD COLUMN IF
+ * NOT EXISTS`, que NO existe en SQLite — ver `MIGRACIONES_COLUMNAS_OUTBOX` más abajo para el
+ * porqué esa migración va aparte). Constante pura, sin ningún `await` de por medio, para
+ * poder correrla contra SQLite real (`node:sqlite`) sin pasar por `expo-sqlite` — ver
+ * `outbox-ddl.test.ts`.
+ */
+export const DDL_OUTBOX = `
+  CREATE TABLE IF NOT EXISTS outbox (
+    event_id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'pendiente'
+  );
+  CREATE INDEX IF NOT EXISTS outbox_estado_idx ON outbox(estado);
+  CREATE TABLE IF NOT EXISTS sync_lease (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    expira_at INTEGER NOT NULL
+  );
+`;
+
+interface MigracionColumna {
+  tabla: string;
+  columna: string;
+  tipo: string;
+}
+
+/**
+ * 🔴 Hallazgo 1 CRÍTICO (code review): esta migración vivía como
+ * `ALTER TABLE outbox ADD COLUMN IF NOT EXISTS enviado_at TEXT;` dentro del `execAsync` de
+ * `abrirOutboxNueva` — pero `ADD COLUMN IF NOT EXISTS` es sintaxis de POSTGRES, no de SQLite.
+ * Contra SQLite 3.45.1 (la que embebe `expo-sqlite`) tira `near "EXISTS": syntax error` — y
+ * como estaba en el MISMO `execAsync` que crea las tablas base, CADA `abrirOutbox()` fallaba
+ * entero: `registrarPuntoGps` no llegaba a escribir un solo punto GPS, en foreground ni en
+ * headless, en ninguna instalación (nueva o vieja). Sacar el `IF NOT EXISTS` sin más tampoco
+ * alcanza: la segunda apertura del proceso (o cualquier instalación que ya tuviera la
+ * columna) rompería con `duplicate column name: enviado_at`.
+ *
+ * El fix real: `agregarColumnasFaltantes` (abajo) consulta `PRAGMA table_info` y SOLO corre el
+ * `ALTER TABLE` — sin `IF NOT EXISTS`, que ahí tampoco existe — cuando la columna todavía no
+ * está. Lista (no un solo campo) para que una migración de columna futura se agregue acá sin
+ * tocar la lógica de aplicación.
+ */
+export const MIGRACIONES_COLUMNAS_OUTBOX: readonly MigracionColumna[] = [
+  // Momento en que una fila pasó a 'enviado' -- NO es lo mismo que ts (la hora del FIX
+  // GPS/evento, que puede ser mucho más vieja que el intento de envío que la marcó).
+  // Necesaria para poder distinguir "recién se marcó enviado, el POST todavía puede estar en
+  // vuelo" de "quedó huérfana" -- ver recuperarEnviadosHuerfanos más abajo.
+  { tabla: 'outbox', columna: 'enviado_at', tipo: 'TEXT' },
+];
+
+/** `ALTER TABLE` plano (sin `IF NOT EXISTS`, que SQLite no soporta ahí) — pura, testeable sin
+ * `expo-sqlite`. El nombre de tabla/columna sale de `MIGRACIONES_COLUMNAS_OUTBOX` (constante
+ * interna, nunca de input de usuario), así que no hay riesgo de inyección al interpolarlo. */
+export function construirAgregarColumna(tabla: string, columna: string, tipo: string): string {
+  return `ALTER TABLE ${tabla} ADD COLUMN ${columna} ${tipo}`;
+}
+
+/** ¿Falta esta columna? Compara contra los nombres que devuelve `PRAGMA table_info(tabla)` —
+ * pura, no toca la base. */
+export function faltaColumna(columnasExistentes: string[], columna: string): boolean {
+  return !columnasExistentes.includes(columna);
+}
+
+/**
+ * Aplica `MIGRACIONES_COLUMNAS_OUTBOX` una por una: por cada columna, lee `PRAGMA
+ * table_info(tabla)` y corre el `ALTER TABLE` SOLO si `faltaColumna` dice que no está — así
+ * es segura de llamar en CADA apertura del proceso (`abrirOutbox()` puede correr más de una
+ * vez por instalación, ver el comentario de `outboxPromise`) sin repetir un `ALTER TABLE`
+ * sobre una columna que ya existe (`duplicate column name`).
+ */
+async function agregarColumnasFaltantes(db: SQLite.SQLiteDatabase): Promise<void> {
+  for (const migracion of MIGRACIONES_COLUMNAS_OUTBOX) {
+    const columnas = await db.getAllAsync<{ name: string }>(
+      `PRAGMA table_info(${migracion.tabla})`,
+    );
+    if (faltaColumna(columnas.map((columna) => columna.name), migracion.columna)) {
+      await db.execAsync(
+        construirAgregarColumna(migracion.tabla, migracion.columna, migracion.tipo),
+      );
+    }
+  }
+}
+
 async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLiteDatabase> {
   // Breadcrumb en CADA apertura (no solo la primera): un "apertura #847 de quivo-outbox.db"
   // habría gritado la causa raíz (frecuencia de apertura) desde el primer minuto del piloto.
@@ -85,31 +173,11 @@ async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLit
   );
   // DDL dentro de la promesa cacheada: corre una sola vez por proceso, nunca en el path de
   // escritura caliente (`encolarEvento`, hasta cientos de llamadas por jornada).
-  await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS outbox (
-      event_id TEXT PRIMARY KEY,
-      device_id TEXT NOT NULL,
-      ts TEXT NOT NULL,
-      tipo TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      estado TEXT NOT NULL DEFAULT 'pendiente'
-    );
-    CREATE INDEX IF NOT EXISTS outbox_estado_idx ON outbox(estado);
-    CREATE TABLE IF NOT EXISTS sync_lease (
-      id TEXT PRIMARY KEY,
-      owner TEXT NOT NULL,
-      expira_at INTEGER NOT NULL
-    );
-    -- Hallazgo 3 (code review, MEDIO): momento en que una fila pasó a 'enviado' -- NO es lo
-    -- mismo que ts (la hora del FIX GPS/evento, que puede ser mucho más vieja que el intento
-    -- de envío que la marcó). Necesaria para poder distinguir "recién se marcó enviado, el
-    -- POST todavía puede estar en vuelo" de "quedó huérfana" -- ver recuperarEnviadosHuerfanos
-    -- más abajo. ADD COLUMN IF NOT EXISTS (soportado desde SQLite 3.35, la misma versión
-    -- mínima que ya exige el UPSERT con WHERE de construirAdquirirLease) para que
-    -- instalaciones existentes (creadas por una versión anterior de la app, sin esta columna)
-    -- la reciban sin migración aparte.
-    ALTER TABLE outbox ADD COLUMN IF NOT EXISTS enviado_at TEXT;
-  `);
+  await db.execAsync(DDL_OUTBOX);
+  // Migraciones de columna APARTE del `execAsync` de arriba (Hallazgo 1, ver el docblock de
+  // `MIGRACIONES_COLUMNAS_OUTBOX`): necesitan leer `PRAGMA table_info` antes de decidir si
+  // corren, algo que un solo `execAsync` de sentencias fijas no puede condicionar.
+  await agregarColumnasFaltantes(db);
   return db;
 }
 
