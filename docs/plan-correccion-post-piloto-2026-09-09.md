@@ -903,35 +903,96 @@ aproxima con pull y lo deja preparado.
 | 2026-09-09 20:54 | `948f…` | 10 | **16:54 en Bolivia: arranque de los recorridos del piloto**, con credenciales cruzadas y cambio de APK en curso |
 | 2026-09-10 14:44 | `680a…` | 10 | Reprueba pedida por el CTO. **48 s después de abrir la app**, en primer plano, online, Galaxy A71, Android 13 |
 
-**Patrón:** siempre al **empezar** a usar la app, nunca a mitad de recorrido. La Entrega 3 (circuit
-breaker) acota los reintentos, pero **no explica por qué el servidor rechaza un refresh a los 48 s**.
+**Patrón:** siempre al **empezar** a usar la app, nunca a mitad de recorrido.
 
-**Hipótesis, en orden de probabilidad:**
-- **(a) Sesión desplazada.** `auth-movil.service.ts` cierra la sesión viva de la placa en cada login
-  (un vehículo admite una sola `SesionOperativa`). Si otro teléfono entra con la misma placa
-  (credenciales cruzadas como en el piloto, reinstalación o cambio de APK), el refresh del primero
-  se rechaza **con el mismo 401 genérico que un token vencido**, y la app lo trata como transitorio.
-- **(b) Carrera de rotación del refresh token.** Dos refresh concurrentes (arranque de la app más
-  el primer sync): el segundo usa un token que el primero ya rotó.
+**Diagnóstico confirmado con datos (2026-09-10).** Logs de Cloud Run de `/v1/mobile/auth/*` (09-09
+19:00Z → 10-09 14:45Z) y lectura de `sesiones_operativas` con un job temporal de solo lectura
+(`BEGIN READ ONLY`, borrado al terminar; hizo falta `app.rol='admin_quivo'` porque la tabla tiene RLS
+forzado):
 
-**Paso 1 — diagnóstico antes de codear.** Logs de Cloud Run de las llamadas de refresh y login móvil
-a las 20:54Z del 09-09 y a las 14:44Z del 10-09, más el historial de `sesiones_operativas` de esos
-vehículos: ¿hubo un login de la misma placa desde otro `deviceId` segundos antes? Requiere que el CTO
-reautentique `gcloud` (`gcloud auth login`). **No implementar el fix sin confirmar la causa.**
+- **Ráfagas de refresh 401:** 4 ráfagas de 5 a 9 intentos en segundos, con hasta 3 en el mismo segundo
+  (el cliente refresca en paralelo, sin *single-flight*), siempre seguidas de `logout` 204 y un login 200
+  minutos después.
+- **6 sesiones fantasma `verif-final-0…5`**, abiertas entre las 18:41 y las 18:43Z del 09-09, **una por
+  placa `9001TST`–`9006TST`**: la verificación final del script de siembra loguea y nunca cierra. Son los
+  `verif-fi` del combo del panel.
+- **7 cierres por nuevo login:** 5 son un teléfono real reemplazando a un fantasma; 1 es el mismo teléfono
+  (`a0d2c635`) pasando de `9005TST` a `9004TST` (credenciales cruzadas del chat); 1 entre teléfonos reales
+  (`9001TST`, 21:10Z) coincide con la reinstalación del APK nuevo, que genera `deviceId` nuevo.
+- **Las ráfagas ocurren *antes* de los logins que desplazan.** El desplazamiento fue consecuencia del
+  re-login, no la causa del 401.
+- **Sesiones zombi:** `9004TST` (desde 09-09 19:58Z) y `9001TST` (desde 21:10Z) seguían `activa`.
+- **Descartado:** la "rotación perdida". El refresh exitoso de las 20:30Z era de otro teléfono.
 
-**Paso 2 — fix según la causa confirmada:**
-- **Si es (a):** la API devuelve un error distinguible (`SESION_DESPLAZADA`, con placa y hora) en vez
-  del genérico, y guarda el motivo de cierre de la sesión (p. ej. `cerradaPor: 'nuevo_login'`). La app
-  lo trata como falla de **CAPTURA**: sin reintentos y con un mensaje en lenguaje de chofer, del estilo
-  *"Otra persona inició sesión con este vehículo. Si sos vos, volvé a ingresar."*. Junto con la
-  Entrega 24 (confirmar "¿Sos Betty?" al loguear) cierra la clase de error del piloto.
-- **Si es (b):** refresh *single-flight* en el cliente (una sola promesa de refresh compartida) y, en
-  el servidor, tolerancia de reuso del refresh anterior durante una ventana corta.
+**Causa:** el teléfono arranca con un refresh token de una sesión que **ya no está vigente** (cerrada, o de
+una instalación anterior), el servidor responde con el mismo 401 genérico que a un token vencido, y el
+cliente **reintenta en ráfaga** en vez de ir al login.
 
-**Verificación:** test de API: dos logins de la misma placa desde dos `deviceId` → el refresh del
-primero devuelve `SESION_DESPLAZADA`, no el 401 genérico. Test de cliente del *single-flight* si
-aplica (b). Reproducción manual con dos teléfonos.
-**Rollback:** revert. El código de error nuevo es compatible hacia atrás: un APK viejo lo ve como 401.
+**Fix:**
+1. **API:** un refresh con sesión cerrada o token desconocido devuelve un código distinguible
+   (`SESION_NO_VIGENTE`, con el motivo si se conoce: nuevo login, logout, inactividad), compatible
+   hacia atrás como 401.
+2. **App:** ante ese código, falla de **CAPTURA**: un solo intento, borrar los tokens locales y llevar al
+   login con un mensaje en lenguaje de chofer. El *single-flight* del refresh ya está en la rama de
+   drenado (`365e14f`).
+3. **Siembra:** la verificación final de `scripts/sembrar-piloto-produccion.ts` cierra sus sesiones; el
+   guard de `deviceId` de la Entrega 11 bloquea `verif-final-*` en producción.
+4. **Zombis:** Entrega 19, más cierre manual de `9004TST` y `9001TST` antes del próximo piloto (0b).
+
+**Verificación:** test de API (refresh con sesión cerrada → código distinguible); test de cliente
+(rechazo definitivo → un intento, tokens borrados, navegación a login); reproducción manual con dos
+teléfonos y la misma placa: al volver a abrir el primero, mensaje claro y sin ráfaga.
+**Rollback:** revert. El código nuevo es compatible hacia atrás: un APK viejo lo ve como 401.
+
+---
+
+### Entrega 30 — OSRM en producción: la ruta "ir a un punto" sale en línea recta
+**P1 · Ámbito: infra + móvil · ~4 h · Sin dependencias · Evidencia: logs de Cloud Run (2026-09-09)**
+
+- Logs de producción: `RuteoService: No se pudo calcular ruta con OSRM (http://localhost:5001): fetch
+  failed`, repetido durante el piloto.
+- `quivo-api` en producción tiene 9 variables de entorno y **ninguna `OSRM_URL`**, y no existe un servicio
+  OSRM (solo `quivo-api` y `quivo-web`). `RuteoService` (`apps/api/src/modules/tracking/ruteo.service.ts`)
+  cae a `localhost:5001`, falla y el mapa dibuja **una línea recta**.
+- Único consumidor: `GET /v1/mobile/ruta-a-punto`, que usa la pantalla de operación de la app.
+- **Causa probable del síntoma 10** ("la ruta en naranja sobre las casas, 2 segundos").
+
+**Opciones (decisión del CTO):** (a) desplegar OSRM (Cloud Run o VM con el extracto de Bolivia, ya existe
+`scripts/setup-osrm.sh`) y setear `OSRM_URL` en el deploy; (b) proveedor de ruteo externo; (c) mientras
+tanto, **no dibujar la línea recta de fallback**, que engaña, y mostrar solo la ruta asignada.
+**Recomendación:** (c) ya y (a) antes de escalar la flota.
+**Verificación:** sin el warning en los logs; `ruta-a-punto` devuelve geometría por calles.
+
+---
+
+### Entrega 31 — La posición del conductor tiene que moverse siempre, como Google Maps
+**P0 · Ámbito: móvil · ~6 h · 31a depende de: 2 (apilada sobre la rama de drenado) · 31b va en la rama
+del mapa offline · Evidencia: piloto, Sentry, exploración de código y prueba del CTO en transporte público**
+
+**Síntoma:** al iniciar el recorrido, el marcador del conductor no se mueve; cerrar y reabrir la app da un
+salto de posición y vuelve a quedar fijo.
+
+**Causa (exploración con file:line):**
+1. **El SDK arranca en modo estacionario y no sale:** `iniciar()` en `use-gps-operativo.ts` solo llama
+   `ready()` + `start()`; no hay `changePace(true)` en el repo ni `isMoving` en la config.
+2. **`ACTIVITY_RECOGNITION` no está declarado** en `apps/mobile/app.config.ts`: en Android 10+ nunca puede
+   concederse (Sentry: `not_granted`), y el SDK cae a la geocerca estacionaria de 200 a 500 m.
+3. **La única posición que corre es un `getCurrentPosition` suelto al montar la pantalla.**
+4. El HTML del WebView del mapa **se reconstruye cada vez que cambia el próximo punto de control**, y
+   recarga Leaflet completo en cada paso.
+
+El mapa en sí está bien: recibe `position` por `postMessage`, mueve el marcador y sigue con la cámara.
+
+**31a (GPS):** declarar y pedir `ACTIVITY_RECOGNITION` en runtime (fail-open); forzar el estado de
+movimiento al iniciar y pedir una posición inmediata; **no volver a estacionario durante un recorrido
+activo**; posición inmediata al volver a primer plano. **Tradeoff aceptado:** más consumo de batería
+durante el recorrido, igual que Google Maps navegando.
+**31b (mapa):** el próximo punto de control viaja por `postMessage`; el HTML queda estable.
+
+**Verificación:** tests de orden (`start()` antes de forzar movimiento), de config y de permiso declarado;
+en un vehículo en movimiento, el marcador avanza de forma continua y la cámara lo sigue desde el primer
+minuto; `adb shell dumpsys package com.quivotech.conductor | grep -i activity_recognition` muestra el
+permiso declarado y concedido.
 
 ---
 
@@ -1062,7 +1123,9 @@ sesión — si sale 13 sin 14, el mapa muestra N vehículos indistinguibles de l
 | **7** | **Radios configurables** | `packages/shared` para P0; mover al paquete del día en P1 (cambiar sin APK nuevo) | Entrega 6 |
 | **8** | **Push (FCM) para la rotación** | Pull oportunista ahora (Entrega 27); FCM en P1, apoyado en el `expo-notifications` que agrega la Entrega 7 | No existe infra de push hoy: ni FCM ni `expo-notifications` en `apps/mobile/package.json` |
 | **9** | **Ventana de precarga** | 7 días de asignaciones próximas | Cubre fin de semana y feriados sin inflar SQLite |
-| **10** | **Sesión desplazada** | Confirmar la causa con los logs del servidor antes de codear; si es desplazamiento por otro login, error distinguible y tratarlo como falla de captura sin reintentos | Entrega 28. Los 3 eventos de Sentry son `refresh-agotado` al arrancar la app |
+| **10** | **Rechazo de refresh (`refresh-agotado`)** | Código distinguible para sesión no vigente; el cliente corta sin ráfaga, borra los tokens y va al login; la siembra cierra sus sesiones de verificación | Entrega 28. Logs + `sesiones_operativas`: las ráfagas pasan antes de los re-logins; el desplazamiento entre choferes no fue la causa |
+| **11** | **OSRM en producción** | No dibujar la línea recta de fallback ya; desplegar OSRM antes de escalar la flota | Entrega 30. Sin `OSRM_URL` ni servicio OSRM en producción; causa probable del síntoma 10 |
+| **12** | **Seguimiento continuo vs batería** | Seguimiento continuo durante el recorrido activo (sin volver a estacionario), como Google Maps; al finalizar vuelve el modo normal | Entrega 31. Pedido explícito del CTO; con el conductor en un vehículo con cargador el costo es aceptable |
 
 ---
 
