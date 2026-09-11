@@ -21,12 +21,11 @@ import {
 } from '../../gps/battery-gap-monitor';
 import {
   claveCumplimiento,
-  confirmarVisitasVencidas,
   UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
   type DeteccionPuntoControl,
   type EstadoPuntoControl,
 } from '../../gps/geofence';
-import { aplicarConfirmacionesForzadas, registrarPuntoGps } from '../../gps/headless-task';
+import { confirmarVisitasVencidasEnCola, registrarPuntoGps } from '../../gps/headless-task';
 import { clavesCumplimientoDesdePayloads, combinarConVisitasPendientes } from '../../gps/location-task';
 import {
   asegurarPermisoNotificaciones,
@@ -205,7 +204,7 @@ export function useGpsOperativo(
         const {
           deteccion,
           deteccionAproximacion: nuevaAproximacion,
-          puntosRearmados,
+          puntosRearmadosVoz,
         } = await registrarPuntoGps(
           db,
           location,
@@ -215,12 +214,13 @@ export function useGpsOperativo(
           // el Map en el medio. Ver `ContenedorEstadosPuntosControl` (`gps/headless-task.ts`).
           puntosControlDetectados,
         );
-        // FIX POST-REVISIÓN (bug 4): libera el dedupe de voz de aproximación para los puntos
-        // que este tick re-armó de verdad — ver `limpiarAproximacionesAnunciadas` y el
-        // comentario de `puntosRearmados` en `gps/geofence.ts`. Incondicional (no gatea en
-        // `settings.navegacionVoz`): limpiar el Set nunca hace daño si la voz está apagada (el
-        // Set solo tiene entradas de anuncios que SÍ se emitieron).
-        if (puntosRearmados.length > 0) limpiarAproximacionesAnunciadas(puntosRearmados);
+        // FIX POST-REVISIÓN (bug 4, ajustado por G1): libera el dedupe de voz de aproximación
+        // para los puntos cuya histéresis PROPIA de voz re-armó de verdad este tick — ver
+        // `limpiarAproximacionesAnunciadas` y el comentario largo de `puntosRearmadosVoz` en
+        // `gps/geofence.ts` (independiente de la histéresis de DETECCIÓN). Incondicional (no
+        // gatea en `settings.navegacionVoz`): limpiar el Set nunca hace daño si la voz está
+        // apagada (el Set solo tiene entradas de anuncios que SÍ se emitieron).
+        if (puntosRearmadosVoz.length > 0) limpiarAproximacionesAnunciadas(puntosRearmadosVoz);
         if (deteccion) setUltimaDeteccion(deteccion);
         // ENTREGA 6/7: se actualiza en CADA tick con puntos de control (incluso a `null` cuando
         // ninguno está en rango) — a diferencia de `ultimaDeteccion`, que solo cambia con una
@@ -276,19 +276,32 @@ export function useGpsOperativo(
    * evalúa si alguna visita ya lleva `>= UMBRAL_ANTIGUEDAD_CANDIDATO_MS` sin mejorar su mínimo
    * y, si es así, la confirma con el candidato YA observado (mismo camino transaccional que el
    * confirm normal — `aplicarConfirmacionesForzadas`, `gps/headless-task.ts`).
+   *
+   * FIX POST-REVISIÓN (R1, "evidencia duplicada por concurrencia"): la lectura del estado +
+   * `confirmarVisitasVencidas` + `aplicarConfirmacionesForzadas` corren ahora DENTRO de
+   * `confirmarVisitasVencidasEnCola` — la MISMA cola FIFO que serializa los fixes reales
+   * (`registrarPuntoGps`, `gps/headless-task.ts`). Antes corrían acá directo, por FUERA de la
+   * cola: un fix real concurrente (`onLocation`) podía leer la MISMA visita pendiente antes de
+   * que este heartbeat terminara de escribirla (o viceversa) y los dos terminaban emitiendo la
+   * MISMA pasada con `eventId` distintos — el servidor dedupea solo por `eventId` (QUI-241), así
+   * que el paso se contaba dos veces. `filtrarSesionActual: false` — a diferencia del heartbeat
+   * headless, `puntosControlDetectados` ya está scopeado a la sesión actual (`sembrarCumplimientos`
+   * lo reemplaza entero en cada cambio de `sesionId`), no hace falta filtrar de nuevo.
    */
   const onHeartbeat = useCallback(async () => {
     try {
       await semillaPromise.current;
       const db = await abrirOutbox();
-      const estados = puntosControlDetectados.current;
-      const { emitir, transiciones } = confirmarVisitasVencidas(
-        estados,
+      const emitir = await confirmarVisitasVencidasEnCola(
+        db,
+        deviceId,
+        sesionId,
+        puntosControlDetectados,
         Date.now(),
         UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+        false,
       );
       if (emitir.length === 0) return;
-      await aplicarConfirmacionesForzadas(db, deviceId, sesionId, emitir, transiciones, estados);
       // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
       // ve el punto tachado aunque haya sido el heartbeat, no un fix nuevo, quien lo cerró.
       setUltimaDeteccion(emitir[emitir.length - 1]?.deteccion ?? null);
@@ -737,22 +750,23 @@ export function useGpsOperativo(
       // `fin_recorrido` (no después) mantiene el orden causal del recorrido: el paso por el
       // último punto de control queda registrado como parte del recorrido que cerró, no
       // colgando después de que ya "terminó".
+      //
+      // FIX POST-REVISIÓN (R1, "evidencia duplicada por concurrencia"): corre DENTRO de
+      // `confirmarVisitasVencidasEnCola` (la MISMA cola FIFO que `registrarPuntoGps`) — antes
+      // corría directo, por fuera de la cola: un fix real que llegara justo antes de que el
+      // chofer apretara "Finalizar" podía solaparse con este cierre y terminar emitiendo la
+      // MISMA pasada dos veces con `eventId` distintos (el servidor solo dedupea por `eventId`,
+      // QUI-241). `filtrarSesionActual: false` — mismo motivo que `onHeartbeat`.
       try {
-        const { emitir, transiciones } = confirmarVisitasVencidas(
-          puntosControlDetectados.current,
+        await confirmarVisitasVencidasEnCola(
+          db,
+          deviceId,
+          sesionId,
+          puntosControlDetectados,
           Date.now(),
           0,
+          false,
         );
-        if (emitir.length > 0) {
-          await aplicarConfirmacionesForzadas(
-            db,
-            deviceId,
-            sesionId,
-            emitir,
-            transiciones,
-            puntosControlDetectados.current,
-          );
-        }
       } catch (error) {
         console.error('[QUIVO][gps] No se pudo descargar las visitas pendientes al finalizar', error);
         Sentry.captureException(error, {

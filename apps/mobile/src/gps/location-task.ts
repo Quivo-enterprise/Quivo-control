@@ -85,10 +85,17 @@ export interface ResultadoConstruirEventos {
    * precisión del fix — `registrarPuntoGps` (`headless-task.ts`) las convierte en breadcrumbs
    * de Sentry. Vacío en el caso normal. Ver `AvisoPrecision` en `geofence.ts`. */
   avisosPrecision: AvisoPrecision[];
-  /** FIX POST-REVISIÓN (bug 4): puntos que ESTE tick re-armó de verdad — ver el comentario de
-   * `puntosRearmados` en `geofence.ts`. `registrarPuntoGps`/`tareaHeadlessUbicacion` lo pasan a
-   * `limpiarAproximacionesAnunciadas` (`anuncio-punto-control.ts`). */
+  /** FIX POST-REVISIÓN (bug 4): puntos cuya histéresis de DETECCIÓN re-armó de verdad este tick
+   * — ver el comentario de `puntosRearmados` en `geofence.ts`. FIX POST-REVISIÓN (G1): ya NO se
+   * usa para `limpiarAproximacionesAnunciadas` — ver `puntosRearmadosVoz` abajo. */
   puntosRearmados: string[];
+  /** FIX POST-REVISIÓN (G1, "la voz se re-anuncia dentro del radio de aviso"): puntos cuya
+   * histéresis PROPIA de voz (`avisoVozDentro`, `geofence.ts`) re-armó de verdad este tick —
+   * este es el campo que `registrarPuntoGps`/`tareaHeadlessUbicacion` pasan a
+   * `limpiarAproximacionesAnunciadas` (`anuncio-punto-control.ts`), independiente de la
+   * histéresis de detección (`puntosRearmados` arriba). Ver el comentario largo de
+   * `puntosRearmadosVoz` en `geofence.ts`. */
+  puntosRearmadosVoz: string[];
 }
 
 /**
@@ -174,6 +181,7 @@ export function construirEventosDeUbicacion(
   let transicionesEstado = new Map<string, EstadoPuntoControl>();
   let avisosPrecision: AvisoPrecision[] = [];
   let puntosRearmados: string[] = [];
+  let puntosRearmadosVoz: string[] = [];
   if (contexto.puntosControl.length > 0) {
     const posicion: [number, number] = [location.coords.longitude, location.coords.latitude];
     // M3 (hallazgo de revisión, medio): la precisión del fix viaja DENTRO de cada detección y
@@ -204,14 +212,20 @@ export function construirEventosDeUbicacion(
     // que el evento la use directo (ver más abajo), sino para que la máquina de estados pueda
     // guardarla como CANDIDATO si este fix resulta ser el de entrada o el que mejora el mínimo
     // de la visita. Ver el comentario largo de `posicionFix` en `filtrarNuevosCumplimientos`.
-    const { emitir, transiciones, avisosPrecision: avisos, puntosRearmados: rearmados } =
-      filtrarNuevosCumplimientos(estadosPuntosControl, detecciones, contexto.sesionId, tsFixMs, {
-        lat: location.coords.latitude,
-        lng: location.coords.longitude,
-      });
+    const {
+      emitir,
+      transiciones,
+      avisosPrecision: avisos,
+      puntosRearmados: rearmados,
+      puntosRearmadosVoz: rearmadosVoz,
+    } = filtrarNuevosCumplimientos(estadosPuntosControl, detecciones, contexto.sesionId, tsFixMs, {
+      lat: location.coords.latitude,
+      lng: location.coords.longitude,
+    });
     transicionesEstado = transiciones;
     avisosPrecision = avisos;
     puntosRearmados = rearmados;
+    puntosRearmadosVoz = rearmadosVoz;
 
     for (const {
       deteccion: nuevaDeteccion,
@@ -274,7 +288,15 @@ export function construirEventosDeUbicacion(
     }
   }
 
-  return { eventos, deteccion, deteccionAproximacion, transicionesEstado, avisosPrecision, puntosRearmados };
+  return {
+    eventos,
+    deteccion,
+    deteccionAproximacion,
+    transicionesEstado,
+    avisosPrecision,
+    puntosRearmados,
+    puntosRearmadosVoz,
+  };
 }
 
 /**

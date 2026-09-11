@@ -1,4 +1,4 @@
-import { haversineMetros, type PuntoControlPaquete } from '@quivo/shared';
+import { RADIO_AVISO_M, haversineMetros, type PuntoControlPaquete } from '@quivo/shared';
 
 export interface DeteccionPuntoControl {
   puntoControlId: string;
@@ -298,6 +298,35 @@ export interface EstadoPuntoControl {
    * evento tiene que llevar la HORA del fix más cercano, no la del fix que confirma (que puede
    * ser varios fixes y minutos después en un vehículo lento). */
   candidatoTsFixMs?: number;
+  /**
+   * FIX POST-REVISIÓN (G1, "la voz se re-anuncia dentro del radio de aviso"): histéresis PROPIA
+   * de la marca de voz de aproximación, TOTALMENTE INDEPENDIENTE de `dentro`/
+   * `fixesFueraRadioRearme` (la histéresis de DETECCIÓN, sobre `radioToleranciaM`). El bug: con
+   * `radioToleranciaM` (30 m) mucho más chico que `RADIO_AVISO_M` (150 m), la detección re-arma
+   * en cuanto el vehículo supera `radioToleranciaM * FACTOR_REARME_RADIO` (45 m) por
+   * `FIXES_REARME_CONSECUTIVOS` fixes — con el vehículo TODAVÍA a 60-140 m, bien adentro de
+   * `RADIO_AVISO_M`. Antes de este fix, ese re-armado de DETECCIÓN era lo único que limpiaba
+   * `aproximacionesAnunciadas` (`anuncio-punto-control.ts`), así que el próximo fix dentro de
+   * `RADIO_AVISO_M` (que sigue habiendo, el vehículo no se fue) volvía a pasar por
+   * `fase: 'aproximacion'` con el dedupe YA libre → segunda voz anunciando una "aproximación" de
+   * un punto del que en realidad se está alejando.
+   *
+   * `true` mientras el vehículo sigue "dentro" del ciclo de aviso actual (entró a
+   * `RADIO_AVISO_M` en algún fix reciente y todavía no se alejó lo suficiente) — se pone en
+   * `true` cada vez que un fix cae `<= RADIO_AVISO_M` (sin importar `cumplido`/`dentro` de
+   * detección) y se resetea a `false` recién cuando el fix se aleja más allá de
+   * `RADIO_AVISO_M * FACTOR_REARME_RADIO` (225 m con el default) por `FIXES_REARME_CONSECUTIVOS`
+   * fixes SEGUIDOS — misma constante de histéresis que la detección, pero sobre el radio de
+   * AVISO, no el de detección. Optional por el mismo motivo que el resto de los campos de
+   * histéresis: ausente se trata como `false` (nunca se anunció, nada que rearmar).
+   */
+  avisoVozDentro?: boolean;
+  /** Contador de fixes CONSECUTIVOS vistos más allá de `RADIO_AVISO_M * FACTOR_REARME_RADIO`
+   * mientras `avisoVozDentro: true` — mismo rol que `fixesFueraRadioRearme` pero para la
+   * histéresis de voz (ver `avisoVozDentro`). Se resetea a 0 en cuanto un fix vuelve a caer
+   * `<= RADIO_AVISO_M`, y también al rearmar (`avisoVozDentro` pasa a `false`). Ausente se trata
+   * como 0. */
+  avisoVozFixesFueraRadioRearme?: number;
 }
 
 /** B1 (hallazgo de revisión, bajo): `Object.freeze` en vez de un objeto de módulo mutable —
@@ -370,8 +399,26 @@ export interface ResultadoFiltrado {
    * exactamente el bug (la voz repite la aproximación mientras se aleja, y la aproximación
    * REAL de la vuelta siguiente queda en silencio porque el ciclo ya estaba "usado"). Vacío en
    * el caso normal (ningún punto re-armó en este tick).
+   *
+   * FIX POST-REVISIÓN (G1): desde ese fix, este campo YA NO alimenta
+   * `limpiarAproximacionesAnunciadas` — ver `puntosRearmadosVoz` abajo, que tiene su propia
+   * histéresis sobre `RADIO_AVISO_M` en vez de la de detección. Se conserva igual porque sigue
+   * siendo el único lugar que expone la transición real de `dentro` (detección), útil para
+   * telemetría/depuración aunque hoy no tenga otro consumidor.
    */
   puntosRearmados: string[];
+  /**
+   * FIX POST-REVISIÓN (G1, "la voz se re-anuncia dentro del radio de aviso"): `puntoControlId`
+   * de los puntos cuya histéresis de VOZ (`avisoVozDentro`/`avisoVozFixesFueraRadioRearme`, ver
+   * `EstadoPuntoControl`) re-armó DE VERDAD este tick — el único momento en que corresponde
+   * reabrir `aproximacionesAnunciadas` (`limpiarAproximacionesAnunciadas`,
+   * `anuncio-punto-control.ts`). Deliberadamente independiente de `puntosRearmados` (arriba, la
+   * histéresis de DETECCIÓN): con `radioToleranciaM` mucho más chico que `RADIO_AVISO_M`, la
+   * detección re-arma mucho antes de que el vehículo realmente salga de la zona de aviso — usar
+   * esa señal para la voz es justo el bug que este campo existe para cerrar. Vacío en el caso
+   * normal (ningún punto re-armó su voz en este tick).
+   */
+  puntosRearmadosVoz: string[];
 }
 
 /**
@@ -437,10 +484,15 @@ export function filtrarNuevosCumplimientos(
   const transiciones = new Map<string, EstadoPuntoControl>();
   const avisosPrecision: AvisoPrecision[] = [];
   const puntosRearmados: string[] = [];
+  const puntosRearmadosVoz: string[] = [];
 
   for (const deteccion of detecciones) {
     const clave = claveCumplimiento(sesionId, deteccion.puntoControlId);
-    const estado = estados.get(clave) ?? ESTADO_INICIAL;
+    // `let`, no `const`: el bloque de histéresis de voz de abajo la reasigna con los campos
+    // `avisoVoz*` actualizados ANTES de que el resto de la función arme sus transiciones — así
+    // cualquier `{...estado, ...}` de más abajo (entrada, re-armado de detección, etc.) arrastra
+    // esos campos sin que cada rama tenga que saber de la histéresis de voz (G1).
+    let estado = estados.get(clave) ?? ESTADO_INICIAL;
 
     // A3 (hallazgo de revisión, alto): un fix bufferado que llega DESPUÉS pero con un tsFix
     // ANTERIOR (o igual) al último ya aceptado para este punto de control se descarta por
@@ -455,6 +507,40 @@ export function filtrarNuevosCumplimientos(
     // M3: margen de error del fix. Solo descuenta en el RE-ARMADO — ver el comentario largo de
     // `MotivoAvisoPrecision`/M3 arriba para el porqué de la asimetría.
     const margenM = deteccion.accuracyM ?? 0;
+
+    // FIX POST-REVISIÓN (G1, "la voz se re-anuncia dentro del radio de aviso"): histéresis de la
+    // marca de voz, TOTALMENTE INDEPENDIENTE de la de detección de abajo (`dentro`/
+    // `fixesFueraRadioRearme`, sobre `radioToleranciaM`) — ver el comentario largo de
+    // `avisoVozDentro` en `EstadoPuntoControl`. Corre para TODA detección de este tick, sin
+    // importar `cumplido`/`dentro` de la máquina de detección: a diferencia de `dentro`, que solo
+    // avanza dentro del radio de detección (chico), acá lo que importa es la distancia contra
+    // `RADIO_AVISO_M` (grande) — el radio que de hecho gatea cuándo suena la voz
+    // (`location-task.ts`, `deteccionAproximacion`).
+    let avisoVozDentro = estado.avisoVozDentro ?? false;
+    let avisoVozFixesFueraRadioRearme = estado.avisoVozFixesFueraRadioRearme ?? 0;
+    if (deteccion.distanciaM <= RADIO_AVISO_M) {
+      // Dentro de la zona de aviso (o volviendo a estarlo): arma/mantiene armado el ciclo de voz
+      // y resetea el contador de salida — un fix que vuelve a acercarse desmiente cualquier
+      // outlier de alejamiento que viniera acumulando.
+      avisoVozDentro = true;
+      avisoVozFixesFueraRadioRearme = 0;
+    } else if (avisoVozDentro && deteccion.distanciaM - margenM > RADIO_AVISO_M * FACTOR_REARME_RADIO) {
+      // Fuera de la zona de aviso CON MARGEN (descontando la precisión del fix, mismo criterio
+      // M3 que la detección) — cuenta como un fix de salida. Entre `RADIO_AVISO_M` y
+      // `RADIO_AVISO_M * FACTOR_REARME_RADIO` (o dentro del margen de error) el fix es
+      // "inconcluyente": ni suma ni resetea, igual que el tramo análogo de la detección.
+      avisoVozFixesFueraRadioRearme += 1;
+      if (avisoVozFixesFueraRadioRearme >= FIXES_REARME_CONSECUTIVOS) {
+        // `FIXES_REARME_CONSECUTIVOS` fixes SEGUIDOS confirmando la salida: recién acá se
+        // considera re-armado de verdad el ciclo de voz — mismo umbral que la detección
+        // (reusado, no un valor nuevo, por pedido explícito del diseño), pero evaluado sobre
+        // `RADIO_AVISO_M` en vez de `radioToleranciaM`.
+        avisoVozDentro = false;
+        avisoVozFixesFueraRadioRearme = 0;
+        puntosRearmadosVoz.push(deteccion.puntoControlId);
+      }
+    }
+    estado = { ...estado, avisoVozDentro, avisoVozFixesFueraRadioRearme };
 
     if (!estado.dentro) {
       if (deteccion.cumplido && tsFixMs - estado.ultimoEmitidoMs >= PASADA_MIN_MS) {
@@ -640,9 +726,10 @@ export function filtrarNuevosCumplimientos(
       // propia `accuracy`, para que un fix impreciso no habilite una pasada fantasma.
       const consecutivos = (estadoBase.fixesFueraRadioRearme ?? 0) + 1;
       if (consecutivos >= FIXES_REARME_CONSECUTIVOS) {
-        // FIX POST-REVISIÓN (bug 4): este es el ÚNICO lugar donde `dentro` pasa de `true` a
-        // `false` de verdad — el único momento en que corresponde reabrir el aviso de
-        // aproximación por voz para este punto (ver el comentario de `puntosRearmados`).
+        // FIX POST-REVISIÓN (bug 4): este es el ÚNICO lugar donde `dentro` (DETECCIÓN) pasa de
+        // `true` a `false` de verdad. FIX POST-REVISIÓN (G1): esto YA NO reabre el aviso de voz
+        // — ver `puntosRearmadosVoz`/`avisoVozDentro` arriba, que tienen su propia histéresis
+        // sobre `RADIO_AVISO_M` en vez de reusar ésta (el bug que G1 cierra).
         puntosRearmados.push(deteccion.puntoControlId);
         transiciones.set(clave, {
           ...estadoBase,
@@ -677,7 +764,7 @@ export function filtrarNuevosCumplimientos(
     }
   }
 
-  return { emitir, transiciones, avisosPrecision, puntosRearmados };
+  return { emitir, transiciones, avisosPrecision, puntosRearmados, puntosRearmadosVoz };
 }
 
 /**
@@ -821,9 +908,10 @@ export function confirmarVisitasVencidas(
     });
   }
 
-  // Sin `puntosRearmados`: confirmar por antigüedad/cierre nunca re-arma la histéresis por sí
-  // solo — `dentro` sigue en `true` (la visita solo se cierra en curso, igual que el camino
-  // normal de confirmación por distancia) hasta que un fix real la re-arme por el camino de
-  // siempre.
-  return { emitir, transiciones, avisosPrecision: [], puntosRearmados: [] };
+  // Sin `puntosRearmados`/`puntosRearmadosVoz`: confirmar por antigüedad/cierre nunca re-arma
+  // ninguna de las dos histéresis por sí solo — `dentro` (detección) sigue en `true` (la visita
+  // solo se cierra en curso, igual que el camino normal de confirmación por distancia) y
+  // `avisoVozDentro` (G1) no se toca acá; las dos siguen re-armando únicamente por el camino
+  // normal de fixes reales (`filtrarNuevosCumplimientos`).
+  return { emitir, transiciones, avisosPrecision: [], puntosRearmados: [], puntosRearmadosVoz: [] };
 }

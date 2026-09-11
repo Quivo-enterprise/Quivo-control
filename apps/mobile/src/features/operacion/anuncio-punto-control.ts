@@ -165,25 +165,31 @@ function claveAnuncio(sesionId: string, puntoControlId: string, pasada: number):
  *
  * FIX POST-REVISIÓN (bug 4, "la voz vuelve a anunciar la aproximación al alejarse"/"la
  * aproximación real de la vuelta siguiente queda en silencio"): se limpia con
- * `limpiarAproximacionesAnunciadas` (abajo), llamada SOLO cuando el geofence RE-ARMA de verdad
- * el punto (`puntosRearmados`, `gps/geofence.ts` — misma histéresis que la detección:
- * `FACTOR_REARME_RADIO` × `FIXES_REARME_CONSECUTIVOS`), NUNCA al confirmar. Antes se borraba
- * acá mismo dentro de `anunciarPuntoControl` en cuanto el punto CONFIRMABA — con el vehículo
- * todavía a bastante menos de `RADIO_AVISO_M` (la confirmación ocurre en el mínimo local, muy
- * cerca del punto), el próximo fix mientras sigue alejándose (todavía dentro de
- * `RADIO_AVISO_M`, que es mucho más ancho) volvía a pasar por `fase: 'aproximacion'` con la
- * entrada YA libre → segunda voz anunciando la "aproximación" de un punto del que se está
- * alejando. Y esa segunda voz dejaba la entrada "usada" de nuevo, así que la aproximación REAL
- * de la vuelta siguiente no volvía a sonar. Limpiar recién en el re-armado real evita las dos
- * mitades del bug a la vez, con la misma histéresis que ya protege la evidencia.
+ * `limpiarAproximacionesAnunciadas` (abajo), NUNCA al confirmar. Antes se borraba acá mismo
+ * dentro de `anunciarPuntoControl` en cuanto el punto CONFIRMABA — con el vehículo todavía a
+ * bastante menos de `RADIO_AVISO_M` (la confirmación ocurre en el mínimo local, muy cerca del
+ * punto), el próximo fix mientras sigue alejándose (todavía dentro de `RADIO_AVISO_M`, que es
+ * mucho más ancho) volvía a pasar por `fase: 'aproximacion'` con la entrada YA libre → segunda
+ * voz anunciando la "aproximación" de un punto del que se está alejando.
+ *
+ * FIX POST-REVISIÓN (G1, "la voz se re-anuncia dentro del radio de aviso"): la limpieza YA NO se
+ * dispara con el re-armado de DETECCIÓN (`puntosRearmados`, sobre `radioToleranciaM` — mucho más
+ * chico que `RADIO_AVISO_M`) — eso era justo el bug: con `radioToleranciaM=30` y
+ * `RADIO_AVISO_M=150`, la detección re-arma en cuanto el vehículo supera ~45 m, con el vehículo
+ * TODAVÍA a 60-140 m, bien adentro de la zona de aviso — la voz volvía a sonar mientras el
+ * vehículo se seguía alejando. Ahora se dispara con `puntosRearmadosVoz` (`gps/geofence.ts`),
+ * una histéresis PROPIA sobre `RADIO_AVISO_M` (rearma recién más allá de
+ * `RADIO_AVISO_M * FACTOR_REARME_RADIO`, con los mismos `FIXES_REARME_CONSECUTIVOS` fixes
+ * seguidos que ya exige el rearme), independiente de la de detección y NUNCA al confirmar. Ver
+ * el comentario largo de `avisoVozDentro`/`puntosRearmadosVoz` en `geofence.ts`.
  */
 const aproximacionesAnunciadas = new Set<string>();
 
 /**
- * FIX POST-REVISIÓN (bug 4): libera el dedupe de aproximación para los puntos que el geofence
- * ACABA de re-armar en este tick/heartbeat — ver el comentario largo de `aproximacionesAnunciadas`
- * arriba y el de `puntosRearmados` en `gps/geofence.ts`. Llamarla con una lista vacía (el caso
- * normal, ningún punto re-armó) es un no-op.
+ * FIX POST-REVISIÓN (G1): libera el dedupe de aproximación para los puntos cuya histéresis de
+ * VOZ (`puntosRearmadosVoz`, `gps/geofence.ts`) ACABA de re-armar en este tick/heartbeat — ver
+ * el comentario largo de `aproximacionesAnunciadas` arriba. Llamarla con una lista vacía (el
+ * caso normal, ninguna voz re-armó) es un no-op.
  */
 export function limpiarAproximacionesAnunciadas(puntosControlIds: readonly string[]): void {
   for (const id of puntosControlIds) aproximacionesAnunciadas.delete(id);
@@ -299,18 +305,20 @@ export async function anunciarDeteccionesDelTick(
   resultado: {
     deteccion: DeteccionPuntoControl | null;
     deteccionAproximacion: DeteccionPuntoControl | null;
-    /** FIX POST-REVISIÓN (bug 4): puntos re-armados en este tick — ver
-     * `limpiarAproximacionesAnunciadas` arriba. Opcional/vacío por default: el camino de
-     * confirmación forzada por antigüedad (`confirmarVisitasVencidas`, heartbeat) nunca re-arma
-     * por sí solo. */
-    puntosRearmados?: string[];
+    /** FIX POST-REVISIÓN (G1): puntos cuya histéresis PROPIA de voz re-armó de verdad en este
+     * tick — ver `puntosRearmadosVoz` en `gps/geofence.ts` y el comentario largo de
+     * `limpiarAproximacionesAnunciadas` arriba. Deliberadamente NO es la histéresis de
+     * detección (`puntosRearmados` en `geofence.ts`) — usar esa era justo el bug que G1 cierra.
+     * Opcional/vacío por default: el camino de confirmación forzada por antigüedad
+     * (`confirmarVisitasVencidas`, heartbeat) nunca re-arma ninguna histéresis por sí solo. */
+    puntosRearmadosVoz?: string[];
   },
 ): Promise<void> {
-  if (resultado.puntosRearmados && resultado.puntosRearmados.length > 0) {
-    // Antes de anunciar la aproximación de este MISMO tick: si un punto re-armó y, en el mismo
-    // tick, ya está de nuevo dentro de `RADIO_AVISO_M` (rebote poco común pero posible), tiene
-    // que poder volver a avisar sin esperar al tick siguiente.
-    limpiarAproximacionesAnunciadas(resultado.puntosRearmados);
+  if (resultado.puntosRearmadosVoz && resultado.puntosRearmadosVoz.length > 0) {
+    // Antes de anunciar la aproximación de este MISMO tick: si la voz de un punto re-armó y, en
+    // el mismo tick, ya está de nuevo dentro de `RADIO_AVISO_M` (rebote poco común pero
+    // posible), tiene que poder volver a avisar sin esperar al tick siguiente.
+    limpiarAproximacionesAnunciadas(resultado.puntosRearmadosVoz);
   }
   if (resultado.deteccionAproximacion) {
     await anunciarPuntoControl(db, resultado.deteccionAproximacion, opciones);

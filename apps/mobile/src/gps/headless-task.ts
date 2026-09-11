@@ -59,11 +59,22 @@ const GRACIA_STOP_TRAS_VENCIMIENTO_MS = 2 * 60 * 60 * 1000;
  * estricto, uno a la vez, así que el segundo SIEMPRE ve las transiciones que aplicó el primero
  * antes de calcular las suyas.
  *
- * El `.catch(() => undefined)` de cada eslabón asegura que un `registrarPuntoGpsInterno` que
- * rechaza no deje la cola rota para siempre — una promesa rechazada instalada tal cual en
- * `colaRegistroGps` tumbaría TODOS los ticks futuros encadenados con `.then()`. El error real
- * se sigue propagando al caller de ESE tick puntual (`resultado`, sin el `.catch`), solo que
- * la cola avanza igual para el próximo.
+ * R1 (hallazgo de revisión SERIO, ampliación posterior): desde ese fix, esta MISMA cola también
+ * serializa las confirmaciones forzadas de heartbeat/cierre de recorrido
+ * (`confirmarVisitasVencidasEnCola`, headless y foreground) — no solo los fixes reales. Antes,
+ * el heartbeat y el cierre llamaban `aplicarConfirmacionesForzadas` por FUERA de la cola: un fix
+ * y un heartbeat concurrentes podían leer la MISMA visita pendiente antes de que ninguno
+ * terminara de escribir, y los dos emitir un `cumplimiento_punto_control` con `eventId`
+ * DISTINTOS para la MISMA pasada — el servidor solo dedupea por `eventId` (QUI-241), así que el
+ * paso se contaba dos veces. La cola cierra esa ventana exactamente igual que cierra la de los
+ * fixes: mientras una operación de CUALQUIERA de los tres caminos está en curso, ninguna otra
+ * puede empezar a leer/escribir `visitas_pendientes` ni emitir cumplimientos.
+ *
+ * El `.catch(() => undefined)` de cada eslabón asegura que una operación que rechaza no deje la
+ * cola rota para siempre — una promesa rechazada instalada tal cual en `colaRegistroGps`
+ * tumbaría TODAS las operaciones futuras encadenadas con `.then()`. El error real se sigue
+ * propagando al caller de ESA operación puntual (`resultado`, sin el `.catch`), solo que la cola
+ * avanza igual para la próxima.
  */
 let colaRegistroGps: Promise<unknown> = Promise.resolve();
 
@@ -157,6 +168,14 @@ export interface ContenedorEstadosPuntosControl {
  *
  * Serializado por `colaRegistroGps` (C2, ver su comentario) — el cuerpo real vive en
  * `registrarPuntoGpsInterno`, que esta función encadena en la cola en vez de ejecutar directo.
+ *
+ * R1 (hallazgo de revisión SERIO, "evidencia duplicada por concurrencia"): el cuerpo genérico de
+ * encolado vive ahora en `ejecutarEnColaRegistroGps` (abajo), compartido con las confirmaciones
+ * forzadas de heartbeat/cierre (`confirmarVisitasVencidasEnCola`) — antes esas dos corrían POR
+ * FUERA de esta cola, así que un fix y un heartbeat concurrentes podían leer la MISMA visita
+ * pendiente antes de que ninguno terminara de escribir y emitir dos `cumplimiento_punto_control`
+ * con `eventId` distintos para la MISMA pasada (el servidor solo dedupea por `eventId`, QUI-241
+ * — el paso se contaba dos veces). Ver el docblock de `ejecutarEnColaRegistroGps`.
  */
 export function registrarPuntoGps(
   db: SQLite.SQLiteDatabase,
@@ -167,7 +186,24 @@ export function registrarPuntoGps(
   deteccion: DeteccionPuntoControl | null;
   deteccionAproximacion: DeteccionPuntoControl | null;
   puntosRearmados: string[];
+  puntosRearmadosVoz: string[];
 }> {
+  return ejecutarEnColaRegistroGps(
+    () => registrarPuntoGpsInterno(db, location, contexto, estadosPuntosControl),
+    contexto.sesionId,
+  );
+}
+
+/**
+ * R1: cuerpo genérico de la cola FIFO — extraído de `registrarPuntoGps` para que
+ * `confirmarVisitasVencidasEnCola` (heartbeat y cierre de recorrido, headless y foreground)
+ * pueda encolar SU operación en la MISMA cola, con el MISMO techo de tiempo (B7) y el mismo
+ * manejo de errores/profundidad. Serializar por acá — no solo el camino de fixes reales — es lo
+ * que cierra la ventana de concurrencia de R1: mientras una operación (fix, heartbeat o cierre)
+ * está en curso, ninguna otra puede empezar a leer/escribir `visitas_pendientes` ni emitir
+ * cumplimientos, sin importar de cuál de los tres caminos venga.
+ */
+function ejecutarEnColaRegistroGps<T>(operacion: () => Promise<T>, sesionId: string): Promise<T> {
   profundidadColaRegistroGps += 1;
   if (profundidadColaRegistroGps >= PROFUNDIDAD_COLA_SOSPECHOSA) {
     Sentry.addBreadcrumb({
@@ -181,15 +217,10 @@ export function registrarPuntoGps(
   // B7: el techo de tiempo arranca cuando la operación EMPIEZA (dentro del `then`), no cuando
   // se encola — ver el comentario de `TIMEOUT_REGISTRO_GPS_MS`.
   const resultado = colaRegistroGps
-    .then(() =>
-      conTimeout(
-        registrarPuntoGpsInterno(db, location, contexto, estadosPuntosControl),
-        TIMEOUT_REGISTRO_GPS_MS,
-      ),
-    )
+    .then(() => conTimeout(operacion(), TIMEOUT_REGISTRO_GPS_MS))
     .catch((error: unknown) => {
       if (error instanceof TimeoutRegistroGpsError) {
-        console.error('[QUIVO][gps] registrarPuntoGps venció su techo de tiempo', error);
+        console.error('[QUIVO][gps] una operación de la cola de registro venció su techo de tiempo', error);
         // Sin esto, una escritura trabada arrastra al resto del turno en silencio — el peor
         // caso del ticket, invisible por definición (nadie lee la consola del teléfono de un
         // conductor en ruta).
@@ -198,7 +229,7 @@ export function registrarPuntoGps(
           extra: {
             timeoutMs: TIMEOUT_REGISTRO_GPS_MS,
             profundidadCola: profundidadColaRegistroGps,
-            sesionId: contexto.sesionId,
+            sesionId,
           },
         });
       }
@@ -229,11 +260,29 @@ export function registrarPuntoGps(
  * persistido en el outbox pero con el Map todavía en `dentro:false, pasadas:0` — el próximo
  * fix lo re-emitía como `pasada: 1`, duplicando evidencia ya escrita.
  *
- * Las transiciones de RE-ARMADO (sin `cumplimiento_punto_control` asociado — un punto que
- * simplemente se aleja no genera ningún evento) se aplican junto con el `gps_point`, que es
- * SIEMPRE el primer evento del tick: si el `gps_point` falla, el `await` de abajo aborta el
- * tick entero antes de llegar a aplicar NINGUNA transición (ni de re-armado ni de
- * cumplimiento) — mismo comportamiento que antes para ese caso.
+ * Las transiciones de RE-ARMADO/entrada/avance de mínimo (sin `cumplimiento_punto_control`
+ * asociado — un punto que simplemente se aleja, entra o mejora su mínimo sin confirmar no
+ * genera ningún evento) se aplican junto con el `gps_point`, que es SIEMPRE el primer evento del
+ * tick: si el `gps_point` falla, el `await` de abajo aborta el tick entero antes de llegar a
+ * aplicar NINGUNA transición (ni de re-armado ni de cumplimiento) — mismo comportamiento que
+ * antes para ese caso.
+ *
+ * FIX POST-REVISIÓN (G2, "la persistencia del candidato va después de la memoria"): para ESAS
+ * transiciones sin evento propio, la copia durable del candidato (`visitas_pendientes`,
+ * `guardarVisitaPendiente`/`eliminarVisitaPendiente`) se escribe AHORA, por clave, INMEDIATAMENTE
+ * ANTES de aplicar esa transición puntual a `estados` (memoria) — nunca en un segundo `for`
+ * aparte después de que TODA la memoria ya avanzó, como hacía la versión anterior (el
+ * "housekeeping" de bug 5, hoy fusionado acá). Antes, si `guardarVisitaPendiente` fallaba, el
+ * error quedaba solo logueado (`console.error`, sin capturar la causa raíz de forma que bloquee
+ * nada) y la memoria YA había avanzado igual: si la app se mataba entre ese momento y el próximo
+ * fix, `asegurarSemillaCumplimientos`/`sembrarCumplimientos` reconstruía el estado desde el
+ * outbox SIN la fila de `visitas_pendientes` (nunca se escribió) — la visita en curso se perdía
+ * por completo, exactamente el escenario que `visitas_pendientes` existe para cubrir. Con el
+ * fix: si la escritura falla para una clave, esa transición puntual NO se aplica a `estados` —
+ * el Map queda con el estado ANTERIOR para esa clave, así que el PRÓXIMO fix la reprocesa desde
+ * ahí (mismo mínimo/candidato de antes) y reintenta la escritura, en vez de quedar con una
+ * memoria adelantada que SQLite nunca respaldó. El resto de las claves de este mismo tick no se
+ * ven afectadas (el fallo es por clave, no aborta el tick completo).
  */
 async function registrarPuntoGpsInterno(
   db: SQLite.SQLiteDatabase,
@@ -244,13 +293,21 @@ async function registrarPuntoGpsInterno(
   deteccion: DeteccionPuntoControl | null;
   deteccionAproximacion: DeteccionPuntoControl | null;
   puntosRearmados: string[];
+  puntosRearmadosVoz: string[];
 }> {
   // B6: `.current` se lee ACÁ, ya con el turno de la cola concedido — nunca en el caller, que
   // pudo haber quedado con una referencia previa a una re-siembra (ver
   // `ContenedorEstadosPuntosControl`).
   const estados = estadosPuntosControl.current;
-  const { eventos, deteccion, deteccionAproximacion, transicionesEstado, avisosPrecision, puntosRearmados } =
-    construirEventosDeUbicacion(location, contexto, estados);
+  const {
+    eventos,
+    deteccion,
+    deteccionAproximacion,
+    transicionesEstado,
+    avisosPrecision,
+    puntosRearmados,
+    puntosRearmadosVoz,
+  } = construirEventosDeUbicacion(location, contexto, estados);
   // M3: la precisión degradada del fix queda registrada como breadcrumb — es la telemetría que
   // el gate de accuracy anterior NO dejaba (descartaba la pasada en silencio).
   for (const aviso of avisosPrecision) {
@@ -263,7 +320,7 @@ async function registrarPuntoGpsInterno(
   }
   // Claves cuya transición ya está atada a un evento propio (`evento.clave`, los
   // `cumplimiento_punto_control` emitidos este tick) — el resto de `transicionesEstado` son
-  // re-armados sin evento asociado, aplicados junto al `gps_point`.
+  // re-armados/entradas/avances de mínimo sin evento asociado, aplicados junto al `gps_point`.
   const clavesConEventoPropio = new Set(
     eventos.map((evento) => evento.clave).filter((clave): clave is string => clave !== undefined),
   );
@@ -272,7 +329,8 @@ async function registrarPuntoGpsInterno(
     if (evento.clave !== undefined) {
       // FIX POST-REVISIÓN (bug 5): confirmación — encolar el evento y borrar la fila de
       // `visitas_pendientes` de esta visita en LA MISMA transacción (ver
-      // `encolarEventoYLimpiarVisita`, `db/outbox.ts`).
+      // `encolarEventoYLimpiarVisita`, `db/outbox.ts`). Ya es persist-antes-que-memoria (la
+      // transacción entera corre antes de tocar `estados`) — no necesita el fix de G2.
       await encolarEventoYLimpiarVisita(
         db,
         { deviceId: contexto.deviceId, tipo: evento.tipo, payload: evento.payload },
@@ -288,62 +346,61 @@ async function registrarPuntoGpsInterno(
         tipo: evento.tipo,
         payload: evento.payload,
       });
-      // `gps_point` (siempre el primer evento, sin `clave` propia): ancla para aplicar las
-      // transiciones de RE-ARMADO, que no tienen ningún evento propio al que atarse.
+      // FIX POST-REVISIÓN (G2): `gps_point` (siempre el primer evento, sin `clave` propia) ya
+      // persistió — ahora, por cada transición SIN evento propio, primero se escribe (o borra)
+      // su fila de `visitas_pendientes` y RECIÉN SI ESO SALE BIEN se aplica la transición a
+      // `estados`. Ver el docblock de la función para el porqué del orden y del fail-per-clave
+      // (no aborta el tick, no bloquea las demás claves).
       for (const [clave, estado] of transicionesEstado) {
-        if (!clavesConEventoPropio.has(clave)) estados.set(clave, estado);
+        if (clavesConEventoPropio.has(clave)) continue; // ya persistida+aplicada arriba
+        try {
+          if (
+            estado.dentro &&
+            estado.confirmado === false &&
+            estado.candidatoLat !== undefined &&
+            estado.candidatoLng !== undefined &&
+            estado.candidatoTsFixMs !== undefined &&
+            estado.minDistanciaM !== undefined &&
+            estado.puntoControlId !== undefined &&
+            estado.radioToleranciaM !== undefined
+          ) {
+            await guardarVisitaPendiente(db, {
+              clave,
+              sesionId: contexto.sesionId,
+              puntoControlId: estado.puntoControlId,
+              pasadasPrevias: estado.pasadas,
+              radioToleranciaM: estado.radioToleranciaM,
+              minDistanciaM: estado.minDistanciaM,
+              distanciaEntradaM: estado.distanciaEntradaM ?? estado.minDistanciaM,
+              candidatoLat: estado.candidatoLat,
+              candidatoLng: estado.candidatoLng,
+              candidatoTsFixMs: estado.candidatoTsFixMs,
+              ultimoEmitidoMs: estado.ultimoEmitidoMs,
+              fixesDentroSinConfirmar: estado.fixesDentroSinConfirmar ?? 0,
+            });
+          } else {
+            // Re-armada sin confirmar, o transición sin visita en curso: borra cualquier fila
+            // vieja que pudiera quedar (no-op seguro si no había ninguna).
+            await eliminarVisitaPendiente(db, clave);
+          }
+          estados.set(clave, estado);
+        } catch (error) {
+          console.error('[QUIVO][gps] No se pudo actualizar visitas_pendientes — transición no aplicada', error);
+          // FIX POST-REVISIÓN (G2): a diferencia de la versión anterior, este catch es por
+          // CLAVE (no envuelve todo el tick) y, a propósito, NO hace `estados.set(clave, estado)`
+          // — la memoria se queda en el estado ANTERIOR para esta clave puntual, así que el
+          // próximo fix la reprocesa desde ahí y reintenta la escritura (ver el docblock de la
+          // función).
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-cola', paso: 'visita-pendiente-no-aplicada' },
+            extra: { sesionId: contexto.sesionId, clave },
+          });
+        }
       }
     }
   }
 
-  // FIX POST-REVISIÓN (bug 5): housekeeping de `visitas_pendientes` — para CADA clave que este
-  // tick tocó (no solo las confirmadas, que ya se limpiaron arriba en la misma transacción):
-  // si sigue siendo una visita en curso sin confirmar, guarda/actualiza su candidato; si no
-  // (re-armada, o B5 reentrada-ya-confirmada), borra cualquier fila vieja que pudiera quedar.
-  // Best-effort a propósito (try/catch propio, no aborta el tick): la evidencia YA se persistió
-  // arriba — esto es solo la copia durable del candidato para sobrevivir un kill de la app a
-  // mitad de visita (bug 5), no la evidencia legal en sí.
-  try {
-    for (const [clave, estado] of transicionesEstado) {
-      if (
-        estado.dentro &&
-        estado.confirmado === false &&
-        estado.candidatoLat !== undefined &&
-        estado.candidatoLng !== undefined &&
-        estado.candidatoTsFixMs !== undefined &&
-        estado.minDistanciaM !== undefined &&
-        estado.puntoControlId !== undefined &&
-        estado.radioToleranciaM !== undefined
-      ) {
-        await guardarVisitaPendiente(db, {
-          clave,
-          sesionId: contexto.sesionId,
-          puntoControlId: estado.puntoControlId,
-          pasadasPrevias: estado.pasadas,
-          radioToleranciaM: estado.radioToleranciaM,
-          minDistanciaM: estado.minDistanciaM,
-          distanciaEntradaM: estado.distanciaEntradaM ?? estado.minDistanciaM,
-          candidatoLat: estado.candidatoLat,
-          candidatoLng: estado.candidatoLng,
-          candidatoTsFixMs: estado.candidatoTsFixMs,
-          ultimoEmitidoMs: estado.ultimoEmitidoMs,
-          fixesDentroSinConfirmar: estado.fixesDentroSinConfirmar ?? 0,
-        });
-      } else if (!clavesConEventoPropio.has(clave)) {
-        // Las que SÍ tuvieron evento propio ya se borraron transaccionalmente arriba — acá solo
-        // cubre el caso defensivo de una fila vieja de una visita que se re-armó sin confirmar.
-        await eliminarVisitaPendiente(db, clave);
-      }
-    }
-  } catch (error) {
-    console.error('[QUIVO][gps] No se pudo actualizar visitas_pendientes', error);
-    Sentry.captureException(error, {
-      tags: { contexto: 'gps-cola', paso: 'housekeeping-visitas-pendientes' },
-      extra: { sesionId: contexto.sesionId },
-    });
-  }
-
-  return { deteccion, deteccionAproximacion, puntosRearmados };
+  return { deteccion, deteccionAproximacion, puntosRearmados, puntosRearmadosVoz };
 }
 
 /**
@@ -554,6 +611,53 @@ export async function aplicarConfirmacionesForzadas(
 }
 
 /**
+ * R1 (hallazgo de revisión SERIO, "evidencia duplicada por concurrencia"): variante de
+ * `confirmarVisitasVencidas` + `aplicarConfirmacionesForzadas` que corre las DOS DENTRO de
+ * `ejecutarEnColaRegistroGps` — la MISMA cola que serializa los fixes reales
+ * (`registrarPuntoGps`). Reemplaza las llamadas directas que hacían `manejarHeartbeatHeadless`
+ * (abajo), `onHeartbeat` y `detener` (`use-gps-operativo.ts`, foreground) a esas dos funciones
+ * por FUERA de la cola: un fix y un heartbeat concurrentes podían leer la MISMA visita pendiente
+ * (`estadosPuntosControl.current`) antes de que ninguno terminara de escribir, y los dos emitir
+ * un `cumplimiento_punto_control` con `eventId` DISTINTOS para la MISMA pasada — el servidor
+ * dedupea solo por `eventId` (QUI-241), así que el paso se contaba DOS VECES.
+ *
+ * `estadosPuntosControl` se recibe como CONTENEDOR (`{ current }`), no como Map por valor — igual
+ * criterio que B6 en `registrarPuntoGps`: `.current` se lee DENTRO de la operación encolada,
+ * cuando le toca su turno, nunca en el caller (que pudo quedar con una referencia previa a una
+ * re-siembra).
+ *
+ * `filtrarSesionActual` distingue los dos callers reales: `true` para el heartbeat HEADLESS
+ * (`puntosControlDetectadosHeadless` es un singleton de módulo que nunca se limpia entre
+ * sesiones — ver `filtrarPorSesion`/bug 2 en `geofence.ts`); `false` para el heartbeat y el
+ * cierre de recorrido FOREGROUND (`puntosControlDetectados` de `use-gps-operativo.ts`, que
+ * `sembrarCumplimientos` reemplaza entero en cada cambio de `sesionId` — filtrar ahí no hace
+ * nada, pero tampoco hace falta).
+ *
+ * Devuelve los cumplimientos emitidos (`CumplimientoAEmitir[]`) para que el caller pueda anunciar
+ * cada uno (`anunciarPuntoControl`) DESPUÉS de que la operación encolada ya terminó — el anuncio
+ * es best-effort y no tiene por qué competir por el turno de la cola.
+ */
+export function confirmarVisitasVencidasEnCola(
+  db: SQLite.SQLiteDatabase,
+  deviceId: string,
+  sesionId: string,
+  estadosPuntosControl: ContenedorEstadosPuntosControl,
+  ahoraMs: number,
+  umbralMs: number,
+  filtrarSesionActual: boolean,
+): Promise<CumplimientoAEmitir[]> {
+  return ejecutarEnColaRegistroGps(async () => {
+    const estados = estadosPuntosControl.current;
+    const estadosAEvaluar = filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados;
+    const { emitir, transiciones } = confirmarVisitasVencidas(estadosAEvaluar, ahoraMs, umbralMs);
+    if (emitir.length > 0) {
+      await aplicarConfirmacionesForzadas(db, deviceId, sesionId, emitir, transiciones, estados);
+    }
+    return emitir;
+  }, sesionId);
+}
+
+/**
  * Headless task de Transistorsoft (QUI-216): se registra UNA sola vez desde `index.js` — es
  * el único lugar donde el SDK permite hacerlo — y sigue ejecutándose después de que el
  * usuario mata la app, siempre que la config tenga `stopOnTerminate: false` +
@@ -601,7 +705,7 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
 
     const db = await abrirOutbox();
     await asegurarSemillaCumplimientos(db, contexto.sesionId);
-    const { deteccion, deteccionAproximacion, puntosRearmados } = await registrarPuntoGps(
+    const { deteccion, deteccionAproximacion, puntosRearmadosVoz } = await registrarPuntoGps(
       db,
       location,
       contexto,
@@ -614,10 +718,13 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     // el `paso: 'anunciar-punto-control'` de Sentry, no en el `paso:
     // 'registrar-punto-gps'` del catch general de abajo, que hoy reporta pérdida de EVIDENCIA —
     // mezclar los dos haría parecer perdido un punto GPS que en realidad se guardó bien.
+    // FIX POST-REVISIÓN (G1): se pasa `puntosRearmadosVoz` (histéresis PROPIA de la marca de
+    // voz sobre `RADIO_AVISO_M`), no `puntosRearmados` (histéresis de DETECCIÓN) — ver el
+    // comentario largo de `puntosRearmadosVoz` en `geofence.ts`.
     await anunciarDeteccionesDelTick(
       db,
       { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
-      { deteccion, deteccionAproximacion, puntosRearmados },
+      { deteccion, deteccionAproximacion, puntosRearmadosVoz },
     ).catch((error) => {
       console.error('[QUIVO][headless] No se pudo anunciar el punto de control', error);
       Sentry.captureException(error, {
@@ -652,6 +759,15 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
  * *last-known* location", no una lectura fresca) — solo evalúa si alguna visita en curso ya
  * lleva demasiado sin mejorar su mínimo (`confirmarVisitasVencidas`, `geofence.ts`) y, si es
  * así, la confirma con el candidato YA observado.
+ *
+ * FIX POST-REVISIÓN (R1, "evidencia duplicada por concurrencia"): la lectura de
+ * `puntosControlDetectadosHeadless` + `confirmarVisitasVencidas` + `aplicarConfirmacionesForzadas`
+ * corren ahora DENTRO de `confirmarVisitasVencidasEnCola` (la MISMA cola que
+ * `registrarPuntoGps`) — antes corrían acá directo, por FUERA de la cola, así que un fix real
+ * concurrente podía leer la MISMA visita pendiente antes de que este heartbeat terminara de
+ * escribirla (o viceversa) y los dos terminaban emitiendo la MISMA pasada con `eventId`
+ * distintos — el servidor dedupea solo por `eventId` (QUI-241), así que el paso se contaba dos
+ * veces. `filtrarSesionActual: true` — ver el comentario de `confirmarVisitasVencidasEnCola`.
  */
 async function manejarHeartbeatHeadless(): Promise<void> {
   try {
@@ -660,24 +776,16 @@ async function manejarHeartbeatHeadless(): Promise<void> {
 
     const db = await abrirOutbox();
     await asegurarSemillaCumplimientos(db, contexto.sesionId);
-    const estados = puntosControlDetectadosHeadless.current;
-    // FIX POST-REVISIÓN (bug 2, hallazgo propio de `filtrarPorSesion` — ver su docblock en
-    // `geofence.ts`): `puntosControlDetectadosHeadless` es un singleton de MÓDULO que
-    // `asegurarSemillaCumplimientos` solo AGREGA entradas, nunca limpia entre sesiones — a
-    // diferencia de `puntosControlDetectados` en `use-gps-operativo.ts` (foreground), que
-    // `sembrarCumplimientos` REEMPLAZA entero en cada cambio de `sesionId`. Sin este filtro, una
-    // visita sin confirmar de un turno ANTERIOR en el MISMO dispositivo/vehículo (cambio de
-    // chofer sin reinicio de proceso) se confirmaría igual, atribuida por error a la sesión
-    // ACTUAL (`aplicarConfirmacionesForzadas` usa un único `sesionId` para todo lo que emite).
-    const estadosSesion = filtrarPorSesion(estados, contexto.sesionId);
-    const { emitir, transiciones } = confirmarVisitasVencidas(
-      estadosSesion,
+    const emitir = await confirmarVisitasVencidasEnCola(
+      db,
+      contexto.deviceId,
+      contexto.sesionId,
+      puntosControlDetectadosHeadless,
       Date.now(),
       UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+      true,
     );
     if (emitir.length === 0) return;
-
-    await aplicarConfirmacionesForzadas(db, contexto.deviceId, contexto.sesionId, emitir, transiciones, estados);
 
     for (const c of emitir) {
       await anunciarPuntoControl(
