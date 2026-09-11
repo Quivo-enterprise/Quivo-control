@@ -211,11 +211,54 @@ describe('crearControladorTiles — máquina de estados de la capa de tiles', ()
     controlador.reintentar();
     expect(controlador.estaRemovida()).toBe(false);
 
-    // Esta vez sí hay señal: no debe volver a removerse.
-    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
+    // Esta vez sí hay señal DURANTE la ventana de espera del nuevo timeout que arma este
+    // onTileError (por eso el orden es error → load, no load → error): el tile real cancela
+    // ESE timeout puntual, igual que en el resto de los tests de este describe. No debe volver
+    // a removerse.
     controlador.onTileError();
+    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
     vi.advanceTimersByTime(TIMEOUT_MS);
     expect(onRemoverCapa).toHaveBeenCalledTimes(1); // solo la primera vez, no de nuevo
+    expect(controlador.estaRemovida()).toBe(false);
+  });
+
+  // Hallazgo 2 del code-review de esta entrega (medio): la versión anterior de
+  // `crearControladorTiles` marcaba un flag `cargoTileReal = true` PERMANENTE apenas cargaba un
+  // tile real, y ese flag bloqueaba para siempre volver a armar el timeout de remoción — sin
+  // importar cuánto tiempo pasara ni cuántos tileerror llegaran después. Escenario real: el
+  // chofer sale de la terminal con señal (carga un tile real) y más tarde, ya en ruta, entra a
+  // una zona sin cobertura — con el bug, la capa de tiles NUNCA se removía ahí, porque el flag
+  // de "alguna vez cargó un tile real" seguía en true desde la terminal. Esta es la secuencia
+  // inversa pedida por el code-review: carga real → (silencio, pasa el tiempo) → pérdida de
+  // red → errores sostenidos → SÍ se remueve la capa → vuelve la red → se reintegra.
+  it('una carga real vieja no inmuniza para siempre: errores sostenidos después SÍ remueven la capa', () => {
+    const onRemoverCapa = vi.fn();
+    const controlador = instanciarControladorTiles({
+      errorTileUrl: ERROR_TILE_URL,
+      timeoutMs: TIMEOUT_MS,
+      onRemoverCapa,
+    });
+
+    // El chofer arranca en la terminal, con señal: carga un tile real.
+    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
+    expect(controlador.estaRemovida()).toBe(false);
+
+    // Viaja un rato largo sin que se pida ningún tile nuevo (sin pan/zoom de por medio).
+    vi.advanceTimersByTime(TIMEOUT_MS * 10);
+    expect(onRemoverCapa).not.toHaveBeenCalled();
+
+    // Entra a una zona sin cobertura: los tiles empiezan a fallar y ya no hay ninguna carga
+    // real más — exactamente el escenario que el flag permanente del bug ignoraba para siempre.
+    controlador.onTileError();
+    expect(onRemoverCapa).not.toHaveBeenCalled(); // todavía dentro del colchón de TIMEOUT_MS
+
+    vi.advanceTimersByTime(TIMEOUT_MS);
+    expect(onRemoverCapa).toHaveBeenCalledTimes(1);
+    expect(controlador.estaRemovida()).toBe(true);
+
+    // Vuelve la red: reintentar() + un tile real reintegra la capa al mapa.
+    controlador.reintentar();
+    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
     expect(controlador.estaRemovida()).toBe(false);
   });
 });

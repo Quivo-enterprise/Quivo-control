@@ -130,14 +130,27 @@ export interface ControladorTiles {
  */
 export const CONTROLADOR_TILES_JS_SOURCE = `
 function crearControladorTiles(opciones) {
-  var cargoTileReal = false;
+  // Hallazgo 2 del code-review de esta entrega (medio): la versión anterior guardaba un flag
+  // "cargoTileReal" que, apenas se ponía en true con el primer tile real, quedaba así PARA
+  // SIEMPRE — ningún onTileError posterior volvía a armar el timeout de remoción, sin importar
+  // cuánto tiempo pasara. Escenario real: el chofer sale de la terminal con señal (carga un
+  // tile real) y más tarde, ya en ruta, entra a una zona sin cobertura — con el bug, la capa de
+  // tiles se quedaba ahí para siempre, pidiendo tiles reales en cada flyTo sin retirarse nunca.
+  //
+  // El fix NO guarda ningún flag permanente de "alguna vez hubo señal": la única memoria de
+  // estado es "hay un timeout de remoción corriendo ahora mismo" (timeoutId). Cada racha de
+  // errores arma su propia ventana de espera desde cero; si durante esa ventana llega CUALQUIER
+  // tile real, onTileLoad cancela ESE timeout puntual (señal hay AHORA, no importa qué pasó
+  // antes ni hace cuánto). Si nadie cancela el timeout durante la ventana, se decide que no hay
+  // cobertura y se remueve — sin importar que en algún momento anterior sí la hubiera habido.
+  // Así se mide la AUSENCIA SOSTENIDA de éxito por ventana de tiempo, no un booleano histórico.
   var timeoutId = null;
   var removida = false;
 
   function onTileLoad(tileSrc) {
     if (removida) return;
     if (tileSrc === opciones.errorTileUrl) return; // el GIF de error NUNCA cuenta como carga real
-    cargoTileReal = true;
+    // Cancela la ventana de error en curso, si hay una: llegó señal real ahora.
     if (timeoutId !== null) {
       clearTimeout(timeoutId);
       timeoutId = null;
@@ -145,22 +158,21 @@ function crearControladorTiles(opciones) {
   }
 
   function onTileError() {
-    if (removida || cargoTileReal || timeoutId !== null) return;
+    if (removida || timeoutId !== null) return;
     // Colchón antes de sacar la capa (no al primer error): un tileerror aislado con red
     // intermitente no debe tirar los tiles para toda la sesión del mapa, solo la ausencia
-    // sostenida de éxito.
+    // sostenida de éxito DURANTE esta ventana puntual.
     timeoutId = setTimeout(function () {
+      // Si llegamos acá es porque nada canceló este timeout puntual (ver onTileLoad) — no
+      // importa si hubo un tile real hace rato, lo que cuenta es esta ventana.
       timeoutId = null;
-      if (!cargoTileReal) {
-        removida = true;
-        opciones.onRemoverCapa();
-      }
+      removida = true;
+      opciones.onRemoverCapa();
     }, opciones.timeoutMs);
   }
 
   function reintentar() {
     removida = false;
-    cargoTileReal = false;
     if (timeoutId !== null) {
       clearTimeout(timeoutId);
       timeoutId = null;
