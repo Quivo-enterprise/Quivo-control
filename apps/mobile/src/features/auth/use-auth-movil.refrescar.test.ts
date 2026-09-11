@@ -37,12 +37,18 @@ vi.mock('@sentry/react-native', () => ({
   captureException: vi.fn(),
 }));
 
-import { authMovilApi } from '../../shared/api/auth-movil-api';
-import { actualizarSesionMovil, type SesionMovilGuardada } from '../../shared/security/sesion-movil-store';
+import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
+import { obtenerEstadoCircuitoRefresh, reiniciarCircuitoRefresh } from '../../shared/api/refresh-circuit-breaker';
+import {
+  actualizarSesionMovil,
+  cargarSesionMovil,
+  type SesionMovilGuardada,
+} from '../../shared/security/sesion-movil-store';
 import { refrescar } from './use-auth-movil';
 
 const refreshMock = authMovilApi.refresh as unknown as ReturnType<typeof vi.fn>;
 const actualizarSesionMovilMock = actualizarSesionMovil as unknown as ReturnType<typeof vi.fn>;
+const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
 
 function sesion(refreshToken: string): SesionMovilGuardada {
   return {
@@ -59,6 +65,10 @@ describe('refrescar (single-flight)', () => {
   beforeEach(() => {
     refreshMock.mockReset();
     actualizarSesionMovilMock.mockReset();
+    cargarSesionMovilMock.mockReset();
+    // El circuit breaker es estado a nivel de módulo (real, no mockeado acá) — sin este
+    // reset, un 401 contado en un test anterior podía filtrarse al siguiente.
+    reiniciarCircuitoRefresh();
   });
 
   it('comparte una única llamada de red entre refrescos concurrentes con el mismo refresh token', async () => {
@@ -134,5 +144,86 @@ describe('refrescar (single-flight)', () => {
     expect(refreshMock).toHaveBeenCalledTimes(2);
     expect(r1.refreshToken).toBe('refresh-a-rotado');
     expect(r2.refreshToken).toBe('refresh-b-rotado');
+  });
+});
+
+describe('refrescar — Hallazgo 3 (code review, MEDIO): carrera de refresh headless/foreground', () => {
+  beforeEach(() => {
+    refreshMock.mockReset();
+    actualizarSesionMovilMock.mockReset();
+    cargarSesionMovilMock.mockReset();
+    reiniciarCircuitoRefresh();
+  });
+
+  /** Tokens de refresh nuevos que devuelve el mock de `authMovilApi.refresh` en un éxito. */
+  function tokensRefrescados(refreshTokenNuevo: string) {
+    return {
+      accessToken: `access-${refreshTokenNuevo}`,
+      refreshToken: refreshTokenNuevo,
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    };
+  }
+
+  it('T0 en memoria y T1 en SecureStore: un solo 401, relee disco, reintenta con T1, y el circuito no suma fallo', async () => {
+    const t0 = sesion('T0'); // lo que tiene `estado.sesion`/`guardada` en este contexto JS
+    const enDisco = sesion('T1'); // lo que otro contexto (headless) ya rotó y persistió
+
+    cargarSesionMovilMock.mockResolvedValue(enDisco);
+    refreshMock.mockImplementation(async (token: string) => {
+      if (token === 'T0') {
+        // T0 ya fue canjeado server-side por el otro contexto — 401 real.
+        throw new AuthMovilApiError('http', 'Refresh token inválido', 401);
+      }
+      return tokensRefrescados('T2');
+    });
+    const rotada = { ...enDisco, ...tokensRefrescados('T2') };
+    actualizarSesionMovilMock.mockResolvedValue(rotada);
+
+    const resultado = await refrescar(t0);
+
+    expect(resultado).toBe(rotada);
+    // UN solo 401 real (con T0) — el reintento (con T1, releído de disco) tiene éxito.
+    expect(refreshMock).toHaveBeenCalledTimes(2);
+    expect(refreshMock).toHaveBeenNthCalledWith(1, 'T0');
+    expect(refreshMock).toHaveBeenNthCalledWith(2, 'T1');
+    // El reintento persiste sobre la sesión de DISCO (T1), no sobre la vieja (T0) — si
+    // persistiera sobre `t0`, el `contexto`/resto de campos de la rotación de headless (que
+    // pudo traer más que solo los tokens) se perdería.
+    expect(actualizarSesionMovilMock).toHaveBeenCalledWith(enDisco, expect.objectContaining({ refreshToken: 'T2' }));
+    // El circuito termina COMO SI nada hubiera fallado: el 401 real sumó un fallo transitorio,
+    // pero el éxito final (`circuitoTrasExito`) lo resetea del todo — nunca llega a abrirse.
+    const estado = obtenerEstadoCircuitoRefresh();
+    expect(estado.estado).toBe('cerrado');
+    expect(estado.fallosConsecutivos).toBe(0);
+  });
+
+  it('si el token en disco es el MISMO que ya falló, el 401 es real — no reintenta en loop', async () => {
+    const t0 = sesion('T0');
+    cargarSesionMovilMock.mockResolvedValue(sesion('T0')); // disco NO tiene un token distinto
+    refreshMock.mockRejectedValue(new AuthMovilApiError('http', 'Sesión revocada', 401));
+
+    await expect(refrescar(t0)).rejects.toThrow('Sesión revocada');
+    // Un solo intento de red — sin el token en disco distinto, no hay evidencia de carrera y
+    // reintentar con el MISMO token que ya falló no cambiaría nada (loop inútil).
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin sesión en disco (logout concurrente), el 401 se propaga sin reintentar', async () => {
+    const t0 = sesion('T0');
+    cargarSesionMovilMock.mockResolvedValue(null);
+    refreshMock.mockRejectedValue(new AuthMovilApiError('http', 'Sesión revocada', 401));
+
+    await expect(refrescar(t0)).rejects.toThrow('Sesión revocada');
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('un error de RED (no 401) no dispara la relectura de disco — sigue siendo offline legítimo', async () => {
+    const t0 = sesion('T0');
+    refreshMock.mockRejectedValue(new AuthMovilApiError('network', 'Sin conexión'));
+
+    await expect(refrescar(t0)).rejects.toThrow('Sin conexión');
+    expect(cargarSesionMovilMock).not.toHaveBeenCalled();
+    expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -452,12 +452,24 @@ async function asegurarSemillaCumplimientos(
  * concurrente para el MISMO token comparte la única promesa en vuelo, así que dentro de un
  * mismo contexto JS (el caso que dispara el bug: varios ticks headless seguidos, o headless +
  * foreground si Android no reciclo el contexto entre ambos) el servidor ve UN solo refresh,
- * no N. Si Android sí recicla el contexto (headless y foreground en instancias JS distintas),
- * el peor caso es el mismo que ya acepta el circuit breaker (un intento de más) — nunca se
- * rompe nada, nunca hay doble captura de la misma evidencia. `refrescar()` ya persiste el
- * token nuevo (`actualizarSesionMovil`) ANTES de resolver su promesa compartida, así que
- * cualquier caller que esperaba esa misma promesa lee el token YA persistido — condición (c)
- * del hallazgo.
+ * no N. `refrescar()` ya persiste el token nuevo (`actualizarSesionMovil`) ANTES de resolver
+ * su promesa compartida, así que cualquier caller que esperaba esa misma promesa lee el token
+ * YA persistido — condición (c) del hallazgo.
+ *
+ * 🔴 Hallazgo 3 (code review, MEDIO — corrige la afirmación de abajo, que era FALSA): si
+ * Android SÍ recicla el contexto (headless y foreground en instancias JS distintas, el caso
+ * COMÚN — Android arranca un runtime nuevo por cada tick headless), el peor caso NO era "un
+ * intento de más": era una RÁFAGA de 401 reales. Un tick headless en su propio contexto podía
+ * rotar el refresh token de T0 a T1 y persistirlo en SecureStore mientras el contexto de
+ * foreground, recién arrancado, seguía con T0 en memoria — ese T0 ya canjeado server-side
+ * dispara un 401 de verdad, y `refrescarConReintentos` (`use-auth-movil.ts`) reintentaba 4
+ * veces MÁS con el mismo T0 sin releer disco, acumulando los 5 fallos que abren el circuit
+ * breaker. Con el circuito abierto, `obtenerAccessToken`/esta misma función quedaban
+ * devolviendo `null` indefinidamente aunque SecureStore tuviera T1 válido — el patrón de
+ * ráfaga de 401 visto en producción (Entrega 28 del plan). El fix real vive en `refrescar()`
+ * (`ejecutarRefresh`, `use-auth-movil.ts`): ante un 401 real, releer SecureStore y reintentar
+ * una vez con el token vigente si difiere del usado — cubre este camino headless automática-
+ * mente, porque esta función pasa por esa misma `refrescar()`.
  *
  * Sigue siendo TRANSPORTE, no captura: si el refresh falla (circuito abierto, 401 real, o
  * simplemente sin red), esta función devuelve `null` en silencio y `intentarDrenarOportunista`

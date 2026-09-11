@@ -3,6 +3,7 @@ import * as Sentry from '@sentry/react-native';
 import type { ContextoOperativoMovil, ResumenAsignacionMovil } from '@quivo/shared';
 import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
 import {
+  CircuitoRefreshAbiertoError,
   esSesionIrrecuperable,
   intentarRefrescarConCircuito,
   obtenerEstadoCircuitoRefresh,
@@ -507,20 +508,76 @@ export async function refrescar(guardada: SesionMovilGuardada): Promise<SesionMo
   const enVuelo = refrescosEnVuelo.get(clave);
   if (enVuelo) return enVuelo;
 
-  const promesa = (async () => {
-    // Entrega 3: el circuit breaker (`shared/api/refresh-circuit-breaker.ts`) envuelve ACÁ,
-    // en el único lugar que golpea `POST /v1/mobile/auth/refresh` — cubre automáticamente a
-    // los dos callers de `refrescar` (`refrescarConReintentos` y `obtenerAccessToken`) sin
-    // duplicar el chequeo, y nunca toca el sync de datos (otro cliente HTTP por completo, ver
-    // el docblock del breaker).
-    const tokens = await intentarRefrescarConCircuito(guardada.refreshToken);
-    return actualizarSesionMovil(guardada, tokens);
-  })();
+  const promesa = ejecutarRefresh(guardada);
   refrescosEnVuelo.set(clave, promesa);
   try {
     return await promesa;
   } finally {
     refrescosEnVuelo.delete(clave);
+  }
+}
+
+/**
+ * Hallazgo 3 (code review, MEDIO — carrera de refresh entre headless y foreground,
+ * `headless-task.ts`): el SDK de Transistorsoft corre el headless task en SU PROPIO contexto
+ * JS, distinto del que arranca al reabrir la app. Un tick headless puede rotar el refresh
+ * token de T0 a T1 y persistirlo en SecureStore mientras el contexto de foreground, recién
+ * arrancado, todavía tiene T0 en memoria (`estado.sesion`/`guardada`, cargado de disco antes
+ * de que la escritura del headless aterrizara, o simplemente porque los dos contextos
+ * partieron del mismo T0 y el headless ganó la carrera). Ese T0 ya fue canjeado server-side:
+ * `authMovilApi.refresh(T0)` desde foreground recibe un 401 REAL, aunque la sesión sea
+ * perfectamente válida — SecureStore ya tiene T1.
+ *
+ * Antes de este fix ese 401 se propagaba tal cual: `refrescarConReintentos` reintentaba hasta
+ * 4 veces MÁS, siempre con el mismo T0 en memoria (nunca releía disco), acumulando 5 fallos
+ * 401 reales — exactamente `UMBRAL_FALLOS_ABRIR_CIRCUITO` — que abrían el circuit breaker. Con
+ * el circuito abierto (backoff de minutos) y sin que nada volviera a mirar SecureStore,
+ * `obtenerAccessToken`/`obtenerAccessTokenHeadless` quedaban devolviendo `null`
+ * INDEFINIDAMENTE — sync completamente detenido en foreground hasta matar la app — aunque el
+ * refresh token VIGENTE (T1) estuviera ahí, a un `SecureStore.getItemAsync` de distancia. El
+ * docblock de `obtenerAccessTokenHeadless` (`headless-task.ts`) documentaba el peor caso como
+ * "un intento extra, nunca se rompe nada" — eso era falso, este es el patrón de ráfaga de 401
+ * visto en producción (Entrega 28 del plan).
+ *
+ * Fix: ante un 401 REAL (no un corto-circuito del breaker, `CircuitoRefreshAbiertoError`, que
+ * no dice nada sobre si el token en memoria quedó obsoleto — reintentar ahí no cambiaría
+ * nada), releer la sesión persistida. Si el `refreshToken` guardado ahí difiere del que se
+ * acaba de usar, es evidencia de que OTRO contexto ya lo rotó mientras este seguía con el
+ * viejo — reintentar UNA sola vez con el valor de disco antes de darse por vencido. Si
+ * coincide (o no hay sesión guardada, p. ej. logout concurrente), el 401 es de verdad y se
+ * propaga tal cual — nunca reintenta en loop.
+ *
+ * Cubre foreground Y headless con un solo fix porque los dos pasan por ESTA función: los 4
+ * call sites de `refrescar()` (`reconciliarSesion`, `refrescarConReintentos` y
+ * `obtenerAccessToken` acá abajo, más `obtenerAccessTokenHeadless` en `headless-task.ts`)
+ * terminan todos acá.
+ */
+async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMovilGuardada> {
+  try {
+    // Entrega 3: el circuit breaker (`shared/api/refresh-circuit-breaker.ts`) envuelve ACÁ, en
+    // el único lugar que golpea `POST /v1/mobile/auth/refresh` — cubre automáticamente a todos
+    // los callers de `refrescar` sin duplicar el chequeo, y nunca toca el sync de datos (otro
+    // cliente HTTP por completo, ver el docblock del breaker).
+    const tokens = await intentarRefrescarConCircuito(guardada.refreshToken);
+    return await actualizarSesionMovil(guardada, tokens);
+  } catch (error) {
+    const esFalloRealDeRefresh =
+      error instanceof AuthMovilApiError &&
+      error.status === 401 &&
+      !(error instanceof CircuitoRefreshAbiertoError);
+    if (!esFalloRealDeRefresh) throw error;
+
+    const enDisco = await cargarSesionMovil();
+    if (!enDisco || enDisco.refreshToken === guardada.refreshToken) {
+      // Sin sesión guardada (logout concurrente) o el mismo token que ya falló: el 401 es de
+      // verdad, no una carrera entre contextos — se propaga tal cual.
+      throw error;
+    }
+
+    // Otro contexto (headless o foreground) ya rotó el token mientras este seguía con el
+    // viejo — un solo reintento con el valor vigente de disco, antes de contar el fallo.
+    const tokens = await intentarRefrescarConCircuito(enDisco.refreshToken);
+    return await actualizarSesionMovil(enDisco, tokens);
   }
 }
 
