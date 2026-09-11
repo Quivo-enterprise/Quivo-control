@@ -6,6 +6,127 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome: cinco ramas abiertas, ninguna mergeable todavía (2026-09-11)
+
+**Leer esto primero en la próxima sesión.** El plan sigue siendo
+[`plan-correccion-post-piloto-2026-09-09.md`](plan-correccion-post-piloto-2026-09-09.md) (entregas
+0a–31, decisiones hasta la fila 12). Esta sección es la foto exacta de dónde quedó la ejecución.
+
+### Qué hay en `main` (`a8704da`)
+
+| PR | Qué |
+|---|---|
+| #65 | Commits del piloto, `GET /reportes/en-vivo/posiciones` (Entrega 10), throttler por dispositivo y caché negativa de tokens (Entrega 12) |
+| #66–#69 | Docs: handoff de #65, Entregas 7b, 28 (con evidencia de producción), 29, 30 (OSRM) y 31 (posición congelada) |
+| #70 | `unplugin-swc` en vitest con `decoratorMetadata`: los tests de integración de `sync-errores`/auditoría ya no se saltean y fallan si falta la metadata. `@swc/core` en `allowBuilds` |
+
+Nada de lo de abajo está desplegado. **Nada del lado móvil se probó en un teléfono.**
+
+### Las cinco ramas (todas pusheadas, ninguna con PR, sin cambios sin commitear)
+
+Todas están **20 commits detrás de `main`**: rebasar antes de abrir PR. Orden de merge obligatorio:
+**drenado → posición → anuncio → mapa offline → web**. Cada agente trabaja en su propio worktree
+(`../Quivo-control-<nombre>`); nunca `checkout` ni `stash` en el directorio principal.
+
+| Rama · worktree | HEAD | Tests | Entregas | Codex `verify-fix` (último) |
+|---|---|---|---|---|
+| `fix/movil-drenado-background` · `-movil-drenado` | `fe36953` | 216/216 | 1, 2, 3, parte de 4, logout real (migración Prisma `refreshTokenHashAnterior`) | **`partial`**, ronda 3 |
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `9e9f2d3` | 212/212 | 31a | **`partial`**, ronda 2 |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `6e4f285` (**WIP roto**) | **213/214, `tsc` rojo** | 5, 6, 7, 7b | **`partial`** sobre `5fc887b` |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `fcc55db` | 174/174 | 25, 31b | **`partial`** |
+| `feat/web-mapa-todos-vehiculos` · `-web-mapa` | `0d67964` | — | 13, 14 | No aplica (`feat`). Click y hover verificados en vivo con Playwright |
+
+`partial` **bloquea el commit final** (regla 13): o se cierra el hueco, o se justifica explícitamente
+al CTO. Los reportes completos están en `~/.claude/codex-debug-state/20260911-*-verify-fix-*.json`.
+
+**Trampas de apilado:** posición salió de un drenado viejo (`365e14f`) y **no contiene `fe36953`**;
+anuncio y drenado chocan en `db/outbox.ts` y `db/outbox-ddl.ts`. Rebasar posición y anuncio sobre
+drenado **después** de cerrarlo, no antes.
+
+### Lo que falta en cada rama
+
+**1. Drenado (base de todo, va primero).** Tres rondas de Codex; lo que queda:
+- **G1 — carrera de refresh entre contextos JS.** Foreground y headless pueden leer el mismo refresh
+  token T0; headless rota a T1, foreground manda T0 y recibe 401. Los single-flight son por contexto.
+  Diseño decidido: **refresh bajo un lease de SQLite `refresh-sesion`**; dentro del lease releer
+  SecureStore y, si el token cambió, adoptarlo sin tocar la red; el circuito cuenta el 401 solo
+  después de releer. Test con dos "runtimes" y barreras que fuercen ambas lecturas de T0.
+- **G2 — solo el refresh escribe tokens.** `obtenerContexto` guarda la sesión completa desde una copia
+  vieja y puede pisar un T1 recién rotado. Reemplazar por una actualización con relectura y fusión
+  (`actualizarSesionMovil`) que nunca toque los tokens.
+- **G3 — headless con más de 20 lotes no programa continuación.** Recomendación: **justificar** (el
+  heartbeat de 60 s continúa; 20 lotes son 10 000 eventos, muy por encima de una jornada) y dejarlo
+  escrito en el código y el PR.
+- **R — lease tomado por reloj que retrocede.** Recomendación: **justificar** con la cota ya puesta.
+- Después: `verify-fix` de nuevo, `/code-review`, **`/security-review`** (logout y migración), PR, CI,
+  merge. **Al desplegar, la migración va antes que el código de la API.**
+
+**2. Posición (31a, la flecha que no se mueve: P0 del CTO).**
+- **G1** — si `start()` funciona y `changePace(true)` falla, hoy se informa éxito. Reafirmar el
+  movimiento con `getState().isMoving` en el heartbeat y al volver a primer plano, **sin depender de
+  `onMotionChange`** (con `ACTIVITY_RECOGNITION` denegado ese evento no llega).
+- **G2** — si falla el outbox después de `start()`, `tracking` queda en `false` con el SDK grabando.
+  Poner `tracking=true` apenas `start()` resuelve, separar el estado de almacenamiento, y dejar
+  "Finalizar" siempre disponible.
+- **R1** — serializar la restauración de `disableStopDetection:false` con el siguiente `iniciar()`.
+- Rebasar sobre drenado cerrado, `verify-fix`, revisión, PR.
+
+**3. Anuncio.** El commit `6e4f285` es **de preservación**: un agente murió por límite de uso a mitad.
+Contiene G1 (histéresis propia de la voz: `puntosRearmados` pasó a `puntosRearmadosVoz`), G2
+(persistir la visita antes de publicarla en memoria) y R1 (serializar heartbeat y cierre en
+`colaRegistroGps`), **sin revisar**. Roto: `anuncio-punto-control.test.ts:386` usa el nombre viejo y
+el test "puntosRearmados libera el dedupe de aproximación ANTES de procesar el tick" falla (1 llamada
+en vez de 2). Falta:
+- Auditar el diff de `6e4f285` contra los cuatro huecos, no continuarlo a ciegas.
+- **`eventId` estable** por `{sesionId, puntoControlId, pasada}`, para que un fix y un heartbeat
+  concurrentes no emitan dos eventos con UUID distintos.
+- **R2 — atomicidad:** la transacción de `db/outbox.ts` se abre sobre `db`, pero sus operaciones
+  internas pueden recuperar un handle muerto y escribir en otra conexión. La transacción entera va
+  dentro de la recuperación de handle.
+- Test del recorrido completo con radio de detección menor que `RADIO_AVISO_M` (150).
+
+**4. Mapa offline (25 y 31b).**
+- **Gap — handshake de mapa listo.** El estado inicial (posición incluida) se manda con `useEffect` y
+  `onLoadEnd`, sin saber si los listeners del HTML ya existen. Si el primer mensaje llega antes, se
+  pierde. **Puede ser parte del síntoma de la flecha congelada**, así que va con la misma prioridad que
+  31a: el HTML emite `mapa-listo` tras registrar los listeners y React Native responde con el estado
+  actual, sin esperar recursos de red.
+- **Riesgo — reintento de tiles con zoom mezclado.** En Leaflet 1.9.4, `getTileUrl(coords)` usa el zoom
+  actual de la capa, no `coords.z`: un tile fallido de otro zoom se reintenta con la x/y vieja y el
+  zoom nuevo. Descartar los tiles fallidos de otro zoom o construir la URL con `coords.z`.
+- Confirmar que las apariciones de `removeLayer`/`toString` en la fuente son comentarios o tests de
+  ausencia. Probar **con red y en modo avión** antes de mergear.
+
+**5. Web (13 y 14).** Rebasar sobre `main` (16 atrás), `/code-review`, gate de UI (`web-design-guidelines`),
+PR. Se puede mergear en paralelo a las móviles: no comparte archivos.
+
+### Sin empezar
+
+- **Requieren OK explícito del CTO (escritura en producción):** 0b (cerrar sesiones fantasma
+  `verif-final-0…5` y zombis `9004TST`/`9001TST` con `UPDATE`, nunca `DELETE`) y 0c (rotación del
+  video a mano). El único acceso autorizado hasta ahora fue un job de **solo lectura**.
+- 8, 9, 11, 15–24, 26 (preflight), 27 (precarga del paquete), 28 (código `SESION_NO_VIGENTE`), 29,
+  30 (no dibujar la línea recta de OSRM).
+
+### Decisiones abiertas del CTO
+
+1. **Radio de detección.** Pidió 10 m. Objeción registrada: 150 m para detectar y ~40 m o el mínimo
+   local para confirmar al chofer; con `RUTA_PROXIMIDAD_TOLERANCIA_METROS = 100` todo radio menor que
+   la distancia de plantado pierde el punto siempre. Sin decidir.
+2. **OSRM** (Entrega 30): desplegarlo o proveedor externo. 3. **`lineaId` en `Conductor`** (Entrega 17).
+4. **FCM** para empujar la rotación (P1 de la Entrega 27).
+
+### Cómo retomar
+
+1. Leer esta sección y la Entrega 31 del plan.
+2. Relanzar **como máximo 3 agentes Sonnet a la vez** (con 4 o 5 el límite de uso los cortó cada vez):
+   drenado (G1+G2+justificaciones), anuncio (auditar `6e4f285`, arreglar el test, `eventId` estable,
+   R2) y mapa offline (handshake + zoom). Posición espera a drenado; web entra cuando se libere un lugar.
+3. Tras cada corte por límite de uso: `git status` en el worktree y auditar el diff antes de seguir.
+4. Para correr los tests de la API: exportar `DATABASE_URL` desde `apps/api/.env` (el postinstall de
+   `packages/db` falla sin ella). Postgres de tests en `localhost:5434` (contenedor
+   `quivo-control-postgres-1`), Redis en 6380.
+
 ## Post-piloto: plan en 27 entregas y primer merge (#65, 2026-09-10)
 
 El piloto del 2026-09-09 (5 conductores, Línea 120 y Zona 12, todos desde Univalle Tiquipaya)
