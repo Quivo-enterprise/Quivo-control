@@ -136,11 +136,40 @@ export function faltaColumna(columnasExistentes: string[], columna: string): boo
 }
 
 /**
+ * R2 (hallazgo de `/codex-debug verify-fix` sobre `757af20`, ALTO): ¿este error es SQLite
+ * rechazando un `ALTER TABLE ... ADD COLUMN` porque la columna YA EXISTE? El mensaje que tira
+ * SQLite (y que `expo-sqlite`/`node:sqlite` propagan tal cual en `error.message`) es
+ * `duplicate column name: <columna>` — no viene tipado con un `code` propio (a diferencia de
+ * `esHandleNativoMuerto`, que sí puede apoyarse en `error.code`), así que el mensaje es la
+ * única señal disponible. Pura para poder testearla sin un error real de SQLite de por medio.
+ */
+export function esErrorColumnaDuplicada(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const message = 'message' in error ? (error as { message?: unknown }).message : undefined;
+  return typeof message === 'string' && /duplicate column name/i.test(message);
+}
+
+/**
  * Aplica `MIGRACIONES_COLUMNAS_OUTBOX` una por una: por cada columna, lee `PRAGMA
  * table_info(tabla)` y corre el `ALTER TABLE` SOLO si `faltaColumna` dice que no está — así
  * es segura de llamar en CADA apertura del proceso (`abrirOutbox()` puede correr más de una
  * vez por instalación, ver el comentario de `outboxPromise`) sin repetir un `ALTER TABLE`
  * sobre una columna que ya existe (`duplicate column name`).
+ *
+ * R2 (hallazgo de `/codex-debug verify-fix`, ALTO — el guard de arriba NO alcanza): `PRAGMA
+ * table_info` + `ALTER TABLE` no son atómicos entre sí, y `abrirOutbox()` puede correr en dos
+ * CONTEXTOS JS a la vez (headless vs. foreground, ver el comentario de `outboxPromise`) sobre
+ * el MISMO archivo `quivo-outbox.db`. Si ambos leen el `PRAGMA` ANTES de que cualquiera de los
+ * dos corra su `ALTER TABLE`, los dos ven la columna ausente y los dos intentan agregarla — el
+ * segundo `ALTER TABLE` en llegar choca con `duplicate column name`, aunque el guard de arriba
+ * sea correcto (cada uno, por su cuenta, SÍ vio la columna ausente en el instante que consultó).
+ * No es una ventana teórica: es EXACTAMENTE el escenario que este archivo ya documenta para
+ * `abrirOutbox()`/`outboxPromise` — dos contextos abriendo la base en simultáneo.
+ *
+ * Fix: atrapar específicamente `duplicate column name` (`esErrorColumnaDuplicada`) y tratarlo
+ * como ÉXITO — la columna existe, que es justo la postcondición que este paso busca, sin
+ * importar QUIÉN la haya agregado. Cualquier otro error (SQL roto, tabla inexistente, etc.) se
+ * propaga tal cual — no hay nada seguro que asumir ahí.
  */
 async function agregarColumnasFaltantes(db: SQLite.SQLiteDatabase): Promise<void> {
   for (const migracion of MIGRACIONES_COLUMNAS_OUTBOX) {
@@ -148,9 +177,15 @@ async function agregarColumnasFaltantes(db: SQLite.SQLiteDatabase): Promise<void
       `PRAGMA table_info(${migracion.tabla})`,
     );
     if (faltaColumna(columnas.map((columna) => columna.name), migracion.columna)) {
-      await db.execAsync(
-        construirAgregarColumna(migracion.tabla, migracion.columna, migracion.tipo),
-      );
+      try {
+        await db.execAsync(
+          construirAgregarColumna(migracion.tabla, migracion.columna, migracion.tipo),
+        );
+      } catch (error) {
+        if (!esErrorColumnaDuplicada(error)) throw error;
+        // Otro contexto ganó la carrera y ya la agregó entre nuestro `PRAGMA` y este
+        // `ALTER TABLE` — la postcondición ("la columna existe") ya se cumple, seguimos.
+      }
     }
   }
 }

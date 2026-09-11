@@ -19,6 +19,7 @@ import {
   TTL_LEASE_DRENAJE_MS,
   construirAdquirirLease,
   construirAgregarColumna,
+  esErrorColumnaDuplicada,
   faltaColumna,
 } from './outbox';
 
@@ -142,6 +143,53 @@ describe('DDL real del outbox contra SQLite de verdad (Hallazgo 1, CRÍTICO)', (
     db.exec(DDL_OUTBOX);
     aplicarMigraciones(db);
     expect(() => aplicarMigraciones(db)).not.toThrow();
+    db.close();
+  });
+
+  /**
+   * R2 (hallazgo de `/codex-debug verify-fix` sobre `757af20`, ALTO): `PRAGMA table_info` +
+   * `ALTER TABLE` no son atómicos ENTRE SÍ, y `abrirOutbox()` puede correr en dos contextos JS
+   * a la vez (headless vs. foreground) sobre el MISMO archivo `quivo-outbox.db`. Si los dos
+   * leen el `PRAGMA` (ven la columna ausente) ANTES de que cualquiera corra su `ALTER TABLE`,
+   * el segundo `ALTER TABLE` en llegar choca con "duplicate column name" — aunque el guard de
+   * `faltaColumna` sea correcto en el instante en que cada uno lo consultó. Reproduce esa
+   * ventana contra SQLite REAL (no una simulación en JS del predicado) intercalando dos
+   * "aperturas": ambas leen el PRAGMA primero, y recién después la primera corre su ALTER y la
+   * segunda el suyo — el mismo orden de eventos que produce el bug en producción.
+   */
+  it('dos aperturas "concurrentes" (la segunda ALTER llega tras el PRAGMA de la primera): ninguna falla, la columna queda una sola vez', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec(DDL_OUTBOX); // DDL base — `enviado_at` NO está acá, viene de la migración aparte.
+    const migracion = MIGRACIONES_COLUMNAS_OUTBOX[0]!;
+
+    // Los dos contextos leen el PRAGMA ANTES de que cualquiera intente el ALTER — la ventana de
+    // no-atomicidad que R2 describe. Los dos ven la columna ausente.
+    const columnasContexto1 = columnasDe(db, migracion.tabla);
+    const columnasContexto2 = columnasDe(db, migracion.tabla);
+    expect(faltaColumna(columnasContexto1, migracion.columna)).toBe(true);
+    expect(faltaColumna(columnasContexto2, migracion.columna)).toBe(true);
+
+    // Contexto 1 gana la carrera y agrega la columna — sin el try/catch, esto no es el punto
+    // bajo prueba, así que corre directo.
+    db.exec(construirAgregarColumna(migracion.tabla, migracion.columna, migracion.tipo));
+
+    // Contexto 2 corre SU `ALTER TABLE` sobre la misma columna que el contexto 1 ya agregó —
+    // reproduce EXACTAMENTE el `try { execAsync(...) } catch { if (!esErrorColumnaDuplicada)
+    // throw }` de `agregarColumnasFaltantes` en `outbox.ts` (código de producción, no
+    // reimplementado acá: la función interna no es exportable porque toma un
+    // `SQLite.SQLiteDatabase` de `expo-sqlite`, no un `DatabaseSync` de `node:sqlite` — mismo
+    // motivo que el resto de este archivo prueba el SQL puro contra el motor real en vez de
+    // `abrirOutboxNueva` completa).
+    expect(() => {
+      try {
+        db.exec(construirAgregarColumna(migracion.tabla, migracion.columna, migracion.tipo));
+      } catch (error) {
+        if (!esErrorColumnaDuplicada(error)) throw error;
+      }
+    }).not.toThrow();
+
+    const columnasFinal = columnasDe(db, 'outbox');
+    expect(columnasFinal.filter((columna) => columna === migracion.columna)).toHaveLength(1);
     db.close();
   });
 });
