@@ -151,6 +151,29 @@ function generarTokenLease(): string {
 }
 
 /**
+ * Hallazgo 2 (code review, MEDIO — `sincronizarPendientesConLease`): tras un lote LLENO
+ * (`LOTE_MAXIMO` eventos), `sincronizarPendientesConLease` liberaba el lease con el
+ * enfriamiento de éxito (`PISO_ENTRE_INTENTOS_DRENAJE_MS`, 10 s) antes de devolver el
+ * control. El encadenado `setTimeout(intentarSync, 500)` de `iniciarSyncAutomatico` llegaba
+ * DEMASIADO PRONTO — a los 500 ms el lease seguía "tomado" por ese cooldown — así que el
+ * segundo intento recibía `null` (alguien más tiene el lease), `iniciarSyncAutomatico` lo
+ * trataba como "0 enviados" (no es un fallo, ver su comentario) y la cadena se cortaba ahí.
+ * Con horas sin cobertura (miles de eventos acumulados), el drenado completo tardaba minutos
+ * en foreground y hasta ~20 min en headless (recién al próximo heartbeat), con `/en-vivo`
+ * mostrando una posición vieja todo ese tiempo.
+ *
+ * Fix: el MISMO holder del lease encadena el siguiente lote sin soltarlo mientras el lote
+ * recién enviado haya salido LLENO (señal de que probablemente queda más) — hasta
+ * `TOPE_LOTES_POR_CICLO_DRENAJE` lotes por llamada, para no monopolizar el lease (ni la red)
+ * indefinidamente si el outbox nunca converge (p. ej. reingresando eventos más rápido de lo
+ * que se drenan). El enfriamiento de `PISO_ENTRE_INTENTOS_DRENAJE_MS` sigue aplicando IGUAL
+ * que antes a la liberación FINAL de la llamada (lote no lleno, tope alcanzado, o fallo) —
+ * sigue siendo el piso entre intentos OPORTUNISTAS (`onLocation`/heartbeat/latido de 15 s),
+ * no un piso entre lotes de un mismo drenado ya en curso.
+ */
+const TOPE_LOTES_POR_CICLO_DRENAJE = 20;
+
+/**
  * Hallazgo 6 (code review, BAJO — `docs/plan-correccion-post-piloto-2026-09-09.md`): el lease
  * de `drenaje-oportunista.ts` (Entrega 2) no cubre a `iniciarSyncAutomatico` (más abajo,
  * disparado por `useSyncStatus`, montado en `operation-screen.tsx` y `perfil-screen.tsx`) ni
@@ -201,7 +224,16 @@ export async function sincronizarPendientesConLease(
   }
 
   try {
-    const resultado = await sincronizarPendientes(accessToken);
+    // Hallazgo 2: encadena lotes LLENOS bajo el MISMO lease, sin soltarlo entre uno y otro —
+    // ver el docblock de `TOPE_LOTES_POR_CICLO_DRENAJE`. Un lote que sale con menos de
+    // `LOTE_MAXIMO` enviados significa "no había más pendientes" (o el último lote parcial),
+    // así que corta el loop sin gastar otro round-trip para confirmarlo.
+    let totalEnviados = 0;
+    for (let lotesDrenados = 0; lotesDrenados < TOPE_LOTES_POR_CICLO_DRENAJE; lotesDrenados++) {
+      const resultado = await sincronizarPendientes(accessToken);
+      totalEnviados += resultado.enviados;
+      if (resultado.enviados < LOTE_MAXIMO) break;
+    }
     await liberarLeaseConCooldown(
       db,
       ID_LEASE_DRENAJE,
@@ -209,7 +241,7 @@ export async function sincronizarPendientesConLease(
       Date.now(),
       PISO_ENTRE_INTENTOS_DRENAJE_MS,
     );
-    return resultado;
+    return { enviados: totalEnviados };
   } catch (error) {
     // El caller (`intentarSync`/el intervalo de `use-sync-status.ts`) sigue siendo responsable
     // de reportar este fallo (backoff propio, `errorSync`) — acá solo se libera el lease para
