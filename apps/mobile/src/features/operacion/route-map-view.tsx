@@ -39,10 +39,17 @@ export function RouteMapView({
   style,
 }: RouteMapViewProps) {
   const webViewRef = useRef<WebView>(null);
-  const html = useMemo(
-    () => construirHtml(paquete, vehiculo, proximoPuntoControlId),
-    [paquete, vehiculo, proximoPuntoControlId],
-  );
+  // Entrega 31b (defecto post-piloto): `proximoPuntoControlId` SALE de estas dependencias a
+  // propósito. Antes estaba acá y cada vez que el conductor pasaba un punto de control (cambia
+  // el próximo) React recalculaba un `html` nuevo — mismo string salvo ese valor — y se lo pasaba
+  // a la WebView como `source.html` nuevo, forzando una recarga COMPLETA del documento: Leaflet
+  // se reinstancia, se pierde el marcador de posición/estado de seguimiento hasta el próximo
+  // `onLoadEnd`, y el controlador de tiles arranca de cero. En una ruta de 26 puntos de control
+  // son 26 recargas con parpadeo. Lo único que de verdad cambia la ruta dibujada (la geometría,
+  // los puntos de control fijos) depende de `paquete`/`vehiculo` — el próximo punto de control es
+  // estado que ahora viaja por `postMessage` (ver `enviarEstadoMapa` abajo), no por reconstrucción
+  // de HTML. Ver el comentario grande en `construirHtml` (route-map-html.ts) para el detalle.
+  const html = useMemo(() => construirHtml(paquete, vehiculo), [paquete, vehiculo]);
   const source = useMemo(() => ({ html }), [html]);
 
   const enviarEstadoMapa = useCallback(() => {
@@ -50,8 +57,15 @@ export function RouteMapView({
       JSON.stringify({
         type: 'tracking',
         active: tracking,
-        proximoPuntoControlId,
       }),
+    );
+    // Próximo punto de control: mensaje propio (no viaja dentro de 'tracking') para que el
+    // handler del HTML pueda reestilizar solo los marcadores sin acoplarse al resto del estado
+    // de seguimiento. Se manda siempre acá, en el mismo camino que el resto de `enviarEstadoMapa`
+    // (montaje + cada `onLoadEnd`), porque el script del WebView arranca con
+    // `proximoPuntoIdActual = null` — nunca lo recibe horneado en el HTML.
+    webViewRef.current?.postMessage(
+      JSON.stringify({ type: 'proximoPuntoControl', id: proximoPuntoControlId }),
     );
     if (posicionActual) {
       webViewRef.current?.postMessage(JSON.stringify({ type: 'position', ...posicionActual }));

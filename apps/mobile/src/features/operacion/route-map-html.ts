@@ -192,16 +192,34 @@ function crearControladorTiles(opciones) {
 }
 `;
 
+/**
+ * Entrega 31b (defecto post-piloto, 2026-09-10): `construirHtml` YA NO recibe
+ * `proximoPuntoControlId`. Antes lo recibía y lo horneaba dentro del `<script>` generado
+ * (`var proximoPuntoIdActual = ${JSON.stringify(proximoPuntoControlId)}`), y como
+ * `route-map-view.tsx` lo tenía en las dependencias del `useMemo` del HTML, cada vez que el
+ * chofer pasaba un punto de control (cambia el próximo) el `useMemo` recalculaba un HTML
+ * DISTINTO — mismo string salvo ese único valor — y React le pasaba a la WebView un `source.html`
+ * nuevo, forzando una recarga COMPLETA del documento: Leaflet se reinstancia desde cero
+ * (`L.map(...)` de nuevo), se pierden el marcador de posición y el estado de seguimiento hasta
+ * el próximo `onLoadEnd`, y el controlador de tiles (`crearControladorTiles`) también arranca de
+ * cero. En una ruta de 26 puntos de control eso son 26 recargas completas del mapa con
+ * parpadeo — inaceptable para navegación en vivo.
+ *
+ * El próximo punto de control YA NO es un dato de construcción del HTML: es estado que viaja
+ * por `postMessage` (mismo mecanismo que `tracking`/`position`/`ruta-calculada`, ver
+ * `enviarEstadoMapa` en route-map-view.tsx), con un handler acá abajo (`data.type ===
+ * 'proximoPuntoControl'`) que solo reestiliza los marcadores existentes
+ * (`renderizarPuntosControl()`) sin tocar `L.map`. Así el HTML generado es un string IDÉNTICO
+ * para el mismo paquete+vehículo sin importar qué punto de control sea el próximo — el `useMemo`
+ * de React no lo recalcula y la WebView nunca recarga por este motivo. Lo único que sigue
+ * determinando el HTML (y por lo tanto las dependencias del `useMemo`) es la identidad del
+ * paquete (la ruta dibujada, los puntos de control fijos) y del vehículo.
+ */
 export function construirHtml(
   paquete: PaqueteDia,
   _vehiculo: ContextoOperativoMovil['vehiculo'],
-  proximoPuntoControlId: string | null,
 ): string {
   const coordenadasRuta = convertirGeoJsonALatLng(paquete.ruta.geometria.coordinates);
-  const proximoPuntoControl = paquete.puntosControl.find((pc) => pc.id === proximoPuntoControlId);
-  const proximoPuntoLatLng: CoordenadaLeaflet | null = proximoPuntoControl
-    ? [proximoPuntoControl.coord.coordinates[1], proximoPuntoControl.coord.coordinates[0]]
-    : null;
 
   const puntosControlData: PuntoControlMapaHtml[] = paquete.puntosControl.map((pc, idx) => ({
     id: pc.id,
@@ -350,7 +368,12 @@ export function construirHtml(
     }).addTo(map);
 
     var puntosControlData = ${JSON.stringify(puntosControlData)};
-    var proximoPuntoIdActual = ${JSON.stringify(proximoPuntoControlId)};
+    // Arranca en null (nunca horneado desde construirHtml — ver el comentario grande de arriba,
+    // Entrega 31b): el valor real llega por postMessage ('proximoPuntoControl'), que
+    // route-map-view.tsx manda tanto al montar la WebView como en cada onLoadEnd. Hasta que
+    // llegue ese mensaje ningún punto de control aparece destacado como "próximo" — una ventana
+    // de un solo frame, indistinguible a simple vista de tenerlo ya resuelto.
+    var proximoPuntoIdActual = null;
     var pcMarkers = [];
 
     function renderizarPuntosControl() {
@@ -384,7 +407,6 @@ export function construirHtml(
       });
     }
 
-    var proximoPuntoLatLng = ${JSON.stringify(proximoPuntoLatLng)};
     var caminoResaltado = null;
     var rutaCalculadaCoords = null;
     var posicion = null;
@@ -449,12 +471,21 @@ export function construirHtml(
         return;
       }
 
+      if (data.type === 'proximoPuntoControl') {
+        // Entrega 31b: reestiliza los marcadores de puntos de control (el próximo destacado, el
+        // resto en su color normal) SIN tocar L.map ni recrear la polyline/capa de tiles — por
+        // eso este mensaje llega solo, separado de 'tracking'. renderizarPuntosControl() ya hacía
+        // exactamente este trabajo (remueve y vuelve a crear los markers, no el mapa), así que se
+        // reusa tal cual: no hace falta un mecanismo de reestilado nuevo, solo dispararlo desde
+        // este tipo de mensaje además de desde 'tracking'.
+        proximoPuntoIdActual = data.id || null;
+        renderizarPuntosControl();
+        return;
+      }
+
       if (data.type === 'tracking') {
         var didChange = seguimientoActivo !== (data.active === true);
         seguimientoActivo = data.active === true;
-        if (data.proximoPuntoControlId) {
-          proximoPuntoIdActual = data.proximoPuntoControlId;
-        }
 
         // Color de la ruta en mapa: En espera (#1E1B4B) vs En línea (#FE9B0B)
         ruta.setStyle({

@@ -264,11 +264,7 @@ describe('crearControladorTiles — máquina de estados de la capa de tiles', ()
 });
 
 describe('construirHtml — cero dependencia de red para inicializar el mapa', () => {
-  const html = construirHtml(
-    paqueteDePrueba(),
-    vehiculoDePrueba,
-    'p0000000-0000-4000-8000-000000000002',
-  );
+  const html = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
 
   it('no referencia ningún <script src="https://..."> (Leaflet ya no viene de unpkg)', () => {
     expect(html).not.toMatch(/<script[^>]*\ssrc\s*=\s*["']https?:/i);
@@ -346,6 +342,26 @@ describe('construirHtml — cero dependencia de red para inicializar el mapa', (
   // exportar un bundle de release.
   it('el HTML generado no contiene .toString() de ninguna función del bundle', () => {
     expect(html).not.toContain('.toString()');
+  });
+
+  // Entrega 31b (defecto post-piloto): construirHtml YA NO recibe proximoPuntoControlId — ver el
+  // comentario grande sobre esta función en route-map-html.ts. Este test es la guarda: el próximo
+  // punto de control arranca SIEMPRE en null dentro del script (nunca horneado), y se entera del
+  // valor real por postMessage. Si alguien reintrodujera un tercer parámetro y volviera a
+  // hornearlo acá, este test lo detecta.
+  it('nunca hornea el próximo punto de control — el script arranca con proximoPuntoIdActual = null', () => {
+    expect(html).toContain('var proximoPuntoIdActual = null;');
+  });
+
+  // Corolario directo de lo anterior: dado que el HTML ya no depende de qué punto de control es
+  // el próximo, dos llamadas a construirHtml con el mismo paquete/vehículo producen EXACTAMENTE
+  // el mismo string — la propiedad que el useMemo de route-map-view.tsx necesita para no
+  // recalcular (y por lo tanto no recargar la WebView) cuando lo único que cambió fue el próximo
+  // punto de control.
+  it('es determinístico para el mismo paquete y vehículo (dos llamadas producen el mismo HTML)', () => {
+    const htmlA = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
+    const htmlB = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
+    expect(htmlA).toBe(htmlB);
   });
 });
 
@@ -447,11 +463,7 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
   }
 
   it('corre sin tirar y dibuja la polyline, los puntos de control y llama fitBounds', () => {
-    const html = construirHtml(
-      paqueteDePrueba(),
-      vehiculoDePrueba,
-      'p0000000-0000-4000-8000-000000000002',
-    );
+    const html = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
     const scriptAplicacion = extraerScriptDeAplicacion(html);
 
     const listenersRegistrados: Array<{ objeto: string; evento: string }> = [];
@@ -502,5 +514,79 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
         { objeto: 'window', evento: 'message' },
       ]),
     );
+  });
+
+  // Entrega 31b (defecto post-piloto) — el test central del fix: el mensaje 'proximoPuntoControl'
+  // tiene que reestilizar el marcador correcto (el punto que quedó atrás pasa a "completed") SIN
+  // volver a llamar L.map en ningún momento. Antes de este fix, cambiar el próximo punto de
+  // control recargaba TODO el HTML de la WebView — lo que en este arnés equivaldría a que
+  // `construirHtml` generara un `<script>` distinto y, si lo corriéramos de nuevo, L.map se
+  // llamara una segunda vez. Acá se corre el `<script>` UNA sola vez y se le mandan mensajes
+  // postMessage sucesivos, tal como pasa en la WebView real durante toda la vida del componente.
+  it('el mensaje proximoPuntoControl reestiliza el marcador correcto y no vuelve a crear el mapa (L.map una sola vez)', () => {
+    const paquete = paqueteDePrueba();
+    const idPrimerPunto = paquete.puntosControl[0]!.id;
+    const idSegundoPunto = paquete.puntosControl[1]!.id;
+    const html = construirHtml(paquete, vehiculoDePrueba);
+    const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+    const lFalso = crearLFalso();
+    let mapCalls = 0;
+    const mapOriginal = lFalso.map;
+    // crearLFalso().map no usa sus argumentos (el script real le pasa ('map', opts), pero la
+    // fábrica los ignora) — el wrapper tampoco necesita reenviarlos, solo contar invocaciones.
+    lFalso.map = () => {
+      mapCalls += 1;
+      return mapOriginal();
+    };
+
+    let handlerMensajeWindow: ((event: { data: string }) => void) | undefined;
+    const sandbox: Record<string, unknown> = {
+      L: lFalso,
+      document: { addEventListener: () => {} },
+      window: {
+        addEventListener: (evento: string, cb: (event: { data: string }) => void) => {
+          if (evento === 'message') handlerMensajeWindow = cb;
+        },
+      },
+      console,
+      setTimeout,
+      clearTimeout,
+      Date,
+      Math,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(scriptAplicacion, sandbox);
+
+    expect(mapCalls).toBe(1);
+    expect(handlerMensajeWindow).toBeTypeOf('function');
+
+    // seguimientoActivo = true: necesario para que "isPassed" (renderizarPuntosControl) tenga
+    // algo que distinguir — sin tracking activo ningún punto se marca "completed" nunca, por
+    // diseño (ver el comentario de renderizarPuntosControl en route-map-html.ts).
+    handlerMensajeWindow!({ data: JSON.stringify({ type: 'tracking', active: true }) });
+    // El próximo punto de control pasa a ser el segundo: el primero queda "atrás" (completed).
+    handlerMensajeWindow!({ data: JSON.stringify({ type: 'proximoPuntoControl', id: idSegundoPunto }) });
+
+    // La aserción central del fix: seguimos en el mismo mapa, nunca se reinicializó Leaflet.
+    expect(mapCalls).toBe(1);
+
+    type MarkerFalso = { tipo: string; args: { opts: { icon: { opts: { html: string } } } } };
+    const mapaFalso = sandbox.map as { capas: MarkerFalso[] };
+    const markers = mapaFalso.capas.filter((c) => c.tipo === 'marker');
+    expect(markers).toHaveLength(2);
+
+    const htmlPrimerMarker = markers[0]!.args.opts.icon.opts.html;
+    const htmlSegundoMarker = markers[1]!.args.opts.icon.opts.html;
+    expect(htmlPrimerMarker).toContain('completed');
+    expect(htmlSegundoMarker).not.toContain('completed');
+
+    // Y al revés: si el próximo vuelve a ser el primer punto (p. ej. la app se reconstruyó el
+    // estado), el reestilizado responde igual, sin recrear el mapa.
+    handlerMensajeWindow!({ data: JSON.stringify({ type: 'proximoPuntoControl', id: idPrimerPunto }) });
+    expect(mapCalls).toBe(1);
+    const markersTrasSegundoMensaje = mapaFalso.capas.filter((c) => c.tipo === 'marker');
+    expect(markersTrasSegundoMensaje).toHaveLength(2);
+    expect(markersTrasSegundoMensaje[0]!.args.opts.icon.opts.html).not.toContain('completed');
   });
 });
