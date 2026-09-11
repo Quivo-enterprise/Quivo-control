@@ -28,6 +28,15 @@ function instanciarControladorTiles(opciones: OpcionesControladorTiles): Control
   return factory()(opciones);
 }
 
+/** Tile `<img>` falso mínimo: solo lo que el controlador toca (`.src`, `.parentNode`). No hace
+ * falta un DOM real — el controlador nunca asume más que esto de un tile. */
+function crearTileFalso(opciones: { montado?: boolean } = {}) {
+  return {
+    src: '',
+    parentNode: opciones.montado === false ? null : ({} as unknown),
+  };
+}
+
 // Entrega 25 (plan post-piloto 2026-09-09): la navegación en ruta no puede depender de la red.
 // Estos tests cubren lo que sí es testeable fuera del WebView: (a) que Leaflet quede embebido
 // inline y no se referencie ningún CDN, (b) que exista el fallback "nunca pantalla gris" cuando
@@ -109,17 +118,24 @@ describe('convertirGeoJsonALatLng', () => {
   });
 });
 
-// Code-review de la Entrega 25 (2026-09-10) — hallazgo 1 (de esa ronda, ya corregido antes de
-// esta): el fallback documentado de tiles ("sin cobertura a los 4s se remueve la capa") no se
-// ejecutaba nunca, porque Leaflet dispara `tileload` también para el GIF de `errorTileUrl` (no
-// solo para tiles reales), y el handler viejo no distinguía uno del otro. Estos tests ejercitan
-// `crearControladorTiles` vía `instanciarControladorTiles` (ver arriba) — evaluando el MISMO
-// string `CONTROLADOR_TILES_JS_SOURCE` que `construirHtml` embebe tal cual en el `<script>` del
-// WebView (ver `route-map-html.ts`), así que cubren el comportamiento real y el texto real, no
-// una función TS paralela que podría divergir del bundle de release.
-describe('crearControladorTiles — máquina de estados de la capa de tiles', () => {
+// Decisión del chairman (2026-09-11), a partir de un code-review posterior a la Entrega 25: el
+// mecanismo anterior (retirar la capa de tiles completa a los 4s de fallos sostenidos tras un
+// `tileerror`) EMPEORABA el caso normal. Con cobertura completa, si fallaba el último tile
+// pendiente (un timeout suelto, un 429 del servidor de demo de OSM), a los 4s se borraban TODOS
+// los tiles que sí habían cargado — pantalla lisa con la red funcionando. El requisito real ("sin
+// red, nunca pantalla gris") ya lo cumplían el `errorTileUrl`, el fondo liso y la
+// polyline/puntos de control/posición, que se dibujan siempre — retirar la capa no sumaba nada.
+// Ahora la capa queda SIEMPRE montada y `crearControladorTiles` solo reintenta, tile por tile, los
+// que fallaron — ver el comentario grande sobre `CONTROLADOR_TILES_JS_SOURCE` en route-map-html.ts.
+// Estos tests ejercitan `crearControladorTiles` vía `instanciarControladorTiles` (ver arriba) —
+// evaluando el MISMO string `CONTROLADOR_TILES_JS_SOURCE` que `construirHtml` embebe tal cual en
+// el `<script>` del WebView, así que cubren el comportamiento real y el texto real, no una función
+// TS paralela que podría divergir del bundle de release.
+describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca se retira)', () => {
   const ERROR_TILE_URL = 'data:image/gif;base64,ERROR';
-  const TIMEOUT_MS = 4000;
+  const REINTENTO_INTERVALO_MS = 30000;
+  const URL_ORIGINAL = 'https://tile.openstreetmap.org/10/512/512.png';
+  const COORDS = { x: 512, y: 512, z: 10 };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -129,137 +145,108 @@ describe('crearControladorTiles — máquina de estados de la capa de tiles', ()
     vi.useRealTimers();
   });
 
-  it('sin ningún tile real: a los 4s remueve la capa', () => {
-    const onRemoverCapa = vi.fn();
-    const controlador = instanciarControladorTiles({
+  /** Instancia el controlador con defaults razonables para estos tests — `tileSigueEnMapa`
+   * devuelve `true` salvo que el test la pise (simula un tile podado por pan/zoom). */
+  function crearControlador(overrides: Partial<OpcionesControladorTiles> = {}): ControladorTiles {
+    return instanciarControladorTiles({
       errorTileUrl: ERROR_TILE_URL,
-      timeoutMs: TIMEOUT_MS,
-      onRemoverCapa,
+      reintentoIntervaloMs: REINTENTO_INTERVALO_MS,
+      obtenerUrlOriginal: () => URL_ORIGINAL,
+      tileSigueEnMapa: () => true,
+      ...overrides,
     });
+  }
 
-    controlador.onTileError();
-    expect(onRemoverCapa).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(TIMEOUT_MS);
+  it('un tile falla y, pasados 30s sin ningún mensaje de posición de por medio, se reintenta solo; si carga, sale de la lista y el temporizador se detiene', () => {
+    const tile = crearTileFalso();
+    const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+    const controlador = crearControlador({ obtenerUrlOriginal });
 
-    expect(onRemoverCapa).toHaveBeenCalledTimes(1);
-    expect(controlador.estaRemovida()).toBe(true);
+    controlador.onTileError(tile, COORDS);
+    // El reintento es PURAMENTE por el temporizador — no depende de que llegue ningún mensaje
+    // 'position' (a diferencia del mecanismo viejo, ver `intentarRecuperarTiles` que existía
+    // antes). Nada pasa hasta que se cumple el intervalo.
+    expect(obtenerUrlOriginal).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
+    // Se reasignó tile.src con la URL original + cache-busting, para forzar una carga real nueva.
+    expect(tile.src).toContain(URL_ORIGINAL);
+    expect(tile.src).not.toBe(URL_ORIGINAL); // trae el parámetro de cache-busting agregado
+
+    // Leaflet dispara su propio 'tileload' sobre ESE <img> cuando la nueva carga funciona.
+    controlador.onTileLoad(tile, tile.src);
+
+    // Salió de la lista de pendientes: el temporizador se apaga y ya no se lo vuelve a tocar.
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS * 3);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
   });
 
-  it('el GIF de errorTileUrl dispara tileload pero NO cuenta como tile real — sigue removiendo', () => {
-    const onRemoverCapa = vi.fn();
-    const controlador = instanciarControladorTiles({
-      errorTileUrl: ERROR_TILE_URL,
-      timeoutMs: TIMEOUT_MS,
-      onRemoverCapa,
-    });
+  it('sin ningún tile fallido no arranca ningún temporizador', () => {
+    const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+    crearControlador({ obtenerUrlOriginal });
 
-    controlador.onTileError();
-    // Este es exactamente el evento que Leaflet 1.9.4 dispara para el placeholder de error:
-    // un tileload cuyo e.tile.src es el errorTileUrl, no un tile real.
-    controlador.onTileLoad(ERROR_TILE_URL);
-    vi.advanceTimersByTime(TIMEOUT_MS);
-
-    expect(onRemoverCapa).toHaveBeenCalledTimes(1);
-    expect(controlador.estaRemovida()).toBe(true);
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS * 5);
+    expect(obtenerUrlOriginal).not.toHaveBeenCalled();
   });
 
-  it('un tile real cancela el timeout — nunca remueve la capa', () => {
-    const onRemoverCapa = vi.fn();
-    const controlador = instanciarControladorTiles({
-      errorTileUrl: ERROR_TILE_URL,
-      timeoutMs: TIMEOUT_MS,
-      onRemoverCapa,
-    });
+  it('un tile que sigue fallando se reintenta en cada tick, sin duplicar la entrada pendiente', () => {
+    const tile = crearTileFalso();
+    const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+    const controlador = crearControlador({ obtenerUrlOriginal });
 
-    controlador.onTileError();
-    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
-    vi.advanceTimersByTime(TIMEOUT_MS);
+    controlador.onTileError(tile, COORDS);
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
 
-    expect(onRemoverCapa).not.toHaveBeenCalled();
-    expect(controlador.estaRemovida()).toBe(false);
+    // El reintento del tick anterior volvió a fallar: Leaflet dispara tileerror otra vez sobre
+    // el MISMO <img>. No debe armar una segunda entrada/temporizador en paralelo.
+    controlador.onTileError(tile, COORDS);
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(2);
   });
 
-  it('un tileerror aislado con red intermitente no remueve nada si después carga un tile real', () => {
-    const onRemoverCapa = vi.fn();
-    const controlador = instanciarControladorTiles({
-      errorTileUrl: ERROR_TILE_URL,
-      timeoutMs: TIMEOUT_MS,
-      onRemoverCapa,
-    });
+  // Hallazgo del code-review de esta entrega: Leaflet dispara `tileload` también para el GIF de
+  // `errorTileUrl` (no solo para tiles reales) — sin este chequeo, ese `tileload` sacaría al tile
+  // de la lista de pendientes como si hubiera cargado de verdad.
+  it('el GIF de errorTileUrl dispara tileload pero NO cuenta como carga real ni saca al tile de la lista', () => {
+    const tile = crearTileFalso();
+    const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+    const controlador = crearControlador({ obtenerUrlOriginal });
 
-    controlador.onTileError();
-    vi.advanceTimersByTime(TIMEOUT_MS / 2);
-    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
-    vi.advanceTimersByTime(TIMEOUT_MS);
+    controlador.onTileError(tile, COORDS);
+    // Este es exactamente el evento que Leaflet 1.9.4 dispara para el placeholder de error: un
+    // tileload cuyo tile.src es el errorTileUrl, no un tile real.
+    controlador.onTileLoad(tile, ERROR_TILE_URL);
 
-    expect(onRemoverCapa).not.toHaveBeenCalled();
-    expect(controlador.estaRemovida()).toBe(false);
+    // Sigue pendiente: el temporizador lo reintenta igual, el GIF no lo sacó de la lista.
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
   });
 
-  it('reintentar() resetea el estado para volver a evaluar cobertura desde cero', () => {
-    const onRemoverCapa = vi.fn();
-    const controlador = instanciarControladorTiles({
-      errorTileUrl: ERROR_TILE_URL,
-      timeoutMs: TIMEOUT_MS,
-      onRemoverCapa,
+  it('un tile podado del mapa (pan/zoom) se descarta sin reintentar y el temporizador se apaga si era el único pendiente', () => {
+    const tilePodado = crearTileFalso({ montado: false });
+    const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+    const controlador = crearControlador({
+      obtenerUrlOriginal,
+      tileSigueEnMapa: (tile) => tile !== tilePodado,
     });
 
-    controlador.onTileError();
-    vi.advanceTimersByTime(TIMEOUT_MS);
-    expect(controlador.estaRemovida()).toBe(true);
+    controlador.onTileError(tilePodado, COORDS);
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    // Se descartó sin pedir la URL de reintento — ya no está en el mapa, reintentarlo sería red
+    // desperdiciada.
+    expect(obtenerUrlOriginal).not.toHaveBeenCalled();
 
-    controlador.reintentar();
-    expect(controlador.estaRemovida()).toBe(false);
-
-    // Esta vez sí hay señal DURANTE la ventana de espera del nuevo timeout que arma este
-    // onTileError (por eso el orden es error → load, no load → error): el tile real cancela
-    // ESE timeout puntual, igual que en el resto de los tests de este describe. No debe volver
-    // a removerse.
-    controlador.onTileError();
-    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
-    vi.advanceTimersByTime(TIMEOUT_MS);
-    expect(onRemoverCapa).toHaveBeenCalledTimes(1); // solo la primera vez, no de nuevo
-    expect(controlador.estaRemovida()).toBe(false);
-  });
-
-  // Hallazgo 2 del code-review de esta entrega (medio): la versión anterior de
-  // `crearControladorTiles` marcaba un flag `cargoTileReal = true` PERMANENTE apenas cargaba un
-  // tile real, y ese flag bloqueaba para siempre volver a armar el timeout de remoción — sin
-  // importar cuánto tiempo pasara ni cuántos tileerror llegaran después. Escenario real: el
-  // chofer sale de la terminal con señal (carga un tile real) y más tarde, ya en ruta, entra a
-  // una zona sin cobertura — con el bug, la capa de tiles NUNCA se removía ahí, porque el flag
-  // de "alguna vez cargó un tile real" seguía en true desde la terminal. Esta es la secuencia
-  // inversa pedida por el code-review: carga real → (silencio, pasa el tiempo) → pérdida de
-  // red → errores sostenidos → SÍ se remueve la capa → vuelve la red → se reintegra.
-  it('una carga real vieja no inmuniza para siempre: errores sostenidos después SÍ remueven la capa', () => {
-    const onRemoverCapa = vi.fn();
-    const controlador = instanciarControladorTiles({
-      errorTileUrl: ERROR_TILE_URL,
-      timeoutMs: TIMEOUT_MS,
-      onRemoverCapa,
-    });
-
-    // El chofer arranca en la terminal, con señal: carga un tile real.
-    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
-    expect(controlador.estaRemovida()).toBe(false);
-
-    // Viaja un rato largo sin que se pida ningún tile nuevo (sin pan/zoom de por medio).
-    vi.advanceTimersByTime(TIMEOUT_MS * 10);
-    expect(onRemoverCapa).not.toHaveBeenCalled();
-
-    // Entra a una zona sin cobertura: los tiles empiezan a fallar y ya no hay ninguna carga
-    // real más — exactamente el escenario que el flag permanente del bug ignoraba para siempre.
-    controlador.onTileError();
-    expect(onRemoverCapa).not.toHaveBeenCalled(); // todavía dentro del colchón de TIMEOUT_MS
-
-    vi.advanceTimersByTime(TIMEOUT_MS);
-    expect(onRemoverCapa).toHaveBeenCalledTimes(1);
-    expect(controlador.estaRemovida()).toBe(true);
-
-    // Vuelve la red: reintentar() + un tile real reintegra la capa al mapa.
-    controlador.reintentar();
-    controlador.onTileLoad('https://tile.openstreetmap.org/10/512/512.png');
-    expect(controlador.estaRemovida()).toBe(false);
+    // Era el único pendiente: el temporizador se apagó solo. Confirmarlo agregando un tile nuevo
+    // y viendo que el próximo tick vuelve a arrancar desde cero (si el timer hubiera seguido
+    // corriendo con un intervalo desalineado, este tile se reintentaría antes de tiempo).
+    const tileNuevo = crearTileFalso();
+    controlador.onTileError(tileNuevo, COORDS);
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS - 1);
+    expect(obtenerUrlOriginal).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -302,9 +289,12 @@ describe('construirHtml — cero dependencia de red para inicializar el mapa', (
     expect(html).toContain('#F4F6F8');
   });
 
-  it('maneja tileerror para nunca dejar mosaicos rotos parpadeando sin red', () => {
+  it('maneja tileerror para reintentar tiles fallidos, sin retirar nunca la capa completa', () => {
     expect(html).toContain("tileLayer.on('tileerror'");
-    expect(html).toContain('map.removeLayer(tileLayer)');
+    expect(html).toContain('controladorTiles.onTileError');
+    // Guarda mecánica del hallazgo del code-review: la capa de tiles jamás se retira del mapa —
+    // si alguien reintrodujera la lógica de remoción, este assert lo detecta.
+    expect(html).not.toContain('map.removeLayer(tileLayer)');
   });
 
   it('deja el punto de extensión comentado para el cache de tiles de la Entrega 27', () => {
@@ -323,9 +313,10 @@ describe('construirHtml — cero dependencia de red para inicializar el mapa', (
     expect(idxSetView).toBeLessThan(idxTileLayerAddTo);
   });
 
-  it('embebe crearControladorTiles (la máquina de estados de tiles) dentro del script', () => {
+  it('embebe crearControladorTiles (el reintento de tiles fallidos) dentro del script', () => {
     expect(html).toContain('function crearControladorTiles');
     expect(html).toContain('controladorTiles.onTileLoad');
+    expect(html).toContain('controladorTiles.onTileError');
   });
 
   it('la polyline de la ruta usa coordenadas ya convertidas a [lat, lng]', () => {
@@ -402,18 +393,27 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
   }
 
   /** Fábrica de capas Leaflet falsas (tileLayer/polyline/marker/divIcon): todas soportan
-   * `.addTo(mapa)` (se registran en `mapa.capas`), `.on(evento, cb)` y los demás métodos que
-   * `route-map-html.ts` invoca sobre ellas (`setStyle`, `setIcon`, `setLatLng`, `getLatLng`,
-   * `getBounds`, `bringToFront`) — sin implementar nada de geometría real, solo lo mínimo para
-   * que el script corra sin `TypeError: x is not a function`. */
+   * `.addTo(mapa)` (se registran en `mapa.capas`), `.on(evento, cb)` — guardando el callback en
+   * `capa.callbacks[evento]` para poder disparar `tileload`/`tileerror` a mano en los tests de
+   * integración del reintento de tiles — y los demás métodos que `route-map-html.ts` invoca sobre
+   * ellas (`setStyle`, `setIcon`, `setLatLng`, `getLatLng`, `getBounds`, `bringToFront`,
+   * `getTileUrl`) — sin implementar nada de geometría real, solo lo mínimo para que el script
+   * corra sin `TypeError: x is not a function`. */
   function crearCapaLeafletFalsa(tipo: string, args: unknown) {
-    const capa: Record<string, unknown> = { tipo, args, handlersRegistrados: [] as string[] };
+    const callbacks: Record<string, (evento: unknown) => void> = {};
+    const capa: Record<string, unknown> = {
+      tipo,
+      args,
+      handlersRegistrados: [] as string[],
+      callbacks,
+    };
     capa.addTo = (mapaFalso: { capas: unknown[] }) => {
       mapaFalso.capas.push(capa);
       return capa;
     };
-    capa.on = (evento: string) => {
+    capa.on = (evento: string, cb: (evento: unknown) => void) => {
       (capa.handlersRegistrados as string[]).push(evento);
+      callbacks[evento] = cb;
       return capa;
     };
     capa.setStyle = () => capa;
@@ -422,6 +422,10 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
     capa.getLatLng = () => ({ lat: -17.38, lng: -66.15 });
     capa.getBounds = () => 'bounds-falso';
     capa.bringToFront = () => capa;
+    // Réplica mínima de Leaflet real: URL de tile a partir de {x,y,z}. Solo hace falta que sea
+    // determinística y distinguible, no que coincida con el formato exacto de Leaflet.
+    capa.getTileUrl = (coords: { x: number; y: number; z: number }) =>
+      `https://tile.openstreetmap.org/${coords.z}/${coords.x}/${coords.y}.png`;
     return capa;
   }
 
@@ -482,6 +486,8 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
       console,
       setTimeout,
       clearTimeout,
+      setInterval,
+      clearInterval,
       Date,
       Math,
     };
@@ -514,6 +520,56 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
         { objeto: 'window', evento: 'message' },
       ]),
     );
+  });
+
+  // Decisión del chairman (2026-09-11): el mecanismo anterior retiraba la capa COMPLETA de tiles
+  // a los 4s de un tileerror sin tileload real después — con cobertura completa, si el ÚLTIMO
+  // tile pendiente fallaba (timeout suelto, 429 del servidor de demo de OSM), eso borraba los
+  // tiles que sí habían cargado, dejando el mapa liso con la red funcionando. Este test corre el
+  // `<script>` real de `construirHtml` (no una reimplementación) y dispara los callbacks
+  // 'tileload'/'tileerror' que el propio script registró sobre `tileLayer` — si alguien
+  // reintrodujera `map.removeLayer(tileLayer)`, este test lo detecta.
+  it('N tiles cargan y el último falla: la capa de tiles nunca se retira, sea cual sea el resultado del último tile', () => {
+    vi.useFakeTimers();
+    try {
+      const html = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
+      const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+      const sandbox: Record<string, unknown> = {
+        L: crearLFalso(),
+        document: { addEventListener: () => {} },
+        window: { addEventListener: () => {} },
+        console,
+        setTimeout,
+        clearTimeout,
+        setInterval,
+        clearInterval,
+        Date,
+        Math,
+      };
+      vm.createContext(sandbox);
+      vm.runInContext(scriptAplicacion, sandbox);
+
+      type CapaFalsa = { tipo: string; callbacks: Record<string, (evento: unknown) => void> };
+      const mapaFalso = sandbox.map as { capas: CapaFalsa[] };
+      const tileLayerCapa = mapaFalso.capas.find((c) => c.tipo === 'tileLayer');
+      expect(tileLayerCapa).toBeDefined();
+
+      // 11 tiles reales cargan — cobertura completa salvo por el último tile pendiente.
+      for (let i = 0; i < 11; i++) {
+        tileLayerCapa!.callbacks.tileload!({ tile: { src: `https://tile.openstreetmap.org/10/${i}/1.png` } });
+      }
+      // El último tile pendiente falla.
+      tileLayerCapa!.callbacks.tileerror!({ tile: { src: '' }, coords: { x: 11, y: 1, z: 10 } });
+      // Le da tiempo de sobra a cualquier temporizador de remoción que pudiera haber quedado (la
+      // versión anterior removía a los 4s) — con el mecanismo actual no debería pasar nada.
+      vi.advanceTimersByTime(60000);
+
+      // La capa sigue montada en el mapa — nunca se llamó map.removeLayer(tileLayer).
+      expect(mapaFalso.capas).toContain(tileLayerCapa);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // Entrega 31b (defecto post-piloto) — el test central del fix: el mensaje 'proximoPuntoControl'
@@ -552,6 +608,8 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
       console,
       setTimeout,
       clearTimeout,
+      setInterval,
+      clearInterval,
       Date,
       Math,
     };

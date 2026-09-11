@@ -14,11 +14,15 @@ import { LEAFLET_CSS_INLINE, LEAFLET_JS_INLINE } from './leaflet-inline.generate
  * arranca siempre, con o sin red.
  *
  * Lo único que sigue dependiendo de la red son los tiles de OpenStreetMap (imágenes de calles
- * de fondo) — y ahí el fallback es la capa base `#F4F6F8` + la lógica de `tileerror` más abajo:
- * si los tiles no cargan, el mapa se queda sin ellos pero la polyline de la ruta, los puntos de
- * control y la posición del vehículo siguen dibujados sobre un fondo liso legible. La
- * navegación funcional se conserva — el chofer ve dónde está respecto de su ruta aunque no vea
- * las calles.
+ * de fondo) — y ahí el fallback YA está resuelto sin tocar la capa de tiles: el `errorTileUrl`
+ * (GIF transparente, ver más abajo) evita el ícono de "imagen rota" tile por tile, el fondo liso
+ * `#F4F6F8` (seteado en html/body/#map) cubre el resto del lienzo, y la polyline de la ruta, los
+ * puntos de control y la posición del vehículo se dibujan siempre, tile o no tile. La capa de
+ * tiles NUNCA se retira del mapa — ver `CONTROLADOR_TILES_JS_SOURCE` más abajo para el porqué (un
+ * mecanismo anterior que la retiraba a los 4s de fallos sostenidos terminaba borrando tiles que sí
+ * habían cargado, exactamente en el caso normal con buena cobertura). Lo único que hace el
+ * controlador de tiles es reintentar, cada tanto, los tiles puntuales que fallaron — nunca toca
+ * los que ya están bien.
  */
 
 /** Coordenada Leaflet, siempre `[lat, lng]` — a diferencia de GeoJSON, que es `[lng, lat]`
@@ -47,31 +51,52 @@ export interface PuntoControlMapaHtml {
 /** Opciones de `crearControladorTiles` (ver `CONTROLADOR_TILES_JS_SOURCE`) — tipa el objeto que
  * se le pasa a la función una vez evaluada en el WebView o en `new Function` en los tests. */
 export interface OpcionesControladorTiles {
-  /** Debe ser EXACTAMENTE el mismo string que se le pasa a `L.tileLayer(..., { errorTileUrl })`. */
+  /** Debe ser EXACTAMENTE el mismo string que se le pasa a `L.tileLayer(..., { errorTileUrl })`.
+   * Sirve para distinguir el `tileload` del GIF placeholder (no es una carga real) del de un tile
+   * de verdad. */
   errorTileUrl: string;
-  timeoutMs: number;
-  /** Se invoca una sola vez cuando se decide que no hay cobertura y hay que sacar la capa. */
-  onRemoverCapa: () => void;
+  /** Cada cuánto se reintentan, en bloque, TODOS los tiles fallidos pendientes. El temporizador
+   * (un único `setInterval` compartido) solo corre mientras haya al menos un tile pendiente. */
+  reintentoIntervaloMs: number;
+  /** Dado el `coords` que Leaflet manda en el evento `tileerror`, devuelve la URL original del
+   * tile. Hace falta recalcularla porque, para cuando llega `tileerror`, Leaflet YA reemplazó
+   * `tile.src` por `errorTileUrl` (ver el comentario grande sobre `CONTROLADOR_TILES_JS_SOURCE`
+   * más abajo) — el `<img>` fallido ya no tiene la URL real en ningún atributo. */
+  obtenerUrlOriginal: (coords: unknown) => string;
+  /** true si el `<img>` del tile fallido sigue montado en el DOM del mapa. Leaflet lo desmonta
+   * (poda) cuando el tile queda fuera de la vista por un pan/zoom — reintentar un tile podado
+   * sería re-descargar algo que ya no se va a dibujar. */
+  tileSigueEnMapa: (tile: unknown) => boolean;
 }
 
 export interface ControladorTiles {
-  /** Notificar un `tileload` de Leaflet, pasando el `src` del `<img>` que cargó. */
-  onTileLoad: (tileSrc: string | null | undefined) => void;
-  /** Notificar un `tileerror` de Leaflet (no importa cuál tile — solo que falló uno). */
-  onTileError: () => void;
-  /** Reintentar: vuelve a habilitar la detección como si el mapa arrancara de cero. Se usa
-   * cuando puede haber vuelto la red (ver `intentarRecuperarTiles` en el HTML generado). */
-  reintentar: () => void;
-  /** true si ya se decidió remover la capa por falta de cobertura sostenida. */
-  estaRemovida: () => boolean;
+  /** Notificar un `tileload` de Leaflet: `tile` es el `<img>` que disparó el evento, `tileSrc` su
+   * `src` en ese momento. Si el tile estaba en la lista de pendientes, sale de ahí. */
+  onTileLoad: (tile: unknown, tileSrc: string | null | undefined) => void;
+  /** Notificar un `tileerror` de Leaflet: `tile` es el `<img>` que falló, `coords` el `{x,y,z}`
+   * que Leaflet manda en el evento (necesario para recalcular la URL original al reintentar). */
+  onTileError: (tile: unknown, coords: unknown) => void;
 }
 
 /**
- * Código fuente LITERAL (JS plano, ES5) de la máquina de estados que decide cuándo la capa de
- * tiles de OpenStreetMap debe darse por perdida y removerse del mapa. Es un STRING, no una
- * función TypeScript — y esa diferencia es justamente el fix del Hallazgo 1 del code-review de
- * esta entrega (release real, no un caso de laboratorio). Ver el bloque de comentario largo más
- * abajo, antes de `CONTROLADOR_TILES_JS_SOURCE`, para el detalle completo de por qué.
+ * Código fuente LITERAL (JS plano, ES5) del controlador que reintenta, en bloque y cada tanto,
+ * los tiles de OpenStreetMap que fallaron — SIN retirar nunca la capa de tiles del mapa. Es un
+ * STRING, no una función TypeScript — y esa diferencia es justamente el fix del Hallazgo 1 del
+ * code-review de esta entrega (release real, no un caso de laboratorio). Ver el bloque de
+ * comentario largo más abajo, antes de `CONTROLADOR_TILES_JS_SOURCE`, para el detalle completo de
+ * por qué.
+ *
+ * Versión anterior (revisada y descartada): este controlador retiraba la capa completa de tiles
+ * (`map.removeLayer(tileLayer)`) a los 4s de no ver ningún `tileload` real tras un `tileerror`.
+ * El code-review posterior encontró que eso EMPEORABA el caso normal: con cobertura completa, si
+ * fallaba el último tile pendiente (un timeout suelto, un 429 del servidor de demo de OSM), a los
+ * 4s se borraban TODOS los tiles que sí habían cargado — pantalla lisa con red funcionando. En
+ * redes lentas, el primer error armaba el timer y la retirada podía abortar tiles que estaban
+ * cargando bien. El requisito real ("sin red, nunca pantalla gris") ya lo cumplen el
+ * `errorTileUrl`, el fondo liso `#F4F6F8` y la polyline/puntos de control/posición, que se dibujan
+ * siempre — retirar la capa no sumaba nada y solo agregaba riesgo. Por eso ahora la capa queda
+ * SIEMPRE montada y lo único que hace este controlador es reintentar, tile por tile, los que
+ * fallaron — Leaflet no reintenta un tile con `tileerror` por su cuenta.
  *
  * Este texto se ejecuta en DOS lugares y TIENE QUE SER exactamente el mismo en ambos:
  *   1. Interpolado tal cual dentro del `<script>` del HTML — ver `construirHtml` más abajo.
@@ -130,64 +155,76 @@ export interface ControladorTiles {
  */
 export const CONTROLADOR_TILES_JS_SOURCE = `
 function crearControladorTiles(opciones) {
-  // Hallazgo 2 del code-review de esta entrega (medio): la versión anterior guardaba un flag
-  // "cargoTileReal" que, apenas se ponía en true con el primer tile real, quedaba así PARA
-  // SIEMPRE — ningún onTileError posterior volvía a armar el timeout de remoción, sin importar
-  // cuánto tiempo pasara. Escenario real: el chofer sale de la terminal con señal (carga un
-  // tile real) y más tarde, ya en ruta, entra a una zona sin cobertura — con el bug, la capa de
-  // tiles se quedaba ahí para siempre, pidiendo tiles reales en cada flyTo sin retirarse nunca.
-  //
-  // El fix NO guarda ningún flag permanente de "alguna vez hubo señal": la única memoria de
-  // estado es "hay un timeout de remoción corriendo ahora mismo" (timeoutId). Cada racha de
-  // errores arma su propia ventana de espera desde cero; si durante esa ventana llega CUALQUIER
-  // tile real, onTileLoad cancela ESE timeout puntual (señal hay AHORA, no importa qué pasó
-  // antes ni hace cuánto). Si nadie cancela el timeout durante la ventana, se decide que no hay
-  // cobertura y se remueve — sin importar que en algún momento anterior sí la hubiera habido.
-  // Así se mide la AUSENCIA SOSTENIDA de éxito por ventana de tiempo, no un booleano histórico.
-  var timeoutId = null;
-  var removida = false;
+  // Lista de tiles fallidos pendientes de reintento: { tile: <img>, coords: {x,y,z} }. Un mismo
+  // <img> nunca queda duplicado acá (ver onTileError) — mientras siga fallando, sigue siendo la
+  // MISMA entrada, no una nueva por cada tileerror sucesivo.
+  var pendientes = [];
+  // Un único setInterval compartido para todos los tiles pendientes (no uno por tile): más barato
+  // y evita reintentos desincronizados. Solo existe mientras haya al menos un pendiente — arranca
+  // en el primer tileerror y se apaga solo cuando la lista queda vacía (ver detenerTimerSiVacio).
+  var intervalId = null;
 
-  function onTileLoad(tileSrc) {
-    if (removida) return;
+  function indiceDe(tile) {
+    for (var i = 0; i < pendientes.length; i++) {
+      if (pendientes[i].tile === tile) return i;
+    }
+    return -1;
+  }
+
+  function detenerTimerSiVacio() {
+    if (pendientes.length === 0 && intervalId !== null) {
+      clearInterval(intervalId);
+      intervalId = null;
+    }
+  }
+
+  function reintentarPendientes() {
+    // Recorre una copia porque la lista muta durante el loop (los tiles podados se descartan acá
+    // mismo, sin esperar al próximo tileload/tileerror que nunca va a llegar para un <img> que ya
+    // no está en el DOM).
+    var siguientes = [];
+    for (var i = 0; i < pendientes.length; i++) {
+      var entrada = pendientes[i];
+      // El tile salió de la vista por un pan/zoom (Leaflet lo podó del DOM): reintentar algo que
+      // ya no se va a dibujar sería tráfico de red desperdiciado. Se descarta sin reintentar.
+      if (!opciones.tileSigueEnMapa(entrada.tile)) continue;
+      var url = opciones.obtenerUrlOriginal(entrada.coords);
+      // Cache-busting: sin esto el navegador puede resolver el reintento contra la misma
+      // respuesta fallida que tiene cacheada en vez de golpear la red de nuevo.
+      url += (url.indexOf('?') === -1 ? '?' : '&') + '_retry=' + Date.now();
+      // Asignar .src de nuevo dispara una carga real del <img> — Leaflet ya le tiene enganchados
+      // sus propios onload/onerror (los que a su vez disparan 'tileload'/'tileerror'), así que si
+      // esta carga funciona, onTileLoad de acá abajo se entera solo y saca la entrada de la lista;
+      // si vuelve a fallar, onTileError la deja donde está (mismo tile, no se duplica) para el
+      // próximo tick. Deliberadamente NO se usa tileLayer.redraw(): eso recarga TODOS los tiles
+      // del mapa (parpadeo visible) por reintentar unos pocos.
+      entrada.tile.src = url;
+      siguientes.push(entrada);
+    }
+    pendientes = siguientes;
+    detenerTimerSiVacio();
+  }
+
+  function onTileLoad(tile, tileSrc) {
     if (tileSrc === opciones.errorTileUrl) return; // el GIF de error NUNCA cuenta como carga real
-    // Cancela la ventana de error en curso, si hay una: llegó señal real ahora.
-    if (timeoutId !== null) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
+    var idx = indiceDe(tile);
+    if (idx !== -1) {
+      pendientes.splice(idx, 1);
+      detenerTimerSiVacio();
     }
   }
 
-  function onTileError() {
-    if (removida || timeoutId !== null) return;
-    // Colchón antes de sacar la capa (no al primer error): un tileerror aislado con red
-    // intermitente no debe tirar los tiles para toda la sesión del mapa, solo la ausencia
-    // sostenida de éxito DURANTE esta ventana puntual.
-    timeoutId = setTimeout(function () {
-      // Si llegamos acá es porque nada canceló este timeout puntual (ver onTileLoad) — no
-      // importa si hubo un tile real hace rato, lo que cuenta es esta ventana.
-      timeoutId = null;
-      removida = true;
-      opciones.onRemoverCapa();
-    }, opciones.timeoutMs);
-  }
-
-  function reintentar() {
-    removida = false;
-    if (timeoutId !== null) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
+  function onTileError(tile, coords) {
+    if (indiceDe(tile) !== -1) return; // ya está pendiente — no arma un segundo reintento en paralelo
+    pendientes.push({ tile: tile, coords: coords });
+    if (intervalId === null) {
+      intervalId = setInterval(reintentarPendientes, opciones.reintentoIntervaloMs);
     }
-  }
-
-  function estaRemovida() {
-    return removida;
   }
 
   return {
     onTileLoad: onTileLoad,
-    onTileError: onTileError,
-    reintentar: reintentar,
-    estaRemovida: estaRemovida
+    onTileError: onTileError
   };
 }
 `;
@@ -299,7 +336,6 @@ export function construirHtml(
     // es el servidor de demostración de OSM — su política de uso no permite consumo intensivo
     // desde apps en producción con flota real. Con más de un puñado de vehículos hace falta un
     // proveedor de tiles propio o pago (p. ej. MapTiler, Mapbox, o un tile server propio).
-    var TILE_ERROR_TIMEOUT_MS = 4000;
     // Pixel transparente 1x1: evita que Android WebView dibuje el ícono de "imagen rota" en
     // cada mosaico que falla mientras no hay red — sin esto, un mapa sin cobertura se llena
     // de cuadrados rotos parpadeando en cada reintento en vez de quedar en el fondo liso.
@@ -325,36 +361,32 @@ export function construirHtml(
     // route-map-html.ts para el motivo completo (minificador de Metro + bytecode de Hermes).
     ${CONTROLADOR_TILES_JS_SOURCE}
 
+    // La capa de tiles queda SIEMPRE montada (ver el comentario grande sobre
+    // CONTROLADOR_TILES_JS_SOURCE arriba en route-map-html.ts — una versión anterior la retiraba
+    // por ausencia sostenida de éxito y eso rompía el caso normal). Lo único que hace este
+    // controlador es reintentar, cada REINTENTO_TILES_INTERVALO_MS, los <img> puntuales que
+    // fallaron — sin depender de ningún mensaje de posición, así que un vehículo detenido
+    // también recupera sus calles.
+    var REINTENTO_TILES_INTERVALO_MS = 30000;
     var controladorTiles = crearControladorTiles({
       errorTileUrl: ERROR_TILE_URL,
-      timeoutMs: TILE_ERROR_TIMEOUT_MS,
-      onRemoverCapa: function () { map.removeLayer(tileLayer); }
+      reintentoIntervaloMs: REINTENTO_TILES_INTERVALO_MS,
+      // Para cuando llega 'tileerror' Leaflet YA reemplazó tile.src por ERROR_TILE_URL (ver el
+      // comentario grande arriba), así que la URL real hay que recalcularla a partir de las
+      // coords que el propio evento trae — tileLayer.getTileUrl es la misma función que Leaflet
+      // usa internamente para pedir el tile la primera vez.
+      obtenerUrlOriginal: function (coords) { return tileLayer.getTileUrl(coords); },
+      // Un tile podado (fuera de la vista tras un pan/zoom) ya no tiene el <img> montado en el
+      // DOM — parentNode es la señal barata y estable de "Leaflet ya lo descartó", sin tocar
+      // ninguna estructura interna privada de la librería.
+      tileSigueEnMapa: function (tile) { return !!(tile && tile.parentNode); }
     });
     tileLayer.on('tileload', function (e) {
-      controladorTiles.onTileLoad(e && e.tile ? e.tile.src : null);
+      controladorTiles.onTileLoad(e && e.tile, e && e.tile ? e.tile.src : null);
     });
-    tileLayer.on('tileerror', function () {
-      controladorTiles.onTileError();
+    tileLayer.on('tileerror', function (e) {
+      controladorTiles.onTileError(e && e.tile, e && e.coords);
     });
-
-    // Reintento de red apoyado en el heartbeat que YA existe (el GPS), no en 'online'/'offline':
-    // esos eventos del navegador son notoriamente poco confiables en WKWebView (iOS) y no
-    // conviene depender de ellos para algo tan visible como el mapa. Cada actualización de
-    // posición (llega cada vez que el chofer se movió ~15m, ver route-map-view.tsx) es una
-    // oportunidad barata para reintentar: si la capa fue removida, se vuelve a agregar y se
-    // deja que tileload/tileerror decidan otra vez en TILE_ERROR_TIMEOUT_MS si esta vez hay
-    // señal. REINTENTO_MIN_INTERVALO_MS evita reintentar en cada GPS individual mientras se
-    // sigue sin cobertura por un rato largo.
-    var REINTENTO_MIN_INTERVALO_MS = 30000;
-    var ultimoReintentoTilesMs = 0;
-    function intentarRecuperarTiles() {
-      if (!controladorTiles.estaRemovida()) return;
-      var ahora = Date.now();
-      if (ahora - ultimoReintentoTilesMs < REINTENTO_MIN_INTERVALO_MS) return;
-      ultimoReintentoTilesMs = ahora;
-      controladorTiles.reintentar();
-      tileLayer.addTo(map);
-    }
 
     var COLOR_ESPERA = '#1E1B4B';
     var COLOR_LINEA = '#FE9B0B';
@@ -510,7 +542,6 @@ export function construirHtml(
 
       if (data.type === 'position') {
         var latlng = [data.lat, data.lng];
-        intentarRecuperarTiles();
 
         if (prevLatLng && (prevLatLng[0] !== latlng[0] || prevLatLng[1] !== latlng[1])) {
           currentHeading = calcHeading(prevLatLng[0], prevLatLng[1], latlng[0], latlng[1]);
