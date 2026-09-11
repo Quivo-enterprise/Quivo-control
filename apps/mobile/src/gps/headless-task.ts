@@ -4,16 +4,35 @@ import BackgroundGeolocation, {
   type HeadlessEvent,
   type Location,
 } from 'react-native-background-geolocation';
-import type { DeteccionPuntoControl, EstadoPuntoControl } from './geofence';
+import {
+  confirmarVisitasVencidas,
+  filtrarPorSesion,
+  UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+  type CumplimientoAEmitir,
+  type DeteccionPuntoControl,
+  type EstadoPuntoControl,
+} from './geofence';
 import {
   clavesCumplimientoDesdePayloads,
+  combinarConVisitasPendientes,
   construirEventosDeUbicacion,
   type ContextoUbicacion,
 } from './location-task';
-import { abrirOutbox, encolarEvento, obtenerEventosPorTipo } from '../db/outbox';
+import {
+  abrirOutbox,
+  encolarEvento,
+  encolarEventoYLimpiarVisita,
+  eliminarVisitaPendiente,
+  guardarVisitaPendiente,
+  obtenerEventosPorTipo,
+  obtenerVisitasPendientes,
+} from '../db/outbox';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
 import { cargarSesionMovil, obtenerDeviceIdMovil } from '../shared/security/sesion-movil-store';
-import { anunciarDeteccionesDelTick } from '../features/operacion/anuncio-punto-control';
+import {
+  anunciarDeteccionesDelTick,
+  anunciarPuntoControl,
+} from '../features/operacion/anuncio-punto-control';
 
 /**
  * Margen de gracia antes de apagar el plugin nativo tras vencer el paquete del día (hallazgo
@@ -144,7 +163,11 @@ export function registrarPuntoGps(
   location: Location,
   contexto: ContextoUbicacion,
   estadosPuntosControl: ContenedorEstadosPuntosControl,
-): Promise<{ deteccion: DeteccionPuntoControl | null; deteccionAproximacion: DeteccionPuntoControl | null }> {
+): Promise<{
+  deteccion: DeteccionPuntoControl | null;
+  deteccionAproximacion: DeteccionPuntoControl | null;
+  puntosRearmados: string[];
+}> {
   profundidadColaRegistroGps += 1;
   if (profundidadColaRegistroGps >= PROFUNDIDAD_COLA_SOSPECHOSA) {
     Sentry.addBreadcrumb({
@@ -217,12 +240,16 @@ async function registrarPuntoGpsInterno(
   location: Location,
   contexto: ContextoUbicacion,
   estadosPuntosControl: ContenedorEstadosPuntosControl,
-): Promise<{ deteccion: DeteccionPuntoControl | null; deteccionAproximacion: DeteccionPuntoControl | null }> {
+): Promise<{
+  deteccion: DeteccionPuntoControl | null;
+  deteccionAproximacion: DeteccionPuntoControl | null;
+  puntosRearmados: string[];
+}> {
   // B6: `.current` se lee ACÁ, ya con el turno de la cola concedido — nunca en el caller, que
   // pudo haber quedado con una referencia previa a una re-siembra (ver
   // `ContenedorEstadosPuntosControl`).
   const estados = estadosPuntosControl.current;
-  const { eventos, deteccion, deteccionAproximacion, transicionesEstado, avisosPrecision } =
+  const { eventos, deteccion, deteccionAproximacion, transicionesEstado, avisosPrecision, puntosRearmados } =
     construirEventosDeUbicacion(location, contexto, estados);
   // M3: la precisión degradada del fix queda registrada como breadcrumb — es la telemetría que
   // el gate de accuracy anterior NO dejaba (descartaba la pasada en silencio).
@@ -242,17 +269,25 @@ async function registrarPuntoGpsInterno(
   );
 
   for (const evento of eventos) {
-    await encolarEvento(db, {
-      deviceId: contexto.deviceId,
-      tipo: evento.tipo,
-      payload: evento.payload,
-    });
     if (evento.clave !== undefined) {
+      // FIX POST-REVISIÓN (bug 5): confirmación — encolar el evento y borrar la fila de
+      // `visitas_pendientes` de esta visita en LA MISMA transacción (ver
+      // `encolarEventoYLimpiarVisita`, `db/outbox.ts`).
+      await encolarEventoYLimpiarVisita(
+        db,
+        { deviceId: contexto.deviceId, tipo: evento.tipo, payload: evento.payload },
+        evento.clave,
+      );
       // `cumplimiento_punto_control`: transición aplicada YA, recién confirmada su propia
       // escritura — ver el comentario de la función para el porqué (M4).
       const estado = transicionesEstado.get(evento.clave);
       if (estado) estados.set(evento.clave, estado);
     } else {
+      await encolarEvento(db, {
+        deviceId: contexto.deviceId,
+        tipo: evento.tipo,
+        payload: evento.payload,
+      });
       // `gps_point` (siempre el primer evento, sin `clave` propia): ancla para aplicar las
       // transiciones de RE-ARMADO, que no tienen ningún evento propio al que atarse.
       for (const [clave, estado] of transicionesEstado) {
@@ -260,7 +295,55 @@ async function registrarPuntoGpsInterno(
       }
     }
   }
-  return { deteccion, deteccionAproximacion };
+
+  // FIX POST-REVISIÓN (bug 5): housekeeping de `visitas_pendientes` — para CADA clave que este
+  // tick tocó (no solo las confirmadas, que ya se limpiaron arriba en la misma transacción):
+  // si sigue siendo una visita en curso sin confirmar, guarda/actualiza su candidato; si no
+  // (re-armada, o B5 reentrada-ya-confirmada), borra cualquier fila vieja que pudiera quedar.
+  // Best-effort a propósito (try/catch propio, no aborta el tick): la evidencia YA se persistió
+  // arriba — esto es solo la copia durable del candidato para sobrevivir un kill de la app a
+  // mitad de visita (bug 5), no la evidencia legal en sí.
+  try {
+    for (const [clave, estado] of transicionesEstado) {
+      if (
+        estado.dentro &&
+        estado.confirmado === false &&
+        estado.candidatoLat !== undefined &&
+        estado.candidatoLng !== undefined &&
+        estado.candidatoTsFixMs !== undefined &&
+        estado.minDistanciaM !== undefined &&
+        estado.puntoControlId !== undefined &&
+        estado.radioToleranciaM !== undefined
+      ) {
+        await guardarVisitaPendiente(db, {
+          clave,
+          sesionId: contexto.sesionId,
+          puntoControlId: estado.puntoControlId,
+          pasadasPrevias: estado.pasadas,
+          radioToleranciaM: estado.radioToleranciaM,
+          minDistanciaM: estado.minDistanciaM,
+          distanciaEntradaM: estado.distanciaEntradaM ?? estado.minDistanciaM,
+          candidatoLat: estado.candidatoLat,
+          candidatoLng: estado.candidatoLng,
+          candidatoTsFixMs: estado.candidatoTsFixMs,
+          ultimoEmitidoMs: estado.ultimoEmitidoMs,
+          fixesDentroSinConfirmar: estado.fixesDentroSinConfirmar ?? 0,
+        });
+      } else if (!clavesConEventoPropio.has(clave)) {
+        // Las que SÍ tuvieron evento propio ya se borraron transaccionalmente arriba — acá solo
+        // cubre el caso defensivo de una fila vieja de una visita que se re-armó sin confirmar.
+        await eliminarVisitaPendiente(db, clave);
+      }
+    }
+  } catch (error) {
+    console.error('[QUIVO][gps] No se pudo actualizar visitas_pendientes', error);
+    Sentry.captureException(error, {
+      tags: { contexto: 'gps-cola', paso: 'housekeeping-visitas-pendientes' },
+      extra: { sesionId: contexto.sesionId },
+    });
+  }
+
+  return { deteccion, deteccionAproximacion, puntosRearmados };
 }
 
 /**
@@ -401,7 +484,14 @@ async function asegurarSemillaCumplimientos(
     semilla = (async () => {
       try {
         const eventos = await obtenerEventosPorTipo(db, 'cumplimiento_punto_control', sesionId);
-        for (const [clave, estado] of clavesCumplimientoDesdePayloads(eventos)) {
+        const base = clavesCumplimientoDesdePayloads(eventos);
+        // FIX POST-REVISIÓN (bug 5): superpone las visitas PENDIENTES persistidas — ver el
+        // docblock de `combinarConVisitasPendientes` (`location-task.ts`) para el porqué. Sin
+        // esto, una visita en curso al momento del kill/reciclado volvía como si nunca hubiera
+        // pasado (o, peor, como "ya confirmada" si había una pasada previa de ese punto).
+        const visitasPendientes = await obtenerVisitasPendientes(db, sesionId);
+        const combinado = combinarConVisitasPendientes(base, visitasPendientes);
+        for (const [clave, estado] of combinado) {
           puntosControlDetectadosHeadless.current.set(clave, estado);
         }
       } catch (error) {
@@ -420,6 +510,50 @@ async function asegurarSemillaCumplimientos(
 }
 
 /**
+ * FIX POST-REVISIÓN (bug 2, "un vehículo detenido nunca confirma"): aplica las confirmaciones
+ * forzadas de `confirmarVisitasVencidas` (`geofence.ts`, heartbeat o cierre de recorrido) —
+ * encola cada `cumplimiento_punto_control` con el candidato ya guardado (mismo camino
+ * transaccional que el confirm normal, `encolarEventoYLimpiarVisita`) y aplica su transición al
+ * Map de estados. Exportada para que `use-gps-operativo.ts` (foreground) pueda reusarla sin
+ * duplicar el armado del payload — es la MISMA forma de payload que construye
+ * `construirEventosDeUbicacion` para el confirm normal (`location-task.ts`), solo que acá no
+ * hay una `location` de la que leer `sesionId`/`deviceId`, así que se reciben aparte.
+ */
+export async function aplicarConfirmacionesForzadas(
+  db: SQLite.SQLiteDatabase,
+  deviceId: string,
+  sesionId: string,
+  emitir: CumplimientoAEmitir[],
+  transiciones: ReadonlyMap<string, EstadoPuntoControl>,
+  estados: Map<string, EstadoPuntoControl>,
+): Promise<void> {
+  for (const c of emitir) {
+    await encolarEventoYLimpiarVisita(
+      db,
+      {
+        deviceId,
+        tipo: 'cumplimiento_punto_control',
+        payload: {
+          sesionId,
+          puntoControlId: c.deteccion.puntoControlId,
+          lat: c.candidatoLat,
+          lng: c.candidatoLng,
+          distanciaM: c.deteccion.distanciaM,
+          distanciaEntradaM: c.distanciaEntradaM,
+          distanciaMinAproximacionM: c.distanciaMinAproximacionM,
+          validadoPor: 'app',
+          tsFix: c.candidatoTsFixMs !== undefined ? new Date(c.candidatoTsFixMs).toISOString() : undefined,
+          pasada: c.pasada,
+        },
+      },
+      c.clave,
+    );
+    const estado = transiciones.get(c.clave);
+    if (estado) estados.set(c.clave, estado);
+  }
+}
+
+/**
  * Headless task de Transistorsoft (QUI-216): se registra UNA sola vez desde `index.js` — es
  * el único lugar donde el SDK permite hacerlo — y sigue ejecutándose después de que el
  * usuario mata la app, siempre que la config tenga `stopOnTerminate: false` +
@@ -431,9 +565,10 @@ async function asegurarSemillaCumplimientos(
  * Doc oficial de Transistorsoft: "Standard JavaScript callbacks like `onLocation` do not
  * fire after app termination. Only registered headless tasks execute."
  *
- * Solo procesa el evento `location`; el resto (`terminate`, `heartbeat`, `motionchange`,
- * etc.) no tiene, hoy, ninguna escritura asociada — se ignoran explícitamente en vez de
- * fallar en silencio ante un `switch` sin `default`.
+ * Procesa `location` (el camino principal) y, desde el FIX POST-REVISIÓN del bug 2, también
+ * `heartbeat` (confirmación forzada de visitas vencidas — ver `manejarHeartbeatHeadless` abajo).
+ * El resto (`terminate`, `motionchange`, etc.) no tiene, hoy, ninguna escritura asociada — se
+ * ignora explícitamente en vez de fallar en silencio ante un `switch` sin `default`.
  *
  * Todo el cuerpo va bajo `try/catch`: el wrapper del SDK rechaza la promesa de la tarea ante
  * cualquier throw y NO reintenta, así que un fallo transitorio de SecureStore o SQLite
@@ -441,6 +576,10 @@ async function asegurarSemillaCumplimientos(
  * spike existe para demostrar.
  */
 export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void> {
+  if (event.name === 'heartbeat') {
+    await manejarHeartbeatHeadless();
+    return;
+  }
   if (event.name !== 'location') return;
 
   try {
@@ -462,7 +601,7 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
 
     const db = await abrirOutbox();
     await asegurarSemillaCumplimientos(db, contexto.sesionId);
-    const { deteccion, deteccionAproximacion } = await registrarPuntoGps(
+    const { deteccion, deteccionAproximacion, puntosRearmados } = await registrarPuntoGps(
       db,
       location,
       contexto,
@@ -478,7 +617,7 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     await anunciarDeteccionesDelTick(
       db,
       { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
-      { deteccion, deteccionAproximacion },
+      { deteccion, deteccionAproximacion, puntosRearmados },
     ).catch((error) => {
       console.error('[QUIVO][headless] No se pudo anunciar el punto de control', error);
       Sentry.captureException(error, {
@@ -495,6 +634,67 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     // (evidencia legal, RF-67..73) no dejaría NINGÚN rastro reportado.
     Sentry.captureException(error, {
       tags: { contexto: 'headless-task', paso: 'registrar-punto-gps', evento: event.name },
+    });
+  }
+}
+
+/**
+ * FIX POST-REVISIÓN (bug 2, "un vehículo detenido nunca confirma"): handler de `heartbeat` en
+ * headless — el otro extremo del bug (junto con `onHeartbeat` en `use-gps-operativo.ts` para
+ * foreground). Un vehículo DETENIDO dentro del radio de un punto de control no produce fixes
+ * nuevos (`distanceFilter: 15` — sin desplazamiento no hay `onLocation`), así que la única
+ * forma de cerrar esa visita es un evento que SÍ siga llegando con el vehículo quieto — el
+ * `heartbeat` del SDK (`heartbeatInterval: 60`, `background-geolocation.config.ts`), que hasta
+ * este fix se recibía y se ignoraba (ver el comentario de cabecera de `tareaHeadlessUbicacion`).
+ *
+ * Deliberadamente NO llama a `registrarPuntoGps`/no escribe ningún `gps_point`: el heartbeat no
+ * trae un fix nuevo del que valga la pena dejar evidencia (`HeartbeatEvent.location` es "the
+ * *last-known* location", no una lectura fresca) — solo evalúa si alguna visita en curso ya
+ * lleva demasiado sin mejorar su mínimo (`confirmarVisitasVencidas`, `geofence.ts`) y, si es
+ * así, la confirma con el candidato YA observado.
+ */
+async function manejarHeartbeatHeadless(): Promise<void> {
+  try {
+    const contexto = await obtenerContextoUbicacionPersistido();
+    if (!contexto) return;
+
+    const db = await abrirOutbox();
+    await asegurarSemillaCumplimientos(db, contexto.sesionId);
+    const estados = puntosControlDetectadosHeadless.current;
+    // FIX POST-REVISIÓN (bug 2, hallazgo propio de `filtrarPorSesion` — ver su docblock en
+    // `geofence.ts`): `puntosControlDetectadosHeadless` es un singleton de MÓDULO que
+    // `asegurarSemillaCumplimientos` solo AGREGA entradas, nunca limpia entre sesiones — a
+    // diferencia de `puntosControlDetectados` en `use-gps-operativo.ts` (foreground), que
+    // `sembrarCumplimientos` REEMPLAZA entero en cada cambio de `sesionId`. Sin este filtro, una
+    // visita sin confirmar de un turno ANTERIOR en el MISMO dispositivo/vehículo (cambio de
+    // chofer sin reinicio de proceso) se confirmaría igual, atribuida por error a la sesión
+    // ACTUAL (`aplicarConfirmacionesForzadas` usa un único `sesionId` para todo lo que emite).
+    const estadosSesion = filtrarPorSesion(estados, contexto.sesionId);
+    const { emitir, transiciones } = confirmarVisitasVencidas(
+      estadosSesion,
+      Date.now(),
+      UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+    );
+    if (emitir.length === 0) return;
+
+    await aplicarConfirmacionesForzadas(db, contexto.deviceId, contexto.sesionId, emitir, transiciones, estados);
+
+    for (const c of emitir) {
+      await anunciarPuntoControl(
+        db,
+        c.deteccion,
+        { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
+      ).catch((error) => {
+        console.error('[QUIVO][headless] No se pudo anunciar la confirmación por heartbeat', error);
+        Sentry.captureException(error, {
+          tags: { contexto: 'headless-task', paso: 'anunciar-confirmacion-heartbeat' },
+        });
+      });
+    }
+  } catch (error) {
+    console.error('[QUIVO][headless] No se pudo procesar el heartbeat', error);
+    Sentry.captureException(error, {
+      tags: { contexto: 'headless-task', paso: 'procesar-heartbeat' },
     });
   }
 }

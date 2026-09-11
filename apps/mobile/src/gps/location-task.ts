@@ -85,6 +85,10 @@ export interface ResultadoConstruirEventos {
    * precisión del fix — `registrarPuntoGps` (`headless-task.ts`) las convierte en breadcrumbs
    * de Sentry. Vacío en el caso normal. Ver `AvisoPrecision` en `geofence.ts`. */
   avisosPrecision: AvisoPrecision[];
+  /** FIX POST-REVISIÓN (bug 4): puntos que ESTE tick re-armó de verdad — ver el comentario de
+   * `puntosRearmados` en `geofence.ts`. `registrarPuntoGps`/`tareaHeadlessUbicacion` lo pasan a
+   * `limpiarAproximacionesAnunciadas` (`anuncio-punto-control.ts`). */
+  puntosRearmados: string[];
 }
 
 /**
@@ -169,6 +173,7 @@ export function construirEventosDeUbicacion(
   let deteccionAproximacion: DeteccionPuntoControl | null = null;
   let transicionesEstado = new Map<string, EstadoPuntoControl>();
   let avisosPrecision: AvisoPrecision[] = [];
+  let puntosRearmados: string[] = [];
   if (contexto.puntosControl.length > 0) {
     const posicion: [number, number] = [location.coords.longitude, location.coords.latitude];
     // M3 (hallazgo de revisión, medio): la precisión del fix viaja DENTRO de cada detección y
@@ -195,16 +200,29 @@ export function construirEventosDeUbicacion(
       }
     }
 
-    const { emitir, transiciones, avisosPrecision: avisos } = filtrarNuevosCumplimientos(
-      estadosPuntosControl,
-      detecciones,
-      contexto.sesionId,
-      tsFixMs,
-    );
+    // FIX POST-REVISIÓN (bug 1): se pasa la posición de ESTE fix como `posicionFix` — no para
+    // que el evento la use directo (ver más abajo), sino para que la máquina de estados pueda
+    // guardarla como CANDIDATO si este fix resulta ser el de entrada o el que mejora el mínimo
+    // de la visita. Ver el comentario largo de `posicionFix` en `filtrarNuevosCumplimientos`.
+    const { emitir, transiciones, avisosPrecision: avisos, puntosRearmados: rearmados } =
+      filtrarNuevosCumplimientos(estadosPuntosControl, detecciones, contexto.sesionId, tsFixMs, {
+        lat: location.coords.latitude,
+        lng: location.coords.longitude,
+      });
     transicionesEstado = transiciones;
     avisosPrecision = avisos;
+    puntosRearmados = rearmados;
 
-    for (const { deteccion: nuevaDeteccion, pasada, clave, distanciaEntradaM, distanciaMinAproximacionM } of emitir) {
+    for (const {
+      deteccion: nuevaDeteccion,
+      pasada,
+      clave,
+      distanciaEntradaM,
+      distanciaMinAproximacionM,
+      candidatoLat,
+      candidatoLng,
+      candidatoTsFixMs,
+    } of emitir) {
       // B4 (hallazgo de revisión, bajo): la pasada viaja en la propia `DeteccionPuntoControl`
       // — `gps-provider.tsx` la necesita para distinguir dos pasadas CONSECUTIVAS del MISMO
       // punto de control (multi-vuelta) al decidir si repetir sonido/toast.
@@ -217,13 +235,21 @@ export function construirEventosDeUbicacion(
         payload: {
           sesionId: contexto.sesionId,
           puntoControlId: nuevaDeteccion.puntoControlId,
-          // lat/lng de la posición ACTUAL (el fix que disparó la confirmación, no el de
-          // entrada) — el worker (QUI-241) necesita la coordenada real para re-validar
-          // server-side (ST_DWithin, fuente de verdad RF-39). ENTREGA 6: con la confirmación
-          // diferida al mínimo local, esta posición está TAN cerca o más cerca del punto real
-          // que la de entrada, así que la revalidación server-side sigue pasando sin cambios.
-          lat: location.coords.latitude,
-          lng: location.coords.longitude,
+          // FIX POST-REVISIÓN (bug 1, "el servidor puede rechazar el paso"): lat/lng del fix
+          // CANDIDATO (el más cercano de la visita, guardado por la máquina de estados) — NUNCA
+          // las del fix ACTUAL que disparó esta confirmación. El bug real: en el camino "la
+          // distancia vuelve a crecer", el fix que dispara la confirmación puede estar YA FUERA
+          // del radio (ejemplo verificado: radio 150, entra a 146 m, el fix que confirma está a
+          // 158 m) — el worker revalida con `ST_DWithin` exactamente esas coordenadas contra
+          // `radioToleranciaM` (`ingesta-worker.service.ts` ~347-430) y rechaza el paso
+          // (`cumplido=false`), perdiendo evidencia real. El candidato está DENTRO del radio
+          // por construcción (es el mínimo observado), así que la revalidación server-side
+          // siempre pasa. Fallback a `location.coords` solo para el caso degenerado en que
+          // `filtrarNuevosCumplimientos` no haya podido registrar un candidato (no debería
+          // ocurrir en el camino real, que siempre pasa `posicionFix`) — mejor una posición
+          // "peor" que ninguna.
+          lat: candidatoLat ?? location.coords.latitude,
+          lng: candidatoLng ?? location.coords.longitude,
           distanciaM: nuevaDeteccion.distanciaM,
           // ENTREGA 6: ambos números viajan — `distanciaEntradaM` es lo que decía la voz vieja
           // (borde del radio de detección, 104-150 m en el piloto del 09-09);
@@ -232,12 +258,12 @@ export function construirEventosDeUbicacion(
           distanciaEntradaM,
           distanciaMinAproximacionM,
           validadoPor: 'app',
-          // Mismo timestamp del fix GPS que dispara el `gps_point` de más arriba — misma
-          // `location`, mismo defecto de buffering headless. Acá pesa más: la hora de paso
-          // por este punto de control es el hecho que sustenta una sanción (RF-64..66).
-          // Contrato + fallback: `PayloadCumplimientoPuntoControlSchema` / `resolverTsFix`
-          // en `@quivo/shared`.
-          tsFix,
+          // FIX POST-REVISIÓN (bug 1): hora del fix CANDIDATO, no del fix que confirma — mismo
+          // razonamiento que `lat`/`lng` de arriba: la hora que sustenta una sanción (RF-64..66)
+          // tiene que ser la del paso real (el mínimo), no la de un fix posterior ya alejándose.
+          // Contrato + fallback: `PayloadCumplimientoPuntoControlSchema` / `resolverTsFix` en
+          // `@quivo/shared`.
+          tsFix: candidatoTsFixMs !== undefined ? new Date(candidatoTsFixMs).toISOString() : tsFix,
           // Número de pasada (multi-vuelta, plan §2.3): contador incremental por clave
           // `${sesionId}:${puntoControlId}`, empezando en 1 — ver `filtrarNuevosCumplimientos`
           // en `geofence.ts`. `PayloadCumplimientoPuntoControlSchema.pasada` es opcional a
@@ -248,7 +274,7 @@ export function construirEventosDeUbicacion(
     }
   }
 
-  return { eventos, deteccion, deteccionAproximacion, transicionesEstado, avisosPrecision };
+  return { eventos, deteccion, deteccionAproximacion, transicionesEstado, avisosPrecision, puntosRearmados };
 }
 
 /**
@@ -360,4 +386,74 @@ export function clavesCumplimientoDesdePayloads(
     });
   }
   return estados;
+}
+
+/** Forma de una fila de `visitas_pendientes` (`db/outbox.ts`) tal como la necesita
+ * `combinarConVisitasPendientes` — deliberadamente redeclarada acá (en vez de importar el tipo
+ * de `db/outbox.ts`) para que este módulo siga sin ninguna dependencia de `expo-sqlite`: es lo
+ * que lo mantiene testeable bajo vitest/Node (ver el docblock de cabecera del archivo). */
+export interface VisitaPendienteSembrable {
+  clave: string;
+  puntoControlId: string;
+  pasadasPrevias: number;
+  radioToleranciaM: number;
+  minDistanciaM: number;
+  distanciaEntradaM: number;
+  candidatoLat: number;
+  candidatoLng: number;
+  candidatoTsFixMs: number;
+  ultimoEmitidoMs: number;
+  fixesDentroSinConfirmar: number;
+}
+
+/**
+ * FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"): superpone las
+ * visitas PENDIENTES (persistidas en SQLite, `visitas_pendientes` en `db/outbox.ts`) sobre el
+ * Map ya derivado de los eventos `cumplimiento_punto_control` CONFIRMADOS
+ * (`clavesCumplimientoDesdePayloads`, arriba). El bug real: esa función solo ve eventos YA
+ * emitidos — una visita que estaba "en el mínimo local, todavía sin confirmar" al momento de
+ * matar la app (o de que Android recicle el contexto JS headless) no tiene ningún evento en el
+ * outbox todavía, así que la semilla la perdía por completo (ni pendiente ni confirmada: como
+ * si nunca hubiera pasado). Peor aún — si SÍ había una pasada previa confirmada de ese mismo
+ * punto (multi-vuelta), la semilla vieja sembraba esa clave con `confirmado: true`, así que la
+ * visita en curso volvía como "ya cumplida" y la máquina de estados jamás la re-evaluaba.
+ *
+ * PURA (sin SQLite): la lectura de `visitas_pendientes` vive en el caller (`headless-task.ts` /
+ * `use-gps-operativo.ts`), acá solo se combina. `pasadas` viene SIEMPRE del estado YA derivado
+ * de los eventos confirmados (`combinado.get(...)?.pasadas`) — la fila de `visitas_pendientes`
+ * NO las duplica ni las reemplaza, así que si el outbox tiene 2 pasadas ya emitidas y una
+ * tercera visita en curso, `pasadas` sigue en 2 (la próxima confirmación la sube a 3). Solo cae
+ * a `pasadasPrevias` (el conteo guardado AL MOMENTO de entrar a esa visita) en el caso borde de
+ * no tener NINGÚN evento confirmado todavía para esa clave (primera visita de la sesión).
+ */
+export function combinarConVisitasPendientes(
+  estadosBase: ReadonlyMap<string, EstadoPuntoControl>,
+  visitasPendientes: VisitaPendienteSembrable[],
+): Map<string, EstadoPuntoControl> {
+  const combinado = new Map(estadosBase);
+  for (const visita of visitasPendientes) {
+    const base = combinado.get(visita.clave);
+    combinado.set(visita.clave, {
+      dentro: true,
+      confirmado: false,
+      // `base?.ultimoEmitidoMs` es la fuente autoritativa (derivada de los eventos confirmados
+      // que SIGUEN en el outbox); `visita.ultimoEmitidoMs` (guardado junto al candidato al
+      // persistir la fila) es el fallback si esa clave ya no tiene ningún evento confirmado
+      // visible (purgado, o primera visita de la sesión) — nunca `-Infinity` a ciegas, que
+      // reabriría la puerta de `PASADA_MIN_MS` sin motivo.
+      ultimoEmitidoMs: base?.ultimoEmitidoMs ?? visita.ultimoEmitidoMs,
+      pasadas: base?.pasadas ?? visita.pasadasPrevias,
+      fixesFueraRadioRearme: 0,
+      ultimoFixMs: visita.candidatoTsFixMs,
+      minDistanciaM: visita.minDistanciaM,
+      distanciaEntradaM: visita.distanciaEntradaM,
+      fixesDentroSinConfirmar: visita.fixesDentroSinConfirmar,
+      puntoControlId: visita.puntoControlId,
+      radioToleranciaM: visita.radioToleranciaM,
+      candidatoLat: visita.candidatoLat,
+      candidatoLng: visita.candidatoLng,
+      candidatoTsFixMs: visita.candidatoTsFixMs,
+    });
+  }
+  return combinado;
 }

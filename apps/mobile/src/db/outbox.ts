@@ -2,6 +2,11 @@ import * as Crypto from 'expo-crypto';
 import * as SQLite from 'expo-sqlite';
 import * as Sentry from '@sentry/react-native';
 import { generarUuidV7, type TipoEventoSync } from '@quivo/shared';
+// FIX POST-REVISIÓN (bug 5): el DDL vive en su propio módulo SIN imports (`outbox-ddl.ts`) para
+// que `db/outbox-ddl.test.ts` pueda importarlo bajo vitest sin arrastrar `react-native`
+// (transitivo de `expo-sqlite`/`@sentry/react-native`, que este archivo SÍ necesita) — ver el
+// docblock de cabecera de `outbox-ddl.ts` para el porqué completo.
+import { OUTBOX_DDL_SQL } from './outbox-ddl';
 
 /**
  * Outbox local (RF-67..73, doc técnico §6): todo evento nace con `event_id` UUIDv7 +
@@ -85,33 +90,7 @@ async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLit
   );
   // DDL dentro de la promesa cacheada: corre una sola vez por proceso, nunca en el path de
   // escritura caliente (`encolarEvento`, hasta cientos de llamadas por jornada).
-  await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS outbox (
-      event_id TEXT PRIMARY KEY,
-      device_id TEXT NOT NULL,
-      ts TEXT NOT NULL,
-      tipo TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      estado TEXT NOT NULL DEFAULT 'pendiente'
-    );
-    CREATE INDEX IF NOT EXISTS outbox_estado_idx ON outbox(estado);
-    -- ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): dedupe PERSISTIDO del
-    -- anuncio de confirmación (sonido + vibración + notificación) por
-    -- {sesionId, puntoControlId, pasada} — un useRef de React (como el que dedupea la
-    -- voz/sonido en el GpsProvider de hoy) no sobrevive al contexto headless, que puede
-    -- reevaluarse en una invocación de motor JS distinta a la que anunció la primera vez. Vive
-    -- en esta MISMA base (no un archivo .db nuevo): ya hay una conexión abierta y saneada
-    -- (conReintentoSiHandleMuerto), y un segundo archivo SQLite sería otra superficie para el
-    -- bug de expo-sqlite@16.0.10 documentado arriba (outboxPromise). Ver
-    -- registrarAnuncioSiNuevo más abajo para el porqué de "clave" como PK en vez de las tres
-    -- columnas por separado. (Nota: sin comillas invertidas acá a propósito — este bloque es
-    -- un TEMPLATE LITERAL de JS, y una comilla invertida sin escapar lo cierra a mitad de
-    -- camino y rompe el parseo de TODO el archivo con errores TS1005 crípticos y lejanos.)
-    CREATE TABLE IF NOT EXISTS anuncios_punto_control (
-      clave TEXT PRIMARY KEY,
-      ts TEXT NOT NULL
-    );
-  `);
+  await db.execAsync(OUTBOX_DDL_SQL);
   return db;
 }
 
@@ -347,6 +326,173 @@ export async function registrarAnuncioSiNuevo(
     ]),
   );
   return result.changes > 0;
+}
+
+/** Fila de la tabla `visitas_pendientes` — ver su comentario de DDL arriba. Espejo (en
+ * `camelCase`) de `VisitaPendienteSembrable` (`gps/location-task.ts`), que es la forma que
+ * `combinarConVisitasPendientes` (pura, sin SQLite) sabe consumir. */
+export interface VisitaPendienteRow {
+  clave: string;
+  sesionId: string;
+  puntoControlId: string;
+  pasadasPrevias: number;
+  radioToleranciaM: number;
+  minDistanciaM: number;
+  distanciaEntradaM: number;
+  candidatoLat: number;
+  candidatoLng: number;
+  candidatoTsFixMs: number;
+  ultimoEmitidoMs: number;
+  fixesDentroSinConfirmar: number;
+}
+
+interface VisitaPendienteRowCruda {
+  clave: string;
+  sesion_id: string;
+  punto_control_id: string;
+  pasadas_previas: number;
+  radio_tolerancia_m: number;
+  min_distancia_m: number;
+  distancia_entrada_m: number;
+  candidato_lat: number;
+  candidato_lng: number;
+  candidato_ts_fix_ms: number;
+  ultimo_emitido_ms: number;
+  fixes_dentro_sin_confirmar: number;
+}
+
+function toVisitaPendienteRow(row: VisitaPendienteRowCruda): VisitaPendienteRow {
+  return {
+    clave: row.clave,
+    sesionId: row.sesion_id,
+    puntoControlId: row.punto_control_id,
+    pasadasPrevias: row.pasadas_previas,
+    radioToleranciaM: row.radio_tolerancia_m,
+    minDistanciaM: row.min_distancia_m,
+    distanciaEntradaM: row.distancia_entrada_m,
+    candidatoLat: row.candidato_lat,
+    candidatoLng: row.candidato_lng,
+    candidatoTsFixMs: row.candidato_ts_fix_ms,
+    ultimoEmitidoMs: row.ultimo_emitido_ms,
+    fixesDentroSinConfirmar: row.fixes_dentro_sin_confirmar,
+  };
+}
+
+/**
+ * FIX POST-REVISIÓN (bug 5): persiste (o actualiza) el candidato de UNA visita en curso —
+ * llamado desde `registrarPuntoGpsInterno` (`gps/headless-task.ts`) por cada fix que la
+ * máquina de estados deja `dentro: true, confirmado: false` (entrada o mejora del mínimo, ver
+ * `filtrarNuevosCumplimientos`, `gps/geofence.ts`). `ON CONFLICT... DO UPDATE` (no
+ * `INSERT OR REPLACE`) a propósito: `REPLACE` borra e re-inserta la fila entera, lo que en
+ * SQLite dispara los triggers de `DELETE`+`INSERT` en vez de un `UPDATE` — no hay triggers hoy,
+ * pero `DO UPDATE` es semánticamente lo que se quiere decir ("actualizá esta fila") y cuesta
+ * lo mismo.
+ */
+export async function guardarVisitaPendiente(
+  db: SQLite.SQLiteDatabase,
+  visita: VisitaPendienteRow,
+): Promise<void> {
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync(
+      `INSERT INTO visitas_pendientes (
+         clave, sesion_id, punto_control_id, pasadas_previas, radio_tolerancia_m,
+         min_distancia_m, distancia_entrada_m, candidato_lat, candidato_lng,
+         candidato_ts_fix_ms, ultimo_emitido_ms, fixes_dentro_sin_confirmar, actualizado_ts
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(clave) DO UPDATE SET
+         pasadas_previas = excluded.pasadas_previas,
+         radio_tolerancia_m = excluded.radio_tolerancia_m,
+         min_distancia_m = excluded.min_distancia_m,
+         distancia_entrada_m = excluded.distancia_entrada_m,
+         candidato_lat = excluded.candidato_lat,
+         candidato_lng = excluded.candidato_lng,
+         candidato_ts_fix_ms = excluded.candidato_ts_fix_ms,
+         ultimo_emitido_ms = excluded.ultimo_emitido_ms,
+         fixes_dentro_sin_confirmar = excluded.fixes_dentro_sin_confirmar,
+         actualizado_ts = excluded.actualizado_ts`,
+      [
+        visita.clave,
+        visita.sesionId,
+        visita.puntoControlId,
+        visita.pasadasPrevias,
+        visita.radioToleranciaM,
+        visita.minDistanciaM,
+        visita.distanciaEntradaM,
+        visita.candidatoLat,
+        visita.candidatoLng,
+        visita.candidatoTsFixMs,
+        visita.ultimoEmitidoMs,
+        visita.fixesDentroSinConfirmar,
+        new Date().toISOString(),
+      ],
+    ),
+  );
+}
+
+/** Borra la fila de una visita que ya no está pendiente (confirmada o re-armada sin confirmar,
+ * B5 en `geofence.ts`). Llamarla con una `clave` que no tiene fila es un no-op seguro
+ * (`DELETE ... WHERE` sin matches). */
+export async function eliminarVisitaPendiente(
+  db: SQLite.SQLiteDatabase,
+  clave: string,
+): Promise<void> {
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync('DELETE FROM visitas_pendientes WHERE clave = ?', [clave]),
+  );
+}
+
+/** Lee las visitas pendientes de una sesión (o de todas, sin filtro) — usada al sembrar
+ * (`asegurarSemillaCumplimientos`/`sembrarCumplimientos`) para superponerlas sobre el estado
+ * derivado de los eventos confirmados vía `combinarConVisitasPendientes`
+ * (`gps/location-task.ts`). */
+export async function obtenerVisitasPendientes(
+  db: SQLite.SQLiteDatabase,
+  sesionId?: string,
+): Promise<VisitaPendienteRow[]> {
+  const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    sesionId !== undefined
+      ? dbActiva.getAllAsync<VisitaPendienteRowCruda>(
+          'SELECT * FROM visitas_pendientes WHERE sesion_id = ?',
+          [sesionId],
+        )
+      : dbActiva.getAllAsync<VisitaPendienteRowCruda>('SELECT * FROM visitas_pendientes'),
+  );
+  return rows.map(toVisitaPendienteRow);
+}
+
+/**
+ * FIX POST-REVISIÓN (bug 5, requisito del diseño C: "al emitir se borra en la misma
+ * transacción que encola el evento"): encola el `cumplimiento_punto_control` y borra la fila
+ * de `visitas_pendientes` correspondiente dentro de UNA transacción SQLite
+ * (`withTransactionAsync`) — así ninguna de las dos puede quedar a medias. Sin esto, un crash
+ * entre las dos escrituras dejaría el evento YA encolado (la evidencia está a salvo) pero la
+ * fila de `visitas_pendientes` todavía viva: al sembrar de nuevo, `combinarConVisitasPendientes`
+ * la superpondría como "visita en curso" sobre un estado que YA tiene esa pasada confirmada —
+ * la máquina de estados la re-evaluaría desde cero y, en el peor caso, terminaría emitiendo la
+ * MISMA pasada una segunda vez con un `eventId` nuevo (el plan deja `pasada` fuera de la clave
+ * de idempotencia del servidor — el único gate real es el `eventId` por evento, así que un
+ * segundo `encolarEvento` para la misma pasada SÍ duplicaría evidencia server-side).
+ *
+ * `claveVisitaPendiente === undefined` (evento sin visita pendiente asociada, no debería
+ * ocurrir para un `cumplimiento_punto_control` pero se contempla por completitud) encola sin
+ * abrir transacción — no hay nada que borrar.
+ */
+export async function encolarEventoYLimpiarVisita(
+  db: SQLite.SQLiteDatabase,
+  evento: EventoOutboxNuevo,
+  claveVisitaPendiente: string | undefined,
+): Promise<{ eventId: string; insertado: boolean }> {
+  if (claveVisitaPendiente === undefined) return encolarEvento(db, evento);
+
+  let resultado: { eventId: string; insertado: boolean } | undefined;
+  await db.withTransactionAsync(async () => {
+    resultado = await encolarEvento(db, evento);
+    await eliminarVisitaPendiente(db, claveVisitaPendiente);
+  });
+  // `withTransactionAsync` solo resuelve si `task` resolvió sin lanzar — `resultado` siempre
+  // queda asignado en ese caso. El `as` documenta esa garantía en vez de forzar un chequeo de
+  // `undefined` que nunca puede ser `true` en este punto.
+  return resultado as { eventId: string; insertado: boolean };
 }
 
 /** H4 (hallazgo de revisión, medio): pasa por `conReintentoSiHandleMuerto` igual que los

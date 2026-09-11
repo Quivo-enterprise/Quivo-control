@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 
 // Hallazgo 3 (MEDIO, code review sobre el hallazgo 1 de `docs/plan-v2-app-y-mapa-en-vivo.md`
 // §2.4): `obtenerContextoUbicacionPersistido` (`headless-task.ts`) puede quedar corriendo el
@@ -27,11 +27,26 @@ vi.mock('@sentry/react-native', () => ({
   addBreadcrumb: vi.fn(),
 }));
 
-vi.mock('../db/outbox', () => ({
-  abrirOutbox: vi.fn(),
-  encolarEvento: vi.fn(),
-  obtenerEventosPorTipo: vi.fn(),
-}));
+// FIX POST-REVISIÓN (bug 5): `registrarPuntoGpsInterno` ahora también llama a
+// `encolarEventoYLimpiarVisita` (confirmaciones, transaccional con `visitas_pendientes`),
+// `guardarVisitaPendiente`/`eliminarVisitaPendiente` (housekeeping best-effort por tick) y
+// `obtenerVisitasPendientes` (siembra) — se mockean igual que el resto de `../db/outbox`.
+// `encolarEventoYLimpiarVisita` delega en el mismo mock que `encolarEvento` para que los tests
+// existentes, que solo configuran `encolarEventoMock`, sigan viendo el mismo `eventId` resuelto
+// también en el camino de confirmación (que antes de este fix pasaba por `encolarEvento`
+// directo).
+vi.mock('../db/outbox', () => {
+  const encolarEvento = vi.fn();
+  return {
+    abrirOutbox: vi.fn(),
+    encolarEvento,
+    encolarEventoYLimpiarVisita: vi.fn((db: unknown, evento: unknown) => encolarEvento(db, evento)),
+    guardarVisitaPendiente: vi.fn().mockResolvedValue(undefined),
+    eliminarVisitaPendiente: vi.fn().mockResolvedValue(undefined),
+    obtenerVisitasPendientes: vi.fn().mockResolvedValue([]),
+    obtenerEventosPorTipo: vi.fn(),
+  };
+});
 
 vi.mock('../db/paquete-dia', () => ({
   abrirPaqueteDiaDb: vi.fn(),
@@ -50,18 +65,30 @@ vi.mock('../shared/security/sesion-movil-store', () => ({
 // el contenido del anuncio, que ya cubre su propio test.
 vi.mock('../features/operacion/anuncio-punto-control', () => ({
   anunciarDeteccionesDelTick: vi.fn().mockResolvedValue(undefined),
+  // FIX POST-REVISIÓN (bug 2): el handler de heartbeat (`manejarHeartbeatHeadless`) llama a
+  // `anunciarPuntoControl` directo (no al wrapper `anunciarDeteccionesDelTick`, que espera un
+  // solo tick con aproximación+confirmación) — mockeado igual, sin contenido.
+  anunciarPuntoControl: vi.fn().mockResolvedValue(undefined),
 }));
 
 import BackgroundGeolocation, { type HeadlessEvent, type Location } from 'react-native-background-geolocation';
 import type { PuntoControlPaquete } from '@quivo/shared';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal, type PaqueteDiaLocal } from '../db/paquete-dia';
-import { abrirOutbox, encolarEvento, obtenerEventosPorTipo } from '../db/outbox';
+import {
+  abrirOutbox,
+  encolarEvento,
+  obtenerEventosPorTipo,
+  obtenerVisitasPendientes,
+} from '../db/outbox';
 import {
   cargarSesionMovil,
   obtenerDeviceIdMovil,
   type SesionMovilGuardada,
 } from '../shared/security/sesion-movil-store';
-import { anunciarDeteccionesDelTick } from '../features/operacion/anuncio-punto-control';
+import {
+  anunciarDeteccionesDelTick,
+  anunciarPuntoControl,
+} from '../features/operacion/anuncio-punto-control';
 import { obtenerContextoUbicacionPersistido, tareaHeadlessUbicacion } from './headless-task';
 
 const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
@@ -73,9 +100,11 @@ const stopMock = BackgroundGeolocation.stop as unknown as ReturnType<typeof vi.f
 const abrirOutboxMock = abrirOutbox as unknown as ReturnType<typeof vi.fn>;
 const encolarEventoMock = encolarEvento as unknown as ReturnType<typeof vi.fn>;
 const obtenerEventosPorTipoMock = obtenerEventosPorTipo as unknown as ReturnType<typeof vi.fn>;
+const obtenerVisitasPendientesMock = obtenerVisitasPendientes as unknown as ReturnType<typeof vi.fn>;
 const anunciarDeteccionesDelTickMock = anunciarDeteccionesDelTick as unknown as ReturnType<
   typeof vi.fn
 >;
+const anunciarPuntoControlMock = anunciarPuntoControl as unknown as ReturnType<typeof vi.fn>;
 
 /** Sesión mínima "autenticado" — sólo lo que lee `obtenerContextoUbicacionPersistido`. El
  * resto del contrato de `SesionMovilGuardada` (vehículo, conductor, sindicato, etc.) no le
@@ -312,5 +341,157 @@ describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega
     await expect(
       tareaHeadlessUbicacion(eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z'))),
     ).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * FIX POST-REVISIÓN (bug 2, "un vehículo detenido nunca confirma"): `tareaHeadlessUbicacion`
+ * enruta el evento `heartbeat` del SDK a `manejarHeartbeatHeadless` — antes de este fix,
+ * `heartbeat` se recibía y se ignoraba por completo (ver el comentario de cabecera de
+ * `tareaHeadlessUbicacion`, `headless-task.ts`), así que un vehículo DETENIDO dentro del radio
+ * de un punto de control (sin fixes nuevos — `distanceFilter: 15`, sin desplazamiento no hay
+ * `onLocation`) nunca disparaba ninguna confirmación. El caso real: el ÚLTIMO punto de control
+ * de la ruta, en la terminal, donde el chofer se estaciona y apaga el motor.
+ *
+ * Usa timers falsos (`vi.useFakeTimers`) porque `confirmarVisitasVencidas` compara
+ * `Date.now()` contra el `tsFixMs` del candidato — sin controlar el reloj, este test dependería
+ * de cuánto tarda en correr la máquina real (flaky por construcción).
+ */
+describe('tareaHeadlessUbicacion — heartbeat (FIX POST-REVISIÓN, bug 2)', () => {
+  function location(lat: number, lng: number, timestamp: string): Location {
+    return {
+      timestamp,
+      recorded_at: timestamp,
+      age: 0,
+      odometer: 0,
+      odometer_error: 0,
+      is_moving: true,
+      uuid: `loc-${timestamp}`,
+      coords: { latitude: lat, longitude: lng, accuracy: 5, speed: 0 },
+      battery: { level: 0.8, is_charging: false },
+      activity: { type: 'in_vehicle', confidence: 90 },
+    } as unknown as Location;
+  }
+
+  function eventoLocation(loc: Location): HeadlessEvent {
+    return { name: 'location', params: loc } as unknown as HeadlessEvent;
+  }
+
+  function eventoHeartbeat(): HeadlessEvent {
+    // `HeartbeatEvent` real trae `location`/`taskId` — el handler no los lee (deliberadamente
+    // no escribe ningún `gps_point` nuevo, ver el comentario de `manejarHeartbeatHeadless`), así
+    // que un evento vacío alcanza para probar el enrutamiento y la confirmación forzada.
+    return { name: 'heartbeat', params: {} } as unknown as HeadlessEvent;
+  }
+
+  function puntoControlReal(id: string, coord: [number, number]): PuntoControlPaquete {
+    return {
+      id,
+      orden: 5,
+      coord: { type: 'Point', coordinates: coord },
+      radioToleranciaM: 30,
+      obligatorio: true,
+    };
+  }
+
+  function sesionYPaqueteDe(sesionId: string, asignacionId: string, pc: PuntoControlPaquete): void {
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: asignacionId, venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: asignacionId, venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+  }
+
+  beforeEach(() => {
+    cargarSesionMovilMock.mockReset();
+    obtenerDeviceIdMovilMock.mockReset().mockResolvedValue('device-heartbeat-1');
+    abrirPaqueteDiaDbMock.mockReset().mockResolvedValue({});
+    obtenerPaqueteDiaLocalMock.mockReset();
+    getStateMock.mockReset().mockResolvedValue({ enabled: true });
+    stopMock.mockReset().mockResolvedValue(undefined);
+    abrirOutboxMock.mockReset().mockResolvedValue({});
+    encolarEventoMock.mockReset().mockResolvedValue({ eventId: 'evt-hb', insertado: true });
+    obtenerEventosPorTipoMock.mockReset().mockResolvedValue([]);
+    obtenerVisitasPendientesMock.mockReset().mockResolvedValue([]);
+    anunciarDeteccionesDelTickMock.mockClear();
+    anunciarPuntoControlMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    // H8/best-practice: SIEMPRE volver a timers reales, incluso si un test de este bloque
+    // falla a mitad de camino — un `useFakeTimers` que se filtra al resto de la suite congela
+    // el reloj de tests no relacionados.
+    vi.useRealTimers();
+  });
+
+  it('vehículo detenido dentro del radio (sin más fixes): un heartbeat ANTES de UMBRAL_ANTIGUEDAD_CANDIDATO_MS no confirma nada', async () => {
+    const sesionId = 'sesion-heartbeat-1';
+    const pc = puntoControlReal('pc-heartbeat-1', [-63.18, -17.78]);
+    sesionYPaqueteDe(sesionId, 'asignacion-heartbeat-1', pc);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T12:00:00.000Z'));
+    // Entra al radio — arranca el mínimo local, sin confirmar (el vehículo se detiene acá).
+    await tareaHeadlessUbicacion(eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z')));
+    const llamadasEncolarAntes = encolarEventoMock.mock.calls.length;
+
+    // Pasan 89 s — todavía NO cumple UMBRAL_ANTIGUEDAD_CANDIDATO_MS (90 s).
+    vi.setSystemTime(new Date('2026-09-10T12:01:29.000Z'));
+    await tareaHeadlessUbicacion(eventoHeartbeat());
+
+    expect(encolarEventoMock.mock.calls.length).toBe(llamadasEncolarAntes);
+    expect(anunciarPuntoControlMock).not.toHaveBeenCalled();
+  });
+
+  it('vehículo detenido dentro del radio (terminal, "el chofer estaciona"): un heartbeat AL CUMPLIRSE UMBRAL_ANTIGUEDAD_CANDIDATO_MS confirma con el candidato, SIN fix nuevo, y anuncia la confirmación', async () => {
+    const sesionId = 'sesion-heartbeat-2';
+    const pc = puntoControlReal('pc-heartbeat-2', [-63.18, -17.78]);
+    sesionYPaqueteDe(sesionId, 'asignacion-heartbeat-2', pc);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T12:00:00.000Z'));
+    await tareaHeadlessUbicacion(eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z')));
+    const llamadasEncolarAntes = encolarEventoMock.mock.calls.length;
+
+    // Pasan 91 s sin ningún fix nuevo — el heartbeat sigue llegando igual (vehículo detenido).
+    vi.setSystemTime(new Date('2026-09-10T12:01:31.000Z'));
+    await tareaHeadlessUbicacion(eventoHeartbeat());
+
+    // Confirmó por heartbeat: un `cumplimiento_punto_control` nuevo en el outbox, con el
+    // candidato ya observado (fase confirmado, pasada 1) — nunca una posición inventada.
+    expect(encolarEventoMock.mock.calls.length).toBe(llamadasEncolarAntes + 1);
+    const [, eventoEncolado] = encolarEventoMock.mock.calls[encolarEventoMock.mock.calls.length - 1]!;
+    expect(eventoEncolado).toMatchObject({
+      tipo: 'cumplimiento_punto_control',
+      payload: expect.objectContaining({ puntoControlId: 'pc-heartbeat-2', pasada: 1 }),
+    });
+    // Y salió el anuncio (sonido/voz) de la confirmación — un heartbeat también tiene que
+    // avisarle al chofer, no solo dejar evidencia silenciosa.
+    expect(anunciarPuntoControlMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin sesión activa: el heartbeat es un no-op silencioso, no lanza ni encola nada', async () => {
+    cargarSesionMovilMock.mockResolvedValue(null);
+
+    await expect(tareaHeadlessUbicacion(eventoHeartbeat())).resolves.toBeUndefined();
+    expect(encolarEventoMock).not.toHaveBeenCalled();
+    expect(anunciarPuntoControlMock).not.toHaveBeenCalled();
+  });
+
+  it('sin ninguna visita en curso (ningún punto de control cerca): el heartbeat no encola ni anuncia nada', async () => {
+    const sesionId = 'sesion-heartbeat-3';
+    const pc = puntoControlReal('pc-heartbeat-3', [-63.18, -17.78]);
+    sesionYPaqueteDe(sesionId, 'asignacion-heartbeat-3', pc);
+    // Nunca hubo un fix `location` — no hay ninguna visita `dentro: true` para este punto.
+
+    await tareaHeadlessUbicacion(eventoHeartbeat());
+
+    expect(encolarEventoMock).not.toHaveBeenCalled();
+    expect(anunciarPuntoControlMock).not.toHaveBeenCalled();
   });
 });

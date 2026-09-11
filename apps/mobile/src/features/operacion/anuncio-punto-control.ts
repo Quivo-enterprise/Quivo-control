@@ -161,16 +161,33 @@ function claveAnuncio(sesionId: string, puntoControlId: string, pasada: number):
  * usa SQLite: es informativo, no evidencia (ver el docblock del módulo), y `location-task.ts`
  * ya documenta que "el dedupe de 'ya lo anuncié' es responsabilidad del caller" — sin este Set,
  * la voz repetiría "Punto de control 16 a 140 metros" en CADA fix mientras el vehículo siga
- * dentro de `RADIO_AVISO_M` (varios fixes seguidos, no uno solo). Se limpia recién cuando ESE
- * punto CONFIRMA (ver `anunciarPuntoControl`) — una próxima pasada real vuelve a avisar.
+ * dentro de `RADIO_AVISO_M` (varios fixes seguidos, no uno solo).
  *
- * Limitación conocida y aceptada: si el vehículo entra en el radio de aviso y se aleja SIN
- * llegar a confirmar (nunca entró al radio de detección real, más angosto), la entrada queda
- * "usada" hasta que ese punto confirme alguna vez — un reacercamiento posterior no vuelve a
- * avisar por voz hasta la primera confirmación. Aceptable: es solo el aviso informativo, la
- * detección/evidencia (`radioToleranciaM`) no se toca.
+ * FIX POST-REVISIÓN (bug 4, "la voz vuelve a anunciar la aproximación al alejarse"/"la
+ * aproximación real de la vuelta siguiente queda en silencio"): se limpia con
+ * `limpiarAproximacionesAnunciadas` (abajo), llamada SOLO cuando el geofence RE-ARMA de verdad
+ * el punto (`puntosRearmados`, `gps/geofence.ts` — misma histéresis que la detección:
+ * `FACTOR_REARME_RADIO` × `FIXES_REARME_CONSECUTIVOS`), NUNCA al confirmar. Antes se borraba
+ * acá mismo dentro de `anunciarPuntoControl` en cuanto el punto CONFIRMABA — con el vehículo
+ * todavía a bastante menos de `RADIO_AVISO_M` (la confirmación ocurre en el mínimo local, muy
+ * cerca del punto), el próximo fix mientras sigue alejándose (todavía dentro de
+ * `RADIO_AVISO_M`, que es mucho más ancho) volvía a pasar por `fase: 'aproximacion'` con la
+ * entrada YA libre → segunda voz anunciando la "aproximación" de un punto del que se está
+ * alejando. Y esa segunda voz dejaba la entrada "usada" de nuevo, así que la aproximación REAL
+ * de la vuelta siguiente no volvía a sonar. Limpiar recién en el re-armado real evita las dos
+ * mitades del bug a la vez, con la misma histéresis que ya protege la evidencia.
  */
 const aproximacionesAnunciadas = new Set<string>();
+
+/**
+ * FIX POST-REVISIÓN (bug 4): libera el dedupe de aproximación para los puntos que el geofence
+ * ACABA de re-armar en este tick/heartbeat — ver el comentario largo de `aproximacionesAnunciadas`
+ * arriba y el de `puntosRearmados` en `gps/geofence.ts`. Llamarla con una lista vacía (el caso
+ * normal, ningún punto re-armó) es un no-op.
+ */
+export function limpiarAproximacionesAnunciadas(puntosControlIds: readonly string[]): void {
+  for (const id of puntosControlIds) aproximacionesAnunciadas.delete(id);
+}
 
 export interface AnuncioPuntoControlOpciones {
   sesionId: string;
@@ -214,9 +231,10 @@ export async function anunciarPuntoControl(
 
   if (deteccion.fase !== 'confirmado' || deteccion.pasada === undefined) return;
 
-  // Reabre el ciclo de aproximación para la PRÓXIMA pasada de este punto — ver el comentario de
-  // `aproximacionesAnunciadas`.
-  aproximacionesAnunciadas.delete(deteccion.puntoControlId);
+  // FIX POST-REVISIÓN (bug 4): el ciclo de aproximación YA NO se reabre acá — ver el comentario
+  // largo de `aproximacionesAnunciadas`. Reabrirlo recién cuando el geofence re-arma de verdad
+  // (`limpiarAproximacionesAnunciadas`, llamada desde `headless-task.ts`/`use-gps-operativo.ts`
+  // con `puntosRearmados`).
 
   const clave = claveAnuncio(opciones.sesionId, deteccion.puntoControlId, deteccion.pasada);
   // Fail-open (`esNuevo` arranca en `true`): si el dedupe persistido falla (SQLite ocupada,
@@ -247,9 +265,19 @@ export async function anunciarPuntoControl(
         title: `${identificador} registrado`,
         body: 'Quedó confirmado en tu recorrido.',
       },
-      // `trigger: null` = inmediata. No es un recordatorio programado, es la confirmación de
-      // ESTE instante — el mismo que ya se persistió en el outbox antes de llegar acá.
-      trigger: null,
+      // FIX POST-REVISIÓN (bug 3, "cae en el canal por defecto — sin heads-up ni chime"):
+      // `trigger: null` entrega inmediato pero SIN canal — Android 8+/O+ ignora `content.sound`
+      // de una notificación individual (el sonido/importancia los define el CANAL), y
+      // `expo-notifications@0.32.17` NO expone `channelId` dentro de `content` (confirmado
+      // contra `NotificationContentInput`, `build/Notifications.types.d.ts`): el único lugar
+      // donde este SDK deja elegir el canal de una notificación inmediata es el propio
+      // `trigger`, vía `ChannelAwareTriggerInput` (`{ channelId: string }`,
+      // `NotificationTriggerInput = null | ChannelAwareTriggerInput | ...`). Con `trigger: null`
+      // el sistema enruta al canal DEFAULT (creado con `importance` genérica) — silencioso y sin
+      // heads-up, aunque `asegurarCanalNotificacion()` de arriba haya creado el canal
+      // `CANAL_ANUNCIO_ANDROID` con `importance: HIGH` y el timbre propio: ese canal nunca se
+      // referenciaba desde ningún lado.
+      trigger: { channelId: CANAL_ANUNCIO_ANDROID },
     });
   } catch (error) {
     Sentry.captureException(error, {
@@ -271,8 +299,19 @@ export async function anunciarDeteccionesDelTick(
   resultado: {
     deteccion: DeteccionPuntoControl | null;
     deteccionAproximacion: DeteccionPuntoControl | null;
+    /** FIX POST-REVISIÓN (bug 4): puntos re-armados en este tick — ver
+     * `limpiarAproximacionesAnunciadas` arriba. Opcional/vacío por default: el camino de
+     * confirmación forzada por antigüedad (`confirmarVisitasVencidas`, heartbeat) nunca re-arma
+     * por sí solo. */
+    puntosRearmados?: string[];
   },
 ): Promise<void> {
+  if (resultado.puntosRearmados && resultado.puntosRearmados.length > 0) {
+    // Antes de anunciar la aproximación de este MISMO tick: si un punto re-armó y, en el mismo
+    // tick, ya está de nuevo dentro de `RADIO_AVISO_M` (rebote poco común pero posible), tiene
+    // que poder volver a avisar sin esperar al tick siguiente.
+    limpiarAproximacionesAnunciadas(resultado.puntosRearmados);
+  }
   if (resultado.deteccionAproximacion) {
     await anunciarPuntoControl(db, resultado.deteccionAproximacion, opciones);
   }

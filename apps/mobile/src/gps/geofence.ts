@@ -265,6 +265,39 @@ export interface EstadoPuntoControl {
    * una visita en curso sin confirmar de todos modos (`dentro: false` implícito).
    */
   confirmado?: boolean;
+  /**
+   * FIX POST-REVISIÓN (bug 1, "el servidor puede rechazar el paso"): identidad del punto de
+   * control de ESTA visita — necesaria para que `confirmarVisitasVencidas` (heartbeat, ver más
+   * abajo) pueda reconstruir una `DeteccionPuntoControl` completa sin tener un fix nuevo a
+   * mano (el heartbeat no trae posición: "The heartbeat event does not actively engage
+   * location-services", doc del SDK). Se fija en la rama de ENTRADA y no se limpia al
+   * confirmar (no hace falta: `confirmado === false` ya gatea todo lo que la lee).
+   */
+  puntoControlId?: string;
+  /** Mismo motivo que `puntoControlId` — copia de `deteccion.radioToleranciaM` al momento de
+   * ENTRAR, para reconstruir la detección sin un fix nuevo. */
+  radioToleranciaM?: number;
+  /**
+   * FIX POST-REVISIÓN (bug 1): coordenadas del fix CANDIDATO — el más cercano visto durante la
+   * visita en curso — NO las del fix que finalmente dispara la confirmación. El bug: el evento
+   * `cumplimiento_punto_control` viajaba con `location.coords` del fix que confirma (el que
+   * muestra que la distancia volvió a crecer), que puede estar YA FUERA del radio de
+   * tolerancia (ejemplo real: radio 150, entra a 146 m, el fix que confirma está a 158 m) — el
+   * worker revalida con `ST_DWithin` exactamente esas coordenadas contra `radioToleranciaM`
+   * (`ingesta-worker.service.ts`) y las rechaza (`cumplido=false`), perdiendo evidencia de un
+   * paso real. Con el candidato, el evento SIEMPRE lleva una posición DENTRO del radio (por
+   * construcción: es el mínimo observado) — la revalidación server-side pasa siempre.
+   * Se fija en la rama de ENTRADA (con el fix de entrada) y se actualiza cada vez que un fix
+   * nuevo mejora el mínimo (`mejoraElMinimo`, ver el cuerpo de la función) — mismo ciclo de
+   * vida que `minDistanciaM`, con el que viaja siempre en sincronía.
+   */
+  candidatoLat?: number;
+  /** Ver `candidatoLat`. */
+  candidatoLng?: number;
+  /** `tsFixMs` (epoch ms) del fix candidato — igual razón que `candidatoLat`/`candidatoLng`: el
+   * evento tiene que llevar la HORA del fix más cercano, no la del fix que confirma (que puede
+   * ser varios fixes y minutos después en un vehículo lento). */
+  candidatoTsFixMs?: number;
 }
 
 /** B1 (hallazgo de revisión, bajo): `Object.freeze` en vez de un objeto de módulo mutable —
@@ -289,6 +322,20 @@ export interface CumplimientoAEmitir {
    * (la distancia empezó a crecer desde acá) o, en el caso del fallback, el mínimo visto hasta
    * el momento de forzar la confirmación. Ver `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO`. */
   distanciaMinAproximacionM: number;
+  /**
+   * FIX POST-REVISIÓN (bug 1): coordenadas/hora del fix CANDIDATO (el mínimo real de la
+   * visita) — lo que el evento `cumplimiento_punto_control` debe llevar en `lat`/`lng`/`tsFix`,
+   * NO la posición/hora del fix que disparó esta confirmación. Ver el comentario largo de
+   * `EstadoPuntoControl.candidatoLat`. Opcional solo porque `filtrarNuevosCumplimientos` recibe
+   * `posicionFix` como parámetro OPCIONAL (para no romper las decenas de call sites de
+   * `geofence.test.ts` que no lo necesitan) — todo caller real (`location-task.ts`,
+   * `confirmarVisitasVencidas`) los deja siempre definidos.
+   */
+  candidatoLat?: number;
+  /** Ver `candidatoLat` de arriba. */
+  candidatoLng?: number;
+  /** Ver `candidatoLat` de arriba. */
+  candidatoTsFixMs?: number;
 }
 
 export interface ResultadoFiltrado {
@@ -311,6 +358,20 @@ export interface ResultadoFiltrado {
   /** M3: decisiones de este tick condicionadas por la precisión del fix — ver `AvisoPrecision`.
    * Vacío en el caso normal (fix preciso, o sin `accuracyM` conocida). */
   avisosPrecision: AvisoPrecision[];
+  /**
+   * FIX POST-REVISIÓN (bug 4, "un vehículo detenido nunca confirma" — en realidad, hallazgo
+   * mellizo de bug 4: "la voz vuelve a anunciar la aproximación al alejarse"): `puntoControlId`
+   * de los puntos que ESTE tick re-armó DE VERDAD (`dentro: true → false`, tras
+   * `FIXES_REARME_CONSECUTIVOS` fixes concluyentes fuera de `radio * FACTOR_REARME_RADIO`) —
+   * el único momento en que corresponde reabrir el aviso de aproximación por voz
+   * (`limpiarAproximacionesAnunciadas`, `features/operacion/anuncio-punto-control.ts`).
+   * Confirmar (`fase: 'confirmado'`) NO va acá: el vehículo puede seguir a <150 m, todavía
+   * alejándose del punto, mucho antes de que el re-armado real ocurra — reabrir ahí es
+   * exactamente el bug (la voz repite la aproximación mientras se aleja, y la aproximación
+   * REAL de la vuelta siguiente queda en silencio porque el ciclo ya estaba "usado"). Vacío en
+   * el caso normal (ningún punto re-armó en este tick).
+   */
+  puntosRearmados: string[];
 }
 
 /**
@@ -359,10 +420,23 @@ export function filtrarNuevosCumplimientos(
   detecciones: DeteccionPuntoControl[],
   sesionId: string,
   tsFixMs: number,
+  /**
+   * FIX POST-REVISIÓN (bug 1): lat/lng del fix que produjo `detecciones` en este tick — el
+   * mismo `location.coords` que ya usa el caller para construir el `gps_point` del tick
+   * (`construirEventosDeUbicacion`, `location-task.ts`). OPCIONAL a propósito: las decenas de
+   * call sites existentes de `geofence.test.ts` no lo necesitan (no verifican `candidatoLat`);
+   * sin este parámetro, `candidatoLat`/`candidatoLng` quedan `undefined` y el caller real
+   * (`location-task.ts`) cae a la posición del fix que confirma — el comportamiento previo a
+   * este fix, nunca peor. `tsFixMs` (el 4º parámetro, siempre requerido) SÍ se registra como
+   * `candidatoTsFixMs` sin depender de este parámetro: la hora del candidato no necesita
+   * coordenadas para tener sentido.
+   */
+  posicionFix?: { lat: number; lng: number },
 ): ResultadoFiltrado {
   const emitir: CumplimientoAEmitir[] = [];
   const transiciones = new Map<string, EstadoPuntoControl>();
   const avisosPrecision: AvisoPrecision[] = [];
+  const puntosRearmados: string[] = [];
 
   for (const deteccion of detecciones) {
     const clave = claveCumplimiento(sesionId, deteccion.puntoControlId);
@@ -400,6 +474,13 @@ export function filtrarNuevosCumplimientos(
           // fallback más abajo.
           fixesDentroSinConfirmar: 0,
           confirmado: false,
+          // FIX POST-REVISIÓN (bug 1 y bug 2): identidad + candidato del fix de ENTRADA — ver
+          // los comentarios largos de `EstadoPuntoControl.puntoControlId`/`candidatoLat`.
+          puntoControlId: deteccion.puntoControlId,
+          radioToleranciaM: deteccion.radioToleranciaM,
+          candidatoLat: posicionFix?.lat,
+          candidatoLng: posicionFix?.lng,
+          candidatoTsFixMs: tsFixMs,
         });
       } else if (deteccion.cumplido) {
         // B5 (hallazgo de revisión, bajo): CUMPLE pero todavía no pasó `PASADA_MIN_MS` desde la
@@ -476,6 +557,16 @@ export function filtrarNuevosCumplimientos(
         const distanciaMinAproximacionM = minPrevio;
         const distanciaEntradaM = estado.distanciaEntradaM ?? distanciaMinAproximacionM;
         const pasada = estado.pasadas + 1;
+        // FIX POST-REVISIÓN (bug 1): candidato del ESTADO (el fix del mínimo, guardado en la
+        // rama de ENTRADA o en la de "mejora el mínimo" de abajo) — NUNCA el fix ACTUAL (el que
+        // dispara esta confirmación, que puede estar más lejos que el mínimo: es justo lo que
+        // "la distancia volvió a crecer" significa). Sin este fallback a `tsFixMs` el candidato
+        // quedaría `undefined` solo en el caso degenerado de un `EstadoPuntoControl` que llegó
+        // hasta acá con `confirmado === false` pero sin haber pasado por la rama de ENTRADA
+        // (no debería ocurrir por construcción, pero un `tsFixMs` es preferible a nada).
+        const candidatoLat = estado.candidatoLat;
+        const candidatoLng = estado.candidatoLng;
+        const candidatoTsFixMs = estado.candidatoTsFixMs ?? tsFixMs;
         emitir.push({
           deteccion: {
             ...deteccion,
@@ -494,6 +585,9 @@ export function filtrarNuevosCumplimientos(
           pasada,
           distanciaEntradaM,
           distanciaMinAproximacionM,
+          candidatoLat,
+          candidatoLng,
+          candidatoTsFixMs,
         });
         if (margenM > deteccion.radioToleranciaM) {
           // La pasada se emite igual (M3), pero queda marcada: el fix que la sustenta tiene un
@@ -527,6 +621,12 @@ export function filtrarNuevosCumplimientos(
           ...estado,
           minDistanciaM: mejoraElMinimo ? deteccion.distanciaM : minPrevio,
           fixesDentroSinConfirmar: fixesSinMejorar,
+          // FIX POST-REVISIÓN (bug 1): el candidato SIGUE al mínimo — si este fix lo mejoró,
+          // pasa a ser el nuevo candidato; si no, se conserva el de antes (mismo criterio que
+          // `minDistanciaM` en la línea de arriba).
+          candidatoLat: mejoraElMinimo ? posicionFix?.lat : estado.candidatoLat,
+          candidatoLng: mejoraElMinimo ? posicionFix?.lng : estado.candidatoLng,
+          candidatoTsFixMs: mejoraElMinimo ? tsFixMs : estado.candidatoTsFixMs,
         };
       }
     }
@@ -540,6 +640,10 @@ export function filtrarNuevosCumplimientos(
       // propia `accuracy`, para que un fix impreciso no habilite una pasada fantasma.
       const consecutivos = (estadoBase.fixesFueraRadioRearme ?? 0) + 1;
       if (consecutivos >= FIXES_REARME_CONSECUTIVOS) {
+        // FIX POST-REVISIÓN (bug 4): este es el ÚNICO lugar donde `dentro` pasa de `true` a
+        // `false` de verdad — el único momento en que corresponde reabrir el aviso de
+        // aproximación por voz para este punto (ver el comentario de `puntosRearmados`).
+        puntosRearmados.push(deteccion.puntoControlId);
         transiciones.set(clave, {
           ...estadoBase,
           dentro: false,
@@ -573,5 +677,153 @@ export function filtrarNuevosCumplimientos(
     }
   }
 
-  return { emitir, transiciones, avisosPrecision };
+  return { emitir, transiciones, avisosPrecision, puntosRearmados };
+}
+
+/**
+ * FIX POST-REVISIÓN (bug 2, "un vehículo detenido nunca confirma"): antigüedad máxima, en ms,
+ * que puede tener el fix CANDIDATO de una visita SIN CONFIRMAR antes de forzar su confirmación
+ * en el próximo `heartbeat` del SDK — cubre el caso de un vehículo que se DETIENE dentro del
+ * radio y nunca vuelve a producir un fix nuevo: un vehículo parado no dispara `onLocation`
+ * (`distanceFilter: 15` — sin desplazamiento no hay fix), así que
+ * `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO` (el fallback existente, que cuenta FIXES) nunca se
+ * alcanza — no hay fixes nuevos que contar — y la visita queda pendiente para siempre. El caso
+ * real que esto existe para cerrar: el ÚLTIMO punto de control de una ruta, en la terminal,
+ * donde el chofer se estaciona y apaga el motor — sin este piso NUNCA se registra.
+ *
+ * 90 s: dentro del rango 60-120 s pedido. `heartbeatInterval: 60`
+ * (`background-geolocation.config.ts`) — dos heartbeats sin fix nuevo (bajo `distanceFilter: 15`,
+ * el vehículo llevaría sin moverse ≥15 m durante ≥90 s) es señal fuerte de vehículo detenido: un
+ * semáforo largo o una cola corta rara vez llegan a dos ciclos completos de heartbeat, y un
+ * layover real (terminal, control con parada obligatoria) los supera de sobra. Es además corto
+ * en términos absolutos: el chofer no espera más de un minuto y medio para sentir/escuchar la
+ * confirmación de que su parada quedó registrada.
+ */
+export const UMBRAL_ANTIGUEDAD_CANDIDATO_MS = 90 * 1000;
+
+/**
+ * FIX POST-REVISIÓN (bug 2, hallazgo propio surgido al escribir los tests de este fix — no
+ * estaba en la lista original de `/code-review`): `confirmarVisitasVencidas` opera sobre TODO
+ * el Map que recibe, sin distinguir sesión — correcto para `puntosControlDetectados.current`
+ * de `use-gps-operativo.ts` (foreground), que `sembrarCumplimientos` REEMPLAZA entero en cada
+ * cambio de `sesionId` (nunca mezcla dos sesiones). Pero NO es seguro para
+ * `puntosControlDetectadosHeadless` (`headless-task.ts`): ese Map es un singleton de MÓDULO que
+ * `asegurarSemillaCumplimientos` solo AGREGA entradas, nunca limpia — si el mismo contexto JS
+ * headless sobrevive un cambio de turno (chofer nuevo en el MISMO dispositivo/vehículo, sin
+ * reinicio de proceso — el caso NORMAL en un dispositivo atado al vehículo, no al chofer), una
+ * visita sin confirmar de la sesión ANTERIOR queda viva en el Map. Sin este filtro, el próximo
+ * heartbeat de la sesión NUEVA la confirmaría igual — `aplicarConfirmacionesForzadas` usa un
+ * único `sesionId` (el de la sesión ACTUAL) para TODO lo que `confirmarVisitasVencidas` emite,
+ * así que un paso de la sesión VIEJA se encolaría atribuido a la sesión NUEVA (evidencia con
+ * `sesionId` incorrecto).
+ *
+ * `estado.puntoControlId` (guardado en la rama de ENTRADA, FIX bug 1) es lo que permite
+ * reconstruir la clave esperada y compararla: solo sobrevive una entrada cuya clave coincide
+ * EXACTAMENTE con `claveCumplimiento(sesionId, estado.puntoControlId)` — el resto (de otra
+ * sesión, o sin `puntoControlId` por ser un `EstadoPuntoControl` viejo/incompleto) se ignora en
+ * este heartbeat, SIN tocarlo en el Map original (`estados` no se muta — devuelve un Map nuevo).
+ */
+export function filtrarPorSesion(
+  estados: ReadonlyMap<string, EstadoPuntoControl>,
+  sesionId: string,
+): Map<string, EstadoPuntoControl> {
+  const filtrado = new Map<string, EstadoPuntoControl>();
+  for (const [clave, estado] of estados) {
+    if (
+      estado.puntoControlId !== undefined &&
+      clave === claveCumplimiento(sesionId, estado.puntoControlId)
+    ) {
+      filtrado.set(clave, estado);
+    }
+  }
+  return filtrado;
+}
+
+/**
+ * FIX POST-REVISIÓN (bug 2): recorre TODO el Map de estados y confirma (con el candidato ya
+ * guardado, sin necesitar un fix nuevo) toda visita `dentro: true, confirmado: false` cuyo
+ * candidato lleve sin mejorar `>= umbralMs`. Pensada para dos callers, con el MISMO umbral
+ * jugando dos roles distintos:
+ * - El handler de `heartbeat` (headless y foreground, ver `anuncio-punto-control.ts` y
+ *   `headless-task.ts`/`use-gps-operativo.ts`): `umbralMs = UMBRAL_ANTIGUEDAD_CANDIDATO_MS`, la
+ *   antigüedad real de arriba.
+ * - El cierre del recorrido (`fin_recorrido`, plan diseño B, "cierre del recorrido"):
+ *   `umbralMs = 0` — fuerza la confirmación de TODA visita pendiente sin importar su edad, para
+ *   que ningún paso quede en el limbo cuando el chofer detiene o finaliza. `0` funciona sin
+ *   ninguna rama especial porque `ahoraMs - candidatoTsFixMs` es siempre `>= 0` para un
+ *   candidato ya observado.
+ *
+ * Deliberadamente NO registra ningún `gps_point`: el heartbeat del SDK "no engancha activamente
+ * los servicios de ubicación" (doc oficial) — inventar una posición sería fabricar evidencia
+ * GPS que el dispositivo nunca produjo. El punto de control SÍ se confirma con el candidato ya
+ * observado (una posición real, solo que no la más reciente).
+ *
+ * Best-effort defensivo: una visita sin `puntoControlId`/`radioToleranciaM`/candidato completo
+ * (un `EstadoPuntoControl` construido a mano en un test viejo, o una semilla incompleta) se
+ * salta en silencio en vez de forzar una confirmación con datos a medias — el fallback normal
+ * por fixes (`FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO`) sigue cubriendo esas visitas apenas
+ * llegue un fix nuevo.
+ */
+export function confirmarVisitasVencidas(
+  estados: ReadonlyMap<string, EstadoPuntoControl>,
+  ahoraMs: number,
+  umbralMs: number = UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+): ResultadoFiltrado {
+  const emitir: CumplimientoAEmitir[] = [];
+  const transiciones = new Map<string, EstadoPuntoControl>();
+
+  for (const [clave, estado] of estados) {
+    if (!estado.dentro || estado.confirmado !== false) continue;
+    if (
+      estado.candidatoTsFixMs === undefined ||
+      estado.candidatoLat === undefined ||
+      estado.candidatoLng === undefined ||
+      estado.minDistanciaM === undefined ||
+      estado.puntoControlId === undefined ||
+      estado.radioToleranciaM === undefined
+    ) {
+      continue;
+    }
+    if (ahoraMs - estado.candidatoTsFixMs < umbralMs) continue;
+
+    const distanciaMinAproximacionM = estado.minDistanciaM;
+    const distanciaEntradaM = estado.distanciaEntradaM ?? distanciaMinAproximacionM;
+    const pasada = estado.pasadas + 1;
+    emitir.push({
+      deteccion: {
+        puntoControlId: estado.puntoControlId,
+        distanciaM: distanciaMinAproximacionM,
+        cumplido: true,
+        radioToleranciaM: estado.radioToleranciaM,
+        fase: 'confirmado',
+        pasada,
+      },
+      clave,
+      pasada,
+      distanciaEntradaM,
+      distanciaMinAproximacionM,
+      candidatoLat: estado.candidatoLat,
+      candidatoLng: estado.candidatoLng,
+      candidatoTsFixMs: estado.candidatoTsFixMs,
+    });
+    transiciones.set(clave, {
+      ...estado,
+      // Ojo: `ultimoEmitidoMs` se sella con la hora del CANDIDATO (la hora real de paso), no
+      // `ahoraMs` (la hora en que el heartbeat lo notó) — mismo criterio que el resto del
+      // módulo: `PASADA_MIN_MS` de la PRÓXIMA pasada tiene que medirse desde el paso real, no
+      // desde cuándo se enteró el sistema.
+      ultimoEmitidoMs: estado.candidatoTsFixMs,
+      pasadas: pasada,
+      confirmado: true,
+      minDistanciaM: undefined,
+      distanciaEntradaM: undefined,
+      fixesDentroSinConfirmar: undefined,
+    });
+  }
+
+  // Sin `puntosRearmados`: confirmar por antigüedad/cierre nunca re-arma la histéresis por sí
+  // solo — `dentro` sigue en `true` (la visita solo se cierra en curso, igual que el camino
+  // normal de confirmación por distancia) hasta que un fix real la re-arme por el camino de
+  // siempre.
+  return { emitir, transiciones, avisosPrecision: [], puntosRearmados: [] };
 }

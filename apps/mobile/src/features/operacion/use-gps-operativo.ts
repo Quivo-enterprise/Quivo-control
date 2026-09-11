@@ -9,6 +9,7 @@ import {
   contarEventosPendientes,
   encolarEvento,
   obtenerEventosPorTipo,
+  obtenerVisitasPendientes,
 } from '../../db/outbox';
 import { gpsSpikeConfig, logVerboseHabilitado } from '../../gps/background-geolocation.config';
 import {
@@ -18,10 +19,19 @@ import {
   evaluarCriteriosGo,
   type MuestraBateria,
 } from '../../gps/battery-gap-monitor';
-import { claveCumplimiento, type DeteccionPuntoControl, type EstadoPuntoControl } from '../../gps/geofence';
-import { registrarPuntoGps } from '../../gps/headless-task';
-import { clavesCumplimientoDesdePayloads } from '../../gps/location-task';
-import { asegurarPermisoNotificaciones } from './anuncio-punto-control';
+import {
+  claveCumplimiento,
+  confirmarVisitasVencidas,
+  UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+  type DeteccionPuntoControl,
+  type EstadoPuntoControl,
+} from '../../gps/geofence';
+import { aplicarConfirmacionesForzadas, registrarPuntoGps } from '../../gps/headless-task';
+import { clavesCumplimientoDesdePayloads, combinarConVisitasPendientes } from '../../gps/location-task';
+import {
+  asegurarPermisoNotificaciones,
+  limpiarAproximacionesAnunciadas,
+} from './anuncio-punto-control';
 import {
   AUTORIZACION_DENEGADA,
   AUTORIZACION_NO_DETERMINADA,
@@ -132,6 +142,11 @@ export function useGpsOperativo(
   const erroresEscritura = useRef(0);
   const puntosControlDetectados = useRef<Map<string, EstadoPuntoControl>>(new Map());
   const subscription = useRef<{ remove: () => void } | null>(null);
+  // FIX POST-REVISIÓN (bug 2): suscripción SEPARADA de `onHeartbeat` — ver `onHeartbeat` más
+  // abajo. No comparte el mismo `subscription.current` que `onLocation`: las dos deben poder
+  // instalarse/removerse de forma independiente (el SDK expone un `remove()` propio por cada
+  // `addListener`).
+  const heartbeatSubscription = useRef<{ remove: () => void } | null>(null);
   // QUI-338: si esta app YA invocó `requestPermission()` alguna vez en este dispositivo,
   // persistido en `AsyncStorage` bajo `CLAVE_PERMISO_GPS_SOLICITADO` (ver ese comentario para
   // el porqué). Vive en un ref, no en `useState`: se lee de forma síncrona dentro de
@@ -187,7 +202,11 @@ export function useGpsOperativo(
         // La semilla nunca rechaza (best-effort, ver `sembrarCumplimientos`).
         await semillaPromise.current;
         const db = await abrirOutbox();
-        const { deteccion, deteccionAproximacion: nuevaAproximacion } = await registrarPuntoGps(
+        const {
+          deteccion,
+          deteccionAproximacion: nuevaAproximacion,
+          puntosRearmados,
+        } = await registrarPuntoGps(
           db,
           location,
           { deviceId, sesionId, puntosControl },
@@ -196,6 +215,12 @@ export function useGpsOperativo(
           // el Map en el medio. Ver `ContenedorEstadosPuntosControl` (`gps/headless-task.ts`).
           puntosControlDetectados,
         );
+        // FIX POST-REVISIÓN (bug 4): libera el dedupe de voz de aproximación para los puntos
+        // que este tick re-armó de verdad — ver `limpiarAproximacionesAnunciadas` y el
+        // comentario de `puntosRearmados` en `gps/geofence.ts`. Incondicional (no gatea en
+        // `settings.navegacionVoz`): limpiar el Set nunca hace daño si la voz está apagada (el
+        // Set solo tiene entradas de anuncios que SÍ se emitieron).
+        if (puntosRearmados.length > 0) limpiarAproximacionesAnunciadas(puntosRearmados);
         if (deteccion) setUltimaDeteccion(deteccion);
         // ENTREGA 6/7: se actualiza en CADA tick con puntos de control (incluso a `null` cuando
         // ninguno está en rango) — a diferencia de `ultimaDeteccion`, que solo cambia con una
@@ -239,6 +264,47 @@ export function useGpsOperativo(
     onLocationRef.current = onLocation;
   }, [onLocation]);
 
+  /**
+   * FIX POST-REVISIÓN (bug 2, "un vehículo detenido nunca confirma"): mitad foreground del fix
+   * — ver `manejarHeartbeatHeadless` (`gps/headless-task.ts`) para la mitad headless y el
+   * porqué completo. Sin un fix nuevo (vehículo detenido, `distanceFilter: 15`) ninguna visita
+   * en curso puede cerrar por el camino normal — el `heartbeat` del SDK
+   * (`heartbeatInterval: 60`) es el único evento que sigue llegando con el vehículo quieto.
+   *
+   * Deliberadamente NO escribe ningún `gps_point`: el heartbeat no trae una posición fresca
+   * (`HeartbeatEvent.location` es "the last-known location", no una lectura nueva) — solo
+   * evalúa si alguna visita ya lleva `>= UMBRAL_ANTIGUEDAD_CANDIDATO_MS` sin mejorar su mínimo
+   * y, si es así, la confirma con el candidato YA observado (mismo camino transaccional que el
+   * confirm normal — `aplicarConfirmacionesForzadas`, `gps/headless-task.ts`).
+   */
+  const onHeartbeat = useCallback(async () => {
+    try {
+      await semillaPromise.current;
+      const db = await abrirOutbox();
+      const estados = puntosControlDetectados.current;
+      const { emitir, transiciones } = confirmarVisitasVencidas(
+        estados,
+        Date.now(),
+        UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+      );
+      if (emitir.length === 0) return;
+      await aplicarConfirmacionesForzadas(db, deviceId, sesionId, emitir, transiciones, estados);
+      // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
+      // ve el punto tachado aunque haya sido el heartbeat, no un fix nuevo, quien lo cerró.
+      setUltimaDeteccion(emitir[emitir.length - 1]?.deteccion ?? null);
+    } catch (error) {
+      console.error('[QUIVO][gps] No se pudo procesar el heartbeat', error);
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'procesar-heartbeat' },
+      });
+    }
+  }, [deviceId, sesionId]);
+
+  const onHeartbeatRef = useRef(onHeartbeat);
+  useEffect(() => {
+    onHeartbeatRef.current = onHeartbeat;
+  }, [onHeartbeat]);
+
   const suscribirUbicaciones = useCallback(() => {
     subscription.current?.remove();
     subscription.current = BackgroundGeolocation.onLocation(
@@ -249,6 +315,13 @@ export function useGpsOperativo(
         setErrorGps(`No se pudo registrar una ubicación (código ${String(error)}).`);
       },
     );
+    // FIX POST-REVISIÓN (bug 2): suscripción de heartbeat en el MISMO punto que la de
+    // ubicaciones (arranque manual e re-enganche al montar) — así el vehículo detenido en la
+    // TERMINAL, en la parada final de la ruta, también confirma su último punto de control.
+    heartbeatSubscription.current?.remove();
+    heartbeatSubscription.current = BackgroundGeolocation.onHeartbeat(() => {
+      void onHeartbeatRef.current();
+    });
   }, []);
 
   /**
@@ -282,7 +355,15 @@ export function useGpsOperativo(
         'cumplimiento_punto_control',
         sesionId,
       );
-      puntosControlDetectados.current = clavesCumplimientoDesdePayloads(eventosCumplimiento);
+      const base = clavesCumplimientoDesdePayloads(eventosCumplimiento);
+      // FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"):
+      // superpone las visitas PENDIENTES persistidas (SQLite) — ver el docblock de
+      // `combinarConVisitasPendientes` (`gps/location-task.ts`). Sin esto, matar y reabrir la
+      // app a mitad de una visita en curso la devolvía como si nunca hubiera pasado (o, con una
+      // pasada previa del mismo punto, como "ya confirmada" — la máquina de estados nunca más
+      // la re-evaluaba).
+      const visitasPendientes = await obtenerVisitasPendientes(db, sesionId);
+      puntosControlDetectados.current = combinarConVisitasPendientes(base, visitasPendientes);
     } catch (error) {
       console.error('[QUIVO][gps] No se pudo sembrar cumplimientos desde el outbox', error);
       Sentry.captureException(error, {
@@ -343,6 +424,8 @@ export function useGpsOperativo(
       montado = false;
       subscription.current?.remove();
       subscription.current = null;
+      heartbeatSubscription.current?.remove();
+      heartbeatSubscription.current = null;
     };
   }, [sesionId, suscribirUbicaciones, sembrarCumplimientos]);
 
@@ -567,10 +650,12 @@ export function useGpsOperativo(
       // Plan §2.4.4: mensaje distinto del de persistencia (bloque de abajo) — acá el módulo
       // NATIVO no pudo arrancar pese a que el permiso/servicio ya estaban en orden (licencia
       // del plugin, Google Play Services): no hay nada grabándose todavía, a diferencia del
-      // catch siguiente. La suscripción que acabamos de instalar no tiene nada que escuchar:
-      // se remueve.
+      // catch siguiente. Las suscripciones que acabamos de instalar no tienen nada que
+      // escuchar: se remueven.
       subscription.current?.remove();
       subscription.current = null;
+      heartbeatSubscription.current?.remove();
+      heartbeatSubscription.current = null;
       Sentry.captureException(error, {
         tags: { contexto: 'gps-foreground', paso: 'iniciar-nativo' },
       });
@@ -636,9 +721,45 @@ export function useGpsOperativo(
       await BackgroundGeolocation.stop();
       subscription.current?.remove();
       subscription.current = null;
+      heartbeatSubscription.current?.remove();
+      heartbeatSubscription.current = null;
       setTracking(false);
 
       const db = await abrirOutbox();
+
+      // FIX POST-REVISIÓN (bug 2, diseño B "cierre del recorrido"): descarga TODAS las visitas
+      // pendientes y encola sus eventos ANTES del `fin_recorrido` de abajo — sin esto, una
+      // visita todavía "en el mínimo local" al momento de finalizar (el chofer para el motor y
+      // aprieta "Finalizar" antes de que la distancia vuelva a crecer, o antes de que pase
+      // `UMBRAL_ANTIGUEDAD_CANDIDATO_MS`) se perdía: nada volvía a evaluarla una vez detenido el
+      // tracking. `umbralMs: 0` fuerza la confirmación de CUALQUIER visita pendiente sin
+      // importar su edad — "ante la duda, emitir" (invariante del diseño). Encolar ANTES de
+      // `fin_recorrido` (no después) mantiene el orden causal del recorrido: el paso por el
+      // último punto de control queda registrado como parte del recorrido que cerró, no
+      // colgando después de que ya "terminó".
+      try {
+        const { emitir, transiciones } = confirmarVisitasVencidas(
+          puntosControlDetectados.current,
+          Date.now(),
+          0,
+        );
+        if (emitir.length > 0) {
+          await aplicarConfirmacionesForzadas(
+            db,
+            deviceId,
+            sesionId,
+            emitir,
+            transiciones,
+            puntosControlDetectados.current,
+          );
+        }
+      } catch (error) {
+        console.error('[QUIVO][gps] No se pudo descargar las visitas pendientes al finalizar', error);
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'descargar-visitas-pendientes-fin' },
+        });
+      }
+
       await encolarEvento(db, { deviceId, tipo: 'fin_recorrido', payload: { sesionId } });
 
       // A1 (hallazgo de revisión, QUI-216 criterio B): los huecos se calculan desde el

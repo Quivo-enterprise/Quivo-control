@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { PuntoControlPaquete } from '@quivo/shared';
 import {
   claveCumplimiento,
+  confirmarVisitasVencidas,
   detectarPuntosControlCercanos,
   filtrarNuevosCumplimientos,
   FACTOR_REARME_RADIO,
   FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO,
   PASADA_MIN_MS,
+  UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
   type DeteccionPuntoControl,
   type EstadoPuntoControl,
 } from './geofence';
@@ -651,3 +653,174 @@ function confirmarPrimeraPasadaEnSesion(estados: Map<string, EstadoPuntoControl>
     { distanciaM: 15, tsFixMs: 1_000 },
   ]);
 }
+
+/**
+ * FIX POST-REVISIÓN (bug 2, "un vehículo detenido nunca confirma"): tests de
+ * `confirmarVisitasVencidas` — la mitad "heartbeat"/"cierre de recorrido" del fix. Sin fixes
+ * nuevos (el fallback existente, `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO`, cuenta FIXES, no
+ * tiempo) un vehículo DETENIDO dentro del radio nunca confirmaba — el caso real es el ÚLTIMO
+ * punto de control de la ruta, en la terminal, donde el chofer se estaciona y apaga el motor.
+ */
+describe('confirmarVisitasVencidas (FIX POST-REVISIÓN, bug 2)', () => {
+  /** Entra a un punto de control (fix único, sin más fixes después — el escenario "vehículo
+   * detenido") y devuelve la clave de esa visita. Pasa `posicionFix` siempre: sin eso el
+   * candidato queda `undefined` y `confirmarVisitasVencidas` lo saltea (best-effort) — no es
+   * el escenario que estos tests quieren ejercitar. */
+  function entrarYDetenerse(
+    estados: Map<string, EstadoPuntoControl>,
+    opts: {
+      sesionId?: string;
+      puntoControlId?: string;
+      distanciaM?: number;
+      radioToleranciaM?: number;
+      tsFixMs?: number;
+      lat?: number;
+      lng?: number;
+    } = {},
+  ): string {
+    const {
+      sesionId = 'sesion-1',
+      puntoControlId = 'pc-1',
+      distanciaM = 146,
+      radioToleranciaM = 150,
+      tsFixMs = 0,
+      lat = -17.78,
+      lng = -63.18,
+    } = opts;
+    const resultado = filtrarNuevosCumplimientos(
+      estados,
+      [deteccion(distanciaM, radioToleranciaM, puntoControlId)],
+      sesionId,
+      tsFixMs,
+      { lat, lng },
+    );
+    aplicarTransiciones(estados, resultado.transiciones);
+    return claveCumplimiento(sesionId, puntoControlId);
+  }
+
+  it('vehículo detenido dentro del radio: un heartbeat ANTES de cumplirse UMBRAL_ANTIGUEDAD_CANDIDATO_MS todavía NO confirma', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    entrarYDetenerse(estados, { tsFixMs: 0 });
+    const { emitir } = confirmarVisitasVencidas(
+      estados,
+      UMBRAL_ANTIGUEDAD_CANDIDATO_MS - 1,
+      UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+    );
+    expect(emitir).toHaveLength(0);
+  });
+
+  it('vehículo detenido dentro del radio: un heartbeat AL CUMPLIRSE (o superar) UMBRAL_ANTIGUEDAD_CANDIDATO_MS confirma con el candidato ya observado, SIN fix nuevo (caso "terminal, chofer estaciona")', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    const clave = entrarYDetenerse(estados, { tsFixMs: 0, lat: -17.78, lng: -63.18, distanciaM: 146 });
+
+    const { emitir, transiciones } = confirmarVisitasVencidas(
+      estados,
+      UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+      UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+    );
+
+    expect(emitir).toHaveLength(1);
+    const c = emitir[0]!;
+    expect(c.clave).toBe(clave);
+    expect(c.deteccion.fase).toBe('confirmado');
+    expect(c.deteccion.pasada).toBe(1);
+    // El candidato (fix de entrada, único fix de la visita) es lo que viaja — nunca una
+    // posición inventada: el heartbeat no trae un fix nuevo del que fabricar evidencia.
+    expect(c.candidatoLat).toBeCloseTo(-17.78, 6);
+    expect(c.candidatoLng).toBeCloseTo(-63.18, 6);
+    expect(c.candidatoTsFixMs).toBe(0);
+    expect(c.distanciaMinAproximacionM).toBeCloseTo(146, 0);
+
+    // La transición cierra la visita en curso (confirmado: true) pero NO re-arma `dentro` —
+    // eso sigue exclusivamente en manos de fixes reales (histéresis de re-armado normal).
+    const nuevoEstado = transiciones.get(clave);
+    expect(nuevoEstado?.confirmado).toBe(true);
+    expect(nuevoEstado?.dentro).toBe(true);
+    expect(nuevoEstado?.pasadas).toBe(1);
+    // `ultimoEmitidoMs` se sella con la hora del CANDIDATO (el paso real), no `ahoraMs` (cuándo
+    // el heartbeat lo notó) — protege `PASADA_MIN_MS` de la PRÓXIMA pasada con el mismo
+    // criterio que el camino de confirmación normal.
+    expect(nuevoEstado?.ultimoEmitidoMs).toBe(0);
+  });
+
+  it('NO confirma una visita que ya está fuera del radio (dentro: false) — el heartbeat no reabre nada por su cuenta', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    estados.set(claveCumplimiento('sesion-1', 'pc-1'), {
+      dentro: false,
+      ultimoEmitidoMs: -Infinity,
+      pasadas: 0,
+    });
+    const { emitir } = confirmarVisitasVencidas(estados, 10_000_000);
+    expect(emitir).toHaveLength(0);
+  });
+
+  it('NO confirma una visita YA confirmada (confirmado: true) — nunca duplica una pasada que ya salió por el camino normal', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    const clave = entrarYDetenerse(estados, { tsFixMs: 0 });
+    // Confirma por el camino normal (un fix que muestra que la distancia volvió a crecer).
+    const paso2 = filtrarNuevosCumplimientos(
+      estados,
+      [deteccion(160, 150, 'pc-1')],
+      'sesion-1',
+      10_000,
+      { lat: -17.7797, lng: -63.18 },
+    );
+    aplicarTransiciones(estados, paso2.transiciones);
+    expect(estados.get(clave)?.confirmado).toBe(true);
+
+    const { emitir } = confirmarVisitasVencidas(estados, 10_000 + UMBRAL_ANTIGUEDAD_CANDIDATO_MS);
+    expect(emitir).toHaveLength(0);
+  });
+
+  it('best-effort: un EstadoPuntoControl sin candidato completo (semilla vieja / construido a mano en un test) se saltea en silencio, sin lanzar', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    estados.set(claveCumplimiento('sesion-1', 'pc-1'), {
+      dentro: true,
+      confirmado: false,
+      ultimoEmitidoMs: -Infinity,
+      pasadas: 0,
+      // Sin candidatoLat/candidatoLng/candidatoTsFixMs/minDistanciaM/puntoControlId/radioToleranciaM.
+    });
+    expect(() => confirmarVisitasVencidas(estados, 10_000_000)).not.toThrow();
+    expect(confirmarVisitasVencidas(estados, 10_000_000).emitir).toHaveLength(0);
+  });
+
+  it('es pura: no muta el Map de estados que recibe — las transiciones viajan aparte para que el caller decida aplicarlas', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    entrarYDetenerse(estados, { tsFixMs: 0 });
+    const snapshot = new Map(estados);
+    confirmarVisitasVencidas(estados, UMBRAL_ANTIGUEDAD_CANDIDATO_MS);
+    expect(estados).toEqual(snapshot);
+  });
+
+  it('umbralMs: 0 (diseño B, "cierre del recorrido"): confirma CUALQUIER visita pendiente sin importar su antigüedad — "ante la duda, emitir"', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    entrarYDetenerse(estados, { tsFixMs: 5_000 });
+
+    // Con el umbral normal, un heartbeat 1 ms después de la entrada NO alcanza.
+    const conUmbralNormal = confirmarVisitasVencidas(estados, 5_001, UMBRAL_ANTIGUEDAD_CANDIDATO_MS);
+    expect(conUmbralNormal.emitir).toHaveLength(0);
+
+    // Con `umbralMs: 0` (el que usa el cierre de recorrido al finalizar/detener) confirma
+    // igual, con la MISMA edad — el chofer para el motor y aprieta "Finalizar" antes de que
+    // pase ningún tiempo: la visita pendiente no puede quedar en el limbo.
+    const conCierre = confirmarVisitasVencidas(estados, 5_001, 0);
+    expect(conCierre.emitir).toHaveLength(1);
+  });
+
+  it('puntosRearmados y avisosPrecision siempre vacíos: confirmar por antigüedad/cierre nunca re-arma la histéresis de voz por sí solo', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    entrarYDetenerse(estados, { tsFixMs: 0 });
+    const resultado = confirmarVisitasVencidas(estados, UMBRAL_ANTIGUEDAD_CANDIDATO_MS);
+    expect(resultado.puntosRearmados).toEqual([]);
+    expect(resultado.avisosPrecision).toEqual([]);
+  });
+
+  it('múltiples visitas vencidas en puntos DISTINTOS: confirma TODAS en una sola llamada (el heartbeat no está atado a un único punto de control)', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    entrarYDetenerse(estados, { puntoControlId: 'pc-1', tsFixMs: 0 });
+    entrarYDetenerse(estados, { puntoControlId: 'pc-2', tsFixMs: 0 });
+    const { emitir } = confirmarVisitasVencidas(estados, UMBRAL_ANTIGUEDAD_CANDIDATO_MS);
+    expect(emitir.map((c) => c.deteccion.puntoControlId).sort()).toEqual(['pc-1', 'pc-2']);
+  });
+});

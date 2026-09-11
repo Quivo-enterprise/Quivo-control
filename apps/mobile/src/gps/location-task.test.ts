@@ -4,8 +4,10 @@ import type { PuntoControlPaquete } from '@quivo/shared';
 import { claveCumplimiento, PASADA_MIN_MS, type EstadoPuntoControl } from './geofence';
 import {
   clavesCumplimientoDesdePayloads,
+  combinarConVisitasPendientes,
   construirEventosDeUbicacion,
   type ContextoUbicacion,
+  type VisitaPendienteSembrable,
 } from './location-task';
 
 function ubicacion(
@@ -168,11 +170,16 @@ describe('construirEventosDeUbicacion', () => {
     expect(estados.size).toBe(0);
   });
 
-  it('propaga el timestamp del FIX GPS que confirma (no el de entrada) al payload de cumplimiento_punto_control (evidencia RF-64..66)', () => {
-    // ENTREGA 6: el evento de cumplimiento se arma con la MISMA `location` que dispara la
-    // CONFIRMACIÓN (mínimo local) — el fix de entrada solo arranca el seguimiento, no genera
-    // evidencia por sí mismo. Sin esto la hora de paso por el punto de control (el hecho que
-    // sustenta una sanción) quedaría corrida al momento del encolado bajo el camino headless.
+  it('propaga la posición/hora del fix CANDIDATO (el mínimo local, de entrada) — NO el fix que dispara la confirmación (FIX POST-REVISIÓN, bug 1)', () => {
+    // FIX POST-REVISIÓN (bug 1, "el servidor puede rechazar el paso"): antes de este fix, el
+    // evento de cumplimiento se armaba con la MISMA `location` que dispara la CONFIRMACIÓN
+    // (el fix que muestra que la distancia volvió a crecer) — que puede estar MÁS LEJOS del
+    // punto que el candidato guardado (es justo lo que "creciendo" significa). El worker
+    // revalida con `ST_DWithin` exactamente esas coordenadas contra `radioToleranciaM`
+    // (`ingesta-worker.service.ts`) — con el fix que confirma ya fuera del radio, esa
+    // revalidación puede rechazar un paso real (`cumplido=false`), perdiendo evidencia. Ahora
+    // el evento SIEMPRE lleva lat/lng/tsFix del CANDIDATO (el fix de entrada, en este caso —
+    // el único candidato de la visita, porque el segundo fix no mejora el mínimo).
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
     let estados = new Map<string, EstadoPuntoControl>();
     const paso1 = construirEventosDeUbicacion(
@@ -187,7 +194,51 @@ describe('construirEventosDeUbicacion', () => {
       contexto([pc]),
       estados,
     );
-    expect(eventos[1]?.payload['tsFix']).toBe('2026-08-14T11:42:17.500Z');
+    // tsFix es el de la ENTRADA (candidato), no el del fix que confirma 10 s después.
+    expect(eventos[1]?.payload['tsFix']).toBe('2026-08-14T11:42:07.500Z');
+    // lat/lng también son los del fix de ENTRADA (-17.78), no los del fix que confirma
+    // (-17.7797, ~33 m más lejos).
+    expect(eventos[1]?.payload['lat']).toBeCloseTo(-17.78, 6);
+    expect(eventos[1]?.payload['lng']).toBeCloseTo(-63.18, 6);
+  });
+
+  it('bug 1 (verificado con radio real de producción): entra a 146 m, el fix que confirma está a 158 m (radio 150) — el evento lleva la posición/hora de los 146 m, DENTRO del radio', () => {
+    // Escenario exacto del hallazgo de revisión: radio 150, entra a 146 m (candidato), el
+    // siguiente fix que muestra que la distancia volvió a crecer está a 158 m — MÁS ALLÁ del
+    // radio de tolerancia. Antes de este fix, el payload hubiera llevado 158 m (fuera de
+    // radio) y el worker lo habría rechazado (`cumplido=false`) pese a que el vehículo SÍ pasó
+    // dentro del radio. Se arma la geometría con dos puntos sobre el mismo meridiano (mismo
+    // `lng`) para que la distancia sea exactamente la diferencia en latitud × 111.32 km/° —
+    // fácil de verificar a ojo.
+    const metrosPorGrado = 111_320;
+    const pc = puntoControl('pc-1', [-63.18, -17.78], 150);
+    const latEntrada = -17.78 - 146 / metrosPorGrado;
+    const latConfirma = -17.78 - 158 / metrosPorGrado;
+
+    let estados = new Map<string, EstadoPuntoControl>();
+    const paso1 = construirEventosDeUbicacion(
+      ubicacion(latEntrada, -63.18, '2026-08-14T11:42:00.000Z'),
+      contexto([pc]),
+      estados,
+    );
+    expect(paso1.eventos).toHaveLength(1); // solo gps_point — no confirma en la entrada (ENTREGA 6)
+    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+
+    const paso2 = construirEventosDeUbicacion(
+      ubicacion(latConfirma, -63.18, '2026-08-14T11:42:10.000Z'),
+      contexto([pc]),
+      estados,
+    );
+    const confirmacion = paso2.eventos[1];
+    expect(confirmacion?.tipo).toBe('cumplimiento_punto_control');
+    // El payload lleva la posición de los 146 m (candidato), no los 158 m del fix que confirma.
+    expect(confirmacion?.payload['lat']).toBeCloseTo(latEntrada, 9);
+    expect(confirmacion?.payload['tsFix']).toBe('2026-08-14T11:42:00.000Z');
+    expect(confirmacion?.payload['distanciaMinAproximacionM']).toBeCloseTo(146, 0);
+    // Verificación explícita de la propiedad que protege la revalidación server-side: la
+    // distancia emitida (`distanciaM`, que es el mínimo) SIEMPRE cae dentro del radio.
+    const distanciaEmitidaM = confirmacion?.payload['distanciaM'] as number;
+    expect(distanciaEmitidaM).toBeLessThanOrEqual(pc.radioToleranciaM);
   });
 
   it('no re-emite DENTRO DE LA MISMA PASADA si el punto de control ya estaba "dentro"', () => {
@@ -592,5 +643,153 @@ describe('clavesCumplimientoDesdePayloads', () => {
       estadosVivos,
     );
     expect(pasoConfirma.eventos[1]?.payload).toMatchObject({ pasada: 4 });
+  });
+});
+
+/**
+ * FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"): tests de
+ * `combinarConVisitasPendientes` — antes de este fix, una visita EN CURSO (dentro del radio,
+ * todavía sin confirmar por "mínimo local") al momento de matar la app / que Android reciclara
+ * el contexto JS headless se perdía sin dejar rastro: `clavesCumplimientoDesdePayloads` solo ve
+ * eventos YA emitidos, y una visita sin confirmar no tiene ningún evento en el outbox todavía.
+ */
+describe('combinarConVisitasPendientes (FIX POST-REVISIÓN, bug 5)', () => {
+  function visitaPendiente(overrides: Partial<VisitaPendienteSembrable> = {}): VisitaPendienteSembrable {
+    return {
+      clave: claveCumplimiento('sesion-1', 'pc-1'),
+      puntoControlId: 'pc-1',
+      pasadasPrevias: 0,
+      radioToleranciaM: 150,
+      minDistanciaM: 30,
+      distanciaEntradaM: 40,
+      candidatoLat: -17.78,
+      candidatoLng: -63.18,
+      candidatoTsFixMs: 1_000,
+      ultimoEmitidoMs: -Infinity,
+      fixesDentroSinConfirmar: 0,
+      ...overrides,
+    };
+  }
+
+  it('una visita pendiente SIN ningún evento confirmado previo (primera visita de la sesión) vuelve como dentro/sin confirmar', () => {
+    const base = clavesCumplimientoDesdePayloads([]); // outbox vacío — nada confirmado todavía
+    const combinado = combinarConVisitasPendientes(base, [visitaPendiente()]);
+    const clave = claveCumplimiento('sesion-1', 'pc-1');
+    const estado = combinado.get(clave);
+    expect(estado).toMatchObject({
+      dentro: true,
+      confirmado: false,
+      minDistanciaM: 30,
+      distanciaEntradaM: 40,
+      puntoControlId: 'pc-1',
+      radioToleranciaM: 150,
+      candidatoLat: -17.78,
+      candidatoLng: -63.18,
+      candidatoTsFixMs: 1_000,
+      pasadas: 0, // pasadasPrevias, porque no hay ningún evento confirmado que la reemplace
+    });
+  });
+
+  it('recargar desde SQLite CONFIRMA una sola vez: la visita sembrada como pendiente sigue viva hasta que un fix real la confirme — no se pierde ni se duplica', () => {
+    // Misma geometría que el test de "bug 1" de arriba: radio 150, candidato a 146 m (el que
+    // quedó guardado en `visitas_pendientes` justo antes del kill), el próximo fix real a 158 m
+    // (más lejos que el candidato ⇒ "la distancia volvió a crecer" ⇒ confirma).
+    const metrosPorGrado = 111_320;
+    const pc = puntoControl('pc-1', [-63.18, -17.78], 150);
+    const latCandidato = -17.78 - 146 / metrosPorGrado;
+    const latConfirma = -17.78 - 158 / metrosPorGrado;
+
+    const base = clavesCumplimientoDesdePayloads([]);
+    // La app murió justo DESPUÉS de entrar (candidato a 146 m) y ANTES de que el fix que
+    // confirma llegara — exactamente lo que `visitas_pendientes` existe para sobrevivir.
+    const combinado = combinarConVisitasPendientes(base, [
+      visitaPendiente({
+        minDistanciaM: 146,
+        distanciaEntradaM: 146,
+        candidatoLat: latCandidato,
+        candidatoLng: -63.18,
+        candidatoTsFixMs: 0,
+      }),
+    ]);
+
+    // Reabre la app: el próximo fix real (más lejos que el candidato ⇒ la distancia vuelve a
+    // crecer) confirma, usando el Map RECONSTRUIDO desde la fila pendiente — no arranca de cero.
+    const pasoConfirma = construirEventosDeUbicacion(
+      ubicacion(latConfirma, -63.18, '2026-08-14T11:42:10.000Z'),
+      contexto([pc]),
+      combinado,
+    );
+    const confirmacion = pasoConfirma.eventos.find((e) => e.tipo === 'cumplimiento_punto_control');
+    expect(confirmacion).toBeDefined();
+    expect(confirmacion?.payload['pasada']).toBe(1); // primera pasada real, no una fantasma
+    // El payload lleva el candidato PERSISTIDO (146 m, hora 0), no el fix que confirma (158 m)
+    // — la misma protección del bug 1 aplica sobre una visita reconstruida desde SQLite.
+    expect(confirmacion?.payload['lat']).toBeCloseTo(latCandidato, 9);
+    expect(confirmacion?.payload['tsFix']).toBe(new Date(0).toISOString());
+    // Y se emite UNA sola vez: el mismo tick no produce una segunda confirmación.
+    expect(pasoConfirma.eventos.filter((e) => e.tipo === 'cumplimiento_punto_control')).toHaveLength(1);
+  });
+
+  it('si YA hay pasadas confirmadas de ese punto (multi-vuelta), la visita pendiente NO pisa `pasadas` — sigue contando desde los eventos confirmados, no desde `pasadasPrevias`', () => {
+    // Dos pasadas ya confirmadas y en el outbox; una TERCERA visita en curso, sin confirmar,
+    // pendiente en SQLite al momento del kill. El bug que esto corrige: la semilla vieja
+    // reemplazaba directamente con la fila pendiente y perdía las 2 pasadas ya confirmadas.
+    const base = clavesCumplimientoDesdePayloads([
+      { ts: '2026-08-14T09:00:00.000Z', payload: { sesionId: 'sesion-1', puntoControlId: 'pc-1' } },
+      { ts: '2026-08-14T10:00:00.000Z', payload: { sesionId: 'sesion-1', puntoControlId: 'pc-1' } },
+    ]);
+    expect(base.get(claveCumplimiento('sesion-1', 'pc-1'))?.pasadas).toBe(2);
+
+    const combinado = combinarConVisitasPendientes(base, [visitaPendiente({ pasadasPrevias: 0 })]);
+    const estado = combinado.get(claveCumplimiento('sesion-1', 'pc-1'));
+    // `pasadas` sigue en 2 (viene del estado YA derivado de los eventos confirmados) — la
+    // próxima confirmación la sube a 3, nunca a 1.
+    expect(estado?.pasadas).toBe(2);
+    expect(estado?.dentro).toBe(true);
+    expect(estado?.confirmado).toBe(false);
+  });
+
+  it('CRÍTICO (el bug real, "vuelve como ya confirmada"): la semilla vieja dejaba `confirmado: true` (heredado de la pasada previa) con una visita NUEVA en curso — acá SIEMPRE se sobreescribe a `confirmado: false`, forzando la re-evaluación', () => {
+    const base = clavesCumplimientoDesdePayloads([
+      { ts: '2026-08-14T09:00:00.000Z', payload: { sesionId: 'sesion-1', puntoControlId: 'pc-1' } },
+    ]);
+    // `clavesCumplimientoDesdePayloads` siembra SIEMPRE con `confirmado: true` — correcto para
+    // una clave sin ninguna visita en curso (todo lo que sabe son pasadas YA emitidas). Es
+    // EXACTAMENTE este valor heredado el que el bug dejaba pisar la visita pendiente: antes de
+    // este fix, una semilla que solo mezclara ambas fuentes de datos mal habría conservado este
+    // `true` para la pasada 2 en curso, y la máquina de estados jamás la habría re-evaluado.
+    expect(base.get(claveCumplimiento('sesion-1', 'pc-1'))?.confirmado).toBe(true);
+
+    const combinado = combinarConVisitasPendientes(base, [visitaPendiente()]);
+    // Con la visita pendiente superpuesta, `combinarConVisitasPendientes` SIEMPRE fija
+    // `confirmado: false` para esa clave — nunca hereda el `true` de la pasada previa.
+    expect(combinado.get(claveCumplimiento('sesion-1', 'pc-1'))?.confirmado).toBe(false);
+  });
+
+  it('sin visitas pendientes (lista vacía): es un no-op — el Map resultante es equivalente al de entrada', () => {
+    const base = clavesCumplimientoDesdePayloads([
+      { ts: '2026-08-14T09:00:00.000Z', payload: { sesionId: 'sesion-1', puntoControlId: 'pc-1' } },
+    ]);
+    const combinado = combinarConVisitasPendientes(base, []);
+    expect(combinado).toEqual(base);
+  });
+
+  it('es pura: no muta `estadosBase` que recibe', () => {
+    const base = clavesCumplimientoDesdePayloads([
+      { ts: '2026-08-14T09:00:00.000Z', payload: { sesionId: 'sesion-1', puntoControlId: 'pc-1' } },
+    ]);
+    const snapshot = new Map(base);
+    combinarConVisitasPendientes(base, [visitaPendiente()]);
+    expect(base).toEqual(snapshot);
+  });
+
+  it('múltiples visitas pendientes de puntos DISTINTOS se combinan todas, cada una en su propia clave', () => {
+    const base = clavesCumplimientoDesdePayloads([]);
+    const combinado = combinarConVisitasPendientes(base, [
+      visitaPendiente({ clave: claveCumplimiento('sesion-1', 'pc-1'), puntoControlId: 'pc-1' }),
+      visitaPendiente({ clave: claveCumplimiento('sesion-1', 'pc-2'), puntoControlId: 'pc-2' }),
+    ]);
+    expect(combinado.get(claveCumplimiento('sesion-1', 'pc-1'))?.dentro).toBe(true);
+    expect(combinado.get(claveCumplimiento('sesion-1', 'pc-2'))?.dentro).toBe(true);
   });
 });

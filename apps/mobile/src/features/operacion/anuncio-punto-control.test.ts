@@ -51,6 +51,7 @@ import {
   anunciarDeteccionesDelTick,
   anunciarPuntoControl,
   asegurarPermisoNotificaciones,
+  limpiarAproximacionesAnunciadas,
   obtenerEstadoPermisoNotificaciones,
   type AnuncioPuntoControlOpciones,
 } from './anuncio-punto-control';
@@ -143,7 +144,15 @@ describe('anunciarPuntoControl — fase "aproximacion" (Entrega 7)', () => {
     expect(speakMock).toHaveBeenCalledTimes(1);
   });
 
-  it('reabre el ciclo de aproximación para la vuelta siguiente una vez que ESE punto confirma', async () => {
+  it('FIX POST-REVISIÓN (bug 4): confirmar NO reabre el ciclo de aproximación — el vehículo puede seguir a <150 m, alejándose', async () => {
+    // Antes de este fix, `anunciarPuntoControl` borraba la entrada de `aproximacionesAnunciadas`
+    // en cuanto el punto CONFIRMABA (con el vehículo todavía muy cerca — la confirmación ocurre
+    // en el mínimo local). El próximo fix mientras sigue alejándose (todavía dentro de
+    // `RADIO_AVISO_M`, mucho más ancho que el radio de detección) volvía a pasar por
+    // `fase: 'aproximacion'` con la entrada YA libre → segunda voz "acercándose" a un punto del
+    // que en realidad se está alejando. Ahora el ciclo solo se reabre con
+    // `limpiarAproximacionesAnunciadas` (llamada desde el geofence cuando RE-ARMA de verdad, ver
+    // el test de `anunciarDeteccionesDelTick` más abajo) — confirmar, por sí solo, no alcanza.
     const puntoId = 'pc-aprox-3';
     const opts = opciones([puntoControl(puntoId, 0)]);
 
@@ -154,14 +163,41 @@ describe('anunciarPuntoControl — fase "aproximacion" (Entrega 7)', () => {
     );
     expect(speakMock).toHaveBeenCalledTimes(1);
 
-    // Confirma la pasada 1 — libera la entrada de `aproximacionesAnunciadas` para ese punto.
     await anunciarPuntoControl(
       DB_FALSO,
       deteccion({ puntoControlId: puntoId, fase: 'confirmado', pasada: 1, distanciaM: 10 }),
       opts,
     );
 
-    // Nueva pasada (vuelta 2): la voz debe volver a avisar.
+    // El vehículo sigue alejándose, todavía dentro de RADIO_AVISO_M: NO debe volver a hablar.
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: puntoId, fase: 'aproximacion', distanciaM: 95 }),
+      opts,
+    );
+    expect(speakMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('FIX POST-REVISIÓN (bug 4): limpiarAproximacionesAnunciadas SÍ reabre el ciclo — la vuelta siguiente vuelve a avisar', async () => {
+    const puntoId = 'pc-aprox-3b';
+    const opts = opciones([puntoControl(puntoId, 0)]);
+
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: puntoId, fase: 'aproximacion', distanciaM: 100 }),
+      opts,
+    );
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: puntoId, fase: 'confirmado', pasada: 1, distanciaM: 10 }),
+      opts,
+    );
+    expect(speakMock).toHaveBeenCalledTimes(1);
+
+    // El geofence re-armó de verdad (el vehículo se alejó lo suficiente, con la histéresis de
+    // FACTOR_REARME_RADIO/FIXES_REARME_CONSECUTIVOS) — recién ACÁ corresponde reabrir.
+    limpiarAproximacionesAnunciadas([puntoId]);
+
     await anunciarPuntoControl(
       DB_FALSO,
       deteccion({ puntoControlId: puntoId, fase: 'aproximacion', distanciaM: 95 }),
@@ -207,9 +243,15 @@ describe('anunciarPuntoControl — fase "confirmado" (Entrega 7, dedupe persisti
     expect(vibrateMock).toHaveBeenCalledTimes(1);
     expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
     expect(speakMock).not.toHaveBeenCalled();
+    // FIX POST-REVISIÓN (bug 3, "cae en el canal por defecto — sin heads-up ni chime"):
+    // `trigger: null` entregaba inmediato pero SIN canal — Android enrutaba al canal default
+    // (silencioso), y el canal `CANAL_ANUNCIO_ANDROID` con importance HIGH + timbre propio,
+    // creado por `asegurarCanalNotificacion()`, nunca se referenciaba desde ningún lado. El fix
+    // usa `ChannelAwareTriggerInput` (`{ channelId }`) — el único lugar de este SDK
+    // (`expo-notifications@0.32.17`) donde una notificación inmediata puede elegir canal.
     expect(scheduleNotificationMock.mock.calls[0]?.[0]).toMatchObject({
       content: { title: 'Punto de control 6 registrado' },
-      trigger: null,
+      trigger: { channelId: 'quivo-anuncio-punto-control-v1' },
     });
   });
 
@@ -321,6 +363,30 @@ describe('anunciarDeteccionesDelTick (Entrega 7)', () => {
     expect(speakMock).not.toHaveBeenCalled();
     expect(vibrateMock).not.toHaveBeenCalled();
     expect(scheduleNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it('FIX POST-REVISIÓN (bug 4): puntosRearmados libera el dedupe de aproximación ANTES de procesar el tick', async () => {
+    const puntoId = 'pc-tick-rearme';
+    const opts = opciones([puntoControl(puntoId, 0)]);
+
+    // "Usa" la entrada de aproximación de este punto.
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: puntoId, fase: 'aproximacion', distanciaM: 100 }),
+      opts,
+    );
+    expect(speakMock).toHaveBeenCalledTimes(1);
+
+    // Un tick que re-arma ESTE punto (`puntosRearmados`) y, en el mismo tick, ya está de nuevo
+    // dentro de RADIO_AVISO_M (rebote) — debe poder volver a avisar sin esperar al tick
+    // siguiente.
+    await anunciarDeteccionesDelTick(DB_FALSO, opts, {
+      deteccion: null,
+      deteccionAproximacion: deteccion({ puntoControlId: puntoId, fase: 'aproximacion', distanciaM: 140 }),
+      puntosRearmados: [puntoId],
+    });
+
+    expect(speakMock).toHaveBeenCalledTimes(2);
   });
 });
 
