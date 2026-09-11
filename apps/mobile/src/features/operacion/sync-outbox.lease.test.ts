@@ -18,6 +18,7 @@ vi.mock('../../db/outbox', () => ({
   abrirOutbox: vi.fn().mockResolvedValue({}),
   adquirirLease: vi.fn(),
   liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
+  renovarLease: vi.fn(),
   marcarAcusados: vi.fn(),
   marcarEnviados: vi.fn(),
   obtenerLotePendiente: vi.fn().mockResolvedValue([]),
@@ -37,13 +38,14 @@ vi.mock('../../shared/api/sync-api', () => ({
   syncApi: { enviarLote: vi.fn() },
 }));
 
-import { adquirirLease, liberarLeaseConCooldown, obtenerLotePendiente } from '../../db/outbox';
+import { adquirirLease, liberarLeaseConCooldown, obtenerLotePendiente, renovarLease } from '../../db/outbox';
 import { syncApi } from '../../shared/api/sync-api';
 import { sincronizarPendientesConLease } from './sync-outbox';
 
 const adquirirLeaseMock = adquirirLease as unknown as ReturnType<typeof vi.fn>;
 const obtenerLotePendienteMock = obtenerLotePendiente as unknown as ReturnType<typeof vi.fn>;
 const liberarLeaseConCooldownMock = liberarLeaseConCooldown as unknown as ReturnType<typeof vi.fn>;
+const renovarLeaseMock = renovarLease as unknown as ReturnType<typeof vi.fn>;
 const enviarLoteMock = syncApi.enviarLote as unknown as ReturnType<typeof vi.fn>;
 
 describe('sincronizarPendientesConLease — hallazgo 6 (iniciarSyncAutomatico/latido de 15s sin lease)', () => {
@@ -51,6 +53,8 @@ describe('sincronizarPendientesConLease — hallazgo 6 (iniciarSyncAutomatico/la
     adquirirLeaseMock.mockReset().mockResolvedValue(true);
     obtenerLotePendienteMock.mockReset().mockResolvedValue([]); // outbox vacío: enviados: 0
     liberarLeaseConCooldownMock.mockReset().mockResolvedValue(undefined);
+    // R1: renovación exitosa por defecto — los tests de pérdida de lease la sobreescriben.
+    renovarLeaseMock.mockReset().mockResolvedValue(true);
   });
 
   it('sin lease disponible (el drenado por ubicación lo tiene en este instante) devuelve null y NO llama a obtenerLotePendiente', async () => {
@@ -143,6 +147,79 @@ describe('sincronizarPendientesConLease — hallazgo 6 (iniciarSyncAutomatico/la
       expect(obtenerLotePendienteMock).toHaveBeenCalledTimes(TOPE_LOTES_POR_CICLO_DRENAJE);
       // El lease se libera igual al llegar al tope — no queda tomado para siempre.
       expect(liberarLeaseConCooldownMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('R1: renueva el lease ANTES de CADA lote, no solo al final', async () => {
+      obtenerLotePendienteMock
+        .mockResolvedValueOnce(loteDe(LOTE_MAXIMO, 'a'))
+        .mockResolvedValueOnce(loteDe(LOTE_MAXIMO, 'b'))
+        .mockResolvedValueOnce(loteDe(120, 'c'));
+      enviarLoteMock.mockImplementation(
+        async (eventos: { eventId: string }[]) =>
+          ({ aceptados: eventos.map((e) => e.eventId) }) as { aceptados: string[] },
+      );
+
+      await sincronizarPendientesConLease('access-token');
+
+      // Antes del fix (`verify-fix` R1): la renovación NO existía — hasta 20 lotes (10k
+      // eventos) podían superar el TTL de 60s del lease sin refrescarlo. Con el fix, se renueva
+      // una vez por cada lote intentado (3 acá: 2 llenos + 1 parcial que corta el loop).
+      expect(renovarLeaseMock).toHaveBeenCalledTimes(3);
+      expect(renovarLeaseMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'drenaje-outbox',
+        expect.any(String),
+        expect.any(Number),
+        60_000,
+      );
+    });
+
+    it('G2: al llegar al TOPE con pendientes restantes, libera SIN enfriamiento — el siguiente disparo inmediato adquiere el lease', async () => {
+      // Outbox que nunca converge: siempre hay un lote lleno esperando (mismo setup que
+      // "respeta el tope de lotes por ciclo").
+      obtenerLotePendienteMock.mockImplementation(async () => loteDe(LOTE_MAXIMO, 'x'));
+      enviarLoteMock.mockImplementation(
+        async (eventos: { eventId: string }[]) =>
+          ({ aceptados: eventos.map((e) => e.eventId) }) as { aceptados: string[] },
+      );
+
+      await sincronizarPendientesConLease('access-token');
+
+      // Antes del fix (`verify-fix` G2): liberaba con el enfriamiento normal
+      // (`PISO_ENTRE_INTENTOS_DRENAJE_MS`, 10s) también al llegar al tope — el
+      // `setTimeout(500ms)` de `iniciarSyncAutomatico` llegaba contra un lease todavía tomado y
+      // la cadena se cortaba. Con el fix, el cooldown es 0 (inmediato) cuando queda trabajo
+      // pendiente al cortar por el tope.
+      expect(liberarLeaseConCooldownMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'drenaje-outbox',
+        expect.any(String),
+        expect.any(Number),
+        0,
+      );
+    });
+
+    it('R3/R1: lease perdido a mitad del bucle (otro owner lo toma) — corta tras el lote en curso y NO libera el lease ajeno', async () => {
+      // 4 lotes llenos disponibles: los 2 primeros se drenan con normalidad, la renovación
+      // antes del TERCERO falla (otro contexto ya tomó la fila — TTL vencido o cota de reloj).
+      obtenerLotePendienteMock.mockImplementation(async () => loteDe(LOTE_MAXIMO, 'y'));
+      enviarLoteMock.mockImplementation(
+        async (eventos: { eventId: string }[]) =>
+          ({ aceptados: eventos.map((e) => e.eventId) }) as { aceptados: string[] },
+      );
+      renovarLeaseMock
+        .mockResolvedValueOnce(true) // antes del lote 1
+        .mockResolvedValueOnce(true) // antes del lote 2
+        .mockResolvedValueOnce(false); // antes del lote 3: ya no somos el dueño
+
+      const resultado = await sincronizarPendientesConLease('access-token');
+
+      // Cortó tras 2 lotes completos (1000 eventos) — nunca llegó a pedir un tercer lote.
+      expect(resultado).toEqual({ enviados: LOTE_MAXIMO * 2 });
+      expect(obtenerLotePendienteMock).toHaveBeenCalledTimes(2);
+      expect(renovarLeaseMock).toHaveBeenCalledTimes(3);
+      // Nunca libera: la fila ya no es nuestra, liberar pisaría el lease del nuevo dueño.
+      expect(liberarLeaseConCooldownMock).not.toHaveBeenCalled();
     });
   });
 });

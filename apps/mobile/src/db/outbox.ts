@@ -819,6 +819,44 @@ export async function liberarLeaseConCooldown(
   await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
 }
 
+/**
+ * R1 (hallazgo de `/codex-debug verify-fix` sobre `5379e00`/`cf1601f`, ALTO): renueva el lease
+ * `id` para `token`, empujando `expira_at` a `ahoraMs + ttlMs` — MISMO SQL que
+ * `construirLiberarLeaseConCooldown` (un `UPDATE` condicionado por `owner = token`), pero
+ * llamado ANTES de cada lote de un drenado encadenado (`drenarLotesConLease`,
+ * `features/operacion/sync-outbox.ts`), no solo al liberar al final.
+ *
+ * Sin esto, un encadenado de hasta `TOPE_LOTES_POR_CICLO_DRENAJE` lotes (hasta 10k eventos)
+ * podía superar el TTL de 60 s del lease SIN renovarlo — la fila quedaba "tomada" según el
+ * `expira_at` de la ADQUISICIÓN original mientras el drenado real seguía en curso mucho más
+ * allá de ese instante. Pasado el TTL, cualquier otro contexto (headless vs. foreground) ve la
+ * fila como huérfana y la toma — dos drenados concurrentes, justo lo que el lease existe para
+ * impedir.
+ *
+ * Devuelve si la renovación tuvo efecto: `changes > 0` (`true`) significa "sigo siendo el
+ * dueño, renovado"; `0` (`false`) significa que la fila YA NO ES MÍA — o bien otro contexto la
+ * tomó porque mi TTL alcanzó a vencer entre lotes, o bien un salto de reloj hacia atrás la hizo
+ * pasar la cota de sanidad (`COTA_SANIDAD_LEASE_MS`) y algún tercero la reclamó como huérfana.
+ * El caller (`drenarLotesConLease`) debe cortar el bucle DE INMEDIATO ante `false`, SIN llamar
+ * a `liberarLeaseConCooldown` — liberar acá pisaría el lease legítimo del nuevo dueño. Acota
+ * (no elimina del todo) el hallazgo R3 de la misma verificación: un dueño desplazado por la
+ * cota de reloj lo detecta a más tardar en el lote SIGUIENTE (nunca sigue enviando a ciegas
+ * indefinidamente), y como la ingesta del servidor es idempotente por `eventId`
+ * (`ON CONFLICT ... DO NOTHING`), a lo sumo el lote que estaba en vuelo en ese instante se
+ * solapa con el que arranca el nuevo dueño — nunca pérdida ni duplicación permanente.
+ */
+export async function renovarLease(
+  db: SQLite.SQLiteDatabase,
+  id: string,
+  token: string,
+  ahoraMs: number,
+  ttlMs: number,
+): Promise<boolean> {
+  const { sql, params } = construirLiberarLeaseConCooldown(id, token, ahoraMs, ttlMs);
+  const result = await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
+  return result.changes > 0;
+}
+
 function toEventoOutboxRow(row: OutboxRowCruda): EventoOutboxRow {
   return {
     eventId: row.event_id,

@@ -9,7 +9,7 @@ import {
   PISO_ENTRE_INTENTOS_DRENAJE_MS as PISO_ENTRE_INTENTOS_MS,
   TTL_LEASE_DRENAJE_MS as TTL_LEASE_MS,
 } from '../../db/outbox';
-import { sincronizarPendientes } from './sync-outbox';
+import { drenarLotesConLease } from './sync-outbox';
 
 /**
  * Drenado OPORTUNISTA del outbox en background (Entrega 2,
@@ -96,10 +96,16 @@ function generarTokenLease(): string {
  * rechazaría la promesa que el SDK usa para cerrar la tarea, y además cortaría el `await` que
  * el caller necesita) y "fire and forget" desde el foreground (`void
  * intentarDrenarOportunista(...)`, sin `.catch` propio en el call site) — en NINGÚN camino
- * puede rechazar. El `catch` de `sincronizarPendientes` ya cubre el caso esperado (falla de
- * transporte); este externo cubre lo INESPERADO (p. ej. `abrirOutbox`/`adquirirLease`
- * fallando), que sin este resguardo se filtraría como unhandled rejection en foreground o
- * como una tarea headless rechazada (y sin reintento) en background.
+ * puede rechazar. El `catch` de `drenarLotesConLease`/`sincronizarPendientes` ya cubre el caso
+ * esperado (falla de transporte); este externo cubre lo INESPERADO (p. ej.
+ * `abrirOutbox`/`adquirirLease` fallando), que sin este resguardo se filtraría como unhandled
+ * rejection en foreground o como una tarea headless rechazada (y sin reintento) en background.
+ *
+ * G1 (hallazgo de `/codex-debug verify-fix`, ALTO): este camino drena con
+ * `drenarLotesConLease` (`sync-outbox.ts`), el MISMO bucle compartido que usa
+ * `sincronizarPendientesConLease` en foreground — un atraso grande en background ya no queda
+ * cortado a un lote por evento de ubicación/heartbeat, ver el docblock de esa función para el
+ * detalle de renovación de lease y encadenado.
  */
 export async function intentarDrenarOportunista(
   obtenerAccessToken: () => Promise<string | null>,
@@ -179,11 +185,24 @@ export async function intentarDrenarOportunista(
         return;
       }
 
-      await sincronizarPendientes(accessToken);
-      // Éxito: resetea el backoff en memoria (ver su comentario) y libera con el piso fijo — el
-      // próximo intento, en cualquier contexto, puede volver a intentar en 10 s.
+      // G1: bucle COMPARTIDO con el foreground — ver el docblock de `drenarLotesConLease`
+      // (`sync-outbox.ts`) y el de la función, arriba.
+      const { motivo } = await drenarLotesConLease(db, accessToken, token);
+      // Éxito (sin excepción, sea cual sea `motivo`): resetea el backoff en memoria — ver su
+      // comentario.
       backoffActualMs = PISO_ENTRE_INTENTOS_MS;
-      await liberarLeaseConCooldown(db, ID_LEASE_DRENAJE, token, Date.now(), PISO_ENTRE_INTENTOS_MS);
+      if (motivo === 'lease-perdido') {
+        // R1 (ver `renovarLease`, `db/outbox.ts`): ya no somos el dueño de esta fila — otro
+        // contexto la tomó entre lotes. NO liberar: liberar acá pisaría el lease legítimo del
+        // nuevo dueño.
+        return;
+      }
+      // G2: sin enfriamiento si cortamos por el TOPE con pendientes restantes
+      // (`tope-alcanzado`) — el próximo evento de ubicación/heartbeat debe poder adquirir el
+      // lease de inmediato, en vez de esperar el piso pensado para intentos oportunistas
+      // espaciados. Con `motivo: 'agotado'` (ya no queda más), el piso normal sigue aplicando.
+      const cooldownMs = motivo === 'tope-alcanzado' ? 0 : PISO_ENTRE_INTENTOS_MS;
+      await liberarLeaseConCooldown(db, ID_LEASE_DRENAJE, token, Date.now(), cooldownMs);
     } catch (error) {
       // Falla de transporte (sin cobertura, 5xx, timeout, 429): SOLO Sentry, nunca la pantalla
       // del chofer — ver el docblock de la función. La evidencia sigue intacta en el outbox
