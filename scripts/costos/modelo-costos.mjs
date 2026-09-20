@@ -58,9 +58,6 @@ export const PRECIOS = Object.freeze({
 
   // Serverless VPC connector e2-micro — §4 ("≈$0.0126/h por instancia, mín. 2")
   vpcConnectorInstanciaHora: 0.0126,
-
-  // Artifact Registry — §4
-  artifactRegistryGiBMes: 0.1, // $/GiB-mes
 });
 
 /** Free tiers aplicados — §4. */
@@ -70,7 +67,6 @@ export const FREE_TIER = Object.freeze({
   cloudRunRequests: 2000000,
   workerVcpuSeg: 384204,
   workerGiBSeg: 728744,
-  artifactRegistryGiB: 0.5,
 });
 
 /**
@@ -102,11 +98,6 @@ export const CALIBRACION = Object.freeze({
   // Costo de Cloud Run "quivo-web" por conductor mostrado en el panel — calibrado contra
   // la columna "Web" de §5/§6 (tramo lineal n≥200, donde el free tier ya está agotado).
   webCostoPorConductorMes: 0.005,
-  // Crecimiento de storage por conductor en 6 meses de retención caliente, en GiB. Citado
-  // directamente de §3.4 ("121,7 MB por conductor"), convertido a GiB. Ver nota en
-  // calcularDiscoSqlGiB: el ajuste de escenario MEDIDO usa la fórmula explícita en vez de
-  // esta constante.
-  crecimientoAgostoMbPorConductor: 121.7,
 });
 
 // ---------------------------------------------------------------------------
@@ -225,7 +216,12 @@ export const EDGE_CASES_DEFAULT = Object.freeze({
   jornadaHoras: null, // null => derivar de vueltasDiarias * vueltaKm / 20 km/h; si se fija, pisa el derivado
   bytesPorPuntoOverride: null, // null => usar el de los supuestos de carga
   haCloudSql: false, // Alta disponibilidad regional (duplica cómputo + storage) — §7
-  region: 'southamerica-west1', // vs 'us-central1' — §6 "Palanca extra, fuera de tabla"
+  // Hallazgo 5 de revisión (2026-09-20): había acá un edge case `region: 'us-central1'` que
+  // solo descontaba Cloud SQL cómputo y Cloud Run (citado, §6) pero dejaba disco/backup de
+  // Cloud SQL, Redis y VPC connector a precio de Santiago, más un ×0,9 de egreso inventado
+  // sin cita. Eliminado por completo (ver `generar-tablas.mjs` §6 para el detalle): no hay
+  // precio de us-central1 citable en este repo para esas líneas, e inventarlo es peor que no
+  // tener la fila.
 });
 
 // ---------------------------------------------------------------------------
@@ -318,6 +314,44 @@ export function elegirTierSql(ptsPorSegundo) {
   return SQL_TIERS[SQL_TIERS.length - 1];
 }
 
+/** Tolerancia de "cerca de borde" — hallazgo 1 de revisión (2026-09-20). */
+export const TOLERANCIA_BORDE_TIER_PCT = 0.02; // ±2%
+
+/**
+ * Detecta si `ptsPorSegundo` cae dentro de `toleranciaPct` de un borde de tier de Cloud
+ * SQL (`elegirTierSql` usa `<=`, así que un empate exacto de borde — como el que produce el
+ * escalón de 2000 conductores con los supuestos medidos, 495,0 pts/s contra un borde de
+ * 495,0 — decide el tier por un margen efectivamente cero). Cuando hay proximidad, devuelve
+ * ambos tiers candidatos (el elegido y el vecino) para que el documento generado muestre el
+ * RANGO en vez de un punto — hallazgo 1 de revisión, 2026-09-20: la cifra titular del
+ * documento (2000 conductores, escenario A, actual) caía exactamente en ese empate.
+ */
+export function tierCercanoABorde(ptsPorSegundo, toleranciaPct = TOLERANCIA_BORDE_TIER_PCT) {
+  const idx = SQL_TIERS.findIndex((t) => ptsPorSegundo <= t.ptsSMax);
+  const tierActual = idx === -1 ? SQL_TIERS[SQL_TIERS.length - 1] : SQL_TIERS[idx];
+
+  const candidatos = [];
+  if (Number.isFinite(tierActual.ptsSMax) && idx + 1 < SQL_TIERS.length) {
+    // Borde superior del tier elegido: si estamos cerca, el vecino MÁS CARO es la alternativa.
+    candidatos.push({ borde: tierActual.ptsSMax, tierVecino: SQL_TIERS[idx + 1] });
+  }
+  if (idx > 0) {
+    // Borde inferior (= borde superior del tier anterior): si estamos cerca, el vecino MÁS
+    // BARATO es la alternativa.
+    candidatos.push({ borde: SQL_TIERS[idx - 1].ptsSMax, tierVecino: SQL_TIERS[idx - 1] });
+  }
+
+  let cercano = null;
+  for (const c of candidatos) {
+    const distanciaPct = Math.abs(ptsPorSegundo - c.borde) / c.borde;
+    if (distanciaPct <= toleranciaPct && (!cercano || distanciaPct < cercano.distanciaPct)) {
+      cercano = { distanciaPct, borde: c.borde, tierVecino: c.tierVecino };
+    }
+  }
+  if (!cercano) return null;
+  return { tierActual, tierVecino: cercano.tierVecino, borde: cercano.borde, distanciaPct: cercano.distanciaPct };
+}
+
 export function costoSqlComputo(tier, { ha = false, cud = false } = {}) {
   let costo;
   if (tier.vcpu == null) {
@@ -341,7 +375,7 @@ const DISCO_MINIMO_GIB = 10; // PD_SSD mínimo de Cloud SQL — §2 "10 GB PD_SS
 const DISCO_INCREMENTO_GIB = 5; // paso de redondeo del autoresize, calibrado contra §5/§6
 
 /**
- * GiB de disco proyectados para n conductores, con `mesesRetencionCaliente` de retención.
+ * GiB de disco proyectados para `n` conductores, con `mesesRetencionCaliente` de retención.
  * Fórmula: piso de 10 GiB (lo ya desplegado) + crecimiento acumulado, redondeado hacia
  * arriba al siguiente incremento de 5 GiB (aproximación del autoresize de Cloud SQL, que
  * no crece en pasos finos). CASO ESPECIAL n=10: se usa el piso real desplegado (10 GiB,
@@ -349,10 +383,18 @@ const DISCO_INCREMENTO_GIB = 5; // paso de redondeo del autoresize, calibrado co
  * base real ya está por debajo de lo que la fórmula proyectaría y no tiene sentido
  * "reservar" disco que ya existe sin usarse.
  *
+ * IMPORTANTE (hallazgo 6 de revisión, 2026-09-20): `n` es la flota NOMINAL (todos los
+ * conductores que van a escribir filas en la ventana de retención), NUNCA la concurrencia
+ * efectiva de pico (`nEfectivo` en `calcularEscalon`). El disco crece con quién escribe
+ * datos durante el mes, no con cuántos transmiten en el mismo instante — por eso el
+ * llamador (`calcularEscalon`) pasa `n`, no `nEfectivo`. Antes de este fix, la guarda
+ * "CASO ESPECIAL n=10" se evaluaba sobre `nEfectivo` y por eso se disparaba de más en
+ * escenarios con concurrencia fraccionaria (p.ej. escenario B hasta n=16, C hasta n=28).
+ *
  * `bytesPorPunto`, `puntosPorConductorDia`, `diasOperativosMes` y `mesesRetencionCaliente`
  * vienen de los supuestos de carga activos (agosto o medidos).
  */
-export function calcularDiscoSqlGiB(nEfectivo, supuestos, { mesesRetencionCaliente } = {}) {
+export function calcularDiscoSqlGiB(n, supuestos, { mesesRetencionCaliente } = {}) {
   const meses = mesesRetencionCaliente ?? supuestos.mesesRetencionCaliente;
   const puntosPorDia = supuestos.puntosPorConductorDia ?? supuestos.puntosPorConductorDiaPorVueltas?.[6];
 
@@ -370,9 +412,9 @@ export function calcularDiscoSqlGiB(nEfectivo, supuestos, { mesesRetencionCalien
     (supuestos.bytesPorPunto * puntosPorDia * meses) / (baseBytesPorPunto * basePuntosPorDia * baseMeses);
   const crecimientoGiBPorConductor = crecimientoGiBPorConductorBase * factorEscala;
 
-  if (nEfectivo <= 10) return DISCO_MINIMO_GIB;
+  if (n <= 10) return DISCO_MINIMO_GIB;
 
-  const proyectado = DISCO_MINIMO_GIB + nEfectivo * crecimientoGiBPorConductor;
+  const proyectado = DISCO_MINIMO_GIB + n * crecimientoGiBPorConductor;
   return Math.ceil(proyectado / DISCO_INCREMENTO_GIB) * DISCO_INCREMENTO_GIB;
 }
 
@@ -454,25 +496,13 @@ function construirPuntosReferenciaApi() {
 }
 
 /**
- * Mejor ajuste de `cpuSegPorRequestApi` por mínimos cuadrados (error en USD del costo
- * ACTIVO, es decir ya sin el idle de "actual") sobre los 18 puntos de referencia. La
- * función objetivo no es estrictamente convexa (el recorte del free tier introduce
- * quiebres), así que se resuelve con una búsqueda en grilla gruesa→fina en vez de un
- * método basado en gradiente — para un solo parámetro, exhaustivo es más simple y más
- * confiable que asumir una forma que no está garantizada.
+ * Búsqueda en grilla gruesa→fina de la `c` (vCPU-s/request) que minimiza `funcionError(c)`.
+ * La función objetivo no es estrictamente convexa (el recorte del free tier introduce
+ * quiebres), así que se resuelve así en vez de con un método basado en gradiente — para un
+ * solo parámetro, exhaustivo es más simple y más confiable que asumir una forma que no está
+ * garantizada.
  */
-function calibrarCpuSegPorRequestApi() {
-  const puntos = construirPuntosReferenciaApi();
-
-  function errorCuadratico(c) {
-    let suma = 0;
-    for (const p of puntos) {
-      const modeloActivo = costoCloudRunActivoConC(p.requestsTotalesMes, c);
-      suma += (modeloActivo - p.targetActivo) ** 2;
-    }
-    return suma;
-  }
-
+function buscarMejorC(funcionError) {
   let mejor = { c: 0, error: Infinity };
   let lo = 0.00001;
   let hi = 0.2;
@@ -480,20 +510,82 @@ function calibrarCpuSegPorRequestApi() {
     const pasos = 400;
     for (let i = 0; i <= pasos; i++) {
       const c = lo + ((hi - lo) * i) / pasos;
-      const error = errorCuadratico(c);
+      const error = funcionError(c);
       if (error < mejor.error) mejor = { c, error };
     }
     const rango = (hi - lo) / pasos;
     lo = Math.max(0, mejor.c - rango * 2);
     hi = mejor.c + rango * 2;
   }
-  return { valor: mejor.c, puntos };
+  return mejor;
+}
+
+/** Suma de cuadrados del error en USD del costo activo — criterio elegido (ver más abajo). */
+function errorCuadraticoUsd(puntos, c) {
+  let suma = 0;
+  for (const p of puntos) {
+    suma += (costoCloudRunActivoConC(p.requestsTotalesMes, c) - p.targetActivo) ** 2;
+  }
+  return suma;
+}
+
+/**
+ * Suma de cuadrados del error RELATIVO (%) del costo activo. Los puntos con
+ * `targetActivo === 0` (arquitectura optimizada, n bajo, agosto publicó $0.00) se excluyen:
+ * un error relativo contra un target de $0 es infinito/indefinido y no informa sobre `c`.
+ */
+function errorCuadraticoRelativo(puntos, c) {
+  let suma = 0;
+  for (const p of puntos) {
+    if (p.targetActivo === 0) continue;
+    const rel = (costoCloudRunActivoConC(p.requestsTotalesMes, c) - p.targetActivo) / p.targetActivo;
+    suma += rel ** 2;
+  }
+  return suma;
+}
+
+/** Suma del error absoluto en USD (para comparar candidatos con una sola cifra). */
+function errorAbsolutoTotalUsd(puntos, c) {
+  let suma = 0;
+  for (const p of puntos) {
+    suma += Math.abs(costoCloudRunActivoConC(p.requestsTotalesMes, c) - p.targetActivo);
+  }
+  return suma;
+}
+
+/**
+ * Calibra `cpuSegPorRequestApi` por mejor ajuste sobre los 18 puntos de referencia — plan
+ * §13.3. Prueba DOS criterios (§9 del documento generado, "se probó también minimizar el
+ * error relativo"): mínimos cuadrados en USD (el que se usa) y mínimos cuadrados en error
+ * relativo (%). El resultado de ambos se expone en `comparacion` para que el documento
+ * reporte el número real de esa comparación en vez de una afirmación sin verificar.
+ */
+function calibrarCpuSegPorRequestApi() {
+  const puntos = construirPuntosReferenciaApi();
+
+  const usd = buscarMejorC((c) => errorCuadraticoUsd(puntos, c));
+  const relativo = buscarMejorC((c) => errorCuadraticoRelativo(puntos, c));
+
+  return {
+    valor: usd.c,
+    puntos,
+    comparacion: {
+      usd: { c: usd.c, errorAbsolutoTotalUsd: errorAbsolutoTotalUsd(puntos, usd.c) },
+      relativo: { c: relativo.c, errorAbsolutoTotalUsd: errorAbsolutoTotalUsd(puntos, relativo.c) },
+    },
+  };
 }
 
 const CALIBRACION_API = calibrarCpuSegPorRequestApi();
 
 /** vCPU-s por request de API — resultado de la calibración de arriba, NO un número a mano. */
 export const CPU_SEG_POR_REQUEST_API = CALIBRACION_API.valor;
+
+/**
+ * Comparación de los dos criterios de calibración probados — plan/§9 del documento
+ * generado. `usd.c` es el que efectivamente usa `CPU_SEG_POR_REQUEST_API`.
+ */
+export const COMPARACION_CALIBRACION_API = CALIBRACION_API.comparacion;
 
 /**
  * Tabla de error residual por escalón — plan §13.3 ("emitir tabla de error residual por
@@ -526,16 +618,14 @@ function costoCloudRunActivo(requestsTotalesMes) {
  * aplicada). Arquitectura "optimizada": min-instances=0 (palanca C) + ciclo de sync 60s
  * en vez de 15s (palanca D) — ambas reducen el costo activo y eliminan el idle.
  */
-export function costoApi(nEfectivo, supuestos, arquitectura, { region = 'southamerica-west1' } = {}) {
+export function costoApi(nEfectivo, supuestos, arquitectura) {
   const cicloSyncSeg = arquitectura === 'optimizada' ? supuestos.cicloSyncSegOptimizada : supuestos.cicloSyncSegActual;
   const reqPorConductorDia = requestsPorConductorDia(supuestos, cicloSyncSeg);
   const requestsTotalesMes = nEfectivo * reqPorConductorDia * supuestos.diasOperativosMes;
 
   const idle = arquitectura === 'actual' ? IDLE_API_MENSUAL : 0;
   const activo = costoCloudRunActivo(requestsTotalesMes);
-  let total = idle + activo;
-  if (region === 'us-central1') total *= 0.8; // §6 "recorta ~20% del cómputo de Cloud Run"
-  return total;
+  return idle + activo;
 }
 
 /**
@@ -544,10 +634,8 @@ export function costoApi(nEfectivo, supuestos, arquitectura, { region = 'southam
  * (probablemente el panel /en-vivo de operaciones, no el conductor), así que se modela
  * como proporcional a la flota mostrada.
  */
-export function costoWeb(nEfectivo, { region = 'southamerica-west1' } = {}) {
-  let total = nEfectivo * CALIBRACION.webCostoPorConductorMes;
-  if (region === 'us-central1') total *= 0.8;
-  return total;
+export function costoWeb(nEfectivo) {
+  return nEfectivo * CALIBRACION.webCostoPorConductorMes;
 }
 
 /**
@@ -593,7 +681,7 @@ export function calcularInstanciasWorker(requestsPorDiaTotal) {
   return 1 + UMBRALES_INSTANCIAS_WORKER_REQ_DIA.filter((umbral) => requestsPorDiaTotal > umbral).length;
 }
 
-export function costoWorker(nEfectivo, supuestos, arquitectura, { region = 'southamerica-west1' } = {}) {
+export function costoWorker(nEfectivo, supuestos, arquitectura) {
   const cicloSyncSeg =
     arquitectura === 'optimizada' ? supuestos.cicloSyncSegOptimizada : supuestos.cicloSyncSegActual;
   const requestsPorDiaTotal = nEfectivo * requestsPorConductorDia(supuestos, cicloSyncSeg);
@@ -604,9 +692,7 @@ export function costoWorker(nEfectivo, supuestos, arquitectura, { region = 'sout
 
   const cpuBillable = Math.max(0, vcpuSegTotal - FREE_TIER.workerVcpuSeg) * PRECIOS.workerPoolVcpuSeg;
   const memBillable = Math.max(0, memGiBSegTotal - FREE_TIER.workerGiBSeg) * PRECIOS.workerPoolMemGiBSeg;
-  let total = cpuBillable + memBillable;
-  if (region === 'us-central1') total *= 0.8;
-  return total;
+  return cpuBillable + memBillable;
 }
 
 /** Serverless VPC connector — flat, independiente de n (§4: 2 instancias mínimas e2-micro). */
@@ -640,13 +726,11 @@ export function costoGcsArchivado(discoGiB, arquitectura) {
  * ambas arquitecturas (confirma dependencia del volumen de datos GPS, no del framing de
  * requests), así que se calcula sobre el total de puntos generados, no sobre requests.
  */
-export function costoEgreso(nEfectivo, supuestos, { region = 'southamerica-west1' } = {}) {
+export function costoEgreso(nFlota, supuestos) {
   const puntosPorDia = supuestos.puntosPorConductorDia ?? supuestos.puntosPorConductorDiaPorVueltas?.[6];
-  const totalPuntosMes = nEfectivo * puntosPorDia * supuestos.diasOperativosMes;
+  const totalPuntosMes = nFlota * puntosPorDia * supuestos.diasOperativosMes;
   const egresoGiB = (totalPuntosMes * CALIBRACION.bytesEgresoPorPunto) / 1e9;
-  let total = egresoGiB * PRECIOS.egresoInternetGiB;
-  if (region === 'us-central1') total *= 0.9; // egreso no está entre los ahorros citados en §6; ajuste menor
-  return total;
+  return egresoGiB * PRECIOS.egresoInternetGiB;
 }
 
 // ---------------------------------------------------------------------------
@@ -664,6 +748,19 @@ export function costoEgreso(nEfectivo, supuestos, { region = 'southamerica-west1
  * @param {object} [opts.edgeCases] - overrides sobre EDGE_CASES_DEFAULT.
  */
 export function calcularEscalon(n, opts = {}) {
+  // Hallazgo 5 de revisión (2026-09-20): `region` YA NO es un edge case soportado (ver
+  // EDGE_CASES_DEFAULT). Rechazar explícitamente en vez de ignorarlo en silencio — si no,
+  // alguien vuelve a pedir 'us-central1' y recibe precios de Santiago sin enterarse.
+  if (opts.edgeCases && Object.prototype.hasOwnProperty.call(opts.edgeCases, 'region')) {
+    throw new Error(
+      "calcularEscalon: 'region' ya no es un edge case soportado. No hay precios de " +
+        'us-central1 citables en este repo para SQL disco/backup, Redis ni VPC connector — ' +
+        'aplicar un descuento solo a Cloud SQL cómputo/Cloud Run sería un híbrido inconsistente ' +
+        '(hallazgo 5 de revisión, 2026-09-20). Relevar precios reales de us-central1 con ' +
+        '`gcloud`/lista de precios para CADA línea antes de reintroducirlo.',
+    );
+  }
+
   const arquitectura = opts.arquitectura ?? 'actual';
   const escenario = opts.escenario ?? 'A';
   const supuestosBase = opts.supuestos ?? SUPUESTOS_AGOSTO;
@@ -674,16 +771,24 @@ export function calcularEscalon(n, opts = {}) {
 
   // --- Resolver supuestos de carga con los edge cases aplicados ---
   const vueltasDiarias = edgeCases.vueltasDiarias ?? 6;
-  const puntosPorConductorDia = supuestosBase.puntosPorConductorDia
-    ? // supuestos medidos: no varían por vueltas (ya son la jornada completa medida);
-      // el edge case de 3 vueltas se aproxima aquí como la mitad de la carga diaria.
-      vueltasDiarias === 3
-      ? supuestosBase.puntosPorConductorDia / 2
-      : supuestosBase.puntosPorConductorDia
-    : supuestosBase.puntosPorConductorDiaPorVueltas[vueltasDiarias] ??
-      supuestosBase.puntosPorConductorDiaPorVueltas[6];
 
-  const jornadaHoras = edgeCases.jornadaHoras ?? (supuestosBase.jornadaHoras * vueltasDiarias) / 6;
+  // Jornada base (sin overrides): la de los supuestos activos (10h en ambos juegos).
+  const jornadaHorasBase = supuestosBase.jornadaHoras;
+
+  // Puntos/conductor/día base (sin overrides), y su tasa horaria implícita. Hallazgo 4 de
+  // revisión (2026-09-20): antes, un override explícito de `jornadaHoras` ensanchaba el
+  // denominador del promedio pero dejaba `puntosPorConductorDia` fijo — una jornada más
+  // larga se modelaba como los MISMOS puntos repartidos más finos (pico más bajo, tier más
+  // bajo, costo menor), exactamente al revés de lo que implica una cadencia de muestreo
+  // fija. Ahora los puntos/día se DERIVAN de la jornada final vía una tasa constante de
+  // puntos/hora (`puntosPorConductorDiaBase / jornadaHorasBase`), así que una jornada más
+  // larga con la misma cadencia de 15 min da MÁS puntos/día, nunca menos.
+  const puntosPorConductorDiaBase =
+    supuestosBase.puntosPorConductorDia ?? supuestosBase.puntosPorConductorDiaPorVueltas[6];
+  const tasaPuntosPorHora = puntosPorConductorDiaBase / jornadaHorasBase;
+
+  const jornadaHoras = edgeCases.jornadaHoras ?? (jornadaHorasBase * vueltasDiarias) / 6;
+  const puntosPorConductorDia = tasaPuntosPorHora * jornadaHoras;
 
   const bytesPorPunto = edgeCases.bytesPorPuntoOverride ?? supuestosBase.bytesPorPunto;
 
@@ -695,17 +800,20 @@ export function calcularEscalon(n, opts = {}) {
     bytesPorPunto,
   };
 
-  const region = edgeCases.region ?? 'southamerica-west1';
   const ha = edgeCases.haCloudSql ?? false;
 
   // --- Cloud SQL ---
+  // La concurrencia (`nEfectivo`) aplica SOLO al camino de tasa de escritura pico — hallazgo
+  // 3 de revisión (2026-09-20). Storage y egreso escalan con la FLOTA TOTAL (`n`): en el
+  // escenario B ("2000 registrados, ~1200 en pico") los 2000 manejan por turnos pero los
+  // 2000 escriben filas en la ventana de retención y los 2000 transmiten datos a lo largo
+  // del mes, no solo los que están activos en el instante de pico.
   const ptsPorSegundo = puntosPorSegundoPico(nEfectivo, puntosPorConductorDia, jornadaHoras);
   const tier = elegirTierSql(ptsPorSegundo);
   const cud = arquitectura === 'optimizada'; // Palanca F: CUD 1 año, solo optimizada
-  let sqlComputo = costoSqlComputo(tier, { ha, cud });
-  if (region === 'us-central1') sqlComputo *= 0.6; // §6 "recorta ~40% del cómputo de Cloud SQL"
+  const sqlComputo = costoSqlComputo(tier, { ha, cud });
 
-  const discoGiB = calcularDiscoSqlGiB(nEfectivo, supuestos, {
+  const discoGiB = calcularDiscoSqlGiB(n, supuestos, {
     mesesRetencionCaliente: arquitectura === 'optimizada' ? 3 : supuestos.mesesRetencionCaliente,
   });
   const sqlDisco = costoSqlDisco(discoGiB, { ha });
@@ -713,13 +821,13 @@ export function calcularEscalon(n, opts = {}) {
 
   // --- Resto de servicios ---
   const redis = costoRedis(arquitectura);
-  const api = costoApi(nEfectivo, supuestos, arquitectura, { region });
-  const web = costoWeb(nEfectivo, { region });
-  const worker = costoWorker(nEfectivo, supuestos, arquitectura, { region });
+  const api = costoApi(nEfectivo, supuestos, arquitectura);
+  const web = costoWeb(nEfectivo);
+  const worker = costoWorker(nEfectivo, supuestos, arquitectura);
   const vpcConnector = arquitectura === 'optimizada' ? 0 : costoVpcConnector(); // Palanca A
   const artifactRegistry = costoArtifactRegistry();
   const gcs = costoGcsArchivado(discoGiB, arquitectura);
-  const egreso = costoEgreso(nEfectivo, supuestos, { region });
+  const egreso = costoEgreso(n, supuestos);
 
   const desglose = {
     sqlComputo,
@@ -737,6 +845,23 @@ export function calcularEscalon(n, opts = {}) {
 
   const total = Object.values(desglose).reduce((acc, v) => acc + v, 0);
 
+  // Hallazgo 1 de revisión (2026-09-20): si el pico cae cerca de un borde de tier, exponer
+  // el vecino y el total que resultaría con ese vecino, para que el documento generado
+  // muestre un RANGO en vez de un punto de borde de margen cero.
+  const bordeTier = tierCercanoABorde(ptsPorSegundo);
+  let bordeTierCercano = null;
+  if (bordeTier) {
+    const sqlComputoVecino = costoSqlComputo(bordeTier.tierVecino, { ha, cud });
+    const totalVecino = total - sqlComputo + sqlComputoVecino;
+    bordeTierCercano = {
+      distanciaPct: bordeTier.distanciaPct,
+      bordePtsPorSegundo: bordeTier.borde,
+      tierVecino: bordeTier.tierVecino.nombre,
+      tierVecinoExtrapolado: bordeTier.tierVecino.extrapolado,
+      totalVecino,
+    };
+  }
+
   return {
     n,
     nEfectivo,
@@ -747,6 +872,7 @@ export function calcularEscalon(n, opts = {}) {
     ptsPorSegundo,
     discoGiB,
     superaTechoProbado: ptsPorSegundo > TECHO_PROBADO_PTS_S,
+    bordeTierCercano,
     desglose,
     total,
   };

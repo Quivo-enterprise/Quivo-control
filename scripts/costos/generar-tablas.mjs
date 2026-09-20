@@ -29,6 +29,8 @@ import {
   REFERENCIA_AGOSTO_TOTAL,
   REGION,
   HORAS_MES,
+  TOLERANCIA_BORDE_TIER_PCT,
+  COMPARACION_CALIBRACION_API,
 } from './modelo-costos.mjs';
 
 const ARQUITECTURAS = ['actual', 'optimizada'];
@@ -56,6 +58,60 @@ function gib(n) {
 
 function fila(cols) {
   return `| ${cols.join(' | ')} |`;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers de borde de tier (hallazgo 1 de revisión, 2026-09-20) — `bordeTierCercano`
+// ya lo calcula modelo-costos.mjs (`tierCercanoABorde`), esta capa solo lo formatea
+// para que el documento muestre el RANGO, nunca el punto, cuando el pico cae cerca
+// de un empate de tier.
+// ---------------------------------------------------------------------------
+
+/** `{lo, hi}` en USD si `r` tiene un empate de tier cercano, o `null` si no. */
+function rangoBorde(r) {
+  if (!r.bordeTierCercano) return null;
+  return {
+    lo: Math.min(r.total, r.bordeTierCercano.totalVecino),
+    hi: Math.max(r.total, r.bordeTierCercano.totalVecino),
+  };
+}
+
+/** `usd()` con rango cuando corresponde, marcado con `†` para la nota al pie. */
+function usdConBorde(r) {
+  const rango = rangoBorde(r);
+  return rango ? `${usd(rango.lo)}–${usd(rango.hi)} †` : usd(r.total);
+}
+
+/** Igual que `usdConBorde` pero con el formato corto (`usdCorto`) de las tablas. */
+function usdCortoConBorde(r) {
+  const rango = rangoBorde(r);
+  return rango ? `${usdCorto(rango.lo)}–${usdCorto(rango.hi)} †` : usdCorto(r.total);
+}
+
+/**
+ * Nota al pie con el detalle de cada empate de tier presente en `resultados` (uno o
+ * varios escalones de una misma tabla). Devuelve `null` si ninguno tiene empate, para
+ * no imprimir una nota vacía.
+ */
+function notaBordeTier(resultados) {
+  const conBorde = resultados.filter((r) => r && r.bordeTierCercano);
+  if (conBorde.length === 0) return null;
+  const items = conBorde.map((r) => {
+    const b = r.bordeTierCercano;
+    return (
+      `n=${r.n} (${r.ptsPorSegundo.toFixed(1)} pts/s, borde de tier en ${b.bordePtsPorSegundo.toFixed(1)} pts/s, ` +
+      `margen ${(b.distanciaPct * 100).toFixed(1)}%): \`${r.tierSql}\` → ${usdCorto(r.total)} contra ` +
+      `\`${b.tierVecino}\`${b.tierVecinoExtrapolado ? ' (extrapolado)' : ''} → ${usdCorto(b.totalVecino)}`
+    );
+  });
+  return (
+    `† **Empate de borde de tier de Cloud SQL** (dentro de ±${(TOLERANCIA_BORDE_TIER_PCT * 100).toFixed(0)}% del ` +
+    `límite del tier; en los casos listados el margen es efectivamente CERO, así que el tier — y el total — ` +
+    `podría caer para cualquiera de los dos lados): ${items.join('; ')}. El punto de escritura pico que decide ` +
+    'el tier es una extrapolación de UNA sola jornada medida (n=1, plan §12.4) redondeada a puntos/día — un ' +
+    'redondeo mínimo de ese supuesto empuja el escalón real al tier vecino, más caro. El RANGO, no el punto, ' +
+    'es la cifra defendible frente a finanzas.'
+  );
 }
 
 function tabla(encabezados, filas, aligns) {
@@ -147,8 +203,8 @@ p();
         ],
         [
           '2000',
-          usd(n2000A.total) + '/mes',
-          usd(n2000O.total) + '/mes',
+          usdConBorde(n2000A) + '/mes',
+          usdConBorde(n2000O) + '/mes',
           `\`${n2000A.tierSql}\`${n2000A.tierSqlExtrapolado ? ' (extrapolado)' : ''}`,
           n2000A.superaTechoProbado ? `sí (${n2000A.ptsPorSegundo.toFixed(0)} pts/s)` : 'no',
         ],
@@ -157,8 +213,17 @@ p();
     ),
   );
   p();
+  const notaResumen = notaBordeTier([n600A, n600O, n2000A, n2000O]);
+  if (notaResumen) {
+    p(notaResumen);
+    p();
+  }
+  const rangoResumenO = rangoBorde(n2000O);
+  const costoPorConductorTxt = rangoResumenO
+    ? `entre ${usd(rangoResumenO.lo / 2000)} y ${usd(rangoResumenO.hi / 2000)}`
+    : `${usd(n2000O.total / 2000)}`;
   p(
-    `El costo por conductor a 2000 (arquitectura optimizada) es ${usd(n2000O.total / 2000)}/mes — ` +
+    `El costo por conductor a 2000 (arquitectura optimizada) es ${costoPorConductorTxt}/mes — ` +
       `${n2000O.total / 2000 < n600O.total / 600 ? 'sigue bajando' : 'sube'} respecto a los ` +
       `${usd(n600O.total / 600)}/mes de 600 conductores, porque la base fija (Redis, worker, VPC/GCS, ` +
       `Artifact Registry) se sigue repartiendo entre más conductores. **El hallazgo estructural de agosto ` +
@@ -206,7 +271,7 @@ p();
         ],
         [
           'Este documento (medido, escenario A)',
-          usd(n2000A.total) + ' actual / ' + usd(n2000O.total) + ' optimizada',
+          usdConBorde(n2000A) + ' actual / ' + usdConBorde(n2000O) + ' optimizada',
           '2000 conductores',
           hoy,
         ],
@@ -215,6 +280,11 @@ p();
     ),
   );
   p();
+  const notaReconciliacion = notaBordeTier([n2000A, n2000O]);
+  if (notaReconciliacion) {
+    p(notaReconciliacion);
+    p();
+  }
   p(
     `**La diferencia es real y se explica en tres capas, no en una:**`,
   );
@@ -236,15 +306,37 @@ p();
       `vehículos per se.`,
   );
   p();
-  p(
-    `**Conclusión para finanzas:** el rango de julio (US$1.200–2.800 para 3000) y el número medido de este ` +
-      `documento para 2000 (${usd(n2000A.total)} actual / ${usd(n2000O.total)} optimizada) NO son ` +
-      `directamente comparables — son estimaciones de dos momentos distintos del proyecto, con dos niveles ` +
-      `de evidencia distintos. El número de este documento tiene evidencia real detrás (precios de lista + ` +
-      `una medición de carga real, aunque limitada — ver §8). El de julio es una proyección de arquitectura ` +
-      `sin verificar contra infraestructura desplegada. **Se recomienda a finanzas usar el número de este ` +
-      `documento y descartar el rango de julio para 2000-3000 vehículos.**`,
-  );
+  {
+    const rangoConclA = rangoBorde(n2000A);
+    const rangoConclO = rangoBorde(n2000O);
+    const cifraA = rangoConclA ? `${usd(rangoConclA.lo)}–${usd(rangoConclA.hi)}` : usd(n2000A.total);
+    const cifraO = rangoConclO ? `${usd(rangoConclO.lo)}–${usd(rangoConclO.hi)}` : usd(n2000O.total);
+    const techoA = rangoConclA ? usd(rangoConclA.hi) : usd(n2000A.total);
+    p(
+      `**Conclusión para finanzas:** el rango de julio (US$1.200–2.800 para 3000) y la proyección de este ` +
+        `documento para 2000 (${cifraA} actual / ${cifraO} optimizada) NO son directamente comparables — son ` +
+        `estimaciones de dos momentos distintos del proyecto, con dos niveles de evidencia distintos.`,
+    );
+    p();
+    p(
+      `**La cifra de este documento para 2000 es un RANGO, no un punto, y hay que decírselo a finanzas así:** ` +
+        `a 2000 conductores el pico de escritura da exactamente ${n2000A.ptsPorSegundo.toFixed(1)} pts/s, que ` +
+        `cae EXACTO en el borde entre \`${n2000A.tierSql}\` y ` +
+        `\`${n2000A.bordeTierCercano ? n2000A.bordeTierCercano.tierVecino : 'el tier vecino'}\` — un empate de ` +
+        `margen efectivamente cero. Ese borde de 495 pts/s no es una medición robusta: es un redondeo de una ` +
+        `extrapolación armada con UNA sola jornada medida (n=1, plan §12.4) a "~6.000 puntos/conductor/día". ` +
+        `Recomendar el extremo bajo del rango sin este contexto sería decirle a finanzas que adopte el ` +
+        `resultado de un empate como si fuera un número firme.`,
+    );
+    p();
+    p(
+      `El número de este documento tiene evidencia real detrás (precios de lista + una medición de carga ` +
+        `real, aunque limitada — ver §8); el de julio es una proyección de arquitectura sin verificar contra ` +
+        `infraestructura desplegada. **Se recomienda a finanzas presupuestar contra el EXTREMO ALTO del rango ` +
+        `(${techoA} actual) hasta que una segunda medición confirme de qué lado del borde cae la carga real, y ` +
+        `descartar el rango de julio para 2000-3000 vehículos.**`,
+    );
+  }
 }
 p();
 p('---');
@@ -318,16 +410,19 @@ for (const [escenarioKey, esc] of Object.entries(ESCENARIOS)) {
   for (const arquitectura of ARQUITECTURAS) {
     p(`**Arquitectura ${NOMBRE_ARQUITECTURA[arquitectura]}**`);
     p();
-    const filas = RESULTADOS_MEDIDOS[escenarioKey][arquitectura].map((r) => [
-      String(r.n),
-      r.nEfectivo.toFixed(0),
-      `\`${r.tierSql}\`${r.tierSqlExtrapolado ? ' *' : ''}`,
-      r.ptsPorSegundo.toFixed(1),
-      r.superaTechoProbado ? 'sí' : 'no',
-      gib(r.discoGiB),
-      usdCorto(r.total),
-      usdCorto(r.total / r.n),
-    ]);
+    const filas = RESULTADOS_MEDIDOS[escenarioKey][arquitectura].map((r) => {
+      const rango = rangoBorde(r);
+      return [
+        String(r.n),
+        r.nEfectivo.toFixed(0),
+        `\`${r.tierSql}\`${r.tierSqlExtrapolado ? ' *' : ''}${rango ? ' †' : ''}`,
+        r.ptsPorSegundo.toFixed(1),
+        r.superaTechoProbado ? 'sí' : 'no',
+        gib(r.discoGiB),
+        rango ? `${usdCorto(rango.lo)}–${usdCorto(rango.hi)}` : usdCorto(r.total),
+        rango ? `${usdCorto(rango.lo / r.n)}–${usdCorto(rango.hi / r.n)}` : usdCorto(r.total / r.n),
+      ];
+    });
     p(
       tabla(
         ['Conductores (n)', 'n efectivo', 'Tier SQL', 'Pts/s pico', `¿Supera ${TECHO_PROBADO_PTS_S} pts/s?`, 'Disco', 'Total/mes', 'USD/conductor'],
@@ -336,6 +431,11 @@ for (const [escenarioKey, esc] of Object.entries(ESCENARIOS)) {
       ),
     );
     p();
+    const notaTablaEscalones = notaBordeTier(RESULTADOS_MEDIDOS[escenarioKey][arquitectura]);
+    if (notaTablaEscalones) {
+      p(notaTablaEscalones);
+      p();
+    }
   }
 }
 {
@@ -373,14 +473,26 @@ for (const arquitectura of ARQUITECTURAS) {
   p();
   const filas = [600, 2000].map((n) => {
     const r = RESULTADOS_MEDIDOS.A[arquitectura].find((x) => x.n === n);
+    const rango = rangoBorde(r);
     return [
       String(n),
-      ...COLUMNAS_DESGLOSE.map(([key]) => usdCorto(r.desglose[key] ?? 0)),
-      `**${usdCorto(r.total)}**`,
+      ...COLUMNAS_DESGLOSE.map(([key]) => {
+        if (key === 'sqlComputo' && rango) {
+          const sqlComputoVecino = r.desglose.sqlComputo + (rango.hi - rango.lo);
+          return `${usdCorto(r.desglose.sqlComputo)}–${usdCorto(sqlComputoVecino)} †`;
+        }
+        return usdCorto(r.desglose[key] ?? 0);
+      }),
+      rango ? `**${usdCorto(rango.lo)}–${usdCorto(rango.hi)} †**` : `**${usdCorto(r.total)}**`,
     ];
   });
   p(tabla(['Conductores', ...COLUMNAS_DESGLOSE.map(([, label]) => label), 'TOTAL'], filas));
   p();
+  const notaDesglose = notaBordeTier([600, 2000].map((n) => RESULTADOS_MEDIDOS.A[arquitectura].find((x) => x.n === n)));
+  if (notaDesglose) {
+    p(notaDesglose);
+    p();
+  }
 }
 p('---');
 p();
@@ -397,9 +509,9 @@ p();
     ['Base (6 vueltas, jornada derivada, bytes medidos, sin HA, Santiago)', {}],
     ['Vueltas diarias: 3 (piso)', { vueltasDiarias: 3 }],
     ['Jornada operativa: 14 h (en vez de 10 h)', { jornadaHoras: 14 }],
-    ['Ancho de fila con bloat: 350 B (en vez de ' + SUPUESTOS_MEDIDOS.bytesPorPunto + ' B medidos)', { bytesPorPuntoOverride: 350 }],
+    ['Ancho de fila con bloat: 350 B (por debajo de los ' + SUPUESTOS_MEDIDOS.bytesPorPunto + ' B medidos)', { bytesPorPuntoOverride: 350 }],
+    ['Ancho de fila con bloat: 480 B (por encima de los ' + SUPUESTOS_MEDIDOS.bytesPorPunto + ' B medidos)', { bytesPorPuntoOverride: 480 }],
     ['Alta disponibilidad regional en Cloud SQL: sí', { haCloudSql: true }],
-    ['Región: us-central1 (en vez de southamerica-west1)', { region: 'us-central1' }],
   ];
   const filas = variantes.map(([nombre, edgeCases]) => {
     const r = calcularEscalon(600, { arquitectura: 'actual', escenario: 'A', supuestos: SUPUESTOS_MEDIDOS, edgeCases });
@@ -412,7 +524,20 @@ p();
 p(
   'Nota: los edge cases de "3 vueltas" y "jornada 14h" no son independientes — el modelo deriva la jornada ' +
     'de las vueltas diarias salvo que se fuerce explícitamente (`jornadaHoras` distinto de `null` en ' +
-    '`EDGE_CASES_DEFAULT`), por eso se muestran por separado.',
+    '`EDGE_CASES_DEFAULT`), por eso se muestran por separado. Los dos casos de ancho de fila (350 B y 480 B) ' +
+    'acotan el riesgo real: §8 advierte que los 365,6 B medidos vienen de una muestra chica sin `VACUUM FULL` ' +
+    'ni `ANALYZE`, así que el número real en régimen puede ser MAYOR, no solo menor.',
+);
+p();
+p(
+  '**Nota sobre región (eliminada de esta tabla):** una versión anterior de este modelo incluía un edge case ' +
+    '`region: us-central1` que aplicaba los descuentos citados de §6 (×0,6 Cloud SQL cómputo, ×0,8 Cloud Run) ' +
+    'pero NO tocaba disco/backup de Cloud SQL, Redis ni el VPC connector (nunca recibían el parámetro), y ' +
+    'encima multiplicaba el egreso ×0,9 con un factor inventado sin cita. Ese híbrido subestimaba el ahorro ' +
+    'real (PD-SSD y Memorystore SÍ son más baratos en us-central1) y a la vez inventaba un número donde no ' +
+    'había fuente. Se eliminó el edge case completo: inventar el resto de los factores para "completarlo" es ' +
+    'peor que no tener la fila. Reintroducirlo requiere relevar precios de us-central1 con `gcloud`/lista de ' +
+    'precios para cada línea, no solo para cómputo.',
 );
 p();
 p('---');
@@ -605,13 +730,22 @@ p(
   '- **Extrapolación de umbrales de `quivo-worker` más allá de 600 conductores:** duplicar el umbral de ' +
     'requests/día en cada salto de instancia, anclado en el salto real de agosto (400→500 conductores).',
 );
-p(
-  '- **Calibración de `CPU_SEG_POR_REQUEST_API` por mínimos cuadrados en USD** (no en % relativo) sobre los ' +
-    '18 puntos de referencia. Se probó también minimizar el error relativo (%); el resultado no fue mejor — ' +
-    'ambos metodos dejan una parte de la columna "API" sin reproducir (§7.1). Se optó por mínimos cuadrados ' +
-    'en USD por ser el criterio estándar y no distorsionar por los escalones de "optimizada" con costo ' +
-    'publicado cercano a cero.',
-);
+{
+  const { usd: critUsd, relativo: critRelativo } = COMPARACION_CALIBRACION_API;
+  const peorPct = ((critRelativo.errorAbsolutoTotalUsd - critUsd.errorAbsolutoTotalUsd) / critUsd.errorAbsolutoTotalUsd) * 100;
+  p(
+    '- **Calibración de `CPU_SEG_POR_REQUEST_API` por mínimos cuadrados en USD** (no en % relativo) sobre los ' +
+      '18 puntos de referencia. Se probó también minimizar el error relativo (%) — comparación real, no una ' +
+      `afirmación sin verificar: mínimos cuadrados en USD da \`c = ${critUsd.c.toFixed(6)}\` con un error ` +
+      `absoluto total de ${usdCorto(critUsd.errorAbsolutoTotalUsd)} sobre los 18 puntos; minimizar el error ` +
+      `relativo da \`c = ${critRelativo.c.toFixed(6)}\` con un error absoluto total de ` +
+      `${usdCorto(critRelativo.errorAbsolutoTotalUsd)} — ${peorPct.toFixed(1)}% PEOR en USD, no mejor. Ambos ` +
+      'métodos dejan una parte de la columna "API" sin reproducir (§7.1); se optó por mínimos cuadrados en USD ' +
+      'porque además de ganar en error absoluto total, es el criterio estándar y no se distorsiona por los ' +
+      'escalones de "optimizada" con costo publicado cercano a cero (donde el error relativo queda indefinido ' +
+      'y se excluye de esa suma, sesgando ese criterio hacia los escalones de "actual").',
+  );
+}
 p(
   '- **Tolerancia del test de regresión:** ±5% como objetivo (informativo), ±15% como falla dura, sobre ' +
     'los 18 puntos de referencia de agosto (9 escalones × 2 arquitecturas) — no solo los 4 escalones ' +

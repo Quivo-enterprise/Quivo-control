@@ -16,9 +16,11 @@ Con los supuestos de carga MEDIDOS el 2026-09-20 (plan §12) y el escenario A (2
 | Conductores | Arquitectura actual | Arquitectura optimizada | Tier Cloud SQL (actual) | ¿Supera el techo probado por k6 (300 pts/s)? |
 | ---: | ---: | ---: | :--- | :--- |
 | 600 | US$1402.83/mes | US$929.76/mes | `db-custom-16-61440` (extrapolado) | no |
-| 2000 | US$2926.66/mes | US$1945.74/mes | `db-custom-32-122880` (extrapolado) | sí (495 pts/s) |
+| 2000 | US$2926.66–US$5135.35 †/mes | US$1945.74–US$3602.25 †/mes | `db-custom-32-122880` (extrapolado) | sí (495 pts/s) |
 
-El costo por conductor a 2000 (arquitectura optimizada) es US$0.97/mes — sigue bajando respecto a los US$1.55/mes de 600 conductores, porque la base fija (Redis, worker, VPC/GCS, Artifact Registry) se sigue repartiendo entre más conductores. **El hallazgo estructural de agosto sigue vigente: el costo no escala con la flota, escala con el dimensionamiento de Cloud SQL, y ese dimensionamiento es la única parte del modelo con criterio de ingeniería, no aritmética.**
+† **Empate de borde de tier de Cloud SQL** (dentro de ±2% del límite del tier; en los casos listados el margen es efectivamente CERO, así que el tier — y el total — podría caer para cualquiera de los dos lados): n=2000 (495.0 pts/s, borde de tier en 495.0 pts/s, margen 0.0%): `db-custom-32-122880` → $2926.66 contra `db-custom-64-245760` (extrapolado) → $5135.35; n=2000 (495.0 pts/s, borde de tier en 495.0 pts/s, margen 0.0%): `db-custom-32-122880` → $1945.74 contra `db-custom-64-245760` (extrapolado) → $3602.25. El punto de escritura pico que decide el tier es una extrapolación de UNA sola jornada medida (n=1, plan §12.4) redondeada a puntos/día — un redondeo mínimo de ese supuesto empuja el escalón real al tier vecino, más caro. El RANGO, no el punto, es la cifra defendible frente a finanzas.
+
+El costo por conductor a 2000 (arquitectura optimizada) es entre US$0.97 y US$1.80/mes — sigue bajando respecto a los US$1.55/mes de 600 conductores, porque la base fija (Redis, worker, VPC/GCS, Artifact Registry) se sigue repartiendo entre más conductores. **El hallazgo estructural de agosto sigue vigente: el costo no escala con la flota, escala con el dimensionamiento de Cloud SQL, y ese dimensionamiento es la única parte del modelo con criterio de ingeniería, no aritmética.**
 
 A 495 puntos/s pico (escenario A, 2000 conductores), la arquitectura supera 1.6× el techo de 300 pts/s que cubre el único test de carga real del repo (`tests/load/k6/`, plan §9.5). Los tiers de Cloud SQL usados por encima de 600 conductores (`db-custom-8-30720`, `db-custom-16-61440`, `db-custom-32-122880`, `db-custom-64-245760`) son EXTRAPOLACIONES de precio, no capacidad probada.
 
@@ -32,7 +34,9 @@ A 495 puntos/s pico (escenario A, 2000 conductores), la arquitectura supera 1.6�
 | :--- | :--- | :--- | :--- |
 | `documento-tecnico-cto.md` §10 | US$1.200 – 2.800/mes | 3000 vehículos | 2026-07-19 |
 | `costos-gcp-por-escala.md` | $508.75 actual / $309.54 optimizada | 600 conductores | 2026-08-26 |
-| Este documento (medido, escenario A) | US$2926.66 actual / US$1945.74 optimizada | 2000 conductores | 2026-09-20 |
+| Este documento (medido, escenario A) | US$2926.66–US$5135.35 † actual / US$1945.74–US$3602.25 † optimizada | 2000 conductores | 2026-09-20 |
+
+† **Empate de borde de tier de Cloud SQL** (dentro de ±2% del límite del tier; en los casos listados el margen es efectivamente CERO, así que el tier — y el total — podría caer para cualquiera de los dos lados): n=2000 (495.0 pts/s, borde de tier en 495.0 pts/s, margen 0.0%): `db-custom-32-122880` → $2926.66 contra `db-custom-64-245760` (extrapolado) → $5135.35; n=2000 (495.0 pts/s, borde de tier en 495.0 pts/s, margen 0.0%): `db-custom-32-122880` → $1945.74 contra `db-custom-64-245760` (extrapolado) → $3602.25. El punto de escritura pico que decide el tier es una extrapolación de UNA sola jornada medida (n=1, plan §12.4) redondeada a puntos/día — un redondeo mínimo de ese supuesto empuja el escalón real al tier vecino, más caro. El RANGO, no el punto, es la cifra defendible frente a finanzas.
 
 **La diferencia es real y se explica en tres capas, no en una:**
 
@@ -40,7 +44,11 @@ A 495 puntos/s pico (escenario A, 2000 conductores), la arquitectura supera 1.6�
 2. **3000 ≠ 2000.** Este documento no extrapola hasta 3000 (fuera del encargo de la tarea ClickUp `86e34jkb2`, que pide hasta 2000). El rango de julio pesa sobre 1000 vehículos más.
 3. **El régimen de costo no es lineal con la flota** (§1, hallazgo de agosto que sigue vigente): a 2000 conductores la base fija (Redis, worker, VPC/GCS, Artifact Registry) sigue siendo una fracción chica del total, y el grueso es Cloud SQL dimensionado por PICO de escritura, no por cantidad de vehículos per se.
 
-**Conclusión para finanzas:** el rango de julio (US$1.200–2.800 para 3000) y el número medido de este documento para 2000 (US$2926.66 actual / US$1945.74 optimizada) NO son directamente comparables — son estimaciones de dos momentos distintos del proyecto, con dos niveles de evidencia distintos. El número de este documento tiene evidencia real detrás (precios de lista + una medición de carga real, aunque limitada — ver §8). El de julio es una proyección de arquitectura sin verificar contra infraestructura desplegada. **Se recomienda a finanzas usar el número de este documento y descartar el rango de julio para 2000-3000 vehículos.**
+**Conclusión para finanzas:** el rango de julio (US$1.200–2.800 para 3000) y la proyección de este documento para 2000 (US$2926.66–US$5135.35 actual / US$1945.74–US$3602.25 optimizada) NO son directamente comparables — son estimaciones de dos momentos distintos del proyecto, con dos niveles de evidencia distintos.
+
+**La cifra de este documento para 2000 es un RANGO, no un punto, y hay que decírselo a finanzas así:** a 2000 conductores el pico de escritura da exactamente 495.0 pts/s, que cae EXACTO en el borde entre `db-custom-32-122880` y `db-custom-64-245760` — un empate de margen efectivamente cero. Ese borde de 495 pts/s no es una medición robusta: es un redondeo de una extrapolación armada con UNA sola jornada medida (n=1, plan §12.4) a "~6.000 puntos/conductor/día". Recomendar el extremo bajo del rango sin este contexto sería decirle a finanzas que adopte el resultado de un empate como si fuera un número firme.
+
+El número de este documento tiene evidencia real detrás (precios de lista + una medición de carga real, aunque limitada — ver §8); el de julio es una proyección de arquitectura sin verificar contra infraestructura desplegada. **Se recomienda a finanzas presupuestar contra el EXTREMO ALTO del rango (US$5135.35 actual) hasta que una segunda medición confirme de qué lado del borde cae la carga real, y descartar el rango de julio para 2000-3000 vehículos.**
 
 ---
 
@@ -75,14 +83,16 @@ Tres escenarios de qué significa "2000 trufis" (plan §4.2/§10 — el CTO pidi
 | 200 | 200 | `db-custom-4-15360` | 49.5 | no | 80 GiB | $439.43 | $2.20 |
 | 300 | 300 | `db-custom-8-30720` * | 74.3 | no | 115 GiB | $740.39 | $2.47 |
 | 400 | 400 | `db-custom-8-30720` * | 99.0 | no | 150 GiB | $765.26 | $1.91 |
-| 500 | 500 | `db-custom-8-30720` * | 123.8 | no | 185 GiB | $827.54 | $1.66 |
+| 500 | 500 | `db-custom-8-30720` * † | 123.8 | no | 185 GiB | $827.54–$1379.71 | $1.66–$2.76 |
 | 600 | 600 | `db-custom-16-61440` * | 148.5 | no | 215 GiB | $1402.83 | $2.34 |
 | 800 | 800 | `db-custom-16-61440` * | 198.0 | no | 285 GiB | $1452.57 | $1.82 |
-| 1000 | 1000 | `db-custom-16-61440` * | 247.5 | no | 355 GiB | $1539.71 | $1.54 |
+| 1000 | 1000 | `db-custom-16-61440` * † | 247.5 | no | 355 GiB | $1539.71–$2644.06 | $1.54–$2.64 |
 | 1200 | 1200 | `db-custom-32-122880` * | 297.0 | no | 420 GiB | $2692.05 | $2.24 |
 | 1500 | 1500 | `db-custom-32-122880` * | 371.3 | sí | 525 GiB | $2766.66 | $1.84 |
 | 1750 | 1750 | `db-custom-32-122880` * | 433.1 | sí | 610 GiB | $2827.96 | $1.62 |
-| 2000 | 2000 | `db-custom-32-122880` * | 495.0 | sí | 695 GiB | $2926.66 | $1.46 |
+| 2000 | 2000 | `db-custom-32-122880` * † | 495.0 | sí | 695 GiB | $2926.66–$5135.35 | $1.46–$2.57 |
+
+† **Empate de borde de tier de Cloud SQL** (dentro de ±2% del límite del tier; en los casos listados el margen es efectivamente CERO, así que el tier — y el total — podría caer para cualquiera de los dos lados): n=500 (123.8 pts/s, borde de tier en 123.8 pts/s, margen 0.0%): `db-custom-8-30720` → $827.54 contra `db-custom-16-61440` (extrapolado) → $1379.71; n=1000 (247.5 pts/s, borde de tier en 247.5 pts/s, margen 0.0%): `db-custom-16-61440` → $1539.71 contra `db-custom-32-122880` (extrapolado) → $2644.06; n=2000 (495.0 pts/s, borde de tier en 495.0 pts/s, margen 0.0%): `db-custom-32-122880` → $2926.66 contra `db-custom-64-245760` (extrapolado) → $5135.35. El punto de escritura pico que decide el tier es una extrapolación de UNA sola jornada medida (n=1, plan §12.4) redondeada a puntos/día — un redondeo mínimo de ese supuesto empuja el escalón real al tier vecino, más caro. El RANGO, no el punto, es la cifra defendible frente a finanzas.
 
 **Arquitectura Optimizada**
 
@@ -95,14 +105,16 @@ Tres escenarios de qué significa "2000 trufis" (plan §4.2/§10 — el CTO pidi
 | 200 | 200 | `db-custom-4-15360` | 49.5 | no | 45 GiB | $268.03 | $1.34 |
 | 300 | 300 | `db-custom-8-30720` * | 74.3 | no | 65 GiB | $484.68 | $1.62 |
 | 400 | 400 | `db-custom-8-30720` * | 99.0 | no | 80 GiB | $494.30 | $1.24 |
-| 500 | 500 | `db-custom-8-30720` * | 123.8 | no | 100 GiB | $505.85 | $1.01 |
+| 500 | 500 | `db-custom-8-30720` * † | 123.8 | no | 100 GiB | $505.85–$919.98 | $1.01–$1.84 |
 | 600 | 600 | `db-custom-16-61440` * | 148.5 | no | 115 GiB | $929.76 | $1.55 |
 | 800 | 800 | `db-custom-16-61440` * | 198.0 | no | 150 GiB | $951.46 | $1.19 |
-| 1000 | 1000 | `db-custom-16-61440` * | 247.5 | no | 185 GiB | $973.19 | $0.97 |
+| 1000 | 1000 | `db-custom-16-61440` * † | 247.5 | no | 185 GiB | $973.19–$1801.45 | $0.97–$1.80 |
 | 1200 | 1200 | `db-custom-32-122880` * | 297.0 | no | 215 GiB | $1821.40 | $1.52 |
 | 1500 | 1500 | `db-custom-32-122880` * | 371.3 | sí | 270 GiB | $1854.89 | $1.24 |
 | 1750 | 1750 | `db-custom-32-122880` * | 433.1 | sí | 310 GiB | $1880.72 | $1.07 |
-| 2000 | 2000 | `db-custom-32-122880` * | 495.0 | sí | 355 GiB | $1945.74 | $0.97 |
+| 2000 | 2000 | `db-custom-32-122880` * † | 495.0 | sí | 355 GiB | $1945.74–$3602.25 | $0.97–$1.80 |
+
+† **Empate de borde de tier de Cloud SQL** (dentro de ±2% del límite del tier; en los casos listados el margen es efectivamente CERO, así que el tier — y el total — podría caer para cualquiera de los dos lados): n=500 (123.8 pts/s, borde de tier en 123.8 pts/s, margen 0.0%): `db-custom-8-30720` → $505.85 contra `db-custom-16-61440` (extrapolado) → $919.98; n=1000 (247.5 pts/s, borde de tier en 247.5 pts/s, margen 0.0%): `db-custom-16-61440` → $973.19 contra `db-custom-32-122880` (extrapolado) → $1801.45; n=2000 (495.0 pts/s, borde de tier en 495.0 pts/s, margen 0.0%): `db-custom-32-122880` → $1945.74 contra `db-custom-64-245760` (extrapolado) → $3602.25. El punto de escritura pico que decide el tier es una extrapolación de UNA sola jornada medida (n=1, plan §12.4) redondeada a puntos/día — un redondeo mínimo de ese supuesto empuja el escalón real al tier vecino, más caro. El RANGO, no el punto, es la cifra defendible frente a finanzas.
 
 ### 4.2 Escenario B · padrón con 60% activo
 
@@ -110,41 +122,41 @@ Tres escenarios de qué significa "2000 trufis" (plan §4.2/§10 — el CTO pidi
 
 | Conductores (n) | n efectivo | Tier SQL | Pts/s pico | ¿Supera 300 pts/s? | Disco | Total/mes | USD/conductor |
 | ---: | ---: | :--- | ---: | :--- | ---: | ---: | ---: |
-| 10 | 6 | `db-g1-small` | 1.5 | no | 10 GiB | $157.60 | $15.76 |
-| 25 | 15 | `db-g1-small` | 3.7 | no | 20 GiB | $161.28 | $6.45 |
-| 50 | 30 | `db-custom-1-3840` | 7.4 | no | 25 GiB | $196.58 | $3.93 |
-| 100 | 60 | `db-custom-2-7680` | 14.9 | no | 35 GiB | $270.07 | $2.70 |
-| 200 | 120 | `db-custom-2-7680` | 29.7 | no | 55 GiB | $282.82 | $1.41 |
-| 300 | 180 | `db-custom-4-15360` | 44.6 | no | 75 GiB | $435.16 | $1.45 |
-| 400 | 240 | `db-custom-4-15360` | 59.4 | no | 95 GiB | $449.73 | $1.12 |
-| 500 | 300 | `db-custom-8-30720` * | 74.3 | no | 115 GiB | $740.39 | $1.48 |
-| 600 | 360 | `db-custom-8-30720` * | 89.1 | no | 135 GiB | $754.96 | $1.26 |
-| 800 | 480 | `db-custom-8-30720` * | 118.8 | no | 175 GiB | $821.51 | $1.03 |
-| 1000 | 600 | `db-custom-16-61440` * | 148.5 | no | 215 GiB | $1402.83 | $1.40 |
-| 1200 | 720 | `db-custom-16-61440` * | 178.2 | no | 260 GiB | $1433.72 | $1.19 |
-| 1500 | 900 | `db-custom-16-61440` * | 222.8 | no | 320 GiB | $1477.44 | $0.98 |
-| 1750 | 1050 | `db-custom-32-122880` * | 259.9 | no | 370 GiB | $2655.62 | $1.52 |
-| 2000 | 1200 | `db-custom-32-122880` * | 297.0 | no | 420 GiB | $2692.05 | $1.35 |
+| 10 | 6 | `db-g1-small` | 1.5 | no | 10 GiB | $157.66 | $15.77 |
+| 25 | 15 | `db-g1-small` | 3.7 | no | 20 GiB | $161.43 | $6.46 |
+| 50 | 30 | `db-custom-1-3840` | 7.4 | no | 30 GiB | $198.63 | $3.97 |
+| 100 | 60 | `db-custom-2-7680` | 14.9 | no | 45 GiB | $274.16 | $2.74 |
+| 200 | 120 | `db-custom-2-7680` | 29.7 | no | 80 GiB | $292.76 | $1.46 |
+| 300 | 180 | `db-custom-4-15360` | 44.6 | no | 115 GiB | $450.94 | $1.50 |
+| 400 | 240 | `db-custom-4-15360` | 59.4 | no | 150 GiB | $471.36 | $1.18 |
+| 500 | 300 | `db-custom-8-30720` * | 74.3 | no | 185 GiB | $767.86 | $1.54 |
+| 600 | 360 | `db-custom-8-30720` * | 89.1 | no | 215 GiB | $786.52 | $1.31 |
+| 800 | 480 | `db-custom-8-30720` * | 118.8 | no | 285 GiB | $864.76 | $1.08 |
+| 1000 | 600 | `db-custom-16-61440` * | 148.5 | no | 355 GiB | $1457.76 | $1.46 |
+| 1200 | 720 | `db-custom-16-61440` * | 178.2 | no | 420 GiB | $1496.84 | $1.25 |
+| 1500 | 900 | `db-custom-16-61440` * | 222.8 | no | 525 GiB | $1558.09 | $1.04 |
+| 1750 | 1050 | `db-custom-32-122880` * | 259.9 | no | 610 GiB | $2750.01 | $1.57 |
+| 2000 | 1200 | `db-custom-32-122880` * | 297.0 | no | 695 GiB | $2800.17 | $1.40 |
 
 **Arquitectura Optimizada**
 
 | Conductores (n) | n efectivo | Tier SQL | Pts/s pico | ¿Supera 300 pts/s? | Disco | Total/mes | USD/conductor |
 | ---: | ---: | :--- | ---: | :--- | ---: | ---: | ---: |
-| 10 | 6 | `db-g1-small` | 1.5 | no | 10 GiB | $80.27 | $8.03 |
-| 25 | 15 | `db-g1-small` | 3.7 | no | 15 GiB | $82.22 | $3.29 |
-| 50 | 30 | `db-custom-1-3840` | 7.4 | no | 20 GiB | $100.30 | $2.01 |
-| 100 | 60 | `db-custom-2-7680` | 14.9 | no | 25 GiB | $154.44 | $1.54 |
-| 200 | 120 | `db-custom-2-7680` | 29.7 | no | 35 GiB | $159.18 | $0.80 |
-| 300 | 180 | `db-custom-4-15360` | 44.6 | no | 45 GiB | $267.54 | $0.89 |
-| 400 | 240 | `db-custom-4-15360` | 59.4 | no | 55 GiB | $272.58 | $0.68 |
-| 500 | 300 | `db-custom-8-30720` * | 74.3 | no | 65 GiB | $484.68 | $0.97 |
-| 600 | 360 | `db-custom-8-30720` * | 89.1 | no | 75 GiB | $490.75 | $0.82 |
-| 800 | 480 | `db-custom-8-30720` * | 118.8 | no | 95 GiB | $503.19 | $0.63 |
-| 1000 | 600 | `db-custom-16-61440` * | 148.5 | no | 115 GiB | $929.76 | $0.93 |
-| 1200 | 720 | `db-custom-16-61440` * | 178.2 | no | 135 GiB | $942.41 | $0.79 |
-| 1500 | 900 | `db-custom-16-61440` * | 222.8 | no | 165 GiB | $961.43 | $0.64 |
-| 1750 | 1050 | `db-custom-32-122880` * | 259.9 | no | 190 GiB | $1805.55 | $1.03 |
-| 2000 | 1200 | `db-custom-32-122880` * | 297.0 | no | 215 GiB | $1821.40 | $0.91 |
+| 10 | 6 | `db-g1-small` | 1.5 | no | 10 GiB | $80.33 | $8.03 |
+| 25 | 15 | `db-g1-small` | 3.7 | no | 15 GiB | $82.37 | $3.29 |
+| 50 | 30 | `db-custom-1-3840` | 7.4 | no | 20 GiB | $100.59 | $2.01 |
+| 100 | 60 | `db-custom-2-7680` | 14.9 | no | 30 GiB | $156.81 | $1.57 |
+| 200 | 120 | `db-custom-2-7680` | 29.7 | no | 45 GiB | $163.93 | $0.82 |
+| 300 | 180 | `db-custom-4-15360` | 44.6 | no | 65 GiB | $276.43 | $0.92 |
+| 400 | 240 | `db-custom-4-15360` | 59.4 | no | 80 GiB | $283.84 | $0.71 |
+| 500 | 300 | `db-custom-8-30720` * | 74.3 | no | 100 GiB | $500.09 | $1.00 |
+| 600 | 360 | `db-custom-8-30720` * | 89.1 | no | 115 GiB | $508.54 | $0.85 |
+| 800 | 480 | `db-custom-8-30720` * | 118.8 | no | 150 GiB | $527.50 | $0.66 |
+| 1000 | 600 | `db-custom-16-61440` * | 148.5 | no | 185 GiB | $960.58 | $0.96 |
+| 1200 | 720 | `db-custom-16-61440` * | 178.2 | no | 215 GiB | $977.98 | $0.81 |
+| 1500 | 900 | `db-custom-16-61440` * | 222.8 | no | 270 GiB | $1007.68 | $0.67 |
+| 1750 | 1050 | `db-custom-32-122880` * | 259.9 | no | 310 GiB | $1858.61 | $1.06 |
+| 2000 | 1200 | `db-custom-32-122880` * | 297.0 | no | 355 GiB | $1883.06 | $0.94 |
 
 ### 4.3 Escenario C · activos/mes, pico menor
 
@@ -152,41 +164,41 @@ Tres escenarios de qué significa "2000 trufis" (plan §4.2/§10 — el CTO pidi
 
 | Conductores (n) | n efectivo | Tier SQL | Pts/s pico | ¿Supera 300 pts/s? | Disco | Total/mes | USD/conductor |
 | ---: | ---: | :--- | ---: | :--- | ---: | ---: | ---: |
-| 10 | 4 | `db-g1-small` | 0.9 | no | 10 GiB | $157.55 | $15.76 |
-| 25 | 9 | `db-g1-small` | 2.2 | no | 10 GiB | $157.66 | $6.31 |
-| 50 | 18 | `db-g1-small` | 4.3 | no | 20 GiB | $161.33 | $3.23 |
-| 100 | 35 | `db-custom-1-3840` | 8.7 | no | 25 GiB | $196.68 | $1.97 |
-| 200 | 70 | `db-custom-2-7680` | 17.3 | no | 35 GiB | $270.46 | $1.35 |
-| 300 | 105 | `db-custom-2-7680` | 26.0 | no | 50 GiB | $279.30 | $0.93 |
-| 400 | 140 | `db-custom-4-15360` | 34.6 | no | 60 GiB | $424.97 | $1.06 |
-| 500 | 175 | `db-custom-4-15360` | 43.3 | no | 70 GiB | $432.78 | $0.87 |
-| 600 | 210 | `db-custom-4-15360` | 52.0 | no | 85 GiB | $442.44 | $0.74 |
-| 800 | 280 | `db-custom-8-30720` * | 69.3 | no | 110 GiB | $736.11 | $0.92 |
-| 1000 | 350 | `db-custom-8-30720` * | 86.6 | no | 130 GiB | $751.95 | $0.75 |
-| 1200 | 420 | `db-custom-8-30720` * | 104.0 | no | 155 GiB | $769.53 | $0.64 |
-| 1500 | 525 | `db-custom-16-61440` * | 129.9 | no | 190 GiB | $1384.61 | $0.92 |
-| 1750 | 613 | `db-custom-16-61440` * | 151.6 | no | 220 GiB | $1406.15 | $0.80 |
-| 2000 | 700 | `db-custom-16-61440` * | 173.3 | no | 250 GiB | $1427.70 | $0.71 |
+| 10 | 4 | `db-g1-small` | 0.9 | no | 10 GiB | $157.65 | $15.77 |
+| 25 | 9 | `db-g1-small` | 2.2 | no | 20 GiB | $161.40 | $6.46 |
+| 50 | 18 | `db-g1-small` | 4.3 | no | 30 GiB | $165.31 | $3.31 |
+| 100 | 35 | `db-custom-1-3840` | 8.7 | no | 45 GiB | $204.65 | $2.05 |
+| 200 | 70 | `db-custom-2-7680` | 17.3 | no | 80 GiB | $288.14 | $1.44 |
+| 300 | 105 | `db-custom-2-7680` | 26.0 | no | 115 GiB | $304.94 | $1.02 |
+| 400 | 140 | `db-custom-4-15360` | 34.6 | no | 150 GiB | $460.33 | $1.15 |
+| 500 | 175 | `db-custom-4-15360` | 43.3 | no | 185 GiB | $477.85 | $0.96 |
+| 600 | 210 | `db-custom-4-15360` | 52.0 | no | 215 GiB | $493.73 | $0.82 |
+| 800 | 280 | `db-custom-8-30720` * | 69.3 | no | 285 GiB | $805.08 | $1.01 |
+| 1000 | 350 | `db-custom-8-30720` * | 86.6 | no | 355 GiB | $840.34 | $0.84 |
+| 1200 | 420 | `db-custom-8-30720` * | 104.0 | no | 420 GiB | $873.86 | $0.73 |
+| 1500 | 525 | `db-custom-16-61440` * | 129.9 | no | 525 GiB | $1516.33 | $1.01 |
+| 1750 | 613 | `db-custom-16-61440` * | 151.6 | no | 610 GiB | $1559.54 | $0.89 |
+| 2000 | 700 | `db-custom-16-61440` * | 173.3 | no | 695 GiB | $1602.74 | $0.80 |
 
 **Arquitectura Optimizada**
 
 | Conductores (n) | n efectivo | Tier SQL | Pts/s pico | ¿Supera 300 pts/s? | Disco | Total/mes | USD/conductor |
 | ---: | ---: | :--- | ---: | :--- | ---: | ---: | ---: |
-| 10 | 4 | `db-g1-small` | 0.9 | no | 10 GiB | $80.22 | $8.02 |
-| 25 | 9 | `db-g1-small` | 2.2 | no | 10 GiB | $80.32 | $3.21 |
-| 50 | 18 | `db-g1-small` | 4.3 | no | 15 GiB | $82.27 | $1.65 |
-| 100 | 35 | `db-custom-1-3840` | 8.7 | no | 20 GiB | $100.40 | $1.00 |
-| 200 | 70 | `db-custom-2-7680` | 17.3 | no | 25 GiB | $154.63 | $0.77 |
-| 300 | 105 | `db-custom-2-7680` | 26.0 | no | 30 GiB | $157.11 | $0.52 |
-| 400 | 140 | `db-custom-4-15360` | 34.6 | no | 35 GiB | $263.11 | $0.66 |
-| 500 | 175 | `db-custom-4-15360` | 43.3 | no | 40 GiB | $265.64 | $0.53 |
-| 600 | 210 | `db-custom-4-15360` | 52.0 | no | 50 GiB | $270.06 | $0.45 |
-| 800 | 280 | `db-custom-8-30720` * | 69.3 | no | 60 GiB | $482.41 | $0.60 |
-| 1000 | 350 | `db-custom-8-30720` * | 86.6 | no | 70 GiB | $488.53 | $0.49 |
-| 1200 | 420 | `db-custom-8-30720` * | 104.0 | no | 85 GiB | $496.97 | $0.41 |
-| 1500 | 525 | `db-custom-16-61440` * | 129.9 | no | 100 GiB | $921.09 | $0.61 |
-| 1750 | 613 | `db-custom-16-61440` * | 151.6 | no | 115 GiB | $930.31 | $0.53 |
-| 2000 | 700 | `db-custom-16-61440` * | 173.3 | no | 130 GiB | $939.70 | $0.47 |
+| 10 | 4 | `db-g1-small` | 0.9 | no | 10 GiB | $80.31 | $8.03 |
+| 25 | 9 | `db-g1-small` | 2.2 | no | 15 GiB | $82.34 | $3.29 |
+| 50 | 18 | `db-g1-small` | 4.3 | no | 20 GiB | $84.53 | $1.69 |
+| 100 | 35 | `db-custom-1-3840` | 8.7 | no | 30 GiB | $104.92 | $1.05 |
+| 200 | 70 | `db-custom-2-7680` | 17.3 | no | 45 GiB | $163.68 | $0.82 |
+| 300 | 105 | `db-custom-2-7680` | 26.0 | no | 65 GiB | $172.45 | $0.57 |
+| 400 | 140 | `db-custom-4-15360` | 34.6 | no | 80 GiB | $282.97 | $0.71 |
+| 500 | 175 | `db-custom-4-15360` | 43.3 | no | 100 GiB | $291.79 | $0.58 |
+| 600 | 210 | `db-custom-4-15360` | 52.0 | no | 115 GiB | $298.96 | $0.50 |
+| 800 | 280 | `db-custom-8-30720` * | 69.3 | no | 150 GiB | $522.13 | $0.65 |
+| 1000 | 350 | `db-custom-8-30720` * | 86.6 | no | 185 GiB | $539.07 | $0.54 |
+| 1200 | 420 | `db-custom-8-30720` * | 104.0 | no | 215 GiB | $554.77 | $0.46 |
+| 1500 | 525 | `db-custom-16-61440` * | 129.9 | no | 270 GiB | $996.01 | $0.66 |
+| 1750 | 613 | `db-custom-16-61440` * | 151.6 | no | 310 GiB | $1016.53 | $0.58 |
+| 2000 | 700 | `db-custom-16-61440` * | 173.3 | no | 355 GiB | $1039.00 | $0.52 |
 
 \* Tier extrapolado por este modelo (agosto no dimensionó más allá de 62 pts/s / 600 conductores). Sin evidencia de prueba de carga real a esa capacidad.
 
@@ -199,14 +211,18 @@ Tres escenarios de qué significa "2000 trufis" (plan §4.2/§10 — el CTO pidi
 | Conductores | SQL cómputo | SQL disco | SQL backup | Redis | API | Web | Worker | VPC conn. | GCS | Art.Reg. | Egreso | TOTAL |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 600 | $1104.34 | $51.17 | $22.96 | $51.10 | $74.10 | $3.00 | $68.55 | $18.40 | $0.00 | $0.30 | $8.90 | **$1402.83** |
-| 2000 | $2208.69 | $165.41 | $76.72 | $51.10 | $223.01 | $10.00 | $143.36 | $18.40 | $0.00 | $0.30 | $29.68 | **$2926.66** |
+| 2000 | $2208.69–$4417.38 † | $165.41 | $76.72 | $51.10 | $223.01 | $10.00 | $143.36 | $18.40 | $0.00 | $0.30 | $29.68 | **$2926.66–$5135.35 †** |
+
+† **Empate de borde de tier de Cloud SQL** (dentro de ±2% del límite del tier; en los casos listados el margen es efectivamente CERO, así que el tier — y el total — podría caer para cualquiera de los dos lados): n=2000 (495.0 pts/s, borde de tier en 495.0 pts/s, margen 0.0%): `db-custom-32-122880` → $2926.66 contra `db-custom-64-245760` (extrapolado) → $5135.35. El punto de escritura pico que decide el tier es una extrapolación de UNA sola jornada medida (n=1, plan §12.4) redondeada a puntos/día — un redondeo mínimo de ese supuesto empuja el escalón real al tier vecino, más caro. El RANGO, no el punto, es la cifra defendible frente a finanzas.
 
 **Arquitectura Optimizada**
 
 | Conductores | SQL cómputo | SQL disco | SQL backup | Redis | API | Web | Worker | VPC conn. | GCS | Art.Reg. | Egreso | TOTAL |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 600 | $828.26 | $27.37 | $11.76 | $10.50 | $7.88 | $3.00 | $31.14 | $0.00 | $0.64 | $0.30 | $8.90 | **$929.76** |
-| 2000 | $1656.52 | $84.49 | $38.64 | $10.50 | $45.07 | $10.00 | $68.55 | $0.00 | $1.99 | $0.30 | $29.68 | **$1945.74** |
+| 2000 | $1656.52–$3313.03 † | $84.49 | $38.64 | $10.50 | $45.07 | $10.00 | $68.55 | $0.00 | $1.99 | $0.30 | $29.68 | **$1945.74–$3602.25 †** |
+
+† **Empate de borde de tier de Cloud SQL** (dentro de ±2% del límite del tier; en los casos listados el margen es efectivamente CERO, así que el tier — y el total — podría caer para cualquiera de los dos lados): n=2000 (495.0 pts/s, borde de tier en 495.0 pts/s, margen 0.0%): `db-custom-32-122880` → $1945.74 contra `db-custom-64-245760` (extrapolado) → $3602.25. El punto de escritura pico que decide el tier es una extrapolación de UNA sola jornada medida (n=1, plan §12.4) redondeada a puntos/día — un redondeo mínimo de ese supuesto empuja el escalón real al tier vecino, más caro. El RANGO, no el punto, es la cifra defendible frente a finanzas.
 
 ---
 
@@ -216,12 +232,14 @@ Tres escenarios de qué significa "2000 trufis" (plan §4.2/§10 — el CTO pidi
 | :--- | ---: | ---: |
 | Base (6 vueltas, jornada derivada, bytes medidos, sin HA, Santiago) | $1402.83 | — |
 | Vueltas diarias: 3 (piso) | $1294.06 | -7.8% |
-| Jornada operativa: 14 h (en vez de 10 h) | $876.18 | -37.5% |
-| Ancho de fila con bloat: 350 B (en vez de 365.6 B medidos) | $1401.08 | -0.1% |
+| Jornada operativa: 14 h (en vez de 10 h) | $1461.67 | +4.2% |
+| Ancho de fila con bloat: 350 B (por debajo de los 365.6 B medidos) | $1401.08 | -0.1% |
+| Ancho de fila con bloat: 480 B (por encima de los 365.6 B medidos) | $1425.58 | +1.6% |
 | Alta disponibilidad regional en Cloud SQL: sí | $2581.30 | +84.0% |
-| Región: us-central1 (en vez de southamerica-west1) | $931.07 | -33.6% |
 
-Nota: los edge cases de "3 vueltas" y "jornada 14h" no son independientes — el modelo deriva la jornada de las vueltas diarias salvo que se fuerce explícitamente (`jornadaHoras` distinto de `null` en `EDGE_CASES_DEFAULT`), por eso se muestran por separado.
+Nota: los edge cases de "3 vueltas" y "jornada 14h" no son independientes — el modelo deriva la jornada de las vueltas diarias salvo que se fuerce explícitamente (`jornadaHoras` distinto de `null` en `EDGE_CASES_DEFAULT`), por eso se muestran por separado. Los dos casos de ancho de fila (350 B y 480 B) acotan el riesgo real: §8 advierte que los 365,6 B medidos vienen de una muestra chica sin `VACUUM FULL` ni `ANALYZE`, así que el número real en régimen puede ser MAYOR, no solo menor.
+
+**Nota sobre región (eliminada de esta tabla):** una versión anterior de este modelo incluía un edge case `region: us-central1` que aplicaba los descuentos citados de §6 (×0,6 Cloud SQL cómputo, ×0,8 Cloud Run) pero NO tocaba disco/backup de Cloud SQL, Redis ni el VPC connector (nunca recibían el parámetro), y encima multiplicaba el egreso ×0,9 con un factor inventado sin cita. Ese híbrido subestimaba el ahorro real (PD-SSD y Memorystore SÍ son más baratos en us-central1) y a la vez inventaba un número donde no había fuente. Se eliminó el edge case completo: inventar el resto de los factores para "completarlo" es peor que no tener la fila. Reintroducirlo requiere relevar precios de us-central1 con `gcloud`/lista de precios para cada línea, no solo para cómputo.
 
 ---
 
@@ -310,7 +328,7 @@ Los supuestos MEDIDOS que arman las tablas de §4-§6 vienen de una sola medici�
 - **Escenario C (factor de concurrencia 0.35):** el plan §4.2 deja este factor explícitamente "a derivar", sin dato de utilización diaria real de la flota. Se tomó 0,35 como supuesto de producto (fracción de actividad diaria típica en flotas rotativas con turnos), NO VERIFICADO.
 - **Extrapolación de tiers de Cloud SQL más allá de 600 conductores:** duplicar vCPU/RAM cada vez que se duplica el techo de pts/s, siguiendo el mismo patrón que agosto usó hasta 600. Sin prueba de carga que confirme que un solo nodo sostiene esa capacidad.
 - **Extrapolación de umbrales de `quivo-worker` más allá de 600 conductores:** duplicar el umbral de requests/día en cada salto de instancia, anclado en el salto real de agosto (400→500 conductores).
-- **Calibración de `CPU_SEG_POR_REQUEST_API` por mínimos cuadrados en USD** (no en % relativo) sobre los 18 puntos de referencia. Se probó también minimizar el error relativo (%); el resultado no fue mejor — ambos metodos dejan una parte de la columna "API" sin reproducir (§7.1). Se optó por mínimos cuadrados en USD por ser el criterio estándar y no distorsionar por los escalones de "optimizada" con costo publicado cercano a cero.
+- **Calibración de `CPU_SEG_POR_REQUEST_API` por mínimos cuadrados en USD** (no en % relativo) sobre los 18 puntos de referencia. Se probó también minimizar el error relativo (%) — comparación real, no una afirmación sin verificar: mínimos cuadrados en USD da `c = 0.048119` con un error absoluto total de $184.14 sobre los 18 puntos; minimizar el error relativo da `c = 0.056837` con un error absoluto total de $192.00 — 4.3% PEOR en USD, no mejor. Ambos métodos dejan una parte de la columna "API" sin reproducir (§7.1); se optó por mínimos cuadrados en USD porque además de ganar en error absoluto total, es el criterio estándar y no se distorsiona por los escalones de "optimizada" con costo publicado cercano a cero (donde el error relativo queda indefinido y se excluye de esa suma, sesgando ese criterio hacia los escalones de "actual").
 - **Tolerancia del test de regresión:** ±5% como objetivo (informativo), ±15% como falla dura, sobre los 18 puntos de referencia de agosto (9 escalones × 2 arquitecturas) — no solo los 4 escalones (10/100/300/600) que cubría el intento anterior. Plan §13.4.
 - **Escenario "optimizada" en la proyección a 2000 asume que las seis palancas de agosto SÍ están aplicadas** (ciclo de sync 60s, min-instances=0, Redis propio, etc.), aunque el plan §9.3 confirma que ninguna lo está hoy en `quivo-control-prod`. Es un objetivo, no el estado real — se marca explícitamente en este párrafo porque no hay otro lugar natural en las tablas de arriba para esa advertencia.
 

@@ -6,6 +6,46 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Modelo de costos a 2000 trufis — mecanismo de revisión conectado al doc (2026-09-20)
+
+Plan: [`plan-costos-2000.md`](plan-costos-2000.md) §13 (especificación de calibración) y §7
+(criterios de aceptación). `scripts/costos/modelo-costos.mjs` + `scripts/costos/generar-tablas.mjs`
+generan `docs/costos-gcp-2000.md` — **cero valores a mano en el `.md`**, todo sale de una corrida de
+`node scripts/costos/generar-tablas.mjs > docs/costos-gcp-2000.md`. Test de regresión: 21/21.
+
+Cerrados en esta iteración cuatro hallazgos de una revisión de código que se había aplicado a medias
+(el mecanismo existía en `modelo-costos.mjs` pero `generar-tablas.mjs` no lo consumía, o el `.md`
+nunca se regeneró tras el fix):
+
+1. **Rango de borde de tier publicado.** `bordeTierCercano` (ya calculado por
+   `tierCercanoABorde` en el modelo) ahora se consume en `generar-tablas.mjs` en los 5 lugares que
+   citaban el punto (resumen ejecutivo, reconciliación, "Conclusión para finanzas", tablas de
+   escalones y desglose por servicio). A 2000 conductores el pico da exactamente 495,0 pts/s,
+   empate exacto con el borde de `db-custom-32-122880`/`db-custom-64-245760`: el documento ahora
+   recomienda a finanzas presupuestar contra el extremo alto del rango ($2926,66–$5135,35 actual)
+   en vez de un número puntual que esconde un empate de margen cero. Mismo empate en n=500 y n=1000.
+2. **Edge case de jornada, signo corregido** (ya estaba en el código, solo faltaba regenerar el
+   `.md`): jornada 14h ahora da MÁS puntos/día (tasa constante puntos/hora) y por lo tanto MÁS
+   costo (+4,2%), no menos (-37,5% como decía la versión vieja del documento).
+3. **Storage de escenarios B/C, ya escalaba con la flota nominal** (idem, solo faltaba
+   regenerar): a 2000 conductores los tres escenarios dan 695 GiB (antes B daba 420 GiB y C 250 GiB,
+   subestimados por usar la concurrencia efectiva en vez de la flota completa).
+4. **Comparación de criterios de calibración de API, publicada con números reales**: minimizar
+   error relativo (%) da `c=0,0568` con error absoluto total $192,00, un 4,3% PEOR que minimizar en
+   USD (`c=0,0481`, $184,14). La afirmación "no fue mejor" ya no es una frase sin verificar.
+
+Abiertos, declarados como tales en el propio documento (no ocultos):
+
+- Escenario C (factor de concurrencia 0,35) es un supuesto de producto NO VERIFICADO — el plan
+  §4.2 lo deja "a derivar" y no hay medición de utilización diaria real de la flota.
+- Los tiers de Cloud SQL y los umbrales de `quivo-worker` por encima de 600 conductores son
+  EXTRAPOLACIÓN de precio (duplicar el patrón que agosto sí documentó), sin prueba de carga real
+  que confirme que un solo nodo sostiene esa capacidad — el propio test de carga k6 del repo solo
+  cubre hasta 300 pts/s, y a 2000 conductores el pico da 495 pts/s (1,6× ese techo).
+- La medición que alimenta los supuestos MEDIDOS es n=1 (una sola jornada real completa,
+  extrapolada), dos días de datos, sin `VACUUM FULL`/`ANALYZE` — documentado en detalle en §8 del
+  `.md` generado.
+
 ## Punto de retome: cinco ramas abiertas, ninguna mergeable todavía (2026-09-11)
 
 **Leer esto primero en la próxima sesión.** El plan sigue siendo
