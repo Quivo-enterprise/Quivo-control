@@ -1,0 +1,46 @@
+{
+  "descripcion": "Bytes de índice por fila de gps_points, medidos en Postgres local (Docker, postgis/postgis:16-3.4-alpine), migraciones reales de packages/db (34 migraciones), RLS FORCE, ANALYZE corrido antes de medir. Paso 1 del encargo 2026-09-22 (docs/plan-experimento-puntos-gps.md §8/§9.2). Usado por scripts/costos/modelo-costos.mjs (BYTES_INDICE_POR_FILA_MEDIDO) para la regla de memoria/working set de SQL_TIERS_MEDIDOS.",
+  "fecha": "2026-09-22",
+  "entorno": {
+    "imagen": "postgis/postgis:16-3.4-alpine",
+    "contenedor": "quivo-carga-pg (efímero, borrado al terminar)",
+    "perfil": "c1 (1 cpu / 3.75GB, bind 127.0.0.1:55432)",
+    "migraciones": "packages/db/prisma/migrations, 34 migraciones, prisma migrate deploy",
+    "precarga": "500 sesiones x 7 dias x 1920 pts/sesion/dia = 6.720.000 filas (scripts/experimentos/gps/carga/precargar.mjs)",
+    "analyzeCorrido": true
+  },
+  "filasTotales": 6720000,
+  "particionesConDatos": 7,
+  "particionesVacias": 49,
+  "totales": {
+    "heapBytes": 2586828800,
+    "indexesBytes": 1415520256,
+    "totalBytes": 4002979840
+  },
+  "bytesPorFila": {
+    "heap": 384.9448,
+    "indices": 210.6429,
+    "total": 595.6815
+  },
+  "indicesGpsPoints": [
+    { "nombre": "gps_points_pkey", "columnas": "(event_id, ts)" },
+    { "nombre": "gps_points_sesion_ts_idx", "columnas": "(sesion_id, ts)" },
+    { "nombre": "gps_points_sindicato_id_ts_idx", "columnas": "(\"sindicatoId\", ts)" }
+  ],
+  "porParticion": [
+    { "particion": "gps_points_20260915", "heapBytes": 167329792, "indexesBytes": 198000640, "totalBytes": 365412352 },
+    { "particion": "gps_points_20260916", "heapBytes": 167329792, "indexesBytes": 205955072, "totalBytes": 373366784 },
+    { "particion": "gps_points_20260917", "heapBytes": 167329792, "indexesBytes": 201613312, "totalBytes": 369025024 },
+    { "particion": "gps_points_20260918", "heapBytes": 167329792, "indexesBytes": 198541312, "totalBytes": 365953024 },
+    { "particion": "gps_points_20260919", "heapBytes": 167329792, "indexesBytes": 205053952, "totalBytes": 372465664 },
+    { "particion": "gps_points_20260920", "heapBytes": 167329792, "indexesBytes": 200572928, "totalBytes": 367984640 },
+    { "particion": "gps_points_20260921", "heapBytes": 167329792, "indexesBytes": 205611008, "totalBytes": 373022720 }
+  ],
+  "notas": [
+    "pg_relation_size/pg_indexes_size/pg_total_relation_size medidos sobre la tabla padre (gps_points, particionada, heap/indexes = 0 al ser solo catalogo) y sobre cada particion hija (fisica) con SELECT sobre pg_class.",
+    "56 particiones totales: 7 con datos (2026-09-15 a 2026-09-21, la ventana de 7 dias precargada) + 49 vacias (particiones futuras creadas por crear_particion_gps_points, ~8KB cada una, negligible).",
+    "bytesPorFila.indices (210.6429 B/fila) es la cifra citada en modelo-costos.mjs como BYTES_INDICE_POR_FILA_MEDIDO — suma pg_indexes_size de los 3 indices sobre TODAS las particiones, dividido filas totales.",
+    "bytesPorFila.heap (384.94 B/fila) es informativo, NO es el 200B citado en plan-costos-2000.md §12.1 (esa cifra viene de una muestra chica de produccion sin ANALYZE/VACUUM FULL, reltuples=-1 — no comparable 1:1 con esta medicion local con esquema real, TEXT para device_id/sindicatoId en vez de tipos mas compactos, y datos sinteticos).",
+    "Limites (docs/plan-experimento-puntos-gps.md §8): disco NVMe local != PD-SSD de Cloud SQL, sin latencia de red VPC, 7 dias precargados (no 6 meses, sin bloat de largo plazo)."
+  ]
+}

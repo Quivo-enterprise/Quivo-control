@@ -1,0 +1,12 @@
+
+=== perfil-c2_obj-1000_sync-15 ===
+>>> Punto: perfil=c2 objetivo=1000pts/s sync=15s K=0 duracion=300s calentamiento=60s
+<<< Punto: PASA — {"throughputInsuficiente":false,"p95LoteAlto":false,"filasPerdidas":false,"backlogNoSostenido":false,"corridaInvalida":false}
+
+=== perfil-c2_obj-2000_sync-15 ===
+>>> Punto: perfil=c2 objetivo=2000pts/s sync=15s K=0 duracion=300s calentamiento=60s
+<<< Punto: PASA — {"throughputInsuficiente":false,"p95LoteAlto":false,"filasPerdidas":false,"backlogNoSostenido":false,"corridaInvalida":false}
+
+=== perfil-c2_obj-3000_sync-15 ===
+>>> Punto: perfil=c2 objetivo=3000pts/s sync=15s K=0 duracion=300s calentamiento=60s
+<<< Punto: PASA — {"throughputInsuficiente":false,"p95LoteAlto":false,"filasPerdidas":false,"backlogNoSostenido":false,"corridaInvalida":false}

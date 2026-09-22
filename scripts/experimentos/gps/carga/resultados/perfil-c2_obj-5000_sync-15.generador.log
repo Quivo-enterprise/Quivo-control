@@ -1,0 +1,37 @@
+
+---stderr---
+Generador: objetivo=5000 pts/s, sync=15s, trufis=5000, concurrencia=1, calentamiento=60s, medicion=180s
+Fin de calentamiento, empieza medición.
+AUTOCONTROL: backlog SIN drenar al cierre de la ventana medida = 4 lote(s) (60 filas) — el perfil NO sostiene esta tasa (backlog creciente).
+{
+  "objetivoPtsSeg": 5000,
+  "syncSegundos": 15,
+  "concurrencia": 1,
+  "trufis": 5000,
+  "duracionMedicionS": 180.001,
+  "tasaOfrecidaPtsSeg": 4999.972222376542,
+  "desviacionOfrecidaPct": 0.0005555524691590108,
+  "corridaValida": true,
+  "sostenido": false,
+  "backlogAlCierre": 4,
+  "filasEnBacklogAlCierre": 60,
+  "backlogAbandonadoTrasDrenado": 0,
+  "filasAbandonadasTrasDrenado": 0,
+  "lotesEnviados": 60000,
+  "lotesConfirmados": 60000,
+  "lotesFallidos": 0,
+  "filasEnviadas": 900000,
+  "filasConfirmadas": 900000,
+  "filasPerdidas": 0,
+  "throughputLogradoPtsSeg": 4999.972222376542,
+  "throughputVsObjetivoPct": 99.99944444753083,
+  "latenciaLoteMs": {
+    "p50": 2.3007940000097733,
+    "p95": 3.0349009999772534,
+    "p99": 3.634980999981053,
+    "max": 31.679215000011027
+  },
+  "backlogMaximo": 52,
+  "backlogPromedio": 3.302521008403361,
+  "erroresMuestra": []
+}

@@ -1,0 +1,38 @@
+
+---stderr---
+Generador: objetivo=1000 pts/s, sync=15s, trufis=1000, concurrencia=1, calentamiento=60s, medicion=300s
+Fin de calentamiento, empieza medición.
+AUTOCONTROL: backlog SIN drenar al cierre de la ventana medida = 22986 lote(s) (344790 filas) — el perfil NO sostiene esta tasa (backlog creciente).
+AUTOCONTROL: 22926 lote(s) (343890 filas) sin drenar tras 15s de drenado — quedaron abandonados, no procesados.
+{
+  "objetivoPtsSeg": 1000,
+  "syncSegundos": 15,
+  "concurrencia": 1,
+  "trufis": 1000,
+  "duracionMedicionS": 300.001,
+  "tasaOfrecidaPtsSeg": 999.9966666777779,
+  "desviacionOfrecidaPct": 0.0003333322222147217,
+  "corridaValida": true,
+  "sostenido": false,
+  "backlogAlCierre": 22986,
+  "filasEnBacklogAlCierre": 344790,
+  "backlogAbandonadoTrasDrenado": 22926,
+  "filasAbandonadasTrasDrenado": 343890,
+  "lotesEnviados": 847,
+  "lotesConfirmados": 847,
+  "lotesFallidos": 0,
+  "filasEnviadas": 12705,
+  "filasConfirmadas": 12705,
+  "filasPerdidas": 0,
+  "throughputLogradoPtsSeg": 42.34985883380389,
+  "throughputVsObjetivoPct": 4.234985883380389,
+  "latenciaLoteMs": {
+    "p50": 305.6150609999895,
+    "p95": 599.4227589999937,
+    "p99": 700.793052999994,
+    "max": 898.0685299999896
+  },
+  "backlogMaximo": 22857,
+  "backlogPromedio": 11503.558659217877,
+  "erroresMuestra": []
+}

@@ -1,0 +1,110 @@
+{
+  "perfil": "c1",
+  "objetivoPtsSeg": 500,
+  "syncSegundos": 15,
+  "concurrenciaGenerador": 1,
+  "K": 20,
+  "duracionMedicionS": 300,
+  "remoto": false,
+  "resultado": "PASA",
+  "criteriosFalla": {
+    "throughputInsuficiente": false,
+    "p95LoteAlto": false,
+    "filasPerdidas": false,
+    "backlogNoSostenido": false,
+    "corridaInvalida": false,
+    "generadorProcesoFallo": false,
+    "lecturasProcesoFallo": false,
+    "lecturasSinResultado": false,
+    "lecturasSinDatos": false,
+    "lecturasConErrorAlto": false
+  },
+  "lecturasErroresPorTipo": {
+    "listarHoy": {
+      "n": 200,
+      "errores": 0,
+      "tasaErrorPct": 0
+    },
+    "obtenerPosiciones": {
+      "n": 600,
+      "errores": 0,
+      "tasaErrorPct": 0
+    },
+    "obtenerTraza": {
+      "n": 600,
+      "errores": 0,
+      "tasaErrorPct": 0
+    }
+  },
+  "cpuPromedioPct": 20.861263157894726,
+  "cpuMaxPct": 112.1,
+  "notaCpu": null,
+  "generador": {
+    "objetivoPtsSeg": 500,
+    "syncSegundos": 15,
+    "concurrencia": 1,
+    "trufis": 500,
+    "duracionMedicionS": 300,
+    "tasaOfrecidaPtsSeg": 500,
+    "desviacionOfrecidaPct": 0,
+    "corridaValida": true,
+    "sostenido": true,
+    "backlogAlCierre": 0,
+    "filasEnBacklogAlCierre": 0,
+    "backlogAbandonadoTrasDrenado": 0,
+    "filasAbandonadasTrasDrenado": 0,
+    "lotesEnviados": 9999,
+    "lotesConfirmados": 9999,
+    "lotesFallidos": 0,
+    "filasEnviadas": 149985,
+    "filasConfirmadas": 149985,
+    "filasPerdidas": 0,
+    "throughputLogradoPtsSeg": 499.95,
+    "throughputVsObjetivoPct": 99.99,
+    "latenciaLoteMs": {
+      "p50": 5.770251999958418,
+      "p95": 11.137096999969799,
+      "p99": 12.111040000003413,
+      "max": 79.27550099999644
+    },
+    "backlogMaximo": 57,
+    "backlogPromedio": 0.39106145251396646,
+    "erroresMuestra": []
+  },
+  "lecturas": {
+    "K": 20,
+    "duracionMedicionS": 300,
+    "poolSize": 62,
+    "listarHoy": {
+      "n": 200,
+      "errores": 0,
+      "tasaErrorPct": 0,
+      "p50Ms": 19.09486100001959,
+      "p95Ms": 25.85441999998875,
+      "p99Ms": 94.22497699999803,
+      "poolWaitP50Ms": 0.03526999999303371,
+      "poolWaitP95Ms": 0.097009999997681
+    },
+    "obtenerPosiciones": {
+      "n": 600,
+      "errores": 0,
+      "tasaErrorPct": 0,
+      "p50Ms": 26.723320999997668,
+      "p95Ms": 33.54552800001693,
+      "p99Ms": 60.60017800000787,
+      "poolWaitP50Ms": 0.031079000036697835,
+      "poolWaitP95Ms": 0.10294699999212753
+    },
+    "obtenerTraza": {
+      "n": 600,
+      "errores": 0,
+      "tasaErrorPct": 0,
+      "p50Ms": 4.977408000006108,
+      "p95Ms": 66.37434199999552,
+      "p99Ms": 91.1851869999955,
+      "poolWaitP50Ms": 0.02514300000621006,
+      "poolWaitP95Ms": 13.782422000018414
+    },
+    "erroresMuestra": []
+  }
+}

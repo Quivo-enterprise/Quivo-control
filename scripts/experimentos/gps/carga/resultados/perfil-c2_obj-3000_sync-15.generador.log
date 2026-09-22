@@ -1,0 +1,36 @@
+
+---stderr---
+Generador: objetivo=3000 pts/s, sync=15s, trufis=3000, concurrencia=1, calentamiento=60s, medicion=300s
+Fin de calentamiento, empieza medición.
+{
+  "objetivoPtsSeg": 3000,
+  "syncSegundos": 15,
+  "concurrencia": 1,
+  "trufis": 3000,
+  "duracionMedicionS": 299.999,
+  "tasaOfrecidaPtsSeg": 3000.010000033333,
+  "desviacionOfrecidaPct": 0.0003333344444399699,
+  "corridaValida": true,
+  "sostenido": true,
+  "backlogAlCierre": 0,
+  "filasEnBacklogAlCierre": 0,
+  "backlogAbandonadoTrasDrenado": 0,
+  "filasAbandonadasTrasDrenado": 0,
+  "lotesEnviados": 60000,
+  "lotesConfirmados": 60000,
+  "lotesFallidos": 0,
+  "filasEnviadas": 900000,
+  "filasConfirmadas": 900000,
+  "filasPerdidas": 0,
+  "throughputLogradoPtsSeg": 3000.010000033333,
+  "throughputVsObjetivoPct": 100.00033333444445,
+  "latenciaLoteMs": {
+    "p50": 2.5404920000000857,
+    "p95": 3.7788540000037756,
+    "p99": 4.3401710000034655,
+    "max": 21.876792999973986
+  },
+  "backlogMaximo": 2,
+  "backlogPromedio": 0.10614525139664804,
+  "erroresMuestra": []
+}

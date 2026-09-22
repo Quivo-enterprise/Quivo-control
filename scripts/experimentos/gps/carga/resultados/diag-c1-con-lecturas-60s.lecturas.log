@@ -1,0 +1,27 @@
+
+---stderr---
+Lecturas: K=20 monitores, calentamiento=10s, medicion=60s
+Fin de calentamiento (lecturas), empieza medición.
+{
+  "K": 20,
+  "duracionMedicionS": 60,
+  "listarHoy": {
+    "n": 9,
+    "p50Ms": 38426.551208,
+    "p95Ms": 67939.84442800001,
+    "p99Ms": 67939.84442800001
+  },
+  "obtenerPosiciones": {
+    "n": 4,
+    "p50Ms": 61725.171871,
+    "p95Ms": 63227.924961000004,
+    "p99Ms": 63227.924961000004
+  },
+  "obtenerTraza": {
+    "n": 7,
+    "p50Ms": 42516.673366999996,
+    "p95Ms": 68520.74357,
+    "p99Ms": 68520.74357
+  },
+  "erroresMuestra": []
+}

@@ -1,0 +1,110 @@
+{
+  "perfil": "c1",
+  "objetivoPtsSeg": 2000,
+  "syncSegundos": 15,
+  "concurrenciaGenerador": 1,
+  "K": 20,
+  "duracionMedicionS": 300,
+  "remoto": false,
+  "resultado": "PASA",
+  "criteriosFalla": {
+    "throughputInsuficiente": false,
+    "p95LoteAlto": false,
+    "filasPerdidas": false,
+    "backlogNoSostenido": false,
+    "corridaInvalida": false,
+    "generadorProcesoFallo": false,
+    "lecturasProcesoFallo": false,
+    "lecturasSinResultado": false,
+    "lecturasSinDatos": false,
+    "lecturasConErrorAlto": false
+  },
+  "lecturasErroresPorTipo": {
+    "listarHoy": {
+      "n": 200,
+      "errores": 0,
+      "tasaErrorPct": 0
+    },
+    "obtenerPosiciones": {
+      "n": 600,
+      "errores": 0,
+      "tasaErrorPct": 0
+    },
+    "obtenerTraza": {
+      "n": 600,
+      "errores": 0,
+      "tasaErrorPct": 0
+    }
+  },
+  "cpuPromedioPct": 42.50073684210523,
+  "cpuMaxPct": 105.07,
+  "notaCpu": null,
+  "generador": {
+    "objetivoPtsSeg": 2000,
+    "syncSegundos": 15,
+    "concurrencia": 1,
+    "trufis": 2000,
+    "duracionMedicionS": 300,
+    "tasaOfrecidaPtsSeg": 2000,
+    "desviacionOfrecidaPct": 0,
+    "corridaValida": true,
+    "sostenido": true,
+    "backlogAlCierre": 3,
+    "filasEnBacklogAlCierre": 45,
+    "backlogAbandonadoTrasDrenado": 0,
+    "filasAbandonadasTrasDrenado": 0,
+    "lotesEnviados": 39996,
+    "lotesConfirmados": 39996,
+    "lotesFallidos": 0,
+    "filasEnviadas": 599940,
+    "filasConfirmadas": 599940,
+    "filasPerdidas": 0,
+    "throughputLogradoPtsSeg": 1999.8,
+    "throughputVsObjetivoPct": 99.99,
+    "latenciaLoteMs": {
+      "p50": 3.362948999973014,
+      "p95": 6.676800000001094,
+      "p99": 10.554342999996152,
+      "max": 63.70529499999975
+    },
+    "backlogMaximo": 461,
+    "backlogPromedio": 5.016759776536313,
+    "erroresMuestra": []
+  },
+  "lecturas": {
+    "K": 20,
+    "duracionMedicionS": 300,
+    "poolSize": 62,
+    "listarHoy": {
+      "n": 200,
+      "errores": 0,
+      "tasaErrorPct": 0,
+      "p50Ms": 14.475955000001704,
+      "p95Ms": 30.41656199999852,
+      "p99Ms": 88.17329600000085,
+      "poolWaitP50Ms": 0.02234899999166373,
+      "poolWaitP95Ms": 0.0709589999896707
+    },
+    "obtenerPosiciones": {
+      "n": 600,
+      "errores": 0,
+      "tasaErrorPct": 0,
+      "p50Ms": 23.040157999988878,
+      "p95Ms": 35.74387900001602,
+      "p99Ms": 68.57186600001296,
+      "poolWaitP50Ms": 0.029054000042378902,
+      "poolWaitP95Ms": 0.06390499998815358
+    },
+    "obtenerTraza": {
+      "n": 600,
+      "errores": 0,
+      "tasaErrorPct": 0,
+      "p50Ms": 3.5396489999984624,
+      "p95Ms": 9.35124800002086,
+      "p99Ms": 49.62471300002653,
+      "poolWaitP50Ms": 0.03052100003696978,
+      "poolWaitP95Ms": 9.111691999976756
+    },
+    "erroresMuestra": []
+  }
+}
