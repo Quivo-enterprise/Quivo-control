@@ -34,6 +34,61 @@ Plan: `docs/plan-experimento-puntos-gps.md`. Resultados: `scripts/experimentos/g
   revisar el cambio de semántica de `totalPuntos` (#74) al rebasear. Tras deployar #74, correr
   una vez el recompute de `docs/runbooks/retencion-gps.md`.
 
+### Palancas de costo pendientes (estado verificado contra el código, 2026-09-22)
+
+**La columna "optimizada" es un objetivo, no lo que se paga hoy.** Producción corre la
+arquitectura "actual": de las seis palancas de agosto no se aplicó ninguna
+(`docs/plan-costos-2000.md` §9.3). Fuentes de detalle: `docs/costos-gcp-por-escala.md` §6
+(palancas A–F), `docs/plan-costos-2000.md` §11–§12 (palancas de volumen),
+`scripts/experimentos/gps/carga/resultados/resumen.md` (concurrencia del worker).
+
+**Palancas de precio (agosto), ninguna aplicada:**
+
+| # | Cambio técnico | Estado hoy | Ahorro | Riesgo / prerrequisito |
+|---|---|---|---|---|
+| A | `quivo-api` con Direct VPC egress (`--network/--subnet/--vpc-egress`, como `quivo-worker`) en vez de `--vpc-connector` | `scripts/deploy-gcp.sh:772` sigue con `--vpc-connector` | −$18.40/mes, todo escalón | Ninguno declarado (GA) |
+| B | Redis propio en `e2-micro` en vez de Memorystore Basic 1 GiB | Memorystore sigue (`docs/infra-gcp-prod.md:84-92`) | −$40.60/mes | Operación propia (parches, monitoreo). Memorystore Basic tampoco tiene HA |
+| C | `--min-instances 1` → `0` en `quivo-api` | `deploy-gcp.sh:770` sigue en 1 | −$11.59 a −$17.71/mes | Cold start ~3-5 s en el primer sync del día; el outbox reintenta |
+| D | Ciclo de sync 15 s → 60 s (`REFRESCO_MS`) | `apps/mobile/src/features/operacion/use-sync-status.ts:8` sigue en `15_000` | −$9 en requests y evita la 2.ª instancia de worker a 500-600 (−$37) | Hasta 60 s más de lag en `/en-vivo`. Requiere release de app. **Ojo:** el motivo de agosto ("un INSERT por punto") era falso: el worker ya hace INSERT multi-fila; el ahorro viene de menos requests/transacciones |
+| E | Retención caliente 6 → 3 meses + archivo en bucket GCS Nearline (`GPS_RETENTION_MONTHS=3`, `GPS_ARCHIVE_BUCKET`) | Default 6 (`retencion-gps.service.ts:121`), bucket vacío (`.env.example:65`). El código de archivado existe, no está activado | −$14.45/mes a 600; a 2000 el disco caliente con 6 meses es ~$163 + ~$77 backups | Crear el bucket (no existe) y seguir `docs/runbooks/retencion-gps.md` |
+| F | CUD de 1 año en Cloud SQL (−25 % del cómputo) | No verificable en el repo (se compra en billing) | −$69.02/mes a 600 | Compromiso de 12 meses: tomarlo solo con el tier confirmado. `db-g1-small` no admite CUD |
+
+**Palancas de volumen y capacidad (bajan la carga, no el precio unitario):**
+
+- **Concurrencia del worker BullMQ 1 → 4.** `ingesta-worker.service.ts` no fija `concurrency`
+  (default 1, serializado). Medido: 2000 pts/s que falla en 1 vCPU con concurrencia 1 pasa al 100 %
+  con 4 en el mismo contenedor. La más barata antes de subir tier. Falta probar que no rompe el
+  orden de lotes de un mismo dispositivo.
+- **Retención escalonada por resolución** (evolución de E): denso 7-14 días → trazo simplificado +
+  eventos de control → archivo. Riesgo bajo. A 2000 el disco caliente con 6 meses es ~684 GB
+  medido (`plan-costos-2000.md` §12; la cifra de ~1,46 TB → ~100 GB de §11 usaba la estimación
+  preliminar de §9.2, ya corregida); el ahorro nuevo no está recalculado.
+- **Douglas-Peucker con zona protegida antes de persistir.** Medido (n=1): DP 2 m retiene 63 % de
+  puntos, p95 1,2 m, 0 pasadas perdidas de 132; DP 20 m retiene 53 %, p95 8,9 m, 0 perdidas.
+  **Sin zona protegida pierde pasadas (28/132 con 5 m): descartado para evidencia.** A 2000 el
+  ahorro se diluye porque el tier lo decide la RAM.
+- **Captura 15 m → 30 m** (`distanceFilter`, `apps/mobile/src/gps/background-geolocation.config.ts:52`):
+  −50 % de puntos sin pasadas perdidas (n=1). A 2000: $1,270 → $858 actual, $703 → $419
+  optimizada. Requiere release de app y validar en el piloto 86e329ub0 (precisión de replay y
+  apelaciones). Submuestrear a 30 m no equivale a capturar a 30 m.
+- **`distanceFilter` adaptativo** (denso cerca de puntos de control, laxo en tramos rectos): sin
+  cifra, la más cara de implementar (release + geocercas en el dispositivo).
+- **Resumen por sesión `gps_sesion_resumen`:** HECHO (#74). Falta el recompute tras el deploy.
+- **TimescaleDB/AlloyDB:** decisión de arquitectura, no optimización. Solo si retención escalonada
+  + DP no alcanzan.
+- **Cambio de región a `us-central1`:** ~26 % menos, pero **no recomendado**: migración completa
+  de datos y latencia desde Bolivia sin medir. Retirado del modelo.
+
+**Pendientes técnicos sin costo directo (bloquean confiar en los números):**
+
+- Activar el export de facturación a BigQuery: hoy ningún número se contrasta con la factura real.
+- Tiers de 4 y 8 vCPU de Cloud SQL sin medir (extrapolados); el multiplicador de RAM 4× es
+  heurística declarada. A 2000 decide el tier (rango $994–$1,270).
+- k6 a 300 pts/s nunca corrió contra `quivo-control-prod`.
+- Bytes/fila (365,6 B) medidos en muestra chica sin `VACUUM FULL`/`ANALYZE`: en régimen puede subir.
+- `tile.openstreetmap.org` no admite uso de flota en producción: pasar a un proveedor de tiles
+  pago (mismos datos OSM).
+
 ## Mapa en vivo: tabla `gps_sesion_resumen` (N+1 de `listarHoy`/`obtenerPosiciones`) — 2026-09-22
 
 **Estado:** PR `perf/en-vivo-resumen-sesion`. Plan: `docs/plan-en-vivo-resumen-sesion.md`.
