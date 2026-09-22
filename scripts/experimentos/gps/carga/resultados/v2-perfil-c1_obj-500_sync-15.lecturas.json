@@ -1,0 +1,36 @@
+{
+  "K": 0,
+  "duracionMedicionS": 300,
+  "poolSize": 2,
+  "listarHoy": {
+    "n": 0,
+    "errores": 0,
+    "tasaErrorPct": 0,
+    "p50Ms": null,
+    "p95Ms": null,
+    "p99Ms": null,
+    "poolWaitP50Ms": null,
+    "poolWaitP95Ms": null
+  },
+  "obtenerPosiciones": {
+    "n": 0,
+    "errores": 0,
+    "tasaErrorPct": 0,
+    "p50Ms": null,
+    "p95Ms": null,
+    "p99Ms": null,
+    "poolWaitP50Ms": null,
+    "poolWaitP95Ms": null
+  },
+  "obtenerTraza": {
+    "n": 0,
+    "errores": 0,
+    "tasaErrorPct": 0,
+    "p50Ms": null,
+    "p95Ms": null,
+    "p99Ms": null,
+    "poolWaitP50Ms": null,
+    "poolWaitP95Ms": null
+  },
+  "erroresMuestra": []
+}

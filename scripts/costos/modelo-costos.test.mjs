@@ -2,9 +2,21 @@ import { describe, it, expect } from 'vitest';
 import {
   calcularEscalon,
   SUPUESTOS_AGOSTO,
+  SUPUESTOS_MEDIDOS,
+  SUPUESTOS_MEDIDOS_30M,
   REFERENCIA_AGOSTO_TOTAL,
   residuosApiAgosto,
   residuosTotalAgosto,
+  elegirTierSql,
+  elegirTierSqlMedido,
+  ramRequeridaWorkingSetGiB,
+  tierCercanoABorde,
+  SQL_TIERS,
+  SQL_TIERS_MEDIDOS,
+  PISO_TRUFIS_EFECTIVOS_MEDIDO,
+  PISO_TIER_MEDIDO_NOMBRE,
+  MULTIPLICADORES_RAM_SENSIBILIDAD,
+  RAM_MULTIPLICADOR_WORKING_SET,
 } from './modelo-costos.mjs';
 
 /**
@@ -147,5 +159,180 @@ describe('modelo-costos — regresión contra docs/costos-gcp-por-escala.md (ago
       );
     }
     expect(residuos.length).toBe(18);
+  });
+});
+
+/**
+ * SQL_TIERS_MEDIDOS — dimensionamiento nuevo, plan-experimento-puntos-gps.md §8/§9.
+ * `SQL_TIERS` (agosto) no se toca ni se re-testea acá (ya lo cubre el describe de arriba,
+ * que sigue en verde con estos cambios — ver también el test explícito de abajo que fuerza
+ * `forzarTierAgosto: true` y verifica que reproduce la cifra histórica).
+ */
+describe('SQL_TIERS_MEDIDOS — dimensionamiento medido (plan-experimento-puntos-gps.md §9)', () => {
+  it('escritura: 495 pts/s (pico medido a 2000 trufis, escenario A) cabe en 1 vCPU — confirma H-tier (plan §8)', () => {
+    const tier = elegirTierSql(495, SQL_TIERS_MEDIDOS);
+    expect(tier.nombre).toBe('db-custom-1-3840');
+    expect(tier.vcpu).toBe(1);
+  });
+
+  it('escritura: el techo de 1 vCPU es 500 pts/s (50% de los 1.000 pts/s que PASA en c1, plan §8)', () => {
+    const unVcpu = SQL_TIERS_MEDIDOS.find((t) => t.nombre === 'db-custom-1-3840');
+    expect(unVcpu.ptsSMax).toBe(500);
+    expect(unVcpu.extrapolado).toBe(false);
+  });
+
+  it('escritura: 501 pts/s ya NO cabe en 1 vCPU (cruza el techo de diseño)', () => {
+    const tier = elegirTierSql(501, SQL_TIERS_MEDIDOS);
+    expect(tier.nombre).not.toBe('db-custom-1-3840');
+  });
+
+  it('piso: aplica db-custom-2-7680 desde 100 trufis efectivos aunque escritura y RAM pidan menos', () => {
+    // pts/s y puntos/día bajos a propósito: ninguna de las otras dos reglas debería pedir
+    // más que el piso en este punto (nEfectivo apenas en el umbral).
+    const r = elegirTierSqlMedido(PISO_TRUFIS_EFECTIVOS_MEDIDO, 25, 6000);
+    expect(r.tier.nombre).toBe(PISO_TIER_MEDIDO_NOMBRE);
+    expect(r.reglaGanadora).toBe('piso');
+  });
+
+  it('piso: por debajo de 100 trufis efectivos NO aplica — cae a SQL_TIERS (tabla de agosto), no a un tier medido chico inventado', () => {
+    const r = elegirTierSqlMedido(PISO_TRUFIS_EFECTIVOS_MEDIDO - 1, 24, 6000);
+    expect(r.reglaGanadora).toBe('agosto-fallback');
+    expect(r.tier).toEqual(elegirTierSql(24, SQL_TIERS));
+  });
+
+  it('RAM (working set): decide por encima del piso cuando el working set de 2 días × margen supera la RAM del piso', () => {
+    // nEfectivo y puntos/día grandes a propósito para forzar que la regla de RAM sea la que
+    // pide más RAM que el piso (db-custom-2-7680, 7.5 GiB) y que escritura (495 pts/s cabe
+    // holgado en 1 vCPU con este puntosPorConductorDia/jornada).
+    const r = elegirTierSqlMedido(2000, 495, 6000);
+    expect(r.reglaGanadora).toBe('ram');
+    expect(r.ramRequeridaGiB).not.toBeNull();
+    expect(r.tier.ramGiB).toBeGreaterThanOrEqual(r.ramRequeridaGiB);
+    // Y estrictamente por encima del piso — si no, el piso hubiera ganado el empate hacia
+    // arriba (candidatos.reduce usa `>`, así que en un empate exacto gana el primero, piso
+    // no es el primero acá — este assert deja explícito que la RAM realmente superó el piso).
+    const tierPiso = SQL_TIERS_MEDIDOS.find((t) => t.nombre === PISO_TIER_MEDIDO_NOMBRE);
+    expect(r.ramRequeridaGiB).toBeGreaterThan(tierPiso.ramGiB);
+  });
+
+  it('ramRequeridaWorkingSetGiB: escala linealmente con nEfectivo y con puntos/conductor/día', () => {
+    const base = ramRequeridaWorkingSetGiB(100, 1000);
+    const dobleN = ramRequeridaWorkingSetGiB(200, 1000);
+    const doblePuntos = ramRequeridaWorkingSetGiB(100, 2000);
+    expect(dobleN).toBeCloseTo(base * 2, 6);
+    expect(doblePuntos).toBeCloseTo(base * 2, 6);
+  });
+
+  it('calcularEscalon: usarTierMedido solo se activa con SUPUESTOS_MEDIDOS/SUPUESTOS_MEDIDOS_30M, nunca con SUPUESTOS_AGOSTO', () => {
+    const conAgosto = calcularEscalon(2000, { arquitectura: 'actual', escenario: 'A', supuestos: SUPUESTOS_AGOSTO });
+    const conMedidos = calcularEscalon(2000, { arquitectura: 'actual', escenario: 'A', supuestos: SUPUESTOS_MEDIDOS });
+    expect(conAgosto.usarTierMedido).toBe(false);
+    expect(conMedidos.usarTierMedido).toBe(true);
+  });
+
+  it('calcularEscalon: forzarTierAgosto reproduce el dimensionamiento histórico (SQL_TIERS) con SUPUESTOS_MEDIDOS — n=600 actual', () => {
+    // Cifra citada en docs/plan-experimento-puntos-gps.md §7 (columna "600 actual/opt") y en
+    // el docs/costos-gcp-2000.md generado antes de esta recalibración: US$1.402,83.
+    const historico = calcularEscalon(600, {
+      arquitectura: 'actual',
+      escenario: 'A',
+      supuestos: SUPUESTOS_MEDIDOS,
+      forzarTierAgosto: true,
+    });
+    expect(historico.usarTierMedido).toBe(false);
+    expect(historico.total).toBeCloseTo(1402.83, 1);
+  });
+
+  it('SUPUESTOS_MEDIDOS_30M (captura 30 m) reduce puntos/conductor/día y por lo tanto el pico de escritura vs SUPUESTOS_MEDIDOS (15 m/captura actual)', () => {
+    expect(SUPUESTOS_MEDIDOS_30M.puntosPorConductorDia).toBeLessThan(SUPUESTOS_MEDIDOS.puntosPorConductorDia);
+    expect(SUPUESTOS_MEDIDOS_30M.puntosPorConductorDia).toBe(2972);
+
+    const r15 = calcularEscalon(2000, { arquitectura: 'actual', escenario: 'A', supuestos: SUPUESTOS_MEDIDOS });
+    const r30 = calcularEscalon(2000, { arquitectura: 'actual', escenario: 'A', supuestos: SUPUESTOS_MEDIDOS_30M });
+    expect(r30.ptsPorSegundo).toBeLessThan(r15.ptsPorSegundo);
+    expect(r30.usarTierMedido).toBe(true);
+  });
+});
+
+/**
+ * Hallazgo 1 de revisión (2026-09-22): cuando gana "escritura", el rango de borde cercano no
+ * puede ofrecer un tier por debajo de lo que exigen RAM/piso, y los empates entre reglas se
+ * reportan TODOS (no solo la primera en `candidatos`). Repro exacto pedido por la revisión:
+ * `elegirTierSqlMedido(150, 505, 6000)`.
+ */
+describe('elegirTierSqlMedido / tierCercanoABorde — clamp del rango y empates (hallazgo 1 de revisión, 2026-09-22)', () => {
+  it('repro elegirTierSqlMedido(150, 505, 6000): empate escritura+piso en db-custom-2-7680, reporta ambas reglas', () => {
+    const r = elegirTierSqlMedido(150, 505, 6000);
+    expect(r.tier.nombre).toBe('db-custom-2-7680');
+    expect(r.reglaGanadora).toBe('escritura+piso');
+    expect(r.tierRam.nombre).toBe('db-custom-1-3840'); // RAM por sí sola pediría menos que el piso
+    expect(r.tierPiso.nombre).toBe('db-custom-2-7680');
+  });
+
+  it('tierCercanoABorde: con tierMinimo, un vecino barato por debajo del piso se omite (no se agrega como candidato)', () => {
+    // Mismo clamp que aplica calcularEscalon internamente cuando reglaGanadora incluye
+    // "escritura": tierMinimo = max(tierRam, tierPiso) del resultado de elegirTierSqlMedido.
+    const tierMinimo = SQL_TIERS_MEDIDOS.find((t) => t.nombre === 'db-custom-2-7680'); // tierPiso del repro de arriba
+    const sinClamp = tierCercanoABorde(505, undefined, SQL_TIERS_MEDIDOS);
+    const conClamp = tierCercanoABorde(505, undefined, SQL_TIERS_MEDIDOS, tierMinimo);
+    expect(sinClamp.tierVecino.nombre).toBe('db-custom-1-3840'); // sin clamp: ofrece el tier inválido
+    expect(conClamp).toBeNull(); // con clamp: no hay vecino barato válido, no hay rango que reportar
+  });
+
+  it('n=600 (escenario A, SUPUESTOS_MEDIDOS): ram y piso empatan en db-custom-2-7680, se reportan ambas', () => {
+    const r = calcularEscalon(600, { arquitectura: 'actual', escenario: 'A', supuestos: SUPUESTOS_MEDIDOS });
+    expect(r.tierSql).toBe('db-custom-2-7680');
+    expect(r.reglaTierMedido).toBe('ram+piso');
+  });
+});
+
+/**
+ * Hallazgo 2 de revisión (2026-09-22): `ramRequeridaWorkingSetGiB`/`elegirTierSqlMedido`
+ * aceptan el multiplicador de RAM como parámetro (default `RAM_MULTIPLICADOR_WORKING_SET`)
+ * para poder recorrer 3×/4×/5× programáticamente.
+ */
+describe('sensibilidad del multiplicador de RAM (hallazgo 2 de revisión, 2026-09-22)', () => {
+  it('ramRequeridaWorkingSetGiB acepta un multiplicador explícito y escala linealmente con él', () => {
+    const conDefault = ramRequeridaWorkingSetGiB(100, 1000);
+    const conMultiplicadorIgualAlDefault = ramRequeridaWorkingSetGiB(100, 1000, undefined, RAM_MULTIPLICADOR_WORKING_SET);
+    const conTres = ramRequeridaWorkingSetGiB(100, 1000, undefined, 3);
+    expect(conMultiplicadorIgualAlDefault).toBeCloseTo(conDefault, 9);
+    expect(conTres).toBeCloseTo((conDefault * 3) / RAM_MULTIPLICADOR_WORKING_SET, 9);
+  });
+
+  it('MULTIPLICADORES_RAM_SENSIBILIDAD expone 3/4/5', () => {
+    expect(MULTIPLICADORES_RAM_SENSIBILIDAD).toEqual([3, 4, 5]);
+  });
+
+  it('n=2000 (escenario A, SUPUESTOS_MEDIDOS): el tier cambia entre 3× y 4× — el multiplicador SÍ mueve el resultado', () => {
+    const r3 = calcularEscalon(2000, {
+      arquitectura: 'actual',
+      escenario: 'A',
+      supuestos: SUPUESTOS_MEDIDOS,
+      ramMultiplicadorWorkingSet: 3,
+    });
+    const r4 = calcularEscalon(2000, {
+      arquitectura: 'actual',
+      escenario: 'A',
+      supuestos: SUPUESTOS_MEDIDOS,
+      ramMultiplicadorWorkingSet: 4,
+    });
+    expect(r3.tierSql).toBe('db-custom-4-15360');
+    expect(r4.tierSql).toBe('db-custom-8-30720');
+    expect(r3.total).toBeLessThan(r4.total);
+  });
+
+  it('n=600 (escenario A, SUPUESTOS_MEDIDOS): el tier NO cambia entre 3×, 4× y 5× — el piso ya domina en ese rango', () => {
+    const tiers = MULTIPLICADORES_RAM_SENSIBILIDAD.map(
+      (m) =>
+        calcularEscalon(600, {
+          arquitectura: 'actual',
+          escenario: 'A',
+          supuestos: SUPUESTOS_MEDIDOS,
+          ramMultiplicadorWorkingSet: m,
+        }).tierSql,
+    );
+    expect(new Set(tiers).size).toBe(1);
+    expect(tiers[0]).toBe('db-custom-2-7680');
   });
 });

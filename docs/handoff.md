@@ -6,6 +6,34 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Costos recalibrados con prueba de carga + confirmación en Cloud SQL real — 2026-09-22
+
+Plan: `docs/plan-experimento-puntos-gps.md`. Resultados: `scripts/experimentos/gps/carga/resultados/resumen.md`.
+
+- **Cifras finales (USD/mes, actual / optimizada, captura 15 m):** 600 → $436.53 / $205.03
+  (agosto: $508.75 / $309.54); 2000 simultáneos → $994.06–$1,270.15 / $496.28–$703.35 (rango
+  por el multiplicador de RAM 3×/4×, heurística declarada, no medida). Captura 30 m: 600 →
+  $397.03 / $182.76; 2000 → $858.33 / $419.08. Fuente: `docs/costos-gcp-2000.md` (GENERADO por
+  `node scripts/costos/generar-tablas.mjs`, no editar a mano).
+- **Las cifras infladas previas (~$1.4k a 600, hasta $5.1k a 2000) venían de dimensionar solo
+  por un techo de escritura sin medir — descartado.** El tier a 600/2000 lo deciden RAM/working
+  set y el piso `db-custom-2-7680`, no la escritura.
+- **Prueba de carga local (Docker, CPU/RAM capados):** c1 300–2000 y c2 1000–3000 pts/s PASA. La
+  corrida vieja c1@2000 FALLA era límite del generador closed-loop (8,46 ms/lote ⇒ ~1770 pts/s),
+  no de la base; la baja de latencia 8,46→3,34 ms quedó **sin explicar**.
+- **Cloud SQL real (`db-custom-1-3840`, instancia temporal, ya BORRADA):** 2000 pts/s sostenidos
+  con concurrencia 40, CPU máx 50 %, memoria 58–65 %. Con concurrencia 8/16 falla por RTT del
+  cliente (~187 ms/lote), no por la base. Lecturas en vivo: listarHoy p50 60 ms, obtenerPosiciones
+  p50 70 ms. Tier 2 vCPU no se corrió a propósito (no cambia ninguna decisión).
+- **Publicado:** finanzas https://claude.ai/artifact/CKYr2k2r8wZaWbgh2XAL5f · escalera
+  https://claude.ai/artifact/S32g8pCG5fN8Txu984uSZH (privados: el CTO debe compartirlos) ·
+  comentario en ClickUp 86e34jkb2.
+- **Pendiente:** la tarea de ClickUp pide hasta **3000** vehículos; el modelo llega a 2000 (4/8 vCPU
+  no medidos). Decisión de producto: captura 30 m (validar en piloto 86e329ub0; afecta precisión
+  de replay/apelaciones). Rama `feat/web-mapa-todos-vehiculos` consume `posicionesTodas`:
+  revisar el cambio de semántica de `totalPuntos` (#74) al rebasear. Tras deployar #74, correr
+  una vez el recompute de `docs/runbooks/retencion-gps.md`.
+
 ## Mapa en vivo: tabla `gps_sesion_resumen` (N+1 de `listarHoy`/`obtenerPosiciones`) — 2026-09-22
 
 **Estado:** PR `perf/en-vivo-resumen-sesion`. Plan: `docs/plan-en-vivo-resumen-sesion.md`.

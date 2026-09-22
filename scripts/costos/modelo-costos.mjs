@@ -173,6 +173,27 @@ export const SUPUESTOS_MEDIDOS = Object.freeze({
   crecimientoPuntosPorDiaBase: 6000,
 });
 
+/**
+ * Supuestos MEDIDOS + captura a 30 m de distanceFilter — docs/plan-experimento-puntos-gps.md
+ * §7 (tabla de resultados del paso A, fila "captura 30 m") y §9.6 ("nuevo juego
+ * SUPUESTOS_MEDIDOS_30M = medidos con puntosPorConductorDia: 2972"). Mismo juego que
+ * SUPUESTOS_MEDIDOS (bytes/punto, jornada, días operativos, retención, todo lo demás) salvo
+ * `puntosPorConductorDia`: 2.972 en vez de 6.000 — la cifra medida en la sesión real
+ * (2026-09-10, 5.635 puntos crudos) al submuestrear la captura a 30 m en vez de 15 m: 49,5%
+ * de los puntos, CERO pasadas de punto de control perdidas (de 132) en esa sesión. NO
+ * reemplaza a SUPUESTOS_MEDIDOS (que sigue siendo la cifra "15 m"/captura actual); es un
+ * escenario alternativo que este documento reporta al lado del de 15 m, no en su lugar —
+ * plan §9.7 pide ambas escaleras.
+ */
+export const SUPUESTOS_MEDIDOS_30M = Object.freeze({
+  ...SUPUESTOS_MEDIDOS,
+  id: 'medido-30m-2026-09-22',
+  origen:
+    'docs/plan-experimento-puntos-gps.md §7 (captura 30 m: 49,5% de puntos, 0/132 pasadas ' +
+    'perdidas) + §9.6',
+  puntosPorConductorDia: 2972,
+});
+
 // ---------------------------------------------------------------------------
 // 3. Escenarios de definición de "2000 trufis" — plan §10 (§4.2 del plan)
 // ---------------------------------------------------------------------------
@@ -307,11 +328,11 @@ export const SQL_TIERS = Object.freeze([
  */
 export const TECHO_PROBADO_PTS_S = 300;
 
-export function elegirTierSql(ptsPorSegundo) {
-  for (const tier of SQL_TIERS) {
+export function elegirTierSql(ptsPorSegundo, tiers = SQL_TIERS) {
+  for (const tier of tiers) {
     if (ptsPorSegundo <= tier.ptsSMax) return tier;
   }
-  return SQL_TIERS[SQL_TIERS.length - 1];
+  return tiers[tiers.length - 1];
 }
 
 /** Tolerancia de "cerca de borde" — hallazgo 1 de revisión (2026-09-20). */
@@ -326,19 +347,33 @@ export const TOLERANCIA_BORDE_TIER_PCT = 0.02; // ±2%
  * RANGO en vez de un punto — hallazgo 1 de revisión, 2026-09-20: la cifra titular del
  * documento (2000 conductores, escenario A, actual) caía exactamente en ese empate.
  */
-export function tierCercanoABorde(ptsPorSegundo, toleranciaPct = TOLERANCIA_BORDE_TIER_PCT) {
-  const idx = SQL_TIERS.findIndex((t) => ptsPorSegundo <= t.ptsSMax);
-  const tierActual = idx === -1 ? SQL_TIERS[SQL_TIERS.length - 1] : SQL_TIERS[idx];
+export function tierCercanoABorde(
+  ptsPorSegundo,
+  toleranciaPct = TOLERANCIA_BORDE_TIER_PCT,
+  tiers = SQL_TIERS,
+  tierMinimo = null,
+) {
+  const idx = tiers.findIndex((t) => ptsPorSegundo <= t.ptsSMax);
+  const tierActual = idx === -1 ? tiers[tiers.length - 1] : tiers[idx];
+  // Hallazgo 1 de revisión (2026-09-22): `tierMinimo` es el piso que imponen las reglas de
+  // RAM/producción (cuando la regla ganadora fue "escritura" pero RAM o piso empujan a un
+  // tier mayor en el margen). Sin este clamp, el vecino "barato" de un borde de escritura
+  // podía quedar POR DEBAJO de lo que RAM/piso exigen — un rango que ofrece un tier
+  // inválido. Repro: `elegirTierSqlMedido(150, 505, 6000)` (piso exige db-custom-2-7680,
+  // el vecino barato del borde de escritura en 500 pts/s sería db-custom-1-3840).
+  const idxMinimo = tierMinimo ? tiers.findIndex((t) => t.nombre === tierMinimo.nombre) : -1;
 
   const candidatos = [];
-  if (Number.isFinite(tierActual.ptsSMax) && idx + 1 < SQL_TIERS.length) {
+  if (Number.isFinite(tierActual.ptsSMax) && idx + 1 < tiers.length) {
     // Borde superior del tier elegido: si estamos cerca, el vecino MÁS CARO es la alternativa.
-    candidatos.push({ borde: tierActual.ptsSMax, tierVecino: SQL_TIERS[idx + 1] });
+    // No hace falta clamp acá: RAM/piso solo imponen un PISO, nunca un techo.
+    candidatos.push({ borde: tierActual.ptsSMax, tierVecino: tiers[idx + 1] });
   }
-  if (idx > 0) {
+  if (idx > 0 && (idxMinimo === -1 || idx - 1 >= idxMinimo)) {
     // Borde inferior (= borde superior del tier anterior): si estamos cerca, el vecino MÁS
-    // BARATO es la alternativa.
-    candidatos.push({ borde: SQL_TIERS[idx - 1].ptsSMax, tierVecino: SQL_TIERS[idx - 1] });
+    // BARATO es la alternativa — salvo que ese vecino caiga por debajo del piso de RAM/producción,
+    // en cuyo caso no es una alternativa válida y se omite (no hay "vecino barato" que ofrecer).
+    candidatos.push({ borde: tiers[idx - 1].ptsSMax, tierVecino: tiers[idx - 1] });
   }
 
   let cercano = null;
@@ -350,6 +385,181 @@ export function tierCercanoABorde(ptsPorSegundo, toleranciaPct = TOLERANCIA_BORD
   }
   if (!cercano) return null;
   return { tierActual, tierVecino: cercano.tierVecino, borde: cercano.borde, distanciaPct: cercano.distanciaPct };
+}
+
+// ---------------------------------------------------------------------------
+// 5b. Dimensionamiento MEDIDO de Cloud SQL — docs/plan-experimento-puntos-gps.md §8/§9.
+//
+// `SQL_TIERS` (arriba) reproduce el criterio de AGOSTO (escritura pico, sin medición real de
+// capacidad) y es la regla dura del encargo: NO SE TOCA, es el ancla del test de regresión.
+// Esto de acá es un dimensionamiento PARALELO, usado SOLO por `calcularEscalon` cuando los
+// supuestos activos son `SUPUESTOS_MEDIDOS` o `SUPUESTOS_MEDIDOS_30M` (plan §9, encabezado:
+// "se agrega un dimensionamiento nuevo ... usado SOLO por la proyección con
+// SUPUESTOS_MEDIDOS"), construido a partir de la prueba de carga real de septiembre (plan
+// §8: Postgres local en Docker, NVMe, `gps_points` con las migraciones reales y RLS FORCE).
+// Límites declarados de esa prueba (no se repiten como "más firmes" acá): disco NVMe local
+// ≠ PD-SSD de Cloud SQL (IOPS/latencia distintos), sin latencia de red VPC, 7 días
+// precargados (no 6 meses, sin bloat de largo plazo), perfiles c4/c8 NO corridos (RAM del
+// host de la prueba, 13 GiB, no alcanza para 15/30 GB de memoria de contenedor).
+//
+// Plan §9, tres reglas — el tier elegido es el MAYOR de las tres, nunca el menor (§9.4).
+// ---------------------------------------------------------------------------
+
+/**
+ * Regla 1 — ESCRITURA (plan §9.1): "techo de diseño = 50% de lo medido que pasa". La prueba
+ * de carga (plan §8, tabla "Escritura sola — capacidad de INSERT pura") mostró, con el
+ * INSERT multi-fila real del worker y RLS FORCE:
+ *   - 1 vCPU (`c1`): PASA hasta 1.000 pts/s (p95 10ms); FALLA en 2.000 (87,9%, backlog
+ *     creciente) → techo de diseño = 1.000 / 2 = 500 pts/s.
+ *   - 2 vCPU (`c2`, memoria capada a 4GB por RAM del host — desviación declarada, plan §8):
+ *     PASA hasta 3.000 pts/s (p95 4ms); 5.000 falla por criterio estricto (backlog residual,
+ *     ver plan §8 nota) → techo de diseño = 3.000 / 2 = 1.500 pts/s.
+ *   - 4 vCPU: perfil `c4` NO CORRIDO (RAM del host insuficiente, plan §8 §0). EXTRAPOLADO
+ *     duplicando el techo anterior (mismo patrón que el resto del modelo usa para
+ *     extrapolar sin evidencia directa) → 3.000 pts/s, marcado `extrapolado: true`.
+ *   - 8 vCPU en adelante: extrapolación de la extrapolación (sin ningún dato, ni de agosto ni
+ *     de esta prueba), mismo patrón de duplicación — igual criterio que `SQL_TIERS` arriba.
+ *
+ * Mismo catálogo físico de tiers (nombre/vCPU/RAM) que `SQL_TIERS`; solo cambia `ptsSMax`,
+ * porque la evidencia de capacidad de escritura es otra medición. Sin `db-g1-small`: la
+ * regla 3 (piso) ya garantiza `db-custom-2-7680` desde 100 trufis efectivos, y por debajo de
+ * 100 este dimensionamiento medido no se usa en absoluto (cae a `SQL_TIERS`, la tabla de
+ * agosto — ver `elegirTierSqlMedido`).
+ */
+export const SQL_TIERS_MEDIDOS = Object.freeze([
+  { nombre: 'db-custom-1-3840', vcpu: 1, ramGiB: 3.75, ptsSMax: 500, extrapolado: false },
+  { nombre: 'db-custom-2-7680', vcpu: 2, ramGiB: 7.5, ptsSMax: 1500, extrapolado: false },
+  { nombre: 'db-custom-4-15360', vcpu: 4, ramGiB: 15, ptsSMax: 3000, extrapolado: true },
+  { nombre: 'db-custom-8-30720', vcpu: 8, ramGiB: 30, ptsSMax: 6000, extrapolado: true },
+  { nombre: 'db-custom-16-61440', vcpu: 16, ramGiB: 60, ptsSMax: 12000, extrapolado: true },
+  { nombre: 'db-custom-32-122880', vcpu: 32, ramGiB: 120, ptsSMax: 24000, extrapolado: true },
+  { nombre: 'db-custom-64-245760', vcpu: 64, ramGiB: 240, ptsSMax: Infinity, extrapolado: true },
+]);
+
+/**
+ * Regla 2 — MEMORIA / working set (plan §9.2). Bytes de índice por fila de `gps_points`,
+ * MEDIDOS en un Postgres local con las migraciones reales de `packages/db` y ≥1M filas
+ * precargadas (`scripts/experimentos/gps/carga/resultados/tamanos-indice.json`, generado
+ * 2026-09-22 — `pg_indexes_size` sumado sobre la tabla padre + particiones, ÷ filas totales,
+ * `ANALYZE` corrido antes de medir).
+ */
+export const BYTES_INDICE_POR_FILA_MEDIDO = 210.6429; // medido — tamanos-indice.json (1.415.520.256 B índice / 6.720.000 filas)
+
+/**
+ * Regla 2 (cont.): "el tier debe tener RAM ≥ 4 × (índices de 2 días de la flota) — las
+ * lecturas en vivo tocan hoy/24h; ×4 porque Cloud SQL dedica ~1/3 de la RAM a
+ * shared_buffers y hay que dejar margen" (plan §9.2). "La flota" se resuelve como
+ * `nEfectivo` (no `n` nominal): es la misma cantidad que ya usa el resto del modelo para
+ * "cuántos trufis generan carga en un día dado" bajo el escenario elegido (API, worker,
+ * escritura pico) — el escenario C, en particular, define su factor de concurrencia
+ * explícitamente como "no todos operan el mismo día" (§10/§4.2 del plan de costos), que es
+ * exactamente la pregunta que el working set de HOY necesita responder. Decisión propia del
+ * chairman (no está en la letra del §9.2, que no distingue n de nEfectivo).
+ */
+export const RAM_MULTIPLICADOR_WORKING_SET = 4;
+export const DIAS_WORKING_SET = 2;
+
+/**
+ * Multiplicadores de RAM sobre los que se corre la tabla de sensibilidad — hallazgo 2 de
+ * revisión (2026-09-22): el ×4 de `RAM_MULTIPLICADOR_WORKING_SET` es una heurística
+ * DECLARADA, no medida (§7.2/§9.2 del plan). Se exponen 3/4/5 para que
+ * `generar-tablas.mjs` compute (no escriba a mano) el rango de tier/costo que produce esa
+ * incertidumbre en 600 y 2000 conductores.
+ */
+export const MULTIPLICADORES_RAM_SENSIBILIDAD = Object.freeze([3, 4, 5]);
+
+/**
+ * `ramMultiplicador` es un parámetro (default `RAM_MULTIPLICADOR_WORKING_SET`), no una
+ * constante escrita a mano en la fórmula — hallazgo 2 de revisión (2026-09-22): permite que
+ * `generar-tablas.mjs` recorra 3×/4×/5× programáticamente para la tabla de sensibilidad, en
+ * vez de tener el heurístico ×4 fijo dentro de la función.
+ */
+export function ramRequeridaWorkingSetGiB(
+  nEfectivo,
+  puntosPorConductorDia,
+  bytesIndicePorFila = BYTES_INDICE_POR_FILA_MEDIDO,
+  ramMultiplicador = RAM_MULTIPLICADOR_WORKING_SET,
+) {
+  const bytesIndices2Dias = nEfectivo * puntosPorConductorDia * DIAS_WORKING_SET * bytesIndicePorFila;
+  return (ramMultiplicador * bytesIndices2Dias) / 1024 ** 3;
+}
+
+function tierPorRam(ramRequeridaGiB, tiers = SQL_TIERS_MEDIDOS) {
+  for (const tier of tiers) {
+    if (ramRequeridaGiB <= tier.ramGiB) return tier;
+  }
+  return tiers[tiers.length - 1];
+}
+
+/**
+ * Regla 3 — PISO de producción (plan §9.3): "db-custom-2-7680 desde 100 trufis efectivos
+ * (lecturas del mapa en vivo + autovacuum + margen); por debajo, la tabla de agosto." Por
+ * debajo del piso, este dimensionamiento medido NO decide nada — se delega en `SQL_TIERS`
+ * (agosto), no en una regla nueva sin evidencia a esa escala chica.
+ */
+export const PISO_TRUFIS_EFECTIVOS_MEDIDO = 100;
+export const PISO_TIER_MEDIDO_NOMBRE = 'db-custom-2-7680';
+
+function indiceTier(tier, tiers = SQL_TIERS_MEDIDOS) {
+  return tiers.findIndex((t) => t.nombre === tier.nombre);
+}
+
+/**
+ * Elige el tier de Cloud SQL con el dimensionamiento MEDIDO (plan §9.4: "tier = máximo de
+ * las tres reglas"). Devuelve también qué regla(s) ganaron y, si aplica, la RAM que pidió la
+ * regla 2 — `generar-tablas.mjs` y los tests lo usan para mostrar/verificar el criterio, no
+ * solo el resultado.
+ *
+ * En un EMPATE entre reglas (dos o más reglas piden el mismo tier, p.ej. RAM y piso
+ * coinciden en `db-custom-2-7680` — el caso real de n=600, plan-costos-2000/hallazgo 2 de
+ * revisión 2026-09-22), el TIER elegido es idéntico sin importar cuál gane el empate, pero
+ * `reglaGanadora` ahora reporta TODAS las reglas empatadas (join con `+`, p.ej. `'ram+piso'`)
+ * en vez de solo la primera en el orden de `candidatos` — antes de este fix se perdía en
+ * silencio que la regla de RAM (declarada, no medida) también decidía ese tier.
+ *
+ * `ramMultiplicador` (default `RAM_MULTIPLICADOR_WORKING_SET`) se reenvía tal cual a
+ * `ramRequeridaWorkingSetGiB` — permite que `generar-tablas.mjs` recorra la tabla de
+ * sensibilidad 3×/4×/5× (hallazgo 2 de revisión) llamando esta misma función, sin duplicar
+ * la lógica de selección de tier.
+ */
+export function elegirTierSqlMedido(
+  nEfectivo,
+  ptsPorSegundo,
+  puntosPorConductorDia,
+  ramMultiplicador = RAM_MULTIPLICADOR_WORKING_SET,
+) {
+  if (nEfectivo < PISO_TRUFIS_EFECTIVOS_MEDIDO) {
+    return {
+      tier: elegirTierSql(ptsPorSegundo, SQL_TIERS),
+      reglaGanadora: 'agosto-fallback',
+      ramRequeridaGiB: null,
+      tierRam: null,
+      tierPiso: null,
+    };
+  }
+
+  const tierEscritura = elegirTierSql(ptsPorSegundo, SQL_TIERS_MEDIDOS);
+  const ramRequeridaGiB = ramRequeridaWorkingSetGiB(
+    nEfectivo,
+    puntosPorConductorDia,
+    BYTES_INDICE_POR_FILA_MEDIDO,
+    ramMultiplicador,
+  );
+  const tierRam = tierPorRam(ramRequeridaGiB);
+  const tierPiso = SQL_TIERS_MEDIDOS.find((t) => t.nombre === PISO_TIER_MEDIDO_NOMBRE);
+
+  const candidatos = [
+    { tier: tierEscritura, regla: 'escritura' },
+    { tier: tierRam, regla: 'ram' },
+    { tier: tierPiso, regla: 'piso' },
+  ];
+  const indiceMax = Math.max(...candidatos.map((c) => indiceTier(c.tier)));
+  const empatados = candidatos.filter((c) => indiceTier(c.tier) === indiceMax);
+  // El tier es el mismo para todos los `empatados` por construcción (mismo índice máximo) —
+  // se toma el primero solo para leer `.tier`, no para decidir la regla ganadora.
+  const reglaGanadora = empatados.map((c) => c.regla).join('+');
+
+  return { tier: empatados[0].tier, reglaGanadora, ramRequeridaGiB, tierRam, tierPiso };
 }
 
 export function costoSqlComputo(tier, { ha = false, cud = false } = {}) {
@@ -746,6 +956,16 @@ export function costoEgreso(nFlota, supuestos) {
  * @param {object} opts.supuestos - SUPUESTOS_AGOSTO o SUPUESTOS_MEDIDOS (o un objeto
  *   compatible, p.ej. para tests).
  * @param {object} [opts.edgeCases] - overrides sobre EDGE_CASES_DEFAULT.
+ * @param {boolean} [opts.forzarTierAgosto] - fuerza el dimensionamiento de `SQL_TIERS`
+ *   (agosto) aunque los supuestos activos sean `SUPUESTOS_MEDIDOS`/`SUPUESTOS_MEDIDOS_30M`.
+ *   Uso único: reproducir en `generar-tablas.mjs` el dimensionamiento histórico ("qué decía
+ *   este documento antes de recalibrar con la prueba de carga", plan §9, sección de
+ *   referencia histórica marcada "descartado") sin duplicar la fórmula de costo.
+ * @param {number} [opts.ramMultiplicadorWorkingSet] - override de `RAM_MULTIPLICADOR_WORKING_SET`
+ *   (default si se omite), reenviado a `elegirTierSqlMedido`/`ramRequeridaWorkingSetGiB`.
+ *   Uso único: `generar-tablas.mjs` recorre `MULTIPLICADORES_RAM_SENSIBILIDAD` (3/4/5)
+ *   llamando esta misma función para la tabla de sensibilidad (hallazgo 2 de revisión,
+ *   2026-09-22) sin duplicar la fórmula de costo por separado.
  */
 export function calcularEscalon(n, opts = {}) {
   // Hallazgo 5 de revisión (2026-09-20): `region` YA NO es un edge case soportado (ver
@@ -809,7 +1029,27 @@ export function calcularEscalon(n, opts = {}) {
   // 2000 escriben filas en la ventana de retención y los 2000 transmiten datos a lo largo
   // del mes, no solo los que están activos en el instante de pico.
   const ptsPorSegundo = puntosPorSegundoPico(nEfectivo, puntosPorConductorDia, jornadaHoras);
-  const tier = elegirTierSql(ptsPorSegundo);
+
+  // Dimensionamiento MEDIDO (plan §9): solo para SUPUESTOS_MEDIDOS/SUPUESTOS_MEDIDOS_30M, y
+  // solo si `opts.forzarTierAgosto` no lo desactiva explícitamente (ver jsdoc arriba).
+  const usarTierMedido =
+    !opts.forzarTierAgosto &&
+    (supuestosBase.id === SUPUESTOS_MEDIDOS.id || supuestosBase.id === SUPUESTOS_MEDIDOS_30M.id);
+
+  let tier;
+  let tierMedidoInfo = null;
+  if (usarTierMedido) {
+    tierMedidoInfo = elegirTierSqlMedido(
+      nEfectivo,
+      ptsPorSegundo,
+      puntosPorConductorDia,
+      opts.ramMultiplicadorWorkingSet,
+    );
+    tier = tierMedidoInfo.tier;
+  } else {
+    tier = elegirTierSql(ptsPorSegundo);
+  }
+
   const cud = arquitectura === 'optimizada'; // Palanca F: CUD 1 año, solo optimizada
   const sqlComputo = costoSqlComputo(tier, { ha, cud });
 
@@ -847,8 +1087,28 @@ export function calcularEscalon(n, opts = {}) {
 
   // Hallazgo 1 de revisión (2026-09-20): si el pico cae cerca de un borde de tier, exponer
   // el vecino y el total que resultaría con ese vecino, para que el documento generado
-  // muestre un RANGO en vez de un punto de borde de margen cero.
-  const bordeTier = tierCercanoABorde(ptsPorSegundo);
+  // muestre un RANGO en vez de un punto de borde de margen cero. Con dimensionamiento
+  // MEDIDO, el borde de pts/s solo es relevante si la regla que decidió el tier fue
+  // "escritura" (o el fallback a la tabla de agosto por debajo de 100 trufis efectivos) —
+  // si ganó "ram" o "piso", el tier no depende de dónde cae `ptsPorSegundo`, así que no hay
+  // ambigüedad de borde que reportar (decisión propia, plan §9 no distingue este caso).
+  let bordeTier = null;
+  if (usarTierMedido && tierMedidoInfo) {
+    if (tierMedidoInfo.reglaGanadora === 'agosto-fallback') {
+      bordeTier = tierCercanoABorde(ptsPorSegundo, TOLERANCIA_BORDE_TIER_PCT, SQL_TIERS);
+    } else if (tierMedidoInfo.reglaGanadora.split('+').includes('escritura')) {
+      // Hallazgo 1 de revisión (2026-09-22): el vecino "barato" cerca del borde de escritura
+      // nunca puede quedar por debajo de lo que exigen las reglas de RAM/piso — se clampa el
+      // extremo bajo del rango a `max(tierRam, tierPiso)` (el mayor índice de las dos).
+      const tierMinimo =
+        indiceTier(tierMedidoInfo.tierRam) >= indiceTier(tierMedidoInfo.tierPiso)
+          ? tierMedidoInfo.tierRam
+          : tierMedidoInfo.tierPiso;
+      bordeTier = tierCercanoABorde(ptsPorSegundo, TOLERANCIA_BORDE_TIER_PCT, SQL_TIERS_MEDIDOS, tierMinimo);
+    }
+  } else if (!usarTierMedido) {
+    bordeTier = tierCercanoABorde(ptsPorSegundo);
+  }
   let bordeTierCercano = null;
   if (bordeTier) {
     const sqlComputoVecino = costoSqlComputo(bordeTier.tierVecino, { ha, cud });
@@ -873,6 +1133,9 @@ export function calcularEscalon(n, opts = {}) {
     discoGiB,
     superaTechoProbado: ptsPorSegundo > TECHO_PROBADO_PTS_S,
     bordeTierCercano,
+    usarTierMedido,
+    reglaTierMedido: tierMedidoInfo?.reglaGanadora ?? null,
+    ramRequeridaGiB: tierMedidoInfo?.ramRequeridaGiB ?? null,
     desglose,
     total,
   };
