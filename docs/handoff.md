@@ -6,7 +6,34 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Modelo de costos a 2000 trufis — mecanismo de revisión conectado al doc (2026-09-20)
+## Modelo de costos a 2000 trufis — mergeado en #72 (2026-09-21)
+
+**Estado:** mergeado a `main` en `8f828be` (PR #72, CI `ci` + `acceptance` en verde). Cierra la
+parte de ingeniería de ClickUp `86e34jkb2` ("Añadir proyección de Costos").
+
+Cifras finales del documento, escenario A (concurrentes en pico), supuestos medidos:
+
+| | 600 conductores | 2000 conductores |
+|---|---|---|
+| Actual | $1.402,83/mes | $2.926,66–$5.135,35/mes |
+| Optimizada | $929,76/mes | $1.945,74–$3.602,25/mes |
+
+A 2000 es un **rango**: el pico cae en empate exacto con un borde de tier de Cloud SQL (495,0 pts/s).
+
+El test de regresión **ahora corre en CI**: `scripts/*` entró al workspace de pnpm y
+`@quivo/costos-scripts` está en el fan-out de `turbo run test` (`f1f140e`). Antes no lo alcanzaba
+ningún comando de CI y el gate de ±15% no era gate de nada.
+
+**Pendiente, sin hacer:**
+- **Entregable 2** (ClickUp `86e2yxchp`): documento para finanzas con costos y riesgos. Presupuesto de
+  ventas, punto de equilibrio y pricing quedan fuera por decisión del CTO — los completa finanzas.
+- Publicar la escalera v2 como Artifact (la v1 de agosto es un Artifact; esta vive solo en el repo).
+- Comentar el resultado en ClickUp `86e34jkb2`: Angel pingeó el 2026-09-13 sin respuesta.
+- Cerrar la brecha n=1 de la medición: lo resuelve el piloto múltiple usuario (`86e329ub0`).
+- Prueba de carga `tests/load/k6/` contra `quivo-control-prod`: nunca se corrió, y a 2000 el pico
+  supera 1,6× su techo de 300 pts/s.
+
+### Detalle de la última iteración (2026-09-20)
 
 Plan: [`plan-costos-2000.md`](plan-costos-2000.md) §13 (especificación de calibración) y §7
 (criterios de aceptación). `scripts/costos/modelo-costos.mjs` + `scripts/costos/generar-tablas.mjs`
