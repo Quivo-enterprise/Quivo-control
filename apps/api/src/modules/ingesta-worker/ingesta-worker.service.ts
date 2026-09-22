@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type OnModuleDestroy,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, withTenantContext } from '@quivo/db';
 import type { Prisma as PrismaTypes } from '@quivo/db';
@@ -139,8 +145,10 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const [particionHoy] = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
-      tx.$queryRaw<{ existe: boolean }[]>`
+    const [particionHoy] = await withTenantContext(
+      CONTEXTO_ADMIN,
+      (tx) =>
+        tx.$queryRaw<{ existe: boolean }[]>`
         SELECT to_regclass('public.gps_points_' || to_char(CURRENT_DATE, 'YYYYMMDD')) IS NOT NULL AS existe
       `,
     );
@@ -151,7 +159,9 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async procesarLote(job: Job<LoteIngestaJob>): Promise<{ procesados: number; errores: number }> {
+  private async procesarLote(
+    job: Job<LoteIngestaJob>,
+  ): Promise<{ procesados: number; errores: number }> {
     const inicio = Date.now();
     const { sindicatoId, eventos } = job.data;
     this.detectarDriftReloj(eventos);
@@ -165,7 +175,11 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     for (const evento of porTipo.cumplimiento_punto_control) {
       errores += await this.procesarCumplimiento(sindicatoId, evento);
     }
-    const operativos = [...porTipo.inicio_recorrido, ...porTipo.fin_recorrido, ...porTipo.observacion];
+    const operativos = [
+      ...porTipo.inicio_recorrido,
+      ...porTipo.fin_recorrido,
+      ...porTipo.observacion,
+    ];
     for (const evento of operativos) {
       errores += await this.procesarEventoOperativo(sindicatoId, evento);
     }
@@ -201,15 +215,18 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       }
       return 0;
     } catch (error) {
-      await Promise.all(eventos.map((evento) => this.registrarErrorSync(sindicatoId, evento, error)));
+      await Promise.all(
+        eventos.map((evento) => this.registrarErrorSync(sindicatoId, evento, error)),
+      );
       return eventos.length;
     }
   }
 
   private async procesarCumplimiento(sindicatoId: string, evento: EventoSync): Promise<number> {
     try {
-      const { tsFixDescartado } = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-        procesarCumplimientoEnTx(tx, sindicatoId, evento),
+      const { tsFixDescartado } = await withTenantContext(
+        { rol: 'admin_quivo', sindicatoId },
+        (tx) => procesarCumplimientoEnTx(tx, sindicatoId, evento),
       );
       if (tsFixDescartado) {
         // Mismo criterio que `procesarGpsPoints`: el fallback al `ts` de encolado NUNCA debe
@@ -239,7 +256,11 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async registrarErrorSync(sindicatoId: string, evento: EventoSync, error: unknown): Promise<void> {
+  private async registrarErrorSync(
+    sindicatoId: string,
+    evento: EventoSync,
+    error: unknown,
+  ): Promise<void> {
     this.logger.error(
       `Evento ${evento.eventId} (${evento.tipo}) rechazado: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -336,10 +357,106 @@ export async function insertarGpsPoints(
       ${payload.accuracy ?? null}, ${payload.speed ?? null}, now(), ${sindicatoId}
     )`;
   });
+  // `gps_sesion_resumen` (docs/plan-en-vivo-resumen-sesion.md) se mantiene en el MISMO
+  // statement que la evidencia, vía `WITH ins AS (INSERT ... RETURNING) INSERT ... SELECT`,
+  // no con un trigger ni un job aparte — atómico con `gps_points`: si esto falla, no queda
+  // evidencia insertada sin su resumen, ni viceversa.
+  //
+  // `ins` sale del `RETURNING` del INSERT con `ON CONFLICT DO NOTHING`: por eso solo trae
+  // las filas EFECTIVAMENTE insertadas (un reenvío idempotente, RF-72, no aporta filas a
+  // `ins`) — es justo lo que evita que `total_puntos` se infle con reenvíos.
+  //
+  // `jornada` se calcula bit a bit igual que `fechaActualBolivia`
+  // (apps/api/src/common/tiempo/jornada.ts:13-16, Bolivia = UTC-4 fijo): la fecha calendario
+  // de `ts - 4h` en UTC. Un mismo lote puede traer puntos de 2 jornadas distintas (sesión que
+  // cruza medianoche boliviana) — el `GROUP BY` de `agregados`/`ultimo_punto` los separa en
+  // grupos distintos, así que el upsert de abajo puede tocar 2 filas de resumen para la misma
+  // sesión en una sola corrida, cada una con su propia PK `(sesion_id, jornada, sindicatoId)`.
+  //
+  // `ts AT TIME ZONE 'UTC'` ANTES de restar el intervalo y castear a `date` (code-review
+  // MEDIUM): `ts` es `timestamptz`, y castear un `timestamptz` a `date` directamente
+  // convierte primero al **TimeZone de la sesión/conexión** — que esta transacción de
+  // ingesta NO fija a `UTC` en ningún punto (a diferencia de `crear_particion_gps_points`,
+  // que sí lo hace). Si el pool de conexiones alguna vez trae una sesión con otro TimeZone
+  // (config del servidor, una `SET TimeZone` pegada de una conexión reusada, etc.), esta
+  // expresión calcularía una jornada distinta de `fechaActualBolivia` (aritmética pura en
+  // UTC, sin TimeZone de sesión de por medio) — silenciosamente, sin error. `ts AT TIME ZONE
+  // 'UTC'` convierte primero a un `timestamp` sin zona que representa la hora de pared UTC;
+  // restarle el intervalo y castear ESE resultado a `date` es aritmética pura, sin ninguna
+  // conversión de zona horaria, sin importar el TimeZone de la sesión.
+  //
+  // `agregados` resuelve el total y los `max()` de ingesta/fix SOLO sobre lo nuevo de este
+  // lote; `ultimo_punto` (DISTINCT ON, con la misma tripleta de expresiones repetida en el
+  // ORDER BY — Postgres exige que arranque igual que el DISTINCT ON) trae lat/lng/accuracy/
+  // speed de la fila con el `ts` más reciente DE ESTE LOTE, para compararla en el
+  // `ON CONFLICT DO UPDATE` contra lo que ya había. `"sindicatoId"` entra también en el
+  // `DISTINCT ON`/`GROUP BY`/join (code-review MEDIUM, cross-tenant poisoning): un lote es
+  // siempre de un único sindicato en la práctica (mismo motivo que el comentario de `filas`
+  // más arriba), pero dejarlo explícito en la agrupación evita que dos tenants
+  // distintos puedan colisionar jamás en la misma fila si esa invariante alguna vez se
+  // rompe — la PK de 3 columnas de `gps_sesion_resumen` ya no lo permitiría de todos modos,
+  // pero el join/agrupación tienen que ser consistentes con esa PK.
+  //
+  // `ORDER BY a.sesion_id, a.jornada, a."sindicatoId"` (code-review LOW — deadlock): dos
+  // batches concurrentes que tocan las mismas filas de resumen (dos dispositivos de la
+  // misma sesión, o el mismo dispositivo reintentando en paralelo) podrían, sin un orden
+  // determinista, bloquear filas en órdenes cruzados y deadlockear en el `ON CONFLICT DO
+  // UPDATE`. Ordenar la fuente del upsert por la PK completa asegura que CUALQUIER batch
+  // concurrente adquiere los locks de fila en el mismo orden.
+  //
+  // El `DO UPDATE`: `total_puntos` SUMA (nunca reemplaza — cada corrida aporta puntos NUEVOS,
+  // ya filtrados por el `ON CONFLICT DO NOTHING` de arriba); `ultimo_ingreso_ts` es GREATEST
+  // (la ingesta más reciente, sin importar qué tan viejo sea el `ts` del punto que la
+  // disparó — un punto tardío del outbox SÍ actualiza "cuándo se supo de la sesión por
+  // última vez"); lat/lng/accuracy/speed/`ultimo_fix_ts` SOLO se pisan si el fix de este lote
+  // es más nuevo que el que ya estaba guardado — así un punto tardío (`ts` viejo, típico del
+  // outbox móvil reenviando tras estar offline) nunca pisa la última posición conocida.
+  // `"sindicatoId"` NUNCA se toca en el `SET` — es parte de la PK, no hay fila existente con
+  // otro valor con la que pueda entrar en conflicto.
   await tx.$executeRaw(Prisma.sql`
-    INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
-    VALUES ${Prisma.join(filas)}
-    ON CONFLICT (event_id, ts) DO NOTHING
+    WITH ins AS (
+      INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
+      VALUES ${Prisma.join(filas)}
+      ON CONFLICT (event_id, ts) DO NOTHING
+      RETURNING sesion_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId"
+    ),
+    agregados AS (
+      SELECT
+        sesion_id,
+        ((ts AT TIME ZONE 'UTC') - interval '4 hours')::date AS jornada,
+        "sindicatoId",
+        count(*)::int AS total_puntos,
+        max(ts) AS ultimo_fix_ts,
+        max(received_at) AS ultimo_ingreso_ts
+      FROM ins
+      GROUP BY sesion_id, ((ts AT TIME ZONE 'UTC') - interval '4 hours')::date, "sindicatoId"
+    ),
+    ultimo_punto AS (
+      SELECT DISTINCT ON (sesion_id, ((ts AT TIME ZONE 'UTC') - interval '4 hours')::date, "sindicatoId")
+        sesion_id,
+        ((ts AT TIME ZONE 'UTC') - interval '4 hours')::date AS jornada,
+        "sindicatoId",
+        lat, lng, accuracy, speed
+      FROM ins
+      ORDER BY sesion_id, ((ts AT TIME ZONE 'UTC') - interval '4 hours')::date, "sindicatoId", ts DESC
+    )
+    INSERT INTO gps_sesion_resumen
+      (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng, accuracy, speed, updated_at)
+    SELECT
+      a.sesion_id, a.jornada, a."sindicatoId", a.total_puntos, a.ultimo_fix_ts, a.ultimo_ingreso_ts,
+      u.lat, u.lng, u.accuracy, u.speed, now()
+    FROM agregados a
+    JOIN ultimo_punto u ON u.sesion_id = a.sesion_id AND u.jornada = a.jornada AND u."sindicatoId" = a."sindicatoId"
+    ORDER BY a.sesion_id, a.jornada, a."sindicatoId"
+    ON CONFLICT (sesion_id, jornada, "sindicatoId") DO UPDATE SET
+      total_puntos = gps_sesion_resumen.total_puntos + EXCLUDED.total_puntos,
+      ultimo_ingreso_ts = GREATEST(gps_sesion_resumen.ultimo_ingreso_ts, EXCLUDED.ultimo_ingreso_ts),
+      lat = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts THEN EXCLUDED.lat ELSE gps_sesion_resumen.lat END,
+      lng = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts THEN EXCLUDED.lng ELSE gps_sesion_resumen.lng END,
+      accuracy = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts THEN EXCLUDED.accuracy ELSE gps_sesion_resumen.accuracy END,
+      speed = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts THEN EXCLUDED.speed ELSE gps_sesion_resumen.speed END,
+      ultimo_fix_ts = GREATEST(gps_sesion_resumen.ultimo_fix_ts, EXCLUDED.ultimo_fix_ts),
+      updated_at = now()
   `);
   return tsFixDescartados;
 }
@@ -379,7 +496,8 @@ export async function procesarCumplimientoEnTx(
   // Idempotencia: `cumplimientos_pc.eventId` es `@unique` SOLO (no compuesto con `ts` como
   // `gps_points.(event_id, ts)`), así que cambiar el `ts` acá no introduce el mismo riesgo —
   // `skipDuplicates` sigue deduplicando por `eventId` sin importar qué `ts` se calculó.
-  const tsFixDescartado = payload.tsFix !== undefined && Date.parse(payload.tsFix) !== Date.parse(ts);
+  const tsFixDescartado =
+    payload.tsFix !== undefined && Date.parse(payload.tsFix) !== Date.parse(ts);
   // `createMany` + `skipDuplicates` (ON CONFLICT DO NOTHING sobre el unique de `eventId`),
   // no `create()` — reenviar el mismo lote (comportamiento esperado del cliente ante un
   // timeout, QUI-240) no debe duplicar el cumplimiento. Bug real encontrado en una prueba
