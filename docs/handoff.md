@@ -6,6 +6,28 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Mapa en vivo: tabla `gps_sesion_resumen` (N+1 de `listarHoy`/`obtenerPosiciones`) — 2026-09-22
+
+**Estado:** PR `perf/en-vivo-resumen-sesion`. Plan: `docs/plan-en-vivo-resumen-sesion.md`.
+
+- Tabla nueva `gps_sesion_resumen`, PK `(sesion_id, jornada, "sindicatoId")`, FORCE RLS con la
+  misma policy que `gps_points`. La mantiene el worker en el mismo statement que inserta los puntos
+  (CTE `INSERT ... RETURNING` + upsert ordenado). Las lecturas del mapa pasan de O(puntos del día)
+  a O(sesiones): con 1.000 sesiones y 6,7 M filas (local), `listarHoy` 53 s → 62 ms y
+  `obtenerPosiciones` 53 s → 72 ms. Objetivo de <50 ms no alcanzado: el resto es el join de
+  sesiones/vehículos/rutas, fuera de este cambio.
+- Hallazgos de la revisión aplicados: backfill con `set_config('app.rol','admin_quivo')` (en Cloud
+  SQL `postgres` no es BYPASSRLS, sin eso copiaba 0 filas); jornada con `AT TIME ZONE 'UTC'`;
+  sindicato en la PK (un `sesionId` forjado no pisa el resumen de otro sindicato); `ORDER BY` en
+  el upsert contra deadlocks; `ultimoIngresoTs` = máximo de hoy y ayer.
+- Cambio de semántica: `obtenerPosiciones.totalPuntos` = puntos de la jornada del último fix (antes
+  ventana rodante de 24 h). Sin consumidor en `apps/web`.
+- **Paso manual obligatorio tras el deploy:** correr una vez el recompute de
+  `docs/runbooks/retencion-gps.md` (sección `gps_sesion_resumen`) cuando el worker nuevo esté vivo,
+  para cubrir los puntos que ingirió el worker viejo entre la migración y el deploy.
+- Local: 5 tests de auth/JWKS fallan en esta máquina por estado de `jwks` del entorno local; no
+  tocan este cambio. CI es el juez.
+
 ## Modelo de costos a 2000 trufis — mergeado en #72 (2026-09-21)
 
 **Estado:** mergeado a `main` en `8f828be` (PR #72, CI `ci` + `acceptance` en verde). Cierra la
