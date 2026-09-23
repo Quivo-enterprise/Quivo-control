@@ -163,14 +163,18 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
     const controlador = crearControlador({ obtenerUrlOriginal });
 
     controlador.onTileError(tile, COORDS);
-    // El reintento es PURAMENTE por el temporizador — no depende de que llegue ningún mensaje
-    // 'position' (a diferencia del mecanismo viejo, ver `intentarRecuperarTiles` que existía
-    // antes). Nada pasa hasta que se cumple el intervalo.
-    expect(obtenerUrlOriginal).not.toHaveBeenCalled();
+    // `obtenerUrlOriginal` se invoca UNA sola vez, apenas falla el tile — no en cada reintento
+    // (ver el comentario grande sobre 'urlBase' en route-map-html.ts: recalcularla más tarde
+    // podría mezclar el zoom actual con las x/y viejas de `coords`).
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
+    // Pero el reintento en sí es PURAMENTE por el temporizador — no depende de que llegue ningún
+    // mensaje 'position' (a diferencia del mecanismo viejo). tile.src no se toca hasta el tick.
+    expect(tile.src).toBe('');
 
     vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    // Se reasignó tile.src con la URL original + cache-busting, para forzar una carga real nueva
+    // — reusando la URL ya calculada, sin volver a invocar obtenerUrlOriginal.
     expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
-    // Se reasignó tile.src con la URL original + cache-busting, para forzar una carga real nueva.
     expect(tile.src).toContain(URL_ORIGINAL);
     expect(tile.src).not.toBe(URL_ORIGINAL); // trae el parámetro de cache-busting agregado
 
@@ -190,20 +194,66 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
     expect(obtenerUrlOriginal).not.toHaveBeenCalled();
   });
 
-  it('un tile que sigue fallando se reintenta en cada tick, sin duplicar la entrada pendiente', () => {
+  it('un tile que sigue fallando se reintenta en cada tick, sin duplicar la entrada pendiente ni recalcular la URL', () => {
     const tile = crearTileFalso();
     const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
     const controlador = crearControlador({ obtenerUrlOriginal });
 
     controlador.onTileError(tile, COORDS);
-    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
     expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    const primerSrc = tile.src;
+    expect(primerSrc).toContain(URL_ORIGINAL);
 
     // El reintento del tick anterior volvió a fallar: Leaflet dispara tileerror otra vez sobre
-    // el MISMO <img>. No debe armar una segunda entrada/temporizador en paralelo.
+    // el MISMO <img>. No debe armar una segunda entrada/temporizador en paralelo, y como sigue
+    // siendo el MISMO tile pendiente, tampoco vuelve a invocar obtenerUrlOriginal (la URL base ya
+    // quedó congelada en el primer onTileError — ver el comentario sobre 'urlBase').
     controlador.onTileError(tile, COORDS);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
-    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(2);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
+    // El segundo reintento SÍ vuelve a reasignar tile.src (con un cache-busting distinto), aunque
+    // la URL base sea la misma — el reintento en sí no se salteó.
+    expect(tile.src).toContain(URL_ORIGINAL);
+    expect(tile.src).not.toBe(primerSrc);
+  });
+
+  // Bug real reportado por la verificación de esta entrega (Codex, verify-fix): Leaflet 1.9.4
+  // arma `tileLayer.getTileUrl(coords)` con el zoom ACTUAL de la capa, no con `coords.z`. El
+  // mecanismo viejo invocaba `obtenerUrlOriginal(coords)` de nuevo en cada tick de reintento — si
+  // el chofer cambiaba de zoom en la ventana de 30s entre el fallo y el reintento, el tile se
+  // reintentaba con las x/y del zoom viejo pero la URL armada al zoom NUEVO: un mosaico de una
+  // región distinta a la pedida. Este test simula ese `obtenerUrlOriginal` "a la Leaflet"
+  // (ignora `coords.z`, usa una variable de zoom mutable que representa el zoom actual de la
+  // capa) para probar que el controlador ya NO se deja engañar: congela la URL en el momento del
+  // fallo y la reusa en todos los reintentos futuros, sin importar que el zoom haya cambiado.
+  it('un tile pendiente conserva la URL (y el zoom) del momento en que falló, aunque el zoom de la capa cambie antes del reintento', () => {
+    const tile = crearTileFalso();
+    let zoomActualDeLaCapa = 10;
+    // Réplica deliberada del comportamiento real de Leaflet 1.9.4: ignora coords.z y arma la URL
+    // con el zoom "actual" de la capa en el momento de la llamada.
+    const obtenerUrlOriginalComoLeaflet = vi.fn(
+      (coords: unknown) =>
+        `https://tile.openstreetmap.org/${zoomActualDeLaCapa}/${(coords as { x: number }).x}/${(coords as { y: number }).y}.png`,
+    );
+    const controlador = crearControlador({ obtenerUrlOriginal: obtenerUrlOriginalComoLeaflet });
+
+    // El tile falla a zoom 10 — la URL base se calcula y congela ACÁ, con zoomActualDeLaCapa = 10.
+    controlador.onTileError(tile, COORDS);
+    expect(obtenerUrlOriginalComoLeaflet).toHaveBeenCalledTimes(1);
+
+    // El chofer hace zoom in ANTES de que se cumpla el intervalo de reintento.
+    zoomActualDeLaCapa = 16;
+
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+
+    // Si el controlador hubiera vuelto a invocar obtenerUrlOriginal acá, tile.src tendría '/16/'
+    // (el bug real). Con la URL congelada, el reintento sigue siendo al zoom correcto (10), el
+    // mismo en el que el tile falló — nunca se volvió a invocar obtenerUrlOriginal.
+    expect(obtenerUrlOriginalComoLeaflet).toHaveBeenCalledTimes(1);
+    expect(tile.src).toContain(`/10/${COORDS.x}/${COORDS.y}.png`);
+    expect(tile.src).not.toContain('/16/');
   });
 
   // Hallazgo del code-review de esta entrega: Leaflet dispara `tileload` también para el GIF de
@@ -224,7 +274,7 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
     expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
   });
 
-  it('un tile podado del mapa (pan/zoom) se descarta sin reintentar y el temporizador se apaga si era el único pendiente', () => {
+  it('un tile podado del mapa (pan/zoom) se descarta sin reintentar (nunca le toca tile.src) y el temporizador se apaga si era el único pendiente', () => {
     const tilePodado = crearTileFalso({ montado: false });
     const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
     const controlador = crearControlador({
@@ -233,20 +283,30 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
     });
 
     controlador.onTileError(tilePodado, COORDS);
+    // `obtenerUrlOriginal` sí se invoca en `onTileError` (calcula y congela 'urlBase' apenas
+    // falla, ver el comentario grande en route-map-html.ts) — eso es solo construir un string, sin
+    // ningún costo de red. Lo que nunca pasa para un tile podado es la reasignación de `tile.src`
+    // en el tick de reintento, que sí dispararía una descarga real.
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
+
     vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
-    // Se descartó sin pedir la URL de reintento — ya no está en el mapa, reintentarlo sería red
-    // desperdiciada.
-    expect(obtenerUrlOriginal).not.toHaveBeenCalled();
+    // Se descartó sin reintentar de verdad — ya no está en el mapa, reintentarlo sería red
+    // desperdiciada. `tile.src` queda intacto (nunca se le asignó nada).
+    expect(tilePodado.src).toBe('');
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1); // sin una segunda invocación en el tick
 
     // Era el único pendiente: el temporizador se apagó solo. Confirmarlo agregando un tile nuevo
     // y viendo que el próximo tick vuelve a arrancar desde cero (si el timer hubiera seguido
     // corriendo con un intervalo desalineado, este tile se reintentaría antes de tiempo).
     const tileNuevo = crearTileFalso();
     controlador.onTileError(tileNuevo, COORDS);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(2); // urlBase del tile nuevo, calculada ahora
     vi.advanceTimersByTime(REINTENTO_INTERVALO_MS - 1);
-    expect(obtenerUrlOriginal).not.toHaveBeenCalled();
+    expect(tileNuevo.src).toBe('');
     vi.advanceTimersByTime(1);
-    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
+    expect(tileNuevo.src).toContain(URL_ORIGINAL);
+    // El tick de retry reusa la urlBase ya calculada — no vuelve a invocar obtenerUrlOriginal.
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -353,6 +413,22 @@ describe('construirHtml — cero dependencia de red para inicializar el mapa', (
     const htmlA = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
     const htmlB = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
     expect(htmlA).toBe(htmlB);
+  });
+
+  // Entrega 25/31b (handshake mapa-listo): guarda mecánica del texto — el comportamiento real
+  // (que se manda DESPUÉS de registrar los listeners) lo cubre el test end-to-end con `vm` más
+  // abajo en este archivo.
+  it('emite el handshake mapa-listo por ReactNativeWebView.postMessage', () => {
+    expect(html).toContain("window.ReactNativeWebView");
+    expect(html).toContain("type: 'mapa-listo'");
+  });
+
+  it('el handshake mapa-listo aparece en el texto DESPUÉS de registrar los listeners de message', () => {
+    const idxListenerMessage = html.indexOf("window.addEventListener('message'");
+    const idxMapaListo = html.indexOf("type: 'mapa-listo'");
+    expect(idxListenerMessage).toBeGreaterThan(-1);
+    expect(idxMapaListo).toBeGreaterThan(-1);
+    expect(idxMapaListo).toBeGreaterThan(idxListenerMessage);
   });
 });
 
@@ -470,17 +546,30 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
     const html = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
     const scriptAplicacion = extraerScriptDeAplicacion(html);
 
+    // Orden de eventos compartido entre el registro de listeners y el postMessage de mapa-listo —
+    // sirve para el aserto de la Entrega 25/31b más abajo: mapa-listo tiene que salir DESPUÉS de
+    // que los listeners de 'message' ya estén registrados, nunca antes.
+    const ordenDeEventos: string[] = [];
     const listenersRegistrados: Array<{ objeto: string; evento: string }> = [];
+    const mensajesAReactNative: string[] = [];
     const sandbox: Record<string, unknown> = {
       L: crearLFalso(),
       document: {
         addEventListener: (evento: string) => {
           listenersRegistrados.push({ objeto: 'document', evento });
+          ordenDeEventos.push('listener:document:' + evento);
         },
       },
       window: {
         addEventListener: (evento: string) => {
           listenersRegistrados.push({ objeto: 'window', evento });
+          ordenDeEventos.push('listener:window:' + evento);
+        },
+        ReactNativeWebView: {
+          postMessage: (data: string) => {
+            mensajesAReactNative.push(data);
+            ordenDeEventos.push('postMessage:' + data);
+          },
         },
       },
       console,
@@ -520,6 +609,21 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
         { objeto: 'window', evento: 'message' },
       ]),
     );
+
+    // Entrega 25/31b (handshake mapa-listo): el script manda mapa-listo por
+    // window.ReactNativeWebView.postMessage — la señal real que RN escucha en `onMessage`
+    // (route-map-view.tsx) para recién ahí mandar el estado completo, sin depender de un
+    // `onLoadEnd` que podría llegar antes de que estos listeners existieran.
+    expect(mensajesAReactNative).toContain(JSON.stringify({ type: 'mapa-listo' }));
+    // Y el orden importa: el handshake se manda DESPUÉS de registrar los listeners de 'message',
+    // nunca antes — si se mandara antes, RN podría responder con el estado completo antes de que
+    // el script esté listo para procesarlo (aunque en este mock no hay una race real, el orden en
+    // el texto/ejecución es lo que garantiza que en el WebView real no la haya).
+    const idxListenerWindowMessage = ordenDeEventos.indexOf('listener:window:message');
+    const idxMapaListo = ordenDeEventos.indexOf('postMessage:' + JSON.stringify({ type: 'mapa-listo' }));
+    expect(idxListenerWindowMessage).toBeGreaterThan(-1);
+    expect(idxMapaListo).toBeGreaterThan(-1);
+    expect(idxMapaListo).toBeGreaterThan(idxListenerWindowMessage);
   });
 
   // Decisión del chairman (2026-09-11): el mecanismo anterior retiraba la capa COMPLETA de tiles

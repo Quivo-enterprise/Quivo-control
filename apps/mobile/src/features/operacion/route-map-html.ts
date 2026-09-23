@@ -61,7 +61,11 @@ export interface OpcionesControladorTiles {
   /** Dado el `coords` que Leaflet manda en el evento `tileerror`, devuelve la URL original del
    * tile. Hace falta recalcularla porque, para cuando llega `tileerror`, Leaflet YA reemplazó
    * `tile.src` por `errorTileUrl` (ver el comentario grande sobre `CONTROLADOR_TILES_JS_SOURCE`
-   * más abajo) — el `<img>` fallido ya no tiene la URL real en ningún atributo. */
+   * más abajo) — el `<img>` fallido ya no tiene la URL real en ningún atributo. Se invoca UNA sola
+   * vez por tile, dentro de `onTileError` — nunca en cada reintento — precisamente porque el valor
+   * que devuelve (típicamente `tileLayer.getTileUrl(coords)`) usa el zoom ACTUAL de la capa, no
+   * `coords.z`; recalcularlo más tarde, en un reintento, podría mezclar el zoom nuevo con las x/y
+   * viejas de `coords`. Ver el comentario grande sobre `urlBase` en `CONTROLADOR_TILES_JS_SOURCE`. */
   obtenerUrlOriginal: (coords: unknown) => string;
   /** true si el `<img>` del tile fallido sigue montado en el DOM del mapa. Leaflet lo desmonta
    * (poda) cuando el tile queda fuera de la vista por un pan/zoom — reintentar un tile podado
@@ -155,9 +159,25 @@ export interface ControladorTiles {
  */
 export const CONTROLADOR_TILES_JS_SOURCE = `
 function crearControladorTiles(opciones) {
-  // Lista de tiles fallidos pendientes de reintento: { tile: <img>, coords: {x,y,z} }. Un mismo
-  // <img> nunca queda duplicado acá (ver onTileError) — mientras siga fallando, sigue siendo la
-  // MISMA entrada, no una nueva por cada tileerror sucesivo.
+  // Lista de tiles fallidos pendientes de reintento: { tile: <img>, coords: {x,y,z}, urlBase }.
+  // Un mismo <img> nunca queda duplicado acá (ver onTileError) — mientras siga fallando, sigue
+  // siendo la MISMA entrada, no una nueva por cada tileerror sucesivo.
+  //
+  // POR QUÉ 'urlBase' SE CALCULA UNA SOLA VEZ, EN onTileError, Y NUNCA EN CADA REINTENTO (bug real
+  // de zoom mezclado, reportado por la verificación de esta entrega):
+  // 'opciones.obtenerUrlOriginal' típicamente delega en 'tileLayer.getTileUrl(coords)' de Leaflet.
+  // En Leaflet 1.9.4, esa función arma la URL con el zoom ACTUAL DE LA CAPA (this._getZoomForUrl()),
+  // no con 'coords.z' — a pesar de recibir 'coords' como argumento, IGNORA su 'z'. El mecanismo
+  // anterior de este controlador guardaba solo '{ tile, coords }' en 'pendientes' y volvía a
+  // invocar 'obtenerUrlOriginal(coords)' recién en cada tick de 'reintentarPendientes' (hasta
+  // reintentoIntervaloMs = 30s después del fallo). Si el mapa cambiaba de zoom en esa ventana (el
+  // chofer hace zoom in/out mientras un tile de otro zoom sigue pendiente), el reintento
+  // combinaba las x/y viejas de 'coords' con el zoom NUEVO de la capa — un mosaico de una región
+  // distinta a la que se pidió, dibujado como si fuera el tile correcto. La solución: calcular y
+  // guardar la URL completa ('urlBase') UNA sola vez, en onTileError, en el mismo instante en que
+  // el zoom de la capa todavía coincide con 'coords.z' (el fallo recién ocurrió a ESE zoom). Los
+  // reintentos posteriores reusan ese 'urlBase' congelado (solo le agregan el cache-busting), sin
+  // importar cuánto tiempo pase ni cuántas veces cambie el zoom mientras el tile sigue pendiente.
   var pendientes = [];
   // Un único setInterval compartido para todos los tiles pendientes (no uno por tile): más barato
   // y evita reintentos desincronizados. Solo existe mientras haya al menos un pendiente — arranca
@@ -188,7 +208,11 @@ function crearControladorTiles(opciones) {
       // El tile salió de la vista por un pan/zoom (Leaflet lo podó del DOM): reintentar algo que
       // ya no se va a dibujar sería tráfico de red desperdiciado. Se descarta sin reintentar.
       if (!opciones.tileSigueEnMapa(entrada.tile)) continue;
-      var url = opciones.obtenerUrlOriginal(entrada.coords);
+      // 'urlBase' es la URL calculada en onTileError, con el zoom que tenía la capa cuando ESTE
+      // tile falló — NUNCA se vuelve a invocar 'obtenerUrlOriginal' acá (ver el comentario grande
+      // sobre 'urlBase' más arriba): si el zoom de la capa cambió desde entonces, recalcular la
+      // URL ahora mezclaría el zoom nuevo con las x/y viejas de 'entrada.coords'.
+      var url = entrada.urlBase;
       // Cache-busting: sin esto el navegador puede resolver el reintento contra la misma
       // respuesta fallida que tiene cacheada en vez de golpear la red de nuevo.
       url += (url.indexOf('?') === -1 ? '?' : '&') + '_retry=' + Date.now();
@@ -216,7 +240,9 @@ function crearControladorTiles(opciones) {
 
   function onTileError(tile, coords) {
     if (indiceDe(tile) !== -1) return; // ya está pendiente — no arma un segundo reintento en paralelo
-    pendientes.push({ tile: tile, coords: coords });
+    // 'urlBase' se calcula ACÁ, apenas falla el tile, y no en 'reintentarPendientes' — ver el
+    // comentario grande sobre 'urlBase' arriba de 'pendientes' para el porqué (zoom mezclado).
+    pendientes.push({ tile: tile, coords: coords, urlBase: opciones.obtenerUrlOriginal(coords) });
     if (intervalId === null) {
       intervalId = setInterval(reintentarPendientes, opciones.reintentoIntervaloMs);
     }
@@ -567,6 +593,23 @@ export function construirHtml(
     }
     document.addEventListener('message', receiveMessage);
     window.addEventListener('message', receiveMessage);
+
+    // Entrega 25/31b (handshake mapa-listo): recién ACÁ, con los listeners de 'message' ya
+    // registrados arriba, es seguro avisarle a RN que puede mandar el estado completo sin que se
+    // pierda. Antes, RN mandaba el estado inicial (posición del vehículo incluida) por
+    // postMessage desde un useEffect/onLoadEnd sin saber si el script del WebView ya había
+    // llegado a esta línea — si tardaba (motor más lento, dispositivo viejo, primera carga), ese
+    // primer mensaje se perdía en el vacío y el marcador de posición quedaba ausente hasta el
+    // próximo cambio de estado: mismo síntoma que "la flecha del vehículo aparece congelada" (la
+    // ruta sí se dibuja porque no depende de ningún mensaje). Se manda DELIBERADAMENTE antes de
+    // tocar tiles/fitBounds: no debe esperar ningún recurso de red, solo que los listeners ya
+    // existan, que es lo único que hace falta. window.ReactNativeWebView lo inyecta
+    // react-native-webview — se chequea su existencia por si este HTML llegara a correr alguna
+    // vez fuera de una WebView (p. ej. un preview de escritorio).
+    if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'mapa-listo' }));
+    }
+
     map.on('dragstart', function () { seguimientoActivo = false; });
     // El view inicial ya se fijó arriba (map.setView, antes de agregar tiles/polyline/
     // marcadores) — este fitBounds solo ajusta esa vista provisoria a los límites reales de la

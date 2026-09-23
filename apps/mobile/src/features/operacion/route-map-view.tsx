@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
 import { construirHtml } from './route-map-html';
+import {
+  construirMensajesEstadoMapa,
+  esHandshakeMapaListo,
+  type EstadoMapaProtocolo,
+} from './route-map-protocol';
 
 interface RouteMapViewProps {
   paquete: PaqueteDia;
@@ -47,35 +52,63 @@ export function RouteMapView({
   // `onLoadEnd`, y el controlador de tiles arranca de cero. En una ruta de 26 puntos de control
   // son 26 recargas con parpadeo. Lo único que de verdad cambia la ruta dibujada (la geometría,
   // los puntos de control fijos) depende de `paquete`/`vehiculo` — el próximo punto de control es
-  // estado que ahora viaja por `postMessage` (ver `enviarEstadoMapa` abajo), no por reconstrucción
+  // estado que ahora viaja por `postMessage` (ver `enviarEstadoCompleto` abajo), no por reconstrucción
   // de HTML. Ver el comentario grande en `construirHtml` (route-map-html.ts) para el detalle.
   const html = useMemo(() => construirHtml(paquete, vehiculo), [paquete, vehiculo]);
   const source = useMemo(() => ({ html }), [html]);
 
-  const enviarEstadoMapa = useCallback(() => {
-    webViewRef.current?.postMessage(
-      JSON.stringify({
-        type: 'tracking',
-        active: tracking,
-      }),
-    );
-    // Próximo punto de control: mensaje propio (no viaja dentro de 'tracking') para que el
-    // handler del HTML pueda reestilizar solo los marcadores sin acoplarse al resto del estado
-    // de seguimiento. Se manda siempre acá, en el mismo camino que el resto de `enviarEstadoMapa`
-    // (montaje + cada `onLoadEnd`), porque el script del WebView arranca con
-    // `proximoPuntoIdActual = null` — nunca lo recibe horneado en el HTML.
-    webViewRef.current?.postMessage(
-      JSON.stringify({ type: 'proximoPuntoControl', id: proximoPuntoControlId }),
-    );
-    if (posicionActual) {
-      webViewRef.current?.postMessage(JSON.stringify({ type: 'position', ...posicionActual }));
-    }
-    webViewRef.current?.postMessage(
-      JSON.stringify({ type: 'ruta-calculada', coordinates: rutaCalculada }),
-    );
-  }, [posicionActual, proximoPuntoControlId, rutaCalculada, tracking]);
+  // Entrega 25/31b (handshake mapa-listo): guarda el último estado conocido en una ref —
+  // actualizada en cada render, ver más abajo — para que `enviarEstadoCompleto` pueda mandarlo
+  // desde CUALQUIER disparador (el cambio de props de siempre, `onLoadEnd`, o ahora también el
+  // mensaje `mapa-listo` que llega por `onMessage`) sin depender de qué closure exacta haya
+  // quedado registrada como callback en ese momento. Ver `route-map-protocol.ts` para el porqué
+  // completo del handshake y el diseño de `EstadoMapaProtocolo`.
+  const estadoActualRef = useRef<EstadoMapaProtocolo>({
+    tracking,
+    proximoPuntoControlId,
+    posicionActual,
+    rutaCalculada,
+  });
+  estadoActualRef.current = { tracking, proximoPuntoControlId, posicionActual, rutaCalculada };
 
-  useEffect(enviarEstadoMapa, [enviarEstadoMapa]);
+  const enviarEstadoCompleto = useCallback(() => {
+    construirMensajesEstadoMapa(estadoActualRef.current).forEach((mensaje) => {
+      webViewRef.current?.postMessage(mensaje);
+    });
+  }, []);
+
+  // Sigue mandando el estado cada vez que cambia una de estas props (comportamiento de siempre) —
+  // el handshake de abajo (`onMessage` + `mapa-listo`) es el mecanismo que GARANTIZA que el
+  // primer envío no se pierda, no un reemplazo de este disparador por cambios posteriores.
+  useEffect(enviarEstadoCompleto, [
+    tracking,
+    proximoPuntoControlId,
+    posicionActual,
+    rutaCalculada,
+    enviarEstadoCompleto,
+  ]);
+
+  // Entrega 25/31b (handshake mapa-listo): el HTML (`route-map-html.ts`) manda
+  // `{type:'mapa-listo'}` por `ReactNativeWebView.postMessage` apenas registra sus listeners de
+  // `message` — antes de tocar tiles o cualquier otro recurso de red. Antes de este handshake, el
+  // estado inicial (posición del vehículo incluida) se mandaba a ciegas desde `useEffect`/
+  // `onLoadEnd`, sin saber si esos listeners ya existían: si el script del WebView tardaba en
+  // llegar a esa línea (motor más lento, dispositivo viejo, primera carga), el mensaje se perdía
+  // en el vacío y el marcador de posición quedaba ausente hasta el próximo cambio de estado —
+  // mismo síntoma reportado como "la flecha del vehículo aparece congelada" (la ruta sí se dibuja
+  // porque no depende de ningún mensaje). Con el handshake, en cambio, es el propio HTML el que
+  // avisa cuándo está listo para recibir, y acá simplemente respondemos con el estado completo
+  // más reciente (`estadoActualRef.current`). Si el WebView se recarga (nueva navegación, error
+  // de red, etc.) el script vuelve a ejecutar desde cero y manda `mapa-listo` de nuevo, así que
+  // este mismo handler repite el envío sin necesidad de lógica adicional.
+  const onMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      if (esHandshakeMapaListo(event.nativeEvent.data)) {
+        enviarEstadoCompleto();
+      }
+    },
+    [enviarEstadoCompleto],
+  );
 
   const lastRecenter = useRef(recenterTick);
   useEffect(() => {
@@ -94,7 +127,12 @@ export function RouteMapView({
         style={styles.webview}
         javaScriptEnabled
         domStorageEnabled={false}
-        onLoadEnd={enviarEstadoMapa}
+        // `onLoadEnd` queda como respaldo (reenvía el mismo estado, idempotente en el HTML) por si
+        // el motor de WebView lo dispara después de que el script ya registró sus listeners — pero
+        // el mecanismo que GARANTIZA que no se pierda el primer envío es `onMessage` + el handshake
+        // `mapa-listo` de arriba, no este callback.
+        onLoadEnd={enviarEstadoCompleto}
+        onMessage={onMessage}
       />
     </View>
   );
