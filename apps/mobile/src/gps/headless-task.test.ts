@@ -72,11 +72,13 @@ vi.mock('../features/operacion/anuncio-punto-control', () => ({
 }));
 
 import BackgroundGeolocation, { type HeadlessEvent, type Location } from 'react-native-background-geolocation';
+import * as Sentry from '@sentry/react-native';
 import type { PuntoControlPaquete } from '@quivo/shared';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal, type PaqueteDiaLocal } from '../db/paquete-dia';
 import {
   abrirOutbox,
   encolarEvento,
+  guardarVisitaPendiente,
   obtenerEventosPorTipo,
   obtenerVisitasPendientes,
 } from '../db/outbox';
@@ -101,10 +103,12 @@ const abrirOutboxMock = abrirOutbox as unknown as ReturnType<typeof vi.fn>;
 const encolarEventoMock = encolarEvento as unknown as ReturnType<typeof vi.fn>;
 const obtenerEventosPorTipoMock = obtenerEventosPorTipo as unknown as ReturnType<typeof vi.fn>;
 const obtenerVisitasPendientesMock = obtenerVisitasPendientes as unknown as ReturnType<typeof vi.fn>;
+const guardarVisitaPendienteMock = guardarVisitaPendiente as unknown as ReturnType<typeof vi.fn>;
 const anunciarDeteccionesDelTickMock = anunciarDeteccionesDelTick as unknown as ReturnType<
   typeof vi.fn
 >;
 const anunciarPuntoControlMock = anunciarPuntoControl as unknown as ReturnType<typeof vi.fn>;
+const captureExceptionMock = Sentry.captureException as unknown as ReturnType<typeof vi.fn>;
 
 /** Sesión mínima "autenticado" — sólo lo que lee `obtenerContextoUbicacionPersistido`. El
  * resto del contrato de `SesionMovilGuardada` (vehículo, conductor, sindicato, etc.) no le
@@ -493,5 +497,140 @@ describe('tareaHeadlessUbicacion — heartbeat (FIX POST-REVISIÓN, bug 2)', () 
 
     expect(encolarEventoMock).not.toHaveBeenCalled();
     expect(anunciarPuntoControlMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * FIX POST-REVISIÓN (G2, "la persistencia del candidato va después de la memoria" — gap
+ * reportado por Codex, verify-fix ronda 3): para las transiciones SIN evento propio (entrada,
+ * re-armado, avance de mínimo — ver el docblock de `registrarPuntoGpsInterno`), la fila de
+ * `visitas_pendientes` se escribe (`guardarVisitaPendiente`/`eliminarVisitaPendiente`) ANTES de
+ * aplicar esa transición a `estados` (memoria); si la escritura falla, la transición NO se
+ * aplica — el próximo fix reprocesa esa clave desde el estado ANTERIOR (reintenta la escritura)
+ * en vez de quedar con memoria adelantada que SQLite nunca respaldó. El fallo se reporta a
+ * Sentry (nunca se traga en silencio) pero NO aborta el resto del tick: el `gps_point` y el
+ * anuncio de aproximación de ESTE MISMO tick igual salen.
+ */
+describe('registrarPuntoGpsInterno — G2 (persistir visita pendiente ANTES de la memoria)', () => {
+  function location(lat: number, lng: number, timestamp: string): Location {
+    return {
+      timestamp,
+      recorded_at: timestamp,
+      age: 0,
+      odometer: 0,
+      odometer_error: 0,
+      is_moving: true,
+      uuid: `loc-${timestamp}`,
+      coords: { latitude: lat, longitude: lng, accuracy: 5, speed: 0 },
+      battery: { level: 0.8, is_charging: false },
+      activity: { type: 'in_vehicle', confidence: 90 },
+    } as unknown as Location;
+  }
+
+  function eventoLocation(loc: Location): HeadlessEvent {
+    return { name: 'location', params: loc } as unknown as HeadlessEvent;
+  }
+
+  function puntoControlReal(id: string, coord: [number, number]): PuntoControlPaquete {
+    return {
+      id,
+      orden: 5,
+      coord: { type: 'Point', coordinates: coord },
+      radioToleranciaM: 30,
+      obligatorio: true,
+    };
+  }
+
+  beforeEach(() => {
+    cargarSesionMovilMock.mockReset();
+    obtenerDeviceIdMovilMock.mockReset().mockResolvedValue('device-g2-1');
+    abrirPaqueteDiaDbMock.mockReset().mockResolvedValue({});
+    obtenerPaqueteDiaLocalMock.mockReset();
+    abrirOutboxMock.mockReset().mockResolvedValue({});
+    encolarEventoMock.mockReset().mockResolvedValue({ eventId: 'evt-g2', insertado: true });
+    obtenerEventosPorTipoMock.mockReset().mockResolvedValue([]);
+    obtenerVisitasPendientesMock.mockReset().mockResolvedValue([]);
+    guardarVisitaPendienteMock.mockReset().mockResolvedValue(undefined);
+    captureExceptionMock.mockClear();
+    anunciarDeteccionesDelTickMock.mockClear().mockResolvedValue(undefined);
+  });
+
+  it('si guardarVisitaPendiente falla en la ENTRADA, NO aplica la transición a memoria (el próximo fix la reprocesa desde cero) y reporta a Sentry sin abortar el tick', async () => {
+    const sesionId = 'sesion-g2-1';
+    const pc = puntoControlReal('pc-g2-1', [-63.18, -17.78]);
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: 'asignacion-g2-1', venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: 'asignacion-g2-1', venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+
+    // Tick 1: entra exactamente sobre el punto (distancia ~0) — la transición de ENTRADA no
+    // tiene evento propio (el cumplimiento recién se emite al confirmar), así que pasa por
+    // `guardarVisitaPendiente` — que esta vez FALLA.
+    guardarVisitaPendienteMock.mockRejectedValueOnce(new Error('sqlite ocupada'));
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-23T12:00:00.000Z')),
+    );
+
+    // El resto del tick NO se abortó: el `gps_point` se encoló y el anuncio de aproximación
+    // salió igual — el fallo es SOLO de la copia durable del candidato, no de la evidencia.
+    expect(encolarEventoMock).toHaveBeenCalledTimes(1);
+    expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(1);
+    const [, , resultadoPrimerTick] = anunciarDeteccionesDelTickMock.mock.calls[0]!;
+    expect(resultadoPrimerTick.deteccion).toBeNull();
+
+    // El fallo se reportó — nunca se traga en silencio.
+    expect(captureExceptionMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tags: expect.objectContaining({ contexto: 'gps-cola', paso: 'visita-pendiente-no-aplicada' }),
+        extra: expect.objectContaining({ sesionId }),
+      }),
+    );
+
+    // Tick 2: un fix que, DE HABER quedado en memoria como "mínimo 0 m", confirmaría la pasada 1
+    // acá mismo (la distancia creció a ~11 m). Como la transición de ENTRADA del tick 1 NO se
+    // aplicó (persistencia fallida), este tick se procesa como una ENTRADA NUEVA — sin
+    // confirmar todavía — en vez de confirmar de más con un mínimo que SQLite nunca respaldó.
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.7799, -63.18, '2026-09-23T12:00:10.000Z')),
+    );
+    const resultadoSegundoTick = anunciarDeteccionesDelTickMock.mock.calls[1]![2];
+    expect(resultadoSegundoTick.deteccion).toBeNull();
+  });
+
+  it('cuando guardarVisitaPendiente funciona, la entrada SÍ queda en memoria y el siguiente fix que crece confirma la pasada 1', async () => {
+    const sesionId = 'sesion-g2-2';
+    const pc = puntoControlReal('pc-g2-2', [-63.18, -17.78]);
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: 'asignacion-g2-2', venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: 'asignacion-g2-2', venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-23T12:00:00.000Z')),
+    );
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.7799, -63.18, '2026-09-23T12:00:10.000Z')),
+    );
+
+    expect(captureExceptionMock).not.toHaveBeenCalled();
+    const resultadoSegundoTick = anunciarDeteccionesDelTickMock.mock.calls[1]![2];
+    expect(resultadoSegundoTick.deteccion).toMatchObject({
+      puntoControlId: 'pc-g2-2',
+      fase: 'confirmado',
+      pasada: 1,
+    });
   });
 });
