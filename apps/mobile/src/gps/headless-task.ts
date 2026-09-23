@@ -4,6 +4,7 @@ import BackgroundGeolocation, {
   type HeadlessEvent,
   type Location,
 } from 'react-native-background-geolocation';
+import { derivarEventIdDeterministico } from '@quivo/shared';
 import {
   confirmarVisitasVencidas,
   filtrarPorSesion,
@@ -333,7 +334,14 @@ async function registrarPuntoGpsInterno(
       // transacción entera corre antes de tocar `estados`) — no necesita el fix de G2.
       await encolarEventoYLimpiarVisita(
         db,
-        { deviceId: contexto.deviceId, tipo: evento.tipo, payload: evento.payload },
+        {
+          deviceId: contexto.deviceId,
+          tipo: evento.tipo,
+          payload: evento.payload,
+          // FIX POST-REVISIÓN ("eventId estable"): derivado de {sesionId, puntoControlId,
+          // pasada} en `construirEventosDeUbicacion` — ver `EventoUbicacionConstruido.eventId`.
+          eventId: evento.eventId,
+        },
         evento.clave,
       );
       // `cumplimiento_punto_control`: transición aplicada YA, recién confirmada su propia
@@ -590,6 +598,12 @@ export async function aplicarConfirmacionesForzadas(
       {
         deviceId,
         tipo: 'cumplimiento_punto_control',
+        // FIX POST-REVISIÓN ("eventId estable"): la MISMA tripleta {sesionId, puntoControlId,
+        // pasada} que derivaría `construirEventosDeUbicacion` (`location-task.ts`) para un fix
+        // real — así, si un fix y este confirm forzado (heartbeat/cierre) terminaran
+        // confirmando la MISMA pasada, emiten el MISMO `eventId` en vez de dos distintos. Ver
+        // `EventoUbicacionConstruido.eventId`.
+        eventId: derivarEventIdDeterministico([sesionId, c.deteccion.puntoControlId, String(c.pasada)]),
         payload: {
           sesionId,
           puntoControlId: c.deteccion.puntoControlId,

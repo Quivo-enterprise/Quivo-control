@@ -1,5 +1,11 @@
 import type { Location } from 'react-native-background-geolocation';
-import { RADIO_AVISO_M, resolverTsFix, type PuntoControlPaquete, type TipoEventoSync } from '@quivo/shared';
+import {
+  derivarEventIdDeterministico,
+  RADIO_AVISO_M,
+  resolverTsFix,
+  type PuntoControlPaquete,
+  type TipoEventoSync,
+} from '@quivo/shared';
 import {
   detectarPuntosControlCercanos,
   filtrarNuevosCumplimientos,
@@ -51,6 +57,19 @@ export interface EventoUbicacionConstruido {
    * en el Map de estados y no se re-emiten como pasada 1 en el próximo fix.
    */
   clave?: string;
+  /**
+   * FIX POST-REVISIÓN ("eventId estable" — hallazgo de concurrencia, ver
+   * `derivarEventIdDeterministico` en `@quivo/shared`): presente SOLO en
+   * `cumplimiento_punto_control`, derivado determinísticamente de `{sesionId, puntoControlId,
+   * pasada}` — la MISMA pasada de la MISMA visita produce SIEMPRE el MISMO `eventId`, así que
+   * un fix real y una confirmación forzada por heartbeat/cierre
+   * (`aplicarConfirmacionesForzadas`, `headless-task.ts`) que terminaran confirmando la MISMA
+   * pasada (carrera que R1 ya serializa dentro de un mismo contexto JS, pero esto cierra la
+   * clase de bug entera, no solo esa ventana puntual) emiten el MISMO evento en vez de dos
+   * distintos — el dedupe del servidor es únicamente por `eventId` (QUI-241). `undefined` para
+   * `gps_point` (cada fix GPS es un hecho distinto, no hay pasada que lo identifique).
+   */
+  eventId?: string;
 }
 
 export interface ResultadoConstruirEventos {
@@ -246,6 +265,13 @@ export function construirEventosDeUbicacion(
         // M4 (hallazgo de revisión, medio): clave atada a ESTE evento — ver el comentario de
         // `EventoUbicacionConstruido.clave`.
         clave,
+        // FIX POST-REVISIÓN ("eventId estable"): derivado de {sesionId, puntoControlId, pasada}
+        // — ver el comentario largo de `EventoUbicacionConstruido.eventId`.
+        eventId: derivarEventIdDeterministico([
+          contexto.sesionId,
+          nuevaDeteccion.puntoControlId,
+          String(pasada),
+        ]),
         payload: {
           sesionId: contexto.sesionId,
           puntoControlId: nuevaDeteccion.puntoControlId,

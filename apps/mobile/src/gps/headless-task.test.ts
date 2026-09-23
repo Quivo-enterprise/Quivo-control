@@ -73,7 +73,7 @@ vi.mock('../features/operacion/anuncio-punto-control', () => ({
 
 import BackgroundGeolocation, { type HeadlessEvent, type Location } from 'react-native-background-geolocation';
 import * as Sentry from '@sentry/react-native';
-import type { PuntoControlPaquete } from '@quivo/shared';
+import { derivarEventIdDeterministico, type PuntoControlPaquete } from '@quivo/shared';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal, type PaqueteDiaLocal } from '../db/paquete-dia';
 import {
   abrirOutbox,
@@ -472,6 +472,12 @@ describe('tareaHeadlessUbicacion — heartbeat (FIX POST-REVISIÓN, bug 2)', () 
     const [, eventoEncolado] = encolarEventoMock.mock.calls[encolarEventoMock.mock.calls.length - 1]!;
     expect(eventoEncolado).toMatchObject({
       tipo: 'cumplimiento_punto_control',
+      // FIX POST-REVISIÓN ("eventId estable"): la confirmación forzada por heartbeat deriva el
+      // MISMO eventId que derivaría un fix real para esta tripleta (ver
+      // `location-task.test.ts`, "el cumplimiento lleva un eventId derivado...") — así, si un
+      // fix real llegara a confirmar la misma pasada por otro camino, el servidor los trata
+      // como el MISMO evento en vez de contarlo dos veces.
+      eventId: derivarEventIdDeterministico([sesionId, 'pc-heartbeat-2', '1']),
       payload: expect.objectContaining({ puntoControlId: 'pc-heartbeat-2', pasada: 1 }),
     });
     // Y salió el anuncio (sonido/voz) de la confirmación — un heartbeat también tiene que

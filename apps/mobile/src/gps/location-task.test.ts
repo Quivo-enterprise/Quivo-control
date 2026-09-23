@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Location } from 'react-native-background-geolocation';
-import type { PuntoControlPaquete } from '@quivo/shared';
+import { derivarEventIdDeterministico, type PuntoControlPaquete } from '@quivo/shared';
 import { claveCumplimiento, PASADA_MIN_MS, type EstadoPuntoControl } from './geofence';
 import {
   clavesCumplimientoDesdePayloads,
@@ -161,6 +161,35 @@ describe('construirEventosDeUbicacion', () => {
     // §2.4, "el Set se muta antes de confirmar la escritura").
     const clave = claveCumplimiento('sesion-1', 'pc-1');
     expect(transicionesEstado.get(clave)).toMatchObject({ dentro: true, pasadas: 1, confirmado: true });
+  });
+
+  it('FIX POST-REVISIÓN ("eventId estable"): el cumplimiento lleva un eventId derivado de {sesionId, puntoControlId, pasada}', () => {
+    // Hallazgo de concurrencia (R1, headless-task.ts): un fix real y una confirmación forzada
+    // por heartbeat/cierre pueden terminar confirmando la MISMA pasada — sin un eventId
+    // determinístico, cada camino generaría un UUID aleatorio distinto y el dedupe del
+    // servidor (por eventId) contaría el paso dos veces. `construirEventosDeUbicacion` tiene
+    // que derivar el MISMO eventId que derivaría `aplicarConfirmacionesForzadas`
+    // (`headless-task.ts`) para la misma tripleta.
+    const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
+    let estados = new Map<string, EstadoPuntoControl>();
+    const paso1 = construirEventosDeUbicacion(
+      ubicacion(-17.78, -63.18, '2026-09-23T12:00:00.000Z'),
+      contexto([pc], 'sesion-eventid'),
+      estados,
+    );
+    estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+    const { eventos } = construirEventosDeUbicacion(
+      ubicacion(-17.7797, -63.18, '2026-09-23T12:00:10.000Z'),
+      contexto([pc], 'sesion-eventid'),
+      estados,
+    );
+
+    expect(eventos[1]?.eventId).toBe(
+      derivarEventIdDeterministico(['sesion-eventid', 'pc-1', '1']),
+    );
+    // El `gps_point` no tiene pasada asociada — sin eventId propio (se genera uno al azar en
+    // `db/outbox.ts`, cada fix GPS es un hecho distinto).
+    expect(eventos[0]?.eventId).toBeUndefined();
   });
 
   it('NO muta el Map de estados recibido (la mutación es responsabilidad del caller, tras confirmar la escritura)', () => {
