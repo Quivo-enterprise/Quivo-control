@@ -197,6 +197,21 @@ export async function intentarDrenarOportunista(
         // nuevo dueño.
         return;
       }
+      // G3 (hallazgo de `/codex-debug verify-fix`, MEDIO — sobre este mismo bloque): en
+      // headless, alcanzar el tope (`tope-alcanzado`, 20 lotes = hasta 10 000 eventos) libera
+      // el lease SIN programar una continuación explícita (sin `setTimeout`/reintento propio)
+      // — el resto del atraso queda esperando el PRÓXIMO evento externo. Evaluado y dejado
+      // así a propósito, sin cambiar comportamiento:
+      // 1. El heartbeat de `background-geolocation.config.ts` sigue disparando cada 60 s
+      //    AUNQUE el vehículo esté quieto (no depende de fixes de ubicación) — la continuación
+      //    ya está garantizada por ese camino, sin necesitar un mecanismo nuevo.
+      // 2. 10 000 eventos por ciclo es un atraso MUY por encima de una jornada completa (a un
+      //    fix cada ~10 s, ~8600 eventos en 24 h corridas) — llegar al tope en la práctica
+      //    implica ya varias horas sin ninguna conectividad, un escenario extremo donde 60 s
+      //    más de espera hasta el próximo heartbeat es insignificante frente al atraso total.
+      // 3. Agregar un `setTimeout` propio acá reintroduciría el problema que
+      //    `drenaje-oportunista.ts` ya documenta arriba (RN congela los timers JS con la
+      //    Activity en pausa) sin necesidad, dado el punto 1.
       // G2: sin enfriamiento si cortamos por el TOPE con pendientes restantes
       // (`tope-alcanzado`) — el próximo evento de ubicación/heartbeat debe poder adquirir el
       // lease de inmediato, en vez de esperar el piso pensado para intentos oportunistas
