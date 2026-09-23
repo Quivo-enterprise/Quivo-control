@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PuntoControlPaquete } from '@quivo/shared';
+import { RADIO_AVISO_M, type PuntoControlPaquete } from '@quivo/shared';
 import {
   claveCumplimiento,
   confirmarVisitasVencidas,
@@ -7,6 +7,7 @@ import {
   filtrarNuevosCumplimientos,
   FACTOR_REARME_RADIO,
   FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO,
+  FIXES_REARME_CONSECUTIVOS,
   PASADA_MIN_MS,
   UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
   type DeteccionPuntoControl,
@@ -536,6 +537,106 @@ describe('filtrarNuevosCumplimientos — histéresis de re-armado (multi-vuelta)
   });
 });
 
+describe('filtrarNuevosCumplimientos — G1 (histéresis PROPIA de voz, independiente de la de detección)', () => {
+  // Caso Codex verificado (verify-fix, ronda 3, gap G1): con `radioToleranciaM=30` (mucho más
+  // chico que `RADIO_AVISO_M=150`), la histéresis de DETECCIÓN re-arma en cuanto el vehículo
+  // supera `30 * FACTOR_REARME_RADIO = 45` m por `FIXES_REARME_CONSECUTIVOS` fixes — con el
+  // vehículo TODAVÍA a 60-140 m, bien adentro de la zona de aviso. Antes de G1 ese re-armado de
+  // DETECCIÓN (`puntosRearmados`) era la única señal que liberaba el dedupe de voz
+  // (`aproximacionesAnunciadas`, `anuncio-punto-control.ts`) — usarla ahí re-anunciaba la
+  // aproximación en el mismo tick del re-armado (60-80 m, adentro de `RADIO_AVISO_M`) y dejaba
+  // la aproximación REAL de la vuelta siguiente en silencio (el dedupe "ya se había liberado y
+  // vuelto a usar" antes de tiempo). G1 exige que la voz tenga su PROPIA histéresis, sobre
+  // `RADIO_AVISO_M`, con el mismo umbral de fixes consecutivos.
+  it('rearme de DETECCIÓN a 60/80 m (radioToleranciaM=30) NO libera puntosRearmadosVoz: el vehículo sigue dentro de RADIO_AVISO_M', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    const radioToleranciaM = 30;
+
+    // Entra y confirma la primera pasada bien cerca del punto.
+    aplicarTransiciones(
+      estados,
+      filtrarNuevosCumplimientos(
+        estados,
+        [deteccion(10, radioToleranciaM)],
+        'sesion-1',
+        0,
+      ).transiciones,
+    );
+    const confirmacion = filtrarNuevosCumplimientos(
+      estados,
+      [deteccion(15, radioToleranciaM)],
+      'sesion-1',
+      1_000,
+    );
+    expect(confirmacion.emitir).toHaveLength(1);
+    aplicarTransiciones(estados, confirmacion.transiciones);
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.avisoVozDentro).toBe(true);
+
+    // Fix 1 saliendo: 60 m > 45 (30*1.5) — cuenta para el re-armado de DETECCIÓN (1/2), pero
+    // sigue bien adentro de RADIO_AVISO_M (150): la histéresis de voz ni se entera.
+    const paso60 = filtrarNuevosCumplimientos(estados, [deteccion(60, radioToleranciaM)], 'sesion-1', 60_000);
+    expect(paso60.puntosRearmados).toEqual([]);
+    expect(paso60.puntosRearmadosVoz).toEqual([]);
+    aplicarTransiciones(estados, paso60.transiciones);
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.avisoVozDentro).toBe(true);
+
+    // Fix 2 saliendo: 80 m > 45, segundo consecutivo (FIXES_REARME_CONSECUTIVOS=2) — ACÁ
+    // re-arma la DETECCIÓN (`puntosRearmados`), pero 80 m sigue <= RADIO_AVISO_M (150): la voz
+    // NO debe re-armar (`puntosRearmadosVoz` vacío) — es exactamente el caso que Codex reportó
+    // roto antes de G1.
+    const paso80 = filtrarNuevosCumplimientos(estados, [deteccion(80, radioToleranciaM)], 'sesion-1', 70_000);
+    expect(paso80.puntosRearmados).toEqual(['pc-1']);
+    expect(paso80.puntosRearmadosVoz).toEqual([]);
+    aplicarTransiciones(estados, paso80.transiciones);
+    const estadoTrasRearmeDeteccion = estados.get(claveCumplimiento('sesion-1', 'pc-1'));
+    expect(estadoTrasRearmeDeteccion?.dentro).toBe(false); // detección SÍ re-armó
+    expect(estadoTrasRearmeDeteccion?.avisoVozDentro).toBe(true); // voz sigue "en zona de aviso"
+
+    // El vehículo se sigue alejando, todavía dentro de RADIO_AVISO_M (90-140 m): la voz sigue
+    // sin re-armar — sin esto, el bug original re-anunciaría acá mismo.
+    const paso110 = filtrarNuevosCumplimientos(estados, [deteccion(110, radioToleranciaM)], 'sesion-1', 80_000);
+    expect(paso110.puntosRearmadosVoz).toEqual([]);
+    aplicarTransiciones(estados, paso110.transiciones);
+
+    // Recién más allá de RADIO_AVISO_M * FACTOR_REARME_RADIO (225 m), `FIXES_REARME_CONSECUTIVOS`
+    // fixes seguidos, re-arma la voz de verdad.
+    expect(RADIO_AVISO_M * FACTOR_REARME_RADIO).toBe(225);
+    const paso230 = filtrarNuevosCumplimientos(estados, [deteccion(230, radioToleranciaM)], 'sesion-1', 90_000);
+    expect(paso230.puntosRearmadosVoz).toEqual([]); // 1er fix consecutivo: no alcanza todavía
+    aplicarTransiciones(estados, paso230.transiciones);
+
+    const paso235 = filtrarNuevosCumplimientos(estados, [deteccion(235, radioToleranciaM)], 'sesion-1', 100_000);
+    expect(paso235.puntosRearmadosVoz).toEqual(['pc-1']); // 2do fix consecutivo: re-arma la voz
+    aplicarTransiciones(estados, paso235.transiciones);
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.avisoVozDentro).toBe(false);
+  });
+
+  it('avisoVozDentro se reactiva (sin rearmar) si el vehículo vuelve a acercarse antes de completar FIXES_REARME_CONSECUTIVOS', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    aplicarTransiciones(
+      estados,
+      filtrarNuevosCumplimientos(estados, [deteccion(10)], 'sesion-1', 0).transiciones,
+    );
+
+    // Un fix afuera de la zona de aviso con margen (cuenta 1/2)...
+    const salida1 = filtrarNuevosCumplimientos(estados, [deteccion(230)], 'sesion-1', 10_000);
+    expect(salida1.puntosRearmadosVoz).toEqual([]);
+    aplicarTransiciones(estados, salida1.transiciones);
+    expect(estados.get(claveCumplimiento('sesion-1', 'pc-1'))?.avisoVozFixesFueraRadioRearme).toBe(1);
+
+    // ...pero un fix que vuelve a caer dentro de RADIO_AVISO_M resetea el contador — un
+    // acercamiento real desmiente el outlier de alejamiento, igual que la histéresis de
+    // detección (A2).
+    const regreso = filtrarNuevosCumplimientos(estados, [deteccion(100)], 'sesion-1', 20_000);
+    expect(regreso.puntosRearmadosVoz).toEqual([]);
+    aplicarTransiciones(estados, regreso.transiciones);
+    const estadoTrasRegreso = estados.get(claveCumplimiento('sesion-1', 'pc-1'));
+    expect(estadoTrasRegreso?.avisoVozDentro).toBe(true);
+    expect(estadoTrasRegreso?.avisoVozFixesFueraRadioRearme).toBe(0);
+  });
+
+});
+
 describe('filtrarNuevosCumplimientos — M3 (precisión del fix), sobre una visita ya confirmada', () => {
   it('una accuracy PEOR que el radio no impide confirmar la pasada (solo la marca como degradada)', () => {
     // El gate anterior (en `location-task.ts`) descartaba la detección entera cuando
@@ -808,11 +909,12 @@ describe('confirmarVisitasVencidas (FIX POST-REVISIÓN, bug 2)', () => {
     expect(conCierre.emitir).toHaveLength(1);
   });
 
-  it('puntosRearmados y avisosPrecision siempre vacíos: confirmar por antigüedad/cierre nunca re-arma la histéresis de voz por sí solo', () => {
+  it('puntosRearmados, puntosRearmadosVoz y avisosPrecision siempre vacíos: confirmar por antigüedad/cierre nunca re-arma ninguna histéresis por sí solo', () => {
     const estados = new Map<string, EstadoPuntoControl>();
     entrarYDetenerse(estados, { tsFixMs: 0 });
     const resultado = confirmarVisitasVencidas(estados, UMBRAL_ANTIGUEDAD_CANDIDATO_MS);
     expect(resultado.puntosRearmados).toEqual([]);
+    expect(resultado.puntosRearmadosVoz).toEqual([]);
     expect(resultado.avisosPrecision).toEqual([]);
   });
 
