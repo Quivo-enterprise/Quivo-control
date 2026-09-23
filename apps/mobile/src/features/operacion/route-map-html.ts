@@ -62,10 +62,19 @@ export interface OpcionesControladorTiles {
    * tile. Hace falta recalcularla porque, para cuando llega `tileerror`, Leaflet YA reemplazó
    * `tile.src` por `errorTileUrl` (ver el comentario grande sobre `CONTROLADOR_TILES_JS_SOURCE`
    * más abajo) — el `<img>` fallido ya no tiene la URL real en ningún atributo. Se invoca UNA sola
-   * vez por tile, dentro de `onTileError` — nunca en cada reintento — precisamente porque el valor
-   * que devuelve (típicamente `tileLayer.getTileUrl(coords)`) usa el zoom ACTUAL de la capa, no
-   * `coords.z`; recalcularlo más tarde, en un reintento, podría mezclar el zoom nuevo con las x/y
-   * viejas de `coords`. Ver el comentario grande sobre `urlBase` en `CONTROLADOR_TILES_JS_SOURCE`. */
+   * vez por tile, dentro de `onTileError` — nunca en cada reintento (ver el comentario sobre
+   * `urlBase` en `CONTROLADOR_TILES_JS_SOURCE`) — pero congelar el resultado en `onTileError` NO
+   * alcanza por sí solo (hallazgo de la verificación `verify-fix` de esta entrega): en Leaflet
+   * 1.9.4, `tileLayer.getTileUrl(coords)` arma la URL con el zoom ACTUAL de la capa
+   * (`this._getZoomForUrl()`), IGNORANDO `coords.z` a pesar de recibirlo. Y ese zoom puede haber
+   * cambiado YA para cuando llega el PRIMER `tileerror` de un tile: Leaflet actualiza `_tileZoom`
+   * antes de `_abortLoading` (que solo retira `<img>` con `complete === false`), y una imagen
+   * fallida puede quedar `complete === true` antes de que el navegador entregue el evento `error`
+   * — el chofer puede cambiar de zoom en esa ventana. Por eso la implementación real (ver
+   * `construirUrlTileZoomExacto` / `CONSTRUIR_URL_TILE_JS_SOURCE` más abajo) NUNCA delega en
+   * `tileLayer.getTileUrl(coords)`: arma la URL a mano con `coords.z` EXPLÍCITO y normaliza `x`
+   * para el wrap horizontal, así el zoom de la URL es siempre el del momento en que ESE tile
+   * falló, sin importar cuándo llegue el evento ni si la capa ya cambió de zoom para entonces. */
   obtenerUrlOriginal: (coords: unknown) => string;
   /** true si el `<img>` del tile fallido sigue montado en el DOM del mapa. Leaflet lo desmonta
    * (poda) cuando el tile queda fuera de la vista por un pan/zoom — reintentar un tile podado
@@ -165,7 +174,7 @@ function crearControladorTiles(opciones) {
   //
   // POR QUÉ 'urlBase' SE CALCULA UNA SOLA VEZ, EN onTileError, Y NUNCA EN CADA REINTENTO (bug real
   // de zoom mezclado, reportado por la verificación de esta entrega):
-  // 'opciones.obtenerUrlOriginal' típicamente delega en 'tileLayer.getTileUrl(coords)' de Leaflet.
+  // 'opciones.obtenerUrlOriginal' NUNCA debe delegar en 'tileLayer.getTileUrl(coords)' de Leaflet.
   // En Leaflet 1.9.4, esa función arma la URL con el zoom ACTUAL DE LA CAPA (this._getZoomForUrl()),
   // no con 'coords.z' — a pesar de recibir 'coords' como argumento, IGNORA su 'z'. El mecanismo
   // anterior de este controlador guardaba solo '{ tile, coords }' en 'pendientes' y volvía a
@@ -173,11 +182,30 @@ function crearControladorTiles(opciones) {
   // reintentoIntervaloMs = 30s después del fallo). Si el mapa cambiaba de zoom en esa ventana (el
   // chofer hace zoom in/out mientras un tile de otro zoom sigue pendiente), el reintento
   // combinaba las x/y viejas de 'coords' con el zoom NUEVO de la capa — un mosaico de una región
-  // distinta a la que se pidió, dibujado como si fuera el tile correcto. La solución: calcular y
-  // guardar la URL completa ('urlBase') UNA sola vez, en onTileError, en el mismo instante en que
-  // el zoom de la capa todavía coincide con 'coords.z' (el fallo recién ocurrió a ESE zoom). Los
-  // reintentos posteriores reusan ese 'urlBase' congelado (solo le agregan el cache-busting), sin
-  // importar cuánto tiempo pase ni cuántas veces cambie el zoom mientras el tile sigue pendiente.
+  // distinta a la que se pidió, dibujado como si fuera el tile correcto.
+  //
+  // PRIMER INTENTO DE SOLUCIÓN (INSUFICIENTE — hallazgo de la verificación 'verify-fix' de Codex
+  // sobre esta misma entrega): calcular y guardar la URL completa ('urlBase') UNA sola vez, en
+  // onTileError, asumiendo que el zoom de la capa TODAVÍA coincide con 'coords.z' en ese instante.
+  // ESO NO ES CIERTO en general: Leaflet actualiza '_tileZoom' (el zoom que 'getTileUrl' usa
+  // internamente vía '_getZoomForUrl()') ANTES de '_abortLoading', que solo retira <img> con
+  // 'complete === false'. Una imagen fallida puede quedar 'complete === true' ANTES de que el
+  // navegador entregue el evento 'error' al <img> — el chofer puede cambiar de zoom en esa misma
+  // ventana, así que el PRIMER 'tileerror' de un tile (no solo un reintento tardío) puede llegar
+  // después del cambio de zoom. Congelar 'urlBase' en onTileError no alcanza si
+  // 'opciones.obtenerUrlOriginal' sigue siendo 'tileLayer.getTileUrl(coords)' (que arma la URL con
+  // el zoom de la capa EN EL MOMENTO DE LA LLAMADA, sin importar cuándo se llame).
+  //
+  // SOLUCIÓN COMPLETA: 'opciones.obtenerUrlOriginal' (ver 'construirUrlTileZoomExacto' /
+  // 'CONSTRUIR_URL_TILE_JS_SOURCE' más abajo en route-map-html.ts, y cómo se la pasa
+  // 'construirHtml') arma la URL a mano con 'coords.z' EXPLÍCITO — nunca con el zoom de la capa en
+  // el momento de la llamada — así que el resultado es correcto sin importar CUÁNDO llegue el
+  // evento. Congelar 'urlBase' en onTileError sigue siendo necesario ADEMÁS de eso (evita que un
+  // reintento tardío, con la capa ya en otro zoom, vuelva a invocar 'obtenerUrlOriginal' y
+  // recalcule con las x/y viejas combinadas con datos de otro momento), pero ahora la URL que se
+  // congela ya es correcta desde el primer cálculo. Los reintentos posteriores reusan ese
+  // 'urlBase' congelado (solo le agregan el cache-busting), sin importar cuánto tiempo pase ni
+  // cuántas veces cambie el zoom mientras el tile sigue pendiente.
   var pendientes = [];
   // Un único setInterval compartido para todos los tiles pendientes (no uno por tile): más barato
   // y evita reintentos desincronizados. Solo existe mientras haya al menos un pendiente — arranca
@@ -252,6 +280,98 @@ function crearControladorTiles(opciones) {
     onTileLoad: onTileLoad,
     onTileError: onTileError
   };
+}
+`;
+
+/** Describe la capa de tiles XYZ lo mínimo necesario para reconstruir la URL de un tile a mano —
+ * ver `CONSTRUIR_URL_TILE_JS_SOURCE` más abajo. Se arma en `construirHtml` a partir de
+ * `tileLayer._url`/`tileLayer.options` (la MISMA capa real de Leaflet, nunca un duplicado
+ * hardcodeado), así que si algún día esta capa suma `subdomains`/`zoomOffset`/`zoomReverse`, la
+ * reconstrucción los sigue respetando sin tocar este archivo. */
+export interface DescripcionCapaTilesXYZ {
+  /** Plantilla cruda de la capa, p. ej. `'https://tile.openstreetmap.org/{z}/{x}/{y}.png'` —
+   * `tileLayer._url` en Leaflet 1.9.4, la misma que recibió `L.tileLayer(...)`. */
+  urlTemplate: string;
+  /** `tileLayer.options.zoomOffset` — 0 si la capa no lo define. Esta capa OSM no lo usa hoy. */
+  zoomOffset: number;
+  /** `tileLayer.options.zoomReverse` — false si la capa no lo define. Esta capa OSM no lo usa hoy. */
+  zoomReverse: boolean;
+  /** `tileLayer.options.maxZoom` — solo hace falta cuando `zoomReverse` es true. */
+  maxZoom: number;
+  /** `tileLayer.options.subdomains` ya normalizado a array (Leaflet lo splitea en `initialize` si
+   * llegó como string). Vacío si la plantilla no tiene `{s}` — es el caso de esta capa OSM. */
+  subdominios: string[];
+}
+
+/**
+ * Código fuente LITERAL (JS plano, ES5) de `construirUrlTileZoomExacto` — GAP 1 de la
+ * verificación `verify-fix` de Codex sobre el commit anterior de esta entrega. Igual que
+ * `CONTROLADOR_TILES_JS_SOURCE` (ver el comentario grande sobre por qué NUNCA
+ * `Function.prototype.toString()` más arriba), viaja como STRING literal escrito a mano, evaluado
+ * tal cual en el `<script>` real y con `new Function` en los tests — nunca una función TS que el
+ * bundler pueda renombrar.
+ *
+ * Por qué existe esta función en vez de seguir usando `tileLayer.getTileUrl(coords)`: esa función
+ * de Leaflet arma la URL con `this._getZoomForUrl()` (el zoom ACTUAL de la capa en el momento de
+ * la llamada), IGNORANDO el `coords.z` que recibe como argumento. `onTileError` puede recibir un
+ * `coords` de un zoom que la capa YA DEJÓ ATRÁS — ver el comentario grande sobre `urlBase` en
+ * `CONTROLADOR_TILES_JS_SOURCE` más arriba para el mecanismo exacto (Leaflet actualiza `_tileZoom`
+ * antes de que `_abortLoading` pueda descartar la imagen fallida, así que el chofer puede cambiar
+ * de zoom antes de que el evento `error` llegue, incluso para el primer `tileerror` de un tile).
+ * `construirUrlTileZoomExacto` arma la URL con `coords.z` explícito — replica a mano la fórmula de
+ * `_getZoomForUrl` (`zoomReverse ? maxZoom - z : z`, más `zoomOffset`) pero partiendo de `coords.z`
+ * en vez de leer el zoom actual de la capa — y normaliza `x` para el wrap horizontal (2^z columnas
+ * de tiles por fila), porque el `coords` que llega a `tileerror` es el SIN normalizar: Leaflet
+ * normaliza x/y recién dentro de `createTile` (vía `_wrapCoords`), después de haber capturado el
+ * `coords` original para el evento — verificado contra el bundle de Leaflet 1.9.4 embebido
+ * (`_tileReady` dispara `tileerror` con el `coords` que le pasó `_addTile`, sin pasar por
+ * `_wrapCoords`). Sin esta normalización, un tile en el borde del mapa (x fuera de `[0, 2^z)`)
+ * reintentaría una URL con una columna de tile que no existe.
+ *
+ * Deliberadamente NO usa `L.Util.template`/`tileLayer._getSubdomain` de Leaflet: la capa OSM de
+ * esta app no tiene `{s}` en su plantilla (un solo host, sin subdominios) ni usa `zoomOffset`/
+ * `zoomReverse`, así que un reemplazo de placeholders manual (`formatearPlantillaTile`) alcanza,
+ * es trivial de testear sin un `L` falso, y evita depender de un método privado (`_getSubdomain`)
+ * de una librería de terceros. Si esta capa alguna vez suma subdominios, la selección de
+ * subdominio de acá (hash `x + y` módulo la cantidad de subdominios) replica la de Leaflet.
+ */
+export const CONSTRUIR_URL_TILE_JS_SOURCE = `
+function formatearPlantillaTile(plantilla, datos) {
+  var resultado = plantilla;
+  for (var clave in datos) {
+    if (Object.prototype.hasOwnProperty.call(datos, clave)) {
+      resultado = resultado.split('{' + clave + '}').join(String(datos[clave]));
+    }
+  }
+  return resultado;
+}
+
+function construirUrlTileZoomExacto(coords, capa) {
+  // Zoom EXPLÍCITO a partir de 'coords.z' — nunca del zoom actual de la capa. Replica la fórmula
+  // de 'TileLayer.prototype._getZoomForUrl' de Leaflet, pero partiendo de 'coords.z' en vez de
+  // 'this._tileZoom' (ver el comentario grande sobre CONSTRUIR_URL_TILE_JS_SOURCE en
+  // route-map-html.ts para el porqué completo).
+  var zoomUrl = capa.zoomReverse ? capa.maxZoom - coords.z : coords.z;
+  zoomUrl = zoomUrl + (capa.zoomOffset || 0);
+
+  // Wrap horizontal: 'coords.x' que llega a 'tileerror' NO está normalizado (Leaflet normaliza
+  // recién en 'createTile', después de haber armado el 'coords' del evento) — sin esto, un tile en
+  // el borde del mapa reintentaría una columna que no existe. El wrap es sobre 'coords.z' (el
+  // zoom del GRID en el que se pidió el tile), no sobre 'zoomUrl' (que ya puede llevar el offset).
+  var tilesPorFila = Math.pow(2, coords.z);
+  var xNormalizada = ((coords.x % tilesPorFila) + tilesPorFila) % tilesPorFila;
+
+  var subdominio = '';
+  if (capa.subdominios && capa.subdominios.length > 0) {
+    subdominio = capa.subdominios[Math.abs(xNormalizada + coords.y) % capa.subdominios.length];
+  }
+
+  return formatearPlantillaTile(capa.urlTemplate, {
+    z: zoomUrl,
+    x: xNormalizada,
+    y: coords.y,
+    s: subdominio
+  });
 }
 `;
 
@@ -367,7 +487,13 @@ export function construirHtml(
     // de cuadrados rotos parpadeando en cada reintento en vez de quedar en el fondo liso.
     var ERROR_TILE_URL =
       'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBTAA7';
-    var tileLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // Plantilla cruda, en una variable propia — la comparte tileLayer.getTileUrl (la primera
+    // carga de cada tile, sin tocar) y construirUrlTileZoomExacto (el reintento manual de acá
+    // abajo, que NUNCA pasa por tileLayer.getTileUrl — ver el comentario grande sobre
+    // CONSTRUIR_URL_TILE_JS_SOURCE más arriba en route-map-html.ts). Una sola fuente de verdad
+    // para el string de la URL evita que la plantilla del reintento se desincronice de la real.
+    var TILE_URL_TEMPLATE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    var tileLayer = L.tileLayer(TILE_URL_TEMPLATE, {
       maxZoom: 19,
       errorTileUrl: ERROR_TILE_URL
     });
@@ -380,11 +506,13 @@ export function construirHtml(
     // de depender del fetch en vivo de acá abajo. Cuando eso exista, esta capa pasa a ser
     // solamente el fallback de "no lo tenía cacheado".
 
-    // CONTROLADOR_TILES_JS_SOURCE (definido arriba en route-map-html.ts como STRING literal, NO
-    // como función TS) se interpola acá tal cual, texto por texto. Es EXACTAMENTE el mismo
-    // string que route-map-html.test.ts evalúa con \`new Function\` para testear el
-    // comportamiento. Ver el comentario largo sobre CONTROLADOR_TILES_JS_SOURCE más arriba en
-    // route-map-html.ts para el motivo completo (minificador de Metro + bytecode de Hermes).
+    // CONSTRUIR_URL_TILE_JS_SOURCE / CONTROLADOR_TILES_JS_SOURCE (definidos arriba en
+    // route-map-html.ts como STRINGS literales, NO como funciones TS) se interpolan acá tal cual,
+    // texto por texto. Son EXACTAMENTE los mismos strings que route-map-html.test.ts evalúa con
+    // \`new Function\` para testear el comportamiento. Ver los comentarios largos sobre cada uno
+    // más arriba en route-map-html.ts para el motivo completo (minificador de Metro + bytecode de
+    // Hermes, y por qué la URL del reintento no puede delegar en tileLayer.getTileUrl).
+    ${CONSTRUIR_URL_TILE_JS_SOURCE}
     ${CONTROLADOR_TILES_JS_SOURCE}
 
     // La capa de tiles queda SIEMPRE montada (ver el comentario grande sobre
@@ -399,9 +527,21 @@ export function construirHtml(
       reintentoIntervaloMs: REINTENTO_TILES_INTERVALO_MS,
       // Para cuando llega 'tileerror' Leaflet YA reemplazó tile.src por ERROR_TILE_URL (ver el
       // comentario grande arriba), así que la URL real hay que recalcularla a partir de las
-      // coords que el propio evento trae — tileLayer.getTileUrl es la misma función que Leaflet
-      // usa internamente para pedir el tile la primera vez.
-      obtenerUrlOriginal: function (coords) { return tileLayer.getTileUrl(coords); },
+      // coords que el propio evento trae. Deliberadamente NO delega en tileLayer.getTileUrl(coords)
+      // — esa función arma la URL con el zoom ACTUAL de la capa, no con coords.z (ver el
+      // comentario grande sobre CONSTRUIR_URL_TILE_JS_SOURCE más arriba). construirUrlTileZoomExacto
+      // sí usa coords.z explícito; tileLayer.options ya trae zoomOffset/zoomReverse/subdomains
+      // resueltos por Leaflet mismo (spliteados/ajustados en su initialize), así que esta capa
+      // sigue siendo la única fuente de verdad aunque esos valores cambien.
+      obtenerUrlOriginal: function (coords) {
+        return construirUrlTileZoomExacto(coords, {
+          urlTemplate: TILE_URL_TEMPLATE,
+          zoomOffset: tileLayer.options.zoomOffset || 0,
+          zoomReverse: !!tileLayer.options.zoomReverse,
+          maxZoom: tileLayer.options.maxZoom,
+          subdominios: tileLayer.options.subdomains || []
+        });
+      },
       // Un tile podado (fuera de la vista tras un pan/zoom) ya no tiene el <img> montado en el
       // DOM — parentNode es la señal barata y estable de "Leaflet ya lo descartó", sin tocar
       // ninguna estructura interna privada de la librería.

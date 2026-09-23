@@ -2,11 +2,16 @@ import * as vm from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
 import {
+  CONSTRUIR_URL_TILE_JS_SOURCE,
   CONTROLADOR_TILES_JS_SOURCE,
   construirHtml,
   convertirGeoJsonALatLng,
 } from './route-map-html';
-import type { ControladorTiles, OpcionesControladorTiles } from './route-map-html';
+import type {
+  ControladorTiles,
+  DescripcionCapaTilesXYZ,
+  OpcionesControladorTiles,
+} from './route-map-html';
 
 /**
  * Evalúa `CONTROLADOR_TILES_JS_SOURCE` con `new Function` y devuelve una instancia real del
@@ -26,6 +31,22 @@ function instanciarControladorTiles(opciones: OpcionesControladorTiles): Control
     opts: OpcionesControladorTiles,
   ) => ControladorTiles;
   return factory()(opciones);
+}
+
+/**
+ * Evalúa `CONSTRUIR_URL_TILE_JS_SOURCE` con `new Function` y devuelve `construirUrlTileZoomExacto`
+ * real — el MISMO texto que `construirHtml` interpola en el `<script>` (ver el comentario grande
+ * sobre `CONSTRUIR_URL_TILE_JS_SOURCE` en route-map-html.ts, GAP 1 de la verificación `verify-fix`
+ * de Codex sobre el commit anterior). Igual razón que `instanciarControladorTiles` arriba: testear
+ * una reimplementación TS paralela no habría detectado que la producción seguía delegando en
+ * `tileLayer.getTileUrl(coords)`.
+ */
+function instanciarConstructorUrlTile(): (coords: unknown, capa: DescripcionCapaTilesXYZ) => string {
+  // eslint-disable-next-line no-new-func -- evaluación intencional del string fuente, ver doc arriba.
+  const factory = new Function(
+    `${CONSTRUIR_URL_TILE_JS_SOURCE}\nreturn construirUrlTileZoomExacto;`,
+  ) as () => (coords: unknown, capa: DescripcionCapaTilesXYZ) => string;
+  return factory();
 }
 
 /** Tile `<img>` falso mínimo: solo lo que el controlador toca (`.src`, `.parentNode`). No hace
@@ -310,6 +331,141 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
   });
 });
 
+// GAP 1 de la verificación `verify-fix` de Codex sobre el commit anterior de esta entrega:
+// congelar 'urlBase' en onTileError (describe de arriba) no alcanza si la función que arma esa
+// URL sigue delegando en `tileLayer.getTileUrl(coords)` — esa función de Leaflet 1.9.4 usa el
+// zoom ACTUAL de la capa (`this._getZoomForUrl()`), no `coords.z`, y ese zoom puede haber
+// cambiado YA para cuando llega el PRIMER `tileerror` de un tile (Leaflet actualiza `_tileZoom`
+// antes de que `_abortLoading` pueda descartar la imagen fallida). Este describe ejercita
+// `construirUrlTileZoomExacto` — la función real que reemplaza a `tileLayer.getTileUrl` en
+// `obtenerUrlOriginal` (ver el comentario grande sobre `CONSTRUIR_URL_TILE_JS_SOURCE` en
+// route-map-html.ts) — evaluando el MISMO string que `construirHtml` interpola, nunca una
+// reimplementación TS paralela.
+describe('construirUrlTileZoomExacto — arma la URL del reintento con coords.z explícito (GAP 1 de verify-fix)', () => {
+  const CAPA_OSM: DescripcionCapaTilesXYZ = {
+    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    zoomOffset: 0,
+    zoomReverse: false,
+    maxZoom: 19,
+    subdominios: [],
+  };
+
+  it('arma la URL con coords.x/y/z tal cual, sin subdominios ni offset', () => {
+    const construirUrlTile = instanciarConstructorUrlTile();
+    expect(construirUrlTile({ x: 300, y: 400, z: 10 }, CAPA_OSM)).toBe(
+      'https://tile.openstreetmap.org/10/300/400.png',
+    );
+  });
+
+  it('respeta zoomOffset y zoomReverse cuando la capa los define', () => {
+    const construirUrlTile = instanciarConstructorUrlTile();
+    const capaConOffset: DescripcionCapaTilesXYZ = { ...CAPA_OSM, zoomOffset: 1 };
+    expect(construirUrlTile({ x: 1, y: 2, z: 10 }, capaConOffset)).toBe(
+      'https://tile.openstreetmap.org/11/1/2.png',
+    );
+
+    const capaConReverse: DescripcionCapaTilesXYZ = {
+      ...CAPA_OSM,
+      zoomReverse: true,
+      maxZoom: 19,
+    };
+    // zoomReverse: z_url = maxZoom - coords.z = 19 - 10 = 9.
+    expect(construirUrlTile({ x: 1, y: 2, z: 10 }, capaConReverse)).toBe(
+      'https://tile.openstreetmap.org/9/1/2.png',
+    );
+  });
+
+  it('normaliza x fuera de rango [0, 2^z) para el wrap horizontal', () => {
+    const construirUrlTile = instanciarConstructorUrlTile();
+    // z = 3 → 8 columnas de tiles (0..7). x = -1 envuelve a 7; x = 8 envuelve a 0.
+    expect(construirUrlTile({ x: -1, y: 5, z: 3 }, CAPA_OSM)).toBe(
+      'https://tile.openstreetmap.org/3/7/5.png',
+    );
+    expect(construirUrlTile({ x: 8, y: 5, z: 3 }, CAPA_OSM)).toBe(
+      'https://tile.openstreetmap.org/3/0/5.png',
+    );
+    // y NUNCA se normaliza (esta capa no tiene wrap vertical) — el x fuera de rango no debe
+    // tocarlo.
+    expect(construirUrlTile({ x: 8, y: -3, z: 3 }, CAPA_OSM)).toBe(
+      'https://tile.openstreetmap.org/3/0/-3.png',
+    );
+  });
+
+  it('selecciona un subdominio de la capa cuando la plantilla tiene {s}', () => {
+    const construirUrlTile = instanciarConstructorUrlTile();
+    const capaConSubdominios: DescripcionCapaTilesXYZ = {
+      urlTemplate: 'https://{s}.tile.example.com/{z}/{x}/{y}.png',
+      zoomOffset: 0,
+      zoomReverse: false,
+      maxZoom: 19,
+      subdominios: ['a', 'b', 'c'],
+    };
+    const url = construirUrlTile({ x: 300, y: 400, z: 10 }, capaConSubdominios);
+    expect(url).toMatch(/^https:\/\/[abc]\.tile\.example\.com\/10\/300\/400\.png$/);
+  });
+
+  // Bug real, GAP 1 del verify-fix: este es el escenario exacto que congelar 'urlBase' en
+  // onTileError (por sí solo) NO cubre. El tile se pidió y falló a zoom 10; el chofer hace zoom
+  // in a 16 ANTES de que Leaflet entregue el evento 'tileerror' para ESE tile (el `_tileZoom` de
+  // la capa ya cambió). Con `tileLayer.getTileUrl(coords)` la URL armada en el propio onTileError
+  // ya habría salido mal (con '/16/'), porque esa función ignora coords.z y usa el zoom actual de
+  // la capa. `construirUrlTileZoomExacto`, en cambio, nunca lee ningún "zoom actual" — arma la URL
+  // solo a partir de `coords.z` y de la descripción ESTÁTICA de la capa, así que el resultado es
+  // correcto sin importar cuándo llegue el evento.
+  it('el tile se pidió y falló a zoom 10, la capa ya está en zoom 16 cuando llega el PRIMER tileerror: el reintento conserva z=10', () => {
+    vi.useFakeTimers();
+    try {
+      const construirUrlTile = instanciarConstructorUrlTile();
+      const tile = crearTileFalso();
+      // Exactamente como lo arma construirHtml: obtenerUrlOriginal delega en
+      // construirUrlTileZoomExacto, nunca en tileLayer.getTileUrl — no hay ninguna variable de
+      // "zoom actual de la capa" de la que depender acá, ni siquiera en el primer tileerror.
+      const controlador = instanciarControladorTiles({
+        errorTileUrl: 'data:image/gif;base64,ERROR',
+        reintentoIntervaloMs: 30000,
+        obtenerUrlOriginal: (coords) => construirUrlTile(coords, CAPA_OSM),
+        tileSigueEnMapa: () => true,
+      });
+
+      // El tile falla a zoom 10 — sin importar que, para cuando Leaflet dispara este evento, el
+      // mapa ya haya cambiado de zoom (eso es justamente lo que este test simula: la llamada a
+      // onTileError llega "tarde", después del cambio de zoom, pero coords.z sigue siendo 10, el
+      // zoom real al que se pidió este tile).
+      controlador.onTileError(tile, { x: 300, y: 400, z: 10 });
+      vi.advanceTimersByTime(30000);
+
+      expect(tile.src).toContain('/10/300/400.png');
+      expect(tile.src).not.toContain('/16/');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Complementa el test de "tile podado" del describe de crearControladorTiles (misma mecánica),
+  // pero acá con construirUrlTileZoomExacto real de por medio: un tile que salió del DOM entre el
+  // fallo y el tick de reintento no debe tocar tile.src ni tirar, aunque la URL congelada ya esté
+  // calculada.
+  it('un tile desmontado del DOM antes del tick de reintento no rompe y no le toca tile.src', () => {
+    vi.useFakeTimers();
+    try {
+      const construirUrlTile = instanciarConstructorUrlTile();
+      const tile = crearTileFalso({ montado: false });
+      const controlador = instanciarControladorTiles({
+        errorTileUrl: 'data:image/gif;base64,ERROR',
+        reintentoIntervaloMs: 30000,
+        obtenerUrlOriginal: (coords) => construirUrlTile(coords, CAPA_OSM),
+        tileSigueEnMapa: () => false,
+      });
+
+      expect(() => controlador.onTileError(tile, { x: 300, y: 400, z: 10 })).not.toThrow();
+      expect(() => vi.advanceTimersByTime(30000)).not.toThrow();
+      expect(tile.src).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('construirHtml — cero dependencia de red para inicializar el mapa', () => {
   const html = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
 
@@ -471,10 +627,18 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
   /** Fábrica de capas Leaflet falsas (tileLayer/polyline/marker/divIcon): todas soportan
    * `.addTo(mapa)` (se registran en `mapa.capas`), `.on(evento, cb)` — guardando el callback en
    * `capa.callbacks[evento]` para poder disparar `tileload`/`tileerror` a mano en los tests de
-   * integración del reintento de tiles — y los demás métodos que `route-map-html.ts` invoca sobre
-   * ellas (`setStyle`, `setIcon`, `setLatLng`, `getLatLng`, `getBounds`, `bringToFront`,
-   * `getTileUrl`) — sin implementar nada de geometría real, solo lo mínimo para que el script
-   * corra sin `TypeError: x is not a function`. */
+   * integración del reintento de tiles — y los demás métodos/propiedades que `route-map-html.ts`
+   * invoca sobre ellas (`setStyle`, `setIcon`, `setLatLng`, `getLatLng`, `getBounds`,
+   * `bringToFront`, `options`) — sin implementar nada de geometría real, solo lo mínimo para que
+   * el script corra sin `TypeError: x is not a function`.
+   *
+   * `capa.options` replica lo que Leaflet real deja en `layer.options` tras `initialize` (el
+   * `opts` con el que se llamó al constructor) — desde el GAP 1 de la verificación `verify-fix`
+   * de Codex, `route-map-html.ts` lee `tileLayer.options.zoomOffset/zoomReverse/maxZoom/
+   * subdomains` para reconstruir la URL de un tile a mano (`construirUrlTileZoomExacto`), en vez
+   * de `tileLayer.getTileUrl(coords)` — ver el comentario grande sobre
+   * `CONSTRUIR_URL_TILE_JS_SOURCE` en route-map-html.ts para el porqué completo. Ya NO se
+   * implementa `getTileUrl` acá: la producción no la llama más para el reintento. */
   function crearCapaLeafletFalsa(tipo: string, args: unknown) {
     const callbacks: Record<string, (evento: unknown) => void> = {};
     const capa: Record<string, unknown> = {
@@ -482,6 +646,7 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
       args,
       handlersRegistrados: [] as string[],
       callbacks,
+      options: (args as { opts?: Record<string, unknown> } | undefined)?.opts ?? {},
     };
     capa.addTo = (mapaFalso: { capas: unknown[] }) => {
       mapaFalso.capas.push(capa);
@@ -498,10 +663,6 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
     capa.getLatLng = () => ({ lat: -17.38, lng: -66.15 });
     capa.getBounds = () => 'bounds-falso';
     capa.bringToFront = () => capa;
-    // Réplica mínima de Leaflet real: URL de tile a partir de {x,y,z}. Solo hace falta que sea
-    // determinística y distinguible, no que coincida con el formato exacto de Leaflet.
-    capa.getTileUrl = (coords: { x: number; y: number; z: number }) =>
-      `https://tile.openstreetmap.org/${coords.z}/${coords.x}/${coords.y}.png`;
     return capa;
   }
 
@@ -671,6 +832,57 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
 
       // La capa sigue montada en el mapa — nunca se llamó map.removeLayer(tileLayer).
       expect(mapaFalso.capas).toContain(tileLayerCapa);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // GAP 1 del verify-fix de Codex, ejercitado de punta a punta con el <script> real (no una
+  // reimplementación): antes de este fix, `obtenerUrlOriginal` llamaba `tileLayer.getTileUrl
+  // (coords)`; el mock de este describe ni siquiera exponía `tileLayer.options`
+  // (zoomOffset/zoomReverse/maxZoom/subdomains), así que si la producción hubiera seguido
+  // dependiendo de eso sin `construirUrlTileZoomExacto`, este test habría tirado
+  // `TypeError: Cannot read properties of undefined` al leer `tileLayer.options.zoomOffset`. Este
+  // test corre el <script> real, dispara un `tileerror` con `coords.z = 10` y confirma que la URL
+  // reintentada conserva ese `10` — armada por `construirUrlTileZoomExacto` a partir de
+  // `tileLayer.options` (ver `crearCapaLeafletFalsa`), nunca de un "zoom actual" que este mock no
+  // modela (el mismo motivo por el que `tileLayer.getTileUrl` ya no se usa en producción).
+  it('el reintento de un tile fallido arma la URL con coords.z explícito, vía tileLayer.options (no tileLayer.getTileUrl)', () => {
+    vi.useFakeTimers();
+    try {
+      const html = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
+      const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+      const sandbox: Record<string, unknown> = {
+        L: crearLFalso(),
+        document: { addEventListener: () => {} },
+        window: { addEventListener: () => {} },
+        console,
+        setTimeout,
+        clearTimeout,
+        setInterval,
+        clearInterval,
+        Date,
+        Math,
+      };
+      vm.createContext(sandbox);
+      vm.runInContext(scriptAplicacion, sandbox);
+
+      type CapaFalsa = { tipo: string; callbacks: Record<string, (evento: unknown) => void> };
+      const mapaFalso = sandbox.map as { capas: CapaFalsa[] };
+      const tileLayerCapa = mapaFalso.capas.find((c) => c.tipo === 'tileLayer');
+      expect(tileLayerCapa).toBeDefined();
+
+      const tileFalso = { src: '', parentNode: {} };
+      tileLayerCapa!.callbacks.tileerror!({ tile: tileFalso, coords: { x: 300, y: 400, z: 10 } });
+      vi.advanceTimersByTime(30000);
+
+      expect(tileFalso.src).toContain('/10/300/400.png');
+
+      // Guarda mecánica del hallazgo: si alguien reintrodujera la delegación en
+      // tileLayer.getTileUrl(coords) como código real (no en un comentario explicativo), este
+      // assert lo detecta sin depender de que el mock rompa.
+      expect(scriptAplicacion).not.toContain('return tileLayer.getTileUrl(coords)');
     } finally {
       vi.useRealTimers();
     }
