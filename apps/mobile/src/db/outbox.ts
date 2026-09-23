@@ -280,8 +280,19 @@ async function generarEventId(): Promise<string> {
  * `rescate-dia1.ts` reportaba (y persistía como registro de auditoría, `guardarResultadoRescate`)
  * "3000 encolados" en un re-run que en realidad escribió 0 filas nuevas.
  */
-export async function encolarEvento(
-  db: SQLite.SQLiteDatabase,
+/**
+ * R2 (hallazgo de revisión SERIO, atomicidad de `encolarEventoYLimpiarVisita`): cuerpo RAW del
+ * INSERT — SIN su propio `conReintentoSiHandleMuerto` — para que `encolarEventoYLimpiarVisita`
+ * pueda correrlo DENTRO de una transacción cuya recuperación de handle envuelve la transacción
+ * ENTERA (ver el docblock de esa función). Si esta función tuviera su propia recuperación, un
+ * handle que muere A MITAD de esa transacción reabriría una conexión NUEVA solo para el INSERT
+ * — corriendo FUERA de la transacción abierta en la conexión vieja (ahora zombi) — mientras el
+ * `DELETE` de al lado podría (o no) terminar en una tercera conexión: exactamente la ruptura de
+ * atomicidad que R2 existe para cerrar. `encolarEvento` (abajo) es el único wrapper con
+ * recuperación propia, para el camino simple (sin transacción) que no tiene este riesgo.
+ */
+async function insertarEventoRaw(
+  dbActiva: SQLite.SQLiteDatabase,
   evento: EventoOutboxNuevo,
 ): Promise<{ eventId: string; insertado: boolean }> {
   const eventIdProvisto = evento.eventId !== undefined;
@@ -289,16 +300,21 @@ export async function encolarEvento(
   const sql = eventIdProvisto
     ? "INSERT OR IGNORE INTO outbox (event_id, device_id, ts, tipo, payload, estado) VALUES (?, ?, ?, ?, ?, 'pendiente')"
     : "INSERT INTO outbox (event_id, device_id, ts, tipo, payload, estado) VALUES (?, ?, ?, ?, ?, 'pendiente')";
-  const result = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.runAsync(sql, [
-      eventId,
-      evento.deviceId,
-      new Date().toISOString(),
-      evento.tipo,
-      JSON.stringify(evento.payload),
-    ]),
-  );
+  const result = await dbActiva.runAsync(sql, [
+    eventId,
+    evento.deviceId,
+    new Date().toISOString(),
+    evento.tipo,
+    JSON.stringify(evento.payload),
+  ]);
   return { eventId, insertado: result.changes > 0 };
+}
+
+export async function encolarEvento(
+  db: SQLite.SQLiteDatabase,
+  evento: EventoOutboxNuevo,
+): Promise<{ eventId: string; insertado: boolean }> {
+  return conReintentoSiHandleMuerto(db, (dbActiva) => insertarEventoRaw(dbActiva, evento));
 }
 
 /**
@@ -429,6 +445,16 @@ export async function guardarVisitaPendiente(
   );
 }
 
+/** R2: cuerpo RAW del DELETE — SIN su propia recuperación de handle, mismo motivo que
+ * `insertarEventoRaw` (ver su docblock): `encolarEventoYLimpiarVisita` lo corre dentro de una
+ * transacción cuya recuperación envuelve la transacción entera. */
+async function eliminarVisitaPendienteRaw(
+  dbActiva: SQLite.SQLiteDatabase,
+  clave: string,
+): Promise<void> {
+  await dbActiva.runAsync('DELETE FROM visitas_pendientes WHERE clave = ?', [clave]);
+}
+
 /** Borra la fila de una visita que ya no está pendiente (confirmada o re-armada sin confirmar,
  * B5 en `geofence.ts`). Llamarla con una `clave` que no tiene fila es un no-op seguro
  * (`DELETE ... WHERE` sin matches). */
@@ -436,9 +462,7 @@ export async function eliminarVisitaPendiente(
   db: SQLite.SQLiteDatabase,
   clave: string,
 ): Promise<void> {
-  await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.runAsync('DELETE FROM visitas_pendientes WHERE clave = ?', [clave]),
-  );
+  await conReintentoSiHandleMuerto(db, (dbActiva) => eliminarVisitaPendienteRaw(dbActiva, clave));
 }
 
 /** Lee las visitas pendientes de una sesión (o de todas, sin filtro) — usada al sembrar
@@ -476,6 +500,31 @@ export async function obtenerVisitasPendientes(
  * `claveVisitaPendiente === undefined` (evento sin visita pendiente asociada, no debería
  * ocurrir para un `cumplimiento_punto_control` pero se contempla por completitud) encola sin
  * abrir transacción — no hay nada que borrar.
+ *
+ * FIX POST-REVISIÓN (R2, hallazgo de revisión SERIO — "atomicidad rota por recuperación de
+ * handle"): la transacción (`withTransactionAsync`) ahora se abre DENTRO de
+ * `conReintentoSiHandleMuerto`, no al revés. Antes, `db.withTransactionAsync` corría sobre el
+ * handle recibido (`db`) mientras el INSERT/DELETE de adentro llamaban a `encolarEvento`/
+ * `eliminarVisitaPendiente` — cada uno con su PROPIA recuperación de handle. Si `db` moría a
+ * mitad de la transacción, esa recuperación interna abría una conexión NUEVA (`dbNueva`) y
+ * corría el INSERT (o el DELETE) ahí — FUERA de la transacción abierta en la conexión vieja
+ * (ya zombi) — mientras el `COMMIT` implícito de `withTransactionAsync`, al final, seguía
+ * apuntando al handle MUERTO y fallaba. Resultado real: el INSERT y el DELETE podían quedar
+ * autocommiteados por separado en `dbNueva` (sin ninguna atomicidad entre sí) mientras el
+ * caller recibía una EXCEPCIÓN (el `COMMIT` fallido) como si nada se hubiera escrito — un
+ * reintento aguas arriba podía volver a encolar el mismo cumplimiento con un `eventId` nuevo
+ * (mitigado, no eliminado, por el eventId determinístico — ver `derivarEventIdDeterministico`,
+ * `@quivo/shared`) sobre una fila de `visitas_pendientes` que ya no correspondía.
+ *
+ * Con la transacción entera envuelta en `conReintentoSiHandleMuerto`, un handle que muere en
+ * CUALQUIER punto (BEGIN, INSERT, DELETE o COMMIT) hace que la función reintente la operación
+ * COMPLETA una vez, desde cero, contra una ÚNICA conexión fresca (`dbActiva`) — nunca mezcla
+ * dos conexiones dentro de la misma transacción. `insertarEventoRaw`/`eliminarVisitaPendienteRaw`
+ * (sin su propia recuperación) son justamente lo que hace esto seguro: si tuvieran la suya
+ * propia, podrían reabrir POR SU CUENTA a mitad de la transacción externa, reintroduciendo el
+ * mismo bug un nivel más adentro. Reintentar la transacción completa es seguro aunque ya haya
+ * corrido parte del INSERT: si el `COMMIT` no se confirmó, SQLite garantiza que nada de la
+ * transacción quedó persistido (rollback implícito de la conexión muerta).
  */
 export async function encolarEventoYLimpiarVisita(
   db: SQLite.SQLiteDatabase,
@@ -484,15 +533,17 @@ export async function encolarEventoYLimpiarVisita(
 ): Promise<{ eventId: string; insertado: boolean }> {
   if (claveVisitaPendiente === undefined) return encolarEvento(db, evento);
 
-  let resultado: { eventId: string; insertado: boolean } | undefined;
-  await db.withTransactionAsync(async () => {
-    resultado = await encolarEvento(db, evento);
-    await eliminarVisitaPendiente(db, claveVisitaPendiente);
+  return conReintentoSiHandleMuerto(db, async (dbActiva) => {
+    let resultado: { eventId: string; insertado: boolean } | undefined;
+    await dbActiva.withTransactionAsync(async () => {
+      resultado = await insertarEventoRaw(dbActiva, evento);
+      await eliminarVisitaPendienteRaw(dbActiva, claveVisitaPendiente);
+    });
+    // `withTransactionAsync` solo resuelve si `task` resolvió sin lanzar — `resultado` siempre
+    // queda asignado en ese caso. El `as` documenta esa garantía en vez de forzar un chequeo de
+    // `undefined` que nunca puede ser `true` en este punto.
+    return resultado as { eventId: string; insertado: boolean };
   });
-  // `withTransactionAsync` solo resuelve si `task` resolvió sin lanzar — `resultado` siempre
-  // queda asignado en ese caso. El `as` documenta esa garantía en vez de forzar un chequeo de
-  // `undefined` que nunca puede ser `true` en este punto.
-  return resultado as { eventId: string; insertado: boolean };
 }
 
 /** H4 (hallazgo de revisión, medio): pasa por `conReintentoSiHandleMuerto` igual que los
