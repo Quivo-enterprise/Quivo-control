@@ -300,6 +300,118 @@ describe('construirEventosDeUbicacion', () => {
     });
   });
 
+  describe('recorrido completo con radio de detección MENOR que RADIO_AVISO_M (Entrega 18/tarea 8)', () => {
+    it('aviso a 150 m → proximidad a 40 m → confirmación de evidencia → rearme de detección y de voz → segunda pasada completa, sin perder ninguna', () => {
+      // radioToleranciaM (30) << RADIO_AVISO_M (150): exactamente el caso que motivó separar
+      // detección de anuncio (Entrega 6) y, después, decoplar la confirmación de proximidad de
+      // la de evidencia (Decisión CTO 2026-09-23). Recorre las DOS pasadas completas de un
+      // acercamiento real y verifica que cada señal (aviso, proximidad, evidencia, rearme de
+      // detección, rearme de voz) dispara exactamente en el tick que corresponde — nunca antes,
+      // nunca después — y que "0 detecciones sin paso anotado" se sostiene (2 pasadas, 2
+      // eventos).
+      const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
+      const sesionId = 'sesion-recorrido-completo';
+      const t0 = Date.parse('2026-09-23T12:00:00.000Z');
+      let estados = new Map<string, EstadoPuntoControl>();
+      const pasadasEmitidas: number[] = [];
+      const puntosRearmadosVistos: string[][] = [];
+      const puntosRearmadosVozVistos: string[][] = [];
+
+      function tick(metros: number, offsetMs: number) {
+        const resultado = construirEventosDeUbicacion(
+          ubicacion(latitudAMetrosDelPunto(metros), -63.18, t0 + offsetMs),
+          contexto([pc], sesionId),
+          estados,
+        );
+        estados = conTransicionesAplicadas(estados, resultado.transicionesEstado);
+        for (const { pasada } of resultado.eventos
+          .filter((e) => e.tipo === 'cumplimiento_punto_control')
+          .map((e) => e.payload as { pasada: number })) {
+          pasadasEmitidas.push(pasada);
+        }
+        puntosRearmadosVistos.push(resultado.puntosRearmados);
+        puntosRearmadosVozVistos.push(resultado.puntosRearmadosVoz);
+        return resultado;
+      }
+
+      // --- Pasada 1 ---
+      // 160 m: fuera de RADIO_AVISO_M (150) — ningún aviso, ninguna visita.
+      const r1 = tick(160, 0);
+      expect(r1.deteccionAproximacion).toBeNull();
+      expect(r1.deteccionConfirmacionProximidad).toBeNull();
+
+      // 140 m: dentro de RADIO_AVISO_M — aviso informativo. Todavía fuera del radio de
+      // detección (30) — sin visita, sin proximidad (RADIO_CONFIRMACION_M).
+      const r2 = tick(140, 10_000);
+      expect(r2.deteccionAproximacion).toMatchObject({ puntoControlId: 'pc-1', fase: 'aproximacion' });
+      expect(r2.deteccionConfirmacionProximidad).toBeNull();
+
+      // 20 m: CUMPLE el radio de detección (30) ⇒ ENTRA. Evidencia todavía sin confirmar
+      // (recién arranca el mínimo local) — pero 20 <= RADIO_CONFIRMACION_M (40): la
+      // PROXIMIDAD dispara en este MISMO tick, antes que la evidencia.
+      const r3 = tick(20, 20_000);
+      expect(r3.deteccion).toBeNull();
+      expect(r3.deteccionConfirmacionProximidad).toMatchObject({
+        puntoControlId: 'pc-1',
+        fase: 'confirmado-proximidad',
+      });
+
+      // 25 m: la distancia CRECE respecto del mínimo (20) ⇒ CONFIRMA la evidencia (pasada 1,
+      // mínimo 20). La proximidad ya no vuelve a disparar (la visita quedó `confirmado: true`).
+      const r4 = tick(25, 30_000);
+      expect(r4.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 1 });
+      expect(r4.deteccionConfirmacionProximidad).toBeNull();
+
+      // 60 m: fuera del radio de re-armado de DETECCIÓN (30 * 1.5 = 45) — 1er fix consecutivo,
+      // no alcanza todavía. Sigue <= RADIO_AVISO_M: la voz no se entera.
+      const r5 = tick(60, 40_000);
+      expect(r5.puntosRearmados).toEqual([]);
+
+      // 80 m: 2do fix consecutivo fuera de 45 m ⇒ RE-ARMA la DETECCIÓN. Sigue <= 150: la
+      // histéresis de VOZ (independiente, G1) NO re-arma acá — bien adentro de la zona de
+      // aviso todavía.
+      const r6 = tick(80, 50_000);
+      expect(r6.puntosRearmados).toEqual(['pc-1']);
+      expect(r6.puntosRearmadosVoz).toEqual([]);
+
+      // 300 m: fuera de RADIO_AVISO_M (150) Y de RADIO_AVISO_M * 1.5 (225) — 1er fix
+      // consecutivo de la histéresis de VOZ, no alcanza todavía.
+      const r7 = tick(300, 60_000);
+      expect(r7.deteccionAproximacion).toBeNull();
+      expect(r7.puntosRearmadosVoz).toEqual([]);
+
+      // 310 m: 2do fix consecutivo más allá de 225 m ⇒ RE-ARMA la VOZ (G1) — recién ahora,
+      // bien afuera de la zona de aviso, no en el rearme de detección (60-80 m) de arriba.
+      const r8 = tick(310, 70_000);
+      expect(r8.puntosRearmadosVoz).toEqual(['pc-1']);
+
+      // --- Pasada 2 (bien pasado PASADA_MIN_MS desde la confirmación anterior) ---
+      const tPasada2 = PASADA_MIN_MS + 100_000;
+      // 140 m: aviso de nuevo (la histéresis de detección Y la de voz ya re-armaron).
+      const r9 = tick(140, tPasada2);
+      expect(r9.deteccionAproximacion).toMatchObject({ puntoControlId: 'pc-1', fase: 'aproximacion' });
+
+      // 20 m: ENTRA de nuevo (nueva visita) — proximidad dispara otra vez, en tiempo real.
+      const r10 = tick(20, tPasada2 + 10_000);
+      expect(r10.deteccion).toBeNull();
+      expect(r10.deteccionConfirmacionProximidad).toMatchObject({
+        puntoControlId: 'pc-1',
+        fase: 'confirmado-proximidad',
+      });
+
+      // 25 m: confirma la EVIDENCIA de la pasada 2 — "0 detecciones sin paso anotado".
+      const r11 = tick(25, tPasada2 + 20_000);
+      expect(r11.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 2 });
+
+      // Verificación final: exactamente 2 pasadas emitidas (1 y 2, sin duplicados ni huecos),
+      // el re-armado de detección ocurrió UNA sola vez en toda la corrida (tick de 80 m) y el
+      // de voz también UNA sola vez (tick de 310 m) — nunca se confundieron entre sí.
+      expect(pasadasEmitidas).toEqual([1, 2]);
+      expect(puntosRearmadosVistos.filter((p) => p.length > 0)).toEqual([['pc-1']]);
+      expect(puntosRearmadosVozVistos.filter((p) => p.length > 0)).toEqual([['pc-1']]);
+    });
+  });
+
   it('NO muta el Map de estados recibido (la mutación es responsabilidad del caller, tras confirmar la escritura)', () => {
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
     const estados = new Map<string, EstadoPuntoControl>();
