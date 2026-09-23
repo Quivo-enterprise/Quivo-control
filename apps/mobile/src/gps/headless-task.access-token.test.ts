@@ -26,8 +26,10 @@ vi.mock('../db/outbox', () => ({
   obtenerEventosPorTipo: vi.fn(),
   adquirirLease: vi.fn().mockResolvedValue(true),
   liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
+  // G1 ronda 4: `ejecutarRefresh` renueva (compare-and-set) el lease antes de persistir.
+  renovarLease: vi.fn().mockResolvedValue(true),
   ID_LEASE_REFRESH_SESION: 'refresh-sesion',
-  TTL_LEASE_REFRESH_SESION_MS: 15_000,
+  TTL_LEASE_REFRESH_SESION_MS: 20_000,
 }));
 
 vi.mock('../db/paquete-dia', () => ({

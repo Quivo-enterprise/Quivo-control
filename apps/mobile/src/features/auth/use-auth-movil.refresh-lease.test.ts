@@ -62,7 +62,7 @@ vi.mock('../../shared/security/sesion-movil-store', () => ({
 vi.mock('../../db/outbox', () => ({
   abrirOutbox: vi.fn(async () => ({})),
   ID_LEASE_REFRESH_SESION: 'refresh-sesion',
-  TTL_LEASE_REFRESH_SESION_MS: 15_000,
+  TTL_LEASE_REFRESH_SESION_MS: 20_000,
   adquirirLease: vi.fn(
     async (_db: unknown, _id: string, token: string, ahoraMs: number, ttlMs: number) => {
       if (compartido.lease && compartido.lease.expiraAt > ahoraMs) return false;
@@ -75,6 +75,16 @@ vi.mock('../../db/outbox', () => ({
       if (compartido.lease?.owner === token) {
         compartido.lease = { owner: token, expiraAt: ahoraMs + cooldownMs };
       }
+    },
+  ),
+  // G1 ronda 4: `renovarLease` es el MISMO UPDATE condicionado por `owner` que
+  // `liberarLeaseConCooldown` (ver `db/outbox.ts`) — reproduce esa semántica de compare-and-set
+  // sobre la fila de lease compartida en memoria de este fake.
+  renovarLease: vi.fn(
+    async (_db: unknown, _id: string, token: string, ahoraMs: number, ttlMs: number) => {
+      if (compartido.lease?.owner !== token) return false;
+      compartido.lease = { owner: token, expiraAt: ahoraMs + ttlMs };
+      return true;
     },
   ),
 }));

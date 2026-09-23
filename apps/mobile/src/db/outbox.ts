@@ -757,11 +757,19 @@ export const ID_LEASE_REFRESH_SESION = 'refresh-sesion';
 
 /**
  * TTL del lease de refresh — holgado sobre `REQUEST_TIMEOUT_MS` (12 s, `auth-movil-api.ts`),
- * la única llamada de red que corre bajo este lease (a diferencia del drenado, acá no hay
- * lotes que encadenar ni renovación a mitad de camino: es una sola request). El margen de 3 s
- * cubre el `await` extra de releer SecureStore antes de decidir.
+ * la única llamada de red que corre bajo este lease. G1 (hallazgo de `/codex-debug verify-fix`
+ * ronda 4, ALTO): el margen anterior (3 s) no dejaba lugar a que el `setTimeout` del request
+ * (que NO acota una suspensión del runtime, solo el tiempo de red una vez que el JS corre) más
+ * las relecturas de SecureStore/escritura final se completaran antes de que el TTL venciera.
+ * Subido a 8 s de margen (20 s total): cubre esas relecturas/escritura con holgura real bajo
+ * carga, sin pretender ser una garantía — la garantía de fondo NO es este margen, es el
+ * compare-and-set de `ejecutarRefresh` (`renovarLease` justo antes de persistir, en
+ * `use-auth-movil.ts`): si el margen igual no alcanza y el lease se pierde después de que el
+ * servidor ya rotó, ese chequeo detecta la pérdida y aborta la persistencia insegura en vez de
+ * arriesgar pisar el estado de otro contexto — ver su docblock para el caso aceptado
+ * explícitamente que queda (el próximo 401 exige un login limpio).
  */
-export const TTL_LEASE_REFRESH_SESION_MS = 15_000;
+export const TTL_LEASE_REFRESH_SESION_MS = 20_000;
 
 /**
  * Hallazgo 4 (code review, BAJO — reloj de pared sin cota superior): `adquirirLease` compara

@@ -135,4 +135,81 @@ describe('actualizarContextoSesionMovil — G2 (verify-fix): nunca pisa tokens r
     expect(resultado).toBeNull();
     expect(await cargarSesionMovil()).toBeNull();
   });
+
+  /**
+   * G2 ronda 4 (hallazgo de `/codex-debug verify-fix`, ALTO): Codex reprodujo que "releer +
+   * escribir el objeto completo" tampoco es atómico — una rotación puede terminar de rotar y
+   * persistir EXACTAMENTE entre la relectura y la escritura de `actualizarContextoSesionMovil`,
+   * y el test anterior (arriba) solo cubría una rotación COMPLETADA antes de que la relectura
+   * arrancara. Este test fuerza esa ventana exacta con un `setItemAsync` controlado a mano: deja
+   * avanzar la lectura de `actualizarContextoSesionMovil` con normalidad, pero pausa
+   * específicamente su ESCRITURA (la clave `quivo.mobile.contexto.v1`) hasta después de que una
+   * rotación concurrente (`actualizarSesionMovil`) corra de punta a punta.
+   */
+  it('G2 (verify-fix ronda 4, caso reportado por Codex): una rotación que corre EXACTAMENTE entre la lectura y la escritura de actualizarContextoSesionMovil no se pierde', async () => {
+    const secureStore = await import('expo-secure-store');
+    const setItemAsyncMock = vi.mocked(secureStore.setItemAsync);
+    const CLAVE_CONTEXTO = 'quivo.mobile.contexto.v1';
+
+    const t0 = sesion('T0');
+    await guardarSesionMovil(t0);
+
+    let liberarEscrituraContexto!: () => void;
+    const escrituraContextoBloqueada = new Promise<void>((resolve) => {
+      liberarEscrituraContexto = resolve;
+    });
+    let alcanzoEscrituraContexto = false;
+    setItemAsyncMock.mockImplementation(async (clave: string, valor: string) => {
+      if (clave === CLAVE_CONTEXTO) {
+        alcanzoEscrituraContexto = true;
+        await escrituraContextoBloqueada;
+      }
+      almacenFalso.set(clave, valor);
+    });
+
+    try {
+      const nuevoContexto = contexto();
+      const promesaContexto = actualizarContextoSesionMovil(nuevoContexto);
+
+      // Deja que `actualizarContextoSesionMovil` avance hasta quedar PARADO justo en su
+      // escritura (ya leyó T0 en memoria) — el hueco exacto que el diseño de una sola clave
+      // combinada dejaba abierto.
+      await vi.waitFor(() => expect(alcanzoEscrituraContexto).toBe(true));
+
+      // Mientras el contexto sigue "en vuelo", una rotación CONCURRENTE corre de punta a punta
+      // — su escritura usa OTRA clave (`quivo.mobile.credenciales.v1`), así que el gate de
+      // arriba no la afecta en absoluto.
+      const tokensRotados = {
+        accessToken: `access-T1-${'x'.repeat(32)}`,
+        refreshToken: `T1-${'x'.repeat(32)}`,
+        accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      };
+      const rotada = await actualizarSesionMovil(t0, tokensRotados);
+      expect(rotada.refreshToken).toBe(tokensRotados.refreshToken);
+
+      // Recién ahora se libera la escritura de contexto, que arrancó con T0 en su copia en
+      // memoria (`vigente`) — el bug viejo hubiera pisado T1 con esa copia al escribir.
+      liberarEscrituraContexto();
+      const resultado = await promesaContexto;
+
+      expect(resultado?.contexto).toEqual(nuevoContexto);
+      // El valor de RETORNO de `actualizarContextoSesionMovil` refleja lo que leyó AL EMPEZAR
+      // (T0 — la lectura corrió ANTES de que la rotación existiera, a propósito, para forzar
+      // el hueco exacto). Eso es aceptable: nadie asume que ese retorno sea la sesión más
+      // fresca posible, y `use-auth-movil.ts` ya maneja esto (`actualizada ?? actual.sesion`,
+      // seguido por el próximo `obtenerAccessToken`/reconciliación). LA PROPIEDAD QUE CIERRA
+      // G2 DE VERDAD es la del DISCO, no la del valor de retorno — ver `enDisco` abajo.
+      expect(resultado?.refreshToken).toBe(t0.refreshToken);
+
+      const enDisco = await cargarSesionMovil();
+      expect(enDisco?.refreshToken).toBe(tokensRotados.refreshToken);
+      expect(enDisco?.contexto).toEqual(nuevoContexto);
+    } finally {
+      // Restaura el mock genérico para no afectar otros tests de este archivo.
+      setItemAsyncMock.mockImplementation(async (clave: string, valor: string) => {
+        almacenFalso.set(clave, valor);
+      });
+    }
+  });
 });
