@@ -365,7 +365,7 @@ describe('anunciarDeteccionesDelTick (Entrega 7)', () => {
     expect(scheduleNotificationMock).not.toHaveBeenCalled();
   });
 
-  it('FIX POST-REVISIÓN (bug 4): puntosRearmados libera el dedupe de aproximación ANTES de procesar el tick', async () => {
+  it('FIX POST-REVISIÓN (G1): puntosRearmadosVoz libera el dedupe de aproximación ANTES de procesar el tick', async () => {
     const puntoId = 'pc-tick-rearme';
     const opts = opciones([puntoControl(puntoId, 0)]);
 
@@ -377,16 +377,41 @@ describe('anunciarDeteccionesDelTick (Entrega 7)', () => {
     );
     expect(speakMock).toHaveBeenCalledTimes(1);
 
-    // Un tick que re-arma ESTE punto (`puntosRearmados`) y, en el mismo tick, ya está de nuevo
-    // dentro de RADIO_AVISO_M (rebote) — debe poder volver a avisar sin esperar al tick
-    // siguiente.
+    // Un tick que re-arma la histéresis PROPIA de voz de ESTE punto (`puntosRearmadosVoz`,
+    // `gps/geofence.ts` — G1) y, en el mismo tick, ya está de nuevo dentro de RADIO_AVISO_M
+    // (rebote) — debe poder volver a avisar sin esperar al tick siguiente. A propósito NO se usa
+    // `puntosRearmados` (la histéresis de DETECCIÓN, sobre `radioToleranciaM`): reusar esa acá
+    // era justo el bug que G1 cierra (la detección re-arma mucho antes de que el vehículo salga
+    // de verdad de la zona de aviso).
     await anunciarDeteccionesDelTick(DB_FALSO, opts, {
       deteccion: null,
       deteccionAproximacion: deteccion({ puntoControlId: puntoId, fase: 'aproximacion', distanciaM: 140 }),
-      puntosRearmados: [puntoId],
+      puntosRearmadosVoz: [puntoId],
     });
 
     expect(speakMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('FIX POST-REVISIÓN (G1): puntosRearmados (histéresis de DETECCIÓN) NO libera el dedupe de voz', async () => {
+    const puntoId = 'pc-tick-rearme-deteccion';
+    const opts = opciones([puntoControl(puntoId, 0)]);
+
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: puntoId, fase: 'aproximacion', distanciaM: 100 }),
+      opts,
+    );
+    expect(speakMock).toHaveBeenCalledTimes(1);
+
+    // Sin `puntosRearmadosVoz` (undefined): la detección pudo haber re-armado
+    // (`radioToleranciaM`, mucho más chico que `RADIO_AVISO_M`), pero eso YA NO alcanza para
+    // reabrir la voz (G1) — el vehículo puede seguir a 60-140 m, adentro de la zona de aviso.
+    await anunciarDeteccionesDelTick(DB_FALSO, opts, {
+      deteccion: null,
+      deteccionAproximacion: deteccion({ puntoControlId: puntoId, fase: 'aproximacion', distanciaM: 90 }),
+    });
+
+    expect(speakMock).toHaveBeenCalledTimes(1);
   });
 });
 
