@@ -6,6 +6,17 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Próxima entrega: APK conductor build 11 — plan aprobado 2026-09-23
+
+**Plan: [`plan-apk-build-11.md`](plan-apk-build-11.md).** Decisiones del CTO:
+
+- **Alcance P0 completo:** cerrar las 4 ramas móviles (Entregas 1–7, 7b, 25, 31) y sumar las Entregas 8, 9, 26 y 28.
+- **Radio:** detectar a 150 m y confirmar a 40 m. Cierra la decisión abierta #1.
+- **Fuera de este APK:** palancas de costo D (sync a 60 s) y captura a 30 m.
+- **Cambio del nombre de paquete antes del build**, porque el trial de Transistorsoft de `com.quivotech.conductor` venció. El APK nuevo no se instala encima del viejo: hay que drenar cada teléfono antes de desinstalar.
+
+Estado: arrancando la Fase 1 (drenado, anuncio y mapa offline en paralelo).
+
 ## Costos recalibrados con prueba de carga + confirmación en Cloud SQL real — 2026-09-22
 
 Plan: `docs/plan-experimento-puntos-gps.md`. Resultados: `scripts/experimentos/gps/carga/resultados/resumen.md`.
