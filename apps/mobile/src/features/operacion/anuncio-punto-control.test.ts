@@ -52,6 +52,7 @@ import {
   anunciarPuntoControl,
   asegurarPermisoNotificaciones,
   limpiarAproximacionesAnunciadas,
+  limpiarConfirmacionesProximidadAnunciadas,
   obtenerEstadoPermisoNotificaciones,
   type AnuncioPuntoControlOpciones,
 } from './anuncio-punto-control';
@@ -327,6 +328,105 @@ describe('anunciarPuntoControl — fase "confirmado" (Entrega 7, dedupe persisti
 
     expect(vibrateMock).not.toHaveBeenCalled();
     expect(scheduleNotificationMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('anunciarPuntoControl — fase "confirmado-proximidad" (DECISIÓN CTO 2026-09-23, RADIO_CONFIRMACION_M)', () => {
+  beforeEach(() => {
+    vibrateMock.mockClear();
+    speakMock.mockClear();
+    scheduleNotificationMock.mockClear();
+    setChannelMock.mockClear();
+    captureExceptionMock.mockClear();
+    registrarAnuncioSiNuevoMock.mockReset().mockResolvedValue(true);
+  });
+
+  it('vibra + notifica "llegaste", nunca habla, y NO pasa por el dedupe persistido (no hay pasada todavía)', async () => {
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'pc-prox-1', fase: 'confirmado-proximidad', distanciaM: 30 }),
+      opciones([puntoControl('pc-prox-1', 5)]),
+    );
+
+    expect(vibrateMock).toHaveBeenCalledTimes(1);
+    expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(registrarAnuncioSiNuevoMock).not.toHaveBeenCalled();
+    expect(scheduleNotificationMock.mock.calls[0]?.[0]).toMatchObject({
+      content: { title: 'Punto de control 6: llegaste' },
+      trigger: { channelId: 'quivo-anuncio-punto-control-v1' },
+    });
+  });
+
+  it('dedupe EN MEMORIA por puntoControlId: una segunda detección de proximidad para el MISMO punto no repite el anuncio', async () => {
+    const opts = opciones([puntoControl('pc-prox-2', 0)]);
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'pc-prox-2', fase: 'confirmado-proximidad', distanciaM: 35 }),
+      opts,
+    );
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'pc-prox-2', fase: 'confirmado-proximidad', distanciaM: 10 }),
+      opts,
+    );
+
+    expect(vibrateMock).toHaveBeenCalledTimes(1);
+    expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('limpiarConfirmacionesProximidadAnunciadas (liberado por puntosRearmados, la histéresis de DETECCIÓN) permite un nuevo anuncio', async () => {
+    const opts = opciones([puntoControl('pc-prox-3', 0)]);
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'pc-prox-3', fase: 'confirmado-proximidad', distanciaM: 35 }),
+      opts,
+    );
+    limpiarConfirmacionesProximidadAnunciadas(['pc-prox-3']);
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'pc-prox-3', fase: 'confirmado-proximidad', distanciaM: 35 }),
+      opts,
+    );
+
+    expect(vibrateMock).toHaveBeenCalledTimes(2);
+    expect(scheduleNotificationMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('DECISIÓN CTO: si la proximidad YA anunció "llegaste", la confirmación de EVIDENCIA (fase "confirmado") para la MISMA visita NO repite vibración/notificación', async () => {
+    const opts = opciones([puntoControl('pc-prox-4', 0)]);
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'pc-prox-4', fase: 'confirmado-proximidad', distanciaM: 20 }),
+      opts,
+    );
+    expect(vibrateMock).toHaveBeenCalledTimes(1);
+
+    // La evidencia confirma varios fixes después, en el mínimo local — mismo puntoControlId.
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'pc-prox-4', fase: 'confirmado', pasada: 1 }),
+      opts,
+    );
+
+    // Sin doble aviso para el mismo paso: ni vibración ni notificación nuevas, y el dedupe
+    // persistido (SQLite) ni se consulta — no hace falta, ya se avisó.
+    expect(vibrateMock).toHaveBeenCalledTimes(1);
+    expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
+    expect(registrarAnuncioSiNuevoMock).not.toHaveBeenCalled();
+  });
+
+  it('si la proximidad NUNCA anunció (el mínimo no bajó de RADIO_CONFIRMACION_M), la confirmación de evidencia sigue avisando como siempre — "el punto no puede quedar sin confirmar"', async () => {
+    const opts = opciones([puntoControl('pc-prox-5', 0)]);
+
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'pc-prox-5', fase: 'confirmado', pasada: 1 }),
+      opts,
+    );
+
+    expect(vibrateMock).toHaveBeenCalledTimes(1);
+    expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
   });
 });
 

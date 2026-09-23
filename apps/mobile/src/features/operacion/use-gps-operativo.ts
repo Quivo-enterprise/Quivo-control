@@ -30,6 +30,7 @@ import { clavesCumplimientoDesdePayloads, combinarConVisitasPendientes } from '.
 import {
   asegurarPermisoNotificaciones,
   limpiarAproximacionesAnunciadas,
+  limpiarConfirmacionesProximidadAnunciadas,
 } from './anuncio-punto-control';
 import {
   AUTORIZACION_DENEGADA,
@@ -133,6 +134,12 @@ export function useGpsOperativo(
   const [deteccionAproximacion, setDeteccionAproximacion] = useState<DeteccionPuntoControl | null>(
     null,
   );
+  // DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): anuncio de "llegaste" en TIEMPO REAL,
+  // SEPARADO de `ultimaDeteccion` (la confirmación LIGADA A LA EVIDENCIA, mínimo local/fallback,
+  // que puede tardar varios fixes más) — ver `deteccionConfirmacionProximidad` en
+  // `ResultadoConstruirEventos` (`gps/location-task.ts`).
+  const [deteccionConfirmacionProximidad, setDeteccionConfirmacionProximidad] =
+    useState<DeteccionPuntoControl | null>(null);
   const [posicionActual, setPosicionActual] = useState<
     { lat: number; lng: number; speedKmh: number | null } | null
   >(null);
@@ -204,6 +211,8 @@ export function useGpsOperativo(
         const {
           deteccion,
           deteccionAproximacion: nuevaAproximacion,
+          deteccionConfirmacionProximidad: nuevaConfirmacionProximidad,
+          puntosRearmados,
           puntosRearmadosVoz,
         } = await registrarPuntoGps(
           db,
@@ -221,12 +230,19 @@ export function useGpsOperativo(
         // gatea en `settings.navegacionVoz`): limpiar el Set nunca hace daño si la voz está
         // apagada (el Set solo tiene entradas de anuncios que SÍ se emitieron).
         if (puntosRearmadosVoz.length > 0) limpiarAproximacionesAnunciadas(puntosRearmadosVoz);
+        // DECISIÓN CTO 2026-09-23: libera el dedupe de "llegaste por proximidad" cuando la
+        // histéresis de DETECCIÓN re-arma de verdad — ver `confirmacionesProximidadAnunciadas`
+        // en `anuncio-punto-control.ts`.
+        if (puntosRearmados.length > 0) limpiarConfirmacionesProximidadAnunciadas(puntosRearmados);
         if (deteccion) setUltimaDeteccion(deteccion);
         // ENTREGA 6/7: se actualiza en CADA tick con puntos de control (incluso a `null` cuando
         // ninguno está en rango) — a diferencia de `ultimaDeteccion`, que solo cambia con una
         // confirmación real. Sin el `null` explícito, la última aproximación anunciada quedaría
         // "pegada" en el estado del hook después de que el vehículo se aleja.
         setDeteccionAproximacion(nuevaAproximacion);
+        // DECISIÓN CTO 2026-09-23: mismo criterio que `deteccionAproximacion` — se actualiza en
+        // CADA tick (incluso a `null`) para que la marca no quede "pegada" tras alejarse.
+        setDeteccionConfirmacionProximidad(nuevaConfirmacionProximidad);
       } catch (error) {
         // Sin este catch, `onLocation` (async) rechazaba y el fallo quedaba como unhandled
         // rejection: evidencia perdida en silencio.
@@ -912,6 +928,7 @@ export function useGpsOperativo(
     abrirAjustesPermisoGps,
     ultimaDeteccion,
     deteccionAproximacion,
+    deteccionConfirmacionProximidad,
     posicionActual,
     iniciar,
     detener,

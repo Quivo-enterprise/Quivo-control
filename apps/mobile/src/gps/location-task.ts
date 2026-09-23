@@ -2,6 +2,7 @@ import type { Location } from 'react-native-background-geolocation';
 import {
   derivarEventIdDeterministico,
   RADIO_AVISO_M,
+  RADIO_CONFIRMACION_M,
   resolverTsFix,
   type PuntoControlPaquete,
   type TipoEventoSync,
@@ -91,6 +92,21 @@ export interface ResultadoConstruirEventos {
    * `anuncio-punto-control.ts` en headless) — acá se recalcula en cada tick sin memoria.
    */
   deteccionAproximacion: DeteccionPuntoControl | null;
+  /**
+   * DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`, `@quivo/shared`): el punto de control MÁS
+   * CERCANO, entre los que tienen una visita YA ACTIVA (`dentro && confirmado === false` en el
+   * estado post-tick — ver el cuerpo de la función), cuya distancia cae dentro de
+   * `RADIO_CONFIRMACION_M` (40 m), con `fase: 'confirmado-proximidad'`, o `null` si ninguno
+   * califica. Informativo, en TIEMPO REAL — a diferencia de `deteccion` (arriba), que recién
+   * aparece cuando la EVIDENCIA confirma (mínimo local / fallback, que puede tardar varios fixes
+   * más en llegar): esto le permite al chofer escuchar "llegaste" apenas el vehículo está de
+   * verdad cerca del punto, no recién cuando ya se empezó a alejar. Deliberadamente NO toca la
+   * detección/registro del cumplimiento (`filtrarNuevosCumplimientos` no cambia) — es una señal
+   * calculada por fuera de esa máquina de estados, igual que `deteccionAproximacion`. El dedupe
+   * "ya lo anuncié para esta visita" es responsabilidad del caller
+   * (`anuncio-punto-control.ts`), igual que para `deteccionAproximacion`.
+   */
+  deteccionConfirmacionProximidad: DeteccionPuntoControl | null;
   /**
    * Transiciones de estado del geofence (`filtrarNuevosCumplimientos`, `geofence.ts`) que
    * corresponde aplicar al Map de estados del caller — SOLO DESPUÉS de que `encolarEvento`
@@ -197,6 +213,7 @@ export function construirEventosDeUbicacion(
 
   let deteccion: DeteccionPuntoControl | null = null;
   let deteccionAproximacion: DeteccionPuntoControl | null = null;
+  let deteccionConfirmacionProximidad: DeteccionPuntoControl | null = null;
   let transicionesEstado = new Map<string, EstadoPuntoControl>();
   let avisosPrecision: AvisoPrecision[] = [];
   let puntosRearmados: string[] = [];
@@ -245,6 +262,26 @@ export function construirEventosDeUbicacion(
     avisosPrecision = avisos;
     puntosRearmados = rearmados;
     puntosRearmadosVoz = rearmadosVoz;
+
+    // DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): el punto MÁS CERCANO, entre los que
+    // tienen una visita YA ACTIVA sin confirmar (`dentro && confirmado === false`), cuya
+    // distancia cae dentro de `RADIO_CONFIRMACION_M` — leyendo el estado POST-tick
+    // (`transicionesEstado`, que ya incluye la transición de ENTRADA de este mismo fix si
+    // corresponde) con fallback al estado previo para las claves que este tick no tocó. Igual
+    // que `deteccionAproximacion`: por fuera de la máquina de estados, no puede introducir un
+    // bug en la evidencia legal (que sigue emitiendo exactamente igual, en el mínimo local).
+    for (const d of detecciones) {
+      if (d.distanciaM > RADIO_CONFIRMACION_M) continue;
+      const claveVisita = claveCumplimiento(contexto.sesionId, d.puntoControlId);
+      const estadoVisita = transicionesEstado.get(claveVisita) ?? estadosPuntosControl.get(claveVisita);
+      if (!estadoVisita?.dentro || estadoVisita.confirmado !== false) continue;
+      if (
+        deteccionConfirmacionProximidad === null ||
+        d.distanciaM < deteccionConfirmacionProximidad.distanciaM
+      ) {
+        deteccionConfirmacionProximidad = { ...d, fase: 'confirmado-proximidad' };
+      }
+    }
 
     for (const {
       deteccion: nuevaDeteccion,
@@ -318,6 +355,7 @@ export function construirEventosDeUbicacion(
     eventos,
     deteccion,
     deteccionAproximacion,
+    deteccionConfirmacionProximidad,
     transicionesEstado,
     avisosPrecision,
     puntosRearmados,

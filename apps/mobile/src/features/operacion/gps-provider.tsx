@@ -70,6 +70,18 @@ export function GpsProvider({
     }
   }, [gps.deteccionAproximacion, settings.navegacionVoz, anunciar]);
 
+  // DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): anuncio de "llegaste" en TIEMPO REAL
+  // (vibración + notificación), apenas el vehículo mide `distanciaM <= RADIO_CONFIRMACION_M`
+  // durante una visita activa — PISO universal, igual que la confirmación de evidencia de abajo
+  // (sin gate de settings): el dedupe (`confirmacionesProximidadAnunciadas`,
+  // `anuncio-punto-control.ts`) evita repetirlo cuando la confirmación de evidencia llegue
+  // después para el MISMO paso.
+  useEffect(() => {
+    if (gps.deteccionConfirmacionProximidad) {
+      anunciar(gps.deteccionConfirmacionProximidad);
+    }
+  }, [gps.deteccionConfirmacionProximidad, anunciar]);
+
   // Confirmación de paso (vibración + notificación con sonido) — el PISO universal, igual en
   // foreground que en headless: regla dura del plan ("vibración siempre"), sin gate de
   // settings. `settings.sonidoConfirmacion` de abajo es una capa EXTRA sobre este piso (el

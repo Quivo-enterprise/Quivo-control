@@ -186,6 +186,7 @@ export function registrarPuntoGps(
 ): Promise<{
   deteccion: DeteccionPuntoControl | null;
   deteccionAproximacion: DeteccionPuntoControl | null;
+  deteccionConfirmacionProximidad: DeteccionPuntoControl | null;
   puntosRearmados: string[];
   puntosRearmadosVoz: string[];
 }> {
@@ -293,6 +294,7 @@ async function registrarPuntoGpsInterno(
 ): Promise<{
   deteccion: DeteccionPuntoControl | null;
   deteccionAproximacion: DeteccionPuntoControl | null;
+  deteccionConfirmacionProximidad: DeteccionPuntoControl | null;
   puntosRearmados: string[];
   puntosRearmadosVoz: string[];
 }> {
@@ -304,6 +306,7 @@ async function registrarPuntoGpsInterno(
     eventos,
     deteccion,
     deteccionAproximacion,
+    deteccionConfirmacionProximidad,
     transicionesEstado,
     avisosPrecision,
     puntosRearmados,
@@ -408,7 +411,13 @@ async function registrarPuntoGpsInterno(
     }
   }
 
-  return { deteccion, deteccionAproximacion, puntosRearmados, puntosRearmadosVoz };
+  return {
+    deteccion,
+    deteccionAproximacion,
+    deteccionConfirmacionProximidad,
+    puntosRearmados,
+    puntosRearmadosVoz,
+  };
 }
 
 /**
@@ -719,12 +728,13 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
 
     const db = await abrirOutbox();
     await asegurarSemillaCumplimientos(db, contexto.sesionId);
-    const { deteccion, deteccionAproximacion, puntosRearmadosVoz } = await registrarPuntoGps(
-      db,
-      location,
-      contexto,
-      puntosControlDetectadosHeadless,
-    );
+    const {
+      deteccion,
+      deteccionAproximacion,
+      deteccionConfirmacionProximidad,
+      puntosRearmados,
+      puntosRearmadosVoz,
+    } = await registrarPuntoGps(db, location, contexto, puntosControlDetectadosHeadless);
     // ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): el punto GPS y el
     // cumplimiento YA quedaron persistidos arriba (la evidencia, RF-64..73) — el anuncio al
     // chofer es best-effort y NUNCA debe poder tumbar ese resultado ya escrito. Por eso corre
@@ -734,11 +744,13 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     // mezclar los dos haría parecer perdido un punto GPS que en realidad se guardó bien.
     // FIX POST-REVISIÓN (G1): se pasa `puntosRearmadosVoz` (histéresis PROPIA de la marca de
     // voz sobre `RADIO_AVISO_M`), no `puntosRearmados` (histéresis de DETECCIÓN) — ver el
-    // comentario largo de `puntosRearmadosVoz` en `geofence.ts`.
+    // comentario largo de `puntosRearmadosVoz` en `geofence.ts`. DECISIÓN CTO 2026-09-23:
+    // `puntosRearmados` SÍ se pasa acá, para el dedupe de "llegaste por proximidad" — ver
+    // `confirmacionesProximidadAnunciadas` en `anuncio-punto-control.ts`.
     await anunciarDeteccionesDelTick(
       db,
       { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
-      { deteccion, deteccionAproximacion, puntosRearmadosVoz },
+      { deteccion, deteccionAproximacion, deteccionConfirmacionProximidad, puntosRearmados, puntosRearmadosVoz },
     ).catch((error) => {
       console.error('[QUIVO][headless] No se pudo anunciar el punto de control', error);
       Sentry.captureException(error, {

@@ -282,6 +282,13 @@ describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega
       puntoControlId: 'pc-headless-1',
       fase: 'aproximacion',
     });
+    // DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): distancia 0 <= 40 m — la proximidad
+    // dispara en TIEMPO REAL en el MISMO tick de la entrada, sin esperar a que la evidencia
+    // confirme (que recién llega en un fix posterior, cuando la distancia crece).
+    expect(resultado.deteccionConfirmacionProximidad).toMatchObject({
+      puntoControlId: 'pc-headless-1',
+      fase: 'confirmado-proximidad',
+    });
   });
 
   it('segundo fix (se aleja ~33 m, distancia CRECE respecto del mínimo): confirma la pasada 1', async () => {

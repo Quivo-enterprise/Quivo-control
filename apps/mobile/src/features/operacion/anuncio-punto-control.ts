@@ -195,6 +195,36 @@ export function limpiarAproximacionesAnunciadas(puntosControlIds: readonly strin
   for (const id of puntosControlIds) aproximacionesAnunciadas.delete(id);
 }
 
+/**
+ * DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`, `@quivo/shared`): dedupe EN MEMORIA (igual
+ * criterio que `aproximacionesAnunciadas`, no persistido — es UX, no evidencia) del anuncio de
+ * "llegaste" por PROXIMIDAD (`fase: 'confirmado-proximidad'`, disparado en tiempo real apenas
+ * el vehículo mide `distanciaM <= RADIO_CONFIRMACION_M` durante una visita activa — ver
+ * `deteccionConfirmacionProximidad` en `location-task.ts`). Se limpia con `puntosRearmados` (la
+ * histéresis de DETECCIÓN, NO la de voz `puntosRearmadosVoz`): esta marca está atada al ciclo de
+ * VISITA/PASADA (gobernado por `dentro`/re-armado de detección), no al ciclo de aviso por voz —
+ * son conceptos distintos, aunque ambos usen un Set en memoria.
+ *
+ * También la CONSULTA `anunciarPuntoControl` en su rama `'confirmado'` (la confirmación LIGADA A
+ * LA EVIDENCIA): si la proximidad YA anunció "llegaste" para esta visita, la confirmación de
+ * evidencia (que puede llegar varios fixes después, en el mínimo local) NO repite la
+ * vibración/notificación — evita el doble aviso para el MISMO paso. Si la proximidad NUNCA
+ * anunció (el mínimo de la visita no llegó a `RADIO_CONFIRMACION_M` — punto plantado lejos de
+ * la trayectoria real), la confirmación de evidencia sigue anunciando como siempre: "el punto no
+ * puede quedar sin confirmar" (texto de la decisión del CTO).
+ */
+const confirmacionesProximidadAnunciadas = new Set<string>();
+
+/**
+ * DECISIÓN CTO 2026-09-23: libera el dedupe de "llegaste por proximidad" para los puntos cuya
+ * histéresis de DETECCIÓN (`puntosRearmados`, `gps/geofence.ts`) re-armó de verdad en este
+ * tick/heartbeat — ver el comentario largo de `confirmacionesProximidadAnunciadas` arriba.
+ * Llamarla con una lista vacía (el caso normal, ningún punto re-armó) es un no-op.
+ */
+export function limpiarConfirmacionesProximidadAnunciadas(puntosControlIds: readonly string[]): void {
+  for (const id of puntosControlIds) confirmacionesProximidadAnunciadas.delete(id);
+}
+
 export interface AnuncioPuntoControlOpciones {
   sesionId: string;
   puntosControl: PuntoControlPaquete[];
@@ -235,12 +265,52 @@ export async function anunciarPuntoControl(
     return;
   }
 
+  if (deteccion.fase === 'confirmado-proximidad') {
+    // DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): anuncio de "llegaste" en TIEMPO REAL,
+    // apenas el vehículo mide `distanciaM <= RADIO_CONFIRMACION_M` durante una visita activa —
+    // ver `deteccionConfirmacionProximidad` en `gps/location-task.ts`. Dedupe EN MEMORIA (no
+    // persistido: es UX, no evidencia — la evidencia sigue emitiéndose exactamente igual, en el
+    // mínimo local), liberado recién cuando la detección re-arma de verdad (ver el comentario
+    // largo de `confirmacionesProximidadAnunciadas`).
+    if (confirmacionesProximidadAnunciadas.has(deteccion.puntoControlId)) return;
+    confirmacionesProximidadAnunciadas.add(deteccion.puntoControlId);
+
+    // Mismo piso universal que la confirmación de evidencia (vibración SIEMPRE, antes que
+    // cualquier intento de notificación/audio y fuera de su `try/catch` — ver el comentario de
+    // la rama `'confirmado'` de abajo).
+    Vibration.vibrate(300);
+
+    try {
+      await asegurarCanalNotificacion();
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: `${identificador}: llegaste`,
+          body: 'Estás a menos de 40 metros del punto de control.',
+        },
+        trigger: { channelId: CANAL_ANUNCIO_ANDROID },
+      });
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'anuncio-punto-control', paso: 'notificacion-proximidad' },
+      });
+    }
+    return;
+  }
+
   if (deteccion.fase !== 'confirmado' || deteccion.pasada === undefined) return;
 
   // FIX POST-REVISIÓN (bug 4): el ciclo de aproximación YA NO se reabre acá — ver el comentario
   // largo de `aproximacionesAnunciadas`. Reabrirlo recién cuando el geofence re-arma de verdad
   // (`limpiarAproximacionesAnunciadas`, llamada desde `headless-task.ts`/`use-gps-operativo.ts`
   // con `puntosRearmados`).
+
+  // DECISIÓN CTO 2026-09-23: si la proximidad YA avisó "llegaste" para esta visita, la
+  // confirmación de EVIDENCIA (que puede llegar fixes después, recién en el mínimo local) no
+  // repite vibración/notificación para el MISMO paso — ver el comentario largo de
+  // `confirmacionesProximidadAnunciadas`. Si la proximidad NUNCA disparó (el mínimo de la
+  // visita no llegó a `RADIO_CONFIRMACION_M`), esta rama sigue anunciando como siempre: "el
+  // punto no puede quedar sin confirmar".
+  if (confirmacionesProximidadAnunciadas.has(deteccion.puntoControlId)) return;
 
   const clave = claveAnuncio(opciones.sesionId, deteccion.puntoControlId, deteccion.pasada);
   // Fail-open (`esNuevo` arranca en `true`): si el dedupe persistido falla (SQLite ocupada,
@@ -305,6 +375,14 @@ export async function anunciarDeteccionesDelTick(
   resultado: {
     deteccion: DeteccionPuntoControl | null;
     deteccionAproximacion: DeteccionPuntoControl | null;
+    /**
+     * DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): punto más cercano dentro de
+     * `RADIO_CONFIRMACION_M` con una visita activa sin confirmar — ver
+     * `deteccionConfirmacionProximidad` en `gps/location-task.ts`. Opcional/`null`: el camino
+     * de confirmación forzada por antigüedad (`confirmarVisitasVencidas`, heartbeat) no lo
+     * calcula (no hay fix nuevo del que leer una distancia en tiempo real).
+     */
+    deteccionConfirmacionProximidad?: DeteccionPuntoControl | null;
     /** FIX POST-REVISIÓN (G1): puntos cuya histéresis PROPIA de voz re-armó de verdad en este
      * tick — ver `puntosRearmadosVoz` en `gps/geofence.ts` y el comentario largo de
      * `limpiarAproximacionesAnunciadas` arriba. Deliberadamente NO es la histéresis de
@@ -312,6 +390,14 @@ export async function anunciarDeteccionesDelTick(
      * Opcional/vacío por default: el camino de confirmación forzada por antigüedad
      * (`confirmarVisitasVencidas`, heartbeat) nunca re-arma ninguna histéresis por sí solo. */
     puntosRearmadosVoz?: string[];
+    /**
+     * DECISIÓN CTO 2026-09-23: puntos cuya histéresis de DETECCIÓN re-armó de verdad este tick
+     * — ver `puntosRearmados` en `gps/geofence.ts` y el comentario largo de
+     * `confirmacionesProximidadAnunciadas` arriba. Libera el dedupe de "llegaste por
+     * proximidad", NO el de voz (ese usa `puntosRearmadosVoz`, arriba — son dos histéresis
+     * independientes).
+     */
+    puntosRearmados?: string[];
   },
 ): Promise<void> {
   if (resultado.puntosRearmadosVoz && resultado.puntosRearmadosVoz.length > 0) {
@@ -320,8 +406,18 @@ export async function anunciarDeteccionesDelTick(
     // posible), tiene que poder volver a avisar sin esperar al tick siguiente.
     limpiarAproximacionesAnunciadas(resultado.puntosRearmadosVoz);
   }
+  if (resultado.puntosRearmados && resultado.puntosRearmados.length > 0) {
+    limpiarConfirmacionesProximidadAnunciadas(resultado.puntosRearmados);
+  }
   if (resultado.deteccionAproximacion) {
     await anunciarPuntoControl(db, resultado.deteccionAproximacion, opciones);
+  }
+  // DECISIÓN CTO 2026-09-23: el anuncio de proximidad va ANTES que la confirmación de
+  // evidencia — si las dos coincidieran en el MISMO tick (caso borde), la proximidad marca el
+  // dedupe primero y la evidencia lo ve y no repite vibración/notificación (ver el comentario
+  // largo de `confirmacionesProximidadAnunciadas`).
+  if (resultado.deteccionConfirmacionProximidad) {
+    await anunciarPuntoControl(db, resultado.deteccionConfirmacionProximidad, opciones);
   }
   if (resultado.deteccion) {
     await anunciarPuntoControl(db, resultado.deteccion, opciones);

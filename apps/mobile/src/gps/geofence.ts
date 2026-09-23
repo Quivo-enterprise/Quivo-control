@@ -35,8 +35,18 @@ export interface DeteccionPuntoControl {
    * de la visita — ver el comentario largo de esa función). `undefined` para una
    * `DeteccionPuntoControl` cruda de `detectarPuntosControlCercanos` que todavía no pasó por
    * ninguna de las dos decisiones.
+   *
+   * DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`, `@quivo/shared`): `'confirmado-proximidad'`
+   * distingue el anuncio de "llegaste" en TIEMPO REAL — apenas un fix mide `distanciaM <=
+   * RADIO_CONFIRMACION_M` (40 m) durante una visita YA activa (`dentro && confirmado === false`,
+   * ver `deteccionConfirmacionProximidad` en `construirEventosDeUbicacion`,
+   * `location-task.ts`) — de `'confirmado'` (arriba), que es la confirmación LIGADA A LA
+   * EVIDENCIA (mínimo local / fallback), que puede tardar varios fixes más en llegar (recién
+   * cuando la distancia empieza a CRECER). Deliberadamente NO toca la detección/registro del
+   * cumplimiento (que sigue exactamente igual): es una señal puramente de UX, calculada por
+   * fuera de esta máquina de estados, igual que `'aproximacion'`.
    */
-  fase?: 'aproximacion' | 'confirmado';
+  fase?: 'aproximacion' | 'confirmado' | 'confirmado-proximidad';
 }
 
 /**

@@ -192,6 +192,114 @@ describe('construirEventosDeUbicacion', () => {
     expect(eventos[0]?.eventId).toBeUndefined();
   });
 
+  /** Latitud a `metros` al SUR de la del punto de control (`-17.78`), usando la MISMA
+   * conversión aproximada (111 320 m/grado) que ya asume el resto del archivo para sus
+   * distancias "~33 m" — alcanza de sobra para las comparaciones de umbral de estos tests
+   * (no se afirma un valor exacto de `distanciaM`, solo de qué lado del umbral cae). */
+  function latitudAMetrosDelPunto(metros: number): number {
+    return -17.78 - metros / 111_320;
+  }
+
+  describe('DECISIÓN CTO 2026-09-23 — deteccionConfirmacionProximidad (RADIO_CONFIRMACION_M)', () => {
+    it('se dispara en TIEMPO REAL apenas la visita entra a <= RADIO_CONFIRMACION_M — ANTES de que la evidencia confirme (que recién llega cuando la distancia crece)', () => {
+      const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
+      const t0 = Date.parse('2026-09-23T12:00:00.000Z');
+      let estados = new Map<string, EstadoPuntoControl>();
+
+      // Tick 0: 140 m — dentro de RADIO_AVISO_M (aviso), pero fuera de radioToleranciaM (30):
+      // la visita ni siquiera empezó (`dentro: false`) — la proximidad NO puede dispararse
+      // para un punto que la detección todavía no autorizó.
+      const paso0 = construirEventosDeUbicacion(
+        ubicacion(latitudAMetrosDelPunto(140), -63.18, t0),
+        contexto([pc], 'sesion-proximidad-1'),
+        estados,
+      );
+      expect(paso0.deteccionConfirmacionProximidad).toBeNull();
+      estados = conTransicionesAplicadas(estados, paso0.transicionesEstado);
+
+      // Tick 1: 20 m — CUMPLE (< 30) ⇒ ENTRA (dentro:true, confirmado:false). La evidencia NO
+      // confirma todavía (recién arranca el seguimiento del mínimo local) — pero 20 m <=
+      // RADIO_CONFIRMACION_M (40), así que la proximidad SÍ dispara, en el MISMO tick de la
+      // entrada.
+      const paso1 = construirEventosDeUbicacion(
+        ubicacion(latitudAMetrosDelPunto(20), -63.18, t0 + 10_000),
+        contexto([pc], 'sesion-proximidad-1'),
+        estados,
+      );
+      expect(paso1.deteccion).toBeNull(); // evidencia: todavía SIN confirmar
+      expect(paso1.deteccionConfirmacionProximidad).toMatchObject({
+        puntoControlId: 'pc-1',
+        fase: 'confirmado-proximidad',
+      });
+      expect(paso1.deteccionConfirmacionProximidad!.distanciaM).toBeLessThanOrEqual(40);
+      estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+
+      // Tick 2: 25 m — la distancia CRECE respecto del mínimo (20) ⇒ AHORA sí confirma la
+      // evidencia (mínimo local). La proximidad ya no vuelve a disparar para esta MISMA visita
+      // (post-transición, `confirmado` pasa a `true`) — el dedupe real (en memoria, por
+      // puntoControlId) vive en `anuncio-punto-control.ts`, pero acá alcanza con que el campo
+      // deje de calcularse para un `confirmado !== false`.
+      const paso2 = construirEventosDeUbicacion(
+        ubicacion(latitudAMetrosDelPunto(25), -63.18, t0 + 20_000),
+        contexto([pc], 'sesion-proximidad-1'),
+        estados,
+      );
+      expect(paso2.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 1 });
+      expect(paso2.deteccionConfirmacionProximidad).toBeNull();
+    });
+
+    it('nunca dispara si el mínimo de la visita no baja de RADIO_CONFIRMACION_M — la evidencia sigue confirmando igual (el punto no queda sin confirmar)', () => {
+      // Punto plantado lejos de la trayectoria real: el radio de detección (100 m) es mayor
+      // que RADIO_CONFIRMACION_M (40) y el vehículo nunca pasa a menos de 40 m del punto.
+      const pc = puntoControl('pc-1', [-63.18, -17.78], 100);
+      const t0 = Date.parse('2026-09-23T12:00:00.000Z');
+      let estados = new Map<string, EstadoPuntoControl>();
+
+      // Entra a 80 m (cumple el radio de 100, pero > RADIO_CONFIRMACION_M).
+      const paso1 = construirEventosDeUbicacion(
+        ubicacion(latitudAMetrosDelPunto(80), -63.18, t0),
+        contexto([pc], 'sesion-proximidad-2'),
+        estados,
+      );
+      expect(paso1.deteccionConfirmacionProximidad).toBeNull();
+      estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
+
+      // Crece a 90 m — nunca bajó de 40. La proximidad sigue sin disparar, pero la EVIDENCIA
+      // confirma igual (mínimo local, regla dura del plan: "0 detecciones sin paso anotado").
+      const paso2 = construirEventosDeUbicacion(
+        ubicacion(latitudAMetrosDelPunto(90), -63.18, t0 + 10_000),
+        contexto([pc], 'sesion-proximidad-2'),
+        estados,
+      );
+      expect(paso2.deteccionConfirmacionProximidad).toBeNull();
+      expect(paso2.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 1 });
+    });
+
+    it('no toca la detección/registro del cumplimiento: distanciaMinAproximacionM y pasada del evento son las mismas con o sin proximidad', () => {
+      // Mismo recorrido que el primer test de este bloque, comparado byte a byte contra el
+      // payload emitido — la Decisión CTO es explícita: "la detección/registro del
+      // cumplimiento NO cambia".
+      const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
+      const t0 = Date.parse('2026-09-23T12:00:00.000Z');
+      let estados = new Map<string, EstadoPuntoControl>();
+      estados = conTransicionesAplicadas(
+        estados,
+        construirEventosDeUbicacion(
+          ubicacion(latitudAMetrosDelPunto(20), -63.18, t0),
+          contexto([pc], 'sesion-proximidad-3'),
+          estados,
+        ).transicionesEstado,
+      );
+      const { eventos } = construirEventosDeUbicacion(
+        ubicacion(latitudAMetrosDelPunto(25), -63.18, t0 + 10_000),
+        contexto([pc], 'sesion-proximidad-3'),
+        estados,
+      );
+      expect(eventos[1]?.payload).toMatchObject({ puntoControlId: 'pc-1', pasada: 1 });
+      expect(eventos[1]?.payload['distanciaMinAproximacionM']).toBeCloseTo(20, 0);
+    });
+  });
+
   it('NO muta el Map de estados recibido (la mutación es responsabilidad del caller, tras confirmar la escritura)', () => {
     const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
     const estados = new Map<string, EstadoPuntoControl>();
