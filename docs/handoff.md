@@ -15,7 +15,10 @@
 - **Fuera de este APK:** palancas de costo D (sync a 60 s) y captura a 30 m.
 - **Cambio del nombre de paquete antes del build**, porque el trial de Transistorsoft de `com.quivotech.conductor` venció. El APK nuevo no se instala encima del viejo: hay que drenar cada teléfono antes de desinstalar.
 
-Estado: arrancando la Fase 1 (drenado, anuncio y mapa offline en paralelo).
+- **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
+- **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
+
+Estado: Fase 1 en curso (drenado, anuncio y mapa offline en paralelo).
 
 ## Costos recalibrados con prueba de carga + confirmación en Cloud SQL real — 2026-09-22
 

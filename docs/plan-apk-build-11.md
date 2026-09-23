@@ -122,8 +122,10 @@ Pedido del CTO (2026-09-23): la licencia trial de Transistorsoft para `com.quivo
 - Grep de control: `grep -rn com.quivotech.conductor` sin resultados fuera de `docs/archivo` y del handoff histórico.
 - Revisar si alguna API key de Google Maps o tiles está restringida por paquete+SHA-1. Hoy no se encontró ninguna.
 
+**Nombre decidido (CTO, 2026-09-23): `com.quivotech.conductor.app`.**
+
 **Acciones del CTO:**
-- Elegir el nombre nuevo, porque la licencia se pide para ese nombre exacto.
+- ~~Elegir el nombre nuevo~~ Hecho: `com.quivotech.conductor.app`. La licencia se pide para ese nombre exacto.
 - Pedir la key de 30 días.
 - Actualizar el secreto de EAS `TRANSISTORSOFT_LICENSE_KEY` (entorno `production`).
 
