@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Sentry from '@sentry/react-native';
+import type * as SQLite from 'expo-sqlite';
 import type { ContextoOperativoMovil, ResumenAsignacionMovil } from '@quivo/shared';
 import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
 import {
@@ -9,6 +10,14 @@ import {
   reiniciarCircuitoRefresh,
 } from '../../shared/api/refresh-circuit-breaker';
 import {
+  abrirOutbox,
+  adquirirLease,
+  liberarLeaseConCooldown,
+  ID_LEASE_REFRESH_SESION,
+  TTL_LEASE_REFRESH_SESION_MS,
+} from '../../db/outbox';
+import {
+  actualizarContextoSesionMovil,
   actualizarSesionMovil,
   borrarSesionMovil,
   cargarSesionMovil,
@@ -168,9 +177,14 @@ export function useAuthMovil() {
         }
         const contexto = await authMovilApi.obtenerContexto(vigente.accessToken);
         if (!mounted.current) return;
-        const actualizada = { ...vigente, contexto };
-        await guardarSesionMovil(actualizada);
-        setEstado((actual) => ({ ...actual, sesion: actualizada, aviso: null }));
+        // G2 (hallazgo de `/codex-debug verify-fix`, ALTO): `actualizarContextoSesionMovil`
+        // relee la sesión VIGENTE de disco y fusiona SOLO `contexto` — nunca pisa
+        // accessToken/refreshToken con la copia en memoria (`vigente`), que puede haber
+        // quedado vieja si un refresh concurrente (otro contexto JS, bajo el lease de
+        // `ID_LEASE_REFRESH_SESION`) rotó y persistió mientras este `await` estaba en vuelo.
+        // Ver el docblock de esa función en `sesion-movil-store.ts`.
+        const actualizada = await actualizarContextoSesionMovil(contexto);
+        setEstado((actual) => ({ ...actual, sesion: actualizada ?? actual.sesion, aviso: null }));
       } catch (error: unknown) {
         if (!mounted.current) return;
         if (error instanceof AuthMovilApiError && error.status === 401) {
@@ -208,9 +222,9 @@ export function useAuthMovil() {
           try {
             const contexto = await authMovilApi.obtenerContexto(revalidada.accessToken);
             if (!mounted.current) return;
-            const actualizada = { ...revalidada, contexto };
-            await guardarSesionMovil(actualizada);
-            setEstado((actual) => ({ ...actual, sesion: actualizada, aviso: null }));
+            // G2 — misma razón que arriba: relee y fusiona SOLO contexto, nunca pisa tokens.
+            const actualizada = await actualizarContextoSesionMovil(contexto);
+            setEstado((actual) => ({ ...actual, sesion: actualizada ?? revalidada, aviso: null }));
           } catch {
             // El refresh de tokens SÍ funcionó (ya persistido dentro de `refrescar`, vía
             // `actualizarSesionMovil`) pero traer el contexto falló (offline puntual, etc.):
@@ -574,6 +588,44 @@ export async function refrescar(guardada: SesionMovilGuardada): Promise<SesionMo
   }
 }
 
+/** Mismo generador de token de lease que `drenaje-oportunista.ts` (`generarTokenLease`) —
+ * duplicado a propósito, no importado: no es un identificador criptográfico, solo necesita
+ * distinguir intentos concurrentes de ESTE dispositivo para `liberarLeaseConCooldown`
+ * (`owner = token`, ver su comentario en `db/outbox.ts`). */
+function generarTokenLeaseRefresh(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Intervalo de poll mientras se espera el lease `refresh-sesion` — corto a propósito: el
+ * peor caso (el dueño actual termina su única request de red y libera con cooldown 0) se
+ * resuelve en el orden de cientos de ms, no de segundos. */
+const INTERVALO_POLL_LEASE_REFRESH_MS = 150;
+
+/**
+ * G1 (hallazgo de `/codex-debug verify-fix`, ALTO): a diferencia del drenado oportunista
+ * (`drenaje-oportunista.ts`), acá NO se puede desistir en silencio si el lease está tomado —
+ * el caller necesita el resultado del refresh sí o sí. Reintenta adquirir con un poll corto
+ * hasta el TTL del lease ajeno (`TTL_LEASE_REFRESH_SESION_MS`): pasado ese tiempo, el dueño
+ * anterior o bien ya liberó (éxito/fallo de su request) o su fila quedó huérfana y
+ * `adquirirLease` la reclama sola en el siguiente intento — nunca hace falta esperar más que
+ * eso. Devuelve `false` (en vez de esperar indefinidamente) si ni así se consigue — caso
+ * patológico (dos rondas de contención seguidas) que `ejecutarRefresh` degrada a un intento
+ * best-effort sin lease, nunca peor que el comportamiento previo a este fix.
+ */
+async function adquirirLeaseRefreshConEspera(
+  db: SQLite.SQLiteDatabase,
+  token: string,
+): Promise<boolean> {
+  const limiteMs = Date.now() + TTL_LEASE_REFRESH_SESION_MS;
+  for (;;) {
+    const ahoraMs = Date.now();
+    const obtenido = await adquirirLease(db, ID_LEASE_REFRESH_SESION, token, ahoraMs, TTL_LEASE_REFRESH_SESION_MS);
+    if (obtenido) return true;
+    if (Date.now() >= limiteMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, INTERVALO_POLL_LEASE_REFRESH_MS));
+  }
+}
+
 /**
  * Único punto que golpea la red de refresh — ya recibe la sesión RECONCILIADA (`refrescar`,
  * arriba se encarga de eso, antes de entrar al single-flight). Sin retry propio: si
@@ -581,14 +633,55 @@ export async function refrescar(guardada: SesionMovilGuardada): Promise<SesionMo
  * tal cual — no hay nada más que reconciliar acá, ya se hizo antes de llegar. `sin llamadas
  * directas a `intentarRefrescarConCircuito` fuera de `refrescar()`" (decisión de diseño del
  * CTO): esta es la ÚNICA función del módulo que la invoca.
+ *
+ * G1 (hallazgo de `/codex-debug verify-fix`, ALTO — reemplaza el diseño anterior, que solo
+ * reconciliaba una vez en `refrescar()` antes del single-flight EN MEMORIA): ese single-flight
+ * (`refrescosEnVuelo`) es por CONTEXTO JS, así que dos contextos (foreground/headless) podían
+ * releer el mismo T0 casi al mismo tiempo, cada uno en su propio single-flight, y los dos
+ * llegar hasta acá. Ahora TODO el tramo releer-decidir-refrescar-persistir corre bajo el lease
+ * SQLite `ID_LEASE_REFRESH_SESION` (mismo mecanismo que `ID_LEASE_DRENAJE`, que sí cruza
+ * contextos): solo un contexto puede estar en esta sección a la vez. El que entra segundo
+ * espera el lease y, al conseguirlo, relee disco DE NUEVO — si el primero ya rotó, adopta el
+ * token nuevo sin tocar la red; el circuito de `intentarRefrescarConCircuito` solo se toca
+ * cuando, incluso con el lease en mano, el token en disco sigue siendo el mismo que se iba a
+ * enviar (ahí un 401 es evidencia real, no un artefacto de carrera).
  */
 async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMovilGuardada> {
-  // Entrega 3: el circuit breaker (`shared/api/refresh-circuit-breaker.ts`) envuelve ACÁ, en
-  // el único lugar que golpea `POST /v1/mobile/auth/refresh` — cubre automáticamente a todos
-  // los callers de `refrescar` sin duplicar el chequeo, y nunca toca el sync de datos (otro
-  // cliente HTTP por completo, ver el docblock del breaker).
-  const tokens = await intentarRefrescarConCircuito(guardada.refreshToken);
-  return await actualizarSesionMovil(guardada, tokens);
+  const db = await abrirOutbox();
+  const tokenLease = generarTokenLeaseRefresh();
+  const obtuvoLease = await adquirirLeaseRefreshConEspera(db, tokenLease);
+  if (!obtuvoLease) {
+    // Caso patológico (ver docblock de `adquirirLeaseRefreshConEspera`): degradamos al
+    // comportamiento best-effort previo a este fix — una relectura más y, si no cambió nada,
+    // seguir con la red. Nunca peor que el diseño anterior, solo no cierra del todo la carrera
+    // en esta rama extrema.
+    Sentry.captureException(new Error('No se pudo adquirir el lease refresh-sesion a tiempo'), {
+      tags: { contexto: 'use-auth-movil', paso: 'lease-refresh-timeout' },
+    });
+    const relectura = await reconciliarConDisco(guardada);
+    if (relectura.refreshToken !== guardada.refreshToken) return relectura;
+    const tokensSinLease = await intentarRefrescarConCircuito(relectura.refreshToken);
+    return await actualizarSesionMovil(relectura, tokensSinLease);
+  }
+
+  try {
+    const vigente = await reconciliarConDisco(guardada);
+    if (vigente.refreshToken !== guardada.refreshToken) {
+      // Otro contexto rotó mientras esperábamos el lease (o entre la reconciliación de
+      // `refrescar()` y este punto) — adoptamos SIN tocar la red. Cierra el hallazgo G1: antes,
+      // un T0 desactualizado podía llegar hasta acá y su 401 contaba contra el circuito.
+      return vigente;
+    }
+    // El token en disco sigue siendo el mismo que íbamos a usar: recién ACÁ es seguro que un
+    // 401 cuente contra el circuito — no hay evidencia de ninguna rotación concurrente.
+    const tokens = await intentarRefrescarConCircuito(vigente.refreshToken);
+    return await actualizarSesionMovil(vigente, tokens);
+  } finally {
+    // Cooldown 0: a diferencia del drenado, acá no hace falta un piso entre intentos — el
+    // single-flight en memoria y el circuit breaker ya evitan machacar la red; el próximo
+    // contexto que necesite el lease debe poder tomarlo de inmediato.
+    await liberarLeaseConCooldown(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), 0);
+  }
 }
 
 /** Umbral de 401 ACUMULADOS (NO estrictamente consecutivos — ver H4 más abajo) antes de

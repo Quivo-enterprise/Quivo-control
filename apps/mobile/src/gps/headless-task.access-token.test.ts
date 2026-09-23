@@ -16,10 +16,18 @@ vi.mock('@sentry/react-native', () => ({
   addBreadcrumb: vi.fn(),
 }));
 
+// G1 (hallazgo de `/codex-debug verify-fix`): `refrescar()` (`use-auth-movil.ts`, llamado
+// desde `obtenerAccessTokenHeadless`) ahora corre bajo el lease SQLite `refresh-sesion` —
+// `adquirirLease`/`liberarLeaseConCooldown` se mockean concediendo el lease de inmediato, sin
+// alterar el comportamiento/timing de estos tests (un solo contexto simulado a la vez).
 vi.mock('../db/outbox', () => ({
-  abrirOutbox: vi.fn(),
+  abrirOutbox: vi.fn().mockResolvedValue({}),
   encolarEvento: vi.fn(),
   obtenerEventosPorTipo: vi.fn(),
+  adquirirLease: vi.fn().mockResolvedValue(true),
+  liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
+  ID_LEASE_REFRESH_SESION: 'refresh-sesion',
+  TTL_LEASE_REFRESH_SESION_MS: 15_000,
 }));
 
 vi.mock('../db/paquete-dia', () => ({

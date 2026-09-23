@@ -742,6 +742,28 @@ export const PISO_ENTRE_INTENTOS_DRENAJE_MS = 10_000;
 export const TTL_LEASE_DRENAJE_MS = 60_000;
 
 /**
+ * G1 (hallazgo de `/codex-debug verify-fix`, ALTO, sobre `ea3d84e`/`fe36953`): mismo mutex
+ * entre contextos JS que `ID_LEASE_DRENAJE`, pero para el REFRESH de tokens en vez del
+ * drenado. `reconciliarConDisco` (`use-auth-movil.ts`) releía SecureStore antes de intentar,
+ * pero eso solo cierra la ventana DENTRO de un mismo contexto (el single-flight en memoria,
+ * `refrescosEnVuelo`, tampoco cruza contextos) — foreground y headless corren en contextos JS
+ * DISTINTOS en Android, y pueden leer el MISMO refresh token T0 antes de que ninguno de los
+ * dos lo rote. Con la fila `sync_lease` reutilizada bajo este `id` distinto, solo un contexto
+ * puede estar releyendo+refrescando+persistiendo a la vez — el otro espera (o, si el que
+ * tiene el lease ya rotó, relee disco al entrar y adopta el token nuevo SIN tocar la red — ver
+ * `ejecutarRefresh` en `use-auth-movil.ts`).
+ */
+export const ID_LEASE_REFRESH_SESION = 'refresh-sesion';
+
+/**
+ * TTL del lease de refresh — holgado sobre `REQUEST_TIMEOUT_MS` (12 s, `auth-movil-api.ts`),
+ * la única llamada de red que corre bajo este lease (a diferencia del drenado, acá no hay
+ * lotes que encadenar ni renovación a mitad de camino: es una sola request). El margen de 3 s
+ * cubre el `await` extra de releer SecureStore antes de decidir.
+ */
+export const TTL_LEASE_REFRESH_SESION_MS = 15_000;
+
+/**
  * Hallazgo 4 (code review, BAJO — reloj de pared sin cota superior): `adquirirLease` compara
  * `expira_at` contra `Date.now()` con reloj de PARED, sin ninguna cota — si el reloj del
  * teléfono estaba adelantado y salta hacia atrás (corrección NTP, o el chofer lo ajusta a
@@ -761,6 +783,18 @@ export const TTL_LEASE_DRENAJE_MS = 60_000;
  *
  * Duplicado acá en vez de importado desde `drenaje-oportunista.ts`/`sync-outbox.ts` (que YA
  * importan de `outbox.ts` — un import en sentido contrario crearía un ciclo).
+ *
+ * R (hallazgo de `/codex-debug verify-fix`, regresión evaluada, NO corregida a propósito):
+ * `ID_LEASE_REFRESH_SESION` reutiliza el MISMO `construirAdquirirLease`/esta misma cota, con un
+ * TTL propio menor (`TTL_LEASE_REFRESH_SESION_MS`, 15 s). La cota queda fija en
+ * `TTL_LEASE_DRENAJE_MS + 60_000` (120 s) para AMBOS leases — más holgada de lo estrictamente
+ * necesario para el de refresh, pero eso solo hace el margen de seguridad más grande, nunca más
+ * chico: un salto de reloj hacia atrás sigue necesitando superar 120 s para colar un
+ * `expira_at` fantasma, igual que en el lease de drenado. La ventana de drenados/refrescos
+ * concurrentes que ese salto podría abrir (documentada arriba) queda acotada por el TTL de
+ * CADA lease — 15 s en el de refresh, más angosta que los 60 s del de drenado — y no se cierra
+ * del todo por diseño: la cota es una red de seguridad contra un lease huérfano, no una prueba
+ * de reloj monótono. Aceptado tal cual, sin cambios, para esta entrega.
  */
 export const COTA_SANIDAD_LEASE_MS = TTL_LEASE_DRENAJE_MS + 60_000;
 

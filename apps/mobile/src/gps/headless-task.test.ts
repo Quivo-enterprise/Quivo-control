@@ -31,10 +31,18 @@ vi.mock('@sentry/react-native', () => ({
   addBreadcrumb: vi.fn(),
 }));
 
+// G1 (hallazgo de `/codex-debug verify-fix`): importar `headless-task.ts` evalúa
+// transitivamente `use-auth-movil.ts`, que ahora importa `db/outbox` para el lease
+// `refresh-sesion` — se completan los exports aunque este archivo no ejercite ese camino
+// (solo cubre `obtenerContextoUbicacionPersistido`), para que el import no falle.
 vi.mock('../db/outbox', () => ({
   abrirOutbox: vi.fn(),
   encolarEvento: vi.fn(),
   obtenerEventosPorTipo: vi.fn(),
+  adquirirLease: vi.fn().mockResolvedValue(true),
+  liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
+  ID_LEASE_REFRESH_SESION: 'refresh-sesion',
+  TTL_LEASE_REFRESH_SESION_MS: 15_000,
 }));
 
 vi.mock('../db/paquete-dia', () => ({

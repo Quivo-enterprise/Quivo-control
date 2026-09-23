@@ -33,6 +33,20 @@ vi.mock('../../shared/security/sesion-movil-store', () => ({
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
+// G1 (hallazgo de `/codex-debug verify-fix`): `refrescar()`/`ejecutarRefresh` ahora corren
+// bajo el lease SQLite `refresh-sesion` (`db/outbox.ts`) — se mockea igual que
+// `sesion-movil-store` (dependencia nativa vía `expo-sqlite`) y siempre "concede" el lease de
+// inmediato, para no alterar el comportamiento/timing de los tests de ESTE archivo (que
+// ejercitan un solo contexto JS a la vez — la contención real entre dos contextos se cubre
+// en `use-auth-movil.refresh-lease.test.ts`).
+vi.mock('../../db/outbox', () => ({
+  abrirOutbox: vi.fn().mockResolvedValue({}),
+  adquirirLease: vi.fn().mockResolvedValue(true),
+  liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
+  ID_LEASE_REFRESH_SESION: 'refresh-sesion',
+  TTL_LEASE_REFRESH_SESION_MS: 15_000,
+}));
+
 vi.mock('@sentry/react-native', () => ({
   captureException: vi.fn(),
 }));
@@ -315,7 +329,11 @@ describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca f
     refreshMock.mockRejectedValue(new AuthMovilApiError('network', 'Sin conexión'));
 
     await expect(refrescar(t0)).rejects.toThrow('Sin conexión');
-    expect(cargarSesionMovilMock).toHaveBeenCalledTimes(1);
+    // G1 (hallazgo de `/codex-debug verify-fix`): DOS lecturas de disco, no una — la de
+    // `refrescar()` (rápida, fuera del lease) y la de `ejecutarRefresh` bajo el lease
+    // `refresh-sesion` (la comprobación AUTORITATIVA, ver su docblock en `use-auth-movil.ts`).
+    // Sin token distinto en ninguna de las dos, el resultado no cambia: un solo intento de red.
+    expect(cargarSesionMovilMock).toHaveBeenCalledTimes(2);
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 });

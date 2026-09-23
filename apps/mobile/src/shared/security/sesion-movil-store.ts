@@ -50,6 +50,32 @@ export async function actualizarSesionMovil(
   return nueva;
 }
 
+/**
+ * G2 (hallazgo de `/codex-debug verify-fix`, ALTO): `reconciliarSesion` (`use-auth-movil.ts`)
+ * llamaba a `guardarSesionMovil({ ...copiaVieja, contexto })`, donde `copiaVieja` es la sesión
+ * que ya tenía en memoria ANTES de `await authMovilApi.obtenerContexto(...)`. Si un refresh
+ * concurrente (otro contexto JS, o el propio módulo bajo el lease de
+ * `ID_LEASE_REFRESH_SESION`) rota y persiste T1 MIENTRAS ese `await` está en vuelo, ese
+ * `guardarSesionMovil` pisaba el disco ENTERO con los tokens VIEJOS (T0) al volver — perdiendo
+ * la rotación de T1 sin que nada la recupere: el próximo refresh vuelve a intentar con un T0
+ * que el servidor ya invalidó.
+ *
+ * Fix: relee la sesión VIGENTE de disco (nunca la copia en memoria del caller) y fusiona SOLO
+ * `contexto` — jamás toca `accessToken`/`refreshToken`/sus vencimientos. Sea cual sea la
+ * antigüedad de la copia en memoria que disparó esta llamada, un refresh concurrente que ya
+ * ganó la carrera queda intacto. Si no hay sesión en disco (logout concurrente), devuelve
+ * `null` — el caller decide qué hacer (no hay nada que fusionar).
+ */
+export async function actualizarContextoSesionMovil(
+  contexto: ContextoOperativoMovil,
+): Promise<SesionMovilGuardada | null> {
+  const vigente = await cargarSesionMovil();
+  if (!vigente) return null;
+  const actualizada: SesionMovilGuardada = { ...vigente, contexto };
+  await guardarSesionMovil(actualizada);
+  return actualizada;
+}
+
 export async function borrarSesionMovil(): Promise<void> {
   await SecureStore.deleteItemAsync(SESSION_KEY, OPTIONS);
 }

@@ -14,6 +14,18 @@ vi.mock('../../shared/security/sesion-movil-store', () => ({
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
+// G1 (hallazgo de `/codex-debug verify-fix`): `use-auth-movil.ts` ahora importa `db/outbox`
+// (lease `refresh-sesion`, vía `expo-sqlite`) — mismo motivo de mock que `sesion-movil-store`,
+// ver `use-auth-movil.refrescar.test.ts`. Este archivo solo ejercita funciones puras
+// (`clasificarFalloAccessToken`), pero importar el módulo igual evalúa sus imports.
+vi.mock('../../db/outbox', () => ({
+  abrirOutbox: vi.fn().mockResolvedValue({}),
+  adquirirLease: vi.fn().mockResolvedValue(true),
+  liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
+  ID_LEASE_REFRESH_SESION: 'refresh-sesion',
+  TTL_LEASE_REFRESH_SESION_MS: 15_000,
+}));
+
 vi.mock('@sentry/react-native', () => ({
   captureException: vi.fn(),
 }));
