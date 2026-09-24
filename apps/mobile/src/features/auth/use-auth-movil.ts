@@ -20,12 +20,15 @@ import {
 import {
   actualizarContextoSesionMovil,
   actualizarSesionMovil,
-  borrarRevocacionPendiente,
+  borrarLogoutSolicitado,
+  borrarRevocacionPendientePorId,
   borrarSesionMovil,
   cargarSesionMovil,
   guardarRevocacionPendiente,
   guardarSesionMovil,
-  leerRevocacionPendiente,
+  hayLogoutSolicitado,
+  listarRevocacionesPendientes,
+  marcarLogoutSolicitado,
   obtenerDeviceIdMovil,
   type RevocacionPendienteGuardada,
   type SesionMovilGuardada,
@@ -403,7 +406,24 @@ export function useAuthMovil() {
     // MISMO lease `refresh-sesion`, SIEMPRE espera a conseguirlo (nunca degrada al
     // `estado.sesion?.refreshToken` de React, que puede estar varias rotaciones headless
     // atrás) y revoca con el refresh token RELEÍDO de disco.
-    await ejecutarLogout(deviceId.current ?? estado.deviceId ?? undefined);
+    //
+    // Ronda 6 (gaps 4 y 5 de Codex): `ejecutarLogout` ahora puede (a) resolver `'pendiente'`
+    // (no consiguió el lease — no tocó nada localmente) o (b) RECHAZAR (la relectura bajo lease
+    // falló repetidamente — tampoco tocó nada). Se tratan distinto a propósito: en (a) el
+    // chofer igual debe ver "sesión cerrada" ya (requisito de producto, la limpieza real llega
+    // después vía `intentarRevocacionesPendientes`), así que el reset de `estado` sigue
+    // corriendo igual que en el camino feliz. En (b) la sesión local sigue siendo VÁLIDA —
+    // resetear `estado` acá desincronizaría la UI del almacenamiento real (el chofer creería
+    // estar deslogueado mientras `restaurarSesion` lo vuelve a meter a `operacion` en el
+    // próximo arranque) — se informa el error y se deja `estado.sesion` intacto para reintentar.
+    try {
+      await ejecutarLogout(deviceId.current ?? estado.deviceId ?? undefined);
+    } catch (error: unknown) {
+      if (mounted.current) {
+        setEstado((actual) => ({ ...actual, cargando: false, error: mensajeUsuario(error) }));
+      }
+      return;
+    }
     // H5: `ESTADO_INICIAL` limpia `estado`, pero este ref vive fuera de `estado` — sin este
     // reset explícito, una racha de 401 de la sesión que se está cerrando sobrevivía al
     // logout y podía combinarse con un solo 401 de la sesión siguiente.
@@ -735,7 +755,16 @@ async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMov
     try {
       enDiscoBajoLease = await cargarSesionMovil();
     } catch {
-      enDiscoBajoLease = guardada;
+      // Punto 2 (`/codex-debug verify-fix` ronda 6, ALTO, decisión del CTO — reemplaza el
+      // fallback anterior a `guardada`): un fallo de LECTURA bajo el lease no es evidencia de
+      // que el token en memoria siga siendo el vigente — otro contexto pudo haber rotado
+      // exactamente en esta ventana, y degradar a `guardada` (memoria) podía mandarle al
+      // servidor un T0 ya canjeado, contando un 401 evitable contra el circuito. Se aborta sin
+      // tocar la red (mismo tratamiento que la contención de lease, G1a): transitorio, no
+      // cuenta para el circuito, el caller reintenta más tarde.
+      throw new ReintentarRefreshMasTardeError(
+        'Fallo al releer la sesión persistida bajo el lease de refresh-sesion; no hay forma segura de saber qué token está vigente, se reintenta más tarde sin tocar la red.',
+      );
     }
     if (!enDiscoBajoLease) {
       throw new SesionCerradaEnRefreshError(
@@ -811,6 +840,23 @@ async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMov
  * (si lo hay) adquirió el suyo. */
 const MARGEN_ESPERA_LEASE_LOGOUT_MS = 5_000;
 
+/** Punto 3 (verify-fix ronda 6): número de intentos de `cargarSesionMovil()` dentro de
+ * `ejecutarLogout` antes de rendirse y devolver el error al llamador SIN tocar almacenamiento
+ * — ver el gap de Codex en el docblock de `ejecutarLogout`. */
+const REINTENTOS_LECTURA_SESION_LOGOUT = 3;
+
+async function leerSesionParaLogoutConReintentos(): Promise<SesionMovilGuardada | null> {
+  let ultimoError: unknown;
+  for (let intento = 0; intento < REINTENTOS_LECTURA_SESION_LOGOUT; intento++) {
+    try {
+      return await cargarSesionMovil();
+    } catch (error) {
+      ultimoError = error;
+    }
+  }
+  throw ultimoError;
+}
+
 /**
  * Punto 3 (`/codex-debug verify-fix`, decisión del CTO — reemplaza el diseño anterior, que
  * degradaba a `estado.sesion?.refreshToken` en memoria si no conseguía el lease a tiempo):
@@ -830,18 +876,35 @@ const MARGEN_ESPERA_LEASE_LOGOUT_MS = 5_000;
  * Fix: SIEMPRE espera el lease `refresh-sesion` (el mismo de `ejecutarRefresh`) con poll hasta
  * `TTL_LEASE_REFRESH_SESION_MS + MARGEN_ESPERA_LEASE_LOGOUT_MS` — nunca degrada a memoria. El
  * lease vence SOLO (ningún dueño legítimo lo retiene más allá de su propio TTL), así que esa
- * espera SIEMPRE termina consiguiéndolo; el caso de no conseguirlo ni con margen es un síntoma
- * de algo mucho más grave (SQLite inaccesible, reloj roto) y se reporta a Sentry, pero de todos
- * modos se sigue adelante con la mejor lectura posible en vez de dejar al chofer bloqueado en
- * "cerrando sesión" para siempre. Una vez con el lease, relee el refresh token PERSISTIDO (nunca
- * la memoria) antes de revocar — con eso alcanza el token EXACTO que el servidor reconoce como
- * vigente, sin importar cuántas rotaciones headless hayan pasado.
+ * espera SIEMPRE termina consiguiéndolo salvo el caso patológico de abajo. Una vez con el lease,
+ * relee el refresh token PERSISTIDO (nunca la memoria) antes de revocar — con eso alcanza el
+ * token EXACTO que el servidor reconoce como vigente, sin importar cuántas rotaciones headless
+ * hayan pasado.
  *
- * Si la revocación de red falla (offline u otro motivo), la limpieza local sigue igual — el
- * chofer espera que "cerrar sesión" cierre YA en el teléfono — pero se persiste la intención de
- * revocación (`guardarRevocacionPendiente`) para reintentarla en el próximo arranque con red o
- * ciclo de drenado (`intentarRevocacionesPendientes`, más abajo) en vez de dejar la sesión
- * abierta server-side para siempre.
+ * Gap 4 (`/codex-debug verify-fix` ronda 6, decisión del CTO — reemplaza el diseño anterior, que
+ * SEGUÍA adelante y ejecutaba toda la sección crítica igual aunque `obtuvoLease` fuera `false`):
+ * sin lease no hay sección crítica — punto. Si el margen se agota (síntoma grave: SQLite
+ * inaccesible, reloj roto), NO se relee, revoca ni borra nada: se marca la intención de forma
+ * durable (`marcarLogoutSolicitado`) y se devuelve `'pendiente'` sin tocar el almacenamiento de
+ * la sesión. El chofer de todos modos ve la sesión cerrada YA (el caller, `logout()` en el hook,
+ * limpia el `estado` de React sin importar este resultado) — la limpieza real y la revocación
+ * server-side se completan en el próximo arranque o ciclo de drenado, cuando
+ * `intentarRevocacionesPendientes` encuentra la marca y reintenta `ejecutarLogout` completo
+ * (la sesión sigue intacta en disco mientras tanto, nunca se tocó sin el lease).
+ *
+ * Gap 5 (`/codex-debug verify-fix` ronda 6, decisión del CTO — reemplaza el diseño anterior, que
+ * ignoraba un fallo de `cargarSesionMovil()` y borraba la sesión igual, sin revocar ni dejar
+ * ningún registro): si la relectura falla tras `REINTENTOS_LECTURA_SESION_LOGOUT` intentos, se
+ * propaga el error al llamador SIN tocar almacenamiento — ni se borra la sesión local ni se
+ * persiste nada. La sesión queda intacta para un logout posterior.
+ *
+ * Orden (decisión del CTO, con lease y credenciales ya leídas): primero se persiste la
+ * INTENCIÓN de revocación (el refresh token leído) — así, si el proceso muere entre el borrado
+ * local y que el POST de red confirme, la intención sobrevive y `intentarRevocacionesPendientes`
+ * la retoma. Recién después se borra la sesión local (el chofer espera que "cerrar sesión"
+ * limpie el teléfono YA) y se intenta revocar en la red; al confirmar (204), se borra SOLO esa
+ * intención — nunca las de otros logouts que puedan estar en vuelo (ver `sesion-movil-store.ts`,
+ * punto 4).
  *
  * Marca la sesión como cerrada (`borrarSesionMovil`) ANTES de soltar el lease: cualquier
  * `ejecutarRefresh` que estaba esperando este MISMO lease lo adquiere DESPUÉS, encuentra
@@ -849,7 +912,9 @@ const MARGEN_ESPERA_LEASE_LOGOUT_MS = 5_000;
  * persistir nada — ver ese chequeo arriba. Así, un refresh que "termina después" del logout
  * nunca resucita una sesión ya cerrada en disco.
  */
-export async function ejecutarLogout(deviceIdParaLogout: string | undefined): Promise<void> {
+export async function ejecutarLogout(
+  deviceIdParaLogout: string | undefined,
+): Promise<'completado' | 'pendiente'> {
   const db = await abrirOutbox();
   const tokenLease = generarTokenLeaseRefresh();
   const obtuvoLease = await adquirirLeaseRefreshConEspera(
@@ -858,42 +923,46 @@ export async function ejecutarLogout(deviceIdParaLogout: string | undefined): Pr
     TTL_LEASE_REFRESH_SESION_MS + MARGEN_ESPERA_LEASE_LOGOUT_MS,
   );
   if (!obtuvoLease) {
-    // Caso patológico (ver el docblock de arriba) — no debería ocurrir nunca dado el margen.
+    // Gap 4: caso patológico (ver el docblock de arriba) — no debería ocurrir nunca dado el
+    // margen. Sin lease, NADA de lectura/revocación/borrado corre acá.
     Sentry.captureException(
       new Error('No se pudo adquirir el lease refresh-sesion para logout ni con margen'),
       { tags: { contexto: 'use-auth-movil', paso: 'logout-lease-no-adquirido' } },
     );
+    await marcarLogoutSolicitado().catch(() => {});
+    return 'pendiente';
   }
   try {
-    let refreshTokenParaRevocar: string | undefined;
-    try {
-      const vigente = await cargarSesionMovil();
-      refreshTokenParaRevocar = vigente?.refreshToken;
-    } catch {
-      // Best-effort: si la relectura falla, no hay token seguro que revocar — nunca se cae a
-      // memoria (ver el docblock de arriba).
-    }
+    // Gap 5: si esto agota sus reintentos, se propaga SIN tocar almacenamiento — ver el
+    // docblock de arriba.
+    const vigente = await leerSesionParaLogoutConReintentos();
+    const refreshTokenParaRevocar = vigente?.refreshToken;
     if (refreshTokenParaRevocar) {
+      // Orden (ver el docblock de arriba): persistir la intención PRIMERO.
+      const idRevocacion = await guardarRevocacionPendiente({
+        refreshToken: refreshTokenParaRevocar,
+        deviceId: deviceIdParaLogout,
+        intentos: 0,
+      });
+      await borrarSesionMovil();
       try {
         // Entrega 3: se manda el `deviceId` como fallback server-side — ver el docblock de
         // `AuthMovilService.logout` para el porqué (refresh token localmente obsoleto por una
         // rotación cuya respuesta el cliente nunca confirmó recibir).
         await authMovilApi.logout(refreshTokenParaRevocar, deviceIdParaLogout);
-        // Por si un intento anterior de logout offline había dejado una revocación pendiente
-        // con un token viejo: esta revocación (con el token vigente) ya cubrió esa intención.
-        await borrarRevocacionPendiente();
+        // 204: la intención ya se cumplió — borrar SOLO esta entrada (nunca un borrado global,
+        // ver `sesion-movil-store.ts` punto 4: puede haber otras intenciones en vuelo).
+        await borrarRevocacionPendientePorId(idRevocacion);
       } catch {
-        // Punto 3: revocación de red fallida — la limpieza local sigue igual (abajo), pero se
-        // persiste la intención para reintentar. Ver el docblock de arriba.
-        await guardarRevocacionPendiente({
-          refreshToken: refreshTokenParaRevocar,
-          deviceId: deviceIdParaLogout,
-          intentos: 0,
-        });
+        // Punto 3: revocación de red fallida — la intención ya quedó persistida arriba, no
+        // hace falta volver a guardarla. Se reintenta en el próximo arranque/drenado (ver
+        // `intentarRevocacionesPendientes`).
       }
+    } else {
+      // Sin refresh token que revocar (nunca hubo sesión) — solo limpiar local.
+      await borrarSesionMovil();
     }
-    // Marca la sesión como cerrada ANTES de soltar el lease — ver el docblock de arriba.
-    await borrarSesionMovil();
+    return 'completado';
   } finally {
     await liberarLeaseConCooldown(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), 0);
   }
@@ -906,42 +975,77 @@ export async function ejecutarLogout(deviceIdParaLogout: string | undefined): Pr
 export const TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED = 3;
 
 /**
- * Punto 3 (`/codex-debug verify-fix`, decisión del CTO): reintenta una revocación de logout que
- * quedó pendiente porque `ejecutarLogout` no pudo completarla por falta de red (ver su
+ * Punto 3 (`/codex-debug verify-fix`, decisión del CTO): reintenta las revocaciones de logout
+ * que quedaron pendientes porque `ejecutarLogout` no pudo completarlas por falta de red (ver su
  * docblock). Se llama desde `restaurarSesion` ("próximo arranque con red") y desde
  * `intentarDrenarOportunista` (`drenaje-oportunista.ts`, "próximo ciclo de drenado") — ambos
- * puntos donde ya hay, o estamos por confirmar, conectividad. No usa el lease `refresh-sesion`:
- * la sesión asociada a este refresh token ya está borrada (el logout que la generó ya limpió el
- * disco), así que no hay ningún token vigente con el que pueda chocar.
+ * puntos donde ya hay, o estamos por confirmar, conectividad. No usa el lease `refresh-sesion`
+ * para ESTA parte: la sesión asociada a cada refresh token ya está borrada (el logout que la
+ * generó ya limpió el disco), así que no hay ningún token vigente con el que pueda chocar.
+ *
+ * Punto 4 (verify-fix ronda 6): itera TODAS las entradas de `listarRevocacionesPendientes`
+ * (antes era una sola) — cada una se procesa y se borra de forma independiente
+ * (`borrarRevocacionPendientePorId`), así que una que está en vuelo/reintentando nunca pisa ni
+ * borra a otra que se guardó mientras tanto (ver `sesion-movil-store.ts`, punto 4).
+ *
+ * Punto 3 (gap 4 de Codex): además, si un logout anterior no llegó a conseguir el lease
+ * `refresh-sesion` (`ejecutarLogout` devolvió `'pendiente'` y marcó la intención con
+ * `marcarLogoutSolicitado`, sin haber leído ningún token todavía), reintenta acá
+ * `ejecutarLogout` completo — misma cola/mismo punto de retoma que las revocaciones con token ya
+ * conocido. Si esta vez sí consigue el lease, sigue el camino normal completo (lee la sesión,
+ * que sigue intacta en disco, persiste la intención, borra local, revoca).
  *
  * NUNCA rechaza — todos los callers la disparan fire-and-forget.
  */
 export async function intentarRevocacionesPendientes(): Promise<void> {
-  let pendiente: RevocacionPendienteGuardada | null;
+  let pendientes: Array<RevocacionPendienteGuardada & { id: string }>;
   try {
-    pendiente = await leerRevocacionPendiente();
+    pendientes = await listarRevocacionesPendientes();
+  } catch {
+    pendientes = [];
+  }
+  for (const pendiente of pendientes) {
+    try {
+      await authMovilApi.logout(pendiente.refreshToken, pendiente.deviceId);
+      await borrarRevocacionPendientePorId(pendiente.id);
+    } catch (error) {
+      if (error instanceof AuthMovilApiError && error.kind === 'network') {
+        // Sin red todavía: se deja esta entrada intacta (no cuenta contra el tope) — se sigue
+        // igual con las demás entradas independientes.
+        continue;
+      }
+      const intentos = pendiente.intentos + 1;
+      if (intentos >= TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED) {
+        Sentry.captureException(error, {
+          tags: { contexto: 'auth-movil', paso: 'revocacion-pendiente-agotada' },
+          extra: { intentos },
+        });
+        await borrarRevocacionPendientePorId(pendiente.id).catch(() => {});
+        continue;
+      }
+      // Reescribe la MISMA entrada (mismo refresh token ⇒ mismo id derivado) con el contador
+      // actualizado — nunca crea una entrada nueva ni toca las demás.
+      await guardarRevocacionPendiente({ ...pendiente, intentos }).catch(() => {});
+    }
+  }
+
+  let solicitado: boolean;
+  try {
+    solicitado = await hayLogoutSolicitado();
   } catch {
     return;
   }
-  if (!pendiente) return;
+  if (!solicitado) return;
   try {
-    await authMovilApi.logout(pendiente.refreshToken, pendiente.deviceId);
-    await borrarRevocacionPendiente();
-  } catch (error) {
-    if (error instanceof AuthMovilApiError && error.kind === 'network') {
-      // Sin red todavía: se deja intacta (no cuenta contra el tope) para el próximo intento.
-      return;
+    const idDispositivo = await obtenerDeviceIdMovil();
+    const resultado = await ejecutarLogout(idDispositivo);
+    if (resultado === 'completado') {
+      await borrarLogoutSolicitado().catch(() => {});
     }
-    const intentos = pendiente.intentos + 1;
-    if (intentos >= TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED) {
-      Sentry.captureException(error, {
-        tags: { contexto: 'auth-movil', paso: 'revocacion-pendiente-agotada' },
-        extra: { intentos },
-      });
-      await borrarRevocacionPendiente();
-      return;
-    }
-    await guardarRevocacionPendiente({ ...pendiente, intentos }).catch(() => {});
+    // Si sigue `'pendiente'`, la marca queda intacta a propósito — el próximo ciclo reintenta.
+  } catch {
+    // Best-effort (p. ej. `cargarSesionMovil` agotó sus reintentos dentro de `ejecutarLogout`):
+    // la marca queda intacta, se reintenta en el próximo ciclo — esta función nunca rechaza.
   }
 }
 

@@ -25,21 +25,10 @@ vi.mock('expo-secure-store', () => ({
   }),
 }));
 
-vi.mock('expo-crypto', () => ({ randomUUID: vi.fn(() => randomUUID()) }));
-
-// Punto 1/2 (`/codex-debug verify-fix`, decisión del CTO): `sesion-movil-store.ts` ahora corre
-// la migración de la legacy bajo el lease SQLite `refresh-sesion` (`db/outbox.ts`, vía
-// `expo-sqlite`) — mismo motivo de mock que en `use-auth-movil.refrescar.test.ts`. Ninguno de
-// los tests de este archivo llega a tocar la legacy (usan `guardarSesionMovil`, que escribe
-// directo en el formato nuevo), así que un mock que siempre concede el lease de inmediato no
-// altera el comportamiento/timing de estos tests — la migración bajo contención real se cubre
-// en `sesion-movil-store.migracion.test.ts`.
-vi.mock('../../db/outbox', () => ({
-  abrirOutbox: vi.fn().mockResolvedValue({}),
-  adquirirLease: vi.fn().mockResolvedValue(true),
-  liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
-  ID_LEASE_REFRESH_SESION: 'refresh-sesion',
-  TTL_LEASE_REFRESH_SESION_MS: 20_000,
+vi.mock('expo-crypto', () => ({
+  randomUUID: vi.fn(() => randomUUID()),
+  digestStringAsync: vi.fn(async () => 'a'.repeat(64)),
+  CryptoDigestAlgorithm: { SHA256: 'SHA256' },
 }));
 
 import {

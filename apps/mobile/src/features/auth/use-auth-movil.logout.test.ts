@@ -36,12 +36,15 @@ vi.mock('../../shared/api/auth-movil-api', () => ({
 
 vi.mock('../../shared/security/sesion-movil-store', () => ({
   actualizarSesionMovil: vi.fn(),
-  borrarRevocacionPendiente: vi.fn().mockResolvedValue(undefined),
+  borrarLogoutSolicitado: vi.fn().mockResolvedValue(undefined),
+  borrarRevocacionPendientePorId: vi.fn().mockResolvedValue(undefined),
   borrarSesionMovil: vi.fn().mockResolvedValue(undefined),
   cargarSesionMovil: vi.fn(),
-  guardarRevocacionPendiente: vi.fn().mockResolvedValue(undefined),
+  guardarRevocacionPendiente: vi.fn().mockResolvedValue('id-revocacion'),
   guardarSesionMovil: vi.fn(),
-  leerRevocacionPendiente: vi.fn().mockResolvedValue(null),
+  hayLogoutSolicitado: vi.fn().mockResolvedValue(false),
+  listarRevocacionesPendientes: vi.fn().mockResolvedValue([]),
+  marcarLogoutSolicitado: vi.fn().mockResolvedValue(undefined),
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
@@ -61,10 +64,12 @@ vi.mock('@sentry/react-native', () => ({
 
 import { authMovilApi } from '../../shared/api/auth-movil-api';
 import {
-  borrarRevocacionPendiente,
+  borrarLogoutSolicitado,
+  borrarRevocacionPendientePorId,
   borrarSesionMovil,
   cargarSesionMovil,
   guardarRevocacionPendiente,
+  marcarLogoutSolicitado,
   type SesionMovilGuardada,
 } from '../../shared/security/sesion-movil-store';
 import { adquirirLease } from '../../db/outbox';
@@ -77,9 +82,11 @@ const borrarSesionMovilMock = borrarSesionMovil as unknown as ReturnType<typeof 
 const guardarRevocacionPendienteMock = guardarRevocacionPendiente as unknown as ReturnType<
   typeof vi.fn
 >;
-const borrarRevocacionPendienteMock = borrarRevocacionPendiente as unknown as ReturnType<
+const borrarRevocacionPendientePorIdMock = borrarRevocacionPendientePorId as unknown as ReturnType<
   typeof vi.fn
 >;
+const marcarLogoutSolicitadoMock = marcarLogoutSolicitado as unknown as ReturnType<typeof vi.fn>;
+const borrarLogoutSolicitadoMock = borrarLogoutSolicitado as unknown as ReturnType<typeof vi.fn>;
 const adquirirLeaseMock = adquirirLease as unknown as ReturnType<typeof vi.fn>;
 
 function sesion(refreshToken: string): SesionMovilGuardada {
@@ -99,8 +106,10 @@ describe('ejecutarLogout — punto 3 (verify-fix): coordina con ejecutarRefresh 
     refreshMock.mockReset();
     cargarSesionMovilMock.mockReset();
     borrarSesionMovilMock.mockReset().mockResolvedValue(undefined);
-    guardarRevocacionPendienteMock.mockReset().mockResolvedValue(undefined);
-    borrarRevocacionPendienteMock.mockReset().mockResolvedValue(undefined);
+    guardarRevocacionPendienteMock.mockReset().mockResolvedValue('id-revocacion');
+    borrarRevocacionPendientePorIdMock.mockReset().mockResolvedValue(undefined);
+    marcarLogoutSolicitadoMock.mockReset().mockResolvedValue(undefined);
+    borrarLogoutSolicitadoMock.mockReset().mockResolvedValue(undefined);
     adquirirLeaseMock.mockReset().mockResolvedValue(true);
   });
 
@@ -115,20 +124,22 @@ describe('ejecutarLogout — punto 3 (verify-fix): coordina con ejecutarRefresh 
     expect(logoutMock).not.toHaveBeenCalledWith('T0', expect.anything());
   });
 
-  it('marca la sesión como cerrada (borrarSesionMovil) tras revocar, ANTES de que la función retorne', async () => {
+  it('orden (verify-fix ronda 6, decisión del CTO): persiste la intención de revocación, borra la sesión local, y RECIÉN DESPUÉS intenta revocar en la red', async () => {
     cargarSesionMovilMock.mockResolvedValue(sesion('T2'));
 
-    await ejecutarLogout('device-1');
+    const resultado = await ejecutarLogout('device-1');
 
-    expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
-    // Orden: revocar server-side primero, borrar local después — si el borrado local
-    // corriera antes y el POST de logout fallara, quedaría un estado local "deslogueado" con
-    // la sesión todavía activa en el servidor.
-    const ordenLogout = logoutMock.mock.invocationCallOrder[0];
-    const ordenBorrar = borrarSesionMovilMock.mock.invocationCallOrder[0];
-    expect(ordenLogout).toBeDefined();
-    expect(ordenBorrar).toBeDefined();
-    expect(ordenLogout as number).toBeLessThan(ordenBorrar as number);
+    expect(resultado).toBe('completado');
+    // Si el proceso muriera entre el borrado local y que el POST de red confirme, la
+    // intención (persistida PRIMERO) sobrevive — `intentarRevocacionesPendientes` la retoma.
+    const ordenGuardarIntencion = guardarRevocacionPendienteMock.mock.invocationCallOrder[0];
+    const ordenBorrarLocal = borrarSesionMovilMock.mock.invocationCallOrder[0];
+    const ordenRevocarRed = logoutMock.mock.invocationCallOrder[0];
+    expect(ordenGuardarIntencion).toBeDefined();
+    expect(ordenBorrarLocal).toBeDefined();
+    expect(ordenRevocarRed).toBeDefined();
+    expect(ordenGuardarIntencion as number).toBeLessThan(ordenBorrarLocal as number);
+    expect(ordenBorrarLocal as number).toBeLessThan(ordenRevocarRed as number);
   });
 
   it('logout con el lease OCUPADO al principio (React en T0, disco en T2): espera a conseguirlo y revoca con T2, nunca degrada a memoria', async () => {
@@ -192,26 +203,74 @@ describe('ejecutarLogout — punto 3 (verify-fix): coordina con ejecutarRefresh 
     expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
   });
 
-  it('un fallo de red al revocar no impide la limpieza local, y persiste una revocación pendiente para reintentar', async () => {
+  it('un fallo de red al revocar no impide la limpieza local — la intención ya quedó persistida ANTES del intento, no hace falta guardarla de nuevo', async () => {
     cargarSesionMovilMock.mockResolvedValue(sesion('T2'));
     logoutMock.mockRejectedValue(new Error('offline'));
 
-    await expect(ejecutarLogout('device-1')).resolves.toBeUndefined();
+    await expect(ejecutarLogout('device-1')).resolves.toBe('completado');
     expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
+    expect(guardarRevocacionPendienteMock).toHaveBeenCalledTimes(1);
     expect(guardarRevocacionPendienteMock).toHaveBeenCalledWith({
       refreshToken: 'T2',
       deviceId: 'device-1',
       intentos: 0,
     });
+    // La red falló: la intención (ya persistida) NO se borra — queda para
+    // `intentarRevocacionesPendientes`.
+    expect(borrarRevocacionPendientePorIdMock).not.toHaveBeenCalled();
   });
 
-  it('una revocación exitosa borra cualquier revocación pendiente que hubiera quedado de un logout offline anterior', async () => {
+  it('punto 4 (ronda 6): al confirmar la revocación en el servidor, borra SOLO la entrada propia (por id) — nunca un borrado global', async () => {
     cargarSesionMovilMock.mockResolvedValue(sesion('T2'));
+    guardarRevocacionPendienteMock.mockResolvedValue('id-t2');
 
     await ejecutarLogout('device-1');
 
-    expect(borrarRevocacionPendienteMock).toHaveBeenCalledTimes(1);
+    expect(guardarRevocacionPendienteMock).toHaveBeenCalledTimes(1);
+    expect(borrarRevocacionPendientePorIdMock).toHaveBeenCalledWith('id-t2');
+  });
+
+  it('gap 4 (Codex, ronda 6): si el lease no se consigue ni con margen, NO lee/revoca/borra nada — marca la intención durable y devuelve "pendiente"', async () => {
+    vi.useFakeTimers();
+    try {
+      adquirirLeaseMock.mockResolvedValue(false); // nunca se libera
+      const promesa = ejecutarLogout('device-1');
+      await vi.advanceTimersByTimeAsync(26_000); // TTL (20s) + margen (5s) de sobra
+
+      await expect(promesa).resolves.toBe('pendiente');
+      expect(cargarSesionMovilMock).not.toHaveBeenCalled();
+      expect(logoutMock).not.toHaveBeenCalled();
+      expect(borrarSesionMovilMock).not.toHaveBeenCalled();
+      expect(guardarRevocacionPendienteMock).not.toHaveBeenCalled();
+      expect(marcarLogoutSolicitadoMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 10_000);
+
+  it('gap 5 (Codex, ronda 6): si cargarSesionMovil falla repetidamente bajo el lease, propaga el error SIN borrar ni revocar nada', async () => {
+    const error = new Error('SecureStore no disponible');
+    cargarSesionMovilMock.mockRejectedValue(error);
+
+    await expect(ejecutarLogout('device-1')).rejects.toBe(error);
+    expect(cargarSesionMovilMock).toHaveBeenCalledTimes(3); // los 3 reintentos, todos fallaron
+    expect(logoutMock).not.toHaveBeenCalled();
+    expect(borrarSesionMovilMock).not.toHaveBeenCalled();
     expect(guardarRevocacionPendienteMock).not.toHaveBeenCalled();
+  });
+
+  it('gap 5: si cargarSesionMovil falla dos veces pero la 3ra lectura funciona, el logout completa normalmente', async () => {
+    cargarSesionMovilMock
+      .mockRejectedValueOnce(new Error('falla 1'))
+      .mockRejectedValueOnce(new Error('falla 2'))
+      .mockResolvedValueOnce(sesion('T2'));
+
+    const resultado = await ejecutarLogout('device-1');
+
+    expect(resultado).toBe('completado');
+    expect(cargarSesionMovilMock).toHaveBeenCalledTimes(3);
+    expect(logoutMock).toHaveBeenCalledWith('T2', 'device-1');
+    expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
   });
 
   it('un refresh que estaba esperando el MISMO lease y lo adquiere DESPUÉS del logout encuentra la sesión cerrada y aborta sin tocar la red ni persistir', async () => {

@@ -63,7 +63,7 @@ import {
   cargarSesionMovil,
   type SesionMovilGuardada,
 } from '../../shared/security/sesion-movil-store';
-import { refrescar, SesionCerradaEnRefreshError } from './use-auth-movil';
+import { refrescar, ReintentarRefreshMasTardeError, SesionCerradaEnRefreshError } from './use-auth-movil';
 
 const refreshMock = authMovilApi.refresh as unknown as ReturnType<typeof vi.fn>;
 const actualizarSesionMovilMock = actualizarSesionMovil as unknown as ReturnType<typeof vi.fn>;
@@ -94,14 +94,15 @@ describe('refrescar (single-flight)', () => {
   beforeEach(() => {
     refreshMock.mockReset();
     actualizarSesionMovilMock.mockReset();
-    // G3/R4: `refrescar()` ahora relee disco ANTES de cualquier intento de red (ver
-    // `reconciliarConDisco`, `use-auth-movil.ts`) — por defecto, un RECHAZO (no un `null`
-    // resuelto): `null` ahora tiene un significado propio (sesión cerrada, ver
-    // `SesionCerradaEnRefreshError` más abajo) que estos tests NO ejercitan. Un rechazo es
-    // "lectura no disponible" (best-effort, ambos consumidores caen a `guardada`), que es lo
-    // que esta primera sección necesita para no alterar su comportamiento (no ejercitan la
-    // reconciliación en sí, ver la sección de abajo).
-    cargarSesionMovilMock.mockReset().mockRejectedValue(new Error('lectura no disponible (best-effort, test)'));
+    // Punto 2 (`/codex-debug verify-fix` ronda 6, ALTO): la lectura AUTORITATIVA bajo el lease
+    // (dentro de `ejecutarRefresh`) ya NO cae a `guardada` si `cargarSesionMovil()` rechaza —
+    // aborta con `ReintentarRefreshMasTardeError` sin tocar la red (ver esa función). Estos
+    // tests no ejercitan esa lectura fallida (eso vive en `use-auth-movil.refresh-lease.test.ts`
+    // y en `use-auth-movil.refrescar.test.ts` más abajo); acá cada test resuelve
+    // `cargarSesionMovil()` con la MISMA sesión que están refrescando, para que tanto la
+    // reconciliación (fuera del lease) como la lectura autoritativa (bajo el lease) vean el
+    // mismo token y el camino normal de red corra sin abortar.
+    cargarSesionMovilMock.mockReset();
     // El circuit breaker es estado a nivel de módulo (real, no mockeado acá) — sin este
     // reset, un 401 contado en un test anterior podía filtrarse al siguiente.
     reiniciarCircuitoRefresh();
@@ -115,6 +116,7 @@ describe('refrescar (single-flight)', () => {
       }),
     );
     const guardada = sesion('refresh-1');
+    cargarSesionMovilMock.mockResolvedValue(guardada);
     const rotada = { ...guardada, accessToken: 'access-nueva', refreshToken: 'refresh-2' };
     actualizarSesionMovilMock.mockResolvedValue(rotada);
 
@@ -144,6 +146,7 @@ describe('refrescar (single-flight)', () => {
 
   it('no cachea un rechazo: una llamada posterior dispara un intento de red nuevo', async () => {
     const guardada = sesion('refresh-1');
+    cargarSesionMovilMock.mockResolvedValue(guardada);
     refreshMock.mockRejectedValueOnce(new Error('401'));
 
     await expect(refrescar(guardada)).rejects.toThrow('401');
@@ -164,6 +167,14 @@ describe('refrescar (single-flight)', () => {
   });
 
   it('no comparte la llamada de red entre refresh tokens distintos', async () => {
+    // Secuencial a propósito (no `Promise.all`): `cargarSesionMovil()` es un mock SIN
+    // argumento, compartido por la reconciliación (fuera del lease) y la lectura autoritativa
+    // (bajo el lease, ver punto 2 arriba) — no hay forma de hacerlo responder distinto según
+    // CUÁL de los dos refrescos concurrentes está preguntando. Ejecutar cada refresco de punta
+    // a punta antes de lanzar el siguiente evita esa ambigüedad sin debilitar la propiedad bajo
+    // prueba: el mapa `refrescosEnVuelo` se indexa por token, así que dos tokens distintos nunca
+    // comparten entrada sin importar el timing (la concurrencia CON EL MISMO token ya se cubre
+    // en el test de arriba).
     refreshMock.mockImplementation(async (token: string) => ({
       accessToken: `access-${token}`,
       refreshToken: `${token}-rotado`,
@@ -175,10 +186,13 @@ describe('refrescar (single-flight)', () => {
       ...tokens,
     }));
 
-    const [r1, r2] = await Promise.all([
-      refrescar(sesion('refresh-a')),
-      refrescar(sesion('refresh-b')),
-    ]);
+    const sesionA = sesion('refresh-a');
+    cargarSesionMovilMock.mockResolvedValue(sesionA);
+    const r1 = await refrescar(sesionA);
+
+    const sesionB = sesion('refresh-b');
+    cargarSesionMovilMock.mockResolvedValue(sesionB);
+    const r2 = await refrescar(sesionB);
 
     expect(refreshMock).toHaveBeenCalledTimes(2);
     expect(r1.refreshToken).toBe('refresh-a-rotado');
@@ -246,10 +260,11 @@ describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca f
     const descartable = sesion('token-agotado');
     // `null` ahora significa "sesión cerrada" (aborta sin red, ver `SesionCerradaEnRefreshError`)
     // — para construir 4 fallos 401 REALES contra la red hace falta que la lectura autoritativa
-    // vea el MISMO token que `descartable` (no una ausencia), así que rechazamos en vez de
-    // resolver `null`: ambos consumidores (`reconciliarConDisco` fuera del lease, la lectura
-    // directa dentro) caen a `guardada` ante un rechazo, sin abortar.
-    cargarSesionMovilMock.mockRejectedValue(new Error('lectura no disponible (best-effort, test)'));
+    // vea el MISMO token que `descartable` (no una ausencia ni un rechazo: punto 2 de la ronda 6
+    // ya no cae a `guardada` ante un rechazo, ver el docblock de `ejecutarRefresh`), así que se
+    // resuelve con el mismo `descartable` en ambos consumidores (`reconciliarConDisco` fuera del
+    // lease, la lectura autoritativa dentro) — sin mismatch, sin abortar.
+    cargarSesionMovilMock.mockResolvedValue(descartable);
     refreshMock.mockRejectedValue(new AuthMovilApiError('http', 'Sesión revocada', 401));
     for (let intento = 0; intento < 4; intento++) {
       await expect(refrescar(descartable)).rejects.toThrow('Sesión revocada');
@@ -341,14 +356,32 @@ describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca f
     expect(actualizarSesionMovilMock).not.toHaveBeenCalled();
   });
 
+  it('punto 2 (verify-fix ronda 6, ALTO): si la lectura autoritativa bajo el lease falla, aborta con ReintentarRefreshMasTardeError sin tocar la red ni contar contra el circuito', async () => {
+    const t0 = sesion('T0');
+    // Tanto la reconciliación (fuera del lease, best-effort) como la lectura autoritativa
+    // (dentro del lease) usan el mismo mock — la primera cae a `guardada` ante el rechazo
+    // (comportamiento sin cambios), pero la segunda, bajo el nuevo punto 2, YA NO cae a
+    // `guardada`: aborta. Antes de este fix, degradar a `guardada` ahí podía mandar al servidor
+    // un token ya rotado por otro contexto.
+    cargarSesionMovilMock.mockRejectedValue(new Error('SecureStore no disponible'));
+
+    await expect(refrescar(t0)).rejects.toBeInstanceOf(ReintentarRefreshMasTardeError);
+    expect(refreshMock).not.toHaveBeenCalled();
+    const estado = obtenerEstadoCircuitoRefresh();
+    expect(estado.fallosConsecutivos).toBe(0);
+  });
+
   it('un error de RED (no 401) no dispara un segundo intento — sigue siendo offline legítimo', async () => {
     const t0 = sesion('T0');
     // La reconciliación (lectura de disco) corre SIEMPRE, ANTES de la red — a diferencia del
     // diseño viejo, que solo releía disco DESPUÉS de un 401. Un `null` resuelto ahora significa
-    // "sesión cerrada" (test de arriba) — acá se simula en cambio una lectura NO disponible
-    // (rechazo), que ambos consumidores tratan como best-effort y caen a `guardada` (T0), sin
-    // abortar: el resultado no cambia, un error de red sigue sin disparar ningún reintento.
-    cargarSesionMovilMock.mockRejectedValue(new Error('lectura no disponible (best-effort, test)'));
+    // "sesión cerrada" (test de arriba); acá en cambio la lectura de disco RESUELVE con el
+    // MISMO token que memoria (T0, sin evidencia de rotación) — punto 2 de la ronda 6 ya no
+    // tolera un rechazo en la lectura autoritativa bajo el lease (aborta sin red, ver
+    // `use-auth-movil.refrescar.test.ts`/`ReintentarRefreshMasTardeError`), así que este test
+    // usa una lectura exitosa para seguir ejercitando lo que le importa: un error de RED en el
+    // único intento no dispara ningún reintento.
+    cargarSesionMovilMock.mockResolvedValue(t0);
     refreshMock.mockRejectedValue(new AuthMovilApiError('network', 'Sin conexión'));
 
     await expect(refrescar(t0)).rejects.toThrow('Sin conexión');
