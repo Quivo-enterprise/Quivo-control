@@ -27,11 +27,7 @@ import {
 } from '../../gps/geofence';
 import { confirmarVisitasVencidasEnCola, registrarPuntoGps } from '../../gps/headless-task';
 import { clavesCumplimientoDesdePayloads, combinarConVisitasPendientes } from '../../gps/location-task';
-import {
-  asegurarPermisoNotificaciones,
-  limpiarAproximacionesAnunciadas,
-  limpiarConfirmacionesProximidadAnunciadas,
-} from './anuncio-punto-control';
+import { asegurarPermisoNotificaciones, limpiarAproximacionesAnunciadas } from './anuncio-punto-control';
 import {
   AUTORIZACION_DENEGADA,
   AUTORIZACION_NO_DETERMINADA,
@@ -166,6 +162,14 @@ export function useGpsOperativo(
   // `iniciar()`) leen para no sembrar dos veces y para no suscribirse/arrancar antes de que
   // termine. Ver `sembrarCumplimientos` más abajo.
   const semillaPromise = useRef<Promise<void> | null>(null);
+  // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5, "semilla fallida"): `true` solo cuando
+  // `sembrarCumplimientos` terminó de leer el outbox SIN excepción — separado de
+  // `semillaPromise` a propósito, igual criterio que `semillasHidratadasPorSesion` en
+  // `gps/headless-task.ts`: la promesa de la siembra resuelve aunque su `catch` interno haya
+  // corrido, así que no alcanza para saber si el Map de estados quedó bien hidratado o vacío
+  // por un fallo transitorio (SQLite ocupada). `onLocation` lo consulta antes de procesar
+  // cumplimientos (ver más abajo).
+  const semillaHidratadaRef = useRef(false);
 
   const onLocation = useCallback(
     // La escritura al outbox (gps_point + cumplimiento_punto_control) vive en
@@ -207,7 +211,19 @@ export function useGpsOperativo(
         // (que lo re-emitiría como `pasada: 1`) o de perderse por no haber suscripción todavía.
         // La semilla nunca rechaza (best-effort, ver `sembrarCumplimientos`).
         await semillaPromise.current;
+        // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): si la siembra todavía no hidrató
+        // (falló la última vez), reintenta ACÁ MISMO antes de procesar este fix — "se reintenta
+        // en cada tick" — en vez de quedar pegado para siempre a la promesa fallida.
+        if (!semillaHidratadaRef.current) {
+          semillaPromise.current = sembrarCumplimientos();
+          await semillaPromise.current;
+        }
         const db = await abrirOutbox();
+        // FIX POST-REVISIÓN (punto 5): mientras no hidrate, no se procesan transiciones de
+        // cumplimiento — `puntosControl: []` hace que `construirEventosDeUbicacion` salte esa
+        // parte (ver su chequeo `contexto.puntosControl.length > 0`); la captura de `gps_point`
+        // sigue exactamente igual, no depende de esto.
+        const puntosControlDelTick = semillaHidratadaRef.current ? puntosControl : [];
         const {
           deteccion,
           deteccionAproximacion: nuevaAproximacion,
@@ -217,7 +233,7 @@ export function useGpsOperativo(
         } = await registrarPuntoGps(
           db,
           location,
-          { deviceId, sesionId, puntosControl },
+          { deviceId, sesionId, puntosControl: puntosControlDelTick },
           // B6 (hallazgo de revisión, bajo): se pasa el REF, no `.current` — la cola FIFO de
           // `registrarPuntoGps` difiere la ejecución, y `sembrarCumplimientos` puede reemplazar
           // el Map en el medio. Ver `ContenedorEstadosPuntosControl` (`gps/headless-task.ts`).
@@ -230,10 +246,11 @@ export function useGpsOperativo(
         // gatea en `settings.navegacionVoz`): limpiar el Set nunca hace daño si la voz está
         // apagada (el Set solo tiene entradas de anuncios que SÍ se emitieron).
         if (puntosRearmadosVoz.length > 0) limpiarAproximacionesAnunciadas(puntosRearmadosVoz);
-        // DECISIÓN CTO 2026-09-23: libera el dedupe de "llegaste por proximidad" cuando la
-        // histéresis de DETECCIÓN re-arma de verdad — ver `confirmacionesProximidadAnunciadas`
-        // en `anuncio-punto-control.ts`.
-        if (puntosRearmados.length > 0) limpiarConfirmacionesProximidadAnunciadas(puntosRearmados);
+        // FIX POST-REVISIÓN (Codex `verify-fix`, punto 2): el dedupe de "llegaste por
+        // proximidad" ya es PERSISTIDO y está scopeado por `pasada` — no hace falta "liberarlo"
+        // al re-armar (`puntosRearmados`), una pasada nueva ya produce una clave nueva. `void`
+        // documenta que se sigue recibiendo (telemetría/depuración futura) sin usarlo acá.
+        void puntosRearmados;
         if (deteccion) setUltimaDeteccion(deteccion);
         // ENTREGA 6/7: se actualiza en CADA tick con puntos de control (incluso a `null` cuando
         // ninguno está en rango) — a diferencia de `ultimaDeteccion`, que solo cambia con una
@@ -393,11 +410,16 @@ export function useGpsOperativo(
       // la re-evaluaba).
       const visitasPendientes = await obtenerVisitasPendientes(db, sesionId);
       puntosControlDetectados.current = combinarConVisitasPendientes(base, visitasPendientes);
+      // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): recién ACÁ, tras terminar sin
+      // excepción, se marca hidratada — ver el comentario largo de `semillaHidratadaRef`.
+      semillaHidratadaRef.current = true;
     } catch (error) {
       console.error('[QUIVO][gps] No se pudo sembrar cumplimientos desde el outbox', error);
       Sentry.captureException(error, {
         tags: { contexto: 'gps-foreground', paso: 'sembrar-cumplimientos' },
       });
+      // FIX POST-REVISIÓN (punto 5): NO se marca hidratada — `onLocation` reintenta la siembra
+      // en el próximo fix mientras siga en `false` (ver su uso más abajo).
     }
   }, [sesionId]);
 
@@ -418,6 +440,9 @@ export function useGpsOperativo(
         // Ignorar fallo silencioso (puede que no tenga permisos aún)
       });
 
+    // FIX POST-REVISIÓN (punto 5): nueva sesión (o primer montaje) — arranca sin hidratar hasta
+    // que `sembrarCumplimientos` termine bien.
+    semillaHidratadaRef.current = false;
     // C1 (hallazgo de revisión CRÍTICO): la siembra corre SIEMPRE al montar (keyed por
     // `sesionId`, ver las deps de este efecto), ANTES de decidir si re-enganchar la
     // suscripción — no solo cuando el chofer aprieta "Iniciar" (ver el comentario de

@@ -36,16 +36,19 @@ vi.mock('@sentry/react-native', () => ({
 }));
 
 import {
+  anuncioYaRegistrado,
   encolarEventoYLimpiarVisita,
   type EventoOutboxNuevo,
 } from './outbox';
 
 /** Handle SQLite falso — solo los métodos que `outbox.ts` realmente usa en el camino bajo
- * prueba (`runAsync`, `withTransactionAsync`, `execAsync` para el DDL de una reapertura). */
+ * prueba (`runAsync`, `withTransactionAsync`, `execAsync` para el DDL de una reapertura,
+ * `getFirstAsync` para lecturas puras como `anuncioYaRegistrado`). */
 interface HandleFalso {
   runAsync: ReturnType<typeof vi.fn>;
   withTransactionAsync: ReturnType<typeof vi.fn>;
   execAsync: ReturnType<typeof vi.fn>;
+  getFirstAsync?: ReturnType<typeof vi.fn>;
 }
 
 /** Error con la MISMA forma que el NPE nativo real de `expo-sqlite@16.0.10` sobre un handle
@@ -151,5 +154,43 @@ describe('encolarEventoYLimpiarVisita — R2 (handle muere A MITAD de la transac
         'clave-3',
       ),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 3, "marcar después de programar"): lectura PURA
+ * de `anuncios_punto_control` — a diferencia de `registrarAnuncioSiNuevo` (INSERT OR IGNORE),
+ * esta función NO escribe nada. `anuncio-punto-control.ts` la usa para consultar "¿ya está
+ * marcado?" ANTES de intentar programar una notificación, sin marcar una fila a ciegas por un
+ * intento que todavía no terminó.
+ */
+describe('anuncioYaRegistrado', () => {
+  it('devuelve false y hace un SELECT (nunca un INSERT) cuando la clave no existe', async () => {
+    const getFirstAsync = vi.fn().mockResolvedValue(null);
+    const db = { ...crearHandleFalso(vi.fn()), getFirstAsync };
+
+    const resultado = await anuncioYaRegistrado(
+      db as unknown as Parameters<typeof anuncioYaRegistrado>[0],
+      'proximidad:sesion-1:pc-1:1',
+    );
+
+    expect(resultado).toBe(false);
+    expect(getFirstAsync).toHaveBeenCalledWith(
+      expect.stringContaining('SELECT'),
+      ['proximidad:sesion-1:pc-1:1'],
+    );
+    expect(db.runAsync).not.toHaveBeenCalled();
+  });
+
+  it('devuelve true cuando la clave ya está registrada', async () => {
+    const getFirstAsync = vi.fn().mockResolvedValue({ clave: 'proximidad:sesion-1:pc-1:1' });
+    const db = { ...crearHandleFalso(vi.fn()), getFirstAsync };
+
+    const resultado = await anuncioYaRegistrado(
+      db as unknown as Parameters<typeof anuncioYaRegistrado>[0],
+      'proximidad:sesion-1:pc-1:1',
+    );
+
+    expect(resultado).toBe(true);
   });
 });

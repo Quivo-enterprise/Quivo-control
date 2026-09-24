@@ -344,6 +344,25 @@ export async function registrarAnuncioSiNuevo(
   return result.changes > 0;
 }
 
+/**
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 3, "marcar después de programar"): lectura PURA
+ * (sin insertar) de `anuncios_punto_control` — a diferencia de `registrarAnuncioSiNuevo`
+ * (arriba), que hace el `INSERT OR IGNORE` de una: acá hace falta poder CONSULTAR "¿ya está
+ * marcado?" sin marcarlo, porque `anunciarPuntoControl` (`features/operacion/
+ * anuncio-punto-control.ts`) ahora solo marca DESPUÉS de programar la notificación con éxito —
+ * antes de intentar, necesita saber si ya se marcó en un intento anterior sin insertar una fila
+ * a ciegas que podría corresponder a un intento que todavía no terminó de programar nada.
+ */
+export async function anuncioYaRegistrado(db: SQLite.SQLiteDatabase, clave: string): Promise<boolean> {
+  const row = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.getFirstAsync<{ clave: string }>(
+      'SELECT clave FROM anuncios_punto_control WHERE clave = ?',
+      [clave],
+    ),
+  );
+  return row !== null && row !== undefined;
+}
+
 /** Fila de la tabla `visitas_pendientes` — ver su comentario de DDL arriba. Espejo (en
  * `camelCase`) de `VisitaPendienteSembrable` (`gps/location-task.ts`), que es la forma que
  * `combinarConVisitasPendientes` (pura, sin SQLite) sabe consumir. */

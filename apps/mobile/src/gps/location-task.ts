@@ -2,7 +2,6 @@ import type { Location } from 'react-native-background-geolocation';
 import {
   derivarEventIdDeterministico,
   RADIO_AVISO_M,
-  RADIO_CONFIRMACION_M,
   resolverTsFix,
   type PuntoControlPaquete,
   type TipoEventoSync,
@@ -254,6 +253,7 @@ export function construirEventosDeUbicacion(
       avisosPrecision: avisos,
       puntosRearmados: rearmados,
       puntosRearmadosVoz: rearmadosVoz,
+      anunciosProximidad,
     } = filtrarNuevosCumplimientos(estadosPuntosControl, detecciones, contexto.sesionId, tsFixMs, {
       lat: location.coords.latitude,
       lng: location.coords.longitude,
@@ -263,23 +263,20 @@ export function construirEventosDeUbicacion(
     puntosRearmados = rearmados;
     puntosRearmadosVoz = rearmadosVoz;
 
-    // DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): el punto MÁS CERCANO, entre los que
-    // tienen una visita YA ACTIVA sin confirmar (`dentro && confirmado === false`), cuya
-    // distancia cae dentro de `RADIO_CONFIRMACION_M` — leyendo el estado POST-tick
-    // (`transicionesEstado`, que ya incluye la transición de ENTRADA de este mismo fix si
-    // corresponde) con fallback al estado previo para las claves que este tick no tocó. Igual
-    // que `deteccionAproximacion`: por fuera de la máquina de estados, no puede introducir un
-    // bug en la evidencia legal (que sigue emitiendo exactamente igual, en el mínimo local).
-    for (const d of detecciones) {
-      if (d.distanciaM > RADIO_CONFIRMACION_M) continue;
-      const claveVisita = claveCumplimiento(contexto.sesionId, d.puntoControlId);
-      const estadoVisita = transicionesEstado.get(claveVisita) ?? estadosPuntosControl.get(claveVisita);
-      if (!estadoVisita?.dentro || estadoVisita.confirmado !== false) continue;
+    // FIX POST-REVISIÓN (Codex `verify-fix`, punto 1 — "separar estado de anuncio y estado de
+    // evidencia"): la máquina de estados (`filtrarNuevosCumplimientos`) ya decide, con SU PROPIO
+    // ciclo de vida (`anuncioProximidadHecho`, independiente de `confirmado`), cuáles
+    // detecciones corresponde anunciar este tick — acá solo se elige la MÁS CERCANA (mismo
+    // criterio que antes) si hubo más de una. Ya NO se vuelve a leer `estadoVisita.confirmado`:
+    // ese era justo el bug (un jitter de distancia podía confirmar la evidencia temprano y
+    // bloquear el anuncio para siempre en esa visita, aunque el vehículo luego sí se acercara a
+    // <40 m).
+    for (const anuncio of anunciosProximidad) {
       if (
         deteccionConfirmacionProximidad === null ||
-        d.distanciaM < deteccionConfirmacionProximidad.distanciaM
+        anuncio.distanciaM < deteccionConfirmacionProximidad.distanciaM
       ) {
-        deteccionConfirmacionProximidad = { ...d, fase: 'confirmado-proximidad' };
+        deteccionConfirmacionProximidad = anuncio;
       }
     }
 

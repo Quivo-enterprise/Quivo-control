@@ -122,6 +122,38 @@ class TimeoutRegistroGpsError extends Error {
 }
 
 /**
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 7, "el timeout de la cola no cancela la
+ * operación subyacente"): contador de GENERACIÓN de la cola. `conTimeout` (arriba) ya
+ * documentaba el hueco: al vencer el techo de `TIMEOUT_REGISTRO_GPS_MS`, la cola avanza (el
+ * siguiente fix/heartbeat puede empezar a leer/escribir `estadosPuntosControl`/SQLite) pero la
+ * operación VENCIDA sigue corriendo de fondo — si finalmente termina (SQLite que tardó pero no
+ * estaba muerta), sus escrituras llegan TARDE y pueden intercalarse con las de la operación que
+ * la cola ya dejó avanzar, con el memory Map como principal víctima (una escritura vieja podría
+ * pisar un estado más nuevo).
+ *
+ * DECISIÓN (documentada, punto 7 del brief): se optó por este contador de generación en vez de
+ * simplemente "no liberar la exclusión al vencer el timeout". No liberar reintroduciría el
+ * problema ORIGINAL que el propio timeout (B7) existe para cerrar: una escritura REALMENTE
+ * trabada (no solo lenta) colgaría la cola para siempre, y con ella TODOS los puntos GPS del
+ * resto del turno, en los dos contextos (headless y foreground) — "la pérdida total de la
+ * evidencia del resto del turno", tal como ya lo describe el comentario de
+ * `TIMEOUT_REGISTRO_GPS_MS`. El generation counter deja que la cola siga avanzando (evidencia
+ * nueva sigue entrando sin esperar a la operación trabada) mientras impide que esa operación,
+ * si finalmente despierta, corrompa el estado que las operaciones más nuevas ya construyeron:
+ * `registrarPuntoGpsInterno` captura su propia generación al empezar y la revisa antes de cada
+ * tramo de escritura — si ya quedó vieja, aborta el RESTO de su trabajo (lo que ya escribió
+ * antes de vencer no tiene vuelta atrás, pero no sigue escribiendo después).
+ */
+let generacionColaRegistroGps = 0;
+
+/** `true` si `miGeneracion` sigue siendo la generación ACTUAL de la cola — `false` si esta
+ * operación ya venció su timeout (la cola avanzó, incrementando el contador) mientras seguía
+ * corriendo de fondo. Ver `generacionColaRegistroGps`. */
+function generacionVigente(miGeneracion: number): boolean {
+  return miGeneracion === generacionColaRegistroGps;
+}
+
+/**
  * B7: corre `operacion` con un techo de tiempo. Si vence, la promesa devuelta rechaza (así la
  * cola avanza y el caller se entera), pero la operación original sigue viva — su resultado se
  * ignora, y si termina rechazando se le engancha un `.catch` vacío para no dejar un unhandled
@@ -191,9 +223,63 @@ export function registrarPuntoGps(
   puntosRearmadosVoz: string[];
 }> {
   return ejecutarEnColaRegistroGps(
+    db,
     () => registrarPuntoGpsInterno(db, location, contexto, estadosPuntosControl),
     contexto.sesionId,
   );
+}
+
+/**
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 6, "visita perdida si falla
+ * guardarVisitaPendiente"): cola de reintento EN MEMORIA para escrituras de `visitas_pendientes`
+ * que fallaron en su primer intento. Antes de este fix, una escritura fallida dejaba la
+ * transición SIN aplicar a `estados` (memoria) — a propósito, para no adelantar la memoria
+ * respecto de lo que SQLite tenía realmente confirmado (ver el docblock viejo de
+ * `registrarPuntoGpsInterno`, G2). El problema real que ese diseño no cubría: si el ÚNICO fix
+ * dentro del radio de un punto de control es justo el que falla al escribir, la memoria se
+ * queda en `dentro:false` para siempre — el próximo fix, ya afuera del radio, no ve ninguna
+ * visita en curso que cerrar, y esa pasada se pierde PARA SIEMPRE, no solo hasta que SQLite se
+ * desocupe (el escenario que `visitas_pendientes` existe para cubrir era justo el opuesto:
+ * proteger contra un CRASH, no contra una escritura momentáneamente ocupada mientras el proceso
+ * sigue vivo).
+ *
+ * El fix: la transición SIEMPRE se aplica a `estados` (memoria) — la continuidad de la visita
+ * dentro de la vida de ESTE proceso ya no depende de que la escritura a SQLite salga bien en el
+ * primer intento — y la escritura fallida se encola acá para reintentarse, en orden, ANTES de
+ * procesar la PRÓXIMA operación de la cola (el próximo fix o heartbeat, sea cual sea primero).
+ * Tradeoff ACEPTADO y documentado: si el proceso muere ANTES de que el reintento drene esta
+ * cola, la copia durable de esa visita en curso se pierde igual (no hay forma de sobrevivir a un
+ * crash sin haber llegado a disco) — pero es estrictamente MEJOR que el diseño anterior, que
+ * perdía la visita incluso sin ningún crash de por medio.
+ */
+type ReintentoVisitaPendiente =
+  | { tipo: 'guardar'; visita: Parameters<typeof guardarVisitaPendiente>[1] }
+  | { tipo: 'eliminar'; clave: string };
+
+const reintentosVisitaPendiente = new Map<string, ReintentoVisitaPendiente>();
+
+/** Drena la cola de `reintentosVisitaPendiente` — se llama desde `ejecutarEnColaRegistroGps`,
+ * ANTES de cada operación nueva (fix o heartbeat), así que corre serializada con el resto de la
+ * cola y nunca compite por la escritura con la operación que la sigue. Nunca rechaza: un
+ * reintento que vuelve a fallar simplemente queda en la cola para el próximo turno. */
+async function drenarReintentosVisitaPendiente(db: SQLite.SQLiteDatabase): Promise<void> {
+  if (reintentosVisitaPendiente.size === 0) return;
+  for (const [clave, reintento] of Array.from(reintentosVisitaPendiente.entries())) {
+    try {
+      if (reintento.tipo === 'guardar') {
+        await guardarVisitaPendiente(db, reintento.visita);
+      } else {
+        await eliminarVisitaPendiente(db, reintento.clave);
+      }
+      reintentosVisitaPendiente.delete(clave);
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-cola', paso: 'reintento-visita-pendiente' },
+        extra: { clave },
+      });
+      // Sigue en la cola — se reintenta de nuevo en la próxima operación encolada.
+    }
+  }
 }
 
 /**
@@ -205,7 +291,11 @@ export function registrarPuntoGps(
  * está en curso, ninguna otra puede empezar a leer/escribir `visitas_pendientes` ni emitir
  * cumplimientos, sin importar de cuál de los tres caminos venga.
  */
-function ejecutarEnColaRegistroGps<T>(operacion: () => Promise<T>, sesionId: string): Promise<T> {
+function ejecutarEnColaRegistroGps<T>(
+  db: SQLite.SQLiteDatabase,
+  operacion: () => Promise<T>,
+  sesionId: string,
+): Promise<T> {
   profundidadColaRegistroGps += 1;
   if (profundidadColaRegistroGps >= PROFUNDIDAD_COLA_SOSPECHOSA) {
     Sentry.addBreadcrumb({
@@ -217,20 +307,30 @@ function ejecutarEnColaRegistroGps<T>(operacion: () => Promise<T>, sesionId: str
   }
 
   // B7: el techo de tiempo arranca cuando la operación EMPIEZA (dentro del `then`), no cuando
-  // se encola — ver el comentario de `TIMEOUT_REGISTRO_GPS_MS`.
+  // se encola — ver el comentario de `TIMEOUT_REGISTRO_GPS_MS`. FIX POST-REVISIÓN (punto 6): el
+  // drenado de reintentos corre PRIMERO, dentro del mismo `then` — así queda serializado con la
+  // cola y "antes de procesar el siguiente fix/heartbeat" (orden preservado) es literal.
   const resultado = colaRegistroGps
+    .then(() => drenarReintentosVisitaPendiente(db))
     .then(() => conTimeout(operacion(), TIMEOUT_REGISTRO_GPS_MS))
     .catch((error: unknown) => {
       if (error instanceof TimeoutRegistroGpsError) {
         console.error('[QUIVO][gps] una operación de la cola de registro venció su techo de tiempo', error);
+        // FIX POST-REVISIÓN (punto 7): incrementa la GENERACIÓN — la operación vencida, si
+        // finalmente termina de correr, va a ver `generacionVigente(miGeneracion) === false` y
+        // va a abortar el resto de sus escrituras en vez de corromper el estado que la próxima
+        // operación (ya despachada, ver el `.then` de arriba) construya mientras tanto.
+        generacionColaRegistroGps += 1;
         // Sin esto, una escritura trabada arrastra al resto del turno en silencio — el peor
         // caso del ticket, invisible por definición (nadie lee la consola del teléfono de un
-        // conductor en ruta).
+        // conductor en ruta). Sirve, además, de WATCHDOG: es la señal que Sentry recibe de que
+        // una operación vencida quedó corriendo de fondo.
         Sentry.captureException(error, {
           tags: { contexto: 'gps-cola', paso: 'timeout-registro-punto' },
           extra: {
             timeoutMs: TIMEOUT_REGISTRO_GPS_MS,
             profundidadCola: profundidadColaRegistroGps,
+            generacion: generacionColaRegistroGps,
             sesionId,
           },
         });
@@ -279,12 +379,18 @@ function ejecutarEnColaRegistroGps<T>(operacion: () => Promise<T>, sesionId: str
  * nada) y la memoria YA había avanzado igual: si la app se mataba entre ese momento y el próximo
  * fix, `asegurarSemillaCumplimientos`/`sembrarCumplimientos` reconstruía el estado desde el
  * outbox SIN la fila de `visitas_pendientes` (nunca se escribió) — la visita en curso se perdía
- * por completo, exactamente el escenario que `visitas_pendientes` existe para cubrir. Con el
- * fix: si la escritura falla para una clave, esa transición puntual NO se aplica a `estados` —
- * el Map queda con el estado ANTERIOR para esa clave, así que el PRÓXIMO fix la reprocesa desde
- * ahí (mismo mínimo/candidato de antes) y reintenta la escritura, en vez de quedar con una
- * memoria adelantada que SQLite nunca respaldó. El resto de las claves de este mismo tick no se
- * ven afectadas (el fallo es por clave, no aborta el tick completo).
+ * por completo, exactamente el escenario que `visitas_pendientes` existe para cubrir.
+ *
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 6, "visita perdida si falla
+ * guardarVisitaPendiente" — SUPERSEDE el párrafo de arriba): el diseño de G2 (no aplicar la
+ * transición a `estados` si la escritura falla) tenía su propio hueco: si el ÚNICO fix dentro
+ * del radio de un punto es justo el que falla al escribir, la memoria se queda en `dentro:
+ * false` para siempre — el próximo fix, ya afuera del radio, no ve ninguna visita que cerrar, y
+ * la pasada se pierde PARA SIEMPRE, no solo hasta que SQLite se desocupe. Ahora la transición
+ * SIEMPRE se aplica a `estados` (memoria) y la escritura fallida se encola en
+ * `reintentosVisitaPendiente` (ver su docblock) para reintentarse antes de la PRÓXIMA operación
+ * de la cola. El resto de las claves de este mismo tick no se ven afectadas (el fallo es por
+ * clave, no aborta el tick completo).
  */
 async function registrarPuntoGpsInterno(
   db: SQLite.SQLiteDatabase,
@@ -298,6 +404,12 @@ async function registrarPuntoGpsInterno(
   puntosRearmados: string[];
   puntosRearmadosVoz: string[];
 }> {
+  // FIX POST-REVISIÓN (Codex `verify-fix`, punto 7): generación capturada AL EMPEZAR — si para
+  // cuando esta operación llega a escribir algo la cola ya avanzó (esta operación venció su
+  // timeout mientras tanto), `generacionVigente(miGeneracion)` da `false` y el resto del cuerpo
+  // aborta sin seguir escribiendo. Ver el docblock largo de `generacionColaRegistroGps`.
+  const miGeneracion = generacionColaRegistroGps;
+
   // B6: `.current` se lee ACÁ, ya con el turno de la cola concedido — nunca en el caller, que
   // pudo haber quedado con una referencia previa a una re-siembra (ver
   // `ContenedorEstadosPuntosControl`).
@@ -330,6 +442,11 @@ async function registrarPuntoGpsInterno(
   );
 
   for (const evento of eventos) {
+    // FIX POST-REVISIÓN (punto 7): chequeo de generación ANTES de cada escritura del tick — una
+    // operación que venció su timeout y sigue corriendo de fondo deja de escribir apenas la
+    // cola avanzó, en vez de intercalar escrituras tardías con la operación más nueva que ya
+    // está en curso.
+    if (!generacionVigente(miGeneracion)) break;
     if (evento.clave !== undefined) {
       // FIX POST-REVISIÓN (bug 5): confirmación — encolar el evento y borrar la fila de
       // `visitas_pendientes` de esta visita en LA MISMA transacción (ver
@@ -363,50 +480,67 @@ async function registrarPuntoGpsInterno(
       // `estados`. Ver el docblock de la función para el porqué del orden y del fail-per-clave
       // (no aborta el tick, no bloquea las demás claves).
       for (const [clave, estado] of transicionesEstado) {
+        // FIX POST-REVISIÓN (punto 7): mismo chequeo que el loop externo — una tanda de
+        // housekeeping puede cubrir varias claves; si la cola avanzó a mitad de esta tanda, se
+        // corta acá en vez de seguir escribiendo con datos ya viejos.
+        if (!generacionVigente(miGeneracion)) break;
         if (clavesConEventoPropio.has(clave)) continue; // ya persistida+aplicada arriba
+        const esVisitaEnCurso =
+          estado.dentro &&
+          estado.confirmado === false &&
+          estado.candidatoLat !== undefined &&
+          estado.candidatoLng !== undefined &&
+          estado.candidatoTsFixMs !== undefined &&
+          estado.minDistanciaM !== undefined &&
+          estado.puntoControlId !== undefined &&
+          estado.radioToleranciaM !== undefined;
+        const reintento: ReintentoVisitaPendiente = esVisitaEnCurso
+          ? {
+              tipo: 'guardar',
+              visita: {
+                clave,
+                sesionId: contexto.sesionId,
+                puntoControlId: estado.puntoControlId as string,
+                pasadasPrevias: estado.pasadas,
+                radioToleranciaM: estado.radioToleranciaM as number,
+                minDistanciaM: estado.minDistanciaM as number,
+                distanciaEntradaM: estado.distanciaEntradaM ?? (estado.minDistanciaM as number),
+                candidatoLat: estado.candidatoLat as number,
+                candidatoLng: estado.candidatoLng as number,
+                candidatoTsFixMs: estado.candidatoTsFixMs as number,
+                ultimoEmitidoMs: estado.ultimoEmitidoMs,
+                fixesDentroSinConfirmar: estado.fixesDentroSinConfirmar ?? 0,
+              },
+            }
+          : { tipo: 'eliminar', clave };
         try {
-          if (
-            estado.dentro &&
-            estado.confirmado === false &&
-            estado.candidatoLat !== undefined &&
-            estado.candidatoLng !== undefined &&
-            estado.candidatoTsFixMs !== undefined &&
-            estado.minDistanciaM !== undefined &&
-            estado.puntoControlId !== undefined &&
-            estado.radioToleranciaM !== undefined
-          ) {
-            await guardarVisitaPendiente(db, {
-              clave,
-              sesionId: contexto.sesionId,
-              puntoControlId: estado.puntoControlId,
-              pasadasPrevias: estado.pasadas,
-              radioToleranciaM: estado.radioToleranciaM,
-              minDistanciaM: estado.minDistanciaM,
-              distanciaEntradaM: estado.distanciaEntradaM ?? estado.minDistanciaM,
-              candidatoLat: estado.candidatoLat,
-              candidatoLng: estado.candidatoLng,
-              candidatoTsFixMs: estado.candidatoTsFixMs,
-              ultimoEmitidoMs: estado.ultimoEmitidoMs,
-              fixesDentroSinConfirmar: estado.fixesDentroSinConfirmar ?? 0,
-            });
+          if (reintento.tipo === 'guardar') {
+            await guardarVisitaPendiente(db, reintento.visita);
           } else {
             // Re-armada sin confirmar, o transición sin visita en curso: borra cualquier fila
             // vieja que pudiera quedar (no-op seguro si no había ninguna).
             await eliminarVisitaPendiente(db, clave);
           }
-          estados.set(clave, estado);
+          // La escritura salió bien: si había quedado un reintento pendiente de un fallo
+          // anterior para esta MISMA clave, ya no hace falta — este intento lo reemplaza.
+          reintentosVisitaPendiente.delete(clave);
         } catch (error) {
-          console.error('[QUIVO][gps] No se pudo actualizar visitas_pendientes — transición no aplicada', error);
-          // FIX POST-REVISIÓN (G2): a diferencia de la versión anterior, este catch es por
-          // CLAVE (no envuelve todo el tick) y, a propósito, NO hace `estados.set(clave, estado)`
-          // — la memoria se queda en el estado ANTERIOR para esta clave puntual, así que el
-          // próximo fix la reprocesa desde ahí y reintenta la escritura (ver el docblock de la
-          // función).
+          console.error('[QUIVO][gps] No se pudo actualizar visitas_pendientes — se reintentará antes del próximo fix/heartbeat', error);
+          // FIX POST-REVISIÓN (Codex `verify-fix`, punto 6): a diferencia del diseño anterior
+          // (G2), que dejaba la memoria SIN avanzar para esta clave, ahora se encola el
+          // reintento (`reintentosVisitaPendiente`, drenado por `ejecutarEnColaRegistroGps`
+          // ANTES de la próxima operación) — ver el docblock largo de esa cola para el porqué
+          // del cambio de tradeoff. `estados.set` de abajo corre SIEMPRE, éxito o fallo.
+          reintentosVisitaPendiente.set(clave, reintento);
           Sentry.captureException(error, {
-            tags: { contexto: 'gps-cola', paso: 'visita-pendiente-no-aplicada' },
+            tags: { contexto: 'gps-cola', paso: 'visita-pendiente-reintento-encolado' },
             extra: { sesionId: contexto.sesionId, clave },
           });
         }
+        // FIX POST-REVISIÓN (punto 6): se aplica SIEMPRE, haya salido bien o mal la escritura —
+        // la continuidad de la visita dentro de la vida de este proceso ya no depende de que
+        // SQLite confirme en el primer intento (ver el docblock de `reintentosVisitaPendiente`).
+        estados.set(clave, estado);
       }
     }
   }
@@ -549,10 +683,36 @@ const puntosControlDetectadosHeadless: ContenedorEstadosPuntosControl = { curren
  * sesiones. */
 const semillasCumplimientosPorSesion = new Map<string, Promise<void>>();
 
+/**
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 5, "semilla fallida"): sesiones cuya siembra
+ * HIDRATÓ de verdad (el `try` de abajo terminó sin excepción) — separado del cache de promesas
+ * de arriba a propósito. Antes de este fix, una lectura fallida (SQLite ocupada, handle zombi)
+ * quedaba igual "completada" en `semillasCumplimientosPorSesion` (la promesa resuelve aunque su
+ * `catch` interno haya corrido) con el Map vacío — el contador de pasadas de esa sesión
+ * arrancaba de cero, y con el `eventId` determinístico (`{sesionId, puntoControlId, pasada}`)
+ * una pasada REAL posterior podía reusar `pasada: 1` y el servidor la descartaba (`ON CONFLICT
+ * DO NOTHING`) por chocar con la `pasada: 1` de una visita anterior real — evidencia perdida en
+ * silencio. Con este Map, una siembra fallida NO cuenta como hidratada: `tareaHeadlessUbicacion`
+ * consulta `estaSemillaHidratada` antes de procesar cumplimientos (ver su uso más abajo) y, si
+ * todavía no hidrató, procesa el fix SOLO para `gps_point` (la captura GPS no depende de esto),
+ * sin tocar la máquina de estados de cumplimiento.
+ */
+const semillasHidratadasPorSesion = new Map<string, boolean>();
+
+/** Ver `semillasHidratadasPorSesion`: `true` solo si la siembra de esta sesión hidrató con
+ * éxito alguna vez en este contexto JS. */
+export function estaSemillaHidratada(sesionId: string): boolean {
+  return semillasHidratadasPorSesion.get(sesionId) === true;
+}
+
 async function asegurarSemillaCumplimientos(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
 ): Promise<void> {
+  // FIX POST-REVISIÓN (punto 5): si ya hidrató alguna vez, no hay nada que reintentar — evita
+  // releer el outbox en cada tick de una sesión que ya sembró bien.
+  if (semillasHidratadasPorSesion.get(sesionId) === true) return;
+
   let semilla = semillasCumplimientosPorSesion.get(sesionId);
   if (!semilla) {
     semilla = (async () => {
@@ -568,6 +728,9 @@ async function asegurarSemillaCumplimientos(
         for (const [clave, estado] of combinado) {
           puntosControlDetectadosHeadless.current.set(clave, estado);
         }
+        // FIX POST-REVISIÓN (punto 5): recién ACÁ, tras terminar sin excepción, se marca
+        // hidratada — es la señal que habilita procesar transiciones de cumplimiento.
+        semillasHidratadasPorSesion.set(sesionId, true);
       } catch (error) {
         console.error('[QUIVO][headless] No se pudo sembrar cumplimientos desde el outbox', error);
         // QUI-365: este catch es best-effort a propósito (ver doc de la función) — sin captura
@@ -576,6 +739,10 @@ async function asegurarSemillaCumplimientos(
         Sentry.captureException(error, {
           tags: { contexto: 'headless-task', paso: 'sembrar-cumplimientos' },
         });
+        // FIX POST-REVISIÓN (punto 5): NO se marca hidratada, y se saca del cache de promesas
+        // para que el PRÓXIMO tick dispare un reintento nuevo en vez de quedar pegado para
+        // siempre a esta promesa ya resuelta (fallida).
+        semillasCumplimientosPorSesion.delete(sesionId);
       }
     })();
     semillasCumplimientosPorSesion.set(sesionId, semilla);
@@ -669,15 +836,19 @@ export function confirmarVisitasVencidasEnCola(
   umbralMs: number,
   filtrarSesionActual: boolean,
 ): Promise<CumplimientoAEmitir[]> {
-  return ejecutarEnColaRegistroGps(async () => {
-    const estados = estadosPuntosControl.current;
-    const estadosAEvaluar = filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados;
-    const { emitir, transiciones } = confirmarVisitasVencidas(estadosAEvaluar, ahoraMs, umbralMs);
-    if (emitir.length > 0) {
-      await aplicarConfirmacionesForzadas(db, deviceId, sesionId, emitir, transiciones, estados);
-    }
-    return emitir;
-  }, sesionId);
+  return ejecutarEnColaRegistroGps(
+    db,
+    async () => {
+      const estados = estadosPuntosControl.current;
+      const estadosAEvaluar = filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados;
+      const { emitir, transiciones } = confirmarVisitasVencidas(estadosAEvaluar, ahoraMs, umbralMs);
+      if (emitir.length > 0) {
+        await aplicarConfirmacionesForzadas(db, deviceId, sesionId, emitir, transiciones, estados);
+      }
+      return emitir;
+    },
+    sesionId,
+  );
 }
 
 /**
@@ -728,13 +899,23 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
 
     const db = await abrirOutbox();
     await asegurarSemillaCumplimientos(db, contexto.sesionId);
+    // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): mientras la semilla de esta sesión no
+    // haya hidratado (lectura fallida, se reintenta en el próximo tick — ver
+    // `asegurarSemillaCumplimientos`), este fix se procesa SOLO para `gps_point` — la máquina
+    // de estados de cumplimiento (`filtrarNuevosCumplimientos`) queda sin evaluar, para no
+    // arrancar el contador de pasadas desde un Map vacío. `puntosControl: []` es lo que hace
+    // que `construirEventosDeUbicacion` salte esa parte (ver su chequeo
+    // `contexto.puntosControl.length > 0`) sin tocar la captura GPS, que no depende de esto.
+    const contextoTick = estaSemillaHidratada(contexto.sesionId)
+      ? contexto
+      : { ...contexto, puntosControl: [] };
     const {
       deteccion,
       deteccionAproximacion,
       deteccionConfirmacionProximidad,
       puntosRearmados,
       puntosRearmadosVoz,
-    } = await registrarPuntoGps(db, location, contexto, puntosControlDetectadosHeadless);
+    } = await registrarPuntoGps(db, location, contextoTick, puntosControlDetectadosHeadless);
     // ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): el punto GPS y el
     // cumplimiento YA quedaron persistidos arriba (la evidencia, RF-64..73) — el anuncio al
     // chofer es best-effort y NUNCA debe poder tumbar ese resultado ya escrito. Por eso corre
@@ -744,9 +925,10 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     // mezclar los dos haría parecer perdido un punto GPS que en realidad se guardó bien.
     // FIX POST-REVISIÓN (G1): se pasa `puntosRearmadosVoz` (histéresis PROPIA de la marca de
     // voz sobre `RADIO_AVISO_M`), no `puntosRearmados` (histéresis de DETECCIÓN) — ver el
-    // comentario largo de `puntosRearmadosVoz` en `geofence.ts`. DECISIÓN CTO 2026-09-23:
-    // `puntosRearmados` SÍ se pasa acá, para el dedupe de "llegaste por proximidad" — ver
-    // `confirmacionesProximidadAnunciadas` en `anuncio-punto-control.ts`.
+    // comentario largo de `puntosRearmadosVoz` en `geofence.ts`. `puntosRearmados` se sigue
+    // pasando por compatibilidad/telemetría (`anuncio-punto-control.ts` ya no lo necesita para
+    // dedupe — ver el punto 2 del fix de Codex `verify-fix`, el anuncio de proximidad es
+    // PERSISTIDO y scopeado por `pasada`, no requiere liberarse al re-armar).
     await anunciarDeteccionesDelTick(
       db,
       { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },

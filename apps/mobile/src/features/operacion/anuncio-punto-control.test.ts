@@ -21,6 +21,10 @@ vi.mock('expo-speech', () => ({
 vi.mock('expo-notifications', () => ({
   setNotificationChannelAsync: vi.fn().mockResolvedValue(undefined),
   scheduleNotificationAsync: vi.fn().mockResolvedValue('notif-id'),
+  // FIX POST-REVISIÓN (Codex `verify-fix`, punto 4): `anuncio-punto-control.ts` llama
+  // `setNotificationHandler` como efecto de MÓDULO (al importarlo) — sin este mock, cualquier
+  // test que importe el módulo real (todo este archivo) rompería en la carga.
+  setNotificationHandler: vi.fn(),
   AndroidImportance: { HIGH: 4 },
   // Hallazgo de campo (Sentry, build 10, Galaxy A71 Android 13): `POST_NOTIFICATIONS` es un
   // permiso de runtime real en Android 13+ — `getPermissionsAsync`/`requestPermissionsAsync`
@@ -36,23 +40,26 @@ vi.mock('@sentry/react-native', () => ({
   captureException: vi.fn(),
 }));
 
-// `registrarAnuncioSiNuevo` es el dedupe PERSISTIDO (SQLite) — se mockea igual que en
-// `headless-task.test.ts` (`../db/outbox` trae `expo-sqlite`, que también rompe bajo Node).
+// `registrarAnuncioSiNuevo`/`anuncioYaRegistrado` son el dedupe PERSISTIDO (SQLite) — se mockean
+// igual que en `headless-task.test.ts` (`../db/outbox` trae `expo-sqlite`, que también rompe
+// bajo Node). FIX POST-REVISIÓN (Codex `verify-fix`, punto 3): `anunciarPuntoControl` ahora
+// CONSULTA (`anuncioYaRegistrado`, sin insertar) antes de intentar, y recién MARCA
+// (`registrarAnuncioSiNuevo`) después de programar la notificación con éxito.
 vi.mock('../../db/outbox', () => ({
   registrarAnuncioSiNuevo: vi.fn().mockResolvedValue(true),
+  anuncioYaRegistrado: vi.fn().mockResolvedValue(false),
 }));
 
 import { Vibration } from 'react-native';
 import * as Speech from 'expo-speech';
 import * as Notifications from 'expo-notifications';
 import * as Sentry from '@sentry/react-native';
-import { registrarAnuncioSiNuevo } from '../../db/outbox';
+import { anuncioYaRegistrado, registrarAnuncioSiNuevo } from '../../db/outbox';
 import {
   anunciarDeteccionesDelTick,
   anunciarPuntoControl,
   asegurarPermisoNotificaciones,
   limpiarAproximacionesAnunciadas,
-  limpiarConfirmacionesProximidadAnunciadas,
   obtenerEstadoPermisoNotificaciones,
   type AnuncioPuntoControlOpciones,
 } from './anuncio-punto-control';
@@ -71,8 +78,31 @@ const requestPermissionsMock = Notifications.requestPermissionsAsync as unknown 
 >;
 const captureExceptionMock = Sentry.captureException as unknown as ReturnType<typeof vi.fn>;
 const registrarAnuncioSiNuevoMock = registrarAnuncioSiNuevo as unknown as ReturnType<typeof vi.fn>;
+const anuncioYaRegistradoMock = anuncioYaRegistrado as unknown as ReturnType<typeof vi.fn>;
 
 const DB_FALSO = {} as never;
+
+/**
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 2/3): dedupe PERSISTIDO realista para los tests
+ * — un `Set` en memoria que `registrarAnuncioSiNuevoMock` llena y `anuncioYaRegistradoMock`
+ * consulta, simulando la tabla `anuncios_punto_control` real. Reemplaza la necesidad de
+ * encadenar `mockResolvedValueOnce` a mano (frágil: dependía del ORDEN exacto de las llamadas
+ * internas de `anunciarPuntoControl`, que ahora consulta dos claves distintas por invocación en
+ * la fase `'confirmado'` — la propia y la cruzada de proximidad). Los tests que necesitan
+ * simular un fallo puntual siguen pudiendo usar `.mockRejectedValueOnce`/`.mockResolvedValueOnce`
+ * encima de esta implementación default.
+ */
+function configurarDedupePersistidoRealista(): void {
+  const marcadas = new Set<string>();
+  registrarAnuncioSiNuevoMock.mockReset().mockImplementation(async (_db: unknown, clave: string) => {
+    if (marcadas.has(clave)) return false;
+    marcadas.add(clave);
+    return true;
+  });
+  anuncioYaRegistradoMock.mockReset().mockImplementation(async (_db: unknown, clave: string) =>
+    marcadas.has(clave),
+  );
+}
 
 function puntoControl(id: string, orden: number): PuntoControlPaquete {
   return {
@@ -116,7 +146,7 @@ describe('anunciarPuntoControl — fase "aproximacion" (Entrega 7)', () => {
     speakMock.mockClear();
     scheduleNotificationMock.mockClear();
     captureExceptionMock.mockClear();
-    registrarAnuncioSiNuevoMock.mockReset().mockResolvedValue(true);
+    configurarDedupePersistidoRealista();
   });
 
   it('solo habla — nunca vibra ni notifica (es un aviso informativo, no evidencia de paso)', async () => {
@@ -231,7 +261,7 @@ describe('anunciarPuntoControl — fase "confirmado" (Entrega 7, dedupe persisti
     scheduleNotificationMock.mockClear();
     setChannelMock.mockClear();
     captureExceptionMock.mockClear();
-    registrarAnuncioSiNuevoMock.mockReset().mockResolvedValue(true);
+    configurarDedupePersistidoRealista();
   });
 
   it('vibra + notifica, nunca habla (la voz es solo para el aviso de aproximación)', async () => {
@@ -257,9 +287,8 @@ describe('anunciarPuntoControl — fase "confirmado" (Entrega 7, dedupe persisti
   });
 
   it('misma pasada anunciada dos veces (dos ticks que confirman lo mismo) → un solo anuncio', async () => {
-    // Simula el dedupe PERSISTIDO real: la primera llamada gana la fila (INSERT OR IGNORE),
-    // la segunda la pierde.
-    registrarAnuncioSiNuevoMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    // `configurarDedupePersistidoRealista` simula la tabla real: la primera llamada marca la
+    // fila (tras programar con éxito, punto 3) y la segunda la encuentra ya marcada.
     const d = deteccion({ puntoControlId: 'pc-conf-2', fase: 'confirmado', pasada: 1 });
     const opts = opciones([puntoControl('pc-conf-2', 0)]);
 
@@ -301,8 +330,11 @@ describe('anunciarPuntoControl — fase "confirmado" (Entrega 7, dedupe persisti
     expect(captureExceptionMock).toHaveBeenCalledTimes(1);
   });
 
-  it('fail-open: si el dedupe persistido falla (SQLite ocupada), anuncia de todos modos', async () => {
-    registrarAnuncioSiNuevoMock.mockRejectedValueOnce(new Error('handle zombi'));
+  it('fail-open: si la CONSULTA del dedupe persistido falla (SQLite ocupada), anuncia de todos modos', async () => {
+    // Dos consultas por invocación en esta fase: la cruzada (proximidad de la misma pasada) y
+    // la propia. La primera resuelve `false` (nadie anunció por proximidad); la segunda —la que
+    // realmente gatea esta rama— falla.
+    anuncioYaRegistradoMock.mockResolvedValueOnce(false).mockRejectedValueOnce(new Error('handle zombi'));
 
     await anunciarPuntoControl(
       DB_FALSO,
@@ -312,11 +344,28 @@ describe('anunciarPuntoControl — fase "confirmado" (Entrega 7, dedupe persisti
 
     expect(vibrateMock).toHaveBeenCalledTimes(1);
     expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
-    // El fallo del dedupe queda registrado aparte, con su propio `paso`.
+    // El fallo de la consulta queda registrado aparte, con su propio `paso`.
     expect(captureExceptionMock).toHaveBeenCalledWith(
       expect.any(Error),
-      expect.objectContaining({ tags: expect.objectContaining({ paso: 'dedupe-confirmacion' }) }),
+      expect.objectContaining({ tags: expect.objectContaining({ paso: 'dedupe-confirmacion-consulta' }) }),
     );
+  });
+
+  it('FIX POST-REVISIÓN (Codex verify-fix, punto 3): si programar la notificación falla, NO marca el dedupe — el próximo intento para la MISMA pasada anuncia de nuevo', async () => {
+    scheduleNotificationMock.mockRejectedValueOnce(new Error('canal no disponible'));
+    const d = deteccion({ puntoControlId: 'pc-conf-7', fase: 'confirmado', pasada: 1 });
+    const opts = opciones([puntoControl('pc-conf-7', 0)]);
+
+    await anunciarPuntoControl(DB_FALSO, d, opts);
+    expect(vibrateMock).toHaveBeenCalledTimes(1);
+    expect(registrarAnuncioSiNuevoMock).not.toHaveBeenCalled(); // no se marcó: falló el schedule
+
+    // Reintento (p. ej. el próximo fix que siga confirmando la MISMA pasada): esta vez el
+    // schedule sale bien, y como nunca quedó marcado, vuelve a vibrar/notificar.
+    await anunciarPuntoControl(DB_FALSO, d, opts);
+    expect(vibrateMock).toHaveBeenCalledTimes(2);
+    expect(scheduleNotificationMock).toHaveBeenCalledTimes(2);
+    expect(registrarAnuncioSiNuevoMock).toHaveBeenCalledTimes(1); // recién ahora se marca
   });
 
   it('ignora una detección "confirmado" sin número de pasada (no debería ocurrir, pero no debe reventar)', async () => {
@@ -338,36 +387,47 @@ describe('anunciarPuntoControl — fase "confirmado-proximidad" (DECISIÓN CTO 2
     scheduleNotificationMock.mockClear();
     setChannelMock.mockClear();
     captureExceptionMock.mockClear();
-    registrarAnuncioSiNuevoMock.mockReset().mockResolvedValue(true);
+    configurarDedupePersistidoRealista();
   });
 
-  it('vibra + notifica "llegaste", nunca habla, y NO pasa por el dedupe persistido (no hay pasada todavía)', async () => {
+  it('vibra + notifica "llegaste", nunca habla, y marca el dedupe PERSISTIDO recién tras programar con éxito (punto 2/3)', async () => {
     await anunciarPuntoControl(
       DB_FALSO,
-      deteccion({ puntoControlId: 'pc-prox-1', fase: 'confirmado-proximidad', distanciaM: 30 }),
+      deteccion({ puntoControlId: 'pc-prox-1', fase: 'confirmado-proximidad', distanciaM: 30, pasada: 1 }),
       opciones([puntoControl('pc-prox-1', 5)]),
     );
 
     expect(vibrateMock).toHaveBeenCalledTimes(1);
     expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
     expect(speakMock).not.toHaveBeenCalled();
-    expect(registrarAnuncioSiNuevoMock).not.toHaveBeenCalled();
+    expect(registrarAnuncioSiNuevoMock).toHaveBeenCalledTimes(1);
     expect(scheduleNotificationMock.mock.calls[0]?.[0]).toMatchObject({
       content: { title: 'Punto de control 6: llegaste' },
       trigger: { channelId: 'quivo-anuncio-punto-control-v1' },
     });
   });
 
-  it('dedupe EN MEMORIA por puntoControlId: una segunda detección de proximidad para el MISMO punto no repite el anuncio', async () => {
+  it('sin `pasada` (no debería ocurrir, geofence.ts siempre la completa) — no revienta, no anuncia', async () => {
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'pc-prox-0', fase: 'confirmado-proximidad', distanciaM: 30 }),
+      opciones([puntoControl('pc-prox-0', 0)]),
+    );
+
+    expect(vibrateMock).not.toHaveBeenCalled();
+    expect(scheduleNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it('dedupe PERSISTIDO por {sesionId, puntoControlId, pasada}: una segunda detección de proximidad para la MISMA visita no repite el anuncio', async () => {
     const opts = opciones([puntoControl('pc-prox-2', 0)]);
     await anunciarPuntoControl(
       DB_FALSO,
-      deteccion({ puntoControlId: 'pc-prox-2', fase: 'confirmado-proximidad', distanciaM: 35 }),
+      deteccion({ puntoControlId: 'pc-prox-2', fase: 'confirmado-proximidad', distanciaM: 35, pasada: 1 }),
       opts,
     );
     await anunciarPuntoControl(
       DB_FALSO,
-      deteccion({ puntoControlId: 'pc-prox-2', fase: 'confirmado-proximidad', distanciaM: 10 }),
+      deteccion({ puntoControlId: 'pc-prox-2', fase: 'confirmado-proximidad', distanciaM: 10, pasada: 1 }),
       opts,
     );
 
@@ -375,17 +435,16 @@ describe('anunciarPuntoControl — fase "confirmado-proximidad" (DECISIÓN CTO 2
     expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
   });
 
-  it('limpiarConfirmacionesProximidadAnunciadas (liberado por puntosRearmados, la histéresis de DETECCIÓN) permite un nuevo anuncio', async () => {
+  it('FIX POST-REVISIÓN (punto 2): pasada NUEVA (multi-vuelta) → vuelve a anunciar, sin necesidad de "limpiar" nada (la clave ya incluye la pasada)', async () => {
     const opts = opciones([puntoControl('pc-prox-3', 0)]);
     await anunciarPuntoControl(
       DB_FALSO,
-      deteccion({ puntoControlId: 'pc-prox-3', fase: 'confirmado-proximidad', distanciaM: 35 }),
+      deteccion({ puntoControlId: 'pc-prox-3', fase: 'confirmado-proximidad', distanciaM: 35, pasada: 1 }),
       opts,
     );
-    limpiarConfirmacionesProximidadAnunciadas(['pc-prox-3']);
     await anunciarPuntoControl(
       DB_FALSO,
-      deteccion({ puntoControlId: 'pc-prox-3', fase: 'confirmado-proximidad', distanciaM: 35 }),
+      deteccion({ puntoControlId: 'pc-prox-3', fase: 'confirmado-proximidad', distanciaM: 35, pasada: 2 }),
       opts,
     );
 
@@ -393,27 +452,29 @@ describe('anunciarPuntoControl — fase "confirmado-proximidad" (DECISIÓN CTO 2
     expect(scheduleNotificationMock).toHaveBeenCalledTimes(2);
   });
 
-  it('DECISIÓN CTO: si la proximidad YA anunció "llegaste", la confirmación de EVIDENCIA (fase "confirmado") para la MISMA visita NO repite vibración/notificación', async () => {
+  it('DECISIÓN CTO: si la proximidad YA anunció "llegaste" para esta pasada, la confirmación de EVIDENCIA (fase "confirmado") de la MISMA pasada NO repite vibración/notificación', async () => {
     const opts = opciones([puntoControl('pc-prox-4', 0)]);
     await anunciarPuntoControl(
       DB_FALSO,
-      deteccion({ puntoControlId: 'pc-prox-4', fase: 'confirmado-proximidad', distanciaM: 20 }),
+      deteccion({ puntoControlId: 'pc-prox-4', fase: 'confirmado-proximidad', distanciaM: 20, pasada: 1 }),
       opts,
     );
     expect(vibrateMock).toHaveBeenCalledTimes(1);
+    expect(registrarAnuncioSiNuevoMock).toHaveBeenCalledTimes(1); // marcó la clave de proximidad
 
-    // La evidencia confirma varios fixes después, en el mínimo local — mismo puntoControlId.
+    // La evidencia confirma varios fixes después, en el mínimo local — MISMA pasada.
     await anunciarPuntoControl(
       DB_FALSO,
       deteccion({ puntoControlId: 'pc-prox-4', fase: 'confirmado', pasada: 1 }),
       opts,
     );
 
-    // Sin doble aviso para el mismo paso: ni vibración ni notificación nuevas, y el dedupe
-    // persistido (SQLite) ni se consulta — no hace falta, ya se avisó.
+    // Sin doble aviso para el mismo paso: ni vibración ni notificación nuevas, y la rama
+    // `'confirmado'` no llega a marcar SU PROPIA clave (retorna apenas ve la de proximidad ya
+    // registrada) — `registrarAnuncioSiNuevoMock` sigue en 1 llamada (la de proximidad).
     expect(vibrateMock).toHaveBeenCalledTimes(1);
     expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
-    expect(registrarAnuncioSiNuevoMock).not.toHaveBeenCalled();
+    expect(registrarAnuncioSiNuevoMock).toHaveBeenCalledTimes(1);
   });
 
   it('si la proximidad NUNCA anunció (el mínimo no bajó de RADIO_CONFIRMACION_M), la confirmación de evidencia sigue avisando como siempre — "el punto no puede quedar sin confirmar"', async () => {
@@ -435,7 +496,7 @@ describe('anunciarDeteccionesDelTick (Entrega 7)', () => {
     vibrateMock.mockClear();
     speakMock.mockClear();
     scheduleNotificationMock.mockClear();
-    registrarAnuncioSiNuevoMock.mockReset().mockResolvedValue(true);
+    configurarDedupePersistidoRealista();
   });
 
   it('anuncia la aproximación y la confirmación del mismo tick cuando ambas vienen', async () => {
@@ -597,7 +658,7 @@ describe('permiso de notificaciones denegado — el anuncio NO se pierde (hallaz
     vibrateMock.mockClear();
     speakMock.mockClear();
     scheduleNotificationMock.mockClear();
-    registrarAnuncioSiNuevoMock.mockReset().mockResolvedValue(true);
+    configurarDedupePersistidoRealista();
     // Simula el estado real reportado desde el campo: sin el permiso, Android no rechaza la
     // llamada — silenciosamente no muestra nada. `scheduleNotificationAsync` puede devolver un
     // id igual (comportamiento real documentado del SDK) y aun así la notificación no aparece;

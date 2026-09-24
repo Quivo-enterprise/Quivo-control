@@ -5,8 +5,43 @@ import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
 import type { PuntoControlPaquete } from '@quivo/shared';
 import type { DeteccionPuntoControl } from '../../gps/geofence';
-import { registrarAnuncioSiNuevo } from '../../db/outbox';
+import { anuncioYaRegistrado, registrarAnuncioSiNuevo } from '../../db/outbox';
 import { formatearDistanciaVoz } from './format-distancia';
+
+/**
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 4, "sin setNotificationHandler no se muestra ni
+ * suena en foreground"): sin un handler registrado, `expo-notifications` (a partir de la v0.28)
+ * NO presenta la notificación mientras la app está en primer plano — ni banner, ni sonido —
+ * aunque `scheduleNotificationAsync` resuelva "bien". Se registra UNA sola vez, como efecto de
+ * módulo (este archivo lo importan tanto `use-gps-operativo.ts`, en el árbol de React, como
+ * `headless-task.ts`/`index.js`, sin árbol — entre los dos cubren tanto el arranque en frío de
+ * la app como el registro del headless task, así que no hace falta un punto de entrada
+ * dedicado). Fuera del foreground (pantalla apagada, app terminada) este handler NO interviene
+ * — Android presenta la notificación directo desde el CANAL nativo (`asegurarCanalNotificacion`
+ * más abajo), que ya está configurado con `importance: HIGH` + sonido propio.
+ *
+ * DECISIÓN (documentada, punto 4 del brief — "evitar doble voz+sonido en foreground si ya hay
+ * TTS"): la fase `'confirmado'` (evidencia) ya tiene su PROPIO sonido dedicado en foreground
+ * (`confirmacion-sonido.ts`, disparado desde `gps-provider.tsx`, con `duckOthers`) — sumarle el
+ * sonido del CANAL de esta notificación sería un doble sonido para el mismo paso. Esa fase
+ * marca su notificación con `data.silenciarSonidoForeground: true` (ver más abajo) para que
+ * este handler NO reproduzca el sonido del canal (el banner SÍ se muestra igual, es solo el
+ * audio lo que se evita duplicar). Las demás fases (`'confirmado-proximidad'`, sin sonido
+ * dedicado propio en foreground) sí suenan a través de este handler — es el ÚNICO audio que
+ * tienen. La voz de aproximación (`Speech.speak`) no pasa por notificaciones y no se ve
+ * afectada por este handler.
+ */
+Notifications.setNotificationHandler({
+  handleNotification: async (notification) => {
+    const silenciarSonido = notification.request.content.data?.['silenciarSonidoForeground'] === true;
+    return {
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: !silenciarSonido,
+      shouldSetBadge: false,
+    };
+  },
+});
 
 /**
  * ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless" — probablemente el arreglo
@@ -156,6 +191,24 @@ function claveAnuncio(sesionId: string, puntoControlId: string, pasada: number):
 }
 
 /**
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 2, "identidad durable del anuncio"): clave de
+ * dedupe PERSISTIDO del anuncio de PROXIMIDAD (`fase: 'confirmado-proximidad'`) — misma tabla
+ * (`anuncios_punto_control`) que `claveAnuncio` de arriba, con un prefijo (`proximidad:`) para
+ * no colisionar con la clave de EVIDENCIA de la MISMA pasada (son dos anuncios distintos, con
+ * textos distintos, que pueden o no coincidir en el tiempo). `pasada` es la de la visita EN
+ * CURSO (confirmada o no todavía por la evidencia — ver `filtrarNuevosCumplimientos`), la MISMA
+ * que llena `deteccion.pasada` tanto para el disparo INMEDIATO (`<= RADIO_CONFIRMACION_M`) como
+ * para el FALLBACK (timeout o salida del radio) — por eso una fila en esta tabla, sin importar
+ * cuál de los dos caminos la insertó primero, bloquea al otro para la MISMA visita. A
+ * diferencia del Set en memoria que reemplaza (indexado solo por `puntoControlId`, sin sesión
+ * ni pasada), esta clave sobrevive reciclar el proceso headless y no confunde dos pasadas
+ * distintas del mismo punto (multi-vuelta) ni dos sesiones distintas sobre la misma ruta.
+ */
+function claveAnuncioProximidad(sesionId: string, puntoControlId: string, pasada: number): string {
+  return `proximidad:${sesionId}:${puntoControlId}:${pasada}`;
+}
+
+/**
  * Dedupe EN MEMORIA (no persistido) del aviso de aproximación, por `puntoControlId` — sin
  * `pasada` (una `deteccionAproximacion` nunca la trae, ver `location-task.ts`). A propósito no
  * usa SQLite: es informativo, no evidencia (ver el docblock del módulo), y `location-task.ts`
@@ -196,34 +249,20 @@ export function limpiarAproximacionesAnunciadas(puntosControlIds: readonly strin
 }
 
 /**
- * DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`, `@quivo/shared`): dedupe EN MEMORIA (igual
- * criterio que `aproximacionesAnunciadas`, no persistido — es UX, no evidencia) del anuncio de
- * "llegaste" por PROXIMIDAD (`fase: 'confirmado-proximidad'`, disparado en tiempo real apenas
- * el vehículo mide `distanciaM <= RADIO_CONFIRMACION_M` durante una visita activa — ver
- * `deteccionConfirmacionProximidad` en `location-task.ts`). Se limpia con `puntosRearmados` (la
- * histéresis de DETECCIÓN, NO la de voz `puntosRearmadosVoz`): esta marca está atada al ciclo de
- * VISITA/PASADA (gobernado por `dentro`/re-armado de detección), no al ciclo de aviso por voz —
- * son conceptos distintos, aunque ambos usen un Set en memoria.
- *
- * También la CONSULTA `anunciarPuntoControl` en su rama `'confirmado'` (la confirmación LIGADA A
- * LA EVIDENCIA): si la proximidad YA anunció "llegaste" para esta visita, la confirmación de
- * evidencia (que puede llegar varios fixes después, en el mínimo local) NO repite la
- * vibración/notificación — evita el doble aviso para el MISMO paso. Si la proximidad NUNCA
- * anunció (el mínimo de la visita no llegó a `RADIO_CONFIRMACION_M` — punto plantado lejos de
- * la trayectoria real), la confirmación de evidencia sigue anunciando como siempre: "el punto no
- * puede quedar sin confirmar" (texto de la decisión del CTO).
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 2, "identidad durable del anuncio"): el dedupe
+ * del anuncio de proximidad (`fase: 'confirmado-proximidad'`) YA NO vive en un Set en memoria
+ * indexado por `puntoControlId` — ese Set permitía re-anunciar "llegaste" tras reciclar el
+ * proceso headless (Android puede matar y relanzar el contexto JS headless a mitad de turno) y,
+ * al no llevar `sesionId`/`pasada`, no distinguía dos pasadas del mismo punto (multi-vuelta) ni
+ * dos sesiones sobre la misma ruta recurrente. Ahora es una fila PERSISTIDA en SQLite
+ * (`anuncios_punto_control`, misma tabla que la EVIDENCIA — ver `claveAnuncioProximidad` y
+ * `registrarAnuncioSiNuevo`/`anuncioYaRegistrado` en `db/outbox.ts`), compartida entre el
+ * disparo INMEDIATO y el FALLBACK (los dos escriben/consultan la MISMA clave por visita) — no
+ * hace falta ninguna función de "limpieza": una pasada NUEVA produce una clave NUEVA por
+ * construcción (`claveAnuncioProximidad` incluye `pasada`), así que no hay nada que liberar al
+ * re-armar. La rama `'confirmado'` de abajo consulta esta MISMA tabla (sin insertar) para no
+ * repetir vibración/notificación si la proximidad ya avisó "llegaste" para la MISMA visita.
  */
-const confirmacionesProximidadAnunciadas = new Set<string>();
-
-/**
- * DECISIÓN CTO 2026-09-23: libera el dedupe de "llegaste por proximidad" para los puntos cuya
- * histéresis de DETECCIÓN (`puntosRearmados`, `gps/geofence.ts`) re-armó de verdad en este
- * tick/heartbeat — ver el comentario largo de `confirmacionesProximidadAnunciadas` arriba.
- * Llamarla con una lista vacía (el caso normal, ningún punto re-armó) es un no-op.
- */
-export function limpiarConfirmacionesProximidadAnunciadas(puntosControlIds: readonly string[]): void {
-  for (const id of puntosControlIds) confirmacionesProximidadAnunciadas.delete(id);
-}
 
 export interface AnuncioPuntoControlOpciones {
   sesionId: string;
@@ -266,14 +305,24 @@ export async function anunciarPuntoControl(
   }
 
   if (deteccion.fase === 'confirmado-proximidad') {
-    // DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): anuncio de "llegaste" en TIEMPO REAL,
-    // apenas el vehículo mide `distanciaM <= RADIO_CONFIRMACION_M` durante una visita activa —
-    // ver `deteccionConfirmacionProximidad` en `gps/location-task.ts`. Dedupe EN MEMORIA (no
-    // persistido: es UX, no evidencia — la evidencia sigue emitiéndose exactamente igual, en el
-    // mínimo local), liberado recién cuando la detección re-arma de verdad (ver el comentario
-    // largo de `confirmacionesProximidadAnunciadas`).
-    if (confirmacionesProximidadAnunciadas.has(deteccion.puntoControlId)) return;
-    confirmacionesProximidadAnunciadas.add(deteccion.puntoControlId);
+    // FIX POST-REVISIÓN (Codex `verify-fix`, punto 2): sin `pasada` no hay identidad durable
+    // que consultar/marcar — no debería ocurrir (la máquina de estados, `geofence.ts`, siempre
+    // la completa para esta fase), pero es preferible saltar en silencio a marcar una clave sin
+    // sentido (`proximidad:sesion:punto:undefined`).
+    if (deteccion.pasada === undefined) return;
+    const clave = claveAnuncioProximidad(opciones.sesionId, deteccion.puntoControlId, deteccion.pasada);
+    // Fail-open (arranca en `false`, "no registrado"): mismo criterio que el resto del módulo —
+    // si la consulta persistida falla, mejor arriesgar un anuncio de más que perder el único
+    // que importa.
+    let yaAnunciado = false;
+    try {
+      yaAnunciado = await anuncioYaRegistrado(db, clave);
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'anuncio-punto-control', paso: 'dedupe-proximidad-consulta' },
+      });
+    }
+    if (yaAnunciado) return;
 
     // Mismo piso universal que la confirmación de evidencia (vibración SIEMPRE, antes que
     // cualquier intento de notificación/audio y fuera de su `try/catch` — ver el comentario de
@@ -289,10 +338,23 @@ export async function anunciarPuntoControl(
         },
         trigger: { channelId: CANAL_ANUNCIO_ANDROID },
       });
+      // FIX POST-REVISIÓN (Codex `verify-fix`, punto 3, "marcar después de programar"): la
+      // marca persistida se escribe SOLO acá, con la notificación ya programada con éxito — si
+      // esto falla (SQLite ocupada), la visita queda SIN marcar y el próximo trigger (otro fix
+      // dentro del radio, o el fallback) puede reintentar el anuncio completo.
+      try {
+        await registrarAnuncioSiNuevo(db, clave);
+      } catch (error) {
+        Sentry.captureException(error, {
+          tags: { contexto: 'anuncio-punto-control', paso: 'dedupe-proximidad-marcar' },
+        });
+      }
     } catch (error) {
       Sentry.captureException(error, {
         tags: { contexto: 'anuncio-punto-control', paso: 'notificacion-proximidad' },
       });
+      // Sin marcar (ver arriba): un fallo de programación no debe dejar esta visita como
+      // "ya anunciada" para siempre.
     }
     return;
   }
@@ -302,30 +364,46 @@ export async function anunciarPuntoControl(
   // FIX POST-REVISIÓN (bug 4): el ciclo de aproximación YA NO se reabre acá — ver el comentario
   // largo de `aproximacionesAnunciadas`. Reabrirlo recién cuando el geofence re-arma de verdad
   // (`limpiarAproximacionesAnunciadas`, llamada desde `headless-task.ts`/`use-gps-operativo.ts`
-  // con `puntosRearmados`).
+  // con `puntosRearmadosVoz`).
 
-  // DECISIÓN CTO 2026-09-23: si la proximidad YA avisó "llegaste" para esta visita, la
-  // confirmación de EVIDENCIA (que puede llegar fixes después, recién en el mínimo local) no
-  // repite vibración/notificación para el MISMO paso — ver el comentario largo de
-  // `confirmacionesProximidadAnunciadas`. Si la proximidad NUNCA disparó (el mínimo de la
-  // visita no llegó a `RADIO_CONFIRMACION_M`), esta rama sigue anunciando como siempre: "el
-  // punto no puede quedar sin confirmar".
-  if (confirmacionesProximidadAnunciadas.has(deteccion.puntoControlId)) return;
-
-  const clave = claveAnuncio(opciones.sesionId, deteccion.puntoControlId, deteccion.pasada);
-  // Fail-open (`esNuevo` arranca en `true`): si el dedupe persistido falla (SQLite ocupada,
-  // handle zombi que `conReintentoSiHandleMuerto` no logró sanar), es preferible arriesgar un
-  // anuncio DE MÁS que perder el único que importa — un chofer que pasa por un punto y nunca lo
-  // siente es la falla que esta entrega existe para cerrar; un doble aviso es un detalle.
-  let esNuevo = true;
+  // DECISIÓN CTO 2026-09-23 (adaptada al punto 2 — dedupe ahora PERSISTIDO, no en memoria): si
+  // la proximidad YA avisó "llegaste" para esta MISMA visita (misma `pasada`), la confirmación
+  // de EVIDENCIA (que puede llegar fixes después, recién en el mínimo local) no repite
+  // vibración/notificación para el MISMO paso. Solo CONSULTA (`anuncioYaRegistrado`), nunca
+  // marca esta clave — marcarla acá sería mentir ("la proximidad avisó") cuando en realidad fue
+  // la evidencia. Si la proximidad NUNCA disparó (el mínimo de la visita no llegó a
+  // `RADIO_CONFIRMACION_M`), esta rama sigue anunciando como siempre: "el punto no puede quedar
+  // sin confirmar".
+  const claveProximidadDeEstaPasada = claveAnuncioProximidad(
+    opciones.sesionId,
+    deteccion.puntoControlId,
+    deteccion.pasada,
+  );
   try {
-    esNuevo = await registrarAnuncioSiNuevo(db, clave);
+    if (await anuncioYaRegistrado(db, claveProximidadDeEstaPasada)) return;
   } catch (error) {
     Sentry.captureException(error, {
-      tags: { contexto: 'anuncio-punto-control', paso: 'dedupe-confirmacion' },
+      tags: { contexto: 'anuncio-punto-control', paso: 'dedupe-proximidad-consulta-cruzada' },
+    });
+    // Fail-open: si la consulta cruzada falla, se sigue de largo y se anuncia como si la
+    // proximidad nunca hubiera disparado — un doble aviso es preferible a ninguno.
+  }
+
+  const clave = claveAnuncio(opciones.sesionId, deteccion.puntoControlId, deteccion.pasada);
+  // Fail-open (`yaAnunciado` arranca en `false`): si la consulta persistida falla (SQLite
+  // ocupada, handle zombi que `conReintentoSiHandleMuerto` no logró sanar), es preferible
+  // arriesgar un anuncio DE MÁS que perder el único que importa — un chofer que pasa por un
+  // punto y nunca lo siente es la falla que esta entrega existe para cerrar; un doble aviso es
+  // un detalle.
+  let yaAnunciado = false;
+  try {
+    yaAnunciado = await anuncioYaRegistrado(db, clave);
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'anuncio-punto-control', paso: 'dedupe-confirmacion-consulta' },
     });
   }
-  if (!esNuevo) return;
+  if (yaAnunciado) return;
 
   // VIBRACIÓN SIEMPRE (regla dura del plan, Entrega 7): el canal más robusto porque no depende
   // de audio — ni de que el volumen del stream de media esté arriba de 0 (ver el aviso de
@@ -340,6 +418,12 @@ export async function anunciarPuntoControl(
       content: {
         title: `${identificador} registrado`,
         body: 'Quedó confirmado en tu recorrido.',
+        // FIX POST-REVISIÓN (punto 4): esta fase ya tiene su propio sonido en foreground
+        // (`confirmacion-sonido.ts`, `gps-provider.tsx`) — el `handleNotification` de cabecera
+        // de este módulo lee este flag para NO sumarle el sonido del canal (el banner sí se
+        // muestra igual). En background/headless este flag no importa: Android presenta la
+        // notificación directo desde el canal nativo, sin pasar por este handler.
+        data: { silenciarSonidoForeground: true },
       },
       // FIX POST-REVISIÓN (bug 3, "cae en el canal por defecto — sin heads-up ni chime"):
       // `trigger: null` entrega inmediato pero SIN canal — Android 8+/O+ ignora `content.sound`
@@ -355,6 +439,15 @@ export async function anunciarPuntoControl(
       // referenciaba desde ningún lado.
       trigger: { channelId: CANAL_ANUNCIO_ANDROID },
     });
+    // FIX POST-REVISIÓN (Codex `verify-fix`, punto 3): marcar SOLO tras programar con éxito —
+    // ver el comentario largo en la rama `'confirmado-proximidad'` de arriba.
+    try {
+      await registrarAnuncioSiNuevo(db, clave);
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'anuncio-punto-control', paso: 'dedupe-confirmacion-marcar' },
+      });
+    }
   } catch (error) {
     Sentry.captureException(error, {
       tags: { contexto: 'anuncio-punto-control', paso: 'notificacion-confirmacion' },
@@ -391,11 +484,13 @@ export async function anunciarDeteccionesDelTick(
      * (`confirmarVisitasVencidas`, heartbeat) nunca re-arma ninguna histéresis por sí solo. */
     puntosRearmadosVoz?: string[];
     /**
-     * DECISIÓN CTO 2026-09-23: puntos cuya histéresis de DETECCIÓN re-armó de verdad este tick
-     * — ver `puntosRearmados` en `gps/geofence.ts` y el comentario largo de
-     * `confirmacionesProximidadAnunciadas` arriba. Libera el dedupe de "llegaste por
-     * proximidad", NO el de voz (ese usa `puntosRearmadosVoz`, arriba — son dos histéresis
-     * independientes).
+     * FIX POST-REVISIÓN (Codex `verify-fix`, punto 2): ya NO se usa para liberar ningún dedupe
+     * acá — el dedupe de proximidad es PERSISTIDO y está scopeado por `pasada`
+     * (`claveAnuncioProximidad`), así que una pasada nueva ya produce una clave nueva por
+     * construcción, sin necesitar ninguna "limpieza" atada al re-armado de la histéresis de
+     * DETECCIÓN. Se conserva el campo en la firma (opcional) por compatibilidad con los
+     * callers existentes (`headless-task.ts`, `use-gps-operativo.ts`), que lo siguen calculando
+     * para telemetría/depuración — ver `puntosRearmados` en `gps/geofence.ts`.
      */
     puntosRearmados?: string[];
   },
@@ -405,9 +500,6 @@ export async function anunciarDeteccionesDelTick(
     // el mismo tick, ya está de nuevo dentro de `RADIO_AVISO_M` (rebote poco común pero
     // posible), tiene que poder volver a avisar sin esperar al tick siguiente.
     limpiarAproximacionesAnunciadas(resultado.puntosRearmadosVoz);
-  }
-  if (resultado.puntosRearmados && resultado.puntosRearmados.length > 0) {
-    limpiarConfirmacionesProximidadAnunciadas(resultado.puntosRearmados);
   }
   if (resultado.deteccionAproximacion) {
     await anunciarPuntoControl(db, resultado.deteccionAproximacion, opciones);

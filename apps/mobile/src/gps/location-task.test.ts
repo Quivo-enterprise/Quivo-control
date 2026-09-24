@@ -275,6 +275,54 @@ describe('construirEventosDeUbicacion', () => {
       expect(paso2.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 1 });
     });
 
+    it('FIX POST-REVISIÓN (Codex verify-fix, punto 1): un jitter que confirma la evidencia TEMPRANO (145→130→131 m, sin bajar nunca de 40) no bloquea el anuncio de proximidad si el vehículo SÍ se acerca después (90→35 m) — antes, `confirmado` ya en `true` desde el uptick de 131 m impedía el anuncio para siempre en esta visita', () => {
+      const pc = puntoControl('pc-1', [-63.18, -17.78], 150);
+      const t0 = Date.parse('2026-09-23T12:00:00.000Z');
+      let estados = new Map<string, EstadoPuntoControl>();
+
+      function tick(metros: number, offsetMs: number) {
+        const resultado = construirEventosDeUbicacion(
+          ubicacion(latitudAMetrosDelPunto(metros), -63.18, t0 + offsetMs),
+          contexto([pc], 'sesion-jitter-1'),
+          estados,
+        );
+        estados = conTransicionesAplicadas(estados, resultado.transicionesEstado);
+        return resultado;
+      }
+
+      // 145 m: ENTRA (dentro:true, confirmado:false, min=145). Lejos de RADIO_CONFIRMACION_M.
+      const r1 = tick(145, 0);
+      expect(r1.deteccionConfirmacionProximidad).toBeNull();
+
+      // 130 m: mejora el mínimo — sigue sin confirmar, sigue sin proximidad.
+      const r2 = tick(130, 10_000);
+      expect(r2.deteccion).toBeNull();
+      expect(r2.deteccionConfirmacionProximidad).toBeNull();
+
+      // 131 m: jitter — la distancia "crece" respecto del mínimo guardado (130) y la EVIDENCIA
+      // confirma acá mismo (regla dura: "0 detecciones sin paso anotado", no se toca). ANTES del
+      // fix, esto dejaba `confirmado: true` y el chequeo de proximidad (`confirmado !== false`)
+      // nunca volvía a evaluarse para esta visita — el bug que reportó Codex.
+      const r3 = tick(131, 20_000);
+      expect(r3.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 1 });
+      expect(r3.deteccionConfirmacionProximidad).toBeNull(); // 131 m > 40, nada que anunciar TODAVÍA
+
+      // 90 m: sigue alejado de RADIO_CONFIRMACION_M — nada que anunciar, la visita sigue
+      // `dentro` (no re-armó: 90 < 150 * 1.5).
+      const r4 = tick(90, 30_000);
+      expect(r4.deteccionConfirmacionProximidad).toBeNull();
+
+      // 35 m: el vehículo SÍ se acerca de verdad, por debajo de RADIO_CONFIRMACION_M (40) — el
+      // anuncio de proximidad tiene que disparar ACÁ, aunque la evidencia ya haya confirmado
+      // hace dos ticks. Este es el assert que fallaba contra el código previo al fix.
+      const r5 = tick(35, 40_000);
+      expect(r5.deteccionConfirmacionProximidad).toMatchObject({
+        puntoControlId: 'pc-1',
+        fase: 'confirmado-proximidad',
+        pasada: 1,
+      });
+    });
+
     it('no toca la detección/registro del cumplimiento: distanciaMinAproximacionM y pasada del evento son las mismas con o sin proximidad', () => {
       // Mismo recorrido que el primer test de este bloque, comparado byte a byte contra el
       // payload emitido — la Decisión CTO es explícita: "la detección/registro del

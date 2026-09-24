@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { RADIO_AVISO_M, type PuntoControlPaquete } from '@quivo/shared';
+import { RADIO_AVISO_M, RADIO_CONFIRMACION_M, type PuntoControlPaquete } from '@quivo/shared';
 import {
   claveCumplimiento,
   confirmarVisitasVencidas,
   detectarPuntosControlCercanos,
+  evaluarAnunciosProximidadVencidos,
   filtrarNuevosCumplimientos,
   FACTOR_REARME_RADIO,
   FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO,
   FIXES_REARME_CONSECUTIVOS,
   PASADA_MIN_MS,
   UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+  UMBRAL_ANUNCIO_PROXIMIDAD_MS,
   type DeteccionPuntoControl,
   type EstadoPuntoControl,
 } from './geofence';
@@ -924,5 +926,105 @@ describe('confirmarVisitasVencidas (FIX POST-REVISIÓN, bug 2)', () => {
     entrarYDetenerse(estados, { puntoControlId: 'pc-2', tsFixMs: 0 });
     const { emitir } = confirmarVisitasVencidas(estados, UMBRAL_ANTIGUEDAD_CANDIDATO_MS);
     expect(emitir.map((c) => c.deteccion.puntoControlId).sort()).toEqual(['pc-1', 'pc-2']);
+  });
+});
+
+describe('FIX POST-REVISIÓN (Codex verify-fix, punto 1) — fallback del anuncio de proximidad, NO por el primer aumento de distancia', () => {
+  it('anunciosProximidad: dispara SOLO al bajar de RADIO_CONFIRMACION_M, nunca por el primer aumento de distancia (jitter dentro del radio grande)', () => {
+    let estados = new Map<string, EstadoPuntoControl>();
+    // ENTRADA a 145 m (radio 150) — lejos de RADIO_CONFIRMACION_M (40).
+    let r = filtrarNuevosCumplimientos(estados, [deteccion(145)], 'sesion-fallback-1', 0);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.anunciosProximidad).toEqual([]);
+
+    // 130 m: mejora el mínimo, sigue lejos de 40 — sin anuncio.
+    r = filtrarNuevosCumplimientos(estados, [deteccion(130)], 'sesion-fallback-1', 10_000);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.anunciosProximidad).toEqual([]);
+
+    // 131 m: crece respecto del mínimo (130) — la EVIDENCIA confirma acá, pero el AUMENTO por
+    // sí solo NO debe disparar el anuncio de proximidad (regla del punto 1: "NO por el primer
+    // aumento de distancia") — 131 m sigue lejos de 40.
+    r = filtrarNuevosCumplimientos(estados, [deteccion(131)], 'sesion-fallback-1', 20_000);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.emitir).toHaveLength(1); // evidencia sí confirma (no se toca su criterio)
+    expect(r.anunciosProximidad).toEqual([]); // el anuncio NO dispara por el aumento
+
+    // 35 m: recién ACÁ, por bajar de RADIO_CONFIRMACION_M.
+    r = filtrarNuevosCumplimientos(estados, [deteccion(35)], 'sesion-fallback-1', 30_000);
+    expect(r.anunciosProximidad).toMatchObject([{ puntoControlId: 'pc-1', fase: 'confirmado-proximidad' }]);
+  });
+
+  it('fallback por VENCIMIENTO (UMBRAL_ANUNCIO_PROXIMIDAD_MS): un vehículo detenido dentro del radio, sin bajar nunca de 40 m, igual recibe el anuncio tras el timeout', () => {
+    let estados = new Map<string, EstadoPuntoControl>();
+    let r = filtrarNuevosCumplimientos(estados, [deteccion(100)], 'sesion-fallback-2', 0);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.anunciosProximidad).toEqual([]);
+
+    // Todavía no vence el timeout (89.9 s) — sin anuncio, aunque la distancia no mejoró nunca
+    // (fallback de EVIDENCIA por fixes tampoco corrió, distinto mecanismo/constante).
+    r = filtrarNuevosCumplimientos(estados, [deteccion(100)], 'sesion-fallback-2', UMBRAL_ANUNCIO_PROXIMIDAD_MS - 100);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.anunciosProximidad).toEqual([]);
+
+    // Vence el timeout — el chofer no puede quedarse sin ningún "llegaste" para esta pasada.
+    r = filtrarNuevosCumplimientos(estados, [deteccion(100)], 'sesion-fallback-2', UMBRAL_ANUNCIO_PROXIMIDAD_MS + 100);
+    expect(r.anunciosProximidad).toMatchObject([{ puntoControlId: 'pc-1', fase: 'confirmado-proximidad' }]);
+  });
+
+  it('fallback por SALIDA del radio de detección: si la visita re-arma sin haber anunciado nunca, anuncia en el mismo tick del re-armado', () => {
+    let estados = new Map<string, EstadoPuntoControl>();
+    // Radio chico (30 m) para que el punto quede lejos de RADIO_CONFIRMACION_M en toda la
+    // visita, y para que el rearme (30*1.5=45) sea alcanzable rápido.
+    let r = filtrarNuevosCumplimientos(estados, [deteccion(20, 30)], 'sesion-fallback-3', 0);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.anunciosProximidad).toHaveLength(1); // 20 <= 40: esto SÍ anuncia de entrada
+
+    // Repetimos con un punto DISTINTO para aislar el caso "nunca bajó de 40": entra a 50 m
+    // (cumple el radio de 60, pero > RADIO_CONFIRMACION_M) y se aleja hasta re-armar sin haber
+    // anunciado nunca.
+    estados = new Map<string, EstadoPuntoControl>();
+    r = filtrarNuevosCumplimientos(estados, [deteccion(50, 60, 'pc-2')], 'sesion-fallback-3', 0);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.anunciosProximidad).toEqual([]);
+    // Confirma la evidencia (crece) — sigue sin anunciar (55 > 40).
+    r = filtrarNuevosCumplimientos(estados, [deteccion(55, 60, 'pc-2')], 'sesion-fallback-3', 10_000);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.emitir).toHaveLength(1);
+    expect(r.anunciosProximidad).toEqual([]);
+    // 1er fix fuera del radio de re-armado (60*1.5=90) — todavía no re-arma (hace falta 2).
+    r = filtrarNuevosCumplimientos(estados, [deteccion(95, 60, 'pc-2')], 'sesion-fallback-3', 20_000);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.puntosRearmados).toEqual([]);
+    expect(r.anunciosProximidad).toEqual([]);
+    // 2do fix consecutivo — re-arma DE VERDAD. El chofer nunca escuchó "llegaste" para esta
+    // pasada — el fallback tiene que dispararlo en este mismo tick.
+    r = filtrarNuevosCumplimientos(estados, [deteccion(100, 60, 'pc-2')], 'sesion-fallback-3', 30_000);
+    expect(r.puntosRearmados).toEqual(['pc-2']);
+    expect(r.anunciosProximidad).toMatchObject([{ puntoControlId: 'pc-2', fase: 'confirmado-proximidad' }]);
+  });
+
+  it('evaluarAnunciosProximidadVencidos: cubre el vehículo DETENIDO (sin fixes nuevos) vía heartbeat, con el mismo timeout', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    const r = filtrarNuevosCumplimientos(estados, [deteccion(100)], 'sesion-fallback-4', 0);
+    aplicarTransiciones(estados, r.transiciones);
+
+    // Heartbeat antes del timeout: nada que anunciar todavía.
+    const antes = evaluarAnunciosProximidadVencidos(estados, UMBRAL_ANUNCIO_PROXIMIDAD_MS - 100);
+    expect(antes.anuncios).toEqual([]);
+
+    // Heartbeat después del timeout: dispara el fallback igual que un fix real lo haría.
+    const despues = evaluarAnunciosProximidadVencidos(estados, UMBRAL_ANUNCIO_PROXIMIDAD_MS + 100);
+    expect(despues.anuncios).toMatchObject([{ puntoControlId: 'pc-1', fase: 'confirmado-proximidad' }]);
+  });
+
+  it('anuncio inmediato (<= RADIO_CONFIRMACION_M) deduplica dentro de la MISMA visita: no repite en el tick siguiente', () => {
+    let estados = new Map<string, EstadoPuntoControl>();
+    let r = filtrarNuevosCumplimientos(estados, [deteccion(RADIO_CONFIRMACION_M - 5)], 'sesion-fallback-5', 0);
+    aplicarTransiciones(estados, r.transiciones);
+    expect(r.anunciosProximidad).toHaveLength(1);
+
+    r = filtrarNuevosCumplimientos(estados, [deteccion(RADIO_CONFIRMACION_M - 10)], 'sesion-fallback-5', 10_000);
+    expect(r.anunciosProximidad).toEqual([]);
   });
 });

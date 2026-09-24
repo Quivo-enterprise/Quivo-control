@@ -334,6 +334,58 @@ describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega
     expect(anunciarDeteccionesDelTickMock).not.toHaveBeenCalled();
   });
 
+  it('FIX POST-REVISIÓN (Codex verify-fix, punto 5): semilla fallida NO se marca hidratada — este tick procesa SOLO gps_point, y el SIGUIENTE tick reintenta la siembra y procesa cumplimientos normalmente', async () => {
+    const sesionId = 'sesion-headless-semilla-fallida';
+    const pc = puntoControlReal('pc-headless-semilla', [-63.18, -17.78]);
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: 'asignacion-headless-semilla', venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: 'asignacion-headless-semilla', venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+    // Tick 1: la lectura del outbox para sembrar el Map de cumplimientos falla (SQLite ocupada).
+    obtenerEventosPorTipoMock.mockRejectedValueOnce(new Error('sqlite ocupada'));
+
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z')),
+    );
+
+    // Sin semilla hidratada: el tick NO procesó ninguna detección de cumplimiento (ni siquiera
+    // el aviso de aproximación, que también depende de tener `puntosControl` en el contexto) —
+    // solo se persistió el `gps_point` (verificado más abajo por `encolarEventoMock`). El fallo
+    // de la siembra queda reportado a Sentry.
+    expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(1);
+    const [, , resultadoTick1] = anunciarDeteccionesDelTickMock.mock.calls[0]!;
+    expect(resultadoTick1.deteccion).toBeNull();
+    expect(resultadoTick1.deteccionAproximacion).toBeNull();
+    expect(resultadoTick1.deteccionConfirmacionProximidad).toBeNull();
+    expect(encolarEventoMock).toHaveBeenCalledTimes(1); // solo el gps_point del tick 1
+    expect(encolarEventoMock.mock.calls[0]?.[1]).toMatchObject({ tipo: 'gps_point' });
+    expect(captureExceptionMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: expect.objectContaining({ paso: 'sembrar-cumplimientos' }) }),
+    );
+
+    // Tick 2: la lectura ya no falla — reintenta la siembra (punto 5: "se reintenta en cada
+    // tick") y, al hidratar, procesa cumplimientos con normalidad (aviso de aproximación sobre
+    // el mismo punto, distancia 0).
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:10.000Z')),
+    );
+
+    expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(2);
+    const [, opcionesTick2, resultadoTick2] = anunciarDeteccionesDelTickMock.mock.calls[1]!;
+    expect(opcionesTick2).toEqual({ sesionId, puntosControl: [pc] });
+    expect(resultadoTick2.deteccionAproximacion).toMatchObject({
+      puntoControlId: 'pc-headless-semilla',
+      fase: 'aproximacion',
+    });
+  });
+
   it('un fallo del anuncio (best-effort) NO impide que el evento de este test se considere resuelto sin throw', async () => {
     const sesionId = 'sesion-headless-3';
     const pc = puntoControlReal('pc-headless-3', [-63.18, -17.78]);
@@ -568,7 +620,7 @@ describe('registrarPuntoGpsInterno — G2 (persistir visita pendiente ANTES de l
     anunciarDeteccionesDelTickMock.mockClear().mockResolvedValue(undefined);
   });
 
-  it('si guardarVisitaPendiente falla en la ENTRADA, NO aplica la transición a memoria (el próximo fix la reprocesa desde cero) y reporta a Sentry sin abortar el tick', async () => {
+  it('FIX POST-REVISIÓN (Codex verify-fix, punto 6): si guardarVisitaPendiente falla en la ENTRADA, la transición SÍ se aplica a memoria igual (ya no se pierde la visita) — el fallo se encola para reintentar y se reporta a Sentry sin abortar el tick', async () => {
     const sesionId = 'sesion-g2-1';
     const pc = puntoControlReal('pc-g2-1', [-63.18, -17.78]);
     const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
@@ -597,24 +649,74 @@ describe('registrarPuntoGpsInterno — G2 (persistir visita pendiente ANTES de l
     const [, , resultadoPrimerTick] = anunciarDeteccionesDelTickMock.mock.calls[0]!;
     expect(resultadoPrimerTick.deteccion).toBeNull();
 
-    // El fallo se reportó — nunca se traga en silencio.
+    // El fallo se reportó — nunca se traga en silencio — con el `paso` del ENCOLADO de
+    // reintento (punto 6), ya no `visita-pendiente-no-aplicada`.
     expect(captureExceptionMock).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({
-        tags: expect.objectContaining({ contexto: 'gps-cola', paso: 'visita-pendiente-no-aplicada' }),
+        tags: expect.objectContaining({
+          contexto: 'gps-cola',
+          paso: 'visita-pendiente-reintento-encolado',
+        }),
         extra: expect.objectContaining({ sesionId }),
       }),
     );
 
-    // Tick 2: un fix que, DE HABER quedado en memoria como "mínimo 0 m", confirmaría la pasada 1
-    // acá mismo (la distancia creció a ~11 m). Como la transición de ENTRADA del tick 1 NO se
-    // aplicó (persistencia fallida), este tick se procesa como una ENTRADA NUEVA — sin
-    // confirmar todavía — en vez de confirmar de más con un mínimo que SQLite nunca respaldó.
+    // Tick 2: un fix que crece a ~11 m respecto del mínimo (0). Como la transición de ENTRADA
+    // del tick 1 SÍ quedó en memoria (punto 6 — la continuidad de la visita ya no depende de
+    // que SQLite confirme en el primer intento), este tick CONFIRMA la pasada 1 — no la trata
+    // como una entrada nueva. El reintento de la escritura fallida del tick 1 se drena ANTES de
+    // procesar este tick (`guardarVisitaPendienteMock` ya no rechaza la segunda vez, por
+    // `mockRejectedValueOnce`).
     await tareaHeadlessUbicacion(
       eventoLocation(location(-17.7799, -63.18, '2026-09-23T12:00:10.000Z')),
     );
     const resultadoSegundoTick = anunciarDeteccionesDelTickMock.mock.calls[1]![2];
-    expect(resultadoSegundoTick.deteccion).toBeNull();
+    expect(resultadoSegundoTick.deteccion).toMatchObject({
+      puntoControlId: 'pc-g2-1',
+      fase: 'confirmado',
+      pasada: 1,
+    });
+    // El reintento drenado escribió la copia durable con éxito la segunda vez.
+    expect(guardarVisitaPendienteMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('FIX POST-REVISIÓN (Codex verify-fix, punto 6): fallo en el ÚNICO fix dentro del radio + el siguiente fix ya FUERA del radio ⇒ la visita se persiste igual (antes se perdía para siempre)', async () => {
+    const sesionId = 'sesion-g2-3';
+    const pc = puntoControlReal('pc-g2-3', [-63.18, -17.78]);
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: 'asignacion-g2-3', venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: 'asignacion-g2-3', venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+
+    // Tick 1 (único fix DENTRO del radio de 30 m): la escritura de la visita pendiente falla.
+    guardarVisitaPendienteMock.mockRejectedValueOnce(new Error('sqlite ocupada'));
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-23T12:00:00.000Z')),
+    );
+    const resultadoPrimerTick = anunciarDeteccionesDelTickMock.mock.calls[0]![2];
+    expect(resultadoPrimerTick.deteccion).toBeNull(); // todavía sin confirmar, evidencia intacta
+
+    // Tick 2: el vehículo pasó de largo — ~2.2 km, bien fuera del radio (30 m) y del radio de
+    // re-armado (45 m). Con la memoria intacta (punto 6), la distancia "crece" respecto del
+    // mínimo (0) y CONFIRMA — con el diseño anterior (G2 sin reintento), la memoria nunca había
+    // avanzado a `dentro: true` y este fix no encontraba ninguna visita que cerrar: la pasada se
+    // perdía para siempre.
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.80, -63.18, '2026-09-23T12:00:10.000Z')),
+    );
+    const resultadoSegundoTick = anunciarDeteccionesDelTickMock.mock.calls[1]![2];
+    expect(resultadoSegundoTick.deteccion).toMatchObject({
+      puntoControlId: 'pc-g2-3',
+      fase: 'confirmado',
+      pasada: 1,
+    });
   });
 
   it('cuando guardarVisitaPendiente funciona, la entrada SÍ queda en memoria y el siguiente fix que crece confirma la pasada 1', async () => {
@@ -645,5 +747,133 @@ describe('registrarPuntoGpsInterno — G2 (persistir visita pendiente ANTES de l
       fase: 'confirmado',
       pasada: 1,
     });
+  });
+});
+
+/**
+ * FIX POST-REVISIÓN (Codex `verify-fix`, punto 7, "el timeout de la cola no cancela la
+ * operación subyacente"): antes de este fix, una operación que vencía el techo de tiempo
+ * (`TIMEOUT_REGISTRO_GPS_MS`, 30 s) liberaba la cola para el siguiente fix/heartbeat pero seguía
+ * corriendo de fondo — si SQLite finalmente respondía (tarde, no muerta), sus escrituras podían
+ * intercalarse con las de la operación más nueva que la cola ya había dejado avanzar. El fix
+ * (contador de generación) hace que esa operación vencida aborte el resto de su trabajo apenas
+ * detecta que quedó vieja.
+ *
+ * `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync` porque `conTimeout` usa un `setTimeout`
+ * real para el techo — sin controlar el reloj, este test dependería de esperar 30 s de verdad
+ * (o de que la máquina de CI tarde justo lo suficiente, flaky por construcción).
+ */
+describe('registrarPuntoGpsInterno — FIX POST-REVISIÓN (Codex verify-fix, punto 7, generación de la cola)', () => {
+  function location(lat: number, lng: number, timestamp: string): Location {
+    return {
+      timestamp,
+      recorded_at: timestamp,
+      age: 0,
+      odometer: 0,
+      odometer_error: 0,
+      is_moving: true,
+      uuid: `loc-${timestamp}`,
+      coords: { latitude: lat, longitude: lng, accuracy: 5, speed: 0 },
+      battery: { level: 0.8, is_charging: false },
+      activity: { type: 'in_vehicle', confidence: 90 },
+    } as unknown as Location;
+  }
+
+  function eventoLocation(loc: Location): HeadlessEvent {
+    return { name: 'location', params: loc } as unknown as HeadlessEvent;
+  }
+
+  function puntoControlReal(id: string, coord: [number, number]): PuntoControlPaquete {
+    return {
+      id,
+      orden: 5,
+      coord: { type: 'Point', coordinates: coord },
+      radioToleranciaM: 30,
+      obligatorio: true,
+    };
+  }
+
+  beforeEach(() => {
+    cargarSesionMovilMock.mockReset();
+    obtenerDeviceIdMovilMock.mockReset().mockResolvedValue('device-timeout-1');
+    abrirPaqueteDiaDbMock.mockReset().mockResolvedValue({});
+    obtenerPaqueteDiaLocalMock.mockReset();
+    abrirOutboxMock.mockReset().mockResolvedValue({});
+    obtenerEventosPorTipoMock.mockReset().mockResolvedValue([]);
+    obtenerVisitasPendientesMock.mockReset().mockResolvedValue([]);
+    guardarVisitaPendienteMock.mockReset().mockResolvedValue(undefined);
+    captureExceptionMock.mockClear();
+    anunciarDeteccionesDelTickMock.mockClear().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    // Ver el mismo comentario en el bloque de heartbeat: nunca dejar timers falsos filtrándose
+    // al resto de la suite.
+    vi.useRealTimers();
+  });
+
+  it('una operación que vence su timeout y sigue corriendo de fondo NO escribe la visita pendiente tras despertar tarde — la operación NUEVA (que sí corrió a tiempo) es la única que la escribe', async () => {
+    const sesionId = 'sesion-timeout-1';
+    const pc = puntoControlReal('pc-timeout-1', [-63.18, -17.78]);
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: 'asignacion-timeout-1', venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: 'asignacion-timeout-1', venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+
+    vi.useFakeTimers();
+
+    // Tick 1 (entra sobre el punto, distancia ~0): su `encolarEvento` del `gps_point` queda
+    // COLGADO — simula una escritura SQLite realmente lenta, no muerta.
+    let resolverEncolarLento!: (valor: { eventId: string; insertado: boolean }) => void;
+    const encolarLento = new Promise<{ eventId: string; insertado: boolean }>((resolve) => {
+      resolverEncolarLento = resolve;
+    });
+    encolarEventoMock
+      .mockReset()
+      .mockImplementationOnce(() => encolarLento)
+      .mockResolvedValue({ eventId: 'evt-timeout-2', insertado: true });
+
+    const tick1 = tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z')),
+    );
+
+    // Vence el techo de 30 s (`TIMEOUT_REGISTRO_GPS_MS`) — la cola avanza (generación++) y
+    // `tareaHeadlessUbicacion` de tick 1 resuelve (su propio try/catch reporta el timeout, no
+    // relanza).
+    await vi.advanceTimersByTimeAsync(30_000 + 100);
+    await tick1;
+    expect(captureExceptionMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: expect.objectContaining({ paso: 'timeout-registro-punto' }) }),
+    );
+    captureExceptionMock.mockClear();
+
+    // Tick 2: la cola YA avanzó — un fix normal, mismo punto (todavía no hay ninguna visita en
+    // memoria: tick 1 nunca llegó a aplicar la suya), corre en la generación NUEVA y sí puede
+    // escribir su visita pendiente con normalidad.
+    await tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:40.000Z')),
+    );
+    expect(guardarVisitaPendienteMock).toHaveBeenCalledTimes(1);
+    const llamadaTick2 = guardarVisitaPendienteMock.mock.calls[0]![1] as { candidatoTsFixMs: number };
+
+    // Recién ACÁ "responde" la escritura colgada del tick 1 — su operación interna
+    // (`registrarPuntoGpsInterno`) sigue corriendo de fondo y retoma justo después del `await
+    // encolarEvento` del `gps_point`. Con la generación ya vieja, tiene que abortar ANTES de
+    // llegar a `guardarVisitaPendiente` — si el fix de la generación no funcionara, este resolve
+    // dispararía una SEGUNDA llamada (pisando o duplicando la visita que tick 2 ya escribió).
+    resolverEncolarLento({ eventId: 'evt-timeout-1', insertado: true });
+    await vi.advanceTimersByTimeAsync(0); // deja correr los microtasks/continuaciones pendientes
+
+    expect(guardarVisitaPendienteMock).toHaveBeenCalledTimes(1); // sigue en 1: nunca llegó del tick 1
+    // La única fila escrita es la del tick 2 (candidato con el `tsFix` del segundo fix, no del
+    // primero) — prueba que la operación vieja no alcanzó a pisarla.
+    expect(llamadaTick2.candidatoTsFixMs).toBe(Date.parse('2026-09-10T12:00:40.000Z'));
   });
 });
