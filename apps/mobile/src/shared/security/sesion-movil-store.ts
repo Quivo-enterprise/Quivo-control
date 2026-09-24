@@ -7,6 +7,13 @@ import {
   type ContextoOperativoMovil,
   type RefreshMovilResponse,
 } from '@quivo/shared';
+import {
+  abrirOutbox,
+  adquirirLease,
+  liberarLeaseConCooldown,
+  ID_LEASE_REFRESH_SESION,
+  TTL_LEASE_REFRESH_SESION_MS,
+} from '../../db/outbox';
 
 /**
  * G2 (hallazgo de `/codex-debug verify-fix` ronda 4, ALTO — reemplaza el diseño de una sola
@@ -51,14 +58,47 @@ function partirCredencialesYContexto(
   return { credenciales, contexto };
 }
 
+/** Duplicado a propósito de `generarTokenLeaseRefresh` (`use-auth-movil.ts`) — mismo motivo que
+ * esa duplicación (ver su comentario): no es un identificador criptográfico, solo distingue
+ * intentos concurrentes de ESTE dispositivo bajo el lease `refresh-sesion`. Importarlo desde
+ * `use-auth-movil.ts` crearía una dependencia circular real (ese módulo SÍ importa de este
+ * archivo: `actualizarSesionMovil`, `cargarSesionMovil`, etc.). */
+function generarTokenLeaseMigracion(): string {
+  return `mig-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 /**
- * Divide la clave vieja combinada en las dos nuevas — solo si TODAVÍA no existe
- * `CREDENCIALES_KEY` (postcondición ya cumplida por otro contexto, o por un login/refresh que
- * corrió antes de que esta migración alcanzara a ejecutarse): en ese caso, la clave vieja queda
- * huérfana y solo hace falta borrarla, NUNCA pisar el estado nuevo (que puede ser más reciente
- * que lo que la clave vieja tenía guardado). Idempotente y best-effort: cualquier fallo de
- * lectura/parseo de la clave vieja se trata como "no hay nada que migrar", nunca bloquea el
- * arranque.
+ * Divide la clave vieja combinada en las dos nuevas.
+ *
+ * Punto 2 (`/codex-debug verify-fix`, decisión del CTO — reemplaza el diseño anterior, que
+ * migraba con un simple leer-comprobar-escribir SIN exclusión): dos contextos podían leer que
+ * faltaban las credenciales nuevas, uno migraba y un refresh concurrente rotaba encima, y el
+ * otro terminaba su escritura demorada de la legacy pisando esa rotación. Ahora la migración
+ * corre bajo el MISMO lease SQLite `refresh-sesion` que serializa `ejecutarRefresh`/
+ * `ejecutarLogout` (`use-auth-movil.ts`) y, YA CON EL LEASE EN MANO, vuelve a chequear si las
+ * claves nuevas existen antes de escribir nada — si existen (otro contexto migró, o un login/
+ * refresh corrió mientras tanto), NUNCA se pisan con lo que trae la legacy, sin importar qué
+ * tan vieja o nueva sea esta frente a ese valor. El relleno es POR CLAVE: si solo falta una de
+ * las dos (p. ej. por un fallo de escritura parcial anterior, ver el `catch` de abajo), solo esa
+ * se completa desde la legacy — la otra, si ya existe, queda intacta.
+ *
+ * UN SOLO intento de lease (sin poll-wait, a diferencia de `adquirirLeaseRefreshConEspera` de
+ * `use-auth-movil.ts`): esta función es la única llamada por `cargarSesionMovil`, y
+ * `cargarSesionMovil` a su vez se llama DESDE DENTRO del lease en `ejecutarRefresh`/
+ * `ejecutarLogout` (releen disco ya con el lease tomado). Esperar ahí por el MISMO lease que el
+ * propio caller ya tiene sería un auto-bloqueo — el caller nunca lo suelta hasta que esta
+ * llamada retorne. Si el lease está ocupado (por el propio caller reentrante o por cualquier
+ * otro contexto), la migración simplemente se difiere sin tocar nada: la legacy queda intacta
+ * y el PRÓXIMO `cargarSesionMovil()` (se llama todo el tiempo, en casi cualquier flujo)
+ * reintenta. Mientras tanto, `cargarSesionMovil` sigue pudiendo componer la sesión completa
+ * DIRECTO desde la legacy (`componerSesionDesdeLegacy`, más abajo) — nunca devuelve `null` solo
+ * porque la migración todavía no corrió.
+ *
+ * Punto 1 (verify-fix, decisión del CTO — reemplaza el `finally` anterior, que borraba la
+ * legacy SIEMPRE, incluso si una de las dos escrituras nuevas fallaba): la legacy solo se borra
+ * DESPUÉS de confirmar que las claves nuevas quedaron completas (ya existían, o se acaban de
+ * escribir sin lanzar). Si cualquier escritura falla, se aborta sin borrar nada — perder la
+ * legacy ahí perdería la ÚNICA copia completa de la sesión por un fallo transitorio.
  */
 async function migrarSesionLegadaSiExiste(): Promise<void> {
   let legado: string | null;
@@ -68,24 +108,101 @@ async function migrarSesionLegadaSiExiste(): Promise<void> {
     return;
   }
   if (!legado) return;
+
+  let db: Awaited<ReturnType<typeof abrirOutbox>>;
   try {
-    const credencialesExistentes = await SecureStore.getItemAsync(CREDENCIALES_KEY, OPTIONS);
-    if (!credencialesExistentes) {
-      const parsed = AuthConductorMovilResponseSchema.safeParse(JSON.parse(legado) as unknown);
-      if (parsed.success && parsed.data.status === 'autenticado') {
-        const { credenciales, contexto } = partirCredencialesYContexto(parsed.data);
-        await Promise.all([
-          SecureStore.setItemAsync(CREDENCIALES_KEY, JSON.stringify(credenciales), OPTIONS),
-          SecureStore.setItemAsync(CONTEXTO_KEY, JSON.stringify({ contexto }), OPTIONS),
-        ]);
-      }
-    }
+    db = await abrirOutbox();
   } catch {
-    // Best-effort: un legado corrupto no debe bloquear la migración — simplemente se descarta
-    // (se borra más abajo) y `cargarSesionMovil` sigue con lo que haya (o no) en las claves
-    // nuevas.
-  } finally {
+    return;
+  }
+  const token = generarTokenLeaseMigracion();
+  let obtuvoLease: boolean;
+  try {
+    obtuvoLease = await adquirirLease(
+      db,
+      ID_LEASE_REFRESH_SESION,
+      token,
+      Date.now(),
+      TTL_LEASE_REFRESH_SESION_MS,
+    );
+  } catch {
+    return;
+  }
+  if (!obtuvoLease) return;
+
+  try {
+    const [credencialesExistentes, contextoExistente] = await Promise.all([
+      SecureStore.getItemAsync(CREDENCIALES_KEY, OPTIONS),
+      SecureStore.getItemAsync(CONTEXTO_KEY, OPTIONS),
+    ]);
+    if (credencialesExistentes && contextoExistente) {
+      // Ya migrado por otro contexto (o un login/refresh corrió antes de llegar acá) — la
+      // legacy quedó huérfana, solo hace falta descartarla.
+      await SecureStore.deleteItemAsync(SESSION_KEY_LEGACY, OPTIONS).catch(() => {});
+      return;
+    }
+
+    let parsed: ReturnType<typeof AuthConductorMovilResponseSchema.safeParse> | undefined;
+    try {
+      parsed = AuthConductorMovilResponseSchema.safeParse(JSON.parse(legado) as unknown);
+    } catch {
+      parsed = undefined;
+    }
+    if (!parsed || !parsed.success || parsed.data.status !== 'autenticado') {
+      // Legado corrupto, no parseable o no autenticado: no hay nada que migrar, se descarta.
+      await SecureStore.deleteItemAsync(SESSION_KEY_LEGACY, OPTIONS).catch(() => {});
+      return;
+    }
+    const { credenciales, contexto } = partirCredencialesYContexto(parsed.data);
+    try {
+      if (!credencialesExistentes) {
+        await SecureStore.setItemAsync(CREDENCIALES_KEY, JSON.stringify(credenciales), OPTIONS);
+      }
+      if (!contextoExistente) {
+        await SecureStore.setItemAsync(CONTEXTO_KEY, JSON.stringify({ contexto }), OPTIONS);
+      }
+    } catch {
+      // Punto 1: si CUALQUIERA de las escrituras falla, la legacy queda INTACTA — nunca se
+      // borra en este camino. `cargarSesionMovil` puede seguir componiendo la sesión completa
+      // desde ella mientras tanto (`componerSesionDesdeLegacy`), y el próximo intento de
+      // migración retoma desde acá (la clave que sí llegó a escribirse no se vuelve a tocar,
+      // por el chequeo de arriba).
+      return;
+    }
+    // Ambas claves nuevas confirmadas (ya existían, o se acaban de escribir sin lanzar): recién
+    // ACÁ es seguro borrar la legacy.
     await SecureStore.deleteItemAsync(SESSION_KEY_LEGACY, OPTIONS).catch(() => {});
+  } finally {
+    await liberarLeaseConCooldown(db, ID_LEASE_REFRESH_SESION, token, Date.now(), 0).catch(
+      () => {},
+    );
+  }
+}
+
+/**
+ * Punto 1 (verify-fix, decisión del CTO): fallback de lectura cuando la migración no pudo
+ * completar sus dos escrituras (una falló a mitad de camino, ver el `catch` de
+ * `migrarSesionLegadaSiExiste`) y la legacy sigue intacta a propósito, o cuando la migración se
+ * difirió por no conseguir el lease (reentrancia con `ejecutarRefresh`/`ejecutarLogout`, ver esa
+ * misma función). En vez de que `cargarSesionMovil` devuelva `null` — perdiendo una sesión
+ * perfectamente válida por un fallo transitorio de escritura o por contención del lease —
+ * compone la sesión completa DIRECTO desde la legacy. No persiste ni borra nada acá: la
+ * migración de verdad se reintenta en la PRÓXIMA llamada, bajo el lease, como siempre.
+ */
+async function componerSesionDesdeLegacy(): Promise<SesionMovilGuardada | null> {
+  let legado: string | null;
+  try {
+    legado = await SecureStore.getItemAsync(SESSION_KEY_LEGACY, OPTIONS);
+  } catch {
+    return null;
+  }
+  if (!legado) return null;
+  try {
+    const parsed = AuthConductorMovilResponseSchema.safeParse(JSON.parse(legado) as unknown);
+    if (!parsed.success || parsed.data.status !== 'autenticado') return null;
+    return parsed.data;
+  } catch {
+    return null;
   }
 }
 
@@ -106,7 +223,12 @@ export async function cargarSesionMovil(): Promise<SesionMovilGuardada | null> {
     SecureStore.getItemAsync(CREDENCIALES_KEY, OPTIONS),
     SecureStore.getItemAsync(CONTEXTO_KEY, OPTIONS),
   ]);
-  if (!rawCredenciales || !rawContexto) return null;
+  if (!rawCredenciales || !rawContexto) {
+    // Punto 1 (verify-fix): falta alguna de las dos claves nuevas — nunca hubo sesión, o la
+    // migración quedó a mitad de camino (fallo de escritura) o se difirió (lease ocupado). Antes
+    // de rendirse, se intenta componer desde la legacy — ver `componerSesionDesdeLegacy`.
+    return await componerSesionDesdeLegacy();
+  }
   try {
     const credenciales = JSON.parse(rawCredenciales) as unknown;
     const { contexto } = JSON.parse(rawContexto) as { contexto: unknown };
@@ -182,4 +304,56 @@ export async function obtenerDeviceIdMovil(): Promise<string> {
   const nuevo = `android:${Crypto.randomUUID()}`;
   await SecureStore.setItemAsync(DEVICE_KEY, nuevo, OPTIONS);
   return nuevo;
+}
+
+const REVOCACION_PENDIENTE_KEY = 'quivo.mobile.revocacion-pendiente.v1';
+
+/**
+ * Punto 3 (`/codex-debug verify-fix`, decisión del CTO): `ejecutarLogout` (`use-auth-movil.ts`)
+ * SIEMPRE borra la sesión local, incluso si la revocación de red falla (offline) — el chofer
+ * espera que "cerrar sesión" limpie el teléfono YA. Pero eso no debe dejar la sesión abierta
+ * del lado del servidor para siempre: si la revocación falló, se persiste ACÁ la intención (el
+ * refresh token que había que revocar) para reintentarla en el próximo arranque con red o ciclo
+ * de drenado — ver `intentarRevocacionesPendientes` en `use-auth-movil.ts`.
+ */
+export interface RevocacionPendienteGuardada {
+  refreshToken: string;
+  deviceId?: string;
+  /** Intentos NO-red fallidos acumulados (un fallo de red no cuenta, se reintenta indefinido
+   * hasta que haya conectividad) — ver `TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED`. */
+  intentos: number;
+}
+
+export async function guardarRevocacionPendiente(
+  revocacion: RevocacionPendienteGuardada,
+): Promise<void> {
+  await SecureStore.setItemAsync(REVOCACION_PENDIENTE_KEY, JSON.stringify(revocacion), OPTIONS);
+}
+
+export async function leerRevocacionPendiente(): Promise<RevocacionPendienteGuardada | null> {
+  let raw: string | null;
+  try {
+    raw = await SecureStore.getItemAsync(REVOCACION_PENDIENTE_KEY, OPTIONS);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      typeof (parsed as Record<string, unknown>).refreshToken === 'string' &&
+      typeof (parsed as Record<string, unknown>).intentos === 'number'
+    ) {
+      return parsed as RevocacionPendienteGuardada;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function borrarRevocacionPendiente(): Promise<void> {
+  await SecureStore.deleteItemAsync(REVOCACION_PENDIENTE_KEY, OPTIONS).catch(() => {});
 }

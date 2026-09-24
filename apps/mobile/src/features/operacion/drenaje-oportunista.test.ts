@@ -53,6 +53,14 @@ vi.mock('../../shared/api/sync-api', () => ({
   syncApi: { enviarLote: vi.fn() },
 }));
 
+// Punto 3 (`/codex-debug verify-fix`, decisión del CTO): `intentarDrenarOportunista` ahora
+// dispara `intentarRevocacionesPendientes` (fire-and-forget) en cada ciclo — mockeado
+// wholesale para no arrastrar `use-auth-movil.ts` (y transitivamente `sesion-movil-store.ts`,
+// `expo-secure-store`/`expo-crypto`) a este archivo, que no los necesita para nada más.
+vi.mock('../auth/use-auth-movil', () => ({
+  intentarRevocacionesPendientes: vi.fn().mockResolvedValue(undefined),
+}));
+
 import {
   abrirOutbox,
   adquirirLease,

@@ -20,10 +20,14 @@ import {
 import {
   actualizarContextoSesionMovil,
   actualizarSesionMovil,
+  borrarRevocacionPendiente,
   borrarSesionMovil,
   cargarSesionMovil,
+  guardarRevocacionPendiente,
   guardarSesionMovil,
+  leerRevocacionPendiente,
   obtenerDeviceIdMovil,
+  type RevocacionPendienteGuardada,
   type SesionMovilGuardada,
 } from '../../shared/security/sesion-movil-store';
 
@@ -122,6 +126,11 @@ export function useAuthMovil() {
       try {
         deviceId.current = await obtenerDeviceIdMovil();
         setEstado((actual) => ({ ...actual, deviceId: deviceId.current }));
+        // Punto 3 (verify-fix, decisión del CTO): "próximo arranque con red" — intenta drenar
+        // cualquier revocación de logout que quedó pendiente de un arranque anterior sin
+        // conectividad (ver `intentarRevocacionesPendientes`). Fire-and-forget: nunca bloquea
+        // ni puede fallar la restauración de sesión (esa función nunca rechaza).
+        void intentarRevocacionesPendientes();
         const guardada = await cargarSesionMovil();
         if (!mounted.current) return;
         
@@ -391,9 +400,10 @@ export function useAuthMovil() {
     setEstado((actual) => ({ ...actual, cargando: true, error: null }));
     // Punto 3 (verify-fix, decisión del CTO): la lógica real vive en `ejecutarLogout`
     // (standalone, ver su docblock más abajo) — coordina con `ejecutarRefresh` a través del
-    // MISMO lease `refresh-sesion` en vez de confiar en `estado.sesion?.refreshToken` (React),
-    // que puede estar varias rotaciones headless atrás.
-    await ejecutarLogout(estado.sesion?.refreshToken, deviceId.current ?? estado.deviceId ?? undefined);
+    // MISMO lease `refresh-sesion`, SIEMPRE espera a conseguirlo (nunca degrada al
+    // `estado.sesion?.refreshToken` de React, que puede estar varias rotaciones headless
+    // atrás) y revoca con el refresh token RELEÍDO de disco.
+    await ejecutarLogout(deviceId.current ?? estado.deviceId ?? undefined);
     // H5: `ESTADO_INICIAL` limpia `estado`, pero este ref vive fuera de `estado` — sin este
     // reset explícito, una racha de 401 de la sesión que se está cerrando sobrevivía al
     // logout y podía combinarse con un solo 401 de la sesión siguiente.
@@ -401,7 +411,7 @@ export function useAuthMovil() {
     // Entrega 3: mismo motivo, para el circuit breaker del refresh (global al módulo).
     reiniciarCircuitoRefresh();
     if (mounted.current) setEstado({ ...ESTADO_INICIAL, etapa: 'vehiculo' });
-  }, [estado.sesion?.refreshToken, estado.deviceId]);
+  }, [estado.deviceId]);
 
   /** Access token vigente para llamadas propias de la pantalla de operación (paquete del
    * día QUI-236, sync QUI-240) — refresca sola si ya venció, sin duplicar la lógica de
@@ -610,8 +620,9 @@ const INTERVALO_POLL_LEASE_REFRESH_MS = 150;
 async function adquirirLeaseRefreshConEspera(
   db: SQLite.SQLiteDatabase,
   token: string,
+  esperaMaximaMs: number = TTL_LEASE_REFRESH_SESION_MS,
 ): Promise<boolean> {
-  const limiteMs = Date.now() + TTL_LEASE_REFRESH_SESION_MS;
+  const limiteMs = Date.now() + esperaMaximaMs;
   for (;;) {
     const ahoraMs = Date.now();
     const obtenido = await adquirirLease(db, ID_LEASE_REFRESH_SESION, token, ahoraMs, TTL_LEASE_REFRESH_SESION_MS);
@@ -743,6 +754,27 @@ async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMov
     // G1(b) ronda 4: el servidor YA rotó con éxito — antes de persistir, confirmar (y renovar)
     // que seguimos siendo dueños del lease. Ver el docblock de `ejecutarRefresh` para el caso
     // aceptado explícitamente si lo perdimos.
+    // Punto 4 (`/codex-debug verify-fix`, decisión del CTO — riesgo residual ACEPTADO, sin
+    // cambio de comportamiento): entre que este `renovarLease` confirma (compare-and-set en
+    // SQLite) que seguimos siendo dueños del lease y que `actualizarSesionMovil` (abajo)
+    // termina de escribir en SecureStore, el runtime de Android puede suspenderse (la app pasa
+    // a background y el sistema congela/mata el proceso, o el hilo se apantalla más de lo
+    // esperado). Si eso pasa, el lease puede vencer (`TTL_LEASE_REFRESH_SESION_MS`) y otro
+    // contexto adquirirlo y rotar de nuevo ANTES de que esta escritura, ya en curso, alcance a
+    // aplicarse — el CAS de SQLite protege la FILA del lease, no la escritura posterior en
+    // SecureStore: `expo-secure-store` no ofrece ninguna escritura condicional/con fencing
+    // (no hay equivalente a un `WHERE owner = ?` para el Keychain/Keystore), así que no hay
+    // forma de que esta escritura se autoinvalide si perdimos el lease mientras estaba en
+    // vuelo. Cerrar esto de raíz exigiría persistencia con fencing atómico real (fuera del
+    // alcance de SecureStore) — no se implementa acá.
+    //
+    // Red de seguridad ya existente que acota el daño (por eso se acepta explícitamente sin
+    // más cambios): si esta escritura tardía llega a pisar una rotación más nueva, el servidor
+    // ya conoce ambos refresh tokens involucrados (`refreshTokenHashAnterior`, ver
+    // `AuthMovilService`) y detecta el reuso del token viejo en el próximo intento — el 401
+    // resultante no revalida (`sesionNoRevalidada`) y fuerza un login limpio (Entrega 28,
+    // `SESION_NO_VIGENTE`, pendiente de implementar) en vez de dejar el cliente atascado con
+    // credenciales que el servidor ya invalidó silenciosamente.
     const renovado = await renovarLease(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), TTL_LEASE_REFRESH_SESION_MS);
     if (!renovado) {
       const relecturaTrasPerderLease = await cargarSesionMovil().catch(() => null);
@@ -769,26 +801,47 @@ async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMov
   }
 }
 
+/** Punto 3 (verify-fix, decisión del CTO): margen sobre `TTL_LEASE_REFRESH_SESION_MS` que
+ * `ejecutarLogout` espera además del TTL del lease — logout YA NO degrada al token de memoria
+ * si no consigue el lease a tiempo (ver el docblock de `ejecutarLogout`), así que tiene que
+ * esperar lo que haga falta. El lease vence SOLO (todo dueño legítimo lo suelta o lo deja
+ * expirar dentro de `TTL_LEASE_REFRESH_SESION_MS` desde que lo adquirió) — este margen extra
+ * solo cubre el jitter del poll (`INTERVALO_POLL_LEASE_REFRESH_MS`) y relojes no perfectamente
+ * sincronizados entre el momento en que ESTA espera arrancó y el momento en que el dueño previo
+ * (si lo hay) adquirió el suyo. */
+const MARGEN_ESPERA_LEASE_LOGOUT_MS = 5_000;
+
 /**
- * Punto 3 (`/codex-debug verify-fix`, decisión del CTO): lógica de `logout()` extraída a
- * standalone (mismo patrón que `refrescar`/`ejecutarRefresh`) para poder testearla sin el
- * arnés de React que este paquete no tiene (ver el comentario de `clasificarFalloAccessToken`
- * más abajo).
+ * Punto 3 (`/codex-debug verify-fix`, decisión del CTO — reemplaza el diseño anterior, que
+ * degradaba a `estado.sesion?.refreshToken` en memoria si no conseguía el lease a tiempo):
+ * lógica de `logout()` extraída a standalone (mismo patrón que `refrescar`/`ejecutarRefresh`)
+ * para poder testearla sin el arnés de React que este paquete no tiene (ver el comentario de
+ * `clasificarFalloAccessToken` más abajo).
  *
  * `use-auth-movil.service.ts:logout` (API) revoca por MATCH EXACTO del `refreshTokenHash`
  * vigente, con un fallback que solo cubre UNA rotación de historia
  * (`refreshTokenHashAnterior`). El `logout()` viejo mandaba `estado.sesion?.refreshToken`
  * (React, en memoria) — si el headless task rotó dos veces (T0→T1→T2) mientras foreground
- * seguía mostrando T0, el servidor no reconocía T0 (ni como vigente ni como "anterior": solo
- * guarda UN hash de historia) y el logout terminaba en el camino no-op silencioso, dejando la
- * sesión ABIERTA del lado del servidor.
+ * seguía mostrando T0, el servidor no reconocía T0 y el logout terminaba en el camino no-op
+ * silencioso, dejando la sesión ABIERTA del lado del servidor. El fallback a memoria cuando el
+ * lease estaba ocupado reproducía EXACTAMENTE el mismo bug bajo contención — el hallazgo que
+ * cierra este cambio.
  *
- * Fix: adquiere el MISMO lease `refresh-sesion` que usa `ejecutarRefresh` y, si lo consigue,
- * relee el refresh token PERSISTIDO (nunca la memoria) antes de revocar — con eso alcanza el
- * token EXACTO que el servidor reconoce como vigente, sin importar cuántas rotaciones headless
- * hayan pasado, y sin depender del fallback de una sola generación. Si no consigue el lease a
- * tiempo (contención), degrada al token de memoria — mismo comportamiento best-effort que el
- * resto del módulo ante esa rama extrema.
+ * Fix: SIEMPRE espera el lease `refresh-sesion` (el mismo de `ejecutarRefresh`) con poll hasta
+ * `TTL_LEASE_REFRESH_SESION_MS + MARGEN_ESPERA_LEASE_LOGOUT_MS` — nunca degrada a memoria. El
+ * lease vence SOLO (ningún dueño legítimo lo retiene más allá de su propio TTL), así que esa
+ * espera SIEMPRE termina consiguiéndolo; el caso de no conseguirlo ni con margen es un síntoma
+ * de algo mucho más grave (SQLite inaccesible, reloj roto) y se reporta a Sentry, pero de todos
+ * modos se sigue adelante con la mejor lectura posible en vez de dejar al chofer bloqueado en
+ * "cerrando sesión" para siempre. Una vez con el lease, relee el refresh token PERSISTIDO (nunca
+ * la memoria) antes de revocar — con eso alcanza el token EXACTO que el servidor reconoce como
+ * vigente, sin importar cuántas rotaciones headless hayan pasado.
+ *
+ * Si la revocación de red falla (offline u otro motivo), la limpieza local sigue igual — el
+ * chofer espera que "cerrar sesión" cierre YA en el teléfono — pero se persiste la intención de
+ * revocación (`guardarRevocacionPendiente`) para reintentarla en el próximo arranque con red o
+ * ciclo de drenado (`intentarRevocacionesPendientes`, más abajo) en vez de dejar la sesión
+ * abierta server-side para siempre.
  *
  * Marca la sesión como cerrada (`borrarSesionMovil`) ANTES de soltar el lease: cualquier
  * `ejecutarRefresh` que estaba esperando este MISMO lease lo adquiere DESPUÉS, encuentra
@@ -796,23 +849,29 @@ async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMov
  * persistir nada — ver ese chequeo arriba. Así, un refresh que "termina después" del logout
  * nunca resucita una sesión ya cerrada en disco.
  */
-export async function ejecutarLogout(
-  refreshTokenMemoria: string | undefined,
-  deviceIdParaLogout: string | undefined,
-): Promise<void> {
+export async function ejecutarLogout(deviceIdParaLogout: string | undefined): Promise<void> {
   const db = await abrirOutbox();
   const tokenLease = generarTokenLeaseRefresh();
-  const obtuvoLease = await adquirirLeaseRefreshConEspera(db, tokenLease);
+  const obtuvoLease = await adquirirLeaseRefreshConEspera(
+    db,
+    tokenLease,
+    TTL_LEASE_REFRESH_SESION_MS + MARGEN_ESPERA_LEASE_LOGOUT_MS,
+  );
+  if (!obtuvoLease) {
+    // Caso patológico (ver el docblock de arriba) — no debería ocurrir nunca dado el margen.
+    Sentry.captureException(
+      new Error('No se pudo adquirir el lease refresh-sesion para logout ni con margen'),
+      { tags: { contexto: 'use-auth-movil', paso: 'logout-lease-no-adquirido' } },
+    );
+  }
   try {
-    let refreshTokenParaRevocar = refreshTokenMemoria;
-    if (obtuvoLease) {
-      try {
-        const vigente = await cargarSesionMovil();
-        if (vigente) refreshTokenParaRevocar = vigente.refreshToken;
-      } catch {
-        // Best-effort: si la relectura falla, seguimos con lo que había en memoria — mejor
-        // intentar revocar con un token viejo que no intentar revocar nada.
-      }
+    let refreshTokenParaRevocar: string | undefined;
+    try {
+      const vigente = await cargarSesionMovil();
+      refreshTokenParaRevocar = vigente?.refreshToken;
+    } catch {
+      // Best-effort: si la relectura falla, no hay token seguro que revocar — nunca se cae a
+      // memoria (ver el docblock de arriba).
     }
     if (refreshTokenParaRevocar) {
       try {
@@ -820,16 +879,69 @@ export async function ejecutarLogout(
         // `AuthMovilService.logout` para el porqué (refresh token localmente obsoleto por una
         // rotación cuya respuesta el cliente nunca confirmó recibir).
         await authMovilApi.logout(refreshTokenParaRevocar, deviceIdParaLogout);
+        // Por si un intento anterior de logout offline había dejado una revocación pendiente
+        // con un token viejo: esta revocación (con el token vigente) ya cubrió esa intención.
+        await borrarRevocacionPendiente();
       } catch {
-        // La limpieza local siempre se ejecuta; la sesión expira/revoca server-side después.
+        // Punto 3: revocación de red fallida — la limpieza local sigue igual (abajo), pero se
+        // persiste la intención para reintentar. Ver el docblock de arriba.
+        await guardarRevocacionPendiente({
+          refreshToken: refreshTokenParaRevocar,
+          deviceId: deviceIdParaLogout,
+          intentos: 0,
+        });
       }
     }
     // Marca la sesión como cerrada ANTES de soltar el lease — ver el docblock de arriba.
     await borrarSesionMovil();
   } finally {
-    if (obtuvoLease) {
-      await liberarLeaseConCooldown(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), 0);
+    await liberarLeaseConCooldown(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), 0);
+  }
+}
+
+/** Punto 3 (verify-fix, decisión del CTO): tope de intentos NO-red antes de descartar una
+ * revocación pendiente (ver `intentarRevocacionesPendientes`) — un fallo de RED no cuenta
+ * contra este tope (se reintenta indefinidamente hasta que haya conectividad); solo un fallo
+ * con respuesta real del servidor (4xx/5xx/contrato) tres veces seguidas hace desistir. */
+export const TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED = 3;
+
+/**
+ * Punto 3 (`/codex-debug verify-fix`, decisión del CTO): reintenta una revocación de logout que
+ * quedó pendiente porque `ejecutarLogout` no pudo completarla por falta de red (ver su
+ * docblock). Se llama desde `restaurarSesion` ("próximo arranque con red") y desde
+ * `intentarDrenarOportunista` (`drenaje-oportunista.ts`, "próximo ciclo de drenado") — ambos
+ * puntos donde ya hay, o estamos por confirmar, conectividad. No usa el lease `refresh-sesion`:
+ * la sesión asociada a este refresh token ya está borrada (el logout que la generó ya limpió el
+ * disco), así que no hay ningún token vigente con el que pueda chocar.
+ *
+ * NUNCA rechaza — todos los callers la disparan fire-and-forget.
+ */
+export async function intentarRevocacionesPendientes(): Promise<void> {
+  let pendiente: RevocacionPendienteGuardada | null;
+  try {
+    pendiente = await leerRevocacionPendiente();
+  } catch {
+    return;
+  }
+  if (!pendiente) return;
+  try {
+    await authMovilApi.logout(pendiente.refreshToken, pendiente.deviceId);
+    await borrarRevocacionPendiente();
+  } catch (error) {
+    if (error instanceof AuthMovilApiError && error.kind === 'network') {
+      // Sin red todavía: se deja intacta (no cuenta contra el tope) para el próximo intento.
+      return;
     }
+    const intentos = pendiente.intentos + 1;
+    if (intentos >= TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'auth-movil', paso: 'revocacion-pendiente-agotada' },
+        extra: { intentos },
+      });
+      await borrarRevocacionPendiente();
+      return;
+    }
+    await guardarRevocacionPendiente({ ...pendiente, intentos }).catch(() => {});
   }
 }
 

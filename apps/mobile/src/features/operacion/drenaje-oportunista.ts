@@ -9,6 +9,7 @@ import {
   PISO_ENTRE_INTENTOS_DRENAJE_MS as PISO_ENTRE_INTENTOS_MS,
   TTL_LEASE_DRENAJE_MS as TTL_LEASE_MS,
 } from '../../db/outbox';
+import { intentarRevocacionesPendientes } from '../auth/use-auth-movil';
 import { drenarLotesConLease } from './sync-outbox';
 
 /**
@@ -110,6 +111,13 @@ function generarTokenLease(): string {
 export async function intentarDrenarOportunista(
   obtenerAccessToken: () => Promise<string | null>,
 ): Promise<void> {
+  // Punto 3 (`/codex-debug verify-fix`, decisión del CTO): "próximo ciclo de drenado" —
+  // aprovecha que esta función se dispara con cada fix de ubicación/heartbeat (hay actividad,
+  // y probablemente red) para reintentar una revocación de logout que quedó pendiente por
+  // falta de conectividad (ver `intentarRevocacionesPendientes`/`ejecutarLogout` en
+  // `use-auth-movil.ts`). Fire-and-forget e independiente del lease/token de abajo: nunca
+  // rechaza, y no tiene nada que ver con el drenado del outbox en sí.
+  void intentarRevocacionesPendientes();
   try {
     const db = await abrirOutbox();
     const ahoraMs = Date.now();

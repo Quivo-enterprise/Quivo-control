@@ -12,7 +12,14 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
  * `ejecutarLogout` (extraída de `logout()` del hook, mismo patrón que `refrescar`/
  * `ejecutarRefresh`, para poder testearla sin el arnés de React que este paquete no tiene) releé
  * el refresh token PERSISTIDO bajo el lease `refresh-sesion` — el MISMO que serializa
- * `ejecutarRefresh` — en vez de confiar en el argumento de memoria.
+ * `ejecutarRefresh` — en vez de confiar en ningún argumento de memoria.
+ *
+ * Ronda 2 (`/codex-debug verify-fix` sobre `75c1189`, decisión del CTO): el diseño anterior
+ * degradaba al `refreshTokenMemoria` (React) si no conseguía el lease a tiempo — exactamente el
+ * mismo bug bajo contención. Ahora `ejecutarLogout` YA NO recibe ningún token de memoria: espera
+ * el lease con poll hasta `TTL_LEASE_REFRESH_SESION_MS + MARGEN_ESPERA_LEASE_LOGOUT_MS` (el
+ * lease vence solo, así que esa espera siempre termina consiguiéndolo) y SIEMPRE revoca con lo
+ * que lea de disco.
  */
 vi.mock('../../shared/api/auth-movil-api', () => ({
   authMovilApi: { refresh: vi.fn(), logout: vi.fn() },
@@ -29,9 +36,12 @@ vi.mock('../../shared/api/auth-movil-api', () => ({
 
 vi.mock('../../shared/security/sesion-movil-store', () => ({
   actualizarSesionMovil: vi.fn(),
+  borrarRevocacionPendiente: vi.fn().mockResolvedValue(undefined),
   borrarSesionMovil: vi.fn().mockResolvedValue(undefined),
   cargarSesionMovil: vi.fn(),
+  guardarRevocacionPendiente: vi.fn().mockResolvedValue(undefined),
   guardarSesionMovil: vi.fn(),
+  leerRevocacionPendiente: vi.fn().mockResolvedValue(null),
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
@@ -51,8 +61,10 @@ vi.mock('@sentry/react-native', () => ({
 
 import { authMovilApi } from '../../shared/api/auth-movil-api';
 import {
+  borrarRevocacionPendiente,
   borrarSesionMovil,
   cargarSesionMovil,
+  guardarRevocacionPendiente,
   type SesionMovilGuardada,
 } from '../../shared/security/sesion-movil-store';
 import { adquirirLease } from '../../db/outbox';
@@ -62,6 +74,12 @@ const logoutMock = authMovilApi.logout as unknown as ReturnType<typeof vi.fn>;
 const refreshMock = authMovilApi.refresh as unknown as ReturnType<typeof vi.fn>;
 const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
 const borrarSesionMovilMock = borrarSesionMovil as unknown as ReturnType<typeof vi.fn>;
+const guardarRevocacionPendienteMock = guardarRevocacionPendiente as unknown as ReturnType<
+  typeof vi.fn
+>;
+const borrarRevocacionPendienteMock = borrarRevocacionPendiente as unknown as ReturnType<
+  typeof vi.fn
+>;
 const adquirirLeaseMock = adquirirLease as unknown as ReturnType<typeof vi.fn>;
 
 function sesion(refreshToken: string): SesionMovilGuardada {
@@ -81,6 +99,8 @@ describe('ejecutarLogout — punto 3 (verify-fix): coordina con ejecutarRefresh 
     refreshMock.mockReset();
     cargarSesionMovilMock.mockReset();
     borrarSesionMovilMock.mockReset().mockResolvedValue(undefined);
+    guardarRevocacionPendienteMock.mockReset().mockResolvedValue(undefined);
+    borrarRevocacionPendienteMock.mockReset().mockResolvedValue(undefined);
     adquirirLeaseMock.mockReset().mockResolvedValue(true);
   });
 
@@ -88,7 +108,7 @@ describe('ejecutarLogout — punto 3 (verify-fix): coordina con ejecutarRefresh 
     const t2EnDisco = sesion('T2');
     cargarSesionMovilMock.mockResolvedValue(t2EnDisco);
 
-    await ejecutarLogout('T0', 'device-1');
+    await ejecutarLogout('device-1');
 
     expect(logoutMock).toHaveBeenCalledTimes(1);
     expect(logoutMock).toHaveBeenCalledWith('T2', 'device-1');
@@ -98,7 +118,7 @@ describe('ejecutarLogout — punto 3 (verify-fix): coordina con ejecutarRefresh 
   it('marca la sesión como cerrada (borrarSesionMovil) tras revocar, ANTES de que la función retorne', async () => {
     cargarSesionMovilMock.mockResolvedValue(sesion('T2'));
 
-    await ejecutarLogout('T0', 'device-1');
+    await ejecutarLogout('device-1');
 
     expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
     // Orden: revocar server-side primero, borrar local después — si el borrado local
@@ -111,44 +131,87 @@ describe('ejecutarLogout — punto 3 (verify-fix): coordina con ejecutarRefresh 
     expect(ordenLogout as number).toBeLessThan(ordenBorrar as number);
   });
 
-  it('si no consigue el lease a tiempo (contención), degrada al token de memoria — best-effort, nunca peor que antes del fix', async () => {
-    // `adquirirLeaseRefreshConEspera` (compartida con `ejecutarRefresh`) hace polling real con
-    // `setTimeout` hasta agotar `TTL_LEASE_REFRESH_SESION_MS` (20 s) — timers falsos para no
-    // hacer esperar 20 s reales a este test.
+  it('logout con el lease OCUPADO al principio (React en T0, disco en T2): espera a conseguirlo y revoca con T2, nunca degrada a memoria', async () => {
+    // Ronda 2 del hallazgo: el diseño anterior degradaba a un token de memoria si el lease
+    // estaba ocupado — reproducía el mismo bug bajo contención. Ahora `ejecutarLogout` ya no
+    // recibe NINGÚN token de memoria: solo espera el lease y relee disco.
     vi.useFakeTimers();
     try {
-      adquirirLeaseMock.mockResolvedValue(false);
+      // Ocupado en los primeros intentos (otro contexto sosteniendo el lease — p. ej. un
+      // `ejecutarRefresh` headless en vuelo), libre recién al tercero.
+      adquirirLeaseMock
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+      cargarSesionMovilMock.mockResolvedValue(sesion('T2'));
 
-      const promesa = ejecutarLogout('T0-memoria', 'device-1');
-      // Margen sobre el TTL (20 s): el poll cada 150 ms no divide exacto al TTL, así que un
-      // avance de EXACTAMENTE 20_000 puede dejar el último timer pendiente justo pasado el
-      // borde sin dispararse — de sobra para cruzarlo con margen.
-      await vi.advanceTimersByTimeAsync(30_000);
+      const promesa = ejecutarLogout('device-1');
+      // El poll corre cada 150 ms (`INTERVALO_POLL_LEASE_REFRESH_MS`) — un par de segundos de
+      // sobra para que los tres intentos se resuelvan.
+      await vi.advanceTimersByTimeAsync(2_000);
       await promesa;
 
-      expect(cargarSesionMovilMock).not.toHaveBeenCalled();
-      expect(logoutMock).toHaveBeenCalledWith('T0-memoria', 'device-1');
+      expect(adquirirLeaseMock).toHaveBeenCalledTimes(3);
+      expect(logoutMock).toHaveBeenCalledTimes(1);
+      expect(logoutMock).toHaveBeenCalledWith('T2', 'device-1');
       expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('sin refreshToken de memoria NI en disco (nunca hubo sesión), no llama a authMovilApi.logout pero sí limpia el almacenamiento local', async () => {
+  it('lease ocupado durante una contención larga (bien dentro de TTL + margen): igual espera y consigue el lease, revocando con lo que haya en disco', async () => {
+    vi.useFakeTimers();
+    try {
+      // Se libera recién en el intento 100 (~15 s de poll a 150 ms) — mucho más que una
+      // contención breve, pero todavía dentro de TTL + margen (25 s en total).
+      let llamada = 0;
+      adquirirLeaseMock.mockImplementation(async () => {
+        llamada += 1;
+        return llamada >= 100;
+      });
+      cargarSesionMovilMock.mockResolvedValue(sesion('T-final'));
+
+      const promesa = ejecutarLogout('device-1');
+      await vi.advanceTimersByTimeAsync(25_000);
+      await promesa;
+
+      expect(logoutMock).toHaveBeenCalledWith('T-final', 'device-1');
+      expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sin refreshToken en disco (nunca hubo sesión), no llama a authMovilApi.logout pero sí limpia el almacenamiento local', async () => {
     cargarSesionMovilMock.mockResolvedValue(null);
 
-    await ejecutarLogout(undefined, 'device-1');
+    await ejecutarLogout('device-1');
 
     expect(logoutMock).not.toHaveBeenCalled();
     expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
   });
 
-  it('un fallo de red al revocar no impide la limpieza local (best-effort, igual que antes del fix)', async () => {
+  it('un fallo de red al revocar no impide la limpieza local, y persiste una revocación pendiente para reintentar', async () => {
     cargarSesionMovilMock.mockResolvedValue(sesion('T2'));
     logoutMock.mockRejectedValue(new Error('offline'));
 
-    await expect(ejecutarLogout('T0', 'device-1')).resolves.toBeUndefined();
+    await expect(ejecutarLogout('device-1')).resolves.toBeUndefined();
     expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
+    expect(guardarRevocacionPendienteMock).toHaveBeenCalledWith({
+      refreshToken: 'T2',
+      deviceId: 'device-1',
+      intentos: 0,
+    });
+  });
+
+  it('una revocación exitosa borra cualquier revocación pendiente que hubiera quedado de un logout offline anterior', async () => {
+    cargarSesionMovilMock.mockResolvedValue(sesion('T2'));
+
+    await ejecutarLogout('device-1');
+
+    expect(borrarRevocacionPendienteMock).toHaveBeenCalledTimes(1);
+    expect(guardarRevocacionPendienteMock).not.toHaveBeenCalled();
   });
 
   it('un refresh que estaba esperando el MISMO lease y lo adquiere DESPUÉS del logout encuentra la sesión cerrada y aborta sin tocar la red ni persistir', async () => {
