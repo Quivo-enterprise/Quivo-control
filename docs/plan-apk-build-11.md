@@ -14,6 +14,8 @@ Decisiones del CTO (2026-09-23):
 
 Primer paso al salir de plan mode: volcar este plan a `docs/plan-apk-build-11.md` y agregar el puntero en `docs/handoff.md` (regla 8).
 
+> **Estado (2026-09-23, cierre de sesión):** Fase 1 a medias. Mapa offline cerrado. Drenado en la ronda 6 sin verificar. Anuncio necesita el rediseño de la capa de anuncios. El detalle está en `docs/handoff.md` → "Punto de retome — cierre de la sesión del 2026-09-23".
+
 ## Reglas de ejecución
 
 - El chairman (Opus) orquesta, revisa y verifica. Todo el código lo escriben subagentes Sonnet, cada uno en su worktree existente (`../Quivo-control-<nombre>`). Nunca `checkout` ni `stash` en el directorio principal.
