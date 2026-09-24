@@ -18,7 +18,74 @@
 - **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
 - **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
 
-Estado: Fase 1 en curso (drenado, anuncio y mapa offline en paralelo).
+### Punto de retome — cierre de la sesión del 2026-09-23
+
+**Leer esto primero.** Las cuatro ramas móviles están pusheadas, ninguna tiene PR y no queda nada sin commitear en ningún worktree. El orden de merge sigue siendo **drenado → posición → anuncio → mapa offline**. Web va en paralelo.
+
+| Rama · worktree | HEAD | Rebase sobre `main` | tsc / tests móvil | Codex `verify-fix` (último) |
+|---|---|---|---|---|
+| `fix/movil-drenado-background` · `-movil-drenado` | `8431fc9` | **Sí** (base `7d001e1`) | 0 / 244 | Ronda 6 **sin correr**. `8431fc9` es un commit de preservación: el agente se cortó por límite de uso justo antes de commitear |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `f84618c` | No | 0 / 245 (+ shared 57/57) | **`partial`**, `20260923-201325-verify-fix-266181.json` |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `6831112` | No | 0 / 196 | **`fixes_root_cause`**, `20260923-192505-verify-fix-144425.json` |
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `9e9f2d3` | No | — | `partial` (del 09-11). No se tocó: espera a que drenado esté mergeado |
+| `feat/web-mapa-todos-vehiculos` · `-web-mapa` | `0d67964` | No | — | No aplica. No se tocó |
+
+Los reportes de Codex están en `~/.claude/codex-debug-state/`.
+
+**Drenado, qué se hizo en esta sesión (rondas 4 a 6):**
+- Rebase limpio. La migración pasó a llamarse `20260923090000_refresh_token_hash_anterior` para quedar después de `gps_sesion_resumen`.
+- G1: refresh bajo el lease SQLite `refresh-sesion`, con relectura dentro del lease y compare-and-set del lease antes de persistir. Ya no existe el refresh sin lease.
+- G2: credenciales y contexto van en claves de SecureStore separadas (`quivo.mobile.credenciales.v1` y `quivo.mobile.contexto.v1`).
+- Logout: toma el mismo lease, relee el token persistido y deja una revocación pendiente durable si no hay red.
+- Ronda 6 (commit `8431fc9`):
+  - se eliminó la migración de la clave vieja: el paquete nuevo es una instalación limpia y SecureStore es por app;
+  - una lectura fallida bajo el lease difiere el refresh;
+  - el logout no entra a la sección crítica sin el lease;
+  - la revocación pendiente pasó a ser por entrada.
+- **Falta:**
+  - revisar el diff de `8431fc9` contra los cuatro puntos del brief (reporte `20260923-200546`);
+  - correr `verify-fix` (base `7d001e1`);
+  - `/code-review` y `/security-review` (logout y migración Prisma);
+  - PR, CI y merge.
+- **Riesgo residual que el CTO tiene que aceptar (regla 13):** si el runtime se suspende entre el compare-and-set del lease y la escritura en SecureStore, la escritura tardía puede pisar un token más nuevo. SecureStore no tiene escritura condicional, así que no se puede hacer fencing. La red de seguridad es la detección de reuso del servidor (`refreshTokenHashAnterior` revoca la sesión entera) más el login limpio de la Entrega 28. Está documentado en `use-auth-movil.ts`, junto a `renovarLease`.
+- En el worktree de drenado quedaron corriendo Postgres (5434) y Redis (6380) de su `docker-compose`.
+
+**Anuncio: necesita un rediseño, no otra ronda.** La auditoría de `6e4f285` salió bien: G1, G2 y R1 estaban correctos. Después vinieron dos rondas más con `eventId` determinístico, atomicidad del outbox (R2), `RADIO_CONFIRMACION_M` y `setNotificationHandler`. Codex sigue en `partial` y los huecos son de integración, no teóricos:
+1. la evidencia todavía dispara anuncios por `gps-provider.tsx:108` y `anuncio-punto-control.ts:364`;
+2. `evaluarAnunciosProximidadVencidos` (el fallback de 90 s) **solo se llama desde tests**;
+3. `anuncioProximidadHecho` se marca antes de programar la notificación;
+4. el dedupe hace SELECT → programar → INSERT, que no es atómico;
+5. la generación de la cola no se chequea después de cada `await`;
+6. el drenado de reintentos queda fuera de `conTimeout`;
+7. el texto «a menos de 40 m» también se usa en los fallbacks.
+
+Diseño decidido para la próxima sesión (un solo agente Sonnet):
+- **Una sola decisión de anuncio:** función pura `decidirAnuncio(estadoAnuncio, entrada: fix | heartbeat, ahora)` → `{motivo: 'proximidad' | 'fallback-tiempo' | 'fallback-salida' | null, estado}`. La evidencia nunca dispara ningún canal hacia el chofer.
+- **Un solo punto de llamada:** dentro de `colaRegistroGps`, tanto para fixes como para heartbeats. El foreground (`gps-provider`) no tiene disparador propio: consume las decisiones de esa misma cola.
+- **Intención durable:** INSERT OR IGNORE de la intención (`pendiente`) en `anuncios_punto_control` **antes** de programar, lo que reclama la identidad `{sesionId, puntoControlId, pasada}` de forma atómica. Después se programa con `identifier` igual a esa identidad (un duplicado reemplaza al anterior, no se apila) y se marca `programado`. Si falla, queda `pendiente` y la cola la reintenta.
+- **Texto según el motivo** (proximidad, tiempo o salida).
+- **Generación** chequeada después de cada `await` y antes de toda mutación. El drenado de reintentos va dentro de `conTimeout`, y los reintentos de una visita se descartan cuando su confirmación transaccional sale bien.
+
+**Mapa offline:** cerrado. Tiene handshake `mapa-listo` y el reintento de tiles arma la URL con `coords.z` y la x normalizada. Solo falta rebase, `/code-review`, PR y la prueba en teléfono (con red y en modo avión).
+
+**Otros cambios de esta sesión:**
+- Se borraron del remoto `feat/reestructurar-admin-panel` (`8950ebb`), `feat/QUI-342-filtros-url-export-cumplimiento` (`be805b1`) y `feat/QUI-339-auditoria-accesibilidad-web` (`c986699`), por pedido del CTO.
+- Quedan 7 ramas remotas de agosto sin mergear, probablemente mergeadas con squash: `deploy-gcp-prod`, `en-vivo-api`, `en-vivo-design-system`, `en-vivo-web`, `fix/en-vivo-hooks`, `qui-227-web-nextjs-scaffold` y `test/QUI-340-e2e-admin`. No se tocaron: verificar que su contenido esté en `main` antes de borrarlas.
+- Backup del estado de siembra (Entrega 0a) en `~/quivo-backups/estado-siembra-produccion-2026-09-23.json`.
+- Tests de API en local: 6 fallos de Better-Auth (`modules/auth`, `jwt-auth.guard`, `auditoria`, `sync-errores`). Son idénticos en `main`, son del entorno y no los causa ninguna rama. Si los tests de `en-vivo` fallan con `PosicionEnVivoSchema undefined`, es un `dist` viejo: `corepack pnpm -C packages/shared build`.
+- `pnpm` no está en el PATH de la shell de las herramientas: usar `corepack pnpm`.
+
+**Pendiente del CTO:**
+- OK para desplegar `main` a producción (#65, #70 y #74), seguido del recompute de `docs/runbooks/retencion-gps.md`.
+- Pedir la key de Transistorsoft para `com.quivotech.conductor.app` recién cuando las Fases 1–3 estén mergeadas.
+- Aceptar el riesgo residual de drenado descrito arriba.
+
+**Cómo retomar:** como máximo 3 agentes Sonnet a la vez.
+1. Drenado: revisar `8431fc9`, verify-fix, reviews, PR y merge.
+2. Anuncio: rediseño según el diseño de arriba.
+3. Web: rebase, review y PR.
+
+Cuando drenado esté mergeado, entran posición (rebase sobre drenado) y la Entrega 8/9/26 (sobre anuncio mergeado).
 
 ## Costos recalibrados con prueba de carga + confirmación en Cloud SQL real — 2026-09-22
 
