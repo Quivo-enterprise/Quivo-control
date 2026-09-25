@@ -43,9 +43,9 @@ import {
   type EstadoPermisoActividad,
 } from '../../gps/permiso-actividad';
 import {
+  crearCoordinadorIniciarDetener,
   crearManejadorForegroundActivo,
   crearManejadorReafirmarMovimiento,
-  crearSerializadorPromesaEnCurso,
   crearSerializadorRestauracion,
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
@@ -189,16 +189,26 @@ export function useGpsOperativo(
   // `esperarPendiente()` en `iniciar()` y el `registrar()` en `detener()`. Una sola instancia
   // por hook, mismo ciclo de vida que `trackingRef`.
   const serializadorRestauracion = useRef(crearSerializadorRestauracion()).current;
-  // MEDIO (hallazgo de revisión, QUI-247): instancia INDEPENDIENTE del mismo factory de
-  // arriba — serializa `detener()` contra un `iniciar()` en curso, no la restauración de
-  // config. `iniciar()` registra acá su propia promesa (envolviendo `ejecutarIniciar`, más
-  // abajo) apenas arranca, y `detener()` la espera ANTES de tocar nada (nativo, suscripciones,
-  // outbox, `tracking`). Sin esto, un toque rápido Iniciar→Finalizar podía hacer que
-  // `detener()` escribiera `fin_recorrido` (y pisara `trackingRef`) ANTES de que el `iniciar()`
-  // en vuelo llegara a escribir `inicio_recorrido` — reconstrucción de recorrido rota. Ver el
-  // docblock de `crearSerializadorPromesaEnCurso` (`gps/seguimiento-continuo.ts`) y su test
-  // dedicado a esta carrera.
-  const serializadorIniciar = useRef(crearSerializadorPromesaEnCurso()).current;
+  // MEDIO (hallazgo de revisión, QUI-247) + BUG EN PRODUCCIÓN (hallazgo 2026-09-25): serializa
+  // `detener()` contra un `iniciar()` en curso. `iniciar()` registra acá su propia promesa
+  // (envolviendo `ejecutarIniciar`, más abajo) apenas arranca, y `detener()` la espera ANTES de
+  // tocar nada (nativo, suscripciones, outbox, `tracking`). Sin esto, un toque rápido
+  // Iniciar→Finalizar podía hacer que `detener()` escribiera `fin_recorrido` (y pisara
+  // `trackingRef`) ANTES de que el `iniciar()` en vuelo llegara a escribir `inicio_recorrido` —
+  // reconstrucción de recorrido rota.
+  //
+  // `crearSerializadorPromesaEnCurso` (sin límite de tiempo) resolvía esa carrera, pero abrió
+  // otra: si `iniciar()` se cuelga de verdad (`abrirOutbox()` contra SQLite trabada, o
+  // `BackgroundGeolocation.ready()`/`.start()` sin responder contra el nativo), `detener()`
+  // quedaba esperando esa promesa PARA SIEMPRE — "Finalizar recorrido" dejaba de responder, sin
+  // mensaje ni reintento. `crearCoordinadorIniciarDetener` (`gps/seguimiento-continuo.ts`)
+  // reemplaza esa instancia con dos capacidades nuevas: una espera ACOTADA
+  // (`esperarIniciarConTimeout`, `TIMEOUT_ESPERA_INICIAR_MS`) para que `detener()` nunca quede
+  // colgado, y una generación de cancelación (`nuevaGeneracion`/`estaVigente`) para que, si ese
+  // `iniciar()` colgado resuelve TARDE (después de que `detener()` ya se cansó de esperarlo), no
+  // resucite el tracking que el chofer ya vio cerrarse — ver los dos chequeos de `estaVigente`
+  // en `ejecutarIniciar`, más abajo, y el docblock completo en `gps/seguimiento-continuo.ts`.
+  const serializadorIniciar = useRef(crearCoordinadorIniciarDetener()).current;
   // LOW-MED (hallazgo de revisión, QUI-247): estado mutable compartido del marcador
   // `inicio_recorrido` del intento de `iniciar()` en curso — `reiniciarEstadoInicioRecorrido`
   // le asigna un `eventId` ESTABLE al arrancar cada intento, y `asegurarInicioRecorrido`
@@ -675,9 +685,14 @@ export function useGpsOperativo(
   // `detener()` esperarla y garantizar `inicio_recorrido < fin_recorrido` siempre. Se separó en
   // dos funciones (en vez de registrar la promesa desde dentro de esta misma) porque necesitamos
   // la referencia a la promesa completa DESDE AFUERA, antes de que la función empiece a correr
-  // de verdad — exactamente el mismo motivo por el que `crearSerializadorPromesaEnCurso` existe
+  // de verdad — exactamente el mismo motivo por el que `crearCoordinadorIniciarDetener` existe
   // como abstracción aparte (ver su docblock, `gps/seguimiento-continuo.ts`).
-  const ejecutarIniciar = useCallback(async () => {
+  //
+  // BUG EN PRODUCCIÓN (2026-09-25): recibe `generacion` (asignada por `iniciar()`, más abajo,
+  // vía `serializadorIniciar.nuevaGeneracion()`) para poder chequear `estaVigente(generacion)`
+  // en los dos puntos donde un `detener()` que se cansó de esperar (timeout) pudo haber cerrado
+  // el recorrido mientras este intento seguía en curso — ver esos dos chequeos más abajo.
+  const ejecutarIniciar = useCallback(async (generacion: number) => {
     setErrorGps(null);
     setResultado(null);
     bateria.current = [];
@@ -834,6 +849,12 @@ export function useGpsOperativo(
     // (segundo/tercer `iniciar()` en la misma sesión) nunca debe reusar el `eventId` de uno
     // viejo. Ver `inicio-recorrido-retry.ts` para el porqué de la idempotencia por `eventId`
     // estable.
+    // BUG EN PRODUCCIÓN (2026-09-25): si un `detener()` ya se cansó de esperar este intento
+    // (timeout) mientras corrían los chequeos de permiso de arriba, o si un `iniciar()` más
+    // nuevo ya lo superó, no tiene sentido arrancar el SDK ni suscribirse para un recorrido que
+    // el chofer ya dio por cerrado (o que ya está siendo reemplazado).
+    if (!serializadorIniciar.estaVigente(generacion)) return;
+
     reiniciarEstadoInicioRecorrido(estadoInicioRecorrido, await generarEventId());
     suscribirUbicaciones();
 
@@ -859,6 +880,30 @@ export function useGpsOperativo(
       // arriba) y, sin él, caía a la geocerca estacionaria de 200-500 m: la causa raíz de que
       // la flecha no se moviera.
       await iniciarSeguimientoContinuo(BackgroundGeolocation);
+      // BUG EN PRODUCCIÓN (2026-09-25): este es el chequeo que de verdad importa — si lo que
+      // colgó era justo el `ready()`/`start()` de arriba, `detener()` ya pudo haberse cansado de
+      // esperar (`TIMEOUT_ESPERA_INICIAR_MS`) y haber cerrado el recorrido SIN este intento
+      // (nativo detenido, suscripciones removidas, `fin_recorrido` escrito) antes de que esta
+      // línea se alcanzara. Dejar que la resolución tardía marque `tracking=true` acá resucitaría
+      // un recorrido que el chofer ya vio cerrarse — la carrera inversa que
+      // `crearCoordinadorIniciarDetener` existe para evitar (ver su docblock,
+      // `gps/seguimiento-continuo.ts`). Si ya no es la generación vigente, se apaga lo que ESTE
+      // intento acaba de arrancar (el SDK nativo + las tres suscripciones que instaló
+      // `suscribirUbicaciones()` arriba) y se sale sin tocar `tracking`/`trackingRef`.
+      if (!serializadorIniciar.estaVigente(generacion)) {
+        subscription.current?.remove();
+        subscription.current = null;
+        heartbeatSubscription.current?.remove();
+        heartbeatSubscription.current = null;
+        motionChangeSubscription.current?.remove();
+        motionChangeSubscription.current = null;
+        await BackgroundGeolocation.stop().catch((error) => {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'iniciar-tardio-tras-timeout-detener' },
+          });
+        });
+        return;
+      }
       // G2 (merge post-drenado, Entrega 31a — gap de revisión): `tracking` se marca `true`
       // ACÁ, apenas `start()` resuelve, y ya NO más abajo tras el outbox. Antes, con el outbox
       // fallando (SQLite sin espacio, handle zombi) DESPUÉS de un `start()` exitoso,
@@ -969,20 +1014,26 @@ export function useGpsOperativo(
     deviceId,
     sesionId,
     serializadorRestauracion,
+    serializadorIniciar,
     estadoInicioRecorrido,
   ]);
 
-  // MEDIO (hallazgo de revisión, QUI-247): wrapper público de "Iniciar recorrido". Lo único que
-  // agrega sobre `ejecutarIniciar` es registrar su promesa en `serializadorIniciar` — y hacerlo
-  // ANTES de cualquier `await` de esta misma función, así que para cuando el conductor pudiera
-  // llegar a tocar "Finalizar" (una interacción de UI separada, nunca en el mismo tick de JS)
-  // el registro ya está hecho. `detener()`, más abajo, llama `serializadorIniciar.esperarPendiente()`
+  // MEDIO (hallazgo de revisión, QUI-247) + BUG EN PRODUCCIÓN (2026-09-25): wrapper público de
+  // "Iniciar recorrido". Pide una generación nueva (`nuevaGeneracion()`) ANTES de invocar
+  // `ejecutarIniciar` — así ese intento puede chequear `estaVigente(generacion)` para saber si
+  // sigue siendo el más reciente — y registra su promesa (`registrarPromesaEnCurso`) ANTES de
+  // cualquier `await` de esta misma función, así que para cuando el conductor pudiera llegar a
+  // tocar "Finalizar" (una interacción de UI separada, nunca en el mismo tick de JS) el registro
+  // ya está hecho. `detener()`, más abajo, llama `serializadorIniciar.esperarIniciarConTimeout()`
   // ANTES de tocar nada, así que el orden `inicio_recorrido < fin_recorrido` queda garantizado
-  // sin importar qué tan rápido se toquen los dos botones. Ver el test dedicado a esta carrera
-  // en `gps/seguimiento-continuo.test.ts` (`crearSerializadorPromesaEnCurso`).
+  // sin importar qué tan rápido se toquen los dos botones — con un límite de tiempo, a
+  // diferencia de la versión anterior (`registrar`/`esperarPendiente`, sin timeout). Ver el test
+  // dedicado a esta carrera y al timeout en `gps/seguimiento-continuo.test.ts`
+  // (`crearCoordinadorIniciarDetener`).
   const iniciar = useCallback(async () => {
-    const promesa = ejecutarIniciar();
-    serializadorIniciar.registrar(promesa);
+    const generacion = serializadorIniciar.nuevaGeneracion();
+    const promesa = ejecutarIniciar(generacion);
+    serializadorIniciar.registrarPromesaEnCurso(promesa);
     await promesa;
   }, [ejecutarIniciar, serializadorIniciar]);
 
@@ -995,7 +1046,25 @@ export function useGpsOperativo(
       // escribir `inicio_recorrido` (y de asentar `trackingRef`). `ejecutarIniciar` nunca
       // rechaza (todos sus fallos internos se atrapan y se reportan a Sentry por su cuenta), así
       // que esperar acá no puede hacer fallar `detener()`.
-      await serializadorIniciar.esperarPendiente();
+      //
+      // BUG EN PRODUCCIÓN (2026-09-25): esta espera está ACOTADA (`TIMEOUT_ESPERA_INICIAR_MS` =
+      // 10 s, `gps/seguimiento-continuo.ts`) — antes esperaba `esperarPendiente()` sin límite, y
+      // si `iniciar()` se colgaba de verdad (`abrirOutbox()` contra SQLite trabada, o
+      // `BackgroundGeolocation.ready()`/`.start()` sin responder) "Finalizar recorrido" nunca
+      // respondía. Vencido el plazo, `esperarIniciarConTimeout` invalida la generación de ese
+      // intento y `detener()` sigue de largo con el cierre real (parar el SDK, limpiar
+      // suscripciones/estado, escribir `fin_recorrido`) en vez de quedarse esperando — si el
+      // `iniciar()` colgado resuelve después, los dos chequeos de `estaVigente` en
+      // `ejecutarIniciar` evitan que reactive el tracking que este cierre ya completó.
+      const { agotado } = await serializadorIniciar.esperarIniciarConTimeout();
+      if (agotado) {
+        // No bloquea el cierre (sigue abajo igual) — es diagnóstico: interesa saber cuándo pasa
+        // esto de verdad en campo, es la señal de que `iniciar()` se está colgando contra el
+        // nativo o el outbox.
+        Sentry.captureException(new Error('Timeout esperando iniciar() en curso al detener'), {
+          tags: { contexto: 'gps-foreground', paso: 'detener-timeout-iniciar' },
+        });
+      }
       await BackgroundGeolocation.stop();
       subscription.current?.remove();
       subscription.current = null;

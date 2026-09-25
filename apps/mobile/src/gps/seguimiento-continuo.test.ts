@@ -10,6 +10,7 @@ vi.mock('@sentry/react-native', () => ({
 
 import * as Sentry from '@sentry/react-native';
 import {
+  crearCoordinadorIniciarDetener,
   crearManejadorForegroundActivo,
   crearManejadorReafirmarMovimiento,
   crearSerializadorPromesaEnCurso,
@@ -18,6 +19,7 @@ import {
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
   restaurarComportamientoNormal,
+  TIMEOUT_ESPERA_INICIAR_MS,
   type SdkSeguimientoContinuo,
 } from './seguimiento-continuo';
 
@@ -535,5 +537,122 @@ describe('crearSerializadorPromesaEnCurso — carrera Iniciar→Finalizar rápid
   it('sin ningún iniciar() en vuelo (camino normal): detener() no espera nada', async () => {
     const serializadorIniciar = crearSerializadorPromesaEnCurso();
     await expect(serializadorIniciar.esperarPendiente()).resolves.toBeUndefined();
+  });
+});
+
+describe('crearCoordinadorIniciarDetener — timeout de detener() contra un iniciar() colgado (bug en producción, 2026-09-25)', () => {
+  // BUG EN PRODUCCIÓN: `detener()` esperaba el `iniciar()` en curso SIN límite de tiempo
+  // (`crearSerializadorPromesaEnCurso.esperarPendiente()`, arriba). Si `iniciar()` se colgaba
+  // de verdad (`abrirOutbox()` contra SQLite trabada, o `BackgroundGeolocation.ready()`/
+  // `.start()` sin responder contra el nativo), "Finalizar recorrido" quedaba esperando esa
+  // promesa PARA SIEMPRE: el botón dejaba de responder, sin mensaje ni reintento. Este
+  // coordinador acota esa espera (`esperarIniciarConTimeout`) y agrega una generación de
+  // cancelación (`nuevaGeneracion`/`estaVigente`) para que, si ese `iniciar()` colgado resuelve
+  // TARDE, no reactive el tracking que `detener()` ya cerró — ver `use-gps-operativo.ts`,
+  // los dos chequeos de `estaVigente` en `ejecutarIniciar`.
+
+  it('camino feliz — sin ningún iniciar() en curso: esperarIniciarConTimeout() resuelve de inmediato sin agotar', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    await expect(coordinador.esperarIniciarConTimeout()).resolves.toEqual({ agotado: false });
+  });
+
+  it('(c) camino feliz sin regresión: iniciar() en curso que resuelve ANTES del timeout — espera, no agota, y la generación sigue vigente', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const generacion = coordinador.nuevaGeneracion();
+    const { promesa, resolver } = crearDiferida<void>();
+    coordinador.registrarPromesaEnCurso(promesa);
+
+    let resuelto = false;
+    const espera = coordinador.esperarIniciarConTimeout(10_000).then((resultado) => {
+      resuelto = true;
+      return resultado;
+    });
+
+    await Promise.resolve();
+    expect(resuelto).toBe(false); // todavía no resolvió el iniciar() en curso — no debe agotar antes de tiempo
+
+    resolver();
+    const resultado = await espera;
+
+    expect(resultado).toEqual({ agotado: false });
+    // Nadie la invalidó: el chequeo de `estaVigente` en `ejecutarIniciar` sigue dejando pasar
+    // este intento (camino normal, sin regresión sobre el comportamiento previo al fix).
+    expect(coordinador.estaVigente(generacion)).toBe(true);
+  });
+
+  it('(a) iniciar() colgado: detener() no se queda esperando para siempre — esperarIniciarConTimeout() agota tras el timeout (fake timers)', async () => {
+    vi.useFakeTimers();
+    try {
+      const coordinador = crearCoordinadorIniciarDetener();
+      coordinador.nuevaGeneracion();
+      // Nunca resuelve — simula el `iniciar()` colgado contra `abrirOutbox()`/`ready()`/`.start()`.
+      coordinador.registrarPromesaEnCurso(new Promise<void>(() => {}));
+
+      const espera = coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
+      await vi.advanceTimersByTimeAsync(TIMEOUT_ESPERA_INICIAR_MS);
+
+      await expect(espera).resolves.toEqual({ agotado: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('(b) iniciar() que termina TARDE tras el timeout de detener(): la generación queda invalidada — no re-arranca el tracking', async () => {
+    vi.useFakeTimers();
+    try {
+      const coordinador = crearCoordinadorIniciarDetener();
+      const generacion = coordinador.nuevaGeneracion();
+      const { promesa, resolver } = crearDiferida<void>();
+      coordinador.registrarPromesaEnCurso(promesa);
+
+      // `detener()` se cansa de esperar (timeout) y sigue con el cierre real del recorrido.
+      const espera = coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
+      await vi.advanceTimersByTimeAsync(TIMEOUT_ESPERA_INICIAR_MS);
+      await expect(espera).resolves.toEqual({ agotado: true });
+
+      // La generación de ESE intento de `iniciar()` ya no es vigente — el chequeo que hace
+      // `ejecutarIniciar` justo antes de marcar `tracking=true` (y el que hace antes de
+      // arrancar el SDK) ven esto en `false` y abortan sin reactivar nada.
+      expect(coordinador.estaVigente(generacion)).toBe(false);
+
+      // El `iniciar()` colgado resuelve TARDE, recién ahora — después de que `detener()` ya se
+      // cansó de esperarlo y cerró el recorrido.
+      resolver();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Sigue invalidada: resolver tarde no "revive" la generación vieja — el próximo
+      // `ejecutarIniciar` (si lo hubiera) tampoco la vería vigente jamás otra vez.
+      expect(coordinador.estaVigente(generacion)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('un iniciar() nuevo invalida la generación del anterior aunque el anterior nunca haya llegado a timeoutear', () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const generacionVieja = coordinador.nuevaGeneracion();
+    const generacionNueva = coordinador.nuevaGeneracion();
+
+    expect(coordinador.estaVigente(generacionVieja)).toBe(false);
+    expect(coordinador.estaVigente(generacionNueva)).toBe(true);
+  });
+
+  it('(c) camino feliz sin regresión: iniciar() ya resuelto antes de detener() — no agota ni invalida nada', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const generacion = coordinador.nuevaGeneracion();
+    coordinador.registrarPromesaEnCurso(Promise.resolve());
+
+    // Deja que la promesa (ya resuelta) se asiente, como pasaría entre el `await promesa` de
+    // `iniciar()` y el toque de "Finalizar" del chofer.
+    await Promise.resolve();
+
+    const resultado = await coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
+    expect(resultado).toEqual({ agotado: false });
+    expect(coordinador.estaVigente(generacion)).toBe(true);
+  });
+
+  it('TIMEOUT_ESPERA_INICIAR_MS es 10 s — acotado, no instantáneo, para no cortar un iniciar() normal que solo tarda un poco', () => {
+    expect(TIMEOUT_ESPERA_INICIAR_MS).toBe(10_000);
   });
 });
