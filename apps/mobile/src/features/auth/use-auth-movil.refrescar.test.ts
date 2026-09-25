@@ -253,6 +253,28 @@ describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca f
     expect(estado.fallosConsecutivos).toBe(0);
   });
 
+  /**
+   * Punto 7 (code review 2026-09-25): si el token de DISCO que trae la reconciliación todavía
+   * tiene el access token vigente (otro contexto ya rotó hace un instante), no hace falta
+   * rotar de nuevo — devolver esa sesión de disco tal cual ahorra un refresh evitable.
+   */
+  it('punto 7: T0 en memoria, T1 en disco con access token TODAVÍA vigente — devuelve la sesión de disco sin rotar de nuevo', async () => {
+    const t0 = sesion('T0');
+    const enDisco = {
+      ...sesion('T1'),
+      accessToken: 'access-T1-vigente',
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    };
+    cargarSesionMovilMock.mockResolvedValue(enDisco);
+    refreshMock.mockRejectedValue(new Error('no debería llamarse a refresh — T1 sigue vigente'));
+
+    const resultado = await refrescar(t0);
+
+    expect(resultado).toBe(enDisco);
+    expect(refreshMock).not.toHaveBeenCalled();
+    expect(actualizarSesionMovilMock).not.toHaveBeenCalled();
+  });
+
   it('G3: con 4 fallos previos en el circuito, reconciliar ANTES evita que T0 sea el 5to fallo que abriría el circuito y bloquearía el reintento con T1', async () => {
     // 4 fallos 401 reales previos (uno menos que UMBRAL_FALLOS_ABRIR_CIRCUITO = 5) contra un
     // token descartable, sin sesión distinta en disco — el circuito queda cerrado pero al

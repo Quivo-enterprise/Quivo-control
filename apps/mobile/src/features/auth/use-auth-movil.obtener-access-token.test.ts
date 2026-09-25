@@ -31,6 +31,7 @@ vi.mock('@sentry/react-native', () => ({
 }));
 
 import { AuthMovilApiError } from '../../shared/api/auth-movil-api';
+import { CircuitoRefreshAbiertoError } from '../../shared/api/refresh-circuit-breaker';
 import {
   UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA,
   clasificarFalloAccessToken,
@@ -133,5 +134,37 @@ describe('clasificarFalloAccessToken', () => {
     const resultado = clasificarFalloAccessToken(new Error('boom'), 0);
     expect(resultado.marcarSesionNoRevalidada).toBe(false);
     expect(resultado.fallos401Acumulados).toBe(0);
+  });
+
+  /**
+   * Punto 10 (code review 2026-09-25): `CircuitoRefreshAbiertoError` tiene `status: 401` a
+   * propósito (`refresh-circuit-breaker.ts`), pero es una decisión LOCAL (el circuito ya
+   * estaba abierto por fallos anteriores) — nunca evidencia NUEVA del servidor. No debe sumar
+   * a la racha ni, por sí sola, alcanzar el umbral.
+   */
+  it('CircuitoRefreshAbiertoError (status 401, pero decisión LOCAL) NO suma a la racha de 401', () => {
+    const error = new CircuitoRefreshAbiertoError();
+    const resultado = clasificarFalloAccessToken(error, 0);
+    expect(resultado.fallos401Acumulados).toBe(0);
+    expect(resultado.marcarSesionNoRevalidada).toBe(false);
+  });
+
+  it(`${UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA - 1} 401 reales + N CircuitoRefreshAbiertoError NO alcanzan el umbral por sí solos`, () => {
+    let fallos = 0;
+    let marcar = false;
+    for (let i = 0; i < UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA - 1; i++) {
+      const error = new AuthMovilApiError('http', 'Sesión móvil inválida o expirada', 401);
+      ({ fallos401Acumulados: fallos, marcarSesionNoRevalidada: marcar } =
+        clasificarFalloAccessToken(error, fallos));
+    }
+    expect(marcar).toBe(false);
+    // El circuito, ya abierto por esos fallos reales, corta varios intentos posteriores sin
+    // tocar la red — ninguno de ellos debe empujar la racha hacia el umbral.
+    for (let i = 0; i < 5; i++) {
+      ({ fallos401Acumulados: fallos, marcarSesionNoRevalidada: marcar } =
+        clasificarFalloAccessToken(new CircuitoRefreshAbiertoError(), fallos));
+    }
+    expect(fallos).toBe(UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA - 1);
+    expect(marcar).toBe(false);
   });
 });
