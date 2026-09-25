@@ -488,6 +488,86 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
       expect(tileB.src).toContain(URL_ORIGINAL);
     });
   });
+
+  // Hallazgo del code-review de esta entrega (2026-09-25): 'abandonados' solo se vaciaba en
+  // 'onConectividadRecuperada' (la transición offline->online del teléfono). Con OSM bloqueando
+  // (403/429) y buena cobertura de red TODO el turno, esa transición nunca llega — 'abandonados'
+  // retenía para siempre los <img> que Leaflet ya había podado del DOM tras un pan/zoom. Estos
+  // tests cubren la poda por 'tileSigueEnMapa' en cada pasada de 'reintentarPendientes' y el tope
+  // defensivo 'topeAbandonados'.
+  describe('poda de "abandonados"', () => {
+    it('poda "abandonados" en cada pasada de reintentarPendientes: un tile abandonado que Leaflet ya podó del DOM (pan/zoom) no se re-pide ni en onConectividadRecuperada', () => {
+      const tileAbandonado = crearTileFalso();
+      const tileOtro = crearTileFalso();
+      let abandonadoMontado = true;
+      const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+      const controlador = crearControlador({
+        obtenerUrlOriginal,
+        maxIntentos: 1,
+        esperaMaximaTicks: 1,
+        tileSigueEnMapa: (tile) => (tile === tileAbandonado ? abandonadoMontado : true),
+      });
+
+      controlador.onTileError(tileAbandonado, COORDS);
+      vi.advanceTimersByTime(REINTENTO_INTERVALO_MS); // intento 1 de 1
+      vi.advanceTimersByTime(REINTENTO_INTERVALO_MS); // agota el tope -> pasa a 'abandonados'
+      const srcTrasAgotar = tileAbandonado.src;
+      expect(srcTrasAgotar).toContain(URL_ORIGINAL);
+
+      // El chofer paneó/zoomeó: Leaflet podó este <img> del DOM mientras estaba abandonado.
+      abandonadoMontado = false;
+
+      // El temporizador se había apagado al quedar 'pendientes' vacío (ver el test de arriba
+      // sobre eso) — un tile NUEVO que falla lo arranca de nuevo, y el próximo tick corre
+      // 'reintentarPendientes', que ahora TAMBIÉN poda 'abandonados' además de procesar
+      // 'pendientes'.
+      controlador.onTileError(tileOtro, COORDS);
+      vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+
+      // Ya podado de 'abandonados' en la pasada de arriba: onConectividadRecuperada no lo toca.
+      controlador.onConectividadRecuperada();
+      expect(tileAbandonado.src).toBe(srcTrasAgotar);
+    });
+
+    it('acota "abandonados" a topeAbandonados, descartando las entradas más viejas primero', () => {
+      const tile1 = crearTileFalso();
+      const tile2 = crearTileFalso();
+      const tile3 = crearTileFalso();
+      const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+      const controlador = crearControlador({
+        obtenerUrlOriginal,
+        maxIntentos: 1,
+        esperaMaximaTicks: 1,
+        topeAbandonados: 2,
+      });
+
+      // Los tres fallan antes de que corra ningún tick del temporizador, así que quedan en
+      // 'pendientes' en orden de llegada: tile1, tile2, tile3.
+      controlador.onTileError(tile1, COORDS);
+      controlador.onTileError(tile2, COORDS);
+      controlador.onTileError(tile3, COORDS);
+
+      vi.advanceTimersByTime(REINTENTO_INTERVALO_MS); // intento 1 de 1 para los tres (todavía no abandonan)
+      const src1TrasIntento1 = tile1.src;
+      const src2TrasIntento1 = tile2.src;
+      const src3TrasIntento1 = tile3.src;
+      expect(src1TrasIntento1).toContain(URL_ORIGINAL);
+
+      // Se agota maxIntentos para los tres EN LA MISMA pasada -> los tres pasan a 'abandonados' en
+      // orden tile1, tile2, tile3. El tope (2) descarta al más viejo: tile1.
+      vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+
+      controlador.onConectividadRecuperada();
+
+      // tile1 quedó afuera de 'abandonados' (evicted por el tope): no se le vuelve a tocar tile.src.
+      expect(tile1.src).toBe(src1TrasIntento1);
+      // tile2 y tile3 sí seguían en 'abandonados': se re-piden con un cache-busting nuevo.
+      expect(tile2.src).not.toBe(src2TrasIntento1);
+      expect(tile3.src).not.toBe(src3TrasIntento1);
+      expect(tile2.src).toContain(URL_ORIGINAL);
+      expect(tile3.src).toContain(URL_ORIGINAL);
+    });
+  });
 });
 
 // GAP 1 de la verificación `verify-fix` de Codex sobre el commit anterior de esta entrega:

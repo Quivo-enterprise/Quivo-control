@@ -50,8 +50,19 @@ export interface OpcionesDetectorReconexion {
 export interface DetectorReconexion {
   /** Notifica el estado de conectividad ACTUAL (ver `esOnline`) — se llama en cada cambio que
    * reporte NetInfo, no solo en las transiciones; el detector decide internamente cuándo
-   * corresponde disparar. */
-  notificar: (online: boolean) => void;
+   * corresponde disparar.
+   *
+   * `null` es el estado "todavía no se sabe" — NUNCA "offline" (Hallazgo del code-review de esta
+   * entrega, 2026-09-25): `useNetInfo()` arranca con `isConnected: null` hasta que NetInfo
+   * resuelve la conectividad real, unos ~2s típicos tras montar el hook. Antes de este fix, el
+   * llamador convertía ese `null` a `false` (vía `esOnline(null, null)`), y esa lectura espuria
+   * marcaba `estabaOffline = true`; la PRIMERA lectura real (con el teléfono online todo el rato)
+   * llegaba como `true` y el detector la interpretaba como una transición offline→online genuina
+   * — un falso `onReconectado` disparado ~2s después de montar el mapa, sin que hubiera existido
+   * ningún corte de red. `notificar(null)` es un no-op deliberado: no toca `estabaOffline` ni
+   * ningún timer, así que `null → online` nunca dispara, y solo `null → offline → online` (un
+   * corte real, detectado después de que NetInfo ya resolvió) sigue disparando una vez. */
+  notificar: (online: boolean | null) => void;
   /** Cancela cualquier disparo pendiente (debounce en curso) — se llama al desmontar el
    * componente que posee este detector, para no invocar `onReconectado` sobre un mapa que ya no
    * existe. */
@@ -80,7 +91,11 @@ export function crearDetectorReconexion(opciones: OpcionesDetectorReconexion): D
     }
   }
 
-  function notificar(online: boolean) {
+  function notificar(online: boolean | null) {
+    // Estado desconocido (NetInfo todavía no resolvió) — ver el comentario grande sobre `null` en
+    // `DetectorReconexion.notificar` más arriba. No es offline: se ignora sin tocar
+    // `estabaOffline` ni ningún timer.
+    if (online === null) return;
     if (!online) {
       estabaOffline = true;
       // Un nuevo corte de red cancela cualquier disparo de reconexión que estuviera esperando su

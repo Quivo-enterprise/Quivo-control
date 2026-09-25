@@ -76,6 +76,16 @@ export interface OpcionesControladorTiles {
    * default `8` si se omite (con `reintentoIntervaloMs = 30000`, un techo de 4 minutos entre
    * reintentos sucesivos de un mismo tile). */
   esperaMaximaTicks?: number;
+  /** Tope defensivo para la lista `abandonados` (Hallazgo del code-review de esta entrega,
+   * 2026-09-25): `reintentarPendientes` ya poda `abandonados` en cada pasada descartando las
+   * entradas cuyo `tile` ya no está montado en el mapa (`!tileSigueEnMapa`), pero eso solo cubre
+   * el caso "el chofer se movió y Leaflet desmontó el `<img>`". Con un bloqueo sostenido de OSM
+   * (403/429) y buena cobertura de red todo el turno, un chofer que se queda quieto o recorre
+   * pocas calles repetidas puede acumular muchos tiles abandonados que SIGUEN visibles —
+   * `tileSigueEnMapa` no los descarta porque de verdad siguen en el DOM. Sin este tope, esa lista
+   * crecería sin límite mientras dure el bloqueo. Al superarlo, se descartan las entradas MÁS
+   * VIEJAS primero. Opcional: default `200` si se omite. */
+  topeAbandonados?: number;
   /** Dado el `coords` que Leaflet manda en el evento `tileerror`, devuelve la URL original del
    * tile. Hace falta recalcularla porque, para cuando llega `tileerror`, Leaflet YA reemplazó
    * `tile.src` por `errorTileUrl` (ver el comentario grande sobre `CONTROLADOR_TILES_JS_SOURCE`
@@ -240,6 +250,14 @@ function crearControladorTiles(opciones) {
   // aunque la conexión ya hubiera vuelto. Guardarlos acá (en vez de descartarlos del todo) es lo
   // que permite que 'onConectividadRecuperada' (más abajo) los vuelva a pedir apenas vuelve la
   // red, sin depender de ningún gesto del chofer.
+  //
+  // Hallazgo del code-review de esta entrega (2026-09-25): esta lista solo se vaciaba en
+  // 'onConectividadRecuperada' (la transición offline->online del teléfono). Con OSM bloqueando
+  // (403/429) y buena cobertura de red TODO el turno, esa transición nunca llega — 'abandonados'
+  // retenía para siempre los <img> que Leaflet ya había podado del DOM tras un pan/zoom, sin
+  // límite. 'reintentarPendientes' ahora poda esta lista en CADA pasada (por 'tileSigueEnMapa',
+  // igual que hace con 'pendientes') y la acota a 'topeAbandonados' entradas — ver esa función
+  // más abajo para el detalle completo.
   var abandonados = [];
   // Un único setInterval compartido para todos los tiles pendientes (no uno por tile): más barato
   // y evita reintentos desincronizados. Solo existe mientras haya al menos un pendiente — arranca
@@ -255,6 +273,9 @@ function crearControladorTiles(opciones) {
   // reintento se apaga solo mientras el bloqueo persiste, en vez de mantenerse constante.
   var maxIntentos = opciones.maxIntentos || 6;
   var esperaMaximaTicks = opciones.esperaMaximaTicks || 8;
+  // Tope defensivo de 'abandonados' — ver el comentario grande sobre esa lista más arriba y sobre
+  // 'topeAbandonados' en OpcionesControladorTiles (route-map-html.ts) para el porqué completo.
+  var topeAbandonados = opciones.topeAbandonados || 200;
 
   function indiceDe(tile) {
     for (var i = 0; i < pendientes.length; i++) {
@@ -329,6 +350,28 @@ function crearControladorTiles(opciones) {
       siguientes.push(entrada);
     }
     pendientes = siguientes;
+
+    // Poda 'abandonados' en CADA pasada (Hallazgo del code-review de esta entrega, 2026-09-25) —
+    // ver el comentario grande sobre esa lista más arriba para el porqué completo. Mismo criterio
+    // que arriba con 'pendientes': un tile que salió de la vista por un pan/zoom ya no tiene
+    // sentido conservarlo, Leaflet no lo va a volver a mostrar tal cual (si vuelve a la vista,
+    // crea un <img> nuevo, una entrada distinta con sus propios intentos desde cero).
+    var abandonadosVivos = [];
+    for (var j = 0; j < abandonados.length; j++) {
+      if (opciones.tileSigueEnMapa(abandonados[j].tile)) {
+        abandonadosVivos.push(abandonados[j]);
+      }
+    }
+    // Tope defensivo: la poda de arriba no alcanza sola cuando el chofer NO se mueve (o recorre
+    // pocas calles repetidas) durante un bloqueo sostenido de OSM — esos tiles siguen montados de
+    // verdad, 'tileSigueEnMapa' no los saca. Se descartan las entradas MÁS VIEJAS primero (las que
+    // llevan más tiempo esperando una reconexión) — ver 'topeAbandonados' en
+    // OpcionesControladorTiles más arriba en route-map-html.ts.
+    if (abandonadosVivos.length > topeAbandonados) {
+      abandonadosVivos = abandonadosVivos.slice(abandonadosVivos.length - topeAbandonados);
+    }
+    abandonados = abandonadosVivos;
+
     detenerTimerSiVacio();
   }
 

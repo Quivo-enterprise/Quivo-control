@@ -108,4 +108,45 @@ describe('crearDetectorReconexion', () => {
     vi.advanceTimersByTime(DEBOUNCE_RECONEXION_MS * 3);
     expect(onReconectado).not.toHaveBeenCalled();
   });
+
+  // Hallazgo del code-review de esta entrega (2026-09-25): `useNetInfo()` arranca con
+  // `isConnected: null` hasta que NetInfo resuelve la conectividad real (~2s típicos tras
+  // montar). Antes de este fix, el llamador convertía ese `null` a `false` (vía
+  // `esOnline(null, null)`), y el detector lo tomaba como un offline real — la primera lectura
+  // online de verdad disparaba un `onReconectado` falso sin que hubiera existido ningún corte de
+  // red. Estos tests ejercitan `notificar(null)` directo contra el detector puro.
+  it('null → online (arranque normal, NetInfo todavía no resolvió) nunca dispara — null es "no sé", no offline', () => {
+    const onReconectado = vi.fn();
+    const detector = crearDetectorReconexion({ debounceMs: DEBOUNCE_RECONEXION_MS, onReconectado });
+
+    detector.notificar(null); // NetInfo arranca sin resolver
+    detector.notificar(true); // primera lectura real: el teléfono ya estaba online
+    vi.advanceTimersByTime(DEBOUNCE_RECONEXION_MS * 3);
+    expect(onReconectado).not.toHaveBeenCalled();
+  });
+
+  it('null → offline → online sí dispara una vez — el null inicial no enmascara un corte real posterior', () => {
+    const onReconectado = vi.fn();
+    const detector = crearDetectorReconexion({ debounceMs: DEBOUNCE_RECONEXION_MS, onReconectado });
+
+    detector.notificar(null); // NetInfo arranca sin resolver
+    detector.notificar(false); // corte de red real
+    detector.notificar(true); // vuelve la red
+    expect(onReconectado).not.toHaveBeenCalled(); // todavía no pasó el debounce
+
+    vi.advanceTimersByTime(DEBOUNCE_RECONEXION_MS);
+    expect(onReconectado).toHaveBeenCalledTimes(1);
+  });
+
+  it('notificar(null) en cualquier momento es un no-op — no cancela un disparo pendiente ni reinicia el debounce', () => {
+    const onReconectado = vi.fn();
+    const detector = crearDetectorReconexion({ debounceMs: DEBOUNCE_RECONEXION_MS, onReconectado });
+
+    detector.notificar(false);
+    detector.notificar(true);
+    vi.advanceTimersByTime(DEBOUNCE_RECONEXION_MS / 2);
+    detector.notificar(null); // NetInfo manda una lectura sin resolver en medio del debounce
+    vi.advanceTimersByTime(DEBOUNCE_RECONEXION_MS / 2);
+    expect(onReconectado).toHaveBeenCalledTimes(1); // el disparo pendiente no se vio afectado
+  });
 });

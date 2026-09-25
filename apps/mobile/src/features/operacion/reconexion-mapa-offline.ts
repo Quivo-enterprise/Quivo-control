@@ -23,7 +23,14 @@ import {
  */
 export function useReconexionMapaOffline(onReconectado: () => void): void {
   const netInfo = useNetInfo();
-  const online = esOnline(netInfo.isConnected, netInfo.isInternetReachable);
+  // Hallazgo del code-review de esta entrega (2026-09-25): `useNetInfo()` arranca con
+  // `isConnected: null` hasta que NetInfo resuelve la conectividad real (~2s típicos tras
+  // montar). Antes, `esOnline(null, null)` devolvía `false` acá — el detector lo tomaba como un
+  // "offline" real (`estabaOffline = true`) y la primera lectura online de verdad disparaba un
+  // `onReconectado` falso, sin que hubiera existido ningún corte de red. Mientras `isConnected`
+  // sigue en `null`, se le manda `null` al detector (no-op deliberado — ver el comentario grande
+  // sobre `null` en `DetectorReconexion.notificar`) en vez de forzarlo a `boolean` con `esOnline`.
+  const online = netInfo.isConnected === null ? null : esOnline(netInfo.isConnected, netInfo.isInternetReachable);
 
   const onReconectadoRef = useRef(onReconectado);
   onReconectadoRef.current = onReconectado;
