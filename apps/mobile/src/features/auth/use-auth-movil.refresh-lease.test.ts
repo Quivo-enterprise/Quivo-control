@@ -1,4 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import type { RefreshMovilResponse } from '@quivo/shared';
+import type { SesionMovilGuardada } from '../../shared/security/sesion-movil-store';
 
 /**
  * G1 (hallazgo de `/codex-debug verify-fix`, ALTO): `use-auth-movil.refrescar.test.ts` cubre
@@ -42,7 +44,7 @@ vi.mock('../../shared/api/auth-movil-api', () => ({
 }));
 
 vi.mock('../../shared/security/sesion-movil-store', () => ({
-  actualizarSesionMovil: vi.fn(async (actual: any, tokens: any, contexto = actual.contexto) => {
+  actualizarSesionMovil: vi.fn(async (actual: SesionMovilGuardada, tokens: RefreshMovilResponse, contexto = actual.contexto) => {
     const nueva = { status: 'autenticado', ...tokens, contexto };
     compartido.sesionEnDisco = nueva;
     return nueva;
@@ -90,7 +92,6 @@ vi.mock('../../db/outbox', () => ({
 }));
 
 import { authMovilApi } from '../../shared/api/auth-movil-api';
-import type { SesionMovilGuardada } from '../../shared/security/sesion-movil-store';
 
 function sesion(refreshToken: string): SesionMovilGuardada {
   return {
