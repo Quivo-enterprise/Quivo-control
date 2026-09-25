@@ -19,8 +19,19 @@
  * el `ALTER TABLE ... ADD COLUMN` liso y llano, y dejar que `outbox.ts` atrape el error real que
  * SQLite lanza cuando la columna YA existe ("duplicate column name: <col>") con
  * `esErrorColumnaDuplicada` — así la migración es idempotente (segura de correr en cada apertura
- * del outbox, instalación nueva o vieja) sin necesitar una consulta previa a
- * `PRAGMA table_info`.
+ * del outbox, instalación nueva o vieja).
+ *
+ * FIX POST-REVISIÓN (hallazgo 9, code review — "una migración rota tumba TODO `abrirOutbox`"):
+ * `outbox.ts` YA NO confía a ciegas en el mensaje de error para decidir si una columna existe —
+ * consulta `PRAGMA table_info` primero (más robusto que parsear el `message`) y, además, ninguna
+ * falla de esta migración (columna duplicada o no) puede tumbar la apertura del outbox: se
+ * reporta a Sentry y se sigue. `esErrorColumnaDuplicada` se conserva acá para ese chequeo previo
+ * (best-effort) y para el propio test de este módulo, que corre las migraciones a mano contra
+ * SQLite real.
+ *
+ * Columnas nuevas `intentos`/`ultimo_intento_ts` (hallazgo 1): sostienen el estado transitorio
+ * `'programando'` (ver `marcarAnuncioProgramando`, `outbox.ts`) — instalaciones ya en producción
+ * (con la tabla de 7 columnas de la ronda anterior) tampoco las tienen.
  */
 export const MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL: readonly string[] = [
   "ALTER TABLE anuncios_punto_control ADD COLUMN estado TEXT NOT NULL DEFAULT 'programado'",
@@ -28,6 +39,8 @@ export const MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL: readonly string[] = [
   'ALTER TABLE anuncios_punto_control ADD COLUMN sesion_id TEXT',
   'ALTER TABLE anuncios_punto_control ADD COLUMN punto_control_id TEXT',
   'ALTER TABLE anuncios_punto_control ADD COLUMN pasada INTEGER',
+  'ALTER TABLE anuncios_punto_control ADD COLUMN intentos INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE anuncios_punto_control ADD COLUMN ultimo_intento_ts TEXT',
 ];
 
 /**

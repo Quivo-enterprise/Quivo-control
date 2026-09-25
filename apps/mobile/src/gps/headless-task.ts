@@ -106,6 +106,16 @@ let colaRegistroGps: Promise<unknown> = Promise.resolve();
 const TIMEOUT_REGISTRO_GPS_MS = 30_000;
 
 /**
+ * FIX POST-REVISIÓN (hallazgo 8, code review — "el reintento de notificaciones bloquea
+ * gps_point"): techo de tiempo PROPIO, separado de `TIMEOUT_REGISTRO_GPS_MS`, para
+ * `reintentarAnunciosLlegadaPendientes` — ver el docblock de `ejecutarEnColaRegistroGps` para el
+ * porqué de correrlo aparte. Más corto que el de la escritura crítica: un puente de
+ * notificaciones colgado (`expo-notifications`) no debe demorar el tick siguiente ni un segundo
+ * más de lo necesario para detectarlo.
+ */
+const TIMEOUT_REINTENTO_ANUNCIOS_MS = 5_000;
+
+/**
  * B7: profundidad actual de la cola (operaciones encoladas todavía sin resolver). Se reporta
  * junto al timeout — una cola de 1 dice "una escritura puntual se trabó"; una de 40 dice "hace
  * 7 minutos que no entra ningún punto". A propósito NO hay un tope duro que descarte fixes: el
@@ -269,18 +279,41 @@ const reintentosVisitaPendiente = new Map<string, ReintentoVisitaPendiente>();
 /** Drena la cola de `reintentosVisitaPendiente` — se llama desde `ejecutarEnColaRegistroGps`,
  * ANTES de cada operación nueva (fix o heartbeat), así que corre serializada con el resto de la
  * cola y nunca compite por la escritura con la operación que la sigue. Nunca rechaza: un
- * reintento que vuelve a fallar simplemente queda en la cola para el próximo turno. */
-async function drenarReintentosVisitaPendiente(db: SQLite.SQLiteDatabase): Promise<void> {
+ * reintento que vuelve a fallar simplemente queda en la cola para el próximo turno.
+ *
+ * FIX POST-REVISIÓN (hallazgo 7, code review — "sin chequeo de generación, una operación vencida
+ * puede resucitar `visitas_pendientes`"): antes, este drenado no tenía forma de saber si la
+ * operación que lo encoló (`ejecutarEnColaRegistroGps`) ya venció su timeout mientras tanto — si
+ * `guardarVisitaPendiente`/`eliminarVisitaPendiente` tardaban lo suficiente como para que la cola
+ * avanzara (generación++) y una operación MÁS NUEVA ya hubiera confirmado/borrado la MISMA visita,
+ * este drenado, al despertar tarde, podía reinsertar (`guardarVisitaPendiente`) una fila que la
+ * operación nueva YA había borrado transaccionalmente (`encolarEventoYLimpiarVisita`) — una visita
+ * fantasma que el próximo sembrado (`combinarConVisitasPendientes`) reabriría, duplicando una
+ * pasada de evidencia ya emitida. `miGeneracion` se captura ANTES de empezar (en
+ * `ejecutarEnColaRegistroGps`, el turno que le toca a esta operación) y se revisa después de CADA
+ * `await` — si ya quedó vieja, se corta sin seguir mutando `reintentosVisitaPendiente`/SQLite.
+ */
+async function drenarReintentosVisitaPendiente(
+  db: SQLite.SQLiteDatabase,
+  miGeneracion: number,
+): Promise<void> {
   if (reintentosVisitaPendiente.size === 0) return;
   for (const [clave, reintento] of Array.from(reintentosVisitaPendiente.entries())) {
+    if (!generacionVigente(miGeneracion)) return;
     try {
       if (reintento.tipo === 'guardar') {
         await guardarVisitaPendiente(db, reintento.visita);
       } else {
         await eliminarVisitaPendiente(db, reintento.clave);
       }
+      // FIX POST-REVISIÓN (hallazgo 7): re-chequear INMEDIATAMENTE después del `await` — si la
+      // cola avanzó mientras esta escritura estaba en vuelo, no tocar `reintentosVisitaPendiente`
+      // (la operación nueva, en su propia generación, es la única fuente de verdad a partir de
+      // acá).
+      if (!generacionVigente(miGeneracion)) return;
       reintentosVisitaPendiente.delete(clave);
     } catch (error) {
+      if (!generacionVigente(miGeneracion)) return;
       Sentry.captureException(error, {
         tags: { contexto: 'gps-cola', paso: 'reintento-visita-pendiente' },
         extra: { clave },
@@ -317,21 +350,45 @@ function ejecutarEnColaRegistroGps<T>(
 
   // B7: el techo de tiempo arranca cuando la operación EMPIEZA (dentro del `then`), no cuando
   // se encola — ver el comentario de `TIMEOUT_REGISTRO_GPS_MS`. FIX POST-REVISIÓN (punto 6, gap
-  // "el drenado de reintentos queda fuera de conTimeout"): AMBOS drenados (visitas pendientes Y,
-  // desde el rediseño, anuncios de llegada pendientes) corren AHORA dentro del MISMO
-  // `conTimeout` que `operacion()` — un solo presupuesto de tiempo para "ponerse al día antes de
-  // este tick + procesar este tick", en vez de un drenado sin techo seguido de uno con techo.
+  // "el drenado de reintentos queda fuera de conTimeout"): el drenado de VISITAS PENDIENTES sigue
+  // corriendo DENTRO del mismo `conTimeout` que `operacion()` — es housekeeping de la escritura
+  // crítica (`visitas_pendientes`), con el mismo presupuesto de tiempo.
+  //
+  // FIX POST-REVISIÓN (hallazgo 8, code review — "el reintento de notificaciones bloquea
+  // gps_point"): el reintento de ANUNCIOS de llegada (`reintentarAnunciosLlegadaPendientes`) YA
+  // NO corre acá adentro — antes corría ANTES de `operacion()`, dentro del MISMO
+  // `TIMEOUT_REGISTRO_GPS_MS`, así que un puente de notificaciones colgado (`expo-notifications`
+  // sin responder) consumía el presupuesto de tiempo de la escritura de `gps_point`/evidencia,
+  // que no tiene nada que ver con notificaciones. Ahora corre DESPUÉS de que `operacion()`
+  // resuelve (evidencia ya persistida) y FUERA de la cadena que `resultado` propaga: un
+  // `conTimeout` propio (`TIMEOUT_REINTENTO_ANUNCIOS_MS`), fire-and-forget con su propio
+  // `.catch` — nunca bloquea ni hace fallar el tick siguiente. Los reclamos/notificaciones de
+  // anuncio usan `INSERT OR IGNORE`/`identifier` fijo (`db/outbox.ts`), así que desacoplarlo de
+  // la cola no reabre ninguna ventana de duplicado.
+  const miGeneracionAlEmpezar = generacionColaRegistroGps;
   const resultado = colaRegistroGps
     .then(() =>
       conTimeout(
         (async () => {
-          await drenarReintentosVisitaPendiente(db);
-          await reintentarAnunciosLlegadaPendientes(db, puntosControl);
+          await drenarReintentosVisitaPendiente(db, miGeneracionAlEmpezar);
           return operacion();
         })(),
         TIMEOUT_REGISTRO_GPS_MS,
       ),
     )
+    .then((valor) => {
+      void conTimeout(
+        reintentarAnunciosLlegadaPendientes(db, sesionId, puntosControl),
+        TIMEOUT_REINTENTO_ANUNCIOS_MS,
+      ).catch((error: unknown) => {
+        console.error('[QUIVO][gps] no se pudo reintentar los anuncios de llegada pendientes', error);
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-cola', paso: 'reintento-anuncios-llegada' },
+          extra: { sesionId },
+        });
+      });
+      return valor;
+    })
     .catch((error: unknown) => {
       if (error instanceof TimeoutRegistroGpsError) {
         console.error('[QUIVO][gps] una operación de la cola de registro venció su techo de tiempo', error);
@@ -835,6 +892,19 @@ async function asegurarSemillaCumplimientos(
  * duplicar el armado del payload — es la MISMA forma de payload que construye
  * `construirEventosDeUbicacion` para el confirm normal (`location-task.ts`), solo que acá no
  * hay una `location` de la que leer `sesionId`/`deviceId`, así que se reciben aparte.
+ *
+ * FIX POST-REVISIÓN (hallazgo 7, code review — "sin chequeo de generación, una operación vencida
+ * puede duplicar evidencia"): antes, este loop no revisaba la generación de la cola en NINGÚN
+ * punto — el único chequeo vivía en el CALLER (`confirmarVisitasVencidasEnCola`), una sola vez,
+ * DESPUÉS de que la función entera terminara. Si esta operación vencía su timeout a mitad del
+ * `for` (varias visitas vencidas en el mismo heartbeat) y la cola avanzaba mientras tanto, el
+ * resto de las iteraciones seguía escribiendo `cumplimiento_punto_control` — potencialmente para
+ * la MISMA visita que una operación más nueva, en la generación siguiente, ya estaba confirmando
+ * por su cuenta — dos `encolarEventoYLimpiarVisita` para la misma pasada (mitigado por el
+ * `eventId` determinístico, pero no evitado: el segundo intento igual corre contra
+ * `visitas_pendientes` ya mutado por el primero). `miGeneracion` se recibe del caller (capturada
+ * ahí ANTES de este loop) y se revisa después de CADA `await`, igual criterio que
+ * `registrarPuntoGpsInterno`.
  */
 export async function aplicarConfirmacionesForzadas(
   db: SQLite.SQLiteDatabase,
@@ -843,8 +913,10 @@ export async function aplicarConfirmacionesForzadas(
   emitir: CumplimientoAEmitir[],
   transiciones: ReadonlyMap<string, EstadoPuntoControl>,
   estados: Map<string, EstadoPuntoControl>,
+  miGeneracion: number = generacionColaRegistroGps,
 ): Promise<void> {
   for (const c of emitir) {
+    if (!generacionVigente(miGeneracion)) return;
     await encolarEventoYLimpiarVisita(
       db,
       {
@@ -871,6 +943,10 @@ export async function aplicarConfirmacionesForzadas(
       },
       c.clave,
     );
+    // FIX POST-REVISIÓN (hallazgo 7): re-chequear INMEDIATAMENTE después del `await` de arriba,
+    // ANTES de tocar `estados` — una operación vencida que despierta tarde no debe pisar el
+    // estado que la operación nueva ya construyó.
+    if (!generacionVigente(miGeneracion)) return;
     const estado = transiciones.get(c.clave);
     if (estado) estados.set(c.clave, estado);
   }
@@ -931,7 +1007,7 @@ export function confirmarVisitasVencidasEnCola(
       const estadosAEvaluar = filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados;
       const { emitir, transiciones } = confirmarVisitasVencidas(estadosAEvaluar, ahoraMs, umbralMs);
       if (emitir.length > 0) {
-        await aplicarConfirmacionesForzadas(db, deviceId, sesionId, emitir, transiciones, estados);
+        await aplicarConfirmacionesForzadas(db, deviceId, sesionId, emitir, transiciones, estados, miGeneracion);
         if (!generacionVigente(miGeneracion)) return { emitir, anunciosLlegada: [] };
       }
 

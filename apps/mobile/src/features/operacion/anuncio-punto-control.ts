@@ -6,12 +6,14 @@ import type * as SQLite from 'expo-sqlite';
 import { RADIO_CONFIRMACION_M, type PuntoControlPaquete } from '@quivo/shared';
 import type { DeteccionPuntoControl } from '../../gps/geofence';
 import {
+  claveAnuncio,
   marcarAnuncioProgramado,
+  marcarAnuncioProgramando,
   obtenerAnunciosPendientesDeProgramar,
   reclamarIntencionAnuncio,
 } from '../../db/outbox';
 import { formatearDistanciaVoz } from './format-distancia';
-import type { MotivoAnuncio } from './decidir-anuncio';
+import { esMotivoAnuncio, type MotivoAnuncio } from './decidir-anuncio';
 
 /**
  * FIX POST-REVISIÓN (Codex `verify-fix`, punto 4, "sin setNotificationHandler no se muestra ni
@@ -288,10 +290,18 @@ function textoAnuncioLlegada(motivo: MotivoAnuncio): string {
 }
 
 /**
- * Programa la notificación de "llegaste" (best-effort) y, si sale bien, marca la intención
- * (`marcarAnuncioProgramado`) como `'programado'`. Compartida por `anunciarLlegadaPuntoControl`
+ * Programa la notificación de "llegaste" (best-effort). Compartida por `anunciarLlegadaPuntoControl`
  * (primer intento, tras reclamar la intención) y `reintentarAnunciosLlegadaPendientes` (reintento
  * de una intención YA reclamada) — ninguna de las dos vuelve a reclamar acá.
+ *
+ * Devuelve `true` solo si la vibración+notificación de verdad se dispararon (`scheduleNotificationAsync`
+ * resolvió) — FIX POST-REVISIÓN (hallazgo 3, "el chime suena aunque el reclamo se perdió"): los
+ * callers en React (`use-gps-operativo.ts`) usan este valor para decidir si corresponde el sonido
+ * custom de foreground (`gps.ultimoAnuncioLlegada`) — nunca lo asumen de antemano. Que
+ * `marcarAnuncioProgramado` (el bookkeeping DESPUÉS de programar) falle no cambia este resultado:
+ * la vibración/notificación YA ocurrieron, es solo la fila de SQLite la que puede quedar
+ * `'programando'` un poco más (el próximo reintento la retoma sin re-disparar nada visible al
+ * chofer, ver `identifier` fijo más abajo).
  */
 async function programarNotificacionLlegada(
   db: SQLite.SQLiteDatabase,
@@ -299,7 +309,7 @@ async function programarNotificacionLlegada(
   puntoControlId: string,
   motivo: MotivoAnuncio,
   opciones: AnuncioPuntoControlOpciones,
-): Promise<void> {
+): Promise<boolean> {
   const orden = ordenDe(puntoControlId, opciones.puntosControl);
   const identificador = orden !== undefined ? `Punto de control ${orden}` : 'Punto de control';
 
@@ -330,24 +340,74 @@ async function programarNotificacionLlegada(
       // canal (`ChannelAwareTriggerInput`) — sin esto cae al canal default, silencioso.
       trigger: { channelId: CANAL_ANUNCIO_ANDROID },
     });
-    try {
-      await marcarAnuncioProgramado(db, clave);
-    } catch (error) {
-      Sentry.captureException(error, {
-        tags: { contexto: 'anuncio-punto-control', paso: 'marcar-anuncio-programado' },
-      });
-      // No marcado: queda 'pendiente' pese a que SÍ se programó — un reintento futuro
-      // reprograma con el MISMO `identifier`, así que reemplaza en vez de duplicar. Peor caso:
-      // una vibración de más, nunca una notificación duplicada visible.
-    }
   } catch (error) {
     Sentry.captureException(error, {
       tags: { contexto: 'anuncio-punto-control', paso: 'notificacion-llegada' },
     });
-    // Sin programar: la fila queda 'pendiente' (reclamada en `anunciarLlegadaPuntoControl`) —
-    // el próximo tick de la cola la reintenta vía `reintentarAnunciosLlegadaPendientes`.
+    // Sin programar: la fila queda 'programando' (marcada antes de este intento, ver
+    // `intentarProgramarNotificacion`) — el próximo tick de la cola la reintenta vía
+    // `reintentarAnunciosLlegadaPendientes`, una vez que el intento quede viejo.
+    return false;
   }
+
+  try {
+    await marcarAnuncioProgramado(db, clave);
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'anuncio-punto-control', paso: 'marcar-anuncio-programado' },
+    });
+    // No marcado: queda 'programando' pese a que SÍ se programó — un reintento futuro (una vez
+    // vieja) reprograma con el MISMO `identifier`, así que reemplaza en vez de duplicar. La
+    // vibración/notificación YA salieron — eso es lo que importa para el valor de retorno.
+  }
+  return true;
 }
+
+/**
+ * FIX POST-REVISIÓN (hallazgo 1, code review — "'pendiente' mezcla reclamado-programando con
+ * reclamado-falló"): marca la fila como `'programando'` (`marcarAnuncioProgramando`, `db/outbox.ts`)
+ * INMEDIATAMENTE ANTES de intentar programar — best-effort: si esta marca falla, se intenta
+ * programar igual (peor caso: una ventana un poco más larga en la que un reintento concurrente
+ * podría competir, el mismo riesgo que ya existía sin este mecanismo — nunca se pierde el
+ * anuncio por esto). Punto único que comparten el primer intento
+ * (`anunciarLlegadaPuntoControl`) y el reintento (`reintentarAnunciosLlegadaPendientes`).
+ */
+async function intentarProgramarNotificacion(
+  db: SQLite.SQLiteDatabase,
+  clave: string,
+  puntoControlId: string,
+  motivo: MotivoAnuncio,
+  opciones: AnuncioPuntoControlOpciones,
+): Promise<boolean> {
+  try {
+    await marcarAnuncioProgramando(db, clave);
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'anuncio-punto-control', paso: 'marcar-anuncio-programando' },
+    });
+  }
+  return programarNotificacionLlegada(db, clave, puntoControlId, motivo, opciones);
+}
+
+/**
+ * FIX POST-REVISIÓN (hallazgo 6, code review — "si el reclamo mismo falla, fail-open duplica bajo
+ * contención cruzada"): reclamos que fallaron ANTES de llegar a persistir nada en
+ * `anuncios_punto_control` — sin fila que `obtenerAnunciosPendientesDeProgramar` pueda ofrecer, la
+ * única forma de reintentarlos es este mapa en memoria, drenado por
+ * `reintentarAnunciosLlegadaPendientes` en el próximo turno de la cola. Vive a nivel de módulo,
+ * igual criterio que `aproximacionesAnunciadas` — el proceso headless no tiene otro lugar donde
+ * guardarlo, y perderlo si el proceso muere es aceptable (el próximo tick que decida esta MISMA
+ * visita la vuelve a intentar desde cero vía `evaluarAnunciosDeFixes`/`evaluarAnuncioDeHeartbeat`
+ * solo si esta visita todavía no quedó marcada `anuncioHecho`, que es exactamente el caso: la
+ * decisión y la ejecución están desacopladas — ver el rediseño de `decidir-anuncio.ts`).
+ */
+interface ReclamoFallido {
+  puntoControlId: string;
+  pasada: number;
+  motivo: MotivoAnuncio;
+  opciones: AnuncioPuntoControlOpciones;
+}
+const reclamosFallidos = new Map<string, ReclamoFallido>();
 
 /**
  * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
@@ -358,6 +418,15 @@ async function programarNotificacionLlegada(
  * `reclamarIntencionAnuncio`, `db/outbox.ts`) y la ejecuta. `reclamado: false` significa que
  * otra llamada (otro tick, u otro proceso) ya está a cargo de esta identidad exacta
  * `{sesionId, puntoControlId, pasada}` — no hace falta hacer nada más.
+ *
+ * Devuelve `true` solo si ESTA llamada disparó de verdad la vibración/notificación — ver el
+ * docblock de `programarNotificacionLlegada` (hallazgo 3).
+ *
+ * FIX POST-REVISIÓN (hallazgo 6): si el reclamo mismo falla (SQLite ocupada), ahora falla CERRADO
+ * — antes se asumía `reclamado: true` (fail-open) y se programaba igual, arriesgando un duplicado
+ * REAL bajo contención cruzada (headless y foreground reclamando la MISMA visita a la vez, cada
+ * uno viendo su propio error transitorio). El reclamo se reintenta en el próximo tick, vía
+ * `reclamosFallidos` (arriba) + `reintentarAnunciosLlegadaPendientes`.
  */
 export async function anunciarLlegadaPuntoControl(
   db: SQLite.SQLiteDatabase,
@@ -365,41 +434,51 @@ export async function anunciarLlegadaPuntoControl(
   pasada: number,
   motivo: MotivoAnuncio,
   opciones: AnuncioPuntoControlOpciones,
-): Promise<void> {
+): Promise<boolean> {
   let reclamado = false;
-  let clave = `${opciones.sesionId}:${puntoControlId}:${pasada}`;
+  let clave = claveAnuncio(opciones.sesionId, puntoControlId, pasada);
   try {
     const resultado = await reclamarIntencionAnuncio(db, opciones.sesionId, puntoControlId, pasada, motivo);
     reclamado = resultado.reclamado;
     clave = resultado.clave;
+    reclamosFallidos.delete(clave); // reclamó bien esta vez — cualquier reintento viejo sobra
   } catch (error) {
     Sentry.captureException(error, {
       tags: { contexto: 'anuncio-punto-control', paso: 'reclamar-intencion-llegada' },
     });
-    // Fail-open: si la reclamación misma falla (SQLite ocupada), preferimos arriesgar un
-    // duplicado (best-effort, mismo criterio que el resto del módulo) a perder el único aviso
-    // que importa — se sigue como si se hubiera reclamado.
-    reclamado = true;
+    reclamosFallidos.set(clave, { puntoControlId, pasada, motivo, opciones });
+    return false;
   }
-  if (!reclamado) return;
+  if (!reclamado) return false;
 
-  await programarNotificacionLlegada(db, clave, puntoControlId, motivo, opciones);
+  return intentarProgramarNotificacion(db, clave, puntoControlId, motivo, opciones);
 }
 
 /**
- * Reintenta las intenciones que quedaron `'pendiente'` (reclamadas, nunca programadas con
- * éxito) — llamada desde el único punto de llamada, DENTRO de `conTimeout`
- * (`gps/headless-task.ts`), antes de procesar el siguiente fix/heartbeat (mismo patrón que
- * `drenarReintentosVisitaPendiente`). No vuelve a reclamar nada — la intención YA es de esta
- * corrida, solo falta programar la notificación.
+ * Reintenta las intenciones pendientes de programar — llamada desde el único punto de llamada,
+ * DENTRO de `conTimeout` (`gps/headless-task.ts`), en cada turno de la cola (mismo patrón que
+ * `drenarReintentosVisitaPendiente`). Dos fuentes, en orden:
+ * 1. `reclamosFallidos` (hallazgo 6): reclamos que fallaron ANTES de persistir nada — se
+ *    reintenta el reclamo COMPLETO (`anunciarLlegadaPuntoControl`), filtrado a `sesionId` para no
+ *    reintentar reclamos de una sesión que ya no es la activa.
+ * 2. `obtenerAnunciosPendientesDeProgramar` (hallazgo 1/5): intenciones YA reclamadas
+ *    (`'pendiente'`, o `'programando'` con un intento viejo) — no vuelve a reclamar nada acá, solo
+ *    falta programar la notificación.
  */
 export async function reintentarAnunciosLlegadaPendientes(
   db: SQLite.SQLiteDatabase,
+  sesionId: string,
   puntosControl: PuntoControlPaquete[],
 ): Promise<void> {
+  for (const [clave, reclamo] of Array.from(reclamosFallidos.entries())) {
+    if (reclamo.opciones.sesionId !== sesionId) continue;
+    reclamosFallidos.delete(clave);
+    await anunciarLlegadaPuntoControl(db, reclamo.puntoControlId, reclamo.pasada, reclamo.motivo, reclamo.opciones);
+  }
+
   let pendientes: Awaited<ReturnType<typeof obtenerAnunciosPendientesDeProgramar>> = [];
   try {
-    pendientes = await obtenerAnunciosPendientesDeProgramar(db);
+    pendientes = await obtenerAnunciosPendientesDeProgramar(db, sesionId);
   } catch (error) {
     Sentry.captureException(error, {
       tags: { contexto: 'anuncio-punto-control', paso: 'listar-anuncios-pendientes' },
@@ -407,11 +486,25 @@ export async function reintentarAnunciosLlegadaPendientes(
     return;
   }
   for (const pendiente of pendientes) {
-    await programarNotificacionLlegada(
+    // FIX POST-REVISIÓN (hallazgo 10, cleanup — "validar motivo antes de textoAnuncioLlegada"):
+    // `pendiente.motivo` viene de una columna `TEXT` sin restricción (`outbox-ddl.ts`) — antes se
+    // casteaba a ciegas. Una fila con un `motivo` irreconocible (legado, corrupción, o una
+    // versión futura de la app con un motivo nuevo) se reporta y se salta en vez de programar una
+    // notificación con un texto potencialmente `undefined` (`textoAnuncioLlegada` es un `switch`
+    // exhaustivo sobre `MotivoAnuncio`, sin `default` — TypeScript no puede validar en runtime lo
+    // que ya vino casteado).
+    if (!esMotivoAnuncio(pendiente.motivo)) {
+      Sentry.captureException(new Error(`motivo de anuncio irreconocible: ${pendiente.motivo}`), {
+        tags: { contexto: 'anuncio-punto-control', paso: 'reintentar-motivo-invalido' },
+        extra: { clave: pendiente.clave },
+      });
+      continue;
+    }
+    await intentarProgramarNotificacion(
       db,
       pendiente.clave,
       pendiente.puntoControlId,
-      pendiente.motivo as MotivoAnuncio,
+      pendiente.motivo,
       { sesionId: pendiente.sesionId, puntosControl },
     );
   }

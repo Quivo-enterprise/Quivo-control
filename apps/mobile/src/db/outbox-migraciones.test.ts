@@ -41,11 +41,21 @@ describe('MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL — contra SQLite real (node:sq
       .sort();
   }
 
-  it('agrega las 5 columnas nuevas a la tabla VIEJA (2 columnas) sin lanzar', () => {
+  it('agrega las 7 columnas nuevas a la tabla VIEJA (2 columnas) sin lanzar', () => {
     db = abrirConTablaVieja();
     expect(() => correrMigraciones(db!)).not.toThrow();
     expect(columnas(db)).toEqual(
-      ['clave', 'estado', 'motivo', 'pasada', 'punto_control_id', 'sesion_id', 'ts'].sort(),
+      [
+        'clave',
+        'estado',
+        'intentos',
+        'motivo',
+        'pasada',
+        'punto_control_id',
+        'sesion_id',
+        'ts',
+        'ultimo_intento_ts',
+      ].sort(),
     );
   });
 
@@ -54,11 +64,21 @@ describe('MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL — contra SQLite real (node:sq
     correrMigraciones(db);
     expect(() => correrMigraciones(db!)).not.toThrow();
     expect(columnas(db)).toEqual(
-      ['clave', 'estado', 'motivo', 'pasada', 'punto_control_id', 'sesion_id', 'ts'].sort(),
+      [
+        'clave',
+        'estado',
+        'intentos',
+        'motivo',
+        'pasada',
+        'punto_control_id',
+        'sesion_id',
+        'ts',
+        'ultimo_intento_ts',
+      ].sort(),
     );
   });
 
-  it('sobre una tabla NUEVA (ya creada con las 7 columnas del DDL) también es un no-op seguro', () => {
+  it('sobre una tabla NUEVA (ya creada con las 9 columnas del DDL) también es un no-op seguro', () => {
     db = new DatabaseSync(':memory:');
     db.exec(`
       CREATE TABLE anuncios_punto_control (
@@ -68,12 +88,24 @@ describe('MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL — contra SQLite real (node:sq
         motivo TEXT,
         sesion_id TEXT,
         punto_control_id TEXT,
-        pasada INTEGER
+        pasada INTEGER,
+        intentos INTEGER NOT NULL DEFAULT 0,
+        ultimo_intento_ts TEXT
       )
     `);
     expect(() => correrMigraciones(db!)).not.toThrow();
     expect(columnas(db)).toEqual(
-      ['clave', 'estado', 'motivo', 'pasada', 'punto_control_id', 'sesion_id', 'ts'].sort(),
+      [
+        'clave',
+        'estado',
+        'intentos',
+        'motivo',
+        'pasada',
+        'punto_control_id',
+        'sesion_id',
+        'ts',
+        'ultimo_intento_ts',
+      ].sort(),
     );
   });
 
@@ -91,6 +123,8 @@ describe('MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL — contra SQLite real (node:sq
     expect(fila.sesion_id).toBeNull();
     expect(fila.punto_control_id).toBeNull();
     expect(fila.pasada).toBeNull();
+    expect(fila.intentos).toBe(0);
+    expect(fila.ultimo_intento_ts).toBeNull();
   });
 
   it('reclamar una intención (INSERT OR IGNORE) tras migrar deja la fila en estado "pendiente" con identidad completa', () => {

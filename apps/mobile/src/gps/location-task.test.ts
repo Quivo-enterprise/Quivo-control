@@ -642,6 +642,20 @@ describe('clavesCumplimientoDesdePayloads', () => {
     ]);
   });
 
+  /** FIX POST-REVISIÓN (hallazgo 2, code review — EL MÁS IMPORTANTE del lote de fixes: "la
+   * evidencia re-sembrada dispara fallback-salida"). Invariante que debe sostenerse SIEMPRE: la
+   * evidencia nunca dispara un anuncio (ver el rediseño de `decidir-anuncio.ts`). Antes de este
+   * fix, una clave sembrada acá quedaba `dentro: true` pero SIN `anuncioHecho` — el próximo fix
+   * que la re-armaba (`visita: 'saliendo'`) decidía `'fallback-salida'` para un punto que en
+   * realidad ya había pasado hace rato, sin que el chofer estuviera ahí. */
+  it('siembra con `anuncioHecho: true` — la evidencia re-sembrada NUNCA debe volver a disparar un anuncio', () => {
+    const estados = clavesCumplimientoDesdePayloads([
+      { ts: '2026-08-14T11:00:00.000Z', payload: { sesionId: 'sesion-1', puntoControlId: 'pc-1' } },
+    ]);
+    const estado = estados.get(claveCumplimiento('sesion-1', 'pc-1'));
+    expect(estado?.anuncioHecho).toBe(true);
+  });
+
   it('ignora eventos sin sesionId o sin puntoControlId en vez de fabricar claves basura', () => {
     const estados = clavesCumplimientoDesdePayloads([
       { ts: '2026-08-14T11:00:00.000Z', payload: { sesionId: 'sesion-1' } },

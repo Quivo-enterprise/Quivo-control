@@ -95,14 +95,18 @@ describe('OUTBOX_DDL_SQL — DDL contra SQLite real (node:sqlite)', () => {
     );
   });
 
-  it('crea los índices esperados (outbox_estado_idx, visitas_pendientes_sesion_idx)', () => {
+  it('crea los índices esperados (outbox_estado_idx, anuncios_punto_control_estado_idx, visitas_pendientes_sesion_idx)', () => {
     db = abrirEnMemoria();
     const indices = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name")
       .all()
       .map((fila) => (fila as { name: string }).name);
     expect(indices).toEqual(
-      expect.arrayContaining(['outbox_estado_idx', 'visitas_pendientes_sesion_idx']),
+      expect.arrayContaining([
+        'outbox_estado_idx',
+        'anuncios_punto_control_estado_idx',
+        'visitas_pendientes_sesion_idx',
+      ]),
     );
   });
 

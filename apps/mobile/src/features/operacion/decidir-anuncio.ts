@@ -28,6 +28,24 @@ import { claveCumplimiento, type DeteccionPuntoControl, type EstadoPuntoControl 
 /** Motivo por el que corresponde anunciarle "llegaste" al chofer — nunca por evidencia. */
 export type MotivoAnuncio = 'proximidad' | 'fallback-tiempo' | 'fallback-salida';
 
+/** Lista runtime de `MotivoAnuncio` — única fuente de verdad para `esMotivoAnuncio`, así que un
+ * motivo nuevo agregado al tipo de arriba sin actualizar acá se detecta por inspección directa
+ * (son 3 literales, no vale la pena un mapeo generado). */
+const MOTIVOS_ANUNCIO: readonly MotivoAnuncio[] = ['proximidad', 'fallback-tiempo', 'fallback-salida'];
+
+/**
+ * FIX POST-REVISIÓN (hallazgo 10, cleanup — "validar `motivo` antes de `textoAnuncioLlegada`"):
+ * guarda de tipo runtime para `motivo` — `anuncio-punto-control.ts` lee `motivo` como `TEXT` sin
+ * restricción desde `anuncios_punto_control` (`reintentarAnunciosLlegadaPendientes`) y antes lo
+ * casteaba a ciegas (`as MotivoAnuncio`) antes de pasarlo a `textoAnuncioLlegada` — un valor
+ * corrupto o de una versión futura de la app (columna `TEXT` sin `CHECK`, ver `outbox-ddl.ts`)
+ * caía en el `switch` exhaustivo de `textoAnuncioLlegada` sin ningún caso que lo cubra, lo que
+ * TypeScript no puede pescar en runtime (el cast ya mintió sobre el tipo).
+ */
+export function esMotivoAnuncio(valor: string): valor is MotivoAnuncio {
+  return (MOTIVOS_ANUNCIO as readonly string[]).includes(valor);
+}
+
 /** Antigüedad máxima, en ms, que una visita activa puede pasar sin haber anunciado antes de que
  * el fallback dispare igual — mismo valor (90 s) y mismo escenario físico (vehículo detenido)
  * que documentaba `UMBRAL_ANUNCIO_PROXIMIDAD_MS` en `geofence.ts` antes de este rediseño; vive
@@ -234,13 +252,26 @@ export function evaluarAnuncioDeHeartbeat(
       ahoraMs,
       umbralMs,
     );
-    if (!motivo) continue; // todavía no vence el fallback de tiempo
 
+    // FIX POST-REVISIÓN (hallazgo 4, code review — "con motivo null, desdeMs no se persiste, un
+    // vehículo detenido que solo manda heartbeats nunca dispara fallback-tiempo"): antes, este
+    // `continue` saltaba TODO — incluida la semilla de `desdeMs` que `decidirAnuncio` ya calculó
+    // (`estadoAnuncio.desdeMs ?? ahoraMs`, ver su docblock). Con `estado.anuncioDesdeMs` siempre
+    // `undefined` para una visita reconstruida sin ese dato (p. ej. `combinarConVisitasPendientes`
+    // no lo setea — ver su docblock), CADA heartbeat volvía a sembrar `desdeMs` con el `ahoraMs`
+    // de ESE heartbeat, así que la resta `ahoraMs - desdeMs` del PRÓXIMO heartbeat nunca acumulaba
+    // más que el intervalo entre dos heartbeats — el fallback de 90 s jamás llegaba a vencer para
+    // un vehículo detenido que solo manda heartbeats (nunca un fix real que sí persiste la
+    // transición, ver `evaluarAnunciosDeFixes`). Ahora la transición se persiste SIEMPRE (motivo
+    // dispare o no) — la semilla de `desdeMs` sobrevive de un heartbeat al siguiente; solo la
+    // entrada a `anuncios` (lo que de verdad dispara la ejecución) sigue gateada por `motivo`.
     transiciones.set(clave, {
       ...estado,
       anuncioHecho: nuevoEstadoAnuncio.anunciado,
       anuncioDesdeMs: nuevoEstadoAnuncio.desdeMs,
     });
+    if (!motivo) continue; // todavía no vence el fallback de tiempo
+
     anuncios.push({
       motivo,
       puntoControlId: estado.puntoControlId,

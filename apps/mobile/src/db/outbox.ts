@@ -93,18 +93,58 @@ async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLit
   // escritura caliente (`encolarEvento`, hasta cientos de llamadas por jornada).
   await db.execAsync(OUTBOX_DDL_SQL);
   // REDISEÑO (punto 3 del brief — "intención durable"): migra `anuncios_punto_control` para las
-  // instalaciones que ya tenían la tabla vieja de 2 columnas — ver el docblock de
-  // `outbox-migraciones.ts`. Cada `ALTER TABLE ADD COLUMN` corre una vez por proceso (misma
-  // cadencia que el DDL de arriba) y es idempotente: en una instalación NUEVA (que ya recibió
-  // las columnas del DDL de arriba) todas fallan con "duplicate column name" y se tragan.
-  for (const migracion of MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL) {
-    try {
-      await db.execAsync(migracion);
-    } catch (error) {
-      if (!esErrorColumnaDuplicada(error)) throw error;
-    }
-  }
+  // instalaciones que ya tenían la tabla vieja — ver el docblock de `outbox-migraciones.ts`.
+  await migrarAnunciosPuntoControl(db);
   return db;
+}
+
+/** Nombre de la columna que agrega un `ALTER TABLE ... ADD COLUMN <nombre> ...` — usado para
+ * consultarla contra `PRAGMA table_info` ANTES de correr el `ALTER`, en vez de depender
+ * únicamente del mensaje de error de SQLite (ver `migrarAnunciosPuntoControl`). `null` si el SQL
+ * no matchea el patrón esperado (no debería pasar con las migraciones de este módulo). */
+function nombreColumnaDeMigracion(sql: string): string | null {
+  const coincidencia = /ADD COLUMN\s+(\w+)/i.exec(sql);
+  return coincidencia ? coincidencia[1]! : null;
+}
+
+/**
+ * FIX POST-REVISIÓN (hallazgo 9, code review — "una migración rota tumba TODO `abrirOutbox`"):
+ * antes, cualquier error de `ALTER TABLE` que NO fuera "duplicate column name" (tabla bloqueada,
+ * SQL roto en una versión de SQLite distinta, disco lleno) se re-lanzaba y tumbaba
+ * `abrirOutboxNueva` entera — perdiendo el outbox COMPLETO (evidencia legal RF-67..73, no solo
+ * los anuncios) por un problema acotado a una tabla secundaria. Ahora:
+ * - Se consulta `PRAGMA table_info(anuncios_punto_control)` PRIMERO — más robusto que confiar en
+ *   el `message` de una excepción para saber si la columna ya existe — y solo se corre el
+ *   `ALTER` de las columnas que de verdad faltan.
+ * - CUALQUIER error de esta migración (incluida una carrera rarísima donde el `ALTER` falla con
+ *   "duplicate column name" pese al chequeo previo) se reporta a Sentry y se traga: esta función
+ *   NUNCA relanza, así que jamás puede tumbar `abrirOutbox`. Perder la migración de anuncios es
+ *   aceptable (el peor caso es que `reclamarIntencionAnuncio`/`marcarAnuncioProgramando` fallen
+ *   después, ya capturados en sus propios `try/catch` — ver `anuncio-punto-control.ts`); perder
+ *   TODO el outbox no lo es.
+ */
+async function migrarAnunciosPuntoControl(db: SQLite.SQLiteDatabase): Promise<void> {
+  try {
+    const columnasExistentes = new Set(
+      (await db.getAllAsync<{ name: string }>('PRAGMA table_info(anuncios_punto_control)')).map(
+        (fila) => fila.name,
+      ),
+    );
+    for (const migracion of MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL) {
+      const columna = nombreColumnaDeMigracion(migracion);
+      if (columna && columnasExistentes.has(columna)) continue;
+      try {
+        await db.execAsync(migracion);
+      } catch (error) {
+        if (!esErrorColumnaDuplicada(error)) throw error;
+      }
+    }
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'outbox', paso: 'migrar-anuncios-punto-control' },
+    });
+    // Nunca relanza — ver el docblock de la función.
+  }
 }
 
 /**
@@ -331,16 +371,28 @@ export async function encolarEvento(
 }
 
 /**
+ * FIX POST-REVISIÓN (hallazgo 10, cleanup — "unificar `claveAnuncio()` en un solo helper"):
+ * fórmula ÚNICA de la clave PK de `anuncios_punto_control` — antes `db/outbox.ts` y
+ * `features/operacion/anuncio-punto-control.ts` construían el MISMO string
+ * (`${sesionId}:${puntoControlId}:${pasada}`) cada uno por su cuenta (este último la necesita
+ * como fallback ANTES de que `reclamarIntencionAnuncio` resuelva, y como clave de
+ * `reclamosFallidos` cuando el reclamo mismo falla) — un cambio de formato en uno sin el otro
+ * habría desincronizado silenciosamente la identidad reclamada de la que ejecuta.
+ */
+export function claveAnuncio(sesionId: string, puntoControlId: string, pasada: number): string {
+  return `${sesionId}:${puntoControlId}:${pasada}`;
+}
+
+/**
  * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
  * 2026-09-23, punto 3 del brief — "intención durable ANTES de programar"): reclama ATÓMICAMENTE
  * la INTENCIÓN de anunciar "llegaste" para una visita — `INSERT OR IGNORE` en estado
  * `'pendiente'`, ANTES de intentar `scheduleNotificationAsync` (`anunciarLlegadaPuntoControl`,
- * `features/operacion/anuncio-punto-control.ts`). `clave` (`${sesionId}:${puntoControlId}:
- * ${pasada}`) es la PK, así que dos decisiones concurrentes para la MISMA visita (dos ticks que
- * terminan decidiendo el mismo motivo, o un reintento superpuesto) solo dejan que UNA reclame —
- * la otra ve `reclamado: false` y no debe programar nada. Reemplaza el viejo
- * `registrarAnuncioSiNuevo` (que marcaba DESPUÉS de programar, sin identidad reclamada — punto 3
- * del hallazgo de Codex).
+ * `features/operacion/anuncio-punto-control.ts`). `clave` (`claveAnuncio`, arriba) es la PK, así
+ * que dos decisiones concurrentes para la MISMA visita (dos ticks que terminan decidiendo el
+ * mismo motivo, o un reintento superpuesto) solo dejan que UNA reclame — la otra ve
+ * `reclamado: false` y no debe programar nada. Reemplaza el viejo `registrarAnuncioSiNuevo` (que
+ * marcaba DESPUÉS de programar, sin identidad reclamada — punto 3 del hallazgo de Codex).
  */
 export async function reclamarIntencionAnuncio(
   db: SQLite.SQLiteDatabase,
@@ -349,7 +401,7 @@ export async function reclamarIntencionAnuncio(
   pasada: number,
   motivo: string,
 ): Promise<{ reclamado: boolean; clave: string }> {
-  const clave = `${sesionId}:${puntoControlId}:${pasada}`;
+  const clave = claveAnuncio(sesionId, puntoControlId, pasada);
   const result = await conReintentoSiHandleMuerto(db, (dbActiva) =>
     dbActiva.runAsync(
       `INSERT OR IGNORE INTO anuncios_punto_control
@@ -363,13 +415,36 @@ export async function reclamarIntencionAnuncio(
 
 /** Marca una intención YA reclamada (`reclamarIntencionAnuncio`) como `'programado'` — tras
  * `scheduleNotificationAsync` con éxito. Si esto falla (SQLite ocupada), la fila queda
- * `'pendiente'` y `obtenerAnunciosPendientesDeProgramar` la vuelve a ofrecer en el próximo tick
- * de la cola (ver `reintentarAnunciosLlegadaPendientes`, `anuncio-punto-control.ts`). */
+ * `'programando'` (ver `marcarAnuncioProgramando`) y `obtenerAnunciosPendientesDeProgramar` la
+ * vuelve a ofrecer una vez que ese intento quede viejo (ver `ANUNCIO_PROGRAMANDO_STALE_MS`). */
 export async function marcarAnuncioProgramado(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
   await conReintentoSiHandleMuerto(db, (dbActiva) =>
     dbActiva.runAsync("UPDATE anuncios_punto_control SET estado = 'programado' WHERE clave = ?", [
       clave,
     ]),
+  );
+}
+
+/**
+ * FIX POST-REVISIÓN (hallazgo 1, code review — "'pendiente' mezcla dos significados"): marca la
+ * fila como `'programando'`, con la marca de tiempo del intento y el contador de intentos
+ * incrementado — se llama justo ANTES de intentar `scheduleNotificationAsync`, tanto en el primer
+ * intento (`anunciarLlegadaPuntoControl`) como en cada reintento
+ * (`reintentarAnunciosLlegadaPendientes`, `anuncio-punto-control.ts`). Mientras la fila sigue
+ * `'programando'` con un intento FRESCO (menos de `ANUNCIO_PROGRAMANDO_STALE_MS`),
+ * `obtenerAnunciosPendientesDeProgramar` NO la vuelve a ofrecer — sin esto, un reintento
+ * concurrente (headless y foreground compitiendo por la MISMA visita, o dos ticks seguidos de la
+ * cola) podía reclamar un intento que YA estaba en vuelo y disparar la vibración/notificación una
+ * SEGUNDA vez para el mismo "llegaste".
+ */
+export async function marcarAnuncioProgramando(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync(
+      `UPDATE anuncios_punto_control
+         SET estado = 'programando', ultimo_intento_ts = ?, intentos = intentos + 1
+       WHERE clave = ?`,
+      [new Date().toISOString(), clave],
+    ),
   );
 }
 
@@ -381,13 +456,59 @@ export interface AnuncioLlegadaPendienteRow {
   motivo: string;
 }
 
+/** Ventana máxima que una fila `'programando'` puede quedar sin reintentarse antes de tratarse
+ * como abandonada (el intento anterior murió sin marcar ni `'programado'` ni volver a
+ * `'programando'`) — ver el docblock de `marcarAnuncioProgramando`. Holgada respecto del
+ * intervalo de fixes/heartbeats (10-60 s) para no competir con un intento genuinamente en curso. */
+export const ANUNCIO_PROGRAMANDO_STALE_MS = 2 * 60 * 1000;
+
+/** FIX POST-REVISIÓN (hallazgo 5, "el reintento no filtra por sesión/antigüedad/intentos"):
+ * antigüedad máxima (desde `reclamarIntencionAnuncio`, columna `ts`) de una fila que todavía vale
+ * la pena reintentar. Pasada esta ventana, `obtenerAnunciosPendientesDeProgramar` la PURGA en vez
+ * de seguir ofreciéndola — sin esto, una intención reclamada un día y nunca programada (proceso
+ * matado antes de programar, o un fallo persistente) se reintentaba PARA SIEMPRE, sesión tras
+ * sesión, mientras el dispositivo siguiera encendido. */
+export const ANUNCIO_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** FIX POST-REVISIÓN (hallazgo 5): techo de reintentos — una notificación que sigue fallando
+ * `ANUNCIO_MAX_INTENTOS` veces seguidas (canal roto, permiso revocado a mitad de turno) deja de
+ * ofrecerse: mejor un "llegaste" perdido después de varios intentos genuinos que un reintento sin
+ * fin que nunca va a tener éxito. */
+export const ANUNCIO_MAX_INTENTOS = 5;
+
 /** Intenciones reclamadas (`reclamarIntencionAnuncio`) cuya notificación NUNCA se programó con
- * éxito — el próximo tick de la cola las reintenta. Filas incompletas (legado de la tabla de 2
- * columnas previa al rediseño, migradas sin identidad reconstruible) se descartan en vez de
- * reventar: nunca fueron reclamadas por este mecanismo, no hay nada que reintentar. */
+ * éxito — el próximo tick de la cola las reintenta. Filtra por `sesionId` (hallazgo 5 — nunca
+ * reintenta anuncios de una sesión distinta a la que está corriendo AHORA) y purga, ANTES de
+ * listar, las filas vencidas por antigüedad (`ANUNCIO_TTL_MS`) o por intentos agotados
+ * (`ANUNCIO_MAX_INTENTOS`) sin importar la sesión — esa purga sí es global, para que el outbox no
+ * acumule filas de sesiones viejas para siempre. Una fila `'programando'` solo se ofrece de nuevo
+ * cuando su último intento quedó viejo (`ANUNCIO_PROGRAMANDO_STALE_MS`, hallazgo 1) — mientras
+ * sigue fresca, otro intento ya está (o podría estar) en vuelo. Filas incompletas (legado de la
+ * tabla de 2 columnas previa al rediseño, migradas sin identidad reconstruible) se descartan en
+ * vez de reventar: nunca fueron reclamadas por este mecanismo, no hay nada que reintentar. */
 export async function obtenerAnunciosPendientesDeProgramar(
   db: SQLite.SQLiteDatabase,
+  sesionId: string,
+  ahoraMs: number = Date.now(),
 ): Promise<AnuncioLlegadaPendienteRow[]> {
+  const vencidoIso = new Date(ahoraMs - ANUNCIO_TTL_MS).toISOString();
+  const staleIso = new Date(ahoraMs - ANUNCIO_PROGRAMANDO_STALE_MS).toISOString();
+
+  // Purga best-effort — un fallo acá no debe impedir listar lo que sigue siendo válido; el
+  // próximo tick vuelve a intentar la purga.
+  try {
+    await conReintentoSiHandleMuerto(db, (dbActiva) =>
+      dbActiva.runAsync('DELETE FROM anuncios_punto_control WHERE ts < ? OR intentos >= ?', [
+        vencidoIso,
+        ANUNCIO_MAX_INTENTOS,
+      ]),
+    );
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'outbox', paso: 'purgar-anuncios-vencidos' },
+    });
+  }
+
   const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
     dbActiva.getAllAsync<{
       clave: string;
@@ -396,7 +517,10 @@ export async function obtenerAnunciosPendientesDeProgramar(
       pasada: number | null;
       motivo: string | null;
     }>(
-      "SELECT clave, sesion_id, punto_control_id, pasada, motivo FROM anuncios_punto_control WHERE estado = 'pendiente'",
+      `SELECT clave, sesion_id, punto_control_id, pasada, motivo FROM anuncios_punto_control
+       WHERE sesion_id = ?
+         AND (estado = 'pendiente' OR (estado = 'programando' AND (ultimo_intento_ts IS NULL OR ultimo_intento_ts < ?)))`,
+      [sesionId, staleIso],
     ),
   );
   const resultado: AnuncioLlegadaPendienteRow[] = [];

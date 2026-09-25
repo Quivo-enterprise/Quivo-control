@@ -454,6 +454,19 @@ export function clavesCumplimientoDesdePayloads(
       // camino (eso no se persiste hasta confirmar). No hay nada pendiente que seguir.
       confirmado: true,
       ultimoFixMs: Number.isFinite(ultimoEmitidoMs) ? ultimoEmitidoMs : undefined,
+      // FIX POST-REVISIÓN (hallazgo 2, code review — "la evidencia re-sembrada dispara
+      // fallback-salida", EL MÁS IMPORTANTE del lote): sin esto, una clave sembrada acá quedaba
+      // `dentro: true` (A1, arriba) pero SIN `anuncioHecho` — `estadoAnuncioDe`
+      // (`decidir-anuncio.ts`) la lee como "todavía no anuncié nada para esta visita" pese a que
+      // la visita YA está confirmada/cerrada desde hace rato (es evidencia vieja, re-sembrada
+      // tras un reinicio del proceso). El próximo fix que la re-arma (`visita: 'saliendo'`)
+      // decidía entonces `'fallback-salida'` — un anuncio de "llegaste" FANTASMA disparado por
+      // evidencia pura, exactamente lo que el rediseño de `decidir-anuncio.ts` prometía que NUNCA
+      // podía pasar ("la evidencia nunca dispara un anuncio"). Toda clave que llega hasta acá
+      // viene de una pasada YA EMITIDA — por construcción, esa pasada real YA tuvo su oportunidad
+      // de anunciar (o no le tocaba); marcarla `anuncioHecho: true` cierra el ciclo de anuncio de
+      // esa visita para siempre, igual que ya cierra el de evidencia (`confirmado: true`, arriba).
+      anuncioHecho: true,
     });
   }
   return estados;

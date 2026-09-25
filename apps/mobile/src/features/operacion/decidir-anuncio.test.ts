@@ -264,6 +264,39 @@ describe('evaluarAnunciosDeFixes — orquestador (único punto de llamada, fixes
     expect(anuncios).toEqual([]);
   });
 
+  /** FIX POST-REVISIÓN (hallazgo 2, code review — EL MÁS IMPORTANTE del lote: "la evidencia
+   * re-sembrada dispara fallback-salida"). Reproduce el escenario real end-to-end: una visita
+   * SEMBRADA desde el outbox (`clavesCumplimientoDesdePayloads`, `location-task.ts` — mismo shape
+   * que esa función produce tras el fix del hallazgo 2: `dentro: true`, `confirmado: true`,
+   * `anuncioHecho: true`) que luego se re-arma (el vehículo vuelve a pasar por al lado y se aleja
+   * de nuevo) NUNCA debe decidir un anuncio — la invariante ("la evidencia nunca dispara un
+   * anuncio") tiene que sobrevivir un reinicio del proceso, no solo la vida de un Map en memoria
+   * que nunca se reconstruyó. */
+  it('visita SEMBRADA desde evidencia (anuncioHecho: true, como siembra clavesCumplimientoDesdePayloads) que se re-arma: NO dispara fallback-salida', () => {
+    const sesionId = 'sesion-resembrada';
+    const clave = claveCumplimiento(sesionId, 'pc-1');
+    const estadoSembrado = estadoVisitaActiva({
+      confirmado: true,
+      anuncioHecho: true, // ver el fix de `clavesCumplimientoDesdePayloads`
+      anuncioDesdeMs: undefined,
+    });
+    const estadosAntes = new Map<string, EstadoPuntoControl>([[clave, estadoSembrado]]);
+    const transicionesEstado = new Map<string, EstadoPuntoControl>([
+      [clave, { ...estadoSembrado, dentro: false, pasadas: 1 }], // el fix de este tick re-arma (sale del radio)
+    ]);
+
+    const { anuncios } = evaluarAnunciosDeFixes(
+      estadosAntes,
+      transicionesEstado,
+      [deteccionCruda(999)],
+      ['pc-1'], // re-armó de verdad este tick
+      sesionId,
+      1_000,
+    );
+
+    expect(anuncios).toEqual([]);
+  });
+
   it('fix sin transición este tick (descartado por A3): se ignora sin reventar', () => {
     const { anuncios, transiciones } = evaluarAnunciosDeFixes(
       new Map(),
@@ -299,6 +332,39 @@ describe('evaluarAnuncioDeHeartbeat — orquestador (único punto de llamada, he
 
     const { anuncios } = evaluarAnuncioDeHeartbeat(estados, UMBRAL_ANUNCIO_PROXIMIDAD_MS - 100);
     expect(anuncios).toEqual([]);
+  });
+
+  /** FIX POST-REVISIÓN (hallazgo 4, code review — "con motivo null, desdeMs no se persiste: un
+   * vehículo detenido que solo manda heartbeats nunca dispara fallback-tiempo"). Antes de este
+   * fix, un heartbeat que NO disparaba (motivo null) saltaba el `transiciones.set` — la semilla de
+   * `desdeMs` que `decidirAnuncio` acababa de calcular se perdía, y el PRÓXIMO heartbeat volvía a
+   * sembrarla con SU PROPIO `ahoraMs` (nunca hereda el `desdeMs` real de la entrada a la visita).
+   * Resultado real: un vehículo detenido que solo manda heartbeats (nunca un fix real, que sí
+   * persiste vía `evaluarAnunciosDeFixes`) NUNCA llegaba a vencer el umbral de 90 s — el reloj se
+   * reiniciaba en cada heartbeat. */
+  it('la semilla de desdeMs SOBREVIVE un heartbeat que no dispara — el SEGUNDO heartbeat sí vence el fallback de tiempo', () => {
+    const clave = claveCumplimiento('sesion-1', 'pc-1');
+    const estados = new Map<string, EstadoPuntoControl>([
+      [clave, estadoVisitaActiva({ anuncioDesdeMs: undefined })],
+    ]);
+
+    // Heartbeat 1: todavía lejos del umbral — no dispara, pero DEBE persistir la semilla de
+    // desdeMs (10_000, el instante de este primer heartbeat/entrada).
+    const r1 = evaluarAnuncioDeHeartbeat(estados, 10_000);
+    expect(r1.anuncios).toEqual([]);
+    expect(r1.transiciones.get(clave)?.anuncioDesdeMs).toBe(10_000);
+
+    // El caller real (`confirmarVisitasVencidasEnCola`, `gps/headless-task.ts`) SIEMPRE aplica la
+    // transición devuelta a `estados` (memoria) — ver su loop.
+    for (const [k, e] of r1.transiciones) estados.set(k, e);
+
+    // Heartbeat 2, a más de UMBRAL_ANUNCIO_PROXIMIDAD_MS del PRIMER heartbeat (no del segundo):
+    // con el fix, dispara `fallback-tiempo`. Con el bug, `desdeMs` se habría re-sembrado a este
+    // mismo `ahoraMs` en el heartbeat 1 (perdido), y la resta acá daría 0 — nunca dispara.
+    const r2 = evaluarAnuncioDeHeartbeat(estados, 10_000 + UMBRAL_ANUNCIO_PROXIMIDAD_MS + 1);
+    expect(r2.anuncios).toEqual([
+      { motivo: 'fallback-tiempo', puntoControlId: 'pc-1', pasada: 1, distanciaM: 150, radioToleranciaM: 150 },
+    ]);
   });
 
   it('visita ya anunciada: no decide de nuevo', () => {

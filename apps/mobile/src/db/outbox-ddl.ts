@@ -55,8 +55,25 @@ export const OUTBOX_DDL_SQL = `
       motivo TEXT,
       sesion_id TEXT,
       punto_control_id TEXT,
-      pasada INTEGER
+      pasada INTEGER,
+      -- FIX POST-REVISIÓN (hallazgo 1, code review del rediseño de anuncios): 'pendiente'
+      -- mezclaba dos significados ("recién reclamado, todavía sin intentar programar" y "se
+      -- intentó programar y falló") — un reintento sobre 'pendiente' podía re-disparar una
+      -- notificación que en realidad seguía EN VUELO (otro tick, u otro proceso, ya la estaba
+      -- programando). intentos/ultimo_intento_ts sostienen el estado transitorio
+      -- 'programando' (ver marcarAnuncioProgramando, outbox.ts): solo se reintenta un
+      -- 'programando' cuando su último intento quedó VIEJO (ANUNCIO_PROGRAMANDO_STALE_MS),
+      -- nunca mientras sigue fresco. intentos también acota los reintentos (ver
+      -- ANUNCIO_MAX_INTENTOS) para no reintentar para siempre una notificación que sigue
+      -- fallando. (Nota: sin comillas invertidas en este bloque, mismo motivo que arriba.)
+      intentos INTEGER NOT NULL DEFAULT 0,
+      ultimo_intento_ts TEXT
     );
+    -- FIX POST-REVISIÓN (hallazgo 5, "el reintento de anuncios no filtra por sesión/antigüedad"):
+    -- sin este índice, obtenerAnunciosPendientesDeProgramar (que filtra por estado en cada
+    -- turno de la cola, potencialmente cientos de veces por jornada) hace un table scan completo
+    -- de una tabla que solo crece.
+    CREATE INDEX IF NOT EXISTS anuncios_punto_control_estado_idx ON anuncios_punto_control(estado);
     -- FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"): la visita
     -- EN CURSO (dentro del radio, todavía sin confirmar por "mínimo local" — ver el docblock de
     -- filtrarNuevosCumplimientos, gps/geofence.ts) vivía SOLO en memoria (el Map de

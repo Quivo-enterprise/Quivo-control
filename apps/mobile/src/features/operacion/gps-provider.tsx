@@ -1,10 +1,10 @@
 import React, { createContext, useContext, useMemo, useEffect, useRef, useCallback } from 'react';
 import * as Sentry from '@sentry/react-native';
+import type * as SQLite from 'expo-sqlite';
 import { usePaqueteDia } from './use-paquete-dia';
 import { useGpsOperativo } from './use-gps-operativo';
 import { useOperacionSettings } from '../perfil/use-operacion-settings';
 import { usePuntoControlSonido } from './confirmacion-sonido';
-import { abrirOutbox } from '../../db/outbox';
 import { anunciarPuntoControl } from './anuncio-punto-control';
 import type { DeteccionPuntoControl } from '../../gps/geofence';
 
@@ -52,13 +52,19 @@ export function GpsProvider({
    */
   const anunciar = useCallback(
     (deteccion: DeteccionPuntoControl) => {
-      abrirOutbox()
-        .then((db) => anunciarPuntoControl(db, deteccion, { sesionId, puntosControl }))
-        .catch((error: unknown) => {
+      // FIX POST-REVISIÓN (hallazgo 10, cleanup — "abre el outbox para un `_db` sin usar"):
+      // `anunciarPuntoControl` documenta su primer parámetro como sin uso (el dedupe del aviso de
+      // aproximación vive en memoria, `aproximacionesAnunciadas`, nunca en SQLite) — abrir
+      // `quivo-outbox.db` acá solo para descartar el handle era una llamada nativa de sobra en el
+      // camino más caliente del hook (cada fix con un punto de control cerca, potencialmente
+      // cientos por jornada). Se pasa un placeholder tipado, que la función nunca lee.
+      anunciarPuntoControl({} as SQLite.SQLiteDatabase, deteccion, { sesionId, puntosControl }).catch(
+        (error: unknown) => {
           Sentry.captureException(error, {
             tags: { contexto: 'gps-provider', paso: 'anunciar-punto-control-foreground' },
           });
-        });
+        },
+      );
     },
     [sesionId, puntosControl],
   );

@@ -36,8 +36,12 @@ vi.mock('@sentry/react-native', () => ({
 }));
 
 import {
+  ANUNCIO_MAX_INTENTOS,
+  ANUNCIO_PROGRAMANDO_STALE_MS,
+  ANUNCIO_TTL_MS,
   encolarEventoYLimpiarVisita,
   marcarAnuncioProgramado,
+  marcarAnuncioProgramando,
   obtenerAnunciosPendientesDeProgramar,
   reclamarIntencionAnuncio,
   type EventoOutboxNuevo,
@@ -218,8 +222,29 @@ describe('marcarAnuncioProgramado', () => {
   });
 });
 
+/** Hallazgo 1 (code review, "'pendiente' mezcla reclamado-programando con reclamado-falló"):
+ * `marcarAnuncioProgramando` es el paso NUEVO entre reclamar la intención y programar la
+ * notificación — deja la fila en un estado transitorio propio, con su marca de tiempo e intentos
+ * incrementados. */
+describe('marcarAnuncioProgramando (hallazgo 1)', () => {
+  it('actualiza el estado a "programando", incrementa intentos y marca el intento actual', async () => {
+    const runAsync = vi.fn().mockResolvedValue({ changes: 1 });
+    const db = { ...crearHandleFalso(runAsync) };
+
+    await marcarAnuncioProgramando(
+      db as unknown as Parameters<typeof marcarAnuncioProgramando>[0],
+      'sesion-1:pc-1:1',
+    );
+
+    expect(runAsync).toHaveBeenCalledWith(
+      expect.stringMatching(/estado = 'programando'[\s\S]*intentos = intentos \+ 1/),
+      [expect.any(String), 'sesion-1:pc-1:1'],
+    );
+  });
+});
+
 describe('obtenerAnunciosPendientesDeProgramar', () => {
-  it('devuelve las filas "pendiente" con identidad completa', async () => {
+  it('devuelve las filas "pendiente" de LA SESIÓN pedida, con identidad completa', async () => {
     const getAllAsync = vi.fn().mockResolvedValue([
       {
         clave: 'sesion-1:pc-1:1',
@@ -229,14 +254,21 @@ describe('obtenerAnunciosPendientesDeProgramar', () => {
         motivo: 'proximidad',
       },
     ]);
-    const db = { ...crearHandleFalso(vi.fn()), getAllAsync };
+    const runAsync = vi.fn().mockResolvedValue({ changes: 0 });
+    const db = { ...crearHandleFalso(runAsync), getAllAsync };
 
     const resultado = await obtenerAnunciosPendientesDeProgramar(
       db as unknown as Parameters<typeof obtenerAnunciosPendientesDeProgramar>[0],
+      'sesion-1',
     );
 
     expect(resultado).toEqual([
       { clave: 'sesion-1:pc-1:1', sesionId: 'sesion-1', puntoControlId: 'pc-1', pasada: 1, motivo: 'proximidad' },
+    ]);
+    // FIX (hallazgo 5): filtra por sesión — nunca trae filas de OTRA sesión.
+    expect(getAllAsync).toHaveBeenCalledWith(expect.stringContaining('sesion_id = ?'), [
+      'sesion-1',
+      expect.any(String),
     ]);
   });
 
@@ -244,12 +276,56 @@ describe('obtenerAnunciosPendientesDeProgramar', () => {
     const getAllAsync = vi.fn().mockResolvedValue([
       { clave: 'vieja:clave', sesion_id: null, punto_control_id: null, pasada: null, motivo: null },
     ]);
-    const db = { ...crearHandleFalso(vi.fn()), getAllAsync };
+    const runAsync = vi.fn().mockResolvedValue({ changes: 0 });
+    const db = { ...crearHandleFalso(runAsync), getAllAsync };
 
     const resultado = await obtenerAnunciosPendientesDeProgramar(
       db as unknown as Parameters<typeof obtenerAnunciosPendientesDeProgramar>[0],
+      'sesion-1',
     );
 
     expect(resultado).toEqual([]);
+  });
+
+  /** FIX POST-REVISIÓN (hallazgo 5, "reintenta filas de días/sesiones anteriores para siempre"):
+   * antes de listar, purga filas vencidas por antigüedad (`ANUNCIO_TTL_MS`) o por intentos
+   * agotados (`ANUNCIO_MAX_INTENTOS`) — sin importar la sesión (esa purga es global). */
+  it('purga filas vencidas por antigüedad o por intentos agotados ANTES de listar', async () => {
+    const getAllAsync = vi.fn().mockResolvedValue([]);
+    const runAsync = vi.fn().mockResolvedValue({ changes: 3 });
+    const db = { ...crearHandleFalso(runAsync), getAllAsync };
+    const ahoraMs = Date.parse('2026-09-25T12:00:00.000Z');
+
+    await obtenerAnunciosPendientesDeProgramar(
+      db as unknown as Parameters<typeof obtenerAnunciosPendientesDeProgramar>[0],
+      'sesion-1',
+      ahoraMs,
+    );
+
+    expect(runAsync).toHaveBeenCalledWith(expect.stringContaining('DELETE FROM anuncios_punto_control'), [
+      new Date(ahoraMs - ANUNCIO_TTL_MS).toISOString(),
+      ANUNCIO_MAX_INTENTOS,
+    ]);
+  });
+
+  /** FIX POST-REVISIÓN (hallazgo 1, "un reintento reclama un intento que ya está en vuelo"): una
+   * fila `'programando'` con un intento FRESCO no se ofrece — solo cuando `ultimo_intento_ts`
+   * quedó viejo (`ANUNCIO_PROGRAMANDO_STALE_MS`). */
+  it('filtra "programando" fresco por SQL — la consulta exige `ultimo_intento_ts` vencido o nulo', async () => {
+    const getAllAsync = vi.fn().mockResolvedValue([]);
+    const runAsync = vi.fn().mockResolvedValue({ changes: 0 });
+    const db = { ...crearHandleFalso(runAsync), getAllAsync };
+    const ahoraMs = Date.parse('2026-09-25T12:00:00.000Z');
+
+    await obtenerAnunciosPendientesDeProgramar(
+      db as unknown as Parameters<typeof obtenerAnunciosPendientesDeProgramar>[0],
+      'sesion-1',
+      ahoraMs,
+    );
+
+    expect(getAllAsync).toHaveBeenCalledWith(expect.stringMatching(/estado = 'programando'[\s\S]*ultimo_intento_ts/), [
+      'sesion-1',
+      new Date(ahoraMs - ANUNCIO_PROGRAMANDO_STALE_MS).toISOString(),
+    ]);
   });
 });

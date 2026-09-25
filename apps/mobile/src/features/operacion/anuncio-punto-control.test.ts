@@ -46,8 +46,11 @@ vi.mock('@sentry/react-native', () => ({
 // reclamada — se mockea igual que antes (`../../db/outbox` trae `expo-sqlite`, que también rompe
 // bajo Node).
 vi.mock('../../db/outbox', () => ({
+  claveAnuncio: (sesionId: string, puntoControlId: string, pasada: number) =>
+    `${sesionId}:${puntoControlId}:${pasada}`,
   reclamarIntencionAnuncio: vi.fn(),
   marcarAnuncioProgramado: vi.fn().mockResolvedValue(undefined),
+  marcarAnuncioProgramando: vi.fn().mockResolvedValue(undefined),
   obtenerAnunciosPendientesDeProgramar: vi.fn().mockResolvedValue([]),
 }));
 
@@ -57,6 +60,7 @@ import * as Notifications from 'expo-notifications';
 import * as Sentry from '@sentry/react-native';
 import {
   marcarAnuncioProgramado,
+  marcarAnuncioProgramando,
   obtenerAnunciosPendientesDeProgramar,
   reclamarIntencionAnuncio,
 } from '../../db/outbox';
@@ -86,16 +90,21 @@ const requestPermissionsMock = Notifications.requestPermissionsAsync as unknown 
 const captureExceptionMock = Sentry.captureException as unknown as ReturnType<typeof vi.fn>;
 const reclamarIntencionAnuncioMock = reclamarIntencionAnuncio as unknown as ReturnType<typeof vi.fn>;
 const marcarAnuncioProgramadoMock = marcarAnuncioProgramado as unknown as ReturnType<typeof vi.fn>;
+const marcarAnuncioProgramandoMock = marcarAnuncioProgramando as unknown as ReturnType<typeof vi.fn>;
 const obtenerAnunciosPendientesDeProgramarMock =
   obtenerAnunciosPendientesDeProgramar as unknown as ReturnType<typeof vi.fn>;
 
 const DB_FALSO = {} as never;
 
 /**
- * REDISEÑO: simula la tabla real `anuncios_punto_control` (clave PK, estado 'pendiente'/
- * 'programado') para los tests — `reclamarIntencionAnuncioMock` inserta (con `INSERT OR IGNORE`,
- * solo la primera llamada por clave "gana") y `obtenerAnunciosPendientesDeProgramarMock` lista lo
- * que sigue en `'pendiente'`. `marcarAnuncioProgramadoMock` mueve la fila a `'programado'`.
+ * REDISEÑO (hallazgo 1): simula la tabla real `anuncios_punto_control` (clave PK, estado
+ * 'pendiente'/'programando'/'programado') para los tests — `reclamarIntencionAnuncioMock` inserta
+ * (con `INSERT OR IGNORE`, solo la primera llamada por clave "gana"), `marcarAnuncioProgramandoMock`
+ * mueve la fila a `'programando'`, `marcarAnuncioProgramadoMock` la mueve a `'programado'`, y
+ * `obtenerAnunciosPendientesDeProgramarMock` lista lo que sigue `'pendiente'` (siempre) o
+ * `'programando'` (solo si nadie la reclamó de nuevo desde entonces, mismo criterio simplificado
+ * que el SQL real — acá no hay staleness de verdad porque los tests no controlan el reloj, así
+ * que una fila `'programando'` se sigue ofreciendo salvo que ya haya pasado a `'programado'`).
  */
 function configurarTablaAnunciosRealista(): void {
   const filas = new Map<
@@ -110,11 +119,15 @@ function configurarTablaAnunciosRealista(): void {
       return { reclamado: true, clave };
     },
   );
+  marcarAnuncioProgramandoMock.mockReset().mockImplementation(async (_db: unknown, clave: string) => {
+    const fila = filas.get(clave);
+    if (fila) fila.estado = 'programando';
+  });
   marcarAnuncioProgramadoMock.mockReset().mockImplementation(async (_db: unknown, clave: string) => {
     const fila = filas.get(clave);
     if (fila) fila.estado = 'programado';
   });
-  obtenerAnunciosPendientesDeProgramarMock.mockReset().mockImplementation(async () => {
+  obtenerAnunciosPendientesDeProgramarMock.mockReset().mockImplementation(async (_db: unknown, sesionId: string) => {
     const pendientes: {
       clave: string;
       sesionId: string;
@@ -123,7 +136,8 @@ function configurarTablaAnunciosRealista(): void {
       motivo: string;
     }[] = [];
     for (const [clave, fila] of filas) {
-      if (fila.estado === 'pendiente') {
+      if (fila.sesionId !== sesionId) continue;
+      if (fila.estado === 'pendiente' || fila.estado === 'programando') {
         pendientes.push({ clave, sesionId: fila.sesionId, puntoControlId: fila.puntoControlId, pasada: fila.pasada, motivo: fila.motivo });
       }
     }
@@ -341,30 +355,72 @@ describe('anunciarLlegadaPuntoControl (REDISEÑO 2026-09-23 — intención durab
     expect(scheduleNotificationMock).toHaveBeenCalledTimes(2);
   });
 
-  it('FIX (punto 3 del brief): si programar la notificación falla, NO se marca "programado" — la fila queda "pendiente"', async () => {
+  it('FIX (punto 3 del brief): si programar la notificación falla, NO se marca "programado" — la fila queda "programando"', async () => {
     scheduleNotificationMock.mockRejectedValueOnce(new Error('canal no disponible'));
-    await anunciarLlegadaPuntoControl(DB_FALSO, 'pc-4', 1, 'proximidad', opciones([puntoControl('pc-4', 0)]));
+    const exitoso = await anunciarLlegadaPuntoControl(
+      DB_FALSO,
+      'pc-4',
+      1,
+      'proximidad',
+      opciones([puntoControl('pc-4', 0)]),
+    );
 
+    expect(exitoso).toBe(false);
     expect(vibrateMock).toHaveBeenCalledTimes(1);
+    expect(marcarAnuncioProgramandoMock).toHaveBeenCalledWith(DB_FALSO, 'sesion-1:pc-4:1');
     expect(marcarAnuncioProgramadoMock).not.toHaveBeenCalled();
     // La intención SIGUE reclamada (no se revierte) — el reintento la retoma, no la reclama de
     // nuevo (ver `reintentarAnunciosLlegadaPendientes`, abajo).
-    const pendientes = await obtenerAnunciosPendientesDeProgramarMock();
+    const pendientes = await obtenerAnunciosPendientesDeProgramarMock(DB_FALSO, 'sesion-1');
     expect(pendientes).toEqual([
       { clave: 'sesion-1:pc-4:1', sesionId: 'sesion-1', puntoControlId: 'pc-4', pasada: 1, motivo: 'proximidad' },
     ]);
   });
 
-  it('fail-open: si la reclamación misma falla (SQLite ocupada), anuncia igual (mejor un duplicado que perderlo)', async () => {
+  it('FIX POST-REVISIÓN (hallazgo 6): fail CLOSED — si la reclamación misma falla (SQLite ocupada), NO vibra ni programa nada en este intento', async () => {
+    // `sesionId` PROPIO (no el `'sesion-1'` compartido por `opciones()`): este test deja A
+    // PROPÓSITO un reclamo fallido sin drenar en `reclamosFallidos` (un mapa a nivel de MÓDULO,
+    // real, no mockeado) — con `'sesion-1'` contaminaría cualquier test posterior que llame
+    // `reintentarAnunciosLlegadaPendientes(DB_FALSO, 'sesion-1', ...)`.
     reclamarIntencionAnuncioMock.mockRejectedValueOnce(new Error('handle zombi'));
-    await anunciarLlegadaPuntoControl(DB_FALSO, 'pc-5', 1, 'proximidad', opciones([puntoControl('pc-5', 0)]));
+    const exitoso = await anunciarLlegadaPuntoControl(
+      DB_FALSO,
+      'pc-5',
+      1,
+      'proximidad',
+      { sesionId: 'sesion-hallazgo-6-fail-closed', puntosControl: [puntoControl('pc-5', 0)] },
+    );
 
-    expect(vibrateMock).toHaveBeenCalledTimes(1);
-    expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
+    expect(exitoso).toBe(false);
+    expect(vibrateMock).not.toHaveBeenCalled();
+    expect(scheduleNotificationMock).not.toHaveBeenCalled();
     expect(captureExceptionMock).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({ tags: expect.objectContaining({ paso: 'reclamar-intencion-llegada' }) }),
     );
+  });
+
+  it('FIX POST-REVISIÓN (hallazgo 6): un reclamo fallido se reintenta desde `reintentarAnunciosLlegadaPendientes` y SÍ termina anunciando', async () => {
+    // `sesionId` PROPIO de este test (no el `'sesion-1'` compartido por `opciones()`): el test
+    // anterior ("fail CLOSED") deja su propio reclamo fallido (`pc-5`) sin drenar en
+    // `reclamosFallidos` — un mapa a nivel de MÓDULO, real (no mockeado) — y
+    // `reintentarAnunciosLlegadaPendientes` reintenta TODOS los reclamos de la sesión pedida, no
+    // solo el de este test. Aislar por sesión evita que un test contamine el conteo del otro (en
+    // producción esto es exactamente el comportamiento correcto: reintentar todo lo pendiente de
+    // la sesión activa).
+    const opts: AnuncioPuntoControlOpciones = {
+      sesionId: 'sesion-hallazgo-6-retry',
+      puntosControl: [puntoControl('pc-5b', 0)],
+    };
+    reclamarIntencionAnuncioMock.mockRejectedValueOnce(new Error('handle zombi'));
+    const primerIntento = await anunciarLlegadaPuntoControl(DB_FALSO, 'pc-5b', 1, 'proximidad', opts);
+    expect(primerIntento).toBe(false);
+    expect(vibrateMock).not.toHaveBeenCalled();
+
+    await reintentarAnunciosLlegadaPendientes(DB_FALSO, 'sesion-hallazgo-6-retry', [puntoControl('pc-5b', 0)]);
+
+    expect(vibrateMock).toHaveBeenCalledTimes(1);
+    expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
   });
 
   it('vibra SIEMPRE aunque falle la notificación (canal más robusto, no depende de audio)', async () => {
@@ -387,30 +443,58 @@ describe('reintentarAnunciosLlegadaPendientes (drenado, dentro de conTimeout —
     configurarTablaAnunciosRealista();
   });
 
-  it('reprograma una intención "pendiente" SIN volver a reclamarla', async () => {
+  it('reprograma una intención "programando" SIN volver a reclamarla', async () => {
     scheduleNotificationMock.mockRejectedValueOnce(new Error('canal no disponible'));
     await anunciarLlegadaPuntoControl(DB_FALSO, 'pc-1', 1, 'fallback-tiempo', opciones([puntoControl('pc-1', 0)]));
     expect(marcarAnuncioProgramadoMock).not.toHaveBeenCalled();
     reclamarIntencionAnuncioMock.mockClear();
 
-    await reintentarAnunciosLlegadaPendientes(DB_FALSO, [puntoControl('pc-1', 0)]);
+    await reintentarAnunciosLlegadaPendientes(DB_FALSO, 'sesion-1', [puntoControl('pc-1', 0)]);
 
     expect(reclamarIntencionAnuncioMock).not.toHaveBeenCalled(); // no reclama de nuevo
     expect(scheduleNotificationMock).toHaveBeenCalledTimes(2); // 1er intento (fallido) + reintento
     expect(marcarAnuncioProgramadoMock).toHaveBeenCalledWith(DB_FALSO, 'sesion-1:pc-1:1');
   });
 
+  it('no reintenta una intención de OTRA sesión (hallazgo 5)', async () => {
+    scheduleNotificationMock.mockRejectedValueOnce(new Error('canal no disponible'));
+    await anunciarLlegadaPuntoControl(DB_FALSO, 'pc-1b', 1, 'fallback-tiempo', opciones([puntoControl('pc-1b', 0)]));
+    scheduleNotificationMock.mockClear();
+
+    await reintentarAnunciosLlegadaPendientes(DB_FALSO, 'otra-sesion', [puntoControl('pc-1b', 0)]);
+
+    expect(scheduleNotificationMock).not.toHaveBeenCalled();
+  });
+
   it('no hace nada si no hay pendientes', async () => {
-    await reintentarAnunciosLlegadaPendientes(DB_FALSO, []);
+    await reintentarAnunciosLlegadaPendientes(DB_FALSO, 'sesion-1', []);
     expect(scheduleNotificationMock).not.toHaveBeenCalled();
   });
 
   it('best-effort: si listar pendientes falla, se reporta a Sentry y no rechaza', async () => {
     obtenerAnunciosPendientesDeProgramarMock.mockRejectedValueOnce(new Error('handle zombi'));
-    await expect(reintentarAnunciosLlegadaPendientes(DB_FALSO, [])).resolves.toBeUndefined();
+    await expect(reintentarAnunciosLlegadaPendientes(DB_FALSO, 'sesion-1', [])).resolves.toBeUndefined();
     expect(captureExceptionMock).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({ tags: expect.objectContaining({ paso: 'listar-anuncios-pendientes' }) }),
+    );
+  });
+
+  /** FIX POST-REVISIÓN (hallazgo 10, cleanup — "validar motivo antes de textoAnuncioLlegada"). */
+  it('salta (y reporta) una fila pendiente con `motivo` irreconocible, sin programar nada', async () => {
+    obtenerAnunciosPendientesDeProgramarMock.mockResolvedValueOnce([
+      { clave: 'sesion-1:pc-raro:1', sesionId: 'sesion-1', puntoControlId: 'pc-raro', pasada: 1, motivo: 'motivo-inventado' },
+    ]);
+
+    await reintentarAnunciosLlegadaPendientes(DB_FALSO, 'sesion-1', [puntoControl('pc-raro', 0)]);
+
+    expect(scheduleNotificationMock).not.toHaveBeenCalled();
+    expect(vibrateMock).not.toHaveBeenCalled();
+    expect(captureExceptionMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tags: expect.objectContaining({ paso: 'reintentar-motivo-invalido' }),
+      }),
     );
   });
 });

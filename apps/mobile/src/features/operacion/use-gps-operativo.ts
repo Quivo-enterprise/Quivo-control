@@ -232,10 +232,14 @@ export function useGpsOperativo(
         // parte (ver su chequeo `contexto.puntosControl.length > 0`); la captura de `gps_point`
         // sigue exactamente igual, no depende de esto.
         const puntosControlDelTick = semillaHidratadaRef.current ? puntosControl : [];
+        // FIX POST-REVISIÓN (hallazgo 10, cleanup — "`void puntosRearmados` es código muerto"):
+        // `registrarPuntoGps` también devuelve `puntosRearmados` (histéresis de DETECCIÓN) — sin
+        // ningún consumidor acá desde el rediseño (`puntosRearmadosVoz`, la histéresis PROPIA de
+        // voz, es la que sí se usa). Se deja fuera de la desestructuración en vez de traerlo solo
+        // para descartarlo.
         const {
           deteccion,
           deteccionAproximacion: nuevaAproximacion,
-          puntosRearmados,
           puntosRearmadosVoz,
           anunciosLlegada,
         } = await registrarPuntoGps(
@@ -254,9 +258,6 @@ export function useGpsOperativo(
         // gatea en `settings.navegacionVoz`): limpiar el Set nunca hace daño si la voz está
         // apagada (el Set solo tiene entradas de anuncios que SÍ se emitieron).
         if (puntosRearmadosVoz.length > 0) limpiarAproximacionesAnunciadas(puntosRearmadosVoz);
-        // `puntosRearmados` (histéresis de DETECCIÓN): ya no tiene consumidor acá — se conserva
-        // en la desestructuración por compatibilidad/telemetría futura.
-        void puntosRearmados;
         if (deteccion) setUltimaDeteccion(deteccion);
         // ENTREGA 6/7: se actualiza en CADA tick con puntos de control (incluso a `null` cuando
         // ninguno está en rango) — a diferencia de `ultimaDeteccion`, que solo cambia con una
@@ -268,26 +269,37 @@ export function useGpsOperativo(
         // el mismo camino que usa el headless (`anunciarLlegadaPuntoControl`,
         // `anuncio-punto-control.ts`) — "el foreground no tiene disparador propio: consume las
         // decisiones de esa misma cola".
-        if (anunciosLlegada.length > 0) {
-          const ultimo = anunciosLlegada[anunciosLlegada.length - 1]!;
-          setUltimoAnuncioLlegada({
-            puntoControlId: ultimo.puntoControlId,
-            pasada: ultimo.pasada,
-            motivo: ultimo.motivo,
-          });
-          for (const anuncio of anunciosLlegada) {
-            anunciarLlegadaPuntoControl(
-              db,
-              anuncio.puntoControlId,
-              anuncio.pasada,
-              anuncio.motivo,
-              { sesionId, puntosControl: puntosControlDelTick },
-            ).catch((error: unknown) => {
+        //
+        // FIX POST-REVISIÓN (hallazgo 3, code review — "el chime suena aunque el reclamo se
+        // perdió"): antes, `setUltimoAnuncioLlegada` (que dispara el sonido custom de foreground,
+        // `confirmacion-sonido.ts`, en `gps-provider.tsx`) se llamaba INCONDICIONALMENTE, ANTES
+        // de saber si `anunciarLlegadaPuntoControl` de verdad reclamó/programó algo — si el
+        // reclamo se perdía (otra llamada ya estaba a cargo de la MISMA visita, o el reclamo
+        // mismo fallaba), el chime sonaba igual sin que hubiera pasado NADA. Ahora se llama
+        // recién cuando `anunciarLlegadaPuntoControl` resuelve `true` (reclamó Y programó de
+        // verdad — ver su docblock).
+        for (const anuncio of anunciosLlegada) {
+          anunciarLlegadaPuntoControl(
+            db,
+            anuncio.puntoControlId,
+            anuncio.pasada,
+            anuncio.motivo,
+            { sesionId, puntosControl: puntosControlDelTick },
+          )
+            .then((exitoso) => {
+              if (exitoso) {
+                setUltimoAnuncioLlegada({
+                  puntoControlId: anuncio.puntoControlId,
+                  pasada: anuncio.pasada,
+                  motivo: anuncio.motivo,
+                });
+              }
+            })
+            .catch((error: unknown) => {
               Sentry.captureException(error, {
                 tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada' },
               });
             });
-          }
         }
       } catch (error) {
         // Sin este catch, `onLocation` (async) rechazaba y el fallo quedaba como unhandled
@@ -371,23 +383,28 @@ export function useGpsOperativo(
       }
       // REDISEÑO: fallback de TIEMPO del anuncio de llegada — ver el docblock de
       // `confirmarVisitasVencidasEnCola`. Mismo camino de ejecución que `onLocation`.
-      if (anunciosLlegada.length > 0) {
-        const ultimo = anunciosLlegada[anunciosLlegada.length - 1]!;
-        setUltimoAnuncioLlegada({
-          puntoControlId: ultimo.puntoControlId,
-          pasada: ultimo.pasada,
-          motivo: ultimo.motivo,
-        });
-        for (const anuncio of anunciosLlegada) {
-          anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
-            sesionId,
-            puntosControl,
-          }).catch((error: unknown) => {
+      // FIX POST-REVISIÓN (hallazgo 3): el chime (`setUltimoAnuncioLlegada`) solo se dispara si
+      // `anunciarLlegadaPuntoControl` reclamó Y programó de verdad — ver el comentario largo en
+      // `onLocation`, arriba.
+      for (const anuncio of anunciosLlegada) {
+        anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
+          sesionId,
+          puntosControl,
+        })
+          .then((exitoso) => {
+            if (exitoso) {
+              setUltimoAnuncioLlegada({
+                puntoControlId: anuncio.puntoControlId,
+                pasada: anuncio.pasada,
+                motivo: anuncio.motivo,
+              });
+            }
+          })
+          .catch((error: unknown) => {
             Sentry.captureException(error, {
               tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-heartbeat' },
             });
           });
-        }
       }
     } catch (error) {
       console.error('[QUIVO][gps] No se pudo procesar el heartbeat', error);
