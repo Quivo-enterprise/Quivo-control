@@ -31,6 +31,25 @@ vi.mock('expo-crypto', () => ({
   CryptoDigestAlgorithm: { SHA256: 'SHA256' },
 }));
 
+// Punto 4 (code review 2026-09-25): `sesion-movil-store.ts` ahora importa `@sentry/react-native`
+// y `../../db/outbox` (lease propio para la colección de revocaciones pendientes) — sin
+// mockearlos acá, el import de este módulo arrastra la dependencia nativa real de
+// `@sentry/react-native` (que a su vez tira de `react-native`, que vitest/rollup no puede
+// parsear sin el transform de Metro). Mismo motivo que el resto de los archivos de este
+// directorio que mockean `db/outbox`.
+vi.mock('@sentry/react-native', () => ({
+  captureException: vi.fn(),
+  addBreadcrumb: vi.fn(),
+}));
+
+vi.mock('../../db/outbox', () => ({
+  abrirOutbox: vi.fn().mockResolvedValue({}),
+  adquirirLease: vi.fn().mockResolvedValue(true),
+  liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
+  ID_LEASE_REVOCACIONES_PENDIENTES: 'revocaciones-pendientes',
+  TTL_LEASE_REVOCACIONES_PENDIENTES_MS: 3_000,
+}));
+
 import {
   actualizarContextoSesionMovil,
   actualizarSesionMovil,

@@ -66,6 +66,7 @@ import {
 } from '../../shared/security/sesion-movil-store';
 import {
   intentarRevocacionesPendientes,
+  reiniciarThrottleRevocacionesPendientesParaTests,
   TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED,
 } from './use-auth-movil';
 
@@ -96,6 +97,9 @@ describe('intentarRevocacionesPendientes — punto 3 (verify-fix)', () => {
     borrarLogoutSolicitadoMock.mockReset().mockResolvedValue(undefined);
     cargarSesionMovilMock.mockReset();
     obtenerDeviceIdMovilMock.mockReset().mockResolvedValue('device-1');
+    // Punto 4: sin este reset, el throttle de módulo (piso de 10 s) saltearía todas las pasadas
+    // de este archivo a partir de la segunda — corren en milisegundos de wall-clock real.
+    reiniciarThrottleRevocacionesPendientesParaTests();
   });
 
   it('sin ninguna revocación pendiente ni logout solicitado, no llama a authMovilApi.logout', async () => {
@@ -228,6 +232,67 @@ describe('intentarRevocacionesPendientes — punto 3 (verify-fix)', () => {
       hayLogoutSolicitadoMock.mockRejectedValue(new Error('SecureStore no disponible'));
 
       await expect(intentarRevocacionesPendientes()).resolves.toBeUndefined();
+    });
+
+    /**
+     * Punto 3 (code review 2026-09-25): si un login nuevo (`guardarSesionMovil`, concurrente)
+     * borra la marca de logout pendiente DESPUÉS de que este ciclo ya la leyó como presente
+     * (primera llamada a `hayLogoutSolicitado` en true) pero ANTES de que `ejecutarLogout`
+     * consiga el lease `refresh-sesion` y relea la marca (segunda llamada, ahora en false), no
+     * debe revocar ni tocar la sesión — que para entonces ya es la NUEVA, no la que originó la
+     * marca.
+     */
+    it('si la marca desaparece entre la lectura inicial y el lease (login concurrente), aborta sin revocar la sesión nueva', async () => {
+      hayLogoutSolicitadoMock
+        .mockResolvedValueOnce(true) // chequeo inicial en intentarRevocacionesPendientes
+        .mockResolvedValueOnce(false); // relectura bajo lease dentro de ejecutarLogout
+
+      await intentarRevocacionesPendientes();
+
+      expect(cargarSesionMovilMock).not.toHaveBeenCalled();
+      expect(logoutMock).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Punto 4 (code review 2026-09-25): single-flight + piso de 10 s a nivel de módulo — ver el
+   * docblock de `intentarRevocacionesPendientes`.
+   */
+  describe('punto 4: single-flight + throttle de módulo', () => {
+    it('dos llamadas CONCURRENTES (sin await entre medio) comparten la misma pasada', async () => {
+      listarRevocacionesPendientesMock.mockResolvedValue([]);
+
+      const promesaA = intentarRevocacionesPendientes();
+      const promesaB = intentarRevocacionesPendientes();
+
+      await Promise.all([promesaA, promesaB]);
+
+      expect(listarRevocacionesPendientesMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('una segunda llamada inmediatamente después de que la primera terminó no hace nada (dentro del piso)', async () => {
+      listarRevocacionesPendientesMock.mockResolvedValue([]);
+
+      await intentarRevocacionesPendientes();
+      expect(listarRevocacionesPendientesMock).toHaveBeenCalledTimes(1);
+
+      await intentarRevocacionesPendientes();
+
+      expect(listarRevocacionesPendientesMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('pasado el piso, una llamada nueva sí corre', async () => {
+      listarRevocacionesPendientesMock.mockResolvedValue([]);
+
+      await intentarRevocacionesPendientes();
+      expect(listarRevocacionesPendientesMock).toHaveBeenCalledTimes(1);
+
+      // Simula que pasó el piso (equivalente a que el reloj avance 10 s) — más simple y
+      // determinístico que fake timers para este caso.
+      reiniciarThrottleRevocacionesPendientesParaTests();
+      await intentarRevocacionesPendientes();
+
+      expect(listarRevocacionesPendientesMock).toHaveBeenCalledTimes(2);
     });
   });
 });

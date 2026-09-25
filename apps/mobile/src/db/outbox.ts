@@ -772,6 +772,32 @@ export const ID_LEASE_REFRESH_SESION = 'refresh-sesion';
 export const TTL_LEASE_REFRESH_SESION_MS = 20_000;
 
 /**
+ * Punto 4 (code review 2026-09-25): mutex propio para la colección de revocaciones pendientes
+ * (`REVOCACIONES_PENDIENTES_KEY`, `sesion-movil-store.ts`) — `guardarRevocacionPendiente`/
+ * `borrarRevocacionPendientePorId` hacen relectura+escritura sobre esa clave de SecureStore sin
+ * ninguna sincronización, y foreground/headless pueden pisarse (una entrada que
+ * `ejecutarLogout` acaba de agregar desaparece si una pasada de `intentarRevocacionesPendientes`
+ * ya había releído la colección ANTES de esa escritura).
+ *
+ * Deliberadamente UN `id` de lease DISTINTO a `ID_LEASE_REFRESH_SESION`, no el mismo (aunque el
+ * hallazgo original lo sugería): `ejecutarLogout` (`use-auth-movil.ts`) llama a
+ * `guardarRevocacionPendiente`/`borrarRevocacionPendientePorId` MIENTRAS ya tiene tomado
+ * `ID_LEASE_REFRESH_SESION` para sí mismo — reusar ese mismo lease acá autobloquearía esa
+ * escritura contra su propio dueño (el mismo contexto JS, pero un `token` distinto no es
+ * reentrante para este mecanismo). Un lease separado, de vida brevísima (solo cubre leer +
+ * escribir un blob JSON chico de SecureStore, nunca una llamada de red), evita ese
+ * autobloqueo sin perder la propiedad que importa: exclusión mutua entre CONTEXTOS JS
+ * distintos sobre la MISMA colección.
+ */
+export const ID_LEASE_REVOCACIONES_PENDIENTES = 'revocaciones-pendientes';
+
+/** TTL brevísimo a propósito (ver el comentario de `ID_LEASE_REVOCACIONES_PENDIENTES`): la
+ * sección crítica que cubre es solo leer+parsear+escribir SecureStore, nunca una llamada de
+ * red — unos pocos cientos de ms de margen alcanzan de sobra, y un TTL corto hace que un
+ * lease huérfano (proceso matado a mitad de la escritura) se libere solo rápido. */
+export const TTL_LEASE_REVOCACIONES_PENDIENTES_MS = 3_000;
+
+/**
  * Hallazgo 4 (code review, BAJO — reloj de pared sin cota superior): `adquirirLease` compara
  * `expira_at` contra `Date.now()` con reloj de PARED, sin ninguna cota — si el reloj del
  * teléfono estaba adelantado y salta hacia atrás (corrección NTP, o el chofer lo ajusta a
