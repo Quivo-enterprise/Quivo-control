@@ -398,6 +398,96 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
     vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
     expect(tileNuevo.src).toContain(URL_ORIGINAL);
   });
+
+  // Decisión del CTO (2026-09-25): al volver la conectividad, el mapa reinicia los contadores de
+  // reintento de los tiles pendientes/abandonados y los vuelve a pedir sin esperar pan/zoom. Estos
+  // tests ejercitan `onConectividadRecuperada` directamente sobre el controlador real (mismo
+  // string `CONTROLADOR_TILES_JS_SOURCE` que corre en el WebView).
+  describe('onConectividadRecuperada', () => {
+    it('reintenta de una un tile que seguía en backoff (pendiente, esperando su próximo tick)', () => {
+      const tile = crearTileFalso();
+      const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+      const controlador = crearControlador({ obtenerUrlOriginal });
+
+      controlador.onTileError(tile, COORDS);
+      // Todavía no le tocaba ningún tick — 'tile.src' sigue vacío.
+      expect(tile.src).toBe('');
+
+      controlador.onConectividadRecuperada();
+      // Se re-pidió de inmediato, sin esperar el próximo tick del temporizador.
+      expect(tile.src).toContain(URL_ORIGINAL);
+    });
+
+    it('reintenta un tile que ya había agotado maxIntentos y quedó abandonado', () => {
+      const tile = crearTileFalso();
+      const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+      const controlador = crearControlador({ obtenerUrlOriginal, maxIntentos: 1, esperaMaximaTicks: 1 });
+
+      controlador.onTileError(tile, COORDS);
+      vi.advanceTimersByTime(REINTENTO_INTERVALO_MS); // intento 1 de 1 (agota el tope)
+      const srcTrasAgotar = tile.src;
+      expect(srcTrasAgotar).toContain(URL_ORIGINAL);
+
+      // Confirmar que quedó abandonado: más ticks no lo vuelven a tocar.
+      vi.advanceTimersByTime(REINTENTO_INTERVALO_MS * 5);
+      expect(tile.src).toBe(srcTrasAgotar);
+
+      controlador.onConectividadRecuperada();
+      // Se re-pidió de una — un cache-busting distinto al del último intento agotado.
+      expect(tile.src).toContain(URL_ORIGINAL);
+      expect(tile.src).not.toBe(srcTrasAgotar);
+
+      // Y si vuelve a fallar, arranca un backoff nuevo desde cero (no heredó los intentos
+      // agotados antes del corte de red) — el próximo tick lo reintenta de nuevo.
+      controlador.onTileError(tile, COORDS);
+      vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+      expect(tile.src).not.toBe(srcTrasAgotar);
+    });
+
+    it('no reintenta un tile abandonado/pendiente que ya fue podado del mapa (pan/zoom)', () => {
+      const tilePodado = crearTileFalso();
+      let montado = true;
+      const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+      const controlador = crearControlador({
+        obtenerUrlOriginal,
+        tileSigueEnMapa: (tile) => (tile === tilePodado ? montado : true),
+      });
+
+      controlador.onTileError(tilePodado, COORDS);
+      montado = false; // el chofer paneó/zoomeó y Leaflet podó este <img> del DOM
+
+      controlador.onConectividadRecuperada();
+      // No se le tocó tile.src — reintentar algo que ya no se va a dibujar sería red
+      // desperdiciada, mismo criterio que 'reintentarPendientes'.
+      expect(tilePodado.src).toBe('');
+    });
+
+    it('sin ningún tile pendiente ni abandonado, no hace nada (no tira, no arranca temporizadores)', () => {
+      const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+      const controlador = crearControlador({ obtenerUrlOriginal });
+
+      expect(() => controlador.onConectividadRecuperada()).not.toThrow();
+      expect(obtenerUrlOriginal).not.toHaveBeenCalled();
+    });
+
+    it('apaga el temporizador compartido (si un tile reseteado vuelve a fallar, arranca uno nuevo por onTileError, no queda uno viejo corriendo en paralelo)', () => {
+      const tileA = crearTileFalso();
+      const tileB = crearTileFalso();
+      const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+      const controlador = crearControlador({ obtenerUrlOriginal });
+
+      controlador.onTileError(tileA, COORDS); // arranca el temporizador compartido
+      controlador.onConectividadRecuperada(); // lo apaga y re-pide tileA de una
+
+      // Si tileA vuelve a fallar, onTileError arma una entrada nueva y arranca el temporizador
+      // de nuevo — sin esto (si el temporizador viejo hubiera seguido corriendo con 'pendientes'
+      // vacío) este tileB nunca se reintentaría.
+      controlador.onTileError(tileA, COORDS);
+      controlador.onTileError(tileB, COORDS);
+      vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+      expect(tileB.src).toContain(URL_ORIGINAL);
+    });
+  });
 });
 
 // GAP 1 de la verificación `verify-fix` de Codex sobre el commit anterior de esta entrega:
@@ -1105,6 +1195,77 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
       });
     }
     expect(markerCalls).toBe(3);
+  });
+
+  // Decisión del CTO (2026-09-25): al volver la conectividad, `route-map-view.tsx` manda
+  // `{type: 'reconectado'}` — este test corre el `<script>` real, dispara un `tileerror` (como lo
+  // haría Leaflet) y confirma que el mensaje reintenta ESE tile de una, sin llamar a `L.map` de
+  // nuevo ni tocar los marcadores de puntos de control/posición.
+  it('el mensaje reconectado reintenta los tiles fallidos de una, sin recrear el mapa ni los marcadores', () => {
+    vi.useFakeTimers();
+    try {
+      const paquete = paqueteDePrueba();
+      const html = construirHtml(paquete, vehiculoDePrueba);
+      const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+      const lFalso = crearLFalso();
+      let mapCalls = 0;
+      let markerCalls = 0;
+      const mapOriginal = lFalso.map;
+      const markerOriginal = lFalso.marker;
+      lFalso.map = () => {
+        mapCalls += 1;
+        return mapOriginal();
+      };
+      lFalso.marker = (latlng: unknown, opts: unknown) => {
+        markerCalls += 1;
+        return markerOriginal(latlng, opts);
+      };
+
+      let handlerMensajeWindow: ((event: { data: string }) => void) | undefined;
+      const sandbox: Record<string, unknown> = {
+        L: lFalso,
+        document: { addEventListener: () => {} },
+        window: {
+          addEventListener: (evento: string, cb: (event: { data: string }) => void) => {
+            if (evento === 'message') handlerMensajeWindow = cb;
+          },
+        },
+        console,
+        setTimeout,
+        clearTimeout,
+        setInterval,
+        clearInterval,
+        Date,
+        Math,
+      };
+      vm.createContext(sandbox);
+      vm.runInContext(scriptAplicacion, sandbox);
+
+      expect(mapCalls).toBe(1);
+      expect(markerCalls).toBe(2); // los 2 puntos de control, al montar
+      expect(handlerMensajeWindow).toBeTypeOf('function');
+
+      type CapaFalsa = { tipo: string; callbacks: Record<string, (evento: unknown) => void> };
+      const mapaFalso = sandbox.map as { capas: CapaFalsa[] };
+      const tileLayerCapa = mapaFalso.capas.find((c) => c.tipo === 'tileLayer');
+      expect(tileLayerCapa).toBeDefined();
+
+      const tileFallido = { src: '', parentNode: {} };
+      tileLayerCapa!.callbacks.tileerror!({ tile: tileFallido, coords: { x: 5, y: 6, z: 10 } });
+      // Todavía no pasó ningún tick del temporizador de reintento — sigue sin tocarse.
+      expect(tileFallido.src).toBe('');
+
+      handlerMensajeWindow!({ data: JSON.stringify({ type: 'reconectado' }) });
+
+      // Se re-pidió de una, sin esperar el próximo tick.
+      expect(tileFallido.src).toContain('https://tile.openstreetmap.org/10/5/6.png');
+      // Nunca se recreó el mapa ni se volvieron a crear los marcadores de puntos de control.
+      expect(mapCalls).toBe(1);
+      expect(markerCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

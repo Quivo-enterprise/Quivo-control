@@ -107,6 +107,13 @@ export interface ControladorTiles {
   /** Notificar un `tileerror` de Leaflet: `tile` es el `<img>` que falló, `coords` el `{x,y,z}`
    * que Leaflet manda en el evento (necesario para recalcular la URL original al reintentar). */
   onTileError: (tile: unknown, coords: unknown) => void;
+  /** Decisión del CTO (2026-09-25): al volver la conectividad del teléfono (ver
+   * `reconexion-mapa-offline.ts`, que es quien dispara esto desde `route-map-view.tsx` vía
+   * `postMessage({ type: 'reconectado' })`), reinicia los contadores de TODOS los tiles
+   * pendientes (en backoff, esperando su próximo tick) y abandonados (agotaron `maxIntentos` y
+   * quedaban con `errorTileUrl` hasta un pan/zoom) que sigan visibles, y los vuelve a pedir de
+   * una — sin esperar a que el chofer mueva el mapa. */
+  onConectividadRecuperada: () => void;
 }
 
 /**
@@ -225,6 +232,15 @@ function crearControladorTiles(opciones) {
   // 'urlBase' congelado (solo le agregan el cache-busting), sin importar cuánto tiempo pase ni
   // cuántas veces cambie el zoom mientras el tile sigue pendiente.
   var pendientes = [];
+  // Tiles que agotaron 'maxIntentos' (ver más abajo) — decisión del CTO (2026-09-25): antes de
+  // esto, un tile abandonado salía de 'pendientes' y no quedaba ninguna referencia a él en ningún
+  // lado; la única forma de recuperarlo era un pan/zoom (Leaflet crea un <img> nuevo al volver a
+  // traerlo a la vista). Si el corte de red duraba más que la ventana de reintentos (con los
+  // defaults, ~15 minutos), el chofer se quedaba sin esas calles hasta mover el mapa a mano,
+  // aunque la conexión ya hubiera vuelto. Guardarlos acá (en vez de descartarlos del todo) es lo
+  // que permite que 'onConectividadRecuperada' (más abajo) los vuelva a pedir apenas vuelve la
+  // red, sin depender de ningún gesto del chofer.
+  var abandonados = [];
   // Un único setInterval compartido para todos los tiles pendientes (no uno por tile): más barato
   // y evita reintentos desincronizados. Solo existe mientras haya al menos un pendiente — arranca
   // en el primer tileerror y se apaga solo cuando la lista queda vacía (ver detenerTimerSiVacio).
@@ -279,11 +295,13 @@ function crearControladorTiles(opciones) {
 
       entrada.intentos += 1;
       if (entrada.intentos > maxIntentos) {
-        // Tope alcanzado: se abandona este tile. Se queda con 'errorTileUrl' (el fondo liso ya
-        // cubre el hueco visualmente) hasta que un pan/zoom lo saque de la vista y Leaflet cree un
-        // <img> nuevo al volver a traerlo — ese <img> es una entrada distinta, con sus propios
-        // intentos desde cero, así que no queda permanentemente descartado, solo dejado en paz
-        // mientras el bloqueo/la falta de cobertura sigan como están.
+        // Tope alcanzado: se abandona este tile PERO se guarda en 'abandonados' (ver el
+        // comentario grande sobre esa lista más arriba) en vez de descartarse del todo — así
+        // 'onConectividadRecuperada' puede reintentarlo apenas vuelve la red. Sigue con
+        // 'errorTileUrl' (el fondo liso ya cubre el hueco visualmente) hasta entonces o hasta que
+        // un pan/zoom lo saque de la vista y Leaflet cree un <img> nuevo al volver a traerlo — ese
+        // <img> es una entrada distinta, con sus propios intentos desde cero.
+        abandonados.push(entrada);
         continue;
       }
 
@@ -343,9 +361,46 @@ function crearControladorTiles(opciones) {
     }
   }
 
+  // Decisión del CTO (2026-09-25): al volver la conectividad del teléfono (la señal la manda RN,
+  // ver 'reconexion-mapa-offline.ts' — este controlador no sabe nada de NetInfo ni de la conexión
+  // real del teléfono, solo reacciona cuando le avisan), reinicia los contadores de TODOS los
+  // tiles pendientes (en backoff, esperando su próximo tick) Y abandonados (agotaron
+  // 'maxIntentos') que sigan visibles, y los vuelve a pedir de una — sin esperar ningún pan/zoom.
+  //
+  // Deliberadamente NO se reinsertan las entradas reseteadas en 'pendientes': al reasignar
+  // 'tile.src' más abajo, Leaflet dispara 'tileload'/'tileerror' sobre ESE MISMO <img> como si
+  // fuera una carga real nueva. Si carga bien, no hace falta ninguna entrada pendiente (nunca se
+  // creó ninguna acá); si vuelve a fallar, 'onTileError' de arriba arma una entrada NUEVA desde
+  // cero (intentos: 0, esperaTicks: 1) — el mismo camino que cualquier tile que falla por primera
+  // vez, sin arrastrar el conteo de intentos que tenía antes del corte de red. Por eso también se
+  // apaga el temporizador compartido acá: si algún reintento vuelve a fallar, 'onTileError' lo
+  // reinicia solo, igual que siempre.
+  function onConectividadRecuperada() {
+    var candidatos = pendientes.concat(abandonados);
+    pendientes = [];
+    abandonados = [];
+    if (intervalId !== null) {
+      clearInterval(intervalId);
+      intervalId = null;
+    }
+    for (var i = 0; i < candidatos.length; i++) {
+      var entrada = candidatos[i];
+      // Solo los que siguen montados en el DOM: uno podado por un pan/zoom mientras estaba
+      // pendiente/abandonado ya no se va a dibujar — reintentarlo sería red desperdiciada, igual
+      // que en 'reintentarPendientes'.
+      if (!opciones.tileSigueEnMapa(entrada.tile)) continue;
+      // 'urlBase' ya está congelada desde 'onTileError' (el zoom del momento en que ESE tile
+      // falló) — nunca se recalcula acá, mismo motivo que en 'reintentarPendientes'.
+      var url = entrada.urlBase;
+      url += (url.indexOf('?') === -1 ? '?' : '&') + '_retry=' + Date.now();
+      entrada.tile.src = url;
+    }
+  }
+
   return {
     onTileLoad: onTileLoad,
-    onTileError: onTileError
+    onTileError: onTileError,
+    onConectividadRecuperada: onConectividadRecuperada
   };
 }
 `;
@@ -767,6 +822,16 @@ export function construirHtml(
         }
         seguimientoActivo = true;
         map.flyTo(posicion.getLatLng(), 17, { duration: 0.6 });
+        return;
+      }
+
+      if (data.type === 'reconectado') {
+        // Decisión del CTO (2026-09-25): 'route-map-view.tsx' manda este mensaje al detectar la
+        // transición offline→online del teléfono (ver 'reconexion-mapa-offline.ts') — reinicia
+        // los contadores de los tiles pendientes/abandonados y los vuelve a pedir, sin tocar
+        // L.map ni redibujar la polyline/los marcadores (mismo criterio que 'proximoPuntoControl'
+        // más arriba: un mensaje puntual que solo toca lo que corresponde, nunca recarga nada).
+        controladorTiles.onConectividadRecuperada();
         return;
       }
 

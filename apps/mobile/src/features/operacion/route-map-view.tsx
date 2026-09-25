@@ -9,6 +9,7 @@ import {
   esHandshakeMapaListo,
   type EstadoMapaProtocolo,
 } from './route-map-protocol';
+import { useReconexionMapaOffline } from './reconexion-mapa-offline';
 
 interface RouteMapViewProps {
   paquete: PaqueteDia;
@@ -129,6 +130,21 @@ export function RouteMapView({
       lastRecenter.current = recenterTick;
     }
   }, [recenterTick]);
+
+  // Decisión del CTO (2026-09-25): al volver la conectividad del teléfono (no la de
+  // `tile.openstreetmap.org` en sí — eso lo sigue manejando el propio controlador de tiles del
+  // WebView, ver `route-map-html.ts`), avisarle al mapa que reinicie los contadores de reintento
+  // de los tiles pendientes/abandonados y los vuelva a pedir, sin esperar a que el chofer haga
+  // pan/zoom. `useReconexionMapaOffline` (ver `reconexion-mapa-offline.ts`) hace el trabajo de
+  // detectar la transición offline→online (con debounce, para no disparar en redes que aletean) —
+  // acá solo se traduce esa señal en el mismo mecanismo de `postMessage` puntual que ya usa
+  // `recenter` arriba, sin tocar `enviarEstadoCompleto` (eso son mensajes de ESTADO completo, este
+  // es un evento puntual, como 'recenter').
+  useReconexionMapaOffline(
+    useCallback(() => {
+      webViewRef.current?.postMessage(JSON.stringify({ type: 'reconectado' }));
+    }, []),
+  );
 
   return (
     <View style={[styles.container, style]}>
