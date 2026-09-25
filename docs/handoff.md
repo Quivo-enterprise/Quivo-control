@@ -6,6 +6,534 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Próxima entrega: APK conductor build 11 — plan aprobado 2026-09-23
+
+**Plan: [`plan-apk-build-11.md`](plan-apk-build-11.md).** Decisiones del CTO:
+
+- **Alcance P0 completo:** cerrar las 4 ramas móviles (Entregas 1–7, 7b, 25, 31) y sumar las Entregas 8, 9, 26 y 28.
+- **Radio:** detectar a 150 m y confirmar a 40 m. Cierra la decisión abierta #1.
+- **Fuera de este APK:** palancas de costo D (sync a 60 s) y captura a 30 m.
+- **Cambio del nombre de paquete antes del build**, porque el trial de Transistorsoft de `com.quivotech.conductor` venció. El APK nuevo no se instala encima del viejo: hay que drenar cada teléfono antes de desinstalar.
+
+- **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
+- **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
+
+### Punto de retome — cierre de la sesión del 2026-09-25
+
+**Leer esto primero.** Reemplaza al retome del 2026-09-23 (que queda abajo como histórico).
+
+**Decisiones del CTO en esta sesión:**
+- **Gate sin Codex hasta que vuelva.** La cuota de Codex está agotada hasta el **2026-09-27 15:46**. Hasta entonces el gate de merge es `/code-review` + `/security-review` (sin `verify-fix`). Desde esa fecha, `verify-fix` vuelve a ser obligatorio para los `fix:` (regla 13).
+- **Antes de lanzar el build 11**, presentar al CTO la lista completa de funcionalidades nuevas y correcciones (por Entrega/PR). El CTO decide ahí si suma alcance. No disparar el build antes.
+- **Licencia Transistorsoft nueva** para `com.quivotech.conductor.app`, cargada en EAS (`TRANSISTORSOFT_LICENSE_KEY`, entorno `production`, proyecto `@shadow00/quivo-conductor`). **Es trial:** vence el **2026-10-25**, `max_build_stamp` 20261025, `grace_builds` 0. El build 11 tiene que salir antes; para builds posteriores hay que comprar la licencia. El valor no se puede leer de vuelta: se confirma en el primer build.
+- No se agrega detección de reuso de refresh token en el servidor (ver abajo).
+
+**Hecho:**
+- **#80 mergeado** (`baf87dd`, squash): drenado GPS en background + sesión móvil entre contextos + paquete `com.quivotech.conductor.app` en `app.config.ts`. Incluye los fixes de `/code-review` (marca de logout respetada por `restaurarSesion` y el headless; error de lectura de la marca no apaga el tracker; lease propio para revocaciones pendientes; backoff/agotado del sync; throttle del drenado; `CircuitoRefreshAbiertoError` fuera de la racha de 401). Móvil tsc 0 / 263 tests; API tsc 0, mismos 6 fallos de Better-Auth que `main`. `/security-review` sin hallazgos.
+- **Corrección de una premisa falsa del retome anterior:** el servidor **no** detecta reuso de refresh token. `refresh()` no lee `refreshTokenHashAnterior`; solo `logout()` la usa como prueba de posesión para el fallback por `deviceId`. El riesgo residual de drenado (suspensión entre el CAS del lease y la escritura en SecureStore) termina en: token ya rotado → 401 → circuito abierto → el chofer se vuelve a loguear (Entrega 28). No es un problema de seguridad. Detección de reuso descartada: convertiría esa carrera local en revocación total.
+- **Deuda técnica registrada:** secuencia de lease duplicada entre `drenaje-oportunista.ts` y `sync-outbox.ts`.
+
+**Estado por rama:**
+
+| Rama · worktree | HEAD | Estado |
+|---|---|---|
+| `fix/movil-drenado-background` · `-movil-drenado` | — | **Mergeada (#80).** Borrar el worktree: antes, `docker compose down` en él (quedaron Postgres 5434, Redis 6380 y OSRM corriendo) |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `b161377` | Rediseño hecho (tsc 0, 267 tests, lint 0 errores). **`/code-review` con 10 hallazgos sin aplicar** (lista abajo). Sin rebase: va 37+ commits detrás y ahora `main` trae drenado, que toca `headless-task.ts` (esperar conflictos) |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `6831112` | Cerrado. Falta rebase, `/code-review`, PR y prueba en teléfono (con red y en modo avión) |
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `9e9f2d3` | Desbloqueada: drenado ya está en `main`. Rebase sobre `main` y cerrar sus gaps (`partial` del 09-11) |
+| `feat/web-mapa-todos-vehiculos` · `-web-mapa` | `0d67964` | **Bloqueada por permisos:** el clasificador de auto mode rechazó el agente de rebase (necesita `push --force-with-lease`). El CTO tiene que habilitar el force-push o hacer el rebase. Al rebasear, revisar la semántica nueva de `totalPuntos` (#74) |
+
+**Hallazgos de `/code-review` en anuncio (a aplicar con un Sonnet nuevo) y triage del chairman:**
+1. `anuncio-punto-control.ts:409`: `'pendiente'` significa a la vez "reclamado, programándose" y "falló". El reintento reprograma un reclamo en vuelo y alerta dos veces. **Fix:** estado separado (`programando` con timestamp) y reintentar solo lo `pendiente` viejo.
+2. `decidir-anuncio.ts:176`: los estados sembrados desde la evidencia (`clavesCumplimientoDesdePayloads`) quedan `dentro:true` sin `anuncioHecho`. Tras un re-seed, cada punto ya pasado dispara `fallback-salida` al alejarse. **Fix:** el seed marca `anuncioHecho: true`. Es el más grave: rompe la invariante "la evidencia nunca dispara".
+3. `use-gps-operativo.ts:273` y `:376`: `setUltimoAnuncioLlegada` se setea antes y sin importar el reclamo, así que el chime suena aunque el reclamo se haya perdido. **Fix:** setearlo solo si hubo reclamo y quedó programado.
+4. `decidir-anuncio.ts:237`: con `motivo` null no se persiste `desdeMs`, así que con el vehículo detenido y solo heartbeats, `fallback-tiempo` nunca dispara. **Fix:** sembrar desde `candidatoTsFixMs` o persistir la transición.
+5. `outbox.ts:395`: `obtenerAnunciosPendientesDeProgramar` no filtra por sesión, antigüedad ni intentos, y reintenta filas de días anteriores para siempre. **Fix:** filtrar por la sesión actual, agregar TTL e intentos máximos, purgar, e índice en `estado`.
+6. `anuncio-punto-control.ts:382`: si el reclamo lanza error, hoy falla abierto (`reclamado=true`) y duplica justo en el caso de contención entre contextos. **Decisión:** fallar cerrado, sin programar, y reintentar el reclamo en el próximo tick.
+7. `headless-task.ts:875`: faltan chequeos de generación en `aplicarConfirmacionesForzadas` y `drenarReintentosVisitaPendiente`. Una operación vieja puede resucitar `visitas_pendientes` y duplicar una pasada de evidencia. **Fix:** chequear después de cada `await`.
+8. `headless-task.ts:329`: el reintento de anuncios corre dentro del `conTimeout` y antes de `operacion()`, así que un puente de notificaciones colgado bloquea la escritura de `gps_point`. **Fix:** correrlo después de `operacion()` con su propio timeout, o fuera de la cola de evidencia.
+9. `outbox.ts:101`: la migración de anuncios relanza cualquier error que no sea "duplicate column" y tumba `abrirOutbox`, con lo que se pierde evidencia. **Fix:** `PRAGMA table_info` + catch con Sentry, sin fallar la apertura.
+10. Limpieza: `gps-provider.tsx:55` abre el outbox para un `_db` que no se usa; `void puntosRearmados` es código muerto; unificar `claveAnuncio()`. Menores: validar `motivo` antes de `textoAnuncioLlegada`, y posible doble sonido (canal nativo + expo-audio) con la pantalla apagada.
+
+**Pendiente del CTO:**
+- Habilitar force-push para el rebase de web, o hacerlo.
+- OK para desplegar `main` a producción (#65, #70, #74 y ahora la migración de #80), seguido del recompute de `docs/runbooks/retencion-gps.md`.
+
+**Cómo retomar (máximo 3 agentes Sonnet a la vez):**
+1. Anuncio: un Sonnet aplica los 10 hallazgos de arriba → rebase sobre `main` (drenado ya adentro) → `/code-review` → PR → merge. Desde el 2026-09-27 15:46, sumar `verify-fix`.
+2. Posición: rebase sobre `main` y cierre de gaps.
+3. Mapa offline: rebase, `/code-review`, PR.
+4. Después: Entregas 8/9/26 (sobre anuncio mergeado) y 28. Luego, la lista de features y fixes para el CTO antes del build.
+
+---
+
+### Punto de retome — cierre de la sesión del 2026-09-23 (histórico, reemplazado por el del 2026-09-25)
+
+**Leer esto primero.** Las cuatro ramas móviles están pusheadas, ninguna tiene PR y no queda nada sin commitear en ningún worktree. El orden de merge sigue siendo **drenado → posición → anuncio → mapa offline**. Web va en paralelo.
+
+| Rama · worktree | HEAD | Rebase sobre `main` | tsc / tests móvil | Codex `verify-fix` (último) |
+|---|---|---|---|---|
+| `fix/movil-drenado-background` · `-movil-drenado` | `8431fc9` | **Sí** (base `7d001e1`) | 0 / 244 | Ronda 6 **sin correr**. `8431fc9` es un commit de preservación: el agente se cortó por límite de uso justo antes de commitear |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `f84618c` | No | 0 / 245 (+ shared 57/57) | **`partial`**, `20260923-201325-verify-fix-266181.json` |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `6831112` | No | 0 / 196 | **`fixes_root_cause`**, `20260923-192505-verify-fix-144425.json` |
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `9e9f2d3` | No | — | `partial` (del 09-11). No se tocó: espera a que drenado esté mergeado |
+| `feat/web-mapa-todos-vehiculos` · `-web-mapa` | `0d67964` | No | — | No aplica. No se tocó |
+
+Los reportes de Codex están en `~/.claude/codex-debug-state/`.
+
+**Drenado, qué se hizo en esta sesión (rondas 4 a 6):**
+- Rebase limpio. La migración pasó a llamarse `20260923090000_refresh_token_hash_anterior` para quedar después de `gps_sesion_resumen`.
+- G1: refresh bajo el lease SQLite `refresh-sesion`, con relectura dentro del lease y compare-and-set del lease antes de persistir. Ya no existe el refresh sin lease.
+- G2: credenciales y contexto van en claves de SecureStore separadas (`quivo.mobile.credenciales.v1` y `quivo.mobile.contexto.v1`).
+- Logout: toma el mismo lease, relee el token persistido y deja una revocación pendiente durable si no hay red.
+- Ronda 6 (commit `8431fc9`):
+  - se eliminó la migración de la clave vieja: el paquete nuevo es una instalación limpia y SecureStore es por app;
+  - una lectura fallida bajo el lease difiere el refresh;
+  - el logout no entra a la sección crítica sin el lease;
+  - la revocación pendiente pasó a ser por entrada.
+- **Falta:**
+  - revisar el diff de `8431fc9` contra los cuatro puntos del brief (reporte `20260923-200546`);
+  - correr `verify-fix` (base `7d001e1`);
+  - `/code-review` y `/security-review` (logout y migración Prisma);
+  - PR, CI y merge.
+- **Riesgo residual que el CTO tiene que aceptar (regla 13):** si el runtime se suspende entre el compare-and-set del lease y la escritura en SecureStore, la escritura tardía puede pisar un token más nuevo. SecureStore no tiene escritura condicional, así que no se puede hacer fencing. La red de seguridad es la detección de reuso del servidor (`refreshTokenHashAnterior` revoca la sesión entera) más el login limpio de la Entrega 28. Está documentado en `use-auth-movil.ts`, junto a `renovarLease`.
+- En el worktree de drenado quedaron corriendo Postgres (5434) y Redis (6380) de su `docker-compose`.
+
+**Anuncio: necesita un rediseño, no otra ronda.** La auditoría de `6e4f285` salió bien: G1, G2 y R1 estaban correctos. Después vinieron dos rondas más con `eventId` determinístico, atomicidad del outbox (R2), `RADIO_CONFIRMACION_M` y `setNotificationHandler`. Codex sigue en `partial` y los huecos son de integración, no teóricos:
+1. la evidencia todavía dispara anuncios por `gps-provider.tsx:108` y `anuncio-punto-control.ts:364`;
+2. `evaluarAnunciosProximidadVencidos` (el fallback de 90 s) **solo se llama desde tests**;
+3. `anuncioProximidadHecho` se marca antes de programar la notificación;
+4. el dedupe hace SELECT → programar → INSERT, que no es atómico;
+5. la generación de la cola no se chequea después de cada `await`;
+6. el drenado de reintentos queda fuera de `conTimeout`;
+7. el texto «a menos de 40 m» también se usa en los fallbacks.
+
+Diseño decidido para la próxima sesión (un solo agente Sonnet):
+- **Una sola decisión de anuncio:** función pura `decidirAnuncio(estadoAnuncio, entrada: fix | heartbeat, ahora)` → `{motivo: 'proximidad' | 'fallback-tiempo' | 'fallback-salida' | null, estado}`. La evidencia nunca dispara ningún canal hacia el chofer.
+- **Un solo punto de llamada:** dentro de `colaRegistroGps`, tanto para fixes como para heartbeats. El foreground (`gps-provider`) no tiene disparador propio: consume las decisiones de esa misma cola.
+- **Intención durable:** INSERT OR IGNORE de la intención (`pendiente`) en `anuncios_punto_control` **antes** de programar, lo que reclama la identidad `{sesionId, puntoControlId, pasada}` de forma atómica. Después se programa con `identifier` igual a esa identidad (un duplicado reemplaza al anterior, no se apila) y se marca `programado`. Si falla, queda `pendiente` y la cola la reintenta.
+- **Texto según el motivo** (proximidad, tiempo o salida).
+- **Generación** chequeada después de cada `await` y antes de toda mutación. El drenado de reintentos va dentro de `conTimeout`, y los reintentos de una visita se descartan cuando su confirmación transaccional sale bien.
+
+**Mapa offline:** cerrado. Tiene handshake `mapa-listo` y el reintento de tiles arma la URL con `coords.z` y la x normalizada. Solo falta rebase, `/code-review`, PR y la prueba en teléfono (con red y en modo avión).
+
+**Otros cambios de esta sesión:**
+- Se borraron del remoto `feat/reestructurar-admin-panel` (`8950ebb`), `feat/QUI-342-filtros-url-export-cumplimiento` (`be805b1`) y `feat/QUI-339-auditoria-accesibilidad-web` (`c986699`), por pedido del CTO.
+- Quedan 7 ramas remotas de agosto sin mergear, probablemente mergeadas con squash: `deploy-gcp-prod`, `en-vivo-api`, `en-vivo-design-system`, `en-vivo-web`, `fix/en-vivo-hooks`, `qui-227-web-nextjs-scaffold` y `test/QUI-340-e2e-admin`. No se tocaron: verificar que su contenido esté en `main` antes de borrarlas.
+- Backup del estado de siembra (Entrega 0a) en `~/quivo-backups/estado-siembra-produccion-2026-09-23.json`.
+- Tests de API en local: 6 fallos de Better-Auth (`modules/auth`, `jwt-auth.guard`, `auditoria`, `sync-errores`). Son idénticos en `main`, son del entorno y no los causa ninguna rama. Si los tests de `en-vivo` fallan con `PosicionEnVivoSchema undefined`, es un `dist` viejo: `corepack pnpm -C packages/shared build`.
+- `pnpm` no está en el PATH de la shell de las herramientas: usar `corepack pnpm`.
+
+**Pendiente del CTO:**
+- OK para desplegar `main` a producción (#65, #70 y #74), seguido del recompute de `docs/runbooks/retencion-gps.md`.
+- Pedir la key de Transistorsoft para `com.quivotech.conductor.app` recién cuando las Fases 1–3 estén mergeadas.
+- Aceptar el riesgo residual de drenado descrito arriba.
+
+**Cómo retomar:** como máximo 3 agentes Sonnet a la vez.
+1. Drenado: revisar `8431fc9`, verify-fix, reviews, PR y merge.
+2. Anuncio: rediseño según el diseño de arriba.
+3. Web: rebase, review y PR.
+
+Cuando drenado esté mergeado, entran posición (rebase sobre drenado) y la Entrega 8/9/26 (sobre anuncio mergeado).
+
+## Costos recalibrados con prueba de carga + confirmación en Cloud SQL real — 2026-09-22
+
+Plan: `docs/plan-experimento-puntos-gps.md`. Resultados: `scripts/experimentos/gps/carga/resultados/resumen.md`.
+
+- **Cifras finales (USD/mes, actual / optimizada, captura 15 m):** 600 → $436.53 / $205.03
+  (agosto: $508.75 / $309.54); 2000 simultáneos → $994.06–$1,270.15 / $496.28–$703.35 (rango
+  por el multiplicador de RAM 3×/4×, heurística declarada, no medida). Captura 30 m: 600 →
+  $397.03 / $182.76; 2000 → $858.33 / $419.08. Fuente: `docs/costos-gcp-2000.md` (GENERADO por
+  `node scripts/costos/generar-tablas.mjs`, no editar a mano).
+- **Las cifras infladas previas (~$1.4k a 600, hasta $5.1k a 2000) venían de dimensionar solo
+  por un techo de escritura sin medir — descartado.** El tier a 600/2000 lo deciden RAM/working
+  set y el piso `db-custom-2-7680`, no la escritura.
+- **Prueba de carga local (Docker, CPU/RAM capados):** c1 300–2000 y c2 1000–3000 pts/s PASA. La
+  corrida vieja c1@2000 FALLA era límite del generador closed-loop (8,46 ms/lote ⇒ ~1770 pts/s),
+  no de la base; la baja de latencia 8,46→3,34 ms quedó **sin explicar**.
+- **Cloud SQL real (`db-custom-1-3840`, instancia temporal, ya BORRADA):** 2000 pts/s sostenidos
+  con concurrencia 40, CPU máx 50 %, memoria 58–65 %. Con concurrencia 8/16 falla por RTT del
+  cliente (~187 ms/lote), no por la base. Lecturas en vivo: listarHoy p50 60 ms, obtenerPosiciones
+  p50 70 ms. Tier 2 vCPU no se corrió a propósito (no cambia ninguna decisión).
+- **Publicado:** finanzas https://claude.ai/artifact/CKYr2k2r8wZaWbgh2XAL5f · escalera
+  https://claude.ai/artifact/S32g8pCG5fN8Txu984uSZH (privados: el CTO debe compartirlos) ·
+  comentario en ClickUp 86e34jkb2.
+- **Pendiente:** la tarea de ClickUp pide hasta **3000** vehículos; el modelo llega a 2000 (4/8 vCPU
+  no medidos). Decisión de producto: captura 30 m (validar en piloto 86e329ub0; afecta precisión
+  de replay/apelaciones). Rama `feat/web-mapa-todos-vehiculos` consume `posicionesTodas`:
+  revisar el cambio de semántica de `totalPuntos` (#74) al rebasear. Tras deployar #74, correr
+  una vez el recompute de `docs/runbooks/retencion-gps.md`.
+
+### Palancas de costo pendientes (estado verificado contra el código, 2026-09-22)
+
+**La columna "optimizada" es un objetivo, no lo que se paga hoy.** Producción corre la
+arquitectura "actual": de las seis palancas de agosto no se aplicó ninguna
+(`docs/plan-costos-2000.md` §9.3). Fuentes de detalle: `docs/costos-gcp-por-escala.md` §6
+(palancas A–F), `docs/plan-costos-2000.md` §11–§12 (palancas de volumen),
+`scripts/experimentos/gps/carga/resultados/resumen.md` (concurrencia del worker).
+
+**Palancas de precio (agosto), ninguna aplicada:**
+
+| # | Cambio técnico | Estado hoy | Ahorro | Riesgo / prerrequisito |
+|---|---|---|---|---|
+| A | `quivo-api` con Direct VPC egress (`--network/--subnet/--vpc-egress`, como `quivo-worker`) en vez de `--vpc-connector` | `scripts/deploy-gcp.sh:772` sigue con `--vpc-connector` | −$18.40/mes, todo escalón | Ninguno declarado (GA) |
+| B | Redis propio en `e2-micro` en vez de Memorystore Basic 1 GiB | Memorystore sigue (`docs/infra-gcp-prod.md:84-92`) | −$40.60/mes | Operación propia (parches, monitoreo). Memorystore Basic tampoco tiene HA |
+| C | `--min-instances 1` → `0` en `quivo-api` | `deploy-gcp.sh:770` sigue en 1 | −$11.59 a −$17.71/mes | Cold start ~3-5 s en el primer sync del día; el outbox reintenta |
+| D | Ciclo de sync 15 s → 60 s (`REFRESCO_MS`) | `apps/mobile/src/features/operacion/use-sync-status.ts:8` sigue en `15_000` | −$9 en requests y evita la 2.ª instancia de worker a 500-600 (−$37) | Hasta 60 s más de lag en `/en-vivo`. Requiere release de app. **Ojo:** el motivo de agosto ("un INSERT por punto") era falso: el worker ya hace INSERT multi-fila; el ahorro viene de menos requests/transacciones |
+| E | Retención caliente 6 → 3 meses + archivo en bucket GCS Nearline (`GPS_RETENTION_MONTHS=3`, `GPS_ARCHIVE_BUCKET`) | Default 6 (`retencion-gps.service.ts:121`), bucket vacío (`.env.example:65`). El código de archivado existe, no está activado | −$14.45/mes a 600; a 2000 el disco caliente con 6 meses es ~$163 + ~$77 backups | Crear el bucket (no existe) y seguir `docs/runbooks/retencion-gps.md` |
+| F | CUD de 1 año en Cloud SQL (−25 % del cómputo) | No verificable en el repo (se compra en billing) | −$69.02/mes a 600 | Compromiso de 12 meses: tomarlo solo con el tier confirmado. `db-g1-small` no admite CUD |
+
+**Palancas de volumen y capacidad (bajan la carga, no el precio unitario):**
+
+- **Concurrencia del worker BullMQ 1 → 4.** `ingesta-worker.service.ts` no fija `concurrency`
+  (default 1, serializado). Medido: 2000 pts/s que falla en 1 vCPU con concurrencia 1 pasa al 100 %
+  con 4 en el mismo contenedor. La más barata antes de subir tier. Falta probar que no rompe el
+  orden de lotes de un mismo dispositivo.
+- **Retención escalonada por resolución** (evolución de E): denso 7-14 días → trazo simplificado +
+  eventos de control → archivo. Riesgo bajo. A 2000 el disco caliente con 6 meses es ~684 GB
+  medido (`plan-costos-2000.md` §12; la cifra de ~1,46 TB → ~100 GB de §11 usaba la estimación
+  preliminar de §9.2, ya corregida); el ahorro nuevo no está recalculado.
+- **Douglas-Peucker con zona protegida antes de persistir.** Medido (n=1): DP 2 m retiene 63 % de
+  puntos, p95 1,2 m, 0 pasadas perdidas de 132; DP 20 m retiene 53 %, p95 8,9 m, 0 perdidas.
+  **Sin zona protegida pierde pasadas (28/132 con 5 m): descartado para evidencia.** A 2000 el
+  ahorro se diluye porque el tier lo decide la RAM.
+- **Captura 15 m → 30 m** (`distanceFilter`, `apps/mobile/src/gps/background-geolocation.config.ts:52`):
+  −50 % de puntos sin pasadas perdidas (n=1). A 2000: $1,270 → $858 actual, $703 → $419
+  optimizada. Requiere release de app y validar en el piloto 86e329ub0 (precisión de replay y
+  apelaciones). Submuestrear a 30 m no equivale a capturar a 30 m.
+- **`distanceFilter` adaptativo** (denso cerca de puntos de control, laxo en tramos rectos): sin
+  cifra, la más cara de implementar (release + geocercas en el dispositivo).
+- **Resumen por sesión `gps_sesion_resumen`:** HECHO (#74). Falta el recompute tras el deploy.
+- **TimescaleDB/AlloyDB:** decisión de arquitectura, no optimización. Solo si retención escalonada
+  + DP no alcanzan.
+- **Cambio de región a `us-central1`:** ~26 % menos, pero **no recomendado**: migración completa
+  de datos y latencia desde Bolivia sin medir. Retirado del modelo.
+
+**Pendientes técnicos sin costo directo (bloquean confiar en los números):**
+
+- Activar el export de facturación a BigQuery: hoy ningún número se contrasta con la factura real.
+- Tiers de 4 y 8 vCPU de Cloud SQL sin medir (extrapolados); el multiplicador de RAM 4× es
+  heurística declarada. A 2000 decide el tier (rango $994–$1,270).
+- k6 a 300 pts/s nunca corrió contra `quivo-control-prod`.
+- Bytes/fila (365,6 B) medidos en muestra chica sin `VACUUM FULL`/`ANALYZE`: en régimen puede subir.
+- `tile.openstreetmap.org` no admite uso de flota en producción: pasar a un proveedor de tiles
+  pago (mismos datos OSM).
+
+## Mapa en vivo: tabla `gps_sesion_resumen` (N+1 de `listarHoy`/`obtenerPosiciones`) — 2026-09-22
+
+**Estado:** PR `perf/en-vivo-resumen-sesion`. Plan: `docs/plan-en-vivo-resumen-sesion.md`.
+
+- Tabla nueva `gps_sesion_resumen`, PK `(sesion_id, jornada, "sindicatoId")`, FORCE RLS con la
+  misma policy que `gps_points`. La mantiene el worker en el mismo statement que inserta los puntos
+  (CTE `INSERT ... RETURNING` + upsert ordenado). Las lecturas del mapa pasan de O(puntos del día)
+  a O(sesiones): con 1.000 sesiones y 6,7 M filas (local), `listarHoy` 53 s → 62 ms y
+  `obtenerPosiciones` 53 s → 72 ms. Objetivo de <50 ms no alcanzado: el resto es el join de
+  sesiones/vehículos/rutas, fuera de este cambio.
+- Hallazgos de la revisión aplicados: backfill con `set_config('app.rol','admin_quivo')` (en Cloud
+  SQL `postgres` no es BYPASSRLS, sin eso copiaba 0 filas); jornada con `AT TIME ZONE 'UTC'`;
+  sindicato en la PK (un `sesionId` forjado no pisa el resumen de otro sindicato); `ORDER BY` en
+  el upsert contra deadlocks; `ultimoIngresoTs` = máximo de hoy y ayer.
+- Cambio de semántica: `obtenerPosiciones.totalPuntos` = puntos de la jornada del último fix (antes
+  ventana rodante de 24 h). Sin consumidor en `apps/web`.
+- **Paso manual obligatorio tras el deploy:** correr una vez el recompute de
+  `docs/runbooks/retencion-gps.md` (sección `gps_sesion_resumen`) cuando el worker nuevo esté vivo,
+  para cubrir los puntos que ingirió el worker viejo entre la migración y el deploy.
+- Local: 5 tests de auth/JWKS fallan en esta máquina por estado de `jwks` del entorno local; no
+  tocan este cambio. CI es el juez.
+
+## Modelo de costos a 2000 trufis — mergeado en #72 (2026-09-21)
+
+**Estado:** mergeado a `main` en `8f828be` (PR #72, CI `ci` + `acceptance` en verde). Cierra la
+parte de ingeniería de ClickUp `86e34jkb2` ("Añadir proyección de Costos").
+
+Cifras finales del documento, escenario A (concurrentes en pico), supuestos medidos:
+
+| | 600 conductores | 2000 conductores |
+|---|---|---|
+| Actual | $1.402,83/mes | $2.926,66–$5.135,35/mes |
+| Optimizada | $929,76/mes | $1.945,74–$3.602,25/mes |
+
+A 2000 es un **rango**: el pico cae en empate exacto con un borde de tier de Cloud SQL (495,0 pts/s).
+
+El test de regresión **ahora corre en CI**: `scripts/*` entró al workspace de pnpm y
+`@quivo/costos-scripts` está en el fan-out de `turbo run test` (`f1f140e`). Antes no lo alcanzaba
+ningún comando de CI y el gate de ±15% no era gate de nada.
+
+**Pendiente, sin hacer:**
+- **Entregable 2** (ClickUp `86e2yxchp`): documento para finanzas con costos y riesgos. Presupuesto de
+  ventas, punto de equilibrio y pricing quedan fuera por decisión del CTO — los completa finanzas.
+- Publicar la escalera v2 como Artifact (la v1 de agosto es un Artifact; esta vive solo en el repo).
+- Comentar el resultado en ClickUp `86e34jkb2`: Angel pingeó el 2026-09-13 sin respuesta.
+- Cerrar la brecha n=1 de la medición: lo resuelve el piloto múltiple usuario (`86e329ub0`).
+- Prueba de carga `tests/load/k6/` contra `quivo-control-prod`: nunca se corrió, y a 2000 el pico
+  supera 1,6× su techo de 300 pts/s.
+
+### Detalle de la última iteración (2026-09-20)
+
+Plan: [`plan-costos-2000.md`](plan-costos-2000.md) §13 (especificación de calibración) y §7
+(criterios de aceptación). `scripts/costos/modelo-costos.mjs` + `scripts/costos/generar-tablas.mjs`
+generan `docs/costos-gcp-2000.md` — **cero valores a mano en el `.md`**, todo sale de una corrida de
+`node scripts/costos/generar-tablas.mjs > docs/costos-gcp-2000.md`. Test de regresión: 21/21.
+
+Cerrados en esta iteración cuatro hallazgos de una revisión de código que se había aplicado a medias
+(el mecanismo existía en `modelo-costos.mjs` pero `generar-tablas.mjs` no lo consumía, o el `.md`
+nunca se regeneró tras el fix):
+
+1. **Rango de borde de tier publicado.** `bordeTierCercano` (ya calculado por
+   `tierCercanoABorde` en el modelo) ahora se consume en `generar-tablas.mjs` en los 5 lugares que
+   citaban el punto (resumen ejecutivo, reconciliación, "Conclusión para finanzas", tablas de
+   escalones y desglose por servicio). A 2000 conductores el pico da exactamente 495,0 pts/s,
+   empate exacto con el borde de `db-custom-32-122880`/`db-custom-64-245760`: el documento ahora
+   recomienda a finanzas presupuestar contra el extremo alto del rango ($2926,66–$5135,35 actual)
+   en vez de un número puntual que esconde un empate de margen cero. Mismo empate en n=500 y n=1000.
+2. **Edge case de jornada, signo corregido** (ya estaba en el código, solo faltaba regenerar el
+   `.md`): jornada 14h ahora da MÁS puntos/día (tasa constante puntos/hora) y por lo tanto MÁS
+   costo (+4,2%), no menos (-37,5% como decía la versión vieja del documento).
+3. **Storage de escenarios B/C, ya escalaba con la flota nominal** (idem, solo faltaba
+   regenerar): a 2000 conductores los tres escenarios dan 695 GiB (antes B daba 420 GiB y C 250 GiB,
+   subestimados por usar la concurrencia efectiva en vez de la flota completa).
+4. **Comparación de criterios de calibración de API, publicada con números reales**: minimizar
+   error relativo (%) da `c=0,0568` con error absoluto total $192,00, un 4,3% PEOR que minimizar en
+   USD (`c=0,0481`, $184,14). La afirmación "no fue mejor" ya no es una frase sin verificar.
+
+Abiertos, declarados como tales en el propio documento (no ocultos):
+
+- Escenario C (factor de concurrencia 0,35) es un supuesto de producto NO VERIFICADO — el plan
+  §4.2 lo deja "a derivar" y no hay medición de utilización diaria real de la flota.
+- Los tiers de Cloud SQL y los umbrales de `quivo-worker` por encima de 600 conductores son
+  EXTRAPOLACIÓN de precio (duplicar el patrón que agosto sí documentó), sin prueba de carga real
+  que confirme que un solo nodo sostiene esa capacidad — el propio test de carga k6 del repo solo
+  cubre hasta 300 pts/s, y a 2000 conductores el pico da 495 pts/s (1,6× ese techo).
+- La medición que alimenta los supuestos MEDIDOS es n=1 (una sola jornada real completa,
+  extrapolada), dos días de datos, sin `VACUUM FULL`/`ANALYZE` — documentado en detalle en §8 del
+  `.md` generado.
+
+## Punto de retome: cinco ramas abiertas, ninguna mergeable todavía (2026-09-11)
+
+**Leer esto primero en la próxima sesión.** El plan sigue siendo
+[`plan-correccion-post-piloto-2026-09-09.md`](plan-correccion-post-piloto-2026-09-09.md) (entregas
+0a–31, decisiones hasta la fila 12). Esta sección es la foto exacta de dónde quedó la ejecución.
+
+### Qué hay en `main` (`a8704da`)
+
+| PR | Qué |
+|---|---|
+| #65 | Commits del piloto, `GET /reportes/en-vivo/posiciones` (Entrega 10), throttler por dispositivo y caché negativa de tokens (Entrega 12) |
+| #66–#69 | Docs: handoff de #65, Entregas 7b, 28 (con evidencia de producción), 29, 30 (OSRM) y 31 (posición congelada) |
+| #70 | `unplugin-swc` en vitest con `decoratorMetadata`: los tests de integración de `sync-errores`/auditoría ya no se saltean y fallan si falta la metadata. `@swc/core` en `allowBuilds` |
+
+Nada de lo de abajo está desplegado. **Nada del lado móvil se probó en un teléfono.**
+
+### Las cinco ramas (todas pusheadas, ninguna con PR, sin cambios sin commitear)
+
+Todas están **20 commits detrás de `main`**: rebasar antes de abrir PR. Orden de merge obligatorio:
+**drenado → posición → anuncio → mapa offline → web**. Cada agente trabaja en su propio worktree
+(`../Quivo-control-<nombre>`); nunca `checkout` ni `stash` en el directorio principal.
+
+| Rama · worktree | HEAD | Tests | Entregas | Codex `verify-fix` (último) |
+|---|---|---|---|---|
+| `fix/movil-drenado-background` · `-movil-drenado` | `fe36953` | 216/216 | 1, 2, 3, parte de 4, logout real (migración Prisma `refreshTokenHashAnterior`) | **`partial`**, ronda 3 |
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `9e9f2d3` | 212/212 | 31a | **`partial`**, ronda 2 |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `6e4f285` (**WIP roto**) | **213/214, `tsc` rojo** | 5, 6, 7, 7b | **`partial`** sobre `5fc887b` |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `fcc55db` | 174/174 | 25, 31b | **`partial`** |
+| `feat/web-mapa-todos-vehiculos` · `-web-mapa` | `0d67964` | — | 13, 14 | No aplica (`feat`). Click y hover verificados en vivo con Playwright |
+
+`partial` **bloquea el commit final** (regla 13): o se cierra el hueco, o se justifica explícitamente
+al CTO. Los reportes completos están en `~/.claude/codex-debug-state/20260911-*-verify-fix-*.json`.
+
+**Trampas de apilado:** posición salió de un drenado viejo (`365e14f`) y **no contiene `fe36953`**;
+anuncio y drenado chocan en `db/outbox.ts` y `db/outbox-ddl.ts`. Rebasar posición y anuncio sobre
+drenado **después** de cerrarlo, no antes.
+
+### Lo que falta en cada rama
+
+**1. Drenado (base de todo, va primero).** Tres rondas de Codex; lo que queda:
+- **G1 — carrera de refresh entre contextos JS.** Foreground y headless pueden leer el mismo refresh
+  token T0; headless rota a T1, foreground manda T0 y recibe 401. Los single-flight son por contexto.
+  Diseño decidido: **refresh bajo un lease de SQLite `refresh-sesion`**; dentro del lease releer
+  SecureStore y, si el token cambió, adoptarlo sin tocar la red; el circuito cuenta el 401 solo
+  después de releer. Test con dos "runtimes" y barreras que fuercen ambas lecturas de T0.
+- **G2 — solo el refresh escribe tokens.** `obtenerContexto` guarda la sesión completa desde una copia
+  vieja y puede pisar un T1 recién rotado. Reemplazar por una actualización con relectura y fusión
+  (`actualizarSesionMovil`) que nunca toque los tokens.
+- **G3 — headless con más de 20 lotes no programa continuación.** Recomendación: **justificar** (el
+  heartbeat de 60 s continúa; 20 lotes son 10 000 eventos, muy por encima de una jornada) y dejarlo
+  escrito en el código y el PR.
+- **R — lease tomado por reloj que retrocede.** Recomendación: **justificar** con la cota ya puesta.
+- Después: `verify-fix` de nuevo, `/code-review`, **`/security-review`** (logout y migración), PR, CI,
+  merge. **Al desplegar, la migración va antes que el código de la API.**
+
+**2. Posición (31a, la flecha que no se mueve: P0 del CTO).**
+- **G1** — si `start()` funciona y `changePace(true)` falla, hoy se informa éxito. Reafirmar el
+  movimiento con `getState().isMoving` en el heartbeat y al volver a primer plano, **sin depender de
+  `onMotionChange`** (con `ACTIVITY_RECOGNITION` denegado ese evento no llega).
+- **G2** — si falla el outbox después de `start()`, `tracking` queda en `false` con el SDK grabando.
+  Poner `tracking=true` apenas `start()` resuelve, separar el estado de almacenamiento, y dejar
+  "Finalizar" siempre disponible.
+- **R1** — serializar la restauración de `disableStopDetection:false` con el siguiente `iniciar()`.
+- Rebasar sobre drenado cerrado, `verify-fix`, revisión, PR.
+
+**3. Anuncio.** El commit `6e4f285` es **de preservación**: un agente murió por límite de uso a mitad.
+Contiene G1 (histéresis propia de la voz: `puntosRearmados` pasó a `puntosRearmadosVoz`), G2
+(persistir la visita antes de publicarla en memoria) y R1 (serializar heartbeat y cierre en
+`colaRegistroGps`), **sin revisar**. Roto: `anuncio-punto-control.test.ts:386` usa el nombre viejo y
+el test "puntosRearmados libera el dedupe de aproximación ANTES de procesar el tick" falla (1 llamada
+en vez de 2). Falta:
+- Auditar el diff de `6e4f285` contra los cuatro huecos, no continuarlo a ciegas.
+- **`eventId` estable** por `{sesionId, puntoControlId, pasada}`, para que un fix y un heartbeat
+  concurrentes no emitan dos eventos con UUID distintos.
+- **R2 — atomicidad:** la transacción de `db/outbox.ts` se abre sobre `db`, pero sus operaciones
+  internas pueden recuperar un handle muerto y escribir en otra conexión. La transacción entera va
+  dentro de la recuperación de handle.
+- Test del recorrido completo con radio de detección menor que `RADIO_AVISO_M` (150).
+
+**4. Mapa offline (25 y 31b).**
+- **Gap — handshake de mapa listo.** El estado inicial (posición incluida) se manda con `useEffect` y
+  `onLoadEnd`, sin saber si los listeners del HTML ya existen. Si el primer mensaje llega antes, se
+  pierde. **Puede ser parte del síntoma de la flecha congelada**, así que va con la misma prioridad que
+  31a: el HTML emite `mapa-listo` tras registrar los listeners y React Native responde con el estado
+  actual, sin esperar recursos de red.
+- **Riesgo — reintento de tiles con zoom mezclado.** En Leaflet 1.9.4, `getTileUrl(coords)` usa el zoom
+  actual de la capa, no `coords.z`: un tile fallido de otro zoom se reintenta con la x/y vieja y el
+  zoom nuevo. Descartar los tiles fallidos de otro zoom o construir la URL con `coords.z`.
+- Confirmar que las apariciones de `removeLayer`/`toString` en la fuente son comentarios o tests de
+  ausencia. Probar **con red y en modo avión** antes de mergear.
+
+**5. Web (13 y 14).** Rebasar sobre `main` (16 atrás), `/code-review`, gate de UI (`web-design-guidelines`),
+PR. Se puede mergear en paralelo a las móviles: no comparte archivos.
+
+### Sin empezar
+
+- **Requieren OK explícito del CTO (escritura en producción):** 0b (cerrar sesiones fantasma
+  `verif-final-0…5` y zombis `9004TST`/`9001TST` con `UPDATE`, nunca `DELETE`) y 0c (rotación del
+  video a mano). El único acceso autorizado hasta ahora fue un job de **solo lectura**.
+- 8, 9, 11, 15–24, 26 (preflight), 27 (precarga del paquete), 28 (código `SESION_NO_VIGENTE`), 29,
+  30 (no dibujar la línea recta de OSRM).
+
+### Decisiones abiertas del CTO
+
+1. **Radio de detección.** Pidió 10 m. Objeción registrada: 150 m para detectar y ~40 m o el mínimo
+   local para confirmar al chofer; con `RUTA_PROXIMIDAD_TOLERANCIA_METROS = 100` todo radio menor que
+   la distancia de plantado pierde el punto siempre. Sin decidir.
+2. **OSRM** (Entrega 30): desplegarlo o proveedor externo. 3. **`lineaId` en `Conductor`** (Entrega 17).
+4. **FCM** para empujar la rotación (P1 de la Entrega 27).
+
+### Cómo retomar
+
+1. Leer esta sección y la Entrega 31 del plan.
+2. Relanzar **como máximo 3 agentes Sonnet a la vez** (con 4 o 5 el límite de uso los cortó cada vez):
+   drenado (G1+G2+justificaciones), anuncio (auditar `6e4f285`, arreglar el test, `eventId` estable,
+   R2) y mapa offline (handshake + zoom). Posición espera a drenado; web entra cuando se libere un lugar.
+3. Tras cada corte por límite de uso: `git status` en el worktree y auditar el diff antes de seguir.
+4. Para correr los tests de la API: exportar `DATABASE_URL` desde `apps/api/.env` (el postinstall de
+   `packages/db` falla sin ella). Postgres de tests en `localhost:5434` (contenedor
+   `quivo-control-postgres-1`), Redis en 6380.
+
+## Post-piloto: plan en 27 entregas y primer merge (#65, 2026-09-10)
+
+El piloto del 2026-09-09 (5 conductores, Línea 120 y Zona 12, todos desde Univalle Tiquipaya)
+funcionó como fuente de evidencia y falló como demo. **La intención vive en
+[`plan-correccion-post-piloto-2026-09-09.md`](plan-correccion-post-piloto-2026-09-09.md)**: 27
+entregas atómicas, cada una un PR con ámbito acotado, verificación, rollback y dependencias.
+Acá queda solo lo ejecutado.
+
+### Lo que el piloto mostró, y no era lo que parecía
+
+- **"Trufis duplicados" no existían.** El combo de `/en-vivo` lista *sesiones*, no vehículos
+  (`map-builders.ts`). Las ~20 entradas eran sesiones, muchas muertas. El mapa dibujaba **una**
+  por vez (`page.tsx`, `<select>` único): por eso aparecieron 2 iconos y nunca los demás.
+- **`verif-fi` / `test-ver` no los genera la app.** El único generador de `deviceId` emite
+  `android:${uuid}`. Son sesiones creadas contra producción por scripts o a mano.
+- **Los avisos "100 m antes" y "134 m antes" no son un bug de detección.** Producción tiene
+  **150 m en ambas líneas** (`scripts/data/z12-circuito/puntos-control.json`,
+  `cargar-linea-120.ts:269`); `seed.ts` siembra 100 m solo en desarrollo, y el comentario de
+  `geofence.ts` cita el lado equivocado. El defecto es de producto: **anuncio == detección**.
+- **"Sin sonido":** el anuncio vive en `gps-provider.tsx`, un componente React. Con la pantalla
+  apagada no hay árbol montado. Un chofer manejando nunca tiene la app en primer plano.
+- **"Tengo que cerrar la app para que se actualice":** `headless-task.ts` no drenaba el outbox.
+- **El round-robin de rotaciones no puede emparejar bien:** `Conductor` no tiene `lineaId`.
+- **3 de 5 no operaron su credencial:** placas y PIN cruzados al copiarlos de un grupo de WhatsApp.
+- **Sentido de ruta invertido:** dato cargado en la rotación, no bug de la app.
+
+### Qué entró en #65
+
+- **Los 5 commits del piloto (`536ad86`…`662cc97`), que estaban solo en una rama local** aunque
+  corrían en producción, incluido el APK con GPS cada 15 m que usaron 3 conductores. `main`
+  seguía con `distanceFilter: 50`.
+- **`GET /reportes/en-vivo/posiciones`** (`9096aa7`, `497dc73`): última posición de todos los
+  vehículos en una sola query, con `lineaId` y `rutaSentido`. El piso del `LATERAL` cubre el
+  cruce de medianoche boliviana; antes, un vehículo que arrancó a las 22:00 desaparecía del mapa
+  a las 00:30. `EXPLAIN ANALYZE`: solo escanea las particiones del rango.
+- **Throttling de `POST /sync/batches`** (`63a0b51`, `e364ead`): por dispositivo, no por IP. El
+  tráfico con token inválido se acota con una caché negativa **por hash de token** en
+  `AuthMovilGuard` (TTL 5 min, tope 10 000, solo `UnauthorizedException`).
+
+**Tres diseños del throttler se descartaron, y todos por la misma causa: los choferes comparten
+IP pública (CGNAT).** (1) `@SkipThrottle()` con el guard de dispositivo después de autenticar
+dejaba sin límite el tráfico no autenticado. (2) Un guard de IP antes de autenticar contaba
+también las peticiones válidas: 20 teléfonos × 6 req/min superan cualquier techo por IP. (3) Un
+bloqueo por fallos por IP antes de validar tumbaba a choferes con credencial válida detrás del
+mismo NAT que un teléfono en bucle de 401. **Cualquier control que use la IP como identidad
+castiga a inocentes en este producto.** Las tres versiones pasaban `tsc` y sus tests.
+
+**Verificación:** 45/45 tests en en-vivo, guard y sync; `/code-review` 0 hallazgos;
+`/security-review` sin vulnerabilidades altas ni medias; CI (`ci` y `acceptance`) verde. En local
+fallan 11 tests de `vehiculos`, `cumplimiento` y `paquete-dia` **con y sin estos cambios**
+(verificado con stash): datos sucios en la base de tests (`localhost:5434`). Mergear no
+despliega: el deploy es manual.
+
+### Estado de las entregas al cierre de este PR
+
+| Entrega | Estado | Dónde |
+|---|---|---|
+| 0a backup de `.estado-siembra-produccion.json` | Hecho, SHA-256 idéntico | `~/quivo-backups/` (fuera del repo) |
+| 10 endpoint de posiciones · 12 throttler | En `main` (#65) | — |
+| 1 `revertirAPendiente` · 2 drenado en background | Commiteado y pusheado, sin PR | `fix/movil-drenado-background` |
+| 25 mapa offline (Leaflet inline) | Commiteado y pusheado, sin PR | `fix/movil-mapa-offline` |
+| 5 voz redondeada · 6 anuncio separado de detección | Commiteado y pusheado, sin PR | `fix/movil-anuncio-puntos-control` |
+| 3 breaker de refresh 401 · 4 pantalla del chofer | En curso | worktree `Quivo-control-movil-drenado` |
+| 7 anuncio desde headless | En curso | worktree `Quivo-control-movil-anuncio` |
+| 13 mapa con todos los vehículos · 14 icono de vehículo | En curso | worktree `Quivo-control-web-mapa` |
+| Resto (0b, 0c, 8, 9, 11, 15–24, 26, 27) | Sin empezar | — |
+
+**Nada del lado móvil está probado en un teléfono.** Los tests del lease corren contra un `Map`
+simulado y el mapa offline no se probó en modo avión real.
+
+### Pendiente del CTO (acceso a producción)
+
+- **0b:** primero el censo de prefijos de `deviceId` (lo necesita la Entrega 11 antes de bloquear
+  dispositivos) y después cerrar las sesiones fantasma **con `UPDATE`, nunca `DELETE`**: hay
+  `gps_points` y `cumplimientos_pc` colgando de esas sesiones sin FK. SQL en el plan.
+- **0c:** la rotación del video a mano (no `POST /v1/rotaciones`) y revisar el `sentido` de cada ruta.
+- **Radio de detección:** el CTO pidió 10 m. Recomendación escrita en el plan: **150 m para
+  detectar, ~40 m para confirmar al chofer**. `RUTA_PROXIMIDAD_TOLERANCIA_METROS = 100` permite
+  plantar puntos hasta 100 m fuera de su ruta, y todo radio menor que esa distancia los pierde en
+  todas las pasadas. La Entrega 18 lo mide punto por punto.
+
+### Deuda conocida que #65 no cierra
+
+- `sembrar-piloto-produccion.ts`: los pasos 10–12 sin `try/finally` (un 429 deja la rotación en
+  `borrador` y nadie loguea), y el `catch` del borrado marca asignaciones imborrables ante
+  cualquier error.
+- `vehicle-marker-animation.ts`: la cola crece en poll rápido y el marcador se atrasa.
+- Techo de traza de 50 000 puntos sin acotar el costo de Zod y la serialización en Node.
+- El aislamiento entre sindicatos de `/reportes/en-vivo` depende de RLS **transitiva** por JOIN:
+  `sesiones_operativas`, `rutas` y `asignaciones` no tienen política propia.
+- `tile.openstreetmap.org` no admite uso intensivo de una flota en producción.
+- Posible test inestable: `CURRENT_DATE - 1` depende de la zona horaria de la conexión.
+
+### Lecciones de proceso
+
+- **El límite de uso cortó agentes tres veces**, siempre con 4 o 5 en paralelo, y cada corte dejó
+  trabajo a medias. Un intento dejó el drenado escrito pero sin conectar a ningún call site: habría
+  pasado los tests sin arreglar nada. Retomar un corte exige auditar el diff, no continuar a ciegas.
+- **Cada agente trabaja en su worktree.** Uno hizo `checkout -b` en el directorio principal y
+  desvió un commit del chairman a otra rama.
+- **Un comentario que afirma una garantía de seguridad no es evidencia.** El guard original
+  documentaba un fallback a `req.ip` que nunca se ejecutaba; se aprobó leyendo el comentario en
+  vez de trazar el orden de guards.
+- Un agente agregó `Co-Authored-By` a un commit; se reescribió antes del push.
+
 ## Producción usable: panel, credenciales y GPS más fino (2026-09-09)
 
 El primer día en que la app, la API, el panel y la base funcionaron juntos contra producción,

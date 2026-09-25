@@ -131,10 +131,22 @@ const TECHO_MAXIMO_DESDE_INICIO_MS = 36 * 60 * MINUTO_MS;
  * `so.inicio` dentro de la jornada boliviana exacta (`trazaDesde`/`trazaHasta`) con
  * `LIMIT 100`; con sesiones colgadas de días previos (`fin IS NULL` para siempre, la
  * app no cierra sesión al "Finalizar recorrido") ese límite puede esconder a las vivas
- * detrás de zombies. Acá el filtro es una ventana **rodante** de 24 h sobre `so.inicio`
- * (no la jornada calendario) con un tope más alto: cubre un turno completo aunque cruce
- * medianoche boliviana, y 500 sesiones es más margen del que cualquier sindicato real
- * tiene hoy en simultáneo.
+ * detrás de zombies. Acá el filtro de SESIONES (`so.inicio`) es una ventana **rodante**
+ * de 24 h (no la jornada calendario) con un tope más alto: cubre un turno completo
+ * aunque cruce medianoche boliviana, y 500 sesiones es más margen del que cualquier
+ * sindicato real tiene hoy en simultáneo.
+ *
+ * CORRECCIÓN (code-review, hallazgo detectado en producción ~00:40 Bolivia): esta
+ * garantía de "cubre un turno completo aunque cruce medianoche" es sobre qué SESIONES
+ * entran, no sobre qué POSICIONES se les encuentran. Hasta este fix, el `LATERAL` de
+ * `obtenerPosiciones` seguía acotado a `trazaDesde` (arranque de la jornada calendario,
+ * no de esta ventana rodante) — un vehículo que arrancó anoche y sigue reportando sin
+ * parar SÍ entraba por este `WHERE` (`so.inicio >= sesionesDesde` o sesión abierta), pero
+ * sus fixes de antes de medianoche quedaban fuera del `LATERAL`, y si todavía no había
+ * un fix nuevo posterior a medianoche, la posición salía `NULL`/`sin_datos`: el vehículo
+ * desaparecía del mapa justo cuando más se lo necesitaba. Ver `posicionesDesde` en
+ * `obtenerPosiciones` — ahora el `LATERAL` comparte el mismo piso rodante que este
+ * `WHERE`, así que la garantía de "cubre un turno completo" aplica a AMBOS.
  */
 const VENTANA_SESIONES_POSICIONES_MS = 24 * 60 * MINUTO_MS;
 const LIMITE_SESIONES_POSICIONES = 500;
@@ -209,40 +221,79 @@ export class EnVivoService {
    * anteriores (`fin IS NULL AND estado = 'activa'`): la app no cierra la sesión al
    * "Finalizar recorrido" — solo registra un evento —, así que hay sesiones colgadas
    * indefinidamente y omitirlas escondería vehículos que sí están reportando.
+   *
+   * docs/plan-en-vivo-resumen-sesion.md — el `LEFT JOIN LATERAL` que agregaba sobre TODOS
+   * los puntos de la jornada de cada sesión (O(puntos del día de la flota), 10,65 s medidos
+   * con 1.000 sesiones/6,7M filas) se reemplaza por un `LEFT JOIN LATERAL` a
+   * `gps_sesion_resumen`: una fila por `(sesion_id, jornada)` ya agregada por
+   * `insertarGpsPoints` (ingesta-worker.service.ts) en el momento de la escritura, no en
+   * cada lectura. O(sesiones), sin tocar `gps_points` para nada en este endpoint.
+   *
+   * Sigue siendo `LATERAL` (no un `LEFT JOIN` liso) por un hallazgo de EXPLAIN, no por
+   * estética: con `LEFT JOIN gps_sesion_resumen res ON res.sesion_id = so.id::uuid AND
+   * res.jornada = $1`, el planner — con la tabla de resumen todavía chica (1.000 filas,
+   * 1.000 sesiones × 1 jornada en el benchmark) — elegía un `Seq Scan` de
+   * `gps_sesion_resumen` repetido por cada sesión candidata (`Nested Loop Left Join` +
+   * `Join Filter`, NO `Index Cond`) en vez del índice de la PK: ~1.000×1.000 comparaciones,
+   * 1,96 s medidos con `EXPLAIN (ANALYZE, BUFFERS)` contra un container Postgres efímero
+   * sembrado con 1.000 sesiones/6,7M `gps_points` (mismo escenario que §1, ver el handoff
+   * de esta rama para los números completos). El `LATERAL` con `LIMIT 1` fuerza un acceso
+   * correlacionado por sesión — el mismo patrón que ya usaba `obtenerPosiciones` — y el
+   * planner pasa a un `Index Scan` sobre `gps_sesion_resumen_pkey` por sesión: ~62 ms
+   * medidos con los mismos datos, la ganancia completa que buscaba esta migración.
+   * `LIMIT 1` es redundante en los datos (la PK ya garantiza como máximo 1 fila por
+   * `(sesion_id, jornada)`) pero se deja explícito para que el planner nunca tenga excusa
+   * de recorrer más de una fila del lateral.
    */
   async listarHoy(
     actor: AuthenticatedUser,
     ahora: Date = new Date(),
   ): Promise<SesionEnVivoResumen[]> {
-    // Cotas **constantes** (no correlacionadas con `so.inicio`) para que el planner pueda
-    // podar particiones de `gps_points`: la ventana abarca 2 particiones diarias como
-    // mucho (jornada Bolivia = 04:00 UTC → 04:00 UTC del día siguiente).
+    // Misma jornada boliviana que antes (04:00 UTC → 04:00 UTC del día siguiente), pero acá
+    // solo sirve para fijar la PK `(sesion_id, jornada, sindicatoId)` del resumen a leer —
+    // ya no acota un rango de partición de `gps_points`.
     const jornada = fechaActualBolivia(ahora);
     const trazaDesde = inicioDeJornadaBolivia(jornada);
     const trazaHasta = inicioDeJornadaSiguienteBolivia(jornada);
+    // `YYYY-MM-DD` en vez de pasar el `Date` (medianoche UTC) directo al placeholder
+    // (code-review MEDIUM): Prisma tipa un parámetro `Date` como `timestamptz`, así que
+    // `${jornada}::date` haría a Postgres convertir ese instante al TimeZone de la SESIÓN
+    // antes de extraer la fecha (mismo problema que `(ts - interval '4h')::date`, ver el
+    // comentario de la migración y de `insertarGpsPoints`) — podría no coincidir con la
+    // jornada que calculó `fechaActualBolivia` si la conexión trae un TimeZone distinto de
+    // UTC. Un string `'YYYY-MM-DD'` casteado a `date` es un literal de fecha, sin ninguna
+    // interpretación de zona horaria de por medio.
+    const jornadaStr = jornada.toISOString().slice(0, 10);
 
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
       const filas = await tx.$queryRaw<SesionEnVivoRow[]>`
         SELECT so.id, so.inicio, so.fin, so.estado, so."deviceId",
           v.placa as "vehiculoPlaca", c.nombre as "conductorNombre", l.nombre as "lineaNombre",
-          fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos"
+          res.ultimo_fix_ts AS "ultimoFixTs", res.ultimo_ingreso_ts AS "ultimoIngresoTs",
+          res.total_puntos AS "totalPuntos"
         FROM sesiones_operativas so
         JOIN vehiculos v ON v.id = so."vehiculoId"
         JOIN conductores c ON c.id = so."conductorId"
         JOIN asignaciones a ON a.id = so."asignacionId"
-        JOIN rutas r ON r.id = a."rutaId"
-        JOIN lineas l ON l.id = r."lineaId"
+        JOIN rutas ru ON ru.id = a."rutaId"
+        JOIN lineas l ON l.id = ru."lineaId"
         LEFT JOIN LATERAL (
-          SELECT max(gp.ts) AS "ultimoFixTs",
-                 max(gp.received_at) AS "ultimoIngresoTs",
-                 count(*)::int AS "totalPuntos"
-          FROM gps_points gp
-          WHERE gp.sesion_id = so.id::uuid
-            AND gp.ts >= ${trazaDesde} AND gp.ts < ${trazaHasta}
-        ) fix ON true
+          SELECT ultimo_fix_ts, ultimo_ingreso_ts, total_puntos
+          FROM gps_sesion_resumen gr
+          WHERE gr.sesion_id = so.id::uuid AND gr.jornada = ${jornadaStr}::date
+            -- Cierre explícito por tenant (code-review MEDIUM, cross-tenant poisoning): no
+            -- alcanza con confiar solo en la PK de 3 columnas / RLS de gps_sesion_resumen
+            -- — si por algún motivo existiera una fila con este sesion_id/jornada de OTRO
+            -- tenant (que RLS ya le esconde a so, pero que admin_quivo SÍ vería en este
+            -- mismo LATERAL sin este filtro), este join explícito por so.sindicatoId
+            -- asegura que solo se le atribuye a la sesión el resumen de SU PROPIO tenant,
+            -- incluso corriendo como admin_quivo.
+            AND gr."sindicatoId" = so."sindicatoId"
+          LIMIT 1
+        ) res ON true
         WHERE (so.inicio >= ${trazaDesde} AND so.inicio < ${trazaHasta})
            OR (so.fin IS NULL AND so.estado = 'activa')
-        ORDER BY (so.fin IS NULL) DESC, fix."ultimoFixTs" DESC NULLS LAST, so.inicio DESC
+        ORDER BY (so.fin IS NULL) DESC, res.ultimo_fix_ts DESC NULLS LAST, so.inicio DESC
         LIMIT 100
       `;
 
@@ -271,54 +322,98 @@ export class EnVivoService {
    * de corrección post-piloto por costo — con 5 sesiones en poll rápido de 1 s son
    * 300 req/min, el techo exacto del throttle del controller).
    *
-   * Extiende el `LATERAL` de `listarHoy` con dos cambios de fondo:
+   * docs/plan-en-vivo-resumen-sesion.md — igual que `listarHoy`, el `LEFT JOIN LATERAL`
+   * sobre `gps_points` (10,49 s medidos con 1.000 sesiones/6,7M filas) se reemplaza por un
+   * `LEFT JOIN LATERAL` sobre `gps_sesion_resumen`: a lo sumo 2 filas por sesión (jornada de
+   * HOY y de AYER — ver `posicionesDesde`/`VENTANA_SESIONES_POSICIONES_MS` abajo, nunca hace
+   * falta mirar más atrás), resuelto por índice (PK `(sesion_id, jornada)`), no un escaneo
+   * de los puntos crudos de la sesión.
    *
-   * 1. En vez de `max()` sobre `gps_points`, trae la **fila completa** del fix más
-   *    reciente (`ORDER BY ts DESC LIMIT 1`) para tener `lat`/`lng`/`accuracy`/`speed`
-   *    de esa posición puntual — un `max(lat)` no tendría sentido. `ultimoIngresoTs` y
-   *    `totalPuntos` siguen siendo agregados de la ventana completa, calculados con
-   *    funciones de ventana (`OVER ()`, sin `PARTITION BY`) sobre el mismo conjunto de
-   *    filas que ya filtró el `WHERE`: Postgres las evalúa **antes** de aplicar
-   *    `ORDER BY`/`LIMIT`, así que quedan correctas aunque la fila devuelta sea solo 1.
-   *    Alcanza con un único acceso a `gps_points` por sesión (mismo costo que el
-   *    `max()` de `listarHoy`), no dos subqueries.
-   * 2. `l.id AS "lineaId"` y `r.sentido AS "rutaSentido"`: ambos joins (`rutas`,
-   *    `lineas`) ya estaban para resolver `lineaNombre`, así que salen gratis.
+   * `l.id AS "lineaId"` y `ru.sentido AS "rutaSentido"`: ambos joins (`rutas`, `lineas`) ya
+   * estaban para resolver `lineaNombre`, así que salen gratis.
    *
-   * La ventana de partición (`trazaDesde`/`trazaHasta`, jornada boliviana) se conserva
-   * intacta para que el planner siga podando particiones de `gps_points` — es una cota
-   * **constante**, no correlacionada con `so.inicio`, igual que en `listarHoy`.
+   * **Cambio de semántica documentado (plan §3):** `totalPuntos` deja de ser "puntos en la
+   * ventana rodante de 24 h" (lo que hacía el `count(*) OVER ()` de la versión vieja,
+   * sumando fixes de HOY y de AYER si el `LATERAL` cruzaba medianoche) y pasa a ser "puntos
+   * de la jornada boliviana DEL ÚLTIMO FIX" — el `total_puntos` de la fila de
+   * `gps_sesion_resumen` que gana el `ORDER BY ... LIMIT 1` de abajo, no una suma entre las
+   * 2 jornadas candidatas. Hoy (grep sobre `apps/web`) ningún consumidor lee este campo de
+   * `obtenerPosiciones`, así que no hay UI que corregir por este cambio.
+   *
+   * El resto de la garantía "cubre un turno completo aunque cruce medianoche" (código de
+   * abajo, hallazgo 2 del code-review QUI-240/en-vivo) se preserva igual: el `LATERAL`
+   * sigue mirando la jornada de HOY y la de AYER, con el mismo piso `posicionesDesde` que
+   * antes tenían las filas de `gps_points` — ahora es un filtro sobre `ultimo_fix_ts` de
+   * `gps_sesion_resumen`, no sobre `ts` de puntos individuales.
+   *
+   * **`ultimoIngresoTs` — hallazgo adicional del code-review (LOW, "dispositivo activo
+   * parece perdido justo después de medianoche"):** `lat`/`lng`/`accuracy`/`speed`/
+   * `ultimoFixTs`/`totalPuntos` SÍ tienen que venir de UNA sola fila (la del fix más
+   * reciente — es LA posición) pero `ultimoIngresoTs` NO puede acotarse a esa misma fila.
+   * Escenario real: una sesión cruza medianoche boliviana, su jornada de HOY ya tiene un fix
+   * (algo estancado, hace rato) y justo en este momento llega — tarde, del outbox — un lote
+   * con puntos de ANTES de medianoche: por `ts`, esos puntos actualizan la fila de AYER, no
+   * la de HOY (`insertarGpsPoints` escribe cada punto en la jornada de SU PROPIO `ts`). El
+   * dispositivo SÍ está sincronizando ahora mismo, pero si `ultimoIngresoTs` sale solo de la
+   * fila de HOY (la que gana por `ultimo_fix_ts` más nuevo), ese ingreso reciente queda
+   * invisible y `antiguedadIngestaMs` marca al vehículo como `perdido` estando activo. Por
+   * eso `"ultimoIngresoTs"` se calcula con `max(...) OVER ()` — una función de ventana sobre
+   * TODAS las filas que matchean el `WHERE` (hoy Y ayer, misma sesión, mismo tenant), no
+   * solo la que gana el `ORDER BY ... LIMIT 1` de abajo: Postgres evalúa las funciones de
+   * ventana ANTES de aplicar `ORDER BY`/`LIMIT` a la fila final, así que el valor SÍ ve
+   * ambas filas candidatas aunque el `LIMIT 1` solo devuelva una.
    */
   async obtenerPosiciones(
     actor: AuthenticatedUser,
     ahora: Date = new Date(),
   ): Promise<PosicionEnVivo[]> {
     const jornada = fechaActualBolivia(ahora);
+    // Un día calendario exacto atrás — `jornada` es siempre medianoche UTC de un día
+    // boliviano, así que restarle 24 h da la fecha del día anterior sin drift.
+    const jornadaAyer = new Date(jornada.getTime() - 24 * 60 * MINUTO_MS);
     const trazaDesde = inicioDeJornadaBolivia(jornada);
-    const trazaHasta = inicioDeJornadaSiguienteBolivia(jornada);
     const sesionesDesde = new Date(ahora.getTime() - VENTANA_SESIONES_POSICIONES_MS);
+    const posicionesDesde =
+      trazaDesde.getTime() < sesionesDesde.getTime() ? trazaDesde : sesionesDesde;
+    // `YYYY-MM-DD`, no el `Date` directo (code-review MEDIUM — mismo motivo que
+    // `listarHoy`): evita que Postgres reinterprete el instante según el TimeZone de la
+    // sesión al castear a `date`.
+    const jornadaStr = jornada.toISOString().slice(0, 10);
+    const jornadaAyerStr = jornadaAyer.toISOString().slice(0, 10);
 
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
       const filas = await tx.$queryRaw<PosicionEnVivoRow[]>`
         SELECT so.id, so.inicio, so.fin, so.estado, so."deviceId",
           v.placa as "vehiculoPlaca", c.nombre as "conductorNombre",
-          l.id as "lineaId", l.nombre as "lineaNombre", r.sentido as "rutaSentido",
+          l.id as "lineaId", l.nombre as "lineaNombre", ru.sentido as "rutaSentido",
           fix.lat, fix.lng, fix.accuracy, fix.speed,
           fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos"
         FROM sesiones_operativas so
         JOIN vehiculos v ON v.id = so."vehiculoId"
         JOIN conductores c ON c.id = so."conductorId"
         JOIN asignaciones a ON a.id = so."asignacionId"
-        JOIN rutas r ON r.id = a."rutaId"
-        JOIN lineas l ON l.id = r."lineaId"
+        JOIN rutas ru ON ru.id = a."rutaId"
+        JOIN lineas l ON l.id = ru."lineaId"
         LEFT JOIN LATERAL (
-          SELECT gp.lat, gp.lng, gp.accuracy, gp.speed, gp.ts AS "ultimoFixTs",
-                 max(gp.received_at) OVER () AS "ultimoIngresoTs",
-                 count(*) OVER ()::int AS "totalPuntos"
-          FROM gps_points gp
-          WHERE gp.sesion_id = so.id::uuid
-            AND gp.ts >= ${trazaDesde} AND gp.ts < ${trazaHasta}
-          ORDER BY gp.ts DESC
+          SELECT gr.lat, gr.lng, gr.accuracy, gr.speed,
+                 gr.ultimo_fix_ts AS "ultimoFixTs",
+                 -- max(...) OVER (), no gr.ultimo_ingreso_ts liso: ver el docblock de arriba
+                 -- ("ultimoIngresoTs — hallazgo adicional del code-review"). Se evalúa sobre
+                 -- TODAS las filas hoy+ayer que pasan el WHERE, antes del ORDER BY/LIMIT de
+                 -- más abajo.
+                 max(gr.ultimo_ingreso_ts) OVER () AS "ultimoIngresoTs",
+                 gr.total_puntos AS "totalPuntos"
+          FROM gps_sesion_resumen gr
+          WHERE gr.sesion_id = so.id::uuid
+            -- Cierre explícito por tenant (code-review MEDIUM, cross-tenant poisoning —
+            -- mismo motivo que listarHoy): además de la PK de 3 columnas y la RLS de
+            -- gps_sesion_resumen, este join asegura que una fila de OTRO tenant con el mismo
+            -- sesion_id/jornada nunca se le atribuye a esta sesión, ni siquiera corriendo
+            -- como admin_quivo (que sí puede ver filas de cualquier tenant).
+            AND gr."sindicatoId" = so."sindicatoId"
+            AND gr.jornada IN (${jornadaStr}::date, ${jornadaAyerStr}::date)
+            AND gr.ultimo_fix_ts >= ${posicionesDesde}
+          ORDER BY gr.ultimo_fix_ts DESC
           LIMIT 1
         ) fix ON true
         WHERE (so.inicio >= ${sesionesDesde})

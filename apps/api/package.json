@@ -36,8 +36,10 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@swc/core": "^1.16.2",
     "@types/node": "^22.10.7",
     "@types/pg": "^8.11.10",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "unplugin-swc": "^1.6.0"
   }
 }

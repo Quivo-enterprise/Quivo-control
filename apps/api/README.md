@@ -21,6 +21,17 @@ pnpm --filter @quivo/api start     # node dist/main.js — sirve en :3001 (PORT 
 > `tsx`/esbuild no emiten metadata de decoradores TypeScript, y NestJS la necesita para
 > inyección de dependencias por tipo. Para iterar en la API, compilar con `tsc` (o `tsc --watch`)
 > y correr el JS emitido con `node`/`node --watch`.
+>
+> Esa misma falta de metadata afecta a `ZodValidationPipe`
+> (`src/common/validation/zod-validation.pipe.ts`): sin `design:paramtypes`, el pipe no
+> encuentra el DTO Zod asociado a un `@Query()`/`@Body()` y deja pasar el valor crudo sin
+> `z.coerce`/`transform` aplicados. Bajo `pnpm dev` (`tsx`) esto sigue así — un endpoint con
+> coerción en su DTO se comporta distinto que en producción. Los **tests** (`pnpm test`,
+> `vitest`) ya NO tienen este problema: `apps/api/vitest.config.ts` transforma con
+> `@swc/core` vía `unplugin-swc` (`decoratorMetadata`/`legacyDecorator` activos), así que
+> `Reflect.getMetadata('design:paramtypes', ...)` está disponible bajo vitest igual que en
+> un build real con `tsc`, y los tests de integración HTTP corren con la misma coerción de
+> Zod que producción.
 
 ## Endpoints
 

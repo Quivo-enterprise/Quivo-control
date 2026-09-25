@@ -702,6 +702,12 @@ si `now() - max(received_at) > 15 min` en horario operativo; asegurar que la exc
 **P2 · Ámbito: datos/docs · ~2 h · Depende de: 0a**
 
 - Borrar `scripts/crear-credenciales-piloto.ts` (obsoleto según `docs/plan-siembra-produccion.md:207-209`).
+- **Documentación de infraestructura desactualizada (verificado el 2026-09-10):** `docs/infra-gcp-prod.md`
+  y el documento de credenciales de demo day apuntan a `quivo-api-424426714260` / `quivo-web-424426714260`,
+  pero esa API responde **503**. El APK de producción usa `quivo-api-741758083365` (`apps/mobile/eas.json:30`),
+  que responde 200. Además, la credencial de admin documentada da 401 en la API viva: el primer admin de
+  producción se creó con contraseña aleatoria en Secret Manager. Corregir las URLs y dejar escrito dónde
+  vive la credencial, sin copiarla.
 - Actualizar `docs/plan-unicidad-placa.md:3`, que dice "sin implementar" cuando PR #56 / commit
   `878e078` ya está en main.
 - Restos conocidos sin endpoint DELETE (`PILOTO001`, `L1-PILOTO`, 73 asignaciones viejas sobre
@@ -780,6 +786,8 @@ ya tiene una máquina pura y testeada (`decidirPermisoGps`) que devuelve
 | Almacenamiento lleno | Escritura canaria a `quivo-outbox.db`; `SQLITE_FULL` en runtime | Sí | *"El teléfono no tiene espacio. QUIVO no puede guardar tu recorrido."* |
 | Sesión expirada sin refresh | Circuit breaker de la Entrega 3 abierto | Sí | *"Tenés que volver a ingresar tu placa y PIN."* |
 | **Paquete del día ausente** | `obtenerPaqueteDiaLocal() === null` o `puntosControl.length === 0` | **Sí** | *"No tenemos los puntos de control de tu ruta. Conectate un momento para bajarlos."* |
+| Notificaciones no concedidas (Android 13+) | Estado expuesto por la Entrega 7b (`POST_NOTIFICATIONS`) | No, advierte | *"Activá las notificaciones para escuchar los avisos de puntos de control con la pantalla apagada."* Si se niega, vibración y voz siguen |
+| Reconocimiento de actividad | `ACTIVITY_RECOGNITION` `not_granted` (visto en el evento de Sentry del 10-09) | No, advierte | Sin este permiso el SDK de GPS detecta peor cuándo el vehículo está detenido o en movimiento: más huecos o más consumo. Pedirlo en runtime |
 
 **La última es el hallazgo más grave del plan.** `headless-task.ts:358` hace
 `puntosControl: paqueteLocal?.paquete.puntosControl ?? []`. Con el paquete ausente o de otra
@@ -882,6 +890,156 @@ aproxima con pull y lo deja preparado.
 
 ---
 
+### Entrega 28 — Sesión desplazada: causa raíz del `refresh-agotado`
+**P0 · Ámbito: API + móvil · ~6 h · Depende de: 3, 24 · Evidencia: Sentry `QUIVO-CONTROL-CONDUCTOR-2`**
+
+**Evidencia (Sentry, proyecto `quivo-control-conductor`).** Tres eventos
+`AuthMovilApiError: Sesión móvil inválida o expirada`, todos con `paso: refresh-agotado` y
+`reintentos: 3`:
+
+| Cuándo (UTC) | Dispositivo (`user.id`) | Build | Contexto |
+|---|---|---|---|
+| 2026-08-23 16:19 | `948f…` | 7 | QA |
+| 2026-09-09 20:54 | `948f…` | 10 | **16:54 en Bolivia: arranque de los recorridos del piloto**, con credenciales cruzadas y cambio de APK en curso |
+| 2026-09-10 14:44 | `680a…` | 10 | Reprueba pedida por el CTO. **48 s después de abrir la app**, en primer plano, online, Galaxy A71, Android 13 |
+
+**Patrón:** siempre al **empezar** a usar la app, nunca a mitad de recorrido.
+
+**Diagnóstico confirmado con datos (2026-09-10).** Logs de Cloud Run de `/v1/mobile/auth/*` (09-09
+19:00Z → 10-09 14:45Z) y lectura de `sesiones_operativas` con un job temporal de solo lectura
+(`BEGIN READ ONLY`, borrado al terminar; hizo falta `app.rol='admin_quivo'` porque la tabla tiene RLS
+forzado):
+
+- **Ráfagas de refresh 401:** 4 ráfagas de 5 a 9 intentos en segundos, con hasta 3 en el mismo segundo
+  (el cliente refresca en paralelo, sin *single-flight*), siempre seguidas de `logout` 204 y un login 200
+  minutos después.
+- **6 sesiones fantasma `verif-final-0…5`**, abiertas entre las 18:41 y las 18:43Z del 09-09, **una por
+  placa `9001TST`–`9006TST`**: la verificación final del script de siembra loguea y nunca cierra. Son los
+  `verif-fi` del combo del panel.
+- **7 cierres por nuevo login:** 5 son un teléfono real reemplazando a un fantasma; 1 es el mismo teléfono
+  (`a0d2c635`) pasando de `9005TST` a `9004TST` (credenciales cruzadas del chat); 1 entre teléfonos reales
+  (`9001TST`, 21:10Z) coincide con la reinstalación del APK nuevo, que genera `deviceId` nuevo.
+- **Las ráfagas ocurren *antes* de los logins que desplazan.** El desplazamiento fue consecuencia del
+  re-login, no la causa del 401.
+- **Sesiones zombi:** `9004TST` (desde 09-09 19:58Z) y `9001TST` (desde 21:10Z) seguían `activa`.
+- **Descartado:** la "rotación perdida". El refresh exitoso de las 20:30Z era de otro teléfono.
+
+**Causa:** el teléfono arranca con un refresh token de una sesión que **ya no está vigente** (cerrada, o de
+una instalación anterior), el servidor responde con el mismo 401 genérico que a un token vencido, y el
+cliente **reintenta en ráfaga** en vez de ir al login.
+
+**Fix:**
+1. **API:** un refresh con sesión cerrada o token desconocido devuelve un código distinguible
+   (`SESION_NO_VIGENTE`, con el motivo si se conoce: nuevo login, logout, inactividad), compatible
+   hacia atrás como 401.
+2. **App:** ante ese código, falla de **CAPTURA**: un solo intento, borrar los tokens locales y llevar al
+   login con un mensaje en lenguaje de chofer. El *single-flight* del refresh ya está en la rama de
+   drenado (`365e14f`).
+3. **Siembra:** la verificación final de `scripts/sembrar-piloto-produccion.ts` cierra sus sesiones; el
+   guard de `deviceId` de la Entrega 11 bloquea `verif-final-*` en producción.
+4. **Zombis:** Entrega 19, más cierre manual de `9004TST` y `9001TST` antes del próximo piloto (0b).
+
+**Verificación:** test de API (refresh con sesión cerrada → código distinguible); test de cliente
+(rechazo definitivo → un intento, tokens borrados, navegación a login); reproducción manual con dos
+teléfonos y la misma placa: al volver a abrir el primero, mensaje claro y sin ráfaga.
+**Rollback:** revert. El código nuevo es compatible hacia atrás: un APK viejo lo ve como 401.
+
+---
+
+### Entrega 30 — OSRM en producción: la ruta "ir a un punto" sale en línea recta
+**P1 · Ámbito: infra + móvil · ~4 h · Sin dependencias · Evidencia: logs de Cloud Run (2026-09-09)**
+
+- Logs de producción: `RuteoService: No se pudo calcular ruta con OSRM (http://localhost:5001): fetch
+  failed`, repetido durante el piloto.
+- `quivo-api` en producción tiene 9 variables de entorno y **ninguna `OSRM_URL`**, y no existe un servicio
+  OSRM (solo `quivo-api` y `quivo-web`). `RuteoService` (`apps/api/src/modules/tracking/ruteo.service.ts`)
+  cae a `localhost:5001`, falla y el mapa dibuja **una línea recta**.
+- Único consumidor: `GET /v1/mobile/ruta-a-punto`, que usa la pantalla de operación de la app.
+- **Causa probable del síntoma 10** ("la ruta en naranja sobre las casas, 2 segundos").
+
+**Opciones (decisión del CTO):** (a) desplegar OSRM (Cloud Run o VM con el extracto de Bolivia, ya existe
+`scripts/setup-osrm.sh`) y setear `OSRM_URL` en el deploy; (b) proveedor de ruteo externo; (c) mientras
+tanto, **no dibujar la línea recta de fallback**, que engaña, y mostrar solo la ruta asignada.
+**Recomendación:** (c) ya y (a) antes de escalar la flota.
+**Verificación:** sin el warning en los logs; `ruta-a-punto` devuelve geometría por calles.
+
+---
+
+### Entrega 31 — La posición del conductor tiene que moverse siempre, como Google Maps
+**P0 · Ámbito: móvil · ~6 h · 31a depende de: 2 (apilada sobre la rama de drenado) · 31b va en la rama
+del mapa offline · Evidencia: piloto, Sentry, exploración de código y prueba del CTO en transporte público**
+
+**Síntoma:** al iniciar el recorrido, el marcador del conductor no se mueve; cerrar y reabrir la app da un
+salto de posición y vuelve a quedar fijo.
+
+**Causa (exploración con file:line):**
+1. **El SDK arranca en modo estacionario y no sale:** `iniciar()` en `use-gps-operativo.ts` solo llama
+   `ready()` + `start()`; no hay `changePace(true)` en el repo ni `isMoving` en la config.
+2. **`ACTIVITY_RECOGNITION` no está declarado** en `apps/mobile/app.config.ts`: en Android 10+ nunca puede
+   concederse (Sentry: `not_granted`), y el SDK cae a la geocerca estacionaria de 200 a 500 m.
+3. **La única posición que corre es un `getCurrentPosition` suelto al montar la pantalla.**
+4. El HTML del WebView del mapa **se reconstruye cada vez que cambia el próximo punto de control**, y
+   recarga Leaflet completo en cada paso.
+
+El mapa en sí está bien: recibe `position` por `postMessage`, mueve el marcador y sigue con la cámara.
+
+**31a (GPS):** declarar y pedir `ACTIVITY_RECOGNITION` en runtime (fail-open); forzar el estado de
+movimiento al iniciar y pedir una posición inmediata; **no volver a estacionario durante un recorrido
+activo**; posición inmediata al volver a primer plano. **Tradeoff aceptado:** más consumo de batería
+durante el recorrido, igual que Google Maps navegando.
+**31b (mapa):** el próximo punto de control viaja por `postMessage`; el HTML queda estable.
+
+**Verificación:** tests de orden (`start()` antes de forzar movimiento), de config y de permiso declarado;
+en un vehículo en movimiento, el marcador avanza de forma continua y la cámara lo sigue desde el primer
+minuto; `adb shell dumpsys package com.quivotech.conductor | grep -i activity_recognition` muestra el
+permiso declarado y concedido.
+
+---
+
+### Entrega 7b — Pedir `POST_NOTIFICATIONS` en runtime
+**P0 · Ámbito: móvil · ~2 h · Depende de: 7 · Evidencia: Sentry `QUIVO-CONTROL-CONDUCTOR-2`**
+
+El evento de Sentry del 10-09 (Android 13) reporta `POST_NOTIFICATIONS: not_granted` con el permiso
+**declarado** en `app.config.ts`. En Android 13+ es permiso de runtime y hoy nadie lo pide, así que
+**la notificación del anuncio de la Entrega 7 no se muestra en campo**. Pedirlo con la app en primer
+plano antes de iniciar el recorrido. Fail-open: si se niega, vibración y voz siguen. Exponer el estado
+para el preflight de la Entrega 26.
+
+---
+
+### Entrega 29 — Coerción de query sin decorator metadata en desarrollo y tests
+**P2 · Ámbito: API (entorno de desarrollo y tests) · ~3 h · Sin dependencias · No afecta producción**
+
+**Evidencia (verificación en vivo del 2026-09-10).** Con la API local levantada con `pnpm dev`
+(`tsx watch`), `GET /v1/sync-errores?desde=<ISO>` devolvió 500:
+```
+fecha.getUTCFullYear is not a function
+  at inicioDeJornadaBolivia (apps/api/src/common/tiempo/jornada.ts:24)
+  at SyncErroresService.listar (apps/api/src/modules/sync/sync-errores.service.ts:18)
+```
+**No se reproduce con el build de producción.** Compilada con `tsc` (como el Dockerfile) la misma
+request responde 200, y en auditoría el filtro por fecha excluye exactamente las filas anteriores:
+`ZodValidationPipe` devuelve el output parseado (`zod-validation.pipe.ts:28`, registrado global en
+`app.module.ts:70`) y los 53 DTOs de `@Query()`/`@Body()` están envueltos en `createZodDto`.
+
+**Causa (hipótesis en verificación):** `tsx` usa esbuild, que no emite `emitDecoratorMetadata` (el repo
+ya documenta esa limitación con los `@Inject(...)` explícitos, evanw/esbuild#257). Sin
+`design:paramtypes`, Nest no resuelve el DTO del `@Query()`, el pipe no transforma y el string llega
+crudo al servicio. **Riesgo real:** si vitest también compila con esbuild pelado, un test de
+integración que dependa de la coerción del pipe correría sin metadata y daría un resultado falso en
+CI. Hoy no existen tests de `sync-errores` ni de auditoría con filtro de fecha.
+
+**Enfoque:** confirmar la hipótesis (500 con `tsx`, 200 con `tsc`); revisar la config de vitest;
+agregar tests de regresión del filtro por fecha que corran por el mismo camino que CI; decidir el
+arreglo del entorno (runner de `dev` con decorator metadata, pipes explícitos o documentación).
+**No tocar el pipe ni código de producto sin esa decisión.**
+
+**Verificación:** los tests nuevos pasan por el camino de CI; `pnpm dev` deja de dar 500 si se elige
+cambiar el runner.
+**Rollback:** revert; sin impacto en producción.
+
+---
+
 ## Auditoría offline — qué ya cumple el principio rector
 
 | Camino | ¿Toca la red? | Evidencia |
@@ -965,6 +1123,9 @@ sesión — si sale 13 sin 14, el mapa muestra N vehículos indistinguibles de l
 | **7** | **Radios configurables** | `packages/shared` para P0; mover al paquete del día en P1 (cambiar sin APK nuevo) | Entrega 6 |
 | **8** | **Push (FCM) para la rotación** | Pull oportunista ahora (Entrega 27); FCM en P1, apoyado en el `expo-notifications` que agrega la Entrega 7 | No existe infra de push hoy: ni FCM ni `expo-notifications` en `apps/mobile/package.json` |
 | **9** | **Ventana de precarga** | 7 días de asignaciones próximas | Cubre fin de semana y feriados sin inflar SQLite |
+| **10** | **Rechazo de refresh (`refresh-agotado`)** | Código distinguible para sesión no vigente; el cliente corta sin ráfaga, borra los tokens y va al login; la siembra cierra sus sesiones de verificación | Entrega 28. Logs + `sesiones_operativas`: las ráfagas pasan antes de los re-logins; el desplazamiento entre choferes no fue la causa |
+| **11** | **OSRM en producción** | No dibujar la línea recta de fallback ya; desplegar OSRM antes de escalar la flota | Entrega 30. Sin `OSRM_URL` ni servicio OSRM en producción; causa probable del síntoma 10 |
+| **12** | **Seguimiento continuo vs batería** | Seguimiento continuo durante el recorrido activo (sin volver a estacionario), como Google Maps; al finalizar vuelve el modo normal | Entrega 31. Pedido explícito del CTO; con el conductor en un vehículo con cargador el costo es aceptable |
 
 ---
 

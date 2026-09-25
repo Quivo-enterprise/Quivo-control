@@ -1,0 +1,1858 @@
+{
+  "generadoEn": "2026-09-22T09:59:32.782Z",
+  "entrada": {
+    "puntosCrudos": 5635,
+    "kmCrudos": 110.64954691780932,
+    "puntosControl": 26,
+    "tieneCumplimientosReales": true
+  },
+  "jornadaReferenciaPuntos": 6000,
+  "baseline": {
+    "puntos": 5635,
+    "pctVsCrudo": 100,
+    "kmTotales": 110.64954691780932,
+    "pasadasPorPc": {
+      "884ac1fd-4de6-48a9-958a-050168c3c3e9": 6,
+      "4a43318e-32f5-4099-90f2-847e3bd18e7d": 6,
+      "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": 6,
+      "1a2f2b1c-f00a-4715-95fe-77f6801c876a": 6,
+      "c1d6cf09-d684-4264-a8b6-f5e255c88a81": 6,
+      "6ea502f2-4569-41c1-adf5-56b9ff0c340e": 6,
+      "58569286-5656-44cc-b5ad-abb4c0c30877": 5,
+      "558a11b8-3023-4973-8bea-3e80b2f4ad49": 5,
+      "30e941ff-e620-4bdf-94c7-6213821c6533": 2,
+      "66893d00-e1c2-411f-8525-67843e34b587": 0,
+      "a123450a-7fa3-4376-87fe-35626ad2dbcc": 0,
+      "eb6d6db9-296c-461d-a7a6-d844d78a6463": 3,
+      "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": 6,
+      "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": 5,
+      "ff7028ed-7e8c-4769-b717-2a8dba3c605c": 6,
+      "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": 6,
+      "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": 6,
+      "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": 6,
+      "86802069-f1a1-4abb-90cf-b138b56e0821": 6,
+      "d072a67d-6367-4692-af3a-50e7be7236c6": 6,
+      "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": 6,
+      "59989ff4-2f9e-4fa4-a961-587d50825737": 6,
+      "454c1611-001f-42b8-89c1-f58a68ab0700": 6,
+      "874aaac7-7762-48f0-82c5-5c0fec014b3e": 6,
+      "41b18bfa-7053-4c22-b066-2091d7cb1ad9": 6,
+      "72d07939-c87b-4d9a-9359-3d38a2a29f24": 4
+    },
+    "puntosDiaProyectado6000": 6000
+  },
+  "variantes": [
+    {
+      "nombre": "dp-2",
+      "tipo": "douglas-peucker",
+      "parametro": 2,
+      "puntosGuardados": 1438,
+      "pctVsCrudo": 25.51907719609583,
+      "desviacionMaxM": 1.9985065718389765,
+      "desviacionP95M": 1.5549787100639727,
+      "kmTotales": 110.56684737491983,
+      "difKmPct": -0.07474006463932065,
+      "pasadasPerdidas": 7,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 4
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 4
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 1531.1446317657499
+    },
+    {
+      "nombre": "dp-5",
+      "tipo": "douglas-peucker",
+      "parametro": 5,
+      "puntosGuardados": 724,
+      "pctVsCrudo": 12.84826974267968,
+      "desviacionMaxM": 4.99815632498855,
+      "desviacionP95M": 3.7172763892458516,
+      "kmTotales": 110.38456579482165,
+      "difKmPct": -0.2394778201708243,
+      "pasadasPerdidas": 28,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 2
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 2
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 2
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 3
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 3
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 4
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 2
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 2
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 770.8961845607809
+    },
+    {
+      "nombre": "dp-10",
+      "tipo": "douglas-peucker",
+      "parametro": 10,
+      "puntosGuardados": 462,
+      "pctVsCrudo": 8.198757763975156,
+      "desviacionMaxM": 9.970706414549996,
+      "desviacionP95M": 6.738825218068386,
+      "kmTotales": 110.05580431461333,
+      "difKmPct": -0.5365974102334325,
+      "pasadasPerdidas": 43,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 2
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 4
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 1
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 0
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 4
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 0
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 1
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 2
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 1
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 0
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 491.92546583850935
+    },
+    {
+      "nombre": "dp-20",
+      "tipo": "douglas-peucker",
+      "parametro": 20,
+      "puntosGuardados": 282,
+      "pctVsCrudo": 5.004436557231588,
+      "desviacionMaxM": 19.968174191733077,
+      "desviacionP95M": 13.491291582923381,
+      "kmTotales": 109.56172429845363,
+      "difKmPct": -0.9831243323244042,
+      "pasadasPerdidas": 68,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 4
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 3
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 1
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 1
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 3
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 1
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 0
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 1
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 0
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 0
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 1
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 0
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 0
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 0
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 300.2661934338953
+    },
+    {
+      "nombre": "dp-2-zona-protegida",
+      "tipo": "douglas-peucker-zona-protegida",
+      "parametro": 2,
+      "puntosGuardados": 3573,
+      "pctVsCrudo": 63.40727595385981,
+      "desviacionMaxM": 2.0271179234916117,
+      "desviacionP95M": 1.237740412960436,
+      "kmTotales": 110.60951339948886,
+      "difKmPct": -0.03618046294413936,
+      "pasadasPerdidas": 0,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 3804.4365572315883
+    },
+    {
+      "nombre": "dp-5-zona-protegida",
+      "tipo": "douglas-peucker-zona-protegida",
+      "parametro": 5,
+      "puntosGuardados": 3216,
+      "pctVsCrudo": 57.07187222715173,
+      "desviacionMaxM": 6.8118769161257795,
+      "desviacionP95M": 3.0418471257306985,
+      "kmTotales": 110.52415455552311,
+      "difKmPct": -0.11332388227431944,
+      "pasadasPerdidas": 0,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 3424.312333629104
+    },
+    {
+      "nombre": "dp-10-zona-protegida",
+      "tipo": "douglas-peucker-zona-protegida",
+      "parametro": 10,
+      "puntosGuardados": 3097,
+      "pctVsCrudo": 54.96007098491571,
+      "desviacionMaxM": 9.7418884418949,
+      "desviacionP95M": 4.088937821658292,
+      "kmTotales": 110.4122529170953,
+      "difKmPct": -0.21445546531724913,
+      "pasadasPerdidas": 0,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 3297.6042590949423
+    },
+    {
+      "nombre": "dp-20-zona-protegida",
+      "tipo": "douglas-peucker-zona-protegida",
+      "parametro": 20,
+      "puntosGuardados": 3005,
+      "pctVsCrudo": 53.327417923691215,
+      "desviacionMaxM": 24.68053746724706,
+      "desviacionP95M": 8.920271395255643,
+      "kmTotales": 110.20424046954204,
+      "difKmPct": -0.40244760206569014,
+      "pasadasPerdidas": 0,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 3199.645075421473
+    },
+    {
+      "nombre": "distancia-30m",
+      "tipo": "submuestreo-distancia",
+      "parametro": 30,
+      "puntosGuardados": 2791,
+      "pctVsCrudo": 49.52972493345164,
+      "desviacionMaxM": 17.695262237827173,
+      "desviacionP95M": 2.4743578910007864,
+      "kmTotales": 109.81746686237788,
+      "difKmPct": -0.7519958993139879,
+      "pasadasPerdidas": 0,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 2971.7834960070986
+    },
+    {
+      "nombre": "distancia-50m",
+      "tipo": "submuestreo-distancia",
+      "parametro": 50,
+      "puntosGuardados": 1803,
+      "pctVsCrudo": 31.996450754214727,
+      "desviacionMaxM": 48.179447700295654,
+      "desviacionP95M": 6.686168467521757,
+      "kmTotales": 108.8226180751581,
+      "difKmPct": -1.6510947342678768,
+      "pasadasPerdidas": 1,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 2
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 1919.787045252884
+    },
+    {
+      "nombre": "distancia-80m",
+      "tipo": "submuestreo-distancia",
+      "parametro": 80,
+      "puntosGuardados": 1164,
+      "pctVsCrudo": 20.656610470275066,
+      "desviacionMaxM": 76.81372863521895,
+      "desviacionP95M": 13.35441028280926,
+      "kmTotales": 107.99709002108894,
+      "difKmPct": -2.3971692344033095,
+      "pasadasPerdidas": 1,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 2
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 1239.396628216504
+    },
+    {
+      "nombre": "tiempo-15s",
+      "tipo": "submuestreo-tiempo",
+      "parametro": 15,
+      "puntosGuardados": 1143,
+      "pctVsCrudo": 20.283939662821652,
+      "desviacionMaxM": 34.14198660580573,
+      "desviacionP95M": 10.5108277769604,
+      "kmTotales": 109.17039721575205,
+      "difKmPct": -1.3367878525123882,
+      "pasadasPerdidas": 0,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 1217.0363797692992
+    },
+    {
+      "nombre": "tiempo-30s",
+      "tipo": "submuestreo-tiempo",
+      "parametro": 30,
+      "puntosGuardados": 661,
+      "pctVsCrudo": 11.730257320319431,
+      "desviacionMaxM": 65.06316841284732,
+      "desviacionP95M": 27.414883366795852,
+      "kmTotales": 107.66274565780675,
+      "difKmPct": -2.6993343788575714,
+      "pasadasPerdidas": 5,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 4
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 5
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 4
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 703.8154392191659
+    },
+    {
+      "nombre": "tiempo-60s",
+      "tipo": "submuestreo-tiempo",
+      "parametro": 60,
+      "puntosGuardados": 366,
+      "pctVsCrudo": 6.495119787045253,
+      "desviacionMaxM": 174.36694785694075,
+      "desviacionP95M": 55.317964906859764,
+      "kmTotales": 105.65277275707291,
+      "difKmPct": -4.515855961387731,
+      "pasadasPerdidas": 36,
+      "pasadasExtra": 0,
+      "detallePasadasPorPc": {
+        "884ac1fd-4de6-48a9-958a-050168c3c3e9": {
+          "baseline": 6,
+          "variante": 4
+        },
+        "4a43318e-32f5-4099-90f2-847e3bd18e7d": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a": {
+          "baseline": 6,
+          "variante": 3
+        },
+        "1a2f2b1c-f00a-4715-95fe-77f6801c876a": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "c1d6cf09-d684-4264-a8b6-f5e255c88a81": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "6ea502f2-4569-41c1-adf5-56b9ff0c340e": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "58569286-5656-44cc-b5ad-abb4c0c30877": {
+          "baseline": 5,
+          "variante": 4
+        },
+        "558a11b8-3023-4973-8bea-3e80b2f4ad49": {
+          "baseline": 5,
+          "variante": 3
+        },
+        "30e941ff-e620-4bdf-94c7-6213821c6533": {
+          "baseline": 2,
+          "variante": 2
+        },
+        "66893d00-e1c2-411f-8525-67843e34b587": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "a123450a-7fa3-4376-87fe-35626ad2dbcc": {
+          "baseline": 0,
+          "variante": 0
+        },
+        "eb6d6db9-296c-461d-a7a6-d844d78a6463": {
+          "baseline": 3,
+          "variante": 3
+        },
+        "dd195dd9-8994-4126-b07c-2b8b7ad7d36d": {
+          "baseline": 6,
+          "variante": 4
+        },
+        "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b": {
+          "baseline": 5,
+          "variante": 1
+        },
+        "ff7028ed-7e8c-4769-b717-2a8dba3c605c": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4": {
+          "baseline": 6,
+          "variante": 4
+        },
+        "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9": {
+          "baseline": 6,
+          "variante": 3
+        },
+        "06dfb6a5-8e1d-4817-8f32-34c36589e8ef": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "86802069-f1a1-4abb-90cf-b138b56e0821": {
+          "baseline": 6,
+          "variante": 4
+        },
+        "d072a67d-6367-4692-af3a-50e7be7236c6": {
+          "baseline": 6,
+          "variante": 6
+        },
+        "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "59989ff4-2f9e-4fa4-a961-587d50825737": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "454c1611-001f-42b8-89c1-f58a68ab0700": {
+          "baseline": 6,
+          "variante": 5
+        },
+        "874aaac7-7762-48f0-82c5-5c0fec014b3e": {
+          "baseline": 6,
+          "variante": 2
+        },
+        "41b18bfa-7053-4c22-b066-2091d7cb1ad9": {
+          "baseline": 6,
+          "variante": 3
+        },
+        "72d07939-c87b-4d9a-9359-3d38a2a29f24": {
+          "baseline": 4,
+          "variante": 4
+        }
+      },
+      "puntosDiaProyectado6000": 389.70718722271516
+    }
+  ],
+  "sanityCheckCumplimientos": [
+    {
+      "puntoControlId": "884ac1fd-4de6-48a9-958a-050168c3c3e9",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "4a43318e-32f5-4099-90f2-847e3bd18e7d",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "8d00e36d-9ed0-46f2-9afd-9cb5e78eb27a",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "1a2f2b1c-f00a-4715-95fe-77f6801c876a",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "c1d6cf09-d684-4264-a8b6-f5e255c88a81",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "6ea502f2-4569-41c1-adf5-56b9ff0c340e",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "58569286-5656-44cc-b5ad-abb4c0c30877",
+      "pasadasBaselineRecalculadas": 5,
+      "pasadasRealesRegistradas": 5
+    },
+    {
+      "puntoControlId": "558a11b8-3023-4973-8bea-3e80b2f4ad49",
+      "pasadasBaselineRecalculadas": 5,
+      "pasadasRealesRegistradas": 5
+    },
+    {
+      "puntoControlId": "30e941ff-e620-4bdf-94c7-6213821c6533",
+      "pasadasBaselineRecalculadas": 2,
+      "pasadasRealesRegistradas": 2
+    },
+    {
+      "puntoControlId": "66893d00-e1c2-411f-8525-67843e34b587",
+      "pasadasBaselineRecalculadas": 0,
+      "pasadasRealesRegistradas": 0
+    },
+    {
+      "puntoControlId": "a123450a-7fa3-4376-87fe-35626ad2dbcc",
+      "pasadasBaselineRecalculadas": 0,
+      "pasadasRealesRegistradas": 0
+    },
+    {
+      "puntoControlId": "eb6d6db9-296c-461d-a7a6-d844d78a6463",
+      "pasadasBaselineRecalculadas": 3,
+      "pasadasRealesRegistradas": 3
+    },
+    {
+      "puntoControlId": "dd195dd9-8994-4126-b07c-2b8b7ad7d36d",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "2d2f81f3-ac5b-4ffa-ac80-6f051fa9d32b",
+      "pasadasBaselineRecalculadas": 5,
+      "pasadasRealesRegistradas": 5
+    },
+    {
+      "puntoControlId": "ff7028ed-7e8c-4769-b717-2a8dba3c605c",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "5c62dce3-0edf-49e2-a77a-7c82bbb2cdf4",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "6a26a1ba-2b42-4dd3-abfe-b9212f15fad9",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "06dfb6a5-8e1d-4817-8f32-34c36589e8ef",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "86802069-f1a1-4abb-90cf-b138b56e0821",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "d072a67d-6367-4692-af3a-50e7be7236c6",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "bb3ca30c-1e13-4079-aacd-ff4bb4b43f24",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "59989ff4-2f9e-4fa4-a961-587d50825737",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "454c1611-001f-42b8-89c1-f58a68ab0700",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "874aaac7-7762-48f0-82c5-5c0fec014b3e",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "41b18bfa-7053-4c22-b066-2091d7cb1ad9",
+      "pasadasBaselineRecalculadas": 6,
+      "pasadasRealesRegistradas": 6
+    },
+    {
+      "puntoControlId": "72d07939-c87b-4d9a-9359-3d38a2a29f24",
+      "pasadasBaselineRecalculadas": 4,
+      "pasadasRealesRegistradas": 4
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+
+=== perfil-c2_obj-5000_sync-15 ===
+>>> Punto: perfil=c2 objetivo=5000pts/s sync=15s K=0 duracion=180s calentamiento=60s
+<<< Punto: FALLA — {"throughputInsuficiente":false,"p95LoteAlto":false,"filasPerdidas":false,"backlogNoSostenido":true,"corridaInvalida":false}

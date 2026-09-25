@@ -24,7 +24,13 @@ export interface PerfilScreenProps extends NativeStackScreenProps<OperationStack
 export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAccessToken, onLogout }: PerfilScreenProps) {
   const { data: contexto, isLoading, refetch } = usePerfilQuery(contextoInicial, obtenerAccessToken);
   const { gps } = useGpsContext();
-  const { isOffline } = useSyncStatus(obtenerAccessToken, contextoInicial.sesionId);
+  // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
+  // el llamado a `useSyncStatus` se CONSERVA — drena el outbox también mientras esta pantalla
+  // está abierta (ver el comentario M5 en `sync-outbox.ts` sobre el doble montaje con
+  // `operation-screen.tsx`) — pero ya no se usa su `isOffline` para cambiar el status pill de
+  // abajo: "sin conexión" es el estado normal de un chofer manejando, no algo que deba
+  // alarmar con un color distinto.
+  useSyncStatus(obtenerAccessToken, contextoInicial.sesionId);
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
   const scale = useTextScale();
   const { settings } = useOperacionSettings();
@@ -34,9 +40,9 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   }
 
   const modeloVehiculo = `${contexto.vehiculo.marca} ${contexto.vehiculo.modelo}`.trim() || 'Toyota Hiace';
-  const statusLabel = isOffline ? 'OFFLINE' : gps.tracking ? 'EN LINEA' : 'EN ESPERA';
+  const statusLabel = gps.tracking ? 'EN LINEA' : 'EN ESPERA';
   // En Figma: EN ESPERA es azul (#3127B1) y EN LINEA es naranja/ámbar (#FD9E15)
-  const statusColor = isOffline ? '#FF9500' : gps.tracking ? '#FD9E15' : '#3127B1';
+  const statusColor = gps.tracking ? '#FD9E15' : '#3127B1';
 
   return (
     <View style={styles.container}>

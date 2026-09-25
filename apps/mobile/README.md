@@ -35,7 +35,7 @@ conectado por ADB:
 pnpm --filter @quivo/mobile android
 ```
 
-Esto compila e instala `com.quivotech.conductor`. Si Expo muestra “No development build is
+Esto compila e instala `com.quivotech.conductor.app`. Si Expo muestra “No development build is
 installed”, falta precisamente ese paso. Las siguientes ejecuciones usan `pnpm dev` y se
 abre la aplicación instalada **QUIVO Conductor**.
 
