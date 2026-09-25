@@ -55,7 +55,19 @@ export function RouteMapView({
   // estado que ahora viaja por `postMessage` (ver `enviarEstadoCompleto` abajo), no por reconstrucción
   // de HTML. Ver el comentario grande en `construirHtml` (route-map-html.ts) para el detalle.
   const html = useMemo(() => construirHtml(paquete, vehiculo), [paquete, vehiculo]);
-  const source = useMemo(() => ({ html }), [html]);
+  // `baseUrl` (dominio real de producción de este proyecto, confirmado en `apps/api/README.md` y
+  // `docs/plan-integracion-redesign-jairo.md`: CORS_ORIGIN/paneles públicos apuntan a
+  // `control.myquivo.com`) — hallazgo del code-review de esta entrega: sin `baseUrl`, el WebView
+  // carga este HTML desde un string sin ningún origen, así que las peticiones de tiles a
+  // `tile.openstreetmap.org` (`route-map-html.ts`) salían sin header `Referer`. La política de uso
+  // de OSM pide un Referer identificable — sin él, OSM puede bloquear la IP, y el bucle de
+  // reintento (antes sin tope, ver el fix en `route-map-html.ts`) volvía a pedir cada tile visible
+  // cada 30s para siempre, agravando el bloqueo. `baseUrl` NO afecta a Leaflet ni al CSS: ambos
+  // viajan inline dentro del mismo string de `html` (`leaflet-inline.generated.ts`), así que no
+  // son peticiones de red que dependan de resolverse contra este origen — y por la misma razón
+  // tampoco rompe el arranque sin red (offline): lo único que cambia es el header `Referer` que
+  // manda el WebView al pedir un tile, nunca cómo se resuelven los recursos inline.
+  const source = useMemo(() => ({ html, baseUrl: 'https://control.myquivo.com/' }), [html]);
 
   // Entrega 25/31b (handshake mapa-listo): guarda el último estado conocido en una ref —
   // actualizada en cada render, ver más abajo — para que `enviarEstadoCompleto` pueda mandarlo

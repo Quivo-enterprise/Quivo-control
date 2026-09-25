@@ -215,7 +215,7 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
     expect(obtenerUrlOriginal).not.toHaveBeenCalled();
   });
 
-  it('un tile que sigue fallando se reintenta en cada tick, sin duplicar la entrada pendiente ni recalcular la URL', () => {
+  it('un tile que sigue fallando se reintenta con backoff exponencial, sin duplicar la entrada pendiente ni recalcular la URL', () => {
     const tile = crearTileFalso();
     const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
     const controlador = crearControlador({ obtenerUrlOriginal });
@@ -232,6 +232,14 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
     // quedó congelada en el primer onTileError — ver el comentario sobre 'urlBase').
     controlador.onTileError(tile, COORDS);
     expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
+
+    // Backoff exponencial (Hallazgo del code-review de esta entrega): tras el primer reintento la
+    // espera para el SEGUNDO se duplicó a 2 ticks — un solo tick más todavía no le toca.
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
+    expect(tile.src).toBe(primerSrc);
+
+    // Al segundo tick de espera (2 en total desde el primer reintento) sí le toca de nuevo.
     vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
     expect(obtenerUrlOriginal).toHaveBeenCalledTimes(1);
     // El segundo reintento SÍ vuelve a reasignar tile.src (con un cache-busting distinto), aunque
@@ -328,6 +336,67 @@ describe('crearControladorTiles — reintento de tiles fallidos (la capa nunca s
     expect(tileNuevo.src).toContain(URL_ORIGINAL);
     // El tick de retry reusa la urlBase ya calculada — no vuelve a invocar obtenerUrlOriginal.
     expect(obtenerUrlOriginal).toHaveBeenCalledTimes(2);
+  });
+
+  // Hallazgo del code-review de esta entrega: OSM tile.openstreetmap.org es el servidor de
+  // demostración de OSM (ver el AVISO DE RIESGO en route-map-html.ts) — sin ningún tope, un
+  // bloqueo sostenido hacía que CADA tile visible se re-pidiera cada `reintentoIntervaloMs` PARA
+  // SIEMPRE, agravando el bloqueo. Estos dos tests cubren el tope: backoff exponencial (la espera
+  // entre reintentos sucesivos del MISMO tile se duplica) y abandono definitivo tras
+  // `maxIntentos`.
+  it('duplica la espera entre reintentos sucesivos del mismo tile (backoff exponencial)', () => {
+    const tile = crearTileFalso();
+    const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+    const controlador = crearControlador({ obtenerUrlOriginal });
+
+    controlador.onTileError(tile, COORDS);
+
+    // Tick 1: primer reintento — igual que antes de este fix, no espera más de un tick.
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    const srcTrasIntento1 = tile.src;
+    expect(srcTrasIntento1).toContain(URL_ORIGINAL);
+
+    // Tick 2: la espera para el SEGUNDO intento se duplicó a 2 ticks — todavía no le toca, no se
+    // vuelve a tocar tile.src en este tick.
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    expect(tile.src).toBe(srcTrasIntento1);
+
+    // Tick 3: se cumplieron los 2 ticks de espera del segundo intento — reintenta de nuevo.
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    expect(tile.src).not.toBe(srcTrasIntento1);
+    expect(tile.src).toContain(URL_ORIGINAL);
+  });
+
+  it('abandona un tile tras agotar maxIntentos — deja de reintentarlo aunque la falla persista, y el temporizador se apaga', () => {
+    const tile = crearTileFalso();
+    const obtenerUrlOriginal = vi.fn(() => URL_ORIGINAL);
+    // esperaMaximaTicks: 1 anula el backoff (siempre 1 tick de espera) para poder agotar
+    // maxIntentos en pocos ticks, sin que el crecimiento del backoff complique el cálculo.
+    const controlador = crearControlador({ obtenerUrlOriginal, maxIntentos: 2, esperaMaximaTicks: 1 });
+
+    controlador.onTileError(tile, COORDS);
+
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS); // intento 1 de 2
+    const srcTrasIntento1 = tile.src;
+    expect(srcTrasIntento1).toContain(URL_ORIGINAL);
+
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS); // intento 2 de 2 (llega al tope)
+    const srcTrasIntento2 = tile.src;
+    expect(srcTrasIntento2).not.toBe(srcTrasIntento1);
+
+    // Se agotaron los 2 intentos permitidos: el próximo tick abandona el tile en vez de
+    // reintentarlo — tile.src queda como estaba tras el segundo intento, sin importar cuántos
+    // ticks más pasen.
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS * 10);
+    expect(tile.src).toBe(srcTrasIntento2);
+
+    // Al abandonarlo, la lista de pendientes queda vacía y el temporizador se apaga — un tile
+    // NUEVO que falla arranca su propio contador de intentos desde cero, sin heredar nada del
+    // anterior.
+    const tileNuevo = crearTileFalso();
+    controlador.onTileError(tileNuevo, COORDS);
+    vi.advanceTimersByTime(REINTENTO_INTERVALO_MS);
+    expect(tileNuevo.src).toContain(URL_ORIGINAL);
   });
 });
 
@@ -675,7 +744,9 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
           capas: [] as unknown[],
           fitBoundsLlamadas: 0,
           flyToLlamadas: 0,
+          setViewLlamadas: 0,
           setView() {
+            mapaFalso.setViewLlamadas += 1;
             return mapaFalso;
           },
           on() {
@@ -962,5 +1033,263 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
     const markersTrasSegundoMensaje = mapaFalso.capas.filter((c) => c.tipo === 'marker');
     expect(markersTrasSegundoMensaje).toHaveLength(2);
     expect(markersTrasSegundoMensaje[0]!.args.opts.icon.opts.html).not.toContain('completed');
+  });
+
+  // Hallazgo del code-review de esta entrega: `route-map-view.tsx` manda 'tracking' Y
+  // 'proximoPuntoControl' juntos en CADA cambio de props — incluida cada actualización de
+  // posición GPS, porque `posicionActual` está en las dependencias del `useEffect` que dispara el
+  // envío (ver `enviarEstadoCompleto` en route-map-view.tsx). Antes de este fix, cada mensaje
+  // 'tracking'/'proximoPuntoControl' llamaba `renderizarPuntosControl()` incondicionalmente —
+  // aunque ni el estado de seguimiento ni el próximo punto de control hubieran cambiado — así que
+  // un solo fix de GPS reconstruía TODOS los marcadores de puntos de control dos veces (borra y
+  // vuelve a crear con `map.removeLayer`/`L.marker`). Este test corre el `<script>` real y manda
+  // la secuencia exacta que produce un fix de GPS (tracking + proximoPuntoControl + position, en
+  // ese orden — el mismo de `construirMensajesEstadoMapa`), repetida varias veces con los mismos
+  // valores de tracking/próximo punto, y confirma que `L.marker` NUNCA se vuelve a invocar para
+  // los puntos de control — solo una vez para el marcador de posición (que sí debe actualizarse).
+  it('una actualización de posición (tracking + proximoPuntoControl sin cambios + position) no reconstruye los marcadores de puntos de control', () => {
+    const paquete = paqueteDePrueba();
+    const html = construirHtml(paquete, vehiculoDePrueba);
+    const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+    const lFalso = crearLFalso();
+    let markerCalls = 0;
+    const markerOriginal = lFalso.marker;
+    lFalso.marker = (latlng: unknown, opts: unknown) => {
+      markerCalls += 1;
+      return markerOriginal(latlng, opts);
+    };
+
+    let handlerMensajeWindow: ((event: { data: string }) => void) | undefined;
+    const sandbox: Record<string, unknown> = {
+      L: lFalso,
+      document: { addEventListener: () => {} },
+      window: {
+        addEventListener: (evento: string, cb: (event: { data: string }) => void) => {
+          if (evento === 'message') handlerMensajeWindow = cb;
+        },
+      },
+      console,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Date,
+      Math,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(scriptAplicacion, sandbox);
+
+    // Los 2 puntos de control de la ruta de prueba se crean al montar el script.
+    expect(markerCalls).toBe(2);
+    expect(handlerMensajeWindow).toBeTypeOf('function');
+
+    // Primer "fix de GPS": tracking (false, el default, sin cambio), proximoPuntoControl (null,
+    // sin cambio) y position — exactamente el orden de `construirMensajesEstadoMapa`.
+    handlerMensajeWindow!({ data: JSON.stringify({ type: 'tracking', active: false }) });
+    handlerMensajeWindow!({ data: JSON.stringify({ type: 'proximoPuntoControl', id: null }) });
+    handlerMensajeWindow!({ data: JSON.stringify({ type: 'position', lat: -17.38, lng: -66.15 }) });
+
+    // +1 por el marcador de POSICIÓN, nuevo (primera vez que se conoce la posición del vehículo)
+    // — los de puntos de control no se tocaron.
+    expect(markerCalls).toBe(3);
+
+    // Varios fixes de GPS más, todos con el mismo tracking/próximo punto de control: el marcador
+    // de posición ya existe (se actualiza con setLatLng, no se vuelve a crear) y los puntos de
+    // control tampoco deberían volver a crearse.
+    for (let i = 0; i < 5; i++) {
+      handlerMensajeWindow!({ data: JSON.stringify({ type: 'tracking', active: false }) });
+      handlerMensajeWindow!({ data: JSON.stringify({ type: 'proximoPuntoControl', id: null }) });
+      handlerMensajeWindow!({
+        data: JSON.stringify({ type: 'position', lat: -17.38 + i * 0.001, lng: -66.15 }),
+      });
+    }
+    expect(markerCalls).toBe(3);
+  });
+});
+
+// Hallazgo 2 del code-review de esta entrega: `map.fitBounds(ruta.getBounds(), ...)` tira
+// ('Bounds are not valid') cuando la ruta no tiene coordenadas — un paquete con geometría vacía
+// (dato incompleto/corrupto desde el backend) no debería congelar ni crashear el mapa. Estos tests
+// corren el `<script>` real (no una reimplementación) contra un paquete sin coordenadas de ruta,
+// ejercitando los 3 call-sites de `ajustarVistaARuta` (el fitBounds inicial, 'tracking' con
+// seguimiento apagado, y 'recenter' sin posición conocida).
+describe('ajustarVistaARuta — guarda contra fitBounds con una ruta sin coordenadas (Hallazgo 2)', () => {
+  function extraerScriptDeAplicacion(htmlGenerado: string): string {
+    const inicio = htmlGenerado.lastIndexOf('<script>');
+    const fin = htmlGenerado.indexOf('</script>', inicio);
+    if (inicio === -1 || fin === -1) {
+      throw new Error('No se encontró el <script> de la aplicación en el HTML generado.');
+    }
+    return htmlGenerado.slice(inicio + '<script>'.length, fin);
+  }
+
+  function crearCapaLeafletFalsa(tipo: string, args: unknown) {
+    const callbacks: Record<string, (evento: unknown) => void> = {};
+    const capa: Record<string, unknown> = {
+      tipo,
+      args,
+      callbacks,
+      options: (args as { opts?: Record<string, unknown> } | undefined)?.opts ?? {},
+    };
+    capa.addTo = (mapaFalso: { capas: unknown[] }) => {
+      mapaFalso.capas.push(capa);
+      return capa;
+    };
+    capa.on = (evento: string, cb: (evento: unknown) => void) => {
+      callbacks[evento] = cb;
+      return capa;
+    };
+    capa.setStyle = () => capa;
+    capa.setIcon = () => capa;
+    capa.setLatLng = () => capa;
+    capa.getLatLng = () => ({ lat: -17.38, lng: -66.15 });
+    capa.getBounds = () => 'bounds-falso';
+    capa.bringToFront = () => capa;
+    return capa;
+  }
+
+  function crearLFalso() {
+    return {
+      map: () => {
+        const mapaFalso = {
+          capas: [] as unknown[],
+          fitBoundsLlamadas: 0,
+          flyToLlamadas: 0,
+          setViewLlamadas: 0,
+          setView() {
+            mapaFalso.setViewLlamadas += 1;
+            return mapaFalso;
+          },
+          on() {
+            return mapaFalso;
+          },
+          flyTo() {
+            mapaFalso.flyToLlamadas += 1;
+            return mapaFalso;
+          },
+          fitBounds() {
+            mapaFalso.fitBoundsLlamadas += 1;
+            return mapaFalso;
+          },
+          removeLayer(capa: unknown) {
+            mapaFalso.capas = mapaFalso.capas.filter((c) => c !== capa);
+            return mapaFalso;
+          },
+        };
+        return mapaFalso;
+      },
+      tileLayer: (url: string, opts: unknown) => crearCapaLeafletFalsa('tileLayer', { url, opts }),
+      polyline: (coords: unknown, opts: unknown) => crearCapaLeafletFalsa('polyline', { coords, opts }),
+      marker: (latlng: unknown, opts: unknown) => crearCapaLeafletFalsa('marker', { latlng, opts }),
+      divIcon: (opts: unknown) => ({ tipo: 'divIcon', opts }),
+    };
+  }
+
+  function paqueteConRutaVacia(): PaqueteDia {
+    const base = paqueteDePrueba();
+    return { ...base, ruta: { ...base.ruta, geometria: { type: 'LineString', coordinates: [] } } };
+  }
+
+  it('con ruta vacía y sin posición conocida: el fitBounds inicial se salta (no tira) y no toca la vista', () => {
+    const html = construirHtml(paqueteConRutaVacia(), vehiculoDePrueba);
+    const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+    const sandbox: Record<string, unknown> = {
+      L: crearLFalso(),
+      document: { addEventListener: () => {} },
+      window: { addEventListener: () => {} },
+      console,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Date,
+      Math,
+    };
+    vm.createContext(sandbox);
+
+    expect(() => {
+      vm.runInContext(scriptAplicacion, sandbox);
+    }).not.toThrow();
+
+    const mapaFalso = sandbox.map as { fitBoundsLlamadas: number; setViewLlamadas: number };
+    // El fitBounds del final de construirHtml (ver `ajustarVistaARuta`) nunca se llama sin
+    // coordenadas de ruta.
+    expect(mapaFalso.fitBoundsLlamadas).toBe(0);
+    // setView SÍ se llama una vez — el view inicial de arranque (`map.setView(... : [0,0], 15)`),
+    // no un segundo llamado desde `ajustarVistaARuta` (no hay posición conocida todavía).
+    expect(mapaFalso.setViewLlamadas).toBe(1);
+  });
+
+  it('con ruta vacía pero con posición ya conocida: "tracking" con seguimiento apagado centra en la posición actual en vez de tirar', () => {
+    const html = construirHtml(paqueteConRutaVacia(), vehiculoDePrueba);
+    const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+    let handlerMensajeWindow: ((event: { data: string }) => void) | undefined;
+    const sandbox: Record<string, unknown> = {
+      L: crearLFalso(),
+      document: { addEventListener: () => {} },
+      window: {
+        addEventListener: (evento: string, cb: (event: { data: string }) => void) => {
+          if (evento === 'message') handlerMensajeWindow = cb;
+        },
+      },
+      console,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Date,
+      Math,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(scriptAplicacion, sandbox);
+
+    const mapaFalso = sandbox.map as { fitBoundsLlamadas: number; setViewLlamadas: number };
+    expect(mapaFalso.setViewLlamadas).toBe(1); // el view inicial de arranque
+
+    // Se conoce una posición (primer fix de GPS) y luego se apaga el seguimiento.
+    handlerMensajeWindow!({ data: JSON.stringify({ type: 'position', lat: -17.38, lng: -66.15 }) });
+    handlerMensajeWindow!({ data: JSON.stringify({ type: 'tracking', active: true }) });
+    handlerMensajeWindow!({ data: JSON.stringify({ type: 'tracking', active: false }) });
+
+    // 'tracking' con active:false, ruta vacía, pero posición SÍ conocida: ajustarVistaARuta debe
+    // centrar en la posición actual (map.setView) en vez de llamar fitBounds con un bounds
+    // inválido.
+    expect(mapaFalso.fitBoundsLlamadas).toBe(0);
+    expect(mapaFalso.setViewLlamadas).toBe(2);
+  });
+
+  it('con ruta vacía: el mensaje "recenter" sin posición conocida no llama fitBounds', () => {
+    const html = construirHtml(paqueteConRutaVacia(), vehiculoDePrueba);
+    const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+    let handlerMensajeWindow: ((event: { data: string }) => void) | undefined;
+    const sandbox: Record<string, unknown> = {
+      L: crearLFalso(),
+      document: { addEventListener: () => {} },
+      window: {
+        addEventListener: (evento: string, cb: (event: { data: string }) => void) => {
+          if (evento === 'message') handlerMensajeWindow = cb;
+        },
+      },
+      console,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Date,
+      Math,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(scriptAplicacion, sandbox);
+
+    expect(() => {
+      handlerMensajeWindow!({ data: JSON.stringify({ type: 'recenter' }) });
+    }).not.toThrow();
+
+    const mapaFalso = sandbox.map as { fitBoundsLlamadas: number };
+    expect(mapaFalso.fitBoundsLlamadas).toBe(0);
   });
 });

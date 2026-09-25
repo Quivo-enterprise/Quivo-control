@@ -55,9 +55,27 @@ export interface OpcionesControladorTiles {
    * Sirve para distinguir el `tileload` del GIF placeholder (no es una carga real) del de un tile
    * de verdad. */
   errorTileUrl: string;
-  /** Cada cuánto se reintentan, en bloque, TODOS los tiles fallidos pendientes. El temporizador
-   * (un único `setInterval` compartido) solo corre mientras haya al menos un tile pendiente. */
+  /** Cada cuánto TICK del temporizador compartido se evalúa si a un tile pendiente ya le toca
+   * reintentarse — es el intervalo BASE del backoff exponencial (ver `maxIntentos`/
+   * `esperaMaximaTicks` más abajo), no necesariamente el tiempo real entre dos reintentos del
+   * MISMO tile (que crece con cada fallo sucesivo). El temporizador (un único `setInterval`
+   * compartido) solo corre mientras haya al menos un tile pendiente. */
   reintentoIntervaloMs: number;
+  /** Tope de reintentos por tile antes de abandonarlo (Hallazgo del code-review de esta entrega:
+   * sin este tope, un bloqueo sostenido del servidor de tiles — cae dentro de lo que permite la
+   * política de uso de `tile.openstreetmap.org`, ver el AVISO DE RIESGO más abajo en
+   * `construirHtml` — hacía que CADA tile visible se re-pidiera cada `reintentoIntervaloMs` PARA
+   * SIEMPRE, sin límite, agravando el bloqueo en vez de aliviarlo). Agotado el tope, el tile queda
+   * con `errorTileUrl` (el fondo liso ya cubre el hueco) hasta que un pan/zoom lo saque y lo
+   * vuelva a traer a la vista — Leaflet crea un `<img>` nuevo en ese caso, que arranca sus propios
+   * intentos desde cero. Opcional: default `6` si se omite. */
+  maxIntentos?: number;
+  /** Techo del backoff exponencial, en unidades de `reintentoIntervaloMs` (no en ms directos):
+   * cada fallo sucesivo del MISMO tile duplica la espera hasta este techo, para no seguir
+   * golpeando la red al mismo ritmo mientras el bloqueo/la falta de cobertura persiste. Opcional:
+   * default `8` si se omite (con `reintentoIntervaloMs = 30000`, un techo de 4 minutos entre
+   * reintentos sucesivos de un mismo tile). */
+  esperaMaximaTicks?: number;
   /** Dado el `coords` que Leaflet manda en el evento `tileerror`, devuelve la URL original del
    * tile. Hace falta recalcularla porque, para cuando llega `tileerror`, Leaflet YA reemplazó
    * `tile.src` por `errorTileUrl` (ver el comentario grande sobre `CONTROLADOR_TILES_JS_SOURCE`
@@ -211,6 +229,16 @@ function crearControladorTiles(opciones) {
   // y evita reintentos desincronizados. Solo existe mientras haya al menos un pendiente — arranca
   // en el primer tileerror y se apaga solo cuando la lista queda vacía (ver detenerTimerSiVacio).
   var intervalId = null;
+  // Hallazgo del code-review de esta entrega: sin tope, un tile bloqueado (la política de uso de
+  // tile.openstreetmap.org no permite consumo intensivo desde apps en producción con flota real —
+  // ver el AVISO DE RIESGO en construirHtml más abajo) se re-pedía cada 'reintentoIntervaloMs'
+  // PARA SIEMPRE — con todos los tiles visibles reintentando al mismo ritmo, eso agrava el
+  // bloqueo en vez de aliviarlo. 'maxIntentos'/'esperaMaximaTicks' acotan eso: cada tile tiene un
+  // número finito de intentos, con una espera que se DUPLICA en cada fallo sucesivo (backoff
+  // exponencial, en unidades de 'reintentoIntervaloMs') hasta un techo — así el tráfico de
+  // reintento se apaga solo mientras el bloqueo persiste, en vez de mantenerse constante.
+  var maxIntentos = opciones.maxIntentos || 6;
+  var esperaMaximaTicks = opciones.esperaMaximaTicks || 8;
 
   function indiceDe(tile) {
     for (var i = 0; i < pendientes.length; i++) {
@@ -227,15 +255,38 @@ function crearControladorTiles(opciones) {
   }
 
   function reintentarPendientes() {
-    // Recorre una copia porque la lista muta durante el loop (los tiles podados se descartan acá
-    // mismo, sin esperar al próximo tileload/tileerror que nunca va a llegar para un <img> que ya
-    // no está en el DOM).
+    // Recorre una copia porque la lista muta durante el loop (los tiles podados o que agotaron
+    // sus intentos se descartan acá mismo, sin esperar a un evento que nunca va a llegar).
     var siguientes = [];
     for (var i = 0; i < pendientes.length; i++) {
       var entrada = pendientes[i];
       // El tile salió de la vista por un pan/zoom (Leaflet lo podó del DOM): reintentar algo que
       // ya no se va a dibujar sería tráfico de red desperdiciado. Se descarta sin reintentar.
       if (!opciones.tileSigueEnMapa(entrada.tile)) continue;
+
+      // Backoff exponencial: 'ticksHastaProximoIntento' es cuántos ticks de este temporizador
+      // (cada uno dura 'reintentoIntervaloMs') faltan para que a ESTE tile le toque su próximo
+      // reintento — arranca en 1 (reintenta en el primer tick, igual que antes de este fix). Se
+      // decrementa acá; 'entrada.esperaTicks' (la duración COMPLETA de la espera actual, separada
+      // del contador) es lo que se duplica más abajo tras cada intento — nunca este contador ya
+      // decrementado, o la próxima espera saldría de una cuenta ya consumida (0 o negativa) en vez
+      // de duplicar la espera real que se usó.
+      entrada.ticksHastaProximoIntento -= 1;
+      if (entrada.ticksHastaProximoIntento > 0) {
+        siguientes.push(entrada);
+        continue;
+      }
+
+      entrada.intentos += 1;
+      if (entrada.intentos > maxIntentos) {
+        // Tope alcanzado: se abandona este tile. Se queda con 'errorTileUrl' (el fondo liso ya
+        // cubre el hueco visualmente) hasta que un pan/zoom lo saque de la vista y Leaflet cree un
+        // <img> nuevo al volver a traerlo — ese <img> es una entrada distinta, con sus propios
+        // intentos desde cero, así que no queda permanentemente descartado, solo dejado en paz
+        // mientras el bloqueo/la falta de cobertura sigan como están.
+        continue;
+      }
+
       // 'urlBase' es la URL calculada en onTileError, con el zoom que tenía la capa cuando ESTE
       // tile falló — NUNCA se vuelve a invocar 'obtenerUrlOriginal' acá (ver el comentario grande
       // sobre 'urlBase' más arriba): si el zoom de la capa cambió desde entonces, recalcular la
@@ -251,6 +302,12 @@ function crearControladorTiles(opciones) {
       // próximo tick. Deliberadamente NO se usa tileLayer.redraw(): eso recarga TODOS los tiles
       // del mapa (parpadeo visible) por reintentar unos pocos.
       entrada.tile.src = url;
+      // Espera duplicada para el PRÓXIMO intento de este mismo tile (con techo), a partir de
+      // 'esperaTicks' (la duración de espera ya usada), NUNCA del contador ya decrementado de
+      // arriba — si esta carga funciona, onTileLoad saca la entrada de la lista antes de que esto
+      // importe.
+      entrada.esperaTicks = Math.min(entrada.esperaTicks * 2, esperaMaximaTicks);
+      entrada.ticksHastaProximoIntento = entrada.esperaTicks;
       siguientes.push(entrada);
     }
     pendientes = siguientes;
@@ -270,7 +327,17 @@ function crearControladorTiles(opciones) {
     if (indiceDe(tile) !== -1) return; // ya está pendiente — no arma un segundo reintento en paralelo
     // 'urlBase' se calcula ACÁ, apenas falla el tile, y no en 'reintentarPendientes' — ver el
     // comentario grande sobre 'urlBase' arriba de 'pendientes' para el porqué (zoom mezclado).
-    pendientes.push({ tile: tile, coords: coords, urlBase: opciones.obtenerUrlOriginal(coords) });
+    // 'intentos'/'esperaTicks'/'ticksHastaProximoIntento' arrancan el backoff exponencial de este
+    // tile desde cero — reintenta en el primer tick, igual que el comportamiento previo a este
+    // fix ('esperaTicks' = 1 tick de espera inicial).
+    pendientes.push({
+      tile: tile,
+      coords: coords,
+      urlBase: opciones.obtenerUrlOriginal(coords),
+      intentos: 0,
+      esperaTicks: 1,
+      ticksHastaProximoIntento: 1
+    });
     if (intervalId === null) {
       intervalId = setInterval(reintentarPendientes, opciones.reintentoIntervaloMs);
     }
@@ -478,10 +545,17 @@ export function construirHtml(
     // html/body/#map) YA es la navegación funcional: la polyline, los puntos de control y la
     // posición del vehículo se dibujan igual, sin esperar ningún tile.
     //
-    // AVISO DE RIESGO (no resuelto en esta entrega, ver plan Entrega 25): tile.openstreetmap.org
-    // es el servidor de demostración de OSM — su política de uso no permite consumo intensivo
-    // desde apps en producción con flota real. Con más de un puñado de vehículos hace falta un
-    // proveedor de tiles propio o pago (p. ej. MapTiler, Mapbox, o un tile server propio).
+    // AVISO DE RIESGO (mitigado parcialmente en esta entrega, ver plan Entrega 25):
+    // tile.openstreetmap.org es el servidor de demostración de OSM — su política de uso no
+    // permite consumo intensivo desde apps en producción con flota real. Con más de un puñado de
+    // vehículos hace falta un proveedor de tiles propio o pago (p. ej. MapTiler, Mapbox, o un tile
+    // server propio) — eso sigue sin resolverse acá. Lo que SÍ se resolvió (hallazgo del
+    // code-review de esta entrega): las peticiones de tile salían sin ningún header \`Referer\`
+    // porque este HTML corría como un string sin \`baseUrl\` en el \`source\` de la WebView — la
+    // política de uso de OSM pide un Referer identificable, y sin él, más el reintento sin tope
+    // que había antes (ver \`CONTROLADOR_TILES_JS_SOURCE\` más arriba), esto podía agravar un
+    // bloqueo en vez de evitarlo. Ahora \`route-map-view.tsx\` pasa \`baseUrl\` en \`source\`, así que el
+    // WebView sí manda Referer, y el reintento tiene backoff exponencial + tope de intentos.
     // Pixel transparente 1x1: evita que Android WebView dibuje el ícono de "imagen rota" en
     // cada mosaico que falla mientras no hay red — sin esto, un mapa sin cobertura se llena
     // de cuadrados rotos parpadeando en cada reintento en vez de quedar en el fondo liso.
@@ -522,9 +596,19 @@ export function construirHtml(
     // fallaron — sin depender de ningún mensaje de posición, así que un vehículo detenido
     // también recupera sus calles.
     var REINTENTO_TILES_INTERVALO_MS = 30000;
+    // Hallazgo del code-review de esta entrega: sin tope, un bloqueo sostenido del servidor de
+    // tiles (ver el AVISO DE RIESGO más abajo sobre la política de uso de
+    // tile.openstreetmap.org) hacía que CADA tile visible se re-pidiera cada
+    // REINTENTO_TILES_INTERVALO_MS para siempre — 6 intentos con backoff exponencial (techo de 8
+    // ticks, ~4 minutos entre reintentos sucesivos de un mismo tile) alcanzan para recuperarse de
+    // un corte transitorio sin seguir martillando la red indefinidamente durante uno sostenido.
+    var REINTENTO_TILES_MAX_INTENTOS = 6;
+    var REINTENTO_TILES_ESPERA_MAXIMA_TICKS = 8;
     var controladorTiles = crearControladorTiles({
       errorTileUrl: ERROR_TILE_URL,
       reintentoIntervaloMs: REINTENTO_TILES_INTERVALO_MS,
+      maxIntentos: REINTENTO_TILES_MAX_INTENTOS,
+      esperaMaximaTicks: REINTENTO_TILES_ESPERA_MAXIMA_TICKS,
       // Para cuando llega 'tileerror' Leaflet YA reemplazó tile.src por ERROR_TILE_URL (ver el
       // comentario grande arriba), así que la URL real hay que recalcularla a partir de las
       // coords que el propio evento trae. Deliberadamente NO delega en tileLayer.getTileUrl(coords)
@@ -648,6 +732,23 @@ export function construirHtml(
       caminoResaltado.bringToFront();
     }
 
+    // Hallazgo del code-review de esta entrega: 'map.fitBounds(ruta.getBounds(), ...)' tira
+    // ('Bounds are not valid') cuando 'coordenadasRuta' está vacío — un paquete sin geometría de
+    // ruta (dato incompleto/corrupto desde el backend) no debería congelar ni crashear el mapa por
+    // eso. Los tres call-sites de fitBounds (acá, en 'tracking' y en 'recenter' más abajo) pasan
+    // por este helper en vez de llamar a 'ruta.getBounds()' directo. Sin coordenadas, no hay bounds
+    // válidos que ajustar: si ya se conoce la posición del vehículo, centra ahí (mejor que nada);
+    // si tampoco hay posición, no toca la vista — queda el 'map.setView' inicial de más arriba.
+    function ajustarVistaARuta() {
+      if (coordenadasRuta.length === 0) {
+        if (posicion) {
+          map.setView(posicion.getLatLng(), 17);
+        }
+        return;
+      }
+      map.fitBounds(ruta.getBounds(), { paddingTopLeft: [20, 80], paddingBottomRight: [20, 180] });
+    }
+
     function updateMap(data) {
       if (!data) return;
 
@@ -661,7 +762,7 @@ export function construirHtml(
 
       if (data.type === 'recenter') {
         if (!posicion) {
-          map.fitBounds(ruta.getBounds(), { paddingTopLeft: [20, 80], paddingBottomRight: [20, 180] });
+          ajustarVistaARuta();
           return;
         }
         seguimientoActivo = true;
@@ -676,14 +777,24 @@ export function construirHtml(
         // exactamente este trabajo (remueve y vuelve a crear los markers, no el mapa), así que se
         // reusa tal cual: no hace falta un mecanismo de reestilado nuevo, solo dispararlo desde
         // este tipo de mensaje además de desde 'tracking'.
-        proximoPuntoIdActual = data.id || null;
+        //
+        // Hallazgo del code-review de esta entrega: 'route-map-view.tsx' manda ESTE mensaje (junto
+        // con 'tracking') en CADA cambio de props, incluida cada actualización de posición GPS
+        // ('posicionActual' está en las dependencias de ese useEffect) — sin este guard, cada fix
+        // de GPS borraba y volvía a crear TODOS los marcadores de puntos de control, dos veces
+        // (acá y en 'tracking' más abajo), aunque el próximo punto de control siguiera siendo el
+        // mismo. Si el id no cambió, no hay nada que reestilizar: se sale antes de tocar el DOM.
+        var nuevoProximoPuntoId = data.id || null;
+        if (nuevoProximoPuntoId === proximoPuntoIdActual) return;
+        proximoPuntoIdActual = nuevoProximoPuntoId;
         renderizarPuntosControl();
         return;
       }
 
       if (data.type === 'tracking') {
-        var didChange = seguimientoActivo !== (data.active === true);
-        seguimientoActivo = data.active === true;
+        var nuevoTracking = data.active === true;
+        var didChange = seguimientoActivo !== nuevoTracking;
+        seguimientoActivo = nuevoTracking;
 
         // Color de la ruta en mapa: En espera (#1E1B4B) vs En línea (#FE9B0B)
         ruta.setStyle({
@@ -691,7 +802,14 @@ export function construirHtml(
           weight: seguimientoActivo ? 5.5 : 4.5
         });
 
-        renderizarPuntosControl();
+        // Mismo hallazgo que en 'proximoPuntoControl' de arriba: este mensaje también llega en
+        // cada fix de GPS con el mismo 'active' de siempre — 'renderizarPuntosControl()' solo
+        // hace falta reejecutarla cuando 'seguimientoActivo' de verdad cambió (afecta qué puntos
+        // se pintan como "completed", ver 'isPassed' en 'renderizarPuntosControl'), no en cada
+        // mensaje 'tracking' idéntico al anterior.
+        if (didChange) {
+          renderizarPuntosControl();
+        }
 
         if (posicion) {
           posicion.setIcon(getArrowIcon(currentHeading));
@@ -700,7 +818,7 @@ export function construirHtml(
         if (seguimientoActivo && posicion) {
           map.flyTo(posicion.getLatLng(), 17, { duration: 0.7 });
         } else if (!seguimientoActivo) {
-          map.fitBounds(ruta.getBounds(), { paddingTopLeft: [20, 80], paddingBottomRight: [20, 180] });
+          ajustarVistaARuta();
         }
         actualizarCaminoAlProximoPunto();
         return;
@@ -752,10 +870,12 @@ export function construirHtml(
 
     map.on('dragstart', function () { seguimientoActivo = false; });
     // El view inicial ya se fijó arriba (map.setView, antes de agregar tiles/polyline/
-    // marcadores) — este fitBounds solo ajusta esa vista provisoria a los límites reales de la
-    // ruta. Corre de forma síncrona apenas el script se ejecuta (inmediato: ya no espera ningún
-    // <script src> remoto), así que el ajuste es un solo frame de JS local, no una espera de red.
-    map.fitBounds(ruta.getBounds(), { paddingTopLeft: [20, 80], paddingBottomRight: [20, 180] });
+    // marcadores) — este ajuste solo acomoda esa vista provisoria a los límites reales de la
+    // ruta (ver 'ajustarVistaARuta' más arriba: sin coordenadas de ruta, 'fitBounds' tiraría por
+    // bounds inválidos). Corre de forma síncrona apenas el script se ejecuta (inmediato: ya no
+    // espera ningún <script src> remoto), así que el ajuste es un solo frame de JS local, no una
+    // espera de red.
+    ajustarVistaARuta();
   </script>
 </body>
 </html>`;
