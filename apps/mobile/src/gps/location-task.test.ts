@@ -200,154 +200,6 @@ describe('construirEventosDeUbicacion', () => {
     return -17.78 - metros / 111_320;
   }
 
-  describe('DECISIÓN CTO 2026-09-23 — deteccionConfirmacionProximidad (RADIO_CONFIRMACION_M)', () => {
-    it('se dispara en TIEMPO REAL apenas la visita entra a <= RADIO_CONFIRMACION_M — ANTES de que la evidencia confirme (que recién llega cuando la distancia crece)', () => {
-      const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
-      const t0 = Date.parse('2026-09-23T12:00:00.000Z');
-      let estados = new Map<string, EstadoPuntoControl>();
-
-      // Tick 0: 140 m — dentro de RADIO_AVISO_M (aviso), pero fuera de radioToleranciaM (30):
-      // la visita ni siquiera empezó (`dentro: false`) — la proximidad NO puede dispararse
-      // para un punto que la detección todavía no autorizó.
-      const paso0 = construirEventosDeUbicacion(
-        ubicacion(latitudAMetrosDelPunto(140), -63.18, t0),
-        contexto([pc], 'sesion-proximidad-1'),
-        estados,
-      );
-      expect(paso0.deteccionConfirmacionProximidad).toBeNull();
-      estados = conTransicionesAplicadas(estados, paso0.transicionesEstado);
-
-      // Tick 1: 20 m — CUMPLE (< 30) ⇒ ENTRA (dentro:true, confirmado:false). La evidencia NO
-      // confirma todavía (recién arranca el seguimiento del mínimo local) — pero 20 m <=
-      // RADIO_CONFIRMACION_M (40), así que la proximidad SÍ dispara, en el MISMO tick de la
-      // entrada.
-      const paso1 = construirEventosDeUbicacion(
-        ubicacion(latitudAMetrosDelPunto(20), -63.18, t0 + 10_000),
-        contexto([pc], 'sesion-proximidad-1'),
-        estados,
-      );
-      expect(paso1.deteccion).toBeNull(); // evidencia: todavía SIN confirmar
-      expect(paso1.deteccionConfirmacionProximidad).toMatchObject({
-        puntoControlId: 'pc-1',
-        fase: 'confirmado-proximidad',
-      });
-      expect(paso1.deteccionConfirmacionProximidad!.distanciaM).toBeLessThanOrEqual(40);
-      estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
-
-      // Tick 2: 25 m — la distancia CRECE respecto del mínimo (20) ⇒ AHORA sí confirma la
-      // evidencia (mínimo local). La proximidad ya no vuelve a disparar para esta MISMA visita
-      // (post-transición, `confirmado` pasa a `true`) — el dedupe real (en memoria, por
-      // puntoControlId) vive en `anuncio-punto-control.ts`, pero acá alcanza con que el campo
-      // deje de calcularse para un `confirmado !== false`.
-      const paso2 = construirEventosDeUbicacion(
-        ubicacion(latitudAMetrosDelPunto(25), -63.18, t0 + 20_000),
-        contexto([pc], 'sesion-proximidad-1'),
-        estados,
-      );
-      expect(paso2.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 1 });
-      expect(paso2.deteccionConfirmacionProximidad).toBeNull();
-    });
-
-    it('nunca dispara si el mínimo de la visita no baja de RADIO_CONFIRMACION_M — la evidencia sigue confirmando igual (el punto no queda sin confirmar)', () => {
-      // Punto plantado lejos de la trayectoria real: el radio de detección (100 m) es mayor
-      // que RADIO_CONFIRMACION_M (40) y el vehículo nunca pasa a menos de 40 m del punto.
-      const pc = puntoControl('pc-1', [-63.18, -17.78], 100);
-      const t0 = Date.parse('2026-09-23T12:00:00.000Z');
-      let estados = new Map<string, EstadoPuntoControl>();
-
-      // Entra a 80 m (cumple el radio de 100, pero > RADIO_CONFIRMACION_M).
-      const paso1 = construirEventosDeUbicacion(
-        ubicacion(latitudAMetrosDelPunto(80), -63.18, t0),
-        contexto([pc], 'sesion-proximidad-2'),
-        estados,
-      );
-      expect(paso1.deteccionConfirmacionProximidad).toBeNull();
-      estados = conTransicionesAplicadas(estados, paso1.transicionesEstado);
-
-      // Crece a 90 m — nunca bajó de 40. La proximidad sigue sin disparar, pero la EVIDENCIA
-      // confirma igual (mínimo local, regla dura del plan: "0 detecciones sin paso anotado").
-      const paso2 = construirEventosDeUbicacion(
-        ubicacion(latitudAMetrosDelPunto(90), -63.18, t0 + 10_000),
-        contexto([pc], 'sesion-proximidad-2'),
-        estados,
-      );
-      expect(paso2.deteccionConfirmacionProximidad).toBeNull();
-      expect(paso2.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 1 });
-    });
-
-    it('FIX POST-REVISIÓN (Codex verify-fix, punto 1): un jitter que confirma la evidencia TEMPRANO (145→130→131 m, sin bajar nunca de 40) no bloquea el anuncio de proximidad si el vehículo SÍ se acerca después (90→35 m) — antes, `confirmado` ya en `true` desde el uptick de 131 m impedía el anuncio para siempre en esta visita', () => {
-      const pc = puntoControl('pc-1', [-63.18, -17.78], 150);
-      const t0 = Date.parse('2026-09-23T12:00:00.000Z');
-      let estados = new Map<string, EstadoPuntoControl>();
-
-      function tick(metros: number, offsetMs: number) {
-        const resultado = construirEventosDeUbicacion(
-          ubicacion(latitudAMetrosDelPunto(metros), -63.18, t0 + offsetMs),
-          contexto([pc], 'sesion-jitter-1'),
-          estados,
-        );
-        estados = conTransicionesAplicadas(estados, resultado.transicionesEstado);
-        return resultado;
-      }
-
-      // 145 m: ENTRA (dentro:true, confirmado:false, min=145). Lejos de RADIO_CONFIRMACION_M.
-      const r1 = tick(145, 0);
-      expect(r1.deteccionConfirmacionProximidad).toBeNull();
-
-      // 130 m: mejora el mínimo — sigue sin confirmar, sigue sin proximidad.
-      const r2 = tick(130, 10_000);
-      expect(r2.deteccion).toBeNull();
-      expect(r2.deteccionConfirmacionProximidad).toBeNull();
-
-      // 131 m: jitter — la distancia "crece" respecto del mínimo guardado (130) y la EVIDENCIA
-      // confirma acá mismo (regla dura: "0 detecciones sin paso anotado", no se toca). ANTES del
-      // fix, esto dejaba `confirmado: true` y el chequeo de proximidad (`confirmado !== false`)
-      // nunca volvía a evaluarse para esta visita — el bug que reportó Codex.
-      const r3 = tick(131, 20_000);
-      expect(r3.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 1 });
-      expect(r3.deteccionConfirmacionProximidad).toBeNull(); // 131 m > 40, nada que anunciar TODAVÍA
-
-      // 90 m: sigue alejado de RADIO_CONFIRMACION_M — nada que anunciar, la visita sigue
-      // `dentro` (no re-armó: 90 < 150 * 1.5).
-      const r4 = tick(90, 30_000);
-      expect(r4.deteccionConfirmacionProximidad).toBeNull();
-
-      // 35 m: el vehículo SÍ se acerca de verdad, por debajo de RADIO_CONFIRMACION_M (40) — el
-      // anuncio de proximidad tiene que disparar ACÁ, aunque la evidencia ya haya confirmado
-      // hace dos ticks. Este es el assert que fallaba contra el código previo al fix.
-      const r5 = tick(35, 40_000);
-      expect(r5.deteccionConfirmacionProximidad).toMatchObject({
-        puntoControlId: 'pc-1',
-        fase: 'confirmado-proximidad',
-        pasada: 1,
-      });
-    });
-
-    it('no toca la detección/registro del cumplimiento: distanciaMinAproximacionM y pasada del evento son las mismas con o sin proximidad', () => {
-      // Mismo recorrido que el primer test de este bloque, comparado byte a byte contra el
-      // payload emitido — la Decisión CTO es explícita: "la detección/registro del
-      // cumplimiento NO cambia".
-      const pc = puntoControl('pc-1', [-63.18, -17.78], 30);
-      const t0 = Date.parse('2026-09-23T12:00:00.000Z');
-      let estados = new Map<string, EstadoPuntoControl>();
-      estados = conTransicionesAplicadas(
-        estados,
-        construirEventosDeUbicacion(
-          ubicacion(latitudAMetrosDelPunto(20), -63.18, t0),
-          contexto([pc], 'sesion-proximidad-3'),
-          estados,
-        ).transicionesEstado,
-      );
-      const { eventos } = construirEventosDeUbicacion(
-        ubicacion(latitudAMetrosDelPunto(25), -63.18, t0 + 10_000),
-        contexto([pc], 'sesion-proximidad-3'),
-        estados,
-      );
-      expect(eventos[1]?.payload).toMatchObject({ puntoControlId: 'pc-1', pasada: 1 });
-      expect(eventos[1]?.payload['distanciaMinAproximacionM']).toBeCloseTo(20, 0);
-    });
-  });
-
   describe('recorrido completo con radio de detección MENOR que RADIO_AVISO_M (Entrega 18/tarea 8)', () => {
     it('aviso a 150 m → proximidad a 40 m → confirmación de evidencia → rearme de detección y de voz → segunda pasada completa, sin perder ninguna', () => {
       // radioToleranciaM (30) << RADIO_AVISO_M (150): exactamente el caso que motivó separar
@@ -386,29 +238,25 @@ describe('construirEventosDeUbicacion', () => {
       // 160 m: fuera de RADIO_AVISO_M (150) — ningún aviso, ninguna visita.
       const r1 = tick(160, 0);
       expect(r1.deteccionAproximacion).toBeNull();
-      expect(r1.deteccionConfirmacionProximidad).toBeNull();
 
       // 140 m: dentro de RADIO_AVISO_M — aviso informativo. Todavía fuera del radio de
-      // detección (30) — sin visita, sin proximidad (RADIO_CONFIRMACION_M).
+      // detección (30) — sin visita.
       const r2 = tick(140, 10_000);
       expect(r2.deteccionAproximacion).toMatchObject({ puntoControlId: 'pc-1', fase: 'aproximacion' });
-      expect(r2.deteccionConfirmacionProximidad).toBeNull();
 
       // 20 m: CUMPLE el radio de detección (30) ⇒ ENTRA. Evidencia todavía sin confirmar
-      // (recién arranca el mínimo local) — pero 20 <= RADIO_CONFIRMACION_M (40): la
-      // PROXIMIDAD dispara en este MISMO tick, antes que la evidencia.
+      // (recién arranca el mínimo local) — el anuncio de "llegaste" en tiempo real (proximidad,
+      // <= RADIO_CONFIRMACION_M) lo decide `evaluarAnunciosDeFixes` (`decidir-anuncio.test.ts`),
+      // por fuera de este módulo — acá solo se verifica que `deteccionesTick` trae la distancia
+      // real de este fix, insumo de esa decisión.
       const r3 = tick(20, 20_000);
       expect(r3.deteccion).toBeNull();
-      expect(r3.deteccionConfirmacionProximidad).toMatchObject({
-        puntoControlId: 'pc-1',
-        fase: 'confirmado-proximidad',
-      });
+      expect(r3.deteccionesTick).toContainEqual(expect.objectContaining({ puntoControlId: 'pc-1', distanciaM: expect.any(Number) }));
 
       // 25 m: la distancia CRECE respecto del mínimo (20) ⇒ CONFIRMA la evidencia (pasada 1,
-      // mínimo 20). La proximidad ya no vuelve a disparar (la visita quedó `confirmado: true`).
+      // mínimo 20).
       const r4 = tick(25, 30_000);
       expect(r4.deteccion).toMatchObject({ puntoControlId: 'pc-1', fase: 'confirmado', pasada: 1 });
-      expect(r4.deteccionConfirmacionProximidad).toBeNull();
 
       // 60 m: fuera del radio de re-armado de DETECCIÓN (30 * 1.5 = 45) — 1er fix consecutivo,
       // no alcanza todavía. Sigue <= RADIO_AVISO_M: la voz no se entera.
@@ -439,13 +287,9 @@ describe('construirEventosDeUbicacion', () => {
       const r9 = tick(140, tPasada2);
       expect(r9.deteccionAproximacion).toMatchObject({ puntoControlId: 'pc-1', fase: 'aproximacion' });
 
-      // 20 m: ENTRA de nuevo (nueva visita) — proximidad dispara otra vez, en tiempo real.
+      // 20 m: ENTRA de nuevo (nueva visita).
       const r10 = tick(20, tPasada2 + 10_000);
       expect(r10.deteccion).toBeNull();
-      expect(r10.deteccionConfirmacionProximidad).toMatchObject({
-        puntoControlId: 'pc-1',
-        fase: 'confirmado-proximidad',
-      });
 
       // 25 m: confirma la EVIDENCIA de la pasada 2 — "0 detecciones sin paso anotado".
       const r11 = tick(25, tPasada2 + 20_000);

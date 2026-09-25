@@ -36,8 +36,10 @@ vi.mock('@sentry/react-native', () => ({
 }));
 
 import {
-  anuncioYaRegistrado,
   encolarEventoYLimpiarVisita,
+  marcarAnuncioProgramado,
+  obtenerAnunciosPendientesDeProgramar,
+  reclamarIntencionAnuncio,
   type EventoOutboxNuevo,
 } from './outbox';
 
@@ -158,39 +160,96 @@ describe('encolarEventoYLimpiarVisita — R2 (handle muere A MITAD de la transac
 });
 
 /**
- * FIX POST-REVISIÓN (Codex `verify-fix`, punto 3, "marcar después de programar"): lectura PURA
- * de `anuncios_punto_control` — a diferencia de `registrarAnuncioSiNuevo` (INSERT OR IGNORE),
- * esta función NO escribe nada. `anuncio-punto-control.ts` la usa para consultar "¿ya está
- * marcado?" ANTES de intentar programar una notificación, sin marcar una fila a ciegas por un
- * intento que todavía no terminó.
+ * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
+ * 2026-09-23, punto 3 del brief — "intención durable ANTES de programar"): `reclamarIntencionAnuncio`
+ * hace el `INSERT OR IGNORE` (estado `'pendiente'`) — la identidad `{sesionId, puntoControlId,
+ * pasada}` reclamada; `marcarAnuncioProgramado` la pasa a `'programado'` tras el schedule;
+ * `obtenerAnunciosPendientesDeProgramar` lista lo que quedó `'pendiente'` para reintentar.
  */
-describe('anuncioYaRegistrado', () => {
-  it('devuelve false y hace un SELECT (nunca un INSERT) cuando la clave no existe', async () => {
-    const getFirstAsync = vi.fn().mockResolvedValue(null);
-    const db = { ...crearHandleFalso(vi.fn()), getFirstAsync };
+describe('reclamarIntencionAnuncio', () => {
+  it('hace un INSERT OR IGNORE en estado "pendiente" con la identidad completa', async () => {
+    const runAsync = vi.fn().mockResolvedValue({ changes: 1 });
+    const db = { ...crearHandleFalso(runAsync) };
 
-    const resultado = await anuncioYaRegistrado(
-      db as unknown as Parameters<typeof anuncioYaRegistrado>[0],
-      'proximidad:sesion-1:pc-1:1',
+    const resultado = await reclamarIntencionAnuncio(
+      db as unknown as Parameters<typeof reclamarIntencionAnuncio>[0],
+      'sesion-1',
+      'pc-1',
+      1,
+      'proximidad',
     );
 
-    expect(resultado).toBe(false);
-    expect(getFirstAsync).toHaveBeenCalledWith(
-      expect.stringContaining('SELECT'),
-      ['proximidad:sesion-1:pc-1:1'],
+    expect(resultado).toEqual({ reclamado: true, clave: 'sesion-1:pc-1:1' });
+    expect(runAsync).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT OR IGNORE'),
+      ['sesion-1:pc-1:1', expect.any(String), 'proximidad', 'sesion-1', 'pc-1', 1],
     );
-    expect(db.runAsync).not.toHaveBeenCalled();
   });
 
-  it('devuelve true cuando la clave ya está registrada', async () => {
-    const getFirstAsync = vi.fn().mockResolvedValue({ clave: 'proximidad:sesion-1:pc-1:1' });
-    const db = { ...crearHandleFalso(vi.fn()), getFirstAsync };
+  it('reclamado: false cuando la identidad ya estaba reclamada (changes: 0)', async () => {
+    const runAsync = vi.fn().mockResolvedValue({ changes: 0 });
+    const db = { ...crearHandleFalso(runAsync) };
 
-    const resultado = await anuncioYaRegistrado(
-      db as unknown as Parameters<typeof anuncioYaRegistrado>[0],
-      'proximidad:sesion-1:pc-1:1',
+    const resultado = await reclamarIntencionAnuncio(
+      db as unknown as Parameters<typeof reclamarIntencionAnuncio>[0],
+      'sesion-1',
+      'pc-1',
+      1,
+      'proximidad',
     );
 
-    expect(resultado).toBe(true);
+    expect(resultado.reclamado).toBe(false);
+  });
+});
+
+describe('marcarAnuncioProgramado', () => {
+  it('actualiza el estado a "programado" por clave', async () => {
+    const runAsync = vi.fn().mockResolvedValue({ changes: 1 });
+    const db = { ...crearHandleFalso(runAsync) };
+
+    await marcarAnuncioProgramado(
+      db as unknown as Parameters<typeof marcarAnuncioProgramado>[0],
+      'sesion-1:pc-1:1',
+    );
+
+    expect(runAsync).toHaveBeenCalledWith(expect.stringContaining("estado = 'programado'"), [
+      'sesion-1:pc-1:1',
+    ]);
+  });
+});
+
+describe('obtenerAnunciosPendientesDeProgramar', () => {
+  it('devuelve las filas "pendiente" con identidad completa', async () => {
+    const getAllAsync = vi.fn().mockResolvedValue([
+      {
+        clave: 'sesion-1:pc-1:1',
+        sesion_id: 'sesion-1',
+        punto_control_id: 'pc-1',
+        pasada: 1,
+        motivo: 'proximidad',
+      },
+    ]);
+    const db = { ...crearHandleFalso(vi.fn()), getAllAsync };
+
+    const resultado = await obtenerAnunciosPendientesDeProgramar(
+      db as unknown as Parameters<typeof obtenerAnunciosPendientesDeProgramar>[0],
+    );
+
+    expect(resultado).toEqual([
+      { clave: 'sesion-1:pc-1:1', sesionId: 'sesion-1', puntoControlId: 'pc-1', pasada: 1, motivo: 'proximidad' },
+    ]);
+  });
+
+  it('descarta filas legado sin identidad reconstruible (sesion_id/punto_control_id/pasada/motivo en NULL)', async () => {
+    const getAllAsync = vi.fn().mockResolvedValue([
+      { clave: 'vieja:clave', sesion_id: null, punto_control_id: null, pasada: null, motivo: null },
+    ]);
+    const db = { ...crearHandleFalso(vi.fn()), getAllAsync };
+
+    const resultado = await obtenerAnunciosPendientesDeProgramar(
+      db as unknown as Parameters<typeof obtenerAnunciosPendientesDeProgramar>[0],
+    );
+
+    expect(resultado).toEqual([]);
   });
 });

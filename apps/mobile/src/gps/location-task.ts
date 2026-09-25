@@ -92,20 +92,24 @@ export interface ResultadoConstruirEventos {
    */
   deteccionAproximacion: DeteccionPuntoControl | null;
   /**
-   * DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`, `@quivo/shared`): el punto de control MÁS
-   * CERCANO, entre los que tienen una visita YA ACTIVA (`dentro && confirmado === false` en el
-   * estado post-tick — ver el cuerpo de la función), cuya distancia cae dentro de
-   * `RADIO_CONFIRMACION_M` (40 m), con `fase: 'confirmado-proximidad'`, o `null` si ninguno
-   * califica. Informativo, en TIEMPO REAL — a diferencia de `deteccion` (arriba), que recién
-   * aparece cuando la EVIDENCIA confirma (mínimo local / fallback, que puede tardar varios fixes
-   * más en llegar): esto le permite al chofer escuchar "llegaste" apenas el vehículo está de
-   * verdad cerca del punto, no recién cuando ya se empezó a alejar. Deliberadamente NO toca la
-   * detección/registro del cumplimiento (`filtrarNuevosCumplimientos` no cambia) — es una señal
-   * calculada por fuera de esa máquina de estados, igual que `deteccionAproximacion`. El dedupe
-   * "ya lo anuncié para esta visita" es responsabilidad del caller
-   * (`anuncio-punto-control.ts`), igual que para `deteccionAproximacion`.
+   * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix`
+   * del 2026-09-23): TODAS las detecciones crudas de este tick (`detectarPuntosControlCercanos`,
+   * sin filtrar por `cumplido`) — el único punto de llamada de `decidirAnuncio`
+   * (`gps/headless-task.ts`, vía `evaluarAnunciosDeFixes` en
+   * `features/operacion/decidir-anuncio.ts`) las necesita para leer la distancia REAL de este
+   * fix a cada punto de control con una visita activa. Antes de este rediseño, esa decisión
+   * (entonces llamada `deteccionConfirmacionProximidad`) vivía DENTRO de
+   * `filtrarNuevosCumplimientos` — ahora la máquina de estados de evidencia no calcula nada de
+   * anuncio, así que el caller necesita las detecciones crudas para decidir por su cuenta.
    */
-  deteccionConfirmacionProximidad: DeteccionPuntoControl | null;
+  deteccionesTick: DeteccionPuntoControl[];
+  /**
+   * `tsFixMs` de este tick — el mismo reloj que usa `filtrarNuevosCumplimientos` para
+   * `PASADA_MIN_MS` (`tsFix`, nunca `Date.now()`). El único punto de llamada de `decidirAnuncio`
+   * lo necesita para medir el fallback de tiempo (`UMBRAL_ANUNCIO_PROXIMIDAD_MS`,
+   * `decidir-anuncio.ts`) sobre el mismo reloj que el resto del pipeline.
+   */
+  tsFixMs: number;
   /**
    * Transiciones de estado del geofence (`filtrarNuevosCumplimientos`, `geofence.ts`) que
    * corresponde aplicar al Map de estados del caller — SOLO DESPUÉS de que `encolarEvento`
@@ -212,7 +216,7 @@ export function construirEventosDeUbicacion(
 
   let deteccion: DeteccionPuntoControl | null = null;
   let deteccionAproximacion: DeteccionPuntoControl | null = null;
-  let deteccionConfirmacionProximidad: DeteccionPuntoControl | null = null;
+  let deteccionesTick: DeteccionPuntoControl[] = [];
   let transicionesEstado = new Map<string, EstadoPuntoControl>();
   let avisosPrecision: AvisoPrecision[] = [];
   let puntosRearmados: string[] = [];
@@ -230,6 +234,7 @@ export function construirEventosDeUbicacion(
       contexto.puntosControl,
       location.coords.accuracy,
     );
+    deteccionesTick = detecciones;
 
     // ENTREGA 6: aviso de aproximación — el punto MÁS CERCANO dentro de `RADIO_AVISO_M`, sobre
     // TODAS las detecciones del tick (no solo las `cumplido`, que usan el radio de detección
@@ -253,7 +258,6 @@ export function construirEventosDeUbicacion(
       avisosPrecision: avisos,
       puntosRearmados: rearmados,
       puntosRearmadosVoz: rearmadosVoz,
-      anunciosProximidad,
     } = filtrarNuevosCumplimientos(estadosPuntosControl, detecciones, contexto.sesionId, tsFixMs, {
       lat: location.coords.latitude,
       lng: location.coords.longitude,
@@ -262,23 +266,6 @@ export function construirEventosDeUbicacion(
     avisosPrecision = avisos;
     puntosRearmados = rearmados;
     puntosRearmadosVoz = rearmadosVoz;
-
-    // FIX POST-REVISIÓN (Codex `verify-fix`, punto 1 — "separar estado de anuncio y estado de
-    // evidencia"): la máquina de estados (`filtrarNuevosCumplimientos`) ya decide, con SU PROPIO
-    // ciclo de vida (`anuncioProximidadHecho`, independiente de `confirmado`), cuáles
-    // detecciones corresponde anunciar este tick — acá solo se elige la MÁS CERCANA (mismo
-    // criterio que antes) si hubo más de una. Ya NO se vuelve a leer `estadoVisita.confirmado`:
-    // ese era justo el bug (un jitter de distancia podía confirmar la evidencia temprano y
-    // bloquear el anuncio para siempre en esa visita, aunque el vehículo luego sí se acercara a
-    // <40 m).
-    for (const anuncio of anunciosProximidad) {
-      if (
-        deteccionConfirmacionProximidad === null ||
-        anuncio.distanciaM < deteccionConfirmacionProximidad.distanciaM
-      ) {
-        deteccionConfirmacionProximidad = anuncio;
-      }
-    }
 
     for (const {
       deteccion: nuevaDeteccion,
@@ -352,7 +339,8 @@ export function construirEventosDeUbicacion(
     eventos,
     deteccion,
     deteccionAproximacion,
-    deteccionConfirmacionProximidad,
+    deteccionesTick,
+    tsFixMs,
     transicionesEstado,
     avisosPrecision,
     puntosRearmados,

@@ -7,6 +7,7 @@ import { generarUuidV7, type TipoEventoSync } from '@quivo/shared';
 // (transitivo de `expo-sqlite`/`@sentry/react-native`, que este archivo SÍ necesita) — ver el
 // docblock de cabecera de `outbox-ddl.ts` para el porqué completo.
 import { OUTBOX_DDL_SQL } from './outbox-ddl';
+import { esErrorColumnaDuplicada, MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL } from './outbox-migraciones';
 
 /**
  * Outbox local (RF-67..73, doc técnico §6): todo evento nace con `event_id` UUIDv7 +
@@ -91,6 +92,18 @@ async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLit
   // DDL dentro de la promesa cacheada: corre una sola vez por proceso, nunca en el path de
   // escritura caliente (`encolarEvento`, hasta cientos de llamadas por jornada).
   await db.execAsync(OUTBOX_DDL_SQL);
+  // REDISEÑO (punto 3 del brief — "intención durable"): migra `anuncios_punto_control` para las
+  // instalaciones que ya tenían la tabla vieja de 2 columnas — ver el docblock de
+  // `outbox-migraciones.ts`. Cada `ALTER TABLE ADD COLUMN` corre una vez por proceso (misma
+  // cadencia que el DDL de arriba) y es idempotente: en una instalación NUEVA (que ya recibió
+  // las columnas del DDL de arriba) todas fallan con "duplicate column name" y se tragan.
+  for (const migracion of MIGRACIONES_ANUNCIOS_PUNTO_CONTROL_SQL) {
+    try {
+      await db.execAsync(migracion);
+    } catch (error) {
+      if (!esErrorColumnaDuplicada(error)) throw error;
+    }
+  }
   return db;
 }
 
@@ -318,49 +331,93 @@ export async function encolarEvento(
 }
 
 /**
- * ENTREGA 7 (plan post-piloto 2026-09-09): registra que el anuncio (sonido + vibración +
- * notificación) de una CONFIRMACIÓN de punto de control ya salió, y devuelve si esta llamada
- * fue la que lo registró por primera vez. `clave` es `${sesionId}:${puntoControlId}:${pasada}`
- * (`claveAnuncio`, `features/operacion/anuncio-punto-control.ts`) — la MISMA tripleta que
- * identifica una pasada evidenciada en `filtrarNuevosCumplimientos` (`gps/geofence.ts`), así
- * que dos ticks que terminen confirmando la MISMA pasada (headless recicla el contexto JS
- * justo después de escribir el evento pero antes de anunciar, por ejemplo) anuncian una sola
- * vez.
- *
- * Mismo patrón que `encolarEvento` arriba (B1): `INSERT OR IGNORE` + `changes > 0`, no un
- * SELECT-luego-INSERT — con la PK como único gate no hay ventana de TOCTOU entre leer "¿ya
- * está?" y escribir, que sí existiría con dos pasos separados y dos ticks concurrentes.
+ * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
+ * 2026-09-23, punto 3 del brief — "intención durable ANTES de programar"): reclama ATÓMICAMENTE
+ * la INTENCIÓN de anunciar "llegaste" para una visita — `INSERT OR IGNORE` en estado
+ * `'pendiente'`, ANTES de intentar `scheduleNotificationAsync` (`anunciarLlegadaPuntoControl`,
+ * `features/operacion/anuncio-punto-control.ts`). `clave` (`${sesionId}:${puntoControlId}:
+ * ${pasada}`) es la PK, así que dos decisiones concurrentes para la MISMA visita (dos ticks que
+ * terminan decidiendo el mismo motivo, o un reintento superpuesto) solo dejan que UNA reclame —
+ * la otra ve `reclamado: false` y no debe programar nada. Reemplaza el viejo
+ * `registrarAnuncioSiNuevo` (que marcaba DESPUÉS de programar, sin identidad reclamada — punto 3
+ * del hallazgo de Codex).
  */
-export async function registrarAnuncioSiNuevo(
+export async function reclamarIntencionAnuncio(
   db: SQLite.SQLiteDatabase,
-  clave: string,
-): Promise<boolean> {
+  sesionId: string,
+  puntoControlId: string,
+  pasada: number,
+  motivo: string,
+): Promise<{ reclamado: boolean; clave: string }> {
+  const clave = `${sesionId}:${puntoControlId}:${pasada}`;
   const result = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.runAsync('INSERT OR IGNORE INTO anuncios_punto_control (clave, ts) VALUES (?, ?)', [
-      clave,
-      new Date().toISOString(),
-    ]),
-  );
-  return result.changes > 0;
-}
-
-/**
- * FIX POST-REVISIÓN (Codex `verify-fix`, punto 3, "marcar después de programar"): lectura PURA
- * (sin insertar) de `anuncios_punto_control` — a diferencia de `registrarAnuncioSiNuevo`
- * (arriba), que hace el `INSERT OR IGNORE` de una: acá hace falta poder CONSULTAR "¿ya está
- * marcado?" sin marcarlo, porque `anunciarPuntoControl` (`features/operacion/
- * anuncio-punto-control.ts`) ahora solo marca DESPUÉS de programar la notificación con éxito —
- * antes de intentar, necesita saber si ya se marcó en un intento anterior sin insertar una fila
- * a ciegas que podría corresponder a un intento que todavía no terminó de programar nada.
- */
-export async function anuncioYaRegistrado(db: SQLite.SQLiteDatabase, clave: string): Promise<boolean> {
-  const row = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.getFirstAsync<{ clave: string }>(
-      'SELECT clave FROM anuncios_punto_control WHERE clave = ?',
-      [clave],
+    dbActiva.runAsync(
+      `INSERT OR IGNORE INTO anuncios_punto_control
+         (clave, ts, estado, motivo, sesion_id, punto_control_id, pasada)
+       VALUES (?, ?, 'pendiente', ?, ?, ?, ?)`,
+      [clave, new Date().toISOString(), motivo, sesionId, puntoControlId, pasada],
     ),
   );
-  return row !== null && row !== undefined;
+  return { reclamado: result.changes > 0, clave };
+}
+
+/** Marca una intención YA reclamada (`reclamarIntencionAnuncio`) como `'programado'` — tras
+ * `scheduleNotificationAsync` con éxito. Si esto falla (SQLite ocupada), la fila queda
+ * `'pendiente'` y `obtenerAnunciosPendientesDeProgramar` la vuelve a ofrecer en el próximo tick
+ * de la cola (ver `reintentarAnunciosLlegadaPendientes`, `anuncio-punto-control.ts`). */
+export async function marcarAnuncioProgramado(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync("UPDATE anuncios_punto_control SET estado = 'programado' WHERE clave = ?", [
+      clave,
+    ]),
+  );
+}
+
+export interface AnuncioLlegadaPendienteRow {
+  clave: string;
+  sesionId: string;
+  puntoControlId: string;
+  pasada: number;
+  motivo: string;
+}
+
+/** Intenciones reclamadas (`reclamarIntencionAnuncio`) cuya notificación NUNCA se programó con
+ * éxito — el próximo tick de la cola las reintenta. Filas incompletas (legado de la tabla de 2
+ * columnas previa al rediseño, migradas sin identidad reconstruible) se descartan en vez de
+ * reventar: nunca fueron reclamadas por este mecanismo, no hay nada que reintentar. */
+export async function obtenerAnunciosPendientesDeProgramar(
+  db: SQLite.SQLiteDatabase,
+): Promise<AnuncioLlegadaPendienteRow[]> {
+  const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.getAllAsync<{
+      clave: string;
+      sesion_id: string | null;
+      punto_control_id: string | null;
+      pasada: number | null;
+      motivo: string | null;
+    }>(
+      "SELECT clave, sesion_id, punto_control_id, pasada, motivo FROM anuncios_punto_control WHERE estado = 'pendiente'",
+    ),
+  );
+  const resultado: AnuncioLlegadaPendienteRow[] = [];
+  for (const row of rows) {
+    if (
+      row.sesion_id === null ||
+      row.punto_control_id === null ||
+      row.pasada === null ||
+      row.motivo === null
+    ) {
+      continue;
+    }
+    resultado.push({
+      clave: row.clave,
+      sesionId: row.sesion_id,
+      puntoControlId: row.punto_control_id,
+      pasada: row.pasada,
+      motivo: row.motivo,
+    });
+  }
+  return resultado;
 }
 
 /** Fila de la tabla `visitas_pendientes` — ver su comentario de DDL arriba. Espejo (en

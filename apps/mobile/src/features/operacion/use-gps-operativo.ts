@@ -27,7 +27,12 @@ import {
 } from '../../gps/geofence';
 import { confirmarVisitasVencidasEnCola, registrarPuntoGps } from '../../gps/headless-task';
 import { clavesCumplimientoDesdePayloads, combinarConVisitasPendientes } from '../../gps/location-task';
-import { asegurarPermisoNotificaciones, limpiarAproximacionesAnunciadas } from './anuncio-punto-control';
+import {
+  anunciarLlegadaPuntoControl,
+  asegurarPermisoNotificaciones,
+  limpiarAproximacionesAnunciadas,
+} from './anuncio-punto-control';
+import type { MotivoAnuncio } from './decidir-anuncio';
 import {
   AUTORIZACION_DENEGADA,
   AUTORIZACION_NO_DETERMINADA,
@@ -130,12 +135,15 @@ export function useGpsOperativo(
   const [deteccionAproximacion, setDeteccionAproximacion] = useState<DeteccionPuntoControl | null>(
     null,
   );
-  // DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): anuncio de "llegaste" en TIEMPO REAL,
-  // SEPARADO de `ultimaDeteccion` (la confirmación LIGADA A LA EVIDENCIA, mínimo local/fallback,
-  // que puede tardar varios fixes más) — ver `deteccionConfirmacionProximidad` en
-  // `ResultadoConstruirEventos` (`gps/location-task.ts`).
-  const [deteccionConfirmacionProximidad, setDeteccionConfirmacionProximidad] =
-    useState<DeteccionPuntoControl | null>(null);
+  // REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
+  // 2026-09-23): el anuncio de "llegaste" YA NO se deriva de la evidencia (`ultimaDeteccion`) —
+  // es la última decisión (`AnuncioDecidido`, `decidir-anuncio.ts`) que tomó el único punto de
+  // llamada dentro de `colaRegistroGps` (`gps/headless-task.ts`). `gps-provider.tsx` lo consume
+  // SOLO para el sonido custom EXTRA de foreground (`confirmacion-sonido.ts`) — la vibración y la
+  // notificación ya las ejecutó este mismo hook, ver `onLocation`/`onHeartbeat` más abajo.
+  const [ultimoAnuncioLlegada, setUltimoAnuncioLlegada] = useState<
+    { puntoControlId: string; pasada: number; motivo: MotivoAnuncio } | null
+  >(null);
   const [posicionActual, setPosicionActual] = useState<
     { lat: number; lng: number; speedKmh: number | null } | null
   >(null);
@@ -227,9 +235,9 @@ export function useGpsOperativo(
         const {
           deteccion,
           deteccionAproximacion: nuevaAproximacion,
-          deteccionConfirmacionProximidad: nuevaConfirmacionProximidad,
           puntosRearmados,
           puntosRearmadosVoz,
+          anunciosLlegada,
         } = await registrarPuntoGps(
           db,
           location,
@@ -246,10 +254,8 @@ export function useGpsOperativo(
         // gatea en `settings.navegacionVoz`): limpiar el Set nunca hace daño si la voz está
         // apagada (el Set solo tiene entradas de anuncios que SÍ se emitieron).
         if (puntosRearmadosVoz.length > 0) limpiarAproximacionesAnunciadas(puntosRearmadosVoz);
-        // FIX POST-REVISIÓN (Codex `verify-fix`, punto 2): el dedupe de "llegaste por
-        // proximidad" ya es PERSISTIDO y está scopeado por `pasada` — no hace falta "liberarlo"
-        // al re-armar (`puntosRearmados`), una pasada nueva ya produce una clave nueva. `void`
-        // documenta que se sigue recibiendo (telemetría/depuración futura) sin usarlo acá.
+        // `puntosRearmados` (histéresis de DETECCIÓN): ya no tiene consumidor acá — se conserva
+        // en la desestructuración por compatibilidad/telemetría futura.
         void puntosRearmados;
         if (deteccion) setUltimaDeteccion(deteccion);
         // ENTREGA 6/7: se actualiza en CADA tick con puntos de control (incluso a `null` cuando
@@ -257,9 +263,32 @@ export function useGpsOperativo(
         // confirmación real. Sin el `null` explícito, la última aproximación anunciada quedaría
         // "pegada" en el estado del hook después de que el vehículo se aleja.
         setDeteccionAproximacion(nuevaAproximacion);
-        // DECISIÓN CTO 2026-09-23: mismo criterio que `deteccionAproximacion` — se actualiza en
-        // CADA tick (incluso a `null`) para que la marca no quede "pegada" tras alejarse.
-        setDeteccionConfirmacionProximidad(nuevaConfirmacionProximidad);
+        // REDISEÑO: `anunciosLlegada` YA fue DECIDIDO dentro de `registrarPuntoGps` (la cola) —
+        // acá SOLO se ejecuta (reclamar intención durable + programar notificación/vibración),
+        // el mismo camino que usa el headless (`anunciarLlegadaPuntoControl`,
+        // `anuncio-punto-control.ts`) — "el foreground no tiene disparador propio: consume las
+        // decisiones de esa misma cola".
+        if (anunciosLlegada.length > 0) {
+          const ultimo = anunciosLlegada[anunciosLlegada.length - 1]!;
+          setUltimoAnuncioLlegada({
+            puntoControlId: ultimo.puntoControlId,
+            pasada: ultimo.pasada,
+            motivo: ultimo.motivo,
+          });
+          for (const anuncio of anunciosLlegada) {
+            anunciarLlegadaPuntoControl(
+              db,
+              anuncio.puntoControlId,
+              anuncio.pasada,
+              anuncio.motivo,
+              { sesionId, puntosControl: puntosControlDelTick },
+            ).catch((error: unknown) => {
+              Sentry.captureException(error, {
+                tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada' },
+              });
+            });
+          }
+        }
       } catch (error) {
         // Sin este catch, `onLocation` (async) rechazaba y el fallo quedaba como unhandled
         // rejection: evidencia perdida en silencio.
@@ -325,7 +354,7 @@ export function useGpsOperativo(
     try {
       await semillaPromise.current;
       const db = await abrirOutbox();
-      const emitir = await confirmarVisitasVencidasEnCola(
+      const { emitir, anunciosLlegada } = await confirmarVisitasVencidasEnCola(
         db,
         deviceId,
         sesionId,
@@ -333,18 +362,40 @@ export function useGpsOperativo(
         Date.now(),
         UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
         false,
+        puntosControl,
       );
-      if (emitir.length === 0) return;
-      // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
-      // ve el punto tachado aunque haya sido el heartbeat, no un fix nuevo, quien lo cerró.
-      setUltimaDeteccion(emitir[emitir.length - 1]?.deteccion ?? null);
+      if (emitir.length > 0) {
+        // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
+        // ve el punto tachado aunque haya sido el heartbeat, no un fix nuevo, quien lo cerró.
+        setUltimaDeteccion(emitir[emitir.length - 1]?.deteccion ?? null);
+      }
+      // REDISEÑO: fallback de TIEMPO del anuncio de llegada — ver el docblock de
+      // `confirmarVisitasVencidasEnCola`. Mismo camino de ejecución que `onLocation`.
+      if (anunciosLlegada.length > 0) {
+        const ultimo = anunciosLlegada[anunciosLlegada.length - 1]!;
+        setUltimoAnuncioLlegada({
+          puntoControlId: ultimo.puntoControlId,
+          pasada: ultimo.pasada,
+          motivo: ultimo.motivo,
+        });
+        for (const anuncio of anunciosLlegada) {
+          anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
+            sesionId,
+            puntosControl,
+          }).catch((error: unknown) => {
+            Sentry.captureException(error, {
+              tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-heartbeat' },
+            });
+          });
+        }
+      }
     } catch (error) {
       console.error('[QUIVO][gps] No se pudo procesar el heartbeat', error);
       Sentry.captureException(error, {
         tags: { contexto: 'gps-foreground', paso: 'procesar-heartbeat' },
       });
     }
-  }, [deviceId, sesionId]);
+  }, [deviceId, sesionId, puntosControl]);
 
   const onHeartbeatRef = useRef(onHeartbeat);
   useEffect(() => {
@@ -799,7 +850,7 @@ export function useGpsOperativo(
       // MISMA pasada dos veces con `eventId` distintos (el servidor solo dedupea por `eventId`,
       // QUI-241). `filtrarSesionActual: false` — mismo motivo que `onHeartbeat`.
       try {
-        await confirmarVisitasVencidasEnCola(
+        const { anunciosLlegada } = await confirmarVisitasVencidasEnCola(
           db,
           deviceId,
           sesionId,
@@ -807,7 +858,20 @@ export function useGpsOperativo(
           Date.now(),
           0,
           false,
+          puntosControl,
         );
+        // REDISEÑO: un cierre de recorrido también puede dejar una visita sin su "llegaste" —
+        // mismo camino de ejecución que `onLocation`/`onHeartbeat`.
+        for (const anuncio of anunciosLlegada) {
+          anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
+            sesionId,
+            puntosControl,
+          }).catch((error: unknown) => {
+            Sentry.captureException(error, {
+              tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-cierre' },
+            });
+          });
+        }
       } catch (error) {
         console.error('[QUIVO][gps] No se pudo descargar las visitas pendientes al finalizar', error);
         Sentry.captureException(error, {
@@ -893,7 +957,7 @@ export function useGpsOperativo(
     } catch {
       setErrorGps('No se pudo detener correctamente el GPS. Intenta nuevamente.');
     }
-  }, [deviceId, sesionId]);
+  }, [deviceId, sesionId, puntosControl]);
 
   /**
    * B3 (hallazgo de revisión, bajo): Map SEPARADO de `puntosControlDetectados` — antes de este
@@ -953,7 +1017,7 @@ export function useGpsOperativo(
     abrirAjustesPermisoGps,
     ultimaDeteccion,
     deteccionAproximacion,
-    deteccionConfirmacionProximidad,
+    ultimoAnuncioLlegada,
     posicionActual,
     iniciar,
     detener,

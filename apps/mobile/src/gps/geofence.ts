@@ -1,9 +1,4 @@
-import {
-  RADIO_AVISO_M,
-  RADIO_CONFIRMACION_M,
-  haversineMetros,
-  type PuntoControlPaquete,
-} from '@quivo/shared';
+import { RADIO_AVISO_M, haversineMetros, type PuntoControlPaquete } from '@quivo/shared';
 
 export interface DeteccionPuntoControl {
   puntoControlId: string;
@@ -41,17 +36,15 @@ export interface DeteccionPuntoControl {
    * `DeteccionPuntoControl` cruda de `detectarPuntosControlCercanos` que todavía no pasó por
    * ninguna de las dos decisiones.
    *
-   * DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`, `@quivo/shared`): `'confirmado-proximidad'`
-   * distingue el anuncio de "llegaste" en TIEMPO REAL — apenas un fix mide `distanciaM <=
-   * RADIO_CONFIRMACION_M` (40 m) durante una visita YA activa (`dentro && confirmado === false`,
-   * ver `deteccionConfirmacionProximidad` en `construirEventosDeUbicacion`,
-   * `location-task.ts`) — de `'confirmado'` (arriba), que es la confirmación LIGADA A LA
-   * EVIDENCIA (mínimo local / fallback), que puede tardar varios fixes más en llegar (recién
-   * cuando la distancia empieza a CRECER). Deliberadamente NO toca la detección/registro del
-   * cumplimiento (que sigue exactamente igual): es una señal puramente de UX, calculada por
-   * fuera de esta máquina de estados, igual que `'aproximacion'`.
+   * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix`
+   * del 2026-09-23): ya NO existe una fase `'confirmado-proximidad'` — el anuncio de "llegaste"
+   * (proximidad, fallback de tiempo o de salida) se decide por completo en
+   * `features/operacion/decidir-anuncio.ts` (`decidirAnuncio`), fuera de esta máquina de
+   * estados y sin depender de `fase`: la evidencia (este campo) nunca dispara ningún canal
+   * hacia el chofer. `'confirmado'` sigue existiendo tal cual (UI de evidencia — toast,
+   * progreso — que sí puede seguir reaccionando a la confirmación real).
    */
-  fase?: 'aproximacion' | 'confirmado' | 'confirmado-proximidad';
+  fase?: 'aproximacion' | 'confirmado';
 }
 
 /**
@@ -216,22 +209,6 @@ export interface AvisoPrecision {
  */
 export const PASADA_MIN_MS = 2 * 60 * 1000;
 
-/**
- * FIX POST-REVISIÓN (Codex `verify-fix`, veredicto `partial` del 2026-09-23 sobre el anuncio de
- * proximidad — punto 1 del brief): antigüedad máxima, en ms, que una visita puede pasar
- * `dentro: true` sin haber anunciado "llegaste" (`RADIO_CONFIRMACION_M`) antes de forzar el
- * anuncio con el mínimo visto hasta ese momento. Cubre el vehículo que se detiene DENTRO del
- * radio de detección pero nunca llega a menos de `RADIO_CONFIRMACION_M` (p. ej. punto plantado
- * lejos de la trayectoria real, o el radio de detección es mucho más grande que 40 m) — sin
- * este piso, el chofer nunca escucha ningún "llegaste" para esa pasada (la evidencia SÍ se
- * confirma igual, por el mínimo local o su propio fallback — ver `FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO`
- * — pero eso es un canal aparte, con otro texto). Mismo valor (90 s) que
- * `UMBRAL_ANTIGUEDAD_CANDIDATO_MS` porque cubre el mismo escenario físico (vehículo detenido),
- * pero es una constante DISTINTA a propósito: gobierna el anuncio (UX), no la evidencia, y las
- * dos deben poder ajustarse por separado sin acoplar sus significados.
- */
-export const UMBRAL_ANUNCIO_PROXIMIDAD_MS = 90 * 1000;
-
 /** Estado de histéresis de UN punto de control para UNA sesión (clave `claveCumplimiento`). */
 export interface EstadoPuntoControl {
   /** `true` mientras el vehículo sigue "dentro" de la pasada actual — no re-armó todavía. */
@@ -359,26 +336,24 @@ export interface EstadoPuntoControl {
    * como 0. */
   avisoVozFixesFueraRadioRearme?: number;
   /**
-   * FIX POST-REVISIÓN (Codex `verify-fix`, punto 1 — "separar estado de anuncio y estado de
-   * evidencia"): `true` si esta visita YA disparó el anuncio de proximidad ("llegaste",
-   * `fase: 'confirmado-proximidad'`) — por haber bajado de `RADIO_CONFIRMACION_M` o por el
-   * fallback (`UMBRAL_ANUNCIO_PROXIMIDAD_MS` o salida del radio sin haber anunciado). Antes del
-   * fix, el ÚNICO gate era `confirmado === false` (el estado de la EVIDENCIA) — el bug real: un
-   * jitter de GPS (p. ej. 130→131 m) puede hacer `creciendo = true` y confirmar la evidencia
-   * ANTES de que el vehículo haya llegado a estar cerca de verdad, dejando `confirmado: true`
-   * para el resto de la visita — si el vehículo LUEGO sí se acerca a <40 m (90→35 m), el chequeo
-   * viejo (`confirmado !== false` ⇒ no evaluar) nunca dejaba anunciar. Con este campo, el
-   * anuncio se gobierna por su PROPIO ciclo de vida — arranca en `false` en cada ENTRADA nueva
-   * (mismo momento que `minDistanciaM`) y no le importa si la evidencia ya confirmó o no.
-   * Ausente se trata como `false` (nunca se anunció, mismo motivo que el resto de los campos de
-   * histéresis).
+   * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix`
+   * del 2026-09-23 — "separar estado de anuncio y estado de evidencia"): `true` si esta visita
+   * YA produjo una decisión de anuncio ("llegaste", ver `decidirAnuncio` en
+   * `features/operacion/decidir-anuncio.ts`) — sin importar el motivo (proximidad, fallback de
+   * tiempo o de salida). Este campo es puro DATO de ciclo de vida (se resetea al ENTRAR a una
+   * visita nueva, mismo momento que `minDistanciaM`) — la DECISIÓN de cuándo pasa a `true` vive
+   * enteramente en `decidirAnuncio` y su único punto de llamada (`gps/headless-task.ts`), nunca
+   * acá: `geofence.ts` (la máquina de estados de EVIDENCIA) no calcula anuncios ni los dispara,
+   * solo reserva el campo para que sobreviva junto al resto del estado de la visita. Ausente se
+   * trata como `false` (nunca se anunció, mismo motivo que el resto de los campos de histéresis).
    */
-  anuncioProximidadHecho?: boolean;
-  /** Ver `anuncioProximidadHecho`: `tsFixMs` del fix de ENTRADA de la visita en curso — el
-   * reloj contra el que se mide `UMBRAL_ANUNCIO_PROXIMIDAD_MS`. Mismo ciclo de vida que
-   * `minDistanciaM` (se fija en la ENTRADA, no se toca por la confirmación de evidencia).
-   * Ausente se trata como "recién arrancado" (no dispara el timeout todavía). */
-  anuncioProximidadDesdeMs?: number;
+  anuncioHecho?: boolean;
+  /** Ver `anuncioHecho`: `tsFixMs` del fix de ENTRADA de la visita en curso — el reloj contra el
+   * que `decidirAnuncio` mide el fallback de tiempo (`UMBRAL_ANUNCIO_PROXIMIDAD_MS`,
+   * `decidir-anuncio.ts`). Mismo ciclo de vida que `minDistanciaM` (se fija en la ENTRADA, no se
+   * toca por la confirmación de evidencia). Ausente se trata como "recién arrancado ahora" (ver
+   * `EstadoAnuncioVisita.desdeMs`). */
+  anuncioDesdeMs?: number;
 }
 
 /** B1 (hallazgo de revisión, bajo): `Object.freeze` en vez de un objeto de módulo mutable —
@@ -471,22 +446,6 @@ export interface ResultadoFiltrado {
    * normal (ningún punto re-armó su voz en este tick).
    */
   puntosRearmadosVoz: string[];
-  /**
-   * FIX POST-REVISIÓN (Codex `verify-fix`, punto 1): detecciones `fase: 'confirmado-proximidad'`
-   * que corresponde ANUNCIAR en este tick — cada una lleva `pasada` (la de la visita EN CURSO,
-   * confirmada o no todavía — ver `anuncioProximidadHecho`) para que el caller
-   * (`anuncio-punto-control.ts`) pueda dedupear de forma DURABLE por `{sesionId, puntoControlId,
-   * pasada}` (punto 2 del brief), en vez de un Set en memoria por `puntoControlId` que no
-   * distingue visitas ni sobrevive un reciclado del proceso. Dispara por dos motivos,
-   * mutuamente excluyentes dentro de la MISMA visita (una vez `anuncioProximidadHecho`, no
-   * vuelve a disparar hasta la próxima ENTRADA):
-   * - **Proximidad real**: `distanciaM <= RADIO_CONFIRMACION_M` en el fix de este tick.
-   * - **Fallback**: `UMBRAL_ANUNCIO_PROXIMIDAD_MS` sin bajar de `RADIO_CONFIRMACION_M`, o la
-   *   visita re-arma (sale del radio de detección) sin haber anunciado nunca — "el chofer no
-   *   puede quedarse sin ningún aviso audible", igual invariante que ya aplica a la EVIDENCIA.
-   * Vacío en el caso normal (nada que anunciar este tick).
-   */
-  anunciosProximidad: DeteccionPuntoControl[];
 }
 
 /**
@@ -553,7 +512,6 @@ export function filtrarNuevosCumplimientos(
   const avisosPrecision: AvisoPrecision[] = [];
   const puntosRearmados: string[] = [];
   const puntosRearmadosVoz: string[] = [];
-  const anunciosProximidad: DeteccionPuntoControl[] = [];
 
   for (const deteccion of detecciones) {
     const clave = claveCumplimiento(sesionId, deteccion.puntoControlId);
@@ -617,13 +575,11 @@ export function filtrarNuevosCumplimientos(
         // comentario de cabecera de la función). `pasadas` no se toca en este punto: solo se
         // incrementa cuando la visita CONFIRMA de verdad (más abajo), así que sigue
         // reflejando pasadas realmente evidenciadas, nunca visitas abiertas sin confirmar.
-        // FIX POST-REVISIÓN (Codex `verify-fix`, punto 1): el ciclo de anuncio de proximidad
-        // arranca FRESCO en cada ENTRADA — `anuncioProximidadHecho: false` — sin importar qué
-        // haya pasado en la visita anterior. Si el propio fix de entrada YA está a
-        // `<= RADIO_CONFIRMACION_M` (radio de detección chico, p. ej. 30 m), se anuncia en el
-        // mismo tick de la entrada — mismo comportamiento que antes del fix, solo que ahora el
-        // gate es `anuncioProximidadHecho`, no `confirmado`.
-        const anuncioInmediato = deteccion.distanciaM <= RADIO_CONFIRMACION_M;
+        // REDISEÑO: el ciclo de ANUNCIO (`anuncioHecho`/`anuncioDesdeMs`) arranca FRESCO en
+        // cada ENTRADA — mismo momento que `minDistanciaM` — pero la DECISIÓN de si corresponde
+        // anunciar ya NO vive acá: geofence.ts solo resetea el ciclo de vida, nunca decide. Ver
+        // `evaluarAnunciosDeFixes`/`decidirAnuncio` (`features/operacion/decidir-anuncio.ts`) y
+        // su único punto de llamada (`gps/headless-task.ts`).
         transiciones.set(clave, {
           ...estado,
           dentro: true,
@@ -643,19 +599,9 @@ export function filtrarNuevosCumplimientos(
           candidatoLat: posicionFix?.lat,
           candidatoLng: posicionFix?.lng,
           candidatoTsFixMs: tsFixMs,
-          anuncioProximidadHecho: anuncioInmediato,
-          anuncioProximidadDesdeMs: tsFixMs,
+          anuncioHecho: false,
+          anuncioDesdeMs: tsFixMs,
         });
-        if (anuncioInmediato) {
-          anunciosProximidad.push({
-            ...deteccion,
-            fase: 'confirmado-proximidad',
-            // Visita recién entrando: todavía no hay `pasadas` incrementado — la pasada que le
-            // va a corresponder a esta visita (confirme o no la evidencia todavía) es la
-            // próxima, `estado.pasadas + 1` — ver el comentario largo de `anunciosProximidad`.
-            pasada: estado.pasadas + 1,
-          });
-        }
       } else if (deteccion.cumplido) {
         // B5 (hallazgo de revisión, bajo): CUMPLE pero todavía no pasó `PASADA_MIN_MS` desde la
         // última emisión. Antes esta rama dejaba `dentro: false`, así que el piso no atribuía
@@ -805,29 +751,6 @@ export function filtrarNuevosCumplimientos(
       }
     }
 
-    // FIX POST-REVISIÓN (Codex `verify-fix`, punto 1): anuncio de proximidad — DELIBERADAMENTE
-    // por fuera del `if (estado.confirmado === false)` de arriba: corre sin importar si la
-    // evidencia ya confirmó o no en este mismo tick o en uno anterior (ver el docblock de
-    // `anuncioProximidadHecho`). `pasadaVisita` es la pasada de la visita EN CURSO — si la
-    // evidencia todavía no confirmó, `estado.pasadas + 1` (prospectiva); si ya confirmó
-    // (`estadoBase.confirmado === true`, en este tick o en uno anterior), `estadoBase.pasadas`
-    // YA ES ese mismo número — las dos ramas producen el mismo valor para toda la visita, así
-    // que la identidad de dedupe (`{sesionId, puntoControlId, pasada}`, `anuncio-punto-control.ts`)
-    // es estable durante todo el ciclo `dentro: true`, confirme o no la evidencia en el medio.
-    if (estadoBase.anuncioProximidadHecho !== true) {
-      const pasadaVisita = estadoBase.confirmado === false ? estado.pasadas + 1 : estadoBase.pasadas;
-      const anuncioProximidadDesdeMs = estadoBase.anuncioProximidadDesdeMs ?? tsFixMs;
-      const dentroDeProximidad = deteccion.distanciaM <= RADIO_CONFIRMACION_M;
-      const vencioTimeout =
-        !dentroDeProximidad && tsFixMs - anuncioProximidadDesdeMs >= UMBRAL_ANUNCIO_PROXIMIDAD_MS;
-      if (dentroDeProximidad || vencioTimeout) {
-        anunciosProximidad.push({ ...deteccion, fase: 'confirmado-proximidad', pasada: pasadaVisita });
-        estadoBase = { ...estadoBase, anuncioProximidadHecho: true, anuncioProximidadDesdeMs };
-      } else {
-        estadoBase = { ...estadoBase, anuncioProximidadDesdeMs };
-      }
-    }
-
     const radioRearme = deteccion.radioToleranciaM * FACTOR_REARME_RADIO;
     if (deteccion.distanciaM - margenM > radioRearme) {
       // A2 (hallazgo de revisión, alto): hacen falta `FIXES_REARME_CONSECUTIVOS` fixes
@@ -842,23 +765,16 @@ export function filtrarNuevosCumplimientos(
         // — ver `puntosRearmadosVoz`/`avisoVozDentro` arriba, que tienen su propia histéresis
         // sobre `RADIO_AVISO_M` en vez de reusar ésta (el bug que G1 cierra).
         puntosRearmados.push(deteccion.puntoControlId);
-        // FIX POST-REVISIÓN (Codex `verify-fix`, punto 1, fallback "sale del radio sin haber
-        // anunciado"): el re-armado real es el ÚLTIMO momento en que esta visita todavía existe
-        // como tal — si para entonces nunca se anunció la proximidad (ni por distancia ni por
-        // el timeout de arriba), el chofer se queda sin ningún "llegaste" para esta pasada
-        // aunque la EVIDENCIA sí haya confirmado (regla dura: "el chofer no puede quedarse sin
-        // ningún aviso audible"). `estadoBase.confirmado` ya es `true` acá SIEMPRE (la
-        // confirmación de evidencia corre antes que el re-armado pueda cerrar la visita, ver la
-        // nota de cabecera de la función) — `estadoBase.pasadas` es la pasada real.
-        if (estadoBase.anuncioProximidadHecho !== true) {
-          anunciosProximidad.push({ ...deteccion, fase: 'confirmado-proximidad', pasada: estadoBase.pasadas });
-        }
+        // REDISEÑO: este re-armado real es la señal que `evaluarAnunciosDeFixes`
+        // (`features/operacion/decidir-anuncio.ts`) usa para decidir el fallback
+        // `'fallback-salida'` si la visita nunca anunció — geofence.ts ya no decide ni marca
+        // `anuncioHecho` acá, solo expone `puntosRearmados` (abajo) para que el único punto de
+        // llamada detecte el borde `dentro: true → false`.
         transiciones.set(clave, {
           ...estadoBase,
           dentro: false,
           fixesFueraRadioRearme: 0,
           ultimoFixMs: tsFixMs,
-          anuncioProximidadHecho: true,
         });
       } else {
         transiciones.set(clave, {
@@ -887,7 +803,7 @@ export function filtrarNuevosCumplimientos(
     }
   }
 
-  return { emitir, transiciones, avisosPrecision, puntosRearmados, puntosRearmadosVoz, anunciosProximidad };
+  return { emitir, transiciones, avisosPrecision, puntosRearmados, puntosRearmadosVoz };
 }
 
 /**
@@ -1035,56 +951,15 @@ export function confirmarVisitasVencidas(
   // ninguna de las dos histéresis por sí solo — `dentro` (detección) sigue en `true` (la visita
   // solo se cierra en curso, igual que el camino normal de confirmación por distancia) y
   // `avisoVozDentro` (G1) no se toca acá; las dos siguen re-armando únicamente por el camino
-  // normal de fixes reales (`filtrarNuevosCumplimientos`). Sin `anunciosProximidad` tampoco: el
-  // timeout del anuncio de proximidad para un vehículo DETENIDO (sin fixes nuevos) lo cubre
-  // `evaluarAnunciosProximidadVencidos` (abajo), una función APARTE — mezclarlo acá acoplaría de
-  // nuevo el anuncio a la máquina de EVIDENCIA, justo lo que el punto 1 del brief pide separar.
+  // normal de fixes reales (`filtrarNuevosCumplimientos`). El fallback de tiempo del ANUNCIO
+  // para un vehículo DETENIDO (sin fixes nuevos) lo cubre `evaluarAnuncioDeHeartbeat`
+  // (`features/operacion/decidir-anuncio.ts`), evaluado aparte por el único punto de llamada —
+  // mezclarlo acá acoplaría de nuevo el anuncio a la máquina de EVIDENCIA.
   return {
     emitir,
     transiciones,
     avisosPrecision: [],
     puntosRearmados: [],
     puntosRearmadosVoz: [],
-    anunciosProximidad: [],
   };
-}
-
-/**
- * FIX POST-REVISIÓN (Codex `verify-fix`, punto 1): mitad "vehículo detenido" del fallback de
- * anuncio de proximidad — hermana de `confirmarVisitasVencidas` (arriba), pero para el ANUNCIO,
- * no la EVIDENCIA. Un vehículo parado no produce fixes nuevos (`distanceFilter: 15`), así que
- * `UMBRAL_ANUNCIO_PROXIMIDAD_MS` nunca se evaluaría dentro de `filtrarNuevosCumplimientos` (que
- * solo corre con un fix real) — el `heartbeat` del SDK es, igual que para la evidencia, el único
- * evento que sigue llegando. Deliberadamente NO toca `pasadas`/`confirmado`/emite ningún
- * `cumplimiento_punto_control`: solo decide si corresponde el anuncio "llegaste" (o su
- * fallback) y marca `anuncioProximidadHecho`.
- */
-export function evaluarAnunciosProximidadVencidos(
-  estados: ReadonlyMap<string, EstadoPuntoControl>,
-  ahoraMs: number,
-  umbralMs: number = UMBRAL_ANUNCIO_PROXIMIDAD_MS,
-): { anuncios: DeteccionPuntoControl[]; transiciones: Map<string, EstadoPuntoControl> } {
-  const anuncios: DeteccionPuntoControl[] = [];
-  const transiciones = new Map<string, EstadoPuntoControl>();
-
-  for (const [clave, estado] of estados) {
-    if (!estado.dentro || estado.anuncioProximidadHecho === true) continue;
-    if (estado.puntoControlId === undefined || estado.radioToleranciaM === undefined) continue;
-    const desdeMs = estado.anuncioProximidadDesdeMs;
-    if (desdeMs === undefined || ahoraMs - desdeMs < umbralMs) continue;
-
-    const pasadaVisita = estado.confirmado === false ? estado.pasadas + 1 : estado.pasadas;
-    const distanciaM = estado.minDistanciaM ?? estado.radioToleranciaM;
-    anuncios.push({
-      puntoControlId: estado.puntoControlId,
-      distanciaM,
-      cumplido: true,
-      radioToleranciaM: estado.radioToleranciaM,
-      fase: 'confirmado-proximidad',
-      pasada: pasadaVisita,
-    });
-    transiciones.set(clave, { ...estado, anuncioProximidadHecho: true });
-  }
-
-  return { anuncios, transiciones };
 }

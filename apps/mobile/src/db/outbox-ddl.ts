@@ -41,9 +41,21 @@ export const OUTBOX_DDL_SQL = `
     -- columnas por separado. (Nota: sin comillas invertidas acá a propósito — este bloque es
     -- un TEMPLATE LITERAL de JS, y una comilla invertida sin escapar lo cierra a mitad de
     -- camino y rompe el parseo de TODO el archivo con errores TS1005 crípticos y lejanos.)
+    --
+    -- REDISEÑO (decisión del CTO, ronda posterior al veredicto "partial" de Codex verify-fix del
+    -- 2026-09-23, punto 3 del brief): columnas nuevas para reclamar la INTENCION de anunciar
+    -- (estado 'pendiente') ANTES de programar la notificacion, y para poder reintentar sin
+    -- parsear "clave" (sesion_id/punto_control_id/pasada por separado). Instalaciones YA EN
+    -- PRODUCCION (con la tabla vieja de 2 columnas) las reciben via outbox-migraciones.ts, que
+    -- outbox.ts corre despues de este DDL en cada apertura.
     CREATE TABLE IF NOT EXISTS anuncios_punto_control (
       clave TEXT PRIMARY KEY,
-      ts TEXT NOT NULL
+      ts TEXT NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'programado',
+      motivo TEXT,
+      sesion_id TEXT,
+      punto_control_id TEXT,
+      pasada INTEGER
     );
     -- FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"): la visita
     -- EN CURSO (dentro del radio, todavía sin confirmar por "mínimo local" — ver el docblock de

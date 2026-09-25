@@ -4,7 +4,7 @@ import BackgroundGeolocation, {
   type HeadlessEvent,
   type Location,
 } from 'react-native-background-geolocation';
-import { derivarEventIdDeterministico } from '@quivo/shared';
+import { derivarEventIdDeterministico, type PuntoControlPaquete } from '@quivo/shared';
 import {
   confirmarVisitasVencidas,
   filtrarPorSesion,
@@ -32,8 +32,15 @@ import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
 import { cargarSesionMovil, obtenerDeviceIdMovil } from '../shared/security/sesion-movil-store';
 import {
   anunciarDeteccionesDelTick,
-  anunciarPuntoControl,
+  anunciarLlegadaPuntoControl,
+  reintentarAnunciosLlegadaPendientes,
 } from '../features/operacion/anuncio-punto-control';
+import {
+  evaluarAnuncioDeHeartbeat,
+  evaluarAnunciosDeFixes,
+  UMBRAL_ANUNCIO_PROXIMIDAD_MS,
+  type AnuncioDecidido,
+} from '../features/operacion/decidir-anuncio';
 
 /**
  * Margen de gracia antes de apagar el plugin nativo tras vencer el paquete del día (hallazgo
@@ -218,14 +225,15 @@ export function registrarPuntoGps(
 ): Promise<{
   deteccion: DeteccionPuntoControl | null;
   deteccionAproximacion: DeteccionPuntoControl | null;
-  deteccionConfirmacionProximidad: DeteccionPuntoControl | null;
   puntosRearmados: string[];
   puntosRearmadosVoz: string[];
+  anunciosLlegada: AnuncioDecidido[];
 }> {
   return ejecutarEnColaRegistroGps(
     db,
     () => registrarPuntoGpsInterno(db, location, contexto, estadosPuntosControl),
     contexto.sesionId,
+    contexto.puntosControl,
   );
 }
 
@@ -295,6 +303,7 @@ function ejecutarEnColaRegistroGps<T>(
   db: SQLite.SQLiteDatabase,
   operacion: () => Promise<T>,
   sesionId: string,
+  puntosControl: PuntoControlPaquete[],
 ): Promise<T> {
   profundidadColaRegistroGps += 1;
   if (profundidadColaRegistroGps >= PROFUNDIDAD_COLA_SOSPECHOSA) {
@@ -307,12 +316,22 @@ function ejecutarEnColaRegistroGps<T>(
   }
 
   // B7: el techo de tiempo arranca cuando la operación EMPIEZA (dentro del `then`), no cuando
-  // se encola — ver el comentario de `TIMEOUT_REGISTRO_GPS_MS`. FIX POST-REVISIÓN (punto 6): el
-  // drenado de reintentos corre PRIMERO, dentro del mismo `then` — así queda serializado con la
-  // cola y "antes de procesar el siguiente fix/heartbeat" (orden preservado) es literal.
+  // se encola — ver el comentario de `TIMEOUT_REGISTRO_GPS_MS`. FIX POST-REVISIÓN (punto 6, gap
+  // "el drenado de reintentos queda fuera de conTimeout"): AMBOS drenados (visitas pendientes Y,
+  // desde el rediseño, anuncios de llegada pendientes) corren AHORA dentro del MISMO
+  // `conTimeout` que `operacion()` — un solo presupuesto de tiempo para "ponerse al día antes de
+  // este tick + procesar este tick", en vez de un drenado sin techo seguido de uno con techo.
   const resultado = colaRegistroGps
-    .then(() => drenarReintentosVisitaPendiente(db))
-    .then(() => conTimeout(operacion(), TIMEOUT_REGISTRO_GPS_MS))
+    .then(() =>
+      conTimeout(
+        (async () => {
+          await drenarReintentosVisitaPendiente(db);
+          await reintentarAnunciosLlegadaPendientes(db, puntosControl);
+          return operacion();
+        })(),
+        TIMEOUT_REGISTRO_GPS_MS,
+      ),
+    )
     .catch((error: unknown) => {
       if (error instanceof TimeoutRegistroGpsError) {
         console.error('[QUIVO][gps] una operación de la cola de registro venció su techo de tiempo', error);
@@ -400,9 +419,9 @@ async function registrarPuntoGpsInterno(
 ): Promise<{
   deteccion: DeteccionPuntoControl | null;
   deteccionAproximacion: DeteccionPuntoControl | null;
-  deteccionConfirmacionProximidad: DeteccionPuntoControl | null;
   puntosRearmados: string[];
   puntosRearmadosVoz: string[];
+  anunciosLlegada: AnuncioDecidido[];
 }> {
   // FIX POST-REVISIÓN (Codex `verify-fix`, punto 7): generación capturada AL EMPEZAR — si para
   // cuando esta operación llega a escribir algo la cola ya avanzó (esta operación venció su
@@ -418,7 +437,8 @@ async function registrarPuntoGpsInterno(
     eventos,
     deteccion,
     deteccionAproximacion,
-    deteccionConfirmacionProximidad,
+    deteccionesTick,
+    tsFixMs,
     transicionesEstado,
     avisosPrecision,
     puntosRearmados,
@@ -434,6 +454,23 @@ async function registrarPuntoGpsInterno(
       data: { ...aviso, sesionId: contexto.sesionId },
     });
   }
+
+  // REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
+  // 2026-09-23 — "un solo punto de llamada, dentro de colaRegistroGps"): la decisión de anuncio
+  // de "llegaste" (`evaluarAnunciosDeFixes`, `features/operacion/decidir-anuncio.ts`) corre ACÁ,
+  // ANTES de persistir nada — es PURA (sin I/O, sin `await` de por medio), así que no hay ventana
+  // de generación que proteger: lee `estados` (el Map TAL COMO ESTABA antes de este tick) y
+  // `transicionesEstado` (la salida YA CALCULADA de `filtrarNuevosCumplimientos` para el MISMO
+  // tick), nunca la evidencia ya persistida — la evidencia NUNCA dispara este canal.
+  const { anuncios: anunciosLlegada, transiciones: transicionesAnuncio } = evaluarAnunciosDeFixes(
+    estados,
+    transicionesEstado,
+    deteccionesTick,
+    puntosRearmados,
+    contexto.sesionId,
+    tsFixMs,
+  );
+
   // Claves cuya transición ya está atada a un evento propio (`evento.clave`, los
   // `cumplimiento_punto_control` emitidos este tick) — el resto de `transicionesEstado` son
   // re-armados/entradas/avances de mínimo sin evento asociado, aplicados junto al `gps_point`.
@@ -464,6 +501,18 @@ async function registrarPuntoGpsInterno(
         },
         evento.clave,
       );
+      // FIX POST-REVISIÓN (gap "la generación de la cola no se chequea después de cada await"):
+      // re-chequear ACÁ, inmediatamente después del `await` de arriba y ANTES de cualquier
+      // mutación — antes solo se chequeaba al INICIO de cada iteración del `for`, dejando una
+      // ventana entre el `await` y el `estados.set` de abajo sin proteger.
+      if (!generacionVigente(miGeneracion)) break;
+      // FIX POST-REVISIÓN (gap "reintentos descartados en confirmación transaccional"): la
+      // confirmación que acaba de correr ya borró (transaccionalmente, `encolarEventoYLimpiarVisita`)
+      // cualquier fila de `visitas_pendientes` de esta MISMA clave — un reintento 'guardar' viejo
+      // que hubiera quedado en `reintentosVisitaPendiente` de un `guardarVisitaPendiente` fallido
+      // en un tick ANTERIOR ahora está obsoleto: si se drenara después, reinsertaría una visita
+      // que ya confirmó, reabriendo una pasada fantasma.
+      reintentosVisitaPendiente.delete(evento.clave);
       // `cumplimiento_punto_control`: transición aplicada YA, recién confirmada su propia
       // escritura — ver el comentario de la función para el porqué (M4).
       const estado = transicionesEstado.get(evento.clave);
@@ -474,6 +523,9 @@ async function registrarPuntoGpsInterno(
         tipo: evento.tipo,
         payload: evento.payload,
       });
+      // FIX POST-REVISIÓN (gap "generación tras cada await"): mismo motivo que arriba — el
+      // `gps_point` recién persistió, chequear ANTES de entrar al loop de housekeeping.
+      if (!generacionVigente(miGeneracion)) break;
       // FIX POST-REVISIÓN (G2): `gps_point` (siempre el primer evento, sin `clave` propia) ya
       // persistió — ahora, por cada transición SIN evento propio, primero se escribe (o borra)
       // su fila de `visitas_pendientes` y RECIÉN SI ESO SALE BIEN se aplica la transición a
@@ -521,6 +573,9 @@ async function registrarPuntoGpsInterno(
             // vieja que pudiera quedar (no-op seguro si no había ninguna).
             await eliminarVisitaPendiente(db, clave);
           }
+          // FIX POST-REVISIÓN (gap "generación tras cada await"): chequear INMEDIATAMENTE
+          // después del `await` de arriba, antes de tocar `reintentosVisitaPendiente`/`estados`.
+          if (!generacionVigente(miGeneracion)) break;
           // La escritura salió bien: si había quedado un reintento pendiente de un fallo
           // anterior para esta MISMA clave, ya no hace falta — este intento lo reemplaza.
           reintentosVisitaPendiente.delete(clave);
@@ -537,6 +592,10 @@ async function registrarPuntoGpsInterno(
             extra: { sesionId: contexto.sesionId, clave },
           });
         }
+        // FIX POST-REVISIÓN (gap "generación tras cada await"): el `catch` de arriba también
+        // corre después de un `await` que rechazó — cubrir ese camino acá también, no solo el de
+        // éxito (que ya chequeó arriba, antes de este punto).
+        if (!generacionVigente(miGeneracion)) break;
         // FIX POST-REVISIÓN (punto 6): se aplica SIEMPRE, haya salido bien o mal la escritura —
         // la continuidad de la visita dentro de la vida de este proceso ya no depende de que
         // SQLite confirme en el primer intento (ver el docblock de `reintentosVisitaPendiente`).
@@ -545,12 +604,29 @@ async function registrarPuntoGpsInterno(
     }
   }
 
+  // REDISEÑO: aplica las transiciones de ANUNCIO (`anuncioHecho`/`anuncioDesdeMs`, decididas más
+  // arriba por `evaluarAnunciosDeFixes`, ANTES de que este loop empezara) como OVERLAY sobre lo
+  // que la evidencia ya dejó en `estados` — nunca antes, para no pisar una transición de
+  // evidencia con un objeto desactualizado. Vuelve a chequear la generación (el loop de arriba
+  // pudo haber corrido `await`s que la vencieran mientras tanto).
+  if (generacionVigente(miGeneracion)) {
+    for (const [clave, estadoAnuncio] of transicionesAnuncio) {
+      const actual = estados.get(clave);
+      if (!actual) continue;
+      estados.set(clave, {
+        ...actual,
+        anuncioHecho: estadoAnuncio.anuncioHecho,
+        anuncioDesdeMs: estadoAnuncio.anuncioDesdeMs,
+      });
+    }
+  }
+
   return {
     deteccion,
     deteccionAproximacion,
-    deteccionConfirmacionProximidad,
     puntosRearmados,
     puntosRearmadosVoz,
+    anunciosLlegada,
   };
 }
 
@@ -823,9 +899,18 @@ export async function aplicarConfirmacionesForzadas(
  * `sembrarCumplimientos` reemplaza entero en cada cambio de `sesionId` — filtrar ahí no hace
  * nada, pero tampoco hace falta).
  *
- * Devuelve los cumplimientos emitidos (`CumplimientoAEmitir[]`) para que el caller pueda anunciar
- * cada uno (`anunciarPuntoControl`) DESPUÉS de que la operación encolada ya terminó — el anuncio
- * es best-effort y no tiene por qué competir por el turno de la cola.
+ * Devuelve los cumplimientos emitidos (`CumplimientoAEmitir[]`, EVIDENCIA — el caller NUNCA debe
+ * anunciarlos, ver el rediseño de 2026-09-23) y `anunciosLlegada` (`AnuncioDecidido[]`, el
+ * ÚNICO dato que el caller puede pasar a `anunciarLlegadaPuntoControl`).
+ *
+ * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
+ * 2026-09-23, punto 2 del brief — "evaluarAnunciosProximidadVencidos solo se llama desde
+ * tests"): esta es la ÚNICA función que un heartbeat (headless o foreground) invoca, así que es
+ * acá — no en un caller aparte — donde también corre `evaluarAnuncioDeHeartbeat`
+ * (`features/operacion/decidir-anuncio.ts`), el fallback de TIEMPO para un vehículo detenido.
+ * Corre TANTO para el heartbeat como para el cierre de recorrido (`detener()`,
+ * `use-gps-operativo.ts`) — un cierre que confirma la última visita pendiente también merece su
+ * "llegaste" si nunca sonó.
  */
 export function confirmarVisitasVencidasEnCola(
   db: SQLite.SQLiteDatabase,
@@ -835,19 +920,42 @@ export function confirmarVisitasVencidasEnCola(
   ahoraMs: number,
   umbralMs: number,
   filtrarSesionActual: boolean,
-): Promise<CumplimientoAEmitir[]> {
+  puntosControl: PuntoControlPaquete[],
+  umbralAnuncioMs: number = UMBRAL_ANUNCIO_PROXIMIDAD_MS,
+): Promise<{ emitir: CumplimientoAEmitir[]; anunciosLlegada: AnuncioDecidido[] }> {
   return ejecutarEnColaRegistroGps(
     db,
     async () => {
+      const miGeneracion = generacionColaRegistroGps;
       const estados = estadosPuntosControl.current;
       const estadosAEvaluar = filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados;
       const { emitir, transiciones } = confirmarVisitasVencidas(estadosAEvaluar, ahoraMs, umbralMs);
       if (emitir.length > 0) {
         await aplicarConfirmacionesForzadas(db, deviceId, sesionId, emitir, transiciones, estados);
+        if (!generacionVigente(miGeneracion)) return { emitir, anunciosLlegada: [] };
       }
-      return emitir;
+
+      // REDISEÑO: fallback de TIEMPO del anuncio — independiente de la evidencia de arriba
+      // (`emitir`/`transiciones`), evaluado sobre el estado YA actualizado. Nunca lee `emitir`.
+      const { anuncios: anunciosLlegada, transiciones: transicionesAnuncio } = evaluarAnuncioDeHeartbeat(
+        filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados,
+        ahoraMs,
+        umbralAnuncioMs,
+      );
+      for (const [clave, estadoAnuncio] of transicionesAnuncio) {
+        if (!generacionVigente(miGeneracion)) break;
+        const actual = estados.get(clave);
+        if (!actual) continue;
+        estados.set(clave, {
+          ...actual,
+          anuncioHecho: estadoAnuncio.anuncioHecho,
+          anuncioDesdeMs: estadoAnuncio.anuncioDesdeMs,
+        });
+      }
+      return { emitir, anunciosLlegada };
     },
     sesionId,
+    puntosControl,
   );
 }
 
@@ -910,11 +1018,9 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
       ? contexto
       : { ...contexto, puntosControl: [] };
     const {
-      deteccion,
       deteccionAproximacion,
-      deteccionConfirmacionProximidad,
-      puntosRearmados,
       puntosRearmadosVoz,
+      anunciosLlegada,
     } = await registrarPuntoGps(db, location, contextoTick, puntosControlDetectadosHeadless);
     // ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): el punto GPS y el
     // cumplimiento YA quedaron persistidos arriba (la evidencia, RF-64..73) — el anuncio al
@@ -923,16 +1029,14 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     // el `paso: 'anunciar-punto-control'` de Sentry, no en el `paso:
     // 'registrar-punto-gps'` del catch general de abajo, que hoy reporta pérdida de EVIDENCIA —
     // mezclar los dos haría parecer perdido un punto GPS que en realidad se guardó bien.
-    // FIX POST-REVISIÓN (G1): se pasa `puntosRearmadosVoz` (histéresis PROPIA de la marca de
-    // voz sobre `RADIO_AVISO_M`), no `puntosRearmados` (histéresis de DETECCIÓN) — ver el
-    // comentario largo de `puntosRearmadosVoz` en `geofence.ts`. `puntosRearmados` se sigue
-    // pasando por compatibilidad/telemetría (`anuncio-punto-control.ts` ya no lo necesita para
-    // dedupe — ver el punto 2 del fix de Codex `verify-fix`, el anuncio de proximidad es
-    // PERSISTIDO y scopeado por `pasada`, no requiere liberarse al re-armar).
+    // REDISEÑO: `anunciosLlegada` YA fue DECIDIDO dentro de `registrarPuntoGps` (la cola) — este
+    // wrapper solo EJECUTA (voz de aproximación + notificación/vibración de llegada), nunca
+    // vuelve a evaluar nada de evidencia (`deteccion` ya NO se pasa: la evidencia nunca dispara
+    // este canal, ver el rediseño de 2026-09-23).
     await anunciarDeteccionesDelTick(
       db,
       { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
-      { deteccion, deteccionAproximacion, deteccionConfirmacionProximidad, puntosRearmados, puntosRearmadosVoz },
+      { deteccionAproximacion, anunciosLlegada, puntosRearmadosVoz },
     ).catch((error) => {
       console.error('[QUIVO][headless] No se pudo anunciar el punto de control', error);
       Sentry.captureException(error, {
@@ -984,7 +1088,12 @@ async function manejarHeartbeatHeadless(): Promise<void> {
 
     const db = await abrirOutbox();
     await asegurarSemillaCumplimientos(db, contexto.sesionId);
-    const emitir = await confirmarVisitasVencidasEnCola(
+    // REDISEÑO: `emitir` (confirmaciones de EVIDENCIA forzadas por antigüedad) YA NO se anuncia
+    // — la evidencia nunca dispara ningún canal hacia el chofer (gap 1 y 2 del brief). Solo
+    // `anunciosLlegada`, decidido por `evaluarAnuncioDeHeartbeat` DENTRO de
+    // `confirmarVisitasVencidasEnCola` (punto 2 del brief: el fallback de 90 s ahora SÍ corre en
+    // producción, desde este mismo punto de llamada).
+    const { anunciosLlegada } = await confirmarVisitasVencidasEnCola(
       db,
       contexto.deviceId,
       contexto.sesionId,
@@ -992,18 +1101,21 @@ async function manejarHeartbeatHeadless(): Promise<void> {
       Date.now(),
       UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
       true,
+      contexto.puntosControl,
     );
-    if (emitir.length === 0) return;
+    if (anunciosLlegada.length === 0) return;
 
-    for (const c of emitir) {
-      await anunciarPuntoControl(
+    for (const anuncio of anunciosLlegada) {
+      await anunciarLlegadaPuntoControl(
         db,
-        c.deteccion,
+        anuncio.puntoControlId,
+        anuncio.pasada,
+        anuncio.motivo,
         { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
       ).catch((error) => {
-        console.error('[QUIVO][headless] No se pudo anunciar la confirmación por heartbeat', error);
+        console.error('[QUIVO][headless] No se pudo anunciar la llegada por heartbeat', error);
         Sentry.captureException(error, {
-          tags: { contexto: 'headless-task', paso: 'anunciar-confirmacion-heartbeat' },
+          tags: { contexto: 'headless-task', paso: 'anunciar-llegada-heartbeat' },
         });
       });
     }

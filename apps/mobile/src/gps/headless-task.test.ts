@@ -65,10 +65,12 @@ vi.mock('../shared/security/sesion-movil-store', () => ({
 // el contenido del anuncio, que ya cubre su propio test.
 vi.mock('../features/operacion/anuncio-punto-control', () => ({
   anunciarDeteccionesDelTick: vi.fn().mockResolvedValue(undefined),
-  // FIX POST-REVISIÓN (bug 2): el handler de heartbeat (`manejarHeartbeatHeadless`) llama a
-  // `anunciarPuntoControl` directo (no al wrapper `anunciarDeteccionesDelTick`, que espera un
-  // solo tick con aproximación+confirmación) — mockeado igual, sin contenido.
-  anunciarPuntoControl: vi.fn().mockResolvedValue(undefined),
+  // REDISEÑO: el handler de heartbeat (`manejarHeartbeatHeadless`) ejecuta las decisiones YA
+  // tomadas (`anunciosLlegada`) llamando `anunciarLlegadaPuntoControl` directo — mockeado igual,
+  // sin contenido. `reintentarAnunciosLlegadaPendientes` corre dentro de `conTimeout`, en cada
+  // turno de la cola (`ejecutarEnColaRegistroGps`).
+  anunciarLlegadaPuntoControl: vi.fn().mockResolvedValue(undefined),
+  reintentarAnunciosLlegadaPendientes: vi.fn().mockResolvedValue(undefined),
 }));
 
 import BackgroundGeolocation, { type HeadlessEvent, type Location } from 'react-native-background-geolocation';
@@ -89,7 +91,8 @@ import {
 } from '../shared/security/sesion-movil-store';
 import {
   anunciarDeteccionesDelTick,
-  anunciarPuntoControl,
+  anunciarLlegadaPuntoControl,
+  reintentarAnunciosLlegadaPendientes,
 } from '../features/operacion/anuncio-punto-control';
 import { obtenerContextoUbicacionPersistido, tareaHeadlessUbicacion } from './headless-task';
 
@@ -107,7 +110,11 @@ const guardarVisitaPendienteMock = guardarVisitaPendiente as unknown as ReturnTy
 const anunciarDeteccionesDelTickMock = anunciarDeteccionesDelTick as unknown as ReturnType<
   typeof vi.fn
 >;
-const anunciarPuntoControlMock = anunciarPuntoControl as unknown as ReturnType<typeof vi.fn>;
+const anunciarLlegadaPuntoControlMock = anunciarLlegadaPuntoControl as unknown as ReturnType<
+  typeof vi.fn
+>;
+const reintentarAnunciosLlegadaPendientesMock =
+  reintentarAnunciosLlegadaPendientes as unknown as ReturnType<typeof vi.fn>;
 const captureExceptionMock = Sentry.captureException as unknown as ReturnType<typeof vi.fn>;
 
 /** Sesión mínima "autenticado" — sólo lo que lee `obtenerContextoUbicacionPersistido`. El
@@ -277,18 +284,18 @@ describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega
     expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(1);
     const [, opciones, resultado] = anunciarDeteccionesDelTickMock.mock.calls[0]!;
     expect(opciones).toEqual({ sesionId, puntosControl: [pc] });
-    expect(resultado.deteccion).toBeNull();
     expect(resultado.deteccionAproximacion).toMatchObject({
       puntoControlId: 'pc-headless-1',
       fase: 'aproximacion',
     });
-    // DECISIÓN CTO 2026-09-23 (`RADIO_CONFIRMACION_M`): distancia 0 <= 40 m — la proximidad
-    // dispara en TIEMPO REAL en el MISMO tick de la entrada, sin esperar a que la evidencia
-    // confirme (que recién llega en un fix posterior, cuando la distancia crece).
-    expect(resultado.deteccionConfirmacionProximidad).toMatchObject({
-      puntoControlId: 'pc-headless-1',
-      fase: 'confirmado-proximidad',
-    });
+    // REDISEÑO (decidirAnuncio, decidir-anuncio.ts): distancia 0 <= 40 m (RADIO_CONFIRMACION_M)
+    // — la decisión de anuncio de "llegaste" ("proximidad") ya sale en el MISMO tick de la
+    // entrada, sin esperar a que la evidencia confirme (que recién llega en un fix posterior,
+    // cuando la distancia crece) — YA NO es un campo `deteccionConfirmacionProximidad`, es una
+    // entrada del array `anunciosLlegada`.
+    expect(resultado.anunciosLlegada).toEqual([
+      { puntoControlId: 'pc-headless-1', pasada: 1, motivo: 'proximidad', distanciaM: 0, radioToleranciaM: 30 },
+    ]);
   });
 
   it('segundo fix (se aleja ~33 m, distancia CRECE respecto del mínimo): confirma la pasada 1', async () => {
@@ -315,13 +322,25 @@ describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega
       eventoLocation(location(-17.7797, -63.18, '2026-09-10T12:00:10.000Z')),
     );
 
+    // REDISEÑO: la EVIDENCIA (confirmación de pasada 1) ya no viaja en el `resultado` que recibe
+    // `anunciarDeteccionesDelTick` — la evidencia nunca dispara ningún canal. Se verifica
+    // directo contra el outbox (`encolarEventoMock`, que `encolarEventoYLimpiarVisita` delega).
     expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(2);
-    const [, , resultadoSegundoTick] = anunciarDeteccionesDelTickMock.mock.calls[1]!;
-    expect(resultadoSegundoTick.deteccion).toMatchObject({
-      puntoControlId: 'pc-headless-2',
-      fase: 'confirmado',
-      pasada: 1,
+    const confirmacion = encolarEventoMock.mock.calls
+      .map(([, evento]) => evento)
+      .find((evento) => evento?.tipo === 'cumplimiento_punto_control');
+    expect(confirmacion).toMatchObject({
+      tipo: 'cumplimiento_punto_control',
+      payload: expect.objectContaining({ puntoControlId: 'pc-headless-2', pasada: 1 }),
     });
+    // El punto entró a distancia 0 (<=40 m) — el anuncio de "llegaste" (proximidad) ya salió en
+    // el PRIMER tick, así que el segundo (la confirmación de evidencia) no repite nada.
+    const [, , resultadoPrimerTick] = anunciarDeteccionesDelTickMock.mock.calls[0]!;
+    const [, , resultadoSegundoTick] = anunciarDeteccionesDelTickMock.mock.calls[1]!;
+    expect(resultadoPrimerTick.anunciosLlegada).toEqual([
+      { puntoControlId: 'pc-headless-2', pasada: 1, motivo: 'proximidad', distanciaM: 0, radioToleranciaM: 30 },
+    ]);
+    expect(resultadoSegundoTick.anunciosLlegada).toEqual([]);
   });
 
   it('sin turno vigente (sin sesión): descarta el punto ANTES de intentar anunciar nada', async () => {
@@ -360,9 +379,8 @@ describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega
     // de la siembra queda reportado a Sentry.
     expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(1);
     const [, , resultadoTick1] = anunciarDeteccionesDelTickMock.mock.calls[0]!;
-    expect(resultadoTick1.deteccion).toBeNull();
     expect(resultadoTick1.deteccionAproximacion).toBeNull();
-    expect(resultadoTick1.deteccionConfirmacionProximidad).toBeNull();
+    expect(resultadoTick1.anunciosLlegada).toEqual([]);
     expect(encolarEventoMock).toHaveBeenCalledTimes(1); // solo el gps_point del tick 1
     expect(encolarEventoMock.mock.calls[0]?.[1]).toMatchObject({ tipo: 'gps_point' });
     expect(captureExceptionMock).toHaveBeenCalledWith(
@@ -482,7 +500,8 @@ describe('tareaHeadlessUbicacion — heartbeat (FIX POST-REVISIÓN, bug 2)', () 
     obtenerEventosPorTipoMock.mockReset().mockResolvedValue([]);
     obtenerVisitasPendientesMock.mockReset().mockResolvedValue([]);
     anunciarDeteccionesDelTickMock.mockClear();
-    anunciarPuntoControlMock.mockReset().mockResolvedValue(undefined);
+    anunciarLlegadaPuntoControlMock.mockReset().mockResolvedValue(undefined);
+    reintentarAnunciosLlegadaPendientesMock.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -508,40 +527,55 @@ describe('tareaHeadlessUbicacion — heartbeat (FIX POST-REVISIÓN, bug 2)', () 
     await tareaHeadlessUbicacion(eventoHeartbeat());
 
     expect(encolarEventoMock.mock.calls.length).toBe(llamadasEncolarAntes);
-    expect(anunciarPuntoControlMock).not.toHaveBeenCalled();
+    expect(anunciarLlegadaPuntoControlMock).not.toHaveBeenCalled();
   });
 
-  it('vehículo detenido dentro del radio (terminal, "el chofer estaciona"): un heartbeat AL CUMPLIRSE UMBRAL_ANTIGUEDAD_CANDIDATO_MS confirma con el candidato, SIN fix nuevo, y anuncia la confirmación', async () => {
+  it('REDISEÑO (punto 2 del brief — "evaluarAnunciosProximidadVencidos solo se llama desde tests"): vehículo detenido SIN bajar nunca de RADIO_CONFIRMACION_M — un heartbeat AL CUMPLIRSE UMBRAL_ANUNCIO_PROXIMIDAD_MS ejecuta el fallback-tiempo del ANUNCIO, separado de la confirmación de EVIDENCIA por heartbeat (mismo umbral, 90 s, dos mecanismos distintos)', async () => {
     const sesionId = 'sesion-heartbeat-2';
-    const pc = puntoControlReal('pc-heartbeat-2', [-63.18, -17.78]);
+    // Radio de detección grande (100 m) para poder entrar CUMPLIENDO (80 m) sin bajar nunca de
+    // RADIO_CONFIRMACION_M (40 m) — así la decisión de "proximidad" NUNCA dispara en la entrada,
+    // y lo único que puede anunciar "llegaste" es el fallback de TIEMPO del heartbeat.
+    const pc: PuntoControlPaquete = {
+      id: 'pc-heartbeat-2',
+      orden: 5,
+      coord: { type: 'Point', coordinates: [-63.18, -17.78] },
+      radioToleranciaM: 100,
+      obligatorio: true,
+    };
     sesionYPaqueteDe(sesionId, 'asignacion-heartbeat-2', pc);
 
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-10T12:00:00.000Z'));
-    await tareaHeadlessUbicacion(eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z')));
+    // Entra a ~80 m (cumple el radio de 100, pero > RADIO_CONFIRMACION_M=40).
+    const latitudA80m = -17.78 - 80 / 111_320;
+    await tareaHeadlessUbicacion(eventoLocation(location(latitudA80m, -63.18, '2026-09-10T12:00:00.000Z')));
     const llamadasEncolarAntes = encolarEventoMock.mock.calls.length;
+    expect(anunciarLlegadaPuntoControlMock).not.toHaveBeenCalled(); // 80 m > 40 m: sin proximidad
 
     // Pasan 91 s sin ningún fix nuevo — el heartbeat sigue llegando igual (vehículo detenido).
     vi.setSystemTime(new Date('2026-09-10T12:01:31.000Z'));
     await tareaHeadlessUbicacion(eventoHeartbeat());
 
-    // Confirmó por heartbeat: un `cumplimiento_punto_control` nuevo en el outbox, con el
-    // candidato ya observado (fase confirmado, pasada 1) — nunca una posición inventada.
+    // EVIDENCIA: confirmó por heartbeat con el candidato ya observado — nunca una posición
+    // inventada.
     expect(encolarEventoMock.mock.calls.length).toBe(llamadasEncolarAntes + 1);
     const [, eventoEncolado] = encolarEventoMock.mock.calls[encolarEventoMock.mock.calls.length - 1]!;
     expect(eventoEncolado).toMatchObject({
       tipo: 'cumplimiento_punto_control',
-      // FIX POST-REVISIÓN ("eventId estable"): la confirmación forzada por heartbeat deriva el
-      // MISMO eventId que derivaría un fix real para esta tripleta (ver
-      // `location-task.test.ts`, "el cumplimiento lleva un eventId derivado...") — así, si un
-      // fix real llegara a confirmar la misma pasada por otro camino, el servidor los trata
-      // como el MISMO evento en vez de contarlo dos veces.
       eventId: derivarEventIdDeterministico([sesionId, 'pc-heartbeat-2', '1']),
       payload: expect.objectContaining({ puntoControlId: 'pc-heartbeat-2', pasada: 1 }),
     });
-    // Y salió el anuncio (sonido/voz) de la confirmación — un heartbeat también tiene que
-    // avisarle al chofer, no solo dejar evidencia silenciosa.
-    expect(anunciarPuntoControlMock).toHaveBeenCalledTimes(1);
+    // ANUNCIO: el fallback de TIEMPO ejecuta en el MISMO heartbeat, pero por un camino
+    // COMPLETAMENTE separado (`evaluarAnuncioDeHeartbeat`, nunca lee `emitir`/la evidencia de
+    // arriba) — motivo 'fallback-tiempo', nunca 'proximidad' (el vehículo nunca bajó de 40 m).
+    expect(anunciarLlegadaPuntoControlMock).toHaveBeenCalledTimes(1);
+    expect(anunciarLlegadaPuntoControlMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'pc-heartbeat-2',
+      1,
+      'fallback-tiempo',
+      expect.objectContaining({ sesionId }),
+    );
   });
 
   it('sin sesión activa: el heartbeat es un no-op silencioso, no lanza ni encola nada', async () => {
@@ -549,7 +583,7 @@ describe('tareaHeadlessUbicacion — heartbeat (FIX POST-REVISIÓN, bug 2)', () 
 
     await expect(tareaHeadlessUbicacion(eventoHeartbeat())).resolves.toBeUndefined();
     expect(encolarEventoMock).not.toHaveBeenCalled();
-    expect(anunciarPuntoControlMock).not.toHaveBeenCalled();
+    expect(anunciarLlegadaPuntoControlMock).not.toHaveBeenCalled();
   });
 
   it('sin ninguna visita en curso (ningún punto de control cerca): el heartbeat no encola ni anuncia nada', async () => {
@@ -561,7 +595,7 @@ describe('tareaHeadlessUbicacion — heartbeat (FIX POST-REVISIÓN, bug 2)', () 
     await tareaHeadlessUbicacion(eventoHeartbeat());
 
     expect(encolarEventoMock).not.toHaveBeenCalled();
-    expect(anunciarPuntoControlMock).not.toHaveBeenCalled();
+    expect(anunciarLlegadaPuntoControlMock).not.toHaveBeenCalled();
   });
 });
 
@@ -645,9 +679,8 @@ describe('registrarPuntoGpsInterno — G2 (persistir visita pendiente ANTES de l
     // El resto del tick NO se abortó: el `gps_point` se encoló y el anuncio de aproximación
     // salió igual — el fallo es SOLO de la copia durable del candidato, no de la evidencia.
     expect(encolarEventoMock).toHaveBeenCalledTimes(1);
+    expect(encolarEventoMock.mock.calls[0]?.[1]).toMatchObject({ tipo: 'gps_point' }); // sin confirmación todavía
     expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(1);
-    const [, , resultadoPrimerTick] = anunciarDeteccionesDelTickMock.mock.calls[0]!;
-    expect(resultadoPrimerTick.deteccion).toBeNull();
 
     // El fallo se reportó — nunca se traga en silencio — con el `paso` del ENCOLADO de
     // reintento (punto 6), ya no `visita-pendiente-no-aplicada`.
@@ -671,11 +704,12 @@ describe('registrarPuntoGpsInterno — G2 (persistir visita pendiente ANTES de l
     await tareaHeadlessUbicacion(
       eventoLocation(location(-17.7799, -63.18, '2026-09-23T12:00:10.000Z')),
     );
-    const resultadoSegundoTick = anunciarDeteccionesDelTickMock.mock.calls[1]![2];
-    expect(resultadoSegundoTick.deteccion).toMatchObject({
-      puntoControlId: 'pc-g2-1',
-      fase: 'confirmado',
-      pasada: 1,
+    const confirmacion = encolarEventoMock.mock.calls
+      .map(([, evento]) => evento)
+      .find((evento) => evento?.tipo === 'cumplimiento_punto_control');
+    expect(confirmacion).toMatchObject({
+      tipo: 'cumplimiento_punto_control',
+      payload: expect.objectContaining({ puntoControlId: 'pc-g2-1', pasada: 1 }),
     });
     // El reintento drenado escribió la copia durable con éxito la segunda vez.
     expect(guardarVisitaPendienteMock).toHaveBeenCalledTimes(2);
@@ -700,8 +734,8 @@ describe('registrarPuntoGpsInterno — G2 (persistir visita pendiente ANTES de l
     await tareaHeadlessUbicacion(
       eventoLocation(location(-17.78, -63.18, '2026-09-23T12:00:00.000Z')),
     );
-    const resultadoPrimerTick = anunciarDeteccionesDelTickMock.mock.calls[0]![2];
-    expect(resultadoPrimerTick.deteccion).toBeNull(); // todavía sin confirmar, evidencia intacta
+    // Todavía sin confirmar — evidencia intacta, solo `gps_point` en el outbox.
+    expect(encolarEventoMock.mock.calls.every(([, evento]) => evento?.tipo === 'gps_point')).toBe(true);
 
     // Tick 2: el vehículo pasó de largo — ~2.2 km, bien fuera del radio (30 m) y del radio de
     // re-armado (45 m). Con la memoria intacta (punto 6), la distancia "crece" respecto del
@@ -711,11 +745,12 @@ describe('registrarPuntoGpsInterno — G2 (persistir visita pendiente ANTES de l
     await tareaHeadlessUbicacion(
       eventoLocation(location(-17.80, -63.18, '2026-09-23T12:00:10.000Z')),
     );
-    const resultadoSegundoTick = anunciarDeteccionesDelTickMock.mock.calls[1]![2];
-    expect(resultadoSegundoTick.deteccion).toMatchObject({
-      puntoControlId: 'pc-g2-3',
-      fase: 'confirmado',
-      pasada: 1,
+    const confirmacion = encolarEventoMock.mock.calls
+      .map(([, evento]) => evento)
+      .find((evento) => evento?.tipo === 'cumplimiento_punto_control');
+    expect(confirmacion).toMatchObject({
+      tipo: 'cumplimiento_punto_control',
+      payload: expect.objectContaining({ puntoControlId: 'pc-g2-3', pasada: 1 }),
     });
   });
 
@@ -741,11 +776,12 @@ describe('registrarPuntoGpsInterno — G2 (persistir visita pendiente ANTES de l
     );
 
     expect(captureExceptionMock).not.toHaveBeenCalled();
-    const resultadoSegundoTick = anunciarDeteccionesDelTickMock.mock.calls[1]![2];
-    expect(resultadoSegundoTick.deteccion).toMatchObject({
-      puntoControlId: 'pc-g2-2',
-      fase: 'confirmado',
-      pasada: 1,
+    const confirmacion = encolarEventoMock.mock.calls
+      .map(([, evento]) => evento)
+      .find((evento) => evento?.tipo === 'cumplimiento_punto_control');
+    expect(confirmacion).toMatchObject({
+      tipo: 'cumplimiento_punto_control',
+      payload: expect.objectContaining({ puntoControlId: 'pc-g2-2', pasada: 1 }),
     });
   });
 });
