@@ -423,6 +423,44 @@ describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega
       tareaHeadlessUbicacion(eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z'))),
     ).resolves.toBeUndefined();
   });
+
+  it('REDISEÑO: fix dentro de RADIO_CONFIRMACION_M (40 m) → EXACTAMENTE una decisión de anuncio, aunque lleguen fixes duplicados/concurrentes para la MISMA visita', async () => {
+    const sesionId = 'sesion-headless-concurrencia';
+    const pc = puntoControlReal('pc-headless-concurrencia', [-63.18, -17.78]);
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue({
+      status: 'autenticado',
+      contexto: { sesionId, asignacion: { id: 'asignacion-concurrencia', venceAt } },
+    } as unknown as SesionMovilGuardada);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue({
+      paquete: { asignacion: { id: 'asignacion-concurrencia', venceAt }, puntosControl: [pc] },
+      vencido: false,
+      descargadoEn: new Date().toISOString(),
+    } as unknown as PaqueteDiaLocal);
+
+    // Dos fixes "duplicados" (misma posición, distancia 0 <= RADIO_CONFIRMACION_M) DISPARADOS
+    // EN PARALELO, sin esperar al primero — `colaRegistroGps` (C2/R1) los serializa: el segundo
+    // ve el estado que dejó el primero (`anuncioHecho: true`), así que `evaluarAnunciosDeFixes`
+    // no vuelve a decidir nada para la MISMA visita.
+    const tick1 = tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.000Z')),
+    );
+    const tick2 = tareaHeadlessUbicacion(
+      eventoLocation(location(-17.78, -63.18, '2026-09-10T12:00:00.100Z')),
+    );
+    await Promise.all([tick1, tick2]);
+
+    expect(anunciarDeteccionesDelTickMock).toHaveBeenCalledTimes(2);
+    const anunciosDeAmbosTicks = anunciarDeteccionesDelTickMock.mock.calls.flatMap(
+      ([, , resultado]) => resultado.anunciosLlegada,
+    );
+    expect(anunciosDeAmbosTicks).toHaveLength(1); // EXACTAMENTE una decisión, no dos
+    expect(anunciosDeAmbosTicks[0]).toMatchObject({
+      puntoControlId: 'pc-headless-concurrencia',
+      pasada: 1,
+      motivo: 'proximidad',
+    });
+  });
 });
 
 /**

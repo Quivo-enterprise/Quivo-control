@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RADIO_AVISO_M, RADIO_CONFIRMACION_M, type PuntoControlPaquete } from '@quivo/shared';
+import { RADIO_AVISO_M, type PuntoControlPaquete } from '@quivo/shared';
 import {
   claveCumplimiento,
   confirmarVisitasVencidas,
@@ -7,7 +7,6 @@ import {
   filtrarNuevosCumplimientos,
   FACTOR_REARME_RADIO,
   FIXES_FALLBACK_CONFIRMACION_SIN_MINIMO,
-  FIXES_REARME_CONSECUTIVOS,
   PASADA_MIN_MS,
   UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
   type DeteccionPuntoControl,

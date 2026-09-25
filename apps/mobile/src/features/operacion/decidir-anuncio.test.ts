@@ -134,6 +134,50 @@ function deteccionCruda(distanciaM: number, puntoControlId = 'pc-1'): DeteccionP
   return { puntoControlId, distanciaM, cumplido: distanciaM <= 150, radioToleranciaM: 150 };
 }
 
+describe('evaluarAnunciosDeFixes — LA EVIDENCIA NUNCA DISPARA (gap 1/2 del brief)', () => {
+  it('la evidencia confirma (mínimo local, distancia crece) lejos de RADIO_CONFIRMACION_M y sin re-armar: NO decide ningún anuncio', () => {
+    // Simula el tick donde `filtrarNuevosCumplimientos` acaba de CONFIRMAR la evidencia
+    // (`confirmado: true`, `dentro` sigue en `true` — el re-armado es un tick aparte, más
+    // adelante) con el fix ACTUAL a 90 m — lejos de RADIO_CONFIRMACION_M (40) y del umbral de
+    // tiempo (recién entrando, `anuncioDesdeMs` == `tsFixMs`). La evidencia, por sí sola, no
+    // debe producir NINGUNA decisión de anuncio.
+    const sesionId = 'sesion-evidencia';
+    const clave = claveCumplimiento(sesionId, 'pc-1');
+    const estadosAntes = new Map<string, EstadoPuntoControl>([[clave, estadoVisitaActiva({ confirmado: false })]]);
+    const transicionesEstado = new Map<string, EstadoPuntoControl>([
+      [
+        clave,
+        estadoVisitaActiva({
+          confirmado: true, // LA EVIDENCIA YA CONFIRMÓ este mismo tick
+          anuncioHecho: false,
+          anuncioDesdeMs: 1_000,
+        }),
+      ],
+    ]);
+
+    const { anuncios } = evaluarAnunciosDeFixes(
+      estadosAntes,
+      transicionesEstado,
+      [deteccionCruda(90)],
+      [], // sin re-armar todavía
+      sesionId,
+      1_000,
+    );
+
+    expect(anuncios).toEqual([]);
+  });
+
+  it('anunciarDeteccionesDelTick / anunciarLlegadaPuntoControl no reciben ningún campo de evidencia (garantía de tipos): la firma de resultado no acepta `deteccion`/`fase`', () => {
+    // Documenta, a nivel de tipos, que ya no existe ningún camino para que un caller le pase
+    // evidencia (`DeteccionPuntoControl` con `fase: 'confirmado'`) a la ejecución del anuncio de
+    // llegada — el rediseño lo hace estructuralmente imposible, no solo "por convención".
+    type ResultadoAnuncioLlegada = { puntoControlId: string; pasada: number; motivo: string };
+    const anuncio: ResultadoAnuncioLlegada = { puntoControlId: 'pc-1', pasada: 1, motivo: 'proximidad' };
+    expect(anuncio).not.toHaveProperty('fase');
+    expect(anuncio).not.toHaveProperty('deteccion');
+  });
+});
+
 describe('evaluarAnunciosDeFixes — orquestador (único punto de llamada, fixes)', () => {
   it('visita recién ENTRANDO (no en estadosAntes) con distancia <= radio: decide "proximidad" de inmediato', () => {
     const sesionId = 'sesion-1';
