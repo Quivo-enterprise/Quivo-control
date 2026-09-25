@@ -152,6 +152,43 @@ export type ContextoEnVivo = z.infer<typeof ContextoEnVivoSchema>;
 export const TRAZA_EN_VIVO_LIMITE_MAX = 50_000;
 export const TRAZA_EN_VIVO_LIMITE_DEFAULT = 8_000;
 
+/**
+ * `GET /v1/reportes/en-vivo/posiciones` (ENTREGA 10) — última posición conocida de
+ * TODOS los vehículos con sesión activa, en una sola fila por sesión. Reemplaza para el
+ * mapa el patrón "una traza por sesión" (`TrazaEnVivoSchema` de arriba), descartado por
+ * costo: con 5 sesiones en poll rápido de 1 s ese patrón implica 300 req/min, el techo
+ * exacto del throttle de `en-vivo.controller.ts`; con 20 vehículos revienta. Acá el
+ * costo NO escala con N: es siempre una query.
+ */
+export const PosicionEnVivoSchema = z
+  .object({
+    /** `sesionOperativa.id`. */
+    id: uuidSchema,
+    deviceId: z.string(),
+    /** `fin IS NULL AND estado = 'activa'` — igual criterio que `SesionEnVivoResumenSchema`. */
+    activa: z.boolean(),
+    vehiculoPlaca: z.string(),
+    conductorNombre: z.string(),
+    /** Habilita el filtro por línea en el cliente sin round-trip extra: el join a
+     * `lineas` ya lo hace la query para `lineaNombre`, este campo sale gratis. */
+    lineaId: uuidSchema,
+    lineaNombre: z.string(),
+    /** `Ruta.sentido` (texto libre, sin detección automática — ver diagnóstico del
+     * piloto 2026-09-09). Mostrarlo de un vistazo es lo que permite detectar una
+     * rotación cargada con el sentido invertido antes de que el chofer salga a la calle. */
+    rutaSentido: z.string(),
+    /** Última posición conocida. `null` cuando la sesión todavía no mandó ningún fix
+     * ("esperando el primer punto GPS", mismo caso que en el listado). */
+    lat: z.number().nullable(),
+    lng: z.number().nullable(),
+    accuracy: z.number().nullable(),
+    speed: z.number().nullable(),
+    /** Puntos de la sesión dentro de la ventana de la jornada consultada. */
+    totalPuntos: z.number().int().nonnegative(),
+  })
+  .merge(FrescuraEnVivoSchema);
+export type PosicionEnVivo = z.infer<typeof PosicionEnVivoSchema>;
+
 export const TrazaEnVivoQuerySchema = z.object({
   /** Cursor del cliente. Solo puede **recortar**: el server lo clampea al piso de la
    * ventana de la sesión (ver `obtenerTraza`). */

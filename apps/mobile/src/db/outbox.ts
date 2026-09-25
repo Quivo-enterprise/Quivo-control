@@ -67,6 +67,129 @@ const OUTBOX_DB_PATH = 'quivo-outbox.db';
 let outboxPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let outboxAbiertoAlgunaVez = false;
 
+/**
+ * DDL de creación (tablas + índice) — todo con `IF NOT EXISTS`, que SÍ es sintaxis SQLite
+ * válida para `CREATE TABLE`/`CREATE INDEX` (a diferencia de `ALTER TABLE ... ADD COLUMN IF
+ * NOT EXISTS`, que NO existe en SQLite — ver `MIGRACIONES_COLUMNAS_OUTBOX` más abajo para el
+ * porqué esa migración va aparte). Constante pura, sin ningún `await` de por medio, para
+ * poder correrla contra SQLite real (`node:sqlite`) sin pasar por `expo-sqlite` — ver
+ * `outbox-ddl.test.ts`.
+ */
+export const DDL_OUTBOX = `
+  CREATE TABLE IF NOT EXISTS outbox (
+    event_id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'pendiente'
+  );
+  CREATE INDEX IF NOT EXISTS outbox_estado_idx ON outbox(estado);
+  CREATE TABLE IF NOT EXISTS sync_lease (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    expira_at INTEGER NOT NULL
+  );
+`;
+
+interface MigracionColumna {
+  tabla: string;
+  columna: string;
+  tipo: string;
+}
+
+/**
+ * 🔴 Hallazgo 1 CRÍTICO (code review): esta migración vivía como
+ * `ALTER TABLE outbox ADD COLUMN IF NOT EXISTS enviado_at TEXT;` dentro del `execAsync` de
+ * `abrirOutboxNueva` — pero `ADD COLUMN IF NOT EXISTS` es sintaxis de POSTGRES, no de SQLite.
+ * Contra SQLite 3.45.1 (la que embebe `expo-sqlite`) tira `near "EXISTS": syntax error` — y
+ * como estaba en el MISMO `execAsync` que crea las tablas base, CADA `abrirOutbox()` fallaba
+ * entero: `registrarPuntoGps` no llegaba a escribir un solo punto GPS, en foreground ni en
+ * headless, en ninguna instalación (nueva o vieja). Sacar el `IF NOT EXISTS` sin más tampoco
+ * alcanza: la segunda apertura del proceso (o cualquier instalación que ya tuviera la
+ * columna) rompería con `duplicate column name: enviado_at`.
+ *
+ * El fix real: `agregarColumnasFaltantes` (abajo) consulta `PRAGMA table_info` y SOLO corre el
+ * `ALTER TABLE` — sin `IF NOT EXISTS`, que ahí tampoco existe — cuando la columna todavía no
+ * está. Lista (no un solo campo) para que una migración de columna futura se agregue acá sin
+ * tocar la lógica de aplicación.
+ */
+export const MIGRACIONES_COLUMNAS_OUTBOX: readonly MigracionColumna[] = [
+  // Momento en que una fila pasó a 'enviado' -- NO es lo mismo que ts (la hora del FIX
+  // GPS/evento, que puede ser mucho más vieja que el intento de envío que la marcó).
+  // Necesaria para poder distinguir "recién se marcó enviado, el POST todavía puede estar en
+  // vuelo" de "quedó huérfana" -- ver recuperarEnviadosHuerfanos más abajo.
+  { tabla: 'outbox', columna: 'enviado_at', tipo: 'TEXT' },
+];
+
+/** `ALTER TABLE` plano (sin `IF NOT EXISTS`, que SQLite no soporta ahí) — pura, testeable sin
+ * `expo-sqlite`. El nombre de tabla/columna sale de `MIGRACIONES_COLUMNAS_OUTBOX` (constante
+ * interna, nunca de input de usuario), así que no hay riesgo de inyección al interpolarlo. */
+export function construirAgregarColumna(tabla: string, columna: string, tipo: string): string {
+  return `ALTER TABLE ${tabla} ADD COLUMN ${columna} ${tipo}`;
+}
+
+/** ¿Falta esta columna? Compara contra los nombres que devuelve `PRAGMA table_info(tabla)` —
+ * pura, no toca la base. */
+export function faltaColumna(columnasExistentes: string[], columna: string): boolean {
+  return !columnasExistentes.includes(columna);
+}
+
+/**
+ * R2 (hallazgo de `/codex-debug verify-fix` sobre `757af20`, ALTO): ¿este error es SQLite
+ * rechazando un `ALTER TABLE ... ADD COLUMN` porque la columna YA EXISTE? El mensaje que tira
+ * SQLite (y que `expo-sqlite`/`node:sqlite` propagan tal cual en `error.message`) es
+ * `duplicate column name: <columna>` — no viene tipado con un `code` propio (a diferencia de
+ * `esHandleNativoMuerto`, que sí puede apoyarse en `error.code`), así que el mensaje es la
+ * única señal disponible. Pura para poder testearla sin un error real de SQLite de por medio.
+ */
+export function esErrorColumnaDuplicada(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const message = 'message' in error ? (error as { message?: unknown }).message : undefined;
+  return typeof message === 'string' && /duplicate column name/i.test(message);
+}
+
+/**
+ * Aplica `MIGRACIONES_COLUMNAS_OUTBOX` una por una: por cada columna, lee `PRAGMA
+ * table_info(tabla)` y corre el `ALTER TABLE` SOLO si `faltaColumna` dice que no está — así
+ * es segura de llamar en CADA apertura del proceso (`abrirOutbox()` puede correr más de una
+ * vez por instalación, ver el comentario de `outboxPromise`) sin repetir un `ALTER TABLE`
+ * sobre una columna que ya existe (`duplicate column name`).
+ *
+ * R2 (hallazgo de `/codex-debug verify-fix`, ALTO — el guard de arriba NO alcanza): `PRAGMA
+ * table_info` + `ALTER TABLE` no son atómicos entre sí, y `abrirOutbox()` puede correr en dos
+ * CONTEXTOS JS a la vez (headless vs. foreground, ver el comentario de `outboxPromise`) sobre
+ * el MISMO archivo `quivo-outbox.db`. Si ambos leen el `PRAGMA` ANTES de que cualquiera de los
+ * dos corra su `ALTER TABLE`, los dos ven la columna ausente y los dos intentan agregarla — el
+ * segundo `ALTER TABLE` en llegar choca con `duplicate column name`, aunque el guard de arriba
+ * sea correcto (cada uno, por su cuenta, SÍ vio la columna ausente en el instante que consultó).
+ * No es una ventana teórica: es EXACTAMENTE el escenario que este archivo ya documenta para
+ * `abrirOutbox()`/`outboxPromise` — dos contextos abriendo la base en simultáneo.
+ *
+ * Fix: atrapar específicamente `duplicate column name` (`esErrorColumnaDuplicada`) y tratarlo
+ * como ÉXITO — la columna existe, que es justo la postcondición que este paso busca, sin
+ * importar QUIÉN la haya agregado. Cualquier otro error (SQL roto, tabla inexistente, etc.) se
+ * propaga tal cual — no hay nada seguro que asumir ahí.
+ */
+async function agregarColumnasFaltantes(db: SQLite.SQLiteDatabase): Promise<void> {
+  for (const migracion of MIGRACIONES_COLUMNAS_OUTBOX) {
+    const columnas = await db.getAllAsync<{ name: string }>(
+      `PRAGMA table_info(${migracion.tabla})`,
+    );
+    if (faltaColumna(columnas.map((columna) => columna.name), migracion.columna)) {
+      try {
+        await db.execAsync(
+          construirAgregarColumna(migracion.tabla, migracion.columna, migracion.tipo),
+        );
+      } catch (error) {
+        if (!esErrorColumnaDuplicada(error)) throw error;
+        // Otro contexto ganó la carrera y ya la agregó entre nuestro `PRAGMA` y este
+        // `ALTER TABLE` — la postcondición ("la columna existe") ya se cumple, seguimos.
+      }
+    }
+  }
+}
+
 async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLiteDatabase> {
   // Breadcrumb en CADA apertura (no solo la primera): un "apertura #847 de quivo-outbox.db"
   // habría gritado la causa raíz (frecuencia de apertura) desde el primer minuto del piloto.
@@ -85,17 +208,11 @@ async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLit
   );
   // DDL dentro de la promesa cacheada: corre una sola vez por proceso, nunca en el path de
   // escritura caliente (`encolarEvento`, hasta cientos de llamadas por jornada).
-  await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS outbox (
-      event_id TEXT PRIMARY KEY,
-      device_id TEXT NOT NULL,
-      ts TEXT NOT NULL,
-      tipo TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      estado TEXT NOT NULL DEFAULT 'pendiente'
-    );
-    CREATE INDEX IF NOT EXISTS outbox_estado_idx ON outbox(estado);
-  `);
+  await db.execAsync(DDL_OUTBOX);
+  // Migraciones de columna APARTE del `execAsync` de arriba (Hallazgo 1, ver el docblock de
+  // `MIGRACIONES_COLUMNAS_OUTBOX`): necesitan leer `PRAGMA table_info` antes de decidir si
+  // corren, algo que un solo `execAsync` de sentencias fijas no puede condicionar.
+  await agregarColumnasFaltantes(db);
   return db;
 }
 
@@ -392,8 +509,19 @@ export async function obtenerEventosPorTipo(
   return eventos;
 }
 
+/** Distinto de `actualizarEstado` (usado por `marcarAcusados` abajo): además del estado, sella
+ * `enviado_at` con el momento REAL de este intento — lo que `recuperarEnviadosHuerfanos`
+ * necesita para decidir si una fila `enviado` es un POST todavía en vuelo o una huérfana
+ * (hallazgo 3, ver esa función). */
 export async function marcarEnviados(db: SQLite.SQLiteDatabase, eventIds: string[]): Promise<void> {
-  await actualizarEstado(db, eventIds, 'enviado');
+  if (eventIds.length === 0) return;
+  const placeholders = eventIds.map(() => '?').join(',');
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync(
+      `UPDATE outbox SET estado = 'enviado', enviado_at = ? WHERE event_id IN (${placeholders})`,
+      [new Date().toISOString(), ...eventIds],
+    ),
+  );
 }
 
 /** El servidor acusó estos `event_id` puntuales (202 de QUI-240) — quedan sincronizados de
@@ -403,13 +531,97 @@ export async function marcarAcusados(db: SQLite.SQLiteDatabase, eventIds: string
   await actualizarEstado(db, eventIds, 'acusado');
 }
 
-/** Reintento tras fallo de red/timeout del lote completo: vuelve `enviado` -> `pendiente`
- * para que el próximo ciclo de sync los tome de nuevo (con backoff, ver QUI-240). */
+/**
+ * SQL de la reversión con GUARDA DE ESTADO, aislado como función pura para poder testearlo sin
+ * un módulo nativo de por medio (mismo patrón que `construirPurgaAcusados`, arriba).
+ *
+ * 🔴 BUG DE PRODUCCIÓN que este guard corrige: `sincronizarPendientes`
+ * (`features/operacion/sync-outbox.ts`) marca el lote entero `enviado`, lo manda, y en su
+ * `catch` (fallo de red/timeout) revertía el LOTE ENTERO a `pendiente` sin mirar qué pasó con
+ * cada `event_id` puntual. Si el POST llegó al servidor y se procesó (202 de QUI-240) pero la
+ * RESPUESTA se perdió en el camino de vuelta (timeout de 20 s, red boliviana), el servidor YA
+ * tiene esos eventos — pero el cliente, sin este guard, los devolvía a `pendiente` igual y los
+ * reenviaba PARA SIEMPRE, sin que nada los volviera a marcar `acusado` (el próximo acuse del
+ * servidor no vuelve a mencionar un `event_id` que ya procesó antes). `acusado` es un estado
+ * TERMINAL — es el contrato de QUI-238 ("`acusado` = confirmado por el servidor") — y nada debe
+ * sacarlo de ahí. El `AND estado = 'enviado'` hace que solo los eventos que de verdad siguen en
+ * vuelo (nadie los acusó todavía) vuelvan a `pendiente`; un `event_id` que ya está `acusado` no
+ * matchea la condición y la fila queda intacta.
+ */
+export function construirRevertirAPendiente(
+  eventIds: string[],
+): { sql: string; params: string[] } {
+  const placeholders = eventIds.map(() => '?').join(',');
+  return {
+    sql: `UPDATE outbox SET estado = 'pendiente' WHERE event_id IN (${placeholders}) AND estado = 'enviado'`,
+    params: [...eventIds],
+  };
+}
+
+/** Reintento tras fallo de red/timeout del lote completo: vuelve `enviado` -> `pendiente` para
+ * que el próximo ciclo de sync los tome de nuevo (con backoff, ver QUI-240). Ver
+ * `construirRevertirAPendiente` para el porqué del guard de estado — a diferencia de
+ * `marcarEnviados`/`marcarAcusados` (que pasan por `actualizarEstado` sin condición, porque ahí
+ * el estado de origen no importa), esta función NUNCA debe poder pisar un `acusado`. */
 export async function revertirAPendiente(
   db: SQLite.SQLiteDatabase,
   eventIds: string[],
 ): Promise<void> {
-  await actualizarEstado(db, eventIds, 'pendiente');
+  if (eventIds.length === 0) return;
+  const { sql, params } = construirRevertirAPendiente(eventIds);
+  await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
+}
+
+/**
+ * Hallazgo 3 (code review, MEDIO — `sincronizarPendientes`, `features/operacion/sync-outbox.ts`):
+ * marca el lote `enviado` ANTES del POST, y solo lo revierte a `pendiente` en su propio
+ * `catch` (fallo de red visible). Si Android mata la tarea headless A MITAD del POST (el
+ * proceso muere entero, ningún `catch` de JS llega a correr), o el POST queda colgado más
+ * allá del TTL de 60 s del lease (`docs/handoff.md` documenta que en Android, con la Activity
+ * pausada, OkHttp puede no respetar ningún timeout propio), esas filas quedan `enviado` PARA
+ * SIEMPRE — nadie las revierte y `obtenerLotePendiente` solo mira `estado = 'pendiente'`. El
+ * comentario original de `drenaje-oportunista.ts` ("colgado hasta el próximo intento") era
+ * falso: sin este reproceso, ES pérdida definitiva de evidencia legal (RF-67..73), no una
+ * demora.
+ *
+ * Reenviar es SEGURO por construcción: la ingesta del servidor es idempotente por `eventId`
+ * (`ON CONFLICT (event_id, ts) DO NOTHING`, ver el comentario de cabecera de este archivo) —
+ * si el POST huérfano en realidad SÍ llegó a procesarse del lado del servidor antes de que el
+ * proceso muriera, reenviarlo no duplica nada, solo repite trabajo ya hecho.
+ *
+ * `antesDe` la decide el caller según SU contexto (el umbral tiene que ser mayor que el
+ * timeout del request Y que el TTL del lease de drenado — ver
+ * `UMBRAL_RECUPERACION_ENVIADOS_MS`, `drenaje-oportunista.ts` — para no reclamar como
+ * "huérfano" un POST que en realidad sigue vivo y a punto de resolver).
+ *
+ * `COALESCE(enviado_at, ts)`: filas `enviado` de una instalación de ANTES de esta columna (o
+ * de una corrida que falló entre el `ALTER TABLE` y el primer `marcarEnviados` tras
+ * actualizar) no tienen `enviado_at` — se usa `ts` (la hora de creación del evento, siempre
+ * más vieja que cuando se marcó `enviado`) como piso conservador: una fila sin `enviado_at`
+ * es, como mínimo, tan vieja como parece por su `ts`, así que cae del lado seguro de la
+ * recuperación en vez de quedar bloqueada para siempre por falta de dato.
+ *
+ * Guarda respetada (Entrega 1): solo transiciona `estado = 'enviado'` — un `acusado` nunca
+ * matchea esta condición, exactamente igual que `construirRevertirAPendiente`.
+ */
+export function construirRecuperarEnviadosHuerfanos(
+  antesDe: Date,
+): { sql: string; params: string[] } {
+  return {
+    sql: "UPDATE outbox SET estado = 'pendiente' WHERE estado = 'enviado' AND COALESCE(enviado_at, ts) < ?",
+    params: [antesDe.toISOString()],
+  };
+}
+
+/** Aplica `construirRecuperarEnviadosHuerfanos` — ver su docblock. Devuelve la cantidad de
+ * filas recuperadas (0 en el caso común: nada quedó huérfano). */
+export async function recuperarEnviadosHuerfanos(
+  db: SQLite.SQLiteDatabase,
+  antesDe: Date,
+): Promise<number> {
+  const { sql, params } = construirRecuperarEnviadosHuerfanos(antesDe);
+  const result = await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
+  return result.changes;
 }
 
 /** Tipo de evento cuya evidencia local se preserva mientras la sesión siga activa: es el único
@@ -485,6 +697,267 @@ async function actualizarEstado(
       ...eventIds,
     ]),
   );
+}
+
+/**
+ * Lease de exclusión mutua para el drenado oportunista del outbox en background (Entrega 2,
+ * `docs/plan-correccion-post-piloto-2026-09-09.md`). Vive en la propia SQLite del outbox —NO
+ * en un `let` de módulo— porque el mutex tiene que cruzar CONTEXTOS JS: la tarea headless de
+ * Transistorsoft y el hook de foreground pueden correr en procesos/contextos JS distintos en
+ * Android (a diferencia de la cola en memoria de `headless-task.ts`, que sí puede asumir un
+ * único contexto para `registrarPuntoGps` porque ese SÍ está documentado como compartido —
+ * ver `HeadlessTaskManager.java:184-206` citado en `docs/handoff.md`). Un `let` de módulo NO
+ * cubre ese caso: cada contexto JS tiene su propia copia, así que dos "mutex" en memoria
+ * distintos nunca se ven entre sí y el mismo lote se drenaría dos veces en paralelo.
+ *
+ * Una sola fila por `id` (`sync_lease.id` es PK) sirve DOS propósitos con el mismo mecanismo:
+ * - **Mutex entre contextos**: mientras `expira_at` esté en el futuro, la fila está "tomada" y
+ *   nadie más puede adquirirla.
+ * - **Piso de 10 s entre intentos + backoff**: `liberarLeaseConCooldown` no borra la fila al
+ *   terminar — la deja "tomada" hasta `ahora + cooldown`. Un éxito libera con el piso fijo
+ *   (10 s); un fallo libera con el backoff exponencial vigente. El próximo intento, sea del
+ *   mismo contexto o del otro, encuentra la fila todavía vigente y desiste sin tocar la red.
+ *
+ * El TTL es OBLIGATORIO (ver `adquirirLease`): si el proceso muere a mitad de un drenado (la
+ * app es matada por Android, un crash) sin llegar a liberar, la fila queda "tomada" con el
+ * `expira_at` que se le puso AL ADQUIRIR (el TTL de la operación, no el del cooldown) — pasado
+ * ese punto cualquier intento nuevo la recupera solo. Sin este TTL, un lease huérfano
+ * bloquearía el drenado para siempre y el outbox nunca más se vaciaría en background.
+ */
+export const ID_LEASE_DRENAJE = 'drenaje-outbox';
+
+/**
+ * Piso duro entre intentos EXITOSOS del drenado oportunista (Entrega 2) — evita que un GPS a
+ * alta frecuencia (`distanceFilter` 15 m ≈ cada pocos segundos a velocidad de calle) dispare
+ * un POST por cada fix. Vive ACÁ (no en `drenaje-oportunista.ts`, su dueño original) porque
+ * `sync-outbox.ts` también lo necesita para su propia variante con lease (hallazgo 6, code
+ * review: `iniciarSyncAutomatico` llamaba a `sincronizarPendientes` SIN pasar por el lease) —
+ * `sync-outbox.ts` no puede importar de `drenaje-oportunista.ts` sin crear un ciclo, porque
+ * `drenaje-oportunista.ts` ya importa `sincronizarPendientes` DESDE `sync-outbox.ts`.
+ */
+export const PISO_ENTRE_INTENTOS_DRENAJE_MS = 10_000;
+
+/** TTL del lease en sí (distinto del cooldown de arriba) — ver el comentario de
+ * `ID_LEASE_DRENAJE`. Mismo motivo de ubicación que `PISO_ENTRE_INTENTOS_DRENAJE_MS`. */
+export const TTL_LEASE_DRENAJE_MS = 60_000;
+
+/**
+ * G1 (hallazgo de `/codex-debug verify-fix`, ALTO, sobre `ea3d84e`/`fe36953`): mismo mutex
+ * entre contextos JS que `ID_LEASE_DRENAJE`, pero para el REFRESH de tokens en vez del
+ * drenado. `reconciliarConDisco` (`use-auth-movil.ts`) releía SecureStore antes de intentar,
+ * pero eso solo cierra la ventana DENTRO de un mismo contexto (el single-flight en memoria,
+ * `refrescosEnVuelo`, tampoco cruza contextos) — foreground y headless corren en contextos JS
+ * DISTINTOS en Android, y pueden leer el MISMO refresh token T0 antes de que ninguno de los
+ * dos lo rote. Con la fila `sync_lease` reutilizada bajo este `id` distinto, solo un contexto
+ * puede estar releyendo+refrescando+persistiendo a la vez — el otro espera (o, si el que
+ * tiene el lease ya rotó, relee disco al entrar y adopta el token nuevo SIN tocar la red — ver
+ * `ejecutarRefresh` en `use-auth-movil.ts`).
+ */
+export const ID_LEASE_REFRESH_SESION = 'refresh-sesion';
+
+/**
+ * TTL del lease de refresh — holgado sobre `REQUEST_TIMEOUT_MS` (12 s, `auth-movil-api.ts`),
+ * la única llamada de red que corre bajo este lease. G1 (hallazgo de `/codex-debug verify-fix`
+ * ronda 4, ALTO): el margen anterior (3 s) no dejaba lugar a que el `setTimeout` del request
+ * (que NO acota una suspensión del runtime, solo el tiempo de red una vez que el JS corre) más
+ * las relecturas de SecureStore/escritura final se completaran antes de que el TTL venciera.
+ * Subido a 8 s de margen (20 s total): cubre esas relecturas/escritura con holgura real bajo
+ * carga, sin pretender ser una garantía — la garantía de fondo NO es este margen, es el
+ * compare-and-set de `ejecutarRefresh` (`renovarLease` justo antes de persistir, en
+ * `use-auth-movil.ts`): si el margen igual no alcanza y el lease se pierde después de que el
+ * servidor ya rotó, ese chequeo detecta la pérdida y aborta la persistencia insegura en vez de
+ * arriesgar pisar el estado de otro contexto — ver su docblock para el caso aceptado
+ * explícitamente que queda (el próximo 401 exige un login limpio).
+ */
+export const TTL_LEASE_REFRESH_SESION_MS = 20_000;
+
+/**
+ * Punto 4 (code review 2026-09-25): mutex propio para la colección de revocaciones pendientes
+ * (`REVOCACIONES_PENDIENTES_KEY`, `sesion-movil-store.ts`) — `guardarRevocacionPendiente`/
+ * `borrarRevocacionPendientePorId` hacen relectura+escritura sobre esa clave de SecureStore sin
+ * ninguna sincronización, y foreground/headless pueden pisarse (una entrada que
+ * `ejecutarLogout` acaba de agregar desaparece si una pasada de `intentarRevocacionesPendientes`
+ * ya había releído la colección ANTES de esa escritura).
+ *
+ * Deliberadamente UN `id` de lease DISTINTO a `ID_LEASE_REFRESH_SESION`, no el mismo (aunque el
+ * hallazgo original lo sugería): `ejecutarLogout` (`use-auth-movil.ts`) llama a
+ * `guardarRevocacionPendiente`/`borrarRevocacionPendientePorId` MIENTRAS ya tiene tomado
+ * `ID_LEASE_REFRESH_SESION` para sí mismo — reusar ese mismo lease acá autobloquearía esa
+ * escritura contra su propio dueño (el mismo contexto JS, pero un `token` distinto no es
+ * reentrante para este mecanismo). Un lease separado, de vida brevísima (solo cubre leer +
+ * escribir un blob JSON chico de SecureStore, nunca una llamada de red), evita ese
+ * autobloqueo sin perder la propiedad que importa: exclusión mutua entre CONTEXTOS JS
+ * distintos sobre la MISMA colección.
+ */
+export const ID_LEASE_REVOCACIONES_PENDIENTES = 'revocaciones-pendientes';
+
+/** TTL brevísimo a propósito (ver el comentario de `ID_LEASE_REVOCACIONES_PENDIENTES`): la
+ * sección crítica que cubre es solo leer+parsear+escribir SecureStore, nunca una llamada de
+ * red — unos pocos cientos de ms de margen alcanzan de sobra, y un TTL corto hace que un
+ * lease huérfano (proceso matado a mitad de la escritura) se libere solo rápido. */
+export const TTL_LEASE_REVOCACIONES_PENDIENTES_MS = 3_000;
+
+/**
+ * Hallazgo 4 (code review, BAJO — reloj de pared sin cota superior): `adquirirLease` compara
+ * `expira_at` contra `Date.now()` con reloj de PARED, sin ninguna cota — si el reloj del
+ * teléfono estaba adelantado y salta hacia atrás (corrección NTP, o el chofer lo ajusta a
+ * mano) en X ms, una fila escrita bajo el reloj VIEJO (adelantado) queda con `expira_at` hasta
+ * X ms en el futuro DEL RELOJ NUEVO — `adquirirLease` la ve "tomada" y falla todo ese tiempo,
+ * aunque nadie esté drenando de verdad y el dueño original ya haya terminado (o muerto) hace
+ * rato.
+ *
+ * Fix: tratar el lease como libre TAMBIÉN si `expira_at` está a más de esta cota en el futuro
+ * — ningún camino LEGÍTIMO de este lease (adquisición con `TTL_LEASE_DRENAJE_MS`, liberación
+ * con el piso fijo de `PISO_ENTRE_INTENTOS_DRENAJE_MS` o con el backoff exponencial de
+ * `drenaje-oportunista.ts`/`sync-outbox.ts`, que topea en 60 s en los dos) escribe, bajo un
+ * reloj ESTABLE, un `expira_at` más de `TTL_LEASE_DRENAJE_MS` (60 s) en el futuro. El doble de
+ * margen sobre ese peor caso (120 s en vez de 60 s) es a propósito: un lease legítimo recién
+ * adquirido nunca se acerca a esa cota, así que nunca se libera de más por error — solo un
+ * salto de reloj hacia atrás mayor a 60 s produce un `expira_at` que la cruza.
+ *
+ * Duplicado acá en vez de importado desde `drenaje-oportunista.ts`/`sync-outbox.ts` (que YA
+ * importan de `outbox.ts` — un import en sentido contrario crearía un ciclo).
+ *
+ * R (hallazgo de `/codex-debug verify-fix`, regresión evaluada, NO corregida a propósito):
+ * `ID_LEASE_REFRESH_SESION` reutiliza el MISMO `construirAdquirirLease`/esta misma cota, con un
+ * TTL propio menor (`TTL_LEASE_REFRESH_SESION_MS`, 15 s). La cota queda fija en
+ * `TTL_LEASE_DRENAJE_MS + 60_000` (120 s) para AMBOS leases — más holgada de lo estrictamente
+ * necesario para el de refresh, pero eso solo hace el margen de seguridad más grande, nunca más
+ * chico: un salto de reloj hacia atrás sigue necesitando superar 120 s para colar un
+ * `expira_at` fantasma, igual que en el lease de drenado. La ventana de drenados/refrescos
+ * concurrentes que ese salto podría abrir (documentada arriba) queda acotada por el TTL de
+ * CADA lease — 15 s en el de refresh, más angosta que los 60 s del de drenado — y no se cierra
+ * del todo por diseño: la cota es una red de seguridad contra un lease huérfano, no una prueba
+ * de reloj monótono. Aceptado tal cual, sin cambios, para esta entrega.
+ */
+export const COTA_SANIDAD_LEASE_MS = TTL_LEASE_DRENAJE_MS + 60_000;
+
+/**
+ * UPSERT atómico con guarda temporal: adquiere la fila `id` SOLO si no existe todavía, si su
+ * `expira_at` ya pasó (`ahoraMs`), o si `expira_at` está tan lejos en el futuro que solo puede
+ * explicarse por un salto de reloj hacia atrás (Hallazgo 4, `COTA_SANIDAD_LEASE_MS`) — soporta
+ * desde SQLite 3.35 (UPSERT con cláusula `WHERE` en `DO UPDATE`, muy por debajo de lo que
+ * embebe `expo-sqlite`). `changes > 0` es la señal de "adquirido": si la fila existe y ninguna
+ * de las dos condiciones matchea, la cláusula `WHERE` del `DO UPDATE` no matchea y SQLite
+ * trata el statement entero como no-op (0 filas afectadas, sin lanzar ningún error de
+ * constraint) — un solo `runAsync` resuelve "¿está libre (o parece corrupta)? si sí, tomala"
+ * sin ventana entre el chequeo y la toma, que es exactamente lo que dos contextos JS
+ * compitiendo por el mismo lease necesitan.
+ *
+ * `token` identifica a ESTE intento puntual (no al proceso ni al contexto) — ver
+ * `construirLiberarLeaseConCooldown` para el porqué: solo el dueño legítimo puede liberar.
+ */
+export function construirAdquirirLease(
+  id: string,
+  token: string,
+  ahoraMs: number,
+  expiraAtMs: number,
+): { sql: string; params: (string | number)[] } {
+  return {
+    sql: `
+      INSERT INTO sync_lease (id, owner, expira_at) VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, expira_at = excluded.expira_at
+      WHERE sync_lease.expira_at <= ? OR sync_lease.expira_at > ?
+    `,
+    params: [id, token, expiraAtMs, ahoraMs, ahoraMs + COTA_SANIDAD_LEASE_MS],
+  };
+}
+
+/**
+ * Intenta tomar el lease `id` para `token`. `ttlMs` es el techo de seguridad de ESTA operación
+ * (no el cooldown post-éxito, ver `liberarLeaseConCooldown`): generoso a propósito (cubre un
+ * `POST /v1/sync/batches` completo + el reintento de handle muerto de
+ * `conReintentoSiHandleMuerto`) para no expirar un drenado que sigue vivo y legítimo, pero
+ * finito — es la única red de seguridad contra un lease huérfano si el proceso muere a mitad
+ * de la operación sin liberar.
+ */
+export async function adquirirLease(
+  db: SQLite.SQLiteDatabase,
+  id: string,
+  token: string,
+  ahoraMs: number,
+  ttlMs: number,
+): Promise<boolean> {
+  const { sql, params } = construirAdquirirLease(id, token, ahoraMs, ahoraMs + ttlMs);
+  const result = await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
+  return result.changes > 0;
+}
+
+/**
+ * Condicionado por `owner = token` (no solo por `id`): entre que un contexto ADQUIERE el lease
+ * (con un TTL holgado, arriba) y lo LIBERA, otro contexto puede haber reclamado la misma fila
+ * como huérfana si el TTL alcanzó a vencer mientras el primero seguía trabajando (más lento de
+ * lo previsto, pero sin haber muerto). Sin el filtro por `owner`, la liberación tardía del
+ * primero pisaría el lease del segundo, que en ese momento sigue legítimamente en vuelo — dos
+ * drenados concurrentes, justo lo que el lease existe para impedir. Con el filtro, una
+ * liberación tardía sobre un lease que ya cambió de dueño simplemente no afecta ninguna fila
+ * (`changes === 0`), silenciosamente — no hay nada que reportar, el nuevo dueño sigue su curso.
+ */
+export function construirLiberarLeaseConCooldown(
+  id: string,
+  token: string,
+  ahoraMs: number,
+  cooldownMs: number,
+): { sql: string; params: (string | number)[] } {
+  return {
+    sql: 'UPDATE sync_lease SET expira_at = ? WHERE id = ? AND owner = ?',
+    params: [ahoraMs + cooldownMs, id, token],
+  };
+}
+
+/**
+ * Libera el lease dejándolo "tomado" hasta `ahoraMs + cooldownMs` — nunca lo borra, porque ese
+ * cooldown ES el piso de 10 s / backoff entre intentos (ver el comentario de `ID_LEASE_DRENAJE`
+ * arriba). El próximo `adquirirLease`, en cualquier contexto, ve `expira_at` todavía en el
+ * futuro y desiste sin tocar la red hasta que venza.
+ */
+export async function liberarLeaseConCooldown(
+  db: SQLite.SQLiteDatabase,
+  id: string,
+  token: string,
+  ahoraMs: number,
+  cooldownMs: number,
+): Promise<void> {
+  const { sql, params } = construirLiberarLeaseConCooldown(id, token, ahoraMs, cooldownMs);
+  await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
+}
+
+/**
+ * R1 (hallazgo de `/codex-debug verify-fix` sobre `5379e00`/`cf1601f`, ALTO): renueva el lease
+ * `id` para `token`, empujando `expira_at` a `ahoraMs + ttlMs` — MISMO SQL que
+ * `construirLiberarLeaseConCooldown` (un `UPDATE` condicionado por `owner = token`), pero
+ * llamado ANTES de cada lote de un drenado encadenado (`drenarLotesConLease`,
+ * `features/operacion/sync-outbox.ts`), no solo al liberar al final.
+ *
+ * Sin esto, un encadenado de hasta `TOPE_LOTES_POR_CICLO_DRENAJE` lotes (hasta 10k eventos)
+ * podía superar el TTL de 60 s del lease SIN renovarlo — la fila quedaba "tomada" según el
+ * `expira_at` de la ADQUISICIÓN original mientras el drenado real seguía en curso mucho más
+ * allá de ese instante. Pasado el TTL, cualquier otro contexto (headless vs. foreground) ve la
+ * fila como huérfana y la toma — dos drenados concurrentes, justo lo que el lease existe para
+ * impedir.
+ *
+ * Devuelve si la renovación tuvo efecto: `changes > 0` (`true`) significa "sigo siendo el
+ * dueño, renovado"; `0` (`false`) significa que la fila YA NO ES MÍA — o bien otro contexto la
+ * tomó porque mi TTL alcanzó a vencer entre lotes, o bien un salto de reloj hacia atrás la hizo
+ * pasar la cota de sanidad (`COTA_SANIDAD_LEASE_MS`) y algún tercero la reclamó como huérfana.
+ * El caller (`drenarLotesConLease`) debe cortar el bucle DE INMEDIATO ante `false`, SIN llamar
+ * a `liberarLeaseConCooldown` — liberar acá pisaría el lease legítimo del nuevo dueño. Acota
+ * (no elimina del todo) el hallazgo R3 de la misma verificación: un dueño desplazado por la
+ * cota de reloj lo detecta a más tardar en el lote SIGUIENTE (nunca sigue enviando a ciegas
+ * indefinidamente), y como la ingesta del servidor es idempotente por `eventId`
+ * (`ON CONFLICT ... DO NOTHING`), a lo sumo el lote que estaba en vuelo en ese instante se
+ * solapa con el que arranca el nuevo dueño — nunca pérdida ni duplicación permanente.
+ */
+export async function renovarLease(
+  db: SQLite.SQLiteDatabase,
+  id: string,
+  token: string,
+  ahoraMs: number,
+  ttlMs: number,
+): Promise<boolean> {
+  const { sql, params } = construirLiberarLeaseConCooldown(id, token, ahoraMs, ttlMs);
+  const result = await conReintentoSiHandleMuerto(db, (dbActiva) => dbActiva.runAsync(sql, params));
+  return result.changes > 0;
 }
 
 function toEventoOutboxRow(row: OutboxRowCruda): EventoOutboxRow {

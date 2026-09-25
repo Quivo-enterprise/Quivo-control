@@ -1,0 +1,2 @@
+>>> Punto: perfil=c1 objetivo=2000pts/s sync=15s K=20 duracion=300s calentamiento=60s concurrencia=1 remoto=false
+<<< Punto: PASA — {"throughputInsuficiente":false,"p95LoteAlto":false,"filasPerdidas":false,"backlogNoSostenido":false,"corridaInvalida":false,"generadorProcesoFallo":false,"lecturasProcesoFallo":false,"lecturasSinResultado":false,"lecturasSinDatos":false,"lecturasConErrorAlto":false}

@@ -1,0 +1,41 @@
+
+---stderr---
+[lecturas.mjs] modo LOCAL -> localhost:55432/quivo_control (Docker quivo-carga-pg)
+Lecturas: K=0 monitores, calentamiento=60s, medicion=300s
+Fin de calentamiento (lecturas), empieza medición.
+{
+  "K": 0,
+  "duracionMedicionS": 300,
+  "poolSize": 2,
+  "listarHoy": {
+    "n": 0,
+    "errores": 0,
+    "tasaErrorPct": 0,
+    "p50Ms": null,
+    "p95Ms": null,
+    "p99Ms": null,
+    "poolWaitP50Ms": null,
+    "poolWaitP95Ms": null
+  },
+  "obtenerPosiciones": {
+    "n": 0,
+    "errores": 0,
+    "tasaErrorPct": 0,
+    "p50Ms": null,
+    "p95Ms": null,
+    "p99Ms": null,
+    "poolWaitP50Ms": null,
+    "poolWaitP95Ms": null
+  },
+  "obtenerTraza": {
+    "n": 0,
+    "errores": 0,
+    "tasaErrorPct": 0,
+    "p50Ms": null,
+    "p95Ms": null,
+    "p99Ms": null,
+    "poolWaitP50Ms": null,
+    "poolWaitP95Ms": null
+  },
+  "erroresMuestra": []
+}

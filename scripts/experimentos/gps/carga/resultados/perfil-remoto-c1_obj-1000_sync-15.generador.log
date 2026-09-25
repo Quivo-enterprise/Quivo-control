@@ -1,0 +1,39 @@
+
+---stderr---
+[generador.mjs] modo REMOTO -> host=34.176.39.129 puerto=5432 db=quivo_carga sslmode=require
+Generador: objetivo=1000 pts/s, sync=15s, trufis=1000, concurrencia=8, calentamiento=60s, medicion=300s
+Fin de calentamiento, empieza medición.
+INFO: backlog al cierre de la ventana medida (instantáneo, antes de drenar) = 8772 lote(s) (131580 filas) — se intenta drenar a continuación con deadline de 30s.
+AUTOCONTROL: 7498 lote(s) (112470 filas) sin drenar tras 30s de drenado (≤2 intervalos de sync) — el perfil NO sostiene esta tasa (backlog no drena en tiempo acotado).
+{
+  "objetivoPtsSeg": 1000,
+  "syncSegundos": 15,
+  "concurrencia": 8,
+  "trufis": 1000,
+  "duracionMedicionS": 300,
+  "tasaOfrecidaPtsSeg": 1000,
+  "desviacionOfrecidaPct": 0,
+  "corridaValida": true,
+  "sostenido": false,
+  "backlogAlCierre": 8772,
+  "filasEnBacklogAlCierre": 131580,
+  "backlogAbandonadoTrasDrenado": 7498,
+  "filasAbandonadasTrasDrenado": 112470,
+  "lotesEnviados": 12684,
+  "lotesConfirmados": 12684,
+  "lotesFallidos": 0,
+  "filasEnviadas": 190260,
+  "filasConfirmadas": 190260,
+  "filasPerdidas": 0,
+  "throughputLogradoPtsSeg": 634.2,
+  "throughputVsObjetivoPct": 63.42000000000001,
+  "latenciaLoteMs": {
+    "p50": 187.49216999998316,
+    "p95": 199.3305499999551,
+    "p99": 222.03769700002158,
+    "max": 421.9108460000134
+  },
+  "backlogMaximo": 8721,
+  "backlogPromedio": 4373.0446927374305,
+  "erroresMuestra": []
+}

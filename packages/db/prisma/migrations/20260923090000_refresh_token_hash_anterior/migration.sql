@@ -1,0 +1,15 @@
+-- Hallazgo 5 (code review, SEGURIDAD -- docs/plan-correccion-post-piloto-2026-09-09.md):
+-- POST /logout es publico, y su rama de fallback (cuando el refreshToken recibido ya no
+-- matchea el hash VIGENTE de ninguna sesion) cerraba la sesion ACTIVA de ese deviceId sin
+-- exigir ninguna prueba de que quien llama alguna vez tuvo un refreshToken real de esa
+-- sesion. `deviceId` no es secreto (en-vivo.service.ts/recorridos.service.ts lo devuelven a
+-- usuarios web), asi que cualquiera que lo conociera podia desloguear a un chofer en ruta
+-- una y otra vez con un string inventado de 32+ caracteres como "refreshToken".
+--
+-- Fix (ver AuthMovilService.refresh/logout): guardar el hash que CADA rotacion de refresh()
+-- deja atras (el que se esta reemplazando), para que el fallback de logout() pueda exigir
+-- que el refreshToken recibido coincida con ESE hash -- prueba de posesion de un token REAL
+-- emitido por el servidor para esta sesion, no solo conocimiento del deviceId. Nullable:
+-- sesiones que nunca refrescaron (o filas de antes de esta columna) simplemente no tienen
+-- fallback posible, que es el comportamiento seguro por defecto.
+ALTER TABLE "sesiones_operativas" ADD COLUMN "refreshTokenHashAnterior" TEXT;

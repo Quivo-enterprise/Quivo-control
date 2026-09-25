@@ -1,0 +1,32 @@
+{
+  "objetivoPtsSeg": 1000,
+  "syncSegundos": 15,
+  "concurrencia": 1,
+  "trufis": 1000,
+  "duracionMedicionS": 300,
+  "tasaOfrecidaPtsSeg": 1000,
+  "desviacionOfrecidaPct": 0,
+  "corridaValida": true,
+  "sostenido": true,
+  "backlogAlCierre": 0,
+  "filasEnBacklogAlCierre": 0,
+  "backlogAbandonadoTrasDrenado": 0,
+  "filasAbandonadasTrasDrenado": 0,
+  "lotesEnviados": 20000,
+  "lotesConfirmados": 20000,
+  "lotesFallidos": 0,
+  "filasEnviadas": 300000,
+  "filasConfirmadas": 300000,
+  "filasPerdidas": 0,
+  "throughputLogradoPtsSeg": 1000,
+  "throughputVsObjetivoPct": 100,
+  "latenciaLoteMs": {
+    "p50": 8.524105999997118,
+    "p95": 9.893910999991931,
+    "p99": 10.543507999973372,
+    "max": 21.876228000000992
+  },
+  "backlogMaximo": 4,
+  "backlogPromedio": 0.3687150837988827,
+  "erroresMuestra": []
+}

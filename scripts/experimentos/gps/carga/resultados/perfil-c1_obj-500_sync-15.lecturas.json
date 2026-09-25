@@ -1,0 +1,23 @@
+{
+  "K": 0,
+  "duracionMedicionS": 300,
+  "listarHoy": {
+    "n": 0,
+    "p50Ms": null,
+    "p95Ms": null,
+    "p99Ms": null
+  },
+  "obtenerPosiciones": {
+    "n": 0,
+    "p50Ms": null,
+    "p95Ms": null,
+    "p99Ms": null
+  },
+  "obtenerTraza": {
+    "n": 0,
+    "p50Ms": null,
+    "p95Ms": null,
+    "p99Ms": null
+  },
+  "erroresMuestra": []
+}

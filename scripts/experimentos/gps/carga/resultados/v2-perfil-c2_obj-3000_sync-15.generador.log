@@ -1,0 +1,38 @@
+
+---stderr---
+[generador.mjs] modo LOCAL -> localhost:55432/quivo_control (Docker quivo-carga-pg)
+Generador: objetivo=3000 pts/s, sync=15s, trufis=3000, concurrencia=1, calentamiento=60s, medicion=300s
+Fin de calentamiento, empieza medición.
+INFO: backlog al cierre de la ventana medida (instantáneo, antes de drenar) = 4 lote(s) (60 filas) — se intenta drenar a continuación con deadline de 30s.
+{
+  "objetivoPtsSeg": 3000,
+  "syncSegundos": 15,
+  "concurrencia": 1,
+  "trufis": 3000,
+  "duracionMedicionS": 299.999,
+  "tasaOfrecidaPtsSeg": 2999.959999866666,
+  "desviacionOfrecidaPct": 0.0013333377778053546,
+  "corridaValida": true,
+  "sostenido": true,
+  "backlogAlCierre": 4,
+  "filasEnBacklogAlCierre": 60,
+  "backlogAbandonadoTrasDrenado": 0,
+  "filasAbandonadasTrasDrenado": 0,
+  "lotesEnviados": 59997,
+  "lotesConfirmados": 59997,
+  "lotesFallidos": 0,
+  "filasEnviadas": 899955,
+  "filasConfirmadas": 899955,
+  "filasPerdidas": 0,
+  "throughputLogradoPtsSeg": 2999.8599995333316,
+  "throughputVsObjetivoPct": 99.99533331777772,
+  "latenciaLoteMs": {
+    "p50": 2.9834290000144392,
+    "p95": 5.3839589999988675,
+    "p99": 8.075449000025401,
+    "max": 24.72215399995912
+  },
+  "backlogMaximo": 10,
+  "backlogPromedio": 1.910614525139665,
+  "erroresMuestra": []
+}

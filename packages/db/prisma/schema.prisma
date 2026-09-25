@@ -548,6 +548,13 @@ model SesionOperativa {
   estado           String     @default("activa")
   accessTokenHash  String     @unique
   refreshTokenHash String     @unique
+  // Hallazgo 5 (code review, SEGURIDAD — `docs/plan-correccion-post-piloto-2026-09-09.md`):
+  // el hash del refreshToken que `refresh()` ACABA de rotar hacia afuera, para poder probar
+  // "prueba de posesión" en el fallback de `logout()` sin necesitar una tabla de historial
+  // completa — ver el docblock de `AuthMovilService.logout`. Nullable: sesiones que nunca
+  // refrescaron (o instaladas antes de esta columna) simplemente no tienen fallback posible,
+  // que es el comportamiento seguro por defecto.
+  refreshTokenHashAnterior String?
   accessExpiresAt  DateTime
   refreshExpiresAt DateTime
   revokedAt        DateTime?
@@ -633,6 +640,18 @@ model Sancion {
 // `gps_points`) — verificado a mano, ver esa migración — así que la policy se repite
 // también en cada partición, existente y futura (`crear_particion_gps_points` quedó
 // redefinida para hacerlo sola en cada partición nueva).
+//
+// `gps_sesion_resumen` (docs/plan-en-vivo-resumen-sesion.md, `20260922100000_gps_sesion_resumen`)
+// tampoco tiene modelo Prisma, aunque NO está particionada: es el agregado por
+// (sesion_id, jornada, "sindicatoId") que mantiene `insertarGpsPoints` con un upsert
+// `ON CONFLICT DO UPDATE` que compara `EXCLUDED` contra la fila existente campo por campo
+// (para que un punto tardío no pise la última posición) — ese control fino no se expresa
+// con `createMany`/`upsert` de Prisma en una sola sentencia, así que se maneja 100% con
+// `$queryRaw`/`$executeRaw`, igual que `gps_points`. `"sindicatoId"` es parte de la PK
+// (code-review MEDIUM, cross-tenant poisoning: `sesion_id` llega del payload del cliente y
+// el upsert corre como `admin_quivo`) — dos tenants nunca pueden colisionar en la misma
+// fila. Lo leen `listarHoy`/`obtenerPosiciones` (en-vivo.service.ts) en vez de agregar sobre
+// `gps_points` en cada request.
 
 /**
  * Cumplimiento de un punto de control durante un recorrido — evento `cumplimiento_punto_control`
