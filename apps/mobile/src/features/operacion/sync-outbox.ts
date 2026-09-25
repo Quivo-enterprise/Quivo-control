@@ -107,12 +107,20 @@ export function programarPurgaOutbox(sesionIdActiva?: string): Promise<void> {
 }
 
 /** Un ciclo de sync: toma hasta `LOTE_MAXIMO` eventos pendientes, los manda, y marca según
- * el acuse del servidor — el cliente SOLO da por sincronizado lo que vino acusado (QUI-238). */
-export async function sincronizarPendientes(accessToken: string): Promise<{ enviados: number }> {
+ * el acuse del servidor — el cliente SOLO da por sincronizado lo que vino acusado (QUI-238).
+ *
+ * Punto 6 (code review 2026-09-25): además de `enviados` (ACEPTADOS por el servidor — el
+ * único número que le importa al caller final, `iniciarSyncAutomatico`/UI), devuelve `leidos`
+ * (filas que salieron de `obtenerLotePendiente`, ANTES de que el servidor acuse nada) — ver
+ * `drenarLotesConLease` para el porqué: decidir si el LOTE salió lleno tiene que mirar cuánto
+ * se LEYÓ del outbox, no cuánto se ACEPTÓ. */
+export async function sincronizarPendientes(
+  accessToken: string,
+): Promise<{ enviados: number; leidos: number }> {
   const db = await abrirOutbox();
   const lote = await obtenerLotePendiente(db, LOTE_MAXIMO);
   if (lote.length === 0) {
-    return { enviados: 0 };
+    return { enviados: 0, leidos: 0 };
   }
 
   const eventIds = lote.map((evento) => evento.eventId);
@@ -128,7 +136,7 @@ export async function sincronizarPendientes(accessToken: string): Promise<{ envi
     const respuesta = await syncApi.enviarLote(eventos, accessToken);
     await marcarAcusados(db, respuesta.aceptados);
     await revertirAPendiente(db, idsNoAcusados(eventIds, respuesta.aceptados));
-    return { enviados: respuesta.aceptados.length };
+    return { enviados: respuesta.aceptados.length, leidos: lote.length };
   } catch (error) {
     // Fallo de red/servidor: todo el lote vuelve a pendiente para el próximo intento.
     await revertirAPendiente(db, eventIds);
@@ -226,7 +234,15 @@ export async function drenarLotesConLease(
     }
     const resultado = await sincronizarPendientes(accessToken);
     totalEnviados += resultado.enviados;
-    if (resultado.enviados < LOTE_MAXIMO) {
+    // Punto 6 (code review 2026-09-25): decidir "agotado" con `resultado.enviados` (ACEPTADOS
+    // por el servidor) en vez de `resultado.leidos` (filas que de verdad salieron del outbox)
+    // cortaba el ciclo después de UN SOLO lote cuando algún evento del lote es rechazado SIEMPRE
+    // por el servidor (p. ej. un payload con un id de punto de control que ya no existe) y cae
+    // al PRINCIPIO de cada lote nuevo (`obtenerLotePendiente` es FIFO) — ese evento nunca se
+    // acusa, así que `enviados` queda por debajo de `LOTE_MAXIMO` aunque el LOTE haya salido
+    // lleno y quede mucho más atraso real detrás. `leidos` es la señal correcta de "¿este lote
+    // vino lleno, probablemente hay más?" — independiente de cuántos acuse el servidor.
+    if (resultado.leidos < LOTE_MAXIMO) {
       return { enviados: totalEnviados, motivo: 'agotado' };
     }
   }
@@ -348,15 +364,27 @@ export function iniciarSyncAutomatico(
       onSyncStart?.();
       // Hallazgo 6 (code review): `sincronizarPendientesConLease`, NO `sincronizarPendientes`
       // directo — ver su docblock. `resultado === null` significa "alguien más (el drenado
-      // por ubicación, u otro disparo de este mismo motor) tiene el lease ahora mismo": no es
-      // un fallo, así que se trata como un éxito vacío (no toca `errorSync`/el contador de
-      // fallos consecutivos) y no se agenda un reintento inmediato — el próximo disparo normal
-      // (reconexión de NetInfo, o el intervalo de `use-sync-status.ts`) ya va a volver a
-      // intentar.
+      // por ubicación, u otro disparo de este mismo motor) tiene el lease ahora mismo".
       const resultado = await sincronizarPendientesConLease(accessToken);
+      if (resultado === null) {
+        // Punto 5 (code review 2026-09-25): lease no disponible NO es un éxito — antes esto
+        // reseteaba `backoffMs` a `BACKOFF_INICIAL_MS` y, como `resultado && ...` daba `false`,
+        // NO reprogramaba ningún reintento. Sin otro disparador externo (NetInfo, un evento de
+        // ubicación) que volviera a llamar a `intentarSync`, la cadena de reintentos por
+        // backoff moría en silencio ahí mismo. Ahora: el backoff vigente NO se toca, y se
+        // reprograma respetando COMO PISO el cooldown del lease (`PISO_ENTRE_INTENTOS_DRENAJE_MS`)
+        // — reintentar antes solo repetiría el mismo `null`, el lease de drenado no se libera
+        // más rápido que eso.
+        onResultado?.({ enviados: 0 });
+        timeoutId = setTimeout(
+          () => void intentarSync(),
+          Math.max(backoffMs, PISO_ENTRE_INTENTOS_DRENAJE_MS),
+        );
+        return;
+      }
       backoffMs = BACKOFF_INICIAL_MS;
-      onResultado?.(resultado ?? { enviados: 0 });
-      if (resultado && resultado.enviados > 0) {
+      onResultado?.(resultado);
+      if (resultado.enviados > 0) {
         // Puede haber más pendientes que el límite de un lote — seguir de inmediato.
         timeoutId = setTimeout(() => void intentarSync(), 500);
       }

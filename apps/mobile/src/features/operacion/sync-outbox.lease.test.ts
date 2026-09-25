@@ -199,6 +199,46 @@ describe('sincronizarPendientesConLease — hallazgo 6 (iniciarSyncAutomatico/la
       );
     });
 
+    /**
+     * Punto 6 (code review 2026-09-25): `drenarLotesConLease` decidía "agotado" mirando
+     * `resultado.enviados` (ACEPTADOS por el servidor) en vez de las filas LEÍDAS del lote. Un
+     * evento "veneno" que el servidor rechaza SIEMPRE y queda al frente de cada lote (FIFO,
+     * nunca se acusa) hacía que `enviados` quedara por debajo de `LOTE_MAXIMO` aunque el lote
+     * hubiera salido LLENO — el ciclo cortaba después de UN SOLO lote con mucho atraso real
+     * detrás.
+     */
+    it('un evento SIEMPRE rechazado al frente del lote no corta el ciclo tras un solo lote lleno', async () => {
+      const loteLleno1 = ['veneno', ...loteDe(LOTE_MAXIMO - 1, 'a').map((e) => e.eventId)];
+      const loteLleno2 = ['veneno', ...loteDe(LOTE_MAXIMO - 1, 'b').map((e) => e.eventId)];
+      const loteParcial = ['veneno', ...loteDe(49, 'c').map((e) => e.eventId)];
+      function filasDe(ids: string[]) {
+        return ids.map((eventId) => ({
+          eventId,
+          deviceId: 'device-1',
+          ts: new Date().toISOString(),
+          tipo: 'gps_point' as const,
+          payload: {},
+          estado: 'pendiente' as const,
+        }));
+      }
+      obtenerLotePendienteMock
+        .mockResolvedValueOnce(filasDe(loteLleno1))
+        .mockResolvedValueOnce(filasDe(loteLleno2))
+        .mockResolvedValueOnce(filasDe(loteParcial));
+      // El servidor rechaza 'veneno' SIEMPRE, acepta el resto — así, `enviados` queda en
+      // `LOTE_MAXIMO - 1` (499) para los dos lotes llenos, aunque `leidos` sea 500 (lleno).
+      enviarLoteMock.mockImplementation(async (eventos: { eventId: string }[]) => ({
+        aceptados: eventos.map((e) => e.eventId).filter((id) => id !== 'veneno'),
+      }));
+
+      const resultado = await sincronizarPendientesConLease('access-token');
+
+      // Los 3 lotes se drenaron en un solo ciclo — con el bug viejo (`enviados < LOTE_MAXIMO`),
+      // el primer lote ya "parecía" no-lleno (499 < 500) y el ciclo cortaba ahí.
+      expect(obtenerLotePendienteMock).toHaveBeenCalledTimes(3);
+      expect(resultado).toEqual({ enviados: (LOTE_MAXIMO - 1) * 2 + 49 });
+    });
+
     it('R3/R1: lease perdido a mitad del bucle (otro owner lo toma) — corta tras el lote en curso y NO libera el lease ajeno', async () => {
       // 4 lotes llenos disponibles: los 2 primeros se drenan con normalidad, la renovación
       // antes del TERCERO falla (otro contexto ya tomó la fila — TTL vencido o cota de reloj).
