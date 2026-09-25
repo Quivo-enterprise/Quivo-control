@@ -18,7 +18,56 @@
 - **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
 - **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
 
-### Punto de retome — cierre de la sesión del 2026-09-23
+### Punto de retome — cierre de la sesión del 2026-09-25
+
+**Leer esto primero.** Reemplaza al retome del 2026-09-23 (que queda abajo como histórico).
+
+**Decisiones del CTO en esta sesión:**
+- **Gate sin Codex hasta que vuelva.** La cuota de Codex está agotada hasta el **2026-09-27 15:46**. Hasta entonces el gate de merge es `/code-review` + `/security-review` (sin `verify-fix`). Desde esa fecha, `verify-fix` vuelve a ser obligatorio para los `fix:` (regla 13).
+- **Antes de lanzar el build 11**, presentar al CTO la lista completa de funcionalidades nuevas y correcciones (por Entrega/PR). El CTO decide ahí si suma alcance. No disparar el build antes.
+- **Licencia Transistorsoft nueva** para `com.quivotech.conductor.app`, cargada en EAS (`TRANSISTORSOFT_LICENSE_KEY`, entorno `production`, proyecto `@shadow00/quivo-conductor`). **Es trial:** vence el **2026-10-25**, `max_build_stamp` 20261025, `grace_builds` 0. El build 11 tiene que salir antes; para builds posteriores hay que comprar la licencia. El valor no se puede leer de vuelta: se confirma en el primer build.
+- No se agrega detección de reuso de refresh token en el servidor (ver abajo).
+
+**Hecho:**
+- **#80 mergeado** (`baf87dd`, squash): drenado GPS en background + sesión móvil entre contextos + paquete `com.quivotech.conductor.app` en `app.config.ts`. Incluye los fixes de `/code-review` (marca de logout respetada por `restaurarSesion` y el headless; error de lectura de la marca no apaga el tracker; lease propio para revocaciones pendientes; backoff/agotado del sync; throttle del drenado; `CircuitoRefreshAbiertoError` fuera de la racha de 401). Móvil tsc 0 / 263 tests; API tsc 0, mismos 6 fallos de Better-Auth que `main`. `/security-review` sin hallazgos.
+- **Corrección de una premisa falsa del retome anterior:** el servidor **no** detecta reuso de refresh token. `refresh()` no lee `refreshTokenHashAnterior`; solo `logout()` la usa como prueba de posesión para el fallback por `deviceId`. El riesgo residual de drenado (suspensión entre el CAS del lease y la escritura en SecureStore) termina en: token ya rotado → 401 → circuito abierto → el chofer se vuelve a loguear (Entrega 28). No es un problema de seguridad. Detección de reuso descartada: convertiría esa carrera local en revocación total.
+- **Deuda técnica registrada:** secuencia de lease duplicada entre `drenaje-oportunista.ts` y `sync-outbox.ts`.
+
+**Estado por rama:**
+
+| Rama · worktree | HEAD | Estado |
+|---|---|---|
+| `fix/movil-drenado-background` · `-movil-drenado` | — | **Mergeada (#80).** Borrar el worktree: antes, `docker compose down` en él (quedaron Postgres 5434, Redis 6380 y OSRM corriendo) |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `b161377` | Rediseño hecho (tsc 0, 267 tests, lint 0 errores). **`/code-review` con 10 hallazgos sin aplicar** (lista abajo). Sin rebase: va 37+ commits detrás y ahora `main` trae drenado, que toca `headless-task.ts` (esperar conflictos) |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `6831112` | Cerrado. Falta rebase, `/code-review`, PR y prueba en teléfono (con red y en modo avión) |
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `9e9f2d3` | Desbloqueada: drenado ya está en `main`. Rebase sobre `main` y cerrar sus gaps (`partial` del 09-11) |
+| `feat/web-mapa-todos-vehiculos` · `-web-mapa` | `0d67964` | **Bloqueada por permisos:** el clasificador de auto mode rechazó el agente de rebase (necesita `push --force-with-lease`). El CTO tiene que habilitar el force-push o hacer el rebase. Al rebasear, revisar la semántica nueva de `totalPuntos` (#74) |
+
+**Hallazgos de `/code-review` en anuncio (a aplicar con un Sonnet nuevo) y triage del chairman:**
+1. `anuncio-punto-control.ts:409`: `'pendiente'` significa a la vez "reclamado, programándose" y "falló". El reintento reprograma un reclamo en vuelo y alerta dos veces. **Fix:** estado separado (`programando` con timestamp) y reintentar solo lo `pendiente` viejo.
+2. `decidir-anuncio.ts:176`: los estados sembrados desde la evidencia (`clavesCumplimientoDesdePayloads`) quedan `dentro:true` sin `anuncioHecho`. Tras un re-seed, cada punto ya pasado dispara `fallback-salida` al alejarse. **Fix:** el seed marca `anuncioHecho: true`. Es el más grave: rompe la invariante "la evidencia nunca dispara".
+3. `use-gps-operativo.ts:273` y `:376`: `setUltimoAnuncioLlegada` se setea antes y sin importar el reclamo, así que el chime suena aunque el reclamo se haya perdido. **Fix:** setearlo solo si hubo reclamo y quedó programado.
+4. `decidir-anuncio.ts:237`: con `motivo` null no se persiste `desdeMs`, así que con el vehículo detenido y solo heartbeats, `fallback-tiempo` nunca dispara. **Fix:** sembrar desde `candidatoTsFixMs` o persistir la transición.
+5. `outbox.ts:395`: `obtenerAnunciosPendientesDeProgramar` no filtra por sesión, antigüedad ni intentos, y reintenta filas de días anteriores para siempre. **Fix:** filtrar por la sesión actual, agregar TTL e intentos máximos, purgar, e índice en `estado`.
+6. `anuncio-punto-control.ts:382`: si el reclamo lanza error, hoy falla abierto (`reclamado=true`) y duplica justo en el caso de contención entre contextos. **Decisión:** fallar cerrado, sin programar, y reintentar el reclamo en el próximo tick.
+7. `headless-task.ts:875`: faltan chequeos de generación en `aplicarConfirmacionesForzadas` y `drenarReintentosVisitaPendiente`. Una operación vieja puede resucitar `visitas_pendientes` y duplicar una pasada de evidencia. **Fix:** chequear después de cada `await`.
+8. `headless-task.ts:329`: el reintento de anuncios corre dentro del `conTimeout` y antes de `operacion()`, así que un puente de notificaciones colgado bloquea la escritura de `gps_point`. **Fix:** correrlo después de `operacion()` con su propio timeout, o fuera de la cola de evidencia.
+9. `outbox.ts:101`: la migración de anuncios relanza cualquier error que no sea "duplicate column" y tumba `abrirOutbox`, con lo que se pierde evidencia. **Fix:** `PRAGMA table_info` + catch con Sentry, sin fallar la apertura.
+10. Limpieza: `gps-provider.tsx:55` abre el outbox para un `_db` que no se usa; `void puntosRearmados` es código muerto; unificar `claveAnuncio()`. Menores: validar `motivo` antes de `textoAnuncioLlegada`, y posible doble sonido (canal nativo + expo-audio) con la pantalla apagada.
+
+**Pendiente del CTO:**
+- Habilitar force-push para el rebase de web, o hacerlo.
+- OK para desplegar `main` a producción (#65, #70, #74 y ahora la migración de #80), seguido del recompute de `docs/runbooks/retencion-gps.md`.
+
+**Cómo retomar (máximo 3 agentes Sonnet a la vez):**
+1. Anuncio: un Sonnet aplica los 10 hallazgos de arriba → rebase sobre `main` (drenado ya adentro) → `/code-review` → PR → merge. Desde el 2026-09-27 15:46, sumar `verify-fix`.
+2. Posición: rebase sobre `main` y cierre de gaps.
+3. Mapa offline: rebase, `/code-review`, PR.
+4. Después: Entregas 8/9/26 (sobre anuncio mergeado) y 28. Luego, la lista de features y fixes para el CTO antes del build.
+
+---
+
+### Punto de retome — cierre de la sesión del 2026-09-23 (histórico, reemplazado por el del 2026-09-25)
 
 **Leer esto primero.** Las cuatro ramas móviles están pusheadas, ninguna tiene PR y no queda nada sin commitear en ningún worktree. El orden de merge sigue siendo **drenado → posición → anuncio → mapa offline**. Web va en paralelo.
 

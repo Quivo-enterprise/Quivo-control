@@ -14,7 +14,7 @@ Decisiones del CTO (2026-09-23):
 
 Primer paso al salir de plan mode: volcar este plan a `docs/plan-apk-build-11.md` y agregar el puntero en `docs/handoff.md` (regla 8).
 
-> **Estado (2026-09-23, cierre de sesión):** Fase 1 a medias. Mapa offline cerrado. Drenado en la ronda 6 sin verificar. Anuncio necesita el rediseño de la capa de anuncios. El detalle está en `docs/handoff.md` → "Punto de retome — cierre de la sesión del 2026-09-23".
+> **Estado (2026-09-25, cierre de sesión):** Drenado mergeado (#80, incluye el cambio de paquete). Anuncio rediseñado, con 10 hallazgos de `/code-review` por aplicar. Mapa offline cerrado sin PR. Posición desbloqueada. Web bloqueada por permiso de force-push. Detalle en `docs/handoff.md` → "Punto de retome — cierre de la sesión del 2026-09-25".
 
 ## Reglas de ejecución
 
