@@ -340,6 +340,7 @@ describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega
     encolarEventoMock.mockReset().mockResolvedValue({ eventId: 'evt-1', insertado: true });
     obtenerEventosPorTipoMock.mockReset().mockResolvedValue([]);
     anunciarDeteccionesDelTickMock.mockClear();
+    intentarDrenarOportunistaMock.mockClear();
   });
 
   it('primer fix (entrada, distancia 0): avisa aproximación, todavía NO confirma', async () => {
@@ -375,6 +376,10 @@ describe('tareaHeadlessUbicacion — llama a anunciarDeteccionesDelTick (Entrega
     expect(resultado.anunciosLlegada).toEqual([
       { puntoControlId: 'pc-headless-1', pasada: 1, motivo: 'proximidad', distanciaM: 0, radioToleranciaM: 30 },
     ]);
+    // Entrega 2 (drenado oportunista): corre como ÚLTIMA línea de `tareaHeadlessUbicacion`,
+    // sin importar qué anuncio se haya decidido este tick — ver el docblock del hallazgo 1 en
+    // `headless-task.tarea.test.ts` para la cobertura completa de este camino.
+    expect(intentarDrenarOportunistaMock).toHaveBeenCalledTimes(1);
   });
 
   it('segundo fix (se aleja ~33 m, distancia CRECE respecto del mínimo): confirma la pasada 1', async () => {
