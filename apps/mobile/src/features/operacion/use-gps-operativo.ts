@@ -22,6 +22,7 @@ import { claveCumplimiento, type DeteccionPuntoControl, type EstadoPuntoControl 
 import { registrarPuntoGps } from '../../gps/headless-task';
 import { clavesCumplimientoDesdePayloads } from '../../gps/location-task';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
+import { resolverResultadoIniciar } from './resultado-iniciar-recorrido';
 import {
   AUTORIZACION_DENEGADA,
   AUTORIZACION_NO_DETERMINADA,
@@ -38,8 +39,10 @@ import {
 import {
   crearManejadorForegroundActivo,
   crearManejadorReafirmarMovimiento,
+  crearSerializadorRestauracion,
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
+  reafirmarMovimientoSiEstacionario,
   restaurarComportamientoNormal,
 } from '../../gps/seguimiento-continuo';
 
@@ -167,6 +170,18 @@ export function useGpsOperativo(
   // `tracking` (reenganche, `iniciar()`, `detener()`).
   const trackingRef = useRef(false);
   const estaEnRecorrido = useCallback(() => trackingRef.current, []);
+  // R1 (merge post-drenado, Entrega 31a — gap de revisión): `detener()` dispara
+  // `restaurarComportamientoNormal` (setConfig disableStopDetection:false) SIN esperarlo, para
+  // no demorar el cierre del recorrido. Si el chofer vuelve a tocar "Iniciar" antes de que ese
+  // `setConfig` termine de aplicarse, esa llamada podía resolver DESPUÉS del
+  // `setConfig(disableStopDetection:true)` del `iniciarSeguimientoContinuo` del nuevo
+  // `iniciar()` — pisando, por orden de llegada al nativo y no por intención, la política
+  // "true" del recorrido que sí está activo. `crearSerializadorRestauracion`
+  // (`gps/seguimiento-continuo.ts`, pura y testeada aparte) es el slot que guarda esa promesa
+  // en vuelo para que el PRÓXIMO `iniciar()` la espere antes de reafirmar movimiento — ver el
+  // `esperarPendiente()` en `iniciar()` y el `registrar()` en `detener()`. Una sola instancia
+  // por hook, mismo ciclo de vida que `trackingRef`.
+  const serializadorRestauracion = useRef(crearSerializadorRestauracion()).current;
   // QUI-338: si esta app YA invocó `requestPermission()` alguna vez en este dispositivo,
   // persistido en `AsyncStorage` bajo `CLAVE_PERMISO_GPS_SOLICITADO` (ver ese comentario para
   // el porqué). Vive en un ref, no en `useState`: se lee de forma síncrona dentro de
@@ -323,6 +338,19 @@ export function useGpsOperativo(
         } catch (error) {
           Sentry.captureException(error, {
             tags: { contexto: 'gps-foreground', paso: 'heartbeat-getCurrentPosition' },
+          });
+        }
+        // G1 (merge post-drenado, Entrega 31a): el heartbeat es, junto con el regreso a
+        // foreground (`crearManejadorForegroundActivo`), uno de los dos puntos que NO dependen
+        // de `onMotionChange`/`ACTIVITY_RECOGNITION` para notar que el plugin volvió a
+        // estacionario — ver el docblock de `reafirmarMovimientoSiEstacionario`
+        // (`gps/seguimiento-continuo.ts`). Corre cada 60 s pase lo que pase, con o sin ese
+        // permiso concedido.
+        try {
+          await reafirmarMovimientoSiEstacionario(BackgroundGeolocation, estaEnRecorrido);
+        } catch (error) {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'heartbeat-reafirmar-movimiento' },
           });
         }
         // `intentarDrenarOportunista` nunca rechaza (ver su docblock) — no hace falta un
@@ -703,6 +731,16 @@ export function useGpsOperativo(
 
     try {
       await BackgroundGeolocation.ready(gpsSpikeConfig);
+      // R1 (merge post-drenado, Entrega 31a — gap de revisión): si un `detener()` reciente
+      // dejó una restauración de `disableStopDetection` en vuelo (ver
+      // `serializadorRestauracion`, más arriba, y el `registrar()` en `detener()`), esperarla
+      // ACÁ — antes de reafirmar movimiento del recorrido nuevo — para que el
+      // `setConfig(false)` de la restauración quede SIEMPRE ordenado antes del
+      // `setConfig(true)` de `iniciarSeguimientoContinuo` de abajo, nunca después. Sin este
+      // `await`, un "Finalizar" + "Iniciar" rápido corría ambos `setConfig` en carrera, con el
+      // nativo quedando en el estado de quien resolviera último en vez del que corresponde al
+      // recorrido activo.
+      await serializadorRestauracion.esperarPendiente();
       // QUI-P0: reemplaza el `BackgroundGeolocation.start()` suelto de antes de este fix.
       // `iniciarSeguimientoContinuo` (`gps/seguimiento-continuo.ts`) hace `start()` y INMEDIATAMENTE
       // después fuerza `changePace(true)` + `disableStopDetection: true` — sin guarda de "solo
@@ -713,6 +751,20 @@ export function useGpsOperativo(
       // arriba) y, sin él, caía a la geocerca estacionaria de 200-500 m: la causa raíz de que
       // la flecha no se moviera.
       await iniciarSeguimientoContinuo(BackgroundGeolocation);
+      // G2 (merge post-drenado, Entrega 31a — gap de revisión): `tracking` se marca `true`
+      // ACÁ, apenas `start()` resuelve, y ya NO más abajo tras el outbox. Antes, con el outbox
+      // fallando (SQLite sin espacio, handle zombi) DESPUÉS de un `start()` exitoso,
+      // `tracking` se quedaba en `false` para siempre — el SDK nativo seguía grabando de
+      // verdad (bloque de arriba: un fallo de outbox nunca lo detiene, ver el catch de abajo)
+      // pero la UI (`next-control-sheet.tsx`) solo ofrece "COMENZAR RUTA" cuando `tracking` es
+      // `false`, nunca "FINALIZAR RUTA" — el chofer quedaba sin forma de cerrar un recorrido
+      // que sí estaba grabando. El estado del ALMACENAMIENTO local es una señal aparte
+      // (`errorGps`, ver el catch de abajo): un fallo ahí ya no apaga ni bloquea `tracking`. La
+      // decisión de qué vale `tracking`/`errorGps` ante un fallo (nativo o de outbox) vive en
+      // `resolverResultadoIniciar` (`resultado-iniciar-recorrido.ts`) — pura y testeada aparte,
+      // ver su docblock para el porqué de la invariante ("nativo OK ⇒ tracking SIEMPRE true").
+      setTracking(true);
+      trackingRef.current = true;
     } catch (error) {
       // RIESGO 1 (`/codex-debug verify-fix`, corregido en `iniciarSeguimientoContinuo` —
       // `gps/seguimiento-continuo.ts`): este catch YA NO puede dispararse por un fallo de
@@ -747,9 +799,14 @@ export function useGpsOperativo(
       // informativo que ya usa el resto del hook para fallos en vivo, que `operation-screen.tsx`
       // muestra sin gatear `canStart` — así "Iniciar recorrido" queda disponible para
       // reintentar de inmediato.
-      setErrorGps(
-        'No se pudo activar el GPS en este momento. Volvé a tocar "Iniciar recorrido" para reintentar.',
-      );
+      //
+      // G2: acá SÍ corresponde `tracking: false` — a diferencia del catch de outbox de abajo,
+      // este es el único caso donde de verdad no hay nada grabándose (`resolverResultadoIniciar`,
+      // `resultado-iniciar-recorrido.ts`).
+      const resultadoFalloNativo = resolverResultadoIniciar(false, false);
+      setTracking(resultadoFalloNativo.tracking);
+      trackingRef.current = resultadoFalloNativo.tracking;
+      setErrorGps(resultadoFalloNativo.errorGps);
       return;
     }
 
@@ -765,34 +822,33 @@ export function useGpsOperativo(
       // RNF-24/QUI-247: marca el límite real del recorrido — sin esto, reconstruir un
       // recorrido más adelante solo tenía los puntos GPS sueltos, sin saber dónde empezó.
       await encolarEvento(db, { deviceId, tipo: 'inicio_recorrido', payload: { sesionId } });
-      // Plan §2.4.3: `tracking` recién se marca `true` ACÁ, después de que la suscripción
-      // quedó conectada Y el marcador de inicio encoló con éxito.
-      setTracking(true);
-      trackingRef.current = true;
     } catch (error) {
-      // Plan §2.4.4: el GPS nativo (bloque de arriba) ya está corriendo y grabando en su
-      // propia base — este catch es SOLO el pipeline local app→outbox el que falló. No se
-      // llama `BackgroundGeolocation.stop()` acá: cortar el tracking nativo por un fallo de
-      // SQLite tiraría exactamente la evidencia que este orden existe para salvar (mismo
-      // principio que el plan §2.4.1 aplica al 401 de sesión — la evidencia local es lo único
-      // irrecuperable).
+      // Plan §2.4.4 + G2 (merge post-drenado, Entrega 31a): el GPS nativo (bloque de arriba)
+      // ya está corriendo y grabando en su propia base, y `tracking` ya quedó en `true` ahí —
+      // este catch es SOLO el pipeline local app→outbox el que falló, y a propósito YA NO lo
+      // revierte. No se llama `BackgroundGeolocation.stop()` acá: cortar el tracking nativo
+      // por un fallo de SQLite tiraría exactamente la evidencia que este orden existe para
+      // salvar (mismo principio que el plan §2.4.1 aplica al 401 de sesión — la evidencia
+      // local es lo único irrecuperable). El estado de almacenamiento se comunica aparte, por
+      // `errorGps` — nunca pisando `tracking` — para que "Finalizar recorrido" siga
+      // disponible en `next-control-sheet.tsx` pase lo que pase con el outbox.
       //
       // B1: tampoco se REMUEVE la suscripción (antes sí se hacía). Lo único que falló acá es
       // el marcador `inicio_recorrido`; `onLocation` abre el outbox por su cuenta en cada fix
       // y se auto-sana vía `reabrirOutboxTrasFalloNativo` (`db/outbox.ts`). Removerla
       // convertía un fallo puntual de encolado en la pérdida de TODOS los puntos siguientes
       // hasta que el chofer volviera a apretar "Iniciar" — exactamente el daño que este
-      // hallazgo describe. La UI queda en "Iniciar" (`tracking` sigue false) y ese reintento
-      // es idempotente: `suscribirUbicaciones` remueve la suscripción anterior antes de
+      // hallazgo describe. `suscribirUbicaciones` remueve la suscripción anterior antes de
       // instalar la nueva, y el nativo ya arrancado no se reinicia.
       Sentry.captureException(error, {
         tags: { contexto: 'gps-foreground', paso: 'iniciar-outbox' },
       });
-      setErrorGps(
-        'El GPS ya está grabando en el dispositivo, pero no se pudo abrir el almacenamiento local. Reintenta "Iniciar"; si persiste, revisa el espacio disponible.',
-      );
+      // G2: `tracking` NO se toca acá — `resolverResultadoIniciar(true, false).tracking` es
+      // siempre `true` (ver su docblock e invariante testeada), coherente con lo que ya se
+      // asignó arriba tras el `start()` exitoso. Solo se usa el mensaje de error.
+      setErrorGps(resolverResultadoIniciar(true, false).errorGps);
     }
-  }, [suscribirUbicaciones, sembrarCumplimientos, deviceId, sesionId]);
+  }, [suscribirUbicaciones, sembrarCumplimientos, deviceId, sesionId, serializadorRestauracion]);
 
   const detener = useCallback(async () => {
     setErrorGps(null);
@@ -809,15 +865,24 @@ export function useGpsOperativo(
       // QUI-P0: reverso de `reafirmarMovimiento` — restaura `disableStopDetection: false` para
       // que un futuro re-enganche o inspección de estado no encuentre la política "nunca
       // apagar el GPS" activa fuera de un recorrido real (ver docblock en
-      // `gps/seguimiento-continuo.ts`). Best-effort y SIN `await`: `BackgroundGeolocation.stop()`
-      // de arriba ya cortó el tracking nativo — un fallo acá es solo de config persistida, no
-      // debe demorar ni hacer fallar el cierre del recorrido (outbox, veredicto) que sigue
-      // abajo.
-      void restaurarComportamientoNormal(BackgroundGeolocation).catch((error) => {
-        Sentry.captureException(error, {
-          tags: { contexto: 'gps-foreground', paso: 'restaurar-comportamiento-normal' },
-        });
-      });
+      // `gps/seguimiento-continuo.ts`). Best-effort y SIN `await` acá mismo:
+      // `BackgroundGeolocation.stop()` de arriba ya cortó el tracking nativo — un fallo acá es
+      // solo de config persistida, no debe demorar ni hacer fallar el cierre del recorrido
+      // (outbox, veredicto) que sigue abajo.
+      //
+      // R1: la promesa SÍ se registra (`serializadorRestauracion`, ver su comentario más
+      // arriba y el docblock de `crearSerializadorRestauracion`) para que el PRÓXIMO
+      // `iniciar()` pueda esperarla antes de reafirmar movimiento — sin este registro, un
+      // "Finalizar" + "Iniciar" rápido corría este `setConfig(false)` en carrera con el
+      // `setConfig(true)` del nuevo recorrido, con el nativo quedando en el estado de quien
+      // resuelva último y no de quien debería ganar.
+      serializadorRestauracion.registrar(
+        restaurarComportamientoNormal(BackgroundGeolocation).catch((error) => {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'restaurar-comportamiento-normal' },
+          });
+        }),
+      );
 
       const db = await abrirOutbox();
       await encolarEvento(db, { deviceId, tipo: 'fin_recorrido', payload: { sesionId } });
@@ -898,7 +963,7 @@ export function useGpsOperativo(
     } catch {
       setErrorGps('No se pudo detener correctamente el GPS. Intenta nuevamente.');
     }
-  }, [deviceId, sesionId]);
+  }, [deviceId, sesionId, serializadorRestauracion]);
 
   /**
    * B3 (hallazgo de revisión, bajo): Map SEPARADO de `puntosControlDetectados` — antes de este

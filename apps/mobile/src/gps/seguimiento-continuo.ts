@@ -33,6 +33,10 @@ export interface SdkSeguimientoContinuo {
   start: () => Promise<unknown>;
   changePace: (isMoving: boolean) => Promise<unknown>;
   setConfig: (config: { activity?: { disableStopDetection?: boolean } }) => Promise<unknown>;
+  /** `State.isMoving` — la única forma de LEER lo que el plugin cree que está pasando AHORA,
+   * sin esperar a que dispare un evento. La necesita `reafirmarMovimientoSiEstacionario` (ver
+   * su docblock, más abajo) para el gap G1 (merge post-drenado, Entrega 31a). */
+  getState: () => Promise<{ isMoving: boolean }>;
 }
 
 /**
@@ -134,6 +138,37 @@ export async function restaurarComportamientoNormal(
 }
 
 /**
+ * G1 (merge post-drenado, Entrega 31a — gap de revisión sobre esta misma entrega): defensa que
+ * NO depende de `onMotionChange`. `crearManejadorReafirmarMovimiento` (más abajo) es la defensa
+ * en profundidad "oficial" contra un `changePace(true)` que falló en silencio (absorbido por
+ * `iniciarSeguimientoContinuo`, ver su docblock) — pero depende de que el SDK EMITA el evento
+ * `onMotionChange`, y ese evento nativo usa el sensor de actividad de Android
+ * (`ACTIVITY_RECOGNITION`, Android 10+): con el permiso denegado (el chofer lo puede negar sin
+ * que nada en la app lo bloquee, ver `permiso-actividad.ts`) el plugin puede quedar sin ningún
+ * disparador que note que sigue estacionario, y el freeze original (la flecha no se mueve)
+ * reaparece exactamente por la vía que este módulo existe para cerrar.
+ *
+ * Esta función en cambio LEE el estado real (`getState().isMoving`) desde dos puntos que
+ * ocurren SIEMPRE, con o sin ese permiso: el heartbeat del SDK (cada 60 s,
+ * `background-geolocation.config.ts`) y el regreso a foreground
+ * (`crearManejadorForegroundActivo`, abajo). Si el recorrido sigue activo (`estaEnRecorrido`) y
+ * el plugin reporta `isMoving: false`, vuelve a correr `reafirmarMovimiento` — el mismo
+ * `changePace(true)` + `setConfig(disableStopDetection: true)` que ya usa
+ * `iniciarSeguimientoContinuo`. Nunca reafirma fuera de un recorrido (`estaEnRecorrido() ===
+ * false`): no hay nada que defender ahí, mismo criterio que
+ * `crearManejadorReafirmarMovimiento`.
+ */
+export async function reafirmarMovimientoSiEstacionario(
+  sdk: Pick<SdkSeguimientoContinuo, 'changePace' | 'setConfig' | 'getState'>,
+  estaEnRecorrido: () => boolean,
+): Promise<void> {
+  if (!estaEnRecorrido()) return;
+  const estado = await sdk.getState();
+  if (estado.isMoving) return;
+  await reafirmarMovimiento(sdk);
+}
+
+/**
  * Handler de `AppState` para el punto 4 del brief: con un recorrido en curso, volver a
  * primer plano no debe dejar el marcador con un fix viejo hasta el próximo evento natural del
  * SDK — pide una posición fresca de inmediato. Devuelve el propio handler (factory) en vez de
@@ -154,9 +189,17 @@ export async function restaurarComportamientoNormal(
  * sin manejar, y además ningún rastro de que el fix forzado al volver a primer plano falló. Se
  * encadena `.catch()` (nunca `await`: el handler de `AppState` tiene que devolver sincrónico,
  * igual que antes) que reporta a Sentry con un tag que identifica este handler puntual.
+ *
+ * G1 (merge post-drenado, Entrega 31a): además del fix inmediato de arriba, este handler ahora
+ * también corre `reafirmarMovimientoSiEstacionario` — el regreso a foreground es, junto con el
+ * heartbeat, uno de los dos puntos que NO dependen de `onMotionChange`/`ACTIVITY_RECOGNITION`
+ * (ver el docblock de esa función). Va en su propia promesa `.catch()`-eada, independiente de
+ * la de `getCurrentPosition` de arriba: un fallo de una no debe impedir el intento de la otra.
  */
 export function crearManejadorForegroundActivo(
-  sdk: { getCurrentPosition: (opts: { samples: number; persist: boolean }) => Promise<unknown> },
+  sdk: Pick<SdkSeguimientoContinuo, 'changePace' | 'setConfig' | 'getState'> & {
+    getCurrentPosition: (opts: { samples: number; persist: boolean }) => Promise<unknown>;
+  },
   estaEnRecorrido: () => boolean,
 ): (estadoApp: string) => void {
   return (estadoApp: string) => {
@@ -164,6 +207,11 @@ export function crearManejadorForegroundActivo(
       void sdk.getCurrentPosition({ samples: 1, persist: true }).catch((error) => {
         Sentry.captureException(error, {
           tags: { contexto: 'gps-foreground', paso: 'foreground-activo-getCurrentPosition' },
+        });
+      });
+      void reafirmarMovimientoSiEstacionario(sdk, estaEnRecorrido).catch((error) => {
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'foreground-activo-reafirmar-movimiento' },
         });
       });
     }
@@ -199,5 +247,58 @@ export function crearManejadorReafirmarMovimiento(
         });
       });
     }
+  };
+}
+
+/**
+ * R1 (merge post-drenado, Entrega 31a — gap de revisión): serializa una restauración de config
+ * en vuelo (`detener()`, `restaurarComportamientoNormal`) con el PRÓXIMO arranque (`iniciar()`,
+ * `reafirmarMovimiento`/`iniciarSeguimientoContinuo`).
+ *
+ * EL RIESGO que esto cierra: `detener()` dispara `restaurarComportamientoNormal`
+ * (`setConfig({disableStopDetection: false})`) sin esperarlo — a propósito, para no demorar el
+ * cierre del recorrido (outbox, veredicto). Si el chofer vuelve a tocar "Iniciar" ANTES de que
+ * ese `setConfig` termine de aplicarse contra el nativo, esa llamada podía resolver DESPUÉS del
+ * `setConfig({disableStopDetection: true})` del nuevo `iniciar()` — pisando, por orden de
+ * llegada al nativo y no por intención, la política "true" del recorrido que sí está activo
+ * con un "false" que ya no aplica a nada. El síntoma sería el freeze original (la flecha no se
+ * mueve) reapareciendo en un segundo recorrido iniciado muy rápido tras el anterior.
+ *
+ * `crearSerializadorRestauracion` es un slot de UNA sola promesa "en vuelo" — `registrar` la
+ * guarda (y la limpia sola cuando resuelve, salvo que ya haya sido reemplazada por una más
+ * nueva, ver el comentario en `registrar`), y `esperarPendiente` es lo que el próximo
+ * `iniciar()` llama ANTES de reafirmar movimiento para garantizar el orden. Pura (sin React,
+ * sin el SDK): un slot de estado + dos funciones, testeable con promesas de control manual.
+ * `use-gps-operativo.ts` crea UNA instancia por hook (vive en un `useRef`, mismo ciclo de vida
+ * que `trackingRef`) y la usa desde `detener()`/`iniciar()`.
+ */
+export interface SerializadorRestauracion {
+  /** Registra una promesa "en vuelo" — reemplaza cualquier registro anterior sin esperarlo
+   * (si `detener()` corriera dos veces seguidas, cosa que no debería pasar en la práctica, la
+   * más nueva gana). Al resolver (éxito o fallo, `finally`), se limpia sola SOLO si nadie la
+   * reemplazó ni la consumió mientras tanto — evita que una limpieza tardía borre el registro
+   * de una promesa más nueva que la reemplazó. */
+  registrar(promesa: Promise<void>): void;
+  /** Si hay una promesa registrada, la espera y limpia el registro; si no hay ninguna, resuelve
+   * de inmediato. Después de esta llamada, el slot siempre queda vacío. */
+  esperarPendiente(): Promise<void>;
+}
+
+export function crearSerializadorRestauracion(): SerializadorRestauracion {
+  let enCurso: Promise<void> | null = null;
+
+  return {
+    registrar(promesa: Promise<void>): void {
+      enCurso = promesa;
+      void promesa.finally(() => {
+        if (enCurso === promesa) enCurso = null;
+      });
+    },
+    async esperarPendiente(): Promise<void> {
+      if (enCurso) {
+        await enCurso;
+        enCurso = null;
+      }
+    },
   };
 }
