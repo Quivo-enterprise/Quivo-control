@@ -70,7 +70,10 @@ import {
   renovarLease,
 } from '../../db/outbox';
 import { syncApi } from '../../shared/api/sync-api';
-import { intentarDrenarOportunista } from './drenaje-oportunista';
+import {
+  intentarDrenarOportunista,
+  reiniciarThrottleDrenajeOportunistaParaTests,
+} from './drenaje-oportunista';
 
 const adquirirLeaseMock = adquirirLease as unknown as ReturnType<typeof vi.fn>;
 const renovarLeaseMock = renovarLease as unknown as ReturnType<typeof vi.fn>;
@@ -102,6 +105,10 @@ describe('intentarDrenarOportunista — hallazgo 4a (lease ANTES del access toke
     liberarLeaseConCooldownMock.mockReset().mockResolvedValue(undefined);
     abrirOutboxMock.mockReset().mockResolvedValue({});
     enviarLoteMock.mockReset();
+    // Punto 8: sin este reset, el throttle de módulo (piso de 10 s) saltearía todos los tests
+    // de este archivo a partir del segundo — corren en milisegundos de wall-clock real, uno
+    // tras otro, y heredarían el timestamp de intento del test anterior.
+    reiniciarThrottleDrenajeOportunistaParaTests();
   });
 
   it('adquiere el lease ANTES de pedir el access token — no al revés', async () => {
@@ -161,6 +168,40 @@ describe('intentarDrenarOportunista — hallazgo 4a (lease ANTES del access toke
     await intentarDrenarOportunista(vi.fn().mockResolvedValue(null));
 
     expect(obtenerLotePendienteMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Punto 8 (code review 2026-09-25): `use-gps-operativo.ts` llama a esta función en CADA fix
+   * de foreground sin throttle propio — sin este chequeo de módulo, un GPS a alta frecuencia
+   * dispara `adquirirLease`/`intentarRevocacionesPendientes` en cada uno.
+   */
+  describe('punto 8: throttle de módulo (piso entre intentos, ANTES de tocar SQLite)', () => {
+    it('un segundo intento inmediato (dentro del piso) ni siquiera abre el outbox', async () => {
+      const obtenerAccessToken = vi.fn().mockResolvedValue('access-token');
+
+      await intentarDrenarOportunista(obtenerAccessToken);
+      expect(adquirirLeaseMock).toHaveBeenCalledTimes(1);
+
+      await intentarDrenarOportunista(obtenerAccessToken);
+
+      // Ningún trabajo nuevo: ni el lease SQLite ni el access token se tocan de nuevo.
+      expect(adquirirLeaseMock).toHaveBeenCalledTimes(1);
+      expect(obtenerAccessToken).toHaveBeenCalledTimes(1);
+    });
+
+    it('pasado el piso, un intento nuevo sí corre', async () => {
+      const obtenerAccessToken = vi.fn().mockResolvedValue('access-token');
+
+      await intentarDrenarOportunista(obtenerAccessToken);
+      expect(adquirirLeaseMock).toHaveBeenCalledTimes(1);
+
+      // Simula que ya pasó el piso reseteando el throttle (equivalente a que el reloj avance
+      // los 10 s completos) — más simple y determinístico que fake timers para este caso.
+      reiniciarThrottleDrenajeOportunistaParaTests();
+      await intentarDrenarOportunista(obtenerAccessToken);
+
+      expect(adquirirLeaseMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('G1 (hallazgo de `/codex-debug verify-fix`, ALTO): el headless encadena lotes igual que el foreground', () => {

@@ -69,6 +69,30 @@ const UMBRAL_RECUPERACION_ENVIADOS_MS = 90_000;
  * ideal, nunca se rompe el mutex. */
 let backoffActualMs = PISO_ENTRE_INTENTOS_MS;
 
+/**
+ * Punto 8 (code review 2026-09-25): throttle en memoria a nivel de MÓDULO, chequeado ANTES de
+ * tocar SQLite (`abrirOutbox`/`adquirirLease`) o de disparar `intentarRevocacionesPendientes`
+ * (punto 4) — `use-gps-operativo.ts` llama a `intentarDrenarOportunista` en CADA fix de
+ * foreground sin ningún throttle propio; a `distanceFilter` de 15 m eso puede ser varias veces
+ * por segundo a velocidad de calle. El lease SQLite YA impedía dos drenados CONCURRENTES entre
+ * contextos, pero cada intento igual pagaba el costo de abrir la conexión y perder la carrera
+ * por el lease — y, peor, disparaba `intentarRevocacionesPendientes` sin condición alguna. Este
+ * throttle es SOLO una optimización de ENTRADA a este contexto JS puntual: no reemplaza el
+ * lease SQLite (la garantía real de exclusión mutua entre contextos), solo reduce cuántas veces
+ * por segundo este contexto intenta entrar en absoluto. Igual que `backoffActualMs` (arriba),
+ * vive en memoria a propósito — un reinicio de contexto (headless ↔ foreground) lo resetea, peor
+ * caso se reintenta un poco antes de lo ideal, nunca se rompe ninguna garantía.
+ */
+let ultimoIntentoDrenajeMs = 0;
+
+/** SOLO para tests: los de este archivo corren `intentarDrenarOportunista` muchas veces en
+ * segundos de wall-clock real, y sin este reset el throttle de arriba haría que el segundo test
+ * en adelante se salteara entero por heredar el timestamp del anterior. Sin caller en
+ * producción — el throttle debe persistir mientras el proceso viva. */
+export function reiniciarThrottleDrenajeOportunistaParaTests(): void {
+  ultimoIntentoDrenajeMs = 0;
+}
+
 function generarTokenLease(): string {
   // No es un identificador criptográfico ni de seguridad — solo necesita ser distinto entre
   // intentos concurrentes de ESTE dispositivo para que `construirLiberarLeaseConCooldown`
@@ -111,6 +135,15 @@ function generarTokenLease(): string {
 export async function intentarDrenarOportunista(
   obtenerAccessToken: () => Promise<string | null>,
 ): Promise<void> {
+  // Punto 8 (ver el docblock de `ultimoIntentoDrenajeMs` arriba): se sale ANTES de tocar
+  // SQLite o de disparar `intentarRevocacionesPendientes` si el último intento (exitoso o no)
+  // fue hace menos del piso — desistir en silencio acá es el comportamiento correcto, igual
+  // que cuando no se consigue el lease SQLite más abajo.
+  const ahoraInicioMs = Date.now();
+  if (ahoraInicioMs - ultimoIntentoDrenajeMs < PISO_ENTRE_INTENTOS_MS) {
+    return;
+  }
+  ultimoIntentoDrenajeMs = ahoraInicioMs;
   // Punto 3 (`/codex-debug verify-fix`, decisión del CTO): "próximo ciclo de drenado" —
   // aprovecha que esta función se dispara con cada fix de ubicación/heartbeat (hay actividad,
   // y probablemente red) para reintentar una revocación de logout que quedó pendiente por
