@@ -1,5 +1,6 @@
 import NetInfo from '@react-native-community/netinfo';
 import * as Sentry from '@sentry/react-native';
+import type * as SQLite from 'expo-sqlite';
 import type { EventoSync } from '@quivo/shared';
 import {
   abrirOutbox,
@@ -10,6 +11,7 @@ import {
   obtenerLotePendiente,
   purgarAcusadosAntesDe,
   recuperarEnviadosHuerfanos,
+  renovarLease,
   revertirAPendiente,
   ID_LEASE_DRENAJE,
   PISO_ENTRE_INTENTOS_DRENAJE_MS,
@@ -105,12 +107,20 @@ export function programarPurgaOutbox(sesionIdActiva?: string): Promise<void> {
 }
 
 /** Un ciclo de sync: toma hasta `LOTE_MAXIMO` eventos pendientes, los manda, y marca según
- * el acuse del servidor — el cliente SOLO da por sincronizado lo que vino acusado (QUI-238). */
-export async function sincronizarPendientes(accessToken: string): Promise<{ enviados: number }> {
+ * el acuse del servidor — el cliente SOLO da por sincronizado lo que vino acusado (QUI-238).
+ *
+ * Punto 6 (code review 2026-09-25): además de `enviados` (ACEPTADOS por el servidor — el
+ * único número que le importa al caller final, `iniciarSyncAutomatico`/UI), devuelve `leidos`
+ * (filas que salieron de `obtenerLotePendiente`, ANTES de que el servidor acuse nada) — ver
+ * `drenarLotesConLease` para el porqué: decidir si el LOTE salió lleno tiene que mirar cuánto
+ * se LEYÓ del outbox, no cuánto se ACEPTÓ. */
+export async function sincronizarPendientes(
+  accessToken: string,
+): Promise<{ enviados: number; leidos: number }> {
   const db = await abrirOutbox();
   const lote = await obtenerLotePendiente(db, LOTE_MAXIMO);
   if (lote.length === 0) {
-    return { enviados: 0 };
+    return { enviados: 0, leidos: 0 };
   }
 
   const eventIds = lote.map((evento) => evento.eventId);
@@ -126,7 +136,7 @@ export async function sincronizarPendientes(accessToken: string): Promise<{ envi
     const respuesta = await syncApi.enviarLote(eventos, accessToken);
     await marcarAcusados(db, respuesta.aceptados);
     await revertirAPendiente(db, idsNoAcusados(eventIds, respuesta.aceptados));
-    return { enviados: respuesta.aceptados.length };
+    return { enviados: respuesta.aceptados.length, leidos: lote.length };
   } catch (error) {
     // Fallo de red/servidor: todo el lote vuelve a pendiente para el próximo intento.
     await revertirAPendiente(db, eventIds);
@@ -148,6 +158,95 @@ function generarTokenLease(): string {
   // identificador criptográfico, solo necesita distinguir "soy el dueño que adquirió este
   // lease" entre intentos concurrentes de este dispositivo.
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Hallazgo 2 (code review, MEDIO — `sincronizarPendientesConLease`): tras un lote LLENO
+ * (`LOTE_MAXIMO` eventos), `sincronizarPendientesConLease` liberaba el lease con el
+ * enfriamiento de éxito (`PISO_ENTRE_INTENTOS_DRENAJE_MS`, 10 s) antes de devolver el
+ * control. El encadenado `setTimeout(intentarSync, 500)` de `iniciarSyncAutomatico` llegaba
+ * DEMASIADO PRONTO — a los 500 ms el lease seguía "tomado" por ese cooldown — así que el
+ * segundo intento recibía `null` (alguien más tiene el lease), `iniciarSyncAutomatico` lo
+ * trataba como "0 enviados" (no es un fallo, ver su comentario) y la cadena se cortaba ahí.
+ * Con horas sin cobertura (miles de eventos acumulados), el drenado completo tardaba minutos
+ * en foreground y hasta ~20 min en headless (recién al próximo heartbeat), con `/en-vivo`
+ * mostrando una posición vieja todo ese tiempo.
+ *
+ * Fix: el MISMO holder del lease encadena el siguiente lote sin soltarlo mientras el lote
+ * recién enviado haya salido LLENO (señal de que probablemente queda más) — hasta
+ * `TOPE_LOTES_POR_CICLO_DRENAJE` lotes por llamada, para no monopolizar el lease (ni la red)
+ * indefinidamente si el outbox nunca converge (p. ej. reingresando eventos más rápido de lo
+ * que se drenan).
+ *
+ * G2 (hallazgo de `/codex-debug verify-fix` sobre este mismo fix, ALTO): al llegar al TOPE con
+ * pendientes todavía por drenar, liberar con el enfriamiento normal reproducía el MISMO defecto
+ * que este fix existe para cerrar — el `setTimeout(500ms)` de `iniciarSyncAutomatico` llegaba
+ * igual de temprano contra un lease que el tope acababa de dejar "tomado" por 10 s más. Ver
+ * `drenarLotesConLease` (`motivo: 'tope-alcanzado'`) y sus callers: al llegar al tope CON
+ * pendientes restantes, liberan SIN enfriamiento — el siguiente disparo, sea el
+ * `setTimeout(500ms)` en foreground o el próximo evento de ubicación en headless, adquiere el
+ * lease de inmediato en vez de esperar el piso pensado para intentos OPORTUNISTAS espaciados.
+ * El piso de `PISO_ENTRE_INTENTOS_DRENAJE_MS` sigue aplicando igual que antes SOLO cuando el
+ * ciclo termina porque ya no queda más (lote no lleno, `motivo: 'agotado'`) o falla — nunca
+ * cuando corta por el tope con trabajo pendiente.
+ */
+const TOPE_LOTES_POR_CICLO_DRENAJE = 20;
+
+/** Por qué terminó `drenarLotesConLease` — decide cómo (o si) el caller libera el lease. */
+export type MotivoFinDrenajeLotes = 'agotado' | 'tope-alcanzado' | 'lease-perdido';
+
+export interface ResultadoDrenajeLotes {
+  enviados: number;
+  motivo: MotivoFinDrenajeLotes;
+}
+
+/**
+ * G1 (hallazgo de `/codex-debug verify-fix`, ALTO — causa raíz de que el encadenado de la
+ * Entrega 2/hallazgo 2 no cerrara el síntoma del piloto para el camino headless):
+ * `intentarDrenarOportunista` (`drenaje-oportunista.ts`) seguía llamando UNA sola vez a
+ * `sincronizarPendientes`, sin pasar por ningún encadenado — un atraso grande en background
+ * (la app cerrada, el único motor de sync es el evento de ubicación/heartbeat) drenaba un lote
+ * por evento igual que antes de ese fix, aunque `sincronizarPendientesConLease` (foreground) sí
+ * encadenara. Fix real: bucle COMPARTIDO — foreground y headless llaman a ESTA MISMA función
+ * bajo un lease YA ADQUIRIDO por el caller (con su propio `token`), así que el comportamiento
+ * de drenado (cuántos lotes, cuándo cortar, cómo renovar el lease) vive en un solo lugar en vez
+ * de divergir entre los dos call sites.
+ *
+ * R1 (hallazgo de la misma verificación, ALTO): renueva el lease ANTES de cada lote
+ * (`renovarLease`, `db/outbox.ts`) — no solo al liberar al final, como antes. Si la renovación
+ * no afecta ninguna fila (ya no somos el dueño — el TTL venció mientras seguíamos trabajando,
+ * o un salto de reloj hizo que otro contexto la reclamara como huérfana), el bucle CORTA DE
+ * INMEDIATO con `motivo: 'lease-perdido'`, sin drenar más lotes y SIN que el caller libere el
+ * lease (ya no es suyo — liberar pisaría al nuevo dueño). El progreso de los lotes YA enviados
+ * en este ciclo (`enviados`) se devuelve igual: es trabajo real, no se pierde ni se reporta como
+ * fallo.
+ */
+export async function drenarLotesConLease(
+  db: SQLite.SQLiteDatabase,
+  accessToken: string,
+  token: string,
+): Promise<ResultadoDrenajeLotes> {
+  let totalEnviados = 0;
+  for (let lotesDrenados = 0; lotesDrenados < TOPE_LOTES_POR_CICLO_DRENAJE; lotesDrenados++) {
+    const renovado = await renovarLease(db, ID_LEASE_DRENAJE, token, Date.now(), TTL_LEASE_DRENAJE_MS);
+    if (!renovado) {
+      return { enviados: totalEnviados, motivo: 'lease-perdido' };
+    }
+    const resultado = await sincronizarPendientes(accessToken);
+    totalEnviados += resultado.enviados;
+    // Punto 6 (code review 2026-09-25): decidir "agotado" con `resultado.enviados` (ACEPTADOS
+    // por el servidor) en vez de `resultado.leidos` (filas que de verdad salieron del outbox)
+    // cortaba el ciclo después de UN SOLO lote cuando algún evento del lote es rechazado SIEMPRE
+    // por el servidor (p. ej. un payload con un id de punto de control que ya no existe) y cae
+    // al PRINCIPIO de cada lote nuevo (`obtenerLotePendiente` es FIFO) — ese evento nunca se
+    // acusa, así que `enviados` queda por debajo de `LOTE_MAXIMO` aunque el LOTE haya salido
+    // lleno y quede mucho más atraso real detrás. `leidos` es la señal correcta de "¿este lote
+    // vino lleno, probablemente hay más?" — independiente de cuántos acuse el servidor.
+    if (resultado.leidos < LOTE_MAXIMO) {
+      return { enviados: totalEnviados, motivo: 'agotado' };
+    }
+  }
+  return { enviados: totalEnviados, motivo: 'tope-alcanzado' };
 }
 
 /**
@@ -201,15 +300,22 @@ export async function sincronizarPendientesConLease(
   }
 
   try {
-    const resultado = await sincronizarPendientes(accessToken);
-    await liberarLeaseConCooldown(
-      db,
-      ID_LEASE_DRENAJE,
-      token,
-      Date.now(),
-      PISO_ENTRE_INTENTOS_DRENAJE_MS,
-    );
-    return resultado;
+    // Hallazgo 2 + G1/G2 (verificación posterior): `drenarLotesConLease` es el bucle
+    // COMPARTIDO con el camino headless (`intentarDrenarOportunista`) — ver su docblock para
+    // el detalle de renovación de lease y de cómo se decide `motivo`.
+    const { enviados, motivo } = await drenarLotesConLease(db, accessToken, token);
+    if (motivo === 'lease-perdido') {
+      // R1: ya no somos el dueño — no liberar acá pisaría el lease legítimo del contexto que
+      // lo tomó. El progreso de este ciclo se reporta igual, no es un fallo.
+      return { enviados };
+    }
+    // G2: sin enfriamiento si cortamos por el TOPE con pendientes restantes (`tope-alcanzado`)
+    // — el próximo `setTimeout(500ms)` de `iniciarSyncAutomatico` debe poder adquirir el lease
+    // de inmediato. Con `motivo: 'agotado'` (ya no queda más), el piso normal entre intentos
+    // oportunistas sigue aplicando igual que antes.
+    const cooldownMs = motivo === 'tope-alcanzado' ? 0 : PISO_ENTRE_INTENTOS_DRENAJE_MS;
+    await liberarLeaseConCooldown(db, ID_LEASE_DRENAJE, token, Date.now(), cooldownMs);
+    return { enviados };
   } catch (error) {
     // El caller (`intentarSync`/el intervalo de `use-sync-status.ts`) sigue siendo responsable
     // de reportar este fallo (backoff propio, `errorSync`) — acá solo se libera el lease para
@@ -258,15 +364,27 @@ export function iniciarSyncAutomatico(
       onSyncStart?.();
       // Hallazgo 6 (code review): `sincronizarPendientesConLease`, NO `sincronizarPendientes`
       // directo — ver su docblock. `resultado === null` significa "alguien más (el drenado
-      // por ubicación, u otro disparo de este mismo motor) tiene el lease ahora mismo": no es
-      // un fallo, así que se trata como un éxito vacío (no toca `errorSync`/el contador de
-      // fallos consecutivos) y no se agenda un reintento inmediato — el próximo disparo normal
-      // (reconexión de NetInfo, o el intervalo de `use-sync-status.ts`) ya va a volver a
-      // intentar.
+      // por ubicación, u otro disparo de este mismo motor) tiene el lease ahora mismo".
       const resultado = await sincronizarPendientesConLease(accessToken);
+      if (resultado === null) {
+        // Punto 5 (code review 2026-09-25): lease no disponible NO es un éxito — antes esto
+        // reseteaba `backoffMs` a `BACKOFF_INICIAL_MS` y, como `resultado && ...` daba `false`,
+        // NO reprogramaba ningún reintento. Sin otro disparador externo (NetInfo, un evento de
+        // ubicación) que volviera a llamar a `intentarSync`, la cadena de reintentos por
+        // backoff moría en silencio ahí mismo. Ahora: el backoff vigente NO se toca, y se
+        // reprograma respetando COMO PISO el cooldown del lease (`PISO_ENTRE_INTENTOS_DRENAJE_MS`)
+        // — reintentar antes solo repetiría el mismo `null`, el lease de drenado no se libera
+        // más rápido que eso.
+        onResultado?.({ enviados: 0 });
+        timeoutId = setTimeout(
+          () => void intentarSync(),
+          Math.max(backoffMs, PISO_ENTRE_INTENTOS_DRENAJE_MS),
+        );
+        return;
+      }
       backoffMs = BACKOFF_INICIAL_MS;
-      onResultado?.(resultado ?? { enviados: 0 });
-      if (resultado && resultado.enviados > 0) {
+      onResultado?.(resultado);
+      if (resultado.enviados > 0) {
         // Puede haber más pendientes que el límite de un lote — seguir de inmediato.
         timeoutId = setTimeout(() => void intentarSync(), 500);
       }

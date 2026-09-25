@@ -41,10 +41,18 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
 
   beforeAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      await tx.sindicato.create({ data: { id: sindicatoId, nombre: 'Ingesta Worker Test', estado: 'activo' } });
-      await tx.sindicato.create({ data: { id: sindicatoOtroId, nombre: 'Ingesta Worker Test — Otro', estado: 'activo' } });
-      const linea = await tx.linea.create({ data: { sindicatoId, codigo: 'IW1', nombre: 'Línea Ingesta' } });
-      const lineaOtro = await tx.linea.create({ data: { sindicatoId: sindicatoOtroId, codigo: 'IW1', nombre: 'Línea Otro' } });
+      await tx.sindicato.create({
+        data: { id: sindicatoId, nombre: 'Ingesta Worker Test', estado: 'activo' },
+      });
+      await tx.sindicato.create({
+        data: { id: sindicatoOtroId, nombre: 'Ingesta Worker Test — Otro', estado: 'activo' },
+      });
+      const linea = await tx.linea.create({
+        data: { sindicatoId, codigo: 'IW1', nombre: 'Línea Ingesta' },
+      });
+      const lineaOtro = await tx.linea.create({
+        data: { sindicatoId: sindicatoOtroId, codigo: 'IW1', nombre: 'Línea Otro' },
+      });
       rutaId = randomUUID();
       rutaOtroId = randomUUID();
       await tx.$executeRaw`
@@ -67,12 +75,28 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       `;
 
       const vehiculo = await tx.vehiculo.create({
-        data: { sindicatoId, placa: 'IWT001', tipo: 'bus', marca: 'x', modelo: 'x', color: 'x', capacidad: 10, estado: 'activo' },
+        data: {
+          sindicatoId,
+          placa: 'IWT001',
+          tipo: 'bus',
+          marca: 'x',
+          modelo: 'x',
+          color: 'x',
+          capacidad: 10,
+          estado: 'activo',
+        },
       });
       const conductor = await tx.conductor.create({
-        data: { sindicatoId, nombre: 'Conductor Test', documentoIdentidad: `IWT-${randomUUID()}`, licenciaConducir: 'LIC-1' },
+        data: {
+          sindicatoId,
+          nombre: 'Conductor Test',
+          documentoIdentidad: `IWT-${randomUUID()}`,
+          licenciaConducir: 'LIC-1',
+        },
       });
-      const rotacion = await tx.rotacion.create({ data: { sindicatoId, periodo: '2026-08', estado: 'publicada' } });
+      const rotacion = await tx.rotacion.create({
+        data: { sindicatoId, periodo: '2026-08', estado: 'publicada' },
+      });
       const asignacion = await tx.asignacion.create({
         data: {
           rotacionId: rotacion.id,
@@ -107,6 +131,11 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
       await tx.cumplimientoPc.deleteMany({ where: { sindicatoId } });
       await tx.eventoOperativo.deleteMany({ where: { sindicatoId } });
+      // `gps_sesion_resumen` (docs/plan-en-vivo-resumen-sesion.md) NO tiene FK propia a
+      // `sesiones_operativas`/`gps_points`, pero SÍ a `sindicatos` (`ON DELETE RESTRICT`) —
+      // sin borrar esto primero, el `sindicato.delete` de abajo falla con violación de FK,
+      // porque `insertarGpsPoints` (probado más abajo en este archivo) ahora escribe acá.
+      await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id = ${sesionId}::uuid`;
       await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id = ${sesionId}::uuid`;
       await tx.sesionOperativa.deleteMany({ where: { sindicatoId } });
       await tx.asignacion.deleteMany({ where: { rutaId } });
@@ -153,8 +182,10 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       insertarGpsPoints(tx, sindicatoId, [eventoGps]),
     );
 
-    const filas = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-      tx.$queryRaw<{ total: bigint }[]>`
+    const filas = await withTenantContext(
+      { rol: 'admin_quivo', sindicatoId },
+      (tx) =>
+        tx.$queryRaw<{ total: bigint }[]>`
         SELECT COUNT(*) as total FROM gps_points WHERE event_id = ${eventId}::uuid
       `,
     );
@@ -177,8 +208,10 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       insertarGpsPoints(tx, sindicatoId, [eventoGps]),
     );
 
-    const filas = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-      tx.$queryRaw<{ ts: Date }[]>`
+    const filas = await withTenantContext(
+      { rol: 'admin_quivo', sindicatoId },
+      (tx) =>
+        tx.$queryRaw<{ ts: Date }[]>`
         SELECT ts FROM gps_points WHERE event_id = ${eventId}::uuid
       `,
     );
@@ -201,8 +234,10 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       insertarGpsPoints(tx, sindicatoId, [eventoGps]),
     );
 
-    const filas = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-      tx.$queryRaw<{ ts: Date }[]>`
+    const filas = await withTenantContext(
+      { rol: 'admin_quivo', sindicatoId },
+      (tx) =>
+        tx.$queryRaw<{ ts: Date }[]>`
         SELECT ts FROM gps_points WHERE event_id = ${eventId}::uuid
       `,
     );
@@ -240,6 +275,88 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       ]),
     );
     expect(descartados).toBe(1);
+  });
+
+  /**
+   * code-review MEDIUM (docs/plan-en-vivo-resumen-sesion.md): la jornada boliviana de
+   * `gps_sesion_resumen` tiene que salir bit a bit igual que `fechaActualBolivia`
+   * (aritmética pura en UTC), sin importar el TimeZone de la CONEXIÓN de Postgres que
+   * ejecuta el upsert. Antes del fix, `(ts - interval '4 hours')::date` casteaba un
+   * `timestamptz` a `date` — esa conversión SÍ pasa por el TimeZone de la sesión — así que
+   * una conexión reusada del pool con `TimeZone` distinto de `UTC` podía calcular una
+   * jornada distinta de la real, silenciosamente. `SET LOCAL` (no `SET` a secas): queda
+   * acotado a esta transacción — no se pega a la conexión física para el resto de la suite
+   * cuando `withTenantContext` la devuelve al pool de Prisma.
+   */
+  it('la jornada del punto no cambia con el TimeZone de la conexión (code-review MEDIUM)', async () => {
+    const sesionTzId = await withTenantContext(
+      { rol: 'admin_quivo', sindicatoId: null },
+      async (tx) => {
+        await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE)`;
+        const base = await tx.sesionOperativa.findUniqueOrThrow({ where: { id: sesionId } });
+        const sesion = await tx.sesionOperativa.create({
+          data: {
+            sindicatoId,
+            asignacionId: base.asignacionId,
+            vehiculoId: base.vehiculoId,
+            conductorId: base.conductorId,
+            deviceId: 'device-test-tz',
+            accessTokenHash: randomUUID(),
+            refreshTokenHash: randomUUID(),
+            accessExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+            refreshExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          },
+        });
+        return sesion.id;
+      },
+    );
+
+    // Ancla al día UTC de HOY para que ambos `ts` caigan en la partición ya asegurada arriba.
+    const hoyStr = new Date().toISOString().slice(0, 10);
+    const ayerStr = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    // 05:00 UTC - 4h = 01:00 UTC del MISMO día ⇒ jornada = HOY.
+    const tsHoy = `${hoyStr}T05:00:00.000Z`;
+    // 03:59 UTC - 4h = 23:59 UTC del día ANTERIOR ⇒ jornada = AYER.
+    const tsAyer = `${hoyStr}T03:59:00.000Z`;
+
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId }, async (tx) => {
+      await tx.$executeRaw`SET LOCAL TimeZone = 'America/La_Paz'`;
+      await insertarGpsPoints(tx, sindicatoId, [
+        evento({
+          eventId: randomUUID(),
+          ts: tsHoy,
+          payload: { sesionId: sesionTzId, lat: -17.78, lng: -63.18, accuracy: 5, speed: 10 },
+        }),
+        evento({
+          eventId: randomUUID(),
+          ts: tsAyer,
+          payload: { sesionId: sesionTzId, lat: -17.78, lng: -63.18, accuracy: 5, speed: 10 },
+        }),
+      ]);
+    });
+
+    try {
+      const filas = await withTenantContext(
+        { rol: 'admin_quivo', sindicatoId },
+        (tx) =>
+          tx.$queryRaw<{ jornada: Date; total_puntos: number }[]>`
+          SELECT jornada, total_puntos FROM gps_sesion_resumen
+          WHERE sesion_id = ${sesionTzId}::uuid ORDER BY jornada ASC
+        `,
+      );
+
+      expect(filas).toHaveLength(2);
+      expect(filas[0]?.jornada.toISOString().slice(0, 10)).toBe(ayerStr);
+      expect(filas[0]?.total_puntos).toBe(1);
+      expect(filas[1]?.jornada.toISOString().slice(0, 10)).toBe(hoyStr);
+      expect(filas[1]?.total_puntos).toBe(1);
+    } finally {
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id = ${sesionTzId}::uuid`;
+        await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id = ${sesionTzId}::uuid`;
+        await tx.sesionOperativa.delete({ where: { id: sesionTzId } });
+      });
+    }
   });
 
   it('valida server-side un cumplimiento dentro del radio de tolerancia', async () => {

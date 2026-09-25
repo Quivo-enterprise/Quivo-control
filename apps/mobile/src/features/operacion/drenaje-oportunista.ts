@@ -9,7 +9,8 @@ import {
   PISO_ENTRE_INTENTOS_DRENAJE_MS as PISO_ENTRE_INTENTOS_MS,
   TTL_LEASE_DRENAJE_MS as TTL_LEASE_MS,
 } from '../../db/outbox';
-import { sincronizarPendientes } from './sync-outbox';
+import { intentarRevocacionesPendientes } from '../auth/use-auth-movil';
+import { drenarLotesConLease } from './sync-outbox';
 
 /**
  * Drenado OPORTUNISTA del outbox en background (Entrega 2,
@@ -68,6 +69,30 @@ const UMBRAL_RECUPERACION_ENVIADOS_MS = 90_000;
  * ideal, nunca se rompe el mutex. */
 let backoffActualMs = PISO_ENTRE_INTENTOS_MS;
 
+/**
+ * Punto 8 (code review 2026-09-25): throttle en memoria a nivel de MÓDULO, chequeado ANTES de
+ * tocar SQLite (`abrirOutbox`/`adquirirLease`) o de disparar `intentarRevocacionesPendientes`
+ * (punto 4) — `use-gps-operativo.ts` llama a `intentarDrenarOportunista` en CADA fix de
+ * foreground sin ningún throttle propio; a `distanceFilter` de 15 m eso puede ser varias veces
+ * por segundo a velocidad de calle. El lease SQLite YA impedía dos drenados CONCURRENTES entre
+ * contextos, pero cada intento igual pagaba el costo de abrir la conexión y perder la carrera
+ * por el lease — y, peor, disparaba `intentarRevocacionesPendientes` sin condición alguna. Este
+ * throttle es SOLO una optimización de ENTRADA a este contexto JS puntual: no reemplaza el
+ * lease SQLite (la garantía real de exclusión mutua entre contextos), solo reduce cuántas veces
+ * por segundo este contexto intenta entrar en absoluto. Igual que `backoffActualMs` (arriba),
+ * vive en memoria a propósito — un reinicio de contexto (headless ↔ foreground) lo resetea, peor
+ * caso se reintenta un poco antes de lo ideal, nunca se rompe ninguna garantía.
+ */
+let ultimoIntentoDrenajeMs = 0;
+
+/** SOLO para tests: los de este archivo corren `intentarDrenarOportunista` muchas veces en
+ * segundos de wall-clock real, y sin este reset el throttle de arriba haría que el segundo test
+ * en adelante se salteara entero por heredar el timestamp del anterior. Sin caller en
+ * producción — el throttle debe persistir mientras el proceso viva. */
+export function reiniciarThrottleDrenajeOportunistaParaTests(): void {
+  ultimoIntentoDrenajeMs = 0;
+}
+
 function generarTokenLease(): string {
   // No es un identificador criptográfico ni de seguridad — solo necesita ser distinto entre
   // intentos concurrentes de ESTE dispositivo para que `construirLiberarLeaseConCooldown`
@@ -96,14 +121,36 @@ function generarTokenLease(): string {
  * rechazaría la promesa que el SDK usa para cerrar la tarea, y además cortaría el `await` que
  * el caller necesita) y "fire and forget" desde el foreground (`void
  * intentarDrenarOportunista(...)`, sin `.catch` propio en el call site) — en NINGÚN camino
- * puede rechazar. El `catch` de `sincronizarPendientes` ya cubre el caso esperado (falla de
- * transporte); este externo cubre lo INESPERADO (p. ej. `abrirOutbox`/`adquirirLease`
- * fallando), que sin este resguardo se filtraría como unhandled rejection en foreground o
- * como una tarea headless rechazada (y sin reintento) en background.
+ * puede rechazar. El `catch` de `drenarLotesConLease`/`sincronizarPendientes` ya cubre el caso
+ * esperado (falla de transporte); este externo cubre lo INESPERADO (p. ej.
+ * `abrirOutbox`/`adquirirLease` fallando), que sin este resguardo se filtraría como unhandled
+ * rejection en foreground o como una tarea headless rechazada (y sin reintento) en background.
+ *
+ * G1 (hallazgo de `/codex-debug verify-fix`, ALTO): este camino drena con
+ * `drenarLotesConLease` (`sync-outbox.ts`), el MISMO bucle compartido que usa
+ * `sincronizarPendientesConLease` en foreground — un atraso grande en background ya no queda
+ * cortado a un lote por evento de ubicación/heartbeat, ver el docblock de esa función para el
+ * detalle de renovación de lease y encadenado.
  */
 export async function intentarDrenarOportunista(
   obtenerAccessToken: () => Promise<string | null>,
 ): Promise<void> {
+  // Punto 8 (ver el docblock de `ultimoIntentoDrenajeMs` arriba): se sale ANTES de tocar
+  // SQLite o de disparar `intentarRevocacionesPendientes` si el último intento (exitoso o no)
+  // fue hace menos del piso — desistir en silencio acá es el comportamiento correcto, igual
+  // que cuando no se consigue el lease SQLite más abajo.
+  const ahoraInicioMs = Date.now();
+  if (ahoraInicioMs - ultimoIntentoDrenajeMs < PISO_ENTRE_INTENTOS_MS) {
+    return;
+  }
+  ultimoIntentoDrenajeMs = ahoraInicioMs;
+  // Punto 3 (`/codex-debug verify-fix`, decisión del CTO): "próximo ciclo de drenado" —
+  // aprovecha que esta función se dispara con cada fix de ubicación/heartbeat (hay actividad,
+  // y probablemente red) para reintentar una revocación de logout que quedó pendiente por
+  // falta de conectividad (ver `intentarRevocacionesPendientes`/`ejecutarLogout` en
+  // `use-auth-movil.ts`). Fire-and-forget e independiente del lease/token de abajo: nunca
+  // rechaza, y no tiene nada que ver con el drenado del outbox en sí.
+  void intentarRevocacionesPendientes();
   try {
     const db = await abrirOutbox();
     const ahoraMs = Date.now();
@@ -179,11 +226,39 @@ export async function intentarDrenarOportunista(
         return;
       }
 
-      await sincronizarPendientes(accessToken);
-      // Éxito: resetea el backoff en memoria (ver su comentario) y libera con el piso fijo — el
-      // próximo intento, en cualquier contexto, puede volver a intentar en 10 s.
+      // G1: bucle COMPARTIDO con el foreground — ver el docblock de `drenarLotesConLease`
+      // (`sync-outbox.ts`) y el de la función, arriba.
+      const { motivo } = await drenarLotesConLease(db, accessToken, token);
+      // Éxito (sin excepción, sea cual sea `motivo`): resetea el backoff en memoria — ver su
+      // comentario.
       backoffActualMs = PISO_ENTRE_INTENTOS_MS;
-      await liberarLeaseConCooldown(db, ID_LEASE_DRENAJE, token, Date.now(), PISO_ENTRE_INTENTOS_MS);
+      if (motivo === 'lease-perdido') {
+        // R1 (ver `renovarLease`, `db/outbox.ts`): ya no somos el dueño de esta fila — otro
+        // contexto la tomó entre lotes. NO liberar: liberar acá pisaría el lease legítimo del
+        // nuevo dueño.
+        return;
+      }
+      // G3 (hallazgo de `/codex-debug verify-fix`, MEDIO — sobre este mismo bloque): en
+      // headless, alcanzar el tope (`tope-alcanzado`, 20 lotes = hasta 10 000 eventos) libera
+      // el lease SIN programar una continuación explícita (sin `setTimeout`/reintento propio)
+      // — el resto del atraso queda esperando el PRÓXIMO evento externo. Evaluado y dejado
+      // así a propósito, sin cambiar comportamiento:
+      // 1. El heartbeat de `background-geolocation.config.ts` sigue disparando cada 60 s
+      //    AUNQUE el vehículo esté quieto (no depende de fixes de ubicación) — la continuación
+      //    ya está garantizada por ese camino, sin necesitar un mecanismo nuevo.
+      // 2. 10 000 eventos por ciclo es un atraso MUY por encima de una jornada completa (a un
+      //    fix cada ~10 s, ~8600 eventos en 24 h corridas) — llegar al tope en la práctica
+      //    implica ya varias horas sin ninguna conectividad, un escenario extremo donde 60 s
+      //    más de espera hasta el próximo heartbeat es insignificante frente al atraso total.
+      // 3. Agregar un `setTimeout` propio acá reintroduciría el problema que
+      //    `drenaje-oportunista.ts` ya documenta arriba (RN congela los timers JS con la
+      //    Activity en pausa) sin necesidad, dado el punto 1.
+      // G2: sin enfriamiento si cortamos por el TOPE con pendientes restantes
+      // (`tope-alcanzado`) — el próximo evento de ubicación/heartbeat debe poder adquirir el
+      // lease de inmediato, en vez de esperar el piso pensado para intentos oportunistas
+      // espaciados. Con `motivo: 'agotado'` (ya no queda más), el piso normal sigue aplicando.
+      const cooldownMs = motivo === 'tope-alcanzado' ? 0 : PISO_ENTRE_INTENTOS_MS;
+      await liberarLeaseConCooldown(db, ID_LEASE_DRENAJE, token, Date.now(), cooldownMs);
     } catch (error) {
       // Falla de transporte (sin cobertura, 5xx, timeout, 429): SOLO Sentry, nunca la pantalla
       // del chofer — ver el docblock de la función. La evidencia sigue intacta en el outbox

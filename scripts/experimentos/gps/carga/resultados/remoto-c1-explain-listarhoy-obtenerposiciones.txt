@@ -1,0 +1,121 @@
+=== EXPLAIN (ANALYZE, BUFFERS) listarHoy (remoto-c1) ===
+Limit  (cost=187.32..187.35 rows=12 width=151) (actual time=19.365..19.380 rows=100 loops=1)
+  Buffers: shared hit=11908 read=141 dirtied=2
+  ->  Sort  (cost=187.32..187.35 rows=12 width=151) (actual time=19.364..19.373 rows=100 loops=1)
+        Sort Key: ((so.fin IS NULL)) DESC, gr.ultimo_fix_ts DESC NULLS LAST, so.inicio DESC
+        Sort Method: top-N heapsort  Memory: 70kB
+        Buffers: shared hit=11908 read=141 dirtied=2
+        ->  Nested Loop Left Join  (cost=22.29..187.11 rows=12 width=151) (actual time=3.095..18.533 rows=1000 loops=1)
+              Buffers: shared hit=11897 read=141 dirtied=2
+              ->  Nested Loop  (cost=22.00..87.15 rows=12 width=167) (actual time=3.021..14.772 rows=1000 loops=1)
+                    Buffers: shared hit=8897 read=141 dirtied=2
+                    ->  Nested Loop  (cost=21.72..81.93 rows=12 width=191) (actual time=2.385..10.941 rows=1000 loops=1)
+                          Buffers: shared hit=5924 read=114 dirtied=2
+                          ->  Nested Loop  (cost=21.45..76.43 rows=12 width=220) (actual time=1.765..7.007 rows=1000 loops=1)
+                                Buffers: shared hit=2957 read=81 dirtied=2
+                                ->  Hash Join  (cost=21.17..70.04 rows=12 width=69) (actual time=1.335..2.654 rows=1000 loops=1)
+                                      Hash Cond: (a."rutaId" = ru.id)
+                                      Buffers: shared hit=2 read=36 dirtied=2
+                                      ->  Seq Scan on asignaciones a  (cost=0.00..45.00 rows=1000 width=74) (actual time=0.492..1.561 rows=1000 loops=1)
+                                            Buffers: shared hit=2 read=33
+                                      ->  Hash  (cost=21.12..21.12 rows=4 width=64) (actual time=0.819..0.821 rows=1 loops=1)
+                                            Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                                            Buffers: shared read=3 dirtied=2
+                                            ->  Nested Loop  (cost=4.16..21.12 rows=4 width=64) (actual time=0.809..0.811 rows=1 loops=1)
+                                                  Buffers: shared read=3 dirtied=2
+                                                  ->  Seq Scan on lineas l  (cost=0.00..11.60 rows=1 width=64) (actual time=0.511..0.512 rows=1 loops=1)
+                                                        Filter: ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true)))
+                                                        Buffers: shared read=1 dirtied=1
+                                                  ->  Bitmap Heap Scan on rutas ru  (cost=4.16..9.50 rows=2 width=64) (actual time=0.287..0.289 rows=1 loops=1)
+                                                        Recheck Cond: ("lineaId" = l.id)
+                                                        Heap Blocks: exact=1
+                                                        Buffers: shared read=2 dirtied=1
+                                                        ->  Bitmap Index Scan on "rutas_lineaId_idx"  (cost=0.00..4.16 rows=2 width=0) (actual time=0.025..0.025 rows=1 loops=1)
+                                                              Index Cond: ("lineaId" = l.id)
+                                                              Buffers: shared read=1
+                                ->  Index Scan using sesiones_operativas_asignacion_estado_idx on sesiones_operativas so  (cost=0.28..0.52 rows=1 width=225) (actual time=0.004..0.004 rows=1 loops=1000)
+                                      Index Cond: ("asignacionId" = a.id)
+                                      Filter: ((((inicio >= '2026-09-22 00:00:00'::timestamp without time zone) AND (inicio < '2026-09-23 00:00:00'::timestamp without time zone)) OR ((fin IS NULL) AND (estado = 'activa'::text))) AND ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true))))
+                                      Buffers: shared hit=2955 read=45
+                          ->  Index Scan using vehiculos_pkey on vehiculos v  (cost=0.28..0.46 rows=1 width=45) (actual time=0.004..0.004 rows=1 loops=1000)
+                                Index Cond: (id = so."vehiculoId")
+                                Filter: ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true)))
+                                Buffers: shared hit=2967 read=33
+                    ->  Index Scan using conductores_pkey on conductores c  (cost=0.28..0.43 rows=1 width=50) (actual time=0.003..0.003 rows=1 loops=1000)
+                          Index Cond: (id = so."conductorId")
+                          Filter: ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true)))
+                          Buffers: shared hit=2973 read=27
+              ->  Limit  (cost=0.29..8.32 rows=1 width=20) (actual time=0.003..0.003 rows=1 loops=1000)
+                    Buffers: shared hit=3000
+                    ->  Index Scan using gps_sesion_resumen_pkey on gps_sesion_resumen gr  (cost=0.29..8.32 rows=1 width=20) (actual time=0.003..0.003 rows=1 loops=1000)
+                          Index Cond: ((sesion_id = (so.id)::uuid) AND (jornada = '2026-09-22'::date) AND ("sindicatoId" = so."sindicatoId"))
+                          Filter: ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true)))
+                          Buffers: shared hit=3000
+Planning:
+  Buffers: shared hit=943 read=63 dirtied=6
+Planning Time: 51.483 ms
+Execution Time: 19.650 ms
+
+=== EXPLAIN (ANALYZE, BUFFERS) obtenerPosiciones (remoto-c1) ===
+Limit  (cost=277.22..277.25 rows=12 width=247) (actual time=17.719..17.778 rows=500 loops=1)
+  Buffers: shared hit=14541
+  ->  Sort  (cost=277.22..277.25 rows=12 width=247) (actual time=17.718..17.745 rows=500 loops=1)
+        Sort Key: ((so.fin IS NULL)) DESC, gr.ultimo_fix_ts DESC NULLS LAST, so.inicio DESC
+        Sort Method: quicksort  Memory: 282kB
+        Buffers: shared hit=14541
+        ->  Nested Loop Left Join  (cost=37.81..277.01 rows=12 width=247) (actual time=0.142..15.957 rows=1000 loops=1)
+              Buffers: shared hit=14541
+              ->  Nested Loop  (cost=22.00..87.12 rows=12 width=231) (actual time=0.061..9.413 rows=1000 loops=1)
+                    Buffers: shared hit=9038
+                    ->  Nested Loop  (cost=21.72..81.90 rows=12 width=255) (actual time=0.053..6.622 rows=1000 loops=1)
+                          Buffers: shared hit=6038
+                          ->  Nested Loop  (cost=21.45..76.40 rows=12 width=284) (actual time=0.045..3.663 rows=1000 loops=1)
+                                Buffers: shared hit=3038
+                                ->  Hash Join  (cost=21.17..70.04 rows=12 width=133) (actual time=0.034..0.603 rows=1000 loops=1)
+                                      Hash Cond: (a."rutaId" = ru.id)
+                                      Buffers: shared hit=38
+                                      ->  Seq Scan on asignaciones a  (cost=0.00..45.00 rows=1000 width=74) (actual time=0.007..0.324 rows=1000 loops=1)
+                                            Buffers: shared hit=35
+                                      ->  Hash  (cost=21.12..21.12 rows=4 width=128) (actual time=0.022..0.025 rows=1 loops=1)
+                                            Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                                            Buffers: shared hit=3
+                                            ->  Nested Loop  (cost=4.16..21.12 rows=4 width=128) (actual time=0.018..0.021 rows=1 loops=1)
+                                                  Buffers: shared hit=3
+                                                  ->  Seq Scan on lineas l  (cost=0.00..11.60 rows=1 width=64) (actual time=0.007..0.007 rows=1 loops=1)
+                                                        Filter: ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true)))
+                                                        Buffers: shared hit=1
+                                                  ->  Bitmap Heap Scan on rutas ru  (cost=4.16..9.50 rows=2 width=96) (actual time=0.009..0.010 rows=1 loops=1)
+                                                        Recheck Cond: ("lineaId" = l.id)
+                                                        Heap Blocks: exact=1
+                                                        Buffers: shared hit=2
+                                                        ->  Bitmap Index Scan on "rutas_lineaId_idx"  (cost=0.00..4.16 rows=2 width=0) (actual time=0.003..0.003 rows=1 loops=1)
+                                                              Index Cond: ("lineaId" = l.id)
+                                                              Buffers: shared hit=1
+                                ->  Index Scan using sesiones_operativas_asignacion_estado_idx on sesiones_operativas so  (cost=0.28..0.52 rows=1 width=225) (actual time=0.003..0.003 rows=1 loops=1000)
+                                      Index Cond: ("asignacionId" = a.id)
+                                      Filter: (((inicio >= '2026-09-21 10:23:41.342'::timestamp without time zone) OR ((fin IS NULL) AND (estado = 'activa'::text))) AND ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true))))
+                                      Buffers: shared hit=3000
+                          ->  Index Scan using vehiculos_pkey on vehiculos v  (cost=0.28..0.46 rows=1 width=45) (actual time=0.003..0.003 rows=1 loops=1000)
+                                Index Cond: (id = so."vehiculoId")
+                                Filter: ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true)))
+                                Buffers: shared hit=3000
+                    ->  Index Scan using conductores_pkey on conductores c  (cost=0.28..0.43 rows=1 width=50) (actual time=0.002..0.002 rows=1 loops=1000)
+                          Index Cond: (id = so."conductorId")
+                          Filter: ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true)))
+                          Buffers: shared hit=3000
+              ->  Limit  (cost=15.81..15.81 rows=1 width=52) (actual time=0.006..0.006 rows=1 loops=1000)
+                    Buffers: shared hit=5503
+                    ->  Sort  (cost=15.81..15.81 rows=1 width=52) (actual time=0.006..0.006 rows=1 loops=1000)
+                          Sort Key: gr.ultimo_fix_ts DESC
+                          Sort Method: quicksort  Memory: 25kB
+                          Buffers: shared hit=5503
+                          ->  WindowAgg  (cost=0.29..15.80 rows=1 width=52) (actual time=0.005..0.005 rows=2 loops=1000)
+                                Buffers: shared hit=5503
+                                ->  Index Scan using gps_sesion_resumen_pkey on gps_sesion_resumen gr  (cost=0.29..15.79 rows=1 width=52) (actual time=0.003..0.003 rows=2 loops=1000)
+                                      Index Cond: ((sesion_id = (so.id)::uuid) AND (jornada = ANY ('{2026-09-22,2026-09-21}'::date[])) AND ("sindicatoId" = so."sindicatoId"))
+                                      Filter: ((ultimo_fix_ts >= '2026-09-21 14:23:41.342+00'::timestamp with time zone) AND ((current_setting('app.rol'::text, true) = 'admin_quivo'::text) OR ("sindicatoId" = current_setting('app.sindicato_id'::text, true))))
+                                      Buffers: shared hit=5503
+Planning:
+  Buffers: shared hit=84
+Planning Time: 1.348 ms
+Execution Time: 18.059 ms

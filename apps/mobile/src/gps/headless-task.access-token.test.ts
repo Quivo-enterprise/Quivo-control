@@ -16,10 +16,20 @@ vi.mock('@sentry/react-native', () => ({
   addBreadcrumb: vi.fn(),
 }));
 
+// G1 (hallazgo de `/codex-debug verify-fix`): `refrescar()` (`use-auth-movil.ts`, llamado
+// desde `obtenerAccessTokenHeadless`) ahora corre bajo el lease SQLite `refresh-sesion` —
+// `adquirirLease`/`liberarLeaseConCooldown` se mockean concediendo el lease de inmediato, sin
+// alterar el comportamiento/timing de estos tests (un solo contexto simulado a la vez).
 vi.mock('../db/outbox', () => ({
-  abrirOutbox: vi.fn(),
+  abrirOutbox: vi.fn().mockResolvedValue({}),
   encolarEvento: vi.fn(),
   obtenerEventosPorTipo: vi.fn(),
+  adquirirLease: vi.fn().mockResolvedValue(true),
+  liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
+  // G1 ronda 4: `ejecutarRefresh` renueva (compare-and-set) el lease antes de persistir.
+  renovarLease: vi.fn().mockResolvedValue(true),
+  ID_LEASE_REFRESH_SESION: 'refresh-sesion',
+  TTL_LEASE_REFRESH_SESION_MS: 20_000,
 }));
 
 vi.mock('../db/paquete-dia', () => ({
@@ -147,11 +157,11 @@ describe('obtenerAccessTokenHeadless', () => {
       obtenerAccessTokenHeadless(),
     ];
 
-    // Deja que las tres lleguen hasta el punto de espera del refresh (microtasks) antes de
-    // resolverlo.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(refreshMock).toHaveBeenCalledTimes(1); // no 3 — ver el docblock del fix.
+    // Deja que las tres lleguen hasta el punto de espera del refresh antes de resolverlo.
+    // G3/R4 (`use-auth-movil.ts`): `refrescar()` ahora reconcilia contra disco (un `await`
+    // extra, `cargarSesionMovil()` de nuevo) ANTES de tocar la red — `vi.waitFor` espera esa
+    // reconciliación en vez de asumir una cantidad fija de microtask ticks.
+    await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1)); // no 3 — ver el docblock del fix.
 
     resolverRefresh({
       accessToken: 'access-nueva',

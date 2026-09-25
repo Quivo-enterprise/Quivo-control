@@ -16,10 +16,12 @@ vi.mock('@sentry/react-native', () => ({
 }));
 
 import {
+  COTA_SANIDAD_LEASE_MS,
   construirAdquirirLease,
   construirLiberarLeaseConCooldown,
   construirRecuperarEnviadosHuerfanos,
   construirRevertirAPendiente,
+  TTL_LEASE_DRENAJE_MS,
   type EstadoOutbox,
 } from './outbox';
 
@@ -143,7 +145,10 @@ describe('construirAdquirirLease (Entrega 2 — mutex cross-contexto)', () => {
     expect(sql).toContain('INSERT INTO sync_lease');
     expect(sql).toContain('ON CONFLICT(id) DO UPDATE');
     expect(sql).toContain('WHERE sync_lease.expira_at <= ?');
-    expect(params).toEqual(['drenaje-outbox', 'token-1', 31_000, 1_000]);
+    // Hallazgo 4 (BAJO): segunda condición del OR — un `expira_at` demasiado lejos en el
+    // futuro (salto de reloj hacia atrás) también libera el lease. Ver `COTA_SANIDAD_LEASE_MS`.
+    expect(sql).toContain('OR sync_lease.expira_at > ?');
+    expect(params).toEqual(['drenaje-outbox', 'token-1', 31_000, 1_000, 1_000 + COTA_SANIDAD_LEASE_MS]);
   });
 
   /** Simula el UPSERT completo: adquiere solo si la fila no existe o si `expira_at <= ahora`. */
@@ -183,6 +188,81 @@ describe('construirAdquirirLease (Entrega 2 — mutex cross-contexto)', () => {
     // intento SÍ lo recupera — sin esto, el lease huérfano bloquearía el drenado para siempre.
     expect(simularAdquirir(tabla, 'drenaje-outbox', 'otro-contexto', 30_001, 30_000)).toBe(true);
     expect(tabla.get('drenaje-outbox')?.owner).toBe('otro-contexto');
+  });
+
+  describe('Hallazgo 4 (code review, BAJO): salto de reloj hacia atrás', () => {
+    /** Interpreta el WHERE real generado por `construirAdquirirLease`: libre si `expira_at`
+     * ya pasó O si está más allá de la cota de sanidad (`ahoraMs + COTA_SANIDAD_LEASE_MS`). */
+    function simularAdquirirConCota(
+      tabla: Map<string, { owner: string; expiraAt: number }>,
+      id: string,
+      token: string,
+      ahoraMs: number,
+      expiraAtMs: number,
+    ): boolean {
+      const fila = tabla.get(id);
+      const libre = !fila || fila.expiraAt <= ahoraMs || fila.expiraAt > ahoraMs + COTA_SANIDAD_LEASE_MS;
+      if (libre) {
+        tabla.set(id, { owner: token, expiraAt: expiraAtMs });
+        return true;
+      }
+      return false;
+    }
+
+    it('un lease vigente (expira_at razonable) NO se libera de más bajo reloj estable', () => {
+      const tabla = new Map<string, { owner: string; expiraAt: number }>();
+      // Adquirido en t=0 con el TTL real del lease (60s) — expira_at = 60_000.
+      simularAdquirirConCota(tabla, 'drenaje-outbox', 'contexto-vivo', 0, TTL_LEASE_DRENAJE_MS);
+
+      // 5s después, reloj estable: el lease sigue legítimamente tomado.
+      expect(simularAdquirirConCota(tabla, 'drenaje-outbox', 'otro-contexto', 5_000, 999)).toBe(false);
+      expect(tabla.get('drenaje-outbox')?.owner).toBe('contexto-vivo');
+    });
+
+    it('el reloj del teléfono salta hacia atrás más de la cota → el lease "del futuro" se libera solo', () => {
+      const tabla = new Map<string, { owner: string; expiraAt: number }>();
+      // El teléfono tenía el reloj ADELANTADO: adquiere el lease con `ahoraMs` ya corrido
+      // 10 minutos hacia adelante respecto del reloj real — expira_at queda "en el futuro"
+      // también respecto del reloj real, mucho más allá del TTL legítimo (60s).
+      const relojAdelantadoMs = 10 * 60_000;
+      simularAdquirirConCota(
+        tabla,
+        'drenaje-outbox',
+        'contexto-con-reloj-adelantado',
+        relojAdelantadoMs,
+        relojAdelantadoMs + TTL_LEASE_DRENAJE_MS,
+      );
+
+      // El reloj se corrige (NTP, o el chofer lo ajusta) y salta hacia atrás a t=0 real — sin
+      // el fix, `expira_at` (~10min + 60s en el futuro) seguiría "tomado" ~10 minutos enteros.
+      // Con la cota (TTL + 60s = 120s), un `expira_at` tan lejos en el futuro es imposible bajo
+      // un reloj estable — se trata como libre.
+      expect(simularAdquirirConCota(tabla, 'drenaje-outbox', 'contexto-nuevo', 0, TTL_LEASE_DRENAJE_MS)).toBe(
+        true,
+      );
+      expect(tabla.get('drenaje-outbox')?.owner).toBe('contexto-nuevo');
+    });
+
+    it('un salto de reloj hacia atrás CHICO (dentro de la cota) sigue respetando el lease vigente', () => {
+      const tabla = new Map<string, { owner: string; expiraAt: number }>();
+      // Reloj apenas adelantado (30s) al adquirir — dentro del margen que un TTL legítimo ya
+      // explica, no debe tratarse como corrupto.
+      const relojLevementeAdelantadoMs = 30_000;
+      simularAdquirirConCota(
+        tabla,
+        'drenaje-outbox',
+        'contexto-vivo',
+        relojLevementeAdelantadoMs,
+        relojLevementeAdelantadoMs + TTL_LEASE_DRENAJE_MS,
+      );
+
+      // Reloj corregido a t=0: expira_at (90_000) sigue dentro de la cota de sanidad
+      // (0 + 120_000) — un lease legítimo recién adquirido no debe liberarse de más.
+      expect(simularAdquirirConCota(tabla, 'drenaje-outbox', 'otro-contexto', 0, TTL_LEASE_DRENAJE_MS)).toBe(
+        false,
+      );
+      expect(tabla.get('drenaje-outbox')?.owner).toBe('contexto-vivo');
+    });
   });
 });
 

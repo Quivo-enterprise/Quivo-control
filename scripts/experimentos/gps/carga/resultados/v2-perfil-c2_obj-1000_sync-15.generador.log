@@ -1,0 +1,37 @@
+
+---stderr---
+[generador.mjs] modo LOCAL -> localhost:55432/quivo_control (Docker quivo-carga-pg)
+Generador: objetivo=1000 pts/s, sync=15s, trufis=1000, concurrencia=1, calentamiento=60s, medicion=300s
+Fin de calentamiento, empieza medición.
+{
+  "objetivoPtsSeg": 1000,
+  "syncSegundos": 15,
+  "concurrencia": 1,
+  "trufis": 1000,
+  "duracionMedicionS": 300.001,
+  "tasaOfrecidaPtsSeg": 999.9466668444439,
+  "desviacionOfrecidaPct": 0.005333315555606078,
+  "corridaValida": true,
+  "sostenido": true,
+  "backlogAlCierre": 0,
+  "filasEnBacklogAlCierre": 0,
+  "backlogAbandonadoTrasDrenado": 0,
+  "filasAbandonadasTrasDrenado": 0,
+  "lotesEnviados": 19999,
+  "lotesConfirmados": 19999,
+  "lotesFallidos": 0,
+  "filasEnviadas": 299985,
+  "filasConfirmadas": 299985,
+  "filasPerdidas": 0,
+  "throughputLogradoPtsSeg": 999.9466668444439,
+  "throughputVsObjetivoPct": 99.99466668444438,
+  "latenciaLoteMs": {
+    "p50": 5.037192999967374,
+    "p95": 10.727825000009034,
+    "p99": 11.8499020000163,
+    "max": 22.90214200000628
+  },
+  "backlogMaximo": 2,
+  "backlogPromedio": 0.21787709497206703,
+  "erroresMuestra": []
+}

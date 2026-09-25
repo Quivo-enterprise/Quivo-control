@@ -16,7 +16,11 @@ import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportun
 // Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
 // `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
 import { refrescar } from '../features/auth/use-auth-movil';
-import { cargarSesionMovil, obtenerDeviceIdMovil } from '../shared/security/sesion-movil-store';
+import {
+  cargarSesionMovil,
+  hayLogoutSolicitado,
+  obtenerDeviceIdMovil,
+} from '../shared/security/sesion-movil-store';
 
 /**
  * Margen de gracia antes de apagar el plugin nativo tras vencer el paquete del día (hallazgo
@@ -323,6 +327,40 @@ export async function obtenerContextoUbicacionPersistido(): Promise<ContextoUbic
     return null;
   }
 
+  // Fix drenado en background (2026-09-25, punto 2): `ejecutarLogout` (`use-auth-movil.ts`)
+  // puede devolver 'pendiente' cuando no consigue el lease `refresh-sesion` a tiempo (caso
+  // patológico) — marca `marcarLogoutSolicitado()` pero deja la sesión INTACTA en disco a
+  // propósito, para que `intentarRevocacionesPendientes` la encuentre y reintente el logout
+  // completo. Este task headless corre fuera de React y de ese ciclo de reintento: sin este
+  // chequeo, seguiría atribuyendo evidencia GPS NUEVA (RF-67..73) al `sesionId` de un chofer
+  // que ya pidió cerrar sesión — crítico en teléfonos compartidos, donde otro chofer puede
+  // tomar el vehículo en esa ventana.
+  //
+  // Punto 2 (code review 2026-09-25): la marca PRESENTE y la LECTURA que falla NO son lo
+  // mismo, y antes se trataban igual (fail-closed también sobre el tracker). Un error
+  // transitorio de Keystore/SecureStore en un solo tick no es evidencia de que el chofer pidió
+  // cerrar sesión — pero `detenerTrackingNativo()` es IRREVERSIBLE en este camino: además de
+  // parar el plugin, desactiva `startOnBoot`, así que un solo tick con Keystore ocupado podía
+  // matar la captura GPS del resto del turno sin que nada la reanude. Ahora: marca PRESENTE →
+  // se sigue deteniendo el tracker (fail-closed real, hay evidencia). LECTURA que falla → se
+  // descarta el punto de ESTE tick (fail-closed sobre la atribución, mismo motivo que
+  // `debeRestaurarComoDeslogueado` en `use-auth-movil.ts`) pero el tracker sigue corriendo —
+  // el próximo tick vuelve a intentar leer la marca. A propósito NO se toca el drenado
+  // (`intentarDrenarOportunista`, ver el caller): la evidencia YA registrada antes de este
+  // punto debe seguir subiendo — la sesión sigue siendo válida server-side hasta que la
+  // revocación real se complete, así que autenticar ESE envío no es operar por el chofer que
+  // se fue, es solo terminar de entregar lo que ya se capturó legítimamente.
+  let logoutSolicitado: boolean;
+  try {
+    logoutSolicitado = await hayLogoutSolicitado();
+  } catch {
+    return null;
+  }
+  if (logoutSolicitado) {
+    await detenerTrackingNativo();
+    return null;
+  }
+
   const dbPaquete = await abrirPaqueteDiaDb();
   // Hallazgo 1 (CRÍTICO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): comparar contra la
   // asignación de ESTA sesión (ya validada arriba), no aceptar la fila a ciegas — la fila de
@@ -452,12 +490,24 @@ async function asegurarSemillaCumplimientos(
  * concurrente para el MISMO token comparte la única promesa en vuelo, así que dentro de un
  * mismo contexto JS (el caso que dispara el bug: varios ticks headless seguidos, o headless +
  * foreground si Android no reciclo el contexto entre ambos) el servidor ve UN solo refresh,
- * no N. Si Android sí recicla el contexto (headless y foreground en instancias JS distintas),
- * el peor caso es el mismo que ya acepta el circuit breaker (un intento de más) — nunca se
- * rompe nada, nunca hay doble captura de la misma evidencia. `refrescar()` ya persiste el
- * token nuevo (`actualizarSesionMovil`) ANTES de resolver su promesa compartida, así que
- * cualquier caller que esperaba esa misma promesa lee el token YA persistido — condición (c)
- * del hallazgo.
+ * no N. `refrescar()` ya persiste el token nuevo (`actualizarSesionMovil`) ANTES de resolver
+ * su promesa compartida, así que cualquier caller que esperaba esa misma promesa lee el token
+ * YA persistido — condición (c) del hallazgo.
+ *
+ * 🔴 Hallazgo 3 (code review, MEDIO — corrige la afirmación de abajo, que era FALSA): si
+ * Android SÍ recicla el contexto (headless y foreground en instancias JS distintas, el caso
+ * COMÚN — Android arranca un runtime nuevo por cada tick headless), el peor caso NO era "un
+ * intento de más": era una RÁFAGA de 401 reales. Un tick headless en su propio contexto podía
+ * rotar el refresh token de T0 a T1 y persistirlo en SecureStore mientras el contexto de
+ * foreground, recién arrancado, seguía con T0 en memoria — ese T0 ya canjeado server-side
+ * dispara un 401 de verdad, y `refrescarConReintentos` (`use-auth-movil.ts`) reintentaba 4
+ * veces MÁS con el mismo T0 sin releer disco, acumulando los 5 fallos que abren el circuit
+ * breaker. Con el circuito abierto, `obtenerAccessToken`/esta misma función quedaban
+ * devolviendo `null` indefinidamente aunque SecureStore tuviera T1 válido — el patrón de
+ * ráfaga de 401 visto en producción (Entrega 28 del plan). El fix real vive en `refrescar()`
+ * (`ejecutarRefresh`, `use-auth-movil.ts`): ante un 401 real, releer SecureStore y reintentar
+ * una vez con el token vigente si difiere del usado — cubre este camino headless automática-
+ * mente, porque esta función pasa por esa misma `refrescar()`.
  *
  * Sigue siendo TRANSPORTE, no captura: si el refresh falla (circuito abierto, 401 real, o
  * simplemente sin red), esta función devuelve `null` en silencio y `intentarDrenarOportunista`

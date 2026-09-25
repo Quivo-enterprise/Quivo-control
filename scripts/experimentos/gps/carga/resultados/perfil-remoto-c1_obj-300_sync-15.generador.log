@@ -1,0 +1,37 @@
+
+---stderr---
+[generador.mjs] modo REMOTO -> host=34.176.39.129 puerto=5432 db=quivo_carga sslmode=require
+Generador: objetivo=300 pts/s, sync=15s, trufis=300, concurrencia=8, calentamiento=60s, medicion=300s
+Fin de calentamiento, empieza medición.
+{
+  "objetivoPtsSeg": 300,
+  "syncSegundos": 15,
+  "concurrencia": 8,
+  "trufis": 300,
+  "duracionMedicionS": 300,
+  "tasaOfrecidaPtsSeg": 300,
+  "desviacionOfrecidaPct": 0,
+  "corridaValida": true,
+  "sostenido": true,
+  "backlogAlCierre": 0,
+  "filasEnBacklogAlCierre": 0,
+  "backlogAbandonadoTrasDrenado": 0,
+  "filasAbandonadasTrasDrenado": 0,
+  "lotesEnviados": 6000,
+  "lotesConfirmados": 6000,
+  "lotesFallidos": 0,
+  "filasEnviadas": 90000,
+  "filasConfirmadas": 90000,
+  "filasPerdidas": 0,
+  "throughputLogradoPtsSeg": 300,
+  "throughputVsObjetivoPct": 100,
+  "latenciaLoteMs": {
+    "p50": 189.63011299999198,
+    "p95": 206.7750679999881,
+    "p99": 217.47642599997926,
+    "max": 459.580369000003
+  },
+  "backlogMaximo": 1,
+  "backlogPromedio": 0.01675977653631285,
+  "erroresMuestra": []
+}

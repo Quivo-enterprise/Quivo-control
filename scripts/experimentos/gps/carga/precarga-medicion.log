@@ -1,0 +1,11 @@
+[precargar.mjs] modo LOCAL -> localhost:55432/quivo_control (Docker quivo-carga-pg)
+Precarga (cliente, local): 500 sesiones x 7 días x 1920 pts/sesión/día = 6.720.000 filas totales
+Particiones históricas asegurradas.
+  día -7: acumulado 960.000 filas (69s)
+  día -6: acumulado 1.920.000 filas (145s)
+  día -5: acumulado 2.880.000 filas (215s)
+  día -4: acumulado 3.840.000 filas (285s)
+  día -3: acumulado 4.800.000 filas (365s)
+  día -2: acumulado 5.760.000 filas (467s)
+  día -1: acumulado 6.720.000 filas (538s)
+Precarga completa: 6.720.000 filas en 538s (12482 filas/s)

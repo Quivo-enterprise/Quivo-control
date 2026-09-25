@@ -1,0 +1,72 @@
+{
+  "perfil": "c1",
+  "objetivoPtsSeg": 1000,
+  "syncSegundos": 15,
+  "K": 20,
+  "duracionMedicionS": 300,
+  "resultado": "FALLA",
+  "criteriosFalla": {
+    "throughputInsuficiente": true,
+    "p95LoteAlto": false,
+    "filasPerdidas": false,
+    "backlogNoSostenido": true,
+    "corridaInvalida": false
+  },
+  "cpuPromedioPct": 100.82127659574465,
+  "cpuMaxPct": 105.73,
+  "generador": {
+    "objetivoPtsSeg": 1000,
+    "syncSegundos": 15,
+    "concurrencia": 1,
+    "trufis": 1000,
+    "duracionMedicionS": 300.001,
+    "tasaOfrecidaPtsSeg": 999.9966666777779,
+    "desviacionOfrecidaPct": 0.0003333322222147217,
+    "corridaValida": true,
+    "sostenido": false,
+    "backlogAlCierre": 22986,
+    "filasEnBacklogAlCierre": 344790,
+    "backlogAbandonadoTrasDrenado": 22926,
+    "filasAbandonadasTrasDrenado": 343890,
+    "lotesEnviados": 847,
+    "lotesConfirmados": 847,
+    "lotesFallidos": 0,
+    "filasEnviadas": 12705,
+    "filasConfirmadas": 12705,
+    "filasPerdidas": 0,
+    "throughputLogradoPtsSeg": 42.34985883380389,
+    "throughputVsObjetivoPct": 4.234985883380389,
+    "latenciaLoteMs": {
+      "p50": 305.6150609999895,
+      "p95": 599.4227589999937,
+      "p99": 700.793052999994,
+      "max": 898.0685299999896
+    },
+    "backlogMaximo": 22857,
+    "backlogPromedio": 11503.558659217877,
+    "erroresMuestra": []
+  },
+  "lecturas": {
+    "K": 20,
+    "duracionMedicionS": 300,
+    "listarHoy": {
+      "n": 68,
+      "p50Ms": 58000.835326,
+      "p95Ms": 88306.336033,
+      "p99Ms": 133804.54613
+    },
+    "obtenerPosiciones": {
+      "n": 67,
+      "p50Ms": 74494.14528699999,
+      "p95Ms": 107104.917297,
+      "p99Ms": 122603.77848299999
+    },
+    "obtenerTraza": {
+      "n": 194,
+      "p50Ms": 21797.101954000012,
+      "p95Ms": 52499.634949,
+      "p99Ms": 60004.813928999996
+    },
+    "erroresMuestra": []
+  }
+}
