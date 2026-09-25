@@ -779,8 +779,12 @@ export const MARKER_POPUP_ANCHOR_FILTER: FilterSpecification = [
 /** Fuentes/capas GeoJSON propias de QUIVO, agregadas encima del estilo base — portado de
  * `Quivo-rutas` (`ensureDataLayers`), con dos agregados propios de Quivo-control: la capa de
  * radio mayor para `pinType: 'node'` (nodos del trazado en edición) y `quivo-marker-labels`
- * (el número de nodo, ver `nodeNumberFromId`). */
-function ensureDataLayers(map: MapLibreMap) {
+ * (el número de nodo, ver `nodeNumberFromId`).
+ *
+ * Exportada (mismo motivo que los filtros de arriba) para poder testear, sin levantar un `Map`
+ * con WebGL, que las capas del vehículo (`quivo-vehicle-symbols`/`quivo-vehicle-labels`) no
+ * usan `*-ignore-placement: true` — ver `route-map-impl.vehicle-layers.test.ts`. */
+export function ensureDataLayers(map: MapLibreMap) {
   if (!map.getSource('quivo-routes')) map.addSource('quivo-routes', { type: 'geojson', data: featureCollection([]) as never });
   if (!map.getSource('quivo-stops')) map.addSource('quivo-stops', { type: 'geojson', data: featureCollection([]) as never });
   if (!map.getSource('quivo-markers')) map.addSource('quivo-markers', { type: 'geojson', data: featureCollection([]) as never });
@@ -970,10 +974,20 @@ function ensureDataLayers(map: MapLibreMap) {
   }
   // ENTREGA 14 — el sprite real del vehículo (`quivo-bus-${estadoFrescura}`, registrado por
   // `ensureVehiculoIconos`). Arranca OCULTO — `setVehiculoIconoDisponible` lo prende recién
-  // cuando confirma que los tres sprites cargaron. `icon-allow-overlap`/`icon-ignore-placement`
-  // en `true`: con N vehículos cerca uno del otro (terminal, semáforo) no queremos que MapLibre
-  // esconda uno por colisión — los puntos de control sí pueden colisionar entre sí, los
-  // vehículos nunca.
+  // cuando confirma que los tres sprites cargaron. `icon-allow-overlap: true`: con N vehículos
+  // cerca uno del otro (terminal, semáforo) no queremos que MapLibre esconda uno por colisión —
+  // los puntos de control sí pueden colisionar entre sí, los vehículos nunca.
+  // FIX web-design-guidelines (hallazgo ALTA) — `icon-ignore-placement` se saca (default
+  // `false`): con `true` el ícono NO se insertaba en el índice de colisión, así que no
+  // reservaba su caja y los POI del estilo base (restaurantes, farmacias…) se dibujaban
+  // encima. `icon-allow-overlap: true` ya garantiza que el vehículo mismo nunca se esconda
+  // por colisión — no hace falta `ignore-placement` para eso. Como esta capa se agrega SIN
+  // `beforeId` (queda arriba de todo el stack, incluidas las POI del estilo base), y MapLibre
+  // procesa el índice de colisión de arriba hacia abajo (las capas más altas reservan primero),
+  // el vehículo sigue ganando el conflicto — ahora además esconde al POI que colisiona con él
+  // en vez de quedar tapado (confirmado con context7 `/maplibre/maplibre-gl-js`,
+  // `pauseable_placement.ts`: "later style layers are placed first into the collision grid…
+  // higher visual layers win collision conflicts against lower ones").
   // ENTREGA 15 — `icon-size: 0.5→0.62`. A 0.5 el sprite (rasterizado a `VEHICULO_ICONO_PX: 64`)
   // se dibuja a 32 px, el mismo orden de magnitud que los íconos de POI del estilo base
   // (restaurantes, farmacias…) — un vehículo, que es la capa de información PRINCIPAL de
@@ -997,7 +1011,6 @@ function ensureDataLayers(map: MapLibreMap) {
         'icon-image': ['concat', 'quivo-bus-', ['case', ['==', ['get', 'estadoFrescura'], ''], 'reportando', ['get', 'estadoFrescura']]],
         'icon-size': 0.62,
         'icon-allow-overlap': true,
-        'icon-ignore-placement': true,
       },
     });
   }
@@ -1005,6 +1018,9 @@ function ensureDataLayers(map: MapLibreMap) {
   // `quivo-marker-popup-anchor`, ver su filtro más abajo) porque tiene que verse SIEMPRE
   // (`text-allow-overlap`) y en cualquier zoom, a diferencia del label genérico de paradas
   // (que recién aparece en `minzoom: 13` y puede ocultarse por colisión).
+  // FIX web-design-guidelines (hallazgo ALTA) — mismo motivo que `quivo-vehicle-symbols`:
+  // sin `text-ignore-placement` la placa reserva su caja en el índice de colisión y los POI
+  // del mapa base dejan de dibujarse encima.
   if (!map.getLayer('quivo-vehicle-labels')) {
     map.addLayer({
       id: 'quivo-vehicle-labels',
@@ -1021,7 +1037,6 @@ function ensureDataLayers(map: MapLibreMap) {
         'text-offset': [0, 2],
         'text-anchor': 'top',
         'text-allow-overlap': true,
-        'text-ignore-placement': true,
       },
       paint: { 'text-color': '#ffffff', 'text-halo-color': 'rgba(15,17,26,0.85)', 'text-halo-width': 1.6 },
     });

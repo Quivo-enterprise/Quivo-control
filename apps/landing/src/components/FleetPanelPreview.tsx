@@ -75,6 +75,9 @@ function DemoLiveMap() {
         // sin marker visible ni clickeable apenas cargaban los sprites de `/en-vivo`.
         pinType: 'vehicle',
         estadoFrescura: 'reportando',
+        // FIX web-design-guidelines (hallazgo MEDIA) — `VEHICLE_LABELS_FILTER` exige
+        // `placa !== ''`; sin esto la placa (acá, el id del vehículo demo) no se dibujaba.
+        placa: vehicle.id,
       })),
     [step],
   );

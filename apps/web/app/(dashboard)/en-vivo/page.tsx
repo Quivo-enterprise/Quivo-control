@@ -385,7 +385,7 @@ export default function EnVivoPage() {
                 border: 'none',
                 fontSize: '0.75rem',
                 fontWeight: 700,
-                cursor: ultimoPunto ? 'pointer' : 'not-allowed',
+                cursor: sesionSeleccionada && ultimoPunto ? 'pointer' : 'not-allowed',
                 opacity: sesionSeleccionada && ultimoPunto ? 1 : 0.6,
                 transition: 'all var(--qv-transition-fast)',
               }}
@@ -446,7 +446,7 @@ export default function EnVivoPage() {
           filtro sin perder contexto), a diferencia del empty-state de página completa de
           arriba (que es para "no hay NADA en toda la jornada"). */}
       {posicionesFiltradas.length === 0 && (
-        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
+        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
           <AlertTriangle size={14} style={{ color: 'var(--qv-color-accent)' }} />
           <span>Ningún vehículo de esta línea está reportando ahora. Probá con &quot;Todas las líneas&quot;.</span>
         </div>
@@ -454,21 +454,21 @@ export default function EnVivoPage() {
 
       {/* FLOATING ALERT TOASTS */}
       {sesionSeleccionada && presentacion.esFalla && (
-        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}>
+        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}>
           <AlertTriangle size={14} />
           <span>{presentacion.etiqueta}: El teléfono no sincroniza con el servidor</span>
         </div>
       )}
 
       {sesionSeleccionada && estado === 'detenido' && (
-        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
+        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
           <Clock size={14} style={{ color: 'var(--qv-color-accent)' }} />
           <span>Vehículo detenido: Posición estacionaria registrada</span>
         </div>
       )}
 
       {finalizada && (
-        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-primary)', color: 'var(--qv-text-primary)' }}>
+        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-primary)', color: 'var(--qv-text-primary)' }}>
           <CheckCircle2 size={14} style={{ color: 'var(--qv-color-success)' }} />
           <span>Sesión finalizada</span>
           <button
@@ -491,7 +491,7 @@ export default function EnVivoPage() {
       )}
 
       {pollPausado && (
-        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}>
+        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}>
           <Clock size={14} style={{ color: 'var(--qv-color-warning)' }} />
           <span>Seguimiento pausado por inactividad</span>
           <button
