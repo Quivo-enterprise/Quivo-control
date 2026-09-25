@@ -29,7 +29,12 @@ export default (): ExpoConfig => ({
   platforms: ['android'],
   icon: './assets/images/icon.png',
   android: {
-    package: 'com.quivotech.conductor',
+    // QUI-… (decisión del CTO, ronda de verify-fix del logout/sesión): el trial de
+    // Transistorsoft del `applicationId` viejo (`com.quivotech.conductor`) venció, así que este
+    // build usa uno nuevo (`.app`). SecureStore es por `applicationId`: por eso NO hay
+    // migración de la clave legacy `quivo.mobile.session.v2` (ver el comentario de
+    // `sesion-movil-store.ts`) — el cambio de paquete ya implica instalación limpia.
+    package: 'com.quivotech.conductor.app',
     // QUI-357: con el backend en Cloud Run (HTTPS nativo) no hay excusa para permitir
     // cleartext en release — los PINs de conductor y la evidencia GPS legal viajarían en
     // claro sobre WiFi público. La excepción para desarrollo local (`http://` en la LAN) va
