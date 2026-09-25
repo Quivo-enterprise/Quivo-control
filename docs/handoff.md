@@ -18,9 +18,43 @@
 - **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
 - **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
 
-### Punto de retome — cierre de la sesión del 2026-09-25
+### Punto de retome — cierre de la segunda sesión del 2026-09-25
 
-**Leer esto primero.** Reemplaza al retome del 2026-09-23 (que queda abajo como histórico).
+**Leer esto primero.** Reemplaza al retome anterior del mismo día (queda abajo como histórico; sus
+decisiones del CTO siguen vigentes: gate sin Codex hasta el 2026-09-27 15:46, lista de features antes
+del build, licencia trial hasta el 2026-10-25).
+
+**Cambio de método:** las ramas se ponen al día con `git merge origin/main`, **no con rebase**. No hace
+falta force-push y el squash del PR deja igual un commit. Así se desbloqueó web.
+
+**Hecho en esta sesión:**
+- Worktree y rama local de drenado borrados, y sus contenedores bajados. La rama remota ya no existía.
+- Las 4 ramas tienen `main` mergeado y están pusheadas, sin cambios sin commitear.
+- Ninguna tiene PR todavía.
+
+| Rama · worktree | HEAD | Verificado por el chairman | Estado |
+|---|---|---|---|
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `79e832b` | tsc 0 · 314/314 | G1/G2/R1 cerrados + permiso `ACTIVITY_RECOGNITION`. Chairman quitó migración duplicada `20260910070000_refresh_token_hash_anterior` (main ya la trae como `20260923…`). `/code-review` → 3 hallazgos, aplicados en `79e832b` (orden inicio<fin, reintento de `inicio_recorrido` con eventId estable, `ready()` en reattach — confirmado en docs SDK 5.4.0: "call `.ready(config)` once… each time your app is launched") |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `9e36d7a` | tsc 0 · 384/384 | Los 10 hallazgos aplicados (`0711e5e`), merge de main (`0960afd`) con 6 conflictos. **Sin `/code-review` todavía** |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `52803b6` | tsc 0 · 318/318 | Merge sin conflictos. `/code-review`: 1 low + 2 preexistentes, todos aplicados (sin redibujo de markers por fix, guarda de `fitBounds`, `baseUrl: https://control.myquivo.com/` para `Referer` de OSM + backoff con tope de 6 intentos) |
+| `feat/web-mapa-todos-vehiculos` · `-web-mapa` | `3e3d9f1` | no re-corrido (agente: typecheck/lint 0, web 81, design-system 53, builds OK) | `totalPuntos` sin cambios necesarios. `/code-review`: 1 high (pulse→vehículo rompía editor de rutas y landing) + 1 low, aplicados: `pinType: 'vehicle'` propio. **Sin verificación en vivo** |
+
+**Pendiente antes de cada PR (en este orden de merge: posición → anuncio → mapa offline; web en paralelo):**
+1. **Posición:** poner timeout a la espera de `detener()` sobre el `iniciar()` en curso (si `iniciar` se cuelga abriendo el outbox, "Finalizar" no responde nunca). Luego `/code-review` sobre `79e832b`, PR, CI, merge.
+2. **Anuncio:** `/code-review` **con foco en el merge**: el agente resolvió `headless-task.ts` y `use-gps-operativo.ts` tomando su rama como base e injertando lo de main (diff vs main: +947/+366 líneas). Confirmar que no se perdió ningún fix de #80 (marca de logout en `restaurarSesion` y headless, lease de revocaciones, backoff/agotado del sync, throttle del drenado, `CircuitoRefreshAbiertoError`). Además borró `db/outbox-ddl.ts` y `outbox-migraciones.ts` (absorbidos en `DDL_OUTBOX`). Doble sonido con pantalla apagada: sin verificar en teléfono. Después de mergear posición, volver a mergear main en anuncio.
+3. **Mapa offline:** decidir si los tiles abandonados tras 6 intentos (~15 min) se reintentan al volver la red (reset de contadores con NetInfo) — hoy no, hasta pan/zoom. Prueba en teléfono con red y en modo avión. PR.
+4. **Web:** verificación en vivo con Playwright (punto marcado del editor de rutas visible y arrastrable, vehículos en `/en-vivo` y en la demo de la landing) + gate `web-design-guidelines`. PR. Hay docker del agente corriendo en `-web-mapa` (Postgres 5434, Redis 6380): `docker compose down` al terminar.
+5. Después: Entregas 8/9/26 (sobre anuncio mergeado) y 28. Luego la lista de features y fixes para el CTO antes del build.
+
+**Notificación de "run failed" al celular:** era el primer push de #80 (`553f687`), que falló en Lint con 2
+`no-explicit-any`. El push siguiente lo arregló. Los briefs ya exigen lint en 0 errores antes del push.
+
+**Pendiente del CTO:** OK para desplegar `main` a producción (#65, #70, #74 y la migración de #80),
+seguido del recompute de `docs/runbooks/retencion-gps.md`.
+
+---
+
+### Punto de retome — cierre de la sesión del 2026-09-25 (histórico, reemplazado por el de la segunda sesión)
 
 **Decisiones del CTO en esta sesión:**
 - **Gate sin Codex hasta que vuelva.** La cuota de Codex está agotada hasta el **2026-09-27 15:46**. Hasta entonces el gate de merge es `/code-review` + `/security-review` (sin `verify-fix`). Desde esa fecha, `verify-fix` vuelve a ser obligatorio para los `fix:` (regla 13).
