@@ -137,7 +137,12 @@ export function construirMarcadoresVehiculos(
         label: p.vehiculoPlaca,
         description: `${p.lineaNombre} · ${p.conductorNombre} · ${presentacion.etiqueta}`,
         color: presentacion.color,
-        pinType: 'pulse',
+        // ENTREGA 16 — `'vehicle'`, no `'pulse'`: un fix de code-review le devolvió `'pulse'` a
+        // su significado original (nodos pulsantes del editor de trazado/demo de landing) — los
+        // vehículos reales de `/en-vivo` tienen su propio pinType desde acá en adelante (ver
+        // `MARKER_PULSE_FILTER`/`MARKER_POINTS_FILTER`/`VEHICLE_BODY_FILTER` en
+        // `route-map-impl.tsx`).
+        pinType: 'vehicle',
         estadoFrescura: p.estadoFrescura,
         placa: p.vehiculoPlaca,
         onClick: () => onSeleccionar(p.id),

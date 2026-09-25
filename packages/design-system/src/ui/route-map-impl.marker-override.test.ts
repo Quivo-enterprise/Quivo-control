@@ -16,7 +16,9 @@ function vehiculo(sesionId: string, lat: number, lng: number): MapPoint {
     id: `vehiculo:${sesionId}`,
     lat,
     lng,
-    pinType: 'pulse',
+    // ENTREGA 16 — 'vehicle', no 'pulse': ver el comentario de `MARKER_PULSE_FILTER` en
+    // route-map-impl.tsx.
+    pinType: 'vehicle',
     estadoFrescura: 'reportando',
     placa: `PLC-${sesionId}`,
   };
@@ -67,7 +69,7 @@ describe('markersWithVehicleOverride — animación por id con varios vehículos
     expect(resultado[1]).not.toBe(s2);
     expect(resultado[1]).toMatchObject({ id: 'vehiculo:s2', lat: -20, lng: -70 });
     // El resto de las propiedades de s2 (placa, estadoFrescura, pinType) se preservan.
-    expect(resultado[1]).toMatchObject({ pinType: 'pulse', estadoFrescura: 'reportando', placa: 'PLC-s2' });
+    expect(resultado[1]).toMatchObject({ pinType: 'vehicle', estadoFrescura: 'reportando', placa: 'PLC-s2' });
   });
 
   it('markerId que no matchea ningún vehículo de la lista actual no rompe nada (sesión filtrada por línea)', () => {

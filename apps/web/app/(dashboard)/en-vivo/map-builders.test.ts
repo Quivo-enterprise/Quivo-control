@@ -97,9 +97,9 @@ describe('construirMarcadoresVehiculos', () => {
     ]);
   });
 
-  it('todos los markers de vehículo salen con pinType "pulse" — así los separa la capa symbol de los puntos de control', () => {
+  it('todos los markers de vehículo salen con pinType "vehicle" — así los separa la capa symbol de los puntos de control y de los pinType "pulse" del editor de trazado', () => {
     const markers = construirMarcadoresVehiculos([posicion({ id: 's1' })], () => {});
-    expect(markers[0]!.pinType).toBe('pulse');
+    expect(markers[0]!.pinType).toBe('vehicle');
   });
 
   it('el click del marker llama a onSeleccionar con el id de LA sesión correspondiente, no la primera', () => {

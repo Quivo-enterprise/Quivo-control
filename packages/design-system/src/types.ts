@@ -47,16 +47,26 @@ export interface MapPoint {
   label?: string;
   description?: string;
   color?: string;
-  pinType?: 'pin' | 'stop' | 'pulse' | 'node';
+  // ENTREGA 16 — `'vehicle'` reemplaza a `'pulse'` como pinType de los vehículos de `/en-vivo`
+  // (ver `route-map-impl.tsx`, capas `quivo-vehicle-*`). `'pulse'` vuelve a su significado
+  // original de siempre (nodos/puntos pulsantes del editor de trazado — `rutas/page.tsx`, el
+  // punto pendiente arrastrable y el nodo seleccionado — y el demo de la landing): un fix de
+  // code-review detectó que la Entrega 14 le había robado `'pulse'` a esos consumidores no
+  // vehiculares, dejándolos sin marker visible/clickeable/arrastrable apenas cargaban los
+  // sprites del bus (`quivo-vehicle-symbols` pedía una imagen `quivo-bus-` que no existe para
+  // ellos).
+  pinType?: 'pin' | 'stop' | 'pulse' | 'node' | 'vehicle';
   draggable?: boolean;
   onDragEnd?: (point: { lat: number; lng: number }) => void;
   onClick?: () => void;
   /**
-   * ENTREGA 14 (iconografía `/en-vivo`). Solo lo consume `pinType: 'pulse'`: selecciona el
+   * ENTREGA 14 (iconografía `/en-vivo`). Solo lo consume `pinType: 'vehicle'`: selecciona el
    * sprite del vehículo (`quivo-bus-${estadoFrescura}`, ver `route-map-impl.tsx`) — la FORMA
    * cambia con el estado, no solo el color. String suelto (no `EstadoFrescura` de
    * `@quivo/shared`) a propósito: este paquete no depende de tipos de dominio, mismo criterio
-   * que el resto de `RouteMapProps`.
+   * que el resto de `RouteMapProps`. Si viaja vacío/ausente en un `pinType: 'vehicle'`, la capa
+   * cae al sprite `reportando` (ver `quivo-vehicle-symbols` en `route-map-impl.tsx`) — nunca
+   * pide una imagen `quivo-bus-` inexistente.
    */
   estadoFrescura?: string;
   /** ENTREGA 14. Placa del vehículo — el texto que se dibuja bajo su ícono/fallback en el

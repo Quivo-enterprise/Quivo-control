@@ -24,6 +24,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type {
+  FilterSpecification,
   GeoJSONSource,
   Map as MapLibreMap,
   MapLayerMouseEvent,
@@ -291,7 +292,7 @@ function pointFeatures(points: MapPoint[], isDark: boolean, kind: 'stop' | 'mark
               : 'marker',
           draggable: Boolean(point.draggable),
           clickable: Boolean(point.onClick),
-          // ENTREGA 14 — solo relevantes para `pinType: 'pulse'` (ver `quivo-vehicle-symbols`/
+          // ENTREGA 14/16 — solo relevantes para `pinType: 'vehicle'` (ver `quivo-vehicle-symbols`/
           // `quivo-vehicle-labels`); en cualquier otro punto viajan vacíos, sin costo.
           estadoFrescura: point.estadoFrescura ?? '',
           placa: point.placa ?? '',
@@ -741,6 +742,40 @@ function loadQuivoMapStyle(): Promise<StyleSpecification> {
   return quivoMapStylePromise;
 }
 
+// ENTREGA 16 — filtros de las capas `quivo-marker-*`/`quivo-vehicle-*`, extraídos a constantes
+// EXPORTADAS (en vez de vivir inline dentro de cada `map.addLayer`) por dos motivos: (1) el
+// mismo filtro de vehículo (`pinType === 'vehicle'`) lo usan tres capas distintas
+// (`quivo-vehicle-fallback`/`quivo-vehicle-symbols`/`quivo-vehicle-labels`) — antes vivía
+// duplicado en cada una, con el riesgo de que un fix tocara una copia y se olvidara de la otra
+// (exactamente el bug que este fix corrige: la Entrega 14 le sacó `'pulse'` a
+// `quivo-marker-points`/`quivo-marker-popup-anchor` para dárselo a los vehículos, rompiendo a
+// los consumidores no vehiculares de `'pulse'` — el punto pendiente/nodo seleccionado del
+// editor de trazado en `rutas/page.tsx` y el demo de la landing, `FleetPanelPreview.tsx`); y
+// (2) exportarlos permite testear la EXPRESIÓN real que evalúa MapLibre (`route-map-impl.
+// layer-filters.test.ts`) sin levantar un `Map` con WebGL.
+//
+// `'pulse'` es el pinType genérico de "marcador que pulsa" — nodos del editor de trazado y el
+// demo de la landing lo usan igual que antes de la Entrega 14. `'vehicle'` es el pinType
+// EXCLUSIVO de los vehículos reales de `/en-vivo` (`construirMarcadoresVehiculos` en
+// `apps/web/app/(dashboard)/en-vivo/map-builders.ts`) — nunca lo usa nada más.
+export const MARKER_PULSE_FILTER: FilterSpecification = [
+  'any',
+  ['==', ['get', 'pinType'], 'pulse'],
+  ['all', ['==', ['get', 'pinType'], 'vehicle'], ['==', ['get', 'estadoFrescura'], 'reportando']],
+];
+export const MARKER_POINTS_FILTER: FilterSpecification = ['!=', ['get', 'pinType'], 'vehicle'];
+export const VEHICLE_BODY_FILTER: FilterSpecification = ['==', ['get', 'pinType'], 'vehicle'];
+export const VEHICLE_LABELS_FILTER: FilterSpecification = [
+  'all',
+  ['==', ['get', 'pinType'], 'vehicle'],
+  ['!=', ['get', 'placa'], ''],
+];
+export const MARKER_POPUP_ANCHOR_FILTER: FilterSpecification = [
+  'all',
+  ['!=', ['get', 'label'], ''],
+  ['!=', ['get', 'pinType'], 'vehicle'],
+];
+
 /** Fuentes/capas GeoJSON propias de QUIVO, agregadas encima del estilo base — portado de
  * `Quivo-rutas` (`ensureDataLayers`), con dos agregados propios de Quivo-control: la capa de
  * radio mayor para `pinType: 'node'` (nodos del trazado en edición) y `quivo-marker-labels`
@@ -883,7 +918,9 @@ function ensureDataLayers(map: MapLibreMap) {
       // en movimiento AHORA") solo tiene sentido para `reportando`. Antes solo filtraba por
       // `pinType`, así que un vehículo sin señal pulsaba igual que uno reportando — la
       // animación mentía justo en el caso que más importa detectar.
-      filter: ['all', ['==', ['get', 'pinType'], 'pulse'], ['==', ['get', 'estadoFrescura'], 'reportando']],
+      // ENTREGA 16 — `pinType: 'pulse'` (nodos del editor/demo de landing) sigue pulsando
+      // siempre, como antes de la Entrega 14 — ver `MARKER_PULSE_FILTER`.
+      filter: MARKER_PULSE_FILTER,
       paint: { 'circle-radius': 16, 'circle-color': ['get', 'color'], 'circle-opacity': 0.18, 'circle-stroke-width': 0 },
     });
   }
@@ -892,13 +929,14 @@ function ensureDataLayers(map: MapLibreMap) {
       id: 'quivo-marker-points',
       type: 'circle',
       source: 'quivo-markers',
-      // ENTREGA 14 — `pulse` (vehículos) sale de acá: antes era el MISMO círculo que un punto
-      // de control con 4 px de diferencia de radio. Ahora un vehículo se dibuja con
-      // `quivo-vehicle-symbols` (ícono) o `quivo-vehicle-fallback` (círculo grande, ver abajo)
-      // — nunca con esta capa genérica.
-      filter: ['!=', ['get', 'pinType'], 'pulse'],
+      // ENTREGA 14 — `vehicle` sale de acá: antes era el MISMO círculo que un punto de control
+      // con 4 px de diferencia de radio. Ahora un vehículo se dibuja con `quivo-vehicle-symbols`
+      // (ícono) o `quivo-vehicle-fallback` (círculo grande, ver abajo) — nunca con esta capa
+      // genérica. `pulse` (nodos del editor/demo de landing, ENTREGA 16) SÍ sigue acá — nunca
+      // tuvo capas propias, solo un radio distinto (ver `match` de abajo).
+      filter: MARKER_POINTS_FILTER,
       paint: {
-        'circle-radius': ['match', ['get', 'pinType'], 'node', 11, 'stop', 7, 8],
+        'circle-radius': ['match', ['get', 'pinType'], 'node', 11, 'pulse', 11, 'stop', 7, 8],
         'circle-color': ['get', 'color'],
         'circle-opacity': 0.98,
         'circle-stroke-color': ['get', 'haloColor'],
@@ -919,7 +957,7 @@ function ensureDataLayers(map: MapLibreMap) {
       id: 'quivo-vehicle-fallback',
       type: 'circle',
       source: 'quivo-markers',
-      filter: ['==', ['get', 'pinType'], 'pulse'],
+      filter: VEHICLE_BODY_FILTER,
       layout: { visibility: 'visible' },
       paint: {
         'circle-radius': 17,
@@ -947,10 +985,16 @@ function ensureDataLayers(map: MapLibreMap) {
       id: 'quivo-vehicle-symbols',
       type: 'symbol',
       source: 'quivo-markers',
-      filter: ['==', ['get', 'pinType'], 'pulse'],
+      filter: VEHICLE_BODY_FILTER,
       layout: {
         visibility: 'none',
-        'icon-image': ['concat', 'quivo-bus-', ['get', 'estadoFrescura']],
+        // ENTREGA 16 — `case` de respaldo: un `pinType: 'vehicle'` sin `estadoFrescura` (nunca
+        // pasa desde `/en-vivo`, que siempre lo setea — ver `construirMarcadoresVehiculos` —
+        // pero SÍ puede pasar en un consumidor futuro del design system) cae al sprite
+        // `reportando` en vez de pedirle a MapLibre la imagen inexistente `quivo-bus-`
+        // (`estadoFrescura` vacío concatenado) — eso dejaría al vehículo sin ícono ni fallback
+        // visible (`quivo-vehicle-fallback` ya está oculto en cuanto los sprites cargan).
+        'icon-image': ['concat', 'quivo-bus-', ['case', ['==', ['get', 'estadoFrescura'], ''], 'reportando', ['get', 'estadoFrescura']]],
         'icon-size': 0.62,
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
@@ -966,7 +1010,7 @@ function ensureDataLayers(map: MapLibreMap) {
       id: 'quivo-vehicle-labels',
       type: 'symbol',
       source: 'quivo-markers',
-      filter: ['all', ['==', ['get', 'pinType'], 'pulse'], ['!=', ['get', 'placa'], '']],
+      filter: VEHICLE_LABELS_FILTER,
       layout: {
         'text-field': ['get', 'placa'],
         'text-font': ['Noto Sans Bold'],
@@ -1003,10 +1047,12 @@ function ensureDataLayers(map: MapLibreMap) {
       id: 'quivo-marker-popup-anchor',
       type: 'symbol',
       source: 'quivo-markers',
-      // ENTREGA 14 — `pulse` (vehículos) queda afuera: ya tiene su propio label SIEMPRE
-      // visible (`quivo-vehicle-labels`, sin `minzoom` ni límite de colisión). Sin este
-      // filtro, un vehículo mostraría la placa DOS veces superpuestas a partir de zoom 13.
-      filter: ['all', ['!=', ['get', 'label'], ''], ['!=', ['get', 'pinType'], 'pulse']],
+      // ENTREGA 14 — `vehicle` queda afuera: ya tiene su propio label SIEMPRE visible
+      // (`quivo-vehicle-labels`, sin `minzoom` ni límite de colisión). Sin este filtro, un
+      // vehículo mostraría la placa DOS veces superpuestas a partir de zoom 13. `pulse` (nodos
+      // del editor/demo de landing, ENTREGA 16) SÍ sigue acá — el punto pendiente ("Punto
+      // marcado") y el nodo seleccionado dependen de este label genérico para su texto.
+      filter: MARKER_POPUP_ANCHOR_FILTER,
       minzoom: 13,
       layout: {
         'text-field': ['get', 'label'],
@@ -1026,8 +1072,9 @@ const ROUTE_CLICK_LAYERS = ['quivo-route-casing'];
 const STOP_CLICK_LAYERS = ['quivo-stop-points'];
 const ZONE_CLICK_LAYERS = ['quivo-zone-fill'];
 // ENTREGA 15 — arreglo del bug de la Entrega 13/14: tocar un vehículo no abría su detalle. La
-// Entrega 14 sacó a los vehículos de `quivo-marker-points` (ver su filtro `pinType != 'pulse'`
-// más arriba) y los movió a tres capas propias, pero nadie enganchó click/hover a esas capas
+// Entrega 14 sacó a los vehículos de `quivo-marker-points` (ver `MARKER_POINTS_FILTER` más
+// arriba — `pinType: 'vehicle'` desde la Entrega 16) y los movió a tres capas propias, pero
+// nadie enganchó click/hover a esas capas
 // nuevas — `wireFeatureClicks`/el `mousedown` de drag seguían escuchando solo
 // `quivo-marker-points`, así que un click sobre un vehículo nunca generaba ni un
 // `queryRenderedFeatures` hit ahí. Se agregan las tres:

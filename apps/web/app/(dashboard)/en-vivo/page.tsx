@@ -86,6 +86,19 @@ export default function EnVivoPage() {
   );
   const vehiculosEnMapa = posicionesFiltradas.length - vehiculosSinFix;
 
+  // ENTREGA 16 — fix de code-review: si el filtro por línea excluye al vehículo con detalle
+  // abierto (`sesionSeleccionada`), el panel de detalle, el `followPoint` de la cámara y
+  // `animatedVehicle.markerId` seguían activos sobre un vehículo que ya NO está en `markers`
+  // (`posicionesFiltradas` lo sacó) — el mapa quedaba "siguiendo" un marker invisible. Se
+  // cierra la selección apenas deja de estar en la lista filtrada, en vez de esperar a que el
+  // usuario la cierre a mano.
+  useEffect(() => {
+    if (sesionSeleccionada && !posicionesFiltradas.some((p) => p.id === sesionSeleccionada)) {
+      setSesionSeleccionada(null);
+      setSeguir(false);
+    }
+  }, [sesionSeleccionada, posicionesFiltradas]);
+
   // Click en un marcador de vehículo → recién ahí se piden `contexto` y `traza` de ESA
   // sesión (los hooks ya existentes, sin cambios). Con un solo detalle abierto a la vez, el
   // problema de escalado del poll por sesión (Entrega 10) se resuelve solo.
