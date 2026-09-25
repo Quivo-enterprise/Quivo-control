@@ -327,9 +327,7 @@ export function useGpsOperativo(
             erroresEnCorrida: erroresEscritura.current,
           },
         });
-        setErrorGps(
-          `No se pudo guardar una ubicación en el outbox (${erroresEscritura.current} en esta corrida). La evidencia de esos puntos se perdió.`,
-        );
+        setErrorGps('El teléfono no pudo guardar tu recorrido. Revisá el espacio disponible.');
       }
 
       // Entrega 2 (drenado oportunista del outbox en background): mismo motor que
