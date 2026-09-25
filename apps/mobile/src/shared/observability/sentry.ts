@@ -63,7 +63,7 @@ function resolveEnvironment(): string {
  * agrupamiento de releases funcione bien.
  */
 function resolveRelease(): string {
-  const applicationId = Application.applicationId ?? 'com.quivotech.conductor';
+  const applicationId = Application.applicationId ?? 'com.quivotech.conductor.app';
   const version = Application.nativeApplicationVersion ?? '0.0.0';
   const build = Application.nativeBuildVersion ?? '0';
   return `${applicationId}@${version}+${build}`;

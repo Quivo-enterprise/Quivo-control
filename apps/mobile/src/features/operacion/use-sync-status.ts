@@ -3,7 +3,11 @@ import { useNetInfo } from '@react-native-community/netinfo';
 import { Vibration } from 'react-native';
 import * as Sentry from '@sentry/react-native';
 import { abrirOutbox, contarEventosPendientes } from '../../db/outbox';
-import { iniciarSyncAutomatico, sincronizarPendientes, type ResultadoSync } from './sync-outbox';
+import {
+  iniciarSyncAutomatico,
+  sincronizarPendientesConLease,
+  type ResultadoSync,
+} from './sync-outbox';
 
 const REFRESCO_MS = 15_000;
 
@@ -184,9 +188,18 @@ export function useSyncStatus(
               // QUI-338 (c): camino de demo/QA — nunca toca la red de verdad.
               throw new Error('Fallo de sincronización simulado (QA)');
             }
-            await sincronizarPendientes(token);
-            setErrorSync(null);
-            registrarExito();
+            // Hallazgo 6 (code review, `docs/plan-correccion-post-piloto-2026-09-09.md`):
+            // este latido de 15 s llamaba a `sincronizarPendientes` SIN pasar por el lease de
+            // la Entrega 2 — podía mandar el mismo lote que el drenado por ubicación
+            // (`onLocation`/`onHeartbeat`) dos veces en paralelo. `sincronizarPendientesConLease`
+            // respeta el mismo lease; `resultado === null` significa que otro camino lo tiene
+            // en este instante — no es un fallo, se ignora en silencio (el próximo tick, 15 s
+            // después, reintenta).
+            const resultado = await sincronizarPendientesConLease(token);
+            if (resultado !== null) {
+              setErrorSync(null);
+              registrarExito();
+            }
           } catch (error) {
             setErrorSync(error instanceof Error ? error.message : 'Error de sincronización');
             registrarFallo();

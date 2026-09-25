@@ -12,7 +12,15 @@ import {
 } from './location-task';
 import { abrirOutbox, encolarEvento, obtenerEventosPorTipo } from '../db/outbox';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
-import { cargarSesionMovil, obtenerDeviceIdMovil } from '../shared/security/sesion-movil-store';
+import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
+// Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
+// `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
+import { refrescar } from '../features/auth/use-auth-movil';
+import {
+  cargarSesionMovil,
+  hayLogoutSolicitado,
+  obtenerDeviceIdMovil,
+} from '../shared/security/sesion-movil-store';
 
 /**
  * Margen de gracia antes de apagar el plugin nativo tras vencer el paquete del día (hallazgo
@@ -319,6 +327,40 @@ export async function obtenerContextoUbicacionPersistido(): Promise<ContextoUbic
     return null;
   }
 
+  // Fix drenado en background (2026-09-25, punto 2): `ejecutarLogout` (`use-auth-movil.ts`)
+  // puede devolver 'pendiente' cuando no consigue el lease `refresh-sesion` a tiempo (caso
+  // patológico) — marca `marcarLogoutSolicitado()` pero deja la sesión INTACTA en disco a
+  // propósito, para que `intentarRevocacionesPendientes` la encuentre y reintente el logout
+  // completo. Este task headless corre fuera de React y de ese ciclo de reintento: sin este
+  // chequeo, seguiría atribuyendo evidencia GPS NUEVA (RF-67..73) al `sesionId` de un chofer
+  // que ya pidió cerrar sesión — crítico en teléfonos compartidos, donde otro chofer puede
+  // tomar el vehículo en esa ventana.
+  //
+  // Punto 2 (code review 2026-09-25): la marca PRESENTE y la LECTURA que falla NO son lo
+  // mismo, y antes se trataban igual (fail-closed también sobre el tracker). Un error
+  // transitorio de Keystore/SecureStore en un solo tick no es evidencia de que el chofer pidió
+  // cerrar sesión — pero `detenerTrackingNativo()` es IRREVERSIBLE en este camino: además de
+  // parar el plugin, desactiva `startOnBoot`, así que un solo tick con Keystore ocupado podía
+  // matar la captura GPS del resto del turno sin que nada la reanude. Ahora: marca PRESENTE →
+  // se sigue deteniendo el tracker (fail-closed real, hay evidencia). LECTURA que falla → se
+  // descarta el punto de ESTE tick (fail-closed sobre la atribución, mismo motivo que
+  // `debeRestaurarComoDeslogueado` en `use-auth-movil.ts`) pero el tracker sigue corriendo —
+  // el próximo tick vuelve a intentar leer la marca. A propósito NO se toca el drenado
+  // (`intentarDrenarOportunista`, ver el caller): la evidencia YA registrada antes de este
+  // punto debe seguir subiendo — la sesión sigue siendo válida server-side hasta que la
+  // revocación real se complete, así que autenticar ESE envío no es operar por el chofer que
+  // se fue, es solo terminar de entregar lo que ya se capturó legítimamente.
+  let logoutSolicitado: boolean;
+  try {
+    logoutSolicitado = await hayLogoutSolicitado();
+  } catch {
+    return null;
+  }
+  if (logoutSolicitado) {
+    await detenerTrackingNativo();
+    return null;
+  }
+
   const dbPaquete = await abrirPaqueteDiaDb();
   // Hallazgo 1 (CRÍTICO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): comparar contra la
   // asignación de ESTA sesión (ya validada arriba), no aceptar la fila a ciegas — la fila de
@@ -422,6 +464,70 @@ async function asegurarSemillaCumplimientos(
 }
 
 /**
+ * Access token para el drenado oportunista (Entrega 2) DESDE EL CONTEXTO HEADLESS —
+ * deliberadamente DISTINTO de `obtenerAccessToken` de `use-auth-movil.ts` (ese es un hook de
+ * React, con estado en memoria y `useCallback`; acá no hay árbol de componentes, así que la
+ * única fuente posible es SecureStore, igual que `obtenerContextoUbicacionPersistido` arriba).
+ *
+ * Entrega 3 (cierra el punto de extensión que dejó la Entrega 2): si el access token venció,
+ * ahora SÍ se intenta un refresh — protegido por el mismo circuit breaker que usa el hook de
+ * foreground.
+ *
+ * Hallazgo 4 (code review, causa candidata de los `refresh-agotado` de Sentry
+ * QUIVO-CONTROL-CONDUCTOR-2, siempre al arrancar la app): esta función usaba directo
+ * `intentarRefrescarConCircuito` + `actualizarSesionMovil`, salteándose el single-flight de
+ * `refrescar()` (`refrescosEnVuelo`, `use-auth-movil.ts`). Con fixes de GPS a ~1/s y el access
+ * token vencido, CADA tick del outbox disparaba su propio refresh — el servidor rota el
+ * refresh token de forma ATÓMICA (`refresh()`, `auth-movil.service.ts`), así que de N
+ * refreshes concurrentes con el mismo `refreshToken` viejo solo uno gana y los N-1 restantes
+ * reciben 401 real. Con 5 o más fallos 401 reales, el circuito se abre EN FALSO (no porque la
+ * sesión esté muerta, sino por la carrera). Peor: si el chofer reabre la app durante un
+ * refresh headless en vuelo, el foreground lee el token viejo (todavía no rotado en su
+ * SecureStore local) y también intenta refrescarlo — mismo problema, otro contexto.
+ *
+ * Fix: reusar `refrescar()` de `use-auth-movil.ts` en vez de orquestar el refresh a mano acá.
+ * `refrescar()` ya es single-flight por `refreshToken` (`refrescosEnVuelo`) — toda llamada
+ * concurrente para el MISMO token comparte la única promesa en vuelo, así que dentro de un
+ * mismo contexto JS (el caso que dispara el bug: varios ticks headless seguidos, o headless +
+ * foreground si Android no reciclo el contexto entre ambos) el servidor ve UN solo refresh,
+ * no N. `refrescar()` ya persiste el token nuevo (`actualizarSesionMovil`) ANTES de resolver
+ * su promesa compartida, así que cualquier caller que esperaba esa misma promesa lee el token
+ * YA persistido — condición (c) del hallazgo.
+ *
+ * 🔴 Hallazgo 3 (code review, MEDIO — corrige la afirmación de abajo, que era FALSA): si
+ * Android SÍ recicla el contexto (headless y foreground en instancias JS distintas, el caso
+ * COMÚN — Android arranca un runtime nuevo por cada tick headless), el peor caso NO era "un
+ * intento de más": era una RÁFAGA de 401 reales. Un tick headless en su propio contexto podía
+ * rotar el refresh token de T0 a T1 y persistirlo en SecureStore mientras el contexto de
+ * foreground, recién arrancado, seguía con T0 en memoria — ese T0 ya canjeado server-side
+ * dispara un 401 de verdad, y `refrescarConReintentos` (`use-auth-movil.ts`) reintentaba 4
+ * veces MÁS con el mismo T0 sin releer disco, acumulando los 5 fallos que abren el circuit
+ * breaker. Con el circuito abierto, `obtenerAccessToken`/esta misma función quedaban
+ * devolviendo `null` indefinidamente aunque SecureStore tuviera T1 válido — el patrón de
+ * ráfaga de 401 visto en producción (Entrega 28 del plan). El fix real vive en `refrescar()`
+ * (`ejecutarRefresh`, `use-auth-movil.ts`): ante un 401 real, releer SecureStore y reintentar
+ * una vez con el token vigente si difiere del usado — cubre este camino headless automática-
+ * mente, porque esta función pasa por esa misma `refrescar()`.
+ *
+ * Sigue siendo TRANSPORTE, no captura: si el refresh falla (circuito abierto, 401 real, o
+ * simplemente sin red), esta función devuelve `null` en silencio y `intentarDrenarOportunista`
+ * aborta el drenado sin tocar la pantalla del chofer — la evidencia ya está a salvo en el
+ * outbox. El breaker ya reporta a Sentry por su cuenta cuando corresponde (ver su docblock);
+ * acá no hace falta un `captureException` adicional por cada intento fallido.
+ */
+export async function obtenerAccessTokenHeadless(): Promise<string | null> {
+  const sesion = await cargarSesionMovil();
+  if (!sesion) return null;
+  if (new Date(sesion.accessTokenExpiresAt) > new Date()) return sesion.accessToken;
+  try {
+    const actualizada = await refrescar(sesion);
+    return actualizada.accessToken;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Headless task de Transistorsoft (QUI-216): se registra UNA sola vez desde `index.js` — es
  * el único lugar donde el SDK permite hacerlo — y sigue ejecutándose después de que el
  * usuario mata la app, siempre que la config tenga `stopOnTerminate: false` +
@@ -433,50 +539,83 @@ async function asegurarSemillaCumplimientos(
  * Doc oficial de Transistorsoft: "Standard JavaScript callbacks like `onLocation` do not
  * fire after app termination. Only registered headless tasks execute."
  *
- * Solo procesa el evento `location`; el resto (`terminate`, `heartbeat`, `motionchange`,
- * etc.) no tiene, hoy, ninguna escritura asociada — se ignoran explícitamente en vez de
- * fallar en silencio ante un `switch` sin `default`.
+ * Procesa `location` (registra el punto) y, desde el hallazgo 2 de abajo, también
+ * `heartbeat` (solo para drenar, nunca para registrar un punto GPS falso). El resto
+ * (`terminate`, `motionchange`, etc.) no tiene, hoy, ninguna escritura asociada — se ignoran
+ * explícitamente en vez de fallar en silencio ante un `switch` sin `default`.
  *
- * Todo el cuerpo va bajo `try/catch`: el wrapper del SDK rechaza la promesa de la tarea ante
- * cualquier throw y NO reintenta, así que un fallo transitorio de SecureStore o SQLite
- * perdería ese fix en silencio, justo en el camino de app terminada que el criterio C del
- * spike existe para demostrar.
+ * El registro del punto va bajo `try/catch`: el wrapper del SDK rechaza la promesa de la
+ * tarea ante cualquier throw y NO reintenta, así que un fallo transitorio de SecureStore o
+ * SQLite perdería ese fix en silencio, justo en el camino de app terminada que el criterio C
+ * del spike existe para demostrar.
+ *
+ * Hallazgo 1 (CRÍTICO, code review de la Entrega 2): ANTES, el `return` de la rama
+ * `!contexto` vivía DENTRO de este `try`, y ese `return` salía de TODA la función — el
+ * drenado (entonces al final del cuerpo, después del try/catch) nunca se alcanzaba en ese
+ * camino. Con el paquete del día vencido o la sesión en el margen de gracia
+ * (`GRACIA_STOP_TRAS_VENCIMIENTO_MS`) y la app terminada, CADA tick de ubicación salía por
+ * ahí: un `fin_recorrido` pendiente encolado ANTES de que la sesión venciera nunca se drenaba
+ * en background — exactamente el caso que el comentario de esa rama decía cubrir, pero no
+ * cubría. Fix: el registro del punto y el drenado quedan en bloques separados, sin ningún
+ * `return` que pueda saltear al segundo — el drenado de abajo corre pase lo que pase con el
+ * primero (fix nuevo, contexto nulo, evento `heartbeat` sin punto que registrar, o error de
+ * escritura).
  */
 export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void> {
-  if (event.name !== 'location') return;
+  // Hallazgo 2 (MEDIO, code review de la Entrega 2): `heartbeat` también dispara el drenado.
+  // `background-geolocation.config.ts` declara `heartbeatInterval: 60` justamente para dar un
+  // segundo punto de enganche cuando el vehículo está quieto y ningún fix `location` llega
+  // (nada que reportar, `distanceFilter` no dispara) — sin este camino, con la app terminada
+  // los últimos puntos quedaban en el outbox hasta el próximo movimiento y `/en-vivo` mostraba
+  // la posición vieja toda la parada.
+  if (event.name !== 'location' && event.name !== 'heartbeat') return;
 
-  try {
-    const contexto = await obtenerContextoUbicacionPersistido();
-    if (!contexto) {
-      // No hay turno vigente (sesión cerrada o paquete del día vencido): el punto se
-      // descarta. La decisión de cortar o no el tracking nativo (inmediata en un caso, con
-      // margen de gracia en el otro) ya se tomó dentro de `obtenerContextoUbicacionPersistido`
-      // — ver su comentario para el porqué de cada camino.
-      return;
+  if (event.name === 'location') {
+    try {
+      const contexto = await obtenerContextoUbicacionPersistido();
+      if (contexto) {
+        // El plugin tipa `HeadlessEvent.params` como `Map` genérico (`{[key: string]: ...}`)
+        // en vez de exponer una unión discriminada por `event.name` — con `name ===
+        // 'location'` el shape real SÍ es `Location` (documentado en la wiki de Android
+        // Headless Mode), pero el tipo del propio paquete no lo refleja. `as unknown as
+        // Location` documenta esa brecha en vez de silenciarla con `any`/`@ts-ignore`.
+        const location = event.params as unknown as Location;
+
+        const db = await abrirOutbox();
+        await asegurarSemillaCumplimientos(db, contexto.sesionId);
+        await registrarPuntoGps(db, location, contexto, puntosControlDetectadosHeadless);
+      }
+      // `contexto === null`: sin turno vigente (sesión cerrada o paquete del día vencido) —
+      // el punto se descarta, decisión ya tomada dentro de
+      // `obtenerContextoUbicacionPersistido` (ver su comentario). El drenado de abajo corre
+      // IGUAL — ver el hallazgo 1 arriba.
+    } catch (error) {
+      console.error('[QUIVO][headless] No se pudo registrar la ubicación en el outbox', error);
+      // QUI-365: este es EL escenario que el ticket marca como el peor y el que menos se ve —
+      // el `try/catch` de este bloque existe para que un fallo transitorio no tumbe la
+      // promesa que el SDK nativo no reintenta (ver doc arriba), pero eso mismo lo vuelve
+      // invisible sin captura explícita: no hay UI, no hay logs que alguien vaya a mirar en
+      // el teléfono de un conductor en ruta. Sin este `captureException`, un punto GPS
+      // perdido acá (evidencia legal, RF-67..73) no dejaría NINGÚN rastro reportado. Este
+      // catch NO envuelve el drenado de abajo a propósito: que este tick falle en capturar no
+      // debe impedir el intento de vaciar lo que YA estaba persistido de ticks anteriores.
+      Sentry.captureException(error, {
+        tags: { contexto: 'headless-task', paso: 'registrar-punto-gps', evento: event.name },
+      });
     }
-
-    // El plugin tipa `HeadlessEvent.params` como `Map` genérico (`{[key: string]: ...}`) en
-    // vez de exponer una unión discriminada por `event.name` — con `name === 'location'` el
-    // shape real SÍ es `Location` (documentado en la wiki de Android Headless Mode), pero el
-    // tipo del propio paquete no lo refleja. `as unknown as Location` documenta esa brecha en
-    // vez de silenciarla con `any`/`@ts-ignore`.
-    const location = event.params as unknown as Location;
-
-    const db = await abrirOutbox();
-    await asegurarSemillaCumplimientos(db, contexto.sesionId);
-    await registrarPuntoGps(db, location, contexto, puntosControlDetectadosHeadless);
-  } catch (error) {
-    console.error('[QUIVO][headless] No se pudo registrar la ubicación en el outbox', error);
-    // QUI-365: este es EL escenario que el ticket marca como el peor y el que menos se ve —
-    // el `try/catch` de toda la función existe para que un fallo transitorio no tumbe la
-    // promesa que el SDK nativo no reintenta (ver doc arriba), pero eso mismo lo vuelve
-    // invisible sin captura explícita: no hay UI, no hay logs que alguien vaya a mirar en el
-    // teléfono de un conductor en ruta. Sin este `captureException`, un punto GPS perdido acá
-    // (evidencia legal, RF-67..73) no dejaría NINGÚN rastro reportado.
-    Sentry.captureException(error, {
-      tags: { contexto: 'headless-task', paso: 'registrar-punto-gps', evento: event.name },
-    });
   }
+
+  // Entrega 2 (`docs/plan-correccion-post-piloto-2026-09-09.md`) — causa raíz del síntoma más
+  // reportado del piloto ("tengo que cerrar la app para que se actualice la ubicación"):
+  // `headless-task.ts` escribía al outbox pero nadie lo drenaba en background. Ningún
+  // `return` de arriba puede saltear esta línea (hallazgo 1) — corre para `location` Y
+  // `heartbeat`, con o sin contexto, con o sin error de escritura. Va con AWAIT porque el SDK
+  // de Transistorsoft da por terminada la tarea headless en cuanto se ejecuta la ÚLTIMA LÍNEA
+  // de esta función: sin este `await`, la promesa de `intentarDrenarOportunista` queda
+  // corriendo "de fondo" sobre un contexto que el SDK ya considera cerrado, y el trabajo
+  // (mutex, POST, liberar el lease) se corta a mitad de camino en cuanto el wake lock se
+  // libera.
+  await intentarDrenarOportunista(obtenerAccessTokenHeadless);
 }
 
 /** `stop()` aislado en su propio try/catch: que falle apagar el plugin no debe escalar al

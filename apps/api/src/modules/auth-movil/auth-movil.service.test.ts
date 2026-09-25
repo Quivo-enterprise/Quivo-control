@@ -168,6 +168,142 @@ describe('AuthMovilService', () => {
     );
   });
 
+  it('logout con un refreshToken YA ROTADO cae al fallback por deviceId y sí cierra la sesión (docs/handoff.md:3382-3385)', async () => {
+    // Reproduce el bug de QA del 2026-08-23: el cliente sostiene un refreshToken que el
+    // servidor YA rotó (un `refresh()` previo tuvo éxito acá, simulando la rotación cuya
+    // respuesta el cliente real nunca llegó a confirmar recibir) — `login.refreshToken` queda
+    // "fantasma": inválido para `refresh()`, pero la sesión sigue `'activa'` con otro hash.
+    const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+    const login = await service.autenticarConductor({
+      challengeToken: vehiculo.challengeToken,
+      deviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    const rotado = await service.refresh({ refreshToken: login.refreshToken });
+    // El token viejo ya no sirve para refrescar — confirma que quedó "fantasma".
+    await expect(service.refresh({ refreshToken: login.refreshToken })).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    // La sesión, sin embargo, sigue activa (con el hash ROTADO) — es la sesión zombi.
+    await expect(service.validarAccessToken(rotado.accessToken)).resolves.toMatchObject({
+      deviceId,
+    });
+
+    // Logout con el token VIEJO (el único que el cliente real sostenía) + deviceId: el match
+    // exacto por hash no encuentra nada, pero el fallback por deviceId sí cierra la sesión.
+    await service.logout({ refreshToken: login.refreshToken, deviceId });
+
+    await expect(service.validarAccessToken(rotado.accessToken)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
+
+  it('SEGURIDAD (hallazgo 5): deviceId correcto + refreshToken INVENTADO no cierra la sesión activa', async () => {
+    // Escenario del hallazgo: `deviceId` no es secreto (`en-vivo.service.ts` /
+    // `recorridos.service.ts` lo devuelven a usuarios web), así que alguien que solo conoce
+    // el `deviceId` — sin haber tenido nunca un `refreshToken` real de esta sesión — no debe
+    // poder cerrarla mandando cualquier string de 32+ caracteres.
+    const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+    const login = await service.autenticarConductor({
+      challengeToken: vehiculo.challengeToken,
+      deviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    const refreshTokenInventado = 'z'.repeat(32);
+    await service.logout({ refreshToken: refreshTokenInventado, deviceId });
+
+    // La sesión sigue activa: ni el hash vigente ni `refreshTokenHashAnterior` (todavía
+    // `null`, esta sesión nunca refrescó) matchean un string inventado.
+    await expect(service.validarAccessToken(login.accessToken)).resolves.toMatchObject({
+      deviceId,
+    });
+
+    // Repetir el ataque con OTRO string inventado tampoco debe cerrarla — no es un fluke de
+    // un solo intento.
+    await service.logout({ refreshToken: 'y'.repeat(40), deviceId });
+    await expect(service.validarAccessToken(login.accessToken)).resolves.toMatchObject({
+      deviceId,
+    });
+
+    // Limpieza.
+    await service.logout({ refreshToken: login.refreshToken });
+  });
+
+  it('SEGURIDAD (hallazgo 5): tras refrescar, un refreshToken inventado TAMPOCO cierra la sesión (tiene refreshTokenHashAnterior, pero no matchea)', async () => {
+    const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+    const login = await service.autenticarConductor({
+      challengeToken: vehiculo.challengeToken,
+      deviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    const rotado = await service.refresh({ refreshToken: login.refreshToken });
+
+    // Ahora la sesión SÍ tiene `refreshTokenHashAnterior` (el hash de `login.refreshToken`,
+    // que la rotación de arriba dejó atrás) — pero un string inventado no coincide con ESE
+    // hash tampoco: la ventana de "prueba de posesión" es exactamente uno, no "cualquiera".
+    await service.logout({ refreshToken: 'w'.repeat(32), deviceId });
+    await expect(service.validarAccessToken(rotado.accessToken)).resolves.toMatchObject({
+      deviceId,
+    });
+
+    // Limpieza.
+    await service.logout({ refreshToken: rotado.refreshToken });
+  });
+
+  it('logout SIN deviceId (cliente viejo, compat hacia atrás) sigue siendo un no-op silencioso si el token no matchea', async () => {
+    const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+    const login = await service.autenticarConductor({
+      challengeToken: vehiculo.challengeToken,
+      deviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    const rotado = await service.refresh({ refreshToken: login.refreshToken });
+
+    // Sin `deviceId`, el comportamiento viejo se conserva: no encuentra nada, no lanza, no
+    // cierra nada.
+    await expect(service.logout({ refreshToken: login.refreshToken })).resolves.toBeUndefined();
+    await expect(service.validarAccessToken(rotado.accessToken)).resolves.toMatchObject({
+      deviceId,
+    });
+
+    // Limpieza: no dejar esta sesión activa para no interferir con otros tests del archivo.
+    await service.logout({ refreshToken: rotado.refreshToken });
+  });
+
+  it('logout con deviceId ajeno (sin match de hash) NO toca la sesión de OTRO dispositivo', async () => {
+    const otroDeviceId = `${deviceId}-fallback-scope`;
+    const vehiculo1 = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+    const login1 = await service.autenticarConductor({
+      challengeToken: vehiculo1.challengeToken,
+      deviceId,
+      documentoIdentidad: documento,
+      pin: pinConductor,
+    });
+    if (login1.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+    // deviceId inventado, sin sesión propia — el fallback no encuentra nada que cerrar y la
+    // sesión real (otro deviceId, refreshToken tampoco coincide) queda intacta.
+    await service.logout({ refreshToken: 'x'.repeat(40), deviceId: otroDeviceId });
+    await expect(service.validarAccessToken(login1.accessToken)).resolves.toMatchObject({
+      deviceId,
+    });
+
+    // Limpieza.
+    await service.logout({ refreshToken: login1.refreshToken, deviceId });
+  });
+
   it('al rotar el PIN revoca sesiones y audita sin exponer la credencial', async () => {
     const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
     const login = await service.autenticarConductor({
