@@ -20,14 +20,25 @@ function fakeDb() {
 }
 
 describe('crearEstadoInicioRecorrido / reiniciarEstadoInicioRecorrido', () => {
-  it('estado inicial: eventId null, no confirmado', () => {
-    expect(crearEstadoInicioRecorrido()).toEqual({ eventId: null, confirmado: false });
+  it('estado inicial: eventId null, no confirmado, ts null', () => {
+    expect(crearEstadoInicioRecorrido()).toEqual({ eventId: null, confirmado: false, ts: null });
   });
 
-  it('reiniciar asigna el eventId y resetea confirmado, incluso si ya estaba confirmado', () => {
-    const estado: EstadoInicioRecorrido = { eventId: 'viejo', confirmado: true };
-    reiniciarEstadoInicioRecorrido(estado, 'nuevo-event-id');
-    expect(estado).toEqual({ eventId: 'nuevo-event-id', confirmado: false });
+  it('reiniciar asigna el eventId, el ts y resetea confirmado, incluso si ya estaba confirmado', () => {
+    const estado: EstadoInicioRecorrido = { eventId: 'viejo', confirmado: true, ts: 'ts-viejo' };
+    reiniciarEstadoInicioRecorrido(estado, 'nuevo-event-id', 'ts-nuevo');
+    expect(estado).toEqual({ eventId: 'nuevo-event-id', confirmado: false, ts: 'ts-nuevo' });
+  });
+
+  // H2 (hallazgo de revisión, 2026-09-25): el `ts` capturado al arrancar el intento tiene que
+  // sobrevivir intacto hasta el `encolarEvento` real, sin importar cuándo se ejecute la
+  // escritura — es la garantía que cierra la carrera con `fin_recorrido` documentada en
+  // `EstadoInicioRecorrido.ts`.
+  it('el ts capturado al arrancar es anterior a un ts de escritura simulado más tardío', () => {
+    const estado = crearEstadoInicioRecorrido();
+    reiniciarEstadoInicioRecorrido(estado, 'event-1', '2026-09-25T10:00:00.000Z');
+    const tsFinSimulado = '2026-09-25T10:00:11.000Z'; // p. ej. tras 10s+ de timeout en detener()
+    expect(Date.parse(estado.ts as string)).toBeLessThan(Date.parse(tsFinSimulado));
   });
 });
 
@@ -49,7 +60,7 @@ describe('asegurarInicioRecorrido', () => {
   });
 
   it('ya confirmado: es un no-op, no vuelve a tocar el outbox (guarda barata para reintentos repetidos)', async () => {
-    const estado: EstadoInicioRecorrido = { eventId: 'event-1', confirmado: true };
+    const estado: EstadoInicioRecorrido = { eventId: 'event-1', confirmado: true, ts: 'ts-1' };
     const abrirOutbox = vi.fn(async () => fakeDb());
     const encolarEvento = vi.fn(async () => ({ eventId: 'event-1', insertado: true }));
 
@@ -63,8 +74,12 @@ describe('asegurarInicioRecorrido', () => {
     expect(encolarEvento).not.toHaveBeenCalled();
   });
 
-  it('primer intento con éxito: escribe inicio_recorrido con el eventId estable y marca confirmado', async () => {
-    const estado: EstadoInicioRecorrido = { eventId: 'event-estable', confirmado: false };
+  it('primer intento con éxito: escribe inicio_recorrido con el eventId estable, el ts capturado y marca confirmado', async () => {
+    const estado: EstadoInicioRecorrido = {
+      eventId: 'event-estable',
+      confirmado: false,
+      ts: '2026-09-25T10:00:00.000Z',
+    };
     const abrirOutbox = vi.fn(async () => fakeDb());
     const encolarEvento = vi.fn(async () => ({ eventId: 'event-estable', insertado: true }));
 
@@ -80,12 +95,13 @@ describe('asegurarInicioRecorrido', () => {
       tipo: 'inicio_recorrido',
       payload: { sesionId: 'sesion-1' },
       eventId: 'event-estable',
+      ts: '2026-09-25T10:00:00.000Z',
     });
     expect(estado.confirmado).toBe(true);
   });
 
   it('el intento falla: propaga el error, NO marca confirmado (el llamador puede reintentar)', async () => {
-    const estado: EstadoInicioRecorrido = { eventId: 'event-1', confirmado: false };
+    const estado: EstadoInicioRecorrido = { eventId: 'event-1', confirmado: false, ts: 'ts-1' };
     const abrirOutbox = vi.fn(async () => fakeDb());
     const encolarEvento = vi.fn(async () => {
       throw new Error('SQLite sin espacio');
@@ -106,7 +122,11 @@ describe('asegurarInicioRecorrido', () => {
   // posterior (`onLocation`, heartbeat o `detener()`) sí lo logra — usando el MISMO eventId en
   // los dos intentos (idempotencia vía `INSERT OR IGNORE` en `db/outbox.ts`).
   it('reintento tras un fallo: usa el MISMO eventId que el intento anterior y termina confirmado', async () => {
-    const estado: EstadoInicioRecorrido = { eventId: 'event-estable', confirmado: false };
+    const estado: EstadoInicioRecorrido = {
+      eventId: 'event-estable',
+      confirmado: false,
+      ts: 'ts-1',
+    };
     const abrirOutbox = vi.fn(async () => fakeDb());
     const encolarEvento = vi
       .fn()
@@ -135,14 +155,15 @@ describe('asegurarInicioRecorrido', () => {
     expect(encolarEvento.mock.calls[1]?.[1].eventId).toBe('event-estable');
   });
 
-  it('reiniciar para un recorrido NUEVO usa un eventId distinto al del recorrido anterior', () => {
+  it('reiniciar para un recorrido NUEVO usa un eventId (y ts) distinto al del recorrido anterior', () => {
     const estado = crearEstadoInicioRecorrido();
-    reiniciarEstadoInicioRecorrido(estado, 'recorrido-1');
+    reiniciarEstadoInicioRecorrido(estado, 'recorrido-1', 'ts-1');
     estado.confirmado = true;
 
-    reiniciarEstadoInicioRecorrido(estado, 'recorrido-2');
+    reiniciarEstadoInicioRecorrido(estado, 'recorrido-2', 'ts-2');
 
     expect(estado.eventId).toBe('recorrido-2');
+    expect(estado.ts).toBe('ts-2');
     expect(estado.confirmado).toBe(false);
   });
 });

@@ -351,6 +351,25 @@ export type SerializadorPromesaEnCurso = SerializadorRestauracion;
  *    justo ANTES de sus pasos con efecto (arrancar el SDK, marcar `tracking` activo) y aborta
  *    sin tocarlos si ya no es la generación vigente.
  *
+ * H1 (hallazgo de revisión CRÍTICO, 2026-09-25 — revisión de esta misma entrega): la
+ * invalidación por generación de arriba no alcanzaba sola. Un intento invalidado (por timeout, o
+ * por un `iniciar()` más nuevo) seguía limpiando/tocando estado COMPARTIDO cuando por fin
+ * resolvía tarde (`subscription.current`/`heartbeatSubscription.current`/
+ * `motionChangeSubscription.current`, `tracking`/`trackingRef`, `BackgroundGeolocation.stop()`):
+ * si para entonces un `iniciar()` más nuevo ya estaba corriendo, el intento viejo le removía las
+ * suscripciones, le paraba el SDK y/o le pisaba `tracking` al nuevo. El fix vive en
+ * `use-gps-operativo.ts` (`ejecutarIniciar` captura los handles que ÉL MISMO instaló al
+ * suscribirse y limpia solo esos, nunca los refs compartidos a ciegas) apoyado en dos
+ * capacidades nuevas de este coordinador: `hayIntentoMasNuevo` (para no llamar `stop()` sobre el
+ * SDK de un intento más nuevo) y la separación entre "vigente" (`estaVigente`, afectada por
+ * timeout) y "la generación más nueva que existió" (`hayIntentoMasNuevo`, no afectada por
+ * timeout). Ver el docblock de `CoordinadorIniciarDetener.hayIntentoMasNuevo` arriba.
+ *
+ * L1 (hallazgo de revisión, 2026-09-25): `esperarIniciarConTimeout` limpia su propio registro
+ * (`enCurso`/`generacionEnCurso`) al vencer el timeout, no solo cuando la promesa colgada
+ * finalmente resuelve — un segundo `detener()` inmediato no debe volver a esperar 10 s por el
+ * mismo intento ya dado por perdido.
+ *
  * Pura, sin React ni el SDK — testeable con promesas de control manual y fake timers (ver
  * `seguimiento-continuo.test.ts`).
  */
@@ -361,12 +380,26 @@ export interface CoordinadorIniciarDetener {
    * (`ejecutarIniciar` en `use-gps-operativo.ts`), para obtener la generación de ESE intento. */
   nuevaGeneracion(): number;
   /** Registra la promesa de ESE intento como "en curso" — lo que `esperarIniciarConTimeout`
-   * espera desde `detener()`. */
-  registrarPromesaEnCurso(promesa: Promise<void>): void;
-  /** `true` si `generacion` sigue siendo la del intento de `iniciar()` más reciente — `false`
-   * si un `detener()` posterior se cansó de esperarlo (timeout) o si otro `iniciar()` ya
-   * arrancó encima. Chequear ANTES de cada paso con efecto. */
+   * espera desde `detener()`. `generacion` es la que devolvió `nuevaGeneracion()` para ESE
+   * mismo intento (hallazgo H1, ver más abajo: hace falta saber a qué generación pertenece la
+   * promesa en curso para poder invalidar SOLO esa al vencer el timeout). */
+  registrarPromesaEnCurso(promesa: Promise<void>, generacion: number): void;
+  /** `true` si `generacion` sigue siendo la del intento de `iniciar()` más reciente Y no fue
+   * invalidada — `false` si un `detener()` posterior se cansó de esperarla (timeout) o si otro
+   * `iniciar()` ya arrancó encima. Chequear ANTES de cada paso con efecto. */
   estaVigente(generacion: number): boolean;
+  /**
+   * H1 (hallazgo de revisión CRÍTICO, 2026-09-25): `true` si ya existe un `iniciar()` MÁS
+   * NUEVO que `generacion` (`nuevaGeneracion()` corrió de nuevo después) — a diferencia de
+   * `estaVigente`, ignora la invalidación por timeout. Un intento invalidado por timeout pero
+   * sin ningún `iniciar()` posterior sigue siendo "el más nuevo que existió": es seguro que
+   * termine de apagar lo que él mismo prendió (`BackgroundGeolocation.stop()`) — `detener()` ya
+   * lo llamó una vez en su propio cierre, una segunda llamada es redundante pero inocua. Si en
+   * cambio SÍ hay un `iniciar()` más nuevo corriendo (o ya corrido), apagar el SDK apagaría el
+   * recorrido de ESE intento, no el propio: nunca debe llamarse `stop()` en ese caso. Ver el
+   * escenario completo en el docblock de `use-gps-operativo.ts` (`limpiarSuscripcionesPropias`).
+   */
+  hayIntentoMasNuevo(generacion: number): boolean;
   /** `detener()` llama esto ANTES de tocar nada (nativo, suscripciones, outbox, estado). Si no
    * hay ningún `iniciar()` en curso, resuelve de inmediato con `{ agotado: false }`. Si lo hay,
    * espera hasta `timeoutMs`; si vence sin que resuelva, invalida su generación (punto 2 del
@@ -377,27 +410,48 @@ export interface CoordinadorIniciarDetener {
 
 export function crearCoordinadorIniciarDetener(): CoordinadorIniciarDetener {
   let enCurso: Promise<void> | null = null;
-  let generacion = 0;
+  // H1: separado de `ultimaGeneracion` — ver el docblock de `registrarPromesaEnCurso`. Necesario
+  // para que, al vencer el timeout, se invalide EXACTAMENTE la generación de la promesa que
+  // estaba en curso en ese momento, no "la última generación conocida" (que podría ya ser otra
+  // si, por algún camino, `registrarPromesaEnCurso` se llamara más de una vez sin que la
+  // anterior hubiera resuelto — no debería pasar en la práctica, pero esta separación lo hace
+  // imposible de todos modos).
+  let generacionEnCurso: number | null = null;
+  let ultimaGeneracion = 0;
+  // H1: generaciones invalidadas por un timeout de `detener()` — `estaVigente` las trata como
+  // no vigentes SIN bajar `ultimaGeneracion` (que sigue siendo "la generación del intento de
+  // `iniciar()` más reciente que existió", la pregunta que responde `hayIntentoMasNuevo`).
+  const generacionesInvalidadas = new Set<number>();
 
   return {
     nuevaGeneracion(): number {
-      generacion += 1;
-      return generacion;
+      ultimaGeneracion += 1;
+      return ultimaGeneracion;
     },
-    registrarPromesaEnCurso(promesa: Promise<void>): void {
+    registrarPromesaEnCurso(promesa: Promise<void>, generacion: number): void {
       enCurso = promesa;
+      generacionEnCurso = generacion;
       void promesa.finally(() => {
-        if (enCurso === promesa) enCurso = null;
+        if (enCurso === promesa) {
+          enCurso = null;
+          generacionEnCurso = null;
+        }
       });
     },
     estaVigente(generacionAEvaluar: number): boolean {
-      return generacionAEvaluar === generacion;
+      return (
+        generacionAEvaluar === ultimaGeneracion && !generacionesInvalidadas.has(generacionAEvaluar)
+      );
+    },
+    hayIntentoMasNuevo(generacionAEvaluar: number): boolean {
+      return ultimaGeneracion > generacionAEvaluar;
     },
     async esperarIniciarConTimeout(
       timeoutMs: number = TIMEOUT_ESPERA_INICIAR_MS,
     ): Promise<{ agotado: boolean }> {
       if (!enCurso) return { agotado: false };
       const promesaEnCurso = enCurso;
+      const generacionEnEspera = generacionEnCurso;
       let idTimer: ReturnType<typeof setTimeout> | undefined;
       const promesaTimeout = new Promise<'timeout'>((resolve) => {
         idTimer = setTimeout(() => resolve('timeout'), timeoutMs);
@@ -415,14 +469,83 @@ export function crearCoordinadorIniciarDetener(): CoordinadorIniciarDetener {
           promesaTimeout,
         ]);
         if (resultado === 'timeout') {
-          generacion += 1;
+          if (generacionEnEspera !== null) generacionesInvalidadas.add(generacionEnEspera);
+          // L1 (hallazgo de revisión, 2026-09-25): limpiar el registro ACÁ, no solo confiar en
+          // que el `.finally()` de `registrarPromesaEnCurso` lo haga cuando la promesa colgada
+          // por fin resuelva — sin esto, un SEGUNDO `detener()` disparado de inmediato (el
+          // chofer reintentando el botón) encontraba `enCurso` todavía apuntando a la misma
+          // promesa colgada y volvía a esperar el timeout completo por un intento que ya se dio
+          // por perdido, en vez de proceder directo con el cierre.
+          if (enCurso === promesaEnCurso) {
+            enCurso = null;
+            generacionEnCurso = null;
+          }
           return { agotado: true };
         }
-        if (enCurso === promesaEnCurso) enCurso = null;
+        if (enCurso === promesaEnCurso) {
+          enCurso = null;
+          generacionEnCurso = null;
+        }
         return { agotado: false };
       } finally {
         if (idTimer !== undefined) clearTimeout(idTimer);
       }
     },
   };
+}
+
+/**
+ * H1 (hallazgo de revisión CRÍTICO, 2026-09-25): la mitad "refs" del fix — la otra mitad es
+ * `hayIntentoMasNuevo` de arriba, que decide si además corresponde `BackgroundGeolocation.stop()`.
+ *
+ * Extraída de `use-gps-operativo.ts` (`ejecutarIniciar`) para que sea testeable sin React: el
+ * bug real era que un intento de `iniciar()` invalidado (por timeout de `detener()`, o por un
+ * `iniciar()` más nuevo) limpiaba `subscription.current`/`heartbeatSubscription.current`/
+ * `motionChangeSubscription.current` DIRECTAMENTE — si para cuando ese intento por fin
+ * resolvía (tarde) esos refs ya pertenecían a un `iniciar()` más nuevo y activo, le removía las
+ * suscripciones al recorrido que sí está corriendo.
+ *
+ * `instaladas` son los handles que el LLAMADOR (un intento de `iniciar()` en particular) instaló
+ * él mismo (ver el valor de retorno de `suscribirUbicaciones`, `use-gps-operativo.ts`).
+ * `compartidas` son los refs de React (`{current}}`) que TODOS los intentos comparten — la única
+ * fuente de verdad de "qué suscripción está activa ahora mismo".
+ *
+ * Comportamiento: cada handle de `instaladas` se remueve incondicionalmente (idempotente — si
+ * ya fue removido, p. ej. porque `detener()` ya cerró el recorrido, una segunda llamada a
+ * `remove()` no tiene nada más que hacer). El ref compartido correspondiente solo se pone en
+ * `null` si TODAVÍA apunta a ESE MISMO handle — si un `iniciar()` más nuevo ya lo reemplazó, se
+ * deja completamente intacto (nunca se lee ni se escribe con datos de otro handle).
+ */
+export interface SuscripcionRemovible {
+  remove: () => void;
+}
+
+export interface SuscripcionesInstaladas {
+  subscription: SuscripcionRemovible;
+  heartbeat: SuscripcionRemovible;
+  motionChange: SuscripcionRemovible;
+}
+
+export interface RefsSuscripcionesCompartidas {
+  subscription: { current: SuscripcionRemovible | null };
+  heartbeat: { current: SuscripcionRemovible | null };
+  motionChange: { current: SuscripcionRemovible | null };
+}
+
+export function limpiarSuscripcionesPropias(
+  instaladas: SuscripcionesInstaladas,
+  compartidas: RefsSuscripcionesCompartidas,
+): void {
+  instaladas.subscription.remove();
+  if (compartidas.subscription.current === instaladas.subscription) {
+    compartidas.subscription.current = null;
+  }
+  instaladas.heartbeat.remove();
+  if (compartidas.heartbeat.current === instaladas.heartbeat) {
+    compartidas.heartbeat.current = null;
+  }
+  instaladas.motionChange.remove();
+  if (compartidas.motionChange.current === instaladas.motionChange) {
+    compartidas.motionChange.current = null;
+  }
 }
