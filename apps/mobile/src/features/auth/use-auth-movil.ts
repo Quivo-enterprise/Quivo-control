@@ -4,6 +4,7 @@ import type * as SQLite from 'expo-sqlite';
 import type { ContextoOperativoMovil, ResumenAsignacionMovil } from '@quivo/shared';
 import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
 import {
+  CircuitoRefreshAbiertoError,
   esSesionIrrecuperable,
   intentarRefrescarConCircuito,
   obtenerEstadoCircuitoRefresh,
@@ -218,7 +219,22 @@ export function useAuthMovil() {
         setEstado((actual) => ({ ...actual, sesion: actualizada ?? actual.sesion, aviso: null }));
       } catch (error: unknown) {
         if (!mounted.current) return;
-        if (error instanceof AuthMovilApiError && error.status === 401) {
+        // Punto 10 (code review 2026-09-25): `CircuitoRefreshAbiertoError` tiene
+        // `status: 401` A PROPÓSITO (ver su docblock en `refresh-circuit-breaker.ts` — así
+        // `error.status === 401` lo trata igual que un 401 real EN OTROS callers que solo
+        // necesitan degradar a "sesión no revalidada"), pero acá SÍ importa la diferencia: es
+        // una decisión LOCAL (el circuito ya estaba abierto por fallos 401 PREVIOS), nunca
+        // evidencia nueva del servidor — ni siquiera tocó la red esta vez. Tratarlo igual que
+        // un 401 real dispara `refrescarConReintentos` (reintentos que, mientras el circuito
+        // siga abierto, vuelven a fallar con el MISMO error local sin volver a consultar al
+        // servidor) y puede terminar marcando `sesionNoRevalidada` sin que el servidor haya
+        // dicho nada nuevo. Se excluye acá; cae al `else` genérico de abajo (aviso de
+        // "trabajando offline", sin tocar `sesionNoRevalidada`).
+        if (
+          error instanceof AuthMovilApiError &&
+          error.status === 401 &&
+          !(error instanceof CircuitoRefreshAbiertoError)
+        ) {
           // Plan §2.4.1: antes, CUALQUIER fallo del refresh que no fuera `kind: 'network'`
           // (incluido otro 401 llano) disparaba `borrarSesionMovil()` en el primer intento.
           // Eso desmontaba `GpsProvider`, removía la suscripción `onLocation` (el SDK nativo
@@ -617,6 +633,20 @@ export async function refrescar(guardada: SesionMovilGuardada): Promise<SesionMo
   // `reconciliarConDisco`. Así, toda llamada (aunque arranque con un token de memoria distinto
   // y desactualizado) converge a la MISMA clave si el token vigente en disco es el mismo.
   const vigente = await reconciliarConDisco(guardada);
+  // Punto 7 (code review 2026-09-25): si `reconciliarConDisco` adoptó una sesión de DISCO
+  // porque OTRO contexto ya rotó el refresh token (`vigente !== guardada`), y esa sesión de
+  // disco todavía tiene el access token VIGENTE, no hace falta rotar de nuevo acá — la rotación
+  // ya la hizo el otro contexto hace un instante. Sin este chequeo, cada contexto que
+  // reconciliaba contra un T1 recién rotado igual disparaba SU PROPIA request de refresh sobre
+  // T1 (en vez de reusar el access token que esa rotación ya trajo), multiplicando refreshes
+  // evitables exactamente en el escenario (headless + foreground concurrentes) que
+  // `reconciliarConDisco` existe para cubrir. Comparación estricta (sin margen): mismo criterio
+  // que el resto del archivo (`obtenerAccessToken` más abajo, `headless-task.ts`) — no hay una
+  // constante de margen para `accessTokenExpiresAt` en este código base, así que no se inventa
+  // una acá.
+  if (vigente !== guardada && new Date(vigente.accessTokenExpiresAt) > new Date()) {
+    return vigente;
+  }
   const clave = vigente.refreshToken;
   const enVuelo = refrescosEnVuelo.get(clave);
   if (enVuelo) return enVuelo;
@@ -815,13 +845,21 @@ async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMov
     // vuelo. Cerrar esto de raíz exigiría persistencia con fencing atómico real (fuera del
     // alcance de SecureStore) — no se implementa acá.
     //
-    // Red de seguridad ya existente que acota el daño (por eso se acepta explícitamente sin
-    // más cambios): si esta escritura tardía llega a pisar una rotación más nueva, el servidor
-    // ya conoce ambos refresh tokens involucrados (`refreshTokenHashAnterior`, ver
-    // `AuthMovilService`) y detecta el reuso del token viejo en el próximo intento — el 401
-    // resultante no revalida (`sesionNoRevalidada`) y fuerza un login limpio (Entrega 28,
-    // `SESION_NO_VIGENTE`, pendiente de implementar) en vez de dejar el cliente atascado con
-    // credenciales que el servidor ya invalidó silenciosamente.
+    // Punto 9 (code review 2026-09-25 — corrige un comentario FALSO de esta misma sección):
+    // NO hay ninguna detección de reuso en el servidor acá. `refresh()`
+    // (`apps/api/src/modules/auth-movil/auth-movil.service.ts`) busca la sesión por
+    // `refreshTokenHash` (el hash VIGENTE) — nunca lee `refreshTokenHashAnterior`; esa columna
+    // la usa SOLO `logout()`, como prueba de posesión de un fallback por `deviceId` (ver su
+    // docblock), no como mecanismo de detección de reuso de `refresh()`. Decisión del CTO: NO
+    // se implementa detección de reuso en el servidor.
+    //
+    // Lo que pasa de verdad si esta escritura tardía llega a pisar una rotación más nueva: el
+    // teléfono queda en disco con el token YA ROTADO (el que esta escritura tardía persistió,
+    // no el que el servidor reconoce como vigente después de la rotación más nueva). El
+    // próximo `refresh()` con ese token da 401, el circuit breaker cuenta el fallo y eventualmente
+    // abre el circuito, y el chofer termina teniendo que volver a loguearse (Entrega 28,
+    // `SESION_NO_VIGENTE`, pendiente de implementar) — no hay corrupción de datos ni sesión de
+    // otro chofer comprometida, solo esa degradación a login manual.
     const renovado = await renovarLease(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), TTL_LEASE_REFRESH_SESION_MS);
     if (!renovado) {
       const relecturaTrasPerderLease = await cargarSesionMovil().catch(() => null);
@@ -932,6 +970,13 @@ async function leerSesionParaLogoutConReintentos(): Promise<SesionMovilGuardada 
  */
 export async function ejecutarLogout(
   deviceIdParaLogout: string | undefined,
+  opciones?: {
+    // Punto 3 (code review 2026-09-25): solo lo pasa `intentarRevocacionesPendientes` cuando
+    // dispara este logout PORQUE leyó `hayLogoutSolicitado()` en `true` — nunca el logout
+    // directo del chofer (`logout()` en el hook), que no depende de esa marca. Ver el chequeo
+    // bajo lease más abajo.
+    soloSiSigueSolicitadoBajoLease?: boolean;
+  },
 ): Promise<'completado' | 'pendiente'> {
   const db = await abrirOutbox();
   const tokenLease = generarTokenLeaseRefresh();
@@ -951,6 +996,20 @@ export async function ejecutarLogout(
     return 'pendiente';
   }
   try {
+    // Punto 3 (code review 2026-09-25): `intentarRevocacionesPendientes` pudo haber leído la
+    // marca de logout pendiente ANTES de que `guardarSesionMovil` (login nuevo, concurrente) la
+    // borrara — para cuando este logout consigue el lease, la sesión que `guardarSesionMovil`
+    // dejó en disco puede ya ser la NUEVA, no la que originó la marca. Relee la marca ACÁ, con
+    // el lease ya tomado (`guardarSesionMovil` no toma este lease al escribir, así que esto no
+    // cierra la ventana del todo, pero la reduce a lo que dura este `await`): si ya no está,
+    // un login más reciente la superó — no revocar ni tocar la sesión (nueva) que haya en
+    // disco. Riesgo residual documentado en `guardarSesionMovil`.
+    if (opciones?.soloSiSigueSolicitadoBajoLease) {
+      const sigueSolicitado = await hayLogoutSolicitado().catch(() => true);
+      if (!sigueSolicitado) {
+        return 'completado';
+      }
+    }
     // Gap 5: si esto agota sus reintentos, se propaga SIN tocar almacenamiento — ver el
     // docblock de arriba.
     const vigente = await leerSesionParaLogoutConReintentos();
@@ -1014,8 +1073,46 @@ export const TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED = 3;
  * que sigue intacta en disco, persiste la intención, borra local, revoca).
  *
  * NUNCA rechaza — todos los callers la disparan fire-and-forget.
+ *
+ * Punto 4 (code review 2026-09-25): esta función hace read-modify-write sobre la colección de
+ * revocaciones pendientes (ver `sesion-movil-store.ts`, que ahora sincroniza esa parte bajo
+ * `ID_LEASE_REVOCACIONES_PENDIENTES`) — pero llamados CONCURRENTES a esta misma función, dentro
+ * del MISMO contexto JS, igual multiplicaban trabajo redundante sin necesidad (cada uno vuelve a
+ * listar/reintentar las mismas entradas). `drenaje-oportunista.ts:120` la dispara sin `await` en
+ * cada fix (mitigado además por su propio throttle, punto 8) y `restaurarSesion` también la
+ * dispara al arrancar — de sobra para que dos pasadas se solapen en la práctica. Single-flight +
+ * piso de 10 s a nivel de MÓDULO (memoria, no cruza contextos — igual que `backoffActualMs` en
+ * `drenaje-oportunista.ts`, ver su comentario): si ya hay una pasada en vuelo, los llamadores
+ * subsiguientes ESPERAN esa misma promesa en vez de arrancar la suya; si la última pasada
+ * terminó hace menos del piso, se resuelve al toque sin hacer nada.
  */
-export async function intentarRevocacionesPendientes(): Promise<void> {
+const PISO_ENTRE_PASADAS_REVOCACIONES_MS = 10_000;
+let pasadaRevocacionesEnVuelo: Promise<void> | null = null;
+let ultimaPasadaRevocacionesMs = 0;
+
+/** SOLO para tests: ver el mismo patrón en `reiniciarThrottleDrenajeOportunistaParaTests`
+ * (`drenaje-oportunista.ts`) — sin este reset, los tests de este archivo (que corren varias
+ * pasadas en milisegundos de wall-clock real) se saltearían entero a partir de la segunda. Sin
+ * caller en producción. */
+export function reiniciarThrottleRevocacionesPendientesParaTests(): void {
+  pasadaRevocacionesEnVuelo = null;
+  ultimaPasadaRevocacionesMs = 0;
+}
+
+export function intentarRevocacionesPendientes(): Promise<void> {
+  if (pasadaRevocacionesEnVuelo) return pasadaRevocacionesEnVuelo;
+  if (Date.now() - ultimaPasadaRevocacionesMs < PISO_ENTRE_PASADAS_REVOCACIONES_MS) {
+    return Promise.resolve();
+  }
+  const pasada = ejecutarPasadaRevocacionesPendientes().finally(() => {
+    ultimaPasadaRevocacionesMs = Date.now();
+    pasadaRevocacionesEnVuelo = null;
+  });
+  pasadaRevocacionesEnVuelo = pasada;
+  return pasada;
+}
+
+async function ejecutarPasadaRevocacionesPendientes(): Promise<void> {
   let pendientes: Array<RevocacionPendienteGuardada & { id: string }>;
   try {
     pendientes = await listarRevocacionesPendientes();
@@ -1056,7 +1153,7 @@ export async function intentarRevocacionesPendientes(): Promise<void> {
   if (!solicitado) return;
   try {
     const idDispositivo = await obtenerDeviceIdMovil();
-    const resultado = await ejecutarLogout(idDispositivo);
+    const resultado = await ejecutarLogout(idDispositivo, { soloSiSigueSolicitadoBajoLease: true });
     if (resultado === 'completado') {
       await borrarLogoutSolicitado().catch(() => {});
     }
@@ -1103,12 +1200,23 @@ export const UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA = 2;
  * `kind === 'network'`, que es offline legítimo: la app tiene que poder operar sin red (
  * requisito duro del producto), así que eso nunca debe encender la alarma. A propósito NO
  * resetea el contador ante un error de red (decisión (b) documentada arriba, junto a la
- * constante del umbral) — solo lo deja sin sumar. */
+ * constante del umbral) — solo lo deja sin sumar.
+ *
+ * Punto 10 (code review 2026-09-25): tampoco suma un `CircuitoRefreshAbiertoError` — tiene
+ * `status: 401` a propósito (ver su docblock en `refresh-circuit-breaker.ts`), pero es una
+ * decisión LOCAL (el circuito ya estaba abierto por fallos anteriores), nunca evidencia NUEVA
+ * del servidor. Contarlo acumularía la racha más rápido de lo que el servidor realmente la
+ * generó — el umbral (`UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA`) existe para confirmar con
+ * el servidor, no con el propio circuito local. */
 export function clasificarFalloAccessToken(
   error: unknown,
   fallos401AcumuladosPrevios: number,
 ): { fallos401Acumulados: number; marcarSesionNoRevalidada: boolean } {
-  if (error instanceof AuthMovilApiError && error.status === 401) {
+  if (
+    error instanceof AuthMovilApiError &&
+    error.status === 401 &&
+    !(error instanceof CircuitoRefreshAbiertoError)
+  ) {
     const fallos401Acumulados = fallos401AcumuladosPrevios + 1;
     return {
       fallos401Acumulados,

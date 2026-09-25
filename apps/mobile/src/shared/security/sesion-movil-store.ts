@@ -1,5 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
+import * as Sentry from '@sentry/react-native';
 import {
   AuthConductorMovilResponseSchema,
   DeviceIdMovilSchema,
@@ -7,6 +8,13 @@ import {
   type ContextoOperativoMovil,
   type RefreshMovilResponse,
 } from '@quivo/shared';
+import {
+  abrirOutbox,
+  adquirirLease,
+  liberarLeaseConCooldown,
+  ID_LEASE_REVOCACIONES_PENDIENTES,
+  TTL_LEASE_REVOCACIONES_PENDIENTES_MS,
+} from '../../db/outbox';
 /**
  * G2 (hallazgo de `/codex-debug verify-fix` ronda 4, ALTO — reemplaza el diseño de una sola
  * clave combinada): `SESSION_KEY_LEGACY` guardaba credenciales (`accessToken`/`refreshToken`/
@@ -50,18 +58,24 @@ function partirCredencialesYContexto(
 }
 
 export async function guardarSesionMovil(sesion: SesionMovilGuardada): Promise<void> {
+  // Punto 3 (code review 2026-09-25 — antes esto corría DESPUÉS de escribir las credenciales):
+  // un login nuevo y exitoso supera cualquier intento de logout que hubiera quedado
+  // "solicitado" (ver `marcarLogoutSolicitado`) para la sesión ANTERIOR — sin esto, un
+  // reintento tardío de `intentarRevocacionesPendientes` podría terminar cerrando esta sesión
+  // recién abierta. Borrar la marca ACÁ, ANTES de escribir las credenciales/contexto nuevos,
+  // reduce la ventana en la que `intentarRevocacionesPendientes` puede leer la marca como
+  // presente y decidir revocar — si igual la lee como presente justo antes de este borrado,
+  // `ejecutarLogout` (`use-auth-movil.ts`) vuelve a chequear la marca una vez tomado el lease
+  // `refresh-sesion`, y aborta si ya no está. Riesgo residual aceptado (decisión del CTO): si
+  // pese a esto `ejecutarLogout` ya leyó la sesión ANTES de este borrado, la revocación
+  // server-side de la sesión vieja queda sin completar (nunca se llegó a leer su refresh token
+  // bajo lease) — ver el docblock de `marcarLogoutSolicitado`.
+  await borrarLogoutSolicitado();
   const { credenciales, contexto } = partirCredencialesYContexto(sesion);
   await Promise.all([
     SecureStore.setItemAsync(CREDENCIALES_KEY, JSON.stringify(credenciales), OPTIONS),
     SecureStore.setItemAsync(CONTEXTO_KEY, JSON.stringify({ contexto }), OPTIONS),
   ]);
-  // Punto 3 (verify-fix ronda 6): un login nuevo y exitoso supera cualquier intento de logout
-  // que hubiera quedado "solicitado" (ver `marcarLogoutSolicitado`) para la sesión ANTERIOR —
-  // sin esto, un reintento tardío de `intentarRevocacionesPendientes` podría terminar cerrando
-  // esta sesión recién abierta. Riesgo residual aceptado (decisión del CTO): si esto ocurre, la
-  // revocación server-side de la sesión vieja queda sin completar (nunca se llegó a leer su
-  // refresh token bajo lease) — ver el docblock de `marcarLogoutSolicitado`.
-  await borrarLogoutSolicitado();
 }
 
 export async function cargarSesionMovil(): Promise<SesionMovilGuardada | null> {
@@ -235,6 +249,60 @@ async function derivarIdRevocacion(refreshToken: string): Promise<string> {
   return hash.slice(0, 16);
 }
 
+/**
+ * Punto 4 (code review 2026-09-25): toda mutación de `ColeccionRevocacionesPendientes`
+ * (guardar, borrar por id, reescribir con `intentos` actualizado — las tres pasan por
+ * `guardarRevocacionPendiente`/`borrarRevocacionPendientePorId`) corre como
+ * relectura+escritura bajo `ID_LEASE_REVOCACIONES_PENDIENTES` — ver su comentario en
+ * `db/outbox.ts` para el porqué de un lease PROPIO en vez de reusar `ID_LEASE_REFRESH_SESION`.
+ * Reintentos breves (no la espera larga de `adquirirLeaseRefreshConEspera` en
+ * `use-auth-movil.ts`, pensada para una operación de red que DEBE completarse): acá la sección
+ * crítica es un blob JSON chico de SecureStore, la contención entre dos contextos JS se
+ * resuelve en milisegundos.
+ *
+ * Última red de seguridad (caso patológico — SQLite inaccesible): tras agotar los reintentos,
+ * se procede IGUAL sin el lease en vez de descartar la mutación en silencio. Perder
+ * exclusión mutua en ese escenario extremo es preferible a perder la entrada — el requisito
+ * duro es "ninguna entrada se pierde", no "nunca hay una carrera bajo falla total de SQLite".
+ */
+const REINTENTOS_LEASE_COLECCION_REVOCACIONES = 8;
+const ESPERA_ENTRE_REINTENTOS_LEASE_COLECCION_MS = 75;
+
+function generarTokenLeaseColeccionRevocaciones(): string {
+  return `revocaciones-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function conLeaseColeccionRevocaciones<T>(mutar: () => Promise<T>): Promise<T> {
+  const db = await abrirOutbox();
+  const token = generarTokenLeaseColeccionRevocaciones();
+  let obtuvoLease = false;
+  for (let intento = 0; intento < REINTENTOS_LEASE_COLECCION_REVOCACIONES; intento++) {
+    obtuvoLease = await adquirirLease(
+      db,
+      ID_LEASE_REVOCACIONES_PENDIENTES,
+      token,
+      Date.now(),
+      TTL_LEASE_REVOCACIONES_PENDIENTES_MS,
+    );
+    if (obtuvoLease) break;
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_ENTRE_REINTENTOS_LEASE_COLECCION_MS));
+  }
+  if (!obtuvoLease) {
+    Sentry.captureException(
+      new Error('No se pudo adquirir el lease revocaciones-pendientes tras los reintentos'),
+      { tags: { contexto: 'sesion-movil-store', paso: 'lease-coleccion-revocaciones-agotado' } },
+    );
+    // Última red de seguridad (ver el docblock de arriba): mutar sin lease antes que perder la
+    // entrada en silencio.
+    return mutar();
+  }
+  try {
+    return await mutar();
+  } finally {
+    await liberarLeaseConCooldown(db, ID_LEASE_REVOCACIONES_PENDIENTES, token, Date.now(), 0);
+  }
+}
+
 /** Devuelve el id de la entrada escrita (derivado del `refreshToken`) — el caller lo necesita
  * para poder borrar DESPUÉS únicamente esa entrada (`borrarRevocacionPendientePorId`) sin
  * afectar ninguna otra intención que haya quedado pendiente en paralelo. */
@@ -242,9 +310,11 @@ export async function guardarRevocacionPendiente(
   revocacion: RevocacionPendienteGuardada,
 ): Promise<string> {
   const id = await derivarIdRevocacion(revocacion.refreshToken);
-  const coleccion = await leerColeccionRevocacionesPendientes();
-  coleccion[id] = revocacion;
-  await escribirColeccionRevocacionesPendientes(coleccion);
+  await conLeaseColeccionRevocaciones(async () => {
+    const coleccion = await leerColeccionRevocacionesPendientes();
+    coleccion[id] = revocacion;
+    await escribirColeccionRevocacionesPendientes(coleccion);
+  });
   return id;
 }
 
@@ -256,10 +326,12 @@ export async function listarRevocacionesPendientes(): Promise<
 }
 
 export async function borrarRevocacionPendientePorId(id: string): Promise<void> {
-  const coleccion = await leerColeccionRevocacionesPendientes();
-  if (!(id in coleccion)) return;
-  delete coleccion[id];
-  await escribirColeccionRevocacionesPendientes(coleccion);
+  await conLeaseColeccionRevocaciones(async () => {
+    const coleccion = await leerColeccionRevocacionesPendientes();
+    if (!(id in coleccion)) return;
+    delete coleccion[id];
+    await escribirColeccionRevocacionesPendientes(coleccion);
+  });
 }
 
 const LOGOUT_SOLICITADO_KEY = 'quivo.mobile.logout-solicitado.v1';
