@@ -12,6 +12,7 @@ import * as Sentry from '@sentry/react-native';
 import {
   crearManejadorForegroundActivo,
   crearManejadorReafirmarMovimiento,
+  crearSerializadorPromesaEnCurso,
   crearSerializadorRestauracion,
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
@@ -484,5 +485,55 @@ describe('crearManejadorReafirmarMovimiento', () => {
         tags: expect.objectContaining({ paso: 'motion-change-reafirmar-movimiento' }),
       }),
     );
+  });
+});
+
+describe('crearSerializadorPromesaEnCurso — carrera Iniciar→Finalizar rápido (QUI-247, MEDIO)', () => {
+  // Hallazgo MEDIO de revisión: `tracking` pasa a `true` apenas resuelve `start()`, ANTES de
+  // que `iniciar()` termine de escribir `inicio_recorrido` (espera la semilla de cumplimientos
+  // + `abrirOutbox()`, puede tardar segundos) — y `next-control-sheet.tsx` ya ofrece "FINALIZAR
+  // RUTA" en esa ventana. Un toque Iniciar→Finalizar muy rápido hacía que `detener()` escribiera
+  // `fin_recorrido` ANTES de que el `iniciar()` en vuelo llegara a escribir `inicio_recorrido`:
+  // reconstrucción de recorrido rota (fin sin inicio). El fix: `use-gps-operativo.ts` guarda el
+  // `iniciar()` en vuelo en una instancia de este mismo serializador (alias genérico de
+  // `crearSerializadorRestauracion`, mismo mecanismo) y `detener()` la espera ANTES de tocar
+  // nada. Este test reproduce la carrera con el propio serializador, sin levantar el hook
+  // completo (que no tiene arnés jest-expo/RNTL en este paquete).
+  it('detener() esperado tras registrar un iniciar() en vuelo: inicio_recorrido siempre se escribe antes que fin_recorrido', async () => {
+    const orden: string[] = [];
+    const serializadorIniciar = crearSerializadorPromesaEnCurso();
+    const { promesa: iniciarEnCurso, resolver: resolverIniciar } = crearDiferida<void>();
+
+    // Simula `iniciar()`: se registra ANTES de que nada más corra (mismo orden que el wrapper
+    // real en `use-gps-operativo.ts`), y su "trabajo" (escribir `inicio_recorrido`) solo se
+    // asienta cuando `resolverIniciar()` se llama más abajo — simulando la espera real de la
+    // semilla + `abrirOutbox()`.
+    serializadorIniciar.registrar(
+      iniciarEnCurso.then(() => {
+        orden.push('inicio_recorrido');
+      }),
+    );
+
+    // El chofer toca "Finalizar" YA, con `iniciar()` todavía en vuelo — `detener()` tiene que
+    // esperar antes de escribir `fin_recorrido`.
+    const detenerSimulado = (async () => {
+      await serializadorIniciar.esperarPendiente();
+      orden.push('fin_recorrido');
+    })();
+
+    // El `iniciar()` en vuelo "tarda" — se resuelve recién acá, después de que `detener()` ya
+    // esté esperando.
+    await Promise.resolve();
+    expect(orden).toEqual([]); // ninguno de los dos escribió nada todavía
+
+    resolverIniciar();
+    await detenerSimulado;
+
+    expect(orden).toEqual(['inicio_recorrido', 'fin_recorrido']);
+  });
+
+  it('sin ningún iniciar() en vuelo (camino normal): detener() no espera nada', async () => {
+    const serializadorIniciar = crearSerializadorPromesaEnCurso();
+    await expect(serializadorIniciar.esperarPendiente()).resolves.toBeUndefined();
   });
 });

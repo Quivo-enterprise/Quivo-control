@@ -302,3 +302,24 @@ export function crearSerializadorRestauracion(): SerializadorRestauracion {
     },
   };
 }
+
+/**
+ * MEDIO (hallazgo de revisión, QUI-247): alias genérico de `crearSerializadorRestauracion` —
+ * el mecanismo (una promesa "en vuelo" que un consumidor posterior espera antes de proceder)
+ * no es exclusivo de la restauración de `disableStopDetection`. `use-gps-operativo.ts` lo
+ * reusa para una SEGUNDA instancia independiente que serializa `detener()` contra un
+ * `iniciar()` en curso: antes de este fix, `tracking` pasaba a `true` apenas resolvía
+ * `start()` (bien antes de que `inicio_recorrido` se escribiera al outbox, que espera la
+ * semilla de cumplimientos + `abrirOutbox()` — puede tardar segundos), y `next-control-
+ * sheet.tsx` ya ofrecía "FINALIZAR RUTA" en esa ventana. Un toque rápido Iniciar→Finalizar
+ * hacía que `detener()` escribiera `fin_recorrido` ANTES de que el `iniciar()` en vuelo
+ * terminara de escribir `inicio_recorrido` — reconstrucción de recorrido rota (fin sin
+ * inicio) — y además el `trackingRef = false` de `detener()` podía pisar el `trackingRef =
+ * true` que el `iniciar()` en vuelo todavía no había asignado. `detener()` ahora llama
+ * `esperarPendiente()` de ESTA instancia ANTES de tocar nada (nativo, suscripciones, outbox,
+ * estado), así que el orden `inicio_recorrido < fin_recorrido` queda garantizado siempre, sin
+ * importar qué tan rápido se toquen los dos botones. Misma implementación exacta, sin
+ * acoplar los dos usos entre sí (dos instancias, un `useRef` cada una en el hook).
+ */
+export const crearSerializadorPromesaEnCurso = crearSerializadorRestauracion;
+export type SerializadorPromesaEnCurso = SerializadorRestauracion;

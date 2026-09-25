@@ -8,6 +8,7 @@ import {
   abrirOutbox,
   contarEventosPendientes,
   encolarEvento,
+  generarEventId,
   obtenerEventosPorTipo,
 } from '../../db/outbox';
 import { gpsSpikeConfig, logVerboseHabilitado } from '../../gps/background-geolocation.config';
@@ -22,6 +23,11 @@ import { claveCumplimiento, type DeteccionPuntoControl, type EstadoPuntoControl 
 import { registrarPuntoGps } from '../../gps/headless-task';
 import { clavesCumplimientoDesdePayloads } from '../../gps/location-task';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
+import {
+  asegurarInicioRecorrido,
+  crearEstadoInicioRecorrido,
+  reiniciarEstadoInicioRecorrido,
+} from './inicio-recorrido-retry';
 import { resolverResultadoIniciar } from './resultado-iniciar-recorrido';
 import {
   AUTORIZACION_DENEGADA,
@@ -39,6 +45,7 @@ import {
 import {
   crearManejadorForegroundActivo,
   crearManejadorReafirmarMovimiento,
+  crearSerializadorPromesaEnCurso,
   crearSerializadorRestauracion,
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
@@ -182,6 +189,27 @@ export function useGpsOperativo(
   // `esperarPendiente()` en `iniciar()` y el `registrar()` en `detener()`. Una sola instancia
   // por hook, mismo ciclo de vida que `trackingRef`.
   const serializadorRestauracion = useRef(crearSerializadorRestauracion()).current;
+  // MEDIO (hallazgo de revisión, QUI-247): instancia INDEPENDIENTE del mismo factory de
+  // arriba — serializa `detener()` contra un `iniciar()` en curso, no la restauración de
+  // config. `iniciar()` registra acá su propia promesa (envolviendo `ejecutarIniciar`, más
+  // abajo) apenas arranca, y `detener()` la espera ANTES de tocar nada (nativo, suscripciones,
+  // outbox, `tracking`). Sin esto, un toque rápido Iniciar→Finalizar podía hacer que
+  // `detener()` escribiera `fin_recorrido` (y pisara `trackingRef`) ANTES de que el `iniciar()`
+  // en vuelo llegara a escribir `inicio_recorrido` — reconstrucción de recorrido rota. Ver el
+  // docblock de `crearSerializadorPromesaEnCurso` (`gps/seguimiento-continuo.ts`) y su test
+  // dedicado a esta carrera.
+  const serializadorIniciar = useRef(crearSerializadorPromesaEnCurso()).current;
+  // LOW-MED (hallazgo de revisión, QUI-247): estado mutable compartido del marcador
+  // `inicio_recorrido` del intento de `iniciar()` en curso — `reiniciarEstadoInicioRecorrido`
+  // le asigna un `eventId` ESTABLE al arrancar cada intento, y `asegurarInicioRecorrido`
+  // (`inicio-recorrido-retry.ts`) lo usa desde CUATRO puntos (el intento inicial en
+  // `iniciar()`, cada `onLocation`, cada heartbeat, y `detener()` como última red de
+  // seguridad) para que un fallo de escritura nunca quede sin reintento — antes de este fix,
+  // si esa escritura fallaba una vez, `tracking` se quedaba en `true` pero NADA volvía a
+  // intentar escribir el marcador: un recorrido con `fin_recorrido` pero sin `inicio_recorrido`.
+  // `eventId: null` (estado inicial) protege el camino de re-enganche (nunca llama `iniciar()`,
+  // nunca debe emitir este marcador) — ver el docblock del módulo.
+  const estadoInicioRecorrido = useRef(crearEstadoInicioRecorrido()).current;
   // QUI-338: si esta app YA invocó `requestPermission()` alguna vez en este dispositivo,
   // persistido en `AsyncStorage` bajo `CLAVE_PERMISO_GPS_SOLICITADO` (ver ese comentario para
   // el porqué). Vive en un ref, no en `useState`: se lee de forma síncrona dentro de
@@ -280,6 +308,28 @@ export function useGpsOperativo(
         setErrorGps('El teléfono no pudo guardar tu recorrido. Revisá el espacio disponible.');
       }
 
+      // LOW-MED (hallazgo de revisión, QUI-247): reintento oportunista del marcador
+      // `inicio_recorrido` si el intento de `iniciar()` (o un reintento previo, heartbeat u
+      // otro fix) todavía no logró escribirlo. `asegurarInicioRecorrido` es un no-op barato
+      // (un solo `if`) en el camino normal ya confirmado, y también en el camino de
+      // re-enganche (`eventId: null`, nunca debe emitir este marcador) — ver
+      // `inicio-recorrido-retry.ts`. Try/catch propio, separado del de arriba, para no inflar
+      // `erroresEscritura` (que mide fallos de PUNTOS GPS para el veredicto del spike) con
+      // fallos de este marcador aparte.
+      if (!estadoInicioRecorrido.confirmado) {
+        try {
+          await asegurarInicioRecorrido(
+            estadoInicioRecorrido,
+            { abrirOutbox, encolarEvento },
+            { deviceId, sesionId },
+          );
+        } catch (error) {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'reintentar-inicio-recorrido-onlocation' },
+          });
+        }
+      }
+
       // Entrega 2 (drenado oportunista del outbox en background): mismo motor que
       // `headless-task.ts`, enganchado acá tras CADA fix de foreground — sin `await` a
       // propósito (a diferencia del headless, acá no hay ninguna promesa de tarea del SDK
@@ -289,7 +339,7 @@ export function useGpsOperativo(
       // que este `void` no deja una unhandled rejection colgando.
       void intentarDrenarOportunista(obtenerAccessToken);
     },
-    [deviceId, sesionId, puntosControl, obtenerAccessToken],
+    [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido],
   );
 
   // `onLocation` cambia de identidad cuando cambian `puntosControl`/`sesionId`, pero la
@@ -353,6 +403,25 @@ export function useGpsOperativo(
             tags: { contexto: 'gps-foreground', paso: 'heartbeat-reafirmar-movimiento' },
           });
         }
+        // LOW-MED (hallazgo de revisión, QUI-247): mismo reintento oportunista que
+        // `onLocation` (ver ese comentario) — el heartbeat es el ÚNICO evento que sigue
+        // llegando cada 60 s con o sin movimiento, así que sin este segundo enganche un
+        // layover prolongado justo después de un `iniciar()` que falló al escribir
+        // `inicio_recorrido` podía dejar el marcador sin ningún reintento hasta el próximo fix
+        // de `onLocation` (que puede tardar de más con el vehículo detenido).
+        if (!estadoInicioRecorrido.confirmado) {
+          try {
+            await asegurarInicioRecorrido(
+              estadoInicioRecorrido,
+              { abrirOutbox, encolarEvento },
+              { deviceId, sesionId },
+            );
+          } catch (error) {
+            Sentry.captureException(error, {
+              tags: { contexto: 'gps-foreground', paso: 'heartbeat-reintentar-inicio-recorrido' },
+            });
+          }
+        }
         // `intentarDrenarOportunista` nunca rechaza (ver su docblock) — no hace falta un
         // catch propio acá.
         await intentarDrenarOportunista(obtenerAccessTokenRef.current);
@@ -371,7 +440,10 @@ export function useGpsOperativo(
     motionChangeSubscription.current = BackgroundGeolocation.onMotionChange(
       crearManejadorReafirmarMovimiento(BackgroundGeolocation, estaEnRecorrido),
     );
-  }, [estaEnRecorrido]);
+    // `deviceId`/`sesionId` en las deps: el handler de `onHeartbeat` de arriba los usa
+    // directamente (reintento de `inicio_recorrido`, QUI-247) — sin esto, un cambio de
+    // `sesionId` entre renders dejaría el heartbeat cerrado sobre una sesión vieja.
+  }, [estaEnRecorrido, deviceId, sesionId, estadoInicioRecorrido]);
 
   /**
    * C1 (hallazgo de revisión CRÍTICO): siembra `puntosControlDetectados.current` desde el
@@ -454,6 +526,21 @@ export function useGpsOperativo(
       try {
         const estado = await BackgroundGeolocation.getState();
         if (!montado || !estado.enabled) return;
+        // LOW, verificado contra la doc oficial del SDK instalado (`react-native-background-
+        // geolocation@5.4.0`, hallazgo de revisión): "You must call `.ready(config)` once and
+        // only once, each time your app is launched" — y el patrón canónico de la propia doc
+        // (`ready(config).then(state => { if (!state.enabled) start(); })`) llama `ready()`
+        // SIEMPRE, incluso cuando espera que el plugin ya esté `enabled`; el chequeo de
+        // `state.enabled` es solo para decidir si hace falta `start()`, nunca para saltear
+        // `ready()`. Antes de este fix, este camino de re-enganche (el chofer mata la app a
+        // mitad de turno y la reabre con el plugin ya corriendo) llamaba `changePace`/
+        // `setConfig` (`reafirmarMovimiento`, abajo) sin haber llamado `ready()` en ESTE
+        // lanzamiento del proceso — `ready()` solo corre dentro de `iniciar()`, que este camino
+        // nunca ejecuta. `ready()` es seguro de llamar acá aunque el plugin ya esté `enabled`:
+        // no lo reinicia ni lo detiene (mismo `gpsSpikeConfig` que usa `iniciar()`, para que la
+        // config reafirmada sea la misma en los dos caminos de entrada).
+        await BackgroundGeolocation.ready(gpsSpikeConfig);
+        if (!montado) return;
         suscribirUbicaciones();
         setTracking(true);
         trackingRef.current = true;
@@ -579,7 +666,18 @@ export function useGpsOperativo(
     await Linking.openSettings();
   }, []);
 
-  const iniciar = useCallback(async () => {
+  // MEDIO (hallazgo de revisión, QUI-247): `ejecutarIniciar` es el cuerpo REAL de "Iniciar
+  // recorrido" — sin cambios de comportamiento respecto de antes de este fix, salvo la
+  // generación del `eventId` estable de `inicio_recorrido` (ver más abajo). `iniciar()` (más
+  // abajo del todo, después de `detener()`... en realidad la envoltura queda inmediatamente
+  // después de esta función) es apenas un wrapper que registra la promesa de ESTA función en
+  // `serializadorIniciar` ANTES de que nada más pueda correr — es lo que le permite a
+  // `detener()` esperarla y garantizar `inicio_recorrido < fin_recorrido` siempre. Se separó en
+  // dos funciones (en vez de registrar la promesa desde dentro de esta misma) porque necesitamos
+  // la referencia a la promesa completa DESDE AFUERA, antes de que la función empiece a correr
+  // de verdad — exactamente el mismo motivo por el que `crearSerializadorPromesaEnCurso` existe
+  // como abstracción aparte (ver su docblock, `gps/seguimiento-continuo.ts`).
+  const ejecutarIniciar = useCallback(async () => {
     setErrorGps(null);
     setResultado(null);
     bateria.current = [];
@@ -727,6 +825,16 @@ export function useGpsOperativo(
     // sincrónico y no toca SQLite) y arrancar el nativo después: `onLocation` ya espera la
     // semilla por su cuenta (ver su comentario), así que un fix que llegue antes de que
     // termine la siembra queda retenido, no descartado ni mal contado.
+    //
+    // LOW-MED (hallazgo de revisión, QUI-247): arranca ACÁ un `eventId` estable NUEVO para el
+    // marcador `inicio_recorrido` de ESTE intento — antes de `suscribirUbicaciones()`, para que
+    // esté listo antes de que pueda llegar el primer fix (`onLocation` ya reintenta este
+    // marcador si hace falta, ver ese comentario). `reiniciarEstadoInicioRecorrido` resetea
+    // `confirmado` incluso si el intento anterior nunca llegó a escribirlo — un recorrido nuevo
+    // (segundo/tercer `iniciar()` en la misma sesión) nunca debe reusar el `eventId` de uno
+    // viejo. Ver `inicio-recorrido-retry.ts` para el porqué de la idempotencia por `eventId`
+    // estable.
+    reiniciarEstadoInicioRecorrido(estadoInicioRecorrido, await generarEventId());
     suscribirUbicaciones();
 
     try {
@@ -818,10 +926,17 @@ export function useGpsOperativo(
       // "Finalizar recorrido", ver `next-control-sheet.tsx`). Acá solo se espera esa MISMA
       // promesa — nunca se vuelve a sembrar por cuenta propia.
       await (semillaPromise.current ?? sembrarCumplimientos());
-      const db = await abrirOutbox();
       // RNF-24/QUI-247: marca el límite real del recorrido — sin esto, reconstruir un
       // recorrido más adelante solo tenía los puntos GPS sueltos, sin saber dónde empezó.
-      await encolarEvento(db, { deviceId, tipo: 'inicio_recorrido', payload: { sesionId } });
+      // LOW-MED (hallazgo de revisión): la escritura en sí vive en `asegurarInicioRecorrido`
+      // (`inicio-recorrido-retry.ts`), con el `eventId` estable armado arriba — si ESTE intento
+      // falla, `onLocation`/heartbeat siguen reintentando con el MISMO `eventId` hasta que
+      // quede confirmado (o hasta `detener()`, como última red de seguridad).
+      await asegurarInicioRecorrido(
+        estadoInicioRecorrido,
+        { abrirOutbox, encolarEvento },
+        { deviceId, sesionId },
+      );
     } catch (error) {
       // Plan §2.4.4 + G2 (merge post-drenado, Entrega 31a): el GPS nativo (bloque de arriba)
       // ya está corriendo y grabando en su propia base, y `tracking` ya quedó en `true` ahí —
@@ -848,11 +963,39 @@ export function useGpsOperativo(
       // asignó arriba tras el `start()` exitoso. Solo se usa el mensaje de error.
       setErrorGps(resolverResultadoIniciar(true, false).errorGps);
     }
-  }, [suscribirUbicaciones, sembrarCumplimientos, deviceId, sesionId, serializadorRestauracion]);
+  }, [
+    suscribirUbicaciones,
+    sembrarCumplimientos,
+    deviceId,
+    sesionId,
+    serializadorRestauracion,
+    estadoInicioRecorrido,
+  ]);
+
+  // MEDIO (hallazgo de revisión, QUI-247): wrapper público de "Iniciar recorrido". Lo único que
+  // agrega sobre `ejecutarIniciar` es registrar su promesa en `serializadorIniciar` — y hacerlo
+  // ANTES de cualquier `await` de esta misma función, así que para cuando el conductor pudiera
+  // llegar a tocar "Finalizar" (una interacción de UI separada, nunca en el mismo tick de JS)
+  // el registro ya está hecho. `detener()`, más abajo, llama `serializadorIniciar.esperarPendiente()`
+  // ANTES de tocar nada, así que el orden `inicio_recorrido < fin_recorrido` queda garantizado
+  // sin importar qué tan rápido se toquen los dos botones. Ver el test dedicado a esta carrera
+  // en `gps/seguimiento-continuo.test.ts` (`crearSerializadorPromesaEnCurso`).
+  const iniciar = useCallback(async () => {
+    const promesa = ejecutarIniciar();
+    serializadorIniciar.registrar(promesa);
+    await promesa;
+  }, [ejecutarIniciar, serializadorIniciar]);
 
   const detener = useCallback(async () => {
     setErrorGps(null);
     try {
+      // MEDIO (hallazgo de revisión, QUI-247): si hay un `iniciar()` en vuelo, esperarlo ACÁ —
+      // antes de tocar el nativo, las suscripciones, el outbox o `tracking` — para que
+      // `fin_recorrido` nunca pueda escribirse antes de que ese `iniciar()` termine de intentar
+      // escribir `inicio_recorrido` (y de asentar `trackingRef`). `ejecutarIniciar` nunca
+      // rechaza (todos sus fallos internos se atrapan y se reportan a Sentry por su cuenta), así
+      // que esperar acá no puede hacer fallar `detener()`.
+      await serializadorIniciar.esperarPendiente();
       await BackgroundGeolocation.stop();
       subscription.current?.remove();
       subscription.current = null;
@@ -883,6 +1026,28 @@ export function useGpsOperativo(
           });
         }),
       );
+
+      // LOW-MED (hallazgo de revisión, QUI-247): última red de seguridad ANTES de escribir
+      // `fin_recorrido` — si `iniciar()` y todos sus reintentos (`onLocation`, heartbeat)
+      // todavía no lograron escribir `inicio_recorrido`, este es el último intento posible
+      // (después de esto las suscripciones ya están removidas — arriba — así que no habrá más
+      // reintentos). Con `estadoInicioRecorrido.eventId === null` (nunca hubo un `iniciar()`
+      // real en este proceso — camino de re-enganche) `asegurarInicioRecorrido` es un no-op, tal
+      // cual tiene que ser: un recorrido re-enganchado no debe generar un `inicio_recorrido`
+      // nuevo (ver `inicio-recorrido-retry.ts`). Best-effort: si ni siquiera este último intento
+      // logra escribirlo, `detener()` sigue igual con `fin_recorrido` — no bloquear el cierre
+      // del recorrido por esto, mismo criterio que el resto de esta función.
+      try {
+        await asegurarInicioRecorrido(
+          estadoInicioRecorrido,
+          { abrirOutbox, encolarEvento },
+          { deviceId, sesionId },
+        );
+      } catch (error) {
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'detener-asegurar-inicio-recorrido' },
+        });
+      }
 
       const db = await abrirOutbox();
       await encolarEvento(db, { deviceId, tipo: 'fin_recorrido', payload: { sesionId } });
@@ -963,7 +1128,7 @@ export function useGpsOperativo(
     } catch {
       setErrorGps('No se pudo detener correctamente el GPS. Intenta nuevamente.');
     }
-  }, [deviceId, sesionId, serializadorRestauracion]);
+  }, [deviceId, sesionId, serializadorRestauracion, serializadorIniciar, estadoInicioRecorrido]);
 
   /**
    * B3 (hallazgo de revisión, bajo): Map SEPARADO de `puntosControlDetectados` — antes de este
