@@ -277,12 +277,17 @@ export async function marcarLogoutSolicitado(): Promise<void> {
   await SecureStore.setItemAsync(LOGOUT_SOLICITADO_KEY, '1', OPTIONS);
 }
 
+/**
+ * Fix drenado en background (2026-09-25): antes esta función se tragaba cualquier fallo de
+ * lectura y devolvía `false` (fail-open) — indistinguible de "no hay marca". `restaurarSesion`
+ * (`use-auth-movil.ts`) necesita justo esa distinción para decidir fail-closed cuando SecureStore
+ * falla: deja de tragarse el error acá y lo propaga. `intentarRevocacionesPendientes` (el otro
+ * caller) ya envolvía su propia llamada en un `try/catch` que trata cualquier fallo como "no hay
+ * nada que reintentar este ciclo" — mismo comportamiento neto que antes, ahora explícito en vez
+ * de duplicado silenciosamente acá.
+ */
 export async function hayLogoutSolicitado(): Promise<boolean> {
-  try {
-    return (await SecureStore.getItemAsync(LOGOUT_SOLICITADO_KEY, OPTIONS)) !== null;
-  } catch {
-    return false;
-  }
+  return (await SecureStore.getItemAsync(LOGOUT_SOLICITADO_KEY, OPTIONS)) !== null;
 }
 
 export async function borrarLogoutSolicitado(): Promise<void> {

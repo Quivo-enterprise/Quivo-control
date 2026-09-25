@@ -16,7 +16,11 @@ import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportun
 // Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
 // `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
 import { refrescar } from '../features/auth/use-auth-movil';
-import { cargarSesionMovil, obtenerDeviceIdMovil } from '../shared/security/sesion-movil-store';
+import {
+  cargarSesionMovil,
+  hayLogoutSolicitado,
+  obtenerDeviceIdMovil,
+} from '../shared/security/sesion-movil-store';
 
 /**
  * Margen de gracia antes de apagar el plugin nativo tras vencer el paquete del día (hallazgo
@@ -319,6 +323,30 @@ export async function obtenerContextoUbicacionPersistido(): Promise<ContextoUbic
     // `enabled` para siempre — batería quemada toda la noche y un reporte que muestra el
     // micro "manejando" durante días, sin `fin_recorrido`. `stop()` también desactiva el
     // arranque en boot: el SDK solo reanuda si quedó `enabled`.
+    await detenerTrackingNativo();
+    return null;
+  }
+
+  // Fix drenado en background (2026-09-25, punto 2): `ejecutarLogout` (`use-auth-movil.ts`)
+  // puede devolver 'pendiente' cuando no consigue el lease `refresh-sesion` a tiempo (caso
+  // patológico) — marca `marcarLogoutSolicitado()` pero deja la sesión INTACTA en disco a
+  // propósito, para que `intentarRevocacionesPendientes` la encuentre y reintente el logout
+  // completo. Este task headless corre fuera de React y de ese ciclo de reintento: sin este
+  // chequeo, seguiría atribuyendo evidencia GPS NUEVA (RF-67..73) al `sesionId` de un chofer
+  // que ya pidió cerrar sesión — crítico en teléfonos compartidos, donde otro chofer puede
+  // tomar el vehículo en esa ventana. Fail-closed en la lectura, mismo motivo que
+  // `debeRestaurarComoDeslogueado` en `use-auth-movil.ts`. A propósito NO se toca el drenado
+  // (`intentarDrenarOportunista`, ver el caller): la evidencia YA registrada antes de este
+  // punto debe seguir subiendo — la sesión sigue siendo válida server-side hasta que la
+  // revocación real se complete, así que autenticar ESE envío no es operar por el chofer que
+  // se fue, es solo terminar de entregar lo que ya se capturó legítimamente.
+  let logoutSolicitado: boolean;
+  try {
+    logoutSolicitado = await hayLogoutSolicitado();
+  } catch {
+    logoutSolicitado = true;
+  }
+  if (logoutSolicitado) {
     await detenerTrackingNativo();
     return null;
   }

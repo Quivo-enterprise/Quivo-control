@@ -134,9 +134,27 @@ export function useAuthMovil() {
         // conectividad (ver `intentarRevocacionesPendientes`). Fire-and-forget: nunca bloquea
         // ni puede fallar la restauración de sesión (esa función nunca rechaza).
         void intentarRevocacionesPendientes();
+
+        // Fix drenado en background (2026-09-25, crítico): `ejecutarLogout` puede devolver
+        // 'pendiente' cuando no consigue el lease `refresh-sesion` a tiempo (caso patológico,
+        // ver su docblock) — marca `marcarLogoutSolicitado()` pero NO toca la sesión en disco
+        // a propósito (`intentarRevocacionesPendientes`, arriba, necesita encontrarla intacta
+        // para reintentar el logout completo bajo lease). Sin este chequeo, `cargarSesionMovil`
+        // de abajo devolvía la sesión tal cual y el chofer volvía a `operacion` al reabrir la
+        // app — un chofer que cerró sesión quedaba re-logueado, crítico en teléfonos
+        // compartidos entre choferes. Chequea ANTES de leer la sesión: si hay que tratar esto
+        // como deslogueado, ni siquiera se toca `CREDENCIALES_KEY`/`CONTEXTO_KEY` acá, así que
+        // la sesión en disco queda intacta (el borrado real sigue siendo exclusivo de
+        // `ejecutarLogout`, vía `intentarRevocacionesPendientes`).
+        if (await debeRestaurarComoDeslogueado()) {
+          if (!mounted.current) return;
+          setEstado((actual) => ({ ...actual, etapa: 'vehiculo', sesion: null }));
+          return;
+        }
+
         const guardada = await cargarSesionMovil();
         if (!mounted.current) return;
-        
+
         // Validar que la sesión no esté vencida y que no tenga una estructura corrupta
         if (
           !guardada || 
@@ -1098,6 +1116,27 @@ export function clasificarFalloAccessToken(
     };
   }
   return { fallos401Acumulados: fallos401AcumuladosPrevios, marcarSesionNoRevalidada: false };
+}
+
+/**
+ * Fix drenado en background (2026-09-25): decide si `restaurarSesion` debe tratar el arranque
+ * como deslogueado por una marca `marcarLogoutSolicitado()` pendiente — ver el comentario del
+ * call site en `restaurarSesion`. Extraída a standalone y exportada para poder testearla sin el
+ * arnés de React que este paquete no tiene (mismo patrón que `clasificarFalloAccessToken`,
+ * `refrescar` y `ejecutarLogout`, todas en este archivo).
+ *
+ * Fail-closed: si la LECTURA de la marca falla (SecureStore no disponible/corrupto), se trata
+ * IGUAL que si la marca estuviera presente. Sin esa señal, no hay forma de descartar que un
+ * logout haya quedado pendiente — y el costo de un falso "sesión cerrada" (el chofer legítimo
+ * tiene que volver a loguearse) es mucho menor que el de dejar operando, sin saberlo, a un
+ * chofer que ya pidió cerrar sesión en un teléfono que puede estar compartido con otro.
+ */
+export async function debeRestaurarComoDeslogueado(): Promise<boolean> {
+  try {
+    return await hayLogoutSolicitado();
+  } catch {
+    return true;
+  }
 }
 
 function mensajeUsuario(error: unknown): string {

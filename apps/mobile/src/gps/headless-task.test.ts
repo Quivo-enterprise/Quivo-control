@@ -52,6 +52,7 @@ vi.mock('../db/paquete-dia', () => ({
 
 vi.mock('../shared/security/sesion-movil-store', () => ({
   cargarSesionMovil: vi.fn(),
+  hayLogoutSolicitado: vi.fn(),
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
@@ -63,12 +64,14 @@ import BackgroundGeolocation from 'react-native-background-geolocation';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal, type PaqueteDiaLocal } from '../db/paquete-dia';
 import {
   cargarSesionMovil,
+  hayLogoutSolicitado,
   obtenerDeviceIdMovil,
   type SesionMovilGuardada,
 } from '../shared/security/sesion-movil-store';
 import { obtenerContextoUbicacionPersistido } from './headless-task';
 
 const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
+const hayLogoutSolicitadoMock = hayLogoutSolicitado as unknown as ReturnType<typeof vi.fn>;
 const obtenerDeviceIdMovilMock = obtenerDeviceIdMovil as unknown as ReturnType<typeof vi.fn>;
 const abrirPaqueteDiaDbMock = abrirPaqueteDiaDb as unknown as ReturnType<typeof vi.fn>;
 const obtenerPaqueteDiaLocalMock = obtenerPaqueteDiaLocal as unknown as ReturnType<typeof vi.fn>;
@@ -106,6 +109,7 @@ function paqueteLocalDe(venceAtIso: string): PaqueteDiaLocal {
 describe('obtenerContextoUbicacionPersistido — hallazgo 3 (vencimiento evaluado contra la sesión)', () => {
   beforeEach(() => {
     cargarSesionMovilMock.mockReset();
+    hayLogoutSolicitadoMock.mockReset().mockResolvedValue(false);
     obtenerDeviceIdMovilMock.mockReset().mockResolvedValue('device-1');
     abrirPaqueteDiaDbMock.mockReset().mockResolvedValue({});
     obtenerPaqueteDiaLocalMock.mockReset();
@@ -161,6 +165,54 @@ describe('obtenerContextoUbicacionPersistido — hallazgo 3 (vencimiento evaluad
 
     expect(contexto).not.toBeNull();
     expect(contexto?.puntosControl).toEqual([{ id: 'pc-1' }]);
+    expect(stopMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('obtenerContextoUbicacionPersistido — fix drenado en background (punto 2, marca de logout pendiente)', () => {
+  beforeEach(() => {
+    cargarSesionMovilMock.mockReset();
+    hayLogoutSolicitadoMock.mockReset();
+    obtenerDeviceIdMovilMock.mockReset().mockResolvedValue('device-1');
+    abrirPaqueteDiaDbMock.mockReset().mockResolvedValue({});
+    obtenerPaqueteDiaLocalMock.mockReset();
+    getStateMock.mockReset().mockResolvedValue({ enabled: true });
+    stopMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('con la marca de logout pendiente presente, detiene el tracking y descarta el punto aunque la sesión en disco siga vigente', async () => {
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue(sesion(venceAt));
+    hayLogoutSolicitadoMock.mockResolvedValue(true);
+
+    const contexto = await obtenerContextoUbicacionPersistido();
+
+    expect(contexto).toBeNull();
+    expect(stopMock).toHaveBeenCalledTimes(1);
+    // No debe llegar a evaluar el paquete del día: se corta antes.
+    expect(obtenerPaqueteDiaLocalMock).not.toHaveBeenCalled();
+  });
+
+  it('fail-closed: si la lectura de la marca falla, trata igual que si estuviera presente', async () => {
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue(sesion(venceAt));
+    hayLogoutSolicitadoMock.mockRejectedValue(new Error('SecureStore no disponible'));
+
+    const contexto = await obtenerContextoUbicacionPersistido();
+
+    expect(contexto).toBeNull();
+    expect(stopMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin marca de logout pendiente, sigue registrando el punto como antes', async () => {
+    const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    cargarSesionMovilMock.mockResolvedValue(sesion(venceAt));
+    hayLogoutSolicitadoMock.mockResolvedValue(false);
+    obtenerPaqueteDiaLocalMock.mockResolvedValue(null);
+
+    const contexto = await obtenerContextoUbicacionPersistido();
+
+    expect(contexto).not.toBeNull();
     expect(stopMock).not.toHaveBeenCalled();
   });
 });
