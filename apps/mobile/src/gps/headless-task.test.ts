@@ -193,7 +193,7 @@ describe('obtenerContextoUbicacionPersistido — fix drenado en background (punt
     expect(obtenerPaqueteDiaLocalMock).not.toHaveBeenCalled();
   });
 
-  it('fail-closed: si la lectura de la marca falla, trata igual que si estuviera presente', async () => {
+  it('si la LECTURA de la marca falla, descarta el punto de este tick pero NO detiene el tracker (punto 2)', async () => {
     const venceAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     cargarSesionMovilMock.mockResolvedValue(sesion(venceAt));
     hayLogoutSolicitadoMock.mockRejectedValue(new Error('SecureStore no disponible'));
@@ -201,7 +201,11 @@ describe('obtenerContextoUbicacionPersistido — fix drenado en background (punt
     const contexto = await obtenerContextoUbicacionPersistido();
 
     expect(contexto).toBeNull();
-    expect(stopMock).toHaveBeenCalledTimes(1);
+    // Un error transitorio de Keystore no es evidencia de logout: fail-closed sobre la
+    // atribución del punto (se descarta), NO sobre el tracker (irreversible: desactiva
+    // `startOnBoot`). El próximo tick reintenta la lectura.
+    expect(stopMock).not.toHaveBeenCalled();
+    expect(obtenerPaqueteDiaLocalMock).not.toHaveBeenCalled();
   });
 
   it('sin marca de logout pendiente, sigue registrando el punto como antes', async () => {

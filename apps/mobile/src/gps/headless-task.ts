@@ -334,8 +334,18 @@ export async function obtenerContextoUbicacionPersistido(): Promise<ContextoUbic
   // completo. Este task headless corre fuera de React y de ese ciclo de reintento: sin este
   // chequeo, seguiría atribuyendo evidencia GPS NUEVA (RF-67..73) al `sesionId` de un chofer
   // que ya pidió cerrar sesión — crítico en teléfonos compartidos, donde otro chofer puede
-  // tomar el vehículo en esa ventana. Fail-closed en la lectura, mismo motivo que
-  // `debeRestaurarComoDeslogueado` en `use-auth-movil.ts`. A propósito NO se toca el drenado
+  // tomar el vehículo en esa ventana.
+  //
+  // Punto 2 (code review 2026-09-25): la marca PRESENTE y la LECTURA que falla NO son lo
+  // mismo, y antes se trataban igual (fail-closed también sobre el tracker). Un error
+  // transitorio de Keystore/SecureStore en un solo tick no es evidencia de que el chofer pidió
+  // cerrar sesión — pero `detenerTrackingNativo()` es IRREVERSIBLE en este camino: además de
+  // parar el plugin, desactiva `startOnBoot`, así que un solo tick con Keystore ocupado podía
+  // matar la captura GPS del resto del turno sin que nada la reanude. Ahora: marca PRESENTE →
+  // se sigue deteniendo el tracker (fail-closed real, hay evidencia). LECTURA que falla → se
+  // descarta el punto de ESTE tick (fail-closed sobre la atribución, mismo motivo que
+  // `debeRestaurarComoDeslogueado` en `use-auth-movil.ts`) pero el tracker sigue corriendo —
+  // el próximo tick vuelve a intentar leer la marca. A propósito NO se toca el drenado
   // (`intentarDrenarOportunista`, ver el caller): la evidencia YA registrada antes de este
   // punto debe seguir subiendo — la sesión sigue siendo válida server-side hasta que la
   // revocación real se complete, así que autenticar ESE envío no es operar por el chofer que
@@ -344,7 +354,7 @@ export async function obtenerContextoUbicacionPersistido(): Promise<ContextoUbic
   try {
     logoutSolicitado = await hayLogoutSolicitado();
   } catch {
-    logoutSolicitado = true;
+    return null;
   }
   if (logoutSolicitado) {
     await detenerTrackingNativo();
