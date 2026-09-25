@@ -29,7 +29,15 @@ import {
   obtenerVisitasPendientes,
 } from '../db/outbox';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
-import { cargarSesionMovil, obtenerDeviceIdMovil } from '../shared/security/sesion-movil-store';
+import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
+// Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
+// `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
+import { refrescar } from '../features/auth/use-auth-movil';
+import {
+  cargarSesionMovil,
+  hayLogoutSolicitado,
+  obtenerDeviceIdMovil,
+} from '../shared/security/sesion-movil-store';
 import {
   anunciarDeteccionesDelTick,
   anunciarLlegadaPuntoControl,
@@ -741,6 +749,40 @@ export async function obtenerContextoUbicacionPersistido(): Promise<ContextoUbic
     return null;
   }
 
+  // Fix drenado en background (2026-09-25, punto 2): `ejecutarLogout` (`use-auth-movil.ts`)
+  // puede devolver 'pendiente' cuando no consigue el lease `refresh-sesion` a tiempo (caso
+  // patológico) — marca `marcarLogoutSolicitado()` pero deja la sesión INTACTA en disco a
+  // propósito, para que `intentarRevocacionesPendientes` la encuentre y reintente el logout
+  // completo. Este task headless corre fuera de React y de ese ciclo de reintento: sin este
+  // chequeo, seguiría atribuyendo evidencia GPS NUEVA (RF-67..73) al `sesionId` de un chofer
+  // que ya pidió cerrar sesión — crítico en teléfonos compartidos, donde otro chofer puede
+  // tomar el vehículo en esa ventana.
+  //
+  // Punto 2 (code review 2026-09-25): la marca PRESENTE y la LECTURA que falla NO son lo
+  // mismo, y antes se trataban igual (fail-closed también sobre el tracker). Un error
+  // transitorio de Keystore/SecureStore en un solo tick no es evidencia de que el chofer pidió
+  // cerrar sesión — pero `detenerTrackingNativo()` es IRREVERSIBLE en este camino: además de
+  // parar el plugin, desactiva `startOnBoot`, así que un solo tick con Keystore ocupado podía
+  // matar la captura GPS del resto del turno sin que nada la reanude. Ahora: marca PRESENTE →
+  // se sigue deteniendo el tracker (fail-closed real, hay evidencia). LECTURA que falla → se
+  // descarta el punto de ESTE tick (fail-closed sobre la atribución, mismo motivo que
+  // `debeRestaurarComoDeslogueado` en `use-auth-movil.ts`) pero el tracker sigue corriendo —
+  // el próximo tick vuelve a intentar leer la marca. A propósito NO se toca el drenado
+  // (`intentarDrenarOportunista`, ver el caller): la evidencia YA registrada antes de este
+  // punto debe seguir subiendo — la sesión sigue siendo válida server-side hasta que la
+  // revocación real se complete, así que autenticar ESE envío no es operar por el chofer que
+  // se fue, es solo terminar de entregar lo que ya se capturó legítimamente.
+  let logoutSolicitado: boolean;
+  try {
+    logoutSolicitado = await hayLogoutSolicitado();
+  } catch {
+    return null;
+  }
+  if (logoutSolicitado) {
+    await detenerTrackingNativo();
+    return null;
+  }
+
   const dbPaquete = await abrirPaqueteDiaDb();
   // Hallazgo 1 (CRÍTICO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): comparar contra la
   // asignación de ESTA sesión (ya validada arriba), no aceptar la fila a ciegas — la fila de
@@ -1036,6 +1078,45 @@ export function confirmarVisitasVencidasEnCola(
 }
 
 /**
+ * Igual que `obtenerAccessToken` (`use-auth-movil.ts`), pero sin React ni contexto de
+ * componente — el drenado oportunista corre tanto en el headless task (sin árbol) como en
+ * foreground (`use-gps-operativo.ts`, que sí tiene el suyo vía `useAuthMovil`). Best-effort:
+ * `null` si no hay sesión o el refresh falla.
+ *
+ * 🔴 Hallazgo 3 (code review, MEDIO — corrige la afirmación de abajo, que era FALSA): si
+ * Android SÍ recicla el contexto (headless y foreground en instancias JS distintas, el caso
+ * COMÚN — Android arranca un runtime nuevo por cada tick headless), el peor caso NO era "un
+ * intento de más": era una RÁFAGA de 401 reales. Un tick headless en su propio contexto podía
+ * rotar el refresh token de T0 a T1 y persistirlo en SecureStore mientras el contexto de
+ * foreground, recién arrancado, seguía con T0 en memoria — ese T0 ya canjeado server-side
+ * dispara un 401 de verdad, y `refrescarConReintentos` (`use-auth-movil.ts`) reintentaba 4
+ * veces MÁS con el mismo T0 sin releer disco, acumulando los 5 fallos que abren el circuit
+ * breaker. Con el circuito abierto, `obtenerAccessToken`/esta misma función quedaban
+ * devolviendo `null` indefinidamente aunque SecureStore tuviera T1 válido — el patrón de
+ * ráfaga de 401 visto en producción (Entrega 28 del plan). El fix real vive en `refrescar()`
+ * (`ejecutarRefresh`, `use-auth-movil.ts`): ante un 401 real, releer SecureStore y reintentar
+ * una vez con el token vigente si difiere del usado — cubre este camino headless automática-
+ * mente, porque esta función pasa por esa misma `refrescar()`.
+ *
+ * Sigue siendo TRANSPORTE, no captura: si el refresh falla (circuito abierto, 401 real, o
+ * simplemente sin red), esta función devuelve `null` en silencio y `intentarDrenarOportunista`
+ * aborta el drenado sin tocar la pantalla del chofer — la evidencia ya está a salvo en el
+ * outbox. El breaker ya reporta a Sentry por su cuenta cuando corresponde (ver su docblock);
+ * acá no hace falta un `captureException` adicional por cada intento fallido.
+ */
+export async function obtenerAccessTokenHeadless(): Promise<string | null> {
+  const sesion = await cargarSesionMovil();
+  if (!sesion) return null;
+  if (new Date(sesion.accessTokenExpiresAt) > new Date()) return sesion.accessToken;
+  try {
+    const actualizada = await refrescar(sesion);
+    return actualizada.accessToken;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Headless task de Transistorsoft (QUI-216): se registra UNA sola vez desde `index.js` — es
  * el único lugar donde el SDK permite hacerlo — y sigue ejecutándose después de que el
  * usuario mata la app, siempre que la config tenga `stopOnTerminate: false` +
@@ -1060,77 +1141,102 @@ export function confirmarVisitasVencidasEnCola(
 export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void> {
   if (event.name === 'heartbeat') {
     await manejarHeartbeatHeadless();
+    // Entrega 2 (drenado oportunista del outbox en background) — ver el comentario grande más
+    // abajo, en el camino 'location', para el porqué completo (causa raíz del síntoma más
+    // reportado del piloto) y por qué va con `await`.
+    await intentarDrenarOportunista(obtenerAccessTokenHeadless);
     return;
   }
   if (event.name !== 'location') return;
 
+  // Hallazgo 1 (CRÍTICO, code review de la Entrega 2 del drenado): el `return` de la rama
+  // `!contexto` (y cualquier otro `return`/`throw` de este bloque) ya NO puede saltear el
+  // drenado de más abajo — antes vivía DENTRO de este `try`, con un `return` que salía de TODA
+  // la función, y el drenado (entonces al final del cuerpo) nunca se alcanzaba en ese camino.
+  // Con el paquete del día vencido o la sesión en el margen de gracia
+  // (`GRACIA_STOP_TRAS_VENCIMIENTO_MS`) y la app terminada, CADA tick de ubicación salía por
+  // ahí: un `fin_recorrido` pendiente encolado ANTES de que la sesión venciera nunca se drenaba
+  // en background. Fix: el registro del punto vive en su propio bloque, sin ningún `return` que
+  // pueda saltear el drenado — corre pase lo que pase con el primero (fix nuevo, contexto nulo,
+  // o error de escritura).
   try {
     const contexto = await obtenerContextoUbicacionPersistido();
-    if (!contexto) {
-      // No hay turno vigente (sesión cerrada o paquete del día vencido): el punto se
-      // descarta. La decisión de cortar o no el tracking nativo (inmediata en un caso, con
-      // margen de gracia en el otro) ya se tomó dentro de `obtenerContextoUbicacionPersistido`
-      // — ver su comentario para el porqué de cada camino.
-      return;
-    }
+    if (contexto) {
+      // El plugin tipa `HeadlessEvent.params` como `Map` genérico (`{[key: string]: ...}`) en
+      // vez de exponer una unión discriminada por `event.name` — con `name === 'location'` el
+      // shape real SÍ es `Location` (documentado en la wiki de Android Headless Mode), pero el
+      // tipo del propio paquete no lo refleja. `as unknown as Location` documenta esa brecha en
+      // vez de silenciarla con `any`/`@ts-ignore`.
+      const location = event.params as unknown as Location;
 
-    // El plugin tipa `HeadlessEvent.params` como `Map` genérico (`{[key: string]: ...}`) en
-    // vez de exponer una unión discriminada por `event.name` — con `name === 'location'` el
-    // shape real SÍ es `Location` (documentado en la wiki de Android Headless Mode), pero el
-    // tipo del propio paquete no lo refleja. `as unknown as Location` documenta esa brecha en
-    // vez de silenciarla con `any`/`@ts-ignore`.
-    const location = event.params as unknown as Location;
-
-    const db = await abrirOutbox();
-    await asegurarSemillaCumplimientos(db, contexto.sesionId);
-    // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): mientras la semilla de esta sesión no
-    // haya hidratado (lectura fallida, se reintenta en el próximo tick — ver
-    // `asegurarSemillaCumplimientos`), este fix se procesa SOLO para `gps_point` — la máquina
-    // de estados de cumplimiento (`filtrarNuevosCumplimientos`) queda sin evaluar, para no
-    // arrancar el contador de pasadas desde un Map vacío. `puntosControl: []` es lo que hace
-    // que `construirEventosDeUbicacion` salte esa parte (ver su chequeo
-    // `contexto.puntosControl.length > 0`) sin tocar la captura GPS, que no depende de esto.
-    const contextoTick = estaSemillaHidratada(contexto.sesionId)
-      ? contexto
-      : { ...contexto, puntosControl: [] };
-    const {
-      deteccionAproximacion,
-      puntosRearmadosVoz,
-      anunciosLlegada,
-    } = await registrarPuntoGps(db, location, contextoTick, puntosControlDetectadosHeadless);
-    // ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): el punto GPS y el
-    // cumplimiento YA quedaron persistidos arriba (la evidencia, RF-64..73) — el anuncio al
-    // chofer es best-effort y NUNCA debe poder tumbar ese resultado ya escrito. Por eso corre
-    // DESPUÉS del `await` de arriba (nunca antes) y con su propio `catch`: un fallo acá cae en
-    // el `paso: 'anunciar-punto-control'` de Sentry, no en el `paso:
-    // 'registrar-punto-gps'` del catch general de abajo, que hoy reporta pérdida de EVIDENCIA —
-    // mezclar los dos haría parecer perdido un punto GPS que en realidad se guardó bien.
-    // REDISEÑO: `anunciosLlegada` YA fue DECIDIDO dentro de `registrarPuntoGps` (la cola) — este
-    // wrapper solo EJECUTA (voz de aproximación + notificación/vibración de llegada), nunca
-    // vuelve a evaluar nada de evidencia (`deteccion` ya NO se pasa: la evidencia nunca dispara
-    // este canal, ver el rediseño de 2026-09-23).
-    await anunciarDeteccionesDelTick(
-      db,
-      { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
-      { deteccionAproximacion, anunciosLlegada, puntosRearmadosVoz },
-    ).catch((error) => {
-      console.error('[QUIVO][headless] No se pudo anunciar el punto de control', error);
-      Sentry.captureException(error, {
-        tags: { contexto: 'headless-task', paso: 'anunciar-punto-control' },
+      const db = await abrirOutbox();
+      await asegurarSemillaCumplimientos(db, contexto.sesionId);
+      // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): mientras la semilla de esta sesión no
+      // haya hidratado (lectura fallida, se reintenta en el próximo tick — ver
+      // `asegurarSemillaCumplimientos`), este fix se procesa SOLO para `gps_point` — la máquina
+      // de estados de cumplimiento (`filtrarNuevosCumplimientos`) queda sin evaluar, para no
+      // arrancar el contador de pasadas desde un Map vacío. `puntosControl: []` es lo que hace
+      // que `construirEventosDeUbicacion` salte esa parte (ver su chequeo
+      // `contexto.puntosControl.length > 0`) sin tocar la captura GPS, que no depende de esto.
+      const contextoTick = estaSemillaHidratada(contexto.sesionId)
+        ? contexto
+        : { ...contexto, puntosControl: [] };
+      const {
+        deteccionAproximacion,
+        puntosRearmadosVoz,
+        anunciosLlegada,
+      } = await registrarPuntoGps(db, location, contextoTick, puntosControlDetectadosHeadless);
+      // ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): el punto GPS y el
+      // cumplimiento YA quedaron persistidos arriba (la evidencia, RF-64..73) — el anuncio al
+      // chofer es best-effort y NUNCA debe poder tumbar ese resultado ya escrito. Por eso corre
+      // DESPUÉS del `await` de arriba (nunca antes) y con su propio `catch`: un fallo acá cae en
+      // el `paso: 'anunciar-punto-control'` de Sentry, no en el `paso:
+      // 'registrar-punto-gps'` del catch general de abajo, que hoy reporta pérdida de EVIDENCIA —
+      // mezclar los dos haría parecer perdido un punto GPS que en realidad se guardó bien.
+      // REDISEÑO: `anunciosLlegada` YA fue DECIDIDO dentro de `registrarPuntoGps` (la cola) — este
+      // wrapper solo EJECUTA (voz de aproximación + notificación/vibración de llegada), nunca
+      // vuelve a evaluar nada de evidencia (`deteccion` ya NO se pasa: la evidencia nunca dispara
+      // este canal, ver el rediseño de 2026-09-23).
+      await anunciarDeteccionesDelTick(
+        db,
+        { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
+        { deteccionAproximacion, anunciosLlegada, puntosRearmadosVoz },
+      ).catch((error) => {
+        console.error('[QUIVO][headless] No se pudo anunciar el punto de control', error);
+        Sentry.captureException(error, {
+          tags: { contexto: 'headless-task', paso: 'anunciar-punto-control' },
+        });
       });
-    });
+    }
+    // `contexto === null`: sin turno vigente (sesión cerrada, logout solicitado o paquete del
+    // día vencido) — el punto se descarta, decisión ya tomada dentro de
+    // `obtenerContextoUbicacionPersistido` (ver su comentario). El drenado de abajo corre IGUAL
+    // — ver el hallazgo 1 de arriba.
   } catch (error) {
     console.error('[QUIVO][headless] No se pudo registrar la ubicación en el outbox', error);
     // QUI-365: este es EL escenario que el ticket marca como el peor y el que menos se ve —
-    // el `try/catch` de toda la función existe para que un fallo transitorio no tumbe la
+    // el `try/catch` de este bloque existe para que un fallo transitorio no tumbe la
     // promesa que el SDK nativo no reintenta (ver doc arriba), pero eso mismo lo vuelve
     // invisible sin captura explícita: no hay UI, no hay logs que alguien vaya a mirar en el
     // teléfono de un conductor en ruta. Sin este `captureException`, un punto GPS perdido acá
-    // (evidencia legal, RF-67..73) no dejaría NINGÚN rastro reportado.
+    // (evidencia legal, RF-67..73) no dejaría NINGÚN rastro reportado. Este catch NO envuelve
+    // el drenado de abajo a propósito: que este tick falle en capturar no debe impedir el
+    // intento de vaciar lo que YA estaba persistido de ticks anteriores.
     Sentry.captureException(error, {
       tags: { contexto: 'headless-task', paso: 'registrar-punto-gps', evento: event.name },
     });
   }
+
+  // Entrega 2 (`docs/plan-correccion-post-piloto-2026-09-09.md`) — causa raíz del síntoma más
+  // reportado del piloto ("tengo que cerrar la app para que se actualice la ubicación"):
+  // `headless-task.ts` escribía al outbox pero nadie lo drenaba en background. Ningún `return`
+  // de arriba puede saltear esta línea (hallazgo 1) — corre con o sin contexto, con o sin error
+  // de escritura. Va con AWAIT porque el SDK de Transistorsoft da por terminada la tarea
+  // headless en cuanto se ejecuta la ÚLTIMA LÍNEA de esta función: sin este `await`, la promesa
+  // de `intentarDrenarOportunista` queda corriendo "de fondo" sobre un contexto que el SDK ya
+  // considera cerrado, y el trabajo (mutex, POST, liberar el lease) se corta a mitad de camino
+  // en cuanto el wake lock se libera.
+  await intentarDrenarOportunista(obtenerAccessTokenHeadless);
 }
 
 /**

@@ -33,6 +33,7 @@ import {
   limpiarAproximacionesAnunciadas,
 } from './anuncio-punto-control';
 import type { MotivoAnuncio } from './decidir-anuncio';
+import { intentarDrenarOportunista } from './drenaje-oportunista';
 import {
   AUTORIZACION_DENEGADA,
   AUTORIZACION_NO_DETERMINADA,
@@ -115,6 +116,11 @@ export function useGpsOperativo(
   sesionId: string,
   deviceId: string,
   puntosControl: PuntoControlPaquete[] = [],
+  // Entrega 2 (drenado oportunista del outbox en background): el mismo `obtenerAccessToken`
+  // que ya usa `usePaqueteDia`/`useSyncStatus` (`use-auth-movil.ts`), enhebrado desde
+  // `GpsProvider` — ver el call site en `onLocation`/`onHeartbeat` más abajo. Requerido (sin
+  // default): las dos pantallas que montan `GpsProvider` ya tienen esta función disponible.
+  obtenerAccessToken: () => Promise<string | null>,
 ) {
   const [tracking, setTracking] = useState(false);
   const [puntos, setPuntos] = useState(0);
@@ -325,8 +331,17 @@ export function useGpsOperativo(
           `No se pudo guardar una ubicación en el outbox (${erroresEscritura.current} en esta corrida). La evidencia de esos puntos se perdió.`,
         );
       }
+
+      // Entrega 2 (drenado oportunista del outbox en background): mismo motor que
+      // `headless-task.ts`, enganchado acá tras CADA fix de foreground — sin `await` a
+      // propósito (a diferencia del headless, acá no hay ninguna promesa de tarea del SDK
+      // esperando que esta función termine para "cerrar" nada; bloquear `onLocation` en el
+      // POST de sync solo demoraría el próximo fix sin ganar nada). `intentarDrenarOportunista`
+      // nunca rechaza (ver su docblock: todo su cuerpo vive bajo un try/catch defensivo), así
+      // que este `void` no deja una unhandled rejection colgando.
+      void intentarDrenarOportunista(obtenerAccessToken);
     },
-    [deviceId, sesionId, puntosControl],
+    [deviceId, sesionId, puntosControl, obtenerAccessToken],
   );
 
   // `onLocation` cambia de identidad cuando cambian `puntosControl`/`sesionId`, pero la
@@ -363,6 +378,20 @@ export function useGpsOperativo(
    * lo reemplaza entero en cada cambio de `sesionId`), no hace falta filtrar de nuevo.
    */
   const onHeartbeat = useCallback(async () => {
+    // Entrega 2 (drenado oportunista del outbox en background): fuerza un fix fresco
+    // (`HeartbeatEvent.location` es la ÚLTIMA posición conocida, no una lectura nueva — ver el
+    // docblock de arriba) y lo persiste igual que cualquier otro punto — si el vehículo lleva
+    // rato detenido sin emitir por `onLocation` (`distanceFilter: 15` no dispara nada quieto),
+    // este es el único mecanismo que sigue dejando evidencia GPS cada 60 s durante ese layover.
+    // Va ANTES del resto (confirmación de visitas/anuncios) y en su PROPIO try/catch: un fallo
+    // acá es de instrumentación, nunca debe impedir que el resto del heartbeat corra.
+    try {
+      await BackgroundGeolocation.getCurrentPosition({ samples: 1, persist: true });
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'heartbeat-getCurrentPosition' },
+      });
+    }
     try {
       await semillaPromise.current;
       const db = await abrirOutbox();
@@ -412,7 +441,12 @@ export function useGpsOperativo(
         tags: { contexto: 'gps-foreground', paso: 'procesar-heartbeat' },
       });
     }
-  }, [deviceId, sesionId, puntosControl]);
+    // Entrega 2: mismo motor que `onLocation` — `intentarDrenarOportunista` nunca rechaza (ver
+    // su docblock), así que corre sin su propio try/catch, incondicional al resultado del
+    // bloque de arriba (un heartbeat que falló en confirmar visitas igual puede tener trabajo
+    // de sync pendiente que drenar).
+    await intentarDrenarOportunista(obtenerAccessToken);
+  }, [deviceId, sesionId, puntosControl, obtenerAccessToken]);
 
   const onHeartbeatRef = useRef(onHeartbeat);
   useEffect(() => {

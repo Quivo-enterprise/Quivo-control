@@ -24,7 +24,6 @@ import { useSyncStatus } from './use-sync-status';
 import { formatearDistancia } from './format-distancia';
 import { ruteoApi } from '../../shared/api/ruteo-api';
 import { ControlFeedbackToast } from './control-feedback-toast';
-import { OfflineBanner } from './offline-banner';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import { CerrarSesionDialog } from '../../shared/components/cerrar-sesion-dialog';
 import { useGpsContext } from './gps-provider';
@@ -51,10 +50,16 @@ export function OperationScreen(
 ) {
   useKeepAwake();
   const { gps, paqueteDia } = useGpsContext();
-  const { pendientes, errorSync, isOffline, isSyncing } = useSyncStatus(
-    props.obtenerAccessToken,
-    props.contexto.sesionId,
-  );
+  // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
+  // `pendientes`/`errorSync`/`isSyncing` YA NO se leen acá — eran exactamente los widgets de
+  // "N pendientes / error de sincronización" que el principio rector prohíbe en esta pantalla
+  // (transporte, no captura: el outbox sigue creciendo y drenando solo, sin que el chofer
+  // tenga que saberlo ni pueda hacer nada al respecto). `useSyncStatus` se sigue llamando
+  // igual — drena el outbox y calcula `isOffline`, que acá SÍ sigue en uso, pero solo como
+  // insumo del gate de política `settings.trabajarOffline` (una configuración explícita del
+  // dispositivo, no un widget espontáneo de estado de red) — nunca para pintar un badge de
+  // "conectado/desconectado".
+  const { isOffline } = useSyncStatus(props.obtenerAccessToken, props.contexto.sesionId);
   const { settings } = useOperacionSettings();
   const lineaBrand = useMemo(
     () => resolverMarcaLinea(props.contexto.linea),
@@ -274,11 +279,9 @@ export function OperationScreen(
                 contexto={props.contexto}
                 brand={lineaBrand}
                 tracking={gps.tracking}
-                isOffline={isOffline}
               />
             </Pressable>
           </View>
-          <OfflineBanner isOffline={isOffline} />
         </View>
 
         {gps.tracking && proximoPuntoControl && (
@@ -329,24 +332,16 @@ export function OperationScreen(
             </Button>
           </View>
         ) : null}
-        {/* Plan §2.2, punto 3 (hallazgo de revisión): `errorSync` se leía de `useSyncStatus`
-            pero nunca se mostraba — el conductor no tenía forma de enterarse de que la
-            sincronización venía fallando. Se oculta si ya se muestra el banner de
-            `sesionNoRevalidada` arriba (ese caso ya explica, con más precisión, por qué no
-            sincroniza) para no duplicar alarmas por el mismo motivo. El texto aclara
-            explícitamente que los datos NO se pierden (el outbox los retiene) para no
-            alarmar de más a alguien manejando. */}
-        {errorSync && !props.sesionNoRevalidada ? (
-          <Text accessibilityRole="alert" style={styles.dangerNotice}>
-            No se pudo sincronizar el recorrido. Tus datos están guardados en el teléfono y se
-            van a enviar solos apenas haya conexión.
-          </Text>
-        ) : null}
-        {pendientes >= 800 ? (
-          <Text accessibilityRole="alert" style={styles.dangerNotice}>
-            Almacenamiento local casi lleno (80%). Conéctate pronto para sincronizar.
-          </Text>
-        ) : null}
+        {/* Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`): acá vivían el banner
+            de `errorSync` ("no se pudo sincronizar") y el de `pendientes >= 800`
+            ("almacenamiento casi lleno") — los dos eran TRANSPORTE puro: el primero es un
+            fallo de red retransmisible sin acción posible del chofer (el outbox sigue
+            reteniendo y reintentando solo), y el segundo usaba el tamaño de la cola de sync
+            como proxy de espacio en disco, que en realidad depende de cuánto tarda la red en
+            drenar, no de cuánto espacio queda de verdad. Ambos se sacaron de pantalla — ver
+            `docs/estados-red-vs-captura.md`. La detección REAL de disco lleno (escritura
+            canaria / `SQLITE_FULL`) queda para la Entrega 26 (preflight), que si corresponde
+            sí debe mostrarse porque ESA es una falla de captura. */}
         {paqueteDia.vencido ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             Asignación vencida. Reconecta antes de iniciar otro recorrido.
@@ -426,9 +421,6 @@ export function OperationScreen(
           // estados sí, porque tocar el botón en esos casos no hacía nada.
           !gps.permisoGps.bloqueante
         }
-        pendingEvents={pendientes}
-        isOffline={isOffline}
-        isSyncing={isSyncing}
         onStart={() => void gps.iniciar()}
         onFinish={confirmarFinalizacion}
         panY={sheetPanY}
@@ -579,8 +571,10 @@ function DriverRouteCard({
   contexto: ContextoOperativoMovil;
   brand: LineaBrand;
   tracking: boolean;
-  isOffline: boolean;
 }) {
+  // Entrega 4 (`docs/estados-red-vs-captura.md`): el status pill de abajo se guía solo por
+  // `tracking` — mismo criterio que el fix equivalente en `perfil-screen.tsx` — nunca por
+  // `isOffline`, que ya no es una prop de este componente.
   const modeloVehiculo = `${contexto.vehiculo.placa} ${contexto.vehiculo.modelo || 'Toyota Hiace'}`.trim();
   const statusLabel = tracking ? 'EN LINEA' : 'EN ESPERA';
 

@@ -33,16 +33,41 @@ vi.mock('../../shared/security/sesion-movil-store', () => ({
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
-vi.mock('@sentry/react-native', () => ({
-  captureException: vi.fn(),
+// G1 (hallazgo de `/codex-debug verify-fix`): `refrescar()`/`ejecutarRefresh` ahora corren
+// bajo el lease SQLite `refresh-sesion` (`db/outbox.ts`) — se mockea igual que
+// `sesion-movil-store` (dependencia nativa vía `expo-sqlite`) y siempre "concede" el lease de
+// inmediato, para no alterar el comportamiento/timing de los tests de ESTE archivo (que
+// ejercitan un solo contexto JS a la vez — la contención real entre dos contextos se cubre
+// en `use-auth-movil.refresh-lease.test.ts`).
+vi.mock('../../db/outbox', () => ({
+  abrirOutbox: vi.fn().mockResolvedValue({}),
+  adquirirLease: vi.fn().mockResolvedValue(true),
+  liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
+  // G1 ronda 4: `ejecutarRefresh` renueva (compare-and-set) el lease justo antes de persistir —
+  // concedido por defecto para no alterar el comportamiento/timing de los tests de este archivo
+  // (la pérdida del lease se cubre en `use-auth-movil.refresh-lease.test.ts`).
+  renovarLease: vi.fn().mockResolvedValue(true),
+  ID_LEASE_REFRESH_SESION: 'refresh-sesion',
+  TTL_LEASE_REFRESH_SESION_MS: 20_000,
 }));
 
-import { authMovilApi } from '../../shared/api/auth-movil-api';
-import { actualizarSesionMovil, type SesionMovilGuardada } from '../../shared/security/sesion-movil-store';
-import { refrescar } from './use-auth-movil';
+vi.mock('@sentry/react-native', () => ({
+  captureException: vi.fn(),
+  addBreadcrumb: vi.fn(),
+}));
+
+import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
+import { obtenerEstadoCircuitoRefresh, reiniciarCircuitoRefresh } from '../../shared/api/refresh-circuit-breaker';
+import {
+  actualizarSesionMovil,
+  cargarSesionMovil,
+  type SesionMovilGuardada,
+} from '../../shared/security/sesion-movil-store';
+import { refrescar, ReintentarRefreshMasTardeError, SesionCerradaEnRefreshError } from './use-auth-movil';
 
 const refreshMock = authMovilApi.refresh as unknown as ReturnType<typeof vi.fn>;
 const actualizarSesionMovilMock = actualizarSesionMovil as unknown as ReturnType<typeof vi.fn>;
+const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
 
 function sesion(refreshToken: string): SesionMovilGuardada {
   return {
@@ -55,10 +80,32 @@ function sesion(refreshToken: string): SesionMovilGuardada {
   } as SesionMovilGuardada;
 }
 
+/** Tokens de refresh nuevos que devuelve el mock de `authMovilApi.refresh` en un éxito. */
+function tokensRefrescados(refreshTokenNuevo: string) {
+  return {
+    accessToken: `access-${refreshTokenNuevo}`,
+    refreshToken: refreshTokenNuevo,
+    accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+  };
+}
+
 describe('refrescar (single-flight)', () => {
   beforeEach(() => {
     refreshMock.mockReset();
     actualizarSesionMovilMock.mockReset();
+    // Punto 2 (`/codex-debug verify-fix` ronda 6, ALTO): la lectura AUTORITATIVA bajo el lease
+    // (dentro de `ejecutarRefresh`) ya NO cae a `guardada` si `cargarSesionMovil()` rechaza —
+    // aborta con `ReintentarRefreshMasTardeError` sin tocar la red (ver esa función). Estos
+    // tests no ejercitan esa lectura fallida (eso vive en `use-auth-movil.refresh-lease.test.ts`
+    // y en `use-auth-movil.refrescar.test.ts` más abajo); acá cada test resuelve
+    // `cargarSesionMovil()` con la MISMA sesión que están refrescando, para que tanto la
+    // reconciliación (fuera del lease) como la lectura autoritativa (bajo el lease) vean el
+    // mismo token y el camino normal de red corra sin abortar.
+    cargarSesionMovilMock.mockReset();
+    // El circuit breaker es estado a nivel de módulo (real, no mockeado acá) — sin este
+    // reset, un 401 contado en un test anterior podía filtrarse al siguiente.
+    reiniciarCircuitoRefresh();
   });
 
   it('comparte una única llamada de red entre refrescos concurrentes con el mismo refresh token', async () => {
@@ -69,6 +116,7 @@ describe('refrescar (single-flight)', () => {
       }),
     );
     const guardada = sesion('refresh-1');
+    cargarSesionMovilMock.mockResolvedValue(guardada);
     const rotada = { ...guardada, accessToken: 'access-nueva', refreshToken: 'refresh-2' };
     actualizarSesionMovilMock.mockResolvedValue(rotada);
 
@@ -77,7 +125,10 @@ describe('refrescar (single-flight)', () => {
     const p1 = refrescar(guardada);
     const p2 = refrescar(guardada);
 
-    expect(refreshMock).toHaveBeenCalledTimes(1);
+    // G3/R4: `refrescar()` ahora reconcilia contra disco (un `await` extra) ANTES de llegar al
+    // single-flight/la red — `vi.waitFor` espera esa reconciliación en vez de asumir que
+    // `refreshMock` ya fue invocado de forma síncrona.
+    await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
 
     resolverRefresh({
       accessToken: 'access-nueva',
@@ -95,6 +146,7 @@ describe('refrescar (single-flight)', () => {
 
   it('no cachea un rechazo: una llamada posterior dispara un intento de red nuevo', async () => {
     const guardada = sesion('refresh-1');
+    cargarSesionMovilMock.mockResolvedValue(guardada);
     refreshMock.mockRejectedValueOnce(new Error('401'));
 
     await expect(refrescar(guardada)).rejects.toThrow('401');
@@ -115,6 +167,14 @@ describe('refrescar (single-flight)', () => {
   });
 
   it('no comparte la llamada de red entre refresh tokens distintos', async () => {
+    // Secuencial a propósito (no `Promise.all`): `cargarSesionMovil()` es un mock SIN
+    // argumento, compartido por la reconciliación (fuera del lease) y la lectura autoritativa
+    // (bajo el lease, ver punto 2 arriba) — no hay forma de hacerlo responder distinto según
+    // CUÁL de los dos refrescos concurrentes está preguntando. Ejecutar cada refresco de punta
+    // a punta antes de lanzar el siguiente evita esa ambigüedad sin debilitar la propiedad bajo
+    // prueba: el mapa `refrescosEnVuelo` se indexa por token, así que dos tokens distintos nunca
+    // comparten entrada sin importar el timing (la concurrencia CON EL MISMO token ya se cubre
+    // en el test de arriba).
     refreshMock.mockImplementation(async (token: string) => ({
       accessToken: `access-${token}`,
       refreshToken: `${token}-rotado`,
@@ -126,13 +186,232 @@ describe('refrescar (single-flight)', () => {
       ...tokens,
     }));
 
-    const [r1, r2] = await Promise.all([
-      refrescar(sesion('refresh-a')),
-      refrescar(sesion('refresh-b')),
-    ]);
+    const sesionA = sesion('refresh-a');
+    cargarSesionMovilMock.mockResolvedValue(sesionA);
+    const r1 = await refrescar(sesionA);
+
+    const sesionB = sesion('refresh-b');
+    cargarSesionMovilMock.mockResolvedValue(sesionB);
+    const r2 = await refrescar(sesionB);
 
     expect(refreshMock).toHaveBeenCalledTimes(2);
     expect(r1.refreshToken).toBe('refresh-a-rotado');
     expect(r2.refreshToken).toBe('refresh-b-rotado');
+  });
+});
+
+/**
+ * G3/R4 (hallazgo de `/codex-debug verify-fix` sobre `ea3d84e`, ALTO): el diseño ANTERIOR
+ * reconciliaba DESPUÉS de un 401 (intentaba con T0, capturaba el fallo, RECIÉN ahí releía
+ * disco y reintentaba con T1 llamando DIRECTO a `intentarRefrescarConCircuito`, salteando el
+ * single-flight de `refrescar()`). Eso tenía dos huecos:
+ * - G3: el intento con T0 SIEMPRE contaba como fallo 401 real contra el circuit breaker — con
+ *   4 fallos previos, ESE intento era el 5to y abría el circuito ANTES de poder reintentar con
+ *   T1, bloqueando el reintento con `CircuitoRefreshAbiertoError`.
+ * - R4: el reintento con T1 llamaba `intentarRefrescarConCircuito` directo, sin pasar por el
+ *   single-flight — dos llamadas concurrentes (una con T0 viejo, otra ya con T1) podían
+ *   disparar dos rotaciones en paralelo.
+ *
+ * El fix reconcilia ANTES de intentar (`reconciliarConDisco`, `use-auth-movil.ts`) — ver esa
+ * función para el detalle. Este describe cubre el comportamiento nuevo.
+ */
+describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca fuera del single-flight', () => {
+  beforeEach(() => {
+    refreshMock.mockReset();
+    actualizarSesionMovilMock.mockReset();
+    cargarSesionMovilMock.mockReset();
+    reiniciarCircuitoRefresh();
+  });
+
+  it('T0 en memoria y T1 en SecureStore: reconcilia ANTES de la red — T0 NUNCA se envía, refresca directo con T1', async () => {
+    const t0 = sesion('T0'); // lo que tiene `estado.sesion`/`guardada` en este contexto JS
+    const enDisco = sesion('T1'); // lo que otro contexto (headless) ya rotó y persistió
+
+    cargarSesionMovilMock.mockResolvedValue(enDisco);
+    refreshMock.mockImplementation(async (token: string) => {
+      if (token === 'T0') {
+        throw new Error('no debería enviarse T0 nunca — la reconciliación va ANTES de la red');
+      }
+      return tokensRefrescados('T2');
+    });
+    const rotada = { ...enDisco, ...tokensRefrescados('T2') };
+    actualizarSesionMovilMock.mockResolvedValue(rotada);
+
+    const resultado = await refrescar(t0);
+
+    expect(resultado).toBe(rotada);
+    // UN solo intento de red — directo con T1, nunca con T0.
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock).toHaveBeenCalledWith('T1');
+    // Persiste sobre la sesión de DISCO (T1), no sobre la vieja (T0) — si persistiera sobre
+    // `t0`, el `contexto`/resto de campos de la rotación de headless (que pudo traer más que
+    // solo los tokens) se perdería.
+    expect(actualizarSesionMovilMock).toHaveBeenCalledWith(enDisco, expect.objectContaining({ refreshToken: 'T2' }));
+    // El circuito nunca llega a tocarse por T0 — cierra directo con el único éxito real.
+    const estado = obtenerEstadoCircuitoRefresh();
+    expect(estado.estado).toBe('cerrado');
+    expect(estado.fallosConsecutivos).toBe(0);
+  });
+
+  /**
+   * Punto 7 (code review 2026-09-25): si el token de DISCO que trae la reconciliación todavía
+   * tiene el access token vigente (otro contexto ya rotó hace un instante), no hace falta
+   * rotar de nuevo — devolver esa sesión de disco tal cual ahorra un refresh evitable.
+   */
+  it('punto 7: T0 en memoria, T1 en disco con access token TODAVÍA vigente — devuelve la sesión de disco sin rotar de nuevo', async () => {
+    const t0 = sesion('T0');
+    const enDisco = {
+      ...sesion('T1'),
+      accessToken: 'access-T1-vigente',
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    };
+    cargarSesionMovilMock.mockResolvedValue(enDisco);
+    refreshMock.mockRejectedValue(new Error('no debería llamarse a refresh — T1 sigue vigente'));
+
+    const resultado = await refrescar(t0);
+
+    expect(resultado).toBe(enDisco);
+    expect(refreshMock).not.toHaveBeenCalled();
+    expect(actualizarSesionMovilMock).not.toHaveBeenCalled();
+  });
+
+  it('G3: con 4 fallos previos en el circuito, reconciliar ANTES evita que T0 sea el 5to fallo que abriría el circuito y bloquearía el reintento con T1', async () => {
+    // 4 fallos 401 reales previos (uno menos que UMBRAL_FALLOS_ABRIR_CIRCUITO = 5) contra un
+    // token descartable, sin sesión distinta en disco — el circuito queda cerrado pero al
+    // borde.
+    const descartable = sesion('token-agotado');
+    // `null` ahora significa "sesión cerrada" (aborta sin red, ver `SesionCerradaEnRefreshError`)
+    // — para construir 4 fallos 401 REALES contra la red hace falta que la lectura autoritativa
+    // vea el MISMO token que `descartable` (no una ausencia ni un rechazo: punto 2 de la ronda 6
+    // ya no cae a `guardada` ante un rechazo, ver el docblock de `ejecutarRefresh`), así que se
+    // resuelve con el mismo `descartable` en ambos consumidores (`reconciliarConDisco` fuera del
+    // lease, la lectura autoritativa dentro) — sin mismatch, sin abortar.
+    cargarSesionMovilMock.mockResolvedValue(descartable);
+    refreshMock.mockRejectedValue(new AuthMovilApiError('http', 'Sesión revocada', 401));
+    for (let intento = 0; intento < 4; intento++) {
+      await expect(refrescar(descartable)).rejects.toThrow('Sesión revocada');
+    }
+    expect(obtenerEstadoCircuitoRefresh()).toMatchObject({ estado: 'cerrado', fallosConsecutivos: 4 });
+
+    // Ahora: T0 en memoria, T1 en disco (otro contexto lo rotó mientras tanto). Con el diseño
+    // VIEJO, el 401 de T0 sería el 5to fallo — abriría el circuito ANTES de poder reintentar
+    // con T1, y el reintento hubiera quedado bloqueado por el circuito que su propio intento
+    // acababa de abrir.
+    const t0 = sesion('T0');
+    const enDisco = sesion('T1');
+    cargarSesionMovilMock.mockResolvedValue(enDisco);
+    refreshMock.mockImplementation(async (token: string) => {
+      if (token === 'T0') {
+        throw new Error('no debería enviarse T0 — sería el 5to fallo y abriría el circuito en falso');
+      }
+      return tokensRefrescados('T2');
+    });
+    const rotada = { ...enDisco, ...tokensRefrescados('T2') };
+    actualizarSesionMovilMock.mockResolvedValue(rotada);
+
+    const resultado = await refrescar(t0);
+
+    expect(resultado).toBe(rotada);
+    expect(refreshMock).not.toHaveBeenCalledWith('T0');
+    expect(refreshMock).toHaveBeenLastCalledWith('T1');
+    // El circuito NUNCA se abre — el éxito con T1 lo cierra del todo (nunca pasó por el 5to
+    // fallo que el diseño viejo hubiera contado).
+    const estado = obtenerEstadoCircuitoRefresh();
+    expect(estado.estado).toBe('cerrado');
+    expect(estado.fallosConsecutivos).toBe(0);
+  });
+
+  it('R4: dos llamadas concurrentes con T0 (viejo) en memoria reconcilian a T1 (disco) y comparten UNA sola request — nunca dos rotaciones en paralelo', async () => {
+    const enDisco = sesion('T1');
+    cargarSesionMovilMock.mockResolvedValue(enDisco);
+    let resolverRefresh!: (tokens: ReturnType<typeof tokensRefrescados>) => void;
+    refreshMock.mockImplementation((token: string) => {
+      if (token === 'T0') {
+        throw new Error('no debería enviarse T0 — dos llamadas concurrentes deben reconciliar y compartir UNA request con T1');
+      }
+      return new Promise((resolve) => {
+        resolverRefresh = resolve;
+      });
+    });
+    const rotada = { ...enDisco, ...tokensRefrescados('T2') };
+    actualizarSesionMovilMock.mockResolvedValue(rotada);
+
+    const p1 = refrescar(sesion('T0'));
+    const p2 = refrescar(sesion('T0'));
+
+    await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
+    expect(refreshMock).toHaveBeenCalledWith('T1');
+
+    resolverRefresh(tokensRefrescados('T2'));
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    expect(r1).toBe(rotada);
+    expect(r2).toBe(rotada);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('si el token en disco es el MISMO que en memoria, el 401 es real — un solo intento, sin reintento', async () => {
+    const t0 = sesion('T0');
+    cargarSesionMovilMock.mockResolvedValue(sesion('T0')); // disco NO tiene un token distinto
+    refreshMock.mockRejectedValue(new AuthMovilApiError('http', 'Sesión revocada', 401));
+
+    await expect(refrescar(t0)).rejects.toThrow('Sesión revocada');
+    // Sin token distinto en disco, la reconciliación no cambia nada — un solo intento con T0,
+    // y el 401 es de verdad (no hay evidencia de carrera que justifique un valor distinto).
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('G3-logout (verify-fix, punto 3): sin sesión en disco bajo el lease (logout ganó la carrera), aborta SIN tocar la red ni persistir nada', async () => {
+    const t0 = sesion('T0');
+    // `cargarSesionMovil()` resuelve `null` de forma EXPLÍCITA (no un rechazo) — es la señal de
+    // que `ejecutarLogout` (mismo lease `refresh-sesion`) ganó la carrera, revocó y borró la
+    // sesión ANTES de que este refresh alcanzara a adquirir el lease. Antes de este fix, un
+    // `null` acá se trataba como "sin info, seguir con la memoria" y el refresh terminaba
+    // golpeando la red con un token ya revocado — ver el hallazgo de logout (verify-fix punto 3).
+    cargarSesionMovilMock.mockResolvedValue(null);
+    refreshMock.mockRejectedValue(new AuthMovilApiError('http', 'Sesión revocada', 401));
+
+    await expect(refrescar(t0)).rejects.toBeInstanceOf(SesionCerradaEnRefreshError);
+    // La propiedad que importa: CERO llamadas de red y CERO persistencia — nunca se llega a
+    // enviar un token que el servidor ya invalidó por el logout.
+    expect(refreshMock).not.toHaveBeenCalled();
+    expect(actualizarSesionMovilMock).not.toHaveBeenCalled();
+  });
+
+  it('punto 2 (verify-fix ronda 6, ALTO): si la lectura autoritativa bajo el lease falla, aborta con ReintentarRefreshMasTardeError sin tocar la red ni contar contra el circuito', async () => {
+    const t0 = sesion('T0');
+    // Tanto la reconciliación (fuera del lease, best-effort) como la lectura autoritativa
+    // (dentro del lease) usan el mismo mock — la primera cae a `guardada` ante el rechazo
+    // (comportamiento sin cambios), pero la segunda, bajo el nuevo punto 2, YA NO cae a
+    // `guardada`: aborta. Antes de este fix, degradar a `guardada` ahí podía mandar al servidor
+    // un token ya rotado por otro contexto.
+    cargarSesionMovilMock.mockRejectedValue(new Error('SecureStore no disponible'));
+
+    await expect(refrescar(t0)).rejects.toBeInstanceOf(ReintentarRefreshMasTardeError);
+    expect(refreshMock).not.toHaveBeenCalled();
+    const estado = obtenerEstadoCircuitoRefresh();
+    expect(estado.fallosConsecutivos).toBe(0);
+  });
+
+  it('un error de RED (no 401) no dispara un segundo intento — sigue siendo offline legítimo', async () => {
+    const t0 = sesion('T0');
+    // La reconciliación (lectura de disco) corre SIEMPRE, ANTES de la red — a diferencia del
+    // diseño viejo, que solo releía disco DESPUÉS de un 401. Un `null` resuelto ahora significa
+    // "sesión cerrada" (test de arriba); acá en cambio la lectura de disco RESUELVE con el
+    // MISMO token que memoria (T0, sin evidencia de rotación) — punto 2 de la ronda 6 ya no
+    // tolera un rechazo en la lectura autoritativa bajo el lease (aborta sin red, ver
+    // `use-auth-movil.refrescar.test.ts`/`ReintentarRefreshMasTardeError`), así que este test
+    // usa una lectura exitosa para seguir ejercitando lo que le importa: un error de RED en el
+    // único intento no dispara ningún reintento.
+    cargarSesionMovilMock.mockResolvedValue(t0);
+    refreshMock.mockRejectedValue(new AuthMovilApiError('network', 'Sin conexión'));
+
+    await expect(refrescar(t0)).rejects.toThrow('Sin conexión');
+    // G1 (hallazgo de `/codex-debug verify-fix`): DOS lecturas de disco, no una — la de
+    // `refrescar()` (rápida, fuera del lease) y la de `ejecutarRefresh` bajo el lease
+    // `refresh-sesion` (la comprobación AUTORITATIVA, ver su docblock en `use-auth-movil.ts`).
+    // Sin token distinto en ninguna de las dos, el resultado no cambia: un solo intento de red.
+    expect(cargarSesionMovilMock).toHaveBeenCalledTimes(2);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 });

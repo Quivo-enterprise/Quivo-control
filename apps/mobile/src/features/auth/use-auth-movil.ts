@@ -1,13 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Sentry from '@sentry/react-native';
+import type * as SQLite from 'expo-sqlite';
 import type { ContextoOperativoMovil, ResumenAsignacionMovil } from '@quivo/shared';
 import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
 import {
+  CircuitoRefreshAbiertoError,
+  esSesionIrrecuperable,
+  intentarRefrescarConCircuito,
+  obtenerEstadoCircuitoRefresh,
+  reiniciarCircuitoRefresh,
+} from '../../shared/api/refresh-circuit-breaker';
+import {
+  abrirOutbox,
+  adquirirLease,
+  liberarLeaseConCooldown,
+  renovarLease,
+  ID_LEASE_REFRESH_SESION,
+  TTL_LEASE_REFRESH_SESION_MS,
+} from '../../db/outbox';
+import {
+  actualizarContextoSesionMovil,
   actualizarSesionMovil,
+  borrarLogoutSolicitado,
+  borrarRevocacionPendientePorId,
   borrarSesionMovil,
   cargarSesionMovil,
+  guardarRevocacionPendiente,
   guardarSesionMovil,
+  hayLogoutSolicitado,
+  listarRevocacionesPendientes,
+  marcarLogoutSolicitado,
   obtenerDeviceIdMovil,
+  type RevocacionPendienteGuardada,
   type SesionMovilGuardada,
 } from '../../shared/security/sesion-movil-store';
 
@@ -28,6 +52,16 @@ export interface EstadoAuthMovil {
    * (`obtenerAccessToken`) vuelve a tener éxito.
    */
   sesionNoRevalidada: boolean;
+  /** Entrega 3 (`docs/plan-correccion-post-piloto-2026-09-09.md`): distingue un 401 de refresh
+   * TRANSITORIO (el circuito sigue reintentando con backoff, el chofer no ve nada — principio
+   * rector) de una sesión REALMENTE muerta: `esSesionIrrecuperable` solo se prende cuando el
+   * circuit breaker (`shared/api/refresh-circuit-breaker.ts`) lleva ABIERTO más de
+   * `UMBRAL_MS_SESION_IRRECUPERABLE` sin que ningún probe haya tenido éxito. Es una falla de
+   * CAPTURA (la app no puede recuperar sesión de forma autónoma) y por eso SÍ debe hacerse
+   * visible — pero esta entrega solo expone el estado, no construye la UI: la consume la
+   * Entrega 26 (preflight). Se apaga con el primer refresh exitoso o con un login/logout
+   * nuevo (`reiniciarCircuitoRefresh`). */
+  sesionIrrecuperable: boolean;
   /** Login de un paso (`POST /sesion`): token de un solo uso que llega en la respuesta
    * `seleccion_requerida` (≥2 asignaciones hoy) y hay que reenviar en
    * `POST /sesion/asignacion` junto con el `asignacionId` elegido. Reemplaza al
@@ -45,6 +79,7 @@ const ESTADO_INICIAL: EstadoAuthMovil = {
   error: null,
   aviso: null,
   sesionNoRevalidada: false,
+  sesionIrrecuperable: false,
   seleccionToken: null,
   asignaciones: [],
   sesion: null,
@@ -69,6 +104,21 @@ export function useAuthMovil() {
    * `autenticarSesion`/`seleccionarAsignacion` (búsqueda: `fallos401Acumulados.current = 0`). */
   const fallos401Acumulados = useRef(0);
 
+  /** Entrega 3: refleja en `estado` el veredicto ACTUAL del circuit breaker
+   * (`refresh-circuit-breaker.ts`) — se llama después de cada intento de refresh (éxito o
+   * fallo), en foreground. El breaker vive fuera de React (módulo compartido con el camino
+   * headless), así que esto es lo que lo sincroniza con el estado que puede leer un
+   * componente. Barato de sobra para llamarlo en cada intento: son 4 comparaciones puras. */
+  const sincronizarSesionIrrecuperable = useCallback(() => {
+    if (!mounted.current) return;
+    const irrecuperable = esSesionIrrecuperable(obtenerEstadoCircuitoRefresh(), Date.now());
+    setEstado((actual) =>
+      actual.sesionIrrecuperable === irrecuperable
+        ? actual
+        : { ...actual, sesionIrrecuperable: irrecuperable },
+    );
+  }, []);
+
   useEffect(() => {
     mounted.current = true;
     void restaurarSesion();
@@ -80,9 +130,32 @@ export function useAuthMovil() {
       try {
         deviceId.current = await obtenerDeviceIdMovil();
         setEstado((actual) => ({ ...actual, deviceId: deviceId.current }));
+        // Punto 3 (verify-fix, decisión del CTO): "próximo arranque con red" — intenta drenar
+        // cualquier revocación de logout que quedó pendiente de un arranque anterior sin
+        // conectividad (ver `intentarRevocacionesPendientes`). Fire-and-forget: nunca bloquea
+        // ni puede fallar la restauración de sesión (esa función nunca rechaza).
+        void intentarRevocacionesPendientes();
+
+        // Fix drenado en background (2026-09-25, crítico): `ejecutarLogout` puede devolver
+        // 'pendiente' cuando no consigue el lease `refresh-sesion` a tiempo (caso patológico,
+        // ver su docblock) — marca `marcarLogoutSolicitado()` pero NO toca la sesión en disco
+        // a propósito (`intentarRevocacionesPendientes`, arriba, necesita encontrarla intacta
+        // para reintentar el logout completo bajo lease). Sin este chequeo, `cargarSesionMovil`
+        // de abajo devolvía la sesión tal cual y el chofer volvía a `operacion` al reabrir la
+        // app — un chofer que cerró sesión quedaba re-logueado, crítico en teléfonos
+        // compartidos entre choferes. Chequea ANTES de leer la sesión: si hay que tratar esto
+        // como deslogueado, ni siquiera se toca `CREDENCIALES_KEY`/`CONTEXTO_KEY` acá, así que
+        // la sesión en disco queda intacta (el borrado real sigue siendo exclusivo de
+        // `ejecutarLogout`, vía `intentarRevocacionesPendientes`).
+        if (await debeRestaurarComoDeslogueado()) {
+          if (!mounted.current) return;
+          setEstado((actual) => ({ ...actual, etapa: 'vehiculo', sesion: null }));
+          return;
+        }
+
         const guardada = await cargarSesionMovil();
         if (!mounted.current) return;
-        
+
         // Validar que la sesión no esté vencida y que no tenga una estructura corrupta
         if (
           !guardada || 
@@ -132,15 +205,36 @@ export function useAuthMovil() {
           // — sin este `setEstado` acá, los tokens rotados quedarían solo en disco (`refrescar`
           // ya los persiste vía `actualizarSesionMovil`) pero no en memoria.
           setEstado((actual) => ({ ...actual, sesion: vigente }));
+          sincronizarSesionIrrecuperable();
         }
         const contexto = await authMovilApi.obtenerContexto(vigente.accessToken);
         if (!mounted.current) return;
-        const actualizada = { ...vigente, contexto };
-        await guardarSesionMovil(actualizada);
-        setEstado((actual) => ({ ...actual, sesion: actualizada, aviso: null }));
+        // G2 (hallazgo de `/codex-debug verify-fix`, ALTO): `actualizarContextoSesionMovil`
+        // relee la sesión VIGENTE de disco y fusiona SOLO `contexto` — nunca pisa
+        // accessToken/refreshToken con la copia en memoria (`vigente`), que puede haber
+        // quedado vieja si un refresh concurrente (otro contexto JS, bajo el lease de
+        // `ID_LEASE_REFRESH_SESION`) rotó y persistió mientras este `await` estaba en vuelo.
+        // Ver el docblock de esa función en `sesion-movil-store.ts`.
+        const actualizada = await actualizarContextoSesionMovil(contexto);
+        setEstado((actual) => ({ ...actual, sesion: actualizada ?? actual.sesion, aviso: null }));
       } catch (error: unknown) {
         if (!mounted.current) return;
-        if (error instanceof AuthMovilApiError && error.status === 401) {
+        // Punto 10 (code review 2026-09-25): `CircuitoRefreshAbiertoError` tiene
+        // `status: 401` A PROPÓSITO (ver su docblock en `refresh-circuit-breaker.ts` — así
+        // `error.status === 401` lo trata igual que un 401 real EN OTROS callers que solo
+        // necesitan degradar a "sesión no revalidada"), pero acá SÍ importa la diferencia: es
+        // una decisión LOCAL (el circuito ya estaba abierto por fallos 401 PREVIOS), nunca
+        // evidencia nueva del servidor — ni siquiera tocó la red esta vez. Tratarlo igual que
+        // un 401 real dispara `refrescarConReintentos` (reintentos que, mientras el circuito
+        // siga abierto, vuelven a fallar con el MISMO error local sin volver a consultar al
+        // servidor) y puede terminar marcando `sesionNoRevalidada` sin que el servidor haya
+        // dicho nada nuevo. Se excluye acá; cae al `else` genérico de abajo (aviso de
+        // "trabajando offline", sin tocar `sesionNoRevalidada`).
+        if (
+          error instanceof AuthMovilApiError &&
+          error.status === 401 &&
+          !(error instanceof CircuitoRefreshAbiertoError)
+        ) {
           // Plan §2.4.1: antes, CUALQUIER fallo del refresh que no fuera `kind: 'network'`
           // (incluido otro 401 llano) disparaba `borrarSesionMovil()` en el primer intento.
           // Eso desmontaba `GpsProvider`, removía la suscripción `onLocation` (el SDK nativo
@@ -152,6 +246,10 @@ export function useAuthMovil() {
           // transitorio). Reintenta con `vigente` — ya rotado si el `refrescar` de arriba
           // tuvo éxito — nunca con `guardada` (A4, ver el comentario de arriba).
           const revalidada = await refrescarConReintentos(vigente);
+          // Entrega 3: sincroniza el veredicto del circuit breaker DESPUÉS de que
+          // `refrescarConReintentos` agotó (o no) sus reintentos — cubre tanto el éxito como
+          // el fallo definitivo de este camino de restauración.
+          sincronizarSesionIrrecuperable();
           if (!revalidada) {
             // A5 (hallazgo de revisión, alto): el backoff se agotó DE VERDAD (4 intentos,
             // ~40 s) sin lograr revalidar. El aviso genérico de "sin red" es FALSO acá si la
@@ -171,9 +269,9 @@ export function useAuthMovil() {
           try {
             const contexto = await authMovilApi.obtenerContexto(revalidada.accessToken);
             if (!mounted.current) return;
-            const actualizada = { ...revalidada, contexto };
-            await guardarSesionMovil(actualizada);
-            setEstado((actual) => ({ ...actual, sesion: actualizada, aviso: null }));
+            // G2 — misma razón que arriba: relee y fusiona SOLO contexto, nunca pisa tokens.
+            const actualizada = await actualizarContextoSesionMovil(contexto);
+            setEstado((actual) => ({ ...actual, sesion: actualizada ?? revalidada, aviso: null }));
           } catch {
             // El refresh de tokens SÍ funcionó (ya persistido dentro de `refrescar`, vía
             // `actualizarSesionMovil`) pero traer el contexto falló (offline puntual, etc.):
@@ -273,7 +371,16 @@ export function useAuthMovil() {
       // H5: login nuevo exitoso — cortar cualquier racha de 401 heredada de la sesión
       // anterior (el ref no lo limpia `ESTADO_INICIAL` porque vive fuera de `estado`).
       fallos401Acumulados.current = 0;
-      setEstado((actual) => ({ ...actual, etapa: 'operacion', sesion: respuesta }));
+      // Entrega 3: mismo motivo que arriba, pero para el circuit breaker del refresh — es
+      // GLOBAL al módulo (ver el docblock de `reiniciarCircuitoRefresh`), así que un login
+      // nuevo y válido no debe heredar un circuito abierto por la sesión anterior.
+      reiniciarCircuitoRefresh();
+      setEstado((actual) => ({
+        ...actual,
+        etapa: 'operacion',
+        sesion: respuesta,
+        sesionIrrecuperable: false,
+      }));
     });
   }, []);
 
@@ -302,11 +409,14 @@ export function useAuthMovil() {
         // H5: misma razón que en `autenticarSesion` — este es el otro camino de login
         // exitoso (segundo paso de `seleccion_requerida`).
         fallos401Acumulados.current = 0;
+        // Entrega 3: mismo motivo que en `autenticarSesion`.
+        reiniciarCircuitoRefresh();
         setEstado((previo) => ({
           ...previo,
           etapa: 'operacion',
           sesion: respuesta,
           seleccionToken: null,
+          sesionIrrecuperable: false,
         }));
       });
     },
@@ -325,21 +435,37 @@ export function useAuthMovil() {
 
   const logout = useCallback(async () => {
     setEstado((actual) => ({ ...actual, cargando: true, error: null }));
-    const refreshToken = estado.sesion?.refreshToken;
-    if (refreshToken) {
-      try {
-        await authMovilApi.logout(refreshToken);
-      } catch {
-        // La limpieza local siempre se ejecuta; la sesión expira/revoca server-side después.
+    // Punto 3 (verify-fix, decisión del CTO): la lógica real vive en `ejecutarLogout`
+    // (standalone, ver su docblock más abajo) — coordina con `ejecutarRefresh` a través del
+    // MISMO lease `refresh-sesion`, SIEMPRE espera a conseguirlo (nunca degrada al
+    // `estado.sesion?.refreshToken` de React, que puede estar varias rotaciones headless
+    // atrás) y revoca con el refresh token RELEÍDO de disco.
+    //
+    // Ronda 6 (gaps 4 y 5 de Codex): `ejecutarLogout` ahora puede (a) resolver `'pendiente'`
+    // (no consiguió el lease — no tocó nada localmente) o (b) RECHAZAR (la relectura bajo lease
+    // falló repetidamente — tampoco tocó nada). Se tratan distinto a propósito: en (a) el
+    // chofer igual debe ver "sesión cerrada" ya (requisito de producto, la limpieza real llega
+    // después vía `intentarRevocacionesPendientes`), así que el reset de `estado` sigue
+    // corriendo igual que en el camino feliz. En (b) la sesión local sigue siendo VÁLIDA —
+    // resetear `estado` acá desincronizaría la UI del almacenamiento real (el chofer creería
+    // estar deslogueado mientras `restaurarSesion` lo vuelve a meter a `operacion` en el
+    // próximo arranque) — se informa el error y se deja `estado.sesion` intacto para reintentar.
+    try {
+      await ejecutarLogout(deviceId.current ?? estado.deviceId ?? undefined);
+    } catch (error: unknown) {
+      if (mounted.current) {
+        setEstado((actual) => ({ ...actual, cargando: false, error: mensajeUsuario(error) }));
       }
+      return;
     }
-    await borrarSesionMovil();
     // H5: `ESTADO_INICIAL` limpia `estado`, pero este ref vive fuera de `estado` — sin este
     // reset explícito, una racha de 401 de la sesión que se está cerrando sobrevivía al
     // logout y podía combinarse con un solo 401 de la sesión siguiente.
     fallos401Acumulados.current = 0;
+    // Entrega 3: mismo motivo, para el circuit breaker del refresh (global al módulo).
+    reiniciarCircuitoRefresh();
     if (mounted.current) setEstado({ ...ESTADO_INICIAL, etapa: 'vehiculo' });
-  }, [estado.sesion?.refreshToken]);
+  }, [estado.deviceId]);
 
   /** Access token vigente para llamadas propias de la pantalla de operación (paquete del
    * día QUI-236, sync QUI-240) — refresca sola si ya venció, sin duplicar la lógica de
@@ -369,6 +495,10 @@ export function useAuthMovil() {
       if (mounted.current) {
         setEstado((actual) => ({ ...actual, sesion: actualizada, sesionNoRevalidada: false }));
       }
+      // Entrega 3: el `refrescar` de arriba ya pasó por `intentarRefrescarConCircuito`, que
+      // cierra el circuito en un éxito — sincronizar acá apaga `sesionIrrecuperable` si había
+      // quedado prendida (mismo espíritu que el `sesionNoRevalidada: false` de arriba).
+      sincronizarSesionIrrecuperable();
       return actualizada.accessToken;
     } catch (error: unknown) {
       const { fallos401Acumulados: fallosActualizados, marcarSesionNoRevalidada } =
@@ -377,13 +507,19 @@ export function useAuthMovil() {
       if (marcarSesionNoRevalidada && mounted.current) {
         setEstado((actual) => ({ ...actual, sesionNoRevalidada: true }));
       }
+      // Entrega 3: ESTE es el camino que corría sin freno cada 15s en el bug de QA — acá es
+      // donde `sesionIrrecuperable` puede prenderse de verdad (circuito abierto hace más de
+      // `UMBRAL_MS_SESION_IRRECUPERABLE`). Bajo el principio rector, esto NO dispara ningún
+      // aviso en pantalla por sí solo — solo actualiza el estado que la Entrega 26 (preflight,
+      // fuera de este alcance) va a consumir.
+      sincronizarSesionIrrecuperable();
       // NO se borra la sesión acá en ningún caso (401 ni network): misma decisión, mismo
       // motivo que en `refrescarConReintentos` — ver su comentario. Un 401 aislado o
       // repetido solo enciende la señal para que el chofer decida volver a loguearse; el
       // borrado automático sigue siendo exclusivo de `logout()`.
       return null;
     }
-  }, [estado.sesion]);
+  }, [estado.sesion, sincronizarSesionIrrecuperable]);
 
   async function ejecutar(accion: () => Promise<void>): Promise<void> {
     setEstado((actual) => ({ ...actual, cargando: true, error: null, aviso: null }));
@@ -424,34 +560,607 @@ export function useAuthMovil() {
  * y puede terminar marcando `sesionNoRevalidada: true` (o dejando `obtenerAccessToken` en
  * `null` para siempre) sobre una sesión que en realidad es válida.
  *
- * Fix: single-flight sobre el refresh, con el `refreshToken` como clave. Toda llamada
- * concurrente a `refrescar()` para el mismo token comparte la ÚNICA promesa en vuelo en vez
- * de disparar una rotación paralela — `refrescarConReintentos` y `obtenerAccessToken` pasan
- * por esta misma función, así que quedan cubiertos automáticamente. La entrada se borra del
- * mapa en el `finally`, tanto si resuelve como si rechaza: así un rechazo nunca queda
- * cacheado — el próximo llamador (p. ej. el siguiente intento de `refrescarConReintentos`,
- * tras el backoff) dispara un intento nuevo, no reutiliza el error viejo. Si el token SÍ fue
- * revocado server-side, ese 401 real se sigue propagando a todos los que esperaban la promesa
+ * Fix: single-flight sobre el refresh, con el `refreshToken` (ya RECONCILIADO contra disco —
+ * ver `reconciliarConDisco`/`refrescar` más abajo) como clave. Toda llamada concurrente a
+ * `refrescar()` para el mismo token vigente comparte la ÚNICA promesa en vuelo en vez de
+ * disparar una rotación paralela — `refrescarConReintentos` y `obtenerAccessToken` pasan por
+ * esta misma función, así que quedan cubiertos automáticamente. La entrada se borra del mapa
+ * en el `finally`, tanto si resuelve como si rechaza: así un rechazo nunca queda cacheado — el
+ * próximo llamador (p. ej. el siguiente intento de `refrescarConReintentos`, tras el backoff)
+ * dispara un intento nuevo, no reutiliza el error viejo. Si el token SÍ fue revocado
+ * server-side, ese 401 real se sigue propagando a todos los que esperaban la promesa
  * compartida, y `refrescarConReintentos` lo sigue tratando como falla tras agotar reintentos —
  * la semántica de `sesionNoRevalidada` no cambia. */
 const refrescosEnVuelo = new Map<string, Promise<SesionMovilGuardada>>();
 
+/**
+ * G3/R4 (hallazgo de `/codex-debug verify-fix` sobre `ea3d84e`, ALTO — reemplaza el diseño
+ * anterior de esta función, que reconciliaba DESPUÉS de un 401): el SDK de Transistorsoft
+ * corre el headless task en SU PROPIO contexto JS, distinto del que arranca al reabrir la app.
+ * Un tick headless puede rotar el refresh token de T0 a T1 y persistirlo en SecureStore
+ * mientras el contexto de foreground, recién arrancado, todavía tiene T0 en memoria. Ese T0 ya
+ * fue canjeado server-side: enviarlo recibe un 401 REAL, aunque la sesión sea perfectamente
+ * válida — SecureStore ya tiene T1.
+ *
+ * El diseño ANTERIOR reconciliaba reactivamente: intentaba con T0, capturaba el 401, RECIÉN
+ * ahí releía disco y reintentaba con T1 — pero ese primer intento con T0 fallido SIEMPRE
+ * pasaba primero por `intentarRefrescarConCircuito`, así que SIEMPRE contaba como un fallo 401
+ * real contra el circuit breaker (`circuitoTrasFallo401`). Con el circuito ya en
+ * `UMBRAL_FALLOS_ABRIR_CIRCUITO - 1` fallos previos (4), ese intento con T0 era el QUINTO — el
+ * circuito se ABRÍA en ESE MISMO `intentarRefrescarConCircuito`, ANTES de que el código
+ * alcanzara siquiera a releer disco. El reintento con T1 que venía después quedaba bloqueado
+ * por el circuito que su propio intento fallido acababa de abrir — `CircuitoRefreshAbiertoError`
+ * en vez de la rotación exitosa que T1 hubiera dado. Y cada probe POSTERIOR del backoff volvía
+ * a repetir T0 (nunca releía disco de nuevo, el reintento con T1 vivía solo en el `catch` de
+ * un único intento), reabriendo el circuito en loop — `obtenerAccessToken` quedaba en `null`
+ * indefinidamente pese a que T1 era válido desde el principio.
+ *
+ * Fix: reconciliar ANTES de intentar, no después de fallar. `refrescar()` relee SIEMPRE la
+ * sesión persistida (best-effort — ver el `catch` de abajo) antes de tocar la red; si el
+ * `refreshToken` en disco difiere del que trae `guardada` (memoria), es evidencia de que OTRO
+ * contexto ya lo rotó, y se adopta el de disco DE ENTRADA. Con esto, el ÚNICO intento de red
+ * de esta llamada usa siempre el token más vigente conocido sin golpear el servidor — un T0 ya
+ * sabido obsoleto JAMÁS se envía, así que el circuito nunca cuenta un fallo evitable por él (el
+ * 401 que abría el circuito en el diseño viejo simplemente no vuelve a ocurrir). Además, la
+ * reconciliación ahora ocurre ANTES del single-flight (`refrescar`, abajo): dos llamadas
+ * concurrentes que arrancan con el mismo T0 viejo en memoria reconcilian AL MISMO T1 y
+ * comparten la única request — nunca dos rotaciones en paralelo, ni siquiera con el reintento
+ * de disco de por medio (antes, ese reintento llamaba a `intentarRefrescarConCircuito` DIRECTO,
+ * salteando el single-flight).
+ *
+ * Cubre foreground Y headless con un solo fix porque los dos pasan por ESTA función: los 4 call
+ * sites de `refrescar()` (`reconciliarSesion`, `refrescarConReintentos` y `obtenerAccessToken`
+ * acá abajo, más `obtenerAccessTokenHeadless` en `headless-task.ts`) terminan todos acá.
+ */
+async function reconciliarConDisco(guardada: SesionMovilGuardada): Promise<SesionMovilGuardada> {
+  try {
+    const enDisco = await cargarSesionMovil();
+    if (enDisco && enDisco.refreshToken !== guardada.refreshToken) {
+      return enDisco;
+    }
+  } catch {
+    // Best-effort: si la lectura de disco falla (SecureStore no disponible, corrupción), seguimos
+    // con `guardada` tal cual — un fallo acá no debe impedir el intento de refresh con lo que ya
+    // teníamos en memoria.
+  }
+  return guardada;
+}
+
 /** `export` solo para el test de single-flight (`use-auth-movil.refrescar.test.ts`) — no se
  * usa fuera de este módulo en producción. */
 export async function refrescar(guardada: SesionMovilGuardada): Promise<SesionMovilGuardada> {
-  const clave = guardada.refreshToken;
+  // G3/R4: reconciliar ANTES de calcular la clave del single-flight — ver el docblock de
+  // `reconciliarConDisco`. Así, toda llamada (aunque arranque con un token de memoria distinto
+  // y desactualizado) converge a la MISMA clave si el token vigente en disco es el mismo.
+  const vigente = await reconciliarConDisco(guardada);
+  // Punto 7 (code review 2026-09-25): si `reconciliarConDisco` adoptó una sesión de DISCO
+  // porque OTRO contexto ya rotó el refresh token (`vigente !== guardada`), y esa sesión de
+  // disco todavía tiene el access token VIGENTE, no hace falta rotar de nuevo acá — la rotación
+  // ya la hizo el otro contexto hace un instante. Sin este chequeo, cada contexto que
+  // reconciliaba contra un T1 recién rotado igual disparaba SU PROPIA request de refresh sobre
+  // T1 (en vez de reusar el access token que esa rotación ya trajo), multiplicando refreshes
+  // evitables exactamente en el escenario (headless + foreground concurrentes) que
+  // `reconciliarConDisco` existe para cubrir. Comparación estricta (sin margen): mismo criterio
+  // que el resto del archivo (`obtenerAccessToken` más abajo, `headless-task.ts`) — no hay una
+  // constante de margen para `accessTokenExpiresAt` en este código base, así que no se inventa
+  // una acá.
+  if (vigente !== guardada && new Date(vigente.accessTokenExpiresAt) > new Date()) {
+    return vigente;
+  }
+  const clave = vigente.refreshToken;
   const enVuelo = refrescosEnVuelo.get(clave);
   if (enVuelo) return enVuelo;
 
-  const promesa = (async () => {
-    const tokens = await authMovilApi.refresh(guardada.refreshToken);
-    return actualizarSesionMovil(guardada, tokens);
-  })();
+  const promesa = ejecutarRefresh(vigente);
   refrescosEnVuelo.set(clave, promesa);
   try {
     return await promesa;
   } finally {
     refrescosEnVuelo.delete(clave);
+  }
+}
+
+/** Mismo generador de token de lease que `drenaje-oportunista.ts` (`generarTokenLease`) —
+ * duplicado a propósito, no importado: no es un identificador criptográfico, solo necesita
+ * distinguir intentos concurrentes de ESTE dispositivo para `liberarLeaseConCooldown`
+ * (`owner = token`, ver su comentario en `db/outbox.ts`). */
+function generarTokenLeaseRefresh(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Intervalo de poll mientras se espera el lease `refresh-sesion` — corto a propósito: el
+ * peor caso (el dueño actual termina su única request de red y libera con cooldown 0) se
+ * resuelve en el orden de cientos de ms, no de segundos. */
+const INTERVALO_POLL_LEASE_REFRESH_MS = 150;
+
+/**
+ * G1 (hallazgo de `/codex-debug verify-fix`, ALTO): a diferencia del drenado oportunista
+ * (`drenaje-oportunista.ts`), acá NO se puede desistir en silencio si el lease está tomado —
+ * el caller necesita el resultado del refresh sí o sí. Reintenta adquirir con un poll corto
+ * hasta el TTL del lease ajeno (`TTL_LEASE_REFRESH_SESION_MS`): pasado ese tiempo, el dueño
+ * anterior o bien ya liberó (éxito/fallo de su request) o su fila quedó huérfana y
+ * `adquirirLease` la reclama sola en el siguiente intento — nunca hace falta esperar más que
+ * eso. Devuelve `false` (en vez de esperar indefinidamente) si ni así se consigue — caso
+ * patológico (dos rondas de contención seguidas): `ejecutarRefresh` YA NO degrada a un refresh
+ * sin lease en ese caso (ver `ReintentarRefreshMasTardeError` y el docblock de `ejecutarRefresh`
+ * — ronda 4 de `/codex-debug verify-fix`, ese camino reproducía la carrera original).
+ */
+async function adquirirLeaseRefreshConEspera(
+  db: SQLite.SQLiteDatabase,
+  token: string,
+  esperaMaximaMs: number = TTL_LEASE_REFRESH_SESION_MS,
+): Promise<boolean> {
+  const limiteMs = Date.now() + esperaMaximaMs;
+  for (;;) {
+    const ahoraMs = Date.now();
+    const obtenido = await adquirirLease(db, ID_LEASE_REFRESH_SESION, token, ahoraMs, TTL_LEASE_REFRESH_SESION_MS);
+    if (obtenido) return true;
+    if (Date.now() >= limiteMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, INTERVALO_POLL_LEASE_REFRESH_MS));
+  }
+}
+
+/**
+ * G1 (`/codex-debug verify-fix` ronda 4): señaliza contención pasajera del lease `refresh-sesion`
+ * sin evidencia de que el token en memoria esté mal — el caller (`refrescarConReintentos`,
+ * `obtenerAccessToken`) ya trata cualquier error NO-`AuthMovilApiError`/401 como transitorio, así
+ * que esto NUNCA cuenta contra el circuit breaker ni prende `sesionNoRevalidada`. Ver el
+ * docblock de `ejecutarRefresh` para la rama que la lanza.
+ */
+export class ReintentarRefreshMasTardeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReintentarRefreshMasTardeError';
+  }
+}
+
+/**
+ * G3-logout (verify-fix, punto 3 — decisión del CTO): `ejecutarRefresh` lanza esto cuando,
+ * bajo el lease `refresh-sesion` ya adquirido, `cargarSesionMovil()` devuelve `null` — evidencia
+ * de que `ejecutarLogout` (más abajo) ganó la carrera por el MISMO lease, revocó la sesión y la
+ * borró ANTES de soltarlo. No es un 401 (nadie tocó la red) ni un error de red: es información
+ * definitiva de que ya no hay nada que refrescar. Mismo tratamiento que
+ * `ReintentarRefreshMasTardeError` en los callers (no cuenta contra el circuito), pero semántica
+ * distinta — no tiene sentido reintentar esto "más tarde": la sesión está cerrada.
+ */
+export class SesionCerradaEnRefreshError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SesionCerradaEnRefreshError';
+  }
+}
+
+/**
+ * Único punto que golpea la red de refresh — ya recibe la sesión RECONCILIADA (`refrescar`,
+ * arriba se encarga de eso, antes de entrar al single-flight). Sin retry propio: si
+ * `intentarRefrescarConCircuito` falla (401 real, circuito abierto, o red), el error se propaga
+ * tal cual — no hay nada más que reconciliar acá, ya se hizo antes de llegar. `sin llamadas
+ * directas a `intentarRefrescarConCircuito` fuera de `refrescar()`" (decisión de diseño del
+ * CTO): esta es la ÚNICA función del módulo que la invoca.
+ *
+ * G1 (hallazgo de `/codex-debug verify-fix`, ALTO — reemplaza el diseño anterior, que solo
+ * reconciliaba una vez en `refrescar()` antes del single-flight EN MEMORIA): ese single-flight
+ * (`refrescosEnVuelo`) es por CONTEXTO JS, así que dos contextos (foreground/headless) podían
+ * releer el mismo T0 casi al mismo tiempo, cada uno en su propio single-flight, y los dos
+ * llegar hasta acá. Ahora TODO el tramo releer-decidir-refrescar-persistir corre bajo el lease
+ * SQLite `ID_LEASE_REFRESH_SESION` (mismo mecanismo que `ID_LEASE_DRENAJE`, que sí cruza
+ * contextos): solo un contexto puede estar en esta sección a la vez. El que entra segundo
+ * espera el lease y, al conseguirlo, relee disco DE NUEVO — si el primero ya rotó, adopta el
+ * token nuevo sin tocar la red; el circuito de `intentarRefrescarConCircuito` solo se toca
+ * cuando, incluso con el lease en mano, el token en disco sigue siendo el mismo que se iba a
+ * enviar (ahí un 401 es evidencia real, no un artefacto de carrera).
+ *
+ * G1 ronda 4 (hallazgo de `/codex-debug verify-fix`, ALTO — reemplaza DOS partes del diseño
+ * anterior):
+ * (a) Se ELIMINA el camino "sin lease": si `adquirirLeaseRefreshConEspera` agota su espera, este
+ *     diseño anterior refrescaba igual, sin exclusión — reproduciendo la carrera original que el
+ *     lease existe para cerrar. Ahora, sin lease, NO se toca la red: se relee disco una vez más
+ *     (best-effort) y, si cambió, se adopta; si no, se lanza `ReintentarRefreshMasTardeError` —
+ *     el caller ya sabe tratar eso como transitorio, sin abrir el circuito.
+ * (b) Antes de PERSISTIR el resultado de un refresh exitoso, se verifica con
+ *     `renovarLease` (compare-and-set por `owner`) que el lease sigue siendo nuestro — a la vez
+ *     que se renueva su TTL, cubriendo el caso de una operación de red más lenta de lo esperado.
+ *     Si lo perdimos (`renovado === false`), NO se pisa el disco a ciegas: se relee y, si otro
+ *     contexto ya dejó un token distinto (más nuevo que el que enviamos), se adopta sin más. Si
+ *     el disco sigue mostrando el token que acabamos de invalidar server-side y nadie más
+ *     avanzó, no hay forma segura de persistir la rotación que el servidor YA aceptó — caso
+ *     aceptado EXPLÍCITAMENTE (decisión del CTO): esta rotación exitosa queda sin reflejar en
+ *     ningún almacenamiento local, y el PRÓXIMO intento manda el token ahora inválido, recibe un
+ *     401 real, y sigue el camino normal (sesión no revalidada → login limpio). No se reintenta
+ *     la persistencia para no arriesgar pisar un estado más nuevo que el propio.
+ *
+ * También aborta sin tocar la red (`SesionCerradaEnRefreshError`) si, ya con el lease en mano,
+ * `cargarSesionMovil()` devuelve `null` — `ejecutarLogout` (más abajo) pudo haber ganado la
+ * carrera por este mismo lease y borrado la sesión.
+ */
+async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMovilGuardada> {
+  const db = await abrirOutbox();
+  const tokenLease = generarTokenLeaseRefresh();
+  const obtuvoLease = await adquirirLeaseRefreshConEspera(db, tokenLease);
+  if (!obtuvoLease) {
+    // G1(a): sin lease, NO se toca la red — ver el docblock de arriba. Solo queda una relectura
+    // best-effort: si alguien más ya rotó mientras esperábamos, la adoptamos gratis; si no, no
+    // hay evidencia de nada roto, solo de contención — se señaliza como transitorio.
+    Sentry.addBreadcrumb({
+      category: 'auth-movil',
+      level: 'warning',
+      message: 'Lease refresh-sesion no disponible a tiempo; se difiere sin tocar la red (G1a)',
+    });
+    const relectura = await reconciliarConDisco(guardada);
+    if (relectura.refreshToken !== guardada.refreshToken) return relectura;
+    throw new ReintentarRefreshMasTardeError(
+      'No se pudo adquirir el lease de refresh-sesion a tiempo y no hay evidencia de que otro contexto ya haya rotado; reintentar más tarde sin tocar la red.',
+    );
+  }
+
+  try {
+    // Lectura AUTORITATIVA bajo el lease — a diferencia de `reconciliarConDisco` (best-effort,
+    // solo para la clave del single-flight FUERA del lease), acá SÍ importa distinguir un fallo
+    // de lectura (best-effort: seguimos con `guardada`) de una ausencia EXPLÍCITA de sesión
+    // (`null`, ver `SesionCerradaEnRefreshError` arriba): esa ausencia es información, no un
+    // fallo, y no se degrada a `guardada`.
+    let enDiscoBajoLease: SesionMovilGuardada | null;
+    try {
+      enDiscoBajoLease = await cargarSesionMovil();
+    } catch {
+      // Punto 2 (`/codex-debug verify-fix` ronda 6, ALTO, decisión del CTO — reemplaza el
+      // fallback anterior a `guardada`): un fallo de LECTURA bajo el lease no es evidencia de
+      // que el token en memoria siga siendo el vigente — otro contexto pudo haber rotado
+      // exactamente en esta ventana, y degradar a `guardada` (memoria) podía mandarle al
+      // servidor un T0 ya canjeado, contando un 401 evitable contra el circuito. Se aborta sin
+      // tocar la red (mismo tratamiento que la contención de lease, G1a): transitorio, no
+      // cuenta para el circuito, el caller reintenta más tarde.
+      throw new ReintentarRefreshMasTardeError(
+        'Fallo al releer la sesión persistida bajo el lease de refresh-sesion; no hay forma segura de saber qué token está vigente, se reintenta más tarde sin tocar la red.',
+      );
+    }
+    if (!enDiscoBajoLease) {
+      throw new SesionCerradaEnRefreshError(
+        'La sesión fue cerrada (logout) mientras se esperaba el lease de refresh-sesion; se aborta sin tocar la red ni persistir nada.',
+      );
+    }
+    if (enDiscoBajoLease.refreshToken !== guardada.refreshToken) {
+      // Otro contexto rotó mientras esperábamos el lease (o entre la reconciliación de
+      // `refrescar()` y este punto) — adoptamos SIN tocar la red. Cierra el hallazgo G1: antes,
+      // un T0 desactualizado podía llegar hasta acá y su 401 contaba contra el circuito.
+      return enDiscoBajoLease;
+    }
+    // El token en disco sigue siendo el mismo que íbamos a usar: recién ACÁ es seguro que un
+    // 401 cuente contra el circuito — no hay evidencia de ninguna rotación concurrente.
+    const tokens = await intentarRefrescarConCircuito(enDiscoBajoLease.refreshToken);
+    // G1(b) ronda 4: el servidor YA rotó con éxito — antes de persistir, confirmar (y renovar)
+    // que seguimos siendo dueños del lease. Ver el docblock de `ejecutarRefresh` para el caso
+    // aceptado explícitamente si lo perdimos.
+    // Punto 4 (`/codex-debug verify-fix`, decisión del CTO — riesgo residual ACEPTADO, sin
+    // cambio de comportamiento): entre que este `renovarLease` confirma (compare-and-set en
+    // SQLite) que seguimos siendo dueños del lease y que `actualizarSesionMovil` (abajo)
+    // termina de escribir en SecureStore, el runtime de Android puede suspenderse (la app pasa
+    // a background y el sistema congela/mata el proceso, o el hilo se apantalla más de lo
+    // esperado). Si eso pasa, el lease puede vencer (`TTL_LEASE_REFRESH_SESION_MS`) y otro
+    // contexto adquirirlo y rotar de nuevo ANTES de que esta escritura, ya en curso, alcance a
+    // aplicarse — el CAS de SQLite protege la FILA del lease, no la escritura posterior en
+    // SecureStore: `expo-secure-store` no ofrece ninguna escritura condicional/con fencing
+    // (no hay equivalente a un `WHERE owner = ?` para el Keychain/Keystore), así que no hay
+    // forma de que esta escritura se autoinvalide si perdimos el lease mientras estaba en
+    // vuelo. Cerrar esto de raíz exigiría persistencia con fencing atómico real (fuera del
+    // alcance de SecureStore) — no se implementa acá.
+    //
+    // Punto 9 (code review 2026-09-25 — corrige un comentario FALSO de esta misma sección):
+    // NO hay ninguna detección de reuso en el servidor acá. `refresh()`
+    // (`apps/api/src/modules/auth-movil/auth-movil.service.ts`) busca la sesión por
+    // `refreshTokenHash` (el hash VIGENTE) — nunca lee `refreshTokenHashAnterior`; esa columna
+    // la usa SOLO `logout()`, como prueba de posesión de un fallback por `deviceId` (ver su
+    // docblock), no como mecanismo de detección de reuso de `refresh()`. Decisión del CTO: NO
+    // se implementa detección de reuso en el servidor.
+    //
+    // Lo que pasa de verdad si esta escritura tardía llega a pisar una rotación más nueva: el
+    // teléfono queda en disco con el token YA ROTADO (el que esta escritura tardía persistió,
+    // no el que el servidor reconoce como vigente después de la rotación más nueva). El
+    // próximo `refresh()` con ese token da 401, el circuit breaker cuenta el fallo y eventualmente
+    // abre el circuito, y el chofer termina teniendo que volver a loguearse (Entrega 28,
+    // `SESION_NO_VIGENTE`, pendiente de implementar) — no hay corrupción de datos ni sesión de
+    // otro chofer comprometida, solo esa degradación a login manual.
+    const renovado = await renovarLease(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), TTL_LEASE_REFRESH_SESION_MS);
+    if (!renovado) {
+      const relecturaTrasPerderLease = await cargarSesionMovil().catch(() => null);
+      if (
+        relecturaTrasPerderLease &&
+        relecturaTrasPerderLease.refreshToken !== enDiscoBajoLease.refreshToken
+      ) {
+        return relecturaTrasPerderLease;
+      }
+      Sentry.captureException(
+        new Error('Se perdió el lease refresh-sesion tras una rotación exitosa; no se persiste'),
+        { tags: { contexto: 'use-auth-movil', paso: 'lease-perdido-post-rotacion' } },
+      );
+      throw new Error(
+        'Se perdió el lease de refresh-sesion después de que el servidor ya rotó exitosamente; no hay forma segura de persistir sin arriesgar pisar un estado más nuevo. El próximo 401 exigirá un login limpio (caso aceptado explícitamente, ver el docblock de ejecutarRefresh).',
+      );
+    }
+    return await actualizarSesionMovil(enDiscoBajoLease, tokens);
+  } finally {
+    // Cooldown 0: a diferencia del drenado, acá no hace falta un piso entre intentos — el
+    // single-flight en memoria y el circuit breaker ya evitan machacar la red; el próximo
+    // contexto que necesite el lease debe poder tomarlo de inmediato.
+    await liberarLeaseConCooldown(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), 0);
+  }
+}
+
+/** Punto 3 (verify-fix, decisión del CTO): margen sobre `TTL_LEASE_REFRESH_SESION_MS` que
+ * `ejecutarLogout` espera además del TTL del lease — logout YA NO degrada al token de memoria
+ * si no consigue el lease a tiempo (ver el docblock de `ejecutarLogout`), así que tiene que
+ * esperar lo que haga falta. El lease vence SOLO (todo dueño legítimo lo suelta o lo deja
+ * expirar dentro de `TTL_LEASE_REFRESH_SESION_MS` desde que lo adquirió) — este margen extra
+ * solo cubre el jitter del poll (`INTERVALO_POLL_LEASE_REFRESH_MS`) y relojes no perfectamente
+ * sincronizados entre el momento en que ESTA espera arrancó y el momento en que el dueño previo
+ * (si lo hay) adquirió el suyo. */
+const MARGEN_ESPERA_LEASE_LOGOUT_MS = 5_000;
+
+/** Punto 3 (verify-fix ronda 6): número de intentos de `cargarSesionMovil()` dentro de
+ * `ejecutarLogout` antes de rendirse y devolver el error al llamador SIN tocar almacenamiento
+ * — ver el gap de Codex en el docblock de `ejecutarLogout`. */
+const REINTENTOS_LECTURA_SESION_LOGOUT = 3;
+
+async function leerSesionParaLogoutConReintentos(): Promise<SesionMovilGuardada | null> {
+  let ultimoError: unknown;
+  for (let intento = 0; intento < REINTENTOS_LECTURA_SESION_LOGOUT; intento++) {
+    try {
+      return await cargarSesionMovil();
+    } catch (error) {
+      ultimoError = error;
+    }
+  }
+  throw ultimoError;
+}
+
+/**
+ * Punto 3 (`/codex-debug verify-fix`, decisión del CTO — reemplaza el diseño anterior, que
+ * degradaba a `estado.sesion?.refreshToken` en memoria si no conseguía el lease a tiempo):
+ * lógica de `logout()` extraída a standalone (mismo patrón que `refrescar`/`ejecutarRefresh`)
+ * para poder testearla sin el arnés de React que este paquete no tiene (ver el comentario de
+ * `clasificarFalloAccessToken` más abajo).
+ *
+ * `use-auth-movil.service.ts:logout` (API) revoca por MATCH EXACTO del `refreshTokenHash`
+ * vigente, con un fallback que solo cubre UNA rotación de historia
+ * (`refreshTokenHashAnterior`). El `logout()` viejo mandaba `estado.sesion?.refreshToken`
+ * (React, en memoria) — si el headless task rotó dos veces (T0→T1→T2) mientras foreground
+ * seguía mostrando T0, el servidor no reconocía T0 y el logout terminaba en el camino no-op
+ * silencioso, dejando la sesión ABIERTA del lado del servidor. El fallback a memoria cuando el
+ * lease estaba ocupado reproducía EXACTAMENTE el mismo bug bajo contención — el hallazgo que
+ * cierra este cambio.
+ *
+ * Fix: SIEMPRE espera el lease `refresh-sesion` (el mismo de `ejecutarRefresh`) con poll hasta
+ * `TTL_LEASE_REFRESH_SESION_MS + MARGEN_ESPERA_LEASE_LOGOUT_MS` — nunca degrada a memoria. El
+ * lease vence SOLO (ningún dueño legítimo lo retiene más allá de su propio TTL), así que esa
+ * espera SIEMPRE termina consiguiéndolo salvo el caso patológico de abajo. Una vez con el lease,
+ * relee el refresh token PERSISTIDO (nunca la memoria) antes de revocar — con eso alcanza el
+ * token EXACTO que el servidor reconoce como vigente, sin importar cuántas rotaciones headless
+ * hayan pasado.
+ *
+ * Gap 4 (`/codex-debug verify-fix` ronda 6, decisión del CTO — reemplaza el diseño anterior, que
+ * SEGUÍA adelante y ejecutaba toda la sección crítica igual aunque `obtuvoLease` fuera `false`):
+ * sin lease no hay sección crítica — punto. Si el margen se agota (síntoma grave: SQLite
+ * inaccesible, reloj roto), NO se relee, revoca ni borra nada: se marca la intención de forma
+ * durable (`marcarLogoutSolicitado`) y se devuelve `'pendiente'` sin tocar el almacenamiento de
+ * la sesión. El chofer de todos modos ve la sesión cerrada YA (el caller, `logout()` en el hook,
+ * limpia el `estado` de React sin importar este resultado) — la limpieza real y la revocación
+ * server-side se completan en el próximo arranque o ciclo de drenado, cuando
+ * `intentarRevocacionesPendientes` encuentra la marca y reintenta `ejecutarLogout` completo
+ * (la sesión sigue intacta en disco mientras tanto, nunca se tocó sin el lease).
+ *
+ * Gap 5 (`/codex-debug verify-fix` ronda 6, decisión del CTO — reemplaza el diseño anterior, que
+ * ignoraba un fallo de `cargarSesionMovil()` y borraba la sesión igual, sin revocar ni dejar
+ * ningún registro): si la relectura falla tras `REINTENTOS_LECTURA_SESION_LOGOUT` intentos, se
+ * propaga el error al llamador SIN tocar almacenamiento — ni se borra la sesión local ni se
+ * persiste nada. La sesión queda intacta para un logout posterior.
+ *
+ * Orden (decisión del CTO, con lease y credenciales ya leídas): primero se persiste la
+ * INTENCIÓN de revocación (el refresh token leído) — así, si el proceso muere entre el borrado
+ * local y que el POST de red confirme, la intención sobrevive y `intentarRevocacionesPendientes`
+ * la retoma. Recién después se borra la sesión local (el chofer espera que "cerrar sesión"
+ * limpie el teléfono YA) y se intenta revocar en la red; al confirmar (204), se borra SOLO esa
+ * intención — nunca las de otros logouts que puedan estar en vuelo (ver `sesion-movil-store.ts`,
+ * punto 4).
+ *
+ * Marca la sesión como cerrada (`borrarSesionMovil`) ANTES de soltar el lease: cualquier
+ * `ejecutarRefresh` que estaba esperando este MISMO lease lo adquiere DESPUÉS, encuentra
+ * `cargarSesionMovil()` en `null` y aborta (`SesionCerradaEnRefreshError`) sin tocar la red ni
+ * persistir nada — ver ese chequeo arriba. Así, un refresh que "termina después" del logout
+ * nunca resucita una sesión ya cerrada en disco.
+ */
+export async function ejecutarLogout(
+  deviceIdParaLogout: string | undefined,
+  opciones?: {
+    // Punto 3 (code review 2026-09-25): solo lo pasa `intentarRevocacionesPendientes` cuando
+    // dispara este logout PORQUE leyó `hayLogoutSolicitado()` en `true` — nunca el logout
+    // directo del chofer (`logout()` en el hook), que no depende de esa marca. Ver el chequeo
+    // bajo lease más abajo.
+    soloSiSigueSolicitadoBajoLease?: boolean;
+  },
+): Promise<'completado' | 'pendiente'> {
+  const db = await abrirOutbox();
+  const tokenLease = generarTokenLeaseRefresh();
+  const obtuvoLease = await adquirirLeaseRefreshConEspera(
+    db,
+    tokenLease,
+    TTL_LEASE_REFRESH_SESION_MS + MARGEN_ESPERA_LEASE_LOGOUT_MS,
+  );
+  if (!obtuvoLease) {
+    // Gap 4: caso patológico (ver el docblock de arriba) — no debería ocurrir nunca dado el
+    // margen. Sin lease, NADA de lectura/revocación/borrado corre acá.
+    Sentry.captureException(
+      new Error('No se pudo adquirir el lease refresh-sesion para logout ni con margen'),
+      { tags: { contexto: 'use-auth-movil', paso: 'logout-lease-no-adquirido' } },
+    );
+    await marcarLogoutSolicitado().catch(() => {});
+    return 'pendiente';
+  }
+  try {
+    // Punto 3 (code review 2026-09-25): `intentarRevocacionesPendientes` pudo haber leído la
+    // marca de logout pendiente ANTES de que `guardarSesionMovil` (login nuevo, concurrente) la
+    // borrara — para cuando este logout consigue el lease, la sesión que `guardarSesionMovil`
+    // dejó en disco puede ya ser la NUEVA, no la que originó la marca. Relee la marca ACÁ, con
+    // el lease ya tomado (`guardarSesionMovil` no toma este lease al escribir, así que esto no
+    // cierra la ventana del todo, pero la reduce a lo que dura este `await`): si ya no está,
+    // un login más reciente la superó — no revocar ni tocar la sesión (nueva) que haya en
+    // disco. Riesgo residual documentado en `guardarSesionMovil`.
+    if (opciones?.soloSiSigueSolicitadoBajoLease) {
+      const sigueSolicitado = await hayLogoutSolicitado().catch(() => true);
+      if (!sigueSolicitado) {
+        return 'completado';
+      }
+    }
+    // Gap 5: si esto agota sus reintentos, se propaga SIN tocar almacenamiento — ver el
+    // docblock de arriba.
+    const vigente = await leerSesionParaLogoutConReintentos();
+    const refreshTokenParaRevocar = vigente?.refreshToken;
+    if (refreshTokenParaRevocar) {
+      // Orden (ver el docblock de arriba): persistir la intención PRIMERO.
+      const idRevocacion = await guardarRevocacionPendiente({
+        refreshToken: refreshTokenParaRevocar,
+        deviceId: deviceIdParaLogout,
+        intentos: 0,
+      });
+      await borrarSesionMovil();
+      try {
+        // Entrega 3: se manda el `deviceId` como fallback server-side — ver el docblock de
+        // `AuthMovilService.logout` para el porqué (refresh token localmente obsoleto por una
+        // rotación cuya respuesta el cliente nunca confirmó recibir).
+        await authMovilApi.logout(refreshTokenParaRevocar, deviceIdParaLogout);
+        // 204: la intención ya se cumplió — borrar SOLO esta entrada (nunca un borrado global,
+        // ver `sesion-movil-store.ts` punto 4: puede haber otras intenciones en vuelo).
+        await borrarRevocacionPendientePorId(idRevocacion);
+      } catch {
+        // Punto 3: revocación de red fallida — la intención ya quedó persistida arriba, no
+        // hace falta volver a guardarla. Se reintenta en el próximo arranque/drenado (ver
+        // `intentarRevocacionesPendientes`).
+      }
+    } else {
+      // Sin refresh token que revocar (nunca hubo sesión) — solo limpiar local.
+      await borrarSesionMovil();
+    }
+    return 'completado';
+  } finally {
+    await liberarLeaseConCooldown(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), 0);
+  }
+}
+
+/** Punto 3 (verify-fix, decisión del CTO): tope de intentos NO-red antes de descartar una
+ * revocación pendiente (ver `intentarRevocacionesPendientes`) — un fallo de RED no cuenta
+ * contra este tope (se reintenta indefinidamente hasta que haya conectividad); solo un fallo
+ * con respuesta real del servidor (4xx/5xx/contrato) tres veces seguidas hace desistir. */
+export const TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED = 3;
+
+/**
+ * Punto 3 (`/codex-debug verify-fix`, decisión del CTO): reintenta las revocaciones de logout
+ * que quedaron pendientes porque `ejecutarLogout` no pudo completarlas por falta de red (ver su
+ * docblock). Se llama desde `restaurarSesion` ("próximo arranque con red") y desde
+ * `intentarDrenarOportunista` (`drenaje-oportunista.ts`, "próximo ciclo de drenado") — ambos
+ * puntos donde ya hay, o estamos por confirmar, conectividad. No usa el lease `refresh-sesion`
+ * para ESTA parte: la sesión asociada a cada refresh token ya está borrada (el logout que la
+ * generó ya limpió el disco), así que no hay ningún token vigente con el que pueda chocar.
+ *
+ * Punto 4 (verify-fix ronda 6): itera TODAS las entradas de `listarRevocacionesPendientes`
+ * (antes era una sola) — cada una se procesa y se borra de forma independiente
+ * (`borrarRevocacionPendientePorId`), así que una que está en vuelo/reintentando nunca pisa ni
+ * borra a otra que se guardó mientras tanto (ver `sesion-movil-store.ts`, punto 4).
+ *
+ * Punto 3 (gap 4 de Codex): además, si un logout anterior no llegó a conseguir el lease
+ * `refresh-sesion` (`ejecutarLogout` devolvió `'pendiente'` y marcó la intención con
+ * `marcarLogoutSolicitado`, sin haber leído ningún token todavía), reintenta acá
+ * `ejecutarLogout` completo — misma cola/mismo punto de retoma que las revocaciones con token ya
+ * conocido. Si esta vez sí consigue el lease, sigue el camino normal completo (lee la sesión,
+ * que sigue intacta en disco, persiste la intención, borra local, revoca).
+ *
+ * NUNCA rechaza — todos los callers la disparan fire-and-forget.
+ *
+ * Punto 4 (code review 2026-09-25): esta función hace read-modify-write sobre la colección de
+ * revocaciones pendientes (ver `sesion-movil-store.ts`, que ahora sincroniza esa parte bajo
+ * `ID_LEASE_REVOCACIONES_PENDIENTES`) — pero llamados CONCURRENTES a esta misma función, dentro
+ * del MISMO contexto JS, igual multiplicaban trabajo redundante sin necesidad (cada uno vuelve a
+ * listar/reintentar las mismas entradas). `drenaje-oportunista.ts:120` la dispara sin `await` en
+ * cada fix (mitigado además por su propio throttle, punto 8) y `restaurarSesion` también la
+ * dispara al arrancar — de sobra para que dos pasadas se solapen en la práctica. Single-flight +
+ * piso de 10 s a nivel de MÓDULO (memoria, no cruza contextos — igual que `backoffActualMs` en
+ * `drenaje-oportunista.ts`, ver su comentario): si ya hay una pasada en vuelo, los llamadores
+ * subsiguientes ESPERAN esa misma promesa en vez de arrancar la suya; si la última pasada
+ * terminó hace menos del piso, se resuelve al toque sin hacer nada.
+ */
+const PISO_ENTRE_PASADAS_REVOCACIONES_MS = 10_000;
+let pasadaRevocacionesEnVuelo: Promise<void> | null = null;
+let ultimaPasadaRevocacionesMs = 0;
+
+/** SOLO para tests: ver el mismo patrón en `reiniciarThrottleDrenajeOportunistaParaTests`
+ * (`drenaje-oportunista.ts`) — sin este reset, los tests de este archivo (que corren varias
+ * pasadas en milisegundos de wall-clock real) se saltearían entero a partir de la segunda. Sin
+ * caller en producción. */
+export function reiniciarThrottleRevocacionesPendientesParaTests(): void {
+  pasadaRevocacionesEnVuelo = null;
+  ultimaPasadaRevocacionesMs = 0;
+}
+
+export function intentarRevocacionesPendientes(): Promise<void> {
+  if (pasadaRevocacionesEnVuelo) return pasadaRevocacionesEnVuelo;
+  if (Date.now() - ultimaPasadaRevocacionesMs < PISO_ENTRE_PASADAS_REVOCACIONES_MS) {
+    return Promise.resolve();
+  }
+  const pasada = ejecutarPasadaRevocacionesPendientes().finally(() => {
+    ultimaPasadaRevocacionesMs = Date.now();
+    pasadaRevocacionesEnVuelo = null;
+  });
+  pasadaRevocacionesEnVuelo = pasada;
+  return pasada;
+}
+
+async function ejecutarPasadaRevocacionesPendientes(): Promise<void> {
+  let pendientes: Array<RevocacionPendienteGuardada & { id: string }>;
+  try {
+    pendientes = await listarRevocacionesPendientes();
+  } catch {
+    pendientes = [];
+  }
+  for (const pendiente of pendientes) {
+    try {
+      await authMovilApi.logout(pendiente.refreshToken, pendiente.deviceId);
+      await borrarRevocacionPendientePorId(pendiente.id);
+    } catch (error) {
+      if (error instanceof AuthMovilApiError && error.kind === 'network') {
+        // Sin red todavía: se deja esta entrada intacta (no cuenta contra el tope) — se sigue
+        // igual con las demás entradas independientes.
+        continue;
+      }
+      const intentos = pendiente.intentos + 1;
+      if (intentos >= TOPE_INTENTOS_REVOCACION_PENDIENTE_NO_RED) {
+        Sentry.captureException(error, {
+          tags: { contexto: 'auth-movil', paso: 'revocacion-pendiente-agotada' },
+          extra: { intentos },
+        });
+        await borrarRevocacionPendientePorId(pendiente.id).catch(() => {});
+        continue;
+      }
+      // Reescribe la MISMA entrada (mismo refresh token ⇒ mismo id derivado) con el contador
+      // actualizado — nunca crea una entrada nueva ni toca las demás.
+      await guardarRevocacionPendiente({ ...pendiente, intentos }).catch(() => {});
+    }
+  }
+
+  let solicitado: boolean;
+  try {
+    solicitado = await hayLogoutSolicitado();
+  } catch {
+    return;
+  }
+  if (!solicitado) return;
+  try {
+    const idDispositivo = await obtenerDeviceIdMovil();
+    const resultado = await ejecutarLogout(idDispositivo, { soloSiSigueSolicitadoBajoLease: true });
+    if (resultado === 'completado') {
+      await borrarLogoutSolicitado().catch(() => {});
+    }
+    // Si sigue `'pendiente'`, la marca queda intacta a propósito — el próximo ciclo reintenta.
+  } catch {
+    // Best-effort (p. ej. `cargarSesionMovil` agotó sus reintentos dentro de `ejecutarLogout`):
+    // la marca queda intacta, se reintenta en el próximo ciclo — esta función nunca rechaza.
   }
 }
 
@@ -491,12 +1200,23 @@ export const UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA = 2;
  * `kind === 'network'`, que es offline legítimo: la app tiene que poder operar sin red (
  * requisito duro del producto), así que eso nunca debe encender la alarma. A propósito NO
  * resetea el contador ante un error de red (decisión (b) documentada arriba, junto a la
- * constante del umbral) — solo lo deja sin sumar. */
+ * constante del umbral) — solo lo deja sin sumar.
+ *
+ * Punto 10 (code review 2026-09-25): tampoco suma un `CircuitoRefreshAbiertoError` — tiene
+ * `status: 401` a propósito (ver su docblock en `refresh-circuit-breaker.ts`), pero es una
+ * decisión LOCAL (el circuito ya estaba abierto por fallos anteriores), nunca evidencia NUEVA
+ * del servidor. Contarlo acumularía la racha más rápido de lo que el servidor realmente la
+ * generó — el umbral (`UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA`) existe para confirmar con
+ * el servidor, no con el propio circuito local. */
 export function clasificarFalloAccessToken(
   error: unknown,
   fallos401AcumuladosPrevios: number,
 ): { fallos401Acumulados: number; marcarSesionNoRevalidada: boolean } {
-  if (error instanceof AuthMovilApiError && error.status === 401) {
+  if (
+    error instanceof AuthMovilApiError &&
+    error.status === 401 &&
+    !(error instanceof CircuitoRefreshAbiertoError)
+  ) {
     const fallos401Acumulados = fallos401AcumuladosPrevios + 1;
     return {
       fallos401Acumulados,
@@ -504,6 +1224,27 @@ export function clasificarFalloAccessToken(
     };
   }
   return { fallos401Acumulados: fallos401AcumuladosPrevios, marcarSesionNoRevalidada: false };
+}
+
+/**
+ * Fix drenado en background (2026-09-25): decide si `restaurarSesion` debe tratar el arranque
+ * como deslogueado por una marca `marcarLogoutSolicitado()` pendiente — ver el comentario del
+ * call site en `restaurarSesion`. Extraída a standalone y exportada para poder testearla sin el
+ * arnés de React que este paquete no tiene (mismo patrón que `clasificarFalloAccessToken`,
+ * `refrescar` y `ejecutarLogout`, todas en este archivo).
+ *
+ * Fail-closed: si la LECTURA de la marca falla (SecureStore no disponible/corrupto), se trata
+ * IGUAL que si la marca estuviera presente. Sin esa señal, no hay forma de descartar que un
+ * logout haya quedado pendiente — y el costo de un falso "sesión cerrada" (el chofer legítimo
+ * tiene que volver a loguearse) es mucho menor que el de dejar operando, sin saberlo, a un
+ * chofer que ya pidió cerrar sesión en un teléfono que puede estar compartido con otro.
+ */
+export async function debeRestaurarComoDeslogueado(): Promise<boolean> {
+  try {
+    return await hayLogoutSolicitado();
+  } catch {
+    return true;
+  }
 }
 
 function mensajeUsuario(error: unknown): string {

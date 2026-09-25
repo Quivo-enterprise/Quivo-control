@@ -106,8 +106,12 @@ export const authMovilApi = {
     return parseResponse(ContextoOperativoMovilSchema, payload);
   },
 
-  async logout(refreshToken: string): Promise<void> {
-    await request('/v1/mobile/auth/logout', { method: 'POST', body: { refreshToken } });
+  /** `deviceId` opcional (Entrega 3, `docs/plan-correccion-post-piloto-2026-09-09.md`): lo
+   * manda el caller (`use-auth-movil.ts`) como fallback server-side para cuando el
+   * `refreshToken` local ya quedó obsoleto por una rotación no confirmada — ver el docblock
+   * de `AuthMovilService.logout` (`apps/api/.../auth-movil.service.ts`) para el detalle. */
+  async logout(refreshToken: string, deviceId?: string): Promise<void> {
+    await request('/v1/mobile/auth/logout', { method: 'POST', body: { refreshToken, deviceId } });
   },
 };
 
