@@ -10,6 +10,7 @@ import {
   encolarEvento,
   generarEventId,
   obtenerEventosPorTipo,
+  obtenerVisitasPendientes,
 } from '../../db/outbox';
 import { gpsSpikeConfig, logVerboseHabilitado } from '../../gps/background-geolocation.config';
 import {
@@ -19,9 +20,20 @@ import {
   evaluarCriteriosGo,
   type MuestraBateria,
 } from '../../gps/battery-gap-monitor';
-import { claveCumplimiento, type DeteccionPuntoControl, type EstadoPuntoControl } from '../../gps/geofence';
-import { registrarPuntoGps } from '../../gps/headless-task';
-import { clavesCumplimientoDesdePayloads } from '../../gps/location-task';
+import {
+  claveCumplimiento,
+  UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+  type DeteccionPuntoControl,
+  type EstadoPuntoControl,
+} from '../../gps/geofence';
+import { confirmarVisitasVencidasEnCola, registrarPuntoGps } from '../../gps/headless-task';
+import { clavesCumplimientoDesdePayloads, combinarConVisitasPendientes } from '../../gps/location-task';
+import {
+  anunciarLlegadaPuntoControl,
+  asegurarPermisoNotificaciones,
+  limpiarAproximacionesAnunciadas,
+} from './anuncio-punto-control';
+import type { MotivoAnuncio } from './decidir-anuncio';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
 import {
   asegurarInicioRecorrido,
@@ -128,8 +140,8 @@ export function useGpsOperativo(
   puntosControl: PuntoControlPaquete[] = [],
   // Entrega 2 (drenado oportunista del outbox en background): el mismo `obtenerAccessToken`
   // que ya usa `usePaqueteDia`/`useSyncStatus` (`use-auth-movil.ts`), enhebrado desde
-  // `GpsProvider` — ver el call site en `onLocation` más abajo. Requerido (sin default): las
-  // dos pantallas que montan `GpsProvider` ya tienen esta función disponible.
+  // `GpsProvider` — ver el call site en `onLocation`/`onHeartbeat` más abajo. Requerido (sin
+  // default): las dos pantallas que montan `GpsProvider` ya tienen esta función disponible.
   obtenerAccessToken: () => Promise<string | null>,
 ) {
   const [tracking, setTracking] = useState(false);
@@ -148,6 +160,23 @@ export function useGpsOperativo(
   const [estadoPermisoActividad, setEstadoPermisoActividad] =
     useState<EstadoPermisoActividad>('no_solicitado');
   const [ultimaDeteccion, setUltimaDeteccion] = useState<DeteccionPuntoControl | null>(null);
+  // ENTREGA 6/7 (plan post-piloto 2026-09-09): aviso de aproximación (`fase: 'aproximacion'`),
+  // SEPARADO de `ultimaDeteccion` (que ahora solo lleva confirmaciones, `fase: 'confirmado'`) —
+  // `gps-provider.tsx` los consume por separado: éste dispara SOLO la voz informativa,
+  // `ultimaDeteccion` dispara vibración + notificación (+ el sonido custom foreground). Ver
+  // `deteccionAproximacion` en `ResultadoConstruirEventos` (`gps/location-task.ts`).
+  const [deteccionAproximacion, setDeteccionAproximacion] = useState<DeteccionPuntoControl | null>(
+    null,
+  );
+  // REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
+  // 2026-09-23): el anuncio de "llegaste" YA NO se deriva de la evidencia (`ultimaDeteccion`) —
+  // es la última decisión (`AnuncioDecidido`, `decidir-anuncio.ts`) que tomó el único punto de
+  // llamada dentro de `colaRegistroGps` (`gps/headless-task.ts`). `gps-provider.tsx` lo consume
+  // SOLO para el sonido custom EXTRA de foreground (`confirmacion-sonido.ts`) — la vibración y la
+  // notificación ya las ejecutó este mismo hook, ver `onLocation`/`onHeartbeat` más abajo.
+  const [ultimoAnuncioLlegada, setUltimoAnuncioLlegada] = useState<
+    { puntoControlId: string; pasada: number; motivo: MotivoAnuncio } | null
+  >(null);
   const [posicionActual, setPosicionActual] = useState<
     { lat: number; lng: number; speedKmh: number | null } | null
   >(null);
@@ -156,15 +185,10 @@ export function useGpsOperativo(
   const erroresEscritura = useRef(0);
   const puntosControlDetectados = useRef<Map<string, EstadoPuntoControl>>(new Map());
   const subscription = useRef<{ remove: () => void } | null>(null);
-  // Entrega 2: segundo punto de enganche del drenado oportunista, vía `onHeartbeat`
-  // (`heartbeatInterval: 60` en `background-geolocation.config.ts`, declarado ahí sin
-  // suscriptor hasta este cambio). `onLocation` (arriba) solo dispara con el vehículo en
-  // movimiento — `distanceFilter: 15` no emite nada con el motor apagado o el vehículo
-  // detenido en un control largo. El heartbeat es el único evento que sigue llegando cada 60 s
-  // pase lo que pase, así que sin él un layover prolongado podía dejar el outbox sin drenar
-  // aunque la app siguiera viva en background (no headless, no terminada). Ref separada del
-  // `subscription` de `onLocation` porque son dos suscripciones independientes al SDK, cada
-  // una con su propio ciclo de vida de limpieza.
+  // FIX POST-REVISIÓN (bug 2): suscripción SEPARADA de `onHeartbeat` — ver `onHeartbeat` más
+  // abajo. No comparte el mismo `subscription.current` que `onLocation`: las dos deben poder
+  // instalarse/removerse de forma independiente (el SDK expone un `remove()` propio por cada
+  // `addListener`).
   const heartbeatSubscription = useRef<{ remove: () => void } | null>(null);
   // QUI-P0: tercera suscripción al SDK, defensa en profundidad contra volver a estacionario en
   // medio de un recorrido (ver `crearManejadorReafirmarMovimiento`, `gps/seguimiento-continuo.ts`).
@@ -223,6 +247,14 @@ export function useGpsOperativo(
   // `iniciar()`) leen para no sembrar dos veces y para no suscribirse/arrancar antes de que
   // termine. Ver `sembrarCumplimientos` más abajo.
   const semillaPromise = useRef<Promise<void> | null>(null);
+  // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5, "semilla fallida"): `true` solo cuando
+  // `sembrarCumplimientos` terminó de leer el outbox SIN excepción — separado de
+  // `semillaPromise` a propósito, igual criterio que `semillasHidratadasPorSesion` en
+  // `gps/headless-task.ts`: la promesa de la siembra resuelve aunque su `catch` interno haya
+  // corrido, así que no alcanza para saber si el Map de estados quedó bien hidratado o vacío
+  // por un fallo transitorio (SQLite ocupada). `onLocation` lo consulta antes de procesar
+  // cumplimientos (ver más abajo).
+  const semillaHidratadaRef = useRef(false);
 
   const onLocation = useCallback(
     // La escritura al outbox (gps_point + cumplimiento_punto_control) vive en
@@ -264,20 +296,89 @@ export function useGpsOperativo(
         // (que lo re-emitiría como `pasada: 1`) o de perderse por no haber suscripción todavía.
         // La semilla nunca rechaza (best-effort, ver `sembrarCumplimientos`).
         await semillaPromise.current;
+        // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): si la siembra todavía no hidrató
+        // (falló la última vez), reintenta ACÁ MISMO antes de procesar este fix — "se reintenta
+        // en cada tick" — en vez de quedar pegado para siempre a la promesa fallida.
+        if (!semillaHidratadaRef.current) {
+          semillaPromise.current = sembrarCumplimientos();
+          await semillaPromise.current;
+        }
         const db = await abrirOutbox();
-        const { deteccion } = await registrarPuntoGps(
+        // FIX POST-REVISIÓN (punto 5): mientras no hidrate, no se procesan transiciones de
+        // cumplimiento — `puntosControl: []` hace que `construirEventosDeUbicacion` salte esa
+        // parte (ver su chequeo `contexto.puntosControl.length > 0`); la captura de `gps_point`
+        // sigue exactamente igual, no depende de esto.
+        const puntosControlDelTick = semillaHidratadaRef.current ? puntosControl : [];
+        // FIX POST-REVISIÓN (hallazgo 10, cleanup — "`void puntosRearmados` es código muerto"):
+        // `registrarPuntoGps` también devuelve `puntosRearmados` (histéresis de DETECCIÓN) — sin
+        // ningún consumidor acá desde el rediseño (`puntosRearmadosVoz`, la histéresis PROPIA de
+        // voz, es la que sí se usa). Se deja fuera de la desestructuración en vez de traerlo solo
+        // para descartarlo.
+        const {
+          deteccion,
+          deteccionAproximacion: nuevaAproximacion,
+          puntosRearmadosVoz,
+          anunciosLlegada,
+        } = await registrarPuntoGps(
           db,
           location,
-          { deviceId, sesionId, puntosControl },
+          { deviceId, sesionId, puntosControl: puntosControlDelTick },
           // B6 (hallazgo de revisión, bajo): se pasa el REF, no `.current` — la cola FIFO de
           // `registrarPuntoGps` difiere la ejecución, y `sembrarCumplimientos` puede reemplazar
           // el Map en el medio. Ver `ContenedorEstadosPuntosControl` (`gps/headless-task.ts`).
           puntosControlDetectados,
         );
+        // FIX POST-REVISIÓN (bug 4, ajustado por G1): libera el dedupe de voz de aproximación
+        // para los puntos cuya histéresis PROPIA de voz re-armó de verdad este tick — ver
+        // `limpiarAproximacionesAnunciadas` y el comentario largo de `puntosRearmadosVoz` en
+        // `gps/geofence.ts` (independiente de la histéresis de DETECCIÓN). Incondicional (no
+        // gatea en `settings.navegacionVoz`): limpiar el Set nunca hace daño si la voz está
+        // apagada (el Set solo tiene entradas de anuncios que SÍ se emitieron).
+        if (puntosRearmadosVoz.length > 0) limpiarAproximacionesAnunciadas(puntosRearmadosVoz);
         if (deteccion) setUltimaDeteccion(deteccion);
+        // ENTREGA 6/7: se actualiza en CADA tick con puntos de control (incluso a `null` cuando
+        // ninguno está en rango) — a diferencia de `ultimaDeteccion`, que solo cambia con una
+        // confirmación real. Sin el `null` explícito, la última aproximación anunciada quedaría
+        // "pegada" en el estado del hook después de que el vehículo se aleja.
+        setDeteccionAproximacion(nuevaAproximacion);
+        // REDISEÑO: `anunciosLlegada` YA fue DECIDIDO dentro de `registrarPuntoGps` (la cola) —
+        // acá SOLO se ejecuta (reclamar intención durable + programar notificación/vibración),
+        // el mismo camino que usa el headless (`anunciarLlegadaPuntoControl`,
+        // `anuncio-punto-control.ts`) — "el foreground no tiene disparador propio: consume las
+        // decisiones de esa misma cola".
+        //
+        // FIX POST-REVISIÓN (hallazgo 3, code review — "el chime suena aunque el reclamo se
+        // perdió"): antes, `setUltimoAnuncioLlegada` (que dispara el sonido custom de foreground,
+        // `confirmacion-sonido.ts`, en `gps-provider.tsx`) se llamaba INCONDICIONALMENTE, ANTES
+        // de saber si `anunciarLlegadaPuntoControl` de verdad reclamó/programó algo — si el
+        // reclamo se perdía (otra llamada ya estaba a cargo de la MISMA visita, o el reclamo
+        // mismo fallaba), el chime sonaba igual sin que hubiera pasado NADA. Ahora se llama
+        // recién cuando `anunciarLlegadaPuntoControl` resuelve `true` (reclamó Y programó de
+        // verdad — ver su docblock).
+        for (const anuncio of anunciosLlegada) {
+          anunciarLlegadaPuntoControl(
+            db,
+            anuncio.puntoControlId,
+            anuncio.pasada,
+            anuncio.motivo,
+            { sesionId, puntosControl: puntosControlDelTick },
+          )
+            .then((exitoso) => {
+              if (exitoso) {
+                setUltimoAnuncioLlegada({
+                  puntoControlId: anuncio.puntoControlId,
+                  pasada: anuncio.pasada,
+                  motivo: anuncio.motivo,
+                });
+              }
+            })
+            .catch((error: unknown) => {
+              Sentry.captureException(error, {
+                tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada' },
+              });
+            });
+        }
       } catch (error) {
-        // (el drenado de abajo, fuera de este catch, corre igual aunque esta escritura falle
-        // — ver el comentario junto a la llamada)
         // Sin este catch, `onLocation` (async) rechazaba y el fallo quedaba como unhandled
         // rejection: evidencia perdida en silencio.
         erroresEscritura.current += 1;
@@ -297,14 +398,6 @@ export function useGpsOperativo(
             erroresEnCorrida: erroresEscritura.current,
           },
         });
-        // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
-        // ESTO ES CAPTURA, no transporte — falló la escritura a SQLite (disco lleno, handle
-        // zombi, etc.), no el envío por red, así que SÍ tiene que verse. El texto viejo
-        // ("No se pudo guardar una ubicación en el outbox... la evidencia se perdió") era
-        // jerga técnica sin acción concreta para un chofer manejando. Este es en lenguaje de
-        // chofer y apunta a la causa más común y accionable (espacio en disco) — el
-        // `Sentry.captureException` de arriba sigue mandando el detalle técnico completo
-        // (código de error, conteo de la corrida) para diagnóstico.
         setErrorGps('El teléfono no pudo guardar tu recorrido. Revisá el espacio disponible.');
       }
 
@@ -351,14 +444,137 @@ export function useGpsOperativo(
     onLocationRef.current = onLocation;
   }, [onLocation]);
 
-  // Mismo patrón de ref que `onLocationRef` arriba, para el handler de `onHeartbeat` que se
-  // registra una sola vez más abajo: sin esto, el closure quedaría atado al
-  // `obtenerAccessToken` vigente al momento de suscribirse (potencialmente stale si el
-  // caller — `GpsProvider` — lo redefine entre renders).
-  const obtenerAccessTokenRef = useRef(obtenerAccessToken);
+  /**
+   * FIX POST-REVISIÓN (bug 2, "un vehículo detenido nunca confirma"): mitad foreground del fix
+   * — ver `manejarHeartbeatHeadless` (`gps/headless-task.ts`) para la mitad headless y el
+   * porqué completo. Sin un fix nuevo (vehículo detenido, `distanceFilter: 15`) ninguna visita
+   * en curso puede cerrar por el camino normal — el `heartbeat` del SDK
+   * (`heartbeatInterval: 60`) es el único evento que sigue llegando con el vehículo quieto.
+   *
+   * Deliberadamente NO escribe ningún `gps_point`: el heartbeat no trae una posición fresca
+   * (`HeartbeatEvent.location` es "the last-known location", no una lectura nueva) — solo
+   * evalúa si alguna visita ya lleva `>= UMBRAL_ANTIGUEDAD_CANDIDATO_MS` sin mejorar su mínimo
+   * y, si es así, la confirma con el candidato YA observado (mismo camino transaccional que el
+   * confirm normal — `aplicarConfirmacionesForzadas`, `gps/headless-task.ts`).
+   *
+   * FIX POST-REVISIÓN (R1, "evidencia duplicada por concurrencia"): la lectura del estado +
+   * `confirmarVisitasVencidas` + `aplicarConfirmacionesForzadas` corren ahora DENTRO de
+   * `confirmarVisitasVencidasEnCola` — la MISMA cola FIFO que serializa los fixes reales
+   * (`registrarPuntoGps`, `gps/headless-task.ts`). Antes corrían acá directo, por FUERA de la
+   * cola: un fix real concurrente (`onLocation`) podía leer la MISMA visita pendiente antes de
+   * que este heartbeat terminara de escribirla (o viceversa) y los dos terminaban emitiendo la
+   * MISMA pasada con `eventId` distintos — el servidor dedupea solo por `eventId` (QUI-241), así
+   * que el paso se contaba dos veces. `filtrarSesionActual: false` — a diferencia del heartbeat
+   * headless, `puntosControlDetectados` ya está scopeado a la sesión actual (`sembrarCumplimientos`
+   * lo reemplaza entero en cada cambio de `sesionId`), no hace falta filtrar de nuevo.
+   */
+  const onHeartbeat = useCallback(async () => {
+    // Entrega 2 (drenado oportunista del outbox en background): fuerza un fix fresco
+    // (`HeartbeatEvent.location` es la ÚLTIMA posición conocida, no una lectura nueva — ver el
+    // docblock de arriba) y lo persiste igual que cualquier otro punto — si el vehículo lleva
+    // rato detenido sin emitir por `onLocation` (`distanceFilter: 15` no dispara nada quieto),
+    // este es el único mecanismo que sigue dejando evidencia GPS cada 60 s durante ese layover.
+    // Va ANTES del resto (confirmación de visitas/anuncios) y en su PROPIO try/catch: un fallo
+    // acá es de instrumentación, nunca debe impedir que el resto del heartbeat corra.
+    try {
+      await BackgroundGeolocation.getCurrentPosition({ samples: 1, persist: true });
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'heartbeat-getCurrentPosition' },
+      });
+    }
+    // G1 (merge post-drenado, Entrega 31a): el heartbeat es, junto con el regreso a
+    // foreground (`crearManejadorForegroundActivo`), uno de los dos puntos que NO dependen
+    // de `onMotionChange`/`ACTIVITY_RECOGNITION` para notar que el plugin volvió a
+    // estacionario — ver el docblock de `reafirmarMovimientoSiEstacionario`
+    // (`gps/seguimiento-continuo.ts`). Corre cada 60 s pase lo que pase, con o sin ese
+    // permiso concedido.
+    try {
+      await reafirmarMovimientoSiEstacionario(BackgroundGeolocation, estaEnRecorrido);
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'heartbeat-reafirmar-movimiento' },
+      });
+    }
+    // LOW-MED (hallazgo de revisión, QUI-247): mismo reintento oportunista que `onLocation`
+    // (ver ese comentario) — el heartbeat es el ÚNICO evento que sigue llegando cada 60 s con
+    // o sin movimiento, así que sin este segundo enganche un layover prolongado justo después
+    // de un `iniciar()` que falló al escribir `inicio_recorrido` podía dejar el marcador sin
+    // ningún reintento hasta el próximo fix de `onLocation` (que puede tardar de más con el
+    // vehículo detenido).
+    if (!estadoInicioRecorrido.confirmado) {
+      try {
+        await asegurarInicioRecorrido(
+          estadoInicioRecorrido,
+          { abrirOutbox, encolarEvento },
+          { deviceId, sesionId },
+        );
+      } catch (error) {
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'heartbeat-reintentar-inicio-recorrido' },
+        });
+      }
+    }
+    try {
+      await semillaPromise.current;
+      const db = await abrirOutbox();
+      const { emitir, anunciosLlegada } = await confirmarVisitasVencidasEnCola(
+        db,
+        deviceId,
+        sesionId,
+        puntosControlDetectados,
+        Date.now(),
+        UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+        false,
+        puntosControl,
+      );
+      if (emitir.length > 0) {
+        // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
+        // ve el punto tachado aunque haya sido el heartbeat, no un fix nuevo, quien lo cerró.
+        setUltimaDeteccion(emitir[emitir.length - 1]?.deteccion ?? null);
+      }
+      // REDISEÑO: fallback de TIEMPO del anuncio de llegada — ver el docblock de
+      // `confirmarVisitasVencidasEnCola`. Mismo camino de ejecución que `onLocation`.
+      // FIX POST-REVISIÓN (hallazgo 3): el chime (`setUltimoAnuncioLlegada`) solo se dispara si
+      // `anunciarLlegadaPuntoControl` reclamó Y programó de verdad — ver el comentario largo en
+      // `onLocation`, arriba.
+      for (const anuncio of anunciosLlegada) {
+        anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
+          sesionId,
+          puntosControl,
+        })
+          .then((exitoso) => {
+            if (exitoso) {
+              setUltimoAnuncioLlegada({
+                puntoControlId: anuncio.puntoControlId,
+                pasada: anuncio.pasada,
+                motivo: anuncio.motivo,
+              });
+            }
+          })
+          .catch((error: unknown) => {
+            Sentry.captureException(error, {
+              tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-heartbeat' },
+            });
+          });
+      }
+    } catch (error) {
+      console.error('[QUIVO][gps] No se pudo procesar el heartbeat', error);
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'procesar-heartbeat' },
+      });
+    }
+    // Entrega 2: mismo motor que `onLocation` — `intentarDrenarOportunista` nunca rechaza (ver
+    // su docblock), así que corre sin su propio try/catch, incondicional al resultado del
+    // bloque de arriba (un heartbeat que falló en confirmar visitas igual puede tener trabajo
+    // de sync pendiente que drenar).
+    await intentarDrenarOportunista(obtenerAccessToken);
+  }, [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido, estaEnRecorrido]);
+
+  const onHeartbeatRef = useRef(onHeartbeat);
   useEffect(() => {
-    obtenerAccessTokenRef.current = obtenerAccessToken;
-  }, [obtenerAccessToken]);
+    onHeartbeatRef.current = onHeartbeat;
+  }, [onHeartbeat]);
 
   const suscribirUbicaciones = useCallback(() => {
     subscription.current?.remove();
@@ -370,62 +586,16 @@ export function useGpsOperativo(
         setErrorGps(`No se pudo registrar una ubicación (código ${String(error)}).`);
       },
     );
-
-    // Entrega 2: segundo enganche del drenado oportunista — ver el comentario de
-    // `heartbeatSubscription` arriba para el porqué. `getCurrentPosition({samples:1,
-    // persist:true})` fuerza un fix fresco (el evento de heartbeat solo trae la ÚLTIMA
-    // posición conocida, no una nueva — así lo documenta el SDK) y lo persiste igual que
-    // cualquier otro punto, ANTES de intentar drenar: si el vehículo lleva rato detenido sin
-    // emitir por `onLocation`, este es el único mecanismo que sigue dejando evidencia GPS
-    // cada 60 s durante ese layover. Ambos pasos (fix + drenado) van bajo el mismo try/catch
-    // defensivo que el resto del hook: un fallo acá es de transporte/instrumentación, nunca
-    // debe llegarle al chofer (principio rector del plan).
+    // FIX POST-REVISIÓN (bug 2): suscripción de heartbeat en el MISMO punto que la de
+    // ubicaciones (arranque manual e re-enganche al montar) — así el vehículo detenido en la
+    // TERMINAL, en la parada final de la ruta, también confirma su último punto de control.
     heartbeatSubscription.current?.remove();
     heartbeatSubscription.current = BackgroundGeolocation.onHeartbeat(() => {
-      void (async () => {
-        try {
-          await BackgroundGeolocation.getCurrentPosition({ samples: 1, persist: true });
-        } catch (error) {
-          Sentry.captureException(error, {
-            tags: { contexto: 'gps-foreground', paso: 'heartbeat-getCurrentPosition' },
-          });
-        }
-        // G1 (merge post-drenado, Entrega 31a): el heartbeat es, junto con el regreso a
-        // foreground (`crearManejadorForegroundActivo`), uno de los dos puntos que NO dependen
-        // de `onMotionChange`/`ACTIVITY_RECOGNITION` para notar que el plugin volvió a
-        // estacionario — ver el docblock de `reafirmarMovimientoSiEstacionario`
-        // (`gps/seguimiento-continuo.ts`). Corre cada 60 s pase lo que pase, con o sin ese
-        // permiso concedido.
-        try {
-          await reafirmarMovimientoSiEstacionario(BackgroundGeolocation, estaEnRecorrido);
-        } catch (error) {
-          Sentry.captureException(error, {
-            tags: { contexto: 'gps-foreground', paso: 'heartbeat-reafirmar-movimiento' },
-          });
-        }
-        // LOW-MED (hallazgo de revisión, QUI-247): mismo reintento oportunista que
-        // `onLocation` (ver ese comentario) — el heartbeat es el ÚNICO evento que sigue
-        // llegando cada 60 s con o sin movimiento, así que sin este segundo enganche un
-        // layover prolongado justo después de un `iniciar()` que falló al escribir
-        // `inicio_recorrido` podía dejar el marcador sin ningún reintento hasta el próximo fix
-        // de `onLocation` (que puede tardar de más con el vehículo detenido).
-        if (!estadoInicioRecorrido.confirmado) {
-          try {
-            await asegurarInicioRecorrido(
-              estadoInicioRecorrido,
-              { abrirOutbox, encolarEvento },
-              { deviceId, sesionId },
-            );
-          } catch (error) {
-            Sentry.captureException(error, {
-              tags: { contexto: 'gps-foreground', paso: 'heartbeat-reintentar-inicio-recorrido' },
-            });
-          }
-        }
-        // `intentarDrenarOportunista` nunca rechaza (ver su docblock) — no hace falta un
-        // catch propio acá.
-        await intentarDrenarOportunista(obtenerAccessTokenRef.current);
-      })();
+      // Merge (Entrega 31a + anuncio): main movió `getCurrentPosition`/reafirmar
+      // movimiento/reintento de `inicio_recorrido` al `onHeartbeat` real (arriba, useCallback),
+      // junto al resto de la lógica de anuncio — un solo camino, sin duplicar el fix forzado
+      // ni el drenado (que `onHeartbeat` ya hace al final).
+      void onHeartbeatRef.current();
     });
 
     // QUI-P0: defensa EN PROFUNDIDAD contra volver a estacionario en medio de un recorrido —
@@ -440,10 +610,11 @@ export function useGpsOperativo(
     motionChangeSubscription.current = BackgroundGeolocation.onMotionChange(
       crearManejadorReafirmarMovimiento(BackgroundGeolocation, estaEnRecorrido),
     );
-    // `deviceId`/`sesionId` en las deps: el handler de `onHeartbeat` de arriba los usa
-    // directamente (reintento de `inicio_recorrido`, QUI-247) — sin esto, un cambio de
-    // `sesionId` entre renders dejaría el heartbeat cerrado sobre una sesión vieja.
-  }, [estaEnRecorrido, deviceId, sesionId, estadoInicioRecorrido]);
+    // `deviceId`/`sesionId`/`estadoInicioRecorrido` NO van acá: el handler de `onHeartbeat`
+    // (arriba, su propio `useCallback`) es quien los usa directamente (reintento de
+    // `inicio_recorrido`, QUI-247) — esta función solo lo referencia vía `onHeartbeatRef`, que
+    // siempre apunta a la versión más reciente (ver el `useEffect` que lo mantiene al día).
+  }, [estaEnRecorrido]);
 
   /**
    * C1 (hallazgo de revisión CRÍTICO): siembra `puntosControlDetectados.current` desde el
@@ -476,12 +647,25 @@ export function useGpsOperativo(
         'cumplimiento_punto_control',
         sesionId,
       );
-      puntosControlDetectados.current = clavesCumplimientoDesdePayloads(eventosCumplimiento);
+      const base = clavesCumplimientoDesdePayloads(eventosCumplimiento);
+      // FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"):
+      // superpone las visitas PENDIENTES persistidas (SQLite) — ver el docblock de
+      // `combinarConVisitasPendientes` (`gps/location-task.ts`). Sin esto, matar y reabrir la
+      // app a mitad de una visita en curso la devolvía como si nunca hubiera pasado (o, con una
+      // pasada previa del mismo punto, como "ya confirmada" — la máquina de estados nunca más
+      // la re-evaluaba).
+      const visitasPendientes = await obtenerVisitasPendientes(db, sesionId);
+      puntosControlDetectados.current = combinarConVisitasPendientes(base, visitasPendientes);
+      // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): recién ACÁ, tras terminar sin
+      // excepción, se marca hidratada — ver el comentario largo de `semillaHidratadaRef`.
+      semillaHidratadaRef.current = true;
     } catch (error) {
       console.error('[QUIVO][gps] No se pudo sembrar cumplimientos desde el outbox', error);
       Sentry.captureException(error, {
         tags: { contexto: 'gps-foreground', paso: 'sembrar-cumplimientos' },
       });
+      // FIX POST-REVISIÓN (punto 5): NO se marca hidratada — `onLocation` reintenta la siembra
+      // en el próximo fix mientras siga en `false` (ver su uso más abajo).
     }
   }, [sesionId]);
 
@@ -502,6 +686,9 @@ export function useGpsOperativo(
         // Ignorar fallo silencioso (puede que no tenga permisos aún)
       });
 
+    // FIX POST-REVISIÓN (punto 5): nueva sesión (o primer montaje) — arranca sin hidratar hasta
+    // que `sembrarCumplimientos` termine bien.
+    semillaHidratadaRef.current = false;
     // C1 (hallazgo de revisión CRÍTICO): la siembra corre SIEMPRE al montar (keyed por
     // `sesionId`, ver las deps de este efecto), ANTES de decidir si re-enganchar la
     // suscripción — no solo cuando el chofer aprieta "Iniciar" (ver el comentario de
@@ -685,6 +872,18 @@ export function useGpsOperativo(
     erroresEscritura.current = 0;
     setPuntos(0);
     setUltimaDeteccion(null);
+
+    // HALLAZGO DE CAMPO (Entrega 7, Sentry build 10, Galaxy A71 Android 13): pedir
+    // `POST_NOTIFICATIONS` ACÁ, con la app en foreground y ANTES de tocar el SDK de
+    // geolocalización — `asegurarPermisoNotificaciones` (`./anuncio-punto-control.ts`) nunca
+    // rechaza (best-effort interno con su propio try/catch + Sentry), así que este `await` no
+    // necesita su propio try/catch y NUNCA bloquea "Iniciar recorrido" si el chofer deniega o
+    // el pedido falla: la vibración y la voz de aproximación no dependen de este permiso. Efecto
+    // colateral deseado: al resolverse ANTES de `BackgroundGeolocation.ready()/start()` de más
+    // abajo, si el chofer concede, la notificación NATIVA del foreground service del propio SDK
+    // (`background-geolocation.config.ts`, también gateada por este mismo permiso de Android
+    // 13+) queda visible desde el primer arranque, no solo la de confirmación de puntos.
+    await asegurarPermisoNotificaciones();
 
     // QUI-338 — VERIFICACIÓN PREVIA (brief punto 1): consultar el estado real de permiso y
     // servicio de ubicación ANTES de intentar `ready()`/`start()`, y ramificar según el caso
@@ -1050,6 +1249,64 @@ export function useGpsOperativo(
       }
 
       const db = await abrirOutbox();
+
+      // FIX POST-REVISIÓN (bug 2, diseño B "cierre del recorrido"): descarga TODAS las visitas
+      // pendientes y encola sus eventos ANTES del `fin_recorrido` de abajo — sin esto, una
+      // visita todavía "en el mínimo local" al momento de finalizar (el chofer para el motor y
+      // aprieta "Finalizar" antes de que la distancia vuelva a crecer, o antes de que pase
+      // `UMBRAL_ANTIGUEDAD_CANDIDATO_MS`) se perdía: nada volvía a evaluarla una vez detenido el
+      // tracking. `umbralMs: 0` fuerza la confirmación de CUALQUIER visita pendiente sin
+      // importar su edad — "ante la duda, emitir" (invariante del diseño). Encolar ANTES de
+      // `fin_recorrido` (no después) mantiene el orden causal del recorrido: el paso por el
+      // último punto de control queda registrado como parte del recorrido que cerró, no
+      // colgando después de que ya "terminó".
+      //
+      // FIX POST-REVISIÓN (R1, "evidencia duplicada por concurrencia"): corre DENTRO de
+      // `confirmarVisitasVencidasEnCola` (la MISMA cola FIFO que `registrarPuntoGps`) — antes
+      // corría directo, por fuera de la cola: un fix real que llegara justo antes de que el
+      // chofer apretara "Finalizar" podía solaparse con este cierre y terminar emitiendo la
+      // MISMA pasada dos veces con `eventId` distintos (el servidor solo dedupea por `eventId`,
+      // QUI-241). `filtrarSesionActual: false` — mismo motivo que `onHeartbeat`.
+      try {
+        // FIX POST-REVISIÓN (code review — "Finalizar puede dejar un 'llegaste' sin anunciar"):
+        // `umbralAnuncioMs: 0`, igual criterio que `umbralMs: 0` de arriba ("ante la duda,
+        // emitir"). Sin este 9° argumento explícito, `confirmarVisitasVencidasEnCola` caía a su
+        // default (`UMBRAL_ANUNCIO_PROXIMIDAD_MS`, 90 s, ver `decidir-anuncio.ts`) — una visita
+        // hecha MENOS de 90 s antes de apretar "Finalizar" se confirmaba (evidencia intacta, por
+        // el `umbralMs: 0` de la confirmación) pero nunca se anunciaba: el fallback de tiempo de
+        // `evaluarAnuncioDeHeartbeat` la descartaba por no haber esperado el umbral de 90 s que
+        // ya no tiene sentido exigir en un cierre — el chofer se queda sin la vibración/
+        // notificación de "llegaste" para el último punto de su recorrido.
+        const { anunciosLlegada } = await confirmarVisitasVencidasEnCola(
+          db,
+          deviceId,
+          sesionId,
+          puntosControlDetectados,
+          Date.now(),
+          0,
+          false,
+          puntosControl,
+          0,
+        );
+        // REDISEÑO: un cierre de recorrido también puede dejar una visita sin su "llegaste" —
+        // mismo camino de ejecución que `onLocation`/`onHeartbeat`.
+        for (const anuncio of anunciosLlegada) {
+          anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
+            sesionId,
+            puntosControl,
+          }).catch((error: unknown) => {
+            Sentry.captureException(error, {
+              tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-cierre' },
+            });
+          });
+        }
+      } catch (error) {
+        console.error('[QUIVO][gps] No se pudo descargar las visitas pendientes al finalizar', error);
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'descargar-visitas-pendientes-fin' },
+        });
+      }
+
       await encolarEvento(db, { deviceId, tipo: 'fin_recorrido', payload: { sesionId } });
 
       // A1 (hallazgo de revisión, QUI-216 criterio B): los huecos se calculan desde el
@@ -1128,7 +1385,7 @@ export function useGpsOperativo(
     } catch {
       setErrorGps('No se pudo detener correctamente el GPS. Intenta nuevamente.');
     }
-  }, [deviceId, sesionId, serializadorRestauracion, serializadorIniciar, estadoInicioRecorrido]);
+  }, [deviceId, sesionId, puntosControl, serializadorRestauracion, serializadorIniciar, estadoInicioRecorrido]);
 
   /**
    * B3 (hallazgo de revisión, bajo): Map SEPARADO de `puntosControlDetectados` — antes de este
@@ -1191,6 +1448,8 @@ export function useGpsOperativo(
     // UI.
     estadoPermisoActividad,
     ultimaDeteccion,
+    deteccionAproximacion,
+    ultimoAnuncioLlegada,
     posicionActual,
     iniciar,
     detener,

@@ -23,6 +23,10 @@ vi.mock('@sentry/react-native', () => ({
 vi.mock('../db/outbox', () => ({
   abrirOutbox: vi.fn().mockResolvedValue({}),
   encolarEvento: vi.fn(),
+  encolarEventoYLimpiarVisita: vi.fn(),
+  guardarVisitaPendiente: vi.fn().mockResolvedValue(undefined),
+  eliminarVisitaPendiente: vi.fn().mockResolvedValue(undefined),
+  obtenerVisitasPendientes: vi.fn().mockResolvedValue([]),
   obtenerEventosPorTipo: vi.fn(),
   adquirirLease: vi.fn().mockResolvedValue(true),
   liberarLeaseConCooldown: vi.fn().mockResolvedValue(undefined),
@@ -41,9 +45,21 @@ vi.mock('../features/operacion/drenaje-oportunista', () => ({
   intentarDrenarOportunista: vi.fn().mockResolvedValue(undefined),
 }));
 
+// REDISEÑO (anuncio de puntos de control): `anuncio-punto-control.ts` importa
+// `expo-notifications`/`expo-speech`, que arrastran el paquete `expo` (su `async-require`
+// referencia el global `__DEV__` de React Native, indefinido bajo vitest/Node) — se mockea
+// entero para que `import './headless-task'` no lo evalúe de verdad. Este archivo solo
+// ejercita `obtenerAccessTokenHeadless`, que no toca este módulo.
+vi.mock('../features/operacion/anuncio-punto-control', () => ({
+  anunciarDeteccionesDelTick: vi.fn().mockResolvedValue(undefined),
+  anunciarLlegadaPuntoControl: vi.fn().mockResolvedValue(undefined),
+  reintentarAnunciosLlegadaPendientes: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../shared/security/sesion-movil-store', () => ({
   actualizarSesionMovil: vi.fn(),
   cargarSesionMovil: vi.fn(),
+  hayLogoutSolicitado: vi.fn().mockResolvedValue(false),
   obtenerDeviceIdMovil: vi.fn(),
 }));
 

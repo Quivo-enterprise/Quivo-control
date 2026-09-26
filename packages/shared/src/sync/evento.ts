@@ -76,6 +76,19 @@ export type PayloadGpsPoint = z.infer<typeof PayloadGpsPointSchema>;
  * una vez más y se perdió el evento". OPCIONAL a propósito, igual que `tsFix`: APKs
  * anteriores a este cambio nunca lo van a mandar, y esos eventos siguen siendo válidos sin
  * él (se persisten con `pasada: null`, nunca se rechazan).
+ *
+ * `distanciaEntradaM`/`distanciaMinAproximacionM` (ENTREGA 6, plan post-piloto 2026-09-09):
+ * la máquina de estados ya NO emite el evento en el instante de ENTRADA al radio de
+ * detección — lo difiere hasta el "mínimo local" (el fix más cercano al punto real de la
+ * visita en curso, detectado cuando la distancia empieza a crecer de nuevo; ver el comentario
+ * largo de "mínimo local" en `filtrarNuevosCumplimientos`). `distanciaEntradaM` conserva el
+ * dato que antes viajaba como `distanciaM` (la distancia del fix que hizo `cumplido=true`);
+ * `distanciaMinAproximacionM` es la distancia real mínima observada. Server-side esto es
+ * SOLO evidencia adicional — `procesarCumplimientoEnTx` (`ingesta-worker.service.ts`) sigue
+ * revalidando con `ST_DWithin` contra `lat`/`lng` y `radioToleranciaM`, sin leer estos campos
+ * (el mínimo local SIEMPRE cae dentro del radio, así que la revalidación sigue pasando sin
+ * cambios). AMBOS opcionales por el mismo motivo que `pasada`: retrocompatibilidad con APKs
+ * anteriores a esta entrega.
  */
 export const PayloadCumplimientoPuntoControlSchema = z.object({
   sesionId: z.string().min(1),
@@ -84,6 +97,8 @@ export const PayloadCumplimientoPuntoControlSchema = z.object({
   lng: z.number(),
   tsFix: z.string().datetime({ offset: true }).optional(),
   pasada: z.number().int().positive().optional(),
+  distanciaEntradaM: z.number().nonnegative().optional(),
+  distanciaMinAproximacionM: z.number().nonnegative().optional(),
 });
 export type PayloadCumplimientoPuntoControl = z.infer<typeof PayloadCumplimientoPuntoControlSchema>;
 
