@@ -33,7 +33,7 @@
 
 Nada de esto tiene `verify-fix` de Codex (vuelve el 2026-09-27 15:46) ni prueba en teléfono. El `verify-fix` retroactivo es el paso 4. Lo del teléfono va en la prueba única sobre el RC (paso 7).
 
-**Pendiente, en este orden:**
+**Pendiente, en este orden** (actualizado en la segunda sesión del 09-26: la 9 mergeada en #91 y la 28 en #92; lo que sigue es el punto 3):
 
 1. **Entrega 28 — `fix/sesion-no-vigente`** (worktree `../Quivo-control-sesion-no-vigente`, pusheada en `0ddb239`, con `main` mergeado).
    - **Verificado por el chairman:** tsc 0 · 530/530 · lint 0 errores. API: tsc 0; los tests de auth-movil (32/32) los corrió el agente.
@@ -43,11 +43,11 @@ Nada de esto tiene `verify-fix` de Codex (vuelve el 2026-09-27 15:46) ni prueba 
      - **Identidad del token:** antes de cualquier acción destructiva relee SecureStore bajo el lease y compara el token rechazado con el guardado.
      - **Sin recorrido activo:** va al login.
      - **Con recorrido activo:** banner bloqueante, sin sync; el logout ocurre recién después de Finalizar. El recorrido activo se detecta con el módulo `estado-recorrido-activo.ts`.
-   - **Falta:**
-     - (a) **Copy con voseo por error del brief:** `operation-screen.tsx:370` dice "Tocá Finalizar y volvé a iniciar sesión.". La app tutea, así que debe decir "Toca Finalizar y vuelve a iniciar sesión." Lo corrige un Sonnet.
-     - (b) Por la regla de una sola vuelta, **no se re-revisa completo.** El chairman lee el diff `ed86055..0ddb239` para confirmar que los hallazgos 1–4 quedaron cubiertos.
-     - (c) PR → CI → merge.
-   - **Riesgo sin test:** reabrir la app con el flag puesto y un recorrido activo. Depende del timing de efectos (`suscribirseARecorridoActivo`). Va en la prueba única del RC.
+   - **Cierre (2026-09-26, segunda sesión) — PR #92:**
+     - (a) Copy en tuteo: `86a0f22`.
+     - (b) El chairman leyó el diff del rescope y encontró **1 hallazgo alto**. El "riesgo sin test" de la reapertura no dependía del timing: fallaba siempre. `useGpsOperativo` publicaba el `false` inicial de `tracking` al montar. `restaurarSesion` lo tomaba como veredicto, borraba la sesión con el recorrido activo, y el headless apagaba el tracking sin `fin_recorrido`. Fix en `a6a5b53`: solo se publican veredictos reales (re-enganche, iniciar o detener) y el cierre se dispara por nivel (`sesionNoVigente && !tracking`), lo que también cubre la carrera del banner trabado. Tiene 2 tests de la secuencia; el hook sigue sin arnés de React.
+     - Verificado por el chairman sobre `main` + la rama: mobile tsc 0 · 539/539 · lint 0 errores; API tsc 0 · auth-movil 32/32.
+   - **Riesgo que queda:** el orden real de efectos en el teléfono. Se prueba en el RC: matar la app a mitad de recorrido, revocar la sesión y reabrir.
 2. **Entrega 9 — `fix/movil-toast-dedupe`** (worktree `../Quivo-control-toast`, pusheada en `4d29bbc`).
    - Dedupe por `{puntoControlId, pasada}`, con fail-open si falta `pasada`. Función pura `debeMostrarToast` con 7 tests.
    - El agente corrió su propio `/code-review` y aplicó un hallazgo alto: el ref se resetea cuando `ultimaDeteccion` vuelve a `null`. Sin eso, el primer punto de un recorrido nuevo que coincidía con el último del anterior quedaba silenciado.
