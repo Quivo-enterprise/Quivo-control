@@ -48,10 +48,15 @@ Nada de esto tiene `verify-fix` de Codex (vuelve el 2026-09-27 15:46) ni prueba 
      - (b) Por la regla de una sola vuelta, **no se re-revisa completo.** El chairman lee el diff `ed86055..0ddb239` para confirmar que los hallazgos 1–4 quedaron cubiertos.
      - (c) PR → CI → merge.
    - **Riesgo sin test:** reabrir la app con el flag puesto y un recorrido activo. Depende del timing de efectos (`suscribirseARecorridoActivo`). Va en la prueba única del RC.
-2. **Entrega 9 — `fix/movil-toast-dedupe`** (worktree `../Quivo-control-toast`, pusheada en `0e36dfa`).
+2. **Entrega 9 — `fix/movil-toast-dedupe`** (worktree `../Quivo-control-toast`, pusheada en `4d29bbc`).
    - Dedupe por `{puntoControlId, pasada}`, con fail-open si falta `pasada`. Función pura `debeMostrarToast` con 7 tests.
-   - El agente se cortó con el cambio de cuenta. El chairman auditó el diff y lo commiteó: tsc 0 · 520/520 · lint 0 errores.
-   - **Falta:** `/code-review` corto → PR → CI → merge.
+   - El agente corrió su propio `/code-review` y aplicó un hallazgo alto: el ref se resetea cuando `ultimaDeteccion` vuelve a `null`. Sin eso, el primer punto de un recorrido nuevo que coincidía con el último del anterior quedaba silenciado.
+   - Hallazgos que el agente dejó fuera de alcance y van a deuda:
+     - deduplicar en el productor (`setUltimaDeteccion`) y no en cada consumidor;
+     - el contador de `simularDeteccion` en `__DEV__`;
+     - la regla de identidad duplicada entre `ultimoSonado` y el toast.
+   - Verificado por el chairman: tsc 0 · 520/520. (Error del chairman: creyó que el agente había muerto con el cambio de cuenta y commiteó su WIP como `0e36dfa`. El agente siguió encima y no se perdió nada.)
+   - **Falta:** PR → CI → merge. El review ya está hecho.
 3. **Paso 4:** `/codex-debug verify-fix` retroactivo sobre #87, #89, #88 y la 28. Solo bloquea un `masks_symptom` en un camino real.
 4. **Paso 5 (lo corre el CTO):** deploy de `main` con la API de la 28. Primero `gcloud run jobs update quivo-migraciones --project quivo-control-prod --region southamerica-west1 --task-timeout=1800`, después `! scripts/deploy-gcp.sh <tag>` y el recompute de `docs/runbooks/retencion-gps.md`. El preflight está en el retome de la 3.ª sesión del 09-25. **La API va antes que el APK.**
 5. **Paso 6:** lista de features y fixes al CTO (memoria `apk-build-11-changelog-antes-de-lanzar`), y con su OK, el RC con `eas build --platform android --profile production`.
@@ -60,7 +65,7 @@ Nada de esto tiene `verify-fix` de Codex (vuelve el 2026-09-27 15:46) ni prueba 
 - **`packages/shared` se consume desde `dist`.** En un worktree recién mergeado, tsc falla con "no exported member" hasta que se corre `rm -rf dist && pnpm -s build` en `packages/shared`.
 - **El lint válido es `pnpm lint`** (`eslint src`). `eslint .` da errores falsos en `plugins/*.js` y `*.cjs`.
 - **`gh` de esta máquina no tiene `pr update-branch`.** Para poner una rama al día: `git merge origin/main` en su worktree.
-- **El cambio de cuenta de Claude a mitad de sesión corta a los subagentes en vuelo.** Después de un `/login`, auditar los worktrees.
+- **Un `/login` a mitad de sesión no corta a los subagentes en vuelo, pero sí puede frenar su progreso visible.** No commitear su trabajo a medias: esperar su notificación.
 
 **Acción del CTO, en paralelo:** comprar la licencia de Transistorsoft. El trial vence el 2026-10-25 con `grace_builds` 0, y el build 12 va a caer después de esa fecha.
 
