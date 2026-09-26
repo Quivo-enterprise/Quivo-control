@@ -367,7 +367,7 @@ export function OperationScreen(
         {props.sesionNoVigente ? (
           <View style={styles.sesionNoRevalidadaContainer}>
             <Text accessibilityRole="alert" style={styles.dangerNotice}>
-              Tu sesión venció. Tocá Finalizar y volvé a iniciar sesión.
+              Tu sesión venció. Toca Finalizar y vuelve a iniciar sesión.
             </Text>
             <Button
               variant="danger"
