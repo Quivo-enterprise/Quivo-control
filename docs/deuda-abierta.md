@@ -128,6 +128,11 @@ PgBouncer. La trampa y la mitigación para el piloto están en
 
 ---
 
+### Detectado en el deploy del build 11 (2026-09-26)
+
+- **Redis `quivo-redis` en `maxmemory-policy` `volatile-lru`.** BullMQ exige `noeviction`: con la memoria llena, Redis podría desalojar claves de jobs y se perderían lotes de sync encolados. El worker lo avisa en cada arranque. Fix de una línea, que decide el CTO: `gcloud redis instances update quivo-redis --region southamerica-west1 --project quivo-control-prod --update-redis-config maxmemory-policy=noeviction`. Hoy la instancia es de 1 GB y tiene poca carga.
+- **`repeat:marcar-vencidas` en `quivo-api`: `could not renew lock` / `Missing lock`**, desde al menos el 2026-09-14. Hipótesis sin verificar: el job repetible corre en el servicio de la API, al que Cloud Run le frena la CPU fuera de las requests, así que el timer que renueva el lock se atrasa. Candidato: mover el job al worker pool.
+
 ## El gate GPS: sigue sin medirse
 
 Los 4 criterios GO de [`spike-gps.md`](spike-gps.md) —batería <5%/8 h, sin huecos >2 min,

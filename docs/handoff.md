@@ -28,10 +28,9 @@
   - `scripts/recompute-resumen-gps.sh`, con el SQL en `scripts/sql/`, que ahora toma un lock contra el worker y usa la jornada boliviana explícita.
   - `--task-timeout=1800` en `deploy-gcp.sh`.
   - Probado en un Postgres 16 descartable: el lock, el timeout y la jornada. Contra prod no se probó.
+- **Paso 5 HECHO** (tag `b11-20260926`, `main@4135940`). Verificado; el detalle está en el plan. Recompute con 0 filas: esperable, sin ingesta. Deuda nueva registrada: Redis `volatile-lru` → `noeviction` (decide el CTO).
 - **Siguiente, en orden:**
-  1. El CTO corre el paso 5: `! scripts/deploy-gcp.sh b11-<fecha>` y después `! scripts/recompute-resumen-gps.sh`.
-  2. El chairman verifica.
-  3. Paso 7 en el teléfono.
+  1. Paso 7 en el teléfono, con el RC build 12.
   4. Paso 4 (Codex, desde el 2026-09-27 15:46).
 - **Trampa local:** después de mergear PRs móviles, `node_modules` puede quedar viejo. Correr `DATABASE_URL=postgresql://build:build@localhost:5432/build_placeholder pnpm install --frozen-lockfile`.
 

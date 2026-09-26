@@ -104,7 +104,20 @@ día D. En el primer uso, el chairman lee el log de la ejecución.
 - El job `quivo-migraciones` tiene `timeoutSeconds` 600; la última ejecución (09-22) salió OK.
 - **El tag `v1` ya no apunta a lo que corre**: `v1` = `sha256:07446b04…`, que no es `ed3c47`. **El rollback se hace por revisión o por digest, nunca por el tag `v1`**. Usar `--image=…/api@sha256:ed3c4732365eba558ea9b3061903c38b88cddd721dfd042a1569e4ead0cdf03e` para el worker.
 
-### Paso 5 — deploy de `main` a prod (el CTO corre; el chairman verifica solo en lectura)
+### Paso 5 — HECHO (2026-09-26, ~20:20 UTC, tag `b11-20260926`, `main@4135940`)
+
+Verificado por el chairman, solo en lectura:
+- **Migraciones:** `quivo-migraciones-vww9r` aplicó `20260922100000_gps_sesion_resumen` y `20260923090000_refresh_token_hash_anterior` en menos de 1 s. La rotación de la contraseña de `quivo_app` (`ghx5v`) salió OK. El job queda con timeout de 1800 s.
+- **Tráfico:** `quivo-api-00008-dgj` y `quivo-web-00004-f5v` con el 100 %. `quivo-worker-00002-xdk` corre la imagen `b11-20260926` y está "escuchando la cola de sync".
+- **Health:** `/v1/health/ready` da ok (db up, redis up) en las dos URLs de la API; `/en-vivo` y la raíz del panel dan 200.
+- **Recompute:** `quivo-migraciones-rvr59` pasó por BEGIN, LOCK, INSERT 0 filas y COMMIT. Son 0 filas porque no hay puntos hoy ni ayer: nadie usa el build 10.
+- **Errores desde el deploy, ninguno nuevo:**
+  - `could not renew lock` / `Missing lock` del job `repeat:marcar-vencidas` en `quivo-api`, que ya aparecía el 2026-09-14.
+  - La advertencia de BullMQ "Eviction policy is volatile-lru. It should be noeviction" sobre `quivo-redis`, que ya aparecía antes del deploy.
+  - Los dos van a `docs/deuda-abierta.md`. El segundo es un riesgo real de perder jobs con la memoria llena: corregirlo con `gcloud redis instances update quivo-redis --update-redis-config maxmemory-policy=noeviction`, previa decisión del CTO.
+- **Rollback, si hiciera falta:** api/worker `api@sha256:ed3c4732…`, web `web@sha256:86801ec8…`, las revisiones anteriores.
+
+### Paso 5 — runbook original (el CTO corre; el chairman verifica solo en lectura)
 
 Ventana: cualquier hora. **El build 10 ya no lo usa nadie** (el CTO, 2026-09-26), así que no hay ingesta en vivo que corra carrera con el recompute. Igual el SQL toma `LOCK TABLE gps_sesion_resumen IN SHARE ROW EXCLUSIVE MODE` con `lock_timeout` 30 s, y usa la jornada boliviana explícita en vez de `CURRENT_DATE`, que en UTC falla entre las 20:00 y las 24:00 de Bolivia. Son los hallazgos de Codex sobre el SQL original del runbook.
 
