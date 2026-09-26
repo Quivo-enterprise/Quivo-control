@@ -425,9 +425,6 @@ export function OperationScreen(
         onFinish={confirmarFinalizacion}
         panY={sheetPanY}
         gpsError={gps.errorGps}
-        iniciando={gps.iniciando}
-        guardandoRecorridoAnterior={gps.guardandoRecorridoAnterior}
-        deteniendo={gps.deteniendo}
       />
 
       <Modal

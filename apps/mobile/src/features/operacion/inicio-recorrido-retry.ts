@@ -130,16 +130,5 @@ export async function asegurarInicioRecorrido<Db>(
     eventId,
     ts,
   });
-  // Punto 6 (rediseño iniciar()/detener(), 2026-09-25): marcar `confirmado` SOLO si
-  // `estado.eventId` sigue siendo el mismo `eventId` que este intento acaba de escribir. Con
-  // `detener()` ya no esperando a un `iniciar()` en curso, un intento invalidado puede seguir en
-  // vuelo (colgado en este mismo `await encolarEvento`) mientras un `iniciar()` NUEVO ya llamó
-  // `reiniciarEstadoInicioRecorrido` (nuevo `eventId`/`ts`) para el recorrido siguiente. Si el
-  // intento viejo, al resolver tarde, marcara `confirmado = true` sin este chequeo, pisaría el
-  // estado "sin confirmar" del recorrido NUEVO con un `true` que en realidad certifica el evento
-  // del recorrido viejo — el reintento oportunista (`onLocation`/heartbeat/`detener()`) del
-  // recorrido nuevo dejaría de reintentar creyendo que ya está escrito.
-  if (estado.eventId === eventId) {
-    estado.confirmado = true;
-  }
+  estado.confirmado = true;
 }
