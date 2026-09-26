@@ -6,9 +6,9 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Próxima entrega: APK conductor build 11 — plan aprobado 2026-09-23
+## Próxima entrega: APK conductor build 11 — plan v2 del 2026-09-26 (reemplaza al del 09-23)
 
-**Plan: [`plan-apk-build-11.md`](plan-apk-build-11.md).** Decisiones del CTO:
+**Plan: [`plan-apk-build-11.md`](plan-apk-build-11.md).** Decisiones del CTO del 09-23 (el alcance y la rama posición cambiaron en el v2):
 
 - **Alcance P0 completo:** cerrar las 4 ramas móviles (Entregas 1–7, 7b, 25, 31) y sumar las Entregas 8, 9, 26 y 28.
 - **Radio:** detectar a 150 m y confirmar a 40 m. Cierra la decisión abierta #1.
@@ -18,9 +18,25 @@
 - **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
 - **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
 
-### Punto de retome — cierre de la cuarta sesión del 2026-09-25
+### Punto de retome — 2026-09-26: plan v2 del build 11
 
-**Leer esto primero.** Reemplaza al retome de la tercera sesión (queda abajo como histórico; su tabla de
+**Leer esto primero.** El plan se rehízo por loop. **Fuente de verdad: [`plan-apk-build-11.md`](plan-apk-build-11.md) (v2).**
+
+Decisiones del CTO:
+- **Posición:** vuelve a `79e832b`. Los fixes 1–5 de abajo **quedan descartados**.
+- **Alcance:** 3 ramas + Entregas 28 y 9. Las Entregas 8 y 26 pasan al build 12.
+- **Deploy:** lo corre el CTO con `!`.
+
+Reglas anti-loop:
+- Una sola vuelta de review por rama. Solo bloquea un `high` en un camino real.
+- El handoff viaja dentro del PR de código.
+- Una sola prueba en teléfono, sobre el RC.
+
+Meta: build en los teléfonos antes del **2026-10-10**. La licencia trial vence el 2026-10-25.
+
+### Punto de retome — cierre de la cuarta sesión del 2026-09-25 (histórico, reemplazado por el plan v2 del 2026-09-26)
+
+Reemplaza al retome de la tercera sesión (queda abajo como histórico; su tabla de
 ramas y su preflight de deploy siguen valiendo salvo lo que se corrige acá). Todo lo de esta sesión es
 **app móvil del conductor** (`apps/mobile`, APK build 11), rama `fix/movil-posicion-en-vivo`.
 
