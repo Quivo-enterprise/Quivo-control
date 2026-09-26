@@ -56,7 +56,7 @@ Nada de esto tiene `verify-fix` de Codex (vuelve el 2026-09-27 15:46) ni prueba 
      - el contador de `simularDeteccion` en `__DEV__`;
      - la regla de identidad duplicada entre `ultimoSonado` y el toast.
    - Verificado por el chairman: tsc 0 · 520/520. (Error del chairman: creyó que el agente había muerto con el cambio de cuenta y commiteó su WIP como `0e36dfa`. El agente siguió encima y no se perdió nada.)
-   - **Falta:** PR → CI → merge. El review ya está hecho.
+   - **Hecho:** PR #91 (con `main` mergeado). El chairman leyó el diff antes de abrirlo y no encontró hallazgos nuevos. Se mergea con CI verde.
 3. **Paso 4:** `/codex-debug verify-fix` retroactivo sobre #87, #89, #88 y la 28. Solo bloquea un `masks_symptom` en un camino real.
 4. **Paso 5 (lo corre el CTO):** deploy de `main` con la API de la 28. Primero `gcloud run jobs update quivo-migraciones --project quivo-control-prod --region southamerica-west1 --task-timeout=1800`, después `! scripts/deploy-gcp.sh <tag>` y el recompute de `docs/runbooks/retencion-gps.md`. El preflight está en el retome de la 3.ª sesión del 09-25. **La API va antes que el APK.**
 5. **Paso 6:** lista de features y fixes al CTO (memoria `apk-build-11-changelog-antes-de-lanzar`), y con su OK, el RC con `eas build --platform android --profile production`.

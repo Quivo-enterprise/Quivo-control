@@ -10,6 +10,7 @@ import Animated, {
 import { Ionicons } from '@expo/vector-icons';
 import { quivoColors, quivoFonts, quivoSpacing } from '../../shared/theme/quivo-theme';
 import type { DeteccionPuntoControl } from '../../gps/geofence';
+import { debeMostrarToast, type IdentidadToastMostrado } from './control-feedback-toast.logic';
 
 interface ControlFeedbackToastProps {
   ultimaDeteccion: DeteccionPuntoControl | null;
@@ -19,7 +20,15 @@ export function ControlFeedbackToast({ ultimaDeteccion }: ControlFeedbackToastPr
   const [queue, setQueue] = useState<DeteccionPuntoControl[]>([]);
   const [current, setCurrent] = useState<DeteccionPuntoControl | null>(null);
   const timerRef = useRef<NodeJS.Timeout | undefined>(undefined);
-  
+  // ENTREGA 9 (plan post-piloto 2026-09-09, "deduplicar el toast de confirmación", síntoma 11):
+  // comparación por identidad análoga a `ultimoSonado` (`gps-provider.tsx`) — identidad de la
+  // última detección ya encolada, para no pushear de nuevo solo porque cambió la REFERENCIA de
+  // `ultimaDeteccion` (re-render) sin que cambiara el `{puntoControlId, pasada}` real. Ver
+  // `debeMostrarToast`. NO es el mismo ref: éste vive en este componente (se pierde al
+  // desmontar) y dedupea `ultimaDeteccion` (evidencia, `pasada` opcional), no
+  // `ultimoAnuncioLlegada` (decisión ya tomada, `pasada` siempre presente).
+  const ultimoMostrado = useRef<IdentidadToastMostrado | null>(null);
+
   // Animations for modal entry/exit
   const containerOpacity = useSharedValue(0);
   const containerScale = useSharedValue(0.8);
@@ -34,8 +43,25 @@ export function ControlFeedbackToast({ ultimaDeteccion }: ControlFeedbackToastPr
   const dismissTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   useEffect(() => {
-    if (!ultimaDeteccion || !ultimaDeteccion.cumplido) return;
-    setQueue((prev) => [...prev, ultimaDeteccion]);
+    // FIX (revisión, hallazgo 1): `ultimaDeteccion` vuelve a `null` al arrancar un recorrido
+    // nuevo (`ejecutarIniciar`, `use-gps-operativo.ts`) — sin este reset, la identidad de la
+    // última confirmación del recorrido ANTERIOR sobrevive, y como `pasada` arranca de nuevo en
+    // 1 por sesión (`claveCumplimiento` es `${sesionId}:${puntoControlId}`, `geofence.ts`), la
+    // primera confirmación de la sesión nueva en el MISMO punto de control (recorridos que
+    // empiezan/terminan en el mismo punto) quedaría deduplicada por error.
+    if (!ultimaDeteccion) {
+      ultimoMostrado.current = null;
+      return;
+    }
+    if (!debeMostrarToast(ultimoMostrado.current, ultimaDeteccion)) return;
+    const detectada = ultimaDeteccion; // `debeMostrarToast` ya validó `cumplido`.
+    // Solo se actualiza la identidad cuando `pasada` viene definida (el caso normal, ver el
+    // docblock de `debeMostrarToast`) — si faltara, no hay identidad estable que recordar y el
+    // toast queda en modo fail-open (siempre se muestra), igual que antes de esta entrega.
+    if (detectada.pasada !== undefined) {
+      ultimoMostrado.current = { puntoControlId: detectada.puntoControlId, pasada: detectada.pasada };
+    }
+    setQueue((prev) => [...prev, detectada]);
   }, [ultimaDeteccion]);
 
   useEffect(() => {
