@@ -262,3 +262,125 @@ describe('DDL real del lease (`sync_lease`) contra SQLite de verdad (Hallazgo 4,
     db.close();
   });
 });
+
+/**
+ * REDISEÑO (anuncio de puntos de control, code review 2026-09-25): `DDL_OUTBOX` también crea
+ * `anuncios_punto_control` (intención durable del anuncio de "llegaste") y `visitas_pendientes`
+ * (copia durable del candidato de una visita en curso, bug 5) — antes vivían en un módulo
+ * separado (`outbox-ddl.ts`), fusionado acá con el DDL del outbox al integrar la rama de
+ * drenado en background. Mismo motivo que el resto del archivo: correrlo contra SQLite real
+ * (`node:sqlite`), no contra un mock.
+ */
+describe('DDL real de anuncios_punto_control y visitas_pendientes contra SQLite de verdad', () => {
+  function columnasDe(db: DatabaseSync, tabla: string): string[] {
+    const filas = db.prepare(`PRAGMA table_info(${tabla})`).all() as { name: string }[];
+    return filas.map((fila) => fila.name);
+  }
+
+  function abrirEnMemoria(): DatabaseSync {
+    const nueva = new DatabaseSync(':memory:');
+    nueva.exec(DDL_OUTBOX);
+    return nueva;
+  }
+
+  it('crea las cinco tablas esperadas (outbox, sync_lease, anuncios_punto_control, visitas_pendientes)', () => {
+    const db = abrirEnMemoria();
+    const tablas = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all()
+      .map((fila) => (fila as { name: string }).name);
+    expect(tablas).toEqual(
+      expect.arrayContaining(['outbox', 'sync_lease', 'anuncios_punto_control', 'visitas_pendientes']),
+    );
+    db.close();
+  });
+
+  it('crea los índices esperados (anuncios_punto_control_estado_idx, visitas_pendientes_sesion_idx)', () => {
+    const db = abrirEnMemoria();
+    const indices = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name")
+      .all()
+      .map((fila) => (fila as { name: string }).name);
+    expect(indices).toEqual(
+      expect.arrayContaining(['anuncios_punto_control_estado_idx', 'visitas_pendientes_sesion_idx']),
+    );
+    db.close();
+  });
+
+  it('visitas_pendientes tiene exactamente las columnas que db/outbox.ts espera (VisitaPendienteRow espejado en snake_case)', () => {
+    const db = abrirEnMemoria();
+    const columnas = columnasDe(db, 'visitas_pendientes').sort();
+    expect(columnas).toEqual(
+      [
+        'actualizado_ts',
+        'candidato_lat',
+        'candidato_lng',
+        'candidato_ts_fix_ms',
+        'clave',
+        'distancia_entrada_m',
+        'fixes_dentro_sin_confirmar',
+        'min_distancia_m',
+        'pasadas_previas',
+        'punto_control_id',
+        'radio_tolerancia_m',
+        'sesion_id',
+        'ultimo_emitido_ms',
+      ].sort(),
+    );
+    db.close();
+  });
+
+  it('visitas_pendientes: clave es PRIMARY KEY (un INSERT con clave duplicada choca, no se duplica silenciosamente)', () => {
+    const db = abrirEnMemoria();
+    const insertar = db.prepare(`
+      INSERT INTO visitas_pendientes (
+        clave, sesion_id, punto_control_id, pasadas_previas, radio_tolerancia_m,
+        min_distancia_m, distancia_entrada_m, candidato_lat, candidato_lng,
+        candidato_ts_fix_ms, ultimo_emitido_ms, fixes_dentro_sin_confirmar, actualizado_ts
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const fila = ['sesion-1:pc-1', 'sesion-1', 'pc-1', 0, 150, 10, 10, -17.78, -63.18, 1000, 0, 0, '2026-09-11T00:00:00.000Z'];
+    insertar.run(...fila);
+    expect(() => insertar.run(...fila)).toThrow();
+    db.close();
+  });
+
+  it('anuncios_punto_control nace con estado por default "programado" (nunca "pendiente" sin reclamo explícito)', () => {
+    const db = abrirEnMemoria();
+    db.exec("INSERT INTO anuncios_punto_control (clave, ts) VALUES ('c1', '2026-09-25T00:00:00.000Z')");
+    const fila = db.prepare('SELECT estado, intentos, ultimo_intento_ts FROM anuncios_punto_control WHERE clave = ?')
+      .get('c1') as { estado: string; intentos: number; ultimo_intento_ts: string | null };
+    expect(fila).toEqual({ estado: 'programado', intentos: 0, ultimo_intento_ts: null });
+    db.close();
+  });
+
+  /**
+   * FIX POST-REVISIÓN (hallazgo 1, code review del anuncio de puntos de control): las 7
+   * columnas nuevas de `anuncios_punto_control` (estado/motivo/sesion_id/punto_control_id/
+   * pasada/intentos/ultimo_intento_ts) llegan por `MIGRACIONES_COLUMNAS_OUTBOX` — instalaciones
+   * ya en producción con la tabla vieja (2 columnas: clave, ts) las reciben vía el mismo
+   * mecanismo genérico `faltaColumna`/`construirAgregarColumna` que usa `enviado_at`.
+   */
+  it('agrega las 7 columnas nuevas de anuncios_punto_control a una tabla VIEJA (2 columnas) sin lanzar', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE anuncios_punto_control (clave TEXT PRIMARY KEY, ts TEXT NOT NULL)');
+    for (const migracion of MIGRACIONES_COLUMNAS_OUTBOX) {
+      if (migracion.tabla !== 'anuncios_punto_control') continue;
+      const columnas = columnasDe(db, migracion.tabla);
+      if (faltaColumna(columnas, migracion.columna)) {
+        expect(() =>
+          db.exec(construirAgregarColumna(migracion.tabla, migracion.columna, migracion.tipo)),
+        ).not.toThrow();
+      }
+    }
+    expect(columnasDe(db, 'anuncios_punto_control').sort()).toEqual(
+      ['clave', 'estado', 'intentos', 'motivo', 'pasada', 'punto_control_id', 'sesion_id', 'ts', 'ultimo_intento_ts'].sort(),
+    );
+    // Fila vieja sobrevive con los defaults correctos — nunca "pendiente" fantasma tras migrar.
+    db.exec("INSERT INTO anuncios_punto_control (clave, ts) VALUES ('vieja:pc-1:1', '2026-09-01T00:00:00.000Z')");
+    const fila = db.prepare('SELECT estado, intentos FROM anuncios_punto_control WHERE clave = ?')
+      .get('vieja:pc-1:1') as { estado: string; intentos: number };
+    expect(fila).toEqual({ estado: 'programado', intentos: 0 });
+    db.close();
+  });
+});

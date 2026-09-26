@@ -90,6 +90,52 @@ export const DDL_OUTBOX = `
     owner TEXT NOT NULL,
     expira_at INTEGER NOT NULL
   );
+  -- REDISEÑO (anuncio de puntos de control, 2026-09-25): dedupe/estado PERSISTIDO del anuncio
+  -- de "llegaste" (vibración + notificación) por {sesionId, puntoControlId, pasada} — un
+  -- useRef de React no sobrevive al contexto headless. estado: 'programando' (reclamado, con
+  -- ultimo_intento_ts puesto en el mismo INSERT del claim — ver reclamarIntencionAnuncio) ->
+  -- 'programado' (schedule confirmado). Ver marcarAnuncioProgramando/
+  -- obtenerAnunciosPendientesDeProgramar más abajo.
+  -- FIX POST-REVISIÓN (code review, "doble llegaste" — vibración+notificación duplicadas): antes
+  -- el claim insertaba 'pendiente' y una llamada aparte (marcarAnuncioProgramando) recién
+  -- después la pasaba a 'programando' — la ventana entre esas dos escrituras dejaba una fila
+  -- 'pendiente' que el SELECT de reintento (más abajo) ofrece SIN chequear antigüedad, así que un
+  -- reintento fire-and-forget concurrente (ejecutarEnColaRegistroGps, gps/headless-task.ts)
+  -- podía verla y programar la MISMA notificación una segunda vez. El DEFAULT 'programado' de la
+  -- columna queda por retrocompatibilidad con filas legado migradas antes de este rediseño (nunca
+  -- las escribe este mecanismo) — el claim vigente ya NUNCA escribe 'pendiente'.
+  CREATE TABLE IF NOT EXISTS anuncios_punto_control (
+    clave TEXT PRIMARY KEY,
+    ts TEXT NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'programado',
+    motivo TEXT,
+    sesion_id TEXT,
+    punto_control_id TEXT,
+    pasada INTEGER,
+    intentos INTEGER NOT NULL DEFAULT 0,
+    ultimo_intento_ts TEXT
+  );
+  CREATE INDEX IF NOT EXISTS anuncios_punto_control_estado_idx ON anuncios_punto_control(estado);
+  -- Copia durable del candidato (fix más cercano observado) de CADA visita en curso, por
+  -- {sesionId, puntoControlId} — combinarConVisitasPendientes (gps/location-task.ts) la
+  -- superpone sobre el Map derivado de los eventos ya confirmados al sembrar. Se borra en la
+  -- MISMA transacción que encola el evento de confirmación (encolarEventoYLimpiarVisita).
+  CREATE TABLE IF NOT EXISTS visitas_pendientes (
+    clave TEXT PRIMARY KEY,
+    sesion_id TEXT NOT NULL,
+    punto_control_id TEXT NOT NULL,
+    pasadas_previas INTEGER NOT NULL,
+    radio_tolerancia_m REAL NOT NULL,
+    min_distancia_m REAL NOT NULL,
+    distancia_entrada_m REAL NOT NULL,
+    candidato_lat REAL NOT NULL,
+    candidato_lng REAL NOT NULL,
+    candidato_ts_fix_ms REAL NOT NULL,
+    ultimo_emitido_ms REAL NOT NULL,
+    fixes_dentro_sin_confirmar INTEGER NOT NULL,
+    actualizado_ts TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS visitas_pendientes_sesion_idx ON visitas_pendientes(sesion_id);
 `;
 
 interface MigracionColumna {
@@ -120,6 +166,17 @@ export const MIGRACIONES_COLUMNAS_OUTBOX: readonly MigracionColumna[] = [
   // Necesaria para poder distinguir "recién se marcó enviado, el POST todavía puede estar en
   // vuelo" de "quedó huérfana" -- ver recuperarEnviadosHuerfanos más abajo.
   { tabla: 'outbox', columna: 'enviado_at', tipo: 'TEXT' },
+  // REDISEÑO (anuncio de puntos de control): anuncios_punto_control nació con 2 columnas
+  // (clave, ts) -- instalaciones ya en producción con esa tabla vieja necesitan estas 7
+  // columnas nuevas para el estado 'pendiente'/'programando'/'programado' con intención
+  // durable (ver marcarAnuncioProgramando/obtenerAnunciosPendientesDeProgramar más abajo).
+  { tabla: 'anuncios_punto_control', columna: 'estado', tipo: "TEXT NOT NULL DEFAULT 'programado'" },
+  { tabla: 'anuncios_punto_control', columna: 'motivo', tipo: 'TEXT' },
+  { tabla: 'anuncios_punto_control', columna: 'sesion_id', tipo: 'TEXT' },
+  { tabla: 'anuncios_punto_control', columna: 'punto_control_id', tipo: 'TEXT' },
+  { tabla: 'anuncios_punto_control', columna: 'pasada', tipo: 'INTEGER' },
+  { tabla: 'anuncios_punto_control', columna: 'intentos', tipo: 'INTEGER NOT NULL DEFAULT 0' },
+  { tabla: 'anuncios_punto_control', columna: 'ultimo_intento_ts', tipo: 'TEXT' },
 ];
 
 /** `ALTER TABLE` plano (sin `IF NOT EXISTS`, que SQLite no soporta ahí) — pura, testeable sin
@@ -173,19 +230,36 @@ export function esErrorColumnaDuplicada(error: unknown): boolean {
  */
 async function agregarColumnasFaltantes(db: SQLite.SQLiteDatabase): Promise<void> {
   for (const migracion of MIGRACIONES_COLUMNAS_OUTBOX) {
-    const columnas = await db.getAllAsync<{ name: string }>(
-      `PRAGMA table_info(${migracion.tabla})`,
-    );
-    if (faltaColumna(columnas.map((columna) => columna.name), migracion.columna)) {
-      try {
-        await db.execAsync(
-          construirAgregarColumna(migracion.tabla, migracion.columna, migracion.tipo),
-        );
-      } catch (error) {
-        if (!esErrorColumnaDuplicada(error)) throw error;
-        // Otro contexto ganó la carrera y ya la agregó entre nuestro `PRAGMA` y este
-        // `ALTER TABLE` — la postcondición ("la columna existe") ya se cumple, seguimos.
+    // FIX POST-REVISIÓN (hallazgo 9, code review del anuncio de puntos de control — "una
+    // migración rota tumba TODO abrirOutbox, perdiendo evidencia"): cada migración corre en su
+    // PROPIO try/catch, reportado a Sentry y NUNCA relanzado — ni siquiera un error real (SQL
+    // roto, tabla bloqueada, disco lleno) en, por ejemplo, la migración de
+    // `anuncios_punto_control` (una tabla secundaria de UX) debe poder impedir que
+    // `abrirOutboxNueva` devuelva un handle usable para `gps_point`/evidencia legal
+    // (RF-67..73). El peor caso de que una columna puntual no se agregue es que la función que
+    // la usa (`marcarAnuncioProgramando`, `recuperarEnviadosHuerfanos`, etc.) falle después —
+    // ya capturado en sus propios `try/catch`; perder TODO el outbox no lo es.
+    try {
+      const columnas = await db.getAllAsync<{ name: string }>(
+        `PRAGMA table_info(${migracion.tabla})`,
+      );
+      if (faltaColumna(columnas.map((columna) => columna.name), migracion.columna)) {
+        try {
+          await db.execAsync(
+            construirAgregarColumna(migracion.tabla, migracion.columna, migracion.tipo),
+          );
+        } catch (error) {
+          if (!esErrorColumnaDuplicada(error)) throw error;
+          // Otro contexto ganó la carrera y ya la agregó entre nuestro `PRAGMA` y este
+          // `ALTER TABLE` — la postcondición ("la columna existe") ya se cumple, seguimos.
+        }
       }
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'outbox', paso: 'agregar-columna-faltante' },
+        extra: { tabla: migracion.tabla, columna: migracion.columna },
+      });
+      // Nunca relanza — ver el docblock de la función.
     }
   }
 }
@@ -412,8 +486,19 @@ export async function generarEventId(): Promise<string> {
  * `rescate-dia1.ts` reportaba (y persistía como registro de auditoría, `guardarResultadoRescate`)
  * "3000 encolados" en un re-run que en realidad escribió 0 filas nuevas.
  */
-export async function encolarEvento(
-  db: SQLite.SQLiteDatabase,
+/**
+ * R2 (hallazgo de revisión SERIO, atomicidad de `encolarEventoYLimpiarVisita`): cuerpo RAW del
+ * INSERT — SIN su propio `conReintentoSiHandleMuerto` — para que `encolarEventoYLimpiarVisita`
+ * (más abajo) pueda correrlo DENTRO de una transacción cuya recuperación de handle envuelve la
+ * transacción ENTERA. Si esta función tuviera su propia recuperación, un handle que muere A
+ * MITAD de esa transacción reabriría una conexión NUEVA solo para el INSERT — corriendo FUERA
+ * de la transacción abierta en la conexión vieja (ahora zombi) — mientras el `DELETE` de al
+ * lado podría (o no) terminar en una tercera conexión: exactamente la ruptura de atomicidad
+ * que R2 existe para cerrar. `encolarEvento` (abajo) es el único wrapper con recuperación
+ * propia, para el camino simple (sin transacción) que no tiene este riesgo.
+ */
+async function insertarEventoRaw(
+  dbActiva: SQLite.SQLiteDatabase,
   evento: EventoOutboxNuevo,
 ): Promise<{ eventId: string; insertado: boolean }> {
   const eventIdProvisto = evento.eventId !== undefined;
@@ -421,16 +506,417 @@ export async function encolarEvento(
   const sql = eventIdProvisto
     ? "INSERT OR IGNORE INTO outbox (event_id, device_id, ts, tipo, payload, estado) VALUES (?, ?, ?, ?, ?, 'pendiente')"
     : "INSERT INTO outbox (event_id, device_id, ts, tipo, payload, estado) VALUES (?, ?, ?, ?, ?, 'pendiente')";
+  const result = await dbActiva.runAsync(sql, [
+    eventId,
+    evento.deviceId,
+    new Date().toISOString(),
+    evento.tipo,
+    JSON.stringify(evento.payload),
+  ]);
+  return { eventId, insertado: result.changes > 0 };
+}
+
+export async function encolarEvento(
+  db: SQLite.SQLiteDatabase,
+  evento: EventoOutboxNuevo,
+): Promise<{ eventId: string; insertado: boolean }> {
+  return conReintentoSiHandleMuerto(db, (dbActiva) => insertarEventoRaw(dbActiva, evento));
+}
+
+/**
+ * Fórmula ÚNICA de la clave PK de `anuncios_punto_control` — usada tanto acá como en
+ * `features/operacion/anuncio-punto-control.ts` (como fallback ANTES de que
+ * `reclamarIntencionAnuncio` resuelva, y como clave de su mapa de reclamos fallidos) — un
+ * cambio de formato en uno sin el otro desincronizaría silenciosamente la identidad reclamada
+ * de la que ejecuta.
+ */
+export function claveAnuncio(sesionId: string, puntoControlId: string, pasada: number): string {
+  return `${sesionId}:${puntoControlId}:${pasada}`;
+}
+
+/**
+ * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
+ * 2026-09-23, punto 3 del brief — "intención durable ANTES de programar"): reclama ATÓMICAMENTE
+ * la INTENCIÓN de anunciar "llegaste" para una visita — `INSERT OR IGNORE`, ANTES de intentar
+ * `scheduleNotificationAsync` (`anunciarLlegadaPuntoControl`, `features/operacion/anuncio-punto-
+ * control.ts`). `clave` (`claveAnuncio`, arriba) es la PK, así que dos decisiones concurrentes
+ * para la MISMA visita (dos ticks que terminan decidiendo el mismo motivo, o un reintento
+ * superpuesto) solo dejan que UNA reclame — la otra ve `reclamado: false` y no debe programar
+ * nada.
+ *
+ * FIX POST-REVISIÓN (code review, "doble llegaste" — vibración+notificación duplicadas): el
+ * INSERT escribe DIRECTO a estado `'programando'` con `ultimo_intento_ts` puesto al momento del
+ * claim — un solo statement, sin pasar por `'pendiente'`. Antes, el claim insertaba `'pendiente'`
+ * (sin `ultimo_intento_ts`) y quedaba así hasta que el caller, en un `await` APARTE, llamaba
+ * `marcarAnuncioProgramando` — esa ventana entre las dos escrituras es justo lo que
+ * `obtenerAnunciosPendientesDeProgramar` no protegía: su condición ofrece CUALQUIER fila
+ * `'pendiente'` sin mirar antigüedad (a diferencia de `'programando'`, que exige
+ * `ultimo_intento_ts` vencido). El reintento de anuncios pendientes corre fire-and-forget desde
+ * `ejecutarEnColaRegistroGps` (`gps/headless-task.ts`) justo después de que el tick que hizo ESTE
+ * claim resuelve — con la ventana abierta, esa consulta podía ver la fila recién reclamada y
+ * disparar una SEGUNDA vibración+notificación para la misma llegada. Al nacer ya `'programando'`
+ * con `ultimo_intento_ts` fresco, la fila queda protegida por la MISMA regla de staleness
+ * (`ANUNCIO_PROGRAMANDO_STALE_MS`) desde el instante del claim — nunca hay una ventana en la que
+ * la fila sea ofrecible sin que haya pasado ese margen.
+ *
+ * Recuperación tras un crash intacta: si el proceso muere DESPUÉS de este INSERT pero ANTES de
+ * `marcarAnuncioProgramando`/`programarNotificacionLlegada` (la Activity/tarea headless muere a
+ * mitad de camino), la fila queda `'programando'` con el `ultimo_intento_ts` del claim — el
+ * próximo tick la reintenta en cuanto ese timestamp quede viejo (`ANUNCIO_PROGRAMANDO_STALE_MS`,
+ * como cualquier otro intento trabado), nunca se pierde. Único cambio de comportamiento: esa
+ * recuperación ahora tarda hasta `ANUNCIO_PROGRAMANDO_STALE_MS` en vez de ser inmediata (como sí
+ * lo era la rama `'pendiente'` vieja, sin chequeo de antigüedad) — tradeoff aceptado a propósito:
+ * esa inmediatez sin chequeo era EXACTAMENTE el hueco que abría la duplicación.
+ */
+export async function reclamarIntencionAnuncio(
+  db: SQLite.SQLiteDatabase,
+  sesionId: string,
+  puntoControlId: string,
+  pasada: number,
+  motivo: string,
+): Promise<{ reclamado: boolean; clave: string }> {
+  const clave = claveAnuncio(sesionId, puntoControlId, pasada);
+  const ahoraIso = new Date().toISOString();
   const result = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.runAsync(sql, [
-      eventId,
-      evento.deviceId,
-      new Date().toISOString(),
-      evento.tipo,
-      JSON.stringify(evento.payload),
+    dbActiva.runAsync(
+      `INSERT OR IGNORE INTO anuncios_punto_control
+         (clave, ts, estado, motivo, sesion_id, punto_control_id, pasada, ultimo_intento_ts)
+       VALUES (?, ?, 'programando', ?, ?, ?, ?, ?)`,
+      [clave, ahoraIso, motivo, sesionId, puntoControlId, pasada, ahoraIso],
+    ),
+  );
+  return { reclamado: result.changes > 0, clave };
+}
+
+/** Marca una intención YA reclamada (`reclamarIntencionAnuncio`) como `'programado'` — tras
+ * `scheduleNotificationAsync` con éxito. Si esto falla (SQLite ocupada), la fila queda
+ * `'programando'` (ver `marcarAnuncioProgramando`) y `obtenerAnunciosPendientesDeProgramar` la
+ * vuelve a ofrecer una vez que ese intento quede viejo (ver `ANUNCIO_PROGRAMANDO_STALE_MS`). */
+export async function marcarAnuncioProgramado(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync("UPDATE anuncios_punto_control SET estado = 'programado' WHERE clave = ?", [
+      clave,
     ]),
   );
-  return { eventId, insertado: result.changes > 0 };
+}
+
+/**
+ * FIX POST-REVISIÓN (hallazgo 1, code review del anuncio de puntos de control — "'pendiente'
+ * mezcla dos significados"): re-marca la fila como `'programando'`, refrescando la marca de
+ * tiempo del intento y el contador de intentos — se llama justo ANTES de intentar
+ * `scheduleNotificationAsync`, tanto en el primer intento (`anunciarLlegadaPuntoControl`) como
+ * en cada reintento (`reintentarAnunciosLlegadaPendientes`, `anuncio-punto-control.ts`).
+ * Mientras la fila sigue `'programando'` con un intento FRESCO (menos de
+ * `ANUNCIO_PROGRAMANDO_STALE_MS`), `obtenerAnunciosPendientesDeProgramar` NO la vuelve a
+ * ofrecer — sin esto, un reintento concurrente (headless y foreground compitiendo por la MISMA
+ * visita, o dos ticks seguidos de la cola) podía reclamar un intento que YA estaba en vuelo y
+ * disparar la vibración/notificación una SEGUNDA vez para el mismo "llegaste".
+ *
+ * NOTA (post claim atómico, ver `reclamarIntencionAnuncio`): el claim YA deja la fila en
+ * `'programando'` con `ultimo_intento_ts` puesto — esta llamada, inmediatamente después en
+ * `intentarProgramarNotificacion`, sigue corriendo igual (es idempotente y refresca el timestamp
+ * justo antes del intento real de `scheduleNotificationAsync`, que puede demorar por el `await`
+ * de `asegurarCanalNotificacion`), pero YA NO es la transición que sale de `'pendiente'` — esa
+ * fase no existe más.
+ */
+export async function marcarAnuncioProgramando(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync(
+      `UPDATE anuncios_punto_control
+         SET estado = 'programando', ultimo_intento_ts = ?, intentos = intentos + 1
+       WHERE clave = ?`,
+      [new Date().toISOString(), clave],
+    ),
+  );
+}
+
+export interface AnuncioLlegadaPendienteRow {
+  clave: string;
+  sesionId: string;
+  puntoControlId: string;
+  pasada: number;
+  motivo: string;
+}
+
+/** Ventana máxima que una fila `'programando'` puede quedar sin reintentarse antes de tratarse
+ * como abandonada (el intento anterior murió sin marcar ni `'programado'` ni volver a
+ * `'programando'`) — ver el docblock de `marcarAnuncioProgramando`. Holgada respecto del
+ * intervalo de fixes/heartbeats (10-60 s) para no competir con un intento genuinamente en curso. */
+export const ANUNCIO_PROGRAMANDO_STALE_MS = 2 * 60 * 1000;
+
+/** FIX POST-REVISIÓN (hallazgo 5, "el reintento no filtra por sesión/antigüedad/intentos"):
+ * antigüedad máxima (desde `reclamarIntencionAnuncio`, columna `ts`) de una fila que todavía vale
+ * la pena reintentar. Pasada esta ventana, `obtenerAnunciosPendientesDeProgramar` la PURGA en vez
+ * de seguir ofreciéndola — sin esto, una intención reclamada un día y nunca programada (proceso
+ * matado antes de programar, o un fallo persistente) se reintentaba PARA SIEMPRE, sesión tras
+ * sesión, mientras el dispositivo siguiera encendido. */
+export const ANUNCIO_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** FIX POST-REVISIÓN (hallazgo 5): techo de reintentos — una notificación que sigue fallando
+ * `ANUNCIO_MAX_INTENTOS` veces seguidas (canal roto, permiso revocado a mitad de turno) deja de
+ * ofrecerse: mejor un "llegaste" perdido después de varios intentos genuinos que un reintento sin
+ * fin que nunca va a tener éxito. */
+export const ANUNCIO_MAX_INTENTOS = 5;
+
+/** Intenciones reclamadas (`reclamarIntencionAnuncio`) cuya notificación NUNCA se programó con
+ * éxito — el próximo tick de la cola las reintenta. Filtra por `sesionId` (hallazgo 5 — nunca
+ * reintenta anuncios de una sesión distinta a la que está corriendo AHORA) y purga, ANTES de
+ * listar, las filas vencidas por antigüedad (`ANUNCIO_TTL_MS`) o por intentos agotados
+ * (`ANUNCIO_MAX_INTENTOS`) sin importar la sesión — esa purga sí es global, para que el outbox no
+ * acumule filas de sesiones viejas para siempre. Una fila `'programando'` solo se ofrece de nuevo
+ * cuando su último intento quedó viejo (`ANUNCIO_PROGRAMANDO_STALE_MS`, hallazgo 1) — mientras
+ * sigue fresca, otro intento ya está (o podría estar) en vuelo. Filas incompletas (legado de la
+ * tabla de 2 columnas previa al rediseño, migradas sin identidad reconstruible) se descartan en
+ * vez de reventar: nunca fueron reclamadas por este mecanismo, no hay nada que reintentar.
+ *
+ * La rama `estado = 'pendiente'` del `WHERE` (sin chequeo de antigüedad) es DEFENSIVA, no el
+ * camino vigente: `reclamarIntencionAnuncio` ya NUNCA escribe `'pendiente'` (ver su docblock,
+ * fix del "doble llegaste" — el claim nace directo en `'programando'` con `ultimo_intento_ts`).
+ * Se mantiene por si queda alguna fila `'pendiente'` de un build viejo en el dispositivo — esas
+ * SÍ deben poder reintentarse sin esperar `ANUNCIO_PROGRAMANDO_STALE_MS`, porque nunca tuvieron un
+ * intento en vuelo que proteger. */
+export async function obtenerAnunciosPendientesDeProgramar(
+  db: SQLite.SQLiteDatabase,
+  sesionId: string,
+  ahoraMs: number = Date.now(),
+): Promise<AnuncioLlegadaPendienteRow[]> {
+  const vencidoIso = new Date(ahoraMs - ANUNCIO_TTL_MS).toISOString();
+  const staleIso = new Date(ahoraMs - ANUNCIO_PROGRAMANDO_STALE_MS).toISOString();
+
+  // Purga best-effort — un fallo acá no debe impedir listar lo que sigue siendo válido; el
+  // próximo tick vuelve a intentar la purga.
+  try {
+    await conReintentoSiHandleMuerto(db, (dbActiva) =>
+      dbActiva.runAsync('DELETE FROM anuncios_punto_control WHERE ts < ? OR intentos >= ?', [
+        vencidoIso,
+        ANUNCIO_MAX_INTENTOS,
+      ]),
+    );
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'outbox', paso: 'purgar-anuncios-vencidos' },
+    });
+  }
+
+  const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.getAllAsync<{
+      clave: string;
+      sesion_id: string | null;
+      punto_control_id: string | null;
+      pasada: number | null;
+      motivo: string | null;
+    }>(
+      `SELECT clave, sesion_id, punto_control_id, pasada, motivo FROM anuncios_punto_control
+       WHERE sesion_id = ?
+         AND (estado = 'pendiente' OR (estado = 'programando' AND (ultimo_intento_ts IS NULL OR ultimo_intento_ts < ?)))`,
+      [sesionId, staleIso],
+    ),
+  );
+  const resultado: AnuncioLlegadaPendienteRow[] = [];
+  for (const row of rows) {
+    if (
+      row.sesion_id === null ||
+      row.punto_control_id === null ||
+      row.pasada === null ||
+      row.motivo === null
+    ) {
+      continue;
+    }
+    resultado.push({
+      clave: row.clave,
+      sesionId: row.sesion_id,
+      puntoControlId: row.punto_control_id,
+      pasada: row.pasada,
+      motivo: row.motivo,
+    });
+  }
+  return resultado;
+}
+
+/** Fila de la tabla `visitas_pendientes` — ver su comentario de DDL arriba. Espejo (en
+ * `camelCase`) de `VisitaPendienteSembrable` (`gps/location-task.ts`), que es la forma que
+ * `combinarConVisitasPendientes` (pura, sin SQLite) sabe consumir. */
+export interface VisitaPendienteRow {
+  clave: string;
+  sesionId: string;
+  puntoControlId: string;
+  pasadasPrevias: number;
+  radioToleranciaM: number;
+  minDistanciaM: number;
+  distanciaEntradaM: number;
+  candidatoLat: number;
+  candidatoLng: number;
+  candidatoTsFixMs: number;
+  ultimoEmitidoMs: number;
+  fixesDentroSinConfirmar: number;
+}
+
+interface VisitaPendienteRowCruda {
+  clave: string;
+  sesion_id: string;
+  punto_control_id: string;
+  pasadas_previas: number;
+  radio_tolerancia_m: number;
+  min_distancia_m: number;
+  distancia_entrada_m: number;
+  candidato_lat: number;
+  candidato_lng: number;
+  candidato_ts_fix_ms: number;
+  ultimo_emitido_ms: number;
+  fixes_dentro_sin_confirmar: number;
+}
+
+function toVisitaPendienteRow(row: VisitaPendienteRowCruda): VisitaPendienteRow {
+  return {
+    clave: row.clave,
+    sesionId: row.sesion_id,
+    puntoControlId: row.punto_control_id,
+    pasadasPrevias: row.pasadas_previas,
+    radioToleranciaM: row.radio_tolerancia_m,
+    minDistanciaM: row.min_distancia_m,
+    distanciaEntradaM: row.distancia_entrada_m,
+    candidatoLat: row.candidato_lat,
+    candidatoLng: row.candidato_lng,
+    candidatoTsFixMs: row.candidato_ts_fix_ms,
+    ultimoEmitidoMs: row.ultimo_emitido_ms,
+    fixesDentroSinConfirmar: row.fixes_dentro_sin_confirmar,
+  };
+}
+
+/**
+ * FIX POST-REVISIÓN (bug 5): persiste (o actualiza) el candidato de UNA visita en curso —
+ * llamado desde `registrarPuntoGpsInterno` (`gps/headless-task.ts`) por cada fix que la
+ * máquina de estados deja `dentro: true, confirmado: false` (entrada o mejora del mínimo, ver
+ * `filtrarNuevosCumplimientos`, `gps/geofence.ts`). `ON CONFLICT... DO UPDATE` (no
+ * `INSERT OR REPLACE`) a propósito: `REPLACE` borra e re-inserta la fila entera, lo que en
+ * SQLite dispara los triggers de `DELETE`+`INSERT` en vez de un `UPDATE` — no hay triggers hoy,
+ * pero `DO UPDATE` es semánticamente lo que se quiere decir ("actualizá esta fila") y cuesta
+ * lo mismo.
+ */
+export async function guardarVisitaPendiente(
+  db: SQLite.SQLiteDatabase,
+  visita: VisitaPendienteRow,
+): Promise<void> {
+  await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    dbActiva.runAsync(
+      `INSERT INTO visitas_pendientes (
+         clave, sesion_id, punto_control_id, pasadas_previas, radio_tolerancia_m,
+         min_distancia_m, distancia_entrada_m, candidato_lat, candidato_lng,
+         candidato_ts_fix_ms, ultimo_emitido_ms, fixes_dentro_sin_confirmar, actualizado_ts
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(clave) DO UPDATE SET
+         pasadas_previas = excluded.pasadas_previas,
+         radio_tolerancia_m = excluded.radio_tolerancia_m,
+         min_distancia_m = excluded.min_distancia_m,
+         distancia_entrada_m = excluded.distancia_entrada_m,
+         candidato_lat = excluded.candidato_lat,
+         candidato_lng = excluded.candidato_lng,
+         candidato_ts_fix_ms = excluded.candidato_ts_fix_ms,
+         ultimo_emitido_ms = excluded.ultimo_emitido_ms,
+         fixes_dentro_sin_confirmar = excluded.fixes_dentro_sin_confirmar,
+         actualizado_ts = excluded.actualizado_ts`,
+      [
+        visita.clave,
+        visita.sesionId,
+        visita.puntoControlId,
+        visita.pasadasPrevias,
+        visita.radioToleranciaM,
+        visita.minDistanciaM,
+        visita.distanciaEntradaM,
+        visita.candidatoLat,
+        visita.candidatoLng,
+        visita.candidatoTsFixMs,
+        visita.ultimoEmitidoMs,
+        visita.fixesDentroSinConfirmar,
+        new Date().toISOString(),
+      ],
+    ),
+  );
+}
+
+/** R2: cuerpo RAW del DELETE — SIN su propia recuperación de handle, mismo motivo que
+ * `insertarEventoRaw` (ver su docblock): `encolarEventoYLimpiarVisita` lo corre dentro de una
+ * transacción cuya recuperación envuelve la transacción entera. */
+async function eliminarVisitaPendienteRaw(
+  dbActiva: SQLite.SQLiteDatabase,
+  clave: string,
+): Promise<void> {
+  await dbActiva.runAsync('DELETE FROM visitas_pendientes WHERE clave = ?', [clave]);
+}
+
+/** Borra la fila de una visita que ya no está pendiente (confirmada o re-armada sin confirmar,
+ * B5 en `geofence.ts`). Llamarla con una `clave` que no tiene fila es un no-op seguro
+ * (`DELETE ... WHERE` sin matches). */
+export async function eliminarVisitaPendiente(
+  db: SQLite.SQLiteDatabase,
+  clave: string,
+): Promise<void> {
+  await conReintentoSiHandleMuerto(db, (dbActiva) => eliminarVisitaPendienteRaw(dbActiva, clave));
+}
+
+/** Lee las visitas pendientes de una sesión (o de todas, sin filtro) — usada al sembrar
+ * (`asegurarSemillaCumplimientos`/`sembrarCumplimientos`) para superponerlas sobre el estado
+ * derivado de los eventos confirmados vía `combinarConVisitasPendientes`
+ * (`gps/location-task.ts`). */
+export async function obtenerVisitasPendientes(
+  db: SQLite.SQLiteDatabase,
+  sesionId?: string,
+): Promise<VisitaPendienteRow[]> {
+  const rows = await conReintentoSiHandleMuerto(db, (dbActiva) =>
+    sesionId !== undefined
+      ? dbActiva.getAllAsync<VisitaPendienteRowCruda>(
+          'SELECT * FROM visitas_pendientes WHERE sesion_id = ?',
+          [sesionId],
+        )
+      : dbActiva.getAllAsync<VisitaPendienteRowCruda>('SELECT * FROM visitas_pendientes'),
+  );
+  return rows.map(toVisitaPendienteRow);
+}
+
+/**
+ * FIX POST-REVISIÓN (bug 5, requisito del diseño C: "al emitir se borra en la misma
+ * transacción que encola el evento"): encola el `cumplimiento_punto_control` y borra la fila
+ * de `visitas_pendientes` correspondiente dentro de UNA transacción SQLite
+ * (`withTransactionAsync`) — así ninguna de las dos puede quedar a medias. Sin esto, un crash
+ * entre las dos escrituras dejaría el evento YA encolado (la evidencia está a salvo) pero la
+ * fila de `visitas_pendientes` todavía viva: al sembrar de nuevo, `combinarConVisitasPendientes`
+ * la superpondría como "visita en curso" sobre un estado que YA tiene esa pasada confirmada —
+ * la máquina de estados la re-evaluaría desde cero y, en el peor caso, terminaría emitiendo la
+ * MISMA pasada una segunda vez con un `eventId` nuevo (el plan deja `pasada` fuera de la clave
+ * de idempotencia del servidor — el único gate real es el `eventId` por evento, así que un
+ * segundo `encolarEvento` para la misma pasada SÍ duplicaría evidencia server-side).
+ *
+ * `claveVisitaPendiente === undefined` (evento sin visita pendiente asociada, no debería
+ * ocurrir para un `cumplimiento_punto_control` pero se contempla por completitud) encola sin
+ * abrir transacción — no hay nada que borrar.
+ *
+ * La transacción (`withTransactionAsync`) se abre DENTRO de `conReintentoSiHandleMuerto`, no al
+ * revés (R2, hallazgo de revisión SERIO — "atomicidad rota por recuperación de handle"): si
+ * `db` muere a mitad de la transacción, esa recuperación interna reabría una conexión NUEVA y
+ * correría el INSERT (o el DELETE) ahí — FUERA de la transacción abierta en la conexión vieja
+ * (ya zombi) — mientras el `COMMIT` implícito de `withTransactionAsync`, al final, seguía
+ * apuntando al handle MUERTO y fallaba. Con la transacción entera envuelta en
+ * `conReintentoSiHandleMuerto`, un handle que muere en CUALQUIER punto (BEGIN, INSERT, DELETE o
+ * COMMIT) hace que la función reintente la operación COMPLETA una vez, desde cero, contra una
+ * ÚNICA conexión fresca (`dbActiva`) — nunca mezcla dos conexiones dentro de la misma
+ * transacción. `insertarEventoRaw`/`eliminarVisitaPendienteRaw` (sin su propia recuperación)
+ * son justamente lo que hace esto seguro.
+ */
+export async function encolarEventoYLimpiarVisita(
+  db: SQLite.SQLiteDatabase,
+  evento: EventoOutboxNuevo,
+  claveVisitaPendiente: string | undefined,
+): Promise<{ eventId: string; insertado: boolean }> {
+  if (claveVisitaPendiente === undefined) return encolarEvento(db, evento);
+
+  return conReintentoSiHandleMuerto(db, async (dbActiva) => {
+    let resultado: { eventId: string; insertado: boolean } | undefined;
+    await dbActiva.withTransactionAsync(async () => {
+      resultado = await insertarEventoRaw(dbActiva, evento);
+      await eliminarVisitaPendienteRaw(dbActiva, claveVisitaPendiente);
+    });
+    return resultado as { eventId: string; insertado: boolean };
+  });
 }
 
 /** H4 (hallazgo de revisión, medio): pasa por `conReintentoSiHandleMuerto` igual que los

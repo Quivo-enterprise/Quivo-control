@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio';
+import * as Sentry from '@sentry/react-native';
 import sonidoConfirmacion from '../../../assets/sounds/confirmacion-chime.wav';
 
 /**
@@ -36,6 +37,12 @@ async function asegurarModoAudioConfigurado(): Promise<void> {
     // se pudo configurar, `reproducir()` igual intenta sonar con lo que el sistema tenga por
     // default — puede que no duckee ni suene en silencio, pero no debe bloquear nada.
     console.error('[QUIVO][audio] No se pudo configurar el modo de audio', error);
+    // ENTREGA 7 (plan post-piloto 2026-09-09): este catch era invisible por diseño — bien para
+    // el chofer (nunca debe bloquear nada), mal para nosotros (nadie lee la consola del
+    // teléfono de un conductor en ruta). Reportar a Sentry sin cambiar el comportamiento.
+    Sentry.captureException(error, {
+      tags: { contexto: 'confirmacion-sonido', paso: 'configurar-modo-audio' },
+    });
   }
 }
 
@@ -57,6 +64,9 @@ export function usePuntoControlSonido() {
       playerRef.current = createAudioPlayer(sonidoConfirmacion);
     } catch (error) {
       console.error('[QUIVO][audio] No se pudo cargar el sonido de confirmación', error);
+      Sentry.captureException(error, {
+        tags: { contexto: 'confirmacion-sonido', paso: 'crear-player' },
+      });
       playerRef.current = null;
     }
     return () => {
@@ -86,13 +96,22 @@ export function usePuntoControlSonido() {
             player.play();
           } catch (error) {
             console.error('[QUIVO][audio] No se pudo iniciar la reproducción del sonido de confirmación', error);
+            Sentry.captureException(error, {
+              tags: { contexto: 'confirmacion-sonido', paso: 'play' },
+            });
           }
         })
         .catch((error: unknown) => {
           console.error('[QUIVO][audio] No se pudo rebobinar el sonido de confirmación', error);
+          Sentry.captureException(error, {
+            tags: { contexto: 'confirmacion-sonido', paso: 'seek-to' },
+          });
         });
     } catch (error) {
       console.error('[QUIVO][audio] No se pudo reproducir el sonido de confirmación', error);
+      Sentry.captureException(error, {
+        tags: { contexto: 'confirmacion-sonido', paso: 'reproducir' },
+      });
     }
   }, []);
 }
