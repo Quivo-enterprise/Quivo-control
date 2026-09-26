@@ -32,10 +32,12 @@ vi.mock('@sentry/react-native', () => ({
 
 import { cargarSesionMovil, type SesionMovilGuardada } from '../../shared/security/sesion-movil-store';
 import {
+  huboLecturaDeRecorridoActivo,
   marcarRecorridoActivoGlobal,
   reiniciarEstadoRecorridoActivoParaTests,
+  suscribirseARecorridoActivo,
 } from '../operacion/estado-recorrido-activo';
-import { decidirCierrePorNoVigente } from './use-auth-movil';
+import { decidirCierrePorNoVigente, type VeredictoCierrePorNoVigente } from './use-auth-movil';
 
 const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
 
@@ -115,5 +117,56 @@ describe('decidirCierrePorNoVigente', () => {
 
     marcarRecorridoActivoGlobal(false);
     await expect(decidirCierrePorNoVigente(undefined)).resolves.toEqual({ tipo: 'borrar' });
+  });
+});
+
+/**
+ * FIX POST-REVISIÓN (hallazgo ALTO, Entrega 28): documenta la secuencia real que sigue
+ * `restaurarSesion` (`use-auth-movil.ts`, bloque `void (async () => { ... })()` tras el flag
+ * headless) cuando reabre la app y el re-enganche de `useGpsOperativo` TODAVÍA no resolvió
+ * ningún veredicto — `huboLecturaDeRecorridoActivo()` en `false` SIN que eso signifique "no hay
+ * recorrido", sino "todavía no se sabe". `restaurarSesion` se suscribe con
+ * `suscribirseARecorridoActivo` y espera la PRIMERA publicación real antes de decidir. Este
+ * paquete no tiene arnés de React (`renderHook`, ver el docblock de
+ * `clasificarFalloAccessToken`), así que se ejercita el módulo compartido
+ * (`estado-recorrido-activo.ts`) directo, sin renderizar `useGpsOperativo` — es exactamente lo
+ * que `restaurarSesion` consume de él.
+ */
+describe('secuencia real de restaurarSesion: sin veredicto todavía → suscribirse → primer veredicto real', () => {
+  beforeEach(() => {
+    reiniciarEstadoRecorridoActivoParaTests();
+  });
+
+  it('sin publicación previa (huboLectura false) y luego publicar `true` resuelve "esperar_finalizar"', async () => {
+    expect(huboLecturaDeRecorridoActivo()).toBe(false);
+
+    const veredicto = new Promise<VeredictoCierrePorNoVigente>((resolve) => {
+      const desuscribir = suscribirseARecorridoActivo(() => {
+        desuscribir();
+        resolve(decidirCierrePorNoVigente(undefined));
+      });
+    });
+
+    // FIX POST-REVISIÓN: este `true` es el veredicto REAL que `useGpsOperativo` publica cuando
+    // el re-enganche resuelve con el plugin `enabled` — nunca el `false` prematuro del montaje
+    // que causaba el bug (ver `veredictoPublicable`, `use-gps-operativo.ts`).
+    marcarRecorridoActivoGlobal(true);
+
+    await expect(veredicto).resolves.toEqual({ tipo: 'esperar_finalizar' });
+  });
+
+  it('sin publicación previa y luego publicar `false` (re-enganche sin nada que enganchar) resuelve "borrar"', async () => {
+    expect(huboLecturaDeRecorridoActivo()).toBe(false);
+
+    const veredicto = new Promise<VeredictoCierrePorNoVigente>((resolve) => {
+      const desuscribir = suscribirseARecorridoActivo(() => {
+        desuscribir();
+        resolve(decidirCierrePorNoVigente(undefined));
+      });
+    });
+
+    marcarRecorridoActivoGlobal(false);
+
+    await expect(veredicto).resolves.toEqual({ tipo: 'borrar' });
   });
 });

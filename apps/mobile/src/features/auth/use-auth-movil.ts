@@ -79,9 +79,9 @@ export interface EstadoAuthMovil {
    * ACTIVO, así que `cerrarSesionPorNoVigente` NO puede borrar la sesión ni cambiar `etapa`
    * todavía (eso desmontaría `GpsProvider` y mataría el tracking sin `fin_recorrido` — ver el
    * comentario de `reconciliarSesion` sobre las "8 sesiones abiertas"). Se prende para que
-   * `OperationScreen` bloquee con un aviso no descartable ("Tocá Finalizar…") y se apaga (junto
-   * con el borrado real) recién cuando `finalizarTrasSesionNoVigente` corre, tras que el chofer
-   * confirme "Finalizar" y `gps.detener()` complete. */
+   * `OperationScreen` bloquee con un aviso no descartable ("Toca Finalizar y vuelve a iniciar
+   * sesión.") y se apaga (junto con el borrado real) recién cuando `finalizarTrasSesionNoVigente`
+   * corre, tras que el chofer confirme "Finalizar" y `gps.detener()` complete. */
   sesionNoVigente: boolean;
   /** Login de un paso (`POST /sesion`): token de un solo uso que llega en la respuesta
    * `seleccion_requerida` (≥2 asignaciones hoy) y hay que reenviar en
@@ -277,6 +277,14 @@ export function useAuthMovil() {
         // usa el valor si YA hubo una lectura real (`huboLecturaDeRecorridoActivo`, caso runtime
         // reciclado sin cold start) o, si no, se espera la PRIMERA publicación real antes de
         // decidir — `cerrarSesionPorNoVigente` hace el resto (chequeo B + C).
+        //
+        // FIX POST-REVISIÓN (hallazgo ALTO, Entrega 28): esta espera solo es confiable porque
+        // `useGpsOperativo` garantiza que `huboLecturaDeRecorridoActivo()`/la primera publicación
+        // a la que se suscribe `suscribirseARecorridoActivo` son un veredicto REAL (re-enganche
+        // resuelto o `iniciar()`/`detener()`) — nunca el `false` inicial del `useState` de React
+        // publicado antes de que el re-enganche corriera. Antes de ese fix, ese `false` prematuro
+        // llegaba acá como si fuera el veredicto, y este bloque decidía `borrar` con el recorrido
+        // todavía activo. Ver `veredictoPublicable` en `use-gps-operativo.ts`.
         void (async () => {
           if (!(await haySesionNoVigenteParaToken(guardada.refreshToken).catch(() => false))) {
             return;

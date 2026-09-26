@@ -11,20 +11,34 @@
  * la etapa de auth en el árbol (`App.tsx` solo renderiza `OperationNavigator`/`GpsProvider`
  * cuando `auth.estado.etapa === 'operacion'`) — no hay Context de React que fluya de un hijo
  * hacia un hook que vive más arriba sin invertir la dependencia. Un módulo compartido, ínfimo y
- * sin importar nada pesado es la wiring MENOS invasiva: `useGpsOperativo` lo actualiza en un
- * `useEffect` sobre `tracking`; `use-auth-movil.ts` solo lo LEE (síncrono) o se suscribe a sus
- * cambios cuando necesita esperar la PRIMERA lectura real (ver `suscribirseARecorridoActivo`,
- * usado en `restaurarSesion` para el caso "flag headless + app recién reabierta", donde el
- * re-enganche nativo de `useGpsOperativo` tarda unos `await`s en resolver — leer el booleano
- * crudo en ese instante daría casi siempre `false` aunque el recorrido siga activo).
+ * sin importar nada pesado es la wiring MENOS invasiva: `use-auth-movil.ts` solo lo LEE
+ * (síncrono) o se suscribe a sus cambios cuando necesita esperar la PRIMERA lectura real (ver
+ * `suscribirseARecorridoActivo`, usado en `restaurarSesion` para el caso "flag headless + app
+ * recién reabierta", donde el re-enganche nativo de `useGpsOperativo` tarda unos `await`s en
+ * resolver — leer el booleano crudo en ese instante daría casi siempre `false` aunque el
+ * recorrido siga activo).
+ *
+ * FIX POST-REVISIÓN (hallazgo ALTO, Entrega 28): `useGpsOperativo` NO publica en cada cambio de
+ * su `tracking` de React sin más — publica solo VEREDICTOS REALES, con un ref propio
+ * (`veredictoPublicable`) que gatea su efecto `[tracking]`. Un veredicto real es (a) lo que
+ * resuelve el re-enganche nativo al montar (`getState()`/`ready()` — con o sin plugin `enabled`,
+ * publicado explícitamente cuando el efecto `[tracking]` no alcanza a correr por no cambiar de
+ * valor) o (b) un cambio de `tracking` por `iniciar()`/`detener()`. Antes de este fix, el efecto
+ * `[tracking]` publicaba el `false` inicial del `useState` de React apenas montaba el
+ * componente — mucho antes de que el re-enganche resolviera — y ESE `false` prematuro era lo
+ * que marcaba `huboLectura = true` acá abajo: `restaurarSesion` lo tomaba como el veredicto real
+ * y borraba la sesión con el recorrido todavía activo. Ver el docblock de `veredictoPublicable`
+ * en `use-gps-operativo.ts` para el detalle completo.
  */
 
 type Listener = (activo: boolean) => void;
 
 let recorridoActivo = false;
-/** `true` desde la primera vez que `useGpsOperativo` publicó una lectura real (re-enganche o
- * `iniciar()`/`detener()`) en ESTE proceso — antes de eso, `recorridoActivo === false` es solo
- * el valor inicial, no evidencia de que no haya recorrido. */
+/** `true` desde la primera vez que `useGpsOperativo` publicó una lectura real (re-enganche
+ * resuelto, con o sin plugin `enabled`, o `iniciar()`/`detener()`) en ESTE proceso — antes de
+ * eso, `recorridoActivo === false` es solo el valor inicial, no evidencia de que no haya
+ * recorrido. Ver el docblock del módulo, arriba, para cómo `useGpsOperativo` garantiza que solo
+ * llega acá un veredicto real. */
 let huboLectura = false;
 const listeners = new Set<Listener>();
 

@@ -146,12 +146,35 @@ export function useGpsOperativo(
   obtenerAccessToken: () => Promise<string | null>,
 ) {
   const [tracking, setTracking] = useState(false);
+  // FIX POST-REVISIÓN (hallazgo ALTO, rescope SESION_NO_VIGENTE — Entrega 28): `false` hasta que
+  // este hook tenga un VEREDICTO REAL sobre si hay un recorrido activo — el re-enganche nativo
+  // (efecto más abajo: `getState()`/`ready()` resuelven, con o sin plugin `enabled`) o un cambio
+  // real de `tracking` por `iniciar()`/`detener()`. Antes de este fix, el efecto `[tracking]` de
+  // abajo publicaba el `false` INICIAL de este `useState` apenas montaba el componente, varios
+  // `await`s antes de que el re-enganche resolviera — `restaurarSesion` (`use-auth-movil.ts`)
+  // leía ese `false` prematuro como si fuera el veredicto real (`huboLecturaDeRecorridoActivo()`
+  // ya daba `true` desde ese primer efecto) y borraba la sesión con el recorrido TODAVÍA activo,
+  // matando el tracking sin `fin_recorrido` — justo lo que el rescope de
+  // `estado-recorrido-activo.ts` existía para evitar. Se resetea a `false` al montar/cambiar
+  // `sesionId` (ver el efecto de re-enganche más abajo, junto a `semillaHidratadaRef`); se pone
+  // en `true` cuando el re-enganche resuelve (haya o no un plugin `enabled` para re-enganchar) o
+  // cuando `iniciar()`/`detener()` cambian `tracking` de verdad.
+  const veredictoPublicable = useRef(false);
   // Rescope SESION_NO_VIGENTE (code review): espeja `tracking` a un módulo compartido, sin
   // React, que `use-auth-movil.ts` (más arriba en el árbol que `GpsProvider`) lee para saber si
   // hay un recorrido activo antes de decidir si puede borrar la sesión de inmediato — ver el
   // docblock de `estado-recorrido-activo.ts` para el porqué de esta wiring.
+  //
+  // FIX POST-REVISIÓN: publica SOLO cuando `veredictoPublicable` ya está en `true` (ver ese ref,
+  // arriba) — evita publicar el `false` inicial del `useState` de arriba como si fuera un
+  // veredicto real. Cubre los cambios REALES de `tracking` (`iniciar()`/`detener()`, y el
+  // re-enganche cuando SÍ encuentra un plugin `enabled` — ahí `tracking` pasa de `false` a
+  // `true` y este efecto sí vuelve a correr). El caso en que el re-enganche NO encuentra nada que
+  // re-enganchar (`tracking` se queda en `false`, este efecto nunca vuelve a disparar porque el
+  // valor no cambió) lo publica el propio re-enganche de forma EXPLÍCITA — ver ese bloque más
+  // abajo.
   useEffect(() => {
-    marcarRecorridoActivoGlobal(tracking);
+    if (veredictoPublicable.current) marcarRecorridoActivoGlobal(tracking);
   }, [tracking]);
   const [puntos, setPuntos] = useState(0);
   const [resultado, setResultado] = useState<string | null>(null);
@@ -697,6 +720,11 @@ export function useGpsOperativo(
     // FIX POST-REVISIÓN (punto 5): nueva sesión (o primer montaje) — arranca sin hidratar hasta
     // que `sembrarCumplimientos` termine bien.
     semillaHidratadaRef.current = false;
+    // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): nueva sesión (o primer
+    // montaje) — todavía sin veredicto real de recorrido activo hasta que el re-enganche de
+    // abajo resuelva o el chofer toque "Iniciar"/"Finalizar". Ver el comentario largo de
+    // `veredictoPublicable`, arriba.
+    veredictoPublicable.current = false;
     // C1 (hallazgo de revisión CRÍTICO): la siembra corre SIEMPRE al montar (keyed por
     // `sesionId`, ver las deps de este efecto), ANTES de decidir si re-enganchar la
     // suscripción — no solo cuando el chofer aprieta "Iniciar" (ver el comentario de
@@ -720,7 +748,19 @@ export function useGpsOperativo(
     void (async () => {
       try {
         const estado = await BackgroundGeolocation.getState();
-        if (!montado || !estado.enabled) return;
+        if (!montado) return;
+        if (!estado.enabled) {
+          // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): esto YA ES el
+          // veredicto real ("no hay nada que re-enganchar, 'Iniciar' sigue disponible") — antes
+          // de este fix, esta rama hacía `return` sin publicar nada, y `tracking` se quedaba en
+          // su `false` inicial sin que el efecto `[tracking]` de arriba volviera a correr (el
+          // valor no cambia de `false` a `false`), así que el veredicto nunca llegaba a
+          // `estado-recorrido-activo.ts`. Se publica EXPLÍCITAMENTE acá, en vez de depender de
+          // ese efecto — mismo motivo que la publicación explícita del bloque `catch`, más abajo.
+          veredictoPublicable.current = true;
+          marcarRecorridoActivoGlobal(false);
+          return;
+        }
         // LOW, verificado contra la doc oficial del SDK instalado (`react-native-background-
         // geolocation@5.4.0`, hallazgo de revisión): "You must call `.ready(config)` once and
         // only once, each time your app is launched" — y el patrón canónico de la propia doc
@@ -737,6 +777,13 @@ export function useGpsOperativo(
         await BackgroundGeolocation.ready(gpsSpikeConfig);
         if (!montado) return;
         suscribirUbicaciones();
+        // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): este SÍ es un
+        // veredicto real ("re-enganchado, hay recorrido activo") — a diferencia del `false`
+        // inicial del montaje, este `setTracking(true)` cambia el valor de verdad (`false` →
+        // `true`), así que el efecto `[tracking]` de arriba vuelve a correr y publica, siempre
+        // que `veredictoPublicable` ya esté en `true` para entonces (se marca acá, antes de la
+        // mutación de estado que dispara ese efecto).
+        veredictoPublicable.current = true;
         setTracking(true);
         trackingRef.current = true;
         // QUI-P0: SEGUNDO punto de entrada de `reafirmarMovimiento` (ver su docblock,
@@ -754,6 +801,17 @@ export function useGpsOperativo(
         });
       } catch {
         // Sin estado del plugin no hay nada que re-enganchar: "Iniciar" sigue disponible.
+        //
+        // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): mismo veredicto real
+        // que la rama `!estado.enabled` de arriba ("nada que re-enganchar" — la app no sabe si
+        // hay un recorrido nativo corriendo, pero el botón "Iniciar recorrido" queda disponible,
+        // así que para efectos de `estado-recorrido-activo.ts` NO hay recorrido activo bajo el
+        // control de esta app). Publicado explícitamente por el mismo motivo: `tracking` se queda
+        // en su `false` inicial, el efecto `[tracking]` no vuelve a correr.
+        if (montado) {
+          veredictoPublicable.current = true;
+          marcarRecorridoActivoGlobal(false);
+        }
       }
     })();
 
@@ -1078,6 +1136,11 @@ export function useGpsOperativo(
       // decisión de qué vale `tracking`/`errorGps` ante un fallo (nativo o de outbox) vive en
       // `resolverResultadoIniciar` (`resultado-iniciar-recorrido.ts`) — pura y testeada aparte,
       // ver su docblock para el porqué de la invariante ("nativo OK ⇒ tracking SIEMPRE true").
+      //
+      // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): "Iniciar recorrido"
+      // es, junto con "Finalizar", un veredicto real — ver el comentario largo de
+      // `veredictoPublicable` al inicio del hook.
+      veredictoPublicable.current = true;
       setTracking(true);
       trackingRef.current = true;
     } catch (error) {
@@ -1119,6 +1182,10 @@ export function useGpsOperativo(
       // este es el único caso donde de verdad no hay nada grabándose (`resolverResultadoIniciar`,
       // `resultado-iniciar-recorrido.ts`).
       const resultadoFalloNativo = resolverResultadoIniciar(false, false);
+      // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): también un veredicto
+      // real, aunque `resultadoFalloNativo.tracking` sea siempre `false` acá (el fallo nativo
+      // nunca deja nada grabándose) — ver el comentario largo de `veredictoPublicable`.
+      veredictoPublicable.current = true;
       setTracking(resultadoFalloNativo.tracking);
       trackingRef.current = resultadoFalloNativo.tracking;
       setErrorGps(resultadoFalloNativo.errorGps);
@@ -1210,6 +1277,9 @@ export function useGpsOperativo(
       heartbeatSubscription.current = null;
       motionChangeSubscription.current?.remove();
       motionChangeSubscription.current = null;
+      // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): "Finalizar" también es
+      // un veredicto real — ver el comentario largo de `veredictoPublicable`, al inicio del hook.
+      veredictoPublicable.current = true;
       setTracking(false);
       trackingRef.current = false;
       // QUI-P0: reverso de `reafirmarMovimiento` — restaura `disableStopDetection: false` para

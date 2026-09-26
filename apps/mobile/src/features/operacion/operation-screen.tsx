@@ -119,18 +119,35 @@ export function OperationScreen(
     if (!gps.tracking) setCompletados(new Set());
   }, [gps.tracking]);
 
-  // Rescope SESION_NO_VIGENTE, punto C: dispara `onSesionNoVigenteFinalizada` en la transición
-  // true→false de `gps.tracking` MIENTRAS `sesionNoVigente` sigue prendido — esa transición es
-  // la señal de que `gps.detener()` (llamado desde el diálogo de "Finalizar" de abajo, el mismo
-  // que el chofer ve reflejado en el banner) ya completó: apaga `tracking` SIEMPRE al terminar,
-  // haya salido bien o mal la escritura de `fin_recorrido` (ver el docblock de `detener()` en
-  // `use-gps-operativo.ts`, invariante "nativo OK ⇒ tracking SIEMPRE false al final"). Un ref
-  // propio (no el `trackingAnterior` del ruteo, arriba) para no acoplar dos efectos sin relación.
-  const trackingAnteriorSesionNoVigente = useRef(gps.tracking);
+  // Rescope SESION_NO_VIGENTE, punto C: dispara `onSesionNoVigenteFinalizada` cuando
+  // `sesionNoVigente` está prendido y `gps.tracking` está en `false` — la señal de que
+  // `gps.detener()` (llamado desde el diálogo de "Finalizar" de abajo, el mismo que el chofer ve
+  // reflejado en el banner) ya completó, haya salido bien o mal la escritura de `fin_recorrido`
+  // (ver el docblock de `detener()` en `use-gps-operativo.ts`, invariante "nativo OK ⇒ tracking
+  // SIEMPRE false al final").
+  //
+  // FIX POST-REVISIÓN (hallazgo ALTO, Entrega 28 — "disparo por nivel, no por flanco"): antes
+  // disparaba solo en el FLANCO true→false de `gps.tracking` (comparando contra un ref del
+  // `tracking` anterior). Con la corrección de `useGpsOperativo` que ahora publica solo
+  // veredictos reales (`estado-recorrido-activo.ts`), existe una carrera legítima donde
+  // `gps.tracking` puede llegar a `false` ANTES de que `use-auth-movil.ts` termine de prender
+  // `sesionNoVigente` (p. ej. el chofer mata la app en medio de un recorrido activo y la reabre:
+  // el re-enganche puede resolver `tracking: false` — sin recorrido — antes de que la
+  // suscripción a `estado-recorrido-activo.ts` decida `esperar_finalizar` y recién ENTONCES
+  // `sesionNoVigente` se prenda). En ese orden, el flanco true→false de `tracking` ya pasó y
+  // nunca vuelve a repetirse: el banner quedaba prendido para siempre y "Finalizar" (que llama
+  // `gps.detener()` sin ningún flanco que producir, porque ya estaba en `false`) nunca
+  // destrababa la sync. Disparo por NIVEL en su lugar (`sesionNoVigente && !gps.tracking`), una
+  // sola vez por cada vez que `sesionNoVigente` se prende, con un ref-guard que se resetea
+  // cuando `sesionNoVigente` vuelve a `false` (login nuevo/sesión distinta).
+  const disparadoSesionNoVigente = useRef(false);
   useEffect(() => {
-    const eraTracking = trackingAnteriorSesionNoVigente.current;
-    trackingAnteriorSesionNoVigente.current = gps.tracking;
-    if (props.sesionNoVigente && eraTracking && !gps.tracking) {
+    if (!props.sesionNoVigente) {
+      disparadoSesionNoVigente.current = false;
+      return;
+    }
+    if (!gps.tracking && !disparadoSesionNoVigente.current) {
+      disparadoSesionNoVigente.current = true;
       void props.onSesionNoVigenteFinalizada();
     }
   }, [gps.tracking, props.sesionNoVigente, props.onSesionNoVigenteFinalizada]);
