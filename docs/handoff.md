@@ -18,9 +18,60 @@
 - **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
 - **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
 
-### Punto de retome — 2026-09-26: plan v2 del build 11
+### Punto de retome — cierre de la sesión del 2026-09-26
 
-**Leer esto primero.** El plan se rehízo por loop. **Fuente de verdad: [`plan-apk-build-11.md`](plan-apk-build-11.md) (v2).**
+**Leer esto primero.** Plan vigente: [`plan-apk-build-11.md`](plan-apk-build-11.md) (v2). Pasos 1, 2 y 2' **hechos**. Pasos 3 y 3' con código listo y sin PR.
+
+**Mergeado hoy** (squash; CI verde; chequeos en cada rama: tsc 0 · tests verdes · `pnpm lint` 0 errores):
+
+| PR | Qué | Review |
+|---|---|---|
+| #86 | Plan v2 (anti-loop, alcance recortado) | solo docs |
+| #87 | Posición en vivo = estado de `79e832b` (G1/G2/R1, `ACTIVITY_RECOGNITION`, QUI-247). Rediseño iniciar/detener revertido (`3afc6c0`..`fe4090c`) | `/code-review` ya hecho sobre `79e832b` |
+| #89 | Anuncio de puntos de control (40 m anuncia / 150 m detecta) + merge con #87 (un solo camino de heartbeat) | `/code-review medium`: 2 bugs aplicados. Uno era el doble "llegaste": ahora el claim nace `'programando'`, con test de la carrera. El otro, `detener()` con `umbralAnuncioMs = 0` |
+| #88 | Mapa offline (Entrega 25) | `/code-review medium`: 0 hallazgos |
+
+Nada de esto tiene `verify-fix` de Codex (vuelve el 2026-09-27 15:46) ni prueba en teléfono. El `verify-fix` retroactivo es el paso 4. Lo del teléfono va en la prueba única sobre el RC (paso 7).
+
+**Pendiente, en este orden:**
+
+1. **Entrega 28 — `fix/sesion-no-vigente`** (worktree `../Quivo-control-sesion-no-vigente`, pusheada en `0ddb239`, con `main` mergeado).
+   - **Verificado por el chairman:** tsc 0 · 530/530 · lint 0 errores. API: tsc 0; los tests de auth-movil (32/32) los corrió el agente.
+   - **Reviews:** `/security-review` sin hallazgos. El `/code-review` sacó 4 hallazgos sobre la versión original (`ed86055`); la clave era que el headless borraba la sesión y eso apagaba el GPS en silencio.
+   - **CTO eligió acotar la 28** y ya está implementado:
+     - **Headless:** no borra nada; deja un flag durable por token (`quivo.mobile.sesion-no-vigente.v1`) y no vuelve a llamar a refresh.
+     - **Identidad del token:** antes de cualquier acción destructiva relee SecureStore bajo el lease y compara el token rechazado con el guardado.
+     - **Sin recorrido activo:** va al login.
+     - **Con recorrido activo:** banner bloqueante, sin sync; el logout ocurre recién después de Finalizar. El recorrido activo se detecta con el módulo `estado-recorrido-activo.ts`.
+   - **Falta:**
+     - (a) **Copy con voseo por error del brief:** `operation-screen.tsx:370` dice "Tocá Finalizar y volvé a iniciar sesión.". La app tutea, así que debe decir "Toca Finalizar y vuelve a iniciar sesión." Lo corrige un Sonnet.
+     - (b) Por la regla de una sola vuelta, **no se re-revisa completo.** El chairman lee el diff `ed86055..0ddb239` para confirmar que los hallazgos 1–4 quedaron cubiertos.
+     - (c) PR → CI → merge.
+   - **Riesgo sin test:** reabrir la app con el flag puesto y un recorrido activo. Depende del timing de efectos (`suscribirseARecorridoActivo`). Va en la prueba única del RC.
+2. **Entrega 9 — `fix/movil-toast-dedupe`** (worktree `../Quivo-control-toast`, pusheada en `4d29bbc`).
+   - Dedupe por `{puntoControlId, pasada}`, con fail-open si falta `pasada`. Función pura `debeMostrarToast` con 7 tests.
+   - El agente corrió su propio `/code-review` y aplicó un hallazgo alto: el ref se resetea cuando `ultimaDeteccion` vuelve a `null`. Sin eso, el primer punto de un recorrido nuevo que coincidía con el último del anterior quedaba silenciado.
+   - Hallazgos que el agente dejó fuera de alcance y van a deuda:
+     - deduplicar en el productor (`setUltimaDeteccion`) y no en cada consumidor;
+     - el contador de `simularDeteccion` en `__DEV__`;
+     - la regla de identidad duplicada entre `ultimoSonado` y el toast.
+   - Verificado por el chairman: tsc 0 · 520/520. (Error del chairman: creyó que el agente había muerto con el cambio de cuenta y commiteó su WIP como `0e36dfa`. El agente siguió encima y no se perdió nada.)
+   - **Falta:** PR → CI → merge. El review ya está hecho.
+3. **Paso 4:** `/codex-debug verify-fix` retroactivo sobre #87, #89, #88 y la 28. Solo bloquea un `masks_symptom` en un camino real.
+4. **Paso 5 (lo corre el CTO):** deploy de `main` con la API de la 28. Primero `gcloud run jobs update quivo-migraciones --project quivo-control-prod --region southamerica-west1 --task-timeout=1800`, después `! scripts/deploy-gcp.sh <tag>` y el recompute de `docs/runbooks/retencion-gps.md`. El preflight está en el retome de la 3.ª sesión del 09-25. **La API va antes que el APK.**
+5. **Paso 6:** lista de features y fixes al CTO (memoria `apk-build-11-changelog-antes-de-lanzar`), y con su OK, el RC con `eas build --platform android --profile production`.
+
+**Trampas de esta sesión:**
+- **`packages/shared` se consume desde `dist`.** En un worktree recién mergeado, tsc falla con "no exported member" hasta que se corre `rm -rf dist && pnpm -s build` en `packages/shared`.
+- **El lint válido es `pnpm lint`** (`eslint src`). `eslint .` da errores falsos en `plugins/*.js` y `*.cjs`.
+- **`gh` de esta máquina no tiene `pr update-branch`.** Para poner una rama al día: `git merge origin/main` en su worktree.
+- **Un `/login` a mitad de sesión no corta a los subagentes en vuelo, pero sí puede frenar su progreso visible.** No commitear su trabajo a medias: esperar su notificación.
+
+**Acción del CTO, en paralelo:** comprar la licencia de Transistorsoft. El trial vence el 2026-10-25 con `grace_builds` 0, y el build 12 va a caer después de esa fecha.
+
+### Punto de retome — 2026-09-26: plan v2 del build 11 (histórico, reemplazado por el cierre de la sesión del 2026-09-26)
+
+El plan se rehízo por loop. **Fuente de verdad: [`plan-apk-build-11.md`](plan-apk-build-11.md) (v2).**
 
 Decisiones del CTO:
 - **Posición:** vuelve a `79e832b`. Los fixes 1–5 de abajo **quedan descartados**.
