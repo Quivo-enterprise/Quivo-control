@@ -97,6 +97,13 @@
 Gate: `/code-review` en una sola vuelta y `bash -n`. No se puede probar contra prod antes del
 día D. En el primer uso, el chairman lee el log de la ejecución.
 
+**Preflight hecho (2026-09-26, solo lectura, `cloud@tuquivo.com`)**:
+- `quivo-api-00006-qsn` y `quivo-worker-00001-kdd` corren el digest `api@sha256:ed3c4732…cdf03e`.
+- `quivo-web-00003-qm9` corre `web@sha256:86801ec8…af1f`.
+- Todos tienen el 100 % del tráfico. Coincide con el handoff: prod = `63a0b51`.
+- El job `quivo-migraciones` tiene `timeoutSeconds` 600; la última ejecución (09-22) salió OK.
+- **El tag `v1` ya no apunta a lo que corre**: `v1` = `sha256:07446b04…`, que no es `ed3c47`. **El rollback se hace por revisión o por digest, nunca por el tag `v1`**. Usar `--image=…/api@sha256:ed3c4732365eba558ea9b3061903c38b88cddd721dfd042a1569e4ead0cdf03e` para el worker.
+
 ### Paso 5 — deploy de `main` a prod (el CTO corre; el chairman verifica solo en lectura)
 
 Ventana: de noche en Bolivia, sin choferes en ruta. Así se achica el hueco que corrige el recompute.
