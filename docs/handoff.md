@@ -6,6 +6,23 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Plan en curso: ubicación fluida + "Finalizado" en el panel + pruebas en calle (2026-09-26)
+
+**Plan: [`plan-ubicacion-fluida.md`](plan-ubicacion-fluida.md).** Absorbe el paso 7 (pruebas en calle) del build 11.
+
+- **Decisiones del CTO:**
+  - Rumbo por GPS con histéresis; detenido, se mantiene el último rumbo. Sin brújula.
+  - Le gusta el mapa heading-up. El motor (Google nativo `react-native-maps` o Leaflet + `leaflet-rotate`) se decide con los datos del spike S2.
+- **Orden:**
+  1. **Fase A:** estado "Finalizado" en el panel, solo servidor y web; se despliega sin APK.
+  2. **Ronda 1 en calle**, con el RC build 11.
+  3. **Fase B:** núcleo de movimiento.
+  4. **Spikes S1 y S2** en un dev build.
+  5. **Fase C:** motor de mapa.
+  6. **Ronda 2 en calle.**
+  7. Licencia de Transistorsoft y build release 12.
+- **Prerrequisito:** extender las asignaciones más allá del 2026-09-29 antes del 30/09.
+
 ## Próxima entrega: APK conductor build 11 — plan v2 del 2026-09-26 (reemplaza al del 09-23)
 
 **Plan: [`plan-apk-build-11.md`](plan-apk-build-11.md).** Decisiones del CTO del 09-23 (el alcance y la rama posición cambiaron en el v2):
@@ -30,7 +47,7 @@
   - Probado en un Postgres 16 descartable: el lock, el timeout y la jornada. Contra prod no se probó.
 - **Paso 5 HECHO** (tag `b11-20260926`, `main@4135940`). Verificado; el detalle está en el plan. Recompute con 0 filas: esperable, sin ingesta. Deuda nueva registrada: Redis `volatile-lru` → `noeviction` (decide el CTO).
 - **Siguiente, en orden:**
-  1. Paso 7 en el teléfono, con el RC build 12.
+  1. Paso 7 en el teléfono, con el RC build 12. **En casa quedó parcialmente validado:** login, Comenzar, posición en `/en-vivo` y Finalizar corta el GPS. Lo que falta en calle pasó a [`plan-ubicacion-fluida.md`](plan-ubicacion-fluida.md), Fase D, ronda 1.
   4. Paso 4 (Codex, desde el 2026-09-27 15:46).
 - **Trampa local:** después de mergear PRs móviles, `node_modules` puede quedar viejo. Correr `DATABASE_URL=postgresql://build:build@localhost:5432/build_placeholder pnpm install --frozen-lockfile`.
 
