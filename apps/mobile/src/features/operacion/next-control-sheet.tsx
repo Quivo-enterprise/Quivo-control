@@ -25,6 +25,14 @@ export interface NextControlSheetProps {
   onStart: () => void;
   onFinish: () => void;
   panY: Animated.Value;
+  // REDISEÑO iniciar()/detener() (2026-09-25, puntos 1-2): flags de single-flight
+  // (`use-gps-operativo.ts`) — deshabilitan "Comenzar"/"Finalizar" mientras el respectivo
+  // camino corre, para que un doble toque nunca dispare dos intentos en paralelo desde la UI.
+  // `guardandoRecorridoAnterior` distingue, dentro de `iniciando`, "intento fresco" de "el
+  // single-flight sigue bloqueado por un cierre anterior que sigue colgado en su propio outbox".
+  iniciando: boolean;
+  guardandoRecorridoAnterior: boolean;
+  deteniendo: boolean;
 }
 
 export function NextControlSheet(props: NextControlSheetProps) {
@@ -111,23 +119,28 @@ export function NextControlSheet(props: NextControlSheetProps) {
         {!props.tracking ? (
           <Button
             variant="secondary"
-            disabled={!props.canStart}
+            disabled={!props.canStart || props.iniciando}
             onPress={props.onStart}
             style={styles.startButton}
             textStyle={styles.startButtonText}
             fullWidth
           >
-            COMENZAR RUTA
+            {props.guardandoRecorridoAnterior
+              ? 'GUARDANDO RECORRIDO ANTERIOR…'
+              : props.iniciando
+                ? 'INICIANDO…'
+                : 'COMENZAR RUTA'}
           </Button>
         ) : (
           <Button
             variant="danger"
+            disabled={props.deteniendo}
             onPress={props.onFinish}
             style={styles.finishButton}
             textStyle={styles.finishButtonText}
             fullWidth
           >
-            FINALIZAR RUTA
+            {props.deteniendo ? 'FINALIZANDO…' : 'FINALIZAR RUTA'}
           </Button>
         )}
       </View>

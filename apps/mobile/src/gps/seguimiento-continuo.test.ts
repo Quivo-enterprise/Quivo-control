@@ -13,17 +13,14 @@ import {
   crearCoordinadorIniciarDetener,
   crearManejadorForegroundActivo,
   crearManejadorReafirmarMovimiento,
-  crearSerializadorPromesaEnCurso,
   crearSerializadorRestauracion,
+  detenerNativoConTimeout,
   iniciarSeguimientoContinuo,
-  limpiarSuscripcionesPropias,
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
   restaurarComportamientoNormal,
-  TIMEOUT_ESPERA_INICIAR_MS,
-  type RefsSuscripcionesCompartidas,
+  TIMEOUT_STOP_NATIVO_MS,
   type SdkSeguimientoContinuo,
-  type SuscripcionesInstaladas,
 } from './seguimiento-continuo';
 
 /**
@@ -493,146 +490,41 @@ describe('crearManejadorReafirmarMovimiento', () => {
   });
 });
 
-describe('crearSerializadorPromesaEnCurso — carrera Iniciar→Finalizar rápido (QUI-247, MEDIO)', () => {
-  // Hallazgo MEDIO de revisión: `tracking` pasa a `true` apenas resuelve `start()`, ANTES de
-  // que `iniciar()` termine de escribir `inicio_recorrido` (espera la semilla de cumplimientos
-  // + `abrirOutbox()`, puede tardar segundos) — y `next-control-sheet.tsx` ya ofrece "FINALIZAR
-  // RUTA" en esa ventana. Un toque Iniciar→Finalizar muy rápido hacía que `detener()` escribiera
-  // `fin_recorrido` ANTES de que el `iniciar()` en vuelo llegara a escribir `inicio_recorrido`:
-  // reconstrucción de recorrido rota (fin sin inicio). El fix: `use-gps-operativo.ts` guarda el
-  // `iniciar()` en vuelo en una instancia de este mismo serializador (alias genérico de
-  // `crearSerializadorRestauracion`, mismo mecanismo) y `detener()` la espera ANTES de tocar
-  // nada. Este test reproduce la carrera con el propio serializador, sin levantar el hook
-  // completo (que no tiene arnés jest-expo/RNTL en este paquete).
-  it('detener() esperado tras registrar un iniciar() en vuelo: inicio_recorrido siempre se escribe antes que fin_recorrido', async () => {
-    const orden: string[] = [];
-    const serializadorIniciar = crearSerializadorPromesaEnCurso();
-    const { promesa: iniciarEnCurso, resolver: resolverIniciar } = crearDiferida<void>();
+describe('crearCoordinadorIniciarDetener — single-flight de iniciar()/detener() (rediseño 2026-09-25)', () => {
+  // REDISEÑO: reemplaza al coordinador con timeout/generaciones "más nueva que…" — con
+  // single-flight garantizado, nunca puede haber DOS `iniciar()` en curso a la vez, así que
+  // "vigente" pasa a ser simplemente "no invalidada por un detener()".
 
-    // Simula `iniciar()`: se registra ANTES de que nada más corra (mismo orden que el wrapper
-    // real en `use-gps-operativo.ts`), y su "trabajo" (escribir `inicio_recorrido`) solo se
-    // asienta cuando `resolverIniciar()` se llama más abajo — simulando la espera real de la
-    // semilla + `abrirOutbox()`.
-    serializadorIniciar.registrar(
-      iniciarEnCurso.then(() => {
-        orden.push('inicio_recorrido');
-      }),
-    );
-
-    // El chofer toca "Finalizar" YA, con `iniciar()` todavía en vuelo — `detener()` tiene que
-    // esperar antes de escribir `fin_recorrido`.
-    const detenerSimulado = (async () => {
-      await serializadorIniciar.esperarPendiente();
-      orden.push('fin_recorrido');
-    })();
-
-    // El `iniciar()` en vuelo "tarda" — se resuelve recién acá, después de que `detener()` ya
-    // esté esperando.
-    await Promise.resolve();
-    expect(orden).toEqual([]); // ninguno de los dos escribió nada todavía
-
-    resolverIniciar();
-    await detenerSimulado;
-
-    expect(orden).toEqual(['inicio_recorrido', 'fin_recorrido']);
-  });
-
-  it('sin ningún iniciar() en vuelo (camino normal): detener() no espera nada', async () => {
-    const serializadorIniciar = crearSerializadorPromesaEnCurso();
-    await expect(serializadorIniciar.esperarPendiente()).resolves.toBeUndefined();
-  });
-});
-
-describe('crearCoordinadorIniciarDetener — timeout de detener() contra un iniciar() colgado (bug en producción, 2026-09-25)', () => {
-  // BUG EN PRODUCCIÓN: `detener()` esperaba el `iniciar()` en curso SIN límite de tiempo
-  // (`crearSerializadorPromesaEnCurso.esperarPendiente()`, arriba). Si `iniciar()` se colgaba
-  // de verdad (`abrirOutbox()` contra SQLite trabada, o `BackgroundGeolocation.ready()`/
-  // `.start()` sin responder contra el nativo), "Finalizar recorrido" quedaba esperando esa
-  // promesa PARA SIEMPRE: el botón dejaba de responder, sin mensaje ni reintento. Este
-  // coordinador acota esa espera (`esperarIniciarConTimeout`) y agrega una generación de
-  // cancelación (`nuevaGeneracion`/`estaVigente`) para que, si ese `iniciar()` colgado resuelve
-  // TARDE, no reactive el tracking que `detener()` ya cerró — ver `use-gps-operativo.ts`,
-  // los dos chequeos de `estaVigente` en `ejecutarIniciar`.
-
-  it('camino feliz — sin ningún iniciar() en curso: esperarIniciarConTimeout() resuelve de inmediato sin agotar', async () => {
+  it('promesaIniciarEnCurso(): null cuando no hay ningún iniciar() en curso', () => {
     const coordinador = crearCoordinadorIniciarDetener();
-    await expect(coordinador.esperarIniciarConTimeout()).resolves.toEqual({ agotado: false });
+    expect(coordinador.promesaIniciarEnCurso()).toBeNull();
   });
 
-  it('(c) camino feliz sin regresión: iniciar() en curso que resuelve ANTES del timeout — espera, no agota, y la generación sigue vigente', async () => {
+  it('single-flight: una segunda llamada mientras hay un iniciar() en curso debe reusar la MISMA promesa registrada', async () => {
     const coordinador = crearCoordinadorIniciarDetener();
     const generacion = coordinador.nuevaGeneracion();
     const { promesa, resolver } = crearDiferida<void>();
-    coordinador.registrarPromesaEnCurso(promesa, generacion);
+    coordinador.registrarPromesaIniciar(promesa, generacion);
 
-    let resuelto = false;
-    const espera = coordinador.esperarIniciarConTimeout(10_000).then((resultado) => {
-      resuelto = true;
-      return resultado;
-    });
+    expect(coordinador.promesaIniciarEnCurso()).toBe(promesa);
+    resolver();
+    await promesa;
+  });
 
-    await Promise.resolve();
-    expect(resuelto).toBe(false); // todavía no resolvió el iniciar() en curso — no debe agotar antes de tiempo
+  it('la promesa registrada se limpia sola al resolver: promesaIniciarEnCurso() vuelve a null', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const generacion = coordinador.nuevaGeneracion();
+    const { promesa, resolver } = crearDiferida<void>();
+    coordinador.registrarPromesaIniciar(promesa, generacion);
 
     resolver();
-    const resultado = await espera;
+    await promesa;
+    await Promise.resolve();
 
-    expect(resultado).toEqual({ agotado: false });
-    // Nadie la invalidó: el chequeo de `estaVigente` en `ejecutarIniciar` sigue dejando pasar
-    // este intento (camino normal, sin regresión sobre el comportamiento previo al fix).
-    expect(coordinador.estaVigente(generacion)).toBe(true);
+    expect(coordinador.promesaIniciarEnCurso()).toBeNull();
   });
 
-  it('(a) iniciar() colgado: detener() no se queda esperando para siempre — esperarIniciarConTimeout() agota tras el timeout (fake timers)', async () => {
-    vi.useFakeTimers();
-    try {
-      const coordinador = crearCoordinadorIniciarDetener();
-      const generacion = coordinador.nuevaGeneracion();
-      // Nunca resuelve — simula el `iniciar()` colgado contra `abrirOutbox()`/`ready()`/`.start()`.
-      coordinador.registrarPromesaEnCurso(new Promise<void>(() => {}), generacion);
-
-      const espera = coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
-      await vi.advanceTimersByTimeAsync(TIMEOUT_ESPERA_INICIAR_MS);
-
-      await expect(espera).resolves.toEqual({ agotado: true });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('(b) iniciar() que termina TARDE tras el timeout de detener(): la generación queda invalidada — no re-arranca el tracking', async () => {
-    vi.useFakeTimers();
-    try {
-      const coordinador = crearCoordinadorIniciarDetener();
-      const generacion = coordinador.nuevaGeneracion();
-      const { promesa, resolver } = crearDiferida<void>();
-      coordinador.registrarPromesaEnCurso(promesa, generacion);
-
-      // `detener()` se cansa de esperar (timeout) y sigue con el cierre real del recorrido.
-      const espera = coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
-      await vi.advanceTimersByTimeAsync(TIMEOUT_ESPERA_INICIAR_MS);
-      await expect(espera).resolves.toEqual({ agotado: true });
-
-      // La generación de ESE intento de `iniciar()` ya no es vigente — el chequeo que hace
-      // `ejecutarIniciar` justo antes de marcar `tracking=true` (y el que hace antes de
-      // arrancar el SDK) ven esto en `false` y abortan sin reactivar nada.
-      expect(coordinador.estaVigente(generacion)).toBe(false);
-
-      // El `iniciar()` colgado resuelve TARDE, recién ahora — después de que `detener()` ya se
-      // cansó de esperarlo y cerró el recorrido.
-      resolver();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      // Sigue invalidada: resolver tarde no "revive" la generación vieja — el próximo
-      // `ejecutarIniciar` (si lo hubiera) tampoco la vería vigente jamás otra vez.
-      expect(coordinador.estaVigente(generacion)).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('un iniciar() nuevo invalida la generación del anterior aunque el anterior nunca haya llegado a timeoutear', () => {
+  it('nuevaGeneracion() sucesivas: la más reciente es la vigente, la anterior deja de serlo', () => {
     const coordinador = crearCoordinadorIniciarDetener();
     const generacionVieja = coordinador.nuevaGeneracion();
     const generacionNueva = coordinador.nuevaGeneracion();
@@ -641,352 +533,198 @@ describe('crearCoordinadorIniciarDetener — timeout de detener() contra un inic
     expect(coordinador.estaVigente(generacionNueva)).toBe(true);
   });
 
-  it('(c) camino feliz sin regresión: iniciar() ya resuelto antes de detener() — no agota ni invalida nada', async () => {
+  it('invalidarEnCurso() es SÍNCRONO — no requiere esperar nada, a diferencia del timeout del diseño anterior', () => {
     const coordinador = crearCoordinadorIniciarDetener();
     const generacion = coordinador.nuevaGeneracion();
-    coordinador.registrarPromesaEnCurso(Promise.resolve(), generacion);
+    expect(coordinador.estaVigente(generacion)).toBe(true);
 
-    // Deja que la promesa (ya resuelta) se asiente, como pasaría entre el `await promesa` de
-    // `iniciar()` y el toque de "Finalizar" del chofer.
+    coordinador.invalidarEnCurso(); // sin await — detener() nunca espera nada acá
+    expect(coordinador.estaVigente(generacion)).toBe(false);
+  });
+
+  it('invalidarEnCurso() sin ningún iniciar() en curso: no-op, no rompe nada', () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    expect(() => coordinador.invalidarEnCurso()).not.toThrow();
+  });
+
+  it('iniciarEnCursoInvalidado(): false mientras el intento en curso sigue vigente', () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const generacion = coordinador.nuevaGeneracion();
+    coordinador.registrarPromesaIniciar(new Promise<void>(() => {}), generacion);
+    expect(coordinador.iniciarEnCursoInvalidado()).toBe(false);
+  });
+
+  // EL CASO que distingue "Iniciando…" de "Guardando recorrido anterior…" en la UI: un
+  // `detener()` invalidó el intento en curso, pero ese intento SIGUE en vuelo (colgado en su
+  // propio outbox) — el single-flight de `iniciar()` sigue bloqueado hasta que por fin resuelva.
+  it('iniciarEnCursoInvalidado(): true cuando detener() invalidó un iniciar() que sigue en curso', () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const generacion = coordinador.nuevaGeneracion();
+    coordinador.registrarPromesaIniciar(new Promise<void>(() => {}), generacion);
+
+    coordinador.invalidarEnCurso();
+
+    expect(coordinador.iniciarEnCursoInvalidado()).toBe(true);
+  });
+
+  it('iniciarEnCursoInvalidado(): vuelve a false una vez que el intento invalidado termina de resolver', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const generacion = coordinador.nuevaGeneracion();
+    const { promesa, resolver } = crearDiferida<void>();
+    coordinador.registrarPromesaIniciar(promesa, generacion);
+    coordinador.invalidarEnCurso();
+    expect(coordinador.iniciarEnCursoInvalidado()).toBe(true);
+
+    resolver();
+    await promesa;
     await Promise.resolve();
 
-    const resultado = await coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
-    expect(resultado).toEqual({ agotado: false });
-    expect(coordinador.estaVigente(generacion)).toBe(true);
+    expect(coordinador.iniciarEnCursoInvalidado()).toBe(false);
   });
 
-  it('TIMEOUT_ESPERA_INICIAR_MS es 10 s — acotado, no instantáneo, para no cortar un iniciar() normal que solo tarda un poco', () => {
-    expect(TIMEOUT_ESPERA_INICIAR_MS).toBe(10_000);
+  it('detener() single-flight: promesaDetenerEnCurso() devuelve la promesa registrada y se limpia sola al resolver', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    expect(coordinador.promesaDetenerEnCurso()).toBeNull();
+
+    const { promesa, resolver } = crearDiferida<void>();
+    coordinador.registrarPromesaDetener(promesa);
+    expect(coordinador.promesaDetenerEnCurso()).toBe(promesa);
+
+    resolver();
+    await promesa;
+    await Promise.resolve();
+    expect(coordinador.promesaDetenerEnCurso()).toBeNull();
   });
 
-  // L1 (hallazgo de revisión, 2026-09-25): al agotar, `esperarIniciarConTimeout` tiene que
-  // limpiar `enCurso`/su generación asociada — no solo confiar en que el `.finally()` de
-  // `registrarPromesaEnCurso` lo haga cuando la promesa colgada algún día resuelva. Sin este
-  // fix, un SEGUNDO `detener()` disparado de inmediato (el chofer reintentando el botón porque
-  // el primero "tardó") encontraba `enCurso` todavía apuntando al mismo intento colgado y volvía
-  // a esperar los 10 s completos por algo que el primer `detener()` ya dio por perdido.
-  it('L1: un segundo detener() inmediato tras el timeout NO vuelve a esperar 10 s por el mismo intento colgado', async () => {
+  it('un iniciar() nuevo (tras resolver el anterior) arranca vigente y sin invalidar — el ciclo se reinicia limpio', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const generacionA = coordinador.nuevaGeneracion();
+    coordinador.registrarPromesaIniciar(Promise.resolve(), generacionA);
+    coordinador.invalidarEnCurso();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const generacionB = coordinador.nuevaGeneracion();
+    expect(coordinador.estaVigente(generacionB)).toBe(true);
+    expect(coordinador.estaVigente(generacionA)).toBe(false);
+  });
+});
+
+describe('detenerNativoConTimeout (rediseño 2026-09-25) — stop() colgado/rechazado no impide la limpieza', () => {
+  // Punto 3 del rediseño: `detener()` nunca queda a merced de un `BackgroundGeolocation.stop()`
+  // que no responde — la limpieza JS (remover suscripciones, tracking=false) sigue de largo
+  // pase lo que pase con el nativo.
+
+  it('stop() resuelve rápido: ok:true, sin error', async () => {
+    const sdk = { stop: vi.fn(async () => ({})) };
+    await expect(detenerNativoConTimeout(sdk)).resolves.toEqual({ ok: true });
+  });
+
+  it('stop() rechaza: ok:false con el error original, no propaga (no lanza)', async () => {
+    const error = new Error('stop(): fallo nativo simulado');
+    const sdk = { stop: vi.fn(async () => { throw error; }) };
+    await expect(detenerNativoConTimeout(sdk)).resolves.toEqual({ ok: false, error });
+  });
+
+  it('stop() colgado (nunca resuelve): vence el timeout y devuelve ok:false sin esperar para siempre', async () => {
     vi.useFakeTimers();
     try {
-      const coordinador = crearCoordinadorIniciarDetener();
-      const generacion = coordinador.nuevaGeneracion();
-      // Nunca resuelve — el mismo `iniciar()` colgado de siempre.
-      coordinador.registrarPromesaEnCurso(new Promise<void>(() => {}), generacion);
+      const sdk = { stop: vi.fn(() => new Promise<unknown>(() => {})) };
+      const promesa = detenerNativoConTimeout(sdk, TIMEOUT_STOP_NATIVO_MS);
+      await vi.advanceTimersByTimeAsync(TIMEOUT_STOP_NATIVO_MS);
+      const resultado = await promesa;
+      expect(resultado.ok).toBe(false);
+      expect(resultado.error).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-      const primeraEspera = coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
-      await vi.advanceTimersByTimeAsync(TIMEOUT_ESPERA_INICIAR_MS);
-      await expect(primeraEspera).resolves.toEqual({ agotado: true });
+  it('TIMEOUT_STOP_NATIVO_MS es 5 s', () => {
+    expect(TIMEOUT_STOP_NATIVO_MS).toBe(5_000);
+  });
 
-      // Segundo detener(), sin avanzar los timers de nuevo: si `enCurso` no se hubiera limpiado,
-      // esta segunda espera instalaría OTRO timeout de 10 s y seguiría pendiente acá — la
-      // aserción de abajo nunca resolvería sin otro `advanceTimersByTimeAsync`, y el test
-      // colgaría hasta el timeout del propio test runner (falla clara de la regresión).
-      let resuelta = false;
-      const segundaEspera = coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS).then((r) => {
-        resuelta = true;
-        return r;
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(resuelta).toBe(true);
-      await expect(segundaEspera).resolves.toEqual({ agotado: false });
+  it('stop() resuelve ANTES del timeout: no espera el timeout completo', async () => {
+    vi.useFakeTimers();
+    try {
+      const sdk = { stop: vi.fn(async () => ({})) };
+      const promesa = detenerNativoConTimeout(sdk, 10_000);
+      const resultado = await promesa;
+      expect(resultado).toEqual({ ok: true });
     } finally {
       vi.useRealTimers();
     }
   });
 });
 
-describe('limpiarSuscripcionesPropias (H1, hallazgo de revisión CRÍTICO, 2026-09-25)', () => {
-  function handleFake() {
-    return { remove: vi.fn() };
-  }
-  function refsVacios(): RefsSuscripcionesCompartidas {
-    return {
-      subscription: { current: null },
-      heartbeat: { current: null },
-      motionChange: { current: null },
-    };
-  }
-
-  it('remueve los tres handles propios incondicionalmente', () => {
-    const instaladas: SuscripcionesInstaladas = {
-      subscription: handleFake(),
-      heartbeat: handleFake(),
-      motionChange: handleFake(),
-    };
-    limpiarSuscripcionesPropias(instaladas, refsVacios());
-    expect(instaladas.subscription.remove).toHaveBeenCalledTimes(1);
-    expect(instaladas.heartbeat.remove).toHaveBeenCalledTimes(1);
-    expect(instaladas.motionChange.remove).toHaveBeenCalledTimes(1);
-  });
-
-  it('si el ref compartido TODAVÍA apunta al handle propio, lo null-ea', () => {
-    const instaladas: SuscripcionesInstaladas = {
-      subscription: handleFake(),
-      heartbeat: handleFake(),
-      motionChange: handleFake(),
-    };
-    const compartidas: RefsSuscripcionesCompartidas = {
-      subscription: { current: instaladas.subscription },
-      heartbeat: { current: instaladas.heartbeat },
-      motionChange: { current: instaladas.motionChange },
-    };
-
-    limpiarSuscripcionesPropias(instaladas, compartidas);
-
-    expect(compartidas.subscription.current).toBeNull();
-    expect(compartidas.heartbeat.current).toBeNull();
-    expect(compartidas.motionChange.current).toBeNull();
-  });
-
-  // EL CASO REAL de H1: el ref compartido ya fue reemplazado por un `iniciar()` más nuevo (B)
-  // antes de que el intento viejo (A) llegue a limpiar — no debe tocarlo ni pisarlo.
-  it('si el ref compartido ya pertenece a OTRO handle (un iniciar() más nuevo), lo deja intacto', () => {
-    const instaladasA: SuscripcionesInstaladas = {
-      subscription: handleFake(),
-      heartbeat: handleFake(),
-      motionChange: handleFake(),
-    };
-    const instaladasB: SuscripcionesInstaladas = {
-      subscription: handleFake(),
-      heartbeat: handleFake(),
-      motionChange: handleFake(),
-    };
-    const compartidas: RefsSuscripcionesCompartidas = {
-      subscription: { current: instaladasB.subscription },
-      heartbeat: { current: instaladasB.heartbeat },
-      motionChange: { current: instaladasB.motionChange },
-    };
-
-    limpiarSuscripcionesPropias(instaladasA, compartidas);
-
-    // A removió SUS propios handles (limpieza propia, aunque ya nadie los referencie)...
-    expect(instaladasA.subscription.remove).toHaveBeenCalledTimes(1);
-    expect(instaladasA.heartbeat.remove).toHaveBeenCalledTimes(1);
-    expect(instaladasA.motionChange.remove).toHaveBeenCalledTimes(1);
-    // ...pero NUNCA tocó los handles de B ni los refs compartidos, que siguen siendo los de B.
-    expect(instaladasB.subscription.remove).not.toHaveBeenCalled();
-    expect(instaladasB.heartbeat.remove).not.toHaveBeenCalled();
-    expect(instaladasB.motionChange.remove).not.toHaveBeenCalled();
-    expect(compartidas.subscription.current).toBe(instaladasB.subscription);
-    expect(compartidas.heartbeat.current).toBe(instaladasB.heartbeat);
-    expect(compartidas.motionChange.current).toBe(instaladasB.motionChange);
-  });
-});
-
-describe('H1 (hallazgo de revisión CRÍTICO, 2026-09-25) — A tardío no puede matar a B', () => {
+describe('Rediseño iniciar()/detener() (bug en producción, 2026-09-25) — detener() no espera a iniciar()', () => {
   /**
    * Reproduce, con los mismos bloques puros que usa `use-gps-operativo.ts`
-   * (`crearCoordinadorIniciarDetener`, `limpiarSuscripcionesPropias`), el escenario completo del
-   * hallazgo: `iniciar A` se cuelga en `ready()/start()` → `detener()` agota el timeout y cierra
-   * → el chofer toca "Iniciar" de nuevo (`B`) → `B` se suscribe y arranca el SDK con éxito →
-   * `A` resuelve (o rechaza) tarde. El estado de React (`subscription`/`heartbeatSubscription`/
-   * `motionChangeSubscription`/`trackingRef`) se simula con objetos `{ current }` — la misma
-   * forma que un `useRef` — y una `stopFn` fake hace de `BackgroundGeolocation.stop()`. El orden
-   * de operaciones replica exactamente el de `ejecutarIniciar`/`detener()` en
-   * `use-gps-operativo.ts`.
+   * (`crearCoordinadorIniciarDetener`, `detenerNativoConTimeout`, `restaurarComportamientoNormal`
+   * de este módulo, y `cerrarRecorridoEnOutbox` de `cierre-recorrido.ts`), el escenario completo
+   * del rediseño: `iniciar()` queda colgado en su propio outbox (asegurarInicioRecorrido) →
+   * `detener()` NO lo espera — invalida su generación de inmediato y sigue con su propio cierre
+   * (stop acotado, limpiar suscripciones, tracking=false) → el `iniciar()` colgado, al resolver
+   * tarde, ve que ya no es vigente y limpia lo que él mismo prendió sin tocar tracking/estado.
    */
-  function handle(nombre: string) {
-    return { nombre, remove: vi.fn() };
-  }
+  it('detener() invalida y cierra sin esperar al iniciar() colgado en outbox; el iniciar() invalidado, al resolver tarde, llama stop()+restaura y no toca tracking', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const trackingRef = { current: false };
+    const stopFn = vi.fn(async () => ({}));
+    const setConfig = vi.fn(async (_config: Record<string, unknown>) => ({}));
+    const orden: string[] = [];
 
-  it('A tardío (resuelve OK tras el timeout): B conserva sus suscripciones, el SDK de B no se para, y tracking sigue true', async () => {
-    vi.useFakeTimers();
-    try {
-      const coordinador = crearCoordinadorIniciarDetener();
-      const refs: RefsSuscripcionesCompartidas = {
-        subscription: { current: null },
-        heartbeat: { current: null },
-        motionChange: { current: null },
-      };
-      const trackingRef = { current: false };
-      const stopFn = vi.fn(async () => {});
-
-      // --- iniciar A: se cuelga en ready()/start(), nunca llega a marcar tracking=true ---
-      const generacionA = coordinador.nuevaGeneracion();
-      const { promesa: promesaA, resolver: resolverA } = crearDiferida<void>();
-      coordinador.registrarPromesaEnCurso(promesaA, generacionA);
-      const instaladasA: SuscripcionesInstaladas = {
-        subscription: handle('A-sub'),
-        heartbeat: handle('A-heartbeat'),
-        motionChange: handle('A-motion'),
-      };
-      refs.subscription.current = instaladasA.subscription;
-      refs.heartbeat.current = instaladasA.heartbeat;
-      refs.motionChange.current = instaladasA.motionChange;
-
-      // --- detener(): se cansa de esperar a A y sigue con su propio cierre ---
-      const espera = coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
-      await vi.advanceTimersByTimeAsync(TIMEOUT_ESPERA_INICIAR_MS);
-      await expect(espera).resolves.toEqual({ agotado: true });
-      await stopFn();
-      refs.subscription.current?.remove();
-      refs.subscription.current = null;
-      refs.heartbeat.current?.remove();
-      refs.heartbeat.current = null;
-      refs.motionChange.current?.remove();
-      refs.motionChange.current = null;
-      trackingRef.current = false;
-      stopFn.mockClear(); // de acá en más solo interesa si A o B lo llaman DE NUEVO
-
-      // --- el chofer toca "Iniciar" otra vez: B ---
-      const generacionB = coordinador.nuevaGeneracion();
-      const instaladasB: SuscripcionesInstaladas = {
-        subscription: handle('B-sub'),
-        heartbeat: handle('B-heartbeat'),
-        motionChange: handle('B-motion'),
-      };
-      refs.subscription.current = instaladasB.subscription;
-      refs.heartbeat.current = instaladasB.heartbeat;
-      refs.motionChange.current = instaladasB.motionChange;
-      expect(coordinador.estaVigente(generacionB)).toBe(true);
-      trackingRef.current = true; // B arrancó el SDK con éxito
-
-      // --- A resuelve tarde (ready()/start() por fin responde) ---
-      resolverA();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      // El chequeo que hace ejecutarIniciar antes de cualquier paso con efecto:
-      expect(coordinador.estaVigente(generacionA)).toBe(false);
-      limpiarSuscripcionesPropias(instaladasA, refs);
-      if (!coordinador.hayIntentoMasNuevo(generacionA)) {
-        await stopFn();
-      }
-      // A NO toca tracking/trackingRef ni errorGps — mismo criterio que el catch no vigente.
-
-      // --- Aserciones: B queda completamente intacto ---
-      expect(refs.subscription.current).toBe(instaladasB.subscription);
-      expect(refs.heartbeat.current).toBe(instaladasB.heartbeat);
-      expect(refs.motionChange.current).toBe(instaladasB.motionChange);
-      expect(instaladasB.subscription.remove).not.toHaveBeenCalled();
-      expect(instaladasB.heartbeat.remove).not.toHaveBeenCalled();
-      expect(instaladasB.motionChange.remove).not.toHaveBeenCalled();
-      expect(stopFn).not.toHaveBeenCalled(); // el SDK de B sigue corriendo
-      expect(trackingRef.current).toBe(true); // la UI sigue mostrando el recorrido de B activo
-      // A sí intentó limpiar lo suyo — dos veces en total (una desde el cierre de `detener()`,
-      // que ya había removido las mismas suscripciones al agotar el timeout, y otra redundante
-      // desde la limpieza tardía de A) — `remove()` es idempotente, así que esto es inocuo.
-      expect(instaladasA.subscription.remove).toHaveBeenCalledTimes(2);
-      expect(instaladasA.heartbeat.remove).toHaveBeenCalledTimes(2);
-      expect(instaladasA.motionChange.remove).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('A tardío SIN un iniciar() más nuevo (solo el timeout de detener(), el chofer no volvió a tocar Iniciar): sí es seguro llamar stop() de nuevo', async () => {
-    vi.useFakeTimers();
-    try {
-      const coordinador = crearCoordinadorIniciarDetener();
-      const generacionA = coordinador.nuevaGeneracion();
-      const { promesa, resolver } = crearDiferida<void>();
-      coordinador.registrarPromesaEnCurso(promesa, generacionA);
-
-      const espera = coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
-      await vi.advanceTimersByTimeAsync(TIMEOUT_ESPERA_INICIAR_MS);
-      await expect(espera).resolves.toEqual({ agotado: true });
-
-      // Nadie tocó "Iniciar" de nuevo — `ultimaGeneracion` sigue siendo la de A.
-      expect(coordinador.hayIntentoMasNuevo(generacionA)).toBe(false);
-
-      resolver();
-      await Promise.resolve();
-      // Sigue sin haber un intento más nuevo: es seguro que A llame stop() (redundante con el
-      // que ya hizo detener(), pero no le pisa nada a nadie).
-      expect(coordinador.hayIntentoMasNuevo(generacionA)).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // Variante del catch (A falla al arrancar el nativo en vez de tener éxito): mismo criterio —
-  // limpia solo lo suyo, nunca toca tracking/errorGps de B, y reporta a Sentry.
-  it('A tardío que RECHAZA (start() falla) tras B: limpia solo lo suyo y reporta a Sentry, sin tocar tracking/errorGps de B', async () => {
-    vi.useFakeTimers();
-    try {
-      const coordinador = crearCoordinadorIniciarDetener();
-      const refs: RefsSuscripcionesCompartidas = {
-        subscription: { current: null },
-        heartbeat: { current: null },
-        motionChange: { current: null },
-      };
-      const trackingRef = { current: false };
-      let errorGpsLlamado = false;
-      const setErrorGps = () => {
-        errorGpsLlamado = true;
-      };
-
-      const generacionA = coordinador.nuevaGeneracion();
-      const { promesa: promesaA, resolver: rechazarA } = crearDiferida<void>();
-      // `registrarPromesaEnCurso` no necesita que la promesa nunca rechace — el coordinador la
-      // trata igual (éxito o fallo cuentan como "terminó a tiempo").
-      coordinador.registrarPromesaEnCurso(
-        promesaA.catch(() => {}),
-        generacionA,
-      );
-      const instaladasA: SuscripcionesInstaladas = {
-        subscription: handle('A-sub'),
-        heartbeat: handle('A-heartbeat'),
-        motionChange: handle('A-motion'),
-      };
-      refs.subscription.current = instaladasA.subscription;
-      refs.heartbeat.current = instaladasA.heartbeat;
-      refs.motionChange.current = instaladasA.motionChange;
-
-      const espera = coordinador.esperarIniciarConTimeout(TIMEOUT_ESPERA_INICIAR_MS);
-      await vi.advanceTimersByTimeAsync(TIMEOUT_ESPERA_INICIAR_MS);
-      await expect(espera).resolves.toEqual({ agotado: true });
-      refs.subscription.current?.remove();
-      refs.subscription.current = null;
-      refs.heartbeat.current?.remove();
-      refs.heartbeat.current = null;
-      refs.motionChange.current?.remove();
-      refs.motionChange.current = null;
-      trackingRef.current = false;
-
-      coordinador.nuevaGeneracion();
-      const instaladasB: SuscripcionesInstaladas = {
-        subscription: handle('B-sub'),
-        heartbeat: handle('B-heartbeat'),
-        motionChange: handle('B-motion'),
-      };
-      refs.subscription.current = instaladasB.subscription;
-      refs.heartbeat.current = instaladasB.heartbeat;
-      refs.motionChange.current = instaladasB.motionChange;
+    // --- iniciar(): arranca el nativo con éxito, marca tracking=true, y se cuelga en su propio
+    // outbox (simulado con una promesa diferida sin resolver todavía). ---
+    const generacion = coordinador.nuevaGeneracion();
+    const { promesa: outboxColgado, resolver: resolverOutbox } = crearDiferida<void>();
+    const ejecutarIniciarSimulado = (async () => {
+      orden.push('start-nativo');
       trackingRef.current = true;
-
-      // A por fin "resuelve" (rechaza) tarde — simulando que start() falló.
-      rechazarA();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      // El catch de `ejecutarIniciar`, con `estaVigente(generacionA) === false`: limpia lo
-      // propio, reporta a Sentry, y JAMÁS llama `setErrorGps` (H1/H2: un intento no vigente no
-      // le pisa un mensaje de error al chofer sobre el recorrido de B).
-      expect(coordinador.estaVigente(generacionA)).toBe(false);
-      limpiarSuscripcionesPropias(instaladasA, refs);
-      if (!coordinador.estaVigente(generacionA)) {
-        Sentry.captureException(new Error('start() falló tarde'), {
-          tags: { contexto: 'gps-foreground', paso: 'iniciar-nativo-no-vigente' },
-        });
-      } else {
-        setErrorGps();
+      await outboxColgado; // se cuelga acá, como `asegurarInicioRecorrido`/`abrirOutbox` real
+      if (!coordinador.estaVigente(generacion)) {
+        // Intento invalidado que resuelve tarde: NO toca tracking, pero sí apaga lo que prendió.
+        await stopFn();
+        await setConfig({ activity: { disableStopDetection: false } });
+        orden.push('iniciar-invalidado-limpio');
+        return;
       }
+      orden.push('outbox-confirmado');
+    })();
+    coordinador.registrarPromesaIniciar(ejecutarIniciarSimulado, generacion);
 
-      expect(refs.subscription.current).toBe(instaladasB.subscription);
-      expect(refs.heartbeat.current).toBe(instaladasB.heartbeat);
-      expect(refs.motionChange.current).toBe(instaladasB.motionChange);
-      expect(trackingRef.current).toBe(true);
-      expect(errorGpsLlamado).toBe(false);
-      expect(Sentry.captureException).toHaveBeenCalledWith(
-        expect.any(Error),
-        expect.objectContaining({
-          tags: expect.objectContaining({ paso: 'iniciar-nativo-no-vigente' }),
-        }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    // --- El chofer toca "Finalizar" YA, con iniciar() todavía colgado en el outbox. ---
+    coordinador.invalidarEnCurso(); // sync — nada que esperar acá
+    orden.push('detener-invalida');
+    await stopFn(); // stop() acotado (detenerNativoConTimeout real se prueba aparte)
+    trackingRef.current = false;
+    orden.push('detener-tracking-false');
+    // `detener()` YA terminó su camino crítico — el chofer ve el recorrido detenido acá mismo,
+    // sin haber esperado ni un microtask al iniciar() colgado.
+    expect(trackingRef.current).toBe(false);
+    expect(orden).toEqual(['start-nativo', 'detener-invalida', 'detener-tracking-false']);
+
+    // --- El iniciar() colgado por fin resuelve, tarde. ---
+    resolverOutbox();
+    await ejecutarIniciarSimulado;
+
+    expect(orden).toEqual([
+      'start-nativo',
+      'detener-invalida',
+      'detener-tracking-false',
+      'iniciar-invalidado-limpio',
+    ]);
+    // stop() se llamó dos veces (una desde detener(), otra redundante desde el iniciar()
+    // invalidado) — idempotente, inocuo.
+    expect(stopFn).toHaveBeenCalledTimes(2);
+    expect(setConfig).toHaveBeenCalledWith({ activity: { disableStopDetection: false } });
+    // tracking nunca volvió a true por culpa del intento invalidado.
+    expect(trackingRef.current).toBe(false);
+  });
+
+  it('sin ningún iniciar() en curso (camino normal): invalidarEnCurso() es no-op y detener() no espera nada', () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    expect(coordinador.promesaIniciarEnCurso()).toBeNull();
+    expect(() => coordinador.invalidarEnCurso()).not.toThrow();
   });
 });

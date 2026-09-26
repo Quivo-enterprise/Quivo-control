@@ -155,6 +155,37 @@ describe('asegurarInicioRecorrido', () => {
     expect(encolarEvento.mock.calls[1]?.[1].eventId).toBe('event-estable');
   });
 
+  // Punto 6 (rediseño iniciar()/detener(), 2026-09-25): con `detener()` ya no esperando a un
+  // `iniciar()` en curso, un intento invalidado puede seguir colgado en este `await
+  // encolarEvento` mientras un `iniciar()` NUEVO ya reinició `estado` para el recorrido
+  // siguiente. El intento viejo, al resolver tarde, NO debe marcar `confirmado = true` — eso
+  // pisaría el estado "sin confirmar" del recorrido nuevo.
+  it('confirmado no se pisa si el eventId cambió mientras encolarEvento estaba en vuelo (intento invalidado que resuelve tarde)', async () => {
+    const estado: EstadoInicioRecorrido = {
+      eventId: 'event-viejo',
+      confirmado: false,
+      ts: 'ts-viejo',
+    };
+    const abrirOutbox = vi.fn(async () => fakeDb());
+    // Mientras este `encolarEvento` está "en vuelo", el recorrido nuevo ya reinició `estado`.
+    const encolarEvento = vi.fn(async () => {
+      reiniciarEstadoInicioRecorrido(estado, 'event-nuevo', 'ts-nuevo');
+      return { eventId: 'event-viejo', insertado: true };
+    });
+
+    await asegurarInicioRecorrido(
+      estado,
+      { abrirOutbox, encolarEvento },
+      { deviceId: 'device-1', sesionId: 'sesion-1' },
+    );
+
+    // El evento del intento viejo SÍ se escribió (el `encolarEvento` corrió con su eventId),
+    // pero `estado` ya no le pertenece — no debe quedar `confirmado`.
+    expect(encolarEvento).toHaveBeenCalledWith(fakeDb(), expect.objectContaining({ eventId: 'event-viejo' }));
+    expect(estado.eventId).toBe('event-nuevo');
+    expect(estado.confirmado).toBe(false);
+  });
+
   it('reiniciar para un recorrido NUEVO usa un eventId (y ts) distinto al del recorrido anterior', () => {
     const estado = crearEstadoInicioRecorrido();
     reiniciarEstadoInicioRecorrido(estado, 'recorrido-1', 'ts-1');
