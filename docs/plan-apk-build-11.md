@@ -159,7 +159,7 @@ plan tiene margen para uno solo. El deploy (paso 5) no depende del paso 4.
 
 ### Borrador del changelog (APK 11 frente al build 10)
 
-La base es el estado de prod del 2026-09-09. Falta confirmar el commit del build 10 (punto 2).
+**Base confirmada (2026-09-26, `eas build:list`):** build 10 = `versionCode` 10, commit `04b14ed`, EAS `da14a3b9`, del 2026-09-09. `TRANSISTORSOFT_LICENSE_KEY` existe en EAS production (secreto, su valor no se puede leer). **Trampa local:** después de mergear #89, `node_modules` quedó sin `expo-notifications` y `eas`/`expo config` fallaban con `PluginError`. Se arregla con `DATABASE_URL=postgresql://build:build@localhost:5432/build_placeholder pnpm install --frozen-lockfile`, porque el postinstall de Prisma exige esa variable.
 
 Móvil:
 - **#80:** drenado GPS en background; la sesión móvil se mantiene entre la UI y el headless;
@@ -173,7 +173,7 @@ Móvil:
 - **#91 (Entrega 9):** el toast de confirmación no se repite para el mismo punto y pasada.
 - **#92 (Entrega 28):** con la sesión vencida o revocada, la app corta sin ráfaga de reintentos.
   Si hay un recorrido activo, pide Finalizar antes de ir al login; nunca corta el GPS en vivo.
-- **Por confirmar:** si `04b14ed` (muestreo cada 15 m, del 2026-09-09) ya estaba en el build 10.
+- (El muestreo cada 15 m, `04b14ed`, ya iba en el build 10: no entra en este changelog.)
 
 Servidor (entra con el paso 5, no con el APK):
 - **#65 y #83:** `/en-vivo` con todos los vehículos, filtro por línea y placa legible.
