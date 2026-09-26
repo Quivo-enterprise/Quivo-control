@@ -6,9 +6,9 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Próxima entrega: APK conductor build 11 — plan aprobado 2026-09-23
+## Próxima entrega: APK conductor build 11 — plan v2 del 2026-09-26 (reemplaza al del 09-23)
 
-**Plan: [`plan-apk-build-11.md`](plan-apk-build-11.md).** Decisiones del CTO:
+**Plan: [`plan-apk-build-11.md`](plan-apk-build-11.md).** Decisiones del CTO del 09-23 (el alcance y la rama posición cambiaron en el v2):
 
 - **Alcance P0 completo:** cerrar las 4 ramas móviles (Entregas 1–7, 7b, 25, 31) y sumar las Entregas 8, 9, 26 y 28.
 - **Radio:** detectar a 150 m y confirmar a 40 m. Cierra la decisión abierta #1.
@@ -18,9 +18,185 @@
 - **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
 - **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
 
-### Punto de retome — cierre de la sesión del 2026-09-25
+### Punto de retome — 2026-09-26: plan v2 del build 11
 
-**Leer esto primero.** Reemplaza al retome del 2026-09-23 (que queda abajo como histórico).
+**Leer esto primero.** El plan se rehízo por loop. **Fuente de verdad: [`plan-apk-build-11.md`](plan-apk-build-11.md) (v2).**
+
+Decisiones del CTO:
+- **Posición:** vuelve a `79e832b`. Los fixes 1–5 de abajo **quedan descartados**.
+- **Alcance:** 3 ramas + Entregas 28 y 9. Las Entregas 8 y 26 pasan al build 12.
+- **Deploy:** lo corre el CTO con `!`.
+
+Reglas anti-loop:
+- Una sola vuelta de review por rama. Solo bloquea un `high` en un camino real.
+- El handoff viaja dentro del PR de código.
+- Una sola prueba en teléfono, sobre el RC.
+
+Meta: build en los teléfonos antes del **2026-10-10**. La licencia trial vence el 2026-10-25.
+
+### Punto de retome — cierre de la cuarta sesión del 2026-09-25 (histórico, reemplazado por el plan v2 del 2026-09-26)
+
+Reemplaza al retome de la tercera sesión (queda abajo como histórico; su tabla de
+ramas y su preflight de deploy siguen valiendo salvo lo que se corrige acá). Todo lo de esta sesión es
+**app móvil del conductor** (`apps/mobile`, APK build 11), rama `fix/movil-posicion-en-vivo`.
+
+**Rama posición — pusheada en `fe4090c`, sin PR:**
+- `c83b0b8` fixes del 3.er `/code-review high` sobre `4b9e5b5..51d3fad` (10 hallazgos, 9 aplicados):
+  serializador de restauración encadena en vez de reemplazar; fase 2 escribe `inicio_recorrido` siempre
+  tras `start()` ok; invalidación con causa `'detener' | 'desmontaje'` (desmontaje no apaga el nativo);
+  espera a intento invalidado con tope 15 s (`EsperaIniciarInvalidadoAgotadaError`) y tolerante a
+  rechazos; bump de `ultimoCierreId` movido tras `start()`; `stop()` síncrono normalizado; docs.
+- `fe4090c` hallazgo restante: `reconciliarStopTardio` (función pura) — si un `stop()` vencido resuelve
+  tarde con el SDK apagado y `tracking=true`, cierra el recorrido una sola vez (guarda por
+  `esReconciliacion` y por `estadoInicioRecorrido.eventId`). Público `detener()` sin cambio de firma.
+- Verificado por el chairman en `fe4090c`: tsc 0 · vitest 364/364 · eslint 0 errores (14 warnings viejos).
+
+**Bloqueante antes del PR — `/code-review medium` sobre `51d3fad..fe4090c` encontró 5 regresiones de
+esos fixes, todas confirmadas por el chairman. Decisiones ya tomadas (el agente que las aplicaba se
+detuvo a pedido del CTO sin escribir nada; worktree limpio):**
+1. `crearSerializadorRestauracion` (`seguimiento-continuo.ts` ~303/315): con el encadenado, un `stop()`
+   nativo que nunca asienta cuelga `esperarPendiente()` para siempre. → `esperarPendiente(timeout
+   10 s)`, al vencer lanza `EsperaRestauracionAgotadaError` y **no** limpia el slot; `iniciar()` lo
+   trata como `EsperaIniciarInvalidadoAgotadaError` ("Cierra y vuelve a abrir la app").
+2. Desmontaje (`use-gps-operativo.ts` ~1023): no apagar el nativo deja GPS huérfano (el remount puede
+   leer `enabled=false` antes de que resuelva el `start()` viejo) y sin `inicio_recorrido`. →
+   **revertir** el caso `'desmontaje'` (vuelve a `detenerNativoYRestaurar`), borrar la plomería de
+   causa; mitigar el caso cruzado suscribiendo `onEnabledChange` mientras hay tracking (verificar firma
+   en los typings del paquete): `enabled=false` + montado + `trackingRef` → `detener` de reconciliación.
+   Verificar orden `stop()`/evento/`trackingRef=false` para no cerrar dos veces.
+3. `ultimoCierreId` (~1039/~793): el bump tardío deja que el cierre viejo pinte veredicto/error sobre el
+   recorrido nuevo. → **revertir** al bump al principio de `ejecutarIniciar`; tradeoff aceptado: un
+   Comenzar bloqueado por permisos descarta el veredicto pendiente del recorrido anterior.
+4. Fase 2 (~1144): tras esperar la semilla puede escribir `inicio_recorrido` con el `eventId` de un
+   recorrido nuevo que nunca arrancó. → capturar `eventIdInicio` al empezar la fase 2 y saltar la
+   escritura si `estadoInicioRecorrido.eventId` cambió.
+5. Reconciliación (~1285/~1363): re-corre `ejecutarDetener` y toma `tsFin`/snapshots nuevos. → pasar
+   `cierreOriginal { tsFin, snapshotBateria, snapshotPuntos, snapshotErroresEscritura }` en `opciones`.
+
+**Criterio de corte (del chairman):** es la 2.ª vuelta de fixes sobre el mismo hook y cada review sacó
+regresiones nuevas. Tras aplicar 1–5 (Sonnet nuevo) + un `/code-review` corto: si vuelve a salir un fallo
+de diseño, proponer al CTO cerrar el PR y mover las carreras residuales a un ticket, no seguir parchando.
+Pendiente también: `/codex-debug verify-fix` (Codex fuera hasta 2026-09-27 15:46 — si se mergea antes,
+queda "no verificado") y prueba en teléfono (iniciar/finalizar rápido, doble toque, modo avión).
+
+**Deploy a producción:** el CTO renovó `gcloud auth login` (cuenta `cloud@tuquivo.com`, proyecto
+`quivo-control-prod`) al inicio de esta sesión. Sigue sin desplegarse: el clasificador bloquea
+`scripts/deploy-gcp.sh`; lo corre el CTO (`! scripts/deploy-gcp.sh <tag>`, secuencia en el retome de la
+tercera sesión) o agrega regla de permiso. Pregunta abierta al CTO, sin respuesta.
+
+**Siguiente paso, en orden:** fixes 1–5 de posición → review → teléfono → PR/CI/merge · luego anuncio
+(`git merge origin/main` + `/code-review` + PR) · mapa offline (teléfono → PR) · Entregas 8/9/26/28 ·
+lista de features al CTO antes del build.
+
+### Punto de retome — cierre de la tercera sesión del 2026-09-25 (histórico, reemplazado por el de la cuarta sesión)
+
+Siguen
+vigentes: gate sin Codex hasta el 2026-09-27 15:46, lista de features al CTO antes del build, licencia
+trial hasta el 2026-10-25, ramas al día con `git merge origin/main` (no rebase).
+
+**Decisiones del CTO en esta sesión:**
+- Mapa offline: al volver la red se reintentan los tiles abandonados/en backoff (hecho, ver abajo).
+- OK para desplegar `main` a producción + recompute. **No se desplegó:** el clasificador de auto mode
+  bloquea `scripts/deploy-gcp.sh` (`Production Deploy`) y las credenciales de `gcloud` están vencidas
+  (`Reauthentication failed`). Lo corre el CTO, o agrega una regla de permiso Bash para el script.
+
+**Mergeado:** #83 `feat(en-vivo)` — mapa con todos los vehículos (`665d401`). Verificado en stack local
+con Playwright (pin del editor arrastrable, 2 vehículos en `/en-vivo`, placa legible, ids en la demo de
+la landing), gate `web-design-guidelines` y dos `/code-review`. Fixes del gate: capas de vehículo sin
+`*-ignore-placement` (conservan `allow-overlap`, reservan colisión; NO bajarlas con `beforeId`: en
+MapLibre las capas más altas se colocan primero), `placa` en la demo, toasts en regiones `role=status`/
+`alert` siempre montadas. No verificado en producción (sigue en la revisión del 09-09).
+
+| Rama · worktree | HEAD (pusheado) | Verificado | Estado |
+|---|---|---|---|
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `51d3fad` | chairman: tsc 0 · 344/344 · lint 0 err | Rediseño iniciar/detener (ver abajo). **Falta 3.er `/code-review`** sobre `4b9e5b5..51d3fad` antes del PR |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `6ed1d49` | agente: tsc 0 · 384/384 | Auditoría del merge vs #80: los 5 fixes presentes byte a byte, `DDL_OUTBOX` superset idempotente. Único faltante (mensaje UX de guardado) restaurado. **Sin `/code-review`**: correrlo después de mergear posición y volver a mergear main |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `8734356` | agente: tsc 0 · 339/339 | Reintento al volver la red (`e22825b`, NetInfo 11.4.1 ya estaba: sin rebuild extra) + fixes del review (`abandonados` podado y con tope 200; `isConnected: null` no cuenta como offline). **Falta prueba en teléfono** con red y modo avión |
+
+**Rediseño de posición (por qué cambió el enfoque):** el timeout de `detener()` sobre `iniciar()` protegía
+un camino inalcanzable — "Finalizar" solo aparece con `tracking=true`, que se marca apenas `start()`
+resuelve; el cuelgue real es el outbox (SQLite), y `detener()` se volvía a colgar en su propio
+`abrirOutbox`. Diseño final (`51d3fad`):
+- Single-flight de `iniciar()` solo hasta `tracking=true`; la cola de outbox (semilla + respaldo de
+  `inicio_recorrido`) corre desacoplada. Tocar Comenzar con un intento invalidado en vuelo arranca uno nuevo.
+- Single-flight de `detener()`. `tsFin` al toque; `inicio_recorrido` lleva el `ts` del arranque del
+  intento → orden por `ts` correcto aunque el INSERT sea tardío (el servidor ordena por `ts`).
+- `stop()` nativo acotado a 5 s. Si falla o vence: tracking sigue `true`, error "No se pudo detener…
+  Intenta nuevamente", sin `fin_recorrido`. La promesa cruda de `stop()` se registra en
+  `serializadorRestauracion`, así un stop tardío no mata el recorrido siguiente.
+- `fin_recorrido` y veredicto en tarea de fondo (`cierre-recorrido.ts`); `fin` se escribe siempre aunque
+  falle el respaldo del inicio; el veredicto usa snapshot de refs tomado al tocar Finalizar; `iniciar()`
+  sube `ultimoCierreId`.
+- Desmontaje invalida el intento en curso; `sigueVigente` incluye `montadoRef`.
+- **Sin test automatizado:** snapshot del veredicto y desmontaje (viven en el hook; el repo no tiene
+  `renderHook`). Opción: extraer `construirResultadoRecorrido` como función pura.
+
+**Siguiente paso, en orden:**
+1. **Posición:** `/code-review high` sobre `4b9e5b5..51d3fad` (foco: carreras, estado viejo, SDK huérfano,
+   orden por `ts`). Fixes → Sonnet nuevo. Probar en teléfono: iniciar/finalizar rápido, doble toque,
+   modo avión. PR → CI → merge.
+2. **Anuncio:** `git merge origin/main` (trae posición), `/code-review` con foco en el merge, PR.
+3. **Mapa offline:** prueba en teléfono (red / modo avión / volver la red) → PR.
+4. Entregas 8/9/26 (sobre anuncio mergeado) y 28. Luego lista de features y fixes al CTO antes del build.
+
+**Deploy a producción (CTO) — preflight de solo lectura hecho:**
+- Sin cambios de contrato que rompan APK build 10 (`deviceId` de logout opcional; throttler de sync solo
+  comentarios; `/en-vivo/posiciones` lo usa solo el panel). Commit hoy en prod según evidencia
+  documental: `63a0b51` (no verificado en vivo).
+- Migraciones pendientes: `20260922100000_gps_sesion_resumen` (backfill SIN filtro de fecha sobre
+  todo `gps_points`; el job no fija `--task-timeout` → default 10 min) y
+  `20260923090000_refresh_token_hash_anterior` (ADD COLUMN nullable, inocua).
+- La migración va antes que el worker nuevo (si no, cada lote falla con `relation "gps_sesion_resumen"
+  does not exist`); el script completo respeta el orden — no usar `--solo worker` suelto.
+- Secuencia: `gcloud auth login` → listar tags (`gcloud artifacts docker images list
+  southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api --include-tags`) → `gcloud run jobs
+  update quivo-migraciones --project quivo-control-prod --region southamerica-west1 --task-timeout=1800`
+  → `scripts/deploy-gcp.sh <tag>` (sugerido tag con fecha) → recompute de `docs/runbooks/retencion-gps.md`
+  desde dentro de la VPC (Cloud SQL solo tiene IP privada: job ad hoc, no `psql` local).
+
+**Datos locales:** el worktree de web se borró, pero sus volúmenes docker (proyecto compose
+`quivo-control-web-mapa`) siguen: la base `quivo_control_e2echeck` tiene 2 posiciones GPS de prueba para
+1001ABC/2002DEF y una asignación para 2002DEF. Si no se reusan: `docker volume ls | grep web-mapa` y borrar.
+
+---
+
+### Punto de retome — cierre de la segunda sesión del 2026-09-25 (histórico, reemplazado por el de la tercera sesión)
+
+**Leer esto primero.** Reemplaza al retome anterior del mismo día (queda abajo como histórico; sus
+decisiones del CTO siguen vigentes: gate sin Codex hasta el 2026-09-27 15:46, lista de features antes
+del build, licencia trial hasta el 2026-10-25).
+
+**Cambio de método:** las ramas se ponen al día con `git merge origin/main`, **no con rebase**. No hace
+falta force-push y el squash del PR deja igual un commit. Así se desbloqueó web.
+
+**Hecho en esta sesión:**
+- Worktree y rama local de drenado borrados, y sus contenedores bajados. La rama remota ya no existía.
+- Las 4 ramas tienen `main` mergeado y están pusheadas, sin cambios sin commitear.
+- Ninguna tiene PR todavía.
+
+| Rama · worktree | HEAD | Verificado por el chairman | Estado |
+|---|---|---|---|
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `79e832b` | tsc 0 · 314/314 | G1/G2/R1 cerrados + permiso `ACTIVITY_RECOGNITION`. Chairman quitó migración duplicada `20260910070000_refresh_token_hash_anterior` (main ya la trae como `20260923…`). `/code-review` → 3 hallazgos, aplicados en `79e832b` (orden inicio<fin, reintento de `inicio_recorrido` con eventId estable, `ready()` en reattach — confirmado en docs SDK 5.4.0: "call `.ready(config)` once… each time your app is launched") |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `9e36d7a` | tsc 0 · 384/384 | Los 10 hallazgos aplicados (`0711e5e`), merge de main (`0960afd`) con 6 conflictos. **Sin `/code-review` todavía** |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `52803b6` | tsc 0 · 318/318 | Merge sin conflictos. `/code-review`: 1 low + 2 preexistentes, todos aplicados (sin redibujo de markers por fix, guarda de `fitBounds`, `baseUrl: https://control.myquivo.com/` para `Referer` de OSM + backoff con tope de 6 intentos) |
+| `feat/web-mapa-todos-vehiculos` · `-web-mapa` | `3e3d9f1` | no re-corrido (agente: typecheck/lint 0, web 81, design-system 53, builds OK) | `totalPuntos` sin cambios necesarios. `/code-review`: 1 high (pulse→vehículo rompía editor de rutas y landing) + 1 low, aplicados: `pinType: 'vehicle'` propio. **Sin verificación en vivo** |
+
+**Pendiente antes de cada PR (en este orden de merge: posición → anuncio → mapa offline; web en paralelo):**
+1. **Posición:** poner timeout a la espera de `detener()` sobre el `iniciar()` en curso (si `iniciar` se cuelga abriendo el outbox, "Finalizar" no responde nunca). Luego `/code-review` sobre `79e832b`, PR, CI, merge.
+2. **Anuncio:** `/code-review` **con foco en el merge**: el agente resolvió `headless-task.ts` y `use-gps-operativo.ts` tomando su rama como base e injertando lo de main (diff vs main: +947/+366 líneas). Confirmar que no se perdió ningún fix de #80 (marca de logout en `restaurarSesion` y headless, lease de revocaciones, backoff/agotado del sync, throttle del drenado, `CircuitoRefreshAbiertoError`). Además borró `db/outbox-ddl.ts` y `outbox-migraciones.ts` (absorbidos en `DDL_OUTBOX`). Doble sonido con pantalla apagada: sin verificar en teléfono. Después de mergear posición, volver a mergear main en anuncio.
+3. **Mapa offline:** decidir si los tiles abandonados tras 6 intentos (~15 min) se reintentan al volver la red (reset de contadores con NetInfo) — hoy no, hasta pan/zoom. Prueba en teléfono con red y en modo avión. PR.
+4. **Web:** verificación en vivo con Playwright (punto marcado del editor de rutas visible y arrastrable, vehículos en `/en-vivo` y en la demo de la landing) + gate `web-design-guidelines`. PR. Hay docker del agente corriendo en `-web-mapa` (Postgres 5434, Redis 6380): `docker compose down` al terminar.
+5. Después: Entregas 8/9/26 (sobre anuncio mergeado) y 28. Luego la lista de features y fixes para el CTO antes del build.
+
+**Notificación de "run failed" al celular:** era el primer push de #80 (`553f687`), que falló en Lint con 2
+`no-explicit-any`. El push siguiente lo arregló. Los briefs ya exigen lint en 0 errores antes del push.
+
+**Pendiente del CTO:** OK para desplegar `main` a producción (#65, #70, #74 y la migración de #80),
+seguido del recompute de `docs/runbooks/retencion-gps.md`.
+
+---
+
+### Punto de retome — cierre de la sesión del 2026-09-25 (histórico, reemplazado por el de la segunda sesión)
 
 **Decisiones del CTO en esta sesión:**
 - **Gate sin Codex hasta que vuelva.** La cuota de Codex está agotada hasta el **2026-09-27 15:46**. Hasta entonces el gate de merge es `/code-review` + `/security-review` (sin `verify-fix`). Desde esa fecha, `verify-fix` vuelve a ser obligatorio para los `fix:` (regla 13).

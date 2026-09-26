@@ -442,7 +442,17 @@ async function conReintentoSiHandleMuerto<T>(
   }
 }
 
-async function generarEventId(): Promise<string> {
+/**
+ * Exportada (antes privada de este módulo) para que `use-gps-operativo.ts` pueda acuñar por
+ * su cuenta un `eventId` ESTABLE para el marcador `inicio_recorrido` de un intento de
+ * `iniciar()` (hallazgo de revisión LOW-MED, QUI-247) — necesita generarlo UNA vez y
+ * reutilizarlo en cada reintento (`onLocation`, heartbeat, `detener()`), en vez de dejar que
+ * `encolarEvento` acuñe uno nuevo por llamada (que rompería la idempotencia del `INSERT OR
+ * IGNORE`, ver el comentario de `EventoOutboxNuevo.eventId`). Mismo generador que ya usa el
+ * camino normal de `encolarEvento` (UUIDv7 con 10 bytes de `expo-crypto`) — ningún cambio de
+ * comportamiento para los callers existentes.
+ */
+export async function generarEventId(): Promise<string> {
   const bytes = await Crypto.getRandomBytesAsync(10);
   return generarUuidV7(bytes);
 }

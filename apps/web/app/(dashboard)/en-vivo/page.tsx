@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Alert, Button, Loader, RouteMap } from '@quivo/design-system';
+import { Alert, Button, Loader, RouteMap, Select } from '@quivo/design-system';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -20,8 +20,8 @@ import {
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import {
   useContextoEnVivo,
+  usePosicionesEnVivo,
   useRecargarTraza,
-  useSesionesEnVivo,
   useTrazaEnVivo,
 } from '../../../src/lib/en-vivo/use-en-vivo';
 import {
@@ -32,13 +32,14 @@ import {
   PRESENTACION_FRESCURA,
 } from '../../../src/lib/en-vivo/traza';
 import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
+import { useLineaOptions } from '../../../src/lib/api/use-linea-options';
 import {
-  construirMarcadores,
+  construirMarcadoresVehiculos,
+  construirPuntosControl,
   construirRutas,
   construirZonas,
-  ID_MARCADOR_VEHICULO,
+  idMarcadorVehiculo,
   mensajeError,
-  opcionDeSesion,
   ultimaPasada,
 } from './map-builders';
 
@@ -55,98 +56,145 @@ export default function EnVivoPage() {
   const { token } = useAuth();
   const router = useRouter();
 
-  const sesiones = useSesionesEnVivo(token);
-  const [sesionId, setSesionId] = useState<string | null>(null);
+  // ENTREGA 13 — `posiciones` (TODOS los vehículos, `GET /reportes/en-vivo/posiciones`)
+  // reemplaza al listado de sesiones (`useSesionesEnVivo`) como fuente del mapa: antes el
+  // panel dibujaba UNA sesión a la vez, elegida en un `<select>` de ~20 entradas con
+  // sesiones muertas (síntomas 1/2/3 del piloto 2026-09-09). Ahora se dibujan todos los
+  // vehículos activos y `sesionSeleccionada` es solo "cuál tiene el detalle abierto" — nace
+  // `null`, nunca gobierna qué se pinta en el mapa.
+  const posiciones = usePosicionesEnVivo(token);
+  const { options: lineaOptions } = useLineaOptions();
+  const [lineaFilter, setLineaFilter] = useState('');
+  const [sesionSeleccionada, setSesionSeleccionada] = useState<string | null>(null);
   const [seguir, setSeguir] = useState(true);
   const [telemetriaExpandida, setTelemetriaExpandida] = useState(true);
   const [fitKeyOverride, setFitKeyOverride] = useState<number>(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const adminCity = useAdminCity();
 
-  const listado = useMemo(() => sesiones.data ?? [], [sesiones.data]);
+  const todasLasPosiciones = useMemo(() => posiciones.data ?? [], [posiciones.data]);
+  const posicionesFiltradas = useMemo(
+    () => (lineaFilter ? todasLasPosiciones.filter((p) => p.lineaId === lineaFilter) : todasLasPosiciones),
+    [todasLasPosiciones, lineaFilter],
+  );
+  // Resumen honesto (pedido explícito del plan post-piloto): un vehículo sin primer fix
+  // (`lat`/`lng` `null` — la sesión existe pero nunca entró un punto GPS) no tiene dónde
+  // dibujarse, pero tampoco puede desaparecer en silencio del conteo.
+  const vehiculosSinFix = useMemo(
+    () => posicionesFiltradas.filter((p) => p.lat === null || p.lng === null).length,
+    [posicionesFiltradas],
+  );
+  const vehiculosEnMapa = posicionesFiltradas.length - vehiculosSinFix;
+
+  // ENTREGA 16 — fix de code-review: si el filtro por línea excluye al vehículo con detalle
+  // abierto (`sesionSeleccionada`), el panel de detalle, el `followPoint` de la cámara y
+  // `animatedVehicle.markerId` seguían activos sobre un vehículo que ya NO está en `markers`
+  // (`posicionesFiltradas` lo sacó) — el mapa quedaba "siguiendo" un marker invisible. Se
+  // cierra la selección apenas deja de estar en la lista filtrada, en vez de esperar a que el
+  // usuario la cierre a mano.
   useEffect(() => {
-    if (listado.length === 0) return;
-    if (sesionId && listado.some((s) => s.id === sesionId)) return;
-    setSesionId(listado[0]?.id ?? null);
-  }, [listado, sesionId]);
+    if (sesionSeleccionada && !posicionesFiltradas.some((p) => p.id === sesionSeleccionada)) {
+      setSesionSeleccionada(null);
+      setSeguir(false);
+    }
+  }, [sesionSeleccionada, posicionesFiltradas]);
 
-  const contexto = useContextoEnVivo(token, sesionId);
-  const traza = useTrazaEnVivo(token, sesionId);
-  const recargarTraza = useRecargarTraza(sesionId);
+  // Click en un marcador de vehículo → recién ahí se piden `contexto` y `traza` de ESA
+  // sesión (los hooks ya existentes, sin cambios). Con un solo detalle abierto a la vez, el
+  // problema de escalado del poll por sesión (Entrega 10) se resuelve solo.
+  const seleccionarSesion = useCallback((id: string) => {
+    setSesionSeleccionada(id);
+    setSeguir(true);
+  }, []);
 
-  const sesion = listado.find((s) => s.id === sesionId);
+  const contexto = useContextoEnVivo(token, sesionSeleccionada);
+  const traza = useTrazaEnVivo(token, sesionSeleccionada);
+  const recargarTraza = useRecargarTraza(sesionSeleccionada);
+
+  // Posición "en vivo" de la sesión seleccionada según el último poll de `/posiciones` — sirve
+  // de fallback de presentación (badge de frescura, "finalizada") mientras `contexto`/`traza`
+  // todavía no respondieron, y aunque el filtro por línea la haya sacado del mapa.
+  const posicionSeleccionada = useMemo(
+    () => (sesionSeleccionada ? todasLasPosiciones.find((p) => p.id === sesionSeleccionada) : undefined),
+    [todasLasPosiciones, sesionSeleccionada],
+  );
+
   const datos = traza.data;
   const ultimoPunto = datos?.puntos.at(-1);
-  const finalizada = Boolean(datos ? datos.sesionFin : sesion?.fin);
-  const pollPausado = intervaloPoll(datos) === false;
+  const finalizada = Boolean(datos ? datos.sesionFin : posicionSeleccionada && !posicionSeleccionada.activa);
+  const pollPausado = Boolean(sesionSeleccionada) && intervaloPoll(datos) === false;
 
-  const estado = datos?.estadoFrescura ?? sesion?.estadoFrescura ?? 'sin_datos';
+  const estado = datos?.estadoFrescura ?? posicionSeleccionada?.estadoFrescura ?? 'sin_datos';
   const presentacion = PRESENTACION_FRESCURA[estado];
 
+  const puntosControl = useMemo(
+    () => (contexto.data ? construirPuntosControl(contexto.data, datos) : []),
+    [contexto.data, datos],
+  );
+  const vehiculos = useMemo(
+    () => construirMarcadoresVehiculos(posicionesFiltradas, seleccionarSesion),
+    [posicionesFiltradas, seleccionarSesion],
+  );
+  const markers = useMemo(() => [...puntosControl, ...vehiculos], [puntosControl, vehiculos]);
   const routes = useMemo(
     () => (contexto.data ? construirRutas(contexto.data, datos) : []),
     [contexto.data, datos],
   );
-  const markers = useMemo(
-    () => (contexto.data ? construirMarcadores(contexto.data, datos, presentacion.color) : []),
-    [contexto.data, datos, presentacion.color],
-  );
   const zones = useMemo(() => (contexto.data ? construirZonas(contexto.data) : []), [contexto.data]);
 
   // Animación del marcador de vehículo (`route-map-impl.tsx` hace el trabajo real — ver el
-  // comentario de `animatedVehicle` en `RouteMapProps`). `points` es `datos.puntos` TAL CUAL
-  // (sin mapear a un array nuevo): ya trae `lat`/`lng`/`ts`, y con hasta
-  // `TRAZA_EN_VIVO_LIMITE_MAX` puntos copiarlo en cada render sería un gasto que no aporta
-  // nada. `resetKey = sesionId`: si el usuario cambia de vehículo en el selector, la
-  // animación arranca de cero (salto directo) en vez de intentar deslizarse entre dos
-  // recorridos no relacionados. `intervalMs` usa la cadencia de poll VIGENTE
-  // (`intervaloPoll`, no un valor fijo) como el presupuesto de tiempo a repartir entre los
-  // puntos nuevos del lote — con el poll pausado (`false`) no importa qué valor se mande acá
-  // porque no va a llegar ningún punto nuevo, pero se manda `INTERVALO_POLL_MS` de todos
-  // modos para no romper el tipo.
+  // comentario de `animatedVehicle` en `RouteMapProps`). Solo se anima la sesión CON DETALLE
+  // ABIERTO: es la única con traza de alta resolución (`datos.puntos`) cargada — el resto de
+  // los vehículos salta directo entre polls de `/posiciones` (cada 5 s), que es la cadencia
+  // que ya tienen. `markerId = idMarcadorVehiculo(sesionSeleccionada)` (Entrega 14): con TODOS
+  // los vehículos dibujados a la vez, el id ya no puede ser una constante única — tiene que
+  // apuntar exactamente al marker de esta sesión entre los N que trae `vehiculos`.
   const intervaloVigente = intervaloPoll(datos);
   const animatedVehicle = useMemo(
     () =>
-      datos && sesionId
+      datos && sesionSeleccionada
         ? {
-            markerId: ID_MARCADOR_VEHICULO,
-            resetKey: sesionId,
+            markerId: idMarcadorVehiculo(sesionSeleccionada),
+            resetKey: sesionSeleccionada,
             points: datos.puntos,
             intervalMs: intervaloVigente === false ? INTERVALO_POLL_MS : intervaloVigente,
           }
         : null,
-    [datos, sesionId, intervaloVigente],
+    [datos, sesionSeleccionada, intervaloVigente],
   );
-
-  const cambiarSesion = (nuevo: string) => {
-    setSesionId(nuevo);
-    setSeguir(true);
-    setFitKeyOverride((prev) => prev + 1);
-  };
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
-    await Promise.all([sesiones.refetch(), traza.refetch()]);
-    recargarTraza();
+    // `Promise<unknown>[]` explícito: `posiciones.refetch()` y `traza.refetch()` resuelven a
+    // `QueryObserverResult` de tipos de dato distintos (`PosicionEnVivo[]` vs.
+    // `TrazaAcumulada`) — un array inferido los unifica y el segundo `push` no tipa.
+    const refetches: Promise<unknown>[] = [posiciones.refetch()];
+    if (sesionSeleccionada) refetches.push(traza.refetch());
+    await Promise.all(refetches);
+    if (sesionSeleccionada) recargarTraza();
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
-  if (sesiones.isLoading) {
+  const cerrarDetalle = () => {
+    setSesionSeleccionada(null);
+  };
+
+  if (posiciones.isLoading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '75vh' }}>
-        <Loader label="Cargando flota y sesiones activas en vivo..." />
+        <Loader label="Cargando flota en vivo..." />
       </div>
     );
   }
 
-  if (sesiones.isError) {
+  if (posiciones.isError) {
     return (
       <div style={{ padding: '2rem', maxWidth: '40rem', margin: '0 auto' }}>
-        <Alert variant="danger" title="No se pudo cargar el listado de sesiones">
+        <Alert variant="danger" title="No se pudo cargar la flota en vivo">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            <span>{mensajeError(sesiones.error)}</span>
+            <span>{mensajeError(posiciones.error)}</span>
             <span>
-              <Button size="sm" variant="secondary" onClick={() => void sesiones.refetch()}>
+              <Button size="sm" variant="secondary" onClick={() => void posiciones.refetch()}>
                 Reintentar
               </Button>
             </span>
@@ -156,7 +204,7 @@ export default function EnVivoPage() {
     );
   }
 
-  if (listado.length === 0) {
+  if (todasLasPosiciones.length === 0) {
     return (
       <div
         style={{
@@ -193,7 +241,7 @@ export default function EnVivoPage() {
             primer punto, aparecerá automáticamente aquí.
           </p>
         </div>
-        <Button size="sm" variant="primary" onClick={() => void sesiones.refetch()}>
+        <Button size="sm" variant="primary" onClick={() => void posiciones.refetch()}>
           <RefreshCw size={14} style={{ marginRight: '0.35rem' }} />
           Verificar nuevamente
         </Button>
@@ -206,12 +254,19 @@ export default function EnVivoPage() {
       {/* MAPA PRINCIPAL A PANTALLA COMPLETA */}
       <RouteMap
         height="100%"
-        loading={contexto.isLoading}
+        loading={Boolean(sesionSeleccionada) && contexto.isLoading}
         routes={routes}
         markers={markers}
         zones={zones}
-        fitMode="once"
-        fitKey={`${sesionId}-${fitKeyOverride}`}
+        // `fitMode='once'` con `fitKey` fijo a `fitKeyOverride` (NO a `sesionSeleccionada`):
+        // los `markers`/`routes` que ve `fitToBounds` son SIEMPRE la unión de la flota
+        // filtrada + la sesión con detalle abierto, nunca un subconjunto de "solo lo
+        // seleccionado" — encuadrar de nuevo cada vez que cambia la selección terminaría
+        // alejando la cámara para mostrar TODA la flota otra vez, justo lo contrario de lo
+        // que espera alguien que acaba de tocar un vehículo puntual. El encuadre inicial (a
+        // la flota completa) y el botón manual "Reencuadrar" siguen bumpeando `fitKeyOverride`;
+        // seguir a un vehículo puntual es trabajo de `followPoint`/`seguir`, no de esto.
+        fitKey={fitKeyOverride}
         followPoint={seguir && ultimoPunto ? { lat: ultimoPunto.lat, lng: ultimoPunto.lng } : null}
         onUserPan={() => setSeguir(false)}
         defaultCenter={adminCity.centro}
@@ -221,7 +276,7 @@ export default function EnVivoPage() {
 
       {/* TOP FLOATING HUD CONTROLS */}
       <div className="qv-live-hud-top">
-        {/* Left Side: Live Badge & Session Selector */}
+        {/* Left Side: Live Badge & Filtro de línea */}
         <div className="qv-live-hud-card" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
           <button
             type="button"
@@ -275,50 +330,47 @@ export default function EnVivoPage() {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <Bus size={15} style={{ color: 'var(--qv-color-primary)' }} />
-            <select
-              value={sesionId ?? ''}
-              onChange={(e) => cambiarSesion(e.target.value)}
-              aria-label="Seleccionar vehículo en vivo"
+            <div style={{ minWidth: '11rem' }}>
+              <Select
+                aria-label="Filtrar por línea"
+                options={[{ label: 'Todas las líneas', value: '' }, ...lineaOptions]}
+                placeholder="Todas las líneas"
+                value={lineaFilter}
+                onChange={(e) => setLineaFilter(e.target.value)}
+              />
+            </div>
+            <span
               style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--qv-text-primary)',
+                fontSize: '0.6875rem',
                 fontWeight: 700,
-                fontSize: '0.8125rem',
-                outline: 'none',
-                cursor: 'pointer',
-                maxWidth: '22rem',
-                textOverflow: 'ellipsis',
+                color: 'var(--qv-text-secondary)',
+                whiteSpace: 'nowrap',
               }}
             >
-              {listado.map((s) => {
-                const opt = opcionDeSesion(s);
-                return (
-                  <option key={opt.value} value={opt.value} style={{ background: 'var(--qv-surface-card)', color: 'var(--qv-text-primary)' }}>
-                    {opt.label}
-                  </option>
-                );
-              })}
-            </select>
+              {vehiculosEnMapa} en el mapa
+              {vehiculosSinFix > 0 && ` · ${vehiculosSinFix} sin GPS aún`}
+            </span>
           </div>
         </div>
 
         {/* Right Side: Freshness Pill & Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-          {/* Freshness Status Pill */}
-          <FrescuraBadgeCompact
-            datos={datos}
-            sesion={sesion}
-            recibidoEn={traza.dataUpdatedAt}
-            sesionesRecibidoEn={sesiones.dataUpdatedAt}
-          />
+          {/* Freshness Status Pill — solo con un vehículo seleccionado */}
+          {sesionSeleccionada && (
+            <FrescuraBadgeCompact
+              datos={datos}
+              posicion={posicionSeleccionada}
+              recibidoEn={traza.dataUpdatedAt}
+              posicionesRecibidoEn={posiciones.dataUpdatedAt}
+            />
+          )}
 
           {/* Map Controls */}
           <div className="qv-live-hud-card" style={{ gap: '0.35rem', padding: '0.3rem 0.5rem' }}>
             <button
               type="button"
               onClick={() => setSeguir((v) => !v)}
-              disabled={!ultimoPunto}
+              disabled={!sesionSeleccionada || !ultimoPunto}
               title={seguir ? 'Dejar de seguir vehículo' : 'Seguir vehículo en tiempo real'}
               style={{
                 display: 'inline-flex',
@@ -333,8 +385,8 @@ export default function EnVivoPage() {
                 border: 'none',
                 fontSize: '0.75rem',
                 fontWeight: 700,
-                cursor: ultimoPunto ? 'pointer' : 'not-allowed',
-                opacity: ultimoPunto ? 1 : 0.6,
+                cursor: sesionSeleccionada && ultimoPunto ? 'pointer' : 'not-allowed',
+                opacity: sesionSeleccionada && ultimoPunto ? 1 : 0.6,
                 transition: 'all var(--qv-transition-fast)',
               }}
             >
@@ -345,7 +397,8 @@ export default function EnVivoPage() {
             <button
               type="button"
               onClick={() => setFitKeyOverride((v) => v + 1)}
-              title="Reencuadrar ruta completa"
+              title="Reencuadrar toda la flota"
+              aria-label="Reencuadrar toda la flota"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -367,6 +420,7 @@ export default function EnVivoPage() {
               type="button"
               onClick={() => void handleManualRefresh()}
               title="Actualizar datos GPS ahora"
+              aria-label="Actualizar datos GPS ahora"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -387,69 +441,89 @@ export default function EnVivoPage() {
         </div>
       </div>
 
+      {/* Filtro sin resultados — estado vacío honesto: la flota existe, esta línea no tiene
+          nadie reportando ahora mismo. El mapa sigue montado (el usuario puede cambiar el
+          filtro sin perder contexto), a diferencia del empty-state de página completa de
+          arriba (que es para "no hay NADA en toda la jornada"). */}
+      {/* Contenedor live SIEMPRE montado: los lectores de pantalla solo anuncian cambios de
+          contenido en una región aria-live que ya estaba en el DOM antes de poblarse; si el
+          toast se monta condicionalmente ya con su texto, NVDA/VoiceOver no lo anuncian. */}
+      <div role="status" aria-live="polite">
+        {posicionesFiltradas.length === 0 && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
+            <AlertTriangle size={14} style={{ color: 'var(--qv-color-accent)' }} />
+            <span>Ningún vehículo de esta línea está reportando ahora. Probá con &quot;Todas las líneas&quot;.</span>
+          </div>
+        )}
+      </div>
+
       {/* FLOATING ALERT TOASTS */}
-      {presentacion.esFalla && (
-        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}>
-          <AlertTriangle size={14} />
-          <span>{presentacion.etiqueta}: El teléfono no sincroniza con el servidor</span>
-        </div>
-      )}
+      <div role="alert" aria-live="assertive">
+        {sesionSeleccionada && presentacion.esFalla && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}>
+            <AlertTriangle size={14} />
+            <span>{presentacion.etiqueta}: El teléfono no sincroniza con el servidor</span>
+          </div>
+        )}
+      </div>
 
-      {estado === 'detenido' && (
-        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
-          <Clock size={14} style={{ color: 'var(--qv-color-accent)' }} />
-          <span>Vehículo detenido: Posición estacionaria registrada</span>
-        </div>
-      )}
+      <div role="status" aria-live="polite">
+        {sesionSeleccionada && estado === 'detenido' && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
+            <Clock size={14} style={{ color: 'var(--qv-color-accent)' }} />
+            <span>Vehículo detenido: Posición estacionaria registrada</span>
+          </div>
+        )}
 
-      {finalizada && (
-        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-primary)', color: 'var(--qv-text-primary)' }}>
-          <CheckCircle2 size={14} style={{ color: 'var(--qv-color-success)' }} />
-          <span>Sesión finalizada</span>
-          <button
-            type="button"
-            onClick={() => router.push(`/reportes/recorridos/${sesionId}`)}
-            style={{
-              background: 'var(--qv-color-primary)',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: '999px',
-              padding: '0.15rem 0.5rem',
-              fontSize: '0.6875rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Ver histórico →
-          </button>
-        </div>
-      )}
+        {finalizada && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-primary)', color: 'var(--qv-text-primary)' }}>
+            <CheckCircle2 size={14} style={{ color: 'var(--qv-color-success)' }} />
+            <span>Sesión finalizada</span>
+            <button
+              type="button"
+              onClick={() => router.push(`/reportes/recorridos/${sesionSeleccionada}`)}
+              style={{
+                background: 'var(--qv-color-primary)',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '999px',
+                padding: '0.15rem 0.5rem',
+                fontSize: '0.6875rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Ver histórico →
+            </button>
+          </div>
+        )}
 
-      {pollPausado && (
-        <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}>
-          <Clock size={14} style={{ color: 'var(--qv-color-warning)' }} />
-          <span>Seguimiento pausado por inactividad</span>
-          <button
-            type="button"
-            onClick={() => void traza.refetch()}
-            style={{
-              background: 'var(--qv-color-warning)',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: '999px',
-              padding: '0.15rem 0.5rem',
-              fontSize: '0.6875rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Reanudar
-          </button>
-        </div>
-      )}
+        {pollPausado && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}>
+            <Clock size={14} style={{ color: 'var(--qv-color-warning)' }} />
+            <span>Seguimiento pausado por inactividad</span>
+            <button
+              type="button"
+              onClick={() => void traza.refetch()}
+              style={{
+                background: 'var(--qv-color-warning)',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '999px',
+                padding: '0.15rem 0.5rem',
+                fontSize: '0.6875rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Reanudar
+            </button>
+          </div>
+        )}
+      </div>
 
-      {/* FLOATING TELEMETRY & CONTROL POINTS DRAWER */}
-      {contexto.data && (
+      {/* FLOATING TELEMETRY & CONTROL POINTS DRAWER — solo con un vehículo seleccionado */}
+      {sesionSeleccionada && contexto.data && (
         <div className="qv-live-hud-bottom">
           <div className="qv-live-telemetry-panel">
             {/* Header / Summary */}
@@ -493,23 +567,47 @@ export default function EnVivoPage() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setTelemetriaExpandida((v) => !v)}
-                title={telemetriaExpandida ? 'Minimizar detalles' : 'Expandir telemetría'}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--qv-text-muted)',
-                  cursor: 'pointer',
-                  padding: '0.25rem',
-                }}
-              >
-                {telemetriaExpandida ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setTelemetriaExpandida((v) => !v)}
+                  title={telemetriaExpandida ? 'Minimizar detalles' : 'Expandir telemetría'}
+                  aria-label={telemetriaExpandida ? 'Minimizar detalles' : 'Expandir telemetría'}
+                  aria-expanded={telemetriaExpandida}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--qv-text-muted)',
+                    cursor: 'pointer',
+                    padding: '0.25rem',
+                  }}
+                >
+                  {telemetriaExpandida ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+                </button>
+                <button
+                  type="button"
+                  onClick={cerrarDetalle}
+                  title="Cerrar detalle del vehículo"
+                  aria-label="Cerrar detalle del vehículo"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--qv-text-muted)',
+                    cursor: 'pointer',
+                    padding: '0.25rem',
+                    fontSize: '1rem',
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
             </div>
 
             {/* Expanded Telemetry & Control Points */}
@@ -628,20 +726,20 @@ export default function EnVivoPage() {
 
 function FrescuraBadgeCompact({
   datos,
-  sesion,
+  posicion,
   recibidoEn,
-  sesionesRecibidoEn,
+  posicionesRecibidoEn,
 }: {
   datos: import('../../../src/lib/en-vivo/traza').TrazaAcumulada | undefined;
-  sesion: import('@quivo/shared').SesionEnVivoResumen | undefined;
+  posicion: import('@quivo/shared').PosicionEnVivo | undefined;
   recibidoEn: number;
-  sesionesRecibidoEn: number;
+  posicionesRecibidoEn: number;
 }) {
   const ahora = useReloj();
-  const fuente = datos ?? sesion;
+  const fuente = datos ?? posicion;
   if (!fuente) return null;
 
-  const referencia = datos ? recibidoEn : sesionesRecibidoEn;
+  const referencia = datos ? recibidoEn : posicionesRecibidoEn;
   const presentacion = PRESENTACION_FRESCURA[fuente.estadoFrescura];
   const antiguedadFix = antiguedadViva(fuente.ultimoFixTs, fuente.servidorTs, referencia, ahora);
 
@@ -665,4 +763,3 @@ function FrescuraBadgeCompact({
     </div>
   );
 }
-
