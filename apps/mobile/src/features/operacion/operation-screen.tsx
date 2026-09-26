@@ -40,9 +40,19 @@ interface OperationScreenProps {
    * del `aviso` genérico de "sin red", que es engañoso acá si la sesión fue cerrada
    * server-side. Renderizado como alerta con CTA explícito más abajo. */
   sesionNoRevalidada: boolean;
+  /** Rescope SESION_NO_VIGENTE, punto C (`use-auth-movil.ts`): corte de raíz con un recorrido
+   * de GPS ACTIVO — a diferencia de `sesionNoRevalidada` (ambigua, puede recuperarse sola), acá
+   * el servidor ya dio la sesión por muerta, pero borrarla/desmontar `GpsProvider` ahora mismo
+   * mataría el tracking sin `fin_recorrido`. Bloquea con un aviso no descartable hasta que el
+   * chofer confirme "Finalizar". */
+  sesionNoVigente: boolean;
   loading: boolean;
   obtenerAccessToken: () => Promise<string | null>;
   onLogout: () => Promise<void>;
+  /** Se llama cuando `gps.detener()` completa (best-effort `fin_recorrido` ya escrito, tracking
+   * apagado) mientras `sesionNoVigente` estaba prendido — recién ahí es seguro borrar la sesión
+   * local y volver al login. Ver el efecto que la dispara, abajo. */
+  onSesionNoVigenteFinalizada: () => Promise<void>;
 }
 
 export function OperationScreen(
@@ -108,6 +118,22 @@ export function OperationScreen(
   useEffect(() => {
     if (!gps.tracking) setCompletados(new Set());
   }, [gps.tracking]);
+
+  // Rescope SESION_NO_VIGENTE, punto C: dispara `onSesionNoVigenteFinalizada` en la transición
+  // true→false de `gps.tracking` MIENTRAS `sesionNoVigente` sigue prendido — esa transición es
+  // la señal de que `gps.detener()` (llamado desde el diálogo de "Finalizar" de abajo, el mismo
+  // que el chofer ve reflejado en el banner) ya completó: apaga `tracking` SIEMPRE al terminar,
+  // haya salido bien o mal la escritura de `fin_recorrido` (ver el docblock de `detener()` en
+  // `use-gps-operativo.ts`, invariante "nativo OK ⇒ tracking SIEMPRE false al final"). Un ref
+  // propio (no el `trackingAnterior` del ruteo, arriba) para no acoplar dos efectos sin relación.
+  const trackingAnteriorSesionNoVigente = useRef(gps.tracking);
+  useEffect(() => {
+    const eraTracking = trackingAnteriorSesionNoVigente.current;
+    trackingAnteriorSesionNoVigente.current = gps.tracking;
+    if (props.sesionNoVigente && eraTracking && !gps.tracking) {
+      void props.onSesionNoVigenteFinalizada();
+    }
+  }, [gps.tracking, props.sesionNoVigente, props.onSesionNoVigenteFinalizada]);
 
   const proximoPuntoControl = useMemo(
     () => proximoPuntoControlPendiente(puntosControl, completados),
@@ -329,6 +355,26 @@ export function OperationScreen(
               style={styles.sesionNoRevalidadaButton}
             >
               Vuelve a iniciar sesión para sincronizar
+            </Button>
+          </View>
+        ) : null}
+        {/* Rescope SESION_NO_VIGENTE, punto C: bloqueante y NO descartable a propósito — sin
+            botón para cerrarlo, distinto del banner de `sesionNoRevalidada` de arriba (que sí
+            puede ignorarse, esto no: el servidor ya dio la sesión por muerta). El único botón
+            abre el MISMO diálogo de confirmación de "Finalizar" que ya usa `NextControlSheet`
+            (`confirmarFinalizacion`) — al confirmar, `gps.detener()` escribe `fin_recorrido` y
+            recién ahí el efecto de arriba dispara `onSesionNoVigenteFinalizada`. */}
+        {props.sesionNoVigente ? (
+          <View style={styles.sesionNoRevalidadaContainer}>
+            <Text accessibilityRole="alert" style={styles.dangerNotice}>
+              Tu sesión venció. Tocá Finalizar y volvé a iniciar sesión.
+            </Text>
+            <Button
+              variant="danger"
+              onPress={confirmarFinalizacion}
+              style={styles.sesionNoRevalidadaButton}
+            >
+              Finalizar recorrido
             </Button>
           </View>
         ) : null}

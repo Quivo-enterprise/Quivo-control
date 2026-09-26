@@ -20,9 +20,11 @@ interface OperationNavigatorProps {
   deviceId: string;
   aviso: string | null;
   sesionNoRevalidada: boolean;
+  sesionNoVigente: boolean;
   loading: boolean;
   obtenerAccessToken: () => Promise<string | null>;
   onLogout: () => Promise<void>;
+  onSesionNoVigenteFinalizada: () => Promise<void>;
 }
 
 export function OperationNavigator(props: OperationNavigatorProps) {
@@ -42,9 +44,11 @@ export function OperationNavigator(props: OperationNavigatorProps) {
               deviceId={props.deviceId}
               aviso={props.aviso}
               sesionNoRevalidada={props.sesionNoRevalidada}
+              sesionNoVigente={props.sesionNoVigente}
               loading={props.loading}
               obtenerAccessToken={props.obtenerAccessToken}
               onLogout={props.onLogout}
+              onSesionNoVigenteFinalizada={props.onSesionNoVigenteFinalizada}
             />
           )}
         </Stack.Screen>

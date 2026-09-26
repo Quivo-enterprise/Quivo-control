@@ -58,9 +58,13 @@ vi.mock('../features/operacion/anuncio-punto-control', () => ({
 
 vi.mock('../shared/security/sesion-movil-store', () => ({
   actualizarSesionMovil: vi.fn(),
-  borrarSesionMovil: vi.fn().mockResolvedValue(undefined),
   cargarSesionMovil: vi.fn(),
   hayLogoutSolicitado: vi.fn().mockResolvedValue(false),
+  // Rescope SESION_NO_VIGENTE (reemplaza `borrarSesionMovil`, que `headless-task.ts` ya no
+  // importa): el nuevo diseño marca un flag durable en vez de borrar la sesión — ver el
+  // docblock de `obtenerAccessTokenHeadless`.
+  haySesionNoVigenteParaToken: vi.fn().mockResolvedValue(false),
+  marcarSesionNoVigenteHeadless: vi.fn().mockResolvedValue(undefined),
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
@@ -78,8 +82,9 @@ import {
 } from '../shared/api/refresh-circuit-breaker';
 import {
   actualizarSesionMovil,
-  borrarSesionMovil,
   cargarSesionMovil,
+  haySesionNoVigenteParaToken,
+  marcarSesionNoVigenteHeadless,
   type SesionMovilGuardada,
 } from '../shared/security/sesion-movil-store';
 import { obtenerAccessTokenHeadless } from './headless-task';
@@ -87,7 +92,12 @@ import { obtenerAccessTokenHeadless } from './headless-task';
 const refreshMock = authMovilApi.refresh as unknown as ReturnType<typeof vi.fn>;
 const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
 const actualizarSesionMovilMock = actualizarSesionMovil as unknown as ReturnType<typeof vi.fn>;
-const borrarSesionMovilMock = borrarSesionMovil as unknown as ReturnType<typeof vi.fn>;
+const haySesionNoVigenteParaTokenMock = haySesionNoVigenteParaToken as unknown as ReturnType<
+  typeof vi.fn
+>;
+const marcarSesionNoVigenteHeadlessMock = marcarSesionNoVigenteHeadless as unknown as ReturnType<
+  typeof vi.fn
+>;
 
 function sesion(overrides: Partial<SesionMovilGuardada> = {}): SesionMovilGuardada {
   return {
@@ -106,7 +116,8 @@ describe('obtenerAccessTokenHeadless', () => {
     refreshMock.mockReset();
     cargarSesionMovilMock.mockReset();
     actualizarSesionMovilMock.mockReset();
-    borrarSesionMovilMock.mockReset().mockResolvedValue(undefined);
+    haySesionNoVigenteParaTokenMock.mockReset().mockResolvedValue(false);
+    marcarSesionNoVigenteHeadlessMock.mockReset().mockResolvedValue(undefined);
     reiniciarCircuitoRefresh();
   });
 
@@ -201,16 +212,14 @@ describe('obtenerAccessTokenHeadless', () => {
   });
 
   /**
-   * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): en el camino headless NO
-   * hay ningún hook de React corriendo para cortar la sesión — sin este chequeo, CADA tick
-   * posterior (ubicación/heartbeat, potencialmente uno por segundo) repetiría el mismo
-   * refresh contra un token que el servidor ya dio por muerto. Se borra la sesión local YA
-   * (`borrarSesionMovil`, nunca el outbox — no hay ninguna función de borrado de outbox
-   * importada en `headless-task.ts`, la evidencia GPS pendiente queda intacta) para que el
-   * PRÓXIMO tick corte en la primera línea (`cargarSesionMovil() === null`, cubierto por el
-   * primer test de este describe) sin volver a tocar la red.
+   * Rescope SESION_NO_VIGENTE (decisión del CTO, code review de `fix/sesion-no-vigente` —
+   * REEMPLAZA el test viejo que esperaba `borrarSesionMovil()`): borrar la sesión acá hacía que
+   * `obtenerContextoUbicacionPersistido` la tratara como "sin sesión" y llamara
+   * `detenerTrackingNativo()` — IRREVERSIBLE, apaga la captura GPS del resto del turno. Ahora
+   * se marca un flag durable (`marcarSesionNoVigenteHeadless`) y la sesión queda INTACTA
+   * (`cargarSesionMovil`/`actualizarSesionMovil` nunca se llaman para borrar nada acá).
    */
-  it('SESION_NO_VIGENTE: borra la sesión local YA (para frenar los ticks siguientes) y devuelve null sin abrir el circuito', async () => {
+  it('SESION_NO_VIGENTE: NO borra la sesión — marca el flag durable, mantiene el contexto y no abre el circuito', async () => {
     const vencida = sesion();
     cargarSesionMovilMock.mockResolvedValue(vencida);
     refreshMock.mockRejectedValueOnce(
@@ -224,19 +233,66 @@ describe('obtenerAccessTokenHeadless', () => {
     );
 
     await expect(obtenerAccessTokenHeadless()).resolves.toBeNull();
-    expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
+    expect(marcarSesionNoVigenteHeadlessMock).toHaveBeenCalledWith('refresh-1');
     expect(actualizarSesionMovilMock).not.toHaveBeenCalled();
     // Evidencia definitiva, no ambigua: no cuenta contra el circuito de refresh.
     expect(obtenerEstadoCircuitoRefresh().estado).toBe('cerrado');
   });
 
-  it('un 401 SIN codigo (genérico) NO borra la sesión — sigue el camino viejo de "no revalidada"', async () => {
+  /**
+   * Cierra el hallazgo "el borrado fallido reintentaba cada ~10 s sin backoff": con el flag ya
+   * puesto (simulando el tick SIGUIENTE al de arriba), el próximo tick corta de entrada, ANTES
+   * de tocar `accessTokenExpiresAt` o la red — cero llamadas a `refresh`.
+   */
+  it('con el flag SESION_NO_VIGENTE ya puesto para este token, el siguiente tick no llama a refresh (sin ráfaga)', async () => {
+    const vencida = sesion();
+    cargarSesionMovilMock.mockResolvedValue(vencida);
+    haySesionNoVigenteParaTokenMock.mockResolvedValue(true);
+
+    await expect(obtenerAccessTokenHeadless()).resolves.toBeNull();
+    expect(haySesionNoVigenteParaTokenMock).toHaveBeenCalledWith('refresh-1');
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * B (rescope): si, para cuando se relee el token bajo el lease `refresh-sesion`, el disco ya
+   * tiene un refresh token DISTINTO (un login nuevo ganó la carrera mientras el rechazo viajaba
+   * de vuelta), el error se descarta — nunca se marca el flag sobre una sesión que ya no es la
+   * rechazada. La secuencia de `cargarSesionMovilMock` cubre las 4 lecturas del camino real: (1)
+   * el `cargarSesionMovil()` inicial de `obtenerAccessTokenHeadless`, (2) la reconciliación de
+   * `refrescar()`, (3) la lectura autoritativa bajo lease de `ejecutarRefresh` — las tres ven
+   * TODAVÍA `refresh-1` para que el intento de red real ocurra y sea rechazado — y (4) la
+   * relectura de `confirmarTokenRechazadoVigente`, que ya ve el token NUEVO del login.
+   */
+  it('token-mismatch: si el disco ya tiene un token distinto (login nuevo) al confirmar, descarta el rechazo sin marcar el flag', async () => {
+    const vencida = sesion();
+    const trasLoginNuevo = sesion({ refreshToken: 'refresh-de-otro-login' });
+    cargarSesionMovilMock
+      .mockResolvedValueOnce(vencida) // (1)
+      .mockResolvedValueOnce(vencida) // (2)
+      .mockResolvedValueOnce(vencida) // (3)
+      .mockResolvedValueOnce(trasLoginNuevo); // (4)
+    refreshMock.mockRejectedValueOnce(
+      new AuthMovilApiError(
+        'http',
+        'Sesión móvil inválida o expirada',
+        401,
+        undefined,
+        'SESION_NO_VIGENTE',
+      ),
+    );
+
+    await expect(obtenerAccessTokenHeadless()).resolves.toBeNull();
+    expect(marcarSesionNoVigenteHeadlessMock).not.toHaveBeenCalled();
+  });
+
+  it('un 401 SIN codigo (genérico) NO marca el flag de SESION_NO_VIGENTE — sigue el camino viejo de "no revalidada"', async () => {
     const vencida = sesion();
     cargarSesionMovilMock.mockResolvedValue(vencida);
     refreshMock.mockRejectedValueOnce(new AuthMovilApiError('http', 'Sesión inválida', 401));
 
     await expect(obtenerAccessTokenHeadless()).resolves.toBeNull();
-    expect(borrarSesionMovilMock).not.toHaveBeenCalled();
+    expect(marcarSesionNoVigenteHeadlessMock).not.toHaveBeenCalled();
   });
 
   it('con el circuito ya abierto (fallos previos, p. ej. del camino de foreground), corta sin tocar la red', async () => {

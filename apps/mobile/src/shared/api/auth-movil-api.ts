@@ -37,6 +37,19 @@ export class AuthMovilApiError extends Error {
     this.name = 'AuthMovilApiError';
   }
 
+  /**
+   * Rescope SESION_NO_VIGENTE (decisión del CTO, code review): refresh token que se mandó en
+   * el intento que produjo ESTE error — solo lo puebla `authMovilApi.refresh` (abajo), que es
+   * el único método con un refresh token que tenga sentido "recordar". Mutable (no en el
+   * constructor) para no tocar los 8+ call sites que ya construyen `AuthMovilApiError` sin este
+   * dato. `undefined` para cualquier error que no venga de ese método. Ver
+   * `obtenerRefreshTokenRechazado` y, del lado del caller, `confirmarTokenRechazadoVigente`
+   * (`use-auth-movil.ts`): antes de cualquier acción destructiva ante `SESION_NO_VIGENTE`, hay
+   * que saber CUÁL token fue el rechazado para poder compararlo contra el que haya en disco en
+   * ese momento (pudo haber cambiado por un login nuevo mientras el rechazo viajaba de vuelta).
+   */
+  public refreshTokenEnviado?: string;
+
   get userMessage(): string {
     if (this.kind === 'configuration') return this.message;
     if (this.kind === 'network') {
@@ -104,11 +117,21 @@ export const authMovilApi = {
   },
 
   async refresh(refreshToken: string): Promise<RefreshMovilResponse> {
-    const payload = await request('/v1/mobile/auth/refresh', {
-      method: 'POST',
-      body: { refreshToken },
-    });
-    return parseResponse(RefreshMovilResponseSchema, payload);
+    try {
+      const payload = await request('/v1/mobile/auth/refresh', {
+        method: 'POST',
+        body: { refreshToken },
+      });
+      return parseResponse(RefreshMovilResponseSchema, payload);
+    } catch (error) {
+      // Rescope SESION_NO_VIGENTE: adjunta el token EXACTO que se mandó — ver el docblock de
+      // `AuthMovilApiError.refreshTokenEnviado`. `request()` ya construyó el error tal cual
+      // (kind/status/codigo); acá solo se le agrega este dato antes de re-lanzarlo.
+      if (error instanceof AuthMovilApiError) {
+        error.refreshTokenEnviado = refreshToken;
+      }
+      throw error;
+    }
   },
 
   async obtenerContexto(accessToken: string): Promise<ContextoOperativoMovil> {
@@ -229,6 +252,14 @@ function extraerCodigo(payload: unknown): string | undefined {
  * `error instanceof AuthMovilApiError && error.codigo === CODIGO_SESION_NO_VIGENTE` a mano. */
 export function esSesionNoVigente(error: unknown): boolean {
   return error instanceof AuthMovilApiError && error.codigo === CODIGO_SESION_NO_VIGENTE;
+}
+
+/** Rescope SESION_NO_VIGENTE: `refreshTokenEnviado` del error si lo tiene (ver su docblock en
+ * la clase) — `undefined` para cualquier error que no sea `AuthMovilApiError` o que no venga de
+ * `authMovilApi.refresh`. Los callers (`headless-task.ts`, `use-auth-movil.ts`) caen de vuelta
+ * al refresh token que ya tenían en memoria cuando esto da `undefined`. */
+export function obtenerRefreshTokenRechazado(error: unknown): string | undefined {
+  return error instanceof AuthMovilApiError ? error.refreshTokenEnviado : undefined;
 }
 
 function extraerMensaje(payload: unknown): string {

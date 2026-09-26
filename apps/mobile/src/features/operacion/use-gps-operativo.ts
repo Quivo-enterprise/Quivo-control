@@ -35,6 +35,7 @@ import {
 } from './anuncio-punto-control';
 import type { MotivoAnuncio } from './decidir-anuncio';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
+import { marcarRecorridoActivoGlobal } from './estado-recorrido-activo';
 import {
   asegurarInicioRecorrido,
   crearEstadoInicioRecorrido,
@@ -145,6 +146,13 @@ export function useGpsOperativo(
   obtenerAccessToken: () => Promise<string | null>,
 ) {
   const [tracking, setTracking] = useState(false);
+  // Rescope SESION_NO_VIGENTE (code review): espeja `tracking` a un módulo compartido, sin
+  // React, que `use-auth-movil.ts` (más arriba en el árbol que `GpsProvider`) lee para saber si
+  // hay un recorrido activo antes de decidir si puede borrar la sesión de inmediato — ver el
+  // docblock de `estado-recorrido-activo.ts` para el porqué de esta wiring.
+  useEffect(() => {
+    marcarRecorridoActivoGlobal(tracking);
+  }, [tracking]);
   const [puntos, setPuntos] = useState(0);
   const [resultado, setResultado] = useState<string | null>(null);
   const [errorGps, setErrorGps] = useState<string | null>(null);
