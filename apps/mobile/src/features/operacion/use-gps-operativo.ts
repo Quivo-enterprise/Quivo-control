@@ -592,7 +592,7 @@ export function useGpsOperativo(
     heartbeatSubscription.current?.remove();
     heartbeatSubscription.current = BackgroundGeolocation.onHeartbeat(() => {
       // Merge (Entrega 31a + anuncio): main movió `getCurrentPosition`/reafirmar
-      // movimiento/reintento de `inicio_recorrido` al `onHeartbeat` real (abajo, useCallback),
+      // movimiento/reintento de `inicio_recorrido` al `onHeartbeat` real (arriba, useCallback),
       // junto al resto de la lógica de anuncio — un solo camino, sin duplicar el fix forzado
       // ni el drenado (que `onHeartbeat` ya hace al final).
       void onHeartbeatRef.current();
@@ -1268,6 +1268,15 @@ export function useGpsOperativo(
       // MISMA pasada dos veces con `eventId` distintos (el servidor solo dedupea por `eventId`,
       // QUI-241). `filtrarSesionActual: false` — mismo motivo que `onHeartbeat`.
       try {
+        // FIX POST-REVISIÓN (code review — "Finalizar puede dejar un 'llegaste' sin anunciar"):
+        // `umbralAnuncioMs: 0`, igual criterio que `umbralMs: 0` de arriba ("ante la duda,
+        // emitir"). Sin este 9° argumento explícito, `confirmarVisitasVencidasEnCola` caía a su
+        // default (`UMBRAL_ANUNCIO_PROXIMIDAD_MS`, 90 s, ver `decidir-anuncio.ts`) — una visita
+        // hecha MENOS de 90 s antes de apretar "Finalizar" se confirmaba (evidencia intacta, por
+        // el `umbralMs: 0` de la confirmación) pero nunca se anunciaba: el fallback de tiempo de
+        // `evaluarAnuncioDeHeartbeat` la descartaba por no haber esperado el umbral de 90 s que
+        // ya no tiene sentido exigir en un cierre — el chofer se queda sin la vibración/
+        // notificación de "llegaste" para el último punto de su recorrido.
         const { anunciosLlegada } = await confirmarVisitasVencidasEnCola(
           db,
           deviceId,
@@ -1277,6 +1286,7 @@ export function useGpsOperativo(
           0,
           false,
           puntosControl,
+          0,
         );
         // REDISEÑO: un cierre de recorrido también puede dejar una visita sin su "llegaste" —
         // mismo camino de ejecución que `onLocation`/`onHeartbeat`.

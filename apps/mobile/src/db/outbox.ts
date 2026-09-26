@@ -92,10 +92,18 @@ export const DDL_OUTBOX = `
   );
   -- REDISEÑO (anuncio de puntos de control, 2026-09-25): dedupe/estado PERSISTIDO del anuncio
   -- de "llegaste" (vibración + notificación) por {sesionId, puntoControlId, pasada} — un
-  -- useRef de React no sobrevive al contexto headless. estado: 'pendiente' (reclamado, sin
-  -- intentar programar todavía) -> 'programando' (intento en vuelo, con ultimo_intento_ts +
-  -- intentos) -> 'programado' (schedule confirmado). Ver marcarAnuncioProgramando/
+  -- useRef de React no sobrevive al contexto headless. estado: 'programando' (reclamado, con
+  -- ultimo_intento_ts puesto en el mismo INSERT del claim — ver reclamarIntencionAnuncio) ->
+  -- 'programado' (schedule confirmado). Ver marcarAnuncioProgramando/
   -- obtenerAnunciosPendientesDeProgramar más abajo.
+  -- FIX POST-REVISIÓN (code review, "doble llegaste" — vibración+notificación duplicadas): antes
+  -- el claim insertaba 'pendiente' y una llamada aparte (marcarAnuncioProgramando) recién
+  -- después la pasaba a 'programando' — la ventana entre esas dos escrituras dejaba una fila
+  -- 'pendiente' que el SELECT de reintento (más abajo) ofrece SIN chequear antigüedad, así que un
+  -- reintento fire-and-forget concurrente (ejecutarEnColaRegistroGps, gps/headless-task.ts)
+  -- podía verla y programar la MISMA notificación una segunda vez. El DEFAULT 'programado' de la
+  -- columna queda por retrocompatibilidad con filas legado migradas antes de este rediseño (nunca
+  -- las escribe este mecanismo) — el claim vigente ya NUNCA escribe 'pendiente'.
   CREATE TABLE IF NOT EXISTS anuncios_punto_control (
     clave TEXT PRIMARY KEY,
     ts TEXT NOT NULL,
@@ -529,12 +537,36 @@ export function claveAnuncio(sesionId: string, puntoControlId: string, pasada: n
 /**
  * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
  * 2026-09-23, punto 3 del brief — "intención durable ANTES de programar"): reclama ATÓMICAMENTE
- * la INTENCIÓN de anunciar "llegaste" para una visita — `INSERT OR IGNORE` en estado
- * `'pendiente'`, ANTES de intentar `scheduleNotificationAsync` (`anunciarLlegadaPuntoControl`,
- * `features/operacion/anuncio-punto-control.ts`). `clave` (`claveAnuncio`, arriba) es la PK, así
- * que dos decisiones concurrentes para la MISMA visita (dos ticks que terminan decidiendo el
- * mismo motivo, o un reintento superpuesto) solo dejan que UNA reclame — la otra ve
- * `reclamado: false` y no debe programar nada.
+ * la INTENCIÓN de anunciar "llegaste" para una visita — `INSERT OR IGNORE`, ANTES de intentar
+ * `scheduleNotificationAsync` (`anunciarLlegadaPuntoControl`, `features/operacion/anuncio-punto-
+ * control.ts`). `clave` (`claveAnuncio`, arriba) es la PK, así que dos decisiones concurrentes
+ * para la MISMA visita (dos ticks que terminan decidiendo el mismo motivo, o un reintento
+ * superpuesto) solo dejan que UNA reclame — la otra ve `reclamado: false` y no debe programar
+ * nada.
+ *
+ * FIX POST-REVISIÓN (code review, "doble llegaste" — vibración+notificación duplicadas): el
+ * INSERT escribe DIRECTO a estado `'programando'` con `ultimo_intento_ts` puesto al momento del
+ * claim — un solo statement, sin pasar por `'pendiente'`. Antes, el claim insertaba `'pendiente'`
+ * (sin `ultimo_intento_ts`) y quedaba así hasta que el caller, en un `await` APARTE, llamaba
+ * `marcarAnuncioProgramando` — esa ventana entre las dos escrituras es justo lo que
+ * `obtenerAnunciosPendientesDeProgramar` no protegía: su condición ofrece CUALQUIER fila
+ * `'pendiente'` sin mirar antigüedad (a diferencia de `'programando'`, que exige
+ * `ultimo_intento_ts` vencido). El reintento de anuncios pendientes corre fire-and-forget desde
+ * `ejecutarEnColaRegistroGps` (`gps/headless-task.ts`) justo después de que el tick que hizo ESTE
+ * claim resuelve — con la ventana abierta, esa consulta podía ver la fila recién reclamada y
+ * disparar una SEGUNDA vibración+notificación para la misma llegada. Al nacer ya `'programando'`
+ * con `ultimo_intento_ts` fresco, la fila queda protegida por la MISMA regla de staleness
+ * (`ANUNCIO_PROGRAMANDO_STALE_MS`) desde el instante del claim — nunca hay una ventana en la que
+ * la fila sea ofrecible sin que haya pasado ese margen.
+ *
+ * Recuperación tras un crash intacta: si el proceso muere DESPUÉS de este INSERT pero ANTES de
+ * `marcarAnuncioProgramando`/`programarNotificacionLlegada` (la Activity/tarea headless muere a
+ * mitad de camino), la fila queda `'programando'` con el `ultimo_intento_ts` del claim — el
+ * próximo tick la reintenta en cuanto ese timestamp quede viejo (`ANUNCIO_PROGRAMANDO_STALE_MS`,
+ * como cualquier otro intento trabado), nunca se pierde. Único cambio de comportamiento: esa
+ * recuperación ahora tarda hasta `ANUNCIO_PROGRAMANDO_STALE_MS` en vez de ser inmediata (como sí
+ * lo era la rama `'pendiente'` vieja, sin chequeo de antigüedad) — tradeoff aceptado a propósito:
+ * esa inmediatez sin chequeo era EXACTAMENTE el hueco que abría la duplicación.
  */
 export async function reclamarIntencionAnuncio(
   db: SQLite.SQLiteDatabase,
@@ -544,12 +576,13 @@ export async function reclamarIntencionAnuncio(
   motivo: string,
 ): Promise<{ reclamado: boolean; clave: string }> {
   const clave = claveAnuncio(sesionId, puntoControlId, pasada);
+  const ahoraIso = new Date().toISOString();
   const result = await conReintentoSiHandleMuerto(db, (dbActiva) =>
     dbActiva.runAsync(
       `INSERT OR IGNORE INTO anuncios_punto_control
-         (clave, ts, estado, motivo, sesion_id, punto_control_id, pasada)
-       VALUES (?, ?, 'pendiente', ?, ?, ?, ?)`,
-      [clave, new Date().toISOString(), motivo, sesionId, puntoControlId, pasada],
+         (clave, ts, estado, motivo, sesion_id, punto_control_id, pasada, ultimo_intento_ts)
+       VALUES (?, ?, 'programando', ?, ?, ?, ?, ?)`,
+      [clave, ahoraIso, motivo, sesionId, puntoControlId, pasada, ahoraIso],
     ),
   );
   return { reclamado: result.changes > 0, clave };
@@ -569,8 +602,8 @@ export async function marcarAnuncioProgramado(db: SQLite.SQLiteDatabase, clave: 
 
 /**
  * FIX POST-REVISIÓN (hallazgo 1, code review del anuncio de puntos de control — "'pendiente'
- * mezcla dos significados"): marca la fila como `'programando'`, con la marca de tiempo del
- * intento y el contador de intentos incrementado — se llama justo ANTES de intentar
+ * mezcla dos significados"): re-marca la fila como `'programando'`, refrescando la marca de
+ * tiempo del intento y el contador de intentos — se llama justo ANTES de intentar
  * `scheduleNotificationAsync`, tanto en el primer intento (`anunciarLlegadaPuntoControl`) como
  * en cada reintento (`reintentarAnunciosLlegadaPendientes`, `anuncio-punto-control.ts`).
  * Mientras la fila sigue `'programando'` con un intento FRESCO (menos de
@@ -578,6 +611,13 @@ export async function marcarAnuncioProgramado(db: SQLite.SQLiteDatabase, clave: 
  * ofrecer — sin esto, un reintento concurrente (headless y foreground compitiendo por la MISMA
  * visita, o dos ticks seguidos de la cola) podía reclamar un intento que YA estaba en vuelo y
  * disparar la vibración/notificación una SEGUNDA vez para el mismo "llegaste".
+ *
+ * NOTA (post claim atómico, ver `reclamarIntencionAnuncio`): el claim YA deja la fila en
+ * `'programando'` con `ultimo_intento_ts` puesto — esta llamada, inmediatamente después en
+ * `intentarProgramarNotificacion`, sigue corriendo igual (es idempotente y refresca el timestamp
+ * justo antes del intento real de `scheduleNotificationAsync`, que puede demorar por el `await`
+ * de `asegurarCanalNotificacion`), pero YA NO es la transición que sale de `'pendiente'` — esa
+ * fase no existe más.
  */
 export async function marcarAnuncioProgramando(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
   await conReintentoSiHandleMuerto(db, (dbActiva) =>
@@ -627,7 +667,14 @@ export const ANUNCIO_MAX_INTENTOS = 5;
  * cuando su último intento quedó viejo (`ANUNCIO_PROGRAMANDO_STALE_MS`, hallazgo 1) — mientras
  * sigue fresca, otro intento ya está (o podría estar) en vuelo. Filas incompletas (legado de la
  * tabla de 2 columnas previa al rediseño, migradas sin identidad reconstruible) se descartan en
- * vez de reventar: nunca fueron reclamadas por este mecanismo, no hay nada que reintentar. */
+ * vez de reventar: nunca fueron reclamadas por este mecanismo, no hay nada que reintentar.
+ *
+ * La rama `estado = 'pendiente'` del `WHERE` (sin chequeo de antigüedad) es DEFENSIVA, no el
+ * camino vigente: `reclamarIntencionAnuncio` ya NUNCA escribe `'pendiente'` (ver su docblock,
+ * fix del "doble llegaste" — el claim nace directo en `'programando'` con `ultimo_intento_ts`).
+ * Se mantiene por si queda alguna fila `'pendiente'` de un build viejo en el dispositivo — esas
+ * SÍ deben poder reintentarse sin esperar `ANUNCIO_PROGRAMANDO_STALE_MS`, porque nunca tuvieron un
+ * intento en vuelo que proteger. */
 export async function obtenerAnunciosPendientesDeProgramar(
   db: SQLite.SQLiteDatabase,
   sesionId: string,

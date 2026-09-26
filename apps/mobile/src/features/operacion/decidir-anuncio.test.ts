@@ -396,4 +396,29 @@ describe('evaluarAnuncioDeHeartbeat — orquestador (único punto de llamada, he
     const { anuncios } = evaluarAnuncioDeHeartbeat(estados, UMBRAL_ANUNCIO_PROXIMIDAD_MS - 100);
     expect(anuncios).toEqual([]); // ni siquiera con minDistanciaM=5: solo decide por TIEMPO
   });
+
+  /** FIX POST-REVISIÓN (code review — "Finalizar puede dejar un 'llegaste' sin anunciar"):
+   * `detener()` (`use-gps-operativo.ts`) llama a `confirmarVisitasVencidasEnCola` con
+   * `umbralAnuncioMs: 0` explícito — "ante la duda, emitir", mismo criterio que `umbralMs: 0`
+   * de la confirmación de evidencia (`umbralMs` propiamente dicho, el 6° argumento). Antes del
+   * fix faltaba el 9° argumento, así que caía al default (`UMBRAL_ANUNCIO_PROXIMIDAD_MS`,
+   * 90 s): una visita hecha MENOS de 90 s antes de apretar "Finalizar" se confirmaba como
+   * evidencia (por el `umbralMs: 0` de la confirmación) pero JAMÁS se anunciaba — el chofer se
+   * quedaba sin la vibración/notificación de "llegaste" del último punto de su recorrido. */
+  it('umbral 0 (el que detener() pasa al cerrar el recorrido) anuncia una visita recién entrada, sin esperar el umbral de tiempo', () => {
+    const clave = claveCumplimiento('sesion-1', 'pc-1');
+    const estados = new Map<string, EstadoPuntoControl>([
+      [clave, estadoVisitaActiva({ anuncioDesdeMs: 0, minDistanciaM: 90 })],
+    ]);
+
+    // Con el default (90 s) esta MISMA visita, a solo 1 s de haber entrado, todavía no dispara.
+    const conUmbralDefault = evaluarAnuncioDeHeartbeat(estados, 1_000);
+    expect(conUmbralDefault.anuncios).toEqual([]);
+
+    // Con umbral 0 (el que ahora pasa `detener()`), dispara de inmediato.
+    const conUmbralCero = evaluarAnuncioDeHeartbeat(estados, 1_000, 0);
+    expect(conUmbralCero.anuncios).toEqual([
+      { motivo: 'fallback-tiempo', puntoControlId: 'pc-1', pasada: 1, distanciaM: 90, radioToleranciaM: 150 },
+    ]);
+  });
 });

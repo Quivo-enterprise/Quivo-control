@@ -370,9 +370,21 @@ function ejecutarEnColaRegistroGps<T>(
   // que no tiene nada que ver con notificaciones. Ahora corre DESPUÉS de que `operacion()`
   // resuelve (evidencia ya persistida) y FUERA de la cadena que `resultado` propaga: un
   // `conTimeout` propio (`TIMEOUT_REINTENTO_ANUNCIOS_MS`), fire-and-forget con su propio
-  // `.catch` — nunca bloquea ni hace fallar el tick siguiente. Los reclamos/notificaciones de
-  // anuncio usan `INSERT OR IGNORE`/`identifier` fijo (`db/outbox.ts`), así que desacoplarlo de
-  // la cola no reabre ninguna ventana de duplicado.
+  // `.catch` — nunca bloquea ni hace fallar el tick siguiente.
+  //
+  // FIX POST-REVISIÓN (code review, "doble llegaste" — vibración+notificación duplicadas): este
+  // reintento fire-and-forget corre CONCURRENTE con cualquier `anunciarLlegadaPuntoControl` que
+  // el caller dispare después de `await`ar esta misma operación (p. ej. `manejarHeartbeatHeadless`
+  // sobre los `anunciosLlegada` que acaba de devolver `confirmarVisitasVencidasEnCola`) — su
+  // `SELECT` (`obtenerAnunciosPendientesDeProgramar`, `db/outbox.ts`) puede correr ENTRE el
+  // `INSERT` del claim (`reclamarIntencionAnuncio`) y el resto de `intentarProgramarNotificacion`.
+  // Lo que cierra esa ventana NO es un `identifier` fijo por sí solo (`identifier` solo evita que
+  // DOS notificaciones apiladas queden visibles, no evita que `scheduleNotificationAsync` y
+  // `Vibration.vibrate` se disparen dos veces): es que `reclamarIntencionAnuncio` deja la fila
+  // reclamada ATÓMICAMENTE en `'programando'` con `ultimo_intento_ts` puesto en el MISMO INSERT
+  // (`db/outbox.ts`) — nunca pasa por un estado `'pendiente'` intermedio que el `SELECT` de arriba
+  // pudiera ofrecer sin chequear antigüedad. Ver el docblock de `reclamarIntencionAnuncio` para el
+  // detalle del hueco que tenía antes y el tradeoff de recuperación tras un crash.
   const miGeneracionAlEmpezar = generacionColaRegistroGps;
   const resultado = colaRegistroGps
     .then(() =>

@@ -175,13 +175,17 @@ describe('encolarEventoYLimpiarVisita — R2 (handle muere A MITAD de la transac
 /**
  * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
  * 2026-09-23, punto 3 del brief — "intención durable ANTES de programar"): `reclamarIntencionAnuncio`
- * hace el `INSERT OR IGNORE` (estado `'pendiente'`) — la identidad `{sesionId, puntoControlId,
- * pasada}` reclamada; `marcarAnuncioProgramado` la pasa a `'programado'` tras el schedule;
- * `obtenerAnunciosPendientesDeProgramar` lista lo que quedó `'pendiente'`/`'programando'` viejo
- * para reintentar.
+ * hace el `INSERT OR IGNORE` — la identidad `{sesionId, puntoControlId, pasada}` reclamada;
+ * `marcarAnuncioProgramado` la pasa a `'programado'` tras el schedule;
+ * `obtenerAnunciosPendientesDeProgramar` lista lo que quedó `'programando'` viejo para
+ * reintentar.
+ *
+ * FIX POST-REVISIÓN (code review, "doble llegaste"): el claim ya NO pasa por `'pendiente'` — el
+ * mismo INSERT deja la fila en `'programando'` con `ultimo_intento_ts` puesto, ver el docblock
+ * de `reclamarIntencionAnuncio` en `outbox.ts`.
  */
 describe('reclamarIntencionAnuncio', () => {
-  it('hace un INSERT OR IGNORE en estado "pendiente" con la identidad completa', async () => {
+  it('hace un INSERT OR IGNORE en estado "programando" (claim atómico, con ultimo_intento_ts) con la identidad completa', async () => {
     const runAsync = vi.fn().mockResolvedValue({ changes: 1 });
     const db = { ...crearHandleFalso(runAsync) };
 
@@ -195,9 +199,11 @@ describe('reclamarIntencionAnuncio', () => {
 
     expect(resultado).toEqual({ reclamado: true, clave: 'sesion-1:pc-1:1' });
     expect(runAsync).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT OR IGNORE'),
-      ['sesion-1:pc-1:1', expect.any(String), 'proximidad', 'sesion-1', 'pc-1', 1],
+      expect.stringMatching(/INSERT OR IGNORE[\s\S]*ultimo_intento_ts[\s\S]*'programando'/),
+      ['sesion-1:pc-1:1', expect.any(String), 'proximidad', 'sesion-1', 'pc-1', 1, expect.any(String)],
     );
+    // Nunca escribe 'pendiente' — ver el fix del "doble llegaste".
+    expect(runAsync).not.toHaveBeenCalledWith(expect.stringContaining("'pendiente'"), expect.anything());
   });
 
   it('reclamado: false cuando la identidad ya estaba reclamada (changes: 0)', async () => {
@@ -213,6 +219,140 @@ describe('reclamarIntencionAnuncio', () => {
     );
 
     expect(resultado.reclamado).toBe(false);
+  });
+});
+
+/**
+ * FIX POST-REVISIÓN (code review, "doble llegaste" — vibración+notificación duplicadas):
+ * reproduce la RACE descrita en el hallazgo con un fake de tabla en memoria que respeta la
+ * semántica real de las dos consultas (`reclamarIntencionAnuncio` y
+ * `obtenerAnunciosPendientesDeProgramar`) contra el MISMO storage — no dos funciones mockeadas
+ * por separado, que no podrían reproducir la interacción entre ellas. El fake lee el estado
+ * literal (`'pendiente'`/`'programando'`) del texto SQL, igual que haría SQLite real, así que
+ * corre distinto según la implementación vigente de `outbox.ts`:
+ * - ANTES del fix (claim en dos pasos, `'pendiente'` sin `ultimo_intento_ts`): el `SELECT` de
+ *   reintento, corrido acá ENTRE el `INSERT` del claim y `marcarAnuncioProgramando`, SÍ devuelve
+ *   la fila recién reclamada (la rama `estado = 'pendiente'` no chequea antigüedad) — el caller
+ *   real (`reintentarAnunciosLlegadaPendientes`) la programaría de nuevo, doble vibración +
+ *   notificación para la MISMA llegada.
+ * - DESPUÉS del fix (claim atómico en `'programando'` con `ultimo_intento_ts` fresco): la misma
+ *   consulta, en el mismo punto, NO la devuelve — sigue protegida por `ANUNCIO_PROGRAMANDO_STALE_MS`
+ *   desde el instante del claim.
+ */
+interface FilaAnuncioFalsa {
+  clave: string;
+  ts: string;
+  estado: string;
+  motivo: string | null;
+  sesion_id: string | null;
+  punto_control_id: string | null;
+  pasada: number | null;
+  intentos: number;
+  ultimo_intento_ts: string | null;
+}
+
+function crearTablaAnunciosFalsa() {
+  const filas = new Map<string, FilaAnuncioFalsa>();
+
+  const runAsync = vi.fn(async (sql: string, params: unknown[] = []) => {
+    if (sql.includes('INSERT OR IGNORE INTO anuncios_punto_control')) {
+      const [clave, ts, motivo, sesionId, puntoControlId, pasada, ultimoIntentoTs] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        number,
+        string | undefined,
+      ];
+      if (filas.has(clave)) return { changes: 0 };
+      // Lee el estado LITERAL del texto SQL — igual que haría el motor real: el estado nunca es
+      // un parámetro ligado en `reclamarIntencionAnuncio`, es texto fijo en la sentencia.
+      const estado = sql.includes("'pendiente'") ? 'pendiente' : 'programando';
+      filas.set(clave, {
+        clave,
+        ts,
+        estado,
+        motivo,
+        sesion_id: sesionId,
+        punto_control_id: puntoControlId,
+        pasada,
+        intentos: 0,
+        ultimo_intento_ts: estado === 'programando' ? ultimoIntentoTs ?? null : null,
+      });
+      return { changes: 1 };
+    }
+    if (sql.includes("SET estado = 'programando'")) {
+      const [ultimoIntentoTs, clave] = params as [string, string];
+      const fila = filas.get(clave);
+      if (!fila) return { changes: 0 };
+      fila.estado = 'programando';
+      fila.ultimo_intento_ts = ultimoIntentoTs;
+      fila.intentos += 1;
+      return { changes: 1 };
+    }
+    if (sql.includes("SET estado = 'programado'")) {
+      const [clave] = params as [string];
+      const fila = filas.get(clave);
+      if (!fila) return { changes: 0 };
+      fila.estado = 'programado';
+      return { changes: 1 };
+    }
+    if (sql.includes('DELETE FROM anuncios_punto_control')) {
+      const [vencidoIso, maxIntentos] = params as [string, number];
+      for (const [clave, fila] of Array.from(filas.entries())) {
+        if (fila.ts < vencidoIso || fila.intentos >= maxIntentos) filas.delete(clave);
+      }
+      return { changes: 0 };
+    }
+    throw new Error(`SQL no soportado por el fake de anuncios_punto_control: ${sql}`);
+  });
+
+  const getAllAsync = vi.fn(async (sql: string, params: unknown[] = []) => {
+    if (sql.includes('SELECT clave, sesion_id, punto_control_id, pasada, motivo')) {
+      const [sesionId, staleIso] = params as [string, string];
+      return Array.from(filas.values())
+        .filter(
+          (fila) =>
+            fila.sesion_id === sesionId &&
+            (fila.estado === 'pendiente' ||
+              (fila.estado === 'programando' &&
+                (fila.ultimo_intento_ts == null || fila.ultimo_intento_ts < staleIso))),
+        )
+        .map((fila) => ({
+          clave: fila.clave,
+          sesion_id: fila.sesion_id,
+          punto_control_id: fila.punto_control_id,
+          pasada: fila.pasada,
+          motivo: fila.motivo,
+        }));
+    }
+    throw new Error(`SQL no soportado por el fake de anuncios_punto_control: ${sql}`);
+  });
+
+  return { runAsync, getAllAsync, withTransactionAsync: vi.fn(), execAsync: vi.fn(), filas };
+}
+
+describe('reclamarIntencionAnuncio — claim atómico cierra la ventana "pendiente" (hallazgo "doble llegaste")', () => {
+  it('el SELECT de reintento, corrido ENTRE el INSERT del claim y marcarAnuncioProgramando, no ve la fila recién reclamada', async () => {
+    const tabla = crearTablaAnunciosFalsa();
+    const db = { ...tabla } as unknown as Parameters<typeof reclamarIntencionAnuncio>[0];
+
+    const claim = await reclamarIntencionAnuncio(db, 'sesion-1', 'pc-1', 1, 'proximidad');
+    expect(claim.reclamado).toBe(true);
+
+    // Simula la ventana de la race: `reintentarAnunciosLlegadaPendientes` corre fire-and-forget
+    // desde `ejecutarEnColaRegistroGps` (`gps/headless-task.ts`) — acá corre su SELECT justo
+    // ANTES de que el caller real llegue a `marcarAnuncioProgramando`/`programarNotificacionLlegada`.
+    const pendientes = await obtenerAnunciosPendientesDeProgramar(
+      db as unknown as Parameters<typeof obtenerAnunciosPendientesDeProgramar>[0],
+      'sesion-1',
+      Date.now(),
+    );
+
+    // Antes del fix esto devolvía la fila recién reclamada — el caller la reprogramaba y
+    // disparaba una segunda vibración+notificación para la MISMA llegada.
+    expect(pendientes).toEqual([]);
   });
 });
 
