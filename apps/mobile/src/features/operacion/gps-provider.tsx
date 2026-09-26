@@ -1,9 +1,12 @@
-import React, { createContext, useContext, useMemo, useEffect, useRef } from 'react';
-import * as Speech from 'expo-speech';
+import React, { createContext, useContext, useMemo, useEffect, useRef, useCallback } from 'react';
+import * as Sentry from '@sentry/react-native';
+import type * as SQLite from 'expo-sqlite';
 import { usePaqueteDia } from './use-paquete-dia';
 import { useGpsOperativo } from './use-gps-operativo';
 import { useOperacionSettings } from '../perfil/use-operacion-settings';
 import { usePuntoControlSonido } from './confirmacion-sonido';
+import { anunciarPuntoControl } from './anuncio-punto-control';
+import type { DeteccionPuntoControl } from '../../gps/geofence';
 
 interface GpsContextValue {
   paqueteDia: ReturnType<typeof usePaqueteDia>;
@@ -36,42 +39,65 @@ export function GpsProvider({
   // y en el handler de `onHeartbeat`.
   const gps = useGpsOperativo(sesionId, deviceId, puntosControl, obtenerAccessToken);
   const { settings } = useOperacionSettings();
-  // B4 (hallazgo de revisión, bajo): compara también contra la PASADA, no solo el
-  // `puntoControlId` — con multi-vuelta, dos pasadas CONSECUTIVAS del mismo punto de control
-  // solo cambian `pasada`, no `puntoControlId`, así que comparar solo el id dejaba la segunda
-  // pasada muda (nunca se actualizaba `ultimoHablado`, porque ya "coincidía").
-  const ultimoHablado = useRef<{ puntoControlId: string; pasada: number } | null>(null);
 
+  /**
+   * ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): wrapper DELGADO sobre
+   * `anunciarPuntoControl` (`./anuncio-punto-control`, sin React, ver su docblock) — el mismo
+   * módulo que llama `tareaHeadlessUbicacion` (`gps/headless-task.ts`). El dedupe en memoria del
+   * aviso de aproximación vive ADENTRO de ese módulo, no acá.
+   *
+   * REDISEÑO (decisión del CTO, ronda posterior al veredicto `partial` de Codex `verify-fix` del
+   * 2026-09-23): este componente YA NO dispara vibración ni notificación de "llegaste" — ese
+   * canal se ejecuta ENTERO dentro de `useGpsOperativo` (`use-gps-operativo.ts`, `onLocation`/
+   * `onHeartbeat`/`detener`), inmediatamente después de que la MISMA cola
+   * (`colaRegistroGps`, `gps/headless-task.ts`) decide el anuncio — "el foreground no tiene
+   * disparador propio: consume las decisiones de esa misma cola". Acá solo queda el aviso de
+   * aproximación (voz) y el sonido custom EXTRA, ninguno de los dos disparado por evidencia.
+   */
+  const anunciar = useCallback(
+    (deteccion: DeteccionPuntoControl) => {
+      // FIX POST-REVISIÓN (hallazgo 10, cleanup — "abre el outbox para un `_db` sin usar"):
+      // `anunciarPuntoControl` documenta su primer parámetro como sin uso (el dedupe del aviso de
+      // aproximación vive en memoria, `aproximacionesAnunciadas`, nunca en SQLite) — abrir
+      // `quivo-outbox.db` acá solo para descartar el handle era una llamada nativa de sobra en el
+      // camino más caliente del hook (cada fix con un punto de control cerca, potencialmente
+      // cientos por jornada). Se pasa un placeholder tipado, que la función nunca lee.
+      anunciarPuntoControl({} as SQLite.SQLiteDatabase, deteccion, { sesionId, puntosControl }).catch(
+        (error: unknown) => {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-provider', paso: 'anunciar-punto-control-foreground' },
+          });
+        },
+      );
+    },
+    [sesionId, puntosControl],
+  );
+
+  // Aviso de aproximación (SOLO voz) — respeta la preferencia `navegacionVoz` del chofer
+  // (`use-operacion-settings.tsx`/`ajustes-screen.tsx`) porque acá SÍ hay settings disponibles
+  // (a diferencia del headless, que no tiene árbol de React del que leerlas y por eso siempre
+  // avisa — ver el docblock de `anuncio-punto-control.ts`: la app en foreground no es la
+  // condición que este módulo existe para cubrir, así que preservar el toggle acá no compromete
+  // el arreglo del reporte de Rosa).
   useEffect(() => {
-    if (gps.ultimaDeteccion && settings.navegacionVoz) {
-      const { puntoControlId, pasada = 0 } = gps.ultimaDeteccion;
-      const yaHablado =
-        ultimoHablado.current?.puntoControlId === puntoControlId &&
-        ultimoHablado.current?.pasada === pasada;
-      if (!yaHablado) {
-        // `volume: 1.0` explícito (el pedido fue "sonido super fuerte para que se escuche"):
-        // no depender del default de la plataforma, que en algunos OEM sale por debajo del
-        // volumen máximo del stream de media.
-        Speech.speak(`Punto de control alcanzado. Distancia: ${gps.ultimaDeteccion.distanciaM} metros.`, {
-          volume: 1.0,
-        });
-        ultimoHablado.current = { puntoControlId, pasada };
-      }
+    if (gps.deteccionAproximacion && settings.navegacionVoz) {
+      anunciar(gps.deteccionAproximacion);
     }
-  }, [gps.ultimaDeteccion, settings.navegacionVoz]);
+  }, [gps.deteccionAproximacion, settings.navegacionVoz, anunciar]);
 
-  // Sonido de confirmación (distinto de la voz de arriba, con su propia preferencia
-  // `sonidoConfirmacion` — ver `use-operacion-settings.tsx` y `confirmacion-sonido.ts`): un
-  // `useRef` PROPIO, no compartido con `ultimoHablado`, para que activar/desactivar una
-  // preferencia sin la otra no afecte el criterio de la que sigue prendida. Mismo criterio
-  // multi-vuelta EXACTO que la voz (B4, arriba): compara `{puntoControlId, pasada}`, no solo el
-  // id, o la segunda pasada del mismo punto de control quedaría muda.
+  // Sonido de confirmación EXTRA (más prolijo que el default de la notificación, `duckOthers`
+  // en vez de competir con la música del trufi) — puramente foreground, por eso vive acá y no en
+  // el módulo compartido. REDISEÑO: dispara sobre `gps.ultimoAnuncioLlegada` (la decisión YA
+  // ejecutada por `useGpsOperativo`), NUNCA sobre `gps.ultimaDeteccion` (evidencia) — mismo
+  // invariante que el resto del rediseño: la evidencia no dispara ningún canal hacia el chofer.
+  // Compara `puntoControlId` + `pasada` (no solo el primero): con multi-vuelta, dos pasadas
+  // CONSECUTIVAS del mismo punto de control solo cambian `pasada`.
   const ultimoSonado = useRef<{ puntoControlId: string; pasada: number } | null>(null);
   const reproducirSonidoConfirmacion = usePuntoControlSonido();
 
   useEffect(() => {
-    if (gps.ultimaDeteccion && settings.sonidoConfirmacion) {
-      const { puntoControlId, pasada = 0 } = gps.ultimaDeteccion;
+    if (gps.ultimoAnuncioLlegada && settings.sonidoConfirmacion) {
+      const { puntoControlId, pasada } = gps.ultimoAnuncioLlegada;
       const yaSonado =
         ultimoSonado.current?.puntoControlId === puntoControlId &&
         ultimoSonado.current?.pasada === pasada;
@@ -80,7 +106,7 @@ export function GpsProvider({
         ultimoSonado.current = { puntoControlId, pasada };
       }
     }
-  }, [gps.ultimaDeteccion, settings.sonidoConfirmacion, reproducirSonidoConfirmacion]);
+  }, [gps.ultimoAnuncioLlegada, settings.sonidoConfirmacion, reproducirSonidoConfirmacion]);
 
   return (
     <GpsContext.Provider value={{ paqueteDia, gps }}>

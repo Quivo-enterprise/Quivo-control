@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
+import { construirHtml } from './route-map-html';
+import {
+  construirMensajesEstadoMapa,
+  esHandshakeMapaListo,
+  type EstadoMapaProtocolo,
+} from './route-map-protocol';
+import { useReconexionMapaOffline } from './reconexion-mapa-offline';
 
 interface RouteMapViewProps {
   paquete: PaqueteDia;
@@ -21,6 +28,11 @@ interface RouteMapViewProps {
  * - Ruta oscura (#1E1B4B) en espera, naranja (#FE9B0B) en seguimiento activo.
  * - Puntos de control: círculos azules (#3127B1) con número blanco, verdes (#22C55E) cuando ya se pasaron.
  * - Flecha de navegación triangular azul (#3127B1) orientada según el rumbo.
+ *
+ * El HTML que corre dentro del WebView (Leaflet + la lógica de dibujado) vive en
+ * `route-map-html.ts`, separado de este componente para poder testearlo sin RN — Entrega 25
+ * del plan post-piloto: Leaflet viaja inline en ese HTML (no desde unpkg), así que este mapa
+ * arranca sin red. Ver el comentario de cabecera de `route-map-html.ts` para el detalle.
  */
 export function RouteMapView({
   paquete,
@@ -33,29 +45,83 @@ export function RouteMapView({
   style,
 }: RouteMapViewProps) {
   const webViewRef = useRef<WebView>(null);
-  const html = useMemo(
-    () => construirHtml(paquete, vehiculo, proximoPuntoControlId),
-    [paquete, vehiculo, proximoPuntoControlId],
+  // Entrega 31b (defecto post-piloto): `proximoPuntoControlId` SALE de estas dependencias a
+  // propósito. Antes estaba acá y cada vez que el conductor pasaba un punto de control (cambia
+  // el próximo) React recalculaba un `html` nuevo — mismo string salvo ese valor — y se lo pasaba
+  // a la WebView como `source.html` nuevo, forzando una recarga COMPLETA del documento: Leaflet
+  // se reinstancia, se pierde el marcador de posición/estado de seguimiento hasta el próximo
+  // `onLoadEnd`, y el controlador de tiles arranca de cero. En una ruta de 26 puntos de control
+  // son 26 recargas con parpadeo. Lo único que de verdad cambia la ruta dibujada (la geometría,
+  // los puntos de control fijos) depende de `paquete`/`vehiculo` — el próximo punto de control es
+  // estado que ahora viaja por `postMessage` (ver `enviarEstadoCompleto` abajo), no por reconstrucción
+  // de HTML. Ver el comentario grande en `construirHtml` (route-map-html.ts) para el detalle.
+  const html = useMemo(() => construirHtml(paquete, vehiculo), [paquete, vehiculo]);
+  // `baseUrl` (dominio real de producción de este proyecto, confirmado en `apps/api/README.md` y
+  // `docs/plan-integracion-redesign-jairo.md`: CORS_ORIGIN/paneles públicos apuntan a
+  // `control.myquivo.com`) — hallazgo del code-review de esta entrega: sin `baseUrl`, el WebView
+  // carga este HTML desde un string sin ningún origen, así que las peticiones de tiles a
+  // `tile.openstreetmap.org` (`route-map-html.ts`) salían sin header `Referer`. La política de uso
+  // de OSM pide un Referer identificable — sin él, OSM puede bloquear la IP, y el bucle de
+  // reintento (antes sin tope, ver el fix en `route-map-html.ts`) volvía a pedir cada tile visible
+  // cada 30s para siempre, agravando el bloqueo. `baseUrl` NO afecta a Leaflet ni al CSS: ambos
+  // viajan inline dentro del mismo string de `html` (`leaflet-inline.generated.ts`), así que no
+  // son peticiones de red que dependan de resolverse contra este origen — y por la misma razón
+  // tampoco rompe el arranque sin red (offline): lo único que cambia es el header `Referer` que
+  // manda el WebView al pedir un tile, nunca cómo se resuelven los recursos inline.
+  const source = useMemo(() => ({ html, baseUrl: 'https://control.myquivo.com/' }), [html]);
+
+  // Entrega 25/31b (handshake mapa-listo): guarda el último estado conocido en una ref —
+  // actualizada en cada render, ver más abajo — para que `enviarEstadoCompleto` pueda mandarlo
+  // desde CUALQUIER disparador (el cambio de props de siempre, `onLoadEnd`, o ahora también el
+  // mensaje `mapa-listo` que llega por `onMessage`) sin depender de qué closure exacta haya
+  // quedado registrada como callback en ese momento. Ver `route-map-protocol.ts` para el porqué
+  // completo del handshake y el diseño de `EstadoMapaProtocolo`.
+  const estadoActualRef = useRef<EstadoMapaProtocolo>({
+    tracking,
+    proximoPuntoControlId,
+    posicionActual,
+    rutaCalculada,
+  });
+  estadoActualRef.current = { tracking, proximoPuntoControlId, posicionActual, rutaCalculada };
+
+  const enviarEstadoCompleto = useCallback(() => {
+    construirMensajesEstadoMapa(estadoActualRef.current).forEach((mensaje) => {
+      webViewRef.current?.postMessage(mensaje);
+    });
+  }, []);
+
+  // Sigue mandando el estado cada vez que cambia una de estas props (comportamiento de siempre) —
+  // el handshake de abajo (`onMessage` + `mapa-listo`) es el mecanismo que GARANTIZA que el
+  // primer envío no se pierda, no un reemplazo de este disparador por cambios posteriores.
+  useEffect(enviarEstadoCompleto, [
+    tracking,
+    proximoPuntoControlId,
+    posicionActual,
+    rutaCalculada,
+    enviarEstadoCompleto,
+  ]);
+
+  // Entrega 25/31b (handshake mapa-listo): el HTML (`route-map-html.ts`) manda
+  // `{type:'mapa-listo'}` por `ReactNativeWebView.postMessage` apenas registra sus listeners de
+  // `message` — antes de tocar tiles o cualquier otro recurso de red. Antes de este handshake, el
+  // estado inicial (posición del vehículo incluida) se mandaba a ciegas desde `useEffect`/
+  // `onLoadEnd`, sin saber si esos listeners ya existían: si el script del WebView tardaba en
+  // llegar a esa línea (motor más lento, dispositivo viejo, primera carga), el mensaje se perdía
+  // en el vacío y el marcador de posición quedaba ausente hasta el próximo cambio de estado —
+  // mismo síntoma reportado como "la flecha del vehículo aparece congelada" (la ruta sí se dibuja
+  // porque no depende de ningún mensaje). Con el handshake, en cambio, es el propio HTML el que
+  // avisa cuándo está listo para recibir, y acá simplemente respondemos con el estado completo
+  // más reciente (`estadoActualRef.current`). Si el WebView se recarga (nueva navegación, error
+  // de red, etc.) el script vuelve a ejecutar desde cero y manda `mapa-listo` de nuevo, así que
+  // este mismo handler repite el envío sin necesidad de lógica adicional.
+  const onMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      if (esHandshakeMapaListo(event.nativeEvent.data)) {
+        enviarEstadoCompleto();
+      }
+    },
+    [enviarEstadoCompleto],
   );
-  const source = useMemo(() => ({ html }), [html]);
-
-  const enviarEstadoMapa = useCallback(() => {
-    webViewRef.current?.postMessage(
-      JSON.stringify({
-        type: 'tracking',
-        active: tracking,
-        proximoPuntoControlId,
-      }),
-    );
-    if (posicionActual) {
-      webViewRef.current?.postMessage(JSON.stringify({ type: 'position', ...posicionActual }));
-    }
-    webViewRef.current?.postMessage(
-      JSON.stringify({ type: 'ruta-calculada', coordinates: rutaCalculada }),
-    );
-  }, [posicionActual, proximoPuntoControlId, rutaCalculada, tracking]);
-
-  useEffect(enviarEstadoMapa, [enviarEstadoMapa]);
 
   const lastRecenter = useRef(recenterTick);
   useEffect(() => {
@@ -64,6 +130,21 @@ export function RouteMapView({
       lastRecenter.current = recenterTick;
     }
   }, [recenterTick]);
+
+  // Decisión del CTO (2026-09-25): al volver la conectividad del teléfono (no la de
+  // `tile.openstreetmap.org` en sí — eso lo sigue manejando el propio controlador de tiles del
+  // WebView, ver `route-map-html.ts`), avisarle al mapa que reinicie los contadores de reintento
+  // de los tiles pendientes/abandonados y los vuelva a pedir, sin esperar a que el chofer haga
+  // pan/zoom. `useReconexionMapaOffline` (ver `reconexion-mapa-offline.ts`) hace el trabajo de
+  // detectar la transición offline→online (con debounce, para no disparar en redes que aletean) —
+  // acá solo se traduce esa señal en el mismo mecanismo de `postMessage` puntual que ya usa
+  // `recenter` arriba, sin tocar `enviarEstadoCompleto` (eso son mensajes de ESTADO completo, este
+  // es un evento puntual, como 'recenter').
+  useReconexionMapaOffline(
+    useCallback(() => {
+      webViewRef.current?.postMessage(JSON.stringify({ type: 'reconectado' }));
+    }, []),
+  );
 
   return (
     <View style={[styles.container, style]}>
@@ -74,253 +155,15 @@ export function RouteMapView({
         style={styles.webview}
         javaScriptEnabled
         domStorageEnabled={false}
-        onLoadEnd={enviarEstadoMapa}
+        // `onLoadEnd` queda como respaldo (reenvía el mismo estado, idempotente en el HTML) por si
+        // el motor de WebView lo dispara después de que el script ya registró sus listeners — pero
+        // el mecanismo que GARANTIZA que no se pierda el primer envío es `onMessage` + el handshake
+        // `mapa-listo` de arriba, no este callback.
+        onLoadEnd={enviarEstadoCompleto}
+        onMessage={onMessage}
       />
     </View>
   );
-}
-
-function construirHtml(
-  paquete: PaqueteDia,
-  _vehiculo: ContextoOperativoMovil['vehiculo'],
-  proximoPuntoControlId: string | null,
-): string {
-  const coordenadasRuta = paquete.ruta.geometria.coordinates.map(([lng, lat]) => [lat, lng]);
-  const proximoPuntoControl = paquete.puntosControl.find((pc) => pc.id === proximoPuntoControlId);
-  const proximoPuntoLatLng = proximoPuntoControl
-    ? [proximoPuntoControl.coord.coordinates[1], proximoPuntoControl.coord.coordinates[0]]
-    : null;
-
-  const puntosControlData = paquete.puntosControl.map((pc, idx) => ({
-    id: pc.id,
-    orden: idx + 1,
-    lat: pc.coord.coordinates[1],
-    lng: pc.coord.coordinates[0],
-  }));
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    html, body, #map { height: 100%; margin: 0; padding: 0; background-color: #F4F6F8; }
-    
-    .control-point-marker {
-      width: 24px;
-      height: 24px;
-      background-color: #3127B1;
-      border: 2px solid #FFFFFF;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-weight: 700;
-      font-size: 11.5px;
-      color: #FFFFFF;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.35);
-      box-sizing: border-box;
-      transition: background-color 0.3s ease;
-    }
-    .control-point-marker.completed {
-      background-color: #22C55E;
-    }
-
-    .nav-arrow-container {
-      width: 28px;
-      height: 28px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: transform 0.3s cubic-bezier(0.2, 0, 0, 1);
-    }
-    .nav-arrow-svg {
-      width: 24px;
-      height: 24px;
-      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35));
-    }
-  </style>
-</head>
-<body>
-  <div id="map"></div>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    var map = L.map('map', { zoomControl: false, attributionControl: false });
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-
-    var coordenadasRuta = ${JSON.stringify(coordenadasRuta)};
-    var COLOR_ESPERA = '#1E1B4B';
-    var COLOR_LINEA = '#FE9B0B';
-
-    var ruta = L.polyline(coordenadasRuta, {
-      color: COLOR_ESPERA,
-      weight: 4.5,
-      opacity: 0.95,
-      lineCap: 'round',
-      lineJoin: 'round'
-    }).addTo(map);
-
-    var puntosControlData = ${JSON.stringify(puntosControlData)};
-    var proximoPuntoIdActual = ${JSON.stringify(proximoPuntoControlId)};
-    var pcMarkers = [];
-
-    function renderizarPuntosControl() {
-      // Limpiar marcadores existentes
-      pcMarkers.forEach(function(m) { map.removeLayer(m); });
-      pcMarkers = [];
-
-      var proximoIdx = -1;
-      if (proximoPuntoIdActual) {
-        for (var k = 0; k < puntosControlData.length; k++) {
-          if (puntosControlData[k].id === proximoPuntoIdActual) {
-            proximoIdx = k;
-            break;
-          }
-        }
-      }
-
-      puntosControlData.forEach(function(pc, idx) {
-        var isPassed = seguimientoActivo && proximoIdx > 0 && idx < proximoIdx;
-        var className = isPassed ? 'control-point-marker completed' : 'control-point-marker';
-        var html = '<div class="' + className + '">' + pc.orden + '</div>';
-        var marker = L.marker([pc.lat, pc.lng], {
-          icon: L.divIcon({
-            className: '',
-            html: html,
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
-          })
-        }).addTo(map);
-        pcMarkers.push(marker);
-      });
-    }
-
-    var proximoPuntoLatLng = ${JSON.stringify(proximoPuntoLatLng)};
-    var caminoResaltado = null;
-    var rutaCalculadaCoords = null;
-    var posicion = null;
-    var seguimientoActivo = false;
-    var currentHeading = 0;
-    var prevLatLng = null;
-
-    renderizarPuntosControl();
-
-    function getArrowIcon(heading) {
-      var html = '<div class="nav-arrow-container" style="transform: rotate(' + heading + 'deg)">' +
-                 '<svg class="nav-arrow-svg" viewBox="0 0 24 24">' +
-                 '<path d="M12 2L4 20.5l8-3.8 8 3.8Z" fill="#3127B1" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>' +
-                 '</svg></div>';
-      return L.divIcon({ className: '', html: html, iconSize: [28, 28], iconAnchor: [14, 14] });
-    }
-
-    function calcHeading(lat1, lon1, lat2, lon2) {
-      var dLon = (lon2 - lon1) * Math.PI / 180;
-      var y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
-      var x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) -
-              Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
-      var brng = Math.atan2(y, x);
-      return ((brng * 180 / Math.PI) + 360) % 360;
-    }
-
-    function actualizarCaminoAlProximoPunto() {
-      if (caminoResaltado) {
-        map.removeLayer(caminoResaltado);
-        caminoResaltado = null;
-      }
-      if (!seguimientoActivo || !rutaCalculadaCoords || rutaCalculadaCoords.length < 2) return;
-
-      caminoResaltado = L.polyline(rutaCalculadaCoords, {
-        color: COLOR_LINEA,
-        weight: 5.5,
-        opacity: 1,
-        lineCap: 'round',
-        lineJoin: 'round'
-      }).addTo(map);
-      caminoResaltado.bringToFront();
-    }
-
-    function updateMap(data) {
-      if (!data) return;
-
-      if (data.type === 'ruta-calculada') {
-        rutaCalculadaCoords = Array.isArray(data.coordinates) && data.coordinates.length >= 2
-          ? data.coordinates
-          : null;
-        actualizarCaminoAlProximoPunto();
-        return;
-      }
-
-      if (data.type === 'recenter') {
-        if (!posicion) {
-          map.fitBounds(ruta.getBounds(), { paddingTopLeft: [20, 80], paddingBottomRight: [20, 180] });
-          return;
-        }
-        seguimientoActivo = true;
-        map.flyTo(posicion.getLatLng(), 17, { duration: 0.6 });
-        return;
-      }
-
-      if (data.type === 'tracking') {
-        var didChange = seguimientoActivo !== (data.active === true);
-        seguimientoActivo = data.active === true;
-        if (data.proximoPuntoControlId) {
-          proximoPuntoIdActual = data.proximoPuntoControlId;
-        }
-
-        // Color de la ruta en mapa: En espera (#1E1B4B) vs En línea (#FE9B0B)
-        ruta.setStyle({
-          color: seguimientoActivo ? COLOR_LINEA : COLOR_ESPERA,
-          weight: seguimientoActivo ? 5.5 : 4.5
-        });
-
-        renderizarPuntosControl();
-
-        if (posicion) {
-          posicion.setIcon(getArrowIcon(currentHeading));
-        }
-
-        if (seguimientoActivo && posicion) {
-          map.flyTo(posicion.getLatLng(), 17, { duration: 0.7 });
-        } else if (!seguimientoActivo) {
-          map.fitBounds(ruta.getBounds(), { paddingTopLeft: [20, 80], paddingBottomRight: [20, 180] });
-        }
-        actualizarCaminoAlProximoPunto();
-        return;
-      }
-
-      if (data.type === 'position') {
-        var latlng = [data.lat, data.lng];
-
-        if (prevLatLng && (prevLatLng[0] !== latlng[0] || prevLatLng[1] !== latlng[1])) {
-          currentHeading = calcHeading(prevLatLng[0], prevLatLng[1], latlng[0], latlng[1]);
-        }
-        prevLatLng = latlng;
-
-        if (!posicion) {
-          posicion = L.marker(latlng, { icon: getArrowIcon(currentHeading) }).addTo(map);
-        } else {
-          posicion.setLatLng(latlng);
-          posicion.setIcon(getArrowIcon(currentHeading));
-        }
-
-        if (seguimientoActivo) {
-          map.flyTo(latlng, 17, { duration: 0.5 });
-        }
-        actualizarCaminoAlProximoPunto();
-      }
-    }
-
-    function receiveMessage(event) {
-      try { updateMap(JSON.parse(event.data)); } catch (_) {}
-    }
-    document.addEventListener('message', receiveMessage);
-    window.addEventListener('message', receiveMessage);
-    map.on('dragstart', function () { seguimientoActivo = false; });
-    map.fitBounds(ruta.getBounds(), { paddingTopLeft: [20, 80], paddingBottomRight: [20, 180] });
-  </script>
-</body>
-</html>`;
 }
 
 const styles = StyleSheet.create({

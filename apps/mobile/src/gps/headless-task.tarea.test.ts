@@ -28,6 +28,10 @@ vi.mock('@sentry/react-native', () => ({
 vi.mock('../db/outbox', () => ({
   abrirOutbox: vi.fn(),
   encolarEvento: vi.fn(),
+  encolarEventoYLimpiarVisita: vi.fn(),
+  guardarVisitaPendiente: vi.fn().mockResolvedValue(undefined),
+  eliminarVisitaPendiente: vi.fn().mockResolvedValue(undefined),
+  obtenerVisitasPendientes: vi.fn().mockResolvedValue([]),
   obtenerEventosPorTipo: vi.fn(),
 }));
 
@@ -38,6 +42,17 @@ vi.mock('../db/paquete-dia', () => ({
 
 vi.mock('../features/operacion/drenaje-oportunista', () => ({
   intentarDrenarOportunista: vi.fn().mockResolvedValue(undefined),
+}));
+
+// REDISEÑO (anuncio de puntos de control): `anuncio-punto-control.ts` importa
+// `expo-notifications`/`expo-speech`, que arrastran el paquete `expo` (su `async-require`
+// referencia el global `__DEV__` de React Native, indefinido bajo vitest/Node) — se mockea
+// entero para que `import './headless-task'` no lo evalúe de verdad. Este archivo no ejercita
+// ningún camino con `contexto` no nulo, así que el contenido del mock no importa.
+vi.mock('../features/operacion/anuncio-punto-control', () => ({
+  anunciarDeteccionesDelTick: vi.fn().mockResolvedValue(undefined),
+  anunciarLlegadaPuntoControl: vi.fn().mockResolvedValue(undefined),
+  reintentarAnunciosLlegadaPendientes: vi.fn().mockResolvedValue(undefined),
 }));
 
 // `tareaHeadlessUbicacion` ya no llama directo al circuit breaker (hallazgo 4) — reusa
@@ -51,6 +66,7 @@ vi.mock('../features/auth/use-auth-movil', () => ({
 
 vi.mock('../shared/security/sesion-movil-store', () => ({
   cargarSesionMovil: vi.fn(),
+  hayLogoutSolicitado: vi.fn().mockResolvedValue(false),
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
@@ -106,9 +122,13 @@ describe('tareaHeadlessUbicacion — hallazgo 2 (heartbeat headless no drenaba)'
     await tareaHeadlessUbicacion({ name: 'heartbeat', params: {} } as never);
 
     expect(intentarDrenarOportunistaMock).toHaveBeenCalledTimes(1);
-    // `heartbeat` nunca debe intentar escribir un punto GPS falso — ni siquiera se consulta
-    // la sesión/contexto de ubicación para ese evento.
-    expect(cargarSesionMovilMock).not.toHaveBeenCalled();
+    // FIX POST-REVISIÓN (bug 2, "un vehículo detenido nunca confirma" — este branch agrega
+    // `manejarHeartbeatHeadless`, que SÍ consulta la sesión/contexto para poder confirmar
+    // visitas pendientes por antigüedad): `heartbeat` YA NO es un no-op de evidencia — lo que
+    // se mantiene es que nunca escribe un `gps_point` falso (sin `location.coords` real). Sin
+    // sesión mockeada (`cargarSesionMovilMock` sin resolver nada), `obtenerContextoUbicacionPersistido`
+    // devuelve `null` y `manejarHeartbeatHeadless` corta antes de abrir el outbox.
+    expect(cargarSesionMovilMock).toHaveBeenCalled();
     expect(abrirOutboxMock).not.toHaveBeenCalled();
   });
 
