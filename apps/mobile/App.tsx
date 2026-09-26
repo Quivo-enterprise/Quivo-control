@@ -136,9 +136,11 @@ function QuivoApp() {
           deviceId={auth.estado.deviceId}
           aviso={auth.estado.aviso}
           sesionNoRevalidada={auth.estado.sesionNoRevalidada}
+          sesionNoVigente={auth.estado.sesionNoVigente}
           loading={auth.estado.cargando}
           obtenerAccessToken={auth.obtenerAccessToken}
           onLogout={auth.logout}
+          onSesionNoVigenteFinalizada={auth.finalizarTrasSesionNoVigente}
         />
       );
     }

@@ -177,6 +177,35 @@ describe('intentarRefrescarConCircuito (singleton stateful)', () => {
     expect(obtenerEstadoCircuitoRefresh().estado).toBe('cerrado');
   });
 
+  /**
+   * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): `SESION_NO_VIGENTE` es
+   * evidencia DEFINITIVA — a diferencia de un 401 sin código (arriba, sí cuenta) o de un
+   * error de red (tampoco cuenta, pero por ser AMBIGUO), acá no cuenta por la razón opuesta:
+   * no hay nada que "confirmar" reintentando. El error se propaga tal cual (el caller —
+   * `refrescar()`/`obtenerAccessTokenHeadless()` — decide cortar de raíz), sin abrir el
+   * circuito ni sumar al backoff.
+   */
+  it('SESION_NO_VIGENTE (codigo) se propaga SIN abrir el circuito ni sumar fallos — evidencia definitiva, no ambigua', async () => {
+    refreshMock.mockRejectedValue(
+      new AuthMovilApiError(
+        'http',
+        'Sesión móvil inválida o expirada',
+        401,
+        undefined,
+        'SESION_NO_VIGENTE',
+      ),
+    );
+    for (let i = 0; i < UMBRAL_FALLOS_ABRIR_CIRCUITO + 3; i++) {
+      await expect(intentarRefrescarConCircuito('refresh-1', i * 15_000)).rejects.toMatchObject({
+        codigo: 'SESION_NO_VIGENTE',
+      });
+    }
+    // Cada intento golpeó la red de verdad (nunca se cortó local) — lo que nunca pasó es que
+    // el circuito avanzara.
+    expect(refreshMock).toHaveBeenCalledTimes(UMBRAL_FALLOS_ABRIR_CIRCUITO + 3);
+    expect(obtenerEstadoCircuitoRefresh()).toEqual(ESTADO_INICIAL_CIRCUITO_REFRESH);
+  });
+
   it('bug de QA 2026-08-23 simulado: 42 min de polling cada 15s con 401 permanente hacen MUCHOS menos que los 29 intentos reales originales', async () => {
     refreshMock.mockRejectedValue(new AuthMovilApiError('http', 'Sesión inválida', 401));
     const REFRESCO_MS = 15_000;
@@ -198,9 +227,7 @@ describe('intentarRefrescarConCircuito (singleton stateful)', () => {
     expect(intentosReales).toBeLessThan(29);
     expect(intentosReales).toBeLessThanOrEqual(20);
     expect(obtenerEstadoCircuitoRefresh().estado).toBe('abierto');
-    expect(
-      esSesionIrrecuperable(obtenerEstadoCircuitoRefresh(), DURACION_MS),
-    ).toBe(true);
+    expect(esSesionIrrecuperable(obtenerEstadoCircuitoRefresh(), DURACION_MS)).toBe(true);
   });
 
   it('reiniciarCircuitoRefresh vuelve todo al estado inicial (login/logout nuevo)', async () => {

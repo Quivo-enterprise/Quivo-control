@@ -2,6 +2,7 @@ import {
   AuthConductorMovilResponseSchema,
   AuthSesionMovilResponseSchema,
   AuthVehiculoMovilResponseSchema,
+  CODIGO_SESION_NO_VIGENTE,
   ContextoOperativoMovilSchema,
   RefreshMovilResponseSchema,
   type AuthConductorMovilRequest,
@@ -25,15 +26,40 @@ export class AuthMovilApiError extends Error {
     /** Sólo viene poblado en un 429 de `POST /v1/mobile/auth/sesion` (lockout por vehículo,
      * `LockoutMovilExceptionFilter`). Ver `userMessage` para cómo se usa. */
     public readonly retryAfterSeconds?: number,
+    /** Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): código distinguible
+     * del body del error — hoy sólo `CODIGO_SESION_NO_VIGENTE` en un refresh rechazado
+     * porque la sesión ya no es vigente (`AuthMovilService.refresh`,
+     * `SesionNoVigenteException`). `undefined` para cualquier otro error (la inmensa
+     * mayoría, incluidos los 401 "de siempre" que un cliente viejo sigue viendo igual). */
+    public readonly codigo?: string,
   ) {
     super(message);
     this.name = 'AuthMovilApiError';
   }
 
+  /**
+   * Rescope SESION_NO_VIGENTE (decisión del CTO, code review): refresh token que se mandó en
+   * el intento que produjo ESTE error — solo lo puebla `authMovilApi.refresh` (abajo), que es
+   * el único método con un refresh token que tenga sentido "recordar". Mutable (no en el
+   * constructor) para no tocar los 8+ call sites que ya construyen `AuthMovilApiError` sin este
+   * dato. `undefined` para cualquier error que no venga de ese método. Ver
+   * `obtenerRefreshTokenRechazado` y, del lado del caller, `confirmarTokenRechazadoVigente`
+   * (`use-auth-movil.ts`): antes de cualquier acción destructiva ante `SESION_NO_VIGENTE`, hay
+   * que saber CUÁL token fue el rechazado para poder compararlo contra el que haya en disco en
+   * ese momento (pudo haber cambiado por un login nuevo mientras el rechazo viajaba de vuelta).
+   */
+  public refreshTokenEnviado?: string;
+
   get userMessage(): string {
     if (this.kind === 'configuration') return this.message;
     if (this.kind === 'network') {
       return `No se pudo conectar con QUIVO${API_URL ? ` en ${API_URL}` : ''}. Revisa el Wi-Fi y vuelve a intentar.`;
+    }
+    // Entrega 28: mensaje en lenguaje de chofer para la sesión definitivamente muerta —
+    // distinto del genérico "Las credenciales no son válidas." de un 401 sin código, que
+    // suena a PIN equivocado en vez de "hay que volver a entrar".
+    if (this.codigo === CODIGO_SESION_NO_VIGENTE) {
+      return 'Tu sesión ya no es válida en este dispositivo. Vuelve a iniciar sesión.';
     }
     if (this.status === 429) {
       // El lockout de POST /sesion es progresivo por vehículo, `min(2^(fallos-3), 60)`
@@ -91,11 +117,21 @@ export const authMovilApi = {
   },
 
   async refresh(refreshToken: string): Promise<RefreshMovilResponse> {
-    const payload = await request('/v1/mobile/auth/refresh', {
-      method: 'POST',
-      body: { refreshToken },
-    });
-    return parseResponse(RefreshMovilResponseSchema, payload);
+    try {
+      const payload = await request('/v1/mobile/auth/refresh', {
+        method: 'POST',
+        body: { refreshToken },
+      });
+      return parseResponse(RefreshMovilResponseSchema, payload);
+    } catch (error) {
+      // Rescope SESION_NO_VIGENTE: adjunta el token EXACTO que se mandó — ver el docblock de
+      // `AuthMovilApiError.refreshTokenEnviado`. `request()` ya construyó el error tal cual
+      // (kind/status/codigo); acá solo se le agrega este dato antes de re-lanzarlo.
+      if (error instanceof AuthMovilApiError) {
+        error.refreshTokenEnviado = refreshToken;
+      }
+      throw error;
+    }
   },
 
   async obtenerContexto(accessToken: string): Promise<ContextoOperativoMovil> {
@@ -149,6 +185,7 @@ async function request(path: string, options: RequestOptions): Promise<unknown> 
         extraerMensaje(payload),
         response.status,
         extraerRetryAfterSeconds(payload, response.headers.get('Retry-After')),
+        extraerCodigo(payload),
       );
     }
     return payload;
@@ -194,6 +231,35 @@ function extraerRetryAfterSeconds(payload: unknown, header: string | null): numb
   }
   const desdeHeader = header ? Number(header) : NaN;
   return Number.isFinite(desdeHeader) && desdeHeader > 0 ? desdeHeader : undefined;
+}
+
+/** Entrega 28: extrae el campo `codigo` del body del error, si vino — hoy sólo
+ * `SesionNoVigenteException` (API) lo agrega. */
+function extraerCodigo(payload: unknown): string | undefined {
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    'codigo' in payload &&
+    typeof (payload as { codigo: unknown }).codigo === 'string'
+  ) {
+    return (payload as { codigo: string }).codigo;
+  }
+  return undefined;
+}
+
+/** Entrega 28: helper único para el chequeo que repiten `refresh-circuit-breaker.ts`,
+ * `use-auth-movil.ts` y `headless-task.ts` — evita que cada caller repita
+ * `error instanceof AuthMovilApiError && error.codigo === CODIGO_SESION_NO_VIGENTE` a mano. */
+export function esSesionNoVigente(error: unknown): boolean {
+  return error instanceof AuthMovilApiError && error.codigo === CODIGO_SESION_NO_VIGENTE;
+}
+
+/** Rescope SESION_NO_VIGENTE: `refreshTokenEnviado` del error si lo tiene (ver su docblock en
+ * la clase) — `undefined` para cualquier error que no sea `AuthMovilApiError` o que no venga de
+ * `authMovilApi.refresh`. Los callers (`headless-task.ts`, `use-auth-movil.ts`) caen de vuelta
+ * al refresh token que ya tenían en memoria cuando esto da `undefined`. */
+export function obtenerRefreshTokenRechazado(error: unknown): string | undefined {
+  return error instanceof AuthMovilApiError ? error.refreshTokenEnviado : undefined;
 }
 
 function extraerMensaje(payload: unknown): string {

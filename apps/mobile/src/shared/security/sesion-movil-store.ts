@@ -71,6 +71,13 @@ export async function guardarSesionMovil(sesion: SesionMovilGuardada): Promise<v
   // server-side de la sesión vieja queda sin completar (nunca se llegó a leer su refresh token
   // bajo lease) — ver el docblock de `marcarLogoutSolicitado`.
   await borrarLogoutSolicitado();
+  // Rescope SESION_NO_VIGENTE (decisión del CTO, code review): un login nuevo trae un
+  // refreshToken DISTINTO al que pudo haber quedado marcado por `marcarSesionNoVigenteHeadless`
+  // (`headless-task.ts`) — borrarla acá, ANTES de escribir las credenciales nuevas, es la
+  // primera de las dos protecciones contra que esa marca vieja sobreviva a la sesión nueva (la
+  // segunda es que todo lector compara el `refreshToken` de la marca contra el vigente en disco,
+  // ver `haySesionNoVigenteParaToken`).
+  await borrarSesionNoVigenteMarcada();
   const { credenciales, contexto } = partirCredencialesYContexto(sesion);
   await Promise.all([
     SecureStore.setItemAsync(CREDENCIALES_KEY, JSON.stringify(credenciales), OPTIONS),
@@ -364,4 +371,72 @@ export async function hayLogoutSolicitado(): Promise<boolean> {
 
 export async function borrarLogoutSolicitado(): Promise<void> {
   await SecureStore.deleteItemAsync(LOGOUT_SOLICITADO_KEY, OPTIONS).catch(() => {});
+}
+
+const SESION_NO_VIGENTE_KEY = 'quivo.mobile.sesion-no-vigente.v1';
+
+export interface SesionNoVigenteMarcada {
+  refreshToken: string;
+}
+
+/**
+ * Rescope SESION_NO_VIGENTE en headless (decisión del CTO, code review de
+ * `fix/sesion-no-vigente` — reemplaza el borrado directo de la sesión que hacía
+ * `obtenerAccessTokenHeadless`): marca durable y MÍNIMA (solo el refresh token que el servidor
+ * rechazó, nunca toca credenciales/contexto) de que ESE token ya no es vigente. Mismo patrón
+ * que `marcarLogoutSolicitado` (arriba) pero keyed por token en vez de un flag suelto: un login
+ * nuevo escribe un refreshToken DISTINTO, así que cualquier lector (`haySesionNoVigenteParaToken`)
+ * descarta la marca vieja aunque `guardarSesionMovil` no llegara a borrarla explícitamente (ver
+ * su docblock) — doble protección, nunca un solo punto de falla.
+ *
+ * Por qué NO borra la sesión (a diferencia del diseño anterior): `borrarSesionMovil()` hace que
+ * `cargarSesionMovil()` devuelva `null`, y `obtenerContextoUbicacionPersistido`
+ * (`gps/headless-task.ts`) trata eso como "sin sesión" — llama `detenerTrackingNativo()`,
+ * IRREVERSIBLE (apaga `startOnBoot`). Cerrar la sesión del lado del servidor no debe apagar la
+ * captura GPS del resto del turno; el chofer sigue viendo su sesión (y el mapa/tracking) hasta
+ * que la UI de foreground lo lleve a re-loguearse de forma controlada (`use-auth-movil.ts`,
+ * `cerrarSesionPorNoVigente`/`finalizarTrasSesionNoVigente`).
+ */
+export async function marcarSesionNoVigenteHeadless(refreshToken: string): Promise<void> {
+  await SecureStore.setItemAsync(
+    SESION_NO_VIGENTE_KEY,
+    JSON.stringify({ refreshToken }),
+    OPTIONS,
+  );
+}
+
+function esSesionNoVigenteMarcadaValida(valor: unknown): valor is SesionNoVigenteMarcada {
+  return (
+    typeof valor === 'object' &&
+    valor !== null &&
+    typeof (valor as Record<string, unknown>).refreshToken === 'string'
+  );
+}
+
+export async function obtenerSesionNoVigenteMarcada(): Promise<SesionNoVigenteMarcada | null> {
+  let raw: string | null;
+  try {
+    raw = await SecureStore.getItemAsync(SESION_NO_VIGENTE_KEY, OPTIONS);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return esSesionNoVigenteMarcadaValida(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `true` solo si HAY una marca y es exactamente para `refreshToken` — el chequeo "keyed por
+ * token" que hace que un login nuevo (refreshToken distinto) la ignore automáticamente aunque
+ * por algún motivo no se hubiera borrado explícitamente. */
+export async function haySesionNoVigenteParaToken(refreshToken: string): Promise<boolean> {
+  const marca = await obtenerSesionNoVigenteMarcada();
+  return marca !== null && marca.refreshToken === refreshToken;
+}
+
+export async function borrarSesionNoVigenteMarcada(): Promise<void> {
+  await SecureStore.deleteItemAsync(SESION_NO_VIGENTE_KEY, OPTIONS).catch(() => {});
 }

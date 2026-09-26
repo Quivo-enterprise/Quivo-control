@@ -30,7 +30,7 @@ import {
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { fechaActualBolivia } from '../../common/tiempo/jornada.js';
-import { LockoutMovilException } from './auth-movil.exceptions.js';
+import { LockoutMovilException, SesionNoVigenteException } from './auth-movil.exceptions.js';
 import type { SesionMovilAutenticada } from './auth-movil.types.js';
 import { emitirTokenOpaco, hashTokenOpaco } from './token-opaco.js';
 
@@ -476,6 +476,15 @@ export class AuthMovilService {
     return toContextoOperativo(sesion.id, sesion.asignacion);
   }
 
+  /**
+   * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): las dos ramas que
+   * rechazan este refresh (abajo, y la del `updateMany` un poco más adelante) lanzan
+   * `SesionNoVigenteException` en vez del `UnauthorizedException` genérico de antes —
+   * ambas significan lo mismo desde la perspectiva del cliente: ESTE `refreshToken` ya no
+   * es el que el servidor reconoce como vigente para esta sesión (no existe/ya rotó, está
+   * revocada/cerrada, o venció), así que no hay nada que un reintento con el MISMO token
+   * pueda arreglar. Sigue siendo 401 (compatibilidad hacia atrás intacta).
+   */
   async refresh({ refreshToken }: RefreshMovilRequest): Promise<RefreshMovilResponse> {
     const ahora = new Date();
     const hashAnterior = hashTokenOpaco(refreshToken);
@@ -488,7 +497,7 @@ export class AuthMovilService {
       sesion.estado !== 'activa' ||
       sesion.refreshExpiresAt <= ahora
     ) {
-      throw new UnauthorizedException('Sesión móvil inválida o expirada');
+      throw new SesionNoVigenteException();
     }
 
     const access = emitirTokenOpaco('access');
@@ -513,7 +522,11 @@ export class AuthMovilService {
       }),
     );
     if (rotado.count !== 1) {
-      throw new UnauthorizedException('Sesión móvil inválida o expirada');
+      // Carrera: el hash coincidió en el `findUnique` de arriba pero ya no coincide en el
+      // `updateMany` (otra rotación concurrente ganó, o la sesión se revocó/cerró justo en
+      // el medio) — mismo significado que la rama de arriba: este `refreshToken` ya no es
+      // el vigente.
+      throw new SesionNoVigenteException();
     }
     return {
       accessToken: access.value,
@@ -636,7 +649,10 @@ export class AuthMovilService {
    * a ser el único secreto (la placa es pública). Misma trampa operativa: rotarlo revoca
    * las sesiones activas de ese conductor — no hacerlo con el chofer en ruta.
    */
-  async generarPinConductor(actor: AuthenticatedUser, id: string): Promise<GenerarPinMovilResponse> {
+  async generarPinConductor(
+    actor: AuthenticatedUser,
+    id: string,
+  ): Promise<GenerarPinMovilResponse> {
     const pin = generarPinCsprng();
     await this.establecerPin(actor, 'conductor', id, pin);
     return { pin };
@@ -862,10 +878,7 @@ export class AuthMovilService {
    * contra `DUMMY_HASH_PROMISE`, en paralelo — sin esto, el tiempo de respuesta del nivel
    * 1 filtra si el vehículo tiene 0, 1, 2 o 3 candidatos (o sea, si tiene rotación
    * publicada hoy) antes de tocar el PIN siquiera. */
-  private async verificarPinConPadding(
-    pin: string,
-    hashes: (string | null)[],
-  ): Promise<boolean[]> {
+  private async verificarPinConPadding(pin: string, hashes: (string | null)[]): Promise<boolean[]> {
     const dummies = Math.max(K_VERIFICACIONES_PADDING - hashes.length, 0);
     const [resultados] = await Promise.all([
       Promise.all(hashes.map((hash) => verificarCredencial(pin, hash))),
@@ -1189,7 +1202,9 @@ function credencialesInvalidasSesion(): UnauthorizedException {
  * probar PINs. Mensaje unificado entre el "sin asignación tras nivel 1" y el "nivel 2
  * matcheó, pero sin rotación publicada". */
 function sinRotacionPublicada(nombreConductor: string, placa: string): ConflictException {
-  return new ConflictException(`${nombreConductor}, hoy no tenés una rotación publicada para ${placa}`);
+  return new ConflictException(
+    `${nombreConductor}, hoy no tenés una rotación publicada para ${placa}`,
+  );
 }
 
 function endpointLegadoApagado(): GoneException {

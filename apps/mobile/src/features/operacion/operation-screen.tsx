@@ -40,9 +40,19 @@ interface OperationScreenProps {
    * del `aviso` genérico de "sin red", que es engañoso acá si la sesión fue cerrada
    * server-side. Renderizado como alerta con CTA explícito más abajo. */
   sesionNoRevalidada: boolean;
+  /** Rescope SESION_NO_VIGENTE, punto C (`use-auth-movil.ts`): corte de raíz con un recorrido
+   * de GPS ACTIVO — a diferencia de `sesionNoRevalidada` (ambigua, puede recuperarse sola), acá
+   * el servidor ya dio la sesión por muerta, pero borrarla/desmontar `GpsProvider` ahora mismo
+   * mataría el tracking sin `fin_recorrido`. Bloquea con un aviso no descartable hasta que el
+   * chofer confirme "Finalizar". */
+  sesionNoVigente: boolean;
   loading: boolean;
   obtenerAccessToken: () => Promise<string | null>;
   onLogout: () => Promise<void>;
+  /** Se llama cuando `gps.detener()` completa (best-effort `fin_recorrido` ya escrito, tracking
+   * apagado) mientras `sesionNoVigente` estaba prendido — recién ahí es seguro borrar la sesión
+   * local y volver al login. Ver el efecto que la dispara, abajo. */
+  onSesionNoVigenteFinalizada: () => Promise<void>;
 }
 
 export function OperationScreen(
@@ -108,6 +118,39 @@ export function OperationScreen(
   useEffect(() => {
     if (!gps.tracking) setCompletados(new Set());
   }, [gps.tracking]);
+
+  // Rescope SESION_NO_VIGENTE, punto C: dispara `onSesionNoVigenteFinalizada` cuando
+  // `sesionNoVigente` está prendido y `gps.tracking` está en `false` — la señal de que
+  // `gps.detener()` (llamado desde el diálogo de "Finalizar" de abajo, el mismo que el chofer ve
+  // reflejado en el banner) ya completó, haya salido bien o mal la escritura de `fin_recorrido`
+  // (ver el docblock de `detener()` en `use-gps-operativo.ts`, invariante "nativo OK ⇒ tracking
+  // SIEMPRE false al final").
+  //
+  // FIX POST-REVISIÓN (hallazgo ALTO, Entrega 28 — "disparo por nivel, no por flanco"): antes
+  // disparaba solo en el FLANCO true→false de `gps.tracking` (comparando contra un ref del
+  // `tracking` anterior). Con la corrección de `useGpsOperativo` que ahora publica solo
+  // veredictos reales (`estado-recorrido-activo.ts`), existe una carrera legítima donde
+  // `gps.tracking` puede llegar a `false` ANTES de que `use-auth-movil.ts` termine de prender
+  // `sesionNoVigente` (p. ej. el chofer mata la app en medio de un recorrido activo y la reabre:
+  // el re-enganche puede resolver `tracking: false` — sin recorrido — antes de que la
+  // suscripción a `estado-recorrido-activo.ts` decida `esperar_finalizar` y recién ENTONCES
+  // `sesionNoVigente` se prenda). En ese orden, el flanco true→false de `tracking` ya pasó y
+  // nunca vuelve a repetirse: el banner quedaba prendido para siempre y "Finalizar" (que llama
+  // `gps.detener()` sin ningún flanco que producir, porque ya estaba en `false`) nunca
+  // destrababa la sync. Disparo por NIVEL en su lugar (`sesionNoVigente && !gps.tracking`), una
+  // sola vez por cada vez que `sesionNoVigente` se prende, con un ref-guard que se resetea
+  // cuando `sesionNoVigente` vuelve a `false` (login nuevo/sesión distinta).
+  const disparadoSesionNoVigente = useRef(false);
+  useEffect(() => {
+    if (!props.sesionNoVigente) {
+      disparadoSesionNoVigente.current = false;
+      return;
+    }
+    if (!gps.tracking && !disparadoSesionNoVigente.current) {
+      disparadoSesionNoVigente.current = true;
+      void props.onSesionNoVigenteFinalizada();
+    }
+  }, [gps.tracking, props.sesionNoVigente, props.onSesionNoVigenteFinalizada]);
 
   const proximoPuntoControl = useMemo(
     () => proximoPuntoControlPendiente(puntosControl, completados),
@@ -329,6 +372,26 @@ export function OperationScreen(
               style={styles.sesionNoRevalidadaButton}
             >
               Vuelve a iniciar sesión para sincronizar
+            </Button>
+          </View>
+        ) : null}
+        {/* Rescope SESION_NO_VIGENTE, punto C: bloqueante y NO descartable a propósito — sin
+            botón para cerrarlo, distinto del banner de `sesionNoRevalidada` de arriba (que sí
+            puede ignorarse, esto no: el servidor ya dio la sesión por muerta). El único botón
+            abre el MISMO diálogo de confirmación de "Finalizar" que ya usa `NextControlSheet`
+            (`confirmarFinalizacion`) — al confirmar, `gps.detener()` escribe `fin_recorrido` y
+            recién ahí el efecto de arriba dispara `onSesionNoVigenteFinalizada`. */}
+        {props.sesionNoVigente ? (
+          <View style={styles.sesionNoRevalidadaContainer}>
+            <Text accessibilityRole="alert" style={styles.dangerNotice}>
+              Tu sesión venció. Toca Finalizar y vuelve a iniciar sesión.
+            </Text>
+            <Button
+              variant="danger"
+              onPress={confirmarFinalizacion}
+              style={styles.sesionNoRevalidadaButton}
+            >
+              Finalizar recorrido
             </Button>
           </View>
         ) : null}

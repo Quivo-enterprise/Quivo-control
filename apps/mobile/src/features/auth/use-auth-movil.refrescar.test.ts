@@ -12,18 +12,30 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 // Se mockean `authMovilApi` y `sesion-movil-store` (en vez de las dependencias nativas que
 // traen — `expo-secure-store`, `expo-crypto`) porque esas SÍ requieren infraestructura nativa;
 // `refrescar()` solo orquesta llamadas a esos dos módulos y es pura lógica de coordinación.
-vi.mock('../../shared/api/auth-movil-api', () => ({
-  authMovilApi: { refresh: vi.fn() },
-  AuthMovilApiError: class AuthMovilApiError extends Error {
+vi.mock('../../shared/api/auth-movil-api', () => {
+  class AuthMovilApiError extends Error {
     constructor(
       public readonly kind: string,
       message: string,
       public readonly status?: number,
+      public readonly retryAfterSeconds?: number,
+      public readonly codigo?: string,
     ) {
       super(message);
     }
-  },
-}));
+  }
+  return {
+    authMovilApi: { refresh: vi.fn() },
+    AuthMovilApiError,
+    // Entrega 28: réplica mínima de la implementación real (`auth-movil-api.ts`) — este
+    // archivo mockea el módulo entero, así que sin este export `refresh-circuit-breaker.ts`
+    // (NO mockeado acá, corre real) rompe al llamarlo dentro de `intentarRefrescarConCircuito`.
+    // Ninguno de los tests de este archivo produce un error con `codigo`, así que esto
+    // siempre resuelve `false` en la práctica — sólo evita el crash del import faltante.
+    esSesionNoVigente: (error: unknown) =>
+      error instanceof AuthMovilApiError && error.codigo === 'SESION_NO_VIGENTE',
+  };
+});
 
 vi.mock('../../shared/security/sesion-movil-store', () => ({
   actualizarSesionMovil: vi.fn(),
@@ -57,13 +69,20 @@ vi.mock('@sentry/react-native', () => ({
 }));
 
 import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
-import { obtenerEstadoCircuitoRefresh, reiniciarCircuitoRefresh } from '../../shared/api/refresh-circuit-breaker';
+import {
+  obtenerEstadoCircuitoRefresh,
+  reiniciarCircuitoRefresh,
+} from '../../shared/api/refresh-circuit-breaker';
 import {
   actualizarSesionMovil,
   cargarSesionMovil,
   type SesionMovilGuardada,
 } from '../../shared/security/sesion-movil-store';
-import { refrescar, ReintentarRefreshMasTardeError, SesionCerradaEnRefreshError } from './use-auth-movil';
+import {
+  refrescar,
+  ReintentarRefreshMasTardeError,
+  SesionCerradaEnRefreshError,
+} from './use-auth-movil';
 
 const refreshMock = authMovilApi.refresh as unknown as ReturnType<typeof vi.fn>;
 const actualizarSesionMovilMock = actualizarSesionMovil as unknown as ReturnType<typeof vi.fn>;
@@ -109,7 +128,12 @@ describe('refrescar (single-flight)', () => {
   });
 
   it('comparte una única llamada de red entre refrescos concurrentes con el mismo refresh token', async () => {
-    let resolverRefresh!: (tokens: { accessToken: string; refreshToken: string; accessTokenExpiresAt: string; refreshTokenExpiresAt: string }) => void;
+    let resolverRefresh!: (tokens: {
+      accessToken: string;
+      refreshToken: string;
+      accessTokenExpiresAt: string;
+      refreshTokenExpiresAt: string;
+    }) => void;
     refreshMock.mockReturnValue(
       new Promise((resolve) => {
         resolverRefresh = resolve;
@@ -164,6 +188,35 @@ describe('refrescar (single-flight)', () => {
     const resultado = await refrescar(guardada);
     expect(resultado).toBe(rotada);
     expect(refreshMock).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): `refrescar()` en sí mismo
+   * no agrega ningún reintento — el backoff vive en `refrescarConReintentos` (nested, sin
+   * arnés RNTL para testear directo, ver el docblock de `use-auth-movil.obtener-access-token.test.ts`).
+   * Lo que sí se puede confirmar acá, a este nivel: un rechazo con `codigo: 'SESION_NO_VIGENTE'`
+   * se propaga tal cual, en UN solo intento de red, sin que el circuito (real, no mockeado en
+   * este archivo) lo cuente ni se abra.
+   */
+  it('SESION_NO_VIGENTE se propaga en un solo intento, sin abrir el circuito de refresh', async () => {
+    const guardada = sesion('refresh-1');
+    cargarSesionMovilMock.mockResolvedValue(guardada);
+    refreshMock.mockRejectedValueOnce(
+      new AuthMovilApiError(
+        'http',
+        'Sesión móvil inválida o expirada',
+        401,
+        undefined,
+        'SESION_NO_VIGENTE',
+      ),
+    );
+
+    await expect(refrescar(guardada)).rejects.toMatchObject({ codigo: 'SESION_NO_VIGENTE' });
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(obtenerEstadoCircuitoRefresh()).toMatchObject({
+      estado: 'cerrado',
+      fallosConsecutivos: 0,
+    });
   });
 
   it('no comparte la llamada de red entre refresh tokens distintos', async () => {
@@ -246,7 +299,10 @@ describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca f
     // Persiste sobre la sesión de DISCO (T1), no sobre la vieja (T0) — si persistiera sobre
     // `t0`, el `contexto`/resto de campos de la rotación de headless (que pudo traer más que
     // solo los tokens) se perdería.
-    expect(actualizarSesionMovilMock).toHaveBeenCalledWith(enDisco, expect.objectContaining({ refreshToken: 'T2' }));
+    expect(actualizarSesionMovilMock).toHaveBeenCalledWith(
+      enDisco,
+      expect.objectContaining({ refreshToken: 'T2' }),
+    );
     // El circuito nunca llega a tocarse por T0 — cierra directo con el único éxito real.
     const estado = obtenerEstadoCircuitoRefresh();
     expect(estado.estado).toBe('cerrado');
@@ -291,7 +347,10 @@ describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca f
     for (let intento = 0; intento < 4; intento++) {
       await expect(refrescar(descartable)).rejects.toThrow('Sesión revocada');
     }
-    expect(obtenerEstadoCircuitoRefresh()).toMatchObject({ estado: 'cerrado', fallosConsecutivos: 4 });
+    expect(obtenerEstadoCircuitoRefresh()).toMatchObject({
+      estado: 'cerrado',
+      fallosConsecutivos: 4,
+    });
 
     // Ahora: T0 en memoria, T1 en disco (otro contexto lo rotó mientras tanto). Con el diseño
     // VIEJO, el 401 de T0 sería el 5to fallo — abriría el circuito ANTES de poder reintentar
@@ -302,7 +361,9 @@ describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca f
     cargarSesionMovilMock.mockResolvedValue(enDisco);
     refreshMock.mockImplementation(async (token: string) => {
       if (token === 'T0') {
-        throw new Error('no debería enviarse T0 — sería el 5to fallo y abriría el circuito en falso');
+        throw new Error(
+          'no debería enviarse T0 — sería el 5to fallo y abriría el circuito en falso',
+        );
       }
       return tokensRefrescados('T2');
     });
@@ -327,7 +388,9 @@ describe('refrescar — G3/R4 (verify-fix): reconciliar ANTES de enviar, nunca f
     let resolverRefresh!: (tokens: ReturnType<typeof tokensRefrescados>) => void;
     refreshMock.mockImplementation((token: string) => {
       if (token === 'T0') {
-        throw new Error('no debería enviarse T0 — dos llamadas concurrentes deben reconciliar y compartir UNA request con T1');
+        throw new Error(
+          'no debería enviarse T0 — dos llamadas concurrentes deben reconciliar y compartir UNA request con T1',
+        );
       }
       return new Promise((resolve) => {
         resolverRefresh = resolve;

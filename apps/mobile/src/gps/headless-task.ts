@@ -32,10 +32,13 @@ import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
 // Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
 // `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
-import { refrescar } from '../features/auth/use-auth-movil';
+import { confirmarTokenRechazadoVigente, refrescar } from '../features/auth/use-auth-movil';
+import { esSesionNoVigente, obtenerRefreshTokenRechazado } from '../shared/api/auth-movil-api';
 import {
   cargarSesionMovil,
   hayLogoutSolicitado,
+  haySesionNoVigenteParaToken,
+  marcarSesionNoVigenteHeadless,
   obtenerDeviceIdMovil,
 } from '../shared/security/sesion-movil-store';
 import {
@@ -1115,15 +1118,59 @@ export function confirmarVisitasVencidasEnCola(
  * aborta el drenado sin tocar la pantalla del chofer — la evidencia ya está a salvo en el
  * outbox. El breaker ya reporta a Sentry por su cuenta cuando corresponde (ver su docblock);
  * acá no hace falta un `captureException` adicional por cada intento fallido.
+ *
+ * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): excepción a "TRANSPORTE, no
+ * captura" — `SESION_NO_VIGENTE` es evidencia DEFINITIVA de que esta sesión ya no existe, y
+ * en el camino headless NO hay ningún hook de React (`use-auth-movil.ts`) corriendo para
+ * cortarla: sin este chequeo, CADA tick posterior (ubicación o heartbeat, potencialmente uno
+ * por segundo mientras el vehículo se mueve) volvería a llamar `refrescar(sesion)` con el
+ * MISMO token que el servidor ya dio por muerto, machacando la red en background sin que
+ * nadie lo vea.
+ *
+ * Rescope (decisión del CTO, code review de `fix/sesion-no-vigente` — REEMPLAZA el diseño
+ * original de la Entrega 28, que borraba la sesión local acá mismo con `borrarSesionMovil()`):
+ * ese borrado hacía que `cargarSesionMovil()` devolviera `null`, y
+ * `obtenerContextoUbicacionPersistido` (arriba en este archivo) trata eso como "sin sesión" —
+ * llama `detenerTrackingNativo()`, IRREVERSIBLE (apaga además `startOnBoot`). Cerrar la sesión
+ * del lado del servidor no debe apagar la captura GPS del resto del turno: la evidencia legal
+ * (RF-67..73) es justo lo que este camino existe para proteger. Ahora, en vez de borrar:
+ *
+ * 1. Si YA hay un flag durable (`haySesionNoVigenteParaToken`, `sesion-movil-store.ts`) para el
+ *    refresh token de ESTA sesión, se corta ACÁ, de entrada, SIN tocar la red — cierra también
+ *    el hallazgo "el borrado fallido reintentaba cada ~10 s sin backoff": con la sesión intacta
+ *    y el flag puesto, cada tick siguiente sale por esta línea antes de llegar siquiera a
+ *    intentar un refresh.
+ * 2. Si el refresh falla con `SESION_NO_VIGENTE` recién en ESTE tick: antes de marcar nada, se
+ *    relee el refresh token PERSISTIDO bajo el lease `refresh-sesion`
+ *    (`confirmarTokenRechazadoVigente`, `use-auth-movil.ts`) y se compara contra el que el
+ *    servidor rechazó (`obtenerRefreshTokenRechazado`, `auth-movil-api.ts`) — si un login nuevo
+ *    ya rotó el token mientras el rechazo viajaba de vuelta, se descarta el error sin marcar
+ *    nada (la sesión nueva es válida). Si sigue siendo el mismo, se marca el flag
+ *    (`marcarSesionNoVigenteHeadless`) — nunca se borra la sesión ni el contexto.
+ *
+ * La sesión (y el contexto) quedan intactos en disco: el chofer sigue viendo su sesión y el
+ * mapa hasta que la UI de foreground (`use-auth-movil.ts`, `cerrarSesionPorNoVigente`/
+ * `finalizarTrasSesionNoVigente`) lo lleve a re-loguearse de forma controlada — recién ahí, si
+ * corresponde, se borra de verdad.
  */
 export async function obtenerAccessTokenHeadless(): Promise<string | null> {
   const sesion = await cargarSesionMovil();
   if (!sesion) return null;
+  if (await haySesionNoVigenteParaToken(sesion.refreshToken).catch(() => false)) {
+    return null;
+  }
   if (new Date(sesion.accessTokenExpiresAt) > new Date()) return sesion.accessToken;
   try {
     const actualizada = await refrescar(sesion);
     return actualizada.accessToken;
-  } catch {
+  } catch (error) {
+    if (esSesionNoVigente(error)) {
+      const refreshTokenRechazado = obtenerRefreshTokenRechazado(error) ?? sesion.refreshToken;
+      const chequeo = await confirmarTokenRechazadoVigente(refreshTokenRechazado);
+      if (chequeo.vigente) {
+        await marcarSesionNoVigenteHeadless(refreshTokenRechazado).catch(() => {});
+      }
+    }
     return null;
   }
 }
