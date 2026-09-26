@@ -15,6 +15,7 @@ import {
   crearManejadorReafirmarMovimiento,
   crearSerializadorRestauracion,
   detenerNativoConTimeout,
+  iniciarConSingleFlight,
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
@@ -617,13 +618,13 @@ describe('detenerNativoConTimeout (rediseño 2026-09-25) — stop() colgado/rech
 
   it('stop() resuelve rápido: ok:true, sin error', async () => {
     const sdk = { stop: vi.fn(async () => ({})) };
-    await expect(detenerNativoConTimeout(sdk)).resolves.toEqual({ ok: true });
+    await expect(detenerNativoConTimeout(sdk)).resolves.toMatchObject({ ok: true });
   });
 
   it('stop() rechaza: ok:false con el error original, no propaga (no lanza)', async () => {
     const error = new Error('stop(): fallo nativo simulado');
     const sdk = { stop: vi.fn(async () => { throw error; }) };
-    await expect(detenerNativoConTimeout(sdk)).resolves.toEqual({ ok: false, error });
+    await expect(detenerNativoConTimeout(sdk)).resolves.toMatchObject({ ok: false, error });
   });
 
   it('stop() colgado (nunca resuelve): vence el timeout y devuelve ok:false sin esperar para siempre', async () => {
@@ -650,10 +651,59 @@ describe('detenerNativoConTimeout (rediseño 2026-09-25) — stop() colgado/rech
       const sdk = { stop: vi.fn(async () => ({})) };
       const promesa = detenerNativoConTimeout(sdk, 10_000);
       const resultado = await promesa;
-      expect(resultado).toEqual({ ok: true });
+      expect(resultado).toMatchObject({ ok: true });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // C (hallazgos de revisión 4/5, 2026-09-25): `promesaAsentada` es la promesa cruda de `stop()`
+  // (nunca rechaza) que el llamador (`detener()`) registra en `SerializadorRestauracion` para
+  // que el PRÓXIMO `iniciar()` la espere antes de `ready()/start()` — un `stop()` tardío no
+  // puede matar un recorrido nuevo.
+  describe('promesaAsentada', () => {
+    it('con stop() exitoso: promesaAsentada resuelve una vez que stop() resuelve', async () => {
+      const sdk = { stop: vi.fn(async () => ({})) };
+      const { promesaAsentada } = await detenerNativoConTimeout(sdk);
+      await expect(promesaAsentada).resolves.toBeUndefined();
+    });
+
+    it('con stop() rechazando: promesaAsentada NO rechaza, resuelve igual', async () => {
+      const sdk = { stop: vi.fn(async () => { throw new Error('stop(): fallo simulado'); }) };
+      const { promesaAsentada } = await detenerNativoConTimeout(sdk);
+      await expect(promesaAsentada).resolves.toBeUndefined();
+    });
+
+    it('con timeout vencido: promesaAsentada sigue en pie y resuelve cuando stop() por fin se asienta tarde', async () => {
+      vi.useFakeTimers();
+      try {
+        let resolverStopTardio!: () => void;
+        const sdk = {
+          stop: vi.fn(
+            () =>
+              new Promise<unknown>((resolve) => {
+                resolverStopTardio = () => resolve({});
+              }),
+          ),
+        };
+        const promesaResultado = detenerNativoConTimeout(sdk, TIMEOUT_STOP_NATIVO_MS);
+        await vi.advanceTimersByTimeAsync(TIMEOUT_STOP_NATIVO_MS);
+        const resultado = await promesaResultado;
+        expect(resultado.ok).toBe(false);
+
+        let asentada = false;
+        const esperar = resultado.promesaAsentada.then(() => {
+          asentada = true;
+        });
+        expect(asentada).toBe(false); // stop() real todavía no resolvió
+
+        resolverStopTardio();
+        await esperar;
+        expect(asentada).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 
@@ -726,5 +776,81 @@ describe('Rediseño iniciar()/detener() (bug en producción, 2026-09-25) — det
     const coordinador = crearCoordinadorIniciarDetener();
     expect(coordinador.promesaIniciarEnCurso()).toBeNull();
     expect(() => coordinador.invalidarEnCurso()).not.toThrow();
+  });
+});
+
+describe('iniciarConSingleFlight (hallazgos de revisión 1, 2, 7, 2026-09-25) — wrapper público de iniciar()', () => {
+  it('sin ningún iniciar() en curso: arranca un intento nuevo con una generación fresca', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const ejecutarIntento = vi.fn(async (_generacion: number) => {});
+
+    await iniciarConSingleFlight(coordinador, ejecutarIntento);
+
+    expect(ejecutarIntento).toHaveBeenCalledTimes(1);
+    expect(ejecutarIntento).toHaveBeenCalledWith(1);
+  });
+
+  it('con un iniciar() en curso todavía VIGENTE: reusa la MISMA promesa, no arranca un segundo intento', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const { promesa, resolver } = crearDiferida<void>();
+    const generacion = coordinador.nuevaGeneracion();
+    coordinador.registrarPromesaIniciar(promesa, generacion);
+    const ejecutarIntento = vi.fn(async (_g: number) => {});
+
+    const resultado = iniciarConSingleFlight(coordinador, ejecutarIntento);
+    resolver();
+    await resultado;
+
+    expect(ejecutarIntento).not.toHaveBeenCalled();
+  });
+
+  // EL CASO que corrige el bug (hallazgos 1/2): antes, esta llamada reusaba tal cual la promesa
+  // invalidada — como un intento invalidado nunca deja `tracking=true`, el toque del chofer se
+  // perdía sin haber arrancado nada nuevo.
+  it('Comenzar tras invalidación: espera al intento invalidado y arranca uno FRESCO (no lo reusa)', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const { promesa: intentoViejo, resolver: resolverViejo } = crearDiferida<void>();
+    const generacionVieja = coordinador.nuevaGeneracion();
+    coordinador.registrarPromesaIniciar(intentoViejo, generacionVieja);
+
+    // El chofer toca "Finalizar" — invalida el intento en curso mientras sigue en vuelo (p. ej.
+    // todavía en `ready()`/`start()`).
+    coordinador.invalidarEnCurso();
+
+    const ejecutarIntentoNuevo = vi.fn(async (_g: number) => {});
+    const resultadoSegundoToque = iniciarConSingleFlight(coordinador, ejecutarIntentoNuevo);
+
+    // Todavía no debería haber arrancado nada nuevo — sigue esperando a que el viejo se asiente.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ejecutarIntentoNuevo).not.toHaveBeenCalled();
+
+    // El intento viejo por fin se asienta (p. ej. `detenerNativoYRestaurar` en `ejecutarIniciar`).
+    resolverViejo();
+    await resultadoSegundoToque;
+
+    // Recién ACÁ arranca el intento fresco, con una generación NUEVA (no la vieja invalidada).
+    expect(ejecutarIntentoNuevo).toHaveBeenCalledTimes(1);
+    expect(ejecutarIntentoNuevo).toHaveBeenCalledWith(generacionVieja + 1);
+  });
+
+  // Contraparte: outbox colgado (fase 2 de `ejecutarIniciar`, desacoplada del single-flight) NO
+  // bloquea un "Comenzar" posterior — el `ejecutarIntento` simulado acá resuelve apenas termina
+  // su fase pre-tracking, aunque deje una tarea de fondo sin terminar (igual que la fase 2 real).
+  it('outbox colgado (fuera del single-flight) no bloquea un Comenzar posterior', async () => {
+    const coordinador = crearCoordinadorIniciarDetener();
+    const outboxColgado = new Promise<void>(() => {}); // nunca resuelve — simula SQLite trabada.
+    const ejecutarIntentoA = vi.fn(async (_g: number) => {
+      void outboxColgado; // fase 2 desacoplada, nunca esperada por el propio intento.
+    });
+
+    await iniciarConSingleFlight(coordinador, ejecutarIntentoA);
+    expect(coordinador.promesaIniciarEnCurso()).toBeNull();
+
+    // Un segundo "Comenzar" (tras un Finalizar/Iniciar posterior) arranca sin quedar bloqueado
+    // por la fase 2 colgada del intento anterior.
+    const ejecutarIntentoB = vi.fn(async (_g: number) => {});
+    await iniciarConSingleFlight(coordinador, ejecutarIntentoB);
+    expect(ejecutarIntentoB).toHaveBeenCalledTimes(1);
   });
 });

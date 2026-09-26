@@ -376,7 +376,6 @@ export function crearCoordinadorIniciarDetener(): CoordinadorIniciarDetener {
   let ultimaGeneracion = 0;
   let invalidada = false;
   let promesaIniciar: Promise<void> | null = null;
-  let generacionPromesaIniciar: number | null = null;
   let promesaDetener: Promise<void> | null = null;
 
   return {
@@ -388,13 +387,20 @@ export function crearCoordinadorIniciarDetener(): CoordinadorIniciarDetener {
       invalidada = false;
       return ultimaGeneracion;
     },
-    registrarPromesaIniciar(promesa: Promise<void>, generacion: number): void {
+    registrarPromesaIniciar(promesa: Promise<void>, _generacion: number): void {
+      // F (hallazgos 9/10, limpieza): antes se guardaba también `generacionPromesaIniciar` para
+      // compararla contra `ultimaGeneracion` en `iniciarEnCursoInvalidado()` — con el
+      // single-flight garantizado (nunca hay un `nuevaGeneracion()` nuevo mientras
+      // `promesaIniciar` siga sin resolver, ver el wrapper `iniciar()` en `use-gps-operativo.ts`)
+      // esa comparación nunca podía dar `true` en la práctica: doble generación redundante. Lo
+      // único que `iniciarEnCursoInvalidado()` necesita es identidad de promesa (¿hay una
+      // registrada?) + el flag `invalidada`. Se conserva `generacion` en la firma pública
+      // (`CoordinadorIniciarDetener`) porque `ejecutarIniciar` sigue necesitándola para su
+      // propio `sigueVigente()` vía `estaVigente(generacion)`.
       promesaIniciar = promesa;
-      generacionPromesaIniciar = generacion;
       void promesa.finally(() => {
         if (promesaIniciar === promesa) {
           promesaIniciar = null;
-          generacionPromesaIniciar = null;
         }
       });
     },
@@ -405,10 +411,7 @@ export function crearCoordinadorIniciarDetener(): CoordinadorIniciarDetener {
       invalidada = true;
     },
     iniciarEnCursoInvalidado(): boolean {
-      return (
-        generacionPromesaIniciar !== null &&
-        (generacionPromesaIniciar !== ultimaGeneracion || invalidada)
-      );
+      return promesaIniciar !== null && invalidada;
     },
     promesaDetenerEnCurso(): Promise<void> | null {
       return promesaDetener;
@@ -424,11 +427,24 @@ export function crearCoordinadorIniciarDetener(): CoordinadorIniciarDetener {
 
 /**
  * Punto 3 del rediseño (`use-gps-operativo.ts`, `detener()`): `BackgroundGeolocation.stop()`
- * acotado con un timeout — si vence, o si `stop()` mismo rechaza, esta función NO propaga: el
- * llamador (`detener()`) reporta el caso a Sentry y sigue igual con la limpieza JS (remover
- * suscripciones, `tracking=false`) sin esperar a que el nativo responda. "Finalizar" tiene que
- * volver a un estado detenido siempre, sin importar en qué haya quedado trabado el propio
- * `stop()` nativo — mismo principio que motivó sacar el outbox del camino crítico.
+ * acotado con un timeout.
+ *
+ * C (hallazgos de revisión 4/5, 2026-09-25 — corrige el rediseño anterior): un `stop()` que
+ * rechaza o vence NO significa "GPS detenido" — el nativo puede seguir grabando de verdad. La
+ * versión anterior de este módulo dejaba que el llamador tratara `ok:false` como un simple
+ * diagnóstico y de todos modos marcara `tracking=false`/removiera suscripciones/escribiera
+ * `fin_recorrido` — un recorrido que el chofer ve "Finalizado" en pantalla mientras el SDK nativo
+ * sigue grabando en su propia base, sin ninguna suscripción JS copiando esos puntos al outbox.
+ * Ahora `detener()` (`use-gps-operativo.ts`) trata `ok:false` como lo que es: el stop NO se pudo
+ * confirmar, así que no toca nada de lo anterior y deja "Finalizar" disponible para reintentar.
+ *
+ * `promesaAsentada`: la promesa CRUDA de `sdk.stop()`, normalizada para nunca rechazar —
+ * expuesta aparte del resultado con timeout para que el llamador la registre en
+ * `SerializadorRestauracion` (mismo slot que usa `restaurarComportamientoNormal`). Un `stop()`
+ * que venció el timeout puede seguir resolviendo tarde contra el nativo; si el chofer reintenta
+ * "Finalizar" con éxito y después toca "Iniciar" de nuevo, ese `stop()` tardío no puede tener
+ * permitido apagar el recorrido NUEVO al resolver — el próximo `iniciar()` espera esta promesa
+ * (vía `esperarPendiente()`) antes de `ready()/start()`.
  */
 export const TIMEOUT_STOP_NATIVO_MS = 5_000;
 
@@ -439,6 +455,8 @@ export interface SdkDetenerNativo {
 export interface ResultadoStopNativo {
   ok: boolean;
   error?: unknown;
+  /** Ver docblock de arriba — nunca rechaza. */
+  promesaAsentada: Promise<void>;
 }
 
 export async function detenerNativoConTimeout(
@@ -449,20 +467,59 @@ export async function detenerNativoConTimeout(
   const promesaTimeout = new Promise<'timeout'>((resolve) => {
     idTimer = setTimeout(() => resolve('timeout'), timeoutMs);
   });
+  const promesaStopNormalizada = sdk.stop().then(
+    () => ({ ok: true }) as const,
+    (error: unknown) => ({ ok: false, error }) as const,
+  );
+  // Nunca rechaza — es solo la señal de "el stop nativo, tarde o temprano, se asentó", sin
+  // importar si terminó en éxito o error. El llamador la usa para serializar el PRÓXIMO
+  // `iniciar()` detrás de ella, no para saber cómo terminó.
+  const promesaAsentada: Promise<void> = promesaStopNormalizada.then(() => undefined);
   try {
-    const resultado = await Promise.race([
-      sdk.stop().then(
-        () => 'ok' as const,
-        (error: unknown) => ({ error }) as const,
-      ),
-      promesaTimeout,
-    ]);
+    const resultado = await Promise.race([promesaStopNormalizada, promesaTimeout]);
     if (resultado === 'timeout') {
-      return { ok: false, error: new Error('Timeout deteniendo BackgroundGeolocation') };
+      return {
+        ok: false,
+        error: new Error('Timeout deteniendo BackgroundGeolocation'),
+        promesaAsentada,
+      };
     }
-    if (resultado === 'ok') return { ok: true };
-    return { ok: false, error: resultado.error };
+    if (resultado.ok) return { ok: true, promesaAsentada };
+    return { ok: false, error: resultado.error, promesaAsentada };
   } finally {
     if (idTimer !== undefined) clearTimeout(idTimer);
+  }
+}
+
+/**
+ * A (hallazgos de revisión 1, 2, 7, 2026-09-25): cuerpo PURO del wrapper público `iniciar()`
+ * (`use-gps-operativo.ts`) — extraído para poder testear con fake timers/promesas de control
+ * manual, sin React. Encapsula la regla que corrige el bug: si el `iniciar()` en curso YA fue
+ * invalidado por un `detener()` (`coordinador.iniciarEnCursoInvalidado()`) pero sigue sin
+ * resolver, no se reusa tal cual como el intento "actual" — eso lo perdía (un intento invalidado
+ * nunca deja `tracking=true`, ver `sigueVigente()` en `ejecutarIniciar`). En vez de eso se espera
+ * a que ESE intento termine de asentarse y se arranca uno fresco.
+ *
+ * `ejecutarIntento(generacion)` es `ejecutarIniciar` en producción (o un fake en los tests) — su
+ * promesa se considera "completa" apenas resuelve, sin importar qué siga corriendo desacoplado
+ * dentro de ella (la fase 2 del outbox, ver el docblock de `ejecutarIniciar`).
+ */
+export async function iniciarConSingleFlight(
+  coordinador: CoordinadorIniciarDetener,
+  ejecutarIntento: (generacion: number) => Promise<void>,
+): Promise<void> {
+  for (;;) {
+    let promesa = coordinador.promesaIniciarEnCurso();
+    if (promesa && coordinador.iniciarEnCursoInvalidado()) {
+      await promesa;
+      continue; // el intento invalidado ya se asentó — arrancar uno nuevo, no reusarlo.
+    }
+    if (!promesa) {
+      const generacion = coordinador.nuevaGeneracion();
+      promesa = ejecutarIntento(generacion);
+      coordinador.registrarPromesaIniciar(promesa, generacion);
+    }
+    await promesa;
+    return;
   }
 }

@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/react-native';
 import {
   asegurarInicioRecorrido,
   type ContextoInicioRecorrido,
@@ -36,6 +37,15 @@ import {
  * `iniciar()`": si algo lee el outbox mientras esta tarea todavía está corriendo, en el peor
  * caso ve un recorrido sin `fin_recorrido` todavía (que es la verdad: el cierre sigue en curso),
  * nunca un `fin_recorrido` sin que se haya intentado escribir su `inicio_recorrido` primero.
+ *
+ * B (hallazgo de revisión 3, 2026-09-25): el paso 1 (`asegurarInicioRecorrido`) va bajo su
+ * PROPIO try/catch, reportado a Sentry — antes, si ese respaldo rechazaba (SQLite sin espacio,
+ * el mismo caso que ya motivó todo este reintento), la excepción se propagaba y este `await`
+ * cortaba la función ANTES de llegar al paso 2: un recorrido terminaba sin `fin_recorrido`
+ * simplemente porque su respaldo de `inicio_recorrido` (que además puede ya estar confirmado por
+ * otro camino — `onLocation`/heartbeat) falló. `fin_recorrido` (paso 2) se escribe SIEMPRE
+ * después, sin importar el resultado del paso 1 — es el marcador más importante de los dos para
+ * cerrar el recorrido, y el único que el chofer nunca tiene otra oportunidad de reintentar.
  */
 export interface DependenciasCierreRecorrido<Db> {
   abrirOutbox: () => Promise<Db>;
@@ -65,11 +75,18 @@ export async function cerrarRecorridoEnOutbox<Db>(
   contexto: ContextoInicioRecorrido,
   tsFin: string,
 ): Promise<ResultadoCierreRecorrido> {
-  // Respaldo del marcador de inicio — ver el docblock de arriba. Si esto rechaza, se propaga: el
-  // llamador decide (`detener()` la reporta a Sentry y sigue igual, no encola `fin_recorrido` en
-  // esa pasada — el próximo drenado/reintento no existe para este evento puntual, pero el
-  // llamador puede optar por reintentar el cierre entero si hace falta).
-  await asegurarInicioRecorrido(estadoInicioRecorrido, deps, contexto);
+  // B (hallazgo de revisión 3): respaldo del marcador de inicio, best-effort — un fallo acá
+  // (SQLite sin espacio, handle zombi) se reporta a Sentry y NO impide el paso 2 de abajo.
+  // `onLocation`/heartbeat ya reintentaron este marcador mientras el recorrido estuvo activo; si
+  // los tres intentos fallan, un `inicio_recorrido` faltante es preferible a un recorrido que
+  // nunca cierra (`fin_recorrido` ausente) — ver el docblock de arriba.
+  try {
+    await asegurarInicioRecorrido(estadoInicioRecorrido, deps, contexto);
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'gps-foreground', paso: 'cierre-respaldo-inicio-recorrido' },
+    });
+  }
 
   const eventIdFin = await deps.generarEventId();
   const db = await deps.abrirOutbox();

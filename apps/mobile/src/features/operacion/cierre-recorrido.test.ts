@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@sentry/react-native', () => ({
+  captureException: vi.fn(),
+}));
+
+import * as Sentry from '@sentry/react-native';
 import { cerrarRecorridoEnOutbox } from './cierre-recorrido';
 import { crearEstadoInicioRecorrido, reiniciarEstadoInicioRecorrido } from './inicio-recorrido-retry';
 
@@ -111,19 +117,39 @@ describe('cerrarRecorridoEnOutbox', () => {
     );
   });
 
-  it('si el respaldo de inicio_recorrido rechaza, NO llega a encolar fin_recorrido (el llamador decide cómo reportarlo)', async () => {
+  // B (hallazgo de revisión 3, 2026-09-25): antes, un respaldo de inicio_recorrido que rechazaba
+  // cortaba la función entera y `fin_recorrido` nunca se encolaba — un recorrido sin forma de
+  // cerrar solo porque el respaldo (que además puede ser puramente redundante, si `onLocation`/
+  // heartbeat ya lo confirmaron) falló. Ahora ese fallo se reporta a Sentry y NO impide el paso
+  // 2: `fin_recorrido` se escribe SIEMPRE.
+  it('si el respaldo de inicio_recorrido rechaza: se reporta a Sentry y de todos modos encola fin_recorrido', async () => {
     const estado = crearEstadoInicioRecorrido();
     reiniciarEstadoInicioRecorrido(estado, 'event-inicio', 'ts-1');
+    const errorRespaldo = new Error('SQLite sin espacio');
     const encolarEvento = vi.fn(async (_db, evento) => {
-      if (evento.tipo === 'inicio_recorrido') throw new Error('SQLite sin espacio');
+      if (evento.tipo === 'inicio_recorrido') throw errorRespaldo;
       return { eventId: evento.eventId, insertado: true };
     });
     const deps = crearDependencias({ encolarEvento });
 
-    await expect(
-      cerrarRecorridoEnOutbox(estado, deps, { deviceId: 'device-1', sesionId: 'sesion-1' }, 'ts-fin'),
-    ).rejects.toThrow('SQLite sin espacio');
+    const resultado = await cerrarRecorridoEnOutbox(
+      estado,
+      deps,
+      { deviceId: 'device-1', sesionId: 'sesion-1' },
+      'ts-fin',
+    );
 
-    expect(encolarEvento).toHaveBeenCalledTimes(1);
+    expect(resultado.eventIdFin).toBe('event-fin-generado');
+    expect(encolarEvento).toHaveBeenCalledTimes(2);
+    expect(encolarEvento).toHaveBeenCalledWith(
+      fakeDb(),
+      expect.objectContaining({ tipo: 'fin_recorrido', ts: 'ts-fin' }),
+    );
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      errorRespaldo,
+      expect.objectContaining({
+        tags: expect.objectContaining({ paso: 'cierre-respaldo-inicio-recorrido' }),
+      }),
+    );
   });
 });

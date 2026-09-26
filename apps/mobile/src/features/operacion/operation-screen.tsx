@@ -426,7 +426,6 @@ export function OperationScreen(
         panY={sheetPanY}
         gpsError={gps.errorGps}
         iniciando={gps.iniciando}
-        guardandoRecorridoAnterior={gps.guardandoRecorridoAnterior}
         deteniendo={gps.deteniendo}
       />
 
