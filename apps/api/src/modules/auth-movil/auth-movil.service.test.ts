@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { Logger, UnauthorizedException } from '@nestjs/common';
 import { hashPassword, verifyPassword } from 'better-auth/crypto';
 import { prisma, withTenantContext } from '@quivo/db';
+import { CODIGO_SESION_NO_VIGENTE } from '@quivo/shared';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fechaActualBolivia, finDeJornadaBolivia } from '../../common/tiempo/jornada.js';
 import { AuthMovilService } from './auth-movil.service.js';
+import { SesionNoVigenteException } from './auth-movil.exceptions.js';
 import { hashTokenOpaco } from './token-opaco.js';
 
 // `verifyPassword` se envuelve en un `vi.fn` que delega a la implementación REAL (scrypt de
@@ -158,14 +160,118 @@ describe('AuthMovilService', () => {
     await expect(service.validarAccessToken(login.accessToken)).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
+    // Entrega 28: el refresh token ya rotado es exactamente el caso "sesión no vigente" —
+    // sigue siendo un UnauthorizedException (compat hacia atrás), pero ahora es la subclase
+    // distinguible.
     await expect(service.refresh({ refreshToken: login.refreshToken })).rejects.toBeInstanceOf(
-      UnauthorizedException,
+      SesionNoVigenteException,
     );
 
     await service.logout({ refreshToken: rotado.refreshToken });
     await expect(service.validarAccessToken(rotado.accessToken)).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
+  });
+
+  describe('Entrega 28 — SESION_NO_VIGENTE en el refresh rechazado', () => {
+    it('un refresh EXITOSO no lanza y no lleva codigo alguno (comportamiento normal intacto)', async () => {
+      const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+      const login = await service.autenticarConductor({
+        challengeToken: vehiculo.challengeToken,
+        deviceId,
+        documentoIdentidad: documento,
+        pin: pinConductor,
+      });
+      if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+      const rotado = await service.refresh({ refreshToken: login.refreshToken });
+      expect(rotado).toMatchObject({
+        accessToken: expect.any(String),
+        refreshToken: expect.any(String),
+      });
+      expect(rotado).not.toHaveProperty('codigo');
+
+      // Limpieza.
+      await service.logout({ refreshToken: rotado.refreshToken });
+    });
+
+    it('refresh con un refreshToken NUNCA emitido (inventado) responde 401 con codigo SESION_NO_VIGENTE', async () => {
+      const refreshTokenInventado = 'q'.repeat(40);
+      const error: unknown = await service
+        .refresh({ refreshToken: refreshTokenInventado })
+        .catch((e) => e);
+
+      expect(error).toBeInstanceOf(SesionNoVigenteException);
+      expect(error).toBeInstanceOf(UnauthorizedException);
+      const httpError = error as UnauthorizedException;
+      expect(httpError.getStatus()).toBe(401);
+      expect(httpError.getResponse()).toMatchObject({
+        statusCode: 401,
+        codigo: CODIGO_SESION_NO_VIGENTE,
+      });
+    });
+
+    it('refresh con el refreshToken de una sesión CERRADA (logout) responde con codigo SESION_NO_VIGENTE', async () => {
+      const vehiculo = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+      const login = await service.autenticarConductor({
+        challengeToken: vehiculo.challengeToken,
+        deviceId,
+        documentoIdentidad: documento,
+        pin: pinConductor,
+      });
+      if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+      await service.logout({ refreshToken: login.refreshToken });
+
+      const error: unknown = await service
+        .refresh({ refreshToken: login.refreshToken })
+        .catch((e) => e);
+      expect(error).toBeInstanceOf(SesionNoVigenteException);
+      expect((error as UnauthorizedException).getResponse()).toMatchObject({
+        codigo: CODIGO_SESION_NO_VIGENTE,
+      });
+    });
+
+    it('refresh con el refreshToken de una sesión REVOCADA por login desplazado (otro dispositivo, mismo vehículo) responde con codigo SESION_NO_VIGENTE', async () => {
+      // Reproduce el escenario real del piloto (Entrega 28): un teléfono sostiene un
+      // refreshToken de una sesión que quedó desplazada porque OTRO dispositivo volvió a
+      // loguear el mismo vehículo (`crearSesionOperativa` cierra las sesiones activas
+      // previas del vehículo, ver auth-movil.service.ts).
+      const vehiculo1 = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+      const login1 = await service.autenticarConductor({
+        challengeToken: vehiculo1.challengeToken,
+        deviceId,
+        documentoIdentidad: documento,
+        pin: pinConductor,
+      });
+      if (login1.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+      const otroDeviceId = `${deviceId}-desplazado`;
+      const vehiculo2 = await service.autenticarVehiculo({
+        placa,
+        pin: pinVehiculo,
+        deviceId: otroDeviceId,
+      });
+      const login2 = await service.autenticarConductor({
+        challengeToken: vehiculo2.challengeToken,
+        deviceId: otroDeviceId,
+        documentoIdentidad: documento,
+        pin: pinConductor,
+      });
+      if (login2.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+
+      // El teléfono 1 (desplazado) intenta refrescar con SU refreshToken viejo.
+      const error: unknown = await service
+        .refresh({ refreshToken: login1.refreshToken })
+        .catch((e) => e);
+      expect(error).toBeInstanceOf(SesionNoVigenteException);
+      expect((error as UnauthorizedException).getResponse()).toMatchObject({
+        codigo: CODIGO_SESION_NO_VIGENTE,
+      });
+
+      // Limpieza.
+      await service.logout({ refreshToken: login2.refreshToken });
+    });
   });
 
   it('logout con un refreshToken YA ROTADO cae al fallback por deviceId y sí cierra la sesión (docs/handoff.md:3382-3385)', async () => {
@@ -806,7 +912,11 @@ describe('AuthMovilService — autenticarSesion (login de un paso, placa + PIN d
     });
 
     const deviceId = `android:${randomUUID()}`;
-    const resultado = await service.autenticarSesion({ placa: vehiculo.placa, pin: '777777', deviceId });
+    const resultado = await service.autenticarSesion({
+      placa: vehiculo.placa,
+      pin: '777777',
+      deviceId,
+    });
     if (resultado.status !== 'seleccion_requerida') throw new Error('Se esperaba selección');
 
     await expect(

@@ -43,15 +43,15 @@ vi.mock('../features/operacion/drenaje-oportunista', () => ({
 
 vi.mock('../shared/security/sesion-movil-store', () => ({
   actualizarSesionMovil: vi.fn(),
+  borrarSesionMovil: vi.fn().mockResolvedValue(undefined),
   cargarSesionMovil: vi.fn(),
   obtenerDeviceIdMovil: vi.fn(),
 }));
 
 vi.mock('../shared/api/auth-movil-api', async () => {
-  const actual =
-    await vi.importActual<typeof import('../shared/api/auth-movil-api')>(
-      '../shared/api/auth-movil-api',
-    );
+  const actual = await vi.importActual<typeof import('../shared/api/auth-movil-api')>(
+    '../shared/api/auth-movil-api',
+  );
   return { ...actual, authMovilApi: { refresh: vi.fn() } };
 });
 
@@ -62,6 +62,7 @@ import {
 } from '../shared/api/refresh-circuit-breaker';
 import {
   actualizarSesionMovil,
+  borrarSesionMovil,
   cargarSesionMovil,
   type SesionMovilGuardada,
 } from '../shared/security/sesion-movil-store';
@@ -70,6 +71,7 @@ import { obtenerAccessTokenHeadless } from './headless-task';
 const refreshMock = authMovilApi.refresh as unknown as ReturnType<typeof vi.fn>;
 const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
 const actualizarSesionMovilMock = actualizarSesionMovil as unknown as ReturnType<typeof vi.fn>;
+const borrarSesionMovilMock = borrarSesionMovil as unknown as ReturnType<typeof vi.fn>;
 
 function sesion(overrides: Partial<SesionMovilGuardada> = {}): SesionMovilGuardada {
   return {
@@ -88,6 +90,7 @@ describe('obtenerAccessTokenHeadless', () => {
     refreshMock.mockReset();
     cargarSesionMovilMock.mockReset();
     actualizarSesionMovilMock.mockReset();
+    borrarSesionMovilMock.mockReset().mockResolvedValue(undefined);
     reiniciarCircuitoRefresh();
   });
 
@@ -118,7 +121,10 @@ describe('obtenerAccessTokenHeadless', () => {
 
     await expect(obtenerAccessTokenHeadless()).resolves.toBe('access-nueva');
     expect(refreshMock).toHaveBeenCalledWith('refresh-1');
-    expect(actualizarSesionMovilMock).toHaveBeenCalledWith(vencida, expect.objectContaining({ accessToken: 'access-nueva' }));
+    expect(actualizarSesionMovilMock).toHaveBeenCalledWith(
+      vencida,
+      expect.objectContaining({ accessToken: 'access-nueva' }),
+    );
   });
 
   it('si el refresh falla (401), devuelve null en silencio — falla de TRANSPORTE, nunca de captura', async () => {
@@ -176,6 +182,45 @@ describe('obtenerAccessTokenHeadless', () => {
     // El circuito no se abre por esta concurrencia (no hubo NINGÚN 401 real, solo un éxito
     // compartido).
     expect(obtenerEstadoCircuitoRefresh().estado).toBe('cerrado');
+  });
+
+  /**
+   * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): en el camino headless NO
+   * hay ningún hook de React corriendo para cortar la sesión — sin este chequeo, CADA tick
+   * posterior (ubicación/heartbeat, potencialmente uno por segundo) repetiría el mismo
+   * refresh contra un token que el servidor ya dio por muerto. Se borra la sesión local YA
+   * (`borrarSesionMovil`, nunca el outbox — no hay ninguna función de borrado de outbox
+   * importada en `headless-task.ts`, la evidencia GPS pendiente queda intacta) para que el
+   * PRÓXIMO tick corte en la primera línea (`cargarSesionMovil() === null`, cubierto por el
+   * primer test de este describe) sin volver a tocar la red.
+   */
+  it('SESION_NO_VIGENTE: borra la sesión local YA (para frenar los ticks siguientes) y devuelve null sin abrir el circuito', async () => {
+    const vencida = sesion();
+    cargarSesionMovilMock.mockResolvedValue(vencida);
+    refreshMock.mockRejectedValueOnce(
+      new AuthMovilApiError(
+        'http',
+        'Sesión móvil inválida o expirada',
+        401,
+        undefined,
+        'SESION_NO_VIGENTE',
+      ),
+    );
+
+    await expect(obtenerAccessTokenHeadless()).resolves.toBeNull();
+    expect(borrarSesionMovilMock).toHaveBeenCalledTimes(1);
+    expect(actualizarSesionMovilMock).not.toHaveBeenCalled();
+    // Evidencia definitiva, no ambigua: no cuenta contra el circuito de refresh.
+    expect(obtenerEstadoCircuitoRefresh().estado).toBe('cerrado');
+  });
+
+  it('un 401 SIN codigo (genérico) NO borra la sesión — sigue el camino viejo de "no revalidada"', async () => {
+    const vencida = sesion();
+    cargarSesionMovilMock.mockResolvedValue(vencida);
+    refreshMock.mockRejectedValueOnce(new AuthMovilApiError('http', 'Sesión inválida', 401));
+
+    await expect(obtenerAccessTokenHeadless()).resolves.toBeNull();
+    expect(borrarSesionMovilMock).not.toHaveBeenCalled();
   });
 
   it('con el circuito ya abierto (fallos previos, p. ej. del camino de foreground), corta sin tocar la red', async () => {

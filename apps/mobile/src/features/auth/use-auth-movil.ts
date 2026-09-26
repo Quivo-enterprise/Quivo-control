@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
 import type { ContextoOperativoMovil, ResumenAsignacionMovil } from '@quivo/shared';
-import { AuthMovilApiError, authMovilApi } from '../../shared/api/auth-movil-api';
+import {
+  AuthMovilApiError,
+  authMovilApi,
+  esSesionNoVigente,
+} from '../../shared/api/auth-movil-api';
 import {
   CircuitoRefreshAbiertoError,
   esSesionIrrecuperable,
@@ -119,6 +123,39 @@ export function useAuthMovil() {
     );
   }, []);
 
+  /**
+   * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): corte de raíz ante
+   * `SESION_NO_VIGENTE` — evidencia DEFINITIVA del servidor de que esta sesión ya no existe
+   * (cerrada, revocada, desplazada por otro dispositivo, o el refresh token ya rotó). A
+   * diferencia de un 401 ambiguo (que sólo prende `sesionNoRevalidada` y deja al chofer
+   * seguir operando offline con la esperanza de un refresh futuro), acá no hay nada que
+   * reintentar: se borran los tokens locales YA (mismo `borrarSesionMovil` que usa
+   * `logout()` — nunca toca el outbox de SQLite, así que la evidencia GPS pendiente queda
+   * intacta para drenar después del re-login) y se lleva al chofer a la pantalla de login,
+   * con un mensaje en su idioma. No hay servidor al que avisar (no queda sesión que
+   * revocar: el servidor ya la dio por muerta), así que no se llama a `authMovilApi.logout`
+   * acá. También resetea el circuito de refresh y la racha de 401 acumulados — mismo
+   * motivo que `logout()`/un login nuevo exitoso (H5): sin esto, esta sesión muerta podía
+   * dejar el circuito abierto o la racha a mitad de camino para la sesión siguiente.
+   */
+  const cerrarSesionPorNoVigente = useCallback(async () => {
+    await borrarSesionMovil().catch(() => {});
+    fallos401Acumulados.current = 0;
+    reiniciarCircuitoRefresh();
+    if (!mounted.current) return;
+    setEstado((actual) => ({
+      ...actual,
+      etapa: 'vehiculo',
+      sesion: null,
+      seleccionToken: null,
+      asignaciones: [],
+      sesionNoRevalidada: false,
+      sesionIrrecuperable: false,
+      aviso: null,
+      error: 'Tu sesión ya no es válida en este dispositivo. Vuelve a iniciar sesión.',
+    }));
+  }, []);
+
   useEffect(() => {
     mounted.current = true;
     void restaurarSesion();
@@ -158,8 +195,8 @@ export function useAuthMovil() {
 
         // Validar que la sesión no esté vencida y que no tenga una estructura corrupta
         if (
-          !guardada || 
-          !guardada.contexto?.conductor || 
+          !guardada ||
+          !guardada.contexto?.conductor ||
           !guardada.contexto?.asignacion?.horario ||
           new Date(guardada.refreshTokenExpiresAt) <= new Date()
         ) {
@@ -219,6 +256,13 @@ export function useAuthMovil() {
         setEstado((actual) => ({ ...actual, sesion: actualizada ?? actual.sesion, aviso: null }));
       } catch (error: unknown) {
         if (!mounted.current) return;
+        // Entrega 28: chequeo PRIMERO — antes de la rama de 401 ambiguo de abajo. Cubre el
+        // caso en que el PRIMER `refrescar(guardada)` (arriba, fuera de este catch) ya vino
+        // con `SESION_NO_VIGENTE`: no hay backoff que valga, se corta de raíz.
+        if (esSesionNoVigente(error)) {
+          await cerrarSesionPorNoVigente();
+          return;
+        }
         // Punto 10 (code review 2026-09-25): `CircuitoRefreshAbiertoError` tiene
         // `status: 401` A PROPÓSITO (ver su docblock en `refresh-circuit-breaker.ts` — así
         // `error.status === 401` lo trata igual que un 401 real EN OTROS callers que solo
@@ -245,7 +289,27 @@ export function useAuthMovil() {
           // su comentario para el porqué (el servidor no distingue repudio real de un 401
           // transitorio). Reintenta con `vigente` — ya rotado si el `refrescar` de arriba
           // tuvo éxito — nunca con `guardada` (A4, ver el comentario de arriba).
-          const revalidada = await refrescarConReintentos(vigente);
+          let revalidada: SesionMovilGuardada | null;
+          try {
+            revalidada = await refrescarConReintentos(vigente);
+          } catch (errorReintento: unknown) {
+            // Entrega 28: `refrescarConReintentos` corta sin reintentar (rethrow inmediato,
+            // ver su docblock) ante `SESION_NO_VIGENTE` — es evidencia definitiva, no hay
+            // backoff que le sirva. Cortar acá también, sin contar esto como "no
+            // revalidada" (ese estado implica "puede que se recupere sola", y esto no).
+            if (esSesionNoVigente(errorReintento)) {
+              sincronizarSesionIrrecuperable();
+              await cerrarSesionPorNoVigente();
+              return;
+            }
+            // Defensivo: `refrescarConReintentos` sólo debería rechazar por lo de arriba —
+            // cualquier otra cosa es inesperada; se reporta y se degrada al mismo camino que
+            // un backoff agotado sin éxito, en vez de dejar una excepción sin capturar.
+            Sentry.captureException(errorReintento, {
+              tags: { contexto: 'auth-movil', paso: 'refrescar-con-reintentos-inesperado' },
+            });
+            revalidada = null;
+          }
           // Entrega 3: sincroniza el veredicto del circuit breaker DESPUÉS de que
           // `refrescarConReintentos` agotó (o no) sus reintentos — cubre tanto el éxito como
           // el fallo definitivo de este camino de restauración.
@@ -311,6 +375,16 @@ export function useAuthMovil() {
    * siendo la ÚNICA vía para borrar la sesión de verdad. Si el servidor llega a exponer esa
    * señal en el futuro (p. ej. un 403 específico de "sesión reemplazada por login nuevo",
    * ver plan §2.4.5), ahí sí correspondería un borrado automático acotado a ese código.
+   *
+   * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): esa señal YA EXISTE
+   * (`SESION_NO_VIGENTE`, `SesionNoVigenteException` en la API) — a diferencia de cualquier
+   * otro fallo, este NO se reintenta con backoff: se re-lanza en el PRIMER intento. Es
+   * exactamente la ráfaga de reintentos que el `refresh-agotado` de Sentry documentaba (los
+   * 3 reintentos, ~40 s, siempre al arrancar con un refresh token que ya no era vigente) —
+   * con evidencia definitiva del servidor de que el token no es vigente, siquiera un solo
+   * reintento adicional es indistinguible de machacar la red en vano. El caller
+   * (`reconciliarSesion`) es responsable de tratar este rechazo como corte de raíz, no como
+   * "no revalidada".
    */
   async function refrescarConReintentos(
     guardada: SesionMovilGuardada,
@@ -321,6 +395,7 @@ export function useAuthMovil() {
       try {
         return await refrescar(guardada);
       } catch (error) {
+        if (esSesionNoVigente(error)) throw error;
         ultimoError = error;
         if (!mounted.current) return null;
         if (intento < esperasMs.length) {
@@ -501,6 +576,14 @@ export function useAuthMovil() {
       sincronizarSesionIrrecuperable();
       return actualizada.accessToken;
     } catch (error: unknown) {
+      // Entrega 28: corte de raíz, ANTES de `clasificarFalloAccessToken` — este camino corre
+      // cada `REFRESCO_MS` (15s, `use-sync-status.ts`) mientras haya sesión, así que sin este
+      // chequeo un token muerto de verdad seguiría golpeando la red cada ciclo (nunca cuenta
+      // como "no revalidada": eso implica que puede recuperarse solo, y esto no puede).
+      if (esSesionNoVigente(error)) {
+        await cerrarSesionPorNoVigente();
+        return null;
+      }
       const { fallos401Acumulados: fallosActualizados, marcarSesionNoRevalidada } =
         clasificarFalloAccessToken(error, fallos401Acumulados.current);
       fallos401Acumulados.current = fallosActualizados;
@@ -516,10 +599,11 @@ export function useAuthMovil() {
       // NO se borra la sesión acá en ningún caso (401 ni network): misma decisión, mismo
       // motivo que en `refrescarConReintentos` — ver su comentario. Un 401 aislado o
       // repetido solo enciende la señal para que el chofer decida volver a loguearse; el
-      // borrado automático sigue siendo exclusivo de `logout()`.
+      // borrado automático sigue siendo exclusivo de `logout()` (y, desde la Entrega 28, de
+      // `cerrarSesionPorNoVigente` arriba).
       return null;
     }
-  }, [estado.sesion, sincronizarSesionIrrecuperable]);
+  }, [estado.sesion, sincronizarSesionIrrecuperable, cerrarSesionPorNoVigente]);
 
   async function ejecutar(accion: () => Promise<void>): Promise<void> {
     setEstado((actual) => ({ ...actual, cargando: true, error: null, aviso: null }));
@@ -693,7 +777,13 @@ async function adquirirLeaseRefreshConEspera(
   const limiteMs = Date.now() + esperaMaximaMs;
   for (;;) {
     const ahoraMs = Date.now();
-    const obtenido = await adquirirLease(db, ID_LEASE_REFRESH_SESION, token, ahoraMs, TTL_LEASE_REFRESH_SESION_MS);
+    const obtenido = await adquirirLease(
+      db,
+      ID_LEASE_REFRESH_SESION,
+      token,
+      ahoraMs,
+      TTL_LEASE_REFRESH_SESION_MS,
+    );
     if (obtenido) return true;
     if (Date.now() >= limiteMs) return false;
     await new Promise((resolve) => setTimeout(resolve, INTERVALO_POLL_LEASE_REFRESH_MS));
@@ -860,7 +950,13 @@ async function ejecutarRefresh(guardada: SesionMovilGuardada): Promise<SesionMov
     // abre el circuito, y el chofer termina teniendo que volver a loguearse (Entrega 28,
     // `SESION_NO_VIGENTE`, pendiente de implementar) — no hay corrupción de datos ni sesión de
     // otro chofer comprometida, solo esa degradación a login manual.
-    const renovado = await renovarLease(db, ID_LEASE_REFRESH_SESION, tokenLease, Date.now(), TTL_LEASE_REFRESH_SESION_MS);
+    const renovado = await renovarLease(
+      db,
+      ID_LEASE_REFRESH_SESION,
+      tokenLease,
+      Date.now(),
+      TTL_LEASE_REFRESH_SESION_MS,
+    );
     if (!renovado) {
       const relecturaTrasPerderLease = await cargarSesionMovil().catch(() => null);
       if (
@@ -1207,7 +1303,13 @@ export const UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA = 2;
  * decisión LOCAL (el circuito ya estaba abierto por fallos anteriores), nunca evidencia NUEVA
  * del servidor. Contarlo acumularía la racha más rápido de lo que el servidor realmente la
  * generó — el umbral (`UMBRAL_401_ACUMULADOS_SESION_NO_REVALIDADA`) existe para confirmar con
- * el servidor, no con el propio circuito local. */
+ * el servidor, no con el propio circuito local.
+ *
+ * Entrega 28: tampoco suma un `SESION_NO_VIGENTE` — el caller (`obtenerAccessToken`) ya lo
+ * intercepta ANTES de llegar acá (ver ese chequeo), así que en la práctica esta función nunca
+ * lo ve desde ese call site; se excluye igual acá, defensivamente, para que esta función siga
+ * siendo correcta en solitario (p. ej. si algún test o caller futuro la llama directo) — un
+ * corte definitivo nunca debería sumar a una racha pensada para confirmar ambigüedad. */
 export function clasificarFalloAccessToken(
   error: unknown,
   fallos401AcumuladosPrevios: number,
@@ -1215,7 +1317,8 @@ export function clasificarFalloAccessToken(
   if (
     error instanceof AuthMovilApiError &&
     error.status === 401 &&
-    !(error instanceof CircuitoRefreshAbiertoError)
+    !(error instanceof CircuitoRefreshAbiertoError) &&
+    !esSesionNoVigente(error)
   ) {
     const fallos401Acumulados = fallos401AcumuladosPrevios + 1;
     return {

@@ -30,6 +30,7 @@ vi.mock('@sentry/react-native', () => ({
   captureException: vi.fn(),
 }));
 
+import { CODIGO_SESION_NO_VIGENTE } from '@quivo/shared';
 import { AuthMovilApiError } from '../../shared/api/auth-movil-api';
 import { CircuitoRefreshAbiertoError } from '../../shared/api/refresh-circuit-breaker';
 import {
@@ -144,6 +145,27 @@ describe('clasificarFalloAccessToken', () => {
    */
   it('CircuitoRefreshAbiertoError (status 401, pero decisión LOCAL) NO suma a la racha de 401', () => {
     const error = new CircuitoRefreshAbiertoError();
+    const resultado = clasificarFalloAccessToken(error, 0);
+    expect(resultado.fallos401Acumulados).toBe(0);
+    expect(resultado.marcarSesionNoRevalidada).toBe(false);
+  });
+
+  /**
+   * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): `SESION_NO_VIGENTE` es
+   * evidencia DEFINITIVA de que la sesión ya no existe — `obtenerAccessToken` (dentro de
+   * `useAuthMovil`) la intercepta ANTES de llegar a esta función (corta con
+   * `cerrarSesionPorNoVigente`, sin pasar por acá), pero esta función se mantiene correcta
+   * en solitario: nunca debe sumar a una racha pensada para confirmar AMBIGÜEDAD, porque
+   * este caso no es ambiguo.
+   */
+  it('SESION_NO_VIGENTE (codigo) NO suma a la racha de 401 ni marca sesionNoRevalidada', () => {
+    const error = new AuthMovilApiError(
+      'http',
+      'Sesión móvil inválida o expirada',
+      401,
+      undefined,
+      CODIGO_SESION_NO_VIGENTE,
+    );
     const resultado = clasificarFalloAccessToken(error, 0);
     expect(resultado.fallos401Acumulados).toBe(0);
     expect(resultado.marcarSesionNoRevalidada).toBe(false);

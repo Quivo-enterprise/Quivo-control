@@ -5,6 +5,18 @@ import { DocumentoIdentidadBoliviaSchema } from '../identidad-bolivia.js';
 import { LineaDistintivoTipoSchema } from '../entities/linea.js';
 import { PlacaVehiculoSchema } from '../entities/vehiculo.js';
 
+/**
+ * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`, causa raíz del
+ * `refresh-agotado` de Sentry `QUIVO-CONTROL-CONDUCTOR-2`): código distinguible que
+ * `POST /v1/mobile/auth/refresh` incluye en el body del error cuando la sesión asociada al
+ * `refreshToken` ya no está vigente (no existe, revocada, cerrada, o el hash ya rotó por
+ * otra sesión/dispositivo) — sigue siendo HTTP 401 (compatible hacia atrás: un cliente viejo
+ * que sólo mira el status lo trata igual que siempre), pero este código permite al cliente
+ * nuevo cortar de raíz (sin ráfaga de reintentos, tokens borrados, login limpio) en vez de
+ * tratarlo como una falla transitoria de red que conviene reintentar con backoff.
+ */
+export const CODIGO_SESION_NO_VIGENTE = 'SESION_NO_VIGENTE' as const;
+
 export const PinMovilSchema = z
   .string()
   .regex(/^\d{6,12}$/, 'El PIN debe tener entre 6 y 12 dígitos');

@@ -16,7 +16,9 @@ import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportun
 // Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
 // `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
 import { refrescar } from '../features/auth/use-auth-movil';
+import { esSesionNoVigente } from '../shared/api/auth-movil-api';
 import {
+  borrarSesionMovil,
   cargarSesionMovil,
   hayLogoutSolicitado,
   obtenerDeviceIdMovil,
@@ -514,6 +516,19 @@ async function asegurarSemillaCumplimientos(
  * aborta el drenado sin tocar la pantalla del chofer — la evidencia ya está a salvo en el
  * outbox. El breaker ya reporta a Sentry por su cuenta cuando corresponde (ver su docblock);
  * acá no hace falta un `captureException` adicional por cada intento fallido.
+ *
+ * Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): excepción a "TRANSPORTE, no
+ * captura" — `SESION_NO_VIGENTE` es evidencia DEFINITIVA de que esta sesión ya no existe, y
+ * en el camino headless NO hay ningún hook de React (`use-auth-movil.ts`) corriendo para
+ * cortarla: sin este chequeo, CADA tick posterior (ubicación o heartbeat, potencialmente uno
+ * por segundo mientras el vehículo se mueve) volvería a llamar `refrescar(sesion)` con el
+ * MISMO token que el servidor ya dio por muerto, machacando la red en background sin que
+ * nadie lo vea — exactamente el patrón de ráfaga que la Entrega 28 existe para cerrar, sólo
+ * que sostenido indefinidamente en vez de acotado a un puñado de reintentos. Se borra la
+ * sesión YA (`borrarSesionMovil`, nunca el outbox — la evidencia GPS pendiente sigue intacta
+ * para drenar después del re-login): el próximo tick encuentra `cargarSesionMovil() === null`
+ * y corta en la primera línea sin tocar la red, y la próxima apertura de la app aterriza en
+ * el login (mismo `borrarSesionMovil` que consume `restaurarSesion` en `use-auth-movil.ts`).
  */
 export async function obtenerAccessTokenHeadless(): Promise<string | null> {
   const sesion = await cargarSesionMovil();
@@ -522,7 +537,10 @@ export async function obtenerAccessTokenHeadless(): Promise<string | null> {
   try {
     const actualizada = await refrescar(sesion);
     return actualizada.accessToken;
-  } catch {
+  } catch (error) {
+    if (esSesionNoVigente(error)) {
+      await borrarSesionMovil().catch(() => {});
+    }
     return null;
   }
 }

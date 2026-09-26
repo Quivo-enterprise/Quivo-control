@@ -2,6 +2,7 @@ import {
   AuthConductorMovilResponseSchema,
   AuthSesionMovilResponseSchema,
   AuthVehiculoMovilResponseSchema,
+  CODIGO_SESION_NO_VIGENTE,
   ContextoOperativoMovilSchema,
   RefreshMovilResponseSchema,
   type AuthConductorMovilRequest,
@@ -25,6 +26,12 @@ export class AuthMovilApiError extends Error {
     /** Sólo viene poblado en un 429 de `POST /v1/mobile/auth/sesion` (lockout por vehículo,
      * `LockoutMovilExceptionFilter`). Ver `userMessage` para cómo se usa. */
     public readonly retryAfterSeconds?: number,
+    /** Entrega 28 (`docs/plan-correccion-post-piloto-2026-09-09.md`): código distinguible
+     * del body del error — hoy sólo `CODIGO_SESION_NO_VIGENTE` en un refresh rechazado
+     * porque la sesión ya no es vigente (`AuthMovilService.refresh`,
+     * `SesionNoVigenteException`). `undefined` para cualquier otro error (la inmensa
+     * mayoría, incluidos los 401 "de siempre" que un cliente viejo sigue viendo igual). */
+    public readonly codigo?: string,
   ) {
     super(message);
     this.name = 'AuthMovilApiError';
@@ -34,6 +41,12 @@ export class AuthMovilApiError extends Error {
     if (this.kind === 'configuration') return this.message;
     if (this.kind === 'network') {
       return `No se pudo conectar con QUIVO${API_URL ? ` en ${API_URL}` : ''}. Revisa el Wi-Fi y vuelve a intentar.`;
+    }
+    // Entrega 28: mensaje en lenguaje de chofer para la sesión definitivamente muerta —
+    // distinto del genérico "Las credenciales no son válidas." de un 401 sin código, que
+    // suena a PIN equivocado en vez de "hay que volver a entrar".
+    if (this.codigo === CODIGO_SESION_NO_VIGENTE) {
+      return 'Tu sesión ya no es válida en este dispositivo. Vuelve a iniciar sesión.';
     }
     if (this.status === 429) {
       // El lockout de POST /sesion es progresivo por vehículo, `min(2^(fallos-3), 60)`
@@ -149,6 +162,7 @@ async function request(path: string, options: RequestOptions): Promise<unknown> 
         extraerMensaje(payload),
         response.status,
         extraerRetryAfterSeconds(payload, response.headers.get('Retry-After')),
+        extraerCodigo(payload),
       );
     }
     return payload;
@@ -194,6 +208,27 @@ function extraerRetryAfterSeconds(payload: unknown, header: string | null): numb
   }
   const desdeHeader = header ? Number(header) : NaN;
   return Number.isFinite(desdeHeader) && desdeHeader > 0 ? desdeHeader : undefined;
+}
+
+/** Entrega 28: extrae el campo `codigo` del body del error, si vino — hoy sólo
+ * `SesionNoVigenteException` (API) lo agrega. */
+function extraerCodigo(payload: unknown): string | undefined {
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    'codigo' in payload &&
+    typeof (payload as { codigo: unknown }).codigo === 'string'
+  ) {
+    return (payload as { codigo: string }).codigo;
+  }
+  return undefined;
+}
+
+/** Entrega 28: helper único para el chequeo que repiten `refresh-circuit-breaker.ts`,
+ * `use-auth-movil.ts` y `headless-task.ts` — evita que cada caller repita
+ * `error instanceof AuthMovilApiError && error.codigo === CODIGO_SESION_NO_VIGENTE` a mano. */
+export function esSesionNoVigente(error: unknown): boolean {
+  return error instanceof AuthMovilApiError && error.codigo === CODIGO_SESION_NO_VIGENTE;
 }
 
 function extraerMensaje(payload: unknown): string {

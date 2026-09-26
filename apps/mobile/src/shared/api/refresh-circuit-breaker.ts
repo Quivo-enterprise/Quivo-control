@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/react-native';
-import { AuthMovilApiError, authMovilApi } from './auth-movil-api';
+import { AuthMovilApiError, authMovilApi, esSesionNoVigente } from './auth-movil-api';
 import type { RefreshMovilResponse } from '@quivo/shared';
 
 /**
@@ -200,6 +200,15 @@ export async function intentarRefrescarConCircuito(
     }
     return tokens;
   } catch (error: unknown) {
+    // Entrega 28: `SESION_NO_VIGENTE` es evidencia DEFINITIVA del servidor de que esta
+    // sesión ya no existe — no es un fallo transitorio del transporte ni una señal parcial
+    // sobre la que tenga sentido contar/abrir el circuito. Se re-lanza tal cual, SIN tocar
+    // `estadoCircuito`, para que el caller (`refrescar()`/`obtenerAccessTokenHeadless()`)
+    // corte de raíz (tokens borrados, login limpio) sin que esto cuente contra la racha de
+    // fallos 401 ni dispare el backoff de reapertura del circuito.
+    if (esSesionNoVigente(error)) {
+      throw error;
+    }
     if (error instanceof AuthMovilApiError && error.status === 401) {
       const previo = estadoCircuito;
       estadoCircuito = circuitoTrasFallo401(estadoCircuito, ahoraMs);
