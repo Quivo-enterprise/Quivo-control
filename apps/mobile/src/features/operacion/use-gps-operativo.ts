@@ -49,7 +49,6 @@ import {
   crearManejadorReafirmarMovimiento,
   crearSerializadorRestauracion,
   detenerNativoConTimeout,
-  EsperaIniciarInvalidadoAgotadaError,
   iniciarConSingleFlight,
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
@@ -240,16 +239,10 @@ export function useGpsOperativo(
       // hook se desmonta (el chofer navega fuera de la pantalla mientras `ready()`/`start()`
       // sigue en curso) podía resolver tarde y tocar refs de un componente ya desmontado. El
       // camino de "intento invalidado que resuelve tarde" (`sigueVigente()` en `ejecutarIniciar`)
-      // ya sabe restaurar sin tocar `tracking`/estado React — ver más abajo, `sigueVigente`
-      // también chequea `montadoRef.current` para cubrir este caso incluso si el efecto de
-      // arriba corriera después de que el intento ya pasó su último chequeo.
-      //
-      // Punto 4 (hallazgo de revisión, 2026-09-25): `causa: 'desmontaje'`, NO el default
-      // `'detener'` — a diferencia de un `detener()` real, un desmontaje no debe apagar el
-      // nativo que este intento invalidado prendió. `ejecutarIniciar` lee esta causa para decidir
-      // si le corresponde llamar `stop()` (ver `detenerNativoYRestaurar` y su chequeo de
-      // `causaInvalidacion()`, más abajo).
-      serializadorIniciar.invalidarEnCurso('desmontaje');
+      // ya sabe apagar el nativo y restaurar sin tocar `tracking`/estado React — ver más abajo,
+      // `sigueVigente` también chequea `montadoRef.current` para cubrir este caso incluso si el
+      // efecto de arriba corriera después de que el intento ya pasó su último chequeo.
+      serializadorIniciar.invalidarEnCurso();
     };
   }, [serializadorIniciar]);
   // LOW-MED (hallazgo de revisión, QUI-247): estado mutable compartido del marcador
@@ -763,18 +756,11 @@ export function useGpsOperativo(
     // llamar `invalidarEnCurso()`, para que ningún efecto de estado (`setTracking`, `setErrorGps`,
     // etc.) se dispare sobre un componente ya desmontado.
     const sigueVigente = (): boolean => serializadorIniciar.estaVigente(generacion) && montadoRef.current;
-    // Intento invalidado POR UN `detener()` que YA arrancó el nativo (`start()`/
-    // `iniciarSeguimientoContinuo` ya resolvió): apaga lo que él mismo prendió y restaura la
-    // config — seguro llamarlo sin condiciones extra porque el single-flight de
-    // `serializadorIniciar` garantiza que nunca hay un `iniciar()` MÁS NUEVO corriendo al mismo
-    // tiempo (sería redundante con la limpieza que ya hizo `detener()` al invalidar, pero
-    // `remove()`/`setConfig` son idempotentes — inocuo).
-    //
-    // Punto 4 (hallazgo de revisión, 2026-09-25): esta función SOLO corresponde cuando la causa
-    // de la invalidación es `'detener'` — ver el chequeo `causaInvalidacion()` en el call site,
-    // más abajo. Un desmontaje (el chofer navega fuera de la pantalla) NUNCA debe llamarla: el
-    // nativo tiene que seguir grabando para que un remount se re-enganche vía `getState().enabled`,
-    // igual que si el chofer hubiera matado la app a mitad de turno.
+    // Intento invalidado que YA arrancó el nativo (`start()`/`iniciarSeguimientoContinuo` ya
+    // resolvió): apaga lo que él mismo prendió y restaura la config — seguro llamarlo sin
+    // condiciones extra porque el single-flight de `serializadorIniciar` garantiza que nunca hay
+    // un `iniciar()` MÁS NUEVO corriendo al mismo tiempo (sería redundante con la limpieza que
+    // ya hizo `detener()` al invalidar, pero `remove()`/`setConfig` son idempotentes — inocuo).
     const detenerNativoYRestaurar = async (): Promise<void> => {
       await BackgroundGeolocation.stop().catch((error) => {
         Sentry.captureException(error, {
@@ -795,15 +781,12 @@ export function useGpsOperativo(
     erroresEscritura.current = 0;
     setPuntos(0);
     setUltimaDeteccion(null);
-    // D (hallazgo de revisión 6, MOVIDO en el punto 6 de la revisión siguiente, 2026-09-25): el
-    // bump de `ultimoCierreId` ya NO va acá. Vivía al principio de `ejecutarIniciar`, antes
-    // incluso de los chequeos de permiso — un "Comenzar" que termina bloqueado por
-    // `decisionPermiso.bloqueante` o que falla en `requestPermission()`/`ready()`/`start()` (o sea,
-    // que NUNCA llega a `tracking=true`) igual invalidaba el cierre en curso del recorrido
-    // ANTERIOR, descartando su veredicto (`resultado`) sin que ningún recorrido nuevo lo
-    // reemplazara. Ahora el bump vive justo después de que `start()` resuelve con éxito (ver más
-    // abajo, junto a `setTracking(true)`) — el único momento en que de verdad hay un recorrido
-    // nuevo que merece invalidar al cierre anterior.
+    // D (hallazgo de revisión 6): invalida cualquier cierre de un recorrido ANTERIOR que siga
+    // resolviendo en segundo plano (`ejecutarDetener`, más abajo) — sin este bump, ese cierre
+    // viejo podía pisar `resultado`/`errorGps` de ESTE recorrido que recién arranca con datos de
+    // batería/puntos de la corrida anterior (el chequeo de `idCierre` en la tarea de fondo del
+    // cierre compara contra este mismo contador).
+    ultimoCierreId.current += 1;
 
     // QUI-338 — VERIFICACIÓN PREVIA (brief punto 1): consultar el estado real de permiso y
     // servicio de ubicación ANTES de intentar `ready()`/`start()`, y ramificar según el caso
@@ -1010,32 +993,10 @@ export function useGpsOperativo(
       // tiempo — así que `stop()` + restaurar siempre es seguro y nunca redundante-con-otro-
       // intento-activo (a diferencia del diseño anterior, que necesitaba `hayIntentoMasNuevo`
       // para no pisar a un intento más nuevo).
-      //
-      // Punto 4 (hallazgo de revisión, 2026-09-25): PERO solo si la causa de la invalidación fue
-      // un `detener()` real. Si fue un DESMONTAJE (el chofer navegó fuera de la pantalla mientras
-      // `start()` seguía en curso), NO corresponde apagar el nativo — el chofer nunca pidió cerrar
-      // el recorrido, y el remount de una instancia nueva del hook se re-engancha solo, vía
-      // `getState().enabled` (mismo camino que cuando el chofer mata la app a mitad de turno). No
-      // hay nada más que "saltear": no se suscribe nada nuevo ni se toca estado — `sigueVigente()`
-      // ya es `false`, así que ninguna de las líneas de abajo (`setTracking`, etc.) se alcanza.
       if (!sigueVigente()) {
-        if (serializadorIniciar.causaInvalidacion() === 'desmontaje') {
-          return;
-        }
         await detenerNativoYRestaurar();
         return;
       }
-      // D (hallazgo de revisión 6, MOVIDO 2026-09-25 — ver el comentario donde vivía antes, al
-      // principio de esta función): bump ACÁ, no antes de los chequeos de permiso — este es el
-      // primer punto en que `ejecutarIniciar` sabe que de verdad va a haber un recorrido nuevo
-      // (`start()` ya resolvió con éxito y sigue vigente). Invalida cualquier cierre de un
-      // recorrido ANTERIOR que siga resolviendo en segundo plano (`ejecutarDetener`, más abajo) —
-      // sin este bump, ese cierre viejo podía pisar `resultado`/`errorGps` de ESTE recorrido con
-      // datos de batería/puntos de la corrida anterior (el chequeo de `idCierre` en la tarea de
-      // fondo del cierre compara contra este mismo contador). Moverlo hasta acá (en vez de al
-      // principio de la función) evita que un intento bloqueado por permisos, o que falla antes de
-      // `start()`, descarte sin motivo el veredicto todavía pendiente del cierre anterior.
-      ultimoCierreId.current += 1;
       // G2 (merge post-drenado, Entrega 31a — gap de revisión): `tracking` se marca `true`
       // ACÁ, apenas `start()` resuelve, y ya NO más abajo tras el outbox. Antes, con el outbox
       // fallando (SQLite sin espacio, handle zombi) DESPUÉS de un `start()` exitoso,
@@ -1112,26 +1073,10 @@ export function useGpsOperativo(
     // colgarse de verdad: `sembrarCumplimientos`/`abrirOutbox`/`asegurarInicioRecorrido` contra
     // SQLite trabada) formaba parte de la MISMA promesa que el wrapper `iniciar()` registraba en
     // `serializadorIniciar` — un outbox colgado dejaba "Comenzar" deshabilitado para siempre, y un
-    // toque posterior reusaba esa promesa (que nunca resuelve) en vez de arrancar algo nuevo.
-    //
-    // Punto 3 (hallazgo de revisión, 2026-09-25 — corrige el chequeo `sigueVigente()` que este
-    // bloque tenía antes de la ESCRITURA): una vez que este intento llegó hasta acá, `start()` YA
-    // resolvió con éxito — hay un recorrido REAL grabando en el nativo, invalidado o no. El
-    // respaldo de `inicio_recorrido` tiene que escribirse SIEMPRE para ese recorrido, sin importar
-    // si el hook se desmontó mientras tanto (`montadoRef`) o si un `detener()` invalidó la
-    // generación DESPUÉS — el caso que este fix cierra: `ejecutarDetener` llama
-    // `invalidarEnCurso()` ANTES de intentar `stop()`; si ese `stop()` FALLA/vence el timeout,
-    // `ejecutarDetener` retorna temprano SIN llamar a `cerrarRecorridoEnOutbox` (ver ese bloque,
-    // más abajo) — el recorrido sigue activo de verdad (nativo grabando, `tracking` nunca se tocó)
-    // pero, con el `sigueVigente()` viejo, esta fase se saltaba la escritura por culpa de una
-    // invalidación que en los hechos no cerró nada. La escritura es idempotente por `eventId`
-    // (`INSERT OR IGNORE`, `db/outbox.ts`), así que escribirla de más (p. ej. si el cierre real
-    // también la reintenta) es inocuo — nunca duplica el marcador.
-    //
-    // Lo que SÍ sigue gateado por `sigueVigente()`: únicamente los `setState`/`setErrorGps` de
-    // React más abajo (en el `catch`) — un intento invalidado no debe pisarle al chofer un estado
-    // de UI de un recorrido que ya vio cerrarse, pero eso es ortogonal a si la escritura al outbox
-    // debe intentarse (siempre debe intentarse).
+    // toque posterior reusaba esa promesa (que nunca resuelve) en vez de arrancar algo nuevo. Los
+    // chequeos `sigueVigente()` se mantienen EXACTAMENTE igual que antes de este split — un
+    // `detener()` que invalida este intento mientras la fase 2 sigue en vuelo no debe tocar
+    // `estadoInicioRecorrido` ni `errorGps` (mismo motivo que ya documentaban H2/punto 5, abajo).
     void (async () => {
       try {
         // C1 (hallazgo de revisión CRÍTICO): la siembra ya NO ocurre acá — corre en el
@@ -1148,9 +1093,12 @@ export function useGpsOperativo(
         // falla, `onLocation`/heartbeat siguen reintentando con el MISMO `eventId` hasta que
         // quede confirmado (o hasta `detener()`, como última red de seguridad).
         //
-        // Punto 3 (2026-09-25): SIN chequeo de `sigueVigente()` acá — ver el comentario de arriba.
-        // Esta escritura corre siempre que `start()` haya resuelto con éxito, la haya invalidado
-        // o no un `detener()` posterior.
+        // Punto 5 del rediseño (2026-09-25): chequeo DESPUÉS de esperar la semilla — si
+        // `detener()` invalidó este intento mientras tanto, no se toca `estadoInicioRecorrido`
+        // acá. `cerrarRecorridoEnOutbox` (el cierre de `detener()`, `cierre-recorrido.ts`) ya se
+        // encarga del mismo respaldo con el `eventId`/`ts` de ESTE intento, así que no se pierde:
+        // solo se evita escribirlo dos veces en paralelo (una desde acá, otra desde el cierre).
+        if (!sigueVigente()) return;
         await asegurarInicioRecorrido(
           estadoInicioRecorrido,
           { abrirOutbox, encolarEvento },
@@ -1220,27 +1168,10 @@ export function useGpsOperativo(
   // distinguir "Iniciando…" de un estado aparte — `guardandoRecorridoAnterior` se elimina (y su
   // texto en `next-control-sheet.tsx`) junto con el caso que describía (el outbox ya no bloquea
   // nada, ver el comentario de `ejecutarIniciar`).
-  // Punto 5.b (hallazgo de revisión, 2026-09-25): `iniciarConSingleFlight` puede lanzar
-  // `EsperaIniciarInvalidadoAgotadaError` si el intento invalidado que está esperando (ver su
-  // docblock, `seguimiento-continuo.ts`) nunca se asienta dentro del timeout — a esta altura no
-  // hay nada más que este hook pueda hacer para destrabarlo. `onStart={() => void gps.iniciar()}`
-  // (`operation-screen.tsx`) descarta la promesa con `void`: sin este `catch`, el rechazo se
-  // perdía como unhandled rejection y el chofer se quedaba mirando el botón sin ningún mensaje.
-  // `setIniciando(false)` sigue en el `finally` (verificado: cubre tanto el camino feliz como
-  // cualquier rechazo, incluido este).
   const iniciar = useCallback(async () => {
     setIniciando(true);
     try {
       await iniciarConSingleFlight(serializadorIniciar, ejecutarIniciar);
-    } catch (error) {
-      if (error instanceof EsperaIniciarInvalidadoAgotadaError) {
-        Sentry.captureException(error, {
-          tags: { contexto: 'gps-foreground', paso: 'iniciar-espera-invalidado-agotada' },
-        });
-        setErrorGps('No se pudo iniciar el GPS. Cierra y vuelve a abrir la app.');
-        return;
-      }
-      throw error;
     } finally {
       setIniciando(false);
     }
@@ -1280,11 +1211,8 @@ export function useGpsOperativo(
     const snapshotErroresEscritura = erroresEscritura.current;
     // Sync — invalida el `iniciar()` en curso, si lo hay, SIN esperar nada. Si ese intento ya
     // llamó `start()`, al resolver tarde se apaga y restaura solo (`detenerNativoYRestaurar` en
-    // `ejecutarIniciar`) — ver el chequeo `sigueVigente()` ahí. `causa: 'detener'` explícita
-    // (aunque sea el default, punto 4 de la revisión 2026-09-25): es justo la causa que SÍ debe
-    // apagar el nativo, a diferencia de un desmontaje — ver `causaInvalidacion()` en
-    // `ejecutarIniciar`.
-    serializadorIniciar.invalidarEnCurso('detener');
+    // `ejecutarIniciar`) — ver el chequeo `sigueVigente()` ahí.
+    serializadorIniciar.invalidarEnCurso();
 
     let resultadoStop: ResultadoStopNativo;
     try {
@@ -1313,10 +1241,9 @@ export function useGpsOperativo(
         { tags: { contexto: 'gps-foreground', paso: 'detener-stop-nativo' } },
       );
       // La promesa CRUDA de `stop()` (incluso la que venció el timeout) puede seguir resolviendo
-      // tarde contra el nativo — se registra para que el PRÓXIMO `iniciar()` la espere (vía
-      // `esperarPendiente()`, ver `ejecutarIniciar`) después de `ready()` y antes de
-      // `iniciarSeguimientoContinuo()`/`start()`: un stop tardío no puede tener permitido apagar
-      // un recorrido nuevo que arrancó mientras tanto.
+      // tarde contra el nativo — se registra para que el PRÓXIMO `iniciar()` la espere antes de
+      // `ready()/start()` (`esperarPendiente()`, ver `ejecutarIniciar`): un stop tardío no puede
+      // tener permitido apagar un recorrido nuevo que arrancó mientras tanto.
       serializadorRestauracion.registrar(resultadoStop.promesaAsentada);
       setErrorGps('No se pudo detener correctamente el GPS. Intenta nuevamente.');
       return;
@@ -1356,10 +1283,8 @@ export function useGpsOperativo(
     // disparada con `void`. `idCierre` es el mecanismo de "solo el cierre MÁS RECIENTE puede
     // tocar `resultado`/`errorGps`" — si el chofer alcanza a iniciar y terminar OTRO recorrido
     // mientras este cierre sigue en vuelo, ese resultado no debe pisar al del recorrido nuevo (D:
-    // `ejecutarIniciar` también bumpea `ultimoCierreId`, pero ya NO "apenas arranca" — desde el
-    // punto 6 de la revisión 2026-09-25 lo hace recién cuando `start()` resuelve con éxito y el
-    // intento sigue vigente, ver ese comentario — así que esta comparación invalida el cierre
-    // viejo en cuanto ese recorrido nuevo de verdad empieza a grabar, no antes).
+    // `ejecutarIniciar` también bumpea `ultimoCierreId` apenas arranca un intento nuevo, así que
+    // esta comparación invalida el cierre viejo incluso antes de que ese intento nuevo termine).
     // `montadoRef` cubre el caso de que el hook ya se haya desmontado para cuando esto resuelva.
     const idCierre = ++ultimoCierreId.current;
     const deviceIdCierre = deviceId;

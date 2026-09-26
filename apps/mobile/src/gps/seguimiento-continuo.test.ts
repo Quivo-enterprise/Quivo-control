@@ -15,13 +15,11 @@ import {
   crearManejadorReafirmarMovimiento,
   crearSerializadorRestauracion,
   detenerNativoConTimeout,
-  EsperaIniciarInvalidadoAgotadaError,
   iniciarConSingleFlight,
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
   restaurarComportamientoNormal,
-  TIMEOUT_ESPERA_INICIAR_INVALIDADO_MS,
   TIMEOUT_STOP_NATIVO_MS,
   type SdkSeguimientoContinuo,
 } from './seguimiento-continuo';
@@ -406,92 +404,6 @@ describe('crearSerializadorRestauracion', () => {
     await esperar;
     expect(resuelto).toBe(true);
   });
-
-  // Punto 1 (hallazgo de revisión, 2026-09-25): CASO REAL que motiva el cambio de "la más nueva
-  // gana" a "encadenar" — un `stop()` vencido (`detenerNativoConTimeout`) registrado por
-  // `detener()`, seguido de una restauración registrada por el `iniciar()` invalidado que se
-  // apaga solo (`detenerNativoYRestaurar`, `use-gps-operativo.ts`) MIENTRAS el `stop()` vencido
-  // todavía no se asentó. Con "la más nueva gana" (diseño anterior), `registrar()` de la segunda
-  // pisaba el slot sin esperar la primera — un `iniciar()` posterior que llama `esperarPendiente()`
-  // podía arrancar (`ready()`/`start()`) ANTES de que el `stop()` vencido tardío se asentara contra
-  // el nativo, reabriendo la ventana de carrera que este serializador existe para cerrar.
-  it('un stop vencido registrado, y luego una restauración registrada ANTES de que el stop se asiente: esperarPendiente() espera a las DOS', async () => {
-    const serializador = crearSerializadorRestauracion();
-    const orden: string[] = [];
-    const stopVencido = crearDiferida<void>();
-    const restauracion = crearDiferida<void>();
-
-    serializador.registrar(
-      stopVencido.promesa.then(() => {
-        orden.push('stop-vencido-asentado');
-      }),
-    );
-    serializador.registrar(
-      restauracion.promesa.then(() => {
-        orden.push('restauracion-asentada');
-      }),
-    );
-
-    let resuelto = false;
-    const esperar = serializador.esperarPendiente().then(() => {
-      resuelto = true;
-    });
-
-    // Ninguna de las dos resolvió todavía — esperarPendiente() no debe adelantarse a ninguna.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(resuelto).toBe(false);
-
-    // La restauración (la MÁS NUEVA) resuelve primero — con "la más nueva gana" esto ya habría
-    // sido suficiente para que esperarPendiente() se considerara satisfecho. Acá NO debe serlo:
-    // el stop vencido (la más VIEJA) sigue sin asentarse.
-    restauracion.resolver();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(resuelto).toBe(false);
-    expect(orden).toEqual(['restauracion-asentada']);
-
-    // Recién cuando el stop vencido por fin se asienta, esperarPendiente() resuelve.
-    stopVencido.resolver();
-    await esperar;
-    expect(resuelto).toBe(true);
-    expect(orden).toEqual(['restauracion-asentada', 'stop-vencido-asentado']);
-  });
-
-  // Contraparte: si el registro más viejo TERMINA EN RECHAZO, no debe tirar abajo la espera de
-  // la más nueva (ambas ramas del `Promise.all` interno están normalizadas con `.catch()`).
-  it('si la promesa más vieja encadenada rechaza, esperarPendiente() igual espera a la nueva y resuelve (nunca rechaza)', async () => {
-    const serializador = crearSerializadorRestauracion();
-    let rechazarVieja!: (error: Error) => void;
-    const vieja = new Promise<void>((_resolve, reject) => {
-      rechazarVieja = reject;
-    });
-    const nueva = crearDiferida<void>();
-
-    serializador.registrar(vieja);
-    serializador.registrar(nueva.promesa);
-    rechazarVieja(new Error('stop(): fallo simulado'));
-
-    let resuelto = false;
-    let rechazado = false;
-    const esperar = serializador
-      .esperarPendiente()
-      .then(() => {
-        resuelto = true;
-      })
-      .catch(() => {
-        rechazado = true;
-      });
-
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(resuelto).toBe(false); // la nueva todavía no resolvió — el rechazo de la vieja no adelanta nada
-
-    nueva.resolver();
-    await esperar;
-    expect(rechazado).toBe(false);
-    expect(resuelto).toBe(true);
-  });
 });
 
 describe('reafirmarMovimientoSiEstacionario', () => {
@@ -591,9 +503,9 @@ describe('crearCoordinadorIniciarDetener — single-flight de iniciar()/detener(
 
   it('single-flight: una segunda llamada mientras hay un iniciar() en curso debe reusar la MISMA promesa registrada', async () => {
     const coordinador = crearCoordinadorIniciarDetener();
-    coordinador.nuevaGeneracion();
+    const generacion = coordinador.nuevaGeneracion();
     const { promesa, resolver } = crearDiferida<void>();
-    coordinador.registrarPromesaIniciar(promesa);
+    coordinador.registrarPromesaIniciar(promesa, generacion);
 
     expect(coordinador.promesaIniciarEnCurso()).toBe(promesa);
     resolver();
@@ -602,9 +514,9 @@ describe('crearCoordinadorIniciarDetener — single-flight de iniciar()/detener(
 
   it('la promesa registrada se limpia sola al resolver: promesaIniciarEnCurso() vuelve a null', async () => {
     const coordinador = crearCoordinadorIniciarDetener();
-    coordinador.nuevaGeneracion();
+    const generacion = coordinador.nuevaGeneracion();
     const { promesa, resolver } = crearDiferida<void>();
-    coordinador.registrarPromesaIniciar(promesa);
+    coordinador.registrarPromesaIniciar(promesa, generacion);
 
     resolver();
     await promesa;
@@ -638,8 +550,8 @@ describe('crearCoordinadorIniciarDetener — single-flight de iniciar()/detener(
 
   it('iniciarEnCursoInvalidado(): false mientras el intento en curso sigue vigente', () => {
     const coordinador = crearCoordinadorIniciarDetener();
-    coordinador.nuevaGeneracion();
-    coordinador.registrarPromesaIniciar(new Promise<void>(() => {}));
+    const generacion = coordinador.nuevaGeneracion();
+    coordinador.registrarPromesaIniciar(new Promise<void>(() => {}), generacion);
     expect(coordinador.iniciarEnCursoInvalidado()).toBe(false);
   });
 
@@ -648,8 +560,8 @@ describe('crearCoordinadorIniciarDetener — single-flight de iniciar()/detener(
   // propio outbox) — el single-flight de `iniciar()` sigue bloqueado hasta que por fin resuelva.
   it('iniciarEnCursoInvalidado(): true cuando detener() invalidó un iniciar() que sigue en curso', () => {
     const coordinador = crearCoordinadorIniciarDetener();
-    coordinador.nuevaGeneracion();
-    coordinador.registrarPromesaIniciar(new Promise<void>(() => {}));
+    const generacion = coordinador.nuevaGeneracion();
+    coordinador.registrarPromesaIniciar(new Promise<void>(() => {}), generacion);
 
     coordinador.invalidarEnCurso();
 
@@ -658,9 +570,9 @@ describe('crearCoordinadorIniciarDetener — single-flight de iniciar()/detener(
 
   it('iniciarEnCursoInvalidado(): vuelve a false una vez que el intento invalidado termina de resolver', async () => {
     const coordinador = crearCoordinadorIniciarDetener();
-    coordinador.nuevaGeneracion();
+    const generacion = coordinador.nuevaGeneracion();
     const { promesa, resolver } = crearDiferida<void>();
-    coordinador.registrarPromesaIniciar(promesa);
+    coordinador.registrarPromesaIniciar(promesa, generacion);
     coordinador.invalidarEnCurso();
     expect(coordinador.iniciarEnCursoInvalidado()).toBe(true);
 
@@ -688,7 +600,7 @@ describe('crearCoordinadorIniciarDetener — single-flight de iniciar()/detener(
   it('un iniciar() nuevo (tras resolver el anterior) arranca vigente y sin invalidar — el ciclo se reinicia limpio', async () => {
     const coordinador = crearCoordinadorIniciarDetener();
     const generacionA = coordinador.nuevaGeneracion();
-    coordinador.registrarPromesaIniciar(Promise.resolve());
+    coordinador.registrarPromesaIniciar(Promise.resolve(), generacionA);
     coordinador.invalidarEnCurso();
     await Promise.resolve();
     await Promise.resolve();
@@ -696,57 +608,6 @@ describe('crearCoordinadorIniciarDetener — single-flight de iniciar()/detener(
     const generacionB = coordinador.nuevaGeneracion();
     expect(coordinador.estaVigente(generacionB)).toBe(true);
     expect(coordinador.estaVigente(generacionA)).toBe(false);
-  });
-
-  // Punto 4 (hallazgo de revisión, 2026-09-25): `causaInvalidacion()` — `ejecutarIniciar`
-  // (`use-gps-operativo.ts`) la usa para decidir si un intento invalidado que resuelve tarde debe
-  // apagar el nativo (`causa: 'detener'`) o dejarlo corriendo (`causa: 'desmontaje'`).
-  describe('causaInvalidacion() — punto 4 de la revisión 2026-09-25', () => {
-    it('null mientras no hay ninguna invalidación', () => {
-      const coordinador = crearCoordinadorIniciarDetener();
-      coordinador.nuevaGeneracion();
-      expect(coordinador.causaInvalidacion()).toBeNull();
-    });
-
-    it('sin argumento, invalidarEnCurso() usa "detener" por default', () => {
-      const coordinador = crearCoordinadorIniciarDetener();
-      coordinador.nuevaGeneracion();
-      coordinador.invalidarEnCurso();
-      expect(coordinador.causaInvalidacion()).toBe('detener');
-    });
-
-    it('con causa "desmontaje" explícita: causaInvalidacion() la refleja', () => {
-      const coordinador = crearCoordinadorIniciarDetener();
-      coordinador.nuevaGeneracion();
-      coordinador.invalidarEnCurso('desmontaje');
-      expect(coordinador.causaInvalidacion()).toBe('desmontaje');
-    });
-
-    it('"detener" es sticky: una invalidación por "desmontaje" posterior no la pisa', () => {
-      const coordinador = crearCoordinadorIniciarDetener();
-      coordinador.nuevaGeneracion();
-      coordinador.invalidarEnCurso('detener');
-      coordinador.invalidarEnCurso('desmontaje');
-      expect(coordinador.causaInvalidacion()).toBe('detener');
-    });
-
-    it('"desmontaje" primero, "detener" después: "detener" pasa a ser la causa (sigue siendo la más segura)', () => {
-      const coordinador = crearCoordinadorIniciarDetener();
-      coordinador.nuevaGeneracion();
-      coordinador.invalidarEnCurso('desmontaje');
-      coordinador.invalidarEnCurso('detener');
-      expect(coordinador.causaInvalidacion()).toBe('detener');
-    });
-
-    it('se resetea a null en nuevaGeneracion() — un intento fresco no hereda la causa del anterior', () => {
-      const coordinador = crearCoordinadorIniciarDetener();
-      coordinador.nuevaGeneracion();
-      coordinador.invalidarEnCurso('detener');
-      expect(coordinador.causaInvalidacion()).toBe('detener');
-
-      coordinador.nuevaGeneracion();
-      expect(coordinador.causaInvalidacion()).toBeNull();
-    });
   });
 });
 
@@ -764,31 +625,6 @@ describe('detenerNativoConTimeout (rediseño 2026-09-25) — stop() colgado/rech
     const error = new Error('stop(): fallo nativo simulado');
     const sdk = { stop: vi.fn(async () => { throw error; }) };
     await expect(detenerNativoConTimeout(sdk)).resolves.toMatchObject({ ok: false, error });
-  });
-
-  // Punto 7 (hallazgo de revisión, 2026-09-25): `sdk.stop()` que TIRA SINCRÓNICAMENTE (no
-  // devuelve una promesa rechazada, lanza directo) — antes escapaba del `.then()` que lo
-  // envolvía y de todo el `try/finally` del timer, propagándose como un rechazo de
-  // `detenerNativoConTimeout` en vez de resolver `{ok:false, promesaAsentada}` como documenta su
-  // contrato.
-  it('stop() tira SINCRÓNICAMENTE (no devuelve una promesa): no propaga, resuelve ok:false igual que un rechazo async', async () => {
-    const error = new Error('stop(): throw sincrónico simulado');
-    const sdk = {
-      stop: vi.fn((): Promise<unknown> => {
-        throw error;
-      }),
-    };
-    await expect(detenerNativoConTimeout(sdk)).resolves.toMatchObject({ ok: false, error });
-  });
-
-  it('stop() tira sincrónicamente: promesaAsentada tampoco rechaza', async () => {
-    const sdk = {
-      stop: vi.fn((): Promise<unknown> => {
-        throw new Error('stop(): throw sincrónico simulado');
-      }),
-    };
-    const { promesaAsentada } = await detenerNativoConTimeout(sdk);
-    await expect(promesaAsentada).resolves.toBeUndefined();
   });
 
   it('stop() colgado (nunca resuelve): vence el timeout y devuelve ok:false sin esperar para siempre', async () => {
@@ -905,7 +741,7 @@ describe('Rediseño iniciar()/detener() (bug en producción, 2026-09-25) — det
       }
       orden.push('outbox-confirmado');
     })();
-    coordinador.registrarPromesaIniciar(ejecutarIniciarSimulado);
+    coordinador.registrarPromesaIniciar(ejecutarIniciarSimulado, generacion);
 
     // --- El chofer toca "Finalizar" YA, con iniciar() todavía colgado en el outbox. ---
     coordinador.invalidarEnCurso(); // sync — nada que esperar acá
@@ -957,8 +793,8 @@ describe('iniciarConSingleFlight (hallazgos de revisión 1, 2, 7, 2026-09-25) �
   it('con un iniciar() en curso todavía VIGENTE: reusa la MISMA promesa, no arranca un segundo intento', async () => {
     const coordinador = crearCoordinadorIniciarDetener();
     const { promesa, resolver } = crearDiferida<void>();
-    coordinador.nuevaGeneracion();
-    coordinador.registrarPromesaIniciar(promesa);
+    const generacion = coordinador.nuevaGeneracion();
+    coordinador.registrarPromesaIniciar(promesa, generacion);
     const ejecutarIntento = vi.fn(async (_g: number) => {});
 
     const resultado = iniciarConSingleFlight(coordinador, ejecutarIntento);
@@ -975,7 +811,7 @@ describe('iniciarConSingleFlight (hallazgos de revisión 1, 2, 7, 2026-09-25) �
     const coordinador = crearCoordinadorIniciarDetener();
     const { promesa: intentoViejo, resolver: resolverViejo } = crearDiferida<void>();
     const generacionVieja = coordinador.nuevaGeneracion();
-    coordinador.registrarPromesaIniciar(intentoViejo);
+    coordinador.registrarPromesaIniciar(intentoViejo, generacionVieja);
 
     // El chofer toca "Finalizar" — invalida el intento en curso mientras sigue en vuelo (p. ej.
     // todavía en `ready()`/`start()`).
@@ -1016,62 +852,5 @@ describe('iniciarConSingleFlight (hallazgos de revisión 1, 2, 7, 2026-09-25) �
     const ejecutarIntentoB = vi.fn(async (_g: number) => {});
     await iniciarConSingleFlight(coordinador, ejecutarIntentoB);
     expect(ejecutarIntentoB).toHaveBeenCalledTimes(1);
-  });
-
-  // Punto 5.a (hallazgo de revisión, 2026-09-25): un intento invalidado que TERMINA EN RECHAZO
-  // (p. ej. `ejecutarIniciar` propagando un fallo real de `start()` — ver su `catch`,
-  // `use-gps-operativo.ts`) no debe abortar el toque fresco del chofer con ESE error viejo.
-  it('intento invalidado que RECHAZA al asentarse: el toque fresco igual arranca (no propaga el rechazo viejo)', async () => {
-    const coordinador = crearCoordinadorIniciarDetener();
-    let rechazarViejo!: (error: Error) => void;
-    const intentoViejo = new Promise<void>((_resolve, reject) => {
-      rechazarViejo = reject;
-    });
-    coordinador.nuevaGeneracion();
-    coordinador.registrarPromesaIniciar(intentoViejo);
-    coordinador.invalidarEnCurso();
-
-    const ejecutarIntentoNuevo = vi.fn(async (_g: number) => {});
-    const resultado = iniciarConSingleFlight(coordinador, ejecutarIntentoNuevo);
-
-    // El intento viejo se asienta con un RECHAZO (no un resolve) — simula `ejecutarIniciar`
-    // propagando un fallo real de `start()` mientras ya estaba invalidado.
-    rechazarViejo(new Error('start(): fallo nativo simulado'));
-
-    await expect(resultado).resolves.toBeUndefined();
-    expect(ejecutarIntentoNuevo).toHaveBeenCalledTimes(1);
-  });
-
-  // Punto 5.b (hallazgo de revisión, 2026-09-25): tope de espera — si el intento invalidado
-  // nunca se asienta (outbox colgado para siempre), `iniciarConSingleFlight` no puede dejar
-  // "Comenzar" esperando sin límite: rechaza con `EsperaIniciarInvalidadoAgotadaError` pasado el
-  // timeout inyectado.
-  it('intento invalidado que NUNCA se asienta: rechaza con EsperaIniciarInvalidadoAgotadaError pasado el timeout', async () => {
-    vi.useFakeTimers();
-    try {
-      const coordinador = crearCoordinadorIniciarDetener();
-      const intentoColgado = new Promise<void>(() => {}); // nunca resuelve ni rechaza
-      coordinador.nuevaGeneracion();
-      coordinador.registrarPromesaIniciar(intentoColgado);
-      coordinador.invalidarEnCurso();
-
-      const ejecutarIntentoNuevo = vi.fn(async (_g: number) => {});
-      const timeoutMs = 1_000;
-      const resultado = iniciarConSingleFlight(coordinador, ejecutarIntentoNuevo, timeoutMs);
-      // Evita un unhandled-rejection warning entre el `advanceTimersByTimeAsync` y el `await`
-      // final de abajo — el rechazo real se asierta con `expect(...).rejects` más abajo.
-      resultado.catch(() => {});
-
-      await vi.advanceTimersByTimeAsync(timeoutMs);
-
-      await expect(resultado).rejects.toBeInstanceOf(EsperaIniciarInvalidadoAgotadaError);
-      expect(ejecutarIntentoNuevo).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('el timeout de espera por default es TIMEOUT_ESPERA_INICIAR_INVALIDADO_MS (15 s) cuando no se inyecta uno', () => {
-    expect(TIMEOUT_ESPERA_INICIAR_INVALIDADO_MS).toBe(15_000);
   });
 });

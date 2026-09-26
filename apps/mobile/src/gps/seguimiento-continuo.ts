@@ -273,22 +273,14 @@ export function crearManejadorReafirmarMovimiento(
  * que `trackingRef`) y la usa desde `detener()`/`iniciar()`.
  */
 export interface SerializadorRestauracion {
-  /** Registra una promesa "en vuelo" — a diferencia de la versión anterior, YA NO reemplaza a
-   * la que estuviera registrada: la encadena. El nuevo slot es `Promise.all([anterior,
-   * nueva])`, así que `esperarPendiente()` termina esperando a las DOS, sin importar cuál
-   * resuelva primero. Necesario porque un `detener()` puede registrar un `stop()` vencido justo
-   * antes de que otro camino (p. ej. un `iniciar()` invalidado que se apaga solo, ver
-   * `detenerNativoYRestaurar` en `use-gps-operativo.ts`) registre su propia restauración — con
-   * "la más nueva gana" (diseño anterior), la primera quedaba sin nadie que la esperara. Ambas
-   * ramas del `Promise.all` están normalizadas para no rechazar nunca (`.catch()`) — un fallo
-   * de cualquiera de las dos no debe tirar abajo la cadena ni la próxima `esperarPendiente()`.
-   * Al resolver, se limpia sola SOLO si nadie la reemplazó ni la consumió mientras tanto — evita
-   * que una limpieza tardía borre el registro de una promesa más nueva que la reemplazó. */
+  /** Registra una promesa "en vuelo" — reemplaza cualquier registro anterior sin esperarlo
+   * (si `detener()` corriera dos veces seguidas, cosa que no debería pasar en la práctica, la
+   * más nueva gana). Al resolver (éxito o fallo, `finally`), se limpia sola SOLO si nadie la
+   * reemplazó ni la consumió mientras tanto — evita que una limpieza tardía borre el registro
+   * de una promesa más nueva que la reemplazó. */
   registrar(promesa: Promise<void>): void;
-  /** Espera TODO lo que esté registrado — incluido lo que se registre mientras esta llamada
-   * sigue esperando (un `registrar()` que llega en el medio no queda afuera). Si no hay nada
-   * registrado, resuelve de inmediato. Después de esta llamada, el slot queda vacío salvo que
-   * algo nuevo se haya registrado en el ínterin. */
+  /** Si hay una promesa registrada, la espera y limpia el registro; si no hay ninguna, resuelve
+   * de inmediato. Después de esta llamada, el slot siempre queda vacío. */
   esperarPendiente(): Promise<void>;
 }
 
@@ -297,25 +289,15 @@ export function crearSerializadorRestauracion(): SerializadorRestauracion {
 
   return {
     registrar(promesa: Promise<void>): void {
-      const anterior = enCurso;
-      const promesaNormalizada = promesa.catch(() => undefined);
-      const nuevoSlot: Promise<void> = anterior
-        ? Promise.all([anterior, promesaNormalizada]).then(() => undefined)
-        : promesaNormalizada;
-      enCurso = nuevoSlot;
-      void nuevoSlot.finally(() => {
-        if (enCurso === nuevoSlot) enCurso = null;
+      enCurso = promesa;
+      void promesa.finally(() => {
+        if (enCurso === promesa) enCurso = null;
       });
     },
     async esperarPendiente(): Promise<void> {
-      // Loop en vez de un solo `await`: si algo se registra MIENTRAS este `await` está en
-      // vuelo, ese `registrar()` reemplaza `enCurso` por un slot nuevo (encadenado sobre el que
-      // se está esperando ahora) — hay que volver a leerlo y esperar también ese slot nuevo,
-      // hasta que quede estable/vacío.
-      while (enCurso) {
-        const slot = enCurso;
-        await slot;
-        if (enCurso === slot) enCurso = null;
+      if (enCurso) {
+        await enCurso;
+        enCurso = null;
       }
     },
   };
@@ -363,8 +345,9 @@ export interface CoordinadorIniciarDetener {
    * REAL de `iniciar()`, para obtener la generación de ESE intento. */
   nuevaGeneracion(): number;
   /** Registra la promesa de ESE intento como "en curso" (single-flight) — se limpia sola al
-   * resolver (éxito o rechazo). */
-  registrarPromesaIniciar(promesa: Promise<void>): void;
+   * resolver (éxito o rechazo). `generacion` es la que devolvió `nuevaGeneracion()` para ESE
+   * mismo intento. */
+  registrarPromesaIniciar(promesa: Promise<void>, generacion: number): void;
   /** `true` si `generacion` sigue siendo la del intento de `iniciar()` en curso Y no fue
    * invalidada por un `detener()`. `ejecutarIniciar` la chequea DESPUÉS de cada `await` —
    * incluidos permisos, `generarEventId`, `ready`, `start`, outbox — antes de cualquier paso
@@ -373,34 +356,13 @@ export interface CoordinadorIniciarDetener {
   /** `detener()` llama esto ANTES de tocar nada más (nativo, suscripciones, outbox, estado) —
    * SIN esperar ni un microtask. Invalida el `iniciar()` en curso, si lo hay; no-op si no hay
    * ninguno. A diferencia del diseño anterior, no hay timeout que esperar: la invalidación es
-   * inmediata porque `detener()` nunca espera al `iniciar()` en curso.
-   *
-   * Punto 4 (hallazgo de revisión, 2026-09-25): `causa` distingue POR QUÉ se invalida — el
-   * desmontaje del hook (el chofer navega fuera de la pantalla mientras `iniciar()` sigue en
-   * curso) y un `detener()` real (el chofer tocó "Finalizar") necesitan tratamiento DISTINTO en
-   * `ejecutarIniciar` cuando el intento invalidado, al resolver tarde, descubre que ya no es
-   * vigente: un `detener()` SÍ tiene que apagar el nativo que este intento prendió (el chofer
-   * pidió cerrar el recorrido); un desmontaje NO — el nativo debe seguir grabando (mismo
-   * `stopOnTerminate: false` que sostiene el re-enganche cuando el chofer mata la app a mitad de
-   * turno), porque un remount de la pantalla se re-engancha solo vía `getState().enabled` (ver el
-   * `useEffect` de re-enganche, `use-gps-operativo.ts`) — llamar `stop()` acá cortaría un
-   * recorrido que el chofer nunca pidió cerrar. Default `'detener'`: es la causa más segura —
-   * un llamador que no pasa `causa` nunca deja el nativo corriendo por accidente. */
-  invalidarEnCurso(causa?: 'detener' | 'desmontaje'): void;
-  /** Causa de la invalidación vigente, o `null` si el intento en curso no fue invalidado. Si
-   * `invalidarEnCurso()` se llama más de una vez para el mismo intento (p. ej. `detener()` y
-   * luego un desmontaje, o viceversa), `'detener'` es STICKY — nunca lo pisa una invalidación por
-   * `'desmontaje'` posterior, porque apagar el nativo sigue siendo lo correcto una vez que el
-   * chofer ya pidió cerrar el recorrido. Se resetea a `null` en `nuevaGeneracion()`. */
-  causaInvalidacion(): 'detener' | 'desmontaje' | null;
+   * inmediata porque `detener()` nunca espera al `iniciar()` en curso. */
+  invalidarEnCurso(): void;
   /** `true` si hay un `iniciar()` en curso cuya generación YA fue invalidada por un
-   * `detener()` — hoy es uso INTERNO de `iniciarConSingleFlight` (más abajo), no de la UI: la
-   * distinción "Iniciando…" / "Guardando recorrido anterior…" que motivó este método se eliminó
-   * junto con el estado `guardandoRecorridoAnterior` (ver `use-gps-operativo.ts`) cuando la fase
-   * 2 del outbox se desacopló del single-flight — un intento invalidado ya no bloquea nada visible
-   * para el chofer. Lo que sigue necesitando este método: `iniciarConSingleFlight` lo usa para
-   * decidir si esperar a que ESE intento termine de asentarse antes de arrancar uno fresco, en
-   * vez de reusarlo tal cual (un intento invalidado nunca deja `tracking=true`). */
+   * `detener()` — la UI (`use-gps-operativo.ts`/`operation-screen.tsx`) lo usa para distinguir
+   * "Iniciando…" (intento fresco, todavía vigente) de "Guardando recorrido anterior…" (intento
+   * invalidado que sigue colgado en su propio outbox, bloqueando el single-flight de (1) hasta
+   * que por fin resuelva). */
   iniciarEnCursoInvalidado(): boolean;
   /** Devuelve la promesa del `detener()` en curso, o `null` — mismo mecanismo single-flight
    * que `promesaIniciarEnCurso()`, para el wrapper `detener()`. */
@@ -413,7 +375,6 @@ export interface CoordinadorIniciarDetener {
 export function crearCoordinadorIniciarDetener(): CoordinadorIniciarDetener {
   let ultimaGeneracion = 0;
   let invalidada = false;
-  let causaInvalidacionActual: 'detener' | 'desmontaje' | null = null;
   let promesaIniciar: Promise<void> | null = null;
   let promesaDetener: Promise<void> | null = null;
 
@@ -424,48 +385,30 @@ export function crearCoordinadorIniciarDetener(): CoordinadorIniciarDetener {
     nuevaGeneracion(): number {
       ultimaGeneracion += 1;
       invalidada = false;
-      causaInvalidacionActual = null;
       return ultimaGeneracion;
     },
-    registrarPromesaIniciar(promesa: Promise<void>): void {
+    registrarPromesaIniciar(promesa: Promise<void>, _generacion: number): void {
       // F (hallazgos 9/10, limpieza): antes se guardaba también `generacionPromesaIniciar` para
       // compararla contra `ultimaGeneracion` en `iniciarEnCursoInvalidado()` — con el
       // single-flight garantizado (nunca hay un `nuevaGeneracion()` nuevo mientras
       // `promesaIniciar` siga sin resolver, ver el wrapper `iniciar()` en `use-gps-operativo.ts`)
       // esa comparación nunca podía dar `true` en la práctica: doble generación redundante. Lo
       // único que `iniciarEnCursoInvalidado()` necesita es identidad de promesa (¿hay una
-      // registrada?) + el flag `invalidada`.
-      //
-      // Punto 5.c (hallazgo de revisión, 2026-09-25): antes este método recibía `generacion` sin
-      // usarlo (parámetro muerto) — se quitó de la firma. `ejecutarIniciar` sigue necesitando SU
-      // propia generación para `estaVigente(generacion)`, pero la obtiene directo de
-      // `nuevaGeneracion()`, nunca de este método.
+      // registrada?) + el flag `invalidada`. Se conserva `generacion` en la firma pública
+      // (`CoordinadorIniciarDetener`) porque `ejecutarIniciar` sigue necesitándola para su
+      // propio `sigueVigente()` vía `estaVigente(generacion)`.
       promesaIniciar = promesa;
-      // Punto 5.c: `.catch(()=>{})` — sin esto, un intento que TERMINA en rechazo (p. ej.
-      // `ejecutarIniciar` propagando un fallo real de `start()`) disparaba un unhandled rejection
-      // acá: `promesa.finally(...)` no consume el rechazo, solo reacciona a él. El rechazo real
-      // sigue llegando a quien de verdad lo espera (`iniciarConSingleFlight`/el wrapper
-      // `iniciar()`) — este `.catch()` es solo para que ESTA suscripción interna no cuente
-      // aparte como una segunda promesa sin manejar.
       void promesa.finally(() => {
         if (promesaIniciar === promesa) {
           promesaIniciar = null;
         }
-      }).catch(() => {});
+      });
     },
     estaVigente(generacionAEvaluar: number): boolean {
       return generacionAEvaluar === ultimaGeneracion && !invalidada;
     },
-    invalidarEnCurso(causa: 'detener' | 'desmontaje' = 'detener'): void {
+    invalidarEnCurso(): void {
       invalidada = true;
-      // Punto 4: `'detener'` es sticky — nunca lo pisa una invalidación por `'desmontaje'`
-      // posterior (ver el docblock de la interfaz para el porqué).
-      if (causaInvalidacionActual !== 'detener') {
-        causaInvalidacionActual = causa;
-      }
-    },
-    causaInvalidacion(): 'detener' | 'desmontaje' | null {
-      return causaInvalidacionActual;
     },
     iniciarEnCursoInvalidado(): boolean {
       return promesaIniciar !== null && invalidada;
@@ -501,10 +444,7 @@ export function crearCoordinadorIniciarDetener(): CoordinadorIniciarDetener {
  * que venció el timeout puede seguir resolviendo tarde contra el nativo; si el chofer reintenta
  * "Finalizar" con éxito y después toca "Iniciar" de nuevo, ese `stop()` tardío no puede tener
  * permitido apagar el recorrido NUEVO al resolver — el próximo `iniciar()` espera esta promesa
- * (vía `esperarPendiente()`) DESPUÉS de `ready()` y ANTES de `iniciarSeguimientoContinuo()`
- * (que es quien llama `start()`) — no "antes de los dos" como decía una versión anterior de
- * este comentario: `ejecutarIniciar` (`use-gps-operativo.ts`) llama `ready()` primero, y recién
- * después `esperarPendiente()` seguido de `iniciarSeguimientoContinuo()`/`start()`.
+ * (vía `esperarPendiente()`) antes de `ready()/start()`.
  */
 export const TIMEOUT_STOP_NATIVO_MS = 5_000;
 
@@ -527,20 +467,10 @@ export async function detenerNativoConTimeout(
   const promesaTimeout = new Promise<'timeout'>((resolve) => {
     idTimer = setTimeout(() => resolve('timeout'), timeoutMs);
   });
-  // `Promise.resolve().then(() => sdk.stop())` en vez de `sdk.stop().then(...)` directo: un
-  // `stop()` que TIRA sincrónicamente (en vez de devolver una promesa rechazada) escapaba de
-  // este `.then()` — la llamada a `sdk.stop()` en sí ya lanzaba, antes de que hubiera ningún
-  // `.then()`/`.catch()` escuchando, y el `try/finally` de más abajo ni llegaba a correr (el
-  // throw pasaba por encima, dejando el timer sin `clearTimeout` y sin devolver el
-  // `{ok:false, promesaAsentada}` documentado). Diferir la llamada a un microtask dentro de una
-  // promesa ya resuelta convierte cualquier throw sincrónico en un rechazo normal de promesa,
-  // capturado igual que un rechazo asíncrono por el `.then(...)` de abajo.
-  const promesaStopNormalizada = Promise.resolve()
-    .then(() => sdk.stop())
-    .then(
-      () => ({ ok: true }) as const,
-      (error: unknown) => ({ ok: false, error }) as const,
-    );
+  const promesaStopNormalizada = sdk.stop().then(
+    () => ({ ok: true }) as const,
+    (error: unknown) => ({ ok: false, error }) as const,
+  );
   // Nunca rechaza — es solo la señal de "el stop nativo, tarde o temprano, se asentó", sin
   // importar si terminó en éxito o error. El llamador la usa para serializar el PRÓXIMO
   // `iniciar()` detrás de ella, no para saber cómo terminó.
@@ -561,31 +491,6 @@ export async function detenerNativoConTimeout(
   }
 }
 
-/** Punto 5.b (hallazgo de revisión, 2026-09-25): tope de espera a que un `iniciar()` invalidado
- * por un `detener()` termine de asentarse antes de arrancar uno fresco (ver
- * `iniciarConSingleFlight`, abajo). Ese intento invalidado puede colgarse de verdad — la fase que
- * puede colgarse (`sembrarCumplimientos`/`abrirOutbox`/`asegurarInicioRecorrido` contra SQLite
- * trabada) es justo la razón de ser de todo este rediseño (ver el docblock del módulo) — así que
- * sin este tope, un "Comenzar" tras un "Finalizar" con el intento anterior colgado podía dejar al
- * chofer esperando para siempre, sin ningún mensaje ni forma de reintentar. Exportada (no una
- * constante interna) para que los tests puedan inyectar un valor chico con fake timers en vez de
- * esperar 15 s reales. */
-export const TIMEOUT_ESPERA_INICIAR_INVALIDADO_MS = 15_000;
-
-/** Punto 5.b: lanzada por `iniciarConSingleFlight` cuando el intento invalidado que está
- * esperando no se asienta dentro de `TIMEOUT_ESPERA_INICIAR_INVALIDADO_MS`. `iniciar()`
- * (`use-gps-operativo.ts`) la distingue de cualquier otro error para mostrar un mensaje
- * específico ("No se pudo iniciar el GPS. Cierra y vuelve a abrir la app.") en vez del genérico —
- * a esta altura ya no hay nada más que un reinicio completo de la app pueda destrabar (el intento
- * colgado sigue vivo, bloqueando el single-flight, hasta que su propio outbox por fin resuelva o
- * el proceso se reinicie). */
-export class EsperaIniciarInvalidadoAgotadaError extends Error {
-  constructor() {
-    super('Timeout esperando a que un iniciar() invalidado termine de asentarse');
-    this.name = 'EsperaIniciarInvalidadoAgotadaError';
-  }
-}
-
 /**
  * A (hallazgos de revisión 1, 2, 7, 2026-09-25): cuerpo PURO del wrapper público `iniciar()`
  * (`use-gps-operativo.ts`) — extraído para poder testear con fake timers/promesas de control
@@ -598,43 +503,21 @@ export class EsperaIniciarInvalidadoAgotadaError extends Error {
  * `ejecutarIntento(generacion)` es `ejecutarIniciar` en producción (o un fake en los tests) — su
  * promesa se considera "completa" apenas resuelve, sin importar qué siga corriendo desacoplado
  * dentro de ella (la fase 2 del outbox, ver el docblock de `ejecutarIniciar`).
- *
- * `timeoutEsperaInvalidadoMs` (punto 5.b): tope de la espera al intento invalidado — parámetro,
- * no la constante de módulo directa, para que los tests lo acoten con fake timers sin depender de
- * `TIMEOUT_ESPERA_INICIAR_INVALIDADO_MS` real.
  */
 export async function iniciarConSingleFlight(
   coordinador: CoordinadorIniciarDetener,
   ejecutarIntento: (generacion: number) => Promise<void>,
-  timeoutEsperaInvalidadoMs: number = TIMEOUT_ESPERA_INICIAR_INVALIDADO_MS,
 ): Promise<void> {
   for (;;) {
     let promesa = coordinador.promesaIniciarEnCurso();
     if (promesa && coordinador.iniciarEnCursoInvalidado()) {
-      // Punto 5.a: `.catch(()=>{})` — un intento invalidado que TERMINA en rechazo (p. ej.
-      // `ejecutarIniciar` propagando un fallo real de `start()`) no debe abortar este toque
-      // fresco del chofer con ESE error viejo; solo importa que ya se asentó, sin importar cómo.
-      // Punto 5.b: acotado con un timeout — si el intento invalidado nunca se asienta, se lanza
-      // `EsperaIniciarInvalidadoAgotadaError` en vez de esperar para siempre.
-      let venceTimeout = false;
-      const idTimer = { current: undefined as ReturnType<typeof setTimeout> | undefined };
-      const promesaTimeout = new Promise<void>((resolve) => {
-        idTimer.current = setTimeout(() => {
-          venceTimeout = true;
-          resolve();
-        }, timeoutEsperaInvalidadoMs);
-      });
-      await Promise.race([promesa.catch(() => undefined), promesaTimeout]);
-      if (idTimer.current !== undefined) clearTimeout(idTimer.current);
-      if (venceTimeout) {
-        throw new EsperaIniciarInvalidadoAgotadaError();
-      }
+      await promesa;
       continue; // el intento invalidado ya se asentó — arrancar uno nuevo, no reusarlo.
     }
     if (!promesa) {
       const generacion = coordinador.nuevaGeneracion();
       promesa = ejecutarIntento(generacion);
-      coordinador.registrarPromesaIniciar(promesa);
+      coordinador.registrarPromesaIniciar(promesa, generacion);
     }
     await promesa;
     return;
