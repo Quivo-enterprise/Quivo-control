@@ -445,73 +445,82 @@ export default function EnVivoPage() {
           nadie reportando ahora mismo. El mapa sigue montado (el usuario puede cambiar el
           filtro sin perder contexto), a diferencia del empty-state de página completa de
           arriba (que es para "no hay NADA en toda la jornada"). */}
-      {posicionesFiltradas.length === 0 && (
-        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
-          <AlertTriangle size={14} style={{ color: 'var(--qv-color-accent)' }} />
-          <span>Ningún vehículo de esta línea está reportando ahora. Probá con &quot;Todas las líneas&quot;.</span>
-        </div>
-      )}
+      {/* Contenedor live SIEMPRE montado: los lectores de pantalla solo anuncian cambios de
+          contenido en una región aria-live que ya estaba en el DOM antes de poblarse; si el
+          toast se monta condicionalmente ya con su texto, NVDA/VoiceOver no lo anuncian. */}
+      <div role="status" aria-live="polite">
+        {posicionesFiltradas.length === 0 && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
+            <AlertTriangle size={14} style={{ color: 'var(--qv-color-accent)' }} />
+            <span>Ningún vehículo de esta línea está reportando ahora. Probá con &quot;Todas las líneas&quot;.</span>
+          </div>
+        )}
+      </div>
 
       {/* FLOATING ALERT TOASTS */}
-      {sesionSeleccionada && presentacion.esFalla && (
-        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}>
-          <AlertTriangle size={14} />
-          <span>{presentacion.etiqueta}: El teléfono no sincroniza con el servidor</span>
-        </div>
-      )}
+      <div role="alert" aria-live="assertive">
+        {sesionSeleccionada && presentacion.esFalla && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}>
+            <AlertTriangle size={14} />
+            <span>{presentacion.etiqueta}: El teléfono no sincroniza con el servidor</span>
+          </div>
+        )}
+      </div>
 
-      {sesionSeleccionada && estado === 'detenido' && (
-        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
-          <Clock size={14} style={{ color: 'var(--qv-color-accent)' }} />
-          <span>Vehículo detenido: Posición estacionaria registrada</span>
-        </div>
-      )}
+      <div role="status" aria-live="polite">
+        {sesionSeleccionada && estado === 'detenido' && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}>
+            <Clock size={14} style={{ color: 'var(--qv-color-accent)' }} />
+            <span>Vehículo detenido: Posición estacionaria registrada</span>
+          </div>
+        )}
 
-      {finalizada && (
-        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-primary)', color: 'var(--qv-text-primary)' }}>
-          <CheckCircle2 size={14} style={{ color: 'var(--qv-color-success)' }} />
-          <span>Sesión finalizada</span>
-          <button
-            type="button"
-            onClick={() => router.push(`/reportes/recorridos/${sesionSeleccionada}`)}
-            style={{
-              background: 'var(--qv-color-primary)',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: '999px',
-              padding: '0.15rem 0.5rem',
-              fontSize: '0.6875rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Ver histórico →
-          </button>
-        </div>
-      )}
+        {finalizada && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-primary)', color: 'var(--qv-text-primary)' }}>
+            <CheckCircle2 size={14} style={{ color: 'var(--qv-color-success)' }} />
+            <span>Sesión finalizada</span>
+            <button
+              type="button"
+              onClick={() => router.push(`/reportes/recorridos/${sesionSeleccionada}`)}
+              style={{
+                background: 'var(--qv-color-primary)',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '999px',
+                padding: '0.15rem 0.5rem',
+                fontSize: '0.6875rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Ver histórico →
+            </button>
+          </div>
+        )}
 
-      {pollPausado && (
-        <div className="qv-live-toast" aria-live="polite" style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}>
-          <Clock size={14} style={{ color: 'var(--qv-color-warning)' }} />
-          <span>Seguimiento pausado por inactividad</span>
-          <button
-            type="button"
-            onClick={() => void traza.refetch()}
-            style={{
-              background: 'var(--qv-color-warning)',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: '999px',
-              padding: '0.15rem 0.5rem',
-              fontSize: '0.6875rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Reanudar
-          </button>
-        </div>
-      )}
+        {pollPausado && (
+          <div className="qv-live-toast" style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}>
+            <Clock size={14} style={{ color: 'var(--qv-color-warning)' }} />
+            <span>Seguimiento pausado por inactividad</span>
+            <button
+              type="button"
+              onClick={() => void traza.refetch()}
+              style={{
+                background: 'var(--qv-color-warning)',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '999px',
+                padding: '0.15rem 0.5rem',
+                fontSize: '0.6875rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Reanudar
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* FLOATING TELEMETRY & CONTROL POINTS DRAWER — solo con un vehículo seleccionado */}
       {sesionSeleccionada && contexto.data && (
