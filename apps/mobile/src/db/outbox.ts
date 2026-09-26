@@ -27,18 +27,6 @@ export interface EventoOutboxNuevo {
    * comportamiento intacto (se genera uno nuevo, camino normal).
    */
   eventId?: string;
-  /**
-   * H2 (hallazgo de revisión, 2026-09-25): `ts` explícito, en vez de dejar que `encolarEvento`
-   * lo asigne a la hora en que el `INSERT` corre. Lo usa `asegurarInicioRecorrido`
-   * (`features/operacion/inicio-recorrido-retry.ts`) para que el evento `inicio_recorrido` lleve
-   * el instante en que el intento de `iniciar()` REALMENTE arrancó, no el instante en que la
-   * escritura a SQLite finalmente se ejecutó — si `abrirOutbox()` se cuelga y la escritura queda
-   * pendiente, la invariante `inicio_recorrido.ts < fin_recorrido.ts` (QUI-247) se rompía cuando
-   * `detener()` (con su propio timeout) lograba escribir `fin_recorrido` primero. Sin este
-   * campo, comportamiento intacto (se usa `new Date().toISOString()` al momento del `INSERT`,
-   * camino normal para el resto de los callers).
-   */
-  ts?: string;
 }
 
 export type EstadoOutbox = 'pendiente' | 'enviado' | 'acusado';
@@ -437,7 +425,7 @@ export async function encolarEvento(
     dbActiva.runAsync(sql, [
       eventId,
       evento.deviceId,
-      evento.ts ?? new Date().toISOString(),
+      new Date().toISOString(),
       evento.tipo,
       JSON.stringify(evento.payload),
     ]),

@@ -48,7 +48,6 @@ import {
   crearManejadorReafirmarMovimiento,
   crearSerializadorRestauracion,
   iniciarSeguimientoContinuo,
-  limpiarSuscripcionesPropias,
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
   restaurarComportamientoNormal,
@@ -371,20 +370,9 @@ export function useGpsOperativo(
     obtenerAccessTokenRef.current = obtenerAccessToken;
   }, [obtenerAccessToken]);
 
-  // H1 (hallazgo de revisión CRÍTICO, 2026-09-25): `suscribirUbicaciones` devuelve los TRES
-  // handles que ESTE llamado en particular acaba de instalar (además de dejarlos, como siempre,
-  // en los refs compartidos). `ejecutarIniciar` los captura en una variable local
-  // (`misSuscripciones`) para poder, si ese intento de `iniciar()` queda invalidado más tarde
-  // (`estaVigente` en falso — un `detener()` que se cansó de esperar, o un `iniciar()` más
-  // nuevo que lo superó), limpiar exactamente lo que ÉL instaló sin tocar
-  // `subscription.current`/`heartbeatSubscription.current`/`motionChangeSubscription.current` a
-  // ciegas: para ese momento esos refs pueden pertenecer a un `iniciar()` más nuevo, y limpiarlos
-  // a ciegas le removía las suscripciones (o le paraba el SDK) al recorrido que sí está activo.
-  // Ver `limpiarSuscripcionesPropias` más abajo y el docblock de `crearCoordinadorIniciarDetener`
-  // (`gps/seguimiento-continuo.ts`).
   const suscribirUbicaciones = useCallback(() => {
     subscription.current?.remove();
-    const subscripcionUbicacion = BackgroundGeolocation.onLocation(
+    subscription.current = BackgroundGeolocation.onLocation(
       (location) => {
         void onLocationRef.current(location);
       },
@@ -392,7 +380,6 @@ export function useGpsOperativo(
         setErrorGps(`No se pudo registrar una ubicación (código ${String(error)}).`);
       },
     );
-    subscription.current = subscripcionUbicacion;
 
     // Entrega 2: segundo enganche del drenado oportunista — ver el comentario de
     // `heartbeatSubscription` arriba para el porqué. `getCurrentPosition({samples:1,
@@ -404,7 +391,7 @@ export function useGpsOperativo(
     // defensivo que el resto del hook: un fallo acá es de transporte/instrumentación, nunca
     // debe llegarle al chofer (principio rector del plan).
     heartbeatSubscription.current?.remove();
-    const subscripcionHeartbeat = BackgroundGeolocation.onHeartbeat(() => {
+    heartbeatSubscription.current = BackgroundGeolocation.onHeartbeat(() => {
       void (async () => {
         try {
           await BackgroundGeolocation.getCurrentPosition({ samples: 1, persist: true });
@@ -450,7 +437,6 @@ export function useGpsOperativo(
         await intentarDrenarOportunista(obtenerAccessTokenRef.current);
       })();
     });
-    heartbeatSubscription.current = subscripcionHeartbeat;
 
     // QUI-P0: defensa EN PROFUNDIDAD contra volver a estacionario en medio de un recorrido —
     // el mecanismo PRIMARIO es `disableStopDetection: true` (default estático en
@@ -461,18 +447,9 @@ export function useGpsOperativo(
     // atado al valor de cuando se instaló esta suscripción. Ver
     // `crearManejadorReafirmarMovimiento` (`gps/seguimiento-continuo.ts`) para el detalle.
     motionChangeSubscription.current?.remove();
-    const subscripcionMotionChange = BackgroundGeolocation.onMotionChange(
+    motionChangeSubscription.current = BackgroundGeolocation.onMotionChange(
       crearManejadorReafirmarMovimiento(BackgroundGeolocation, estaEnRecorrido),
     );
-    motionChangeSubscription.current = subscripcionMotionChange;
-
-    // H1: ver el comentario de cabecera de esta función — los TRES handles que ESTE llamado
-    // instaló, para que un `iniciar()` invalidado más tarde pueda limpiar solo lo suyo.
-    return {
-      subscription: subscripcionUbicacion,
-      heartbeat: subscripcionHeartbeat,
-      motionChange: subscripcionMotionChange,
-    };
     // `deviceId`/`sesionId` en las deps: el handler de `onHeartbeat` de arriba los usa
     // directamente (reintento de `inicio_recorrido`, QUI-247) — sin esto, un cambio de
     // `sesionId` entre renders dejaría el heartbeat cerrado sobre una sesión vieja.
@@ -878,36 +855,8 @@ export function useGpsOperativo(
     // el chofer ya dio por cerrado (o que ya está siendo reemplazado).
     if (!serializadorIniciar.estaVigente(generacion)) return;
 
-    // H2 (hallazgo de revisión, 2026-09-25): `ts` capturado ACÁ — antes de cualquier operación
-    // que pueda colgarse (`abrirOutbox()` más abajo, o el nativo) — es el instante REAL en que
-    // este intento arrancó. `asegurarInicioRecorrido` (llamado más abajo, y en cada reintento:
-    // `onLocation`, heartbeat, `detener()`) lo usa como `ts` explícito del evento
-    // `inicio_recorrido`, en vez de dejar que `encolarEvento` le asigne la hora de cuando el
-    // `INSERT` finalmente se ejecuta contra SQLite. Sin esto, si `abrirOutbox()` se cuelga acá y
-    // `detener()` agota su timeout y escribe `fin_recorrido` primero, `inicio_recorrido` quedaba
-    // con un `ts` POSTERIOR al de `fin_recorrido` una vez que el outbox por fin se destrababa —
-    // rompiendo la invariante `inicio_recorrido.ts < fin_recorrido.ts` (QUI-247) pese a que el
-    // orden real de los sucesos (el chofer inició antes de finalizar) sí la respetaba. Ver
-    // `inicio-recorrido-retry.ts` (`EstadoInicioRecorrido.ts`) y su test dedicado.
-    const tsInicio = new Date().toISOString();
-    reiniciarEstadoInicioRecorrido(estadoInicioRecorrido, await generarEventId(), tsInicio);
-    const misSuscripciones = suscribirUbicaciones();
-
-    // H1 (hallazgo de revisión CRÍTICO, 2026-09-25): limpia SOLO lo que ESTE intento instaló
-    // (`misSuscripciones`, capturado arriba) — nunca `subscription.current`/
-    // `heartbeatSubscription.current`/`motionChangeSubscription.current` directamente. Si este
-    // intento ya no es vigente cuando se llama esto, esos refs pueden pertenecer a un
-    // `iniciar()` más nuevo que ya está corriendo: leerlos/limpiarlos a ciegas le removía las
-    // suscripciones (o el SDK) a un recorrido que sí está activo. Lógica extraída a
-    // `limpiarSuscripcionesPropias` (`gps/seguimiento-continuo.ts`, pura, testeada aparte) — el
-    // ref compartido correspondiente solo se null-ea ahí si TODAVÍA apunta al handle de este
-    // intento (si un `iniciar()` más nuevo ya lo reemplazó, se deja intacto).
-    const limpiarPropias = (): void =>
-      limpiarSuscripcionesPropias(misSuscripciones, {
-        subscription,
-        heartbeat: heartbeatSubscription,
-        motionChange: motionChangeSubscription,
-      });
+    reiniciarEstadoInicioRecorrido(estadoInicioRecorrido, await generarEventId());
+    suscribirUbicaciones();
 
     try {
       await BackgroundGeolocation.ready(gpsSpikeConfig);
@@ -938,24 +887,21 @@ export function useGpsOperativo(
       // línea se alcanzara. Dejar que la resolución tardía marque `tracking=true` acá resucitaría
       // un recorrido que el chofer ya vio cerrarse — la carrera inversa que
       // `crearCoordinadorIniciarDetener` existe para evitar (ver su docblock,
-      // `gps/seguimiento-continuo.ts`). Si ya no es la generación vigente, se limpia lo que ESTE
-      // intento acaba de instalar (las tres suscripciones) y se sale sin tocar
-      // `tracking`/`trackingRef`/`errorGps`.
+      // `gps/seguimiento-continuo.ts`). Si ya no es la generación vigente, se apaga lo que ESTE
+      // intento acaba de arrancar (el SDK nativo + las tres suscripciones que instaló
+      // `suscribirUbicaciones()` arriba) y se sale sin tocar `tracking`/`trackingRef`.
       if (!serializadorIniciar.estaVigente(generacion)) {
-        limpiarPropias();
-        // H1: `BackgroundGeolocation.stop()` SOLO si no hay un `iniciar()` MÁS NUEVO activo —
-        // si lo hay, apagar el SDK apagaría el recorrido de ESE intento, no el propio (la
-        // carrera inversa que este hallazgo corrige: A tardío no puede parar el tracking de B).
-        // Si la invalidación fue por timeout de `detener()` sin ningún `iniciar()` posterior,
-        // `detener()` ya llamó `stop()` en su propio cierre — esta llamada sería redundante pero
-        // inocua, así que directamente se omite.
-        if (!serializadorIniciar.hayIntentoMasNuevo(generacion)) {
-          await BackgroundGeolocation.stop().catch((error) => {
-            Sentry.captureException(error, {
-              tags: { contexto: 'gps-foreground', paso: 'iniciar-tardio-tras-timeout-detener' },
-            });
+        subscription.current?.remove();
+        subscription.current = null;
+        heartbeatSubscription.current?.remove();
+        heartbeatSubscription.current = null;
+        motionChangeSubscription.current?.remove();
+        motionChangeSubscription.current = null;
+        await BackgroundGeolocation.stop().catch((error) => {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'iniciar-tardio-tras-timeout-detener' },
           });
-        }
+        });
         return;
       }
       // G2 (merge post-drenado, Entrega 31a — gap de revisión): `tracking` se marca `true`
@@ -986,22 +932,13 @@ export function useGpsOperativo(
       // NATIVO no pudo arrancar pese a que el permiso/servicio ya estaban en orden (licencia
       // del plugin, Google Play Services): no hay nada grabándose todavía, a diferencia del
       // catch siguiente. Las suscripciones que acabamos de instalar (ubicación, heartbeat y
-      // motion-change) no tienen nada que escuchar: se remueven — vía `limpiarPropias`
-      // (H1, ver su comentario arriba), nunca tocando los refs compartidos a ciegas.
-      limpiarPropias();
-      // H1 (hallazgo de revisión CRÍTICO, 2026-09-25): si este intento YA NO es vigente (un
-      // `detener()` se cansó de esperarlo, o un `iniciar()` más nuevo lo superó), su fallo de
-      // `start()` no le dice nada nuevo a nadie sobre el recorrido REAL (el de la generación
-      // vigente, si la hay) — limpiar sus propias suscripciones (arriba) es lo único que le
-      // corresponde hacer. Tocar `tracking`/`trackingRef`/`errorGps` acá pisaría el estado de
-      // ese otro intento (o reabriría un error sobre un recorrido que el chofer ya vio
-      // cerrarse). Se reporta a Sentry con un tag propio para distinguirlo en el dashboard.
-      if (!serializadorIniciar.estaVigente(generacion)) {
-        Sentry.captureException(error, {
-          tags: { contexto: 'gps-foreground', paso: 'iniciar-nativo-no-vigente' },
-        });
-        return;
-      }
+      // motion-change) no tienen nada que escuchar: se remueven.
+      subscription.current?.remove();
+      subscription.current = null;
+      heartbeatSubscription.current?.remove();
+      heartbeatSubscription.current = null;
+      motionChangeSubscription.current?.remove();
+      motionChangeSubscription.current = null;
       Sentry.captureException(error, {
         tags: { contexto: 'gps-foreground', paso: 'iniciar-nativo' },
       });
@@ -1069,14 +1006,7 @@ export function useGpsOperativo(
       // G2: `tracking` NO se toca acá — `resolverResultadoIniciar(true, false).tracking` es
       // siempre `true` (ver su docblock e invariante testeada), coherente con lo que ya se
       // asignó arriba tras el `start()` exitoso. Solo se usa el mensaje de error.
-      //
-      // H2 (hallazgo de revisión, 2026-09-25): salvo que este intento ya no sea vigente — ahí
-      // `setErrorGps` NO se llama. Un intento invalidado (timeout de `detener()`, o superado por
-      // un `iniciar()` más nuevo) no debe pisarle al chofer un mensaje de error sobre un
-      // recorrido que ya vio cerrarse (o sobre uno que ni siquiera es el que está viendo ahora).
-      if (serializadorIniciar.estaVigente(generacion)) {
-        setErrorGps(resolverResultadoIniciar(true, false).errorGps);
-      }
+      setErrorGps(resolverResultadoIniciar(true, false).errorGps);
     }
   }, [
     suscribirUbicaciones,
@@ -1103,10 +1033,7 @@ export function useGpsOperativo(
   const iniciar = useCallback(async () => {
     const generacion = serializadorIniciar.nuevaGeneracion();
     const promesa = ejecutarIniciar(generacion);
-    // H1 (hallazgo de revisión, 2026-09-25): se pasa `generacion` — el coordinador la necesita
-    // para saber a qué intento invalidar si `esperarIniciarConTimeout` vence (ver el docblock de
-    // `registrarPromesaEnCurso`, `gps/seguimiento-continuo.ts`).
-    serializadorIniciar.registrarPromesaEnCurso(promesa, generacion);
+    serializadorIniciar.registrarPromesaEnCurso(promesa);
     await promesa;
   }, [ejecutarIniciar, serializadorIniciar]);
 

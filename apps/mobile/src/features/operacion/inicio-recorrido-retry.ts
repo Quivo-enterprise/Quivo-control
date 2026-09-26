@@ -41,43 +41,26 @@ export interface EstadoInicioRecorrido {
   eventId: string | null;
   /** `true` una vez que el marcador quedó persistido (o ya lo estaba antes de este intento). */
   confirmado: boolean;
-  /**
-   * H2 (hallazgo de revisión, 2026-09-25): `ts` (ISO) capturado por el llamador al arrancar ESTE
-   * intento de `iniciar()` — junto con `eventId`, ANTES de cualquier operación que pueda
-   * colgarse (`abrirOutbox()`, el nativo). `asegurarInicioRecorrido` lo pasa como `ts` explícito
-   * del evento `inicio_recorrido` en cada reintento (`onLocation`, heartbeat, `detener()`), así
-   * que aunque la escritura real a SQLite se demore, el `ts` persistido sigue siendo el del
-   * instante en que el recorrido REALMENTE empezó — nunca el de cuándo se logró escribir. `null`
-   * en el mismo caso que `eventId: null` (estado inicial / re-enganche, donde no hay nada que
-   * escribir).
-   */
-  ts: string | null;
 }
 
 /** Objeto mutable (no inmutable/funcional a propósito): vive en un `useRef` del hook, igual que
  * `puntosControlDetectados` — `asegurarInicioRecorrido` lo actualiza in-place para que los
  * cuatro call sites (arriba) compartan siempre el mismo estado sin pasarse una copia stale. */
 export function crearEstadoInicioRecorrido(): EstadoInicioRecorrido {
-  return { eventId: null, confirmado: false, ts: null };
+  return { eventId: null, confirmado: false };
 }
 
 /** Arranca un intento nuevo (un `iniciar()` real): asigna el `eventId` estable de este intento
  * y resetea `confirmado` — necesario incluso si el intento ANTERIOR nunca llegó a confirmarse,
  * porque un `eventId` de un recorrido viejo nunca debe reusarse para el marcador de uno nuevo
  * (dos recorridos distintos en la misma sesión, tras `finalizar()` + `iniciar()`, necesitan dos
- * `inicio_recorrido` distintos).
- *
- * H2 (hallazgo de revisión, 2026-09-25): también recibe `ts` (ISO), capturado por el llamador
- * en el mismo instante en que arranca el intento — ver el docblock de `EstadoInicioRecorrido.ts`
- * para el porqué. */
+ * `inicio_recorrido` distintos). */
 export function reiniciarEstadoInicioRecorrido(
   estado: EstadoInicioRecorrido,
   eventId: string,
-  ts: string,
 ): void {
   estado.eventId = eventId;
   estado.confirmado = false;
-  estado.ts = ts;
 }
 
 /** Subconjunto de `db/outbox.ts` que este módulo necesita — declarado acá (no importado) para
@@ -93,8 +76,6 @@ export interface DependenciasInicioRecorrido<Db> {
       tipo: 'inicio_recorrido';
       payload: Record<string, unknown>;
       eventId: string;
-      /** H2 (hallazgo de revisión, 2026-09-25): ver `EstadoInicioRecorrido.ts`. */
-      ts: string;
     },
   ) => Promise<unknown>;
 }
@@ -118,17 +99,12 @@ export async function asegurarInicioRecorrido<Db>(
 ): Promise<void> {
   if (estado.confirmado || estado.eventId === null) return;
   const eventId = estado.eventId;
-  // H2: `estado.ts` siempre se asigna junto con `eventId` en `reiniciarEstadoInicioRecorrido` —
-  // invariante del módulo (el único lugar que asigna `eventId` no-null también asigna `ts`). El
-  // fallback solo cubre un estado construido a mano sin pasar por esa función (p. ej. en tests).
-  const ts = estado.ts ?? new Date().toISOString();
   const db = await deps.abrirOutbox();
   await deps.encolarEvento(db, {
     deviceId: contexto.deviceId,
     tipo: 'inicio_recorrido',
     payload: { sesionId: contexto.sesionId },
     eventId,
-    ts,
   });
   estado.confirmado = true;
 }
