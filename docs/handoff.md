@@ -18,7 +18,79 @@
 - **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
 - **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
 
-### Punto de retome — cierre de la segunda sesión del 2026-09-25
+### Punto de retome — cierre de la tercera sesión del 2026-09-25
+
+**Leer esto primero.** Reemplaza al retome de la segunda sesión (queda abajo como histórico). Siguen
+vigentes: gate sin Codex hasta el 2026-09-27 15:46, lista de features al CTO antes del build, licencia
+trial hasta el 2026-10-25, ramas al día con `git merge origin/main` (no rebase).
+
+**Decisiones del CTO en esta sesión:**
+- Mapa offline: al volver la red se reintentan los tiles abandonados/en backoff (hecho, ver abajo).
+- OK para desplegar `main` a producción + recompute. **No se desplegó:** el clasificador de auto mode
+  bloquea `scripts/deploy-gcp.sh` (`Production Deploy`) y las credenciales de `gcloud` están vencidas
+  (`Reauthentication failed`). Lo corre el CTO, o agrega una regla de permiso Bash para el script.
+
+**Mergeado:** #83 `feat(en-vivo)` — mapa con todos los vehículos (`665d401`). Verificado en stack local
+con Playwright (pin del editor arrastrable, 2 vehículos en `/en-vivo`, placa legible, ids en la demo de
+la landing), gate `web-design-guidelines` y dos `/code-review`. Fixes del gate: capas de vehículo sin
+`*-ignore-placement` (conservan `allow-overlap`, reservan colisión; NO bajarlas con `beforeId`: en
+MapLibre las capas más altas se colocan primero), `placa` en la demo, toasts en regiones `role=status`/
+`alert` siempre montadas. No verificado en producción (sigue en la revisión del 09-09).
+
+| Rama · worktree | HEAD (pusheado) | Verificado | Estado |
+|---|---|---|---|
+| `fix/movil-posicion-en-vivo` · `-movil-posicion` | `51d3fad` | chairman: tsc 0 · 344/344 · lint 0 err | Rediseño iniciar/detener (ver abajo). **Falta 3.er `/code-review`** sobre `4b9e5b5..51d3fad` antes del PR |
+| `fix/movil-anuncio-puntos-control` · `-movil-anuncio` | `6ed1d49` | agente: tsc 0 · 384/384 | Auditoría del merge vs #80: los 5 fixes presentes byte a byte, `DDL_OUTBOX` superset idempotente. Único faltante (mensaje UX de guardado) restaurado. **Sin `/code-review`**: correrlo después de mergear posición y volver a mergear main |
+| `fix/movil-mapa-offline` · `-movil-mapa-offline` | `8734356` | agente: tsc 0 · 339/339 | Reintento al volver la red (`e22825b`, NetInfo 11.4.1 ya estaba: sin rebuild extra) + fixes del review (`abandonados` podado y con tope 200; `isConnected: null` no cuenta como offline). **Falta prueba en teléfono** con red y modo avión |
+
+**Rediseño de posición (por qué cambió el enfoque):** el timeout de `detener()` sobre `iniciar()` protegía
+un camino inalcanzable — "Finalizar" solo aparece con `tracking=true`, que se marca apenas `start()`
+resuelve; el cuelgue real es el outbox (SQLite), y `detener()` se volvía a colgar en su propio
+`abrirOutbox`. Diseño final (`51d3fad`):
+- Single-flight de `iniciar()` solo hasta `tracking=true`; la cola de outbox (semilla + respaldo de
+  `inicio_recorrido`) corre desacoplada. Tocar Comenzar con un intento invalidado en vuelo arranca uno nuevo.
+- Single-flight de `detener()`. `tsFin` al toque; `inicio_recorrido` lleva el `ts` del arranque del
+  intento → orden por `ts` correcto aunque el INSERT sea tardío (el servidor ordena por `ts`).
+- `stop()` nativo acotado a 5 s. Si falla o vence: tracking sigue `true`, error "No se pudo detener…
+  Intenta nuevamente", sin `fin_recorrido`. La promesa cruda de `stop()` se registra en
+  `serializadorRestauracion`, así un stop tardío no mata el recorrido siguiente.
+- `fin_recorrido` y veredicto en tarea de fondo (`cierre-recorrido.ts`); `fin` se escribe siempre aunque
+  falle el respaldo del inicio; el veredicto usa snapshot de refs tomado al tocar Finalizar; `iniciar()`
+  sube `ultimoCierreId`.
+- Desmontaje invalida el intento en curso; `sigueVigente` incluye `montadoRef`.
+- **Sin test automatizado:** snapshot del veredicto y desmontaje (viven en el hook; el repo no tiene
+  `renderHook`). Opción: extraer `construirResultadoRecorrido` como función pura.
+
+**Siguiente paso, en orden:**
+1. **Posición:** `/code-review high` sobre `4b9e5b5..51d3fad` (foco: carreras, estado viejo, SDK huérfano,
+   orden por `ts`). Fixes → Sonnet nuevo. Probar en teléfono: iniciar/finalizar rápido, doble toque,
+   modo avión. PR → CI → merge.
+2. **Anuncio:** `git merge origin/main` (trae posición), `/code-review` con foco en el merge, PR.
+3. **Mapa offline:** prueba en teléfono (red / modo avión / volver la red) → PR.
+4. Entregas 8/9/26 (sobre anuncio mergeado) y 28. Luego lista de features y fixes al CTO antes del build.
+
+**Deploy a producción (CTO) — preflight de solo lectura hecho:**
+- Sin cambios de contrato que rompan APK build 10 (`deviceId` de logout opcional; throttler de sync solo
+  comentarios; `/en-vivo/posiciones` lo usa solo el panel). Commit hoy en prod según evidencia
+  documental: `63a0b51` (no verificado en vivo).
+- Migraciones pendientes: `20260922100000_gps_sesion_resumen` (backfill SIN filtro de fecha sobre
+  todo `gps_points`; el job no fija `--task-timeout` → default 10 min) y
+  `20260923090000_refresh_token_hash_anterior` (ADD COLUMN nullable, inocua).
+- La migración va antes que el worker nuevo (si no, cada lote falla con `relation "gps_sesion_resumen"
+  does not exist`); el script completo respeta el orden — no usar `--solo worker` suelto.
+- Secuencia: `gcloud auth login` → listar tags (`gcloud artifacts docker images list
+  southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api --include-tags`) → `gcloud run jobs
+  update quivo-migraciones --project quivo-control-prod --region southamerica-west1 --task-timeout=1800`
+  → `scripts/deploy-gcp.sh <tag>` (sugerido tag con fecha) → recompute de `docs/runbooks/retencion-gps.md`
+  desde dentro de la VPC (Cloud SQL solo tiene IP privada: job ad hoc, no `psql` local).
+
+**Datos locales:** el worktree de web se borró, pero sus volúmenes docker (proyecto compose
+`quivo-control-web-mapa`) siguen: la base `quivo_control_e2echeck` tiene 2 posiciones GPS de prueba para
+1001ABC/2002DEF y una asignación para 2002DEF. Si no se reusan: `docker volume ls | grep web-mapa` y borrar.
+
+---
+
+### Punto de retome — cierre de la segunda sesión del 2026-09-25 (histórico, reemplazado por el de la tercera sesión)
 
 **Leer esto primero.** Reemplaza al retome anterior del mismo día (queda abajo como histórico; sus
 decisiones del CTO siguen vigentes: gate sin Codex hasta el 2026-09-27 15:46, lista de features antes
