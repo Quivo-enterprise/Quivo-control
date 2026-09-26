@@ -6,6 +6,11 @@
 > persiguiendo un cuelgue hipotético de "Finalizar". Cada review sacó regresiones del fix
 > anterior. Este plan corta ese loop con reglas duras y un alcance menor.
 
+> **Estado (cierre del 2026-09-26):**
+> - Pasos 1, 2 y 2' hechos: #87, #89 y #88 mergeados.
+> - 3 (Entrega 28, acotada por decisión del CTO) y 3' (Entrega 9): código listo, sin PR.
+> - Detalle en `docs/handoff.md` → "Punto de retome — cierre de la sesión del 2026-09-26".
+
 ## Reloj
 
 - **Licencia trial de Transistorsoft para `com.quivotech.conductor.app`: vence el 2026-10-25**
