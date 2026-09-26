@@ -5,8 +5,9 @@
 //
 // **Por qué animar así (y no con un `maplibregl.Marker` de DOM):** el marcador del vehículo
 // es una feature más de la fuente GeoJSON `quivo-markers`, dibujada por una capa `circle`
-// (WebGL) junto al halo `quivo-marker-pulse` que ya filtra por `pinType: 'pulse'` sobre esa
-// misma fuente. Mover la posición vía `GeoJSONSource.setData()` en cada frame mantiene el
+// (WebGL) junto al halo `quivo-marker-pulse` que ya filtra por `pinType: 'vehicle'` (con
+// `estadoFrescura: 'reportando'`, ver `MARKER_PULSE_FILTER`) sobre esa misma fuente. Mover la
+// posición vía `GeoJSONSource.setData()` en cada frame mantiene el
 // halo "gratis" (recalcula con el resto de la fuente, sin un segundo mecanismo de
 // animación) y evita el costo de un `Marker` DOM: ese es un `<div>` posicionado con
 // transform CSS que MapLibre reproyecta a mano en cada evento `move`, lo que implica layout/

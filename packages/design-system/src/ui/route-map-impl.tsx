@@ -24,6 +24,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type {
+  FilterSpecification,
   GeoJSONSource,
   Map as MapLibreMap,
   MapLayerMouseEvent,
@@ -221,8 +222,11 @@ function featureCollection(features: MapFeature[]): MapFeatureCollection {
 
 /** Mismo id que ve el consumidor cuando lo pasa explícitamente; si no, un id sintético estable
  * mientras el array no cambie de orden — usado para correlacionar clicks/drags de vuelta al
- * objeto original (las funciones `onClick`/`onDragEnd` no viajan dentro del GeoJSON). */
-function resolvePointId(point: { id?: string; lat: number; lng: number }, index: number): string {
+ * objeto original (las funciones `onClick`/`onDragEnd` no viajan dentro del GeoJSON).
+ *
+ * Exportada (ENTREGA 14) solo para el test `route-map-impl.marker-override.test.ts` — es pura,
+ * sin `maplibre-gl`, así que exportarla no cambia el contrato público de `RouteMap`. */
+export function resolvePointId(point: { id?: string; lat: number; lng: number }, index: number): string {
   return point.id ?? `${point.lat}:${point.lng}:${index}`;
 }
 
@@ -288,6 +292,10 @@ function pointFeatures(points: MapPoint[], isDark: boolean, kind: 'stop' | 'mark
               : 'marker',
           draggable: Boolean(point.draggable),
           clickable: Boolean(point.onClick),
+          // ENTREGA 14/16 — solo relevantes para `pinType: 'vehicle'` (ver `quivo-vehicle-symbols`/
+          // `quivo-vehicle-labels`); en cualquier otro punto viajan vacíos, sin costo.
+          estadoFrescura: point.estadoFrescura ?? '',
+          placa: point.placa ?? '',
         },
         geometry: { type: 'Point', coordinates: [point.lng, point.lat] },
       };
@@ -334,6 +342,132 @@ function setSourceData(map: MapLibreMap, sourceId: string, data: MapFeatureColle
 }
 
 /**
+ * ENTREGA 14 — sprites del vehículo en `/en-vivo`, uno por `estadoFrescura`. Antes, vehículo
+ * (radio 11) y punto de control (radio 7) eran el MISMO círculo con 4 px de diferencia —
+ * indistinguibles con 26 puntos de control y varios vehículos en pantalla a la vez. Acá la
+ * FORMA cambia, no solo el color, para que un vehículo `perdido` se reconozca sin leer texto:
+ *
+ * - `reportando` — bus sólido (glifo `mdi:bus`), badge verde relleno.
+ * - `detenido`   — bus con reloj (glifo `mdi:bus-clock` — "esperando", no una falla), badge
+ *   con contorno PUNTEADO en vez de relleno sólido: la forma del borde ya comunica "distinto
+ *   de reportando" antes de leer el color.
+ * - `perdido`    — bus con alerta (glifo `mdi:bus-alert`), badge gris y atenuado (opacidad
+ *   reducida): "esto no es una posición confiable ahora mismo".
+ *
+ * `sin_datos` queda afuera a propósito: esa sesión nunca tuvo un fix, así que en
+ * `map-builders.ts` ni siquiera llega a ser un marker (`lat`/`lng` `null` ⇒ no se dibuja) —
+ * no hace falta un cuarto sprite.
+ *
+ * Los tres glifos son Material Design Icons (`mdi:bus`, `mdi:bus-clock`, `mdi:bus-alert`,
+ * licencia Apache-2.0), resueltos vía el MCP `iconify` — no un SVG inventado a mano.
+ */
+type EstadoIconoVehiculo = 'reportando' | 'detenido' | 'perdido';
+
+const ICONO_BUS_PATH =
+  'M18 11H6V6h12m-1.5 11a1.5 1.5 0 0 1-1.5-1.5a1.5 1.5 0 0 1 1.5-1.5a1.5 1.5 0 0 1 1.5 1.5a1.5 1.5 0 0 1-1.5 1.5m-9 0A1.5 1.5 0 0 1 6 15.5A1.5 1.5 0 0 1 7.5 14A1.5 1.5 0 0 1 9 15.5A1.5 1.5 0 0 1 7.5 17M4 16c0 .88.39 1.67 1 2.22V20a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-1h8v1a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-1.78c.61-.55 1-1.34 1-2.22V6c0-3.5-3.58-4-8-4s-8 .5-8 4z';
+const ICONO_BUS_CLOCK_PATH =
+  'M16.5 4v4.25l2.86 1.69l-.75 1.22L15 9V4zm-.5 9c1.36 0 2.54-.5 3.5-1.47c1-.97 1.5-2.14 1.5-3.53c0-1.36-.5-2.54-1.5-3.5c-.96-1-2.14-1.5-3.5-1.5c-1.39 0-2.56.5-3.53 1.5C11.5 5.46 11 6.64 11 8c0 1.39.5 2.56 1.47 3.53S14.61 13 16 13m-2.5 6c.44 0 .8-.16 1.08-.46s.42-.65.42-1.04c0-.42-.14-.77-.42-1.07S13.94 16 13.5 16s-.8.13-1.08.43s-.42.65-.42 1.07c0 .39.14.74.42 1.04s.64.46 1.08.46M3 13h8.11C9.7 11.64 9 10 9 8H3zm1.5 6c.44 0 .8-.16 1.08-.46S6 17.89 6 17.5c0-.42-.14-.77-.42-1.07S4.94 16 4.5 16s-.8.13-1.08.43S3 17.08 3 17.5c0 .39.14.74.42 1.04s.64.46 1.08.46M16 1c1.92 0 3.58.67 4.95 2.05C22.33 4.42 23 6.08 23 8c0 1.77-.56 3.29-1.72 4.59c-1.15 1.29-2.58 2.07-4.28 2.32V18c0 .84-.33 1.58-1 2.2V22c0 .27-.11.5-.3.71c-.2.2-.42.29-.7.29h-1c-.27 0-.5-.09-.71-.29A.98.98 0 0 1 13 22v-1H5v1c0 .27-.09.5-.29.71c-.21.2-.44.29-.71.29H3c-.28 0-.5-.09-.7-.29c-.19-.21-.3-.44-.3-.71v-1.8c-.67-.62-1-1.36-1-2.2V8c0-1.58.67-2.65 2.05-3.2C4.42 4.26 6.41 4 9 4h.61c.28 0 .48.03.61.03C11.63 2 13.55 1 16 1';
+const ICONO_BUS_ALERT_PATH =
+  'M16 1a7 7 0 0 1 7 7c0 3.53-2.61 6.45-6 6.93V18c0 .84-.35 1.58-1.04 2.2V22c0 .27-.09.5-.28.71c-.18.2-.42.29-.68.29h-1a.98.98 0 0 1-.73-.29a.96.96 0 0 1-.31-.71v-1H5.04v1c0 .27-.1.5-.31.71c-.2.2-.44.29-.73.29H3c-.26 0-.5-.09-.68-.29c-.19-.21-.28-.44-.28-.71v-1.8C1.35 19.58 1 18.84 1 18V8c0-1.58.7-2.65 2.07-3.2C4.44 4.26 6.42 4 9 4l1.23.03A7.01 7.01 0 0 1 16 1m0 2a5 5 0 0 0-5 5a5 5 0 0 0 5 5a5 5 0 0 0 5-5a5 5 0 0 0-5-5m-1 7h2v2h-2zm0-6h2v5h-2zM3 13h8.09A7 7 0 0 1 9 8H3zm1.5 3c-.81 0-1.5.67-1.5 1.5A1.5 1.5 0 0 0 4.5 19c.85 0 1.5-.67 1.5-1.5A1.5 1.5 0 0 0 4.5 16m9 0c-.85 0-1.5.67-1.5 1.5a1.5 1.5 0 0 0 1.5 1.5c.81 0 1.5-.67 1.5-1.5a1.5 1.5 0 0 0-1.5-1.5';
+
+interface VehiculoIconoSpec {
+  estado: EstadoIconoVehiculo;
+  path: string;
+  /** Hex literal, no `var(--qv-color-*)`: la imagen se rasteriza en un `<canvas>` fuera del
+   * árbol de React, donde los custom properties del tema no están disponibles — mismo
+   * problema que documenta `resolveColor` para `route.color`/`zone.color`. Mismos valores que
+   * `tokens.css` (paleta clara): `--qv-color-success`/`--qv-color-info`/`--qv-text-muted`. */
+  background: string;
+  /** `true` ⇒ contorno punteado con relleno tenue en vez de relleno sólido — la FORMA del
+   * badge ya distingue `detenido` de `reportando` antes de leer el color. */
+  outline: boolean;
+  opacity: number;
+}
+
+const VEHICULO_ICONOS: VehiculoIconoSpec[] = [
+  { estado: 'reportando', path: ICONO_BUS_PATH, background: '#16a34a', outline: false, opacity: 1 },
+  { estado: 'detenido', path: ICONO_BUS_CLOCK_PATH, background: '#0891b2', outline: true, opacity: 1 },
+  { estado: 'perdido', path: ICONO_BUS_ALERT_PATH, background: '#94a3b8', outline: false, opacity: 0.72 },
+];
+
+const VEHICULO_ICONO_PX = 64;
+
+function vehiculoIconoId(estado: string): string {
+  return `quivo-bus-${estado}`;
+}
+
+function buildVehiculoIconoSvg(spec: VehiculoIconoSpec): string {
+  const size = VEHICULO_ICONO_PX;
+  const center = size / 2;
+  const radius = center - 4;
+  // `detenido` (hueco/punteado) perdía contraste sobre el mapa base: con `fill-opacity: 0.3`
+  // y SIN el halo blanco que sí tienen `reportando`/`perdido` (su `stroke="#ffffff"` de abajo),
+  // el badge se mezclaba con cualquier fondo claro o cian del estilo (agua, parques) y con el
+  // texto de las calles debajo. El fix agrega un disco blanco opaco de respaldo — el mismo
+  // halo de contraste que ya usan los otros dos estados, aplicado ANTES del círculo punteado
+  // en vez de como `stroke` (un stroke blanco por fuera del punteado rompería el efecto
+  // "hueco") — y sube el relleno cian de 0.3 a 0.55: visible sobre el blanco sin taparlo, la
+  // forma sigue siendo la que distingue a `detenido` (punteada) de `reportando` (sólida).
+  const badge = spec.outline
+    ? `<circle cx="${center}" cy="${center}" r="${radius}" fill="#ffffff"/>` +
+      `<circle cx="${center}" cy="${center}" r="${radius}" fill="${spec.background}" fill-opacity="0.55" stroke="${spec.background}" stroke-width="4" stroke-dasharray="7 4"/>`
+    : `<circle cx="${center}" cy="${center}" r="${radius}" fill="${spec.background}" stroke="#ffffff" stroke-width="3"/>`;
+  // El glifo MDI vive en un viewBox de 24×24 — se centra y escala al ~58% del badge.
+  const glyphSize = size * 0.58;
+  const glyphOffset = (size - glyphSize) / 2;
+  const scale = glyphSize / 24;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" ` +
+    `viewBox="0 0 ${size} ${size}" opacity="${spec.opacity}">${badge}` +
+    `<g transform="translate(${glyphOffset} ${glyphOffset}) scale(${scale})">` +
+    `<path fill="#ffffff" d="${spec.path}"/></g></svg>`
+  );
+}
+
+function loadImageElement(svg: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('No se pudo decodificar el ícono del vehículo'));
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  });
+}
+
+/**
+ * Registra (`map.addImage`) los tres sprites de vehículo antes de activar la capa
+ * `quivo-vehicle-symbols`. Devuelve `false` si CUALQUIERA falla (red, CSP, decode) — el
+ * llamador usa eso para quedarse en el fallback de círculo (`quivo-vehicle-fallback`, ya
+ * dibujado y visible por defecto) en vez de activar una capa `symbol` que apunta a una
+ * imagen inexistente: MapLibre simplemente no dibuja nada ahí, y el vehículo desaparecería
+ * del mapa — justo lo que el plan prohíbe ("nunca desaparecer vehículos").
+ */
+async function ensureVehiculoIconos(map: MapLibreMap): Promise<boolean> {
+  try {
+    await Promise.all(
+      VEHICULO_ICONOS.map(async (spec) => {
+        const id = vehiculoIconoId(spec.estado);
+        if (map.hasImage(id)) return;
+        const image = await loadImageElement(buildVehiculoIconoSvg(spec));
+        if (!map.hasImage(id)) map.addImage(id, image);
+      }),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Alterna entre el sprite del bus (`quivo-vehicle-symbols`) y el círculo de respaldo
+ * (`quivo-vehicle-fallback`) — nunca los dos a la vez, y nunca ninguno de los dos (por eso el
+ * fallback arranca VISIBLE por default en `ensureDataLayers`, antes de que las imágenes
+ * terminen de cargar). */
+function setVehiculoIconoDisponible(map: MapLibreMap, disponible: boolean) {
+  if (!map.getLayer('quivo-vehicle-symbols') || !map.getLayer('quivo-vehicle-fallback')) return;
+  map.setLayoutProperty('quivo-vehicle-symbols', 'visibility', disponible ? 'visible' : 'none');
+  map.setLayoutProperty('quivo-vehicle-fallback', 'visibility', disponible ? 'none' : 'visible');
+}
+
+/**
  * Si hay una animación de vehículo activa (`anim.current` no `null`), pisa la posición del
  * marker que matchea `markerId` con la posición VISUAL actual de la animación — el resto de
  * sus propiedades (color, label, pinType…) se dejan intactas. Sin animación (`anim.current`
@@ -342,8 +476,12 @@ function setSourceData(map: MapLibreMap, sourceId: string, data: MapFeatureColle
  * sitios que escriben la fuente `quivo-markers` (la carga inicial, el cambio de tema y el
  * loop de `requestAnimationFrame`) nunca se pisen entre sí con posiciones distintas — ver el
  * comentario de cabecera de `vehicle-marker-animation.ts`.
+ *
+ * Exportada (ENTREGA 14) por el mismo motivo que `resolvePointId`: con N vehículos dibujados
+ * a la vez, la prueba de que la animación pisa EXACTAMENTE el marker de `markerId` — y deja
+ * los demás intactos — vive en `route-map-impl.marker-override.test.ts`.
  */
-function markersWithVehicleOverride(
+export function markersWithVehicleOverride(
   markers: MapPoint[],
   anim: EstadoAnimacionVehiculo,
   markerId: string | undefined,
@@ -604,11 +742,49 @@ function loadQuivoMapStyle(): Promise<StyleSpecification> {
   return quivoMapStylePromise;
 }
 
+// ENTREGA 16 — filtros de las capas `quivo-marker-*`/`quivo-vehicle-*`, extraídos a constantes
+// EXPORTADAS (en vez de vivir inline dentro de cada `map.addLayer`) por dos motivos: (1) el
+// mismo filtro de vehículo (`pinType === 'vehicle'`) lo usan tres capas distintas
+// (`quivo-vehicle-fallback`/`quivo-vehicle-symbols`/`quivo-vehicle-labels`) — antes vivía
+// duplicado en cada una, con el riesgo de que un fix tocara una copia y se olvidara de la otra
+// (exactamente el bug que este fix corrige: la Entrega 14 le sacó `'pulse'` a
+// `quivo-marker-points`/`quivo-marker-popup-anchor` para dárselo a los vehículos, rompiendo a
+// los consumidores no vehiculares de `'pulse'` — el punto pendiente/nodo seleccionado del
+// editor de trazado en `rutas/page.tsx` y el demo de la landing, `FleetPanelPreview.tsx`); y
+// (2) exportarlos permite testear la EXPRESIÓN real que evalúa MapLibre (`route-map-impl.
+// layer-filters.test.ts`) sin levantar un `Map` con WebGL.
+//
+// `'pulse'` es el pinType genérico de "marcador que pulsa" — nodos del editor de trazado y el
+// demo de la landing lo usan igual que antes de la Entrega 14. `'vehicle'` es el pinType
+// EXCLUSIVO de los vehículos reales de `/en-vivo` (`construirMarcadoresVehiculos` en
+// `apps/web/app/(dashboard)/en-vivo/map-builders.ts`) — nunca lo usa nada más.
+export const MARKER_PULSE_FILTER: FilterSpecification = [
+  'any',
+  ['==', ['get', 'pinType'], 'pulse'],
+  ['all', ['==', ['get', 'pinType'], 'vehicle'], ['==', ['get', 'estadoFrescura'], 'reportando']],
+];
+export const MARKER_POINTS_FILTER: FilterSpecification = ['!=', ['get', 'pinType'], 'vehicle'];
+export const VEHICLE_BODY_FILTER: FilterSpecification = ['==', ['get', 'pinType'], 'vehicle'];
+export const VEHICLE_LABELS_FILTER: FilterSpecification = [
+  'all',
+  ['==', ['get', 'pinType'], 'vehicle'],
+  ['!=', ['get', 'placa'], ''],
+];
+export const MARKER_POPUP_ANCHOR_FILTER: FilterSpecification = [
+  'all',
+  ['!=', ['get', 'label'], ''],
+  ['!=', ['get', 'pinType'], 'vehicle'],
+];
+
 /** Fuentes/capas GeoJSON propias de QUIVO, agregadas encima del estilo base — portado de
  * `Quivo-rutas` (`ensureDataLayers`), con dos agregados propios de Quivo-control: la capa de
  * radio mayor para `pinType: 'node'` (nodos del trazado en edición) y `quivo-marker-labels`
- * (el número de nodo, ver `nodeNumberFromId`). */
-function ensureDataLayers(map: MapLibreMap) {
+ * (el número de nodo, ver `nodeNumberFromId`).
+ *
+ * Exportada (mismo motivo que los filtros de arriba) para poder testear, sin levantar un `Map`
+ * con WebGL, que las capas del vehículo (`quivo-vehicle-symbols`/`quivo-vehicle-labels`) no
+ * usan `*-ignore-placement: true` — ver `route-map-impl.vehicle-layers.test.ts`. */
+export function ensureDataLayers(map: MapLibreMap) {
   if (!map.getSource('quivo-routes')) map.addSource('quivo-routes', { type: 'geojson', data: featureCollection([]) as never });
   if (!map.getSource('quivo-stops')) map.addSource('quivo-stops', { type: 'geojson', data: featureCollection([]) as never });
   if (!map.getSource('quivo-markers')) map.addSource('quivo-markers', { type: 'geojson', data: featureCollection([]) as never });
@@ -742,7 +918,13 @@ function ensureDataLayers(map: MapLibreMap) {
       id: 'quivo-marker-pulse',
       type: 'circle',
       source: 'quivo-markers',
-      filter: ['==', ['get', 'pinType'], 'pulse'],
+      // ENTREGA 14 — un vehículo `perdido`/`detenido` NO pulsa: el halo animado ("estoy vivo y
+      // en movimiento AHORA") solo tiene sentido para `reportando`. Antes solo filtraba por
+      // `pinType`, así que un vehículo sin señal pulsaba igual que uno reportando — la
+      // animación mentía justo en el caso que más importa detectar.
+      // ENTREGA 16 — `pinType: 'pulse'` (nodos del editor/demo de landing) sigue pulsando
+      // siempre, como antes de la Entrega 14 — ver `MARKER_PULSE_FILTER`.
+      filter: MARKER_PULSE_FILTER,
       paint: { 'circle-radius': 16, 'circle-color': ['get', 'color'], 'circle-opacity': 0.18, 'circle-stroke-width': 0 },
     });
   }
@@ -751,6 +933,12 @@ function ensureDataLayers(map: MapLibreMap) {
       id: 'quivo-marker-points',
       type: 'circle',
       source: 'quivo-markers',
+      // ENTREGA 14 — `vehicle` sale de acá: antes era el MISMO círculo que un punto de control
+      // con 4 px de diferencia de radio. Ahora un vehículo se dibuja con `quivo-vehicle-symbols`
+      // (ícono) o `quivo-vehicle-fallback` (círculo grande, ver abajo) — nunca con esta capa
+      // genérica. `pulse` (nodos del editor/demo de landing, ENTREGA 16) SÍ sigue acá — nunca
+      // tuvo capas propias, solo un radio distinto (ver `match` de abajo).
+      filter: MARKER_POINTS_FILTER,
       paint: {
         'circle-radius': ['match', ['get', 'pinType'], 'node', 11, 'pulse', 11, 'stop', 7, 8],
         'circle-color': ['get', 'color'],
@@ -758,6 +946,99 @@ function ensureDataLayers(map: MapLibreMap) {
         'circle-stroke-color': ['get', 'haloColor'],
         'circle-stroke-width': 2,
       },
+    });
+  }
+  // ENTREGA 14 — círculo de RESPALDO del vehículo. Arranca VISIBLE por default (antes de que
+  // `ensureVehiculoIconos` termine de registrar los sprites, o si falla) para que un vehículo
+  // nunca desaparezca del mapa mientras el ícono no está listo — ver
+  // `setVehiculoIconoDisponible`, que lo apaga apenas el sprite real está disponible.
+  // ENTREGA 15 — `circle-radius: 14→17` (+21%), en la misma proporción que el `icon-size` de
+  // abajo (0.5→0.62, +24%): el fallback es lo que el usuario ve mientras el sprite carga (o si
+  // falla), así que tiene que quedar del mismo orden de tamaño que el ícono real — si no,
+  // "flashea" un cambio de tamaño visible apenas termina `ensureVehiculoIconos`.
+  if (!map.getLayer('quivo-vehicle-fallback')) {
+    map.addLayer({
+      id: 'quivo-vehicle-fallback',
+      type: 'circle',
+      source: 'quivo-markers',
+      filter: VEHICLE_BODY_FILTER,
+      layout: { visibility: 'visible' },
+      paint: {
+        'circle-radius': 17,
+        'circle-color': ['get', 'color'],
+        'circle-opacity': 0.98,
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 4,
+      },
+    });
+  }
+  // ENTREGA 14 — el sprite real del vehículo (`quivo-bus-${estadoFrescura}`, registrado por
+  // `ensureVehiculoIconos`). Arranca OCULTO — `setVehiculoIconoDisponible` lo prende recién
+  // cuando confirma que los tres sprites cargaron. `icon-allow-overlap: true`: con N vehículos
+  // cerca uno del otro (terminal, semáforo) no queremos que MapLibre esconda uno por colisión —
+  // los puntos de control sí pueden colisionar entre sí, los vehículos nunca.
+  // FIX web-design-guidelines (hallazgo ALTA) — `icon-ignore-placement` se saca (default
+  // `false`): con `true` el ícono NO se insertaba en el índice de colisión, así que no
+  // reservaba su caja y los POI del estilo base (restaurantes, farmacias…) se dibujaban
+  // encima. `icon-allow-overlap: true` ya garantiza que el vehículo mismo nunca se esconda
+  // por colisión — no hace falta `ignore-placement` para eso. Como esta capa se agrega SIN
+  // `beforeId` (queda arriba de todo el stack, incluidas las POI del estilo base), y MapLibre
+  // procesa el índice de colisión de arriba hacia abajo (las capas más altas reservan primero),
+  // el vehículo sigue ganando el conflicto — ahora además esconde al POI que colisiona con él
+  // en vez de quedar tapado (confirmado con context7 `/maplibre/maplibre-gl-js`,
+  // `pauseable_placement.ts`: "later style layers are placed first into the collision grid…
+  // higher visual layers win collision conflicts against lower ones").
+  // ENTREGA 15 — `icon-size: 0.5→0.62`. A 0.5 el sprite (rasterizado a `VEHICULO_ICONO_PX: 64`)
+  // se dibuja a 32 px, el mismo orden de magnitud que los íconos de POI del estilo base
+  // (restaurantes, farmacias…) — un vehículo, que es la capa de información PRINCIPAL de
+  // `/en-vivo`, no puede leerse "igual de importante" que un ícono decorativo del mapa. 0.62
+  // (~40 px) es un salto moderado — no duplica el tamaño ni lo lleva a competir con los labels
+  // de calle — pero alcanza para que el bus se distinga del ruido del mapa base de un vistazo.
+  if (!map.getLayer('quivo-vehicle-symbols')) {
+    map.addLayer({
+      id: 'quivo-vehicle-symbols',
+      type: 'symbol',
+      source: 'quivo-markers',
+      filter: VEHICLE_BODY_FILTER,
+      layout: {
+        visibility: 'none',
+        // ENTREGA 16 — `case` de respaldo: un `pinType: 'vehicle'` sin `estadoFrescura` (nunca
+        // pasa desde `/en-vivo`, que siempre lo setea — ver `construirMarcadoresVehiculos` —
+        // pero SÍ puede pasar en un consumidor futuro del design system) cae al sprite
+        // `reportando` en vez de pedirle a MapLibre la imagen inexistente `quivo-bus-`
+        // (`estadoFrescura` vacío concatenado) — eso dejaría al vehículo sin ícono ni fallback
+        // visible (`quivo-vehicle-fallback` ya está oculto en cuanto los sprites cargan).
+        'icon-image': ['concat', 'quivo-bus-', ['case', ['==', ['get', 'estadoFrescura'], ''], 'reportando', ['get', 'estadoFrescura']]],
+        'icon-size': 0.62,
+        'icon-allow-overlap': true,
+      },
+    });
+  }
+  // Placa del vehículo, debajo del ícono/fallback — capa propia (en vez de reusar
+  // `quivo-marker-popup-anchor`, ver su filtro más abajo) porque tiene que verse SIEMPRE
+  // (`text-allow-overlap`) y en cualquier zoom, a diferencia del label genérico de paradas
+  // (que recién aparece en `minzoom: 13` y puede ocultarse por colisión).
+  // FIX web-design-guidelines (hallazgo ALTA) — mismo motivo que `quivo-vehicle-symbols`:
+  // sin `text-ignore-placement` la placa reserva su caja en el índice de colisión y los POI
+  // del mapa base dejan de dibujarse encima.
+  if (!map.getLayer('quivo-vehicle-labels')) {
+    map.addLayer({
+      id: 'quivo-vehicle-labels',
+      type: 'symbol',
+      source: 'quivo-markers',
+      filter: VEHICLE_LABELS_FILTER,
+      layout: {
+        'text-field': ['get', 'placa'],
+        'text-font': ['Noto Sans Bold'],
+        'text-size': 11,
+        // ENTREGA 15 — `1.7em→2em`: con el ícono más grande (ver `icon-size` arriba) el borde
+        // inferior del bus queda más abajo; sin este ajuste la placa arrancaba pegada (o
+        // superpuesta) al ícono en vez de debajo de él.
+        'text-offset': [0, 2],
+        'text-anchor': 'top',
+        'text-allow-overlap': true,
+      },
+      paint: { 'text-color': '#ffffff', 'text-halo-color': 'rgba(15,17,26,0.85)', 'text-halo-width': 1.6 },
     });
   }
   if (!map.getLayer('quivo-marker-labels')) {
@@ -781,7 +1062,12 @@ function ensureDataLayers(map: MapLibreMap) {
       id: 'quivo-marker-popup-anchor',
       type: 'symbol',
       source: 'quivo-markers',
-      filter: ['!=', ['get', 'label'], ''],
+      // ENTREGA 14 — `vehicle` queda afuera: ya tiene su propio label SIEMPRE visible
+      // (`quivo-vehicle-labels`, sin `minzoom` ni límite de colisión). Sin este filtro, un
+      // vehículo mostraría la placa DOS veces superpuestas a partir de zoom 13. `pulse` (nodos
+      // del editor/demo de landing, ENTREGA 16) SÍ sigue acá — el punto pendiente ("Punto
+      // marcado") y el nodo seleccionado dependen de este label genérico para su texto.
+      filter: MARKER_POPUP_ANCHOR_FILTER,
       minzoom: 13,
       layout: {
         'text-field': ['get', 'label'],
@@ -800,7 +1086,51 @@ function ensureDataLayers(map: MapLibreMap) {
 const ROUTE_CLICK_LAYERS = ['quivo-route-casing'];
 const STOP_CLICK_LAYERS = ['quivo-stop-points'];
 const ZONE_CLICK_LAYERS = ['quivo-zone-fill'];
-const MARKER_CLICK_LAYERS = ['quivo-marker-points'];
+// ENTREGA 15 — arreglo del bug de la Entrega 13/14: tocar un vehículo no abría su detalle. La
+// Entrega 14 sacó a los vehículos de `quivo-marker-points` (ver `MARKER_POINTS_FILTER` más
+// arriba — `pinType: 'vehicle'` desde la Entrega 16) y los movió a tres capas propias, pero
+// nadie enganchó click/hover a esas capas
+// nuevas — `wireFeatureClicks`/el `mousedown` de drag seguían escuchando solo
+// `quivo-marker-points`, así que un click sobre un vehículo nunca generaba ni un
+// `queryRenderedFeatures` hit ahí. Se agregan las tres:
+// - `quivo-vehicle-symbols` / `quivo-vehicle-fallback`: el cuerpo del vehículo (ícono real o
+//   círculo de respaldo) — nunca están las dos visibles a la vez (`setVehiculoIconoDisponible`),
+//   pero como MapLibre tolera de sobra escuchar una capa oculta u opcionalmente inexistente en
+//   el momento del registro (ver comentario de `resolveMarkerClick` más abajo), alcanza con
+//   incluir ambas siempre en vez de alternar el listener según cuál está activa.
+// - `quivo-vehicle-labels`: la placa. SÍ se suma como clickeable — es el label que se dibuja
+//   siempre (`text-allow-overlap`, sin `minzoom`), a diferencia de los labels genéricos de
+//   parada/nodo que nunca son clickeables por su cuenta. En zoom bajo el ícono del bus mide
+//   pocos píxeles y la placa (más ancha, en `Noto Sans Bold`) es a menudo el blanco de toque
+//   más grande y más fácil de acertar con el dedo — dejarla afuera haría que "tocar la placa"
+//   (un gesto natural: es lo que identifica al vehículo) no hiciera nada.
+// Drag (`mousedown` más abajo) reutiliza esta misma constante sin riesgo: los vehículos nunca
+// traen `draggable: true` (`construirMarcadoresVehiculos` en `map-builders.ts` no lo setea), así
+// que el handler de drag los descarta en su primer `if` sin efecto secundario.
+const MARKER_CLICK_LAYERS = ['quivo-marker-points', 'quivo-vehicle-symbols', 'quivo-vehicle-fallback', 'quivo-vehicle-labels'];
+
+/**
+ * Resuelve el `onClick` de un marcador (punto de control o vehículo) para un click que
+ * MapLibre ya resolvió contra una de las capas de `MARKER_CLICK_LAYERS` — extraída como
+ * función PURA (ENTREGA 15, sin `Map` de MapLibre/WebGL de por medio) para poder testear el
+ * enganche capa→feature→`onClick` sin levantar un mapa real, que es justamente lo que el bug
+ * original no tenía cubierto: los tests existentes probaban `markersWithVehicleOverride` y el
+ * `onClick` de `map-builders`, pero ninguno verificaba que la capa donde MapLibre dispara el
+ * evento estuviera efectivamente escuchada. Antes del fix, llamar a esto con
+ * `layerId: 'quivo-vehicle-symbols'` devolvía `undefined` aunque el vehículo tuviera `onClick`
+ * — el chequeo de membership de acá abajo es deliberadamente redundante con el filtro que ya
+ * aplica `map.on('click', layers, …)` (MapLibre filtra `layers` contra las capas que existen al
+ * momento del evento, no al momento del registro — ver nota en `wireFeatureClicks`), pero hace
+ * que la función sea auto-contenida y testeable sin simular ese filtrado interno de MapLibre.
+ */
+export function resolveMarkerClick(
+  layerId: string,
+  featureId: string,
+  markers: MapPoint[],
+): (() => void) | undefined {
+  if (!MARKER_CLICK_LAYERS.includes(layerId)) return undefined;
+  return markers.find((m, i) => resolvePointId(m, i) === featureId)?.onClick;
+}
 
 /**
  * Mapa interactivo (MapLibre GL) para trazado y visualización de rutas — RF-24..33 (QUI-229) y
@@ -920,6 +1250,15 @@ export function RouteMap({
         mapReadyRef.current = true;
         setMapReady(true);
         map.resize();
+
+        // ENTREGA 14 — registro asíncrono de los sprites del vehículo. Corre DESPUÉS de
+        // marcar el mapa listo (no bloquea el primer render): el fallback de círculo
+        // (`quivo-vehicle-fallback`) ya está visible desde `ensureDataLayers`, así que los
+        // vehículos se ven de inmediato aunque esto tarde o falle.
+        void ensureVehiculoIconos(map).then((disponible) => {
+          if (cancelled || mapRef.current !== map) return;
+          setVehiculoIconoDisponible(map, disponible);
+        });
       });
 
       map.on('error', () => {
@@ -936,11 +1275,22 @@ export function RouteMap({
       // Click por feature (rutas/paradas/zonas/markers con `onClick` propio) — se resuelve
       // contra `dataRef.current` en el momento del evento, así siempre corre el callback
       // vigente sin tener que re-registrar listeners cuando cambian los props.
-      function wireFeatureClicks(layers: string[], resolve: (id: string) => (() => void) | undefined) {
+      // `layers` puede incluir ids que todavía no existen en el estilo al momento de este
+      // `map.on(...)` (pasa con los cuatro `wireFeatureClicks` de acá abajo: se registran de
+      // forma síncrona en `initialize()`, ANTES de que dispare `map.on('load', …)` — que es
+      // donde `ensureDataLayers` recién agrega las capas reales). No es un problema: MapLibre
+      // resuelve el listener delegado evaluando `layers` contra `this.getLayer(id)` en cada
+      // evento (no al registrarlo), así que una capa ausente en ese instante simplemente no
+      // aporta features a ese click — nunca lanza ni deja el listener a medio registrar. Por
+      // eso agregar capas nuevas a un array de arriba (como se hizo con `MARKER_CLICK_LAYERS`)
+      // no necesita reordenar nada ni esperar a que el mapa cargue.
+      function wireFeatureClicks(layers: string[], resolve: (id: string, layerId: string) => (() => void) | undefined) {
         map.on('click', layers, (event: MapLayerMouseEvent) => {
-          const id = event.features?.[0]?.properties?.id;
-          if (typeof id !== 'string') return;
-          resolve(id)?.();
+          const feature = event.features?.[0];
+          const id = feature?.properties?.id;
+          const layerId = feature?.layer?.id;
+          if (typeof id !== 'string' || typeof layerId !== 'string') return;
+          resolve(id, layerId)?.();
         });
         map.on('mouseenter', layers, (event: MapLayerMouseEvent) => {
           const clickable = event.features?.[0]?.properties?.clickable;
@@ -954,7 +1304,7 @@ export function RouteMap({
       wireFeatureClicks(ROUTE_CLICK_LAYERS, (id) => dataRef.current.routes.find((r) => r.id === id)?.onClick);
       wireFeatureClicks(STOP_CLICK_LAYERS, (id) => dataRef.current.stops.find((p, i) => resolvePointId(p, i) === id)?.onClick);
       wireFeatureClicks(ZONE_CLICK_LAYERS, (id) => dataRef.current.zones.find((z, i) => resolvePointId(z, i) === id)?.onClick);
-      wireFeatureClicks(MARKER_CLICK_LAYERS, (id) => dataRef.current.markers.find((m, i) => resolvePointId(m, i) === id)?.onClick);
+      wireFeatureClicks(MARKER_CLICK_LAYERS, (id, layerId) => resolveMarkerClick(layerId, id, dataRef.current.markers));
 
       // Drag de markers (`draggable: true`, ej. nodos del trazado en edición o el punto
       // pendiente de parada/punto de control): sin equivalente nativo en MapLibre para capas

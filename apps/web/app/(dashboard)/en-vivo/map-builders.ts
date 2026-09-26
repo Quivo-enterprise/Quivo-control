@@ -1,5 +1,5 @@
 import type { MapPoint, MapRoute, MapZone } from '@quivo/design-system';
-import type { ContextoEnVivo, CumplimientoRecorrido, SesionEnVivoResumen } from '@quivo/shared';
+import type { ContextoEnVivo, CumplimientoRecorrido, PosicionEnVivo } from '@quivo/shared';
 import { ApiError } from '../../../src/lib/api/client';
 import { PRESENTACION_FRESCURA, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 import { simplificarTrazaParaDibujo } from '../../../src/lib/en-vivo/simplificar-traza';
@@ -7,15 +7,6 @@ import { simplificarTrazaParaDibujo } from '../../../src/lib/en-vivo/simplificar
 /** Color fijo de la traza GPS real, igual que en el detalle histórico
  * (`/reportes/recorridos/[id]`) para que las dos pantallas se lean igual. */
 export const COLOR_TRAZA = '#2563eb';
-
-export function opcionDeSesion(sesion: SesionEnVivoResumen) {
-  const dispositivo = sesion.deviceId.slice(0, 8);
-  const estado = PRESENTACION_FRESCURA[sesion.estadoFrescura].etiqueta;
-  return {
-    value: sesion.id,
-    label: `${sesion.vehiculoPlaca} · ${sesion.lineaNombre} · ${sesion.conductorNombre} · ${dispositivo} — ${estado}`,
-  };
-}
 
 export function construirRutas(
   contexto: ContextoEnVivo,
@@ -66,12 +57,21 @@ export function ultimaPasada(
   return ultimo;
 }
 
-export function construirMarcadores(
+/**
+ * ENTREGA 13/14 — puntos de control de la sesión con detalle abierto (`sesionSeleccionada`
+ * en `page.tsx`). Antes esta función (`construirMarcadores`) también agregaba el marker del
+ * vehículo al final, tomando su posición del ÚLTIMO punto de la traza — eso dejó de tener
+ * sentido: ahora la posición "en vivo" de CADA vehículo (haya detalle abierto o no) sale de
+ * `GET /reportes/en-vivo/posiciones` (ver `construirMarcadoresVehiculos`), no de la traza de
+ * una sola sesión. Motor de renderizado: MapLibre GL (`route-map-impl.tsx`), no Leaflet — el
+ * `color` de cada punto termina en la propiedad `color` de un feature GeoJSON que consume la
+ * capa `quivo-marker-points`, donde `var(--qv-color-*)` sí se resuelve (`resolveColor`).
+ */
+export function construirPuntosControl(
   contexto: ContextoEnVivo,
   traza: TrazaAcumulada | undefined,
-  colorVehiculo: string,
 ): MapPoint[] {
-  const marcadores: MapPoint[] = contexto.puntosControl.map((pc, index) => {
+  return contexto.puntosControl.map((pc, index) => {
     const cumplimiento = ultimaPasada(traza, pc.id);
     const cumplido = cumplimiento?.cumplido ?? false;
     return {
@@ -81,39 +81,74 @@ export function construirMarcadores(
       description: cumplimiento
         ? `${cumplido ? 'Cumplido' : 'No cumplido'} — ${cumplimiento.distanciaM.toFixed(0)} m`
         : 'Todavía sin pasada validada',
-      // `MapPoint.color` termina en `buildDivIcon` (`route-map-impl.tsx`), que lo escribe
-      // como custom property CSS en un `style` inline (`--qv-map-pin-color:${color}`) — a
-      // diferencia de `pathOptions.color` de Leaflet (ver `construirZonas`), acá `var()` SÍ
-      // se resuelve.
       color: cumplido ? 'var(--qv-color-success)' : 'var(--qv-text-muted)',
       pinType: 'stop',
     };
   });
-
-  const ultimo = traza?.puntos.at(-1);
-  if (ultimo) {
-    marcadores.push({
-      // Id ESTABLE a propósito (no el id sintético `${lat}:${lng}:${index}` que arma
-      // `resolvePointId` sin esto): la posición de este marker cambia en cada poll, así que
-      // un id derivado de lat/lng cambiaría con ella — y `RouteMap` necesita un id fijo para
-      // saber, entre un render y el siguiente, que sigue siendo "el mismo" marker al que
-      // aplicarle la animación (`animatedVehicle.markerId`, ver `route-map-impl.tsx`).
-      id: ID_MARCADOR_VEHICULO,
-      lat: ultimo.lat,
-      lng: ultimo.lng,
-      label: `${contexto.vehiculo.placa} — última posición`,
-      description: new Date(ultimo.ts).toLocaleTimeString('es-BO'),
-      color: colorVehiculo,
-      pinType: 'pulse',
-    });
-  }
-  return marcadores;
 }
 
-/** Id estable del marker de "última posición" del vehículo — ver el comentario en
- * `construirMarcadores`. Lo consume `page.tsx` para armar el `animatedVehicle` que anima ese
- * marker en vez de dejarlo saltar de golpe en cada poll. */
-export const ID_MARCADOR_VEHICULO = 'vehiculo-en-vivo';
+/** Filtro por línea, client-side — mismo patrón que `vehiculos/page.tsx` (`filteredRows` de
+ * `use-vehiculos.ts`): el endpoint trae TODA la flota activa/reciente y el `<Select>` de
+ * línea filtra en memoria, sin round-trip. `lineaId === ''` ("Todas las líneas") es un no-op. */
+export function filtrarPorLinea(posiciones: PosicionEnVivo[], lineaId: string): PosicionEnVivo[] {
+  return lineaId ? posiciones.filter((p) => p.lineaId === lineaId) : posiciones;
+}
+
+/** Id ESTABLE del marker de un vehículo — no el id sintético `${lat}:${lng}:${index}` que
+ * arma `resolvePointId` sin esto (`route-map-impl.tsx`): la posición cambia en cada poll de
+ * `/en-vivo/posiciones` (cada 5 s), así que un id derivado de lat/lng cambiaría con ella, y
+ * `RouteMap` necesita un id fijo para saber, entre un render y el siguiente, que sigue siendo
+ * "el mismo" marker al que aplicarle la animación (`animatedVehicle.markerId`) o el override
+ * de posición en vivo.
+ *
+ * 🔴 ENTREGA 14 — reemplaza a la vieja constante `ID_MARCADOR_VEHICULO` (un único id fijo,
+ * `'vehiculo-en-vivo'`): con **todos** los vehículos dibujados a la vez (Entrega 13), un id
+ * único chocaría — los N marcadores se pisarían entre sí en la misma fuente GeoJSON
+ * `quivo-markers`. Namespaced por `sesionId`, que es único por definición (`PosicionEnVivo.id`
+ * = `sesionOperativa.id`).
+ */
+export function idMarcadorVehiculo(sesionId: string): string {
+  return `vehiculo:${sesionId}`;
+}
+
+/**
+ * ENTREGA 13/14 — TODOS los vehículos con sesión activa/reciente, ya filtrados por línea en
+ * `page.tsx` (filtrado client-side, mismo patrón que `vehiculos/page.tsx`). Un vehículo sin
+ * primer fix (`lat`/`lng` `null` — la sesión existe pero nunca entró un punto GPS) NO se
+ * dibuja: no hay dónde ponerlo. `page.tsx` lo cuenta aparte para el resumen honesto ("N en el
+ * mapa · M sin GPS todavía") en vez de fingir que no existen.
+ *
+ * `estadoFrescura`/`placa` viajan como propiedades del `MapPoint` (Entrega 14): las consume
+ * `quivo-vehicle-symbols`/`quivo-vehicle-labels` en `route-map-impl.tsx` para elegir el
+ * sprite (la FORMA cambia con el estado, no solo el color) y dibujar la placa junto al ícono.
+ */
+export function construirMarcadoresVehiculos(
+  posiciones: PosicionEnVivo[],
+  onSeleccionar: (sesionId: string) => void,
+): MapPoint[] {
+  return posiciones
+    .filter((p): p is PosicionEnVivo & { lat: number; lng: number } => p.lat !== null && p.lng !== null)
+    .map((p) => {
+      const presentacion = PRESENTACION_FRESCURA[p.estadoFrescura];
+      return {
+        id: idMarcadorVehiculo(p.id),
+        lat: p.lat,
+        lng: p.lng,
+        label: p.vehiculoPlaca,
+        description: `${p.lineaNombre} · ${p.conductorNombre} · ${presentacion.etiqueta}`,
+        color: presentacion.color,
+        // ENTREGA 16 — `'vehicle'`, no `'pulse'`: un fix de code-review le devolvió `'pulse'` a
+        // su significado original (nodos pulsantes del editor de trazado/demo de landing) — los
+        // vehículos reales de `/en-vivo` tienen su propio pinType desde acá en adelante (ver
+        // `MARKER_PULSE_FILTER`/`MARKER_POINTS_FILTER`/`VEHICLE_BODY_FILTER` en
+        // `route-map-impl.tsx`).
+        pinType: 'vehicle',
+        estadoFrescura: p.estadoFrescura,
+        placa: p.vehiculoPlaca,
+        onClick: () => onSeleccionar(p.id),
+      };
+    });
+}
 
 export function construirZonas(contexto: ContextoEnVivo): MapZone[] {
   return contexto.puntosControl.map((pc, index) => ({
@@ -121,12 +156,12 @@ export function construirZonas(contexto: ContextoEnVivo): MapZone[] {
     lng: pc.coord.coordinates[0],
     radiusMeters: pc.radioToleranciaM,
     label: `Tolerancia PC ${index + 1}`,
-    // Hex literal a propósito, NO `var(--qv-text-muted)`: este color va a `pathOptions.color`/
-    // `fillColor` de un `Circle` de Leaflet (`route-map-impl.tsx`), que termina en los
-    // atributos de presentación SVG `stroke`/`fill` — ahí `var()` nunca se resuelve (a
-    // diferencia de `construirMarcadores`, donde el color va a un `style` inline vía
-    // `buildDivIcon`). Mismo valor que el token `--qv-text-muted` claro; no reacciona a
-    // `prefers-color-scheme` en oscuro.
+    // Hex literal a propósito, NO `var(--qv-text-muted)`: este color va al `paint` de la capa
+    // `quivo-zone-fill`/`quivo-zone-outline` de MapLibre GL (`route-map-impl.tsx`), que
+    // termina en atributos de presentación WebGL — ahí `var()` nunca se resuelve (a diferencia
+    // de `construirPuntosControl`/`construirMarcadoresVehiculos`, donde el color pasa por
+    // `resolveColor` antes de llegar al feature). Mismo valor que el token `--qv-text-muted`
+    // claro; no reacciona a `prefers-color-scheme` en oscuro.
     color: '#94a3b8',
   }));
 }

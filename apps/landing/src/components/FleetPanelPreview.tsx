@@ -68,7 +68,16 @@ function DemoLiveMap() {
         label: vehicle.id,
         description: vehicle.place,
         color: vehicle.color,
-        pinType: 'pulse',
+        // ENTREGA 16 — 'vehicle' (con `estadoFrescura: 'reportando'`, todos "En movimiento" en
+        // este demo estático): antes usaba 'pulse', que un fix de code-review le devolvió a su
+        // significado original de "nodo pulsante del editor de trazado" — con eso, este demo
+        // pedía el sprite `quivo-bus-` (estadoFrescura vacío) en vez de uno real y se quedaba
+        // sin marker visible ni clickeable apenas cargaban los sprites de `/en-vivo`.
+        pinType: 'vehicle',
+        estadoFrescura: 'reportando',
+        // FIX web-design-guidelines (hallazgo MEDIA) — `VEHICLE_LABELS_FILTER` exige
+        // `placa !== ''`; sin esto la placa (acá, el id del vehículo demo) no se dibujaba.
+        placa: vehicle.id,
       })),
     [step],
   );
