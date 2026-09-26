@@ -87,6 +87,18 @@ export const gpsSpikeConfig: Config = {
     // 2 minutos le da margen a una parada breve sin sacrificar la detección de un layover
     // real (que dura bastante más que eso).
     stopDetectionDelay: 2,
+    // QUI-P0 (la flecha no se mueve en el mapa): default ESTÁTICO de la misma política que
+    // `reafirmarMovimiento` (`gps/seguimiento-continuo.ts`) reafirma en runtime vía
+    // `setConfig` después de `start()`. Hace falta acá TAMBIÉN, no solo en runtime, porque
+    // `reset` (arriba, no seteado = su default `true`) hace que CADA `ready(gpsSpikeConfig)`
+    // —se llama en cada `iniciar()`, no solo el primero— pise la config persistida con esta:
+    // sin este default, habría una ventana entre `ready()` y el `setConfig` posterior donde
+    // el plugin arranca con la detección de parada habilitada. Se restaura a `false` al
+    // finalizar (`restaurarComportamientoNormal`), pero ese `false` de runtime queda pisado
+    // de nuevo por ESTE `true` en el próximo `ready()` — a propósito: cada recorrido nuevo
+    // tiene que arrancar con el tracking continuo activo por default, sin heredar el estado
+    // de una sesión anterior.
+    disableStopDetection: true,
   },
   persistence: {
     // H7 (hallazgo de revisión, medio): sin setear esto, `maxDaysToPersist` queda en su
