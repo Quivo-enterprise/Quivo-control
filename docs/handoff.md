@@ -18,7 +18,24 @@
 - **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
 - **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
 
-### Punto de retome — cierre de la sesión del 2026-09-26
+### Punto de retome — 2026-09-26, tercera sesión (RC compilado, deploy pendiente)
+
+**Leer esto primero.** El runbook vivo está en `docs/plan-apk-build-11.md` → "Runbook de los pasos 5 y 6".
+- **RC = build 12** (`dabd0e52`), verificado sobre el APK; los detalles están en el plan, paso 6. Se compiló antes del deploy y antes de Codex, por decisión del CTO.
+- **El build 10 ya no lo usa nadie** (CTO). No hay que drenar teléfonos, salvo confirmar "0 pendientes" si sigue instalado.
+- **Preflight de prod (09-26):** prod sigue en `63a0b51`. **Rollback por digest, no por el tag `v1`**: `v1` se movió. Los digests están en el plan.
+- **PR de preparación P1/P2** (`ops/recompute-resumen-gps`):
+  - `scripts/recompute-resumen-gps.sh`, con el SQL en `scripts/sql/`, que ahora toma un lock contra el worker y usa la jornada boliviana explícita.
+  - `--task-timeout=1800` en `deploy-gcp.sh`.
+  - Probado en un Postgres 16 descartable: el lock, el timeout y la jornada. Contra prod no se probó.
+- **Siguiente, en orden:**
+  1. El CTO corre el paso 5: `! scripts/deploy-gcp.sh b11-<fecha>` y después `! scripts/recompute-resumen-gps.sh`.
+  2. El chairman verifica.
+  3. Paso 7 en el teléfono.
+  4. Paso 4 (Codex, desde el 2026-09-27 15:46).
+- **Trampa local:** después de mergear PRs móviles, `node_modules` puede quedar viejo. Correr `DATABASE_URL=postgresql://build:build@localhost:5432/build_placeholder pnpm install --frozen-lockfile`.
+
+### Punto de retome — cierre de la sesión del 2026-09-26 (histórico, reemplazado por el de la tercera sesión)
 
 **Leer esto primero.** Plan vigente: [`plan-apk-build-11.md`](plan-apk-build-11.md) (v2). Pasos 1, 2 y 2' **hechos**. Pasos 3 y 3' con código listo y sin PR.
 

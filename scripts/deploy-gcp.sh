@@ -510,6 +510,10 @@ JS_EOF
     --command=/bin/sh
     --max-retries=0
     --tasks=1
+    # El backfill de la migración 20260922100000_gps_sesion_resumen escanea toda
+    # gps_points: el default de Cloud Run Job (600s) puede matar la tarea a mitad de
+    # camino y Prisma la marca como fallida (P3009), bloqueando deploys futuros.
+    --task-timeout=1800
   )
 
   # Delimitador alternativo `^%%^...%%...` en vez de coma en los 4 `--args` de este bloque:

@@ -71,7 +71,7 @@
 | 5 | **Deploy a prod** de `main` (API de #65/#70/#74/#80/#92; migraciones de #74 y #80 — la 28 no trae): preflight ya hecho (retome de la 3.ª sesión del 09-25). `gcloud run jobs update quivo-migraciones ... --task-timeout=1800` y `! scripts/deploy-gcp.sh <tag>`. Después, el recompute de `docs/runbooks/retencion-gps.md` | **CTO** + chairman | 09-29 |
 | 6 | **Lista de features y fixes al CTO** (memoria `apk-build-11-changelog-antes-de-lanzar`). Con el OK: `eas build --platform android --profile production` = RC. Se instala en **1 teléfono de prueba** | chairman + CTO | 09-30 |
 | 7 | **Prueba única en teléfono** con el checklist de abajo. Si falla algo bloqueante: un fix (Sonnet), un build nuevo, y se repite solo el ítem que falló | chairman + CTO | 10-01/02 |
-| 8 | Distribución: drenar cada teléfono ("0 pendientes" + conteo de `gps_points`), desinstalar el viejo e instalar el RC aprobado. Recorrido de campo con 2 o más choferes | CTO | ≤ 10-10 |
+| 8 | Distribución: el build 10 ya no se usa. Si sigue instalado en algún teléfono, abrirlo y confirmar "0 pendientes" antes de desinstalarlo, porque lo que no se envió se pierde. Después, instalar el RC aprobado. Recorrido de campo con 2 o más choferes | CTO | ≤ 10-10 |
 
 ## Runbook de los pasos 5 y 6 (orden fijo, 2026-09-26)
 
@@ -106,7 +106,7 @@ día D. En el primer uso, el chairman lee el log de la ejecución.
 
 ### Paso 5 — deploy de `main` a prod (el CTO corre; el chairman verifica solo en lectura)
 
-Ventana: de noche en Bolivia, sin choferes en ruta. Así se achica el hueco que corrige el recompute.
+Ventana: cualquier hora. **El build 10 ya no lo usa nadie** (el CTO, 2026-09-26), así que no hay ingesta en vivo que corra carrera con el recompute. Igual el SQL toma `LOCK TABLE gps_sesion_resumen IN SHARE ROW EXCLUSIVE MODE` con `lock_timeout` 30 s, y usa la jornada boliviana explícita en vez de `CURRENT_DATE`, que en UTC falla entre las 20:00 y las 24:00 de Bolivia. Son los hallazgos de Codex sobre el SQL original del runbook.
 
 1. `! gcloud auth login` (cuenta `cloud@tuquivo.com`) y `! gcloud config set project quivo-control-prod`.
 2. **Preflight del chairman** (solo lectura): revisión e imagen actuales de `quivo-api`,
@@ -124,7 +124,7 @@ Ventana: de noche en Bolivia, sin choferes en ruta. Así se achica el hueco que 
    - Las revisiones nuevas de api, web y worker tienen el 100 % del tráfico.
    - `GET /health` responde 200.
    - Los logs del worker no muestran `relation … does not exist` ni errores de `insertarGpsPoints`.
-   - `/sync/batches` sigue en 2xx para los teléfonos del build 10.
+   - (Ya no aplica "el build 10 sigue sincronizando": nadie lo usa. La prueba de que la ingesta funciona es el RC enviando puntos en el paso 7.)
    - `/en-vivo` en prod muestra todos los vehículos (#83).
 6. `! scripts/recompute-resumen-gps.sh` (P1), **apenas el worker nuevo está vivo**. Es
    idempotente: si hay duda, se corre otra vez.
@@ -137,6 +137,16 @@ Las migraciones no se revierten: son aditivas y el código viejo las ignora. Si 
 vuelve a correr, hay que repetir el recompute después del roll-forward.
 
 ### Paso 6 — changelog, decisión y RC
+
+**HECHO (2026-09-26), fuera del orden recomendado.** El CTO lanzó el RC antes del paso 4 y del paso 5; su lanzamiento cuenta como OK al changelog tal cual.
+- **EAS:** `dabd0e52-3ecd-4989-9aef-b8452479fb87`, `versionCode` **12**. El 11 se fijó con `version:set`, pero `autoIncrement` lo subió a 12.
+- **Código:** commit `b7b8208`, idéntico a `main@bc8e458` en `apps` y `packages`.
+- **APK:** https://expo.dev/artifacts/eas/vUQj58QL6mFonvM4A6IcoQel-62GfQZ_01LB-HrlpkY.apk, sha256 `9bdb5cd2ef0e911da09451c03c3d5018e37e9eab5e2fbe3b94970e6017612123`.
+- **Verificado por el chairman sobre el APK:**
+  - `aapt`: `com.quivotech.conductor.app`, versionCode 12, target SDK 36; permisos `ACCESS_BACKGROUND_LOCATION`, `ACTIVITY_RECOGNITION` y `POST_NOTIFICATIONS`.
+  - El bundle tiene la URL de Cloud Run y `SESION_NO_VIGENTE`.
+- **Keystore nuevo del paquete `.app`:** SHA-256 `c6f5ec45bc6e70a970f19683bcfa19f58b4e35e5f62277038a5f9f45e87e894e`. Todo build futuro tiene que firmar con este mismo.
+- **Riesgo aceptado:** un `masks_symptom` del paso 4 obliga a un segundo build.
 
 Orden recomendado: **paso 4 (verify-fix con Codex, desde el 2026-09-27 15:46) antes del RC.**
 Si Codex encuentra un `masks_symptom` después de compilar, hace falta un segundo build y el
