@@ -149,7 +149,10 @@ plan tiene margen para uno solo. El deploy (paso 5) no depende del paso 4.
      en el paso 7.
    - Se anota el commit y el `versionCode` del build 10 (`eas build:list`), para confirmar la
      base del changelog.
-3. `cd apps/mobile && eas build --platform android --profile production`. El `versionCode` se
+3. **Paquete nuevo = app nueva en EAS** (verificado el 2026-09-26). `build:version:get` responde "No remote versions are configured": los builds 7 a 10 son del paquete viejo, y `com.quivotech.conductor.app` no tiene keystore. Los dos comandos siguientes piden respuestas, y con `!` fallan ("stdin is not readable"): **el CTO los corre en su propia terminal**, desde `apps/mobile`:
+   - `npx eas-cli build:version:set -p android` → 11, así no confunde con los builds anteriores. Sin esto el RC sale con `versionCode` 1.
+   - `npx eas-cli build --platform android --profile production` → a "Generate a new Android Keystore?", responder **sí**. El APK igual no se instala encima del viejo. **Todos los builds futuros de `.app` tienen que usar ese keystore**; EAS lo guarda. Si en `node_modules` falta algo, primero `pnpm install` (ver la trampa en "Borrador del changelog").
+   - Referencia: `cd apps/mobile && eas build --platform android --profile production`. El `versionCode` se
    autoincrementa en remoto.
 4. Se registran el build id, el `versionCode`, el commit y la URL del APK. Se corre
    `aapt dump badging` sobre el APK: el paquete debe ser `com.quivotech.conductor.app`.
