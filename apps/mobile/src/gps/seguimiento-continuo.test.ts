@@ -20,6 +20,7 @@ import {
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
+  reconciliarStopTardio,
   restaurarComportamientoNormal,
   TIMEOUT_ESPERA_INICIAR_INVALIDADO_MS,
   TIMEOUT_STOP_NATIVO_MS,
@@ -868,6 +869,127 @@ describe('detenerNativoConTimeout (rediseño 2026-09-25) — stop() colgado/rech
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe('reconciliarStopTardio (bug en producción, 2026-09-25) — un stop() que resuelve tarde no deja el recorrido colgado', () => {
+  /** Promesa + resolver expuestos por separado, para controlar a mano cuándo "se asienta" el
+   * `stop()` original — mismo patrón que usan los tests de `promesaAsentada` de arriba. */
+  function promesaControlada(): { promesa: Promise<void>; resolver: () => void } {
+    let resolver!: () => void;
+    const promesa = new Promise<void>((resolve) => {
+      resolver = resolve;
+    });
+    return { promesa, resolver };
+  }
+
+  it('se asienta + nativo ya apagado + debe reconciliar: llama detener() una vez y resuelve "reconciliado"', async () => {
+    const { promesa, resolver } = promesaControlada();
+    const detener = vi.fn(async () => {});
+    const resultadoPromesa = reconciliarStopTardio({
+      promesaAsentada: promesa,
+      debeReconciliar: () => true,
+      nativoHabilitado: async () => false,
+      detener,
+    });
+    resolver();
+    await expect(resultadoPromesa).resolves.toBe('reconciliado');
+    expect(detener).toHaveBeenCalledTimes(1);
+  });
+
+  it('el nativo sigue enabled (el stop() tardío no apagó nada): no llama detener(), "sin-accion"', async () => {
+    const detener = vi.fn(async () => {});
+    const resultado = await reconciliarStopTardio({
+      promesaAsentada: Promise.resolve(),
+      debeReconciliar: () => true,
+      nativoHabilitado: async () => true,
+      detener,
+    });
+    expect(resultado).toBe('sin-accion');
+    expect(detener).not.toHaveBeenCalled();
+  });
+
+  it('debeReconciliar() ya es false ANTES de leer getState(): no llama nativoHabilitado() ni detener()', async () => {
+    const detener = vi.fn(async () => {});
+    const nativoHabilitado = vi.fn(async () => false);
+    const resultado = await reconciliarStopTardio({
+      promesaAsentada: Promise.resolve(),
+      debeReconciliar: () => false,
+      nativoHabilitado,
+      detener,
+    });
+    expect(resultado).toBe('sin-accion');
+    expect(nativoHabilitado).not.toHaveBeenCalled();
+    expect(detener).not.toHaveBeenCalled();
+  });
+
+  it('debeReconciliar() pasa a false DESPUÉS del await a getState() (p. ej. otro cierre ganó mientras tanto): no llama detener()', async () => {
+    let vigente = true;
+    const detener = vi.fn(async () => {});
+    const resultado = await reconciliarStopTardio({
+      promesaAsentada: Promise.resolve(),
+      debeReconciliar: () => vigente,
+      nativoHabilitado: async () => {
+        // Cambia de estado MIENTRAS este await está en vuelo — simula que, entre que se leyó
+        // getState() y se lo pudo usar, otra vía (reintento del chofer, recorrido nuevo) ya
+        // dejó de corresponder la reconciliación.
+        vigente = false;
+        return false;
+      },
+      detener,
+    });
+    expect(resultado).toBe('sin-accion');
+    expect(detener).not.toHaveBeenCalled();
+  });
+
+  it('promesaAsentada sigue pendiente: no evalúa debeReconciliar() ni hace nada hasta que se asienta', async () => {
+    const { promesa, resolver } = promesaControlada();
+    const debeReconciliar = vi.fn(() => true);
+    const nativoHabilitado = vi.fn(async () => false);
+    const detener = vi.fn(async () => {});
+    const resultadoPromesa = reconciliarStopTardio({
+      promesaAsentada: promesa,
+      debeReconciliar,
+      nativoHabilitado,
+      detener,
+    });
+
+    // Deja correr microtasks sin resolver `promesa` — nada debería haber pasado todavía.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(debeReconciliar).not.toHaveBeenCalled();
+    expect(nativoHabilitado).not.toHaveBeenCalled();
+    expect(detener).not.toHaveBeenCalled();
+
+    resolver();
+    await expect(resultadoPromesa).resolves.toBe('reconciliado');
+    expect(detener).toHaveBeenCalledTimes(1);
+  });
+
+  it('detener() rechaza: el rechazo propaga (el llamador lo reporta a Sentry, no este helper)', async () => {
+    const error = new Error('detener(): fallo simulado');
+    const resultadoPromesa = reconciliarStopTardio({
+      promesaAsentada: Promise.resolve(),
+      debeReconciliar: () => true,
+      nativoHabilitado: async () => false,
+      detener: async () => {
+        throw error;
+      },
+    });
+    await expect(resultadoPromesa).rejects.toBe(error);
+  });
+
+  it('nativoHabilitado() rechaza: el rechazo propaga', async () => {
+    const error = new Error('getState(): fallo simulado');
+    const resultadoPromesa = reconciliarStopTardio({
+      promesaAsentada: Promise.resolve(),
+      debeReconciliar: () => true,
+      nativoHabilitado: async () => {
+        throw error;
+      },
+      detener: async () => {},
+    });
+    await expect(resultadoPromesa).rejects.toBe(error);
   });
 });
 

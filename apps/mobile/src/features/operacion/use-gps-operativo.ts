@@ -54,6 +54,7 @@ import {
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
+  reconciliarStopTardio,
   restaurarComportamientoNormal,
   type ResultadoStopNativo,
 } from '../../gps/seguimiento-continuo';
@@ -1246,6 +1247,19 @@ export function useGpsOperativo(
     }
   }, [ejecutarIniciar, serializadorIniciar]);
 
+  // Reconciliación de un stop() tardío (bug en producción, 2026-09-25): `ejecutarDetener`
+  // necesita poder invocar el `detener()` COMPLETO (single-flight incluido, ver
+  // `detenerConSingleFlight` más abajo) para cerrar un recorrido cuyo `stop()` nativo apagó el
+  // plugin DESPUÉS de que el timeout ya hubiera vencido (ver `reconciliarStopTardio`,
+  // `gps/seguimiento-continuo.ts`). Mismo patrón de ref que `onLocationRef`/`obtenerAccessTokenRef`
+  // de arriba, pero acá por una razón distinta: evita la dependencia circular entre los dos
+  // `useCallback` (`ejecutarDetener` necesita a `detenerConSingleFlight`, que a su vez necesita a
+  // `ejecutarDetener`) — el ref se actualiza en cada render sin que ninguno de los dos tenga que
+  // listar al otro en su arreglo de dependencias.
+  const detenerConSingleFlightRef = useRef<
+    (opciones?: { esReconciliacion?: boolean }) => Promise<void>
+  >(() => Promise.resolve());
+
   // REDISEÑO (2026-09-25): `ejecutarDetener` es el cuerpo REAL de "Finalizar recorrido" — SOLO
   // el camino crítico que el chofer necesita ver completarse antes de que el botón vuelva a
   // responder: invalidar el `iniciar()` en curso (sync, punto 3), parar el nativo con un
@@ -1261,7 +1275,7 @@ export function useGpsOperativo(
   // SQLite trabada) — el fix anterior (esperar a `iniciar()` con un timeout) atacaba el síntoma
   // equivocado: `detener()` mismo se colgaba en SU PROPIO outbox antes de escribir
   // `fin_recorrido`. Este rediseño saca el outbox del camino crítico del todo.
-  const ejecutarDetener = useCallback(async () => {
+  const ejecutarDetener = useCallback(async (opciones: { esReconciliacion?: boolean } = {}) => {
     setErrorGps(null);
     // Punto 3: capturado PRIMERO — el instante REAL en que el chofer tocó "Finalizar", antes de
     // cualquier operación que pueda demorarse. `cerrarRecorridoEnOutbox` (más abajo) lo usa como
@@ -1278,6 +1292,15 @@ export function useGpsOperativo(
     const snapshotBateria = [...bateria.current];
     const snapshotPuntos = puntosRef.current;
     const snapshotErroresEscritura = erroresEscritura.current;
+    // Reconciliación de un stop() tardío (ver `reconciliarStopTardio`,
+    // `gps/seguimiento-continuo.ts`): identidad del recorrido que ESTE toque de "Finalizar" está
+    // intentando cerrar, capturada ANTES de cualquier `await` — igual que los snapshots de
+    // arriba. `estadoInicioRecorrido.eventId` es el identificador estable de "este recorrido"
+    // (asignado una vez por `iniciar()`, ver `reiniciarEstadoInicioRecorrido`); si para cuando el
+    // `stop()` tardío por fin se asienta ya cambió (un `iniciar()` nuevo arrancó otro recorrido
+    // mientras tanto), la reconciliación de abajo no debe cerrar ESE recorrido nuevo con el cierre
+    // que le correspondía a este.
+    const eventIdAlDetener = estadoInicioRecorrido.eventId;
     // Sync — invalida el `iniciar()` en curso, si lo hay, SIN esperar nada. Si ese intento ya
     // llamó `start()`, al resolver tarde se apaga y restaura solo (`detenerNativoYRestaurar` en
     // `ejecutarIniciar`) — ver el chequeo `sigueVigente()` ahí. `causa: 'detener'` explícita
@@ -1319,6 +1342,30 @@ export function useGpsOperativo(
       // un recorrido nuevo que arrancó mientras tanto.
       serializadorRestauracion.registrar(resultadoStop.promesaAsentada);
       setErrorGps('No se pudo detener correctamente el GPS. Intenta nuevamente.');
+      // Reconciliación de un stop() tardío (bug en producción, 2026-09-25): el `stop()` que
+      // venció el timeout/rechazó puede seguir resolviendo contra el nativo — si TERMINA
+      // apagando el plugin de verdad, el chofer no puede quedar viendo "recorrido activo" para
+      // siempre esperando un reintento que quizás nunca llegue. `debeReconciliar()` se evalúa dos
+      // veces dentro de `reconciliarStopTardio` (antes y después de leer `getState()`): cubre que
+      // el hook se haya desmontado, que el chofer haya reintentado "Finalizar" con éxito mientras
+      // tanto (`trackingRef.current` ya en `false`), que ESTE intento haya sido a su vez una
+      // reconciliación (`!opciones.esReconciliacion` — guarda de recursión, un stop() tardío
+      // disparado POR una reconciliación nunca agenda otra) o que haya arrancado un recorrido
+      // distinto (`eventIdAlDetener` ya no coincide).
+      void reconciliarStopTardio({
+        promesaAsentada: resultadoStop.promesaAsentada,
+        debeReconciliar: () =>
+          montadoRef.current &&
+          trackingRef.current &&
+          !opciones.esReconciliacion &&
+          estadoInicioRecorrido.eventId === eventIdAlDetener,
+        nativoHabilitado: async () => (await BackgroundGeolocation.getState()).enabled,
+        detener: () => detenerConSingleFlightRef.current({ esReconciliacion: true }),
+      }).catch((error) => {
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'detener-reconciliar-stop-tardio' },
+        });
+      });
       return;
     }
 
@@ -1455,24 +1502,44 @@ export function useGpsOperativo(
     })();
   }, [deviceId, sesionId, serializadorRestauracion, serializadorIniciar, estadoInicioRecorrido, removerSuscripciones]);
 
-  // Punto 2 del rediseño: wrapper público de "Finalizar recorrido" — single-flight, mismo
-  // mecanismo que `iniciar()` (chequeo y registro síncronos, sin `await` de por medio). Una
-  // segunda llamada mientras hay un `detener()` en curso reusa la MISMA promesa — nunca corre
-  // el camino crítico dos veces en paralelo. `deteniendo` es lo que `operation-screen.tsx` usa
-  // para deshabilitar "Finalizar" mientras corre.
-  const detener = useCallback(async () => {
-    let promesa = serializadorIniciar.promesaDetenerEnCurso();
-    if (!promesa) {
-      promesa = ejecutarDetener();
-      serializadorIniciar.registrarPromesaDetener(promesa);
-    }
-    setDeteniendo(true);
-    try {
-      await promesa;
-    } finally {
-      setDeteniendo(false);
-    }
-  }, [ejecutarDetener, serializadorIniciar]);
+  // Punto 2 del rediseño: single-flight de "Finalizar recorrido" — mismo mecanismo que
+  // `iniciar()` (chequeo y registro síncronos, sin `await` de por medio). Una segunda llamada
+  // mientras hay un `detener()` en curso reusa la MISMA promesa — nunca corre el camino crítico
+  // dos veces en paralelo. `deteniendo` es lo que `operation-screen.tsx` usa para deshabilitar
+  // "Finalizar" mientras corre.
+  //
+  // Recibe `opciones` (reconciliación de un stop() tardío, ver `ejecutarDetener` arriba) para que
+  // la reconciliación pase por el MISMO single-flight que un "Finalizar" real — nunca corre
+  // `ejecutarDetener` en paralelo con un toque genuino del chofer. El wrapper PÚBLICO `detener`
+  // (abajo), el único que ve `operation-screen.tsx`, sigue sin recibir parámetros.
+  const detenerConSingleFlight = useCallback(
+    async (opciones: { esReconciliacion?: boolean } = {}) => {
+      let promesa = serializadorIniciar.promesaDetenerEnCurso();
+      if (!promesa) {
+        promesa = ejecutarDetener(opciones);
+        serializadorIniciar.registrarPromesaDetener(promesa);
+      }
+      setDeteniendo(true);
+      try {
+        await promesa;
+      } finally {
+        setDeteniendo(false);
+      }
+    },
+    [ejecutarDetener, serializadorIniciar],
+  );
+
+  // Mismo patrón de ref que `onLocationRef`/`obtenerAccessTokenRef` (arriba) y
+  // `detenerConSingleFlightRef` (declarado antes de `ejecutarDetener`, que lo necesita) — acá se
+  // mantiene sincronizado con la última versión de `detenerConSingleFlight` en cada render.
+  useEffect(() => {
+    detenerConSingleFlightRef.current = detenerConSingleFlight;
+  }, [detenerConSingleFlight]);
+
+  // Wrapper público de "Finalizar recorrido" — la única firma que ve `operation-screen.tsx`,
+  // sin parámetros (nunca cambia, aunque `detenerConSingleFlight` sí acepte `opciones` para la
+  // reconciliación interna).
+  const detener = useCallback(() => detenerConSingleFlight(), [detenerConSingleFlight]);
 
   /**
    * B3 (hallazgo de revisión, bajo): Map SEPARADO de `puntosControlDetectados` — antes de este

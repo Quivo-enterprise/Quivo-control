@@ -561,6 +561,60 @@ export async function detenerNativoConTimeout(
   }
 }
 
+/**
+ * Reconciliación de un `stop()` que RESUELVE TARDE (bug en producción, 2026-09-25): cierra el
+ * hueco que deja `detenerNativoConTimeout` cuando su timeout de 5 s vence pero el `stop()` nativo
+ * real, más tarde, SÍ termina apagando el plugin. Sin esto, `ejecutarDetener`
+ * (`use-gps-operativo.ts`) ya devolvió `ok:false` y dejó `tracking=true` + suscripciones puestas +
+ * "No se pudo detener correctamente el GPS. Intenta nuevamente." en pantalla — si el chofer no
+ * reintenta, el recorrido queda "activo" en la UI mientras el SDK nativo ya dejó de grabar: ni
+ * puntos nuevos ni `fin_recorrido` durante horas, hasta que alguien note la discrepancia.
+ *
+ * Pura, mismo espíritu que el resto del módulo: recibe sus cuatro dependencias por parámetro, sin
+ * tocar `BackgroundGeolocation` ni React — testeable con promesas de control manual.
+ *
+ * SECUENCIA:
+ * 1. Espera a que el `stop()` original termine de asentarse (`promesaAsentada` — nunca rechaza,
+ *    ver el docblock de `detenerNativoConTimeout` de arriba).
+ * 2. Si ya no corresponde reconciliar (`debeReconciliar()` — el llamador decide qué cuenta como
+ *    "sigue siendo el mismo recorrido activo, sin haber sido cerrado ya por otra vía"), no hace
+ *    nada.
+ * 3. Lee el estado REAL del plugin (`nativoHabilitado()`): si sigue `enabled`, el `stop()` tardío
+ *    no apagó nada (el timeout venció sin más, nada que reconciliar).
+ * 4. Vuelve a chequear `debeReconciliar()` DESPUÉS de ese `await` — el estado pudo cambiar
+ *    mientras se esperaba (el chofer reintentó "Finalizar" con éxito, o inició un recorrido
+ *    distinto) — recién entonces cierra el recorrido llamando a `detener()`.
+ *
+ * `detener()` es el `detener()` COMPLETO del hook (single-flight incluido), no un atajo — así el
+ * cierre real (outbox, `fin_recorrido`, veredicto) corre igual que en un "Finalizar" normal. No
+ * atrapa errores de `nativoHabilitado`/`detener()`: el llamador (`ejecutarDetener`) los reporta a
+ * Sentry.
+ */
+export interface DependenciasReconciliarStopTardio {
+  /** La `promesaAsentada` del `detenerNativoConTimeout` que venció. */
+  promesaAsentada: Promise<void>;
+  /** `true` si sigue teniendo sentido reconciliar (mismo recorrido, todavía activo, montado). Se
+   * evalúa DOS veces (antes y después de `nativoHabilitado()`) — ver SECUENCIA arriba. */
+  debeReconciliar: () => boolean;
+  /** Lee `BackgroundGeolocation.getState().enabled` — la única forma de saber si el `stop()`
+   * tardío de verdad apagó el plugin. */
+  nativoHabilitado: () => Promise<boolean>;
+  /** El `detener()` completo del hook (con single-flight). */
+  detener: () => Promise<void>;
+}
+
+export async function reconciliarStopTardio(
+  deps: DependenciasReconciliarStopTardio,
+): Promise<'reconciliado' | 'sin-accion'> {
+  await deps.promesaAsentada;
+  if (!deps.debeReconciliar()) return 'sin-accion';
+  const habilitado = await deps.nativoHabilitado();
+  if (habilitado) return 'sin-accion';
+  if (!deps.debeReconciliar()) return 'sin-accion';
+  await deps.detener();
+  return 'reconciliado';
+}
+
 /** Punto 5.b (hallazgo de revisión, 2026-09-25): tope de espera a que un `iniciar()` invalidado
  * por un `detener()` termine de asentarse antes de arrancar uno fresco (ver
  * `iniciarConSingleFlight`, abajo). Ese intento invalidado puede colgarse de verdad — la fase que
