@@ -91,12 +91,25 @@ que puede tardar minutos u horas según cuán seguido reporte cada sesión, y un
 terminó (sin más puntos por venir) puede quedar corta para siempre.
 
 El SQL de abajo es un recompute COMPLETO (no incremental) desde `gps_points`, acotado a la
-jornada de HOY y la de AYER (rango generoso: cubre cualquier despliegue que haya cruzado
+jornada boliviana de HOY y la de AYER — calculadas con la MISMA expresión que usa
+`insertarGpsPoints` (`((now() AT TIME ZONE 'UTC') - interval '4 hours')::date`, no
+`CURRENT_DATE`, que depende del TimeZone de la sesión y desfasa el rango entre las 20:00 y
+las 24:00 hora boliviana; rango generoso: cubre cualquier despliegue que haya cruzado
 medianoche boliviana) — sobreescribe `gps_sesion_resumen` con los valores recalculados
 (`DO UPDATE SET columna = EXCLUDED.columna`, no `GREATEST`/suma como el upsert incremental
 del worker) para esas 2 jornadas, así que es **seguro correrlo más de una vez** (idempotente:
 cada corrida vuelve a calcular desde `gps_points`, no depende de qué había antes en
 `gps_sesion_resumen`) y no hace falta saber la hora exacta del corte worker viejo → nuevo.
+
+El script toma `LOCK TABLE gps_sesion_resumen IN SHARE ROW EXCLUSIVE MODE` antes de leer
+`gps_points`: sin esto, un upsert del worker en vivo que haga commit justo entre el snapshot
+de este recompute y su propio commit quedaría pisado (`total_puntos` es un reemplazo acá, no
+una suma) — undercount permanente. El lock hace que el snapshot de `gps_points` solo se tome
+una vez que no queda ningún upsert del worker en vuelo, y bloquea nuevos upserts hasta que
+este script termina; el worker solo espera (no pierde datos), y como este script solo lee
+`gps_points` no hay riesgo de deadlock. Es seguro correr el recompute con el worker en vivo
+recibiendo tráfico — va a introducir una pausa breve en las escrituras a
+`gps_sesion_resumen`, no un error.
 
 El SQL completo (fuente única, no duplicar) vive en
 `scripts/sql/recompute-gps-sesion-resumen.sql`. Para ejecutarlo en producción (dentro de la
