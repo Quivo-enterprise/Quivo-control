@@ -3,9 +3,13 @@ import type { DeteccionPuntoControl } from '../../gps/geofence';
 /**
  * Identidad de la última confirmación mostrada en el toast (`ControlFeedbackToast`),
  * `{ puntoControlId, pasada }` — el mismo par que ya usa el dedupe del sonido de confirmación
- * (`ultimoSonado`, `gps-provider.tsx`). `pasada` siempre viene definida cuando `cumplido` es
- * `true`: todo emisor de una confirmación (`filtrarNuevosCumplimientos`/`confirmarVisitasVencidas`,
- * `geofence.ts`) la completa junto con `cumplido: true`.
+ * (`ultimoSonado`, `gps-provider.tsx`). `pasada` viene definida cuando `cumplido` es `true` en
+ * las detecciones que efectivamente llegan a `ultimaDeteccion`: las emite
+ * `filtrarNuevosCumplimientos`/`confirmarVisitasVencidas` (`geofence.ts`), que la completan
+ * junto con `cumplido: true`. OJO: eso NO es cierto para toda `DeteccionPuntoControl` con
+ * `cumplido: true` en general — `detectarPuntosControlCercanos` (chequeo crudo de proximidad,
+ * `geofence.ts`) también pone `cumplido: distanciaM <= radio` sin `pasada`, simplemente esa
+ * forma cruda no llega hoy a este componente. Ver el fallback fail-open en `debeMostrarToast`.
  */
 export interface IdentidadToastMostrado {
   puntoControlId: string;
