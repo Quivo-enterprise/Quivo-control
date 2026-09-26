@@ -1,16 +1,33 @@
-import type { ContextoEnVivo, SesionEnVivoResumen, TrazaEnVivo } from '@quivo/shared';
+import type { ContextoEnVivo, PosicionEnVivo, SesionEnVivoResumen, TrazaEnVivo } from '@quivo/shared';
 import { apiFetch } from './client';
 
-/** Cliente de los tres endpoints del mapa en vivo (`apps/api/src/modules/reportes/en-vivo.*`). */
+/** Cliente de los endpoints del mapa en vivo (`apps/api/src/modules/reportes/en-vivo.*`). */
 export const enVivoApi = {
-  /** Sesiones de la jornada + las que quedaron abiertas, ordenadas por último fix. */
+  /** Sesiones de la jornada + las que quedaron abiertas, ordenadas por último fix. Sin
+   * consumidores en `/en-vivo` desde la ENTREGA 13 (reemplazado por `posicionesTodas`, que no
+   * escala con N sesiones) — se deja para no romper otros posibles usos del listado crudo. */
   listar: (token: string) => apiFetch<SesionEnVivoResumen[]>('/reportes/en-vivo', token),
+
+  /**
+   * ENTREGA 10/13 — `GET /reportes/en-vivo/posiciones` (plural, SIN `sesionId`). Última
+   * posición conocida de TODOS los vehículos con sesión activa/reciente, en una sola query
+   * server-side que no escala con N — la alternativa (`posiciones` de abajo, una traza por
+   * sesión) está descartada por costo para el mapa que dibuja todos los vehículos a la vez
+   * (ver el comentario de `PosicionEnVivoSchema` en `@quivo/shared`).
+   *
+   * Nombre distinto de `posiciones` (no `enVivoApi.posiciones` a secas) a propósito: esa
+   * clave ya la tiene el endpoint POR SESIÓN de abajo (`:sesionId/posiciones`, el poll de
+   * traza), que sigue viva para la sesión con detalle abierto — colisionar los dos nombres
+   * habría sido confuso o directamente un bug de pisado.
+   */
+  posicionesTodas: (token: string) => apiFetch<PosicionEnVivo[]>('/reportes/en-vivo/posiciones', token),
 
   /** Todo lo que no cambia durante el recorrido (ruta, puntos de control, vehículo). */
   contexto: (token: string, sesionId: string) =>
     apiFetch<ContextoEnVivo>(`/reportes/en-vivo/${sesionId}/contexto`, token),
 
-  /** Delta de traza + agregados de frescura. Sin `desde` devuelve la ventana completa. */
+  /** Delta de traza + agregados de frescura de UNA sesión (la que tiene el detalle abierto).
+   * Sin `desde` devuelve la ventana completa. */
   posiciones: (
     token: string,
     sesionId: string,

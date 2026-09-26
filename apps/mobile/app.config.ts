@@ -62,6 +62,14 @@ export default (): ExpoConfig => ({
       // (`background-geolocation.config.ts`) tras un reinicio del teléfono.
       'WAKE_LOCK',
       'RECEIVE_BOOT_COMPLETED',
+      // QUI-P0 (la flecha del conductor no se mueve en el mapa): permiso "dangerous" que
+      // Android 10+ (API 29+) exige en runtime para el Activity Recognition System
+      // (acelerómetro) que el SDK usa para detectar el paso de estacionario a en-movimiento.
+      // Sin declararlo acá NUNCA podía concederse (confirmado en Sentry: Samsung Galaxy A71,
+      // Android 13, `ACTIVITY_RECOGNITION: not_granted`) — el pedido en runtime vive en
+      // `use-gps-operativo.ts` (`iniciar()`), fail-open: ver `gps/permiso-actividad.ts` para
+      // el detalle completo de por qué esto NUNCA bloquea "Iniciar recorrido".
+      'ACTIVITY_RECOGNITION',
     ],
   },
   extra: {
