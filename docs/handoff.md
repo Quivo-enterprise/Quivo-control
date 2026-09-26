@@ -18,9 +18,63 @@
 - **Paquete nuevo:** `com.quivotech.conductor.app` (decidido 2026-09-23).
 - **Producción (leído 2026-09-23):** `quivo-api` y `quivo-worker` corren la revisión `quivo-api-00006-qsn` (digest `ed3c47…`, del 2026-09-09) y `quivo-web` corre `00003-qm9`. **#65, #70 y #74 NO están desplegados.** El job de migraciones del 09-22 usó la imagen vieja, así que el hueco del recompute todavía no se abrió.
 
-### Punto de retome — cierre de la tercera sesión del 2026-09-25
+### Punto de retome — cierre de la cuarta sesión del 2026-09-25
 
-**Leer esto primero.** Reemplaza al retome de la segunda sesión (queda abajo como histórico). Siguen
+**Leer esto primero.** Reemplaza al retome de la tercera sesión (queda abajo como histórico; su tabla de
+ramas y su preflight de deploy siguen valiendo salvo lo que se corrige acá). Todo lo de esta sesión es
+**app móvil del conductor** (`apps/mobile`, APK build 11), rama `fix/movil-posicion-en-vivo`.
+
+**Rama posición — pusheada en `fe4090c`, sin PR:**
+- `c83b0b8` fixes del 3.er `/code-review high` sobre `4b9e5b5..51d3fad` (10 hallazgos, 9 aplicados):
+  serializador de restauración encadena en vez de reemplazar; fase 2 escribe `inicio_recorrido` siempre
+  tras `start()` ok; invalidación con causa `'detener' | 'desmontaje'` (desmontaje no apaga el nativo);
+  espera a intento invalidado con tope 15 s (`EsperaIniciarInvalidadoAgotadaError`) y tolerante a
+  rechazos; bump de `ultimoCierreId` movido tras `start()`; `stop()` síncrono normalizado; docs.
+- `fe4090c` hallazgo restante: `reconciliarStopTardio` (función pura) — si un `stop()` vencido resuelve
+  tarde con el SDK apagado y `tracking=true`, cierra el recorrido una sola vez (guarda por
+  `esReconciliacion` y por `estadoInicioRecorrido.eventId`). Público `detener()` sin cambio de firma.
+- Verificado por el chairman en `fe4090c`: tsc 0 · vitest 364/364 · eslint 0 errores (14 warnings viejos).
+
+**Bloqueante antes del PR — `/code-review medium` sobre `51d3fad..fe4090c` encontró 5 regresiones de
+esos fixes, todas confirmadas por el chairman. Decisiones ya tomadas (el agente que las aplicaba se
+detuvo a pedido del CTO sin escribir nada; worktree limpio):**
+1. `crearSerializadorRestauracion` (`seguimiento-continuo.ts` ~303/315): con el encadenado, un `stop()`
+   nativo que nunca asienta cuelga `esperarPendiente()` para siempre. → `esperarPendiente(timeout
+   10 s)`, al vencer lanza `EsperaRestauracionAgotadaError` y **no** limpia el slot; `iniciar()` lo
+   trata como `EsperaIniciarInvalidadoAgotadaError` ("Cierra y vuelve a abrir la app").
+2. Desmontaje (`use-gps-operativo.ts` ~1023): no apagar el nativo deja GPS huérfano (el remount puede
+   leer `enabled=false` antes de que resuelva el `start()` viejo) y sin `inicio_recorrido`. →
+   **revertir** el caso `'desmontaje'` (vuelve a `detenerNativoYRestaurar`), borrar la plomería de
+   causa; mitigar el caso cruzado suscribiendo `onEnabledChange` mientras hay tracking (verificar firma
+   en los typings del paquete): `enabled=false` + montado + `trackingRef` → `detener` de reconciliación.
+   Verificar orden `stop()`/evento/`trackingRef=false` para no cerrar dos veces.
+3. `ultimoCierreId` (~1039/~793): el bump tardío deja que el cierre viejo pinte veredicto/error sobre el
+   recorrido nuevo. → **revertir** al bump al principio de `ejecutarIniciar`; tradeoff aceptado: un
+   Comenzar bloqueado por permisos descarta el veredicto pendiente del recorrido anterior.
+4. Fase 2 (~1144): tras esperar la semilla puede escribir `inicio_recorrido` con el `eventId` de un
+   recorrido nuevo que nunca arrancó. → capturar `eventIdInicio` al empezar la fase 2 y saltar la
+   escritura si `estadoInicioRecorrido.eventId` cambió.
+5. Reconciliación (~1285/~1363): re-corre `ejecutarDetener` y toma `tsFin`/snapshots nuevos. → pasar
+   `cierreOriginal { tsFin, snapshotBateria, snapshotPuntos, snapshotErroresEscritura }` en `opciones`.
+
+**Criterio de corte (del chairman):** es la 2.ª vuelta de fixes sobre el mismo hook y cada review sacó
+regresiones nuevas. Tras aplicar 1–5 (Sonnet nuevo) + un `/code-review` corto: si vuelve a salir un fallo
+de diseño, proponer al CTO cerrar el PR y mover las carreras residuales a un ticket, no seguir parchando.
+Pendiente también: `/codex-debug verify-fix` (Codex fuera hasta 2026-09-27 15:46 — si se mergea antes,
+queda "no verificado") y prueba en teléfono (iniciar/finalizar rápido, doble toque, modo avión).
+
+**Deploy a producción:** el CTO renovó `gcloud auth login` (cuenta `cloud@tuquivo.com`, proyecto
+`quivo-control-prod`) al inicio de esta sesión. Sigue sin desplegarse: el clasificador bloquea
+`scripts/deploy-gcp.sh`; lo corre el CTO (`! scripts/deploy-gcp.sh <tag>`, secuencia en el retome de la
+tercera sesión) o agrega regla de permiso. Pregunta abierta al CTO, sin respuesta.
+
+**Siguiente paso, en orden:** fixes 1–5 de posición → review → teléfono → PR/CI/merge · luego anuncio
+(`git merge origin/main` + `/code-review` + PR) · mapa offline (teléfono → PR) · Entregas 8/9/26/28 ·
+lista de features al CTO antes del build.
+
+### Punto de retome — cierre de la tercera sesión del 2026-09-25 (histórico, reemplazado por el de la cuarta sesión)
+
+Siguen
 vigentes: gate sin Codex hasta el 2026-09-27 15:46, lista de features al CTO antes del build, licencia
 trial hasta el 2026-10-25, ramas al día con `git merge origin/main` (no rebase).
 
