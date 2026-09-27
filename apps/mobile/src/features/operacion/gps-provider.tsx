@@ -1,12 +1,23 @@
 import React, { createContext, useContext, useMemo, useEffect, useRef, useCallback } from 'react';
 import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
-import { usePaqueteDia } from './use-paquete-dia';
-import { useGpsOperativo } from './use-gps-operativo';
+import { usePaqueteDia as usePaqueteDiaReal } from './use-paquete-dia';
+import { useGpsOperativo as useGpsOperativoReal } from './use-gps-operativo';
 import { useOperacionSettings } from '../perfil/use-operacion-settings';
 import { usePuntoControlSonido } from './confirmacion-sonido';
 import { anunciarPuntoControl } from './anuncio-punto-control';
 import type { DeteccionPuntoControl } from '../../gps/geofence';
+import { MODO_DEMO } from '../../demo/flag';
+import { usePaqueteDiaDemo } from '../../demo/use-paquete-dia-demo';
+import { useGpsOperativoDemo } from '../../demo/use-gps-operativo-demo';
+
+// docs/plan-apk-demo-conductor.md (paso A): este es EL punto de corte — `useGpsOperativo` real
+// llama al SDK nativo de geolocalización apenas se monta (ver su primer `useEffect`), así que
+// hay que elegir la implementación ACÁ, antes de que ese hook se ejecute. Elegido a nivel de
+// MÓDULO (constante de build, `MODO_DEMO`) — sin el flag, `usePaqueteDia`/`useGpsOperativo`
+// siguen siendo EXACTAMENTE los hooks reales, llamados igual que antes.
+const usePaqueteDia = MODO_DEMO ? usePaqueteDiaDemo : usePaqueteDiaReal;
+const useGpsOperativo = MODO_DEMO ? useGpsOperativoDemo : useGpsOperativoReal;
 
 interface GpsContextValue {
   paqueteDia: ReturnType<typeof usePaqueteDia>;

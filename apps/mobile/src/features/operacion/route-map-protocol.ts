@@ -13,6 +13,34 @@
  * existen (sin esperar tiles ni ninguna otra red) y RN responde con el estado COMPLETO actual.
  */
 
+/** Un trufi ajeno a dibujar en el mapa (`docs/plan-apk-demo-conductor.md`, paso B; SOLO demo, ver
+ * `otrosVehiculos` de `EstadoMapaProtocolo` más abajo). `fotoDataUri` es una entrada de
+ * `FOTOS_TRUFI` (`src/demo/datos/fotos.generated.ts`) y `color` el color de la línea
+ * (`LINEAS_MOCK[lineaId].color`) — ambos ya resueltos por el caller, este protocolo no sabe nada
+ * de datos demo. Es la forma COMPLETA que recibe este módulo desde `operation-screen.tsx`; los
+ * mensajes reales que viajan al WebView son más chicos — ver `construirMensajeFotosVehiculos`/
+ * `construirMensajeOtrosVehiculos` más abajo. */
+export interface VehiculoMapaMensaje {
+  id: string;
+  lat: number;
+  lng: number;
+  fotoDataUri: string;
+  color: string;
+}
+
+/** Forma del mensaje `otros-vehiculos` que de verdad viaja al WebView en cada tick — SIN foto
+ * (esa viaja una sola vez, ver `construirMensajeFotosVehiculos`). FIX POST-REVISIÓN (hallazgo de
+ * revisión — "la foto de ~3 KB viaja de nuevo cada segundo"): antes cada `VehiculoMapaMensaje`
+ * completo (foto incluida) se reenviaba entero en cada tick del motor demo (1 s) — con varios
+ * vehículos eso son varios KB de base64 serializados/deserializados por segundo para un dato que
+ * NUNCA cambia mientras el trufi está en ruta. */
+export interface VehiculoPosicionMapa {
+  id: string;
+  lat: number;
+  lng: number;
+  color: string;
+}
+
 /** Estado completo del mapa que RN conoce en un momento dado — el mismo conjunto de datos que
  * antes viajaba disperso en 4 llamadas a `postMessage` distintas dentro de `enviarEstadoMapa`. */
 export interface EstadoMapaProtocolo {
@@ -20,6 +48,12 @@ export interface EstadoMapaProtocolo {
   proximoPuntoControlId: string | null;
   posicionActual: { lat: number; lng: number } | null;
   rutaCalculada: [number, number][] | null;
+  /** Demo-only (`docs/plan-apk-demo-conductor.md`, paso B): otros trufis de la línea propia, para
+   * los marcadores con foto del mapa. `undefined` en la app real — `route-map-view.tsx` solo lo
+   * puebla cuando `MODO_DEMO`, y el mensaje `otros-vehiculos` NUNCA se manda si viene `undefined`
+   * (a diferencia de `posicionActual`, acá no hace falta distinguir "sin vehículos" de "no
+   * aplica": un array vacío ya cubre "sin vehículos" — ver `construirMensajesEstadoMapa`). */
+  otrosVehiculos?: VehiculoMapaMensaje[];
 }
 
 /**
@@ -39,7 +73,44 @@ export function construirMensajesEstadoMapa(estado: EstadoMapaProtocolo): string
     mensajes.push(JSON.stringify({ type: 'position', ...estado.posicionActual }));
   }
   mensajes.push(JSON.stringify({ type: 'ruta-calculada', coordinates: estado.rutaCalculada }));
+  // Demo-only, siempre al final — ver el docblock de `otrosVehiculos` en `EstadoMapaProtocolo`.
+  // `undefined` (app real, o demo antes del primer tick del motor) NO manda ningún mensaje; un
+  // array vacío SÍ los manda (le dice al HTML "borrá los marcadores que tengas", ver
+  // `route-map-html.ts`). Esta función solo se usa para el envío de ESTADO COMPLETO (handshake
+  // `mapa-listo`/`onLoadEnd`/cambios de tracking-posición-ruta) — el envío recurrente de POSICIÓN
+  // de los otros vehículos en cada tick del motor NO pasa por acá, ver el comentario grande en
+  // `route-map-view.tsx` sobre por qué `otrosVehiculos` salió de las dependencias del efecto que
+  // llama a esta función. `fotos-vehiculos` va ANTES que `otros-vehiculos` a propósito: el HTML
+  // cachea las fotos por id (`route-map-html.ts`) y las necesita ya cacheadas para pintar el
+  // primer marcador de cada vehículo.
+  if (estado.otrosVehiculos) {
+    mensajes.push(construirMensajeFotosVehiculos(estado.otrosVehiculos));
+    mensajes.push(construirMensajeOtrosVehiculos(estado.otrosVehiculos));
+  }
   return mensajes;
+}
+
+/** Mensaje `fotos-vehiculos` — la foto de cada trufi ajeno viaja UNA sola vez (acá) en vez de en
+ * cada mensaje `otros-vehiculos` (ver el docblock de `VehiculoPosicionMapa`). El HTML la cachea
+ * por id y la reusa para siempre mientras esa pestaña del WebView siga viva. */
+export function construirMensajeFotosVehiculos(otrosVehiculos: VehiculoMapaMensaje[]): string {
+  const fotos: Record<string, string> = {};
+  otrosVehiculos.forEach((v) => {
+    fotos[v.id] = v.fotoDataUri;
+  });
+  return JSON.stringify({ type: 'fotos-vehiculos', fotos });
+}
+
+/** Mensaje `otros-vehiculos` liviano — solo `{id, lat, lng, color}`, SIN foto (ver
+ * `construirMensajeFotosVehiculos`). Es el que se manda en cada tick del motor demo. */
+export function construirMensajeOtrosVehiculos(otrosVehiculos: VehiculoMapaMensaje[]): string {
+  const vehiculos: VehiculoPosicionMapa[] = otrosVehiculos.map((v) => ({
+    id: v.id,
+    lat: v.lat,
+    lng: v.lng,
+    color: v.color,
+  }));
+  return JSON.stringify({ type: 'otros-vehiculos', vehiculos });
 }
 
 /**

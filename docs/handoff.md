@@ -4222,4 +4222,36 @@ Copia temporal (sin remote). Plan: `docs/plan-mock-flota-en-vivo.md`. Flag `NEXT
     - Los círculos de tolerancia solo se ven con zoom.
     - La foto `z12-1` requiere crédito (CC BY 2.0).
     - La consola muestra 3 advertencias de MapLibre («Expected value to be of type number, but found null»), sin investigar y sin efecto visible.
-  - Pendiente: decidir si se actualizan la rama `mockup` y el repo público `quivo-control-mockup` con esta iteración. El push lo corre el CTO, porque el clasificador lo bloquea.
+  - Rama `mockup` actualizada con esta iteración (2026-09-27): `d97397a` = cherry-pick de `94900c5` sobre `01dfad4`, push verificado con `ls-remote`. El repo público `quivo-control-mockup` no se actualizó (no se pidió).
+
+## [SANDBOX mock/sandbox — 2026-09-27] APK demo de la app del conductor (en curso)
+- **Plan: [`plan-apk-demo-conductor.md`](plan-apk-demo-conductor.md).** El APK se compila en la PC con gradle, sin EAS, y es 100% mock detrás de `EXPO_PUBLIC_MOCK_DEMO=true`. Su package es `com.quivotech.conductor.demo`, así que convive con la app real.
+- Cubre las tomas de la app en E05, E06 y E08: adelante/atrás con foto y distancia, perfil con foto y teléfono, hoja de ruta con orden de salida, sin conexión con sincronización, reporte tipificado, cambio de conductor y «Datos de hoy».
+- Decisiones del CTO:
+  - el chofer puede ser de las dos líneas;
+  - la verificación se hace en un teléfono por USB;
+  - la tarjeta «Datos de hoy» es mock.
+- **Estado (2026-09-27):** implementado; APK compilado y verificado solo por tipos, tests y el manifest del APK. **Falta la verificación en el teléfono**, porque no hubo ningún dispositivo conectado.
+  - El APK está en `~/Downloads/quivo-conductor-demo.apk` (118 MB, package `.demo`, etiqueta «QUIVO Conductor»).
+  - Tests móviles 602/602 (45 archivos). Typecheck limpio. Lint con 0 errores y 17 warnings, los mismos que ya había.
+  - Código: `apps/mobile/src/demo/` (motor puro, cuentas, datos portados del web, fotos en base64, hooks mock, UI y pantallas). Los swaps a nivel de módulo están en `index.js`, `App.tsx`, `gps-provider.tsx`, `perfil-screen.tsx`, `ajustes-screen.tsx`, `operation-screen.tsx`, `route-map-*` y `sentry-init.ts`.
+  - Revisión: `/code-review` (10 hallazgos) y Codex (4). Corregidos:
+    - UUID con colisiones;
+    - store de perfil que se pisaba;
+    - foto demasiado grande;
+    - ráfaga de salidas;
+    - punto de control de origen;
+    - reloj simulado ×4;
+    - llamadas al SDK desde Ajustes;
+    - Sentry en demo;
+    - fotos reenviadas al WebView cada segundo;
+    - login sin try/catch.
+  - Limitaciones aceptadas, porque esto es un sandbox que no va a main:
+    - el manifest de `expo-image-picker` agrega CAMERA y almacenamiento también sin `APP_VARIANT=demo`;
+    - `src/demo` viaja dentro del bundle no-demo;
+    - los tiles del mapa necesitan internet.
+  - Build local:
+    - hace falta `SENTRY_DISABLE_AUTO_UPLOAD=true`, porque sin la org de Sentry falla la subida de sourcemaps;
+    - `-PreactNativeArchitectures=arm64-v8a` no quitó los otros ABI, que siguen en el APK.
+  - Sin test unitario, verificados solo por inspección: el store compartido del perfil y el gating de Ajustes. En `apps/mobile` no hay renderer de React para tests.
+  - Lista de tomas: `docs/guion-grabacion-mock.md`, sección «App del conductor».

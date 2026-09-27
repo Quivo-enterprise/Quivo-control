@@ -18,12 +18,19 @@ import { registerRootComponent } from 'expo';
 import BackgroundGeolocation from 'react-native-background-geolocation';
 import App from './App';
 import { tareaHeadlessUbicacion } from './src/gps/headless-task';
+import { MODO_DEMO } from './src/demo/flag';
 
 registerRootComponent(App);
 
-// QUI-216: único lugar donde el SDK permite registrar el headless task (doc oficial de
-// Transistorsoft — "index.js is the ONLY place where you can register your headless-task").
-// Sin esto, `enableHeadless: true` en `background-geolocation.config.ts` no tiene efecto: el
-// SDK nativo sigue grabando en su SQLite interna tras el kill de la app, pero nada copia esos
-// puntos a `quivo-outbox.db`, la fuente de verdad de la evidencia legal (RF-67..73).
-BackgroundGeolocation.registerHeadlessTask(tareaHeadlessUbicacion);
+// docs/plan-apk-demo-conductor.md (paso A): en modo demo no hay backend ni evidencia GPS legal
+// que grabar — no tiene sentido registrar el headless task del SDK nativo (que sigue linkeado,
+// solo no se usa). El resto de este archivo no cambia: el import de `BackgroundGeolocation`
+// arriba se queda (registrar el task es la única llamada al SDK que este archivo hace).
+if (!MODO_DEMO) {
+  // QUI-216: único lugar donde el SDK permite registrar el headless task (doc oficial de
+  // Transistorsoft — "index.js is the ONLY place where you can register your headless-task").
+  // Sin esto, `enableHeadless: true` en `background-geolocation.config.ts` no tiene efecto: el
+  // SDK nativo sigue grabando en su SQLite interna tras el kill de la app, pero nada copia esos
+  // puntos a `quivo-outbox.db`, la fuente de verdad de la evidencia legal (RF-67..73).
+  BackgroundGeolocation.registerHeadlessTask(tareaHeadlessUbicacion);
+}

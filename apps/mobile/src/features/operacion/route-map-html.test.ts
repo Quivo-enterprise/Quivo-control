@@ -1347,6 +1347,181 @@ describe('construirHtml — el <script> generado corre de punta a punta sin tira
       vi.useRealTimers();
     }
   });
+
+  // Demo-only (docs/plan-apk-demo-conductor.md, paso B) — mensajes 'fotos-vehiculos' +
+  // 'otros-vehiculos', nunca mandados por la app real (ver el docblock de `otrosVehiculos` en
+  // `EstadoMapaProtocolo`, route-map-protocol.ts). Corre el `<script>` real (no una
+  // reimplementación) y ejercita el mismo diccionario id->marker que ya usa 'position' para el
+  // vehículo propio: crea, actualiza (setLatLng, no un L.marker nuevo) y borra
+  // (map.removeLayer) cuando un id deja de venir en el mensaje — el caso real de una unidad
+  // ajena que "recicla al fondo de la cola" (otrosVehiculos, src/demo/motor.ts) y deja de estar
+  // en_ruta de un tick al siguiente.
+  //
+  // FIX POST-REVISIÓN (hallazgo de revisión — "la foto viaja de nuevo cada segundo"): el mensaje
+  // 'otros-vehiculos' YA NO trae `fotoDataUri` — la foto llega antes, por separado, en
+  // 'fotos-vehiculos', y el HTML la cachea por id (`fotosVehiculosCache`) para pintar el
+  // marcador. Este test manda 'fotos-vehiculos' ANTES del primer 'otros-vehiculos' (mismo orden
+  // que `construirMensajesEstadoMapa`, route-map-protocol.ts) y confirma que el ícono igual sale
+  // con la foto correcta.
+  it('el mensaje otros-vehiculos crea, actualiza y borra los marcadores por id (diccionario, no recreación completa), usando la foto cacheada de fotos-vehiculos', () => {
+    const html = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
+    const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+    const lFalso = crearLFalso();
+    let markerCalls = 0;
+    const markerOriginal = lFalso.marker;
+    lFalso.marker = (latlng: unknown, opts: unknown) => {
+      markerCalls += 1;
+      return markerOriginal(latlng, opts);
+    };
+
+    let handlerMensajeWindow: ((event: { data: string }) => void) | undefined;
+    const sandbox: Record<string, unknown> = {
+      L: lFalso,
+      document: { addEventListener: () => {} },
+      window: {
+        addEventListener: (evento: string, cb: (event: { data: string }) => void) => {
+          if (evento === 'message') handlerMensajeWindow = cb;
+        },
+      },
+      console,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Date,
+      Math,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(scriptAplicacion, sandbox);
+
+    expect(markerCalls).toBe(2); // los 2 puntos de control, al montar
+    expect(handlerMensajeWindow).toBeTypeOf('function');
+
+    const mapaFalso = sandbox.map as { capas: Array<{ tipo: string }> };
+
+    // 'fotos-vehiculos' primero (mismo orden que construirMensajesEstadoMapa) — no crea ningún
+    // marcador por sí solo, solo llena la caché.
+    handlerMensajeWindow!({
+      data: JSON.stringify({
+        type: 'fotos-vehiculos',
+        fotos: { 'trufi-z12-1': 'data:image/jpeg;base64,aaa', 'trufi-z12-2': 'data:image/jpeg;base64,bbb' },
+      }),
+    });
+    expect(markerCalls).toBe(2);
+
+    handlerMensajeWindow!({
+      data: JSON.stringify({
+        type: 'otros-vehiculos',
+        vehiculos: [
+          { id: 'trufi-z12-1', lat: -17.38, lng: -66.15, color: '#2563eb' },
+          { id: 'trufi-z12-2', lat: -17.37, lng: -66.14, color: '#ffffff' },
+        ],
+      }),
+    });
+
+    // +2 marcadores nuevos (uno por vehículo) — los de puntos de control no se tocan.
+    expect(markerCalls).toBe(4);
+    expect(mapaFalso.capas.filter((c) => c.tipo === 'marker')).toHaveLength(4);
+
+    type MarkerFalso = {
+      tipo: string;
+      args: { latlng: unknown; opts: { icon: { opts: { html: string } } } };
+      setLatLng: (latlng: unknown) => void;
+    };
+    const markersTrasPrimerMensaje = mapaFalso.capas.filter((c) => c.tipo === 'marker') as unknown as MarkerFalso[];
+    // El anillo blanco (Línea 120, color claro) suma el hairline extra; el azul (Z12) no.
+    const htmlAnilloAzul = markersTrasPrimerMensaje[2]!.args.opts.icon.opts.html;
+    const htmlAnilloBlanco = markersTrasPrimerMensaje[3]!.args.opts.icon.opts.html;
+    expect(htmlAnilloAzul).toContain('border: 3px solid #2563eb');
+    expect(htmlAnilloAzul).not.toContain('rgba(15,23,42,0.28)');
+    expect(htmlAnilloBlanco).toContain('border: 3px solid #ffffff');
+    expect(htmlAnilloBlanco).toContain('rgba(15,23,42,0.28)');
+    // La foto cacheada se usó para armar el <img> de cada marcador.
+    expect(htmlAnilloAzul).toContain('data:image/jpeg;base64,aaa');
+    expect(htmlAnilloBlanco).toContain('data:image/jpeg;base64,bbb');
+
+    let setLatLngLlamadas = 0;
+    (markersTrasPrimerMensaje[2] as unknown as { setLatLng: (l: unknown) => void }).setLatLng = () => {
+      setLatLngLlamadas += 1;
+    };
+
+    // Segundo mensaje: trufi-z12-1 se movió (misma id -> setLatLng, NO un marker nuevo);
+    // trufi-z12-2 ya no viene -> se borra del mapa; trufi-z12-3 es nuevo -> se crea (con una foto
+    // que llegó en un 'fotos-vehiculos' posterior, sin volver a mandar la de los otros dos).
+    handlerMensajeWindow!({
+      data: JSON.stringify({ type: 'fotos-vehiculos', fotos: { 'trufi-z12-3': 'data:image/jpeg;base64,ccc' } }),
+    });
+    handlerMensajeWindow!({
+      data: JSON.stringify({
+        type: 'otros-vehiculos',
+        vehiculos: [
+          { id: 'trufi-z12-1', lat: -17.381, lng: -66.151, color: '#2563eb' },
+          { id: 'trufi-z12-3', lat: -17.36, lng: -66.13, color: '#2563eb' },
+        ],
+      }),
+    });
+
+    expect(setLatLngLlamadas).toBe(1);
+    // +1 solamente (trufi-z12-3 es el único nuevo) — trufi-z12-1 se actualizó in-place.
+    expect(markerCalls).toBe(5);
+    // 2 puntos de control + trufi-z12-1 (actualizado) + trufi-z12-3 (nuevo) = 4; trufi-z12-2 salió.
+    expect(mapaFalso.capas.filter((c) => c.tipo === 'marker')).toHaveLength(4);
+    const markerNuevo = mapaFalso.capas.filter((c) => c.tipo === 'marker').at(-1) as unknown as MarkerFalso;
+    expect(markerNuevo.args.opts.icon.opts.html).toContain('data:image/jpeg;base64,ccc');
+  });
+
+  // FIX POST-REVISIÓN (hallazgo de revisión): 'fotos-vehiculos' es acumulativo (nunca borra
+  // entradas ya cacheadas) — mandarlo de nuevo con un subconjunto no debe "olvidar" fotos de
+  // vehículos que ya estaban en el mapa.
+  it('fotos-vehiculos acumula en la caché sin borrar entradas anteriores', () => {
+    const html = construirHtml(paqueteDePrueba(), vehiculoDePrueba);
+    const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+    const lFalso = crearLFalso();
+    let handlerMensajeWindow: ((event: { data: string }) => void) | undefined;
+    const sandbox: Record<string, unknown> = {
+      L: lFalso,
+      document: { addEventListener: () => {} },
+      window: {
+        addEventListener: (evento: string, cb: (event: { data: string }) => void) => {
+          if (evento === 'message') handlerMensajeWindow = cb;
+        },
+      },
+      console,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Date,
+      Math,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(scriptAplicacion, sandbox);
+
+    handlerMensajeWindow!({
+      data: JSON.stringify({ type: 'fotos-vehiculos', fotos: { a: 'data:a' } }),
+    });
+    handlerMensajeWindow!({
+      data: JSON.stringify({ type: 'fotos-vehiculos', fotos: { b: 'data:b' } }),
+    });
+    handlerMensajeWindow!({
+      data: JSON.stringify({
+        type: 'otros-vehiculos',
+        vehiculos: [
+          { id: 'a', lat: -17.38, lng: -66.15, color: '#2563eb' },
+          { id: 'b', lat: -17.37, lng: -66.14, color: '#2563eb' },
+        ],
+      }),
+    });
+
+    const mapaFalso = sandbox.map as {
+      capas: Array<{ tipo: string; args: { opts: { icon: { opts: { html: string } } } } }>;
+    };
+    const marcadoresVehiculos = mapaFalso.capas.filter((c) => c.tipo === 'marker').slice(-2);
+    expect(marcadoresVehiculos[0]!.args.opts.icon.opts.html).toContain('data:a');
+    expect(marcadoresVehiculos[1]!.args.opts.icon.opts.html).toContain('data:b');
+  });
 });
 
 // Hallazgo 2 del code-review de esta entrega: `map.fitBounds(ruta.getBounds(), ...)` tira

@@ -26,8 +26,19 @@ import { OperationNavigator } from './src/app/operation-navigator';
 import { SplashScreen } from './src/features/auth/splash-screen';
 import { quivoColors, quivoFonts, quivoSpacing } from './src/shared/theme/quivo-theme';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { MODO_DEMO } from './src/demo/flag';
+import { DemoProvider } from './src/demo/demo-provider';
+import { trufiIdDesdeContexto } from './src/demo/cuentas';
+import { useAuthMovilDemo } from './src/demo/use-auth-movil-demo';
 
 const queryClient = new QueryClient();
+
+// docs/plan-apk-demo-conductor.md (paso A): la elección de implementación pasa a nivel de
+// MÓDULO (no dentro del componente) — `MODO_DEMO` es una constante de build (lee
+// `EXPO_PUBLIC_MOCK_DEMO` una sola vez, ver `src/demo/flag.ts`), así que esto es seguro aunque
+// los hooks no puedan llamarse condicionalmente: sin el flag, esta línea siempre resuelve al
+// hook real y el camino de código es byte a byte el mismo de siempre.
+const useAuth = MODO_DEMO ? useAuthMovilDemo : useAuthMovil;
 
 export default function App() {
   return (
@@ -54,7 +65,7 @@ function QuivoApp() {
   });
   const [monoLoaded, monoError] = useJetBrainsMono({ JetBrainsMono_400Regular });
 
-  const auth = useAuthMovil();
+  const auth = useAuth();
   const fontsLoaded = montserratLoaded && oxaniumLoaded && monoLoaded;
   const fontError = montserratError ?? oxaniumError ?? monoError;
 
@@ -130,7 +141,7 @@ function QuivoApp() {
 
     const contexto = contextoDe(auth.estado);
     if (auth.estado.etapa === 'operacion' && contexto && auth.estado.deviceId) {
-      return (
+      const navigator = (
         <OperationNavigator
           contexto={contexto}
           deviceId={auth.estado.deviceId}
@@ -142,6 +153,16 @@ function QuivoApp() {
           onLogout={auth.logout}
           onSesionNoVigenteFinalizada={auth.finalizarTrasSesionNoVigente}
         />
+      );
+      // El motor demo (`src/demo/motor.ts`) necesita saber qué unidad es la propia para
+      // arrancar su estado — se deriva de la placa del `contexto` ya logueado (`useAuthMovilDemo`
+      // solo construye `contexto` a partir de una `CuentaDemo` real, así que siempre matchea).
+      // Sin el flag, este `MODO_DEMO ? ... : navigator` siempre toma la segunda rama: el árbol
+      // renderizado es exactamente `navigator`, sin ningún componente demo de por medio.
+      return MODO_DEMO ? (
+        <DemoProvider trufiPropioId={trufiIdDesdeContexto(contexto)}>{navigator}</DemoProvider>
+      ) : (
+        navigator
       );
     }
     return <LoadingScreen label="Preparando tu contexto operativo…" />;

@@ -618,6 +618,25 @@ export function construirHtml(
       height: 24px;
       filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35));
     }
+
+    /* Demo-only (docs/plan-apk-demo-conductor.md, paso B): marcador con foto de un trufi ajeno
+       de la línea propia — mensaje 'otros-vehiculos' (route-map-protocol.ts). El anillo de color
+       viaja como estilo inline (ver iconoVehiculoOtro más abajo, en el <script>) porque varía por
+       vehículo (color de línea) — esta clase solo pone el tamaño/recorte/sombra compartidos. */
+    .vehiculo-otro-marker {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      overflow: hidden;
+      box-sizing: border-box;
+      background-color: #E2E8F0;
+    }
+    .vehiculo-otro-marker img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -794,6 +813,47 @@ export function construirHtml(
     var currentHeading = 0;
     var prevLatLng = null;
 
+    // Demo-only (docs/plan-apk-demo-conductor.md, paso B): diccionario id -> L.Marker de los
+    // "otros vehículos" de la línea propia (mensaje 'otros-vehiculos') — mismo patrón que el
+    // marcador único 'posicion' de arriba, pero uno por vehículo. La app real NUNCA manda este
+    // mensaje (route-map-protocol.ts, EstadoMapaProtocolo.otrosVehiculos es undefined fuera de
+    // demo), así que este diccionario queda vacío para siempre fuera de demo.
+    var vehiculosOtrosMarkers = {};
+    // FIX POST-REVISIÓN (hallazgo de revisión — "la foto viaja de nuevo cada segundo"): caché
+    // id -> data URI, poblada por el mensaje 'fotos-vehiculos' (route-map-protocol.ts,
+    // construirMensajeFotosVehiculos) — la foto de un trufi ya NO viaja dentro del mensaje
+    // 'otros-vehiculos' (ese solo trae {id, lat, lng, color} en cada tick, ver
+    // construirMensajeOtrosVehiculos). 'fotos-vehiculos' llega ANTES que el primer
+    // 'otros-vehiculos' de cada tanda (mismo orden en construirMensajesEstadoMapa), así que para
+    // cuando se crea un marcador nuevo la foto ya está cacheada acá.
+    var fotosVehiculosCache = {};
+
+    // Luminancia relativa aproximada (coeficientes ITU-R BT.601) — decide si el anillo de color
+    // de un marcador es lo bastante claro (Línea 120, blanco) como para necesitar un hairline
+    // oscuro extra para seguir siendo visible sobre el fondo claro de los tiles/el mapa. Mismo
+    // umbral y fórmula que 'esColorClaro' en src/demo/ui/color-utils.ts (duplicado a propósito:
+    // ese archivo es TS de React Native, este corre como texto plano dentro del WebView).
+    function colorEsClaroParaAnillo(hexColor) {
+      var hex = String(hexColor || '').replace('#', '');
+      if (hex.length !== 6) return false;
+      var r = parseInt(hex.substring(0, 2), 16);
+      var g = parseInt(hex.substring(2, 4), 16);
+      var b = parseInt(hex.substring(4, 6), 16);
+      if (isNaN(r) || isNaN(g) || isNaN(b)) return false;
+      var luminancia = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      return luminancia > 0.7;
+    }
+
+    function iconoVehiculoOtro(fotoDataUri, color) {
+      var anillo = 'border: 3px solid ' + color + ';';
+      var sombra = colorEsClaroParaAnillo(color)
+        ? 'box-shadow: 0 0 0 1px rgba(15,23,42,0.28), 0 2px 5px rgba(0,0,0,0.35);'
+        : 'box-shadow: 0 2px 5px rgba(0,0,0,0.35);';
+      var html = '<div class="vehiculo-otro-marker" style="' + anillo + sombra + '">' +
+                 '<img src="' + fotoDataUri + '" /></div>';
+      return L.divIcon({ className: '', html: html, iconSize: [38, 38], iconAnchor: [19, 19] });
+    }
+
     renderizarPuntosControl();
 
     function getArrowIcon(heading) {
@@ -875,6 +935,57 @@ export function construirHtml(
         // L.map ni redibujar la polyline/los marcadores (mismo criterio que 'proximoPuntoControl'
         // más arriba: un mensaje puntual que solo toca lo que corresponde, nunca recarga nada).
         controladorTiles.onConectividadRecuperada();
+        return;
+      }
+
+      if (data.type === 'fotos-vehiculos') {
+        // Demo-only — ver el docblock de 'fotosVehiculosCache' más arriba. Solo agrega/actualiza
+        // entradas (nunca las borra): una foto de un trufi no cambia mientras dura la sesión
+        // demo, así que no hace falta invalidar nada acá.
+        var fotosMensaje = data.fotos && typeof data.fotos === 'object' ? data.fotos : {};
+        for (var idFoto in fotosMensaje) {
+          if (Object.prototype.hasOwnProperty.call(fotosMensaje, idFoto)) {
+            fotosVehiculosCache[idFoto] = fotosMensaje[idFoto];
+          }
+        }
+        return;
+      }
+
+      if (data.type === 'otros-vehiculos') {
+        // Demo-only (docs/plan-apk-demo-conductor.md, paso B) — la app real nunca manda este
+        // mensaje (ver el docblock de 'otrosVehiculos' en EstadoMapaProtocolo,
+        // route-map-protocol.ts), así que este bloque queda sin ejercitar fuera de demo. Mismo
+        // patrón diff que 'position': actualiza los que siguen, crea los nuevos, borra los que ya
+        // no vienen en el mensaje (unidad reciclada al fondo de la cola, ver 'otrosVehiculos' en
+        // src/demo/motor.ts). Este mensaje YA NO trae 'fotoDataUri' (ver
+        // construirMensajeOtrosVehiculos, route-map-protocol.ts) — la foto sale del caché que
+        // llenó 'fotos-vehiculos' más arriba; si por algún motivo todavía no llegó (no debería
+        // pasar, ver el orden en construirMensajesEstadoMapa), el marcador simplemente arranca
+        // sin foto (string vacío) hasta que un mensaje 'otros-vehiculos' posterior lo reconstruya
+        // — no, no la reconstruye sola, pero el próximo L.marker nuevo (otro vehículo, otro id)
+        // sí encontraría la caché ya poblada.
+        var vehiculosMensaje = Array.isArray(data.vehiculos) ? data.vehiculos : [];
+        var idsVistos = {};
+        for (var idxVehiculo = 0; idxVehiculo < vehiculosMensaje.length; idxVehiculo++) {
+          var vehiculo = vehiculosMensaje[idxVehiculo];
+          if (!vehiculo || !vehiculo.id) continue;
+          idsVistos[vehiculo.id] = true;
+          var latlngVehiculo = [vehiculo.lat, vehiculo.lng];
+          var markerExistente = vehiculosOtrosMarkers[vehiculo.id];
+          if (markerExistente) {
+            markerExistente.setLatLng(latlngVehiculo);
+          } else {
+            vehiculosOtrosMarkers[vehiculo.id] = L.marker(latlngVehiculo, {
+              icon: iconoVehiculoOtro(fotosVehiculosCache[vehiculo.id] || '', vehiculo.color)
+            }).addTo(map);
+          }
+        }
+        for (var idExistente in vehiculosOtrosMarkers) {
+          if (Object.prototype.hasOwnProperty.call(vehiculosOtrosMarkers, idExistente) && !idsVistos[idExistente]) {
+            map.removeLayer(vehiculosOtrosMarkers[idExistente]);
+            delete vehiculosOtrosMarkers[idExistente];
+          }
+        }
         return;
       }
 

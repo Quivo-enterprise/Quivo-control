@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Image, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import * as Sentry from '@sentry/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -30,6 +30,36 @@ import { useGpsContext } from './gps-provider';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OperationStackParamList } from '../../app/operation-navigator';
 import { useOperacionSettings } from '../perfil/use-operacion-settings';
+import type { VehiculoMapaMensaje } from './route-map-protocol';
+import {
+  MODO_DEMO,
+  FOTOS_TRUFI,
+  LINEAS_MOCK,
+  useDemo as useDemoReal,
+  usePerfilDemo,
+  type UseDemoResultado,
+} from '../../demo';
+import { IndicadoresVecinosDemo } from '../../demo/ui/indicadores-vecinos';
+import { BannerSenalDemo } from '../../demo/ui/banner-senal';
+import { ReportarModalDemo } from '../../demo/ui/reportar-modal';
+import { PanelDemoOculto } from '../../demo/ui/panel-demo';
+
+// docs/plan-apk-demo-conductor.md (paso B): mismo patrón de swap a nivel de MÓDULO que
+// `usePaqueteDia`/`useGpsOperativo` en `gps-provider.tsx` — `MODO_DEMO` es una constante de
+// build (nunca cambia durante la vida del proceso), así que elegir CUÁL hook se llama con un
+// ternario a nivel de módulo mantiene el orden de hooks estable dentro de este componente, a
+// diferencia de un `if (MODO_DEMO) useDemo()` inline. Sin el flag, `useDemoOpcional`/
+// `usePerfilDemoOpcional` son las funciones "nulo" de abajo — `useDemo()` real, que requiere un
+// `<DemoProvider>` (solo montado en `App.tsx` cuando `MODO_DEMO`), nunca se llega a invocar.
+function useDemoNulo(): UseDemoResultado | null {
+  return null;
+}
+const useDemoOpcional = MODO_DEMO ? useDemoReal : useDemoNulo;
+
+function usePerfilDemoNulo(_conductorId: string): { foto?: string } | null {
+  return null;
+}
+const usePerfilDemoOpcional = MODO_DEMO ? usePerfilDemo : usePerfilDemoNulo;
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -60,6 +90,8 @@ export function OperationScreen(
 ) {
   useKeepAwake();
   const { gps, paqueteDia } = useGpsContext();
+  // docs/plan-apk-demo-conductor.md (paso B) — `null` fuera de demo (`useDemoOpcional` arriba).
+  const demo = useDemoOpcional();
   // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
   // `pendientes`/`errorSync`/`isSyncing` YA NO se leen acá — eran exactamente los widgets de
   // "N pendientes / error de sincronización" que el principio rector prohíbe en esta pantalla
@@ -79,6 +111,22 @@ export function OperationScreen(
     () => paqueteDia.paquete?.puntosControl ?? [],
     [paqueteDia.paquete],
   );
+  // docs/plan-apk-demo-conductor.md (paso B) — marcadores con foto de "otros vehículos" de la
+  // línea propia para el mapa (mensaje 'otros-vehiculos', route-map-protocol.ts). `undefined`
+  // fuera de demo, así que `route-map-view.tsx` nunca manda ese mensaje en la app real. Ya
+  // "throttleado al tick de 1s" gratis: `demo.otrosVehiculosLineaPropia` (useDemo) solo cambia de
+  // referencia una vez por tick del motor (`DemoProvider`), no en cada render.
+  const otrosVehiculosMapaDemo = useMemo<VehiculoMapaMensaje[] | undefined>(() => {
+    if (!MODO_DEMO || !demo) return undefined;
+    const colorLinea = LINEAS_MOCK[demo.estado.lineaPropiaId].color;
+    return demo.otrosVehiculosLineaPropia.map((vehiculo) => ({
+      id: vehiculo.trufiId,
+      lat: vehiculo.lat,
+      lng: vehiculo.lng,
+      fotoDataUri: FOTOS_TRUFI[vehiculo.trufiId] ?? '',
+      color: colorLinea,
+    }));
+  }, [demo]);
   const [completados, setCompletados] = useState<Set<string>>(new Set());
   const [observacion, setObservacion] = useState('');
   const [enviandoObservacion, setEnviandoObservacion] = useState(false);
@@ -87,6 +135,9 @@ export function OperationScreen(
   const [observacionModalVisible, setObservacionModalVisible] = useState(false);
   const [recenterTick, setRecenterTick] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
+  // docs/plan-apk-demo-conductor.md (paso B) — demo-only, nunca visibles sin MODO_DEMO.
+  const [reportarModalVisible, setReportarModalVisible] = useState(false);
+  const [panelDemoVisible, setPanelDemoVisible] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
 
   // M3 (hallazgo de revisión, medio): `puntosControl.length` se lee por REF, no como
@@ -307,6 +358,7 @@ export function OperationScreen(
         tracking={gps.tracking}
         recenterTick={recenterTick}
         rutaCalculada={rutaCalculada}
+        otrosVehiculos={otrosVehiculosMapaDemo}
       />
 
       <View pointerEvents="box-none" style={styles.topOverlay}>
@@ -327,11 +379,33 @@ export function OperationScreen(
           </View>
         </View>
 
+        {/* docs/plan-apk-demo-conductor.md (paso B) — indicadores adelante/atrás (guion E06
+            03:16), justo bajo la tarjeta de identidad. Solo mientras hay jornada activa: sin
+            tracking, `adelanteAtras` del motor devuelve `{}` (nada que mostrar todavía). */}
+        {MODO_DEMO && demo && demo.estado.tracking && (
+          <IndicadoresVecinosDemo
+            adelante={demo.adelanteAtras.adelante}
+            atras={demo.adelanteAtras.atras}
+            colorLinea={LINEAS_MOCK[demo.estado.lineaPropiaId].color}
+          />
+        )}
+
         {gps.tracking && proximoPuntoControl && (
           <NavigationInstructionCard
             distanciaMetros={distanciaProximoPunto}
             velocidadKmh={gps.posicionActual?.speedKmh ?? null}
             brand={lineaBrand}
+          />
+        )}
+
+        {/* docs/plan-apk-demo-conductor.md (paso B) — banner de señal (guion E06 03:25, E08
+            05:42-06:01). El producto real saca a propósito los badges de red de esta pantalla
+            (`docs/estados-red-vs-captura.md`) — este banner es una pieza SOLO de grabación. */}
+        {MODO_DEMO && demo && (
+          <BannerSenalDemo
+            senal={demo.estado.senal}
+            puntosPendientes={demo.estado.puntosPendientes}
+            ultimaSincronizacion={demo.estado.ultimaSincronizacion}
           />
         )}
 
@@ -423,11 +497,34 @@ export function OperationScreen(
       </View>
 
       <Animated.View style={[styles.fabsContainer, { transform: [{ translateY: sheetPanY }] }]}>
+        {/* docs/plan-apk-demo-conductor.md (paso B, guion E06 02:45) — entrada a la pantalla
+            "Hoja de ruta" (ruta agregada por el paso C del mismo plan). Solo demo, y solo antes
+            de iniciar recorrido (después, el chofer ya está guiado por el mapa/NextControlSheet). */}
+        {MODO_DEMO && !gps.tracking && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Hoja de ruta"
+            style={styles.recenterButton}
+            onPress={() => props.navigation.navigate('HojaDeRuta')}
+          >
+            <Ionicons name="clipboard-outline" size={22} color="#3127B1" />
+          </Pressable>
+        )}
+
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Registrar observación"
           style={styles.recenterButton}
-          onPress={() => setObservacionModalVisible(true)}
+          onPress={() => {
+            // docs/plan-apk-demo-conductor.md (paso B, guion E06 03:36): en demo este FAB abre el
+            // modal "Reportar" tipificado en vez del modal de texto libre — el modal real queda
+            // intacto para fuera de demo.
+            if (MODO_DEMO) {
+              setReportarModalVisible(true);
+            } else {
+              setObservacionModalVisible(true);
+            }
+          }}
         >
           <Ionicons name="alert-circle-outline" size={24} color="#3127B1" />
         </Pressable>
@@ -461,6 +558,11 @@ export function OperationScreen(
           accessibilityLabel="Centrar en mi ubicación"
           style={styles.recenterButton}
           onPress={() => setRecenterTick((t) => t + 1)}
+          // docs/plan-apk-demo-conductor.md (paso B) — "Panel demo oculto": pulsación larga de
+          // 1.5s sobre este MISMO FAB, solo demo. El toque corto sigue centrando el mapa sin
+          // cambios — esta prop extra se agrega solo a nivel de MÓDULO (MODO_DEMO), nunca cambia
+          // en runtime, así que no altera el comportamiento del toque corto fuera de demo.
+          {...(MODO_DEMO ? { onLongPress: () => setPanelDemoVisible(true), delayLongPress: 1500 } : {})}
         >
           <Ionicons name="locate" size={24} color="#3127B1" />
         </Pressable>
@@ -622,6 +724,28 @@ export function OperationScreen(
           void props.onLogout();
         }}
       />
+
+      {/* docs/plan-apk-demo-conductor.md (paso B) — modal "Reportar" y panel demo oculto,
+          ambos SOLO demo (nunca montados sin MODO_DEMO, y `demo` es `null` fuera de demo). */}
+      {MODO_DEMO && demo && (
+        <ReportarModalDemo
+          visible={reportarModalVisible}
+          onClose={() => setReportarModalVisible(false)}
+          lineaPropiaId={demo.estado.lineaPropiaId}
+          trufiPropioId={demo.estado.trufiPropioId}
+          colorLinea={LINEAS_MOCK[demo.estado.lineaPropiaId].color}
+          senal={demo.estado.senal}
+          onEnviar={(entrada) => demo.acciones.crearReporte(entrada)}
+        />
+      )}
+      {MODO_DEMO && demo && (
+        <PanelDemoOculto
+          visible={panelDemoVisible}
+          onClose={() => setPanelDemoVisible(false)}
+          estado={demo.estado}
+          acciones={demo.acciones}
+        />
+      )}
     </View>
   );
 }
@@ -640,11 +764,17 @@ function DriverRouteCard({
   // `isOffline`, que ya no es una prop de este componente.
   const modeloVehiculo = `${contexto.vehiculo.placa} ${contexto.vehiculo.modelo || 'Toyota Hiace'}`.trim();
   const statusLabel = tracking ? 'EN LINEA' : 'EN ESPERA';
+  // docs/plan-apk-demo-conductor.md (paso B) — `null` fuera de demo (`usePerfilDemoOpcional`).
+  const perfilDemo = usePerfilDemoOpcional(contexto.conductor.id);
 
   return (
     // Más blur (pedido explícito) — 80 -> 100, el máximo que acepta expo-blur.
     <BlurView intensity={100} tint="light" style={styles.identityCard}>
-      <View style={styles.avatar} />
+      {MODO_DEMO && perfilDemo?.foto ? (
+        <Image source={{ uri: perfilDemo.foto }} resizeMode="cover" style={styles.avatar} />
+      ) : (
+        <View style={styles.avatar} />
+      )}
       <View style={styles.identityText}>
         <Text numberOfLines={1} style={styles.driverName}>
           {contexto.conductor.nombre}
@@ -714,6 +844,7 @@ function MapLayer({
   tracking,
   recenterTick,
   rutaCalculada,
+  otrosVehiculos,
 }: {
   loading: boolean;
   paquete: PaqueteDia | null;
@@ -723,6 +854,8 @@ function MapLayer({
   tracking: boolean;
   recenterTick: number;
   rutaCalculada: [number, number][] | null;
+  /** docs/plan-apk-demo-conductor.md (paso B) — `undefined` fuera de demo. */
+  otrosVehiculos?: VehiculoMapaMensaje[];
 }) {
   if (loading) {
     return (
@@ -743,6 +876,7 @@ function MapLayer({
         tracking={tracking}
         recenterTick={recenterTick}
         rutaCalculada={rutaCalculada}
+        otrosVehiculos={otrosVehiculos}
         style={styles.fullMap}
       />
     </MapErrorBoundary>

@@ -68,3 +68,66 @@
 - WhatsApp: los números de los conductores son **ficticios** — no enviar el mensaje en cámara.
 - La foto del trufi `z12-1` es de Wikimedia (CC BY 2.0, MollySVH) — si aparece en plano, créditos en
   el video. El resto son placeholders.
+
+---
+
+# App del conductor — APK demo (E05, E06, E08)
+
+> La app es **100 % simulada**: no usa backend ni GPS real. Solo el mapa de fondo baja tiles de
+> OpenStreetMap, así que el teléfono necesita datos o wifi. El panel web y la app son **dos
+> simulaciones independientes** que no se sincronizan entre sí: se graban por separado. Plan:
+> `docs/plan-apk-demo-conductor.md`.
+
+## Instalar
+- APK: `~/Downloads/quivo-conductor-demo.apk` (package `com.quivotech.conductor.demo`). Se instala
+  **al lado** de la app real (`com.quivotech.conductor.app`) sin pisarla.
+  - Con USB: `adb install -r ~/Downloads/quivo-conductor-demo.apk`.
+  - Sin cable: pasar el archivo al teléfono y permitir «instalar apps desconocidas».
+- En el teléfono el nombre es «QUIVO Conductor».
+- Recompilar (desde `apps/mobile`, con `JAVA_HOME` en JDK 17 y `ANDROID_HOME=~/Android/Sdk`):
+  ```
+  APP_VARIANT=demo EXPO_PUBLIC_MOCK_DEMO=true pnpm exec expo prebuild -p android --clean --no-install
+  cd android && APP_VARIANT=demo EXPO_PUBLIC_MOCK_DEMO=true SENTRY_DISABLE_AUTO_UPLOAD=true \
+    ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+  ```
+  Si solo cambió JavaScript, alcanza con el paso de `gradlew`.
+
+## Cuentas (placa + PIN)
+| Placa | Línea | Posición | PIN 111111 | PIN 222222 |
+|---|---|---|---|---|
+| `4521-BQP` | Z12 | 3º de 5 en la salida | Freddy Choque | Norma Villca |
+| `6248-GNS` | Línea 120 | 2º de 3 en la salida | Hugo Rocha | Ruth Mamani |
+
+## Controles
+- **Panel demo oculto** (el operador): **pulsación larga de 1,5 s** en el botón de centrar mapa. Opciones:
+  - Perder / Recuperar señal;
+  - Velocidad ×1 / ×4;
+  - Saltar al próximo punto de control;
+  - Acercar trufi de adelante;
+  - Reiniciar demo (con confirmación).
+- **Reportar**: el botón de alerta (FAB) abre «Reportar», con los tipos y la placa a elegir.
+- **Hoja de ruta**: se entra por el botón del portapapeles en el mapa (solo antes de iniciar), o desde **Perfil → Hoja de ruta**.
+- **Perfil**: tocar la tarjeta de identidad. Tocando la foto se elige cámara o galería; también está la fila **Teléfono**.
+- **Datos de hoy**: Perfil → **Ajustes**.
+
+## Tomas
+| Toma | Acción en la app |
+|---|---|
+| E05 02:04–02:18 | Abrir la app (splash con logo), con el vehículo detenido. |
+| E06 02:36–02:45 | Abrir la app → login con la placa y el PIN 111111. |
+| E06 02:45–02:56 | **Hoja de ruta**: turno de hoy → **Orden de salida** («Sos el 3º · salís a las HH:MM») → **Recorrido** (paradas y puntos de control). |
+| E06 02:56–03:04 | Volver al mapa → **Iniciar recorrido** (un toque). |
+| E06 03:04–03:16 | Trufi avanzando. Toast al pasar cada punto de control (usar «Saltar al próximo punto» si hace falta). |
+| E06 03:16–03:25 | Indicadores **Adelante / Atrás** con foto, placa, distancia y minutos. En el mapa se ven los trufis de la línea con su foto. Para ver cómo baja la distancia: «Acercar trufi de adelante». |
+| E06 03:25–03:36 | Panel demo → **Perder señal**: banner «Sin conexión · guardando recorrido» con el contador de puntos subiendo, y el recorrido sigue → **Recuperar señal**: «Sincronizando N puntos…» → «Recorrido sincronizado». |
+| E06 03:36–03:42 | **Reportar** → «Vehículo fuera de orden» → elegir la placa → **Enviar** → «Enviado al delegado». Si se hace sin señal: «se enviará al recuperar señal». |
+| E06 03:42–03:48 | Perfil → **Cerrar sesión** → misma placa con el PIN 222222 → otro conductor, con su propia foto y teléfono. |
+| E08 05:24–05:34 | La app abierta en el teléfono, sin otro aparato. |
+| E08 05:34–05:42 | Perfil → Ajustes → **Datos usados hoy** (cifra mock; rotular «Demostración»). |
+| E08 05:42–06:01 | Igual que E06 03:25 (sin señal y sincronización). |
+| Pedido del CTO | Perfil → tocar la foto → **Tomar foto / Elegir de galería** → **Teléfono** +591 → Guardar. |
+
+## Antes de rodar
+- Cargar la foto y el teléfono de cada conductor que aparezca en cámara.
+- Si la escena lo necesita, **Reiniciar demo** para que la unidad propia vuelva a la cola.
+- Si la espera es larga, velocidad ×4 hasta que haya un trufi atrás en ruta y después volver a ×1.

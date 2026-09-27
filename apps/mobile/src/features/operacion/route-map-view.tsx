@@ -5,9 +5,12 @@ import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
 import { construirHtml } from './route-map-html';
 import {
+  construirMensajeFotosVehiculos,
+  construirMensajeOtrosVehiculos,
   construirMensajesEstadoMapa,
   esHandshakeMapaListo,
   type EstadoMapaProtocolo,
+  type VehiculoMapaMensaje,
 } from './route-map-protocol';
 import { useReconexionMapaOffline } from './reconexion-mapa-offline';
 
@@ -20,6 +23,12 @@ interface RouteMapViewProps {
   recenterTick: number;
   /** Ruta real siguiendo calles (OSRM), o `null` si no hay ninguna calculada aún o falló */
   rutaCalculada: [number, number][] | null;
+  /** Demo-only (`docs/plan-apk-demo-conductor.md`, paso B) — otros trufis de la línea propia
+   * (`useDemo().otrosVehiculosLineaPropia`, mapeado a este shape por `operation-screen.tsx`).
+   * `undefined` en la app real: `EstadoMapaProtocolo`/`route-map-html.ts` documentan por qué eso
+   * nunca manda el mensaje `otros-vehiculos`. Ya viene "throttleado a 1s" gratis: el estado del
+   * motor demo (de donde sale este prop) solo cambia una vez por tick de `DemoProvider`. */
+  otrosVehiculos?: VehiculoMapaMensaje[];
   style?: StyleProp<ViewStyle>;
 }
 
@@ -42,6 +51,7 @@ export function RouteMapView({
   tracking,
   recenterTick,
   rutaCalculada,
+  otrosVehiculos,
   style,
 }: RouteMapViewProps) {
   const webViewRef = useRef<WebView>(null);
@@ -81,8 +91,15 @@ export function RouteMapView({
     proximoPuntoControlId,
     posicionActual,
     rutaCalculada,
+    otrosVehiculos,
   });
-  estadoActualRef.current = { tracking, proximoPuntoControlId, posicionActual, rutaCalculada };
+  estadoActualRef.current = {
+    tracking,
+    proximoPuntoControlId,
+    posicionActual,
+    rutaCalculada,
+    otrosVehiculos,
+  };
 
   const enviarEstadoCompleto = useCallback(() => {
     construirMensajesEstadoMapa(estadoActualRef.current).forEach((mensaje) => {
@@ -93,6 +110,16 @@ export function RouteMapView({
   // Sigue mandando el estado cada vez que cambia una de estas props (comportamiento de siempre) —
   // el handshake de abajo (`onMessage` + `mapa-listo`) es el mecanismo que GARANTIZA que el
   // primer envío no se pierda, no un reemplazo de este disparador por cambios posteriores.
+  //
+  // FIX POST-REVISIÓN (hallazgo de revisión — "el mapa reenvía el estado completo cada
+  // segundo"): `otrosVehiculos` SALIÓ de estas dependencias a propósito. `DemoProvider` tickea
+  // cada 1 s y `otrosVehiculosLineaPropia` cambia de REFERENCIA en cada tick (aunque el
+  // contenido sea idéntico, ver su docblock en `demo-provider.tsx`) — tenerlo acá hacía que este
+  // efecto reenviara el estado COMPLETO (tracking + próximo punto + posición + ruta-calculada +
+  // otros-vehiculos, con la foto de ~3 KB de CADA vehículo incluida) una vez por segundo, para
+  // siempre, mientras hubiera compañeros `en_ruta`. Un cambio en `otrosVehiculos` ahora dispara
+  // SOLO el efecto de abajo, que manda nada más que el mensaje `otros-vehiculos` (liviano, sin
+  // foto) y, si hace falta, `fotos-vehiculos` — nunca reenvía tracking/posición/ruta.
   useEffect(enviarEstadoCompleto, [
     tracking,
     proximoPuntoControlId,
@@ -100,6 +127,28 @@ export function RouteMapView({
     rutaCalculada,
     enviarEstadoCompleto,
   ]);
+
+  // Última foto (data URI) mandada por vehículo — permite mandar `fotos-vehiculos` SOLO cuando
+  // el set de fotos realmente cambió (un vehículo nuevo entró en ruta, o reemplazó a otro), nunca
+  // en cada tick. `otros-vehiculos` (posiciones) sí se manda en cada cambio: es lo único que
+  // varía tick a tick.
+  const fotosEnviadasRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!otrosVehiculos) return;
+    const fotosActuales: Record<string, string> = {};
+    otrosVehiculos.forEach((vehiculo) => {
+      fotosActuales[vehiculo.id] = vehiculo.fotoDataUri;
+    });
+    const fotosAnteriores = fotosEnviadasRef.current;
+    const cambiaronFotos =
+      Object.keys(fotosActuales).length !== Object.keys(fotosAnteriores).length ||
+      Object.entries(fotosActuales).some(([id, foto]) => fotosAnteriores[id] !== foto);
+    if (cambiaronFotos) {
+      webViewRef.current?.postMessage(construirMensajeFotosVehiculos(otrosVehiculos));
+      fotosEnviadasRef.current = fotosActuales;
+    }
+    webViewRef.current?.postMessage(construirMensajeOtrosVehiculos(otrosVehiculos));
+  }, [otrosVehiculos]);
 
   // Entrega 25/31b (handshake mapa-listo): el HTML (`route-map-html.ts`) manda
   // `{type:'mapa-listo'}` por `ReactNativeWebView.postMessage` apenas registra sus listeners de

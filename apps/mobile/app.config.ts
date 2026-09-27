@@ -13,7 +13,20 @@ import type { ExpoConfig } from 'expo/config';
  * de red para desarrollo NO vive acá, vive en el plugin nativo
  * `./plugins/withAndroidNetworkSecurityConfig` (ver ese archivo para el porqué: Android decide
  * solo, por `debuggable`, sin que este config tenga que ramificar por perfil).
+ *
+ * `docs/plan-apk-demo-conductor.md` (paso A): `APP_VARIANT=demo` (variable de ENTORNO del
+ * prebuild, NO `EXPO_PUBLIC_*` — solo hace falta acá, nunca en el bundle JS, igual que
+ * `TRANSISTORSOFT_LICENSE_KEY`) cambia el `applicationId` de Android a
+ * `com.quivotech.conductor.demo`, para que el APK demo conviva instalado en el mismo teléfono
+ * que la app real (`com.quivotech.conductor.app`) sin pisarla ni tocar su outbox pendiente. Sin
+ * `APP_VARIANT` (o con cualquier otro valor) nada cambia acá — el build real sigue exactamente
+ * igual. El comportamiento EN RUNTIME (datos mock, sin SDK) lo decide `EXPO_PUBLIC_MOCK_DEMO`
+ * (`src/demo/flag.ts`), una variable separada a propósito: nada impide compilar el
+ * `applicationId` real con el flag de runtime activado (o viceversa) si alguna vez hiciera
+ * falta, aunque el uso normal es pasar los dos juntos.
  */
+const esVarianteDemo = process.env.APP_VARIANT === 'demo';
+
 export default (): ExpoConfig => ({
   name: 'QUIVO Conductor',
   slug: 'quivo-conductor',
@@ -34,7 +47,7 @@ export default (): ExpoConfig => ({
     // build usa uno nuevo (`.app`). SecureStore es por `applicationId`: por eso NO hay
     // migración de la clave legacy `quivo.mobile.session.v2` (ver el comentario de
     // `sesion-movil-store.ts`) — el cambio de paquete ya implica instalación limpia.
-    package: 'com.quivotech.conductor.app',
+    package: esVarianteDemo ? 'com.quivotech.conductor.demo' : 'com.quivotech.conductor.app',
     // QUI-357: con el backend en Cloud Run (HTTPS nativo) no hay excusa para permitir
     // cleartext en release — los PINs de conductor y la evidencia GPS legal viajarían en
     // claro sobre WiFi público. La excepción para desarrollo local (`http://` en la LAN) va
@@ -113,6 +126,29 @@ export default (): ExpoConfig => ({
     ],
     'expo-sqlite',
     'expo-secure-store',
+    // docs/plan-apk-demo-conductor.md (paso C, decisión del CTO — reemplaza el comentario
+    // original de paso A, que dejaba el plugin instalado siempre): condicionado a
+    // `esVarianteDemo`, igual que `applicationId` más arriba. Solo el modo demo usa foto de
+    // perfil (Perfil → tocar el avatar → "Tomar foto"/"Elegir de galería"), así que el APK REAL
+    // (`APP_VARIANT` sin `demo`) no debe pedirle a Android los permisos `CAMERA`/
+    // `READ_MEDIA_IMAGES` en el manifest — ni aunque nunca se soliciten en runtime, declararlos
+    // de más en un manifest de producción es superficie que un review de seguridad puede (con
+    // razón) objetar. El spread condicional es el único cambio: con `esVarianteDemo` en `false`
+    // (build real) el array de plugins resulta BYTE A BYTE el de antes menos esta entrada.
+    ...(esVarianteDemo
+      ? [
+          [
+            'expo-image-picker',
+            {
+              photosPermission: 'QUIVO Control usa tus fotos para tu foto de perfil.',
+              cameraPermission: 'QUIVO Control usa la cámara para tu foto de perfil.',
+              // Sin micrófono: la foto de perfil no graba audio/video, y el plugin agrega
+              // `RECORD_AUDIO` a Android por default si esto no se apaga explícitamente.
+              microphonePermission: false,
+            },
+          ] as const,
+        ]
+      : []),
     [
       'expo-notifications',
       {

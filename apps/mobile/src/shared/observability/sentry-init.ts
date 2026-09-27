@@ -1,9 +1,19 @@
 import { initSentry } from './sentry';
+import { MODO_DEMO } from '../../demo/flag';
 
 /**
  * QUI-365 — ejecuta `initSentry()` como efecto de lado AL IMPORTAR este módulo, no cuando
  * alguien decida llamarlo. Ver `./sentry.ts` para el porqué de la config; acá va solo el
  * porqué de que este archivo exista separado.
+ *
+ * FIX POST-REVISIÓN (hallazgo de revisión — "errores del demo no deben llegar a Sentry de
+ * producción"): `app.config.ts` ya deja el build demo (`APP_VARIANT=demo`) SIN
+ * `EXPO_PUBLIC_SENTRY_DSN`, y `initSentry()` (`./sentry.ts`) ya no-opea sin DSN — pero ese es un
+ * guard indirecto (depende de que nadie configure un DSN junto con `EXPO_PUBLIC_MOCK_DEMO=true`
+ * por error). Acá, en el único punto de entrada real de Sentry, el guard es EXPLÍCITO y directo:
+ * con `MODO_DEMO` no se llama `initSentry()` en absoluto, sin importar qué DSN esté seteado —
+ * los datos 100% mock del demo (ids, ubicaciones falsas, "conductores" ficticios) nunca deben
+ * mezclarse con la telemetría real de la flota en producción.
  *
  * Antes, `index.js` importaba `initSentry` y la llamaba como sentencia suelta más abajo en el
  * archivo. Eso no alcanza: `babel-preset-expo` transpila los imports ESM a `require(...)`
@@ -21,4 +31,6 @@ import { initSentry } from './sentry';
  * emite antes que el de `expo`, `react-native-background-geolocation`, `./App` y
  * `./src/gps/headless-task`.
  */
-initSentry();
+if (!MODO_DEMO) {
+  initSentry();
+}

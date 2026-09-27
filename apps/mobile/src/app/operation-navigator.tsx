@@ -6,11 +6,19 @@ import { PerfilScreen } from '../features/perfil/perfil-screen';
 import { AjustesScreen } from '../features/perfil/ajustes-screen';
 import { GpsProvider } from '../features/operacion/gps-provider';
 import { SettingsProvider } from '../features/perfil/use-operacion-settings';
+import { MODO_DEMO } from '../demo/flag';
+import { HojaDeRutaScreen } from '../demo/pantallas/hoja-de-ruta-screen';
 
 export type OperationStackParamList = {
   Map: undefined;
   Perfil: undefined;
   Ajustes: undefined;
+  // docs/plan-apk-demo-conductor.md (paso C, E06 02:45): pantalla nueva, demo-only. Se declara
+  // en el param list SIEMPRE (tipado simple, sin condicionales de tipos) pero la ruta solo se
+  // REGISTRA con `MODO_DEMO` (ver abajo) — sin el flag, nada la puede alcanzar (el único punto
+  // de entrada es el ítem de navegación de `perfil-screen.tsx`, también gateado por el flag) y
+  // `navigation.navigate('HojaDeRuta')` seguiría tipando bien pero no tendría ruta que resolver.
+  HojaDeRuta: undefined;
 };
 
 const Stack = createNativeStackNavigator<OperationStackParamList>();
@@ -65,6 +73,11 @@ export function OperationNavigator(props: OperationNavigatorProps) {
         <Stack.Screen name="Ajustes">
           {(screenProps) => <AjustesScreen {...screenProps} contexto={props.contexto} />}
         </Stack.Screen>
+        {MODO_DEMO && (
+          <Stack.Screen name="HojaDeRuta">
+            {(screenProps) => <HojaDeRutaScreen {...screenProps} contexto={props.contexto} />}
+          </Stack.Screen>
+        )}
       </Stack.Navigator>
     </GpsProvider>
     </SettingsProvider>

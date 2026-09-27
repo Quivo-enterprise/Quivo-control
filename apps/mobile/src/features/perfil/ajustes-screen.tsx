@@ -18,6 +18,8 @@ import {
   type ResultadoRescateGuardado,
 } from './rescate-dia1';
 import logo from '../../../assets/images/logo.png';
+import { MODO_DEMO } from '../../demo/flag';
+import { useDemo } from '../../demo/demo-provider';
 
 type AjustesScreenProps = NativeStackScreenProps<OperationStackParamList, 'Ajustes'> & {
   /** H5 (hallazgo de revisión, rescate del día 1): la misma sesión que `OperationNavigator` ya
@@ -53,7 +55,20 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
   // gatillar de lo habitual (el botón de confirmar sigue "vivo" un instante extra).
   const rescatandoRef = useRef(false);
 
+  // FIX POST-REVISIÓN (hallazgo de revisión — "rescate llama al SDK real en modo demo"): esta
+  // pantalla es la MISMA en ambas variantes (real/demo) — antes, sus dos `useEffect` llamaban
+  // incondicionalmente `contarPuntosRescatablesDia1()`/`obtenerResultadoRescateGuardado()`
+  // (`./rescate-dia1.ts`), que a su vez llaman `BackgroundGeolocation.getCount()`/lecturas de la
+  // SQLite nativa del SDK real — en modo demo no hay SDK montado (`MODO_DEMO`, ver
+  // `gps-provider.tsx`), así que esto era la ÚNICA ruta que igual tocaba el SDK real estando en
+  // demo. `MODO_DEMO` corta ambos efectos antes de llamar nada del SDK; la sección completa
+  // queda oculta más abajo (nunca se monta el botón "Rescatar puntos ahora", que sí escribe al
+  // outbox real vía `rescatarPuntosDia1`).
   useEffect(() => {
+    if (MODO_DEMO) {
+      setCargandoConteo(false);
+      return;
+    }
     let activo = true;
     setCargandoConteo(true);
     contarPuntosRescatablesDia1()
@@ -74,6 +89,10 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
   }, []);
 
   useEffect(() => {
+    if (MODO_DEMO) {
+      setCargandoResultadoGuardado(false);
+      return;
+    }
     let activo = true;
     setCargandoResultadoGuardado(true);
     obtenerResultadoRescateGuardado()
@@ -239,84 +258,98 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
           />
         </View>
 
-        <Text style={[styles.screenTitle, { fontSize: 16 * scale, marginTop: quivoSpacing.lg }]} allowFontScaling={!settings.textoGrande}>
-          Rescate de datos — día 1
-        </Text>
-        <View style={styles.cardBlock}>
-          <View style={styles.rescateRow}>
-            <Ionicons name="medkit-outline" size={24} color={quivoColors.primaryStrong} style={styles.rowIcon} />
-            <View style={styles.rowTextContent}>
-              <Text style={[styles.title, { fontSize: 15 * scale }]} allowFontScaling={!settings.textoGrande}>
-                Recuperar recorrido no sincronizado
-              </Text>
-              <Text style={[styles.description, { fontSize: 14 * scale }]} allowFontScaling={!settings.textoGrande}>
-                Copia al outbox los puntos GPS que el dispositivo grabó pero todavía no se
-                sincronizaron. No borra nada del teléfono.
-              </Text>
-            </View>
-          </View>
+        {/* docs/plan-apk-demo-conductor.md (paso C, E08 05:34 "pocos megas"): demo-only, va acá
+            (y no en Perfil) porque se lee mejor pegada a "Modo ahorro de datos" de arriba — el
+            mismo dato que esa preferencia promete cuidar. */}
+        {MODO_DEMO && <DatosHoyCardDemo scale={scale} textoGrande={settings.textoGrande} />}
 
-          {cargandoConteo || cargandoResultadoGuardado ? (
-            <View style={styles.rescateConteoRow}>
-              <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
-                Consultando estado del rescate…
-              </Text>
-            </View>
-          ) : resultadoGuardado ? (
-            // H2 (hallazgo de revisión, alto): con una marca ya guardada, el botón principal
-            // queda deshabilitado — la única forma de volver a correrlo es este enlace
-            // secundario, que pasa por la MISMA confirmación explícita de abajo (H5).
-            <View style={styles.rescateConteoRow}>
-              <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
-                Ya se ejecutó el {formatearFechaHora(resultadoGuardado.fechaIso)} ·{' '}
-                {resultadoGuardado.encolados} puntos encolados
-                {resumenExtra(resultadoGuardado)}
-              </Text>
-              <Button
-                variant="link"
-                size="sm"
-                onPress={abrirConfirmacion}
-                disabled={rescatando}
-                style={styles.rescateEjecutarDeNuevo}
-              >
-                Ejecutar de nuevo
-              </Button>
-            </View>
-          ) : (
-            <>
-              <View style={styles.rescateConteoRow}>
-                <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
-                  {conteoRescatable === null
-                    ? 'No se pudo consultar el almacenamiento del GPS.'
-                    : `${conteoRescatable} puntos disponibles para rescatar.`}
-                </Text>
+        {/* FIX POST-REVISIÓN (hallazgo de revisión): sección entera oculta en modo demo — ver el
+            comentario grande sobre los dos `useEffect` de arriba. El botón "Rescatar puntos
+            ahora" llama `rescatarPuntosDia1()`, que lee `BackgroundGeolocation.getLocations()` y
+            escribe al outbox REAL; no tiene sentido (ni es seguro) exponerlo con el SDK real sin
+            montar. La ruta real (sin `MODO_DEMO`) sigue exactamente igual. */}
+        {!MODO_DEMO && (
+          <>
+            <Text style={[styles.screenTitle, { fontSize: 16 * scale, marginTop: quivoSpacing.lg }]} allowFontScaling={!settings.textoGrande}>
+              Rescate de datos — día 1
+            </Text>
+            <View style={styles.cardBlock}>
+              <View style={styles.rescateRow}>
+                <Ionicons name="medkit-outline" size={24} color={quivoColors.primaryStrong} style={styles.rowIcon} />
+                <View style={styles.rowTextContent}>
+                  <Text style={[styles.title, { fontSize: 15 * scale }]} allowFontScaling={!settings.textoGrande}>
+                    Recuperar recorrido no sincronizado
+                  </Text>
+                  <Text style={[styles.description, { fontSize: 14 * scale }]} allowFontScaling={!settings.textoGrande}>
+                    Copia al outbox los puntos GPS que el dispositivo grabó pero todavía no se
+                    sincronizaron. No borra nada del teléfono.
+                  </Text>
+                </View>
               </View>
-              <Button
-                variant="primary"
-                onPress={abrirConfirmacion}
-                loading={rescatando}
-                disabled={rescatando || !conteoRescatable}
-                fullWidth
-                style={styles.rescateBoton}
-              >
-                {rescatando ? 'Rescatando…' : 'Rescatar puntos ahora'}
-              </Button>
-            </>
-          )}
 
-          {progresoRescate && (
-            <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
-              Encolados {progresoRescate.encolados} de {progresoRescate.total}
-              {resumenExtra(progresoRescate)}
-            </Text>
-          )}
+              {cargandoConteo || cargandoResultadoGuardado ? (
+                <View style={styles.rescateConteoRow}>
+                  <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+                    Consultando estado del rescate…
+                  </Text>
+                </View>
+              ) : resultadoGuardado ? (
+                // H2 (hallazgo de revisión, alto): con una marca ya guardada, el botón principal
+                // queda deshabilitado — la única forma de volver a correrlo es este enlace
+                // secundario, que pasa por la MISMA confirmación explícita de abajo (H5).
+                <View style={styles.rescateConteoRow}>
+                  <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+                    Ya se ejecutó el {formatearFechaHora(resultadoGuardado.fechaIso)} ·{' '}
+                    {resultadoGuardado.encolados} puntos encolados
+                    {resumenExtra(resultadoGuardado)}
+                  </Text>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    onPress={abrirConfirmacion}
+                    disabled={rescatando}
+                    style={styles.rescateEjecutarDeNuevo}
+                  >
+                    Ejecutar de nuevo
+                  </Button>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.rescateConteoRow}>
+                    <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+                      {conteoRescatable === null
+                        ? 'No se pudo consultar el almacenamiento del GPS.'
+                        : `${conteoRescatable} puntos disponibles para rescatar.`}
+                    </Text>
+                  </View>
+                  <Button
+                    variant="primary"
+                    onPress={abrirConfirmacion}
+                    loading={rescatando}
+                    disabled={rescatando || !conteoRescatable}
+                    fullWidth
+                    style={styles.rescateBoton}
+                  >
+                    {rescatando ? 'Rescatando…' : 'Rescatar puntos ahora'}
+                  </Button>
+                </>
+              )}
 
-          {errorRescate && (
-            <Text style={[styles.rescateError, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
-              {errorRescate}
-            </Text>
-          )}
-        </View>
+              {progresoRescate && (
+                <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+                  Encolados {progresoRescate.encolados} de {progresoRescate.total}
+                  {resumenExtra(progresoRescate)}
+                </Text>
+              )}
+
+              {errorRescate && (
+                <Text style={[styles.rescateError, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+                  {errorRescate}
+                </Text>
+              )}
+            </View>
+          </>
+        )}
       </ScrollView>
 
       <QuivoConfirmDialog
@@ -333,6 +366,37 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
       />
     </View>
   );
+}
+
+/**
+ * Demo — "Datos de hoy" (`docs/plan-apk-demo-conductor.md`, paso C, guion E08 05:34: "pocos
+ * megas"). Componente aparte (no inline en `AjustesScreen`) para poder llamar `useDemo()` solo
+ * cuando `MODO_DEMO` es `true` — `AjustesScreen` es la MISMA pantalla en ambas variantes, así
+ * que no puede llamar un hook que solo existe con `<DemoProvider>` montado; este componente sí
+ * puede, porque el padre solo lo monta bajo el mismo flag (`MODO_DEMO`, constante de build,
+ * nunca cambia en la vida de la app).
+ */
+function DatosHoyCardDemo({ scale, textoGrande }: { scale: number; textoGrande: boolean }) {
+  const { estado } = useDemo();
+  return (
+    <View style={[styles.cardBlock, styles.datosHoyCard]}>
+      <Ionicons name="cellular-outline" size={24} color={quivoColors.primaryStrong} style={styles.rowIcon} />
+      <View style={styles.rowTextContent}>
+        <Text style={[styles.title, { fontSize: 15 * scale }]} allowFontScaling={!textoGrande}>
+          Datos usados hoy · {formatearMB(estado.datosHoyMB)}
+        </Text>
+        <Text style={[styles.helper, { fontSize: 12 * scale }]} allowFontScaling={!textoGrande}>
+          Registro del recorrido y sincronización
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+/** `2.4` -> `"2,4 MB"` — coma decimal (`es-BO`), un solo decimal (alcanza para el dato mock de
+ * "pocos megas" del guion; el valor real detrás crece de a `MB_POR_PUNTO` por punto GPS). */
+function formatearMB(mb: number): string {
+  return `${mb.toFixed(1).replace('.', ',')} MB`;
 }
 
 /** H5: mapeo de `Turno` (`@quivo/shared`) al mismo texto que ya usa
@@ -472,6 +536,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 12,
     elevation: 2,
+  },
+  datosHoyCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: quivoSpacing.md,
+    paddingVertical: quivoSpacing.sm,
+    paddingHorizontal: quivoSpacing.sm,
   },
   row: {
     flexDirection: 'row',
