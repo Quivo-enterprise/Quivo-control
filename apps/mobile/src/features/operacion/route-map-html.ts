@@ -935,7 +935,14 @@ export function construirHtml(
       if (data.type === 'position') {
         var latlng = [data.lat, data.lng];
 
-        if (prevLatLng && (prevLatLng[0] !== latlng[0] || prevLatLng[1] !== latlng[1])) {
+        // Fase B (docs/plan-ubicacion-fluida.md): si RN manda un 'heading' numérico (calculado
+        // por el núcleo de movimiento — GPS con histéresis, o el fallback por bearing sobre los
+        // mismos dos puntos que este 'calcHeading' usaría), se usa tal cual en vez de recalcularlo
+        // acá. Con 'heading' ausente o null (emisor viejo, o el núcleo todavía sin rumbo válido)
+        // el comportamiento queda IDÉNTICO al de antes de esta entrega.
+        if (typeof data.heading === 'number' && data.heading >= 0) {
+          currentHeading = data.heading;
+        } else if (prevLatLng && (prevLatLng[0] !== latlng[0] || prevLatLng[1] !== latlng[1])) {
           currentHeading = calcHeading(prevLatLng[0], prevLatLng[1], latlng[0], latlng[1]);
         }
         prevLatLng = latlng;
