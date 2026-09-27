@@ -93,13 +93,16 @@ El guard por `ts` es idempotente y aguanta sync fuera de orden.
 **Web:**
 - `PRESENTACION_FRESCURA` (`traza.ts:255-281`) suma "Recorrido finalizado": neutro, `esFalla: false`.
 - `panel-frescura.tsx` muestra "Finalizó hace X".
-- `intervaloPoll`: se deja de pollear la traza cuando la sesión está `finalizado`.
+- `intervaloPoll`: con `finalizado` primero termina de traer las páginas pendientes (`hayMas`) y después consulta cada 60 s. No corta el poll, para detectar un `inicio_recorrido` nuevo en la misma sesión de login. (Cambio respecto del diseño original, a raíz de la revisión.)
 - En el mapa, el marcador pasa a gris.
 
 **Trampa de deploy:**
 - Si la API emite `'finalizado'` antes de que la web lo conozca y la web valida la respuesta con zod, falla.
 - Verificar el orden en `scripts/deploy-gcp.sh`.
-- Hacer que la web tolere estados desconocidos (fallback `sin_datos`) o desplegar la web primero.
+- **HECHO:** la web tolera estados desconocidos (`presentacionFrescura` cae a `sin_datos`; el sprite del mapa cae a `detenido`).
+- **Orden obligatorio de ESTE deploy:** 1) `scripts/deploy-gcp.sh --solo web` (la web nueva funciona contra la api vieja); 2) `scripts/deploy-gcp.sh` completo (migración con backfill, api, worker). Al revés, el bundle web viejo, que no conoce `finalizado`, rompe `/en-vivo` durante la ventana del deploy.
+- **Otras defensas del worker:** actualiza el estado solo si el evento se insertó (un duplicado no lo toca), atado a `sindicatoId` + `deviceId` autenticados, y omite el UPDATE si el `ts` del evento viene del futuro por encima de `DRIFT_ALERTA_MS`.
+- **Deuda (fuera de alcance):** la API acepta eventos operativos con un `payload.sesionId` que no valida contra el dispositivo; solo el estado derivado está protegido.
 
 **Tests:**
 - `en-vivo.service.test.ts`: casos finalizado, re-inicio, fix posterior al fin, sesión sin eventos.
