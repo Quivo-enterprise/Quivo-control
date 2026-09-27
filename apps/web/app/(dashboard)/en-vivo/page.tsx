@@ -29,7 +29,7 @@ import {
   formatearAntiguedad,
   INTERVALO_POLL_MS,
   intervaloPoll,
-  PRESENTACION_FRESCURA,
+  presentacionFrescura,
 } from '../../../src/lib/en-vivo/traza';
 import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
 import { useLineaOptions } from '../../../src/lib/api/use-linea-options';
@@ -125,7 +125,7 @@ export default function EnVivoPage() {
   const pollPausado = Boolean(sesionSeleccionada) && intervaloPoll(datos) === false;
 
   const estado = datos?.estadoFrescura ?? posicionSeleccionada?.estadoFrescura ?? 'sin_datos';
-  const presentacion = PRESENTACION_FRESCURA[estado];
+  const presentacion = presentacionFrescura(estado);
 
   const puntosControl = useMemo(
     () => (contexto.data ? construirPuntosControl(contexto.data, datos) : []),
@@ -740,7 +740,7 @@ function FrescuraBadgeCompact({
   if (!fuente) return null;
 
   const referencia = datos ? recibidoEn : posicionesRecibidoEn;
-  const presentacion = PRESENTACION_FRESCURA[fuente.estadoFrescura];
+  const presentacion = presentacionFrescura(fuente.estadoFrescura);
   const antiguedadFix = antiguedadViva(fuente.ultimoFixTs, fuente.servidorTs, referencia, ahora);
 
   return (

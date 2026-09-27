@@ -11,9 +11,11 @@ import {
   intervaloPoll,
   necesitaRecargaCompleta,
   offsetRelojServidorMs,
+  presentacionFrescura,
   PRESENTACION_FRESCURA,
   SOLAPE_CURSOR_MS,
   UMBRAL_CORTE_POLL_MS,
+  INTERVALO_POLL_FINALIZADO_MS,
   INTERVALO_POLL_MS,
   INTERVALO_POLL_RAPIDO_MS,
   type TrazaAcumulada,
@@ -43,6 +45,10 @@ function respuesta(overrides: Partial<TrazaEnVivo> = {}): TrazaEnVivo {
     antiguedadIngestaMs: null,
     inactivaDesdeMs: 0,
     estadoFrescura: 'sin_datos',
+    // Fase A (docs/plan-ubicacion-fluida.md) — solo no-null cuando `estadoFrescura ===
+    // 'finalizado'` (contrato de `derivarFrescura`); el default acá es consistente con el
+    // default de `estadoFrescura` de arriba (`sin_datos`, no `finalizado`).
+    recorridoFinTs: null,
     ...overrides,
   };
 }
@@ -361,27 +367,71 @@ describe('intervaloPoll', () => {
   });
 
   it('acelera mientras el server avisa hayMas', () => {
-    expect(intervaloPoll({ hayMas: true, inactivaDesdeMs: 0 })).toBe(INTERVALO_POLL_RAPIDO_MS);
+    expect(intervaloPoll({ hayMas: true, inactivaDesdeMs: 0, estadoFrescura: 'reportando' })).toBe(
+      INTERVALO_POLL_RAPIDO_MS,
+    );
   });
 
   it('corta por inactividad real (`inactivaDesdeMs`), no por `fin`', () => {
-    expect(intervaloPoll({ hayMas: false, inactivaDesdeMs: UMBRAL_CORTE_POLL_MS + 1 })).toBe(false);
+    expect(
+      intervaloPoll({
+        hayMas: false,
+        inactivaDesdeMs: UMBRAL_CORTE_POLL_MS + 1,
+        estadoFrescura: 'perdido',
+      }),
+    ).toBe(false);
   });
 
   it('el corte por inactividad gana aunque el server siga avisando `hayMas` (A6)', () => {
     // Una sesión zombi cuya traza excede `limite` sigue trayendo `hayMas: true` para siempre;
     // sin este orden el poll quedaría a 1 s en vez de cortar.
     expect(
-      intervaloPoll({ hayMas: true, inactivaDesdeMs: UMBRAL_CORTE_POLL_MS + 1 }),
+      intervaloPoll({
+        hayMas: true,
+        inactivaDesdeMs: UMBRAL_CORTE_POLL_MS + 1,
+        estadoFrescura: 'perdido',
+      }),
     ).toBe(false);
   });
 
   it('NO corta a un teléfono solo atrasado: el p95 del lag de ingesta (~814 s) sigue polleando', () => {
-    expect(intervaloPoll({ hayMas: false, inactivaDesdeMs: 814_000 })).toBe(INTERVALO_POLL_MS);
+    expect(
+      intervaloPoll({ hayMas: false, inactivaDesdeMs: 814_000, estadoFrescura: 'detenido' }),
+    ).toBe(INTERVALO_POLL_MS);
   });
 
   it('tampoco corta con el máximo de lag medido en campo si el vehículo sigue vivo', () => {
     expect(UMBRAL_CORTE_POLL_MS).toBeGreaterThan(15 * 60_000);
+  });
+
+  /**
+   * Fase A (docs/plan-ubicacion-fluida.md) — decisión del chairman sobre un hallazgo de
+   * Codex: `finalizado` NO corta el poll del todo (la sesión de LOGIN sigue viva y el
+   * conductor puede iniciar un recorrido nuevo sin volver a loguearse), pasa a una cadencia
+   * lenta propia. `hayMas` sigue mandando primero (catch-up de la carga inicial truncada).
+   */
+  describe('estado "finalizado" — cadencia propia, no corte total', () => {
+    it('sin hayMas: cadencia LENTA (INTERVALO_POLL_FINALIZADO_MS), no `false`', () => {
+      expect(
+        intervaloPoll({ hayMas: false, inactivaDesdeMs: 0, estadoFrescura: 'finalizado' }),
+      ).toBe(INTERVALO_POLL_FINALIZADO_MS);
+    });
+
+    it('con hayMas: sigue el catch-up normal a INTERVALO_POLL_RAPIDO_MS', () => {
+      expect(
+        intervaloPoll({ hayMas: true, inactivaDesdeMs: 0, estadoFrescura: 'finalizado' }),
+      ).toBe(INTERVALO_POLL_RAPIDO_MS);
+    });
+
+    it('gana aunque `inactivaDesdeMs` ya supere el umbral de corte de 30 min', () => {
+      expect(
+        intervaloPoll({
+          hayMas: false,
+          inactivaDesdeMs: UMBRAL_CORTE_POLL_MS + 1,
+          estadoFrescura: 'finalizado',
+        }),
+      ).toBe(INTERVALO_POLL_FINALIZADO_MS);
+    });
   });
 });
 
@@ -399,6 +449,33 @@ describe('presentación de estadoFrescura', () => {
   it('cada estado tiene un color propio', () => {
     const colores = Object.values(PRESENTACION_FRESCURA).map((p) => p.color);
     expect(new Set(colores).size).toBe(colores.length);
+  });
+
+  /** Fase A (docs/plan-ubicacion-fluida.md) — "Recorrido finalizado" es informativo, NO una
+   * falla (mismo criterio que `detenido`). */
+  it('"finalizado" no es una falla', () => {
+    expect(PRESENTACION_FRESCURA.finalizado.esFalla).toBe(false);
+    expect(PRESENTACION_FRESCURA.finalizado.etiqueta).toBe('Recorrido finalizado');
+  });
+
+  /**
+   * Trampa de deploy (plan §Fase A): `apiFetch` no valida con zod en runtime, así que un
+   * panel viejo (o cualquier estado futuro que este código todavía no conozca) puede recibir
+   * un `estadoFrescura` fuera del dominio conocido. `presentacionFrescura` es el fallback:
+   * nunca debe tirar, cae a `sin_datos`.
+   */
+  describe('presentacionFrescura (fallback tolerante a estados desconocidos)', () => {
+    it('devuelve la presentación real para cada estado conocido', () => {
+      expect(presentacionFrescura('finalizado')).toBe(PRESENTACION_FRESCURA.finalizado);
+      expect(presentacionFrescura('reportando')).toBe(PRESENTACION_FRESCURA.reportando);
+    });
+
+    it('un estado desconocido cae a "sin_datos" sin tirar', () => {
+      expect(presentacionFrescura('estado-futuro-inexistente')).toBe(
+        PRESENTACION_FRESCURA.sin_datos,
+      );
+      expect(() => presentacionFrescura('')).not.toThrow();
+    });
   });
 });
 

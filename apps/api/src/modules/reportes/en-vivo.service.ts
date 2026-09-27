@@ -32,6 +32,11 @@ interface SesionEnVivoRow {
   ultimoFixTs: Date | null;
   ultimoIngresoTs: Date | null;
   totalPuntos: number | null;
+  // Fase A (docs/plan-ubicacion-fluida.md) — estado DERIVADO del recorrido, mantenido por
+  // `insertarEventoOperativoEnTx` (ingesta-worker.service.ts). Distinto de `fin`/`estado` de
+  // arriba, que son de la sesión de LOGIN.
+  recorridoEstado: string | null;
+  recorridoEstadoTs: Date | null;
 }
 
 /**
@@ -59,6 +64,10 @@ interface PosicionEnVivoRow {
   ultimoFixTs: Date | null;
   ultimoIngresoTs: Date | null;
   totalPuntos: number | null;
+  // Fase A — igual que en `SesionEnVivoRow`, sale directo de `so`, no del LATERAL a
+  // `gps_sesion_resumen` (el estado del recorrido vive en la sesión, no en el resumen GPS).
+  recorridoEstado: string | null;
+  recorridoEstadoTs: Date | null;
 }
 
 interface AgregadosFixRow {
@@ -107,6 +116,17 @@ const MINUTO_MS = 60_000;
  */
 export const UMBRAL_INGESTA_VIVA_MS = 15 * MINUTO_MS;
 export const UMBRAL_FIX_EN_MOVIMIENTO_MS = 15 * MINUTO_MS;
+
+/**
+ * Fase A (docs/plan-ubicacion-fluida.md) — tolerancia entre `recorridoEstadoTs` (el `ts` del
+ * evento `fin_recorrido`, del reloj del DISPOSITIVO) y `ultimoFixTs` (`gps_points.ts`, mismo
+ * reloj) para seguir clasificando la sesión como `finalizado`. Existe porque el último fix
+ * de evidencia puede capturarse unos instantes ANTES o DESPUÉS del toque de "Finalizar" sin
+ * que eso signifique que el vehículo sigue en movimiento — no es tolerancia de red/ingesta
+ * (eso ya lo cubren `UMBRAL_INGESTA_VIVA_MS`/`ultimoIngresoTs`), es margen de reloj del mismo
+ * dispositivo entre dos eventos casi simultáneos.
+ */
+export const TOLERANCIA_FIN_RECORRIDO_MS = 5_000;
 
 /**
  * Ventana de traza anclada a `sesion.inicio` (no al día calendario, para no cortar una
@@ -158,10 +178,31 @@ function diferenciaMs(ahora: Date, ts: Date | null): number | null {
   return Math.max(0, ahora.getTime() - ts.getTime());
 }
 
+/**
+ * Fase A — `recorridoEstado`/`recorridoEstadoTs` (`SesionEnVivoRow`/`PosicionEnVivoRow`, o
+ * `SesionOperativa.recorridoEstado`/`recorridoEstadoTs` vía Prisma en `obtenerTraza`) pesan
+ * MÁS que la heurística de fix/ingesta de abajo: si el conductor tocó "Finalizar" y ningún
+ * fix llegó después (con `TOLERANCIA_FIN_RECORRIDO_MS` de margen), es un cierre correcto, no
+ * "sin señal". Si SÍ hay un fix posterior al fin, algo sigue grabando (reinicio manual del
+ * tracking, evento de reintento fuera de orden, etc.) — se cae, a propósito, a la
+ * clasificación normal de abajo en vez de forzar `finalizado` contra la evidencia.
+ *
+ * Un `inicio_recorrido` POSTERIOR ya deja `recorridoEstado = 'en_curso'` (el guard de
+ * `insertarEventoOperativoEnTx` lo garantiza), así que ese caso ni siquiera entra a esta
+ * rama — vuelve solo a la clasificación normal.
+ */
 function clasificarFrescura(
   antiguedadFixMs: number | null,
   antiguedadIngestaMs: number | null,
+  recorridoEstado: string | null,
+  recorridoEstadoTs: Date | null,
+  ultimoFixTs: Date | null,
 ): EstadoFrescura {
+  if (recorridoEstado === 'finalizado' && recorridoEstadoTs) {
+    const finMs = recorridoEstadoTs.getTime() + TOLERANCIA_FIN_RECORRIDO_MS;
+    const fixEsPosteriorAlFin = ultimoFixTs !== null && ultimoFixTs.getTime() > finMs;
+    if (!fixEsPosteriorAlFin) return 'finalizado';
+  }
   if (antiguedadFixMs === null && antiguedadIngestaMs === null) return 'sin_datos';
   if (antiguedadIngestaMs === null || antiguedadIngestaMs > UMBRAL_INGESTA_VIVA_MS) {
     return 'perdido';
@@ -178,15 +219,29 @@ function clasificarFrescura(
  * Deriva el bloque de frescura. `inicio` es el fallback de `inactivaDesdeMs` para sesiones
  * que nunca recibieron un punto: sin él, una sesión colgada sin datos tendría inactividad
  * `null` y el cliente no sabría cuándo cortar el poll.
+ *
+ * `recorridoEstado`/`recorridoEstadoTs` son OPCIONALES (default `null`) a propósito: son
+ * nuevos en Fase A y varios callers de este archivo (tests existentes, código que todavía no
+ * se tocó) siguen llamando con la firma vieja de 4 argumentos — sin default, esta sería una
+ * ruptura innecesaria en vez de una extensión aditiva.
  */
 export function derivarFrescura(
   ahora: Date,
   inicio: Date,
   ultimoFixTs: Date | null,
   ultimoIngresoTs: Date | null,
+  recorridoEstado: string | null = null,
+  recorridoEstadoTs: Date | null = null,
 ): FrescuraEnVivo {
   const antiguedadFixMs = diferenciaMs(ahora, ultimoFixTs);
   const antiguedadIngestaMs = diferenciaMs(ahora, ultimoIngresoTs);
+  const estadoFrescura = clasificarFrescura(
+    antiguedadFixMs,
+    antiguedadIngestaMs,
+    recorridoEstado,
+    recorridoEstadoTs,
+    ultimoFixTs,
+  );
   return {
     ultimoFixTs: ultimoFixTs?.toISOString() ?? null,
     ultimoIngresoTs: ultimoIngresoTs?.toISOString() ?? null,
@@ -194,7 +249,11 @@ export function derivarFrescura(
     antiguedadFixMs,
     antiguedadIngestaMs,
     inactivaDesdeMs: antiguedadIngestaMs ?? Math.max(0, ahora.getTime() - inicio.getTime()),
-    estadoFrescura: clasificarFrescura(antiguedadFixMs, antiguedadIngestaMs),
+    estadoFrescura,
+    // Solo no-null cuando el estado ganó "finalizado" (plan §Fase A) — un `recorridoEstadoTs`
+    // de un `en_curso` (o de un `finalizado` descartado por un fix posterior) no es una hora
+    // de fin válida para mostrarle al cliente.
+    recorridoFinTs: estadoFrescura === 'finalizado' ? (recorridoEstadoTs?.toISOString() ?? null) : null,
   };
 }
 
@@ -218,9 +277,13 @@ export function derivarFrescura(
 export class EnVivoService {
   /**
    * Sesiones de la jornada boliviana en curso **más** las que quedaron abiertas de días
-   * anteriores (`fin IS NULL AND estado = 'activa'`): la app no cierra la sesión al
-   * "Finalizar recorrido" — solo registra un evento —, así que hay sesiones colgadas
-   * indefinidamente y omitirlas escondería vehículos que sí están reportando.
+   * anteriores (`fin IS NULL AND estado = 'activa'`): la app no cierra la sesión de LOGIN al
+   * "Finalizar" — sigue siendo así después de Fase A, y sigue siendo intencional (el
+   * conductor puede iniciar un recorrido nuevo sin volver a loguearse) —, así que hay
+   * sesiones colgadas indefinidamente y omitirlas escondería vehículos que sí están
+   * reportando. Lo que Fase A SÍ agrega es que ahora se sabe, por sesión, si el RECORRIDO
+   * (no la sesión de login) terminó: ver `recorridoEstado`/`estadoFrescura: 'finalizado'`
+   * más abajo.
    *
    * docs/plan-en-vivo-resumen-sesion.md — el `LEFT JOIN LATERAL` que agregaba sobre TODOS
    * los puntos de la jornada de cada sesión (O(puntos del día de la flota), 10,65 s medidos
@@ -270,7 +333,8 @@ export class EnVivoService {
         SELECT so.id, so.inicio, so.fin, so.estado, so."deviceId",
           v.placa as "vehiculoPlaca", c.nombre as "conductorNombre", l.nombre as "lineaNombre",
           res.ultimo_fix_ts AS "ultimoFixTs", res.ultimo_ingreso_ts AS "ultimoIngresoTs",
-          res.total_puntos AS "totalPuntos"
+          res.total_puntos AS "totalPuntos",
+          so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs"
         FROM sesiones_operativas so
         JOIN vehiculos v ON v.id = so."vehiculoId"
         JOIN conductores c ON c.id = so."conductorId"
@@ -309,7 +373,14 @@ export class EnVivoService {
           conductorNombre: f.conductorNombre,
           lineaNombre: f.lineaNombre,
           totalPuntos: f.totalPuntos ?? 0,
-          ...derivarFrescura(ahora, f.inicio, f.ultimoFixTs, f.ultimoIngresoTs),
+          ...derivarFrescura(
+            ahora,
+            f.inicio,
+            f.ultimoFixTs,
+            f.ultimoIngresoTs,
+            f.recorridoEstado,
+            f.recorridoEstadoTs,
+          ),
         }),
       );
     });
@@ -387,7 +458,8 @@ export class EnVivoService {
           v.placa as "vehiculoPlaca", c.nombre as "conductorNombre",
           l.id as "lineaId", l.nombre as "lineaNombre", ru.sentido as "rutaSentido",
           fix.lat, fix.lng, fix.accuracy, fix.speed,
-          fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos"
+          fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos",
+          so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs"
         FROM sesiones_operativas so
         JOIN vehiculos v ON v.id = so."vehiculoId"
         JOIN conductores c ON c.id = so."conductorId"
@@ -437,7 +509,14 @@ export class EnVivoService {
           accuracy: f.accuracy,
           speed: f.speed,
           totalPuntos: f.totalPuntos ?? 0,
-          ...derivarFrescura(ahora, f.inicio, f.ultimoFixTs, f.ultimoIngresoTs),
+          ...derivarFrescura(
+            ahora,
+            f.inicio,
+            f.ultimoFixTs,
+            f.ultimoIngresoTs,
+            f.recorridoEstado,
+            f.recorridoEstadoTs,
+          ),
         }),
       );
     });
@@ -595,6 +674,8 @@ export class EnVivoService {
           sesion.inicio,
           agregados?.ultimoFixTs ?? null,
           agregados?.ultimoIngresoTs ?? null,
+          sesion.recorridoEstado,
+          sesion.recorridoEstadoTs,
         ),
       });
     });

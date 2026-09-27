@@ -1,7 +1,7 @@
 import type { MapPoint, MapRoute, MapZone } from '@quivo/design-system';
 import type { ContextoEnVivo, CumplimientoRecorrido, PosicionEnVivo } from '@quivo/shared';
 import { ApiError } from '../../../src/lib/api/client';
-import { PRESENTACION_FRESCURA, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
+import { presentacionFrescura, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 import { simplificarTrazaParaDibujo } from '../../../src/lib/en-vivo/simplificar-traza';
 
 /** Color fijo de la traza GPS real, igual que en el detalle histórico
@@ -129,7 +129,7 @@ export function construirMarcadoresVehiculos(
   return posiciones
     .filter((p): p is PosicionEnVivo & { lat: number; lng: number } => p.lat !== null && p.lng !== null)
     .map((p) => {
-      const presentacion = PRESENTACION_FRESCURA[p.estadoFrescura];
+      const presentacion = presentacionFrescura(p.estadoFrescura);
       return {
         id: idMarcadorVehiculo(p.id),
         lat: p.lat,

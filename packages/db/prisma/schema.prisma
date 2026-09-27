@@ -560,6 +560,17 @@ model SesionOperativa {
   revokedAt        DateTime?
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
+  // Fase A (docs/plan-ubicacion-fluida.md) — estado DERIVADO del recorrido, distinto de
+  // `fin`/`estado` de arriba (esos son de la sesión de LOGIN y solo los toca `logout` en
+  // auth-movil; "Finalizar" en la app no los cambia). `recorridoEstado`/`recorridoEstadoTs`
+  // los mantiene `insertarEventoOperativoEnTx` (ingesta-worker.service.ts) en la misma
+  // transacción que inserta el evento `inicio_recorrido`/`fin_recorrido`, con un guard por
+  // `recorridoEstadoTs` para tolerar sync fuera de orden. `null` mientras la sesión nunca
+  // mandó ninguno de esos dos eventos. Sin `@map` a propósito, igual que el resto del
+  // modelo: la columna en Postgres queda camelCase entre comillas (`"recorridoEstado"`),
+  // no snake_case — este modelo no usa `@map` por campo en ningún otro lugar.
+  recorridoEstado   String?
+  recorridoEstadoTs DateTime?
 
   cumplimientosPc   CumplimientoPc[]
   eventosOperativos EventoOperativo[]

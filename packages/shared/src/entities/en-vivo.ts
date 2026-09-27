@@ -38,13 +38,25 @@ import {
  *                   se mueve. Es el caso normal en terminal, NO una falla.
  * - `perdido`     — ni fixes ni ingesta: el teléfono no llega al servidor.
  * - `sin_datos`   — la sesión existe pero nunca entró un punto en la ventana consultada.
+ * - `finalizado`  — Fase A (docs/plan-ubicacion-fluida.md): el conductor tocó "Finalizar"
+ *                   en la app (evento `fin_recorrido`) y no llegó ningún fix posterior (con
+ *                   5 s de tolerancia) — `SesionOperativa.recorridoEstado` derivado, NO
+ *                   `fin`/`estado` de la sesión de login (esos siguen sin cerrarse). Es un
+ *                   cierre correcto, no una falla: antes de esta entrega un recorrido
+ *                   finalizado se veía "Reportando" → "Detenido" → "Sin señal" (rojo).
  *
  * Es un campo **adicional**: la respuesta siempre trae también `ultimoFixTs`,
  * `ultimoIngresoTs` y `servidorTs` crudos. Los umbrales de **color** (verde/ámbar/rojo)
  * son decisión de presentación y los aplica el frontend sobre esos timestamps; el server
  * no los calcula.
  */
-export const EstadoFrescuraSchema = z.enum(['reportando', 'detenido', 'perdido', 'sin_datos']);
+export const EstadoFrescuraSchema = z.enum([
+  'reportando',
+  'detenido',
+  'perdido',
+  'sin_datos',
+  'finalizado',
+]);
 export type EstadoFrescura = z.infer<typeof EstadoFrescuraSchema>;
 
 /**
@@ -76,6 +88,11 @@ export const FrescuraEnVivoSchema = z.object({
    */
   inactivaDesdeMs: z.number().int().nonnegative(),
   estadoFrescura: EstadoFrescuraSchema,
+  /** `SesionOperativa.recorridoEstadoTs` cuando `estadoFrescura === 'finalizado'`; `null` en
+   * cualquier otro estado (Fase A, docs/plan-ubicacion-fluida.md). El cliente lo usa para
+   * mostrar "Finalizó hace X" con la misma lógica de reloj-de-servidor que ya usa para
+   * `ultimoFixTs`/`ultimoIngresoTs` (`antiguedadViva`, `apps/web/src/lib/en-vivo/traza.ts`). */
+  recorridoFinTs: z.string().nullable(),
 });
 export type FrescuraEnVivo = z.infer<typeof FrescuraEnVivoSchema>;
 

@@ -31,14 +31,22 @@ export const INTERVALO_POLL_RAPIDO_MS = 1_000;
 
 /**
  * Inactividad (medida por el server con `inactivaDesdeMs`) a partir de la cual se corta el
- * poll.
+ * poll — el fallback LENTO para sesiones zombi, no la vía normal de corte.
  *
- * El corte **no puede depender de `fin`**: "Finalizar recorrido" en la app registra un
- * evento pero no cierra la `sesion_operativa`, así que `fin` queda NULL indefinidamente
- * (había sesiones colgadas el 2026-08-18). La regla original "sesión con `fin` +5 min ⇒
- * dejar de pollear" no se dispararía nunca.
+ * El corte **no puede depender de `fin`**: "Finalizar" en la app registra un evento (hoy,
+ * además, deriva `estadoFrescura: 'finalizado'`, ver `intervaloPoll` más abajo) pero no
+ * cierra la `sesion_operativa` de LOGIN — `fin` queda NULL indefinidamente (había sesiones
+ * colgadas el 2026-08-18; sigue siendo así después de Fase A, es intencional: el conductor
+ * puede iniciar un recorrido nuevo sin volver a loguearse). La regla original "sesión con
+ * `fin` +5 min ⇒ dejar de pollear" no se dispararía nunca.
  *
- * El valor sale de los datos de campo: el lag de ingesta tiene p95 de 684-814 s (~14 min) y
+ * Con Fase A, `intervaloPoll` pasa a una cadencia LENTA (`INTERVALO_POLL_FINALIZADO_MS`,
+ * 60 s) cuando el estado es `finalizado` — no corta del todo, porque la sesión de LOGIN
+ * sigue viva y el conductor puede iniciar un recorrido nuevo sin volver a loguearse (decisión
+ * del chairman sobre un hallazgo de Codex: cortar del todo dejaría ese reinicio sin forma de
+ * detectarse). Este umbral de 30 min sigue siendo la red de seguridad para lo que
+ * `finalizado` no cubre: una sesión sin `fin_recorrido` (app vieja, o cerrada de mala manera)
+ * que simplemente dejó de reportar. El valor sale de los datos de campo: el lag de ingesta tiene p95 de 684-814 s (~14 min) y
  * un máximo observado de 4275 s (~71 min). Cortar cerca del p95 mataría el seguimiento de un
  * teléfono que solo está atrasado. 30 min es el doble del umbral con el que el server declara
  * `perdido` (15 min) y deja margen sobre el p95, sin llegar a pollear indefinidamente una
@@ -221,13 +229,32 @@ export function antiguedadViva(
   return Math.max(0, ahoraServidor - Date.parse(ts));
 }
 
+/**
+ * Cadencia del poll mientras el estado es `finalizado` (Fase A) — MÁS LENTA que
+ * `INTERVALO_POLL_MS`, no cortada del todo (decisión del chairman sobre el hallazgo de
+ * Codex): la `sesion_operativa` de LOGIN sigue viva y el conductor puede arrancar un
+ * recorrido NUEVO (`inicio_recorrido`) sin volver a loguearse — cortar el poll del todo
+ * (`false`) dejaría a ese reinicio sin forma de detectarse hasta que algo dispare un
+ * `refetch` manual. 60 s es un piso barato para notar el reinicio sin pollear a la cadencia
+ * normal (10 s) una sesión que, la mayor parte del tiempo, no va a reiniciar.
+ */
+export const INTERVALO_POLL_FINALIZADO_MS = 60_000;
+
 /** Cadencia del `refetchInterval`, según el último payload recibido. */
 export function intervaloPoll(
-  datos: Pick<TrazaEnVivo, 'hayMas' | 'inactivaDesdeMs'> | undefined,
+  datos: Pick<TrazaEnVivo, 'hayMas' | 'inactivaDesdeMs' | 'estadoFrescura'> | undefined,
 ): number | false {
   if (!datos) return INTERVALO_POLL_MS;
-  // El corte por inactividad va PRIMERO: una sesión zombi cuya traza además excede `limite`
-  // (`hayMas: true`) tiene que cortar, no pollear a 1 s para siempre.
+  // Fase A (docs/plan-ubicacion-fluida.md) — va ANTES que el corte por inactividad: un
+  // recorrido finalizado (`inactivaDesdeMs` todavía chico) no debe pollear a la cadencia
+  // normal ni caer en el corte de 30 min, tiene su propia cadencia lenta. `hayMas` manda
+  // primero: si la carga inicial vino truncada por `limite`, sigue el catch-up normal a 1 s
+  // — no tiene sentido frenarlo solo porque el estado actual es `finalizado`.
+  if (datos.estadoFrescura === 'finalizado') {
+    return datos.hayMas ? INTERVALO_POLL_RAPIDO_MS : INTERVALO_POLL_FINALIZADO_MS;
+  }
+  // El corte por inactividad va PRIMERO que `hayMas`: una sesión zombi cuya traza además
+  // excede `limite` (`hayMas: true`) tiene que cortar, no pollear a 1 s para siempre.
   if (datos.inactivaDesdeMs > UMBRAL_CORTE_POLL_MS) return false;
   if (datos.hayMas) return INTERVALO_POLL_RAPIDO_MS;
   return INTERVALO_POLL_MS;
@@ -251,6 +278,11 @@ export interface PresentacionFrescura {
  * `detenido` es deliberadamente neutro-informativo: un vehículo esperando en terminal
  * (huecos de hasta 56 min medidos, el plugin apaga la captura con el vehículo quieto) está
  * trabajando normalmente. La falla es `perdido`.
+ *
+ * `finalizado` (Fase A, docs/plan-ubicacion-fluida.md) es, igual que `detenido`, un estado
+ * NORMAL — el conductor tocó "Finalizar" y el recorrido cerró bien. Antes de esta entrega
+ * ese mismo caso pasaba por `reportando` → `detenido` → `perdido` (rojo, falla) a los 15 min,
+ * que es exactamente lo que este estado nuevo corrige.
  */
 export const PRESENTACION_FRESCURA: Record<EstadoFrescura, PresentacionFrescura> = {
   reportando: {
@@ -278,7 +310,32 @@ export const PRESENTACION_FRESCURA: Record<EstadoFrescura, PresentacionFrescura>
     color: 'var(--qv-text-secondary)',
     esFalla: false,
   },
+  finalizado: {
+    etiqueta: 'Recorrido finalizado',
+    descripcion: 'El conductor finalizó el recorrido. No es una falla.',
+    color: 'var(--qv-text-muted)',
+    esFalla: false,
+  },
 };
+
+/**
+ * Trampa de deploy (plan §Fase A): `scripts/deploy-gcp.sh` despliega API antes que WEB (y el
+ * worker último de los tres) — con `--solo`, o incluso en el orden fijo del script completo,
+ * hay una ventana real donde la API ya puede devolver `estadoFrescura: 'finalizado'` (por el
+ * backfill de la migración, o por un evento nuevo si el worker viejo ya corría) mientras el
+ * panel desplegado todavía es el código VIEJO, sin esta clave en `PRESENTACION_FRESCURA`.
+ * `apiFetch` (`apps/web/src/lib/api/client.ts`) NO valida la respuesta con zod en runtime —
+ * solo castea el tipo — así que un panel viejo indexando `PRESENTACION_FRESCURA['finalizado']`
+ * directo (`objeto[clave]` con una clave que no existe) recibiría `undefined` y reventaría al
+ * leer `.color`/`.etiqueta`. Esta función es el fallback: cualquier valor fuera del dominio
+ * conocido (el código viejo antes de este cambio, o un estado futuro que el panel todavía no
+ * conoce) cae a `sin_datos` en vez de tirar. Los 3 sitios que antes indexaban
+ * `PRESENTACION_FRESCURA[...]` directo (`panel-frescura.tsx`, `map-builders.ts`, `page.tsx`)
+ * pasan por acá.
+ */
+export function presentacionFrescura(estado: string): PresentacionFrescura {
+  return PRESENTACION_FRESCURA[estado as EstadoFrescura] ?? PRESENTACION_FRESCURA.sin_datos;
+}
 
 /** Duración legible para las dos antigüedades (`hace 3 min 20 s`). */
 export function formatearAntiguedad(ms: number | null): string {

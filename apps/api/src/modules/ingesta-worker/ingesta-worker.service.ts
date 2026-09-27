@@ -246,9 +246,21 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
 
   private async procesarEventoOperativo(sindicatoId: string, evento: EventoSync): Promise<number> {
     try {
-      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-        insertarEventoOperativoEnTx(tx, sindicatoId, evento),
+      const { recorridoEstadoOmitidoPorDriftFuturo, driftFuturoMs } = await withTenantContext(
+        { rol: 'admin_quivo', sindicatoId },
+        (tx) => insertarEventoOperativoEnTx(tx, sindicatoId, evento),
       );
+      if (recorridoEstadoOmitidoPorDriftFuturo) {
+        // Mismo criterio que `procesarGpsPoints`/`procesarCumplimiento`: esto NUNCA debe
+        // pasar en silencio — es la señal de un reloj de dispositivo corrido lo bastante
+        // como para haber dejado atascado el estado derivado del recorrido de no ser por
+        // este guard (ver el comentario en `insertarEventoOperativoEnTx`).
+        this.logger.warn(
+          `Evento ${evento.eventId} (${evento.tipo}) con ts futuro: sesión ` +
+            `${extraerSesionId(evento.payload) ?? '?'}, device ${evento.deviceId}, ` +
+            `drift +${((driftFuturoMs ?? 0) / 1000).toFixed(0)}s — recorridoEstado NO actualizado`,
+        );
+      }
       return 0;
     } catch (error) {
       await this.registrarErrorSync(sindicatoId, evento, error);
@@ -547,16 +559,42 @@ export async function procesarCumplimientoEnTx(
   return { tsFixDescartado };
 }
 
+/**
+ * `tipo` → `SesionOperativa.recorridoEstado` que le corresponde. Solo `inicio_recorrido` y
+ * `fin_recorrido` mueven el estado derivado (Fase A, docs/plan-ubicacion-fluida.md);
+ * `observacion` no participa — no representa un cambio de estado del recorrido.
+ */
+const RECORRIDO_ESTADO_POR_TIPO: Partial<Record<EventoSync['tipo'], 'en_curso' | 'finalizado'>> = {
+  inicio_recorrido: 'en_curso',
+  fin_recorrido: 'finalizado',
+};
+
+/**
+ * `insertarEventoOperativoEnTx` devuelve esto en vez de loguear ella misma (es una función
+ * standalone, sin `this.logger` — mismo patrón que `tsFixDescartado` en
+ * `insertarGpsPoints`/`procesarCumplimientoEnTx`: la función de negocio señaliza, el método
+ * de la clase que la llama logea).
+ */
+export interface ResultadoEventoOperativo {
+  /** `true` cuando el evento traía un `ts` tan adelantado (> `DRIFT_ALERTA_MS` respecto del
+   * reloj del server) que NO se tocó `recorridoEstado`/`recorridoEstadoTs` — el evento igual
+   * quedó guardado en `eventos_operativos` (bitácora, ver el `createMany` de arriba). */
+  recorridoEstadoOmitidoPorDriftFuturo: boolean;
+  /** Solo con `recorridoEstadoOmitidoPorDriftFuturo: true` — cuántos ms adelantado venía
+   * `evento.ts` respecto de `Date.now()`, para el warn del llamador. */
+  driftFuturoMs?: number;
+}
+
 export async function insertarEventoOperativoEnTx(
   tx: Tx,
   sindicatoId: string,
   evento: EventoSync,
-): Promise<void> {
+): Promise<ResultadoEventoOperativo> {
   const payload = evento.payload as unknown as { sesionId: string };
   if (!payload.sesionId) {
     throw new Error(`Evento ${evento.eventId} sin sesionId en el payload`);
   }
-  await tx.eventoOperativo.createMany({
+  const insertado = await tx.eventoOperativo.createMany({
     data: [
       {
         eventId: evento.eventId,
@@ -570,6 +608,62 @@ export async function insertarEventoOperativoEnTx(
     ],
     skipDuplicates: true,
   });
+
+  // Fase A (docs/plan-ubicacion-fluida.md) — estado DERIVADO del recorrido, en la MISMA
+  // transacción que el `createMany` de arriba: el evento en `eventos_operativos` (bitácora)
+  // y el estado resumido en `sesiones_operativas` quedan atómicos, mismo commit. NUNCA toca
+  // `fin`/`estado` de `SesionOperativa` — esos son de la sesión de LOGIN (solo `logout` en
+  // auth-movil los cambia). `sindicatoId` es el parámetro de esta función — el tenant
+  // AUTENTICADO del lote (`LoteIngestaJob.sindicatoId`, resuelto en `SyncController` desde
+  // la sesión móvil verificada, `sesion.sindicatoId` — `sync.controller.ts`), nunca un valor
+  // leído del `payload` del evento (que el dispositivo controla).
+  //
+  // `insertado.count === 1` (decisión del chairman sobre un hallazgo de Codex): un
+  // `eventId` DUPLICADO (`skipDuplicates` lo saltea, `count` sale 0) no debe tocar el estado
+  // — defensa en profundidad además del guard por `ts` de abajo, para no depender solo de
+  // ese guard ante un reenvío. Guard `"recorridoEstadoTs" IS NULL OR "recorridoEstadoTs" <
+  // $ts` (no `<=`): tolera sync fuera de orden — un lote viejo que llega tarde (outbox,
+  // reconexión) nunca pisa un estado más nuevo que ya se aplicó. `ts` es el del SOBRE del
+  // evento (`EventoSync.ts`), no un `tsFix`: `inicio_recorrido`/`fin_recorrido` no tienen
+  // payload de fix GPS (a diferencia de `gps_point`/`cumplimiento_punto_control`), así que
+  // no hay nada que resolver acá.
+  const recorridoEstado = RECORRIDO_ESTADO_POR_TIPO[evento.tipo];
+  if (recorridoEstado && insertado.count === 1) {
+    // FIX revisión (Fase A) — watermark del `ts` del DISPOSITIVO, sin cota: un `fin_recorrido`
+    // con el reloj del teléfono muy adelantado (hora mal puesta, GPS con clock roto) escribía
+    // un `recorridoEstadoTs` en el futuro. El guard `"recorridoEstadoTs" < $ts` de abajo es
+    // monótono creciente, así que ESE watermark quedaba más alto que cualquier `ts` real
+    // futuro — la sesión se atascaba en ese estado (`finalizado`/`en_curso`) sin que ningún
+    // evento posterior, con reloj correcto, pudiera volver a actualizarla. Mismo umbral que
+    // ya usa `detectarDriftReloj` (`DRIFT_ALERTA_MS`, definida arriba en este archivo) para no
+    // introducir una segunda constante de drift que pueda divergir de esa. El evento SIGUE
+    // guardándose como bitácora (`createMany` de arriba, ya ejecutado) — solo se omite el
+    // UPDATE del estado derivado.
+    const driftFuturoMs = new Date(evento.ts).getTime() - Date.now();
+    if (driftFuturoMs > DRIFT_ALERTA_MS) {
+      return { recorridoEstadoOmitidoPorDriftFuturo: true, driftFuturoMs };
+    }
+    // `AND "deviceId" = evento.deviceId` (hallazgo de Codex/code-review, además del guard
+    // por `sindicatoId`): `evento.deviceId` es AUTENTICADO, no un valor libre del payload —
+    // `SyncController.recibirLote` (apps/api/src/modules/sync/sync.controller.ts) rechaza
+    // con 400 el lote ENTERO si algún evento trae un `deviceId` distinto del de la sesión
+    // móvil verificada por `AuthMovilGuard` (`sesion.deviceId`), así que para cuando este
+    // código corre ya está garantizado que `evento.deviceId === sesion.deviceId`. El guard
+    // exige además que la sesión pertenezca a ESE dispositivo: sin él, un `sesionId` del
+    // payload que en realidad pertenece a OTRO dispositivo del MISMO sindicato (payload
+    // corrupto, o dos sesiones simultáneas del mismo vehículo en dos teléfonos — caso real,
+    // ver el comentario de `SesionEnVivoResumenSchema` en `@quivo/shared`) dejaría que el
+    // dispositivo A marque como `finalizado`/`en_curso` el recorrido de la sesión del
+    // dispositivo B.
+    await tx.$executeRaw`
+      UPDATE sesiones_operativas
+      SET "recorridoEstado" = ${recorridoEstado}, "recorridoEstadoTs" = ${new Date(evento.ts)}
+      WHERE id = ${payload.sesionId} AND "sindicatoId" = ${sindicatoId}
+        AND "deviceId" = ${evento.deviceId}
+        AND ("recorridoEstadoTs" IS NULL OR "recorridoEstadoTs" < ${new Date(evento.ts)})
+    `;
+  }
+  return { recorridoEstadoOmitidoPorDriftFuturo: false };
 }
 
 function extraerSesionId(payload: EventoSync['payload']): string | null {

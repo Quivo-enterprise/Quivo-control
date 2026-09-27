@@ -82,6 +82,34 @@ describe('ensureDataLayers — capas del vehículo no deben ignorar el índice d
     expect(layout(labels)['text-ignore-placement']).toBe(true);
   });
 
+  it('quivo-vehicle-symbols: icon-image es un match con un caso por sprite conocido y un fallback a un sprite neutro (no a estadoFrescura crudo)', () => {
+    const { map, capasAgregadas } = crearMapaFalso();
+    ensureDataLayers(map);
+
+    const capa = capasAgregadas.find((c) => c.id === 'quivo-vehicle-symbols');
+    const l = layout(capa);
+    const expresion = l['icon-image'] as unknown[];
+
+    expect(Array.isArray(expresion)).toBe(true);
+    expect(expresion[0]).toBe('match');
+    expect(expresion[1]).toEqual(['get', 'estadoFrescura']);
+
+    // Cada estado conocido (reportando/detenido/perdido/finalizado) tiene un caso propio en
+    // el match, apuntando al sprite `quivo-bus-<estado>` correspondiente.
+    const casosConocidos = ['reportando', 'detenido', 'perdido', 'finalizado'];
+    for (const estado of casosConocidos) {
+      const idx = expresion.indexOf(estado);
+      expect(idx, `falta el caso '${estado}' en el match de icon-image`).toBeGreaterThan(1);
+      expect(expresion[idx + 1]).toBe(`quivo-bus-${estado}`);
+    }
+
+    // El último elemento es el fallback (no un `['get', 'estadoFrescura']` ni un `concat`
+    // dinámico) — cualquier valor desconocido (vacío, `sin_datos`, un estado nuevo del enum)
+    // cae en un sprite registrado y conocido, nunca en una imagen inexistente.
+    const fallback = expresion.at(-1);
+    expect(casosConocidos.map((e) => `quivo-bus-${e}`)).toContain(fallback);
+  });
+
   it('las capas del vehículo se agregan sin beforeId (quedan arriba de todo el stack, incluidas las POI del estilo base)', () => {
     const { map } = crearMapaFalso();
     const addLayerSpy = map.addLayer as unknown as ReturnType<typeof vi.fn>;

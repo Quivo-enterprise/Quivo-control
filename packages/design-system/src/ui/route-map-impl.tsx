@@ -353,15 +353,22 @@ function setSourceData(map: MapLibreMap, sourceId: string, data: MapFeatureColle
  *   de reportando" antes de leer el color.
  * - `perdido`    — bus con alerta (glifo `mdi:bus-alert`), badge gris y atenuado (opacidad
  *   reducida): "esto no es una posición confiable ahora mismo".
+ * - `finalizado` — Fase A (docs/plan-ubicacion-fluida.md): bus SÓLIDO liso (mismo glifo
+ *   `mdi:bus` que `reportando`, no `bus-alert`: no es una falla) con badge gris de contorno
+ *   PUNTEADO — mismo tratamiento de "distinto, informativo, no alarmante" que ya usa
+ *   `detenido`, pero en gris/neutro (no cian) para no confundirse con "el teléfono sigue
+ *   vivo esperando". El vehículo sigue visible en el mapa, solo que quieto porque el
+ *   recorrido terminó bien.
  *
  * `sin_datos` queda afuera a propósito: esa sesión nunca tuvo un fix, así que en
  * `map-builders.ts` ni siquiera llega a ser un marker (`lat`/`lng` `null` ⇒ no se dibuja) —
- * no hace falta un cuarto sprite.
+ * no hace falta un sprite para ese estado.
  *
- * Los tres glifos son Material Design Icons (`mdi:bus`, `mdi:bus-clock`, `mdi:bus-alert`,
+ * Los glifos son Material Design Icons (`mdi:bus`, `mdi:bus-clock`, `mdi:bus-alert`,
  * licencia Apache-2.0), resueltos vía el MCP `iconify` — no un SVG inventado a mano.
+ * `finalizado` reusa el mismo glifo `mdi:bus` que `reportando` (no hizo falta un cuarto).
  */
-type EstadoIconoVehiculo = 'reportando' | 'detenido' | 'perdido';
+type EstadoIconoVehiculo = 'reportando' | 'detenido' | 'perdido' | 'finalizado';
 
 const ICONO_BUS_PATH =
   'M18 11H6V6h12m-1.5 11a1.5 1.5 0 0 1-1.5-1.5a1.5 1.5 0 0 1 1.5-1.5a1.5 1.5 0 0 1 1.5 1.5a1.5 1.5 0 0 1-1.5 1.5m-9 0A1.5 1.5 0 0 1 6 15.5A1.5 1.5 0 0 1 7.5 14A1.5 1.5 0 0 1 9 15.5A1.5 1.5 0 0 1 7.5 17M4 16c0 .88.39 1.67 1 2.22V20a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-1h8v1a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-1.78c.61-.55 1-1.34 1-2.22V6c0-3.5-3.58-4-8-4s-8 .5-8 4z';
@@ -388,12 +395,51 @@ const VEHICULO_ICONOS: VehiculoIconoSpec[] = [
   { estado: 'reportando', path: ICONO_BUS_PATH, background: '#16a34a', outline: false, opacity: 1 },
   { estado: 'detenido', path: ICONO_BUS_CLOCK_PATH, background: '#0891b2', outline: true, opacity: 1 },
   { estado: 'perdido', path: ICONO_BUS_ALERT_PATH, background: '#94a3b8', outline: false, opacity: 0.72 },
+  // Fase A — mismo gris que `perdido` (`--qv-text-muted` claro) pero glifo LISO (`mdi:bus`,
+  // no `bus-alert`) y contorno PUNTEADO (`outline: true`, como `detenido`): la forma dice
+  // "no es una falla" antes de leer texto, aunque el color de fondo sea el mismo tono neutro.
+  { estado: 'finalizado', path: ICONO_BUS_PATH, background: '#94a3b8', outline: true, opacity: 0.85 },
 ];
 
 const VEHICULO_ICONO_PX = 64;
 
 function vehiculoIconoId(estado: string): string {
   return `quivo-bus-${estado}`;
+}
+
+/**
+ * FIX revisión (Fase A) — sprite de respaldo para cualquier `estadoFrescura` que no tenga
+ * ícono propio: vacío (nunca pasa desde `/en-vivo`, ver `construirMarcadoresVehiculos`),
+ * `sin_datos` (tampoco pasa — `map-builders.ts` no lo dibuja como marker, ver el comentario
+ * de `VEHICULO_ICONOS` más arriba) o un estado nuevo del enum que este archivo todavía no
+ * conozca. `detenido` en vez de `reportando`: un estado desconocido no debe leerse como
+ * "reportando bien" (verde sólido, afirmación falsa) — el bus con reloj cian punteado ya
+ * comunica "distinto, no es una falla" sin afirmar nada que no se sabe.
+ */
+const VEHICULO_ICONO_FALLBACK: EstadoIconoVehiculo = 'detenido';
+
+/**
+ * Expresión MapLibre `match` para `icon-image`, derivada de `VEHICULO_ICONOS` — así la lista
+ * de estados conocidos nunca puede divergir de los sprites que `ensureVehiculoIconos`
+ * efectivamente registra. Antes: un `case` a mano que solo cubría `estadoFrescura === ''`;
+ * cualquier otro valor desconocido (incluido un futuro estado del enum) pedía la imagen
+ * inexistente `quivo-bus-<lo que sea>` y MapLibre no dibujaba nada ahí — el vehículo
+ * desaparecía del mapa, justo lo que el plan prohíbe.
+ *
+ * Retorna `any`: el tipo `ExpressionSpecification` de `@maplibre/maplibre-gl-style-spec` (una
+ * unión de tuplas literales por operador — `match`, `case`, `concat`…) no es un paquete propio
+ * de este workspace (llega transitivo vía `maplibre-gl`, que tampoco lo reexporta), así que no
+ * hay forma de tipar el `match` construido dinámicamente sin importar de una dependencia no
+ * declarada. Mismo tratamiento laxo que ya usan los `match`/`case` inline de este archivo (p.
+ * ej. `circle-radius` más abajo) — la única diferencia es que acá se arma en una función en vez
+ * de como literal, así que TS no puede inferirlo por contexto y hace falta el `any` explícito.
+ * El shape en runtime (`['match', input, label, output, ..., fallback]`) es el que exige la
+ * spec: https://maplibre.org/maplibre-style-spec/expressions/#match.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- ver comentario arriba
+function buildVehiculoIconoImageExpression(): any {
+  const casos: string[] = VEHICULO_ICONOS.flatMap((spec) => [spec.estado, vehiculoIconoId(spec.estado)]);
+  return ['match', ['get', 'estadoFrescura'], ...casos, vehiculoIconoId(VEHICULO_ICONO_FALLBACK)];
 }
 
 function buildVehiculoIconoSvg(spec: VehiculoIconoSpec): string {
@@ -1002,13 +1048,11 @@ export function ensureDataLayers(map: MapLibreMap) {
       filter: VEHICLE_BODY_FILTER,
       layout: {
         visibility: 'none',
-        // ENTREGA 16 — `case` de respaldo: un `pinType: 'vehicle'` sin `estadoFrescura` (nunca
-        // pasa desde `/en-vivo`, que siempre lo setea — ver `construirMarcadoresVehiculos` —
-        // pero SÍ puede pasar en un consumidor futuro del design system) cae al sprite
-        // `reportando` en vez de pedirle a MapLibre la imagen inexistente `quivo-bus-`
-        // (`estadoFrescura` vacío concatenado) — eso dejaría al vehículo sin ícono ni fallback
-        // visible (`quivo-vehicle-fallback` ya está oculto en cuanto los sprites cargan).
-        'icon-image': ['concat', 'quivo-bus-', ['case', ['==', ['get', 'estadoFrescura'], ''], 'reportando', ['get', 'estadoFrescura']]],
+        // ENTREGA 16 / FIX revisión (Fase A) — ver `buildVehiculoIconoImageExpression` arriba:
+        // `match` con un caso por sprite registrado + fallback a `quivo-bus-detenido` para
+        // cualquier `estadoFrescura` que no matchee ninguno (vacío, `sin_datos`, o un estado
+        // nuevo del enum) — nunca pide una imagen inexistente ni deja al vehículo sin ícono.
+        'icon-image': buildVehiculoIconoImageExpression(),
         'icon-size': 0.62,
         'icon-allow-overlap': true,
       },

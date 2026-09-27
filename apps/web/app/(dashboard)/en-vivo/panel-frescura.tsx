@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader, Tag } from '@quivo/design-system';
 import type { SesionEnVivoResumen } from '@quivo/shared';
-import { antiguedadViva, formatearAntiguedad, PRESENTACION_FRESCURA, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
+import { antiguedadViva, formatearAntiguedad, presentacionFrescura, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 
 /** Re-renderiza cada segundo para que las antigüedades corran solas entre polls. Vive dentro
  * de `PanelFrescura` (ver el comentario ahí) para no forzar un re-render de toda la página. */
@@ -50,7 +50,7 @@ export function PanelFrescura({
   // que existe para evitar. Con `sesionesRecibidoEn` la antigüedad queda congelada hasta el
   // próximo refresco del listado, pero nunca desincronizada del reloj del servidor.
   const referencia = datos ? recibidoEn : sesionesRecibidoEn;
-  const presentacion = PRESENTACION_FRESCURA[fuente.estadoFrescura];
+  const presentacion = presentacionFrescura(fuente.estadoFrescura);
   const antiguedadFix = antiguedadViva(fuente.ultimoFixTs, fuente.servidorTs, referencia, ahora);
   const antiguedadIngesta = antiguedadViva(
     fuente.ultimoIngresoTs,
@@ -58,6 +58,14 @@ export function PanelFrescura({
     referencia,
     ahora,
   );
+  // Fase A (docs/plan-ubicacion-fluida.md) — "Finalizó hace X" con la MISMA lógica de reloj
+  // de servidor que las otras dos antigüedades: `recorridoFinTs` es la hora del evento
+  // `fin_recorrido` (`SesionOperativa.recorridoEstadoTs`), viaja como ISO string y solo es
+  // no-null cuando `estadoFrescura === 'finalizado'` (contrato de `derivarFrescura`).
+  const antiguedadFin =
+    fuente.estadoFrescura === 'finalizado'
+      ? antiguedadViva(fuente.recorridoFinTs, fuente.servidorTs, referencia, ahora)
+      : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', minWidth: '18rem' }}>
@@ -96,6 +104,14 @@ export function PanelFrescura({
           {formatearAntiguedad(antiguedadIngesta)}
         </strong>
       </span>
+      {antiguedadFin !== null && (
+        <span style={{ fontSize: '0.8125rem', opacity: 0.8 }}>
+          Finalizó hace{' '}
+          <strong style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {formatearAntiguedad(antiguedadFin)}
+          </strong>
+        </span>
+      )}
     </div>
   );
 }
