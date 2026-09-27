@@ -6,8 +6,9 @@ services:
       POSTGRES_PASSWORD: quivo_dev
       POSTGRES_DB: quivo_control
     ports:
-      # host 5434 -> evita choque con otros Postgres locales en 5432/5433 en esta máquina de desarrollo
-      - '5434:5432'
+      # host 5444 -> copia sandbox, offset +10 sobre el 5434 del stack original de
+      # Quivo-control, para que ambos stacks puedan correr a la vez sin chocar
+      - '5444:5432'
     volumes:
       - quivo_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,10 +19,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    # Puerto host 6380 (no el 6379 default) — mismo motivo que el 5434 de postgres arriba:
-    # evitar el choque con otro Redis local en esta máquina de desarrollo (QUI-234).
+    # Puerto host 6390 (no el 6379 default) — copia sandbox, offset +10 sobre el 6380
+    # del stack original de Quivo-control, para que ambos stacks puedan correr a la vez
+    # sin chocar (QUI-234).
     ports:
-      - '6380:6379'
+      - '6390:6379'
     volumes:
       - quivo_redis_data:/data
     healthcheck:
@@ -35,8 +37,10 @@ services:
   osrm:
     image: osrm/osrm-backend
     command: osrm-routed --algorithm mld --max-table-size 8000 /data/bolivia-latest.osrm
+    # Puerto host 5011 — copia sandbox, offset +10 sobre el 5001 del stack original de
+    # Quivo-control, para que ambos stacks puedan correr a la vez sin chocar
     ports:
-      - '5001:5000'
+      - '5011:5000'
     volumes:
       - ./osrm-data:/data
     restart: unless-stopped

@@ -3,9 +3,9 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { cx } from '../utils.js';
 import { Loader } from './primitives.js';
-import type { RouteMapProps } from './route-map-impl.js';
+import type { MapOverlayMarker, RouteMapProps } from './route-map-impl.js';
 
-export type { RouteMapProps };
+export type { MapOverlayMarker, RouteMapProps };
 
 // `route-map-impl.js` importa Leaflet/`react-leaflet` a nivel de módulo, y Leaflet toca
 // `window` al cargar (`L.Browser`). `React.lazy` no ejecuta el `import()` hasta que React

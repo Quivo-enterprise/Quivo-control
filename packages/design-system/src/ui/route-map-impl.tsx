@@ -22,12 +22,14 @@
 // al `Marker draggable` de Leaflet para capas GeoJSON, así que el arrastre se implementa a mano
 // (ver los handlers `mousedown`/`mousemove`/`mouseup` sobre `quivo-marker-points`).
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type {
   FilterSpecification,
   GeoJSONSource,
   Map as MapLibreMap,
   MapLayerMouseEvent,
+  Marker as MapLibreMarker,
   MapMouseEvent,
   StyleSpecification,
 } from 'maplibre-gl';
@@ -36,6 +38,7 @@ import { cx } from '../utils.js';
 import type { MapPoint, MapRoute, MapZone } from '../types.js';
 import { Loader } from './primitives.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
+import { diffOverlayMarkers, type MapOverlayMarker } from './route-map-overlay-markers.js';
 import {
   avanzarAnimacion,
   encolarNuevosPuntos,
@@ -43,6 +46,8 @@ import {
   type EstadoAnimacionVehiculo,
   type PuntoAnimable,
 } from './vehicle-marker-animation.js';
+
+export type { MapOverlayMarker };
 
 type MapLibreModule = typeof import('maplibre-gl');
 
@@ -197,6 +202,17 @@ export interface RouteMapProps {
     points: PuntoAnimable[];
     intervalMs: number;
   } | null;
+  /**
+   * Marcadores DOM genéricos superpuestos al mapa (`maplibregl.Marker` real, con el `content`
+   * del consumidor montado adentro vía portal) — aditivo y opcional: no pasar la prop deja el
+   * comportamiento de `RouteMap` exactamente igual que antes. Pensado para overlays que
+   * necesitan interactividad propia (ej. un botón) que las capas GeoJSON de `markers`/`stops`
+   * no pueden ofrecer. `RouteMap` no engancha ningún click a estos marcadores — el `content`
+   * trae su propio manejo (su propio `<button>`), y un click ahí nunca dispara `onMapClick` ni
+   * los handlers de click por feature. Ver `diffOverlayMarkers` en
+   * `route-map-overlay-markers.ts` para el criterio de alta/actualización/baja por `id`.
+   */
+  overlayMarkers?: MapOverlayMarker[];
 }
 
 type MapDataSnapshot = {
@@ -1154,6 +1170,7 @@ export function RouteMap({
   defaultCenter,
   defaultZoom,
   animatedVehicle,
+  overlayMarkers,
 }: RouteMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -1189,12 +1206,28 @@ export function RouteMap({
   const vehicleRafRef = useRef<number | null>(null);
   const reducedMotionRef = useRef(false);
 
+  // `overlayMarkers` (aditivo, ver JSDoc en `RouteMapProps`) — un `maplibregl.Marker` real por
+  // id, fuera de React (igual que `mapRef`/`vehicleAnimRef`), más el elemento DOM que le pasamos
+  // como `element` para poder montar `content` adentro vía `createPortal`. `overlayPortals`
+  // (estado, sí en React) es la proyección de ese `Map` que necesita el JSX de abajo para
+  // renderizar los portales — se recalcula cada vez que el efecto de sincronización cambia el
+  // `Map`, nunca se deriva directo del ref (React no re-renderiza por mutaciones a un ref).
+  const overlayMarkersRef = useRef<
+    Map<string, { marker: MapLibreMarker; el: HTMLDivElement; anchor: 'center' | 'bottom' }>
+  >(new Map());
+  const [overlayPortals, setOverlayPortals] = useState<Array<{ id: string; el: HTMLDivElement }>>([]);
+
   // Creación del mapa — una sola vez por montaje real. A diferencia de `<MapContainer>` de
   // react-leaflet, MapLibre no deja un id "sucio" en el contenedor al desmontar bajo Strict
   // Mode (`map.remove()` limpia de verdad), así que un `useEffect` simple con su cleanup real
   // alcanza — sin el `MapCanvas`/`LeafletProvider` a medida que hacía falta con Leaflet.
   useEffect(() => {
     let cancelled = false;
+    // Capturado ACÁ (no dentro del cleanup de más abajo) — el mismo `Map` vive durante todo
+    // este efecto (nunca se reasigna `overlayMarkersRef.current`), pero el lint de
+    // `react-hooks/exhaustive-deps` pide leer `.current` fuera de la función de cleanup para
+    // no depender de qué haya en el ref en el momento en que React la ejecute.
+    const overlayMarkersOfThisMount = overlayMarkersRef.current;
 
     async function initialize() {
       if (!containerRef.current || mapRef.current) return;
@@ -1358,6 +1391,11 @@ export function RouteMap({
       cancelled = true;
       mapReadyRef.current = false;
       setMapReady(false);
+      // El mapa se destruye — sacar los `overlayMarkers` ANTES (cada `marker.remove()` todavía
+      // necesita a `this._map` vivo para desenganchar sus propios listeners de `move`/`click`),
+      // no después de `mapRef.current?.remove()`.
+      overlayMarkersOfThisMount.forEach((entry) => entry.marker.remove());
+      overlayMarkersOfThisMount.clear();
       mapRef.current?.remove();
       mapRef.current = null;
       maplibreRef.current = null;
@@ -1443,6 +1481,77 @@ export function RouteMap({
     );
     setSourceData(map, 'quivo-zones', zoneFeatures(zones, isDarkRef.current));
   }, [routes, stops, markers, zones, mapReady, animatedVehicle?.markerId]);
+
+  // Sincroniza `overlayMarkers` (aditivo, ver JSDoc en `RouteMapProps`) contra el `Map` de
+  // markers montados en `overlayMarkersRef` — altas/actualizaciones/bajas por `id`, resueltas
+  // por la función pura `diffOverlayMarkers` (ver `route-map-overlay-markers.ts` para el
+  // criterio de dedupe). Nada de esto corre mientras el consumidor no pasa la prop: con
+  // `overlayMarkers` ausente y sin nada montado todavía, el diff da siempre `{add: [],
+  // update: [], remove: []}` — el guard de abajo evita incluso ese cálculo y el `setState` de
+  // `overlayPortals` de más, así que el comportamiento previo (sin esta prop) queda intacto.
+  useEffect(() => {
+    const map = mapRef.current;
+    const maplibre = maplibreRef.current;
+    const mounted = overlayMarkersRef.current;
+    const next = overlayMarkers ?? [];
+    if (!map || !maplibre || !mapReadyRef.current) return;
+    if (next.length === 0 && mounted.size === 0) return;
+
+    const { add, update, remove } = diffOverlayMarkers(mounted.keys(), next);
+
+    remove.forEach((id) => {
+      mounted.get(id)?.marker.remove();
+      mounted.delete(id);
+    });
+
+    add.forEach((overlayMarker) => {
+      const el = document.createElement('div');
+      el.className = 'qv-route-map__overlay-marker';
+      if (overlayMarker.zIndex !== undefined) el.style.zIndex = String(overlayMarker.zIndex);
+      // El `content` del consumidor trae su propio manejo de click (su propio `<button>`) —
+      // sin estos `stopPropagation`, MapLibre engancha estos mismos eventos a nivel del
+      // contenedor del canvas (`map.getCanvasContainer()`, donde `Marker.addTo` cuelga este
+      // mismo `el`), así que interactuar con el marker burbujearía hasta disparar el
+      // `onMapClick` general, los handlers de click por feature (`wireFeatureClicks`) y los
+      // gestos de mapa (paneo/doble-click-zoom) como si fuera una interacción suelta sobre el
+      // mapa. `wheel` queda afuera a propósito: el usuario tiene que poder hacer zoom con la
+      // rueda aunque el cursor esté sobre un marker.
+      el.addEventListener('click', (event) => event.stopPropagation());
+      el.addEventListener('mousedown', (event) => event.stopPropagation());
+      el.addEventListener('dblclick', (event) => event.stopPropagation());
+      el.addEventListener('touchstart', (event) => event.stopPropagation());
+      el.addEventListener('pointerdown', (event) => event.stopPropagation());
+      const anchor = overlayMarker.anchor ?? 'center';
+      const marker = new maplibre.Marker({ element: el, anchor })
+        .setLngLat([overlayMarker.lng, overlayMarker.lat])
+        .addTo(map);
+      mounted.set(overlayMarker.id, { marker, el, anchor });
+    });
+
+    update.forEach((overlayMarker) => {
+      const entry = mounted.get(overlayMarker.id);
+      if (!entry) return;
+      const nextAnchor = overlayMarker.anchor ?? 'center';
+      if (entry.anchor !== nextAnchor) {
+        // MapLibre no permite reconfigurar el `anchor` de un `Marker` ya creado — se recrea
+        // el marker reusando el MISMO `el` (el portal de `content` montado ahí sigue vivo, ver
+        // el JSDoc de `overlayPortals` más abajo) en vez de perder su estado de React de
+        // vuelta a un alta/baja completa.
+        entry.marker.remove();
+        const marker = new maplibre.Marker({ element: entry.el, anchor: nextAnchor })
+          .setLngLat([overlayMarker.lng, overlayMarker.lat])
+          .addTo(map);
+        mounted.set(overlayMarker.id, { marker, el: entry.el, anchor: nextAnchor });
+      } else {
+        entry.marker.setLngLat([overlayMarker.lng, overlayMarker.lat]);
+      }
+      entry.el.style.zIndex = overlayMarker.zIndex !== undefined ? String(overlayMarker.zIndex) : '';
+    });
+
+    if (add.length > 0 || remove.length > 0) {
+      setOverlayPortals(Array.from(mounted.entries()).map(([id, entry]) => ({ id, el: entry.el })));
+    }
+  }, [overlayMarkers, mapReady]);
 
   // Animación del marcador de vehículo (ver `vehicle-marker-animation.ts` para la técnica y
   // la duración). Se dispara cuando llega un lote nuevo de posiciones (`animatedVehicle.points`
@@ -1584,6 +1693,17 @@ export function RouteMap({
     map.panTo([followPoint.lng, followPoint.lat]);
   }, [followPoint?.lat, followPoint?.lng, mapReady]);
 
+  // `content` por id, para el `.map()` de portales de abajo — evita el `.find()` lineal por
+  // portal montado (O(n²) con N overlays: N portales × un `.find()` de N en cada uno) que
+  // había antes. Se recalcula solo cuando cambia la referencia de `overlayMarkers`.
+  const overlayContentById = useMemo(() => {
+    const contenidoPorId = new Map<string, ReactNode>();
+    for (const marker of overlayMarkers ?? []) {
+      contenidoPorId.set(marker.id, marker.content);
+    }
+    return contenidoPorId;
+  }, [overlayMarkers]);
+
   const showLoading = loading || (!initError && !mapReady);
 
   return (
@@ -1599,6 +1719,15 @@ export function RouteMap({
           <span>{initError}</span>
         </div>
       )}
+      {/* `overlayMarkers` (aditivo) — cada `content` se monta vía portal dentro del `<div>`
+          que `maplibregl.Marker` ya posiciona sobre el mapa (ver el efecto de sincronización
+          más arriba). `overlayPortals` guarda los pares `{id, el}` montados; el `content` se
+          resuelve acá, en cada render, contra `overlayContentById` (memo del `overlayMarkers`
+          más reciente) — así una actualización de contenido (sin alta/baja de ids) se refleja
+          sin depender de que el efecto de arriba vuelva a tocar `overlayPortals`. Vacío
+          mientras la prop no se use, así que esto no agrega nada al árbol cuando `RouteMap`
+          no la recibe. */}
+      {overlayPortals.map(({ id, el }) => createPortal(overlayContentById.get(id), el, id))}
     </div>
   );
 }

@@ -4189,3 +4189,15 @@ La sesión `9c63dda6` es de QA, no de operación real, y **ya generó un cumplim
 del radio de 150 m de un punto de control de la Z12. Esa sesión va a aparecer en los reportes como
 un recorrido con cumplimientos que nadie hizo. **Hay que excluirla al analizar la evidencia del
 piloto.** Es un caso concreto del riesgo ya conocido de mezclar pruebas con la base de producción.
+
+
+## [SANDBOX mock/sandbox — 2026-09-27] Flota mockeada en /en-vivo
+Copia temporal (sin remote). Plan: `docs/plan-mock-flota-en-vivo.md`. Flag `NEXT_PUBLIC_MOCK_FLOTA=true` + `NEXT_PUBLIC_DEV_BYPASS_AUTH=true`, sin backend. Estado: implementado y verificado (2026-09-27), commit en rama local `mock/sandbox`.
+- Ejecutar: `pnpm --filter @quivo/design-system build` y luego `pnpm --filter @quivo/web exec next dev --port 3110` → `/en-vivo` (no requiere backend).
+- Design-system: prop aditiva `overlayMarkers` en `RouteMap` (marcadores DOM vía portal, `route-map-overlay-markers.ts`).
+- Mock: `apps/web/src/lib/mock-flota/` (datos, catálogo de infracciones inventado, reducer puro, provider con tick de 1 s, WhatsApp). UI: `apps/web/app/(dashboard)/en-vivo/simulado/`.
+- Fotos: solo `z12-1.jpg` es real (Wikimedia CC BY 2.0, micro de la línea 3V); `z12-2`/`l120-1` son placeholders. Fuentes en `apps/web/public/mock/trufis/FUENTES.md`.
+- WhatsApp: números ficticios 5917000000{1,2,3} (decisión del CTO; pueden pertenecer a una persona real).
+- Aislamiento Docker: `COMPOSE_PROJECT_NAME=quivo-mock`, puertos 5444/6390/5011.
+- Revisión: `/code-review` (10 hallazgos; 9 aplicados, se descarta el de docker-compose por ser intencional en la copia) + web-design-guidelines (16 aplicados, 6 descartados por ser innecesarios en la demo). Tests: web 126/126, design-system 67/67.
+- Pendiente: fotos reales de Z12/120; la ruta blanca de la 120 se ve poco sobre el mapa claro.

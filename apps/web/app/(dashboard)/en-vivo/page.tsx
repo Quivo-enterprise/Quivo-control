@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { Alert, Button, Loader, RouteMap, Select } from '@quivo/design-system';
 import {
   AlertTriangle,
@@ -43,6 +44,17 @@ import {
   ultimaPasada,
 } from './map-builders';
 
+// `next/dynamic` (no un `import` estático) a propósito: `EnVivoSimulado` y todo lo que trae
+// consigo (`FlotaMockProvider`, `simulado.css`, los mocks de flota) son código exclusivo de la
+// demo (`NEXT_PUBLIC_MOCK_FLOTA=true`) — un `import` estático los mete en el bundle de
+// PRODUCCIÓN de `/en-vivo` aunque el flag esté apagado (el `if` de más abajo es en runtime,
+// no en build time; el bundler no puede saber que la rama nunca se toma). `ssr: false` porque
+// el componente ya es 100% cliente (`'use client'`, `FlotaMockProvider` usa `useReducer`) y no
+// hay contenido que valga la pena prerenderizar en el servidor para una demo.
+const EnVivoSimulado = dynamic(() => import('./simulado/en-vivo-simulado').then((mod) => mod.EnVivoSimulado), {
+  ssr: false,
+});
+
 function useReloj(): number {
   const [ahora, setAhora] = useState(() => Date.now());
   useEffect(() => {
@@ -52,7 +64,13 @@ function useReloj(): number {
   return ahora;
 }
 
-export default function EnVivoPage() {
+/**
+ * `/en-vivo` real (backend, GPS de la flota real). Deja de ser el `export default` del
+ * archivo — ver `EnVivoPage` más abajo — para poder envolverla en un flag sin violar las
+ * reglas de hooks (el `if` de modo mock vive en un componente separado que decide ANTES de
+ * montar cualquiera de los dos, nunca a mitad de un componente con hooks ya llamados).
+ */
+function EnVivoReal() {
   const { token } = useAuth();
   const router = useRouter();
 
@@ -722,6 +740,20 @@ export default function EnVivoPage() {
       )}
     </div>
   );
+}
+
+/**
+ * `export default` real del archivo. Con `NEXT_PUBLIC_MOCK_FLOTA=true` (demo sin backend,
+ * ver `docs/plan-mock-flota-en-vivo.md`) renderiza `<EnVivoSimulado/>` en vez de `<EnVivoReal/>`
+ * — el flag se lee al nivel de este wrapper para que NINGUNO de los dos componentes reciba
+ * hooks condicionales: React siempre monta uno solo, nunca "el mismo componente con un if
+ * adentro".
+ */
+export default function EnVivoPage() {
+  if (process.env.NEXT_PUBLIC_MOCK_FLOTA === 'true') {
+    return <EnVivoSimulado />;
+  }
+  return <EnVivoReal />;
 }
 
 function FrescuraBadgeCompact({
