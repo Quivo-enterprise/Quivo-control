@@ -1,4 +1,4 @@
-import { trazoVisibleDe } from './geometria';
+import { avancesDeParadas, trazoVisibleDe } from './geometria';
 import type { LineaMock, LineaMockId, ParadaMock, TrufiMock } from './tipos';
 
 /**
@@ -54,16 +54,49 @@ const Z12_POLILINEA: [number, number][] = [
   [-17.437425, -66.152968], [-17.438749, -66.150633],
 ];
 
-const Z12_PARADAS: ParadaMock[] = [
+/**
+ * Puntos de control de cada línea (Contrato de datos, plan del guion delegado): 3-4 paradas
+ * por línea con `esPuntoControl: true` y `radioToleranciaM` 50-80 — el resto de las paradas
+ * queda en `false`/`0`. `avance` se precalcula UNA VEZ acá con `avanceDeParada` (`geometria.ts`),
+ * reusando la polilínea ya declarada arriba — no se recalcula en cada render.
+ */
+const Z12_PUNTOS_CONTROL: Record<string, number> = {
+  'villa-armonia': 60,
+  'parada-kanata': 70,
+  univalle: 55,
+  salomon: 65,
+};
+
+// `orden` reasignado (ítem 0 del guion de fixes, 2026-09-27): antes se había asignado a mano y
+// no seguía la posición real de cada parada a lo largo del circuito — una búsqueda estrictamente
+// hacia adelante (`avancesDeParadas`) apretaba kanata/univalle/salomon en ~5% del loop porque el
+// vértice global más cercano de esas 3 cae, en la polilínea real, en el orden
+// univalle → salomón → molle-molle → kanata (no kanata → univalle → salomón como estaba antes).
+// Reasignado ordenando por el avance de vértice-más-cercano-GLOBAL de cada parada (`avanceDeParada`,
+// `geometria.ts`) — villa-armonía (origen del loop) se deja fija en `orden: 0` porque su vértice
+// global más cercano cae del lado equivocado del loop (avance ≈1, no ≈0 — ver comentario de
+// `avanceDeParada`). Mismos ids/nombres, solo cambia `orden`.
+const Z12_PARADAS_BASE = [
   { id: 'villa-armonia', nombre: 'Villa Armonía', lat: -17.438501, lng: -66.150773, orden: 0 },
-  { id: 'parada-uspha-uspha', nombre: 'Parada Uspha Uspha', lat: -17.379654, lng: -66.160583, orden: 1 },
-  { id: 'parada-kanata', nombre: 'Parada Kanata', lat: -17.353303, lng: -66.189169, orden: 2 },
-  { id: 'univalle', nombre: 'Univalle', lat: -17.333952, lng: -66.22676, orden: 3 },
-  { id: 'salomon', nombre: 'Salomón', lat: -17.317419, lng: -66.228554, orden: 4 },
-  { id: 'parada-molle-molle', nombre: 'Parada Molle Molle', lat: -17.344054, lng: -66.207523, orden: 5 },
-  { id: 'parada-cristo-rey', nombre: 'Parada Cristo Rey', lat: -17.366966, lng: -66.165714, orden: 6 },
+  { id: 'univalle', nombre: 'Univalle', lat: -17.333952, lng: -66.22676, orden: 1 },
+  { id: 'salomon', nombre: 'Salomón', lat: -17.317419, lng: -66.228554, orden: 2 },
+  { id: 'parada-molle-molle', nombre: 'Parada Molle Molle', lat: -17.344054, lng: -66.207523, orden: 3 },
+  { id: 'parada-kanata', nombre: 'Parada Kanata', lat: -17.353303, lng: -66.189169, orden: 4 },
+  { id: 'parada-cristo-rey', nombre: 'Parada Cristo Rey', lat: -17.366966, lng: -66.165714, orden: 5 },
+  { id: 'parada-uspha-uspha', nombre: 'Parada Uspha Uspha', lat: -17.379654, lng: -66.160583, orden: 6 },
   { id: 'parada-alalay', nombre: 'Parada Alalay', lat: -17.394099, lng: -66.15075, orden: 7 },
-];
+].map((p) => ({
+  ...p,
+  esPuntoControl: p.id in Z12_PUNTOS_CONTROL,
+  radioToleranciaM: Z12_PUNTOS_CONTROL[p.id] ?? 0,
+}));
+
+// `avancesDeParadas` (no `avanceDeParada` por parada suelta): en el circuito Z12 el vértice más
+// cercano GLOBAL de una parada puede caer del lado equivocado del loop (ver comentario de
+// `avanceDeParada` en `geometria.ts`) — acá se calcula una vez para las 8 paradas, en orden, así
+// da monótono creciente por `orden` y Villa Armonía (orden 0) queda en avance exactamente 0.
+const Z12_AVANCES = avancesDeParadas(Z12_POLILINEA, Z12_PARADAS_BASE);
+const Z12_PARADAS: ParadaMock[] = Z12_PARADAS_BASE.map((p, i) => ({ ...p, avance: Z12_AVANCES[i]! }));
 
 const L120_POLILINEA: [number, number][] = [
   [-17.385423, -66.157283], [-17.385017, -66.157584], [-17.384924, -66.157653], [-17.384894, -66.157675],
@@ -110,7 +143,14 @@ const L120_POLILINEA: [number, number][] = [
   [-17.384924, -66.157653], [-17.385017, -66.157584], [-17.385423, -66.157283],
 ];
 
-const L120_PARADAS: ParadaMock[] = [
+const L120_PUNTOS_CONTROL: Record<string, number> = {
+  'plaza-colon': 60,
+  'parada-san-sebastian': 70,
+  'parada-uyustus': 55,
+  'la-cancha': 65,
+};
+
+const L120_PARADAS_BASE = [
   { id: 'plaza-colon', nombre: 'Plaza Colón', lat: -17.385423, lng: -66.157283, orden: 0 },
   { id: 'parada-ballivian', nombre: 'Parada Ballivián', lat: -17.384899, lng: -66.157888, orden: 1 },
   { id: 'parada-san-sebastian', nombre: 'Parada San Sebastián', lat: -17.388445, lng: -66.156214, orden: 2 },
@@ -119,7 +159,16 @@ const L120_PARADAS: ParadaMock[] = [
   { id: 'mercado-la-pampa', nombre: 'Mercado La Pampa', lat: -17.396053, lng: -66.15481, orden: 5 },
   { id: 'parada-uyustus', nombre: 'Parada Uyustus', lat: -17.398495, lng: -66.151998, orden: 6 },
   { id: 'la-cancha', nombre: 'La Cancha', lat: -17.400468, lng: -66.149377, orden: 7 },
-];
+].map((p) => ({
+  ...p,
+  esPuntoControl: p.id in L120_PUNTOS_CONTROL,
+  radioToleranciaM: L120_PUNTOS_CONTROL[p.id] ?? 0,
+}));
+
+// Mismo motivo que `Z12_AVANCES` arriba (la 120 es ida y vuelta, así que un vértice de la
+// VUELTA puede quedar más cerca en línea recta que el de la ida real).
+const L120_AVANCES = avancesDeParadas(L120_POLILINEA, L120_PARADAS_BASE);
+const L120_PARADAS: ParadaMock[] = L120_PARADAS_BASE.map((p, i) => ({ ...p, avance: L120_AVANCES[i]! }));
 
 /**
  * `trazoRuta` de cada línea — computado UNA VEZ acá (no en cada render de `en-vivo-simulado.tsx`),
@@ -148,9 +197,15 @@ export const LINEAS_MOCK: Record<LineaMockId, LineaMock> = {
 };
 
 /**
- * 3 trufis mock: 2 de Z12 y 1 de la Línea 120 (Decisión 4). Placas, nombres de conductor y
- * número interno son inventados. Los números de WhatsApp son ficticios a propósito
- * (Decisión 9 — riesgo aceptado por el CTO: `wa.me` podría abrir el chat de una persona real).
+ * 8 trufis mock: 5 de Z12 y 3 de la Línea 120 (ampliación de flota del guion delegado —
+ * `docs/plan-mock-guion-delegado.md`, "Flota de 8 trufis: 5 de Z12 y 3 de la Línea 120"). Los
+ * 3 primeros (`trufi-z12-1`, `trufi-z12-2`, `trufi-l120-1`) son los ORIGINALES del mock previo
+ * — mismos ids, placas y fotos, sin tocar. Los 5 nuevos (`trufi-z12-{3,4,5}`,
+ * `trufi-l120-{2,3}`) usan placas bolivianas inventadas (`NNNN-ABC`), nombres de conductor
+ * inventados, y fotos placeholder generadas con ImageMagick (mismo estilo que `z12-2.jpg`/
+ * `l120-1.jpg` — ver `public/mock/trufis/FUENTES.md`). Los números de WhatsApp son ficticios a
+ * propósito (Decisión 9 del plan original — riesgo aceptado por el CTO: `wa.me` podría abrir
+ * el chat de una persona real).
  */
 export const TRUFIS_MOCK: TrufiMock[] = [
   {
@@ -172,6 +227,33 @@ export const TRUFIS_MOCK: TrufiMock[] = [
     whatsapp: '59170000002',
   },
   {
+    id: 'trufi-z12-3',
+    placa: '4521-BQP',
+    numeroInterno: 'Z12-15',
+    conductorNombre: 'Freddy Choque',
+    lineaId: 'z12',
+    fotoUrl: '/mock/trufis/z12-3.jpg',
+    whatsapp: '59170000004',
+  },
+  {
+    id: 'trufi-z12-4',
+    placa: '7893-DTM',
+    numeroInterno: 'Z12-19',
+    conductorNombre: 'Wilma Flores',
+    lineaId: 'z12',
+    fotoUrl: '/mock/trufis/z12-4.jpg',
+    whatsapp: '59170000005',
+  },
+  {
+    id: 'trufi-z12-5',
+    placa: '5062-FLR',
+    numeroInterno: 'Z12-23',
+    conductorNombre: 'Juan Carlos Mamani',
+    lineaId: 'z12',
+    fotoUrl: '/mock/trufis/z12-5.jpg',
+    whatsapp: '59170000006',
+  },
+  {
     id: 'trufi-l120-1',
     placa: '1902-JLK',
     numeroInterno: '120-04',
@@ -179,5 +261,23 @@ export const TRUFIS_MOCK: TrufiMock[] = [
     lineaId: 'l120',
     fotoUrl: '/mock/trufis/l120-1.jpg',
     whatsapp: '59170000003',
+  },
+  {
+    id: 'trufi-l120-2',
+    placa: '6248-GNS',
+    numeroInterno: '120-09',
+    conductorNombre: 'Hugo Rocha',
+    lineaId: 'l120',
+    fotoUrl: '/mock/trufis/l120-2.jpg',
+    whatsapp: '59170000007',
+  },
+  {
+    id: 'trufi-l120-3',
+    placa: '3410-HWX',
+    numeroInterno: '120-11',
+    conductorNombre: 'Silvia Aguilar',
+    lineaId: 'l120',
+    fotoUrl: '/mock/trufis/l120-3.jpg',
+    whatsapp: '59170000008',
   },
 ];

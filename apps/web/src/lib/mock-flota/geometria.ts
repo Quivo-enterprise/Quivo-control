@@ -184,3 +184,264 @@ export function trazoVisibleDe(polilinea: [number, number][]): [number, number][
   const indiceRetorno = indiceDeRetornoDe(polilinea);
   return indiceRetorno === null ? polilinea : polilinea.slice(0, indiceRetorno + 1);
 }
+
+// ================================================================================================
+// Helpers añadidos para el mock del panel del delegado (`docs/plan-mock-guion-delegado.md`,
+// subagente A). Reusan `segmentosDe`/`distanciaMetros` de arriba — no se duplica la lógica de
+// distancia acumulada.
+// ================================================================================================
+
+/** Wrapper público de `distanciaMetros` (arriba es privada) — lo necesitan `estado/*` para
+ * medir gaps delante/detrás y tramos de atasco sin reimplementar haversine. */
+export function distanciaEntrePuntosM(a: [number, number], b: [number, number]): number {
+  return distanciaMetros(a, b);
+}
+
+/** Largo total (metros) de una polilínea — wrapper público de `segmentosDe().largoTotal`,
+ * usado por `estado/salidas.ts` para convertir la velocidad de un trufi (fracción de loop por
+ * tick) a metros/segundo al calcular `delanteDetras`. */
+export function largoTotalM(polilinea: [number, number][]): number {
+  return segmentosDe(polilinea).largoTotal;
+}
+
+/**
+ * Avance `[0,1)` de un punto `(lat, lng)` sobre `polilinea`: ubica el VÉRTICE más cercano
+ * (no proyección sobre el segmento — de sobra para paradas ya puestas casi encima de un
+ * vértice real de la polilínea, que es como están cargadas todas las paradas de `datos.ts`) y
+ * devuelve su distancia acumulada / largo total.
+ *
+ * OJO: busca el vértice más cercano en TODA la polilínea — en un circuito (ida y vuelta por
+ * otro camino, o un loop que pasa dos veces cerca del mismo punto) esto puede matchear un
+ * vértice del lado equivocado y romper el orden de `orden` entre paradas (bug real observado
+ * en Z12: `villa-armonia`, la primera parada, matcheaba el ÚLTIMO vértice del loop y daba
+ * avance ≈0.999999). Para precalcular `ParadaMock.avance` de una LÍNEA completa (varias
+ * paradas, cada una con su `orden`) usar `avancesDeParadas`, que busca cada parada solo hacia
+ * ADELANTE del vértice de la parada anterior y por eso da un avance monótono creciente por
+ * `orden`. Esta función queda para el caso de un único punto suelto (y para los tests).
+ */
+export function avanceDeParada(polilinea: [number, number][], lat: number, lng: number): number {
+  if (polilinea.length === 0) {
+    return 0;
+  }
+  let indiceCercano = 0;
+  let distanciaCercana = Infinity;
+  for (let i = 0; i < polilinea.length; i++) {
+    const d = distanciaMetros(polilinea[i]!, [lat, lng]);
+    if (d < distanciaCercana) {
+      distanciaCercana = d;
+      indiceCercano = i;
+    }
+  }
+  const { segmentos, largoTotal } = segmentosDe(polilinea);
+  if (largoTotal === 0) {
+    return 0;
+  }
+  let acumulado = 0;
+  for (let i = 0; i < indiceCercano; i++) {
+    acumulado += segmentos[i]!;
+  }
+  return Math.min(0.999999, acumulado / largoTotal);
+}
+
+/**
+ * Avances `[0,1)` de un conjunto de paradas de una MISMA línea, uno por parada, en el MISMO
+ * orden en que se pasaron en `paradas` (no necesariamente ordenadas por `orden`). A diferencia
+ * de `avanceDeParada` (que busca el vértice más cercano en TODA la polilínea), acá cada parada
+ * busca su vértice más cercano SOLO ESTRICTAMENTE DESPUÉS del vértice encontrado para la parada
+ * anterior (según `orden`) — así el resultado es SIEMPRE monótono CRECIENTE por `orden`. La
+ * PRIMERA parada (menor `orden`) recibe avance `0` fijo — es el origen del loop, no se busca su
+ * vértice (ver comentario de `avanceDeParada` sobre por qué buscarlo en toda la polilínea puede
+ * dar 0.999999 en vez de 0 para el punto de partida).
+ *
+ * OJO con un caso real de este mock: las coordenadas de las paradas "intermedias" de Z12
+ * (`datos.ts`) vienen de puntos de control reales pero su `orden` fue asignado a mano, sin
+ * verificar que coincidiera con la posición real a lo largo del circuito — el vértice más
+ * cercano GLOBAL de varias de ellas cae en la MISMA zona de la polilínea (cerca del final del
+ * loop). Si la búsqueda de cada parada pudiera repetir el índice de la anterior (`>=` en vez de
+ * `>`), esas paradas quedarían con el MISMO avance (empatadas) — rompe cualquier lógica que
+ * asuma estrictamente creciente (cruce de puntos de control en orden). Por eso la búsqueda
+ * arranca en `indiceBusqueda + 1`, nunca en `indiceBusqueda`: fuerza que cada parada avance AL
+ * MENOS un vértice más que la anterior, aunque no sea su vecino geográfico más cercano en
+ * términos absolutos — sigue siendo el mejor candidato DISPONIBLE dado que ya se "gastó" el
+ * tramo anterior.
+ */
+export function avancesDeParadas(
+  polilinea: [number, number][],
+  paradas: { lat: number; lng: number; orden: number }[],
+): number[] {
+  if (polilinea.length === 0 || paradas.length === 0) {
+    return paradas.map(() => 0);
+  }
+  const { segmentos, largoTotal } = segmentosDe(polilinea);
+  const ordenAsc = [...paradas].sort((a, b) => a.orden - b.orden);
+  const avancePorOrden = new Map<number, number>();
+
+  let indiceBusqueda = 0;
+  ordenAsc.forEach((parada, i) => {
+    if (i === 0) {
+      avancePorOrden.set(parada.orden, 0);
+      return;
+    }
+    const desde = Math.min(indiceBusqueda + 1, polilinea.length - 1);
+    let indiceCercano = desde;
+    let distanciaCercana = Infinity;
+    for (let idx = desde; idx < polilinea.length; idx++) {
+      const d = distanciaMetros(polilinea[idx]!, [parada.lat, parada.lng]);
+      if (d < distanciaCercana) {
+        distanciaCercana = d;
+        indiceCercano = idx;
+      }
+    }
+    let acumulado = 0;
+    for (let idx = 0; idx < indiceCercano; idx++) {
+      acumulado += segmentos[idx]!;
+    }
+    const avance = largoTotal === 0 ? 0 : Math.min(0.999999, acumulado / largoTotal);
+    avancePorOrden.set(parada.orden, avance);
+    indiceBusqueda = indiceCercano;
+  });
+
+  return paradas.map((p) => avancePorOrden.get(p.orden) ?? 0);
+}
+
+/**
+ * Metros recorridos AVANZANDO por la polilínea desde `avanceInicio` hasta `avanceFin`, en
+ * sentido de recorrido normal (hace loop si `avanceFin < avanceInicio`). Usado por
+ * `delanteDetras` (`estado/salidas.ts`) para convertir una distancia de arco en minutos según
+ * la velocidad nominal de cada trufi.
+ */
+export function distanciaEntreAvancesM(
+  polilinea: [number, number][],
+  avanceInicio: number,
+  avanceFin: number,
+): number {
+  const { largoTotal } = segmentosDe(polilinea);
+  if (largoTotal === 0) {
+    return 0;
+  }
+  const a = ((avanceInicio % 1) + 1) % 1;
+  const b = ((avanceFin % 1) + 1) % 1;
+  const fraccion = b >= a ? b - a : 1 - a + b;
+  return fraccion * largoTotal;
+}
+
+/**
+ * Tramo `[lat,lng][]` de la polilínea desde `avanceInicio` hacia ADELANTE, hasta acumular
+ * `metros` (o hasta llegar al final de la polilínea si no es un loop cerrado — en la práctica
+ * todas las líneas del mock son loops, así que no hace falta un caso especial ahí). Incluye el
+ * punto de inicio exacto (interpolado) como primer elemento, y SIEMPRE termina con el punto
+ * interpolado exacto a `metros` de distancia (aunque ese punto caiga dentro del MISMO segmento
+ * que el inicio, p. ej. cuando el próximo vértice real está a más de `metros` — antes este caso
+ * devolvía un único punto y el overlay de "tramo atascado" desaparecía del mapa). Usado por
+ * `simularAtasco` (`estado/flota.ts`) para exponer el tramo "atascado" (~250 m) a dibujar en el
+ * mapa.
+ */
+export function tramoDesdeAvance(
+  polilinea: [number, number][],
+  avanceInicio: number,
+  metros: number,
+): [number, number][] {
+  if (polilinea.length < 2) {
+    return polilinea.length === 1 ? [polilinea[0]!] : [];
+  }
+  const { segmentos, largoTotal } = segmentosDe(polilinea);
+  if (largoTotal === 0) {
+    return [polilinea[0]!];
+  }
+
+  const inicio = posicionEnPolilinea(polilinea, avanceInicio);
+  const puntos: [number, number][] = [[inicio.lat, inicio.lng]];
+
+  const t = ((avanceInicio % 1) + 1) % 1;
+  const distanciaInicio = t * largoTotal;
+  const distanciaObjetivo = Math.min(largoTotal, distanciaInicio + Math.max(0, metros));
+
+  // Ubica el índice de segmento donde cae `avanceInicio`, para empezar a acumular vértices
+  // completos desde ahí en adelante.
+  let acumulado = 0;
+  let indiceSegmento = segmentos.length - 1;
+  for (let i = 0; i < segmentos.length; i++) {
+    if (acumulado + segmentos[i]! >= distanciaInicio) {
+      indiceSegmento = i;
+      break;
+    }
+    acumulado += segmentos[i]!;
+  }
+
+  let acumuladoRecorrido = acumulado;
+  for (let i = indiceSegmento; i < segmentos.length; i++) {
+    const largoSegmento = segmentos[i]!;
+    const finSegmento = acumuladoRecorrido + largoSegmento;
+    if (finSegmento >= distanciaObjetivo) {
+      // El objetivo cae DENTRO de este segmento (o justo en su extremo) — interpola el punto
+      // final y listo. Si el segmento de arranque YA es este mismo (`i === indiceSegmento`),
+      // no vuelve a empujar su vértice inicial (ya está en `puntos` como `inicio`).
+      if (i > indiceSegmento) {
+        puntos.push(polilinea[i]!);
+      }
+      const fraccion = largoSegmento === 0 ? 0 : Math.min(1, Math.max(0, (distanciaObjetivo - acumuladoRecorrido) / largoSegmento));
+      const [lat1, lng1] = polilinea[i]!;
+      const [lat2, lng2] = polilinea[i + 1]!;
+      puntos.push([lat1 + (lat2 - lat1) * fraccion, lng1 + (lng2 - lng1) * fraccion]);
+      return puntos;
+    }
+    if (i > indiceSegmento) {
+      puntos.push(polilinea[i]!);
+    }
+    acumuladoRecorrido = finSegmento;
+  }
+
+  // Solo alcanzable si `distanciaObjetivo` cae exactamente en el largo total (clamp de arriba)
+  // y el loop no lo capturó por redondeo — devuelve hasta el último vértice.
+  puntos.push(polilinea[polilinea.length - 1]!);
+  return puntos;
+}
+
+/**
+ * Rumbo (grados, 0=norte/+lat, 90=este/+lng — aproximación plana suficiente para el radio de
+ * esta demo) de la polilínea en el punto `avance`, usado para desplazar perpendicularmente el
+ * marcador durante `simularDesvio` (`estado/flota.ts`).
+ */
+export function bearingEnAvance(polilinea: [number, number][], avance: number): number {
+  if (polilinea.length < 2) {
+    return 0;
+  }
+  const { segmentos, largoTotal } = segmentosDe(polilinea);
+  if (largoTotal === 0) {
+    return 0;
+  }
+  const t = ((avance % 1) + 1) % 1;
+  const distanciaObjetivo = t * largoTotal;
+  let acumulado = 0;
+  for (let i = 0; i < segmentos.length; i++) {
+    if (acumulado + segmentos[i]! >= distanciaObjetivo || i === segmentos.length - 1) {
+      const [lat1, lng1] = polilinea[i]!;
+      const [lat2, lng2] = polilinea[i + 1]!;
+      const dLat = lat2 - lat1;
+      const dLng = (lng2 - lng1) * Math.cos(aRadianes((lat1 + lat2) / 2));
+      return (Math.atan2(dLng, dLat) * 180) / Math.PI;
+    }
+    acumulado += segmentos[i]!;
+  }
+  return 0;
+}
+
+/**
+ * Desplaza `(lat, lng)` `metros` en la dirección PERPENDICULAR (90° a la derecha) de
+ * `bearingDeg`. Aproximación plana (válida al radio de una demo de mapa urbano) — usada por
+ * `simularDesvio` para generar el trayecto que se separa de la polilínea y vuelve a unirse.
+ */
+export function desplazarPerpendicular(
+  lat: number,
+  lng: number,
+  bearingDeg: number,
+  metros: number,
+): { lat: number; lng: number } {
+  const bearingPerpendicular = aRadianes(bearingDeg + 90);
+  const dLat = (metros * Math.cos(bearingPerpendicular)) / RADIO_TIERRA_M;
+  const dLng = (metros * Math.sin(bearingPerpendicular)) / (RADIO_TIERRA_M * Math.cos(aRadianes(lat)));
+  return {
+    lat: lat + (dLat * 180) / Math.PI,
+    lng: lng + (dLng * 180) / Math.PI,
+  };
+}

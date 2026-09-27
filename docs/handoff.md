@@ -4206,3 +4206,20 @@ Copia temporal (sin remote). Plan: `docs/plan-mock-flota-en-vivo.md`. Flag `NEXT
   - HUD superior arriba a la izquierda, porque la ficha tapaba el filtro. Sin anillo de foco en la placa del panel.
   - Tests: web 139/139, design-system 67/67.
 - Pendiente: fotos reales de Z12/120.
+- Iteración 3 (2026-09-27, implementada y verificada): mock completo del panel del delegado para el guion de video (E05/E07/E08). Plan: `docs/plan-mock-guion-delegado.md`. **Lista de tomas con los controles por timecode: `docs/guion-grabacion-mock.md`**. Capturas por toma: `docs/tomas/`.
+  - Todo mockeado (decisión del CTO, aunque el guion pida funciones reales). En edición se rotula «Demostración». Flota de 8 trufis: 5 Z12 + 3 Línea 120. La app del conductor (E06) queda fuera.
+  - Estado: el reducer puro se partió en slices (`apps/web/src/lib/mock-flota/estado/`: flota, salidas, recorridos, novedades, señal, demanda, config). El historial del día es determinístico y arranca a las 05:00; las vueltas se siembran según la curva de demanda, con picos en 7-9, 12-14 y 18-20.
+  - UI: rail de vistas (Mapa, Salidas, Novedades, Análisis, Configuración), franja KPI y ficha con pestañas (Resumen, Recorridos, Horario, Sanciones, Paradas). Capas de mapa: atasco, desvío, demanda, sin señal y resincronización.
+    - Modo grabación con `NEXT_PUBLIC_MOCK_GRABACION=true`: la tecla `S` muestra u oculta el panel de simulación.
+  - Grabar con `next dev`, porque el bypass de login está bloqueado en producción. `devIndicators:false` va en `next.config.ts` de la copia.
+  - Revisión:
+    - `/code-review` + web-design-guidelines: los hallazgos se aplicaron en una tanda de fixes (subagente E).
+    - Una segunda revisión encontró 2 hallazgos medios, los dos corregidos: la devolución del foco al cerrar la ficha tras usar Adelante/Atrás, y el listener de Escape que se reinstalaba cada segundo.
+    - Se corrigió el historial sembrado (hallazgo del chairman, fix delegado): «Hora de mayor movimiento» daba 05:00 y la hora pico 12 salía casi vacía.
+  - Tests: web 231/231, design-system 67/67. Typecheck limpio, sin warnings de lint en los archivos del mock.
+  - Advertencias:
+    - En tomas densas conviene hacer zoom, porque a vista de ciudad los marcadores de Cercado se superponen.
+    - Los círculos de tolerancia solo se ven con zoom.
+    - La foto `z12-1` requiere crédito (CC BY 2.0).
+    - La consola muestra 3 advertencias de MapLibre («Expected value to be of type number, but found null»), sin investigar y sin efecto visible.
+  - Pendiente: decidir si se actualizan la rama `mockup` y el repo público `quivo-control-mockup` con esta iteración. El push lo corre el CTO, porque el clasificador lo bloquea.

@@ -38,6 +38,20 @@ ImageMagick: fondo sólido + silueta de minibús + etiqueta de línea.
 
 Ambos 256×256 JPEG calidad ~80, generados con `convert -size 256x256 xc:'<color>' -draw ...`.
 
+## `z12-3.jpg`, `z12-4.jpg`, `z12-5.jpg`, `l120-2.jpg`, `l120-3.jpg` — PLACEHOLDERS (ampliación a 8 trufis)
+
+Generados para `docs/plan-mock-guion-delegado.md` ("Flota de 8 trufis: 5 de Z12 y 3 de la
+Línea 120") — mismo estilo que `z12-2.jpg`/`l120-1.jpg`: fondo sólido del color de línea +
+silueta blanca de minibús (parabrisas, 3 ventanas laterales, 2 ruedas) + etiqueta de texto.
+
+- `z12-3.jpg`, `z12-4.jpg`, `z12-5.jpg`: fondo azul `#2563eb` (color Z12), silueta blanca,
+  texto "Z12".
+- `l120-2.jpg`, `l120-3.jpg`: fondo gris oscuro `#334155` (mismo neutral que `l120-1.jpg` — el
+  blanco real de la Línea 120 taparía la silueta blanca), silueta blanca, texto "LINEA 120".
+
+Los 5, 256×256 JPEG calidad ~80, generados con ImageMagick (`convert -size 256x256 xc:'<color>'
+-draw "roundrectangle ..." -draw "circle ..." -annotate ... -quality 80 archivo.jpg`).
+
 ## Búsquedas realizadas (para que quede registro de qué se intentó)
 
 - WebSearch: "trufi línea Z12 Cochabamba foto", "trufi línea 120 Cochabamba foto minibus",

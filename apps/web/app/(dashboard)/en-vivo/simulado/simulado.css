@@ -85,6 +85,9 @@
   color: var(--qv-text-secondary);
   cursor: pointer;
   transition: background-color var(--qv-transition-fast), color var(--qv-transition-fast);
+  /* Ítem 11 — sin esto, un doble-tap rápido en móvil (cambiar de filtro seguido) puede
+     disparar el zoom del navegador en vez de solo el click. */
+  touch-action: manipulation;
 }
 
 .qv-linea-filtro__btn:hover {
@@ -221,18 +224,124 @@
 
 .qv-trufi-marker__badge {
   position: absolute;
-  bottom: -2px;
-  right: -2px;
   width: 20px;
   height: 20px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--qv-marker-severity-color, var(--qv-color-danger));
   color: #ffffff;
   border: 2px solid var(--qv-surface-card);
   box-shadow: var(--qv-shadow-xs);
+}
+
+/* Insignia de infracción activa (parpadeante) — abajo a la derecha, comportamiento sin
+ * cambios respecto del mock original. */
+.qv-trufi-marker__badge--severidad {
+  bottom: -2px;
+  right: -2px;
+  background: var(--qv-marker-severity-color, var(--qv-color-danger));
+}
+
+/* Insignia de FASE (ampliación del guion delegado, E07 04:32) — arriba a la derecha, para no
+ * competir con la de severidad cuando un trufi atascado/desviado TAMBIÉN tiene una infracción
+ * activa (el desvío genera una automáticamente). Fondo neutro oscuro, distinto del semáforo de
+ * severidad, para que se lean como dos cosas separadas de un vistazo. */
+.qv-trufi-marker__badge--fase {
+  top: -2px;
+  right: -2px;
+  width: 18px;
+  height: 18px;
+  background: rgba(15, 23, 42, 0.88);
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Marcador de trufi — variantes por FASE (E07 04:32/05:53, `EstadoTrufi.fase`).
+ * ------------------------------------------------------------------------------------- */
+
+.qv-trufi-marker-wrap {
+  position: relative;
+}
+
+/* En cola: un poco más chico que en ruta — el `qv-trufi-marker__ring` es 100%/100% así que
+ * escala solo con el tamaño del botón, sin pisar el `transform: scale()` de hover/selected
+ * (que sigue viviendo en el ring, no acá). */
+.qv-trufi-marker--fase-en_cola {
+  width: 40px;
+  height: 40px;
+}
+
+/* Sin señal: foto en gris + semitransparente — el anillo mantiene el color de línea (Decisión
+ * C2: distinguir esta fase por la FOTO, no por el anillo, para no perder de vista a qué línea
+ * pertenece mientras está "congelado"). */
+.qv-trufi-marker--fase-sin_senal .qv-trufi-marker__photo {
+  filter: grayscale(1);
+  opacity: 0.6;
+}
+
+/* Finalizado: foto apagada + anillo gris (`ANILLO_POR_FASE` en `trufi-marcador.tsx`). */
+.qv-trufi-marker--fase-finalizado .qv-trufi-marker__photo {
+  filter: grayscale(0.85);
+  opacity: 0.75;
+}
+
+.qv-trufi-marker__spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: rgba(15, 23, 42, 0.45);
+  border-radius: 50%;
+}
+
+.qv-trufi-marker__spinner svg {
+  animation: qv-spin 1.1s linear infinite;
+}
+
+@keyframes qv-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qv-trufi-marker__spinner svg {
+    animation: none;
+  }
+}
+
+/* Pill flotante ENCIMA del marcador ("En cola" / "Sin señal · hace m:ss" / "Sincronizando N
+ * puntos…" / "Atascado" / "+N en cola" — ítem 1(c) del guion de fixes, 2026-09-27: antes vivía
+ * DEBAJO del marcador, donde se solapaba con las pastillas "~N esperando" de la demanda al hacer
+ * pile-up a zoom ciudad — arriba queda libre de esa capa) — `position: absolute` así NO agranda
+ * la caja de `.qv-trufi-marker-wrap` (que sigue siendo del tamaño del botón): el ancla del
+ * `maplibregl.Marker` (`anchor: 'center'`, ver `en-vivo-simulado.tsx`) queda centrada en la
+ * FOTO, no en el conjunto foto+pill. */
+.qv-trufi-marker__pill {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 0.3rem;
+  white-space: nowrap;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--qv-radius-full);
+  background: rgba(15, 23, 42, 0.88);
+  color: #ffffff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: var(--qv-shadow-xs);
+  pointer-events: none;
+}
+
+.qv-trufi-marker__pill--atascado {
+  background: color-mix(in srgb, var(--qv-color-danger) 85%, black 10%);
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -706,4 +815,697 @@
 
 .qv-sim-panel__actions-row > * {
   flex: 1;
+}
+
+/* Secciones colapsables del panel de simulación (ampliación del guion delegado: Infracciones ·
+ * Tráfico · Salidas · Conductor · Señal · Demo). El panel entero ya scrollea si hace falta
+ * (`.qv-sim-panel__body`, abajo) — con 6 secciones el contenido puede superar la altura de la
+ * ventana en pantallas chicas. */
+.qv-sim-panel__body {
+  max-height: min(32rem, calc(100vh - 8rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.qv-sim-seccion {
+  border: 1px solid var(--qv-border-subtle);
+  border-radius: var(--qv-radius-md);
+  background: color-mix(in srgb, var(--qv-surface-card) 35%, transparent);
+  overflow: hidden;
+}
+
+.qv-sim-seccion__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--qv-transition-fast);
+}
+
+.qv-sim-seccion__header:hover {
+  background: color-mix(in srgb, var(--qv-surface-card) 55%, transparent);
+}
+
+.qv-sim-seccion__title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--qv-text-primary);
+}
+
+.qv-sim-seccion__chevron {
+  display: flex;
+  color: var(--qv-text-muted);
+  flex-shrink: 0;
+}
+
+.qv-sim-seccion__body {
+  padding: 0 0.7rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid var(--qv-border-subtle);
+  padding-top: 0.6rem;
+}
+
+.qv-sim-panel__aplicado {
+  font-size: var(--qv-text-xs);
+  font-weight: 700;
+  color: var(--qv-color-success);
+  min-height: 1rem;
+}
+
+/* Ítem 6 — `AccionResultado.ok === false` (p. ej. `simularDesvio` con el trufi elegido ya
+   sancionado): mismo texto, tono de error en vez de éxito. */
+.qv-sim-panel__aplicado--error {
+  color: var(--qv-color-danger);
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Rail de vistas (Mapa · Salidas · Novedades · Análisis · Configuración) — dentro del mismo
+ * `.qv-top-hud` que el badge y el filtro de línea, mismo lenguaje "vidrio flotante".
+ * ------------------------------------------------------------------------------------- */
+
+.qv-rail-vistas {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  border-radius: var(--qv-radius-full);
+  background: var(--qv-surface-glass);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--qv-border-glass);
+  box-shadow: var(--qv-shadow-sm);
+  pointer-events: auto;
+  max-width: 100%;
+}
+
+.qv-rail-vistas__btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  background: transparent;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--qv-radius-full);
+  font-size: var(--qv-text-xs);
+  font-weight: 700;
+  color: var(--qv-text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color var(--qv-transition-fast), color var(--qv-transition-fast);
+}
+
+.qv-rail-vistas__btn:hover {
+  background: color-mix(in srgb, var(--qv-color-primary) 12%, transparent);
+  color: var(--qv-text-primary);
+}
+
+.qv-rail-vistas__btn--active,
+.qv-rail-vistas__btn--active:hover {
+  background: var(--qv-color-primary);
+  color: #ffffff;
+}
+
+.qv-rail-vistas__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.3rem;
+  border-radius: var(--qv-radius-full);
+  background: var(--qv-color-danger);
+  color: #ffffff;
+  font-size: 0.6rem;
+  font-weight: 800;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Ítem 10 del guion de fixes (2026-09-27): hint de scroll horizontal — a 390px la franja KPI
+ * (6 indicadores) y las pestañas de la ficha (5) no entran; `overflow-x: auto` ya scrollea
+ * (existía antes) pero sin pista visual de que hay más a la derecha. Clase compartida (JS,
+ * `use-scroll-fade.ts`, decide CUÁNDO aplicarla — solo si de verdad desborda) + `scroll-snap`
+ * para que el gesto de swipe "enganche" en cada tarjeta/pestaña en vez de quedar a medias.
+ * ------------------------------------------------------------------------------------- */
+.qv-scroll-fade-right {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.75rem), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 1.75rem), transparent 100%);
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Franja KPI (E07 03:48) — dentro de `.qv-top-hud`, debajo del rail de vistas.
+ * ------------------------------------------------------------------------------------- */
+
+.qv-kpi-strip {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0.15rem;
+  padding: 0.35rem 0.4rem;
+  border-radius: var(--qv-radius-lg);
+  background: var(--qv-surface-glass);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--qv-border-glass);
+  box-shadow: var(--qv-shadow-sm);
+  pointer-events: auto;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+}
+
+.qv-kpi-strip__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.05rem;
+  padding: 0.2rem 0.55rem;
+  min-width: 3.4rem;
+  flex-shrink: 0;
+  border-right: 1px solid var(--qv-border-subtle);
+  scroll-snap-align: start;
+}
+
+.qv-kpi-strip__item:last-child {
+  border-right: none;
+}
+
+.qv-kpi-strip__icon {
+  color: var(--qv-text-muted);
+}
+
+.qv-kpi-strip__value {
+  font-size: var(--qv-text-md);
+  font-weight: 800;
+  color: var(--qv-text-primary);
+  line-height: 1.1;
+  /* Ítem 11 — los 6 valores cambian de dígitos cada tick (1 s); sin ancho tabular el resto de
+     la franja "tiembla" horizontalmente cuando un dígito angosto (1) pasa a uno ancho (8). */
+  font-variant-numeric: tabular-nums;
+}
+
+.qv-kpi-strip__label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--qv-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .qv-kpi-strip {
+    max-width: calc(100vw - 2.5rem);
+  }
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Overlay de alta demanda ("~N esperando") — parada pulsante (E07 04:32).
+ *
+ * Ítem 1(b) del guion de fixes (2026-09-27): a zoom ciudad, varias paradas con alta demanda a
+ * la vez volvían el mapa ilegible con el texto "~N esperando" siempre visible. Ahora por
+ * default solo se ve el punto pulsante — el texto aparece en HOVER/FOCUS (`:focus`, sin
+ * `focus-within`: el `tabIndex` vive en este mismo `<div>`, no en un hijo). El `aria-label` ya
+ * tenía la info completa desde antes, así que un lector de pantalla no depende del hover para
+ * enterarse. `pointer-events: auto` (antes `none`) + `tabIndex=0` (ver `capas-mapa.tsx`) para
+ * que el punto sea alcanzable con mouse Y teclado.
+ * ------------------------------------------------------------------------------------- */
+
+.qv-demanda-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  pointer-events: auto;
+  cursor: default;
+  border-radius: var(--qv-radius-full);
+}
+
+.qv-demanda-marker__pulse {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--qv-color-warning);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--qv-color-warning) 60%, transparent);
+  animation: qv-demanda-pulse 1.8s ease-out infinite;
+}
+
+@keyframes qv-demanda-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--qv-color-warning) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 14px color-mix(in srgb, var(--qv-color-warning) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--qv-color-warning) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qv-demanda-marker__pulse {
+    animation: none;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--qv-color-warning) 35%, transparent);
+  }
+}
+
+.qv-demanda-marker__label {
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--qv-radius-full);
+  background: rgba(15, 23, 42, 0.88);
+  color: #ffffff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: var(--qv-shadow-xs);
+  /* Oculto por default (ítem 1(b)) — revelado en hover/focus del punto pulsante, ver el
+     comentario de `.qv-demanda-marker` arriba. */
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  pointer-events: none;
+}
+
+.qv-demanda-marker:hover .qv-demanda-marker__label,
+.qv-demanda-marker:focus .qv-demanda-marker__label,
+.qv-demanda-marker:focus-visible .qv-demanda-marker__label {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qv-demanda-marker__label {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Novedades (bandeja — E07 04:17) — vive dentro de `.qv-vista-panel__body` (cascarón de C1,
+ * ver `vistas/vista-panel.tsx` + `vistas/vistas.css`). Estas reglas son solo del CONTENIDO
+ * de `VistaNovedades`, no del cascarón.
+ * ------------------------------------------------------------------------------------- */
+
+.qv-novedades {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  height: 100%;
+}
+
+.qv-novedades__segmented {
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border-radius: var(--qv-radius-full);
+  background: color-mix(in srgb, var(--qv-surface-card) 55%, transparent);
+  border: 1px solid var(--qv-border-subtle);
+  align-self: flex-start;
+}
+
+.qv-novedades__segmented-btn {
+  border: none;
+  background: transparent;
+  padding: 0.3rem 0.8rem;
+  border-radius: var(--qv-radius-full);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--qv-text-secondary);
+  cursor: pointer;
+}
+
+.qv-novedades__segmented-btn--active {
+  background: var(--qv-color-primary);
+  color: #ffffff;
+}
+
+.qv-novedades__layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+  flex: 1;
+}
+
+.qv-novedades__lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.qv-novedades__vacio {
+  font-size: var(--qv-text-sm);
+  color: var(--qv-text-secondary);
+  padding: 0.5rem;
+}
+
+.qv-novedades__item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-subtle);
+  background: color-mix(in srgb, var(--qv-surface-card) 45%, transparent);
+  cursor: pointer;
+  text-align: left;
+  touch-action: manipulation;
+  transition: border-color var(--qv-transition-fast), background-color var(--qv-transition-fast);
+}
+
+.qv-novedades__item:hover {
+  border-color: var(--qv-color-primary);
+}
+
+.qv-novedades__item--active {
+  border-color: var(--qv-color-primary);
+  background: color-mix(in srgb, var(--qv-color-primary) 10%, transparent);
+}
+
+.qv-novedades__item-icono {
+  color: var(--qv-text-secondary);
+  flex-shrink: 0;
+}
+
+.qv-novedades__item-texto {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.qv-novedades__item-titulo {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--qv-text-primary);
+}
+
+.qv-novedades__item-meta {
+  font-size: 0.7rem;
+  color: var(--qv-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qv-novedades__estado-chip {
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--qv-radius-full);
+  font-size: 0.6rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.qv-novedades__estado-chip--nueva {
+  background: color-mix(in srgb, var(--qv-color-danger) 16%, transparent);
+  color: var(--qv-color-danger);
+}
+
+.qv-novedades__estado-chip--en_revision {
+  background: color-mix(in srgb, var(--qv-color-warning) 18%, transparent);
+  color: var(--qv-color-warning);
+}
+
+.qv-novedades__estado-chip--atendida {
+  background: color-mix(in srgb, var(--qv-color-success) 16%, transparent);
+  color: var(--qv-color-success);
+}
+
+.qv-novedades__detalle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.85rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-subtle);
+  background: color-mix(in srgb, var(--qv-surface-card) 55%, transparent);
+}
+
+.qv-novedades__detalle-titulo {
+  margin: 0;
+  font-size: var(--qv-text-sm);
+  font-weight: 800;
+  color: var(--qv-text-primary);
+}
+
+.qv-novedades__detalle-meta {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--qv-text-secondary);
+}
+
+.qv-novedades__detalle-nota {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--qv-text-secondary);
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--qv-radius-sm);
+  background: color-mix(in srgb, var(--qv-surface-sunken) 60%, transparent);
+}
+
+.qv-novedades__acciones-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.qv-novedades__whatsapp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--qv-radius-md);
+  background: #16a34a;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: var(--qv-text-xs);
+  text-decoration: none;
+}
+
+.qv-novedades__whatsapp-btn:hover {
+  background: #15803d;
+}
+
+.qv-novedades__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--qv-border-subtle);
+}
+
+.qv-novedades__section-title {
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--qv-text-muted);
+}
+
+.qv-novedades__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.qv-novedades__row > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Ítem 11 — `<label>` real de la nota (antes solo `placeholder`, sin asociación programática). */
+.qv-novedades__label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--qv-text-secondary);
+}
+
+.qv-novedades__textarea {
+  width: 100%;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-subtle);
+  background: var(--qv-surface-card);
+  color: var(--qv-text-primary);
+  padding: 0.5rem 0.6rem;
+  font-size: var(--qv-text-sm);
+  font-family: inherit;
+  resize: vertical;
+}
+
+.qv-novedades__hint {
+  font-size: var(--qv-text-xs);
+  color: var(--qv-text-secondary);
+}
+
+.qv-novedades__confirmacion {
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--qv-radius-md);
+  background: color-mix(in srgb, var(--qv-color-success) 14%, transparent);
+  color: var(--qv-color-success);
+  font-size: var(--qv-text-xs);
+  font-weight: 700;
+}
+
+/* Ítem 6 — `AccionResultado.ok === false` (p. ej. `crearInfraccionDesdeNovedad` con el trufi ya
+   sancionado): mismo banner, tono de error. */
+.qv-novedades__confirmacion--error {
+  background: color-mix(in srgb, var(--qv-color-danger) 14%, transparent);
+  color: var(--qv-color-danger);
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Ficha del trufi — pestañas (E07 05:05) y complementos de Resumen (fase, puntos de control,
+ * delante/detrás).
+ * ------------------------------------------------------------------------------------- */
+
+/* Fix de revisión: con 5 pestañas (Resumen/Recorridos/Horario/Sanciones/Paradas) el `<Tabs>`
+ * del design-system (`.qv-tabs`, `flex-wrap: nowrap`) desborda el ancho del panel en mobile
+ * (390px) — "Paradas" quedaba recortado por `overflow: hidden` de `.qv-trufi-panel` y era
+ * IMPOSIBLE de tocar. `overflow-x: auto` acá (en el WRAPPER propio, sin tocar el
+ * design-system) lo vuelve deslizable con el dedo — mismo patrón que cualquier tablist mobile. */
+.qv-trufi-panel__tabs {
+  padding: 0.6rem 1.15rem 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+}
+
+.qv-trufi-panel__tabs > * {
+  width: max-content;
+}
+
+/* `.qv-tabs__tab` es del design-system (`packages/design-system/src/ui/layout.tsx#Tabs`) — se
+   apunta desde acá (sin tocar ese paquete, fuera del alcance de este guion) para que cada
+   pestaña "enganche" al hacer swipe a 390px (ítem 10). */
+.qv-trufi-panel__tabs .qv-tabs__tab {
+  scroll-snap-align: start;
+}
+
+.qv-trufi-panel__fase-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.7rem;
+  border-radius: var(--qv-radius-full);
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #ffffff;
+  background: var(--qv-color-primary);
+  width: fit-content;
+}
+
+.qv-trufi-panel__fase-chip--en_cola {
+  background: var(--qv-text-muted);
+}
+
+.qv-trufi-panel__fase-chip--atascado {
+  background: var(--qv-color-danger);
+}
+
+.qv-trufi-panel__fase-chip--desviado {
+  background: #f97316;
+}
+
+.qv-trufi-panel__fase-chip--sin_senal,
+.qv-trufi-panel__fase-chip--sincronizando {
+  background: var(--qv-text-secondary);
+}
+
+.qv-trufi-panel__fase-chip--finalizado {
+  background: #64748b;
+}
+
+.qv-trufi-panel__pc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.qv-trufi-panel__pc-count {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: var(--qv-color-success);
+}
+
+.qv-trufi-panel__pc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.qv-pc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--qv-radius-sm);
+  background: color-mix(in srgb, var(--qv-surface-card) 60%, transparent);
+  border: 1px solid var(--qv-border-subtle);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--qv-text-primary);
+}
+
+.qv-pc-chip__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--qv-text-muted);
+}
+
+.qv-pc-chip--cumplido {
+  background: color-mix(in srgb, var(--qv-color-success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--qv-color-success) 35%, transparent);
+}
+
+.qv-pc-chip--cumplido .qv-pc-chip__dot {
+  background: var(--qv-color-success);
+}
+
+.qv-trufi-panel__gaps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.qv-trufi-panel__gap {
+  text-align: left;
+  border: 1px solid var(--qv-border-subtle);
+  background: color-mix(in srgb, var(--qv-surface-card) 45%, transparent);
+  border-radius: var(--qv-radius-md);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--qv-text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.qv-trufi-panel__gap:hover {
+  border-color: var(--qv-color-primary);
+}
+
+.qv-trufi-panel__gap strong {
+  color: var(--qv-text-primary);
+  font-family: var(--qv-font-mono);
 }

@@ -1,20 +1,29 @@
 import { describe, expect, it } from 'vitest';
+import { TRUFIS_MOCK } from '../datos';
+import { CATALOGO_INFRACCIONES } from '../catalogo-infracciones';
+import type { EstadoFlotaMock, InfraccionMock } from '../tipos';
 import {
   elegirAleatorios,
   elegirTipoInfraccion,
-  estadoInicial,
   fechaPlazoValida,
   infraccionActivaDe,
   infraccionesDe,
   PLAZO_MAX_DIAS,
-  reducer,
+  sembrarSanciones,
   trufisSinInfraccionActiva,
-} from './estado';
-import { TRUFIS_MOCK } from './datos';
-import { CATALOGO_INFRACCIONES } from './catalogo-infracciones';
-import type { EstadoFlotaMock, InfraccionMock } from './tipos';
+} from './flota';
+import { estadoInicial, reducer } from './index';
 
-const AHORA = '2026-09-27T12:00:00.000Z';
+/**
+ * `estado/flota.test.ts` — restaura la cobertura de infracciones que tenía el viejo
+ * `estado.test.ts` (borrado al partir el reducer en slices, ver `docs/plan-mock-guion-delegado.md`
+ * ítem 17). Portado desde `git show HEAD:apps/web/src/lib/mock-flota/estado.test.ts` (rama
+ * `mock/sandbox`, commit `fa9c3a2`), adaptado a la firma actual del reducer (`tick` ahora
+ * necesita `now`, `estadoInicial` recibe `Date`).
+ */
+
+const AHORA = new Date('2026-09-27T12:00:00-04:00');
+const AHORA_ISO = AHORA.toISOString();
 
 function infraccionActiva(overrides: Partial<InfraccionMock> = {}): InfraccionMock {
   return {
@@ -22,90 +31,65 @@ function infraccionActiva(overrides: Partial<InfraccionMock> = {}): InfraccionMo
     trufiId: TRUFIS_MOCK[0]!.id,
     tipoId: CATALOGO_INFRACCIONES[0]!.id,
     severidad: 'leve',
-    ocurridaEn: AHORA,
+    ocurridaEn: AHORA_ISO,
     estado: 'activa',
     ...overrides,
   };
 }
 
-describe('estadoInicial', () => {
-  it('crea un EstadoTrufi para cada trufi mock, sin infracciones y sin pausa', () => {
-    const estado = estadoInicial();
-    expect(Object.keys(estado.trufis)).toHaveLength(TRUFIS_MOCK.length);
-    expect(estado.infracciones).toEqual([]);
-    expect(estado.pausado).toBe(false);
-    for (const trufi of TRUFIS_MOCK) {
-      const et = estado.trufis[trufi.id];
-      expect(et).toBeDefined();
-      expect(et!.siguienteParadaId).toBeNull();
-      expect(typeof et!.lat).toBe('number');
-      expect(typeof et!.lng).toBe('number');
-    }
-  });
-});
-
-describe('reducer — tick', () => {
-  it('avanza el `avance` de cada trufi', () => {
-    const inicial = estadoInicial();
-    const siguiente = reducer(inicial, { type: 'tick' });
-    for (const trufi of TRUFIS_MOCK) {
-      expect(siguiente.trufis[trufi.id]!.avance).not.toBe(inicial.trufis[trufi.id]!.avance);
-    }
-  });
-
-  it('con pausado=true, tick no cambia el estado (misma referencia)', () => {
-    const pausado: EstadoFlotaMock = { ...estadoInicial(), pausado: true };
-    const siguiente = reducer(pausado, { type: 'tick' });
-    expect(siguiente).toBe(pausado);
-  });
-});
-
 describe('reducer — toggle-pausa', () => {
   it('alterna pausado', () => {
-    const inicial = estadoInicial();
+    const inicial = estadoInicial(AHORA);
     const pausado = reducer(inicial, { type: 'toggle-pausa' });
     expect(pausado.pausado).toBe(true);
     const reanudado = reducer(pausado, { type: 'toggle-pausa' });
     expect(reanudado.pausado).toBe(false);
   });
+
+  it('con pausado=true, tick no cambia el estado (misma referencia)', () => {
+    const pausado: EstadoFlotaMock = { ...estadoInicial(AHORA), pausado: true };
+    const siguiente = reducer(pausado, { type: 'tick', now: AHORA_ISO });
+    expect(siguiente).toBe(pausado);
+  });
 });
 
-describe('reducer — simular-infracciones', () => {
+describe('reducer — simular-infracciones (dedupe)', () => {
   it('agrega las infracciones recibidas', () => {
-    const inicial = estadoInicial();
+    const inicial = estadoInicial(AHORA);
     const inf = infraccionActiva();
     const siguiente = reducer(inicial, { type: 'simular-infracciones', infracciones: [inf] });
-    expect(siguiente.infracciones).toEqual([inf]);
+    expect(siguiente.infracciones).toContainEqual(inf);
   });
 
   it('no agrega una infracción para un trufi que YA tiene una activa (defensa del reducer)', () => {
-    const conUna = reducer(estadoInicial(), {
+    const conUna = reducer(estadoInicial(AHORA), {
       type: 'simular-infracciones',
       infracciones: [infraccionActiva({ id: 'inf-1' })],
     });
+    const antes = conUna.infracciones.length;
     const siguiente = reducer(conUna, {
       type: 'simular-infracciones',
       infracciones: [infraccionActiva({ id: 'inf-2' })],
     });
-    expect(siguiente.infracciones).toHaveLength(1);
-    expect(siguiente.infracciones[0]!.id).toBe('inf-1');
+    expect(siguiente.infracciones).toHaveLength(antes);
+    expect(siguiente.infracciones.some((i) => i.id === 'inf-2')).toBe(false);
   });
 });
 
 describe('reducer — limpiar-infracciones', () => {
   it('sin trufiIds, vacía TODA la lista de infracciones', () => {
-    const conInfraccion = reducer(estadoInicial(), {
+    const conInfraccion = reducer(estadoInicial(AHORA), {
       type: 'simular-infracciones',
-      infracciones: [infraccionActiva()],
+      infracciones: [infraccionActiva({ trufiId: 'trufi-z12-4' })],
     });
     const limpio = reducer(conInfraccion, { type: 'limpiar-infracciones' });
     expect(limpio.infracciones).toEqual([]);
   });
 
   it('con trufiIds, borra solo las infracciones de esos trufis y deja el resto intacto', () => {
-    const trufiA = TRUFIS_MOCK[0]!.id;
-    const trufiB = TRUFIS_MOCK[1]!.id;
-    const conDos = reducer(estadoInicial(), {
+    const trufiA = 'trufi-z12-4';
+    const trufiB = 'trufi-z12-5';
+    const conDos = reducer(estadoInicial(AHORA), {
       type: 'simular-infracciones',
       infracciones: [
         infraccionActiva({ id: 'inf-a', trufiId: trufiA }),
@@ -113,14 +97,14 @@ describe('reducer — limpiar-infracciones', () => {
       ],
     });
     const limpio = reducer(conDos, { type: 'limpiar-infracciones', trufiIds: [trufiA] });
-    expect(limpio.infracciones).toHaveLength(1);
-    expect(limpio.infracciones[0]!.id).toBe('inf-b');
+    expect(limpio.infracciones.some((i) => i.id === 'inf-a')).toBe(false);
+    expect(limpio.infracciones.some((i) => i.id === 'inf-b')).toBe(true);
   });
 
   it('con trufiIds que no tienen ninguna infracción, no cambia el estado (misma referencia)', () => {
-    const trufiA = TRUFIS_MOCK[0]!.id;
-    const trufiB = TRUFIS_MOCK[1]!.id;
-    const conUna = reducer(estadoInicial(), {
+    const trufiA = 'trufi-z12-4';
+    const trufiB = 'trufi-z12-5';
+    const conUna = reducer(estadoInicial(AHORA), {
       type: 'simular-infracciones',
       infracciones: [infraccionActiva({ id: 'inf-a', trufiId: trufiA })],
     });
@@ -129,7 +113,9 @@ describe('reducer — limpiar-infracciones', () => {
   });
 
   it('sin infracciones previas, no cambia el estado (misma referencia)', () => {
-    const inicial = estadoInicial();
+    // `estadoInicial` siembra 2 sanciones (`sembrarSanciones`) — para probar el caso "sin
+    // infracciones" hay que partir de un estado sin ellas, no de `estadoInicial` directo.
+    const inicial: EstadoFlotaMock = { ...estadoInicial(AHORA), infracciones: [] };
     const siguiente = reducer(inicial, { type: 'limpiar-infracciones' });
     expect(siguiente).toBe(inicial);
   });
@@ -138,7 +124,7 @@ describe('reducer — limpiar-infracciones', () => {
 describe('reducer — asignar-parada', () => {
   it('fija siguienteParadaId del trufi indicado', () => {
     const trufiId = TRUFIS_MOCK[0]!.id;
-    const siguiente = reducer(estadoInicial(), {
+    const siguiente = reducer(estadoInicial(AHORA), {
       type: 'asignar-parada',
       trufiId,
       paradaId: 'villa-armonia',
@@ -147,20 +133,16 @@ describe('reducer — asignar-parada', () => {
   });
 
   it('con un trufiId inexistente, no cambia el estado', () => {
-    const inicial = estadoInicial();
-    const siguiente = reducer(inicial, {
-      type: 'asignar-parada',
-      trufiId: 'no-existe',
-      paradaId: 'x',
-    });
+    const inicial = estadoInicial(AHORA);
+    const siguiente = reducer(inicial, { type: 'asignar-parada', trufiId: 'no-existe', paradaId: 'x' });
     expect(siguiente).toBe(inicial);
   });
 });
 
-describe('reducer — aplicar-accion', () => {
+describe('reducer — aplicar-accion (plazo)', () => {
   it('modo "ahora": marca la infracción como sancionada sin venceEl', () => {
     const accionId = CATALOGO_INFRACCIONES[0]!.acciones[0]!.id;
-    const conInfraccion = reducer(estadoInicial(), {
+    const conInfraccion = reducer(estadoInicial(AHORA), {
       type: 'simular-infracciones',
       infracciones: [infraccionActiva()],
     });
@@ -169,16 +151,16 @@ describe('reducer — aplicar-accion', () => {
       infraccionId: 'inf-1',
       accionId,
       modo: 'ahora',
-      aplicadaEn: AHORA,
+      aplicadaEn: AHORA_ISO,
     });
-    const infr = siguiente.infracciones[0]!;
+    const infr = siguiente.infracciones.find((i) => i.id === 'inf-1')!;
     expect(infr.estado).toBe('sancionada');
-    expect(infr.accionAplicada).toEqual({ accionId, modo: 'ahora', aplicadaEn: AHORA });
+    expect(infr.accionAplicada).toEqual({ accionId, modo: 'ahora', aplicadaEn: AHORA_ISO });
   });
 
   it('modo "plazo" con venceEl dentro de [hoy, hoy+30d]: aplica y guarda venceEl', () => {
     const accionId = CATALOGO_INFRACCIONES[0]!.acciones[0]!.id;
-    const conInfraccion = reducer(estadoInicial(), {
+    const conInfraccion = reducer(estadoInicial(AHORA), {
       type: 'simular-infracciones',
       infracciones: [infraccionActiva()],
     });
@@ -187,22 +169,17 @@ describe('reducer — aplicar-accion', () => {
       infraccionId: 'inf-1',
       accionId,
       modo: 'plazo',
-      aplicadaEn: AHORA,
+      aplicadaEn: AHORA_ISO,
       venceEl: '2026-10-10',
     });
-    const infr = siguiente.infracciones[0]!;
+    const infr = siguiente.infracciones.find((i) => i.id === 'inf-1')!;
     expect(infr.estado).toBe('sancionada');
-    expect(infr.accionAplicada).toEqual({
-      accionId,
-      modo: 'plazo',
-      aplicadaEn: AHORA,
-      venceEl: '2026-10-10',
-    });
+    expect(infr.accionAplicada).toEqual({ accionId, modo: 'plazo', aplicadaEn: AHORA_ISO, venceEl: '2026-10-10' });
   });
 
   it('modo "plazo" con venceEl fuera de rango (>30 días): IGNORA la acción', () => {
     const accionId = CATALOGO_INFRACCIONES[0]!.acciones[0]!.id;
-    const conInfraccion = reducer(estadoInicial(), {
+    const conInfraccion = reducer(estadoInicial(AHORA), {
       type: 'simular-infracciones',
       infracciones: [infraccionActiva()],
     });
@@ -211,16 +188,17 @@ describe('reducer — aplicar-accion', () => {
       infraccionId: 'inf-1',
       accionId,
       modo: 'plazo',
-      aplicadaEn: AHORA,
+      aplicadaEn: AHORA_ISO,
       venceEl: '2027-01-01',
     });
-    expect(siguiente.infracciones[0]!.estado).toBe('activa');
-    expect(siguiente.infracciones[0]!.accionAplicada).toBeUndefined();
+    const infr = siguiente.infracciones.find((i) => i.id === 'inf-1')!;
+    expect(infr.estado).toBe('activa');
+    expect(infr.accionAplicada).toBeUndefined();
   });
 
   it('modo "plazo" sin venceEl: ignora la acción', () => {
     const accionId = CATALOGO_INFRACCIONES[0]!.acciones[0]!.id;
-    const conInfraccion = reducer(estadoInicial(), {
+    const conInfraccion = reducer(estadoInicial(AHORA), {
       type: 'simular-infracciones',
       infracciones: [infraccionActiva()],
     });
@@ -229,38 +207,35 @@ describe('reducer — aplicar-accion', () => {
       infraccionId: 'inf-1',
       accionId,
       modo: 'plazo',
-      aplicadaEn: AHORA,
+      aplicadaEn: AHORA_ISO,
     });
-    expect(siguiente.infracciones[0]!.estado).toBe('activa');
+    expect(siguiente.infracciones.find((i) => i.id === 'inf-1')!.estado).toBe('activa');
   });
 
   it('sobre una infracción ya sancionada, no hace nada (idempotente)', () => {
     const accionId = CATALOGO_INFRACCIONES[0]!.acciones[0]!.id;
     const sancionada = reducer(
-      reducer(estadoInicial(), {
-        type: 'simular-infracciones',
-        infracciones: [infraccionActiva()],
-      }),
-      { type: 'aplicar-accion', infraccionId: 'inf-1', accionId, modo: 'ahora', aplicadaEn: AHORA },
+      reducer(estadoInicial(AHORA), { type: 'simular-infracciones', infracciones: [infraccionActiva()] }),
+      { type: 'aplicar-accion', infraccionId: 'inf-1', accionId, modo: 'ahora', aplicadaEn: AHORA_ISO },
     );
     const siguiente = reducer(sancionada, {
       type: 'aplicar-accion',
       infraccionId: 'inf-1',
       accionId: CATALOGO_INFRACCIONES[0]!.acciones[1]!.id,
       modo: 'ahora',
-      aplicadaEn: AHORA,
+      aplicadaEn: AHORA_ISO,
     });
     expect(siguiente).toBe(sancionada);
   });
 
   it('con un infraccionId inexistente, no cambia el estado', () => {
-    const inicial = estadoInicial();
+    const inicial = estadoInicial(AHORA);
     const siguiente = reducer(inicial, {
       type: 'aplicar-accion',
       infraccionId: 'no-existe',
       accionId: 'x',
       modo: 'ahora',
-      aplicadaEn: AHORA,
+      aplicadaEn: AHORA_ISO,
     });
     expect(siguiente).toBe(inicial);
   });
@@ -272,35 +247,31 @@ describe('fechaPlazoValida', () => {
   });
 
   it('hoy mismo es válido', () => {
-    expect(fechaPlazoValida('2026-09-27', AHORA)).toBe(true);
+    expect(fechaPlazoValida('2026-09-27', AHORA_ISO)).toBe(true);
   });
 
   it('hoy + 30 días es válido (límite inclusive)', () => {
-    expect(fechaPlazoValida('2026-10-27', AHORA)).toBe(true);
+    expect(fechaPlazoValida('2026-10-27', AHORA_ISO)).toBe(true);
   });
 
   it('hoy + 31 días NO es válido', () => {
-    expect(fechaPlazoValida('2026-10-28', AHORA)).toBe(false);
+    expect(fechaPlazoValida('2026-10-28', AHORA_ISO)).toBe(false);
   });
 
   it('una fecha pasada NO es válida', () => {
-    expect(fechaPlazoValida('2026-09-26', AHORA)).toBe(false);
+    expect(fechaPlazoValida('2026-09-26', AHORA_ISO)).toBe(false);
   });
 
   it('una fecha ilegible NO es válida', () => {
-    expect(fechaPlazoValida('no-es-una-fecha', AHORA)).toBe(false);
+    expect(fechaPlazoValida('no-es-una-fecha', AHORA_ISO)).toBe(false);
   });
 });
 
 describe('fechaPlazoValida — usa el día calendario LOCAL de `now`, no UTC', () => {
-  // `process.env.TZ` no es confiable en todos los runners de vitest, así que en vez de forzar
-  // un huso horario del proceso, se construye `now` con el constructor de `Date` de
-  // año/mes/día/hora (que SIEMPRE interpreta esos componentes en el huso LOCAL del runtime) y
-  // se lo pasa como ISO. El roundtrip `Date -> toISOString() -> new Date(...)` conserva el
-  // mismo instante absoluto, así que `fechaPlazoValida` tiene que leer de vuelta el MISMO día
-  // calendario local (7 de octubre) para que estos casos pasen — si comparara con getters UTC
-  // en vez de locales (el bug original), una hora tardía como las 21:00 en un huso negativo
-  // (Bolivia, UTC-4) correría "hoy" un día hacia adelante y estos límites se romperían.
+  // Construye `now` con año/mes/día/hora (SIEMPRE interpretado en el huso LOCAL del runtime) y
+  // lo pasa como ISO — el roundtrip conserva el instante, pero si `fechaPlazoValida` leyera de
+  // vuelta con getters UTC (el bug original), una hora tardía en un huso negativo (Bolivia,
+  // UTC-4) correría "hoy" un día para adelante y estos límites se romperían.
   const ahoraLocal = new Date(2026, 9, 7, 21, 0).toISOString();
 
   it('el mismo día calendario local (hoy) es válido', () => {
@@ -324,7 +295,7 @@ describe('infraccionActivaDe / infraccionesDe', () => {
   it('infraccionActivaDe encuentra la infracción activa de un trufi, y no una sancionada', () => {
     const trufiId = TRUFIS_MOCK[0]!.id;
     const estado: EstadoFlotaMock = {
-      ...estadoInicial(),
+      ...estadoInicial(AHORA),
       infracciones: [
         infraccionActiva({ id: 'a', trufiId, estado: 'sancionada' }),
         infraccionActiva({ id: 'b', trufiId, estado: 'activa' }),
@@ -335,7 +306,7 @@ describe('infraccionActivaDe / infraccionesDe', () => {
   });
 
   it('sin infracciones para el trufi, devuelve undefined / []', () => {
-    const estado = estadoInicial();
+    const estado = estadoInicial(AHORA);
     expect(infraccionActivaDe(estado, 'x')).toBeUndefined();
     expect(infraccionesDe(estado, 'x')).toEqual([]);
   });
@@ -344,7 +315,7 @@ describe('infraccionActivaDe / infraccionesDe', () => {
 describe('trufisSinInfraccionActiva', () => {
   it('excluye los trufis con infracción activa', () => {
     const ids = TRUFIS_MOCK.map((t) => t.id);
-    const estado = reducer(estadoInicial(), {
+    const estado = reducer(estadoInicial(AHORA), {
       type: 'simular-infracciones',
       infracciones: [infraccionActiva({ trufiId: ids[0] })],
     });
@@ -383,5 +354,34 @@ describe('elegirTipoInfraccion', () => {
   it("con 'aleatoria', devuelve un tipo del catálogo completo", () => {
     const tipo = elegirTipoInfraccion('aleatoria', () => 0.999);
     expect(CATALOGO_INFRACCIONES).toContainEqual(tipo);
+  });
+});
+
+// ================================================================================================
+// Ítem 10 del guion delegado — `sembrarSanciones` nunca siembra en el futuro respecto de `now`.
+// ================================================================================================
+
+describe('sembrarSanciones — nunca en el futuro (ítem 10)', () => {
+  it('con `now` a media mañana, ninguna sanción sembrada ocurre después de `now`', () => {
+    const now = new Date('2026-09-27T07:15:00-04:00');
+    const sanciones = sembrarSanciones(now);
+    expect(sanciones).toHaveLength(2);
+    for (const s of sanciones) {
+      expect(Date.parse(s.ocurridaEn)).toBeLessThanOrEqual(now.getTime());
+      expect(Date.parse(s.accionAplicada!.aplicadaEn)).toBeLessThanOrEqual(now.getTime());
+    }
+  });
+
+  it('con `now` antes de las 05:00, no revienta y no siembra nada en el futuro', () => {
+    const now = new Date('2026-09-27T04:10:00-04:00');
+    const sanciones = sembrarSanciones(now);
+    for (const s of sanciones) {
+      expect(Date.parse(s.ocurridaEn)).toBeLessThanOrEqual(now.getTime());
+    }
+  });
+
+  it('es determinístico para el mismo `now`', () => {
+    const now = new Date('2026-09-27T12:00:00-04:00');
+    expect(sembrarSanciones(now)).toEqual(sembrarSanciones(new Date(now)));
   });
 });

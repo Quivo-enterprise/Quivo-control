@@ -1,0 +1,889 @@
+/**
+ * Estilos de las vistas grandes del panel del delegado (Salidas/Análisis/Configuración/
+ * Novedades — `docs/plan-mock-guion-delegado.md`). Extiende el lenguaje "vidrio flotante" ya
+ * establecido en `../simulado.css` (`.qv-trufi-panel`, `.qv-sim-panel`) — mismos tokens
+ * (`--qv-surface-glass`, `--qv-border-glass`, `--qv-shadow-floating`, `--qv-radius-*`), mismo
+ * `backdrop-filter` blur+saturate, sin inventar un lenguaje nuevo.
+ */
+
+/* ---------------------------------------------------------------------------------------
+ * VistaPanel — cascarón compartido (`vista-panel.tsx`).
+ * ------------------------------------------------------------------------------------- */
+
+.qv-vista-panel {
+  position: absolute;
+  /* Debajo de `.qv-top-hud` (badge + filtro de línea, ~110px de alto contando su `top: 1rem`) —
+     mismo inset izquierdo (1.25rem) que el HUD y `.qv-sim-panel` para alinear las tres piezas
+     ancladas a ese costado. */
+  top: 7rem;
+  left: 1.25rem;
+  bottom: 1rem;
+  /* Por debajo de `.qv-trufi-panel` (1100): si algún día ambos quedan abiertos a la vez, la
+     ficha del trufi (acción más específica/reciente) gana la pila visual. Por encima del HUD y
+     de `.qv-sim-panel` (1000). */
+  z-index: 1050;
+  width: 34rem;
+  max-width: calc(100% - 2.5rem);
+  display: flex;
+  flex-direction: column;
+  background: var(--qv-surface-glass);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid var(--qv-border-glass);
+  border-radius: var(--qv-radius-xl);
+  box-shadow: var(--qv-shadow-floating);
+  overflow: hidden;
+  animation: qv-vista-panel-in var(--qv-transition-smooth) both;
+}
+
+.qv-vista-panel--ancho {
+  /* Salidas/Análisis: línea de tiempo 24h y gráfico de barras necesitan más ancho. A 1440px
+     (34rem/46rem + 1.25rem de margen izquierdo) sigue dejando de sobra los ~23rem que ocupa
+     `.qv-trufi-panel` del lado derecho. */
+  width: 46rem;
+}
+
+@keyframes qv-vista-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(-1rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qv-vista-panel {
+    animation: none;
+  }
+}
+
+.qv-vista-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 1rem 1.15rem 0.85rem;
+  border-bottom: 1px solid var(--qv-border-glass);
+}
+
+.qv-vista-panel__icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--qv-color-primary);
+}
+
+.qv-vista-panel__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--qv-text-md);
+  font-weight: 800;
+  color: var(--qv-text-primary);
+}
+
+/* Foco puramente programático (`headingRef.current?.focus()`) — el `<h2>` no es un control
+   interactivo, así que se apaga el anillo de foco por defecto del navegador acá (nunca en
+   elementos interactivos reales). */
+.qv-vista-panel__title:focus {
+  outline: none;
+}
+
+.qv-vista-panel__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: var(--qv-radius-md);
+  background: color-mix(in srgb, var(--qv-surface-card) 55%, transparent);
+  color: var(--qv-text-secondary);
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color var(--qv-transition-fast), color var(--qv-transition-fast);
+}
+
+.qv-vista-panel__close:hover {
+  background: color-mix(in srgb, var(--qv-color-danger) 15%, transparent);
+  color: var(--qv-color-danger);
+}
+
+.qv-vista-panel__close:focus-visible {
+  outline: none;
+  box-shadow: var(--qv-shadow-focus);
+}
+
+.qv-vista-panel__body {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1.1rem 1.15rem 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.4rem;
+}
+
+@media (max-width: 720px) {
+  .qv-vista-panel {
+    top: auto;
+    left: 0.5rem;
+    right: 0.5rem;
+    bottom: 0.5rem;
+    width: auto;
+    max-width: none;
+    max-height: 78vh;
+    animation: qv-vista-panel-in-sheet var(--qv-transition-smooth) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .qv-vista-panel {
+      animation: none;
+    }
+  }
+
+  @keyframes qv-vista-panel-in-sheet {
+    from {
+      opacity: 0;
+      transform: translateY(1rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .qv-vista-panel__body {
+    padding-bottom: max(1.4rem, env(safe-area-inset-bottom));
+  }
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Piezas comunes a las 3 vistas (secciones, hints, chips, números tabulares).
+ * ------------------------------------------------------------------------------------- */
+
+.qv-vista-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.qv-vista-section + .qv-vista-section {
+  /* El `gap` de `.qv-vista-panel__body` ya separa las secciones — este padding solo evita que
+     el título quede pegado contra la línea divisoria. */
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--qv-border-glass);
+}
+
+.qv-vista-section__title {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--qv-text-muted);
+}
+
+.qv-vista-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.qv-vista-section__header .qv-vista-section__title {
+  flex: 1;
+}
+
+.qv-vista-hint {
+  margin: 0;
+  font-size: var(--qv-text-sm);
+  color: var(--qv-text-secondary);
+}
+
+.qv-vista-link-btn {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--qv-color-primary);
+  font-size: var(--qv-text-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.qv-vista-link-btn:hover {
+  text-decoration: underline;
+}
+
+.qv-tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--qv-font-mono);
+}
+
+.qv-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--qv-radius-full);
+  font-size: 0.65rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.qv-chip--warning {
+  background: color-mix(in srgb, var(--qv-color-warning) 20%, transparent);
+  color: var(--qv-color-warning);
+}
+
+.qv-chip--danger {
+  background: color-mix(in srgb, var(--qv-color-danger) 18%, transparent);
+  color: var(--qv-color-danger);
+}
+
+.qv-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-subtle);
+  background: color-mix(in srgb, var(--qv-surface-card) 55%, transparent);
+  color: var(--qv-text-secondary);
+  cursor: pointer;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: border-color var(--qv-transition-fast), color var(--qv-transition-fast), background-color var(--qv-transition-fast);
+  /* Ítem 11 — botones chicos y seguidos (adelantar/atrasar/WhatsApp en la cola): sin esto un
+     tap en móvil puede quedar interpretado como el inicio de un double-tap-zoom. */
+  touch-action: manipulation;
+}
+
+.qv-icon-btn:hover {
+  border-color: var(--qv-color-primary);
+  color: var(--qv-color-primary);
+}
+
+.qv-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--qv-shadow-focus);
+}
+
+.qv-icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * VistaSalidas — cola por línea.
+ * ------------------------------------------------------------------------------------- */
+
+.qv-cola-linea {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.qv-cola-linea + .qv-cola-linea {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px dashed var(--qv-border-subtle);
+}
+
+.qv-cola-linea__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.qv-cola-linea__nombre {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--qv-text-sm);
+  font-weight: 800;
+  color: var(--qv-text-primary);
+}
+
+.qv-cola-linea__dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--qv-linea-color, var(--qv-color-primary));
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.4);
+  flex-shrink: 0;
+}
+
+.qv-cola-linea__confirmacion {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--qv-radius-md);
+  background: color-mix(in srgb, var(--qv-color-success) 14%, transparent);
+  color: var(--qv-color-success);
+  font-size: var(--qv-text-xs);
+  font-weight: 700;
+}
+
+/* Ítem 6 — `AccionResultado.ok === false` (p. ej. `despacharSiguiente` con la cola vacía): mismo
+   banner, tono de error en vez del check verde. */
+.qv-cola-linea__confirmacion--error {
+  background: color-mix(in srgb, var(--qv-color-danger) 14%, transparent);
+  color: var(--qv-color-danger);
+}
+
+.qv-cola-linea__aviso {
+  font-size: var(--qv-text-xs);
+}
+
+.qv-cola-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.qv-cola-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-subtle);
+  background: color-mix(in srgb, var(--qv-surface-card) 45%, transparent);
+}
+
+.qv-cola-item__pos {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--qv-color-primary) 16%, transparent);
+  color: var(--qv-color-primary);
+  font-size: 0.7rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.qv-cola-item__placa {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  touch-action: manipulation;
+}
+
+.qv-cola-item__conductor {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--qv-text-sm);
+  color: var(--qv-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qv-cola-item__hora {
+  font-size: var(--qv-text-sm);
+  font-weight: 700;
+  color: var(--qv-text-primary);
+  flex-shrink: 0;
+}
+
+.qv-cola-item__acciones {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * VistaSalidas — tabla de salidas del día.
+ * ------------------------------------------------------------------------------------- */
+
+.qv-salidas-tabla {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--qv-text-xs);
+}
+
+.qv-salidas-tabla th {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--qv-text-muted);
+  border-bottom: 1px solid var(--qv-border-glass);
+}
+
+.qv-salidas-tabla td {
+  padding: 0.4rem 0.5rem;
+  color: var(--qv-text-secondary);
+  border-bottom: 1px solid var(--qv-border-subtle);
+}
+
+.qv-salidas-tabla tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * VistaSalidas — línea de tiempo de recorridos 00-24h.
+ * ------------------------------------------------------------------------------------- */
+
+.qv-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.qv-timeline__eje {
+  position: relative;
+  height: 0.9rem;
+  margin-left: 5.5rem;
+}
+
+.qv-timeline__tick {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--qv-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.qv-timeline__filas {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 13rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.qv-timeline__fila {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.qv-timeline__etiqueta {
+  width: 5rem;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  touch-action: manipulation;
+}
+
+.qv-timeline__pista {
+  position: relative;
+  flex: 1;
+  height: 1.3rem;
+  border-radius: var(--qv-radius-sm);
+  background: var(--qv-surface-sunken);
+  border: 1px solid var(--qv-border-subtle);
+  overflow: hidden;
+}
+
+.qv-timeline__ahora {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--qv-color-danger);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.qv-timeline__segmento {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.4);
+  cursor: default;
+}
+
+.qv-timeline__segmento--completo {
+  background: var(--qv-linea-color, var(--qv-color-primary));
+}
+
+.qv-timeline__segmento--incompleto {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--qv-color-warning),
+    var(--qv-color-warning) 3px,
+    color-mix(in srgb, var(--qv-color-warning) 55%, transparent) 3px,
+    color-mix(in srgb, var(--qv-color-warning) 55%, transparent) 6px
+  );
+}
+
+.qv-timeline__segmento--en_curso {
+  background: var(--qv-linea-color, var(--qv-color-primary));
+  animation: qv-timeline-pulso 1.4s ease-in-out infinite;
+}
+
+@keyframes qv-timeline-pulso {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.4), 0 0 0 0 color-mix(in srgb, var(--qv-color-primary) 60%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.4), 0 0 0 4px color-mix(in srgb, var(--qv-color-primary) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qv-timeline__segmento--en_curso {
+    animation: none;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.4), 0 0 0 2px color-mix(in srgb, var(--qv-color-primary) 45%, transparent);
+  }
+}
+
+/* ---------------------------------------------------------------------------------------
+ * VistaAnálisis — gráfico de barras por hora (00-24h).
+ * ------------------------------------------------------------------------------------- */
+
+.qv-hora-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.qv-hora-chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.9rem;
+  font-size: var(--qv-text-xs);
+  color: var(--qv-text-secondary);
+}
+
+.qv-hora-chart__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.qv-hora-chart__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.qv-hora-chart__swatch--normal {
+  background: var(--qv-color-primary);
+}
+
+/* Ítem 2: "Típico" — barra hueca punteada, mismo tono que "Hoy" pero sin relleno, para leerse
+   como una PROYECCIÓN (no un dato real) en el mismo golpe de vista que el resto del legend. */
+.qv-hora-chart__swatch--tipico {
+  background: transparent;
+  border: 1px dashed var(--qv-color-primary);
+  border-radius: 1px;
+}
+
+.qv-hora-chart__swatch--pico {
+  background: var(--qv-color-warning);
+}
+
+.qv-hora-chart__swatch--ahora {
+  background: var(--qv-color-danger);
+}
+
+.qv-hora-chart__plot-wrap {
+  position: relative;
+}
+
+/* Franja sombreada DETRÁS de las barras 7-9/12-14/18-20 (ítem 2 — reemplaza las 3 etiquetas
+ * "HORA PICO" flotantes, que no apuntaban a ninguna columna fija y quedaban mal ancladas).
+ * Posicionado por PORCENTAJE del ancho total (24 columnas parejas, `justify-content:
+ * space-between` sin sobrante que redistribuir con `flex: 1 1 0` — el error de los `gap: 2px`
+ * es imperceptible a esta escala). `z-index: 0` + `.qv-hora-chart__plot` en `z-index: 1` para
+ * que la franja quede DETRÁS de las barras/eje, no encima. */
+.qv-hora-chart__picos {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.qv-hora-chart__pico-band {
+  position: absolute;
+  top: 0;
+  bottom: 1.4rem;
+  background: color-mix(in srgb, var(--qv-color-warning) 10%, transparent);
+  border-radius: 3px;
+}
+
+.qv-hora-chart__plot {
+  position: relative;
+  z-index: 1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2px;
+  height: 8rem;
+  border-bottom: 1px dashed var(--qv-border-subtle);
+}
+
+.qv-hora-chart__col {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  position: relative;
+}
+
+.qv-hora-chart__bar {
+  width: 100%;
+  max-width: 14px;
+  border-radius: 2px 2px 0 0;
+  background: var(--qv-color-primary);
+  transition: filter var(--qv-transition-fast);
+}
+
+.qv-hora-chart__col:hover .qv-hora-chart__bar {
+  filter: brightness(1.15);
+}
+
+.qv-hora-chart__col--pico .qv-hora-chart__bar {
+  background: var(--qv-color-warning);
+}
+
+/* Ítem 2 — barra "Típico" (`movimientoTipicoPorHora`, horas futuras sin dato real todavía):
+   hueca + punteada, mismo criterio visual que `.qv-hora-chart__swatch--tipico` del legend. */
+.qv-hora-chart__bar--tipico {
+  background: transparent;
+  border: 1px dashed color-mix(in srgb, var(--qv-color-primary) 60%, transparent);
+  border-radius: 2px 2px 0 0;
+}
+
+.qv-hora-chart__col--pico .qv-hora-chart__bar--tipico {
+  border-color: color-mix(in srgb, var(--qv-color-warning) 65%, transparent);
+}
+
+.qv-hora-chart__col--ahora .qv-hora-chart__bar {
+  box-shadow: 0 0 0 2px var(--qv-color-danger);
+}
+
+.qv-hora-chart__eje-label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--qv-text-muted);
+}
+
+.qv-hora-chart__ahora-tag {
+  position: absolute;
+  bottom: -1rem;
+  font-size: 0.55rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--qv-color-danger);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * VistaAnálisis — paradas con alta demanda / unidades con problemas de tráfico.
+ * ------------------------------------------------------------------------------------- */
+
+.qv-demanda-lista,
+.qv-trafico-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.qv-demanda-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-subtle);
+  background: color-mix(in srgb, var(--qv-surface-card) 45%, transparent);
+  font-size: var(--qv-text-xs);
+}
+
+.qv-demanda-item__nombre {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  color: var(--qv-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qv-demanda-item__linea {
+  color: var(--qv-text-muted);
+  flex-shrink: 0;
+}
+
+.qv-demanda-item__esperando {
+  color: var(--qv-text-secondary);
+  flex-shrink: 0;
+}
+
+.qv-trafico-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-subtle);
+  background: color-mix(in srgb, var(--qv-surface-card) 45%, transparent);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--qv-transition-fast);
+  touch-action: manipulation;
+}
+
+.qv-trafico-item:hover {
+  border-color: var(--qv-color-primary);
+}
+
+.qv-trafico-item__linea {
+  flex: 1;
+  font-size: var(--qv-text-xs);
+  color: var(--qv-text-secondary);
+}
+
+/* ---------------------------------------------------------------------------------------
+ * VistaConfiguración.
+ * ------------------------------------------------------------------------------------- */
+
+.qv-config-horario {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+}
+
+.qv-config-resumen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.1rem;
+  font-size: var(--qv-text-sm);
+  color: var(--qv-text-secondary);
+}
+
+.qv-config-resumen strong {
+  color: var(--qv-text-primary);
+}
+
+.qv-config-paradas {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.qv-config-parada {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-subtle);
+  background: color-mix(in srgb, var(--qv-surface-card) 40%, transparent);
+}
+
+.qv-config-parada__fila {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.qv-config-feedback:empty {
+  display: none;
+}
+
+.qv-config-errores {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--qv-color-danger);
+  font-size: var(--qv-text-xs);
+  font-weight: 600;
+}
+
+.qv-config-exito {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: var(--qv-radius-md);
+  background: color-mix(in srgb, var(--qv-color-success) 14%, transparent);
+  color: var(--qv-color-success);
+  font-size: var(--qv-text-xs);
+  font-weight: 700;
+}
+
+.qv-config-acciones {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Ajustes a 390px — spec: "Everything works at 390px width".
+ * ------------------------------------------------------------------------------------- */
+
+@media (max-width: 480px) {
+  .qv-config-horario,
+  .qv-config-parada__fila {
+    grid-template-columns: 1fr;
+  }
+
+  .qv-cola-item {
+    flex-wrap: wrap;
+  }
+
+  .qv-cola-item__conductor {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .qv-timeline__etiqueta {
+    width: 3.6rem;
+  }
+
+  .qv-timeline__eje {
+    margin-left: 3.6rem;
+  }
+}
