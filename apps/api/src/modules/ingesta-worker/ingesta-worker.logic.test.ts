@@ -558,4 +558,189 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       ),
     ).rejects.toThrow('sin sesionId');
   });
+
+  /**
+   * Fase A (docs/plan-ubicacion-fluida.md) — `insertarEventoOperativoEnTx` mantiene
+   * `SesionOperativa.recorridoEstado`/`recorridoEstadoTs`, en la MISMA transacción que
+   * inserta el `EventoOperativo`, cuando el tipo es `inicio_recorrido`/`fin_recorrido`.
+   */
+  describe('Fase A — recorridoEstado derivado (inicio_recorrido/fin_recorrido)', () => {
+    async function recorridoEstadoDe(id: string) {
+      const sesion = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        tx.sesionOperativa.findUniqueOrThrow({ where: { id } }),
+      );
+      return { estado: sesion.recorridoEstado, ts: sesion.recorridoEstadoTs };
+    }
+
+    it('fin_recorrido deja recorridoEstado="finalizado" con el ts del evento', async () => {
+      const ts = new Date().toISOString();
+      const eventoFin = evento({ eventId: randomUUID(), ts, tipo: 'fin_recorrido', payload: { sesionId } });
+
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(tx, sindicatoId, eventoFin),
+      );
+
+      const { estado, ts: guardado } = await recorridoEstadoDe(sesionId);
+      expect(estado).toBe('finalizado');
+      expect(guardado?.toISOString()).toBe(ts);
+    });
+
+    it('inicio_recorrido POSTERIOR vuelve el estado a "en_curso"', async () => {
+      const tsInicio = new Date().toISOString();
+      const eventoInicio = evento({
+        eventId: randomUUID(),
+        ts: tsInicio,
+        tipo: 'inicio_recorrido',
+        payload: { sesionId },
+      });
+
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(tx, sindicatoId, eventoInicio),
+      );
+
+      const { estado } = await recorridoEstadoDe(sesionId);
+      expect(estado).toBe('en_curso');
+    });
+
+    it('guard por ts: un evento fuera de orden (ts más viejo que el ya aplicado) no pisa el estado', async () => {
+      const tsNuevo = new Date().toISOString();
+      const tsViejo = new Date(Date.now() - 60_000).toISOString();
+
+      // Aplica primero el más nuevo (fin_recorrido)...
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(
+          tx,
+          sindicatoId,
+          evento({ eventId: randomUUID(), ts: tsNuevo, tipo: 'fin_recorrido', payload: { sesionId } }),
+        ),
+      );
+      // ...y después un inicio_recorrido que llegó tarde (outbox, reconexión) con un ts VIEJO.
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(
+          tx,
+          sindicatoId,
+          evento({ eventId: randomUUID(), ts: tsViejo, tipo: 'inicio_recorrido', payload: { sesionId } }),
+        ),
+      );
+
+      // El estado sigue siendo el del evento más NUEVO — el fuera de orden no lo pisó.
+      const { estado, ts: guardado } = await recorridoEstadoDe(sesionId);
+      expect(estado).toBe('finalizado');
+      expect(guardado?.toISOString()).toBe(tsNuevo);
+    });
+
+    it('un eventId DUPLICADO (createMany.count === 0) no toca el estado', async () => {
+      const eventId = randomUUID();
+      const tsOriginal = new Date().toISOString();
+      const eventoFin = evento({ eventId, ts: tsOriginal, tipo: 'fin_recorrido', payload: { sesionId } });
+
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(tx, sindicatoId, eventoFin),
+      );
+      const { ts: tsTrasElPrimero } = await recorridoEstadoDe(sesionId);
+
+      // Reenvío del MISMO event_id, pero con un `ts` (del sobre) manipulado/distinto — igual
+      // no debe aplicarse: `createMany` con `skipDuplicates` no inserta la fila (count 0),
+      // así que el guard `insertado.count === 1` corta ANTES del UPDATE, sin llegar siquiera
+      // a evaluar el guard por `ts`.
+      const tsManipulado = new Date(Date.now() + 5 * 60_000).toISOString();
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(
+          tx,
+          sindicatoId,
+          evento({ eventId, ts: tsManipulado, tipo: 'fin_recorrido', payload: { sesionId } }),
+        ),
+      );
+
+      const { ts: tsFinal } = await recorridoEstadoDe(sesionId);
+      expect(tsFinal?.toISOString()).toBe(tsTrasElPrimero?.toISOString());
+    });
+
+    it('un evento con deviceId DISTINTO al de la sesión no toca el estado (device_id del evento es el autenticado, no el del payload)', async () => {
+      // `tsAntes` tiene que ser más nuevo que cualquier `recorridoEstadoTs` que hayan dejado
+      // los tests anteriores de este mismo describe (comparten `sesionId`, sin cleanup entre
+      // tests) — el guard por `ts` de `insertarEventoOperativoEnTx` sino lo descartaría en
+      // silencio y esta aserción de "antes" fallaría por una razón ajena a lo que se prueba.
+      const tsAntes = new Date().toISOString();
+      // Deja la sesión en un estado conocido primero.
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(
+          tx,
+          sindicatoId,
+          evento({ eventId: randomUUID(), ts: tsAntes, tipo: 'inicio_recorrido', payload: { sesionId } }),
+        ),
+      );
+      const antes = await recorridoEstadoDe(sesionId);
+      expect(antes.estado).toBe('en_curso');
+
+      // La sesión real es del device "device-test" (fixture de este describe). Un evento
+      // "fin_recorrido" que apunta al MISMO sesionId pero con OTRO deviceId no debe poder
+      // cerrar el recorrido de esa sesión — el guard de `deviceId` en el UPDATE lo bloquea.
+      const tsDespues = new Date(Date.now() + 1_000).toISOString();
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(
+          tx,
+          sindicatoId,
+          evento({
+            eventId: randomUUID(),
+            ts: tsDespues,
+            tipo: 'fin_recorrido',
+            deviceId: 'device-otro-telefono',
+            payload: { sesionId },
+          }),
+        ),
+      );
+
+      const despues = await recorridoEstadoDe(sesionId);
+      expect(despues.estado).toBe('en_curso');
+      expect(despues.ts?.toISOString()).toBe(tsAntes);
+    });
+
+    it('watermark del futuro: un evento con ts adelantado más allá de DRIFT_ALERTA_MS no toca recorridoEstado, pero sí se guarda como bitácora', async () => {
+      // `tsAntes` más nuevo que cualquier `recorridoEstadoTs` dejado por tests previos del
+      // mismo describe (comparten `sesionId`) — mismo motivo que el test de deviceId de
+      // arriba: si no, el guard por `ts` descartaría este setup en silencio.
+      const tsAntes = new Date().toISOString();
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(
+          tx,
+          sindicatoId,
+          evento({ eventId: randomUUID(), ts: tsAntes, tipo: 'inicio_recorrido', payload: { sesionId } }),
+        ),
+      );
+      const antes = await recorridoEstadoDe(sesionId);
+      expect(antes.estado).toBe('en_curso');
+
+      // 30 min en el futuro — bastante más allá de los 5 min de `DRIFT_ALERTA_MS` (no se
+      // importa esa constante acá para no atarse a su valor exacto, solo a que "30 min" es
+      // inequívocamente drift).
+      const eventIdFuturo = randomUUID();
+      const tsFuturo = new Date(Date.now() + 30 * 60_000).toISOString();
+      const resultado = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(
+          tx,
+          sindicatoId,
+          evento({ eventId: eventIdFuturo, ts: tsFuturo, tipo: 'fin_recorrido', payload: { sesionId } }),
+        ),
+      );
+
+      expect(resultado.recorridoEstadoOmitidoPorDriftFuturo).toBe(true);
+      expect(resultado.driftFuturoMs).toBeGreaterThan(25 * 60_000);
+
+      // El estado NO se movió a "finalizado" — sigue en "en_curso", como antes del evento
+      // con ts futuro (la sesión no queda atascada esperando un evento que ya no puede
+      // llegar con un ts más nuevo que ese watermark corrido).
+      const despues = await recorridoEstadoDe(sesionId);
+      expect(despues.estado).toBe('en_curso');
+      expect(despues.ts?.toISOString()).toBe(tsAntes);
+
+      // El evento sí quedó guardado en eventos_operativos — el guard solo omite el UPDATE
+      // del estado derivado, no la bitácora.
+      const registrado = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        tx.eventoOperativo.findUnique({ where: { eventId: eventIdFuturo } }),
+      );
+      expect(registrado).not.toBeNull();
+      expect(registrado?.tipo).toBe('fin_recorrido');
+    });
+  });
 });

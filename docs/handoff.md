@@ -23,6 +23,27 @@
   7. Licencia de Transistorsoft y build release 12.
 - **Prerrequisito:** extender las asignaciones más allá del 2026-09-29 antes del 30/09.
 
+### Estado al 2026-09-27
+
+**Hoy no hay pruebas en calle** (decisión del CTO): solo implementación.
+
+**Fase B, HECHA (#100).**
+- Núcleo puro `movimiento/`, store visual y canal `watchPosition` detrás de `EXPO_PUBLIC_GPS_CANAL_VISUAL`, apagado por defecto.
+- Con el flag apagado, la evidencia no cambia.
+- Sin verificar en dispositivo.
+
+**Fase A, en PR (`fix/panel-recorrido-finalizado`).**
+- Columnas `recorridoEstado`/`recorridoEstadoTs` con backfill, estado `finalizado` en la API y en la web, y poll lento (60 s) tras finalizar.
+- Verificado contra Postgres real: migración, 338 de 339 tests de la API (la falla es un deadlock de concurrencia en un test ajeno, que en aislamiento pasa), 87 de 87 tests de la web, 59 de 59 del design-system.
+- **`/codex-debug verify-fix` NO verificado:** Codex se quedó sin cuota. Lo reemplazó una revisión de código y seguridad con subagente, con los hallazgos aplicados.
+- **Deploy (lo corre el CTO), en este orden:**
+  1. `scripts/deploy-gcp.sh --solo web`
+  2. `scripts/deploy-gcp.sh`
+
+**Siguiente:**
+- **Spikes S1 y S2.** El perfil `development` de EAS es un dev client (depende de Metro), no sirve en la calle, y un APK release exige la licencia paga de Transistorsoft. Propuesta: un perfil `spike` que genere un APK debug con el JS embebido.
+- **S2 necesita una API key de Google Maps** restringida al paquete y al SHA-1 del keystore. Crearla en GCP espera la confirmación del CTO.
+
 ## Próxima entrega: APK conductor build 11 — plan v2 del 2026-09-26 (reemplaza al del 09-23)
 
 **Plan: [`plan-apk-build-11.md`](plan-apk-build-11.md).** Decisiones del CTO del 09-23 (el alcance y la rama posición cambiaron en el v2):

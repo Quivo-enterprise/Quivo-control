@@ -438,6 +438,91 @@ describe('EnVivoService', () => {
     });
   });
 
+  /**
+   * Fase A (docs/plan-ubicacion-fluida.md) — `recorridoEstado`/`recorridoEstadoTs` pesan MÁS
+   * que la heurística de fix/ingesta de arriba. `ahora`/`inicio` son los mismos del describe
+   * de arriba (mediodía y mediodía-6h del 2026-08-18 UTC).
+   */
+  describe('derivarFrescura — Fase A: estado "finalizado" derivado del recorrido', () => {
+    const ahora = new Date('2026-08-18T18:00:00.000Z');
+    const inicio = new Date('2026-08-18T12:00:00.000Z');
+
+    it('recorrido finalizado sin fix posterior ⇒ "finalizado", con recorridoFinTs', () => {
+      const finTs = new Date(ahora.getTime() - 10 * MINUTO);
+      const f = derivarFrescura(ahora, inicio, null, null, 'finalizado', finTs);
+      expect(f.estadoFrescura).toBe('finalizado');
+      expect(f.recorridoFinTs).toBe(finTs.toISOString());
+    });
+
+    it('recorrido finalizado con el último fix ANTES del fin (dentro de la tolerancia) ⇒ "finalizado"', () => {
+      const finTs = new Date(ahora.getTime() - 10 * MINUTO);
+      // El último fix llegó unos segundos antes del toque de "Finalizar" — normal.
+      const ultimoFixTs = new Date(finTs.getTime() - 2_000);
+      const f = derivarFrescura(ahora, inicio, ultimoFixTs, ultimoFixTs, 'finalizado', finTs);
+      expect(f.estadoFrescura).toBe('finalizado');
+    });
+
+    it('re-inicio (recorridoEstado "en_curso") ⇒ vuelve a la clasificación normal', () => {
+      // `inicio_recorrido` posterior — el worker ya dejó `recorridoEstado: 'en_curso'` (guard
+      // por ts), así que acá ni siquiera importa cuán vieja sea `recorridoEstadoTs`.
+      const inicioRecorridoTs = new Date(ahora.getTime() - 5 * MINUTO);
+      const f = derivarFrescura(
+        ahora,
+        inicio,
+        new Date(ahora.getTime() - 20_000),
+        new Date(ahora.getTime() - 3_000),
+        'en_curso',
+        inicioRecorridoTs,
+      );
+      expect(f.estadoFrescura).toBe('reportando');
+      expect(f.recorridoFinTs).toBeNull();
+    });
+
+    it('fix POSTERIOR al fin, más allá de la tolerancia ⇒ defensivo, clasificación normal (no "finalizado")', () => {
+      const finTs = new Date(ahora.getTime() - 10 * MINUTO);
+      // Algo sigue grabando después del "Finalizar" — 30 s después del fin, muy por encima
+      // de la tolerancia de 5 s.
+      const ultimoFixTs = new Date(finTs.getTime() + 30_000);
+      const f = derivarFrescura(ahora, inicio, ultimoFixTs, ultimoFixTs, 'finalizado', finTs);
+      expect(f.estadoFrescura).not.toBe('finalizado');
+      expect(f.recorridoFinTs).toBeNull();
+    });
+
+    it('sesión sin inicio_recorrido/fin_recorrido (recorridoEstado null) ⇒ clasificación normal', () => {
+      const f = derivarFrescura(
+        ahora,
+        inicio,
+        new Date(ahora.getTime() - 20_000),
+        new Date(ahora.getTime() - 3_000),
+        null,
+        null,
+      );
+      expect(f.estadoFrescura).toBe('reportando');
+      expect(f.recorridoFinTs).toBeNull();
+    });
+
+    it('tolerancia de 5 s: un fix exactamente en el borde sigue siendo "finalizado"', () => {
+      const finTs = new Date(ahora.getTime() - 10 * MINUTO);
+      const fixEnElBorde = new Date(finTs.getTime() + 5_000);
+      const f = derivarFrescura(ahora, inicio, fixEnElBorde, fixEnElBorde, 'finalizado', finTs);
+      expect(f.estadoFrescura).toBe('finalizado');
+    });
+
+    it('tolerancia de 5 s: un fix 1 ms después del borde ya NO es "finalizado"', () => {
+      const finTs = new Date(ahora.getTime() - 10 * MINUTO);
+      const fixFueraDeBorde = new Date(finTs.getTime() + 5_001);
+      const f = derivarFrescura(
+        ahora,
+        inicio,
+        fixFueraDeBorde,
+        fixFueraDeBorde,
+        'finalizado',
+        finTs,
+      );
+      expect(f.estadoFrescura).not.toBe('finalizado');
+    });
+  });
+
   describe('listarHoy', () => {
     it('devuelve las sesiones con agregados de fix e ingesta', async () => {
       const filas = await service.listarHoy(adminQuivo, AHORA);

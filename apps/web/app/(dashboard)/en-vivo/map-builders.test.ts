@@ -27,6 +27,7 @@ function posicion(overrides: Partial<PosicionEnVivo>): PosicionEnVivo {
     antiguedadIngestaMs: 3_000,
     inactivaDesdeMs: 3_000,
     estadoFrescura: 'reportando',
+    recorridoFinTs: null,
     ...overrides,
   };
 }
