@@ -13,12 +13,36 @@
  * existen (sin esperar tiles ni ninguna otra red) y RN responde con el estado COMPLETO actual.
  */
 
+/**
+ * Fase B (`docs/plan-ubicacion-fluida.md`, "núcleo de movimiento"): `posicionActual` suma
+ * campos opcionales que produce el store visual (`movimiento/store-visual.ts`) — el HTML
+ * (`route-map-html.ts`) los usa cuando vienen (p. ej. `heading` numérico en vez de su propio
+ * `calcHeading`) y conserva el comportamiento de hoy cuando no vienen (`undefined`/`null`), así
+ * que agregarlos acá no rompe ningún emisor viejo que solo mande `{lat, lng}`.
+ */
+export interface PosicionMapaProtocolo {
+  lat: number;
+  lng: number;
+  /** Grados `[0,360)`, o `null` sin rumbo válido todavía (dibuja un punto sin flecha) — a
+   * diferencia de `undefined` (campo ausente: el emisor no sabe nada de rumbo todavía). */
+  heading?: number | null;
+  /** Metros — radio del halo de precisión (Fase C). */
+  accuracy?: number;
+  /** m/s, `-1` si desconocida (mismo centinela que `FixVisual.speed`). */
+  speed?: number;
+  /** Epoch ms del fix que originó esta posición. */
+  ts?: number;
+  /** `true` cuando el store visual considera el fix obsoleto (`estaObsoleto`, `movimiento/
+   * geo.ts`) — Fase C decide cómo atenuar el marcador con esto. */
+  obsoleto?: boolean;
+}
+
 /** Estado completo del mapa que RN conoce en un momento dado — el mismo conjunto de datos que
  * antes viajaba disperso en 4 llamadas a `postMessage` distintas dentro de `enviarEstadoMapa`. */
 export interface EstadoMapaProtocolo {
   tracking: boolean;
   proximoPuntoControlId: string | null;
-  posicionActual: { lat: number; lng: number } | null;
+  posicionActual: PosicionMapaProtocolo | null;
   rutaCalculada: [number, number][] | null;
 }
 

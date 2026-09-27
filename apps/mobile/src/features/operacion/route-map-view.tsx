@@ -3,11 +3,13 @@ import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
+import { useEstadoVisual } from './movimiento/store-visual';
 import { construirHtml } from './route-map-html';
 import {
   construirMensajesEstadoMapa,
   esHandshakeMapaListo,
   type EstadoMapaProtocolo,
+  type PosicionMapaProtocolo,
 } from './route-map-protocol';
 import { useReconexionMapaOffline } from './reconexion-mapa-offline';
 
@@ -70,6 +72,29 @@ export function RouteMapView({
   // manda el WebView al pedir un tile, nunca cómo se resuelven los recursos inline.
   const source = useMemo(() => ({ html, baseUrl: 'https://control.myquivo.com/' }), [html]);
 
+  // Fase B (`docs/plan-ubicacion-fluida.md`, "núcleo de movimiento"): la posición que viaja al
+  // HTML prioriza el store visual (`movimiento/store-visual.ts`) — alimentado con CADA fix,
+  // evidencia y canal visual, sin pasar por props de React ni re-render de `operation-screen.tsx`
+  // — y cae al prop `posicionActual` de siempre solo mientras el store todavía no tiene nada (p.
+  // ej. el primer instante tras montar, antes de que llegue el primer fix a `onLocation`). Con
+  // el store poblado, `heading`/`accuracy`/`speed`/`ts`/`obsoleto` viajan también — el HTML los
+  // usa si vienen (`route-map-html.ts`) y sigue igual si no.
+  const estadoVisual = useEstadoVisual();
+  const posicionParaProtocolo = useMemo<PosicionMapaProtocolo | null>(() => {
+    if (estadoVisual) {
+      return {
+        lat: estadoVisual.lat,
+        lng: estadoVisual.lng,
+        heading: estadoVisual.rumbo,
+        accuracy: estadoVisual.accuracy,
+        speed: estadoVisual.speed,
+        ts: estadoVisual.ts,
+        obsoleto: estadoVisual.obsoleto,
+      };
+    }
+    return posicionActual ? { lat: posicionActual.lat, lng: posicionActual.lng } : null;
+  }, [estadoVisual, posicionActual]);
+
   // Entrega 25/31b (handshake mapa-listo): guarda el último estado conocido en una ref —
   // actualizada en cada render, ver más abajo — para que `enviarEstadoCompleto` pueda mandarlo
   // desde CUALQUIER disparador (el cambio de props de siempre, `onLoadEnd`, o ahora también el
@@ -79,10 +104,15 @@ export function RouteMapView({
   const estadoActualRef = useRef<EstadoMapaProtocolo>({
     tracking,
     proximoPuntoControlId,
-    posicionActual,
+    posicionActual: posicionParaProtocolo,
     rutaCalculada,
   });
-  estadoActualRef.current = { tracking, proximoPuntoControlId, posicionActual, rutaCalculada };
+  estadoActualRef.current = {
+    tracking,
+    proximoPuntoControlId,
+    posicionActual: posicionParaProtocolo,
+    rutaCalculada,
+  };
 
   const enviarEstadoCompleto = useCallback(() => {
     construirMensajesEstadoMapa(estadoActualRef.current).forEach((mensaje) => {
@@ -93,13 +123,32 @@ export function RouteMapView({
   // Sigue mandando el estado cada vez que cambia una de estas props (comportamiento de siempre) —
   // el handshake de abajo (`onMessage` + `mapa-listo`) es el mecanismo que GARANTIZA que el
   // primer envío no se pierda, no un reemplazo de este disparador por cambios posteriores.
+  //
+  // Fase B: `posicionParaProtocolo`/`posicionActual` SALEN de estas dependencias a propósito —
+  // el store visual puede cambiar a 1Hz (canal visual) o por cada fix de evidencia, y antes de
+  // esta entrega ese cambio reejecutaba este efecto entero (reenviando también
+  // `proximoPuntoControl`/`ruta-calculada`, aunque el HTML ya los dedupea por su cuenta — ver los
+  // guards `if (nuevoProximoPuntoId === proximoPuntoIdActual) return` / `didChange` en
+  // `route-map-html.ts`). La posición tiene ahora su PROPIO efecto, más abajo, así que
+  // `operation-screen.tsx` no termina re-renderizando este componente entero por cada fix visual
+  // más de lo necesario para lo que sí depende de `position`.
   useEffect(enviarEstadoCompleto, [
     tracking,
     proximoPuntoControlId,
-    posicionActual,
     rutaCalculada,
     enviarEstadoCompleto,
   ]);
+
+  // Fase B: mensaje `position` en su propio efecto, separado de tracking/proximoPuntoControl/
+  // ruta-calculada (ver el comentario de arriba). Se omite por completo cuando no hay ninguna
+  // posición conocida todavía (mismo criterio que `construirMensajesEstadoMapa`) — un envío
+  // suelto que llegue ANTES del handshake `mapa-listo` se pierde sin problema: `estadoActualRef`
+  // ya quedó actualizado más arriba, así que el handshake lo re-envía completo apenas el HTML
+  // esté listo para recibirlo.
+  useEffect(() => {
+    if (!posicionParaProtocolo) return;
+    webViewRef.current?.postMessage(JSON.stringify({ type: 'position', ...posicionParaProtocolo }));
+  }, [posicionParaProtocolo]);
 
   // Entrega 25/31b (handshake mapa-listo): el HTML (`route-map-html.ts`) manda
   // `{type:'mapa-listo'}` por `ReactNativeWebView.postMessage` apenas registra sus listeners de

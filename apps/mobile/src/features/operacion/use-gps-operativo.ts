@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Linking, PermissionsAndroid, Platform } from 'react-native';
+import { AppState, Linking, PermissionsAndroid, Platform, type AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Sentry from '@sentry/react-native';
 import BackgroundGeolocation, { type Location } from 'react-native-background-geolocation';
@@ -12,7 +12,17 @@ import {
   obtenerEventosPorTipo,
   obtenerVisitasPendientes,
 } from '../../db/outbox';
-import { gpsSpikeConfig, logVerboseHabilitado } from '../../gps/background-geolocation.config';
+import {
+  canalVisualHabilitado,
+  gpsSpikeConfig,
+  logVerboseHabilitado,
+} from '../../gps/background-geolocation.config';
+import { esFixVisual, fixVisualDesdeLocation } from './movimiento/fix-visual';
+import {
+  alimentarEstadoVisual,
+  configurarObsolescencia,
+  reiniciarEstadoVisual,
+} from './movimiento/store-visual';
 import {
   bateriaConsumidaPorcentaje,
   detectarHuecos,
@@ -224,6 +234,17 @@ export function useGpsOperativo(
   // QUI-P0: tercera suscripción al SDK, defensa en profundidad contra volver a estacionario en
   // medio de un recorrido (ver `crearManejadorReafirmarMovimiento`, `gps/seguimiento-continuo.ts`).
   const motionChangeSubscription = useRef<{ remove: () => void } | null>(null);
+  // FASE B (`docs/plan-ubicacion-fluida.md`): cuarta suscripción, la del canal visual
+  // (`BackgroundGeolocation.watchPosition`, ver `iniciarCanalVisual`/`detenerCanalVisual` más
+  // abajo) — detrás del flag `canalVisualHabilitado` (`gps/background-geolocation.config.ts`),
+  // apagado por default. `watchPosition` devuelve una `Subscription` con `.remove()`, igual que
+  // `onLocation`/`onHeartbeat`/`onMotionChange` (confirmado contra el `.d.ts` instalado:
+  // `@transistorsoft/background-geolocation-types@5.2.2/dist/core/api/
+  // BackgroundGeolocation.d.ts:89`, `watchPosition(...): Subscription`).
+  const watchVisualSubscription = useRef<{ remove: () => void } | null>(null);
+  // Contador de fixes recibidos por el canal visual desde el último `iniciarCanalVisual()` —
+  // solo para los logs `[gps-visual]` del spike S1 (instrumentación, no afecta la evidencia).
+  const visualFixesRecibidos = useRef(0);
   // QUI-P0: espejo en ref de `tracking` — los handlers de `onMotionChange`/`AppState` que se
   // suscriben UNA sola vez (`suscribirUbicaciones`, más abajo) necesitan leer "¿hay un
   // recorrido en curso AHORA?" en el momento en que el evento nativo dispara, no el valor de
@@ -293,6 +314,25 @@ export function useGpsOperativo(
     // corre cuando la app está terminada (QUI-216) — acá solo queda lo que es
     // genuinamente de React: estado de UI y los refs que alimentan el veredicto del spike.
     async (location: Location) => {
+      // FASE B (`docs/plan-ubicacion-fluida.md`, "guard de evidencia"): alimenta el store visual
+      // con TODO fix que llega ACÁ — de evidencia (esta suscripción, `distanceFilter: 15`) —
+      // igual que siempre. Va ANTES que nada más, incluso antes del contador de evidencia.
+      //
+      // FIX POST-REVISIÓN (hallazgo CRÍTICO, "canal visual enruta a la evidencia"): el canal
+      // visual (`watchPosition`, `iniciarCanalVisual` más abajo) YA NO llama a esta función —
+      // alimenta el store directamente y nunca pasa por acá. Antes, sus fixes se enrutaban a
+      // `onLocationRef.current` (esta misma función) confiando en que `esFixVisual(location)`
+      // (`location.extras?.fuente === 'visual'`) cortara acá ANTES de tocar
+      // `puntosRef`/batería/outbox/lógica de puntos de control (todos de EVIDENCIA, RF-67..73) —
+      // pero que `extras` sobreviva el viaje ida y vuelta por el SDK nativo (`watchPosition` →
+      // callback) NUNCA se verificó en dispositivo real; si no sobrevive, cada fix del canal
+      // visual a 1Hz se convertía en un `gps_point` de evidencia falso. El guard `esFixVisual` de
+      // abajo se queda como defensa en profundidad, por si el SDK ADEMÁS difunde esos mismos
+      // fixes por esta suscripción de `onLocation` (no solo por el callback de `watchPosition`) —
+      // nunca debería depender de él como único filtro.
+      alimentarEstadoVisual(fixVisualDesdeLocation(location));
+      if (esFixVisual(location)) return;
+
       // El contador cuenta UBICACIONES RECIBIDAS del SDK, y se incrementa antes de cualquier
       // `await`: si la escritura al outbox falla, la línea "Puntos GPS: N" del veredicto NO
       // debe desviarse por debajo de lo realmente recibido (eso hacía parecer parcialmente
@@ -648,6 +688,120 @@ export function useGpsOperativo(
   }, [estaEnRecorrido]);
 
   /**
+   * FASE B (`docs/plan-ubicacion-fluida.md`, "canal visual con watchPosition"): arranca (si no
+   * está corriendo ya) un `watchPosition` a 1Hz, `persist: false` — nunca toca la SQLite nativa
+   * del plugin de evidencia — con `extras: {fuente: 'visual'}` (queda por si algún día hace
+   * falta distinguir el origen desde afuera, p. ej. logs; ya no lo consume ningún guard propio).
+   *
+   * FIX POST-REVISIÓN (hallazgo CRÍTICO, "canal visual enruta a la evidencia"): el callback de
+   * este `watchPosition` alimenta el store visual DIRECTAMENTE (`alimentarEstadoVisual`) — YA NO
+   * enruta sus fixes a `onLocationRef.current` (la función que procesa la evidencia). El diseño
+   * anterior dependía de que `esFixVisual(location)` cortara dentro de `onLocation` ANTES de
+   * tocar `puntosRef`/batería/outbox — pero que `location.extras.fuente` sobreviva el viaje por
+   * el SDK nativo (`watchPosition` → callback) nunca se confirmó en dispositivo real; si el SDK
+   * no lo respeta, cada fix visual a 1Hz se colaba como un `gps_point` de evidencia. Con esta
+   * función alimentando el store por su cuenta, la evidencia queda gobernada EXCLUSIVAMENTE por
+   * la suscripción de `onLocation` (`distanceFilter: 15`) — el guard `esFixVisual` de esa función
+   * se mantiene como defensa en profundidad, no como el único filtro.
+   *
+   * También habilita la reevaluación de `obsoleto` del store (`configurarObsolescencia`, ver su
+   * docblock en `store-visual.ts`): sin el canal visual, "sin fix hace 15s" es un vehículo
+   * detenido normal (evidencia por distancia/heartbeat), no una señal perdida.
+   *
+   * Firma verificada contra el `.d.ts` instalado (`@transistorsoft/background-geolocation-
+   * types@5.2.2/dist/core/api/BackgroundGeolocation.d.ts:89`):
+   * `watchPosition(options: WatchPositionRequest, locationCallback, errorCallback?): Subscription`.
+   */
+  const iniciarCanalVisual = useCallback(() => {
+    if (watchVisualSubscription.current) return; // ya corriendo
+    configurarObsolescencia(true);
+    visualFixesRecibidos.current = 0;
+    if (logVerboseHabilitado) {
+      void BackgroundGeolocation.getCount()
+        .then((n) => console.log(`[gps-visual] getCount() antes de iniciar: ${n}`))
+        .catch(() => {
+          // Instrumentación best-effort del spike S1: un fallo acá no debe impedir arrancar.
+        });
+    }
+    try {
+      watchVisualSubscription.current = BackgroundGeolocation.watchPosition(
+        {
+          interval: 1000,
+          persist: false,
+          desiredAccuracy: BackgroundGeolocation.DesiredAccuracy.High,
+          extras: { fuente: 'visual' },
+        },
+        (location) => {
+          visualFixesRecibidos.current += 1;
+          if (logVerboseHabilitado) {
+            console.log(`[gps-visual] fix visual #${visualFixesRecibidos.current}`);
+          }
+          // FIX POST-REVISIÓN: alimenta el store visual directo, sin pasar por `onLocationRef`
+          // (ver el docblock de `iniciarCanalVisual`, arriba) — este fix NUNCA debe convertirse
+          // en un `gps_point` de evidencia.
+          alimentarEstadoVisual(fixVisualDesdeLocation(location));
+        },
+        (errorCode) => {
+          Sentry.captureException(new Error(`watchPosition error ${String(errorCode)}`), {
+            tags: { contexto: 'gps-foreground', paso: 'canal-visual-watch' },
+          });
+        },
+      );
+      if (logVerboseHabilitado) console.log('[gps-visual] canal visual iniciado');
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'canal-visual-iniciar' },
+      });
+    }
+  }, []);
+
+  /** Detiene el canal visual si está corriendo — no-op si ya estaba parado (llamado tanto al
+   * salir a background como en cada cambio de `tracking`, ver el efecto de abajo: idempotente a
+   * propósito), y también explícitamente desde `detener()` (hallazgo de revisión, ver ese
+   * comentario). Deshabilita la reevaluación de `obsoleto` del store SIEMPRE que se llama
+   * (`configurarObsolescencia(false)`, antes del guard de no-op) — sin canal visual corriendo,
+   * "sin fix hace 15s" ya no debe marcar obsoleto (ver `store-visual.ts`). */
+  const detenerCanalVisual = useCallback(() => {
+    configurarObsolescencia(false);
+    if (!watchVisualSubscription.current) return;
+    watchVisualSubscription.current.remove();
+    watchVisualSubscription.current = null;
+    if (logVerboseHabilitado) {
+      const recibidos = visualFixesRecibidos.current;
+      console.log(`[gps-visual] canal visual detenido (fixes recibidos: ${recibidos})`);
+      void BackgroundGeolocation.getCount()
+        .then((n) => console.log(`[gps-visual] getCount() tras detener: ${n}`))
+        .catch(() => {
+          // Best-effort, ver comentario de arriba.
+        });
+    }
+  }, []);
+
+  // FASE B: el canal visual corre SOLO con el flag activo (`canalVisualHabilitado`, apagado por
+  // default — con él apagado este efecto es un no-op completo, ver el `return` de abajo), con un
+  // recorrido en curso (`tracking`) y la app en foreground (`AppState === 'active'`) — plan
+  // explícito del CTO: "Se detiene al ir a segundo plano y en `detener()`". Un solo efecto cubre
+  // los tres disparadores (cambio de `tracking`, cambio de `AppState`, desmontaje) sin necesitar
+  // un efecto separado por cada uno: reevalúa la condición completa en cada `AppState` change Y
+  // cada vez que cambia `tracking` (dependencia del efecto — lo reinstala con el valor actual).
+  useEffect(() => {
+    if (!canalVisualHabilitado) return;
+    const evaluarCanalVisual = (estadoApp: AppStateStatus) => {
+      if (tracking && estadoApp === 'active') {
+        iniciarCanalVisual();
+      } else {
+        detenerCanalVisual();
+      }
+    };
+    evaluarCanalVisual(AppState.currentState);
+    const subscripcionAppState = AppState.addEventListener('change', evaluarCanalVisual);
+    return () => {
+      subscripcionAppState.remove();
+      detenerCanalVisual();
+    };
+  }, [tracking, iniciarCanalVisual, detenerCanalVisual]);
+
+  /**
    * C1 (hallazgo de revisión CRÍTICO): siembra `puntosControlDetectados.current` desde el
    * outbox local, reusando la misma función pura y testeada que usa el headless task
    * (`asegurarSemillaCumplimientos` en `headless-task.ts`), incluida la histéresis (A1: la
@@ -823,6 +977,13 @@ export function useGpsOperativo(
       heartbeatSubscription.current = null;
       motionChangeSubscription.current?.remove();
       motionChangeSubscription.current = null;
+      // FIX POST-REVISIÓN (hallazgo ALTO, "store visual nunca se reinicia"): este cleanup corre
+      // tanto al desmontar el hook como al cambiar `sesionId` (dependencia de este efecto,
+      // logout/cambio de sesión en el mismo proceso) — los dos casos en los que la posición VIEJA
+      // del store (singleton de módulo) no debe seguir mostrándose por encima del prop
+      // `posicionActual` fresco de la sesión que arranca. Ver el docblock de
+      // `reiniciarEstadoVisual` (`movimiento/store-visual.ts`).
+      reiniciarEstadoVisual();
     };
   }, [sesionId, suscribirUbicaciones, sembrarCumplimientos]);
 
@@ -1277,6 +1438,17 @@ export function useGpsOperativo(
       heartbeatSubscription.current = null;
       motionChangeSubscription.current?.remove();
       motionChangeSubscription.current = null;
+      // FIX POST-REVISIÓN (hallazgo ALTO, "store visual nunca se reinicia"): corta el canal
+      // visual y reinicia el store ACÁ, de forma explícita y síncrona — no alcanza con dejarlo
+      // solo al efecto `[tracking]` de `iniciarCanalVisual`/`detenerCanalVisual` (más arriba):
+      // ese efecto recién corre en el PRÓXIMO render tras `setTracking(false)` (abajo), y
+      // mientras tanto `route-map-view.tsx` seguía mostrando la posición VIEJA del store
+      // (singleton de módulo, nunca se limpiaba solo) en vez de caer al prop `posicionActual`
+      // fresco. `detenerCanalVisual()` es idempotente (no-op sobre la suscripción si el canal ya
+      // estaba parado o el flag está apagado) — segura de llamar siempre. Ver los docblocks de
+      // `detenerCanalVisual` y `reiniciarEstadoVisual` (`movimiento/store-visual.ts`).
+      detenerCanalVisual();
+      reiniciarEstadoVisual();
       // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): "Finalizar" también es
       // un veredicto real — ver el comentario largo de `veredictoPublicable`, al inicio del hook.
       veredictoPublicable.current = true;
@@ -1463,7 +1635,15 @@ export function useGpsOperativo(
     } catch {
       setErrorGps('No se pudo detener correctamente el GPS. Intenta nuevamente.');
     }
-  }, [deviceId, sesionId, puntosControl, serializadorRestauracion, serializadorIniciar, estadoInicioRecorrido]);
+  }, [
+    deviceId,
+    sesionId,
+    puntosControl,
+    serializadorRestauracion,
+    serializadorIniciar,
+    estadoInicioRecorrido,
+    detenerCanalVisual,
+  ]);
 
   /**
    * B3 (hallazgo de revisión, bajo): Map SEPARADO de `puntosControlDetectados` — antes de este

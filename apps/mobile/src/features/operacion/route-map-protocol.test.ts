@@ -66,6 +66,56 @@ describe('construirMensajesEstadoMapa', () => {
     const mensajes = construirMensajesEstadoMapa({ ...estadoBase, tracking: true });
     expect(JSON.parse(mensajes[0]!)).toEqual({ type: 'tracking', active: true });
   });
+
+  it('propaga los campos opcionales de Fase B (heading, accuracy, speed, ts, obsoleto) en el mensaje position', () => {
+    const mensajes = construirMensajesEstadoMapa({
+      ...estadoBase,
+      posicionActual: {
+        lat: -17.38,
+        lng: -66.15,
+        heading: 123,
+        accuracy: 8,
+        speed: 4.2,
+        ts: 1_700_000_000_000,
+        obsoleto: false,
+      },
+    });
+    const mensajePosicion = mensajes.find(
+      (m) => (JSON.parse(m) as { type: string }).type === 'position',
+    );
+    expect(JSON.parse(mensajePosicion!)).toEqual({
+      type: 'position',
+      lat: -17.38,
+      lng: -66.15,
+      heading: 123,
+      accuracy: 8,
+      speed: 4.2,
+      ts: 1_700_000_000_000,
+      obsoleto: false,
+    });
+  });
+
+  it('el mensaje position no incluye heading/accuracy/speed/ts/obsoleto cuando el emisor solo manda lat/lng (compat)', () => {
+    const mensajes = construirMensajesEstadoMapa({
+      ...estadoBase,
+      posicionActual: { lat: -17.38, lng: -66.15 },
+    });
+    const mensajePosicion = mensajes.find(
+      (m) => (JSON.parse(m) as { type: string }).type === 'position',
+    );
+    expect(JSON.parse(mensajePosicion!)).toEqual({ type: 'position', lat: -17.38, lng: -66.15 });
+  });
+
+  it('heading: null (sin rumbo válido todavía) viaja como null, no se omite', () => {
+    const mensajes = construirMensajesEstadoMapa({
+      ...estadoBase,
+      posicionActual: { lat: -17.38, lng: -66.15, heading: null },
+    });
+    const mensajePosicion = mensajes.find(
+      (m) => (JSON.parse(m) as { type: string }).type === 'position',
+    );
+    expect((JSON.parse(mensajePosicion!) as { heading: unknown }).heading).toBeNull();
+  });
 });
 
 describe('esHandshakeMapaListo', () => {

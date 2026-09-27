@@ -23,6 +23,17 @@ import BackgroundGeolocation, { type Config } from 'react-native-background-geol
 export const logVerboseHabilitado = __DEV__ || process.env.EXPO_PUBLIC_GPS_LOG_VERBOSE === '1';
 
 /**
+ * Fase B (`docs/plan-ubicacion-fluida.md`, "núcleo de movimiento"): interruptor del canal visual
+ * — un `BackgroundGeolocation.watchPosition` extra, a 1Hz, `persist: false`, que solo alimenta el
+ * marcador del mapa (nunca la evidencia legal, ver el guard `esFixVisual` en
+ * `use-gps-operativo.ts`). Apagado por default a propósito: sin la variable, el comportamiento
+ * queda IDÉNTICO al de hoy (solo la suscripción de evidencia de siempre, `distanceFilter: 15`) —
+ * mismo criterio que `EXPO_PUBLIC_GPS_LOG_VERBOSE` arriba, variable de perfil de EAS o del
+ * entorno de Expo, nunca hardcodeada. Se enciende recién para el spike S1 (dev build).
+ */
+export const canalVisualHabilitado = process.env.EXPO_PUBLIC_GPS_CANAL_VISUAL === '1';
+
+/**
  * Config de tracking GPS del recorrido (nació como spike QUI-216, doc técnico §6, y hoy es
  * la config real usada en producción por QUI-243): punto cada 10s o 50m en movimiento,
  * motion-detection nativa activa, buffering/escritura por lotes a SQLite (no punto a
