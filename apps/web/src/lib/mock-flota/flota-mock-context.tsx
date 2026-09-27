@@ -29,6 +29,15 @@ import type {
   TrufiMock,
 } from './tipos';
 
+/** Trufis de `TRUFIS_MOCK` que corresponden a `lineaId`, o todos si `lineaId` es `undefined`
+ * (filtro "Todas" del HUD). Reutilizado por `simularInfracciones`/`limpiarInfracciones` de
+ * abajo — ambos aceptan un `lineaId` opcional para operar solo sobre los trufis VISIBLES bajo
+ * el filtro de línea (Decisión CTO, 2026-09-27), sin que el reducer (`estado.ts`) tenga que
+ * saber qué es una "línea". */
+function trufisDeLinea(lineaId?: LineaMockId): TrufiMock[] {
+  return lineaId ? TRUFIS_MOCK.filter((t) => t.lineaId === lineaId) : TRUFIS_MOCK;
+}
+
 /**
  * Provider + hook del mock de flota (Decisión 3 del plan). El reducer (`estado.ts`) es puro
  * a propósito — acá viven las ÚNICAS dos fuentes de no-determinismo del módulo:
@@ -42,8 +51,8 @@ interface FlotaMockContextValue {
   lineas: Record<LineaMockId, LineaMock>;
   trufis: TrufiMock[];
   catalogo: typeof CATALOGO_INFRACCIONES;
-  simularInfracciones: (n: 1 | 2 | 3, severidad: Severidad | 'aleatoria') => void;
-  limpiarInfracciones: () => void;
+  simularInfracciones: (n: 1 | 2 | 3, severidad: Severidad | 'aleatoria', lineaId?: LineaMockId) => void;
+  limpiarInfracciones: (lineaId?: LineaMockId) => void;
   asignarParada: (trufiId: string, paradaId: string) => void;
   aplicarAccion: (
     infraccionId: string,
@@ -73,10 +82,10 @@ export function FlotaMockProvider({ children }: { children: ReactNode }) {
   // click para no elegir un trufi que ya tiene una (el reducer también lo filtra como
   // segunda defensa, pero acá es donde se decide QUÉ trufis entran al sorteo).
   const simularInfracciones = useCallback(
-    (n: 1 | 2 | 3, severidad: Severidad | 'aleatoria') => {
+    (n: 1 | 2 | 3, severidad: Severidad | 'aleatoria', lineaId?: LineaMockId) => {
       const disponibles = trufisSinInfraccionActiva(
         estado,
-        TRUFIS_MOCK.map((t) => t.id),
+        trufisDeLinea(lineaId).map((t) => t.id),
       );
       const elegidos = elegirAleatorios(disponibles, n, Math.random);
       const ahora = new Date().toISOString();
@@ -96,8 +105,11 @@ export function FlotaMockProvider({ children }: { children: ReactNode }) {
     [estado],
   );
 
-  const limpiarInfracciones = useCallback(() => {
-    dispatch({ type: 'limpiar-infracciones' });
+  const limpiarInfracciones = useCallback((lineaId?: LineaMockId) => {
+    dispatch({
+      type: 'limpiar-infracciones',
+      trufiIds: lineaId ? trufisDeLinea(lineaId).map((t) => t.id) : undefined,
+    });
   }, []);
 
   const asignarParada = useCallback((trufiId: string, paradaId: string) => {

@@ -1,3 +1,4 @@
+import { trazoVisibleDe } from './geometria';
 import type { LineaMock, LineaMockId, ParadaMock, TrufiMock } from './tipos';
 
 /**
@@ -120,12 +121,20 @@ const L120_PARADAS: ParadaMock[] = [
   { id: 'la-cancha', nombre: 'La Cancha', lat: -17.400468, lng: -66.149377, orden: 7 },
 ];
 
+/**
+ * `trazoRuta` de cada línea — computado UNA VEZ acá (no en cada render de `en-vivo-simulado.tsx`),
+ * ver comentario de `trazoVisibleDe` en `geometria.ts`. Z12 no es ida y vuelta (circuito por
+ * calles distintas en cada sentido), así que `trazoVisibleDe` no detecta vértice de retorno y
+ * devuelve `Z12_POLILINEA` completa sin cambios — queda acá por las dudas de que el circuito
+ * real cambie a futuro, no porque haga falta hoy.
+ */
 export const LINEAS_MOCK: Record<LineaMockId, LineaMock> = {
   z12: {
     id: 'z12',
     nombre: 'Z12',
     color: '#2563eb',
     polilinea: Z12_POLILINEA,
+    trazoRuta: trazoVisibleDe(Z12_POLILINEA),
     paradas: Z12_PARADAS,
   },
   l120: {
@@ -133,6 +142,7 @@ export const LINEAS_MOCK: Record<LineaMockId, LineaMock> = {
     nombre: 'Línea 120',
     color: '#ffffff',
     polilinea: L120_POLILINEA,
+    trazoRuta: trazoVisibleDe(L120_POLILINEA),
     paradas: L120_PARADAS,
   },
 };

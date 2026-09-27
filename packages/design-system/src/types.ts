@@ -83,6 +83,16 @@ export interface MapRoute {
   dashed?: boolean;
   points: { lat: number; lng: number }[];
   onClick?: () => void;
+  /** Override opcional del `line-offset` (px de pantalla, perpendicular al trazo) que
+   * `RouteMap` calcula automáticamente a partir del índice de la ruta dentro de `routes`
+   * (ver `routeFeatures` en `route-map-impl.tsx`). El cálculo automático usa un paso fijo de
+   * 4px, pensado para trazos que no comparten calle — insuficiente cuando dos rutas
+   * distintas recorren literalmente la misma vía (su `line-offset` puede terminar
+   * coincidiendo según la dirección de cada trazo) y el halo de una (10px) tapa por completo
+   * a la otra. Sin este campo, ningún consumidor existente cambia de comportamiento — es
+   * puramente aditivo/opt-in (usado hoy solo por el mock de `/en-vivo`, ver
+   * `en-vivo-simulado.tsx`). */
+  offsetPx?: number;
 }
 
 /** Círculo de tolerancia alrededor de un punto de control. Prop `zones` de `RouteMap` — la

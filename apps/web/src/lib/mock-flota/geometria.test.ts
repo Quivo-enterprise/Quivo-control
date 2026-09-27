@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { posicionEnPolilinea } from './geometria';
+import { LINEAS_MOCK } from './datos';
+import { indiceDeRetornoDe, posicionEnPolilinea, trazoVisibleDe } from './geometria';
 
 describe('posicionEnPolilinea', () => {
   it('con polilínea vacía devuelve un punto fijo sin lanzar', () => {
@@ -70,5 +71,98 @@ describe('posicionEnPolilinea', () => {
     ];
     const pos = posicionEnPolilinea(polilinea, 0.5);
     expect(pos.lng).toBeCloseTo(-66.15, 2);
+  });
+});
+
+describe('indiceDeRetornoDe', () => {
+  it('detecta el vértice de retorno en una polilínea de ida y vuelta simple', () => {
+    // Ida: 3 puntos alejándose en línea recta; vuelta: los mismos 3 puntos retrazados.
+    const polilinea: [number, number][] = [
+      [-17.4, -66.16],
+      [-17.39, -66.15],
+      [-17.38, -66.14], // vértice de retorno — índice 2
+      [-17.39, -66.15],
+      [-17.4, -66.16],
+    ];
+    expect(indiceDeRetornoDe(polilinea)).toBe(2);
+  });
+
+  it('devuelve null para una polilínea que NO es de ida y vuelta (circuito por calles distintas)', () => {
+    // Un cuadrado — nunca retraza el mismo tramo en sentido contrario.
+    const polilinea: [number, number][] = [
+      [-17.4, -66.16],
+      [-17.4, -66.15],
+      [-17.39, -66.15],
+      [-17.39, -66.16],
+      [-17.4, -66.16],
+    ];
+    expect(indiceDeRetornoDe(polilinea)).toBeNull();
+  });
+
+  it('devuelve null con menos de 3 puntos', () => {
+    expect(indiceDeRetornoDe([])).toBeNull();
+    expect(
+      indiceDeRetornoDe([
+        [-17.4, -66.16],
+        [-17.39, -66.15],
+      ]),
+    ).toBeNull();
+  });
+
+  it('detecta el vértice de retorno real de la polilínea de la Línea 120', () => {
+    const polilinea = LINEAS_MOCK.l120.polilinea;
+    const indice = indiceDeRetornoDe(polilinea);
+    expect(indice).not.toBeNull();
+    // El vértice de retorno tiene que ser el punto más lejano del inicio (La Cancha, la
+    // última parada de la 120 — ver `L120_PARADAS` en `datos.ts`), y punto medio exacto del
+    // array (167 puntos, ida y vuelta simétrica sobre las mismas calles).
+    expect(indice).toBe((polilinea.length - 1) / 2);
+  });
+
+  it('NO detecta vértice de retorno en la polilínea real de Z12 (circuito, no ida y vuelta)', () => {
+    expect(indiceDeRetornoDe(LINEAS_MOCK.z12.polilinea)).toBeNull();
+  });
+});
+
+describe('trazoVisibleDe', () => {
+  it('recorta a la ida cuando la polilínea es de ida y vuelta', () => {
+    const polilinea: [number, number][] = [
+      [-17.4, -66.16],
+      [-17.39, -66.15],
+      [-17.38, -66.14],
+      [-17.39, -66.15],
+      [-17.4, -66.16],
+    ];
+    expect(trazoVisibleDe(polilinea)).toEqual([
+      [-17.4, -66.16],
+      [-17.39, -66.15],
+      [-17.38, -66.14],
+    ]);
+  });
+
+  it('devuelve la polilínea completa sin cambios cuando NO es de ida y vuelta', () => {
+    const polilinea: [number, number][] = [
+      [-17.4, -66.16],
+      [-17.4, -66.15],
+      [-17.39, -66.15],
+      [-17.39, -66.16],
+      [-17.4, -66.16],
+    ];
+    expect(trazoVisibleDe(polilinea)).toEqual(polilinea);
+  });
+
+  it('el trazo visible de la 120 real es justo la mitad (ida) de la polilínea completa', () => {
+    const completa = LINEAS_MOCK.l120.polilinea;
+    const visible = trazoVisibleDe(completa);
+    expect(visible.length).toBe((completa.length + 1) / 2);
+    expect(visible).toEqual(completa.slice(0, visible.length));
+  });
+
+  it('`LINEAS_MOCK.l120.trazoRuta` (computado en datos.ts) coincide con `trazoVisibleDe` de su polilínea', () => {
+    expect(LINEAS_MOCK.l120.trazoRuta).toEqual(trazoVisibleDe(LINEAS_MOCK.l120.polilinea));
+  });
+
+  it('`LINEAS_MOCK.z12.trazoRuta` es la polilínea completa (no es ida y vuelta)', () => {
+    expect(LINEAS_MOCK.z12.trazoRuta).toEqual(LINEAS_MOCK.z12.polilinea);
   });
 });

@@ -3,19 +3,34 @@
 import { Button, Select } from '@quivo/design-system';
 import { ChevronDown, ChevronUp, Pause, Play, Sparkles } from 'lucide-react';
 import { useState } from 'react';
-import { trufisSinInfraccionActiva, useFlotaMock, type Severidad } from '../../../../src/lib/mock-flota';
+import {
+  trufisSinInfraccionActiva,
+  useFlotaMock,
+  type LineaMockId,
+  type Severidad,
+} from '../../../../src/lib/mock-flota';
+
+interface PanelSimulacionProps {
+  /** Línea del filtro activo en el HUD (`undefined` = "Todas"). Con una línea puesta, el
+   * panel opera SOLO sobre los trufis visibles de esa línea (Decisión CTO, 2026-09-27):
+   * contador, disponibilidad de los botones "Infracción en N" y "Limpiar infracciones". */
+  lineaId?: LineaMockId;
+}
 
 /**
  * Panel flotante de simulación (Decisión 10 del plan) — abajo a la izquierda, para no
  * competir con la ficha del trufi (arriba a la derecha, `trufi-panel.tsx`).
  */
-export function PanelSimulacion() {
+export function PanelSimulacion({ lineaId }: PanelSimulacionProps) {
   const { estado, trufis, simularInfracciones, limpiarInfracciones, togglePausa } = useFlotaMock();
   const [abierto, setAbierto] = useState(true);
   const [severidad, setSeveridad] = useState<Severidad | 'aleatoria'>('aleatoria');
 
-  const activas = estado.infracciones.filter((i) => i.estado === 'activa').length;
-  const disponibles = trufisSinInfraccionActiva(estado, trufis.map((t) => t.id)).length;
+  const trufisVisibles = lineaId ? trufis.filter((t) => t.lineaId === lineaId) : trufis;
+  const idsVisibles = new Set(trufisVisibles.map((t) => t.id));
+  const activas = estado.infracciones.filter((i) => i.estado === 'activa' && idsVisibles.has(i.trufiId)).length;
+  const hayInfraccionesVisibles = estado.infracciones.some((i) => idsVisibles.has(i.trufiId));
+  const disponibles = trufisSinInfraccionActiva(estado, trufisVisibles.map((t) => t.id)).length;
 
   return (
     <div className="qv-sim-panel">
@@ -56,7 +71,7 @@ export function PanelSimulacion() {
                 size="sm"
                 variant="secondary"
                 disabled={disponibles < n}
-                onClick={() => simularInfracciones(n as 1 | 2 | 3, severidad)}
+                onClick={() => simularInfracciones(n as 1 | 2 | 3, severidad, lineaId)}
               >
                 Infracción en {n} trufi{n > 1 ? 's' : ''}
               </Button>
@@ -64,7 +79,12 @@ export function PanelSimulacion() {
           </div>
 
           <div className="qv-sim-panel__actions-row">
-            <Button size="sm" variant="ghost" onClick={limpiarInfracciones} disabled={estado.infracciones.length === 0}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => limpiarInfracciones(lineaId)}
+              disabled={!hayInfraccionesVisibles}
+            >
               Limpiar infracciones
             </Button>
           </div>

@@ -93,13 +93,45 @@ describe('reducer — simular-infracciones', () => {
 });
 
 describe('reducer — limpiar-infracciones', () => {
-  it('vacía la lista de infracciones', () => {
+  it('sin trufiIds, vacía TODA la lista de infracciones', () => {
     const conInfraccion = reducer(estadoInicial(), {
       type: 'simular-infracciones',
       infracciones: [infraccionActiva()],
     });
     const limpio = reducer(conInfraccion, { type: 'limpiar-infracciones' });
     expect(limpio.infracciones).toEqual([]);
+  });
+
+  it('con trufiIds, borra solo las infracciones de esos trufis y deja el resto intacto', () => {
+    const trufiA = TRUFIS_MOCK[0]!.id;
+    const trufiB = TRUFIS_MOCK[1]!.id;
+    const conDos = reducer(estadoInicial(), {
+      type: 'simular-infracciones',
+      infracciones: [
+        infraccionActiva({ id: 'inf-a', trufiId: trufiA }),
+        infraccionActiva({ id: 'inf-b', trufiId: trufiB }),
+      ],
+    });
+    const limpio = reducer(conDos, { type: 'limpiar-infracciones', trufiIds: [trufiA] });
+    expect(limpio.infracciones).toHaveLength(1);
+    expect(limpio.infracciones[0]!.id).toBe('inf-b');
+  });
+
+  it('con trufiIds que no tienen ninguna infracción, no cambia el estado (misma referencia)', () => {
+    const trufiA = TRUFIS_MOCK[0]!.id;
+    const trufiB = TRUFIS_MOCK[1]!.id;
+    const conUna = reducer(estadoInicial(), {
+      type: 'simular-infracciones',
+      infracciones: [infraccionActiva({ id: 'inf-a', trufiId: trufiA })],
+    });
+    const siguiente = reducer(conUna, { type: 'limpiar-infracciones', trufiIds: [trufiB] });
+    expect(siguiente).toBe(conUna);
+  });
+
+  it('sin infracciones previas, no cambia el estado (misma referencia)', () => {
+    const inicial = estadoInicial();
+    const siguiente = reducer(inicial, { type: 'limpiar-infracciones' });
+    expect(siguiente).toBe(inicial);
   });
 });
 

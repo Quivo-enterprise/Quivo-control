@@ -29,8 +29,17 @@ export interface LineaMock {
   nombre: 'Z12' | 'Línea 120';
   /** Color de borde de los marcadores de esta línea (Decisión 6 del plan). */
   color: string;
-  /** `[lat, lng]` — OJO: es el orden inverso del GeoJSON `[lon, lat]` de donde salen los datos. */
+  /** `[lat, lng]` — OJO: es el orden inverso del GeoJSON `[lon, lat]` de donde salen los datos.
+   * Usar para MOVER trufis (`posicionEnPolilinea`) — para DIBUJAR el trazo en el mapa usar
+   * `trazoRuta`, no este campo directamente. */
   polilinea: [number, number][];
+  /** Tramo a DIBUJAR en `RouteMap` (`MapRoute.points` en `en-vivo-simulado.tsx`) — computado
+   * una sola vez en `datos.ts` vía `trazoVisibleDe(polilinea)` (`geometria.ts`). Igual a
+   * `polilinea` salvo que la línea sea de ida y vuelta sobre las mismas calles (p. ej. la
+   * 120): ahí es solo la ida, para no dibujar dos veces el mismo trazo ni romper el
+   * `line-offset` de MapLibre cuando otra línea comparte esa calle (ver `OFFSET_PX` en
+   * `en-vivo-simulado.tsx`). */
+  trazoRuta: [number, number][];
   paradas: ParadaMock[];
 }
 

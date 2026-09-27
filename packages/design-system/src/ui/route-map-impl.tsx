@@ -256,7 +256,8 @@ function routeFeatures(routes: MapRoute[], isDark: boolean): MapFeatureCollectio
   return featureCollection(
     drawable.map((route, index) => {
       const visuals = routeVisuals(resolveColor(route.color, isDark), isDark);
-      const offset = drawable.length > 1 ? (index - (drawable.length - 1) / 2) * 4 : 0;
+      const autoOffset = drawable.length > 1 ? (index - (drawable.length - 1) / 2) * 4 : 0;
+      const offset = route.offsetPx ?? autoOffset;
       return {
         type: 'Feature',
         properties: {

@@ -8,12 +8,32 @@
  * `--qv-radius-*`, `--qv-transition-smooth`), mismo `backdrop-filter` blur+saturate.
  */
 
-.qv-sim-badge {
+/* Contenedor de todo el HUD superior (badge "Modo simulación" + filtro de línea) — apilados
+ * en columna para que el filtro quede "cerca" del badge sin superponerse. El propio
+ * contenedor no captura clicks (`pointer-events: none`); cada hijo interactivo los reactiva.
+ *
+ * Anclado arriba a la IZQUIERDA (no centrado — code review, 2026-09-27): centrado quedaba
+ * debajo de `.qv-trufi-panel` (arriba a la derecha, 22rem de ancho, z-index 1100 > el del HUD)
+ * en anchos ~721–1000px, tapando el botón "Línea 120" del filtro. El inset izquierdo (1.25rem)
+ * es EL MISMO que usa `.qv-sim-panel` (abajo a la izquierda) a propósito — mismo margen visual
+ * en las dos esquinas izquierdas, y esa esquina no tiene ningún panel con el que competir (el
+ * panel de simulación está abajo, no arriba). `max-width` evita que el filtro se salga de
+ * pantalla en mobile (390px); `.qv-linea-filtro` más abajo hace `flex-wrap` si aun así no
+ * entran los 3 botones en una fila. */
+.qv-top-hud {
   position: absolute;
   top: 1rem;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 1.25rem;
   z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-width: calc(100% - 2.5rem);
+  pointer-events: none;
+}
+
+.qv-sim-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -29,6 +49,73 @@
   letter-spacing: 0.03em;
   pointer-events: none;
   box-shadow: var(--qv-shadow-sm);
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Filtro de línea — segmented control en el HUD superior (mismo lenguaje "vidrio flotante"
+ * que `.qv-sim-badge`, mismo patrón de toggle que `.qv-trufi-panel__modo-toggle`/`-btn`).
+ * ------------------------------------------------------------------------------------- */
+
+.qv-linea-filtro {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  border-radius: var(--qv-radius-full);
+  background: var(--qv-surface-glass);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--qv-border-glass);
+  box-shadow: var(--qv-shadow-sm);
+  pointer-events: auto;
+  max-width: 100%;
+}
+
+.qv-linea-filtro__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  background: transparent;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--qv-radius-full);
+  font-size: var(--qv-text-xs);
+  font-weight: 700;
+  color: var(--qv-text-secondary);
+  cursor: pointer;
+  transition: background-color var(--qv-transition-fast), color var(--qv-transition-fast);
+}
+
+.qv-linea-filtro__btn:hover {
+  background: color-mix(in srgb, var(--qv-color-primary) 12%, transparent);
+  color: var(--qv-text-primary);
+}
+
+.qv-linea-filtro__btn--active,
+.qv-linea-filtro__btn--active:hover {
+  background: var(--qv-color-primary);
+  color: #ffffff;
+}
+
+.qv-linea-filtro__dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Línea 120 es blanca (Decisión CTO) — sin un borde propio, el punto se pierde contra el
+ * fondo claro del HUD (y contra el propio botón activo, también claro en hover). */
+.qv-linea-filtro__dot--ring {
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.55);
+}
+
+/* Opción "Todas": no representa una sola línea, así que su punto combina las dos (Z12 azul +
+ * 120 blanca) en vez de inventar un color propio sin significado. */
+.qv-linea-filtro__dot--todas {
+  background: linear-gradient(90deg, var(--qv-color-primary) 50%, #ffffff 50%);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.35);
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -240,6 +327,15 @@
   font-size: var(--qv-text-md);
   color: var(--qv-text-primary);
   letter-spacing: 0.02em;
+}
+
+/* El foco acá es puramente programático (`headingRef.current?.focus()` en `trufi-panel.tsx`,
+ * `tabIndex={-1}` — nunca llega por Tab): mueve el foco de lectores de pantalla al encabezado
+ * cuando se abre el panel, pero el <span> no es un control interactivo, así que el anillo de
+ * foco por defecto del navegador alrededor de la placa se ve como un bug visual. Se apaga solo
+ * acá (no en ningún elemento interactivo — botones/inputs/Select siguen mostrando su foco). */
+.qv-trufi-panel__plate:focus {
+  outline: none;
 }
 
 .qv-trufi-panel__linea-chip {

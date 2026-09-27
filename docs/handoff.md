@@ -4200,4 +4200,9 @@ Copia temporal (sin remote). Plan: `docs/plan-mock-flota-en-vivo.md`. Flag `NEXT
 - WhatsApp: números ficticios 5917000000{1,2,3} (decisión del CTO; pueden pertenecer a una persona real).
 - Aislamiento Docker: `COMPOSE_PROJECT_NAME=quivo-mock`, puertos 5444/6390/5011.
 - Revisión: `/code-review` (10 hallazgos; 9 aplicados, se descarta el de docker-compose por ser intencional en la copia) + web-design-guidelines (16 aplicados, 6 descartados por ser innecesarios en la demo). Tests: web 126/126, design-system 67/67.
-- Pendiente: fotos reales de Z12/120; la ruta blanca de la 120 se ve poco sobre el mapa claro.
+- Iteración 2 (2026-09-27):
+  - Filtro de línea: Todas/Z12/Línea 120, arranca siempre en Todas. Muestra solo los trufis, la ruta y las paradas de la línea elegida. La simulación actúa solo sobre los trufis visibles (lo aprobó el CTO).
+  - Ruta de la 120 visible: prop opt-in `MapRoute.offsetPx` en el design-system (±7 px solo con las dos líneas visibles). Solo se dibuja la ida de la 120 (`trazoRuta`), para que el offset quede siempre del lado opuesto a la Z12; el trufi sigue recorriendo ida y vuelta.
+  - HUD superior arriba a la izquierda, porque la ficha tapaba el filtro. Sin anillo de foco en la placa del panel.
+  - Tests: web 139/139, design-system 67/67.
+- Pendiente: fotos reales de Z12/120.

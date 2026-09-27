@@ -170,7 +170,11 @@ export function estadoInicial(): EstadoFlotaMock {
 export type AccionFlotaMock =
   | { type: 'tick' }
   | { type: 'simular-infracciones'; infracciones: InfraccionMock[] }
-  | { type: 'limpiar-infracciones' }
+  /** Sin `trufiIds`, limpia TODAS las infracciones (comportamiento histórico). Con
+   * `trufiIds`, limpia solo las de esos trufis — el filtro de línea del HUD (Decisión CTO,
+   * 2026-09-27) resuelve la lista de trufis VISIBLES en `flota-mock-context.tsx` antes de
+   * dispatchear, así el reducer sigue sin saber nada de "líneas" ni de filtros. */
+  | { type: 'limpiar-infracciones'; trufiIds?: string[] }
   | { type: 'asignar-parada'; trufiId: string; paradaId: string }
   | {
       type: 'aplicar-accion';
@@ -212,6 +216,23 @@ function simularInfracciones(
     return estado;
   }
   return { ...estado, infracciones: [...estado.infracciones, ...aAgregar] };
+}
+
+/** Sin `trufiIds`, vacía TODA la lista (comportamiento histórico). Con `trufiIds`, borra solo
+ * las infracciones de esos trufis y deja intactas las del resto — ver el comentario de
+ * `AccionFlotaMock['limpiar-infracciones']`. */
+function limpiarInfracciones(estado: EstadoFlotaMock, trufiIds?: string[]): EstadoFlotaMock {
+  if (estado.infracciones.length === 0) {
+    return estado;
+  }
+  if (!trufiIds) {
+    return { ...estado, infracciones: [] };
+  }
+  const idsALimpiar = new Set(trufiIds);
+  const restantes = estado.infracciones.filter((i) => !idsALimpiar.has(i.trufiId));
+  return restantes.length === estado.infracciones.length
+    ? estado
+    : { ...estado, infracciones: restantes };
 }
 
 function asignarParada(
@@ -267,7 +288,7 @@ export function reducer(estado: EstadoFlotaMock, accion: AccionFlotaMock): Estad
     case 'simular-infracciones':
       return simularInfracciones(estado, accion.infracciones);
     case 'limpiar-infracciones':
-      return estado.infracciones.length === 0 ? estado : { ...estado, infracciones: [] };
+      return limpiarInfracciones(estado, accion.trufiIds);
     case 'asignar-parada':
       return asignarParada(estado, accion.trufiId, accion.paradaId);
     case 'aplicar-accion':

@@ -111,3 +111,76 @@ export function posicionEnPolilinea(
   const [lat, lng] = polilinea[polilinea.length - 1]!;
   return { lat, lng };
 }
+
+/**
+ * Detecta el vértice de RETORNO de una polilínea de ida y vuelta (recorre las mismas calles
+ * de ida y de vuelta para cerrar el loop, como `L120_POLILINEA` en `datos.ts` — ver su
+ * comentario de cabecera) — el índice donde el recorrido empieza a retrazar, en sentido
+ * opuesto, el camino que ya hizo.
+ *
+ * Se DERIVA de la propia polilínea, no se hardcodea: el punto más lejano en línea recta
+ * desde el inicio es el candidato — para cualquier ida-y-vuelta simple (sin
+ * auto-intersecciones) es cierto que la distancia al inicio crece en la ida y solo puede
+ * achicarse retrazando el mismo camino en la vuelta, así que el máximo cae justo en el punto
+ * de retorno. Se CONFIRMA verificando que el tramo posterior sea el espejo (dentro de
+ * `toleranciaM`) del tramo anterior — si la polilínea no es de ida y vuelta (p. ej.
+ * `Z12_POLILINEA`, un circuito por calles distintas en cada sentido), el espejo no se
+ * cumple y devuelve `null`; el llamador debe usar la polilínea completa en ese caso.
+ */
+export function indiceDeRetornoDe(
+  polilinea: [number, number][],
+  toleranciaM = 5,
+): number | null {
+  if (polilinea.length < 3) {
+    return null;
+  }
+
+  const inicio = polilinea[0]!;
+  let distanciaMax = -1;
+  let indiceMax = -1;
+  for (let i = 0; i < polilinea.length; i++) {
+    const d = distanciaMetros(inicio, polilinea[i]!);
+    if (d > distanciaMax) {
+      distanciaMax = d;
+      indiceMax = i;
+    }
+  }
+
+  // Sin margen de espejo hacia alguno de los dos lados (el punto más lejano es el primero o
+  // el último vértice) no hay vuelta que verificar — no es ida y vuelta.
+  const alcance = Math.min(indiceMax, polilinea.length - 1 - indiceMax);
+  if (alcance === 0) {
+    return null;
+  }
+
+  for (let k = 1; k <= alcance; k++) {
+    const antes = polilinea[indiceMax - k]!;
+    const despues = polilinea[indiceMax + k]!;
+    if (distanciaMetros(antes, despues) > toleranciaM) {
+      return null;
+    }
+  }
+
+  return indiceMax;
+}
+
+/**
+ * Tramo VISIBLE de una polilínea — solo la ida, cuando la polilínea completa es de ida y
+ * vuelta sobre las mismas calles (ver `indiceDeRetornoDe`). Pensado para DIBUJAR el trazo en
+ * el mapa (`RouteMap`/`MapRoute.points` en `en-vivo-simulado.tsx`): dibujar también la vuelta
+ * es visualmente idéntico (retraza las mismas calles) pero hace que la mitad del trazo
+ * compartido con otra línea corra en sentido contrario, lo que arruina el `line-offset` de
+ * MapLibre (offsets de signo fijo quedan del mismo lado en la ida y del lado opuesto en la
+ * vuelta — ver comentario de `OFFSET_PX` en `en-vivo-simulado.tsx`).
+ *
+ * OJO: no usar para MOVER vehículos sobre la ruta — `posicionEnPolilinea` tiene que seguir
+ * recibiendo la polilínea COMPLETA (`LineaMock.polilinea`, no este resultado): el loop ida +
+ * vuelta es real para el movimiento del trufi, aunque sea redundante para el dibujo.
+ *
+ * Si la polilínea no es de ida y vuelta (no se detecta vértice de retorno), devuelve la
+ * misma polilínea sin cambios.
+ */
+export function trazoVisibleDe(polilinea: [number, number][]): [number, number][] {
+  const indiceRetorno = indiceDeRetornoDe(polilinea);
+  return indiceRetorno === null ? polilinea : polilinea.slice(0, indiceRetorno + 1);
+}
