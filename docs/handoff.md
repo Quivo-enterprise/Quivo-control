@@ -47,8 +47,8 @@
 - Toggle Leaflet/Google y overlay de métricas S1, solo en el spike. Sin batería ni conteo de `gps_point` del outbox.
 - Verificado: typecheck, 639/639 tests, lint, `expo prebuild` real. **No verificado:** build Gradle ni dispositivo.
 - **Build (CTO):** `cd apps/mobile && eas build --profile spike --platform android` desde la rama del spike.
-  - Firma con keystore debug, así que no se instala encima del RC: desinstalar el RC en el teléfono de prueba.
-  - Agregar el SHA-1 del APK (`apksigner verify --print-certs`) a la restricción Android de la API key de Maps.
+  - **APK construido 2026-09-28** (build EAS `45e7efc2`, versionCode 12, 197 MB). Verificado con `apksigner`/`aapt2`: firmado con el keystore remoto de EAS (SHA-1 `db6581…3420`, igual que el RC y ya permitido en la API key `quivo-conductor-maps-android`), `android:debuggable=true`, `index.android.bundle` embebido y meta-data `geo.API_KEY` presente.
+  - Se instala encima del RC (misma firma y mismo versionCode), sin desinstalar.
 - Costo conocido si se elige C1: `react-native-maps` pasa a ser dependencia nativa en todos los builds.
 
 **Deuda nueva:** `scripts/deploy-gcp.sh:803` descarta el stderr de `gcloud run services describe` y muestra "quivo-api no está desplegado" incluso cuando lo que venció es el token de gcloud (pasó el 09-28). Hay que mostrar el error real.
