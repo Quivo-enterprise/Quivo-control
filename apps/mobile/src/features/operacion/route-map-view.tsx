@@ -13,7 +13,10 @@ import {
 } from './route-map-protocol';
 import { useReconexionMapaOffline } from './reconexion-mapa-offline';
 
-interface RouteMapViewProps {
+/** Exportada para que `route-map-native.tsx` (spike S2, motor Google nativo) declare EXACTAMENTE
+ * la misma interfaz de props — intercambiable con este componente detrás del toggle de
+ * `operation-screen.tsx` (`EXPO_PUBLIC_SPIKE`). */
+export interface RouteMapViewProps {
   paquete: PaqueteDia;
   vehiculo: ContextoOperativoMovil['vehiculo'];
   proximoPuntoControlId: string | null;

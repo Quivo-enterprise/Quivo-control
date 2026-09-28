@@ -19,6 +19,9 @@ import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared
 import { MapErrorBoundary } from './map-error-boundary';
 import { completadosTrasDeteccion, proximoPuntoControlPendiente } from './proximo-punto-control';
 import { RouteMapView } from './route-map-view';
+import { RouteMapNative } from './route-map-native';
+import { SpikeMetricsOverlay } from './spike-metrics-overlay';
+import { MOTOR_MAPA_DEFAULT, alternarMotorMapa, etiquetaMotorMapa, spikeHabilitado, type MotorMapa } from './spike-motor-mapa';
 import { NextControlSheet } from './next-control-sheet';
 import { useSyncStatus } from './use-sync-status';
 import { formatearDistancia } from './format-distancia';
@@ -87,6 +90,11 @@ export function OperationScreen(
   const [observacionModalVisible, setObservacionModalVisible] = useState(false);
   const [recenterTick, setRecenterTick] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
+  // Spike `ubicación fluida` (S2, toggle de motor "en caliente"): estado SOLO relevante con
+  // `EXPO_PUBLIC_SPIKE === '1'` — el botón que lo alterna (más abajo, junto a los demás FABs)
+  // está oculto fuera del spike, así que este `useState` nunca se mueve de `MOTOR_MAPA_DEFAULT`
+  // ('leaflet') en un build normal — invariante "cero cambio de comportamiento fuera del spike".
+  const [motorMapa, setMotorMapa] = useState<MotorMapa>(MOTOR_MAPA_DEFAULT);
   const sheetPanY = useRef(new Animated.Value(0)).current;
 
   // M3 (hallazgo de revisión, medio): `puntosControl.length` se lee por REF, no como
@@ -307,7 +315,12 @@ export function OperationScreen(
         tracking={gps.tracking}
         recenterTick={recenterTick}
         rutaCalculada={rutaCalculada}
+        motorMapa={motorMapa}
       />
+
+      {spikeHabilitado() ? (
+        <SpikeMetricsOverlay fixesVisuales={gps.fixesVisuales} fixesEvidencia={gps.puntos} />
+      ) : null}
 
       <View pointerEvents="box-none" style={styles.topOverlay}>
         <View style={{ flexDirection: 'column', gap: quivoSpacing.sm }}>
@@ -444,6 +457,17 @@ export function OperationScreen(
             color={gps.tracking ? '#FD9E15' : '#3127B1'}
           />
         </Pressable>
+
+        {spikeHabilitado() && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Cambiar motor de mapa a ${etiquetaMotorMapa(motorMapa)}`}
+            style={[styles.recenterButton, { backgroundColor: quivoColors.accentSoft }]}
+            onPress={() => setMotorMapa(alternarMotorMapa)}
+          >
+            <Ionicons name="map-outline" size={22} color={quivoColors.accentStrong} />
+          </Pressable>
+        )}
 
         {__DEV__ && gps.tracking && proximoPuntoControl && (
           <Pressable
@@ -714,6 +738,7 @@ function MapLayer({
   tracking,
   recenterTick,
   rutaCalculada,
+  motorMapa,
 }: {
   loading: boolean;
   paquete: PaqueteDia | null;
@@ -723,6 +748,7 @@ function MapLayer({
   tracking: boolean;
   recenterTick: number;
   rutaCalculada: [number, number][] | null;
+  motorMapa: MotorMapa;
 }) {
   if (loading) {
     return (
@@ -733,9 +759,13 @@ function MapLayer({
     );
   }
   if (!paquete) return <View style={styles.mapFallback} />;
+  // Spike `ubicación fluida` (S2): `motorMapa` solo puede ser distinto de 'leaflet' con
+  // `EXPO_PUBLIC_SPIKE === '1'` (único caller del toggle, ver `OperationScreen` arriba) — fuera
+  // del spike este componente SIEMPRE monta `RouteMapView` (Leaflet), idéntico a hoy.
+  const MapaComponent = motorMapa === 'google' ? RouteMapNative : RouteMapView;
   return (
     <MapErrorBoundary>
-      <RouteMapView
+      <MapaComponent
         paquete={paquete}
         vehiculo={vehiculo}
         proximoPuntoControlId={nextPointId}

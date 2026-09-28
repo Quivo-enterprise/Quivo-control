@@ -187,6 +187,13 @@ export function useGpsOperativo(
     if (veredictoPublicable.current) marcarRecorridoActivoGlobal(tracking);
   }, [tracking]);
   const [puntos, setPuntos] = useState(0);
+  // Spike `ubicación fluida` (overlay de métricas S1, `spike-metrics-overlay.tsx`): espejo de
+  // `visualFixesRecibidos.current` (ver ese ref más abajo, ya existía para el `console.log` de
+  // `logVerboseHabilitado`) como estado — mismo patrón que `puntos`/`puntosRef` de arriba. Solo
+  // cambia mientras el canal visual corre (`canalVisualHabilitado`, apagado por default —
+  // `EXPO_PUBLIC_GPS_CANAL_VISUAL !== '1'`): fuera del spike este estado nunca se mueve de `0`,
+  // cero impacto en el build normal.
+  const [fixesVisuales, setFixesVisuales] = useState(0);
   const [resultado, setResultado] = useState<string | null>(null);
   const [errorGps, setErrorGps] = useState<string | null>(null);
   // QUI-338: estado del flujo de permisos de ubicación, separado de `errorGps` a propósito —
@@ -716,6 +723,7 @@ export function useGpsOperativo(
     if (watchVisualSubscription.current) return; // ya corriendo
     configurarObsolescencia(true);
     visualFixesRecibidos.current = 0;
+    setFixesVisuales(0);
     if (logVerboseHabilitado) {
       void BackgroundGeolocation.getCount()
         .then((n) => console.log(`[gps-visual] getCount() antes de iniciar: ${n}`))
@@ -733,6 +741,7 @@ export function useGpsOperativo(
         },
         (location) => {
           visualFixesRecibidos.current += 1;
+          setFixesVisuales(visualFixesRecibidos.current);
           if (logVerboseHabilitado) {
             console.log(`[gps-visual] fix visual #${visualFixesRecibidos.current}`);
           }
@@ -1694,6 +1703,9 @@ export function useGpsOperativo(
   return {
     tracking,
     puntos,
+    // Spike `ubicación fluida` (S1): ver el docblock de `fixesVisuales`/`setFixesVisuales` más
+    // arriba. Siempre `0` fuera del spike (canal visual apagado).
+    fixesVisuales,
     resultado,
     errorGps,
     // QUI-338: gate de permisos previo a "Iniciar recorrido" — `operation-screen.tsx` lo usa
