@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc --noEmit",
-    "eas-build-post-install": "cd ../.. && pnpm --filter \"@quivo/mobile^...\" build",
+    "eas-build-post-install": "node ./scripts/eas-build-post-install-spike.mjs && cd ../.. && pnpm --filter \"@quivo/mobile^...\" build",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
