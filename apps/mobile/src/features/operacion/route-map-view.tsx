@@ -3,7 +3,8 @@ import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
-import { construirHtml } from './route-map-html';
+import { MODO_DEMO } from '../../demo/flag';
+import { construirHtml, type OpcionesCamaraMapa } from './route-map-html';
 import {
   construirMensajeFotosVehiculos,
   construirMensajeOtrosVehiculos,
@@ -65,7 +66,21 @@ export function RouteMapView({
   // los puntos de control fijos) depende de `paquete`/`vehiculo` — el próximo punto de control es
   // estado que ahora viaja por `postMessage` (ver `enviarEstadoCompleto` abajo), no por reconstrucción
   // de HTML. Ver el comentario grande en `construirHtml` (route-map-html.ts) para el detalle.
-  const html = useMemo(() => construirHtml(paquete, vehiculo), [paquete, vehiculo]);
+  // Decisión de cámara del mapa (`route-map-html.ts`, `OpcionesCamaraMapa`): este componente SÍ
+  // conoce `MODO_DEMO` (es el punto de swap de siempre) y se la pasa a `construirHtml` como
+  // parámetro — el builder del HTML es puro y no lee el flag de build por su cuenta. `MODO_DEMO`
+  // es una constante evaluada una sola vez al arrancar el proceso (ver su docblock en
+  // `demo/flag.ts`), así que este objeto nunca cambia de valor entre renders — el `useMemo` con
+  // `[]` solo evita crear una referencia nueva en cada render (el `useMemo` de `html` de abajo
+  // depende de la REFERENCIA).
+  const opcionesCamara = useMemo<OpcionesCamaraMapa>(
+    () => ({ zoomSeguimiento: MODO_DEMO ? 15 : 17, modoCamaraDemo: MODO_DEMO }),
+    [],
+  );
+  const html = useMemo(
+    () => construirHtml(paquete, vehiculo, opcionesCamara),
+    [paquete, vehiculo, opcionesCamara],
+  );
   // `baseUrl` (dominio real de producción de este proyecto, confirmado en `apps/api/README.md` y
   // `docs/plan-integracion-redesign-jairo.md`: CORS_ORIGIN/paneles públicos apuntan a
   // `control.myquivo.com`) — hallazgo del code-review de esta entrega: sin `baseUrl`, el WebView

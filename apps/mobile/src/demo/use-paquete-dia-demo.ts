@@ -3,7 +3,7 @@ import type { PaqueteDia } from '@quivo/shared';
 import type { usePaqueteDia } from '../features/operacion/use-paquete-dia';
 import { LINEAS_MOCK } from './datos/datos';
 import type { LineaMockId } from './datos/tipos';
-import { idParadaDemo, uuidDemo } from './cuentas';
+import { fechaLocalDemo, idParadaDemo, turnoDesdeHoraLocal, uuidDemo } from './cuentas';
 import { useDemo } from './demo-provider';
 
 /**
@@ -21,9 +21,29 @@ export function usePaqueteDiaDemo(
   _obtenerAccessToken: () => Promise<string | null>,
 ): ReturnType<typeof usePaqueteDia> {
   const { estado } = useDemo();
-  const paquete = useMemo(
+  const paqueteBase = useMemo(
     () => construirPaqueteDiaDemo(estado.lineaPropiaId),
     [estado.lineaPropiaId],
+  );
+
+  // FIX POST-REVISIÓN (hallazgo de revisión — "fecha/horario congelados por un memo keyed solo
+  // en lineaPropiaId"): `paqueteBase` (arriba) memoiza TODO el `PaqueteDia` por línea — correcto
+  // para la geometría/paradas (no cambian nunca para la misma línea dentro de una sesión), pero
+  // `asignacion.fecha`/`horario` (calculados adentro de `construirPaqueteDiaDemo` con su propio
+  // `Date.now()`) quedaban pegados al momento del PRIMER cálculo para siempre — si la demo sigue
+  // corriendo horas (o cruza medianoche) sin que `lineaPropiaId` cambie, ese memo nunca vuelve a
+  // ejecutarse y estos dos campos quedan desincronizados del reloj real. Se recalculan ACÁ en
+  // cada render (barato: solo lectura de reloj + comparaciones, no la geometría pesada) y entran
+  // en su propio `useMemo` con dependencias por VALOR (`fecha`/`horario` son strings) — la
+  // referencia de `paquete` solo cambia cuando el VALOR de verdad cambia (nunca dentro del mismo
+  // minuto/hora), así que esto no reintroduce el problema de referencia inestable por tick que
+  // corrigieron otros hallazgos de esta ronda.
+  const ahora = Date.now();
+  const horario = turnoDesdeHoraLocal(ahora);
+  const fecha = fechaLocalDemo(ahora);
+  const paquete = useMemo(
+    () => ({ ...paqueteBase, asignacion: { ...paqueteBase.asignacion, fecha, horario } }),
+    [paqueteBase, fecha, horario],
   );
 
   return useMemo(
@@ -50,8 +70,15 @@ export function construirPaqueteDiaDemo(lineaId: LineaMockId): PaqueteDia {
   return {
     asignacion: {
       id: uuidDemo(`paquete-asignacion-${lineaId}`),
-      fecha: new Date(ahora).toISOString().slice(0, 10),
-      horario: 'manana',
+      // FIX POST-REVISIÓN: mismo bug que `contextoDeCuenta` (`cuentas.ts`) — `toISOString()`
+      // devuelve la fecha en UTC, no la local del teléfono. `fecha`/`horario` de este `PaqueteDia`
+      // no se muestran hoy en ninguna pantalla (solo `contexto.asignacion.*`, que sí viene de
+      // `cuentas.ts`), pero se corrige igual para no dejar la misma trampa sembrada acá. Nota:
+      // `usePaqueteDiaDemo` (arriba) SOBRESCRIBE estos dos campos en cada render con un `ahora`
+      // fresco — acá quedan igual de correctos para quien llame a esta función pura directo
+      // (como el test), sin depender de ese hook.
+      fecha: fechaLocalDemo(ahora),
+      horario: turnoDesdeHoraLocal(ahora),
       horaSalida: null,
       horaPresentacion: null,
       venceAt: new Date(ahora + 24 * 60 * 60 * 1000).toISOString(),

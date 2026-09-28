@@ -18,7 +18,7 @@ import { BlurView } from 'expo-blur';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OperationStackParamList } from '../../app/operation-navigator';
-import { useGpsContext } from '../operacion/gps-provider';
+import { useGpsTracking } from '../operacion/gps-provider';
 import { useSyncStatus } from '../operacion/use-sync-status';
 import { usePerfilQuery as usePerfilQueryReal } from './use-perfil-query';
 import { useTextScale, useOperacionSettings } from './use-operacion-settings';
@@ -45,7 +45,10 @@ export interface PerfilScreenProps extends NativeStackScreenProps<OperationStack
 
 export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAccessToken, onLogout }: PerfilScreenProps) {
   const { data: contexto, isLoading, refetch } = usePerfilQuery(contextoInicial, obtenerAccessToken);
-  const { gps } = useGpsContext();
+  // FIX POST-REVISIÓN (hallazgo de revisión — "Perfil re-renderiza cada segundo de tracking"):
+  // `useGpsTracking()` en vez de `useGpsContext()` — esta pantalla solo lee `tracking` (ver
+  // `statusLabel`/`statusColor` abajo), nunca `posicionActual`. Ver `gps-provider.tsx`.
+  const { tracking } = useGpsTracking();
   // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
   // el llamado a `useSyncStatus` se CONSERVA — drena el outbox también mientras esta pantalla
   // está abierta (ver el comentario M5 en `sync-outbox.ts` sobre el doble montaje con
@@ -62,9 +65,9 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   }
 
   const modeloVehiculo = `${contexto.vehiculo.marca} ${contexto.vehiculo.modelo}`.trim() || 'Toyota Hiace';
-  const statusLabel = gps.tracking ? 'EN LINEA' : 'EN ESPERA';
+  const statusLabel = tracking ? 'EN LINEA' : 'EN ESPERA';
   // En Figma: EN ESPERA es azul (#3127B1) y EN LINEA es naranja/ámbar (#FD9E15)
-  const statusColor = gps.tracking ? '#FD9E15' : '#3127B1';
+  const statusColor = tracking ? '#FD9E15' : '#3127B1';
 
   return (
     <View style={styles.container}>

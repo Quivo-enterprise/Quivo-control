@@ -97,20 +97,43 @@ export function useGpsOperativoDemo(
     [acciones],
   );
 
-  return {
-    tracking: estado.tracking,
-    puntos,
-    resultado: null,
-    errorGps: null,
-    permisoGps: PERMISO_GPS_DEMO,
-    abrirAjustesPermisoGps,
-    estadoPermisoActividad: 'concedido' as EstadoPermisoActividad,
-    ultimaDeteccion,
-    deteccionAproximacion: null,
-    ultimoAnuncioLlegada,
-    posicionActual,
-    iniciar,
-    detener,
-    simularDeteccion,
-  };
+  // FIX POST-REVISIÓN (perf demo — `docs/plan-apk-demo-conductor.md`, hallazgo de latencia de
+  // toques): sin este `useMemo`, este hook devolvía un objeto NUEVO en cada render — y como
+  // `useDemo()` (arriba) fuerza un render de este hook en CADA tick del `DemoProvider` (1 s),
+  // `gps` cambiaba de referencia una vez por segundo aunque nada relevante hubiera cambiado
+  // (p. ej. `en_cola`, con `tracking`/`posicionActual`/`ultimaDeteccion` todos estables). Ese
+  // `gps` inestable es justo lo que `GpsProvider` (`gps-provider.tsx`) mete en `GpsContext` —
+  // con esto memoizado, `gps` solo cambia de referencia cuando alguno de sus campos realmente
+  // cambió, así que `GpsContext` (con su propio `useMemo`, ver `gps-provider.tsx`) deja de forzar
+  // un re-render de CADA pantalla que lo consume (`OperationScreen` Y `PerfilScreen`, aunque
+  // Perfil esté encima y el mapa no se vea) una vez por segundo mientras nada de GPS cambió.
+  return useMemo(
+    () => ({
+      tracking: estado.tracking,
+      puntos,
+      resultado: null,
+      errorGps: null,
+      permisoGps: PERMISO_GPS_DEMO,
+      abrirAjustesPermisoGps,
+      estadoPermisoActividad: 'concedido' as EstadoPermisoActividad,
+      ultimaDeteccion,
+      deteccionAproximacion: null,
+      ultimoAnuncioLlegada,
+      posicionActual,
+      iniciar,
+      detener,
+      simularDeteccion,
+    }),
+    [
+      estado.tracking,
+      puntos,
+      abrirAjustesPermisoGps,
+      ultimaDeteccion,
+      ultimoAnuncioLlegada,
+      posicionActual,
+      iniciar,
+      detener,
+      simularDeteccion,
+    ],
+  );
 }

@@ -58,6 +58,35 @@ describe('crearEstadoInicial', () => {
     const { adelante } = adelanteAtras(estado, TRUFI_PROPIO);
     expect(adelante).toBeDefined();
   });
+
+  // FIX POST-REVISIÓN (hallazgo en teléfono real): antes la unidad más cercana adelante arrancaba
+  // a ~11 km en Z12 (fracción arbitraria del largo total de la polilínea, ~38 km) — demasiado
+  // lejos para verse en cámara. Ahora el espaciado sale de la FRECUENCIA de la línea × la
+  // velocidad nominal (ver el docblock de `crearEstadoInicial`), así que la unidad más cercana
+  // adelante queda dentro de un rango realista apenas arranca la jornada. Se prueban las DOS
+  // líneas (Z12 con `TRUFI_PROPIO`, Línea 120 con la unidad jugable `trufi-l120-2` de
+  // `cuentas.ts`) para no dejar sin cubrir la línea que ningún otro test ejercita como "propia".
+  it('la unidad más cercana adelante arranca a una distancia realista (no a fracciones arbitrarias del largo total), en ambas líneas', () => {
+    const estadoZ12 = iniciarJornada(crearEstadoInicial(TRUFI_PROPIO, AHORA_0), AHORA_0);
+    const { adelante: adelanteZ12 } = adelanteAtras(estadoZ12, TRUFI_PROPIO);
+    expect(adelanteZ12).toBeDefined();
+    expect(adelanteZ12!.distanciaM).toBeGreaterThanOrEqual(1500);
+    expect(adelanteZ12!.distanciaM).toBeLessThanOrEqual(4000);
+
+    const TRUFI_PROPIO_L120 = 'trufi-l120-2'; // misma unidad jugable que `cuentas.ts`
+    const estadoL120 = iniciarJornada(crearEstadoInicial(TRUFI_PROPIO_L120, AHORA_0), AHORA_0);
+    const { adelante: adelanteL120 } = adelanteAtras(estadoL120, TRUFI_PROPIO_L120);
+    expect(adelanteL120).toBeDefined();
+    expect(adelanteL120!.distanciaM).toBeGreaterThanOrEqual(1500);
+    expect(adelanteL120!.distanciaM).toBeLessThanOrEqual(4000);
+  });
+
+  it('preserva el orden: la unidad que salió antes queda siempre más avanzada que la que salió después', () => {
+    const estado = crearEstadoInicial(TRUFI_PROPIO, AHORA_0);
+    // z12-1 salió 2 períodos antes de la propia (z12-3); z12-2 salió 1 período antes — z12-1
+    // tiene que quedar MÁS avanzada que z12-2, nunca al revés.
+    expect(estado.unidades['trufi-z12-1']!.avance).toBeGreaterThan(estado.unidades['trufi-z12-2']!.avance);
+  });
 });
 
 describe('iniciarJornada / finalizarJornada', () => {
@@ -379,6 +408,55 @@ describe('iniciarJornada — no libera un backlog de salidas si el chofer tardó
     estado = avanzar(estado, FRECUENCIA_MS.z12 / 1000 + 5);
     expect(estado.unidades['trufi-z12-4']?.fase).toBe('en_ruta');
     expect(estado.unidades['trufi-z12-5']?.fase).toBe('en_cola');
+  });
+});
+
+describe('iniciarJornada — reubica a las unidades adelante tras esperar en cola (hallazgo de revisión)', () => {
+  // FIX POST-REVISIÓN (hallazgo de revisión — "el espaciado inicial solo vale si se toca 'Iniciar'
+  // de inmediato"): mientras el chofer espera en la cola, las unidades ADELANTE (ya `en_ruta`) se
+  // siguen moviendo a ~333 m/min (`VELOCIDAD_NOMINAL_MPS`). La espera de cada línea se elige para
+  // que la más cercana SUPERE los 4.000 m sin llegar a completar una vuelta (lo que la reciclaría
+  // de vuelta a la cola y invalidaría el test): 5 min en Z12 (2.667 + 1.667 = 4.333 m, muy por
+  // debajo de sus 38 km de circuito) y 2 min en L120 (4.000 + 667 = 4.667 m — el ejemplo exacto del
+  // hallazgo, "a 2 min L120 ahead is at 4.7 km" — todavía lejos de sus ~5 km de circuito completo).
+  // `iniciarJornada` tiene que reubicarla al arrancar, no solo al crear el estado inicial.
+  it('la más cercana adelante vuelve a quedar en [1.500, 4.000] m aunque el chofer tarde varios minutos, en Z12 y L120', () => {
+    const esperaZ12 = avanzar(crearEstadoInicial(TRUFI_PROPIO, AHORA_0), 5 * 60);
+    const estadoZ12 = iniciarJornada(esperaZ12, esperaZ12.ahora);
+    const { adelante: adelanteZ12 } = adelanteAtras(estadoZ12, TRUFI_PROPIO);
+    expect(adelanteZ12).toBeDefined();
+    expect(adelanteZ12!.distanciaM).toBeGreaterThanOrEqual(1500);
+    expect(adelanteZ12!.distanciaM).toBeLessThanOrEqual(4000);
+
+    const TRUFI_PROPIO_L120 = 'trufi-l120-2'; // misma unidad jugable que `cuentas.ts`
+    const esperaL120 = avanzar(crearEstadoInicial(TRUFI_PROPIO_L120, AHORA_0), 2 * 60);
+    const estadoL120 = iniciarJornada(esperaL120, esperaL120.ahora);
+    const { adelante: adelanteL120 } = adelanteAtras(estadoL120, TRUFI_PROPIO_L120);
+    expect(adelanteL120).toBeDefined();
+    expect(adelanteL120!.distanciaM).toBeGreaterThanOrEqual(1500);
+    expect(adelanteL120!.distanciaM).toBeLessThanOrEqual(4000);
+  });
+
+  // FIX POST-REVISIÓN (hallazgo de revisión — "el clamp por unidad apila varias en el mismo
+  // avance"): con varias unidades adelante, cada una tiene que quedar en un `avance` ESTRICTAMENTE
+  // mayor que la anterior — nunca dos apiladas en el mismo punto. Se ejercita con la unidad propia
+  // en la ÚLTIMA posición de cada línea (todas las demás quedan adelante, en orden de salida) para
+  // maximizar la cantidad de unidades reubicadas de una sola vez. Ojo con el orden esperado: la que
+  // salió MÁS temprano (menor `posicion`) es la que tiene MÁS avance (va más adelante en su vuelta).
+  it('preserva el orden estrictamente creciente entre varias unidades adelante, sin apilar ninguna, en Z12 y L120', () => {
+    const estadoZ12 = iniciarJornada(crearEstadoInicial('trufi-z12-5', AHORA_0), AHORA_0);
+    // Ascendente por avance = descendente por antigüedad de salida: z12-4 (nearest ahead) ...
+    // z12-1 (salió primero, la más avanzada).
+    const avancesZ12 = ['trufi-z12-4', 'trufi-z12-3', 'trufi-z12-2', 'trufi-z12-1'].map(
+      (id) => estadoZ12.unidades[id]!.avance,
+    );
+    for (let i = 1; i < avancesZ12.length; i++) {
+      expect(avancesZ12[i]).toBeGreaterThan(avancesZ12[i - 1]!);
+    }
+
+    const estadoL120 = iniciarJornada(crearEstadoInicial('trufi-l120-3', AHORA_0), AHORA_0);
+    const avancesL120 = ['trufi-l120-2', 'trufi-l120-1'].map((id) => estadoL120.unidades[id]!.avance);
+    expect(avancesL120[1]).toBeGreaterThan(avancesL120[0]!);
   });
 });
 

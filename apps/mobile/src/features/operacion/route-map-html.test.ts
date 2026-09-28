@@ -1709,3 +1709,146 @@ describe('ajustarVistaARuta — guarda contra fitBounds con una ruta sin coorden
     expect(mapaFalso.fitBoundsLlamadas).toBe(0);
   });
 });
+
+// Hallazgo de revisión (docs/plan-apk-demo-conductor.md): en demo, 'map.flyTo' animado (0.5-0.7s)
+// en CADA actualización de seguimiento ('tracking'/'position' — disparadas una vez por segundo
+// mientras hay jornada activa, ver route-map-view.tsx) dejaba la cámara animando ~70% del tiempo.
+// `construirHtml` ahora recibe `zoomSeguimiento`/`modoCamaraDemo` como parámetro (`OpcionesCamaraMapa`)
+// en vez de leer `MODO_DEMO` a nivel de módulo — este describe cubre el branch demo pasando esas
+// opciones directo, sin mockear el flag de build.
+describe('construirHtml — cámara de seguimiento en modo demo (hallazgo de revisión)', () => {
+  function extraerScriptDeAplicacion(htmlGenerado: string): string {
+    const inicio = htmlGenerado.lastIndexOf('<script>');
+    const fin = htmlGenerado.indexOf('</script>', inicio);
+    if (inicio === -1 || fin === -1) {
+      throw new Error('No se encontró el <script> de la aplicación en el HTML generado.');
+    }
+    return htmlGenerado.slice(inicio + '<script>'.length, fin);
+  }
+
+  function crearCapaLeafletFalsa(tipo: string, args: unknown) {
+    const capa: Record<string, unknown> = { tipo, args, options: {} };
+    capa.addTo = (mapaFalso: { capas: unknown[] }) => {
+      mapaFalso.capas.push(capa);
+      return capa;
+    };
+    capa.on = () => capa;
+    capa.setStyle = () => capa;
+    capa.setIcon = () => capa;
+    capa.setLatLng = () => capa;
+    capa.getLatLng = () => ({ lat: -17.38, lng: -66.15 });
+    capa.getBounds = () => 'bounds-falso';
+    capa.bringToFront = () => capa;
+    return capa;
+  }
+
+  type LlamadaCamara = { latlng: unknown; zoom?: number; opts: Record<string, unknown> };
+
+  function crearLFalso() {
+    return {
+      map: () => {
+        const mapaFalso = {
+          capas: [] as unknown[],
+          flyToLlamadas: [] as LlamadaCamara[],
+          panToLlamadas: [] as LlamadaCamara[],
+          setViewLlamadas: [] as LlamadaCamara[],
+          setView(latlng: unknown, zoom: number) {
+            mapaFalso.setViewLlamadas.push({ latlng, zoom, opts: {} });
+            return mapaFalso;
+          },
+          on() {
+            return mapaFalso;
+          },
+          flyTo(latlng: unknown, zoom: number, opts: Record<string, unknown>) {
+            mapaFalso.flyToLlamadas.push({ latlng, zoom, opts });
+            return mapaFalso;
+          },
+          panTo(latlng: unknown, opts: Record<string, unknown>) {
+            mapaFalso.panToLlamadas.push({ latlng, opts });
+            return mapaFalso;
+          },
+          fitBounds() {
+            return mapaFalso;
+          },
+          removeLayer(capa: unknown) {
+            mapaFalso.capas = mapaFalso.capas.filter((c) => c !== capa);
+            return mapaFalso;
+          },
+        };
+        return mapaFalso;
+      },
+      tileLayer: (url: string, opts: unknown) => crearCapaLeafletFalsa('tileLayer', { url, opts }),
+      polyline: (coords: unknown, opts: unknown) => crearCapaLeafletFalsa('polyline', { coords, opts }),
+      marker: (latlng: unknown, opts: unknown) => crearCapaLeafletFalsa('marker', { latlng, opts }),
+      divIcon: (opts: unknown) => ({ tipo: 'divIcon', opts }),
+    };
+  }
+
+  function correrScriptDemo() {
+    const html = construirHtml(paqueteDePrueba(), vehiculoDePrueba, {
+      zoomSeguimiento: 15,
+      modoCamaraDemo: true,
+    });
+    const scriptAplicacion = extraerScriptDeAplicacion(html);
+
+    let handlerMensajeWindow: ((event: { data: string }) => void) | undefined;
+    const sandbox: Record<string, unknown> = {
+      L: crearLFalso(),
+      document: { addEventListener: () => {} },
+      window: {
+        addEventListener: (evento: string, cb: (event: { data: string }) => void) => {
+          if (evento === 'message') handlerMensajeWindow = cb;
+        },
+      },
+      console,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Date,
+      Math,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(scriptAplicacion, sandbox);
+
+    return {
+      handlerMensajeWindow: handlerMensajeWindow!,
+      mapaFalso: sandbox.map as {
+        flyToLlamadas: LlamadaCamara[];
+        panToLlamadas: LlamadaCamara[];
+        setViewLlamadas: LlamadaCamara[];
+      },
+    };
+  }
+
+  it('las actualizaciones de seguimiento (tracking/position) usan panTo, nunca flyTo', () => {
+    const { handlerMensajeWindow, mapaFalso } = correrScriptDemo();
+
+    // Primer fix de posición + tracking activo — igual que un tick del motor demo.
+    handlerMensajeWindow({ data: JSON.stringify({ type: 'position', lat: -17.38, lng: -66.15 }) });
+    handlerMensajeWindow({ data: JSON.stringify({ type: 'tracking', active: true }) });
+    // Varios ticks más, como si el motor demo siguiera tickeando cada 1s.
+    for (let i = 0; i < 5; i++) {
+      handlerMensajeWindow({
+        data: JSON.stringify({ type: 'position', lat: -17.38 + i * 0.001, lng: -66.15 }),
+      });
+    }
+
+    expect(mapaFalso.flyToLlamadas).toHaveLength(0);
+    expect(mapaFalso.panToLlamadas.length).toBeGreaterThan(0);
+    // panTo casi instantáneo (0.25s) — nunca la duración de flyTo real (0.5-0.7s).
+    mapaFalso.panToLlamadas.forEach((llamada) => {
+      expect(llamada.opts.duration).toBe(0.25);
+    });
+  });
+
+  it('el recenter explícito sigue usando flyTo (con zoom 15) aunque el resto del seguimiento use panTo', () => {
+    const { handlerMensajeWindow, mapaFalso } = correrScriptDemo();
+
+    handlerMensajeWindow({ data: JSON.stringify({ type: 'position', lat: -17.38, lng: -66.15 }) });
+    handlerMensajeWindow({ data: JSON.stringify({ type: 'recenter' }) });
+
+    expect(mapaFalso.flyToLlamadas).toHaveLength(1);
+    expect(mapaFalso.flyToLlamadas[0]!.zoom).toBe(15);
+  });
+});

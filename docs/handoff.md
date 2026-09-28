@@ -4231,7 +4231,22 @@ Copia temporal (sin remote). Plan: `docs/plan-mock-flota-en-vivo.md`. Flag `NEXT
   - el chofer puede ser de las dos líneas;
   - la verificación se hace en un teléfono por USB;
   - la tarjeta «Datos de hoy» es mock.
-- **Estado (2026-09-27):** implementado; APK compilado y verificado solo por tipos, tests y el manifest del APK. **Falta la verificación en el teléfono**, porque no hubo ningún dispositivo conectado.
+- **Estado (2026-09-28): verificado en el teléfono** (Redmi Note 10 Pro, Android 13, por depuración inalámbrica). Funcionan:
+  - login y cambio de conductor (misma placa, otro PIN);
+  - las dos líneas;
+  - hoja de ruta (fecha local y turno según la salida programada);
+  - iniciar el recorrido;
+  - adelante/atrás (Z12 ~3 km, L120 ~4 km) y otros trufis en el mapa;
+  - sin conexión y sincronización;
+  - Reportar;
+  - teléfono en el perfil;
+  - «Datos usados hoy»;
+  - panel demo.
+  - No se probó la foto por cámara ni la elección desde la galería: el selector abre, pero las fotos del teléfono son personales.
+  - Lentitud: la causa medida fue que el contexto GPS no estaba memoizado y Perfil y Ajustes se re-renderizaban cada segundo. Además, el flyTo del mapa se animaba en cada tick. Las dos cosas están corregidas.
+  - Hubo una segunda ronda de `/code-review` con 8 correcciones: reubicación de los trufis de adelante al iniciar, cámara con panTo, FABs sobre el sheet medido por onLayout, contexto `useGpsTracking` angosto, turno y fecha de madrugada, y paquete con la fecha viva.
+  - Tests móviles 616/616.
+- Estado anterior (2026-09-27): implementado; APK compilado y verificado solo por tipos, tests y el manifest del APK.
   - El APK está en `~/Downloads/quivo-conductor-demo.apk` (118 MB, package `.demo`, etiqueta «QUIVO Conductor»).
   - Tests móviles 602/602 (45 archivos). Typecheck limpio. Lint con 0 errores y 17 warnings, los mismos que ya había.
   - Código: `apps/mobile/src/demo/` (motor puro, cuentas, datos portados del web, fotos en base64, hooks mock, UI y pantallas). Los swaps a nivel de módulo están en `index.js`, `App.tsx`, `gps-provider.tsx`, `perfil-screen.tsx`, `ajustes-screen.tsx`, `operation-screen.tsx`, `route-map-*` y `sentry-init.ts`.

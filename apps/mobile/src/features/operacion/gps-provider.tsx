@@ -26,6 +26,27 @@ interface GpsContextValue {
 
 const GpsContext = createContext<GpsContextValue | null>(null);
 
+/**
+ * FIX POST-REVISIÓN (hallazgo de revisión — "Perfil/Ajustes re-renderizan cada segundo de
+ * tracking"): `gps` (arriba) SÍ debe cambiar de referencia cada tick mientras hay jornada activa
+ * — `gps.posicionActual` avanza de verdad, y `OperationScreen`/`MapLayer` necesitan ese cambio
+ * para redibujar la posición en el mapa. El problema es que `PerfilScreen`/`AjustesScreen` están
+ * ARRIBA en la pila de navegación (el mapa no se ve, no hay nada que redibujar) y de `gps` solo
+ * leen `gps.tracking` (un booleano que cambia 2 veces por jornada, no 1 vez por segundo) — pero
+ * como consumen el `GpsContext` completo (`useGpsContext()`), CUALQUIER cambio de `gps` las
+ * re-renderiza igual, tracking o no.
+ *
+ * Contexto separado, con SOLO `tracking`, memoizado por su propio valor — mientras `tracking` no
+ * cambie, esta referencia tampoco cambia, así que un consumidor que solo lea de acá no se entera
+ * de los ticks de posición. Mismos valores que el `gps.tracking` real (real y demo comparten
+ * `GpsProvider`) — no es un cambio de comportamiento, solo de qué dispara el re-render.
+ */
+interface GpsTrackingContextValue {
+  tracking: boolean;
+}
+
+const GpsTrackingContext = createContext<GpsTrackingContextValue | null>(null);
+
 export function GpsProvider({
   children,
   sesionId,
@@ -119,9 +140,26 @@ export function GpsProvider({
     }
   }, [gps.ultimoAnuncioLlegada, settings.sonidoConfirmacion, reproducirSonidoConfirmacion]);
 
+  // FIX POST-REVISIÓN (perf demo — `docs/plan-apk-demo-conductor.md`, hallazgo de latencia de
+  // toques): sin este `useMemo`, el valor de `GpsContext` era un objeto literal NUEVO en cada
+  // render de `GpsProvider` — y en demo, `GpsProvider` re-renderiza una vez por segundo (consume
+  // `useDemo()` transitivamente vía `useGpsOperativoDemo`/`usePaqueteDiaDemo`). Con `gps`/
+  // `paqueteDia` ya memoizados en su origen (`use-gps-operativo-demo.ts`, `use-paquete-dia-demo.ts`),
+  // memoizar acá el objeto que los envuelve evita una referencia nueva cuando NINGUNO de los dos
+  // cambió — pero mientras hay jornada activa, `gps` SÍ cambia de referencia una vez por segundo a
+  // propósito (`gps.posicionActual` avanza de verdad, `OperationScreen`/`MapLayer` necesitan
+  // enterarse). `PerfilScreen`/`AjustesScreen` NO deberían pagar ese costo (no dibujan el mapa) —
+  // ver `GpsTrackingContext`/`useGpsTracking` más abajo, la vía que sí las aísla del tick de
+  // posición.
+  const value = useMemo(() => ({ paqueteDia, gps }), [paqueteDia, gps]);
+  // Único campo que `PerfilScreen`/`AjustesScreen` leen de `gps` (`useGpsContext().gps.tracking`,
+  // antes de este fix) — memoizado por su propio valor, así que esta referencia NO cambia en cada
+  // tick de posición, solo cuando `tracking` de verdad pasa de `true` a `false` o viceversa.
+  const trackingValue = useMemo(() => ({ tracking: gps.tracking }), [gps.tracking]);
+
   return (
-    <GpsContext.Provider value={{ paqueteDia, gps }}>
-      {children}
+    <GpsContext.Provider value={value}>
+      <GpsTrackingContext.Provider value={trackingValue}>{children}</GpsTrackingContext.Provider>
     </GpsContext.Provider>
   );
 }
@@ -130,6 +168,17 @@ export function useGpsContext() {
   const ctx = useContext(GpsContext);
   if (!ctx) {
     throw new Error('useGpsContext debe ser usado dentro de un GpsProvider');
+  }
+  return ctx;
+}
+
+/** Ver el docblock de `GpsTrackingContext` (arriba) — usar en vez de `useGpsContext()` cuando lo
+ * único que hace falta es `tracking` (hoy, `PerfilScreen`/`AjustesScreen`): evita re-renderizar
+ * en cada tick de `posicionActual` mientras hay jornada activa. */
+export function useGpsTracking() {
+  const ctx = useContext(GpsTrackingContext);
+  if (!ctx) {
+    throw new Error('useGpsTracking debe ser usado dentro de un GpsProvider');
   }
   return ctx;
 }

@@ -4,7 +4,7 @@ import { resolverMarcaLinea, type ContextoOperativoMovil, type LineaBrand } from
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OperationStackParamList } from '../../app/operation-navigator';
 import { quivoColors, quivoFonts, quivoRadius } from '../../shared/theme/quivo-theme';
-import { FOTOS_TRUFI, LINEAS_MOCK, TRUFIS_MOCK, proximaSalidaDe, useDemo } from '..';
+import { FOTOS_TRUFI, LIMITES_TURNO_DEMO, LINEAS_MOCK, TRUFIS_MOCK, proximaSalidaDe, useDemo } from '..';
 import type { ParadaMock, UnidadDemo } from '..';
 
 /**
@@ -23,13 +23,25 @@ export interface HojaDeRutaScreenProps extends NativeStackScreenProps<OperationS
 }
 
 /** El contrato (`ContextoOperativoMovil`) no trae horario de inicio/fin de turno — solo
- * `asignacion.horario` (`manana|tarde|noche`). Rango horario COSMÉTICO, mock, solo para que la
- * tarjeta "Turno de hoy" tenga un dato de horario que mostrar en la toma (no viene de ningún
- * cálculo del motor ni se usa para nada más). */
+ * `asignacion.horario` (`manana|tarde|noche`). El rótulo `inicio – fin` es COSMÉTICO, mock, solo
+ * para que la tarjeta "Turno de hoy" tenga un dato de horario que mostrar en la toma, pero los
+ * NÚMEROS salen de `LIMITES_TURNO_DEMO` (`../cuentas.ts`) — la misma tabla que usa
+ * `turnoDesdeHoraLocal` para decidir `asignacion.horario` al loguear.
+ *
+ * FIX POST-REVISIÓN (hallazgo de revisión — 2 fuentes de verdad divergentes): la primera versión
+ * de este fix hardcodeaba estos rangos ACÁ por separado ("tarde 14:00-20:00 / noche 20:00-00:00")
+ * mientras `turnoDesdeHoraLocal` usaba otros ("tarde" hasta las 22:00) — a las 21:00 el turno
+ * elegido era `'tarde'` pero la tarjeta mostraba "14:00 – 20:00", ya vencido a esa hora. Derivar
+ * el rótulo de `LIMITES_TURNO_DEMO` en vez de repetir los números hace que sea IMPOSIBLE que
+ * vuelvan a desalinearse — cualquier cambio de horario se hace en un solo lugar. */
+function horaHHMM(hora: number): string {
+  return `${String(hora).padStart(2, '0')}:00`;
+}
+
 const HORARIO_TURNO_DEMO: Record<ContextoOperativoMovil['asignacion']['horario'], { inicio: string; fin: string }> = {
-  manana: { inicio: '06:00', fin: '14:00' },
-  tarde: { inicio: '14:00', fin: '20:00' },
-  noche: { inicio: '20:00', fin: '00:00' },
+  manana: { inicio: horaHHMM(LIMITES_TURNO_DEMO.manana.inicioHora), fin: horaHHMM(LIMITES_TURNO_DEMO.manana.finHora) },
+  tarde: { inicio: horaHHMM(LIMITES_TURNO_DEMO.tarde.inicioHora), fin: horaHHMM(LIMITES_TURNO_DEMO.tarde.finHora) },
+  noche: { inicio: horaHHMM(LIMITES_TURNO_DEMO.noche.inicioHora), fin: horaHHMM(LIMITES_TURNO_DEMO.noche.finHora) },
 };
 
 const LABEL_TURNO: Record<ContextoOperativoMovil['asignacion']['horario'], string> = {

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Animated, Linking, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, type LayoutChangeEvent, Linking, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button } from '../../shared/components/Button';
@@ -25,6 +25,11 @@ export interface NextControlSheetProps {
   onStart: () => void;
   onFinish: () => void;
   panY: Animated.Value;
+  /** docs/plan-apk-demo-conductor.md (paso B, hallazgo de layout) — `operation-screen.tsx` (solo
+   * demo) lo usa para ubicar la columna de FABs justo arriba de este sheet sin importar cuánto
+   * mida (varía con `gpsError` visible, tamaño de fuente del sistema, etc.). Opcional y sin
+   * ningún efecto fuera de demo (nadie lo pasa fuera de ese caso). */
+  onHeightChange?: (alturaPx: number) => void;
 }
 
 export function NextControlSheet(props: NextControlSheetProps) {
@@ -71,6 +76,9 @@ export function NextControlSheet(props: NextControlSheetProps) {
       ? '95m.'
       : formatearDistancia(props.distanciaMetros);
 
+  const { onHeightChange } = props;
+  const onLayoutSheet = (e: LayoutChangeEvent) => onHeightChange?.(e.nativeEvent.layout.height);
+
   return (
     <Animated.View
       style={[
@@ -79,6 +87,7 @@ export function NextControlSheet(props: NextControlSheetProps) {
           transform: [{ translateY: panY }],
         },
       ]}
+      onLayout={onHeightChange ? onLayoutSheet : undefined}
     >
       <View style={styles.dragArea} {...panResponder.panHandlers}>
         <View style={styles.dragHandle} />

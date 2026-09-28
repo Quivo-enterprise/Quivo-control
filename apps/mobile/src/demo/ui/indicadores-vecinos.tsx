@@ -19,9 +19,22 @@ export interface IndicadoresVecinosDemoProps {
  * pieza clave del pedido del CTO. Dos tarjetas glass lado a lado (nunca apiladas a todo el ancho:
  * a 360-412dp de ancho de teléfono siguen entrando cómodas una junto a la otra), bajo la tarjeta
  * de identidad del top overlay (`operation-screen.tsx`, ver `docs/plan-apk-demo-conductor.md`,
- * paso B). `minWidth` en los textos numéricos + `fontVariant: tabular-nums` para que un cambio de
- * "850 m" a "1,2 km" (o de "~3 min" a "~12 min") no reacomode el resto de la fila en cada tick del
- * motor demo (1 s) — solo el contenido de esos `Text` cambia, nunca el layout de la tarjeta.
+ * paso B).
+ *
+ * FIX POST-REVISIÓN (hallazgo en teléfono real, 1080×2400 / ~392dp de ancho): la versión anterior
+ * metía "a {distancia} · ~{min} min" (o "En cola · sale {hora}") en UNA sola fila horizontal —
+ * a 392dp de ancho de tarjeta (~176dp cada una en la fila de 2) ese texto no entraba entero y
+ * `numberOfLines={1}` lo truncaba a la mitad de una palabra ("~11 min" quedaba en "~11 m", que se
+ * lee como METROS en vez de minutos; "En cola · sale 22:53" quedaba en "En cola · sale 22…").
+ * Ahora cada dato vive en su PROPIA línea (etiqueta / placa / dato principal / dato secundario) —
+ * ninguna línea individual se acerca al ancho de la tarjeta a 360-412dp. `numberOfLines={1}` se
+ * MANTIENE en cada `Text` como red de seguridad barata (no debería disparar nunca a este ancho,
+ * pero si algún día lo hace, corta la línea en vez de empujar el layout de la tarjeta);
+ * `adjustsFontSizeToFit` sí queda sin usarse — se dejaría para un ancho todavía más angosto que
+ * no es el objetivo acá.
+ * `fontVariant: tabular-nums` en los dígitos evita que el ANCHO del propio dígito salte entre
+ * ticks (dígitos proporcionales vs. tabulares), aunque al estar cada dato en su línea ya no hay
+ * ningún hermano al que correr.
  */
 export function IndicadoresVecinosDemo({ adelante, atras, colorLinea }: IndicadoresVecinosDemoProps) {
   return (
@@ -70,19 +83,25 @@ function TarjetaVecino({
           {vecino.placa}
         </Text>
         {vecino.enCola ? (
-          <Text numberOfLines={1} style={styles.enColaTexto}>
-            En cola{vecino.saleA ? ` · sale ${formatearHoraDemo(vecino.saleA)}` : ''}
-          </Text>
-        ) : (
-          <View style={styles.filaDistancia}>
+          <>
             <Text numberOfLines={1} style={styles.distancia}>
-              a {formatearDistanciaVecinoDemo(vecino.distanciaM)}
+              En cola
+            </Text>
+            {vecino.saleA ? (
+              <Text numberOfLines={1} style={styles.eta}>
+                sale {formatearHoraDemo(vecino.saleA)}
+              </Text>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <Text numberOfLines={1} style={styles.distancia}>
+              {formatearDistanciaVecinoDemo(vecino.distanciaM)}
             </Text>
             <Text numberOfLines={1} style={styles.eta}>
-              {' '}
-              · ~{Math.max(1, Math.round(vecino.minutos))} min
+              ~{Math.max(1, Math.round(vecino.minutos))} min
             </Text>
-          </View>
+          </>
         )}
       </View>
     </BlurView>
@@ -106,7 +125,10 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.8)',
     paddingHorizontal: 10,
     paddingVertical: 8,
-    minHeight: 58,
+    // 4 líneas apiladas ahora (etiqueta/placa/dato principal/dato secundario, ver el docblock de
+    // arriba) en vez de las 3 de antes — minHeight subido de 58 a 76 para que entren sin recortar
+    // y para que la tarjeta vacía (sin vecino, 2 líneas) siga midiendo lo mismo que su par.
+    minHeight: 76,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -136,29 +158,20 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
     marginTop: 1,
   },
-  filaDistancia: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    marginTop: 1,
-  },
   distancia: {
     fontFamily: quivoFonts.bodySemiBold,
     fontSize: 16,
+    lineHeight: 19,
     color: '#334155',
     fontVariant: ['tabular-nums'],
-    minWidth: 66,
+    marginTop: 1,
   },
   eta: {
     fontFamily: quivoFonts.bodyMedium,
     fontSize: 10.5,
+    lineHeight: 13,
     color: quivoColors.textSecondary,
     fontVariant: ['tabular-nums'],
-  },
-  enColaTexto: {
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 12,
-    color: '#334155',
-    marginTop: 1,
   },
   vacioTexto: {
     fontFamily: quivoFonts.bodyMedium,

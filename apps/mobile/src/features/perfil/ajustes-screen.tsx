@@ -6,7 +6,7 @@ import type { ContextoOperativoMovil } from '@quivo/shared';
 import type { OperationStackParamList } from '../../app/operation-navigator';
 import { useOperacionSettings, useTextScale, type OperacionSettings } from './use-operacion-settings';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
-import { useGpsContext } from '../operacion/gps-provider';
+import { useGpsTracking } from '../operacion/gps-provider';
 import { Button } from '../../shared/components/Button';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import {
@@ -30,7 +30,10 @@ type AjustesScreenProps = NativeStackScreenProps<OperationStackParamList, 'Ajust
 
 export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
   const { settings, isLoaded, updateSetting } = useOperacionSettings();
-  const { gps } = useGpsContext();
+  // FIX POST-REVISIÓN (hallazgo de revisión — "Ajustes re-renderiza cada segundo de tracking"):
+  // `useGpsTracking()` en vez de `useGpsContext()` — esta pantalla solo lee `tracking` (ver el
+  // gate de "Trabajar offline" más abajo), nunca `posicionActual`. Ver `gps-provider.tsx`.
+  const { tracking } = useGpsTracking();
   const scale = useTextScale();
 
   // Rescate del día 1 (build de rescate): estado local de la sección de abajo. Vive acá y no
@@ -168,7 +171,7 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
 
   const handleToggle = (key: keyof OperacionSettings, value: boolean) => {
     // Regla especial: trabajarOffline requiere GPS activo (aunque en MVP asumiremos que está)
-    if (key === 'trabajarOffline' && value === true && !gps.tracking) {
+    if (key === 'trabajarOffline' && value === true && !tracking) {
       showToast('Requiere GPS activo para funcionar offline completamente.');
     }
     updateSetting(key, value);

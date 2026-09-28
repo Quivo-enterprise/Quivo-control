@@ -2,6 +2,26 @@ import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
 import { LEAFLET_CSS_INLINE, LEAFLET_JS_INLINE } from './leaflet-inline.generated';
 
 /**
+ * Opciones de cámara del mapa — decididas por el CALLER (`route-map-view.tsx`, que sí conoce
+ * `MODO_DEMO`) y pasadas como parámetro en vez de leer el flag de build acá adentro.
+ * `construirHtml` es un builder PURO (ver su docblock): que dependiera de `MODO_DEMO` a nivel de
+ * módulo lo volvía imposible de testear con distintos escenarios de cámara sin mockear el flag de
+ * build, y mezclaba una decisión de PRODUCTO (real vs. demo) con la construcción del HTML.
+ */
+export interface OpcionesCamaraMapa {
+  /** Zoom aplicado en cada actualización de seguimiento y en el recenter explícito. Real: 17
+   * (rutas OSRM densas en vértices). Demo: 15 — ver el docblock de `construirHtml`. */
+  zoomSeguimiento: number;
+  /** `true` en el APK demo. Decide la API de cámara que usan las actualizaciones de SEGUIMIENTO
+   * ('tracking'/'position', disparadas en cada tick) — nunca el recenter explícito ('recenter',
+   * el toque del chofer en el FAB de centrar), que siempre usa `flyTo` sin importar el modo. Ver
+   * el hallazgo de revisión en el docblock de `construirHtml`. */
+  modoCamaraDemo: boolean;
+}
+
+const OPCIONES_CAMARA_POR_DEFECTO: OpcionesCamaraMapa = { zoomSeguimiento: 17, modoCamaraDemo: false };
+
+/**
  * Builder puro del HTML que corre dentro del WebView del mapa de navegación
  * (`route-map-view.tsx`). Vive separado del componente React para poder testearlo con
  * `vitest` sin necesidad de montar `react-native-webview` — ver `route-map-html.test.ts`.
@@ -566,8 +586,27 @@ function construirUrlTileZoomExacto(coords, capa) {
 export function construirHtml(
   paquete: PaqueteDia,
   _vehiculo: ContextoOperativoMovil['vehiculo'],
+  opcionesCamara: OpcionesCamaraMapa = OPCIONES_CAMARA_POR_DEFECTO,
 ): string {
   const coordenadasRuta = convertirGeoJsonALatLng(paquete.ruta.geometria.coordinates);
+
+  // docs/plan-apk-demo-conductor.md (paso B, hallazgo de perf del APK demo): el zoom de
+  // seguimiento (17) fue elegido para la app real, con rutas OSRM densas en puntos — con las
+  // polilíneas MOCK del demo (`src/demo/datos/geometria.ts`, muchos menos vértices) ese zoom
+  // dibuja tramos como líneas rectas cruzando manzanas enteras. En demo, `route-map-view.tsx`
+  // pasa 15 (mismo zoom que la vista inicial, `map.setView` más abajo); la app real sigue
+  // pasando 17 sin cambios (`OPCIONES_CAMARA_POR_DEFECTO`, si el caller no manda nada).
+  //
+  // FIX POST-REVISIÓN (hallazgo de revisión — "flyTo en cada actualización de posición es una
+  // animación de cámara casi continua en demo"): con el motor demo tickeando cada 1s mientras hay
+  // jornada activa, un `map.flyTo` animado (0.5-0.7s) en CADA actualización de seguimiento
+  // ('tracking'/'position') dejaba la cámara animando ~70% del tiempo. `seguirVehiculo` (más abajo
+  // en el script) usa `map.panTo` (casi instantáneo, 0.25s) para esas actualizaciones DE
+  // SEGUIMIENTO cuando `modoCamaraDemo` es `true` — el recenter EXPLÍCITO ('recenter', el toque
+  // del chofer en el FAB) sigue usando `flyTo` siempre, en real y en demo: ahí sí tiene sentido
+  // una animación más larga, porque es un solo salto puntual, no uno por segundo.
+  const ZOOM_SEGUIMIENTO = opcionesCamara.zoomSeguimiento;
+  const MODO_CAMARA_DEMO = opcionesCamara.modoCamaraDemo;
 
   const puntosControlData: PuntoControlMapaHtml[] = paquete.puntosControl.map((pc, idx) => ({
     id: pc.id,
@@ -644,6 +683,9 @@ export function construirHtml(
   <script>${LEAFLET_JS_INLINE}</script>
   <script>
     var map = L.map('map', { zoomControl: false, attributionControl: false });
+    // Ver 'seguirVehiculo' más abajo — decide 'panTo' (demo) vs. 'flyTo' (real) en las
+    // actualizaciones de SEGUIMIENTO, nunca en el recenter explícito.
+    var MODO_CAMARA_DEMO = ${JSON.stringify(MODO_CAMARA_DEMO)};
 
     var coordenadasRuta = ${JSON.stringify(coordenadasRuta)};
     // Fija un view inicial ANTES de agregar tiles/polyline/marcadores: L.map() de arriba se crea
@@ -890,6 +932,21 @@ export function construirHtml(
       caminoResaltado.bringToFront();
     }
 
+    // FIX POST-REVISIÓN (hallazgo de revisión — "flyTo en cada tick es una animación de cámara
+    // casi continua en demo"): usada SOLO por las actualizaciones de SEGUIMIENTO ('tracking' y
+    // 'position' en 'updateMap', disparadas en cada tick del motor demo o cada fix de GPS real) —
+    // el recenter explícito ('recenter') sigue llamando 'map.flyTo' directo, sin pasar por acá, en
+    // real y en demo. En real (MODO_CAMARA_DEMO false) el comportamiento es IDÉNTICO al de antes
+    // de este fix: 'flyTo' con la duración que pasó el caller. En demo, 'panTo' (casi instantáneo,
+    // 0.25s) en vez de una animación de 0.5-0.7s por segundo.
+    function seguirVehiculo(latlngValue, duracionFlyToReal) {
+      if (MODO_CAMARA_DEMO) {
+        map.panTo(latlngValue, { animate: true, duration: 0.25 });
+      } else {
+        map.flyTo(latlngValue, ${ZOOM_SEGUIMIENTO}, { duration: duracionFlyToReal });
+      }
+    }
+
     // Hallazgo del code-review de esta entrega: 'map.fitBounds(ruta.getBounds(), ...)' tira
     // ('Bounds are not valid') cuando 'coordenadasRuta' está vacío — un paquete sin geometría de
     // ruta (dato incompleto/corrupto desde el backend) no debería congelar ni crashear el mapa por
@@ -900,7 +957,7 @@ export function construirHtml(
     function ajustarVistaARuta() {
       if (coordenadasRuta.length === 0) {
         if (posicion) {
-          map.setView(posicion.getLatLng(), 17);
+          map.setView(posicion.getLatLng(), ${ZOOM_SEGUIMIENTO});
         }
         return;
       }
@@ -924,7 +981,7 @@ export function construirHtml(
           return;
         }
         seguimientoActivo = true;
-        map.flyTo(posicion.getLatLng(), 17, { duration: 0.6 });
+        map.flyTo(posicion.getLatLng(), ${ZOOM_SEGUIMIENTO}, { duration: 0.6 });
         return;
       }
 
@@ -1035,7 +1092,7 @@ export function construirHtml(
         }
 
         if (seguimientoActivo && posicion) {
-          map.flyTo(posicion.getLatLng(), 17, { duration: 0.7 });
+          seguirVehiculo(posicion.getLatLng(), 0.7);
         } else if (!seguimientoActivo) {
           ajustarVistaARuta();
         }
@@ -1059,7 +1116,7 @@ export function construirHtml(
         }
 
         if (seguimientoActivo) {
-          map.flyTo(latlng, 17, { duration: 0.5 });
+          seguirVehiculo(latlng, 0.5);
         }
         actualizarCaminoAlProximoPunto();
       }

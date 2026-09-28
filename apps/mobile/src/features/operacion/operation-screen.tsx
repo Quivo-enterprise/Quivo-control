@@ -1,5 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Image, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Animated,
+  Image,
+  type LayoutChangeEvent,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { BlurView } from 'expo-blur';
 import * as Sentry from '@sentry/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -61,6 +73,12 @@ function usePerfilDemoNulo(_conductorId: string): { foto?: string } | null {
 }
 const usePerfilDemoOpcional = MODO_DEMO ? usePerfilDemo : usePerfilDemoNulo;
 
+/** Referencia ESTABLE de módulo para el caso "sin otros vehículos" — ver el docblock de
+ * `otrosVehiculosMapaDemo` más abajo (hallazgo de revisión sobre `memo(MapLayer)`). Un `[]`
+ * literal inline sería una referencia nueva en cada uso; esta constante de módulo es la MISMA
+ * siempre, así que devolverla nunca dispara un re-render de `MapLayer` por sí sola. */
+const OTROS_VEHICULOS_MAPA_DEMO_VACIO: VehiculoMapaMensaje[] = [];
+
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
   deviceId: string;
@@ -113,19 +131,45 @@ export function OperationScreen(
   );
   // docs/plan-apk-demo-conductor.md (paso B) — marcadores con foto de "otros vehículos" de la
   // línea propia para el mapa (mensaje 'otros-vehiculos', route-map-protocol.ts). `undefined`
-  // fuera de demo, así que `route-map-view.tsx` nunca manda ese mensaje en la app real. Ya
-  // "throttleado al tick de 1s" gratis: `demo.otrosVehiculosLineaPropia` (useDemo) solo cambia de
-  // referencia una vez por tick del motor (`DemoProvider`), no en cada render.
+  // fuera de demo, así que `route-map-view.tsx` nunca manda ese mensaje en la app real.
+  //
+  // FIX POST-REVISIÓN (hallazgo de revisión — "MapLayer memo nunca frena, un array nuevo por
+  // tick"): `useDemo()` devuelve un objeto NUEVO en cada tick del motor (`demo-provider.tsx`
+  // tickea cada 1s), así que dependiendo de `[demo]` este `useMemo` recalculaba —y devolvía un
+  // ARRAY nuevo, con objetos nuevos— en cada tick, aunque las posiciones no hubieran cambiado
+  // (p. ej. mientras la propia espera `en_cola` y no hay ninguna unidad ajena `en_ruta`: antes
+  // era un `[]` nuevo cada vez). `MapLayer` está envuelto en `memo()` más abajo, pero eso no sirve
+  // de nada si la prop `otrosVehiculos` cambia de REFERENCIA en cada render — la comparación
+  // superficial de `memo()` siempre ve una prop "distinta" y nunca frena el re-render. Se cachea
+  // el resultado por una CLAVE de contenido (ids + lat/lng redondeados) en un `ref`: mientras la
+  // clave no cambie, se devuelve la MISMA referencia de array que la vez anterior — y cuando la
+  // lista está vacía, se devuelve la constante de módulo `OTROS_VEHICULOS_MAPA_DEMO_VACIO` en vez
+  // de un `[]` nuevo.
+  const otrosVehiculosCacheRef = useRef<{ clave: string; valor: VehiculoMapaMensaje[] }>({
+    clave: '',
+    valor: OTROS_VEHICULOS_MAPA_DEMO_VACIO,
+  });
   const otrosVehiculosMapaDemo = useMemo<VehiculoMapaMensaje[] | undefined>(() => {
     if (!MODO_DEMO || !demo) return undefined;
+    const lista = demo.otrosVehiculosLineaPropia;
+    if (lista.length === 0) {
+      otrosVehiculosCacheRef.current = { clave: '', valor: OTROS_VEHICULOS_MAPA_DEMO_VACIO };
+      return OTROS_VEHICULOS_MAPA_DEMO_VACIO;
+    }
+    const claveNueva = lista.map((v) => `${v.trufiId}:${v.lat.toFixed(5)}:${v.lng.toFixed(5)}`).join('|');
+    if (claveNueva === otrosVehiculosCacheRef.current.clave) {
+      return otrosVehiculosCacheRef.current.valor;
+    }
     const colorLinea = LINEAS_MOCK[demo.estado.lineaPropiaId].color;
-    return demo.otrosVehiculosLineaPropia.map((vehiculo) => ({
+    const valorNuevo = lista.map((vehiculo) => ({
       id: vehiculo.trufiId,
       lat: vehiculo.lat,
       lng: vehiculo.lng,
       fotoDataUri: FOTOS_TRUFI[vehiculo.trufiId] ?? '',
       color: colorLinea,
     }));
+    otrosVehiculosCacheRef.current = { clave: claveNueva, valor: valorNuevo };
+    return valorNuevo;
   }, [demo]);
   const [completados, setCompletados] = useState<Set<string>>(new Set());
   const [observacion, setObservacion] = useState('');
@@ -139,6 +183,26 @@ export function OperationScreen(
   const [reportarModalVisible, setReportarModalVisible] = useState(false);
   const [panelDemoVisible, setPanelDemoVisible] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
+
+  // FIX POST-REVISIÓN (hallazgo de revisión — "FAB demo con `bottom` fijo tapado en pantallas
+  // más chicas/con overlay más alto"): `bottom: 260` (valor anterior) era una medición fija de
+  // UNA pantalla (1080x2400/440dpi) — cualquier pantalla con `NextControlSheet` más alto (texto
+  // de error de GPS, otra densidad) o con el `topOverlay` más alto (banner de señal +
+  // indicadores vecinos + avisos, todos condicionales) podía volver a tapar el FAB o, en el otro
+  // extremo, hacer que la columna de FABs choque contra la tarjeta de identidad de arriba. Ahora
+  // se MIDEN ambos en vivo (`onLayout`, solo demo — fuera de demo ninguno de los dos callbacks
+  // se pasa, así que no hay medición ni re-render extra en la app real) y el `bottom` se calcula:
+  // altura del sheet + su propio margen (`12`, `next-control-sheet.tsx` styles.sheet.bottom) +
+  // aire (`16`) — acotado (`Math.min`) para que la columna de FABs (altura conocida por
+  // cantidad de botones, sin medir) nunca empiece antes de donde termina el `topOverlay`.
+  const [alturaSheetMedidaDemo, setAlturaSheetMedidaDemo] = useState(228);
+  const [alturaTopOverlayMedidaDemo, setAlturaTopOverlayMedidaDemo] = useState(140);
+  const onLayoutTopOverlayDemo = useCallback((e: LayoutChangeEvent) => {
+    setAlturaTopOverlayMedidaDemo(e.nativeEvent.layout.height);
+  }, []);
+  const onAlturaSheetCambiaDemo = useCallback((altura: number) => {
+    setAlturaSheetMedidaDemo(altura);
+  }, []);
 
   // M3 (hallazgo de revisión, medio): `puntosControl.length` se lee por REF, no como
   // dependencia del efecto de abajo — mismo patrón que `onLocationRef` en
@@ -347,6 +411,29 @@ export function OperationScreen(
   const confirmarFinalizacion = useCallback(() => setConfirmarFinVisible(true), []);
   const confirmarCierreSesion = useCallback(() => setConfirmarLogoutVisible(true), []);
 
+  // Ver el docblock de `alturaSheetMedidaDemo` (arriba) — cálculo del `bottom` dinámico de la
+  // columna de FABs demo. La altura de la columna NO se mide (evita un 3er `onLayout`/re-render):
+  // se deriva de la cantidad de botones que este mismo render decide mostrar (mismas condiciones
+  // que el JSX de abajo) × 42dp (`styles.recenterButton`) + los gaps de 12dp entre ellos
+  // (`styles.fabsContainer.gap`) — siempre 3 botones fijos (Reportar/Info/Centrar) + los 2
+  // condicionales (Hoja de ruta, Debug).
+  const { height: alturaVentanaDemo } = useWindowDimensions();
+  const cantidadFabsDemo =
+    3 + (MODO_DEMO && !gps.tracking ? 1 : 0) + (__DEV__ && gps.tracking && proximoPuntoControl ? 1 : 0);
+  const alturaColumnaFabsDemo = cantidadFabsDemo * 42 + (cantidadFabsDemo - 1) * 12;
+  const SHEET_MARGEN_INFERIOR_DEMO = 12; // next-control-sheet.tsx styles.sheet.bottom
+  const FAB_AIRE_SOBRE_SHEET_DEMO = 16;
+  const TOP_OVERLAY_MARGEN_SUPERIOR_DEMO = Platform.OS === 'ios' ? 12 : 16; // styles.topOverlay.top
+  const MARGEN_SEGURIDAD_DEMO = 12;
+  const bottomDeseadoDemo = alturaSheetMedidaDemo + SHEET_MARGEN_INFERIOR_DEMO + FAB_AIRE_SOBRE_SHEET_DEMO;
+  const bottomMaximoSinTaparOverlayDemo =
+    alturaVentanaDemo -
+    TOP_OVERLAY_MARGEN_SUPERIOR_DEMO -
+    alturaTopOverlayMedidaDemo -
+    alturaColumnaFabsDemo -
+    MARGEN_SEGURIDAD_DEMO;
+  const bottomFabsDemo = Math.min(bottomDeseadoDemo, Math.max(0, bottomMaximoSinTaparOverlayDemo));
+
   return (
     <View style={styles.container}>
       <MapLayer
@@ -361,7 +448,11 @@ export function OperationScreen(
         otrosVehiculos={otrosVehiculosMapaDemo}
       />
 
-      <View pointerEvents="box-none" style={styles.topOverlay}>
+      <View
+        pointerEvents="box-none"
+        style={styles.topOverlay}
+        onLayout={MODO_DEMO ? onLayoutTopOverlayDemo : undefined}
+      >
         <View style={{ flexDirection: 'column', gap: quivoSpacing.sm }}>
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: quivoSpacing.md }}>
             <Pressable
@@ -496,7 +587,13 @@ export function OperationScreen(
         ) : null}
       </View>
 
-      <Animated.View style={[styles.fabsContainer, { transform: [{ translateY: sheetPanY }] }]}>
+      <Animated.View
+        style={[
+          styles.fabsContainer,
+          MODO_DEMO && { bottom: bottomFabsDemo },
+          { transform: [{ translateY: sheetPanY }] },
+        ]}
+      >
         {/* docs/plan-apk-demo-conductor.md (paso B, guion E06 02:45) — entrada a la pantalla
             "Hoja de ruta" (ruta agregada por el paso C del mismo plan). Solo demo, y solo antes
             de iniciar recorrido (después, el chofer ya está guiado por el mapa/NextControlSheet). */}
@@ -590,6 +687,7 @@ export function OperationScreen(
         onFinish={confirmarFinalizacion}
         panY={sheetPanY}
         gpsError={gps.errorGps}
+        onHeightChange={MODO_DEMO ? onAlturaSheetCambiaDemo : undefined}
       />
 
       <Modal
@@ -750,7 +848,18 @@ export function OperationScreen(
   );
 }
 
-function DriverRouteCard({
+// FIX POST-REVISIÓN (perf demo — `docs/plan-apk-demo-conductor.md`, hallazgo de latencia de
+// toques): `OperationScreen` re-renderiza una vez por segundo mientras hay `<DemoProvider>`
+// (consume `useDemo()` directo, necesita `demo.estado.tracking`/`adelanteAtras`/`senal` al
+// minuto) — eso es esperado. Lo que NO hacía falta era que sus hijos con `BlurView` (nativo,
+// costoso de recomponer en Android) volvieran a ejecutar su función de render y su commit nativo
+// CADA VEZ que el padre lo hacía, aunque sus propias props (`contexto`/`brand`/`tracking`, todas
+// estables mientras el chofer sigue `en_cola`) no cambiaran un bit. `memo()` hace que React
+// compare las props por igualdad superficial antes de volver a invocar el componente — con
+// `contexto`/`brand` de referencia estable (vienen de `useMemo`/props sin cambios) y `tracking`
+// booleano, esto corta la recomposición de la tarjeta de identidad (con su `BlurView`
+// `intensity=100`, la más cara de esta pantalla) a solo cuando `tracking` de verdad cambia.
+const DriverRouteCard = memo(function DriverRouteCard({
   contexto,
   tracking,
   brand,
@@ -808,9 +917,11 @@ function DriverRouteCard({
       </View>
     </BlurView>
   );
-}
+});
 
-function NavigationInstructionCard({
+// Mismo motivo que `DriverRouteCard` — `BlurView` propia, solo se vuelve a pintar cuando
+// `distanciaMetros`/`velocidadKmh` (los únicos valores que de verdad varían por GPS) cambian.
+const NavigationInstructionCard = memo(function NavigationInstructionCard({
   distanciaMetros,
   velocidadKmh,
 }: {
@@ -833,9 +944,15 @@ function NavigationInstructionCard({
       <Text style={styles.navSpeed}>{velocidadRedondeada} km/h</Text>
     </BlurView>
   );
-}
+});
 
-function MapLayer({
+// `RouteMapView`/WebView: memoizado por consistencia con las tarjetas de arriba — en demo,
+// `otrosVehiculos` cambia de referencia en cada tick mientras hay compañeros `en_ruta` (posición
+// real que avanza, no ruido), así que esto no evita el mensaje `otros-vehiculos` de
+// `route-map-view.tsx` (ya throttleado ahí, ver su docblock) — pero sí evita reconstruir este
+// wrapper y volver a bajar por `MapErrorBoundary`/`RouteMapView` cuando NINGUNA de estas props
+// cambió (p. ej. `en_cola`, sin compañeros o fuera de demo).
+const MapLayer = memo(function MapLayer({
   loading,
   paquete,
   vehiculo,
@@ -881,7 +998,7 @@ function MapLayer({
       />
     </MapErrorBoundary>
   );
-}
+});
 
 function initials(name: string): string {
   return name
@@ -1042,6 +1159,13 @@ const styles = StyleSheet.create({
     gap: 12,
     alignItems: 'center',
   },
+  // docs/plan-apk-demo-conductor.md (paso B, hallazgo de layout) — SOLO demo (`MODO_DEMO` false
+  // en la app real, sin cambio de comportamiento ahí). El `bottom` de la columna de FABs en demo
+  // ya NO es un número fijo acá: se calcula en `OperationScreen` (`bottomFabsDemo`, medido en vivo
+  // contra `NextControlSheet`/`topOverlay`, ver su docblock) y se pasa como estilo inline en el
+  // `Animated.View` de la columna — la versión anterior de este fix (`bottom: 260`) era una
+  // medición fija de UNA sola pantalla que se destapaba de nuevo con cualquier `NextControlSheet`
+  // más alto (error de GPS visible) o `topOverlay` más alto (banner + indicadores + avisos).
   recenterButton: {
     width: 42,
     height: 42,

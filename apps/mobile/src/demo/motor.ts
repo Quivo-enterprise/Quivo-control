@@ -181,6 +181,28 @@ export interface EstadoMotorDemo {
  * que iban antes que ella ya se fueron). La otra línea (la que no maneja este chofer) se siembra
  * con el mismo criterio, usando el punto medio de su flota como referencia — no la observa nadie
  * en esta sesión, pero mantiene el motor consistente si algún día se necesita.
+ *
+ * FIX POST-REVISIÓN (hallazgo en teléfono real): la fórmula anterior repartía a las unidades ya
+ * `en_ruta` a fracciones fijas (`0.9`, `0.9*2/3`, ...) del largo TOTAL de la polilínea de la
+ * línea, sin ninguna relación con la frecuencia real de salida. En Z12 (circuito de ~38 km) eso
+ * dejaba a la unidad más cercana adelante a ~11 km del chofer al arrancar — demasiado lejos para
+ * verse en cámara ("a 3,6 km" en el guion, no "a 11 km"). Ahora cada unidad que ya salió se ubica
+ * a la distancia que HABRÍA RECORRIDO a velocidad nominal desde su salida, sabiendo que las
+ * salidas están separadas por `FRECUENCIA_MS[línea]` entre sí (mismo modelo que usa la cola en
+ * régimen — ver `despacharPendientes`): la unidad que salió 1 período antes queda a
+ * `FRECUENCIA_MS * VELOCIDAD_NOMINAL_MPS` metros (≈2,7 km en Z12 a 8 min/20 km·h⁻¹, ≈4 km en
+ * Línea 120 a 12 min), la que salió 2 períodos antes al doble, etc. — ver `reubicarAdelante` para
+ * el acotado a [1,5, 4] km y el porqué de escalar los gaps en vez de clampear cada uno por
+ * separado.
+ *
+ * FIX POST-REVISIÓN #2 (hallazgo — "el espaciado inicial solo vale si se toca 'Iniciar' de
+ * inmediato"): las unidades que ya están `en_ruta` en la línea propia se SIGUEN moviendo mientras
+ * el chofer espera en la cola (`avanzarUnidades` no distingue "propia esperando" de "propia en
+ * ruta" para las unidades ajenas) — a razón de ~333 m/min, 2 minutos de espera ya alejan a la más
+ * cercana casi 700 m del rango pensado. Por eso este cálculo de siembra inicial es solo el punto
+ * de PARTIDA (`ahora === ahoraSimulado`, espera cero); `iniciarJornada` vuelve a llamar
+ * `reubicarAdelante` en el momento real en que el chofer arranca, para corregir el corrimiento
+ * acumulado durante la espera (ver su FIX POST-REVISIÓN).
  */
 export function crearEstadoInicial(trufiPropioId: string, ahora: number): EstadoMotorDemo {
   const propio = TRUFIS_MOCK.find((t) => t.id === trufiPropioId);
@@ -202,14 +224,30 @@ export function crearEstadoInicial(trufiPropioId: string, ahora: number): Estado
     const posicionPropia = esPropia
       ? flota.findIndex((t) => t.id === trufiPropioId) + 1
       : Math.ceil(flota.length / 2);
+    const largoTotal = largoTotalM(LINEAS_MOCK[lineaId].polilinea);
+    const frecuenciaS = FRECUENCIA_MS[lineaId] / 1000;
+    const distanciaPeriodoM = frecuenciaS * VELOCIDAD_NOMINAL_MPS;
+
+    // Ya salieron antes — nearest ahead primero (mayor `posicion`, la más próxima a la propia),
+    // con avances CRUDOS espaciados uniformemente por período (ver `reubicarAdelante`, que acota
+    // la más cercana y escala el resto sin apilar ninguna).
+    const yaSalieron = flota
+      .map((trufi, indice) => ({ trufi, posicion: indice + 1 }))
+      .filter(({ posicion }) => posicion < posicionPropia)
+      .sort((a, b) => b.posicion - a.posicion);
+    const crudas: UnidadDemo[] = yaSalieron.map(({ trufi }, rango) => ({
+      trufiId: trufi.id,
+      lineaId,
+      fase: 'en_ruta',
+      avance: largoTotal > 0 ? ((rango + 1) * distanciaPeriodoM) / largoTotal : 0,
+    }));
+    reubicarAdelante(crudas, largoTotal, frecuenciaS).forEach((u) => {
+      unidades[u.trufiId] = u;
+    });
 
     flota.forEach((trufi, indice) => {
       const posicion = indice + 1;
-      if (posicion < posicionPropia) {
-        // Ya salió antes — cuanto más temprano salió (posición más chica), más avanzada va.
-        const avance = ((posicionPropia - posicion) / posicionPropia) * 0.9;
-        unidades[trufi.id] = { trufiId: trufi.id, lineaId, fase: 'en_ruta', avance };
-      } else {
+      if (posicion >= posicionPropia) {
         unidades[trufi.id] = { trufiId: trufi.id, lineaId, fase: 'en_cola', avance: 0 };
         colas[lineaId]!.push(trufi.id);
       }
@@ -245,6 +283,61 @@ export function crearEstadoInicial(trufiPropioId: string, ahora: number): Estado
 
 function paradasControlDe(lineaId: LineaMockId): ParadaMock[] {
   return LINEAS_MOCK[lineaId].paradas.filter((p) => p.esPuntoControl);
+}
+
+/** Distancia (metros) a la que debería quedar la unidad `en_ruta` más cercana adelante de la
+ * terminal — un período de salida (`FRECUENCIA_MS` × `VELOCIDAD_NOMINAL_MPS`) acotado a
+ * `[PISO_ADELANTE_M, TOPE_ADELANTE_M]` para que nunca se vea ni pegada a la terminal ni
+ * perdida en el horizonte, sin importar la frecuencia/largo de cada línea. */
+const PISO_ADELANTE_M = 1500;
+const TOPE_ADELANTE_M = 4000;
+/** Separación mínima (metros) entre dos unidades `en_ruta` consecutivas tras reubicar — nunca
+ * colapsan al mismo `avance` (ver el hallazgo de revisión sobre `Math.min(0.95, …)` más abajo). */
+const PISO_GAP_M = 50;
+
+/**
+ * Reubica un conjunto de unidades `en_ruta` de UNA MISMA línea, ya ordenadas ascendente por
+ * `avance` (índice 0 = la de menor avance = la más cercana a la terminal = "adelante" más
+ * cercano de la unidad propia, que arranca en `avance: 0`), para que la más cercana quede a
+ * `distanciaPeriodoM` de la terminal (acotada a `[PISO_ADELANTE_M, TOPE_ADELANTE_M]`),
+ * preservando el ORDEN y los gaps RELATIVOS entre unidades consecutivas: nunca las reordena y
+ * nunca dos terminan en el mismo `avance`.
+ *
+ * Usada tanto para sembrar el escenario inicial (`crearEstadoInicial`) como para RE-sembrar la
+ * línea propia al tocar "Iniciar recorrido" (`iniciarJornada`, ver su FIX POST-REVISIÓN) — en
+ * ambos casos la entrada puede tener más de una unidad adelante, y los gaps entre ellas hay que
+ * respetarlos, no aplastarlos.
+ *
+ * FIX POST-REVISIÓN (hallazgo de revisión — "el clamp por unidad apila varias en el mismo
+ * avance"): la versión anterior (en `crearEstadoInicial`) hacía `Math.min(0.95, …)` UNIDAD POR
+ * UNIDAD — con muchos períodos de por medio frente a un largo total chico (p. ej. Línea 120,
+ * ~5 km de circuito completo), dos o más unidades podían caer en el mismo tope `0.95` y quedar
+ * apiladas visualmente en el mapa. Acá se escala el gap de CADA unidad por el mismo factor (el
+ * que acerca a la más cercana al rango buscado), con un piso de `PISO_GAP_M` por gap — así el
+ * orden queda SIEMPRE estrictamente creciente, nunca colapsa.
+ */
+function reubicarAdelante(
+  unidadesOrdenadas: UnidadDemo[],
+  largoTotal: number,
+  frecuenciaS: number,
+): UnidadDemo[] {
+  if (unidadesOrdenadas.length === 0 || largoTotal <= 0) return unidadesOrdenadas;
+
+  const distanciaPeriodoM = frecuenciaS * VELOCIDAD_NOMINAL_MPS;
+  const distanciaNominalM = Math.min(TOPE_ADELANTE_M, Math.max(PISO_ADELANTE_M, distanciaPeriodoM));
+  const topeAbsolutoM = largoTotal * 0.95; // nunca "da la vuelta" y termina detrás de la propia
+
+  const gapsM = unidadesOrdenadas.map((u, i) =>
+    i === 0 ? u.avance * largoTotal : (u.avance - unidadesOrdenadas[i - 1]!.avance) * largoTotal,
+  );
+  const factor = gapsM[0]! > 0 ? distanciaNominalM / gapsM[0]! : 1;
+
+  let distanciaAcumuladaM = 0;
+  return unidadesOrdenadas.map((u, i) => {
+    const gapEscalado = Math.max(PISO_GAP_M, gapsM[i]! * factor);
+    distanciaAcumuladaM = Math.min(topeAbsolutoM, distanciaAcumuladaM + gapEscalado);
+    return { ...u, avance: distanciaAcumuladaM / largoTotal };
+  });
 }
 
 /** Paradas de control cruzadas al avanzar de `avanceAnterior` a `avanceNuevo` (circular), en
@@ -455,6 +548,26 @@ export function iniciarJornada(estado: EstadoMotorDemo, ahora: number): EstadoMo
     ? { puntoControlId: paradaOrigen.id, distanciaM: 0, pasada: pasadasPorPunto[paradaOrigen.id]!, en: ahora }
     : null;
 
+  // FIX POST-REVISIÓN (hallazgo de revisión — "la brecha inicial se abre mientras el chofer
+  // espera en cola"): las unidades `en_ruta` de la línea propia se siguieron moviendo TODO el
+  // tiempo que el chofer esperó en cola antes de tocar "Iniciar" (`avanzarUnidades` no distingue
+  // "propia esperando" — solo pausa a la unidad propia, no a sus compañeras de línea que ya
+  // salieron), a ~333 m/min: con solo 2 minutos de espera la más cercana adelante ya se corrió
+  // ~700 m fuera del rango pensado para la toma. Se reubican acá mismo, en el instante en que la
+  // propia vuelve a `avance: 0`, con `reubicarAdelante` (mismo helper que siembra el escenario
+  // inicial) para que la más cercana quede otra vez dentro de rango SIN reordenarlas ni
+  // apilarlas — preserva el orden y los gaps relativos entre ellas, solo comprime/expande la
+  // distancia total al frente.
+  const frecuenciaS = frecuencia / 1000;
+  const largoTotalPropia = largoTotalM(LINEAS_MOCK[estado.lineaPropiaId].polilinea);
+  const enRutaPropiaOrdenadas = Object.values(estado.unidades)
+    .filter((u) => u.lineaId === estado.lineaPropiaId && u.fase === 'en_ruta')
+    .sort((a, b) => a.avance - b.avance);
+  const unidadesReubicadas = { ...estado.unidades };
+  reubicarAdelante(enRutaPropiaOrdenadas, largoTotalPropia, frecuenciaS).forEach((u) => {
+    unidadesReubicadas[u.trufiId] = u;
+  });
+
   return {
     ...estado,
     ahora,
@@ -463,7 +576,7 @@ export function iniciarJornada(estado: EstadoMotorDemo, ahora: number): EstadoMo
     puntosCumplidos,
     pasadasPorPunto,
     ultimaDeteccion,
-    unidades: { ...estado.unidades, [estado.trufiPropioId]: { ...propio, fase: 'en_ruta', avance: 0 } },
+    unidades: { ...unidadesReubicadas, [estado.trufiPropioId]: { ...propio, fase: 'en_ruta', avance: 0 } },
     colas: { ...estado.colas, [estado.lineaPropiaId]: colaSinPropio },
     salidaBase,
   };

@@ -2,6 +2,7 @@ import type { ContextoOperativoMovil } from '@quivo/shared';
 import { normalizarPlacaVehiculo } from '@quivo/shared';
 import { LINEAS_MOCK, TRUFIS_MOCK } from './datos/datos';
 import type { LineaMockId } from './datos/tipos';
+import { FRECUENCIA_MS } from './motor';
 
 /**
  * Cuentas jugables del APK demo (`docs/plan-apk-demo-conductor.md`) — login = placa (de una de
@@ -66,6 +67,103 @@ export const CUENTAS_DEMO: CuentaDemo[] = [
     documentoIdentidad: '8342167 CBB',
   },
 ];
+
+/**
+ * Fecha local (`YYYY-MM-DD`) a partir de un epoch ms — a propósito NO usa `toISOString()`, que
+ * devuelve la fecha en UTC. Bolivia es UTC-4: a las 22:45 hora local ya es 02:45 UTC del día
+ * SIGUIENTE, así que `toISOString().slice(0, 10)` mostraba "28/09" cuando el teléfono marcaba
+ * "27/09" a la noche (hallazgo en teléfono real, `hoja-de-ruta-screen.tsx`). `getFullYear`/
+ * `getMonth`/`getDate` sí leen la fecha en la zona horaria LOCAL del dispositivo (la del chofer,
+ * que es lo que hay que mostrar), sea cuál sea esa zona.
+ */
+export function fechaLocalDemo(ahora: number): string {
+  const fecha = new Date(ahora);
+  const anio = fecha.getFullYear();
+  const mes = String(fecha.getMonth() + 1).padStart(2, '0');
+  const dia = String(fecha.getDate()).padStart(2, '0');
+  return `${anio}-${mes}-${dia}`;
+}
+
+/**
+ * ÚNICA fuente de verdad de los límites de turno (mañana/tarde/noche) — la usa TANTO
+ * `turnoDesdeHoraLocal` (de abajo, para decidir el turno) COMO `hoja-de-ruta-screen.tsx` (para
+ * ROTULAR el horario de ese turno en la tarjeta "Turno de hoy").
+ *
+ * FIX POST-REVISIÓN (hallazgo de revisión — 2 fuentes de verdad divergentes): la primera versión
+ * de este fix definía los límites de selección acá (`6/14/22`) Y por separado, en
+ * `hoja-de-ruta-screen.tsx`, el texto a mostrar con OTROS límites (`tarde` terminaba a las
+ * `20:00`, `noche` a las `00:00`) — a las 21:00, `turnoDesdeHoraLocal` elegía `'tarde'` pero la
+ * tarjeta mostraba "14:00 – 20:00" (ya vencido a esa hora), la misma clase de incoherencia que
+ * este fix vino a resolver. Con un solo `Record` del que ambos archivos leen, ya no hay dos
+ * números que puedan desalinearse.
+ */
+export const LIMITES_TURNO_DEMO: Record<ContextoOperativoMovil['asignacion']['horario'], { inicioHora: number; finHora: number }> = {
+  manana: { inicioHora: 6, finHora: 14 },
+  tarde: { inicioHora: 14, finHora: 22 },
+  noche: { inicioHora: 22, finHora: 6 }, // envuelve medianoche — ver turnoDesdeHoraLocal
+};
+
+/**
+ * Turno (`manana|tarde|noche`) a partir de la hora LOCAL de `ahora`, según `LIMITES_TURNO_DEMO`.
+ * Hallazgo en teléfono real: antes `contextoDeCuenta` hardcodeaba `horario: 'manana'` sin
+ * importar la hora real, así que "Hoja de ruta"/"Ajustes" mostraban "Turno mañana · 06:00 –
+ * 14:00" con una salida programada a las 22:51 — incoherente.
+ *
+ * FIX POST-REVISIÓN (hallazgo de revisión — "el turno se elige por la hora de LOGIN, no por la
+ * de SALIDA"): `contextoDeCuenta` (más abajo) le pasa a esta función la hora de SALIDA
+ * PROGRAMADA (`salidaProgramadaInicialDemo`), no la hora de login — un chofer que loguea a las
+ * 21:58 con salida a las 22:06 (línea Z12, 8 min de frecuencia) tiene que ver "Turno noche" desde
+ * el login, no "Turno tarde" (que sería lo que devolvía esta misma función con la hora de login,
+ * 21:58 < 22:00) para recién pasar a "noche" cuando el chofer refresque la pantalla después de
+ * las 22:00 — la tarjeta "Turno de hoy" no se vuelve a leer entre el login y el arranque, así que
+ * mostraba el turno equivocado toda la espera en cola.
+ */
+export function turnoDesdeHoraLocal(ahora: number): ContextoOperativoMovil['asignacion']['horario'] {
+  const hora = new Date(ahora).getHours();
+  if (hora >= LIMITES_TURNO_DEMO.manana.inicioHora && hora < LIMITES_TURNO_DEMO.manana.finHora) return 'manana';
+  if (hora >= LIMITES_TURNO_DEMO.tarde.inicioHora && hora < LIMITES_TURNO_DEMO.tarde.finHora) return 'tarde';
+  // `noche` envuelve medianoche (22:00 – 06:00 del día siguiente) — es lo que queda una vez
+  // descartados mañana y tarde, sin necesitar una comparación circular aparte.
+  return 'noche';
+}
+
+/**
+ * epoch ms de la salida INICIAL programada de la unidad propia — mismo cálculo que usa
+ * `crearEstadoInicial` (`./motor.ts`) para sembrar `salidaBase[lineaPropiaId]` cuando arranca el
+ * motor (`ahora + FRECUENCIA_MS[lineaId]`; la propia siempre queda al FRENTE de la cola de su
+ * línea en el escenario inicial, así que no hay ningún índice de cola que sumar acá — ver el
+ * docblock de `crearEstadoInicial`). `contextoDeCuenta` todavía no tiene un `EstadoMotorDemo`
+ * corriendo (el login pasa ANTES de montar `<DemoProvider>`), así que este cálculo se repite acá
+ * de forma independiente en vez de leer `proximaSalidaDe(estado, trufiId)` — con la misma
+ * fórmula, ambos coinciden exactamente en el momento del login.
+ */
+export function salidaProgramadaInicialDemo(lineaId: LineaMockId, ahora: number): number {
+  return ahora + FRECUENCIA_MS[lineaId];
+}
+
+/**
+ * Fecha (`YYYY-MM-DD`) de la asignación para el turno `horario` que arranca/incluye el instante
+ * `momentoTurno` — normalmente la fecha LOCAL de `momentoTurno` (`fechaLocalDemo`), salvo un caso:
+ * un turno `noche` (22:00 – 06:00) cuya hora local cae en la madrugada (`00:00` – `05:59`)
+ * pertenece al turno que EMPEZÓ la noche ANTERIOR, así que su fecha de asignación es la de AYER,
+ * no la de hoy.
+ *
+ * FIX POST-REVISIÓN (hallazgo en teléfono real): a las 02:00 del 28/09, un chofer del turno noche
+ * que arrancó a las 22:00 del 27/09 vería "27/09" en su hoja de ruta con `fechaLocalDemo(ahora)`
+ * simple (fecha del CALENDARIO), pero la asignación real es la de AYER — el turno no "empieza de
+ * nuevo" a medianoche. Sin este caso especial, la tarjeta "Turno de hoy" mostraría el 28/09 con un
+ * turno que arrancó, y se sigue contando, desde el 27/09.
+ */
+export function fechaTurnoDemo(
+  momentoTurno: number,
+  horario: ContextoOperativoMovil['asignacion']['horario'],
+): string {
+  const esMadrugadaDelTurnoNoche = horario === 'noche' && new Date(momentoTurno).getHours() < LIMITES_TURNO_DEMO.noche.finHora;
+  if (esMadrugadaDelTurnoNoche) {
+    return fechaLocalDemo(momentoTurno - 24 * 60 * 60 * 1000);
+  }
+  return fechaLocalDemo(momentoTurno);
+}
 
 /** Sindicato ficticio, genérico a propósito (no corresponde a ningún sindicato real). */
 const SINDICATO_DEMO = { id: '00000000-0000-4000-8000-000000000001', nombre: 'Sindicato Mixto de Transporte Valle Alto' };
@@ -173,6 +271,15 @@ export function idParadaDemo(lineaId: LineaMockId, paradaId: string): string {
  * queda `null` a propósito: el horario real de salida de la unidad propia vive en el motor
  * (`proximaSalidaDe`, `./motor.ts`) mientras está en cola — hardcodear un valor acá se
  * desincronizaría del horario que el motor calcula en vivo.
+ *
+ * FIX POST-REVISIÓN (hallazgo de revisión — "turno/fecha por hora de LOGIN, no de SALIDA"):
+ * `fecha`/`horario` se derivan de `salidaProgramadaInicialDemo` (la salida INICIAL programada de
+ * la unidad propia, `ahora + FRECUENCIA_MS[línea]` — mismo cálculo que `crearEstadoInicial` del
+ * motor), no de `ahora` (login) directo. Caso reportado: login 21:58 con salida a las 22:06
+ * (Z12, 8 min de frecuencia) — con la hora de login esto daba `'tarde'` (21 < 22); con la hora de
+ * salida da `'noche'`, coherente con lo que el motor va a mostrar apenas arranque.
+ * `fechaTurnoDemo` (no `fechaLocalDemo` directo) además cubre la madrugada del turno noche: a
+ * las 02:00, la fecha de la asignación sigue siendo la de AYER (el turno arrancó anoche).
  */
 export function contextoDeCuenta(cuenta: CuentaDemo, ahora: number): ContextoOperativoMovil {
   const trufi = TRUFIS_MOCK.find((t) => t.id === cuenta.trufiId);
@@ -180,7 +287,9 @@ export function contextoDeCuenta(cuenta: CuentaDemo, ahora: number): ContextoOpe
     throw new Error(`contextoDeCuenta: trufi desconocido "${cuenta.trufiId}"`);
   }
   const linea = LINEAS_MOCK[trufi.lineaId];
-  const fecha = new Date(ahora).toISOString().slice(0, 10);
+  const salidaProgramada = salidaProgramadaInicialDemo(trufi.lineaId, ahora);
+  const horario = turnoDesdeHoraLocal(salidaProgramada);
+  const fecha = fechaTurnoDemo(salidaProgramada, horario);
 
   contadorSesionDemo += 1;
   contadorAsignacionDemo += 1;
@@ -191,7 +300,7 @@ export function contextoDeCuenta(cuenta: CuentaDemo, ahora: number): ContextoOpe
     asignacion: {
       id: uuidDemo(`asignacion-${contadorAsignacionDemo}-${cuenta.conductorId}`),
       fecha,
-      horario: 'manana',
+      horario,
       horaSalida: null,
       horaPresentacion: null,
       venceAt: new Date(ahora + 24 * 60 * 60 * 1000).toISOString(),

@@ -60,9 +60,14 @@ export {
   buscarCuenta,
   contextoDeCuenta,
   CUENTAS_DEMO,
+  fechaLocalDemo,
+  fechaTurnoDemo,
   idParadaDemo,
+  LIMITES_TURNO_DEMO,
+  salidaProgramadaInicialDemo,
   trufiIdDesdeContexto,
   TRUFIS_JUGABLES_DEMO,
+  turnoDesdeHoraLocal,
   uuidDemo,
 } from './cuentas';
 export type { CuentaDemo } from './cuentas';
