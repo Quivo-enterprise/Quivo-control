@@ -10,10 +10,13 @@ import { calcularCadenciaMediaMs, formatearCadencia, registrarMuestraCadencia } 
  * comportamiento": este archivo ni se importa en ese caso, tree-shaking aparte).
  *
  * Verifica en vivo los criterios (a)-(e) del spike S1 del plan:
- * - (a) fixes visuales recibidos (`fixesVisuales`, prop — espejo de `visualFixesRecibidos.current`
- *   en `use-gps-operativo.ts`) y (b)/(c) `BackgroundGeolocation.getCount()` (polled acá, cada 5s)
- *   — si sube al mismo ritmo que los fixes visuales, el canal visual se está colando en la
- *   evidencia nativa (BUG). Debe mantenerse estable mientras solo corre el canal visual.
+ * - (a) fixes visuales recibidos (`leerFixesVisuales`, prop — getter barato sobre el ref
+ *   `visualFixesRecibidos` de `use-gps-operativo.ts`; NO es un `useState` a propósito — hallazgo
+ *   de revisión: espejarlo a estado re-renderizaba `operation-screen.tsx` a 1Hz y ensuciaba la
+ *   propia medición de fluidez del spike. Este overlay lo lee con su propio polling, mismo
+ *   intervalo que (b)/(c) `BackgroundGeolocation.getCount()` — si sube al mismo ritmo que los
+ *   fixes visuales, el canal visual se está colando en la evidencia nativa (BUG). Debe
+ *   mantenerse estable mientras solo corre el canal visual.
  * - fixes de evidencia recibidos (`fixesEvidencia`, prop — `gps.puntos`, ya expuesto por el hook
  *   de siempre, sin cambios).
  * - (d) cadencia de evidencia: media de los deltas entre incrementos de `fixesEvidencia`,
@@ -32,11 +35,12 @@ import { calcularCadenciaMediaMs, formatearCadencia, registrarMuestraCadencia } 
 const INTERVALO_POLL_GETCOUNT_MS = 5000;
 
 interface SpikeMetricsOverlayProps {
-  fixesVisuales: number;
+  leerFixesVisuales: () => number;
   fixesEvidencia: number;
 }
 
-export function SpikeMetricsOverlay({ fixesVisuales, fixesEvidencia }: SpikeMetricsOverlayProps) {
+export function SpikeMetricsOverlay({ leerFixesVisuales, fixesEvidencia }: SpikeMetricsOverlayProps) {
+  const [fixesVisuales, setFixesVisuales] = useState(0);
   const [getCountNativo, setGetCountNativo] = useState<number | null>(null);
   const [muestrasCadencia, setMuestrasCadencia] = useState<number[]>([]);
   const ultimoFixesEvidenciaRef = useRef(fixesEvidencia);
@@ -44,6 +48,10 @@ export function SpikeMetricsOverlay({ fixesVisuales, fixesEvidencia }: SpikeMetr
   useEffect(() => {
     let cancelado = false;
     const poll = () => {
+      // Hallazgo de revisión (bajo): lee `leerFixesVisuales()` en el MISMO poll que
+      // `getCount()` — el único estado que este overlay actualiza a la cadencia del canal
+      // visual (1Hz) es el suyo propio, nunca `use-gps-operativo.ts`.
+      setFixesVisuales(leerFixesVisuales());
       void BackgroundGeolocation.getCount()
         .then((n) => {
           if (!cancelado) setGetCountNativo(n);
@@ -58,7 +66,7 @@ export function SpikeMetricsOverlay({ fixesVisuales, fixesEvidencia }: SpikeMetr
       cancelado = true;
       clearInterval(id);
     };
-  }, []);
+  }, [leerFixesVisuales]);
 
   useEffect(() => {
     if (fixesEvidencia === ultimoFixesEvidenciaRef.current) return;

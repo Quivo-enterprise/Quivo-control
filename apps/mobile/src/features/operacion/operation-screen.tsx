@@ -319,7 +319,7 @@ export function OperationScreen(
       />
 
       {spikeHabilitado() ? (
-        <SpikeMetricsOverlay fixesVisuales={gps.fixesVisuales} fixesEvidencia={gps.puntos} />
+        <SpikeMetricsOverlay leerFixesVisuales={gps.leerFixesVisuales} fixesEvidencia={gps.puntos} />
       ) : null}
 
       <View pointerEvents="box-none" style={styles.topOverlay}>
