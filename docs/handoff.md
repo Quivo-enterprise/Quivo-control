@@ -21,7 +21,40 @@
   5. **Fase C:** motor de mapa.
   6. **Ronda 2 en calle.**
   7. Licencia de Transistorsoft y build release 12.
-- **Prerrequisito:** extender las asignaciones más allá del 2026-09-29 antes del 30/09.
+- **Prerrequisito:** asignaciones vigentes para las cuentas de prueba (ver "Punto de retome 2026-10-07").
+
+### Punto de retome — 2026-10-07 (leer primero)
+
+**Hecho hoy:**
+- **APK del spike corregido y construido.** Build EAS `881978fc` (commit `4010c75`), link: https://expo.dev/accounts/shadow00/projects/quivo-conductor/builds/881978fc-d4a0-4cb9-a167-72b49d040342
+  - El primer APK (`45e7efc2`) abría el launcher de expo-dev-client. `developmentClient: false` no alcanza: en la variante `debug`, dev-client/dev-launcher/dev-menu se autolinkean igual.
+  - Fix: hook `eas-build-post-install` → `apps/mobile/scripts/eas-build-post-install-spike.mjs`. Solo con `EAS_BUILD_PROFILE=spike` agrega `expo.autolinking.android.exclude` (4 módulos dev) al `package.json` del build. El `package.json` versionado no cambia.
+  - Verificado sobre el APK: SHA-1 `db6581…3420`, LAUNCHER `MainActivity`, 0 referencias a devlauncher en manifest y dex, `debuggable=true`, bundle embebido. **No verificado en teléfono.**
+  - Los worktrees `.claude/worktrees/agent-a62fd67…` y `agent-a32a6c0…` tienen la rama del spike. Buildear desde `agent-a32a6c0…` (en `4010c75`) con `npx eas-cli@latest build --profile spike --platform android`; `eas` no está en el PATH.
+- **Asignaciones extendidas (prod, 2026-10-07):** `9001TST` (Z12) y `9004TST` (120), **solo 2026-10-08 y 2026-10-09**, decisión del CTO.
+  - Script nuevo `scripts/extender-asignaciones-piloto.ts` (PR #105). Usa solo la API: dry-run por defecto, `--apply`, `--placas`, `--desde`/`--hasta`, republica en `finally` y renueva el token ante 401.
+  - Resultado: 4 creadas, rotación `01f82ee6…` (`piloto-20260909`) publicada, 203 asignaciones, verificación OK.
+  - Correrlo con `packages/db/node_modules/.bin/tsx scripts/extender-asignaciones-piloto.ts`, no con `pnpm piloto:…`: pnpm dispara un `install` que falla sin `DATABASE_URL`.
+  - Credenciales por env `QUIVO_ADMIN_EMAIL`/`QUIVO_ADMIN_PASSWORD`, en una terminal propia (los `!` no son interactivos).
+  - **Para extender más días:** el mismo comando con otro rango.
+- **Admin del panel de prod:** `admin@quivo.com`, con el panel en https://quivo-web-hjqvfgsdnq-tl.a.run.app.
+  - Se descartó crear un admin nuevo.
+  - Pendiente del CTO: guardar la credencial en Secret Manager (`QUIVO_PANEL_ADMIN_EMAIL`/`QUIVO_PANEL_ADMIN_PASSWORD`).
+- **Costos de Google Maps:** solo Maps SDK for Android (Mobile Native Dynamic Maps, $0 ilimitado). La key está restringida a `maps-android-backend` + paquete + SHA-1. Falta confirmar el $0 en Facturación → Informes tras las pruebas.
+
+**Pendientes para la próxima sesión (en orden):**
+1. **CTO, en calle (08 y 09/10):** instalar el APK `881978fc` encima y confirmar que arranca sin launcher y sin pedir licencia.
+   - Medir S1 con el overlay: fixes visuales cerca de 1/s; `getCount()` y evidencia sin inflar; batería a mano.
+   - Medir S2 con el toggle Leaflet/Google: fluidez, heading-up, modo avión.
+2. **CTO:** e2e de la Fase A (Finalizar y ver "Recorrido finalizado" en `/en-vivo` en ≤30 s). Ronda 1 en calle (plan, Fase D).
+3. **Decisión C1/C2** con los datos de S1/S2; después, implementar la Fase C.
+4. **PR #105:** el CI falló en un test ajeno (`auth-movil.service.test.ts` › "el 409 de nivel 2 no resetea el contador de fallos", 5071 ms, probable timeout flaky). Se relanzó; mergear si pasa. Si se repite, investigar el flaky aparte.
+5. **Licencia Transistorsoft:** el trial vence el **2026-10-25**; comprarla antes del build release 12.
+6. **Deuda:**
+   - mensaje engañoso de `deploy-gcp.sh:803`;
+   - `/codex-debug verify-fix` pendiente en #87, #88, #89, #92, #97 y la Fase A;
+   - docblock desactualizado en `withAndroidSpikeDebugEmbed.js`, que todavía dice que excluir dev-client era innecesario.
+7. Limpiar los worktrees viejos (`agent-a5f1b8…`, `agent-ad631e…` de #100/#101 ya mergeados) y las ramas locales `feat/movimiento-nucleo` y `fix/panel-recorrido-finalizado`. Requiere aprobación del CTO.
 
 ### Estado al 2026-09-28
 
@@ -53,7 +86,7 @@
 
 **Deuda nueva:** `scripts/deploy-gcp.sh:803` descarta el stderr de `gcloud run services describe` y muestra "quivo-api no está desplegado" incluso cuando lo que venció es el token de gcloud (pasó el 09-28). Hay que mostrar el error real.
 
-**Siguiente:** APK del spike, luego medir S1 y S2 en calle; el CTO decide C1 o C2 y después viene la Fase C.
+**Siguiente:** ver "Punto de retome — 2026-10-07" arriba.
 
 ## Próxima entrega: APK conductor build 11 — plan v2 del 2026-09-26 (reemplaza al del 09-23)
 
