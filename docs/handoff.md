@@ -6,6 +6,42 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-10 (leer primero)
+
+**Plan nuevo aprobado: [`plan-saneamiento.md`](plan-saneamiento.md).**
+- Contenido: SRS reconstruido desde código + docs, reorganización de `docs/`, seguridad, DRY y orden arquitectónico.
+- Corre intercalado con el roadmap, sin congelar features.
+- No se toca el núcleo GPS/outbox/auth móvil hasta validar release 12 en calle.
+- Requisitos originales (`QUIVOcontrol.md`, RF-01..84; `QV-ESP-ESP-CTL-2026-001`): no están en el repo ni en `~/Downloads`. El CTO decidió reconstruir.
+
+**Spike: el toggle Leaflet/Google y el overlay S1 nunca aparecían en el APK `881978fc`.**
+- Causa: `spikeHabilitado(env = process.env)` leía `env.EXPO_PUBLIC_SPIKE` de forma indirecta. babel-preset-expo solo inlinea `process.env.EXPO_PUBLIC_X` literal, así que en release daba `false`.
+- Verificado sobre el bundle Hermes: `EXPO_PUBLIC_GPS_CANAL_VISUAL` quedó inlineado y `EXPO_PUBLIC_SPIKE` no.
+- Fixes en #102 (rama `spike/ubicacion-fluida`, no se mergea):
+  - `409abd8`: lectura literal y test de regresión `apps/mobile/src/env-publico-literal.test.ts`, que prohíbe acceso indirecto a `EXPO_PUBLIC_*`.
+    - **Deuda:** portar ese test a `main`.
+  - `ff32688`:
+    - overlay S1 visible: estaba debajo de la `DriverRouteCard`;
+    - zoom 17 al entrar en seguimiento con Google, igual que el `flyTo` de Leaflet;
+    - `MapErrorBoundary` con `key={motorMapa}`;
+    - `toolbarEnabled={false}`.
+  - Verificado: 645/645 tests, tsc sin errores nuevos (2 preexistentes en `control-feedback-toast.tsx`), eslint 0 errores.
+  - El `/code-review` automático no devolvió resultado: **no verificado** por ese gate.
+- **APK nuevo `beba67fa`**: https://expo.dev/artifacts/eas/UUy5GfzmFr_UBGT17nQgvH7WVJC2eVNN8Ufu13lBwdY.apk
+  - Verificado sobre el APK:
+    - `EXPO_PUBLIC_SPIKE` aparece 0 veces en el bundle;
+    - toggle y overlay presentes;
+    - 0 devlauncher;
+    - launcher `MainActivity`;
+    - SHA-1 `db6581…3420`;
+    - `geo.API_KEY` presente;
+    - `com.quivotech.conductor.app` con versionCode 12.
+  - **No verificado en teléfono.**
+- Notas de calle (auditoría):
+  - el toggle solo surte efecto con el paquete del día ya cargado, así que no hay que arrancar en frío en modo avión;
+  - el contador "Fixes visuales" se resetea al volver de background;
+  - el APK es `assembleDebug`, así que agitar el teléfono abre el dev menu nativo.
+
 ## Plan en curso: ubicación fluida + "Finalizado" en el panel + pruebas en calle (2026-09-26)
 
 **Plan: [`plan-ubicacion-fluida.md`](plan-ubicacion-fluida.md).** Absorbe el paso 7 (pruebas en calle) del build 11.
