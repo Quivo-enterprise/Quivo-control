@@ -243,7 +243,11 @@ export function useGpsOperativo(
   // BackgroundGeolocation.d.ts:89`, `watchPosition(...): Subscription`).
   const watchVisualSubscription = useRef<{ remove: () => void } | null>(null);
   // Contador de fixes recibidos por el canal visual desde el último `iniciarCanalVisual()` —
-  // solo para los logs `[gps-visual]` del spike S1 (instrumentación, no afecta la evidencia).
+  // los logs `[gps-visual]` del spike S1 y, vía `leerFixesVisuales()` más abajo, el overlay de
+  // métricas (`spike-metrics-overlay.tsx`). Vive SOLO en el ref a propósito (hallazgo de
+  // revisión, bajo): antes se espejaba a un `useState` que re-renderizaba `operation-screen.tsx`
+  // a 1Hz (cadencia del canal visual), ensuciando la propia medición de fluidez que este spike
+  // busca hacer. El overlay lo lee con su propio polling, no por props reactivas.
   const visualFixesRecibidos = useRef(0);
   // QUI-P0: espejo en ref de `tracking` — los handlers de `onMotionChange`/`AppState` que se
   // suscriben UNA sola vez (`suscribirUbicaciones`, más abajo) necesitan leer "¿hay un
@@ -1691,9 +1695,14 @@ export function useGpsOperativo(
     [sesionId],
   );
 
+  // Spike `ubicación fluida` (S1): getter barato (lee el ref, sin `useState`) para
+  // `spike-metrics-overlay.tsx` — ver el docblock de `visualFixesRecibidos` más arriba.
+  const leerFixesVisuales = useCallback(() => visualFixesRecibidos.current, []);
+
   return {
     tracking,
     puntos,
+    leerFixesVisuales,
     resultado,
     errorGps,
     // QUI-338: gate de permisos previo a "Iniciar recorrido" — `operation-screen.tsx` lo usa

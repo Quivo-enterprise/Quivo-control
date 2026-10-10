@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc --noEmit",
-    "eas-build-post-install": "cd ../.. && pnpm --filter \"@quivo/mobile^...\" build",
+    "eas-build-post-install": "node ./scripts/eas-build-post-install-spike.mjs && cd ../.. && pnpm --filter \"@quivo/mobile^...\" build",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
@@ -50,6 +50,7 @@
     "react-hook-form": "^7.84.0",
     "react-native": "0.81.5",
     "react-native-background-geolocation": "5.4.0",
+    "react-native-maps": "1.20.1",
     "react-native-mask-input": "^1.2.3",
     "react-native-reanimated": "~3.19.0",
     "react-native-safe-area-context": "5.6.2",

@@ -1,6 +1,15 @@
 import type { ExpoConfig } from 'expo/config';
 
 /**
+ * Spike `ubicación fluida` (`docs/plan-ubicacion-fluida.md`, Fase C / S2): `true` solo con
+ * `EXPO_PUBLIC_SPIKE=1` (perfil `spike` de `eas.json`) — condiciona, más abajo, tanto la API key
+ * de Google Maps (`android.config.googleMaps.apiKey`) como el plugin
+ * `withAndroidSpikeDebugEmbed` (ver ese archivo). Fuera del spike, ninguno de los dos corre: cero
+ * cambio de comportamiento en `development`/`production` (invariante del spike).
+ */
+const spikeHabilitado = process.env.EXPO_PUBLIC_SPIKE === '1';
+
+/**
  * Convertido de `app.json` (estático) a `app.config.ts` (dinámico) por QUI-357/QUI-365/URL de
  * API — las tres tareas necesitan inyectar valores de `process.env` en tiempo de prebuild:
  * - `TRANSISTORSOFT_LICENSE_KEY`: la key JWT del trial va acá, no en el JSON (ver comentario
@@ -83,6 +92,17 @@ export default (): ExpoConfig => ({
       // el detalle completo de por qué esto NUNCA bloquea "Iniciar recorrido".
       'ACTIVITY_RECOGNITION',
     ],
+    // Spike `ubicación fluida` (S2, motor Google nativo — `react-native-maps` con
+    // `PROVIDER_GOOGLE`): `GOOGLE_MAPS_ANDROID_API_KEY` ya existe como env var SENSIBLE de EAS en
+    // `preview`/`production` (confirmado por el CTO en el brief de esta tarea) — NUNCA se
+    // hardcodea ni se loguea acá. Con la variable ausente (build sin ella exportada, p. ej.
+    // `development`/`production` de hoy, que no la necesitan) esta clave se omite del todo del
+    // manifest en vez de mandar un string vacío — `expo config` no la imprime, y
+    // `react-native-maps`/Play Services fallan de forma explícita si algún día un build SIN esta
+    // key intenta cargar `PROVIDER_GOOGLE` (mejor que un mapa en blanco silencioso).
+    ...(process.env.GOOGLE_MAPS_ANDROID_API_KEY
+      ? { config: { googleMaps: { apiKey: process.env.GOOGLE_MAPS_ANDROID_API_KEY } } }
+      : {}),
   },
   extra: {
     // Leído en runtime por `src/shared/observability/sentry.ts` vía `expo-constants` para
@@ -183,5 +203,12 @@ export default (): ExpoConfig => ({
         project: process.env.SENTRY_PROJECT,
       },
     ],
+    // Spike `ubicación fluida` (Parte 1(b) del brief): SOLO con `EXPO_PUBLIC_SPIKE=1`. Ver el
+    // docblock de `withAndroidSpikeDebugEmbed.js` para el porqué completo — en resumen, fuerza
+    // que la variante `debug` (la que exige `eas.json` -> build.spike, para que Transistorsoft no
+    // pida licencia) empaquete el bundle JS, igual que `assembleRelease` hoy. Sin la env var, este
+    // `push` ni siquiera corre: el plugin no entra al array y `android/app/build.gradle` sale
+    // idéntico al de cualquier otro perfil.
+    ...(spikeHabilitado ? ['./plugins/withAndroidSpikeDebugEmbed'] : []),
   ],
 });
