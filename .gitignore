@@ -53,3 +53,21 @@ docs/DOCUMENTO DE DATOS IMPORTANTES Y CREDENCIALES DE QUIVO CONTROL
 # de producción) — permite reanudar sin duplicar filas (no hay endpoint DELETE). No son datos
 # de ejemplo, nunca se commitea.
 scripts/.estado-siembra-produccion.json
+
+# capturas sueltas en la raíz del repo (solo PNG de la raíz, no los de apps/ o docs/)
+/*.png
+
+# web-mapa/: prototipo local del usuario, no versionado
+web-mapa/
+
+# artefactos locales de playwright-mcp
+.playwright-mcp/
+
+# worktrees locales
+.worktrees/
+
+# keystores: nunca se commitean
+*.keystore
+
+# credenciales de dev en texto plano (la versión sin secretos es docs/dev/credenciales-demo.md)
+CREDENCIALES.md
