@@ -28,10 +28,10 @@ const { withAppBuildGradle } = require('expo/config-plugins');
  * - Variante de build custom (p. ej. "spikeRelease" con `debuggable true`): agrega una fuente de
  *   verdad nueva en `android/app/build.gradle` que `expo prebuild` no genera — más superficie que
  *   mantener para algo descartable.
- * - Excluir `expo-dev-client` del autolinking: innecesario. El perfil `production` YA prueba, en
- *   producción real (conductores usándolo hoy), que `developmentClient: false` alcanza para que el
- *   dev-launcher no aparezca sin importar el buildType — el único delta de este perfil es
- *   `debug` en vez de `release`, y esa condición no depende de `debuggableVariants`.
+ * - Dejar `expo-dev-client` autolinkeado: insuficiente. `developmentClient: false` no alcanza en un
+ *   build `debug` — el launcher de dev-client aparecía igual en el APK del spike. Desde `4010c75`
+ *   el hook `scripts/eas-build-post-install-spike.mjs` excluye 4 módulos de dev del autolinking
+ *   cuando `EAS_BUILD_PROFILE=spike`; este plugin solo se ocupa de embeber el bundle JS.
  */
 module.exports = function withAndroidSpikeDebugEmbed(config) {
   return withAppBuildGradle(config, (modConfig) => {

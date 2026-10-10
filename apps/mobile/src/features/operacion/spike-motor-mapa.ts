@@ -14,13 +14,18 @@ export type MotorMapa = 'leaflet' | 'google';
 export const MOTOR_MAPA_DEFAULT: MotorMapa = 'leaflet';
 
 /** `true` solo con `EXPO_PUBLIC_SPIKE === '1'` — gatea tanto el toggle de motor como el overlay
- * de métricas S1 en `operation-screen.tsx`. Función (no una constante de módulo evaluada una
- * sola vez) para que los tests puedan variar `env` sin depender de `process.env` global. Tipo del
- * parámetro deliberadamente laxo (`Record<string, string | undefined>` en vez de
- * `NodeJS.ProcessEnv`): a los tests no les interesa el resto de las variables del proceso
- * (`NODE_ENV` incluida), solo esta. */
-export function spikeHabilitado(env: Record<string, string | undefined> = process.env): boolean {
-  return env.EXPO_PUBLIC_SPIKE === '1';
+ * de métricas S1 en `operation-screen.tsx`.
+ *
+ * IMPORTANTE: el default tiene que leer `process.env.EXPO_PUBLIC_SPIKE` de forma LITERAL y
+ * estática. `babel-preset-expo` solo inlinea las variables `EXPO_PUBLIC_*` cuando el código
+ * escribe exactamente `process.env.EXPO_PUBLIC_X`; un acceso indirecto (`env = process.env` y
+ * luego `env.EXPO_PUBLIC_SPIKE`, o `process.env[nombre]`) no se reemplaza, y en el bundle release
+ * `process.env` no trae la variable, así que devolvería siempre `false` (el toggle y el overlay
+ * nunca aparecían en el APK). Un test (`env-publico-literal.test.ts`) vigila esta regla en todo
+ * `src`. Función (no una constante de módulo) para que los tests puedan variar el valor pasando
+ * el parámetro `valor`, sin depender de `process.env` global. */
+export function spikeHabilitado(valor: string | undefined = process.env.EXPO_PUBLIC_SPIKE): boolean {
+  return valor === '1';
 }
 
 /** Alterna entre los dos motores — `Leaflet ⇄ Google`. Pura: el componente que la usa es quien

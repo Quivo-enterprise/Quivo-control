@@ -3,16 +3,16 @@ import { MOTOR_MAPA_DEFAULT, alternarMotorMapa, etiquetaMotorMapa, spikeHabilita
 
 describe('spikeHabilitado', () => {
   it('es false sin EXPO_PUBLIC_SPIKE', () => {
-    expect(spikeHabilitado({})).toBe(false);
+    expect(spikeHabilitado(undefined)).toBe(false);
   });
 
   it('es false con cualquier valor que no sea el string "1"', () => {
-    expect(spikeHabilitado({ EXPO_PUBLIC_SPIKE: 'true' })).toBe(false);
-    expect(spikeHabilitado({ EXPO_PUBLIC_SPIKE: '0' })).toBe(false);
+    expect(spikeHabilitado('true')).toBe(false);
+    expect(spikeHabilitado('0')).toBe(false);
   });
 
   it('es true solo con EXPO_PUBLIC_SPIKE === "1"', () => {
-    expect(spikeHabilitado({ EXPO_PUBLIC_SPIKE: '1' })).toBe(true);
+    expect(spikeHabilitado('1')).toBe(true);
   });
 });
 
