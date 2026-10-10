@@ -91,8 +91,10 @@ export function SpikeMetricsOverlay({ leerFixesVisuales, fixesEvidencia }: Spike
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    top: 12,
-    right: 12,
+    top: '36%',
+    left: 12,
+    zIndex: 50,
+    elevation: 50,
     backgroundColor: 'rgba(0,0,0,0.72)',
     borderRadius: 8,
     paddingHorizontal: 10,

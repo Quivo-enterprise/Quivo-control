@@ -318,10 +318,6 @@ export function OperationScreen(
         motorMapa={motorMapa}
       />
 
-      {spikeHabilitado() ? (
-        <SpikeMetricsOverlay leerFixesVisuales={gps.leerFixesVisuales} fixesEvidencia={gps.puntos} />
-      ) : null}
-
       <View pointerEvents="box-none" style={styles.topOverlay}>
         <View style={{ flexDirection: 'column', gap: quivoSpacing.sm }}>
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: quivoSpacing.md }}>
@@ -513,6 +509,13 @@ export function OperationScreen(
         panY={sheetPanY}
         gpsError={gps.errorGps}
       />
+
+      {/* Spike S1: va DESPUÉS de topOverlay/FABs/sheet (último en z-order) y a la izquierda, a media
+          altura: libre de la DriverRouteCard (arriba, ancho completo), de la columna de FABs
+          (derecha, bottom 180) y del NextControlSheet (abajo). */}
+      {spikeHabilitado() ? (
+        <SpikeMetricsOverlay leerFixesVisuales={gps.leerFixesVisuales} fixesEvidencia={gps.puntos} />
+      ) : null}
 
       <Modal
         visible={showInfo}
@@ -764,7 +767,7 @@ function MapLayer({
   // del spike este componente SIEMPRE monta `RouteMapView` (Leaflet), idéntico a hoy.
   const MapaComponent = motorMapa === 'google' ? RouteMapNative : RouteMapView;
   return (
-    <MapErrorBoundary>
+    <MapErrorBoundary key={motorMapa}>
       <MapaComponent
         paquete={paquete}
         vehiculo={vehiculo}

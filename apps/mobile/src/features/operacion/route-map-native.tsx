@@ -3,6 +3,7 @@ import { StyleSheet, View, Text } from 'react-native';
 import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE, type LatLng } from 'react-native-maps';
 import Svg, { Path } from 'react-native-svg';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
+import { construirCamaraSeguimiento } from './movimiento/camara-seguimiento';
 import { duracionAnimacionMs, interpolarAngulo, interpolarLatLng } from './movimiento/geo';
 import { useEstadoVisual } from './movimiento/store-visual';
 import type { PosicionMapaProtocolo } from './route-map-protocol';
@@ -112,6 +113,9 @@ interface MarcadorConductorAnimadoProps {
   posicionParaProtocolo: PosicionMapaProtocolo | null;
   mapRef: RefObject<MapView | null>;
   seguimientoActivoRef: RefObject<boolean>;
+  /** true = la próxima cámara de seguimiento debe fijar el zoom (se acaba de entrar en
+   * seguimiento); quien la consume lo baja a false. Ver `camara-seguimiento.ts`. */
+  zoomPendienteRef: RefObject<boolean>;
   /** Ref compartido con el padre (`RouteMapNative`): este componente escribe acá la última
    * posición mostrada para que el recenter manual (que vive en el padre) la lea sin necesidad
    * de que el padre también re-renderice por cada frame de la animación. */
@@ -128,6 +132,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   posicionParaProtocolo,
   mapRef,
   seguimientoActivoRef,
+  zoomPendienteRef,
   posicionMostradaRef,
 }: MarcadorConductorAnimadoProps) {
   const [posicionMostrada, setPosicionMostrada] = useState<CoordenadaMostrada | null>(null);
@@ -191,10 +196,11 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
     // Hallazgo ALTO #1 (perf) + BAJO #5: cámara UNA vez por fix, solo con seguimiento activo;
     // sin rumbo todavía no se manda `heading` (conserva el actual en vez de snapear a norte).
     if (seguimientoActivoRef.current) {
-      mapRef.current?.animateCamera(
-        { center: aLatLng(hasta), ...(hasta.rumbo !== null ? { heading: hasta.rumbo } : {}) },
-        { duration: duracion },
-      );
+      const aplicarZoom = zoomPendienteRef.current;
+      zoomPendienteRef.current = false;
+      mapRef.current?.animateCamera(construirCamaraSeguimiento(hasta, aplicarZoom), {
+        duration: duracion,
+      });
     }
 
     if (!actual) {
@@ -430,7 +436,13 @@ export function RouteMapNative({
 
   // --- Cámara heading-up con seguimiento -------------------------------------------------
   const [seguimientoActivo, setSeguimientoActivo] = useState(false);
-  useEffect(() => setSeguimientoActivo(tracking), [tracking]);
+  // Zoom de seguimiento (equivalente al 17 de Leaflet): se fija solo al ENTRAR en seguimiento
+  // (tracking arranca o recenter), no en cada fix — no se le pisa el pinch al usuario.
+  const zoomPendienteRef = useRef(false);
+  useEffect(() => {
+    if (tracking) zoomPendienteRef.current = true;
+    setSeguimientoActivo(tracking);
+  }, [tracking]);
   const seguimientoActivoRef = useRef(seguimientoActivo);
   useEffect(() => {
     seguimientoActivoRef.current = seguimientoActivo;
@@ -445,11 +457,10 @@ export function RouteMapNative({
     setSeguimientoActivo(true);
     const posicion = posicionMostradaRef.current;
     if (posicion) {
-      mapRef.current?.animateCamera(
-        { center: aLatLng(posicion), ...(posicion.rumbo !== null ? { heading: posicion.rumbo } : {}) },
-        { duration: 400 },
-      );
+      zoomPendienteRef.current = false;
+      mapRef.current?.animateCamera(construirCamaraSeguimiento(posicion, true), { duration: 400 });
     } else if (coordenadasRuta.length > 0) {
+      zoomPendienteRef.current = true;
       mapRef.current?.fitToCoordinates(coordenadasRuta, {
         edgePadding: { top: 80, right: 20, bottom: 180, left: 20 },
         animated: true,
@@ -482,6 +493,7 @@ export function RouteMapNative({
         onMapReady={onMapReady}
         onPanDrag={onPanDrag}
         rotateEnabled
+        toolbarEnabled={false}
         showsCompass={false}
       >
         <RutaPolylines
@@ -499,6 +511,7 @@ export function RouteMapNative({
           posicionParaProtocolo={posicionParaProtocolo}
           mapRef={mapRef}
           seguimientoActivoRef={seguimientoActivoRef}
+          zoomPendienteRef={zoomPendienteRef}
           posicionMostradaRef={posicionMostradaRef}
         />
       </MapView>
