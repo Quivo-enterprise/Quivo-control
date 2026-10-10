@@ -8,6 +8,16 @@
 
 ## Punto de retome — 2026-10-10 (leer primero)
 
+**Saneamiento: Fase 0 hecha, Fase 1 en curso.**
+- **Mapa de la documentación:** [`README.md`](README.md).
+- **SRS v0.1:** [`srs/README.md`](srs/README.md), reconstruido desde el código, con 4 dominios y unos 350 requisitos con file:line.
+- **Otros docs nuevos:** [`datos/modelo.md`](datos/modelo.md), [`arquitectura/vision-general.md`](arquitectura/vision-general.md), [`glosario.md`](glosario.md) y [`calidad/linea-base.md`](calidad/linea-base.md).
+- **Línea base:** 0 errores de typecheck con build previo. Los 51 errores de antes eran el `dist` viejo.
+- **Higiene:** #107.
+- **OSRM no está desplegado en prod:** la ruta a un punto se dibuja como línea recta.
+- **Hallazgo P0:** alta y edición manual de asignaciones sin validación de tenant (`rotaciones.service.ts:219-258`). Va primero en la Fase 2.
+- **Decisiones del CTO pendientes:** 12 decisiones que bloquean diseño, en [SRS §7](srs/README.md).
+
 **Plan nuevo aprobado: [`plan-saneamiento.md`](plan-saneamiento.md).**
 - Contenido: SRS reconstruido desde código + docs, reorganización de `docs/`, seguridad, DRY y orden arquitectónico.
 - Corre intercalado con el roadmap, sin congelar features.
