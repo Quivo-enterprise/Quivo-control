@@ -6,6 +6,42 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-10 (leer primero)
+
+**Plan nuevo aprobado: [`plan-saneamiento.md`](plan-saneamiento.md).**
+- Contenido: SRS reconstruido desde código + docs, reorganización de `docs/`, seguridad, DRY y orden arquitectónico.
+- Corre intercalado con el roadmap, sin congelar features.
+- No se toca el núcleo GPS/outbox/auth móvil hasta validar release 12 en calle.
+- Requisitos originales (`QUIVOcontrol.md`, RF-01..84; `QV-ESP-ESP-CTL-2026-001`): no están en el repo ni en `~/Downloads`. El CTO decidió reconstruir.
+
+**Spike: el toggle Leaflet/Google y el overlay S1 nunca aparecían en el APK `881978fc`.**
+- Causa: `spikeHabilitado(env = process.env)` leía `env.EXPO_PUBLIC_SPIKE` de forma indirecta. babel-preset-expo solo inlinea `process.env.EXPO_PUBLIC_X` literal, así que en release daba `false`.
+- Verificado sobre el bundle Hermes: `EXPO_PUBLIC_GPS_CANAL_VISUAL` quedó inlineado y `EXPO_PUBLIC_SPIKE` no.
+- Fixes en #102 (rama `spike/ubicacion-fluida`, no se mergea):
+  - `409abd8`: lectura literal y test de regresión `apps/mobile/src/env-publico-literal.test.ts`, que prohíbe acceso indirecto a `EXPO_PUBLIC_*`.
+    - **Deuda:** portar ese test a `main`.
+  - `ff32688`:
+    - overlay S1 visible: estaba debajo de la `DriverRouteCard`;
+    - zoom 17 al entrar en seguimiento con Google, igual que el `flyTo` de Leaflet;
+    - `MapErrorBoundary` con `key={motorMapa}`;
+    - `toolbarEnabled={false}`.
+  - Verificado: 645/645 tests, tsc sin errores nuevos (2 preexistentes en `control-feedback-toast.tsx`), eslint 0 errores.
+  - El `/code-review` automático no devolvió resultado: **no verificado** por ese gate.
+- **APK nuevo `beba67fa`**: https://expo.dev/artifacts/eas/UUy5GfzmFr_UBGT17nQgvH7WVJC2eVNN8Ufu13lBwdY.apk
+  - Verificado sobre el APK:
+    - `EXPO_PUBLIC_SPIKE` aparece 0 veces en el bundle;
+    - toggle y overlay presentes;
+    - 0 devlauncher;
+    - launcher `MainActivity`;
+    - SHA-1 `db6581…3420`;
+    - `geo.API_KEY` presente;
+    - `com.quivotech.conductor.app` con versionCode 12.
+  - **No verificado en teléfono.**
+- Notas de calle (auditoría):
+  - el toggle solo surte efecto con el paquete del día ya cargado, así que no hay que arrancar en frío en modo avión;
+  - el contador "Fixes visuales" se resetea al volver de background;
+  - el APK es `assembleDebug`, así que agitar el teléfono abre el dev menu nativo.
+
 ## Plan en curso: ubicación fluida + "Finalizado" en el panel + pruebas en calle (2026-09-26)
 
 **Plan: [`plan-ubicacion-fluida.md`](plan-ubicacion-fluida.md).** Absorbe el paso 7 (pruebas en calle) del build 11.
@@ -21,7 +57,40 @@
   5. **Fase C:** motor de mapa.
   6. **Ronda 2 en calle.**
   7. Licencia de Transistorsoft y build release 12.
-- **Prerrequisito:** extender las asignaciones más allá del 2026-09-29 antes del 30/09.
+- **Prerrequisito:** asignaciones vigentes para las cuentas de prueba (ver "Punto de retome 2026-10-07").
+
+### Punto de retome — 2026-10-07 (leer primero)
+
+**Hecho hoy:**
+- **APK del spike corregido y construido.** Build EAS `881978fc` (commit `4010c75`), link: https://expo.dev/accounts/shadow00/projects/quivo-conductor/builds/881978fc-d4a0-4cb9-a167-72b49d040342
+  - El primer APK (`45e7efc2`) abría el launcher de expo-dev-client. `developmentClient: false` no alcanza: en la variante `debug`, dev-client/dev-launcher/dev-menu se autolinkean igual.
+  - Fix: hook `eas-build-post-install` → `apps/mobile/scripts/eas-build-post-install-spike.mjs`. Solo con `EAS_BUILD_PROFILE=spike` agrega `expo.autolinking.android.exclude` (4 módulos dev) al `package.json` del build. El `package.json` versionado no cambia.
+  - Verificado sobre el APK: SHA-1 `db6581…3420`, LAUNCHER `MainActivity`, 0 referencias a devlauncher en manifest y dex, `debuggable=true`, bundle embebido. **No verificado en teléfono.**
+  - Los worktrees `.claude/worktrees/agent-a62fd67…` y `agent-a32a6c0…` tienen la rama del spike. Buildear desde `agent-a32a6c0…` (en `4010c75`) con `npx eas-cli@latest build --profile spike --platform android`; `eas` no está en el PATH.
+- **Asignaciones extendidas (prod, 2026-10-07):** `9001TST` (Z12) y `9004TST` (120), **solo 2026-10-08 y 2026-10-09**, decisión del CTO.
+  - Script nuevo `scripts/extender-asignaciones-piloto.ts` (PR #105). Usa solo la API: dry-run por defecto, `--apply`, `--placas`, `--desde`/`--hasta`, republica en `finally` y renueva el token ante 401.
+  - Resultado: 4 creadas, rotación `01f82ee6…` (`piloto-20260909`) publicada, 203 asignaciones, verificación OK.
+  - Correrlo con `packages/db/node_modules/.bin/tsx scripts/extender-asignaciones-piloto.ts`, no con `pnpm piloto:…`: pnpm dispara un `install` que falla sin `DATABASE_URL`.
+  - Credenciales por env `QUIVO_ADMIN_EMAIL`/`QUIVO_ADMIN_PASSWORD`, en una terminal propia (los `!` no son interactivos).
+  - **Para extender más días:** el mismo comando con otro rango.
+- **Admin del panel de prod:** `admin@quivo.com`, con el panel en https://quivo-web-hjqvfgsdnq-tl.a.run.app.
+  - Se descartó crear un admin nuevo.
+  - Pendiente del CTO: guardar la credencial en Secret Manager (`QUIVO_PANEL_ADMIN_EMAIL`/`QUIVO_PANEL_ADMIN_PASSWORD`).
+- **Costos de Google Maps:** solo Maps SDK for Android (Mobile Native Dynamic Maps, $0 ilimitado). La key está restringida a `maps-android-backend` + paquete + SHA-1. Falta confirmar el $0 en Facturación → Informes tras las pruebas.
+
+**Pendientes para la próxima sesión (en orden):**
+1. **CTO, en calle (08 y 09/10):** instalar el APK `881978fc` encima y confirmar que arranca sin launcher y sin pedir licencia.
+   - Medir S1 con el overlay: fixes visuales cerca de 1/s; `getCount()` y evidencia sin inflar; batería a mano.
+   - Medir S2 con el toggle Leaflet/Google: fluidez, heading-up, modo avión.
+2. **CTO:** e2e de la Fase A (Finalizar y ver "Recorrido finalizado" en `/en-vivo` en ≤30 s). Ronda 1 en calle (plan, Fase D).
+3. **Decisión C1/C2** con los datos de S1/S2; después, implementar la Fase C.
+4. **PR #105:** el CI falló en un test ajeno (`auth-movil.service.test.ts` › "el 409 de nivel 2 no resetea el contador de fallos", 5071 ms, probable timeout flaky). Se relanzó; mergear si pasa. Si se repite, investigar el flaky aparte.
+5. **Licencia Transistorsoft:** el trial vence el **2026-10-25**; comprarla antes del build release 12.
+6. **Deuda:**
+   - mensaje engañoso de `deploy-gcp.sh:803`;
+   - `/codex-debug verify-fix` pendiente en #87, #88, #89, #92, #97 y la Fase A;
+   - docblock desactualizado en `withAndroidSpikeDebugEmbed.js`, que todavía dice que excluir dev-client era innecesario.
+7. Limpiar los worktrees viejos (`agent-a5f1b8…`, `agent-ad631e…` de #100/#101 ya mergeados) y las ramas locales `feat/movimiento-nucleo` y `fix/panel-recorrido-finalizado`. Requiere aprobación del CTO.
 
 ### Estado al 2026-09-28
 
@@ -53,7 +122,7 @@
 
 **Deuda nueva:** `scripts/deploy-gcp.sh:803` descarta el stderr de `gcloud run services describe` y muestra "quivo-api no está desplegado" incluso cuando lo que venció es el token de gcloud (pasó el 09-28). Hay que mostrar el error real.
 
-**Siguiente:** APK del spike, luego medir S1 y S2 en calle; el CTO decide C1 o C2 y después viene la Fase C.
+**Siguiente:** ver "Punto de retome — 2026-10-07" arriba.
 
 ## Próxima entrega: APK conductor build 11 — plan v2 del 2026-09-26 (reemplaza al del 09-23)
 
