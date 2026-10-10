@@ -1,6 +1,6 @@
 # Plan de saneamiento — documentación (SRS), seguridad, DRY y orden arquitectónico
 
-> **Estado:** aprobado por el CTO el 2026-10-10. En ejecución: Fase 0.
+> **Estado:** aprobado por el CTO el 2026-10-10. Fase 0 hecha; Fase 1 en curso (SRS, modelo, arquitectura y glosario publicados; faltan ADRs, handoff, planes y contradicciones).
 > Origen: 3 auditorías de solo lectura (arquitectura, docs, salud de código) del 2026-10-10.
 
 ## Contexto
@@ -35,28 +35,25 @@ El CTO siente que el proyecto "avanza a ciegas". El diagnóstico (3 auditorías 
 - Release 12 también tiene prioridad sobre este plan.
 - **No se refactoriza el núcleo GPS/outbox/auth móvil antes de que release 12 esté validado en calle.**
 
-## Paso previo (fuera de este plan, pendiente de la sesión)
+## Paso previo — HECHO (2026-10-10)
 
-APK spike `beba67fa` terminado (https://expo.dev/artifacts/eas/UUy5GfzmFr_UBGT17nQgvH7WVJC2eVNN8Ufu13lBwdY.apk).
-- **Sin verificar todavía.** Antes de dárselo al CTO: descargarlo y comprobar sobre el bundle Hermes:
-  - que `EXPO_PUBLIC_SPIKE` no aparezca como string;
-  - que el launcher sea `MainActivity`;
-  - que el SHA-1 sea `db6581…3420`;
-  - que `geo.API_KEY` esté presente.
-- Actualizar el handoff con #102 (`409abd8`, `ff32688`) y el build.
+APK spike `beba67fa` verificado sobre el archivo:
+- `EXPO_PUBLIC_SPIKE` aparece 0 veces;
+- launcher `MainActivity`;
+- SHA-1 `db6581…3420`;
+- `geo.API_KEY` presente.
 
-## Fase 0 — Línea base real e higiene (1–2 PRs, bajo riesgo)
+El handoff está actualizado (#106).
 
-1. **Medir de verdad.** Los locales actuales dan 51 errores de tipos y 52 tests rotos, probablemente por `packages/shared/dist` viejo (del 23-sep, anterior a `src`). Correr `pnpm -r build` y repetir typecheck y test por paquete. Guardar los números en `docs/calidad/linea-base.md`.
-   - Si se confirma que es el `dist`: en `turbo.json`, `typecheck` y `test` tienen que depender de `^build`, o hay que consumir `shared` desde `src`. Así lo local nunca vuelve a mentir.
-2. **Higiene de raíz:**
-   - Agregar a `.gitignore`: `web-mapa/`, `.playwright-mcp/`, `.worktrees/`, `/*.png`, `*.keystore`, `CREDENCIALES.md`.
-   - `git rm --cached CREDENCIALES.md` y mover su contenido útil a un `docs/dev/credenciales-demo.example.md` sin PINs.
-   - Archivar o eliminar `archivo/mobile-mockup/` (código muerto, 2k líneas) y `reporte_implementacion.md`.
-   - Decidir sobre `scripts/experimentos/` (214 archivos): moverlo a `scripts/_experimentos` documentado, o borrarlo.
-3. **Verificar en prod con SQL de solo lectura** que el usuario demo `admin_quivo`, de password conocido según `CREDENCIALES.md:57-59`, **no exista o esté desactivado.**
-4. **Verificar OSRM en prod.** `tracking/ruteo.service.ts:31` cae a `localhost:5001`, y `deploy-gcp.sh` no despliega OSRM. Confirmar si `/v1/mobile/ruta-a-punto` funciona en prod o si es un bug latente.
-5. **Verificar `radioToleranciaM: 30`** en `apps/mobile/src/features/operacion/use-gps-operativo.ts:1686`, contra la decisión de 150/40 m. Si es un bug, es un `fix:` aparte con `/codex-debug verify-fix`.
+## Fase 0 — Línea base real e higiene — HECHA (2026-10-10)
+
+1. **Línea base:** [`calidad/linea-base.md`](calidad/linea-base.md). Con build previo hay 0 errores de typecheck en los 7 paquetes. Los 51 errores y 52 tests rotos venían del `dist` viejo. `turbo.json` ya tenía `dependsOn: ["^build"]`, así que no hay cambio de config; queda la regla de verificar con turbo o con build previo.
+2. **Higiene de raíz:** #107. `.gitignore` actualizado; `CREDENCIALES.md` fuera del índice y reemplazado por `docs/dev/credenciales-demo.md`; `archivo/mobile-mockup/` borrado; `reporte_implementacion.md` movido a `docs/archivo/`.
+   - **Pendiente:** decidir sobre `scripts/experimentos/` (214 archivos, solo los referencian docs).
+   - **Pendiente:** limpiar las menciones a `CREDENCIALES.md` en `packages/db/prisma/seed.ts` y `packages/db/src/auth.ts` (texto de error; revisar tests).
+3. **`admin_quivo` demo en prod:** probablemente no existe. `plan-siembra-produccion.md` descartó correr el seed demo contra prod y el admin real es `admin@quivo.com`. **No verificado por SQL** (la DB solo tiene IP privada).
+4. **OSRM en prod:** **no desplegado.** `quivo-api` no tiene `OSRM_URL` (verificado con `gcloud run services describe`). La ruta a un punto siempre se dibuja como línea recta. Decisión pendiente en la Fase 5.
+5. **`radioToleranciaM: 30`:** **inocuo.** Solo lo usa `simularDeteccion`, que está detrás de `__DEV__`. Los comentarios desactualizados de `geofence.ts` (312-316, 443, 540-544) se corrigen en la Fase 3.2.
 
 ## Fase 1 — Documentación: fuente de verdad única (PRs solo-docs)
 
@@ -132,6 +129,25 @@ docs/planes/                   planes vigentes; los completados van a docs/archi
 6. Inyección de fórmulas en los CSV de `reportes/exportes` (deuda S5).
 7. `pnpm audit` en CI (deuda S6) y Sentry en web (deuda S8).
 8. Sesión web en `localStorage` (`apps/web/src/lib/auth/auth-context.tsx`): primero un ADR (cookie httpOnly vs CSP estricta). Es un cambio mayor y no entra a ciegas.
+
+**Agregados por la reconstrucción del SRS (2026-10-10, [SRS §6](srs/README.md)). Prioridad: 9 > 10 > el resto.**
+
+9. **Aislamiento de asignaciones (P0).**
+   - `crearAsignacion`/`actualizarAsignacion` (`apps/api/src/modules/rotaciones/rotaciones.service.ts:219-258`) no validan el tenant de `vehiculoId`, `conductorId` y `rutaId`.
+   - Primero un test cross-tenant que lo reproduzca, después el fix. `/codex-debug verify-fix`.
+10. **RLS en `rutas`, `variantes`, `paradas`, `puntos_control`, `asignaciones`.** Necesita decisión P-RLS del CTO: policy con subquery o desnormalizar `sindicatoId`. Migración y test RLS.
+11. **Auditoría:**
+    - `REVOKE UPDATE, DELETE` sobre `audit_log` para `quivo_app` + trigger;
+    - eventos de seguridad (login, fallos, lockout, revocación);
+    - atomicidad. Depende de la decisión P-AUD.
+12. **Sesión móvil:** revocarla al desactivar el vehículo o el conductor y al vencer la asignación. Depende de la decisión P-SESION.
+13. **Integridad del sync** (después de la decisión P-ACK):
+    - reintentos en BullMQ;
+    - Redis en `noeviction`;
+    - reproceso de `sync_errors`;
+    - aislar la fila GPS mala en vez de mandar el lote entero;
+    - cuarentena en la app para eventos que el servidor nunca acepta (400).
+14. **Ampliar el test RLS y `roles-matrix.test.ts`** a las tablas y controllers que no cubren (ver `calidad/linea-base.md`).
 
 ## Fase 3 — DRY: una sola fuente por regla de negocio (PRs con tests)
 
