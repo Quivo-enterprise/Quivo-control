@@ -6,7 +6,52 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-10 (leer primero)
+## Punto de retome — 2026-10-10, noche (leer primero)
+
+**Prueba en calle del APK spike `beba67fa`:** la navegación anduvo bien. La app crasheó al
+mandarla a segundo plano con un recorrido iniciado y volvió a crashear en cada relanzamiento.
+- **Síntoma:** RedBox `TypeError: undefined is not a function` en `evaluarCanalVisual`,
+  disparado por un cambio de `AppState`. Como el APK es `assembleDebug`, RELOAD intenta Metro
+  (`localhost:8081`) y muestra "Could not connect to development server". Es ruido del build
+  debug, no una segunda falla.
+- **Causa raíz:** `react-native-background-geolocation@5.4.0` declara `watchPosition` como `async`
+  y devuelve `Promise<{id, remove}>` (`src/NativeModule.js:289`), aunque los tipos 5.2.2 dicen
+  `Subscription`. `use-gps-operativo.ts` guardaba la Promise, y `detenerCanalVisual` llamaba
+  `.remove()` sobre ella.
+- **Alcance:** solo se dispara con `EXPO_PUBLIC_GPS_CANAL_VISUAL=1`, que en `eas.json` está
+  únicamente en el perfil `spike`. El perfil `production` no lo setea; las variables de entorno
+  de EAS no se revisaron.
+- **Fix:** rama `fix/canal-visual-watchposition-promise`. Se agregó
+  `canal-visual-controller.ts`, que normaliza la respuesta sync/Promise, es seguro si se detiene
+  mientras está pendiente y no lanza. Además, `gps/watch-position.ts` tipa `watchPosition` como
+  Promise, y el callback descarta los fixes de generaciones viejas: el listener `watchposition`
+  del runtime es global y se registra antes del `await`.
+  - Verificación: 631/631 tests de mobile (11 del controlador, 2 del shim), typecheck limpio y
+    lint con 0 errores.
+  - `/codex-debug verify-fix` dio `fixes_root_cause` dos veces. `/code-review` encontró 8
+    hallazgos: 7 se aplicaron y 1 quedó documentado (`remove()` del runtime descarta la promesa
+    de `stopWatchPosition`).
+  - El hook no tiene test propio; su cableado queda cubierto solo por typecheck y revisión.
+  - **No verificado en teléfono.** Falta llevarlo a la rama del spike y hacer un build nuevo.
+- **Auditoría:** ningún otro método del SDK se usa como síncrono siendo `async`.
+
+**Decisión del CTO (2026-10-10): la Fase 2 del saneamiento y el resto del backlog quedan
+pendientes.** No se arrancan hasta nueva indicación. Lista vigente:
+- **Fase 2, P0:** asignaciones sin validación de tenant (`rotaciones.service.ts:219-258`). Primero
+  el test y después el fix, con `/security-review`.
+- **Resto de la Fase 1:** renumerar los ADR, partir el handoff en estado y bitácora, archivar los
+  planes completados, corregir las contradicciones de documentación, OpenAPI con chequeo de drift
+  y runbooks de release y rollback.
+- **Seguimientos chicos:**
+  - portar `env-publico-literal.test.ts` a `main`;
+  - decidir sobre `scripts/experimentos/`;
+  - quitar las menciones a `CREDENCIALES.md` en `seed.ts` y `auth.ts`;
+  - verificar `admin_quivo` por SQL;
+  - limpiar los worktrees viejos.
+- **Decisiones del CTO en el [SRS §7](srs/README.md):** las 12 siguen abiertas.
+- **La rotación de prueba del 2026-10-10 se descartó** por pedido del CTO.
+
+## Punto de retome — 2026-10-10 (anterior)
 
 **Saneamiento: Fase 0 hecha, Fase 1 en curso.**
 - **Mapa de la documentación:** [`README.md`](README.md).

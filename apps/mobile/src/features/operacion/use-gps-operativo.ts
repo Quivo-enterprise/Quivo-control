@@ -17,6 +17,8 @@ import {
   gpsSpikeConfig,
   logVerboseHabilitado,
 } from '../../gps/background-geolocation.config';
+import { watchPositionAsync } from '../../gps/watch-position';
+import { crearControladorCanalVisual } from './canal-visual-controller';
 import { esFixVisual, fixVisualDesdeLocation } from './movimiento/fix-visual';
 import {
   alimentarEstadoVisual,
@@ -237,11 +239,15 @@ export function useGpsOperativo(
   // FASE B (`docs/plan-ubicacion-fluida.md`): cuarta suscripción, la del canal visual
   // (`BackgroundGeolocation.watchPosition`, ver `iniciarCanalVisual`/`detenerCanalVisual` más
   // abajo) — detrás del flag `canalVisualHabilitado` (`gps/background-geolocation.config.ts`),
-  // apagado por default. `watchPosition` devuelve una `Subscription` con `.remove()`, igual que
-  // `onLocation`/`onHeartbeat`/`onMotionChange` (confirmado contra el `.d.ts` instalado:
-  // `@transistorsoft/background-geolocation-types@5.2.2/dist/core/api/
-  // BackgroundGeolocation.d.ts:89`, `watchPosition(...): Subscription`).
-  const watchVisualSubscription = useRef<{ remove: () => void } | null>(null);
+  // apagado por default. OJO: a diferencia de `onLocation`/`onHeartbeat`/`onMotionChange`,
+  // `watchPosition` NO devuelve la `Subscription` de forma síncrona en runtime: los tipos
+  // (`@transistorsoft/background-geolocation-types@5.2.2/dist/core/api/
+  // BackgroundGeolocation.d.ts:89`) dicen `Subscription`, pero `react-native-background-
+  // geolocation@5.4.0`, `src/NativeModule.js:289`, es `static async watchPosition` → `Promise`.
+  // Por eso el ciclo de vida lo maneja `crearControladorCanalVisual` (`canal-visual-controller.ts`).
+  const canalVisualController = useRef<ReturnType<typeof crearControladorCanalVisual> | null>(
+    null,
+  );
   // Contador de fixes recibidos por el canal visual desde el último `iniciarCanalVisual()` —
   // solo para los logs `[gps-visual]` del spike S1 (instrumentación, no afecta la evidencia).
   const visualFixesRecibidos = useRef(0);
@@ -687,6 +693,50 @@ export function useGpsOperativo(
     // siempre apunta a la versión más reciente (ver el `useEffect` que lo mantiene al día).
   }, [estaEnRecorrido]);
 
+  // Crea el controlador UNA sola vez (lazy). `abrirWatch`/`onAbierto`/`onFallo` NO capturan estado
+  // de render: solo refs (`canalVisualController`, `visualFixesRecibidos`), funciones de módulo y
+  // constantes — por eso es seguro que el closure de la primera render viva toda la sesión.
+  const obtenerControladorCanalVisual = useCallback(() => {
+    if (canalVisualController.current === null) {
+      canalVisualController.current = crearControladorCanalVisual({
+        // Runtime: devuelve una Promise (ver `gps/watch-position.ts`), pese a los tipos.
+        abrirWatch: (generacion) =>
+          watchPositionAsync(
+            {
+              interval: 1000,
+              persist: false,
+              desiredAccuracy: BackgroundGeolocation.DesiredAccuracy.High,
+              extras: { fuente: 'visual' },
+            },
+            (location) => {
+              // El listener del runtime es GLOBAL: un watch viejo (detenido mientras estaba
+              // pendiente, o un flicker detener→iniciar) sigue entregando fixes hasta que su
+              // `remove()` corre. Se ignoran los de generaciones que ya no son la vigente.
+              if (!canalVisualController.current?.esVigente(generacion)) return;
+              visualFixesRecibidos.current += 1;
+              if (logVerboseHabilitado) {
+                console.log(`[gps-visual] fix visual #${visualFixesRecibidos.current}`);
+              }
+              // FIX POST-REVISIÓN: alimenta el store visual directo, sin pasar por `onLocationRef`
+              // (ver el docblock de `iniciarCanalVisual`, abajo) — este fix NUNCA debe convertirse
+              // en un `gps_point` de evidencia.
+              alimentarEstadoVisual(fixVisualDesdeLocation(location));
+            },
+          ),
+        onAbierto: () => {
+          if (logVerboseHabilitado) console.log('[gps-visual] canal visual iniciado');
+        },
+        // Apertura vigente rechazada: sin canal visual no hay fixes frescos, así que "sin fix
+        // hace 15s" no debe marcar obsoleto (ver `configurarObsolescencia`).
+        onFallo: () => configurarObsolescencia(false),
+        reportarError: (error, paso) => {
+          Sentry.captureException(error, { tags: { contexto: 'gps-foreground', paso } });
+        },
+      });
+    }
+    return canalVisualController.current;
+  }, []);
+
   /**
    * FASE B (`docs/plan-ubicacion-fluida.md`, "canal visual con watchPosition"): arranca (si no
    * está corriendo ya) un `watchPosition` a 1Hz, `persist: false` — nunca toca la SQLite nativa
@@ -708,12 +758,17 @@ export function useGpsOperativo(
    * docblock en `store-visual.ts`): sin el canal visual, "sin fix hace 15s" es un vehículo
    * detenido normal (evidencia por distancia/heartbeat), no una señal perdida.
    *
-   * Firma verificada contra el `.d.ts` instalado (`@transistorsoft/background-geolocation-
-   * types@5.2.2/dist/core/api/BackgroundGeolocation.d.ts:89`):
-   * `watchPosition(options: WatchPositionRequest, locationCallback, errorCallback?): Subscription`.
+   * Firma: los tipos instalados (`@transistorsoft/background-geolocation-types@5.2.2/dist/core/
+   * api/BackgroundGeolocation.d.ts:89`) declaran `watchPosition(options, locationCallback,
+   * errorCallback?): Subscription`, pero el runtime (`react-native-background-geolocation@5.4.0`,
+   * `src/NativeModule.js:289`) es `async` y devuelve `Promise<{id, remove}>` (y rechaza la promesa
+   * ante un fallo nativo en vez de llamar al `errorCallback`). El controlador normaliza ambas
+   * formas y es seguro ante `detener` mientras la promesa está pendiente.
    */
   const iniciarCanalVisual = useCallback(() => {
-    if (watchVisualSubscription.current) return; // ya corriendo
+    const controlador = obtenerControladorCanalVisual();
+    // `iniciar()` devuelve `false` si ya hay un watch corriendo / abriéndose.
+    if (!controlador.iniciar()) return;
     configurarObsolescencia(true);
     visualFixesRecibidos.current = 0;
     if (logVerboseHabilitado) {
@@ -723,37 +778,7 @@ export function useGpsOperativo(
           // Instrumentación best-effort del spike S1: un fallo acá no debe impedir arrancar.
         });
     }
-    try {
-      watchVisualSubscription.current = BackgroundGeolocation.watchPosition(
-        {
-          interval: 1000,
-          persist: false,
-          desiredAccuracy: BackgroundGeolocation.DesiredAccuracy.High,
-          extras: { fuente: 'visual' },
-        },
-        (location) => {
-          visualFixesRecibidos.current += 1;
-          if (logVerboseHabilitado) {
-            console.log(`[gps-visual] fix visual #${visualFixesRecibidos.current}`);
-          }
-          // FIX POST-REVISIÓN: alimenta el store visual directo, sin pasar por `onLocationRef`
-          // (ver el docblock de `iniciarCanalVisual`, arriba) — este fix NUNCA debe convertirse
-          // en un `gps_point` de evidencia.
-          alimentarEstadoVisual(fixVisualDesdeLocation(location));
-        },
-        (errorCode) => {
-          Sentry.captureException(new Error(`watchPosition error ${String(errorCode)}`), {
-            tags: { contexto: 'gps-foreground', paso: 'canal-visual-watch' },
-          });
-        },
-      );
-      if (logVerboseHabilitado) console.log('[gps-visual] canal visual iniciado');
-    } catch (error) {
-      Sentry.captureException(error, {
-        tags: { contexto: 'gps-foreground', paso: 'canal-visual-iniciar' },
-      });
-    }
-  }, []);
+  }, [obtenerControladorCanalVisual]);
 
   /** Detiene el canal visual si está corriendo — no-op si ya estaba parado (llamado tanto al
    * salir a background como en cada cambio de `tracking`, ver el efecto de abajo: idempotente a
@@ -763,9 +788,8 @@ export function useGpsOperativo(
    * "sin fix hace 15s" ya no debe marcar obsoleto (ver `store-visual.ts`). */
   const detenerCanalVisual = useCallback(() => {
     configurarObsolescencia(false);
-    if (!watchVisualSubscription.current) return;
-    watchVisualSubscription.current.remove();
-    watchVisualSubscription.current = null;
+    // Nunca lanza (ver `crearControladorCanalVisual`); `false` = no había nada que detener.
+    if (!canalVisualController.current?.detener()) return;
     if (logVerboseHabilitado) {
       const recibidos = visualFixesRecibidos.current;
       console.log(`[gps-visual] canal visual detenido (fixes recibidos: ${recibidos})`);
