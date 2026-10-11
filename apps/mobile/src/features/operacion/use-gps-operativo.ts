@@ -17,6 +17,7 @@ import {
   gpsSpikeConfig,
   logVerboseHabilitado,
 } from '../../gps/background-geolocation.config';
+import { crearControladorCanalVisual, type SuscripcionWatch } from './canal-visual-controller';
 import { esFixVisual, fixVisualDesdeLocation } from './movimiento/fix-visual';
 import {
   alimentarEstadoVisual,
@@ -237,11 +238,15 @@ export function useGpsOperativo(
   // FASE B (`docs/plan-ubicacion-fluida.md`): cuarta suscripción, la del canal visual
   // (`BackgroundGeolocation.watchPosition`, ver `iniciarCanalVisual`/`detenerCanalVisual` más
   // abajo) — detrás del flag `canalVisualHabilitado` (`gps/background-geolocation.config.ts`),
-  // apagado por default. `watchPosition` devuelve una `Subscription` con `.remove()`, igual que
-  // `onLocation`/`onHeartbeat`/`onMotionChange` (confirmado contra el `.d.ts` instalado:
-  // `@transistorsoft/background-geolocation-types@5.2.2/dist/core/api/
-  // BackgroundGeolocation.d.ts:89`, `watchPosition(...): Subscription`).
-  const watchVisualSubscription = useRef<{ remove: () => void } | null>(null);
+  // apagado por default. OJO: a diferencia de `onLocation`/`onHeartbeat`/`onMotionChange`,
+  // `watchPosition` NO devuelve la `Subscription` de forma síncrona en runtime: los tipos
+  // (`@transistorsoft/background-geolocation-types@5.2.2/dist/core/api/
+  // BackgroundGeolocation.d.ts:89`) dicen `Subscription`, pero `react-native-background-
+  // geolocation@5.4.0`, `src/NativeModule.js:289`, es `static async watchPosition` → `Promise`.
+  // Por eso el ciclo de vida lo maneja `crearControladorCanalVisual` (`canal-visual-controller.ts`).
+  const canalVisualController = useRef<ReturnType<typeof crearControladorCanalVisual> | null>(
+    null,
+  );
   // Contador de fixes recibidos por el canal visual desde el último `iniciarCanalVisual()` —
   // solo para los logs `[gps-visual]` del spike S1 (instrumentación, no afecta la evidencia).
   const visualFixesRecibidos = useRef(0);
@@ -687,6 +692,32 @@ export function useGpsOperativo(
     // siempre apunta a la versión más reciente (ver el `useEffect` que lo mantiene al día).
   }, [estaEnRecorrido]);
 
+  // Runtime: devuelve una Promise (ver el docblock de `iniciarCanalVisual`), pese a los tipos.
+  const abrirWatchVisual = () =>
+    BackgroundGeolocation.watchPosition(
+      {
+        interval: 1000,
+        persist: false,
+        desiredAccuracy: BackgroundGeolocation.DesiredAccuracy.High,
+        extras: { fuente: 'visual' },
+      },
+      (location) => {
+        visualFixesRecibidos.current += 1;
+        if (logVerboseHabilitado) {
+          console.log(`[gps-visual] fix visual #${visualFixesRecibidos.current}`);
+        }
+        // FIX POST-REVISIÓN: alimenta el store visual directo, sin pasar por `onLocationRef`
+        // (ver el docblock de `iniciarCanalVisual`, arriba) — este fix NUNCA debe convertirse
+        // en un `gps_point` de evidencia.
+        alimentarEstadoVisual(fixVisualDesdeLocation(location));
+      },
+      (errorCode) => {
+        Sentry.captureException(new Error(`watchPosition error ${String(errorCode)}`), {
+          tags: { contexto: 'gps-foreground', paso: 'canal-visual-watch' },
+        });
+      },
+    ) as unknown as Promise<SuscripcionWatch>;
+
   /**
    * FASE B (`docs/plan-ubicacion-fluida.md`, "canal visual con watchPosition"): arranca (si no
    * está corriendo ya) un `watchPosition` a 1Hz, `persist: false` — nunca toca la SQLite nativa
@@ -708,12 +739,23 @@ export function useGpsOperativo(
    * docblock en `store-visual.ts`): sin el canal visual, "sin fix hace 15s" es un vehículo
    * detenido normal (evidencia por distancia/heartbeat), no una señal perdida.
    *
-   * Firma verificada contra el `.d.ts` instalado (`@transistorsoft/background-geolocation-
-   * types@5.2.2/dist/core/api/BackgroundGeolocation.d.ts:89`):
-   * `watchPosition(options: WatchPositionRequest, locationCallback, errorCallback?): Subscription`.
+   * Firma: los tipos instalados (`@transistorsoft/background-geolocation-types@5.2.2/dist/core/
+   * api/BackgroundGeolocation.d.ts:89`) declaran `watchPosition(options, locationCallback,
+   * errorCallback?): Subscription`, pero el runtime (`react-native-background-geolocation@5.4.0`,
+   * `src/NativeModule.js:289`) es `async` y devuelve `Promise<{id, remove}>` (y rechaza la promesa
+   * ante un fallo nativo en vez de llamar al `errorCallback`). El controlador normaliza ambas
+   * formas y es seguro ante `detener` mientras la promesa está pendiente.
    */
   const iniciarCanalVisual = useCallback(() => {
-    if (watchVisualSubscription.current) return; // ya corriendo
+    if (canalVisualController.current === null) {
+      canalVisualController.current = crearControladorCanalVisual({
+        abrirWatch: abrirWatchVisual,
+        reportarError: (error, paso) => {
+          Sentry.captureException(error, { tags: { contexto: 'gps-foreground', paso } });
+        },
+      });
+    }
+    if (canalVisualController.current.estaActivoOPendiente()) return; // ya corriendo / abriéndose
     configurarObsolescencia(true);
     visualFixesRecibidos.current = 0;
     if (logVerboseHabilitado) {
@@ -723,36 +765,8 @@ export function useGpsOperativo(
           // Instrumentación best-effort del spike S1: un fallo acá no debe impedir arrancar.
         });
     }
-    try {
-      watchVisualSubscription.current = BackgroundGeolocation.watchPosition(
-        {
-          interval: 1000,
-          persist: false,
-          desiredAccuracy: BackgroundGeolocation.DesiredAccuracy.High,
-          extras: { fuente: 'visual' },
-        },
-        (location) => {
-          visualFixesRecibidos.current += 1;
-          if (logVerboseHabilitado) {
-            console.log(`[gps-visual] fix visual #${visualFixesRecibidos.current}`);
-          }
-          // FIX POST-REVISIÓN: alimenta el store visual directo, sin pasar por `onLocationRef`
-          // (ver el docblock de `iniciarCanalVisual`, arriba) — este fix NUNCA debe convertirse
-          // en un `gps_point` de evidencia.
-          alimentarEstadoVisual(fixVisualDesdeLocation(location));
-        },
-        (errorCode) => {
-          Sentry.captureException(new Error(`watchPosition error ${String(errorCode)}`), {
-            tags: { contexto: 'gps-foreground', paso: 'canal-visual-watch' },
-          });
-        },
-      );
-      if (logVerboseHabilitado) console.log('[gps-visual] canal visual iniciado');
-    } catch (error) {
-      Sentry.captureException(error, {
-        tags: { contexto: 'gps-foreground', paso: 'canal-visual-iniciar' },
-      });
-    }
+    canalVisualController.current.iniciar();
+    if (logVerboseHabilitado) console.log('[gps-visual] canal visual iniciado');
   }, []);
 
   /** Detiene el canal visual si está corriendo — no-op si ya estaba parado (llamado tanto al
@@ -763,9 +777,8 @@ export function useGpsOperativo(
    * "sin fix hace 15s" ya no debe marcar obsoleto (ver `store-visual.ts`). */
   const detenerCanalVisual = useCallback(() => {
     configurarObsolescencia(false);
-    if (!watchVisualSubscription.current) return;
-    watchVisualSubscription.current.remove();
-    watchVisualSubscription.current = null;
+    // Nunca lanza (ver `crearControladorCanalVisual`); `false` = no había nada que detener.
+    if (!canalVisualController.current?.detener()) return;
     if (logVerboseHabilitado) {
       const recibidos = visualFixesRecibidos.current;
       console.log(`[gps-visual] canal visual detenido (fixes recibidos: ${recibidos})`);
