@@ -794,7 +794,15 @@ describe('AuthMovilService — autenticarSesion (login de un paso, placa + PIN d
       tx.intentoAuthMovil.findUnique({ where: { vehiculoId: vehiculo.id } }),
     );
     expect(intento?.fallos).toBe(3);
-  });
+    // Timeout explícito de 15 s (mismo patrón que los otros tests scrypt de este archivo,
+    // ver `}, 15_000)` arriba): este test hace 4 `autenticarSesion` y cada una cuesta 4 scrypt
+    // (3 del padding de nivel 1 + 1 del candidato de nivel 2) = 16 scrypt + 1 `hashPassword`
+    // del fixture. En scrypt de Better Auth cada hash cuesta ~155 ms y NO se paraleliza en
+    // la práctica (4 en paralelo = ~620 ms, medido), así que son ~2.7 s locales y ~5.1 s en
+    // los runners de CI (2 vCPU), contra el default de 5 s de vitest. El costo es inherente
+    // al diseño (padding de tiempo K=3, ver `verificarPinConPadding`); no crece con la
+    // cantidad de conductores del sindicato porque el nivel 2 sólo mira los del vehículo.
+  }, 15_000);
 
   it('PIN incorrecto responde 401 e incrementa el contador de fallos', async () => {
     const conductor = await crearConductor('Chofer Un Paso D', '444444');
