@@ -25,15 +25,25 @@ const DIA_2 = new Date('2031-03-21T00:00:00.000Z');
 const DIA_ANTERIOR_TARDE = new Date(DIA.getTime() + 2 * HORA); // 22:00 Bolivia del 14
 
 describe('derivarEstadoJornada', () => {
+  const desde = new Date('2031-03-15T04:00:00.000Z');
+  const dentro = new Date('2031-03-15T16:00:00.000Z');
+  const antes = new Date('2031-03-15T03:30:00.000Z'); // 23:30 Bolivia del día anterior
   const ts = new Date();
   it('el último evento de recorrido manda sobre la declaración', () => {
-    expect(derivarEstadoJornada('inicio_recorrido', ts)).toBe('en_recorrido');
-    expect(derivarEstadoJornada('fin_recorrido', ts)).toBe('finalizado');
-    expect(derivarEstadoJornada('inicio_recorrido', null)).toBe('en_recorrido');
+    expect(derivarEstadoJornada('inicio_recorrido', dentro, desde, ts)).toBe('en_recorrido');
+    expect(derivarEstadoJornada('fin_recorrido', dentro, desde, ts)).toBe('finalizado');
+    expect(derivarEstadoJornada('inicio_recorrido', dentro, desde, null)).toBe('en_recorrido');
   });
   it('sin recorrido: declaración → dia_iniciado, nada → sin_iniciar', () => {
-    expect(derivarEstadoJornada(null, ts)).toBe('dia_iniciado');
-    expect(derivarEstadoJornada(null, null)).toBe('sin_iniciar');
+    expect(derivarEstadoJornada(null, null, desde, ts)).toBe('dia_iniciado');
+    expect(derivarEstadoJornada(null, null, desde, null)).toBe('sin_iniciar');
+  });
+  it('turno nocturno: inicio_recorrido anterior a desde sigue en_recorrido', () => {
+    expect(derivarEstadoJornada('inicio_recorrido', antes, desde, null)).toBe('en_recorrido');
+  });
+  it('fin_recorrido anterior a desde es de la jornada previa y se ignora', () => {
+    expect(derivarEstadoJornada('fin_recorrido', antes, desde, null)).toBe('sin_iniciar');
+    expect(derivarEstadoJornada('fin_recorrido', antes, desde, ts)).toBe('dia_iniciado');
   });
 });
 
@@ -230,6 +240,34 @@ describe('JornadasService (Postgres real + RLS)', () => {
           },
         ],
       });
+      // Turno nocturno: inicio_recorrido a las 23:30 Bolivia del día anterior, sin fin → hoy
+      // sigue en_recorrido.
+      await vehiculo('noche_inicio', sindicatoAId, a, rutaAId, {
+        eventos: [{ tipo: 'inicio_recorrido', ts: new Date(DIA.getTime() + 3.5 * HORA) }],
+      });
+      // fin_recorrido a las 23:50 Bolivia del día anterior: es de la jornada previa, hoy no
+      // cuenta como finalizado.
+      await vehiculo('noche_fin', sindicatoAId, a, rutaAId, {
+        eventos: [{ tipo: 'fin_recorrido', ts: new Date(DIA.getTime() + (3 + 50 / 60) * HORA) }],
+      });
+      // Empate de ts: gana el de receivedAt más nuevo (aquí el inicio, recibido después).
+      await vehiculo('empate_rx', sindicatoAId, a, rutaAId, {
+        eventos: [
+          { tipo: 'fin_recorrido', ts: DENTRO_DEL_DIA, receivedAt: DENTRO_DEL_DIA },
+          {
+            tipo: 'inicio_recorrido',
+            ts: DENTRO_DEL_DIA,
+            receivedAt: new Date(DENTRO_DEL_DIA.getTime() + 5_000),
+          },
+        ],
+      });
+      // Empate total (ts y receivedAt): el desempate por id es estable entre consultas.
+      await vehiculo('empate_id', sindicatoAId, a, rutaAId, {
+        eventos: [
+          { tipo: 'inicio_recorrido', ts: DENTRO_DEL_DIA },
+          { tipo: 'fin_recorrido', ts: DENTRO_DEL_DIA },
+        ],
+      });
       // Dentro de la tolerancia (ts apenas adelantado) SÍ cuenta.
       await vehiculo('tolerado', sindicatoAId, a, rutaAId, {
         eventos: [
@@ -333,7 +371,7 @@ describe('JornadasService (Postgres real + RLS)', () => {
 
   it('admin_sindicato solo ve su sindicato; el otro ve el suyo', async () => {
     const a = await service.listar(adminA, FECHA);
-    expect(a.vehiculos).toHaveLength(9);
+    expect(a.vehiculos).toHaveLength(13);
     expect(estadoDe(a, 'ajeno')).toBeUndefined();
 
     const b = await service.listar(adminB, FECHA);
@@ -341,10 +379,39 @@ describe('JornadasService (Postgres real + RLS)', () => {
     expect(b.vehiculos[0]?.estado).toBe('dia_iniciado');
   });
 
-  it('admin_quivo ve ambos sindicatos', async () => {
+  it('admin_quivo ve ambos sindicatos, con sindicatoId/Nombre, ordenados por sindicato y placa', async () => {
     const r = await service.listar(adminQuivo, FECHA);
     expect(estadoDe(r, 'ajeno')).toBeDefined();
     expect(estadoDe(r, 'sin')).toBeDefined();
+    expect(estadoDe(r, 'sin')?.sindicatoId).toBe(sindicatoAId);
+    expect(estadoDe(r, 'sin')?.sindicatoNombre).toBe('Jornadas A');
+    expect(estadoDe(r, 'ajeno')?.sindicatoId).toBe(sindicatoBId);
+    expect(estadoDe(r, 'ajeno')?.sindicatoNombre).toBe('Jornadas B');
+    const propios = r.vehiculos.filter(
+      (v) => v.sindicatoId === sindicatoAId || v.sindicatoId === sindicatoBId,
+    );
+    const clave = (v: (typeof propios)[number]) => `${v.sindicatoNombre}\u0000${v.placa}`;
+    expect(propios.map(clave)).toEqual([...propios.map(clave)].sort());
+    // Todos los de A van antes que el de B.
+    expect(propios.at(-1)?.sindicatoId).toBe(sindicatoBId);
+  });
+
+  it('turno nocturno: inicio_recorrido de 23:30 del día anterior sigue en_recorrido hoy', async () => {
+    const r = await service.listar(adminA, FECHA);
+    expect(estadoDe(r, 'noche_inicio')?.estado).toBe('en_recorrido');
+  });
+
+  it('fin_recorrido de 23:50 del día anterior no deja finalizado el día de hoy', async () => {
+    const r = await service.listar(adminA, FECHA);
+    expect(estadoDe(r, 'noche_fin')?.estado).toBe('sin_iniciar');
+  });
+
+  it('empate de ts: gana el receivedAt más nuevo y el resultado es estable', async () => {
+    const r1 = await service.listar(adminA, FECHA);
+    const r2 = await service.listar(adminA, FECHA);
+    expect(estadoDe(r1, 'empate_rx')?.estado).toBe('en_recorrido');
+    expect(estadoDe(r1, 'empate_id')?.estado).toBe(estadoDe(r2, 'empate_id')?.estado);
+    expect(['en_recorrido', 'finalizado']).toContain(estadoDe(r1, 'empate_id')?.estado);
   });
 
   it('varios turnos del mismo vehículo colapsan a una fila con la salida más temprana', async () => {
@@ -368,7 +435,7 @@ describe('JornadasService (Postgres real + RLS)', () => {
     // 2031-03-16T02:00Z = 22:00 del 15 en Bolivia (UTC-4) → sigue siendo el día 15.
     const r = await service.listar(adminA, undefined, new Date('2031-03-16T02:00:00.000Z'));
     expect(r.fecha).toBe(FECHA);
-    expect(r.vehiculos).toHaveLength(9);
+    expect(r.vehiculos).toHaveLength(13);
     // 2031-03-16T05:00Z = 01:00 del 16 en Bolivia → otro día, sin asignaciones.
     const otro = await service.listar(adminA, undefined, new Date('2031-03-16T05:00:00.000Z'));
     expect(otro.fecha).toBe('2031-03-16');

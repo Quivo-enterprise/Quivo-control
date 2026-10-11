@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prisma, withTenantContext } from '@quivo/db';
-import type { EventoSync } from '@quivo/shared';
+import { fechaActualBolivia, type EventoSync } from '@quivo/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   agruparPorTipo,
@@ -104,7 +104,8 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
           vehiculoId: vehiculo.id,
           conductorId: conductor.id,
           rutaId,
-          fecha: new Date(),
+          // Día de Bolivia (no `new Date()`): coincide con el chequeo de inicio_jornada.
+          fecha: fechaActualBolivia(new Date()),
           horario: 'manana',
           orden: 1,
           venceAt: new Date(Date.now() + 60 * 60 * 1000),
@@ -874,6 +875,37 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       ]);
       expect(resultado.errores).toBe(1);
       expect(await buscarEvento(eventId)).toHaveLength(0);
+    });
+
+    it('una declaración cuyo día (Bolivia) no coincide con la asignación de la sesión va a sync_errors', async () => {
+      const eventId = randomUUID();
+      const ayer = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+      const resultado = await procesarLote(sindicatoId, [
+        evento({ eventId, ts: ayer, tipo: 'inicio_jornada', payload: { sesionId } }),
+      ]);
+
+      expect(resultado).toEqual({ procesados: 0, errores: 1 });
+      expect(await buscarEvento(eventId)).toHaveLength(0);
+      const errores = await buscarErrores(eventId);
+      expect(errores).toHaveLength(1);
+      expect(errores[0]?.error).toContain('no coincide con la fecha de la asignación');
+    });
+
+    it('una declaración del mismo día que la asignación se acepta (sin exigir sesión activa: outbox tardío)', async () => {
+      const eventId = randomUUID();
+      // Mediodía de Bolivia del día de la asignación: estable sea cual sea la hora del test.
+      const mediodia = new Date(fechaActualBolivia(new Date()).getTime() + 16 * 60 * 60 * 1000);
+      const resultado = await procesarLote(sindicatoId, [
+        evento({
+          eventId,
+          ts: mediodia.toISOString(),
+          tipo: 'inicio_jornada',
+          payload: { sesionId },
+        }),
+      ]);
+
+      expect(resultado).toEqual({ procesados: 1, errores: 0 });
+      expect(await buscarEvento(eventId)).toHaveLength(1);
     });
 
     it('reenviar el mismo eventId es idempotente (una sola fila, sin errores)', async () => {

@@ -12,6 +12,7 @@ import { Queue, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import {
   PayloadInicioJornadaSchema,
+  fechaActualBolivia,
   resolverTsFix,
   type EventoSync,
   type PayloadGpsPoint,
@@ -592,12 +593,23 @@ async function validarSesionDelDispositivo(
   }
   const sesion = await tx.sesionOperativa.findFirst({
     where: { id: parsed.data.sesionId, sindicatoId, deviceId: evento.deviceId },
-    select: { id: true },
+    select: { id: true, asignacion: { select: { fecha: true } } },
   });
   if (!sesion) {
     throw new Error(
       `Evento ${evento.eventId} (inicio_jornada): la sesión ${parsed.data.sesionId} no existe ` +
         `o no pertenece al dispositivo ${evento.deviceId} de este sindicato`,
+    );
+  }
+  // La declaración "hoy trabajo" tiene que corresponder al día de la asignación de la
+  // sesión (jornada boliviana del `ts` del evento). NO se exige que la sesión siga activa:
+  // los eventos del outbox offline llegan legítimamente después del logout.
+  const diaEvento = fechaActualBolivia(new Date(evento.ts));
+  if (sesion.asignacion.fecha.getTime() !== diaEvento.getTime()) {
+    throw new Error(
+      `Evento ${evento.eventId} (inicio_jornada): el día del evento ` +
+        `(${diaEvento.toISOString().slice(0, 10)}) no coincide con la fecha de la asignación ` +
+        `de la sesión (${sesion.asignacion.fecha.toISOString().slice(0, 10)})`,
     );
   }
 }
