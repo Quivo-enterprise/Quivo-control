@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { uuidSchema } from '../primitives.js';
-import { AsignacionSchema } from './asignacion.js';
 import { RutaSchema } from './ruta.js';
 
 const fechaDiaSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -16,13 +15,15 @@ export type EstadoJornada = z.infer<typeof EstadoJornadaSchema>;
 
 export const JornadaVehiculoSchema = z.object({
   vehiculoId: uuidSchema,
-  placa: z.string(),
+  // Respuesta: sin validar formato de placa (puede haber placas anteriores al reemplaque).
+  placa: z.string().min(1),
   numeroInterno: z.string().nullable(),
   conductorNombre: z.string().nullable(),
   lineaId: uuidSchema,
   lineaNombre: z.string(),
   rutaSentido: RutaSchema.shape.sentido,
-  horaSalida: AsignacionSchema.shape.horaSalida,
+  // Viaja como JSON: ISO string, no `Date` (el cliente web no parsea la respuesta).
+  horaSalida: z.string().datetime({ offset: true }).nullable(),
   estado: EstadoJornadaSchema,
   inicioJornadaTs: z.string().datetime({ offset: true }).nullable(),
 });

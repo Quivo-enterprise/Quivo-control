@@ -57,6 +57,12 @@ describe('VecinoRutaSchema', () => {
     expect(VecinoRutaSchema.safeParse(VECINO).success).toBe(true);
   });
 
+  it('acepta placas legacy y valores históricos de tipo/color (es una respuesta)', () => {
+    expect(
+      VecinoRutaSchema.safeParse({ ...VECINO, placa: 'ABC123', tipo: 'bus', color: 'x' }).success,
+    ).toBe(true);
+  });
+
   it('rechaza distancia negativa y edad no entera', () => {
     expect(VecinoRutaSchema.safeParse({ ...VECINO, distanciaM: -1 }).success).toBe(false);
     expect(VecinoRutaSchema.safeParse({ ...VECINO, edadFixS: 1.5 }).success).toBe(false);

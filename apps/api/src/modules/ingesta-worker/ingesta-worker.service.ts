@@ -11,6 +11,7 @@ import type { Prisma as PrismaTypes } from '@quivo/db';
 import { Queue, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import {
+  PayloadInicioJornadaSchema,
   resolverTsFix,
   type EventoSync,
   type PayloadGpsPoint,
@@ -179,6 +180,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       ...porTipo.inicio_recorrido,
       ...porTipo.fin_recorrido,
       ...porTipo.observacion,
+      ...porTipo.inicio_jornada,
     ];
     for (const evento of operativos) {
       errores += await this.procesarEventoOperativo(sindicatoId, evento);
@@ -312,7 +314,6 @@ export interface EventosPorTipo {
   inicio_recorrido: EventoSync[];
   fin_recorrido: EventoSync[];
   observacion: EventoSync[];
-  // Release 13: agrupado pero aún sin procesar (el worker lo consume en un PR posterior).
   inicio_jornada: EventoSync[];
 }
 
@@ -573,6 +574,39 @@ const RECORRIDO_ESTADO_POR_TIPO: Partial<Record<EventoSync['tipo'], 'en_curso' |
 };
 
 /**
+ * Release 13 — `inicio_jornada` declara "hoy trabajo" para un vehículo, así que `sesionId`
+ * tiene que ser una sesión de ESTE dispositivo y de ESTE sindicato: `evento.deviceId` y
+ * `sindicatoId` son los AUTENTICADOS (ver el comentario del UPDATE de `recorridoEstado` en
+ * `insertarEventoOperativoEnTx`), a diferencia de `payload.sesionId`, que controla el
+ * dispositivo. Si no coincide (o la sesión no existe) se lanza: el llamador
+ * (`procesarEventoOperativo`) lo registra en `sync_errors` y NO se inserta nada.
+ *
+ * Por ahora solo se aplica a `inicio_jornada` para no cambiar el comportamiento de los
+ * demás eventos. La misma brecha existe en el resto de los tipos operativos y en gps
+ * (`sesionId` del payload sin cruzar contra `deviceId`) — pendiente, saneamiento Fase 2.
+ */
+async function validarSesionDelDispositivo(
+  tx: Tx,
+  sindicatoId: string,
+  evento: EventoSync,
+): Promise<void> {
+  const parsed = PayloadInicioJornadaSchema.safeParse(evento.payload);
+  if (!parsed.success) {
+    throw new Error(`Evento ${evento.eventId} (inicio_jornada) con payload inválido`);
+  }
+  const sesion = await tx.sesionOperativa.findFirst({
+    where: { id: parsed.data.sesionId, sindicatoId, deviceId: evento.deviceId },
+    select: { id: true },
+  });
+  if (!sesion) {
+    throw new Error(
+      `Evento ${evento.eventId} (inicio_jornada): la sesión ${parsed.data.sesionId} no existe ` +
+        `o no pertenece al dispositivo ${evento.deviceId} de este sindicato`,
+    );
+  }
+}
+
+/**
  * `insertarEventoOperativoEnTx` devuelve esto en vez de loguear ella misma (es una función
  * standalone, sin `this.logger` — mismo patrón que `tsFixDescartado` en
  * `insertarGpsPoints`/`procesarCumplimientoEnTx`: la función de negocio señaliza, el método
@@ -596,6 +630,9 @@ export async function insertarEventoOperativoEnTx(
   const payload = evento.payload as unknown as { sesionId: string };
   if (!payload.sesionId) {
     throw new Error(`Evento ${evento.eventId} sin sesionId en el payload`);
+  }
+  if (evento.tipo === 'inicio_jornada') {
+    await validarSesionDelDispositivo(tx, sindicatoId, evento);
   }
   const insertado = await tx.eventoOperativo.createMany({
     data: [

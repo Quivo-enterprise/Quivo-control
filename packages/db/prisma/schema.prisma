@@ -729,6 +729,7 @@ model EventoOperativo {
 
   @@index([sindicatoId])
   @@index([sesionId])
+  @@index([sindicatoId, tipo, ts])
   @@map("eventos_operativos")
 }
 

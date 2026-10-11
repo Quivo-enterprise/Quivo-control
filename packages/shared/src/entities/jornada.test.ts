@@ -33,6 +33,13 @@ describe('JornadaVehiculoSchema', () => {
     expect(JornadaVehiculoSchema.safeParse(JORNADA).success).toBe(true);
   });
 
+  it('no valida el formato de la placa (placas legacy) y horaSalida sigue siendo string', () => {
+    const r = JornadaVehiculoSchema.parse({ ...JORNADA, placa: 'ABC123' });
+    expect(r.placa).toBe('ABC123');
+    expect(typeof r.horaSalida).toBe('string');
+    expect(JornadaVehiculoSchema.safeParse({ ...JORNADA, placa: '' }).success).toBe(false);
+  });
+
   it('acepta horaSalida nula e inicioJornadaTs con valor', () => {
     expect(
       JornadaVehiculoSchema.safeParse({
