@@ -42,15 +42,8 @@ import {
   mensajeError,
   ultimaPasada,
 } from './map-builders';
-
-function useReloj(): number {
-  const [ahora, setAhora] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setAhora(Date.now()), 1_000);
-    return () => clearInterval(id);
-  }, []);
-  return ahora;
-}
+import { PanelJornada } from './panel-jornada';
+import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
 
 export default function EnVivoPage() {
   const { token } = useAuth();
@@ -245,6 +238,9 @@ export default function EnVivoPage() {
           <RefreshCw size={14} style={{ marginRight: '0.35rem' }} />
           Verificar nuevamente
         </Button>
+        {/* Sin sesiones todavía (típico de madrugada) es justo cuando importa saber quién
+            declaró su jornada: el panel también vive acá, en el flujo, sin mapa debajo. */}
+        <PanelJornada lineaFilter="" flotante={false} />
       </div>
     );
   }
@@ -353,7 +349,9 @@ export default function EnVivoPage() {
           </div>
         </div>
 
-        {/* Right Side: Freshness Pill & Controls */}
+        {/* Columna derecha: controles + panel "Jornada de hoy" (release 13). El panel va en el
+            flujo, debajo de lo que midan los controles (una o dos filas), sin `top` mágico. */}
+        <div className="qv-live-hud-right">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           {/* Freshness Status Pill — solo con un vehículo seleccionado */}
           {sesionSeleccionada && (
@@ -438,6 +436,8 @@ export default function EnVivoPage() {
               <RefreshCw size={13} style={{ animation: isRefreshing ? 'spin 0.6s linear infinite' : 'none' }} />
             </button>
           </div>
+        </div>
+        <PanelJornada lineaFilter={lineaFilter} />
         </div>
       </div>
 
@@ -735,7 +735,7 @@ function FrescuraBadgeCompact({
   recibidoEn: number;
   posicionesRecibidoEn: number;
 }) {
-  const ahora = useReloj();
+  const ahora = useReloj(1_000);
   const fuente = datos ?? posicion;
   if (!fuente) return null;
 

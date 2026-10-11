@@ -1,18 +1,7 @@
-import { useEffect, useState } from 'react';
 import { Loader, Tag } from '@quivo/design-system';
 import type { SesionEnVivoResumen } from '@quivo/shared';
+import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
 import { antiguedadViva, formatearAntiguedad, presentacionFrescura, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
-
-/** Re-renderiza cada segundo para que las antigüedades corran solas entre polls. Vive dentro
- * de `PanelFrescura` (ver el comentario ahí) para no forzar un re-render de toda la página. */
-function useReloj(): number {
-  const [ahora, setAhora] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setAhora(Date.now()), 1_000);
-    return () => clearInterval(id);
-  }, []);
-  return ahora;
-}
 
 /**
  * Las **dos** antigüedades, siempre juntas: `antiguedadFixMs` dice cuándo se capturó la
@@ -36,7 +25,7 @@ export function PanelFrescura({
   // de toda la página (mapa incluido) cada segundo — `RouteMap` recompondría marcadores,
   // reiniciando la animación `qv-pulse` del vehículo antes de que complete un ciclo.
   // Confinado a esta hoja, el tick solo repinta este panel de texto.
-  const ahora = useReloj();
+  const ahora = useReloj(1_000);
   const fuente = datos ?? sesion;
   if (!fuente) return <Loader label="Cargando estado…" />;
 

@@ -4,10 +4,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TRAZA_EN_VIVO_LIMITE_MAX,
   type ContextoEnVivo,
+  type JornadasDelDia,
   type PosicionEnVivo,
   type SesionEnVivoResumen,
 } from '@quivo/shared';
 import { enVivoApi } from '../api/en-vivo';
+import { reportesApi } from '../api/reportes';
 import {
   debeRecargar,
   desdeConSolape,
@@ -180,4 +182,24 @@ export function useRecargarTraza(sesionId: string | null) {
   return () => {
     queryClient.removeQueries({ queryKey: ['en-vivo', 'traza', sesionId] });
   };
+}
+
+/**
+ * Release 13 — panel "Jornada de hoy": quién declaró "Empezar día", quién está en ruta y
+ * quién no inició. Sin `fecha`: el servidor decide la jornada vigente (el día boliviano
+ * rota a medianoche de Bolivia, 04:00 UTC), así que la pestaña abierta de madrugada cambia de día sola en el
+ * siguiente poll. 30 s alcanza — la declaración es un evento humano, no telemetría. Mismo
+ * criterio de pestaña oculta/foco que el resto de los hooks de esta pantalla.
+ */
+export function useJornadasHoy(token: string | null) {
+  return useQuery<JornadasDelDia>({
+    queryKey: ['en-vivo', 'jornadas'],
+    enabled: Boolean(token),
+    queryFn: () => reportesApi.jornadas(token as string),
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: REINTENTOS,
+    retryDelay,
+  });
 }

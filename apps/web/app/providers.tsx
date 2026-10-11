@@ -1,15 +1,13 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { AuthProvider } from '../src/lib/auth/auth-context';
+import { ConsultasPorIdentidad } from '../src/lib/auth/consultas-por-identidad';
 
 export function Providers({ children }: { children: ReactNode }) {
-  const [client] = useState(() => new QueryClient());
-
   return (
-    <QueryClientProvider client={client}>
-      <AuthProvider>{children}</AuthProvider>
-    </QueryClientProvider>
+    <AuthProvider>
+      <ConsultasPorIdentidad>{children}</ConsultasPorIdentidad>
+    </AuthProvider>
   );
 }
