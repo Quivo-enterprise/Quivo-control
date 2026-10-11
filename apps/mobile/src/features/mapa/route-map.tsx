@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, View, Text, type LayoutChangeEvent } from 'react-native';
 import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE, type LatLng } from 'react-native-maps';
 import Svg, { Path } from 'react-native-svg';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
@@ -12,7 +12,7 @@ import {
   indiceProximoPuntoControl,
 } from './estado-punto-control';
 import { debeResaltarRutaCalculada, estiloRuta, COLOR_LINEA } from './estilo-ruta';
-import { posicionMapaDesde } from './posicion-mapa';
+import { debeCommitearFrame, posicionMapaDesde } from './posicion-mapa';
 import type { PosicionMapa, RouteMapProps } from './tipos';
 
 /**
@@ -35,7 +35,7 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  *
  * PERF: el marcador del conductor (+ su halo de precisión) vive en `MarcadorConductorAnimado`,
  * un componente hijo con su PROPIO loop de `requestAnimationFrame` y estado local — es el ÚNICO
- * que re-renderiza a la cadencia de la animación (~60Hz); este componente padre (polylines,
+ * que re-renderiza a la cadencia de la animación (~30Hz, ver `debeCommitearFrame`); este componente padre (polylines,
  * puntos de control) no vuelve a renderizar por eso. La cámara se anima UNA sola vez por fix
  * nuevo (no por frame), en el mismo lugar donde arranca la interpolación del marcador.
  */
@@ -92,20 +92,65 @@ function MarcadorPuntoControl({ orden, completado }: { orden: number; completado
   );
 }
 
+/** Ventana (ms) en que el `Marker` re-rasteriza su vista custom tras montar o cambiar de
+ * contenido: cubre el layout del `Text` de los puntos de control, que un solo frame no alcanza. */
+const VENTANA_TRACKS_VIEW_CHANGES_MS = 300;
+
 /** `true` mientras la vista custom del `Marker` todavía no terminó su primer pintado (o acaba
  * de cambiar de contenido) — Android re-rasteriza el bitmap del marcador en cada render
- * mientras `tracksViewChanges` esté en `true`, así que se apaga apenas el frame siguiente
- * confirma que ya pintó. Hook compartido por el marcador del conductor y los de puntos de
- * control . */
+ * mientras `tracksViewChanges` esté en `true`, así que se apaga tras una ventana corta. La
+ * ventana arranca cuando el componente que usa el hook MONTA (que debe ser el que renderiza el
+ * `Marker`) y se reinicia con `reactivar()`. Compartido por el marcador del conductor y los de
+ * puntos de control. */
 function useTracksViewChanges(): [boolean, () => void] {
+  const [epoca, setEpoca] = useState(0);
   const [tracksViewChanges, setTracksViewChanges] = useState(true);
   useEffect(() => {
-    if (!tracksViewChanges) return;
-    const id = requestAnimationFrame(() => setTracksViewChanges(false));
-    return () => cancelAnimationFrame(id);
-  }, [tracksViewChanges]);
-  const reactivar = useCallback(() => setTracksViewChanges(true), []);
+    setTracksViewChanges(true);
+    const id = setTimeout(() => setTracksViewChanges(false), VENTANA_TRACKS_VIEW_CHANGES_MS);
+    return () => clearTimeout(id);
+  }, [epoca]);
+  const reactivar = useCallback(() => setEpoca((e) => e + 1), []);
   return [tracksViewChanges, reactivar];
+}
+
+/** `Marker` del conductor: vive aparte para que la ventana de `tracksViewChanges` arranque al
+ * montar el Marker (no antes, cuando todavía no hay posición) y se reinicie al pasar de punto a
+ * flecha (la única transición posible, ver `CoordenadaMostrada`). */
+function MarcadorConductor({
+  posicion,
+  atenuado,
+}: {
+  posicion: CoordenadaMostrada;
+  atenuado: boolean;
+}) {
+  const [tracksViewChanges, reactivarTracksViewChanges] = useTracksViewChanges();
+  const esPunto = posicion.rumbo === null;
+  const esPuntoPrevioRef = useRef(esPunto);
+  useEffect(() => {
+    if (esPuntoPrevioRef.current !== esPunto) {
+      esPuntoPrevioRef.current = esPunto;
+      reactivarTracksViewChanges();
+    }
+  }, [esPunto, reactivarTracksViewChanges]);
+
+  return (
+    // Hallazgo ALTO #3: rotación y atenuado por props NATIVAS del Marker (`rotation`, `flat`,
+    // `opacity`) — la vista hija nunca rota ni cambia opacity, así que Android no tiene que
+    // re-rasterizar el bitmap por eso. `flat` hace la rotación relativa al norte del mapa
+    // (correcta con la cámara heading-up).
+    <Marker
+      coordinate={aLatLng(posicion)}
+      anchor={{ x: 0.5, y: 0.5 }}
+      zIndex={10}
+      rotation={posicion.rumbo ?? 0}
+      flat
+      opacity={atenuado ? 0.4 : 1}
+      tracksViewChanges={tracksViewChanges}
+    >
+      {esPunto ? <PuntoConductor /> : <FlechaConductor />}
+    </Marker>
+  );
 }
 
 interface MarcadorConductorAnimadoProps {
@@ -113,8 +158,10 @@ interface MarcadorConductorAnimadoProps {
   mapRef: RefObject<MapView | null>;
   seguimientoActivoRef: RefObject<boolean>;
   /** true = la próxima cámara de seguimiento debe fijar el zoom (se acaba de entrar en
-   * seguimiento); quien la consume lo baja a false. Ver `camara-seguimiento.ts`. */
+   * seguimiento); quien la consume lo baja a false SOLO si la cámara realmente se animó. */
   zoomPendienteRef: RefObject<boolean>;
+  /** true cuando el mapa está listo Y ya tuvo layout (ver `RouteMap`); antes no se anima nada. */
+  camaraListaRef: RefObject<boolean>;
   /** Ref compartido con el padre (`RouteMap`): este componente escribe acá la última
    * posición mostrada para que el recenter manual (que vive en el padre) la lea sin necesidad
    * de que el padre también re-renderice por cada frame de la animación. */
@@ -123,7 +170,7 @@ interface MarcadorConductorAnimadoProps {
 
 /**
  * Marcador del conductor + halo de precisión, con su PROPIO loop de `requestAnimationFrame` —
- * único componente que re-renderiza a la cadencia de la animación (~60Hz mientras interpola
+ * único componente que re-renderiza a la cadencia de la animación (~30Hz mientras interpola
  * entre dos fixes). Ver el docblock del módulo para el razonamiento completo de por qué se
  * extrajo del padre.
  */
@@ -132,13 +179,12 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   mapRef,
   seguimientoActivoRef,
   zoomPendienteRef,
+  camaraListaRef,
   posicionMostradaRef,
 }: MarcadorConductorAnimadoProps) {
   const [posicionMostrada, setPosicionMostrada] = useState<CoordenadaMostrada | null>(null);
   const rafIdRef = useRef<number | null>(null);
   const ultimoTsFixRef = useRef<number | null>(null);
-  const [tracksViewChanges, reactivarTracksViewChanges] = useTracksViewChanges();
-  const tipoMarcadorAnteriorRef = useRef<'flecha' | 'punto' | null>(null);
 
   const cancelarAnimacion = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -148,24 +194,24 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   }, []);
 
   // Publica la posición nueva en el ref compartido (para el recenter del padre) y en el
-  // estado local (para volver a pintar este marcador). Si cambia el TIPO de hijo del marcador
-  // (punto → flecha, la única transición posible, ver `CoordenadaMostrada`), re-habilita
-  // `tracksViewChanges` un frame para que Android rasterice el nuevo contenido.
+  // estado local (para volver a pintar este marcador).
   const publicarPosicion = useCallback(
-    (siguiente: CoordenadaMostrada) => {
+    (siguiente: CoordenadaMostrada | null) => {
       posicionMostradaRef.current = siguiente;
       setPosicionMostrada(siguiente);
-      const tipoActual: 'flecha' | 'punto' = siguiente.rumbo === null ? 'punto' : 'flecha';
-      if (
-        tipoMarcadorAnteriorRef.current !== null &&
-        tipoMarcadorAnteriorRef.current !== tipoActual
-      ) {
-        reactivarTracksViewChanges();
-      }
-      tipoMarcadorAnteriorRef.current = tipoActual;
     },
-    [posicionMostradaRef, reactivarTracksViewChanges],
+    [posicionMostradaRef],
   );
+
+  // El efecto depende del CONTENIDO del fix (lat/lng/ts/rumbo), no de la identidad del objeto
+  // `posicionMapa`: el store visual y `setPosicionActual` entregan dos veces el mismo fix, y el
+  // flip de `obsoleto` produce un objeto nuevo con los mismos datos — nada de eso debe
+  // reiniciar la interpolación ni volver a animar la cámara (el atenuado solo re-estiliza, se
+  // lee de `posicionMapa` al renderizar).
+  const lat = posicionMapa?.lat ?? null;
+  const lng = posicionMapa?.lng ?? null;
+  const tsFixProp = posicionMapa?.ts ?? null;
+  const rumboFix = typeof posicionMapa?.heading === 'number' ? posicionMapa.heading : null;
 
   // FIX POST-REVISIÓN (hallazgo ALTO #1 + MEDIO #4): antes, la cámara se animaba en un efecto
   // aparte disparado por CADA frame de `posicionMostrada` (~60Hz, saturaba el bridge), y el
@@ -175,31 +221,31 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   // en vez de un updater, y la cámara se anima hacia `hasta` con la MISMA duración que la
   // interpolación del marcador — nunca por frame.
   useEffect(() => {
-    if (!posicionMapa) return;
-    const rumboObjetivo =
-      typeof posicionMapa.heading === 'number' ? posicionMapa.heading : null;
-    const tsFix = posicionMapa.ts ?? Date.now();
+    cancelarAnimacion();
+    if (lat === null || lng === null) {
+      // Sin posición (p. ej. fin del recorrido): nada que mostrar. Se limpia también el estado
+      // de interpolación para que el próximo fix real aparezca directo, sin volar desde el
+      // punto final del recorrido anterior, y para que el recenter no apunte a una posición vieja.
+      ultimoTsFixRef.current = null;
+      publicarPosicion(null);
+      return cancelarAnimacion;
+    }
+    const tsFix = tsFixProp ?? Date.now();
     const dt = ultimoTsFixRef.current != null ? tsFix - ultimoTsFixRef.current : null;
     ultimoTsFixRef.current = tsFix;
     const duracion = duracionAnimacionMs(dt ?? 2500);
 
     const actual = posicionMostradaRef.current;
-    const hasta: CoordenadaMostrada = {
-      lat: posicionMapa.lat,
-      lng: posicionMapa.lng,
-      rumbo: rumboObjetivo ?? actual?.rumbo ?? null,
-    };
+    const hasta: CoordenadaMostrada = { lat, lng, rumbo: rumboFix ?? actual?.rumbo ?? null };
 
-    cancelarAnimacion();
-
-    // Hallazgo ALTO #1 (perf) + BAJO #5: cámara UNA vez por fix, solo con seguimiento activo;
-    // sin rumbo todavía no se manda `heading` (conserva el actual en vez de snapear a norte).
-    if (seguimientoActivoRef.current) {
+    // Hallazgo ALTO #1 (perf) + BAJO #5: cámara UNA vez por fix, solo con seguimiento activo y
+    // el mapa listo; sin rumbo todavía no se manda `heading` (conserva el actual en vez de
+    // snapear a norte). El zoom pendiente solo se consume si la cámara realmente se animó.
+    const mapa = mapRef.current;
+    if (seguimientoActivoRef.current && camaraListaRef.current && mapa) {
       const aplicarZoom = zoomPendienteRef.current;
+      mapa.animateCamera(construirCamaraSeguimiento(hasta, aplicarZoom), { duration: duracion });
       zoomPendienteRef.current = false;
-      mapRef.current?.animateCamera(construirCamaraSeguimiento(hasta, aplicarZoom), {
-        duration: duracion,
-      });
     }
 
     if (!actual) {
@@ -210,14 +256,21 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
 
     const desde: CoordenadaMostrada = actual;
     const inicio = Date.now();
+    let ultimoCommitMs: number | null = null;
     const tick = () => {
-      const t = Math.min(1, (Date.now() - inicio) / duracion);
-      const { lat, lng } = interpolarLatLng(desde, hasta, t);
-      const rumbo =
-        desde.rumbo !== null && hasta.rumbo !== null
-          ? interpolarAngulo(desde.rumbo, hasta.rumbo, t)
-          : hasta.rumbo;
-      publicarPosicion({ lat, lng, rumbo });
+      const ahora = Date.now();
+      const t = Math.min(1, (ahora - inicio) / duracion);
+      // Throttle ~30Hz: cada commit manda props de Marker + Circle por el bridge. El frame
+      // final (t = 1) siempre se publica.
+      if (debeCommitearFrame(ahora, ultimoCommitMs, t >= 1)) {
+        ultimoCommitMs = ahora;
+        const { lat: latT, lng: lngT } = interpolarLatLng(desde, hasta, t);
+        const rumbo =
+          desde.rumbo !== null && hasta.rumbo !== null
+            ? interpolarAngulo(desde.rumbo, hasta.rumbo, t)
+            : hasta.rumbo;
+        publicarPosicion({ lat: latT, lng: lngT, rumbo });
+      }
       if (t < 1) {
         rafIdRef.current = requestAnimationFrame(tick);
       } else {
@@ -227,7 +280,19 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
     rafIdRef.current = requestAnimationFrame(tick);
 
     return cancelarAnimacion;
-  }, [posicionMapa, cancelarAnimacion, publicarPosicion, mapRef, seguimientoActivoRef, zoomPendienteRef, posicionMostradaRef]);
+  }, [
+    lat,
+    lng,
+    tsFixProp,
+    rumboFix,
+    cancelarAnimacion,
+    publicarPosicion,
+    mapRef,
+    seguimientoActivoRef,
+    zoomPendienteRef,
+    camaraListaRef,
+    posicionMostradaRef,
+  ]);
 
   useEffect(() => cancelarAnimacion, [cancelarAnimacion]);
 
@@ -237,21 +302,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
 
   return (
     <>
-      {/* Hallazgo ALTO #3: rotación y atenuado por props NATIVAS del Marker (`rotation`,
-          `flat`, `opacity`) — la vista hija nunca rota ni cambia opacity, así que Android no
-          tiene que re-rasterizar el bitmap por eso. `flat` hace la rotación relativa al norte
-          del mapa (correcta con la cámara heading-up de arriba). */}
-      <Marker
-        coordinate={aLatLng(posicionMostrada)}
-        anchor={{ x: 0.5, y: 0.5 }}
-        zIndex={10}
-        rotation={posicionMostrada.rumbo ?? 0}
-        flat
-        opacity={atenuado ? 0.4 : 1}
-        tracksViewChanges={tracksViewChanges}
-      >
-        {posicionMostrada.rumbo === null ? <PuntoConductor /> : <FlechaConductor />}
-      </Marker>
+      <MarcadorConductor posicion={posicionMostrada} atenuado={atenuado} />
       {typeof posicionMapa?.accuracy === 'number' && Number.isFinite(posicionMapa.accuracy) ? (
         <Circle
           center={aLatLng(posicionMostrada)}
@@ -425,10 +476,26 @@ export function RouteMap({
   // re-render por escribirla (es un ref, no estado).
   const posicionMostradaRef = useRef<CoordenadaMostrada | null>(null);
 
+  // `seguimientoActivo` es solo un ref: nada lo renderiza, así que un pan no re-renderiza.
+  const seguimientoActivoRef = useRef(tracking);
+  // Zoom de seguimiento: se fija solo al ENTRAR en seguimiento (tracking arranca o recenter),
+  // no en cada fix — no se le pisa el pinch al usuario. Se baja SOLO cuando la cámara
+  // realmente se animó (mapa listo y posición conocida).
+  const zoomPendienteRef = useRef(false);
+
+  // Compuerta de cámara: el mapa avisó `onMapReady` Y la vista ya tuvo layout (ancho/alto > 0).
+  // En Android `fitToCoordinates` con la vista sin medir lanza "Map size can't be 0", y
+  // `onMapReady` puede dispararse antes del layout.
+  const mapaListoRef = useRef(false);
+  const layoutListoRef = useRef(false);
+  const camaraListaRef = useRef(false);
+  const camaraInicialAplicadaRef = useRef(false);
+
   // Encuadra la ruta entera (o centra en el vehículo si el paquete no trae geometría, ver
   // `decidirEncuadre`). `fitToCoordinates` reemplaza al `fitBounds` de Leaflet.
   const encuadrarRuta = useCallback(
     (animated: boolean) => {
+      if (!camaraListaRef.current) return;
       const posicion = posicionMostradaRef.current;
       const accion = decidirEncuadre(coordenadasRuta.length, posicion !== null);
       if (accion === 'ajustar-ruta') {
@@ -445,48 +512,64 @@ export function RouteMap({
     [coordenadasRuta],
   );
 
+  // Cámara de seguimiento (heading-up, zoom 17) sobre la posición mostrada. Si todavía no se
+  // puede (mapa sin listo/layout, o sin posición), deja el zoom pendiente para la primera
+  // cámara de seguimiento que sí corra.
+  const seguirVehiculo = useCallback((duracion: number) => {
+    const posicion = posicionMostradaRef.current;
+    const mapa = mapRef.current;
+    if (!posicion || !mapa || !camaraListaRef.current) {
+      zoomPendienteRef.current = true;
+      return;
+    }
+    mapa.animateCamera(construirCamaraSeguimiento(posicion, true), { duration: duracion });
+    zoomPendienteRef.current = false;
+  }, []);
+
+  // Cámara inicial, una sola vez cuando se cumplen mapa listo + layout: en seguimiento (remount
+  // en pleno recorrido) va al vehículo con zoom 17; si no, encuadra la ruta entera.
+  const intentarCamaraInicial = useCallback(() => {
+    if (!mapaListoRef.current || !layoutListoRef.current) return;
+    camaraListaRef.current = true;
+    if (camaraInicialAplicadaRef.current) return;
+    camaraInicialAplicadaRef.current = true;
+    if (seguimientoActivoRef.current) {
+      seguirVehiculo(0);
+    } else {
+      encuadrarRuta(false);
+    }
+  }, [encuadrarRuta, seguirVehiculo]);
+
   // --- Cámara heading-up con seguimiento -------------------------------------------------
-  const [seguimientoActivo, setSeguimientoActivo] = useState(false);
-  // Zoom de seguimiento: se fija solo al ENTRAR en seguimiento (tracking arranca o recenter),
-  // no en cada fix — no se le pisa el pinch al usuario.
-  const zoomPendienteRef = useRef(false);
   const trackingPrevioRef = useRef(tracking);
   useEffect(() => {
     const previo = trackingPrevioRef.current;
     trackingPrevioRef.current = tracking;
+    seguimientoActivoRef.current = tracking;
     if (tracking) {
       // Entra en seguimiento: va al vehículo de una (sin esperar al próximo fix) si ya se lo
       // conoce; si no, el zoom queda pendiente para la primera cámara de seguimiento.
-      const posicion = posicionMostradaRef.current;
-      if (posicion) {
-        zoomPendienteRef.current = false;
-        mapRef.current?.animateCamera(construirCamaraSeguimiento(posicion, true), { duration: 700 });
-      } else {
-        zoomPendienteRef.current = true;
-      }
+      seguirVehiculo(700);
     } else if (previo) {
       // Fin del seguimiento: vuelve a mostrar la ruta entera.
       encuadrarRuta(true);
     }
-    setSeguimientoActivo(tracking);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tracking]);
-  const seguimientoActivoRef = useRef(seguimientoActivo);
-  useEffect(() => {
-    seguimientoActivoRef.current = seguimientoActivo;
-  }, [seguimientoActivo]);
 
-  const onPanDrag = useCallback(() => setSeguimientoActivo(false), []);
+  // Cualquier gesto del usuario (pan, y también pinch/rotate: `onPanDrag` los reporta) sale del
+  // seguimiento, igual que Google Maps; el botón Recentrar (`recenterTick`) lo restaura.
+  const onPanDrag = useCallback(() => {
+    seguimientoActivoRef.current = false;
+  }, []);
 
   const lastRecenter = useRef(recenterTick);
   useEffect(() => {
     if (recenterTick <= lastRecenter.current) return;
     lastRecenter.current = recenterTick;
-    setSeguimientoActivo(true);
-    const posicion = posicionMostradaRef.current;
-    if (posicion) {
-      zoomPendienteRef.current = false;
-      mapRef.current?.animateCamera(construirCamaraSeguimiento(posicion, true), { duration: 400 });
+    seguimientoActivoRef.current = true;
+    if (posicionMostradaRef.current) {
+      seguirVehiculo(400);
     } else {
       zoomPendienteRef.current = true;
       encuadrarRuta(true);
@@ -494,7 +577,21 @@ export function RouteMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recenterTick]);
 
-  const onMapReady = useCallback(() => encuadrarRuta(false), [encuadrarRuta]);
+  const onMapReady = useCallback(() => {
+    mapaListoRef.current = true;
+    intentarCamaraInicial();
+  }, [intentarCamaraInicial]);
+
+  const onLayoutMapa = useCallback(
+    (e: LayoutChangeEvent) => {
+      const { width, height } = e.nativeEvent.layout;
+      if (width > 0 && height > 0) {
+        layoutListoRef.current = true;
+        intentarCamaraInicial();
+      }
+    },
+    [intentarCamaraInicial],
+  );
 
   const mostrarCaminoResaltado = debeResaltarRutaCalculada(tracking, rutaCalculada);
   const caminoResaltadoCoords = useMemo<LatLng[]>(
@@ -509,13 +606,16 @@ export function RouteMap({
         style={styles.map}
         provider={PROVIDER_GOOGLE}
         onMapReady={onMapReady}
+        onLayout={onLayoutMapa}
         onPanDrag={onPanDrag}
         rotateEnabled
         // Sin tilt y sin controles propios de Google: el mapa anterior (Leaflet) no los tenía.
         pitchEnabled={false}
         zoomControlEnabled={false}
         toolbarEnabled={false}
-        showsCompass={false}
+        // Brújula visible: tras un pan en heading-up, tocarla deja el norte arriba (Google solo
+        // la muestra con bearing ≠ 0).
+        showsCompass
       >
         <RutaPolylines
           coordenadasRuta={coordenadasRuta}
@@ -533,6 +633,7 @@ export function RouteMap({
           mapRef={mapRef}
           seguimientoActivoRef={seguimientoActivoRef}
           zoomPendienteRef={zoomPendienteRef}
+          camaraListaRef={camaraListaRef}
           posicionMostradaRef={posicionMostradaRef}
         />
       </MapView>

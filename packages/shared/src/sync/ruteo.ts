@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** Coordenada [lat, lng] — a diferencia de `PuntoGeoJson` (orden GeoJSON [lon, lat]), acá
- * usamos [lat, lng] porque es lo que consume Leaflet directamente en el mapa móvil. */
+ * usamos [lat, lng] por comodidad en el mapa móvil. */
 const latLngSchema = z.tuple([z.number().min(-90).max(90), z.number().min(-180).max(180)]);
 
 export const RutaCalculadaSchema = z.object({

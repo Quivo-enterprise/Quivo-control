@@ -73,7 +73,8 @@ compilación de producto aún requiere configurar la licencia Transistorsoft ind
 `PROVIDER_GOOGLE`, `src/features/mapa/route-map.tsx`) — único motor, decisión en
 `docs/adr/0004-motor-mapa-google.md` (reemplazó a Leaflet + WebView). Requiere la API key
 `GOOGLE_MAPS_ANDROID_API_KEY` en el entorno de EAS (restringida al paquete + SHA-1 del keystore
-de producción): SIN ella el mapa se ve en blanco en un build release. La ruta, los puntos de
+de producción): SIN ella la app se cierra al abrir el mapa (el SDK lanza `IllegalStateException`), por eso
+`app.config.ts` falla en build time en cualquier build de EAS que no sea `development`. La ruta, los puntos de
 control y el marcador se dibujan nativamente; sin red los tiles de fondo pueden faltar (el SDK
 cachea los ya vistos), pero el resto de la pantalla (inicio/fin de recorrido, sync,
 observaciones) sigue funcionando (`MapErrorBoundary` aísla cualquier falla del mapa del resto

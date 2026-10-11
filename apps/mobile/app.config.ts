@@ -1,4 +1,21 @@
 import type { ExpoConfig } from 'expo/config';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { evaluarClaveMapas } = require('./plugins/clave-mapas.cjs') as typeof import('./plugins/clave-mapas.cjs');
+
+const resultadoClaveMapas = evaluarClaveMapas(process.env);
+if (resultadoClaveMapas === 'fallar') {
+  throw new Error(
+    'Falta GOOGLE_MAPS_ANDROID_API_KEY en el entorno de este build de EAS: sin ella la app ' +
+      'se cierra al abrir el mapa (el SDK de Google Maps lanza IllegalStateException). ' +
+      'Definila como variable SENSIBLE del perfil en EAS.',
+  );
+}
+if (resultadoClaveMapas === 'advertir') {
+  console.warn(
+    '[app.config] GOOGLE_MAPS_ANDROID_API_KEY no está definida: la app se CERRARÁ al abrir ' +
+      'el mapa (el SDK de Google Maps lanza IllegalStateException sin API key).',
+  );
+}
 
 /**
  * Convertido de `app.json` (estático) a `app.config.ts` (dinámico) por QUI-357/QUI-365/URL de
@@ -86,12 +103,12 @@ export default (): ExpoConfig => ({
     // Mapa de la ruta activa: motor Google nativo (`react-native-maps` + `PROVIDER_GOOGLE`, ver
     // `docs/adr/0004-motor-mapa-google.md`). La API key de Google Maps SDK for Android vive en
     // el entorno de EAS (`GOOGLE_MAPS_ANDROID_API_KEY`, variable SENSIBLE) — NUNCA se hardcodea
-    // ni se loguea acá. SIN ella el mapa se ve EN BLANCO en un build release (el SDK no falla
-    // con un error visible: pinta una grilla vacía), así que antes de cada APK hay que
-    // confirmar que la variable existe en el entorno del perfil. La key debe estar restringida
-    // en Google Cloud al paquete de la app + el SHA-1 del keystore de producción. Con la
-    // variable ausente (builds locales/`development`) la clave se omite del manifest en vez de
-    // mandar un string vacío.
+    // ni se loguea acá. SIN ella el SDK lanza
+    // IllegalStateException ("API key not found") al crear el primer mapa y la app se CIERRA:
+    // por eso arriba el config falla en build time en cualquier build de EAS que no sea
+    // `development`. La key debe estar restringida en Google Cloud al paquete de la app + el
+    // SHA-1 del keystore de producción. Con la variable ausente en una corrida local/`development`
+    // la clave se omite del manifest en vez de mandar un string vacío (y se advierte por consola).
     ...(process.env.GOOGLE_MAPS_ANDROID_API_KEY
       ? { config: { googleMaps: { apiKey: process.env.GOOGLE_MAPS_ANDROID_API_KEY } } }
       : {}),
