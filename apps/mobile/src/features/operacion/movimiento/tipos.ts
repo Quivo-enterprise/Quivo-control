@@ -6,8 +6,8 @@
  * `vitest` sin tocar `react-native-background-geolocation`.
  */
 
-/** Una coordenada `{lat, lng}` — el orden que usa el resto de este feature (`route-map-
- * protocol.ts`, las props de `RouteMapView`), a diferencia de las tuplas `[lon, lat]` GeoJSON
+/** Una coordenada `{lat, lng}` — el orden que usa el resto de este feature (`mapa/tipos.ts`,
+ * las props de `RouteMap`), a diferencia de las tuplas `[lon, lat]` GeoJSON
  * que usa `@quivo/shared` (`haversineMetros`). */
 export interface Coordenada {
   lat: number;

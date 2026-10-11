@@ -8,7 +8,7 @@ import type { FixVisual } from './tipos';
  * (mismo patrón que `estado-recorrido-activo.ts`: un solo recorrido activo por proceso, así que
  * no hace falta más que un módulo con estado propio). Lo alimenta `useGpsOperativo` con CADA fix
  * (de evidencia o del canal visual — a este módulo le da igual el origen, ver
- * `use-gps-operativo.ts`) y lo consume SOLO `route-map-view.tsx` vía `useEstadoVisual()`: a
+ * `use-gps-operativo.ts`) y lo consume SOLO `mapa/route-map.tsx` vía `useEstadoVisual()`: a
  * diferencia de `posicionActual` (el `useState` de `useGpsOperativo`), alimentar este store
  * nunca dispara un re-render de `operation-screen.tsx` — el único componente que re-renderiza es
  * el que llama al hook.
@@ -150,13 +150,13 @@ export function configurarObsolescencia(habilitada: boolean): void {
 }
 
 /** `getSnapshot` de `useSyncExternalStore` — y también la lectura síncrona que puede necesitar
- * un `useEffect` sin suscribirse (p. ej. el handshake `mapa-listo` de `route-map-view.tsx`). */
+ * un `useEffect` sin suscribirse (p. ej. recentrar el mapa). */
 export function obtenerEstadoVisual(): EstadoVisual | null {
   return snapshotPublico;
 }
 
 /** Hook de lectura — `null` mientras no llegó ningún fix todavía. Pensado para que lo consuma
- * SOLO `route-map-view.tsx`: ver el docblock del módulo, arriba. */
+ * SOLO `mapa/route-map.tsx`: ver el docblock del módulo, arriba. */
 export function useEstadoVisual(): EstadoVisual | null {
   return useSyncExternalStore(suscribirseEstadoVisual, obtenerEstadoVisual);
 }
@@ -166,7 +166,7 @@ export function useEstadoVisual(): EstadoVisual | null {
  * fix" y NOTIFICA a los suscriptores — a diferencia de `reiniciarEstadoVisualParaTests` (abajo),
  * NO toca `listeners` ni el temporizador. Llamado desde `use-gps-operativo.ts` en `detener()`
  * (tras cortar el canal visual) y en el cleanup de desmontaje/cambio de sesión del hook: sin
- * esto, al ser un singleton de módulo, `route-map-view.tsx` seguía priorizando la posición VIEJA
+ * esto, al ser un singleton de módulo, `mapa/route-map.tsx` seguía priorizando la posición VIEJA
  * de un recorrido ya terminado sobre el prop `posicionActual` fresco (p. ej. el
  * `getCurrentPosition` del próximo montaje) hasta que llegara un fix nuevo — que con un recorrido
  * detenido nunca llega. Notificar acá hace que `useEstadoVisual()` pase a `null` de inmediato y

@@ -31,9 +31,8 @@ export function interpolarLatLng(a: Coordenada, b: Coordenada, t: number): Coord
 }
 
 /**
- * Bearing inicial de `a` a `b`, en grados `[0,360)` — misma fórmula que `calcHeading` en
- * `route-map-html.ts` (que la conserva como fallback propio del HTML; ver ese archivo para el
- * porqué de no unificar los dos en runtime). Usada por `seleccionarRumbo` (`rumbo.ts`) como
+ * Bearing inicial de `a` a `b`, en grados `[0,360)` — misma fórmula que tenía el
+ * `calcHeading` del mapa Leaflet anterior (ya retirado). Usada por `seleccionarRumbo` (`rumbo.ts`) como
  * fallback cuando no se puede confiar en `coords.heading`.
  */
 export function calcularBearing(a: Coordenada, b: Coordenada): number {

@@ -11,8 +11,7 @@
     "test": "vitest run --passWithNoTests",
     "start": "expo start --dev-client",
     "android": "expo run:android",
-    "ios": "expo run:ios",
-    "generar:leaflet-inline": "node scripts/generar-leaflet-inline.mjs"
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@babel/runtime": "^7.29.7",
@@ -50,13 +49,13 @@
     "react-hook-form": "^7.84.0",
     "react-native": "0.81.5",
     "react-native-background-geolocation": "5.4.0",
+    "react-native-maps": "1.20.1",
     "react-native-mask-input": "^1.2.3",
     "react-native-reanimated": "~3.19.0",
     "react-native-safe-area-context": "5.6.2",
     "react-native-screens": "^4.16.0",
     "react-native-shimmer-placeholder": "^2.0.9",
     "react-native-svg": "15.12.1",
-    "react-native-webview": "13.15.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -65,7 +64,6 @@
     "@types/pako": "^2.0.3",
     "@types/react": "~19.1.17",
     "babel-preset-expo": "~54.0.12",
-    "leaflet": "1.9.4",
     "typescript": "^5.7.3"
   }
 }
