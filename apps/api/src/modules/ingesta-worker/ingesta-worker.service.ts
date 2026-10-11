@@ -312,6 +312,8 @@ export interface EventosPorTipo {
   inicio_recorrido: EventoSync[];
   fin_recorrido: EventoSync[];
   observacion: EventoSync[];
+  // Release 13: agrupado pero aún sin procesar (el worker lo consume en un PR posterior).
+  inicio_jornada: EventoSync[];
 }
 
 export function agruparPorTipo(eventos: EventoSync[]): EventosPorTipo {
@@ -321,6 +323,7 @@ export function agruparPorTipo(eventos: EventoSync[]): EventosPorTipo {
     inicio_recorrido: [],
     fin_recorrido: [],
     observacion: [],
+    inicio_jornada: [],
   };
   for (const evento of eventos) {
     grupos[evento.tipo].push(evento);
