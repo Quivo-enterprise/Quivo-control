@@ -6,6 +6,22 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Release 13 — features en curso (2026-10-10)
+
+**Plan aprobado:** [`docs/plan-release-13-features.md`](plan-release-13-features.md). Tres features:
+- **A.** "Empezar día", con el evento `inicio_jornada` y un panel "Jornada de hoy" en `/en-vivo`
+  para `admin_sindicato`.
+- **B.** "Delante / detrás": el vehículo que va delante y el que va detrás en la misma ruta y
+  sentido, calculado con `ST_LineLocatePoint`, sin foto y sin lat/lng de los otros vehículos.
+- **C.** Modo navegación con motor Google como único motor. Leaflet se borra del móvil
+  ([ADR 0004](adr/0004-motor-mapa-google.md), cierra S2).
+
+Secuencia: PR 0 docs → PR 1 shared → API A → API B → **deploy de la API antes de cualquier
+APK** → web A → bake-off de comps → móvil C1 → C2 → A → B → changelog al CTO → build.
+- **Estado:** PR 0 (docs) en curso.
+- **Antes del build hay que verificar:** que todos los teléfonos del piloto tengan GMS, la key de
+  Maps en el entorno EAS `production` y el fix #109 probado en teléfono.
+
 ## Punto de retome — 2026-10-10, noche (leer primero)
 
 **Prueba en calle del APK spike `beba67fa`:** la navegación anduvo bien. La app crasheó al
