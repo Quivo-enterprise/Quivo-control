@@ -14,7 +14,6 @@ import { BlurView } from 'expo-blur';
 import * as Sentry from '@sentry/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
-import { Svg, Circle, Line } from 'react-native-svg';
 import {
   haversineMetros,
   resolverMarcaLinea,
@@ -42,6 +41,9 @@ import { useGpsContext } from './gps-provider';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OperationStackParamList } from '../../app/operation-navigator';
 import { useOperacionSettings } from '../perfil/use-operacion-settings';
+import { DriverRouteCard } from './driver-route-card';
+import { faseControl } from '../jornada/fase-control';
+import { useJornada } from '../jornada/use-jornada';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -100,6 +102,13 @@ export function OperationScreen(
   const [showInfo, setShowInfo] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
   const { camara, onPanUsuario, recentrar } = useModoCamara(gps.tracking);
+  const jornada = useJornada({
+    vehiculoId: props.contexto.vehiculo.id,
+    conductorId: props.contexto.conductor.id,
+    sesionId: props.contexto.sesionId,
+    deviceId: props.deviceId,
+  });
+  const fase = faseControl({ jornadaIniciada: jornada.jornadaIniciada, tracking: gps.tracking });
 
   // Lo que tapa el mapa en navegación (`paddingNavegacion`): borde inferior de la tarjeta
   // superior y lo que ocupa el sheet COLAPSADO desde abajo. Solo se setea si el valor redondeado
@@ -353,6 +362,9 @@ export function OperationScreen(
                 contexto={props.contexto}
                 brand={lineaBrand}
                 tracking={gps.tracking}
+                jornadaIniciada={jornada.jornadaIniciada}
+                inicioTs={jornada.inicioTs}
+                compacta={camara.modo !== 'general'}
               />
             </Pressable>
           </View>
@@ -504,7 +516,13 @@ export function OperationScreen(
         nextPointOrder={proximoPuntoControl?.orden ?? null}
         totalPoints={puntosControl.length}
         distanciaMetros={distanciaProximoPunto}
-        tracking={gps.tracking}
+        fase={fase}
+        onEmpezarDia={jornada.empezarDia}
+        empezandoDia={jornada.empezando}
+        errorEmpezarDia={jornada.errorEmpezarDia}
+        // El servidor descarta `inicio_jornada` si la asignación no es la de hoy.
+        puedeEmpezarDia={!paqueteDia.vencido && !paqueteDia.cargando}
+        jornadaCargando={jornada.cargando}
         canStart={
           Boolean(paqueteDia.paquete) &&
           !paqueteDia.vencido &&
@@ -661,60 +679,6 @@ export function OperationScreen(
   );
 }
 
-function DriverRouteCard({
-  contexto,
-  tracking,
-  brand,
-}: {
-  contexto: ContextoOperativoMovil;
-  brand: LineaBrand;
-  tracking: boolean;
-}) {
-  // Entrega 4 (`docs/estados-red-vs-captura.md`): el status pill de abajo se guía solo por
-  // `tracking` — mismo criterio que el fix equivalente en `perfil-screen.tsx` — nunca por
-  // `isOffline`, que ya no es una prop de este componente.
-  const modeloVehiculo = `${contexto.vehiculo.placa} ${contexto.vehiculo.modelo || 'Toyota Hiace'}`.trim();
-  const statusLabel = tracking ? 'EN LINEA' : 'EN ESPERA';
-
-  return (
-    // Más blur (pedido explícito) — 80 -> 100, el máximo que acepta expo-blur.
-    <BlurView intensity={100} tint="light" style={styles.identityCard}>
-      <View style={styles.avatar} />
-      <View style={styles.identityText}>
-        <Text numberOfLines={1} style={styles.driverName}>
-          {contexto.conductor.nombre}
-        </Text>
-        <Text numberOfLines={1} style={styles.sindicatoText}>
-          {contexto.sindicato.nombre}
-        </Text>
-        <Text numberOfLines={1} style={styles.vehicleText}>
-          {modeloVehiculo}
-        </Text>
-      </View>
-      <View style={styles.routeSummary}>
-        {/* Antes el "120" solo tomaba un color naranja/morado según tracking, sin relación con
-            la línea real — `resolverMarcaLinea` (@quivo/shared) ya trae hasta 3 colores de
-            marca por línea (primary/secondary/tertiary), la misma fuente que usa
-            `assignment-selection-screen.tsx`. Acá: fondo = primary, borde = tertiary, y una
-            franja inferior = secondary — así el badge sí identifica la línea, no el estado. */}
-        <View style={[styles.lineBadge, { backgroundColor: brand.primary, borderColor: brand.tertiary }]}>
-          <Text style={[styles.lineBadgeText, { color: brand.text }]}>{contexto.linea.codigo}</Text>
-          <View style={[styles.lineBadgeAccent, { backgroundColor: brand.secondary }]} />
-        </View>
-        {/* "EN LÍNEA"/"EN ESPERA" como badge con punto de estado (mismo lenguaje visual que los
-            badges de `perfil-screen.tsx`), en vez de solo texto de color — se distingue del
-            badge de línea de arriba, que ahora es sobre la marca, no sobre el estado. */}
-        <View style={[styles.statusPill, tracking ? styles.statusPillActive : styles.statusPillIdle]}>
-          <View style={[styles.statusDot, { backgroundColor: tracking ? '#22C55E' : '#94A3B8' }]} />
-          <Text style={[styles.statusPillText, tracking ? styles.statusPillTextActive : styles.statusPillTextIdle]}>
-            {statusLabel}
-          </Text>
-        </View>
-      </View>
-    </BlurView>
-  );
-}
-
 function NavigationInstructionCard({
   distanciaMetros,
   velocidadKmh,
@@ -790,15 +754,6 @@ function MapLayer({
   );
 }
 
-function initials(name: string): string {
-  return name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part.charAt(0).toUpperCase())
-    .join('');
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: quivoColors.page },
   fullMap: { flex: 1, height: undefined, borderRadius: 0 },
@@ -821,93 +776,6 @@ const styles = StyleSheet.create({
     right: 16,
     gap: 8,
   },
-  identityCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.88)',
-    borderRadius: 22,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.8)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 6,
-  },
-  avatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#3127B1',
-  },
-  avatarText: { color: quivoColors.white, fontFamily: quivoFonts.displayBold, fontSize: 16 },
-  identityText: { flex: 1, minWidth: 0, justifyContent: 'center' },
-  driverName: {
-    color: '#3127B1',
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 15.5,
-  },
-  sindicatoText: {
-    color: '#334155',
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 10.5,
-    marginTop: 1,
-  },
-  vehicleText: {
-    color: '#475569',
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 9.5,
-    marginTop: 1,
-  },
-  routeSummary: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    minWidth: 54,
-  },
-  lineBadge: {
-    borderRadius: 10,
-    borderWidth: 1.5,
-    paddingHorizontal: 10,
-    paddingTop: 3,
-    paddingBottom: 5,
-    overflow: 'hidden',
-  },
-  lineBadgeText: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 20,
-    lineHeight: 22,
-    textAlign: 'center',
-  },
-  lineBadgeAccent: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 3,
-  },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 5,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: quivoRadius.pill,
-  },
-  statusPillActive: { backgroundColor: 'rgba(34, 197, 94, 0.14)' },
-  statusPillIdle: { backgroundColor: 'rgba(49, 39, 177, 0.10)' },
-  statusDot: { width: 6, height: 6, borderRadius: 3 },
-  statusPillText: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 8.5,
-    letterSpacing: 0.5,
-  },
-  statusPillTextActive: { color: '#15803D' },
-  statusPillTextIdle: { color: '#3127B1' },
   navInstructionCard: {
     alignSelf: 'flex-start',
     backgroundColor: 'rgba(255, 255, 255, 0.88)',
