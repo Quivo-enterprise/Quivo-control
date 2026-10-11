@@ -20,7 +20,7 @@ Secuencia: PR 0 docs → PR 1 shared → API A → API B → **deploy de la API 
 APK** → web A → bake-off de comps → móvil C1 → C2 → A → B → changelog al CTO → build.
 - **Estado (2026-10-11):**
   - **Mergeados:** PR 0 docs (#110) · PR 1+2 shared + API A (#111) · API B vecinos-ruta (#113) ·
-    móvil C1 motor Google único (#112) · tests deterministas de API (#114, #116).
+    móvil C1 motor Google único (#112) · tests deterministas de API (#114, #116) · web A (#117).
   - **API A (#111):** evento `inicio_jornada` (worker con chequeo de dispositivo y día de
     asignación), índice `(sindicatoId, tipo, ts)`, `GET /v1/reportes/jornadas`.
     - Sin hacer (decisión del chairman): filtro de drift hacia atrás, `CREATE INDEX
@@ -43,8 +43,21 @@ APK** → web A → bake-off de comps → móvil C1 → C2 → A → B → chang
   - **Tests inestables de la API:** `en-vivo.resumen-equivalencia` (corte 04:00 UTC) arreglado en
     #114; `auth-movil` "el 409 de nivel 2…" (≈17 scrypt, ~5.1 s en CI) con timeout de 15 s en #116.
     Costo de login acotado por diseño: peor caso 3 + 20 scrypt (~3.5 s local) por intento fallido.
+  - **Web A (#117):** panel "Jornada de hoy" en `/en-vivo` (`panel-jornada.tsx`, lógica pura en
+    `src/lib/en-vivo/jornadas.ts`).
+    - Nace plegado con resumen de una línea. Grupos: sin iniciar → día iniciado → en recorrido →
+      finalizado. Respeta el filtro de línea, poll de 30 s, aviso "sin actualizar". También se
+      monta en el estado vacío (madrugada sin sesiones).
+    - Columna derecha del HUD, en flujo bajo los controles. En pantalla angosta va a todo el ancho.
+    - **`ConsultasPorIdentidad`:** un `QueryClient` por identidad (`id|rol|sindicatoId`), con
+      `key` que remonta el subárbol. Cierra una fuga previa: el caché sobrevivía al logout y al
+      reemplazo de sesión desde otra pestaña. El refresh de token no remonta.
+    - Limitación: un vehículo con turnos en dos líneas el mismo día solo aparece bajo la primera
+      (la API hace `DISTINCT ON (vehiculoId)`).
+    - Sin spec de acceptance: `admin-panel.spec.ts` ya usa los 5 logins/min. **No verificado con
+      datos reales** de `inicio_jornada` (el móvil todavía no lo emite; llega en móvil A).
   - Comp móvil elegido: **A** (`docs/diseno/release-13-comp-a-operacion.html`).
-  - **Siguiente:** web A (`panel-jornada`) · móvil C2 (modo navegación) · A · B.
+  - **Siguiente:** móvil C2 (modo navegación) · A · B.
 - **Antes de cualquier APK:** deploy de la API (lo confirma el CTO; un APK nuevo contra una API
   vieja traba el outbox con `inicio_jornada`).
 - **Antes del build hay que verificar:** que todos los teléfonos del piloto tengan GMS, la key de
