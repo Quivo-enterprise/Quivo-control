@@ -18,7 +18,7 @@ import { Input } from '../../shared/components/Input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { MapErrorBoundary } from './map-error-boundary';
 import { completadosTrasDeteccion, proximoPuntoControlPendiente } from './proximo-punto-control';
-import { RouteMapView } from './route-map-view';
+import { RouteMap } from '../mapa/route-map';
 import { NextControlSheet } from './next-control-sheet';
 import { useSyncStatus } from './use-sync-status';
 import { formatearDistancia } from './format-distancia';
@@ -735,7 +735,7 @@ function MapLayer({
   if (!paquete) return <View style={styles.mapFallback} />;
   return (
     <MapErrorBoundary>
-      <RouteMapView
+      <RouteMap
         paquete={paquete}
         vehiculo={vehiculo}
         proximoPuntoControlId={nextPointId}

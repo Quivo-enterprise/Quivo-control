@@ -69,11 +69,12 @@ pnpm --filter @quivo/mobile test
 compilación de producto aún requiere configurar la licencia Transistorsoft indicada en
 `docs/spike-gps.md`.
 
-**Mapa (QUI-243):** la pantalla de recorrido usa Leaflet + tiles de OpenStreetMap dentro de
-un `WebView` (`react-native-webview`) — sin API key, 100% open source (mismo motor que
-`RouteMap` del design system web, QUI-229). Se probó primero `react-native-maps`, pero en
-Android solo soporta Google Maps y exige una API key real de Google Maps Platform; se
-descartó para no depender de esa credencial (confirmado con un crash real en un Moto E13 sin
-key configurada). Leaflet se carga desde CDN (`unpkg.com`) — sin red, el mapa no renderiza,
-pero el resto de la pantalla (inicio/fin de recorrido, sync, observaciones) sigue
-funcionando (`MapErrorBoundary` aísla cualquier falla del mapa del resto de la UI).
+**Mapa:** la pantalla de recorrido usa el SDK nativo de Google Maps (`react-native-maps` con
+`PROVIDER_GOOGLE`, `src/features/mapa/route-map.tsx`) — único motor, decisión en
+`docs/adr/0004-motor-mapa-google.md` (reemplazó a Leaflet + WebView). Requiere la API key
+`GOOGLE_MAPS_ANDROID_API_KEY` en el entorno de EAS (restringida al paquete + SHA-1 del keystore
+de producción): SIN ella el mapa se ve en blanco en un build release. La ruta, los puntos de
+control y el marcador se dibujan nativamente; sin red los tiles de fondo pueden faltar (el SDK
+cachea los ya vistos), pero el resto de la pantalla (inicio/fin de recorrido, sync,
+observaciones) sigue funcionando (`MapErrorBoundary` aísla cualquier falla del mapa del resto
+de la UI).

@@ -19,7 +19,7 @@ interface ControlFeedbackToastProps {
 export function ControlFeedbackToast({ ultimaDeteccion }: ControlFeedbackToastProps) {
   const [queue, setQueue] = useState<DeteccionPuntoControl[]>([]);
   const [current, setCurrent] = useState<DeteccionPuntoControl | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // ENTREGA 9 (plan post-piloto 2026-09-09, "deduplicar el toast de confirmación", síntoma 11):
   // comparación por identidad análoga a `ultimoSonado` (`gps-provider.tsx`) — identidad de la
   // última detección ya encolada, para no pushear de nuevo solo porque cambió la REFERENCIA de
@@ -40,7 +40,7 @@ export function ControlFeedbackToast({ ultimaDeteccion }: ControlFeedbackToastPr
   const rippleScale = useSharedValue(1);
   const rippleOpacity = useSharedValue(0);
 
-  const dismissTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const dismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     // FIX (revisión, hallazgo 1): `ultimaDeteccion` vuelve a `null` al arrancar un recorrido

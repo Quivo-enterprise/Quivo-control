@@ -1466,7 +1466,7 @@ export function useGpsOperativo(
       // visual y reinicia el store ACÁ, de forma explícita y síncrona — no alcanza con dejarlo
       // solo al efecto `[tracking]` de `iniciarCanalVisual`/`detenerCanalVisual` (más arriba):
       // ese efecto recién corre en el PRÓXIMO render tras `setTracking(false)` (abajo), y
-      // mientras tanto `route-map-view.tsx` seguía mostrando la posición VIEJA del store
+      // mientras tanto `mapa/route-map.tsx` seguía mostrando la posición VIEJA del store
       // (singleton de módulo, nunca se limpiaba solo) en vez de caer al prop `posicionActual`
       // fresco. `detenerCanalVisual()` es idempotente (no-op sobre la suscripción si el canal ya
       // estaba parado o el flag está apagado) — segura de llamar siempre. Ver los docblocks de
