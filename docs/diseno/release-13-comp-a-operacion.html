@@ -1,0 +1,385 @@
+<title>Comp A Operación</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Montserrat:wght@400;500;600;700&family=Oxanium:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Concepto de layout: 4 marcos de teléfono en fila que envuelve; cada marco = mapa a pantalla completa + capas de vidrio y hoja morada Quivo. Brown-field: se conservan tokens y fuentes de quivo-theme.ts. */
+:root {
+  --bg: #F1F1F8;
+  --fg: #1A1A2E;
+  --muted: #4B4B6B;
+  --line: #D9D9E8;
+  --card: #FFFFFF;
+  --primary: #3226B4;
+  --sheet: #3127B1;
+  --accent: #FD9E15;
+  --route: #FE9B0B;
+  --f-display: 'Oxanium', 'Segoe UI', system-ui, sans-serif;
+  --f-body: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
+  --f-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #12122A; --fg: #EDEDF8; --muted: #B4B4D0; --line: #34345A; --card: #1C1C3C; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #12122A; --fg: #EDEDF8; --muted: #B4B4D0; --line: #34345A; --card: #1C1C3C; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); padding-inline: 16px; padding-block: 32px 56px; line-height: 1.5; }
+h1, h2 { font-family: var(--f-display); margin: 0; text-wrap: balance; }
+.wrap { max-width: 1660px; margin: 0 auto; }
+header.top { display: grid; gap: 14px; max-width: 760px; margin-bottom: 36px; }
+header.top h1 { font-size: clamp(30px, 5vw, 44px); letter-spacing: -0.01em; line-height: 1.05; font-weight: 700; }
+header.top p { margin: 0; color: var(--muted); font-size: 15px; max-width: 65ch; }
+.dials { display: flex; flex-wrap: wrap; gap: 8px; font-family: var(--f-mono); font-size: 12px; }
+.dials span { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--card); }
+.dials b { color: var(--primary); }
+:root[data-theme="dark"] .dials b { color: var(--accent); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .dials b { color: var(--accent); } }
+
+.frames { display: flex; flex-wrap: wrap; gap: 36px 28px; align-items: flex-start; justify-content: center; }
+figure { margin: 0; width: 376px; max-width: 100%; display: grid; gap: 14px; justify-items: center; }
+figcaption { width: 360px; max-width: 100%; font-size: 13px; color: var(--muted); }
+figcaption h2 { font-size: 16px; color: var(--fg); margin-bottom: 4px; font-weight: 600; }
+figcaption p { margin: 0; }
+
+/* ===== Teléfono ===== */
+.phone { position: relative; width: 360px; height: 780px; border-radius: 36px; overflow: hidden; background: #E3E7F0; box-shadow: 0 0 0 8px #1A1A2E, 0 0 0 9px var(--line), 0 24px 48px -16px rgba(50,38,180,.35); color: #1A1A2E; font-family: var(--f-body); isolation: isolate; }
+.phone svg.map { position: absolute; inset: 0; width: 360px; height: 780px; display: block; }
+.i { width: 1em; height: 1em; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.statusbar { position: absolute; top: 0; left: 0; right: 0; height: 28px; padding: 8px 20px 0; display: flex; justify-content: space-between; font: 600 12px var(--f-body); color: #1A1A2E; z-index: 5; }
+.batt { width: 22px; height: 11px; border: 1.5px solid #1A1A2E; border-radius: 3px; position: relative; margin-top: 2px; }
+.batt::after { content: ""; position: absolute; inset: 1.5px; right: 6px; background: #1A1A2E; border-radius: 1px; }
+
+/* Vidrio (aproximación web de la tarjeta BlurView) */
+.glass { background: rgba(255,255,255,.92); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,.72); box-shadow: 0 8px 22px -8px rgba(50,38,180,.32), inset 0 1px 0 rgba(255,255,255,.9); border-radius: 16px; }
+
+/* Tarjeta de conductor completa */
+.driver { position: absolute; left: 12px; right: 12px; top: 34px; padding: 10px 12px; display: grid; grid-template-columns: 36px 1fr auto; gap: 10px; align-items: center; z-index: 4; }
+.avatar { width: 36px; height: 36px; border-radius: 12px; background: #DCD9FB; color: #3226B4; display: grid; place-items: center; font-size: 22px; }
+.dtxt { min-width: 0; display: grid; gap: 1px; }
+.dname { font: 600 13px/1.2 var(--f-body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dunion { font: 500 11px/1.3 var(--f-body); color: #4B4B6B; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dveh { font: 500 12px/1.3 var(--f-mono); color: #1A1A2E; white-space: nowrap; }
+.dright { display: grid; gap: 6px; justify-items: end; }
+.badge { position: relative; min-width: 52px; height: 30px; padding: 0 10px; border-radius: 8px; background: #0B7A55; border: 2px solid #FFD28A; color: #fff; font: 700 17px/26px var(--f-display); text-align: center; overflow: hidden; }
+.badge::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: #FD9E15; }
+.pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; font: 700 10.5px var(--f-display); letter-spacing: .06em; }
+.pill i { width: 7px; height: 7px; border-radius: 50%; display: block; }
+.pill.on { background: #DDF4EA; color: #0F5C42; } .pill.on i { background: #16805D; }
+.pill.idle { background: #E6E6EF; color: #3C3C58; } .pill.idle i { background: #6B6B88; }
+
+/* Tarjeta compacta (navegación) */
+.driver.compact { top: 32px; grid-template-columns: auto 1fr auto; padding: 8px 10px; height: 50px; border-radius: 14px; }
+.driver.compact .dveh { font-size: 13px; font-weight: 700; }
+.driver.compact .dmodel { font: 500 11px var(--f-body); color: #4B4B6B; display: block; }
+
+/* Brújula norte arriba */
+.north { position: absolute; left: 12px; top: 138px; width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; z-index: 3; color: #3226B4; font: 700 10px var(--f-display); }
+.north .i { font-size: 18px; fill: #3226B4; }
+.north span { line-height: 1; margin-top: -2px; }
+
+/* ===== Hoja ===== */
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--sheet); color: #fff; border-radius: 28px 28px 0 0; padding: 10px 16px 24px; z-index: 6; box-shadow: 0 -10px 30px -8px rgba(26,26,46,.45); display: grid; gap: 12px; }
+.handle { width: 40px; height: 4px; border-radius: 4px; background: rgba(255,255,255,.5); justify-self: center; }
+.sh-head { display: flex; align-items: center; gap: 12px; }
+.sh-ico { width: 40px; height: 40px; border-radius: 12px; background: #FFEFD9; color: #8A4700; display: grid; place-items: center; font-size: 22px; flex: none; }
+.sh-title { font: 600 20px/1.15 var(--f-display); }
+.sh-sub { font: 500 13px/1.3 var(--f-body); color: #DCD9FB; }
+.btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; border: 0; border-radius: 14px; font-family: var(--f-display); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; transition: transform .15s ease, filter .15s ease; white-space: nowrap; }
+.btn:active { transform: scale(.98) translateY(1px); }
+.btn:hover { filter: brightness(1.04); }
+.btn:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+.btn.primary { height: 64px; background: var(--accent); color: #1A1A2E; font-size: 20px; box-shadow: 0 6px 16px -6px rgba(253,158,21,.65), inset 0 1px 0 rgba(255,255,255,.4); }
+.btn.primary .i { font-size: 24px; stroke-width: 2.4; }
+.btn.locked { height: 56px; background: rgba(255,255,255,.06); border: 1.5px dashed rgba(255,255,255,.5); color: rgba(255,255,255,.82); font-size: 16px; cursor: not-allowed; }
+.btn.locked:active { transform: none; }
+.btn.ghost { height: 56px; background: transparent; border: 2px solid rgba(255,255,255,.6); color: #fff; font-size: 15px; }
+.hint { display: flex; align-items: center; gap: 8px; font: 500 13px/1.3 var(--f-body); color: rgba(255,255,255,.9); justify-content: center; }
+.hint .i { font-size: 16px; color: #FFD28A; }
+.done-chip { display: inline-flex; align-items: center; gap: 8px; align-self: start; padding: 5px 12px 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,.28); font: 600 13px var(--f-body); color: rgba(255,255,255,.95); justify-self: start; }
+.done-chip .ck { width: 20px; height: 20px; border-radius: 50%; background: #DDF4EA; color: #0F5C42; display: grid; place-items: center; font-size: 12px; }
+.done-chip .ck .i { stroke-width: 3; }
+.nextc { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: center; }
+.nextc .lab { font: 600 10.5px var(--f-body); letter-spacing: .1em; text-transform: uppercase; color: #DCD9FB; }
+.nextc .nm { font: 600 16px/1.25 var(--f-body); }
+.nextc .ds { font: 700 26px var(--f-display); color: var(--accent); font-variant-numeric: tabular-nums; }
+
+/* Tira compacta de navegación */
+.strip { padding: 8px 16px 20px; gap: 10px; border-radius: 24px 24px 0 0; }
+.strip .row1 { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; }
+.strip .dist { font: 700 28px/1 var(--f-display); color: var(--accent); font-variant-numeric: tabular-nums; }
+.strip .nm { font: 600 14px/1.25 var(--f-body); }
+.strip .lab { font: 600 10.5px var(--f-body); letter-spacing: .1em; text-transform: uppercase; color: #DCD9FB; display: flex; align-items: center; gap: 6px; }
+.strip .lab .i { font-size: 13px; }
+
+/* ===== Mapa inclinado ===== */
+.tilt { position: absolute; inset: 0; perspective: 600px; perspective-origin: 180px 250px; overflow: hidden; background: #E3E7F0; }
+.layer { position: absolute; width: 2400px; height: 2400px; left: calc(50% - 1200px); top: -1610px; transform-origin: 1200px 2250px; transform: rotateX(55deg); transform-style: preserve-3d; }
+.layer svg { display: block; width: 2400px; height: 2400px; }
+.bb { position: absolute; transform-origin: 50% 100%; transform: translate(-50%,-100%) rotateX(-55deg) scale(2.6); }
+.bb.bus { transform: translate(-50%,-100%) rotateX(-55deg) scale(1.7); width: 64px; height: 32px; color: #D1343F; }
+.bb.bus svg { width: 64px; height: 32px; }
+.ctl { width: 34px; height: 34px; border-radius: 50%; background: #FD9E15; border: 3px solid #fff; color: #1A1A2E; display: grid; place-items: center; font: 700 15px var(--f-display); box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+.fade-top { position: absolute; left: 0; right: 0; top: 0; height: 130px; background: linear-gradient(#E3E7F0 15%, rgba(227,231,240,0)); z-index: 1; pointer-events: none; }
+.me { position: absolute; left: 50%; top: 525px; width: 64px; height: 64px; transform: translate(-50%,-50%); z-index: 3; display: grid; place-items: center; }
+.me::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: rgba(50,38,180,.16); }
+.me svg { width: 40px; height: 40px; position: relative; filter: drop-shadow(0 4px 4px rgba(26,26,46,.4)); }
+
+/* ===== Vecinos de ruta ===== */
+.neigh { position: absolute; left: 12px; right: 12px; top: 90px; z-index: 4; padding: 2px 12px 8px; }
+.nrow { display: grid; grid-template-columns: 24px 48px 1fr auto; gap: 10px; align-items: center; height: 56px; }
+.nrow + .nrow { border-top: 1px solid rgba(50,38,180,.14); }
+.chev { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: #EFEEFC; color: #3226B4; font-size: 16px; }
+.chev .i { stroke-width: 3; }
+.bus { width: 48px; height: 24px; display: block; }
+.ntxt { min-width: 0; display: grid; gap: 1px; }
+.plate { font: 700 14px/1.2 var(--f-mono); letter-spacing: .01em; white-space: nowrap; }
+.plate small { font: 500 12px var(--f-mono); color: #4B4B6B; margin-left: 4px; }
+.age { font: 600 12px/1.3 var(--f-body); color: #4B4B6B; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.age .i { font-size: 12px; }
+.ndist { font: 700 24px/1 var(--f-display); font-variant-numeric: tabular-nums; text-align: right; }
+.nfoot { display: flex; align-items: center; gap: 6px; font: 500 11px var(--f-body); color: #4B4B6B; padding-top: 6px; border-top: 1px solid rgba(50,38,180,.14); }
+.nfoot .i { font-size: 12px; }
+.empty .chev { background: transparent; border: 1.5px dashed #8C8CA8; color: #6B6B88; }
+.empty .etx { font: 600 14px/1.25 var(--f-body); color: #3C3C58; grid-column: 3 / 5; }
+.empty .ghost { color: #8C8CA8; }
+
+/* Recentrar */
+.recenter { position: absolute; right: 12px; bottom: 166px; z-index: 5; height: 56px; padding: 0 18px 0 14px; border-radius: 28px; background: #fff; color: #3226B4; border: 2px solid #3226B4; display: flex; align-items: center; gap: 8px; font: 700 14px var(--f-display); letter-spacing: .05em; text-transform: uppercase; box-shadow: 0 8px 18px -6px rgba(26,26,46,.5); cursor: pointer; transition: transform .15s ease; }
+.recenter:active { transform: scale(.98); }
+.recenter:focus-visible { outline: 3px solid #FD9E15; outline-offset: 3px; }
+.recenter .i { font-size: 24px; }
+.note { position: absolute; right: 12px; bottom: 228px; z-index: 5; font: 600 10.5px/1.2 var(--f-body); color: #7A2E00; background: #FFF4E0; border: 1px dashed #C96800; border-radius: 6px; padding: 3px 7px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 3 20 12 6 21z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+    <symbol id="i-sunrise" viewBox="0 0 24 24"><path d="M12 2v8"/><path d="m4.93 10.93 1.41 1.41"/><path d="M2 18h2"/><path d="M20 18h2"/><path d="m19.07 10.93-1.41 1.41"/><path d="M22 22H2"/><path d="m8 6 4-4 4 4"/><path d="M16 18a4 4 0 0 0-8 0"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+    <symbol id="i-locate" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><path d="M2 12h3"/><path d="M19 12h3"/><path d="M12 2v3"/><path d="M12 19v3"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+    <symbol id="i-nav" viewBox="0 0 24 24"><path d="M12 2 19 21l-7-4-7 4z"/></symbol>
+
+    <!-- Silueta de minibus, vista lateral. El color del vehiculo entra por currentColor -->
+    <symbol id="bus" viewBox="0 0 64 32">
+      <path d="M3 24V10a4 4 0 0 1 4-4h38a5 5 0 0 1 3.7 1.7L58 18c1.3 1.4 2 3 2 5v1z" fill="currentColor" stroke="#1A1A2E" stroke-opacity=".6" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M8 10h9v7H8zM19 10h9v7h-9zM30 10h9v7h-9z" fill="#fff" fill-opacity=".92"/>
+      <path d="M41 10h4.3a2 2 0 0 1 1.5.7L53 17H41z" fill="#fff" fill-opacity=".92"/>
+      <path d="M3 20.5h57" stroke="#fff" stroke-opacity=".5" stroke-width="1.5"/>
+      <circle cx="16" cy="25" r="5" fill="#1A1A2E"/><circle cx="16" cy="25" r="2" fill="#D9D9E8"/>
+      <circle cx="47" cy="25" r="5" fill="#1A1A2E"/><circle cx="47" cy="25" r="2" fill="#D9D9E8"/>
+    </symbol>
+    <symbol id="bus-ghost" viewBox="0 0 64 32">
+      <path d="M3 24V10a4 4 0 0 1 4-4h38a5 5 0 0 1 3.7 1.7L58 18c1.3 1.4 2 3 2 5v1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 3" stroke-linejoin="round"/>
+      <circle cx="16" cy="25" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <circle cx="47" cy="25" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    </symbol>
+
+    <!-- Mapa general: norte arriba, ruta completa y puntos de control numerados -->
+    <symbol id="map-over" viewBox="0 0 360 780">
+      <rect width="360" height="780" fill="#D9DEEA"/>
+      <g stroke="#fff" stroke-linecap="round" fill="none">
+        <g stroke-width="9"><path d="M0 130H360M0 170H360M0 250H360M0 320H360M0 390H360M0 440H360M0 480H360M0 560H360"/><path d="M40 0V780M120 0V780M220 0V780M300 0V780"/></g>
+        <g stroke-width="5"><path d="M80 0V780M170 0V780M260 0V780M340 0V780M0 210H360M0 285H360M0 355H360M0 520H360"/></g>
+        <path d="M0 520 190 330 360 190" stroke-width="12"/>
+      </g>
+      <rect x="132" y="178" width="80" height="62" rx="8" fill="#CBE3CF"/>
+      <rect x="48" y="258" width="64" height="54" rx="8" fill="#CBE3CF"/>
+      <rect x="228" y="396" width="64" height="36" rx="8" fill="#CBE3CF"/>
+      <g font-family="Montserrat, sans-serif" font-size="9" font-weight="600" fill="#5A5F7D"><text x="124" y="386">Av. Busch</text><text x="224" y="316">Calle Murillo</text><text x="46" y="246">Av. 6 de Agosto</text></g>
+      <g fill="none" stroke-linejoin="round" stroke-linecap="round"><path d="M40 440V390H120V320H220V250H300V170" stroke="#fff" stroke-width="14"/><path d="M40 440V390H120V320H220V250H300V170" stroke="#3226B4" stroke-width="7"/></g>
+      <g font-family="Oxanium, sans-serif" font-weight="700" font-size="14" text-anchor="middle">
+        <g id="c1"><circle cx="40" cy="440" r="14" fill="#fff" stroke="#3226B4" stroke-width="3"/><text x="40" y="445" fill="#1A1A2E">1</text></g>
+        <circle cx="120" cy="360" r="14" fill="#fff" stroke="#3226B4" stroke-width="3"/><text x="120" y="365" fill="#1A1A2E">2</text>
+        <circle cx="170" cy="320" r="14" fill="#fff" stroke="#3226B4" stroke-width="3"/><text x="170" y="325" fill="#1A1A2E">3</text>
+        <circle cx="220" cy="285" r="14" fill="#fff" stroke="#3226B4" stroke-width="3"/><text x="220" y="290" fill="#1A1A2E">4</text>
+        <circle cx="260" cy="250" r="14" fill="#fff" stroke="#3226B4" stroke-width="3"/><text x="260" y="255" fill="#1A1A2E">5</text>
+        <circle cx="300" cy="170" r="14" fill="#fff" stroke="#3226B4" stroke-width="3"/><text x="300" y="175" fill="#1A1A2E">6</text>
+      </g>
+      <circle cx="64" cy="472" r="17" fill="#3226B4" fill-opacity=".18"/><circle cx="64" cy="472" r="7" fill="#3226B4" stroke="#fff" stroke-width="3"/>
+    </symbol>
+
+    <!-- Mapa inclinado: calles (patron) + ruta -->
+    <pattern id="blocks" width="240" height="200" patternUnits="userSpaceOnUse">
+      <rect width="240" height="200" fill="#fff"/>
+      <rect x="14" y="12" width="212" height="176" rx="10" fill="#D9DEEA"/>
+      <rect x="40" y="30" width="60" height="60" rx="4" fill="#CBD1E0"/>
+      <rect x="130" y="100" width="70" height="60" rx="4" fill="#CBD1E0"/>
+    </pattern>
+    <symbol id="map-nav" viewBox="0 0 2400 2400">
+      <rect width="2400" height="2400" fill="url(#blocks)"/>
+      <rect x="1254" y="1214" width="172" height="164" rx="10" fill="#CBE3CF"/>
+      <rect x="494" y="1614" width="212" height="164" rx="10" fill="#CBE3CF"/>
+      <rect x="1494" y="2014" width="212" height="164" rx="10" fill="#CBE3CF"/>
+      <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+        <path d="M1200 2400V1800H1440V1000H1200V300" stroke="#7A3F00" stroke-width="46"/>
+        <path d="M1200 2400V1800H1440V1000H1200V300" stroke="#FE9B0B" stroke-width="28"/>
+        <path d="M1200 2400V2120" stroke="#5A5A78" stroke-width="46"/>
+        <path d="M1200 2400V2120" stroke="#A9A9C2" stroke-width="28"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <header class="top">
+    <h1>Comp A Operación</h1>
+    <p>Rediseño brown-field de la pantalla de operación del conductor, hecho con taste-skill (redesign-existing-projects + design-taste-frontend). Se conserva la marca Quivo: morado #3226B4 y #3127B1, acento #FD9E15, Oxanium, Montserrat y JetBrains Mono. La ruta en navegación va en #FE9B0B.</p>
+    <div class="dials" aria-label="Diales de diseño">
+      <span>DESIGN_VARIANCE <b>4</b></span><span>MOTION_INTENSITY <b>2</b></span><span>VISUAL_DENSITY <b>5</b></span>
+    </div>
+    <p>Pensado para sol fuerte, vehículo en marcha y una sola mano: objetivos primarios de 64 px, contraste AA sobre los overlays, y cada estado se dice con icono y texto, no solo con color.</p>
+  </header>
+
+  <div class="frames">
+
+    <!-- 1. Día sin iniciar -->
+    <figure>
+      <div class="phone" role="img" aria-label="Pantalla de operación: día sin iniciar">
+        <svg class="map" viewBox="0 0 360 780" aria-hidden="true"><use href="#map-over"/></svg>
+        <div class="statusbar"><span>06:31</span><span class="batt"></span></div>
+        <section class="driver glass">
+          <div class="avatar"><svg class="i"><use href="#i-user"/></svg></div>
+          <div class="dtxt"><span class="dname">Marcelo Choque Q.</span><span class="dunion">Sindicato Mixto 14 de Septiembre</span><span class="dveh">1876-BNC Toyota Hiace</span></div>
+          <div class="dright"><span class="badge">120</span><span class="pill idle"><i></i>EN ESPERA</span></div>
+        </section>
+        <div class="north glass" style="border-radius:50%"><svg class="i"><use href="#i-nav"/></svg><span>N</span></div>
+        <section class="sheet" aria-label="Acciones del día">
+          <div class="handle"></div>
+          <div class="sh-head"><div class="sh-ico"><svg class="i"><use href="#i-sunrise"/></svg></div><div><div class="sh-title">Día sin iniciar</div><div class="sh-sub">Línea 120, 6 puntos de control</div></div></div>
+          <button class="btn primary" type="button"><svg class="i"><use href="#i-sunrise"/></svg>Empezar día</button>
+          <div class="hint"><svg class="i"><use href="#i-bell"/></svg>Avisa a tu delegado que hoy trabajas</div>
+          <button class="btn locked" type="button" aria-disabled="true" tabindex="-1"><svg class="i"><use href="#i-lock"/></svg>Comenzar ruta</button>
+        </section>
+      </div>
+      <figcaption><h2>1. Día sin iniciar</h2><p>Mapa en vista general con norte arriba y los 6 controles numerados. Un solo botón grande, EMPEZAR DÍA, en naranja; COMENZAR RUTA queda visible pero bloqueado (candado, borde punteado) para que el conductor entienda el orden.</p></figcaption>
+    </figure>
+
+    <!-- 2. Listo -->
+    <figure>
+      <div class="phone" role="img" aria-label="Pantalla de operación: listo para comenzar ruta">
+        <svg class="map" viewBox="0 0 360 780" aria-hidden="true"><use href="#map-over"/>
+          <circle cx="40" cy="440" r="17" fill="#FD9E15" stroke="#fff" stroke-width="3"/><text x="40" y="445.5" text-anchor="middle" font-family="Oxanium, sans-serif" font-weight="700" font-size="15" fill="#1A1A2E">1</text>
+        </svg>
+        <div class="statusbar"><span>06:44</span><span class="batt"></span></div>
+        <section class="driver glass">
+          <div class="avatar"><svg class="i"><use href="#i-user"/></svg></div>
+          <div class="dtxt"><span class="dname">Marcelo Choque Q.</span><span class="dunion">Sindicato Mixto 14 de Septiembre</span><span class="dveh">1876-BNC Toyota Hiace</span></div>
+          <div class="dright"><span class="badge">120</span><span class="pill idle"><i></i>EN ESPERA</span></div>
+        </section>
+        <div class="north glass" style="border-radius:50%"><svg class="i"><use href="#i-nav"/></svg><span>N</span></div>
+        <section class="sheet" aria-label="Acciones del día">
+          <div class="handle"></div>
+          <div class="done-chip"><span class="ck"><svg class="i"><use href="#i-check"/></svg></span>Día iniciado 06:42</div>
+          <div class="nextc">
+            <div class="sh-ico"><svg class="i"><use href="#i-flag"/></svg></div>
+            <div><div class="lab">Próximo control</div><div class="nm">1. Terminal Bimodal, andén 4</div></div>
+            <div class="ds">180 m</div>
+          </div>
+          <button class="btn primary" type="button"><svg class="i"><use href="#i-play"/></svg>Comenzar ruta</button>
+        </section>
+      </div>
+      <figcaption><h2>2. Listo para salir</h2><p>La confirmación "Día iniciado 06:42" es una píldora discreta con check; no compite con la acción. COMENZAR RUTA toma el lugar del botón naranja, y el primer control se resalta en naranja en el mapa.</p></figcaption>
+    </figure>
+
+    <!-- 3. Navegación con vecinos -->
+    <figure>
+      <div class="phone" role="img" aria-label="Navegación con vehículos delante y detrás en la misma ruta">
+        <div class="tilt">
+          <div class="layer">
+            <svg viewBox="0 0 2400 2400" aria-hidden="true"><use href="#map-nav"/></svg>
+            <div class="bb ctl" style="left:1440px;top:1620px">4</div>
+            <div class="bb bus" style="left:1320px;top:1800px"><svg viewBox="0 0 64 32"><use href="#bus"/></svg></div>
+          </div>
+        </div>
+        <div class="fade-top"></div>
+        <div class="statusbar"><span>06:48</span><span class="batt"></span></div>
+        <section class="driver compact glass">
+          <span class="badge">120</span>
+          <div class="dtxt"><span class="dveh">1876-BNC</span><span class="dmodel">Toyota Hiace</span></div>
+          <span class="pill on"><i></i>EN LÍNEA</span>
+        </section>
+        <section class="neigh glass" aria-label="Vecinos de ruta">
+          <div class="nrow">
+            <span class="chev"><svg class="i"><use href="#i-up"/></svg></span>
+            <svg class="bus" style="color:#D1343F" viewBox="0 0 64 32" aria-label="Minibus rojo"><use href="#bus"/></svg>
+            <div class="ntxt"><span class="plate">2345-KLM<small>#12</small></span><span class="age">Delante<span aria-hidden="true">&nbsp;</span><svg class="i"><use href="#i-clock"/></svg>hace 1 min</span></div>
+            <span class="ndist">850 m</span>
+          </div>
+          <div class="nrow">
+            <span class="chev"><svg class="i"><use href="#i-down"/></svg></span>
+            <svg class="bus" style="color:#2F7DE1" viewBox="0 0 64 32" aria-label="Minibus azul"><use href="#bus"/></svg>
+            <div class="ntxt"><span class="plate">4321-XYZ<small>#07</small></span><span class="age">Detrás<span aria-hidden="true">&nbsp;</span><svg class="i"><use href="#i-clock"/></svg>hace 3 min</span></div>
+            <span class="ndist">1.2 km</span>
+          </div>
+          <div class="nfoot"><svg class="i"><use href="#i-clock"/></svg>Se ocultan los datos de más de 10 min</div>
+        </section>
+        <div class="me"><svg viewBox="0 0 24 24" aria-label="Tu vehículo"><path d="M12 2 19 21l-7-4-7 4z" fill="#3226B4" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
+        <div class="note">comp: solo tras mover el mapa</div>
+        <button class="recenter" type="button"><svg class="i"><use href="#i-locate"/></svg>Recentrar</button>
+        <section class="sheet strip" aria-label="Próximo control">
+          <div class="handle"></div>
+          <div class="row1">
+            <div class="dist">1.4 km</div>
+            <div><div class="lab"><svg class="i"><use href="#i-flag"/></svg>Próximo control 4</div><div class="nm">Av. Busch y 6 de Agosto</div></div>
+          </div>
+          <button class="btn ghost" type="button"><svg class="i"><use href="#i-stop"/></svg>Finalizar ruta</button>
+        </section>
+      </div>
+      <figcaption><h2>3. Navegación con vecinos</h2><p>Mapa inclinado 55° con rumbo arriba, flecha en el tercio inferior y ruta naranja por delante. Cada vecino lleva chevron, texto Delante/Detrás, placa, número, distancia grande y antigüedad; la silueta toma el color real del vehículo. FINALIZAR queda al alcance, pero en contorno.</p></figcaption>
+    </figure>
+
+    <!-- 4. Navegación sin vecinos -->
+    <figure>
+      <div class="phone" role="img" aria-label="Navegación sin vehículos delante ni detrás">
+        <div class="tilt">
+          <div class="layer">
+            <svg viewBox="0 0 2400 2400" aria-hidden="true"><use href="#map-nav"/></svg>
+            <div class="bb ctl" style="left:1440px;top:1620px">4</div>
+          </div>
+        </div>
+        <div class="fade-top"></div>
+        <div class="statusbar"><span>06:51</span><span class="batt"></span></div>
+        <section class="driver compact glass">
+          <span class="badge">120</span>
+          <div class="dtxt"><span class="dveh">1876-BNC</span><span class="dmodel">Toyota Hiace</span></div>
+          <span class="pill on"><i></i>EN LÍNEA</span>
+        </section>
+        <section class="neigh glass empty" aria-label="Vecinos de ruta">
+          <div class="nrow">
+            <span class="chev"><svg class="i"><use href="#i-up"/></svg></span>
+            <svg class="bus ghost" viewBox="0 0 64 32" aria-hidden="true"><use href="#bus-ghost"/></svg>
+            <span class="etx">Nadie delante en tu ruta</span>
+          </div>
+          <div class="nrow">
+            <span class="chev"><svg class="i"><use href="#i-down"/></svg></span>
+            <svg class="bus ghost" viewBox="0 0 64 32" aria-hidden="true"><use href="#bus-ghost"/></svg>
+            <span class="etx">Nadie detrás</span>
+          </div>
+          <div class="nfoot"><svg class="i"><use href="#i-clock"/></svg>Se muestran vehículos activos de los últimos 10 min</div>
+        </section>
+        <div class="me"><svg viewBox="0 0 24 24" aria-label="Tu vehículo"><path d="M12 2 19 21l-7-4-7 4z" fill="#3226B4" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
+        <section class="sheet strip" aria-label="Próximo control">
+          <div class="handle"></div>
+          <div class="row1">
+            <div class="dist">1.4 km</div>
+            <div><div class="lab"><svg class="i"><use href="#i-flag"/></svg>Próximo control 4</div><div class="nm">Av. Busch y 6 de Agosto</div></div>
+          </div>
+          <button class="btn ghost" type="button"><svg class="i"><use href="#i-stop"/></svg>Finalizar ruta</button>
+        </section>
+      </div>
+      <figcaption><h2>4. Navegación sin vecinos</h2><p>Mismo layout y misma altura que el estado 3, para que nada salte. Las filas vacías usan silueta punteada sin color y texto neutro: es información, no un error. El Recentrar no se muestra porque el mapa sigue al vehículo.</p></figcaption>
+    </figure>
+
+  </div>
+</div>
