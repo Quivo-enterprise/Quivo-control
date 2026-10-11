@@ -42,6 +42,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OperationStackParamList } from '../../app/operation-navigator';
 import { useOperacionSettings } from '../perfil/use-operacion-settings';
 import { DriverRouteCard } from './driver-route-card';
+import { VecinosRutaPanel } from '../vecinos-ruta/vecinos-ruta-panel';
 import { faseControl } from '../jornada/fase-control';
 import { useJornada } from '../jornada/use-jornada';
 
@@ -119,6 +120,10 @@ export function OperationScreen(
     const { y, height } = e.nativeEvent.layout;
     setInsetSuperior(Math.round(y + height));
   }, []);
+  // Getter estable de la posición para el panel de vecinos: así el GPS a 1 Hz no cambia sus props.
+  const posicionVecinosRef = useRef(gps.posicionActual);
+  posicionVecinosRef.current = gps.posicionActual;
+  const obtenerPosicionVecinos = useCallback(() => posicionVecinosRef.current, []);
   const insetsNavegacion = useMemo(
     () => ({
       superior: insetSuperior,
@@ -464,6 +469,17 @@ export function OperationScreen(
           </Text>
         ) : null}
       </View>
+
+      {/* Vecinos de ruta: overlay propio FUERA del `topOverlay` medido, para que su montaje tardío
+          no cambie `insetSuperior` (padding de la cámara de navegación). */}
+      <VecinosRutaPanel
+        tracking={gps.tracking}
+        online={!isOffline}
+        obtenerAccessToken={props.obtenerAccessToken}
+        hayPosicion={gps.posicionActual !== null}
+        obtenerPosicion={obtenerPosicionVecinos}
+        topBase={insetSuperior}
+      />
 
       <Animated.View style={[styles.fabsContainer, { transform: [{ translateY: sheetPanY }] }]}>
         <Pressable
