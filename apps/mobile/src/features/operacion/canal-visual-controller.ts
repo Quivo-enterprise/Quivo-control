@@ -18,8 +18,17 @@
 export type SuscripcionWatch = { remove: () => void };
 
 export type DepsControladorCanalVisual = {
-  /** Abre el `watchPosition`. Puede devolver la `Subscription` (tipos) o una Promise (runtime). */
-  abrirWatch: () => SuscripcionWatch | Promise<SuscripcionWatch>;
+  /**
+   * Abre el `watchPosition`. Puede devolver la `Subscription` (tipos) o una Promise (runtime).
+   * Recibe la generación de esta apertura: el callback de ubicación debe ignorar fixes cuando
+   * `esVigente(generacion)` sea `false` (el listener del runtime es GLOBAL y sobrevive hasta
+   * que se resuelva el `remove()` de un watch viejo).
+   */
+  abrirWatch: (generacion: number) => SuscripcionWatch | Promise<SuscripcionWatch>;
+  /** Se llama cuando la suscripción de la generación vigente resolvió y quedó guardada. */
+  onAbierto?: () => void;
+  /** Se llama cuando la apertura de la generación VIGENTE falló (no para generaciones viejas). */
+  onFallo?: () => void;
   /** `paso`: `canal-visual-iniciar` | `canal-visual-detener`. */
   reportarError: (error: unknown, paso: string) => void;
 };
@@ -33,6 +42,8 @@ export function crearControladorCanalVisual(deps: DepsControladorCanalVisual) {
     const remove = (suscripcion as { remove?: unknown } | null | undefined)?.remove;
     if (typeof remove !== 'function') return;
     try {
+      // OJO: el `remove()` del runtime (5.4.0, `NativeModule.js`) dispara `stopWatchPosition(id)`
+      // SIN devolver su promesa: un rechazo nativo al detener no se puede capturar desde acá.
       (remove as () => void).call(suscripcion);
     } catch (error) {
       deps.reportarError(error, 'canal-visual-detener');
@@ -43,13 +54,16 @@ export function crearControladorCanalVisual(deps: DepsControladorCanalVisual) {
     /** `true` si hay un watch corriendo o abriéndose (no se debe abrir otro). */
     estaActivoOPendiente: () => activa !== null || pendiente,
 
+    /** `true` si `g` es la apertura actual (activa o pendiente); falso si fue invalidada. */
+    esVigente: (g: number) => g === generacion && (activa !== null || pendiente),
+
     /** Abre el watch si no hay uno activo ni pendiente. Devuelve `true` si lo abrió. */
     iniciar(): boolean {
       if (activa !== null || pendiente) return false;
       pendiente = true;
       const miGeneracion = ++generacion;
       // `new Promise` captura también un throw síncrono de `abrirWatch`.
-      new Promise<SuscripcionWatch>((resolver) => resolver(deps.abrirWatch()))
+      new Promise<SuscripcionWatch>((resolver) => resolver(deps.abrirWatch(miGeneracion)))
         .then((suscripcion) => {
           if (miGeneracion !== generacion) {
             // `detener` corrió mientras estaba pendiente: remover y no guardar.
@@ -58,10 +72,13 @@ export function crearControladorCanalVisual(deps: DepsControladorCanalVisual) {
           }
           pendiente = false;
           activa = suscripcion;
+          deps.onAbierto?.();
         })
         .catch((error: unknown) => {
-          if (miGeneracion === generacion) pendiente = false;
+          const vigente = miGeneracion === generacion;
+          if (vigente) pendiente = false;
           deps.reportarError(error, 'canal-visual-iniciar');
+          if (vigente) deps.onFallo?.();
         });
       return true;
     },
