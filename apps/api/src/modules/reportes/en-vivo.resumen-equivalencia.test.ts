@@ -30,11 +30,24 @@ import { EnVivoService } from './en-vivo.service.js';
 
 const MINUTO = 60_000;
 
+/**
+ * Reloj determinista anclado al **mediodía UTC de hoy** (08:00 Bolivia), no a `new Date()`.
+ * La jornada boliviana arranca a las 04:00 UTC: con `new Date()` un test corrido entre 04:00 y
+ * 04:10 UTC ponía puntos "de hace 10 min" en la jornada ANTERIOR y `totalPuntos` salía 1 en
+ * vez de 2 (flaky de CI del 2026-10-11 04:09 UTC). A las 12:00 UTC todos los `ts` (hasta
+ * mediodía - 10 min) quedan en la misma jornada y en la partición UTC de hoy que ya asegura
+ * el `beforeAll`. Mismo criterio que `AHORA` en `en-vivo.service.test.ts`.
+ */
+const AHORA = (() => {
+  const hoy = new Date();
+  return new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate(), 12));
+})();
+
 function evento(overrides: Partial<EventoSync> & { payload: EventoSync['payload'] }): EventoSync {
   return {
     eventId: randomUUID(),
     deviceId: 'device-equivalencia',
-    ts: new Date().toISOString(),
+    ts: new Date(AHORA.getTime() - 5 * MINUTO).toISOString(),
     tipo: 'gps_point',
     ...overrides,
   };
@@ -193,7 +206,7 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
   });
 
   it('reenviar el mismo lote (duplicados idempotentes RF-72) no infla `totalPuntos` — vieja y nueva coinciden', async () => {
-    const ahora = new Date();
+    const ahora = AHORA;
     const jornada = fechaActualBolivia(ahora);
     const trazaDesde = inicioDeJornadaBolivia(jornada);
     const trazaHasta = new Date(trazaDesde.getTime() + 24 * 60 * MINUTO);
@@ -238,7 +251,7 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
   });
 
   it('un punto tardío (ts viejo, llegado después) no pisa la última posición — vieja y nueva coinciden en lat/lng/ultimoFixTs', async () => {
-    const ahora = new Date();
+    const ahora = AHORA;
     const jornada = fechaActualBolivia(ahora);
     const trazaDesde = inicioDeJornadaBolivia(jornada);
     const trazaHasta = new Date(trazaDesde.getTime() + 24 * 60 * MINUTO);
@@ -445,7 +458,7 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
     });
 
     it('un tenant atacante mandando el sesionId real de otro tenant no pisa ni esconde el resumen del dueño, y el dueño sigue actualizando su propia fila', async () => {
-      const ahora = new Date();
+      const ahora = AHORA;
 
       // 1) El dispositivo DUEÑO manda su primer punto real.
       await withTenantContext({ rol: 'admin_quivo', sindicatoId: sindicatoDefensorId }, (tx) =>
@@ -514,6 +527,7 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
         insertarGpsPoints(tx, sindicatoDefensorId, [
           evento({
             deviceId: 'device-poisoning-defensor',
+            ts: new Date(AHORA.getTime() - MINUTO).toISOString(),
             payload: {
               sesionId: sesionDefensorId,
               lat: -17.781,
