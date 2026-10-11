@@ -1,17 +1,38 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { StyleSheet, View, Text, type LayoutChangeEvent } from 'react-native';
-import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE, type LatLng } from 'react-native-maps';
+import {
+  StyleSheet,
+  View,
+  Text,
+  type LayoutChangeEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
+import MapView, {
+  Circle,
+  Marker,
+  Polyline,
+  PROVIDER_GOOGLE,
+  type Details,
+  type LatLng,
+} from 'react-native-maps';
 import Svg, { Path } from 'react-native-svg';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
 import { duracionAnimacionMs, interpolarAngulo, interpolarLatLng } from '../operacion/movimiento/geo';
 import { useEstadoVisual } from '../operacion/movimiento/store-visual';
-import { PADDING_ENCUADRE_RUTA, construirCamaraSeguimiento, decidirEncuadre } from './camara';
+import {
+  PADDING_ENCUADRE_RUTA,
+  ZOOM_SEGUIMIENTO,
+  construirCamaraNavegacion,
+  coordenadasEncuadre,
+  decidirEncuadre,
+  paddingNavegacion,
+} from './camara';
 import {
   colorPuntoControl,
   esPuntoControlPasado,
   indiceProximoPuntoControl,
 } from './estado-punto-control';
 import { debeResaltarRutaCalculada, estiloRuta, COLOR_LINEA } from './estilo-ruta';
+import type { ModoCamara } from './modo-camara';
 import { debeCommitearFrame, posicionMapaDesde } from './posicion-mapa';
 import type { PosicionMapa, RouteMapProps } from './tipos';
 
@@ -27,17 +48,43 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  *   flecha rotada por rumbo, punto sin flecha mientras no hubo ningún rumbo válido todavía
  *   (`EstadoRumbo.rumbo === null` la primera vez, ver `movimiento/rumbo.ts`), halo de precisión
  *   (`accuracy`), atenuado si `obsoleto`. Sin posición no hay marcador.
- * - Encuadre inicial de la ruta (`fitToCoordinates` con márgenes), y de nuevo al terminar el
- *   seguimiento o al recentrar sin posición conocida (`camara.ts`).
- * - Cámara heading-up (`animateCamera({center, heading})`) que sigue al marcador mientras
- *   `tracking`; un pan manual (`onPanDrag`, solo dispara con gesto del usuario, nunca con
- *   `animateCamera` propio) corta el seguimiento — `recenterTick` lo restaura.
+ * - Cámara en tres modos (`modo-camara.ts`, estado en la pantalla, llega por `camara`):
+ *   · `general`: ruta entera + vehículo (`fitToCoordinates` con márgenes), norte arriba y pitch 0.
+ *     Es el modo del día sin iniciar y el que vuelve al finalizar el recorrido.
+ *   · `navegacion`: cámara bloqueada al vehículo — heading-up, pitch 55, zoom 18, con el vehículo
+ *     en el tercio inferior de la banda visible (`mapPadding` de `paddingNavegacion`).
+ *   · `libre`: el conductor tocó el mapa en navegación (`onPanDrag` para el arrastre y
+ *     `onRegionChangeStart` con `isGesture` para pinch/doble-tap, que en Android NO disparan
+ *     `onPanDrag`; ninguno dispara con la cámara propia); la cámara no se mueve sola hasta recentrar.
+ *   Los movimientos puntuales (entrar a navegación, recentrar, encuadrar) se ejecutan cuando
+ *   cambia `camara.seq`; el resto del tiempo la cámara depende solo del modo.
+ *
+ * BLOQUEO CUADRO A CUADRO (por qué no hay `animateCamera` por fix): antes la cámara hacía un
+ * `animateCamera` por fix con la duración de la interpolación del marcador, pero el easing de
+ * Google no es lineal y el marcador sí, así que cámara y marcador se desfasaban entre fixes. Ahora,
+ * en `navegacion`, el marcador mueve la cámara con `setCamera` en el MISMO tick del RAF (~30Hz) que
+ * publica su posición, con la misma coordenada y el mismo rumbo interpolados: no puede haber
+ * desfase. La entrada a navegación y el recentrar sí usan `animateCamera` (700/400 ms); mientras
+ * dura se suspende el `setCamera` por frame (`camaraSuspendidaHastaRef`) para no cancelarla. Los
+ * frames descartados en esa ventana no se reponen solos: al vencer, un timer llama a
+ * `sincronizarCamaraNavegacion` y la cámara se re-ubica sobre el vehículo (salto chico, igual a
+ * lo que avanzó en ese tiempo). La sincronización también corre tras un cambio de `mapPadding`
+ * fuera de `general`: en Android `applyBaseMapPadding` hace `moveCamera`, que cancela cualquier
+ * `animateCamera` en vuelo y deja la cámara a medio camino. Si en ese momento hay una suspensión
+ * activa (entrada o recentrar en curso, lo normal al entrar desde `general` porque el padding
+ * cambia en el mismo commit), no se salta: se relanza el `animateCamera` por el tiempo que queda,
+ * desde donde esté la cámara, y la suspensión y el timer de reposición originales siguen vigentes.
+ *   RIESGO (perf, no medido): con `newArchEnabled: false`, cada frame de navegación manda por el
+ *   bridge las props del Marker y del Circle más el comando de cámara hacia nativo, y cada
+ *   `moveCamera` hace que Android emita de vuelta `onRegionChangeStart`, `onRegionChange` y, a
+ *   menudo, `onRegionChangeComplete` (`MapView.java`, listeners de cámara): ~3-5 mensajes por
+ *   frame a ~30 Hz. Hay que medirlo en un teléfono de gama baja del piloto; esta versión no
+ *   cambia el throttle.
  *
  * PERF: el marcador del conductor (+ su halo de precisión) vive en `MarcadorConductorAnimado`,
  * un componente hijo con su PROPIO loop de `requestAnimationFrame` y estado local — es el ÚNICO
  * que re-renderiza a la cadencia de la animación (~30Hz, ver `debeCommitearFrame`); este componente padre (polylines,
- * puntos de control) no vuelve a renderizar por eso. La cámara se anima UNA sola vez por fix
- * nuevo (no por frame), en el mismo lugar donde arranca la interpolación del marcador.
+ * puntos de control) no vuelve a renderizar por eso.
  */
 
 const COLOR_FLECHA = '#3127B1';
@@ -156,10 +203,12 @@ function MarcadorConductor({
 interface MarcadorConductorAnimadoProps {
   posicionMapa: PosicionMapa | null;
   mapRef: RefObject<MapView | null>;
-  seguimientoActivoRef: RefObject<boolean>;
-  /** true = la próxima cámara de seguimiento debe fijar el zoom (se acaba de entrar en
-   * seguimiento); quien la consume lo baja a false SOLO si la cámara realmente se animó. */
-  zoomPendienteRef: RefObject<boolean>;
+  /** Modo de cámara vigente (espejo de `camara.modo` + el pan inmediato, ver `RouteMap`). Solo en
+   * `navegacion` el marcador mueve la cámara. */
+  modoRef: RefObject<ModoCamara>;
+  /** Epoch ms hasta el cual no se mueve la cámara por frame: el padre lo fija mientras corre un
+   * `animateCamera` de entrada/recentrar para que el `setCamera` no lo cancele. */
+  camaraSuspendidaHastaRef: RefObject<number>;
   /** true cuando el mapa está listo Y ya tuvo layout (ver `RouteMap`); antes no se anima nada. */
   camaraListaRef: RefObject<boolean>;
   /** Ref compartido con el padre (`RouteMap`): este componente escribe acá la última
@@ -177,8 +226,8 @@ interface MarcadorConductorAnimadoProps {
 const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   posicionMapa,
   mapRef,
-  seguimientoActivoRef,
-  zoomPendienteRef,
+  modoRef,
+  camaraSuspendidaHastaRef,
   camaraListaRef,
   posicionMostradaRef,
 }: MarcadorConductorAnimadoProps) {
@@ -203,6 +252,20 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
     [posicionMostradaRef],
   );
 
+  // Publica el marcador Y, en navegación, mueve la cámara con los MISMOS valores interpolados
+  // (ver "BLOQUEO CUADRO A CUADRO" en el docblock del módulo). Sin modo navegación, mapa sin
+  // listo o dentro de la ventana de suspensión, solo publica.
+  const publicarYSeguir = useCallback(
+    (siguiente: CoordenadaMostrada) => {
+      publicarPosicion(siguiente);
+      const mapa = mapRef.current;
+      if (modoRef.current !== 'navegacion' || !camaraListaRef.current || !mapa) return;
+      if (Date.now() < camaraSuspendidaHastaRef.current) return;
+      mapa.setCamera(construirCamaraNavegacion(siguiente));
+    },
+    [publicarPosicion, mapRef, modoRef, camaraListaRef, camaraSuspendidaHastaRef],
+  );
+
   // El efecto depende del CONTENIDO del fix (lat/lng/ts/rumbo), no de la identidad del objeto
   // `posicionMapa`: el store visual y `setPosicionActual` entregan dos veces el mismo fix, y el
   // flip de `obsoleto` produce un objeto nuevo con los mismos datos — nada de eso debe
@@ -213,13 +276,9 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   const tsFixProp = posicionMapa?.ts ?? null;
   const rumboFix = typeof posicionMapa?.heading === 'number' ? posicionMapa.heading : null;
 
-  // FIX POST-REVISIÓN (hallazgo ALTO #1 + MEDIO #4): antes, la cámara se animaba en un efecto
-  // aparte disparado por CADA frame de `posicionMostrada` (~60Hz, saturaba el bridge), y el
-  // arranque del RAF vivía DENTRO del updater de `setPosicionMostrada` (side effect impuro —
-  // StrictMode corre updaters dos veces, duplicando la cadena). Ahora todo arranca acá, una
-  // sola vez por FIX NUEVO (no por frame): la posición "actual" se lee de `posicionMostradaRef`
-  // en vez de un updater, y la cámara se anima hacia `hasta` con la MISMA duración que la
-  // interpolación del marcador — nunca por frame.
+  // Todo arranca acá, una sola vez por FIX NUEVO (no por frame): la posición "actual" se lee de
+  // `posicionMostradaRef` en vez de un updater (StrictMode corre los updaters dos veces). La
+  // cámara ya no se anima por fix: la mueve `publicarYSeguir` junto con el marcador.
   useEffect(() => {
     cancelarAnimacion();
     if (lat === null || lng === null) {
@@ -238,19 +297,9 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
     const actual = posicionMostradaRef.current;
     const hasta: CoordenadaMostrada = { lat, lng, rumbo: rumboFix ?? actual?.rumbo ?? null };
 
-    // Hallazgo ALTO #1 (perf) + BAJO #5: cámara UNA vez por fix, solo con seguimiento activo y
-    // el mapa listo; sin rumbo todavía no se manda `heading` (conserva el actual en vez de
-    // snapear a norte). El zoom pendiente solo se consume si la cámara realmente se animó.
-    const mapa = mapRef.current;
-    if (seguimientoActivoRef.current && camaraListaRef.current && mapa) {
-      const aplicarZoom = zoomPendienteRef.current;
-      mapa.animateCamera(construirCamaraSeguimiento(hasta, aplicarZoom), { duration: duracion });
-      zoomPendienteRef.current = false;
-    }
-
     if (!actual) {
-      // Primer fix: sin punto de partida que animar, se posiciona directo.
-      publicarPosicion(hasta);
+      // Primer fix: sin punto de partida que animar, se posiciona directo (y la cámara con él).
+      publicarYSeguir(hasta);
       return cancelarAnimacion;
     }
 
@@ -260,8 +309,8 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
     const tick = () => {
       const ahora = Date.now();
       const t = Math.min(1, (ahora - inicio) / duracion);
-      // Throttle ~30Hz: cada commit manda props de Marker + Circle por el bridge. El frame
-      // final (t = 1) siempre se publica.
+      // Throttle ~30Hz: cada commit manda props de Marker + Circle (+ la cámara en navegación)
+      // por el bridge. El frame final (t = 1) siempre se publica, cámara incluida.
       if (debeCommitearFrame(ahora, ultimoCommitMs, t >= 1)) {
         ultimoCommitMs = ahora;
         const { lat: latT, lng: lngT } = interpolarLatLng(desde, hasta, t);
@@ -269,7 +318,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
           desde.rumbo !== null && hasta.rumbo !== null
             ? interpolarAngulo(desde.rumbo, hasta.rumbo, t)
             : hasta.rumbo;
-        publicarPosicion({ lat: latT, lng: lngT, rumbo });
+        publicarYSeguir({ lat: latT, lng: lngT, rumbo });
       }
       if (t < 1) {
         rafIdRef.current = requestAnimationFrame(tick);
@@ -287,10 +336,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
     rumboFix,
     cancelarAnimacion,
     publicarPosicion,
-    mapRef,
-    seguimientoActivoRef,
-    zoomPendienteRef,
-    camaraListaRef,
+    publicarYSeguir,
     posicionMostradaRef,
   ]);
 
@@ -433,7 +479,9 @@ export function RouteMap({
   proximoPuntoControlId,
   posicionActual,
   tracking,
-  recenterTick,
+  camara,
+  onPanUsuario,
+  insetsNavegacion,
   rutaCalculada,
   style,
 }: RouteMapProps) {
@@ -476,12 +524,16 @@ export function RouteMap({
   // re-render por escribirla (es un ref, no estado).
   const posicionMostradaRef = useRef<CoordenadaMostrada | null>(null);
 
-  // `seguimientoActivo` es solo un ref: nada lo renderiza, así que un pan no re-renderiza.
-  const seguimientoActivoRef = useRef(tracking);
-  // Zoom de seguimiento: se fija solo al ENTRAR en seguimiento (tracking arranca o recenter),
-  // no en cada fix — no se le pisa el pinch al usuario. Se baja SOLO cuando la cámara
-  // realmente se animó (mapa listo y posición conocida).
-  const zoomPendienteRef = useRef(false);
+  // Espejo de `camara.modo` para el loop del marcador y los gestos, sin re-renderizar. `onPanDrag` y
+  // `onRegionChangeStart` (gesto) lo pasan a 'libre' al instante (antes de que el padre re-renderice) para que la cámara por
+  // frame deje de pelear con el gesto.
+  const modoRef = useRef<ModoCamara>(camara.modo);
+  // Epoch ms hasta el cual el marcador no mueve la cámara (ver `MarcadorConductorAnimado`).
+  const camaraSuspendidaHastaRef = useRef(0);
+  // Timer que repone la cámara al vencer la suspensión (ver `sincronizarCamaraNavegacion`).
+  const timerSuspensionRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seqAplicadoRef = useRef(camara.seq);
+  const [altoMapa, setAltoMapa] = useState(0);
 
   // Compuerta de cámara: el mapa avisó `onMapReady` Y la vista ya tuvo layout (ancho/alto > 0).
   // En Android `fitToCoordinates` con la vista sin medir lanza "Map size can't be 0", y
@@ -491,91 +543,179 @@ export function RouteMap({
   const camaraListaRef = useRef(false);
   const camaraInicialAplicadaRef = useRef(false);
 
-  // Encuadra la ruta entera (o centra en el vehículo si el paquete no trae geometría, ver
-  // `decidirEncuadre`). `fitToCoordinates` reemplaza al `fitBounds` de Leaflet.
+  // Vista general: ruta + vehículo con `fitToCoordinates`. No hace falta resetear heading/pitch
+  // antes: `CameraUpdateFactory.newLatLngBounds` (lo que usa `fitToCoordinates` en Android) ya
+  // devuelve bearing 0 y tilt 0, y un `setCamera` previo solo causaría un salto de un frame. Una ruta sin geometría (dato
+  // incompleto del backend) no tiene bounds válidos: se centra en el vehículo si se lo conoce,
+  // y si no se deja la vista como está (ver `decidirEncuadre`).
   const encuadrarRuta = useCallback(
     (animated: boolean) => {
-      if (!camaraListaRef.current) return;
+      const mapa = mapRef.current;
+      if (!camaraListaRef.current || !mapa) return;
       const posicion = posicionMostradaRef.current;
       const accion = decidirEncuadre(coordenadasRuta.length, posicion !== null);
       if (accion === 'ajustar-ruta') {
-        mapRef.current?.fitToCoordinates(coordenadasRuta, {
+        mapa.fitToCoordinates(coordenadasEncuadre(coordenadasRuta, posicion), {
           edgePadding: { ...PADDING_ENCUADRE_RUTA },
           animated,
         });
       } else if (accion === 'centrar-posicion' && posicion) {
-        mapRef.current?.animateCamera(construirCamaraSeguimiento(posicion, true), {
-          duration: animated ? 400 : 0,
-        });
+        const camaraCentrada = {
+          center: aLatLng(posicion),
+          heading: 0,
+          pitch: 0,
+          zoom: ZOOM_SEGUIMIENTO,
+        };
+        if (animated) mapa.animateCamera(camaraCentrada, { duration: 400 });
+        else mapa.setCamera(camaraCentrada);
       }
     },
     [coordenadasRuta],
   );
 
-  // Cámara de seguimiento (heading-up, zoom 17) sobre la posición mostrada. Si todavía no se
-  // puede (mapa sin listo/layout, o sin posición), deja el zoom pendiente para la primera
-  // cámara de seguimiento que sí corra.
-  const seguirVehiculo = useCallback((duracion: number) => {
-    const posicion = posicionMostradaRef.current;
-    const mapa = mapRef.current;
-    if (!posicion || !mapa || !camaraListaRef.current) {
-      zoomPendienteRef.current = true;
-      return;
+  const cancelarTimerSuspension = useCallback(() => {
+    if (timerSuspensionRef.current !== null) {
+      clearTimeout(timerSuspensionRef.current);
+      timerSuspensionRef.current = null;
     }
-    mapa.animateCamera(construirCamaraSeguimiento(posicion, true), { duration: duracion });
-    zoomPendienteRef.current = false;
   }, []);
 
-  // Cámara inicial, una sola vez cuando se cumplen mapa listo + layout: en seguimiento (remount
-  // en pleno recorrido) va al vehículo con zoom 17; si no, encuadra la ruta entera.
+  // Re-ubica la cámara sobre la posición mostrada y levanta la suspensión. Repone lo que se
+  // descartó mientras corría un `animateCamera` (incluido el frame final, t = 1) y recompone la
+  // cámara tras un cambio de `mapPadding`, que en Android cancela el `animateCamera` en vuelo.
+  // Con `reanimarSiSuspendida` (caso del padding) y una suspensión con más de 80 ms por delante, en
+  // vez de saltar relanza el `animateCamera` por el tiempo restante, sin tocar la suspensión ni el
+  // timer ya agendado (que repone la cámara al vencer). Con 80 ms o menos, o sin suspensión, salta.
+  // Solo actúa en navegación, con cámara lista, mapa montado y posición conocida.
+  const sincronizarCamaraNavegacion = useCallback((reanimarSiSuspendida = false) => {
+    const mapa = mapRef.current;
+    const posicion = posicionMostradaRef.current;
+    if (modoRef.current !== 'navegacion' || !camaraListaRef.current || !mapa || !posicion) return;
+    const restante = camaraSuspendidaHastaRef.current - Date.now();
+    if (reanimarSiSuspendida && restante > 80) {
+      mapa.animateCamera(construirCamaraNavegacion(posicion), { duration: restante });
+      return;
+    }
+    camaraSuspendidaHastaRef.current = 0;
+    mapa.setCamera(construirCamaraNavegacion(posicion));
+  }, []);
+
+  // Cámara de navegación sobre la posición mostrada. Sin posición todavía no hace nada: el primer
+  // fix ubica la cámara (`publicarYSeguir`). Con `duracion` > 0 anima y suspende el `setCamera`
+  // por frame mientras dura (y agenda la sincronización para cuando venza); con 0 salta directo.
+  const seguirVehiculo = useCallback(
+    (duracion: number) => {
+      const posicion = posicionMostradaRef.current;
+      const mapa = mapRef.current;
+      if (!posicion || !mapa || !camaraListaRef.current) return;
+      const camaraNav = construirCamaraNavegacion(posicion);
+      cancelarTimerSuspension();
+      if (duracion > 0) {
+        camaraSuspendidaHastaRef.current = Date.now() + duracion;
+        mapa.animateCamera(camaraNav, { duration: duracion });
+        timerSuspensionRef.current = setTimeout(() => {
+          timerSuspensionRef.current = null;
+          sincronizarCamaraNavegacion(false);
+        }, duracion);
+      } else {
+        mapa.setCamera(camaraNav);
+      }
+    },
+    [cancelarTimerSuspension, sincronizarCamaraNavegacion],
+  );
+
+  // Cámara inicial, una sola vez cuando se cumplen mapa listo + layout: en navegación (remount
+  // en pleno recorrido) va al vehículo; si no, encuadra la ruta entera.
   const intentarCamaraInicial = useCallback(() => {
     if (!mapaListoRef.current || !layoutListoRef.current) return;
     camaraListaRef.current = true;
     if (camaraInicialAplicadaRef.current) return;
     camaraInicialAplicadaRef.current = true;
-    if (seguimientoActivoRef.current) {
+    // Remount fuera de `general` (navegación o libre): el `mapPadding` de navegación ya está
+    // activo, así que un encuadre general saldría apretado y en desacuerdo con el modo. Se coloca
+    // una vez sobre el vehículo (en libre no hay seguimiento por frame después).
+    if (modoRef.current !== 'general') {
       seguirVehiculo(0);
     } else {
       encuadrarRuta(false);
     }
   }, [encuadrarRuta, seguirVehiculo]);
 
-  // --- Cámara heading-up con seguimiento -------------------------------------------------
-  const trackingPrevioRef = useRef(tracking);
   useEffect(() => {
-    const previo = trackingPrevioRef.current;
-    trackingPrevioRef.current = tracking;
-    seguimientoActivoRef.current = tracking;
-    if (tracking) {
-      // Entra en seguimiento: va al vehículo de una (sin esperar al próximo fix) si ya se lo
-      // conoce; si no, el zoom queda pendiente para la primera cámara de seguimiento.
-      seguirVehiculo(700);
-    } else if (previo) {
-      // Fin del seguimiento: vuelve a mostrar la ruta entera.
+    modoRef.current = camara.modo;
+    // En `general` no hay suspensión que reponer.
+    if (camara.modo === 'general') cancelarTimerSuspension();
+  }, [camara.modo, cancelarTimerSuspension]);
+
+  useEffect(() => cancelarTimerSuspension, [cancelarTimerSuspension]);
+
+  // Movimientos puntuales de cámara, uno por cada `seq` nuevo. Se saltea el montaje: la cámara
+  // inicial la resuelve `intentarCamaraInicial` (mapa listo + layout).
+  useEffect(() => {
+    if (camara.seq === seqAplicadoRef.current) return;
+    seqAplicadoRef.current = camara.seq;
+    if (camara.accion === 'seguir') {
+      // Entrar desde la vista general es un viaje largo (700); recentrar desde libre, corto (400).
+      seguirVehiculo(camara.desde === 'general' ? 700 : 400);
+    } else if (camara.accion === 'encuadrar') {
       encuadrarRuta(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tracking]);
+  }, [camara.seq, camara.accion, camara.desde, seguirVehiculo, encuadrarRuta]);
 
-  // Cualquier gesto del usuario (pan, y también pinch/rotate: `onPanDrag` los reporta) sale del
-  // seguimiento, igual que Google Maps; el botón Recentrar (`recenterTick`) lo restaura.
-  const onPanDrag = useCallback(() => {
-    seguimientoActivoRef.current = false;
-  }, []);
+  // Cualquier gesto del usuario saca de navegación a libre, igual que Google Maps. Dos fuentes:
+  // `onPanDrag` (en Android sale de `GestureDetector.onScroll`: solo arrastre) y
+  // `onRegionChangeStart` con `isGesture` (sale de `OnCameraMoveStartedListener`: cubre pinch con
+  // centro estacionario y doble-tap zoom, que NO disparan `onPanDrag`). Sin esto el `setCamera`
+  // por frame (zoom 18) peleaba con el gesto. La cámara propia (`animateCamera`/`setCamera`)
+  // reporta `isGesture: false`, así que nunca saca de navegación.
+  const salirANavegacionLibre = useCallback(() => {
+    if (modoRef.current !== 'navegacion') return;
+    modoRef.current = 'libre';
+    cancelarTimerSuspension();
+    onPanUsuario();
+  }, [onPanUsuario, cancelarTimerSuspension]);
 
-  const lastRecenter = useRef(recenterTick);
+  const onPanDrag = salirANavegacionLibre;
+
+  const onRegionChangeStart = useCallback(
+    (event: NativeSyntheticEvent<Details>) => {
+      // Handler barato a propósito: dispara con CADA `moveCamera` propio (isGesture false).
+      if (event.nativeEvent.isGesture !== true) return;
+      salirANavegacionLibre();
+    },
+    [salirANavegacionLibre],
+  );
+
+  // Depende de `esGeneral` (no de `camara.modo`) para que navegación <-> libre, que comparten
+  // padding, no produzcan un objeto nuevo ni disparen la sincronización de cámara.
+  const esGeneral = camara.modo === 'general';
+  const mapPadding = useMemo(
+    () =>
+      esGeneral
+        ? { top: 0, right: 0, bottom: 0, left: 0 }
+        : paddingNavegacion({
+            alto: altoMapa,
+            insetSuperior: insetsNavegacion.superior,
+            insetInferior: insetsNavegacion.inferior,
+          }),
+    [esGeneral, altoMapa, insetsNavegacion.superior, insetsNavegacion.inferior],
+  );
+
+  // Un cambio de `mapPadding` fuera de `general` (entrada a navegación, alto del sheet o de la
+  // tarjeta superior, insets) hace `moveCamera` en Android y cancela un `animateCamera` en vuelo,
+  // mientras `camaraSuspendidaHastaRef` sigue frenando el `setCamera` por frame: la cámara quedaría
+  // a medio camino. Se re-sincroniza; si hay una suspensión en curso se relanza la animación por el
+  // tiempo restante en vez de saltar (ver `sincronizarCamaraNavegacion`). Se difiere un frame por si
+  // el efecto corre antes de que el padding llegue a nativo (orden no confirmado); se cancela en el
+  // cleanup. El primer padding (montaje) no se sincroniza: lo cubre `intentarCamaraInicial`.
+  const paddingAplicadoRef = useRef(mapPadding);
   useEffect(() => {
-    if (recenterTick <= lastRecenter.current) return;
-    lastRecenter.current = recenterTick;
-    seguimientoActivoRef.current = true;
-    if (posicionMostradaRef.current) {
-      seguirVehiculo(400);
-    } else {
-      zoomPendienteRef.current = true;
-      encuadrarRuta(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recenterTick]);
+    if (paddingAplicadoRef.current === mapPadding) return;
+    paddingAplicadoRef.current = mapPadding;
+    if (esGeneral) return;
+    const id = requestAnimationFrame(() => sincronizarCamaraNavegacion(true));
+    return () => cancelAnimationFrame(id);
+  }, [mapPadding, esGeneral, sincronizarCamaraNavegacion]);
 
   const onMapReady = useCallback(() => {
     mapaListoRef.current = true;
@@ -586,6 +726,7 @@ export function RouteMap({
     (e: LayoutChangeEvent) => {
       const { width, height } = e.nativeEvent.layout;
       if (width > 0 && height > 0) {
+        setAltoMapa(Math.round(height));
         layoutListoRef.current = true;
         intentarCamaraInicial();
       }
@@ -608,8 +749,11 @@ export function RouteMap({
         onMapReady={onMapReady}
         onLayout={onLayoutMapa}
         onPanDrag={onPanDrag}
+        onRegionChangeStart={onRegionChangeStart}
+        mapPadding={mapPadding}
         rotateEnabled
-        // Sin tilt y sin controles propios de Google: el mapa anterior (Leaflet) no los tenía.
+        // Sin gesto de inclinación (el pitch lo fija el modo navegación por código, que sigue
+        // funcionando) y sin controles propios de Google.
         pitchEnabled={false}
         zoomControlEnabled={false}
         toolbarEnabled={false}
@@ -631,8 +775,8 @@ export function RouteMap({
         <MarcadorConductorAnimado
           posicionMapa={posicionMapa}
           mapRef={mapRef}
-          seguimientoActivoRef={seguimientoActivoRef}
-          zoomPendienteRef={zoomPendienteRef}
+          modoRef={modoRef}
+          camaraSuspendidaHastaRef={camaraSuspendidaHastaRef}
           camaraListaRef={camaraListaRef}
           posicionMostradaRef={posicionMostradaRef}
         />

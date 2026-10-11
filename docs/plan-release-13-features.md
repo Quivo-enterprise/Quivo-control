@@ -157,6 +157,31 @@ apps/mobile/src/
    - Verificar en la consola de facturación que la carga de mapas dinámicos del SDK nativo de Android es $0. Está **no verificado**.
    - Verificar que todos los teléfonos del piloto tengan GMS.
 
+#### C2 — decisiones de implementación (2026-10-11)
+
+- **El estado vive en la pantalla, no en el mapa.** `use-modo-camara.ts` (hook fino sobre el reducer puro `modo-camara.ts`) se usa en `operation-screen.tsx`, porque la pantalla necesita el modo para el FAB y para el sheet. `RouteMap` recibe `camara` (`{modo, accion, seq}`) y `onPanUsuario`, y reemplaza a `recenterTick`.
+- **Reducer.** El estado es `{modo, accion, seq}`. `seq` sube solo cuando hay que mover la cámara. Si un evento no cambia nada, el reducer devuelve **la misma referencia**, así `onPanDrag` (que dispara muchas veces por gesto) no re-renderiza.
+
+  | Estado + evento | Resultado | Acción de cámara |
+  |---|---|---|
+  | `general`/`libre` + `iniciarRecorrido` | `navegacion` | `seguir` |
+  | cualquiera + `finalizarRecorrido` | `general` | `encuadrar` |
+  | `navegacion` + `panUsuario` | `libre` | ninguna |
+  | `libre` o `navegacion` + `recentrar` | `navegacion` | `seguir` |
+  | `general` + `recentrar` | `general` | `encuadrar` |
+
+  El estado inicial sale de `tracking` al montar: un remount en pleno recorrido arranca en `navegacion`.
+- **Encuadre de `general`:** ruta + posición del vehículo, si se conoce (antes el vehículo podía quedar fuera del encuadre al estar lejos del inicio). `fitToCoordinates` (`newLatLngBounds`) ya deja norte arriba y pitch 0; un `setCamera` previo solo agregaba un salto.
+- **Cámara de navegación:** `{center, heading, pitch: 55, zoom: 18}` en **cada** actualización. Cualquier gesto pasa a `libre` (`onPanDrag`, y además `onRegionChangeStart` con `isGesture`, porque en Android el pinch y el doble toque no disparan `onPanDrag`), así que no hay pinch que respetar y desaparece `zoomPendienteRef`.
+- **Vehículo en el tercio inferior** con `mapPadding`, calculado por la función pura `paddingNavegacion({alto, insetSuperior, insetInferior})`. El objetivo de cámara cae a 2/3 de la banda visible entre la tarjeta superior y el sheet colapsado. El padding se aplica en `navegacion` y en `libre`; en `general` vale cero, porque `fitToCoordinates` ya usa `PADDING_ENCUADRE_RUTA`.
+- **Desfase entre el easing de Google y la interpolación lineal (diferido de C1).** En `navegacion`, la cámara deja de usar `animateCamera` por fix: se mueve con `setCamera` **en el mismo tick del RAF** que publica el marcador, con la misma coordenada y el mismo rumbo interpolados, a ~30 Hz, y por eso no puede haber desfase.
+  - La entrada a `navegacion` y el recentrar usan `animateCamera` (700 y 400 ms). Durante esa ventana se suspende el `setCamera` por frame. Puede quedar un salto chico al terminar la ventana, igual a lo que avanzó el vehículo en ese tiempo.
+  - Un cambio de `mapPadding` (Android hace `moveCamera`) cancela la animación de entrada. Por eso, tras cada cambio de padding y al vencer la ventana, la cámara se re-sincroniza con la posición mostrada.
+  - **Riesgo:** `newArchEnabled: false`. Cada frame manda por el bridge el marcador y la cámara, y cada `moveCamera` devuelve `onRegionChangeStart`/`onRegionChange`/`onRegionChangeComplete`: unos 3 a 5 mensajes por frame a ~30 Hz. Hay que medirlo en un teléfono gama baja del piloto. **No verificado en dispositivo.**
+- **Sheet colapsado:** fuera de `general` (navegación y libre), `NextControlSheet` se colapsa a `snapOffset` (prop controlada `colapsado`), y el chofer lo puede expandir a mano. Se corrige el closure viejo de `minimized` dentro del `PanResponder`, que se crea una sola vez.
+- **FAB de cámara:** oculto en `navegacion`. En `libre` dice "Recentrar" y vuelve a navegación; en `general` dice "Ver ruta completa" y encuadra.
+- **Fuera de C2:** la tarjeta del conductor compacta durante la navegación va con A (PR 8), junto con la extracción de `DriverRouteCard` y la pill del comp A.
+
 ### UI (reglas 7 y 12)
 - **Un solo bake-off móvil**, no tres, que cubre los estados de `operation-screen`:
   1. día sin iniciar (EMPEZAR DÍA);
@@ -223,3 +248,12 @@ El orden C antes que A y B en el móvil es a propósito: el borrado de Leaflet c
   - mandar a segundo plano con el recorrido activo, sin crash (regresión #109).
 - **Calle:** `9001TST` y `9004TST` asignadas a la **misma ruta y sentido**. Cada una tiene que ver a la otra delante o detrás con la distancia coherente. El panel tiene que mostrar las dos como "día iniciado" y luego "en recorrido".
 - Todo lo que no se verifique en teléfono se reporta como **no verificado**.
+
+## Backlog v2 (fuera del release 13)
+
+- **Picture-in-Picture en navegación** (pedido del CTO, 2026-10-11): al salir de la app con el recorrido activo, el mapa queda en una ventana flotante, como Google Maps. Es una mejora de UX (el chofer ve la ruta mientras usa otra app), no un fix: la captura en segundo plano ya la cubre Transistorsoft. Requiere:
+  - `supportsPictureInPicture` + entrada en `onUserLeaveHint` / `setAutoEnterEnabled` (config plugin + módulo nativo);
+  - un layout PiP propio (solo el mapa y el próximo punto de control);
+  - revisar el canal visual. Hipótesis no verificada: RN reporta `AppState` `background` en PiP y el canal visual se apagaría.
+- **Desempate en rutas circulares** para vecinos (último punto de control cumplido).
+- **Jornada ya iniciada en el paquete del día** (que reinstalar la app no vuelva a pedir EMPEZAR DÍA).

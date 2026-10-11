@@ -1,5 +1,14 @@
-import { useRef, useState } from 'react';
-import { Animated, Linking, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Animated,
+  Linking,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button } from '../../shared/components/Button';
@@ -8,6 +17,13 @@ import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared
 import { formatearDistancia } from './format-distancia';
 
 const NUMERO_EMERGENCIAS = '911';
+
+/** Cuánto baja (dp) el sheet al minimizarse: queda asomando solo el borde superior. La pantalla
+ * lo usa para calcular qué parte del mapa tapa el sheet colapsado. */
+export const SNAP_OFFSET_SHEET = 70;
+
+/** Separación (dp) entre el sheet y el borde inferior de la pantalla (`styles.sheet.bottom`). */
+export const MARGEN_INFERIOR_SHEET = 12;
 
 // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
 // esta interfaz tenía `pendingEvents`/`isOffline`/`isSyncing` — ninguno se leía en el render
@@ -25,39 +41,77 @@ export interface NextControlSheetProps {
   onStart: () => void;
   onFinish: () => void;
   panY: Animated.Value;
+  /** `true` = el sheet se colapsa a `SNAP_OFFSET_SHEET` (cualquier modo de cámara distinto de
+   * `general`: navegación y libre); `false` lo vuelve a expandir. El conductor puede arrastrarlo a mano en cualquier momento. */
+  colapsado: boolean;
+  /** Alto (dp, redondeado) del sheet expandido, medido en el layout de su raíz. */
+  onAlto?: (alto: number) => void;
 }
 
 export function NextControlSheet(props: NextControlSheetProps) {
   const { panY } = props;
   const [minimized, setMinimized] = useState(false);
   const [confirmarEmergencia, setConfirmarEmergencia] = useState(false);
-  const snapOffset = 70;
+  const snapOffset = SNAP_OFFSET_SHEET;
+  const { colapsado, onAlto } = props;
+
+  // El `PanResponder` se crea UNA vez (`useRef`), así que sus handlers cerrarían sobre el
+  // `minimized` inicial (siempre `false`): el arrastre leía un valor viejo. Se lee por ref.
+  const minimizedRef = useRef(false);
+  minimizedRef.current = minimized;
+
+  // Colapso controlado: al cambiar `colapsado` el sheet se anima solo; el arrastre manual sigue
+  // funcionando después porque `minimized` queda sincronizado.
+  const colapsadoAplicadoRef = useRef(false);
+  useEffect(() => {
+    if (colapsado === colapsadoAplicadoRef.current) return;
+    colapsadoAplicadoRef.current = colapsado;
+    minimizedRef.current = colapsado;
+    setMinimized(colapsado);
+    Animated.spring(panY, { toValue: colapsado ? snapOffset : 0, useNativeDriver: true }).start();
+  }, [colapsado, panY, snapOffset]);
+
+  const altoReportadoRef = useRef<number | null>(null);
+  const onLayoutSheet = (e: LayoutChangeEvent) => {
+    const alto = Math.round(e.nativeEvent.layout.height);
+    if (alto === altoReportadoRef.current) return;
+    altoReportadoRef.current = alto;
+    onAlto?.(alto);
+  };
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 10,
       onPanResponderMove: (_, gestureState) => {
-        if (!minimized && gestureState.dy > 0) {
+        if (!minimizedRef.current && gestureState.dy > 0) {
           panY.setValue(Math.min(gestureState.dy, snapOffset));
-        } else if (minimized && gestureState.dy < 0) {
+        } else if (minimizedRef.current && gestureState.dy < 0) {
           panY.setValue(Math.max(snapOffset + gestureState.dy, 0));
         }
       },
       onPanResponderRelease: (_, gestureState) => {
-        if (!minimized && gestureState.dy > 40) {
+        if (!minimizedRef.current && gestureState.dy > 40) {
           Animated.spring(panY, {
             toValue: snapOffset,
             useNativeDriver: true,
-          }).start(() => setMinimized(true));
-        } else if (minimized && gestureState.dy < -40) {
+          }).start(({ finished }) => {
+            if (!finished) return;
+            minimizedRef.current = true;
+            setMinimized(true);
+          });
+        } else if (minimizedRef.current && gestureState.dy < -40) {
           Animated.spring(panY, {
             toValue: 0,
             useNativeDriver: true,
-          }).start(() => setMinimized(false));
+          }).start(({ finished }) => {
+            if (!finished) return;
+            minimizedRef.current = false;
+            setMinimized(false);
+          });
         } else {
           Animated.spring(panY, {
-            toValue: minimized ? snapOffset : 0,
+            toValue: minimizedRef.current ? snapOffset : 0,
             useNativeDriver: true,
           }).start();
         }
@@ -73,6 +127,7 @@ export function NextControlSheet(props: NextControlSheetProps) {
 
   return (
     <Animated.View
+      onLayout={onLayoutSheet}
       style={[
         styles.sheet,
         {
@@ -190,7 +245,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 10,
     right: 10,
-    bottom: 12,
+    bottom: MARGEN_INFERIOR_SHEET,
     backgroundColor: '#3127B1',
     borderRadius: 28,
     paddingHorizontal: 20,

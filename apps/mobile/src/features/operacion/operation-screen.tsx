@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Animated,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 import { BlurView } from 'expo-blur';
 import * as Sentry from '@sentry/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -19,7 +29,9 @@ import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared
 import { MapErrorBoundary } from './map-error-boundary';
 import { completadosTrasDeteccion, proximoPuntoControlPendiente } from './proximo-punto-control';
 import { RouteMap } from '../mapa/route-map';
-import { NextControlSheet } from './next-control-sheet';
+import { MARGEN_INFERIOR_SHEET, NextControlSheet, SNAP_OFFSET_SHEET } from './next-control-sheet';
+import { useModoCamara } from '../mapa/use-modo-camara';
+import type { InsetsNavegacion, RouteMapProps } from '../mapa/tipos';
 import { useSyncStatus } from './use-sync-status';
 import { formatearDistancia } from './format-distancia';
 import { ruteoApi } from '../../shared/api/ruteo-api';
@@ -85,9 +97,26 @@ export function OperationScreen(
   const [observacionEnviada, setObservacionEnviada] = useState(false);
   const [errorObservacion, setErrorObservacion] = useState<string | null>(null);
   const [observacionModalVisible, setObservacionModalVisible] = useState(false);
-  const [recenterTick, setRecenterTick] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
+  const { camara, onPanUsuario, recentrar } = useModoCamara(gps.tracking);
+
+  // Lo que tapa el mapa en navegación (`paddingNavegacion`): borde inferior de la tarjeta
+  // superior y lo que ocupa el sheet COLAPSADO desde abajo. Solo se setea si el valor redondeado
+  // cambia, para no re-renderizar la pantalla por cada layout.
+  const [insetSuperior, setInsetSuperior] = useState(0);
+  const [altoSheet, setAltoSheet] = useState(0);
+  const onLayoutTopOverlay = useCallback((e: LayoutChangeEvent) => {
+    const { y, height } = e.nativeEvent.layout;
+    setInsetSuperior(Math.round(y + height));
+  }, []);
+  const insetsNavegacion = useMemo(
+    () => ({
+      superior: insetSuperior,
+      inferior: Math.max(0, altoSheet + MARGEN_INFERIOR_SHEET - SNAP_OFFSET_SHEET),
+    }),
+    [insetSuperior, altoSheet],
+  );
 
   // M3 (hallazgo de revisión, medio): `puntosControl.length` se lee por REF, no como
   // dependencia del efecto de abajo — mismo patrón que `onLocationRef` en
@@ -305,11 +334,13 @@ export function OperationScreen(
         nextPointId={proximoPuntoControl?.id ?? null}
         position={gps.posicionActual}
         tracking={gps.tracking}
-        recenterTick={recenterTick}
+        camara={camara}
+        onPanUsuario={onPanUsuario}
+        insetsNavegacion={insetsNavegacion}
         rutaCalculada={rutaCalculada}
       />
 
-      <View pointerEvents="box-none" style={styles.topOverlay}>
+      <View pointerEvents="box-none" style={styles.topOverlay} onLayout={onLayoutTopOverlay}>
         <View style={{ flexDirection: 'column', gap: quivoSpacing.sm }}>
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: quivoSpacing.md }}>
             <Pressable
@@ -456,14 +487,16 @@ export function OperationScreen(
           </Pressable>
         )}
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Centrar en mi ubicación"
-          style={styles.recenterButton}
-          onPress={() => setRecenterTick((t) => t + 1)}
-        >
-          <Ionicons name="locate" size={24} color="#3127B1" />
-        </Pressable>
+        {camara.modo !== 'navegacion' && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={camara.modo === 'libre' ? 'Recentrar' : 'Ver ruta completa'}
+            style={styles.recenterButton}
+            onPress={recentrar}
+          >
+            <Ionicons name={camara.modo === 'libre' ? 'navigate' : 'locate'} size={24} color="#3127B1" />
+          </Pressable>
+        )}
       </Animated.View>
 
       <NextControlSheet
@@ -487,6 +520,8 @@ export function OperationScreen(
         onStart={() => void gps.iniciar()}
         onFinish={confirmarFinalizacion}
         panY={sheetPanY}
+        colapsado={camara.modo !== 'general'}
+        onAlto={setAltoSheet}
         gpsError={gps.errorGps}
       />
 
@@ -712,7 +747,9 @@ function MapLayer({
   nextPointId,
   position,
   tracking,
-  recenterTick,
+  camara,
+  onPanUsuario,
+  insetsNavegacion,
   rutaCalculada,
 }: {
   loading: boolean;
@@ -721,7 +758,9 @@ function MapLayer({
   nextPointId: string | null;
   position: { lat: number; lng: number } | null;
   tracking: boolean;
-  recenterTick: number;
+  camara: RouteMapProps['camara'];
+  onPanUsuario: RouteMapProps['onPanUsuario'];
+  insetsNavegacion: InsetsNavegacion;
   rutaCalculada: [number, number][] | null;
 }) {
   if (loading) {
@@ -741,7 +780,9 @@ function MapLayer({
         proximoPuntoControlId={nextPointId}
         posicionActual={position}
         tracking={tracking}
-        recenterTick={recenterTick}
+        camara={camara}
+        onPanUsuario={onPanUsuario}
+        insetsNavegacion={insetsNavegacion}
         rutaCalculada={rutaCalculada}
         style={styles.fullMap}
       />
