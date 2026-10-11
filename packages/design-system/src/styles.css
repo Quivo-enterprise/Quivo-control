@@ -2464,11 +2464,23 @@ body::-webkit-scrollbar {
   right: 1rem;
   z-index: 1000;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   flex-wrap: wrap;
   pointer-events: none;
+}
+
+/* Columna derecha del HUD superior: controles del mapa + panel "Jornada de hoy". Apilar en
+   flujo (en vez de un `top` fijo) hace que el panel siempre quede debajo de los controles,
+   ocupen una o dos filas (p. ej. con la píldora de frescura de un vehículo seleccionado). */
+.qv-live-hud-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .qv-live-hud-card {
@@ -2500,6 +2512,53 @@ body::-webkit-scrollbar {
   pointer-events: auto;
 }
 
+/* Panel "Jornada de hoy" (release 13). Vive dentro de `.qv-live-hud-right`, en flujo debajo de
+   los controles. Por debajo de 1180 px el HUD superior se parte en filas: la columna derecha
+   pasa a ocupar todo el ancho y el panel con ella. Con el detalle del vehículo abierto
+   (`.qv-live-hud-bottom`) el panel se oculta en ese rango: el detalle es lo que el operador
+   acaba de pedir y las cifras vuelven al cerrarlo. */
+.qv-live-hud-jornada {
+  width: min(22rem, 100%);
+  pointer-events: auto;
+}
+
+.qv-live-hud-jornada-lista {
+  max-height: min(22rem, 50vh);
+}
+
+/* Botón de plegar/desplegar: fondo sutil al pasar el cursor; el foco usa el contorno por
+   defecto del navegador (no se anula). Transición solo de la propiedad que cambia. */
+.qv-live-hud-jornada-toggle {
+  background: transparent;
+  border-radius: var(--qv-radius-md);
+  touch-action: manipulation;
+  transition: background-color var(--qv-transition-fast);
+}
+
+.qv-live-hud-jornada-toggle:hover {
+  background: color-mix(in srgb, var(--qv-surface-card) 60%, transparent);
+}
+
+@media (max-width: 1180px) {
+  .qv-live-hud-right {
+    flex: 1 1 100%;
+    align-items: stretch;
+  }
+
+  .qv-live-hud-jornada {
+    width: 100%;
+    max-width: 26rem;
+  }
+
+  .qv-live-hud-jornada-lista {
+    max-height: min(22rem, 40vh);
+  }
+
+  .qv-live-map-wrapper:has(.qv-live-hud-bottom) .qv-live-hud-jornada {
+    display: none;
+  }
+}
+
 .qv-live-telemetry-panel {
   display: flex;
   flex-direction: column;
@@ -2515,6 +2574,9 @@ body::-webkit-scrollbar {
 }
 
 .qv-live-toast {
+  /* Centrado y efímero, mismo z-index que el HUD pero montado después (queda encima). Puede
+     cruzarse un instante con el panel "Jornada de hoy" en anchos medianos; se prefiere eso a
+     taparlo permanentemente o mover los toasts a otro borde. */
   position: absolute;
   top: 4.5rem;
   left: 50%;
