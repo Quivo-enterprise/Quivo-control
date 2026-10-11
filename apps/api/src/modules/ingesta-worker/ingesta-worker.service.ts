@@ -17,17 +17,13 @@ import {
   type PayloadGpsPoint,
   type PayloadCumplimientoPuntoControl,
 } from '@quivo/shared';
+import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
 import { COLA_INGESTA_SYNC, type LoteIngestaJob } from '../sync/sync-queue.service.js';
 
 const NOMBRE_COLA_PARTICIONES = 'mantenimiento-particiones-gps';
 const NOMBRE_JOB_PARTICIONES = 'crear-particiones-futuras';
 const CADA_MS_PARTICIONES = 24 * 60 * 60 * 1000; // diario alcanza — se crean con varios días de margen
 const DIAS_ANTICIPACION_PARTICION = 5;
-// RF-58..66 (doc técnico §12 riesgo de drift de reloj de dispositivo): sin una cifra fija
-// del doc técnico, 5 minutos es una asunción razonable de este equipo — más que el drift
-// típico de un reloj de teléfono sin sincronizar, lo bastante chico para detectar un caso
-// real (dispositivo con la hora mal puesta a mano, etc.).
-const DRIFT_ALERTA_MS = 5 * 60 * 1000;
 
 const CONTEXTO_ADMIN = { rol: 'admin_quivo', sindicatoId: null } as const;
 

@@ -9,6 +9,7 @@ import {
   type JornadasDelDia,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import { DRIFT_ALERTA_MS } from '../ingesta-worker/ingesta-drift.js';
 
 interface JornadaRow {
   vehiculoId: string;
@@ -19,22 +20,28 @@ interface JornadaRow {
   lineaNombre: string;
   rutaSentido: string;
   horaSalida: Date | null;
-  recorridoEstado: string | null;
+  /** `tipo` del último `inicio_recorrido`/`fin_recorrido` del vehículo en la jornada. */
+  ultimoEventoRecorrido: string | null;
   inicioJornadaTs: Date | null;
 }
 
 /**
  * Precedencia del estado de la jornada de un vehículo (release 13): el recorrido manda sobre
- * la declaración. `en_curso` → `en_recorrido`, `finalizado` → `finalizado`; sin recorrido, una
- * declaración `inicio_jornada` del día → `dia_iniciado`; si no hay nada → `sin_iniciar`.
- * `recorridoEstado` es el derivado de `sesiones_operativas` (ver `insertarEventoOperativoEnTx`).
+ * la declaración. El último evento de recorrido del día decide: `inicio_recorrido` →
+ * `en_recorrido`, `fin_recorrido` → `finalizado`; sin recorrido, una declaración
+ * `inicio_jornada` del día → `dia_iniciado`; si no hay nada → `sin_iniciar`.
+ *
+ * Se deriva de las filas persistidas de `eventos_operativos` y NO de
+ * `sesiones_operativas.recorridoEstado`: esa columna es el último estado de la sesión y se
+ * pisa con cada evento nuevo, así que no sirve para consultar días anteriores (una sesión
+ * puede cruzar medianoche o reutilizarse otro día).
  */
 export function derivarEstadoJornada(
-  recorridoEstado: string | null,
+  ultimoEventoRecorrido: string | null,
   inicioJornadaTs: Date | null,
 ): EstadoJornada {
-  if (recorridoEstado === 'en_curso') return 'en_recorrido';
-  if (recorridoEstado === 'finalizado') return 'finalizado';
+  if (ultimoEventoRecorrido === 'inicio_recorrido') return 'en_recorrido';
+  if (ultimoEventoRecorrido === 'fin_recorrido') return 'finalizado';
   if (inicioJornadaTs) return 'dia_iniciado';
   return 'sin_iniciar';
 }
@@ -68,6 +75,7 @@ export class JornadasService {
     const diaStr = dia.toISOString().slice(0, 10);
     const desde = inicioDeJornadaBolivia(dia);
     const hasta = inicioDeJornadaSiguienteBolivia(dia);
+    const toleranciaFuturoS = DRIFT_ALERTA_MS / 1000;
 
     const filas = await withTenantContext(
       { rol: actor.rol, sindicatoId: actor.sindicatoId },
@@ -75,13 +83,18 @@ export class JornadasService {
         SELECT a."vehiculoId" AS "vehiculoId", v.placa, v."numeroInterno" AS "numeroInterno",
           c.nombre AS "conductorNombre", l.id AS "lineaId", l.nombre AS "lineaNombre",
           ru.sentido AS "rutaSentido", a."horaSalida" AS "horaSalida",
-          rs."recorridoEstado" AS "recorridoEstado", ij.ts AS "inicioJornadaTs"
+          rs.tipo AS "ultimoEventoRecorrido", ij.ts AS "inicioJornadaTs"
         FROM (
           -- Un vehículo con varios turnos el mismo día cuenta una sola vez: el de salida más
           -- temprana (sin hora de salida, al final).
           SELECT DISTINCT ON (a0."vehiculoId")
             a0."vehiculoId", a0."conductorId", a0."rutaId", a0."horaSalida"
           FROM asignaciones a0
+          -- Solo rotaciones publicadas, igual que el login móvil (auth-movil.service.ts):
+          -- un borrador no es trabajo esperado. No se filtra estado vigente ni
+          -- venceAt (el login sí) porque acá se consultan también días pasados, cuyas
+          -- asignaciones ya están vencidas.
+          JOIN rotaciones ro ON ro.id = a0."rotacionId" AND ro.estado = 'publicada'
           WHERE a0.fecha = ${diaStr}::date
           ORDER BY a0."vehiculoId", a0."horaSalida" ASC NULLS LAST, a0.orden ASC
         ) a
@@ -94,19 +107,37 @@ export class JornadasService {
           SELECT eo.ts
           FROM eventos_operativos eo
           JOIN sesiones_operativas so ON so.id = eo."sesionId"
+            -- Mismo criterio de elegibilidad que la ingesta: el evento tiene que venir del
+            -- dispositivo dueño de la sesión y del mismo sindicato (el sesionId del payload lo
+            -- controla el dispositivo), y su ts no puede estar adelantado más que la
+            -- tolerancia de drift respecto de cuando se recibió (el worker no mueve el estado
+            -- en ese caso, pero la fila queda en la bitácora).
+            AND eo."deviceId" = so."deviceId" AND eo."sindicatoId" = so."sindicatoId"
           WHERE eo."sindicatoId" = v."sindicatoId" AND eo.tipo = 'inicio_jornada'
             AND eo.ts >= ${desde} AND eo.ts < ${hasta}
+            AND eo.ts <= eo."receivedAt" + make_interval(secs => ${toleranciaFuturoS}::double precision)
             AND so."vehiculoId" = a."vehiculoId"
           ORDER BY eo.ts DESC
           LIMIT 1
         ) ij ON true
         LEFT JOIN LATERAL (
-          -- Estado derivado del recorrido más reciente del vehículo en esa jornada.
-          SELECT so."recorridoEstado"
-          FROM sesiones_operativas so
-          WHERE so."vehiculoId" = a."vehiculoId" AND so."sindicatoId" = v."sindicatoId"
-            AND so."recorridoEstadoTs" >= ${desde} AND so."recorridoEstadoTs" < ${hasta}
-          ORDER BY so."recorridoEstadoTs" DESC
+          -- Último evento de recorrido del vehículo dentro de la jornada, desde la bitácora
+          -- (no desde sesiones_operativas.recorridoEstado, que se pisa con cada evento).
+          SELECT eo.tipo
+          FROM eventos_operativos eo
+          JOIN sesiones_operativas so ON so.id = eo."sesionId"
+            -- Mismo criterio de elegibilidad que la ingesta: el evento tiene que venir del
+            -- dispositivo dueño de la sesión y del mismo sindicato (el sesionId del payload lo
+            -- controla el dispositivo), y su ts no puede estar adelantado más que la
+            -- tolerancia de drift respecto de cuando se recibió (el worker no mueve el estado
+            -- en ese caso, pero la fila queda en la bitácora).
+            AND eo."deviceId" = so."deviceId" AND eo."sindicatoId" = so."sindicatoId"
+          WHERE eo."sindicatoId" = v."sindicatoId"
+            AND eo.tipo IN ('inicio_recorrido', 'fin_recorrido')
+            AND eo.ts >= ${desde} AND eo.ts < ${hasta}
+            AND eo.ts <= eo."receivedAt" + make_interval(secs => ${toleranciaFuturoS}::double precision)
+            AND so."vehiculoId" = a."vehiculoId"
+          ORDER BY eo.ts DESC
           LIMIT 1
         ) rs ON true
         ORDER BY v.placa
@@ -124,7 +155,7 @@ export class JornadasService {
         lineaNombre: f.lineaNombre,
         rutaSentido: f.rutaSentido,
         horaSalida: f.horaSalida ? f.horaSalida.toISOString() : null,
-        estado: derivarEstadoJornada(f.recorridoEstado, f.inicioJornadaTs),
+        estado: derivarEstadoJornada(f.ultimoEventoRecorrido, f.inicioJornadaTs),
         inicioJornadaTs: f.inicioJornadaTs ? f.inicioJornadaTs.toISOString() : null,
       })),
     });

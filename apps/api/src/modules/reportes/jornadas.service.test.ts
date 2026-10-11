@@ -3,6 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import { prisma, withTenantContext } from '@quivo/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import { DRIFT_ALERTA_MS } from '../ingesta-worker/ingesta-drift.js';
 import { JornadasService, derivarEstadoJornada } from './jornadas.service.js';
 
 const GEOMETRIA_GEOJSON = JSON.stringify({
@@ -19,14 +20,16 @@ const FECHA = '2031-03-15';
 const DIA = new Date(`${FECHA}T00:00:00.000Z`);
 const HORA = 60 * 60_000;
 const DENTRO_DEL_DIA = new Date(DIA.getTime() + 12 * HORA);
+const DIA_1 = new Date('2031-03-20T00:00:00.000Z');
+const DIA_2 = new Date('2031-03-21T00:00:00.000Z');
 const DIA_ANTERIOR_TARDE = new Date(DIA.getTime() + 2 * HORA); // 22:00 Bolivia del 14
 
 describe('derivarEstadoJornada', () => {
   const ts = new Date();
-  it('el recorrido manda sobre la declaración', () => {
-    expect(derivarEstadoJornada('en_curso', ts)).toBe('en_recorrido');
-    expect(derivarEstadoJornada('finalizado', ts)).toBe('finalizado');
-    expect(derivarEstadoJornada('en_curso', null)).toBe('en_recorrido');
+  it('el último evento de recorrido manda sobre la declaración', () => {
+    expect(derivarEstadoJornada('inicio_recorrido', ts)).toBe('en_recorrido');
+    expect(derivarEstadoJornada('fin_recorrido', ts)).toBe('finalizado');
+    expect(derivarEstadoJornada('inicio_recorrido', null)).toBe('en_recorrido');
   });
   it('sin recorrido: declaración → dia_iniciado, nada → sin_iniciar', () => {
     expect(derivarEstadoJornada(null, ts)).toBe('dia_iniciado');
@@ -94,7 +97,11 @@ describe('JornadasService (Postgres real + RLS)', () => {
       const a = await sembrarSindicato(sindicatoAId, 'JA', rutaAId);
       const b = await sembrarSindicato(sindicatoBId, 'JB', rutaBId);
 
-      /** Crea vehículo + asignación(es) del día + sesión con el `recorridoEstado` pedido. */
+      /**
+       * Crea vehículo + asignación(es) por día + UNA sesión con los eventos pedidos
+       * (`inicio_jornada`/`inicio_recorrido`/`fin_recorrido`). `recorridoEstado` de la
+       * sesión no se toca a propósito: el servicio no debe depender de él.
+       */
       async function vehiculo(
         clave: string,
         sindicatoId: string,
@@ -102,8 +109,8 @@ describe('JornadasService (Postgres real + RLS)', () => {
         rutaId: string,
         opciones: {
           horas?: Array<number | null>;
-          recorridoEstado?: 'en_curso' | 'finalizado' | null;
-          inicioJornadaTs?: Date | null;
+          dias?: Date[];
+          eventos?: Array<{ tipo: string; ts: Date; deviceId?: string; receivedAt?: Date }>;
         } = {},
       ) {
         const v = await tx.vehiculo.create({
@@ -123,24 +130,26 @@ describe('JornadasService (Postgres real + RLS)', () => {
         const horarios = ['manana', 'tarde', 'noche'];
         const horas = opciones.horas ?? [null];
         let primera: { id: string } | null = null;
-        for (const [i, h] of horas.entries()) {
-          const asig = await tx.asignacion.create({
-            data: {
-              rotacionId: ctx.rotacion.id,
-              vehiculoId: v.id,
-              conductorId: ctx.conductor.id,
-              rutaId,
-              fecha: DIA,
-              horario: horarios[i]!,
-              horaSalida: h === null ? null : new Date(DIA.getTime() + h * HORA),
-              orden: i + 1,
-              venceAt: new Date(DIA.getTime() + 28 * HORA),
-              estado: 'vigente',
-            },
-          });
-          primera ??= asig;
+        for (const dia of opciones.dias ?? [DIA]) {
+          for (const [i, h] of horas.entries()) {
+            const asig = await tx.asignacion.create({
+              data: {
+                rotacionId: ctx.rotacion.id,
+                vehiculoId: v.id,
+                conductorId: ctx.conductor.id,
+                rutaId,
+                fecha: dia,
+                horario: horarios[i]!,
+                horaSalida: h === null ? null : new Date(dia.getTime() + h * HORA),
+                orden: i + 1,
+                venceAt: new Date(dia.getTime() + 28 * HORA),
+                estado: 'vigente',
+              },
+            });
+            primera ??= asig;
+          }
         }
-        if (opciones.recorridoEstado !== undefined || opciones.inicioJornadaTs) {
+        if (opciones.eventos?.length) {
           const sesion = await tx.sesionOperativa.create({
             data: {
               sindicatoId,
@@ -152,19 +161,20 @@ describe('JornadasService (Postgres real + RLS)', () => {
               refreshTokenHash: randomUUID(),
               accessExpiresAt: new Date(DIA.getTime() + 28 * HORA),
               refreshExpiresAt: new Date(DIA.getTime() + 28 * HORA),
-              recorridoEstado: opciones.recorridoEstado ?? null,
-              recorridoEstadoTs: opciones.recorridoEstado ? DENTRO_DEL_DIA : null,
             },
           });
-          if (opciones.inicioJornadaTs) {
+          for (const e of opciones.eventos) {
             await tx.eventoOperativo.create({
               data: {
                 eventId: randomUUID(),
                 sindicatoId,
                 sesionId: sesion.id,
-                deviceId: `device-${clave}`,
-                tipo: 'inicio_jornada',
-                ts: opciones.inicioJornadaTs,
+                deviceId: e.deviceId ?? `device-${clave}`,
+                tipo: e.tipo,
+                ts: e.ts,
+                // Por defecto llega "a tiempo" (receivedAt = ts): las fechas del test son
+                // sintéticas y el default now() dejaría todo como evento del futuro.
+                receivedAt: e.receivedAt ?? e.ts,
                 payload: { sesionId: sesion.id },
               },
             });
@@ -172,18 +182,83 @@ describe('JornadasService (Postgres real + RLS)', () => {
         }
       }
 
+      const jornada = (ts: Date) => ({ tipo: 'inicio_jornada', ts });
       await vehiculo('sin', sindicatoAId, a, rutaAId);
-      await vehiculo('dia', sindicatoAId, a, rutaAId, { inicioJornadaTs: DENTRO_DEL_DIA });
+      await vehiculo('dia', sindicatoAId, a, rutaAId, { eventos: [jornada(DENTRO_DEL_DIA)] });
       await vehiculo('rec', sindicatoAId, a, rutaAId, {
-        recorridoEstado: 'en_curso',
-        inicioJornadaTs: DENTRO_DEL_DIA,
+        eventos: [jornada(DENTRO_DEL_DIA), { tipo: 'inicio_recorrido', ts: DENTRO_DEL_DIA }],
       });
-      await vehiculo('fin', sindicatoAId, a, rutaAId, { recorridoEstado: 'finalizado' });
+      await vehiculo('fin', sindicatoAId, a, rutaAId, {
+        eventos: [
+          { tipo: 'inicio_recorrido', ts: DENTRO_DEL_DIA },
+          { tipo: 'fin_recorrido', ts: new Date(DENTRO_DEL_DIA.getTime() + HORA) },
+        ],
+      });
       // Declaración de la jornada ANTERIOR: no cuenta para esta fecha.
-      await vehiculo('vieja', sindicatoAId, a, rutaAId, { inicioJornadaTs: DIA_ANTERIOR_TARDE });
+      await vehiculo('vieja', sindicatoAId, a, rutaAId, {
+        eventos: [jornada(DIA_ANTERIOR_TARDE)],
+      });
       // Tres turnos el mismo día: debe colapsar a UNA fila con la salida más temprana (null al final).
       await vehiculo('multi', sindicatoAId, a, rutaAId, { horas: [null, 18, 9] });
-      await vehiculo('ajeno', sindicatoBId, b, rutaBId, { inicioJornadaTs: DENTRO_DEL_DIA });
+      await vehiculo('ajeno', sindicatoBId, b, rutaBId, { eventos: [jornada(DENTRO_DEL_DIA)] });
+      // Rotación en borrador: sus asignaciones no son trabajo esperado.
+      const borrador = await tx.rotacion.create({
+        data: { sindicatoId: sindicatoAId, periodo: '2031-03', estado: 'borrador' },
+      });
+      await vehiculo('borrador', sindicatoAId, { ...a, rotacion: borrador }, rutaAId);
+
+      // Eventos NO elegibles: se persisten pero no deben contar (misma regla que la ingesta).
+      // deviceId distinto del de la sesión (payload apuntando a la sesión de otro teléfono).
+      await vehiculo('foraneo', sindicatoAId, a, rutaAId, {
+        eventos: [
+          { tipo: 'inicio_recorrido', ts: DENTRO_DEL_DIA, deviceId: 'device-otro-telefono' },
+          { tipo: 'inicio_jornada', ts: DENTRO_DEL_DIA, deviceId: 'device-otro-telefono' },
+        ],
+      });
+      // ts adelantado más allá de la tolerancia de drift respecto de receivedAt.
+      await vehiculo('futuro', sindicatoAId, a, rutaAId, {
+        eventos: [
+          {
+            tipo: 'fin_recorrido',
+            ts: DENTRO_DEL_DIA,
+            receivedAt: new Date(DENTRO_DEL_DIA.getTime() - DRIFT_ALERTA_MS - 60_000),
+          },
+          {
+            tipo: 'inicio_jornada',
+            ts: DENTRO_DEL_DIA,
+            receivedAt: new Date(DENTRO_DEL_DIA.getTime() - DRIFT_ALERTA_MS - 60_000),
+          },
+        ],
+      });
+      // Dentro de la tolerancia (ts apenas adelantado) SÍ cuenta.
+      await vehiculo('tolerado', sindicatoAId, a, rutaAId, {
+        eventos: [
+          {
+            tipo: 'inicio_recorrido',
+            ts: DENTRO_DEL_DIA,
+            receivedAt: new Date(DENTRO_DEL_DIA.getTime() - DRIFT_ALERTA_MS + 60_000),
+          },
+        ],
+      });
+
+      // Sesión que cruza días: inicio_recorrido el día 1, fin_recorrido el día 2.
+      const mediodia = (d: Date) => new Date(d.getTime() + 12 * HORA);
+      await vehiculo('cruza', sindicatoAId, a, rutaAId, {
+        dias: [DIA_1, DIA_2],
+        eventos: [
+          { tipo: 'inicio_recorrido', ts: mediodia(DIA_1) },
+          { tipo: 'fin_recorrido', ts: mediodia(DIA_2) },
+        ],
+      });
+      // Sesión reutilizada: completa el día 1 y arranca de nuevo el día 2.
+      await vehiculo('reusada', sindicatoAId, a, rutaAId, {
+        dias: [DIA_1, DIA_2],
+        eventos: [
+          { tipo: 'inicio_recorrido', ts: mediodia(DIA_1) },
+          { tipo: 'fin_recorrido', ts: new Date(mediodia(DIA_1).getTime() + HORA) },
+          { tipo: 'inicio_recorrido', ts: mediodia(DIA_2) },
+        ],
+      });
     });
   });
 
@@ -217,6 +292,40 @@ describe('JornadasService (Postgres real + RLS)', () => {
     expect(estadoDe(r, 'fin')?.estado).toBe('finalizado');
   });
 
+  it('un evento con deviceId ajeno a la sesión se ignora (recorrido y jornada)', async () => {
+    const r = await service.listar(adminA, FECHA);
+    const f = estadoDe(r, 'foraneo');
+    expect(f?.estado).toBe('sin_iniciar');
+    expect(f?.inicioJornadaTs).toBeNull();
+  });
+
+  it('un evento con ts más allá de la tolerancia de drift se ignora; dentro de ella cuenta', async () => {
+    const r = await service.listar(adminA, FECHA);
+    const f = estadoDe(r, 'futuro');
+    expect(f?.estado).toBe('sin_iniciar');
+    expect(f?.inicioJornadaTs).toBeNull();
+    expect(estadoDe(r, 'tolerado')?.estado).toBe('en_recorrido');
+  });
+
+  it('una rotación en borrador no aparece como trabajo esperado', async () => {
+    const r = await service.listar(adminA, FECHA);
+    expect(estadoDe(r, 'borrador')).toBeUndefined();
+  });
+
+  it('sesión que cruza días: el día 1 es en_recorrido y el día 2 finalizado', async () => {
+    const d1 = await service.listar(adminA, '2031-03-20');
+    const d2 = await service.listar(adminA, '2031-03-21');
+    expect(estadoDe(d1, 'cruza')?.estado).toBe('en_recorrido');
+    expect(estadoDe(d2, 'cruza')?.estado).toBe('finalizado');
+  });
+
+  it('sesión reutilizada en dos días: cada día informa su propio estado', async () => {
+    const d1 = await service.listar(adminA, '2031-03-20');
+    const d2 = await service.listar(adminA, '2031-03-21');
+    expect(estadoDe(d1, 'reusada')?.estado).toBe('finalizado');
+    expect(estadoDe(d2, 'reusada')?.estado).toBe('en_recorrido');
+  });
+
   it('una declaración de la jornada anterior no cuenta para esta fecha', async () => {
     const r = await service.listar(adminA, FECHA);
     expect(estadoDe(r, 'vieja')?.estado).toBe('sin_iniciar');
@@ -224,7 +333,7 @@ describe('JornadasService (Postgres real + RLS)', () => {
 
   it('admin_sindicato solo ve su sindicato; el otro ve el suyo', async () => {
     const a = await service.listar(adminA, FECHA);
-    expect(a.vehiculos).toHaveLength(6);
+    expect(a.vehiculos).toHaveLength(9);
     expect(estadoDe(a, 'ajeno')).toBeUndefined();
 
     const b = await service.listar(adminB, FECHA);
@@ -259,7 +368,7 @@ describe('JornadasService (Postgres real + RLS)', () => {
     // 2031-03-16T02:00Z = 22:00 del 15 en Bolivia (UTC-4) → sigue siendo el día 15.
     const r = await service.listar(adminA, undefined, new Date('2031-03-16T02:00:00.000Z'));
     expect(r.fecha).toBe(FECHA);
-    expect(r.vehiculos).toHaveLength(6);
+    expect(r.vehiculos).toHaveLength(9);
     // 2031-03-16T05:00Z = 01:00 del 16 en Bolivia → otro día, sin asignaciones.
     const otro = await service.listar(adminA, undefined, new Date('2031-03-16T05:00:00.000Z'));
     expect(otro.fecha).toBe('2031-03-16');
