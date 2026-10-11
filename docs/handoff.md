@@ -18,21 +18,38 @@
 
 Secuencia: PR 0 docs → PR 1 shared → API A → API B → **deploy de la API antes de cualquier
 APK** → web A → bake-off de comps → móvil C1 → C2 → A → B → changelog al CTO → build.
-- **Estado:** PR 0 mergeado (#110).
-  - PR 1+2 (shared + API A): rama `feat/shared-contratos-release-13`, con el evento
-    `inicio_jornada`, el worker con chequeo de dispositivo y día de asignación, el índice
-    `(sindicatoId, tipo, ts)` y `GET /v1/reportes/jornadas`.
-    - Tests contra Postgres real: api 358/358, shared 92/92, db 34/34.
-    - `/security-review` sin hallazgos. `/code-review` dio 10 hallazgos: 6 aplicados.
-  - **Quedaron sin hacer (decisión del chairman):**
-    - filtro de drift hacia atrás;
-    - `CREATE INDEX CONCURRENTLY` (la tabla es chica);
-    - reestructurar la query por performance;
-    - el chequeo de dueño para los demás tipos de evento (Fase 2 del saneamiento).
+- **Estado (2026-10-11):**
+  - **Mergeados:** PR 0 docs (#110) · PR 1+2 shared + API A (#111) · API B vecinos-ruta (#113) ·
+    móvil C1 motor Google único (#112) · tests deterministas de API (#114, #116).
+  - **API A (#111):** evento `inicio_jornada` (worker con chequeo de dispositivo y día de
+    asignación), índice `(sindicatoId, tipo, ts)`, `GET /v1/reportes/jornadas`.
+    - Sin hacer (decisión del chairman): filtro de drift hacia atrás, `CREATE INDEX
+      CONCURRENTLY`, reestructurar la query, chequeo de dueño en otros tipos de evento (Fase 2).
+  - **API B (#113):** `GET /v1/mobile/vecinos-ruta`.
+    - Candidatos: misma ruta y sindicato, asignación hoy/ayer, `en_curso`, sesión vigente, fix
+      ≤ 10 min, a ≤ 300 m de la ruta. Fracción en Web Mercator × largo geography.
+    - Desempate por `sesionId`; caché 15 s por `(sindicatoId, rutaId)` por instancia; rate limit
+      por dispositivo (`SyncDeviceThrottlerGuard`).
+    - Aceptado como producto: el `lat`/`lng` del cliente permite ver la posición a lo largo de la
+      ruta de los pares del mismo sindicato y ruta. Sin dedup de misses concurrentes.
+    - Limitación: rutas circulares cerca de inicio≈fin.
+  - **Móvil C1 (#112):** `features/mapa/route-map.tsx` con `react-native-maps` 1.20.1; Leaflet,
+    WebView y su protocolo borrados. Matriz de paridad: [`docs/mapa-paridad-leaflet-google.md`](mapa-paridad-leaflet-google.md).
+    - **Un build de EAS no-`development` falla si falta `GOOGLE_MAPS_ANDROID_API_KEY`** (sin key
+      el SDK cierra la app). Validación en `apps/mobile/plugins/clave-mapas.cjs`.
+    - Diferido a C2: desfase entre easing de cámara de Google y marcador lineal. Pinch/rotate
+      salen del seguimiento (igual que Google Maps).
+    - **No verificado en teléfono:** render con key real, fluidez, encuadre, offline.
+  - **Tests inestables de la API:** `en-vivo.resumen-equivalencia` (corte 04:00 UTC) arreglado en
+    #114; `auth-movil` "el 409 de nivel 2…" (≈17 scrypt, ~5.1 s en CI) con timeout de 15 s en #116.
+    Costo de login acotado por diseño: peor caso 3 + 20 scrypt (~3.5 s local) por intento fallido.
   - Comp móvil elegido: **A** (`docs/diseno/release-13-comp-a-operacion.html`).
-  - Móvil C1 (motor Google único, se borra Leaflet) en curso.
+  - **Siguiente:** web A (`panel-jornada`) · móvil C2 (modo navegación) · A · B.
+- **Antes de cualquier APK:** deploy de la API (lo confirma el CTO; un APK nuevo contra una API
+  vieja traba el outbox con `inicio_jornada`).
 - **Antes del build hay que verificar:** que todos los teléfonos del piloto tengan GMS, la key de
-  Maps en el entorno EAS `production` y el fix #109 probado en teléfono.
+  Maps en el entorno EAS `production` (hoy solo en `preview`; si falta, el build ahora falla) y
+  el fix #109 probado en teléfono.
 
 ## Punto de retome — 2026-10-10, noche (leer primero)
 
