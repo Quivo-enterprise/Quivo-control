@@ -6,6 +6,40 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-11 (leer primero): release 13 completo, APK de producción lanzado
+
+**Estado:** las 3 features del release 13 están en `main` y el backend está desplegado. El APK de producción (versionCode 13) se lanzó en EAS:
+https://expo.dev/accounts/shadow00/projects/quivo-conductor/builds/56239100-0bef-4c43-bdf4-3ee894e9c04a
+
+**PRs de esta sesión**
+
+| PR | Qué | Commit |
+|---|---|---|
+| #119 | Móvil C2: modo navegación (cámara bloqueada al vehículo, pitch 55, zoom 18, vehículo en el tercio inferior, `libre` con un gesto, Recentrar, sheet colapsado). La cámara se mueve en el mismo tick que el marcador, así que no hay desfase de easing. | `d15b7c7` |
+| #120 | Móvil A: EMPEZAR DÍA (`inicio_jornada` por el outbox, store en AsyncStorage por vehículo + conductor + sesión + día boliviano, rollover a medianoche, `DriverRouteCard` extraída con pill y variante compacta). | `e17bf86` |
+| #121 | Móvil B: vecinos delante/detrás (poll de 30 s, estados vecino / nadie / sin dato, silueta SVG, overlay fuera del padding de cámara). | `7989997` |
+
+Cada uno pasó `/code-review` con todos los hallazgos aplicados, la revisión del hook Codex y CI verde (ci + acceptance). Decisiones de C2 en `docs/plan-release-13-features.md`, sección "C2 — decisiones de implementación". El backlog v2 (Picture-in-Picture, entre otros) está al final de ese plan.
+
+**Deploy a producción (confirmado por el CTO):** `TAG=r13-20261011 scripts/deploy-gcp.sh` desde `main` en `1214874`, exit 0. API, migraciones, web y worker quedaron en `r13-20261011`.
+- `/v1/health/ready` responde 200.
+- `vecinos-ruta` y `reportes/jornadas` responden 401 (antes 404).
+- Rollback: redesplegar `v1`. La migración del índice queda aplicada; es inocua.
+
+**Build:** perfil `production`, `buildType: apk` (todavía no va a Play Store). El canal visual queda **apagado**: `EXPO_PUBLIC_GPS_CANAL_VISUAL` no está en el entorno EAS production. `GOOGLE_MAPS_ANDROID_API_KEY` ya existía en production. El CTO aceptó los desvíos de A respecto al comp (la pill va en la tarjeta del conductor; la tira compacta en recorrido no se rehízo). El CTO confirmó que todos los teléfonos del piloto tienen GMS.
+
+**NO verificado (todo en teléfono):**
+- motor Google (#112), navegación (#119), A (#120), B (#121) y el fix #109;
+- el mapa en blanco por el SHA-1 de la key de Maps: se ve en el primer arranque del APK;
+- costo del bridge en navegación (~3–5 mensajes por frame a ~30 Hz con la arquitectura vieja): medir en un teléfono de gama baja;
+- un `inicio_jornada` real de punta a punta (teléfono → worker → panel "Jornada de hoy");
+- vecinos en calle: requieren `9001TST` y `9004TST` en la misma ruta y sentido.
+
+**Siguiente:**
+1. Probar el APK en un teléfono, con el checklist de arriba.
+2. Si #109 queda verificado, evaluar prender el canal visual en production (requiere otro build).
+3. La limpieza de worktrees sobrantes (`.claude/worktrees/agent-*`) sigue pendiente de OK del CTO.
+
 ## Release 13 — features en curso (2026-10-10)
 
 **Plan aprobado:** [`docs/plan-release-13-features.md`](plan-release-13-features.md). Tres features:
