@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { prisma, withTenantContext } from '@quivo/db';
-import type { EventoSync } from '@quivo/shared';
+import { fechaActualBolivia, type EventoSync } from '@quivo/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   agruparPorTipo,
   insertarEventoOperativoEnTx,
+  IngestaWorkerService,
   insertarGpsPoints,
   procesarCumplimientoEnTx,
 } from './ingesta-worker.service.js';
@@ -103,7 +104,8 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
           vehiculoId: vehiculo.id,
           conductorId: conductor.id,
           rutaId,
-          fecha: new Date(),
+          // Día de Bolivia (no `new Date()`): coincide con el chequeo de inicio_jornada.
+          fecha: fechaActualBolivia(new Date()),
           horario: 'manana',
           orden: 1,
           venceAt: new Date(Date.now() + 60 * 60 * 1000),
@@ -129,6 +131,7 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
 
   afterAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      await tx.syncError.deleteMany({ where: { sindicatoId: { in: [sindicatoId, sindicatoOtroId] } } });
       await tx.cumplimientoPc.deleteMany({ where: { sindicatoId } });
       await tx.eventoOperativo.deleteMany({ where: { sindicatoId } });
       // `gps_sesion_resumen` (docs/plan-en-vivo-resumen-sesion.md) NO tiene FK propia a
@@ -741,6 +744,179 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       );
       expect(registrado).not.toBeNull();
       expect(registrado?.tipo).toBe('fin_recorrido');
+    });
+  });
+
+  /**
+   * Release 13 — `inicio_jornada` ("hoy trabajo"): se persiste como evento operativo, NO
+   * mueve `recorridoEstado`, y valida que `sesionId` sea una sesión de ESTE dispositivo y de
+   * ESTE sindicato (a diferencia de los demás tipos, que todavía no lo validan).
+   */
+  describe('Release 13 — inicio_jornada', () => {
+    // `procesarLote` es privado y el constructor real abre Redis + Workers de BullMQ (que
+    // consumirían la cola real): se arma una instancia sin pasar por el constructor, con solo
+    // lo que `procesarLote` toca (logger y la métrica de cola pendiente).
+    function servicioSinCola(): IngestaWorkerService {
+      const servicio = Object.create(IngestaWorkerService.prototype) as Record<string, unknown>;
+      servicio.logger = { log: () => undefined, warn: () => undefined, error: () => undefined };
+      servicio.ingestaQueueStats = { getWaitingCount: async () => 0 };
+      return servicio as unknown as IngestaWorkerService;
+    }
+
+    async function procesarLote(sindicato: string, eventos: EventoSync[]) {
+      const servicio = servicioSinCola() as unknown as {
+        procesarLote(job: unknown): Promise<{ procesados: number; errores: number }>;
+      };
+      return servicio.procesarLote({ id: 'job-test', data: { sindicatoId: sindicato, eventos } });
+    }
+
+    const buscarEvento = (eventId: string) =>
+      withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        tx.eventoOperativo.findMany({ where: { eventId } }),
+      );
+    const buscarErrores = (eventId: string) =>
+      withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+        tx.syncError.findMany({ where: { eventId } }),
+      );
+
+    it('un lote mixto gps_point + inicio_jornada se procesa sin errores y queda en eventos_operativos', async () => {
+      // La partición de hoy ya la crea el test de `insertarGpsPoints` de más arriba (mismo
+      // archivo, corren en orden): no se vuelve a llamar `crear_particion_gps_points` acá, que
+      // toma un lock exclusivo y es fuente de deadlocks contra otros archivos en paralelo.
+      const eventIdGps = randomUUID();
+      const eventIdJornada = randomUUID();
+      const resultado = await procesarLote(sindicatoId, [
+        evento({
+          eventId: eventIdGps,
+          tipo: 'gps_point',
+          payload: { sesionId, lat: -17.78, lng: -63.18 },
+        }),
+        evento({ eventId: eventIdJornada, tipo: 'inicio_jornada', payload: { sesionId } }),
+      ]);
+
+      expect(resultado).toEqual({ procesados: 2, errores: 0 });
+      const registros = await buscarEvento(eventIdJornada);
+      expect(registros).toHaveLength(1);
+      expect(registros[0]?.tipo).toBe('inicio_jornada');
+      expect(registros[0]?.sesionId).toBe(sesionId);
+    });
+
+    it('inicio_jornada NO cambia recorridoEstado ni recorridoEstadoTs', async () => {
+      const antes = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        tx.sesionOperativa.findUniqueOrThrow({ where: { id: sesionId } }),
+      );
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarEventoOperativoEnTx(
+          tx,
+          sindicatoId,
+          // `ts` posterior a cualquier estado previo: si el tipo moviera el estado, se vería.
+          evento({
+            eventId: randomUUID(),
+            ts: new Date(Date.now() + 1_000).toISOString(),
+            tipo: 'inicio_jornada',
+            payload: { sesionId },
+          }),
+        ),
+      );
+      const despues = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        tx.sesionOperativa.findUniqueOrThrow({ where: { id: sesionId } }),
+      );
+      expect(despues.recorridoEstado).toBe(antes.recorridoEstado);
+      expect(despues.recorridoEstadoTs?.toISOString()).toBe(antes.recorridoEstadoTs?.toISOString());
+    });
+
+    it('un deviceId ajeno a la sesión va a sync_errors y no se inserta', async () => {
+      const eventId = randomUUID();
+      const resultado = await procesarLote(sindicatoId, [
+        evento({
+          eventId,
+          deviceId: 'device-ajeno',
+          tipo: 'inicio_jornada',
+          payload: { sesionId },
+        }),
+      ]);
+
+      expect(resultado).toEqual({ procesados: 0, errores: 1 });
+      expect(await buscarEvento(eventId)).toHaveLength(0);
+      const errores = await buscarErrores(eventId);
+      expect(errores).toHaveLength(1);
+      expect(errores[0]?.error).toContain('no pertenece al dispositivo');
+    });
+
+    it('un sesionId inexistente va a sync_errors y no se inserta', async () => {
+      const eventId = randomUUID();
+      const resultado = await procesarLote(sindicatoId, [
+        evento({ eventId, tipo: 'inicio_jornada', payload: { sesionId: randomUUID() } }),
+      ]);
+
+      expect(resultado.errores).toBe(1);
+      expect(await buscarEvento(eventId)).toHaveLength(0);
+      expect(await buscarErrores(eventId)).toHaveLength(1);
+    });
+
+    it('una sesión de OTRO sindicato (tenant del lote distinto) va a sync_errors', async () => {
+      const eventId = randomUUID();
+      const resultado = await procesarLote(sindicatoOtroId, [
+        evento({ eventId, tipo: 'inicio_jornada', payload: { sesionId } }),
+      ]);
+
+      expect(resultado.errores).toBe(1);
+      const insertados = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+        tx.eventoOperativo.findMany({ where: { eventId } }),
+      );
+      expect(insertados).toHaveLength(0);
+      expect(await buscarErrores(eventId)).toHaveLength(1);
+    });
+
+    it('un payload sin sesionId uuid va a sync_errors', async () => {
+      const eventId = randomUUID();
+      const resultado = await procesarLote(sindicatoId, [
+        evento({ eventId, tipo: 'inicio_jornada', payload: { sesionId: 'no-es-uuid' } }),
+      ]);
+      expect(resultado.errores).toBe(1);
+      expect(await buscarEvento(eventId)).toHaveLength(0);
+    });
+
+    it('una declaración cuyo día (Bolivia) no coincide con la asignación de la sesión va a sync_errors', async () => {
+      const eventId = randomUUID();
+      const ayer = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+      const resultado = await procesarLote(sindicatoId, [
+        evento({ eventId, ts: ayer, tipo: 'inicio_jornada', payload: { sesionId } }),
+      ]);
+
+      expect(resultado).toEqual({ procesados: 0, errores: 1 });
+      expect(await buscarEvento(eventId)).toHaveLength(0);
+      const errores = await buscarErrores(eventId);
+      expect(errores).toHaveLength(1);
+      expect(errores[0]?.error).toContain('no coincide con la fecha de la asignación');
+    });
+
+    it('una declaración del mismo día que la asignación se acepta (sin exigir sesión activa: outbox tardío)', async () => {
+      const eventId = randomUUID();
+      // Mediodía de Bolivia del día de la asignación: estable sea cual sea la hora del test.
+      const mediodia = new Date(fechaActualBolivia(new Date()).getTime() + 16 * 60 * 60 * 1000);
+      const resultado = await procesarLote(sindicatoId, [
+        evento({
+          eventId,
+          ts: mediodia.toISOString(),
+          tipo: 'inicio_jornada',
+          payload: { sesionId },
+        }),
+      ]);
+
+      expect(resultado).toEqual({ procesados: 1, errores: 0 });
+      expect(await buscarEvento(eventId)).toHaveLength(1);
+    });
+
+    it('reenviar el mismo eventId es idempotente (una sola fila, sin errores)', async () => {
+      const eventId = randomUUID();
+      const e = evento({ eventId, tipo: 'inicio_jornada', payload: { sesionId } });
+      const primero = await procesarLote(sindicatoId, [e]);
+      const segundo = await procesarLote(sindicatoId, [e]);
+
+      expect(primero.errores).toBe(0);
+      expect(segundo.errores).toBe(0);
+      expect(await buscarEvento(eventId)).toHaveLength(1);
     });
   });
 });

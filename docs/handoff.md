@@ -18,7 +18,19 @@
 
 Secuencia: PR 0 docs → PR 1 shared → API A → API B → **deploy de la API antes de cualquier
 APK** → web A → bake-off de comps → móvil C1 → C2 → A → B → changelog al CTO → build.
-- **Estado:** PR 0 (docs) en curso.
+- **Estado:** PR 0 mergeado (#110).
+  - PR 1+2 (shared + API A): rama `feat/shared-contratos-release-13`, con el evento
+    `inicio_jornada`, el worker con chequeo de dispositivo y día de asignación, el índice
+    `(sindicatoId, tipo, ts)` y `GET /v1/reportes/jornadas`.
+    - Tests contra Postgres real: api 358/358, shared 92/92, db 34/34.
+    - `/security-review` sin hallazgos. `/code-review` dio 10 hallazgos: 6 aplicados.
+  - **Quedaron sin hacer (decisión del chairman):**
+    - filtro de drift hacia atrás;
+    - `CREATE INDEX CONCURRENTLY` (la tabla es chica);
+    - reestructurar la query por performance;
+    - el chequeo de dueño para los demás tipos de evento (Fase 2 del saneamiento).
+  - Comp móvil elegido: **A** (`docs/diseno/release-13-comp-a-operacion.html`).
+  - Móvil C1 (motor Google único, se borra Leaflet) en curso.
 - **Antes del build hay que verificar:** que todos los teléfonos del piloto tengan GMS, la key de
   Maps en el entorno EAS `production` y el fix #109 probado en teléfono.
 

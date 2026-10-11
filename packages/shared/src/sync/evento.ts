@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { uuidV7Schema } from '../primitives.js';
+import { uuidSchema, uuidV7Schema } from '../primitives.js';
 
 /**
  * Tipos de evento que la app móvil produce en el outbox local y sincroniza por lotes
@@ -11,6 +11,7 @@ export const TipoEventoSyncSchema = z.enum([
   'fin_recorrido',
   'cumplimiento_punto_control',
   'observacion',
+  'inicio_jornada',
 ]);
 export type TipoEventoSync = z.infer<typeof TipoEventoSyncSchema>;
 
@@ -101,6 +102,16 @@ export const PayloadCumplimientoPuntoControlSchema = z.object({
   distanciaMinAproximacionM: z.number().nonnegative().optional(),
 });
 export type PayloadCumplimientoPuntoControl = z.infer<typeof PayloadCumplimientoPuntoControlSchema>;
+
+/**
+ * Payload del evento `inicio_jornada` — declaración "hoy trabajo" del conductor, previa a
+ * salir a ruta (release 13). No lleva ubicación y NO cambia `recorridoEstado`: solo marca que
+ * el vehículo inició su día, para que el panel lo distinga de "sin iniciar".
+ */
+export const PayloadInicioJornadaSchema = z.object({
+  sesionId: uuidSchema,
+});
+export type PayloadInicioJornada = z.infer<typeof PayloadInicioJornadaSchema>;
 
 // Solo valida la forma `{ tsFix?: string }` — el resto de las claves del payload (que
 // difieren entre `gps_point` y `cumplimiento_punto_control`) se ignoran (`safeParse` de zod

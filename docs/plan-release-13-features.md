@@ -1,6 +1,6 @@
 # Plan — Release 13: "Empezar día", vecinos de ruta (delante/detrás) y modo navegación (Google, sin Leaflet)
 
-> **Estado:** aprobado por el CTO el 2026-10-10. En curso: PR 0 (docs).
+> **Estado:** aprobado por el CTO el 2026-10-10. PR 0 mergeado (#110). En curso: PR 1+2 (shared + API A, juntos: ver nota en la secuencia) y móvil C1.
 
 > El plan de saneamiento anterior ya vive en `docs/plan-saneamiento.md`. Este archivo pasa a ser el plan de features del release.
 
@@ -164,6 +164,19 @@ apps/mobile/src/
   3. navegación con la tarjeta de vecinos;
   4. sin vecinos.
 - Hay 2 comps HTML en marco de teléfono: A = taste-skill (`redesign-existing-projects`), B = `impeccable`. Se publican como Artifacts y elige el CTO.
+- **Decisión del CTO (2026-10-10): comp A.** Referencia versionada en
+  [`docs/diseno/release-13-comp-a-operacion.html`](diseno/release-13-comp-a-operacion.html).
+  Al implementarlo en RN se toman de A:
+  - la tarjeta de vidrio, la píldora "Día iniciado HH:MM" y COMENZAR RUTA bloqueado con candado
+    en el estado 1;
+  - el panel de vecinos arriba, con chevron, silueta teñida, placa y `#nn`, la distancia en
+    Oxanium y la antigüedad;
+  - la tira compacta con FINALIZAR RUTA en contorno.
+
+  Hay dos ajustes respecto del comp:
+  - en navegación, el próximo control tiene que verse sobre el mapa y no quedar tapado por el
+    panel de vecinos;
+  - la nota "comp:" junto a Recentrar no va en la app.
 - El panel web de jornada va por camino único (`impeccable shape`), con verificación en Playwright y el gate `web-design-guidelines`.
 
 ## Secuencia de PRs (cada uno: Sonnet implementa, el chairman revisa y verifica, gates, CI, merge, handoff)
@@ -171,7 +184,7 @@ apps/mobile/src/
 | # | PR | Gates extra |
 |---|---|---|
 | 0 | docs: este plan en `docs/plan-release-13-features.md` + ADR "motor de mapa: Google, Leaflet retirado" (cierra S2) + puntero en el handoff | solo docs |
-| 1 | shared: `tiempo/jornada.ts` (la API re-exporta), `inicio_jornada` + payload, schemas de vecinos y jornada + tests | `/code-review` |
+| 1 | shared (va junto con el PR 2: agregar `inicio_jornada` al enum sin el worker hace que la API acepte y confirme eventos que nunca persiste): `tiempo/jornada.ts` (la API re-exporta), `inicio_jornada` + payload, schemas de vecinos y jornada + tests | `/code-review` |
 | 2 | API A: rama del worker + chequeo de dispositivo + migración del índice + endpoint de jornadas + tests | `/security-review` |
 | 3 | API B: endpoint de vecinos + caché + tests SQL con fixtures (lineal, circular, sin pares, fix viejo) | `/security-review` |
 | — | **Deploy de la API** (antes de cualquier APK: un worker o controller viejo rechaza el lote entero por el enum de Zod y **traba el outbox**) | CTO confirma el deploy |

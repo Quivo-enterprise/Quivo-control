@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { PayloadGpsPointSchema, resolverTsFix } from './evento.js';
+import {
+  PayloadGpsPointSchema,
+  PayloadInicioJornadaSchema,
+  TipoEventoSyncSchema,
+  resolverTsFix,
+} from './evento.js';
 
 const PAYLOAD_BASE = { sesionId: 'sesion-1', lat: -17.78, lng: -63.18, accuracy: 5, speed: 10 };
 
@@ -22,10 +27,7 @@ describe('resolverTsFix', () => {
 
   it('prefiere el timestamp del fix GPS sobre el de encolado (evidencia RF-67..73)', () => {
     // Caso headless: el SDK entrega en ráfaga al salir de Doze — el fix es de 25 min antes.
-    const ts = resolverTsFix(
-      { ...PAYLOAD_BASE, tsFix: '2026-08-14T12:05:00.000Z' },
-      tsEncolado,
-    );
+    const ts = resolverTsFix({ ...PAYLOAD_BASE, tsFix: '2026-08-14T12:05:00.000Z' }, tsEncolado);
     expect(ts).toBe('2026-08-14T12:05:00.000Z');
   });
 
@@ -35,23 +37,21 @@ describe('resolverTsFix', () => {
 
   it('cae al ts de encolado cuando el `tsFix` es ilegible o no es un string', () => {
     expect(resolverTsFix({ ...PAYLOAD_BASE, tsFix: 'ayer' }, tsEncolado)).toBe(tsEncolado);
-    expect(resolverTsFix({ ...PAYLOAD_BASE, tsFix: 1_760_000_000 }, tsEncolado)).toBe(
-      tsEncolado,
-    );
+    expect(resolverTsFix({ ...PAYLOAD_BASE, tsFix: 1_760_000_000 }, tsEncolado)).toBe(tsEncolado);
     expect(resolverTsFix(null, tsEncolado)).toBe(tsEncolado);
   });
 
   it('ignora un `tsFix` posterior al encolado (reloj del dispositivo corrido)', () => {
     // El fix siempre precede al encolado: un tsFix "del futuro" es dato corrupto.
-    expect(
-      resolverTsFix({ ...PAYLOAD_BASE, tsFix: '2026-08-14T14:00:00.000Z' }, tsEncolado),
-    ).toBe(tsEncolado);
+    expect(resolverTsFix({ ...PAYLOAD_BASE, tsFix: '2026-08-14T14:00:00.000Z' }, tsEncolado)).toBe(
+      tsEncolado,
+    );
   });
 
   it('tolera un adelanto de hasta un minuto (jitter de NTP)', () => {
-    expect(
-      resolverTsFix({ ...PAYLOAD_BASE, tsFix: '2026-08-14T12:30:30.000Z' }, tsEncolado),
-    ).toBe('2026-08-14T12:30:30.000Z');
+    expect(resolverTsFix({ ...PAYLOAD_BASE, tsFix: '2026-08-14T12:30:30.000Z' }, tsEncolado)).toBe(
+      '2026-08-14T12:30:30.000Z',
+    );
   });
 
   it('tolera un atraso de hasta 7 días (buffer headless extendido)', () => {
@@ -85,5 +85,25 @@ describe('resolverTsFix', () => {
       tsFix: '2026-08-14T12:05:00.000Z',
     };
     expect(resolverTsFix(payloadCumplimiento, tsEncolado)).toBe('2026-08-14T12:05:00.000Z');
+  });
+});
+
+describe('PayloadInicioJornadaSchema', () => {
+  const SESION_ID = '0b7e3c1a-2f4d-4c8e-9a51-6d2f1e8b7c34';
+
+  it('acepta un payload con sesionId uuid', () => {
+    expect(PayloadInicioJornadaSchema.safeParse({ sesionId: SESION_ID }).success).toBe(true);
+  });
+
+  it('rechaza un payload sin sesionId', () => {
+    expect(PayloadInicioJornadaSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('rechaza un sesionId que no es uuid', () => {
+    expect(PayloadInicioJornadaSchema.safeParse({ sesionId: 'sesion-1' }).success).toBe(false);
+  });
+
+  it('el enum de tipos de evento acepta inicio_jornada', () => {
+    expect(TipoEventoSyncSchema.safeParse('inicio_jornada').success).toBe(true);
   });
 });

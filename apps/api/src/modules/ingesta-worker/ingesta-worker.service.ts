@@ -11,22 +11,20 @@ import type { Prisma as PrismaTypes } from '@quivo/db';
 import { Queue, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import {
+  PayloadInicioJornadaSchema,
+  fechaActualBolivia,
   resolverTsFix,
   type EventoSync,
   type PayloadGpsPoint,
   type PayloadCumplimientoPuntoControl,
 } from '@quivo/shared';
+import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
 import { COLA_INGESTA_SYNC, type LoteIngestaJob } from '../sync/sync-queue.service.js';
 
 const NOMBRE_COLA_PARTICIONES = 'mantenimiento-particiones-gps';
 const NOMBRE_JOB_PARTICIONES = 'crear-particiones-futuras';
 const CADA_MS_PARTICIONES = 24 * 60 * 60 * 1000; // diario alcanza — se crean con varios días de margen
 const DIAS_ANTICIPACION_PARTICION = 5;
-// RF-58..66 (doc técnico §12 riesgo de drift de reloj de dispositivo): sin una cifra fija
-// del doc técnico, 5 minutos es una asunción razonable de este equipo — más que el drift
-// típico de un reloj de teléfono sin sincronizar, lo bastante chico para detectar un caso
-// real (dispositivo con la hora mal puesta a mano, etc.).
-const DRIFT_ALERTA_MS = 5 * 60 * 1000;
 
 const CONTEXTO_ADMIN = { rol: 'admin_quivo', sindicatoId: null } as const;
 
@@ -179,6 +177,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       ...porTipo.inicio_recorrido,
       ...porTipo.fin_recorrido,
       ...porTipo.observacion,
+      ...porTipo.inicio_jornada,
     ];
     for (const evento of operativos) {
       errores += await this.procesarEventoOperativo(sindicatoId, evento);
@@ -312,6 +311,7 @@ export interface EventosPorTipo {
   inicio_recorrido: EventoSync[];
   fin_recorrido: EventoSync[];
   observacion: EventoSync[];
+  inicio_jornada: EventoSync[];
 }
 
 export function agruparPorTipo(eventos: EventoSync[]): EventosPorTipo {
@@ -321,6 +321,7 @@ export function agruparPorTipo(eventos: EventoSync[]): EventosPorTipo {
     inicio_recorrido: [],
     fin_recorrido: [],
     observacion: [],
+    inicio_jornada: [],
   };
   for (const evento of eventos) {
     grupos[evento.tipo].push(evento);
@@ -570,6 +571,50 @@ const RECORRIDO_ESTADO_POR_TIPO: Partial<Record<EventoSync['tipo'], 'en_curso' |
 };
 
 /**
+ * Release 13 — `inicio_jornada` declara "hoy trabajo" para un vehículo, así que `sesionId`
+ * tiene que ser una sesión de ESTE dispositivo y de ESTE sindicato: `evento.deviceId` y
+ * `sindicatoId` son los AUTENTICADOS (ver el comentario del UPDATE de `recorridoEstado` en
+ * `insertarEventoOperativoEnTx`), a diferencia de `payload.sesionId`, que controla el
+ * dispositivo. Si no coincide (o la sesión no existe) se lanza: el llamador
+ * (`procesarEventoOperativo`) lo registra en `sync_errors` y NO se inserta nada.
+ *
+ * Por ahora solo se aplica a `inicio_jornada` para no cambiar el comportamiento de los
+ * demás eventos. La misma brecha existe en el resto de los tipos operativos y en gps
+ * (`sesionId` del payload sin cruzar contra `deviceId`) — pendiente, saneamiento Fase 2.
+ */
+async function validarSesionDelDispositivo(
+  tx: Tx,
+  sindicatoId: string,
+  evento: EventoSync,
+): Promise<void> {
+  const parsed = PayloadInicioJornadaSchema.safeParse(evento.payload);
+  if (!parsed.success) {
+    throw new Error(`Evento ${evento.eventId} (inicio_jornada) con payload inválido`);
+  }
+  const sesion = await tx.sesionOperativa.findFirst({
+    where: { id: parsed.data.sesionId, sindicatoId, deviceId: evento.deviceId },
+    select: { id: true, asignacion: { select: { fecha: true } } },
+  });
+  if (!sesion) {
+    throw new Error(
+      `Evento ${evento.eventId} (inicio_jornada): la sesión ${parsed.data.sesionId} no existe ` +
+        `o no pertenece al dispositivo ${evento.deviceId} de este sindicato`,
+    );
+  }
+  // La declaración "hoy trabajo" tiene que corresponder al día de la asignación de la
+  // sesión (jornada boliviana del `ts` del evento). NO se exige que la sesión siga activa:
+  // los eventos del outbox offline llegan legítimamente después del logout.
+  const diaEvento = fechaActualBolivia(new Date(evento.ts));
+  if (sesion.asignacion.fecha.getTime() !== diaEvento.getTime()) {
+    throw new Error(
+      `Evento ${evento.eventId} (inicio_jornada): el día del evento ` +
+        `(${diaEvento.toISOString().slice(0, 10)}) no coincide con la fecha de la asignación ` +
+        `de la sesión (${sesion.asignacion.fecha.toISOString().slice(0, 10)})`,
+    );
+  }
+}
+
+/**
  * `insertarEventoOperativoEnTx` devuelve esto en vez de loguear ella misma (es una función
  * standalone, sin `this.logger` — mismo patrón que `tsFixDescartado` en
  * `insertarGpsPoints`/`procesarCumplimientoEnTx`: la función de negocio señaliza, el método
@@ -593,6 +638,9 @@ export async function insertarEventoOperativoEnTx(
   const payload = evento.payload as unknown as { sesionId: string };
   if (!payload.sesionId) {
     throw new Error(`Evento ${evento.eventId} sin sesionId en el payload`);
+  }
+  if (evento.tipo === 'inicio_jornada') {
+    await validarSesionDelDispositivo(tx, sindicatoId, evento);
   }
   const insertado = await tx.eventoOperativo.createMany({
     data: [
