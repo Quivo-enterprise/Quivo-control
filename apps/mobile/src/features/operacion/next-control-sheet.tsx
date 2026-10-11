@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Linking,
   PanResponder,
-  Pressable,
   StyleSheet,
   Text,
   View,
@@ -13,8 +13,10 @@ import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button } from '../../shared/components/Button';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { quivoColors, quivoFonts, quivoRadius } from '../../shared/theme/quivo-theme';
 import { formatearDistancia } from './format-distancia';
+import type { FaseControl } from '../jornada/fase-control';
+import { subtituloJornada } from '../jornada/jornada-store-core';
 
 const NUMERO_EMERGENCIAS = '911';
 
@@ -32,7 +34,20 @@ export const MARGEN_INFERIOR_SHEET = 12;
 // que `operation-screen.tsx` no tenga que seguir calculándolas solo para pasarlas sin efecto.
 export interface NextControlSheetProps {
   contexto: ContextoOperativoMovil;
-  tracking: boolean;
+  /** Fase del control principal: EMPEZAR DÍA → COMENZAR RUTA → FINALIZAR RUTA. */
+  fase: FaseControl;
+  /** Declara el día (`inicio_jornada`). No depende de GPS ni de `canStart`; nunca rechaza. */
+  onEmpezarDia: () => Promise<void>;
+  /** `true` mientras `onEmpezarDia` está en curso (spinner y botón bloqueado). */
+  empezandoDia?: boolean;
+  /** Error del último intento de empezar el día; se muestra junto al botón. */
+  errorEmpezarDia?: string | null;
+  /** `false` si la asignación no es la de hoy (vencida) o aún carga: el servidor rechazaría la
+   * declaración, así que EMPEZAR DÍA se deshabilita. */
+  puedeEmpezarDia?: boolean;
+  /** `true` mientras se lee el almacenamiento local de la jornada: la zona de acción muestra un
+   * placeholder neutro en vez de destellar EMPEZAR DÍA y luego COMENZAR RUTA. */
+  jornadaCargando?: boolean;
   nextPointOrder: number | null;
   totalPoints: number;
   distanciaMetros: number | null;
@@ -52,6 +67,11 @@ export function NextControlSheet(props: NextControlSheetProps) {
   const { panY } = props;
   const [minimized, setMinimized] = useState(false);
   const [confirmarEmergencia, setConfirmarEmergencia] = useState(false);
+  const { fase, onEmpezarDia, empezandoDia = false, puedeEmpezarDia = true } = props;
+  const tracking = fase === 'recorrido';
+  // Con `tracking` la fase 'recorrido' manda de inmediato; si no, mientras se lee la jornada
+  // no se sabe aún si toca EMPEZAR DÍA o COMENZAR RUTA.
+  const cargandoJornada = Boolean(props.jornadaCargando) && !tracking;
   const snapOffset = SNAP_OFFSET_SHEET;
   const { colapsado, onAlto } = props;
 
@@ -139,31 +159,87 @@ export function NextControlSheet(props: NextControlSheetProps) {
         <View style={styles.dragHandle} />
       </View>
 
-      {/* Header Row: Title + Distance on left, Control Number on right */}
-      <View style={styles.headerRow}>
-        <View style={styles.headerLeft}>
-          <Text style={styles.title}>Próximo Control</Text>
-          <Text style={styles.subtitle}>Se encuentra a {distanceText}</Text>
+      {fase === 'jornada' && !cargandoJornada ? (
+        <View style={styles.headerRow}>
+          <View style={styles.jornadaIcono}>
+            <Ionicons name="sunny-outline" size={22} color={quivoColors.warningText} />
+          </View>
+          <View style={styles.headerLeft}>
+            <Text style={styles.title}>Día sin iniciar</Text>
+            <Text style={styles.subtitle}>
+              {subtituloJornada(props.contexto.linea.codigo, props.totalPoints)}
+            </Text>
+          </View>
+        </View>
+      ) : (
+        <>
+        {/* Header Row: Title + Distance on left, Control Number on right */}
+        <View style={styles.headerRow}>
+          <View style={styles.headerLeft}>
+            <Text style={styles.title}>Próximo Control</Text>
+            <Text style={styles.subtitle}>Se encuentra a {distanceText}</Text>
+          </View>
+
+          <Text style={styles.controlNumber}>#{currentControlNumber}</Text>
         </View>
 
-        <Text style={styles.controlNumber}>#{currentControlNumber}</Text>
-      </View>
-
-      {/* Puntos restantes Stepper */}
-      <View style={styles.stepperSection}>
-        <Text style={styles.puntosLabel}>Puntos restantes</Text>
-        <MiniStepper
-          currentOrder={currentControlNumber}
-          totalPoints={props.totalPoints || 6}
-          tracking={props.tracking}
-        />
-      </View>
+        {/* Puntos restantes Stepper */}
+        <View style={styles.stepperSection}>
+          <Text style={styles.puntosLabel}>Puntos restantes</Text>
+          <MiniStepper
+            currentOrder={currentControlNumber}
+            totalPoints={props.totalPoints || 6}
+            tracking={tracking}
+          />
+        </View>
+        </>
+      )}
 
       {props.gpsError && <Text style={styles.error}>{props.gpsError}</Text>}
 
       {/* Action Button Row */}
       <View style={styles.actionsRow}>
-        {!props.tracking ? (
+        {cargandoJornada ? (
+          <View style={styles.cargandoJornada}>
+            <ActivityIndicator color={quivoColors.white} size="small" />
+          </View>
+        ) : fase === 'jornada' ? (
+          <>
+            <Button
+              variant="accent"
+              loading={empezandoDia}
+              disabled={!puedeEmpezarDia || empezandoDia}
+              onPress={() => void onEmpezarDia()}
+              style={styles.empezarButton}
+              textStyle={styles.empezarButtonText}
+              leftIcon={<Ionicons name="sunny" size={22} color={quivoColors.text} />}
+              accessibilityHint="Avisa a tu delegado que hoy trabajas"
+              fullWidth
+            >
+              EMPEZAR DÍA
+            </Button>
+            {props.errorEmpezarDia ? (
+              <Text accessibilityRole="alert" style={styles.error}>
+                {props.errorEmpezarDia}
+              </Text>
+            ) : null}
+            <View style={styles.hintRow}>
+              <Ionicons name="notifications-outline" size={16} color="#FFD28A" />
+              <Text style={styles.hintText}>Avisa a tu delegado que hoy trabajas</Text>
+            </View>
+            <Button
+              variant="ghost"
+              disabled
+              style={styles.lockedButton}
+              textStyle={styles.lockedButtonText}
+              leftIcon={<Ionicons name="lock-closed" size={18} color="rgba(255, 255, 255, 0.82)" />}
+              accessibilityHint="Disponible después de empezar el día"
+              fullWidth
+            >
+              COMENZAR RUTA
+            </Button>
+          </>
+        ) : fase === 'listo' ? (
           <Button
             variant="secondary"
             disabled={!props.canStart}
@@ -176,10 +252,11 @@ export function NextControlSheet(props: NextControlSheetProps) {
           </Button>
         ) : (
           <Button
-            variant="danger"
+            variant="ghost"
             onPress={props.onFinish}
             style={styles.finishButton}
             textStyle={styles.finishButtonText}
+            leftIcon={<Ionicons name="stop-circle-outline" size={20} color={quivoColors.white} />}
             fullWidth
           >
             FINALIZAR RUTA
@@ -342,21 +419,74 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   finishButton: {
-    backgroundColor: '#E50914',
-    borderColor: '#E50914',
+    backgroundColor: 'transparent',
+    borderColor: 'rgba(255, 255, 255, 0.6)',
+    borderWidth: 2,
     borderRadius: quivoRadius.pill,
     height: 46,
-    shadowColor: '#7A0000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
-    elevation: 4,
   },
   finishButtonText: {
     color: quivoColors.white,
     fontFamily: quivoFonts.displayBold,
     fontSize: 14.5,
     letterSpacing: 0.8,
+  },
+  jornadaIcono: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: quivoColors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  empezarButton: {
+    backgroundColor: quivoColors.accent,
+    borderColor: quivoColors.accent,
+    borderRadius: quivoRadius.pill,
+    height: 56,
+    shadowColor: quivoColors.accentStrong,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  empezarButtonText: {
+    color: quivoColors.text,
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 17,
+    letterSpacing: 1,
+  },
+  hintRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginVertical: 10,
+  },
+  hintText: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontFamily: quivoFonts.bodyMedium,
+    fontSize: 13,
+  },
+  lockedButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+    borderStyle: 'dashed',
+    borderWidth: 1.5,
+    borderRadius: quivoRadius.pill,
+    height: 48,
+  },
+  lockedButtonText: {
+    color: 'rgba(255, 255, 255, 0.82)',
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 14.5,
+    letterSpacing: 0.8,
+  },
+  cargandoJornada: {
+    height: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   error: {
     color: '#FFB4B4',
