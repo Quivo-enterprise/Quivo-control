@@ -1,5 +1,10 @@
 import type { StyleProp, ViewStyle } from 'react-native';
 import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
+import type { EstadoCamara } from './modo-camara';
+
+/** Medidas (dp) de lo que tapa el mapa en navegación: borde inferior de la tarjeta superior y
+ * alto que ocupa el sheet colapsado desde abajo (ver `paddingNavegacion`). */
+export type InsetsNavegacion = { superior: number; inferior: number };
 
 /**
  * Props de `RouteMap` (`route-map.tsx`), el mapa de la ruta activa. Motor único: Google nativo
@@ -11,7 +16,16 @@ export interface RouteMapProps {
   proximoPuntoControlId: string | null;
   posicionActual: { lat: number; lng: number } | null;
   tracking: boolean;
-  recenterTick: number;
+  /** Modo de cámara y su acción puntual (`modo-camara.ts`). El mapa ejecuta la acción cuando
+   * cambia `camara.seq`; el modo decide si el marcador mueve la cámara cuadro a cuadro. */
+  camara: EstadoCamara;
+  /** Un gesto del usuario sobre el mapa (solo lo dispara el usuario, nunca la cámara propia):
+   * saca de navegación a libre. */
+  onPanUsuario: () => void;
+  /** Medidas (dp) de lo que tapa el mapa en navegación, para dejar el vehículo en el tercio
+   * inferior de la banda visible (`paddingNavegacion`): borde inferior de la tarjeta superior y
+   * alto que ocupa el sheet colapsado desde abajo. */
+  insetsNavegacion: InsetsNavegacion;
   /** Ruta real siguiendo calles (OSRM), o `null` si no hay ninguna calculada aún o falló */
   rutaCalculada: [number, number][] | null;
   style?: StyleProp<ViewStyle>;
