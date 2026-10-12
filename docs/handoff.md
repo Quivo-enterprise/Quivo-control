@@ -6,7 +6,15 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-11, noche (leer primero): prueba de campo del APK r13
+## Punto de retome — 2026-10-12 (leer primero): /en-vivo — zoom, latencia y Google Maps
+
+El CTO vio /en-vivo desde el teléfono manejando: la web iba atrasada, el zoom se perdía en cada
+actualización y pidió Google Maps (el panel usa **MapLibre**, no Leaflet). Plan aprobado:
+[`docs/plan-en-vivo-google.md`](plan-en-vivo-google.md) — PR 1 zoom (`fitMode` caía en `'auto'`),
+PR 2 latencia (poll 2 s web + piso de drenado 3 s móvil, APK 15), PR 3 motor Google + /en-vivo,
+PR 4..N resto del panel y borrar MapLibre. **Estado: en curso.**
+
+## Punto de retome — 2026-10-11, noche (anterior): prueba de campo del APK r13
 
 El CTO probó el APK r13 en calle. Hallazgos, causas raíz y plan:
 [`docs/plan-prueba-campo-r13.md`](plan-prueba-campo-r13.md). **Estado: los 4 PRs del plan están en `main`**
