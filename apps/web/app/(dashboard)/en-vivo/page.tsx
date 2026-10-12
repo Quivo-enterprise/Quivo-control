@@ -20,6 +20,7 @@ import {
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import {
   useContextoEnVivo,
+  INTERVALO_POLL_POSICIONES_MS,
   usePosicionesEnVivo,
   useRecargarTraza,
   useTrazaEnVivo,
@@ -27,7 +28,6 @@ import {
 import {
   antiguedadViva,
   formatearAntiguedad,
-  INTERVALO_POLL_MS,
   intervaloPoll,
   presentacionFrescura,
 } from '../../../src/lib/en-vivo/traza';
@@ -43,10 +43,8 @@ import {
   ultimaPasada,
 } from './map-builders';
 import { PanelJornada } from './panel-jornada';
+import { conPuntoVivo } from '../../../src/lib/en-vivo/punto-vivo';
 import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
-
-/** Tope de la animación del vehículo seleccionado: alcanza el punto más nuevo en ~1 s. */
-const DURACION_MAX_ANIMACION_MS = 1_000;
 
 export default function EnVivoPage() {
   const { token } = useAuth();
@@ -154,23 +152,31 @@ export default function EnVivoPage() {
   // que ya tienen. `markerId = idMarcadorVehiculo(sesionSeleccionada)` (Entrega 14): con TODOS
   // los vehículos dibujados a la vez, el id ya no puede ser una constante única — tiene que
   // apuntar exactamente al marker de esta sesión entre los N que trae `vehiculos`.
-  const intervaloVigente = intervaloPoll(datos);
+  // Puntos animados = traza (poll de 10 s) + el último fix de `/posiciones` (poll de 2 s) si
+  // es más nuevo que el último punto de la traza (ver `conPuntoVivo`). Dependencias por
+  // valor primitivo: `posicionSeleccionada` cambia de identidad en cada poll aunque el fix
+  // sea el mismo.
+  const vivoLat = posicionSeleccionada?.lat ?? null;
+  const vivoLng = posicionSeleccionada?.lng ?? null;
+  const vivoTs = posicionSeleccionada?.ultimoFixTs ?? null;
+  const puntosAnimados = useMemo(
+    () =>
+      datos ? conPuntoVivo(datos.puntos, { lat: vivoLat, lng: vivoLng, ultimoFixTs: vivoTs }) : [],
+    [datos, vivoLat, vivoLng, vivoTs],
+  );
   const animatedVehicle = useMemo(
     () =>
       datos && sesionSeleccionada
         ? {
             markerId: idMarcadorVehiculo(sesionSeleccionada),
             resetKey: sesionSeleccionada,
-            points: datos.puntos,
-            // Alcanza el punto más nuevo en ~1 s como máximo: repartir todo el intervalo de
-            // poll sumaba ese mismo lag a la posición mostrada.
-            intervalMs: Math.min(
-              DURACION_MAX_ANIMACION_MS,
-              intervaloVigente === false ? INTERVALO_POLL_MS : intervaloVigente,
-            ),
+            points: puntosAnimados,
+            // Cadencia real a la que llegan puntos nuevos (poll de `/posiciones`): repartir
+            // la animación en ese lapso evita mover-y-quedarse-quieto.
+            intervalMs: INTERVALO_POLL_POSICIONES_MS,
           }
         : null,
-    [datos, sesionSeleccionada, intervaloVigente],
+    [datos, sesionSeleccionada, puntosAnimados],
   );
 
   const handleManualRefresh = async () => {

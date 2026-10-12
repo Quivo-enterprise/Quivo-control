@@ -48,14 +48,17 @@ export function useSesionesEnVivo(token: string | null) {
   });
 }
 
+/** Cadencia del poll de `/posiciones`; también es la duración de la animación del vehículo seleccionado. */
+export const INTERVALO_POLL_POSICIONES_MS = 2_000;
+
 /**
  * ENTREGA 13 — última posición de TODOS los vehículos con sesión activa/reciente
  * (`GET /reportes/en-vivo/posiciones`, sin `sesionId`). Reemplaza a `useSesionesEnVivo` como
  * fuente del mapa: gobierna qué se dibuja, no un `<select>` de una sola sesión.
  *
- * `refetchInterval: 2_000` (bajado de 5 s para recortar la latencia web vs. teléfono, PR 2
- * de `docs/plan-en-vivo-google.md`; igual que el poll de traza por sesión): acá el costo NO
- * escala con N — siempre es una query — así que se puede pollear rápido sin acercarse al
+ * `refetchInterval: INTERVALO_POLL_POSICIONES_MS` (2 s; bajado de 5 s para recortar la latencia
+ * web vs. teléfono, PR 2 de `docs/plan-en-vivo-google.md`; la traza por sesión sigue a 10 s):
+ * acá el costo NO escala con N — siempre es una query — así que se puede pollear rápido sin acercarse al
  * throttle (600 req/min por usuario en `en-vivo.controller.ts`, y esto es ~30 req/min por
  * pestaña). `refetchIntervalInBackground: false` (mismo criterio que el
  * resto de los hooks de esta pantalla): con la pestaña oculta no tiene sentido seguir
@@ -66,7 +69,7 @@ export function usePosicionesEnVivo(token: string | null) {
     queryKey: ['en-vivo', 'posiciones-todas'],
     enabled: Boolean(token),
     queryFn: () => enVivoApi.posicionesTodas(token as string),
-    refetchInterval: 2_000,
+    refetchInterval: INTERVALO_POLL_POSICIONES_MS,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: REINTENTOS,

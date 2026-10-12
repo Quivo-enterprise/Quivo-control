@@ -4,11 +4,14 @@ import { ThrottlerStorageService, type ThrottlerStorage } from '@nestjs/throttle
 import { afterEach, describe, expect, it } from 'vitest';
 import { EnVivoUsuarioThrottlerGuard } from './en-vivo-usuario-throttler.guard.js';
 
-function createContext(req: unknown): ExecutionContext {
+function createContext(
+  req: unknown,
+  handler: () => void = function posicionesHandler() {},
+): ExecutionContext {
   const res = { header: () => undefined };
   return {
     switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
-    getHandler: () => function posicionesHandler() {},
+    getHandler: () => handler,
     getClass: () => class EnVivoControllerStub {},
   } as unknown as ExecutionContext;
 }
@@ -59,5 +62,21 @@ describe('EnVivoUsuarioThrottlerGuard — canActivate real', () => {
       await guard.canActivate(createContext(reqA));
     }
     await expect(guard.canActivate(createContext(reqB))).resolves.toBe(true);
+  });
+
+  it('comparte el mismo cupo de 600 entre handlers distintos del controller', async () => {
+    const guard = new EnVivoUsuarioThrottlerGuard(storageService, reflector);
+    await guard.onModuleInit();
+    const req = { ip: '190.1.1.1', user: user('u-1') };
+    const traza = function trazaHandler() {};
+    const contexto = function contextoHandler() {};
+    for (let i = 0; i < 300; i += 1) {
+      await guard.canActivate(createContext(req, traza));
+      await guard.canActivate(createContext(req, contexto));
+    }
+    await expect(guard.canActivate(createContext(req))).rejects.toMatchObject({ status: 429 });
+    await expect(guard.canActivate(createContext(req, traza))).rejects.toMatchObject({
+      status: 429,
+    });
   });
 });

@@ -284,4 +284,21 @@ describe('intentarDrenarOportunista — hallazgo 4a (lease ANTES del access toke
       expect(liberarLeaseConCooldownMock).not.toHaveBeenCalled();
     });
   });
+
+  it('backoff de fallo: arranca en 10 s (no en el piso de 3 s) y duplica 10 → 20 → 40 → 60', async () => {
+    obtenerLotePendienteMock.mockResolvedValue(loteDe(1, 'f'));
+    enviarLoteMock.mockRejectedValue(new Error('sin red'));
+    const cooldowns: number[] = [];
+    const base = Date.now();
+    // Avanza el reloj >3 s entre intentos para pasar el throttle de entrada sin resetear el backoff.
+    const nowSpy = vi.spyOn(Date, 'now');
+    for (let i = 0; i < 5; i += 1) {
+      nowSpy.mockReturnValue(base + (i + 1) * 120_000);
+      liberarLeaseConCooldownMock.mockClear();
+      await intentarDrenarOportunista(vi.fn().mockResolvedValue('access-token'));
+      cooldowns.push(liberarLeaseConCooldownMock.mock.calls[0]?.[4] as number);
+    }
+    nowSpy.mockRestore();
+    expect(cooldowns).toEqual([10_000, 20_000, 40_000, 60_000, 60_000]);
+  });
 });

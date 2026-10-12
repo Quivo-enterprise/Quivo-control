@@ -19,7 +19,7 @@
 // traza GPS completa (esa vive en la fuente `quivo-routes`, separada, y NO se toca acá).
 //
 // **Duración de la animación:** no hay un valor fijo arbitrario. Los puntos GPS llegan en
-// lotes irregulares (el poll de `/en-vivo` es cada `INTERVALO_POLL_MS` = 10 s, o
+// lotes irregulares (el poll de traza de `/en-vivo` es cada `INTERVALO_POLL_MS` = 10 s, el de posiciones cada 2 s, o
 // `INTERVALO_POLL_RAPIDO_MS` = 1 s mientras el server avisa `hayMas`), así que el criterio es
 // repartir el intervalo de poll VIGENTE entre los puntos nuevos de ESE lote
 // (`intervalMs / puntos.length`, ver `encolarNuevosPuntos`): el marcador termina de recorrer
@@ -31,9 +31,10 @@
 // `SOLAPE_CURSOR_MS`/huecos por Doze en `traza.ts`), y animar a esa escala se vería
 // carísimo o directamente pausado la mayor parte del tiempo.
 //
-// **Nota (PR 2 de `docs/plan-en-vivo-google.md`):** el llamador de `/en-vivo` ya no pasa el
-// intervalo de poll completo sino `min(1000, intervalo)`: repartir 10 s dejaba el marcador
-// ~10 s detrás del punto más nuevo. Esta función sigue siendo agnóstica: reparte lo que reciba.
+// **Nota (PR 2 de `docs/plan-en-vivo-google.md`):** el llamador de `/en-vivo` pasa el intervalo
+// real del poll de `/posiciones` (2 s) y agrega a la traza el último fix de ese poll, así que
+// los lotes nuevos llegan cada ~2 s y la animación los reparte en ese mismo lapso. Esta
+// función es agnóstica: reparte lo que reciba.
 
 /** Punto de la traza con lo mínimo que necesita la animación. `PuntoTrazaGps` de
  * `@quivo/shared` (con `accuracy`/`speed` de más) es asignable acá sin problema — es

@@ -46,10 +46,11 @@ import { drenarLotesConLease } from './sync-outbox';
 // entre intentos exitosos (GPS a alta frecuencia no debe disparar un POST por fix) y 60 s de
 // TTL del lease (OkHttp en Android con la Activity pausada puede no respetar timeout propio).
 
-/** Backoff tras un fallo de transporte — arranca en el mismo piso y crece exponencial hasta
- * este techo, igual que el motor de sync en primer plano (`sync-outbox.ts`,
- * `BACKOFF_INICIAL_MS`/`BACKOFF_MAXIMO_MS`) para no machacar la red mientras el problema (sin
- * cobertura, 5xx, timeout) persiste. */
+/** Backoff tras un fallo de transporte — arranca en `BACKOFF_INICIAL_FALLO_MS` (10 s, SEPARADO
+ * del piso de éxito de 3 s: bajar el piso no debe acortar el primer reintento tras un fallo) y
+ * crece exponencial (10 → 20 → 40 → 60) hasta este techo, para no machacar la red mientras el
+ * problema (sin cobertura, 5xx, timeout) persiste. */
+const BACKOFF_INICIAL_FALLO_MS = 10_000;
 const BACKOFF_MAXIMO_MS = 60_000;
 
 /**
@@ -65,9 +66,9 @@ const UMBRAL_RECUPERACION_ENVIADOS_MS = 90_000;
  * correctitud (eso lo da el lease, que SÍ cruza contextos): es solo una optimización para que
  * reintentos sucesivos dentro del MISMO contexto JS no ataquen la red apenas vence el piso fijo
  * de 3 s tras una racha de fallos. Si el contexto JS se recicla (headless ↔ foreground), este
- * valor se resetea a `PISO_ENTRE_INTENTOS_MS` — peor caso, se reintenta un poco antes de lo
+ * valor se resetea a `BACKOFF_INICIAL_FALLO_MS` — peor caso, se reintenta un poco antes de lo
  * ideal, nunca se rompe el mutex. */
-let backoffActualMs = PISO_ENTRE_INTENTOS_MS;
+let backoffActualMs = BACKOFF_INICIAL_FALLO_MS;
 
 /**
  * Punto 8 (code review 2026-09-25): throttle en memoria a nivel de MÓDULO, chequeado ANTES de
@@ -91,6 +92,7 @@ let ultimoIntentoDrenajeMs = 0;
  * producción — el throttle debe persistir mientras el proceso viva. */
 export function reiniciarThrottleDrenajeOportunistaParaTests(): void {
   ultimoIntentoDrenajeMs = 0;
+  backoffActualMs = BACKOFF_INICIAL_FALLO_MS;
 }
 
 function generarTokenLease(): string {
@@ -231,7 +233,7 @@ export async function intentarDrenarOportunista(
       const { motivo } = await drenarLotesConLease(db, accessToken, token);
       // Éxito (sin excepción, sea cual sea `motivo`): resetea el backoff en memoria — ver su
       // comentario.
-      backoffActualMs = PISO_ENTRE_INTENTOS_MS;
+      backoffActualMs = BACKOFF_INICIAL_FALLO_MS;
       if (motivo === 'lease-perdido') {
         // R1 (ver `renovarLease`, `db/outbox.ts`): ya no somos el dueño de esta fila — otro
         // contexto la tomó entre lotes. NO liberar: liberar acá pisaría el lease legítimo del

@@ -1,4 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { Inject, Injectable, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { InjectThrottlerStorage, ThrottlerGuard, type ThrottlerStorage } from '@nestjs/throttler';
 import type { FastifyRequest } from 'fastify';
@@ -16,8 +17,13 @@ type RequestConUsuario = FastifyRequest & { user?: AuthenticatedUser };
  *
  * Orden de guards: el `ThrottlerGuard` global (`APP_GUARD`) corre SIEMPRE antes que los guards
  * de clase/ruta, o sea ANTES de `JwtAuthGuard`; por eso el controller lleva `@SkipThrottle()`
- * (apaga el nombre 'default' global) y este guard, con nombre propio 'usuario', va DESPUÉS de
- * `JwtAuthGuard` en el `@UseGuards(...)`. Mismo patrón que `SyncDeviceThrottlerGuard`.
+ * (limita 'default' global a un tope holgado por IP, pre-auth) y este guard, con nombre propio
+ * 'usuario', va DESPUÉS de `JwtAuthGuard` y ANTES de `RolesGuard` en el `@UseGuards(...)` (así
+ * también se cuentan usuarios autenticados con rol equivocado). Mismo patrón que
+ * `SyncDeviceThrottlerGuard`.
+ *
+ * Fuente única del límite: 600/60 s vive SOLO en el constructor de abajo; el controller NO
+ * lleva `@Throttle({ usuario })` (un decorator ganaría sobre el constructor y duplicaría el valor).
  *
  * Seguridad de la key: `req.user` solo lo setea `JwtAuthGuard` tras verificar la firma del
  * JWT; nunca se deriva de un header o parámetro crudo del cliente. Si por algún motivo no hay
@@ -37,5 +43,13 @@ export class EnVivoUsuarioThrottlerGuard extends ThrottlerGuard {
 
   protected async getTracker(req: RequestConUsuario): Promise<string> {
     return req.user?.userId ?? req.ip;
+  }
+
+  /**
+   * La key base incluye clase+handler, o sea un contador por handler (4 handlers = 4×600).
+   * Acá el cupo es por usuario en TODO el controller: la key no depende del handler.
+   */
+  protected generateKey(_context: ExecutionContext, tracker: string, name: string): string {
+    return createHash('sha256').update(`en-vivo-usuario-${name}-${tracker}`).digest('hex');
   }
 }
