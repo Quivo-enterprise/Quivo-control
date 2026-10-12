@@ -53,7 +53,8 @@ const LIMITE_MITRA = 2;
  * acotada a `LIMITE_MITRA × offsetPx` para que en giros muy cerrados no salte una espiga. En una
  * reversión exacta (la bisectriz no existe) se usa la normal del segmento anterior. Los puntos
  * consecutivos repetidos (vehículo detenido) heredan la normal del segmento no degenerado más
- * cercano, de modo que toda la racha se desplaza igual y no quedan muescas sobre el eje.
+ * cercano, de modo que toda la racha se desplaza igual y no quedan muescas sobre el eje; ese
+ * vecino se precalcula en dos pasadas, así que el costo es lineal aun con rachas muy largas.
  * Devuelve un punto por cada punto de entrada.
  */
 export function desplazarCamino(
@@ -73,27 +74,25 @@ export function desplazarCamino(
     const largo = Math.hypot(dx, dy);
     return largo === 0 ? null : { x: -dy / largo, y: dx / largo };
   });
-  /** Normal del segmento válido más cercano hacia atrás (índice < i), si existe. */
-  const normalPrevia = (i: number) => {
-    for (let j = i - 1; j >= 0; j--) {
-      const n = normales[j];
-      if (n) return n;
-    }
-    return null;
-  };
-  /** Normal del segmento válido más cercano hacia delante (índice >= i), si existe. */
-  const normalSiguiente = (i: number) => {
-    for (let j = i; j < normales.length; j++) {
-      const n = normales[j];
-      if (n) return n;
-    }
-    return null;
-  };
+  // Normal válida más cercana hacia atrás (índice < i) y hacia delante (índice >= i) de cada
+  // vértice, en una pasada cada una: una racha larga de duplicados no se re-escanea por punto.
+  const previaValida: Array<{ x: number; y: number } | null> = new Array(mundo.length).fill(null);
+  let ultima: { x: number; y: number } | null = null;
+  for (let i = 0; i < mundo.length; i++) {
+    previaValida[i] = ultima;
+    ultima = normales[i] ?? ultima;
+  }
+  const siguienteValida: Array<{ x: number; y: number } | null> = new Array(mundo.length).fill(null);
+  let proxima: { x: number; y: number } | null = null;
+  for (let i = mundo.length - 1; i >= 0; i--) {
+    proxima = normales[i] ?? proxima;
+    siguienteValida[i] = proxima;
+  }
   return camino.map((original, i) => {
     const p = mundo[i];
     if (!p) return original;
-    const previa = normalPrevia(i);
-    const siguiente = normalSiguiente(i);
+    const previa = previaValida[i] ?? null;
+    const siguiente = siguienteValida[i] ?? null;
     const primera = previa ?? siguiente;
     const segunda = siguiente ?? previa;
     if (!primera || !segunda) return original; // todo el camino es un único punto
