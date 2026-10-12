@@ -304,6 +304,9 @@ export default function RecorridoDetallePage() {
               routes={construirRutas(detalle)}
               markers={construirMarcadores(detalle)}
               height="480px"
+              engine="google"
+              googleMapsApiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}
+              googleMapsMapId={process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID}
             />
           </div>
 

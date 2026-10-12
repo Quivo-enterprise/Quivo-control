@@ -26,7 +26,8 @@
 // editor de rutas, que migra último):
 // - `MapPoint.draggable` / `MapPoint.onDragEnd`: no hay arrastre de marcadores.
 // - `MapRoute.label` se muestra como etiqueta HTML en el punto medio de la ruta (no sigue la
-//   curvatura de la línea como el texto de MapLibre) y no hay `line-offset` entre rutas paralelas.
+//   curvatura de la línea como el texto de MapLibre). El `line-offset` entre rutas paralelas SÍ se
+//   emula (`desplazarCamino`, se recalcula en cada cambio de zoom para mantener los mismos px).
 // - `pinType: 'pulse'` se dibuja como nodo estático (sin el halo pulsante del editor).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -43,7 +44,7 @@ import type { MapPoint, MapRoute, MapZone } from '../types.js';
 import { Button, Loader } from './primitives.js';
 import type { RouteMapProps } from './route-map-impl.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
-import { latLngAPixelContenedor } from './route-map-proyeccion.js';
+import { desplazarCamino, latLngAPixelContenedor } from './route-map-proyeccion.js';
 import { esGestoUsuarioDeCamara } from './route-map-gestos.js';
 import {
   encuadreAuto,
@@ -247,6 +248,9 @@ interface EntradaRuta {
   casing: google.maps.Polyline;
   linea: google.maps.Polyline;
   etiqueta: MarcadorAvanzado | null;
+  /** Camino sin desplazar y offset lateral en px (0 si hay una sola ruta): se reaplica al zoom. */
+  base: LatLngSimple[];
+  offsetPx: number;
   firma: string;
 }
 
@@ -485,11 +489,14 @@ function Controlador({
     const vivos = new Set<string>();
     routes
       .filter((ruta) => ruta.points.length > 1)
-      .forEach((ruta: MapRoute, indice) => {
+      .forEach((ruta: MapRoute, indice, dibujables) => {
         vivos.add(ruta.id);
-        const camino = ruta.points.map((p) => ({ lat: p.lat, lng: p.lng }));
+        const base = ruta.points.map((p) => ({ lat: p.lat, lng: p.lng }));
+        // Mismo criterio que MapLibre: con varias rutas se reparten ±4 px alrededor del eje.
+        const offsetPx = dibujables.length > 1 ? (indice - (dibujables.length - 1) / 2) * 4 : 0;
+        const camino = desplazarCamino(base, offsetPx, map.getZoom() ?? 0);
         const etiqueta = ruta.label?.trim() ?? '';
-        const firma = [oscuro, ruta.color, ruta.dashed, Boolean(ruta.onClick), etiqueta, indice, firmaPuntos(ruta.points)].join('~');
+        const firma = [oscuro, ruta.color, ruta.dashed, Boolean(ruta.onClick), etiqueta, indice, offsetPx, firmaPuntos(ruta.points)].join('~');
         const previa = existentes.get(ruta.id);
         if (previa?.firma === firma && (!etiqueta || previa.etiqueta || !libMarker)) {
           return;
@@ -519,8 +526,12 @@ function Controlador({
           casing: new google.maps.Polyline({ map, zIndex: 1, geodesic: false }),
           linea: new google.maps.Polyline({ map, zIndex: 2 + indice, geodesic: false }),
           etiqueta: null,
+          base,
+          offsetPx,
           firma: '',
         };
+        entrada.base = base;
+        entrada.offsetPx = offsetPx;
         if (!previa) {
           const alClick = (evento: google.maps.PolyMouseEvent) => {
             datosRef.current.routes.find((r) => r.id === ruta.id)?.onClick?.();
@@ -557,7 +568,7 @@ function Controlador({
           contenido.style.setProperty('--qv-gmap-label-color', visuales.stroke);
           entrada.etiqueta = new libMarker.AdvancedMarkerElement({
             map,
-            position: camino[Math.floor(camino.length / 2)],
+            position: base[Math.floor(base.length / 2)],
             content: contenido,
             zIndex: 3,
           });
@@ -572,6 +583,21 @@ function Controlador({
       existentes.delete(id);
     });
   }, [map, libMarker, routes, oscuro]);
+
+  // El offset lateral es constante en px, así que en metros cambia con el zoom: se reaplica.
+  useEffect(() => {
+    if (!map) return;
+    const oyente = map.addListener('zoom_changed', () => {
+      const zoom = map.getZoom() ?? 0;
+      rutasRef.current.forEach((entrada) => {
+        if (entrada.offsetPx === 0) return;
+        const camino = desplazarCamino(entrada.base, entrada.offsetPx, zoom);
+        entrada.casing.setPath(camino);
+        entrada.linea.setPath(camino);
+      });
+    });
+    return () => oyente.remove();
+  }, [map]);
 
   useEffect(() => {
     if (!map) return;
