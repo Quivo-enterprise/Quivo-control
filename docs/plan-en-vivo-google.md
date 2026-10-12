@@ -22,9 +22,7 @@ El CTO miró /en-vivo desde el teléfono mientras manejaba con la app. Encontró
   - `/en-vivo` (+`panel-frescura.tsx`)
   - `reportes/recorridos/[id]`
   - `rutas` (editor)
-  - `reglas/regla-preview.tsx`
-  - `vehiculos/vehicle-form-panel.tsx`
-  - `lineas/line-form-panel.tsx`
+  - ~~`reglas/regla-preview.tsx`, `vehiculos/vehicle-form-panel.tsx`, `lineas/line-form-panel.tsx`~~ — **premisa falsa (verificado con grep al llegar a PR 5):** no usan `RouteMap`, son mocks CSS. No hay nada que migrar.
   - `apps/landing/.../FleetPanelPreview.tsx`
 
 ### Decisiones del CTO (2026-10-12)
@@ -85,9 +83,9 @@ El CTO miró /en-vivo desde el teléfono mientras manejaba con la app. Encontró
 
 ## PR 4..N — migrar el resto y borrar MapLibre
 - Un PR por grupo, en este orden:
-  1. `reportes/recorridos/[id]`
-  2. `reglas/regla-preview`, `vehiculos/vehicle-form-panel`, `lineas/line-form-panel`
-  3. **`rutas` (editor), el último**: arrastre de puntos y pinType `pulse` necesitan equivalentes en Google
+  1. ~~`reportes/recorridos/[id]`~~ — hecho en #137.
+  2. ~~`reglas`/`vehiculos`/`lineas`~~ — no aplica (sin mapa real).
+  3. ~~**`rutas` (editor)**~~ — hecho en #140 (arrastre, teclado nativo, `pulse` animado).
 - PR final:
   - `engine` pasa a default `'google'` y después se borra el prop.
   - Se borran `route-map-impl.tsx` y la dependencia `maplibre-gl`.
