@@ -18,6 +18,7 @@ import {
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
+  reportarErrorUbicacionSentry,
   restaurarComportamientoNormal,
   type SdkSeguimientoContinuo,
 } from './seguimiento-continuo';
@@ -185,6 +186,35 @@ function sdkForeground(isMoving = true) {
   };
 }
 
+describe('reportarErrorUbicacionSentry', () => {
+  const tags = { contexto: 'gps-foreground', paso: 'paso-x' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([408, 0, 2, 499])('código transitorio %i: breadcrumb warning, sin captureException', (code) => {
+    reportarErrorUbicacionSentry(code, tags);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warning', category: 'gps-foreground' }),
+    );
+  });
+
+  it.each([1, 3, 500])('código %i (permanente/desconocido): captureException con los tags', (code) => {
+    reportarErrorUbicacionSentry(code, tags);
+    expect(Sentry.captureException).toHaveBeenCalledWith(code, { tags });
+    expect(Sentry.addBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it('error ilegible (sin code): captureException, no se degrada a breadcrumb', () => {
+    const error = new Error('x');
+    reportarErrorUbicacionSentry(error, tags);
+    expect(Sentry.captureException).toHaveBeenCalledWith(error, { tags });
+    expect(Sentry.addBreadcrumb).not.toHaveBeenCalled();
+  });
+});
+
 describe('crearManejadorForegroundActivo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -198,7 +228,6 @@ describe('crearManejadorForegroundActivo', () => {
       samples: 1,
       persist: true,
       timeout: 30,
-      maximumAge: 10_000,
     });
   });
 

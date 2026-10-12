@@ -11,6 +11,7 @@ import type { DeteccionPuntoControl } from '../../gps/geofence';
 // por debajo, que rompe bajo vitest/Node (sintaxis Flow que Rollup no puede parsear) — mismo
 // motivo por el que `headless-task.test.ts` mockea sus propias dependencias nativas.
 vi.mock('react-native', () => ({
+  Platform: { OS: 'android' },
   Vibration: { vibrate: vi.fn() },
 }));
 
@@ -55,7 +56,7 @@ vi.mock('../../db/outbox', () => ({
   obtenerAnunciosPendientesDeProgramar: vi.fn().mockResolvedValue([]),
 }));
 
-import { Vibration } from 'react-native';
+import { Platform, Vibration } from 'react-native';
 import * as Speech from 'expo-speech';
 import * as Notifications from 'expo-notifications';
 import * as Sentry from '@sentry/react-native';
@@ -71,6 +72,7 @@ import {
   anunciarPuntoControl,
   asegurarPermisoNotificaciones,
   limpiarAproximacionesAnunciadas,
+  limpiarCanalesObsoletos,
   obtenerEstadoPermisoNotificaciones,
   reintentarAnunciosLlegadaPendientes,
   type AnuncioPuntoControlOpciones,
@@ -682,5 +684,35 @@ describe('permiso de notificaciones denegado — el anuncio NO se pierde (hallaz
 
     expect(speakMock).toHaveBeenCalledTimes(1);
     expect(vibrateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('limpiarCanalesObsoletos', () => {
+  const deleteChannelMock = Notifications.deleteNotificationChannelAsync as unknown as ReturnType<
+    typeof vi.fn
+  >;
+
+  beforeEach(() => {
+    deleteChannelMock.mockClear();
+    deleteChannelMock.mockResolvedValue(undefined);
+    (Platform as { OS: string }).OS = 'android';
+  });
+
+  it('en Android borra el canal -v1 obsoleto', () => {
+    limpiarCanalesObsoletos();
+    expect(deleteChannelMock).toHaveBeenCalledTimes(1);
+    expect(deleteChannelMock).toHaveBeenCalledWith('quivo-anuncio-punto-control-v1');
+  });
+
+  it('en iOS no hace nada', () => {
+    (Platform as { OS: string }).OS = 'ios';
+    limpiarCanalesObsoletos();
+    expect(deleteChannelMock).not.toHaveBeenCalled();
+  });
+
+  it('si el borrado rechaza: no propaga (fire-and-forget)', async () => {
+    deleteChannelMock.mockRejectedValue(new Error('x'));
+    expect(() => limpiarCanalesObsoletos()).not.toThrow();
+    await Promise.resolve();
   });
 });

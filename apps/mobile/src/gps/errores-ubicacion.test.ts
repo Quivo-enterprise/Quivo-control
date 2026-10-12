@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   clasificarErrorUbicacion,
   codigoDeErrorUbicacion,
-  reducirSenalGps,
 } from './errores-ubicacion';
 
 describe('clasificarErrorUbicacion', () => {
@@ -38,24 +37,5 @@ describe('codigoDeErrorUbicacion', () => {
     expect(codigoDeErrorUbicacion(new Error('x'))).toBeNull();
     expect(codigoDeErrorUbicacion('408')).toBeNull();
     expect(codigoDeErrorUbicacion(null)).toBeNull();
-  });
-});
-
-describe('reducirSenalGps', () => {
-  it('un error transitorio activa la señal débil', () => {
-    expect(reducirSenalGps(false, 'error_transitorio')).toBe(true);
-    expect(reducirSenalGps(true, 'error_transitorio')).toBe(true);
-  });
-
-  it('un fix válido posterior la limpia', () => {
-    expect(reducirSenalGps(true, 'fix_valido')).toBe(false);
-  });
-
-  it('detener el tracking la limpia', () => {
-    expect(reducirSenalGps(true, 'tracking_detenido')).toBe(false);
-  });
-
-  it('sin errores, un fix válido mantiene falso (parada sin fixes no es señal débil)', () => {
-    expect(reducirSenalGps(false, 'fix_valido')).toBe(false);
   });
 });

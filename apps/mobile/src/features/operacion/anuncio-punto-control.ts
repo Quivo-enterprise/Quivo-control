@@ -1,6 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import * as Speech from 'expo-speech';
-import { Vibration } from 'react-native';
+import { Platform, Vibration } from 'react-native';
 import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
 import { RADIO_CONFIRMACION_M, type PuntoControlPaquete } from '@quivo/shared';
@@ -142,7 +142,8 @@ export async function obtenerEstadoPermisoNotificaciones(): Promise<Notification
  * la r14: chime saturado.)
  */
 const CANAL_ANUNCIO_ANDROID = 'quivo-anuncio-punto-control-v2';
-// Histórico: `-v1` sonaba con el chime saturado de la r13; se borra al configurar el `-v2`.
+// Histórico: `-v1` sonaba con el chime saturado de la r13; se borra al arrancar la app
+// (`limpiarCanalesObsoletos`).
 const CANAL_ANUNCIO_ANDROID_OBSOLETO = 'quivo-anuncio-punto-control-v1';
 
 /**
@@ -157,6 +158,18 @@ const CANAL_ANUNCIO_ANDROID_OBSOLETO = 'quivo-anuncio-punto-control-v1';
  */
 const SONIDO_NOTIFICACION_ANDROID = 'confirmacion_chime_notificacion_v2.wav';
 
+/**
+ * Borra los canales Android obsoletos (el `-v1` del chime saturado de la r13 sigue visible en los
+ * Ajustes del teléfono aunque ya nada lo use). Se llama UNA vez al arrancar la app (`App.tsx`),
+ * solo en Android; fire-and-forget: best-effort, nunca rechaza ni bloquea el arranque.
+ */
+export function limpiarCanalesObsoletos(): void {
+  if (Platform.OS !== 'android') return;
+  void Notifications.deleteNotificationChannelAsync(CANAL_ANUNCIO_ANDROID_OBSOLETO).catch(
+    () => undefined,
+  );
+}
+
 let canalConfigurado: Promise<void> | null = null;
 
 /** Crea (o no-opea si ya existe) el canal Android — `setNotificationChannelAsync` es
@@ -165,11 +178,6 @@ let canalConfigurado: Promise<void> | null = null;
  * cruzar el bridge nativo de sobra en cada punto de control de la jornada. */
 function asegurarCanalNotificacion(): Promise<void> {
   if (!canalConfigurado) {
-    // Limpieza del canal `-v1` (chime saturado, r13): sigue visible en los Ajustes del teléfono
-    // aunque ya nada lo use. Best-effort, nunca bloquea la creación del `-v2`.
-    void Notifications.deleteNotificationChannelAsync(CANAL_ANUNCIO_ANDROID_OBSOLETO).catch(
-      () => undefined,
-    );
     canalConfigurado = Notifications.setNotificationChannelAsync(CANAL_ANUNCIO_ANDROID, {
       name: 'Puntos de control',
       importance: Notifications.AndroidImportance.HIGH,

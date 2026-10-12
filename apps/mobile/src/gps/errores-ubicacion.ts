@@ -35,21 +35,6 @@ export function clasificarErrorUbicacion(
   return { tipo: 'desconocido', mensaje: null };
 }
 
-/** Eventos que mueven la señal GPS débil (chip en la UI). */
-export type EventoSenalGps = 'error_transitorio' | 'fix_valido' | 'tracking_detenido';
-
-/**
- * Reductor PURO de `senalGpsDebil`. La señal es débil si y solo si llegó un error TRANSITORIO
- * de ubicación DESPUÉS del último fix válido. Un temporizador "sin fix en N s" daba falsos
- * positivos: el canal de evidencia usa distanceFilter 15 m y el canal visual de 1 Hz está
- * apagado en producción, así que un vehículo detenido no recibe fixes y marcaría señal débil
- * en cada parada.
- */
-export function reducirSenalGps(_debil: boolean, evento: EventoSenalGps): boolean {
-  if (evento === 'error_transitorio') return true;
-  return false;
-}
-
 /** Extrae el código numérico de lo que rechaza/entrega el SDK: normalmente un número, a veces
  * un objeto `{ code }` o un `Error` con `code`. `null` si no se puede leer. */
 export function codigoDeErrorUbicacion(error: unknown): number | null {
