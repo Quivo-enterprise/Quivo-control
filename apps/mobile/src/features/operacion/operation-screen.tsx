@@ -26,7 +26,9 @@ import { Button } from '../../shared/components/Button';
 import { Input } from '../../shared/components/Input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { MapErrorBoundary } from './map-error-boundary';
-import { completadosTrasDeteccion, proximoPuntoControlPendiente } from './proximo-punto-control';
+import { useProgresoVuelta } from './use-progreso-vuelta';
+import { VueltaCompletadaBanner } from './vuelta-completada-banner';
+import type { EstadoPuntoVuelta } from './progreso-vuelta';
 import { RouteMap } from '../mapa/route-map';
 import { MARGEN_INFERIOR_SHEET, NextControlSheet } from './next-control-sheet';
 import { BrujulaMapa } from './brujula-mapa';
@@ -96,7 +98,15 @@ export function OperationScreen(
     () => paqueteDia.paquete?.puntosControl ?? [],
     [paqueteDia.paquete],
   );
-  const [completados, setCompletados] = useState<Set<string>>(new Set());
+  // Progreso de la vuelta (RF-GPS-054): pasos en cualquier orden, omitidos en rojo, vuelta al
+  // cerrar en el punto de inicio. Lo escribe el registro de cumplimientos (foreground y headless);
+  // acá solo se lee (hidrata al montar y al volver a `active`).
+  const progreso = useProgresoVuelta(
+    props.contexto.sesionId,
+    puntosControl,
+    gps.posicionActual,
+    gps.tracking,
+  );
   const [observacion, setObservacion] = useState('');
   const [enviandoObservacion, setEnviandoObservacion] = useState(false);
   const [observacionEnviada, setObservacionEnviada] = useState(false);
@@ -143,36 +153,6 @@ export function OperationScreen(
   // sheet no se midió.
   const fabsBottom = altoSheet > 0 ? altoSheet + MARGEN_INFERIOR_SHEET + 12 : 180;
 
-  // M3 (hallazgo de revisión, medio): `puntosControl.length` se lee por REF, no como
-  // dependencia del efecto de abajo — mismo patrón que `onLocationRef` en
-  // `use-gps-operativo.ts`. Si el paquete del día se refresca a mitad de jornada (un punto de
-  // control dado de baja, commit 9a0e472) este cambio NO debe, por sí solo, reprocesar la
-  // MISMA `gps.ultimaDeteccion` con el nuevo total: con `completados` en 20 de 36 y el
-  // refresco trayendo 18, `20 >= 18` reseteaba `completados` a un Set vacío y el guiado
-  // saltaba al punto 1 con el bus a mitad de recorrido.
-  const puntosControlLengthRef = useRef(puntosControl.length);
-  useEffect(() => {
-    puntosControlLengthRef.current = puntosControl.length;
-  }, [puntosControl.length]);
-
-  useEffect(() => {
-    if (!gps.ultimaDeteccion) return;
-    // Plan §2.5 ("reset del próximo punto por vuelta") — lógica pura y testeada en
-    // `completadosTrasDeteccion` (`proximo-punto-control.ts`): sin esto, `completados` solo
-    // crecía y nunca se limpiaba entre vueltas, así que al terminar la vuelta 1 se quedaba
-    // "sin próximo punto" el resto del día.
-    setCompletados((actual) =>
-      completadosTrasDeteccion(
-        actual,
-        gps.ultimaDeteccion!.puntoControlId,
-        puntosControlLengthRef.current,
-      ),
-    );
-  }, [gps.ultimaDeteccion]);
-  useEffect(() => {
-    if (!gps.tracking) setCompletados(new Set());
-  }, [gps.tracking]);
-
   // Rescope SESION_NO_VIGENTE, punto C: dispara `onSesionNoVigenteFinalizada` cuando
   // `sesionNoVigente` está prendido y `gps.tracking` está en `false` — la señal de que
   // `gps.detener()` (llamado desde el diálogo de "Finalizar" de abajo, el mismo que el chofer ve
@@ -206,10 +186,16 @@ export function OperationScreen(
     }
   }, [gps.tracking, props.sesionNoVigente, props.onSesionNoVigenteFinalizada]);
 
-  const proximoPuntoControl = useMemo(
-    () => proximoPuntoControlPendiente(puntosControl, completados),
-    [puntosControl, completados],
+  const proximoPuntoControl = progreso.proximo;
+  const estadosPuntosControl = useMemo(
+    () =>
+      Object.fromEntries(progreso.puntos.map((p) => [p.punto.id, p.estado])) as Record<
+        string,
+        EstadoPuntoVuelta
+      >,
+    [progreso.puntos],
   );
+  const estadosStepper = useMemo(() => progreso.puntos.map((p) => p.estado), [progreso.puntos]);
 
   const distanciaProximoPunto = useMemo(() => {
     if (!proximoPuntoControl || !gps.posicionActual) return null;
@@ -356,7 +342,7 @@ export function OperationScreen(
         loading={paqueteDia.cargando}
         paquete={paqueteDia.paquete}
         vehiculo={props.contexto.vehiculo}
-        nextPointId={proximoPuntoControl?.id ?? null}
+        estadosPuntosControl={estadosPuntosControl}
         position={gps.posicionActual}
         tracking={gps.tracking}
         camara={camara}
@@ -582,6 +568,10 @@ export function OperationScreen(
         contexto={props.contexto}
         nextPointOrder={proximoPuntoControl?.orden ?? null}
         totalPoints={puntosControl.length}
+        estadosPuntos={estadosStepper}
+        vueltaActual={progreso.vueltaActual}
+        puntosPasados={progreso.pasados}
+        puntosOmitidos={progreso.omitidos}
         distanciaMetros={distanciaProximoPunto}
         fase={fase}
         onEmpezarDia={jornada.empezarDia}
@@ -719,6 +709,11 @@ export function OperationScreen(
       </Modal>
 
       <ControlFeedbackToast ultimaDeteccion={gps.ultimaDeteccion} />
+      <VueltaCompletadaBanner
+        resumen={progreso.avisoVuelta}
+        top={insetSuperior + 8}
+        onTerminar={progreso.descartarAvisoVuelta}
+      />
 
       <QuivoConfirmDialog
         visible={confirmarFinVisible}
@@ -796,7 +791,7 @@ function MapLayer({
   loading,
   paquete,
   vehiculo,
-  nextPointId,
+  estadosPuntosControl,
   position,
   tracking,
   camara,
@@ -808,7 +803,7 @@ function MapLayer({
   loading: boolean;
   paquete: PaqueteDia | null;
   vehiculo: ContextoOperativoMovil['vehiculo'];
-  nextPointId: string | null;
+  estadosPuntosControl: Readonly<Record<string, EstadoPuntoVuelta>>;
   position: { lat: number; lng: number } | null;
   tracking: boolean;
   camara: RouteMapProps['camara'];
@@ -831,7 +826,7 @@ function MapLayer({
       <RouteMap
         paquete={paquete}
         vehiculo={vehiculo}
-        proximoPuntoControlId={nextPointId}
+        estadosPuntosControl={estadosPuntosControl}
         posicionActual={position}
         tracking={tracking}
         camara={camara}

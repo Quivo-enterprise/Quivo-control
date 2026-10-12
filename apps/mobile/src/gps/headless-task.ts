@@ -29,6 +29,7 @@ import {
   obtenerVisitasPendientes,
 } from '../db/outbox';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
+import { registrarPasoEnVuelta } from '../features/operacion/progreso-vuelta-store';
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
 // Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
 // `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
@@ -245,6 +246,8 @@ export function registrarPuntoGps(
   estadosPuntosControl: ContenedorEstadosPuntosControl,
 ): Promise<{
   deteccion: DeteccionPuntoControl | null;
+  /** TODAS las confirmaciones persistidas en el tick (`deteccion` es solo la última). */
+  detecciones: DeteccionPuntoControl[];
   deteccionAproximacion: DeteccionPuntoControl | null;
   puntosRearmados: string[];
   puntosRearmadosVoz: string[];
@@ -498,6 +501,8 @@ async function registrarPuntoGpsInterno(
   estadosPuntosControl: ContenedorEstadosPuntosControl,
 ): Promise<{
   deteccion: DeteccionPuntoControl | null;
+  /** TODAS las confirmaciones persistidas en el tick (`deteccion` es solo la última). */
+  detecciones: DeteccionPuntoControl[];
   deteccionAproximacion: DeteccionPuntoControl | null;
   puntosRearmados: string[];
   puntosRearmadosVoz: string[];
@@ -554,6 +559,7 @@ async function registrarPuntoGpsInterno(
   // Claves cuya transición ya está atada a un evento propio (`evento.clave`, los
   // `cumplimiento_punto_control` emitidos este tick) — el resto de `transicionesEstado` son
   // re-armados/entradas/avances de mínimo sin evento asociado, aplicados junto al `gps_point`.
+  const deteccionesPersistidas: DeteccionPuntoControl[] = [];
   const clavesConEventoPropio = new Set(
     eventos.map((evento) => evento.clave).filter((clave): clave is string => clave !== undefined),
   );
@@ -597,6 +603,18 @@ async function registrarPuntoGpsInterno(
       // escritura — ver el comentario de la función para el porqué (M4).
       const estado = transicionesEstado.get(evento.clave);
       if (estado) estados.set(evento.clave, estado);
+      // Progreso de la vuelta (RF-GPS-054): cada confirmación del tick, en orden, sin quedarse
+      // con la última. Best-effort (nunca rechaza): no puede tumbar la evidencia ya escrita.
+      if (evento.deteccion) {
+        deteccionesPersistidas.push(evento.deteccion);
+        await registrarPasoEnVuelta(
+          db,
+          contexto.sesionId,
+          evento.deteccion.puntoControlId,
+          evento.eventId ?? evento.clave,
+          contexto.puntosControl.length,
+        );
+      }
     } else {
       await encolarEvento(db, {
         deviceId: contexto.deviceId,
@@ -703,6 +721,7 @@ async function registrarPuntoGpsInterno(
 
   return {
     deteccion,
+    detecciones: deteccionesPersistidas,
     deteccionAproximacion,
     puntosRearmados,
     puntosRearmadosVoz,
@@ -971,6 +990,7 @@ export async function aplicarConfirmacionesForzadas(
   transiciones: ReadonlyMap<string, EstadoPuntoControl>,
   estados: Map<string, EstadoPuntoControl>,
   miGeneracion: number = generacionColaRegistroGps,
+  totalPuntos = 0,
 ): Promise<void> {
   for (const c of emitir) {
     if (!generacionVigente(miGeneracion)) return;
@@ -1006,6 +1026,13 @@ export async function aplicarConfirmacionesForzadas(
     if (!generacionVigente(miGeneracion)) return;
     const estado = transiciones.get(c.clave);
     if (estado) estados.set(c.clave, estado);
+    await registrarPasoEnVuelta(
+      db,
+      sesionId,
+      c.deteccion.puntoControlId,
+      derivarEventIdDeterministico([sesionId, c.deteccion.puntoControlId, String(c.pasada)]),
+      totalPuntos,
+    );
   }
 }
 
@@ -1064,7 +1091,16 @@ export function confirmarVisitasVencidasEnCola(
       const estadosAEvaluar = filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados;
       const { emitir, transiciones } = confirmarVisitasVencidas(estadosAEvaluar, ahoraMs, umbralMs);
       if (emitir.length > 0) {
-        await aplicarConfirmacionesForzadas(db, deviceId, sesionId, emitir, transiciones, estados, miGeneracion);
+        await aplicarConfirmacionesForzadas(
+          db,
+          deviceId,
+          sesionId,
+          emitir,
+          transiciones,
+          estados,
+          miGeneracion,
+          puntosControl.length,
+        );
         if (!generacionVigente(miGeneracion)) return { emitir, anunciosLlegada: [] };
       }
 

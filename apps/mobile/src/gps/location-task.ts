@@ -70,6 +70,9 @@ export interface EventoUbicacionConstruido {
    * `gps_point` (cada fix GPS es un hecho distinto, no hay pasada que lo identifique).
    */
   eventId?: string;
+  /** Detección confirmada que originó este `cumplimiento_punto_control` (progreso de la vuelta y
+   * UI: TODAS las confirmaciones del tick, no solo la última). `undefined` para `gps_point`. */
+  deteccion?: DeteccionPuntoControl;
 }
 
 export interface ResultadoConstruirEventos {
@@ -286,6 +289,7 @@ export function construirEventosDeUbicacion(
         // M4 (hallazgo de revisión, medio): clave atada a ESTE evento — ver el comentario de
         // `EventoUbicacionConstruido.clave`.
         clave,
+        deteccion: nuevaDeteccion,
         // FIX POST-REVISIÓN ("eventId estable"): derivado de {sesionId, puntoControlId, pasada}
         // — ver el comentario largo de `EventoUbicacionConstruido.eventId`.
         eventId: derivarEventIdDeterministico([
