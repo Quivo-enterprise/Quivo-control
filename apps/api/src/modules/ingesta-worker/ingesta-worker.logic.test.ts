@@ -139,6 +139,10 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       // sin borrar esto primero, el `sindicato.delete` de abajo falla con violación de FK,
       // porque `insertarGpsPoints` (probado más abajo en este archivo) ahora escribe acá.
       await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id = ${sesionId}::uuid`;
+      // PR A (docs/plan-en-vivo-alertas.md): `procesarLote` ahora también escribe
+      // `sesion_desvio_estado` (FK a `sindicatos`) y puede abrir `infracciones` — mismo motivo.
+      await tx.$executeRaw`DELETE FROM sesion_desvio_estado WHERE sesion_id = ${sesionId}`;
+      await tx.infraccion.deleteMany({ where: { sindicatoId } });
       await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id = ${sesionId}::uuid`;
       await tx.sesionOperativa.deleteMany({ where: { sindicatoId } });
       await tx.asignacion.deleteMany({ where: { rutaId } });

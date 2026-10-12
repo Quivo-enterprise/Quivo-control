@@ -59,24 +59,35 @@ export class SancionesService {
   }
 
   async crear(actor: AuthenticatedUser, data: CrearSancion): Promise<Sancion> {
+    const sancion = await withTenantContext(toTenantContext(actor), (tx) =>
+      this.crearEnTx(tx, actor, data),
+    );
+    return sancion;
+  }
+
+  /**
+   * Misma lógica que `crear`, sobre una transacción YA abierta por el llamador — para que
+   * otro flujo (p. ej. `InfraccionesService.sancionar`, docs/plan-en-vivo-alertas.md) cree la
+   * sanción y actualice su propia entidad en UNA sola transacción. `crear` la usa tal cual, así
+   * que su comportamiento público no cambia.
+   */
+  async crearEnTx(tx: Prisma.TransactionClient, actor: AuthenticatedUser, data: CrearSancion): Promise<Sancion> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
-    const sancion = await withTenantContext(toTenantContext(actor), async (tx) => {
-      const regla = await tx.regla.findUnique({ where: { id: data.reglaId } });
-      if (!regla || regla.sindicatoId !== sindicatoId) {
-        throw new NotFoundException('Regla no encontrada');
-      }
-      return tx.sancion.create({
-        data: {
-          sindicatoId,
-          reglaId: data.reglaId,
-          sujetoTipo: data.sujetoTipo,
-          sujetoId: data.sujetoId,
-          motivo: data.motivo,
-          fechaHecho: data.fechaHecho,
-          evidenciaRef: data.evidenciaRef ?? null,
-          estado: 'pendiente',
-        },
-      });
+    const regla = await tx.regla.findUnique({ where: { id: data.reglaId } });
+    if (!regla || regla.sindicatoId !== sindicatoId) {
+      throw new NotFoundException('Regla no encontrada');
+    }
+    const sancion = await tx.sancion.create({
+      data: {
+        sindicatoId,
+        reglaId: data.reglaId,
+        sujetoTipo: data.sujetoTipo,
+        sujetoId: data.sujetoId,
+        motivo: data.motivo,
+        fechaHecho: data.fechaHecho,
+        evidenciaRef: data.evidenciaRef ?? null,
+        estado: 'pendiente',
+      },
     });
     return toSancion(sancion);
   }

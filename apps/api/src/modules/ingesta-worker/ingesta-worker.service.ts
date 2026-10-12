@@ -19,6 +19,13 @@ import {
   type PayloadCumplimientoPuntoControl,
 } from '@quivo/shared';
 import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
+import {
+  detectarPcOmitidosAlFinRecorrido,
+  detectarPcOmitidosPorCumplimiento,
+  procesarDesvioSesion,
+  type MarcadorRecorridoEntrante,
+  type PuntoGpsEntrante,
+} from './deteccion-infracciones.js';
 import { COLA_INGESTA_SYNC, type LoteIngestaJob } from '../sync/sync-queue.service.js';
 
 const NOMBRE_COLA_PARTICIONES = 'mantenimiento-particiones-gps';
@@ -166,12 +173,18 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
 
     let errores = 0;
     const porTipo = agruparPorTipo(eventos);
+    // Entradas de la detección de infracciones: SOLO lo efectivamente persistido en este lote.
+    const entradas: EntradasDeteccion = { gps: [], cumplimientos: [], operativos: [] };
 
     if (porTipo.gps_point.length > 0) {
-      errores += await this.procesarGpsPoints(sindicatoId, porTipo.gps_point);
+      const r = await this.procesarGpsPoints(sindicatoId, porTipo.gps_point);
+      errores += r.errores;
+      if (r.errores === 0) entradas.gps = porTipo.gps_point;
     }
     for (const evento of porTipo.cumplimiento_punto_control) {
-      errores += await this.procesarCumplimiento(sindicatoId, evento);
+      const r = await this.procesarCumplimiento(sindicatoId, evento);
+      errores += r.errores;
+      if (r.cumplido) entradas.cumplimientos.push({ evento, ts: r.cumplido.ts });
     }
     const operativos = [
       ...porTipo.inicio_recorrido,
@@ -180,8 +193,17 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       ...porTipo.inicio_jornada,
     ];
     for (const evento of operativos) {
-      errores += await this.procesarEventoOperativo(sindicatoId, evento);
+      const r = await this.procesarEventoOperativo(sindicatoId, evento);
+      errores += r;
+      if (r === 0 && (evento.tipo === 'inicio_recorrido' || evento.tipo === 'fin_recorrido')) {
+        entradas.operativos.push(evento);
+      }
     }
+
+    // Detección DESPUÉS de persistir toda la evidencia del lote (gps, cumplimientos y eventos
+    // operativos): así un `cumplimiento` y el `inicio_recorrido`/`fin_recorrido` del MISMO lote
+    // se ven entre sí sin importar el orden en que llegaron. Nunca cuenta como error de ingesta.
+    await this.detectarInfracciones(sindicatoId, entradas);
 
     const latenciaMs = Date.now() - inicio;
     const pendientes = await this.contarPendientesCola();
@@ -197,7 +219,10 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     return this.ingestaQueueStats.getWaitingCount();
   }
 
-  private async procesarGpsPoints(sindicatoId: string, eventos: EventoSync[]): Promise<number> {
+  private async procesarGpsPoints(
+    sindicatoId: string,
+    eventos: EventoSync[],
+  ): Promise<{ errores: number }> {
     try {
       const tsFixDescartados = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
         insertarGpsPoints(tx, sindicatoId, eventos),
@@ -212,18 +237,120 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
             `ingestados con el ts de encolado`,
         );
       }
-      return 0;
     } catch (error) {
       await Promise.all(
         eventos.map((evento) => this.registrarErrorSync(sindicatoId, evento, error)),
       );
-      return eventos.length;
+      return { errores: eventos.length };
+    }
+    return { errores: 0 };
+  }
+
+  /**
+   * Detección de infracciones (docs/plan-en-vivo-alertas.md, PR A) sobre la evidencia YA
+   * persistida del lote: por sesión, primero el desvío de ruta (puntos + límites de recorrido) y
+   * luego el PC omitido (cumplimientos cumplidos y `fin_recorrido`) en orden de `ts`, cada paso
+   * en su propia transacción. Cualquier fallo se LOGUEA (estructurado: sesión + error) y NO se
+   * propaga ni va a `sync_errors`: esa tabla es para eventos rechazados, y la evidencia ya
+   * quedó guardada.
+   */
+  private async detectarInfracciones(
+    sindicatoId: string,
+    entradas: EntradasDeteccion,
+  ): Promise<void> {
+    const sesiones = new Map<string, EntradaSesion>();
+    const de = (sesionId: string): EntradaSesion => {
+      const e = sesiones.get(sesionId) ?? { puntos: [], marcadores: [], pcs: [] };
+      sesiones.set(sesionId, e);
+      return e;
+    };
+    for (const evento of entradas.gps) {
+      const payload = evento.payload as unknown as PayloadGpsPoint;
+      if (typeof payload.sesionId !== 'string') continue;
+      de(payload.sesionId).puntos.push({
+        ts: new Date(resolverTsFix(evento.payload, evento.ts)),
+        lat: payload.lat,
+        lng: payload.lng,
+        accuracy: typeof payload.accuracy === 'number' ? payload.accuracy : null,
+      });
+    }
+    for (const { evento, ts } of entradas.cumplimientos) {
+      const payload = evento.payload as unknown as PayloadCumplimientoPuntoControl;
+      if (typeof payload.sesionId !== 'string') continue;
+      de(payload.sesionId).pcs.push({
+        tipo: 'cumplimiento',
+        ts: new Date(ts),
+        puntoControlId: payload.puntoControlId,
+      });
+    }
+    for (const evento of entradas.operativos) {
+      const sesionId = extraerSesionId(evento.payload);
+      if (!sesionId) continue;
+      const e = de(sesionId);
+      const ts = new Date(evento.ts);
+      e.marcadores.push({ tipo: evento.tipo === 'inicio_recorrido' ? 'inicio' : 'fin', ts });
+      if (evento.tipo === 'fin_recorrido') e.pcs.push({ tipo: 'fin', ts });
+    }
+
+    for (const [sesionId, e] of sesiones) {
+      if (e.puntos.length > 0 || e.marcadores.length > 0) {
+        try {
+          const { abiertas, cerradas } = await withTenantContext(
+            { rol: 'admin_quivo', sindicatoId },
+            (tx) => procesarDesvioSesion(tx, sindicatoId, sesionId, e.puntos, e.marcadores),
+          );
+          if (abiertas > 0 || cerradas > 0) {
+            this.logger.log(
+              `Desvío de ruta, sesión ${sesionId}: ${abiertas} abierta(s), ${cerradas} cerrada(s)`,
+            );
+          }
+        } catch (error) {
+          this.registrarFalloDeteccion(sindicatoId, sesionId, 'desvio_ruta', error);
+        }
+      }
+      // Orden de `ts` (estable; ante empate el cumplimiento va antes que el fin).
+      const pcs = [...e.pcs].sort(
+        (a, b) => a.ts.getTime() - b.ts.getTime() || (a.tipo === b.tipo ? 0 : a.tipo === 'cumplimiento' ? -1 : 1),
+      );
+      for (const pc of pcs) {
+        try {
+          await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+            pc.tipo === 'cumplimiento'
+              ? detectarPcOmitidosPorCumplimiento(tx, sindicatoId, sesionId, pc.puntoControlId, pc.ts)
+              : detectarPcOmitidosAlFinRecorrido(tx, sindicatoId, sesionId, pc.ts),
+          );
+        } catch (error) {
+          this.registrarFalloDeteccion(sindicatoId, sesionId, 'pc_omitido', error);
+        }
+      }
     }
   }
 
-  private async procesarCumplimiento(sindicatoId: string, evento: EventoSync): Promise<number> {
+  /** Falla de la detección: solo log estructurado (sesión + error). No va a `sync_errors`. */
+  private registrarFalloDeteccion(
+    sindicatoId: string,
+    sesionId: string,
+    detector: 'desvio_ruta' | 'pc_omitido',
+    error: unknown,
+  ): void {
+    this.logger.error(
+      {
+        mensaje: 'Falló la detección de infracciones',
+        detector,
+        sindicatoId,
+        sesionId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      error instanceof Error ? error.stack : undefined,
+    );
+  }
+
+  private async procesarCumplimiento(
+    sindicatoId: string,
+    evento: EventoSync,
+  ): Promise<{ errores: number; cumplido?: { ts: string } }> {
     try {
-      const { tsFixDescartado } = await withTenantContext(
+      const { tsFixDescartado, cumplido, ts } = await withTenantContext(
         { rol: 'admin_quivo', sindicatoId },
         (tx) => procesarCumplimientoEnTx(tx, sindicatoId, evento),
       );
@@ -236,10 +363,10 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
             `ingestado con el ts de encolado`,
         );
       }
-      return 0;
+      return cumplido ? { errores: 0, cumplido: { ts } } : { errores: 0 };
     } catch (error) {
       await this.registrarErrorSync(sindicatoId, evento, error);
-      return 1;
+      return { errores: 1 };
     }
   }
 
@@ -303,6 +430,18 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       }
     }
   }
+}
+
+interface EntradaSesion {
+  puntos: PuntoGpsEntrante[];
+  marcadores: MarcadorRecorridoEntrante[];
+  pcs: ({ tipo: 'cumplimiento'; ts: Date; puntoControlId: string } | { tipo: 'fin'; ts: Date })[];
+}
+
+interface EntradasDeteccion {
+  gps: EventoSync[];
+  cumplimientos: { evento: EventoSync; ts: string }[];
+  operativos: EventoSync[];
 }
 
 export interface EventosPorTipo {
@@ -478,7 +617,7 @@ export async function procesarCumplimientoEnTx(
   tx: Tx,
   sindicatoId: string,
   evento: EventoSync,
-): Promise<{ tsFixDescartado: boolean }> {
+): Promise<{ tsFixDescartado: boolean; cumplido: boolean; ts: string }> {
   const payload = evento.payload as unknown as PayloadCumplimientoPuntoControl;
   // `puntos_control` no tiene RLS propia (hereda tenant vía rutaId -> linea, QUI-218) — el
   // join contra `lineas."sindicatoId"` es la barrera real acá: sin esto, un evento con un
@@ -557,7 +696,9 @@ export async function procesarCumplimientoEnTx(
     ],
     skipDuplicates: true,
   });
-  return { tsFixDescartado };
+  // `cumplido`/`ts` los usa el llamador para la detección de PC omitido (transacción aparte,
+  // `detectarPcOmitidosPorCumplimiento`), no dentro de esta tx.
+  return { tsFixDescartado, cumplido: row.cumplido, ts };
 }
 
 /**

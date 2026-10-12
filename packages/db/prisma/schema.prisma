@@ -132,6 +132,7 @@ model Sindicato {
   cumplimientosPc          CumplimientoPc[]
   eventosOperativos        EventoOperativo[]
   syncErrors               SyncError[]
+  infracciones             Infraccion[]
 
   @@map("sindicatos")
 }
@@ -338,6 +339,10 @@ model Ruta {
   sentido   String
   geometria Unsupported("geography(LineString,4326)")
   estado    String                                    @default("activo")
+  // Solo las geometrías trazadas con GPS real admiten detección de desvío (un boceto KML con
+  // vértices a cientos de metros genera falsos desvíos). Se habilita por SQL; ver la migración
+  // `20261012100000_infracciones`.
+  desvioHabilitado Boolean                             @default(false)
   publicStatus String                                  @default("borrador")
   publishedAt DateTime?
   createdAt DateTime                                  @default(now())
@@ -574,6 +579,7 @@ model SesionOperativa {
 
   cumplimientosPc   CumplimientoPc[]
   eventosOperativos EventoOperativo[]
+  infracciones      Infraccion[]
 
   @@index([sindicatoId])
   @@index([asignacionId, estado])
@@ -732,6 +738,59 @@ model EventoOperativo {
   @@index([sindicatoId, tipo, ts])
   @@map("eventos_operativos")
 }
+
+/**
+ * docs/plan-en-vivo-alertas.md, PR A — infracciones detectadas por el worker de ingesta
+ * (`desvio_ruta`: máquina de estados sobre los fixes GPS; `pc_omitido`: PC obligatorio que se
+ * saltó) y accionables por el admin desde `/en-vivo` (atender / descartar / sancionar).
+ *
+ * Columnas camelCase (sin `@map` por campo), igual que `CumplimientoPc`/`EventoOperativo` —
+ * los vecinos que SÍ tienen modelo Prisma. Solo `sindicatoId` y `sesionId` tienen FK real;
+ * `vehiculoId`/`conductorId`/`lineaId`/`rutaId`/`reglaId`/`sancionId` son snapshots sin FK
+ * (mismo patrón polimórfico que `Sancion.sujetoId`): la infracción es evidencia histórica y
+ * no debe bloquear ni caer en cascada con cambios en esas entidades.
+ *
+ * `dedupeKey` UNIQUE hace idempotente la detección (reintentos de lote, reproceso):
+ * `desvio:{sesionId}:{inicioTs iso}` / `pc_omitido:{sesionId}:{pcId}:{inicioRecorridoTs iso}`.
+ */
+model Infraccion {
+  id          String          @id @default(uuid())
+  sindicatoId String
+  sindicato   Sindicato       @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  sesionId    String
+  sesion      SesionOperativa @relation(fields: [sesionId], references: [id], onDelete: Cascade)
+  vehiculoId  String
+  conductorId String
+  lineaId     String
+  rutaId      String
+  // 'desvio_ruta' | 'pc_omitido' — dominio validado por zod (`TipoInfraccionSchema`) y CHECK.
+  tipo        String
+  // 'leve' | 'grave' | 'gravisima' (`GravedadReglaSchema`).
+  gravedad    String
+  reglaId     String?
+  // 'abierta' | 'atendida' | 'sancionada' | 'descartada'.
+  estado      String          @default("abierta")
+  inicioTs    DateTime
+  finTs       DateTime?
+  lat         Float
+  lng         Float
+  detalle     Json
+  sancionId   String?
+  atendidaPor String?
+  atendidaEn  DateTime?
+  nota        String?
+  dedupeKey   String          @unique
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([sesionId, estado])
+  @@index([sindicatoId, estado])
+  @@map("infracciones")
+}
+
+// `sesion_desvio_estado` (docs/plan-en-vivo-alertas.md, PR A): estado de la máquina de desvío
+// por sesión. Sin modelo Prisma, mismo criterio que `gps_sesion_resumen` — se lee/escribe solo
+// con SQL crudo (`SELECT ... FOR UPDATE` + upsert) desde el worker de ingesta.
 
 /**
  * Lotes/eventos rechazados por el worker de ingesta (RNF-35, QUI-241/242) — nada se

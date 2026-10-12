@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GravedadReglaSchema } from '../enums/estados.js';
 import { uuidSchema } from '../primitives.js';
 import { LineaGeoJsonSchema } from '../geo.js';
 import {
@@ -202,6 +203,14 @@ export const PosicionEnVivoSchema = z
     speed: z.number().nullable(),
     /** Puntos de la sesión dentro de la ventana de la jornada consultada. */
     totalPuntos: z.number().int().nonnegative(),
+    /** docs/plan-en-vivo-alertas.md PR A — ids para acciones del panel (infracciones,
+     * sanción). Opcionales/nullables: compatibles con respuestas viejas en cache. */
+    vehiculoId: uuidSchema.nullable().optional(),
+    conductorId: uuidSchema.nullable().optional(),
+    /** Gravedad máxima entre las infracciones `abierta` de la sesión (`null` si no hay). */
+    infraccionNivel: GravedadReglaSchema.nullable().optional(),
+    /** Cantidad de infracciones `abierta` de la sesión. */
+    infraccionesAbiertas: z.number().int().nonnegative().optional(),
   })
   .merge(FrescuraEnVivoSchema);
 export type PosicionEnVivo = z.infer<typeof PosicionEnVivoSchema>;

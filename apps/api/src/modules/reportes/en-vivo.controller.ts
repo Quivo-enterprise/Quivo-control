@@ -61,6 +61,12 @@ export class EnVivoController {
     return this.enVivoService.obtenerContexto(actor, sesionId);
   }
 
+  /** docs/plan-en-vivo-alertas.md PR A — infracciones de la sesión (abiertas primero). */
+  @Get(':sesionId/infracciones')
+  infracciones(@CurrentUser() actor: AuthenticatedUser, @Param('sesionId') sesionId: string) {
+    return this.enVivoService.listarInfraccionesSesion(actor, sesionId);
+  }
+
   @Get(':sesionId/posiciones')
   posiciones(
     @CurrentUser() actor: AuthenticatedUser,

@@ -5,15 +5,19 @@ import {
   PosicionEnVivoSchema,
   SesionEnVivoResumenSchema,
   TrazaEnVivoSchema,
+  GRAVEDAD_ORDEN,
   type ContextoEnVivo,
   type EstadoFrescura,
   type FrescuraEnVivo,
+  type GravedadRegla,
+  type Infraccion,
   type PosicionEnVivo,
   type SesionEnVivoResumen,
   type TrazaEnVivo,
   type TrazaEnVivoQuery,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import { toInfraccion } from '../infracciones/infracciones.mapper.js';
 import {
   fechaActualBolivia,
   inicioDeJornadaBolivia,
@@ -57,6 +61,11 @@ interface PosicionEnVivoRow {
   lineaId: string;
   lineaNombre: string;
   rutaSentido: string;
+  vehiculoId: string;
+  conductorId: string;
+  // docs/plan-en-vivo-alertas.md PR A — agregado de las `infracciones` abiertas de la sesión.
+  infraccionesAbiertas: number | null;
+  infraccionNivelOrden: number | null;
   lat: number | null;
   lng: number | null;
   accuracy: number | null;
@@ -97,6 +106,18 @@ interface GpsPointRow {
 }
 
 const MINUTO_MS = 60_000;
+const LIMITE_INFRACCIONES_SESION = 200;
+
+/**
+ * Inverso de `GRAVEDAD_ORDEN` (shared, fuente única del orden leve < grave < gravisima).
+ * `obtenerPosiciones` replica ese orden en un `CASE` SQL (no puede importar la constante):
+ * `en-vivo.gravedad-orden.test.ts` verifica que ambos coinciden.
+ */
+export function nivelDeOrden(orden: number | null | undefined): GravedadRegla | null {
+  if (orden === null || orden === undefined) return null;
+  const par = (Object.entries(GRAVEDAD_ORDEN) as [GravedadRegla, number][]).find(([, o]) => o === orden);
+  return par ? par[0] : null;
+}
 
 /**
  * Umbrales **operativos** (no de presentación) para derivar `estadoFrescura`, calibrados
@@ -455,8 +476,10 @@ export class EnVivoService {
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
       const filas = await tx.$queryRaw<PosicionEnVivoRow[]>`
         SELECT so.id, so.inicio, so.fin, so.estado, so."deviceId",
+          so."vehiculoId" AS "vehiculoId", so."conductorId" AS "conductorId",
           v.placa as "vehiculoPlaca", c.nombre as "conductorNombre",
           l.id as "lineaId", l.nombre as "lineaNombre", ru.sentido as "rutaSentido",
+          inf."infraccionesAbiertas", inf."infraccionNivelOrden",
           fix.lat, fix.lng, fix.accuracy, fix.speed,
           fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos",
           so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs"
@@ -488,6 +511,20 @@ export class EnVivoService {
           ORDER BY gr.ultimo_fix_ts DESC
           LIMIT 1
         ) fix ON true
+        -- docs/plan-en-vivo-alertas.md PR A: infracciones ABIERTAS de la sesión. Un agregado por
+        -- sesión resuelto por el índice (sesionId, estado); count(*) sin GROUP BY siempre
+        -- devuelve una fila (0 si no hay), por eso el LATERAL es seguro con ON true. Orden
+        -- de gravedad: leve(1) < grave(2) < gravisima(3) = GRAVEDAD_ORDEN (@quivo/shared); el
+        -- test en-vivo.gravedad-orden.test.ts verifica que este CASE y la constante coinciden.
+        LEFT JOIN LATERAL (
+          SELECT count(*)::int AS "infraccionesAbiertas",
+                 max(CASE i.gravedad WHEN 'gravisima' THEN 3 WHEN 'grave' THEN 2 ELSE 1 END)
+                   AS "infraccionNivelOrden"
+          FROM infracciones i
+          WHERE i."sesionId" = so.id
+            AND i.estado = 'abierta'
+            AND i."sindicatoId" = so."sindicatoId"
+        ) inf ON true
         WHERE (so.inicio >= ${sesionesDesde})
            OR (so.fin IS NULL AND so.estado = 'activa')
         ORDER BY (so.fin IS NULL) DESC, fix."ultimoFixTs" DESC NULLS LAST, so.inicio DESC
@@ -498,6 +535,10 @@ export class EnVivoService {
         PosicionEnVivoSchema.parse({
           id: f.id,
           deviceId: f.deviceId,
+          vehiculoId: f.vehiculoId,
+          conductorId: f.conductorId,
+          infraccionesAbiertas: f.infraccionesAbiertas ?? 0,
+          infraccionNivel: nivelDeOrden(f.infraccionNivelOrden),
           activa: f.fin === null && f.estado === 'activa',
           vehiculoPlaca: f.vehiculoPlaca,
           conductorNombre: f.conductorNombre,
@@ -519,6 +560,29 @@ export class EnVivoService {
           ),
         }),
       );
+    });
+  }
+
+  /**
+   * docs/plan-en-vivo-alertas.md PR A — infracciones de una sesión, `abierta` primero y luego
+   * por `inicioTs` descendente (ordenado en SQL, antes del tope). `findUnique` de la sesión PRIMERO es el tenant-check (RLS): una
+   * sesión ajena o inexistente es 404. Tope fijo de filas: una sesión no acumula miles.
+   */
+  async listarInfraccionesSesion(actor: AuthenticatedUser, sesionId: string): Promise<Infraccion[]> {
+    return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
+      const sesion = await tx.sesionOperativa.findUnique({ where: { id: sesionId }, select: { id: true } });
+      if (!sesion) {
+        throw new NotFoundException('Sesión no encontrada');
+      }
+      // El orden va en SQL ANTES del LIMIT: si hay más de LIMITE filas, las abiertas más viejas
+      // no deben quedar fuera del tope por culpa de cerradas más recientes.
+      const filas = await tx.$queryRaw<Parameters<typeof toInfraccion>[0][]>`
+        SELECT * FROM infracciones
+        WHERE "sesionId" = ${sesionId}
+        ORDER BY (estado = 'abierta') DESC, "inicioTs" DESC
+        LIMIT ${LIMITE_INFRACCIONES_SESION}
+      `;
+      return filas.map(toInfraccion);
     });
   }
 
