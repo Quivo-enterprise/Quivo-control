@@ -13,17 +13,17 @@ export interface LatLngPlano {
 /** Un punto es arrastrable solo si lo pide Y hay a quién avisar al soltarlo (como en MapLibre,
  * donde `onDragEnd` es lo único que consume el arrastre). Solo los `markers` se arrastran: igual
  * que en MapLibre, donde el arrastre está cableado únicamente a las capas de marcadores (las
- * paradas `stops` nunca). */
+ * paradas `stops` nunca). Los vehículos tampoco: su posición la manda la interpolación. */
 export function esArrastrable(
-  punto: Pick<MapPoint, 'draggable' | 'onDragEnd'>,
+  punto: Pick<MapPoint, 'draggable' | 'onDragEnd' | 'pinType'>,
   tipo: 'stop' | 'marker' = 'marker',
 ): boolean {
-  return tipo === 'marker' && Boolean(punto.draggable && punto.onDragEnd);
+  return tipo === 'marker' && punto.pinType !== 'vehicle' && Boolean(punto.draggable && punto.onDragEnd);
 }
 
 /** El punto necesita ser enfocable por teclado: es clickable o arrastrable. */
 export function esInteractivo(
-  punto: Pick<MapPoint, 'onClick' | 'draggable' | 'onDragEnd'>,
+  punto: Pick<MapPoint, 'onClick' | 'draggable' | 'onDragEnd' | 'pinType'>,
   tipo: 'stop' | 'marker' = 'marker',
 ): boolean {
   return Boolean(punto.onClick) || esArrastrable(punto, tipo);
@@ -58,11 +58,41 @@ export function firmaPunto(
   ].join('~');
 }
 
+/** Nombre accesible de un punto: etiqueta, descripción y, si se arrastra, cómo hacerlo con el
+ * teclado (la mecánica nativa de Google para `gmpDraggable`: Alt+Espacio, flechas, Enter). */
+export function etiquetaPunto(
+  punto: Pick<MapPoint, 'label' | 'description' | 'draggable' | 'onDragEnd' | 'pinType'>,
+  tipo: 'stop' | 'marker',
+): string {
+  return [
+    punto.label?.trim(),
+    punto.description,
+    esArrastrable(punto, tipo) ? 'Alt+Espacio para mover con las flechas, Enter para soltar' : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** Eventos que cambian si hay que ignorar el `click` que cierra un arrastre. */
+export type EventoSupresionClick = 'arrastre' | 'pointerdown' | 'keydown';
+
+/**
+ * ¿Hay que ignorar los `click` / `gmp-click` que lleguen ahora? Es `true` desde que termina un
+ * arrastre (con puntero: el `click` que el navegador emite al soltar; con teclado: el que Google
+ * pueda emitir por el Enter que suelta) hasta que empieza OTRA interacción (nuevo `pointerdown`
+ * o tecla). Sin temporizadores: lo apaga la siguiente entrada del usuario, nunca el reloj.
+ */
+export function siguienteSupresionClick(evento: EventoSupresionClick): boolean {
+  return evento === 'arrastre';
+}
+
 export interface DecisionPunto {
   /** Hay que reemplazar el elemento HTML del marcador. */
   recrearContenido: boolean;
   /** Hay que escribir `marker.position` con la posición recibida. */
   moverPosicion: boolean;
+  /** Es seguro alinear `gmpDraggable` con el flag vigente (no hay arrastre en curso). */
+  sincronizarArrastre: boolean;
 }
 
 /**
@@ -78,8 +108,9 @@ export function decidirActualizacionPunto(entrada: {
   ultima: LatLngPlano;
   posicion: LatLngPlano;
 }): DecisionPunto {
-  if (entrada.arrastrando) return { recrearContenido: false, moverPosicion: false };
+  if (entrada.arrastrando) return { recrearContenido: false, moverPosicion: false, sincronizarArrastre: false };
   return {
+    sincronizarArrastre: true,
     recrearContenido: entrada.firmaPrevia !== entrada.firmaNueva,
     moverPosicion: entrada.ultima.lat !== entrada.posicion.lat || entrada.ultima.lng !== entrada.posicion.lng,
   };
@@ -93,30 +124,4 @@ export function latLngDePosicion(
   const lat = typeof posicion.lat === 'function' ? posicion.lat() : posicion.lat;
   const lng = typeof posicion.lng === 'function' ? posicion.lng() : posicion.lng;
   return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
-}
-
-/** Píxeles que mueve una flecha del teclado sobre un marcador arrastrable (Mayús = paso grande). */
-export const PASO_TECLADO_PX = 8;
-export const PASO_TECLADO_GRANDE_PX = 32;
-
-/** Desplazamiento en px de pantalla (y hacia abajo) de una tecla de flecha, o `null` si no lo es. */
-export function desplazamientoDeTecla(tecla: string, grande: boolean): { dx: number; dy: number } | null {
-  const paso = grande ? PASO_TECLADO_GRANDE_PX : PASO_TECLADO_PX;
-  switch (tecla) {
-    case 'ArrowLeft':
-      return { dx: -paso, dy: 0 };
-    case 'ArrowRight':
-      return { dx: paso, dy: 0 };
-    case 'ArrowUp':
-      return { dx: 0, dy: -paso };
-    case 'ArrowDown':
-      return { dx: 0, dy: paso };
-    default:
-      return null;
-  }
-}
-
-/** El loop de interpolación solo mueve vehículos que NO se están arrastrando. */
-export function debeAnimarEnTick(entrada: { esVehiculo: boolean; arrastrando: boolean }): boolean {
-  return entrada.esVehiculo && !entrada.arrastrando;
 }

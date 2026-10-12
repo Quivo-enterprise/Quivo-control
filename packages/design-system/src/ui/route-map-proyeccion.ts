@@ -105,25 +105,3 @@ export function desplazarCamino(
     return deMundo(p.x + (sx / largo) * paso * mitra, p.y + (sy / largo) * paso * mitra);
   });
 }
-
-/** Inversa de `aMundo`: coordenadas "mundo" -> lat/lng. */
-function desdeMundo(x: number, y: number): { lat: number; lng: number } {
-  const n = Math.PI - (2 * Math.PI * y) / TAMANO_TESELA;
-  return {
-    lat: (180 / Math.PI) * Math.atan(Math.sinh(n)),
-    lng: (x / TAMANO_TESELA - 0.5) * 360,
-  };
-}
-
-/** Mueve `punto` `dx`/`dy` píxeles de pantalla (y positivo = hacia abajo) al `zoom` dado. Sirve
- * para el arrastre por teclado de un marcador: el paso es constante en pantalla. */
-export function desplazarLatLngPx(
-  punto: { lat: number; lng: number },
-  dx: number,
-  dy: number,
-  zoom: number,
-): { lat: number; lng: number } {
-  const escala = 2 ** zoom;
-  const p = aMundo(punto.lat, punto.lng);
-  return desdeMundo(p.x + dx / escala, p.y + dy / escala);
-}

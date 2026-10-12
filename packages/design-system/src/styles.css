@@ -2484,6 +2484,15 @@ body::-webkit-scrollbar {
 .qv-gmap--arrastrando * {
   cursor: grabbing;
 }
+/* El foco de un marcador arrastrable lo lleva el anfitrión <gmp-advanced-marker>, no el contenido. */
+gmp-advanced-marker.qv-gmap--arrastrable:focus {
+  outline: none;
+}
+gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
+  box-shadow:
+    0 0 0 2px var(--qv-surface-card),
+    0 0 0 4px var(--qv-color-primary);
+}
 
 /* `pinType: 'pulse'`: halo de 32 px (el círculo de 16 px de radio de la capa
    `quivo-marker-pulse` de MapLibre) detrás del nodo. Base estática al 18 % de opacidad como en
@@ -2501,15 +2510,16 @@ body::-webkit-scrollbar {
   pointer-events: none;
   animation: qv-gmap-pulso 1.8s ease-out infinite;
 }
+/* El latido nunca baja del 18 % de la base: respira entre la base y un halo más grande y marcado. */
 @keyframes qv-gmap-pulso {
-  0% {
-    transform: scale(0.7);
-    opacity: 0.32;
-  }
-  70%,
+  0%,
   100% {
-    transform: scale(1.35);
-    opacity: 0;
+    transform: scale(1);
+    opacity: 0.18;
+  }
+  45% {
+    transform: scale(1.3);
+    opacity: 0.36;
   }
 }
 @media (prefers-reduced-motion: reduce) {

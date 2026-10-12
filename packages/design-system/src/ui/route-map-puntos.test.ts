@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  debeAnimarEnTick,
+  etiquetaPunto,
+  siguienteSupresionClick,
   decidirActualizacionPunto,
-  desplazamientoDeTecla,
   esArrastrable,
   esInteractivo,
   firmaPunto,
   latLngDePosicion,
 } from './route-map-puntos.js';
-import { desplazarLatLngPx } from './route-map-proyeccion.js';
 
 const ctx = { oscuro: false, tipo: 'marker' as const, rol: 'marker' };
 const noop = () => undefined;
@@ -66,7 +65,7 @@ describe('decidirActualizacionPunto', () => {
         ultima,
         posicion: { lat: 1, lng: 2 },
       }),
-    ).toEqual({ recrearContenido: false, moverPosicion: false });
+    ).toEqual({ recrearContenido: false, moverPosicion: false, sincronizarArrastre: false });
   });
   it('sin arrastre: mueve la posición sin recrear el contenido si la firma es igual', () => {
     expect(
@@ -77,11 +76,11 @@ describe('decidirActualizacionPunto', () => {
         ultima,
         posicion: { lat: -17.4, lng: -66.15 },
       }),
-    ).toEqual({ recrearContenido: false, moverPosicion: true });
+    ).toEqual({ recrearContenido: false, moverPosicion: true, sincronizarArrastre: true });
   });
   it('sin cambios no hace nada; con firma distinta recrea', () => {
     const igual = { arrastrando: false, firmaPrevia: 'a', firmaNueva: 'a', ultima, posicion: { ...ultima } };
-    expect(decidirActualizacionPunto(igual)).toEqual({ recrearContenido: false, moverPosicion: false });
+    expect(decidirActualizacionPunto(igual)).toEqual({ recrearContenido: false, moverPosicion: false, sincronizarArrastre: true });
     expect(decidirActualizacionPunto({ ...igual, firmaNueva: 'b' }).recrearContenido).toBe(true);
   });
 });
@@ -98,35 +97,26 @@ describe('latLngDePosicion', () => {
   });
 });
 
-describe('desplazamientoDeTecla', () => {
-  it('flechas con paso normal y grande; otras teclas => null', () => {
-    expect(desplazamientoDeTecla('ArrowLeft', false)).toEqual({ dx: -8, dy: 0 });
-    expect(desplazamientoDeTecla('ArrowDown', true)).toEqual({ dx: 0, dy: 32 });
-    expect(desplazamientoDeTecla('Enter', false)).toBeNull();
+describe('vehículos', () => {
+  it('nunca son arrastrables', () => {
+    expect(esArrastrable({ draggable: true, onDragEnd: noop, pinType: 'vehicle' })).toBe(false);
+    expect(esInteractivo({ draggable: true, onDragEnd: noop, pinType: 'vehicle' })).toBe(false);
   });
 });
 
-describe('desplazarLatLngPx', () => {
-  const origen = { lat: -17.3935, lng: -66.157 };
-  it('0 px devuelve el mismo punto', () => {
-    const r = desplazarLatLngPx(origen, 0, 0, 15);
-    expect(r.lat).toBeCloseTo(origen.lat, 9);
-    expect(r.lng).toBeCloseTo(origen.lng, 9);
-  });
-  it('derecha aumenta lng, abajo reduce lat, y el paso en grados baja con el zoom', () => {
-    const derecha = desplazarLatLngPx(origen, 8, 0, 15);
-    const abajo = desplazarLatLngPx(origen, 0, 8, 15);
-    expect(derecha.lng).toBeGreaterThan(origen.lng);
-    expect(abajo.lat).toBeLessThan(origen.lat);
-    const lejos = desplazarLatLngPx(origen, 8, 0, 10);
-    expect(lejos.lng - origen.lng).toBeGreaterThan(derecha.lng - origen.lng);
+describe('etiquetaPunto', () => {
+  it('suma la ayuda de teclado solo si es arrastrable', () => {
+    const base = { label: ' Nodo 2 ', description: 'Arrastra' };
+    expect(etiquetaPunto(base, 'marker')).toBe('Nodo 2, Arrastra');
+    expect(etiquetaPunto({ ...base, draggable: true, onDragEnd: noop }, 'marker')).toContain('Alt+Espacio');
+    expect(etiquetaPunto({ ...base, draggable: true, onDragEnd: noop }, 'stop')).toBe('Nodo 2, Arrastra');
   });
 });
 
-describe('debeAnimarEnTick', () => {
-  it('solo vehículos que no se arrastran', () => {
-    expect(debeAnimarEnTick({ esVehiculo: true, arrastrando: false })).toBe(true);
-    expect(debeAnimarEnTick({ esVehiculo: true, arrastrando: true })).toBe(false);
-    expect(debeAnimarEnTick({ esVehiculo: false, arrastrando: false })).toBe(false);
+describe('siguienteSupresionClick', () => {
+  it('solo terminar un arrastre arma la supresión; cualquier entrada nueva la apaga', () => {
+    expect(siguienteSupresionClick('arrastre')).toBe(true);
+    expect(siguienteSupresionClick('pointerdown')).toBe(false);
+    expect(siguienteSupresionClick('keydown')).toBe(false);
   });
 });
