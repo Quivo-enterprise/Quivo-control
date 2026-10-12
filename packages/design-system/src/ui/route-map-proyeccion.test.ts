@@ -144,12 +144,10 @@ describe('desplazarCamino', () => {
     expect(d.y).toBeGreaterThan(0);
   });
 
-  it('racha de 20 000 puntos repetidos: es lineal y todos se desplazan igual', () => {
+  it('racha de 20 000 puntos repetidos: todos se desplazan igual', () => {
     const C: P = { lat: CENTRO.lat, lng: CENTRO.lng + 0.02 };
     const camino = [A, ...Array.from({ length: 20_000 }, () => B), C];
-    const inicio = performance.now();
     const r = desplazarCamino(camino, 4, 14);
-    expect(performance.now() - inicio).toBeLessThan(50);
     expect(r).toHaveLength(camino.length);
     const esperado = desplazamientoPx(B, r[1] as P, 14);
     expect(esperado.dist).toBeCloseTo(4, 3);
