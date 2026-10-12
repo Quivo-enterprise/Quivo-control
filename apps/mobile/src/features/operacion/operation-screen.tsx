@@ -28,7 +28,9 @@ import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared
 import { MapErrorBoundary } from './map-error-boundary';
 import { completadosTrasDeteccion, proximoPuntoControlPendiente } from './proximo-punto-control';
 import { RouteMap } from '../mapa/route-map';
-import { MARGEN_INFERIOR_SHEET, NextControlSheet, SNAP_OFFSET_SHEET } from './next-control-sheet';
+import { MARGEN_INFERIOR_SHEET, NextControlSheet } from './next-control-sheet';
+import { BrujulaMapa } from './brujula-mapa';
+import { crearEmisorRumbo } from '../mapa/rumbo-mapa';
 import { useModoCamara } from '../mapa/use-modo-camara';
 import type { InsetsNavegacion, RouteMapProps } from '../mapa/tipos';
 import { useSyncStatus } from './use-sync-status';
@@ -102,7 +104,9 @@ export function OperationScreen(
   const [observacionModalVisible, setObservacionModalVisible] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
-  const { camara, onPanUsuario, recentrar } = useModoCamara(gps.tracking);
+  const { camara, onPanUsuario, recentrar, alternarOrientacion } = useModoCamara(gps.tracking);
+  // Canal mapa -> brújula del rumbo de la cámara: no pasa por estado de React (llega a ~30 Hz).
+  const emisorRumbo = useRef(crearEmisorRumbo()).current;
   const jornada = useJornada({
     vehiculoId: props.contexto.vehiculo.id,
     conductorId: props.contexto.conductor.id,
@@ -112,10 +116,13 @@ export function OperationScreen(
   const fase = faseControl({ jornadaIniciada: jornada.jornadaIniciada, tracking: gps.tracking });
 
   // Lo que tapa el mapa en navegación (`paddingNavegacion`): borde inferior de la tarjeta
-  // superior y lo que ocupa el sheet COLAPSADO desde abajo. Solo se setea si el valor redondeado
-  // cambia, para no re-renderizar la pantalla por cada layout.
+  // superior y lo que ocupa el sheet VISIBLE (expandido o colapsado) desde abajo. Solo se setea si
+  // el valor redondeado cambia, para no re-renderizar la pantalla por cada layout.
+  // `altoSheet` = alto del sheet expandido (ancla los FABs); `altoSheetVisible` = lo que asoma hoy
+  // desde el borde inferior, margen incluido (el sheet lo avisa al terminar cada snap).
   const [insetSuperior, setInsetSuperior] = useState(0);
   const [altoSheet, setAltoSheet] = useState(0);
+  const [altoSheetVisible, setAltoSheetVisible] = useState(0);
   const onLayoutTopOverlay = useCallback((e: LayoutChangeEvent) => {
     const { y, height } = e.nativeEvent.layout;
     setInsetSuperior(Math.round(y + height));
@@ -127,10 +134,14 @@ export function OperationScreen(
   const insetsNavegacion = useMemo(
     () => ({
       superior: insetSuperior,
-      inferior: Math.max(0, altoSheet + MARGEN_INFERIOR_SHEET - SNAP_OFFSET_SHEET),
+      inferior: Math.max(0, altoSheetVisible),
     }),
-    [insetSuperior, altoSheet],
+    [insetSuperior, altoSheetVisible],
   );
+  // Base de los FABs y del botón "Centrar": justo encima del sheet EXPANDIDO (no del colapsado, así
+  // nunca quedan tapados); se mueven con el sheet por `translateY: sheetPanY`. 180 mientras el
+  // sheet no se midió.
+  const fabsBottom = altoSheet > 0 ? altoSheet + MARGEN_INFERIOR_SHEET + 12 : 180;
 
   // M3 (hallazgo de revisión, medio): `puntosControl.length` se lee por REF, no como
   // dependencia del efecto de abajo — mismo patrón que `onLocationRef` en
@@ -352,6 +363,7 @@ export function OperationScreen(
         onPanUsuario={onPanUsuario}
         insetsNavegacion={insetsNavegacion}
         rutaCalculada={rutaCalculada}
+        emisorRumbo={emisorRumbo}
       />
 
       <View pointerEvents="box-none" style={styles.topOverlay} onLayout={onLayoutTopOverlay}>
@@ -481,7 +493,27 @@ export function OperationScreen(
         topBase={insetSuperior}
       />
 
-      <Animated.View style={[styles.fabsContainer, { transform: [{ translateY: sheetPanY }] }]}>
+      <Animated.View
+        style={[styles.fabsContainer, { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] }]}
+      >
+        {/* Brújula propia (la nativa está apagada). Navegación: alterna rumbo arriba / norte arriba.
+            Libre: recentra, conservando la orientación. En la vista general no se muestra. */}
+        {camara.modo !== 'general' && (
+          <BrujulaMapa
+            emisor={emisorRumbo}
+            style={styles.recenterButton}
+            norteFijo={camara.orientacion === 'norte'}
+            accessibilityLabel={
+              camara.modo === 'libre'
+                ? 'Recentrar'
+                : camara.orientacion === 'norte'
+                  ? 'Brújula: orientar el mapa según tu rumbo'
+                  : 'Brújula: fijar el norte arriba'
+            }
+            onPress={camara.modo === 'libre' ? recentrar : alternarOrientacion}
+          />
+        )}
+
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Registrar observación"
@@ -515,17 +547,35 @@ export function OperationScreen(
           </Pressable>
         )}
 
-        {camara.modo !== 'navegacion' && (
+        {camara.modo === 'general' && (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={camara.modo === 'libre' ? 'Recentrar' : 'Ver ruta completa'}
+            accessibilityLabel="Ver ruta completa"
             style={styles.recenterButton}
             onPress={recentrar}
           >
-            <Ionicons name={camara.modo === 'libre' ? 'navigate' : 'locate'} size={24} color="#3127B1" />
+            <Ionicons name="locate" size={24} color="#3127B1" />
           </Pressable>
         )}
       </Animated.View>
+
+      {/* "Centrar": solo en modo libre, bien visible (estilo Google Maps) abajo a la izquierda,
+          encima del sheet y siguiéndolo al arrastrar. */}
+      {camara.modo === 'libre' && (
+        <Animated.View
+          style={[styles.centrarContenedor, { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] }]}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Recentrar"
+            style={styles.centrarPill}
+            onPress={recentrar}
+          >
+            <Ionicons name="navigate" size={20} color="#3127B1" />
+            <Text style={styles.centrarTexto}>Centrar</Text>
+          </Pressable>
+        </Animated.View>
+      )}
 
       <NextControlSheet
         contexto={props.contexto}
@@ -554,8 +604,8 @@ export function OperationScreen(
         onStart={() => void gps.iniciar()}
         onFinish={confirmarFinalizacion}
         panY={sheetPanY}
-        colapsado={camara.modo !== 'general'}
         onAlto={setAltoSheet}
+        onAltoVisible={setAltoSheetVisible}
         gpsError={gps.errorGps}
       />
 
@@ -731,6 +781,7 @@ function MapLayer({
   onPanUsuario,
   insetsNavegacion,
   rutaCalculada,
+  emisorRumbo,
 }: {
   loading: boolean;
   paquete: PaqueteDia | null;
@@ -742,6 +793,7 @@ function MapLayer({
   onPanUsuario: RouteMapProps['onPanUsuario'];
   insetsNavegacion: InsetsNavegacion;
   rutaCalculada: [number, number][] | null;
+  emisorRumbo: RouteMapProps['emisorRumbo'];
 }) {
   if (loading) {
     return (
@@ -764,6 +816,7 @@ function MapLayer({
         onPanUsuario={onPanUsuario}
         insetsNavegacion={insetsNavegacion}
         rutaCalculada={rutaCalculada}
+        emisorRumbo={emisorRumbo}
         style={styles.fullMap}
       />
     </MapErrorBoundary>
@@ -829,9 +882,32 @@ const styles = StyleSheet.create({
   fabsContainer: {
     position: 'absolute',
     right: 16,
-    bottom: 180,
     gap: 12,
     alignItems: 'center',
+  },
+  centrarContenedor: {
+    position: 'absolute',
+    left: 16,
+  },
+  centrarPill: {
+    height: 44,
+    paddingHorizontal: 18,
+    borderRadius: quivoRadius.pill,
+    backgroundColor: quivoColors.white,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  centrarTexto: {
+    color: '#3127B1',
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 15,
+    letterSpacing: 0.3,
   },
   recenterButton: {
     width: 42,

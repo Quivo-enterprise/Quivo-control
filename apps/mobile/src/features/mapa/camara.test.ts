@@ -7,6 +7,7 @@ import {
   construirCamaraNavegacion,
   coordenadasEncuadre,
   decidirEncuadre,
+  esGestoSobreMapa,
   paddingNavegacion,
 } from './camara';
 
@@ -38,6 +39,20 @@ describe('construirCamaraNavegacion', () => {
 
   it('rumbo 0 (norte) sí se manda', () => {
     expect(construirCamaraNavegacion({ ...pos, rumbo: 0 }).heading).toBe(0);
+  });
+
+  it('orientación norte fija heading 0 aunque haya rumbo, y también sin rumbo', () => {
+    expect(construirCamaraNavegacion(pos, 'norte')).toEqual({
+      center: { latitude: -34.6, longitude: -58.4 },
+      heading: 0,
+      pitch: 55,
+      zoom: 18,
+    });
+    expect(construirCamaraNavegacion({ ...pos, rumbo: null }, 'norte').heading).toBe(0);
+  });
+
+  it('orientación rumbo explícita se comporta como el default', () => {
+    expect(construirCamaraNavegacion(pos, 'rumbo')).toEqual(construirCamaraNavegacion(pos));
   });
 });
 
@@ -119,5 +134,24 @@ describe('decidirEncuadre — guarda contra una ruta sin coordenadas', () => {
 describe('PADDING_ENCUADRE_RUTA', () => {
   it('conserva los márgenes del fitBounds de Leaflet (80 arriba, 180 abajo, 20 a los lados)', () => {
     expect(PADDING_ENCUADRE_RUTA).toEqual({ top: 80, right: 20, bottom: 180, left: 20 });
+  });
+});
+
+describe('esGestoSobreMapa', () => {
+  const inicio = { x: 100, y: 100 };
+  it('un toque quieto o con temblor chico no es gesto', () => {
+    expect(esGestoSobreMapa(inicio, { x: 100, y: 100 }, 1)).toBe(false);
+    expect(esGestoSobreMapa(inicio, { x: 104, y: 105 }, 1)).toBe(false);
+  });
+  it('moverse más de 8 px sí es gesto', () => {
+    expect(esGestoSobreMapa(inicio, { x: 109, y: 100 }, 1)).toBe(true);
+    expect(esGestoSobreMapa(inicio, { x: 106, y: 107 }, 1)).toBe(true);
+  });
+  it('dos o más dedos es gesto (pinch) aunque no se hayan movido', () => {
+    expect(esGestoSobreMapa(inicio, inicio, 2)).toBe(true);
+    expect(esGestoSobreMapa(null, inicio, 3)).toBe(true);
+  });
+  it('sin punto de inicio y un dedo no es gesto', () => {
+    expect(esGestoSobreMapa(null, { x: 500, y: 500 }, 1)).toBe(false);
   });
 });

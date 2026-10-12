@@ -1,9 +1,10 @@
 import type { StyleProp, ViewStyle } from 'react-native';
 import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
 import type { EstadoCamara } from './modo-camara';
+import type { EmisorRumbo } from './rumbo-mapa';
 
 /** Medidas (dp) de lo que tapa el mapa en navegación: borde inferior de la tarjeta superior y
- * alto que ocupa el sheet colapsado desde abajo (ver `paddingNavegacion`). */
+ * alto que ocupa el sheet VISIBLE (expandido o colapsado) desde abajo (ver `paddingNavegacion`). */
 export type InsetsNavegacion = { superior: number; inferior: number };
 
 /**
@@ -24,10 +25,13 @@ export interface RouteMapProps {
   onPanUsuario: () => void;
   /** Medidas (dp) de lo que tapa el mapa en navegación, para dejar el vehículo en el tercio
    * inferior de la banda visible (`paddingNavegacion`): borde inferior de la tarjeta superior y
-   * alto que ocupa el sheet colapsado desde abajo. */
+   * alto que ocupa el sheet visible (expandido o colapsado) desde abajo. */
   insetsNavegacion: InsetsNavegacion;
   /** Ruta real siguiendo calles (OSRM), o `null` si no hay ninguna calculada aún o falló */
   rutaCalculada: [number, number][] | null;
+  /** Canal por el que el mapa publica el rumbo de su cámara (la brújula de la pantalla se
+   * suscribe). Opcional: sin él el mapa funciona igual. */
+  emisorRumbo?: EmisorRumbo;
   style?: StyleProp<ViewStyle>;
 }
 

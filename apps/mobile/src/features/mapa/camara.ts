@@ -1,4 +1,5 @@
 import type { LatLng } from 'react-native-maps';
+import type { OrientacionCamara } from './modo-camara';
 
 /**
  * Cámara del mapa Google nativo (`react-native-maps`) en modo navegación y al encuadrar la
@@ -31,16 +32,21 @@ export interface CamaraNavegacion {
   zoom: number;
 }
 
-/** Cámara de navegación sobre `posicion`. Siempre manda pitch y zoom; `heading` solo con rumbo
- * conocido (sin él se conserva el actual en vez de snapear al norte). */
-export function construirCamaraNavegacion(posicion: {
-  lat: number;
-  lng: number;
-  rumbo: number | null;
-}): CamaraNavegacion {
+/** Cámara de navegación sobre `posicion`. Siempre manda pitch y zoom. Con orientación `rumbo`
+ * (heading-up) manda `heading` solo con rumbo conocido (sin él se conserva el actual en vez de
+ * snapear al norte); con `norte` fija heading 0 y sigue al vehículo igual. */
+export function construirCamaraNavegacion(
+  posicion: {
+    lat: number;
+    lng: number;
+    rumbo: number | null;
+  },
+  orientacion: OrientacionCamara = 'rumbo',
+): CamaraNavegacion {
+  const heading = orientacion === 'norte' ? 0 : posicion.rumbo;
   return {
     center: { latitude: posicion.lat, longitude: posicion.lng },
-    ...(posicion.rumbo !== null ? { heading: posicion.rumbo } : {}),
+    ...(heading !== null ? { heading } : {}),
     pitch: PITCH_NAVEGACION,
     zoom: ZOOM_NAVEGACION,
   };
@@ -89,4 +95,22 @@ export type AccionEncuadre = 'ajustar-ruta' | 'centrar-posicion' | 'nada';
 export function decidirEncuadre(cantidadCoordenadasRuta: number, hayPosicion: boolean): AccionEncuadre {
   if (cantidadCoordenadasRuta > 0) return 'ajustar-ruta';
   return hayPosicion ? 'centrar-posicion' : 'nada';
+}
+
+/** Cuánto (px) puede moverse un dedo antes de contar como gesto y no como toque. */
+export const UMBRAL_GESTO_PX = 8;
+
+/**
+ * ¿El toque en curso es un gesto del conductor sobre el mapa? Sí si hay dos o más dedos (pinch /
+ * rotación) o si el dedo se alejó más de `UMBRAL_GESTO_PX` de donde empezó. Un toque simple (p. ej.
+ * sobre un marcador) no lo es. Pura: la usa `route-map.tsx` desde `onTouchMove`.
+ */
+export function esGestoSobreMapa(
+  inicio: { x: number; y: number } | null,
+  actual: { x: number; y: number },
+  cantidadToques: number,
+): boolean {
+  if (cantidadToques >= 2) return true;
+  if (!inicio) return false;
+  return Math.hypot(actual.x - inicio.x, actual.y - inicio.y) > UMBRAL_GESTO_PX;
 }

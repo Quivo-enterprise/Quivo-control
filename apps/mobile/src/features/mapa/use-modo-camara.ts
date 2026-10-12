@@ -3,7 +3,7 @@ import { estadoCamaraInicial, reducirModoCamara, type EstadoCamara } from './mod
 
 /**
  * Hook fino sobre el reducer puro `modo-camara.ts`. Vive en la pantalla (no en el mapa) porque
- * la pantalla también necesita el modo: para el FAB de cámara y para colapsar el sheet. Traduce
+ * la pantalla también necesita el modo: para el FAB de cámara y la brújula. Traduce
  * los bordes de `tracking` a eventos del recorrido; el pan y el recentrar los disparan el mapa
  * y el FAB. Callbacks estables.
  */
@@ -11,6 +11,7 @@ export function useModoCamara(tracking: boolean): {
   camara: EstadoCamara;
   onPanUsuario: () => void;
   recentrar: () => void;
+  alternarOrientacion: () => void;
 } {
   const [camara, despachar] = useReducer(reducirModoCamara, tracking, estadoCamaraInicial);
 
@@ -25,5 +26,7 @@ export function useModoCamara(tracking: boolean): {
   const onPanUsuario = useCallback(() => despachar({ tipo: 'panUsuario' }), []);
   const recentrar = useCallback(() => despachar({ tipo: 'recentrar' }), []);
 
-  return { camara, onPanUsuario, recentrar };
+  const alternarOrientacion = useCallback(() => despachar({ tipo: 'alternarOrientacion' }), []);
+
+  return { camara, onPanUsuario, recentrar, alternarOrientacion };
 }

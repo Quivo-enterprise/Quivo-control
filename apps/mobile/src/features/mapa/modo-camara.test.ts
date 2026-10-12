@@ -4,9 +4,14 @@ import {
   reducirModoCamara,
   type EstadoCamara,
   type ModoCamara,
+  type OrientacionCamara,
 } from './modo-camara';
 
-const en = (modo: ModoCamara, seq = 5): EstadoCamara => ({ modo, desde: modo, accion: 'ninguna', seq });
+const en = (
+  modo: ModoCamara,
+  seq = 5,
+  orientacion: OrientacionCamara = 'rumbo',
+): EstadoCamara => ({ modo, desde: modo, accion: 'ninguna', orientacion, seq });
 
 describe('estadoCamaraInicial', () => {
   it('con tracking arranca en navegación siguiendo', () => {
@@ -14,6 +19,7 @@ describe('estadoCamaraInicial', () => {
       modo: 'navegacion',
       desde: 'navegacion',
       accion: 'seguir',
+      orientacion: 'rumbo',
       seq: 0,
     });
   });
@@ -22,6 +28,7 @@ describe('estadoCamaraInicial', () => {
       modo: 'general',
       desde: 'general',
       accion: 'encuadrar',
+      orientacion: 'rumbo',
       seq: 0,
     });
   });
@@ -33,6 +40,7 @@ describe('iniciarRecorrido', () => {
       modo: 'navegacion',
       desde: modo,
       accion: 'seguir',
+      orientacion: 'rumbo',
       seq: 6,
     });
   });
@@ -48,6 +56,7 @@ describe('finalizarRecorrido', () => {
       modo: 'general',
       desde: modo,
       accion: 'encuadrar',
+      orientacion: 'rumbo',
       seq: 6,
     });
   });
@@ -59,6 +68,7 @@ describe('panUsuario', () => {
       modo: 'libre',
       desde: 'navegacion',
       accion: 'ninguna',
+      orientacion: 'rumbo',
       seq: 5,
     });
   });
@@ -74,6 +84,7 @@ describe('recentrar', () => {
       modo: 'navegacion',
       desde: modo,
       accion: 'seguir',
+      orientacion: 'rumbo',
       seq: 6,
     });
   });
@@ -82,7 +93,45 @@ describe('recentrar', () => {
       modo: 'general',
       desde: 'general',
       accion: 'encuadrar',
+      orientacion: 'rumbo',
       seq: 6,
     });
+  });
+});
+
+describe('alternarOrientacion', () => {
+  it('en navegación alterna rumbo <-> norte, sigue al vehículo y sube seq', () => {
+    const aNorte = reducirModoCamara(en('navegacion'), { tipo: 'alternarOrientacion' });
+    expect(aNorte).toEqual({
+      modo: 'navegacion',
+      desde: 'navegacion',
+      accion: 'seguir',
+      orientacion: 'norte',
+      seq: 6,
+    });
+    const deVuelta = reducirModoCamara(aNorte, { tipo: 'alternarOrientacion' });
+    expect(deVuelta.orientacion).toBe('rumbo');
+    expect(deVuelta.seq).toBe(7);
+    expect(deVuelta.accion).toBe('seguir');
+  });
+  it.each<ModoCamara>(['general', 'libre'])('%s devuelve la misma referencia', (modo) => {
+    const e = en(modo);
+    expect(reducirModoCamara(e, { tipo: 'alternarOrientacion' })).toBe(e);
+  });
+});
+
+describe('orientacion a través de las transiciones', () => {
+  it('panUsuario la conserva', () => {
+    expect(reducirModoCamara(en('navegacion', 5, 'norte'), { tipo: 'panUsuario' }).orientacion).toBe('norte');
+  });
+  it('recentrar desde libre la conserva', () => {
+    const r = reducirModoCamara(en('libre', 5, 'norte'), { tipo: 'recentrar' });
+    expect(r).toMatchObject({ modo: 'navegacion', accion: 'seguir', orientacion: 'norte', seq: 6 });
+  });
+  it('iniciarRecorrido desde libre la conserva', () => {
+    expect(reducirModoCamara(en('libre', 5, 'norte'), { tipo: 'iniciarRecorrido' }).orientacion).toBe('norte');
+  });
+  it.each<ModoCamara>(['navegacion', 'libre'])('finalizarRecorrido desde %s la reinicia a rumbo', (modo) => {
+    expect(reducirModoCamara(en(modo, 5, 'norte'), { tipo: 'finalizarRecorrido' }).orientacion).toBe('rumbo');
   });
 });

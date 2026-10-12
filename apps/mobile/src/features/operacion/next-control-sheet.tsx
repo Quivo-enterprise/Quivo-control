@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -20,12 +20,12 @@ import { subtituloJornada } from '../jornada/jornada-store-core';
 
 const NUMERO_EMERGENCIAS = '911';
 
-/** Cuánto baja (dp) el sheet al minimizarse: queda asomando solo el borde superior. La pantalla
- * lo usa para calcular qué parte del mapa tapa el sheet colapsado. */
-export const SNAP_OFFSET_SHEET = 70;
-
 /** Separación (dp) entre el sheet y el borde inferior de la pantalla (`styles.sheet.bottom`). */
 export const MARGEN_INFERIOR_SHEET = 12;
+
+/** Aire (dp) bajo la cabecera cuando el sheet está colapsado: la franja visible es la cabecera
+ * (asa + "Próximo Control" + distancia + "#N") más este respiro, así nada queda cortado a la mitad. */
+const AIRE_BAJO_CABECERA = 14;
 
 // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
 // esta interfaz tenía `pendingEvents`/`isOffline`/`isSyncing` — ninguno se leía en el render
@@ -56,47 +56,98 @@ export interface NextControlSheetProps {
   onStart: () => void;
   onFinish: () => void;
   panY: Animated.Value;
-  /** `true` = el sheet se colapsa a `SNAP_OFFSET_SHEET` (cualquier modo de cámara distinto de
-   * `general`: navegación y libre); `false` lo vuelve a expandir. El conductor puede arrastrarlo a mano en cualquier momento. */
-  colapsado: boolean;
   /** Alto (dp, redondeado) del sheet expandido, medido en el layout de su raíz. */
   onAlto?: (alto: number) => void;
+  /** Alto (dp) que el sheet ocupa HOY medido desde el borde inferior de la pantalla, margen
+   * incluido: expandido = alto completo + margen; colapsado = cabecera + aire + margen. Se avisa
+   * al terminar cada snap (no cuadro a cuadro) y solo si cambió. La pantalla lo usa para que el
+   * vehículo en navegación quede por encima del sheet. */
+  onAltoVisible?: (alto: number) => void;
 }
 
 export function NextControlSheet(props: NextControlSheetProps) {
-  const { panY } = props;
-  const [minimized, setMinimized] = useState(false);
+  const { panY, onAlto, onAltoVisible } = props;
   const [confirmarEmergencia, setConfirmarEmergencia] = useState(false);
   const { fase, onEmpezarDia, empezandoDia = false, puedeEmpezarDia = true } = props;
   const tracking = fase === 'recorrido';
   // Con `tracking` la fase 'recorrido' manda de inmediato; si no, mientras se lee la jornada
   // no se sabe aún si toca EMPEZAR DÍA o COMENZAR RUTA.
   const cargandoJornada = Boolean(props.jornadaCargando) && !tracking;
-  const snapOffset = SNAP_OFFSET_SHEET;
-  const { colapsado, onAlto } = props;
+  const cabeceraJornada = fase === 'jornada' && !cargandoJornada;
 
-  // El `PanResponder` se crea UNA vez (`useRef`), así que sus handlers cerrarían sobre el
-  // `minimized` inicial (siempre `false`): el arrastre leía un valor viejo. Se lee por ref.
+  // El sheet arranca EXPANDIDO y solo se colapsa cuando el conductor lo arrastra hacia abajo (no
+  // hay colapso automático al iniciar la ruta: cortaba FINALIZAR RUTA a la mitad). Todo el estado
+  // del snap vive en refs porque el `PanResponder` se crea UNA vez y cerraría sobre valores viejos:
+  // - `minimizedRef`: ¿está colapsado? (se confirma al terminar el spring).
+  // - `altoSheetRef` / `altoCabeceraRef`: medidas reales (onLayout).
+  // - `offsetRef`: cuánto baja el sheet colapsado = alto del sheet - (cabecera + aire), de modo que
+  //   quede visible exactamente la franja de la cabecera.
   const minimizedRef = useRef(false);
-  minimizedRef.current = minimized;
+  // - `objetivoColapsadoRef`: snap DESTINO del último `animarA` (se fija al arrancar el spring, no
+  //   al terminar). Sirve para reajustar el offset si las medidas cambian con un spring en vuelo.
+  const objetivoColapsadoRef = useRef(false);
+  const altoSheetRef = useRef(0);
+  const altoCabeceraRef = useRef(0);
+  const offsetRef = useRef(0);
+  const altoVisibleEmitidoRef = useRef<number | null>(null);
+  const onAltoVisibleRef = useRef(onAltoVisible);
+  onAltoVisibleRef.current = onAltoVisible;
 
-  // Colapso controlado: al cambiar `colapsado` el sheet se anima solo; el arrastre manual sigue
-  // funcionando después porque `minimized` queda sincronizado.
-  const colapsadoAplicadoRef = useRef(false);
-  useEffect(() => {
-    if (colapsado === colapsadoAplicadoRef.current) return;
-    colapsadoAplicadoRef.current = colapsado;
-    minimizedRef.current = colapsado;
-    setMinimized(colapsado);
-    Animated.spring(panY, { toValue: colapsado ? snapOffset : 0, useNativeDriver: true }).start();
-  }, [colapsado, panY, snapOffset]);
+  const emitirAltoVisible = useCallback(() => {
+    if (altoSheetRef.current <= 0) return;
+    const visible = Math.max(
+      0,
+      altoSheetRef.current + MARGEN_INFERIOR_SHEET - (minimizedRef.current ? offsetRef.current : 0),
+    );
+    if (visible === altoVisibleEmitidoRef.current) return;
+    altoVisibleEmitidoRef.current = visible;
+    onAltoVisibleRef.current?.(visible);
+  }, []);
 
-  const altoReportadoRef = useRef<number | null>(null);
+  // Anima al snap y, SOLO si el spring terminó (no fue interrumpido por otro gesto), confirma el
+  // estado y avisa el alto visible.
+  const animarA = useCallback(
+    (destino: number, minimizado: boolean) => {
+      objetivoColapsadoRef.current = minimizado;
+      Animated.spring(panY, { toValue: destino, useNativeDriver: true }).start(({ finished }) => {
+        if (!finished) return;
+        minimizedRef.current = minimizado;
+        emitirAltoVisible();
+      });
+    },
+    [panY, emitirAltoVisible],
+  );
+
+  // Recalcula el offset colapsado con las medidas actuales. Si el destino es colapsado (spring en
+  // vuelo o ya terminado) y el offset cambió (p. ej. apareció una línea de error y el sheet creció), vuelve a hacer snap al offset
+  // nuevo; si no, solo reporta el alto visible.
+  const recalcularSnap = useCallback(() => {
+    const alto = altoSheetRef.current;
+    const cabecera = altoCabeceraRef.current;
+    if (alto <= 0 || cabecera <= 0) return;
+    const nuevo = Math.max(0, Math.round(alto - (cabecera + AIRE_BAJO_CABECERA)));
+    const cambio = nuevo !== offsetRef.current;
+    offsetRef.current = nuevo;
+    if (objetivoColapsadoRef.current && cambio) animarA(nuevo, true);
+    else emitirAltoVisible();
+  }, [animarA, emitirAltoVisible]);
+
   const onLayoutSheet = (e: LayoutChangeEvent) => {
     const alto = Math.round(e.nativeEvent.layout.height);
-    if (alto === altoReportadoRef.current) return;
-    altoReportadoRef.current = alto;
+    if (alto === altoSheetRef.current) return;
+    altoSheetRef.current = alto;
     onAlto?.(alto);
+    recalcularSnap();
+  };
+
+  // Cabecera = asa + título/distancia/"#N", medida desde el borde superior del sheet (incluye su
+  // padding superior): `y + height` es todo lo que debe seguir visible al colapsar.
+  const onLayoutCabecera = (e: LayoutChangeEvent) => {
+    const { y, height } = e.nativeEvent.layout;
+    const alto = Math.round(y + height);
+    if (alto === altoCabeceraRef.current) return;
+    altoCabeceraRef.current = alto;
+    recalcularSnap();
   };
 
   const panResponder = useRef(
@@ -104,36 +155,26 @@ export function NextControlSheet(props: NextControlSheetProps) {
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 10,
       onPanResponderMove: (_, gestureState) => {
+        const offset = offsetRef.current;
         if (!minimizedRef.current && gestureState.dy > 0) {
-          panY.setValue(Math.min(gestureState.dy, snapOffset));
+          panY.setValue(Math.min(gestureState.dy, offset));
         } else if (minimizedRef.current && gestureState.dy < 0) {
-          panY.setValue(Math.max(snapOffset + gestureState.dy, 0));
+          panY.setValue(Math.max(offset + gestureState.dy, 0));
         }
       },
       onPanResponderRelease: (_, gestureState) => {
-        if (!minimizedRef.current && gestureState.dy > 40) {
-          Animated.spring(panY, {
-            toValue: snapOffset,
-            useNativeDriver: true,
-          }).start(({ finished }) => {
-            if (!finished) return;
-            minimizedRef.current = true;
-            setMinimized(true);
-          });
-        } else if (minimizedRef.current && gestureState.dy < -40) {
-          Animated.spring(panY, {
-            toValue: 0,
-            useNativeDriver: true,
-          }).start(({ finished }) => {
-            if (!finished) return;
-            minimizedRef.current = false;
-            setMinimized(false);
-          });
+        const offset = offsetRef.current;
+        const minimizado = minimizedRef.current;
+        if (offset <= 0) return; // sin medidas todavía: nada que colapsar.
+        if (!minimizado && gestureState.dy > 40) {
+          animarA(offset, true);
+        } else if (minimizado && gestureState.dy < -40) {
+          animarA(0, false);
+        } else if (minimizado && Math.abs(gestureState.dy) < 8 && Math.abs(gestureState.dx) < 8) {
+          // Toque simple sobre la franja colapsada: expande (la franja es chica y arrastrar es difícil).
+          animarA(0, false);
         } else {
-          Animated.spring(panY, {
-            toValue: minimizedRef.current ? snapOffset : 0,
-            useNativeDriver: true,
-          }).start();
+          animarA(minimizado ? offset : 0, minimizado);
         }
       },
     }),
@@ -155,35 +196,39 @@ export function NextControlSheet(props: NextControlSheetProps) {
         },
       ]}
     >
-      <View style={styles.dragArea} {...panResponder.panHandlers}>
-        <View style={styles.dragHandle} />
+      {/* Cabecera: asa + título. Es lo único que queda visible al colapsar y la zona de arrastre. */}
+      <View onLayout={onLayoutCabecera} {...panResponder.panHandlers}>
+        <View style={styles.dragArea}>
+          <View style={styles.dragHandle} />
+        </View>
+
+        {cabeceraJornada ? (
+          <View style={styles.headerRow}>
+            <View style={styles.jornadaIcono}>
+              <Ionicons name="sunny-outline" size={22} color={quivoColors.warningText} />
+            </View>
+            <View style={styles.headerLeft}>
+              <Text style={styles.title}>Día sin iniciar</Text>
+              <Text style={styles.subtitle}>
+                {subtituloJornada(props.contexto.linea.codigo, props.totalPoints)}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          // Title + Distance on left, Control Number on right
+          <View style={styles.headerRow}>
+            <View style={styles.headerLeft}>
+              <Text style={styles.title}>Próximo Control</Text>
+              <Text style={styles.subtitle}>Se encuentra a {distanceText}</Text>
+            </View>
+
+            <Text style={styles.controlNumber}>#{currentControlNumber}</Text>
+          </View>
+        )}
       </View>
 
-      {fase === 'jornada' && !cargandoJornada ? (
-        <View style={styles.headerRow}>
-          <View style={styles.jornadaIcono}>
-            <Ionicons name="sunny-outline" size={22} color={quivoColors.warningText} />
-          </View>
-          <View style={styles.headerLeft}>
-            <Text style={styles.title}>Día sin iniciar</Text>
-            <Text style={styles.subtitle}>
-              {subtituloJornada(props.contexto.linea.codigo, props.totalPoints)}
-            </Text>
-          </View>
-        </View>
-      ) : (
-        <>
-        {/* Header Row: Title + Distance on left, Control Number on right */}
-        <View style={styles.headerRow}>
-          <View style={styles.headerLeft}>
-            <Text style={styles.title}>Próximo Control</Text>
-            <Text style={styles.subtitle}>Se encuentra a {distanceText}</Text>
-          </View>
-
-          <Text style={styles.controlNumber}>#{currentControlNumber}</Text>
-        </View>
-
-        {/* Puntos restantes Stepper */}
+      {/* Puntos restantes Stepper */}
+      {!cabeceraJornada && (
         <View style={styles.stepperSection}>
           <Text style={styles.puntosLabel}>Puntos restantes</Text>
           <MiniStepper
@@ -192,7 +237,6 @@ export function NextControlSheet(props: NextControlSheetProps) {
             tracking={tracking}
           />
         </View>
-        </>
       )}
 
       {props.gpsError && <Text style={styles.error}>{props.gpsError}</Text>}
@@ -342,7 +386,7 @@ const styles = StyleSheet.create({
   dragHandle: {
     width: 36,
     height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.10)',
+    backgroundColor: 'rgba(255, 255, 255, 0.35)',
     borderRadius: 2,
   },
   headerRow: {
