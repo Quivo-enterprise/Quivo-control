@@ -80,7 +80,7 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  * frames descartados en esa ventana no se reponen solos: al vencer, un timer llama a
  * `sincronizarCamaraNavegacion` y la cámara se re-ubica sobre el vehículo (salto chico, igual a
  * lo que avanzó en ese tiempo). La sincronización también corre tras un cambio de `mapPadding`
- * fuera de `general`: en Android `applyBaseMapPadding` hace `moveCamera`, que cancela cualquier
+ * fuera de `general` (sin suspensión activa, anima 300 ms en vez de saltar): en Android `applyBaseMapPadding` hace `moveCamera`, que cancela cualquier
  * `animateCamera` en vuelo y deja la cámara a medio camino. Si en ese momento hay una suspensión
  * activa (entrada o recentrar en curso, lo normal al entrar desde `general` porque el padding
  * cambia en el mismo commit), no se salta: se relanza el `animateCamera` por el tiempo que queda,
@@ -99,6 +99,9 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  */
 
 const COLOR_FLECHA = '#3127B1';
+
+/** Duración (ms) de la animación de cámara cuando cambia el `mapPadding` en navegación (el sheet hizo snap). */
+const DURACION_REENCUADRE_PADDING_MS = 300;
 
 interface CoordenadaMostrada {
   lat: number;
@@ -748,15 +751,19 @@ export function RouteMap({
     [salirANavegacionLibre],
   );
 
-  // En libre el conductor puede girar el mapa a mano: al terminar el movimiento se lee la cámara real
-  // para que la aguja de la brújula la siga. Solo en libre: en navegación `onRegionChangeComplete`
-  // llega seguido (cada `moveCamera` propio) y `getCamera` cruza el bridge; ahí el rumbo ya se
-  // publica desde el `setCamera` por frame.
+  // En libre y en general el rumbo de la cámara lo cambia el conductor a mano (o `fitToCoordinates`):
+  // al terminar el movimiento se lee la cámara real para que la aguja la siga. En navegación NO:
+  // `onRegionChangeComplete` llega seguido (cada `moveCamera` propio), `getCamera` cruza el bridge y
+  // el rumbo ya se publica desde el `setCamera` por frame. Al resolverse la promesa se vuelve a
+  // mirar el modo: una lectura vieja no debe pisar el rumbo que fuerza el recentrar.
   const onRegionChangeComplete = useCallback(() => {
-    if (modoRef.current !== 'libre' || !emisorRumbo) return;
+    if (modoRef.current === 'navegacion' || !emisorRumbo) return;
     mapRef.current
       ?.getCamera()
-      .then((c) => emisorRumbo.publicar(c.heading))
+      .then((c) => {
+        if (modoRef.current === 'navegacion') return;
+        emisorRumbo.publicar(c.heading);
+      })
       .catch(() => {
         // Mapa desmontado o no listo: la aguja queda como estaba.
       });
@@ -798,9 +805,18 @@ export function RouteMap({
     if (paddingAplicadoRef.current === mapPadding) return;
     paddingAplicadoRef.current = mapPadding;
     if (esGeneral) return;
-    const id = requestAnimationFrame(() => sincronizarCamaraNavegacion(true));
+    const id = requestAnimationFrame(() => {
+      // En libre el conductor movió el mapa: un snap del sheet no debe recentrarlo.
+      if (modoRef.current !== 'navegacion') return;
+      // Con suspensión en curso (entrada o recentrar) se relanza el `animateCamera` por el tiempo
+      // restante. Sin ella (p. ej. el sheet hizo snap) la cámara ANIMA 300 ms al nuevo encuadre, con
+      // la misma suspensión del `setCamera` por frame, en vez de saltar.
+      const restante = camaraSuspendidaHastaRef.current - Date.now();
+      if (restante > 80) sincronizarCamaraNavegacion(true);
+      else seguirVehiculo(DURACION_REENCUADRE_PADDING_MS);
+    });
     return () => cancelAnimationFrame(id);
-  }, [mapPadding, esGeneral, sincronizarCamaraNavegacion]);
+  }, [mapPadding, esGeneral, sincronizarCamaraNavegacion, seguirVehiculo]);
 
   const onMapReady = useCallback(() => {
     mapaListoRef.current = true;

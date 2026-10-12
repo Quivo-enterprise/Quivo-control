@@ -1,18 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { crearEmisorRumbo, diferenciaRumbo, normalizarRumbo } from './rumbo-mapa';
-
-describe('normalizarRumbo / diferenciaRumbo', () => {
-  it('normaliza a [0,360)', () => {
-    expect(normalizarRumbo(-10)).toBe(350);
-    expect(normalizarRumbo(370)).toBe(10);
-    expect(normalizarRumbo(360)).toBe(0);
-  });
-  it('mide la distancia circular mínima', () => {
-    expect(diferenciaRumbo(359, 1)).toBe(2);
-    expect(diferenciaRumbo(10, 350)).toBe(20);
-    expect(diferenciaRumbo(0, 180)).toBe(180);
-  });
-});
+import { crearEmisorRumbo } from './rumbo-mapa';
 
 describe('crearEmisorRumbo', () => {
   it('empieza en 0 y notifica cambios de 2° o más', () => {

@@ -12,7 +12,7 @@ const COLOR_SUR = '#3127B1';
  * aguja con la punta norte roja que gira `-rumbo` para seguir apuntando al norte real. Se suscribe
  * al `emisorRumbo` y mueve un `Animated.Value` directamente, así que el rumbo (que llega a ~30 Hz en
  * navegación) NO re-renderiza ni este componente ni la pantalla. Lo que hace el toque lo decide la
- * pantalla (alternar norte/rumbo en navegación, recentrar en libre). `norteFijo` marca con un aro
+ * pantalla (solo se muestra en navegación: alterna norte/rumbo). `norteFijo` marca con un aro
  * que la cámara está bloqueada con el norte arriba.
  */
 export function BrujulaMapa({

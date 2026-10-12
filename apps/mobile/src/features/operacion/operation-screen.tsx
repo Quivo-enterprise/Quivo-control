@@ -496,24 +496,6 @@ export function OperationScreen(
       <Animated.View
         style={[styles.fabsContainer, { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] }]}
       >
-        {/* Brújula propia (la nativa está apagada). Navegación: alterna rumbo arriba / norte arriba.
-            Libre: recentra, conservando la orientación. En la vista general no se muestra. */}
-        {camara.modo !== 'general' && (
-          <BrujulaMapa
-            emisor={emisorRumbo}
-            style={styles.recenterButton}
-            norteFijo={camara.orientacion === 'norte'}
-            accessibilityLabel={
-              camara.modo === 'libre'
-                ? 'Recentrar'
-                : camara.orientacion === 'norte'
-                  ? 'Brújula: orientar el mapa según tu rumbo'
-                  : 'Brújula: fijar el norte arriba'
-            }
-            onPress={camara.modo === 'libre' ? recentrar : alternarOrientacion}
-          />
-        )}
-
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Registrar observación"
@@ -545,6 +527,23 @@ export function OperationScreen(
           >
             <Ionicons name="bug" size={22} color={quivoColors.accentStrong} />
           </Pressable>
+        )}
+
+        {/* Brújula propia (la nativa está apagada). Solo en navegación: alterna rumbo arriba / norte
+            arriba. En libre el único control de recentrado es el pill "Centrar"; en la vista general
+            (norte fijo) no hace falta. */}
+        {camara.modo === 'navegacion' && (
+          <BrujulaMapa
+            emisor={emisorRumbo}
+            style={styles.recenterButton}
+            norteFijo={camara.orientacion === 'norte'}
+            accessibilityLabel={
+              camara.orientacion === 'norte'
+                ? 'Brújula: orientar el mapa según tu rumbo'
+                : 'Brújula: fijar el norte arriba'
+            }
+            onPress={alternarOrientacion}
+          />
         )}
 
         {camara.modo === 'general' && (
@@ -879,9 +878,13 @@ const styles = StyleSheet.create({
     fontFamily: quivoFonts.bodySemiBold,
     fontSize: 13,
   },
+  // Fila horizontal de FABs a la derecha, a la altura del pill "Centrar" (izquierda). En navegación
+  // son hasta 4 (obs, info, bug de dev, brújula) = 4×42 + 3×12 = 204 dp; el pill (~120 dp) solo
+  // existe en libre, donde la brújula no se muestra, así que en 360 dp nunca se solapan.
   fabsContainer: {
     position: 'absolute',
     right: 16,
+    flexDirection: 'row',
     gap: 12,
     alignItems: 'center',
   },
