@@ -216,3 +216,12 @@ export function colorTextoContraste(fondo: string): '#ffffff' | '#111827' {
   if (!parseHexColor(fondo)) return '#ffffff';
   return colorLuminance(fondo) > 0.179 ? '#111827' : '#ffffff';
 }
+
+/**
+ * Desplazamiento lateral (px de pantalla) de la ruta `indice` entre `total` rutas dibujables:
+ * con varias rutas se reparten de a 4 px alrededor del eje; con una sola no hay desplazamiento.
+ * Lo usan ambos motores (`line-offset` de MapLibre y `desplazarCamino` de Google).
+ */
+export function offsetRutaParalela(indice: number, total: number): number {
+  return total > 1 ? (indice - (total - 1) / 2) * 4 : 0;
+}

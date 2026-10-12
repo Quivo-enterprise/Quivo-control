@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   Alert,
@@ -68,6 +68,10 @@ export default function RecorridoDetallePage() {
     : 0;
 
   const totalPuntos = detalle?.puntosControl.length ?? 0;
+
+  // Referencias estables para el mapa: sin memo, cada render re-proyectaría todo el trazado.
+  const rutasMapa = useMemo(() => (detalle ? construirRutas(detalle) : []), [detalle]);
+  const marcadoresMapa = useMemo(() => (detalle ? construirMarcadores(detalle) : []), [detalle]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -301,8 +305,8 @@ export default function RecorridoDetallePage() {
             }}
           >
             <RouteMap
-              routes={construirRutas(detalle)}
-              markers={construirMarcadores(detalle)}
+              routes={rutasMapa}
+              markers={marcadoresMapa}
               height="480px"
               engine="google"
               googleMapsApiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}

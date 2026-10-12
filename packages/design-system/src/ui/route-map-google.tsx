@@ -74,6 +74,7 @@ import {
   colorTextoContraste,
   etiquetaFrescura,
   nodeNumberFromId,
+  offsetRutaParalela,
   resolveColor,
   resolvePointId,
   routeVisuals,
@@ -254,6 +255,21 @@ interface EntradaRuta {
   firma: string;
 }
 
+/**
+ * Reaplica el offset lateral de las rutas paralelas a `zoom` (constante en px, así que en metros
+ * cambia con el zoom) y recoloca la etiqueta en el punto medio del camino ya desplazado.
+ */
+function reaplicarOffsetsRutas(rutas: Map<string, EntradaRuta>, zoom: number): void {
+  rutas.forEach((entrada) => {
+    if (entrada.offsetPx === 0) return;
+    const camino = desplazarCamino(entrada.base, entrada.offsetPx, zoom);
+    entrada.casing.setPath(camino);
+    entrada.linea.setPath(camino);
+    const medio = camino[Math.floor(camino.length / 2)];
+    if (entrada.etiqueta && medio) entrada.etiqueta.position = medio;
+  });
+}
+
 interface EntradaZona {
   circulo: google.maps.Circle;
   firma: string;
@@ -414,6 +430,7 @@ function Controlador({
     tiposEntrada.forEach((t) => div.addEventListener(t, alEntrada, { capture: true, passive: true }));
     div.addEventListener('pointerup', alSoltar, true);
     div.addEventListener('pointercancel', alSoltar, true);
+    let frameOffsets: number | null = null;
     const escuchas: google.maps.MapsEventListener[] = [
       map.addListener('idle', () => {
         programaticoRef.current = false;
@@ -436,6 +453,13 @@ function Controlador({
       map.addListener('dragstart', () => onUserPanRef.current?.()),
       map.addListener('zoom_changed', () => {
         actualizarEtiquetasPorZoom(map);
+        // Offsets de rutas paralelas: a lo sumo una recomputación por frame.
+        if (frameOffsets === null) {
+          frameOffsets = requestAnimationFrame(() => {
+            frameOffsets = null;
+            reaplicarOffsetsRutas(rutasRef.current, map.getZoom() ?? ZOOM_POR_DEFECTO);
+          });
+        }
         if (!programaticoRef.current) onUserPanRef.current?.();
       }),
       map.addListener('click', (evento: google.maps.MapMouseEvent) => {
@@ -446,6 +470,7 @@ function Controlador({
     return () => {
       cancelado = true;
       window.clearTimeout(respaldo);
+      if (frameOffsets !== null) cancelAnimationFrame(frameOffsets);
       escuchas.forEach((e) => e.remove());
       tiposEntrada.forEach((t) => div.removeEventListener(t, alEntrada, true));
       div.removeEventListener('pointerup', alSoltar, true);
@@ -491,16 +516,16 @@ function Controlador({
       .filter((ruta) => ruta.points.length > 1)
       .forEach((ruta: MapRoute, indice, dibujables) => {
         vivos.add(ruta.id);
-        const base = ruta.points.map((p) => ({ lat: p.lat, lng: p.lng }));
         // Mismo criterio que MapLibre: con varias rutas se reparten ±4 px alrededor del eje.
-        const offsetPx = dibujables.length > 1 ? (indice - (dibujables.length - 1) / 2) * 4 : 0;
-        const camino = desplazarCamino(base, offsetPx, map.getZoom() ?? 0);
+        const offsetPx = offsetRutaParalela(indice, dibujables.length);
         const etiqueta = ruta.label?.trim() ?? '';
         const firma = [oscuro, ruta.color, ruta.dashed, Boolean(ruta.onClick), etiqueta, indice, offsetPx, firmaPuntos(ruta.points)].join('~');
         const previa = existentes.get(ruta.id);
         if (previa?.firma === firma && (!etiqueta || previa.etiqueta || !libMarker)) {
           return;
         }
+        const base = ruta.points.map((p) => ({ lat: p.lat, lng: p.lng }));
+        const camino = desplazarCamino(base, offsetPx, map.getZoom() ?? ZOOM_POR_DEFECTO);
         // Los colores (getComputedStyle) se resuelven solo cuando la ruta cambió.
         const visuales = routeVisuals(colorParaMapa(ruta.color, oscuro), oscuro);
         const clickable = Boolean(ruta.onClick);
@@ -530,9 +555,10 @@ function Controlador({
           offsetPx,
           firma: '',
         };
-        entrada.base = base;
-        entrada.offsetPx = offsetPx;
-        if (!previa) {
+        if (previa) {
+          entrada.base = base;
+          entrada.offsetPx = offsetPx;
+        } else {
           const alClick = (evento: google.maps.PolyMouseEvent) => {
             datosRef.current.routes.find((r) => r.id === ruta.id)?.onClick?.();
             if (interactiveRef.current && onMapClickRef.current && evento.latLng) {
@@ -558,7 +584,8 @@ function Controlador({
           zIndex: 2 + indice,
           ...opcionesLinea,
         });
-        // Etiqueta HTML en el vértice central (Google no dibuja texto a lo largo de la línea).
+        // Etiqueta HTML en el vértice central del camino YA desplazado (como el símbolo de
+        // MapLibre, que sigue la línea con offset); `reaplicarOffsetsRutas` la sigue al zoom.
         if (entrada.etiqueta) {
           entrada.etiqueta.map = null;
           entrada.etiqueta = null;
@@ -568,7 +595,7 @@ function Controlador({
           contenido.style.setProperty('--qv-gmap-label-color', visuales.stroke);
           entrada.etiqueta = new libMarker.AdvancedMarkerElement({
             map,
-            position: base[Math.floor(base.length / 2)],
+            position: camino[Math.floor(camino.length / 2)],
             content: contenido,
             zIndex: 3,
           });
@@ -583,21 +610,6 @@ function Controlador({
       existentes.delete(id);
     });
   }, [map, libMarker, routes, oscuro]);
-
-  // El offset lateral es constante en px, así que en metros cambia con el zoom: se reaplica.
-  useEffect(() => {
-    if (!map) return;
-    const oyente = map.addListener('zoom_changed', () => {
-      const zoom = map.getZoom() ?? 0;
-      rutasRef.current.forEach((entrada) => {
-        if (entrada.offsetPx === 0) return;
-        const camino = desplazarCamino(entrada.base, entrada.offsetPx, zoom);
-        entrada.casing.setPath(camino);
-        entrada.linea.setPath(camino);
-      });
-    });
-    return () => oyente.remove();
-  }, [map]);
 
   useEffect(() => {
     if (!map) return;
@@ -997,8 +1009,9 @@ export function RouteMap(props: RouteMapProps) {
       >
         <GoogleMap
           key={oscuro ? 'oscuro' : 'claro'}
+          // `@vis.gl/react-google-maps` descarta `style` cuando hay `className`: el tamaño del
+          // canvas lo da `.qv-gmap > .qv-route-map__canvas` en `styles.css`.
           className="qv-route-map__canvas"
-          style={{ width: '100%', height: '100%' }}
           mapId={googleMapsMapId || MAP_ID_DEMO}
           colorScheme={oscuro ? ColorScheme.DARK : ColorScheme.LIGHT}
           defaultCenter={centroInicial}
