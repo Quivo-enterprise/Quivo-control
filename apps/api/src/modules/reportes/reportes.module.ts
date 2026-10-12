@@ -7,6 +7,7 @@ import { ExportesController } from './exportes.controller.js';
 import { ExportesService } from './exportes.service.js';
 import { EnVivoController } from './en-vivo.controller.js';
 import { EnVivoService } from './en-vivo.service.js';
+import { EnVivoUsuarioThrottlerGuard } from './en-vivo-usuario-throttler.guard.js';
 import { JornadasController } from './jornadas.controller.js';
 import { JornadasService } from './jornadas.service.js';
 
@@ -25,6 +26,7 @@ import { JornadasService } from './jornadas.service.js';
     RecorridosService,
     ExportesService,
     EnVivoService,
+    EnVivoUsuarioThrottlerGuard,
     JornadasService,
   ],
 })

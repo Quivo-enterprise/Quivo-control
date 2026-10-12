@@ -1,11 +1,12 @@
 import { Controller, Get, Inject, Param, Query, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { TrazaEnVivoQuerySchema, type TrazaEnVivoQuery } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
 import { RolesGuard } from '../../common/auth/roles.guard.js';
+import { EnVivoUsuarioThrottlerGuard } from './en-vivo-usuario-throttler.guard.js';
 import { EnVivoService } from './en-vivo.service.js';
 
 class TrazaEnVivoQueryDto extends createZodDto(TrazaEnVivoQuerySchema) {}
@@ -14,21 +15,26 @@ class TrazaEnVivoQueryDto extends createZodDto(TrazaEnVivoQuerySchema) {}
  * ENTREGA 3 — mapa en vivo `/en-vivo`. Solo lectura, misma pila de guards/roles que
  * `recorridos.controller.ts`.
  *
- * `@Throttle` propio de 300 req/min: el límite global (`app.module.ts`, QUI-251) es
- * 100 req/min/IP compartido con TODO el panel, y esta pantalla sola hace ~8 req/min por
- * pestaña — con varias pestañas o varios operadores detrás del mismo NAT, el global se
- * agota y tumba el resto del panel. La forma `{ default: { ... } }` es la de
- * `@nestjs/throttler` v6, que nombra los throttlers (el throttler global se llama
- * `'default'`, ver `ThrottlerModule.forRoot`).
+ * Rate limit propio de 600 req/min POR USUARIO (no por IP): el límite global
+ * (`app.module.ts`, QUI-251) es 100 req/min/IP compartido con TODO el panel, y cada pestaña
+ * de esta pantalla hace ~60 req/min (poll de posiciones 2 s + traza 2 s; hasta ~120 con
+ * `hayMas`). Por IP, varios operadores o pestañas detrás del mismo NAT se darían 429 entre
+ * sí. `@SkipThrottle()` apaga el throttler global ('default', que corre ANTES de la auth y
+ * por eso solo podría usar la IP) y `EnVivoUsuarioThrottlerGuard` —DESPUÉS de
+ * `JwtAuthGuard`, cuando `req.user` ya existe— aplica el cupo por `userId`. Misma forma
+ * que `SyncDeviceThrottlerGuard` en `POST /sync/batches`. El nombre del throttler
+ * ('usuario') se declara en `@Throttle` con la forma `{ nombre: { ... } }` de
+ * `@nestjs/throttler` v6.
  *
  * Ninguno de estos GET lleva `@Auditable`: son endpoints de poll y el interceptor de
  * auditoría solo actúa sobre handlers decorados — si escribieran, serían ~500 filas
  * basura por hora en `audit_log`.
  */
 @Controller('reportes/en-vivo')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, EnVivoUsuarioThrottlerGuard)
 @Roles('admin_quivo', 'admin_sindicato')
-@Throttle({ default: { limit: 300, ttl: 60_000 } })
+@SkipThrottle()
+@Throttle({ usuario: { limit: 600, ttl: 60_000 } })
 export class EnVivoController {
   constructor(@Inject(EnVivoService) private readonly enVivoService: EnVivoService) {}
 

@@ -163,7 +163,7 @@ export default function EnVivoPage() {
             resetKey: sesionSeleccionada,
             points: datos.puntos,
             // Alcanza el punto más nuevo en ~1 s como máximo: repartir todo el intervalo de
-            // poll (10 s) sumaba ese mismo lag a la posición mostrada.
+            // poll sumaba ese mismo lag a la posición mostrada.
             intervalMs: Math.min(
               DURACION_MAX_ANIMACION_MS,
               intervaloVigente === false ? INTERVALO_POLL_MS : intervaloVigente,

@@ -53,10 +53,11 @@ export function useSesionesEnVivo(token: string | null) {
  * (`GET /reportes/en-vivo/posiciones`, sin `sesionId`). Reemplaza a `useSesionesEnVivo` como
  * fuente del mapa: gobierna qué se dibuja, no un `<select>` de una sola sesión.
  *
- * `refetchInterval: 2_000` (no los 10 s del poll de traza por sesión; bajado de 5 s para recortar la latencia web vs. teléfono, PR 2 de `docs/plan-en-vivo-google.md`): acá el costo NO
- * escala con N — siempre es una query — así que se puede pollear un poco más rápido sin
- * acercarse al throttle (`@Throttle` de 300 req/min en `en-vivo.controller.ts`, y esto es
- * ~30 req/min por pestaña). `refetchIntervalInBackground: false` (mismo criterio que el
+ * `refetchInterval: 2_000` (bajado de 5 s para recortar la latencia web vs. teléfono, PR 2
+ * de `docs/plan-en-vivo-google.md`; igual que el poll de traza por sesión): acá el costo NO
+ * escala con N — siempre es una query — así que se puede pollear rápido sin acercarse al
+ * throttle (600 req/min por usuario en `en-vivo.controller.ts`, y esto es ~30 req/min por
+ * pestaña). `refetchIntervalInBackground: false` (mismo criterio que el
  * resto de los hooks de esta pantalla): con la pestaña oculta no tiene sentido seguir
  * pollendo un mapa que nadie mira.
  */
@@ -75,7 +76,7 @@ export function usePosicionesEnVivo(token: string | null) {
 
 /**
  * Contexto de la sesión: `staleTime: Infinity` porque la geometría de la ruta son cientos de
- * vértices — reenviarla cada 10 s sería ~90 % del payload y 0 % de información nueva. El
+ * vértices — reenviarla en cada poll sería ~90 % del payload y 0 % de información nueva. El
  * cierre de la sesión no viaja por acá sino en cada respuesta de posiciones (`sesionFin`).
  */
 export function useContextoEnVivo(token: string | null, sesionId: string | null) {
@@ -160,7 +161,7 @@ export function useTrazaEnVivo(token: string | null, sesionId: string | null) {
       // que las guardas anti-bucle de `debeRecargar` (déficit + cooldown) más necesitan saber
       // que la recarga falló. `ultimoIntentoRecargaMs` se graba siempre, haya completado o no:
       // es lo único que impide que este caso (jornada > `TRAZA_EN_VIVO_LIMITE_MAX`, déficit
-      // creciendo de verdad en cada poll) siga disparando una recarga completa cada 10 s.
+      // creciendo de verdad en cada poll) siga disparando una recarga completa en cada poll.
       const completoAhora = recargada.completa;
       return {
         ...recargada,

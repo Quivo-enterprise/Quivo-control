@@ -23,8 +23,12 @@ import type { EstadoFrescura, PuntoTrazaGps, TrazaEnVivo } from '@quivo/shared';
  */
 export const SOLAPE_CURSOR_MS = 900_000;
 
-/** Cadencia normal del poll de posiciones. */
-export const INTERVALO_POLL_MS = 10_000;
+/**
+ * Cadencia normal del poll de la traza de la sesión seleccionada. 2 s (antes 10 s, PR 2 de
+ * `docs/plan-en-vivo-google.md`): el vehículo seleccionado se dibuja desde esta traza, así
+ * que su lag web vs. teléfono es esta cadencia + la latencia de ingesta.
+ */
+export const INTERVALO_POLL_MS = 2_000;
 
 /** Cadencia mientras el server avisa `hayMas` (la carga inicial vino truncada por `limite`). */
 export const INTERVALO_POLL_RAPIDO_MS = 1_000;
@@ -236,7 +240,7 @@ export function antiguedadViva(
  * recorrido NUEVO (`inicio_recorrido`) sin volver a loguearse — cortar el poll del todo
  * (`false`) dejaría a ese reinicio sin forma de detectarse hasta que algo dispare un
  * `refetch` manual. 60 s es un piso barato para notar el reinicio sin pollear a la cadencia
- * normal (10 s) una sesión que, la mayor parte del tiempo, no va a reiniciar.
+ * normal (2 s) una sesión que, la mayor parte del tiempo, no va a reiniciar.
  */
 export const INTERVALO_POLL_FINALIZADO_MS = 60_000;
 
