@@ -134,17 +134,20 @@ export async function obtenerEstadoPermisoNotificaciones(): Promise<Notification
  * la notificación aparezca como heads-up (banner + sonido) en vez de silenciosa en la bandeja —
  * sin esto, un chofer con la pantalla apagada no la ve nunca a tiempo.
  *
- * ID VERSIONADO a propósito (sufijo `-v1`): el día que este timbre cambie (otro `.wav`, otro
+ * ID VERSIONADO a propósito (sufijo `-v2`): el día que este timbre cambie (otro `.wav`, otro
  * `vibrationPattern`), el fix NO es editar esta constante — los teléfonos que YA crearon el
- * canal `-v1` van a seguir sonando con el timbre viejo para siempre (Android ignora el update).
- * El fix es subir a `-v2` acá (deja `-v1` comentado abajo como registro histórico) y actualizar
- * `assets/sounds/<archivo-nuevo>.wav` + `app.config.ts` en el mismo cambio.
+ * canal van a seguir sonando con el timbre viejo para siempre (Android ignora el update).
+ * El fix es subir a `-v3` acá (el `-v2` pasa a ser el obsoleto que se borra) y actualizar
+ * `assets/sounds/<archivo-nuevo>.wav` + `app.config.ts` en el mismo cambio. (`-v1` → `-v2` en
+ * la r14: chime saturado.)
  */
-const CANAL_ANUNCIO_ANDROID = 'quivo-anuncio-punto-control-v1';
+const CANAL_ANUNCIO_ANDROID = 'quivo-anuncio-punto-control-v2';
+// Histórico: `-v1` sonaba con el chime saturado de la r13; se borra al configurar el `-v2`.
+const CANAL_ANUNCIO_ANDROID_OBSOLETO = 'quivo-anuncio-punto-control-v1';
 
 /**
  * Nombre del recurso de sonido tal como lo registra el plugin `expo-notifications` en
- * `app.config.ts` (`sounds: ['./assets/sounds/confirmacion_chime_notificacion.wav']`) — copia
+ * `app.config.ts` (`sounds: ['./assets/sounds/confirmacion_chime_notificacion_v2.wav']`) — copia
  * DEDICADA del mismo timbre que usa `confirmacion-sonido.ts` (`assets/sounds/
  * confirmacion-chime.wav`), con nombre distinto A PROPÓSITO: los recursos `raw` de Android solo
  * aceptan `[a-z0-9_.]` en el nombre de archivo — un guion (el que tiene el original) rompe el
@@ -152,7 +155,7 @@ const CANAL_ANUNCIO_ANDROID = 'quivo-anuncio-punto-control-v1';
  * real en esta sesión (sin acceso a un teléfono) — confirmar que el canal efectivamente suena
  * con este timbre (y no el default del sistema) es parte del preflight de la Entrega 26.
  */
-const SONIDO_NOTIFICACION_ANDROID = 'confirmacion_chime_notificacion.wav';
+const SONIDO_NOTIFICACION_ANDROID = 'confirmacion_chime_notificacion_v2.wav';
 
 let canalConfigurado: Promise<void> | null = null;
 
@@ -162,6 +165,11 @@ let canalConfigurado: Promise<void> | null = null;
  * cruzar el bridge nativo de sobra en cada punto de control de la jornada. */
 function asegurarCanalNotificacion(): Promise<void> {
   if (!canalConfigurado) {
+    // Limpieza del canal `-v1` (chime saturado, r13): sigue visible en los Ajustes del teléfono
+    // aunque ya nada lo use. Best-effort, nunca bloquea la creación del `-v2`.
+    void Notifications.deleteNotificationChannelAsync(CANAL_ANUNCIO_ANDROID_OBSOLETO).catch(
+      () => undefined,
+    );
     canalConfigurado = Notifications.setNotificationChannelAsync(CANAL_ANUNCIO_ANDROID, {
       name: 'Puntos de control',
       importance: Notifications.AndroidImportance.HIGH,

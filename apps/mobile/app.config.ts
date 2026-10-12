@@ -152,7 +152,7 @@ export default (): ExpoConfig => ({
         // canal Android que lo referencia vive en
         // `features/operacion/anuncio-punto-control.ts` (`SONIDO_NOTIFICACION_ANDROID`) — el
         // nombre tiene que coincidir EXACTO entre los dos lugares.
-        sounds: ['./assets/sounds/confirmacion_chime_notificacion.wav'],
+        sounds: ['./assets/sounds/confirmacion_chime_notificacion_v2.wav'],
       },
     ],
     [

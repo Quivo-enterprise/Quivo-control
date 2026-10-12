@@ -77,6 +77,11 @@ import {
   reafirmarMovimientoSiEstacionario,
   restaurarComportamientoNormal,
 } from '../../gps/seguimiento-continuo';
+import {
+  clasificarErrorUbicacion,
+  codigoDeErrorUbicacion,
+  reducirSenalGps,
+} from '../../gps/errores-ubicacion';
 
 /** `Platform.OS` reducido a las dos plataformas que `permiso-ubicacion.ts` distingue — ver el
  * comentario de cabecera de ese módulo para el porqué de la semántica de `status` distinta
@@ -191,6 +196,27 @@ export function useGpsOperativo(
   const [puntos, setPuntos] = useState(0);
   const [resultado, setResultado] = useState<string | null>(null);
   const [errorGps, setErrorGps] = useState<string | null>(null);
+  // `true` cuando, con el recorrido activo, llegó un error TRANSITORIO de ubicación (408/0/2/499)
+  // DESPUÉS del último fix válido (ver `reducirSenalGps`). Reemplaza al viejo "código 408" en
+  // `errorGps`: un timeout de ubicación no tiene acción para el conductor (la UI lo muestra como
+  // chip). NO se basa en "tiempo sin fix": con distanceFilter 15 m y el canal visual apagado, un
+  // vehículo detenido no recibe fixes y daría falso positivo en cada parada.
+  const [senalGpsDebil, setSenalGpsDebil] = useState(false);
+  // `true` si el `errorGps` vigente salió de un error de ubicación del SDK (permiso): un fix
+  // válido posterior prueba que ya se resolvió, así que lo limpia (otros errores — outbox,
+  // detener — NO se tocan).
+  const errorGpsEsDeUbicacion = useRef(false);
+  const registrarFixValido = useCallback(() => {
+    setSenalGpsDebil((debil) => reducirSenalGps(debil, 'fix_valido'));
+    if (errorGpsEsDeUbicacion.current) {
+      errorGpsEsDeUbicacion.current = false;
+      setErrorGps(null);
+    }
+  }, []);
+  // Al detener el tracking se limpia la señal.
+  useEffect(() => {
+    if (!tracking) setSenalGpsDebil((debil) => reducirSenalGps(debil, 'tracking_detenido'));
+  }, [tracking]);
   // QUI-338: estado del flujo de permisos de ubicación, separado de `errorGps` a propósito —
   // `errorGps` es para fallos EN VIVO ya arrancado el tracking (escritura al outbox, stop
   // fallido); `permisoGps` es el gate PREVIO a arrancar, con su propio mensaje por caso y una
@@ -657,10 +683,21 @@ export function useGpsOperativo(
     subscription.current?.remove();
     subscription.current = BackgroundGeolocation.onLocation(
       (location) => {
+        registrarFixValido();
         void onLocationRef.current(location);
       },
       (error) => {
-        setErrorGps(`No se pudo registrar una ubicación (código ${String(error)}).`);
+        // 408/0/2/499 son transitorios (sin fix a tiempo): no se muestra error, solo se marca
+        // `senalGpsDebil` (hasta el próximo fix válido, y solo con tracking activo). Los
+        // desconocidos tampoco muestran nada al conductor. Los permanentes (permisos) sí le dicen
+        // qué hacer.
+        const clasificacion = clasificarErrorUbicacion(codigoDeErrorUbicacion(error));
+        if (clasificacion.tipo === 'permanente') {
+          errorGpsEsDeUbicacion.current = true;
+          setErrorGps(clasificacion.mensaje);
+        } else if (trackingRef.current) {
+          setSenalGpsDebil((debil) => reducirSenalGps(debil, 'error_transitorio'));
+        }
       },
     );
     // FIX POST-REVISIÓN (bug 2): suscripción de heartbeat en el MISMO punto que la de
@@ -691,7 +728,7 @@ export function useGpsOperativo(
     // (arriba, su propio `useCallback`) es quien los usa directamente (reintento de
     // `inicio_recorrido`, QUI-247) — esta función solo lo referencia vía `onHeartbeatRef`, que
     // siempre apunta a la versión más reciente (ver el `useEffect` que lo mantiene al día).
-  }, [estaEnRecorrido]);
+  }, [estaEnRecorrido, registrarFixValido]);
 
   // Crea el controlador UNA sola vez (lazy). `abrirWatch`/`onAbierto`/`onFallo` NO capturan estado
   // de render: solo refs (`canalVisualController`, `visualFixesRecibidos`), funciones de módulo y
@@ -721,6 +758,7 @@ export function useGpsOperativo(
               // (ver el docblock de `iniciarCanalVisual`, abajo) — este fix NUNCA debe convertirse
               // en un `gps_point` de evidencia.
               alimentarEstadoVisual(fixVisualDesdeLocation(location));
+              registrarFixValido();
             },
           ),
         onAbierto: () => {
@@ -735,7 +773,7 @@ export function useGpsOperativo(
       });
     }
     return canalVisualController.current;
-  }, []);
+  }, [registrarFixValido]);
 
   /**
    * FASE B (`docs/plan-ubicacion-fluida.md`, "canal visual con watchPosition"): arranca (si no
@@ -1720,6 +1758,7 @@ export function useGpsOperativo(
     puntos,
     resultado,
     errorGps,
+    senalGpsDebil,
     // QUI-338: gate de permisos previo a "Iniciar recorrido" — `operation-screen.tsx` lo usa
     // para mostrar el mensaje/acción correctos y para que el botón refleje si realmente se
     // puede arrancar (ver `permisoGps.bloqueante`).

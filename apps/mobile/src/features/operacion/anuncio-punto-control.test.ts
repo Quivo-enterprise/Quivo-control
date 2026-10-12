@@ -20,6 +20,7 @@ vi.mock('expo-speech', () => ({
 
 vi.mock('expo-notifications', () => ({
   setNotificationChannelAsync: vi.fn().mockResolvedValue(undefined),
+  deleteNotificationChannelAsync: vi.fn().mockResolvedValue(undefined),
   scheduleNotificationAsync: vi.fn().mockResolvedValue('notif-id'),
   // FIX POST-REVISIÓN (Codex `verify-fix`, punto 4): `anuncio-punto-control.ts` llama
   // `setNotificationHandler` como efecto de MÓDULO (al importarlo) — sin este mock, cualquier
@@ -310,7 +311,7 @@ describe('anunciarLlegadaPuntoControl (REDISEÑO 2026-09-23 — intención durab
     expect(scheduleNotificationMock.mock.calls[0]?.[0]).toMatchObject({
       identifier: 'sesion-1:pc-1:1',
       content: { title: 'Punto de control 6: llegaste' },
-      trigger: { channelId: 'quivo-anuncio-punto-control-v1' },
+      trigger: { channelId: 'quivo-anuncio-punto-control-v2' },
     });
     // Reclamó → programó con éxito → marca 'programado'.
     expect(marcarAnuncioProgramadoMock).toHaveBeenCalledWith(DB_FALSO, 'sesion-1:pc-1:1');
