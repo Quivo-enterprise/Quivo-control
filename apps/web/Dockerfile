@@ -89,6 +89,12 @@ ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ARG NEXT_PUBLIC_DEV_BYPASS_AUTH=false
 ENV NEXT_PUBLIC_DEV_BYPASS_AUTH=${NEXT_PUBLIC_DEV_BYPASS_AUTH}
+# Google Maps (mapa de /en-vivo). La key es de navegador (restringida por referrer), no un secreto
+# del servidor; igual no se versiona: el deploy la lee de Secret Manager y la pasa como build-arg.
+ARG NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
+ENV NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}
+ARG NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID
+ENV NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=${NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID}
 
 RUN pnpm turbo run build --filter=@quivo/web...
 

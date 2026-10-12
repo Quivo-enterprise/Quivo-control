@@ -394,10 +394,16 @@ importers:
 
   packages/design-system:
     dependencies:
+      '@vis.gl/react-google-maps':
+        specifier: 1.10.1
+        version: 1.10.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       maplibre-gl:
         specifier: ^5.24.0
         version: 5.24.0
     devDependencies:
+      '@types/google.maps':
+        specifier: 3.66.6
+        version: 3.66.6
       '@types/node':
         specifier: ^22.10.7
         version: 22.20.1
@@ -1467,6 +1473,9 @@ packages:
 
   '@fastify/proxy-addr@5.1.0':
     resolution: {integrity: sha512-INS+6gh91cLUjB+PVHfu1UqcB76Sqtpyp7bnL+FYojhjygvOPA9ctiD/JDKsyD9Xgu4hUhCSJBPig/w7duNajw==}
+
+  '@googlemaps/js-api-loader@2.1.3':
+    resolution: {integrity: sha512-1t6umwRufEGzIPjHPjPeuuY1dCal0zU2bZeomkf4OA0MprFdlKCnXY3zeFkzDaCvKjwbFubeapm61P5+EbrAoA==}
 
   '@gsap/react@2.1.2':
     resolution: {integrity: sha512-JqliybO1837UcgH2hVOM4VO+38APk3ECNrsuSM4MuXp+rbf+/2IG2K1YJiqfTcXQHH7XlA0m3ykniFYstfq0Iw==}
@@ -3074,6 +3083,9 @@ packages:
   '@types/geojson@7946.0.16':
     resolution: {integrity: sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg==}
 
+  '@types/google.maps@3.66.6':
+    resolution: {integrity: sha512-F+m8NwLXXDf43/GsxmyceugqpBtKMaQGM/raqyINTG+r7fFgCXKxTZJ6Aw4QeMwUkIJwDtYVeUhndq3RFNkuDA==}
+
   '@types/graceful-fs@4.1.9':
     resolution: {integrity: sha512-olP3sd1qOEe5dXTSaFvQG+02VdRXcdytWLAZsAq1PecU8uqQAhkrnbli7DagjtXKW/Bl7YJbUsa8MPcuc8LHEQ==}
 
@@ -3208,6 +3220,12 @@ packages:
     resolution: {integrity: sha512-TQMCz2pFJMfpNxmSfX1VSfTjwUIFx/mL+p1bnfM1xjjdla7Z+KnGMW/EhFbpckp3LyWAH4PgOsMwOMnIN+MBFg==}
     peerDependencies:
       '@urql/core': ^5.0.0
+
+  '@vis.gl/react-google-maps@1.10.1':
+    resolution: {integrity: sha512-2a6Bv04WcJIVN7IIjqygzVrmWKIgTXn/lmMdjeRWbKxX5FV6/Y3LhFScGJAKfAKqoAYIG6s31CWebhFUQdmBsw==}
+    peerDependencies:
+      react: '>=16.8.0 || ^19.0 || ^19.0.0-rc'
+      react-dom: '>=16.8.0 || ^19.0 || ^19.0.0-rc'
 
   '@visx/curve@4.0.1-alpha.0':
     resolution: {integrity: sha512-jRu61Uz274pV1zyioXmboyrLutYbnKsgjj4njSGCnhdXj5GkZvZbg+ThDb6oOzoAnJOBRLz4rzPlWvNJOzuVMg==}
@@ -4499,6 +4517,10 @@ packages:
 
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
+
+  fast-equals@6.1.1:
+    resolution: {integrity: sha512-VA9UvhVec1yj1UqkCLBCXgFBLbd6Pww2RGLa9biAHfl+/aOU9jTeP3idEtLLFouJIGDeugAxD/GhzHpjOSq4oA==}
+    engines: {node: '>=6.0.0'}
 
   fast-json-stable-stringify@2.1.0:
     resolution: {integrity: sha512-lhd/wF+Lk98HZoTCtlVraHtfh5XYijIjalXck7saUtuanSDyLMxnHhSXEDJqHxD7msR8D0uCmqlkwjCV8xvwHw==}
@@ -8357,6 +8379,10 @@ snapshots:
       '@fastify/forwarded': 3.0.1
       ipaddr.js: 2.4.0
 
+  '@googlemaps/js-api-loader@2.1.3':
+    dependencies:
+      '@types/google.maps': 3.66.6
+
   '@gsap/react@2.1.2(gsap@3.15.0)(react@18.3.1)':
     dependencies:
       gsap: 3.15.0
@@ -9907,6 +9933,8 @@ snapshots:
 
   '@types/geojson@7946.0.16': {}
 
+  '@types/google.maps@3.66.6': {}
+
   '@types/graceful-fs@4.1.9':
     dependencies:
       '@types/node': 22.20.1
@@ -10089,6 +10117,14 @@ snapshots:
     dependencies:
       '@urql/core': 5.2.0
       wonka: 6.3.6
+
+  '@vis.gl/react-google-maps@1.10.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+    dependencies:
+      '@googlemaps/js-api-loader': 2.1.3
+      '@types/google.maps': 3.66.6
+      fast-equals: 6.1.1
+      react: 18.3.1
+      react-dom: 18.3.1(react@18.3.1)
 
   '@visx/curve@4.0.1-alpha.0':
     dependencies:
@@ -11461,6 +11497,8 @@ snapshots:
   fast-decode-uri-component@1.0.1: {}
 
   fast-deep-equal@3.1.3: {}
+
+  fast-equals@6.1.1: {}
 
   fast-json-stable-stringify@2.1.0: {}
 
