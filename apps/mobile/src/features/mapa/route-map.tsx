@@ -17,16 +17,32 @@ import MapView, {
 } from 'react-native-maps';
 import Svg, { Path } from 'react-native-svg';
 import { quivoRadius } from '../../shared/theme/quivo-theme';
-import { duracionAnimacionMs, interpolarAngulo, interpolarLatLng } from '../operacion/movimiento/geo';
+import {
+  distanciaMetros,
+  duracionAnimacionMs,
+  interpolarAngulo,
+  interpolarLatLng,
+} from '../operacion/movimiento/geo';
+import {
+  MAX_FALLOS_SNAP,
+  debeInterpolarPorRuta,
+  interpolarSobreRuta,
+  prepararRutaSnap,
+  snapARuta,
+  type RutaSnap,
+} from '../operacion/movimiento/snap-ruta';
 import { useEstadoVisual } from '../operacion/movimiento/store-visual';
 import {
   PADDING_ENCUADRE_RUTA,
+  ZOOM_NAVEGACION,
   ZOOM_SEGUIMIENTO,
   construirCamaraNavegacion,
   coordenadasEncuadre,
   decidirEncuadre,
   esGestoSobreMapa,
   paddingNavegacion,
+  suavizarZoom,
+  zoomPorVelocidad,
 } from './camara';
 import {
   aspectoPuntoControl,
@@ -103,6 +119,13 @@ const COLOR_FLECHA = '#3127B1';
 /** Duración (ms) de la animación de cámara cuando cambia el `mapPadding` en navegación (el sheet hizo snap). */
 const DURACION_REENCUADRE_PADDING_MS = 300;
 
+/** El loop de convergencia del zoom se detiene cuando el zoom queda a menos de esto del objetivo. */
+const UMBRAL_CONVERGENCIA_ZOOM = 0.01;
+
+/** Factor de mezcla por frame (~30 Hz) del rumbo mostrado hacia el rumbo del tramo de la ruta:
+ * suaviza el giro sin adelantarse a la esquina. */
+const FACTOR_RUMBO_RUTA = 0.35;
+
 interface CoordenadaMostrada {
   lat: number;
   lng: number;
@@ -110,6 +133,23 @@ interface CoordenadaMostrada {
    * dibuja un punto sin flecha (ver docblock del módulo). Una vez conocido, nunca vuelve a
    * `null` (mismo invariante que `EstadoRumbo`, `movimiento/rumbo.ts`). */
   rumbo: number | null;
+  /** Distancia acumulada (m) sobre la polilínea de la ruta cuando el marcador está ajustado a
+   * ella (snap visual); `undefined` si se dibuja el GPS crudo. Decide animar por la calle. */
+  distancia?: number;
+  /** El DESTINO de la animación en curso está ajustado a la ruta (aunque algún frame intermedio de
+   * la interpolación lineal no lleve `distancia`): gobierna el halo de precisión, que no aplica
+   * cuando el marcador no está sobre el GPS crudo. */
+  ajustadaARuta?: boolean;
+}
+
+/** Firma barata de contenido de la geometría (cantidad + hash de las coordenadas). */
+function firmaGeometria(coordenadas: ReadonlyArray<ReadonlyArray<number>>): string {
+  let hash = 0;
+  for (const c of coordenadas) {
+    hash = (Math.imul(hash, 31) + Math.round((c[0] ?? 0) * 1e6)) | 0;
+    hash = (Math.imul(hash, 31) + Math.round((c[1] ?? 0) * 1e6)) | 0;
+  }
+  return `${coordenadas.length}:${hash}`;
 }
 
 function aLatLng(coordenada: { lat: number; lng: number }): LatLng {
@@ -142,12 +182,7 @@ function PuntoConductor() {
 
 function MarcadorPuntoControl({ orden, aspecto }: { orden: number; aspecto: AspectoPuntoControl }) {
   return (
-    <View
-      style={[
-        styles.puntoControlMarcador,
-        { backgroundColor: colorPuntoControl(aspecto) },
-      ]}
-    >
+    <View style={[styles.puntoControlMarcador, { backgroundColor: colorPuntoControl(aspecto) }]}>
       <Text style={styles.puntoControlTexto}>{orden}</Text>
     </View>
   );
@@ -233,6 +268,11 @@ interface MarcadorConductorAnimadoProps {
    * posición mostrada para que el recenter manual (que vive en el padre) la lea sin necesidad
    * de que el padre también re-renderice por cada frame de la animación. */
   posicionMostradaRef: RefObject<CoordenadaMostrada | null>;
+  /** Polilínea de la ruta preparada para el snap visual, o `null` sin geometría válida. */
+  rutaSnap: RutaSnap | null;
+  /** Zoom vigente de la cámara de navegación (suavizado por velocidad). Lo avanza este
+   * componente en cada frame de navegación; el padre lo lee al armar sus propias cámaras. */
+  zoomActualRef: RefObject<number>;
 }
 
 /**
@@ -250,10 +290,22 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   camaraSuspendidaHastaRef,
   camaraListaRef,
   posicionMostradaRef,
+  rutaSnap,
+  zoomActualRef,
 }: MarcadorConductorAnimadoProps) {
   const [posicionMostrada, setPosicionMostrada] = useState<CoordenadaMostrada | null>(null);
   const rafIdRef = useRef<number | null>(null);
   const ultimoTsFixRef = useRef<number | null>(null);
+  // Último tramo de la ruta al que se ajustó el marcador (histéresis del snap); `null` fuera de ruta.
+  const snapPrevioRef = useRef<{ indiceSegmento: number } | null>(null);
+  // Fixes consecutivos sin snap: el tramo previo sobrevive a `MAX_FALLOS_SNAP` fallos seguidos.
+  const fallosSnapRef = useRef(0);
+  // Último fix (ts|lat|lng) y ruta ya procesados: un re-disparo del efecto sin cambios reales (p. ej.
+  // otra referencia del paquete) no debe reiniciar la animación en vuelo.
+  const fixProcesadoRef = useRef<{ clave: string; ruta: RutaSnap | null } | null>(null);
+  // Velocidad (km/h) del último fix, para el zoom automático; `null` si se desconoce.
+  const velocidadKmhRef = useRef<number | null>(null);
+  const ultimoZoomMsRef = useRef(0);
 
   const cancelarAnimacion = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -272,30 +324,84 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
     [posicionMostradaRef],
   );
 
-  // Publica el marcador Y, en navegación, mueve la cámara con los MISMOS valores interpolados
-  // (ver "BLOQUEO CUADRO A CUADRO" en el docblock del módulo). Sin modo navegación, mapa sin
-  // listo o dentro de la ventana de suspensión, solo publica.
-  const publicarYSeguir = useCallback(
-    (siguiente: CoordenadaMostrada) => {
-      publicarPosicion(siguiente);
+  // Zoom objetivo según la velocidad del último fix (≤ 15 km/h o desconocida → 18).
+  const zoomObjetivo = useCallback(() => zoomPorVelocidad(velocidadKmhRef.current), []);
+
+  // En navegación mueve la cámara sobre `posicion` con el zoom automático avanzado un paso. Sin
+  // modo navegación, mapa no listo o dentro de la ventana de suspensión, no hace nada.
+  const seguirCamara = useCallback(
+    (posicion: CoordenadaMostrada) => {
       const mapa = mapRef.current;
       if (modoRef.current !== 'navegacion' || !camaraListaRef.current || !mapa) return;
       if (Date.now() < camaraSuspendidaHastaRef.current) return;
-      const camaraNav = construirCamaraNavegacion(siguiente, orientacionRef.current);
+      // Zoom automático por velocidad, suavizado por tiempo; el salto de un frame se acota para
+      // que tras una pausa (suspensión de cámara, background) no pegue un salto.
+      const ahora = Date.now();
+      const dtZoom = Math.min(100, ahora - ultimoZoomMsRef.current);
+      ultimoZoomMsRef.current = ahora;
+      zoomActualRef.current = suavizarZoom(zoomActualRef.current, zoomObjetivo(), dtZoom);
+      const camaraNav = construirCamaraNavegacion(
+        posicion,
+        orientacionRef.current,
+        zoomActualRef.current,
+      );
       // Umbral de 2° dentro del emisor: a 30 Hz casi todos los cuadros no notifican nada.
       if (camaraNav.heading !== undefined) emisorRumbo?.publicar(camaraNav.heading);
       mapa.setCamera(camaraNav);
     },
     [
-      publicarPosicion,
       mapRef,
       modoRef,
       orientacionRef,
       emisorRumbo,
       camaraListaRef,
       camaraSuspendidaHastaRef,
+      zoomActualRef,
+      zoomObjetivo,
     ],
   );
+
+  // Publica el marcador Y, en navegación, mueve la cámara con los MISMOS valores interpolados
+  // (ver "BLOQUEO CUADRO A CUADRO" en el docblock del módulo).
+  const publicarYSeguir = useCallback(
+    (siguiente: CoordenadaMostrada) => {
+      publicarPosicion(siguiente);
+      seguirCamara(siguiente);
+    },
+    [publicarPosicion, seguirCamara],
+  );
+
+  // El zoom automático tiene que seguir convergiendo aunque no lleguen fixes ni haya animación de
+  // posición en curso (p. ej. el vehículo frena y no hay fix nuevo): un loop propio, solo de cámara
+  // (no re-renderiza el marcador), que corre en navegación hasta que `|zoom − objetivo| < 0.01`.
+  const convergerZoom = useCallback(() => {
+    let ultimoCommitMs: number | null = null;
+    const tickZoom = () => {
+      rafIdRef.current = null;
+      const posicion = posicionMostradaRef.current;
+      if (modoRef.current !== 'navegacion' || !posicion) return;
+      if (Math.abs(zoomActualRef.current - zoomObjetivo()) < UMBRAL_CONVERGENCIA_ZOOM) return;
+      const ahora = Date.now();
+      if (debeCommitearFrame(ahora, ultimoCommitMs, false)) {
+        ultimoCommitMs = ahora;
+        seguirCamara(posicion);
+      }
+      rafIdRef.current = requestAnimationFrame(tickZoom);
+    };
+    rafIdRef.current = requestAnimationFrame(tickZoom);
+  }, [posicionMostradaRef, modoRef, zoomActualRef, zoomObjetivo, seguirCamara]);
+
+  // Cambió la geometría de la ruta: el tramo previo, los fallos y la `distancia` mostrada
+  // pertenecen a la ruta vieja; mezclarlos con la nueva animaría por la calle entre dos rutas
+  // distintas. (Se declara antes del efecto de fixes: corre primero en el mismo commit.)
+  useEffect(() => {
+    snapPrevioRef.current = null;
+    fallosSnapRef.current = 0;
+    const mostrada = posicionMostradaRef.current;
+    if (mostrada && mostrada.distancia !== undefined) {
+      posicionMostradaRef.current = { ...mostrada, distancia: undefined, ajustadaARuta: false };
+    }
+  }, [rutaSnap, posicionMostradaRef]);
 
   // El efecto depende del CONTENIDO del fix (lat/lng/ts/rumbo), no de la identidad del objeto
   // `posicionMapa`: el store visual y `setPosicionActual` entregan dos veces el mismo fix, y el
@@ -306,37 +412,99 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   const lng = posicionMapa?.lng ?? null;
   const tsFixProp = posicionMapa?.ts ?? null;
   const rumboFix = typeof posicionMapa?.heading === 'number' ? posicionMapa.heading : null;
+  // Velocidad (m/s) y precisión del fix: entran al snap. Cambian solo con un fix nuevo.
+  const velocidadFix =
+    typeof posicionMapa?.speed === 'number' && posicionMapa.speed >= 0 ? posicionMapa.speed : null;
+  const precisionFix =
+    typeof posicionMapa?.accuracy === 'number' && Number.isFinite(posicionMapa.accuracy)
+      ? posicionMapa.accuracy
+      : null;
 
   // Todo arranca acá, una sola vez por FIX NUEVO (no por frame): la posición "actual" se lee de
   // `posicionMostradaRef` en vez de un updater (StrictMode corre los updaters dos veces). La
-  // cámara ya no se anima por fix: la mueve `publicarYSeguir` junto con el marcador.
+  // cámara ya no se anima por fix: la mueve `publicarYSeguir` junto con el marcador. El efecto NO
+  // cancela la animación en su cleanup (solo al desmontar, abajo): así un re-disparo sin fix ni ruta
+  // nueva retorna temprano y la animación en vuelo sigue.
   useEffect(() => {
-    cancelarAnimacion();
     if (lat === null || lng === null) {
+      cancelarAnimacion();
       // Sin posición (p. ej. fin del recorrido): nada que mostrar. Se limpia también el estado
       // de interpolación para que el próximo fix real aparezca directo, sin volar desde el
       // punto final del recorrido anterior, y para que el recenter no apunte a una posición vieja.
       ultimoTsFixRef.current = null;
+      fixProcesadoRef.current = null;
+      snapPrevioRef.current = null;
+      fallosSnapRef.current = 0;
+      velocidadKmhRef.current = null;
       publicarPosicion(null);
-      return cancelarAnimacion;
+      return;
     }
+    const clave = `${tsFixProp ?? ''}|${lat}|${lng}`;
+    const procesado = fixProcesadoRef.current;
+    if (tsFixProp !== null && procesado?.clave === clave && procesado.ruta === rutaSnap) return;
+    fixProcesadoRef.current = { clave, ruta: rutaSnap };
+    cancelarAnimacion();
+
     const tsFix = tsFixProp ?? Date.now();
     const dt = ultimoTsFixRef.current != null ? tsFix - ultimoTsFixRef.current : null;
     ultimoTsFixRef.current = tsFix;
     const duracion = duracionAnimacionMs(dt ?? 2500);
 
+    velocidadKmhRef.current = velocidadFix !== null ? velocidadFix * 3.6 : null;
+
+    // Snap visual a la ruta: con snap, posición sobre la polilínea y rumbo del tramo; sin snap
+    // (fuera de ruta o sin geometría), el GPS crudo de siempre. Solo afecta lo que se dibuja. El
+    // tramo previo sobrevive a `MAX_FALLOS_SNAP` fixes seguidos sin snap (un fix ruidoso aislado no
+    // borra la histéresis); pasado eso se descarta y se busca en toda la ruta.
+    const snap = rutaSnap
+      ? snapARuta(
+          rutaSnap,
+          { lat, lng, rumbo: rumboFix, velocidadMs: velocidadFix, accuracy: precisionFix },
+          snapPrevioRef.current,
+          fallosSnapRef.current,
+        )
+      : null;
+    if (snap) {
+      snapPrevioRef.current = { indiceSegmento: snap.indiceSegmento };
+      fallosSnapRef.current = 0;
+    } else {
+      fallosSnapRef.current += 1;
+      if (fallosSnapRef.current > MAX_FALLOS_SNAP) snapPrevioRef.current = null;
+    }
+
     const actual = posicionMostradaRef.current;
-    const hasta: CoordenadaMostrada = { lat, lng, rumbo: rumboFix ?? actual?.rumbo ?? null };
+    const hasta: CoordenadaMostrada = snap
+      ? {
+          lat: snap.lat,
+          lng: snap.lng,
+          rumbo: snap.rumbo,
+          distancia: snap.distanciaRecorrida,
+          ajustadaARuta: true,
+        }
+      : { lat, lng, rumbo: rumboFix ?? actual?.rumbo ?? null, ajustadaARuta: false };
 
     if (!actual) {
       // Primer fix: sin punto de partida que animar, se posiciona directo (y la cámara con él).
       publicarYSeguir(hasta);
-      return cancelarAnimacion;
+      convergerZoom();
+      return;
     }
 
     const desde: CoordenadaMostrada = actual;
+    const dDesde = desde.distancia;
+    const dHasta = hasta.distancia;
+    // Con ambos extremos sobre la ruta se anima por la calle (por distancia acumulada), salvo que el
+    // recorrido por la calle sea desproporcionado frente a la línea recta (ida y vuelta, carriles
+    // opuestos pegados): ahí se anima en línea recta.
+    const porRuta =
+      rutaSnap !== null &&
+      dDesde !== undefined &&
+      dHasta !== undefined &&
+      debeInterpolarPorRuta(rutaSnap, dDesde, dHasta, distanciaMetros(desde, hasta));
     const inicio = Date.now();
     let ultimoCommitMs: number | null = null;
+    // Rumbo mostrado en el frame anterior (base del suavizado angular a lo largo de la ruta).
+    let rumboPrevio = desde.rumbo;
     const tick = () => {
       const ahora = Date.now();
       const t = Math.min(1, (ahora - inicio) / duracion);
@@ -344,30 +512,65 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
       // por el bridge. El frame final (t = 1) siempre se publica, cámara incluida.
       if (debeCommitearFrame(ahora, ultimoCommitMs, t >= 1)) {
         ultimoCommitMs = ahora;
-        const { lat: latT, lng: lngT } = interpolarLatLng(desde, hasta, t);
-        const rumbo =
-          desde.rumbo !== null && hasta.rumbo !== null
-            ? interpolarAngulo(desde.rumbo, hasta.rumbo, t)
-            : hasta.rumbo;
-        publicarYSeguir({ lat: latT, lng: lngT, rumbo });
+        const enRuta =
+          porRuta && rutaSnap !== null && dDesde !== undefined && dHasta !== undefined
+            ? interpolarSobreRuta(rutaSnap, dDesde, dHasta, t)
+            : null;
+        let frame: CoordenadaMostrada;
+        if (enRuta) {
+          // Por la calle el rumbo es el del tramo a esa distancia, mezclado con un factor corto para
+          // girar EN la esquina y no antes (el rumbo lineal desde→hasta giraba de a poco desde el inicio).
+          const rumbo =
+            rumboPrevio !== null
+              ? interpolarAngulo(rumboPrevio, enRuta.rumbo, FACTOR_RUMBO_RUTA)
+              : enRuta.rumbo;
+          frame = {
+            lat: enRuta.lat,
+            lng: enRuta.lng,
+            rumbo,
+            distancia: enRuta.distancia,
+            ajustadaARuta: true,
+          };
+        } else {
+          const { lat: latT, lng: lngT } = interpolarLatLng(desde, hasta, t);
+          const rumbo =
+            desde.rumbo !== null && hasta.rumbo !== null
+              ? interpolarAngulo(desde.rumbo, hasta.rumbo, t)
+              : hasta.rumbo;
+          // Frames intermedios en línea recta no llevan `distancia` (no están sobre la polilínea);
+          // el final sí la lleva si el destino está ajustado, para reactivar la animación por la
+          // calle en el próximo fix.
+          frame = {
+            lat: latT,
+            lng: lngT,
+            rumbo,
+            distancia: t >= 1 ? dHasta : undefined,
+            ajustadaARuta: hasta.ajustadaARuta,
+          };
+        }
+        rumboPrevio = frame.rumbo;
+        publicarYSeguir(frame);
       }
       if (t < 1) {
         rafIdRef.current = requestAnimationFrame(tick);
       } else {
         rafIdRef.current = null;
+        convergerZoom();
       }
     };
     rafIdRef.current = requestAnimationFrame(tick);
-
-    return cancelarAnimacion;
   }, [
     lat,
     lng,
     tsFixProp,
     rumboFix,
+    velocidadFix,
+    precisionFix,
+    rutaSnap,
     cancelarAnimacion,
     publicarPosicion,
     publicarYSeguir,
+    convergerZoom,
     posicionMostradaRef,
   ]);
 
@@ -380,7 +583,10 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   return (
     <>
       <MarcadorConductor posicion={posicionMostrada} atenuado={atenuado} />
-      {typeof posicionMapa?.accuracy === 'number' && Number.isFinite(posicionMapa.accuracy) ? (
+      {/* Con snap a la ruta el halo de precisión no aplica: el marcador no está en el GPS crudo. */}
+      {!posicionMostrada.ajustadaARuta &&
+      typeof posicionMapa?.accuracy === 'number' &&
+      Number.isFinite(posicionMapa.accuracy) ? (
         <Circle
           center={aLatLng(posicionMostrada)}
           radius={posicionMapa.accuracy}
@@ -520,9 +726,29 @@ export function RouteMap({
   const mapRef = useRef<MapView>(null);
 
   const coordenadasRuta = useMemo<LatLng[]>(
-    () => paquete.ruta.geometria.coordinates.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
+    () =>
+      paquete.ruta.geometria.coordinates.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
     [paquete],
   );
+
+  // Polilínea de la ruta preparada para el snap visual del marcador (`snap-ruta.ts`). La identidad
+  // sólo cambia si cambia la GEOMETRÍA (firma de contenido): una referencia nueva del paquete con
+  // la misma ruta no debe reiniciar el snap ni la animación del marcador.
+  const rutaSnapCacheRef = useRef<{ firma: string; ruta: RutaSnap | null } | null>(null);
+  const coordenadasGeometria = paquete.ruta.geometria.coordinates;
+  const rutaSnap = useMemo(() => {
+    const firma = firmaGeometria(coordenadasGeometria);
+    if (rutaSnapCacheRef.current?.firma === firma) return rutaSnapCacheRef.current.ruta;
+    const ruta = prepararRutaSnap(
+      coordenadasGeometria.map(([lng, lat]) => ({ lat: lat as number, lng: lng as number })),
+    );
+    rutaSnapCacheRef.current = { firma, ruta };
+    return ruta;
+  }, [coordenadasGeometria]);
+
+  // Zoom vigente de la cámara de navegación: lo avanza el marcador por velocidad; las cámaras
+  // puntuales de este componente (entrada, recentrar, padding) lo leen para no pegar un salto.
+  const zoomActualRef = useRef(ZOOM_NAVEGACION);
 
   const puntosControlData = useMemo(
     () =>
@@ -616,20 +842,27 @@ export function RouteMap({
   // vez de saltar relanza el `animateCamera` por el tiempo restante, sin tocar la suspensión ni el
   // timer ya agendado (que repone la cámara al vencer). Con 80 ms o menos, o sin suspensión, salta.
   // Solo actúa en navegación, con cámara lista, mapa montado y posición conocida.
-  const sincronizarCamaraNavegacion = useCallback((reanimarSiSuspendida = false) => {
-    const mapa = mapRef.current;
-    const posicion = posicionMostradaRef.current;
-    if (modoRef.current !== 'navegacion' || !camaraListaRef.current || !mapa || !posicion) return;
-    const restante = camaraSuspendidaHastaRef.current - Date.now();
-    const camaraNav = construirCamaraNavegacion(posicion, orientacionRef.current);
-    if (camaraNav.heading !== undefined) emisorRumbo?.publicar(camaraNav.heading);
-    if (reanimarSiSuspendida && restante > 80) {
-      mapa.animateCamera(camaraNav, { duration: restante });
-      return;
-    }
-    camaraSuspendidaHastaRef.current = 0;
-    mapa.setCamera(camaraNav);
-  }, [emisorRumbo]);
+  const sincronizarCamaraNavegacion = useCallback(
+    (reanimarSiSuspendida = false) => {
+      const mapa = mapRef.current;
+      const posicion = posicionMostradaRef.current;
+      if (modoRef.current !== 'navegacion' || !camaraListaRef.current || !mapa || !posicion) return;
+      const restante = camaraSuspendidaHastaRef.current - Date.now();
+      const camaraNav = construirCamaraNavegacion(
+        posicion,
+        orientacionRef.current,
+        zoomActualRef.current,
+      );
+      if (camaraNav.heading !== undefined) emisorRumbo?.publicar(camaraNav.heading);
+      if (reanimarSiSuspendida && restante > 80) {
+        mapa.animateCamera(camaraNav, { duration: restante });
+        return;
+      }
+      camaraSuspendidaHastaRef.current = 0;
+      mapa.setCamera(camaraNav);
+    },
+    [emisorRumbo],
+  );
 
   // Cámara de navegación sobre la posición mostrada. Sin posición todavía no hace nada: el primer
   // fix ubica la cámara (`publicarYSeguir`). Con `duracion` > 0 anima y suspende el `setCamera`
@@ -639,7 +872,11 @@ export function RouteMap({
       const posicion = posicionMostradaRef.current;
       const mapa = mapRef.current;
       if (!posicion || !mapa || !camaraListaRef.current) return;
-      const camaraNav = construirCamaraNavegacion(posicion, orientacionRef.current);
+      const camaraNav = construirCamaraNavegacion(
+        posicion,
+        orientacionRef.current,
+        zoomActualRef.current,
+      );
       // Destino de la animación: la aguja de la brújula va directo al rumbo final.
       if (camaraNav.heading !== undefined) emisorRumbo?.publicar(camaraNav.heading, true);
       cancelarTimerSuspension();
@@ -735,7 +972,9 @@ export function RouteMap({
       const { touches } = e.nativeEvent;
       const toque = touches[0];
       if (!toque) return;
-      if (esGestoSobreMapa(inicioToqueRef.current, { x: toque.pageX, y: toque.pageY }, touches.length)) {
+      if (
+        esGestoSobreMapa(inicioToqueRef.current, { x: toque.pageX, y: toque.pageY }, touches.length)
+      ) {
         salirANavegacionLibre();
       }
     },
@@ -878,6 +1117,8 @@ export function RouteMap({
           camaraSuspendidaHastaRef={camaraSuspendidaHastaRef}
           camaraListaRef={camaraListaRef}
           posicionMostradaRef={posicionMostradaRef}
+          rutaSnap={rutaSnap}
+          zoomActualRef={zoomActualRef}
         />
       </MapView>
     </View>

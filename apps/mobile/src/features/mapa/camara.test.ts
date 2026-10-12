@@ -9,6 +9,8 @@ import {
   decidirEncuadre,
   esGestoSobreMapa,
   paddingNavegacion,
+  suavizarZoom,
+  zoomPorVelocidad,
 } from './camara';
 
 describe('constantes de navegación', () => {
@@ -153,5 +155,58 @@ describe('esGestoSobreMapa', () => {
   });
   it('sin punto de inicio y un dedo no es gesto', () => {
     expect(esGestoSobreMapa(null, { x: 500, y: 500 }, 1)).toBe(false);
+  });
+});
+
+describe('zoomPorVelocidad', () => {
+  it('puntos de la curva', () => {
+    expect(zoomPorVelocidad(0)).toBe(18);
+    expect(zoomPorVelocidad(15)).toBe(18);
+    expect(zoomPorVelocidad(40)).toBeCloseTo(17.5, 6);
+    expect(zoomPorVelocidad(60)).toBeCloseTo(17, 6);
+    expect(zoomPorVelocidad(90)).toBe(16);
+    expect(zoomPorVelocidad(140)).toBe(16);
+  });
+  it('interpola linealmente entre puntos', () => {
+    expect(zoomPorVelocidad(27.5)).toBeCloseTo(17.75, 6);
+    expect(zoomPorVelocidad(75)).toBeCloseTo(16.5, 6);
+  });
+  it('velocidad desconocida o inválida → 18', () => {
+    expect(zoomPorVelocidad(null)).toBe(18);
+    expect(zoomPorVelocidad(-3.6)).toBe(18);
+    expect(zoomPorVelocidad(Number.NaN)).toBe(18);
+  });
+  it('es monótona no creciente', () => {
+    let previo = zoomPorVelocidad(0);
+    for (let v = 1; v <= 120; v += 1) {
+      const z = zoomPorVelocidad(v);
+      expect(z).toBeLessThanOrEqual(previo + 1e-9);
+      previo = z;
+    }
+  });
+});
+
+describe('suavizarZoom', () => {
+  it('se acerca al objetivo sin pasarlo', () => {
+    let z = 18;
+    for (let i = 0; i < 300; i += 1) {
+      z = suavizarZoom(z, 16, 33);
+      expect(z).toBeGreaterThanOrEqual(16);
+      expect(z).toBeLessThan(18);
+    }
+    expect(z).toBeCloseTo(16, 2);
+  });
+  it('un paso nunca salta de golpe', () => {
+    expect(suavizarZoom(18, 16, 33)).toBeGreaterThan(17.8);
+  });
+  it('dt <= 0 no cambia el zoom; el resultado no depende de la subdivisión del tiempo', () => {
+    expect(suavizarZoom(17, 16, 0)).toBe(17);
+    expect(suavizarZoom(17, 16, -5)).toBe(17);
+    const a = suavizarZoom(17, 16, 100);
+    const b = suavizarZoom(suavizarZoom(17, 16, 50), 16, 50);
+    expect(a).toBeCloseTo(b, 9);
+  });
+  it('construirCamaraNavegacion acepta el zoom', () => {
+    expect(construirCamaraNavegacion({ lat: 1, lng: 2, rumbo: 3 }, 'rumbo', 16.4).zoom).toBe(16.4);
   });
 });
