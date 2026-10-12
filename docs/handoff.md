@@ -6,7 +6,18 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-12 (leer primero): /en-vivo — zoom, latencia y Google Maps
+## Punto de retome — 2026-10-12, tarde (leer primero): /en-vivo — fotos, alertas por infracción y acciones rápidas
+
+El CTO pidió llevar al producto real lo del demo (`~/Downloads/Quivo-control`, todo mock): marcadores con
+foto del trufi, parpadeo en 3 niveles por infracción y ficha con acciones rápidas, sobre Google Maps.
+Plan aprobado: [`docs/plan-en-vivo-alertas.md`](plan-en-vivo-alertas.md). Premisa corregida: en el sistema
+real no existen detección de infracciones, foto de vehículo, teléfono del conductor ni bucket. Decisiones:
+desvío + PC omitido automáticos; niveles = `gravedad` de Reglas (leve/grave/gravísima); foto del vehículo
+subida por el conductor desde la app; WhatsApp + Llamar; sanción sin plazo. Orden: A (infracciones, API) →
+E (marcador + panel) → B (teléfono) → C (GCS + foto; bucket con ok del CTO; corrige logos en disco
+efímero de Cloud Run) → D (app, APK 16). **Estado: PR A en curso.**
+
+## Punto de retome — 2026-10-12 (anterior): /en-vivo — zoom, latencia y Google Maps
 
 El CTO vio /en-vivo desde el teléfono manejando: la web iba atrasada, el zoom se perdía en cada
 actualización y pidió Google Maps (el panel usa **MapLibre**, no Leaflet). Plan aprobado:
