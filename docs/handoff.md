@@ -12,7 +12,7 @@ El CTO vio /en-vivo desde el teléfono manejando: la web iba atrasada, el zoom s
 actualización y pidió Google Maps (el panel usa **MapLibre**, no Leaflet). Plan aprobado:
 [`docs/plan-en-vivo-google.md`](plan-en-vivo-google.md) — PR 1 zoom (`fitMode` caía en `'auto'`),
 PR 2 latencia (poll 2 s web + piso de drenado 3 s móvil, APK 15), PR 3 motor Google + /en-vivo,
-PR 4..N resto del panel y borrar MapLibre. **Estado: PR 1, 2 y 3 en `main`; ninguno desplegado. Deploy del panel bloqueado por el Map ID.**
+PR 4..N resto del panel y borrar MapLibre. **Estado: PR 1, 2 y 3 en `main` y desplegados en prod como `r14-20261012` (API, migraciones, web, worker). Falta APK 15 (drenado 3 s).**
 
 | PR | Qué | Commit |
 |---|---|---|
@@ -24,11 +24,12 @@ PR 4..N resto del panel y borrar MapLibre. **Estado: PR 1, 2 y 3 en `main`; ning
 
 **Infra Google Maps (2026-10-12):** API `maps-backend.googleapis.com` habilitada en `quivo-control-prod`; key de navegador `quivo-web-maps` (referrers: los dos `quivo-web-*.run.app` + `localhost:3000`, solo Maps JS) creada por el CTO; secreto `google-maps-web-key` (v1) creado por el chairman. Local: `apps/web/.env.local` (gitignored) con la key + `DEMO_MAP_ID`; el dev server tiene que correr en el puerto 3000 por el referrer.
 
-**NO verificado:** latencia real en calle y costo de batería del drenado cada 3 s (APK 15); API y web aún no desplegadas a Cloud Run; #134: pellizco en teléfono real, foco/hover visual, `deploy-gcp.sh` solo `bash -n`.
+**Deploy `r14-20261012` (2026-10-12, lo corrió el CTO):** `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 TAG=r14-20261012 scripts/deploy-gcp.sh` desde `main` en `4cadce5`, exit 0. Map ID `quivo-web` (Vector, JavaScript) creado por el CTO en consola. Verificado: migraciones OK, `/v1/health/ready` ok (db+redis up), web responde 200, y la imagen web tiene el Map ID y la key embebidos en el chunk de `/en-vivo`.
+
+**NO verificado:** /en-vivo en prod con login real (que el mapa Google cargue sin error de auth del referrer); latencia real en calle y costo de batería del drenado cada 3 s (APK 15); #134: pellizco en teléfono real, foco/hover visual.
 
 **Siguiente:**
-1. CTO crea el **Map ID** en consola (Map Management → JavaScript → Vector, `quivo-web`; no hay CLI). Recomendado: en su estilo ocultar POIs de comercios — en los screenshots tapan los vehículos.
-2. Deploy API + web (#131, #132, #134) con `GOOGLE_MAPS_MAP_ID=<id> scripts/deploy-gcp.sh` (sin el Map ID el preflight corta antes de tocar nada).
+1. ~~Map ID~~ y ~~deploy~~ hechos. CTO: abrir /en-vivo en prod y confirmar que carga el mapa Google. Próximos deploys del panel: siempre con `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7` (el Map ID no es secreto).
 3. APK 15 (drenado 3 s) — changelog al CTO antes del build. Prueba en calle: latencia, batería, `/en-vivo` en el teléfono.
 4. PR 4..N: `reportes/recorridos/[id]` → reglas/vehículos/líneas → editor de rutas (necesita drag + pulse en Google) → borrar MapLibre. Limitaciones actuales del motor Google: sin `draggable`, sin `line-offset` entre rutas paralelas, label de ruta en el punto medio, `pulse` estático.
 
