@@ -163,7 +163,7 @@ function generarTokenLease(): string {
 /**
  * Hallazgo 2 (code review, MEDIO — `sincronizarPendientesConLease`): tras un lote LLENO
  * (`LOTE_MAXIMO` eventos), `sincronizarPendientesConLease` liberaba el lease con el
- * enfriamiento de éxito (`PISO_ENTRE_INTENTOS_DRENAJE_MS`, 10 s) antes de devolver el
+ * enfriamiento de éxito (`PISO_ENTRE_INTENTOS_DRENAJE_MS`, 3 s) antes de devolver el
  * control. El encadenado `setTimeout(intentarSync, 500)` de `iniciarSyncAutomatico` llegaba
  * DEMASIADO PRONTO — a los 500 ms el lease seguía "tomado" por ese cooldown — así que el
  * segundo intento recibía `null` (alguien más tiene el lease), `iniciarSyncAutomatico` lo
@@ -181,7 +181,7 @@ function generarTokenLease(): string {
  * G2 (hallazgo de `/codex-debug verify-fix` sobre este mismo fix, ALTO): al llegar al TOPE con
  * pendientes todavía por drenar, liberar con el enfriamiento normal reproducía el MISMO defecto
  * que este fix existe para cerrar — el `setTimeout(500ms)` de `iniciarSyncAutomatico` llegaba
- * igual de temprano contra un lease que el tope acababa de dejar "tomado" por 10 s más. Ver
+ * igual de temprano contra un lease que el tope acababa de dejar "tomado" por 3 s más. Ver
  * `drenarLotesConLease` (`motivo: 'tope-alcanzado'`) y sus callers: al llegar al tope CON
  * pendientes restantes, liberan SIN enfriamiento — el siguiente disparo, sea el
  * `setTimeout(500ms)` en foreground o el próximo evento de ubicación en headless, adquiere el

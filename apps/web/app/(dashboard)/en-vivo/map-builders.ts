@@ -96,7 +96,7 @@ export function filtrarPorLinea(posiciones: PosicionEnVivo[], lineaId: string): 
 
 /** Id ESTABLE del marker de un vehículo — no el id sintético `${lat}:${lng}:${index}` que
  * arma `resolvePointId` sin esto (`route-map-impl.tsx`): la posición cambia en cada poll de
- * `/en-vivo/posiciones` (cada 5 s), así que un id derivado de lat/lng cambiaría con ella, y
+ * `/en-vivo/posiciones` (cada 2 s), así que un id derivado de lat/lng cambiaría con ella, y
  * `RouteMap` necesita un id fijo para saber, entre un render y el siguiente, que sigue siendo
  * "el mismo" marker al que aplicarle la animación (`animatedVehicle.markerId`) o el override
  * de posición en vivo.

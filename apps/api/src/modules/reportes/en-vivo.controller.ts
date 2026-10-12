@@ -6,6 +6,7 @@ import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
 import { RolesGuard } from '../../common/auth/roles.guard.js';
+import { EnVivoUsuarioThrottlerGuard } from './en-vivo-usuario-throttler.guard.js';
 import { EnVivoService } from './en-vivo.service.js';
 
 class TrazaEnVivoQueryDto extends createZodDto(TrazaEnVivoQuerySchema) {}
@@ -14,21 +15,26 @@ class TrazaEnVivoQueryDto extends createZodDto(TrazaEnVivoQuerySchema) {}
  * ENTREGA 3 — mapa en vivo `/en-vivo`. Solo lectura, misma pila de guards/roles que
  * `recorridos.controller.ts`.
  *
- * `@Throttle` propio de 300 req/min: el límite global (`app.module.ts`, QUI-251) es
- * 100 req/min/IP compartido con TODO el panel, y esta pantalla sola hace ~8 req/min por
- * pestaña — con varias pestañas o varios operadores detrás del mismo NAT, el global se
- * agota y tumba el resto del panel. La forma `{ default: { ... } }` es la de
- * `@nestjs/throttler` v6, que nombra los throttlers (el throttler global se llama
- * `'default'`, ver `ThrottlerModule.forRoot`).
+ * Rate limit propio de 600 req/min POR USUARIO (no por IP): el límite global
+ * (`app.module.ts`, QUI-251) es 100 req/min/IP compartido con TODO el panel, y cada pestaña
+ * de esta pantalla hace ~30 req/min de posiciones (poll de 2 s) + ~6 de traza (poll de 10 s;
+ * más con `hayMas`). Por IP, varios operadores o pestañas detrás del mismo NAT se darían 429 entre
+ * sí. El throttler global ('default', que corre ANTES de la auth y por eso solo puede
+ * usar la IP) se sube acá a 1000/min/IP con `@Throttle({ default })`: sigue siendo el único
+ * freno pre-auth (cada request inválida pega al JwtAuthGuard/jwks) pero holgado para NAT. Y `EnVivoUsuarioThrottlerGuard` —DESPUÉS de
+ * `JwtAuthGuard`, cuando `req.user` ya existe— aplica el cupo por `userId`. Misma forma
+ * que `SyncDeviceThrottlerGuard` en `POST /sync/batches`. El límite
+ * por usuario (600/min, nombre 'usuario') vive SOLO en el constructor del guard, y su key es por
+ * usuario en todo el controller (no por handler).
  *
  * Ninguno de estos GET lleva `@Auditable`: son endpoints de poll y el interceptor de
  * auditoría solo actúa sobre handlers decorados — si escribieran, serían ~500 filas
  * basura por hora en `audit_log`.
  */
 @Controller('reportes/en-vivo')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, EnVivoUsuarioThrottlerGuard, RolesGuard)
 @Roles('admin_quivo', 'admin_sindicato')
-@Throttle({ default: { limit: 300, ttl: 60_000 } })
+@Throttle({ default: { limit: 1000, ttl: 60_000 } })
 export class EnVivoController {
   constructor(@Inject(EnVivoService) private readonly enVivoService: EnVivoService) {}
 

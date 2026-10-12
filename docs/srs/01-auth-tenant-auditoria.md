@@ -178,7 +178,7 @@ Leyenda: ✔ permitido; ✘ 403; "—" no aplica. `supervisor`, `socio`, `conduc
 | `GET /sync-errores` | idem (`sync-errores.controller.ts:16`) | ✔ | ✔ | ✘ | ✘ |
 | `GET /reportes/cumplimiento` | idem (`cumplimiento.controller.ts:15`) | ✔ | ✔ | ✘ | ✘ |
 | `GET /reportes/recorridos[/:id]` | idem (`recorridos.controller.ts:15`) | ✔ | ✔ | ✘ | ✘ |
-| `GET /reportes/en-vivo[...]` (throttle propio, 300/min) | idem (`en-vivo.controller.ts:30-31`) | ✔ | ✔ | ✘ | ✘ |
+| `GET /reportes/en-vivo[...]` (throttle propio, 600/min/usuario) | idem (`en-vivo.controller.ts`) | ✔ | ✔ | ✘ | ✘ |
 | `GET /reportes/exportar/{recorridos,cumplimiento,sanciones,actividad}` | idem (`exportes.controller.ts:29`) | ✔ | ✔ | ✘ | ✘ |
 | `POST /mobile/auth/{sesion,sesion/asignacion,refresh,logout}`, legado `/vehiculo`,`/conductor` | públicos con throttle (`AMC:29-68`) | — | — | — | credenciales de conductor (placa + PIN) |
 | `GET /mobile/auth/contexto-operativo`, `GET /mobile/perfil`, `GET /mobile/asignacion-del-dia`, `GET /mobile/ruta-a-punto`, `POST /sync/batches` | `AuthMovilGuard` (`AMC:70-88`; `tracking/paquete-dia.controller.ts:11-12`; `tracking/ruteo.controller.ts:9-10`; `sync/sync.controller.ts:48`) | ✘ | ✘ | ✘ | solo token móvil de sesión operativa (el "conductor" real) |

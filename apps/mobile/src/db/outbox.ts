@@ -1219,9 +1219,9 @@ async function actualizarEstado(
  * Una sola fila por `id` (`sync_lease.id` es PK) sirve DOS propósitos con el mismo mecanismo:
  * - **Mutex entre contextos**: mientras `expira_at` esté en el futuro, la fila está "tomada" y
  *   nadie más puede adquirirla.
- * - **Piso de 10 s entre intentos + backoff**: `liberarLeaseConCooldown` no borra la fila al
+ * - **Piso de 3 s entre intentos + backoff**: `liberarLeaseConCooldown` no borra la fila al
  *   terminar — la deja "tomada" hasta `ahora + cooldown`. Un éxito libera con el piso fijo
- *   (10 s); un fallo libera con el backoff exponencial vigente. El próximo intento, sea del
+ *   (3 s); un fallo libera con el backoff exponencial vigente. El próximo intento, sea del
  *   mismo contexto o del otro, encuentra la fila todavía vigente y desiste sin tocar la red.
  *
  * El TTL es OBLIGATORIO (ver `adquirirLease`): si el proceso muere a mitad de un drenado (la
@@ -1241,7 +1241,7 @@ export const ID_LEASE_DRENAJE = 'drenaje-outbox';
  * `sync-outbox.ts` no puede importar de `drenaje-oportunista.ts` sin crear un ciclo, porque
  * `drenaje-oportunista.ts` ya importa `sincronizarPendientes` DESDE `sync-outbox.ts`.
  */
-export const PISO_ENTRE_INTENTOS_DRENAJE_MS = 10_000;
+export const PISO_ENTRE_INTENTOS_DRENAJE_MS = 3_000;
 
 /** TTL del lease en sí (distinto del cooldown de arriba) — ver el comentario de
  * `ID_LEASE_DRENAJE`. Mismo motivo de ubicación que `PISO_ENTRE_INTENTOS_DRENAJE_MS`. */
@@ -1413,7 +1413,7 @@ export function construirLiberarLeaseConCooldown(
 
 /**
  * Libera el lease dejándolo "tomado" hasta `ahoraMs + cooldownMs` — nunca lo borra, porque ese
- * cooldown ES el piso de 10 s / backoff entre intentos (ver el comentario de `ID_LEASE_DRENAJE`
+ * cooldown ES el piso de 3 s / backoff entre intentos (ver el comentario de `ID_LEASE_DRENAJE`
  * arriba). El próximo `adquirirLease`, en cualquier contexto, ve `expira_at` todavía en el
  * futuro y desiste sin tocar la red hasta que venza.
  */
