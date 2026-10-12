@@ -27,6 +27,7 @@
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_GPS_CANAL_VISUAL": "1",
         "EXPO_PUBLIC_API_URL": "https://quivo-api-741758083365.southamerica-west1.run.app",
         "EXPO_PUBLIC_SENTRY_DSN": "https://5b3bf80a883d8b6b588b39a97d1f149f@o4511920211165184.ingest.us.sentry.io/4511920290922496",
         "SENTRY_ORG": "quivo-de",
