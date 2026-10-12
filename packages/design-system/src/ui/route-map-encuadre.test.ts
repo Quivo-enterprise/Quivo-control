@@ -1,47 +1,87 @@
 import { describe, expect, it } from 'vitest';
-import { debeEncuadrar, estadoEncuadreInicial } from './route-map-encuadre.js';
+import {
+  encuadreAuto,
+  encuadreUnaVez,
+  estadoEncuadreAutoInicial,
+  estadoEncuadreUnaVezInicial,
+} from './route-map-encuadre.js';
 
-describe("debeEncuadrar — modo 'once'", () => {
-  it('encuadra la primera vez que hay puntos', () => {
-    const r = debeEncuadrar({ modo: 'once', firma: 'a', hayPuntos: true, fitKey: 0, estado: estadoEncuadreInicial(0) });
-    expect(r.encuadrar).toBe(true);
-  });
-
-  it('no reencuadra cuando cambian los marcadores (respeta el zoom del usuario)', () => {
-    const primero = debeEncuadrar({ modo: 'once', firma: 'a', hayPuntos: true, fitKey: 0, estado: estadoEncuadreInicial(0) });
-    const segundo = debeEncuadrar({ modo: 'once', firma: 'b', hayPuntos: true, fitKey: 0, estado: primero.estado });
-    expect(segundo.encuadrar).toBe(false);
-  });
-
-  it('reencuadra una vez cuando cambia fitKey (botón Reencuadrar)', () => {
-    const primero = debeEncuadrar({ modo: 'once', firma: 'a', hayPuntos: true, fitKey: 0, estado: estadoEncuadreInicial(0) });
-    const tras = debeEncuadrar({ modo: 'once', firma: 'a', hayPuntos: true, fitKey: 1, estado: primero.estado });
-    expect(tras.encuadrar).toBe(true);
-    const otraVez = debeEncuadrar({ modo: 'once', firma: 'b', hayPuntos: true, fitKey: 1, estado: tras.estado });
-    expect(otraVez.encuadrar).toBe(false);
-  });
-
-  it('no dispara sin puntos y dispara en cuanto aparecen', () => {
-    const vacio = debeEncuadrar({ modo: 'once', firma: '', hayPuntos: false, fitKey: 0, estado: estadoEncuadreInicial(0) });
-    expect(vacio.encuadrar).toBe(false);
-    const conPuntos = debeEncuadrar({ modo: 'once', firma: 'a', hayPuntos: true, fitKey: 0, estado: vacio.estado });
-    expect(conPuntos.encuadrar).toBe(true);
-  });
-});
-
-describe("debeEncuadrar — modo 'auto'", () => {
-  it('encuadra cuando cambia la firma', () => {
-    const inicial = estadoEncuadreInicial(undefined);
-    const primero = debeEncuadrar({ modo: 'auto', firma: 'a', hayPuntos: true, fitKey: undefined, estado: inicial });
+describe('encuadreAuto', () => {
+  it('encuadra cuando cambia la firma y no cuando se repite', () => {
+    const primero = encuadreAuto({
+      firma: 'a',
+      hayPuntos: true,
+      estado: estadoEncuadreAutoInicial(),
+    });
     expect(primero.encuadrar).toBe(true);
-    const igual = debeEncuadrar({ modo: 'auto', firma: 'a', hayPuntos: true, fitKey: undefined, estado: primero.estado });
+    const igual = encuadreAuto({ firma: 'a', hayPuntos: true, estado: primero.estado });
     expect(igual.encuadrar).toBe(false);
-    const cambio = debeEncuadrar({ modo: 'auto', firma: 'b', hayPuntos: true, fitKey: undefined, estado: igual.estado });
+    const cambio = encuadreAuto({ firma: 'b', hayPuntos: true, estado: igual.estado });
     expect(cambio.encuadrar).toBe(true);
   });
 
   it('no encuadra sin puntos', () => {
-    const r = debeEncuadrar({ modo: 'auto', firma: '', hayPuntos: false, fitKey: undefined, estado: estadoEncuadreInicial(undefined) });
+    const r = encuadreAuto({ firma: '', hayPuntos: false, estado: estadoEncuadreAutoInicial() });
     expect(r.encuadrar).toBe(false);
+  });
+
+  it('A -> [] -> A reencuadra', () => {
+    const a = encuadreAuto({ firma: 'a', hayPuntos: true, estado: estadoEncuadreAutoInicial() });
+    const vacio = encuadreAuto({ firma: '', hayPuntos: false, estado: a.estado });
+    expect(vacio.encuadrar).toBe(false);
+    const deNuevoA = encuadreAuto({ firma: 'a', hayPuntos: true, estado: vacio.estado });
+    expect(deNuevoA.encuadrar).toBe(true);
+  });
+});
+
+describe('encuadreUnaVez', () => {
+  it('encuadra en cuanto aparecen puntos y no antes', () => {
+    const vacio = encuadreUnaVez({
+      fitKey: 0,
+      hayPuntos: false,
+      estado: estadoEncuadreUnaVezInicial(0),
+    });
+    expect(vacio.encuadrar).toBe(false);
+    const conPuntos = encuadreUnaVez({ fitKey: 0, hayPuntos: true, estado: vacio.estado });
+    expect(conPuntos.encuadrar).toBe(true);
+  });
+
+  it('los cambios de marcadores no lo afectan (no recibe firma): no reencuadra', () => {
+    const primero = encuadreUnaVez({
+      fitKey: 0,
+      hayPuntos: true,
+      estado: estadoEncuadreUnaVezInicial(0),
+    });
+    expect(primero.encuadrar).toBe(true);
+    let estado = primero.estado;
+    for (let i = 0; i < 3; i++) {
+      const r = encuadreUnaVez({ fitKey: 0, hayPuntos: true, estado });
+      expect(r.encuadrar).toBe(false);
+      estado = r.estado;
+    }
+  });
+
+  it('reencuadra una vez cuando cambia fitKey', () => {
+    const primero = encuadreUnaVez({
+      fitKey: 0,
+      hayPuntos: true,
+      estado: estadoEncuadreUnaVezInicial(0),
+    });
+    const tras = encuadreUnaVez({ fitKey: 1, hayPuntos: true, estado: primero.estado });
+    expect(tras.encuadrar).toBe(true);
+    const otraVez = encuadreUnaVez({ fitKey: 1, hayPuntos: true, estado: tras.estado });
+    expect(otraVez.encuadrar).toBe(false);
+  });
+
+  it('si cambia fitKey sin puntos, difiere el encuadre hasta que haya puntos', () => {
+    const primero = encuadreUnaVez({
+      fitKey: 0,
+      hayPuntos: true,
+      estado: estadoEncuadreUnaVezInicial(0),
+    });
+    const sinPuntos = encuadreUnaVez({ fitKey: 1, hayPuntos: false, estado: primero.estado });
+    expect(sinPuntos.encuadrar).toBe(false);
+    const conPuntos = encuadreUnaVez({ fitKey: 1, hayPuntos: true, estado: sinPuntos.estado });
+    expect(conPuntos.encuadrar).toBe(true);
   });
 });
