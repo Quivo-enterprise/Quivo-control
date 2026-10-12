@@ -15,12 +15,13 @@ real no existen detección de infracciones, foto de vehículo, teléfono del con
 desvío + PC omitido automáticos; niveles = `gravedad` de Reglas (leve/grave/gravísima); foto del vehículo
 subida por el conductor desde la app; WhatsApp + Llamar; sanción sin plazo. Orden: A (infracciones, API) →
 E (marcador + panel) → B (teléfono) → C (GCS + foto; bucket con ok del CTO; corrige logos en disco
-efímero de Cloud Run) → D (app, APK 16) → F (vueltas y sanciones compensatorias, nuevo). **Estado: PR A mergeado (#142), sin desplegar. Línea 16 cargada en prod (#143).**
+efímero de Cloud Run) → D (app, APK 16) → F (vueltas y sanciones compensatorias, nuevo). **Estado: #137, #140 y #142 desplegados en prod (`r15-20261012`). Línea 16 cargada (#143) y piloto creado (#145).**
 
 | PR | Qué | Commit |
 |---|---|---|
 | #142 | Detección automática de infracciones. Incluye: tabla `infracciones` y `sesion_desvio_estado` con RLS; detección en el worker después de persistir la evidencia del lote. **Desvío:** ≥3 puntos a >100 m durante ≥45 s, cierra con 2 puntos a <60 m; se evalúa solo dentro de un recorrido y solo en rutas con `rutas.desvioHabilitado`, que por defecto es **false**. Tras el deploy no hay ninguna ruta habilitada: se activa por SQL solo en geometrías trazadas con GPS, como la Z12. **PC omitido:** ventana por recorrido con tolerancia de 120 s (inicio/fin usan el reloj del sistema, los cumplimientos el GNSS); se marca en vivo y al `fin_recorrido`; es **solo alerta** (sancionar devuelve 409). `PosicionEnVivo` gana `infraccionNivel`, `infraccionesAbiertas`, `vehiculoId` y `conductorId`. Endpoints nuevos: listar, atender, descartar y sancionar (sujeto validado contra la infracción, en la misma transacción). Gates: `/code-review` en 2 rondas (12 hallazgos aplicados), `/security-review` sin hallazgos ≥8, 223 tests de los módulos tocados más integración con Postgres, CI verde. | `a49b80b` |
 | #143 | `scripts/cargar-linea-16.ts`: carga por la API (prod es solo IP privada), dry-run por defecto, pre-vuelo que aborta si el estado de prod no es el esperado, idempotente. **Aplicado en prod el 2026-10-12:** Línea 16 (`0a7df039…`, sindicato piloto `51493936…`), una ruta `circuito` de 213 vértices, 27,2 km. Recorrido: Salomón → El Prado → Honduras (= RETORNO) → Aroma → Ayacucho → Libertador/América (cierra a 11,7 m de la ida) → bifurcación → ramal Putucu → Molinos. Puntos de control: Salomón (0) y Molinos (1) no obligatorios, Honduras (2) obligatorio. 3 paradas, 1 variante, **sin asignaciones**. Re-corrida en dry-run: 0 escrituras. | `4143439` |
+| #145 | `scripts/crear-piloto-linea-16.ts`. Crea socio, vehículo **`1616PIL`**, conductor "Piloto Línea Dieciséis", PIN del conductor y una rotación publicada (`f1f38e25…`) con 14 asignaciones `manana` del 2026-10-13 al 2026-10-26 en la ruta circuito de la 16 (`460c9015…`). **Aplicado en prod el 2026-10-12:** 21 escrituras, verificación OK. El PIN está solo en `~/.quivo-piloto16-creds` de la máquina del CTO (archivo 0600); la API guarda el hash. Si `generar()` reparte a otro vehículo, el script borra lo creado y aborta. ⚠ Mientras 1616PIL y el conductor piloto estén activos, una rotación generada desde el panel los incluye: al terminar el piloto, correr `--desactivar --apply`. | `86d6e91` |
 
 **Operación de Tiquipaya (CTO, 2026-10-12)**, detalle en el plan, "Decisiones posteriores":
 - La 120 es la troncal; los choferes alternan 3 días en la 120 y 1 en la 16.
@@ -40,13 +41,15 @@ efímero de Cloud Run) → D (app, APK 16) → F (vueltas y sanciones compensato
 - Que Honduras sea el punto RETORNO: el CTO dijo "creo".
 - La geometría de la 16 es un boceto de My Maps, por eso queda sin detección de desvío.
 
+**Deploy `r15-20261012` (2026-10-12):** lo corrió el chairman con el ok del CTO. Exit 0, migraciones OK (incluye `20261012100000_infracciones`), API `ok` (db y redis up), panel y worker actualizados. **No verificado:** el panel en prod con login real (recorridos y editor de rutas con Google) y la detección de infracciones con datos reales.
+
+**Frecuencia de Molinos (estándar propuesto al CTO):** en Honduras se manda a Molinos 1 de cada N llegadas, con N = vueltas a Salomón del día + 1. Con llegadas cada 6-7 min, sale uno a Molinos cada ~30-35 min de lunes a viernes, ~18-21 min el sábado y ~24-28 min el domingo. No depende del tamaño de la flota. El primer cálculo (125 móviles repartidos en la ventana) estaba mal y el CTO lo corrigió. Horario: primera salida entre las 7 y las 8 (después es "fuera de horario"); el diurno termina a las 17:00.
+
 **Siguiente:**
-1. **Deploy** de #137, #140 y #142 (la migración `20261012100000_infracciones` se aplica sola en el paso de migraciones). Comando: `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 TAG=r15-<fecha> scripts/deploy-gcp.sh`. Lo corre el CTO o da el ok.
-2. **CTO:** asignar el vehículo del piloto a la Línea 16 en Rotaciones.
-3. **PR E:** marcador con foto y alertas, y panel de acciones rápidas en `/en-vivo`.
-4. **PR F:** vueltas SR→SR, Molinos 1 vez por día con sugerencia de frecuencia, fuera de horario, turno no cumplido y sanción compensatoria agendada.
-   - Cálculo inicial de frecuencia, a confirmar: ~7 min por envío a Molinos con 125 móviles en 15 h.
-   - Falta que el CTO confirme el horario de servicio de la 16.
+1. **Piloto de la 16 en calle desde el 2026-10-13** (placa `1616PIL` + PIN). Mirar en `/en-vivo` los pasos por Salomón y Honduras y los `pc_omitido`. Al terminar: `--desactivar --apply`.
+2. **PR E:** marcador con foto y alertas, y panel de acciones rápidas en `/en-vivo`.
+3. **PR F:** vueltas SR→SR, Molinos 1 vez por día con sugerencia 1 de cada N en Honduras, fuera de horario (7-8), turno no cumplido y sanción compensatoria agendada (nocturno desde las 17:01).
+4. Habilitar `desvioHabilitado` por SQL solo en rutas trazadas con GPS (Z12), si el CTO lo quiere.
 5. PR B (teléfono del conductor) → PR C (GCS y foto, con el ok del CTO para el bucket) → PR D (APK 16).
 
 ## Punto de retome — 2026-10-12 (anterior): /en-vivo — zoom, latencia y Google Maps
