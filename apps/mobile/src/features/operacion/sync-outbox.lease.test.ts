@@ -26,7 +26,7 @@ vi.mock('../../db/outbox', () => ({
   recuperarEnviadosHuerfanos: vi.fn().mockResolvedValue(0),
   revertirAPendiente: vi.fn(),
   ID_LEASE_DRENAJE: 'drenaje-outbox',
-  PISO_ENTRE_INTENTOS_DRENAJE_MS: 10_000,
+  PISO_ENTRE_INTENTOS_DRENAJE_MS: 3_000,
   TTL_LEASE_DRENAJE_MS: 60_000,
 }));
 

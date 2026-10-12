@@ -23,7 +23,7 @@ import { drenarLotesConLease } from './sync-outbox';
  * (headless y foreground, ver los call sites) para que el drenado ocurra sin depender de que
  * haya una pantalla viva.
  *
- * Respeta el diseño de `docs/handoff.md:109-131` (mutex + lease, piso de 10 s, backoff con
+ * Respeta el diseño de `docs/handoff.md:109-131` (mutex + lease, piso de 3 s, backoff con
  * `Date.now()`) con UNA corrección explícita del CTO sobre ese documento: el mutex vive en
  * SQLite (`sync_lease`, `db/outbox.ts`), no en memoria — ver el comentario de
  * `ID_LEASE_DRENAJE` en `outbox.ts` para el porqué (headless y foreground pueden ser contextos
@@ -42,7 +42,7 @@ import { drenarLotesConLease } from './sync-outbox';
 // (`PISO_ENTRE_INTENTOS_DRENAJE_MS`/`TTL_LEASE_DRENAJE_MS`, importados arriba con alias para
 // no tocar el resto de este archivo) — `sync-outbox.ts` también los necesita para su propia
 // variante con lease (hallazgo 6) y no puede importarlos de acá sin crear un ciclo. Ver el
-// comentario de `ID_LEASE_DRENAJE` en `outbox.ts` para el detalle de cada valor: 10 s de piso
+// comentario de `ID_LEASE_DRENAJE` en `outbox.ts` para el detalle de cada valor: 3 s de piso
 // entre intentos exitosos (GPS a alta frecuencia no debe disparar un POST por fix) y 60 s de
 // TTL del lease (OkHttp en Android con la Activity pausada puede no respetar timeout propio).
 
@@ -64,7 +64,7 @@ const UMBRAL_RECUPERACION_ENVIADOS_MS = 90_000;
 /** Backoff EN MEMORIA — a propósito no vive en SQLite como el lease. No es una garantía de
  * correctitud (eso lo da el lease, que SÍ cruza contextos): es solo una optimización para que
  * reintentos sucesivos dentro del MISMO contexto JS no ataquen la red apenas vence el piso fijo
- * de 10 s tras una racha de fallos. Si el contexto JS se recicla (headless ↔ foreground), este
+ * de 3 s tras una racha de fallos. Si el contexto JS se recicla (headless ↔ foreground), este
  * valor se resetea a `PISO_ENTRE_INTENTOS_MS` — peor caso, se reintenta un poco antes de lo
  * ideal, nunca se rompe el mutex. */
 let backoffActualMs = PISO_ENTRE_INTENTOS_MS;
@@ -168,7 +168,7 @@ export async function intentarDrenarOportunista(
     const obtuvoLease = await adquirirLease(db, ID_LEASE_DRENAJE, token, ahoraMs, TTL_LEASE_MS);
     if (!obtuvoLease) {
       // Alguien más lo tiene: o bien otro contexto (headless vs. foreground) está drenando en
-      // este mismo instante, o bien el piso de 10 s / el backoff de un intento anterior todavía
+      // este mismo instante, o bien el piso de 3 s / el backoff de un intento anterior todavía
       // no venció. En ambos casos, no hay nada que hacer acá — desistir en silencio es el
       // comportamiento correcto, no un error.
       return;

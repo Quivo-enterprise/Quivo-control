@@ -30,6 +30,10 @@
 // entre dos puntos: ese delta puede ser de segundos O de más de una hora (ver
 // `SOLAPE_CURSOR_MS`/huecos por Doze en `traza.ts`), y animar a esa escala se vería
 // carísimo o directamente pausado la mayor parte del tiempo.
+//
+// **Nota (PR 2 de `docs/plan-en-vivo-google.md`):** el llamador de `/en-vivo` ya no pasa el
+// intervalo de poll completo sino `min(1000, intervalo)`: repartir 10 s dejaba el marcador
+// ~10 s detrás del punto más nuevo. Esta función sigue siendo agnóstica: reparte lo que reciba.
 
 /** Punto de la traza con lo mínimo que necesita la animación. `PuntoTrazaGps` de
  * `@quivo/shared` (con `accuracy`/`speed` de más) es asignable acá sin problema — es

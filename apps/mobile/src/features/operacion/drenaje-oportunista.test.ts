@@ -41,7 +41,7 @@ vi.mock('../../db/outbox', () => ({
   purgarAcusadosAntesDe: vi.fn().mockResolvedValue(0),
   revertirAPendiente: vi.fn(),
   ID_LEASE_DRENAJE: 'drenaje-outbox',
-  PISO_ENTRE_INTENTOS_DRENAJE_MS: 10_000,
+  PISO_ENTRE_INTENTOS_DRENAJE_MS: 3_000,
   TTL_LEASE_DRENAJE_MS: 60_000,
 }));
 
@@ -105,7 +105,7 @@ describe('intentarDrenarOportunista — hallazgo 4a (lease ANTES del access toke
     liberarLeaseConCooldownMock.mockReset().mockResolvedValue(undefined);
     abrirOutboxMock.mockReset().mockResolvedValue({});
     enviarLoteMock.mockReset();
-    // Punto 8: sin este reset, el throttle de módulo (piso de 10 s) saltearía todos los tests
+    // Punto 8: sin este reset, el throttle de módulo (piso de 3 s) saltearía todos los tests
     // de este archivo a partir del segundo — corren en milisegundos de wall-clock real, uno
     // tras otro, y heredarían el timestamp de intento del test anterior.
     reiniciarThrottleDrenajeOportunistaParaTests();
@@ -196,7 +196,7 @@ describe('intentarDrenarOportunista — hallazgo 4a (lease ANTES del access toke
       expect(adquirirLeaseMock).toHaveBeenCalledTimes(1);
 
       // Simula que ya pasó el piso reseteando el throttle (equivalente a que el reloj avance
-      // los 10 s completos) — más simple y determinístico que fake timers para este caso.
+      // los 3 s completos) — más simple y determinístico que fake timers para este caso.
       reiniciarThrottleDrenajeOportunistaParaTests();
       await intentarDrenarOportunista(obtenerAccessToken);
 
@@ -228,13 +228,13 @@ describe('intentarDrenarOportunista — hallazgo 4a (lease ANTES del access toke
       // Único ciclo: un solo adquirir/liberar lease para los 3 lotes.
       expect(adquirirLeaseMock).toHaveBeenCalledTimes(1);
       expect(liberarLeaseConCooldownMock).toHaveBeenCalledTimes(1);
-      // Motivo 'agotado' (el último lote salió parcial): cooldown normal (piso de 10s), no 0.
+      // Motivo 'agotado' (el último lote salió parcial): cooldown normal (piso de 3 s), no 0.
       expect(liberarLeaseConCooldownMock).toHaveBeenCalledWith(
         expect.anything(),
         'drenaje-outbox',
         expect.any(String),
         expect.any(Number),
-        10_000,
+        3_000,
       );
     });
 

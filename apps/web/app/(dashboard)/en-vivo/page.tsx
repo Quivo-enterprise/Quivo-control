@@ -45,6 +45,9 @@ import {
 import { PanelJornada } from './panel-jornada';
 import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
 
+/** Tope de la animación del vehículo seleccionado: alcanza el punto más nuevo en ~1 s. */
+const DURACION_MAX_ANIMACION_MS = 1_000;
+
 export default function EnVivoPage() {
   const { token } = useAuth();
   const router = useRouter();
@@ -147,7 +150,7 @@ export default function EnVivoPage() {
   // Animación del marcador de vehículo (`route-map-impl.tsx` hace el trabajo real — ver el
   // comentario de `animatedVehicle` en `RouteMapProps`). Solo se anima la sesión CON DETALLE
   // ABIERTO: es la única con traza de alta resolución (`datos.puntos`) cargada — el resto de
-  // los vehículos salta directo entre polls de `/posiciones` (cada 5 s), que es la cadencia
+  // los vehículos salta directo entre polls de `/posiciones` (cada 2 s), que es la cadencia
   // que ya tienen. `markerId = idMarcadorVehiculo(sesionSeleccionada)` (Entrega 14): con TODOS
   // los vehículos dibujados a la vez, el id ya no puede ser una constante única — tiene que
   // apuntar exactamente al marker de esta sesión entre los N que trae `vehiculos`.
@@ -159,7 +162,12 @@ export default function EnVivoPage() {
             markerId: idMarcadorVehiculo(sesionSeleccionada),
             resetKey: sesionSeleccionada,
             points: datos.puntos,
-            intervalMs: intervaloVigente === false ? INTERVALO_POLL_MS : intervaloVigente,
+            // Alcanza el punto más nuevo en ~1 s como máximo: repartir todo el intervalo de
+            // poll (10 s) sumaba ese mismo lag a la posición mostrada.
+            intervalMs: Math.min(
+              DURACION_MAX_ANIMACION_MS,
+              intervaloVigente === false ? INTERVALO_POLL_MS : intervaloVigente,
+            ),
           }
         : null,
     [datos, sesionSeleccionada, intervaloVigente],
