@@ -10,8 +10,9 @@
 
 El CTO probó el APK r13 en calle. Hallazgos, causas raíz y plan:
 [`docs/plan-prueba-campo-r13.md`](plan-prueba-campo-r13.md). **Estado: los 4 PRs del plan están en `main`**
-(CI verde en todos). **No hay APK nuevo todavía:** falta que el CTO apruebe el changelog (memoria
-`apk-build-11-changelog-antes-de-lanzar`) y lance el build (`autoIncrement` sube el versionCode).
+(CI verde en todos). **APK de producción versionCode 14** (changelog aprobado por el CTO, build desde `main` en `83ba099`):
+https://expo.dev/accounts/shadow00/projects/quivo-conductor/builds/b4512e08-8424-423f-87c2-463ddf0b6161
+— artefacto: https://expo.dev/artifacts/eas/s4mNgNPvCVC-0zOYfrk0MZiMkwN0WGK_aF_EJtcnmoo.apk
 
 | PR | Qué | Commit |
 |---|---|---|
@@ -39,7 +40,7 @@ llegó al límite de uso de la cuenta (hasta 2026-10-12 03:56).
 **Backlog derivado:** OSRM en VM GCP (snap fuera de ruta + ruta real al próximo punto); vueltas en
 servidor y panel web; padding del encuadre general medido.
 
-**Siguiente:** changelog al CTO → build APK → prueba de campo con el checklist.
+**Siguiente:** prueba de campo del APK 14 con el checklist.
 
 ## Release 13 completo, APK de producción lanzado (2026-10-11)
 
