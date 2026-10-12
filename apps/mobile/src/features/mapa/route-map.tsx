@@ -3,6 +3,7 @@ import {
   StyleSheet,
   View,
   Text,
+  type GestureResponderEvent,
   type LayoutChangeEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
@@ -24,6 +25,7 @@ import {
   construirCamaraNavegacion,
   coordenadasEncuadre,
   decidirEncuadre,
+  esGestoSobreMapa,
   paddingNavegacion,
 } from './camara';
 import {
@@ -32,8 +34,9 @@ import {
   indiceProximoPuntoControl,
 } from './estado-punto-control';
 import { debeResaltarRutaCalculada, estiloRuta, COLOR_LINEA } from './estilo-ruta';
-import type { ModoCamara } from './modo-camara';
+import type { ModoCamara, OrientacionCamara } from './modo-camara';
 import { debeCommitearFrame, posicionMapaDesde } from './posicion-mapa';
+import type { EmisorRumbo } from './rumbo-mapa';
 import type { PosicionMapa, RouteMapProps } from './tipos';
 
 /**
@@ -56,6 +59,14 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  *   · `libre`: el conductor tocó el mapa en navegación (`onPanDrag` para el arrastre y
  *     `onRegionChangeStart` con `isGesture` para pinch/doble-tap, que en Android NO disparan
  *     `onPanDrag`; ninguno dispara con la cámara propia); la cámara no se mueve sola hasta recentrar.
+ *   En android con la arquitectura vieja `isGesture` no es confiable, así que además el contenedor
+ *   mira los toques crudos (`onTouchStart`/`onTouchMove`, ver `esGestoSobreMapa`): un dedo que se
+ *   mueve más de ~8 px o un pinch sacan de navegación; un toque simple (p. ej. sobre un marcador) no.
+ *   La brújula de Google está apagada (`showsCompass={false}`): tocarla ponía el norte arriba y sacaba
+ *   de navegación sin forma de volver. La pantalla dibuja la suya y el mapa le publica el rumbo de la
+ *   cámara por `emisorRumbo` (sin props ni estado a 30 Hz). La orientación de la cámara de
+ *   navegación (`camara.orientacion`: `rumbo` = heading-up, `norte` = norte arriba siguiendo al
+ *   vehículo) se lee por ref para el `setCamera` por frame.
  *   Los movimientos puntuales (entrar a navegación, recentrar, encuadrar) se ejecutan cuando
  *   cambia `camara.seq`; el resto del tiempo la cámara depende solo del modo.
  *
@@ -69,7 +80,7 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  * frames descartados en esa ventana no se reponen solos: al vencer, un timer llama a
  * `sincronizarCamaraNavegacion` y la cámara se re-ubica sobre el vehículo (salto chico, igual a
  * lo que avanzó en ese tiempo). La sincronización también corre tras un cambio de `mapPadding`
- * fuera de `general`: en Android `applyBaseMapPadding` hace `moveCamera`, que cancela cualquier
+ * fuera de `general` (sin suspensión activa, anima 300 ms en vez de saltar): en Android `applyBaseMapPadding` hace `moveCamera`, que cancela cualquier
  * `animateCamera` en vuelo y deja la cámara a medio camino. Si en ese momento hay una suspensión
  * activa (entrada o recentrar en curso, lo normal al entrar desde `general` porque el padding
  * cambia en el mismo commit), no se salta: se relanza el `animateCamera` por el tiempo que queda,
@@ -88,6 +99,9 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  */
 
 const COLOR_FLECHA = '#3127B1';
+
+/** Duración (ms) de la animación de cámara cuando cambia el `mapPadding` en navegación (el sheet hizo snap). */
+const DURACION_REENCUADRE_PADDING_MS = 300;
 
 interface CoordenadaMostrada {
   lat: number;
@@ -206,6 +220,10 @@ interface MarcadorConductorAnimadoProps {
   /** Modo de cámara vigente (espejo de `camara.modo` + el pan inmediato, ver `RouteMap`). Solo en
    * `navegacion` el marcador mueve la cámara. */
   modoRef: RefObject<ModoCamara>;
+  /** Orientación vigente de la cámara de navegación (espejo de `camara.orientacion`). */
+  orientacionRef: RefObject<OrientacionCamara>;
+  /** Recibe el rumbo de la cámara que se manda por frame (para la brújula de la pantalla). */
+  emisorRumbo?: EmisorRumbo;
   /** Epoch ms hasta el cual no se mueve la cámara por frame: el padre lo fija mientras corre un
    * `animateCamera` de entrada/recentrar para que el `setCamera` no lo cancele. */
   camaraSuspendidaHastaRef: RefObject<number>;
@@ -227,6 +245,8 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   posicionMapa,
   mapRef,
   modoRef,
+  orientacionRef,
+  emisorRumbo,
   camaraSuspendidaHastaRef,
   camaraListaRef,
   posicionMostradaRef,
@@ -261,9 +281,20 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
       const mapa = mapRef.current;
       if (modoRef.current !== 'navegacion' || !camaraListaRef.current || !mapa) return;
       if (Date.now() < camaraSuspendidaHastaRef.current) return;
-      mapa.setCamera(construirCamaraNavegacion(siguiente));
+      const camaraNav = construirCamaraNavegacion(siguiente, orientacionRef.current);
+      // Umbral de 2° dentro del emisor: a 30 Hz casi todos los cuadros no notifican nada.
+      if (camaraNav.heading !== undefined) emisorRumbo?.publicar(camaraNav.heading);
+      mapa.setCamera(camaraNav);
     },
-    [publicarPosicion, mapRef, modoRef, camaraListaRef, camaraSuspendidaHastaRef],
+    [
+      publicarPosicion,
+      mapRef,
+      modoRef,
+      orientacionRef,
+      emisorRumbo,
+      camaraListaRef,
+      camaraSuspendidaHastaRef,
+    ],
   );
 
   // El efecto depende del CONTENIDO del fix (lat/lng/ts/rumbo), no de la identidad del objeto
@@ -483,6 +514,7 @@ export function RouteMap({
   onPanUsuario,
   insetsNavegacion,
   rutaCalculada,
+  emisorRumbo,
   style,
 }: RouteMapProps) {
   const mapRef = useRef<MapView>(null);
@@ -528,6 +560,10 @@ export function RouteMap({
   // `onRegionChangeStart` (gesto) lo pasan a 'libre' al instante (antes de que el padre re-renderice) para que la cámara por
   // frame deje de pelear con el gesto.
   const modoRef = useRef<ModoCamara>(camara.modo);
+  // Espejo de `camara.orientacion` (heading-up o norte arriba) para el `setCamera` por frame. Se
+  // actualiza en el mismo efecto que `modoRef`, declarado ANTES del efecto de `seq`, así el
+  // movimiento puntual de `alternarOrientacion` ya ve la orientación nueva.
+  const orientacionRef = useRef<OrientacionCamara>(camara.orientacion);
   // Epoch ms hasta el cual el marcador no mueve la cámara (ver `MarcadorConductorAnimado`).
   const camaraSuspendidaHastaRef = useRef(0);
   // Timer que repone la cámara al vencer la suspensión (ver `sincronizarCamaraNavegacion`).
@@ -554,6 +590,8 @@ export function RouteMap({
       if (!camaraListaRef.current || !mapa) return;
       const posicion = posicionMostradaRef.current;
       const accion = decidirEncuadre(coordenadasRuta.length, posicion !== null);
+      // Vista general = norte arriba: la brújula se reinicia (el botón además se oculta ahí).
+      emisorRumbo?.publicar(0, true);
       if (accion === 'ajustar-ruta') {
         mapa.fitToCoordinates(coordenadasEncuadre(coordenadasRuta, posicion), {
           edgePadding: { ...PADDING_ENCUADRE_RUTA },
@@ -570,7 +608,7 @@ export function RouteMap({
         else mapa.setCamera(camaraCentrada);
       }
     },
-    [coordenadasRuta],
+    [coordenadasRuta, emisorRumbo],
   );
 
   const cancelarTimerSuspension = useCallback(() => {
@@ -592,13 +630,15 @@ export function RouteMap({
     const posicion = posicionMostradaRef.current;
     if (modoRef.current !== 'navegacion' || !camaraListaRef.current || !mapa || !posicion) return;
     const restante = camaraSuspendidaHastaRef.current - Date.now();
+    const camaraNav = construirCamaraNavegacion(posicion, orientacionRef.current);
+    if (camaraNav.heading !== undefined) emisorRumbo?.publicar(camaraNav.heading);
     if (reanimarSiSuspendida && restante > 80) {
-      mapa.animateCamera(construirCamaraNavegacion(posicion), { duration: restante });
+      mapa.animateCamera(camaraNav, { duration: restante });
       return;
     }
     camaraSuspendidaHastaRef.current = 0;
-    mapa.setCamera(construirCamaraNavegacion(posicion));
-  }, []);
+    mapa.setCamera(camaraNav);
+  }, [emisorRumbo]);
 
   // Cámara de navegación sobre la posición mostrada. Sin posición todavía no hace nada: el primer
   // fix ubica la cámara (`publicarYSeguir`). Con `duracion` > 0 anima y suspende el `setCamera`
@@ -608,7 +648,9 @@ export function RouteMap({
       const posicion = posicionMostradaRef.current;
       const mapa = mapRef.current;
       if (!posicion || !mapa || !camaraListaRef.current) return;
-      const camaraNav = construirCamaraNavegacion(posicion);
+      const camaraNav = construirCamaraNavegacion(posicion, orientacionRef.current);
+      // Destino de la animación: la aguja de la brújula va directo al rumbo final.
+      if (camaraNav.heading !== undefined) emisorRumbo?.publicar(camaraNav.heading, true);
       cancelarTimerSuspension();
       if (duracion > 0) {
         camaraSuspendidaHastaRef.current = Date.now() + duracion;
@@ -621,7 +663,7 @@ export function RouteMap({
         mapa.setCamera(camaraNav);
       }
     },
-    [cancelarTimerSuspension, sincronizarCamaraNavegacion],
+    [cancelarTimerSuspension, sincronizarCamaraNavegacion, emisorRumbo],
   );
 
   // Cámara inicial, una sola vez cuando se cumplen mapa listo + layout: en navegación (remount
@@ -643,9 +685,10 @@ export function RouteMap({
 
   useEffect(() => {
     modoRef.current = camara.modo;
+    orientacionRef.current = camara.orientacion;
     // En `general` no hay suspensión que reponer.
     if (camara.modo === 'general') cancelarTimerSuspension();
-  }, [camara.modo, cancelarTimerSuspension]);
+  }, [camara.modo, camara.orientacion, cancelarTimerSuspension]);
 
   useEffect(() => cancelarTimerSuspension, [cancelarTimerSuspension]);
 
@@ -676,6 +719,55 @@ export function RouteMap({
   }, [onPanUsuario, cancelarTimerSuspension]);
 
   const onPanDrag = salirANavegacionLibre;
+
+  // Detección de gestos por toques crudos, redundante a propósito: en Android con la arquitectura
+  // vieja (`newArchEnabled: false`) `isGesture` de `onRegionChangeStart` no es confiable y
+  // `onPanDrag` solo cubre el arrastre de un dedo. Los `setCamera`/`animateCamera` propios no
+  // producen toques, así que esto solo se dispara por el conductor; un toque simple (marcador) que
+  // no se mueve más de `UMBRAL_GESTO_PX` no saca de navegación.
+  const inicioToqueRef = useRef<{ x: number; y: number } | null>(null);
+  const onTouchStartMapa = useCallback(
+    (e: GestureResponderEvent) => {
+      const { touches } = e.nativeEvent;
+      if (touches.length >= 2) {
+        salirANavegacionLibre();
+        return;
+      }
+      const toque = touches[0];
+      inicioToqueRef.current = toque ? { x: toque.pageX, y: toque.pageY } : null;
+    },
+    [salirANavegacionLibre],
+  );
+  const onTouchMoveMapa = useCallback(
+    (e: GestureResponderEvent) => {
+      if (modoRef.current !== 'navegacion') return;
+      const { touches } = e.nativeEvent;
+      const toque = touches[0];
+      if (!toque) return;
+      if (esGestoSobreMapa(inicioToqueRef.current, { x: toque.pageX, y: toque.pageY }, touches.length)) {
+        salirANavegacionLibre();
+      }
+    },
+    [salirANavegacionLibre],
+  );
+
+  // En libre y en general el rumbo de la cámara lo cambia el conductor a mano (o `fitToCoordinates`):
+  // al terminar el movimiento se lee la cámara real para que la aguja la siga. En navegación NO:
+  // `onRegionChangeComplete` llega seguido (cada `moveCamera` propio), `getCamera` cruza el bridge y
+  // el rumbo ya se publica desde el `setCamera` por frame. Al resolverse la promesa se vuelve a
+  // mirar el modo: una lectura vieja no debe pisar el rumbo que fuerza el recentrar.
+  const onRegionChangeComplete = useCallback(() => {
+    if (modoRef.current === 'navegacion' || !emisorRumbo) return;
+    mapRef.current
+      ?.getCamera()
+      .then((c) => {
+        if (modoRef.current === 'navegacion') return;
+        emisorRumbo.publicar(c.heading);
+      })
+      .catch(() => {
+        // Mapa desmontado o no listo: la aguja queda como estaba.
+      });
+  }, [emisorRumbo]);
 
   const onRegionChangeStart = useCallback(
     (event: NativeSyntheticEvent<Details>) => {
@@ -713,9 +805,18 @@ export function RouteMap({
     if (paddingAplicadoRef.current === mapPadding) return;
     paddingAplicadoRef.current = mapPadding;
     if (esGeneral) return;
-    const id = requestAnimationFrame(() => sincronizarCamaraNavegacion(true));
+    const id = requestAnimationFrame(() => {
+      // En libre el conductor movió el mapa: un snap del sheet no debe recentrarlo.
+      if (modoRef.current !== 'navegacion') return;
+      // Con suspensión en curso (entrada o recentrar) se relanza el `animateCamera` por el tiempo
+      // restante. Sin ella (p. ej. el sheet hizo snap) la cámara ANIMA 300 ms al nuevo encuadre, con
+      // la misma suspensión del `setCamera` por frame, en vez de saltar.
+      const restante = camaraSuspendidaHastaRef.current - Date.now();
+      if (restante > 80) sincronizarCamaraNavegacion(true);
+      else seguirVehiculo(DURACION_REENCUADRE_PADDING_MS);
+    });
     return () => cancelAnimationFrame(id);
-  }, [mapPadding, esGeneral, sincronizarCamaraNavegacion]);
+  }, [mapPadding, esGeneral, sincronizarCamaraNavegacion, seguirVehiculo]);
 
   const onMapReady = useCallback(() => {
     mapaListoRef.current = true;
@@ -741,7 +842,11 @@ export function RouteMap({
   );
 
   return (
-    <View style={[styles.container, style]}>
+    <View
+      style={[styles.container, style]}
+      onTouchStart={onTouchStartMapa}
+      onTouchMove={onTouchMoveMapa}
+    >
       <MapView
         ref={mapRef}
         style={styles.map}
@@ -750,6 +855,7 @@ export function RouteMap({
         onLayout={onLayoutMapa}
         onPanDrag={onPanDrag}
         onRegionChangeStart={onRegionChangeStart}
+        onRegionChangeComplete={onRegionChangeComplete}
         mapPadding={mapPadding}
         rotateEnabled
         // Sin gesto de inclinación (el pitch lo fija el modo navegación por código, que sigue
@@ -757,9 +863,9 @@ export function RouteMap({
         pitchEnabled={false}
         zoomControlEnabled={false}
         toolbarEnabled={false}
-        // Brújula visible: tras un pan en heading-up, tocarla deja el norte arriba (Google solo
-        // la muestra con bearing ≠ 0).
-        showsCompass
+        // Brújula nativa apagada: tocarla ponía el norte arriba y sacaba de navegación sin forma de
+        // volver. La pantalla dibuja una propia (`BrujulaMapa`) alimentada por `emisorRumbo`.
+        showsCompass={false}
       >
         <RutaPolylines
           coordenadasRuta={coordenadasRuta}
@@ -776,6 +882,8 @@ export function RouteMap({
           posicionMapa={posicionMapa}
           mapRef={mapRef}
           modoRef={modoRef}
+          orientacionRef={orientacionRef}
+          emisorRumbo={emisorRumbo}
           camaraSuspendidaHastaRef={camaraSuspendidaHastaRef}
           camaraListaRef={camaraListaRef}
           posicionMostradaRef={posicionMostradaRef}

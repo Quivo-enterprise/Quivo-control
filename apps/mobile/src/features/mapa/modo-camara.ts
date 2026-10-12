@@ -9,6 +9,10 @@
  * - `libre`: el conductor tocó el mapa durante la navegación; la cámara no se mueve sola hasta
  *   que recentre.
  *
+ * `orientacion` (solo cambia dentro de `navegacion`, la alterna la brújula propia): `rumbo` es
+ * heading-up (la cámara gira con el vehículo) y `norte` mantiene el norte arriba mientras sigue al
+ * vehículo. Sobrevive a navegación <-> libre (recentrar no la toca) y se reinicia al finalizar.
+ *
  * `accion` + `seq` le dicen al mapa QUÉ movimiento puntual hacer: `seq` sube solo cuando hay un
  * movimiento que ejecutar, así el mapa reacciona a `seq` y no a objetos nuevos. Si un evento no
  * cambia nada el reducer devuelve la MISMA referencia: `onPanDrag` dispara muchas veces por
@@ -16,6 +20,7 @@
  */
 export type ModoCamara = 'general' | 'navegacion' | 'libre';
 export type AccionCamara = 'seguir' | 'encuadrar' | 'ninguna';
+export type OrientacionCamara = 'rumbo' | 'norte';
 
 export interface EstadoCamara {
   modo: ModoCamara;
@@ -24,6 +29,8 @@ export interface EstadoCamara {
    * `general` es un viaje largo, recentrar desde `libre` uno corto. */
   desde: ModoCamara;
   accion: AccionCamara;
+  /** Cómo orienta la cámara de navegación (ver docblock del módulo). */
+  orientacion: OrientacionCamara;
   seq: number;
 }
 
@@ -31,30 +38,53 @@ export type EventoCamara =
   | { tipo: 'iniciarRecorrido' }
   | { tipo: 'finalizarRecorrido' }
   | { tipo: 'panUsuario' }
-  | { tipo: 'recentrar' };
+  | { tipo: 'recentrar' }
+  | { tipo: 'alternarOrientacion' };
 
 /** Estado al montar: un remount en pleno recorrido (`tracking`) arranca directo en navegación. */
 export function estadoCamaraInicial(tracking: boolean): EstadoCamara {
   return tracking
-    ? { modo: 'navegacion', desde: 'navegacion', accion: 'seguir', seq: 0 }
-    : { modo: 'general', desde: 'general', accion: 'encuadrar', seq: 0 };
+    ? { modo: 'navegacion', desde: 'navegacion', accion: 'seguir', orientacion: 'rumbo', seq: 0 }
+    : { modo: 'general', desde: 'general', accion: 'encuadrar', orientacion: 'rumbo', seq: 0 };
 }
 
 export function reducirModoCamara(estado: EstadoCamara, evento: EventoCamara): EstadoCamara {
   switch (evento.tipo) {
     case 'iniciarRecorrido':
       if (estado.modo === 'navegacion') return estado;
-      return { modo: 'navegacion', desde: estado.modo, accion: 'seguir', seq: estado.seq + 1 };
+      return {
+        modo: 'navegacion',
+        desde: estado.modo,
+        accion: 'seguir',
+        orientacion: estado.orientacion,
+        seq: estado.seq + 1,
+      };
     case 'finalizarRecorrido':
       // Siempre emite, incluso desde `general`: solo ocurre en un borde de `tracking`, es barato.
-      return { modo: 'general', desde: estado.modo, accion: 'encuadrar', seq: estado.seq + 1 };
+      return {
+        modo: 'general',
+        desde: estado.modo,
+        accion: 'encuadrar',
+        orientacion: 'rumbo',
+        seq: estado.seq + 1,
+      };
     case 'panUsuario':
       if (estado.modo !== 'navegacion') return estado;
-      return { modo: 'libre', desde: estado.modo, accion: 'ninguna', seq: estado.seq };
+      return { ...estado, modo: 'libre', desde: estado.modo, accion: 'ninguna' };
     case 'recentrar':
       if (estado.modo === 'general') {
-        return { modo: 'general', desde: estado.modo, accion: 'encuadrar', seq: estado.seq + 1 };
+        return { ...estado, desde: estado.modo, accion: 'encuadrar', seq: estado.seq + 1 };
       }
-      return { modo: 'navegacion', desde: estado.modo, accion: 'seguir', seq: estado.seq + 1 };
+      return { ...estado, modo: 'navegacion', desde: estado.modo, accion: 'seguir', seq: estado.seq + 1 };
+    case 'alternarOrientacion':
+      // Solo tiene sentido siguiendo al vehículo; en libre el toque de la brújula es recentrar.
+      if (estado.modo !== 'navegacion') return estado;
+      return {
+        ...estado,
+        desde: estado.modo,
+        accion: 'seguir',
+        orientacion: estado.orientacion === 'rumbo' ? 'norte' : 'rumbo',
+        seq: estado.seq + 1,
+      };
   }
 }
