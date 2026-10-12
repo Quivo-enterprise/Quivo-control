@@ -22,13 +22,36 @@
 //   baja en el siguiente `idle` (o por timeout), para no confundir nuestros movimientos con los
 //   del usuario, pero un gesto real dentro de esa ventana igual se reporta.
 //
-// Props de `RouteMapProps` que este motor NO soporta todavía (se ignoran sin romper; los usa el
-// editor de rutas, que migra último):
-// - `MapPoint.draggable` / `MapPoint.onDragEnd`: no hay arrastre de marcadores.
+// Arrastre de marcadores (`MapPoint.draggable` + `onDragEnd`, solo `markers`, como MapLibre):
+// - `gmpDraggable` en el `AdvancedMarkerElement`; `gmp-dragstart` / `gmp-dragend` del propio
+//   marcador. Al soltar se lee `marker.position` y se llama al `onDragEnd` VIGENTE (se busca por
+//   id en `datosRef`, sin cierres viejos). Mientras se arrastra, un cambio de `markers` no toca ni
+//   el contenido ni la posición de ese marcador (no lo recrea ni lo devuelve atrás); después, la
+//   posición nueva del consumidor se aplica con el setter sobre el MISMO marcador (foco intacto).
+// - Igual que MapLibre (`route-map-impl.tsx`): cursor `grab` al pasar y `grabbing` al arrastrar
+//   (clases CSS sobre el marcador), un arrastre no dispara el clic del mapa ni el `onClick` del
+//   punto (se suprime UN click que llegue dentro de 500 ms del fin del arrastre, comparando
+//   `timeStamp` de eventos y sin temporizadores, ver `clickTrasArrastre`; además se descarta un
+//   clic del mapa cuyo destino es un marcador INTERACTIVO) y el arrastre no cuenta como
+//   `onUserPan` (no es un gesto de cámara). `arrastrando` lo baja `gmp-dragend`, con una red de
+//   seguridad (`debeCerrarArrastre`) por si ese evento no llega (Esc, foco perdido, pointerdown).
+// - Teclado: se usa el soporte NATIVO de Google para `gmpDraggable` (Tab al marcador, Alt+Espacio
+//   o Alt+Enter empieza a arrastrar, flechas mueven, Enter/Espacio sueltan y emiten `gmp-dragend`,
+//   Esc cancela). El foco queda en el elemento anfitrión `<gmp-advanced-marker>`, así que ESE es
+//   el elemento accesible: su nombre es `marker.title` ("Nodo 2 — Alt+Enter para mover"), su detalle
+//   va en `aria-description` y el contenido HTML de un marcador arrastrable no es enfocable.
+//   Como `gmp-click` es lo que dispara el Enter sobre el anfitrión, el `onClick` de un marcador
+//   arrastrable se atiende con `gmp-click` (`gmpClickable`) y no con el `click` del contenido.
+//
+// Props de `RouteMapProps` con soporte parcial en este motor:
 // - `MapRoute.label` se muestra como etiqueta HTML en el punto medio de la ruta (no sigue la
 //   curvatura de la línea como el texto de MapLibre). El `line-offset` entre rutas paralelas SÍ se
 //   emula (`desplazarCamino`, se recalcula en cada cambio de zoom para mantener los mismos px).
-// - `pinType: 'pulse'` se dibuja como nodo estático (sin el halo pulsante del editor).
+// - `pinType: 'pulse'`: nodo con número + halo CSS que late (`qv-gmap-pulso`, `styles.css`),
+//   estático con `prefers-reduced-motion: reduce`. MapLibre dibuja ese halo SIN animación (capa
+//   `quivo-marker-pulse`, círculo de 16 px al 18 % de opacidad): acá se mantiene ese tamaño/opacidad
+//   como base y se le suma el latido. El elemento solo se recrea si cambia su firma
+//   (`firmaPunto`), así que un render o poll del consumidor no reinicia la animación.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
@@ -45,6 +68,17 @@ import { Button, Loader } from './primitives.js';
 import type { RouteMapProps } from './route-map-impl.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
 import { desplazarCamino, latLngAPixelContenedor } from './route-map-proyeccion.js';
+import {
+  decidirActualizacionPunto,
+  esArrastrable,
+  esInteractivo,
+  clickTrasArrastre,
+  debeCerrarArrastre,
+  descripcionPunto,
+  etiquetaPunto,
+  firmaPunto,
+  latLngDePosicion,
+} from './route-map-puntos.js';
 import { esGestoUsuarioDeCamara } from './route-map-gestos.js';
 import {
   encuadreAuto,
@@ -183,8 +217,9 @@ function crearElementoVehiculo(punto: MapPoint): HTMLElement {
 }
 
 /** Punto de control / parada / nodo: círculo con el color del consumidor (admite
- * `var(--qv-*)` tal cual, el navegador lo resuelve) y borde del color de la superficie. Solo es
- * botón enfocable (role, tabindex, nombre accesible) cuando tiene `onClick`. */
+ * `var(--qv-*)` tal cual, el navegador lo resuelve) y borde del color de la superficie. Es botón
+ * enfocable (role, tabindex, nombre accesible) cuando tiene `onClick`. Si es arrastrable NO: el
+ * foco y el nombre accesible los lleva el anfitrión `<gmp-advanced-marker>` (ver el header). */
 function crearElementoPunto(
   punto: MapPoint,
   tipo: 'stop' | 'marker',
@@ -196,12 +231,26 @@ function crearElementoPunto(
   const raiz = document.createElement('div');
   raiz.className = `qv-gmap-pt qv-gmap-pt--${tipo === 'stop' ? 'parada' : pinType} qv-gmap-pt--rol-${rol}`;
   raiz.style.setProperty('--qv-gmap-pt-color', punto.color?.trim() || 'var(--qv-color-primary)');
-  if (punto.description || punto.label) raiz.title = [punto.label, punto.description].filter(Boolean).join(' — ');
-  if (punto.onClick) {
-    raiz.setAttribute('role', 'button');
-    raiz.tabIndex = 0;
-    raiz.classList.add('qv-gmap--clickable');
-    raiz.setAttribute('aria-label', [punto.label?.trim(), punto.description].filter(Boolean).join(', '));
+  const arrastrable = esArrastrable(punto, tipo);
+  if (arrastrable) {
+    // `qv-gmap--clickable` da el área táctil de 44 px y el anillo de hover; sin role ni tabindex
+    // (el foco y el nombre los lleva el anfitrión) y sin listeners (`enlazarActivacion` lo salta).
+    raiz.classList.add('qv-gmap--arrastrable', 'qv-gmap--clickable');
+  } else {
+    if (punto.description || punto.label) raiz.title = [punto.label, punto.description].filter(Boolean).join(' — ');
+    if (esInteractivo(punto, tipo)) {
+      raiz.setAttribute('role', 'button');
+      raiz.tabIndex = 0;
+      raiz.classList.add('qv-gmap--clickable');
+      raiz.setAttribute('aria-label', etiquetaPunto(punto, tipo));
+    }
+  }
+  // Halo del `pulse`: hermano del punto (no hijo) para que el latido no escale el número.
+  if (tipo === 'marker' && pinType === 'pulse') {
+    const halo = document.createElement('span');
+    halo.className = 'qv-gmap-pt__halo';
+    halo.setAttribute('aria-hidden', 'true');
+    raiz.appendChild(halo);
   }
   const punta = document.createElement('span');
   punta.className = 'qv-gmap-pt__dot';
@@ -218,10 +267,11 @@ function crearElementoPunto(
 }
 
 /** Click y Enter/Espacio sobre el contenido de un marcador. Solo se engancha si el punto es
- * clickable (la firma incluye `Boolean(onClick)`, así que si cambia el contenido se recrea). El
- * `onClick` se lee de la entrada en cada activación para ver siempre el último callback. */
+ * interactivo y NO arrastrable (la firma incluye `esInteractivo` y `esArrastrable`, así que si
+ * cambian el contenido se recrea; en uno arrastrable el clic llega por `gmp-click` del anfitrión).
+ * El `onClick` se lee de la entrada en cada activación para ver siempre el último callback. */
 function enlazarActivacion(contenido: HTMLElement, entrada: { onClick?: () => void }): void {
-  if (!contenido.classList.contains('qv-gmap--clickable')) return;
+  if (!contenido.classList.contains('qv-gmap--clickable') || contenido.classList.contains('qv-gmap--arrastrable')) return;
   contenido.addEventListener('click', () => entrada.onClick?.());
   contenido.addEventListener('keydown', (e) => {
     if ((e.key === 'Enter' || e.key === ' ') && entrada.onClick) {
@@ -242,7 +292,16 @@ interface EntradaPunto {
   esVehiculo: boolean;
   interp: EstadoInterpolacion;
   ultima: LatLngSimple;
+  tipo: 'stop' | 'marker';
   onClick?: () => void;
+  /** Hay un arrastre de este marcador en curso (entre `gmp-dragstart` y `gmp-dragend`). */
+  arrastrando: boolean;
+  /** Cómo empezó el arrastre en curso (lo decide la última entrada del usuario). */
+  modoArrastre: 'puntero' | 'teclado';
+  /** Flag vigente: `gmp-click` y `gmp-dragend` lo consultan para no usar un cierre viejo. */
+  arrastrable: boolean;
+  /** Los listeners `gmp-drag*` / `gmp-click` se enganchan una sola vez, al volverse arrastrable. */
+  arrastreEnganchado: boolean;
 }
 
 interface EntradaRuta {
@@ -340,6 +399,16 @@ function Controlador({
   const rutasRef = useRef(new Map<string, EntradaRuta>());
   const zonasRef = useRef(new Map<string, EntradaZona>());
   const puntosRef = useRef(new Map<string, EntradaPunto>());
+  /** `timeStamp` del fin del último arrastre aún sin consumir (ver `clickTrasArrastre`). */
+  const finArrastreRef = useRef<number | null>(null);
+  /** Última entrada del usuario sobre el mapa: decide si un arrastre es de puntero o de teclado. */
+  const ultimaEntradaRef = useRef<'puntero' | 'teclado'>('puntero');
+  /** Consume (UN click) la supresión posterior a un arrastre: `true` si este click hay que ignorarlo. */
+  const suprimirClickTrasArrastre = useCallback((clickTs: number | undefined): boolean => {
+    const r = clickTrasArrastre(finArrastreRef.current, clickTs ?? performance.now());
+    finArrastreRef.current = r.finArrastreTs;
+    return r.suprimir;
+  }, []);
   const animEstadoRef = useRef<EstadoAnimacionVehiculo>(estadoInicialAnimacion());
   const animResetKeyRef = useRef<string | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -353,6 +422,14 @@ function Controlador({
       programaticoRef.current = false;
       timerProgramaticoRef.current = null;
     }, TIMEOUT_PROGRAMATICO_MS);
+  }, []);
+
+  /** Da por terminado el arrastre de `entrada` sin `gmp-dragend` (ver `debeCerrarArrastre`). Con
+   * `armarClick` el click que suele seguir al soltar tampoco se interpreta como activación. */
+  const cerrarArrastre = useCallback((entrada: EntradaPunto, armarClick = false) => {
+    entrada.arrastrando = false;
+    entrada.marker.classList.remove('qv-gmap--arrastrando');
+    if (armarClick) finArrastreRef.current = performance.now();
   }, []);
 
   const cancelarLimiteZoom = useCallback(() => {
@@ -407,6 +484,23 @@ function Controlador({
     const alEntrada = (e: Event) => {
       const objetivo = e.target instanceof Element ? e.target : null;
       const enControlGoogle = Boolean(objetivo?.closest('.gm-bundled-control, .gm-control-active'));
+      if (e.type === 'pointerdown' || e.type === 'keydown') {
+        const tecla = e.type === 'keydown' ? (e as KeyboardEvent).key : undefined;
+        puntosRef.current.forEach((entrada) => {
+          if (debeCerrarArrastre({ tipo: e.type as 'pointerdown' | 'keydown', tecla }, { arrastrando: entrada.arrastrando, modo: entrada.modoArrastre })) {
+            cerrarArrastre(entrada);
+          }
+        });
+        // Una interacción nueva: el click pendiente del arrastre anterior ya no es suyo.
+        finArrastreRef.current = null;
+        ultimaEntradaRef.current = e.type === 'pointerdown' ? 'puntero' : 'teclado';
+      }
+      // Tocar o mover con flechas un marcador arrastrable (contenido o anfitrión, ambos llevan la
+      // clase) no es un gesto de cámara.
+      if ((e.type === 'pointerdown' || e.type === 'keydown') && objetivo?.closest('.qv-gmap--arrastrable')) {
+        if (e.type === 'pointerdown') punteros.add((e as PointerEvent).pointerId);
+        return;
+      }
       let gesto: boolean;
       if (e.type === 'pointerdown') {
         punteros.add((e as PointerEvent).pointerId);
@@ -463,6 +557,10 @@ function Controlador({
         if (!programaticoRef.current) onUserPanRef.current?.();
       }),
       map.addListener('click', (evento: google.maps.MapMouseEvent) => {
+        // Un clic sobre un marcador (o el que cierra un arrastre) no es un clic en el mapa vacío.
+        const destino = evento.domEvent?.target;
+        if (destino instanceof Element && destino.closest('.qv-gmap--clickable, .qv-gmap--arrastrable')) return;
+        if (suprimirClickTrasArrastre(evento.domEvent?.timeStamp)) return;
         if (!interactiveRef.current || !onMapClickRef.current || !evento.latLng) return;
         onMapClickRef.current({ lat: evento.latLng.lat(), lng: evento.latLng.lng() });
       }),
@@ -476,7 +574,7 @@ function Controlador({
       div.removeEventListener('pointerup', alSoltar, true);
       div.removeEventListener('pointercancel', alSoltar, true);
     };
-  }, [map, camaraRef, actualizarEtiquetasPorZoom, marcarProgramatico, cancelarLimiteZoom]);
+  }, [map, camaraRef, actualizarEtiquetasPorZoom, marcarProgramatico, cancelarLimiteZoom, suprimirClickTrasArrastre, cerrarArrastre]);
 
   // --- Rutas y zonas ---------------------------------------------------------------------------
 
@@ -688,6 +786,74 @@ function Controlador({
     if (rafRef.current === null) rafRef.current = requestAnimationFrame(tick);
   }, [tick]);
 
+  /** Punto vigente (último render) de una entrada, para no llamar callbacks de cierres viejos. */
+  const puntoVigente = useCallback((entrada: EntradaPunto): MapPoint | undefined => {
+    const { markers: marcadores, stops: paradas } = datosRef.current;
+    const lista = entrada.tipo === 'stop' ? paradas : marcadores;
+    return lista.find((p, i) => resolvePointId(p, i) === entrada.id);
+  }, []);
+
+  /** Escucha el arrastre y el clic del marcador (`gmp-dragstart` / `gmp-dragend` solo se emiten con
+   * `gmpDraggable`; el teclado lo resuelve Google). Se engancha una sola vez, la primera vez que
+   * el marcador es arrastrable: los demás no pagan estos listeners. */
+  const engancharArrastre = useCallback(
+    (entrada: EntradaPunto) => {
+      if (entrada.arrastreEnganchado) return;
+      entrada.arrastreEnganchado = true;
+      entrada.marker.addEventListener('gmp-dragstart', () => {
+        entrada.arrastrando = true;
+        entrada.modoArrastre = ultimaEntradaRef.current;
+        entrada.marker.classList.add('qv-gmap--arrastrando');
+      });
+      entrada.marker.addEventListener('gmp-dragend', (e) => {
+        cerrarArrastre(entrada);
+        // El `click` que sigue a soltar (o el Enter que suelta) no es una activación.
+        finArrastreRef.current = e.timeStamp;
+        const posicion = latLngDePosicion(entrada.marker.position);
+        if (!posicion) return;
+        // Esc cancela el arrastre y deja el marcador donde estaba: ahí no hay nada que avisar.
+        const cambio = posicion.lat !== entrada.ultima.lat || posicion.lng !== entrada.ultima.lng;
+        entrada.ultima = posicion;
+        if (!cambio) return;
+        const punto = puntoVigente(entrada);
+        if (punto && esArrastrable(punto, entrada.tipo)) punto.onDragEnd?.(posicion);
+      });
+      entrada.marker.addEventListener('gmp-click', (e) => {
+        if (!entrada.arrastrable || entrada.arrastrando || suprimirClickTrasArrastre(e.timeStamp)) return;
+        entrada.onClick?.();
+      });
+      // Foco perdido en pleno arrastre por teclado: Google no emite `gmp-dragend`.
+      entrada.marker.addEventListener('focusout', () => {
+        if (debeCerrarArrastre({ tipo: 'focusout' }, { arrastrando: entrada.arrastrando, modo: entrada.modoArrastre })) {
+          cerrarArrastre(entrada);
+        }
+      });
+    },
+    [puntoVigente, cerrarArrastre, suprimirClickTrasArrastre],
+  );
+
+  /** Alinea el marcador con el flag de arrastre vigente del punto: `gmpDraggable`, `gmpClickable`
+   * (el Enter sobre el anfitrión dispara `gmp-click`), clase del anfitrión (cursor, guarda de
+   * gestos de cámara) y `title` (nombre accesible del elemento que recibe el foco). */
+  const sincronizarArrastre = useCallback(
+    (entrada: EntradaPunto, punto: MapPoint) => {
+      const arrastrable = esArrastrable(punto, entrada.tipo);
+      entrada.arrastrable = arrastrable;
+      if (arrastrable) engancharArrastre(entrada);
+      else if (!entrada.arrastreEnganchado) return;
+      if (entrada.marker.gmpDraggable !== arrastrable) entrada.marker.gmpDraggable = arrastrable;
+      const clickable = arrastrable && Boolean(punto.onClick);
+      if (entrada.marker.gmpClickable !== clickable) entrada.marker.gmpClickable = clickable;
+      entrada.marker.classList.toggle('qv-gmap--arrastrable', arrastrable);
+      const titulo = arrastrable ? etiquetaPunto(punto, entrada.tipo) : '';
+      if (entrada.marker.title !== titulo) entrada.marker.title = titulo;
+      const detalle = descripcionPunto(punto, entrada.tipo);
+      if (detalle) entrada.marker.setAttribute('aria-description', detalle);
+      else entrada.marker.removeAttribute('aria-description');
+    },
+    [engancharArrastre],
+  );
+
   useEffect(() => {
     if (!map || !libMarker) return;
     const entradas = puntosRef.current;
@@ -713,18 +879,7 @@ function Controlador({
       vivos.add(clave);
       const esVehiculo = tipo === 'marker' && punto.pinType === 'vehicle';
       const posicion = { lat: punto.lat, lng: punto.lng };
-      const firma = [
-        oscuro,
-        tipo,
-        rol,
-        punto.pinType,
-        punto.color,
-        punto.label,
-        punto.description,
-        punto.estadoFrescura,
-        punto.placa,
-        Boolean(punto.onClick),
-      ].join('~');
+      const firma = firmaPunto(punto, { oscuro, tipo, rol });
       const previa = entradas.get(clave);
       const zIndex = esVehiculo ? 1000 : tipo === 'marker' ? 200 : 100;
 
@@ -732,32 +887,59 @@ function Controlador({
         const contenido = esVehiculo ? crearElementoVehiculo(punto) : crearElementoPunto(punto, tipo, rol, id, oscuro);
         const entrada: EntradaPunto = {
           id,
-          marker: new libMarker.AdvancedMarkerElement({ map, position: posicion, content: contenido, zIndex }),
+          marker: new libMarker.AdvancedMarkerElement({
+            map,
+            position: posicion,
+            content: contenido,
+            zIndex,
+          }),
           firma,
           esVehiculo,
           interp: interpolacionQuieta(posicion),
           ultima: posicion,
+          tipo,
           onClick: punto.onClick,
+          arrastrando: false,
+          modoArrastre: 'puntero',
+          arrastrable: false,
+          arrastreEnganchado: false,
         };
+        sincronizarArrastre(entrada, punto);
         enlazarActivacion(contenido, entrada);
         entradas.set(clave, entrada);
         continue;
       }
 
       previa.onClick = punto.onClick;
-      if (previa.firma !== firma) {
-        const anterior = previa.marker.content;
-        const teniaFoco = anterior instanceof HTMLElement && document.activeElement === anterior;
+      // Si dejó de ser arrastrable en medio de un arrastre no habrá `gmp-dragend`: se da por cerrado.
+      // El click de la suelta tampoco debe activar el punto ni el mapa.
+      if (previa.arrastrando && !esArrastrable(punto, tipo)) cerrarArrastre(previa, true);
+      // Quién tenía el foco antes de cambiar entre arrastrable y no arrastrable (host o contenido).
+      const activo = document.activeElement;
+      const teniaFoco = activo !== null && (activo === previa.marker || activo === previa.marker.content);
+      // Durante un arrastre la decisión no toca ni el contenido, ni la posición, ni `gmpDraggable`.
+      const decision = decidirActualizacionPunto({
+        arrastrando: previa.arrastrando,
+        firmaPrevia: previa.firma,
+        firmaNueva: firma,
+        ultima: previa.ultima,
+        posicion,
+      });
+      if (decision.sincronizarArrastre) sincronizarArrastre(previa, punto);
+      if (decision.recrearContenido) {
         const contenido = esVehiculo ? crearElementoVehiculo(punto) : crearElementoPunto(punto, tipo, rol, id, oscuro);
         enlazarActivacion(contenido, previa);
         previa.marker.content = contenido;
         previa.firma = firma;
         // El contenido se reemplaza entero: si el viejo tenía el foco del teclado, pasa al nuevo
         // (si no, el foco se perdería en cada cambio de estado del vehículo).
-        if (teniaFoco && contenido.tabIndex >= 0) {
-          contenido.focus({ preventScroll: true });
-          if (document.activeElement !== contenido) {
-            requestAnimationFrame(() => contenido.focus({ preventScroll: true }));
+        // Con el cambio arrastrable <-> no arrastrable el foco cambia de elemento: queda en el que
+        // sea enfocable ahora (el anfitrión si es arrastrable, el contenido si no).
+        const destinoFoco = previa.arrastrable ? previa.marker : contenido;
+        if (teniaFoco && destinoFoco.tabIndex >= 0) {
+          destinoFoco.focus({ preventScroll: true });
+          if (document.activeElement !== destinoFoco) {
+            requestAnimationFrame(() => destinoFoco.focus({ preventScroll: true }));
           }
         }
         // Si cambió el pinType (pin <-> vehículo) el marcador pasa a ser/dejar de ser animado:
@@ -775,7 +957,8 @@ function Controlador({
           duracionMs,
           reducirMovimiento: reducirMovimientoRef.current,
         });
-      } else if (previa.ultima.lat !== posicion.lat || previa.ultima.lng !== posicion.lng) {
+      } else if (decision.moverPosicion) {
+        // Setter sobre el marcador existente (también tras un arrastre): nunca se recrea.
         previa.marker.position = posicion;
         previa.ultima = posicion;
       }
@@ -787,7 +970,7 @@ function Controlador({
       entradas.delete(clave);
     });
     asegurarLoop();
-  }, [map, libMarker, markers, stops, oscuro, asegurarLoop]);
+  }, [map, libMarker, markers, stops, oscuro, asegurarLoop, sincronizarArrastre, cerrarArrastre]);
 
   // Animación del vehículo seleccionado (traza + punto vivo). Misma máquina de estados que el
   // motor MapLibre (`vehicle-marker-animation.ts`); acá solo cambia quién dibuja.
