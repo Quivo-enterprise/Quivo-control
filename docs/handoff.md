@@ -12,13 +12,14 @@ El CTO vio /en-vivo desde el teléfono manejando: la web iba atrasada, el zoom s
 actualización y pidió Google Maps (el panel usa **MapLibre**, no Leaflet). Plan aprobado:
 [`docs/plan-en-vivo-google.md`](plan-en-vivo-google.md) — PR 1 zoom (`fitMode` caía en `'auto'`),
 PR 2 latencia (poll 2 s web + piso de drenado 3 s móvil, APK 15), PR 3 motor Google + /en-vivo,
-PR 4..N resto del panel y borrar MapLibre. **Estado: PR 1, 2 y 3 en `main` y desplegados en prod como `r14-20261012` (API, migraciones, web, worker). Falta APK 15 (drenado 3 s).**
+PR 4..N resto del panel y borrar MapLibre. **Estado: PR 1, 2 y 3 desplegados en prod (`r14-20261012`); APK 15 (versionCode 15, drenado 3 s) compilado; PR 4 (#137, recorridos) en `main` sin desplegar.**
 
 | PR | Qué | Commit |
 |---|---|---|
 | #131 | `/en-vivo` con `fitMode="once"` (encuadra al montar, con Reencuadrar y en flota vacía → con vehículos); mapa siempre montado (loading/error/vacío como overlays; refetch fallido con datos = chip "Sin conexión"); `encuadreAuto`/`encuadreUnaVez` puros con tests (contrato que hereda el motor Google). Verificado en navegador con API mockeada: zoom 18.10 se mantiene tras polls y paneo; en `main` volvía a 15.68. | `7a942d1` |
 | #132 | `/posiciones` cada 2 s; vehículo seleccionado con el último fix de ese poll (`conPuntoVivo`), traza sigue a 10 s; rate limit en vivo: 1000/min/IP pre-auth + 600/min/usuario (guard propio tras `JwtAuthGuard`, contador único por controller); móvil: piso de drenado 3 s, backoff de fallo desde 10 s (**sale en APK 15**). | `27028fe` |
 | #134 | Motor Google Maps (`@vis.gl/react-google-maps` 1.10.1) en `route-map-google.tsx` con el mismo `RouteMapProps`; `RouteMap` gana `engine` (default `'maplibre'`) y solo `/en-vivo` usa `engine="google"`. Interpolación de todos los vehículos (≤1 s, reduced-motion), encuadre/follow/`onUserPan` (gestos detectados por DOM, `esGestoUsuarioDeCamara`), cámara preservada al cambiar tema, markers accesibles (role/foco/aria con frescura, área táctil ≥44 px), mensajes sin key/auth/carga con "Reintentar" (recarga: el loader de vis.gl es singleton). Helpers puros con tests: `route-map-shared/interpolacion/proyeccion/gestos.ts`. Deploy: key desde Secret Manager `google-maps-web-key`, Map ID desde env `GOOGLE_MAPS_MAP_ID`, validados en el preflight del Paso 0 (antes de migraciones/API). | `07389bf` |
+| #137 | `reportes/recorridos/[id]` con `engine="google"`. Motor Google: emula `line-offset` entre rutas paralelas (`desplazarCamino` en `route-map-proyeccion.ts`: mitra acotada a 2×, rachas de puntos repetidos sin muescas, O(N)), recalculado por zoom con rAF en el handler existente; etiqueta en el punto medio del camino desplazado; `offsetRutaParalela` compartido con MapLibre. **Bug de #134 corregido:** fuera de /en-vivo el mapa Google quedaba con altura 0 (vis.gl 1.10.1 descarta `style` si hay `className`; /en-vivo lo tapaba con `!important`) → regla `.qv-gmap > .qv-route-map__canvas`. Gates: `/code-review` (10, aplicados), `/codex-debug verify-fix` `fixes_root_cause` (riesgo O(N²) resuelto), Playwright con API mockeada (478 px, dos líneas lado a lado, claro/oscuro; /en-vivo 850/850), CI verde. | `12427d6` |
 
 **Gates:** `/code-review` en ambos con hallazgos aplicados (#132: 2 rondas — pre-auth sin límite, cupo ×4 por handler, carga de traza a 2 s). `/codex-debug verify-fix` **no corrió** en #131 (límite de Codex). **#132 se mergeó con el CI todavía en curso** (error de proceso del chairman: el gate leía la salida de `tail`, no el exit code); el run terminó verde (`ci` + `acceptance`) después del merge. #134: revisor Codex durante la implementación (6 hallazgos), `/code-review` (10) y `web-design-guidelines` (10), todos aplicados; CI verde antes del merge (gate por exit code).
 
@@ -30,8 +31,8 @@ PR 4..N resto del panel y borrar MapLibre. **Estado: PR 1, 2 y 3 en `main` y des
 
 **Siguiente:**
 1. ~~Map ID~~ y ~~deploy~~ hechos. CTO: abrir /en-vivo en prod y confirmar que carga el mapa Google. Próximos deploys del panel: siempre con `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7` (el Map ID no es secreto).
-3. APK 15 (drenado 3 s) — changelog al CTO antes del build. Prueba en calle: latencia, batería, `/en-vivo` en el teléfono.
-4. PR 4..N: `reportes/recorridos/[id]` → reglas/vehículos/líneas → editor de rutas (necesita drag + pulse en Google) → borrar MapLibre. Limitaciones actuales del motor Google: sin `draggable`, sin `line-offset` entre rutas paralelas, label de ruta en el punto medio, `pulse` estático.
+3. **APK 15 compilado** (2026-10-12, `production`, versionCode 15, commit `4cadce5`): https://expo.dev/artifacts/eas/Eo25QCSbZ28La6FiiAdTBtyecB0pIObuQzMr1s8iJCc.apk — único cambio móvil: drenado cada 3 s, backoff de fallo desde 10 s. Pendiente prueba en calle (CTO): latencia (objetivo 3-6 s), batería, y el checklist del APK 14.
+4. PR 4..N: ~~`reportes/recorridos/[id]`~~ (#137; se despliega con el próximo deploy del panel) → reglas/vehículos/líneas → editor de rutas (necesita drag + pulse en Google) → borrar MapLibre. Limitaciones actuales del motor Google: sin `draggable`, label de ruta en el punto medio (pueden coincidir dos labels), `pulse` estático.
 
 ## Punto de retome — 2026-10-11, noche (anterior): prueba de campo del APK r13
 
