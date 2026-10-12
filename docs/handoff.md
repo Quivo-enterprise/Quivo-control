@@ -6,7 +6,13 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-11 (leer primero): release 13 completo, APK de producción lanzado
+## Punto de retome — 2026-10-11, noche (leer primero): prueba de campo del APK r13
+
+El CTO probó el APK r13 en calle. Hallazgos, causas raíz y plan aprobado de 4 PRs (sheet/FABs/brújula,
+progreso de vuelta en cualquier orden, snap a ruta + zoom automático + canal visual, señal GPS débil +
+chime): [`docs/plan-prueba-campo-r13.md`](plan-prueba-campo-r13.md). Estado: **plan aprobado, PR 1 en curso.**
+
+## Release 13 completo, APK de producción lanzado (2026-10-11)
 
 **Estado:** las 3 features del release 13 están en `main` y el backend está desplegado. El APK de producción (versionCode 13) se lanzó en EAS:
 https://expo.dev/accounts/shadow00/projects/quivo-conductor/builds/56239100-0bef-4c43-bdf4-3ee894e9c04a
