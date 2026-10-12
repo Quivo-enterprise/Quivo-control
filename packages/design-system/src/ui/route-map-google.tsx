@@ -26,7 +26,8 @@
 // editor de rutas, que migra último):
 // - `MapPoint.draggable` / `MapPoint.onDragEnd`: no hay arrastre de marcadores.
 // - `MapRoute.label` se muestra como etiqueta HTML en el punto medio de la ruta (no sigue la
-//   curvatura de la línea como el texto de MapLibre) y no hay `line-offset` entre rutas paralelas.
+//   curvatura de la línea como el texto de MapLibre). El `line-offset` entre rutas paralelas SÍ se
+//   emula (`desplazarCamino`, se recalcula en cada cambio de zoom para mantener los mismos px).
 // - `pinType: 'pulse'` se dibuja como nodo estático (sin el halo pulsante del editor).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -43,7 +44,7 @@ import type { MapPoint, MapRoute, MapZone } from '../types.js';
 import { Button, Loader } from './primitives.js';
 import type { RouteMapProps } from './route-map-impl.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
-import { latLngAPixelContenedor } from './route-map-proyeccion.js';
+import { desplazarCamino, latLngAPixelContenedor } from './route-map-proyeccion.js';
 import { esGestoUsuarioDeCamara } from './route-map-gestos.js';
 import {
   encuadreAuto,
@@ -73,6 +74,7 @@ import {
   colorTextoContraste,
   etiquetaFrescura,
   nodeNumberFromId,
+  offsetRutaParalela,
   resolveColor,
   resolvePointId,
   routeVisuals,
@@ -247,7 +249,25 @@ interface EntradaRuta {
   casing: google.maps.Polyline;
   linea: google.maps.Polyline;
   etiqueta: MarcadorAvanzado | null;
+  /** Camino sin desplazar y offset lateral en px (0 si hay una sola ruta): se reaplica al zoom. */
+  base: LatLngSimple[];
+  offsetPx: number;
   firma: string;
+}
+
+/**
+ * Reaplica el offset lateral de las rutas paralelas a `zoom` (constante en px, así que en metros
+ * cambia con el zoom) y recoloca la etiqueta en el punto medio del camino ya desplazado.
+ */
+function reaplicarOffsetsRutas(rutas: Map<string, EntradaRuta>, zoom: number): void {
+  rutas.forEach((entrada) => {
+    if (entrada.offsetPx === 0) return;
+    const camino = desplazarCamino(entrada.base, entrada.offsetPx, zoom);
+    entrada.casing.setPath(camino);
+    entrada.linea.setPath(camino);
+    const medio = camino[Math.floor(camino.length / 2)];
+    if (entrada.etiqueta && medio) entrada.etiqueta.position = medio;
+  });
 }
 
 interface EntradaZona {
@@ -410,6 +430,7 @@ function Controlador({
     tiposEntrada.forEach((t) => div.addEventListener(t, alEntrada, { capture: true, passive: true }));
     div.addEventListener('pointerup', alSoltar, true);
     div.addEventListener('pointercancel', alSoltar, true);
+    let frameOffsets: number | null = null;
     const escuchas: google.maps.MapsEventListener[] = [
       map.addListener('idle', () => {
         programaticoRef.current = false;
@@ -432,6 +453,13 @@ function Controlador({
       map.addListener('dragstart', () => onUserPanRef.current?.()),
       map.addListener('zoom_changed', () => {
         actualizarEtiquetasPorZoom(map);
+        // Offsets de rutas paralelas: a lo sumo una recomputación por frame.
+        if (frameOffsets === null) {
+          frameOffsets = requestAnimationFrame(() => {
+            frameOffsets = null;
+            reaplicarOffsetsRutas(rutasRef.current, map.getZoom() ?? ZOOM_POR_DEFECTO);
+          });
+        }
         if (!programaticoRef.current) onUserPanRef.current?.();
       }),
       map.addListener('click', (evento: google.maps.MapMouseEvent) => {
@@ -442,6 +470,7 @@ function Controlador({
     return () => {
       cancelado = true;
       window.clearTimeout(respaldo);
+      if (frameOffsets !== null) cancelAnimationFrame(frameOffsets);
       escuchas.forEach((e) => e.remove());
       tiposEntrada.forEach((t) => div.removeEventListener(t, alEntrada, true));
       div.removeEventListener('pointerup', alSoltar, true);
@@ -485,15 +514,18 @@ function Controlador({
     const vivos = new Set<string>();
     routes
       .filter((ruta) => ruta.points.length > 1)
-      .forEach((ruta: MapRoute, indice) => {
+      .forEach((ruta: MapRoute, indice, dibujables) => {
         vivos.add(ruta.id);
-        const camino = ruta.points.map((p) => ({ lat: p.lat, lng: p.lng }));
+        // Mismo criterio que MapLibre: con varias rutas se reparten ±4 px alrededor del eje.
+        const offsetPx = offsetRutaParalela(indice, dibujables.length);
         const etiqueta = ruta.label?.trim() ?? '';
-        const firma = [oscuro, ruta.color, ruta.dashed, Boolean(ruta.onClick), etiqueta, indice, firmaPuntos(ruta.points)].join('~');
+        const firma = [oscuro, ruta.color, ruta.dashed, Boolean(ruta.onClick), etiqueta, indice, offsetPx, firmaPuntos(ruta.points)].join('~');
         const previa = existentes.get(ruta.id);
         if (previa?.firma === firma && (!etiqueta || previa.etiqueta || !libMarker)) {
           return;
         }
+        const base = ruta.points.map((p) => ({ lat: p.lat, lng: p.lng }));
+        const camino = desplazarCamino(base, offsetPx, map.getZoom() ?? ZOOM_POR_DEFECTO);
         // Los colores (getComputedStyle) se resuelven solo cuando la ruta cambió.
         const visuales = routeVisuals(colorParaMapa(ruta.color, oscuro), oscuro);
         const clickable = Boolean(ruta.onClick);
@@ -519,9 +551,14 @@ function Controlador({
           casing: new google.maps.Polyline({ map, zIndex: 1, geodesic: false }),
           linea: new google.maps.Polyline({ map, zIndex: 2 + indice, geodesic: false }),
           etiqueta: null,
+          base,
+          offsetPx,
           firma: '',
         };
-        if (!previa) {
+        if (previa) {
+          entrada.base = base;
+          entrada.offsetPx = offsetPx;
+        } else {
           const alClick = (evento: google.maps.PolyMouseEvent) => {
             datosRef.current.routes.find((r) => r.id === ruta.id)?.onClick?.();
             if (interactiveRef.current && onMapClickRef.current && evento.latLng) {
@@ -547,7 +584,8 @@ function Controlador({
           zIndex: 2 + indice,
           ...opcionesLinea,
         });
-        // Etiqueta HTML en el vértice central (Google no dibuja texto a lo largo de la línea).
+        // Etiqueta HTML en el vértice central del camino YA desplazado (como el símbolo de
+        // MapLibre, que sigue la línea con offset); `reaplicarOffsetsRutas` la sigue al zoom.
         if (entrada.etiqueta) {
           entrada.etiqueta.map = null;
           entrada.etiqueta = null;
@@ -971,8 +1009,9 @@ export function RouteMap(props: RouteMapProps) {
       >
         <GoogleMap
           key={oscuro ? 'oscuro' : 'claro'}
+          // `@vis.gl/react-google-maps` descarta `style` cuando hay `className`: el tamaño del
+          // canvas lo da `.qv-gmap > .qv-route-map__canvas` en `styles.css`.
           className="qv-route-map__canvas"
-          style={{ width: '100%', height: '100%' }}
           mapId={googleMapsMapId || MAP_ID_DEMO}
           colorScheme={oscuro ? ColorScheme.DARK : ColorScheme.LIGHT}
           defaultCenter={centroInicial}
