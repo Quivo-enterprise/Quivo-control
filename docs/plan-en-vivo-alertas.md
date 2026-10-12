@@ -187,8 +187,17 @@ Aplicación: el admin confirma y el sistema agenda la asignación compensatoria.
   - Puntos de control: Salomón (0) y Molinos (1), no obligatorios; Honduras (2), obligatorio.
   - Resultado: una vuelta que no pasa por Honduras genera `pc_omitido` y las terminales no generan falsos omitidos.
 
+### Reglas fijas de vueltas de la Línea 16 (el CTO las llama "inamovibles")
+- Una vuelta se cuenta solo cuando el circuito vuelve a Salomón Romero (SR→SR).
+- Los cupos de SR son fijos: 4 de lunes a viernes, 2 el sábado y 3 el domingo.
+- **Todos** los móviles suben a Molinos una vez por día. El control decide cuándo, según la necesidad.
+- El CTO quiere que el sistema **sugiera la frecuencia de envíos a Molinos** para tener un estándar. La 16 tiene entre 120 y 130 móviles.
+- Cálculo inicial, sin verificar: con 125 móviles en 15 h de servicio sale un envío cada ~7 min, y con 30 min de espera arriba quedan ~4 móviles en cola en Molinos.
+- Se ajusta con las horas reales de llegada a Molinos que registre el piloto. Falta que el CTO confirme el horario de servicio.
+
 ### PR F (nuevo, después de E): jornada, vueltas y sanciones compensatorias
-- **Cupos de vueltas** por línea y día de la semana, separados por terminal de llegada (Salomón / Molinos).
+- **Cupos de vueltas SR→SR** por línea y día de la semana, más la obligación de subir 1 vez por día a Molinos.
+- **Sugerencia de envío a Molinos:** el próximo móvil a enviar se elige entre los que todavía no subieron hoy, con un intervalo objetivo configurable.
 - **Conteo de vueltas en el servidor:** una vuelta es terminal → Honduras → terminal, clasificada por la terminal de llegada.
 - **Detecciones nuevas:**
   - Ingreso fuera de horario: contra `Asignacion.horaPresentacion`/`horaSalida`, con tolerancia configurable.

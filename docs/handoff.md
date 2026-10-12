@@ -15,7 +15,39 @@ real no existen detección de infracciones, foto de vehículo, teléfono del con
 desvío + PC omitido automáticos; niveles = `gravedad` de Reglas (leve/grave/gravísima); foto del vehículo
 subida por el conductor desde la app; WhatsApp + Llamar; sanción sin plazo. Orden: A (infracciones, API) →
 E (marcador + panel) → B (teléfono) → C (GCS + foto; bucket con ok del CTO; corrige logos en disco
-efímero de Cloud Run) → D (app, APK 16) → F (vueltas y sanciones compensatorias, nuevo). **Estado: PR A en revisión de CI.** El CTO pasó las sanciones reales del sindicato y la operación de la Línea 16 (ver "Decisiones posteriores" en el plan). La carga de la Línea 16 (`scripts/cargar-linea-16.ts`, por la API) está en una rama aparte.
+efímero de Cloud Run) → D (app, APK 16) → F (vueltas y sanciones compensatorias, nuevo). **Estado: PR A mergeado (#142), sin desplegar. Línea 16 cargada en prod (#143).**
+
+| PR | Qué | Commit |
+|---|---|---|
+| #142 | Detección automática de infracciones. Incluye: tabla `infracciones` y `sesion_desvio_estado` con RLS; detección en el worker después de persistir la evidencia del lote. **Desvío:** ≥3 puntos a >100 m durante ≥45 s, cierra con 2 puntos a <60 m; se evalúa solo dentro de un recorrido y solo en rutas con `rutas.desvioHabilitado`, que por defecto es **false**. Tras el deploy no hay ninguna ruta habilitada: se activa por SQL solo en geometrías trazadas con GPS, como la Z12. **PC omitido:** ventana por recorrido con tolerancia de 120 s (inicio/fin usan el reloj del sistema, los cumplimientos el GNSS); se marca en vivo y al `fin_recorrido`; es **solo alerta** (sancionar devuelve 409). `PosicionEnVivo` gana `infraccionNivel`, `infraccionesAbiertas`, `vehiculoId` y `conductorId`. Endpoints nuevos: listar, atender, descartar y sancionar (sujeto validado contra la infracción, en la misma transacción). Gates: `/code-review` en 2 rondas (12 hallazgos aplicados), `/security-review` sin hallazgos ≥8, 223 tests de los módulos tocados más integración con Postgres, CI verde. | `a49b80b` |
+| #143 | `scripts/cargar-linea-16.ts`: carga por la API (prod es solo IP privada), dry-run por defecto, pre-vuelo que aborta si el estado de prod no es el esperado, idempotente. **Aplicado en prod el 2026-10-12:** Línea 16 (`0a7df039…`, sindicato piloto `51493936…`), una ruta `circuito` de 213 vértices, 27,2 km. Recorrido: Salomón → El Prado → Honduras (= RETORNO) → Aroma → Ayacucho → Libertador/América (cierra a 11,7 m de la ida) → bifurcación → ramal Putucu → Molinos. Puntos de control: Salomón (0) y Molinos (1) no obligatorios, Honduras (2) obligatorio. 3 paradas, 1 variante, **sin asignaciones**. Re-corrida en dry-run: 0 escrituras. | `4143439` |
+
+**Operación de Tiquipaya (CTO, 2026-10-12)**, detalle en el plan, "Decisiones posteriores":
+- La 120 es la troncal; los choferes alternan 3 días en la 120 y 1 en la 16.
+- **Cupos fijos de vueltas a Salomón (SR→SR):** 4 de lunes a viernes, 2 el sábado, 3 el domingo.
+- **Molinos:** todos suben 1 vez por día; el control decide cuándo.
+- La 16 tiene entre 120 y 130 móviles.
+- **Salidas de la mañana:** de 7 a 8, con 6 min entre cada una y después 7.
+- **Nocturno:** desde las 17:01 (si deben 3 vueltas, desde las 15:00).
+- **Sanciones compensatorias:**
+  - Fuera de horario: una vuelta más.
+  - Turno no cumplido: repetirlo al día siguiente.
+  - Vueltas faltantes: en nocturno al día siguiente.
+  - Alteración de ruta: una vuelta más.
+
+**NO verificado:**
+- Que la detección de #142 funcione en prod (no está desplegada).
+- Que Honduras sea el punto RETORNO: el CTO dijo "creo".
+- La geometría de la 16 es un boceto de My Maps, por eso queda sin detección de desvío.
+
+**Siguiente:**
+1. **Deploy** de #137, #140 y #142 (la migración `20261012100000_infracciones` se aplica sola en el paso de migraciones). Comando: `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 TAG=r15-<fecha> scripts/deploy-gcp.sh`. Lo corre el CTO o da el ok.
+2. **CTO:** asignar el vehículo del piloto a la Línea 16 en Rotaciones.
+3. **PR E:** marcador con foto y alertas, y panel de acciones rápidas en `/en-vivo`.
+4. **PR F:** vueltas SR→SR, Molinos 1 vez por día con sugerencia de frecuencia, fuera de horario, turno no cumplido y sanción compensatoria agendada.
+   - Cálculo inicial de frecuencia, a confirmar: ~7 min por envío a Molinos con 125 móviles en 15 h.
+   - Falta que el CTO confirme el horario de servicio de la 16.
+5. PR B (teléfono del conductor) → PR C (GCS y foto, con el ok del CTO para el bucket) → PR D (APK 16).
 
 ## Punto de retome — 2026-10-12 (anterior): /en-vivo — zoom, latencia y Google Maps
 
