@@ -1,4 +1,33 @@
 import * as Sentry from '@sentry/react-native';
+import { clasificarErrorUbicacion, codigoDeErrorUbicacion } from './errores-ubicacion';
+
+/** Espera máxima (segundos) del fix forzado al volver a primer plano — el SDK rechaza con 408
+ * si vence. Explícito aunque coincida con el default del SDK (30 s). */
+const TIMEOUT_FIX_FOREGROUND_S = 30;
+
+/**
+ * Reporta a Sentry el rechazo de un `getCurrentPosition` / error de `onLocation` del SDK.
+ * 408/0/2/499 = "no hubo fix a tiempo" (cielo tapado): ruido esperado, no un error accionable
+ * — breadcrumb (nivel warning) para contexto de otros eventos, no `captureException`. Los
+ * permanentes, los códigos desconocidos y los ilegibles SÍ se reportan (no se degradan a
+ * ruido). Único punto de reporte para todos los catch de ubicación.
+ */
+export function reportarErrorUbicacionSentry(
+  error: unknown,
+  tags: { contexto: string; paso: string },
+): void {
+  const codigo = codigoDeErrorUbicacion(error);
+  if (codigo !== null && clasificarErrorUbicacion(codigo).tipo === 'transitorio') {
+    Sentry.addBreadcrumb({
+      category: tags.contexto,
+      level: 'warning',
+      message: `${tags.paso}: sin fix a tiempo`,
+      data: { error: String(error) },
+    });
+    return;
+  }
+  Sentry.captureException(error, { tags });
+}
 
 /**
  * QUI-P0 (la flecha del conductor no se mueve en el mapa — pedido explícito del CTO,
@@ -198,17 +227,28 @@ export async function reafirmarMovimientoSiEstacionario(
  */
 export function crearManejadorForegroundActivo(
   sdk: Pick<SdkSeguimientoContinuo, 'changePace' | 'setConfig' | 'getState'> & {
-    getCurrentPosition: (opts: { samples: number; persist: boolean }) => Promise<unknown>;
+    getCurrentPosition: (opts: {
+      samples: number;
+      persist: boolean;
+      timeout: number;
+    }) => Promise<unknown>;
   },
   estaEnRecorrido: () => boolean,
 ): (estadoApp: string) => void {
   return (estadoApp: string) => {
     if (estadoApp === 'active' && estaEnRecorrido()) {
-      void sdk.getCurrentPosition({ samples: 1, persist: true }).catch((error) => {
-        Sentry.captureException(error, {
-          tags: { contexto: 'gps-foreground', paso: 'foreground-activo-getCurrentPosition' },
+      void sdk
+        .getCurrentPosition({
+          samples: 1,
+          persist: true,
+          timeout: TIMEOUT_FIX_FOREGROUND_S,
+        })
+        .catch((error) => {
+          reportarErrorUbicacionSentry(error, {
+            contexto: 'gps-foreground',
+            paso: 'foreground-activo-getCurrentPosition',
+          });
         });
-      });
       void reafirmarMovimientoSiEstacionario(sdk, estaEnRecorrido).catch((error) => {
         Sentry.captureException(error, {
           tags: { contexto: 'gps-foreground', paso: 'foreground-activo-reafirmar-movimiento' },

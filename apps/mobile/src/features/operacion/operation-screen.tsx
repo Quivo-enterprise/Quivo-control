@@ -395,6 +395,8 @@ export function OperationScreen(
           />
         )}
 
+        {gps.tracking && gps.senalGpsDebil ? <SenalGpsDebilChip /> : null}
+
         {props.aviso ? <Text style={styles.notice}>{props.aviso}</Text> : null}
         {/* QUI-338 (reportado desde la calle: Samsung Galaxy A71, Android 10-13 — conductor
             sin ubicación y sin ningún mensaje que le dijera qué tocar): antes, "Iniciar
@@ -769,6 +771,27 @@ function NavigationInstructionCard({
   );
 }
 
+/** Chip calmo bajo el pill de distancia/velocidad: el 408 de ubicación es transitorio y no tiene
+ * acción para el conductor, así que se informa sin alarma (paleta warning, sin animación más
+ * allá de un fade-in) en vez de un error. Se monta solo mientras hay tracking + señal débil. */
+function SenalGpsDebilChip() {
+  const opacidad = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(opacidad, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+  }, [opacidad]);
+  return (
+    <Animated.View
+      style={[styles.senalDebilChip, { opacity: opacidad }]}
+      accessible
+      accessibilityLiveRegion="polite"
+      accessibilityLabel="Señal GPS débil: los puntos pueden registrarse con retraso"
+    >
+      <Ionicons name="cellular-outline" size={14} color={quivoColors.warningText} />
+      <Text style={styles.senalDebilTexto}>Señal GPS débil</Text>
+    </Animated.View>
+  );
+}
+
 function MapLayer({
   loading,
   paquete,
@@ -862,6 +885,23 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 4,
     marginTop: 2,
+  },
+  senalDebilChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: quivoRadius.pill,
+    backgroundColor: quivoColors.warningSoft,
+    borderWidth: 1,
+    borderColor: quivoColors.warningBorder,
+  },
+  senalDebilTexto: {
+    color: quivoColors.warningText,
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 12,
   },
   navDistance: {
     color: '#3127B1',

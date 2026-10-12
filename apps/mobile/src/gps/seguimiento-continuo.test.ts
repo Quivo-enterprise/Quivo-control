@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // el SDK real (mismo patrón que `headless-task.test.ts`).
 vi.mock('@sentry/react-native', () => ({
   captureException: vi.fn(),
+  addBreadcrumb: vi.fn(),
 }));
 
 import * as Sentry from '@sentry/react-native';
@@ -17,6 +18,7 @@ import {
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
+  reportarErrorUbicacionSentry,
   restaurarComportamientoNormal,
   type SdkSeguimientoContinuo,
 } from './seguimiento-continuo';
@@ -184,6 +186,35 @@ function sdkForeground(isMoving = true) {
   };
 }
 
+describe('reportarErrorUbicacionSentry', () => {
+  const tags = { contexto: 'gps-foreground', paso: 'paso-x' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([408, 0, 2, 499])('código transitorio %i: breadcrumb warning, sin captureException', (code) => {
+    reportarErrorUbicacionSentry(code, tags);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warning', category: 'gps-foreground' }),
+    );
+  });
+
+  it.each([1, 3, 500])('código %i (permanente/desconocido): captureException con los tags', (code) => {
+    reportarErrorUbicacionSentry(code, tags);
+    expect(Sentry.captureException).toHaveBeenCalledWith(code, { tags });
+    expect(Sentry.addBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it('error ilegible (sin code): captureException, no se degrada a breadcrumb', () => {
+    const error = new Error('x');
+    reportarErrorUbicacionSentry(error, tags);
+    expect(Sentry.captureException).toHaveBeenCalledWith(error, { tags });
+    expect(Sentry.addBreadcrumb).not.toHaveBeenCalled();
+  });
+});
+
 describe('crearManejadorForegroundActivo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -193,7 +224,11 @@ describe('crearManejadorForegroundActivo', () => {
     const sdk = sdkForeground();
     const manejador = crearManejadorForegroundActivo(sdk, () => true);
     manejador('active');
-    expect(sdk.getCurrentPosition).toHaveBeenCalledWith({ samples: 1, persist: true });
+    expect(sdk.getCurrentPosition).toHaveBeenCalledWith({
+      samples: 1,
+      persist: true,
+      timeout: 30,
+    });
   });
 
   it('sin recorrido en curso: NO pide posición aunque el estado sea "active"', () => {
@@ -230,6 +265,39 @@ describe('crearManejadorForegroundActivo', () => {
         tags: expect.objectContaining({ paso: 'foreground-activo-getCurrentPosition' }),
       }),
     );
+  });
+
+  it('con getCurrentPosition rechazando con 408: breadcrumb de warning, NO captureException', async () => {
+    const sdk = sdkForeground();
+    sdk.getCurrentPosition.mockRejectedValue(408);
+    const manejador = crearManejadorForegroundActivo(sdk, () => true);
+
+    manejador('active');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warning' }),
+    );
+  });
+
+  it('con getCurrentPosition rechazando con un código desconocido (500): captureException, sin breadcrumb', async () => {
+    const sdk = sdkForeground();
+    sdk.getCurrentPosition.mockRejectedValue(500);
+    const manejador = crearManejadorForegroundActivo(sdk, () => true);
+
+    manejador('active');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      500,
+      expect.objectContaining({
+        tags: expect.objectContaining({ paso: 'foreground-activo-getCurrentPosition' }),
+      }),
+    );
+    expect(Sentry.addBreadcrumb).not.toHaveBeenCalled();
   });
 
   // G1 (merge post-drenado, Entrega 31a — gap de revisión): el regreso a foreground es uno de

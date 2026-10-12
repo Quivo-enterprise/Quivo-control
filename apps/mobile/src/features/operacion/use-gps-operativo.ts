@@ -75,8 +75,13 @@ import {
   iniciarSeguimientoContinuo,
   reafirmarMovimiento,
   reafirmarMovimientoSiEstacionario,
+  reportarErrorUbicacionSentry,
   restaurarComportamientoNormal,
 } from '../../gps/seguimiento-continuo';
+import {
+  clasificarErrorUbicacion,
+  codigoDeErrorUbicacion,
+} from '../../gps/errores-ubicacion';
 
 /** `Platform.OS` reducido a las dos plataformas que `permiso-ubicacion.ts` distingue — ver el
  * comentario de cabecera de ese módulo para el porqué de la semántica de `status` distinta
@@ -191,6 +196,27 @@ export function useGpsOperativo(
   const [puntos, setPuntos] = useState(0);
   const [resultado, setResultado] = useState<string | null>(null);
   const [errorGps, setErrorGps] = useState<string | null>(null);
+  // `true` cuando, con el recorrido activo, llegó un error de ubicación NO permanente (transitorio
+  // o desconocido) DESPUÉS del último fix de EVIDENCIA. Reemplaza al viejo "código 408" en
+  // `errorGps`: un timeout de ubicación no tiene acción para el conductor (la UI lo muestra como
+  // chip). NO se basa en "tiempo sin fix": con distanceFilter 15 m y el canal visual apagado, un
+  // vehículo detenido no recibe fixes y daría falso positivo en cada parada.
+  const [senalGpsDebil, setSenalGpsDebil] = useState(false);
+  // Valor vigente de `senalGpsDebil` en una ref: evita un `setState` por cada fix (solo se llama
+  // al setter cuando el valor realmente cambia).
+  const senalGpsDebilRef = useRef(false);
+  const fijarSenalGpsDebil = useCallback((debil: boolean) => {
+    if (senalGpsDebilRef.current === debil) return;
+    senalGpsDebilRef.current = debil;
+    setSenalGpsDebil(debil);
+  }, []);
+  // Códigos de error de ubicación DESCONOCIDOS ya reportados a Sentry en esta sesión de
+  // tracking (una vez por código, para no inundar). Se reinicia al (re)suscribir al arrancar.
+  const codigosDesconocidosReportados = useRef(new Set<string>());
+  // Al detener el tracking se limpia la señal.
+  useEffect(() => {
+    if (!tracking) fijarSenalGpsDebil(false);
+  }, [tracking, fijarSenalGpsDebil]);
   // QUI-338: estado del flujo de permisos de ubicación, separado de `errorGps` a propósito —
   // `errorGps` es para fallos EN VIVO ya arrancado el tracking (escritura al outbox, stop
   // fallido); `permisoGps` es el gate PREVIO a arrancar, con su propio mensaje por caso y una
@@ -556,8 +582,9 @@ export function useGpsOperativo(
     try {
       await BackgroundGeolocation.getCurrentPosition({ samples: 1, persist: true });
     } catch (error) {
-      Sentry.captureException(error, {
-        tags: { contexto: 'gps-foreground', paso: 'heartbeat-getCurrentPosition' },
+      reportarErrorUbicacionSentry(error, {
+        contexto: 'gps-foreground',
+        paso: 'heartbeat-getCurrentPosition',
       });
     }
     // G1 (merge post-drenado, Entrega 31a): el heartbeat es, junto con el regreso a
@@ -655,12 +682,38 @@ export function useGpsOperativo(
 
   const suscribirUbicaciones = useCallback(() => {
     subscription.current?.remove();
+    codigosDesconocidosReportados.current.clear();
     subscription.current = BackgroundGeolocation.onLocation(
       (location) => {
+        // Solo el fix de EVIDENCIA (este canal) limpia la señal débil; el canal visual
+        // (`watchPosition`, `persist: false`) no es prueba de que el registro funcione.
+        fijarSenalGpsDebil(false);
         void onLocationRef.current(location);
       },
       (error) => {
-        setErrorGps(`No se pudo registrar una ubicación (código ${String(error)}).`);
+        // 408/0/2/499 son transitorios (sin fix a tiempo): no se muestra error, solo se marca
+        // `senalGpsDebil` (hasta el próximo fix de evidencia, y solo con tracking activo). Los
+        // desconocidos igual marcan señal débil y se reportan (una vez por código y sesión).
+        // Los permanentes (permisos) sí le dicen al conductor qué hacer, y su mensaje persiste
+        // hasta que `iniciar`/`detener` limpien `errorGps` (un fix válido posterior NO lo borra:
+        // con "Solo mientras se usa" siguen llegando fixes en foreground).
+        const codigo = codigoDeErrorUbicacion(error);
+        const clasificacion = clasificarErrorUbicacion(codigo);
+        if (clasificacion.tipo === 'permanente') {
+          setErrorGps(clasificacion.mensaje);
+          return;
+        }
+        if (clasificacion.tipo === 'desconocido') {
+          const clave = String(codigo);
+          if (!codigosDesconocidosReportados.current.has(clave)) {
+            codigosDesconocidosReportados.current.add(clave);
+            reportarErrorUbicacionSentry(error, {
+              contexto: 'gps-foreground',
+              paso: 'onLocation-error',
+            });
+          }
+        }
+        if (trackingRef.current) fijarSenalGpsDebil(true);
       },
     );
     // FIX POST-REVISIÓN (bug 2): suscripción de heartbeat en el MISMO punto que la de
@@ -691,7 +744,7 @@ export function useGpsOperativo(
     // (arriba, su propio `useCallback`) es quien los usa directamente (reintento de
     // `inicio_recorrido`, QUI-247) — esta función solo lo referencia vía `onHeartbeatRef`, que
     // siempre apunta a la versión más reciente (ver el `useEffect` que lo mantiene al día).
-  }, [estaEnRecorrido]);
+  }, [estaEnRecorrido, fijarSenalGpsDebil]);
 
   // Crea el controlador UNA sola vez (lazy). `abrirWatch`/`onAbierto`/`onFallo` NO capturan estado
   // de render: solo refs (`canalVisualController`, `visualFixesRecibidos`), funciones de módulo y
@@ -1720,6 +1773,7 @@ export function useGpsOperativo(
     puntos,
     resultado,
     errorGps,
+    senalGpsDebil,
     // QUI-338: gate de permisos previo a "Iniciar recorrido" — `operation-screen.tsx` lo usa
     // para mostrar el mensaje/acción correctos y para que el botón refleje si realmente se
     // puede arrancar (ver `permisoGps.bloqueante`).

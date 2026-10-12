@@ -26,8 +26,13 @@ import { OperationNavigator } from './src/app/operation-navigator';
 import { SplashScreen } from './src/features/auth/splash-screen';
 import { quivoColors, quivoFonts, quivoSpacing } from './src/shared/theme/quivo-theme';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { limpiarCanalesObsoletos } from './src/features/operacion/anuncio-punto-control';
 
 const queryClient = new QueryClient();
+
+// Una vez al arrancar la app (solo Android, fire-and-forget): borra el canal de notificaciones
+// obsoleto de los anuncios de punto de control.
+limpiarCanalesObsoletos();
 
 export default function App() {
   return (
