@@ -15,7 +15,7 @@ real no existen detección de infracciones, foto de vehículo, teléfono del con
 desvío + PC omitido automáticos; niveles = `gravedad` de Reglas (leve/grave/gravísima); foto del vehículo
 subida por el conductor desde la app; WhatsApp + Llamar; sanción sin plazo. Orden: A (infracciones, API) →
 E (marcador + panel) → B (teléfono) → C (GCS + foto; bucket con ok del CTO; corrige logos en disco
-efímero de Cloud Run) → D (app, APK 16). **Estado: PR A en curso.**
+efímero de Cloud Run) → D (app, APK 16) → F (vueltas y sanciones compensatorias, nuevo). **Estado: PR A en revisión de CI.** El CTO pasó las sanciones reales del sindicato y la operación de la Línea 16 (ver "Decisiones posteriores" en el plan). La carga de la Línea 16 (`scripts/cargar-linea-16.ts`, por la API) está en una rama aparte.
 
 ## Punto de retome — 2026-10-12 (anterior): /en-vivo — zoom, latencia y Google Maps
 

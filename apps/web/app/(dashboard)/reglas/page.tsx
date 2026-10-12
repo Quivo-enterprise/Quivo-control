@@ -18,7 +18,7 @@ import {
   Tooltip,
   type StatusBadgeStatus,
 } from '@quivo/design-system';
-import type { EstadoSancion, Regla, Sancion } from '@quivo/shared';
+import { REGLA_TIPOS_RESERVADOS_INFRACCION, type EstadoSancion, type Regla, type Sancion } from '@quivo/shared';
 import {
   AlertCircle,
   AlertTriangle,
@@ -192,7 +192,9 @@ function ReglasTab() {
     if (!token) return;
     reglasApi
       .listar(token)
-      .then((reglas) => setTiposExistentes(Array.from(new Set(reglas.map((r) => r.tipo))).sort()))
+      .then((reglas) => setTiposExistentes(
+          Array.from(new Set([...REGLA_TIPOS_RESERVADOS_INFRACCION, ...reglas.map((r) => r.tipo)])).sort(),
+        ))
       .catch(() => {});
   }, [token]);
 

@@ -7,5 +7,7 @@ import { SancionesService } from './sanciones.service.js';
 @Module({
   controllers: [ReglasController, SancionesController],
   providers: [ReglasService, SancionesService],
+  // `InfraccionesService` (docs/plan-en-vivo-alertas.md) crea sanciones reusando `crearEnTx`.
+  exports: [SancionesService],
 })
 export class ReglasModule {}

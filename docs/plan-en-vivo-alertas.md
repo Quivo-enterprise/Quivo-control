@@ -152,6 +152,53 @@ A → E → B → C → D.
 
 Cada PR sigue la misma regla: código por un Sonnet; `/code-review`; CI por exit code; merge; borrar la rama; handoff.
 
+## Decisiones posteriores (2026-10-12, tarde)
+
+### Ajustes al PR A (salieron de `/code-review` y del CTO)
+- **`rutas.desvioHabilitado`.** El default es `false` y el desvío solo se evalúa en rutas con geometría trazada por GPS (por ejemplo, el circuito Z12). Por ahora se habilita por SQL. Las rutas cargadas desde bocetos de My Maps darían desvíos falsos con el umbral de 100 m: la 120 tiene saltos de hasta 1,3 km entre vértices y la 16 de hasta 580 m.
+- **El desvío solo se mide dentro de un recorrido**, entre `inicio_recorrido` y `fin_recorrido`. Al terminar el recorrido se cierra el desvío abierto y la máquina se reinicia.
+- **Puntos con fecha futura:** se ignoran si superan `DRIFT_ALERTA_MS`, para que `ultimo_ts` no se congele.
+- **Ventana de `pc_omitido`:** el recorrido termina en la referencia y los cumplimientos de un recorrido posterior no cuentan. Hay una tolerancia de 120 s porque inicio y fin usan el reloj del sistema y los cumplimientos el GNSS.
+- **`pc_omitido` es solo alerta** (decisión del CTO): no se puede sancionar y la API devuelve 409. La sanción tiene que ser del conductor o del vehículo de la infracción.
+- **Atención:** la primera atención no se pisa. Los fallos de detección van al logger, no a `sync_errors`.
+
+### Sanciones reales del sindicato (CTO)
+Son compensatorias y se cumplen en la misma línea:
+1. Ingresar fuera de horario: una vuelta más.
+2. No cumplir el turno: repetirlo al día siguiente.
+3. No cumplir las vueltas establecidas: las que faltan se hacen al día siguiente en nocturno. El horario depende de cuántas falten.
+4. Alteración de ruta (= desvío): una vuelta más.
+
+Aplicación: el admin confirma y el sistema agenda la asignación compensatoria. El nocturno empieza a las 17:01; si se deben 3 vueltas, se puede empezar desde las 15:00.
+
+### Operación de la Línea 16 (CTO)
+- **El ciclo:**
+  - Todos salen de Salomón Romero hacia Honduras (el punto "RETORNO LINEA 16").
+  - En Honduras, el control designa quién vuelve a Salomón y quién va a Molinos (el ramal Putucu).
+  - La vuelta termina en la terminal de llegada. La siguiente sale de ahí, otra vez hacia Honduras.
+- **Cupos de vueltas por día:**
+  - Lunes a viernes: 4 a Salomón y 1 a Molinos.
+  - Sábado: 2 y 1.
+  - Domingo: 3 y 1.
+- **Salidas de la mañana:** de 7 a 8, con 6 minutos entre una y otra y después 7. Más tarde quedan a criterio del admin.
+- **Alternancia de choferes:** 3 días en la 120 (la troncal) y 1 día en la 16. Más adelante se van a cargar otras líneas con el mismo esquema.
+- **Carga:** `scripts/cargar-linea-16.ts` (por la API).
+  - Una sola ruta `circuito` que cubre toda la red: 215 vértices.
+  - Puntos de control: Salomón (0) y Molinos (1), no obligatorios; Honduras (2), obligatorio.
+  - Resultado: una vuelta que no pasa por Honduras genera `pc_omitido` y las terminales no generan falsos omitidos.
+
+### PR F (nuevo, después de E): jornada, vueltas y sanciones compensatorias
+- **Cupos de vueltas** por línea y día de la semana, separados por terminal de llegada (Salomón / Molinos).
+- **Conteo de vueltas en el servidor:** una vuelta es terminal → Honduras → terminal, clasificada por la terminal de llegada.
+- **Detecciones nuevas:**
+  - Ingreso fuera de horario: contra `Asignacion.horaPresentacion`/`horaSalida`, con tolerancia configurable.
+  - Turno no cumplido.
+  - Vueltas faltantes al cierre de la jornada.
+- **Sanción compensatoria:** el sistema propone la asignación del día siguiente en la misma línea (nocturno, o desde las 15:00 si se deben 3 o más vueltas) y el admin la confirma.
+- **Falta definir con el CTO:**
+  - La tolerancia de "fuera de horario".
+  - Cómo se registra la designación de Honduras: hoy el sistema no sabe a qué terminal fue designado cada vehículo y solo puede inferirlo por el PC de llegada.
+
 ## Fuera de alcance
 - Notificar al conductor sobre la infracción (no hay push hacia el conductor).
 - Exceso de velocidad.

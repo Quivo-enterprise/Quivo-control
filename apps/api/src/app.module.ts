@@ -18,6 +18,7 @@ import { LineasModule } from './modules/lineas/index.js';
 import { RutasModule } from './modules/rutas/index.js';
 import { ControlPointsModule } from './modules/control-points/index.js';
 import { ReglasModule } from './modules/reglas/index.js';
+import { InfraccionesModule } from './modules/infracciones/index.js';
 import { RotacionesModule } from './modules/rotaciones/index.js';
 import { TrackingModule } from './modules/tracking/index.js';
 import { SyncModule } from './modules/sync/index.js';
@@ -59,6 +60,7 @@ import { DemoRequestsModule } from './modules/demo-requests/index.js';
     RutasModule,
     ControlPointsModule,
     ReglasModule,
+    InfraccionesModule,
     RotacionesModule,
     TrackingModule,
     SyncModule,
