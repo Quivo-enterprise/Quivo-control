@@ -2489,9 +2489,18 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus {
   outline: none;
 }
 gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
+  /* El outline transparente sobrevive a forced-colors (donde box-shadow se ignora). */
+  outline: 2px solid transparent;
+  outline-offset: 3px;
   box-shadow:
     0 0 0 2px var(--qv-surface-card),
     0 0 0 4px var(--qv-color-primary);
+}
+@media (forced-colors: active) {
+  gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot,
+  .qv-gmap-pt.qv-gmap--clickable:focus-visible .qv-gmap-pt__dot {
+    outline-color: Highlight;
+  }
 }
 
 /* `pinType: 'pulse'`: halo de 32 px (el círculo de 16 px de radio de la capa
@@ -2552,6 +2561,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   outline: none;
 }
 .qv-gmap-pt.qv-gmap--clickable:focus-visible .qv-gmap-pt__dot {
+  outline: 2px solid transparent;
+  outline-offset: 3px;
   box-shadow:
     0 0 0 2px var(--qv-surface-card),
     0 0 0 4px var(--qv-color-primary);

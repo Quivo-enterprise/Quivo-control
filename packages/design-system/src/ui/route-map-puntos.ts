@@ -58,32 +58,64 @@ export function firmaPunto(
   ].join('~');
 }
 
-/** Nombre accesible de un punto: etiqueta, descripción y, si se arrastra, cómo hacerlo con el
- * teclado (la mecánica nativa de Google para `gmpDraggable`: Alt+Espacio, flechas, Enter). */
+/** Texto de ayuda de teclado de un marcador arrastrable (mecánica nativa de Google). Se dice
+ * Alt+Enter y no Alt+Espacio: en Windows Alt+Espacio abre el menú de la ventana. */
+export const AYUDA_ARRASTRE_TECLADO = 'Alt+Enter para mover';
+
+/** Nombre accesible de un punto. Arrastrable: corto, "Nodo 2 — Alt+Enter para mover" (es también
+ * el tooltip del anfitrión; el detalle va en `descripcionPunto`). Resto: etiqueta y descripción. */
 export function etiquetaPunto(
   punto: Pick<MapPoint, 'label' | 'description' | 'draggable' | 'onDragEnd' | 'pinType'>,
   tipo: 'stop' | 'marker',
 ): string {
-  return [
-    punto.label?.trim(),
-    punto.description,
-    esArrastrable(punto, tipo) ? 'Alt+Espacio para mover con las flechas, Enter para soltar' : '',
-  ]
-    .filter(Boolean)
-    .join(', ');
+  if (!esArrastrable(punto, tipo)) return [punto.label?.trim(), punto.description].filter(Boolean).join(', ');
+  const nombre = punto.label?.trim() || punto.description?.trim() || '';
+  return [nombre, AYUDA_ARRASTRE_TECLADO].filter(Boolean).join(' — ');
 }
 
-/** Eventos que cambian si hay que ignorar el `click` que cierra un arrastre. */
-export type EventoSupresionClick = 'arrastre' | 'pointerdown' | 'keydown';
+/** Descripción larga (`aria-description` del anfitrión) de un marcador arrastrable. */
+export function descripcionPunto(
+  punto: Pick<MapPoint, 'label' | 'description' | 'draggable' | 'onDragEnd' | 'pinType'>,
+  tipo: 'stop' | 'marker',
+): string {
+  return esArrastrable(punto, tipo) && punto.label?.trim() ? (punto.description?.trim() ?? '') : '';
+}
+
+/** Ventana en la que un `click` todavía cuenta como el que cierra un arrastre. */
+export const VENTANA_CLICK_TRAS_ARRASTRE_MS = 500;
 
 /**
- * ¿Hay que ignorar los `click` / `gmp-click` que lleguen ahora? Es `true` desde que termina un
- * arrastre (con puntero: el `click` que el navegador emite al soltar; con teclado: el que Google
- * pueda emitir por el Enter que suelta) hasta que empieza OTRA interacción (nuevo `pointerdown`
- * o tecla). Sin temporizadores: lo apaga la siguiente entrada del usuario, nunca el reloj.
+ * El `click` que el navegador emite al soltar un arrastre (o el que Google emite por el Enter que
+ * suelta) no es una activación. `finArrastreTs` es el `timeStamp` del fin del arrastre (null si no
+ * hay uno pendiente). Se suprime UN solo click y solo si llega dentro de la ventana; el estado
+ * siempre queda consumido, así un click posterior (p. ej. sintético de un lector de pantalla)
+ * funciona. Compara `timeStamp` de eventos: sin temporizadores.
  */
-export function siguienteSupresionClick(evento: EventoSupresionClick): boolean {
-  return evento === 'arrastre';
+export function clickTrasArrastre(
+  finArrastreTs: number | null,
+  clickTs: number,
+): { suprimir: boolean; finArrastreTs: null } {
+  if (finArrastreTs === null) return { suprimir: false, finArrastreTs: null };
+  const transcurrido = clickTs - finArrastreTs;
+  return { suprimir: transcurrido >= 0 && transcurrido <= VENTANA_CLICK_TRAS_ARRASTRE_MS, finArrastreTs: null };
+}
+
+/**
+ * Red de seguridad para `arrastrando`: normalmente solo lo baja `gmp-dragend`, pero si ese evento
+ * no llega (Esc, foco perdido, el punto dejó de ser arrastrable) el marcador quedaría congelado.
+ * - `pointerdown`: una pulsación nueva nunca es parte de un arrastre en curso.
+ * - `keydown`: en un arrastre con puntero cualquier tecla lo interrumpe; en uno por teclado solo
+ *   Esc lo cancela (las flechas y Enter son el propio arrastre).
+ * - `focusout` del anfitrión: un arrastre por teclado sin foco no puede continuar.
+ */
+export function debeCerrarArrastre(
+  evento: { tipo: 'pointerdown' | 'keydown' | 'focusout'; tecla?: string },
+  estado: { arrastrando: boolean; modo: 'puntero' | 'teclado' },
+): boolean {
+  if (!estado.arrastrando) return false;
+  if (evento.tipo === 'pointerdown') return true;
+  if (evento.tipo === 'focusout') return estado.modo === 'teclado';
+  return estado.modo === 'puntero' || evento.tecla === 'Escape';
 }
 
 export interface DecisionPunto {

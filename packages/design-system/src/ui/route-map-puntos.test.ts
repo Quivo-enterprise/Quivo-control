@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clickTrasArrastre,
+  debeCerrarArrastre,
+  descripcionPunto,
   etiquetaPunto,
-  siguienteSupresionClick,
   decidirActualizacionPunto,
   esArrastrable,
   esInteractivo,
@@ -104,19 +106,67 @@ describe('vehículos', () => {
   });
 });
 
-describe('etiquetaPunto', () => {
-  it('suma la ayuda de teclado solo si es arrastrable', () => {
-    const base = { label: ' Nodo 2 ', description: 'Arrastra' };
-    expect(etiquetaPunto(base, 'marker')).toBe('Nodo 2, Arrastra');
-    expect(etiquetaPunto({ ...base, draggable: true, onDragEnd: noop }, 'marker')).toContain('Alt+Espacio');
-    expect(etiquetaPunto({ ...base, draggable: true, onDragEnd: noop }, 'stop')).toBe('Nodo 2, Arrastra');
+describe('etiquetaPunto / descripcionPunto', () => {
+  const base = { label: ' Nodo 2 ', description: 'Arrastra para desplazar' };
+  it('no arrastrable: etiqueta y descripción, sin ayuda de teclado', () => {
+    expect(etiquetaPunto(base, 'marker')).toBe('Nodo 2, Arrastra para desplazar');
+    expect(descripcionPunto(base, 'marker')).toBe('');
+  });
+  it('arrastrable: nombre corto con Alt+Enter y la descripción aparte', () => {
+    const p = { ...base, draggable: true, onDragEnd: noop };
+    expect(etiquetaPunto(p, 'marker')).toBe('Nodo 2 — Alt+Enter para mover');
+    expect(descripcionPunto(p, 'marker')).toBe('Arrastra para desplazar');
+    expect(etiquetaPunto(p, 'marker')).not.toContain('Alt+Espacio');
+  });
+  it('sin etiqueta usa la descripción como nombre y no la repite', () => {
+    const p = { description: 'Punto marcado', draggable: true, onDragEnd: noop };
+    expect(etiquetaPunto(p, 'marker')).toBe('Punto marcado — Alt+Enter para mover');
+    expect(descripcionPunto(p, 'marker')).toBe('');
+  });
+  it('una parada nunca es arrastrable', () => {
+    expect(etiquetaPunto({ ...base, draggable: true, onDragEnd: noop }, 'stop')).toBe('Nodo 2, Arrastra para desplazar');
   });
 });
 
-describe('siguienteSupresionClick', () => {
-  it('solo terminar un arrastre arma la supresión; cualquier entrada nueva la apaga', () => {
-    expect(siguienteSupresionClick('arrastre')).toBe(true);
-    expect(siguienteSupresionClick('pointerdown')).toBe(false);
-    expect(siguienteSupresionClick('keydown')).toBe(false);
+const VENTANA = 500;
+
+describe('clickTrasArrastre', () => {
+  it('suprime un click dentro de la ventana y consume el estado', () => {
+    expect(clickTrasArrastre(1000, 1100)).toEqual({ suprimir: true, finArrastreTs: null });
+  });
+  it('un click fuera de la ventana pasa (y también consume)', () => {
+    expect(clickTrasArrastre(1000, 1000 + VENTANA + 1)).toEqual({ suprimir: false, finArrastreTs: null });
+  });
+  it('sin arrastre pendiente nunca suprime', () => {
+    expect(clickTrasArrastre(null, 5)).toEqual({ suprimir: false, finArrastreTs: null });
+  });
+  it('un click anterior al fin del arrastre no es el que lo cierra', () => {
+    expect(clickTrasArrastre(1000, 900).suprimir).toBe(false);
+  });
+  it('solo un click: tras consumir, el siguiente (aunque sea inmediato) pasa', () => {
+    const primero = clickTrasArrastre(1000, 1010);
+    expect(clickTrasArrastre(primero.finArrastreTs, 1020).suprimir).toBe(false);
+  });
+});
+
+describe('debeCerrarArrastre', () => {
+  it('sin arrastre en curso nunca cierra nada', () => {
+    expect(debeCerrarArrastre({ tipo: 'pointerdown' }, { arrastrando: false, modo: 'teclado' })).toBe(false);
+  });
+  it('un pointerdown cierra cualquier arrastre', () => {
+    expect(debeCerrarArrastre({ tipo: 'pointerdown' }, { arrastrando: true, modo: 'teclado' })).toBe(true);
+    expect(debeCerrarArrastre({ tipo: 'pointerdown' }, { arrastrando: true, modo: 'puntero' })).toBe(true);
+  });
+  it('por teclado: las flechas y Enter son el arrastre, Esc lo cancela, perder el foco lo corta', () => {
+    const estado = { arrastrando: true, modo: 'teclado' as const };
+    expect(debeCerrarArrastre({ tipo: 'keydown', tecla: 'ArrowRight' }, estado)).toBe(false);
+    expect(debeCerrarArrastre({ tipo: 'keydown', tecla: 'Enter' }, estado)).toBe(false);
+    expect(debeCerrarArrastre({ tipo: 'keydown', tecla: 'Escape' }, estado)).toBe(true);
+    expect(debeCerrarArrastre({ tipo: 'focusout' }, estado)).toBe(true);
+  });
+  it('con puntero: una tecla lo interrumpe y el foco no cuenta', () => {
+    const estado = { arrastrando: true, modo: 'puntero' as const };
+    expect(debeCerrarArrastre({ tipo: 'keydown', tecla: 'a' }, estado)).toBe(true);
+    expect(debeCerrarArrastre({ tipo: 'focusout' }, estado)).toBe(false);
   });
 });
