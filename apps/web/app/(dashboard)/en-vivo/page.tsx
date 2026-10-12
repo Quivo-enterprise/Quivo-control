@@ -172,78 +172,16 @@ export default function EnVivoPage() {
     setSesionSeleccionada(null);
   };
 
-  if (posiciones.isLoading) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '75vh' }}>
-        <Loader label="Cargando flota en vivo..." />
-      </div>
-    );
-  }
-
-  if (posiciones.isError) {
-    return (
-      <div style={{ padding: '2rem', maxWidth: '40rem', margin: '0 auto' }}>
-        <Alert variant="danger" title="No se pudo cargar la flota en vivo">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            <span>{mensajeError(posiciones.error)}</span>
-            <span>
-              <Button size="sm" variant="secondary" onClick={() => void posiciones.refetch()}>
-                Reintentar
-              </Button>
-            </span>
-          </div>
-        </Alert>
-      </div>
-    );
-  }
-
-  if (todasLasPosiciones.length === 0) {
-    return (
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '70vh',
-          gap: '1.25rem',
-          padding: '2rem',
-          textAlign: 'center',
-        }}
-      >
-        <div
-          style={{
-            width: '4rem',
-            height: '4rem',
-            borderRadius: '50%',
-            backgroundColor: 'color-mix(in srgb, var(--qv-color-primary) 12%, transparent)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--qv-color-primary)',
-          }}
-        >
-          <Radio size={28} />
-        </div>
-        <div style={{ maxWidth: '28rem' }}>
-          <h2 style={{ fontFamily: 'var(--qv-font-display)', fontSize: '1.25rem', margin: '0 0 0.5rem 0' }}>
-            Sin vehículos en ruta activa
-          </h2>
-          <p style={{ fontSize: '0.875rem', color: 'var(--qv-text-secondary)', margin: 0 }}>
-            Ningún vehículo ha iniciado recorrido en la jornada de hoy. En cuanto una terminal móvil sincronice su
-            primer punto, aparecerá automáticamente aquí.
-          </p>
-        </div>
-        <Button size="sm" variant="primary" onClick={() => void posiciones.refetch()}>
-          <RefreshCw size={14} style={{ marginRight: '0.35rem' }} />
-          Verificar nuevamente
-        </Button>
-        {/* Sin sesiones todavía (típico de madrugada) es justo cuando importa saber quién
-            declaró su jornada: el panel también vive acá, en el flujo, sin mapa debajo. */}
-        <PanelJornada lineaFilter="" flotante={false} />
-      </div>
-    );
-  }
+  // El mapa se mantiene SIEMPRE montado: si cargando / error / flota vacía lo reemplazaran por
+  // un `return` anticipado, al volver los datos se remontaría y perdería el zoom del usuario.
+  // Estos estados van como capa encima del mapa.
+  const estadoSuperpuesto: 'cargando' | 'error' | 'vacio' | null = posiciones.isLoading
+    ? 'cargando'
+    : posiciones.isError
+      ? 'error'
+      : todasLasPosiciones.length === 0
+        ? 'vacio'
+        : null;
 
   return (
     <div className="qv-live-map-wrapper">
@@ -254,7 +192,8 @@ export default function EnVivoPage() {
         routes={routes}
         markers={markers}
         zones={zones}
-        // `fitMode='once'` con `fitKey` fijo a `fitKeyOverride` (NO a `sesionSeleccionada`):
+        // `fitMode="once"` (explícito: el default de `RouteMap` es 'auto', que reencuadraba en cada poll
+        // de 5 s y pisaba el zoom del usuario) con `fitKey` fijo a `fitKeyOverride` (NO a `sesionSeleccionada`):
         // los `markers`/`routes` que ve `fitToBounds` son SIEMPRE la unión de la flota
         // filtrada + la sesión con detalle abierto, nunca un subconjunto de "solo lo
         // seleccionado" — encuadrar de nuevo cada vez que cambia la selección terminaría
@@ -262,6 +201,7 @@ export default function EnVivoPage() {
         // que espera alguien que acaba de tocar un vehículo puntual. El encuadre inicial (a
         // la flota completa) y el botón manual "Reencuadrar" siguen bumpeando `fitKeyOverride`;
         // seguir a un vehículo puntual es trabajo de `followPoint`/`seguir`, no de esto.
+        fitMode="once"
         fitKey={fitKeyOverride}
         followPoint={seguir && ultimoPunto ? { lat: ultimoPunto.lat, lng: ultimoPunto.lng } : null}
         onUserPan={() => setSeguir(false)}
@@ -270,6 +210,86 @@ export default function EnVivoPage() {
         animatedVehicle={animatedVehicle}
       />
 
+      {/* ESTADOS SIN DATOS: capa sobre el mapa (que sigue montado, ver `estadoSuperpuesto`) */}
+      {estadoSuperpuesto && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 20,
+            overflowY: 'auto',
+            backgroundColor: 'var(--qv-surface-sunken)',
+          }}
+        >
+          {estadoSuperpuesto === 'cargando' && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+            <Loader label="Cargando flota en vivo..." />
+          </div>
+          )}
+          {estadoSuperpuesto === 'error' && (
+          <div style={{ padding: '2rem', maxWidth: '40rem', margin: '0 auto', paddingTop: '4rem' }}>
+            <Alert variant="danger" title="No se pudo cargar la flota en vivo">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <span>{mensajeError(posiciones.error)}</span>
+                <span>
+                  <Button size="sm" variant="secondary" onClick={() => void posiciones.refetch()}>
+                    Reintentar
+                  </Button>
+                </span>
+              </div>
+            </Alert>
+          </div>
+          )}
+          {estadoSuperpuesto === 'vacio' && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              height: '100%',
+              gap: '1.25rem',
+              padding: '2rem',
+              textAlign: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: '4rem',
+                height: '4rem',
+                borderRadius: '50%',
+                backgroundColor: 'color-mix(in srgb, var(--qv-color-primary) 12%, transparent)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--qv-color-primary)',
+              }}
+            >
+              <Radio size={28} />
+            </div>
+            <div style={{ maxWidth: '28rem' }}>
+              <h2 style={{ fontFamily: 'var(--qv-font-display)', fontSize: '1.25rem', margin: '0 0 0.5rem 0' }}>
+                Sin vehículos en ruta activa
+              </h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--qv-text-secondary)', margin: 0 }}>
+                Ningún vehículo ha iniciado recorrido en la jornada de hoy. En cuanto una terminal móvil sincronice su
+                primer punto, aparecerá automáticamente aquí.
+              </p>
+            </div>
+            <Button size="sm" variant="primary" onClick={() => void posiciones.refetch()}>
+              <RefreshCw size={14} style={{ marginRight: '0.35rem' }} />
+              Verificar nuevamente
+            </Button>
+            {/* Sin sesiones todavía (típico de madrugada) es justo cuando importa saber quién
+                declaró su jornada: el panel también vive acá, en el flujo, sin mapa debajo. */}
+            <PanelJornada lineaFilter="" flotante={false} />
+          </div>
+          )}
+        </div>
+      )}
+
+      {!estadoSuperpuesto && (
+        <>
       {/* TOP FLOATING HUD CONTROLS */}
       <div className="qv-live-hud-top">
         {/* Left Side: Live Badge & Filtro de línea */}
@@ -719,6 +739,8 @@ export default function EnVivoPage() {
             )}
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

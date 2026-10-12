@@ -36,6 +36,7 @@ import { cx } from '../utils.js';
 import type { MapPoint, MapRoute, MapZone } from '../types.js';
 import { Loader } from './primitives.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
+import { debeEncuadrar, estadoEncuadreInicial, type EstadoEncuadre } from './route-map-encuadre.js';
 import {
   avanzarAnimacion,
   encolarNuevosPuntos,
@@ -1219,7 +1220,7 @@ export function RouteMap({
   animatedVehicleRef.current = animatedVehicle;
 
   const dragIdRef = useRef<string | null>(null);
-  const fitOnceStateRef = useRef<{ key: string | number | undefined; fired: boolean }>({ key: fitKey, fired: false });
+  const encuadreRef = useRef<EstadoEncuadre>(estadoEncuadreInicial(fitKey));
 
   // Estado (mutable, fuera de React) de la animación del marcador de vehículo — ver
   // `vehicle-marker-animation.ts`. `vehicleAnimRef` es la posición visual vigente,
@@ -1583,27 +1584,25 @@ export function RouteMap({
     map.fitBounds(bounds, { padding: 32, maxZoom: 17, duration: 0 });
   }
 
-  // `fitMode='auto'` — reencuadra cada vez que cambia el conjunto de puntos visibles.
+  // Encuadre de cámara. La decisión (cuándo sí / cuándo no) vive en `debeEncuadrar`:
+  // - `fitMode='auto'` reencuadra cada vez que cambia el conjunto de puntos visibles.
+  // - `fitMode='once'` encuadra una sola vez (al montar, o de nuevo si cambia `fitKey`) en
+  //   cuanto hay puntos (la traza puede llegar después); los cambios posteriores de marcadores
+  //   no tocan la cámara, así se respeta el zoom del usuario.
+  // - `fitMode='off'` nunca encuadra.
   useEffect(() => {
     const map = mapRef.current;
     const maplibre = maplibreRef.current;
-    if (!map || !maplibre || !mapReadyRef.current || fitMode !== 'auto') return;
-    fitToBounds(maplibre, map);
-  }, [boundsSignature, fitMode, mapReady]);
-
-  // `fitMode='once'` + `fitKey` — encuadra una sola vez (al montar, o de nuevo si cambia
-  // `fitKey`), con el guard en un ref porque el efecto sigue corriendo mientras no hay puntos
-  // todavía (la traza puede llegar después) y necesita poder disparar en cuanto aparezcan.
-  useEffect(() => {
-    const map = mapRef.current;
-    const maplibre = maplibreRef.current;
-    if (!map || !maplibre || !mapReadyRef.current || fitMode !== 'once') return;
-    if (fitOnceStateRef.current.key !== fitKey) fitOnceStateRef.current = { key: fitKey, fired: false };
-    if (fitOnceStateRef.current.fired) return;
-    const hasPoints = routes.some((r) => r.points.length > 0) || markers.length > 0 || stops.length > 0 || zones.length > 0;
-    if (!hasPoints) return;
-    fitOnceStateRef.current.fired = true;
-    fitToBounds(maplibre, map);
+    if (!map || !maplibre || !mapReadyRef.current || fitMode === 'off') return;
+    const decision = debeEncuadrar({
+      modo: fitMode,
+      firma: boundsSignature,
+      hayPuntos: routes.some((r) => r.points.length > 0) || markers.length > 0 || stops.length > 0 || zones.length > 0,
+      fitKey,
+      estado: encuadreRef.current,
+    });
+    encuadreRef.current = decision.estado;
+    if (decision.encuadrar) fitToBounds(maplibre, map);
   }, [boundsSignature, fitKey, fitMode, mapReady]);
 
   // Centra en `defaultCenter`/`defaultZoom` solo mientras no hay ningún punto todavía.
