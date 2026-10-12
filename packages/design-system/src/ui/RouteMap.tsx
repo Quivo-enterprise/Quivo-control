@@ -14,6 +14,10 @@ export type { RouteMapProps };
 const RouteMapImpl = lazy(() =>
   import('./route-map-impl.js').then((module) => ({ default: module.RouteMap })),
 );
+// Motor Google Maps (`engine="google"`): chunk aparte, solo se descarga si alguna pantalla lo pide.
+const RouteMapGoogleImpl = lazy(() =>
+  import('./route-map-google.js').then((module) => ({ default: module.RouteMap })),
+);
 
 /**
  * Wrapper client-only de `RouteMap` — es el que se exporta desde el barrel (`index.ts` sigue
@@ -30,7 +34,7 @@ const RouteMapImpl = lazy(() =>
 export function RouteMap(props: RouteMapProps) {
   // Default espejado del que usa `route-map-impl.tsx` — necesario acá para que el placeholder
   // (pre-mount y fallback de Suspense) tenga la misma altura que el mapa real una vez montado.
-  const { height = '420px', className } = props;
+  const { height = '420px', className, engine = 'maplibre' } = props;
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -49,7 +53,7 @@ export function RouteMap(props: RouteMapProps) {
 
   return (
     <Suspense fallback={placeholder}>
-      <RouteMapImpl {...props} />
+      {engine === 'google' ? <RouteMapGoogleImpl {...props} /> : <RouteMapImpl {...props} />}
     </Suspense>
   );
 }

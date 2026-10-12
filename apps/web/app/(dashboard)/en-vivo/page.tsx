@@ -231,6 +231,9 @@ export default function EnVivoPage() {
     <div className="qv-live-map-wrapper">
       {/* MAPA PRINCIPAL A PANTALLA COMPLETA */}
       <RouteMap
+        engine="google"
+        googleMapsApiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}
+        googleMapsMapId={process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID}
         height="100%"
         loading={Boolean(sesionSeleccionada) && contexto.isLoading}
         routes={routes}

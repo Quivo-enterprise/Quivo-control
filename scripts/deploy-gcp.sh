@@ -805,6 +805,13 @@ if [[ "$NEEDS_WEB_DEPLOY" == true ]]; then
     info "Reusando quivo-api ya desplegado: $API_URL"
   fi
 
+  # Google Maps (/en-vivo): NEXT_PUBLIC_* también se hornea en build time. La key de navegador
+  # sale de Secret Manager (`google-maps-web-key`); el Map ID viene de la variable de entorno
+  # GOOGLE_MAPS_MAP_ID (no es secreto). Sin alguno de los dos el panel quedaría con el mapa roto.
+  GOOGLE_MAPS_WEB_KEY="$(read_secret_value google-maps-web-key 2>/dev/null || true)"
+  [[ -n "$GOOGLE_MAPS_WEB_KEY" ]] || fail "No se pudo leer el secreto 'google-maps-web-key' de Secret Manager (proyecto $PROJECT). Crealo antes de desplegar el panel: lo necesita /en-vivo."
+  [[ -n "${GOOGLE_MAPS_MAP_ID:-}" ]] || fail "Falta la variable de entorno GOOGLE_MAPS_MAP_ID (Map ID vectorial de Google Maps para /en-vivo). Exportala antes de correr el deploy del panel."
+
   info "Paso 4/7: build y push de la imagen del panel ($WEB_IMAGE)..."
   # NEXT_PUBLIC_API_URL va SIN /v1 (apps/web/src/lib/api/client.ts concatena el prefijo en
   # cada llamada) y como --build-arg, no como env var de Cloud Run (se hornea en build
@@ -814,6 +821,8 @@ if [[ "$NEEDS_WEB_DEPLOY" == true ]]; then
     -f apps/web/Dockerfile \
     --build-arg NEXT_PUBLIC_API_URL="$API_URL" \
     --build-arg NEXT_PUBLIC_DEV_BYPASS_AUTH=false \
+    --build-arg NEXT_PUBLIC_GOOGLE_MAPS_API_KEY="$GOOGLE_MAPS_WEB_KEY" \
+    --build-arg NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID="$GOOGLE_MAPS_MAP_ID" \
     -t "$WEB_IMAGE" --push .
   info "Imagen $WEB_IMAGE publicada en Artifact Registry."
 
