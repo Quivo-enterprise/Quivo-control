@@ -8,9 +8,38 @@
 
 ## Punto de retome — 2026-10-11, noche (leer primero): prueba de campo del APK r13
 
-El CTO probó el APK r13 en calle. Hallazgos, causas raíz y plan aprobado de 4 PRs (sheet/FABs/brújula,
-progreso de vuelta en cualquier orden, snap a ruta + zoom automático + canal visual, señal GPS débil +
-chime): [`docs/plan-prueba-campo-r13.md`](plan-prueba-campo-r13.md). Estado: **plan aprobado, PR 1 en curso.**
+El CTO probó el APK r13 en calle. Hallazgos, causas raíz y plan:
+[`docs/plan-prueba-campo-r13.md`](plan-prueba-campo-r13.md). **Estado: los 4 PRs del plan están en `main`**
+(CI verde en todos). **No hay APK nuevo todavía:** falta que el CTO apruebe el changelog (memoria
+`apk-build-11-changelog-antes-de-lanzar`) y lance el build (`autoIncrement` sube el versionCode).
+
+| PR | Qué | Commit |
+|---|---|---|
+| #124 | Sheet completo al iniciar ruta (colapso solo por arrastre, offset medido); FABs en fila anclados al sheet (antes `bottom:180` fijo los tapaba: Centrar nunca se veía); pill "Centrar" en libre; brújula propia (navegación: alterna rumbo/norte arriba sin salir del seguimiento); gestos por toques crudos. | `b191eab` |
+| #125 | 408 (`LOCATION_TIMEOUT` del SDK, no HTTP) deja de mostrarse en el sheet: chip "Señal GPS débil" hasta el próximo fix de evidencia; 1/3 con mensaje accionable; Sentry: transitorios como breadcrumb (foreground + heartbeat). Chime regenerado (pico -3 dBFS, cresta 12.7 dB; antes casi onda cuadrada) + canal de notificación v2. | `1feeb6c` |
+| #126 | Progreso de vuelta: puntos en cualquier orden, omitidos en rojo, vuelta al volver al punto de inicio, "Vuelta N" del día; persistido en SQLite (`progreso_vuelta`, clave `sesionId:fecha`, CAS sobre `version`); foreground + headless; RF-GPS-054 y glosario actualizados. | `537bd97` |
+| #127 | Snap visual a la polilínea de la ruta (rumbo separa sentidos, histéresis, animación por la calle); zoom automático por velocidad (18→16); canal visual 1 Hz ON en EAS `production` y `development`. Evidencia/sync/geofence siguen con GPS crudo. | `5d22dc3` |
+
+**Sentry (APK r13, 2026-10-11):** único issue `QUIVO-CONTROL-CONDUCTOR-7` "Error: 408" (2 eventos, handled),
+cubierto por #125. Sin crashes. El teléfono de prueba tenía `ACTIVITY_RECOGNITION` sin conceder.
+
+**Gates:** `/code-review` high en cada PR con hallazgos aplicados (descartados y anotados: orientación
+norte/rumbo se pierde al remontar la pantalla; padding inferior fijo de 180 en el encuadre general).
+`/codex-debug verify-fix` solo corrió en #124 (`fixes_root_cause`); en #125–#127 **no corrió**: Codex
+llegó al límite de uso de la cuenta (hasta 2026-10-12 03:56).
+
+**NO verificado (todo en teléfono) — checklist de la próxima prueba:**
+- sheet y FINALIZAR completos al iniciar; tira colapsada limpia; brújula rumbo↔norte; Centrar tras pan/pinch;
+- **fix #109 con el canal visual ON:** ciclos primer/segundo plano y pantalla apagada sin crash;
+- avenida doble: marcador sobre el carril de la ruta; zoom que cambia con la velocidad;
+- puntos marcados fuera de orden (verde/rojo) y "Vuelta 1" al volver al punto de inicio, también con la
+  pantalla apagada (camino headless; el store CAS no tiene tests unitarios);
+- chip "Señal GPS débil" sin falsos positivos detenido; chime limpio y audible dentro del vehículo.
+
+**Backlog derivado:** OSRM en VM GCP (snap fuera de ruta + ruta real al próximo punto); vueltas en
+servidor y panel web; padding del encuadre general medido.
+
+**Siguiente:** changelog al CTO → build APK → prueba de campo con el checklist.
 
 ## Release 13 completo, APK de producción lanzado (2026-10-11)
 
