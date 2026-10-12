@@ -246,8 +246,6 @@ export function registrarPuntoGps(
   estadosPuntosControl: ContenedorEstadosPuntosControl,
 ): Promise<{
   deteccion: DeteccionPuntoControl | null;
-  /** TODAS las confirmaciones persistidas en el tick (`deteccion` es solo la última). */
-  detecciones: DeteccionPuntoControl[];
   deteccionAproximacion: DeteccionPuntoControl | null;
   puntosRearmados: string[];
   puntosRearmadosVoz: string[];
@@ -501,8 +499,6 @@ async function registrarPuntoGpsInterno(
   estadosPuntosControl: ContenedorEstadosPuntosControl,
 ): Promise<{
   deteccion: DeteccionPuntoControl | null;
-  /** TODAS las confirmaciones persistidas en el tick (`deteccion` es solo la última). */
-  detecciones: DeteccionPuntoControl[];
   deteccionAproximacion: DeteccionPuntoControl | null;
   puntosRearmados: string[];
   puntosRearmadosVoz: string[];
@@ -559,7 +555,6 @@ async function registrarPuntoGpsInterno(
   // Claves cuya transición ya está atada a un evento propio (`evento.clave`, los
   // `cumplimiento_punto_control` emitidos este tick) — el resto de `transicionesEstado` son
   // re-armados/entradas/avances de mínimo sin evento asociado, aplicados junto al `gps_point`.
-  const deteccionesPersistidas: DeteccionPuntoControl[] = [];
   const clavesConEventoPropio = new Set(
     eventos.map((evento) => evento.clave).filter((clave): clave is string => clave !== undefined),
   );
@@ -606,13 +601,12 @@ async function registrarPuntoGpsInterno(
       // Progreso de la vuelta (RF-GPS-054): cada confirmación del tick, en orden, sin quedarse
       // con la última. Best-effort (nunca rechaza): no puede tumbar la evidencia ya escrita.
       if (evento.deteccion) {
-        deteccionesPersistidas.push(evento.deteccion);
         await registrarPasoEnVuelta(
           db,
           contexto.sesionId,
           evento.deteccion.puntoControlId,
           evento.eventId ?? evento.clave,
-          contexto.puntosControl.length,
+          contexto.puntosControl.map((p) => p.id),
         );
       }
     } else {
@@ -721,7 +715,6 @@ async function registrarPuntoGpsInterno(
 
   return {
     deteccion,
-    detecciones: deteccionesPersistidas,
     deteccionAproximacion,
     puntosRearmados,
     puntosRearmadosVoz,
@@ -990,7 +983,7 @@ export async function aplicarConfirmacionesForzadas(
   transiciones: ReadonlyMap<string, EstadoPuntoControl>,
   estados: Map<string, EstadoPuntoControl>,
   miGeneracion: number = generacionColaRegistroGps,
-  totalPuntos = 0,
+  idsPuntos: readonly string[],
 ): Promise<void> {
   for (const c of emitir) {
     if (!generacionVigente(miGeneracion)) return;
@@ -1031,7 +1024,7 @@ export async function aplicarConfirmacionesForzadas(
       sesionId,
       c.deteccion.puntoControlId,
       derivarEventIdDeterministico([sesionId, c.deteccion.puntoControlId, String(c.pasada)]),
-      totalPuntos,
+      idsPuntos,
     );
   }
 }
@@ -1099,7 +1092,7 @@ export function confirmarVisitasVencidasEnCola(
           transiciones,
           estados,
           miGeneracion,
-          puntosControl.length,
+          puntosControl.map((p) => p.id),
         );
         if (!generacionVigente(miGeneracion)) return { emitir, anunciosLlegada: [] };
       }

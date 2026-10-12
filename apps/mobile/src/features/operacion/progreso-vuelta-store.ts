@@ -1,19 +1,37 @@
 import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
 import { conReintentoSiHandleMuerto } from '../../db/outbox';
-import { estadoInicialVuelta, pasoPunto, type EstadoProgresoVuelta } from './progreso-vuelta';
+import {
+  claveProgresoVuelta,
+  estadoInicialVuelta,
+  fechaLocal,
+  pasoPunto,
+  reiniciarVuelta,
+  separarClaveProgreso,
+  type EstadoProgresoVuelta,
+} from './progreso-vuelta';
 
 /**
  * Almacén del progreso de la vuelta (RF-GPS-054) sobre la MISMA SQLite del outbox
- * (`quivo-outbox.db`, tabla `progreso_vuelta`): ya es el almacén compartido entre el contexto de
- * foreground y el headless, y la lectura-modificación-escritura corre dentro de una transacción
- * (AsyncStorage no ofrece nada atómico entre contextos JS). Sin React: lo llaman por igual
+ * (`quivo-outbox.db`, tabla `progreso_vuelta`, una fila por `sesionId:fechaLocal`): ya es el
+ * almacén compartido entre el contexto de foreground y el headless. Sin React: lo llaman por igual
  * `registrarPuntoGpsInterno` y `aplicarConfirmacionesForzadas` (`gps/headless-task.ts`), que son el
- * ÚNICO escritor — la UI solo lee (`use-progreso-vuelta.ts`).
+ * ÚNICO escritor de pasos — la UI solo lee (`use-progreso-vuelta.ts`).
+ *
+ * Atomicidad entre contextos SIN transacciones: la lectura-modificación-escritura usa control de
+ * concurrencia optimista sobre la columna `version` (UPSERT condicional `WHERE version = ?`,
+ * reintento si otro contexto escribió en medio). No se usa `withTransactionAsync` (no es
+ * exclusivo en una conexión compartida: choca con las transacciones del outbox o barre otras
+ * sentencias) ni `withExclusiveTransactionAsync` (abre otra conexión sin `busy_timeout`: un
+ * `SQLITE_BUSY` podría caer sobre una escritura de evidencia del outbox).
  *
  * Es best-effort: el progreso es informativo para el chofer, la evidencia legal es el outbox. Un
  * fallo acá se reporta pero NUNCA debe tumbar el registro del cumplimiento.
  */
+
+/** Filas sin actualizarse en este lapso se descartan (limpieza al escribir). */
+const RETENCION_MS = 3 * 24 * 60 * 60 * 1000;
+const MAX_INTENTOS_CAS = 5;
 
 type Oyente = (estado: EstadoProgresoVuelta) => void;
 const oyentes = new Set<Oyente>();
@@ -27,78 +45,135 @@ export function suscribirProgresoVuelta(oyente: Oyente): () => void {
   };
 }
 
-function parsear(sesionId: string, json: string | undefined): EstadoProgresoVuelta {
-  if (!json) return estadoInicialVuelta(sesionId);
+interface FilaProgreso {
+  estado_json: string;
+  version: number;
+}
+
+function parsear(
+  sesionId: string,
+  fecha: string,
+  fila: FilaProgreso | null | undefined,
+): EstadoProgresoVuelta {
+  const inicial = estadoInicialVuelta(sesionId, fecha);
+  if (!fila) return inicial;
   try {
-    const crudo = JSON.parse(json) as Partial<EstadoProgresoVuelta>;
-    if (crudo.sesionId !== sesionId || !Array.isArray(crudo.pasados)) {
-      return estadoInicialVuelta(sesionId);
-    }
-    return { ...estadoInicialVuelta(sesionId), ...crudo };
+    const crudo = JSON.parse(fila.estado_json) as Partial<EstadoProgresoVuelta>;
+    if (!Array.isArray(crudo.pasados)) return { ...inicial, version: fila.version };
+    return { ...inicial, ...crudo, sesionId, fecha, version: fila.version };
   } catch {
-    return estadoInicialVuelta(sesionId);
+    return { ...inicial, version: fila.version };
   }
 }
 
-/** Estado persistido de la sesión; uno nuevo y vacío si no hay (sesión nueva = vuelta desde 0). */
+const SQL_LEER = 'SELECT estado_json, version FROM progreso_vuelta WHERE clave = ?';
+
+/** Estado persistido de la sesión en el día local `fecha`; uno nuevo y vacío si no hay. */
 export async function leerProgresoVuelta(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
+  fecha: string = fechaLocal(),
 ): Promise<EstadoProgresoVuelta> {
   const fila = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.getFirstAsync<{ estado_json: string }>(
-      'SELECT estado_json FROM progreso_vuelta WHERE sesion_id = ?',
-      [sesionId],
-    ),
+    dbActiva.getFirstAsync<FilaProgreso>(SQL_LEER, [claveProgresoVuelta(sesionId, fecha)]),
   );
-  return parsear(sesionId, fila?.estado_json);
+  return parsear(sesionId, fecha, fila);
 }
 
 // Cadena de promesas: serializa las escrituras de ESTE contexto JS (varios pasos del mismo tick).
-// Entre contextos (headless vs foreground) la atomicidad la da la transacción de SQLite.
+// Entre contextos (headless vs foreground) la atomicidad la da el CAS por `version`.
 let cola: Promise<unknown> = Promise.resolve();
 
 /**
- * Registra el paso por un punto en la vuelta de la sesión. Idempotente por `clave` (ver
- * `pasoPunto`). Nunca rechaza.
+ * Lectura-modificación-escritura optimista de la fila `clave`. `aplicar` devuelve el estado nuevo
+ * o el MISMO objeto recibido si no hay nada que escribir. Devuelve el estado escrito, o `null`
+ * si no hubo escritura.
+ */
+async function modificar(
+  db: SQLite.SQLiteDatabase,
+  sesionId: string,
+  fecha: string,
+  aplicar: (actual: EstadoProgresoVuelta) => EstadoProgresoVuelta,
+): Promise<EstadoProgresoVuelta | null> {
+  const clave = claveProgresoVuelta(sesionId, fecha);
+  return conReintentoSiHandleMuerto(db, async (dbActiva) => {
+    for (let intento = 0; intento < MAX_INTENTOS_CAS; intento++) {
+      const fila = await dbActiva.getFirstAsync<FilaProgreso>(SQL_LEER, [clave]);
+      const actual = parsear(sesionId, fecha, fila);
+      const calculado = aplicar(actual);
+      if (calculado === actual) return null;
+      const nuevo: EstadoProgresoVuelta = { ...calculado, version: actual.version + 1 };
+      const ahoraMs = Date.now();
+      const json = JSON.stringify(nuevo);
+      const resultado = fila
+        ? await dbActiva.runAsync(
+            'UPDATE progreso_vuelta SET estado_json = ?, version = ?, actualizado_ms = ? WHERE clave = ? AND version = ?',
+            [json, nuevo.version, ahoraMs, clave, actual.version],
+          )
+        : await dbActiva.runAsync(
+            'INSERT OR IGNORE INTO progreso_vuelta (clave, estado_json, version, actualizado_ms) VALUES (?, ?, ?, ?)',
+            [clave, json, nuevo.version, ahoraMs],
+          );
+      if (resultado.changes === 1) {
+        // Limpieza: filas que no se tocan hace más de 3 días no se vuelven a leer.
+        await dbActiva.runAsync('DELETE FROM progreso_vuelta WHERE actualizado_ms < ?', [
+          ahoraMs - RETENCION_MS,
+        ]);
+        return nuevo;
+      }
+      // Otro contexto (headless/foreground) escribió en medio: releer y reaplicar.
+    }
+    throw new Error('progreso_vuelta: conflicto de escritura persistente (CAS agotado)');
+  });
+}
+
+function encolar(
+  db: SQLite.SQLiteDatabase,
+  sesionId: string,
+  fecha: string,
+  aplicar: (actual: EstadoProgresoVuelta) => EstadoProgresoVuelta,
+  contextoError: { paso: string; extra: Record<string, unknown> },
+): Promise<void> {
+  const operacion = cola.then(async () => {
+    const nuevo = await modificar(db, sesionId, fecha, aplicar);
+    if (nuevo) for (const oyente of oyentes) oyente(nuevo);
+  });
+  const segura = operacion.catch((error: unknown) => {
+    console.error('[QUIVO][vuelta] No se pudo actualizar el progreso de la vuelta', error);
+    Sentry.captureException(error, {
+      tags: { contexto: 'progreso-vuelta', paso: contextoError.paso },
+      extra: { sesionId, fecha, ...contextoError.extra },
+    });
+  });
+  cola = segura;
+  return segura;
+}
+
+/**
+ * Registra el paso por un punto en la vuelta del día local de la sesión. Idempotente por `clave`
+ * (ver `pasoPunto`). `idsPuntos` = ids del paquete vigente. Nunca rechaza.
  */
 export function registrarPasoEnVuelta(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
   puntoId: string,
   clave: string,
-  totalPuntos: number,
+  idsPuntos: readonly string[],
 ): Promise<void> {
-  const operacion = cola.then(async () => {
-    const nuevo = await conReintentoSiHandleMuerto(db, async (dbActiva) => {
-      let resultado = estadoInicialVuelta(sesionId);
-      await dbActiva.withTransactionAsync(async () => {
-        const fila = await dbActiva.getFirstAsync<{ estado_json: string }>(
-          'SELECT estado_json FROM progreso_vuelta WHERE sesion_id = ?',
-          [sesionId],
-        );
-        resultado = pasoPunto(parsear(sesionId, fila?.estado_json), { puntoId, clave }, totalPuntos);
-        await dbActiva.runAsync(
-          `INSERT INTO progreso_vuelta (sesion_id, estado_json, actualizado_ts) VALUES (?, ?, ?)
-           ON CONFLICT(sesion_id) DO UPDATE SET
-             estado_json = excluded.estado_json,
-             actualizado_ts = excluded.actualizado_ts`,
-          [sesionId, JSON.stringify(resultado), new Date().toISOString()],
-        );
-        // Una sola sesión activa a la vez: las filas de sesiones viejas no se vuelven a leer.
-        await dbActiva.runAsync('DELETE FROM progreso_vuelta WHERE sesion_id != ?', [sesionId]);
-      });
-      return resultado;
-    });
-    for (const oyente of oyentes) oyente(nuevo);
-  });
-  const segura = operacion.catch((error: unknown) => {
-    console.error('[QUIVO][vuelta] No se pudo registrar el paso en el progreso de la vuelta', error);
-    Sentry.captureException(error, {
-      tags: { contexto: 'progreso-vuelta', paso: 'registrar-paso' },
-      extra: { sesionId, puntoId },
-    });
-  });
-  cola = segura;
-  return segura;
+  return encolar(
+    db,
+    sesionId,
+    fechaLocal(),
+    (actual) => pasoPunto(actual, { puntoId, clave }, idsPuntos),
+    { paso: 'registrar-paso', extra: { puntoId } },
+  );
+}
+
+/**
+ * Arranca un recorrido: la vuelta en curso de `clave` (`sesionId:fecha`) empieza de cero y se
+ * conserva el conteo de vueltas del día. Sin fila previa no escribe nada. Nunca rechaza.
+ */
+export function reiniciarVueltaEnCurso(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
+  const { sesionId, fecha } = separarClaveProgreso(clave);
+  return encolar(db, sesionId, fecha, reiniciarVuelta, { paso: 'reiniciar-vuelta', extra: {} });
 }
