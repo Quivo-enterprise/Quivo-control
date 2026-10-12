@@ -2476,6 +2476,47 @@ body::-webkit-scrollbar {
 .qv-gmap--clickable {
   cursor: pointer;
 }
+/* Marcador arrastrable: mismo cursor que MapLibre (grab al pasar, grabbing al arrastrar). */
+.qv-gmap--arrastrable {
+  cursor: grab;
+}
+.qv-gmap--arrastrando,
+.qv-gmap--arrastrando * {
+  cursor: grabbing;
+}
+
+/* `pinType: 'pulse'`: halo de 32 px (el círculo de 16 px de radio de la capa
+   `quivo-marker-pulse` de MapLibre) detrás del nodo. Base estática al 18 % de opacidad como en
+   MapLibre; el latido es un plus de este motor. Con movimiento reducido queda solo la base. */
+.qv-gmap-pt__halo {
+  position: absolute;
+  left: calc(50% - 16px);
+  top: calc(50% - 16px);
+  z-index: -1;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--qv-gmap-pt-color, var(--qv-color-primary));
+  opacity: 0.18;
+  pointer-events: none;
+  animation: qv-gmap-pulso 1.8s ease-out infinite;
+}
+@keyframes qv-gmap-pulso {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.32;
+  }
+  70%,
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qv-gmap-pt__halo {
+    animation: none;
+  }
+}
 /* Área táctil >= 44 px: el punto visible mide 11-22 px; el ::after (transparente, dentro del
    marcador) amplía solo la zona de toque. El vehículo ya mide 40 px y se amplía a 48. */
 .qv-gmap-pt.qv-gmap--clickable::after {

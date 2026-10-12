@@ -302,6 +302,8 @@ export default function RutasPage() {
     ? [
         {
           ...puntoPendiente,
+          // Id estable: sin él la identidad sale de las coordenadas y cada arrastre lo recrearía.
+          id: 'punto-pendiente',
           label: 'Punto marcado',
           description: 'Arrastra para reubicar',
           pinType: 'pulse',
@@ -1117,6 +1119,9 @@ export default function RutasPage() {
 
       {/* Lienzo del Mapa */}
       <RouteMap
+        engine="google"
+        googleMapsApiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}
+        googleMapsMapId={process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID}
         className="routes-map-canvas"
         height="100%"
         interactive={drawing.modo !== 'ver'}
