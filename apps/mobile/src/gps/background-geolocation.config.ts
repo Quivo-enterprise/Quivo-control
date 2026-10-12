@@ -26,10 +26,14 @@ export const logVerboseHabilitado = __DEV__ || process.env.EXPO_PUBLIC_GPS_LOG_V
  * Fase B (`docs/plan-ubicacion-fluida.md`, "núcleo de movimiento"): interruptor del canal visual
  * — un `BackgroundGeolocation.watchPosition` extra, a 1Hz, `persist: false`, que solo alimenta el
  * marcador del mapa (nunca la evidencia legal, ver el guard `esFixVisual` en
- * `use-gps-operativo.ts`). Apagado por default a propósito: sin la variable, el comportamiento
- * queda IDÉNTICO al de hoy (solo la suscripción de evidencia de siempre, `distanceFilter: 15`) —
- * mismo criterio que `EXPO_PUBLIC_GPS_LOG_VERBOSE` arriba, variable de perfil de EAS o del
- * entorno de Expo, nunca hardcodeada. Se enciende recién para el spike S1 (dev build).
+ * `use-gps-operativo.ts`). Encendido en los perfiles `production` y `development` de EAS
+ * (`EXPO_PUBLIC_GPS_CANAL_VISUAL=1`, `apps/mobile/eas.json`) desde la prueba de campo del APK r13.
+ * Corre solo en primer plano mientras hay tracking (pantalla encendida), así que el impacto en
+ * batería queda acotado por la pantalla; la evidencia no cambia (`persist: false`, jamás genera
+ * `gps_point`). Sin la variable el comportamiento queda IDÉNTICO al de antes (solo la
+ * suscripción de evidencia de siempre, `distanceFilter: 15`) — mismo criterio que
+ * `EXPO_PUBLIC_GPS_LOG_VERBOSE` arriba, variable de perfil de EAS o del entorno de Expo, nunca
+ * hardcodeada.
  */
 export const canalVisualHabilitado = process.env.EXPO_PUBLIC_GPS_CANAL_VISUAL === '1';
 

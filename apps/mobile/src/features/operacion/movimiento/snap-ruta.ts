@@ -28,6 +28,9 @@ export const VENTANA_METROS = 300;
 /** Penalización (m) a los segmentos de la ventana que no son el anterior ni sus vecinos
  * inmediatos: un carril paralelo apenas más cerca no le gana al tramo que ya se venía siguiendo. */
 export const PENALIZACION_SALTO_M = 8;
+/** Fixes consecutivos sin snap durante los que el llamador conserva el tramo anterior (histéresis
+ * que sobrevive a un fallo aislado); al superarlo se descarta y se busca en toda la ruta. */
+export const MAX_FALLOS_SNAP = 3;
 /** Distancia (m) entre inicio y fin bajo la cual la ruta se considera un circuito cerrado. */
 const UMBRAL_CIRCUITO_M = 50;
 
@@ -124,7 +127,11 @@ interface Candidato {
   t: number;
 }
 
-/** Mejor segmento aceptable en `[desde, hasta]` (inclusive), o `null`. */
+/**
+ * Mejor segmento aceptable en los índices `[desde, hasta]` (inclusive), o `null`. En una ruta
+ * cerrada los índices son "virtuales" y se toman módulo la cantidad de segmentos (la ventana
+ * puede cruzar el punto de cierre); la penalización de salto usa la distancia circular.
+ */
 function mejorCandidato(
   ruta: RutaSnap,
   x: number,
@@ -135,9 +142,11 @@ function mejorCandidato(
   rumbo: number | null,
   base: number | null = null,
 ): Candidato | null {
+  const n = ruta.segmentos.length;
   let mejor: Candidato | null = null;
   let mejorPuntaje = Infinity;
-  for (let i = desde; i <= hasta; i += 1) {
+  for (let k = desde; k <= hasta; k += 1) {
+    const i = ruta.cerrada ? ((k % n) + n) % n : k;
     const s = ruta.segmentos[i]!;
     const dx = s.bx - s.ax;
     const dy = s.by - s.ay;
@@ -147,8 +156,9 @@ function mejorCandidato(
     if (rumbo !== null && Math.abs(deltaAnguloCorto(s.bearing, rumbo)) > TOLERANCIA_RUMBO_GRADOS) {
       continue;
     }
-    const puntaje =
-      distancia + (base !== null && Math.abs(i - base) > 1 ? PENALIZACION_SALTO_M : 0);
+    let salto = base !== null ? Math.abs(i - base) : 0;
+    if (ruta.cerrada) salto = Math.min(salto, n - salto);
+    const puntaje = distancia + (salto > 1 ? PENALIZACION_SALTO_M : 0);
     if (puntaje < mejorPuntaje) {
       mejorPuntaje = puntaje;
       mejor = { indice: i, distancia, t };
@@ -157,16 +167,29 @@ function mejorCandidato(
   return mejor;
 }
 
+/** Distancia acumulada (m) al inicio del segmento con índice virtual `k` (módulo en circuito cerrado). */
+function acumuladoVirtual(ruta: RutaSnap, k: number): number {
+  const n = ruta.segmentos.length;
+  if (!ruta.cerrada) return ruta.segmentos[k]!.acumulado;
+  const vuelta = Math.floor(k / n);
+  return ruta.segmentos[k - vuelta * n]!.acumulado + vuelta * ruta.largoTotal;
+}
+
 /**
  * Proyecta el fix sobre la ruta. Devuelve `null` si queda fuera de tolerancia o desalineado
  * (el llamador usa entonces el GPS crudo). Con `anterior` busca primero en una ventana de
- * segmentos/metros alrededor del tramo previo, favoreciendo el previo y sus vecinos (histéresis:
- * evita saltar al carril paralelo o a un tramo que cruza), y recién si ahí no hay candidato aceptable busca en toda la ruta.
+ * segmentos/metros alrededor del tramo previo (con wrap en circuitos cerrados), favoreciendo el
+ * previo y sus vecinos (histéresis: evita saltar al carril paralelo o a un tramo que cruza). Si
+ * ahí no hay candidato aceptable busca en toda la ruta, salvo que el rumbo se ignore (parado o
+ * lento, sin rumbo confiable): ahí un tramo lejano o del carril opuesto sería un falso positivo,
+ * así que solo se admite la búsqueda global tras `MAX_FALLOS_SNAP` fixes consecutivos sin snap
+ * (`fallosConsecutivos`, lo lleva el llamador).
  */
 export function snapARuta(
   ruta: RutaSnap,
   fix: FixSnap,
   anterior: { indiceSegmento: number } | null,
+  fallosConsecutivos = 0,
 ): ResultadoSnap | null {
   const x = (fix.lng - ruta.lng0) * ruta.kx;
   const y = (fix.lat - ruta.lat0) * ruta.ky;
@@ -185,27 +208,38 @@ export function snapARuta(
   const ultimo = ruta.segmentos.length - 1;
 
   let candidato: Candidato | null = null;
+  let ventanaIntentada = false;
   if (anterior && anterior.indiceSegmento >= 0 && anterior.indiceSegmento <= ultimo) {
+    ventanaIntentada = true;
     const base = anterior.indiceSegmento;
+    const n = ultimo + 1;
     const acumBase = ruta.segmentos[base]!.acumulado;
+    // Índices virtuales: en circuito cerrado pueden salir de `[0, ultimo]` (wrap); la ventana
+    // nunca cubre más de una vuelta.
     let lo = base;
     while (
-      lo > 0 &&
-      (base - lo < VENTANA_SEGMENTOS ||
-        acumBase - ruta.segmentos[lo - 1]!.acumulado <= VENTANA_METROS)
+      (ruta.cerrada || lo > 0) &&
+      base - lo + 1 < n &&
+      (base - lo < VENTANA_SEGMENTOS || acumBase - acumuladoVirtual(ruta, lo - 1) <= VENTANA_METROS)
     ) {
       lo -= 1;
     }
     let hi = base;
     while (
-      hi < ultimo &&
-      (hi - base < VENTANA_SEGMENTOS || ruta.segmentos[hi + 1]!.acumulado - acumBase <= VENTANA_METROS)
+      (ruta.cerrada || hi < ultimo) &&
+      hi - lo + 1 < n &&
+      (hi - base < VENTANA_SEGMENTOS || acumuladoVirtual(ruta, hi + 1) - acumBase <= VENTANA_METROS)
     ) {
       hi += 1;
     }
     candidato = mejorCandidato(ruta, x, y, lo, hi, umbral, rumbo, base);
   }
-  candidato ??= mejorCandidato(ruta, x, y, 0, ultimo, umbral, rumbo);
+  if (
+    !candidato &&
+    (!ventanaIntentada || rumbo !== null || fallosConsecutivos >= MAX_FALLOS_SNAP)
+  ) {
+    candidato = mejorCandidato(ruta, x, y, 0, ultimo, umbral, rumbo);
+  }
   if (!candidato) return null;
 
   const s = ruta.segmentos[candidato.indice]!;
@@ -255,15 +289,43 @@ export function interpolarSobreRuta(
   hastaDist: number,
   t: number,
 ): PuntoEnRuta {
-  let delta = hastaDist - desdeDist;
-  if (ruta.cerrada) {
-    if (delta < -ruta.largoTotal / 2) delta += ruta.largoTotal;
-    else if (delta > ruta.largoTotal / 2) delta -= ruta.largoTotal;
-  }
+  const delta = deltaSobreRuta(ruta, desdeDist, hastaDist);
   let d = desdeDist + delta * Math.max(0, Math.min(1, t));
   if (ruta.cerrada) {
     d %= ruta.largoTotal;
     if (d < 0) d += ruta.largoTotal;
   }
   return puntoEnDistancia(ruta, d);
+}
+
+/** Recorrido con signo (m) de `desdeDist` a `hastaDist` por el camino que usa `interpolarSobreRuta`
+ * (con wrap por el camino corto en circuitos cerrados). */
+function deltaSobreRuta(ruta: RutaSnap, desdeDist: number, hastaDist: number): number {
+  let delta = hastaDist - desdeDist;
+  if (ruta.cerrada) {
+    if (delta < -ruta.largoTotal / 2) delta += ruta.largoTotal;
+    else if (delta > ruta.largoTotal / 2) delta -= ruta.largoTotal;
+  }
+  return delta;
+}
+
+/** Margen fijo (m) sobre la cuerda y factor de la cuerda para aceptar la animación por la calle. */
+const MARGEN_CUERDA_M = 30;
+const FACTOR_CUERDA = 3;
+
+/**
+ * ¿Es razonable animar por la calle entre dos puntos ajustados? Solo si el recorrido sobre la
+ * polilínea no supera `max(3 × cuerda, cuerda + 30 m)`, con `cuerda` la distancia en línea recta
+ * (haversine) entre ambos. Si no (ida y vuelta por carriles opuestos pegados, un tramo que se
+ * dobla sobre sí mismo), el marcador recorrería media ruta para moverse unos metros: se anima en
+ * línea recta.
+ */
+export function debeInterpolarPorRuta(
+  ruta: RutaSnap,
+  desdeDist: number,
+  hastaDist: number,
+  cuerdaM: number,
+): boolean {
+  const recorrido = Math.abs(deltaSobreRuta(ruta, desdeDist, hastaDist));
+  return recorrido <= Math.max(FACTOR_CUERDA * cuerdaM, cuerdaM + MARGEN_CUERDA_M);
 }
