@@ -40,6 +40,7 @@ import {
   VEHICULO_ICONO_FALLBACK,
   buildVehiculoIconoSvg,
   resolveColor,
+  nodeNumberFromId,
   resolvePointId,
   routeVisuals,
 } from './route-map-shared.js';
@@ -59,7 +60,8 @@ import {
   type PuntoAnimable,
 } from './vehicle-marker-animation.js';
 
-// Reexportada desde `route-map-shared.ts` (la usan los tests y el motor Google).
+// Reexportada desde `route-map-shared.ts` solo para `route-map-impl.marker-override.test.ts`, que
+// la importa desde este módulo; la definición vive en `route-map-shared.ts`.
 export { resolvePointId };
 
 type MapLibreModule = typeof import('maplibre-gl');
@@ -178,11 +180,6 @@ function featureCollection(features: MapFeature[]): MapFeatureCollection {
 }
 
 
-function nodeNumberFromId(id: string): string {
-  const match = id.match(/^nodo-(\d+)$/);
-  return match ? String(Number(match[1]) + 1) : '';
-}
-
 function routeFeatures(routes: MapRoute[], isDark: boolean): MapFeatureCollection {
   const drawable = routes.filter((route) => route.points.length > 1);
   return featureCollection(
@@ -289,47 +286,9 @@ function setSourceData(map: MapLibreMap, sourceId: string, data: MapFeatureColle
   source?.setData(data as never);
 }
 
-/**
- * ENTREGA 14 — sprites del vehículo en `/en-vivo`, uno por `estadoFrescura`. Antes, vehículo
- * (radio 11) y punto de control (radio 7) eran el MISMO círculo con 4 px de diferencia —
- * indistinguibles con 26 puntos de control y varios vehículos en pantalla a la vez. Acá la
- * FORMA cambia, no solo el color, para que un vehículo `perdido` se reconozca sin leer texto:
- *
- * - `reportando` — bus sólido (glifo `mdi:bus`), badge verde relleno.
- * - `detenido`   — bus con reloj (glifo `mdi:bus-clock` — "esperando", no una falla), badge
- *   con contorno PUNTEADO en vez de relleno sólido: la forma del borde ya comunica "distinto
- *   de reportando" antes de leer el color.
- * - `perdido`    — bus con alerta (glifo `mdi:bus-alert`), badge gris y atenuado (opacidad
- *   reducida): "esto no es una posición confiable ahora mismo".
- * - `finalizado` — Fase A (docs/plan-ubicacion-fluida.md): bus SÓLIDO liso (mismo glifo
- *   `mdi:bus` que `reportando`, no `bus-alert`: no es una falla) con badge gris de contorno
- *   PUNTEADO — mismo tratamiento de "distinto, informativo, no alarmante" que ya usa
- *   `detenido`, pero en gris/neutro (no cian) para no confundirse con "el teléfono sigue
- *   vivo esperando". El vehículo sigue visible en el mapa, solo que quieto porque el
- *   recorrido terminó bien.
- *
- * `sin_datos` queda afuera a propósito: esa sesión nunca tuvo un fix, así que en
- * `map-builders.ts` ni siquiera llega a ser un marker (`lat`/`lng` `null` ⇒ no se dibuja) —
- * no hace falta un sprite para ese estado.
- *
- * Los glifos son Material Design Icons (`mdi:bus`, `mdi:bus-clock`, `mdi:bus-alert`,
- * licencia Apache-2.0), resueltos vía el MCP `iconify` — no un SVG inventado a mano.
- * `finalizado` reusa el mismo glifo `mdi:bus` que `reportando` (no hizo falta un cuarto).
- */
-
 function vehiculoIconoId(estado: string): string {
   return `quivo-bus-${estado}`;
 }
-
-/**
- * FIX revisión (Fase A) — sprite de respaldo para cualquier `estadoFrescura` que no tenga
- * ícono propio: vacío (nunca pasa desde `/en-vivo`, ver `construirMarcadoresVehiculos`),
- * `sin_datos` (tampoco pasa — `map-builders.ts` no lo dibuja como marker, ver el comentario
- * de `VEHICULO_ICONOS` más arriba) o un estado nuevo del enum que este archivo todavía no
- * conozca. `detenido` en vez de `reportando`: un estado desconocido no debe leerse como
- * "reportando bien" (verde sólido, afirmación falsa) — el bus con reloj cian punteado ya
- * comunica "distinto, no es una falla" sin afirmar nada que no se sabe.
- */
 
 /**
  * Expresión MapLibre `match` para `icon-image`, derivada de `VEHICULO_ICONOS` — así la lista

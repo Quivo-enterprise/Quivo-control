@@ -386,6 +386,39 @@ EOF
   info "roles/cloudsql.client otorgado (idempotente) a $SERVICE_ACCOUNT sobre el proyecto."
 fi
 
+# ----------------------------------------------------------------------------
+# Paso 0/7 (panel) — Preflight de Google Maps para /en-vivo
+# ----------------------------------------------------------------------------
+# NEXT_PUBLIC_* se hornea en build time. La key de navegador sale de Secret Manager
+# (`google-maps-web-key`); el Map ID viene de la variable de entorno GOOGLE_MAPS_MAP_ID (no es
+# secreto). Se valida acá, ANTES de migraciones y del deploy de la API, para que un faltante no
+# aborte el deploy a medias (API ya desplegada con el panel viejo). Se distingue "el secreto no
+# existe" de "no hay permiso / falló gcloud" mostrando el stderr real de gcloud.
+GOOGLE_MAPS_WEB_KEY=""
+if [[ "$NEEDS_WEB_DEPLOY" == true ]]; then
+  info "Paso 0/7: preflight del panel — verificando la key y el Map ID de Google Maps..."
+  [[ -n "${GOOGLE_MAPS_MAP_ID:-}" ]] || fail "Falta la variable de entorno GOOGLE_MAPS_MAP_ID (Map ID vectorial de Google Maps para /en-vivo). Exportala antes de correr el deploy del panel."
+
+  gmaps_err_file="$(mktemp)"
+  if ! gcloud secrets describe google-maps-web-key --project="$PROJECT" >/dev/null 2>"$gmaps_err_file"; then
+    gmaps_err="$(cat "$gmaps_err_file")"
+    rm -f "$gmaps_err_file"
+    if grep -qiE 'NOT_FOUND|not found' <<<"$gmaps_err"; then
+      fail "El secreto 'google-maps-web-key' no existe en Secret Manager (proyecto $PROJECT). Crealo antes de desplegar el panel: lo necesita /en-vivo."
+    fi
+    fail "No se pudo consultar el secreto 'google-maps-web-key' (¿permisos o sesión de gcloud?). gcloud dijo: ${gmaps_err}"
+  fi
+  if ! GOOGLE_MAPS_WEB_KEY="$(gcloud secrets versions access latest --secret=google-maps-web-key --project="$PROJECT" 2>"$gmaps_err_file")"; then
+    gmaps_err="$(cat "$gmaps_err_file")"
+    rm -f "$gmaps_err_file"
+    fail "El secreto 'google-maps-web-key' existe pero no se pudo leer su última versión (sin versión, o sin permiso secretmanager.versions.access). gcloud dijo: ${gmaps_err}"
+  fi
+  rm -f "$gmaps_err_file"
+  [[ -n "$GOOGLE_MAPS_WEB_KEY" ]] || fail "El secreto 'google-maps-web-key' está vacío. Agregá una versión con la key de navegador de Google Maps."
+  readonly GOOGLE_MAPS_WEB_KEY
+  info "Google Maps: key (Secret Manager) y Map ID OK."
+fi
+
 # ============================================================================
 # Paso 1/7 — Build + push de la imagen compartida API/worker
 # ============================================================================
@@ -805,12 +838,8 @@ if [[ "$NEEDS_WEB_DEPLOY" == true ]]; then
     info "Reusando quivo-api ya desplegado: $API_URL"
   fi
 
-  # Google Maps (/en-vivo): NEXT_PUBLIC_* también se hornea en build time. La key de navegador
-  # sale de Secret Manager (`google-maps-web-key`); el Map ID viene de la variable de entorno
-  # GOOGLE_MAPS_MAP_ID (no es secreto). Sin alguno de los dos el panel quedaría con el mapa roto.
-  GOOGLE_MAPS_WEB_KEY="$(read_secret_value google-maps-web-key 2>/dev/null || true)"
-  [[ -n "$GOOGLE_MAPS_WEB_KEY" ]] || fail "No se pudo leer el secreto 'google-maps-web-key' de Secret Manager (proyecto $PROJECT). Crealo antes de desplegar el panel: lo necesita /en-vivo."
-  [[ -n "${GOOGLE_MAPS_MAP_ID:-}" ]] || fail "Falta la variable de entorno GOOGLE_MAPS_MAP_ID (Map ID vectorial de Google Maps para /en-vivo). Exportala antes de correr el deploy del panel."
+  # Google Maps (/en-vivo): la key y el Map ID ya se validaron en el preflight (Paso 0/7), antes
+  # de migraciones y del deploy de la API: GOOGLE_MAPS_WEB_KEY / GOOGLE_MAPS_MAP_ID se hornean abajo.
 
   info "Paso 4/7: build y push de la imagen del panel ($WEB_IMAGE)..."
   # NEXT_PUBLIC_API_URL va SIN /v1 (apps/web/src/lib/api/client.ts concatena el prefijo en

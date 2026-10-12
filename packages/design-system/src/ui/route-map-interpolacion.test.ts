@@ -4,6 +4,7 @@ import {
   SALTO_DIRECTO_METROS,
   apuntarInterpolacionA,
   distanciaMetros,
+  duracionInterpolacion,
   interpolacionEnMovimiento,
   interpolacionQuieta,
   posicionInterpolada,
@@ -72,5 +73,22 @@ describe('apuntarInterpolacionA', () => {
     expect(interpolacionEnMovimiento(e, 400)).toBe(false);
     const j = apuntarInterpolacionA(interpolacionQuieta(A), B, 0, { duracionMs: 0 });
     expect(posicionInterpolada(j, 0)).toEqual(B);
+  });
+});
+
+describe('duracionInterpolacion', () => {
+  it('tope de 1 s aunque el intervalo de poll sea mayor', () => {
+    expect(DURACION_INTERPOLACION_MS).toBe(1000);
+    expect(duracionInterpolacion(2000)).toBe(1000);
+    expect(duracionInterpolacion(5000)).toBe(1000);
+  });
+
+  it('no supera el intervalo cuando este es menor', () => {
+    expect(duracionInterpolacion(400)).toBe(400);
+    expect(duracionInterpolacion(0)).toBe(0);
+  });
+
+  it('sin intervalo usa el tope', () => {
+    expect(duracionInterpolacion(undefined)).toBe(1000);
   });
 });

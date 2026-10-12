@@ -2406,9 +2406,11 @@ body::-webkit-scrollbar {
   background: var(--qv-gmap-pt-color, var(--qv-color-primary));
   border: 2px solid var(--qv-surface-card);
   box-shadow: 0 1px 3px rgb(15 23 42 / 0.35);
-  color: #fff;
+  /* Contraste elegido por el motor según el color del punto (ver colorTextoContraste). */
+  color: var(--qv-gmap-pt-texto, #fff);
   font-size: 11px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 .qv-gmap-pt--parada .qv-gmap-pt__dot,
@@ -2440,7 +2442,7 @@ body::-webkit-scrollbar {
   transform: translateX(-50%);
   white-space: nowrap;
   pointer-events: none;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   line-height: 1.2;
   color: var(--qv-text-primary);
@@ -2456,7 +2458,7 @@ body::-webkit-scrollbar {
   /* Cuelga de un marcador sin caja propia: se centra sobre su posición. */
   position: static;
   transform: none;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--qv-gmap-label-color, var(--qv-text-primary));
 }
@@ -2468,6 +2470,45 @@ body::-webkit-scrollbar {
 
 .qv-gmap--clickable {
   cursor: pointer;
+}
+/* Área táctil >= 44 px: el punto visible mide 11-22 px; el ::after (transparente, dentro del
+   marcador) amplía solo la zona de toque. El vehículo ya mide 40 px y se amplía a 48. */
+.qv-gmap-pt.qv-gmap--clickable::after {
+  content: '';
+  position: absolute;
+  left: min(-14px, calc((100% - 44px) / 2));
+  right: min(-14px, calc((100% - 44px) / 2));
+  top: min(-14px, calc((100% - 44px) / 2));
+  bottom: min(-14px, calc((100% - 44px) / 2));
+}
+.qv-gmap-veh.qv-gmap--clickable::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+}
+.qv-gmap-pt.qv-gmap--clickable:hover .qv-gmap-pt__dot {
+  box-shadow:
+    var(--qv-shadow-focus),
+    0 1px 3px rgb(15 23 42 / 0.35);
+}
+.qv-gmap-pt.qv-gmap--clickable:focus {
+  outline: none;
+}
+.qv-gmap-pt.qv-gmap--clickable:focus-visible .qv-gmap-pt__dot {
+  box-shadow:
+    0 0 0 2px var(--qv-surface-card),
+    0 0 0 4px var(--qv-color-primary);
+}
+/* Inicio/fin ya usan `outline` como halo: el foco lo reemplaza por un contorno sólido de marca. */
+.qv-gmap-pt--rol-start.qv-gmap--clickable:focus-visible .qv-gmap-pt__dot,
+.qv-gmap-pt--rol-end.qv-gmap--clickable:focus-visible .qv-gmap-pt__dot {
+  outline: 3px solid var(--qv-color-primary);
+  outline-offset: 2px;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.35);
+}
+.qv-gmap-veh.qv-gmap--clickable:hover .qv-gmap-veh__badge {
+  filter: drop-shadow(0 2px 5px rgb(15 23 42 / 0.6));
 }
 
 .qv-gmap-veh {
@@ -2498,8 +2539,11 @@ body::-webkit-scrollbar {
   font-size: 11px;
   font-weight: 700;
   line-height: 1.35;
-  color: #fff;
-  background: rgb(15 17 26 / 0.85);
+  /* Chip de placa: oscuro fijo en ambos temas (legible sobre cualquier mapa base). */
+  --qv-gmap-placa-fg: #fff;
+  --qv-gmap-placa-bg: rgb(15 17 26 / 0.85);
+  color: var(--qv-gmap-placa-fg);
+  background: var(--qv-gmap-placa-bg);
   border-radius: 3px;
 }
 

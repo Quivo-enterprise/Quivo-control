@@ -76,6 +76,12 @@ export function routeVisuals(color: string, isDark: boolean) {
   };
 }
 
+/** Número visible de un nodo del trazado (`nodo-0` => `1`); vacío si el id no es de nodo. */
+export function nodeNumberFromId(id: string): string {
+  const match = id.match(/^nodo-(\d+)$/);
+  return match ? String(Number(match[1]) + 1) : '';
+}
+
 /** Mismo id que ve el consumidor cuando lo pasa explícitamente; si no, un id sintético estable
  * mientras el array no cambie de orden — usado para correlacionar clicks/drags de vuelta al
  * objeto original (las funciones `onClick`/`onDragEnd` no viajan dentro del GeoJSON).
@@ -109,6 +115,33 @@ export interface VehiculoIconoSpec {
   opacity: number;
 }
 
+/**
+ * ENTREGA 14 — sprites del vehículo en `/en-vivo`, uno por `estadoFrescura`. Antes, vehículo
+ * (radio 11) y punto de control (radio 7) eran el MISMO círculo con 4 px de diferencia —
+ * indistinguibles con 26 puntos de control y varios vehículos en pantalla a la vez. Acá la
+ * FORMA cambia, no solo el color, para que un vehículo `perdido` se reconozca sin leer texto:
+ *
+ * - `reportando` — bus sólido (glifo `mdi:bus`), badge verde relleno.
+ * - `detenido`   — bus con reloj (glifo `mdi:bus-clock` — "esperando", no una falla), badge
+ *   con contorno PUNTEADO en vez de relleno sólido: la forma del borde ya comunica "distinto
+ *   de reportando" antes de leer el color.
+ * - `perdido`    — bus con alerta (glifo `mdi:bus-alert`), badge gris y atenuado (opacidad
+ *   reducida): "esto no es una posición confiable ahora mismo".
+ * - `finalizado` — Fase A (docs/plan-ubicacion-fluida.md): bus SÓLIDO liso (mismo glifo
+ *   `mdi:bus` que `reportando`, no `bus-alert`: no es una falla) con badge gris de contorno
+ *   PUNTEADO — mismo tratamiento de "distinto, informativo, no alarmante" que ya usa
+ *   `detenido`, pero en gris/neutro (no cian) para no confundirse con "el teléfono sigue
+ *   vivo esperando". El vehículo sigue visible en el mapa, solo que quieto porque el
+ *   recorrido terminó bien.
+ *
+ * `sin_datos` queda afuera a propósito: esa sesión nunca tuvo un fix, así que en
+ * `map-builders.ts` ni siquiera llega a ser un marker (`lat`/`lng` `null` ⇒ no se dibuja) —
+ * no hace falta un sprite para ese estado.
+ *
+ * Los glifos son Material Design Icons (`mdi:bus`, `mdi:bus-clock`, `mdi:bus-alert`,
+ * licencia Apache-2.0), resueltos vía el MCP `iconify` — no un SVG inventado a mano.
+ * `finalizado` reusa el mismo glifo `mdi:bus` que `reportando` (no hizo falta un cuarto).
+ */
 export const VEHICULO_ICONOS: VehiculoIconoSpec[] = [
   { estado: 'reportando', path: ICONO_BUS_PATH, background: '#16a34a', outline: false, opacity: 1 },
   { estado: 'detenido', path: ICONO_BUS_CLOCK_PATH, background: '#0891b2', outline: true, opacity: 1 },
@@ -121,6 +154,15 @@ export const VEHICULO_ICONOS: VehiculoIconoSpec[] = [
 
 export const VEHICULO_ICONO_PX = 64;
 
+/**
+ * FIX revisión (Fase A) — sprite de respaldo para cualquier `estadoFrescura` que no tenga
+ * ícono propio: vacío (nunca pasa desde `/en-vivo`, ver `construirMarcadoresVehiculos`),
+ * `sin_datos` (tampoco pasa — `map-builders.ts` no lo dibuja como marker, ver el comentario
+ * de `VEHICULO_ICONOS` más arriba) o un estado nuevo del enum que este archivo todavía no
+ * conozca. `detenido` en vez de `reportando`: un estado desconocido no debe leerse como
+ * "reportando bien" (verde sólido, afirmación falsa) — el bus con reloj cian punteado ya
+ * comunica "distinto, no es una falla" sin afirmar nada que no se sabe.
+ */
 export const VEHICULO_ICONO_FALLBACK: EstadoIconoVehiculo = 'detenido';
 
 export function buildVehiculoIconoSvg(spec: VehiculoIconoSpec): string {
@@ -149,4 +191,28 @@ export function buildVehiculoIconoSvg(spec: VehiculoIconoSpec): string {
     `<g transform="translate(${glyphOffset} ${glyphOffset}) scale(${scale})">` +
     `<path fill="#ffffff" d="${spec.path}"/></g></svg>`
   );
+}
+
+/** Etiqueta en español de cada `estadoFrescura` de un vehículo — mismas palabras que
+ * `PRESENTACION_FRESCURA` (`apps/web/src/lib/en-vivo/traza.ts`), que este paquete no puede
+ * importar. Se usa para el `aria-label` del marcador (el estado no puede depender solo de la
+ * forma/color del badge). */
+export const ETIQUETA_FRESCURA: Record<EstadoIconoVehiculo, string> = {
+  reportando: 'Reportando',
+  detenido: 'Detenido',
+  perdido: 'Sin señal',
+  finalizado: 'Recorrido finalizado',
+};
+
+/** Etiqueta de un `estadoFrescura` cualquiera; vacía si no se conoce (no se inventa un estado). */
+export function etiquetaFrescura(estado: string | undefined): string {
+  return estado && estado in ETIQUETA_FRESCURA ? ETIQUETA_FRESCURA[estado as EstadoIconoVehiculo] : '';
+}
+
+/** Color de texto legible (contraste WCAG) sobre un fondo dado: oscuro si el fondo es claro,
+ * blanco si es oscuro. Con un formato que no sea hex (no se puede medir) devuelve blanco. El
+ * umbral 0.179 es donde el contraste contra blanco y contra negro se igualan. */
+export function colorTextoContraste(fondo: string): '#ffffff' | '#111827' {
+  if (!parseHexColor(fondo)) return '#ffffff';
+  return colorLuminance(fondo) > 0.179 ? '#111827' : '#ffffff';
 }

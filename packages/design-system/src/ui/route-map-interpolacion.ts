@@ -2,7 +2,7 @@
 //
 // Contexto: `/en-vivo` consulta `/posiciones` cada ~2 s y cada vehículo llega con su nueva
 // posición. En vez de que el marcador salte, se desliza desde la posición que se estaba
-// MOSTRANDO hacia la nueva a lo largo del intervalo del poll (interpolación lineal: un bus a
+// MOSTRANDO hacia la nueva en ~1 s, sin superar el intervalo del poll (interpolación lineal: un bus a
 // velocidad ~constante entre dos fixes no necesita easing). Este módulo no toca el reloj ni el
 // DOM: el llamador pasa `ahoraMs` (el timestamp de `requestAnimationFrame`), así se testea en
 // el entorno `node` de Vitest sin temporizadores. El vehículo seleccionado con traza de alta
@@ -21,11 +21,17 @@ export interface EstadoInterpolacion {
   duracionMs: number;
 }
 
-/** Duración por defecto del deslizamiento: el intervalo de poll de `/posiciones`. */
-export const DURACION_INTERPOLACION_MS = 2000;
+/** Tope del deslizamiento: ~1 s (plan de /en-vivo, `min(1000, intervalo)`). Repartirlo en todo el
+ * intervalo del poll (~2 s) añadiría ese tiempo entero como retraso respecto al dato real. */
+export const DURACION_INTERPOLACION_MS = 1000;
+
+/** Duración efectiva del deslizamiento para un intervalo de poll dado: `min(1000, intervalo)`. */
+export function duracionInterpolacion(intervaloMs?: number): number {
+  return Math.min(DURACION_INTERPOLACION_MS, intervaloMs ?? DURACION_INTERPOLACION_MS);
+}
 
 /** Por encima de esta distancia el vehículo "teletransporta" (reinicio de GPS, fix atrasado tras
- * un hueco largo): deslizar varios km en 2 s sería un vuelo absurdo, no información. */
+ * un hueco largo): deslizar varios km en ~1 s sería un vuelo absurdo, no información. */
 export const SALTO_DIRECTO_METROS = 1500;
 
 const RADIO_TIERRA_M = 6_371_000;

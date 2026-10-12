@@ -15,10 +15,12 @@
 //   60 fps sería puro desperdicio. Es el mismo objeto de la API que usa el componente.
 // - Cámara: la decisión de cuándo encuadrar vive en `route-map-encuadre.ts` (compartida con el
 //   motor MapLibre); el follow usa `route-map-proyeccion.ts` + `isWithinCentralViewport`.
-//   `onUserPan` se dispara con `dragstart` y con `zoom_changed` NO programático: cada vez que
+//   `onUserPan` se dispara con `dragstart`, con `zoom_changed` NO programático y con el input DOM
+//   del usuario sobre el div del mapa (rueda, doble click, teclas +/-, pellizco, botones de
+//   zoom; ver `route-map-gestos.ts`), éste último independiente de la bandera: cada vez que
 //   este módulo mueve la cámara (fitBounds/panTo/setCenter/setZoom) levanta una bandera que se
 //   baja en el siguiente `idle` (o por timeout), para no confundir nuestros movimientos con los
-//   del usuario.
+//   del usuario, pero un gesto real dentro de esa ventana igual se reporta.
 //
 // Props de `RouteMapProps` que este motor NO soporta todavía (se ignoran sin romper; los usa el
 // editor de rutas, que migra último):
@@ -38,10 +40,11 @@ import {
 } from '@vis.gl/react-google-maps';
 import { cx } from '../utils.js';
 import type { MapPoint, MapRoute, MapZone } from '../types.js';
-import { Loader } from './primitives.js';
+import { Button, Loader } from './primitives.js';
 import type { RouteMapProps } from './route-map-impl.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
 import { latLngAPixelContenedor } from './route-map-proyeccion.js';
+import { esGestoUsuarioDeCamara } from './route-map-gestos.js';
 import {
   encuadreAuto,
   encuadreUnaVez,
@@ -55,8 +58,8 @@ import {
   type EstadoAnimacionVehiculo,
 } from './vehicle-marker-animation.js';
 import {
-  DURACION_INTERPOLACION_MS,
   apuntarInterpolacionA,
+  duracionInterpolacion,
   interpolacionEnMovimiento,
   interpolacionQuieta,
   posicionInterpolada,
@@ -67,6 +70,9 @@ import {
   VEHICULO_ICONOS,
   VEHICULO_ICONO_FALLBACK,
   buildVehiculoIconoSvg,
+  colorTextoContraste,
+  etiquetaFrescura,
+  nodeNumberFromId,
   resolveColor,
   resolvePointId,
   routeVisuals,
@@ -81,6 +87,9 @@ const ZOOM_POR_DEFECTO = 13;
 const MAP_ID_DEMO = 'DEMO_MAP_ID';
 const PADDING_ENCUADRE_PX = 32;
 const ZOOM_MAXIMO_ENCUADRE = 17;
+/** Librerías de Google que se cargan con la API. Constante de módulo: `APIProvider` recrea su
+ * default `[]` en cada render y eso re-dispara su efecto de carga. */
+const LIBRERIAS_GOOGLE = ['marker'];
 /** Tiempo máximo que una bandera "movimiento programático" puede quedar levantada si el mapa
  * no emite `idle` (p. ej. el encuadre no cambió nada). */
 const TIMEOUT_PROGRAMATICO_MS = 1200;
@@ -127,11 +136,6 @@ function colorParaMapa(color: string | undefined, oscuro: boolean): string {
 // Elementos HTML de los marcadores
 // ---------------------------------------------------------------------------------------------
 
-function nodoNumero(id: string): string {
-  const m = id.match(/^nodo-(\d+)$/);
-  return m ? String(Number(m[1]) + 1) : '';
-}
-
 function crearEtiqueta(texto: string, variante: 'stop' | 'marker' | 'route'): HTMLSpanElement {
   const el = document.createElement('span');
   el.className = `qv-gmap-label qv-gmap-label--${variante}`;
@@ -140,23 +144,36 @@ function crearEtiqueta(texto: string, variante: 'stop' | 'marker' | 'route'): HT
 }
 
 /** Marcador de vehículo: mismo badge que los sprites de MapLibre (`buildVehiculoIconoSvg`, forma
- * y color por `estadoFrescura`) + placa debajo. La raíz mide lo que el badge; la placa cuelga. */
+ * y color por `estadoFrescura`) + placa debajo. La raíz mide lo que el badge; la placa cuelga.
+ * Con `onClick` es un botón enfocable; sin él, una imagen con nombre accesible (el estado de
+ * frescura va en el texto, no solo en la forma/color del badge). */
 function crearElementoVehiculo(punto: MapPoint): HTMLElement {
   const spec =
     VEHICULO_ICONOS.find((s) => s.estado === punto.estadoFrescura) ??
     VEHICULO_ICONOS.find((s) => s.estado === VEHICULO_ICONO_FALLBACK)!;
   const raiz = document.createElement('div');
   raiz.className = `qv-gmap-veh qv-gmap-veh--${spec.estado}`;
-  raiz.setAttribute('role', 'button');
-  raiz.tabIndex = 0;
   const placa = punto.placa?.trim() ?? '';
-  raiz.setAttribute('aria-label', `Vehículo ${placa || punto.label || ''}`.trim());
+  const nombre = `Vehículo ${placa || punto.label || ''}`.trim();
+  // El estado va siempre en el texto; si la descripción del consumidor ya lo menciona no se repite.
+  const estado = etiquetaFrescura(punto.estadoFrescura);
+  const descripcion = punto.description?.trim() ?? '';
+  const estadoYaDicho = estado !== '' && descripcion.toLowerCase().includes(estado.toLowerCase());
+  raiz.setAttribute('aria-label', [nombre, estadoYaDicho ? '' : estado, descripcion].filter(Boolean).join(', '));
+  if (punto.onClick) {
+    raiz.setAttribute('role', 'button');
+    raiz.tabIndex = 0;
+    raiz.classList.add('qv-gmap--clickable');
+  } else {
+    raiz.setAttribute('role', 'img');
+  }
   if (punto.description) raiz.title = punto.description;
   // El SVG sale de constantes del módulo (sin datos del usuario): innerHTML es seguro acá.
   raiz.innerHTML = buildVehiculoIconoSvg(spec).replace('<svg ', '<svg class="qv-gmap-veh__badge" aria-hidden="true" ');
   if (placa) {
     const etiqueta = document.createElement('span');
     etiqueta.className = 'qv-gmap-veh__placa';
+    etiqueta.setAttribute('aria-hidden', 'true');
     etiqueta.textContent = placa;
     raiz.appendChild(etiqueta);
   }
@@ -164,26 +181,52 @@ function crearElementoVehiculo(punto: MapPoint): HTMLElement {
 }
 
 /** Punto de control / parada / nodo: círculo con el color del consumidor (admite
- * `var(--qv-*)` tal cual, el navegador lo resuelve) y borde del color de la superficie. */
+ * `var(--qv-*)` tal cual, el navegador lo resuelve) y borde del color de la superficie. Solo es
+ * botón enfocable (role, tabindex, nombre accesible) cuando tiene `onClick`. */
 function crearElementoPunto(
   punto: MapPoint,
   tipo: 'stop' | 'marker',
   rol: 'start' | 'end' | 'stop' | 'marker',
   id: string,
+  oscuro: boolean,
 ): HTMLElement {
   const pinType = punto.pinType ?? 'pin';
   const raiz = document.createElement('div');
   raiz.className = `qv-gmap-pt qv-gmap-pt--${tipo === 'stop' ? 'parada' : pinType} qv-gmap-pt--rol-${rol}`;
   raiz.style.setProperty('--qv-gmap-pt-color', punto.color?.trim() || 'var(--qv-color-primary)');
   if (punto.description || punto.label) raiz.title = [punto.label, punto.description].filter(Boolean).join(' — ');
+  if (punto.onClick) {
+    raiz.setAttribute('role', 'button');
+    raiz.tabIndex = 0;
+    raiz.classList.add('qv-gmap--clickable');
+    raiz.setAttribute('aria-label', [punto.label?.trim(), punto.description].filter(Boolean).join(', '));
+  }
   const punta = document.createElement('span');
   punta.className = 'qv-gmap-pt__dot';
-  const numero = pinType === 'node' || pinType === 'pulse' ? nodoNumero(id) : '';
-  if (numero) punta.textContent = numero;
+  const numero = pinType === 'node' || pinType === 'pulse' ? nodeNumberFromId(id) : '';
+  if (numero) {
+    punta.textContent = numero;
+    // El número va sobre un color arbitrario del consumidor: se elige blanco u oscuro por contraste.
+    raiz.style.setProperty('--qv-gmap-pt-texto', colorTextoContraste(colorParaMapa(punto.color, oscuro)));
+  }
   raiz.appendChild(punta);
   const etiqueta = punto.label?.trim();
   if (etiqueta) raiz.appendChild(crearEtiqueta(etiqueta, tipo === 'stop' ? 'stop' : 'marker'));
   return raiz;
+}
+
+/** Click y Enter/Espacio sobre el contenido de un marcador. Solo se engancha si el punto es
+ * clickable (la firma incluye `Boolean(onClick)`, así que si cambia el contenido se recrea). El
+ * `onClick` se lee de la entrada en cada activación para ver siempre el último callback. */
+function enlazarActivacion(contenido: HTMLElement, entrada: { onClick?: () => void }): void {
+  if (!contenido.classList.contains('qv-gmap--clickable')) return;
+  contenido.addEventListener('click', () => entrada.onClick?.());
+  contenido.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && entrada.onClick) {
+      e.preventDefault();
+      entrada.onClick();
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -270,6 +313,9 @@ function Controlador({
   const reducirMovimientoRef = useRef(false);
   const programaticoRef = useRef(false);
   const timerProgramaticoRef = useRef<number | null>(null);
+  /** Hay un encuadre (`fitBounds`) recién pedido cuyo zoom aún hay que limitar a `ZOOM_MAXIMO_ENCUADRE`. */
+  const limitarZoomRef = useRef(false);
+  const timerLimiteZoomRef = useRef<number | null>(null);
 
   const rutasRef = useRef(new Map<string, EntradaRuta>());
   const zonasRef = useRef(new Map<string, EntradaZona>());
@@ -287,6 +333,14 @@ function Controlador({
       programaticoRef.current = false;
       timerProgramaticoRef.current = null;
     }, TIMEOUT_PROGRAMATICO_MS);
+  }, []);
+
+  const cancelarLimiteZoom = useCallback(() => {
+    limitarZoomRef.current = false;
+    if (timerLimiteZoomRef.current !== null) {
+      window.clearTimeout(timerLimiteZoomRef.current);
+      timerLimiteZoomRef.current = null;
+    }
   }, []);
 
   // prefers-reduced-motion: los vehículos saltan directo en vez de deslizar.
@@ -322,11 +376,53 @@ function Controlador({
       onListoRef.current();
     };
     const respaldo = window.setTimeout(marcarListo, 3000);
+    // Input DOM del usuario sobre el mapa (captura): se reporta aunque haya una bandera
+    // programática levantada. También cancela cualquier límite de zoom pendiente del encuadre.
+    const div = map.getDiv();
+    const punteros = new Set<number>();
+    const avisarGesto = () => {
+      cancelarLimiteZoom();
+      onUserPanRef.current?.();
+    };
+    const alEntrada = (e: Event) => {
+      const objetivo = e.target instanceof Element ? e.target : null;
+      const enControlGoogle = Boolean(objetivo?.closest('.gm-bundled-control, .gm-control-active'));
+      let gesto: boolean;
+      if (e.type === 'pointerdown') {
+        punteros.add((e as PointerEvent).pointerId);
+        gesto = esGestoUsuarioDeCamara({ tipo: 'pointerdown', punterosActivos: punteros.size, enControlGoogle });
+      } else if (e.type === 'keydown') {
+        const k = e as KeyboardEvent;
+        gesto = esGestoUsuarioDeCamara({
+          tipo: 'keydown',
+          tecla: k.key,
+          modificador: k.ctrlKey || k.metaKey || k.altKey,
+        });
+      } else {
+        gesto = esGestoUsuarioDeCamara({ tipo: e.type === 'wheel' ? 'wheel' : 'dblclick' });
+      }
+      if (gesto) avisarGesto();
+    };
+    const alSoltar = (e: Event) => {
+      punteros.delete((e as PointerEvent).pointerId);
+    };
+    const tiposEntrada = ['wheel', 'dblclick', 'keydown', 'pointerdown'] as const;
+    tiposEntrada.forEach((t) => div.addEventListener(t, alEntrada, { capture: true, passive: true }));
+    div.addEventListener('pointerup', alSoltar, true);
+    div.addEventListener('pointercancel', alSoltar, true);
     const escuchas: google.maps.MapsEventListener[] = [
       map.addListener('idle', () => {
         programaticoRef.current = false;
         const centro = map.getCenter();
         const zoom = map.getZoom();
+        if (limitarZoomRef.current && zoom !== undefined && zoom > ZOOM_MAXIMO_ENCUADRE) {
+          // `fitBounds` de Google no tiene `maxZoom`: se corrige acá, una sola vez, sin tocar
+          // la opción `maxZoom` del mapa (que el usuario necesita para acercarse más después).
+          cancelarLimiteZoom();
+          marcarProgramatico();
+          map.setZoom(ZOOM_MAXIMO_ENCUADRE);
+          return;
+        }
         if (centro && zoom !== undefined) {
           camaraRef.current = { center: { lat: centro.lat(), lng: centro.lng() }, zoom };
         }
@@ -347,8 +443,11 @@ function Controlador({
       cancelado = true;
       window.clearTimeout(respaldo);
       escuchas.forEach((e) => e.remove());
+      tiposEntrada.forEach((t) => div.removeEventListener(t, alEntrada, true));
+      div.removeEventListener('pointerup', alSoltar, true);
+      div.removeEventListener('pointercancel', alSoltar, true);
     };
-  }, [map, camaraRef, actualizarEtiquetasPorZoom]);
+  }, [map, camaraRef, actualizarEtiquetasPorZoom, marcarProgramatico, cancelarLimiteZoom]);
 
   // --- Rutas y zonas ---------------------------------------------------------------------------
 
@@ -376,8 +475,9 @@ function Controlador({
         rafRef.current = null;
       }
       if (timerProgramaticoRef.current !== null) window.clearTimeout(timerProgramaticoRef.current);
+      cancelarLimiteZoom();
     };
-  }, [map]);
+  }, [map, cancelarLimiteZoom]);
 
   useEffect(() => {
     if (!map) return;
@@ -387,7 +487,6 @@ function Controlador({
       .filter((ruta) => ruta.points.length > 1)
       .forEach((ruta: MapRoute, indice) => {
         vivos.add(ruta.id);
-        const visuales = routeVisuals(colorParaMapa(ruta.color, oscuro), oscuro);
         const camino = ruta.points.map((p) => ({ lat: p.lat, lng: p.lng }));
         const etiqueta = ruta.label?.trim() ?? '';
         const firma = [oscuro, ruta.color, ruta.dashed, Boolean(ruta.onClick), etiqueta, indice, firmaPuntos(ruta.points)].join('~');
@@ -395,6 +494,8 @@ function Controlador({
         if (previa?.firma === firma && (!etiqueta || previa.etiqueta || !libMarker)) {
           return;
         }
+        // Los colores (getComputedStyle) se resuelven solo cuando la ruta cambió.
+        const visuales = routeVisuals(colorParaMapa(ruta.color, oscuro), oscuro);
         const clickable = Boolean(ruta.onClick);
         const opcionesLinea: google.maps.PolylineOptions = ruta.dashed
           ? {
@@ -480,10 +581,10 @@ function Controlador({
       if (![zona.lat, zona.lng, zona.radiusMeters].every(Number.isFinite)) return;
       const id = resolvePointId(zona, indice);
       vivos.add(id);
-      const color = colorParaMapa(zona.color, oscuro);
       const firma = [oscuro, zona.color, zona.lat, zona.lng, zona.radiusMeters, Boolean(zona.onClick)].join('~');
       const previa = existentes.get(id);
       if (previa?.firma === firma) return;
+      const color = colorParaMapa(zona.color, oscuro);
       const entrada = previa ?? { circulo: new google.maps.Circle({ map, zIndex: 0 }), firma: '' };
       if (!previa) {
         entrada.circulo.addListener('click', () => {
@@ -553,7 +654,8 @@ function Controlador({
     if (!map || !libMarker) return;
     const entradas = puntosRef.current;
     const ahora = performance.now();
-    const duracionMs = animatedRef.current?.intervalMs ?? DURACION_INTERPOLACION_MS;
+    // ~1 s como máximo (plan: `min(1000, intervalo)`): repartirlo en todo el poll es retraso añadido.
+    const duracionMs = duracionInterpolacion(animatedRef.current?.intervalMs);
     const vivos = new Set<string>();
 
     const items: Array<{ punto: MapPoint; tipo: 'stop' | 'marker'; indice: number; rol: 'start' | 'end' | 'stop' | 'marker' }> = [
@@ -589,7 +691,7 @@ function Controlador({
       const zIndex = esVehiculo ? 1000 : tipo === 'marker' ? 200 : 100;
 
       if (!previa) {
-        const contenido = esVehiculo ? crearElementoVehiculo(punto) : crearElementoPunto(punto, tipo, rol, id);
+        const contenido = esVehiculo ? crearElementoVehiculo(punto) : crearElementoPunto(punto, tipo, rol, id, oscuro);
         const entrada: EntradaPunto = {
           id,
           marker: new libMarker.AdvancedMarkerElement({ map, position: posicion, content: contenido, zIndex }),
@@ -599,32 +701,27 @@ function Controlador({
           ultima: posicion,
           onClick: punto.onClick,
         };
-        const activar = () => entrada.onClick?.();
-        contenido.addEventListener('click', activar);
-        contenido.addEventListener('keydown', (e) => {
-          if ((e.key === 'Enter' || e.key === ' ') && entrada.onClick) {
-            e.preventDefault();
-            entrada.onClick();
-          }
-        });
-        if (punto.onClick) contenido.classList.add('qv-gmap--clickable');
+        enlazarActivacion(contenido, entrada);
         entradas.set(clave, entrada);
         continue;
       }
 
       previa.onClick = punto.onClick;
       if (previa.firma !== firma) {
-        const contenido = esVehiculo ? crearElementoVehiculo(punto) : crearElementoPunto(punto, tipo, rol, id);
-        contenido.addEventListener('click', () => previa.onClick?.());
-        contenido.addEventListener('keydown', (e) => {
-          if ((e.key === 'Enter' || e.key === ' ') && previa.onClick) {
-            e.preventDefault();
-            previa.onClick();
-          }
-        });
-        if (punto.onClick) contenido.classList.add('qv-gmap--clickable');
+        const anterior = previa.marker.content;
+        const teniaFoco = anterior instanceof HTMLElement && document.activeElement === anterior;
+        const contenido = esVehiculo ? crearElementoVehiculo(punto) : crearElementoPunto(punto, tipo, rol, id, oscuro);
+        enlazarActivacion(contenido, previa);
         previa.marker.content = contenido;
         previa.firma = firma;
+        // El contenido se reemplaza entero: si el viejo tenía el foco del teclado, pasa al nuevo
+        // (si no, el foco se perdería en cada cambio de estado del vehículo).
+        if (teniaFoco && contenido.tabIndex >= 0) {
+          contenido.focus({ preventScroll: true });
+          if (document.activeElement !== contenido) {
+            requestAnimationFrame(() => contenido.focus({ preventScroll: true }));
+          }
+        }
         // Si cambió el pinType (pin <-> vehículo) el marcador pasa a ser/dejar de ser animado:
         // se actualiza la bandera y el zIndex, y la interpolación arranca desde la posición actual.
         if (previa.esVehiculo !== esVehiculo) {
@@ -686,8 +783,13 @@ function Controlador({
       ),
     [routes, markers, stops, zones],
   );
-  const firmaLimites = puntosVisibles.map((p) => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`).join('|');
-  const hayPuntos = firmaLimites !== '';
+  // La firma O(N) solo hace falta en 'auto' (reencuadra al cambiar el conjunto); 'once' y 'off'
+  // solo necesitan saber si hay puntos.
+  const firmaLimites = useMemo(
+    () => (fitMode === 'auto' ? firmaPuntos(puntosVisibles) : ''),
+    [fitMode, puntosVisibles],
+  );
+  const hayPuntos = puntosVisibles.length > 0;
 
   useEffect(() => {
     const persistente = encuadreRef.current;
@@ -718,11 +820,23 @@ function Controlador({
     }
     const limites = new google.maps.LatLngBounds();
     puntosVisibles.forEach((p) => limites.extend({ lat: p.lat, lng: p.lng }));
-    // `fitBounds` de Google no tiene `maxZoom`: se limita con la opción del mapa mientras dura el
-    // encuadre y se libera en el siguiente `idle`.
-    map.setOptions({ maxZoom: ZOOM_MAXIMO_ENCUADRE });
+    // `fitBounds` de Google no tiene `maxZoom`. En vez de fijar la opción `maxZoom` del mapa (que
+    // quedaría puesta si el encuadre no mueve la cámara y no llega ningún `idle`), se pide un
+    // límite pendiente: el `idle` que sigue lo aplica (setZoom) y un timeout lo descarta, así
+    // nunca queda un tope persistente ni se interpone con un zoom posterior del usuario.
+    limitarZoomRef.current = true;
+    if (timerLimiteZoomRef.current !== null) window.clearTimeout(timerLimiteZoomRef.current);
+    timerLimiteZoomRef.current = window.setTimeout(() => {
+      timerLimiteZoomRef.current = null;
+      if (!limitarZoomRef.current) return;
+      limitarZoomRef.current = false;
+      const zoomActual = map.getZoom();
+      if (zoomActual !== undefined && zoomActual > ZOOM_MAXIMO_ENCUADRE) {
+        marcarProgramatico();
+        map.setZoom(ZOOM_MAXIMO_ENCUADRE);
+      }
+    }, TIMEOUT_PROGRAMATICO_MS);
     map.fitBounds(limites, PADDING_ENCUADRE_PX);
-    google.maps.event.addListenerOnce(map, 'idle', () => map.setOptions({ maxZoom: null }));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- solo cuando cambian firma/clave/modo
   }, [map, listo, firmaLimites, fitKey, fitMode]);
 
@@ -765,11 +879,16 @@ function Controlador({
 // Componente público del motor
 // ---------------------------------------------------------------------------------------------
 
-function MensajeMapa({ titulo, detalle }: { titulo: string; detalle: string }) {
+function MensajeMapa({ titulo, detalle, onReintentar }: { titulo: string; detalle: string; onReintentar?: () => void }) {
   return (
     <div className="qv-route-map__loading qv-gmap__mensaje" role="alert">
       <strong>{titulo}</strong>
       <span>{detalle}</span>
+      {onReintentar ? (
+        <Button variant="secondary" size="sm" onClick={onReintentar}>
+          Reintentar
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -786,6 +905,13 @@ export function RouteMap(props: RouteMapProps) {
     unaVez: estadoEncuadreUnaVezInicial(props.fitKey),
     fitMode: props.fitMode ?? 'auto',
   });
+  const alErrorCarga = useCallback(() => setErrorCarga(true), []);
+  const alListo = useCallback(() => setListo(true), []);
+  // "Reintentar" recarga la página. Remontar `APIProvider` con otra `key` NO sirve: el cargador de
+  // `@vis.gl/react-google-maps` es un singleton de módulo, y tras un fallo el nuevo proveedor
+  // vuelve a pedir el script pero nunca pasa a estado LOADED (verificado con Playwright), así que
+  // el mapa no se crea. Una recarga limpia el singleton.
+  const reintentar = useCallback(() => window.location.reload(), []);
 
   // Google invoca `window.gm_authFailure` cuando rechaza la key (referrer no permitido, API no
   // habilitada, facturación). Sin esto el usuario solo vería el cartel genérico de Google.
@@ -803,6 +929,14 @@ export function RouteMap(props: RouteMapProps) {
     setListo(false);
   }, [oscuro]);
 
+  // Sin key no hay mapa: al usuario final no se le muestra el nombre de la variable de entorno
+  // (no puede hacer nada con ella), pero el desarrollador la ve en la consola.
+  useEffect(() => {
+    if (!googleMapsApiKey) {
+      console.error('RouteMap (engine="google"): falta NEXT_PUBLIC_GOOGLE_MAPS_API_KEY en esta instalación.');
+    }
+  }, [googleMapsApiKey]);
+
   const contenedor = (hijos: ReactNode) => (
     <div className={cx('qv-route-map', 'qv-gmap', className)} style={{ height }}>
       {hijos}
@@ -813,7 +947,7 @@ export function RouteMap(props: RouteMapProps) {
     return contenedor(
       <MensajeMapa
         titulo="Mapa no disponible"
-        detalle="Falta la clave de Google Maps (NEXT_PUBLIC_GOOGLE_MAPS_API_KEY) en esta instalación."
+        detalle="Este panel no tiene configurado Google Maps. Avisa al administrador."
       />,
     );
   }
@@ -829,7 +963,12 @@ export function RouteMap(props: RouteMapProps) {
 
   return contenedor(
     <>
-      <APIProvider apiKey={googleMapsApiKey} language="es" onError={() => setErrorCarga(true)}>
+      <APIProvider
+        apiKey={googleMapsApiKey}
+        language="es"
+        libraries={LIBRERIAS_GOOGLE}
+        onError={alErrorCarga}
+      >
         <GoogleMap
           key={oscuro ? 'oscuro' : 'claro'}
           className="qv-route-map__canvas"
@@ -847,7 +986,7 @@ export function RouteMap(props: RouteMapProps) {
           headingInteractionEnabled={false}
           keyboardShortcuts
         >
-          <Controlador {...props} oscuro={oscuro} camaraRef={camaraRef} encuadreRef={encuadreRef} onListo={() => setListo(true)} />
+          <Controlador {...props} oscuro={oscuro} camaraRef={camaraRef} encuadreRef={encuadreRef} onListo={alListo} />
         </GoogleMap>
       </APIProvider>
       {fallo ? (
@@ -858,11 +997,12 @@ export function RouteMap(props: RouteMapProps) {
               ? 'Google Maps rechazó la clave de API (dominio no autorizado, API no habilitada o facturación inactiva). Revisa la configuración de la clave.'
               : 'No se pudo cargar Google Maps. Revisa la conexión e intenta de nuevo.'
           }
+          onReintentar={reintentar}
         />
       ) : (
         (loading || !listo) && (
           <div className="qv-route-map__loading">
-            <Loader label="Cargando mapa..." />
+            <Loader label="Cargando mapa…" />
           </div>
         )
       )}
