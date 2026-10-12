@@ -1,5 +1,6 @@
 import type { StyleProp, ViewStyle } from 'react-native';
 import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
+import type { EstadoPuntoVuelta } from '../operacion/progreso-vuelta';
 import type { EstadoCamara } from './modo-camara';
 import type { EmisorRumbo } from './rumbo-mapa';
 
@@ -14,7 +15,9 @@ export type InsetsNavegacion = { superior: number; inferior: number };
 export interface RouteMapProps {
   paquete: PaqueteDia;
   vehiculo: ContextoOperativoMovil['vehiculo'];
-  proximoPuntoControlId: string | null;
+  /** Estado de cada punto de control por id (`derivarProgreso`, RF-GPS-054): el mapa pinta
+   * verdes los pasados y rojos los omitidos. */
+  estadosPuntosControl: Readonly<Record<string, EstadoPuntoVuelta>>;
   posicionActual: { lat: number; lng: number } | null;
   tracking: boolean;
   /** Modo de cámara y su acción puntual (`modo-camara.ts`). El mapa ejecuta la acción cuando

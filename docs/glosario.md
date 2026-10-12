@@ -21,7 +21,8 @@ Términos del negocio y del sistema, en el sentido en que los usa el código. Si
 | **Paquete del día** | Datos que la app descarga para operar offline: asignación, ruta, paradas y PC | `packages/shared/src/sync/paquete-dia.ts` |
 | **Sesión operativa** | Login activo de un vehículo con su conductor en un dispositivo. **No es el recorrido** | `SesionOperativa` |
 | **Recorrido** | Lo que el conductor inicia y finaliza con los botones de la app. Su estado (`recorridoEstado`) incluye `finalizado` | `plan-ubicacion-fluida.md`, Fase A |
-| **Pasada / vuelta** | Cada paso por un mismo PC dentro de una sesión. Distingue las vueltas de un circuito | `geofence.ts` |
+| **Pasada** | Cada paso por un mismo PC dentro de una sesión (contador por PC). Distingue los pasos repetidos de un circuito | `geofence.ts` |
+| **Vuelta** | Una recorrida del circuito completo: empieza en el primer PC pasado y se cierra cuando el vehículo vuelve a ese mismo PC. No exige haber pasado todos los PC (los no pasados quedan "omitidos"). Es distinta de la **pasada** (por PC) y por ahora solo se cuenta en el móvil ("Vuelta N") | RF-GPS-054, `progreso-vuelta.ts` |
 | **Fix** | Una posición GPS capturada | SDK de GPS |
 | **Heartbeat** | Evento periódico (60 s) del SDK de GPS sin movimiento | `background-geolocation.config.ts` |
 | **Evento** | Observación inmutable del móvil (punto GPS, PC, inicio/fin de recorrido) con `eventId` UUIDv7 del cliente | `packages/shared/src/sync/evento.ts` |

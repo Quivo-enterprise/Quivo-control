@@ -45,6 +45,12 @@ vi.mock('../features/operacion/drenaje-oportunista', () => ({
   intentarDrenarOportunista: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Progreso de la vuelta (RF-GPS-054): su almacén toca SQLite real — se mockea; su lógica se prueba en
+// `progreso-vuelta*.test.ts`.
+vi.mock('../features/operacion/progreso-vuelta-store', () => ({
+  registrarPasoEnVuelta: vi.fn().mockResolvedValue(undefined),
+}));
+
 // REDISEÑO (anuncio de puntos de control): `anuncio-punto-control.ts` importa
 // `expo-notifications`/`expo-speech`, que arrastran el paquete `expo` (su `async-require`
 // referencia el global `__DEV__` de React Native, indefinido bajo vitest/Node) — se mockea

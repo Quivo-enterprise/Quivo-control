@@ -17,6 +17,7 @@ import { quivoColors, quivoFonts, quivoRadius } from '../../shared/theme/quivo-t
 import { formatearDistancia } from './format-distancia';
 import type { FaseControl } from '../jornada/fase-control';
 import { subtituloJornada } from '../jornada/jornada-store-core';
+import type { EstadoPuntoVuelta } from './progreso-vuelta';
 
 const NUMERO_EMERGENCIAS = '911';
 
@@ -51,6 +52,14 @@ export interface NextControlSheetProps {
   jornadaCargando?: boolean;
   nextPointOrder: number | null;
   totalPoints: number;
+  /** Estado de cada punto en el orden ROTADO de la vuelta (inicio primero), para el stepper
+   * (`derivarProgreso`, RF-GPS-054). */
+  estadosPuntos: readonly EstadoPuntoVuelta[];
+  /** Vuelta en curso ("Vuelta N"). */
+  vueltaActual: number;
+  /** Puntos ya pasados / omitidos (en rojo) de la vuelta en curso. */
+  puntosPasados: number;
+  puntosOmitidos: number;
   distanciaMetros: number | null;
   canStart: boolean;
   gpsError: string | null;
@@ -248,7 +257,14 @@ export function NextControlSheet(props: NextControlSheetProps) {
           // Title + Distance on left, Control Number on right
           <View style={styles.headerRow}>
             <View style={styles.headerLeft}>
-              <Text style={styles.title}>Próximo Control</Text>
+              <View style={styles.tituloRow}>
+                <Text style={styles.title}>Próximo Control</Text>
+                {tracking && (
+                  <View style={styles.vueltaPill}>
+                    <Text style={styles.vueltaPillTexto}>Vuelta {props.vueltaActual}</Text>
+                  </View>
+                )}
+              </View>
               <Text style={styles.subtitle}>Se encuentra a {distanceText}</Text>
             </View>
 
@@ -260,12 +276,15 @@ export function NextControlSheet(props: NextControlSheetProps) {
       {/* Puntos restantes Stepper */}
       {!cabeceraJornada && (
         <View style={styles.stepperSection}>
-          <Text style={styles.puntosLabel}>Puntos restantes</Text>
-          <MiniStepper
-            currentOrder={currentControlNumber}
-            totalPoints={props.totalPoints || 6}
-            tracking={tracking}
-          />
+          <Text style={styles.puntosLabel}>
+            {tracking
+              ? `${props.puntosPasados}/${props.totalPoints} puntos`
+              : `${props.totalPoints} puntos`}
+            {tracking && props.puntosOmitidos > 0 ? (
+              <Text style={styles.puntosOmitidos}>{`  ·  ${props.puntosOmitidos} omitidos`}</Text>
+            ) : null}
+          </Text>
+          <MiniStepper estados={props.estadosPuntos} tracking={tracking} />
         </View>
       )}
 
@@ -357,36 +376,30 @@ export function NextControlSheet(props: NextControlSheetProps) {
 }
 
 function MiniStepper({
-  currentOrder,
-  totalPoints,
+  estados,
   tracking,
 }: {
-  currentOrder: number;
-  totalPoints: number;
+  estados: readonly EstadoPuntoVuelta[];
   tracking: boolean;
 }) {
-  // Antes esto forzaba el conteo a estar entre 6 y 8 puntitos sin importar cuántos puntos de
-  // control tenía la ruta real — se veían bien en rutas de 6-8 puntos por pura coincidencia,
-  // pero mostraban un número equivocado en cualquier otra ruta. El conteo real es
-  // `props.totalPoints` (`puntosControl.length`, ver `operation-screen.tsx`); acá solo se
-  // evita renderizar cero puntitos si por algún motivo llega 0.
-  const count = Math.max(totalPoints, 1);
-  const zeroBased = Math.max(0, currentOrder - 1);
-  const dots = [];
-
-  for (let i = 0; i < count; i++) {
-    const isCompleted = tracking && i < zeroBased;
-    const isCurrent = tracking && i === zeroBased;
-    dots.push(
+  // Un puntito por punto de control REAL de la ruta, en el orden rotado de la vuelta (el punto
+  // donde arrancó va primero). Sin recorrido en curso todos se ven pendientes (ruta "virgen").
+  // Con rutas largas los puntitos pasan a otra fila (`flexWrap`) en vez de salirse del sheet.
+  const dots = estados.map((estado, i) => {
+    const efectivo = tracking ? estado : 'pendiente';
+    return (
       <View
         key={i}
         style={[
           styles.stepperDot,
-          isCompleted || isCurrent ? styles.stepperDotActive : styles.stepperDotInactive,
+          efectivo === 'pasado' && styles.stepperDotPasado,
+          efectivo === 'omitido' && styles.stepperDotOmitido,
+          efectivo === 'proximo' && styles.stepperDotProximo,
+          efectivo === 'pendiente' && styles.stepperDotInactive,
         ]}
       />
     );
-  }
+  });
 
   return <View style={styles.stepperContainer}>{dots}</View>;
 }
@@ -461,18 +474,51 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     marginBottom: 6,
   },
-  stepperContainer: {
+  tituloRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
+  },
+  vueltaPill: {
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
+    borderRadius: quivoRadius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  vueltaPillTexto: {
+    color: quivoColors.white,
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 11.5,
+  },
+  puntosOmitidos: {
+    color: '#FF8A96',
+    fontFamily: quivoFonts.bodySemiBold,
+  },
+  stepperContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    columnGap: 6,
+    rowGap: 6,
   },
   stepperDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
   },
-  stepperDotActive: {
+  stepperDotPasado: {
     backgroundColor: '#22C55E',
+  },
+  // Rojo más claro que el del mapa (#C53B4A): sobre el índigo del sheet el otro casi no contrasta.
+  stepperDotOmitido: {
+    backgroundColor: '#FF5C6C',
+  },
+  // Próximo punto: blanco y más grande, el único que "pesa" entre los puntitos.
+  stepperDotProximo: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: quivoColors.white,
   },
   stepperDotInactive: {
     backgroundColor: 'rgba(255, 255, 255, 0.10)',

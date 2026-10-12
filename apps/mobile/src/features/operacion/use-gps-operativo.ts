@@ -54,6 +54,8 @@ import {
   reiniciarEstadoInicioRecorrido,
 } from './inicio-recorrido-retry';
 import { resolverResultadoIniciar } from './resultado-iniciar-recorrido';
+import { claveProgresoVuelta, fechaLocal } from './progreso-vuelta';
+import { reiniciarVueltaEnCurso } from './progreso-vuelta-store';
 import {
   AUTORIZACION_DENEGADA,
   AUTORIZACION_NO_DETERMINADA,
@@ -1381,6 +1383,20 @@ export function useGpsOperativo(
       veredictoPublicable.current = true;
       setTracking(true);
       trackingRef.current = true;
+      // RF-GPS-054: arranca un recorrido NUEVO (flanco de inicio real: este camino no corre en el
+      // re-enganche de una pantalla que ya estaba rastreando) — la vuelta en curso empieza de
+      // cero; el conteo de vueltas del día se conserva. Best-effort: nunca rechaza el progreso,
+      // pero abrir el outbox sí puede fallar y no debe afectar el arranque.
+      try {
+        await reiniciarVueltaEnCurso(
+          await abrirOutbox(),
+          claveProgresoVuelta(sesionId, fechaLocal()),
+        );
+      } catch (error) {
+        Sentry.captureException(error, {
+          tags: { contexto: 'progreso-vuelta', paso: 'reiniciar-al-iniciar' },
+        });
+      }
     } catch (error) {
       // RIESGO 1 (`/codex-debug verify-fix`, corregido en `iniciarSeguimientoContinuo` —
       // `gps/seguimiento-continuo.ts`): este catch YA NO puede dispararse por un fallo de

@@ -80,6 +80,12 @@ vi.mock('../features/operacion/drenaje-oportunista', () => ({
   intentarDrenarOportunista: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Progreso de la vuelta (RF-GPS-054): su almacén toca SQLite real — se mockea; su lógica se prueba en
+// `progreso-vuelta*.test.ts`.
+vi.mock('../features/operacion/progreso-vuelta-store', () => ({
+  registrarPasoEnVuelta: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): `anunciarDeteccionesDelTick`
 // dispara `expo-notifications`/`expo-speech`/`Vibration`, que a su vez importan `react-native`
 // (rompe bajo vitest/Node, ver `anuncio-punto-control.test.ts`) — se mockea el módulo entero

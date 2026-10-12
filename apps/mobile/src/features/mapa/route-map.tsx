@@ -29,9 +29,9 @@ import {
   paddingNavegacion,
 } from './camara';
 import {
+  aspectoPuntoControl,
   colorPuntoControl,
-  esPuntoControlPasado,
-  indiceProximoPuntoControl,
+  type AspectoPuntoControl,
 } from './estado-punto-control';
 import { debeResaltarRutaCalculada, estiloRuta, COLOR_LINEA } from './estilo-ruta';
 import type { ModoCamara, OrientacionCamara } from './modo-camara';
@@ -45,7 +45,7 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  * Semántica visual:
  * - Ruta oscura (#1E1B4B) en espera, naranja (#FE9B0B) en seguimiento activo (`estilo-ruta.ts`).
  * - Puntos de control: círculos azules (#3127B1) con número blanco, verdes (#22C55E) los ya
- *   pasados, solo con `tracking` (`estado-punto-control.ts`).
+ *   pasados y rojos (#C53B4A) los omitidos, solo con `tracking` (`estado-punto-control.ts`).
  * - Resaltado del tramo OSRM (`rutaCalculada`) en naranja, SOLO con `tracking` activo.
  * - Marcador del conductor: posición interpolada del núcleo de movimiento (`movimiento/geo.ts`),
  *   flecha rotada por rumbo, punto sin flecha mientras no hubo ningún rumbo válido todavía
@@ -140,12 +140,12 @@ function PuntoConductor() {
   return <View style={styles.puntoSinFlecha} />;
 }
 
-function MarcadorPuntoControl({ orden, completado }: { orden: number; completado: boolean }) {
+function MarcadorPuntoControl({ orden, aspecto }: { orden: number; aspecto: AspectoPuntoControl }) {
   return (
     <View
       style={[
         styles.puntoControlMarcador,
-        { backgroundColor: colorPuntoControl(completado) },
+        { backgroundColor: colorPuntoControl(aspecto) },
       ]}
     >
       <Text style={styles.puntoControlTexto}>{orden}</Text>
@@ -438,26 +438,26 @@ interface MarcadorPuntoControlItemProps {
   orden: number;
   latitude: number;
   longitude: number;
-  completado: boolean;
+  aspecto: AspectoPuntoControl;
 }
 
 /** Un punto de control individual, memoizado por sus propias props — re-habilita
- * `tracksViewChanges` un frame SOLO cuando `completado` cambia (el punto pasa a verde), igual
+ * `tracksViewChanges` un frame SOLO cuando `aspecto` cambia (el punto pasa a verde o rojo), igual
  * criterio que el marcador del conductor. */
 const MarcadorPuntoControlItem = memo(function MarcadorPuntoControlItem({
   orden,
   latitude,
   longitude,
-  completado,
+  aspecto,
 }: MarcadorPuntoControlItemProps) {
   const [tracksViewChanges, reactivarTracksViewChanges] = useTracksViewChanges();
-  const completadoAnteriorRef = useRef(completado);
+  const aspectoAnteriorRef = useRef(aspecto);
   useEffect(() => {
-    if (completadoAnteriorRef.current !== completado) {
-      completadoAnteriorRef.current = completado;
+    if (aspectoAnteriorRef.current !== aspecto) {
+      aspectoAnteriorRef.current = aspecto;
       reactivarTracksViewChanges();
     }
-  }, [completado, reactivarTracksViewChanges]);
+  }, [aspecto, reactivarTracksViewChanges]);
 
   return (
     <Marker
@@ -465,7 +465,7 @@ const MarcadorPuntoControlItem = memo(function MarcadorPuntoControlItem({
       anchor={{ x: 0.5, y: 0.5 }}
       tracksViewChanges={tracksViewChanges}
     >
-      <MarcadorPuntoControl orden={orden} completado={completado} />
+      <MarcadorPuntoControl orden={orden} aspecto={aspecto} />
     </Marker>
   );
 });
@@ -480,7 +480,7 @@ interface PuntoControlData {
 interface PuntosControlMarcadoresProps {
   puntosControlData: PuntoControlData[];
   tracking: boolean;
-  proximoIdx: number;
+  estadosPuntosControl: RouteMapProps['estadosPuntosControl'];
 }
 
 /** Hallazgo ALTO #2 (perf): memoizado — el `.map()` completo se salta si ninguna de estas
@@ -488,17 +488,17 @@ interface PuntosControlMarcadoresProps {
 const PuntosControlMarcadores = memo(function PuntosControlMarcadores({
   puntosControlData,
   tracking,
-  proximoIdx,
+  estadosPuntosControl,
 }: PuntosControlMarcadoresProps) {
   return (
     <>
-      {puntosControlData.map((pc, idx) => (
+      {puntosControlData.map((pc) => (
         <MarcadorPuntoControlItem
           key={pc.id}
           orden={pc.orden}
           latitude={pc.latitude}
           longitude={pc.longitude}
-          completado={esPuntoControlPasado(idx, proximoIdx, tracking)}
+          aspecto={aspectoPuntoControl(estadosPuntosControl[pc.id], tracking)}
         />
       ))}
     </>
@@ -507,7 +507,7 @@ const PuntosControlMarcadores = memo(function PuntosControlMarcadores({
 
 export function RouteMap({
   paquete,
-  proximoPuntoControlId,
+  estadosPuntosControl,
   posicionActual,
   tracking,
   camara,
@@ -533,15 +533,6 @@ export function RouteMap({
         longitude: pc.coord.coordinates[0],
       })),
     [paquete],
-  );
-
-  const proximoIdx = useMemo(
-    () =>
-      indiceProximoPuntoControl(
-        puntosControlData.map((pc) => pc.id),
-        proximoPuntoControlId,
-      ),
-    [puntosControlData, proximoPuntoControlId],
   );
 
   // Prioriza el store visual y cae al prop `posicionActual` mientras el store no tiene nada.
@@ -876,7 +867,7 @@ export function RouteMap({
         <PuntosControlMarcadores
           puntosControlData={puntosControlData}
           tracking={tracking}
-          proximoIdx={proximoIdx}
+          estadosPuntosControl={estadosPuntosControl}
         />
         <MarcadorConductorAnimado
           posicionMapa={posicionMapa}

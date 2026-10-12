@@ -136,6 +136,16 @@ export const DDL_OUTBOX = `
     actualizado_ts TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS visitas_pendientes_sesion_idx ON visitas_pendientes(sesion_id);
+  -- Progreso de la vuelta en curso (RF-GPS-054) por sesión de login + día local
+  -- (clave = "sesionId:YYYY-MM-DD"): estado JSON de features/operacion/progreso-vuelta.ts.
+  -- Un único escritor (progreso-vuelta-store.ts) lo actualiza con CAS por version desde
+  -- foreground y headless; la UI solo lo lee. Filas sin tocar en 3 días se limpian al escribir.
+  CREATE TABLE IF NOT EXISTS progreso_vuelta (
+    clave TEXT PRIMARY KEY,
+    estado_json TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    actualizado_ms INTEGER NOT NULL
+  );
 `;
 
 interface MigracionColumna {
@@ -437,7 +447,7 @@ function reabrirSoloSiSigueMuerto(dbMuerta: SQLite.SQLiteDatabase): Promise<SQLi
  * con el handle nuevo. Cualquier otro `code` (SQL roto, base cerrada) se propaga tal cual —
  * reintentar no arregla nada ahí.
  */
-async function conReintentoSiHandleMuerto<T>(
+export async function conReintentoSiHandleMuerto<T>(
   db: SQLite.SQLiteDatabase,
   operacion: (db: SQLite.SQLiteDatabase) => Promise<T>,
 ): Promise<T> {

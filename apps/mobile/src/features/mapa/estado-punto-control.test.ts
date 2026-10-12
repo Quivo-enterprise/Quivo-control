@@ -1,56 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import {
+  aspectoPuntoControl,
   COLOR_PUNTO_CONTROL,
   COLOR_PUNTO_CONTROL_COMPLETADO,
+  COLOR_PUNTO_CONTROL_OMITIDO,
   colorPuntoControl,
-  esPuntoControlPasado,
-  indiceProximoPuntoControl,
 } from './estado-punto-control';
 
-const ids = ['a', 'b', 'c'];
-
-describe('indiceProximoPuntoControl', () => {
-  it('devuelve el índice del próximo punto', () => {
-    expect(indiceProximoPuntoControl(ids, 'b')).toBe(1);
+describe('aspectoPuntoControl', () => {
+  it('pasado y omitido se reflejan solo con el recorrido en seguimiento', () => {
+    expect(aspectoPuntoControl('pasado', true)).toBe('pasado');
+    expect(aspectoPuntoControl('omitido', true)).toBe('omitido');
   });
 
-  it('sin próximo (null) o con un id desconocido devuelve -1', () => {
-    expect(indiceProximoPuntoControl(ids, null)).toBe(-1);
-    expect(indiceProximoPuntoControl(ids, 'zzz')).toBe(-1);
-  });
-});
-
-describe('esPuntoControlPasado (isPassed)', () => {
-  it('con el próximo en el segundo punto, el primero queda atrás y los demás no', () => {
-    expect(esPuntoControlPasado(0, 1, true)).toBe(true);
-    expect(esPuntoControlPasado(1, 1, true)).toBe(false);
-    expect(esPuntoControlPasado(2, 1, true)).toBe(false);
+  it('proximo, pendiente o sin estado se ven como pendientes', () => {
+    expect(aspectoPuntoControl('proximo', true)).toBe('pendiente');
+    expect(aspectoPuntoControl('pendiente', true)).toBe('pendiente');
+    expect(aspectoPuntoControl(undefined, true)).toBe('pendiente');
   });
 
-  it('con el próximo en el primer punto ninguno está pasado', () => {
-    expect([0, 1, 2].map((i) => esPuntoControlPasado(i, 0, true))).toEqual([false, false, false]);
-  });
-
-  it('sin próximo conocido (-1) ninguno está pasado', () => {
-    expect([0, 1, 2].map((i) => esPuntoControlPasado(i, -1, true))).toEqual([false, false, false]);
-  });
-
-  it('sin tracking nunca se marca ninguno, aunque el próximo sea el último', () => {
-    expect([0, 1, 2].map((i) => esPuntoControlPasado(i, 2, false))).toEqual([false, false, false]);
-  });
-
-  it('al avanzar el próximo punto se van sumando pasados', () => {
-    const pasados = (proximoIdx: number) =>
-      ids.map((_, i) => esPuntoControlPasado(i, proximoIdx, true)).filter(Boolean).length;
-    expect([0, 1, 2].map(pasados)).toEqual([0, 1, 2]);
+  it('sin tracking la ruta se muestra virgen aunque haya estados', () => {
+    expect(aspectoPuntoControl('pasado', false)).toBe('pendiente');
+    expect(aspectoPuntoControl('omitido', false)).toBe('pendiente');
   });
 });
 
 describe('colorPuntoControl', () => {
-  it('azul pendiente, verde pasado', () => {
-    expect(colorPuntoControl(false)).toBe(COLOR_PUNTO_CONTROL);
-    expect(colorPuntoControl(true)).toBe(COLOR_PUNTO_CONTROL_COMPLETADO);
+  it('azul pendiente, verde pasado, rojo omitido', () => {
+    expect(colorPuntoControl('pendiente')).toBe(COLOR_PUNTO_CONTROL);
+    expect(colorPuntoControl('pasado')).toBe(COLOR_PUNTO_CONTROL_COMPLETADO);
+    expect(colorPuntoControl('omitido')).toBe(COLOR_PUNTO_CONTROL_OMITIDO);
     expect(COLOR_PUNTO_CONTROL).toBe('#3127B1');
     expect(COLOR_PUNTO_CONTROL_COMPLETADO).toBe('#22C55E');
+    expect(COLOR_PUNTO_CONTROL_OMITIDO).toBe('#C53B4A');
   });
 });
