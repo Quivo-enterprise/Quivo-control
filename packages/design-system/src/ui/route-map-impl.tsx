@@ -37,6 +37,12 @@ import type { MapPoint, MapRoute, MapZone } from '../types.js';
 import { Loader } from './primitives.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
 import {
+  encuadreAuto,
+  encuadreUnaVez,
+  estadoEncuadreAutoInicial,
+  estadoEncuadreUnaVezInicial,
+} from './route-map-encuadre.js';
+import {
   avanzarAnimacion,
   encolarNuevosPuntos,
   estadoInicialAnimacion,
@@ -1219,7 +1225,8 @@ export function RouteMap({
   animatedVehicleRef.current = animatedVehicle;
 
   const dragIdRef = useRef<string | null>(null);
-  const fitOnceStateRef = useRef<{ key: string | number | undefined; fired: boolean }>({ key: fitKey, fired: false });
+  const encuadreAutoRef = useRef(estadoEncuadreAutoInicial());
+  const encuadreUnaVezRef = useRef(estadoEncuadreUnaVezInicial(fitKey));
 
   // Estado (mutable, fuera de React) de la animación del marcador de vehículo — ver
   // `vehicle-marker-animation.ts`. `vehicleAnimRef` es la posición visual vigente,
@@ -1569,6 +1576,8 @@ export function RouteMap({
   ]
     .map((point) => `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`)
     .join('|');
+  // Hay al menos un punto (ruta, marcador, parada o zona): la firma solo queda vacía sin puntos.
+  const hayPuntos = boundsSignature !== '';
 
   function fitToBounds(maplibre: MapLibreModule, map: MapLibreMap) {
     const points = [...routes.flatMap((route) => route.points), ...markers, ...stops, ...zones];
@@ -1583,35 +1592,40 @@ export function RouteMap({
     map.fitBounds(bounds, { padding: 32, maxZoom: 17, duration: 0 });
   }
 
-  // `fitMode='auto'` — reencuadra cada vez que cambia el conjunto de puntos visibles.
+  // Encuadre de cámara. La decisión (cuándo sí / cuándo no) vive en `route-map-encuadre.ts`:
+  // - `fitMode='auto'` (`encuadreAuto`) reencuadra cada vez que cambia el conjunto de puntos.
+  // - `fitMode='once'` (`encuadreUnaVez`) encuadra una sola vez (al montar, o de nuevo si cambia
+  //   `fitKey`) en cuanto hay puntos (la traza puede llegar después); los cambios posteriores de
+  //   marcadores no tocan la cámara, así se respeta el zoom del usuario.
+  // - `fitMode='off'` nunca encuadra.
+  const fitModePrevRef = useRef(fitMode);
   useEffect(() => {
+    if (fitModePrevRef.current !== fitMode) {
+      fitModePrevRef.current = fitMode;
+      encuadreAutoRef.current = estadoEncuadreAutoInicial();
+      encuadreUnaVezRef.current = estadoEncuadreUnaVezInicial(fitKey);
+    }
     const map = mapRef.current;
     const maplibre = maplibreRef.current;
-    if (!map || !maplibre || !mapReadyRef.current || fitMode !== 'auto') return;
-    fitToBounds(maplibre, map);
-  }, [boundsSignature, fitMode, mapReady]);
-
-  // `fitMode='once'` + `fitKey` — encuadra una sola vez (al montar, o de nuevo si cambia
-  // `fitKey`), con el guard en un ref porque el efecto sigue corriendo mientras no hay puntos
-  // todavía (la traza puede llegar después) y necesita poder disparar en cuanto aparezcan.
-  useEffect(() => {
-    const map = mapRef.current;
-    const maplibre = maplibreRef.current;
-    if (!map || !maplibre || !mapReadyRef.current || fitMode !== 'once') return;
-    if (fitOnceStateRef.current.key !== fitKey) fitOnceStateRef.current = { key: fitKey, fired: false };
-    if (fitOnceStateRef.current.fired) return;
-    const hasPoints = routes.some((r) => r.points.length > 0) || markers.length > 0 || stops.length > 0 || zones.length > 0;
-    if (!hasPoints) return;
-    fitOnceStateRef.current.fired = true;
-    fitToBounds(maplibre, map);
+    if (!map || !maplibre || !mapReadyRef.current || fitMode === 'off') return;
+    let encuadrar: boolean;
+    if (fitMode === 'auto') {
+      const decision = encuadreAuto({ firma: boundsSignature, hayPuntos, estado: encuadreAutoRef.current });
+      encuadreAutoRef.current = decision.estado;
+      encuadrar = decision.encuadrar;
+    } else {
+      const decision = encuadreUnaVez({ fitKey, hayPuntos, estado: encuadreUnaVezRef.current });
+      encuadreUnaVezRef.current = decision.estado;
+      encuadrar = decision.encuadrar;
+    }
+    if (encuadrar) fitToBounds(maplibre, map);
   }, [boundsSignature, fitKey, fitMode, mapReady]);
 
   // Centra en `defaultCenter`/`defaultZoom` solo mientras no hay ningún punto todavía.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReadyRef.current || !defaultCenter) return;
-    const hasPoints = routes.some((r) => r.points.length > 0) || markers.length > 0 || stops.length > 0 || zones.length > 0;
-    if (hasPoints) return;
+    if (hayPuntos) return;
     map.jumpTo({ center: [defaultCenter[1], defaultCenter[0]], zoom: defaultZoom ?? DEFAULT_ZOOM });
   }, [defaultCenter?.[0], defaultCenter?.[1], defaultZoom, mapReady]);
 
