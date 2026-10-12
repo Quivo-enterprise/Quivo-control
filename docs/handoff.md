@@ -12,18 +12,25 @@ El CTO vio /en-vivo desde el teléfono manejando: la web iba atrasada, el zoom s
 actualización y pidió Google Maps (el panel usa **MapLibre**, no Leaflet). Plan aprobado:
 [`docs/plan-en-vivo-google.md`](plan-en-vivo-google.md) — PR 1 zoom (`fitMode` caía en `'auto'`),
 PR 2 latencia (poll 2 s web + piso de drenado 3 s móvil, APK 15), PR 3 motor Google + /en-vivo,
-PR 4..N resto del panel y borrar MapLibre. **Estado: PR 1 y PR 2 en `main`; PR 3 bloqueado por la API key.**
+PR 4..N resto del panel y borrar MapLibre. **Estado: PR 1, 2 y 3 en `main`; ninguno desplegado. Deploy del panel bloqueado por el Map ID.**
 
 | PR | Qué | Commit |
 |---|---|---|
 | #131 | `/en-vivo` con `fitMode="once"` (encuadra al montar, con Reencuadrar y en flota vacía → con vehículos); mapa siempre montado (loading/error/vacío como overlays; refetch fallido con datos = chip "Sin conexión"); `encuadreAuto`/`encuadreUnaVez` puros con tests (contrato que hereda el motor Google). Verificado en navegador con API mockeada: zoom 18.10 se mantiene tras polls y paneo; en `main` volvía a 15.68. | `7a942d1` |
 | #132 | `/posiciones` cada 2 s; vehículo seleccionado con el último fix de ese poll (`conPuntoVivo`), traza sigue a 10 s; rate limit en vivo: 1000/min/IP pre-auth + 600/min/usuario (guard propio tras `JwtAuthGuard`, contador único por controller); móvil: piso de drenado 3 s, backoff de fallo desde 10 s (**sale en APK 15**). | `27028fe` |
+| #134 | Motor Google Maps (`@vis.gl/react-google-maps` 1.10.1) en `route-map-google.tsx` con el mismo `RouteMapProps`; `RouteMap` gana `engine` (default `'maplibre'`) y solo `/en-vivo` usa `engine="google"`. Interpolación de todos los vehículos (≤1 s, reduced-motion), encuadre/follow/`onUserPan` (gestos detectados por DOM, `esGestoUsuarioDeCamara`), cámara preservada al cambiar tema, markers accesibles (role/foco/aria con frescura, área táctil ≥44 px), mensajes sin key/auth/carga con "Reintentar" (recarga: el loader de vis.gl es singleton). Helpers puros con tests: `route-map-shared/interpolacion/proyeccion/gestos.ts`. Deploy: key desde Secret Manager `google-maps-web-key`, Map ID desde env `GOOGLE_MAPS_MAP_ID`, validados en el preflight del Paso 0 (antes de migraciones/API). | `07389bf` |
 
-**Gates:** `/code-review` en ambos con hallazgos aplicados (#132: 2 rondas — pre-auth sin límite, cupo ×4 por handler, carga de traza a 2 s). `/codex-debug verify-fix` **no corrió** en #131 (límite de Codex). **#132 se mergeó con el CI todavía en curso** (error de proceso del chairman: el gate leía la salida de `tail`, no el exit code); el run terminó verde (`ci` + `acceptance`) después del merge.
+**Gates:** `/code-review` en ambos con hallazgos aplicados (#132: 2 rondas — pre-auth sin límite, cupo ×4 por handler, carga de traza a 2 s). `/codex-debug verify-fix` **no corrió** en #131 (límite de Codex). **#132 se mergeó con el CI todavía en curso** (error de proceso del chairman: el gate leía la salida de `tail`, no el exit code); el run terminó verde (`ci` + `acceptance`) después del merge. #134: revisor Codex durante la implementación (6 hallazgos), `/code-review` (10) y `web-design-guidelines` (10), todos aplicados; CI verde antes del merge (gate por exit code).
 
-**NO verificado:** latencia real en calle y costo de batería del drenado cada 3 s (APK 15); API y web aún no desplegadas a Cloud Run.
+**Infra Google Maps (2026-10-12):** API `maps-backend.googleapis.com` habilitada en `quivo-control-prod`; key de navegador `quivo-web-maps` (referrers: los dos `quivo-web-*.run.app` + `localhost:3000`, solo Maps JS) creada por el CTO; secreto `google-maps-web-key` (v1) creado por el chairman. Local: `apps/web/.env.local` (gitignored) con la key + `DEMO_MAP_ID`; el dev server tiene que correr en el puerto 3000 por el referrer.
 
-**Siguiente:** PR 3 (motor Google). Falta: OK del CTO para `gcloud services enable maps-backend.googleapis.com` + `gcloud services api-keys create` (referrers: los dos dominios `quivo-web-*.run.app` + `localhost:3000`) y el **Map ID** creado en consola (no hay CLI).
+**NO verificado:** latencia real en calle y costo de batería del drenado cada 3 s (APK 15); API y web aún no desplegadas a Cloud Run; #134: pellizco en teléfono real, foco/hover visual, `deploy-gcp.sh` solo `bash -n`.
+
+**Siguiente:**
+1. CTO crea el **Map ID** en consola (Map Management → JavaScript → Vector, `quivo-web`; no hay CLI). Recomendado: en su estilo ocultar POIs de comercios — en los screenshots tapan los vehículos.
+2. Deploy API + web (#131, #132, #134) con `GOOGLE_MAPS_MAP_ID=<id> scripts/deploy-gcp.sh` (sin el Map ID el preflight corta antes de tocar nada).
+3. APK 15 (drenado 3 s) — changelog al CTO antes del build. Prueba en calle: latencia, batería, `/en-vivo` en el teléfono.
+4. PR 4..N: `reportes/recorridos/[id]` → reglas/vehículos/líneas → editor de rutas (necesita drag + pulse en Google) → borrar MapLibre. Limitaciones actuales del motor Google: sin `draggable`, sin `line-offset` entre rutas paralelas, label de ruta en el punto medio, `pulse` estático.
 
 ## Punto de retome — 2026-10-11, noche (anterior): prueba de campo del APK r13
 
