@@ -2614,6 +2614,158 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   border-radius: 3px;
 }
 
+/* ---- Vehículo con foto, anillo de línea y alerta por infracción (PR E, docs/plan-en-vivo-alertas.md) ----
+   Raíz de 44 px con foto (40 px con sprite). El anillo es un hermano absoluto: así el parpadeo
+   solo repinta un borde y no toca la foto. */
+.qv-gmap-veh--foto {
+  width: 44px;
+  height: 44px;
+}
+.qv-gmap-veh__disco {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--qv-surface-soft, #e2e8f0);
+}
+.qv-gmap-veh__foto {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  -webkit-user-drag: none;
+}
+.qv-gmap-veh--perdido .qv-gmap-veh__foto {
+  filter: grayscale(1);
+  opacity: 0.6;
+}
+.qv-gmap-veh--finalizado .qv-gmap-veh__foto {
+  filter: grayscale(1);
+}
+.qv-gmap-veh__anillo {
+  --qv-gmap-veh-anillo: var(--qv-gmap-veh-linea, var(--qv-color-primary));
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border: 3px solid var(--qv-gmap-veh-anillo);
+  border-radius: 50%;
+  /* Contorno oscuro de 1 px por fuera y por dentro: una línea blanca no se pierde contra el mapa. */
+  box-shadow:
+    0 0 0 1px rgb(15 17 26 / 0.85),
+    inset 0 0 0 1px rgb(15 17 26 / 0.35);
+  pointer-events: none;
+}
+.qv-gmap-veh:not(.qv-gmap-veh--foto) .qv-gmap-veh__anillo {
+  inset: -3px;
+}
+
+/* Severidad: tokens de alerta + ícono con FORMA propia por nivel (no solo color). */
+.qv-gmap-veh--alerta-leve {
+  --qv-gmap-veh-sev: var(--qv-alerta-leve);
+  --qv-gmap-veh-periodo: 1600ms;
+}
+.qv-gmap-veh--alerta-grave {
+  --qv-gmap-veh-sev: var(--qv-alerta-grave);
+  --qv-gmap-veh-periodo: 1000ms;
+}
+.qv-gmap-veh--alerta-gravisima {
+  --qv-gmap-veh-sev: var(--qv-alerta-gravisima);
+  --qv-gmap-veh-periodo: 600ms;
+}
+/* Sin parpadeo (atendida o filtro estático): el anillo queda en el color de la severidad. */
+.qv-gmap-veh[class*='--alerta-']:not(.qv-gmap-veh--parpadea) .qv-gmap-veh__anillo {
+  border-color: var(--qv-gmap-veh-sev);
+}
+.qv-gmap-veh--parpadea .qv-gmap-veh__anillo {
+  animation: qv-gmap-veh-parpadeo var(--qv-gmap-veh-periodo, 1000ms) ease-in-out infinite;
+}
+/* Un ciclo completo (línea -> severidad -> línea) dura el periodo: 600 ms = 1,67 Hz, siempre < 3 Hz. */
+@keyframes qv-gmap-veh-parpadeo {
+  0%,
+  100% {
+    border-color: var(--qv-gmap-veh-anillo);
+  }
+  50% {
+    border-color: var(--qv-gmap-veh-sev);
+    box-shadow:
+      0 0 0 1px rgb(15 17 26 / 0.85),
+      inset 0 0 0 1px rgb(15 17 26 / 0.35),
+      0 0 10px 3px var(--qv-gmap-veh-sev);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Estático pero tan visible como el estado "encendido" del parpadeo: mismo color y mismo halo. */
+  .qv-gmap-veh--parpadea .qv-gmap-veh__anillo {
+    animation: none;
+    border-color: var(--qv-gmap-veh-sev);
+    box-shadow:
+      0 0 0 1px rgb(15 17 26 / 0.85),
+      inset 0 0 0 1px rgb(15 17 26 / 0.35),
+      0 0 10px 3px var(--qv-gmap-veh-sev);
+  }
+}
+.qv-gmap-veh__alerta {
+  position: absolute;
+  top: -7px;
+  right: -9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  padding: 0 3px;
+  border-radius: 10px;
+  background: var(--qv-gmap-veh-sev);
+  color: var(--qv-alerta-fg);
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 1px 3px rgb(15 23 42 / 0.45);
+  pointer-events: none;
+}
+.qv-gmap-veh__alerta-icono {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.qv-gmap-veh__alerta-n {
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  padding-right: 2px;
+}
+.qv-gmap-veh__reloj {
+  position: absolute;
+  bottom: -3px;
+  right: -5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #0891b2;
+  color: #fff;
+  box-shadow: 0 0 0 1.5px #fff;
+  pointer-events: none;
+}
+.qv-gmap-veh__reloj-icono {
+  width: 11px;
+  height: 11px;
+}
+/* Seleccionado: halo de marca por fuera del anillo (el z-index lo sube el motor). */
+.qv-gmap-veh--seleccionado::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 2px solid var(--qv-color-primary);
+  box-shadow: 0 0 0 2px #fff;
+  pointer-events: none;
+}
+
 /* =========================================================================
    Live Telemetry & Tracking Map (En Vivo)
    ========================================================================= */
@@ -2745,6 +2897,12 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   box-shadow: var(--qv-shadow-lg);
 }
 
+/* Pila inferior: avisos (`.qv-live-toasts`) sobre el panel del vehículo (`.qv-live-panel`), ambos
+   hijos en flujo de un mismo contenedor anclado abajo-izquierda. No depende de la altura de las
+   columnas del HUD superior (p. ej. la lista expandida de "Jornada de hoy") y, al ser flujo, los
+   avisos nunca se montan sobre el panel. El contenedor no captura punteros (el mapa debajo sigue
+   siendo arrastrable); lo hacen sus hijos. Su altura se acota para no llegar al HUD superior: el
+   panel (con scroll propio) se encoge antes que los avisos. */
 .qv-live-hud-bottom {
   position: absolute;
   bottom: 1.25rem;
@@ -2752,13 +2910,19 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   z-index: 1000;
   max-width: 26rem;
   width: calc(100% - 2.5rem);
-  pointer-events: auto;
+  /* `--qv-hud-top-h` (borde inferior del HUD superior, medido por la página con un
+     ResizeObserver) hace que la pila nunca tape el HUD aunque éste crezca; 9rem es el respaldo. */
+  max-height: calc(100% - var(--qv-hud-top-h, 7.75rem) - 1.25rem - 0.5rem);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  pointer-events: none;
 }
 
 /* Panel "Jornada de hoy" (release 13). Vive dentro de `.qv-live-hud-right`, en flujo debajo de
    los controles. Por debajo de 1180 px el HUD superior se parte en filas: la columna derecha
    pasa a ocupar todo el ancho y el panel con ella. Con el detalle del vehículo abierto
-   (`.qv-live-hud-bottom`) el panel se oculta en ese rango: el detalle es lo que el operador
+   (`.qv-live-panel`) el panel se oculta en ese rango: el detalle es lo que el operador
    acaba de pedir y las cifras vuelven al cerrarlo. */
 .qv-live-hud-jornada {
   width: min(22rem, 100%);
@@ -2797,7 +2961,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     max-height: min(22rem, 40vh);
   }
 
-  .qv-live-map-wrapper:has(.qv-live-hud-bottom) .qv-live-hud-jornada {
+  .qv-live-map-wrapper:has(.qv-live-panel) .qv-live-hud-jornada {
     display: none;
   }
 }
@@ -2816,15 +2980,22 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   transition: all var(--qv-transition-smooth);
 }
 
+/* Pila de avisos: UN contenedor en flujo dentro de `.qv-live-hud-bottom`, encima del panel del
+   vehículo (o sola, abajo-izquierda, sin panel). Los toasts son hijos en flujo, así no se
+   superponen entre sí. Las regiones aria-live viven dentro: están siempre montadas (vacías no
+   ocupan espacio). */
+.qv-live-toasts {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  pointer-events: none;
+}
 .qv-live-toast {
-  /* Centrado y efímero, mismo z-index que el HUD pero montado después (queda encima). Puede
-     cruzarse un instante con el panel "Jornada de hoy" en anchos medianos; se prefiere eso a
-     taparlo permanentemente o mover los toasts a otro borde. */
-  position: absolute;
-  top: 4.5rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
+  position: relative;
+  margin-bottom: 0.4rem;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -2844,11 +3015,627 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 @keyframes qv-toast-in {
   0% {
     opacity: 0;
-    transform: translate(-50%, -10px);
+    transform: translateY(10px);
   }
   100% {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translateY(0);
+  }
+}
+@media (max-width: 720px) {
+  .qv-live-toasts {
+    align-items: stretch;
+  }
+  .qv-live-hud-bottom--panel .qv-live-toasts {
+    margin: 0 0.75rem;
+  }
+  .qv-live-toast {
+    border-radius: var(--qv-radius-lg);
+  }
+}
+
+/* =========================================================================
+   /en-vivo — alertas por infracción y panel unificado del vehículo (PR E,
+   docs/plan-en-vivo-alertas.md). Tokens de severidad: --qv-alerta-* (tokens.css).
+   ========================================================================= */
+
+.qv-live-hud-left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Leyenda + contadores por nivel (filtros) + "Siguiente alerta". */
+.qv-live-alertas {
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+}
+.qv-live-alertas__titulo {
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--qv-text-secondary);
+  padding: 0 0.15rem;
+}
+.qv-live-alertas__vacio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--qv-text-secondary);
+}
+.qv-live-nivel {
+  --qv-nivel: var(--qv-alerta-leve);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  padding: 0.2rem 0.6rem 0.2rem 0.45rem;
+  border-radius: var(--qv-radius-full);
+  border: 1px solid color-mix(in srgb, var(--qv-nivel) 55%, transparent);
+  background: color-mix(in srgb, var(--qv-nivel) 14%, var(--qv-surface-card));
+  color: var(--qv-text-primary);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    background-color var(--qv-transition-fast),
+    border-color var(--qv-transition-fast);
+}
+.qv-live-nivel--gravisima {
+  --qv-nivel: var(--qv-alerta-gravisima);
+}
+.qv-live-nivel--grave {
+  --qv-nivel: var(--qv-alerta-grave);
+}
+.qv-live-nivel svg {
+  flex: none;
+  color: var(--qv-nivel);
+}
+.qv-live-nivel:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--qv-nivel) 26%, var(--qv-surface-card));
+}
+.qv-live-nivel[aria-pressed='true'] {
+  background: var(--qv-nivel);
+  border-color: var(--qv-nivel);
+  color: var(--qv-alerta-fg);
+}
+.qv-live-nivel[aria-pressed='true'] svg {
+  color: currentColor;
+}
+.qv-live-nivel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.qv-live-nivel:focus-visible,
+.qv-live-btn:focus-visible,
+.qv-live-panel__cerrar:focus-visible {
+  outline: 2px solid var(--qv-color-primary);
+  outline-offset: 2px;
+}
+
+/* Botones del HUD y del panel (icono + texto). */
+.qv-live-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.25rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-glass);
+  background: color-mix(in srgb, var(--qv-surface-card) 70%, transparent);
+  color: var(--qv-text-primary);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    background-color var(--qv-transition-fast),
+    border-color var(--qv-transition-fast);
+}
+.qv-live-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--qv-color-primary) 12%, var(--qv-surface-card));
+  border-color: color-mix(in srgb, var(--qv-color-primary) 40%, transparent);
+}
+.qv-live-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.qv-live-btn[aria-pressed='true'] {
+  background: var(--qv-color-primary);
+  border-color: var(--qv-color-primary);
+  color: #fff;
+}
+.qv-live-btn--primario {
+  background: var(--qv-color-primary);
+  border-color: var(--qv-color-primary);
+  color: #fff;
+}
+.qv-live-btn--primario:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--qv-color-primary) 88%, black);
+}
+.qv-live-btn--peligro {
+  color: var(--qv-color-danger);
+}
+.qv-live-btn--sm {
+  min-height: 2rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.6875rem;
+}
+
+/* Panel unificado del vehículo. */
+.qv-live-hud-bottom--panel {
+  max-width: 27rem;
+}
+.qv-live-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  flex: 0 1 auto;
+  min-height: 0;
+  padding: 0.9rem 1rem;
+  pointer-events: auto;
+  background: var(--qv-surface-glass);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid var(--qv-border-glass);
+  border-radius: var(--qv-radius-xl);
+  box-shadow: var(--qv-shadow-floating);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: var(--qv-text-primary);
+}
+.qv-live-panel__cabecera {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+}
+.qv-live-panel__avatar {
+  position: relative;
+  flex: none;
+  width: 3rem;
+  height: 3rem;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 3px solid var(--qv-panel-linea, var(--qv-color-primary));
+  box-shadow: 0 0 0 1px rgb(15 17 26 / 0.7);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--qv-color-primary) 15%, var(--qv-surface-card));
+  color: var(--qv-color-primary);
+}
+.qv-live-panel__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.qv-live-panel__titulos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1;
+}
+.qv-live-panel__fila {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.qv-live-panel__placa {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+.qv-live-panel__placa:focus-visible {
+  outline: 2px solid var(--qv-color-primary);
+  outline-offset: 2px;
+  border-radius: var(--qv-radius-sm);
+}
+.qv-live-panel__linea {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--qv-radius-full);
+  background: var(--qv-panel-linea, var(--qv-color-primary));
+  color: var(--qv-panel-linea-fg, #fff);
+  box-shadow: 0 0 0 1px rgb(15 17 26 / 0.45);
+}
+.qv-live-panel__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--qv-text-secondary);
+}
+.qv-live-panel__frescura {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.qv-live-panel__punto {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.qv-live-panel__tabular {
+  font-variant-numeric: tabular-nums;
+  color: var(--qv-text-secondary);
+  font-weight: 600;
+}
+.qv-live-panel__cerrar {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--qv-radius-md);
+  border: none;
+  background: transparent;
+  color: var(--qv-text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.qv-live-panel__cerrar:hover {
+  background: color-mix(in srgb, var(--qv-surface-card) 60%, transparent);
+  color: var(--qv-text-primary);
+}
+.qv-live-panel__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.qv-live-panel__sin-tel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--qv-text-secondary);
+}
+.qv-live-panel__sin-tel a {
+  color: var(--qv-color-primary);
+  font-weight: 700;
+}
+.qv-live-panel__tel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--qv-text-secondary);
+}
+.qv-live-panel__seccion {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--qv-border-glass);
+}
+.qv-live-panel__h {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--qv-text-secondary);
+}
+.qv-live-panel__plegar-h {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 2rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--qv-text-secondary);
+  cursor: pointer;
+}
+.qv-live-panel__plegar-h:focus-visible {
+  outline: 2px solid var(--qv-color-primary);
+  outline-offset: 2px;
+}
+.qv-live-panel__vacio {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--qv-text-secondary);
+}
+
+/* Lista de infracciones. */
+.qv-live-infracciones {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.qv-live-inf {
+  --qv-nivel: var(--qv-alerta-leve);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-glass);
+  border-left: 4px solid var(--qv-nivel);
+  background: color-mix(in srgb, var(--qv-surface-card) 55%, transparent);
+}
+.qv-live-inf--grave {
+  --qv-nivel: var(--qv-alerta-grave);
+}
+.qv-live-inf--gravisima {
+  --qv-nivel: var(--qv-alerta-gravisima);
+}
+.qv-live-inf--cerrada {
+  opacity: 0.78;
+}
+.qv-live-inf__cab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.qv-live-inf__icono {
+  flex: none;
+  color: var(--qv-nivel);
+}
+.qv-live-inf__titulo {
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+.qv-live-inf__chip {
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.08rem 0.4rem;
+  border-radius: var(--qv-radius-full);
+  background: color-mix(in srgb, var(--qv-nivel) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--qv-nivel) 50%, transparent);
+}
+.qv-live-inf__estado {
+  margin-left: auto;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--qv-text-secondary);
+}
+.qv-live-inf__detalle {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--qv-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.qv-live-inf__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.qv-live-inf__descarte {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.qv-live-inf__input {
+  flex: 1 1 10rem;
+  min-width: 0;
+  min-height: 2rem;
+  box-sizing: border-box;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-border-strong, var(--qv-color-border));
+  background: var(--qv-surface-card);
+  color: var(--qv-text-primary);
+  font: inherit;
+  font-size: 0.75rem;
+}
+.qv-live-inf__input:focus-visible {
+  outline: 2px solid var(--qv-color-primary);
+  outline-offset: 1px;
+}
+.qv-live-panel__error {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--qv-color-danger);
+}
+.qv-live-panel__aviso {
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--qv-radius-md);
+  border: 1px solid var(--qv-color-warning);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--qv-text-primary);
+}
+
+/* Estadísticas y puntos de control (sección plegable). */
+.qv-live-panel__stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+}
+.qv-live-panel__stat {
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--qv-radius-md);
+  background: color-mix(in srgb, var(--qv-surface-card) 50%, transparent);
+}
+.qv-live-panel__stat span {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--qv-text-secondary);
+}
+.qv-live-panel__stat strong {
+  font-size: 0.8125rem;
+}
+.qv-live-panel__pcs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-height: 6rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.qv-live-pcs-cuerpo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.qv-live-pcs-bloque {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+/* Resumen "n / m validados": texto en el color primario (el verde solo va en el ícono). */
+.qv-live-pcs-resumen {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--qv-text-primary);
+}
+.qv-live-pcs-resumen svg {
+  color: var(--qv-color-success);
+}
+.qv-live-pc {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: var(--qv-radius-sm);
+  background-color: color-mix(in srgb, var(--qv-surface-card) 60%, transparent);
+  border: 1px solid var(--qv-border-subtle);
+  font-size: 0.75rem;
+  color: var(--qv-text-primary);
+}
+.qv-live-pc--ok {
+  background-color: color-mix(in srgb, var(--qv-color-success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--qv-color-success) 35%, transparent);
+}
+.qv-live-pc__punto {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background-color: var(--qv-text-muted);
+}
+.qv-live-pc__check {
+  flex: none;
+  color: var(--qv-color-success);
+}
+.qv-live-pc__nombre {
+  font-weight: 600;
+}
+.qv-live-pc__dist {
+  color: var(--qv-text-secondary);
+  font-size: 0.75rem;
+}
+
+/* Marcador "Ver en mapa": un anillo de la severidad bajo el pin de la infracción. */
+@media (prefers-reduced-motion: no-preference) {
+  .qv-live-panel {
+    animation: qv-live-panel-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+@keyframes qv-live-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Móvil: el panel pasa a hoja inferior a todo el ancho. */
+@media (max-width: 720px) {
+  .qv-live-hud-bottom--panel {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: none;
+    /* Hoja pegada abajo (bottom: 0): sin el margen inferior de escritorio. */
+    max-height: calc(100% - var(--qv-hud-top-h, 7.75rem) - 0.5rem);
+  }
+  .qv-live-panel {
+    max-height: min(72vh, 34rem);
+    /* Opaca: los controles de zoom de Google se transparentaban a través del vidrio. */
+    background: var(--qv-surface-card);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-radius: var(--qv-radius-xl) var(--qv-radius-xl) 0 0;
+    padding: 0.5rem 1rem calc(0.9rem + env(safe-area-inset-bottom, 0px));
+    border-bottom: none;
+  }
+  .qv-live-panel::before {
+    content: '';
+    flex: none;
+    align-self: center;
+    width: 2.5rem;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--qv-border-strong, var(--qv-color-border));
+  }
+  .qv-live-btn {
+    min-height: 2.75rem;
+  }
+  .qv-live-btn--sm {
+    min-height: 2.5rem;
+  }
+  .qv-live-nivel {
+    min-height: 2.5rem;
+  }
+  .qv-live-panel__cerrar {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+  .qv-live-panel__plegar-h {
+    min-height: 2.75rem;
+  }
+  /* Contadores en 0: fuera en móvil (salvo el filtro activo) para que "Siguiente alerta" quepa. */
+  .qv-live-nivel:disabled:not([aria-pressed='true']) {
+    display: none;
+  }
+  .qv-live-hud-left {
+    width: 100%;
   }
 }
 

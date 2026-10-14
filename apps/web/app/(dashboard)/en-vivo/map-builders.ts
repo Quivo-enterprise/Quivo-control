@@ -111,6 +111,36 @@ export function idMarcadorVehiculo(sesionId: string): string {
   return `vehiculo:${sesionId}`;
 }
 
+/** Opciones de PR E (`docs/plan-en-vivo-alertas.md`): lo que el marcador necesita además de la posición. */
+export interface OpcionesMarcadoresVehiculos {
+  /** Sesión con el panel abierto: el marcador se resalta y se apila encima. */
+  seleccionadoId?: string | null;
+  /** Color de la línea por `lineaId` (el poll de posiciones no lo trae): anillo del marcador. */
+  colorLineaPorId?: Readonly<Record<string, string | null | undefined>>;
+}
+
+/**
+ * Alerta, foto, color de línea y selección del marcador. `parpadea` = hay infracciones
+ * abiertas: la API cuenta solo las `abierta` (LATERAL de `en-vivo.service.ts`, `estado =
+ * 'abierta'`), así que al "Atender" o descartar, la infracción sale de la cuenta, el nivel
+ * vuelve a `null` y el marcador deja de parpadear en el siguiente poll (el historial queda en
+ * el panel). `fotoUrl` todavía no existe en el contrato (llega con el PR C): se lee de forma
+ * opcional para que el marcador la use apenas la API la mande.
+ */
+function camposAlertaYFoto(p: PosicionEnVivo, opciones: OpcionesMarcadoresVehiculos): Partial<MapPoint> {
+  const abiertas = p.infraccionesAbiertas ?? 0;
+  const foto = (p as PosicionEnVivo & { fotoUrl?: string | null }).fotoUrl;
+  const colorLinea = opciones.colorLineaPorId?.[p.lineaId];
+  return {
+    ...(foto ? { fotoUrl: foto } : {}),
+    ...(colorLinea ? { colorLinea } : {}),
+    ...(p.infraccionNivel && abiertas > 0
+      ? { alerta: { nivel: p.infraccionNivel, abiertas, parpadea: true } }
+      : {}),
+    ...(opciones.seleccionadoId === p.id ? { seleccionado: true } : {}),
+  };
+}
+
 /**
  * ENTREGA 13/14 — TODOS los vehículos con sesión activa/reciente, ya filtrados por línea en
  * `page.tsx` (filtrado client-side, mismo patrón que `vehiculos/page.tsx`). Un vehículo sin
@@ -125,6 +155,7 @@ export function idMarcadorVehiculo(sesionId: string): string {
 export function construirMarcadoresVehiculos(
   posiciones: PosicionEnVivo[],
   onSeleccionar: (sesionId: string) => void,
+  opciones: OpcionesMarcadoresVehiculos = {},
 ): MapPoint[] {
   return posiciones
     .filter((p): p is PosicionEnVivo & { lat: number; lng: number } => p.lat !== null && p.lng !== null)
@@ -145,6 +176,7 @@ export function construirMarcadoresVehiculos(
         pinType: 'vehicle',
         estadoFrescura: p.estadoFrescura,
         placa: p.vehiculoPlaca,
+        ...camposAlertaYFoto(p, opciones),
         onClick: () => onSeleccionar(p.id),
       };
     });

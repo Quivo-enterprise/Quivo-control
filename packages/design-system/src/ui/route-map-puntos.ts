@@ -4,6 +4,7 @@
 // posición. Sin imports de mapas ni de React, así se testea en `node`.
 
 import type { MapPoint } from '../types.js';
+import { alertaVisible } from './route-map-vehiculo.js';
 
 export interface LatLngPlano {
   lat: number;
@@ -39,7 +40,18 @@ export function esInteractivo(
 export function firmaPunto(
   punto: Pick<
     MapPoint,
-    'pinType' | 'color' | 'label' | 'description' | 'estadoFrescura' | 'placa' | 'onClick' | 'draggable' | 'onDragEnd'
+    | 'pinType'
+    | 'color'
+    | 'label'
+    | 'description'
+    | 'estadoFrescura'
+    | 'placa'
+    | 'fotoUrl'
+    | 'colorLinea'
+    | 'alerta'
+    | 'onClick'
+    | 'draggable'
+    | 'onDragEnd'
   >,
   contexto: { oscuro: boolean; tipo: 'stop' | 'marker'; rol: string },
 ): string {
@@ -53,6 +65,12 @@ export function firmaPunto(
     punto.description,
     punto.estadoFrescura,
     punto.placa,
+    punto.fotoUrl,
+    punto.colorLinea,
+    // Solo lo que obliga a rehacer el dibujo: nivel y parpadeo. La cantidad de abiertas y la
+    // selección se actualizan EN el elemento existente (`actualizarVehiculoEnLugar`): recrearlo
+    // por eso recargaría la foto y reiniciaría la animación.
+    alertaVisible(punto.alerta) ? `${punto.alerta.nivel}:${punto.alerta.parpadea}` : '',
     esInteractivo(punto, contexto.tipo),
     esArrastrable(punto, contexto.tipo),
   ].join('~');

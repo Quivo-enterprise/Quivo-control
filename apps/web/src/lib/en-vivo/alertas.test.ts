@@ -1,0 +1,191 @@
+import { describe, expect, it } from 'vitest';
+import type { Infraccion } from '@quivo/shared';
+import {
+  actualizarPrimeraVez,
+  contarPorNivel,
+  detalleInfraccion,
+  duracionInfraccion,
+  filtrarPorNivel,
+  ordenarAlertas,
+  ordenarInfracciones,
+  puedeAtender,
+  puedeDescartar,
+  puedeSancionar,
+  reglaInicialSancion,
+  reglasSancionables,
+  resumenContadores,
+  siguienteAlertaId,
+  telefonoParaWhatsapp,
+  urlLlamada,
+  urlWhatsapp,
+  velocidadKmh,
+} from './alertas';
+
+const pos = (id: string, nivel: 'leve' | 'grave' | 'gravisima' | null, abiertas = nivel ? 1 : 0, placa = id) => ({
+  id,
+  vehiculoPlaca: placa,
+  infraccionNivel: nivel,
+  infraccionesAbiertas: abiertas,
+});
+
+describe('contadores y filtro', () => {
+  const lista = [pos('a', 'gravisima'), pos('b', 'grave'), pos('c', 'grave'), pos('d', 'leve'), pos('e', null), pos('f', 'leve', 0)];
+  it('cuenta vehículos por su nivel máximo y omite abiertas = 0', () => {
+    expect(contarPorNivel(lista)).toEqual({ gravisima: 1, grave: 2, leve: 1 });
+  });
+  it('resumen en español con singular/plural y sin niveles vacíos', () => {
+    expect(resumenContadores({ gravisima: 1, grave: 2, leve: 3 })).toBe('1 gravísima · 2 graves · 3 leves');
+    expect(resumenContadores({ gravisima: 0, grave: 1, leve: 0 })).toBe('1 grave');
+    expect(resumenContadores({ gravisima: 0, grave: 0, leve: 0 })).toBe('');
+  });
+  it('filtra por nivel o no filtra', () => {
+    expect(filtrarPorNivel(lista, 'grave').map((p) => p.id)).toEqual(['b', 'c']);
+    expect(filtrarPorNivel(lista, null)).toHaveLength(lista.length);
+  });
+});
+
+describe('Siguiente alerta', () => {
+  const lista = [pos('l1', 'leve', 1, 'AAA'), pos('g1', 'grave', 1, 'BBB'), pos('x', null), pos('s1', 'gravisima', 1, 'CCC'), pos('g2', 'grave', 1, 'DDD')];
+  it('ordena por severidad desc y, a igual nivel, la que se vio primero', () => {
+    const vistas = new Map([
+      ['g1', 2000],
+      ['g2', 1000],
+    ]);
+    expect(ordenarAlertas(lista, vistas).map((p) => p.id)).toEqual(['s1', 'g2', 'g1', 'l1']);
+  });
+  it('sin dato de antigüedad desempata por placa', () => {
+    expect(ordenarAlertas(lista).map((p) => p.id)).toEqual(['s1', 'g1', 'g2', 'l1']);
+  });
+  it('cicla y arranca por la primera si nada está seleccionado', () => {
+    const o = ordenarAlertas(lista);
+    expect(siguienteAlertaId(o, null)).toBe('s1');
+    expect(siguienteAlertaId(o, 's1')).toBe('g1');
+    expect(siguienteAlertaId(o, 'l1')).toBe('s1');
+    expect(siguienteAlertaId(o, 'x')).toBe('s1');
+    expect(siguienteAlertaId([], null)).toBeNull();
+  });
+});
+
+describe('infracciones del panel', () => {
+  const base = {
+    id: '1',
+    estado: 'abierta',
+    tipo: 'desvio_ruta',
+    detalle: { distanciaMaxM: 180.4 },
+    inicioTs: new Date('2026-10-13T14:00:00Z'),
+    finTs: null,
+  } as unknown as Infraccion;
+  it('detalle de desvío y de PC omitido', () => {
+    expect(detalleInfraccion(base)).toBe('a 180 m de la ruta');
+    const pc = { ...base, tipo: 'pc_omitido', detalle: { puntoControlId: 'p3', orden: 7 } } as unknown as Infraccion;
+    expect(detalleInfraccion(pc, ['p1', 'p2', 'p3'])).toBe('PC 3 omitido');
+    expect(detalleInfraccion(pc)).toBe('PC 8 omitido');
+  });
+  it('duración solo si cerró', () => {
+    expect(duracionInfraccion(base)).toBeNull();
+    expect(duracionInfraccion({ ...base, finTs: new Date('2026-10-13T14:12:00Z') })).toBe('12 min');
+    expect(duracionInfraccion({ ...base, finTs: new Date('2026-10-13T14:00:45Z') })).toBe('45 s');
+  });
+  it('solo el desvío se puede sancionar', () => {
+    expect(puedeSancionar(base)).toBe(true);
+    expect(puedeSancionar({ ...base, estado: 'sancionada' })).toBe(false);
+    expect(puedeSancionar({ ...base, tipo: 'pc_omitido' })).toBe(false);
+  });
+  it('atender solo abiertas; descartar abiertas y atendidas', () => {
+    expect(puedeAtender({ estado: 'abierta' })).toBe(true);
+    expect(puedeAtender({ estado: 'atendida' })).toBe(false);
+    expect(puedeDescartar({ estado: 'abierta' })).toBe(true);
+    expect(puedeDescartar({ estado: 'atendida' })).toBe(true);
+    expect(puedeDescartar({ estado: 'sancionada' })).toBe(false);
+    expect(puedeDescartar({ estado: 'descartada' })).toBe(false);
+  });
+  it('abiertas primero, luego por fecha descendente', () => {
+    const a = { ...base, id: 'a', estado: 'atendida', inicioTs: new Date('2026-10-13T15:00:00Z') } as Infraccion;
+    const b = { ...base, id: 'b' } as Infraccion;
+    const c = { ...base, id: 'c', inicioTs: new Date('2026-10-13T16:00:00Z') } as Infraccion;
+    expect(ordenarInfracciones([a, b, c]).map((i) => i.id)).toEqual(['c', 'b', 'a']);
+  });
+});
+
+describe('actualizarPrimeraVez', () => {
+  const pos = (id: string, nivel: 'leve' | 'grave' | 'gravisima' | null) => ({
+    id,
+    infraccionNivel: nivel,
+    infraccionesAbiertas: nivel ? 1 : 0,
+  });
+  it('anota el primer instante, no lo pisa y olvida las alertas cerradas', () => {
+    const a = actualizarPrimeraVez(new Map(), [pos('a', 'leve'), pos('b', null)], 100);
+    expect([...a]).toEqual([['a', 100]]);
+    const b = actualizarPrimeraVez(a, [pos('a', 'leve'), pos('c', 'grave')], 200);
+    expect(b.get('a')).toBe(100);
+    expect(b.get('c')).toBe(200);
+    const c = actualizarPrimeraVez(b, [pos('c', 'grave')], 300);
+    expect([...c]).toEqual([['c', 200]]);
+  });
+  it('devuelve la misma referencia si no cambió nada', () => {
+    const a = actualizarPrimeraVez(new Map(), [pos('a', 'leve')], 100);
+    expect(actualizarPrimeraVez(a, [pos('a', 'leve')], 999)).toBe(a);
+  });
+  it('alimenta ordenarAlertas: severidad desc y, a igual nivel, la vista primero', () => {
+    const vehiculos = [
+      { ...pos('x', 'grave'), vehiculoPlaca: 'XXX' },
+      { ...pos('y', 'grave'), vehiculoPlaca: 'AAA' },
+      { ...pos('z', 'gravisima'), vehiculoPlaca: 'ZZZ' },
+    ];
+    // `x` se vio antes que `y` (aunque su placa sea posterior).
+    let mapa = actualizarPrimeraVez(new Map(), [vehiculos[0]!], 100);
+    mapa = actualizarPrimeraVez(mapa, vehiculos, 200);
+    expect(ordenarAlertas(vehiculos, mapa).map((v) => v.id)).toEqual(['z', 'x', 'y']);
+  });
+});
+
+describe('reglaInicialSancion', () => {
+  const reglas = [
+    { id: 'r1', tipo: 'otro' },
+    { id: 'r2', tipo: 'desvio_ruta' },
+  ];
+  it('usa la regla de la infracción si sigue activa', () => {
+    expect(reglaInicialSancion({ reglaId: 'r1' }, reglas)).toBe('r1');
+  });
+  it('si no, la regla activa de desvío; sin ninguna, undefined (no se asume la primera)', () => {
+    expect(reglaInicialSancion({ reglaId: null }, reglas)).toBe('r2');
+    expect(reglaInicialSancion({ reglaId: 'inactiva' }, reglas)).toBe('r2');
+    expect(reglaInicialSancion({ reglaId: null }, [{ id: 'r1', tipo: 'otro' }])).toBeUndefined();
+  });
+});
+
+describe('reglasSancionables (sindicato de la infracción)', () => {
+  const ajena = { id: 'rx', tipo: 'desvio_ruta', sindicatoId: 'S2', estado: 'activo' };
+  const propia = { id: 'r2', tipo: 'desvio_ruta', sindicatoId: 'S1', estado: 'activo' };
+  const inactiva = { id: 'r3', tipo: 'desvio_ruta', sindicatoId: 'S1', estado: 'inactivo' };
+  it('descarta reglas de otro sindicato y las inactivas', () => {
+    expect(reglasSancionables([ajena, inactiva, propia], 'S1').map((r) => r.id)).toEqual(['r2']);
+  });
+  it('con una regla de desvío ajena primero, la preselección es la del sindicato propio', () => {
+    const reglas = reglasSancionables([ajena, propia], 'S1');
+    expect(reglaInicialSancion({ reglaId: null }, reglas)).toBe('r2');
+    expect(reglaInicialSancion({ reglaId: 'rx' }, reglas)).toBe('r2');
+  });
+  it('sin regla de desvío propia no hay preselección (nunca la ajena)', () => {
+    expect(reglaInicialSancion({ reglaId: null }, reglasSancionables([ajena], 'S1'))).toBeUndefined();
+  });
+});
+
+describe('velocidad y contacto', () => {
+  it('m/s a km/h', () => {
+    expect(velocidadKmh(10)).toBe(36);
+    expect(velocidadKmh(null)).toBeNull();
+    expect(velocidadKmh(-1)).toBeNull();
+  });
+  it('teléfono boliviano a wa.me y tel:', () => {
+    expect(telefonoParaWhatsapp('7123 4567')).toBe('59171234567');
+    expect(telefonoParaWhatsapp('+591 71234567')).toBe('59171234567');
+    expect(telefonoParaWhatsapp('123')).toBeNull();
+    const url = urlWhatsapp('71234567', { placa: 'ABC123', lineaNombre: 'L16', infraccion: 'Alteración de ruta' });
+    expect(url).toContain('https://wa.me/59171234567?text=');
+    expect(decodeURIComponent(url!)).toContain('ABC123');
+    expect(urlWhatsapp(null, { placa: 'A', lineaNombre: 'B' })).toBeNull();
+    expect(urlLlamada('+591 71234567')).toBe('tel:+59171234567');
+    expect(urlLlamada('')).toBeNull();
+  });
+});

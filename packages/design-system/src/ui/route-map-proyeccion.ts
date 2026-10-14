@@ -39,6 +39,21 @@ function deMundo(x: number, y: number): { lat: number; lng: number } {
   };
 }
 
+/**
+ * Centro de cámara para que `punto` caiga `offsetPx` pixeles POR ENCIMA del centro del contenedor
+ * (positivo = el centro se corre hacia el sur). Sirve cuando una hoja inferior tapa parte del mapa:
+ * con `offsetPx = alturaHoja / 2` el punto queda en el centro de la zona visible. No toca el zoom.
+ */
+export function centroConDesplazamientoY(
+  punto: { lat: number; lng: number },
+  zoom: number,
+  offsetPx: number,
+): { lat: number; lng: number } {
+  if (!offsetPx) return punto;
+  const p = aMundo(punto.lat, punto.lng);
+  return deMundo(p.x, p.y + offsetPx / 2 ** zoom);
+}
+
 /** Tope de la mitra: el vértice nunca se aleja del eje más de `LIMITE_MITRA` veces el offset. */
 const LIMITE_MITRA = 2;
 
