@@ -44,6 +44,17 @@ export function validateRuntimeConfig(): void {
       throw new Error('CORS_ORIGIN no puede usar * en producción');
     }
   }
+  // GCS_MEDIA_BUCKET es opcional (sin ella la media cae a disco local, sólo válido en
+  // desarrollo/tests): si viene, tiene que ser un nombre de bucket válido y no algo como una URL.
+  const bucketMedia = process.env.GCS_MEDIA_BUCKET?.trim();
+  if (bucketMedia && !/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/.test(bucketMedia)) {
+    throw new Error('GCS_MEDIA_BUCKET debe ser un nombre de bucket de GCS válido (no una URL)');
+  }
+  if (!bucketMedia && nodeEnv === 'production') {
+    console.warn(
+      'GCS_MEDIA_BUCKET no está definida en producción: la media se guarda en disco efímero y se pierde al reiniciar.',
+    );
+  }
   const port = Number(process.env.PORT ?? 3001);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error('PORT debe ser un entero entre 1 y 65535');

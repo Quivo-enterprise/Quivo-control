@@ -16,6 +16,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1101.0",
     "@aws-sdk/lib-storage": "^3.1101.0",
+    "@google-cloud/storage": "7.22.0",
     "@nestjs/common": "^11.0.6",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.6",

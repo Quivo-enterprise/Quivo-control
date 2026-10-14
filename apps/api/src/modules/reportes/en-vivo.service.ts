@@ -77,6 +77,8 @@ interface PosicionEnVivoRow {
   // `gps_sesion_resumen` (el estado del recorrido vive en la sesión, no en el resumen GPS).
   recorridoEstado: string | null;
   recorridoEstadoTs: Date | null;
+  // PR C — `vehiculos.fotoUrl` (JOIN directo, sin costo extra de query).
+  fotoUrl: string | null;
 }
 
 interface AgregadosFixRow {
@@ -477,7 +479,7 @@ export class EnVivoService {
       const filas = await tx.$queryRaw<PosicionEnVivoRow[]>`
         SELECT so.id, so.inicio, so.fin, so.estado, so."deviceId",
           so."vehiculoId" AS "vehiculoId", so."conductorId" AS "conductorId",
-          v.placa as "vehiculoPlaca", c.nombre as "conductorNombre",
+          v.placa as "vehiculoPlaca", v."fotoUrl" as "fotoUrl", c.nombre as "conductorNombre",
           l.id as "lineaId", l.nombre as "lineaNombre", ru.sentido as "rutaSentido",
           inf."infraccionesAbiertas", inf."infraccionNivelOrden",
           fix.lat, fix.lng, fix.accuracy, fix.speed,
@@ -539,6 +541,7 @@ export class EnVivoService {
           conductorId: f.conductorId,
           infraccionesAbiertas: f.infraccionesAbiertas ?? 0,
           infraccionNivel: nivelDeOrden(f.infraccionNivelOrden),
+          fotoUrl: f.fotoUrl ?? null,
           activa: f.fin === null && f.estado === 'activa',
           vehiculoPlaca: f.vehiculoPlaca,
           conductorNombre: f.conductorNombre,

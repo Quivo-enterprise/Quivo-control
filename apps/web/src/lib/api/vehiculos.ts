@@ -21,6 +21,8 @@ export const vehiculosApi = {
     ),
   cambiarEstado: (token: string, id: string, data: CambiarEstadoVehiculo) =>
     apiFetch<Vehiculo>(`/vehiculos/${id}/estado`, token, { method: 'PATCH', body: data }),
+  quitarFoto: (token: string, id: string) =>
+    apiFetch<Vehiculo>(`/vehiculos/${id}/foto`, token, { method: 'DELETE' }),
   historialEstados: (token: string, id: string) =>
     apiFetch<HistorialEstadoVehiculo[]>(`/vehiculos/${id}/historial-estados`, token),
 };

@@ -210,9 +210,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   const conductor = contexto?.conductor.nombre ?? posicion?.conductorNombre ?? '';
   const lineaNombre = contexto?.linea.nombre ?? posicion?.lineaNombre ?? '';
   const colorLinea = contexto?.linea.color || undefined;
-  // `fotoUrl` llega en un PR posterior (C).
-  const fotoUrl =
-    (posicion as (PosicionEnVivo & { fotoUrl?: string | null }) | undefined)?.fotoUrl?.trim() || null;
+  const fotoUrl = posicion?.fotoUrl?.trim() || null;
   const telefono = contexto?.conductor.telefono ?? null;
   const kmh = velocidadKmh(posicion?.speed);
   const lista = ordenarInfracciones(infracciones.data ?? []);

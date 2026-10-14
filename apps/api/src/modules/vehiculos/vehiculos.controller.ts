@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Inject,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ActualizarVehiculoSchema,
   CambiarEstadoVehiculoSchema,
@@ -13,6 +24,7 @@ import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { Roles } from '../../common/auth/roles.decorator.js';
 import { RolesGuard } from '../../common/auth/roles.guard.js';
+import { VehiculoFotoService } from './vehiculo-foto.service.js';
 import { VehiculosService } from './vehiculos.service.js';
 
 class CrearVehiculoDto extends createZodDto(CrearVehiculoSchema) {}
@@ -25,7 +37,10 @@ class CambiarEstadoVehiculoDto extends createZodDto(CambiarEstadoVehiculoSchema)
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin_quivo', 'admin_sindicato', 'operador')
 export class VehiculosController {
-  constructor(@Inject(VehiculosService) private readonly vehiculosService: VehiculosService) {}
+  constructor(
+    @Inject(VehiculosService) private readonly vehiculosService: VehiculosService,
+    @Inject(VehiculoFotoService) private readonly fotoService: VehiculoFotoService,
+  ) {}
 
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser) {
@@ -71,5 +86,13 @@ export class VehiculosController {
     @Body() body: ActualizarVehiculoDto,
   ) {
     return this.vehiculosService.actualizar(actor, id, body as ActualizarVehiculo);
+  }
+
+  /** Quita la foto de la unidad (la sube el conductor desde la app). Sin rol `operador`. */
+  @Delete(':id/foto')
+  @Roles('admin_quivo', 'admin_sindicato')
+  @Auditable('vehiculo', 'quitar_foto')
+  quitarFoto(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {
+    return this.fotoService.quitar(actor, id);
   }
 }

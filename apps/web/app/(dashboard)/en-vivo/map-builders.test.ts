@@ -140,7 +140,7 @@ describe('construirMarcadoresVehiculos — PR E (alertas, color de línea, selec
   });
 
   it('usa fotoUrl cuando la API la manda y no inventa una cuando no', () => {
-    const conFoto = { ...posicion({ id: 'a' }), fotoUrl: 'https://x.test/a.jpg' } as PosicionEnVivo;
+    const conFoto = { ...posicion({ id: 'a' }), fotoUrl: 'https://x.test/a.jpg' };
     const [a, b] = construirMarcadoresVehiculos([conFoto, posicion({ id: 'b' })], () => {});
     expect(a!.fotoUrl).toBe('https://x.test/a.jpg');
     expect(b!.fotoUrl).toBeUndefined();

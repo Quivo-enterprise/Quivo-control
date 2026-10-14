@@ -22,24 +22,35 @@ export class MediaController {
 
   @Get('lineas/:filename')
   obtenerLogo(@Param('filename') filename: string, @Res() reply: FastifyReply) {
-    const logo = this.mediaService.obtenerLogoLinea(filename);
+    const logo = this.mediaService.obtenerArchivoLocal('lineas', filename);
     reply
       .header('Cache-Control', 'public, max-age=86400')
       .type(logo.mimeType)
       .send(createReadStream(logo.path));
   }
 
+  /** Solo dev (driver de disco): en producción las fotos se leen directo del bucket. */
+  @Get('vehiculos/:filename')
+  obtenerFotoVehiculo(@Param('filename') filename: string, @Res() reply: FastifyReply) {
+    const foto = this.mediaService.obtenerArchivoLocal('vehiculos', filename);
+    reply
+      .header('Cache-Control', 'public, max-age=86400')
+      .type(foto.mimeType)
+      .send(createReadStream(foto.path));
+  }
+
   @Post('lineas/logo')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin_quivo', 'admin_sindicato', 'operador')
-  subirLogo(
+  async subirLogo(
     @CurrentUser() _actor: AuthenticatedUser,
     @Body() body: UploadLineaLogoDto,
     @Req() request: FastifyRequest,
   ) {
-    const { filename } = this.mediaService.guardarLogoLinea(body as UploadLineaLogo);
+    const { url } = await this.mediaService.guardarLogoLinea(body as UploadLineaLogo);
+    if (/^https?:\/\//i.test(url)) return { url };
     const forwarded = request.headers['x-forwarded-proto'];
     const protocol = typeof forwarded === 'string' ? forwarded.split(',')[0] : request.protocol;
-    return { url: `${protocol}://${request.headers.host}/v1/media/lineas/${filename}` };
+    return { url: `${protocol}://${request.headers.host}${url}` };
   }
 }

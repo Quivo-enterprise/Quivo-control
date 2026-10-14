@@ -14,7 +14,9 @@ import {
   TIPOS_VEHICULO,
   type Vehiculo,
 } from '@quivo/shared';
-import { Bus, Edit3, History, RefreshCcw, Users } from 'lucide-react';
+import { Bus, Edit3, History, RefreshCcw, Trash2, Users } from 'lucide-react';
+import { useState } from 'react';
+import { formatearFechaFoto } from './vehicle-photo';
 import { NOMBRE_ESTADO } from './vehicle-state-modal';
 
 const ESTADO_BADGE_MAP: Record<Vehiculo['estado'], StatusBadgeStatus> = {
@@ -34,6 +36,7 @@ export function VehicleDetailsModal({
   onEdit,
   onChangeState,
   onHistory,
+  onRemovePhoto,
 }: {
   vehicle: Vehiculo | null;
   socioNombre?: string;
@@ -43,8 +46,34 @@ export function VehicleDetailsModal({
   onEdit?: (vehicle: Vehiculo) => void;
   onChangeState?: (vehicle: Vehiculo) => void;
   onHistory?: (vehicle: Vehiculo) => void;
+  /** Solo roles admin: quita la foto subida por el conductor. */
+  onRemovePhoto?: (vehicle: Vehiculo) => Promise<void>;
 }) {
+  const [confirmando, setConfirmando] = useState(false);
+  const [quitando, setQuitando] = useState(false);
+  const [errorFoto, setErrorFoto] = useState<string | null>(null);
+  const [fotoRota, setFotoRota] = useState<string | null>(null);
   if (!vehicle) return null;
+
+  async function quitarFoto(target: Vehiculo) {
+    if (!onRemovePhoto) return;
+    setQuitando(true);
+    setErrorFoto(null);
+    try {
+      await onRemovePhoto(target);
+      setConfirmando(false);
+    } catch (error: unknown) {
+      setErrorFoto(error instanceof Error ? error.message : 'No se pudo quitar la foto.');
+    } finally {
+      setQuitando(false);
+    }
+  }
+  const fotoUrl = vehicle.fotoUrl?.trim() || null;
+  function cerrar() {
+    setConfirmando(false);
+    setErrorFoto(null);
+    onClose();
+  }
 
   const colorData = COLORES_VEHICULO.find((c) => c.codigo === vehicle.color);
   const colorSecundarioData = COLORES_VEHICULO.find((c) => c.codigo === vehicle.colorSecundario);
@@ -56,7 +85,7 @@ export function VehicleDetailsModal({
       title="Ficha Técnica del Vehículo"
       description={`Consulta de registro y especificaciones de la unidad ${vehicle.placaNormalizada}`}
       className="qv-modal--wide"
-      onClose={onClose}
+      onClose={cerrar}
       footer={
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -65,7 +94,7 @@ export function VehicleDetailsModal({
                 variant="secondary"
                 size="sm"
                 onClick={() => {
-                  onClose();
+                  cerrar();
                   onHistory(vehicle);
                 }}
               >
@@ -78,7 +107,7 @@ export function VehicleDetailsModal({
                 variant="secondary"
                 size="sm"
                 onClick={() => {
-                  onClose();
+                  cerrar();
                   onChangeState(vehicle);
                 }}
               >
@@ -88,14 +117,14 @@ export function VehicleDetailsModal({
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Button variant="ghost" onClick={onClose}>
+            <Button variant="ghost" onClick={cerrar}>
               Cerrar
             </Button>
             {onEdit && (
               <Button
                 variant="primary"
                 onClick={() => {
-                  onClose();
+                  cerrar();
                   onEdit(vehicle);
                 }}
               >
@@ -115,6 +144,75 @@ export function VehicleDetailsModal({
           alignItems: 'start',
         }}
       >
+        <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '0.85rem', alignItems: 'center' }}>
+            <div
+              style={{
+                width: '9rem',
+                height: '6.75rem',
+                borderRadius: 'var(--qv-radius-md)',
+                overflow: 'hidden',
+                border: '1px solid var(--qv-border-glass)',
+                background: 'var(--qv-surface-soft)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              {fotoUrl && fotoRota !== fotoUrl ? (
+                <img
+                  src={fotoUrl}
+                  alt={`Foto del vehículo ${vehicle.placa}`}
+                  width={144}
+                  height={108}
+                  loading="lazy"
+                  decoding="async"
+                  style={{ objectFit: 'cover', width: '100%', height: '100%' }}
+                  onError={() => setFotoRota(fotoUrl)}
+                />
+              ) : (
+                <Bus size={32} style={{ color: 'var(--qv-text-muted)' }} aria-hidden="true" />
+              )}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', minWidth: 0 }}>
+              {fotoUrl && vehicle.fotoActualizadaEn ? (
+                <small style={{ color: 'var(--qv-text-secondary)', fontSize: '0.75rem' }}>
+                  Subida el {formatearFechaFoto(vehicle.fotoActualizadaEn)}
+                  {vehicle.fotoSubidaPor ? ` por ${vehicle.fotoSubidaPor.nombre}` : ''}
+                </small>
+              ) : (
+                <small style={{ color: 'var(--qv-text-muted)', fontSize: '0.75rem' }}>
+                  El conductor aún no subió una foto de la unidad.
+                </small>
+              )}
+              {fotoUrl && onRemovePhoto &&
+                (confirmando ? (
+                  <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--qv-text-primary)' }}>
+                      ¿Quitar la foto de esta unidad?
+                    </span>
+                    <Button variant="danger" size="sm" disabled={quitando} onClick={() => void quitarFoto(vehicle)}>
+                      {quitando ? 'Quitando...' : 'Sí, quitar'}
+                    </Button>
+                    <Button variant="ghost" size="sm" disabled={quitando} onClick={() => setConfirmando(false)}>
+                      Cancelar
+                    </Button>
+                  </div>
+                ) : (
+                  <div>
+                    <Button variant="secondary" size="sm" onClick={() => setConfirmando(true)}>
+                      <Trash2 size={14} style={{ marginRight: '0.35rem' }} />
+                      Quitar foto
+                    </Button>
+                  </div>
+                ))}
+              {errorFoto && (
+                <small role="alert" style={{ color: 'var(--qv-color-danger)', fontSize: '0.75rem' }}>
+                  {errorFoto}
+                </small>
+              )}
+            </div>
+          </div>
         {/* Columna Izquierda: Identificación, Placa y Operación */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
           {/* Cabecera con Placa y Estado */}

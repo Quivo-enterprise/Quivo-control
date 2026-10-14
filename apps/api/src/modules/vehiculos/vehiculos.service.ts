@@ -36,6 +36,11 @@ const TRANSICIONES_VALIDAS: Record<EstadoVehiculo, EstadoVehiculo[]> = {
 
 const CONTEXTO_ADMIN = { rol: 'admin_quivo', sindicatoId: null } as const;
 
+/** PR C — quién subió la foto vigente (`{id, nombre}`), para las respuestas de lista/detalle. */
+export const INCLUDE_FOTO_SUBIDA_POR = {
+  fotoSubidaPor: { select: { id: true, nombre: true } },
+} as const;
+
 @Injectable()
 export class VehiculosService {
   private readonly logger = new Logger(VehiculosService.name);
@@ -45,6 +50,7 @@ export class VehiculosService {
       tx.vehiculo.findMany({
         where: actor.sindicatoId ? { sindicatoId: actor.sindicatoId } : undefined,
         orderBy: { placa: 'asc' },
+        include: INCLUDE_FOTO_SUBIDA_POR,
       }),
     );
     // QUI-366: una fila con datos corruptos/placeholder (ej. el vehículo piloto con
@@ -55,7 +61,7 @@ export class VehiculosService {
 
   async obtener(actor: AuthenticatedUser, id: string): Promise<Vehiculo> {
     const vehiculo = await withTenantContext(toTenantContext(actor), (tx) =>
-      tx.vehiculo.findUnique({ where: { id } }),
+      tx.vehiculo.findUnique({ where: { id }, include: INCLUDE_FOTO_SUBIDA_POR }),
     );
     if (!vehiculo) {
       throw new NotFoundException('Vehículo no encontrado');
@@ -177,7 +183,11 @@ export class VehiculosService {
         if (anterior.estado === 'activo') {
           validarRequisitosActivacion({ ...anterior, ...cambios });
         }
-        return tx.vehiculo.update({ where: { id }, data: cambios });
+        return tx.vehiculo.update({
+          where: { id },
+          data: cambios,
+          include: INCLUDE_FOTO_SUBIDA_POR,
+        });
       });
       return toVehiculo(vehiculo);
     } catch (error: unknown) {
@@ -205,7 +215,10 @@ export class VehiculosService {
     let sindicatoIdAnterior: string | undefined;
     try {
       const vehiculo = await withTenantContext(toTenantContext(actor), async (tx) => {
-        const anterior = await tx.vehiculo.findUnique({ where: { id } });
+        const anterior = await tx.vehiculo.findUnique({
+          where: { id },
+          include: INCLUDE_FOTO_SUBIDA_POR,
+        });
         if (!anterior) {
           throw new NotFoundException('Vehículo no encontrado');
         }
@@ -227,6 +240,7 @@ export class VehiculosService {
         const actualizado = await tx.vehiculo.update({
           where: { id },
           data: { estado: data.estado },
+          include: INCLUDE_FOTO_SUBIDA_POR,
         });
         await tx.historialEstadoVehiculo.create({
           data: {
@@ -405,7 +419,7 @@ function esConflictoUnico(error: unknown): boolean {
 
 /** `credencialHash` nunca sale en la respuesta — es un campo de escritura interna (login
  * por vehículo, QUI-235), no parte del contrato público `VehiculoSchema`. */
-function toVehiculo(row: {
+export function toVehiculo(row: {
   id: string;
   sindicatoId: string;
   socioId: string | null;
@@ -421,9 +435,15 @@ function toVehiculo(row: {
   cartelSuperior: string | null;
   capacidad: number;
   estado: string;
+  fotoUrl?: string | null;
+  fotoActualizadaEn?: Date | null;
+  fotoSubidaPor?: { id: string; nombre: string } | null;
 }): Vehiculo {
   // Sin fallback `?? normalizarPlacaVehiculo(row.placa)`: unicidad de placa
   // (docs/plan-unicidad-placa.md) volvió `placaNormalizada` NOT NULL en la base — el
   // fallback existía para el caso `null` que ya no puede ocurrir.
-  return VehiculoSchema.parse(row);
+  return VehiculoSchema.parse({
+    ...row,
+    fotoActualizadaEn: row.fotoActualizadaEn?.toISOString() ?? null,
+  });
 }
