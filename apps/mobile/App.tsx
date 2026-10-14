@@ -27,6 +27,8 @@ import { SplashScreen } from './src/features/auth/splash-screen';
 import { quivoColors, quivoFonts, quivoSpacing } from './src/shared/theme/quivo-theme';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { limpiarCanalesObsoletos } from './src/features/operacion/anuncio-punto-control';
+import { useActualizacionesAutomaticas } from './src/features/actualizaciones/use-actualizaciones-automaticas';
+import { esPantallaPreOperacion } from './src/features/actualizaciones/actualizaciones-core';
 
 const queryClient = new QueryClient();
 
@@ -60,6 +62,9 @@ function QuivoApp() {
   const [monoLoaded, monoError] = useJetBrainsMono({ JetBrainsMono_400Regular });
 
   const auth = useAuthMovil();
+  // OTA: aplica una actualización ya descargada solo en login/selección de asignación (nunca con
+  // un recorrido activo). Ver `use-actualizaciones-automaticas.ts`.
+  useActualizacionesAutomaticas(esPantallaPreOperacion(auth.estado.etapa, auth.estado.cargando));
   const fontsLoaded = montserratLoaded && oxaniumLoaded && monoLoaded;
   const fontError = montserratError ?? oxaniumError ?? monoError;
 

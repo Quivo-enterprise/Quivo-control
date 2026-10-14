@@ -44,6 +44,33 @@ export default (): ExpoConfig => ({
   orientation: 'portrait',
   newArchEnabled: false,
   platforms: ['android'],
+  // OTA (EAS Update). Principio: la app NUNCA cambia de bundle ni se reinicia con un recorrido
+  // activo (el GPS nativo sigue vivo aunque la JS muera: `stopOnTerminate: false`).
+  //
+  // `checkAutomatically: 'NEVER'`: el chequeo de arranque de expo-updates (ON_LOAD) corre en
+  // CUALQUIER arranque en frío, incluido el del headless task tras un kill, y no sabe nada del
+  // recorrido. En su lugar, `src/features/actualizaciones/` chequea/descarga SOLO en la UI en
+  // primer plano, SOLO sin recorrido activo, y aplica con `reloadAsync()` solo en una pantalla
+  // pre-operación (login/selección de asignación).
+  //
+  // Matiz (expo-updates SDK 54): `NEVER` solo apaga el chequeo de arranque. Una actualización YA
+  // descargada (fetchUpdateAsync) se lanza igual en el próximo arranque en frío. Es aceptable
+  // porque (1) solo descargamos con el recorrido inactivo y reiniciamos de inmediato si estamos
+  // en pantalla pre-operación, así que la ventana "descargada y sin aplicar" es corta; y (2) el
+  // bundle descargado es compatible con el binario (mismo runtimeVersion) y la reconexión a un
+  // recorrido activo tras un arranque en frío ya es el camino normal de la app.
+  // `fallbackToCacheTimeout: 0` evita bloquear el arranque esperando red.
+  //
+  // `runtimeVersion` = fingerprint con `fingerprint.config.js`, que neutraliza los valores que
+  // vienen del entorno de EAS (clave de Google Maps, licencia de Transistorsoft, perfil de
+  // build, slugs de Sentry) para que un `eas update` corrido en otra máquina calce con el APK.
+  // Un cambio nativo real (dependencia, plugin, permisos) cambia el hash solo.
+  runtimeVersion: { policy: 'fingerprint' },
+  updates: {
+    url: 'https://u.expo.dev/09e5dff3-e3dc-408f-a930-bc067a8ff69a',
+    checkAutomatically: 'NEVER',
+    fallbackToCacheTimeout: 0,
+  },
   icon: './assets/images/icon.png',
   android: {
     // QUI-… (decisión del CTO, ronda de verify-fix del logout/sesión): el trial de

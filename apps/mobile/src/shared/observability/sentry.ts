@@ -33,6 +33,10 @@ export function initSentry(): void {
     enableNative: true,
     enableNativeCrashHandling: true,
   });
+
+  // OTA: no se etiqueta a mano. `@sentry/react-native` 7.2 trae `expoContextIntegration` por
+  // defecto, que adjunta el contexto `ota_updates` (update_id, channel, runtime_version,
+  // is_embedded_launch) a cada evento, JS y nativo.
 }
 
 /**

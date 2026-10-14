@@ -44,6 +44,7 @@
     "expo-splash-screen": "~31.0.13",
     "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.20",
     "pako": "^2.1.0",
     "react": "19.1.0",
     "react-hook-form": "^7.84.0",
