@@ -5,7 +5,6 @@ import {
   guardarEstadoVueltaLocal,
   leerEstadoVueltaLocal,
 } from '../../db/vuelta-actual-local';
-import { leerRecorridoActual } from '../../db/recorrido-actual';
 import type { VueltaActualMovil } from '@quivo/shared';
 import { vueltaActualApi } from '../../shared/api/vuelta-actual-api';
 import { cargarSesionMovil } from '../../shared/security/sesion-movil-store';
@@ -22,8 +21,6 @@ import {
   idNotificacionDesignacion,
   marcarAnunciada,
   notificacionesObsoletas,
-  reiniciarEstadoRecorrido,
-  resolverEstadoParaRecorrido,
   ESTADO_LOCAL_INICIAL,
   textoAvisoDesignada,
   type AvisoVuelta,
@@ -37,11 +34,12 @@ import {
  * plano mientras el JS viva. Sin React: en headless no hay árbol montado.
  *
  * El servidor es la verdad de la vuelta y la designación: el cliente no deduce cierres de vuelta,
- * solo refleja lo último que dijo el servidor, atado al RECORRIDO ACTUAL (`leerRecorridoActual`,
- * el registro `recorrido_actual` de la SQLite del paquete: igual en foreground y headless; lo
- * borra `detener()` antes de apagar el tracking). Un error de lectura (`ok:false`) no es "sin
- * recorrido": se conserva el cache y no se consulta en ese tick. Cada consulta/acuse captura el
- * `recorridoId` al empezar y descarta su respuesta si el recorrido activo ya es otro (o ya no hay).
+ * solo refleja lo último que dijo el servidor. Quién llama decide si hay recorrido (el headless solo
+ * corre con el GPS nativo encendido; el foreground, con `tracking`). El cache se limpia al iniciar
+ * y al finalizar el recorrido (`limpiarVueltaActual`), que además incrementa un CONTADOR DE
+ * GENERACIÓN en memoria: cada consulta/acuse captura la generación al empezar y descarta su
+ * respuesta (no persiste, no emite, no anuncia) si cambió. Las claves anunciadas/cerradas del cache
+ * se pierden al limpiar (se limpia entre recorridos).
  *
  * Limitaciones aceptadas: (a) la cuenta regresiva de la espera usa `Date.now()` con margen de 1 min:
  * un reloj del teléfono desfasado más de 1 min puede adelantar el "Ya podés salir"; (b) una
@@ -71,6 +69,9 @@ let enVueloDesdeMs = 0;
 let secuenciaConsulta = 0;
 /** Se pidió un refresco mientras había una consulta en vuelo: corre apenas ésta termine. */
 let refetchPendiente = false;
+/** Contador de generación: `limpiarVueltaActual` lo incrementa; lo que empezó con otra generación
+ * descarta su respuesta. */
+let generacion = 0;
 let obtenerTokenReciente: (() => Promise<string | null>) | null = null;
 
 type Oyente = (sesionId: string, estado: EstadoLocalVuelta) => void;
@@ -105,6 +106,7 @@ export function reiniciarPisoVueltaActualParaTests(): void {
   enVueloDesdeMs = 0;
   secuenciaConsulta = 0;
   refetchPendiente = false;
+  generacion = 0;
   obtenerTokenReciente = null;
 }
 
@@ -132,59 +134,42 @@ async function anunciar(aviso: AvisoVuelta): Promise<boolean> {
  * Incorpora una respuesta del servidor (de un GET o del acuse): la aplica al estado persistido,
  * dispara los avisos y descarta de la bandeja las notificaciones que ya no valen. Una respuesta
  * idéntica a la anterior no escribe SQLite ni emite. Devuelve el estado resultante, o `null` si la
- * respuesta se descartó porque el recorrido activo ya no es el de la consulta.
+ * respuesta se descartó porque `limpiarVueltaActual` corrió mientras la consulta estaba en vuelo.
  */
-type ResultadoAplicado = ReturnType<typeof aplicarRespuesta>;
-
-/** ¿Sigue activo `recorridoId`? Un error de lectura cuenta como NO confirmado (no se habla ni se
- * toca el cache), sin interpretarlo como fin del recorrido. */
-async function recorridoSigueActivo(sesionId: string, recorridoId: string): Promise<boolean> {
-  const lectura = await leerRecorridoActual(sesionId);
-  return lectura.ok && lectura.recorridoId === recorridoId;
-}
-
 async function incorporarRespuesta(
   sesionId: string,
-  recorridoId: string,
+  gen: number,
   respuesta: VueltaActualMovil,
 ): Promise<EstadoLocalVuelta | null> {
   const ahoraMs = Date.now();
-  const { crudo, previo, resultado, descartada } = await serializar(async () => {
-    // Se verifica DENTRO de la cola: si el recorrido activo ya no es el de esta consulta (o no se
-    // pudo leer), se descarta sin tocar el cache.
-    if (!(await recorridoSigueActivo(sesionId, recorridoId))) {
-      return { crudo: ESTADO_LOCAL_INICIAL, previo: ESTADO_LOCAL_INICIAL, resultado: null, descartada: true };
-    }
-    // Único lugar que reemplaza el cache de otro recorrido: acá, dentro de la cola.
-    const crudo = await leerEstadoVueltaLocal(sesionId);
-    const previo = resolverEstadoParaRecorrido(crudo, recorridoId);
-    const aplicado = aplicarRespuesta(previo, respuesta, { ahoraMs });
-    const resultado: ResultadoAplicado = { ...aplicado, estado: { ...aplicado.estado, recorridoId } };
+  const { previo, resultado, descartada } = await serializar(async () => {
+    if (gen !== generacion) return { previo: ESTADO_LOCAL_INICIAL, resultado: null, descartada: true };
+    const previo = await leerEstadoVueltaLocal(sesionId);
+    const resultado = aplicarRespuesta(previo, respuesta, { ahoraMs });
     // Se persiste ANTES de hablar/notificar: el intento queda contado y un reinicio (o el otro
-    // contexto JS) no entra en bucle. Si la fila era de otro recorrido o no tenía `recorridoId`
-    // (APK anterior), se reescribe aunque la respuesta sea idéntica.
-    if (resultado.cambio || crudo.recorridoId !== recorridoId) {
+    // contexto JS) no entra en bucle. Se re-chequea la generación tras la lectura: si el recorrido
+    // terminó entretanto, no se escribe.
+    if (resultado.cambio) {
+      if (gen !== generacion) return { previo, resultado: null, descartada: true };
       await guardarEstadoVueltaLocal(sesionId, resultado.estado);
     }
-    return { crudo, previo, resultado, descartada: false };
+    return { previo, resultado, descartada: false };
   });
   if (descartada || !resultado) return null;
-  if (!resultado.cambio && crudo.recorridoId === recorridoId) return resultado.estado;
+  if (!resultado.cambio) return resultado.estado;
   emitir(sesionId, resultado.estado);
-  // Si el cache era de OTRO recorrido, sus notificaciones (designación/cancelación vieja) se
-  // descartan ahora, contra el estado crudo que se acaba de reemplazar.
-  const anterior = crudo.recorridoId !== null && crudo.recorridoId !== recorridoId ? crudo : previo;
-  for (const id of notificacionesObsoletas(anterior, resultado.estado)) {
+  for (const id of notificacionesObsoletas(previo, resultado.estado)) {
     await descartarNotificacionAviso(id);
   }
   let estado = resultado.estado;
   for (const aviso of resultado.avisos) {
-    if (!(await recorridoSigueActivo(sesionId, recorridoId))) return estado;
+    if (gen !== generacion) return estado;
     const exito = await anunciar(aviso);
     if (!exito) continue;
     const marcado = await serializar(async () => {
-      if (!(await recorridoSigueActivo(sesionId, recorridoId))) return null;
+      if (gen !== generacion) return null;
       const nuevo = marcarAnunciada(await leerEstadoVueltaLocal(sesionId), aviso.clave);
+      if (gen !== generacion) return null;
       await guardarEstadoVueltaLocal(sesionId, nuevo);
       return nuevo;
     });
@@ -200,7 +185,10 @@ async function incorporarRespuesta(
 /** ¿Hay una consulta en vuelo VIGENTE? Una que lleva más de `VENCIMIENTO_EN_VUELO_MS` se da por
  * colgada y no bloquea. */
 function hayConsultaVigente(ahoraMs: number): boolean {
-  return enVuelo && ahoraMs - enVueloDesdeMs < VENCIMIENTO_EN_VUELO_MS;
+  if (!enVuelo) return false;
+  const transcurrido = ahoraMs - enVueloDesdeMs;
+  // Una diferencia negativa (el reloj del teléfono retrocedió) cuenta como vencida: no bloquea.
+  return transcurrido >= 0 && transcurrido < VENCIMIENTO_EN_VUELO_MS;
 }
 
 async function solicitarRefresco(obtenerAccessToken: () => Promise<string | null>): Promise<void> {
@@ -219,7 +207,7 @@ async function solicitarRefresco(obtenerAccessToken: () => Promise<string | null
 async function enviarAcuse(
   accessToken: string,
   sesionId: string,
-  recorridoId: string,
+  gen: number,
   estado: EstadoLocalVuelta,
   obtenerAccessToken: () => Promise<string | null>,
 ): Promise<void> {
@@ -227,7 +215,7 @@ async function enviarAcuse(
   if (!pendiente) return;
   try {
     const respuesta = await vueltaActualApi.acusar(accessToken, pendiente);
-    if (respuesta) await incorporarRespuesta(sesionId, recorridoId, respuesta);
+    if (respuesta) await incorporarRespuesta(sesionId, gen, respuesta);
     else await solicitarRefresco(obtenerAccessToken);
   } catch (error) {
     if (!esErrorAcusePermanente(error)) return; // silencioso: se reintenta en la próxima consulta
@@ -238,11 +226,13 @@ async function enviarAcuse(
     const clave = claveDesignacion(pendiente.vueltaId, { designadaEn: pendiente.designadaEn });
     if (!clave) return;
     const nuevo = await serializar(async () => {
+      if (gen !== generacion) return null;
       const abandonado = abandonarAcuse(await leerEstadoVueltaLocal(sesionId), clave);
+      if (gen !== generacion) return null;
       await guardarEstadoVueltaLocal(sesionId, abandonado);
       return abandonado;
     });
-    emitir(sesionId, nuevo);
+    if (nuevo) emitir(sesionId, nuevo);
   }
 }
 
@@ -260,23 +250,21 @@ export async function consultarVueltaActual(
   const disparoMs = Date.now();
   if (hayConsultaVigente(disparoMs)) return;
   if (!opciones.forzar && disparoMs - ultimoIntentoMs < PISO_ENTRE_CONSULTAS_MS - TOLERANCIA_PISO_MS) return;
-  // El registro del recorrido se lee ANTES de tomar el slot: sin recorrido (o con la lectura
-  // fallida) no se consume el piso ni se marca en vuelo, así la primera consulta tras registrarse
-  // el recorrido no queda esperando 20 s.
+  // La generación se captura al empezar: si `limpiarVueltaActual` corre mientras la consulta está
+  // en vuelo, su respuesta se descarta.
+  const gen = generacion;
   let sesionId: string;
-  let recorridoId: string;
   try {
     const sesion = await cargarSesionMovil();
     if (!sesion) return;
     sesionId = sesion.contexto.sesionId;
-    const lectura = await leerRecorridoActual(sesionId);
-    if (!lectura.ok || !lectura.recorridoId) return;
-    recorridoId = lectura.recorridoId;
   } catch (error) {
     Sentry.captureException(error, { tags: { contexto: 'vuelta-actual', paso: 'previa' } });
     return;
   }
-  // Los awaits de arriba pudieron ceder el paso a otra consulta: se re-chequea antes del slot.
+  // Los awaits de arriba pudieron ceder el paso a otra consulta o a una limpieza: se re-chequea
+  // antes del slot.
+  if (gen !== generacion) return;
   if (hayConsultaVigente(Date.now())) return;
   if (!opciones.forzar && disparoMs - ultimoIntentoMs < PISO_ENTRE_CONSULTAS_MS - TOLERANCIA_PISO_MS) return;
   enVuelo = true;
@@ -290,9 +278,9 @@ export async function consultarVueltaActual(
     const respuesta = await vueltaActualApi.obtener(accessToken);
     // Una consulta vencida (otra tomó el slot mientras esta seguía colgada) descarta su respuesta.
     if (miSecuencia !== secuenciaConsulta) return;
-    const estado = await incorporarRespuesta(sesionId, recorridoId, respuesta);
+    const estado = await incorporarRespuesta(sesionId, gen, respuesta);
     if (!estado) return; // el recorrido cambió/terminó mientras la consulta estaba en vuelo
-    await enviarAcuse(accessToken, sesionId, recorridoId, estado, obtenerAccessToken);
+    await enviarAcuse(accessToken, sesionId, gen, estado, obtenerAccessToken);
   } catch (error) {
     // Red caída / 5xx / 429 / sesión: silencioso para el chofer. Solo se reporta lo que no es
     // un fallo de transporte esperable (contrato roto, SQLite).
@@ -320,6 +308,7 @@ export async function entenderDesignacion(
   obtenerAccessToken: () => Promise<string | null>,
   sesionId: string,
 ): Promise<void> {
+  const gen = generacion;
   try {
     const estado = await serializar(async () => {
       const nuevo = cerrarDesignacion(await leerEstadoVueltaLocal(sesionId));
@@ -329,11 +318,9 @@ export async function entenderDesignacion(
     emitir(sesionId, estado);
     const clave = estado.ultimo ? claveDesignacion(estado.ultimo.vueltaId, estado.ultimo.designacion) : null;
     if (clave) await descartarNotificacionAviso(idNotificacionDesignacion(clave));
-    const lectura = await leerRecorridoActual(sesionId);
-    const recorridoId = lectura.ok ? lectura.recorridoId : null;
-    const accessToken = recorridoId ? await obtenerAccessToken() : null;
-    if (accessToken && recorridoId) {
-      await enviarAcuse(accessToken, sesionId, recorridoId, estado, obtenerAccessToken);
+    const accessToken = await obtenerAccessToken();
+    if (accessToken && gen === generacion) {
+      await enviarAcuse(accessToken, sesionId, gen, estado, obtenerAccessToken);
     }
   } catch (error) {
     Sentry.captureException(error, { tags: { contexto: 'vuelta-actual', paso: 'entendido' } });
@@ -356,25 +343,30 @@ export async function entenderCancelacion(sesionId: string): Promise<void> {
   }
 }
 
-/** Fin del recorrido: limpieza inmediata (la corrección no depende de ella: el cache y las
- * consultas están atados al recorrido activo). Descarta la última respuesta y sus derivados y deja
- * de insistir con lo pendiente. */
-export async function limpiarVueltaActual(sesionId: string): Promise<void> {
+/** Inicio o fin del recorrido: invalida lo que esté en vuelo (incrementa la generación, síncrono) y
+ * borra el cache de la sesión con UNA sentencia, fire-and-forget: NO bloquea (no espera la DB, ni
+ * la cola ni transacciones; nunca rechaza). Después descarta, best-effort, las notificaciones de
+ * designación/cancelación pendientes del cache que se borró. */
+export function limpiarVueltaActual(sesionId: string): void {
+  generacion += 1;
   refetchPendiente = false;
-  try {
-    const estado = await serializar(async () => {
-      const nuevo = reiniciarEstadoRecorrido(await leerEstadoVueltaLocal(sesionId));
-      if (nuevo.anunciadas.length || nuevo.cerradas.length || nuevo.acusesAbandonados.length) {
-        await guardarEstadoVueltaLocal(sesionId, nuevo);
-      } else {
-        await borrarEstadoVueltaLocal(sesionId);
-      }
-      return nuevo;
-    });
-    emitir(sesionId, estado);
-  } catch (error) {
+  // El slot de la consulta anterior (si la hay) se libera: su respuesta ya no cuenta y el recorrido
+  // nuevo no debe esperar su vencimiento ni el piso.
+  enVuelo = false;
+  secuenciaConsulta += 1;
+  ultimoIntentoMs = 0;
+  // La lectura y el borrado se emiten en este orden y sin await entre ambos.
+  emitir(sesionId, ESTADO_LOCAL_INICIAL);
+  const previo = leerEstadoVueltaLocal(sesionId).catch(() => ESTADO_LOCAL_INICIAL);
+  const borrado = borrarEstadoVueltaLocal(sesionId);
+  void (async () => {
+    await borrado;
+    for (const id of notificacionesObsoletas(await previo, ESTADO_LOCAL_INICIAL)) {
+      await descartarNotificacionAviso(id);
+    }
+  })().catch((error: unknown) => {
     Sentry.captureException(error, { tags: { contexto: 'vuelta-actual', paso: 'limpiar' } });
-  }
+  });
 }
 
 /** Al montar: borra el cache que quedó de OTRAS sesiones (la tabla solo guarda la vigente al

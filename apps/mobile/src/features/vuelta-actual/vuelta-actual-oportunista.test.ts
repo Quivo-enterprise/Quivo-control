@@ -10,8 +10,9 @@ const SESION = 'sesion-1';
 
 const mocks = vi.hoisted(() => ({
   filas: new Map<string, unknown>(),
-  recorrido: 'rec-1' as string | null,
-  errorLectura: false,
+  retenerBorrado: false,
+  liberarBorrado: (() => undefined) as () => void,
+  borrados: 0,
   obtener: vi.fn(),
   acusar: vi.fn(),
   anunciar: vi.fn(),
@@ -20,17 +21,18 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@sentry/react-native', () => ({ captureException: mocks.captura, addBreadcrumb: vi.fn() }));
-vi.mock('../../db/recorrido-actual', () => ({
-  leerRecorridoActual: async () =>
-    mocks.errorLectura ? { ok: false } : { ok: true, recorridoId: mocks.recorrido },
-}));
 vi.mock('../../db/vuelta-actual-local', () => ({
   leerEstadoVueltaLocal: async (id: string) => mocks.filas.get(id) ?? ESTADO_LOCAL_INICIAL,
   guardarEstadoVueltaLocal: async (id: string, e: unknown) => {
     mocks.filas.set(id, JSON.parse(JSON.stringify(e)));
   },
-  borrarEstadoVueltaLocal: async (id: string) => {
+  borrarEstadoVueltaLocal: (id: string) => {
+    mocks.borrados += 1;
     mocks.filas.delete(id);
+    // Con `retenerBorrado` la sentencia queda pendiente hasta que el test la libere: sirve para
+    // verificar que nada (limpiar, la consulta siguiente) la espera.
+    if (!mocks.retenerBorrado) return Promise.resolve();
+    return new Promise<void>((resolve) => (mocks.liberarBorrado = resolve));
   },
   borrarEstadosVueltaLocalDeOtrasSesiones: async (id: string) => {
     for (const k of [...mocks.filas.keys()]) if (k !== id) mocks.filas.delete(k);
@@ -51,6 +53,7 @@ import {
   consultarVueltaActual,
   entenderCancelacion,
   entenderDesignacion,
+  limpiarVueltaActual,
   limpiarVueltaActualDeOtrasSesiones,
   reiniciarPisoVueltaActualParaTests,
   suscribirEstadoVuelta,
@@ -88,8 +91,9 @@ const estadoGuardado = () => mocks.filas.get(SESION) as EstadoLocalVuelta;
 
 beforeEach(() => {
   mocks.filas.clear();
-  mocks.recorrido = 'rec-1';
-  mocks.errorLectura = false;
+  mocks.retenerBorrado = false;
+  mocks.liberarBorrado = () => undefined;
+  mocks.borrados = 0;
   Object.values(mocks).forEach((m) => typeof m === 'function' && 'mockReset' in m && m.mockReset());
   mocks.anunciar.mockResolvedValue(true);
   mocks.descartar.mockResolvedValue(undefined);
@@ -211,8 +215,8 @@ describe('cancelación', () => {
   });
 });
 
-describe('recorrido vs consulta en vuelo', () => {
-  it('una respuesta cuya consulta empezó antes de limpiar se descarta: no persiste ni emite ni anuncia', async () => {
+describe('limpiarVueltaActual (generación)', () => {
+  it('una respuesta cuya consulta empezó antes de limpiar se descarta: no persiste ni emite ni anuncia ni acusa', async () => {
     let liberar: () => void = () => undefined;
     mocks.obtener.mockImplementationOnce(
       () => new Promise((resolve) => (liberar = () => resolve(ok(vuelta(true))))),
@@ -221,7 +225,7 @@ describe('recorrido vs consulta en vuelo', () => {
     const baja = suscribirEstadoVuelta(emitido);
     const enVuelo = consultarVueltaActual(token, { forzar: true });
     await vi.waitFor(() => expect(mocks.obtener).toHaveBeenCalledTimes(1));
-    mocks.recorrido = null; // fin del recorrido mientras la consulta sigue en vuelo
+    limpiarVueltaActual(SESION); // fin/inicio de recorrido mientras la consulta sigue en vuelo
     emitido.mockClear();
     liberar();
     await enVuelo;
@@ -232,46 +236,36 @@ describe('recorrido vs consulta en vuelo', () => {
     expect(mocks.acusar).not.toHaveBeenCalled();
   });
 
-  it('una respuesta en vuelo de un recorrido anterior se descarta aunque haya otro recorrido activo', async () => {
-    let liberar: () => void = () => undefined;
-    mocks.obtener.mockImplementationOnce(
-      () => new Promise((resolve) => (liberar = () => resolve(ok(vuelta(true))))),
-    );
-    const emitido = vi.fn();
-    const baja = suscribirEstadoVuelta(emitido);
-    const enVuelo = consultarVueltaActual(token, { forzar: true });
+  it('limpiar no bloquea: devuelve sincrónico y la DB queda pendiente sin trabar nada', async () => {
+    mocks.retenerBorrado = true;
+    mocks.filas.set(SESION, ESTADO_LOCAL_INICIAL);
+    expect(limpiarVueltaActual(SESION)).toBeUndefined(); // no hay promesa que esperar
+    expect(mocks.borrados).toBe(1); // el borrado se disparó (una sentencia), pero sigue pendiente
+    // El borrado pendiente no traba la consulta siguiente.
+    mocks.obtener.mockResolvedValue(ok(vuelta(true)));
+    await consultarVueltaActual(token, { forzar: true });
+    expect(mocks.obtener).toHaveBeenCalledTimes(1);
+    mocks.liberarBorrado();
+  });
+
+  it('la consulta del recorrido nuevo corre sin esperar el piso ni la consulta colgada del anterior', async () => {
+    mocks.obtener.mockReturnValueOnce(new Promise<VueltaActualMovil>(() => undefined));
+    void consultarVueltaActual(token, { forzar: true });
     await vi.waitFor(() => expect(mocks.obtener).toHaveBeenCalledTimes(1));
-    mocks.recorrido = 'rec-2'; // el recorrido terminó y empezó otro mientras la consulta seguía en vuelo
-    liberar();
-    await enVuelo;
-    baja();
-    expect(mocks.filas.has(SESION)).toBe(false);
-    expect(emitido).not.toHaveBeenCalled();
-    expect(mocks.anunciar).not.toHaveBeenCalled();
-    expect(mocks.acusar).not.toHaveBeenCalled();
-  });
-
-  it('sin recorrido activo no se consulta', async () => {
-    mocks.recorrido = null;
+    limpiarVueltaActual(SESION);
     mocks.obtener.mockResolvedValue(ok(vuelta(true)));
-    await consultarVueltaActual(token, { forzar: true });
-    expect(mocks.obtener).not.toHaveBeenCalled();
-    expect(mocks.filas.has(SESION)).toBe(false);
-    mocks.recorrido = 'rec-1';
-    await consultarVueltaActual(token, { forzar: true });
+    await consultarVueltaActual(token); // sin forzar: el piso se reinició
+    expect(mocks.obtener).toHaveBeenCalledTimes(2);
     expect(estadoGuardado().ultimo?.designacion).not.toBeNull();
-    expect(estadoGuardado().recorridoId).toBe('rec-1');
   });
 
-  it('el cache de otro recorrido no se hidrata: la consulta del recorrido nuevo parte de cero', async () => {
+  it('descarta las notificaciones del cache borrado (best-effort)', async () => {
     mocks.obtener.mockResolvedValue(ok(vuelta(true)));
     await consultarVueltaActual(token, { forzar: true });
-    expect(mocks.anunciar).toHaveBeenCalledTimes(1);
-    mocks.recorrido = 'rec-2';
-    mocks.obtener.mockResolvedValue(ok(vuelta(false)));
-    await consultarVueltaActual(token, { forzar: true });
-    expect(estadoGuardado().recorridoId).toBe('rec-2');
-    expect(estadoGuardado().ultimo?.designacion).toBeNull();
+    mocks.descartar.mockClear();
+    limpiarVueltaActual(SESION);
+    await vi.waitFor(() => expect(mocks.descartar).toHaveBeenCalledWith(`designacion|${CLAVE}`));
+    expect(mocks.filas.has(SESION)).toBe(false);
   });
 });
 
@@ -282,87 +276,6 @@ describe('limpieza de otras sesiones', () => {
     await limpiarVueltaActualDeOtrasSesiones(SESION);
     expect(mocks.filas.has('otra-sesion')).toBe(false);
     expect(mocks.filas.has(SESION)).toBe(true);
-  });
-});
-
-describe('lectura del recorrido con error', () => {
-  it('un error de lectura no se interpreta como "sin recorrido": no consulta ni toca el cache', async () => {
-    mocks.obtener.mockResolvedValue(ok(vuelta(true)));
-    await consultarVueltaActual(token, { forzar: true });
-    const antes = estadoGuardado();
-    mocks.obtener.mockClear();
-    mocks.errorLectura = true;
-    await consultarVueltaActual(token, { forzar: true });
-    expect(mocks.obtener).not.toHaveBeenCalled();
-    expect(mocks.filas.has(SESION)).toBe(true);
-    expect(estadoGuardado()).toEqual(antes);
-  });
-
-  it('si la lectura falla mientras la consulta está en vuelo, la respuesta se descarta sin tocar el cache', async () => {
-    mocks.obtener.mockResolvedValue(ok(vuelta(true)));
-    await consultarVueltaActual(token, { forzar: true });
-    const antes = estadoGuardado();
-    let liberar: () => void = () => undefined;
-    mocks.obtener.mockImplementationOnce(
-      () => new Promise((resolve) => (liberar = () => resolve(ok(vuelta(false))))),
-    );
-    const enVuelo = consultarVueltaActual(token, { forzar: true });
-    await vi.waitFor(() => expect(mocks.obtener).toHaveBeenCalledTimes(2));
-    mocks.errorLectura = true;
-    liberar();
-    await enVuelo;
-    expect(estadoGuardado()).toEqual(antes);
-  });
-});
-
-describe('cache de otro recorrido / filas viejas', () => {
-  function filaConDesignacion(recorridoId: string | null): EstadoLocalVuelta {
-    return {
-      ...ESTADO_LOCAL_INICIAL,
-      ultimo: vuelta(true),
-      anunciadas: [CLAVE],
-      actualizadoEn: Date.now(),
-      recorridoId,
-    };
-  }
-
-  it('el cache de otro recorrido se reemplaza dentro de la cola y descarta las notificaciones viejas', async () => {
-    mocks.filas.set(SESION, filaConDesignacion('rec-viejo'));
-    mocks.obtener.mockResolvedValue(ok(vuelta(false, null, V2)));
-    const emitido = vi.fn();
-    const baja = suscribirEstadoVuelta(emitido);
-    await consultarVueltaActual(token, { forzar: true });
-    baja();
-    expect(mocks.descartar).toHaveBeenCalledWith(`designacion|${CLAVE}`);
-    expect(estadoGuardado().recorridoId).toBe('rec-1');
-    expect(estadoGuardado().ultimo?.vueltaId).toBe(V2);
-    expect(emitido).toHaveBeenCalled();
-  });
-
-  it('una fila vieja sin recorridoId se adopta como del recorrido actual: no se borra ni se vuelve a anunciar', async () => {
-    mocks.filas.set(SESION, filaConDesignacion(null));
-    mocks.obtener.mockResolvedValue(ok(vuelta(true)));
-    await consultarVueltaActual(token, { forzar: true });
-    expect(mocks.anunciar).not.toHaveBeenCalled();
-    expect(mocks.descartar).not.toHaveBeenCalled();
-    expect(estadoGuardado().recorridoId).toBe('rec-1');
-    expect(estadoGuardado().ultimo?.designacion).not.toBeNull();
-    expect(estadoGuardado().anunciadas).toEqual([CLAVE]);
-  });
-});
-
-describe('consulta sin recorrido registrado', () => {
-  it('sin recorrido (o lectura fallida) no consume el piso ni marca en vuelo: la siguiente consulta no forzada sí corre', async () => {
-    mocks.obtener.mockResolvedValue(ok(vuelta(true)));
-    mocks.recorrido = null;
-    await consultarVueltaActual(token);
-    mocks.errorLectura = true;
-    await consultarVueltaActual(token);
-    expect(mocks.obtener).not.toHaveBeenCalled();
-    mocks.errorLectura = false;
-    mocks.recorrido = 'rec-1';
-    await consultarVueltaActual(token); // sin forzar: el piso no se gastó
-    expect(mocks.obtener).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -397,6 +310,18 @@ describe('cadencia y consulta colgada', () => {
     // 19,2 s después del disparo anterior (16,2 s después de su fin): ya toca.
     vi.setSystemTime(new Date('2026-10-14T13:00:19.200Z'));
     await consultarVueltaActual(token);
+    expect(mocks.obtener).toHaveBeenCalledTimes(2);
+  });
+
+  it('una diferencia de reloj negativa (el reloj retrocedió) cuenta la consulta en vuelo como vencida', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-14T13:00:00.000Z'));
+    mocks.obtener.mockReturnValueOnce(new Promise<VueltaActualMovil>(() => undefined));
+    void consultarVueltaActual(token, { forzar: true });
+    await vi.waitFor(() => expect(mocks.obtener).toHaveBeenCalledTimes(1));
+    vi.setSystemTime(new Date('2026-10-14T12:30:00.000Z')); // el reloj retrocede 30 min
+    mocks.obtener.mockResolvedValueOnce(ok(vuelta(false, null, V2)));
+    await consultarVueltaActual(token, { forzar: true });
     expect(mocks.obtener).toHaveBeenCalledTimes(2);
   });
 

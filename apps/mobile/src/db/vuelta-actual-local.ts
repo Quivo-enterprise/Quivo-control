@@ -3,10 +3,8 @@ import { VueltaActualMovilSchema } from '@quivo/shared';
 import {
   ESTADO_LOCAL_INICIAL,
   designacionVigente,
-  resolverEstadoParaRecorrido,
   type EstadoLocalVuelta,
 } from '../features/vuelta-actual/vuelta-actual-core';
-import { leerRecorridoActual } from './recorrido-actual';
 
 /**
  * Estado local de la vuelta actual / avisos de designación, por sesión, en la MISMA SQLite del
@@ -39,7 +37,6 @@ export function interpretarEstadoLocal(crudo: string | null | undefined): Estado
         typeof o.actualizadoEn === 'number' && Number.isFinite(o.actualizadoEn) ? o.actualizadoEn : null,
       intentosAnuncio: intentos,
       acusesAbandonados: lista(o.acusesAbandonados),
-      recorridoId: typeof o.recorridoId === 'string' ? o.recorridoId : null,
     };
   } catch {
     return ESTADO_LOCAL_INICIAL;
@@ -79,32 +76,15 @@ export async function borrarEstadosVueltaLocalDeOtrasSesiones(sesionId: string):
   await db.runAsync('DELETE FROM vuelta_actual_local WHERE sesion_id <> ?', [sesionId]);
 }
 
-/**
- * Estado del cache para el recorrido ACTIVO, de SOLO LECTURA (no escribe ni borra nada: el
- * reemplazo del cache de otro recorrido ocurre únicamente dentro de la cola `serializar` de
- * `vuelta-actual-oportunista.ts`). Con la fila de otro recorrido, o sin recorrido, devuelve un
- * estado vacío (`resolverEstadoParaRecorrido`). Si el registro del recorrido no se pudo leer
- * (`ok: false`) devuelve `null`: no se sabe de qué recorrido es el cache, así que no se usa (el
- * llamador conserva su estado en memoria).
- */
-export async function leerEstadoVueltaVigente(sesionId: string): Promise<EstadoLocalVuelta | null> {
-  const recorrido = await leerRecorridoActual(sesionId);
-  if (!recorrido.ok) return null;
-  const crudo = await leerEstadoVueltaLocal(sesionId);
-  return resolverEstadoParaRecorrido(crudo, recorrido.recorridoId);
-}
-
-/** Designación del cache local de la sesión PARA EL RECORRIDO ACTIVO, en la forma mínima que usa el
- * orden de los PC (`ordenEfectivoPuntos`). Para contextos sin React (store de vueltas, voz,
- * headless). Solo lectura. `null` si no hay recorrido activo ni cache/designación, si el registro
- * del recorrido no se pudo leer (`ok: false`: el cache puede ser de otro recorrido) o si la lectura
- * falla (best-effort: sin designación = ruta base). */
+/** Designación del cache local de la sesión, en la forma mínima que usa el orden de los PC
+ * (`ordenEfectivoPuntos`). Para contextos sin React (store de vueltas, voz, headless). Solo lectura.
+ * El cache se limpia al iniciar y al finalizar el recorrido. `null` si no hay cache/designación o si
+ * la lectura falla (best-effort: sin designación = ruta base). */
 export async function leerDesignacionOrdenLocal(
   sesionId: string,
 ): Promise<{ puntoEspera: { id: string } } | null> {
   try {
-    const estado = await leerEstadoVueltaVigente(sesionId);
-    const d = estado ? designacionVigente(estado) : null;
+    const d = designacionVigente(await leerEstadoVueltaLocal(sesionId));
     return d ? { puntoEspera: { id: d.puntoEspera.id } } : null;
   } catch {
     return null;

@@ -50,11 +50,6 @@ async function abrirPaqueteDiaDbNueva(): Promise<SQLite.SQLiteDatabase> {
       estado TEXT NOT NULL,
       actualizado_en TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS recorrido_actual (
-      sesion_id TEXT PRIMARY KEY,
-      recorrido_id TEXT NOT NULL,
-      iniciado_en TEXT NOT NULL
-    );
   `);
   return db;
 }

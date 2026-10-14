@@ -47,16 +47,8 @@ import {
 } from './anuncio-punto-control';
 import type { MotivoAnuncio } from './decidir-anuncio';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
-import { consultarVueltaActual } from '../vuelta-actual/vuelta-actual-oportunista';
+import { consultarVueltaActual, limpiarVueltaActual } from '../vuelta-actual/vuelta-actual-oportunista';
 import { marcarRecorridoActivoGlobal } from './estado-recorrido-activo';
-import { cerrarRecorridoLocal } from './cierre-recorrido';
-import { finalizarRecorridoActual, registrarRecorridoActual } from '../../db/recorrido-actual';
-import {
-  asegurarRegistroRecorrido,
-  crearEstadoRegistroRecorrido,
-  reiniciarEstadoRegistroRecorrido,
-  type EstadoRegistroRecorrido,
-} from './registro-recorrido-retry';
 import {
   asegurarInicioRecorrido,
   crearEstadoInicioRecorrido,
@@ -162,47 +154,6 @@ const PERMISO_GPS_INICIAL: DecisionPermisoGps = decidirPermisoGps({
   plataforma: PLATAFORMA_GPS,
   permisoYaSolicitado: false,
 });
-
-/** Escribe el registro del recorrido activo en SEGUNDO PLANO (fire-and-forget): nunca bloquea ni
- * rechaza, así que el flujo crítico (iniciar/re-enganche/GPS/outbox) no espera a la SQLite del
- * paquete. Marca `registrado` solo si el recorrido sigue siendo el mismo (un `detener()` que lo
- * desarmó entretanto no debe quedar como "registrado"). Si falla, `onLocation`/heartbeat reintentan. */
-function registrarRecorridoEnSegundoPlano(
-  estado: EstadoRegistroRecorrido,
-  sesionId: string,
-  reemplazar: boolean,
-  paso: string,
-): void {
-  const eventId = estado.eventId;
-  if (eventId === null) return;
-  registrarRecorridoActual(sesionId, eventId, reemplazar).then(
-    () => {
-      if (estado.eventId === eventId) estado.registrado = true;
-    },
-    (error: unknown) => {
-      Sentry.captureException(error, { tags: { contexto: 'gps-foreground', paso } });
-    },
-  );
-}
-
-/** Reintenta el registro del recorrido activo si `iniciar()` no pudo escribirlo. Sin await y sin
- * rechazar: el llamador lo dispara DESPUÉS de su lógica crítica. */
-function reintentarRegistroRecorrido(
-  estado: EstadoRegistroRecorrido,
-  sesionId: string,
-  origen: 'onlocation' | 'heartbeat',
-): void {
-  if (estado.registrado || estado.eventId === null) return;
-  asegurarRegistroRecorrido(
-    estado,
-    { asegurarRecorridoActual: (sesion, recorrido) => registrarRecorridoActual(sesion, recorrido, false) },
-    sesionId,
-  ).catch((error: unknown) => {
-    Sentry.captureException(error, {
-      tags: { contexto: 'gps-foreground', paso: `reintentar-registro-recorrido-${origen}` },
-    });
-  });
-}
 
 export function useGpsOperativo(
   sesionId: string,
@@ -370,9 +321,6 @@ export function useGpsOperativo(
   // `eventId: null` (estado inicial) protege el camino de re-enganche (nunca llama `iniciar()`,
   // nunca debe emitir este marcador) — ver el docblock del módulo.
   const estadoInicioRecorrido = useRef(crearEstadoInicioRecorrido()).current;
-  // Registro del recorrido activo (`recorrido_actual`): si su escritura en `iniciar()` falla, se
-  // reintenta en cada `onLocation`/heartbeat (`registro-recorrido-retry.ts`).
-  const estadoRegistroRecorrido = useRef(crearEstadoRegistroRecorrido()).current;
   // QUI-338: si esta app YA invocó `requestPermission()` alguna vez en este dispositivo,
   // persistido en `AsyncStorage` bajo `CLAVE_PERMISO_GPS_SOLICITADO` (ver ese comentario para
   // el porqué). Vive en un ref, no en `useState`: se lee de forma síncrona dentro de
@@ -589,14 +537,10 @@ export function useGpsOperativo(
       // nunca rechaza (ver su docblock: todo su cuerpo vive bajo un try/catch defensivo), así
       // que este `void` no deja una unhandled rejection colgando.
       void intentarDrenarOportunista(obtenerAccessToken);
-      // Aviso de designación a Molinos: misma idea que el drenado (el evento de ubicación es el
-      // reloj que sigue vivo en background), con su propio piso de 20 s. Nunca rechaza.
-      void consultarVueltaActual(obtenerAccessToken);
-      // Reintento del registro del recorrido (si `iniciar()`/re-enganche no pudo escribirlo):
-      // DESPUÉS de toda la lógica existente y sin await (nunca bloquea el flujo de GPS).
-      reintentarRegistroRecorrido(estadoRegistroRecorrido, sesionId, 'onlocation');
+      // Aviso de designación a Molinos: solo con el recorrido activo; piso propio de 20 s; nunca rechaza.
+      if (trackingRef.current) void consultarVueltaActual(obtenerAccessToken);
     },
-    [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido, estadoRegistroRecorrido],
+    [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido],
   );
 
   // `onLocation` cambia de identidad cuando cambian `puntosControl`/`sesionId`, pero la
@@ -734,11 +678,9 @@ export function useGpsOperativo(
     // bloque de arriba (un heartbeat que falló en confirmar visitas igual puede tener trabajo
     // de sync pendiente que drenar).
     await intentarDrenarOportunista(obtenerAccessToken);
-    // Sin await: nada espera esta consulta en foreground (nunca rechaza). El reintento del
-    // registro del recorrido va al final, sin await, para no bloquear confirmaciones ni drenaje.
-    void consultarVueltaActual(obtenerAccessToken);
-    reintentarRegistroRecorrido(estadoRegistroRecorrido, sesionId, 'heartbeat');
-  }, [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido, estadoRegistroRecorrido, estaEnRecorrido]);
+    // Sin await: nada espera esta consulta en foreground (nunca rechaza).
+    if (trackingRef.current) void consultarVueltaActual(obtenerAccessToken);
+  }, [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido, estaEnRecorrido]);
 
   const onHeartbeatRef = useRef(onHeartbeat);
   useEffect(() => {
@@ -1082,37 +1024,6 @@ export function useGpsOperativo(
         veredictoPublicable.current = true;
         setTracking(true);
         trackingRef.current = true;
-        // Re-enganche: si no hay registro del recorrido activo (app reabierta con el tracking
-        // restaurado), se crea uno con id nuevo (INSERT OR IGNORE: si ya existe no se pisa). El id
-        // queda en `estadoRegistroRecorrido` (mismo estado que `iniciar()`) para que `onLocation`/
-        // heartbeat reintenten si la escritura falla. Fire-and-forget, DESPUÉS de `setTracking`.
-        if (estadoRegistroRecorrido.eventId === null) {
-          void generarEventId().then(
-            (id) => {
-              // Un `iniciar()`/`detener()` entretanto ya fijó/desarmó el estado: no se pisa.
-              if (!montado || estadoRegistroRecorrido.eventId !== null || !trackingRef.current) return;
-              reiniciarEstadoRegistroRecorrido(estadoRegistroRecorrido, id);
-              registrarRecorridoEnSegundoPlano(
-                estadoRegistroRecorrido,
-                sesionId,
-                false,
-                'reenganche-recorrido-actual',
-              );
-            },
-            (error: unknown) => {
-              Sentry.captureException(error, {
-                tags: { contexto: 'gps-foreground', paso: 'reenganche-recorrido-actual' },
-              });
-            },
-          );
-        } else {
-          registrarRecorridoEnSegundoPlano(
-            estadoRegistroRecorrido,
-            sesionId,
-            false,
-            'reenganche-recorrido-actual',
-          );
-        }
         // QUI-P0: SEGUNDO punto de entrada de `reafirmarMovimiento` (ver su docblock,
         // `gps/seguimiento-continuo.ts`) — este camino de re-enganche NUNCA pasa por
         // `iniciar()` (el plugin ya está `enabled`, el botón va directo a "Finalizar
@@ -1158,7 +1069,7 @@ export function useGpsOperativo(
       // `reiniciarEstadoVisual` (`movimiento/store-visual.ts`).
       reiniciarEstadoVisual();
     };
-  }, [sesionId, suscribirUbicaciones, sembrarCumplimientos, estadoRegistroRecorrido]);
+  }, [sesionId, suscribirUbicaciones, sembrarCumplimientos]);
 
   /**
    * QUI-338: chequeo PASIVO (solo lectura, nunca pide permiso) del estado real de ubicación
@@ -1434,10 +1345,8 @@ export function useGpsOperativo(
     // viejo. Ver `inicio-recorrido-retry.ts` para el porqué de la idempotencia por `eventId`
     // estable.
     reiniciarEstadoInicioRecorrido(estadoInicioRecorrido, await generarEventId());
-    reiniciarEstadoRegistroRecorrido(
-      estadoRegistroRecorrido,
-      estadoInicioRecorrido.eventId ?? (await generarEventId()),
-    );
+    // Recorrido nuevo: se descarta el cache de la vuelta actual del recorrido anterior (síncrono, sin esperar la DB).
+    limpiarVueltaActual(sesionId);
     suscribirUbicaciones();
 
     try {
@@ -1478,15 +1387,9 @@ export function useGpsOperativo(
       // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): "Iniciar recorrido"
       // es, junto con "Finalizar", un veredicto real — ver el comentario largo de
       // `veredictoPublicable` al inicio del hook.
-      //
       veredictoPublicable.current = true;
       setTracking(true);
       trackingRef.current = true;
-      // Registro propio del recorrido activo (`recorrido_actual`, ver `db/recorrido-actual.ts`):
-      // con el `eventId` de este intento (el mismo del `inicio_recorrido`). Fire-and-forget y
-      // DESPUÉS de `setTracking(true)`: `iniciar()` no espera a la SQLite del paquete. Si falla,
-      // `onLocation`/heartbeat lo reintentan; mientras tanto solo no habrá aviso de designación.
-      registrarRecorridoEnSegundoPlano(estadoRegistroRecorrido, sesionId, true, 'iniciar-recorrido-actual');
       // RF-GPS-054: arranca un recorrido NUEVO (flanco de inicio real: este camino no corre en el
       // re-enganche de una pantalla que ya estaba rastreando) — la vuelta en curso empieza de
       // cero; el conteo de vueltas del día se conserva. Best-effort: nunca rechaza el progreso,
@@ -1597,7 +1500,6 @@ export function useGpsOperativo(
     }
   }, [
     suscribirUbicaciones,
-    estadoRegistroRecorrido,
     sembrarCumplimientos,
     deviceId,
     sesionId,
@@ -1628,63 +1530,32 @@ export function useGpsOperativo(
       // escribir `inicio_recorrido` (y de asentar `trackingRef`). `ejecutarIniciar` nunca
       // rechaza (todos sus fallos internos se atrapan y se reportan a Sentry por su cuenta), así
       // que esperar acá no puede hacer fallar `detener()`.
-      // Orden (ver `cierre-recorrido.ts`): esperar `iniciar()` en vuelo -> BORRAR el registro
-      // `recorrido_actual` (antes de cualquier await largo y de apagar `tracking`, para que una
-      // consulta de la vuelta actual en vuelo no resucite el cache) -> detener el nativo -> apagar
-      // `tracking`.
-      await cerrarRecorridoLocal({
-        esperarIniciar: () => serializadorIniciar.esperarPendiente(),
-        suspenderRegistro: () => {
-          // Sin recorrido (eventId null) los reintentos no hacen nada; se guarda lo previo para
-          // restaurarlo si `stop()` falla y el tracking sigue activo.
-          const eventIdPrevio = estadoRegistroRecorrido.eventId;
-          estadoRegistroRecorrido.eventId = null;
-          estadoRegistroRecorrido.registrado = false;
-          return () => {
-            if (eventIdPrevio === null || estadoRegistroRecorrido.eventId !== null) return;
-            reiniciarEstadoRegistroRecorrido(estadoRegistroRecorrido, eventIdPrevio);
-            registrarRecorridoEnSegundoPlano(
-              estadoRegistroRecorrido,
-              sesionId,
-              false,
-              'restaurar-recorrido-actual',
-            );
-          };
-        },
-        borrarRegistro: () => finalizarRecorridoActual(sesionId),
-        reportar: (error) => {
-          Sentry.captureException(error, {
-            tags: { contexto: 'gps-foreground', paso: 'borrar-recorrido-actual' },
-          });
-        },
-        detenerNativo: async () => {
-          await BackgroundGeolocation.stop();
-          subscription.current?.remove();
-          subscription.current = null;
-          heartbeatSubscription.current?.remove();
-          heartbeatSubscription.current = null;
-          motionChangeSubscription.current?.remove();
-          motionChangeSubscription.current = null;
-          // FIX POST-REVISIÓN (hallazgo ALTO, "store visual nunca se reinicia"): corta el canal
-          // visual y reinicia el store ACÁ, de forma explícita y síncrona — no alcanza con dejarlo
-          // solo al efecto `[tracking]` de `iniciarCanalVisual`/`detenerCanalVisual` (más arriba):
-          // ese efecto recién corre en el PRÓXIMO render tras `setTracking(false)` (abajo), y
-          // mientras tanto `mapa/route-map.tsx` seguía mostrando la posición VIEJA del store
-          // (singleton de módulo, nunca se limpiaba solo) en vez de caer al prop `posicionActual`
-          // fresco. `detenerCanalVisual()` es idempotente (no-op sobre la suscripción si el canal ya
-          // estaba parado o el flag está apagado) — segura de llamar siempre. Ver los docblocks de
-          // `detenerCanalVisual` y `reiniciarEstadoVisual` (`movimiento/store-visual.ts`).
-          detenerCanalVisual();
-          reiniciarEstadoVisual();
-        },
-        apagarTracking: () => {
-          // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): "Finalizar" también es
-          // un veredicto real — ver el comentario largo de `veredictoPublicable`, al inicio del hook.
-          veredictoPublicable.current = true;
-          setTracking(false);
-          trackingRef.current = false;
-        },
-      });
+      await serializadorIniciar.esperarPendiente();
+      // Fin del recorrido: invalida consultas en vuelo y borra el cache (fire-and-forget).
+      limpiarVueltaActual(sesionId);
+      await BackgroundGeolocation.stop();
+      subscription.current?.remove();
+      subscription.current = null;
+      heartbeatSubscription.current?.remove();
+      heartbeatSubscription.current = null;
+      motionChangeSubscription.current?.remove();
+      motionChangeSubscription.current = null;
+      // FIX POST-REVISIÓN (hallazgo ALTO, "store visual nunca se reinicia"): corta el canal
+      // visual y reinicia el store ACÁ, de forma explícita y síncrona — no alcanza con dejarlo
+      // solo al efecto `[tracking]` de `iniciarCanalVisual`/`detenerCanalVisual` (más arriba):
+      // ese efecto recién corre en el PRÓXIMO render tras `setTracking(false)` (abajo), y
+      // mientras tanto `mapa/route-map.tsx` seguía mostrando la posición VIEJA del store
+      // (singleton de módulo, nunca se limpiaba solo) en vez de caer al prop `posicionActual`
+      // fresco. `detenerCanalVisual()` es idempotente (no-op sobre la suscripción si el canal ya
+      // estaba parado o el flag está apagado) — segura de llamar siempre. Ver los docblocks de
+      // `detenerCanalVisual` y `reiniciarEstadoVisual` (`movimiento/store-visual.ts`).
+      detenerCanalVisual();
+      reiniciarEstadoVisual();
+      // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): "Finalizar" también es
+      // un veredicto real — ver el comentario largo de `veredictoPublicable`, al inicio del hook.
+      veredictoPublicable.current = true;
+      setTracking(false);
+      trackingRef.current = false;
       // QUI-P0: reverso de `reafirmarMovimiento` — restaura `disableStopDetection: false` para
       // que un futuro re-enganche o inspección de estado no encuentre la política "nunca
       // apagar el GPS" activa fuera de un recorrido real (ver docblock en
@@ -1873,7 +1744,6 @@ export function useGpsOperativo(
     serializadorRestauracion,
     serializadorIniciar,
     estadoInicioRecorrido,
-    estadoRegistroRecorrido,
     detenerCanalVisual,
   ]);
 

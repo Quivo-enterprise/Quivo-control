@@ -29,9 +29,6 @@ export interface EstadoLocalVuelta {
   intentosAnuncio: Record<string, number>;
   /** Claves cuyo acuse el servidor rechazó de forma permanente (4xx): no se reintenta más. */
   acusesAbandonados: string[];
-  /** Recorrido (`event_id` del `inicio_recorrido`) al que pertenece `ultimo`; `null` = ninguno. Un
-   * cache de otro recorrido no se hidrata ni se usa. */
-  recorridoId: string | null;
 }
 
 export const ESTADO_LOCAL_INICIAL: EstadoLocalVuelta = {
@@ -42,7 +39,6 @@ export const ESTADO_LOCAL_INICIAL: EstadoLocalVuelta = {
   actualizadoEn: null,
   intentosAnuncio: {},
   acusesAbandonados: [],
-  recorridoId: null,
 };
 
 /** Intentos máximos de anunciar un aviso (voz + notificación) antes de rendirse. */
@@ -235,18 +231,6 @@ export function abandonarAcuse(estado: EstadoLocalVuelta, clave: string): Estado
   return { ...estado, acusesAbandonados: recortar([...estado.acusesAbandonados, clave]) };
 }
 
-/** Fin del recorrido: se descarta lo que depende del servidor (última respuesta, cancelación,
- * marcas de tiempo, intentos). Las claves anunciadas/cerradas/abandonadas se conservan — son
- * únicas por vuelta+instante y evitan repetir avisos si el recorrido se reinicia. */
-export function reiniciarEstadoRecorrido(estado: EstadoLocalVuelta): EstadoLocalVuelta {
-  return {
-    ...ESTADO_LOCAL_INICIAL,
-    anunciadas: estado.anunciadas,
-    cerradas: estado.cerradas,
-    acusesAbandonados: estado.acusesAbandonados,
-  };
-}
-
 /** ¿El cache de la vuelta es demasiado viejo para presentarlo como actual? Sin respuesta
  * guardada no hay nada que envejecer (`false`); una marca ausente (cache anterior a esta
  * versión) cuenta como vieja. */
@@ -382,18 +366,4 @@ export function coordenadasTramo(
 /** Designación del cache del recorrido actual. El servidor es la única verdad: no hay supresión local. */
 export function designacionVigente(estado: EstadoLocalVuelta): Designacion | null {
   return estado.ultimo?.designacion ?? null;
-}
-
-/** Estado de SOLO LECTURA del cache para el recorrido `recorridoId` (el activo ahora), puro y sin
- * escribir nada: sin recorrido, o con la fila de OTRO recorrido, se trata como vacío (conserva
- * solo las claves de avisos); una fila vieja sin `recorridoId` (APK anterior, a mitad de
- * recorrido) se adopta como del recorrido actual (se completa en la próxima escritura en cola). */
-export function resolverEstadoParaRecorrido(
-  crudo: EstadoLocalVuelta,
-  recorridoId: string | null,
-): EstadoLocalVuelta {
-  if (recorridoId === null) return reiniciarEstadoRecorrido(crudo);
-  if (crudo.recorridoId === recorridoId) return crudo;
-  if (crudo.recorridoId === null) return { ...crudo, recorridoId };
-  return reiniciarEstadoRecorrido(crudo);
 }

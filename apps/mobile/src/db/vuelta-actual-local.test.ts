@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
   fila: null as string | null,
-  lectura: { ok: true, recorridoId: 'rec-1' } as { ok: true; recorridoId: string | null } | { ok: false },
   run: vi.fn(),
 }));
 vi.mock('./paquete-dia', () => ({
@@ -11,12 +10,10 @@ vi.mock('./paquete-dia', () => ({
     runAsync: m.run,
   }),
 }));
-vi.mock('./recorrido-actual', () => ({ leerRecorridoActual: async () => m.lectura }));
 
 import {
   interpretarEstadoLocal,
   leerDesignacionOrdenLocal,
-  leerEstadoVueltaVigente,
 } from './vuelta-actual-local';
 import { ESTADO_LOCAL_INICIAL } from '../features/vuelta-actual/vuelta-actual-core';
 
@@ -47,43 +44,20 @@ function fila(extra: Record<string, unknown>): string {
   return JSON.stringify({ ultimo: ultimoConDesignacion(), anunciadas: ['a'], ...extra });
 }
 
-describe('lectura del cache atada al recorrido (solo lectura)', () => {
+describe('leerDesignacionOrdenLocal', () => {
   beforeEach(() => {
     m.run.mockReset();
-    m.lectura = { ok: true, recorridoId: 'rec-1' };
   });
 
-  it('cache de otro recorrido: se trata como vacío pero NO escribe ni borra', async () => {
-    m.fila = fila({ recorridoId: 'rec-viejo' });
-    const e = (await leerEstadoVueltaVigente('s'))!;
-    expect(e.ultimo).toBeNull();
-    expect(e.anunciadas).toEqual(['a']);
-    expect(await leerDesignacionOrdenLocal('s')).toBeNull();
-    expect(m.run).not.toHaveBeenCalled();
-  });
-
-  it('sin recorrido activo: vacío y sin escribir', async () => {
-    m.fila = fila({ recorridoId: 'rec-1' });
-    m.lectura = { ok: true, recorridoId: null };
-    expect((await leerEstadoVueltaVigente('s'))?.ultimo).toBeNull();
-    expect(m.run).not.toHaveBeenCalled();
-  });
-
-  it('error de lectura del recorrido (ok:false): sin estado ni designación, aunque el cache sea de otro recorrido', async () => {
-    m.fila = fila({ recorridoId: 'rec-viejo' });
-    m.lectura = { ok: false };
-    expect(await leerEstadoVueltaVigente('s')).toBeNull();
-    expect(await leerDesignacionOrdenLocal('s')).toBeNull();
-    expect(m.run).not.toHaveBeenCalled();
-  });
-
-  it('fila vieja sin recorridoId: se adopta como del recorrido actual (sin escribir)', async () => {
+  it('devuelve el punto de espera del cache de la sesión, sin escribir', async () => {
     m.fila = fila({});
-    const e = (await leerEstadoVueltaVigente('s'))!;
-    expect(e.recorridoId).toBe('rec-1');
-    expect(e.ultimo?.vueltaId).toBe(V1);
     expect(await leerDesignacionOrdenLocal('s')).toEqual({ puntoEspera: { id: ESPERA } });
     expect(m.run).not.toHaveBeenCalled();
+  });
+
+  it('sin cache: null', async () => {
+    m.fila = null;
+    expect(await leerDesignacionOrdenLocal('s')).toBeNull();
   });
 });
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
-import { leerEstadoVueltaVigente } from '../../db/vuelta-actual-local';
+import { leerEstadoVueltaLocal } from '../../db/vuelta-actual-local';
 import {
   ESTADO_LOCAL_INICIAL,
   designacionPendienteDeAviso,
@@ -15,7 +15,6 @@ import {
   consultarVueltaActual,
   entenderCancelacion,
   entenderDesignacion,
-  limpiarVueltaActual,
   limpiarVueltaActualDeOtrasSesiones,
   suscribirEstadoVuelta,
 } from './vuelta-actual-oportunista';
@@ -65,17 +64,16 @@ export function useVueltaActual({ sesionId, tracking, obtenerAccessToken }: Para
   tokenRef.current = obtenerAccessToken;
   const obtenerToken = useCallback(() => tokenRef.current(), []);
 
-  // Sin recorrido no hay aviso: el cache solo se hidrata si pertenece al recorrido activo (si es de
-  // otro, o no hay, se trata como vacío; la hidratación es de SOLO LECTURA: el reemplazo del cache
-  // ocurre en la cola de `vuelta-actual-oportunista.ts`). Al reiniciar la app el tracking se
-  // restaura y este efecto lo vuelve a leer.
+  // Sin recorrido (tracking false) no hay aviso: el cache solo se hidrata con el recorrido activo
+  // (`iniciar()`/`detener()` lo limpian). Al reiniciar la app el tracking se restaura y este efecto
+  // lo vuelve a leer.
   useEffect(() => {
     let vivo = true;
     setEstado(ESTADO_LOCAL_INICIAL);
     if (tracking) {
-      leerEstadoVueltaVigente(sesionId)
+      leerEstadoVueltaLocal(sesionId)
         .then((e) => {
-          if (vivo && e) setEstado(e); // null = registro ilegible: no se hidrata
+          if (vivo) setEstado(e);
         })
         .catch(() => undefined);
     }
@@ -94,14 +92,6 @@ export function useVueltaActual({ sesionId, tracking, obtenerAccessToken }: Para
   useEffect(() => {
     void limpiarVueltaActualDeOtrasSesiones(sesionId);
   }, [sesionId]);
-
-  // Fin del recorrido (tracking true -> false, observado en este montaje): se descarta el cache
-  // para que no reaparezca como actual en el próximo recorrido.
-  const trackingPrevio = useRef(tracking);
-  useEffect(() => {
-    if (trackingPrevio.current && !tracking) void limpiarVueltaActual(sesionId);
-    trackingPrevio.current = tracking;
-  }, [tracking, sesionId]);
 
   // Reloj que re-evalúa la antigüedad del cache (no re-renderiza si no hay respuesta guardada).
   const hayCache = estado.ultimo !== null;

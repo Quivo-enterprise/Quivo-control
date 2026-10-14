@@ -13,13 +13,11 @@ import {
   decidirAvisos,
   designacionPendienteDeAviso,
   designacionVigente,
-  resolverEstadoParaRecorrido,
   esCacheDesactualizado,
   esErrorAcusePermanente,
   marcarAnunciada,
   notificacionesObsoletas,
   partesAvisoDesignada,
-  reiniciarEstadoRecorrido,
   respuestasIguales,
   MARGEN_ESPERA_MIN,
   restanteEsperaMin,
@@ -283,14 +281,6 @@ describe('cache desactualizado', () => {
     expect(esCacheDesactualizado(ESTADO_LOCAL_INICIAL, T0)).toBe(false);
     expect(esCacheDesactualizado({ ...base, actualizadoEn: null }, T0)).toBe(true);
   });
-  it('reiniciarEstadoRecorrido descarta la respuesta y conserva las claves ya vistas', () => {
-    const cerrado = cerrarDesignacion(base);
-    const r = reiniciarEstadoRecorrido(cerrado);
-    expect(r.ultimo).toBeNull();
-    expect(r.actualizadoEn).toBeNull();
-    expect(r.anunciadas).toEqual([CLAVE]);
-    expect(r.cerradas).toEqual([CLAVE]);
-  });
 });
 
 describe('acuse: errores permanentes y notificaciones obsoletas', () => {
@@ -413,7 +403,7 @@ describe('textos y tramo', () => {
   });
 });
 
-describe('vuelta cerrada localmente y lectura por recorrido', () => {
+describe('vuelta cerrada localmente', () => {
   const V = '3f8d3c1e-7a52-4f0b-9a3e-1c2d4e5f6a7b';
   const conDesignacion = (vueltaId: string): VueltaActualMovil => ({
     vueltaId,
@@ -436,15 +426,5 @@ describe('vuelta cerrada localmente y lectura por recorrido', () => {
   it('designacionVigente = designación del cache, sin supresión local', () => {
     expect(designacionVigente({ ...ESTADO_LOCAL_INICIAL, ultimo: conDesignacion(V) })).not.toBeNull();
     expect(designacionVigente(ESTADO_LOCAL_INICIAL)).toBeNull();
-  });
-
-  it('resolverEstadoParaRecorrido: otro recorrido o ninguno = vacío; sin id viejo = adopta', () => {
-    const e = { ...ESTADO_LOCAL_INICIAL, ultimo: conDesignacion(V), anunciadas: ['x'], recorridoId: 'r1' };
-    expect(resolverEstadoParaRecorrido(e, 'r1')).toBe(e);
-    expect(resolverEstadoParaRecorrido(e, 'r2').ultimo).toBeNull();
-    expect(resolverEstadoParaRecorrido(e, 'r2').anunciadas).toEqual(['x']);
-    expect(resolverEstadoParaRecorrido(e, null).ultimo).toBeNull();
-    const vieja = { ...e, recorridoId: null };
-    expect(resolverEstadoParaRecorrido(vieja, 'r2')).toEqual({ ...vieja, recorridoId: 'r2' });
   });
 });
