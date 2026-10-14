@@ -312,51 +312,220 @@ export function primerEspolon(trazado: Coord[], boceto?: Coord[], arcoMinM = 100
   return null;
 }
 
-export const MAX_REINTENTOS_POR_REQUEST = 5;
-/** Un waypoint solo se descarta si está a menos de esto del inicio del espolón (si no, no es el culpable). */
+// ============================================================================================
+// Detección de rulos
+// ============================================================================================
+
+export interface Rulo {
+  /** Índice (en `trazado`) del último vértice previo al rulo, ya sobre el boceto. */
+  indice: number;
+  /** Índice (en `trazado`) del primer vértice posterior al rulo. */
+  indiceReingreso: number;
+  salida: Coord;
+  reingreso: Coord;
+  /** Largo recorrido entre la salida y el reingreso (m). */
+  largoM: number;
+  /** Distancia en línea recta entre la salida y el reingreso (m). */
+  rectaM: number;
+  /** Máxima distancia al boceto dentro del rulo (m). */
+  desvioMaxM: number;
+  /** Punto del trazado más alejado del boceto dentro del rulo. */
+  coordDesvioMax: Coord;
+  criterio: 'vuelve-al-boceto' | 'se-cruza';
+}
+
+export interface OpcionesRulos {
+  /** Un tramo cuenta como "fuera del boceto" a más de esto (m). */
+  fueraM?: number;
+  /** El recorrido fuera del boceto debe superar `factor` × la recta salida→reingreso. */
+  factor?: number;
+  /** Recorrido mínimo para que una excursión cuente como rulo (m): filtra ruido. */
+  largoMinM?: number;
+  /** Criterio 2: el trazado pasa a menos de esto de sí mismo... */
+  cercaniaPropiaM?: number;
+  /** ...con más de esto de recorrido entre medio (m). */
+  arcoPropioMinM?: number;
+}
+
+/**
+ * Rulos del trazado: subtramos donde el trazado se aleja del boceto y vuelve dando la vuelta a una
+ * manzana (artefacto de un waypoint `via` ubicado del lado o sentido equivocado). Dos criterios:
+ *  1. 'vuelve-al-boceto': excursión a > `fueraM` del boceto cuyo recorrido supera `factor` × la
+ *     distancia recta entre el punto de salida y el de reingreso. Una calle paralela legítima de
+ *     sentido único tiene salida y reingreso lejos entre sí (recorrido ≈ recta), no es rulo.
+ *  2. 'se-cruza': el trazado pasa dos veces a < `cercaniaPropiaM` de sí mismo con más de
+ *     `arcoPropioMinM` de recorrido entre medio, y ese subtramo se aleja del boceto (> `fueraM`):
+ *     un lazo/giro en U que el propio boceto no dibuja.
+ * Trabaja sobre el trazado densificado a ~10 m (los vértices de Routes pueden estar a 100+ m en rectas).
+ */
+export function detectarRulos(trazado: Coord[], boceto: Coord[], opciones: OpcionesRulos = {}): Rulo[] {
+  const fueraM = opciones.fueraM ?? 35;
+  const pegadoM = 8;
+  const factor = opciones.factor ?? 2.5;
+  const largoMinM = opciones.largoMinM ?? 80;
+  const cercaniaPropiaM = opciones.cercaniaPropiaM ?? 25;
+  const arcoPropioMinM = opciones.arcoPropioMinM ?? 150;
+  if (trazado.length < 3 || boceto.length < 2) return [];
+
+  // Densificación a <= 10 m, recordando el vértice original de cada punto.
+  const pts: Coord[] = [trazado[0]!];
+  const orig: number[] = [0];
+  for (let i = 1; i < trazado.length; i++) {
+    const a = trazado[i - 1]!;
+    const b = trazado[i]!;
+    const n = Math.max(1, Math.ceil(distanciaM(a, b) / 10));
+    for (let k = 1; k <= n; k++) {
+      pts.push(k === n ? b : [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]);
+      orig.push(k === n ? i : i - 1);
+    }
+  }
+  const arco = [0];
+  for (let i = 1; i < pts.length; i++) arco.push(arco[i - 1]! + distanciaM(pts[i - 1]!, pts[i]!));
+  const dBoceto = pts.map((p) => distanciaAPolilineaM(p, boceto));
+
+  const construir = (ia: number, ib: number, criterio: Rulo['criterio']): Rulo => {
+    let max = -1;
+    let cmax = pts[ia]!;
+    for (let k = ia; k <= ib; k++) {
+      if (dBoceto[k]! > max) {
+        max = dBoceto[k]!;
+        cmax = pts[k]!;
+      }
+    }
+    return {
+      indice: orig[ia]!,
+      indiceReingreso: orig[ib]! + (pts[ib]! === trazado[orig[ib]!] ? 0 : 1),
+      salida: pts[ia]!,
+      reingreso: pts[ib]!,
+      largoM: arco[ib]! - arco[ia]!,
+      rectaM: distanciaM(pts[ia]!, pts[ib]!),
+      desvioMaxM: max,
+      coordDesvioMax: cmax,
+      criterio,
+    };
+  };
+
+  const rulos: Rulo[] = [];
+  // Criterio 1: excursiones fuera del boceto.
+  let k = 0;
+  while (k < pts.length) {
+    if (dBoceto[k]! <= fueraM) {
+      k++;
+      continue;
+    }
+    let fin = k;
+    while (fin + 1 < pts.length && dBoceto[fin + 1]! > fueraM) fin++;
+    // La salida/reingreso reales son donde el trazado dejó/retomó el boceto (<= `pegadoM`), no donde cruzó `fueraM`.
+    let ia = k - 1;
+    let ib = fin + 1;
+    while (ia > 0 && dBoceto[ia]! > pegadoM) ia--;
+    while (ib < pts.length - 1 && dBoceto[ib]! > pegadoM) ib++;
+    k = fin + 1;
+    if (ia < 0 || ib >= pts.length || dBoceto[ia]! > pegadoM || dBoceto[ib]! > pegadoM) continue; // el trazado empieza/termina fuera: no hay salida/reingreso
+    const largo = arco[ib]! - arco[ia]!;
+    const recta = distanciaM(pts[ia]!, pts[ib]!);
+    if (largo >= largoMinM && largo > factor * Math.max(recta, 1)) rulos.push(construir(ia, ib, 'vuelve-al-boceto'));
+  }
+  // Criterio 2: el trazado se cruza consigo mismo (planar local, en metros).
+  const lat0 = pts[0]![1];
+  const kx = RADIO_TIERRA_M * RAD * Math.cos(lat0 * RAD);
+  const ky = RADIO_TIERRA_M * RAD;
+  const xy = pts.map((p) => [p[0] * kx, p[1] * ky] as const);
+  const cubiertos = (i: number): boolean => rulos.some((r) => i >= r.indice && i <= r.indiceReingreso);
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      if (arco[j]! - arco[i]! <= arcoPropioMinM) continue;
+      if (Math.hypot(xy[i]![0] - xy[j]![0], xy[i]![1] - xy[j]![1]) >= cercaniaPropiaM) continue;
+      const r = construir(i, j, 'se-cruza');
+      if (r.desvioMaxM > fueraM && !cubiertos(orig[i]!) && !rulos.some((x) => x.indice <= r.indice && x.indiceReingreso >= r.indiceReingreso)) rulos.push(r);
+      i = j; // sigue después del cruce
+      break;
+    }
+  }
+  return rulos.sort((a, b) => a.indice - b.indice);
+}
+
+export const MAX_REINTENTOS_POR_REQUEST = 6;
+/** Un waypoint solo se toca si está a menos de esto del espolón / rulo (si no, no es el culpable). */
 const DISTANCIA_CULPABLE_M = 150;
+/** Máximo de waypoints culpables que se tocan por intento. */
+const MAX_CULPABLES_POR_INTENTO = 2;
+
+/** Puntos que localizan un problema del trozo (espolón o rulo): sirve para elegir waypoints culpables. */
+function geometriaProblema(coords: Coord[], boceto: Coord[]): { problemas: number; ancla: Coord[] } {
+  const ancla: Coord[] = [];
+  const espolon = primerEspolon(coords, boceto);
+  if (espolon) ancla.push(espolon);
+  const rulos = detectarRulos(coords, boceto);
+  for (const r of rulos) {
+    const [ia, ib] = [r.indice, Math.min(r.indiceReingreso, coords.length - 1)];
+    for (let k = ia; k <= ib; k++) ancla.push(coords[k]!);
+  }
+  return { problemas: (espolon ? 1 : 0) + rulos.length, ancla };
+}
 
 /**
  * Ajusta un tramo del boceto a las calles: remuestrea, trocea, llama a Routes y une los trozos.
  *
  * Robustez: con un `heading` que la calle no admite (o un punto del boceto mal puesto), Routes suele
- * "cumplir" el waypoint metiendo un espolón de cientos de metros para dar la vuelta. Si el trozo
- * tiene un espolón, se descarta el waypoint intermedio más cercano a su inicio y se reintenta (hasta
- * `MAX_REINTENTOS_POR_REQUEST`); gana el intento más corto. La validación del tramo decide después.
+ * "cumplir" el waypoint metiendo un espolón o un rulo alrededor de una manzana. Si el trozo tiene
+ * uno, se escalan los waypoints intermedios más cercanos (<= `DISTANCIA_CULPABLE_M`): primero se
+ * QUITAN; si el problema persiste, se REPONEN sin `heading`. Hasta `MAX_REINTENTOS_POR_REQUEST`
+ * reintentos; gana el intento con menos problemas (y luego el más corto). Lo que quede lo rechaza
+ * la validación del tramo (`detectarRulos`), con coordenadas.
  */
 export async function trazarPorCalles(
   boceto: Coord[],
   apiKey: string,
   opciones: { pasoM?: number; maxIntermedios?: number; ventanaRumboM?: number; giroSinRumboGrados?: number } = {},
-): Promise<{ coords: Coord[]; requests: number; descartadas: Coord[] }> {
+): Promise<{ coords: Coord[]; requests: number; descartadas: Coord[]; sinRumbo: Coord[] }> {
   const muestras = remuestrear(boceto, opciones.pasoM ?? ESPACIADO_MUESTRAS_M, opciones.ventanaRumboM ?? VENTANA_RUMBO_M, opciones.giroSinRumboGrados ?? GIRO_SIN_RUMBO_GRADOS);
   const requests = trocear(muestras, opciones.maxIntermedios ?? MAX_INTERMEDIOS);
   const trozos: Coord[][] = [];
   const descartadas: Coord[] = [];
+  const sinRumbo: Coord[] = [];
   let llamadas = 0;
   for (const original of requests) {
-    let req = original;
+    /** 0 = intacto, 1 = quitado, 2 = repuesto sin heading. */
+    const nivel = original.intermedios.map(() => 0);
+    const armar = (): RequestRuta => ({
+      ...original,
+      intermedios: original.intermedios.flatMap((m, k) => (nivel[k] === 0 ? [m] : nivel[k] === 2 ? [{ coord: m.coord, rumbo: null }] : [])),
+    });
     let mejor: Coord[] | null = null;
-    let mejorLargo = Infinity;
+    let mejorClave: [number, number] = [Infinity, Infinity];
+    let mejorNivel = nivel.slice();
     for (let intento = 0; intento <= MAX_REINTENTOS_POR_REQUEST; intento++) {
-      const { coords } = await calcularRutaGoogle(req, apiKey);
+      const { coords } = await calcularRutaGoogle(armar(), apiKey);
       llamadas++;
-      const largo = longitudM(coords);
-      if (largo < mejorLargo) {
+      const { problemas, ancla } = geometriaProblema(coords, boceto);
+      const clave: [number, number] = [problemas, longitudM(coords)];
+      if (clave[0] < mejorClave[0] || (clave[0] === mejorClave[0] && clave[1] < mejorClave[1])) {
         mejor = coords;
-        mejorLargo = largo;
+        mejorClave = clave;
+        mejorNivel = nivel.slice();
       }
-      const espolon = primerEspolon(coords, boceto);
-      if (!espolon || req.intermedios.length === 0) break;
-      let culpable = 0;
-      for (let k = 1; k < req.intermedios.length; k++) {
-        if (distanciaM(req.intermedios[k]!.coord, espolon) < distanciaM(req.intermedios[culpable]!.coord, espolon)) culpable = k;
+      if (problemas === 0 || ancla.length === 0) break;
+      // Waypoints originales (con su nivel actual) ordenados por cercanía al problema.
+      const candidatos = original.intermedios
+        .map((m, k) => ({ k, d: distanciaAPolilineaM(m.coord, ancla.length === 1 ? [ancla[0]!, ancla[0]!] : ancla) }))
+        .filter((c) => c.d <= DISTANCIA_CULPABLE_M)
+        .sort((a, b) => a.d - b.d);
+      let tocados = 0;
+      for (const c of candidatos) {
+        if (tocados >= MAX_CULPABLES_POR_INTENTO) break;
+        if (nivel[c.k]! >= 2) continue;
+        // Los ya quitados no influyen en el resultado: solo se reponen sin heading si el problema persiste.
+        nivel[c.k] = nivel[c.k]! + 1;
+        tocados++;
       }
-      if (distanciaM(req.intermedios[culpable]!.coord, espolon) > DISTANCIA_CULPABLE_M) break;
-      descartadas.push(req.intermedios[culpable]!.coord);
-      req = { ...req, intermedios: req.intermedios.filter((_, k) => k !== culpable) };
+      if (tocados === 0) break;
     }
+    mejorNivel.forEach((n, k) => {
+      if (n === 1) descartadas.push(original.intermedios[k]!.coord);
+      if (n === 2) sinRumbo.push(original.intermedios[k]!.coord);
+    });
     trozos.push(mejor!);
   }
-  return { coords: unirTrozos(trozos), requests: llamadas, descartadas };
+  return { coords: unirTrozos(trozos), requests: llamadas, descartadas, sinRumbo };
 }

@@ -9,6 +9,7 @@ import {
   armarBodyRoutes,
   decodificarPolyline,
   desvioMaximo,
+  detectarRulos,
   distanciaM,
   longitudM,
   primerEspolon,
@@ -174,4 +175,48 @@ test('primerEspolon con boceto: un ir y volver que el boceto dibuja no cuenta; u
   const puente: Coord[] = [recto[19]!, ...[1, 2].map((k) => [recto[19]![0], recto[19]![1] + k * 0.001] as Coord), ...[2, 1].map((k) => [recto[19]![0], recto[19]![1] + k * 0.001] as Coord), recto[19]!];
   const trazado: Coord[] = [...recto.slice(0, 19), ...puente, ...recto.slice(20)];
   assert.ok(primerEspolon(trazado, recto) !== null);
+});
+
+// --- detectarRulos --------------------------------------------------------------------------
+// Plano local alrededor de ORIGEN: dx metros al este, dy metros al norte.
+const KX = 111_320 * Math.cos((-17.39 * Math.PI) / 180);
+const en = (dx: number, dy: number): Coord => [ORIGEN[0] + dx / KX, ORIGEN[1] + dy / 111_320];
+
+test('detectarRulos: avenida recta de 600 m; el trazado rodea una manzana (80 m de fondo) y vuelve', () => {
+  const boceto: Coord[] = [en(0, 0), en(600, 0)];
+  const trazado: Coord[] = [en(0, 0), en(200, 0), en(200, -80), en(300, -80), en(300, 0), en(600, 0)];
+  const rulos = detectarRulos(trazado, boceto);
+  assert.equal(rulos.length, 1);
+  const r = rulos[0]!;
+  assert.equal(r.criterio, 'vuelve-al-boceto');
+  assert.ok(Math.abs(r.desvioMaxM - 80) < 2, `desvío ${r.desvioMaxM}`);
+  assert.ok(distanciaM(r.salida, en(200, 0)) < 15, 'salida');
+  assert.ok(distanciaM(r.reingreso, en(300, 0)) < 15, 'reingreso');
+  assert.ok(r.largoM > 2.5 * r.rectaM);
+});
+
+test('detectarRulos: rulo que vuelve exactamente al punto de salida (espolón de manzana) se detecta', () => {
+  const boceto: Coord[] = [en(0, 0), en(600, 0)];
+  const trazado: Coord[] = [en(0, 0), en(200, 0), en(200, -90), en(260, -90), en(260, 0), en(200, 0), en(600, 0)];
+  assert.ok(detectarRulos(trazado, boceto).length >= 1);
+});
+
+test('detectarRulos: calle paralela de sentido único a 80 m (corrida larga, sin vuelta en U) NO es rulo', () => {
+  const boceto: Coord[] = [en(0, 0), en(900, 0)];
+  const trazado: Coord[] = [en(0, 0), en(100, 0), en(100, -80), en(700, -80), en(700, 0), en(900, 0)];
+  assert.deepEqual(detectarRulos(trazado, boceto), []);
+});
+
+test('detectarRulos: trazado idéntico al boceto, o dentro de 35 m, no tiene rulos', () => {
+  const boceto: Coord[] = [en(0, 0), en(500, 0), en(500, 300)];
+  assert.deepEqual(detectarRulos(boceto, boceto), []);
+  assert.deepEqual(detectarRulos([en(0, 20), en(500, 20), en(520, 300)], boceto), []);
+});
+
+test('detectarRulos: lazo que se cruza a sí mismo (criterio 2) con salida y reingreso separados', () => {
+  const boceto: Coord[] = [en(0, 0), en(600, 0)];
+  // El trazado sale hacia el sur, hace un lazo, se cruza en (200,-60) y sigue.
+  const trazado: Coord[] = [en(0, 0), en(150, 0), en(200, -60), en(300, -100), en(300, -200), en(200, -200), en(200, -60), en(400, -40), en(450, 0), en(600, 0)];
+  const rulos = detectarRulos(trazado, boceto);
+  assert.ok(rulos.length >= 1);
 });

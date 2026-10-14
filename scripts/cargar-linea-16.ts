@@ -50,7 +50,7 @@
  * cada 250 m y cada muestra va como waypoint `via` con `heading` = rumbo del boceto EN EL SENTIDO
  * DEL TRAMO, lo que obliga a Routes a elegir la calzada de ese sentido (el regreso cae en la
  * calzada de vuelta, no sobre la de ida). Máx. 25 intermedios por request: requests encadenados.
- * Cada tramo se valida contra su boceto (desvío máx. <= 300 m, longitud trazado/boceto <= 1,25).
+ * Cada tramo se valida contra su boceto (desvío máx. <= 120 m, longitud trazado/boceto <= 1,25).
  * El resultado se versiona en `scripts/data/linea-16/trazado-calles.json` (con sha256 del KML): si
  * existe y el sha coincide, `--apply` NO llama a Google. `--recalcular-trazado` lo regenera
  * (GOOGLE_ROUTES_API_KEY); `--solo-trazado` escribe además `trazado-vista-previa.geojson` (boceto
@@ -148,7 +148,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { desvioMaximo, longitudM, trazarPorCalles, unirTrozos, ESPACIADO_MUESTRAS_M, MAX_INTERMEDIOS } from './lib/trazar-por-calles.js';
+import { desvioMaximo, detectarRulos, distanciaAPolilineaM, distanciaM, longitudM, trazarPorCalles, unirTrozos, ESPACIADO_MUESTRAS_M, MAX_INTERMEDIOS } from './lib/trazar-por-calles.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -193,10 +193,22 @@ const VERTICES_BOCETO_ESPERADOS = 213;
  * del ajuste. 60 m (primer umbral) rechazaba trazados correctos; los espolones y vueltas largas
  * (>> 300 m) los frena el ratio de longitud y el descarte de waypoints de `trazarPorCalles`.
  */
-const DESVIO_MAX_TRAZADO_M = 300;
+const DESVIO_MAX_TRAZADO_M = 120;
+/**
+ * Excepciones EXPLÍCITAS al desvío máximo. El boceto cruza manzanas en diagonal (a mano), así que
+ * donde la calle real queda a más de 120 m de la diagonal el trazado "legítimo" la supera. Cada una:
+ * tramo, centro [lon, lat], radio de la zona y tope propio. NO VERIFICADAS sobre el mapa: el CTO
+ * debe revisarlas en `trazado-calles.kml` (Google My Maps) antes de `--apply`.
+ */
+const EXCEPCIONES_DESVIO: { tramo: NombreTramo; centro: Coord; radioM: number; maxM: number; motivo: string }[] = [
+  { tramo: 'ida', centro: [-66.2253, -17.32103], radioM: 120, maxM: 150, motivo: 'salida del terminal: el boceto tiene un lazo propio (v10–v13) y diagonales entre manzanas' },
+  { tramo: 'ida', centro: [-66.22277, -17.32515], radioM: 120, maxM: 150, motivo: 'diagonal del boceto entre manzanas; el trazado toma la calle del sentido' },
+  { tramo: 'regreso', centro: [-66.16418, -17.36593], radioM: 150, maxM: 150, motivo: 'cuña de Honduras: la diagonal del boceto (v10–v12) cruza manzanas; el trazado rodea por calles' },
+];
 const RATIO_LONGITUD_MAX = 1.25;
 const TRAZADO_JSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-calles.json');
 const VISTA_PREVIA_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-vista-previa.geojson');
+const KML_TRAZADO_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-calles.kml');
 const TRAMOS = ['ida', 'regreso', 'conector', 'ramal'] as const;
 type NombreTramo = (typeof TRAMOS)[number];
 
@@ -589,10 +601,27 @@ export function validarTramo(nombre: string, boceto: Coord[], trazado: Coord[]):
   const kmBoceto = longitudM(boceto) / 1000;
   const kmTrazado = longitudM(trazado) / 1000;
   const ratio = kmTrazado / kmBoceto;
-  if (desvio.maxM > DESVIO_MAX_TRAZADO_M) {
-    const [lon, lat] = desvio.coord;
+  // Desvío contra el tope general, salvo en las zonas con excepción explícita (que tienen su propio tope).
+  const excepciones = EXCEPCIONES_DESVIO.filter((e) => e.tramo === nombre);
+  const tope = (p: Coord): number => excepciones.find((e) => distanciaM(p, e.centro) <= e.radioM)?.maxM ?? DESVIO_MAX_TRAZADO_M;
+  const revisar = (puntos: Coord[], contra: Coord[], sentido: string): void => {
+    for (const p of puntos) {
+      const d = distanciaAPolilineaM(p, contra);
+      if (d > tope(p)) {
+        throw new Error(`Tramo "${nombre}": desvío máximo ${d.toFixed(1)} m > ${tope(p)} m (${sentido}) en ${p[1].toFixed(6)},${p[0].toFixed(6)}.`);
+      }
+    }
+  };
+  revisar(trazado, boceto, 'punto del trazado lejos del boceto');
+  revisar(boceto, trazado, 'punto del boceto lejos del trazado');
+  // Un trazado con rulos (vuelta a una manzana para reincorporarse a la misma avenida) no se acepta.
+  const rulos = detectarRulos(trazado, boceto);
+  if (rulos.length > 0) {
+    const f = (c: Coord) => `${c[1].toFixed(6)},${c[0].toFixed(6)}`;
     throw new Error(
-      `Tramo "${nombre}": desvío máximo ${desvio.maxM.toFixed(1)} m > ${DESVIO_MAX_TRAZADO_M} m (${desvio.sentido === 'a→b' ? 'punto del trazado lejos del boceto' : 'punto del boceto lejos del trazado'}) en ${lat.toFixed(6)},${lon.toFixed(6)}.`,
+      `Tramo "${nombre}": ${rulos.length} rulo(s) alrededor de una manzana: ` +
+        rulos.map((r) => `sale en ${f(r.salida)} y reingresa en ${f(r.reingreso)} (${r.largoM.toFixed(0)} m de recorrido para ${r.rectaM.toFixed(0)} m en recta, desvío máx ${r.desvioMaxM.toFixed(0)} m en ${f(r.coordDesvioMax)}, criterio ${r.criterio})`).join('; ') +
+        '.',
     );
   }
   if (ratio > RATIO_LONGITUD_MAX) {
@@ -632,7 +661,9 @@ async function obtenerTrazado(kmlTexto: string, boceto: Boceto): Promise<TramosC
     for (const nombre of TRAMOS) {
       const r = await trazarPorCalles(boceto.tramos[nombre], apiKey, { pasoM: ESPACIADO_MUESTRAS_M, maxIntermedios: MAX_INTERMEDIOS });
       tramos[nombre] = r.coords.map((c) => [redondear(c[0]), redondear(c[1])] as Coord);
-      console.log(`    ${nombre}: ${r.requests} request(s), ${tramos[nombre].length} vértices${r.descartadas.length ? `, ${r.descartadas.length} waypoint(s) descartado(s) por provocar espolones` : ''}.`);
+      console.log(`    ${nombre}: ${r.requests} request(s), ${tramos[nombre].length} vértices${r.descartadas.length ? `, ${r.descartadas.length} waypoint(s) quitado(s) por provocar espolones/rulos` : ''}${r.sinRumbo.length ? `, ${r.sinRumbo.length} sin heading` : ''}.`);
+      for (const c of r.descartadas) console.log(`      quitado:    ${c[1].toFixed(6)},${c[0].toFixed(6)}`);
+      for (const c of r.sinRumbo) console.log(`      sin heading: ${c[1].toFixed(6)},${c[0].toFixed(6)}`);
     }
   }
 
@@ -669,6 +700,41 @@ function escribirVistaPrevia(boceto: Boceto, trazado: TramosCoord): void {
   ]);
   fs.writeFileSync(VISTA_PREVIA_PATH, JSON.stringify({ type: 'FeatureCollection', features }) + '\n');
   console.log(`  Escrito ${path.relative(REPO_ROOT, VISTA_PREVIA_PATH)}.`);
+  fs.writeFileSync(KML_TRAZADO_PATH, armarKmlTrazado(boceto, trazado));
+  console.log(`  Escrito ${path.relative(REPO_ROOT, KML_TRAZADO_PATH)} (importable en Google My Maps).`);
+}
+
+const xmlEscape = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/** Colores KML = aabbggrr. */
+const COLOR_KML: Record<NombreTramo, string> = { ida: 'ffff7f00', regreso: 'ff0000ff', conector: 'ff00ffff', ramal: 'ff00c800' };
+const NOMBRE_KML: Record<NombreTramo, string> = { ida: 'Ida', regreso: 'Regreso', conector: 'Conector', ramal: 'Ramal Putucu' };
+
+/** KML para revisar el trazado sobre el mapa de Google (My Maps): una carpeta con el trazado por tramo y otra con el boceto en gris. */
+export function armarKmlTrazado(boceto: Boceto, trazado: TramosCoord): string {
+  const linea = (nombre: string, estilo: string, coords: Coord[]): string =>
+    `    <Placemark><name>${xmlEscape(nombre)}</name><styleUrl>#${estilo}</styleUrl><LineString><tessellate>1</tessellate><coordinates>${coords.map((c) => `${c[0]},${c[1]},0`).join(' ')}</coordinates></LineString></Placemark>`;
+  const estilos = [
+    ...TRAMOS.map((t) => `  <Style id="calles-${t}"><LineStyle><color>${COLOR_KML[t]}</color><width>4</width></LineStyle></Style>`),
+    '  <Style id="boceto"><LineStyle><color>ff9e9e9e</color><width>2</width></LineStyle></Style>',
+  ];
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<kml xmlns="http://www.opengis.net/kml/2.2">',
+    '<Document>',
+    '  <name>Línea 16 — trazado por calles (Google Routes API)</name>',
+    ...estilos,
+    '  <Folder>',
+    '    <name>Trazado por calles</name>',
+    ...TRAMOS.map((t) => linea(`${NOMBRE_KML[t]} (calles)`, `calles-${t}`, trazado[t])),
+    '  </Folder>',
+    '  <Folder>',
+    '    <name>Boceto original (gris)</name>',
+    ...TRAMOS.map((t) => linea(`${NOMBRE_KML[t]} (boceto)`, 'boceto', boceto.tramos[t])),
+    '  </Folder>',
+    '</Document>',
+    '</kml>',
+    '',
+  ].join('\n');
 }
 
 /** Construye y valida todo lo que se va a cargar. Pura: no toca la red. */
