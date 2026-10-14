@@ -345,6 +345,46 @@ export function SearchInput({ placeholder, value, onChange, onClear, className }
  * Enter confirma la opción activa.
  * ------------------------------------------------------------------------------------- */
 
+/** Estilo inline del listbox portado: anclado por `top` (abre hacia abajo) o `bottom` (flip). */
+interface SelectPosition {
+  top?: number;
+  bottom?: number;
+  left: number;
+  width: number;
+  maxHeight: string;
+}
+
+const SELECT_GAP = 6;
+const SELECT_VIEWPORT_MARGIN = 8;
+const SELECT_DEFAULT_HEIGHT = 256; // = `max-height: 16rem` de `.qv-select-listbox`
+
+/**
+ * Posiciona el listbox `fixed` dentro del viewport: abre hacia abajo si cabe, si no hacia
+ * arriba (flip) cuando hay más espacio ahí, y acota `max-height` al espacio disponible para
+ * que ninguna opción quede fuera de pantalla. Un `position: fixed` fuera del viewport no se
+ * puede traer con scroll, así que sin esto las opciones quedaban inalcanzables (Playwright:
+ * "element is outside of the viewport") cuando el trigger estaba cerca del borde inferior.
+ * `contentHeight` es el alto natural del listbox si ya está montado; si no, se asume el máximo.
+ */
+function computeSelectPosition(rect: DOMRect, contentHeight: number | undefined): SelectPosition {
+  const desired = Math.min(contentHeight ?? SELECT_DEFAULT_HEIGHT, SELECT_DEFAULT_HEIGHT);
+  const spaceBelow = window.innerHeight - rect.bottom - SELECT_GAP - SELECT_VIEWPORT_MARGIN;
+  const spaceAbove = rect.top - SELECT_GAP - SELECT_VIEWPORT_MARGIN;
+  const base = { left: rect.left, width: rect.width };
+  if (spaceBelow >= desired || spaceBelow >= spaceAbove) {
+    return {
+      ...base,
+      top: rect.bottom + SELECT_GAP,
+      maxHeight: `min(16rem, ${Math.max(0, spaceBelow)}px)`,
+    };
+  }
+  return {
+    ...base,
+    bottom: window.innerHeight - rect.top + SELECT_GAP,
+    maxHeight: `min(16rem, ${Math.max(0, spaceAbove)}px)`,
+  };
+}
+
 export interface SelectProps {
   id?: string;
   name?: string;
@@ -381,7 +421,7 @@ export function Select({
   const listboxId = `${controlId}-listbox`;
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
-  const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [position, setPosition] = useState<SelectPosition | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const listboxRef = useRef<HTMLUListElement>(null);
   const optionRefs = useRef<(HTMLLIElement | null)[]>([]);
@@ -423,7 +463,7 @@ export function Select({
     function updatePosition() {
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
-      setPosition({ top: rect.bottom + 6, left: rect.left, width: rect.width });
+      setPosition(computeSelectPosition(rect, listboxRef.current?.scrollHeight));
     }
     updatePosition();
     window.addEventListener('scroll', updatePosition, true);
@@ -442,7 +482,7 @@ export function Select({
   function openList() {
     const rect = containerRef.current?.getBoundingClientRect();
     if (rect) {
-      setPosition({ top: rect.bottom + 6, left: rect.left, width: rect.width });
+      setPosition(computeSelectPosition(rect, undefined));
     }
     setOpen(true);
     setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
@@ -528,7 +568,7 @@ export function Select({
               role="listbox"
               id={listboxId}
               aria-label={label ?? ariaLabelProp ?? placeholder}
-              style={position ? { top: position.top, left: position.left, width: position.width } : undefined}
+              style={position ?? undefined}
             >
               {options.map((option, index) => (
                 <li
