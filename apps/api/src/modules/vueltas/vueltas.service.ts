@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
 import type { Prisma } from '@quivo/db';
+import { bloquearVueltasSesion } from '../ingesta-worker/deteccion-vueltas.js';
 import { vueltaContable, vueltaNoVacia } from './vuelta-no-vacia.js';
 import {
   MolinosResumenSchema,
@@ -51,8 +52,8 @@ export class VueltasService {
   /**
    * `PUT /reportes/en-vivo/:sesionId/vuelta-actual/designacion`. Solo con la vuelta `en_curso` y
    * sin llegada al punto de espera (409 si no). `varianteId: null` cancela la designación. El
-   * UPDATE es condicional (`estado = en_curso AND esperaLlegadaTs IS NULL`) y el worker lee la
-   * vuelta con `FOR UPDATE`, así que una llegada concurrente gana de forma atómica. Designar la
+   * UPDATE es condicional (`estado = en_curso AND esperaLlegadaTs IS NULL`) y el worker y esta
+   * función se serializan con el mismo lock de asesoría de la sesión, así que una llegada concurrente gana de forma atómica. Designar la
    * variante que ya tiene (o cancelar sin designación) es un no-op: no reinicia el acuse ni
    * vuelve a avisar al chofer.
    */
@@ -72,26 +73,24 @@ export class VueltasService {
       }
       const SIN_VUELTA =
         'El vehículo todavía no tiene una vuelta en curso: se puede designar desde que sale de la terminal';
-      // Se BLOQUEA la fila de la vuelta antes de decidir nada (el EXISTS de abajo y las demás
-      // reglas leen su estado). Orden de locks: el worker toma FOR SHARE sobre la sesión y luego
-      // FOR UPDATE sobre la vuelta; aquí la sesión se leyó SIN lock (arriba), así que solo se
-      // toma el de la vuelta: no hay orden inverso (vuelta → sesión) ni deadlock posible.
-      // READ COMMITTED: si el worker tenía la fila, este SELECT espera a que su transacción
-      // termine, y cada sentencia posterior toma un snapshot NUEVO: el EXISTS sobre
-      // `cumplimientos_pc` ve lo que el worker/ingesta acaban de confirmar (sin el lock, un
-      // cumplimiento del PC de espera confirmado entre la lectura y el UPDATE se pasaría por alto).
-      // Si tras esperar el lock la candidata ya no está `en_curso` (el worker la cerró y abrió la
-      // siguiente en esa transacción), se BUSCA de nuevo la vuelta en curso y se reintenta UNA vez
-      // con ese lock: el 409 solo sale si de verdad no hay ninguna.
+      // PRIMERO el lock de asesoría de la sesión, el MISMO que toma el worker de vueltas (ver
+      // `bloquearVueltasSesion`): mientras lo tenemos el worker no puede estar a mitad de una
+      // transición (cerrar N / abrir N+1), así que no hace falta reintentar. Orden de locks:
+      // advisory → fila de la vuelta, igual que el worker (que además toma FOR SHARE sobre la
+      // sesión antes; aquí NO se bloquea la fila de la sesión). READ COMMITTED: si el worker tenía
+      // el lock, esta sentencia espera a que su transacción termine y cada sentencia POSTERIOR toma
+      // un snapshot NUEVO: la vuelta en curso que se busca a continuación es la vigente y el EXISTS
+      // sobre `cumplimientos_pc` ve lo que el worker/ingesta acaban de confirmar.
+      await bloquearVueltasSesion(tx, sesionId);
+      const candidata = await tx.vuelta.findFirst({
+        where: { sesionId, estado: 'en_curso' },
+        select: { id: true },
+      });
       let vuelta: Awaited<ReturnType<typeof tx.vuelta.findUnique>> = null;
-      for (let intento = 0; intento < 2 && vuelta === null; intento += 1) {
-        const candidata = await tx.vuelta.findFirst({
-          where: { sesionId, estado: 'en_curso' },
-          select: { id: true },
-        });
-        if (!candidata) break;
+      if (candidata) {
+        // FOR UPDATE inocuo (ya serializados por el advisory): protege frente a quien toque la fila
+        // sin él (p. ej. el trigger de cierre de sesión); la relectura ve su estado final.
         await tx.$queryRaw`SELECT id FROM vueltas WHERE id = ${candidata.id} FOR UPDATE`;
-        // Relectura tras el lock: la vuelta pudo cerrarse mientras esperábamos.
         const releida = await tx.vuelta.findUnique({ where: { id: candidata.id } });
         if (releida && releida.estado === 'en_curso') vuelta = releida;
       }

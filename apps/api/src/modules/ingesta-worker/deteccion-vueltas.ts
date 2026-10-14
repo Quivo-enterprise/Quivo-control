@@ -103,6 +103,15 @@ const MARGEN_VENTANA_SALIDA_MS = 2 * 60_000;
 /** UUID nulo: primer valor del cursor keyset `(ts, event_id)`. */
 const ID_NULO = '00000000-0000-0000-0000-000000000000';
 
+/**
+ * Lock de asesoría (transaccional) que serializa a quien muta las vueltas de UNA sesión: el worker
+ * y la designación toman la MISMA clave. Orden de locks común: (sesión FOR SHARE, solo el worker) →
+ * este advisory → fila de la vuelta FOR UPDATE.
+ */
+export async function bloquearVueltasSesion(tx: Tx, sesionId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`vueltas:${sesionId}`}, 0))`;
+}
+
 export async function procesarVueltasSesion(
   tx: Tx,
   sindicatoId: string,
@@ -141,7 +150,7 @@ export async function procesarVueltasSesion(
   // PRIMER lock: la fila de la sesión con `FOR SHARE`, ANTES de cualquier `FOR UPDATE` sobre
   // `vueltas` (orden de locks: sesión → vuelta; el cierre hace UPDATE de la sesión y luego el
   // trigger `vueltas_cerrar_con_sesion` toca las vueltas, el mismo orden: sin deadlock; la
-  // designación solo bloquea la vuelta). Bajo READ COMMITTED el `FOR SHARE` choca con el row lock
+  // designación toma el advisory de la sesión y la vuelta, nunca la fila de la sesión). Bajo READ COMMITTED el `FOR SHARE` choca con el row lock
   // del UPDATE que cierra la sesión, así que: o el cierre espera a este lote y su trigger ve la
   // vuelta N+1 que abrimos, o este lote espera y relee la sesión ya cerrada. En la MISMA consulta
   // (con el bloqueo) se traen el estado, el cierre y el contexto (vehículo/conductor/ruta/línea):
@@ -173,10 +182,10 @@ export async function procesarVueltasSesion(
 
   // Serializa los lotes de la MISMA sesión (también cuando todavía no hay fila que bloquear: dos
   // lotes concurrentes con la primera vuelta chocarían en el unique `(sesionId, numero)`).
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`vueltas:${sesionId}`}, 0))`;
+  await bloquearVueltasSesion(tx, sesionId);
 
-  // Última vuelta, en DOS sentencias. (1) Se bloquea la fila con `FOR UPDATE` SOLA: una designación
-  // concurrente (que bloquea la misma fila antes de decidir) espera a que este lote termine. (2) La
+  // Última vuelta, en DOS sentencias. (1) Se bloquea la fila con `FOR UPDATE` SOLA: la designación
+  // ya espera en el advisory de arriba; esto protege frente a quien toque la fila sin él. (2) La
   // lectura con el JOIN a `variantes` va DESPUÉS, ya con el lock tomado: si el `FOR UPDATE` espera a
   // otra transacción, Postgres re-evalúa la fila con EvalPlanQual y con un `LEFT JOIN ... FOR UPDATE
   // OF v` los datos del lado nulable (la variante recién designada, su `puntoEsperaId`) pueden

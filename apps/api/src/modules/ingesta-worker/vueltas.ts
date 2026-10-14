@@ -35,7 +35,7 @@ import {
  *   vuelta en curso queda `abierta_al_cierre` y se abre otra.
  * - Espera: la llegada es el cumplimiento del PC de espera de la variante DESIGNADA mientras la
  *   vuelta designada está en curso. Una designada que cierra en la terminal sin llegada genera
- *   `molinos_omitido`. La salida la resuelve `resolverEspera` con los fixes GPS (stateless).
+ *   `molinos_omitido`. La salida la resuelve el worker con `avanzarSalidaEspera`/`cerrarEspera` sobre los fixes GPS (por páginas).
  *
  * Vuelta vacía: la que abrió la terminal (o un `inicio_recorrido`) y todavía no registró ningún PC
  * después (`pasoRetornoTs` y `ultimoPcTs` nulos) ni está designada. Al terminar el recorrido el
@@ -44,15 +44,16 @@ import {
  * vez de cerrarla. Nunca se elimina una designada. Como lo eliminado es siempre la ÚLTIMA vuelta,
  * la numeración del día queda sin huecos: la siguiente que se abra reutiliza ese número.
  * (El trigger `vueltas_cerrar_con_sesion` NUNCA elimina: solo deja la en curso `abierta_al_cierre`.
- * Si el cierre trae lote tardío, esta máquina la reabre y, si al final sigue vacía y sin designar,
- * la elimina por el mismo camino que `fin_recorrido`. Residual documentado: un logout sin `fin` y sin
- * lote tardío deja una `abierta_al_cierre` vacía; las consultas la excluyen con `vueltaNoVacia`.)
+ * Si el cierre trae lote tardío, esta máquina la reabre, pero JAMÁS la elimina: un lote posterior
+ * aún puede traer su avance. Una `abierta_al_cierre` vacía (logout sin `fin`, o lote tardío que no la
+ * llenó) queda como fila y toda consulta que cuente o liste vueltas cerradas la excluye con
+ * `vueltaNoVacia`/`vueltaContable`.)
  *
  * Sesión ya cerrada ("cierre tardío", `opciones.cierreTardio`): lo sincronizado antes del logout
  * pero procesado después no se pierde. Es la MISMA máquina, sin abrir vueltas nunca (ni por terminal
  * ni por `inicio_recorrido`) y sin eventos posteriores a `cierreTs` + `VENTANA_RECORRIDO_TOLERANCIA_MS`.
  * La última vuelta se reabre en memoria solo si es la que cerró el trigger (`abierta_al_cierre` con
- * `finTs == cierreTs`); si quedó `abierta_al_cierre` por un `fin_recorrido` anterior se deja así y
+ * `finTs >= cierreTs`; ver más abajo cuándo `finTs` supera al cierre); si quedó `abierta_al_cierre` por un `fin_recorrido` anterior se deja así y
  * actúa la rama normal (un terminal dentro de la tolerancia la cierra `completa`).
  *
  * Cualquier cumplimiento de un PC activo de la ruta (la máquina ignora los desconocidos: los filtra
@@ -151,8 +152,9 @@ export interface OpcionesAvanzarVueltas {
   /**
    * Modo "cierre tardío" (sesión de login ya cerrada): la máquina normal, pero que nunca abre una
    * vuelta y descarta lo posterior a `cierreTs` + tolerancia de relojes. La última vuelta, si el
-   * trigger la dejó `abierta_al_cierre` con `finTs == cierreTs`, se reabre en memoria; si no se
-   * cierra durante el lote, conserva `abierta_al_cierre` y su `finTs` (o se elimina si quedó vacía).
+   * trigger la dejó `abierta_al_cierre` con `finTs >= cierreTs`, se reabre en memoria; si no se
+   * cierra durante el lote, vuelve a `abierta_al_cierre` con `finTs = max(cierreTs, retorno, último PC, llegada a la espera)`
+   * (nunca anterior a sus hitos) y nunca se elimina.
    */
   cierreTardio?: { cierreTs: Date };
 }
@@ -173,7 +175,10 @@ export function avanzarVueltas(
     // Solo la vuelta que el trigger cerró con la sesión (su `finTs` ES el cierre) se reabre en
     // memoria; cualquier otra (completa, o `abierta_al_cierre` por un `fin_recorrido` anterior)
     // queda como está y la tratan las ramas normales.
-    if (actual?.estado === 'abierta_al_cierre' && actual.finTs?.getTime() === cierreTardio.cierreTs.getTime()) {
+    // `finTs >= cierreTs`: el trigger la deja en `cierreTs`; si un lote tardío anterior aplicó hitos
+    // posteriores (hasta la tolerancia) la subimos a ese hito (ver el final), así que sigue siendo
+    // `>= cierreTs`. Una `abierta_al_cierre` por `fin_recorrido` real tiene `finTs < cierreTs`.
+    if (actual?.estado === 'abierta_al_cierre' && (actual.finTs?.getTime() ?? 0) >= cierreTardio.cierreTs.getTime()) {
       actual = { ...actual, estado: 'en_curso', finTs: null };
       reabierta = true;
     }
@@ -224,8 +229,8 @@ export function avanzarVueltas(
   };
   const cerrarAbierta = (fila: FilaVuelta, ts: Date) => {
     fila.finTs = ts;
-    if (esVueltaVacia(fila)) {
-      // Vacía: se elimina (es la última vuelta, la numeración no deja hueco). `fila` queda como
+    if (esVueltaVacia(fila) && !cierreTardio) {
+      // Vacía: se elimina (jamás en cierre tardío: queda como fila vacía excluida por `vueltaNoVacia`) (es la última vuelta, la numeración no deja hueco). `fila` queda como
       // marca de "recorrido terminado" para los eventos siguientes del lote.
       fila.estado = 'abierta_al_cierre';
       marcar(fila, false, true);
@@ -323,13 +328,18 @@ export function avanzarVueltas(
   }
 
   if (reabierta && ultima && actual?.estado === 'en_curso') {
-    // No terminó: sigue siendo la vuelta que el trigger cerró con la sesión.
+    // No terminó: sigue siendo la vuelta que el trigger cerró con la sesión. Su `finTs` nunca es
+    // anterior a sus propios hitos (retorno, último PC, llegada a la espera: de este lote o de
+    // anteriores), o la ventana de la salida de la espera (`desde <= hasta`) quedaría vacía.
+    // NUNCA se elimina, aunque siga vacía: un lote posterior todavía puede traer su avance
+    // (las consultas la excluyen con `vueltaNoVacia`/`vueltaContable`).
     actual.estado = 'abierta_al_cierre';
-    actual.finTs = ultima.finTs;
-    // Con el lote tardío ya aplicado, si sigue vacía y sin designar se elimina (el trigger nunca
-    // borra). Solo si el lote trajo eventos: uno de solo GPS no debe borrar lo que un lote de
-    // eventos posterior todavía podría llenar.
-    if (eventos.length > 0 && esVueltaVacia(actual)) marcar(actual, false, true);
+    actual.finTs = new Date(
+      Math.max(
+        cierreTardio!.cierreTs.getTime(),
+        ...[actual.pasoRetornoTs, actual.ultimoPcTs, actual.esperaLlegadaTs].map((d) => d?.getTime() ?? 0),
+      ),
+    );
   }
 
   return { cambios: [...cambios.values()], infracciones };
@@ -436,19 +446,6 @@ export function inicioVentanaEspera(p: {
 }
 
 /**
- * Salida del punto de espera sobre una lista completa de fixes (una sola "página"): ver
- * `avanzarSalidaEspera`. `hastaTs` acota por arriba (cierre de la vuelta).
- */
-export function detectarSalidaEspera(
-  llegadaTs: Date,
-  fixes: readonly FixEspera[],
-  radioM: number,
-  hastaTs: Date | null = null,
-): { ts: Date; lat: number; lng: number } | null {
-  return avanzarSalidaEspera(crearEstadoSalidaEspera(), fixes, { llegadaTs, radioM, hastaTs });
-}
-
-/**
  * Cierra la espera de una vuelta designada: dada la salida confirmada, devuelve su `ts` y, si
  * esperó menos de `esperaMin`, la infracción `espera_corta` (`detalle {esperaMin, requeridoMin}`:
  * lo esperado en minutos enteros hacia abajo y lo exigido).
@@ -476,20 +473,4 @@ export function cerrarEspera(
         }
       : null;
   return { esperaSalidaTs: salida.ts, infraccion };
-}
-
-/**
- * Resuelve la espera de una vuelta designada sobre una lista de fixes: `null` si no aplica o
- * todavía no salió. Sin salida confirmada (hueco de GPS) NO se genera alerta: no hay evidencia.
- */
-export function resolverEspera(
-  vuelta: Pick<FilaVuelta, 'id' | 'varianteId' | 'esperaLlegadaTs' | 'esperaSalidaTs'>,
-  fixes: readonly FixEspera[],
-  params: { radioM: number; esperaMin: number; hastaTs?: Date | null },
-): { esperaSalidaTs: Date; infraccion: InfraccionVuelta | null } | null {
-  if (vuelta.varianteId === null || vuelta.esperaLlegadaTs === null || vuelta.esperaSalidaTs !== null) {
-    return null;
-  }
-  const salida = detectarSalidaEspera(vuelta.esperaLlegadaTs, fixes, params.radioM, params.hastaTs ?? null);
-  return salida ? cerrarEspera(vuelta, salida, params.esperaMin) : null;
 }

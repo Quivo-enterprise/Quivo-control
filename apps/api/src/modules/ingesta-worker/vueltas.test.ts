@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   avanzarSalidaEspera,
   avanzarVueltas,
+  cerrarEspera,
   crearEstadoSalidaEspera,
   cursorSalidaEspera,
-  detectarSalidaEspera,
   inicioVentanaEspera,
-  resolverEspera,
   type EventoVuelta,
   type FilaVuelta,
   type FixEspera,
@@ -398,12 +397,28 @@ describe('avanzarVueltas — cierre tardío (sesión ya cerrada)', () => {
     expect(tardio(cerrada({ estado: 'completa' }), [terminal(min(50)), inicio(min(51))]).cambios).toEqual([]);
   });
 
-  it('un terminal SIN retorno no cierra; la vuelta queda vacía y se elimina (el trigger nunca borra)', () => {
+  it('un terminal SIN retorno no cierra; la vuelta vacía NO se elimina (un lote posterior aún podría traer su avance)', () => {
     const r = tardio(cerrada({ pasoRetornoTs: null }), [terminal(min(50))]);
-    expect(r.cambios).toHaveLength(1);
-    expect(r.cambios[0]).toMatchObject({ eliminada: true, nueva: false });
-    // Con retorno (o cualquier otro PC) la misma situación NO la elimina.
-    expect(tardio(cerrada({ pasoRetornoTs: null }), [comun(min(30))]).cambios[0]!.eliminada).toBe(false);
+    expect(r.cambios).toEqual([]);
+    // Ningún lote tardío elimina nunca una vuelta, tenga o no avance.
+    expect(tardio(cerrada({ pasoRetornoTs: null }), [comun(min(30))]).cambios.some((c) => c.eliminada)).toBe(false);
+  });
+
+  it('no cerrada en el lote: finTs = max(cierre, hitos aplicados) y la fila se sigue reconociendo como la del trigger', () => {
+    // Retorno + PC común a los 62 y 64 min (dentro de la tolerancia de 120 s tras el cierre a los 60).
+    const r1 = tardio(cerrada({ pasoRetornoTs: null }), [retorno(seg(60 * 60 + 62)), comun(seg(60 * 60 + 64))]);
+    expect(ultimaDe(r1)).toMatchObject({ estado: 'abierta_al_cierre', finTs: seg(60 * 60 + 64) });
+    expect(ultimaDe(r1).finTs!.getTime()).toBeGreaterThanOrEqual(ultimaDe(r1).pasoRetornoTs!.getTime());
+    // Un hito anterior al cierre no baja el finTs.
+    const r2 = tardio(cerrada({ pasoRetornoTs: null }), [retorno(min(20))]);
+    expect(ultimaDe(r2)).toMatchObject({ estado: 'abierta_al_cierre', finTs: CIERRE });
+    // Con finTs elevado (lote anterior) el siguiente lote tardío la reabre y la cierra completa.
+    const elevada = ultimaDe(r1);
+    const r3 = tardio(elevada, [terminal(seg(60 * 60 + 70))]);
+    expect(ultimaDe(r3)).toMatchObject({ estado: 'completa', finTs: seg(60 * 60 + 70) });
+    // También considera los hitos ya guardados de lotes anteriores.
+    const r4 = tardio(cerrada({ ultimoPcTs: seg(60 * 60 + 70), esperaLlegadaTs: seg(60 * 60 + 90) }), [comun(min(10))]);
+    expect(ultimaDe(r4).finTs).toEqual(seg(60 * 60 + 90));
   });
 
   it('un lote tardío sin eventos aplicables (todos posteriores al cierre) deja la vuelta vacía tal cual: no la toca', () => {
@@ -442,7 +457,7 @@ describe('avanzarVueltas — cierre tardío (sesión ya cerrada)', () => {
   });
 });
 
-describe('detectarSalidaEspera / resolverEspera', () => {
+describe('salida de la espera (camino de producción: avanzarSalidaEspera / cerrarEspera)', () => {
   const RADIO = 150;
   const LLEGADA = min(0);
   // distanciaM > 180 = fuera (radio + 30 m).
@@ -450,29 +465,32 @@ describe('detectarSalidaEspera / resolverEspera', () => {
     ts: new Date(LLEGADA.getTime() + s * 1000), lat: -17.6, lng: -66.0, accuracy, distanciaM,
   });
 
+  const salidaDe = (fixes: readonly FixEspera[], hasta: Date | null = null) =>
+    avanzarSalidaEspera(crearEstadoSalidaEspera(), fixes, { llegadaTs: LLEGADA, radioM: RADIO, hastaTs: hasta });
+
   it('la salida es el primero de dos fixes consecutivos fuera de radio + 30 m', () => {
-    const s = detectarSalidaEspera(LLEGADA, [fix(10, 50), fix(60, 200), fix(90, 400)], RADIO);
+    const s = salidaDe([fix(10, 50), fix(60, 200), fix(90, 400)]);
     expect(s?.ts).toEqual(new Date(LLEGADA.getTime() + 60_000));
   });
 
   it('un solo fix fuera (salto de GPS) o la franja radio..radio+30 no cuentan', () => {
-    expect(detectarSalidaEspera(LLEGADA, [fix(60, 200), fix(90, 100)], RADIO)).toBeNull();
-    expect(detectarSalidaEspera(LLEGADA, [fix(60, 170), fix(90, 175)], RADIO)).toBeNull();
+    expect(salidaDe([fix(60, 200), fix(90, 100)])).toBeNull();
+    expect(salidaDe([fix(60, 170), fix(90, 175)])).toBeNull();
   });
 
   it('un fix dentro corta la racha', () => {
-    expect(detectarSalidaEspera(LLEGADA, [fix(10, 200), fix(20, 50), fix(30, 200)], RADIO)).toBeNull();
+    expect(salidaDe([fix(10, 200), fix(20, 50), fix(30, 200)])).toBeNull();
   });
 
   it('los fixes imprecisos (accuracy > 30 m) se ignoran sin cortar ni sumar', () => {
-    const s = detectarSalidaEspera(LLEGADA, [fix(10, 200), fix(20, 500, 80), fix(30, 220)], RADIO);
+    const s = salidaDe([fix(10, 200), fix(20, 500, 80), fix(30, 220)]);
     expect(s?.ts).toEqual(new Date(LLEGADA.getTime() + 10_000));
-    expect(detectarSalidaEspera(LLEGADA, [fix(10, 200, 80), fix(20, 220, 80)], RADIO)).toBeNull();
+    expect(salidaDe([fix(10, 200, 80), fix(20, 220, 80)])).toBeNull();
   });
 
   it('un fix duplicado (mismo ts y posición) nunca suma dos veces a la racha', () => {
-    expect(detectarSalidaEspera(LLEGADA, [fix(60, 200), fix(60, 200)], RADIO)).toBeNull();
-    expect(detectarSalidaEspera(LLEGADA, [fix(60, 200), fix(60, 200), fix(90, 220)], RADIO)?.ts).toEqual(
+    expect(salidaDe([fix(60, 200), fix(60, 200)])).toBeNull();
+    expect(salidaDe([fix(60, 200), fix(60, 200), fix(90, 220)])?.ts).toEqual(
       new Date(LLEGADA.getTime() + 60_000),
     );
   });
@@ -530,35 +548,38 @@ describe('detectarSalidaEspera / resolverEspera', () => {
       const desde = (gpsMinTs: Date | null) => inicioVentanaEspera({ llegadaTs: LLEGADA, cursor, gpsMinTs, margenMs: MARGEN });
       const leer = (ventana: Date) => todos.filter((f) => f.ts.getTime() >= ventana.getTime());
       // Sin el mínimo del lote la ventana arranca en cursor - margen y se pierde la salida...
-      expect(detectarSalidaEspera(LLEGADA, leer(desde(null)), RADIO)).toBeNull();
+      expect(salidaDe(leer(desde(null)))).toBeNull();
       // ...con el mínimo GPS del lote retrocede y la encuentra.
-      expect(detectarSalidaEspera(LLEGADA, leer(desde(viejos[0]!.ts)), RADIO)?.ts).toEqual(viejos[0]!.ts);
+      expect(salidaDe(leer(desde(viejos[0]!.ts)))?.ts).toEqual(viejos[0]!.ts);
     });
   });
 
   it('ignora fixes anteriores a la llegada y los posteriores al tope', () => {
-    expect(detectarSalidaEspera(LLEGADA, [fix(-30, 300), fix(-20, 300)], RADIO)).toBeNull();
+    expect(salidaDe([fix(-30, 300), fix(-20, 300)])).toBeNull();
     const hasta = new Date(LLEGADA.getTime() + 30_000);
-    expect(detectarSalidaEspera(LLEGADA, [fix(60, 300), fix(90, 300)], RADIO, hasta)).toBeNull();
+    expect(salidaDe([fix(60, 300), fix(90, 300)], hasta)).toBeNull();
   });
 
-  const vuelta = (parcial: Partial<FilaVuelta> = {}) => ({
-    id: 'v-1', varianteId: 'var', esperaLlegadaTs: LLEGADA, esperaSalidaTs: null, ...parcial,
-  });
+  const vuelta = { id: 'v-1', esperaLlegadaTs: LLEGADA };
   const fixesSalida = (minutos: number) => [fix(60, 20), fix(minutos * 60, 300), fix(minutos * 60 + 20, 400)];
+  // Mismo camino que el worker: salida confirmada (estado incremental) y luego `cerrarEspera`.
+  const resolver = (fixes: FixEspera[], esperaMin: number) => {
+    const salida = salidaDe(fixes);
+    return salida ? cerrarEspera(vuelta, salida, esperaMin) : null;
+  };
 
   it('vía Molinos con 35 min de espera: NO hay alerta', () => {
-    const r = resolverEspera(vuelta(), fixesSalida(35), { radioM: RADIO, esperaMin: 30 });
+    const r = resolver(fixesSalida(35), 30);
     expect(r?.esperaSalidaTs).toEqual(new Date(LLEGADA.getTime() + 35 * 60_000));
     expect(r?.infraccion).toBeNull();
   });
 
   it('esperó justo los 30 min: NO hay alerta', () => {
-    expect(resolverEspera(vuelta(), fixesSalida(30), { radioM: RADIO, esperaMin: 30 })?.infraccion).toBeNull();
+    expect(resolver(fixesSalida(30), 30)?.infraccion).toBeNull();
   });
 
   it('con 20 min de espera: espera_corta con detalle {esperaMin, requeridoMin}', () => {
-    const r = resolverEspera(vuelta(), fixesSalida(20), { radioM: RADIO, esperaMin: 30 });
+    const r = resolver(fixesSalida(20), 30);
     expect(r?.infraccion).toMatchObject({
       tipo: 'espera_corta',
       vueltaId: 'v-1',
@@ -568,15 +589,32 @@ describe('detectarSalidaEspera / resolverEspera', () => {
   });
 
   it('29 min 40 s cuenta como 29 (hacia abajo) y sigue siendo alerta', () => {
-    const fixes = [fix(29 * 60 + 40, 300), fix(29 * 60 + 60, 400)];
-    const r = resolverEspera(vuelta(), fixes, { radioM: RADIO, esperaMin: 30 });
+    const r = resolver([fix(29 * 60 + 40, 300), fix(29 * 60 + 60, 400)], 30);
     expect(r?.infraccion?.detalle).toMatchObject({ esperaMin: 29, requeridoMin: 30 });
   });
 
-  it('sin salida confirmada, sin designación, sin llegada o con salida ya resuelta: null', () => {
-    expect(resolverEspera(vuelta(), [fix(60, 20)], { radioM: RADIO, esperaMin: 30 })).toBeNull();
-    expect(resolverEspera(vuelta({ varianteId: null }), fixesSalida(20), { radioM: RADIO, esperaMin: 30 })).toBeNull();
-    expect(resolverEspera(vuelta({ esperaLlegadaTs: null }), fixesSalida(20), { radioM: RADIO, esperaMin: 30 })).toBeNull();
-    expect(resolverEspera(vuelta({ esperaSalidaTs: min(1) }), fixesSalida(20), { radioM: RADIO, esperaMin: 30 })).toBeNull();
+  it('sin salida confirmada (hueco de GPS) no hay cierre ni alerta', () => {
+    expect(resolver([fix(60, 20)], 30)).toBeNull();
+  });
+
+  it('multi-página incremental: la racha cruza páginas, el cursor no pasa del primer fix y cerrarEspera da la alerta', () => {
+    const paginas = [
+      [fix(60, 20), fix(10 * 60, 30)],
+      [fix(20 * 60, 300)], // primero de la racha, sin confirmar
+      [fix(20 * 60 + 20, 400), fix(21 * 60, 500)], // confirma la salida
+    ];
+    const estado = crearEstadoSalidaEspera();
+    const params = { llegadaTs: LLEGADA, radioM: RADIO };
+    expect(avanzarSalidaEspera(estado, paginas[0]!, params)).toBeNull();
+    expect(cursorSalidaEspera(estado)).toEqual(new Date(LLEGADA.getTime() + 10 * 60_000));
+    expect(avanzarSalidaEspera(estado, paginas[1]!, params)).toBeNull();
+    expect(cursorSalidaEspera(estado)).toEqual(new Date(LLEGADA.getTime() + 20 * 60_000 - 1));
+    const salida = avanzarSalidaEspera(estado, paginas[2]!, params);
+    expect(salida?.ts).toEqual(new Date(LLEGADA.getTime() + 20 * 60_000));
+    const cierre = cerrarEspera(vuelta, salida!, 30);
+    expect(cierre.esperaSalidaTs).toEqual(salida!.ts);
+    expect(cierre.infraccion?.detalle).toMatchObject({ esperaMin: 20, requeridoMin: 30 });
+    // Equivale a evaluar todo junto.
+    expect(salidaDe(paginas.flat())?.ts).toEqual(salida!.ts);
   });
 });

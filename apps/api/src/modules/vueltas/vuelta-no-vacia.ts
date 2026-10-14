@@ -1,6 +1,11 @@
 import { Prisma } from '@quivo/db';
 
 /**
+ * REGLA: TODA consulta que cuente o liste vueltas cerradas (completas o `abierta_al_cierre`) DEBE
+ * usar `vueltaContable` / `vueltaNoVacia` (p. ej. el futuro control de cuota de "vueltas faltantes"
+ * de F2). El cierre tardío NUNCA elimina vueltas, así que una `abierta_al_cierre` vacía (logout sin
+ * `fin_recorrido`, o lote tardío que no la llenó) sigue siendo una fila y contaría de más.
+ *
  * Fragmento SQL "la vuelta NO está vacía" (misma definición que `esVueltaVacia` en
  * ingesta-worker/vueltas.ts, negada): designada, con retorno, con algún otro PC o con llegada a la
  * espera. El trigger `vueltas_cerrar_con_sesion` ya no borra: un logout sin `fin_recorrido` y sin lote
