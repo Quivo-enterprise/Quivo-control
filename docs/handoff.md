@@ -6,7 +6,72 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-13 (leer primero): PR E mergeado, modelo de Molinos corregido
+## Punto de retome — 2026-10-14, 01:30 (leer primero): B, C, G y fix del Select mergeados; F1-api (#154) y D (#155) abiertos
+
+Plan vigente: [`docs/plan-molinos-designacion.md`](plan-molinos-designacion.md) (F1 bloquea el APK, F2 después).
+
+**Decisiones del CTO (2026-10-13/14):**
+- **Bucket:** `gs://quivo-control-prod-media` creado y verificado (`southamerica-west1`, acceso uniforme, allUsers `legacyObjectReader`, SA de la API `objectAdmin`).
+- **`expo-updates`:** aprobado.
+- **Aviso de Molinos:** va **dentro del APK**, no por OTA.
+- **Quién designa:** solo desde la web; el admin o "el control" con el rol **`operador`**. El operador ve el mapa y designa en `/en-vivo`, pero no atiende, descarta ni sanciona. El chofer solo recibe el aviso y toca "Entendido" (en la web: "visto ✓").
+- **Sin definir:** tolerancia de "fuera de horario" (solo F2).
+
+| PR | Qué | Commit |
+|---|---|---|
+| #150 | **B.** Teléfono del conductor: `Conductor.telefono`, normalización Bolivia en shared y `redactarPii` en la auditoría. Revisión de seguridad limpia. ⚠ Se mergeó con `acceptance` en rojo, lo que rompió `admin-panel.spec.ts:140`; se corrigió en #153. Desde entonces rige la memoria `merge-gate-todos-los-checks`: `gh pr view <n> --json statusCheckRollup` con `ci` **y** `acceptance` en SUCCESS. | `460e4d2` |
+| #153 | `fix(design-system)`: el listbox del Select se voltea hacia arriba y acota su altura al viewport (`computeSelectPosition`). Codex `fixes_root_cause`. | `99ec4c8` |
+| #152 | **G.** OTA con `expo-updates` (`checkAutomatically: NEVER`). El updater propio solo actualiza en primer plano, sin recorrido activo, y recarga solo en pantallas previas a la operación. `runtimeVersion` por fingerprint. `scripts/publicar-ota.sh`. No verificado en dispositivo. | `2a9efb5` |
+| #151 | **C.** StorageService en GCS; los logos pasan a GCS. Foto del vehículo: `POST/GET /mobile/vehiculo/foto` y `DELETE /vehiculos/:id/foto`. No verificado: subida real a GCS (verificar tras el deploy). | `7a3eb9c` |
+
+**Abiertos (no mergeados):**
+
+- **#154 `feat(api)`: vueltas en el servidor + designación a Molinos.** Worktree `.claude/worktrees/f1-api`, rama `feat/vueltas-molinos-api`.
+  - **Commits:** `7543b58` (feat), `6d2ff33`, `1b948e2`, `52c1fae` y `73ca474` (fixes de las revisiones 1–4). **Todo pusheado.**
+  - **Ronda 4 (`73ca474`):**
+    - `designar` toma primero el mismo advisory lock `vueltas:<sesionId>` que el worker (`bloquearVueltasSesion`), sin reintento: no hay deadlock.
+    - El cierre tardío nunca borra vueltas.
+    - `finTs` = max(cierre, hitos).
+    - Borrados los wrappers muertos.
+    - El chairman revisó el diff de `designar`. Typecheck 10/10; tests api 643, shared 126 y db 34. Un test flaky ajeno al cambio: `auditoria.controller.integration` (401 de better-auth), que pasa solo.
+  - **Diseño final de las vueltas:**
+    - El trigger `vueltas_cerrar_con_sesion` solo marca la vuelta `abierta_al_cierre`; nunca borra. Fija `app.sindicato_id` a la sesión y lo restaura después.
+    - El worker es el único escritor real. El modo "cierre tardío" es la máquina normal sin abrir vueltas, con 120 s de tolerancia.
+    - Las vueltas vacías no designadas se borran en `fin_recorrido` o en un nuevo `inicio`. Las que quedan tras el cierre se excluyen con `vueltaContable` / `vueltaNoVacia`. **F2 debe usar esos filtros.**
+    - Cursor de espera: `esperaRevisadaHastaTs`.
+  - **Gates:**
+    - Revisión de seguridad: limpia.
+    - `/code-review`: 4 rondas, todas aplicadas.
+    - **Falta:** `codex verify-fix` (la cuota de Codex se agotó hasta las 04:06 del 2026-10-14) y el CI verde de `73ca474`.
+    - Correr: `~/.claude/skills/codex-debug/scripts/codex-debug.sh verify-fix --dir .claude/worktrees/f1-api --base 7543b58 --symptom "..."`.
+  - **No decidir más rondas completas de `/code-review`.** Ya encontraban casos cada vez más raros. Lo que quede va como limitación documentada para F2.
+  - **Pruebas locales:** DB `quivo_f1fix` (postgres en el puerto 5434). Correr antes `set -a && . apps/api/.env && set +a` en el worktree.
+- **#155 `feat(mobile)`: foto del vehículo (D).** Worktree `.claude/worktrees/agent-a2c2b043c54958ab0`, rama `feat/mobile-vehiculo-foto`. Commits `07a3281` (feat) y `60fbad4` (fix de 10 hallazgos).
+  - **Qué incluye:**
+    - `expo-image-picker ~17.0.11` y `expo-image-manipulator ~14.0.8`.
+    - Recorte cuadrado de 512 px.
+    - La foto pendiente queda atada a la sesión.
+    - Verifica con un GET antes de reintentar, porque el POST no es idempotente.
+    - `getPendingResultAsync`.
+    - `READ_EXTERNAL_STORAGE` bloqueado. `WRITE` **no**: expo-image-picker lo exige para la cámara en Android < 10.
+  - **CI:** `ci` y `acceptance` en SUCCESS.
+  - **Falta:** `codex verify-fix` (cuota), y después el merge.
+  - **No verificado en dispositivo.** Cambia el fingerprint: va en APK, no por OTA.
+  - Preexistentes que marca `expo install --check`: `expo` 54.0.36 (pide ~54.0.37), `expo-constants`, y `react-native-reanimated` 3.19.5 (pide ~4.1.1). Anotar para el APK.
+
+**Siguiente, en orden:**
+1. Cerrar #154 y #155: verify-fix, CI con todos los checks, merge, borrar la rama y el worktree.
+2. **F1-web** (lista completa en el plan): sección "Vuelta N de hoy" con Directo / Vía Molinos y el chip "Sugerido", estado de acuse, HUD Molinos, badge "M", ícono fijo de atendidas (`infraccionNivelAtendida`), hoja plegable ≤720 px, y el operador solo con mapa + designación.
+3. **F1-mobile**, después de D por el lockfile: `useVueltaActual` y el aviso grande con "Entendido". Incluye `expo-speech` y una notificación local, la ruta ajustada y la cuenta regresiva de la espera.
+4. PR de docs: este handoff y `docs/plan-molinos-designacion.md`, si todavía no se mergeó.
+5. Deploy a prod **con ok del CTO**: `scripts/deploy-gcp.sh` con `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 TAG=r17-...`. Después:
+   - verificar la subida real a GCS y los logos;
+   - `cargar-linea-16.ts --apply`, con ok del CTO, revisando antes las asignaciones y sesiones de la ruta `460c9015…`.
+6. **Breakpoint del APK:** frenar y pasar al CTO el changelog por PR (#150, #151, #152, #153, #154, #155, F1-web, F1-mobile). El CTO va a sumar cambios estéticos y correcciones de la prueba de campo de `1616PIL`.
+7. Verificar si las `EXPO_PUBLIC_*` existen en el environment `production` de EAS.
+8. F2, que necesita la tolerancia de "fuera de horario". Al terminar el piloto: `crear-piloto-linea-16.ts --desactivar --apply`.
+
+## Punto de retome — 2026-10-13 (anterior): PR E mergeado, modelo de Molinos corregido
 
 | PR | Qué | Commit |
 |---|---|---|
