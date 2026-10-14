@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View, Pressable, Platform } from 'react-native';
 import * as Updates from 'expo-updates';
-import Constants from 'expo-constants';
+import * as Application from 'expo-application';
+import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -14,10 +15,11 @@ import { CerrarSesionDialog } from '../../shared/components/cerrar-sesion-dialog
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import {
   MENSAJE_SE_APLICARA_AL_CERRAR,
+  estaInactivoAhora,
   estadoBotonActualizar,
   etiquetaVersion,
-  puedeReiniciarAhora,
-} from './actualizaciones-core';
+} from '../actualizaciones/actualizaciones-core';
+import { reportarErrorActualizacion } from '../../shared/observability/reportar-actualizacion';
 import { createShimmerPlaceholder } from 'react-native-shimmer-placeholder';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -44,35 +46,83 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   const { settings } = useOperacionSettings();
   const [estadoActualizacion, setEstadoActualizacion] = useState<string | null>(null);
   const [buscando, setBuscando] = useState(false);
+  // Guardas en refs (no estado): el closure de `onPress` del Alert queda viejo y `setBuscando`
+  // no es síncrono, así que dos toques seguidos podrían lanzar dos búsquedas.
+  const buscandoRef = useRef(false);
+  const montadoRef = useRef(true);
+  const enfocado = useIsFocused();
+  const enfocadoRef = useRef(enfocado);
+  enfocadoRef.current = enfocado;
+  useEffect(() => {
+    montadoRef.current = true;
+    return () => {
+      montadoRef.current = false;
+    };
+  }, []);
+  const pantallaViva = () => montadoRef.current && enfocadoRef.current;
 
   const botonActualizar = estadoBotonActualizar({ isDev: __DEV__, updatesHabilitado: Updates.isEnabled });
 
   const buscarActualizacion = async () => {
-    if (buscando) return;
+    if (buscandoRef.current) return;
+    buscandoRef.current = true;
     setBuscando(true);
     setEstadoActualizacion('Buscando…');
     try {
       const chequeo = await Updates.checkForUpdateAsync();
       if (!chequeo.isAvailable) {
-        setEstadoActualizacion('Ya tenés la última versión');
+        if (montadoRef.current) setEstadoActualizacion('Ya tenés la última versión');
         return;
       }
       await Updates.fetchUpdateAsync();
-      // Con recorrido/GPS activo NO se ofrece reiniciar: la actualización queda descargada y
-      // se aplica sola en el próximo arranque en frío.
-      if (!puedeReiniciarAhora(gps.tracking)) {
-        setEstadoActualizacion(MENSAJE_SE_APLICARA_AL_CERRAR);
+      // Estado EN VIVO del recorrido (no `gps.tracking`: closure viejo y falso hasta que el
+      // re-enganche nativo resuelve). Con recorrido activo o sin lectura real NO se ofrece
+      // reiniciar: la actualización queda descargada y se aplica en el próximo arranque.
+      if (!estaInactivoAhora()) {
+        if (montadoRef.current) setEstadoActualizacion(MENSAJE_SE_APLICARA_AL_CERRAR);
+        return;
+      }
+      if (!pantallaViva()) {
+        // Sin alerta flotando sobre otra pantalla; el estado queda legible al volver.
+        if (montadoRef.current) setEstadoActualizacion(MENSAJE_SE_APLICARA_AL_CERRAR);
         return;
       }
       setEstadoActualizacion('Actualización lista');
       Alert.alert('Actualización lista', '¿Reiniciar ahora?', [
-        { text: 'Después', style: 'cancel', onPress: () => setEstadoActualizacion(MENSAJE_SE_APLICARA_AL_CERRAR) },
-        { text: 'Reiniciar', onPress: () => void Updates.reloadAsync() },
+        {
+          text: 'Después',
+          style: 'cancel',
+          onPress: () => {
+            if (montadoRef.current) setEstadoActualizacion(MENSAJE_SE_APLICARA_AL_CERRAR);
+          },
+        },
+        {
+          text: 'Reiniciar',
+          onPress: () => {
+            void (async () => {
+              // El chofer pudo iniciar un recorrido mientras el diálogo estaba abierto.
+              if (!estaInactivoAhora()) {
+                if (montadoRef.current) setEstadoActualizacion(MENSAJE_SE_APLICARA_AL_CERRAR);
+                return;
+              }
+              try {
+                await Updates.reloadAsync();
+              } catch (error) {
+                reportarErrorActualizacion(error, 'reload');
+                if (montadoRef.current) {
+                  setEstadoActualizacion(`No se pudo reiniciar. ${MENSAJE_SE_APLICARA_AL_CERRAR}`);
+                }
+              }
+            })();
+          },
+        },
       ]);
-    } catch {
-      setEstadoActualizacion('No se pudo buscar la actualización');
+    } catch (error) {
+      reportarErrorActualizacion(error, 'fetch');
+      if (montadoRef.current) setEstadoActualizacion('No se pudo buscar la actualización');
     } finally {
-      setBuscando(false);
+      buscandoRef.current = false;
+      if (montadoRef.current) setBuscando(false);
     }
   };
 
@@ -203,7 +253,7 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
           <InfoItem
             label="Versión"
             value={etiquetaVersion(
-              Constants.expoConfig?.version,
+              Application.nativeApplicationVersion,
               Updates.updateId,
               Updates.isEmbeddedLaunch,
             )}
