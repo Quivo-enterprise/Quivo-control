@@ -15,7 +15,7 @@ import {
   type Vehiculo,
 } from '@quivo/shared';
 import { Bus, Edit3, History, RefreshCcw, Trash2, Users } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatearFechaFoto } from './vehicle-photo';
 import { NOMBRE_ESTADO } from './vehicle-state-modal';
 
@@ -53,6 +53,18 @@ export function VehicleDetailsModal({
   const [quitando, setQuitando] = useState(false);
   const [errorFoto, setErrorFoto] = useState<string | null>(null);
   const [fotoRota, setFotoRota] = useState<string | null>(null);
+  // `Button` no reenvía refs: se enfoca el primer botón de cada contenedor.
+  const confirmacionRef = useRef<HTMLDivElement>(null);
+  const disparadorRef = useRef<HTMLDivElement>(null);
+  const devolverFoco = useRef(false);
+  useEffect(() => {
+    if (confirmando) {
+      confirmacionRef.current?.querySelector('button')?.focus();
+    } else if (devolverFoco.current) {
+      devolverFoco.current = false;
+      disparadorRef.current?.querySelector('button')?.focus();
+    }
+  }, [confirmando]);
   if (!vehicle) return null;
 
   async function quitarFoto(target: Vehiculo) {
@@ -187,19 +199,32 @@ export function VehicleDetailsModal({
               )}
               {fotoUrl && onRemovePhoto &&
                 (confirmando ? (
-                  <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <div
+                    ref={confirmacionRef}
+                    role="group"
+                    aria-label="Confirmar que se quita la foto de la unidad"
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}
+                  >
                     <span style={{ fontSize: '0.75rem', color: 'var(--qv-text-primary)' }}>
                       ¿Quitar la foto de esta unidad?
                     </span>
                     <Button variant="danger" size="sm" disabled={quitando} onClick={() => void quitarFoto(vehicle)}>
                       {quitando ? 'Quitando...' : 'Sí, quitar'}
                     </Button>
-                    <Button variant="ghost" size="sm" disabled={quitando} onClick={() => setConfirmando(false)}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={quitando}
+                      onClick={() => {
+                        devolverFoco.current = true;
+                        setConfirmando(false);
+                      }}
+                    >
                       Cancelar
                     </Button>
                   </div>
                 ) : (
-                  <div>
+                  <div ref={disparadorRef}>
                     <Button variant="secondary" size="sm" onClick={() => setConfirmando(true)}>
                       <Trash2 size={14} style={{ marginRight: '0.35rem' }} />
                       Quitar foto

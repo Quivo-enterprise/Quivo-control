@@ -25,7 +25,11 @@ export interface SubirArchivo {
 }
 
 export interface ArchivoSubido {
-  /** URL de lectura: pública en GCS; ruta relativa `/v1/media/...` con el driver de disco. */
+  /**
+   * URL de lectura: pública en GCS; con el driver de disco, absoluta si `MEDIA_PUBLIC_BASE_URL`
+   * está definida (la web vive en otro origen y no puede resolver una ruta relativa) o ruta
+   * relativa `/v1/media/...` si no.
+   */
   url: string;
   /** Nombre del objeto dentro del bucket (`prefijo/uuid.ext`). */
   objeto: string;
@@ -43,6 +47,8 @@ export class StorageService {
   private readonly logger = new Logger(StorageService.name);
   private readonly bucketName = process.env.GCS_MEDIA_BUCKET?.trim() || null;
   private readonly storage = this.bucketName ? new Storage() : null;
+  /** Origen público de la API para armar URLs del driver de disco; sin barra final. */
+  private readonly baseLocal = process.env.MEDIA_PUBLIC_BASE_URL?.trim().replace(/\/+$/, '') || null;
   private readonly directorioLocal = fileURLToPath(new URL('../../../media/', import.meta.url));
 
   get usaGcs(): boolean {
@@ -66,7 +72,7 @@ export class StorageService {
 
     await mkdir(join(this.directorioLocal, prefijoLimpio), { recursive: true });
     await writeFile(join(this.directorioLocal, objeto), buffer, { flag: 'wx' });
-    return { url: `${PREFIJO_URL_LOCAL}${objeto}`, objeto };
+    return { url: `${this.baseLocal ?? ''}${PREFIJO_URL_LOCAL}${objeto}`, objeto };
   }
 
   /**
@@ -94,10 +100,15 @@ export class StorageService {
   /** Nombre de objeto si `valor` apunta al almacenamiento configurado; si no, `null`. */
   private resolverObjeto(valor: string): string | null {
     let candidato: string | null = null;
-    const prefijoUrl = this.bucketName
-      ? `https://storage.googleapis.com/${this.bucketName}/`
-      : PREFIJO_URL_LOCAL;
-    if (valor.startsWith(prefijoUrl)) candidato = valor.slice(prefijoUrl.length);
+    // Con el driver de disco se aceptan la ruta relativa (URLs ya guardadas) y la absoluta
+    // con la base configurada; el resultado igual pasa por el regex estricto de abajo.
+    const prefijosUrl = this.bucketName
+      ? [`https://storage.googleapis.com/${this.bucketName}/`]
+      : this.baseLocal
+        ? [`${this.baseLocal}${PREFIJO_URL_LOCAL}`, PREFIJO_URL_LOCAL]
+        : [PREFIJO_URL_LOCAL];
+    const prefijoUrl = prefijosUrl.find((p) => valor.startsWith(p));
+    if (prefijoUrl) candidato = valor.slice(prefijoUrl.length);
     else if (!ESQUEMA_O_RUTA_ABSOLUTA.test(valor)) candidato = valor;
     if (!candidato) return null;
     candidato = candidato.split('?')[0] ?? '';

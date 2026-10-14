@@ -1,5 +1,4 @@
 import { Body, Controller, Get, Inject, Post, UseGuards } from '@nestjs/common';
-import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { SubirFotoVehiculoMovilSchema } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { AuthMovilGuard } from '../auth-movil/auth-movil.guard.js';
@@ -19,11 +18,13 @@ class SubirFotoVehiculoMovilDto extends createZodDto(SubirFotoVehiculoMovilSchem
 export class VehiculoFotoMovilController {
   constructor(@Inject(VehiculoFotoService) private readonly fotoService: VehiculoFotoService) {}
 
-  // 10 subidas/hora por sesión (no por IP: CGNAT — ver `FotoVehiculoThrottlerGuard`), que
-  // corre después de `AuthMovilGuard` porque necesita `req.sesionMovil`.
+  // Dos límites: el `ThrottlerGuard` global ('default', 100/min por IP) se mantiene a
+  // propósito —los POST de 3 MB sin sesión válida no pueden quedar ilimitados— y
+  // `FotoVehiculoThrottlerGuard` suma 10/hora por dispositivo (ttl/limit definidos allí, única
+  // fuente). Este corre después de `AuthMovilGuard` porque necesita `req.sesionMovil`. A
+  // diferencia de /sync, no hay `@SkipThrottle()`: el volumen es bajo y el tope por IP no
+  // reintroduce el problema de CGNAT.
   @Post('foto')
-  @SkipThrottle()
-  @Throttle({ foto: { ttl: 3_600_000, limit: 10 } })
   @UseGuards(FotoVehiculoThrottlerGuard)
   subir(
     @CurrentMobileSession() sesion: SesionMovilAutenticada,

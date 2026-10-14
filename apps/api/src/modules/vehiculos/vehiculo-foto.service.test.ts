@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StorageService } from '../storage/storage.service.js';
 
@@ -73,6 +73,18 @@ describe('VehiculoFotoService', () => {
   it('409 si la sesión no está activa', async () => {
     tx.sesionOperativa.findUnique.mockResolvedValue({ vehiculoId: 'v', estado: 'cerrada', revokedAt: null });
     await expect(service.subirDesdeMovil(sesion, body(JPEG))).rejects.toBeInstanceOf(ConflictException);
+    // Nunca se llegó al lock ni al UPDATE: el objeto subido se limpia.
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.vehiculo.update).not.toHaveBeenCalled();
+    expect(storage.borrar).toHaveBeenCalledWith('vehiculos/nueva.jpg');
+  });
+
+  it('valida la sesión y bloquea el vehículo en UNA sola transacción', async () => {
+    const { withTenantContext } = await import('@quivo/db');
+    await service.subirDesdeMovil(sesion, body(JPEG));
+    expect(withTenantContext).toHaveBeenCalledTimes(1);
+    expect(orden.indexOf('lock')).toBeGreaterThan(orden.indexOf('tx:begin'));
+    expect(orden.filter((o) => o === 'tx:begin')).toHaveLength(1);
   });
 
   it('usa el vehículo de la sesión en base y borra la foto previa recién tras el commit', async () => {
@@ -100,11 +112,35 @@ describe('VehiculoFotoService', () => {
     expect(storage.borrar.mock.calls.map((c) => c[0])).toEqual(['A', 'B']);
   });
 
-  it('si el update falla borra el objeto recién subido y no la foto previa', async () => {
+  it('si el update falla y la fila no apunta al objeto nuevo, lo borra (no la foto previa)', async () => {
     tx.vehiculo.update.mockRejectedValue(new Error('db'));
+    tx.vehiculo.findUnique.mockResolvedValue({ fotoUrl: 'https://x/vehiculos/vieja.jpg' });
     await expect(service.subirDesdeMovil(sesion, body(JPEG))).rejects.toThrow('db');
     expect(storage.borrar).toHaveBeenCalledTimes(1);
     expect(storage.borrar).toHaveBeenCalledWith('vehiculos/nueva.jpg');
+  });
+
+  it('si el error llega con el COMMIT ya aplicado (la fila apunta al objeto nuevo) NO lo borra', async () => {
+    tx.vehiculo.update.mockRejectedValue(new Error('conexión cortada al confirmar'));
+    tx.vehiculo.findUnique.mockResolvedValue({ fotoUrl: 'https://x/vehiculos/nueva.jpg' });
+    await expect(service.subirDesdeMovil(sesion, body(JPEG))).rejects.toThrow('conexión');
+    expect(storage.borrar).not.toHaveBeenCalled();
+  });
+
+  it('si la relectura también falla NO borra (un huérfano es mejor que un puntero roto)', async () => {
+    tx.vehiculo.update.mockRejectedValue(new Error('db'));
+    tx.vehiculo.findUnique.mockRejectedValue(new Error('db caída'));
+    await expect(service.subirDesdeMovil(sesion, body(JPEG))).rejects.toThrow('db');
+    expect(storage.borrar).not.toHaveBeenCalled();
+  });
+
+  it('quitar sin foto: 404, sin UPDATE ni borrado', async () => {
+    tx.$queryRaw.mockResolvedValue([{ fotoUrl: null }]);
+    await expect(
+      service.quitar({ userId: 'u', rol: 'admin_quivo', sindicatoId: null }, 'veh1'),
+    ).rejects.toThrow(new NotFoundException('El vehículo no tiene foto'));
+    expect(tx.vehiculo.update).not.toHaveBeenCalled();
+    expect(storage.borrar).not.toHaveBeenCalled();
   });
 
   it('quitar: lock, update y borrado de la URL reemplazada después del commit', async () => {

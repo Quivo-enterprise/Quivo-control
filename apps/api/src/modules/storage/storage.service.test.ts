@@ -88,4 +88,37 @@ describe('StorageService (disco local)', () => {
     expect(existsSync(join(dirLocal, r.objeto))).toBe(false);
     await expect(s.borrar(r.url)).resolves.toBeUndefined();
   });
+
+  describe('con MEDIA_PUBLIC_BASE_URL', () => {
+    afterEach(() => {
+      delete process.env.MEDIA_PUBLIC_BASE_URL;
+    });
+
+    it('devuelve URL absoluta (sin barra doble) y borrar la acepta, igual que la relativa', async () => {
+      process.env.MEDIA_PUBLIC_BASE_URL = 'http://localhost:4000/';
+      const s = new StorageService();
+      const r = await s.subir({ buffer: Buffer.from('abc'), contentType: 'image/jpeg', prefijo: 'vehiculos' });
+      creados.push(r.objeto);
+      expect(r.url).toBe(`http://localhost:4000/v1/media/${r.objeto}`);
+      await s.borrar(r.url);
+      expect(existsSync(join(dirLocal, r.objeto))).toBe(false);
+
+      const r2 = await s.subir({ buffer: Buffer.from('abc'), contentType: 'image/jpeg', prefijo: 'vehiculos' });
+      creados.push(r2.objeto);
+      await s.borrar(`/v1/media/${r2.objeto}`); // URL relativa ya guardada
+      expect(existsSync(join(dirLocal, r2.objeto))).toBe(false);
+    });
+
+    it('ignora otros orígenes y saltos de directorio', async () => {
+      process.env.MEDIA_PUBLIC_BASE_URL = 'http://localhost:4000';
+      const s = new StorageService();
+      const r = await s.subir({ buffer: Buffer.from('abc'), contentType: 'image/png', prefijo: 'lineas' });
+      creados.push(r.objeto);
+      const id = r.objeto.split('/')[1];
+      await s.borrar(`http://evil.example.com/v1/media/${r.objeto}`);
+      await s.borrar(`http://localhost:4000/v1/media/../media/lineas/${id}`);
+      await s.borrar(`http://localhost:4000/v1/media/lineas/../../x/${id}`);
+      expect(existsSync(join(dirLocal, r.objeto))).toBe(true);
+    });
+  });
 });

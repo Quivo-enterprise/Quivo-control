@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import type { StorageService } from '../storage/storage.service.js';
 import { MediaService } from './media.service.js';
@@ -40,5 +40,24 @@ describe('MediaService logos', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(subir).not.toHaveBeenCalled();
+  });
+});
+
+describe('MediaService.obtenerArchivoLocal', () => {
+  const { service } = crear();
+
+  it('rechaza carpetas fuera de la lista cerrada', () => {
+    for (const carpeta of ['..', 'otra', 'lineas/..', '', 'sindicatos'])
+      expect(() => service.obtenerArchivoLocal(carpeta, 'x.png')).toThrow(NotFoundException);
+  });
+
+  it('rechaza nombres que no cumplen el regex estricto o no son imagen', () => {
+    for (const nombre of ['../x.png', 'a/b.png', 'x.svg', 'x.html', '.png', 'x.png/..'])
+      expect(() => service.obtenerArchivoLocal('vehiculos', nombre)).toThrow(NotFoundException);
+  });
+
+  it('sirve el emblema versionado de lineas con MIME de imagen', () => {
+    const r = service.obtenerArchivoLocal('lineas', 'linea-120-universitaria.png');
+    expect(r.mimeType).toBe('image/png');
   });
 });

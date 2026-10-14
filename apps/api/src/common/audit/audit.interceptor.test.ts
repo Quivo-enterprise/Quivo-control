@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { prisma, withTenantContext } from '@quivo/db';
-import { firstValueFrom, of } from 'rxjs';
+import { firstValueFrom, of, throwError } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AUDIT_ACCION_KEY, AUDIT_ENTIDAD_KEY } from './audit.decorator.js';
 import { AuditInterceptor } from './audit.interceptor.js';
@@ -126,6 +126,23 @@ describe('AuditInterceptor', () => {
       tx.auditLog.findFirst({ where: { entidadId } }),
     );
     expect(fila?.diff).toEqual({ nombre: 'Juan', telefono: '+591******67' });
+  });
+
+  it('no escribe fila de auditoría cuando el handler lanza (p. ej. 404 de quitar foto sin foto)', async () => {
+    const interceptor = interceptorConEntidad('vehiculo', 'quitar_foto');
+    const entidadId = randomUUID();
+    await expect(
+      firstValueFrom(
+        interceptor.intercept(
+          contexto({ method: 'DELETE', params: { id: entidadId }, user: adminQuivo() }),
+          { handle: () => throwError(() => new Error('El vehículo no tiene foto')) },
+        ),
+      ),
+    ).rejects.toThrow('El vehículo no tiene foto');
+    const fila = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.auditLog.findFirst({ where: { entidadId } }),
+    );
+    expect(fila).toBeNull();
   });
 
   it('audita un PATCH usando el id de los params si la respuesta no trae id', async () => {

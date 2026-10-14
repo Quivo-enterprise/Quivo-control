@@ -43,6 +43,14 @@ export function FotoVehiculoMiniatura({ vehicle }: { vehicle: Vehiculo }) {
   );
 }
 
+// Siempre hora de Bolivia, no la del navegador del admin (mismo criterio que `jornadas.ts`).
+const FORMATO_FECHA_FOTO = new Intl.DateTimeFormat('es-BO', {
+  timeZone: 'America/La_Paz',
+  dateStyle: 'medium',
+  timeStyle: 'short',
+});
+
 export function formatearFechaFoto(iso: string): string {
-  return new Date(iso).toLocaleString('es-BO', { dateStyle: 'medium', timeStyle: 'short' });
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? '—' : FORMATO_FECHA_FOTO.format(ms);
 }

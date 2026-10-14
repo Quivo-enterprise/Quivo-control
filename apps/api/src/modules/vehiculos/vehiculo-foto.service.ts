@@ -46,29 +46,33 @@ export class VehiculoFotoService {
     }
 
     const contexto = { rol: 'conductor', sindicatoId: sesion.sindicatoId };
-    // El vehículo sale de la sesión en la base (no del token en memoria): si la sesión ya
-    // se cerró/revocó o el vehículo desapareció, no hay unidad a la que asociar la foto.
-    const vehiculoId = await withTenantContext(contexto, async (tx) => {
-      const fila = await tx.sesionOperativa.findUnique({
-        where: { id: sesion.sesionId },
-        select: { vehiculoId: true, estado: true, revokedAt: true },
-      });
-      if (!fila || fila.revokedAt || fila.estado !== 'activa') return null;
-      return fila.vehiculoId;
-    });
-    if (!vehiculoId) throw new ConflictException(MSG_SIN_VEHICULO);
-
+    // Se sube antes de abrir la transacción para no retener el lock de la fila durante la
+    // subida de red. Si algo falla antes del commit, el objeto se limpia (ver catch).
     const subida = await this.storage.subir({ buffer, contentType, prefijo: 'vehiculos' });
     const actualizadaEn = new Date();
+    // Vehículo resuelto dentro de la transacción; `null` mientras no se llegó a la fila.
+    let vehiculoId: string | null = null;
     let anterior: string | null;
     try {
       anterior = await withTenantContext(contexto, async (tx) => {
+        // El vehículo sale de la sesión en la base (no del token en memoria): si la sesión ya
+        // se cerró/revocó o el vehículo desapareció, no hay unidad a la que asociar la foto.
+        // Se valida en la MISMA transacción que bloquea la fila, así no hay ventana entre el
+        // chequeo y la escritura.
+        const fila = await tx.sesionOperativa.findUnique({
+          where: { id: sesion.sesionId },
+          select: { vehiculoId: true, estado: true, revokedAt: true },
+        });
+        if (!fila || fila.revokedAt || fila.estado !== 'activa') {
+          throw new ConflictException(MSG_SIN_VEHICULO);
+        }
+        vehiculoId = fila.vehiculoId;
         // Bloquea la fila antes de leer la URL previa: dos subidas (o subida + borrado admin)
         // concurrentes se serializan y cada una borra exactamente la URL que ella reemplazó.
-        const previa = await bloquearFotoVehiculo(tx, vehiculoId);
+        const previa = await bloquearFotoVehiculo(tx, fila.vehiculoId);
         if (!previa) throw new ConflictException(MSG_SIN_VEHICULO);
         await tx.vehiculo.update({
-          where: { id: vehiculoId },
+          where: { id: fila.vehiculoId },
           data: {
             fotoUrl: subida.url,
             fotoActualizadaEn: actualizadaEn,
@@ -78,14 +82,37 @@ export class VehiculoFotoService {
         return previa.fotoUrl;
       });
     } catch (error: unknown) {
-      // La fila no cambió: el objeto recién subido quedaría huérfano.
-      await this.storage.borrar(subida.objeto);
+      // El error puede llegar con el COMMIT ya aplicado (p. ej. conexión cortada al confirmar):
+      // borrar el objeto dejaría la fila apuntando a una URL rota. Se relee la fila y sólo se
+      // borra si NO apunta al objeto nuevo; si la relectura falla, mejor un huérfano.
+      await this.limpiarSubidaFallida(contexto, vehiculoId, subida);
       throw error;
     }
 
     // Después del commit y best effort: un fallo acá solo deja un objeto huérfano.
     if (anterior && anterior !== subida.url) await this.storage.borrar(anterior);
     return { fotoUrl: subida.url, fotoActualizadaEn: actualizadaEn.toISOString() };
+  }
+
+  private async limpiarSubidaFallida(
+    contexto: { rol: string; sindicatoId: string },
+    vehiculoId: string | null,
+    subida: { url: string; objeto: string },
+  ): Promise<void> {
+    // Sin vehículo resuelto nunca se llegó al UPDATE: el objeto es seguro de borrar.
+    if (vehiculoId === null) return this.storage.borrar(subida.objeto);
+    try {
+      const fila = await withTenantContext(contexto, (tx) =>
+        tx.vehiculo.findUnique({ where: { id: vehiculoId }, select: { fotoUrl: true } }),
+      );
+      if (fila?.fotoUrl === subida.url) return;
+    } catch (error: unknown) {
+      this.logger.warn(
+        `No se pudo verificar la foto del vehículo ${vehiculoId}; se conserva ${subida.objeto} (un huérfano es preferible a una URL rota): ${String(error)}`,
+      );
+      return;
+    }
+    await this.storage.borrar(subida.objeto);
   }
 
   async obtenerDesdeMovil(sesion: SesionMovilAutenticada): Promise<FotoVehiculo | null> {
@@ -108,6 +135,9 @@ export class VehiculoFotoService {
       async (tx) => {
         const previo = await bloquearFotoVehiculo(tx, id);
         if (!previo) throw new NotFoundException('Vehículo no encontrado');
+        // Sin foto no hay nada que quitar: sin UPDATE, sin borrado y (al lanzar) sin fila de
+        // auditoría — `AuditInterceptor` sólo escribe cuando el handler termina bien.
+        if (!previo.fotoUrl) throw new NotFoundException('El vehículo no tiene foto');
         const fila = await tx.vehiculo.update({
           where: { id },
           data: { fotoUrl: null, fotoActualizadaEn: null, fotoSubidaPorId: null },

@@ -6,6 +6,9 @@ import { StorageService } from '../storage/storage.service.js';
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 const MIME_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' } as const;
+/** Carpetas servibles por `GET /media/:carpeta/:filename` (lista cerrada). */
+export const CARPETAS_MEDIA = ['lineas', 'vehiculos'] as const;
+export type CarpetaMedia = (typeof CARPETAS_MEDIA)[number];
 export type SupportedMimeType = keyof typeof MIME_TYPES;
 
 export interface UploadLineaLogo {
@@ -19,7 +22,7 @@ export class MediaService {
 
   constructor(@Inject(StorageService) private readonly storage: StorageService) {}
 
-  /** `url` es absoluta con GCS y relativa (`/v1/media/lineas/...`) con el driver de disco. */
+  /** `url` es absoluta con GCS (o con disco + `MEDIA_PUBLIC_BASE_URL`) y relativa (`/v1/media/lineas/...`) con disco sin base. */
   async guardarLogoLinea(upload: UploadLineaLogo): Promise<{ url: string }> {
     const prefix = `data:${upload.mimeType};base64,`;
     if (!upload.contenido.startsWith(prefix))
@@ -42,9 +45,11 @@ export class MediaService {
 
   /** Sirve archivos del driver de disco (dev) y los logos ya guardados antes de GCS. */
   obtenerArchivoLocal(
-    carpeta: 'lineas' | 'vehiculos',
+    carpeta: string,
     filename: string,
   ): { path: string; mimeType: SupportedMimeType } {
+    if (!(CARPETAS_MEDIA as readonly string[]).includes(carpeta))
+      throw new NotFoundException('Imagen no encontrada.');
     if (!/^[a-z0-9][a-z0-9-]*\.(png|jpe?g|webp)$/i.test(filename))
       throw new NotFoundException('Imagen no encontrada.');
     const path = join(this.mediaDirectory, carpeta, filename);

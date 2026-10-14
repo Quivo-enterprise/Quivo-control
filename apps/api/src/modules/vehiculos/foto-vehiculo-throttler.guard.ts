@@ -6,10 +6,15 @@ import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
 
 type RequestConSesionMovil = FastifyRequest & { sesionMovil?: SesionMovilAutenticada };
 
+/** Única fuente del límite de subidas de foto (el controlador no lo repite). */
+export const FOTO_VEHICULO_THROTTLE = { name: 'foto', ttl: 3_600_000, limit: 10 } as const;
+
 /**
- * Rate limit de `POST /mobile/vehiculo/foto` por sesión móvil (10/hora) en vez de por IP:
+ * Rate limit de `POST /mobile/vehiculo/foto` por dispositivo móvil (10/hora) en vez de por IP:
  * detrás de CGNAT muchos conductores comparten IP (mismo motivo que `SyncDeviceThrottlerGuard`).
- * Debe correr después de `AuthMovilGuard`, que es quien setea `req.sesionMovil`.
+ * La clave es `deviceId` (estable) y no `sesionId`: reiniciar sesión no resetea el cupo.
+ * Debe correr después de `AuthMovilGuard`, que es quien setea `req.sesionMovil`. Es un throttler
+ * adicional ('foto'): el global 'default' por IP sigue activo en la ruta.
  */
 @Injectable()
 export class FotoVehiculoThrottlerGuard extends ThrottlerGuard {
@@ -17,10 +22,10 @@ export class FotoVehiculoThrottlerGuard extends ThrottlerGuard {
     @InjectThrottlerStorage() storageService: ThrottlerStorage,
     @Inject(Reflector) reflector: Reflector,
   ) {
-    super([{ name: 'foto', ttl: 3_600_000, limit: 10 }], storageService, reflector);
+    super([{ ...FOTO_VEHICULO_THROTTLE }], storageService, reflector);
   }
 
   protected async getTracker(req: RequestConSesionMovil): Promise<string> {
-    return req.sesionMovil?.sesionId ?? req.ip;
+    return req.sesionMovil?.deviceId ?? req.ip;
   }
 }

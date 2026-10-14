@@ -86,4 +86,31 @@ describe('validateRuntimeConfig', () => {
 
     expect(() => validateRuntimeConfig()).toThrow(/CORS_ORIGIN no puede usar \*/);
   });
+
+  describe('MEDIA_PUBLIC_BASE_URL', () => {
+    function entornoDev(base: string | undefined) {
+      vi.stubEnv('NODE_ENV', 'development');
+      vi.stubEnv('DATABASE_URL', 'postgresql://postgres:x@host/db');
+      vi.stubEnv('JWT_SECRET', 'a'.repeat(32));
+      vi.stubEnv('PORT', '3001');
+      vi.stubEnv('MEDIA_PUBLIC_BASE_URL', base);
+    }
+
+    it('acepta un origen http(s) o ausente', () => {
+      entornoDev('http://localhost:4000');
+      expect(() => validateRuntimeConfig()).not.toThrow();
+      entornoDev('https://api.example.com/');
+      expect(() => validateRuntimeConfig()).not.toThrow();
+      entornoDev(undefined);
+      expect(() => validateRuntimeConfig()).not.toThrow();
+    });
+
+    it.each(['localhost:4000', 'ftp://x.com', 'https://x.com/v1', 'https://x.com/?a=1'])(
+      'rechaza %s',
+      (valor) => {
+        entornoDev(valor);
+        expect(() => validateRuntimeConfig()).toThrow(/MEDIA_PUBLIC_BASE_URL/);
+      },
+    );
+  });
 });

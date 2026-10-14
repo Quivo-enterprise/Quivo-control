@@ -55,6 +55,28 @@ export function validateRuntimeConfig(): void {
       'GCS_MEDIA_BUCKET no está definida en producción: la media se guarda en disco efímero y se pierde al reiniciar.',
     );
   }
+  // MEDIA_PUBLIC_BASE_URL es opcional: origen público de la API (p. ej. http://localhost:4000)
+  // con el que el driver de disco arma URLs absolutas de media. Sin ella quedan relativas.
+  const baseMedia = process.env.MEDIA_PUBLIC_BASE_URL?.trim();
+  if (baseMedia) {
+    let url: URL | null = null;
+    try {
+      url = new URL(baseMedia);
+    } catch {
+      url = null;
+    }
+    if (
+      !url ||
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.pathname !== '/' ||
+      url.search ||
+      url.hash
+    ) {
+      throw new Error(
+        'MEDIA_PUBLIC_BASE_URL debe ser un origen http(s) sin ruta (p. ej. http://localhost:4000)',
+      );
+    }
+  }
   const port = Number(process.env.PORT ?? 3001);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error('PORT debe ser un entero entre 1 y 65535');
