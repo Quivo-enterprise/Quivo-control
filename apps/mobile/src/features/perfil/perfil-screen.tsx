@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View, Pressable, Platform } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View, Pressable, Platform } from 'react-native';
+import * as Updates from 'expo-updates';
+import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -10,6 +12,12 @@ import { usePerfilQuery } from './use-perfil-query';
 import { useTextScale, useOperacionSettings } from './use-operacion-settings';
 import { CerrarSesionDialog } from '../../shared/components/cerrar-sesion-dialog';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import {
+  MENSAJE_SE_APLICARA_AL_CERRAR,
+  estadoBotonActualizar,
+  etiquetaVersion,
+  puedeReiniciarAhora,
+} from './actualizaciones-core';
 import { createShimmerPlaceholder } from 'react-native-shimmer-placeholder';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -34,6 +42,39 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
   const scale = useTextScale();
   const { settings } = useOperacionSettings();
+  const [estadoActualizacion, setEstadoActualizacion] = useState<string | null>(null);
+  const [buscando, setBuscando] = useState(false);
+
+  const botonActualizar = estadoBotonActualizar({ isDev: __DEV__, updatesHabilitado: Updates.isEnabled });
+
+  const buscarActualizacion = async () => {
+    if (buscando) return;
+    setBuscando(true);
+    setEstadoActualizacion('Buscando…');
+    try {
+      const chequeo = await Updates.checkForUpdateAsync();
+      if (!chequeo.isAvailable) {
+        setEstadoActualizacion('Ya tenés la última versión');
+        return;
+      }
+      await Updates.fetchUpdateAsync();
+      // Con recorrido/GPS activo NO se ofrece reiniciar: la actualización queda descargada y
+      // se aplica sola en el próximo arranque en frío.
+      if (!puedeReiniciarAhora(gps.tracking)) {
+        setEstadoActualizacion(MENSAJE_SE_APLICARA_AL_CERRAR);
+        return;
+      }
+      setEstadoActualizacion('Actualización lista');
+      Alert.alert('Actualización lista', '¿Reiniciar ahora?', [
+        { text: 'Después', style: 'cancel', onPress: () => setEstadoActualizacion(MENSAJE_SE_APLICARA_AL_CERRAR) },
+        { text: 'Reiniciar', onPress: () => void Updates.reloadAsync() },
+      ]);
+    } catch {
+      setEstadoActualizacion('No se pudo buscar la actualización');
+    } finally {
+      setBuscando(false);
+    }
+  };
 
   if (isLoading || !contexto) {
     return <PerfilSkeleton navigation={navigation} />;
@@ -150,6 +191,36 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
             onPress={() => setConfirmarLogoutVisible(true)}
           />
         </View>
+
+        {/* Sección: Versión y actualizaciones (OTA, expo-updates) */}
+        <Text
+          style={[styles.sectionTitle, { fontSize: 14 * scale }]}
+          allowFontScaling={!settings.textoGrande}
+        >
+          Aplicación
+        </Text>
+        <View style={styles.card}>
+          <InfoItem
+            label="Versión"
+            value={etiquetaVersion(
+              Constants.expoConfig?.version,
+              Updates.updateId,
+              Updates.isEmbeddedLaunch,
+            )}
+          />
+          <View style={styles.divider} />
+          <NavigationItem
+            icon="cloud-download-outline"
+            title="Buscar actualización"
+            description={
+              botonActualizar.habilitado
+                ? (estadoActualizacion ?? 'Descarga la última versión disponible')
+                : botonActualizar.motivo
+            }
+            disabled={!botonActualizar.habilitado || buscando}
+            onPress={() => void buscarActualizacion()}
+          />
+        </View>
       </ScrollView>
 
       {/* Modal de confirmación seguro de cierre de sesión */}
@@ -192,11 +263,13 @@ function NavigationItem({
   title,
   description,
   onPress,
+  disabled = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
   description: string;
   onPress: () => void;
+  disabled?: boolean;
 }) {
   const scale = useTextScale();
   const { settings } = useOperacionSettings();
@@ -205,7 +278,9 @@ function NavigationItem({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={title}
-      style={({ pressed }) => [styles.navItem, pressed && styles.navItemPressed]}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      style={({ pressed }) => [styles.navItem, (pressed || disabled) && styles.navItemPressed]}
       onPress={onPress}
     >
       <Ionicons name={icon} size={25} color="#3127B1" style={styles.navIcon} />

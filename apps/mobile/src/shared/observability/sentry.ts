@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/react-native';
 import * as Application from 'expo-application';
 import Constants from 'expo-constants';
+import * as Updates from 'expo-updates';
 
 /**
  * QUI-365 — Sentry para `apps/mobile`. Mismo patrón condicional que `apps/api`
@@ -33,6 +34,12 @@ export function initSentry(): void {
     enableNative: true,
     enableNativeCrashHandling: true,
   });
+
+  // OTA (expo-updates): distingue en Sentry el bundle embebido de una actualización OTA.
+  // `updateId` es null/ausente en dev; `isEmbeddedLaunch` evita atribuir al APK un id de OTA.
+  Sentry.setTag('updateId', Updates.isEmbeddedLaunch || !Updates.updateId ? 'embedded' : Updates.updateId);
+  if (Updates.runtimeVersion) Sentry.setTag('runtimeVersion', Updates.runtimeVersion);
+  if (Updates.channel) Sentry.setTag('channel', Updates.channel);
 }
 
 /**

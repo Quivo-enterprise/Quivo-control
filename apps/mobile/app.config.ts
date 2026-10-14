@@ -44,6 +44,22 @@ export default (): ExpoConfig => ({
   orientation: 'portrait',
   newArchEnabled: false,
   platforms: ['android'],
+  // OTA (EAS Update). `fallbackToCacheTimeout: 0` + `ON_LOAD`: la actualización se descarga en
+  // segundo plano y se aplica en el PRÓXIMO arranque en frío; nunca bloquea el arranque de un
+  // conductor en plena jornada.
+  //
+  // `runtimeVersion` = `appVersion` (NO `fingerprint`): medido con `@expo/fingerprint`, el hash
+  // de `expoConfig` cambia al variar `GOOGLE_MAPS_ANDROID_API_KEY` o `TRANSISTORSOFT_LICENSE_KEY`
+  // (ambas viajan en la config resuelta). Esas variables son SENSIBLES de EAS: el build las
+  // tiene y un `eas update` corrido en otra máquina no, así que el runtimeVersion del update
+  // nunca coincidiría con el del APK. Regla: cualquier cambio NATIVO (dependencia con código
+  // nativo, plugin, permisos) exige subir `version` antes de publicar OTA.
+  runtimeVersion: { policy: 'appVersion' },
+  updates: {
+    url: 'https://u.expo.dev/09e5dff3-e3dc-408f-a930-bc067a8ff69a',
+    checkAutomatically: 'ON_LOAD',
+    fallbackToCacheTimeout: 0,
+  },
   icon: './assets/images/icon.png',
   android: {
     // QUI-… (decisión del CTO, ronda de verify-fix del logout/sesión): el trial de
