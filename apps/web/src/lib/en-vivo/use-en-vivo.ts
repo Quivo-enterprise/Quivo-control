@@ -4,16 +4,19 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TRAZA_EN_VIVO_LIMITE_MAX,
   type ContextoEnVivo,
+  type Infraccion,
   type JornadasDelDia,
   type PosicionEnVivo,
   type SesionEnVivoResumen,
 } from '@quivo/shared';
 import { enVivoApi } from '../api/en-vivo';
+import { infraccionesApi } from '../api/infracciones';
 import { reportesApi } from '../api/reportes';
 import {
   debeRecargar,
   desdeConSolape,
   fusionarTraza,
+  INTERVALO_POLL_MS,
   intervaloPoll,
   type TrazaAcumulada,
 } from './traza';
@@ -201,6 +204,32 @@ export function useJornadasHoy(token: string | null) {
     enabled: Boolean(token),
     queryFn: () => reportesApi.jornadas(token as string),
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: REINTENTOS,
+    retryDelay,
+  });
+}
+
+/**
+ * PR E (`docs/plan-en-vivo-alertas.md`) — infracciones de la sesión con el panel abierto
+ * (`GET /reportes/en-vivo/:sesionId/infracciones`). Se refresca al ritmo del poll de la traza
+ * de ESA sesión (`intervaloPoll` sobre la cache de `useTrazaEnVivo`: más lento en reporte
+ * normal y `false` —pausado— cuando la traza también lo está): son datos que cambian al ritmo
+ * del worker de ingesta, no de la telemetría. Las mutaciones invalidan esta key y la de
+ * posiciones.
+ */
+export function useInfraccionesSesion(token: string | null, sesionId: string | null) {
+  const queryClient = useQueryClient();
+  return useQuery<Infraccion[]>({
+    queryKey: ['en-vivo', 'infracciones', sesionId],
+    enabled: Boolean(token && sesionId),
+    queryFn: () => infraccionesApi.listarPorSesion(token as string, sesionId as string),
+    refetchInterval: () => {
+      const intervalo = intervaloPoll(queryClient.getQueryData<TrazaAcumulada>(['en-vivo', 'traza', sesionId]));
+      // El catch-up de la traza (1 s) no aplica a las infracciones: piso en la cadencia normal.
+      return intervalo === false ? false : Math.max(intervalo, INTERVALO_POLL_MS);
+    },
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: REINTENTOS,

@@ -143,6 +143,8 @@ Quiere esto en el producto real, mejorado y sobre Google Maps.
 - **`NuevaSancionModal`:** agrega la prop `valoresIniciales?` y un callback que llama a `POST /infracciones/:id/sancionar`. El flujo de `/reglas` no cambia.
 - **UI:** es un componente puntual con dirección ya elegida por el CTO en el demo, así que va por camino único sin bake-off (regla 7.c): `impeccable` + iconify, y gate con `web-design-guidelines` + `/code-review`.
 - **Si la foto, el teléfono o las infracciones todavía no existen, todo degrada:** sprite actual, sin botones de contacto y sin alerta. Por eso E puede mergearse después de A, sin esperar a C y D.
+- **Desvío respecto del plan (implementación de E, 2026-10-13):** "Atender" no deja el ícono de severidad fijo, sino que el marcador pierde la alerta. Causa: el LATERAL de `obtenerPosiciones` solo cuenta `estado='abierta'`. Para cumplir el plan, la API tiene que devolver también las atendidas (por ejemplo `infraccionesAtendidas`) y `map-builders` tiene que mapearlas a `alerta.parpadea=false`. El design system ya lo soporta. Queda como pendiente chico para el PR F.
+- **Pendiente en móvil (≤720 px):** con el panel abierto, la hoja inferior (72vh) y el HUD dejan visible solo una franja de unos 24 px del mapa a 390×844. "Ver en mapa" centra el punto en esa franja. Mejora propuesta: que la hoja se pueda plegar a una altura mínima y que "Ver en mapa" la pliegue. No bloquea, porque por ahora designa el admin desde la web.
 
 ## Orden
 A → E → B → C → D.
@@ -198,15 +200,32 @@ Aplicación: el admin confirma y el sistema agenda la asignación compensatoria.
 ### PR F (nuevo, después de E): jornada, vueltas y sanciones compensatorias
 - **Cupos de vueltas SR→SR** por línea y día de la semana, más la obligación de subir 1 vez por día a Molinos.
 - **Sugerencia de envío a Molinos:** el próximo móvil a enviar se elige entre los que todavía no subieron hoy, con un intervalo objetivo configurable.
-- **Conteo de vueltas en el servidor:** una vuelta es terminal → Honduras → terminal, clasificada por la terminal de llegada.
+- **Conteo de vueltas en el servidor:** una vuelta es SR → Honduras → SR, marcada "vía Molinos" si pasó por el PC Molinos (corregido 2026-10-13; antes decía terminal → Honduras → terminal).
 - **Detecciones nuevas:**
   - Ingreso fuera de horario: contra `Asignacion.horaPresentacion`/`horaSalida`, con tolerancia configurable.
   - Turno no cumplido.
   - Vueltas faltantes al cierre de la jornada.
 - **Sanción compensatoria:** el sistema propone la asignación del día siguiente en la misma línea (nocturno, o desde las 15:00 si se deben 3 o más vueltas) y el admin la confirma.
-- **Falta definir con el CTO:**
-  - La tolerancia de "fuera de horario".
-  - Cómo se registra la designación de Honduras: hoy el sistema no sabe a qué terminal fue designado cada vehículo y solo puede inferirlo por el PC de llegada.
+- **Designación de destino** (pedido del CTO, 2026-10-13; reemplaza el descarte de "asignar parada" del demo, que se hizo sin conocer la designación de Honduras):
+  - En `/en-vivo`, el panel del vehículo ofrece "Designar destino: Salomón Romero / Molinos". Se resalta cuando la vuelta llega a Honduras.
+  - **Quién designa:** en la operación pueden hacerlo el control de Honduras y la oficina, pero en esta versión **solo el admin del panel web** (`admin_sindicato`/`admin_quivo`).
+  - **Sugerencia:** "Sugerido: Molinos" para el vehículo que todavía no subió hoy, según la regla de 1 de cada N llegadas. Decide el admin.
+  - **Registro:** cada designación guarda quién, cuándo, la sesión y la vuelta. Así se puede auditar la regla de Molinos 1×/día.
+  - **Cuándo:** se puede designar antes de llegar a Honduras o durante la vuelta (confirmado por el CTO). Supuesto del chairman: la designación se puede cambiar hasta que el vehículo llega a una terminal.
+  - **Recorrido Molinos (corrección del CTO, 2026-10-13):** Honduras → regreso normal → en el desvío (vértice 43) sube el ramal Putucu → Molinos → baja → **sigue hasta Salomón Romero**. Molinos es una pasada intermedia del regreso y toda vuelta termina en SR. La geometría prod actual (circuito que **termina** en Molinos) no representa esto: hace falta una variante "vía Molinos" = circuito + ida y vuelta por Putucu.
+  - **App del chofer (CTO): sí cambia.** Requiere APK nuevo.
+    - Aviso visual en pantalla, como el del punto de control.
+    - Ruta ajustada: Honduras → Molinos → Salomón Romero.
+    - Hoy no hay push hacia el chofer. La app tiene que consultar su designación mientras la sesión está activa (poll o respuesta del sync). Por eso el aviso aparece con la app abierta; en segundo plano no está garantizado.
+  - **Verificación:** si la vuelta designada a Molinos llega a SR sin pasar por el PC Molinos, se genera una alerta.
+  - **Conteo (CTO):** la vuelta se completa solo al volver a SR, sea directa desde Retorno L16 o vía Molinos.
+  - **Espera en Molinos: 30 min (CTO).** El sistema mide la permanencia en el PC Molinos (entrada y salida de la geocerca). Propuesta del chairman: una alerta leve si sale antes de 30 min; falta confirmarla.
+  - **Total obligatorio por chofer (CTO, 2026-10-13).** La vuelta vía Molinos es adicional a las directas:
+    - Lunes a viernes: 5 = 4 directas + 1 vía Molinos.
+    - Sábado: 3 = 2 + 1.
+    - Domingo: 4 = 3 + 1.
+  - La fórmula de frecuencia de Molinos (N = directas + 1) queda confirmada.
+- **Falta definir con el CTO:** la tolerancia de "fuera de horario".
 
 ## Fuera de alcance
 - Notificar al conductor sobre la infracción (no hay push hacia el conductor).

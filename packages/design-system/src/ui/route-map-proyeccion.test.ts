@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { desplazarCamino, latLngAPixelContenedor } from './route-map-proyeccion.js';
+import { centroConDesplazamientoY, desplazarCamino, latLngAPixelContenedor } from './route-map-proyeccion.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
 
 const CENTRO = { lat: -17.3935, lng: -66.157 };
@@ -156,5 +156,20 @@ describe('desplazarCamino', () => {
     for (let k = 1; k <= 20_000; k++) {
       expect(r[k]).toEqual(r[1]);
     }
+  });
+});
+
+describe('centroConDesplazamientoY', () => {
+  const punto = { lat: -17.3935, lng: -66.157 };
+  it('sin desplazamiento devuelve el mismo punto', () => {
+    expect(centroConDesplazamientoY(punto, 15, 0)).toEqual(punto);
+  });
+  it('el punto cae offsetPx por encima del centro del contenedor y sin cambiar de longitud', () => {
+    const centro = centroConDesplazamientoY(punto, 15, 200);
+    expect(centro.lat).toBeLessThan(punto.lat);
+    expect(centro.lng).toBeCloseTo(punto.lng, 9);
+    const px = latLngAPixelContenedor(punto, centro, 15, { x: 400, y: 600 });
+    expect(px.y).toBeCloseTo(300 - 200, 4);
+    expect(px.x).toBeCloseTo(200, 4);
   });
 });

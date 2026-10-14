@@ -31,6 +31,12 @@
   --qv-color-warning-soft: #fef3c7;
   --qv-color-info: #0891b2;
   --qv-color-border: #d8dde6;
+
+  /* Alertas por infracción (/en-vivo): anillo y badge del vehículo. `-fg` = texto sobre el badge. */
+  --qv-alerta-leve: #a16207;
+  --qv-alerta-grave: #c2410c;
+  --qv-alerta-gravisima: #b91c1c;
+  --qv-alerta-fg: #ffffff;
   --qv-color-white: #ffffff;
 
   /* Texto */
@@ -102,6 +108,11 @@
     --qv-color-warning-soft: #451a03;
     --qv-color-info: #22d3ee;
     --qv-color-border: #2a3342;
+
+    --qv-alerta-leve: #fbbf24;
+    --qv-alerta-grave: #fb923c;
+    --qv-alerta-gravisima: #f87171;
+    --qv-alerta-fg: #1c1917;
     --qv-color-white: #ffffff;
 
     --qv-text-primary: #f1f5f9;

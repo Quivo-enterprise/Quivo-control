@@ -2,21 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Alert, Button, Loader, RouteMap, Select } from '@quivo/design-system';
+import { Alert, Button, Loader, RouteMap, Select, type MapPoint } from '@quivo/design-system';
 import {
   AlertTriangle,
   ArrowLeft,
+  BellRing,
   Bus,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
+  CircleCheck,
   Clock,
   Maximize2,
   Navigation,
   Radio,
   RefreshCw,
-  User,
 } from 'lucide-react';
+import type { GravedadRegla, Infraccion } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import {
   useContextoEnVivo,
@@ -25,12 +25,18 @@ import {
   useRecargarTraza,
   useTrazaEnVivo,
 } from '../../../src/lib/en-vivo/use-en-vivo';
+import { intervaloPoll, presentacionFrescura } from '../../../src/lib/en-vivo/traza';
 import {
-  antiguedadViva,
-  formatearAntiguedad,
-  intervaloPoll,
-  presentacionFrescura,
-} from '../../../src/lib/en-vivo/traza';
+  ETIQUETA_NIVEL,
+  NIVELES_DESC,
+  actualizarPrimeraVez,
+  contarPorNivel,
+  etiquetaTipoInfraccion,
+  nivelDeAlerta,
+  ordenarAlertas,
+  resumenContadores,
+  siguienteAlertaId,
+} from '../../../src/lib/en-vivo/alertas';
 import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
 import { useLineaOptions } from '../../../src/lib/api/use-linea-options';
 import {
@@ -40,11 +46,10 @@ import {
   construirZonas,
   idMarcadorVehiculo,
   mensajeError,
-  ultimaPasada,
 } from './map-builders';
 import { PanelJornada } from './panel-jornada';
+import { IconoNivel, PanelVehiculo, type AvisoPanel, type BorradoresDescarte } from './panel-vehiculo';
 import { conPuntoVivo } from '../../../src/lib/en-vivo/punto-vivo';
-import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
 
 export default function EnVivoPage() {
   const { token } = useAuth();
@@ -57,22 +62,48 @@ export default function EnVivoPage() {
   // vehículos activos y `sesionSeleccionada` es solo "cuál tiene el detalle abierto" — nace
   // `null`, nunca gobierna qué se pinta en el mapa.
   const posiciones = usePosicionesEnVivo(token);
-  const { options: lineaOptions } = useLineaOptions();
+  const { options: lineaOptions, lineas } = useLineaOptions();
   const [lineaFilter, setLineaFilter] = useState('');
   const [sesionSeleccionada, setSesionSeleccionada] = useState<string | null>(null);
   const [seguir, setSeguir] = useState(true);
-  const [telemetriaExpandida, setTelemetriaExpandida] = useState(true);
+  // PR E: filtro "solo con alertas de este nivel", aviso aria-live de las acciones del panel y
+  // el punto de la infracción que "Ver en mapa" acaba de centrar.
+  const [nivelFiltro, setNivelFiltro] = useState<GravedadRegla | null>(null);
+  const [aviso, setAviso] = useState<AvisoPanel | null>(null);
+  const [focoMapa, setFocoMapa] = useState<{
+    lat: number;
+    lng: number;
+    nivel: GravedadRegla;
+    etiqueta: string;
+    /** Cambia en cada "Ver en mapa": pide centrar otra vez aunque sea la misma infracción. */
+    nonce: number;
+    /** Px que se corre la cámara para que el punto caiga sobre la hoja inferior (móvil). */
+    offsetY: number;
+  } | null>(null);
   const [fitKeyOverride, setFitKeyOverride] = useState<number>(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const adminCity = useAdminCity();
 
   const todasLasPosiciones = useMemo(() => posiciones.data ?? [], [posiciones.data]);
-  const posicionesFiltradas = useMemo(
+  const posicionesDeLinea = useMemo(
     () =>
       lineaFilter
         ? todasLasPosiciones.filter((p) => p.lineaId === lineaFilter)
         : todasLasPosiciones,
     [todasLasPosiciones, lineaFilter],
+  );
+  // Contadores sobre la flota de la línea (no sobre la ya filtrada por nivel: así siguen
+  // visibles todos los niveles). El filtro por nivel conserva siempre el vehículo con el panel
+  // abierto: atenderle la última alerta no debe cerrarle el panel de golpe.
+  const conteoNiveles = useMemo(() => contarPorNivel(posicionesDeLinea), [posicionesDeLinea]);
+  const posicionesFiltradas = useMemo(
+    () =>
+      nivelFiltro
+        ? posicionesDeLinea.filter(
+            (p) => p.id === sesionSeleccionada || nivelDeAlerta(p) === nivelFiltro,
+          )
+        : posicionesDeLinea,
+    [posicionesDeLinea, nivelFiltro, sesionSeleccionada],
   );
   // Resumen honesto (pedido explícito del plan post-piloto): un vehículo sin primer fix
   // (`lat`/`lng` `null` — la sesión existe pero nunca entró un punto GPS) no tiene dónde
@@ -89,12 +120,87 @@ export default function EnVivoPage() {
   // (`posicionesFiltradas` lo sacó) — el mapa quedaba "siguiendo" un marker invisible. Se
   // cierra la selección apenas deja de estar en la lista filtrada, en vez de esperar a que el
   // usuario la cierre a mano.
+  // Con trabajo a medias (formulario de sanción abierto, borrador de descarte) NO se cierra: se
+  // perdería lo escrito. El panel queda abierto con un aviso (`fueraDelMapa`) y se cierra solo
+  // cuando el trabajo termina.
+  const [trabajoEnCurso, setTrabajoEnCurso] = useState(false);
+  // Borradores de descarte por sesión: viven acá para sobrevivir al remonte del panel al cambiar de
+  // vehículo (`key`) y reaparecer al volver a ese vehículo.
+  const [borradores] = useState<BorradoresDescarte>(() => new Map());
+  // Única vía para dejar sin vehículo abierto (botón de cerrar, Escape y des-selección automática):
+  // también suelta el pin de "Ver en mapa", que sin vehículo abierto quedaría huérfano en el mapa.
+  const cerrarSeleccion = useCallback(() => {
+    setSesionSeleccionada(null);
+    setFocoMapa(null);
+    setTrabajoEnCurso(false);
+  }, []);
+  const seleccionFueraDeLista =
+    sesionSeleccionada !== null && !posicionesDeLinea.some((p) => p.id === sesionSeleccionada);
   useEffect(() => {
-    if (sesionSeleccionada && !posicionesFiltradas.some((p) => p.id === sesionSeleccionada)) {
-      setSesionSeleccionada(null);
+    if (seleccionFueraDeLista && !trabajoEnCurso) {
+      cerrarSeleccion();
       setSeguir(false);
     }
-  }, [sesionSeleccionada, posicionesFiltradas]);
+  }, [seleccionFueraDeLista, trabajoEnCurso, cerrarSeleccion]);
+
+  // Foco del panel (lo gestiona la página, no el panel: cambiar de vehículo con "Siguiente alerta"
+  // remonta el panel por `key` y no debe mover el foco). Al ABRIR (cerrado -> abierto) pasa al
+  // encabezado; al CERRAR vuelve al marcador (si el elemento que lo tenía se recreó, al marcador
+  // vigente de esa sesión; si no, a "Siguiente alerta" o al contenedor del mapa; nunca a <body>).
+  const tituloPanelRef = useRef<HTMLHeadingElement>(null);
+  const mapaRef = useRef<HTMLDivElement>(null);
+  const siguienteAlertaRef = useRef<HTMLButtonElement>(null);
+  // `puntoId`: si el foco venía de un marcador, id del marcador de la sesión VIGENTE (cambia al
+  // cambiar de vehículo con el panel abierto); `siguiente`: venía de "Siguiente alerta".
+  const focoPrevioRef = useRef<{ el: HTMLElement | null; puntoId: string | null; siguiente: boolean } | null>(null);
+  const sesionAbiertaRef = useRef<string | null>(null);
+  useEffect(() => {
+    const antes = sesionAbiertaRef.current;
+    sesionAbiertaRef.current = sesionSeleccionada;
+    const marcadorDe = (puntoId: string) =>
+      document.querySelector<HTMLElement>(`.qv-gmap-veh[data-punto-id="${CSS.escape(puntoId)}"]`);
+    // Foco posible: conectado, no deshabilitado y visible (nunca un destino que no lo reciba).
+    const enfocable = (el: HTMLElement | null | undefined): el is HTMLElement =>
+      Boolean(
+        el &&
+          el.isConnected &&
+          !el.matches(':disabled') &&
+          el.getClientRects().length > 0 &&
+          getComputedStyle(el).visibility !== 'hidden',
+      );
+    if (sesionSeleccionada && !antes) {
+      const activo = document.activeElement;
+      const el = activo instanceof HTMLElement && activo !== document.body ? activo : null;
+      focoPrevioRef.current = {
+        el,
+        puntoId: el?.closest<HTMLElement>('.qv-gmap-veh')?.dataset.puntoId ?? null,
+        siguiente: el !== null && el === siguienteAlertaRef.current,
+      };
+      tituloPanelRef.current?.focus({ preventScroll: true });
+    } else if (sesionSeleccionada && antes && sesionSeleccionada !== antes) {
+      // Cambio de vehículo con el panel abierto: si el origen era un marcador, al cerrar se vuelve
+      // al marcador del vehículo NUEVO (no al del anterior); "Siguiente alerta" se conserva.
+      const previo = focoPrevioRef.current;
+      if (previo?.puntoId) {
+        const puntoId = idMarcadorVehiculo(sesionSeleccionada);
+        focoPrevioRef.current = { ...previo, puntoId, el: marcadorDe(puntoId) };
+      }
+    } else if (!sesionSeleccionada && antes) {
+      const previo = focoPrevioRef.current;
+      focoPrevioRef.current = null;
+      const activo = document.activeElement;
+      // Si el usuario ya puso el foco en otro control (clic fuera), no se le quita.
+      if (activo && activo !== document.body && activo.isConnected) return;
+      const origenMarcador = previo?.puntoId ? marcadorDe(previo.puntoId) : null;
+      const candidatos: Array<HTMLElement | null | undefined> = [
+        origenMarcador ?? previo?.el,
+        marcadorDe(idMarcadorVehiculo(antes)),
+        siguienteAlertaRef.current,
+        mapaRef.current,
+      ];
+      candidatos.find(enfocable)?.focus({ preventScroll: true });
+    }
+  }, [sesionSeleccionada]);
 
   // Click en un marcador de vehículo → recién ahí se piden `contexto` y `traza` de ESA
   // sesión (los hooks ya existentes, sin cambios). Con un solo detalle abierto a la vez, el
@@ -102,7 +208,43 @@ export default function EnVivoPage() {
   const seleccionarSesion = useCallback((id: string) => {
     setSesionSeleccionada(id);
     setSeguir(true);
+    setFocoMapa(null);
   }, []);
+
+  // La posición no trae el inicio de la infracción: "la más antigua" de "Siguiente alerta" es la
+  // que esta pestaña vio primero (se olvida cuando la alerta se cierra). Estado derivado durante
+  // el render (`actualizarPrimeraVez` es pura y devuelve la misma referencia si nada cambió), así
+  // el orden nunca va un render por detrás de las posiciones.
+  const [primeraVezAlerta, setPrimeraVezAlerta] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const primeraVezActual = actualizarPrimeraVez(primeraVezAlerta, todasLasPosiciones, Date.now());
+  if (primeraVezActual !== primeraVezAlerta) setPrimeraVezAlerta(primeraVezActual);
+
+  const alertasOrdenadas = useMemo(
+    () => ordenarAlertas(posicionesFiltradas.filter((p) => p.lat !== null && p.lng !== null), primeraVezActual),
+    [posicionesFiltradas, primeraVezActual],
+  );
+  const irASiguienteAlerta = () => {
+    const id = siguienteAlertaId(alertasOrdenadas, sesionSeleccionada);
+    if (!id) return;
+    seleccionarSesion(id);
+    const idx = alertasOrdenadas.findIndex((p) => p.id === id);
+    const p = alertasOrdenadas[idx];
+    const nivel = p ? nivelDeAlerta(p) : null;
+    anunciar({
+      tono: 'ok',
+      texto: p
+        ? `Alerta ${idx + 1} de ${alertasOrdenadas.length}: ${p.vehiculoPlaca}${nivel ? `, ${ETIQUETA_NIVEL[nivel].singular}` : ''}`
+        : 'Sin alertas',
+    });
+  };
+
+  // Aviso aria-live de las acciones del panel (atender, descartar, sancionar, copiar…).
+  const anunciar = useCallback((a: AvisoPanel) => setAviso(a), []);
+  useEffect(() => {
+    if (!aviso) return;
+    const t = setTimeout(() => setAviso(null), 6_000);
+    return () => clearTimeout(t);
+  }, [aviso]);
 
   const contexto = useContextoEnVivo(token, sesionSeleccionada);
   const traza = useTrazaEnVivo(token, sesionSeleccionada);
@@ -131,11 +273,43 @@ export default function EnVivoPage() {
     () => (contexto.data ? construirPuntosControl(contexto.data, datos) : []),
     [contexto.data, datos],
   );
+  // Color de la línea para el anillo del marcador: el catálogo de líneas (si cargó) y, con
+  // seguridad, la de la sesión con el panel abierto (viene en su `contexto`).
+  const colorLineaPorId = useMemo(() => {
+    const mapa: Record<string, string | null | undefined> = {};
+    for (const l of lineas) mapa[l.id] = l.color;
+    if (contexto.data) mapa[contexto.data.linea.id] = contexto.data.linea.color;
+    return mapa;
+  }, [lineas, contexto.data]);
   const vehiculos = useMemo(
-    () => construirMarcadoresVehiculos(posicionesFiltradas, seleccionarSesion),
-    [posicionesFiltradas, seleccionarSesion],
+    () =>
+      construirMarcadoresVehiculos(posicionesFiltradas, seleccionarSesion, {
+        seleccionadoId: sesionSeleccionada,
+        colorLineaPorId,
+      }),
+    [posicionesFiltradas, seleccionarSesion, sesionSeleccionada, colorLineaPorId],
   );
-  const markers = useMemo(() => [...puntosControl, ...vehiculos], [puntosControl, vehiculos]);
+  // Punto de la infracción que "Ver en mapa" centró: un pin del color de su severidad.
+  const marcadorFoco = useMemo<MapPoint[]>(
+    () =>
+      focoMapa
+        ? [
+            {
+              id: 'infraccion-foco',
+              lat: focoMapa.lat,
+              lng: focoMapa.lng,
+              label: focoMapa.etiqueta,
+              pinType: 'pin',
+              color: `var(--qv-alerta-${focoMapa.nivel})`,
+            },
+          ]
+        : [],
+    [focoMapa],
+  );
+  const markers = useMemo(
+    () => [...puntosControl, ...marcadorFoco, ...vehiculos],
+    [puntosControl, marcadorFoco, vehiculos],
+  );
   const routes = useMemo(
     () => (contexto.data ? construirRutas(contexto.data, datos) : []),
     [contexto.data, datos],
@@ -166,7 +340,7 @@ export default function EnVivoPage() {
   );
   const animatedVehicle = useMemo(
     () =>
-      datos && sesionSeleccionada
+      datos && sesionSeleccionada && !seleccionFueraDeLista
         ? {
             markerId: idMarcadorVehiculo(sesionSeleccionada),
             resetKey: sesionSeleccionada,
@@ -176,8 +350,52 @@ export default function EnVivoPage() {
             intervalMs: INTERVALO_POLL_POSICIONES_MS,
           }
         : null,
-    [datos, sesionSeleccionada, puntosAnimados],
+    [datos, sesionSeleccionada, seleccionFueraDeLista, puntosAnimados],
   );
+
+  // "Ver en mapa" gana sobre el seguimiento (que se apaga al usarlo); sin foco, se sigue el último
+  // punto de la traza o, mientras ésta carga, la posición del último poll. Nunca toca el zoom.
+  const puntoASeguir = focoMapa
+    ? { lat: focoMapa.lat, lng: focoMapa.lng, nonce: focoMapa.nonce, offsetY: focoMapa.offsetY }
+    : seguir && !seleccionFueraDeLista && ultimoPunto
+      ? { lat: ultimoPunto.lat, lng: ultimoPunto.lng }
+      : seguir && !seleccionFueraDeLista && posicionSeleccionada?.lat != null && posicionSeleccionada.lng != null
+        ? { lat: posicionSeleccionada.lat, lng: posicionSeleccionada.lng }
+        : null;
+
+  // Única condición para "Seguir" (HUD y panel): hay un vehículo abierto y se sabe dónde está.
+  const puedeSeguir =
+    Boolean(sesionSeleccionada) && !seleccionFueraDeLista && (Boolean(ultimoPunto) || posicionSeleccionada?.lat != null);
+  const alternarSeguir = () => {
+    // Al ENCENDER el seguimiento deja de mandar el punto de "Ver en mapa" (si no, no seguiría nada).
+    if (!seguir) setFocoMapa(null);
+    setSeguir(!seguir);
+  };
+
+  const verInfraccionEnMapa = (inf: Infraccion) => {
+    setSeguir(false);
+    // En móvil (<= 720 px) la hoja inferior tapa el centro del mapa: la cámara se corre para que el
+    // punto caiga en el centro de la franja visible, entre el HUD superior y la hoja.
+    const hoja = document.querySelector<HTMLElement>('.qv-live-hud-bottom--panel');
+    const hud = document.querySelector<HTMLElement>('.qv-live-hud-top');
+    const mapa = mapaRef.current;
+    let offsetY = 0;
+    if (hoja && mapa && window.matchMedia('(max-width: 720px)').matches) {
+      const caja = mapa.getBoundingClientRect();
+      const arriba = Math.max(hud ? hud.getBoundingClientRect().bottom : caja.top, caja.top);
+      const abajo = hoja.getBoundingClientRect().top;
+      const centroVisible = (Math.min(arriba, abajo) + abajo) / 2 - caja.top;
+      offsetY = Math.max(0, Math.round(caja.height / 2 - centroVisible));
+    }
+    setFocoMapa({
+      lat: inf.lat,
+      lng: inf.lng,
+      nivel: inf.gravedad,
+      etiqueta: etiquetaTipoInfraccion(inf.tipo),
+      nonce: Date.now(),
+      offsetY,
+    });
+  };
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -192,7 +410,9 @@ export default function EnVivoPage() {
   };
 
   const cerrarDetalle = () => {
-    setSesionSeleccionada(null);
+    // Cierre explícito: el borrador de descarte se descarta con el panel.
+    borradores.clear();
+    cerrarSeleccion();
   };
 
   // El mapa se mantiene SIEMPRE montado: si cargando / error / flota vacía lo reemplazaran por
@@ -212,6 +432,27 @@ export default function EnVivoPage() {
           : null;
   const sinConexionConDatos = posiciones.isError && hayDatos;
 
+  // Alto real del HUD superior -> `--qv-hud-top-h` (borde inferior respecto del mapa): la pila
+  // inferior acota su altura con él y nunca llega a tapar el HUD (Siguiente alerta, Seguir…).
+  const hayHud = !estadoSuperpuesto;
+  useEffect(() => {
+    const raiz = mapaRef.current;
+    const hud = hayHud ? raiz?.querySelector<HTMLElement>('.qv-live-hud-top') : null;
+    if (!raiz || !hud) return;
+    const medir = () => {
+      const borde = hud.getBoundingClientRect().bottom - raiz.getBoundingClientRect().top;
+      raiz.style.setProperty('--qv-hud-top-h', `${Math.ceil(borde)}px`);
+    };
+    medir();
+    const ro = new ResizeObserver(medir);
+    ro.observe(hud);
+    ro.observe(raiz);
+    return () => {
+      ro.disconnect();
+      raiz.style.removeProperty('--qv-hud-top-h');
+    };
+  }, [hayHud]);
+
   // El mapa sigue montado con `fitMode="once"`: cuando la flota pasa de vacía a con vehículos
   // (después de haber tenido alguno), `fitKey` ya se disparó y no los encuadraría. Se bumpea
   // `fitKeyOverride` solo en esa transición (no en cada poll).
@@ -228,7 +469,7 @@ export default function EnVivoPage() {
   }, [hayVehiculosEnMapa]);
 
   return (
-    <div className="qv-live-map-wrapper">
+    <div className="qv-live-map-wrapper" ref={mapaRef} tabIndex={-1}>
       {/* MAPA PRINCIPAL A PANTALLA COMPLETA */}
       <RouteMap
         engine="google"
@@ -250,7 +491,7 @@ export default function EnVivoPage() {
         // seguir a un vehículo puntual es trabajo de `followPoint`/`seguir`, no de esto.
         fitMode="once"
         fitKey={fitKeyOverride}
-        followPoint={seguir && ultimoPunto ? { lat: ultimoPunto.lat, lng: ultimoPunto.lng } : null}
+        followPoint={puntoASeguir}
         onUserPan={() => setSeguir(false)}
         defaultCenter={adminCity.centro}
         defaultZoom={adminCity.zoom}
@@ -354,7 +595,8 @@ export default function EnVivoPage() {
         <>
           {/* TOP FLOATING HUD CONTROLS */}
           <div className="qv-live-hud-top">
-            {/* Left Side: Live Badge & Filtro de línea */}
+            {/* Left Side: Live Badge & Filtro de línea + alertas por infracción */}
+            <div className="qv-live-hud-left">
             <div className="qv-live-hud-card" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
               <button
                 type="button"
@@ -431,32 +673,73 @@ export default function EnVivoPage() {
               </div>
             </div>
 
+            {/* Leyenda + contadores por nivel (cada uno filtra "solo con alertas de ese nivel") y
+            "Siguiente alerta". El color nunca va solo: cada nivel lleva su ícono y su texto. */}
+            <div className="qv-live-hud-card qv-live-alertas" role="group" aria-label="Alertas por infracción">
+              <span className="qv-live-alertas__titulo">Alertas</span>
+              {NIVELES_DESC.every((n) => conteoNiveles[n] === 0) && !nivelFiltro ? (
+                <span className="qv-live-alertas__vacio">
+                  <CircleCheck size={14} aria-hidden="true" style={{ color: 'var(--qv-color-success)' }} />
+                  Sin infracciones abiertas
+                </span>
+              ) : (
+                NIVELES_DESC.map((nivel) => {
+                  const n = conteoNiveles[nivel];
+                  const activo = nivelFiltro === nivel;
+                  return (
+                    <button
+                      key={nivel}
+                      type="button"
+                      className={`qv-live-nivel qv-live-nivel--${nivel}`}
+                      aria-pressed={activo}
+                      disabled={n === 0 && !activo}
+                      title={`Mostrar solo vehículos con alertas ${ETIQUETA_NIVEL[nivel].plural}`}
+                      aria-label={`${n} ${n === 1 ? ETIQUETA_NIVEL[nivel].singular : ETIQUETA_NIVEL[nivel].plural}: solo con alertas de este nivel`}
+                      onClick={() => setNivelFiltro(activo ? null : nivel)}
+                    >
+                      <IconoNivel nivel={nivel} />
+                      <span aria-hidden="true">
+                        {n} {n === 1 ? ETIQUETA_NIVEL[nivel].singular : ETIQUETA_NIVEL[nivel].plural}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+              <button
+                ref={siguienteAlertaRef}
+                type="button"
+                className="qv-live-btn qv-live-btn--primario"
+                disabled={alertasOrdenadas.length === 0}
+                onClick={irASiguienteAlerta}
+                title={
+                  alertasOrdenadas.length > 0
+                    ? `Ir a la siguiente alerta (${resumenContadores(contarPorNivel(alertasOrdenadas))})`
+                    : undefined
+                }
+              >
+                <BellRing size={14} aria-hidden="true" />
+                Siguiente alerta
+              </button>
+            </div>
+            </div>
+
             {/* Columna derecha: controles + panel "Jornada de hoy" (release 13). El panel va en el
             flujo, debajo de lo que midan los controles (una o dos filas), sin `top` mágico. */}
             <div className="qv-live-hud-right">
               <div
                 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}
               >
-                {/* Freshness Status Pill — solo con un vehículo seleccionado */}
-                {sesionSeleccionada && (
-                  <FrescuraBadgeCompact
-                    datos={datos}
-                    posicion={posicionSeleccionada}
-                    recibidoEn={traza.dataUpdatedAt}
-                    posicionesRecibidoEn={posiciones.dataUpdatedAt}
-                  />
-                )}
-
-                {/* Map Controls */}
+                {/* Map Controls (la frescura del vehículo seleccionado vive en su panel) */}
                 <div
                   className="qv-live-hud-card"
                   style={{ gap: '0.35rem', padding: '0.3rem 0.5rem' }}
                 >
                   <button
                     type="button"
-                    onClick={() => setSeguir((v) => !v)}
-                    disabled={!sesionSeleccionada || !ultimoPunto}
-                    title={seguir ? 'Dejar de seguir vehículo' : 'Seguir vehículo en tiempo real'}
+                    onClick={alternarSeguir}
+                    disabled={!puedeSeguir}
+                    aria-pressed={seguir}
+                    title="Seguir vehículo en tiempo real"
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
@@ -470,16 +753,17 @@ export default function EnVivoPage() {
                       border: 'none',
                       fontSize: '0.75rem',
                       fontWeight: 700,
-                      cursor: sesionSeleccionada && ultimoPunto ? 'pointer' : 'not-allowed',
-                      opacity: sesionSeleccionada && ultimoPunto ? 1 : 0.6,
+                      cursor: puedeSeguir ? 'pointer' : 'not-allowed',
+                      opacity: puedeSeguir ? 1 : 0.6,
                       transition: 'all var(--qv-transition-fast)',
                     }}
                   >
                     <Navigation
                       size={13}
+                      aria-hidden="true"
                       style={{ transform: seguir ? 'rotate(45deg)' : 'none' }}
                     />
-                    <span>{seguir ? 'Siguiendo' : 'Seguir'}</span>
+                    <span>Seguir</span>
                   </button>
 
                   <button
@@ -534,439 +818,187 @@ export default function EnVivoPage() {
               </div>
               <PanelJornada lineaFilter={lineaFilter} />
             </div>
+
           </div>
 
-          {/* Filtro sin resultados — estado vacío honesto: la flota existe, esta línea no tiene
-          nadie reportando ahora mismo. El mapa sigue montado (el usuario puede cambiar el
-          filtro sin perder contexto), a diferencia del empty-state de página completa de
-          arriba (que es para "no hay NADA en toda la jornada"). */}
-          {/* Contenedor live SIEMPRE montado: los lectores de pantalla solo anuncian cambios de
-          contenido en una región aria-live que ya estaba en el DOM antes de poblarse; si el
-          toast se monta condicionalmente ya con su texto, NVDA/VoiceOver no lo anuncian. */}
-          <div role="status" aria-live="polite">
-            {posicionesFiltradas.length === 0 && (
-              <div
-                className="qv-live-toast"
-                style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}
-              >
-                <AlertTriangle size={14} style={{ color: 'var(--qv-color-accent)' }} />
-                <span>
-                  Ningún vehículo de esta línea está reportando ahora. Probá con &quot;Todas las
-                  líneas&quot;.
-                </span>
-              </div>
-            )}
-          </div>
-
-          {sinConexionConDatos && (
-            <div role="status" aria-live="polite">
-              <div
-                className="qv-live-toast"
-                style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}
-              >
-                <AlertTriangle size={14} style={{ color: 'var(--qv-color-warning)' }} />
-                <span>Sin conexión · mostrando últimos datos</span>
-              </div>
-            </div>
-          )}
-
-          {/* FLOATING ALERT TOASTS */}
-          <div role="alert" aria-live="assertive">
-            {sesionSeleccionada && presentacion.esFalla && (
-              <div
-                className="qv-live-toast"
-                style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}
-              >
-                <AlertTriangle size={14} />
-                <span>{presentacion.etiqueta}: El teléfono no sincroniza con el servidor</span>
-              </div>
-            )}
-          </div>
-
-          <div role="status" aria-live="polite">
-            {sesionSeleccionada && estado === 'detenido' && (
-              <div
-                className="qv-live-toast"
-                style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}
-              >
-                <Clock size={14} style={{ color: 'var(--qv-color-accent)' }} />
-                <span>Vehículo detenido: Posición estacionaria registrada</span>
-              </div>
-            )}
-
-            {finalizada && (
-              <div
-                className="qv-live-toast"
-                style={{ borderColor: 'var(--qv-color-primary)', color: 'var(--qv-text-primary)' }}
-              >
-                <CheckCircle2 size={14} style={{ color: 'var(--qv-color-success)' }} />
-                <span>Sesión finalizada</span>
-                <button
-                  type="button"
-                  onClick={() => router.push(`/reportes/recorridos/${sesionSeleccionada}`)}
-                  style={{
-                    background: 'var(--qv-color-primary)',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '999px',
-                    padding: '0.15rem 0.5rem',
-                    fontSize: '0.6875rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Ver histórico →
-                </button>
-              </div>
-            )}
-
-            {pollPausado && (
-              <div
-                className="qv-live-toast"
-                style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}
-              >
-                <Clock size={14} style={{ color: 'var(--qv-color-warning)' }} />
-                <span>Seguimiento pausado por inactividad</span>
-                <button
-                  type="button"
-                  onClick={() => void traza.refetch()}
-                  style={{
-                    background: 'var(--qv-color-warning)',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '999px',
-                    padding: '0.15rem 0.5rem',
-                    fontSize: '0.6875rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Reanudar
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* FLOATING TELEMETRY & CONTROL POINTS DRAWER — solo con un vehículo seleccionado */}
-          {sesionSeleccionada && contexto.data && (
-            <div className="qv-live-hud-bottom">
-              <div className="qv-live-telemetry-panel">
-                {/* Header / Summary */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '0.5rem',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        width: '1.85rem',
-                        height: '1.85rem',
-                        borderRadius: 'var(--qv-radius-md)',
-                        backgroundColor:
-                          'color-mix(in srgb, var(--qv-color-primary) 15%, transparent)',
-                        color: 'var(--qv-color-primary)',
-                      }}
-                    >
-                      <Bus size={15} />
-                    </span>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <strong style={{ fontSize: '0.9375rem', color: 'var(--qv-text-primary)' }}>
-                          {contexto.data.vehiculo.placa}
-                        </strong>
-                        <span
-                          style={{
-                            fontSize: '0.65rem',
-                            fontWeight: 700,
-                            padding: '0.1rem 0.4rem',
-                            borderRadius: 'var(--qv-radius-full)',
-                            backgroundColor: contexto.data.linea.color ?? 'var(--qv-color-primary)',
-                            color: '#ffffff',
-                          }}
-                        >
-                          {contexto.data.linea.nombre}
-                        </span>
-                      </div>
-                      <span
-                        style={{
-                          fontSize: '0.75rem',
-                          color: 'var(--qv-text-secondary)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.25rem',
-                        }}
-                      >
-                        <User size={11} /> {contexto.data.conductor.nombre}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
-                    <button
-                      type="button"
-                      onClick={() => setTelemetriaExpandida((v) => !v)}
-                      title={telemetriaExpandida ? 'Minimizar detalles' : 'Expandir telemetría'}
-                      aria-label={
-                        telemetriaExpandida ? 'Minimizar detalles' : 'Expandir telemetría'
-                      }
-                      aria-expanded={telemetriaExpandida}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--qv-text-muted)',
-                        cursor: 'pointer',
-                        padding: '0.25rem',
-                      }}
-                    >
-                      {telemetriaExpandida ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={cerrarDetalle}
-                      title="Cerrar detalle del vehículo"
-                      aria-label="Cerrar detalle del vehículo"
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--qv-text-muted)',
-                        cursor: 'pointer',
-                        padding: '0.25rem',
-                        fontSize: '1rem',
-                        lineHeight: 1,
-                      }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                </div>
-
-                {/* Expanded Telemetry & Control Points */}
-                {telemetriaExpandida && (
+          {/* PANEL UNIFICADO DEL VEHÍCULO (cabecera, acciones rápidas, infracciones, PCs y stats).
+          En móvil (<= 720 px) se acomoda como hoja inferior (ver `.qv-live-hud-bottom--panel`). */}
+          {/* PILA INFERIOR: avisos sobre el panel unificado del vehículo (cabecera, acciones rápidas,
+          infracciones, PCs y stats). Ambos en flujo dentro del mismo contenedor anclado abajo: los
+          avisos no dependen de la altura del HUD superior (Jornada expandida) ni tapan el panel.
+          En móvil (<= 720 px) el panel es una hoja inferior (ver `.qv-live-hud-bottom--panel`).
+          Las regiones aria-live de los avisos están SIEMPRE montadas. */}
+          <div className={`qv-live-hud-bottom${sesionSeleccionada ? ' qv-live-hud-bottom--panel' : ''}`}>
+            <div className="qv-live-toasts">
+              {/* Filtro sin resultados — estado vacío honesto: la flota existe, esta línea no tiene
+              nadie reportando ahora mismo. El mapa sigue montado (el usuario puede cambiar el
+              filtro sin perder contexto), a diferencia del empty-state de página completa de
+              arriba (que es para "no hay NADA en toda la jornada"). */}
+              {/* Contenedor live SIEMPRE montado: los lectores de pantalla solo anuncian cambios de
+              contenido en una región aria-live que ya estaba en el DOM antes de poblarse; si el
+              toast se monta condicionalmente ya con su texto, NVDA/VoiceOver no lo anuncian. */}
+              <div role="status" aria-live="polite">
+                {aviso && (
                   <div
+                    className="qv-live-toast"
                     style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.625rem',
-                      paddingTop: '0.5rem',
-                      borderTop: '1px solid var(--qv-border-glass)',
+                      borderColor: aviso.tono === 'ok' ? 'var(--qv-color-success)' : 'var(--qv-color-danger)',
+                      color: 'var(--qv-text-primary)',
                     }}
                   >
-                    {/* Telemetry Stats Strip */}
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(2, 1fr)',
-                        gap: '0.5rem',
-                      }}
-                    >
-                      <div
-                        style={{
-                          padding: '0.4rem 0.6rem',
-                          borderRadius: 'var(--qv-radius-md)',
-                          backgroundColor:
-                            'color-mix(in srgb, var(--qv-surface-card) 50%, transparent)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: '0.6875rem',
-                            color: 'var(--qv-text-muted)',
-                            fontWeight: 600,
-                          }}
-                        >
-                          Última Posición
+                    {aviso.tono === 'ok' ? (
+                      <CheckCircle2 size={14} style={{ color: 'var(--qv-color-success)' }} />
+                    ) : (
+                      <AlertTriangle size={14} style={{ color: 'var(--qv-color-danger)' }} />
+                    )}
+                    <span>{aviso.texto}</span>
+                  </div>
+                )}
+                {posicionesFiltradas.length === 0 && (
+                  <div
+                    className="qv-live-toast"
+                    style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}
+                  >
+                    <AlertTriangle size={14} style={{ color: 'var(--qv-color-accent)' }} />
+                    {nivelFiltro && posicionesDeLinea.length > 0 ? (
+                      <>
+                        <span>
+                          Ningún vehículo tiene alertas {ETIQUETA_NIVEL[nivelFiltro].plural} ahora.
                         </span>
-                        <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
-                          {ultimoPunto
-                            ? new Date(ultimoPunto.ts).toLocaleTimeString('es-BO')
-                            : 'Esperando fix'}
-                        </strong>
-                      </div>
-
-                      <div
-                        style={{
-                          padding: '0.4rem 0.6rem',
-                          borderRadius: 'var(--qv-radius-md)',
-                          backgroundColor:
-                            'color-mix(in srgb, var(--qv-surface-card) 50%, transparent)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: '0.6875rem',
-                            color: 'var(--qv-text-muted)',
-                            fontWeight: 600,
-                          }}
+                        <button
+                          type="button"
+                          className="qv-live-btn qv-live-btn--sm"
+                          onClick={() => setNivelFiltro(null)}
                         >
-                          Puntos GPS Traza
-                        </span>
-                        <strong style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
-                          {datos?.puntos.length ?? 0} registrados
-                        </strong>
-                      </div>
-                    </div>
-
-                    {/* Control Points Progress */}
-                    {contexto.data.puntosControl.length > 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontSize: '0.6875rem',
-                              fontWeight: 700,
-                              textTransform: 'uppercase',
-                              letterSpacing: '0.05em',
-                              color: 'var(--qv-text-muted)',
-                            }}
-                          >
-                            Puntos de Control
-                          </span>
-                          <span
-                            style={{
-                              fontSize: '0.6875rem',
-                              fontWeight: 700,
-                              color: 'var(--qv-color-success)',
-                            }}
-                          >
-                            {
-                              contexto.data.puntosControl.filter(
-                                (pc) => ultimaPasada(datos, pc.id)?.cumplido,
-                              ).length
-                            }{' '}
-                            / {contexto.data.puntosControl.length} validados
-                          </span>
-                        </div>
-
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            gap: '0.35rem',
-                            maxHeight: '5.5rem',
-                            overflowY: 'auto',
-                          }}
-                        >
-                          {contexto.data.puntosControl.map((pc, idx) => {
-                            const pasada = ultimaPasada(datos, pc.id);
-                            const cumplido = pasada?.cumplido;
-                            return (
-                              <div
-                                key={pc.id}
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '0.3rem',
-                                  padding: '0.2rem 0.45rem',
-                                  borderRadius: 'var(--qv-radius-sm)',
-                                  backgroundColor: cumplido
-                                    ? 'color-mix(in srgb, var(--qv-color-success) 12%, transparent)'
-                                    : 'color-mix(in srgb, var(--qv-surface-card) 60%, transparent)',
-                                  border: `1px solid ${cumplido ? 'color-mix(in srgb, var(--qv-color-success) 35%, transparent)' : 'var(--qv-border-subtle)'}`,
-                                  fontSize: '0.6875rem',
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    width: '5px',
-                                    height: '5px',
-                                    borderRadius: '50%',
-                                    backgroundColor: cumplido
-                                      ? 'var(--qv-color-success)'
-                                      : 'var(--qv-text-muted)',
-                                  }}
-                                />
-                                <span style={{ fontWeight: 600, color: 'var(--qv-text-primary)' }}>
-                                  PC {idx + 1}
-                                </span>
-                                {pasada && (
-                                  <span
-                                    style={{ color: 'var(--qv-text-muted)', fontSize: '0.65rem' }}
-                                  >
-                                    ({pasada.distanciaM.toFixed(0)}m)
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
+                          Quitar filtro de nivel
+                        </button>
+                      </>
+                    ) : (
+                      <span>
+                        Ningún vehículo de esta línea está reportando ahora. Probá con &quot;Todas las
+                        líneas&quot;.
+                      </span>
                     )}
                   </div>
                 )}
               </div>
+
+              {sinConexionConDatos && (
+                <div role="status" aria-live="polite">
+                  <div
+                    className="qv-live-toast"
+                    style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}
+                  >
+                    <AlertTriangle size={14} style={{ color: 'var(--qv-color-warning)' }} />
+                    <span>Sin conexión · mostrando últimos datos</span>
+                  </div>
+                </div>
+              )}
+
+              {/* FLOATING ALERT TOASTS */}
+              <div role="alert" aria-live="assertive">
+                {sesionSeleccionada && presentacion.esFalla && (
+                  <div
+                    className="qv-live-toast"
+                    style={{ borderColor: 'var(--qv-color-danger)', color: 'var(--qv-color-danger)' }}
+                  >
+                    <AlertTriangle size={14} />
+                    <span>{presentacion.etiqueta}: El teléfono no sincroniza con el servidor</span>
+                  </div>
+                )}
+              </div>
+
+              <div role="status" aria-live="polite">
+                {sesionSeleccionada && estado === 'detenido' && (
+                  <div
+                    className="qv-live-toast"
+                    style={{ borderColor: 'var(--qv-color-accent)', color: 'var(--qv-text-primary)' }}
+                  >
+                    <Clock size={14} style={{ color: 'var(--qv-color-accent)' }} />
+                    <span>Vehículo detenido: Posición estacionaria registrada</span>
+                  </div>
+                )}
+
+                {finalizada && (
+                  <div
+                    className="qv-live-toast"
+                    style={{ borderColor: 'var(--qv-color-primary)', color: 'var(--qv-text-primary)' }}
+                  >
+                    <CheckCircle2 size={14} style={{ color: 'var(--qv-color-success)' }} />
+                    <span>Sesión finalizada</span>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/reportes/recorridos/${sesionSeleccionada}`)}
+                      style={{
+                        background: 'var(--qv-color-primary)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '999px',
+                        padding: '0.15rem 0.5rem',
+                        fontSize: '0.6875rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Ver histórico →
+                    </button>
+                  </div>
+                )}
+
+                {pollPausado && (
+                  <div
+                    className="qv-live-toast"
+                    style={{ borderColor: 'var(--qv-color-warning)', color: 'var(--qv-text-primary)' }}
+                  >
+                    <Clock size={14} style={{ color: 'var(--qv-color-warning)' }} />
+                    <span>Seguimiento pausado por inactividad</span>
+                    <button
+                      type="button"
+                      onClick={() => void traza.refetch()}
+                      style={{
+                        background: 'var(--qv-color-warning)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '999px',
+                        padding: '0.15rem 0.5rem',
+                        fontSize: '0.6875rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Reanudar
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-          )}
+
+            {sesionSeleccionada && (
+              <PanelVehiculo
+                key={sesionSeleccionada}
+                token={token}
+                sesionId={sesionSeleccionada}
+                posicion={posicionSeleccionada}
+                contexto={contexto.data}
+                datos={datos}
+                ultimoPuntoTs={ultimoPunto?.ts}
+                seguir={seguir}
+                puedeSeguir={puedeSeguir}
+                onToggleSeguir={alternarSeguir}
+                tituloRef={tituloPanelRef}
+                fueraDelMapa={seleccionFueraDeLista}
+                onTrabajoEnCurso={setTrabajoEnCurso}
+                borradores={borradores}
+                onCerrar={cerrarDetalle}
+                onVerEnMapa={verInfraccionEnMapa}
+                onAviso={anunciar}
+                trazaRecibidoEn={traza.dataUpdatedAt}
+                posicionesRecibidoEn={posiciones.dataUpdatedAt}
+              />
+            )}
+          </div>
         </>
       )}
-    </div>
-  );
-}
-
-function FrescuraBadgeCompact({
-  datos,
-  posicion,
-  recibidoEn,
-  posicionesRecibidoEn,
-}: {
-  datos: import('../../../src/lib/en-vivo/traza').TrazaAcumulada | undefined;
-  posicion: import('@quivo/shared').PosicionEnVivo | undefined;
-  recibidoEn: number;
-  posicionesRecibidoEn: number;
-}) {
-  const ahora = useReloj(1_000);
-  const fuente = datos ?? posicion;
-  if (!fuente) return null;
-
-  const referencia = datos ? recibidoEn : posicionesRecibidoEn;
-  const presentacion = presentacionFrescura(fuente.estadoFrescura);
-  const antiguedadFix = antiguedadViva(fuente.ultimoFixTs, fuente.servidorTs, referencia, ahora);
-
-  return (
-    <div className="qv-live-hud-card" style={{ gap: '0.45rem' }}>
-      <span
-        style={{
-          width: '7px',
-          height: '7px',
-          borderRadius: '50%',
-          backgroundColor: presentacion.color,
-          boxShadow: `0 0 6px ${presentacion.color}`,
-        }}
-      />
-      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
-        {presentacion.etiqueta}
-      </span>
-      <span
-        style={{
-          fontSize: '0.6875rem',
-          color: 'var(--qv-text-muted)',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
-        • hace {formatearAntiguedad(antiguedadFix)}
-      </span>
     </div>
   );
 }

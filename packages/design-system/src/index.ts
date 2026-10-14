@@ -21,3 +21,4 @@ export * from './ui/layout.js';
 export * from './ui/dashboard.js';
 export * from './ui/charts.js';
 export * from './ui/RouteMap.js';
+export { colorTextoContraste } from './ui/route-map-shared.js';

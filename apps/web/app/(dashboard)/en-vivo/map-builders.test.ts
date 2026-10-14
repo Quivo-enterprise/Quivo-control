@@ -111,3 +111,38 @@ describe('construirMarcadoresVehiculos', () => {
     expect(seleccionados).toEqual(['s2']);
   });
 });
+
+describe('construirMarcadoresVehiculos — PR E (alertas, color de línea, selección)', () => {
+  it('mapea nivel y cantidad a alerta que parpadea; sin abiertas no hay alerta', () => {
+    const [con, sin, cero] = construirMarcadoresVehiculos(
+      [
+        posicion({ id: 'a', infraccionNivel: 'gravisima', infraccionesAbiertas: 2 }),
+        posicion({ id: 'b', infraccionNivel: null, infraccionesAbiertas: 0 }),
+        posicion({ id: 'c', infraccionNivel: 'grave', infraccionesAbiertas: 0 }),
+      ],
+      () => {},
+    );
+    expect(con!.alerta).toEqual({ nivel: 'gravisima', abiertas: 2, parpadea: true });
+    expect(sin!.alerta).toBeUndefined();
+    expect(cero!.alerta).toBeUndefined();
+  });
+
+  it('colorLinea por lineaId y seleccionado solo para la sesión abierta', () => {
+    const markers = construirMarcadoresVehiculos(
+      [posicion({ id: 'a', lineaId: 'L1' }), posicion({ id: 'b', lineaId: 'L2' })],
+      () => {},
+      { seleccionadoId: 'b', colorLineaPorId: { L1: '#ff0000' } },
+    );
+    expect(markers[0]!.colorLinea).toBe('#ff0000');
+    expect(markers[0]!.seleccionado).toBeUndefined();
+    expect(markers[1]!.colorLinea).toBeUndefined();
+    expect(markers[1]!.seleccionado).toBe(true);
+  });
+
+  it('usa fotoUrl cuando la API la manda y no inventa una cuando no', () => {
+    const conFoto = { ...posicion({ id: 'a' }), fotoUrl: 'https://x.test/a.jpg' } as PosicionEnVivo;
+    const [a, b] = construirMarcadoresVehiculos([conFoto, posicion({ id: 'b' })], () => {});
+    expect(a!.fotoUrl).toBe('https://x.test/a.jpg');
+    expect(b!.fotoUrl).toBeUndefined();
+  });
+});

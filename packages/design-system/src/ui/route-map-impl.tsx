@@ -105,8 +105,11 @@ export interface RouteMapProps {
   fitKey?: string | number;
   /** Punto a seguir con `panTo` (nunca cambia el zoom) mientras el mapa esté montado. Opcional
    * y controlado por el consumidor: no pasar la prop (o pasar `null`/`undefined`) desactiva el
-   * seguimiento. */
-  followPoint?: { lat: number; lng: number } | null;
+   * seguimiento. `nonce` (solo lo respeta el motor Google): un valor nuevo pide centrar de nuevo
+   * aunque el punto no haya cambiado ni salido del 60% central. `offsetY` (px, solo Google y solo
+   * junto a `nonce`): corre la cámara para que el punto caiga ese tanto por encima del centro, p. ej.
+   * media altura de una hoja inferior que tapa el mapa. */
+  followPoint?: { lat: number; lng: number; nonce?: number; offsetY?: number } | null;
   /** Se dispara cuando el usuario mueve el mapa a mano (arrastre o zoom con gesto) — nunca por
    * llamadas programáticas (`fitBounds`/`panTo`/`jumpTo`). Pensado para que el consumidor apague
    * su propio toggle de "seguir" cuando el usuario toma control manual del mapa. */

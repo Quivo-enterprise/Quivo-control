@@ -67,7 +67,7 @@ import type { MapPoint, MapRoute, MapZone } from '../types.js';
 import { Button, Loader } from './primitives.js';
 import type { RouteMapProps } from './route-map-impl.js';
 import { isWithinCentralViewport } from './route-map-geometry.js';
-import { desplazarCamino, latLngAPixelContenedor } from './route-map-proyeccion.js';
+import { centroConDesplazamientoY, desplazarCamino, latLngAPixelContenedor } from './route-map-proyeccion.js';
 import {
   decidirActualizacionPunto,
   esArrastrable,
@@ -113,6 +113,17 @@ import {
   resolvePointId,
   routeVisuals,
 } from './route-map-shared.js';
+import {
+  ICONO_NIVEL,
+  ICONO_RELOJ,
+  alertaVisible,
+  etiquetaAlerta,
+  fotoUsable,
+  marcarFotoFallida,
+  normalizarFotoUrl,
+  svgIcono,
+  zIndexVehiculo,
+} from './route-map-vehiculo.js';
 
 type MarcadorAvanzado = google.maps.marker.AdvancedMarkerElement;
 
@@ -179,10 +190,59 @@ function crearEtiqueta(texto: string, variante: 'stop' | 'marker' | 'route'): HT
   return el;
 }
 
-/** Marcador de vehículo: mismo badge que los sprites de MapLibre (`buildVehiculoIconoSvg`, forma
- * y color por `estadoFrescura`) + placa debajo. La raíz mide lo que el badge; la placa cuelga.
- * Con `onClick` es un botón enfocable; sin él, una imagen con nombre accesible (el estado de
- * frescura va en el texto, no solo en la forma/color del badge). */
+/** Nombre accesible del vehículo (placa, frescura, descripción, alerta y, sin `onClick`, la
+ * selección). Se recalcula en `actualizarVehiculoEnLugar` cuando cambian la selección o las abiertas. */
+function etiquetaVehiculo(punto: MapPoint): string {
+  const placa = punto.placa?.trim() ?? '';
+  const nombre = `Vehículo ${placa || punto.label || ''}`.trim();
+  // El estado va siempre en el texto; si la descripción del consumidor ya lo menciona no se repite.
+  const estado = etiquetaFrescura(punto.estadoFrescura);
+  const descripcion = punto.description?.trim() ?? '';
+  const estadoYaDicho = estado !== '' && descripcion.toLowerCase().includes(estado.toLowerCase());
+  return [
+    nombre,
+    estadoYaDicho ? '' : estado,
+    descripcion,
+    etiquetaAlerta(punto.alerta),
+    // Con `onClick` el estado va en `aria-pressed`; sin él, en el nombre.
+    punto.seleccionado && !punto.onClick ? 'seleccionado' : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** Pone al día, SIN recrear el elemento, lo que la firma (`firmaPunto`) deja fuera: la selección
+ * (clase, `aria-pressed`) y la cantidad de infracciones abiertas (texto del badge y nombre
+ * accesible). Así la foto no se vuelve a pedir ni la animación del anillo se reinicia. */
+function actualizarVehiculoEnLugar(raiz: HTMLElement, punto: MapPoint): void {
+  raiz.classList.toggle('qv-gmap-veh--seleccionado', Boolean(punto.seleccionado));
+  if (punto.onClick) raiz.setAttribute('aria-pressed', punto.seleccionado ? 'true' : 'false');
+  const etiqueta = etiquetaVehiculo(punto);
+  if (raiz.getAttribute('aria-label') !== etiqueta) raiz.setAttribute('aria-label', etiqueta);
+  const alerta = alertaVisible(punto.alerta) ? punto.alerta : undefined;
+  const badge = raiz.querySelector<HTMLElement>('.qv-gmap-veh__alerta');
+  if (!alerta || !badge) return;
+  let n = badge.querySelector<HTMLElement>('.qv-gmap-veh__alerta-n');
+  if (alerta.abiertas > 1) {
+    if (!n) {
+      n = document.createElement('span');
+      n.className = 'qv-gmap-veh__alerta-n';
+      badge.appendChild(n);
+    }
+    const texto = String(Math.min(alerta.abiertas, 99));
+    if (n.textContent !== texto) n.textContent = texto;
+  } else if (n) {
+    n.remove();
+  }
+}
+
+/** Marcador de vehículo. Sin foto: mismo badge que los sprites de MapLibre
+ * (`buildVehiculoIconoSvg`, forma y color por `estadoFrescura`). Con `fotoUrl` (PR E): círculo de
+ * 44 px con la foto, que vuelve al sprite si no carga. En ambos casos: anillo del color de la
+ * línea (+ contorno oscuro de 1 px para contraste de líneas blancas), badge de severidad con
+ * ícono propio por nivel (+ cantidad) si hay infracciones abiertas, y la placa debajo. La raíz
+ * mide lo que el disco; la placa cuelga. Con `onClick` es un botón enfocable; sin él, una imagen
+ * con nombre accesible (frescura y alerta van en el texto, no solo en forma/color). */
 function crearElementoVehiculo(punto: MapPoint): HTMLElement {
   const spec =
     VEHICULO_ICONOS.find((s) => s.estado === punto.estadoFrescura) ??
@@ -190,22 +250,92 @@ function crearElementoVehiculo(punto: MapPoint): HTMLElement {
   const raiz = document.createElement('div');
   raiz.className = `qv-gmap-veh qv-gmap-veh--${spec.estado}`;
   const placa = punto.placa?.trim() ?? '';
-  const nombre = `Vehículo ${placa || punto.label || ''}`.trim();
-  // El estado va siempre en el texto; si la descripción del consumidor ya lo menciona no se repite.
-  const estado = etiquetaFrescura(punto.estadoFrescura);
-  const descripcion = punto.description?.trim() ?? '';
-  const estadoYaDicho = estado !== '' && descripcion.toLowerCase().includes(estado.toLowerCase());
-  raiz.setAttribute('aria-label', [nombre, estadoYaDicho ? '' : estado, descripcion].filter(Boolean).join(', '));
+  const alerta = alertaVisible(punto.alerta) ? punto.alerta : undefined;
+  raiz.setAttribute('aria-label', etiquetaVehiculo(punto));
+  // Identificador del punto: permite volver a encontrar el marcador (p. ej. para devolverle el foco
+  // cuando el elemento que lo tenía se recreó).
+  if (punto.id) raiz.dataset.puntoId = punto.id;
   if (punto.onClick) {
     raiz.setAttribute('role', 'button');
+    // El estado "seleccionado" no puede depender solo del halo visual.
+    raiz.setAttribute('aria-pressed', punto.seleccionado ? 'true' : 'false');
     raiz.tabIndex = 0;
     raiz.classList.add('qv-gmap--clickable');
   } else {
     raiz.setAttribute('role', 'img');
   }
   if (punto.description) raiz.title = punto.description;
-  // El SVG sale de constantes del módulo (sin datos del usuario): innerHTML es seguro acá.
-  raiz.innerHTML = buildVehiculoIconoSvg(spec).replace('<svg ', '<svg class="qv-gmap-veh__badge" aria-hidden="true" ');
+  if (punto.seleccionado) raiz.classList.add('qv-gmap-veh--seleccionado');
+  const colorLinea = punto.colorLinea?.trim();
+  if (colorLinea) raiz.style.setProperty('--qv-gmap-veh-linea', colorLinea);
+
+  const spriteSvg = () =>
+    buildVehiculoIconoSvg(spec).replace('<svg ', '<svg class="qv-gmap-veh__badge" aria-hidden="true" ');
+  const foto = normalizarFotoUrl(punto.fotoUrl);
+  const conFoto = foto !== null && fotoUsable(foto);
+  if (conFoto) {
+    raiz.classList.add('qv-gmap-veh--foto');
+    const disco = document.createElement('span');
+    disco.className = 'qv-gmap-veh__disco';
+    const img = document.createElement('img');
+    img.className = 'qv-gmap-veh__foto';
+    img.alt = '';
+    img.setAttribute('aria-hidden', 'true');
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.draggable = false;
+    // Dimensiones intrínsecas (= el disco de 44 px): el navegador reserva el espacio sin saltos.
+    img.width = 44;
+    img.height = 44;
+    img.src = foto;
+    img.addEventListener(
+      'error',
+      () => {
+        marcarFotoFallida(foto);
+        // Vuelve al sprite de siempre sin recrear el marcador (la firma no cambia).
+        raiz.classList.remove('qv-gmap-veh--foto');
+        disco.remove();
+        raiz.insertAdjacentHTML('afterbegin', spriteSvg());
+      },
+      { once: true },
+    );
+    disco.appendChild(img);
+    raiz.appendChild(disco);
+  } else {
+    // El SVG sale de constantes del módulo (sin datos del usuario): innerHTML es seguro acá.
+    raiz.innerHTML = spriteSvg();
+  }
+
+  // Anillo (línea <-> severidad). En modo sprite solo se dibuja si hay color de línea o alerta.
+  if (conFoto || colorLinea || alerta) {
+    const anillo = document.createElement('span');
+    anillo.className = 'qv-gmap-veh__anillo';
+    anillo.setAttribute('aria-hidden', 'true');
+    raiz.appendChild(anillo);
+  }
+  if (alerta) {
+    raiz.classList.add(`qv-gmap-veh--alerta-${alerta.nivel}`);
+    if (alerta.parpadea) raiz.classList.add('qv-gmap-veh--parpadea');
+    const badge = document.createElement('span');
+    badge.className = 'qv-gmap-veh__alerta';
+    badge.setAttribute('aria-hidden', 'true');
+    badge.innerHTML = svgIcono(ICONO_NIVEL[alerta.nivel], 'qv-gmap-veh__alerta-icono');
+    if (alerta.abiertas > 1) {
+      const n = document.createElement('span');
+      n.className = 'qv-gmap-veh__alerta-n';
+      n.textContent = String(Math.min(alerta.abiertas, 99));
+      badge.appendChild(n);
+    }
+    raiz.appendChild(badge);
+  }
+  // `detenido` con foto: el sprite ya traía el reloj; con foto va como mini badge.
+  if (conFoto && spec.estado === 'detenido') {
+    const reloj = document.createElement('span');
+    reloj.className = 'qv-gmap-veh__reloj';
+    reloj.setAttribute('aria-hidden', 'true');
+    reloj.innerHTML = svgIcono(ICONO_RELOJ, 'qv-gmap-veh__reloj-icono');
+    raiz.appendChild(reloj);
+  }
   if (placa) {
     const etiqueta = document.createElement('span');
     etiqueta.className = 'qv-gmap-veh__placa';
@@ -881,7 +1011,7 @@ function Controlador({
       const posicion = { lat: punto.lat, lng: punto.lng };
       const firma = firmaPunto(punto, { oscuro, tipo, rol });
       const previa = entradas.get(clave);
-      const zIndex = esVehiculo ? 1000 : tipo === 'marker' ? 200 : 100;
+      const zIndex = esVehiculo ? zIndexVehiculo(punto) : tipo === 'marker' ? 200 : 100;
 
       if (!previa) {
         const contenido = esVehiculo ? crearElementoVehiculo(punto) : crearElementoPunto(punto, tipo, rol, id, oscuro);
@@ -911,6 +1041,7 @@ function Controlador({
       }
 
       previa.onClick = punto.onClick;
+      if (esVehiculo && previa.marker.zIndex !== zIndex) previa.marker.zIndex = zIndex;
       // Si dejó de ser arrastrable en medio de un arrastre no habrá `gmp-dragend`: se da por cerrado.
       // El click de la suelta tampoco debe activar el punto ni el mapa.
       if (previa.arrastrando && !esArrastrable(punto, tipo)) cerrarArrastre(previa, true);
@@ -951,6 +1082,10 @@ function Controlador({
           previa.marker.position = posicion;
           previa.ultima = posicion;
         }
+      }
+      if (esVehiculo && !decision.recrearContenido && !previa.arrastrando && previa.marker.content instanceof HTMLElement) {
+        // Selección y cantidad de abiertas no están en la firma: se actualizan en el mismo elemento.
+        actualizarVehiculoEnLugar(previa.marker.content, punto);
       }
       if (esVehiculo) {
         previa.interp = apuntarInterpolacionA(previa.interp, posicion, ahora, {
@@ -1073,14 +1208,24 @@ function Controlador({
   }, [map, listo, centroLat, centroLng, defaultZoom]);
 
   // Follow: `panTo` solo si el punto salió del 60% central; jamás toca el zoom.
+  // `nonce` (opcional): cada valor nuevo es un pedido EXPLÍCITO de centrar (p. ej. "Ver en mapa"),
+  // que se atiende aunque el punto ya esté dentro del 60% central y aunque sea el mismo punto.
   const followLat = followPoint?.lat;
   const followLng = followPoint?.lng;
+  const followNonce = followPoint?.nonce;
+  const followOffsetY = followPoint?.offsetY ?? 0;
   useEffect(() => {
     if (!map || !listo || !Number.isFinite(followLat) || !Number.isFinite(followLng)) return;
     if (followLat === undefined || followLng === undefined) return;
     const centro = map.getCenter();
     const zoom = map.getZoom();
     if (!centro || zoom === undefined) return;
+    if (followNonce !== undefined) {
+      marcarProgramatico();
+      // `offsetY`: con una hoja inferior tapando el mapa, el punto se centra en la zona visible.
+      map.panTo(centroConDesplazamientoY({ lat: followLat, lng: followLng }, zoom, followOffsetY));
+      return;
+    }
     const div = map.getDiv();
     const pixel = latLngAPixelContenedor(
       { lat: followLat, lng: followLng },
@@ -1091,7 +1236,7 @@ function Controlador({
     if (isWithinCentralViewport(pixel, { x: div.clientWidth, y: div.clientHeight })) return;
     marcarProgramatico();
     map.panTo({ lat: followLat, lng: followLng });
-  }, [map, listo, followLat, followLng, marcarProgramatico]);
+  }, [map, listo, followLat, followLng, followNonce, followOffsetY, marcarProgramatico]);
 
   return null;
 }

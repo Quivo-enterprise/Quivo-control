@@ -72,6 +72,18 @@ export interface MapPoint {
   /** ENTREGA 14. Placa del vehículo — el texto que se dibuja bajo su ícono/fallback en el
    * mapa (`quivo-vehicle-labels`), para que el mapa se lea sin abrir el detalle de la sesión. */
   placa?: string;
+  /** PR E (`docs/plan-en-vivo-alertas.md`). Foto del vehículo (solo `pinType: 'vehicle'` en el
+   * motor Google): círculo de 44 px. Si falta o falla al cargar, se dibuja el sprite de siempre. */
+  fotoUrl?: string;
+  /** Color de la línea del vehículo: anillo del marcador. Sin él, el anillo usa el color de marca. */
+  colorLinea?: string;
+  /** Infracciones abiertas del vehículo: `nivel` es el máximo; `abiertas` la cantidad.
+   * `parpadea` hace alternar el anillo entre el color de la línea y el de la severidad
+   * (periodo por nivel, siempre < 3 Hz; con movimiento reducido queda fijo). Aunque no
+   * parpadee, el badge de severidad (ícono distinto por nivel + cantidad) se mantiene. */
+  alerta?: { nivel: 'leve' | 'grave' | 'gravisima'; abiertas: number; parpadea: boolean };
+  /** Vehículo con el panel de detalle abierto: se apila por encima de todos y se resalta. */
+  seleccionado?: boolean;
 }
 
 /** Polilínea (trazado) que dibuja `<RouteMap>` — una ruta, la traza GPS real, un borrador en
