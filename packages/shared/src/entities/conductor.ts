@@ -6,6 +6,7 @@ import {
   LicenciaConducirBoliviaSchema,
   NombrePersonaSchema,
 } from '../identidad-bolivia.js';
+import { TelefonoBoliviaSchema } from '../telefono-bolivia.js';
 
 export const ConductorSchema = z.object({
   id: uuidSchema,
@@ -14,6 +15,7 @@ export const ConductorSchema = z.object({
   documentoIdentidad: z.string().min(1).max(50),
   licenciaConducir: z.string().min(1).max(50),
   estado: EstadoConductorSchema,
+  telefono: TelefonoBoliviaSchema,
 });
 export type Conductor = z.infer<typeof ConductorSchema>;
 

@@ -100,6 +100,7 @@ function toConductor(row: {
   documentoIdentidad: string;
   licenciaConducir: string;
   estado: string;
+  telefono: string | null;
 }): Conductor {
   return ConductorSchema.parse(row);
 }

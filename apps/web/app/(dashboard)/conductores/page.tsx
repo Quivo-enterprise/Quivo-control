@@ -2,14 +2,17 @@
 
 import { useMemo } from 'react';
 import { StatusBadge } from '@quivo/design-system';
-import { CreditCard, FileBadge, UserCheck } from 'lucide-react';
+import { CreditCard, FileBadge, Phone, UserCheck } from 'lucide-react';
 import {
   DocumentoIdentidadBoliviaSchema,
   LicenciaConducirBoliviaSchema,
   NombrePersonaSchema,
+  TelefonoBoliviaSchema,
+  formatearTelefonoBolivia,
   normalizarDocumentoIdentidadBolivia,
   normalizarLicenciaConducir,
   normalizarNombrePersona,
+  normalizarTelefonoBolivia,
   type Conductor,
 } from '@quivo/shared';
 import {
@@ -72,6 +75,22 @@ export default function ConductoresPage() {
         normalize: normalizarLicenciaConducir,
         validate: (value) => {
           const result = LicenciaConducirBoliviaSchema.safeParse(value);
+          return result.success ? undefined : result.error.issues[0]?.message;
+        },
+      },
+      {
+        key: 'telefono',
+        label: 'Teléfono (WhatsApp)',
+        kind: 'text',
+        inputType: 'tel',
+        inputMode: 'tel',
+        autoComplete: 'tel',
+        maxLength: 20,
+        placeholder: '7XXXXXXX o +591 7XXXXXXX',
+        helperText: 'Opcional. Celular boliviano para contactar al conductor por WhatsApp o llamada.',
+        normalize: (value) => normalizarTelefonoBolivia(value) ?? value.trim(),
+        validate: (value) => {
+          const result = TelefonoBoliviaSchema.safeParse(value);
           return result.success ? undefined : result.error.issues[0]?.message;
         },
       },
@@ -216,6 +235,21 @@ export default function ConductoresPage() {
               </span>
             </div>
           ),
+        },
+        {
+          key: 'telefono',
+          header: 'Teléfono',
+          render: (row) =>
+            row.telefono ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                <Phone size={13} style={{ color: 'var(--qv-text-muted)' }} />
+                <span style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
+                  {formatearTelefonoBolivia(row.telefono)}
+                </span>
+              </div>
+            ) : (
+              <span style={{ color: 'var(--qv-text-muted)' }}>—</span>
+            ),
         },
         {
           key: 'estado',

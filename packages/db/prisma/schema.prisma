@@ -244,6 +244,9 @@ model Conductor {
   // PIN personal del conductor para el segundo paso del acceso móvil. El valor plano
   // nunca se persiste: se usa el mismo hasher scrypt exportado por Better Auth.
   credencialHash     String?
+  // Celular de contacto (E.164, p. ej. +59171234567) para WhatsApp/llamada desde el panel
+  // en vivo. Dato personal: solo lo exponen endpoints de administración, nunca los móviles.
+  telefono           String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 

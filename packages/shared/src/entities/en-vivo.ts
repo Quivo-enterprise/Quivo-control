@@ -130,7 +130,12 @@ export const ContextoEnVivoSchema = z.object({
     deviceId: z.string(),
   }),
   vehiculo: z.object({ id: uuidSchema, placa: z.string() }),
-  conductor: z.object({ id: uuidSchema, nombre: z.string() }),
+  conductor: z.object({
+    id: uuidSchema,
+    nombre: z.string(),
+    // PII: solo en el contexto (endpoint de administración), nunca en el poll de posiciones.
+    telefono: z.string().nullable().optional(),
+  }),
   linea: z.object({ id: uuidSchema, nombre: z.string(), color: z.string() }),
   ruta: z.object({ id: uuidSchema, geometria: LineaGeoJsonSchema }),
   puntosControl: z.array(PuntoControlRecorridoSchema),

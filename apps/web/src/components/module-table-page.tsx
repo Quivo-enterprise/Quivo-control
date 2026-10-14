@@ -31,6 +31,8 @@ export interface EntityFieldConfig {
   placeholder?: string;
   maxLength?: number;
   pattern?: string;
+  /** Fuerza `type="tel"` en campos `text` (teclado numérico en móvil). */
+  inputType?: 'tel';
   inputMode?: 'text' | 'numeric' | 'decimal' | 'tel' | 'email' | 'search' | 'url' | 'none';
   autoComplete?: string;
   /** Sugerencias vía <datalist> para campos `text` sin catálogo fijo (ej. valores ya usados
@@ -488,7 +490,7 @@ export function ModuleTablePage<T extends Record<string, unknown>>({
                     <Input
                       id={field.key}
                       name={field.key}
-                      type={field.kind === 'number' ? 'number' : 'text'}
+                      type={field.kind === 'number' ? 'number' : (field.inputType ?? 'text')}
                       value={formValues[field.key] ?? ''}
                       onChange={(event) => handleFieldChange(field.key, event.target.value)}
                       onBlur={(event) => {

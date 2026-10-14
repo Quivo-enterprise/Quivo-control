@@ -209,11 +209,10 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   const conductor = contexto?.conductor.nombre ?? posicion?.conductorNombre ?? '';
   const lineaNombre = contexto?.linea.nombre ?? posicion?.lineaNombre ?? '';
   const colorLinea = contexto?.linea.color || undefined;
-  // `fotoUrl` y `telefono` llegan en PRs posteriores (C y B): hoy no existen en los contratos.
+  // `fotoUrl` llega en un PR posterior (C).
   const fotoUrl =
     (posicion as (PosicionEnVivo & { fotoUrl?: string | null }) | undefined)?.fotoUrl?.trim() || null;
-  const telefono =
-    (contexto?.conductor as ({ telefono?: string | null } & ContextoEnVivo['conductor']) | undefined)?.telefono ?? null;
+  const telefono = contexto?.conductor.telefono ?? null;
   const kmh = velocidadKmh(posicion?.speed);
   const lista = ordenarInfracciones(infracciones.data ?? []);
   const abiertas = lista.filter((i) => i.estado === 'abierta');

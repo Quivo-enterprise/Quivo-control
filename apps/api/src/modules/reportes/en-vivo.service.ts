@@ -630,7 +630,11 @@ export class EnVivoService {
           deviceId: sesion.deviceId,
         },
         vehiculo: { id: sesion.vehiculo.id, placa: sesion.vehiculo.placa },
-        conductor: { id: sesion.conductor.id, nombre: sesion.conductor.nombre },
+        conductor: {
+          id: sesion.conductor.id,
+          nombre: sesion.conductor.nombre,
+          telefono: sesion.conductor.telefono,
+        },
         linea: {
           id: sesion.asignacion.ruta.linea.id,
           nombre: sesion.asignacion.ruta.linea.nombre,
