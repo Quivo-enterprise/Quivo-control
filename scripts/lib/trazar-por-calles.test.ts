@@ -7,9 +7,20 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   armarBodyRoutes,
+  cortarPolilinea,
+  detectarVueltasU,
+  podarEspolones,
   decodificarPolyline,
   desvioMaximo,
   detectarRulos,
+  empalmarZona,
+  abscisasSobreBoceto,
+  difAngulo,
+  localizarProblemas,
+  waypointsCulpables,
+  geometriaDeHueco,
+  paresDeZona,
+  type HuecoSinCalle,
   distanciaM,
   longitudM,
   primerEspolon,
@@ -219,4 +230,202 @@ test('detectarRulos: lazo que se cruza a sí mismo (criterio 2) con salida y rei
   const trazado: Coord[] = [en(0, 0), en(150, 0), en(200, -60), en(300, -100), en(300, -200), en(200, -200), en(200, -60), en(400, -40), en(450, 0), en(600, 0)];
   const rulos = detectarRulos(trazado, boceto);
   assert.ok(rulos.length >= 1);
+});
+
+test('detectarRulos: rulo alrededor de una manzana en un trazado paralelo al boceto (a 20 m, nunca "pegado") se detecta por exceso local', () => {
+  const boceto: Coord[] = [en(0, 0), en(600, 0)];
+  const trazado: Coord[] = [en(0, -20), en(200, -20), en(200, -100), en(300, -100), en(300, -20), en(600, -20)];
+  const rulos = detectarRulos(trazado, boceto);
+  assert.equal(rulos.length, 1);
+  const r = rulos[0]!;
+  assert.equal(r.criterio, 'exceso-local');
+  assert.ok(Math.abs(r.excesoM! - 160) < 5, `exceso ${r.excesoM}`);
+  assert.ok(r.desvioMaxM > 95);
+});
+
+test('detectarRulos: una vuelta que el propio boceto dibuja (manzana o ida y vuelta) no se marca', () => {
+  const manzana: Coord[] = [en(0, 0), en(200, 0), en(200, -100), en(300, -100), en(300, 0), en(600, 0)];
+  assert.deepEqual(detectarRulos(manzana, manzana), []);
+  const desplazado: Coord[] = [en(0, -15), en(200, -15), en(215, -100), en(300, -100), en(315, -15), en(600, -15)];
+  assert.deepEqual(detectarRulos(desplazado, manzana), []);
+  const uBoceto: Coord[] = [en(0, 0), en(400, 0), en(400, -15), en(100, -15), en(100, 0), en(700, 0)];
+  assert.deepEqual(detectarRulos(uBoceto, uBoceto), []);
+});
+
+test('detectarRulos regla 2: un par rechazado no salta el tramo; se sigue desde i+1 y se halla el lazo posterior', () => {
+  // El boceto va y vuelve por y=0 (x 0→300→100); el trazado lo copia a y=-20 (par rechazado: no se aleja
+  // del boceto) y luego hace un lazo hacia el norte que vuelve a pasar por el trayecto de ida.
+  const boceto: Coord[] = [en(0, 0), en(300, 0), en(100, 0)];
+  const trazado: Coord[] = [en(0, -20), en(300, -20), en(100, -20), en(100, 100), en(250, 100), en(250, -20)];
+  const rulos = detectarRulos(trazado, boceto, { excesoLocalM: Infinity });
+  assert.ok(rulos.some((r) => r.criterio === 'se-cruza' && r.desvioMaxM > 90), JSON.stringify(rulos.map((r) => r.criterio)));
+});
+
+test('cortarPolilinea: recorta entre abscisas con puntos interpolados', () => {
+  const l: Coord[] = [en(0, 0), en(100, 0), en(100, 100)];
+  const c = cortarPolilinea(l, 50, 150);
+  assert.equal(c.length, 3);
+  assert.ok(distanciaM(c[0]!, en(50, 0)) < 1 && distanciaM(c[1]!, en(100, 0)) < 1 && distanciaM(c[2]!, en(100, 50)) < 1);
+});
+
+test('detectarVueltasU: inversión de rumbo en <= 40 m que el boceto no tiene se marca; si el boceto la dibuja, no', () => {
+  const boceto: Coord[] = [en(0, 0), en(600, 0)];
+  const trazado: Coord[] = [en(0, -10), en(300, -10), en(300, -25), en(100, -25)];
+  const us = detectarVueltasU(trazado, boceto);
+  assert.equal(us.length, 1);
+  assert.ok(us[0]!.giroGrados > 150);
+  assert.ok(distanciaM(us[0]!.coord, en(300, -17)) < 20);
+  const conU: Coord[] = [en(0, 0), en(300, 0), en(300, -15), en(100, -15)];
+  assert.deepEqual(detectarVueltasU(conU, conU), []);
+  assert.deepEqual(detectarVueltasU([en(0, -10), en(300, -10), en(300, 190)], boceto), []); // una esquina de 90° no es U
+});
+
+test('podarEspolones: quita el ir y volver por los mismos vértices que el boceto no dibuja; no toca una U dibujada', () => {
+  const boceto: Coord[] = [en(0, 0), en(600, 0)];
+  const espolon: Coord[] = [en(0, -10), en(200, -10), en(220, -10), en(200, -10), en(600, -10)];
+  const r = podarEspolones(espolon, boceto);
+  assert.equal(r.podados.length, 1);
+  assert.deepEqual(r.coords, [en(0, -10), en(200, -10), en(600, -10)]);
+  assert.equal(detectarVueltasU(r.coords, boceto).length, 0);
+  const conU: Coord[] = [en(0, 0), en(300, 0), en(300, -15), en(100, -15)];
+  assert.deepEqual(podarEspolones(conU, conU).coords, conU);
+});
+
+// --- Zonas ruteadas tramo a tramo con huecos sin calle ---
+
+const BOC: Coord[] = [0, 1, 2, 3, 4, 5].map((i) => [-66.2 + i * 0.001, -17.3] as Coord);
+const HUECO: HuecoSinCalle = { desde: 2, hasta: 3, calle: 'Calle X', motivo: 'sin calle en Google', geometria: [[-66.1975, -17.3003]] };
+
+test('paresDeZona: pares consecutivos en el sentido de marcha y marca de hueco', () => {
+  const ida = paresDeZona(BOC, 1, 4, false, [HUECO]);
+  assert.deepEqual(ida.map((p) => [p.indiceA, p.indiceB, p.hueco !== undefined]), [[1, 2, false], [2, 3, true], [3, 4, false]]);
+  const vuelta = paresDeZona(BOC, 1, 4, true, [HUECO]);
+  assert.deepEqual(vuelta.map((p) => [p.indiceA, p.indiceB, p.hueco !== undefined]), [[4, 3, false], [3, 2, true], [2, 1, false]]);
+  assert.deepEqual(vuelta[0]!.a, BOC[4]);
+});
+
+test('paresDeZona: rechaza rango inválido o hueco fuera de la zona / no consecutivo', () => {
+  assert.throws(() => paresDeZona(BOC, 4, 1, false, []));
+  assert.throws(() => paresDeZona(BOC, 0, 9, false, []));
+  assert.throws(() => paresDeZona(BOC, 3, 5, false, [HUECO]));
+  assert.throws(() => paresDeZona(BOC, 0, 5, false, [{ ...HUECO, hasta: 4 }]));
+});
+
+test('geometriaDeHueco: extremos + calle en el sentido del par; recta si no hay vértices', () => {
+  const [, par] = paresDeZona(BOC, 1, 4, false, [HUECO]);
+  assert.deepEqual(geometriaDeHueco(par!), [BOC[2], [-66.1975, -17.3003], BOC[3]]);
+  const [, parInv] = paresDeZona(BOC, 1, 4, true, [{ ...HUECO, geometria: [[-66.1985, -17.3002], [-66.1975, -17.3003]] }]);
+  assert.deepEqual(geometriaDeHueco(parInv!), [BOC[3], [-66.1975, -17.3003], [-66.1985, -17.3002], BOC[2]]);
+  const [, recta] = paresDeZona(BOC, 1, 4, false, [{ ...HUECO, geometria: undefined }]);
+  assert.deepEqual(geometriaDeHueco(recta!), [BOC[2], BOC[3]]);
+  assert.throws(() => geometriaDeHueco(paresDeZona(BOC, 1, 4, false, [])[0]!));
+});
+
+test('unirTrozos: no duplica el punto de unión entre pares de una zona', () => {
+  const r = unirTrozos([[BOC[1]!, BOC[2]!], [BOC[2]!, [-66.1975, -17.3003], BOC[3]!], [BOC[3]!, BOC[4]!]]);
+  assert.equal(r.length, 5);
+  assert.deepEqual(r[0], BOC[1]);
+  assert.deepEqual(r[4], BOC[4]);
+});
+
+test('empalmarZona: reemplaza entre inicio y fin; lo de afuera queda idéntico', () => {
+  const tramo: Coord[] = [[-66.2, -17.3], [-66.199, -17.3], [-66.198, -17.3001], [-66.197, -17.3001], [-66.196, -17.3], [-66.195, -17.3]];
+  const zona: Coord[] = [[-66.19901, -17.30001], [-66.1975, -17.3003], [-66.19601, -17.30001]];
+  const r = empalmarZona(tramo, zona, tramo[1]!, tramo[4]!);
+  assert.deepEqual(r.coords, [tramo[0], ...zona, tramo[5]]);
+  assert.equal(r.indiceInicio, 1);
+  assert.equal(r.indiceFin, 4);
+});
+
+test('empalmarZona: falla si la zona no empalma (> tolerancia) o si no encuentra fin después del inicio', () => {
+  const tramo: Coord[] = [[-66.2, -17.3], [-66.199, -17.3], [-66.198, -17.3], [-66.197, -17.3]];
+  assert.throws(() => empalmarZona(tramo, [[-66.199, -17.3003], [-66.198, -17.3]], tramo[1]!, tramo[2]!), /inicio de la zona/);
+  assert.throws(() => empalmarZona(tramo, [[-66.199, -17.3], [-66.198, -17.3003]], tramo[1]!, tramo[2]!), /fin de la zona/);
+  assert.throws(() => empalmarZona([tramo[0]!], [tramo[0]!, tramo[0]!], tramo[0]!, tramo[0]!), /no se encontró/);
+});
+
+// --- Fixes post-review ---------------------------------------------------------------------
+
+test('difAngulo: diferencia absoluta 0–180 con cruce por 0/360', () => {
+  assert.equal(difAngulo(10, 350), 20);
+  assert.equal(difAngulo(0, 180), 180);
+  assert.equal(difAngulo(90, 90), 0);
+});
+
+test('detectarVueltasU: U cerca del inicio o del fin del boceto (ventana de rumbo colapsada) también se detecta', () => {
+  const boceto: Coord[] = [en(0, 0), en(0, -1000)]; // recto al sur
+  const conU = (yU: number): Coord[] => [en(5, yU + 40), en(5, yU), en(25, yU), en(25, yU + 40)]; // baja, gira y sube (U de 20 m)
+  for (const y of [-20, -40, -60, -500, -910, -950]) {
+    const us = detectarVueltasU([en(5, y + 80), ...conU(y).slice(0)], boceto);
+    assert.equal(us.length, 1, `U en y=${y}: ${us.length}`);
+  }
+});
+
+test('detectarVueltasU: una U que el boceto sí dibuja cerca del extremo no se marca', () => {
+  const boceto: Coord[] = [en(0, 0), en(300, 0), en(300, -15), en(0, -15)];
+  assert.deepEqual(detectarVueltasU(boceto, boceto), []);
+});
+
+test('podarEspolones: una rotonda (lazo cerrado que NO rehace el camino) no se poda; un espolón real sí', () => {
+  const boceto: Coord[] = [en(0, 0), en(600, 0)];
+  // Rotonda de ~12 m de radio recorrida por un solo lado: entra y sale por el mismo punto, vértices distintos.
+  const R = 12;
+  const circulo: Coord[] = Array.from({ length: 9 }, (_, k) => en(200 + R * Math.sin((k / 8) * 2 * Math.PI), -10 - R + R * Math.cos((k / 8) * 2 * Math.PI)));
+  const conRotonda: Coord[] = [en(0, -10), en(190, -10), ...circulo, en(210, -10), en(600, -10)];
+  const r = podarEspolones(conRotonda, boceto);
+  assert.equal(r.coords.length, conRotonda.length);
+  assert.equal(r.podados.length, 0);
+  // Espolón real: ida y vuelta por los mismos puntos.
+  const espolon: Coord[] = [en(0, -10), en(200, -10), en(210, -10), en(220, -10), en(210, -10), en(200, -10), en(600, -10)];
+  const e = podarEspolones(espolon, boceto);
+  assert.equal(e.podados.length, 1);
+  assert.equal(e.coords.length, espolon.length - 4);
+});
+
+test('abscisasSobreBoceto: un trazado que se aleja de su rama y queda más cerca de una rama ANTERIOR no retrocede; sInicio resuelve el cruce', () => {
+  // Boceto en U: ida por y=0 (x 0→1000), sube, vuelve por y=300 (x 1000→0).
+  const boceto: Coord[] = [en(0, 0), en(1000, 0), en(1000, 260), en(0, 260)];
+  const traz: Coord[] = [en(1000, 260), en(700, 260), en(400, 110), en(300, 110), en(0, 260)]; // se asoma a 110 m de la ida (150 m de la vuelta)
+  const dens: Coord[] = [];
+  for (let i = 1; i < traz.length; i++) {
+    const n = Math.max(1, Math.ceil(distanciaM(traz[i - 1]!, traz[i]!) / 10));
+    for (let k = 0; k < n; k++) dens.push([traz[i - 1]![0] + ((traz[i]![0] - traz[i - 1]![0]) * k) / n, traz[i - 1]![1] + ((traz[i]![1] - traz[i - 1]![1]) * k) / n]);
+  }
+  const s = abscisasSobreBoceto(dens, boceto, 1260);
+  for (let k = 1; k < s.length; k++) assert.ok(s[k]! - s[k - 1]! > -50, `retroceso en ${k}: ${s[k - 1]} → ${s[k]}`);
+  assert.deepEqual(detectarRulos(traz, boceto, { sInicio: 1260 }), []);
+  // Boceto que se cruza: sin sInicio gana la primera pasada; con sInicio, la segunda.
+  const cruz: Coord[] = [en(0, 0), en(600, 0), en(600, 200), en(300, 200), en(300, -100)];
+  assert.ok(abscisasSobreBoceto([en(300, 0), en(300, -50)], cruz)[0]! < 400);
+  assert.ok(Math.abs(abscisasSobreBoceto([en(300, 0), en(300, -50)], cruz, 1300)[0]! - 1300) < 20);
+});
+
+test('waypointsCulpables: mide la distancia a cada problema por separado (no a una polilínea inventada entre ellos)', () => {
+  const wp = (x: number): Muestra => ({ coord: en(x, 0), rumbo: 90 });
+  const intermedios = [wp(100), wp(1000), wp(2000), wp(3000), wp(4000)];
+  const problemas = [
+    { tipo: 'u' as const, ancla: [en(100, 0)], fin: en(100, 0), orden: 5, desde: 5 },
+    { tipo: 'u' as const, ancla: [en(3900, 0)], fin: en(3900, 0), orden: 90, desde: 90 },
+  ];
+  const c = waypointsCulpables(intermedios, problemas);
+  // El waypoint de 2000 m (a 1,9 km de ambos) NO es culpable; con una polilínea 100→3900 daría distancia 0.
+  assert.ok(!c.some((x) => x.k === 2));
+  assert.deepEqual(c.map((x) => x.k).sort(), [0, 4]);
+  // kFin = el waypoint más cercano al ÚLTIMO problema en sentido de marcha (orden 90), aunque se agregó primero: pesa la mitad.
+  assert.ok(c.find((x) => x.k === 4)!.d < 110);
+});
+
+test('localizarProblemas: evalúa contra el boceto entero con la misma proyección que la validación', () => {
+  const boceto: Coord[] = [en(0, 0), en(600, 0)];
+  const trazado: Coord[] = [en(0, 0), en(200, 0), en(200, -80), en(300, -80), en(300, 0), en(600, 0)];
+  const p = localizarProblemas(trazado, boceto, 0);
+  assert.equal(p.length, 1);
+  assert.equal(p[0]!.tipo, 'rulo');
+});
+
+test('localizarProblemas: un rulo dentro de una zona excluida (que después se re-rutea) no cuenta; fuera de ella sí', () => {
+  const boceto: Coord[] = [en(0, 0), en(600, 0)];
+  const trazado: Coord[] = [en(0, 0), en(200, 0), en(200, -80), en(300, -80), en(300, 0), en(600, 0)];
+  assert.equal(localizarProblemas(trazado, boceto, 0, [{ desde: 150, hasta: 350 }]).length, 0);
+  assert.equal(localizarProblemas(trazado, boceto, 0, [{ desde: 400, hasta: 600 }]).length, 1);
 });

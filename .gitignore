@@ -71,3 +71,7 @@ web-mapa/
 
 # credenciales de dev en texto plano (la versión sin secretos es docs/dev/credenciales-demo.md)
 CREDENCIALES.md
+
+# trazado de la línea 16 rechazado por la validación (diagnóstico local)
+scripts/data/linea-16/trazado-rechazado.json
+scripts/data/linea-16/trazado-rechazado.kml

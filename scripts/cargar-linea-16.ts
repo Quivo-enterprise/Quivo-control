@@ -41,27 +41,37 @@
  *   + conector recto bifurcación → inicio del ramal (~77 m, un solo segmento entre el vértice
  *     43 y el primer vértice del ramal; el KML no trae ese tramo y NO se inventan calles)
  *   + ramal Putucu (13 vértices) hasta Molinos
- *   = 151 + 49 + 13 = 213 vértices DEL BOCETO (el script lo asevera, y que |v150 − v92| <= 25 m).
+ *   + bajada de Putucu: el ramal invertido (Molinos → ramal[0], 13 vértices) y el v43
+ *   + regreso directo a Salomón Romero: principal[43..0] invertida (44 vértices, termina en el v0
+ *     donde empieza la ida: el circuito queda cerrado, inicio y fin a <= 50 m)
+ *   = 151 + 49 + 13 + 13 + 44 = 270 vértices DEL BOCETO (el script lo asevera, y que |v150 − v92| <= 25 m).
  *
  * ## Trazado por calles (Google Routes API): la geometría que se carga NO es el boceto
  *
  * El boceto es solo la guía. Cada tramo (ida v0..v150; regreso v150→v91..v43 = la ida invertida;
- * conector v43→ramal[0]; ramal) se ajusta a calles POR SEPARADO con `computeRoutes`: se remuestrea
+ * conector v43→ramal[0]; ramal; bajada = ramal invertido + v43; salomon = v43→v0) se ajusta a calles POR SEPARADO con `computeRoutes`: se remuestrea
  * cada 250 m y cada muestra va como waypoint `via` con `heading` = rumbo del boceto EN EL SENTIDO
  * DEL TRAMO, lo que obliga a Routes a elegir la calzada de ese sentido (el regreso cae en la
  * calzada de vuelta, no sobre la de ida). Máx. 25 intermedios por request: requests encadenados.
- * Cada tramo se valida contra su boceto (desvío máx. <= 120 m, longitud trazado/boceto <= 1,25).
+ * Cada tramo se valida contra su boceto (desvío máx. <= 120 m, longitud trazado/boceto <= 1,25, sin
+ * rulos ni vueltas en U que el boceto no dibuje). Al unir los tramos el hueco entre ellos debe ser
+ * <= 30 m y el circuito debe cerrar (inicio y fin a <= 50 m).
  * El resultado se versiona en `scripts/data/linea-16/trazado-calles.json` (con sha256 del KML): si
  * existe y el sha coincide, `--apply` NO llama a Google. `--recalcular-trazado` lo regenera
- * (GOOGLE_ROUTES_API_KEY); `--solo-trazado` escribe además `trazado-vista-previa.geojson` (boceto
+ * (GOOGLE_ROUTES_API_KEY; `--recalcular-trazado=bajada,salomon` solo esos tramos, el resto se conserva; `--recalcular-zonas` re-rutea solo la zona terminal); `--solo-trazado` escribe además `trazado-vista-previa.geojson` (boceto
  * vs. calles por tramo) y termina sin tocar la API de Quivo. Ver `FUENTE.md`.
+ *
+ * Zona terminal (v8..v24, `ida` y `salomon`): no va con waypoints sino vértice a vértice del boceto (un request por
+ * par de vértices consecutivos), con 2 huecos sin calle en Google (v10→v11, v18→v19) resueltos con la calle real
+ * (`ZONAS_TRAMO_A_TRAMO`, `HUECOS_SIN_CALLE`; decisión del CTO 2026-10-14, ver `FUENTE.md`).
  *
  * Aclaración del CTO (2026-10-12): bajando desde Salomón Romero se toma El Prado hasta Honduras;
  * desde Honduras se vuelve por Aroma, se sube por Ayacucho hasta Libertador/América y desde ahí
  * es la misma ruta de regreso (los designados a Molinos suben por el ramal Putucu). Por eso los
  * vértices 123..150 del KML SON el tramo de retorno (un lazo en el centro), no basura. El
- * regreso directo a Salomón Romero (principal 43..0) usa las mismas calles de la ida, ya
- * cubiertas.
+ * regreso directo a Salomón Romero (principal 43..0 invertida) y la bajada de Putucu (el
+ * ramal invertido) se trazan como tramos propios (`salomon`, `bajada`) con heading de regreso, para
+ * caer en la calzada contraria a la de la ida / subida; antes se dibujaban sobre la ida.
  *
  * ## Puntos de control y paradas (todos sobre esa ruta)
  *
@@ -98,8 +108,8 @@
  * El KML (`scripts/data/linea-16/linea-16-my-maps.kml`, ver `FUENTE.md`, intacto) es un
  * **boceto dibujado a mano**, no una traza GPS: la línea principal tiene 151 vértices para
  * 18,42 km (salto mediana 105 m, p90 239 m, máximo 580 m). La geometría que se carga es el
- * trazado por calles derivado de él (sección anterior), validado contra el boceto a <= 60 m; aun
- * así sigue siendo una aproximación (Routes puede elegir otra calle paralela dentro del umbral) y
+ * trazado por calles derivado de él (sección anterior), validado contra el boceto a <= 120 m
+ * (`DESVIO_MAX_TRAZADO_M`; `EXCEPCIONES_DESVIO` está vacía); aun así sigue siendo una aproximación (Routes puede elegir otra calle paralela dentro del umbral) y
  * NO una traza GPS: la detección de desvío debe quedar DESHABILITADA para esta ruta.
  *
  * ## NO se crean asignaciones ni rotaciones (el CTO asigna desde el panel).
@@ -148,7 +158,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { desvioMaximo, detectarRulos, distanciaAPolilineaM, distanciaM, longitudM, trazarPorCalles, unirTrozos, ESPACIADO_MUESTRAS_M, MAX_INTERMEDIOS } from './lib/trazar-por-calles.js';
+import { calcularRutaGoogle, detectarRulos, detectarVueltasU, empalmarZona, geometriaDeHueco, paresDeZona, podarEspolones, distanciaAPolilineaM, distanciaM, longitudM, trazarPorCalles, unirTrozos, ESPACIADO_MUESTRAS_M, MAX_INTERMEDIOS, type HuecoSinCalle, type VueltaU } from './lib/trazar-por-calles.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -182,8 +192,15 @@ const INDICE_BIFURCACION_PUTUCU = 43;
 /** Vértice de la ida donde el lazo del retorno vuelve a cruzar (América/Libertador): v150 ≈ v92. */
 const INDICE_CRUCE_RETORNO = 92;
 const TOLERANCIA_CRUCE_M = 25;
-/** Vértices esperados del BOCETO: 151 (0..150) + 49 (91..43) + 13 (ramal) = 213. */
-const VERTICES_BOCETO_ESPERADOS = 213;
+/**
+ * Vértices esperados del BOCETO: ida 151 (0..150) + regreso 49 (91..43) + ramal 13 + bajada del ramal
+ * 13 (Molinos → ramal[0], el ramal invertido; v43 ya cuenta en el tramo `salomon`) + salomon 44 (43..0) = 270.
+ */
+const VERTICES_BOCETO_ESPERADOS = 270;
+/** Hueco máximo (m) entre el fin de un tramo y el inicio del siguiente al unirlos. */
+const HUECO_MAX_TRAMOS_M = 30;
+/** La app considera "cerrada" una ruta cuyo inicio y fin están a <= esto (m). */
+const CIERRE_CIRCUITO_MAX_M = 50;
 
 /** Trazado por calles (Google Routes API): validación por tramo contra el boceto. */
 /**
@@ -195,21 +212,80 @@ const VERTICES_BOCETO_ESPERADOS = 213;
  */
 const DESVIO_MAX_TRAZADO_M = 120;
 /**
- * Excepciones EXPLÍCITAS al desvío máximo. El boceto cruza manzanas en diagonal (a mano), así que
- * donde la calle real queda a más de 120 m de la diagonal el trazado "legítimo" la supera. Cada una:
- * tramo, centro [lon, lat], radio de la zona y tope propio. NO VERIFICADAS sobre el mapa: el CTO
- * debe revisarlas en `trazado-calles.kml` (Google My Maps) antes de `--apply`.
+ * Excepciones EXPLÍCITAS de desvío (NO verificadas sobre el mapa: el CTO debe revisarlas en
+ * `trazado-calles.kml` antes de `--apply`, ver `--excepciones-revisadas`). VACÍA desde que la zona
+ * terminal se rutea tramo a tramo (`ZONAS_TRAMO_A_TRAMO`): ya no hace falta ampliar umbrales ni tolerar
+ * rulos ahí. El mecanismo (`tolerarRulos`, tope propio por zona) queda por si hace falta en el futuro.
  */
-const EXCEPCIONES_DESVIO: { tramo: NombreTramo; centro: Coord; radioM: number; maxM: number; motivo: string }[] = [
-  { tramo: 'ida', centro: [-66.2253, -17.32103], radioM: 120, maxM: 150, motivo: 'salida del terminal: el boceto tiene un lazo propio (v10–v13) y diagonales entre manzanas' },
-  { tramo: 'ida', centro: [-66.22277, -17.32515], radioM: 120, maxM: 150, motivo: 'diagonal del boceto entre manzanas; el trazado toma la calle del sentido' },
-  { tramo: 'regreso', centro: [-66.16418, -17.36593], radioM: 150, maxM: 150, motivo: 'cuña de Honduras: la diagonal del boceto (v10–v12) cruza manzanas; el trazado rodea por calles' },
+interface ExcepcionDesvio { tramo: NombreTramo; centro: Coord; radioM: number; maxM: number; tolerarRulos: boolean; motivo: string }
+const EXCEPCIONES_DESVIO: ExcepcionDesvio[] = [];
+/**
+ * Zonas que NO se trazan con waypoints `via` densos sino VÉRTICE A VÉRTICE del boceto: un request de
+ * Routes por cada par de vértices consecutivos (sin waypoints intermedios ni heading), empalmados.
+ * Decisión del CTO (2026-10-14, variante "SINDICATO B"): en la zona terminal (Salancachi / Encanto
+ * Pampa / U.E. Montecillos) el boceto cruza manzanas y con waypoints+heading Routes daba rulos y
+ * desvíos de 134–165 m; ruteando par a par el trazado sigue el dibujo a <= ~8 m, sin rulos ni U.
+ * Índices sobre la línea principal del boceto (v8..v24). `ida` la recorre ascendente (v8→v24) y
+ * `salomon` en sentido inverso (v24→v8). Solo se reemplaza esa porción del tramo: lo de afuera del
+ * rango queda tal cual (se empalma en los vértices más cercanos a v8 y v24, <= `EMPALME_ZONA_MAX_M`).
+ */
+const EMPALME_ZONA_MAX_M = 5;
+/** Salto máximo (m) entre trozos consecutivos de una zona tramo a tramo (un hueco empieza/termina en el vértice crudo del boceto; el trozo vecino de Google, en el punto ajustado a la calle). */
+const ZONA_SALTO_MAX_M = 20;
+/**
+ * Pares de la zona donde Google NO tiene calle transitable (el par no se pide a Routes). Se usa la
+ * calle real de OpenStreetMap, copiada acá (sin dependencia de red): vértices intermedios en el
+ * sentido desde → hasta. Fuente: © colaboradores de OpenStreetMap (ODbL), Overpass 2026-10-14; ver
+ * FUENTE.md. La calle queda a ~16 m de la recta del boceto en ambos huecos (por eso no se usa recta).
+ */
+const HUECOS_SIN_CALLE: HuecoSinCalle[] = [
+  {
+    desde: 10,
+    hasta: 11,
+    calle: 'Calle Los Tajibos',
+    motivo: 'Google no tiene calle transitable entre v10 y v11 (~75 m); es la calle Los Tajibos de OSM',
+    geometria: [[-66.224783, -17.3199], [-66.224709, -17.320062], [-66.224614, -17.320186], [-66.224508, -17.320237], [-66.224425, -17.320252], [-66.224357, -17.320265], [-66.224216, -17.320311]],
+  },
+  {
+    desde: 18,
+    hasta: 19,
+    calle: 'Calle Aguas Potables Norte',
+    motivo: 'Google no tiene calle transitable entre v18 y v19 (~226 m); la calle real es la cadena de ways OSM Calle Encanto / Aguas Potables Norte',
+    geometria: [[-66.223525, -17.323766], [-66.222568, -17.32393], [-66.222448, -17.324015], [-66.222364, -17.324033], [-66.222303, -17.324015], [-66.222228, -17.323948], [-66.222139, -17.323933], [-66.22202, -17.32399], [-66.221839, -17.324058], [-66.221766, -17.324078]],
+  },
 ];
+const ZONAS_TRAMO_A_TRAMO: { nombre: string; tramos: NombreTramo[]; desdeVertice: number; hastaVertice: number; huecos: HuecoSinCalle[] }[] = [
+  { nombre: 'terminal Salancachi / Encanto Pampa / U.E. Montecillos', tramos: ['ida', 'salomon'], desdeVertice: 8, hastaVertice: 24, huecos: HUECOS_SIN_CALLE },
+];
+/**
+ * Muestras del boceto (waypoints `via` con heading) que se OMITEN al trazar un tramo, porque su
+ * heading no lo admite la calle y Routes da una vuelta larga, un rulo o una U para "cumplirlo"
+ * (comprobado omitiéndolas una a una con `detectarRulos` / `detectarVueltasU`). Un tramo listado acá
+ * se traza SIN reintentos automáticos (el reintento automático quita waypoints a ciegas): lo que se
+ * omite es exactamente esto. Coordenadas de las muestras ([lon, lat], a <= 3 m).
+ */
+const OMITIR_MUESTRAS: Partial<Record<NombreTramo, { coord: Coord; motivo: string }[]>> = {
+  regreso: [
+    { coord: [-66.16266, -17.36585], motivo: 'esquina de Atahuallpa: la diagonal del boceto lleva a la calzada de ida, rulo + U' },
+    { coord: [-66.1638, -17.36465], motivo: 'sobre la calzada de ida (-17.3646,-66.1638): hace ir al este por la ida y dar una U' },
+    { coord: [-66.17558, -17.35774], motivo: 'heading 296 en Aroma: rulo de ~900 m antes de alcanzarla' },
+    { coord: [-66.18867, -17.34914], motivo: 'heading 284: rulo/U de ~800 m (desvío 388 m)' },
+    { coord: [-66.19516, -17.34655], motivo: 'heading 291: rulo de ~750 m (desvío 274 m)' },
+  ],
+  salomon: [
+    { coord: [-66.21854, -17.32617], motivo: 'terminal: el boceto cruza manzanas; con estos headings Routes da U y rulos' },
+    { coord: [-66.22138, -17.324], motivo: 'ídem' },
+    { coord: [-66.22433, -17.32243], motivo: 'ídem' },
+  ],
+};
 const RATIO_LONGITUD_MAX = 1.25;
 const TRAZADO_JSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-calles.json');
 const VISTA_PREVIA_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-vista-previa.geojson');
 const KML_TRAZADO_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-calles.kml');
-const TRAMOS = ['ida', 'regreso', 'conector', 'ramal'] as const;
+/** Si un tramo recalculado no pasa la validación, lo calculado se guarda acá (ignorados por git) para diagnosticar sin re-llamar a Google. */
+const RECHAZADO_JSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-rechazado.json');
+const RECHAZADO_KML_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-rechazado.kml');
+const TRAMOS = ['ida', 'regreso', 'conector', 'ramal', 'bajada', 'salomon'] as const;
 type NombreTramo = (typeof TRAMOS)[number];
 
 const KML_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/linea-16-my-maps.kml');
@@ -236,29 +312,13 @@ function redondear(n: number): number {
 
 const RADIO_TIERRA_METROS = 6_371_000;
 
-function haversineMetros(a: Coord, b: Coord): number {
-  const rad = Math.PI / 180;
-  const dLat = (b[1] - a[1]) * rad;
-  const dLon = (b[0] - a[0]) * rad;
-  const sLat = Math.sin(dLat / 2);
-  const sLon = Math.sin(dLon / 2);
-  const h = sLat * sLat + Math.cos(a[1] * rad) * Math.cos(b[1] * rad) * sLon * sLon;
-  return 2 * RADIO_TIERRA_METROS * Math.asin(Math.min(1, Math.sqrt(h)));
-}
-
 function indiceMasCercano(coords: Coord[], punto: Coord): { indice: number; distanciaM: number } {
   let mejor = { indice: 0, distanciaM: Infinity };
   coords.forEach((c, i) => {
-    const d = haversineMetros(c, punto);
+    const d = distanciaM(c, punto);
     if (d < mejor.distanciaM) mejor = { indice: i, distanciaM: d };
   });
   return mejor;
-}
-
-function longitudKm(coords: Coord[]): number {
-  let total = 0;
-  for (let i = 1; i < coords.length; i++) total += haversineMetros(coords[i - 1]!, coords[i]!);
-  return total / 1000;
 }
 
 /** Distancia mínima (m) de un punto a la polilínea, aproximando localmente a plano (equirectangular). */
@@ -346,19 +406,41 @@ function requerirPunto(kml: KmlParseado, nombre: string): Coord {
 
 const argv = process.argv.slice(2);
 const APLICAR = argv.includes('--apply');
-const RECALCULAR_TRAZADO = argv.includes('--recalcular-trazado');
+const ARG_RECALCULAR = argv.find((a) => a === '--recalcular-trazado' || a.startsWith('--recalcular-trazado='));
+const RECALCULAR_TRAZADO = ARG_RECALCULAR !== undefined;
+/** `--recalcular-trazado=bajada,salomon` recalcula solo esos tramos; sin lista, todos. */
+const TRAMOS_A_RECALCULAR: NombreTramo[] = (() => {
+  const lista = ARG_RECALCULAR?.includes('=') ? ARG_RECALCULAR.split('=')[1]!.split(',').map((x) => x.trim()).filter((x) => x.length > 0) : [];
+  const invalidos = lista.filter((x) => !(TRAMOS as readonly string[]).includes(x));
+  if (invalidos.length > 0) {
+    console.error(`--recalcular-trazado: tramo(s) desconocido(s) ${invalidos.join(', ')}. Válidos: ${TRAMOS.join(', ')}.`);
+    process.exit(1);
+  }
+  return lista.length > 0 ? (lista as NombreTramo[]) : [...TRAMOS];
+})();
+/** `--recalcular-zonas`: vuelve a rutear SOLO las zonas tramo a tramo sobre los tramos guardados (el resto no se toca). */
+const RECALCULAR_ZONAS = argv.includes('--recalcular-zonas');
+const EXCEPCIONES_REVISADAS = argv.includes('--excepciones-revisadas');
 const SOLO_TRAZADO = argv.includes('--solo-trazado');
+// Dry-run y --apply NUNCA escriben archivos versionados: recalcular (que llama a Google y reescribe el json) solo con --solo-trazado.
+if ((RECALCULAR_TRAZADO || RECALCULAR_ZONAS) && !SOLO_TRAZADO) {
+  console.error('--recalcular-trazado / --recalcular-zonas requieren --solo-trazado: el dry-run y --apply no escriben archivos versionados.');
+  process.exit(1);
+}
 
 if (argv.includes('--help') || argv.includes('-h')) {
   console.log(`
 Uso:
   QUIVO_ADMIN_EMAIL=… QUIVO_ADMIN_PASSWORD=… [QUIVO_API_URL=…] tsx scripts/cargar-linea-16.ts [--apply]
-  [GOOGLE_ROUTES_API_KEY=…] tsx scripts/cargar-linea-16.ts --solo-trazado [--recalcular-trazado]
+  [GOOGLE_ROUTES_API_KEY=…] tsx scripts/cargar-linea-16.ts --solo-trazado [--recalcular-trazado[=tramo1,tramo2]] [--recalcular-zonas]
 
 Sin --apply: dry-run (login + lecturas GET; NO escribe). Con --apply: escribe vía la API.
 --solo-trazado: calcula/lee el trazado por calles, escribe trazado-calles.json y la vista previa
   (.geojson) y termina SIN tocar la API de Quivo.
---recalcular-trazado: regenera el trazado con Google Routes API (requiere GOOGLE_ROUTES_API_KEY).
+--recalcular-trazado[=a,b]: regenera el trazado con Google Routes API (requiere GOOGLE_ROUTES_API_KEY);
+  con lista, solo esos tramos (el resto se conserva del json). Tramos: ida, regreso, conector, ramal, bajada, salomon.
+--recalcular-zonas: re-rutea SOLO las zonas tramo a tramo (ZONAS_TRAMO_A_TRAMO) sobre los tramos guardados; el resto no se toca.
+--excepciones-revisadas: obligatoria con --apply mientras EXCEPCIONES_DESVIO no esté vacía (desvíos sin verificar).
 Opcionales: QUIVO_SINDICATO_ID, QUIVO_SINDICATO_NOMBRE.
 `);
   process.exit(0);
@@ -528,6 +610,8 @@ interface Boceto {
  *            v150 (≈ v92, ≤ 25 m) para que el tramo arranque donde termina la ida.
  *   conector v43 → ramal[0] (~77 m; el KML no trae ese tramo)
  *   ramal    ramal Putucu hasta Molinos
+ *   bajada   ramal invertido (Molinos → ramal[0]) + v43: la bajada de Putucu en sentido contrario
+ *   salomon  v43 → v0 (principal invertida): el regreso directo a Salomón Romero
  */
 export function prepararBoceto(kmlTexto: string): Boceto {
   const kml = parseKml(kmlTexto);
@@ -537,8 +621,8 @@ export function prepararBoceto(kmlTexto: string): Boceto {
   const honduras = requerirPunto(kml, KML_PARADA_HONDURAS);
   const molinos = requerirPunto(kml, KML_PARADA_MOLINOS);
 
-  console.log(`  Línea principal "${KML_LINEA_PRINCIPAL}": ${principal.length} vértices, ${longitudKm(principal).toFixed(2)} km.`);
-  console.log(`  Ramal Putucu "${KML_RAMAL_PUTUCU}": ${ramal.length} vértices, ${longitudKm(ramal).toFixed(2)} km.`);
+  console.log(`  Línea principal "${KML_LINEA_PRINCIPAL}": ${principal.length} vértices, ${(longitudM(principal) / 1000).toFixed(2)} km.`);
+  console.log(`  Ramal Putucu "${KML_RAMAL_PUTUCU}": ${ramal.length} vértices, ${(longitudM(ramal) / 1000).toFixed(2)} km.`);
 
   if (INDICE_HONDURAS > principal.length - 1) throw new Error(`INDICE_HONDURAS=${INDICE_HONDURAS} fuera de rango.`);
   const hond = indiceMasCercano(principal, honduras);
@@ -552,24 +636,28 @@ export function prepararBoceto(kmlTexto: string): Boceto {
 
   // Guardas del lazo: el último vértice del dibujo (v150) cierra sobre la ida en el v92.
   const ultimo = principal.length - 1;
-  const cierre = haversineMetros(principal[ultimo]!, principal[INDICE_CRUCE_RETORNO]!);
+  const cierre = distanciaM(principal[ultimo]!, principal[INDICE_CRUCE_RETORNO]!);
   if (cierre > TOLERANCIA_CRUCE_M) {
     throw new Error(`v${ultimo} está a ${cierre.toFixed(1)} m de v${INDICE_CRUCE_RETORNO} (> ${TOLERANCIA_CRUCE_M} m). El KML cambió: revisar.`);
   }
   const regresoInvertido = principal.slice(INDICE_BIFURCACION_PUTUCU, INDICE_CRUCE_RETORNO).reverse(); // v91..v43
-  const verticesBoceto = principal.length + regresoInvertido.length + ramal.length;
+  const verticesBoceto = principal.length + regresoInvertido.length + ramal.length + ramal.length + (INDICE_BIFURCACION_PUTUCU + 1);
   console.log(
-    `  Boceto: dibujo completo ${principal.length} + regreso a bifurcación ${regresoInvertido.length} + ramal ${ramal.length} = ${verticesBoceto} vértices.`,
+    `  Boceto: dibujo completo ${principal.length} + regreso a bifurcación ${regresoInvertido.length} + ramal ${ramal.length} + bajada del ramal ${ramal.length} + regreso a Salomón ${INDICE_BIFURCACION_PUTUCU + 1} = ${verticesBoceto} vértices.`,
   );
   console.log(`  Cierre del lazo: v${ultimo} a ${cierre.toFixed(1)} m de v${INDICE_CRUCE_RETORNO} (tope ${TOLERANCIA_CRUCE_M} m).`);
   if (verticesBoceto !== VERTICES_BOCETO_ESPERADOS) {
     throw new Error(`El boceto tiene ${verticesBoceto} vértices y se esperaban ${VERTICES_BOCETO_ESPERADOS}.`);
   }
+  const bajadaRamal = [...ramal].reverse(); // Molinos → ramal[0]
+  const regresoSalomon = principal.slice(0, INDICE_BIFURCACION_PUTUCU + 1).reverse(); // v43..v0
   const tramos: TramosCoord = {
     ida: principal,
     regreso: [principal[ultimo]!, ...regresoInvertido],
     conector: [principal[INDICE_BIFURCACION_PUTUCU]!, ramal[0]!],
     ramal,
+    bajada: [...bajadaRamal, principal[INDICE_BIFURCACION_PUTUCU]!],
+    salomon: regresoSalomon,
   };
   return { principal, ramal, salomon, honduras, molinos, tramos };
 }
@@ -593,99 +681,211 @@ function sha256(texto: string): string {
 }
 
 /**
- * Valida un tramo trazado contra su boceto: desvío máximo <= DESVIO_MAX_TRAZADO_M y longitud
- * trazado/boceto <= RATIO_LONGITUD_MAX. Si no, error con tramo, valor y coordenada del peor punto.
+ * Valida un tramo trazado contra su boceto: desvío máximo <= DESVIO_MAX_TRAZADO_M (o el tope de su
+ * excepción), sin rulos ni vueltas en U que el boceto no dibuje, y longitud trazado/boceto <=
+ * RATIO_LONGITUD_MAX. Si no, error con tramo, valor y coordenada del peor punto.
  */
-export function validarTramo(nombre: string, boceto: Coord[], trazado: Coord[]): { desvioM: number; kmBoceto: number; kmTrazado: number } {
-  const desvio = desvioMaximo(trazado, boceto);
+export function validarTramo(nombre: string, boceto: Coord[], trazado: Coord[], usPrecalculadas?: VueltaU[]): { desvioM: number; kmBoceto: number; kmTrazado: number; coordDesvio: Coord } {
   const kmBoceto = longitudM(boceto) / 1000;
   const kmTrazado = longitudM(trazado) / 1000;
   const ratio = kmTrazado / kmBoceto;
   // Desvío contra el tope general, salvo en las zonas con excepción explícita (que tienen su propio tope).
   const excepciones = EXCEPCIONES_DESVIO.filter((e) => e.tramo === nombre);
   const tope = (p: Coord): number => excepciones.find((e) => distanciaM(p, e.centro) <= e.radioM)?.maxM ?? DESVIO_MAX_TRAZADO_M;
-  const revisar = (puntos: Coord[], contra: Coord[], sentido: string): void => {
+  const tolerado = (p: Coord): boolean => excepciones.some((e) => e.tolerarRulos && distanciaM(p, e.centro) <= e.radioM);
+  // Una sola pasada (ambos sentidos): desvío máximo absoluto y peor punto contra SU límite.
+  let max = { d: -1, coord: trazado[0]!, sentido: '' };
+  let peor: { d: number; tope: number; coord: Coord; sentido: string } | null = null;
+  const pasada = (puntos: Coord[], contra: Coord[], sentido: string): void => {
     for (const p of puntos) {
       const d = distanciaAPolilineaM(p, contra);
-      if (d > tope(p)) {
-        throw new Error(`Tramo "${nombre}": desvío máximo ${d.toFixed(1)} m > ${tope(p)} m (${sentido}) en ${p[1].toFixed(6)},${p[0].toFixed(6)}.`);
-      }
+      if (d > max.d) max = { d, coord: p, sentido };
+      const t = tope(p);
+      if (d > t && (!peor || d - t > peor.d - peor.tope)) peor = { d, tope: t, coord: p, sentido };
     }
   };
-  revisar(trazado, boceto, 'punto del trazado lejos del boceto');
-  revisar(boceto, trazado, 'punto del boceto lejos del trazado');
+  pasada(trazado, boceto, 'punto del trazado lejos del boceto');
+  pasada(boceto, trazado, 'punto del boceto lejos del trazado');
+  const f = (c: Coord) => `${c[1].toFixed(6)},${c[0].toFixed(6)}`;
+  if (peor) {
+    const w = peor as { d: number; tope: number; coord: Coord; sentido: string };
+    throw new Error(`Tramo "${nombre}": desvío máximo ${w.d.toFixed(1)} m > ${w.tope} m (${w.sentido}) en ${f(w.coord)}.`);
+  }
   // Un trazado con rulos (vuelta a una manzana para reincorporarse a la misma avenida) no se acepta.
-  const rulos = detectarRulos(trazado, boceto);
+  const rulos = detectarRulos(trazado, boceto).filter((r) => !(tolerado(r.salida) && tolerado(r.reingreso)));
   if (rulos.length > 0) {
-    const f = (c: Coord) => `${c[1].toFixed(6)},${c[0].toFixed(6)}`;
     throw new Error(
       `Tramo "${nombre}": ${rulos.length} rulo(s) alrededor de una manzana: ` +
-        rulos.map((r) => `sale en ${f(r.salida)} y reingresa en ${f(r.reingreso)} (${r.largoM.toFixed(0)} m de recorrido para ${r.rectaM.toFixed(0)} m en recta, desvío máx ${r.desvioMaxM.toFixed(0)} m en ${f(r.coordDesvioMax)}, criterio ${r.criterio})`).join('; ') +
+        rulos.map((r) => `sale en ${f(r.salida)} y reingresa en ${f(r.reingreso)} (${r.largoM.toFixed(0)} m de recorrido para ${r.rectaM.toFixed(0)} m en recta${r.excesoM === undefined ? '' : `, exceso ${r.excesoM.toFixed(0)} m`}, desvío máx ${r.desvioMaxM.toFixed(0)} m en ${f(r.coordDesvioMax)}, criterio ${r.criterio})`).join('; ') +
         '.',
     );
   }
+  const us = (usPrecalculadas ?? detectarVueltasU(trazado, boceto)).filter((u) => !tolerado(u.coord));
+  if (us.length > 0) {
+    throw new Error(`Tramo "${nombre}": ${us.length} vuelta(s) en U que el boceto no dibuja: ` + us.map((u) => `en ${f(u.coord)} (vértice ${u.indice}, giro ${u.giroGrados.toFixed(0)}° en ${u.arcoM.toFixed(0)} m)`).join('; ') + '.');
+  }
   if (ratio > RATIO_LONGITUD_MAX) {
-    const [lon, lat] = desvio.coord;
     throw new Error(
-      `Tramo "${nombre}": longitud trazado/boceto = ${ratio.toFixed(3)} (${kmTrazado.toFixed(2)} km / ${kmBoceto.toFixed(2)} km) > ${RATIO_LONGITUD_MAX}. Peor desvío ${desvio.maxM.toFixed(1)} m en ${lat.toFixed(6)},${lon.toFixed(6)}.`,
+      `Tramo "${nombre}": longitud trazado/boceto = ${ratio.toFixed(3)} (${kmTrazado.toFixed(2)} km / ${kmBoceto.toFixed(2)} km) > ${RATIO_LONGITUD_MAX}. Peor desvío ${max.d.toFixed(1)} m en ${f(max.coord)}.`,
     );
   }
-  return { desvioM: desvio.maxM, kmBoceto, kmTrazado };
+  return { desvioM: max.d, kmBoceto, kmTrazado, coordDesvio: max.coord };
+}
+
+/** Rango de abscisas (m de arco sobre `boceto.tramos[nombre]`) que cubre la zona tramo a tramo: entre los vértices del tramo más cercanos a sus extremos v(desde) y v(hasta). */
+function abscisasDeZona(boceto: Boceto, nombre: NombreTramo, zona: (typeof ZONAS_TRAMO_A_TRAMO)[number]): { desde: number; hasta: number } {
+  const tramo = boceto.tramos[nombre];
+  const acum = [0];
+  for (let i = 1; i < tramo.length; i++) acum.push(acum[i - 1]! + distanciaM(tramo[i - 1]!, tramo[i]!));
+  const sDe = (ref: Coord): number => acum[tramo.reduce((m, c, i) => (distanciaM(c, ref) < distanciaM(tramo[m]!, ref) ? i : m), 0)]!;
+  const a = sDe(boceto.principal[zona.desdeVertice]!);
+  const b = sDe(boceto.principal[zona.hastaVertice]!);
+  return { desde: Math.min(a, b), hasta: Math.max(a, b) };
+}
+
+/**
+ * Rutea una zona tramo a tramo (par de vértices consecutivos del boceto, sin waypoints ni heading; los
+ * huecos sin calle usan la calle real) y la empalma en `tramo` reemplazando solo esa porción.
+ * `invertir`: el tramo recorre la zona de `hastaVertice` a `desdeVertice` (el regreso a Salomón).
+ */
+async function rutearZona(nombre: NombreTramo, tramo: Coord[], boceto: Boceto, zona: (typeof ZONAS_TRAMO_A_TRAMO)[number], apiKey: string): Promise<Coord[]> {
+  const invertir = nombre === 'salomon';
+  const pares = paresDeZona(boceto.principal, zona.desdeVertice, zona.hastaVertice, invertir, zona.huecos);
+  const trozos: Coord[][] = [];
+  for (const par of pares) {
+    if (par.hueco) {
+      trozos.push(geometriaDeHueco(par));
+      console.log(`      ${nombre}: v${par.indiceA}→v${par.indiceB} sin calle en Google: ${par.hueco.calle} (${par.hueco.geometria?.length ?? 0} vértices propios).`);
+    } else {
+      const r = await calcularRutaGoogle({ origen: { coord: par.a, rumbo: null }, intermedios: [], destino: { coord: par.b, rumbo: null } }, apiKey);
+      trozos.push(r.coords.map((c) => [redondear(c[0]), redondear(c[1])] as Coord));
+    }
+  }
+  // Control de saltos entre trozos consecutivos de la zona (el hueco empieza/termina en el vértice crudo del boceto).
+  for (let k = 1; k < trozos.length; k++) {
+    const salto = distanciaM(trozos[k - 1]![trozos[k - 1]!.length - 1]!, trozos[k]![0]!);
+    if (salto > ZONA_SALTO_MAX_M) {
+      throw new Error(`${nombre}: salto de ${salto.toFixed(1)} m (> ${ZONA_SALTO_MAX_M} m) en la zona "${zona.nombre}" entre los pares v${pares[k - 1]!.indiceA}→v${pares[k - 1]!.indiceB} y v${pares[k]!.indiceA}→v${pares[k]!.indiceB}.`);
+    }
+  }
+  const ensamblada = unirTrozos(trozos);
+  const [inicioRef, finRef] = invertir ? [boceto.principal[zona.hastaVertice]!, boceto.principal[zona.desdeVertice]!] : [boceto.principal[zona.desdeVertice]!, boceto.principal[zona.hastaVertice]!];
+  const e = empalmarZona(tramo, ensamblada, inicioRef, finRef, EMPALME_ZONA_MAX_M);
+  console.log(`    ${nombre}: zona "${zona.nombre}" (v${zona.desdeVertice}..v${zona.hastaVertice}${invertir ? ', invertida' : ''}): ${pares.length} pares, ${e.indiceFin - e.indiceInicio + 1} → ${ensamblada.length} vértices; vértices antes/después del tramo intactos.`);
+  return e.coords;
 }
 
 /**
  * Devuelve el trazado por calles de cada tramo. Si `trazado-calles.json` existe y el sha256 del KML
  * coincide, se usa SIN llamar a Google. `--recalcular-trazado` lo regenera (requiere
- * GOOGLE_ROUTES_API_KEY). Si el sha no coincide y no se pidió recalcular: error.
+ * GOOGLE_ROUTES_API_KEY); `--recalcular-trazado=a,b` recalcula solo esos tramos y conserva el resto
+ * del json tal cual. Si el sha no coincide y no se pidió recalcular: error. Si un tramo recalculado
+ * no pasa la validación, lo calculado se guarda en `trazado-rechazado.json/.kml` antes de abortar.
  */
 async function obtenerTrazado(kmlTexto: string, boceto: Boceto): Promise<TramosCoord> {
   const sha = sha256(kmlTexto);
   let guardado: TrazadoJson | undefined;
   if (fs.existsSync(TRAZADO_JSON_PATH)) guardado = JSON.parse(fs.readFileSync(TRAZADO_JSON_PATH, 'utf8')) as TrazadoJson;
 
-  let tramos: TramosCoord;
-  if (guardado && guardado.meta.kmlSha256 === sha && !RECALCULAR_TRAZADO) {
-    console.log(`  Trazado versionado (${guardado.meta.generado}, sha KML ${sha.slice(0, 12)}…): se usa sin llamar a Google.`);
-    tramos = guardado.tramos;
+  const shaCoincide = guardado !== undefined && guardado.meta.kmlSha256 === sha;
+  const recalcular = new Set<NombreTramo>(RECALCULAR_TRAZADO ? TRAMOS_A_RECALCULAR : []);
+  // Tramos cuya zona tramo a tramo se (re)rutea: los recalculados completos + todos los de ZONAS_TRAMO_A_TRAMO con --recalcular-zonas.
+  const zonasARutear = new Set<NombreTramo>();
+  for (const z of ZONAS_TRAMO_A_TRAMO) for (const t of z.tramos) if (recalcular.has(t) || RECALCULAR_ZONAS) zonasARutear.add(t);
+  if (!RECALCULAR_TRAZADO && !shaCoincide) {
+    throw new Error(
+      guardado
+        ? `trazado-calles.json es de otro KML (sha ${guardado.meta.kmlSha256.slice(0, 12)}… vs ${sha.slice(0, 12)}…). Regenerar con --recalcular-trazado (requiere GOOGLE_ROUTES_API_KEY).`
+        : 'No existe scripts/data/linea-16/trazado-calles.json. Generarlo con --recalcular-trazado (requiere GOOGLE_ROUTES_API_KEY).',
+    );
+  }
+  // Los tramos que no se recalculan salen del json versionado: tienen que existir (y ser del mismo KML).
+  const faltantes = TRAMOS.filter((t) => !recalcular.has(t) && !(shaCoincide && guardado!.tramos[t]?.length));
+  if (faltantes.length > 0) {
+    throw new Error(`Faltan en trazado-calles.json (o es de otro KML) los tramos: ${faltantes.join(', ')}. Recalcularlos con --recalcular-trazado=${faltantes.join(',')} (requiere GOOGLE_ROUTES_API_KEY).`);
+  }
+
+  const tramos = {} as TramosCoord;
+  for (const t of TRAMOS) if (!recalcular.has(t)) tramos[t] = guardado!.tramos[t];
+  if (recalcular.size === 0 && zonasARutear.size === 0) {
+    console.log(`  Trazado versionado (${guardado!.meta.generado}, sha KML ${sha.slice(0, 12)}…): se usa sin llamar a Google.`);
   } else {
-    if (!RECALCULAR_TRAZADO) {
-      throw new Error(
-        guardado
-          ? `trazado-calles.json es de otro KML (sha ${guardado.meta.kmlSha256.slice(0, 12)}… vs ${sha.slice(0, 12)}…). Regenerar con --recalcular-trazado (requiere GOOGLE_ROUTES_API_KEY).`
-          : 'No existe scripts/data/linea-16/trazado-calles.json. Generarlo con --recalcular-trazado (requiere GOOGLE_ROUTES_API_KEY).',
-      );
-    }
     const apiKey = requerirEnv('GOOGLE_ROUTES_API_KEY');
-    console.log(`  Recalculando trazado con Google Routes API (muestras cada ${ESPACIADO_MUESTRAS_M} m, heading del boceto en el sentido del tramo)…`);
-    tramos = { ida: [], regreso: [], conector: [], ramal: [] };
-    for (const nombre of TRAMOS) {
-      const r = await trazarPorCalles(boceto.tramos[nombre], apiKey, { pasoM: ESPACIADO_MUESTRAS_M, maxIntermedios: MAX_INTERMEDIOS });
+    if (recalcular.size === 0) console.log(`  Se conserva todo el json versionado salvo las zonas tramo a tramo de: ${[...zonasARutear].join(', ')}.`);
+    if (recalcular.size > 0) console.log(`  Recalculando con Google Routes API ${[...recalcular].join(', ')} (muestras cada ${ESPACIADO_MUESTRAS_M} m, heading del boceto en el sentido del tramo)…`);
+    if (recalcular.size < TRAMOS.length) console.log(`  Se conservan tal cual del json: ${TRAMOS.filter((t) => !recalcular.has(t)).join(', ')}.`);
+    for (const nombre of TRAMOS.filter((t) => recalcular.has(t))) {
+      const omitir = OMITIR_MUESTRAS[nombre];
+      const r = await trazarPorCalles(boceto.tramos[nombre], apiKey, {
+        pasoM: ESPACIADO_MUESTRAS_M,
+        maxIntermedios: MAX_INTERMEDIOS,
+        ...(omitir ? { omitir: omitir.map((o) => o.coord), maxReintentos: 0 } : {}),
+        // La zona que después se reemplaza con `rutearZona` no cuenta como problema (ni dispara reintentos).
+        excluirAbscisas: ZONAS_TRAMO_A_TRAMO.filter((z) => z.tramos.includes(nombre)).map((z) => abscisasDeZona(boceto, nombre, z)),
+        log: (m) => console.log(`      ${nombre}: ${m}`),
+      });
       tramos[nombre] = r.coords.map((c) => [redondear(c[0]), redondear(c[1])] as Coord);
       console.log(`    ${nombre}: ${r.requests} request(s), ${tramos[nombre].length} vértices${r.descartadas.length ? `, ${r.descartadas.length} waypoint(s) quitado(s) por provocar espolones/rulos` : ''}${r.sinRumbo.length ? `, ${r.sinRumbo.length} sin heading` : ''}.`);
       for (const c of r.descartadas) console.log(`      quitado:    ${c[1].toFixed(6)},${c[0].toFixed(6)}`);
       for (const c of r.sinRumbo) console.log(`      sin heading: ${c[1].toFixed(6)},${c[0].toFixed(6)}`);
     }
+    for (const z of ZONAS_TRAMO_A_TRAMO) {
+      for (const t of z.tramos) if (zonasARutear.has(t)) tramos[t] = await rutearZona(t, tramos[t], boceto, z, apiKey);
+    }
   }
 
-  // Validación SIEMPRE (también el json versionado): no se carga basura.
+  // Espolones (ir hasta un ápice y volver por los mismos puntos, que el boceto no dibuja). La poda solo se aplica en
+  // --solo-trazado (ahí se reescribe el json y se regenera el KML para revisar). Dry-run y --apply NUNCA modifican lo
+  // que se carga en silencio ni escriben archivos versionados: si el json versionado tiene un espolón, abortan.
+  let podado = false;
+  const usPorTramo: Partial<Record<NombreTramo, VueltaU[]>> = {};
+  for (const t of TRAMOS) {
+    const p = podarEspolones(tramos[t], boceto.tramos[t]);
+    if (p.podados.length === 0) {
+      usPorTramo[t] = p.us;
+      continue;
+    }
+    const donde = p.podados.map((c) => `${c[1].toFixed(6)},${c[0].toFixed(6)}`).join('; ');
+    if (!SOLO_TRAZADO) {
+      throw new Error(`${t}: el trazado versionado tiene ${p.podados.length} espolón(es) que la poda quitaría (${donde}). No se poda en silencio lo que se carga: regenerar con --solo-trazado y revisar el KML.`);
+    }
+    console.log(`  ${t}: ${p.podados.length} espolón(es) podado(s) en ${donde} (${tramos[t].length} → ${p.coords.length} vértices).`);
+    tramos[t] = p.coords;
+    podado = true;
+  }
+
+  // Validación SIEMPRE (también el json versionado): no se carga basura. Se validan todos y se juntan los errores.
   console.log('  Validación por tramo (boceto → trazado):');
+  const errores: string[] = [];
   for (const nombre of TRAMOS) {
-    const v = validarTramo(nombre, boceto.tramos[nombre], tramos[nombre]);
-    console.log(
-      `    ${nombre.padEnd(8)} vértices ${String(boceto.tramos[nombre].length).padStart(3)} → ${String(tramos[nombre].length).padStart(4)} · ${v.kmBoceto.toFixed(2)} km → ${v.kmTrazado.toFixed(2)} km · desvío máx ${v.desvioM.toFixed(1)} m`,
-    );
+    try {
+      const v = validarTramo(nombre, boceto.tramos[nombre], tramos[nombre], usPorTramo[nombre]);
+      console.log(
+        `    ${nombre.padEnd(8)} vértices ${String(boceto.tramos[nombre].length).padStart(3)} → ${String(tramos[nombre].length).padStart(4)} · ${v.kmBoceto.toFixed(2)} km → ${v.kmTrazado.toFixed(2)} km · desvío máx ${v.desvioM.toFixed(1)} m en ${v.coordDesvio[1].toFixed(6)},${v.coordDesvio[0].toFixed(6)}`,
+      );
+    } catch (err) {
+      errores.push(err instanceof Error ? err.message : String(err));
+    }
   }
-
-  if (RECALCULAR_TRAZADO || !guardado || guardado.meta.kmlSha256 !== sha) {
-    const salida: TrazadoJson = {
-      meta: {
-        generado: new Date().toISOString(),
-        kmlSha256: sha,
-        fuente: 'Google Routes API computeRoutes (DRIVE, TRAFFIC_UNAWARE, HIGH_QUALITY) sobre scripts/data/linea-16/linea-16-my-maps.kml',
-        parametros: { espaciadoMuestrasM: ESPACIADO_MUESTRAS_M, maxIntermedios: MAX_INTERMEDIOS, desvioMaxM: DESVIO_MAX_TRAZADO_M, ratioLongitudMax: RATIO_LONGITUD_MAX },
-      },
-      tramos,
-    };
+  const salida: TrazadoJson = {
+    meta: {
+      generado: new Date().toISOString(),
+      kmlSha256: sha,
+      fuente: 'Google Routes API computeRoutes (DRIVE, TRAFFIC_UNAWARE, HIGH_QUALITY) sobre scripts/data/linea-16/linea-16-my-maps.kml',
+      parametros: { espaciadoMuestrasM: ESPACIADO_MUESTRAS_M, maxIntermedios: MAX_INTERMEDIOS, desvioMaxM: DESVIO_MAX_TRAZADO_M, ratioLongitudMax: RATIO_LONGITUD_MAX },
+    },
+    tramos,
+  };
+  if (errores.length > 0) {
+    if (recalcular.size > 0 || zonasARutear.size > 0) {
+      fs.writeFileSync(RECHAZADO_JSON_PATH, JSON.stringify(salida) + '\n');
+      fs.writeFileSync(RECHAZADO_KML_PATH, armarKmlTrazado(boceto, tramos));
+      console.error(`  Lo calculado quedó en ${path.relative(REPO_ROOT, RECHAZADO_JSON_PATH)} y ${path.relative(REPO_ROOT, RECHAZADO_KML_PATH)} (no versionados) para diagnosticar sin re-llamar a Google.`);
+    }
+    throw new Error(errores.join('\n'));
+  }
+  // Solo se llega con trazado recalculado o con json válido ya existente: escribir únicamente si hubo cálculo o poda (solo con --solo-trazado: el resto de modos nunca llega acá con cambios).
+  if (SOLO_TRAZADO && (recalcular.size > 0 || zonasARutear.size > 0 || podado)) {
     fs.writeFileSync(TRAZADO_JSON_PATH, JSON.stringify(salida) + '\n');
     console.log(`  Escrito ${path.relative(REPO_ROOT, TRAZADO_JSON_PATH)}.`);
   }
@@ -706,8 +906,8 @@ function escribirVistaPrevia(boceto: Boceto, trazado: TramosCoord): void {
 
 const xmlEscape = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 /** Colores KML = aabbggrr. */
-const COLOR_KML: Record<NombreTramo, string> = { ida: 'ffff7f00', regreso: 'ff0000ff', conector: 'ff00ffff', ramal: 'ff00c800' };
-const NOMBRE_KML: Record<NombreTramo, string> = { ida: 'Ida', regreso: 'Regreso', conector: 'Conector', ramal: 'Ramal Putucu' };
+const COLOR_KML: Record<NombreTramo, string> = { ida: 'ffff7f00', regreso: 'ff0000ff', conector: 'ff00ffff', ramal: 'ff00c800', bajada: 'ffff00ff', salomon: 'ff0080ff' };
+const NOMBRE_KML: Record<NombreTramo, string> = { ida: 'Ida', regreso: 'Regreso', conector: 'Conector', ramal: 'Ramal Putucu', bajada: 'Bajada de Putucu', salomon: 'Regreso a Salomón Romero' };
 
 /** KML para revisar el trazado sobre el mapa de Google (My Maps): una carpeta con el trazado por tramo y otra con el boceto en gris. */
 export function armarKmlTrazado(boceto: Boceto, trazado: TramosCoord): string {
@@ -740,10 +940,21 @@ export function armarKmlTrazado(boceto: Boceto, trazado: TramosCoord): string {
 /** Construye y valida todo lo que se va a cargar. Pura: no toca la red. */
 export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
   const { salomon, honduras, molinos, principal, ramal } = boceto;
-  // Ida + regreso + conector + ramal, sin duplicar los puntos de empalme.
+  // Los tramos se unen en orden (ida, regreso, conector, ramal, bajada, salomon): el fin de cada uno debe
+  // empalmar con el inicio del siguiente; un hueco grande dejaría un salto recto en la geometría.
+  for (let i = 1; i < TRAMOS.length; i++) {
+    const a = TRAMOS[i - 1]!;
+    const b = TRAMOS[i]!;
+    const hueco = distanciaM(trazado[a][trazado[a].length - 1]!, trazado[b][0]!);
+    console.log(`  Empalme ${a} → ${b}: ${hueco.toFixed(1)} m.`);
+    if (hueco > HUECO_MAX_TRAMOS_M) throw new Error(`Hueco de ${hueco.toFixed(1)} m entre el fin de "${a}" y el inicio de "${b}" (tope ${HUECO_MAX_TRAMOS_M} m).`);
+  }
   const geometria: Coord[] = unirTrozos(TRAMOS.map((t) => trazado[t]));
+  const cierre = distanciaM(geometria[0]!, geometria[geometria.length - 1]!);
+  console.log(`  Cierre del circuito (fin de salomon ↔ inicio de ida): ${cierre.toFixed(1)} m (tope ${CIERRE_CIRCUITO_MAX_M} m).`);
+  if (cierre > CIERRE_CIRCUITO_MAX_M) throw new Error(`El circuito no cierra: el fin de la geometría está a ${cierre.toFixed(1)} m del inicio (> ${CIERRE_CIRCUITO_MAX_M} m).`);
   console.log(
-    `  Geometría final (trazado por calles): ${geometria.length} vértices, ${longitudKm(geometria).toFixed(2)} km (boceto: ${longitudKm([...principal, ...ramal]).toFixed(2)} km de dibujo).`,
+    `  Geometría final (trazado por calles): ${geometria.length} vértices, ${(longitudM(geometria) / 1000).toFixed(2)} km (boceto: ${(longitudM([...principal, ...ramal]) / 1000).toFixed(2)} km de dibujo).`,
   );
 
   const puntosControl: PuntoPlan[] = [
@@ -928,7 +1139,7 @@ async function verificar(lineaId: string, plan: PlanDatos): Promise<void> {
     if (hallados.length !== 1) throw new Error(`PC orden ${esp.orden}: ${hallados.length} activos, esperado 1.`);
     const p = hallados[0]!;
     const d = distanciaAGeometriaM(ruta.geometria.coordinates, p.coord.coordinates);
-    const dPlan = haversineMetros(p.coord.coordinates, esp.coord);
+    const dPlan = distanciaM(p.coord.coordinates, esp.coord);
     console.log(`  PC orden ${p.orden} ${esp.nombre}: radio ${p.radioToleranciaM} m, obligatorio=${p.obligatorio}, a ${d.toFixed(1)} m de la geometría, ${dPlan.toFixed(2)} m del plan.`);
     if (p.obligatorio !== esp.obligatorio || p.radioToleranciaM !== RADIO_TOLERANCIA_M || d > PROXIMIDAD_API_M || dPlan > TOLERANCIA_COORD_M) {
       throw new Error(`PC orden ${p.orden} (${esp.nombre}) no coincide con el plan (coord/radio/obligatorio/distancia).`);
@@ -941,7 +1152,7 @@ async function verificar(lineaId: string, plan: PlanDatos): Promise<void> {
     if (hallados.length !== 1) throw new Error(`Parada "${esp.nombre}": ${hallados.length} activas, esperada 1.`);
     const p = hallados[0]!;
     const d = distanciaAGeometriaM(ruta.geometria.coordinates, p.coord.coordinates);
-    const dPlan = haversineMetros(p.coord.coordinates, esp.coord);
+    const dPlan = distanciaM(p.coord.coordinates, esp.coord);
     console.log(`  Parada ${esp.nombre}: tipo=${p.tipo}, orden=${p.orden}, a ${d.toFixed(1)} m de la geometría, ${dPlan.toFixed(2)} m del plan.`);
     if (p.tipo !== esp.tipo || p.orden !== esp.orden || d > PROXIMIDAD_API_M || dPlan > TOLERANCIA_COORD_M) {
       throw new Error(`Parada "${esp.nombre}" no coincide con el plan (tipo/orden/coord/distancia).`);
@@ -1000,6 +1211,7 @@ async function main(): Promise<void> {
     console.log('='.repeat(90));
     console.log(`Línea 16 — SOLO TRAZADO (${RECALCULAR_TRAZADO ? 'recalcula con Google Routes API' : 'lee el json versionado'}); no toca la API de Quivo.`);
     console.log('='.repeat(90));
+    if (EXCEPCIONES_DESVIO.length > 0) console.warn(`AVISO: ${EXCEPCIONES_DESVIO.length} excepción(es) de desvío (hasta 150 m) NO verificadas sobre el mapa; --apply exigirá --excepciones-revisadas.`);
     try {
       const kmlTexto = fs.readFileSync(KML_PATH, 'utf8');
       const boceto = prepararBoceto(kmlTexto);
@@ -1013,6 +1225,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (APLICAR && EXCEPCIONES_DESVIO.length > 0 && !EXCEPCIONES_REVISADAS) {
+    console.error(
+      `--apply abortado: hay ${EXCEPCIONES_DESVIO.length} excepción(es) de desvío (EXCEPCIONES_DESVIO, hasta 150 m) sin verificar sobre el mapa. ` +
+        'Revisar scripts/data/linea-16/trazado-calles.kml y volver a correr con --excepciones-revisadas.',
+    );
+    process.exit(1);
+  }
   API_URL = normalizarBaseUrl(process.env.QUIVO_API_URL || 'https://quivo-api-741758083365.southamerica-west1.run.app');
   requerirEnv('QUIVO_ADMIN_EMAIL');
   requerirEnv('QUIVO_ADMIN_PASSWORD');
