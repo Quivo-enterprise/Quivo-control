@@ -122,9 +122,48 @@ describe('construirMarcadoresVehiculos — PR E (alertas, color de línea, selec
       ],
       () => {},
     );
-    expect(con!.alerta).toEqual({ nivel: 'gravisima', abiertas: 2, parpadea: true });
+    expect(con!.alerta).toEqual({ nivel: 'gravisima', abiertas: 2, atendidas: 0, parpadea: true });
     expect(sin!.alerta).toBeUndefined();
     expect(cero!.alerta).toBeUndefined();
+  });
+
+  it('solo atendidas: ícono fijo con el nivel de las atendidas, sin parpadeo (pendiente E #1)', () => {
+    const [m] = construirMarcadoresVehiculos(
+      [
+        posicion({
+          id: 'a',
+          infraccionNivel: null,
+          infraccionesAbiertas: 0,
+          infraccionesAtendidas: 1,
+          infraccionNivelAtendida: 'grave',
+        }),
+      ],
+      () => {},
+    );
+    expect(m!.alerta).toEqual({ nivel: 'grave', abiertas: 0, atendidas: 1, parpadea: false });
+  });
+
+  it('badge "M" solo con la vuelta designada a una variante', () => {
+    const vuelta = (varianteId: string | null) => ({
+      numero: 2,
+      varianteId,
+      varianteNombre: varianteId ? 'Vía Molinos' : null,
+      designadaEn: null,
+      acuseEn: null,
+      enEspera: false,
+      esperaDesdeTs: null,
+    });
+    const [con, sin, nula] = construirMarcadoresVehiculos(
+      [
+        posicion({ id: 'a', vuelta: vuelta('00000000-0000-4000-8000-000000000001') }),
+        posicion({ id: 'b', vuelta: vuelta(null) }),
+        posicion({ id: 'c', vuelta: null }),
+      ],
+      () => {},
+    );
+    expect(con!.molinos).toBe(true);
+    expect(sin!.molinos).toBeUndefined();
+    expect(nula!.molinos).toBeUndefined();
   });
 
   it('colorLinea por lineaId y seleccionado solo para la sesión abierta', () => {

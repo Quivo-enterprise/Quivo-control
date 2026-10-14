@@ -22,17 +22,27 @@ export function esNivelAlerta(valor: unknown): valor is NivelAlerta {
   return valor === 'leve' || valor === 'grave' || valor === 'gravisima';
 }
 
-/** La alerta es visible solo con un nivel conocido y al menos una infracción abierta. */
+/** La alerta es visible solo con un nivel conocido y al menos una infracción abierta o atendida. */
 export function alertaVisible(alerta: MapPoint['alerta']): alerta is NonNullable<MapPoint['alerta']> {
-  return alerta !== undefined && esNivelAlerta(alerta.nivel) && alerta.abiertas > 0;
+  return (
+    alerta !== undefined && esNivelAlerta(alerta.nivel) && (alerta.abiertas > 0 || (alerta.atendidas ?? 0) > 0)
+  );
 }
 
-/** Texto de la alerta para el nombre accesible: "2 infracciones abiertas, gravísima". */
+/** Texto de la alerta para el nombre accesible: "2 infracciones abiertas, gravísima" o, sin
+ * abiertas, "1 infracción atendida, grave". */
 export function etiquetaAlerta(alerta: MapPoint['alerta']): string {
   if (!alertaVisible(alerta)) return '';
-  const n = alerta.abiertas;
-  return `${n} ${n === 1 ? 'infracción abierta' : 'infracciones abiertas'}, ${ETIQUETA_NIVEL[alerta.nivel]}`;
+  if (alerta.abiertas > 0) {
+    const n = alerta.abiertas;
+    return `${n} ${n === 1 ? 'infracción abierta' : 'infracciones abiertas'}, ${ETIQUETA_NIVEL[alerta.nivel]}`;
+  }
+  const n = alerta.atendidas ?? 0;
+  return `${n} ${n === 1 ? 'infracción atendida' : 'infracciones atendidas'}, ${ETIQUETA_NIVEL[alerta.nivel]}`;
 }
+
+/** Texto del badge "M" para el nombre accesible. */
+export const ETIQUETA_MOLINOS = 'vuelta vía Molinos';
 
 /** Orden de apilado del vehículo: seleccionado > gravísima > grave > leve > resto. */
 export function zIndexVehiculo(punto: Pick<MapPoint, 'seleccionado' | 'alerta'>): number {

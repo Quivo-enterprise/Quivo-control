@@ -1,17 +1,22 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TRAZA_EN_VIVO_LIMITE_MAX,
   type ContextoEnVivo,
   type Infraccion,
   type JornadasDelDia,
+  type MolinosResumen,
   type PosicionEnVivo,
+  type PuntoControl,
   type SesionEnVivoResumen,
+  type Variante,
 } from '@quivo/shared';
 import { enVivoApi } from '../api/en-vivo';
 import { infraccionesApi } from '../api/infracciones';
+import { puntosControlApi } from '../api/puntos-control';
 import { reportesApi } from '../api/reportes';
+import { variantesApi } from '../api/variantes';
 import {
   debeRecargar,
   desdeConSolape,
@@ -20,6 +25,7 @@ import {
   intervaloPoll,
   type TrazaAcumulada,
 } from './traza';
+import { aplicarDesignacion } from './vuelta';
 
 /**
  * Hooks de TanStack Query para `/en-vivo` — el primer consumidor real del `QueryClient` que
@@ -234,5 +240,88 @@ export function useInfraccionesSesion(token: string | null, sesionId: string | n
     refetchOnWindowFocus: true,
     retry: REINTENTOS,
     retryDelay,
+  });
+}
+
+/** Cadencia del HUD de Molinos: cambia al ritmo de los envíos (minutos), no de la telemetría. */
+export const INTERVALO_POLL_MOLINOS_MS = 15_000;
+
+/**
+ * `GET /reportes/en-vivo/molinos` — resumen por línea (en espera, último envío, próximo sugerido).
+ * Poll lento y aparte del de posiciones: agrega por línea/día. Mismo criterio de pestaña oculta.
+ */
+export function useMolinosResumen(token: string | null) {
+  return useQuery<MolinosResumen>({
+    queryKey: ['en-vivo', 'molinos'],
+    enabled: Boolean(token),
+    queryFn: () => enVivoApi.molinos(token as string),
+    refetchInterval: INTERVALO_POLL_MOLINOS_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: REINTENTOS,
+    retryDelay,
+  });
+}
+
+/**
+ * Variantes de la ruta de la sesión (las que tienen punto de espera son las designables) y los
+ * puntos de control de esa ruta (para los minutos de espera). Cambian solo si un admin edita la
+ * ruta: `staleTime` largo. Si fallan, el panel degrada (sin control de designación / 30 min).
+ */
+export function useOpcionesDesignacion(token: string | null, rutaId: string | null) {
+  const variantes = useQuery<Variante[]>({
+    queryKey: ['en-vivo', 'variantes', rutaId],
+    enabled: Boolean(token && rutaId),
+    queryFn: () => variantesApi.listarPorRuta(token as string, rutaId as string),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: REINTENTOS,
+    retryDelay,
+  });
+  const puntos = useQuery<PuntoControl[]>({
+    queryKey: ['en-vivo', 'puntos-control', rutaId],
+    enabled: Boolean(token && rutaId),
+    queryFn: () => puntosControlApi.listarPorRuta(token as string, rutaId as string),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: REINTENTOS,
+    retryDelay,
+  });
+  return { variantes, puntos };
+}
+
+export interface DesignarVars {
+  sesionId: string;
+  varianteId: string | null;
+  varianteNombre: string | null;
+}
+
+/**
+ * Designa (o cancela) la vuelta en curso. Optimista sobre la caché de posiciones (el control
+ * responde al instante) con rollback si la API rechaza (409 con motivo en español); al terminar,
+ * `invalidate` trae la verdad del servidor. `onError` lo maneja el panel (mensaje + aviso).
+ */
+export function useDesignarVuelta(token: string | null) {
+  const queryClient = useQueryClient();
+  const key = ['en-vivo', 'posiciones-todas'];
+  return useMutation({
+    mutationFn: (v: DesignarVars) => enVivoApi.designarVuelta(token as string, v.sesionId, v.varianteId),
+    onMutate: async (v) => {
+      // Un poll en vuelo pisaría el cambio optimista con datos previos a la designación.
+      await queryClient.cancelQueries({ queryKey: key });
+      const previo = queryClient.getQueryData<PosicionEnVivo[]>(key);
+      const ahoraIso = new Date().toISOString();
+      queryClient.setQueryData<PosicionEnVivo[]>(key, (cur) =>
+        cur?.map((p) => (p.id === v.sesionId ? aplicarDesignacion(p, v.varianteId, v.varianteNombre, ahoraIso) : p)),
+      );
+      return { previo };
+    },
+    onError: (_err, _v, ctx) => {
+      if (ctx?.previo) queryClient.setQueryData(key, ctx.previo);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: key });
+      void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'molinos'] });
+    },
   });
 }

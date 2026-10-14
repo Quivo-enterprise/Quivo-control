@@ -4,6 +4,7 @@ import {
   findNavItemForPath,
   isRouteAllowedForRole,
   NAV_ITEMS,
+  rutaInicialParaRol,
 } from './nav-items.js';
 
 describe('filterNavItemsByRole', () => {
@@ -34,6 +35,13 @@ describe('NAV_ITEMS (orden y permisos de "En vivo")', () => {
   it('los dos roles administrativos ven "En vivo"', () => {
     expect(isRouteAllowedForRole(NAV_ITEMS, '/en-vivo', 'admin_quivo')).toBe(true);
     expect(isRouteAllowedForRole(NAV_ITEMS, '/en-vivo', 'admin_sindicato')).toBe(true);
+  });
+
+  it('el operador (control) entra a /en-vivo pero no al dashboard ni a gestión', () => {
+    expect(isRouteAllowedForRole(NAV_ITEMS, '/en-vivo', 'operador')).toBe(true);
+    expect(isRouteAllowedForRole(NAV_ITEMS, '/', 'operador')).toBe(false);
+    expect(isRouteAllowedForRole(NAV_ITEMS, '/vehiculos', 'operador')).toBe(false);
+    expect(isRouteAllowedForRole(NAV_ITEMS, '/usuarios', 'operador')).toBe(false);
   });
 
   it('un rol fuera de la lista no puede entrar a /en-vivo', () => {
@@ -70,5 +78,16 @@ describe('isRouteAllowedForRole (guard por rol en rutas)', () => {
 
   it('rutas sin ítem de navegación (aún no existen) no se bloquean', () => {
     expect(isRouteAllowedForRole(NAV_ITEMS, '/algo-futuro', 'admin_sindicato')).toBe(true);
+  });
+});
+
+describe('rutaInicialParaRol', () => {
+  it('admins arrancan en el dashboard; el operador en /en-vivo', () => {
+    expect(rutaInicialParaRol(NAV_ITEMS, 'admin_quivo')).toBe('/');
+    expect(rutaInicialParaRol(NAV_ITEMS, 'admin_sindicato')).toBe('/');
+    expect(rutaInicialParaRol(NAV_ITEMS, 'operador')).toBe('/en-vivo');
+  });
+  it('un rol sin rutas cae en /', () => {
+    expect(rutaInicialParaRol(NAV_ITEMS, 'conductor')).toBe('/');
   });
 });

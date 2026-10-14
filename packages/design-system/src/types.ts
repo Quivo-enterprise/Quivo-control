@@ -77,11 +77,16 @@ export interface MapPoint {
   fotoUrl?: string;
   /** Color de la línea del vehículo: anillo del marcador. Sin él, el anillo usa el color de marca. */
   colorLinea?: string;
-  /** Infracciones abiertas del vehículo: `nivel` es el máximo; `abiertas` la cantidad.
-   * `parpadea` hace alternar el anillo entre el color de la línea y el de la severidad
-   * (periodo por nivel, siempre < 3 Hz; con movimiento reducido queda fijo). Aunque no
-   * parpadee, el badge de severidad (ícono distinto por nivel + cantidad) se mantiene. */
-  alerta?: { nivel: 'leve' | 'grave' | 'gravisima'; abiertas: number; parpadea: boolean };
+  /** Infracciones del vehículo: `nivel` es el máximo; `abiertas` la cantidad de abiertas y
+   * `atendidas` (opcional) las ya atendidas. `parpadea` hace alternar el anillo entre el color
+   * de la línea y el de la severidad (periodo por nivel, siempre < 3 Hz; con movimiento reducido
+   * queda fijo). Aunque no parpadee, el badge de severidad (ícono distinto por nivel + cantidad
+   * de abiertas) se mantiene: con `abiertas: 0` y `atendidas > 0` es el ícono fijo de "ya
+   * atendida" (pendiente E #1, docs/plan-molinos-designacion.md). */
+  alerta?: { nivel: 'leve' | 'grave' | 'gravisima'; abiertas: number; parpadea: boolean; atendidas?: number };
+  /** La vuelta en curso está designada a Molinos: pequeño badge "M" en el marcador (solo motor
+   * Google, `pinType: 'vehicle'`). */
+  molinos?: boolean;
   /** Vehículo con el panel de detalle abierto: se apila por encima de todos y se resalta. */
   seleccionado?: boolean;
 }

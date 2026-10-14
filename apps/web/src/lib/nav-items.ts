@@ -26,7 +26,8 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'en-vivo',
     label: 'En vivo',
     href: '/en-vivo',
-    roles: ['admin_quivo', 'admin_sindicato'],
+    // `operador` (el control): mapa en vivo + designar a Molinos; infracciones en solo lectura.
+    roles: ['admin_quivo', 'admin_sindicato', 'operador'],
     section: 'Operación',
     iconName: 'Radio',
   },
@@ -171,4 +172,13 @@ export function findNavItemForPath(items: NavItem[], pathname: string): NavItem 
 export function isRouteAllowedForRole(items: NavItem[], pathname: string, rol: string): boolean {
   const item = findNavItemForPath(items, pathname);
   return !item || item.roles.includes(rol);
+}
+
+/**
+ * Primera ruta a la que el rol puede entrar (el orden de `items` es el del menú): a donde se
+ * manda a quien cae en una ruta que no le corresponde. El `operador` no tiene dashboard (`/`):
+ * su casa es `/en-vivo`. Sin ninguna ruta permitida devuelve `/` (comportamiento previo).
+ */
+export function rutaInicialParaRol(items: NavItem[], rol: string): string {
+  return items.find((item) => item.roles.includes(rol))?.href ?? '/';
 }

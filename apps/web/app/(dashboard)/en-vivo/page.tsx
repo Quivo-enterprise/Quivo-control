@@ -12,6 +12,7 @@ import {
   CircleCheck,
   Clock,
   Maximize2,
+  LogOut,
   Navigation,
   Radio,
   RefreshCw,
@@ -20,6 +21,7 @@ import type { GravedadRegla, Infraccion } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import {
   useContextoEnVivo,
+  useMolinosResumen,
   INTERVALO_POLL_POSICIONES_MS,
   usePosicionesEnVivo,
   useRecargarTraza,
@@ -35,6 +37,7 @@ import {
   nivelDeAlerta,
   ordenarAlertas,
   resumenContadores,
+  puedeActuarEnInfracciones,
   siguienteAlertaId,
 } from '../../../src/lib/en-vivo/alertas';
 import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
@@ -47,12 +50,13 @@ import {
   idMarcadorVehiculo,
   mensajeError,
 } from './map-builders';
+import { HudMolinos } from './hud-molinos';
 import { PanelJornada } from './panel-jornada';
 import { IconoNivel, PanelVehiculo, type AvisoPanel, type BorradoresDescarte } from './panel-vehiculo';
 import { conPuntoVivo } from '../../../src/lib/en-vivo/punto-vivo';
 
 export default function EnVivoPage() {
-  const { token } = useAuth();
+  const { token, user, logout } = useAuth();
   const router = useRouter();
 
   // ENTREGA 13 — `posiciones` (TODOS los vehículos, `GET /reportes/en-vivo/posiciones`)
@@ -62,6 +66,11 @@ export default function EnVivoPage() {
   // vehículos activos y `sesionSeleccionada` es solo "cuál tiene el detalle abierto" — nace
   // `null`, nunca gobierna qué se pinta en el mapa.
   const posiciones = usePosicionesEnVivo(token);
+  const molinos = useMolinosResumen(token);
+  // El `operador` (control) no tiene dashboard ni atiende infracciones: "Panel" pasa a "Salir" y
+  // el panel del vehículo muestra las infracciones en solo lectura.
+  const tienePanelAdmin = user?.rol !== 'operador';
+  const soloLectura = !puedeActuarEnInfracciones(user?.rol);
   const { options: lineaOptions, lineas } = useLineaOptions();
   const [lineaFilter, setLineaFilter] = useState('');
   const [sesionSeleccionada, setSesionSeleccionada] = useState<string | null>(null);
@@ -600,8 +609,15 @@ export default function EnVivoPage() {
             <div className="qv-live-hud-card" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
               <button
                 type="button"
-                onClick={() => router.push('/')}
-                title="Volver al panel administrativo"
+                onClick={() => {
+                  if (tienePanelAdmin) {
+                    router.push('/');
+                  } else {
+                    logout();
+                    router.push('/login');
+                  }
+                }}
+                title={tienePanelAdmin ? 'Volver al panel administrativo' : 'Cerrar sesión'}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -617,8 +633,8 @@ export default function EnVivoPage() {
                   transition: 'all var(--qv-transition-fast)',
                 }}
               >
-                <ArrowLeft size={13} />
-                <span>Panel</span>
+                {tienePanelAdmin ? <ArrowLeft size={13} /> : <LogOut size={13} />}
+                <span>{tienePanelAdmin ? 'Panel' : 'Salir'}</span>
               </button>
 
               <div
@@ -721,6 +737,12 @@ export default function EnVivoPage() {
                 Siguiente alerta
               </button>
             </div>
+            <HudMolinos
+              lineas={molinos.data?.lineas}
+              lineaFilter={lineaFilter}
+              servidorTs={molinos.data?.servidorTs}
+              recibidoEn={molinos.dataUpdatedAt}
+            />
             </div>
 
             {/* Columna derecha: controles + panel "Jornada de hoy" (release 13). El panel va en el
@@ -994,6 +1016,7 @@ export default function EnVivoPage() {
                 onAviso={anunciar}
                 trazaRecibidoEn={traza.dataUpdatedAt}
                 posicionesRecibidoEn={posiciones.dataUpdatedAt}
+                soloLectura={soloLectura}
               />
             )}
           </div>
