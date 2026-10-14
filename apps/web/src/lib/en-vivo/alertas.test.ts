@@ -4,6 +4,7 @@ import {
   actualizarPrimeraVez,
   contarPorNivel,
   detalleInfraccion,
+  etiquetaTipoInfraccion,
   duracionInfraccion,
   filtrarPorNivel,
   ordenarAlertas,
@@ -81,15 +82,25 @@ describe('infracciones del panel', () => {
     expect(detalleInfraccion(pc, ['p1', 'p2', 'p3'])).toBe('PC 3 omitido');
     expect(detalleInfraccion(pc)).toBe('PC 8 omitido');
   });
+  it('detalle y etiqueta de las alertas de Molinos', () => {
+    const corta = { ...base, tipo: 'espera_corta', detalle: { esperaMin: 20, requeridoMin: 30 } } as unknown as Infraccion;
+    expect(detalleInfraccion(corta)).toBe('esperó 20 de 30 min en Molinos');
+    expect(etiquetaTipoInfraccion('espera_corta')).toBe('Espera corta en Molinos');
+    const omitido = { ...base, tipo: 'molinos_omitido', detalle: {} } as unknown as Infraccion;
+    expect(detalleInfraccion(omitido)).toBe('cerró la vuelta sin pasar por Molinos');
+    expect(etiquetaTipoInfraccion('molinos_omitido')).toBe('Molinos omitido');
+  });
   it('duración solo si cerró', () => {
     expect(duracionInfraccion(base)).toBeNull();
     expect(duracionInfraccion({ ...base, finTs: new Date('2026-10-13T14:12:00Z') })).toBe('12 min');
     expect(duracionInfraccion({ ...base, finTs: new Date('2026-10-13T14:00:45Z') })).toBe('45 s');
   });
-  it('solo el desvío se puede sancionar', () => {
+  it('el desvío y Molinos omitido se pueden sancionar; PC omitido y espera corta son solo alerta', () => {
     expect(puedeSancionar(base)).toBe(true);
     expect(puedeSancionar({ ...base, estado: 'sancionada' })).toBe(false);
     expect(puedeSancionar({ ...base, tipo: 'pc_omitido' })).toBe(false);
+    expect(puedeSancionar({ ...base, tipo: 'espera_corta' })).toBe(false);
+    expect(puedeSancionar({ ...base, tipo: 'molinos_omitido' })).toBe(true);
   });
   it('atender solo abiertas; descartar abiertas y atendidas', () => {
     expect(puedeAtender({ estado: 'abierta' })).toBe(true);

@@ -107,8 +107,15 @@ export function siguienteAlertaId(ordenadas: { id: string }[], actualId: string 
 // Lista de infracciones del panel
 // ---------------------------------------------------------------------------------------------
 
+const ETIQUETA_TIPO_INFRACCION: Record<Infraccion['tipo'], string> = {
+  desvio_ruta: 'Alteración de ruta',
+  pc_omitido: 'Punto de control omitido',
+  molinos_omitido: 'Molinos omitido',
+  espera_corta: 'Espera corta en Molinos',
+};
+
 export function etiquetaTipoInfraccion(tipo: Infraccion['tipo']): string {
-  return tipo === 'desvio_ruta' ? 'Alteración de ruta' : 'Punto de control omitido';
+  return ETIQUETA_TIPO_INFRACCION[tipo];
 }
 
 export const ETIQUETA_ESTADO_INFRACCION: Record<Infraccion['estado'], string> = {
@@ -142,6 +149,14 @@ export function detalleInfraccion(
     const m = numero(i.detalle.distanciaMaxM);
     return m === null ? 'fuera de la ruta' : `a ${Math.round(m)} m de la ruta`;
   }
+  if (i.tipo === 'molinos_omitido') return 'cerró la vuelta sin pasar por Molinos';
+  if (i.tipo === 'espera_corta') {
+    const esperado = numero(i.detalle.esperaMin);
+    const requerido = numero(i.detalle.requeridoMin);
+    return esperado !== null && requerido !== null
+      ? `esperó ${esperado} de ${requerido} min en Molinos`
+      : 'salió de Molinos antes de tiempo';
+  }
   const posicion = typeof i.detalle.puntoControlId === 'string' ? idsPuntosControl.indexOf(i.detalle.puntoControlId) : -1;
   const orden = posicion >= 0 ? posicion : numero(i.detalle.orden);
   const nombre = typeof i.detalle.nombre === 'string' && i.detalle.nombre.trim() ? i.detalle.nombre.trim() : null;
@@ -158,9 +173,13 @@ export function duracionInfraccion(i: Pick<Infraccion, 'inicioTs' | 'finTs'>): s
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
 }
 
-/** `desvio_ruta` es la única que se puede sancionar (`pc_omitido` es solo alerta: la API da 409). */
+/** `desvio_ruta` y `molinos_omitido` se pueden sancionar; `pc_omitido` y `espera_corta` son solo
+ * alerta (la API da 409). */
 export function puedeSancionar(i: Pick<Infraccion, 'tipo' | 'estado'>): boolean {
-  return i.tipo === 'desvio_ruta' && (i.estado === 'abierta' || i.estado === 'atendida');
+  return (
+    (i.tipo === 'desvio_ruta' || i.tipo === 'molinos_omitido') &&
+    (i.estado === 'abierta' || i.estado === 'atendida')
+  );
 }
 
 /** Atender solo aplica a una abierta (API: `ESTADOS_ORIGEN.atender`). */

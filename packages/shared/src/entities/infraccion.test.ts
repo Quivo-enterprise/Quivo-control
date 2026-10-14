@@ -9,6 +9,8 @@ import {
   GRAVEDAD_DEFAULT_POR_TIPO,
   REGLA_TIPOS_RESERVADOS_INFRACCION,
   SancionarInfraccionSchema,
+  TIPOS_INFRACCION_SOLO_ALERTA,
+  TipoInfraccionSchema,
 } from './infraccion.js';
 import { PosicionEnVivoSchema } from './en-vivo.js';
 
@@ -23,8 +25,22 @@ describe('infraccion', () => {
   });
 
   it('tipos de regla reservados y gravedad por defecto', () => {
-    expect([...REGLA_TIPOS_RESERVADOS_INFRACCION]).toEqual(['desvio_ruta', 'pc_omitido']);
-    expect(GRAVEDAD_DEFAULT_POR_TIPO).toEqual({ desvio_ruta: 'grave', pc_omitido: 'leve' });
+    expect([...REGLA_TIPOS_RESERVADOS_INFRACCION]).toEqual([
+      'desvio_ruta',
+      'pc_omitido',
+      'molinos_omitido',
+      'espera_corta',
+    ]);
+    expect(GRAVEDAD_DEFAULT_POR_TIPO).toEqual({
+      desvio_ruta: 'grave',
+      pc_omitido: 'leve',
+      molinos_omitido: 'grave',
+      espera_corta: 'leve',
+    });
+    // Los tipos reservados cubren exactamente los tipos de infracción.
+    expect([...REGLA_TIPOS_RESERVADOS_INFRACCION].sort()).toEqual([...TipoInfraccionSchema.options].sort());
+    // `pc_omitido` y `espera_corta` son solo alerta (la API responde 409 al sancionar).
+    expect([...TIPOS_INFRACCION_SOLO_ALERTA].sort()).toEqual(['espera_corta', 'pc_omitido']);
   });
 
   it('ActualizarInfraccion: acción acotada y nota <= 500', () => {
@@ -70,6 +86,9 @@ describe('infraccion', () => {
       expect(campos).not.toContain('infraccionesAbiertas');
       expect(campos).not.toContain('vehiculoId');
       expect(campos).not.toContain('conductorId');
+      expect(campos).not.toContain('infraccionesAtendidas');
+      expect(campos).not.toContain('vuelta');
+      expect(campos).not.toContain('molinosHoy');
     }
   });
 });

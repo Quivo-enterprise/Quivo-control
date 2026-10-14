@@ -14,12 +14,25 @@ export async function validarCercaniaARuta(
   coord: PuntoGeoJson,
 ): Promise<void> {
   const rows = await tx.$queryRaw<[{ cerca: boolean }]>`
-    SELECT ST_DWithin(
-      geometria,
-      ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(coord)}), 4326)::geography,
-      ${RUTA_PROXIMIDAD_TOLERANCIA_METROS}
+    SELECT (
+      ST_DWithin(
+        r.geometria,
+        ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(coord)}), 4326)::geography,
+        ${RUTA_PROXIMIDAD_TOLERANCIA_METROS}
+      )
+      -- También vale estar sobre el TRAMO adicional de una variante activa de la ruta (p. ej.
+      -- Molinos, al final del ramal Putucu: docs/plan-molinos-designacion.md).
+      OR EXISTS (
+        SELECT 1 FROM variantes v
+        WHERE v."rutaId" = r.id AND v.estado = 'activo' AND v.geometria IS NOT NULL
+          AND ST_DWithin(
+            v.geometria,
+            ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(coord)}), 4326)::geography,
+            ${RUTA_PROXIMIDAD_TOLERANCIA_METROS}
+          )
+      )
     ) as cerca
-    FROM rutas WHERE id = ${rutaId}
+    FROM rutas r WHERE r.id = ${rutaId}
   `;
   if (!rows[0]?.cerca) {
     throw new BadRequestException(

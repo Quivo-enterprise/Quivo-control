@@ -133,6 +133,7 @@ model Sindicato {
   eventosOperativos        EventoOperativo[]
   syncErrors               SyncError[]
   infracciones             Infraccion[]
+  vueltas                  Vuelta[]
 
   @@map("sindicatos")
 }
@@ -377,12 +378,20 @@ model Variante {
   nombre    String
   // Soft-delete (nunca DELETE real): mismo criterio que el resto del dominio.
   estado    String   @default("activo")
+  // Tramo ADICIONAL de la variante (no el recorrido completo) + punto donde debe esperar
+  // (docs/plan-molinos-designacion.md). Ambos NULL = variante sin geometría propia.
+  geometria Unsupported("geography(LineString,4326)")?
+  puntoEsperaId String?
+  puntoEspera PuntoControl? @relation("VariantePuntoEspera", fields: [puntoEsperaId], references: [id], onDelete: SetNull)
   publicStatus String @default("borrador")
   publishedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  vueltas Vuelta[]
+
   @@index([rutaId])
+  @@index([puntoEsperaId])
   @@index([publicStatus])
   @@index([publicStatus, estado, rutaId])
   @@map("variantes")
@@ -418,12 +427,19 @@ model PuntoControl {
   coord            Unsupported("geography(Point,4326)")
   radioToleranciaM Int
   obligatorio      Boolean                              @default(true)
+  // Rol dentro del ciclo de vueltas (docs/plan-molinos-designacion.md): 'terminal' | 'retorno' |
+  // 'espera' (CHECK en la migración `20261013140000_vueltas_molinos`). NULL = punto común.
+  rol              String?
+  // Minutos de espera obligatoria; solo con rol = 'espera' (CHECK).
+  esperaMin        Int?
   // Soft-delete (nunca DELETE real): `CumplimientoPc.puntoControlId` referencia este id sin
   // FK (mismo patrón polimórfico que Sancion.sujetoId/AuditLog.entidadId) — un DELETE real
   // dejaría ese historial apuntando a un id inexistente.
   estado           String                               @default("activo")
   createdAt        DateTime                             @default(now())
   updatedAt        DateTime                             @updatedAt
+
+  variantesEspera  Variante[]                           @relation("VariantePuntoEspera")
 
   @@index([rutaId])
   @@map("puntos_control")
@@ -591,6 +607,7 @@ model SesionOperativa {
   cumplimientosPc   CumplimientoPc[]
   eventosOperativos EventoOperativo[]
   infracciones      Infraccion[]
+  vueltas           Vuelta[]
 
   @@index([sindicatoId])
   @@index([asignacionId, estado])
@@ -774,7 +791,7 @@ model Infraccion {
   conductorId String
   lineaId     String
   rutaId      String
-  // 'desvio_ruta' | 'pc_omitido' — dominio validado por zod (`TipoInfraccionSchema`) y CHECK.
+  // 'desvio_ruta' | 'pc_omitido' | 'molinos_omitido' | 'espera_corta' — dominio validado por zod (`TipoInfraccionSchema`) y CHECK.
   tipo        String
   // 'leve' | 'grave' | 'gravisima' (`GravedadReglaSchema`).
   gravedad    String
@@ -797,6 +814,46 @@ model Infraccion {
   @@index([sesionId, estado])
   @@index([sindicatoId, estado])
   @@map("infracciones")
+}
+
+// Vueltas del recorrido (docs/plan-molinos-designacion.md, F1-api): una fila por vuelta de una
+// sesión. Las abre/cierra el worker de ingesta (`ingesta-worker/vueltas.ts`, máquina pura) a
+// partir de los cumplimientos de los PC con `rol` y los eventos `inicio/fin_recorrido`; la
+// designación a Molinos (`varianteId`/`designada*`/`acuseEn`) la escribe la web y el acuse la app.
+// `fecha` es el día LOCAL de Bolivia. Índice parcial único (sesionId) WHERE estado='en_curso'
+// solo existe en SQL (Prisma no lo modela).
+model Vuelta {
+  id              String          @id @default(uuid())
+  sindicatoId     String
+  sindicato       Sindicato       @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  sesionId        String
+  sesion          SesionOperativa @relation(fields: [sesionId], references: [id], onDelete: Cascade)
+  vehiculoId      String
+  conductorId     String
+  lineaId         String
+  rutaId          String
+  fecha           DateTime        @db.Date
+  numero          Int
+  inicioTs        DateTime
+  finTs           DateTime?
+  // 'en_curso' | 'completa' | 'abierta_al_cierre'.
+  estado          String          @default("en_curso")
+  pasoRetornoTs   DateTime?
+  varianteId      String?
+  variante        Variante?       @relation(fields: [varianteId], references: [id], onDelete: SetNull)
+  designadaPor    String?
+  designadaEn     DateTime?
+  acuseEn         DateTime?
+  esperaLlegadaTs DateTime?
+  esperaSalidaTs  DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([sesionId, numero])
+  @@index([vehiculoId, fecha])
+  @@index([lineaId, fecha])
+  @@index([sindicatoId, fecha])
+  @@map("vueltas")
 }
 
 // `sesion_desvio_estado` (docs/plan-en-vivo-alertas.md, PR A): estado de la máquina de desvío

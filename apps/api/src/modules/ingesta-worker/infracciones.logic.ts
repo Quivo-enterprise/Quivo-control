@@ -1,6 +1,8 @@
 import {
   GRAVEDAD_DEFAULT_POR_TIPO,
   REGLA_TIPO_DESVIO_RUTA,
+  REGLA_TIPO_ESPERA_CORTA,
+  REGLA_TIPO_MOLINOS_OMITIDO,
   REGLA_TIPO_PC_OMITIDO,
   type GravedadRegla,
   type TipoInfraccion,
@@ -10,6 +12,8 @@ import {
 export const REGLA_TIPO_POR_INFRACCION: Record<TipoInfraccion, string> = {
   desvio_ruta: REGLA_TIPO_DESVIO_RUTA,
   pc_omitido: REGLA_TIPO_PC_OMITIDO,
+  molinos_omitido: REGLA_TIPO_MOLINOS_OMITIDO,
+  espera_corta: REGLA_TIPO_ESPERA_CORTA,
 };
 
 export interface ReglaCandidata {
@@ -82,6 +86,16 @@ export function seleccionarPcOmitidos(
 
 export function dedupeKeyDesvio(sesionId: string, inicioTs: Date): string {
   return `desvio:${sesionId}:${inicioTs.toISOString()}`;
+}
+
+/** `molinos_omitido:{vueltaId}` (docs/plan-molinos-designacion.md): una por vuelta designada. */
+export function dedupeKeyMolinosOmitido(vueltaId: string): string {
+  return `molinos_omitido:${vueltaId}`;
+}
+
+/** `espera_corta:{vueltaId}`: una por vuelta designada. */
+export function dedupeKeyEsperaCorta(vueltaId: string): string {
+  return `espera_corta:${vueltaId}`;
 }
 
 export function dedupeKeyPcOmitido(

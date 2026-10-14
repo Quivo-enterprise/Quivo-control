@@ -17,3 +17,4 @@ export * from './recorrido.js';
 export * from './en-vivo.js';
 export * from './infraccion.js';
 export * from './jornada.js';
+export * from './vuelta.js';

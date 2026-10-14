@@ -6,11 +6,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { withTenantContext, type Prisma } from '@quivo/db';
-import type {
-  ActualizarInfraccion,
-  EstadoInfraccion,
-  Infraccion,
-  SancionarInfraccion,
+import {
+  TIPOS_INFRACCION_SOLO_ALERTA,
+  type ActualizarInfraccion,
+  type EstadoInfraccion,
+  type Infraccion,
+  type SancionarInfraccion,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { SancionesService } from '../reglas/sanciones.service.js';
@@ -82,7 +83,7 @@ export class InfraccionesService {
    * `sancionada` con `sancionId`, todo en UNA transacción: si cualquiera falla (regla
    * inexistente, estado inválido) no queda ni sanción huérfana ni infracción marcada.
    *
-   * Reglas de negocio: `pc_omitido` es solo alerta (decisión del CTO) → 409; el sujeto debe ser
+   * Reglas de negocio: `pc_omitido` y `espera_corta` son solo alerta (decisión del CTO) → 409; el sujeto debe ser
    * el conductor o el vehículo de la propia infracción → 400; `evidenciaRef` por defecto
    * `infraccion:{id} sesion:{sesionId}`.
    */
@@ -92,9 +93,11 @@ export class InfraccionesService {
       if (!infraccion) {
         throw new NotFoundException('Infracción no encontrada');
       }
-      if (infraccion.tipo === 'pc_omitido') {
+      if ((TIPOS_INFRACCION_SOLO_ALERTA as readonly string[]).includes(infraccion.tipo)) {
         throw new ConflictException(
-          'Una infracción de punto de control omitido es solo una alerta: no se puede sancionar',
+          infraccion.tipo === 'espera_corta'
+            ? 'Una infracción de espera corta en Molinos es solo una alerta: no se puede sancionar'
+            : 'Una infracción de punto de control omitido es solo una alerta: no se puede sancionar',
         );
       }
       const sujetoEsperado =

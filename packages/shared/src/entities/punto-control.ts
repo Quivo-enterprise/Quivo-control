@@ -3,6 +3,14 @@ import { PuntoGeoJsonSchema } from '../geo.js';
 import { EstadoPuntoControlSchema } from '../enums/estados.js';
 import { uuidSchema } from '../primitives.js';
 
+/**
+ * Rol del PC en el ciclo de vueltas (docs/plan-molinos-designacion.md): `terminal` abre/cierra
+ * la vuelta (Salomón Romero), `retorno` es el punto del medio (Honduras), `espera` es donde la
+ * unidad designada espera `esperaMin` minutos (Molinos).
+ */
+export const RolPuntoControlSchema = z.enum(['terminal', 'retorno', 'espera']);
+export type RolPuntoControl = z.infer<typeof RolPuntoControlSchema>;
+
 /** `coord` viaja como GeoJSON Point in/out — la columna real es `GEOGRAPHY(POINT)`
  * (SQL crudo en apps/api, igual que `paradas.coord`/`rutas.geometria`). La validación de
  * cumplimiento en recorrido (RF-39, contra `radioToleranciaM`) es de M3 (worker) — acá solo
@@ -15,6 +23,10 @@ export const PuntoControlSchema = z.object({
   radioToleranciaM: z.number().int().positive(),
   obligatorio: z.boolean(),
   estado: EstadoPuntoControlSchema,
+  /** `null`/ausente = punto común. Solo un admin lo edita. */
+  rol: RolPuntoControlSchema.nullable().optional(),
+  /** Minutos de espera obligatoria; solo con `rol = 'espera'` (el servicio lo valida). */
+  esperaMin: z.number().int().positive().nullable().optional(),
 });
 export type PuntoControl = z.infer<typeof PuntoControlSchema>;
 

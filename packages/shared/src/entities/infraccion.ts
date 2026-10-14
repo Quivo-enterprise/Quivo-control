@@ -6,28 +6,49 @@ import { CrearSancionSchema } from './sancion.js';
 // docs/plan-en-vivo-alertas.md, PR A — infracciones detectadas automáticamente por el worker
 // de ingesta (desvío de ruta, punto de control omitido) y accionables por el admin.
 
-export const TipoInfraccionSchema = z.enum(['desvio_ruta', 'pc_omitido']);
+export const TipoInfraccionSchema = z.enum([
+  'desvio_ruta',
+  'pc_omitido',
+  // docs/plan-molinos-designacion.md (F1): la vuelta designada a Molinos cerró sin pasar por el
+  // punto de espera / la unidad salió del punto de espera antes del tiempo mínimo.
+  'molinos_omitido',
+  'espera_corta',
+]);
 export type TipoInfraccion = z.infer<typeof TipoInfraccionSchema>;
 
 export const EstadoInfraccionSchema = z.enum(['abierta', 'atendida', 'sancionada', 'descartada']);
 export type EstadoInfraccion = z.infer<typeof EstadoInfraccionSchema>;
 
 /**
- * `Regla.tipo` es texto libre; estos dos valores EXACTOS están reservados: si el sindicato
+ * `Regla.tipo` es texto libre; estos valores EXACTOS están reservados: si el sindicato
  * tiene una `Regla` activa con uno de ellos, su `gravedad` y su `id` se usan al abrir la
  * infracción (ver `resolverGravedadInfraccion` en apps/api). La UI de `/reglas` los sugiere.
  */
 export const REGLA_TIPO_DESVIO_RUTA = 'desvio_ruta';
 export const REGLA_TIPO_PC_OMITIDO = 'pc_omitido';
+export const REGLA_TIPO_MOLINOS_OMITIDO = 'molinos_omitido';
+export const REGLA_TIPO_ESPERA_CORTA = 'espera_corta';
 export const REGLA_TIPOS_RESERVADOS_INFRACCION = [
   REGLA_TIPO_DESVIO_RUTA,
   REGLA_TIPO_PC_OMITIDO,
+  REGLA_TIPO_MOLINOS_OMITIDO,
+  REGLA_TIPO_ESPERA_CORTA,
 ] as const;
+
+/**
+ * Tipos de infracción que son SOLO una alerta: la API responde 409 al intentar sancionarlos
+ * (decisión del CTO para `pc_omitido`, 2026-10-12, y `espera_corta`, 2026-10-13). `desvio_ruta`
+ * y `molinos_omitido` ("una vuelta más") sí se sancionan.
+ */
+export const TIPOS_INFRACCION_SOLO_ALERTA: readonly TipoInfraccion[] = ['pc_omitido', 'espera_corta'];
 
 /** Gravedad cuando el sindicato NO definió una `Regla` con el `tipo` reservado. */
 export const GRAVEDAD_DEFAULT_POR_TIPO: Record<TipoInfraccion, z.infer<typeof GravedadReglaSchema>> = {
   desvio_ruta: 'grave',
   pc_omitido: 'leve',
+  // Alteración de ruta: se sanciona con "una vuelta más" (plan F1).
+  molinos_omitido: 'grave',
+  espera_corta: 'leve',
 };
 
 /** Orden de severidad para agregar el "nivel" de un vehículo (leve < grave < gravisima). */
@@ -66,6 +87,22 @@ export const DetallePcOmitidoSchema = z.object({
 });
 export type DetallePcOmitido = z.infer<typeof DetallePcOmitidoSchema>;
 
+export const DetalleMolinosOmitidoSchema = z.object({
+  vueltaId: z.string(),
+  numero: z.number().int().positive(),
+  varianteId: z.string(),
+});
+export type DetalleMolinosOmitido = z.infer<typeof DetalleMolinosOmitidoSchema>;
+
+export const DetalleEsperaCortaSchema = z.object({
+  /** Minutos que esperó (entero hacia abajo). */
+  esperaMin: z.number().int().nonnegative(),
+  /** Minutos mínimos exigidos (`puntos_control.esperaMin` del punto de espera). */
+  requeridoMin: z.number().int().positive(),
+  vueltaId: z.string().optional(),
+});
+export type DetalleEsperaCorta = z.infer<typeof DetalleEsperaCortaSchema>;
+
 export const InfraccionSchema = z.object({
   id: uuidSchema,
   sindicatoId: sindicatoIdSchema,
@@ -82,7 +119,7 @@ export const InfraccionSchema = z.object({
   finTs: z.coerce.date().nullable(),
   lat: z.number(),
   lng: z.number(),
-  /** `DetalleDesvio` o `DetallePcOmitido` según `tipo` (jsonb). */
+  /** `DetalleDesvio`, `DetallePcOmitido`, `DetalleMolinosOmitido` o `DetalleEsperaCorta` según `tipo` (jsonb). */
   detalle: z.record(z.unknown()),
   sancionId: uuidSchema.nullable(),
   atendidaPor: z.string().nullable(),

@@ -63,9 +63,20 @@ interface PosicionEnVivoRow {
   rutaSentido: string;
   vehiculoId: string;
   conductorId: string;
-  // docs/plan-en-vivo-alertas.md PR A — agregado de las `infracciones` abiertas de la sesión.
+  // docs/plan-en-vivo-alertas.md PR A — agregado de las `infracciones` abiertas y atendidas de
+  // la sesión (el nivel es el máximo entre ambas; ver el LATERAL de `obtenerPosiciones`).
   infraccionesAbiertas: number | null;
+  infraccionesAtendidas: number | null;
   infraccionNivelOrden: number | null;
+  // docs/plan-molinos-designacion.md — vuelta en curso (LATERAL a `vueltas`) y "ya fue a Molinos hoy".
+  vueltaNumero: number | null;
+  vueltaVarianteId: string | null;
+  vueltaVarianteNombre: string | null;
+  vueltaDesignadaEn: Date | null;
+  vueltaAcuseEn: Date | null;
+  vueltaEsperaLlegadaTs: Date | null;
+  vueltaEsperaSalidaTs: Date | null;
+  molinosHoy: boolean | null;
   lat: number | null;
   lng: number | null;
   accuracy: number | null;
@@ -481,7 +492,16 @@ export class EnVivoService {
           so."vehiculoId" AS "vehiculoId", so."conductorId" AS "conductorId",
           v.placa as "vehiculoPlaca", v."fotoUrl" as "fotoUrl", c.nombre as "conductorNombre",
           l.id as "lineaId", l.nombre as "lineaNombre", ru.sentido as "rutaSentido",
-          inf."infraccionesAbiertas", inf."infraccionNivelOrden",
+          inf."infraccionesAbiertas", inf."infraccionesAtendidas", inf."infraccionNivelOrden",
+          vu.numero AS "vueltaNumero", vu."varianteId" AS "vueltaVarianteId",
+          vu."varianteNombre" AS "vueltaVarianteNombre", vu."designadaEn" AS "vueltaDesignadaEn",
+          vu."acuseEn" AS "vueltaAcuseEn", vu."esperaLlegadaTs" AS "vueltaEsperaLlegadaTs",
+          vu."esperaSalidaTs" AS "vueltaEsperaSalidaTs",
+          EXISTS (
+            SELECT 1 FROM vueltas vh
+            WHERE vh."vehiculoId" = so."vehiculoId" AND vh."sindicatoId" = so."sindicatoId"
+              AND vh.fecha = ${jornadaStr}::date AND vh."varianteId" IS NOT NULL
+          ) AS "molinosHoy",
           fix.lat, fix.lng, fix.accuracy, fix.speed,
           fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos",
           so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs"
@@ -513,20 +533,33 @@ export class EnVivoService {
           ORDER BY gr.ultimo_fix_ts DESC
           LIMIT 1
         ) fix ON true
-        -- docs/plan-en-vivo-alertas.md PR A: infracciones ABIERTAS de la sesión. Un agregado por
-        -- sesión resuelto por el índice (sesionId, estado); count(*) sin GROUP BY siempre
-        -- devuelve una fila (0 si no hay), por eso el LATERAL es seguro con ON true. Orden
-        -- de gravedad: leve(1) < grave(2) < gravisima(3) = GRAVEDAD_ORDEN (@quivo/shared); el
-        -- test en-vivo.gravedad-orden.test.ts verifica que este CASE y la constante coinciden.
+        -- docs/plan-en-vivo-alertas.md PR A: infracciones ABIERTAS y ATENDIDAS de la sesión. Un
+        -- agregado por sesión resuelto por el índice (sesionId, estado); count(*) sin GROUP BY
+        -- siempre devuelve una fila (0 si no hay), por eso el LATERAL es seguro con ON true.
+        -- El nivel es el máximo entre abiertas y atendidas: al "atender" el marcador deja de
+        -- parpadear pero conserva el ícono de severidad (pendiente E #1). Orden de gravedad:
+        -- leve(1) < grave(2) < gravisima(3) = GRAVEDAD_ORDEN (@quivo/shared); el test
+        -- en-vivo.gravedad-orden.test.ts verifica que este CASE y la constante coinciden.
         LEFT JOIN LATERAL (
-          SELECT count(*)::int AS "infraccionesAbiertas",
+          SELECT count(*) FILTER (WHERE i.estado = 'abierta')::int AS "infraccionesAbiertas",
+                 count(*) FILTER (WHERE i.estado = 'atendida')::int AS "infraccionesAtendidas",
                  max(CASE i.gravedad WHEN 'gravisima' THEN 3 WHEN 'grave' THEN 2 ELSE 1 END)
                    AS "infraccionNivelOrden"
           FROM infracciones i
           WHERE i."sesionId" = so.id
-            AND i.estado = 'abierta'
+            AND i.estado IN ('abierta', 'atendida')
             AND i."sindicatoId" = so."sindicatoId"
         ) inf ON true
+        -- docs/plan-molinos-designacion.md: la vuelta EN CURSO de la sesión (a lo sumo una: índice
+        -- parcial único vueltas_sesionId_en_curso_key) con el nombre de la variante designada.
+        LEFT JOIN LATERAL (
+          SELECT v.numero, v."varianteId", va.nombre AS "varianteNombre", v."designadaEn",
+                 v."acuseEn", v."esperaLlegadaTs", v."esperaSalidaTs"
+          FROM vueltas v
+          LEFT JOIN variantes va ON va.id = v."varianteId"
+          WHERE v."sesionId" = so.id AND v.estado = 'en_curso' AND v."sindicatoId" = so."sindicatoId"
+          LIMIT 1
+        ) vu ON true
         WHERE (so.inicio >= ${sesionesDesde})
            OR (so.fin IS NULL AND so.estado = 'activa')
         ORDER BY (so.fin IS NULL) DESC, fix."ultimoFixTs" DESC NULLS LAST, so.inicio DESC
@@ -540,8 +573,25 @@ export class EnVivoService {
           vehiculoId: f.vehiculoId,
           conductorId: f.conductorId,
           infraccionesAbiertas: f.infraccionesAbiertas ?? 0,
+          infraccionesAtendidas: f.infraccionesAtendidas ?? 0,
           infraccionNivel: nivelDeOrden(f.infraccionNivelOrden),
           fotoUrl: f.fotoUrl ?? null,
+          molinosHoy: f.molinosHoy ?? false,
+          vuelta:
+            f.vueltaNumero === null || f.vueltaNumero === undefined
+              ? null
+              : {
+                  numero: f.vueltaNumero,
+                  varianteId: f.vueltaVarianteId,
+                  varianteNombre: f.vueltaVarianteNombre,
+                  designadaEn: f.vueltaDesignadaEn?.toISOString() ?? null,
+                  acuseEn: f.vueltaAcuseEn?.toISOString() ?? null,
+                  enEspera: f.vueltaEsperaLlegadaTs != null && f.vueltaEsperaSalidaTs == null,
+                  esperaDesdeTs:
+                    f.vueltaEsperaLlegadaTs != null && f.vueltaEsperaSalidaTs == null
+                      ? f.vueltaEsperaLlegadaTs.toISOString()
+                      : null,
+                },
           activa: f.fin === null && f.estado === 'activa',
           vehiculoPlaca: f.vehiculoPlaca,
           conductorNombre: f.conductorNombre,
