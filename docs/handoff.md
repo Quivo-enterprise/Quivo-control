@@ -27,15 +27,13 @@ Plan vigente: [`docs/plan-molinos-designacion.md`](plan-molinos-designacion.md) 
 **Abiertos (no mergeados):**
 
 - **#154 `feat(api)`: vueltas en el servidor + designación a Molinos.** Worktree `.claude/worktrees/f1-api`, rama `feat/vueltas-molinos-api`.
-  - **Commits:**
-    - `7543b58`: feat.
-    - `6d2ff33`, `1b948e2` y `52c1fae`: fixes de las revisiones 1 a 3. Están pusheados.
-    - Ronda 4: la estaba aplicando un subagente Sonnet al cortar la sesión. Revisar `git log` en el worktree: si existe el commit `fix(api): designar serializa con el worker y el cierre tardío no borra vueltas`, está sin push.
-  - **Ronda 4, qué corrige:**
-    - Deadlock en el reintento de `designar`: se resuelve tomando el mismo advisory lock `vueltas:<sesionId>` que el worker y quitando el reintento.
-    - El cierre tardío ya no borra vueltas.
+  - **Commits:** `7543b58` (feat), `6d2ff33`, `1b948e2`, `52c1fae` y `73ca474` (fixes de las revisiones 1–4). **Todo pusheado.**
+  - **Ronda 4 (`73ca474`):**
+    - `designar` toma primero el mismo advisory lock `vueltas:<sesionId>` que el worker (`bloquearVueltasSesion`), sin reintento: no hay deadlock.
+    - El cierre tardío nunca borra vueltas.
     - `finTs` = max(cierre, hitos).
-    - Borra los wrappers muertos `resolverEspera` / `detectarSalidaEspera`.
+    - Borrados los wrappers muertos.
+    - El chairman revisó el diff de `designar`. Typecheck 10/10; tests api 643, shared 126 y db 34. Un test flaky ajeno al cambio: `auditoria.controller.integration` (401 de better-auth), que pasa solo.
   - **Diseño final de las vueltas:**
     - El trigger `vueltas_cerrar_con_sesion` solo marca la vuelta `abierta_al_cierre`; nunca borra. Fija `app.sindicato_id` a la sesión y lo restaura después.
     - El worker es el único escritor real. El modo "cierre tardío" es la máquina normal sin abrir vueltas, con 120 s de tolerancia.
@@ -44,7 +42,7 @@ Plan vigente: [`docs/plan-molinos-designacion.md`](plan-molinos-designacion.md) 
   - **Gates:**
     - Revisión de seguridad: limpia.
     - `/code-review`: 4 rondas, todas aplicadas.
-    - **Falta:** `codex verify-fix` (la cuota de Codex se agotó hasta las 04:06 del 2026-10-14), CI verde del último commit, y revisar el diff de la ronda 4.
+    - **Falta:** `codex verify-fix` (la cuota de Codex se agotó hasta las 04:06 del 2026-10-14) y el CI verde de `73ca474`.
     - Correr: `~/.claude/skills/codex-debug/scripts/codex-debug.sh verify-fix --dir .claude/worktrees/f1-api --base 7543b58 --symptom "..."`.
   - **No decidir más rondas completas de `/code-review`.** Ya encontraban casos cada vez más raros. Lo que quede va como limitación documentada para F2.
   - **Pruebas locales:** DB `quivo_f1fix` (postgres en el puerto 5434). Correr antes `set -a && . apps/api/.env && set +a` en el worktree.
