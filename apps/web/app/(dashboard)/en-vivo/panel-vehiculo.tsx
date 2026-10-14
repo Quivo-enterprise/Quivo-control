@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { colorTextoContraste } from '@quivo/design-system';
+import { formatearTelefonoBolivia } from '@quivo/shared';
 import {
   Bus,
   Check,
@@ -209,11 +210,10 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   const conductor = contexto?.conductor.nombre ?? posicion?.conductorNombre ?? '';
   const lineaNombre = contexto?.linea.nombre ?? posicion?.lineaNombre ?? '';
   const colorLinea = contexto?.linea.color || undefined;
-  // `fotoUrl` y `telefono` llegan en PRs posteriores (C y B): hoy no existen en los contratos.
+  // `fotoUrl` llega en un PR posterior (C).
   const fotoUrl =
     (posicion as (PosicionEnVivo & { fotoUrl?: string | null }) | undefined)?.fotoUrl?.trim() || null;
-  const telefono =
-    (contexto?.conductor as ({ telefono?: string | null } & ContextoEnVivo['conductor']) | undefined)?.telefono ?? null;
+  const telefono = contexto?.conductor.telefono ?? null;
   const kmh = velocidadKmh(posicion?.speed);
   const lista = ordenarInfracciones(infracciones.data ?? []);
   const abiertas = lista.filter((i) => i.estado === 'abierta');
@@ -397,7 +397,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
       </div>
       {telefono ? (
         <span className="qv-live-panel__tel">
-          <Phone size={12} aria-hidden="true" /> {telefono}
+          <Phone size={12} aria-hidden="true" /> {formatearTelefonoBolivia(telefono)}
         </span>
       ) : (
         <span className="qv-live-panel__sin-tel">

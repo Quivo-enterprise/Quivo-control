@@ -181,11 +181,16 @@ describe('velocidad y contacto', () => {
     expect(telefonoParaWhatsapp('7123 4567')).toBe('59171234567');
     expect(telefonoParaWhatsapp('+591 71234567')).toBe('59171234567');
     expect(telefonoParaWhatsapp('123')).toBeNull();
+    expect(telefonoParaWhatsapp('44123456')).toBeNull();
+    expect(telefonoParaWhatsapp('+5491123456789')).toBeNull();
+    expect(telefonoParaWhatsapp(null)).toBeNull();
     const url = urlWhatsapp('71234567', { placa: 'ABC123', lineaNombre: 'L16', infraccion: 'Alteración de ruta' });
     expect(url).toContain('https://wa.me/59171234567?text=');
     expect(decodeURIComponent(url!)).toContain('ABC123');
     expect(urlWhatsapp(null, { placa: 'A', lineaNombre: 'B' })).toBeNull();
     expect(urlLlamada('+591 71234567')).toBe('tel:+59171234567');
     expect(urlLlamada('')).toBeNull();
+    expect(urlLlamada('44123456')).toBeNull();
+    expect(urlLlamada('+5491123456789')).toBeNull();
   });
 });

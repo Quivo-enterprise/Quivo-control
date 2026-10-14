@@ -108,6 +108,26 @@ describe('AuditInterceptor', () => {
     expect(fila?.usuarioId).toBe('test-admin-quivo');
   });
 
+  it('enmascara telefono en el diff y deja el resto del body intacto', async () => {
+    const interceptor = interceptorConEntidad('conductor');
+    const entidadId = randomUUID();
+    await firstValueFrom(
+      interceptor.intercept(
+        contexto({
+          method: 'POST',
+          body: { nombre: 'Juan', telefono: '+59171234567' },
+          user: adminQuivo(),
+        }),
+        handlerQueDevuelve({ id: entidadId, sindicatoId }),
+      ),
+    );
+    creadosAuditLog.push(entidadId);
+    const fila = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.auditLog.findFirst({ where: { entidadId } }),
+    );
+    expect(fila?.diff).toEqual({ nombre: 'Juan', telefono: '+591******67' });
+  });
+
   it('audita un PATCH usando el id de los params si la respuesta no trae id', async () => {
     const interceptor = interceptorConEntidad('variante');
     const entidadId = randomUUID();

@@ -1,15 +1,19 @@
 'use client';
 
 import { useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { StatusBadge } from '@quivo/design-system';
-import { CreditCard, FileBadge, UserCheck } from 'lucide-react';
+import { CreditCard, FileBadge, Phone, UserCheck } from 'lucide-react';
 import {
   DocumentoIdentidadBoliviaSchema,
   LicenciaConducirBoliviaSchema,
   NombrePersonaSchema,
+  TelefonoBoliviaSchema,
+  formatearTelefonoBolivia,
   normalizarDocumentoIdentidadBolivia,
   normalizarLicenciaConducir,
   normalizarNombrePersona,
+  normalizarTelefonoBolivia,
   type Conductor,
 } from '@quivo/shared';
 import {
@@ -26,6 +30,7 @@ import { ConductorPreviewCard } from './conductor-preview';
 export default function ConductoresPage() {
   const { token, user } = useAuth();
   const { options: sindicatoOptions } = useSindicatoOptions();
+  const queryClient = useQueryClient();
 
   const fields = useMemo<EntityFieldConfig[]>(() => {
     const base: EntityFieldConfig[] = [
@@ -72,6 +77,22 @@ export default function ConductoresPage() {
         normalize: normalizarLicenciaConducir,
         validate: (value) => {
           const result = LicenciaConducirBoliviaSchema.safeParse(value);
+          return result.success ? undefined : result.error.issues[0]?.message;
+        },
+      },
+      {
+        key: 'telefono',
+        label: 'Teléfono (WhatsApp)',
+        kind: 'text',
+        inputType: 'tel',
+        inputMode: 'tel',
+        autoComplete: 'tel',
+        maxLength: 20,
+        placeholder: '7XXXXXXX o +591 7XXXXXXX',
+        helperText: 'Opcional. Celular boliviano para contactar al conductor por WhatsApp o llamada.',
+        normalize: (value) => normalizarTelefonoBolivia(value) ?? value,
+        validate: (value) => {
+          const result = TelefonoBoliviaSchema.safeParse(value);
           return result.success ? undefined : result.error.issues[0]?.message;
         },
       },
@@ -123,10 +144,20 @@ export default function ConductoresPage() {
   const dataSource = useMemo<ModuleDataSource<Conductor>>(
     () => ({
       list: () => conductoresApi.listar(token ?? ''),
-      create: (values) => conductoresApi.crear(token ?? '', values as never),
-      update: (id, values) => conductoresApi.actualizar(token ?? '', id, values as never),
+      // El contexto de /en-vivo se cachea con staleTime Infinity y trae el teléfono del
+      // conductor: tras crear/editar hay que invalidarlo para que el panel no muestre uno viejo.
+      create: async (values) => {
+        const creado = await conductoresApi.crear(token ?? '', values as never);
+        void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'contexto'] });
+        return creado;
+      },
+      update: async (id, values) => {
+        const actualizado = await conductoresApi.actualizar(token ?? '', id, values as never);
+        void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'contexto'] });
+        return actualizado;
+      },
     }),
-    [token],
+    [token, queryClient],
   );
 
   return (
@@ -216,6 +247,21 @@ export default function ConductoresPage() {
               </span>
             </div>
           ),
+        },
+        {
+          key: 'telefono',
+          header: 'Teléfono',
+          render: (row) =>
+            row.telefono ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                <Phone size={13} style={{ color: 'var(--qv-text-muted)' }} />
+                <span style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
+                  {formatearTelefonoBolivia(row.telefono)}
+                </span>
+              </div>
+            ) : (
+              <span style={{ color: 'var(--qv-text-muted)' }}>—</span>
+            ),
         },
         {
           key: 'estado',
