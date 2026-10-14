@@ -39,7 +39,14 @@ export interface FormFieldProps {
   children: ReactNode;
 }
 
-export function FormField({ label, htmlFor, required, error, helperText, children }: FormFieldProps) {
+export function FormField({
+  label,
+  htmlFor,
+  required,
+  error,
+  helperText,
+  children,
+}: FormFieldProps) {
   return (
     <div className={cx('qv-field', error && 'qv-field--invalid')}>
       <label className="qv-field__label" htmlFor={htmlFor}>
@@ -175,13 +182,23 @@ export function TextArea({ label, helperText, fullWidth, id, className, ...rest 
  * DatePicker — input nativo `type="date"` con el mismo envoltorio visual que Input.
  * ------------------------------------------------------------------------------------- */
 
-export interface DatePickerProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'size'> {
+export interface DatePickerProps extends Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  'type' | 'size'
+> {
   label?: string;
   helperText?: string;
   fullWidth?: boolean;
 }
 
-export function DatePicker({ label, helperText, fullWidth, id, className, ...rest }: DatePickerProps) {
+export function DatePicker({
+  label,
+  helperText,
+  fullWidth,
+  id,
+  className,
+  ...rest
+}: DatePickerProps) {
   const generatedId = useId();
   const controlId = id ?? generatedId;
   return (
@@ -191,7 +208,9 @@ export function DatePicker({ label, helperText, fullWidth, id, className, ...res
           {label}
         </label>
       )}
-      <span className={cx('qv-input', 'qv-input--has-right', fullWidth && 'qv-input--full', className)}>
+      <span
+        className={cx('qv-input', 'qv-input--has-right', fullWidth && 'qv-input--full', className)}
+      >
         <input id={controlId} type="date" className="qv-input__control" {...rest} />
         <span className="qv-input__slot qv-input__slot--right" aria-hidden="true">
           <CalendarIcon />
@@ -214,7 +233,10 @@ export function Checkbox({ label, id, className, ...rest }: CheckboxProps) {
   const generatedId = useId();
   const controlId = id ?? generatedId;
   return (
-    <label className={cx('qv-checkbox', rest.disabled && 'qv-checkbox--disabled', className)} htmlFor={controlId}>
+    <label
+      className={cx('qv-checkbox', rest.disabled && 'qv-checkbox--disabled', className)}
+      htmlFor={controlId}
+    >
       <input id={controlId} type="checkbox" className="qv-checkbox__input" {...rest} />
       <span className="qv-checkbox__box" aria-hidden="true" />
       <span className="qv-checkbox__label">{label}</span>
@@ -296,7 +318,13 @@ export interface SearchInputProps {
   className?: string;
 }
 
-export function SearchInput({ placeholder, value, onChange, onClear, className }: SearchInputProps) {
+export function SearchInput({
+  placeholder,
+  value,
+  onChange,
+  onClear,
+  className,
+}: SearchInputProps) {
   return (
     <span className={cx('qv-input', 'qv-search-input', className)}>
       <span className="qv-input__slot qv-input__slot--left" aria-hidden="true">
@@ -345,6 +373,83 @@ export function SearchInput({ placeholder, value, onChange, onClear, className }
  * Enter confirma la opción activa.
  * ------------------------------------------------------------------------------------- */
 
+/** Estilo inline del listbox portado: anclado por `top` (abre hacia abajo) o `bottom` (flip). */
+export interface SelectPosition {
+  top?: number;
+  bottom?: number;
+  left: number;
+  width: number;
+  /** Tope en px: `min(cap, espacio disponible)`, nunca por debajo de `SELECT_MIN_HEIGHT`. */
+  maxHeight: number;
+}
+
+export interface SelectPositionInput {
+  /** Alto del viewport de layout (`document.documentElement.clientHeight`). */
+  viewportHeight: number;
+  rect: { top: number; bottom: number; left: number; width: number };
+  /** Alto natural del listbox (con bordes) si ya está montado; si no, se asume `cap`. */
+  contentHeight: number | undefined;
+  /** Tope de alto en px, leído del CSS (`max-height` de `.qv-select-listbox`). */
+  cap: number;
+}
+
+export const SELECT_GAP = 6;
+export const SELECT_VIEWPORT_MARGIN = 8;
+/** ~2 opciones: por debajo de esto el listbox deja de ser usable. */
+export const SELECT_MIN_HEIGHT = 88;
+
+/**
+ * Posiciona el listbox `fixed` dentro del viewport: abre hacia abajo si cabe, si no hacia
+ * arriba (flip) cuando hay más espacio ahí, y acota `maxHeight` al espacio disponible para
+ * que ninguna opción quede fuera de pantalla (un `fixed` fuera del viewport no se puede traer
+ * con scroll). Devuelve `null` si el trigger está completamente fuera del viewport (el
+ * llamador cierra el listbox en vez de anclarlo a algo invisible).
+ */
+export function computeSelectPosition({
+  viewportHeight,
+  rect,
+  contentHeight,
+  cap,
+}: SelectPositionInput): SelectPosition | null {
+  if (rect.bottom <= 0 || rect.top >= viewportHeight) return null;
+  const desired = Math.min(contentHeight ?? cap, cap);
+  const spaceBelow = Math.max(
+    0,
+    viewportHeight - rect.bottom - SELECT_GAP - SELECT_VIEWPORT_MARGIN,
+  );
+  const spaceAbove = Math.max(0, rect.top - SELECT_GAP - SELECT_VIEWPORT_MARGIN);
+  const minHeight = Math.min(SELECT_MIN_HEIGHT, desired);
+  const base = { left: rect.left, width: rect.width };
+  if (spaceBelow >= desired || spaceBelow >= spaceAbove) {
+    return {
+      ...base,
+      top: rect.bottom + SELECT_GAP,
+      maxHeight: Math.max(minHeight, Math.min(cap, spaceBelow)),
+    };
+  }
+  return {
+    ...base,
+    bottom: viewportHeight - rect.top + SELECT_GAP,
+    maxHeight: Math.max(minHeight, Math.min(cap, spaceAbove)),
+  };
+}
+
+function samePosition(a: SelectPosition | null, b: SelectPosition): boolean {
+  return (
+    a !== null &&
+    a.top === b.top &&
+    a.bottom === b.bottom &&
+    a.left === b.left &&
+    a.width === b.width &&
+    a.maxHeight === b.maxHeight
+  );
+}
+
+/** Alto natural del listbox incluyendo bordes (`scrollHeight` solo cuenta contenido+padding). */
+function naturalHeight(el: HTMLElement): number {
+  return el.scrollHeight + (el.offsetHeight - el.clientHeight);
+}
+
 export interface SelectProps {
   id?: string;
   name?: string;
@@ -381,9 +486,10 @@ export function Select({
   const listboxId = `${controlId}-listbox`;
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
-  const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [position, setPosition] = useState<SelectPosition | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const listboxRef = useRef<HTMLUListElement>(null);
+  const capRef = useRef<number | null>(null);
   const optionRefs = useRef<(HTMLLIElement | null)[]>([]);
 
   const selectedIndex = options.findIndex((option) => option.value === value);
@@ -412,27 +518,55 @@ export function Select({
     };
   }, [open]);
 
-  // Posición del listbox portado, calculada desde el trigger. `capture: true` en el listener
-  // de scroll es a propósito: el scroll de un ancestro (ej. `.qv-modal__body`) no burbujea,
-  // pero sí se puede capturar en su camino hacia abajo desde `window`.
+  // Posición del listbox portado, calculada desde el trigger. El listbox se monta primero
+  // oculto (`visibility: hidden`, sin posición) y este efecto de layout lo posiciona antes de
+  // pintar. `capture: true` en el scroll es a propósito: el scroll de un ancestro (ej.
+  // `.qv-modal__body`) no burbujea, pero sí se captura desde `window`. Depende de
+  // `options.length` para reposicionar si las opciones cambian con la lista abierta.
+  const optionCount = options.length;
   useIsomorphicLayoutEffect(() => {
     if (!open) {
       setPosition(null);
+      capRef.current = null;
       return undefined;
     }
     function updatePosition() {
       const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setPosition({ top: rect.bottom + 6, left: rect.left, width: rect.width });
+      const listbox = listboxRef.current;
+      if (!rect || !listbox) return;
+      // Fuente única del tope: el `max-height` CSS del listbox (computed → px). Se lee una
+      // sola vez por apertura, antes de que el `style` inline lo pise (el listbox arranca
+      // sin posición); `capRef` lo conserva para los recálculos siguientes.
+      if (capRef.current === null) {
+        const parsed = Number.parseFloat(getComputedStyle(listbox).maxHeight);
+        capRef.current = Number.isFinite(parsed) && parsed > 0 ? parsed : 256;
+      }
+      const cap = capRef.current;
+      const next = computeSelectPosition({
+        viewportHeight: document.documentElement.clientHeight,
+        rect,
+        contentHeight: naturalHeight(listbox),
+        cap,
+      });
+      if (!next) {
+        setOpen(false);
+        return;
+      }
+      setPosition((prev) => (samePosition(prev, next) ? prev : next));
+    }
+    function handleScroll(event: Event) {
+      const target = event.target;
+      if (target instanceof Node && listboxRef.current?.contains(target)) return;
+      updatePosition();
     }
     updatePosition();
-    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('scroll', handleScroll, true);
     window.addEventListener('resize', updatePosition);
     return () => {
-      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('scroll', handleScroll, true);
       window.removeEventListener('resize', updatePosition);
     };
-  }, [open]);
+  }, [open, optionCount]);
 
   useEffect(() => {
     if (!open || activeIndex < 0) return;
@@ -440,10 +574,6 @@ export function Select({
   }, [open, activeIndex]);
 
   function openList() {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (rect) {
-      setPosition({ top: rect.bottom + 6, left: rect.left, width: rect.width });
-    }
     setOpen(true);
     setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
   }
@@ -483,7 +613,8 @@ export function Select({
     }
   }
 
-  const activeOptionId = open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
+  const activeOptionId =
+    open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
 
   return (
     <div className={cx('qv-field', fullWidth && 'qv-field--full')}>
@@ -524,11 +655,18 @@ export function Select({
           createPortal(
             <ul
               ref={listboxRef}
-              className="qv-select-listbox"
+              className={cx(
+                'qv-select-listbox',
+                position?.bottom !== undefined && 'qv-select-listbox--up',
+              )}
               role="listbox"
               id={listboxId}
               aria-label={label ?? ariaLabelProp ?? placeholder}
-              style={position ? { top: position.top, left: position.left, width: position.width } : undefined}
+              style={
+                position
+                  ? { ...position, maxHeight: `${position.maxHeight}px` }
+                  : { visibility: 'hidden' }
+              }
             >
               {options.map((option, index) => (
                 <li
