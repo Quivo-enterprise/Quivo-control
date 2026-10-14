@@ -1,6 +1,8 @@
 import {
   GRAVEDAD_DEFAULT_POR_TIPO,
   REGLA_TIPO_DESVIO_RUTA,
+  REGLA_TIPO_ESPERA_CORTA,
+  REGLA_TIPO_MOLINOS_OMITIDO,
   REGLA_TIPO_PC_OMITIDO,
   type GravedadRegla,
   type TipoInfraccion,
@@ -10,6 +12,8 @@ import {
 export const REGLA_TIPO_POR_INFRACCION: Record<TipoInfraccion, string> = {
   desvio_ruta: REGLA_TIPO_DESVIO_RUTA,
   pc_omitido: REGLA_TIPO_PC_OMITIDO,
+  molinos_omitido: REGLA_TIPO_MOLINOS_OMITIDO,
+  espera_corta: REGLA_TIPO_ESPERA_CORTA,
 };
 
 export interface ReglaCandidata {
@@ -84,6 +88,16 @@ export function dedupeKeyDesvio(sesionId: string, inicioTs: Date): string {
   return `desvio:${sesionId}:${inicioTs.toISOString()}`;
 }
 
+/** `molinos_omitido:{vueltaId}` (docs/plan-molinos-designacion.md): una por vuelta designada. */
+export function dedupeKeyMolinosOmitido(vueltaId: string): string {
+  return `molinos_omitido:${vueltaId}`;
+}
+
+/** `espera_corta:{vueltaId}`: una por vuelta designada. */
+export function dedupeKeyEsperaCorta(vueltaId: string): string {
+  return `espera_corta:${vueltaId}`;
+}
+
 export function dedupeKeyPcOmitido(
   sesionId: string,
   puntoControlId: string,
@@ -155,6 +169,21 @@ export function construirRecorridos(eventos: readonly EventoRecorrido[]): Recorr
     }
   }
   return recorridos;
+}
+
+/**
+ * ¿El recorrido estaba en curso justo ANTES de `ts`? Lee la misma reconstrucción que usa la
+ * detección de infracciones (`construirRecorridos`: fin huérfano ignorado, a igual `ts` el fin va
+ * antes que el inicio). Sin ningún inicio anterior se asume en curso; el último recorrido iniciado
+ * antes de `ts` está en curso salvo que su fin también sea anterior a `ts`.
+ */
+export function recorridoEnCursoAntesDe(recorridos: readonly Recorrido[], ts: Date): boolean {
+  let previo: Recorrido | null = null;
+  for (const r of recorridos) {
+    if (r.inicioTs.getTime() < ts.getTime()) previo = r;
+  }
+  if (!previo) return true;
+  return !(previo.finTs !== null && previo.finTs.getTime() < ts.getTime());
 }
 
 /** Recorrido que contiene el instante (`desde <= ts < hasta`), o `null` (fuera de recorrido). */

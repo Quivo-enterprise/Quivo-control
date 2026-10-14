@@ -26,6 +26,7 @@ import {
   type MarcadorRecorridoEntrante,
   type PuntoGpsEntrante,
 } from './deteccion-infracciones.js';
+import { procesarVueltasSesion, type EntradaVueltasSesion } from './deteccion-vueltas.js';
 import { COLA_INGESTA_SYNC, type LoteIngestaJob } from '../sync/sync-queue.service.js';
 
 const NOMBRE_COLA_PARTICIONES = 'mantenimiento-particiones-gps';
@@ -204,6 +205,9 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     // operativos): así un `cumplimiento` y el `inicio_recorrido`/`fin_recorrido` del MISMO lote
     // se ven entre sí sin importar el orden en que llegaron. Nunca cuenta como error de ingesta.
     await this.detectarInfracciones(sindicatoId, entradas);
+    // Conteo de vueltas (docs/plan-molinos-designacion.md, F1) sobre la misma evidencia ya
+    // persistida. Mismo contrato: jamás cuenta como error de ingesta, solo se loguea.
+    await this.procesarVueltas(sindicatoId, entradas);
 
     const latenciaMs = Date.now() - inicio;
     const pendientes = await this.contarPendientesCola();
@@ -326,11 +330,80 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Vueltas por sesión (`deteccion-vueltas.ts`), una transacción por sesión con el lock de la
+   * máquina. Se corre para toda sesión con evidencia en el lote (también solo GPS: resuelve la
+   * salida del punto de espera). Los fallos se loguean y NO se propagan.
+   */
+  private async procesarVueltas(sindicatoId: string, entradas: EntradasDeteccion): Promise<void> {
+    const sesiones = new Map<string, EntradaVueltasSesion>();
+    const de = (sesionId: string): EntradaVueltasSesion => {
+      const e = sesiones.get(sesionId) ?? {
+        cumplimientos: [],
+        inicios: [],
+        fines: [],
+        hayGps: false,
+        ultimoTs: null,
+        gpsMinTs: null,
+      };
+      sesiones.set(sesionId, e);
+      return e;
+    };
+    // `ts` más reciente del lote por sesión (referencia de antigüedad de las esperas pendientes).
+    const tocar = (e: EntradaVueltasSesion, ts: Date) => {
+      if (Number.isFinite(ts.getTime()) && (e.ultimoTs === null || ts > e.ultimoTs)) e.ultimoTs = ts;
+    };
+    for (const evento of entradas.gps) {
+      const sesionId = extraerSesionId(evento.payload);
+      if (!sesionId) continue;
+      const e = de(sesionId);
+      e.hayGps = true;
+      // Mismo `ts` con el que se persiste el fix en `gps_points`.
+      const tsFix = new Date(resolverTsFix(evento.payload, evento.ts));
+      tocar(e, tsFix);
+      if (Number.isFinite(tsFix.getTime()) && (e.gpsMinTs == null || tsFix < e.gpsMinTs)) e.gpsMinTs = tsFix;
+    }
+    for (const { evento, ts } of entradas.cumplimientos) {
+      const payload = evento.payload as unknown as PayloadCumplimientoPuntoControl;
+      if (typeof payload.sesionId !== 'string') continue;
+      tocar(de(payload.sesionId), new Date(ts));
+      de(payload.sesionId).cumplimientos.push({
+        ts: new Date(ts),
+        puntoControlId: payload.puntoControlId,
+        lat: payload.lat,
+        lng: payload.lng,
+      });
+    }
+    for (const evento of entradas.operativos) {
+      const sesionId = extraerSesionId(evento.payload);
+      if (!sesionId) continue;
+      tocar(de(sesionId), new Date(evento.ts));
+      (evento.tipo === 'inicio_recorrido' ? de(sesionId).inicios : de(sesionId).fines).push(
+        new Date(evento.ts),
+      );
+    }
+    for (const [sesionId, entrada] of sesiones) {
+      try {
+        const r = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+          procesarVueltasSesion(tx, sindicatoId, sesionId, entrada),
+        );
+        if (r.abiertas > 0 || r.cerradas > 0 || r.infracciones > 0) {
+          this.logger.log(
+            `Vueltas, sesión ${sesionId}: ${r.abiertas} abierta(s), ${r.cerradas} cerrada(s), ` +
+              `${r.infracciones} infracción(es)`,
+          );
+        }
+      } catch (error) {
+        this.registrarFalloDeteccion(sindicatoId, sesionId, 'vueltas', error);
+      }
+    }
+  }
+
   /** Falla de la detección: solo log estructurado (sesión + error). No va a `sync_errors`. */
   private registrarFalloDeteccion(
     sindicatoId: string,
     sesionId: string,
-    detector: 'desvio_ruta' | 'pc_omitido',
+    detector: 'desvio_ruta' | 'pc_omitido' | 'vueltas',
     error: unknown,
   ): void {
     this.logger.error(

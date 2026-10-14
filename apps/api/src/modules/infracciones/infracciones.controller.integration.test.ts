@@ -78,6 +78,18 @@ describe('PATCH/POST /infracciones (guards + DTO Zod + DI)', () => {
     expect(res.statusCode).toBe(403);
   });
 
+  it('el operador (control) NO atiende, descarta ni sanciona: 403 en ambas escrituras', async () => {
+    const operador = tokenDe('operador');
+    expect((await patch(randomUUID(), { accion: 'atender' }, operador)).statusCode).toBe(403);
+    expect((await patch(randomUUID(), { accion: 'descartar', nota: 'x' }, operador)).statusCode).toBe(403);
+    const res = await sancionar(
+      randomUUID(),
+      { reglaId: randomUUID(), sujetoTipo: 'conductor', sujetoId: 'x', motivo: 'm', fechaHecho: '2026-10-12' },
+      operador,
+    );
+    expect(res.statusCode).toBe(403);
+  });
+
   it('sancionar valida el body (sin motivo → 400) y descarta un sindicatoId enviado por el cliente', async () => {
     expect((await sancionar(randomUUID(), { reglaId: randomUUID(), sujetoTipo: 'conductor', sujetoId: 'x' })).statusCode).toBe(400);
     // Con body válido llega al service: la infracción no existe → 404 (el sindicatoId extra se ignora).

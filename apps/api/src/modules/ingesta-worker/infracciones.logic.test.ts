@@ -3,9 +3,13 @@ import {
   VENTANA_RECORRIDO_TOLERANCIA_MS,
   construirRecorridos,
   dedupeKeyDesvio,
+  dedupeKeyEsperaCorta,
+  dedupeKeyMolinosOmitido,
+  REGLA_TIPO_POR_INFRACCION,
   descartarFuturos,
   recorridoCerradoEn,
   recorridoDeInstante,
+  recorridoEnCursoAntesDe,
   recorridoIniciadoEn,
   dedupeKeyPcOmitido,
   resolverGravedadInfraccion,
@@ -28,6 +32,21 @@ describe('resolverGravedadInfraccion', () => {
   it('sin regla: defaults desvío → grave, PC omitido → leve, sin reglaId', () => {
     expect(resolverGravedadInfraccion('desvio_ruta', [])).toEqual({ gravedad: 'grave', reglaId: null });
     expect(resolverGravedadInfraccion('pc_omitido', [])).toEqual({ gravedad: 'leve', reglaId: null });
+  });
+
+  it('defaults de Molinos: molinos_omitido → grave, espera_corta → leve; el Regla.tipo reservado coincide con el tipo', () => {
+    expect(resolverGravedadInfraccion('molinos_omitido', [])).toEqual({ gravedad: 'grave', reglaId: null });
+    expect(resolverGravedadInfraccion('espera_corta', [])).toEqual({ gravedad: 'leve', reglaId: null });
+    expect(REGLA_TIPO_POR_INFRACCION).toEqual({
+      desvio_ruta: 'desvio_ruta',
+      pc_omitido: 'pc_omitido',
+      molinos_omitido: 'molinos_omitido',
+      espera_corta: 'espera_corta',
+    });
+    const r = regla({ id: 'r2', tipo: 'espera_corta', gravedad: 'grave' });
+    expect(resolverGravedadInfraccion('espera_corta', [r])).toEqual({ gravedad: 'grave', reglaId: 'r2' });
+    // Una regla de otro tipo reservado no se confunde.
+    expect(resolverGravedadInfraccion('molinos_omitido', [r])).toEqual({ gravedad: 'grave', reglaId: null });
   });
 
   it('usa gravedad y id de la regla activa con el tipo reservado EXACTO', () => {
@@ -109,6 +128,8 @@ describe('dedupe keys', () => {
     const ts = new Date('2026-10-12T15:00:00.000Z');
     expect(dedupeKeyDesvio('s1', ts)).toBe('desvio:s1:2026-10-12T15:00:00.000Z');
     expect(dedupeKeyPcOmitido('s1', 'pc1', ts)).toBe('pc_omitido:s1:pc1:2026-10-12T15:00:00.000Z');
+    expect(dedupeKeyMolinosOmitido('v1')).toBe('molinos_omitido:v1');
+    expect(dedupeKeyEsperaCorta('v1')).toBe('espera_corta:v1');
   });
 });
 
@@ -118,6 +139,20 @@ describe('recorridos (ventanas de PC omitido y gating de desvío)', () => {
   const ini = (seg: number) => ({ tipo: 'inicio_recorrido' as const, ts: t(seg) });
   const fin = (seg: number) => ({ tipo: 'fin_recorrido' as const, ts: t(seg) });
   const TOL = VENTANA_RECORRIDO_TOLERANCIA_MS / 1000;
+
+  it('recorridoEnCursoAntesDe: sin eventos o con un inicio abierto, en curso; tras un fin, no; fin huérfano ignorado', () => {
+    const antes = (evs: (ReturnType<typeof ini> | ReturnType<typeof fin>)[], seg: number) => recorridoEnCursoAntesDe(construirRecorridos(evs), t(seg));
+    expect(antes([], 100)).toBe(true);
+    expect(antes([ini(0)], 100)).toBe(true);
+    expect(antes([ini(0), fin(50)], 100)).toBe(false);
+    expect(antes([ini(0), fin(50), ini(80)], 100)).toBe(true);
+    // Un fin sin recorrido abierto se ignora (misma lectura que las infracciones).
+    expect(antes([fin(10)], 100)).toBe(true);
+    // El fin posterior (o simultáneo) al instante no cuenta como terminado.
+    expect(antes([ini(0), fin(100)], 100)).toBe(true);
+    // Empate de ts: el fin va antes que el inicio, el recorrido queda abierto.
+    expect(antes([ini(50), fin(50)], 100)).toBe(true);
+  });
 
   it('la tolerancia es de 2 minutos', () => {
     expect(VENTANA_RECORRIDO_TOLERANCIA_MS).toBe(120_000);

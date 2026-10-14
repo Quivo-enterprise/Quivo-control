@@ -31,15 +31,17 @@ import {
  * transacción PROPIA: un fallo de la detección nunca revierte ni bloquea la evidencia (el
  * llamador lo atrapa y lo registra).
  *
- * Variantes de ruta (verificado): `Asignacion` solo apunta a `rutaId`; `Variante` es
- * `{rutaId, nombre, estado}` SIN geometría propia, así que no existe una "geometría de
- * variante" contra la que medir. El desvío se mide siempre contra `rutas.geometria` de la ruta
- * de la asignación.
+ * Variantes de ruta: `Asignacion` solo apunta a `rutaId`. Una `Variante` puede traer el TRAMO
+ * ADICIONAL (`variantes.geometria`, p. ej. la subida a Molinos) y la vuelta puede estar
+ * designada a ella (docs/plan-molinos-designacion.md): para los puntos que caen en una vuelta
+ * designada el desvío se mide contra LEAST(ruta base, tramo de la variante). Sin designación se
+ * mide solo contra `rutas.geometria` (subir a Molinos sin que lo hayan designado SÍ cuenta como
+ * desvío, si la ruta tiene el desvío habilitado).
  */
 
 type Tx = PrismaTypes.TransactionClient;
 
-interface ContextoSesion {
+export interface ContextoSesion {
   vehiculoId: string;
   conductorId: string;
   rutaId: string;
@@ -61,7 +63,7 @@ export interface PuntoGpsEntrante {
   accuracy: number | null;
 }
 
-async function resolverGravedad(
+export async function resolverGravedad(
   tx: Tx,
   sindicatoId: string,
   tipo: TipoInfraccion,
@@ -75,7 +77,7 @@ async function resolverGravedad(
   return resolverGravedadInfraccion(tipo, reglas);
 }
 
-async function contextoDeSesion(
+export async function contextoDeSesion(
   tx: Tx,
   sindicatoId: string,
   sesionId: string,
@@ -107,7 +109,7 @@ async function contextoDeSesion(
  * (`recorridoEstado`/`recorridoEstadoTs` de `sesiones_operativas` solo guardan el estado ACTUAL
  * y no sirven para clasificar puntos históricos o tardíos del outbox.)
  */
-async function cargarRecorridos(
+export async function cargarRecorridos(
   tx: Tx,
   sindicatoId: string,
   sesionId: string,
@@ -187,18 +189,39 @@ export async function procesarDesvioSesion(
     .filter((x): x is { p: PuntoGpsEntrante; rec: Recorrido } => x.rec !== null);
   if (enRecorrido.length === 0 && marcadoresDesvio.length === 0) return nada;
 
-  // Una sola query por sesión: distancia de cada punto a la geometría de SU ruta. La precisión
-  // (`accuracy`) NO se filtra acá sino en la máquina pura (`avanzarDesvio`, única fuente).
+  // Vueltas designadas a una variante con tramo propio: los puntos que caen en ellas se miden
+  // también contra ese tramo (el punto sigue en ruta si está sobre la base O sobre el tramo).
+  const designadas = await tx.$queryRaw<{ inicioTs: Date; finTs: Date | null; varianteId: string }[]>`
+    SELECT v."inicioTs", v."finTs", v."varianteId"
+    FROM vueltas v
+    JOIN variantes va ON va.id = v."varianteId"
+    WHERE v."sesionId" = ${sesionId} AND v."sindicatoId" = ${sindicatoId}
+      AND v."varianteId" IS NOT NULL AND va.geometria IS NOT NULL
+  `;
+  const varianteDelPunto = (ts: Date): string | null =>
+    designadas.find(
+      (d) => d.inicioTs.getTime() <= ts.getTime() && (d.finTs === null || ts.getTime() < d.finTs.getTime()),
+    )?.varianteId ?? null;
+
+  // Una sola query por sesión: distancia de cada punto a la geometría de SU ruta (y, si la
+  // vuelta está designada, al tramo de la variante). La precisión (`accuracy`) NO se filtra acá
+  // sino en la máquina pura (`avanzarDesvio`, única fuente).
   const puntosDesvio: PuntoDesvio[] = [];
   if (enRecorrido.length > 0) {
     const valores = enRecorrido.map(
-      ({ p }, i) => Prisma.sql`(${i}::int, ${p.lat}::float8, ${p.lng}::float8)`,
+      ({ p }, i) =>
+        Prisma.sql`(${i}::int, ${p.lat}::float8, ${p.lng}::float8, ${varianteDelPunto(p.ts)}::text)`,
     );
     const filas = await tx.$queryRaw<{ ord: number; distancia_m: number }[]>(Prisma.sql`
       SELECT p.ord,
-             ST_Distance(ST_SetSRID(ST_MakePoint(p.lng, p.lat), 4326)::geography, r.geometria) AS distancia_m
-      FROM (VALUES ${Prisma.join(valores)}) AS p(ord, lat, lng)
+             LEAST(
+               ST_Distance(ST_SetSRID(ST_MakePoint(p.lng, p.lat), 4326)::geography, r.geometria),
+               COALESCE(ST_Distance(ST_SetSRID(ST_MakePoint(p.lng, p.lat), 4326)::geography, va.geometria),
+                        'Infinity'::float8)
+             ) AS distancia_m
+      FROM (VALUES ${Prisma.join(valores)}) AS p(ord, lat, lng, variante_id)
       JOIN rutas r ON r.id = ${ctx.rutaId}
+      LEFT JOIN variantes va ON va.id = p.variante_id AND va."rutaId" = r.id
       ORDER BY p.ord
     `);
     for (const f of filas) {

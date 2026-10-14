@@ -28,6 +28,8 @@ import { SyncErroresController } from '../../modules/sync/sync-errores.controlle
 import { CumplimientoController } from '../../modules/reportes/cumplimiento.controller.js';
 import { RecorridosController } from '../../modules/reportes/recorridos.controller.js';
 import { ExportesController } from '../../modules/reportes/exportes.controller.js';
+import { EnVivoController } from '../../modules/reportes/en-vivo.controller.js';
+import { InfraccionesController } from '../../modules/infracciones/infracciones.controller.js';
 
 const ADMIN_QUIVO_ONLY = ['admin_quivo'];
 const CRUD_NUCLEO = ['admin_quivo', 'admin_sindicato', 'operador'];
@@ -65,6 +67,9 @@ describe('Matriz de roles por controller (QUI-251)', () => {
     ['CumplimientoController', CumplimientoController, PLANIFICACION],
     ['RecorridosController', RecorridosController, PLANIFICACION],
     ['ExportesController', ExportesController, PLANIFICACION],
+    // El control (`operador`) ve el mapa en vivo y designa a Molinos (F1), pero NO opera infracciones.
+    ['EnVivoController', EnVivoController, CRUD_NUCLEO],
+    ['InfraccionesController', InfraccionesController, PLANIFICACION],
   ];
 
   it.each(casos)('%s exige exactamente %j', (_nombre, controller, rolesEsperados) => {

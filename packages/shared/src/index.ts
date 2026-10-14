@@ -11,3 +11,4 @@ export * from './identidad-bolivia.js';
 export * from './telefono-bolivia.js';
 export * from './public-mobility.js';
 export * from './ciudades-bolivia.js';
+export * from './molinos.js';

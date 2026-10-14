@@ -6,45 +6,52 @@
  * idempotente por lookups. **Dry-run por defecto**: se autentica y LEE el estado actual, imprime
  * qué requests mandaría (conteo de vértices, no payloads) y NO escribe nada. `--apply` escribe.
  *
- * ## Modelo operativo (dato del CTO, 2026-10-12 — reemplaza al anterior)
+ * ## Modelo operativo (CTO, 2026-10-12 y corrección 2026-10-13 — reemplaza al anterior)
  *
- *   1. Todos los vehículos salen de **Salomón Romero** hacia **Honduras**. Honduras = el punto
- *      del KML `RETORNO LINEA 16` (junto al vértice 122 de la línea principal). Es una
+ *   1. Todos los vehículos salen de **Salomón Romero** (SR) hacia **Honduras**. Honduras = el
+ *      punto del KML `RETORNO LINEA 16` (junto al vértice 122 de la línea principal). Es una
  *      identificación del CTO ("creo"): **no confirmada en campo**.
- *   2. En Honduras un despachador ("la control") designa quién vuelve a Salomón Romero y quién
- *      va a Molinos.
- *   3. Designado a Salomón Romero: vuelve directo → la vuelta termina en Salomón Romero.
- *   4. Designado a Molinos: vuelve por la ruta hasta la bifurcación (vértice 43) y sube por el
- *      ramal Putucu hasta Molinos (= Parada Putucu) → la vuelta termina en Molinos.
- *   5. Vuelta siguiente: cada uno baja desde su terminal hacia Honduras; el ciclo se repite.
- *      **Una vuelta = terminal → Honduras → terminal, clasificada por la terminal de llegada.**
- *   - Cupos diarios (todavía NO modelados): lun-vie 4 Salomón Romero + 1 Molinos; sáb 2 + 1;
- *     dom 3 + 1.
- *   - Salidas de la mañana: 7-8 am con 6 min de intervalo, en orden de llegada; luego 7 min;
- *     después a criterio del admin. Turno nocturno desde las 17:01 (ahí se suelen cumplir las
- *     sanciones; si se deben 3 vueltas pueden empezar a las 15:00).
+ *   2. En Honduras el control (rol `operador` en la web) designa quién vuelve directo a SR y
+ *      quién va a Molinos.
+ *   3. Directo: vuelve por la ruta hasta SR.
+ *   4. Vía Molinos: en el vértice 43 sube por el ramal Putucu hasta Molinos, ESPERA 30 min,
+ *      baja por las mismas calles y **sigue hasta Salomón Romero**: Molinos es una pasada
+ *      intermedia, **toda vuelta termina en SR** (corrección del CTO, 2026-10-13).
+ *   5. Una vuelta = SR → Honduras → SR (vía Molinos o directa). La vuelta se cuenta recién al
+ *      volver a SR (lo implementa el worker de ingesta, `ingesta-worker/vueltas.ts`).
+ *   - Cupos diarios (F2, todavía NO modelados): lun-vie 4 directas + 1 Molinos; sáb 2 + 1; dom 3 + 1.
+ *   - Salidas de la mañana: 7-8 am con 6 min de intervalo, luego 7 min; después a criterio del admin.
+ *     Turno nocturno desde las 17:01.
  *   - Alternancia de conductores: **3 días en la línea 120 (troncal) y 1 día en la 16**.
  *   - Fuera de alcance a propósito: los 4 trufis que salen desde el centro de Cochabamba.
  *
- * ## Consecuencia de geometría: UNA ruta asignable que cubre toda la red
+ * ## Geometría (F1, docs/plan-molinos-designacion.md): base + tramo de la variante
  *
- * Un vehículo asignado a la línea 16 puede hacer cualquiera de las dos vueltas el mismo día y
- * una asignación apunta a UNA ruta; por eso la ruta asignable tiene que contener todos los
- * puntos de control. Se carga UNA ruta `sentido 'circuito'` (único valor libre permitido:
- * `sentido` es `string` 1..50) con:
+ * UNA ruta asignable `sentido 'circuito'` con la **base** = el circuito directo que TERMINA en SR:
  *
- *     principal[0..150]  todo el dibujo principal (151 vértices): Salomón Romero → … → v92
+ *     ida      principal[0..150]  todo el dibujo principal (151 vértices): Salomón Romero → … → v92
  *                        (América/Libertador) → El Prado → Honduras (v122) → Aroma → Ayacucho →
  *                        Libertador/América (v150, a pocos metros del v92)
- *   + principal[91..43] invertido: desde ahí, la misma ruta de vuelta hasta la bifurcación
- *                        (49 vértices; se salta el v92 porque v150 ≈ v92)
- *   + conector recto bifurcación → inicio del ramal (~77 m, un solo segmento entre el vértice
- *     43 y el primer vértice del ramal; el KML no trae ese tramo y NO se inventan calles)
- *   + ramal Putucu (13 vértices) hasta Molinos
- *   + bajada de Putucu: el ramal invertido (Molinos → ramal[0], 13 vértices) y el v43
- *   + regreso directo a Salomón Romero: principal[43..0] invertida (44 vértices, termina en el v0
- *     donde empieza la ida: el circuito queda cerrado, inicio y fin a <= 50 m)
- *   = 151 + 49 + 13 + 13 + 44 = 270 vértices DEL BOCETO (el script lo asevera, y que |v150 − v92| <= 25 m).
+ *     regreso  v150 → principal[91..43] invertido: desde ahí, la misma ruta de vuelta hasta la
+ *                        bifurcación (49 vértices; se salta el v92 porque v150 ≈ v92)
+ *     salomon  principal[43..0] invertida (44 vértices): el regreso directo a Salomón Romero, que
+ *                        termina en el v0 donde empieza la ida (circuito cerrado, inicio y fin a <= 50 m)
+ *
+ *   BASE = ida + regreso + salomon (empalmes sin duplicar el vértice compartido), ya trazada por calles.
+ *
+ * y la variante **"Vía Molinos"** con el **tramo ADICIONAL** (no el recorrido completo), también trazado
+ * por calles, contiguo y sin duplicar empalmes: v43 → Molinos → v43:
+ *
+ *   conector bifurcación → inicio del ramal (~77 m entre el vértice 43 y el primer vértice
+ *     del ramal; el KML no trae ese tramo, así que se traza por calles igual que el resto, con pocos vértices)
+ *   + ramal    Putucu (13 vértices) hasta Molinos
+ *   + bajada   de Putucu: el ramal invertido (Molinos → ramal[0], 13 vértices) y el v43
+ *
+ * y como **punto de espera** el PC Molinos (esperaMin 30). La vuelta designada hace base hasta v43,
+ * toma el tramo (sube, espera, baja por las mismas calles) y sigue por la base hasta SR; por eso
+ * el tramo se guarda una sola vez y la base termina en SR. El desvío de una vuelta designada se mide
+ * contra LEAST(base, tramo) (`ingesta-worker/deteccion-infracciones.ts`).
+ * Boceto: 151 + 49 + 13 + 13 + 44 = 270 vértices (el script lo asevera, y que |v150 − v92| <= 25 m).
  *
  * ## Trazado por calles (Google Routes API): la geometría que se carga NO es el boceto
  *
@@ -55,11 +62,11 @@
  * calzada de vuelta, no sobre la de ida). Máx. 25 intermedios por request: requests encadenados.
  * Cada tramo se valida contra su boceto (desvío máx. <= 120 m, longitud trazado/boceto <= 1,25, sin
  * rulos ni vueltas en U que el boceto no dibuje). Al unir los tramos el hueco entre ellos debe ser
- * <= 30 m y el circuito debe cerrar (inicio y fin a <= 50 m).
+ * <= 30 m y la base debe cerrar (inicio y fin a <= 50 m, y fin a <= 150 m del PC SR).
  * El resultado se versiona en `scripts/data/linea-16/trazado-calles.json` (con sha256 del KML): si
  * existe y el sha coincide, `--apply` NO llama a Google. `--recalcular-trazado` lo regenera
  * (GOOGLE_ROUTES_API_KEY; `--recalcular-trazado=bajada,salomon` solo esos tramos, el resto se conserva; `--recalcular-zonas` re-rutea solo la zona terminal); `--solo-trazado` escribe además `trazado-vista-previa.geojson` (boceto
- * vs. calles por tramo) y termina sin tocar la API de Quivo. Ver `FUENTE.md`.
+ * vs. calles por tramo) y termina sin tocar la API de Quivo. Ver `FUENTE.md`. Dry-run y `--apply` nunca escriben archivos.
  *
  * Zona terminal (v8..v24, `ida` y `salomon`): no va con waypoints sino vértice a vértice del boceto (un request por
  * par de vértices consecutivos), con 2 huecos sin calle en Google (v10→v11, v18→v19) resueltos con la calle real
@@ -73,35 +80,25 @@
  * ramal invertido) se trazan como tramos propios (`salomon`, `bajada`) con heading de regreso, para
  * caer en la calzada contraria a la de la ida / subida; antes se dibujaban sobre la ida.
  *
- * ## Puntos de control y paradas (todos sobre esa ruta)
+ * ## Puntos de control y paradas
  *
- *   PC (radio 150 m como la 120/Z12):
- *     orden 0 Salomón Romero (obligatorio=false) · orden 1 Molinos (Parada Putucu,
- *     obligatorio=false) · orden 2 Honduras (RETORNO, obligatorio=true).
- *   **Por qué solo Honduras es obligatorio y va ÚLTIMO (orden 2):** la detección server-side
- *   `pc_omitido` (`apps/api` ingesta-worker, `infracciones.logic.ts` — único lugar que lee
- *   `obligatorio`; la app móvil no) marca, EN VIVO, los PC obligatorios de `orden` menor que el
- *   cumplido que no se visitaron, y al `fin_recorrido` cualquier obligatorio sin visitar. Toda
- *   vuelta empieza y termina en una terminal, así que las terminales no pueden ser obligatorias
- *   (darían 'omitido' falso en cada vuelta). Honduras con el orden MÁS ALTO nunca es "menor que
- *   el cumplido": la detección en vivo jamás la marca (una vuelta que sale de Molinos no genera
- *   falso positivo) y solo `fin_recorrido` marca una vuelta que se saltó Honduras. Regla neta:
- *   "toda vuelta debe pasar por Honduras". Los pasos por las terminales se registran igual (el
- *   matcheo por radio no depende de `obligatorio`).
- *   ⚠ `orden` acá NO es un orden de recorrido: las vueltas alternan terminales (Salomón →
- *   Honduras → Salomón, o Molinos → Honduras → Molinos, o mezcladas). El conteo de vueltas por
- *   terminal de llegada se implementará del lado del servidor más adelante; hoy los PC solo
- *   sirven para el matcheo por radio.
- *   Paradas (orden alineado con los PC): Salomón Romero (origen, 0), Molinos (destino, 1),
- *   Honduras (intermedia, 2). `tipo` es semántico —terminal de salida, terminal del ramal,
- *   punto intermedio de retorno—; `orden` solo se alinea con los PC. La API no impone
- *   unicidad ni distancia mínima entre paradas de una ruta (solo que cada una esté a <= 100 m
- *   de la geometría: `RUTA_PROXIMIDAD_TOLERANCIA_METROS`), y los PC igual: se valida localmente
- *   ANTES de mandar nada.
- *   Variante de catálogo: UNA, "Molinos (ramal Putucu)", sobre la misma ruta — mismo patrón que
- *   los ramales de la 120 (`variantes` sin geometría, solo etiqueta para el catálogo/mapa
- *   público de la vuelta que termina en Molinos). Cuesta un POST y no condiciona nada más; si no
- *   se quiere, basta quitar `NOMBRE_VARIANTE`.
+ *   PC (radio 150 m como la 120/Z12), con su `rol` para el conteo de vueltas del servidor:
+ *     orden 0 Salomón Romero  rol `terminal` (obligatorio=false) — abre/cierra cada vuelta
+ *     orden 1 Molinos         rol `espera`, esperaMin 30 (obligatorio=false) — sobre el TRAMO
+ *     orden 2 Honduras        rol `retorno` (obligatorio=true) — marca el medio de la vuelta
+ *   **Por qué solo Honduras es obligatorio y va ÚLTIMO (orden 2):** la detección `pc_omitido`
+ *   (`ingesta-worker/infracciones.logic.ts`) marca EN VIVO los PC obligatorios de `orden` menor
+ *   que el cumplido que no se visitaron, y al `fin_recorrido` cualquier obligatorio sin visitar.
+ *   Toda vuelta empieza y termina en SR (no puede ser obligatoria: daría 'omitido' falso en cada
+ *   vuelta) y Molinos solo lo visitan los designados. Honduras con el orden MÁS ALTO nunca es
+ *   "menor que el cumplido": solo `fin_recorrido` marca una vuelta que se saltó Honduras.
+ *   Paradas (orden alineado con los PC): Salomón Romero (origen, 0), Molinos (intermedia, 1, sobre el
+ *   tramo: pasada intermedia, la vuelta termina en SR), Honduras (intermedia, 2). La API acepta un PC/parada a <= 100 m de la base O de una
+ *   variante activa de la ruta; se valida localmente ANTES de mandar nada.
+ *
+ *   Variante "Vía Molinos" (reemplaza al catálogo viejo "Molinos (ramal Putucu)", que se RENOMBRA
+ *   en el mismo registro si existe): `geometria` = el tramo, `puntoEsperaId` = el PC Molinos. Si
+ *   coexisten ambas, la legacy se pasa a `inactivo` (PATCH estado) para que no quede una variante activa sin tramo.
  *
  * ## ⚠ Calidad de la geometría — LEER ANTES DE USARLA PARA OTRA COSA
  *
@@ -114,21 +111,32 @@
  *
  * ## NO se crean asignaciones ni rotaciones (el CTO asigna desde el panel).
  *
+ * ## ⚠ Antes de `--apply` en producción
+ *
+ * La geometría base cambia (ya no termina en Molinos sino en SR): el piloto activo (`1616PIL`,
+ * ruta `460c9015…`) usa esta ruta. LEER qué asignaciones y sesiones la usan antes de pisarla y
+ * aplicar solo con el OK del CTO y DESPUÉS del deploy de F1 (la API vieja no acepta `rol`,
+ * `esperaMin`, `geometria` ni `puntoEsperaId`).
+ *
  * ## Endpoints usados (todos relativos a `<QUIVO_API_URL>/v1`)
  *
  *   POST /auth/login · GET /sindicatos · GET|POST /lineas · GET|POST /lineas/:id/rutas ·
  *   PATCH /rutas/:id · GET|POST /rutas/:id/puntos-control · PATCH /puntos-control/:id ·
- *   GET|POST /rutas/:id/paradas · PATCH /paradas/:id · GET|POST /rutas/:id/variantes
+ *   GET|POST /rutas/:id/paradas · PATCH /paradas/:id · GET|POST /rutas/:id/variantes ·
+ *   PATCH /variantes/:id   (geometria / puntoEsperaId / rol / esperaMin: solo admin, la API lo exige)
  *
  * ## Idempotencia (por lookups; los ids los pone el servidor)
  *
  *   Sindicato: por `QUIVO_SINDICATO_ID` o por nombre (`QUIVO_SINDICATO_NOMBRE`, default
  *   "Sindicato Piloto — Producción"); NO se crea. Línea: `codigo '16'` en ese sindicato. Ruta:
  *   `sentido 'circuito'` de la línea (geometría distinta → PATCH). PC: por `orden` entre los
- *   activos (coord/radio/obligatorio distintos → PATCH). Paradas: por `nombre` entre las activas
- *   (tipo/orden/coord distintos → PATCH). Variante: por `nombre`. Lo que sobra: rutas con otro
+ *   activos (coord/radio/obligatorio/rol/esperaMin distintos → PATCH). Paradas: por `nombre` entre
+ *   las activas (tipo/orden/coord distintos → PATCH). Variante: por nombre (o renombra la vieja).
+ *   Orden de escritura con la ruta ya existente (la API valida paradas contra base ∪ tramos): ruta
+ *   (solo crea) → variante con su tramo → PATCH de la geometría base → PC → paradas → vínculo de la
+ *   variante con el PC de espera. Lo que sobra: rutas con otro
  *   sentido solo se REPORTA; PC/paradas activos no esperados ABORTAN antes de la primera escritura
- *   (nunca se borra ni desactiva nada). Antes de escribir también se aborta si alguna parada
+ *   (nunca se borra nada; lo único que se desactiva es la variante legacy, ver abajo). Antes de escribir también se aborta si alguna parada
  *   existente (activa o no) queda a > 100 m de la geometría planeada, si el sindicato no está
  *   'activo' o si el código '16' existe en OTRO sindicato.
  *
@@ -176,7 +184,11 @@ const LINEA_16_NOMBRE = 'Línea 16';
 const COLOR_LINEA = '#B45309'; // ámbar oscuro: distinto de teal/índigo/coral del seed
 
 const SENTIDO_RUTA = 'circuito';
-const NOMBRE_VARIANTE = 'Molinos (ramal Putucu)';
+const NOMBRE_VARIANTE = 'Vía Molinos';
+/** Nombre del catálogo anterior (sin geometría): si existe se RENOMBRA en el mismo registro. */
+const NOMBRES_VARIANTE_LEGACY = ['Molinos (ramal Putucu)'];
+/** Minutos de espera obligatoria en Molinos (CTO, 2026-10-13). */
+const ESPERA_MOLINOS_MIN = 30;
 
 /** Mismo valor que la 120 y los PC activos de la Z12. */
 const RADIO_TOLERANCIA_M = 150;
@@ -192,6 +204,8 @@ const INDICE_BIFURCACION_PUTUCU = 43;
 /** Vértice de la ida donde el lazo del retorno vuelve a cruzar (América/Libertador): v150 ≈ v92. */
 const INDICE_CRUCE_RETORNO = 92;
 const TOLERANCIA_CRUCE_M = 25;
+/** La base debe terminar en Salomón Romero: el último vértice dentro del radio del PC SR. */
+const CIERRE_EN_SR_MAX_M = RADIO_TOLERANCIA_M;
 /**
  * Vértices esperados del BOCETO: ida 151 (0..150) + regreso 49 (91..43) + ramal 13 + bajada del ramal
  * 13 (Molinos → ramal[0], el ramal invertido; v43 ya cuenta en el tramo `salomon`) + salomon 44 (43..0) = 270.
@@ -336,6 +350,11 @@ function distanciaAGeometriaM(coords: Coord[], p: Coord): number {
     mejor = Math.min(mejor, Math.hypot(ax + t * dx, ay + t * dy));
   }
   return mejor;
+}
+
+/** Distancia mínima a la base O al tramo de la variante (lo que acepta la API para PC y paradas). */
+function distanciaARutaM(base: Coord[], tramo: Coord[], p: Coord): number {
+  return Math.min(distanciaAGeometriaM(base, p), distanciaAGeometriaM(tramo, p));
 }
 
 // ============================================================================================
@@ -545,6 +564,30 @@ function resumirBody(body: unknown): string {
   return JSON.stringify(resumen);
 }
 
+/**
+ * DIFF legible de lo que cambiaría: una línea por campo distinto (`antes → después`), o `(nuevo)`
+ * si no existe todavía. Nunca imprime geometrías completas (solo vértices / km / extremos).
+ */
+function imprimirDiff(titulo: string, antes: Record<string, unknown> | null, despues: Record<string, unknown>): void {
+  if (antes === null) {
+    console.log(`  DIFF ${titulo}: (nuevo) ${JSON.stringify(despues)}`);
+    return;
+  }
+  const cambios = Object.keys(despues).filter((k) => JSON.stringify(antes[k]) !== JSON.stringify(despues[k]));
+  if (cambios.length === 0) {
+    console.log(`  DIFF ${titulo}: sin cambios.`);
+    return;
+  }
+  for (const k of cambios) console.log(`  DIFF ${titulo}.${k}: ${JSON.stringify(antes[k] ?? null)} → ${JSON.stringify(despues[k])}`);
+}
+
+/** Huella corta de una geometría para el diff: vértices, km y extremos redondeados. */
+function huellaGeometria(coords: Coord[] | null | undefined): string | null {
+  if (!coords || coords.length === 0) return null;
+  const e = (c: Coord) => `${c[1].toFixed(5)},${c[0].toFixed(5)}`;
+  return `${coords.length}v ${(longitudM(coords) / 1000).toFixed(2)}km ${e(coords[0]!)}→${e(coords[coords.length - 1]!)}`;
+}
+
 /** Escritura: en dry-run solo imprime; con --apply la manda. Devuelve la respuesta (o undefined). */
 async function escribir<T = { id: string }>(metodo: string, ruta: string, body: unknown): Promise<T | undefined> {
   escriturasPlaneadas++;
@@ -564,9 +607,9 @@ async function escribir<T = { id: string }>(metodo: string, ruta: string, body: 
 interface SindicatoApi { id: string; nombre: string; estado: string }
 interface LineaApi { id: string; sindicatoId: string; cityId: string; codigo: string; nombre: string; color: string | null }
 interface RutaApi { id: string; lineaId: string; sentido: string; estado: string; geometria: { type: 'LineString'; coordinates: Coord[] } }
-interface PuntoControlApi { id: string; rutaId: string; orden: number; coord: { coordinates: Coord }; radioToleranciaM: number; obligatorio: boolean; estado: string }
+interface PuntoControlApi { id: string; rutaId: string; orden: number; coord: { coordinates: Coord }; radioToleranciaM: number; obligatorio: boolean; estado: string; rol?: string | null; esperaMin?: number | null }
 interface ParadaApi { id: string; rutaId: string; tipo: string; orden: number; nombre: string | null; coord: { coordinates: Coord }; estado: string }
-interface VarianteApi { id: string; rutaId: string; nombre: string; estado: string }
+interface VarianteApi { id: string; rutaId: string; nombre: string; estado: string; geometria?: { type: 'LineString'; coordinates: Coord[] } | null; puntoEsperaId?: string | null }
 
 const EPS_GRADOS = 1e-6; // ~0,1 m: absorbe el redondeo de ST_AsGeoJSON
 
@@ -578,14 +621,30 @@ function mismaGeometria(a: Coord[], b: Coord[]): boolean {
   return a.length === b.length && a.every((c, i) => mismaCoord(c, b[i]!));
 }
 
+/**
+ * Huella de `deseada` para el diff, coherente con la decisión de PATCH (`mismaGeometria`): si la geometría
+ * existente difiere, agrega cuántos vértices cambian y el desvío máximo, para que el diff nunca diga
+ * "sin cambios" cuando se va a mandar un PATCH (la huella sola es igual con otro trazado de igual largo/extremos).
+ */
+function huellaComparada(actual: Coord[] | null | undefined, deseada: Coord[]): string | null {
+  const base = huellaGeometria(deseada);
+  if (!actual || actual.length === 0 || mismaGeometria(actual, deseada)) return base;
+  let distintos = Math.abs(actual.length - deseada.length);
+  for (let i = 0; i < Math.min(actual.length, deseada.length); i++) if (!mismaCoord(actual[i]!, deseada[i]!)) distintos++;
+  const desvio = Math.max(...deseada.map((c) => distanciaAGeometriaM(actual, c)));
+  return `${base} [geometría cambia: ${distintos} vértice(s) distinto(s), desvío máx ${desvio.toFixed(1)} m]`;
+}
+
 // ============================================================================================
 // Plan de datos (derivado del KML, puro) — lo que DEBE existir al terminar
 // ============================================================================================
 
-interface PuntoPlan { nombre: string; orden: number; coord: Coord; obligatorio: boolean }
+interface PuntoPlan { nombre: string; orden: number; coord: Coord; obligatorio: boolean; rol: 'terminal' | 'retorno' | 'espera'; esperaMin: number | null }
 interface ParadaPlan { nombre: string; tipo: 'origen' | 'intermedia' | 'destino'; orden: number; coord: Coord }
 interface PlanDatos {
   geometria: Coord[];
+  /** Tramo ADICIONAL de la variante "Vía Molinos" (conector + ramal Putucu). */
+  tramo: Coord[];
   puntosControl: PuntoPlan[];
   paradas: ParadaPlan[];
 }
@@ -867,6 +926,15 @@ async function obtenerTrazado(kmlTexto: string, boceto: Boceto): Promise<TramosC
       errores.push(err instanceof Error ? err.message : String(err));
     }
   }
+  // --solo-trazado no corre `main` hasta `construirPlan`: se aplican acá las mismas validaciones locales de base/variante
+  // (hueco regreso→salomon, cierre en SR, PC y paradas a <= 100 m de base o tramo) ANTES de escribir el json. Sin red.
+  if (SOLO_TRAZADO && errores.length === 0) {
+    try {
+      construirPlan(boceto, tramos);
+    } catch (err) {
+      errores.push(err instanceof Error ? err.message : String(err));
+    }
+  }
   const salida: TrazadoJson = {
     meta: {
       generado: new Date().toISOString(),
@@ -939,46 +1007,64 @@ export function armarKmlTrazado(boceto: Boceto, trazado: TramosCoord): string {
 
 /** Construye y valida todo lo que se va a cargar. Pura: no toca la red. */
 export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
-  const { salomon, honduras, molinos, principal, ramal } = boceto;
-  // Los tramos se unen en orden (ida, regreso, conector, ramal, bajada, salomon): el fin de cada uno debe
-  // empalmar con el inicio del siguiente; un hueco grande dejaría un salto recto en la geometría.
-  for (let i = 1; i < TRAMOS.length; i++) {
-    const a = TRAMOS[i - 1]!;
-    const b = TRAMOS[i]!;
+  const { salomon, honduras, molinos } = boceto;
+  for (const t of TRAMOS) {
+    if (!trazado[t] || trazado[t].length < 2) throw new Error(`Falta el tramo "${t}" del trazado (o tiene menos de 2 vértices).`);
+  }
+  // Empalmes internos de cada grupo (la base y la variante son geometrías separadas; ya no hay una cadena única de 6 tramos):
+  // ida→regreso (base) y conector→ramal, ramal→bajada (variante). regreso→salomon y la salida/vuelta de la variante
+  // se validan más abajo junto a la base y al tramo.
+  for (const [a, b] of [['ida', 'regreso'], ['conector', 'ramal'], ['ramal', 'bajada']] as const) {
     const hueco = distanciaM(trazado[a][trazado[a].length - 1]!, trazado[b][0]!);
     console.log(`  Empalme ${a} → ${b}: ${hueco.toFixed(1)} m.`);
     if (hueco > HUECO_MAX_TRAMOS_M) throw new Error(`Hueco de ${hueco.toFixed(1)} m entre el fin de "${a}" y el inicio de "${b}" (tope ${HUECO_MAX_TRAMOS_M} m).`);
   }
-  const geometria: Coord[] = unirTrozos(TRAMOS.map((t) => trazado[t]));
+  // BASE: el circuito directo que termina en SR = ida + regreso + salomon (sin conector/ramal/bajada).
+  // El regreso termina en v43 y salomon arranca en v43: empalme directo de la base (sin pasar por la variante).
+  const huecoBase = distanciaM(trazado.regreso[trazado.regreso.length - 1]!, trazado.salomon[0]!);
+  console.log(`  Empalme regreso → salomon (base directa, sin Molinos): ${huecoBase.toFixed(1)} m.`);
+  if (huecoBase > HUECO_MAX_TRAMOS_M) throw new Error(`Hueco de ${huecoBase.toFixed(1)} m entre el fin de "regreso" y el inicio de "salomon" en la base (tope ${HUECO_MAX_TRAMOS_M} m).`);
+  const geometria: Coord[] = unirTrozos([trazado.ida, trazado.regreso, trazado.salomon]);
   const cierre = distanciaM(geometria[0]!, geometria[geometria.length - 1]!);
-  console.log(`  Cierre del circuito (fin de salomon ↔ inicio de ida): ${cierre.toFixed(1)} m (tope ${CIERRE_CIRCUITO_MAX_M} m).`);
-  if (cierre > CIERRE_CIRCUITO_MAX_M) throw new Error(`El circuito no cierra: el fin de la geometría está a ${cierre.toFixed(1)} m del inicio (> ${CIERRE_CIRCUITO_MAX_M} m).`);
-  console.log(
-    `  Geometría final (trazado por calles): ${geometria.length} vértices, ${(longitudM(geometria) / 1000).toFixed(2)} km (boceto: ${(longitudM([...principal, ...ramal]) / 1000).toFixed(2)} km de dibujo).`,
-  );
+  console.log(`  Cierre de la base (fin de salomon ↔ inicio de ida): ${cierre.toFixed(1)} m (tope ${CIERRE_CIRCUITO_MAX_M} m).`);
+  if (cierre > CIERRE_CIRCUITO_MAX_M) throw new Error(`La base no cierra: el fin de la geometría está a ${cierre.toFixed(1)} m del inicio (> ${CIERRE_CIRCUITO_MAX_M} m).`);
+  const cierreEnSr = distanciaM(geometria[geometria.length - 1]!, salomon);
+  console.log(`  La base termina a ${cierreEnSr.toFixed(1)} m del PC Salomón Romero (tope ${CIERRE_EN_SR_MAX_M} m).`);
+  if (cierreEnSr > CIERRE_EN_SR_MAX_M) throw new Error(`La base termina a ${cierreEnSr.toFixed(1)} m de Salomón Romero (> ${CIERRE_EN_SR_MAX_M} m): el circuito debe terminar en SR.`);
+  console.log(`  Base (ida + regreso + salomon): ${geometria.length} vértices, ${(longitudM(geometria) / 1000).toFixed(2)} km.`);
+
+  // TRAMO de la variante "Vía Molinos" = conector + ramal + bajada (v43 → Molinos → v43), contiguo, sin duplicar empalmes.
+  const tramo: Coord[] = unirTrozos([trazado.conector, trazado.ramal, trazado.bajada]);
+  console.log(`  Tramo "${NOMBRE_VARIANTE}" (conector + ramal + bajada): ${tramo.length} vértices, ${(longitudM(tramo) / 1000).toFixed(2)} km.`);
+  // La variante debe colgar de la base en v43 (sale del fin de "regreso") y volver a ella (inicio de "salomon").
+  const salida = distanciaM(trazado.regreso[trazado.regreso.length - 1]!, tramo[0]!);
+  const vuelta = distanciaM(tramo[tramo.length - 1]!, trazado.salomon[0]!);
+  console.log(`  Variante: sale de la base a ${salida.toFixed(1)} m y vuelve a ${vuelta.toFixed(1)} m (tope ${HUECO_MAX_TRAMOS_M} m).`);
+  if (salida > HUECO_MAX_TRAMOS_M || vuelta > HUECO_MAX_TRAMOS_M) throw new Error(`El tramo de la variante no empalma con la base (sale a ${salida.toFixed(1)} m, vuelve a ${vuelta.toFixed(1)} m; tope ${HUECO_MAX_TRAMOS_M} m).`);
 
   const puntosControl: PuntoPlan[] = [
-    { nombre: 'Salomón Romero', orden: 0, coord: salomon, obligatorio: false },
-    { nombre: 'Molinos (Parada Putucu)', orden: 1, coord: molinos, obligatorio: false },
-    { nombre: 'Honduras (RETORNO)', orden: 2, coord: honduras, obligatorio: true },
+    { nombre: 'Salomón Romero', orden: 0, coord: salomon, obligatorio: false, rol: 'terminal', esperaMin: null },
+    { nombre: 'Molinos (Parada Putucu)', orden: 1, coord: molinos, obligatorio: false, rol: 'espera', esperaMin: ESPERA_MOLINOS_MIN },
+    { nombre: 'Honduras (RETORNO)', orden: 2, coord: honduras, obligatorio: true, rol: 'retorno', esperaMin: null },
   ];
   const paradas: ParadaPlan[] = [
     { nombre: 'Salomón Romero', tipo: 'origen', orden: 0, coord: salomon },
-    { nombre: 'Molinos', tipo: 'destino', orden: 1, coord: molinos },
+    { nombre: 'Molinos', tipo: 'intermedia', orden: 1, coord: molinos },
     { nombre: 'Honduras', tipo: 'intermedia', orden: 2, coord: honduras },
   ];
 
   // Mismas reglas que la API (<= 100 m a la geometría), validadas ANTES de mandar nada.
+  // La API acepta un punto a <= 100 m de la base O del tramo de una variante activa.
   for (const p of puntosControl) {
-    const d = distanciaAGeometriaM(geometria, p.coord);
-    console.log(`  PC orden ${p.orden} ${p.nombre}: a ${d.toFixed(1)} m de la geometría.`);
-    if (d > PROXIMIDAD_API_M) throw new Error(`PC "${p.nombre}" a ${d.toFixed(1)} m de la geometría (> ${PROXIMIDAD_API_M} m: la API lo rechazaría).`);
+    const d = distanciaARutaM(geometria, tramo, p.coord);
+    console.log(`  PC orden ${p.orden} ${p.nombre} (${p.rol}): a ${d.toFixed(1)} m de la base/tramo.`);
+    if (d > PROXIMIDAD_API_M) throw new Error(`PC "${p.nombre}" a ${d.toFixed(1)} m de la base/tramo (> ${PROXIMIDAD_API_M} m: la API lo rechazaría).`);
   }
   for (const p of paradas) {
-    const d = distanciaAGeometriaM(geometria, p.coord);
-    if (d > PROXIMIDAD_API_M) throw new Error(`Parada "${p.nombre}" a ${d.toFixed(1)} m de la geometría (> ${PROXIMIDAD_API_M} m: la API la rechazaría).`);
+    const d = distanciaARutaM(geometria, tramo, p.coord);
+    if (d > PROXIMIDAD_API_M) throw new Error(`Parada "${p.nombre}" a ${d.toFixed(1)} m de la base/tramo (> ${PROXIMIDAD_API_M} m: la API la rechazaría).`);
   }
-  return { geometria, puntosControl, paradas };
+  return { geometria, tramo, puntosControl, paradas };
 }
 
 // ============================================================================================
@@ -1040,12 +1126,19 @@ async function sincronizarLinea(sindicato: SindicatoApi): Promise<string> {
   return creada?.id ?? PENDIENTE;
 }
 
-async function sincronizarRuta(lineaId: string, plan: PlanDatos): Promise<string> {
+/**
+ * Ruta: SOLO la crea si falta (con la base ya completa). El cambio de geometría de una ruta
+ * existente va DESPUÉS de cargar el tramo de la variante (`parchearGeometriaRuta`): la API valida
+ * que las paradas queden a <= 100 m de la base O de una variante activa, y la parada de Molinos
+ * ya no está sobre la nueva base.
+ */
+async function sincronizarRuta(lineaId: string, plan: PlanDatos): Promise<{ rutaId: string; existente: RutaApi | null }> {
   console.log(`\n--- Ruta '${SENTIDO_RUTA}' (GET/POST /v1/lineas/:id/rutas) ---`);
   const nueva = { sentido: SENTIDO_RUTA, geometria: { type: 'LineString', coordinates: plan.geometria }, estado: 'activo' };
   if (lineaId === PENDIENTE) {
+    imprimirDiff('ruta', null, { sentido: SENTIDO_RUTA, geometria: huellaGeometria(plan.geometria) });
     await escribir('POST', `/lineas/${PENDIENTE}/rutas`, nueva);
-    return PENDIENTE;
+    return { rutaId: PENDIENTE, existente: null };
   }
   const rutas = await leer<RutaApi[]>(`/lineas/${lineaId}/rutas`);
   for (const r of rutas.filter((x) => x.sentido !== SENTIDO_RUTA)) {
@@ -1055,39 +1148,85 @@ async function sincronizarRuta(lineaId: string, plan: PlanDatos): Promise<string
   if (propias.length > 1) throw new Error(`Hay ${propias.length} rutas '${SENTIDO_RUTA}' en la línea; ambiguo. Resolver a mano.`);
   const existente = propias[0];
   if (!existente) {
+    imprimirDiff('ruta', null, { sentido: SENTIDO_RUTA, geometria: huellaGeometria(plan.geometria) });
     const creada = await escribir<RutaApi>('POST', `/lineas/${lineaId}/rutas`, nueva);
-    return creada?.id ?? PENDIENTE;
+    return { rutaId: creada?.id ?? PENDIENTE, existente: null };
   }
   console.log(`  Ya existe: ${existente.id} (${existente.geometria.coordinates.length} vértices, ${existente.estado}).`);
-  const patch: Record<string, unknown> = {};
-  if (!mismaGeometria(existente.geometria.coordinates, plan.geometria)) patch.geometria = nueva.geometria;
-  if (existente.estado !== 'activo') patch.estado = 'activo';
-  if (Object.keys(patch).length > 0) await escribir('PATCH', `/rutas/${existente.id}`, patch);
-  else console.log('  Sin cambios.');
-  return existente.id;
+  return { rutaId: existente.id, existente };
 }
 
-async function sincronizarPuntosControl(rutaId: string, plan: PlanDatos): Promise<void> {
+/** PATCH de la geometría base / estado de una ruta que ya existía (después del tramo de la variante). */
+async function parchearGeometriaRuta(existente: RutaApi | null, plan: PlanDatos): Promise<void> {
+  if (!existente) return;
+  console.log('\n--- Geometría base de la ruta (PATCH /v1/rutas/:id) ---');
+  const actual = existente.geometria.coordinates;
+  imprimirDiff(
+    'ruta',
+    { geometria: huellaGeometria(actual), estado: existente.estado },
+    { geometria: huellaComparada(actual, plan.geometria), estado: 'activo' },
+  );
+  const patch: Record<string, unknown> = {};
+  if (!mismaGeometria(actual, plan.geometria)) patch.geometria = { type: 'LineString', coordinates: plan.geometria };
+  if (existente.estado !== 'activo') patch.estado = 'activo';
+  if (Object.keys(patch).length === 0) {
+    console.log('  Sin cambios.');
+    return;
+  }
+  console.warn(
+    `  ATENCIÓN: se REEMPLAZA la geometría de la ruta ${existente.id} (${actual.length} → ${plan.geometria.length} vértices). ` +
+      'Si hay un piloto activo sobre esta ruta, verificar sus asignaciones/sesiones antes de aplicar.',
+  );
+  await escribir('PATCH', `/rutas/${existente.id}`, patch);
+}
+
+/** PC por `orden` → id (o PENDIENTE en dry-run) para vincular la variante después. */
+async function sincronizarPuntosControl(rutaId: string, plan: PlanDatos): Promise<Map<number, string>> {
   console.log('\n--- Puntos de control (GET/POST /v1/rutas/:id/puntos-control) ---');
+  const ids = new Map<number, string>();
   const existentes = rutaId === PENDIENTE ? [] : (await leer<PuntoControlApi[]>(`/rutas/${rutaId}/puntos-control`)).filter((p) => p.estado === 'activo');
   const ordenes = new Set(plan.puntosControl.map((p) => p.orden));
   for (const p of existentes.filter((e) => !ordenes.has(e.orden))) {
     throw new Error(`PC activo orden ${p.orden} (${p.id}) no previsto en la ruta. Abortando; resolver a mano.`);
   }
   for (const p of plan.puntosControl) {
-    const cuerpo = { orden: p.orden, coord: { type: 'Point', coordinates: p.coord }, radioToleranciaM: RADIO_TOLERANCIA_M, obligatorio: p.obligatorio, estado: 'activo' };
+    const cuerpo = {
+      orden: p.orden,
+      coord: { type: 'Point', coordinates: p.coord },
+      radioToleranciaM: RADIO_TOLERANCIA_M,
+      obligatorio: p.obligatorio,
+      estado: 'activo',
+      rol: p.rol,
+      esperaMin: p.esperaMin,
+    };
     const iguales = existentes.filter((e) => e.orden === p.orden);
     if (iguales.length > 1) throw new Error(`Hay ${iguales.length} PC activos con orden ${p.orden} en la ruta; resolver a mano.`);
     const e = iguales[0];
     console.log(`  [${p.orden}] ${p.nombre}:`);
+    imprimirDiff(
+      `PC[${p.orden}]`,
+      e ? { coord: mismaCoord(e.coord.coordinates, p.coord) ? p.coord : e.coord.coordinates, radioToleranciaM: e.radioToleranciaM, obligatorio: e.obligatorio, rol: e.rol ?? null, esperaMin: e.esperaMin ?? null } : null,
+      { coord: p.coord, radioToleranciaM: RADIO_TOLERANCIA_M, obligatorio: p.obligatorio, rol: p.rol, esperaMin: p.esperaMin },
+    );
     if (!e) {
-      await escribir('POST', `/rutas/${rutaId}/puntos-control`, cuerpo);
-    } else if (!mismaCoord(e.coord.coordinates, p.coord) || e.radioToleranciaM !== RADIO_TOLERANCIA_M || e.obligatorio !== p.obligatorio) {
-      await escribir('PATCH', `/puntos-control/${e.id}`, cuerpo);
+      const creado = await escribir<PuntoControlApi>('POST', `/rutas/${rutaId}/puntos-control`, cuerpo);
+      ids.set(p.orden, creado?.id ?? PENDIENTE);
     } else {
-      console.log(`    ya existe (${e.id}), sin cambios.`);
+      ids.set(p.orden, e.id);
+      if (
+        !mismaCoord(e.coord.coordinates, p.coord) ||
+        e.radioToleranciaM !== RADIO_TOLERANCIA_M ||
+        e.obligatorio !== p.obligatorio ||
+        (e.rol ?? null) !== p.rol ||
+        (e.esperaMin ?? null) !== p.esperaMin
+      ) {
+        await escribir('PATCH', `/puntos-control/${e.id}`, cuerpo);
+      } else {
+        console.log(`    ya existe (${e.id}), sin cambios.`);
+      }
     }
   }
+  return ids;
 }
 
 async function sincronizarParadas(rutaId: string, plan: PlanDatos): Promise<void> {
@@ -1113,14 +1252,54 @@ async function sincronizarParadas(rutaId: string, plan: PlanDatos): Promise<void
   }
 }
 
-async function sincronizarVariante(rutaId: string): Promise<void> {
-  console.log('\n--- Variante de catálogo (GET/POST /v1/rutas/:id/variantes) ---');
-  const existentes = rutaId === PENDIENTE ? [] : (await leer<VarianteApi[]>(`/rutas/${rutaId}/variantes`)).filter((v) => v.nombre === NOMBRE_VARIANTE);
-  if (existentes.length > 1) throw new Error(`Hay ${existentes.length} variantes "${NOMBRE_VARIANTE}"; resolver a mano.`);
-  const e = existentes[0];
-  if (!e) await escribir('POST', `/rutas/${rutaId}/variantes`, { nombre: NOMBRE_VARIANTE, estado: 'activo' });
-  else if (e.estado !== 'activo') await escribir('PATCH', `/variantes/${e.id}`, { estado: 'activo' });
-  else console.log(`  "${NOMBRE_VARIANTE}" ya existe (${e.id}), sin cambios.`);
+/**
+ * Variante "Vía Molinos": nombre/estado/tramo. El vínculo con el PC de espera va aparte
+ * (`vincularPuntoEspera`) porque el PC de Molinos solo puede crearse DESPUÉS del tramo (queda a
+ * > 100 m de la base) y el vínculo exige que el PC ya exista.
+ */
+async function sincronizarVariante(rutaId: string, plan: PlanDatos): Promise<VarianteApi | null | typeof PENDIENTE> {
+  console.log('\n--- Variante "Vía Molinos" con su tramo (GET/POST/PATCH /v1/rutas/:id/variantes) ---');
+  const todas = rutaId === PENDIENTE ? [] : await leer<VarianteApi[]>(`/rutas/${rutaId}/variantes`);
+  const nuevas = todas.filter((v) => v.nombre === NOMBRE_VARIANTE);
+  const legacy = todas.filter((v) => NOMBRES_VARIANTE_LEGACY.includes(v.nombre));
+  if (nuevas.length > 1) throw new Error(`Hay ${nuevas.length} variantes "${NOMBRE_VARIANTE}"; resolver a mano.`);
+  if (nuevas.length === 0 && legacy.length > 1) throw new Error(`Hay ${legacy.length} variantes del catálogo viejo; resolver a mano.`);
+  const e = nuevas[0] ?? legacy[0];
+  // Si coexisten "Vía Molinos" y la legacy, la legacy (sin tramo) quedaría activa: se desactiva (PATCH estado 'inactivo').
+  if (nuevas.length === 1) {
+    for (const l of legacy.filter((v) => v.estado === 'activo')) {
+      console.log(`  Variante legacy "${l.nombre}" (${l.id}) activa junto a "${NOMBRE_VARIANTE}": se desactiva.`);
+      await escribir('PATCH', `/variantes/${l.id}`, { estado: 'inactivo' });
+    }
+  }
+  const tramo = { type: 'LineString', coordinates: plan.tramo };
+  const deseado = { nombre: NOMBRE_VARIANTE, estado: 'activo', geometria: huellaComparada(e?.geometria?.coordinates, plan.tramo) };
+  imprimirDiff(
+    `variante`,
+    e ? { nombre: e.nombre, estado: e.estado, geometria: huellaGeometria(e.geometria?.coordinates) } : null,
+    deseado,
+  );
+  if (!e) {
+    const creada = await escribir<VarianteApi>('POST', `/rutas/${rutaId}/variantes`, { nombre: NOMBRE_VARIANTE, estado: 'activo', geometria: tramo });
+    return creada ?? PENDIENTE;
+  }
+  if (e.nombre !== NOMBRE_VARIANTE || e.estado !== 'activo' || !e.geometria || !mismaGeometria(e.geometria.coordinates, plan.tramo)) {
+    return (await escribir<VarianteApi>('PATCH', `/variantes/${e.id}`, { nombre: NOMBRE_VARIANTE, estado: 'activo', geometria: tramo })) ?? e;
+  }
+  console.log(`  "${NOMBRE_VARIANTE}" ya existe (${e.id}) con el tramo planeado, sin cambios.`);
+  return e;
+}
+
+async function vincularPuntoEspera(variante: VarianteApi | null | typeof PENDIENTE, puntoEsperaId: string | undefined): Promise<void> {
+  console.log('\n--- Punto de espera de la variante (PATCH /v1/variantes/:id) ---');
+  const actual = variante && variante !== PENDIENTE ? (variante.puntoEsperaId ?? null) : null;
+  imprimirDiff('variante', { puntoEsperaId: actual }, { puntoEsperaId: puntoEsperaId ?? PENDIENTE });
+  if (!variante || variante === PENDIENTE || !puntoEsperaId || puntoEsperaId === PENDIENTE) {
+    await escribir('PATCH', `/variantes/${variante && variante !== PENDIENTE ? variante.id : PENDIENTE}`, { puntoEsperaId: puntoEsperaId ?? PENDIENTE });
+    return;
+  }
+  if (actual === puntoEsperaId) console.log('  ya vinculada, sin cambios.');
+  else await escribir('PATCH', `/variantes/${variante.id}`, { puntoEsperaId });
 }
 
 /** Relee todo desde la API tras --apply y falla si el estado no es el esperado. */
@@ -1138,11 +1317,18 @@ async function verificar(lineaId: string, plan: PlanDatos): Promise<void> {
     const hallados = pcs.filter((p) => p.orden === esp.orden);
     if (hallados.length !== 1) throw new Error(`PC orden ${esp.orden}: ${hallados.length} activos, esperado 1.`);
     const p = hallados[0]!;
-    const d = distanciaAGeometriaM(ruta.geometria.coordinates, p.coord.coordinates);
+    const d = distanciaARutaM(ruta.geometria.coordinates, plan.tramo, p.coord.coordinates);
     const dPlan = distanciaM(p.coord.coordinates, esp.coord);
-    console.log(`  PC orden ${p.orden} ${esp.nombre}: radio ${p.radioToleranciaM} m, obligatorio=${p.obligatorio}, a ${d.toFixed(1)} m de la geometría, ${dPlan.toFixed(2)} m del plan.`);
-    if (p.obligatorio !== esp.obligatorio || p.radioToleranciaM !== RADIO_TOLERANCIA_M || d > PROXIMIDAD_API_M || dPlan > TOLERANCIA_COORD_M) {
-      throw new Error(`PC orden ${p.orden} (${esp.nombre}) no coincide con el plan (coord/radio/obligatorio/distancia).`);
+    console.log(`  PC orden ${p.orden} ${esp.nombre}: rol=${p.rol ?? null}, esperaMin=${p.esperaMin ?? null}, radio ${p.radioToleranciaM} m, obligatorio=${p.obligatorio}, a ${d.toFixed(1)} m de la base/tramo, ${dPlan.toFixed(2)} m del plan.`);
+    if (
+      p.obligatorio !== esp.obligatorio ||
+      p.radioToleranciaM !== RADIO_TOLERANCIA_M ||
+      (p.rol ?? null) !== esp.rol ||
+      (p.esperaMin ?? null) !== esp.esperaMin ||
+      d > PROXIMIDAD_API_M ||
+      dPlan > TOLERANCIA_COORD_M
+    ) {
+      throw new Error(`PC orden ${p.orden} (${esp.nombre}) no coincide con el plan (coord/radio/obligatorio/rol/esperaMin/distancia).`);
     }
   }
   const pars = (await leer<ParadaApi[]>(`/rutas/${ruta.id}/paradas`)).filter((p) => p.estado === 'activo');
@@ -1151,7 +1337,7 @@ async function verificar(lineaId: string, plan: PlanDatos): Promise<void> {
     const hallados = pars.filter((p) => p.nombre === esp.nombre);
     if (hallados.length !== 1) throw new Error(`Parada "${esp.nombre}": ${hallados.length} activas, esperada 1.`);
     const p = hallados[0]!;
-    const d = distanciaAGeometriaM(ruta.geometria.coordinates, p.coord.coordinates);
+    const d = distanciaARutaM(ruta.geometria.coordinates, plan.tramo, p.coord.coordinates);
     const dPlan = distanciaM(p.coord.coordinates, esp.coord);
     console.log(`  Parada ${esp.nombre}: tipo=${p.tipo}, orden=${p.orden}, a ${d.toFixed(1)} m de la geometría, ${dPlan.toFixed(2)} m del plan.`);
     if (p.tipo !== esp.tipo || p.orden !== esp.orden || d > PROXIMIDAD_API_M || dPlan > TOLERANCIA_COORD_M) {
@@ -1160,7 +1346,13 @@ async function verificar(lineaId: string, plan: PlanDatos): Promise<void> {
   }
   const vars = (await leer<VarianteApi[]>(`/rutas/${ruta.id}/variantes`)).filter((v) => v.nombre === NOMBRE_VARIANTE && v.estado === 'activo');
   if (vars.length !== 1) throw new Error(`Variante "${NOMBRE_VARIANTE}": ${vars.length} activas, esperada 1.`);
-  console.log(`  Variante "${NOMBRE_VARIANTE}": 1. OK.`);
+  const variante = vars[0]!;
+  const legacyActivas = (await leer<VarianteApi[]>(`/rutas/${ruta.id}/variantes`)).filter((v) => NOMBRES_VARIANTE_LEGACY.includes(v.nombre) && v.estado === 'activo');
+  if (legacyActivas.length > 0) throw new Error(`Siguen activas variantes legacy: ${legacyActivas.map((v) => `"${v.nombre}" (${v.id})`).join(', ')}.`);
+  const pcMolinos = pcs.find((p) => p.rol === 'espera');
+  if (!variante.geometria || !mismaGeometria(variante.geometria.coordinates, plan.tramo)) throw new Error(`El tramo guardado de "${NOMBRE_VARIANTE}" no coincide con el planeado.`);
+  if (!pcMolinos || variante.puntoEsperaId !== pcMolinos.id) throw new Error(`"${NOMBRE_VARIANTE}" no está vinculada al PC de espera (Molinos).`);
+  console.log(`  Variante "${NOMBRE_VARIANTE}": tramo ${variante.geometria.coordinates.length} vértices, punto de espera ${variante.puntoEsperaId} (Molinos, ${pcMolinos.esperaMin} min). OK.`);
 }
 
 /**
@@ -1188,8 +1380,8 @@ async function preVuelo(sindicato: SindicatoApi, plan: PlanDatos): Promise<void>
   }
   const paradas = await leer<ParadaApi[]>(`/rutas/${ruta.id}/paradas`);
   for (const pa of paradas) {
-    const d = distanciaAGeometriaM(plan.geometria, pa.coord.coordinates);
-    if (d > PROXIMIDAD_API_M) throw new Error(`Parada existente "${pa.nombre}" (${pa.id}, ${pa.estado}) a ${d.toFixed(1)} m de la geometría planeada (> ${PROXIMIDAD_API_M} m).`);
+    const d = distanciaARutaM(plan.geometria, plan.tramo, pa.coord.coordinates);
+    if (d > PROXIMIDAD_API_M) throw new Error(`Parada existente "${pa.nombre}" (${pa.id}, ${pa.estado}) a ${d.toFixed(1)} m de la base/tramo planeados (> ${PROXIMIDAD_API_M} m).`);
   }
   const nombres = new Set(plan.paradas.map((p) => p.nombre));
   const inesperadasPar = paradas.filter((pa) => pa.estado === 'activo' && (!pa.nombre || !nombres.has(pa.nombre)));
@@ -1237,7 +1429,7 @@ async function main(): Promise<void> {
   requerirEnv('QUIVO_ADMIN_PASSWORD');
 
   console.log('='.repeat(90));
-  console.log(`Línea 16 — API ${API_URL} — modo: ${APLICAR ? 'APPLY (escribe vía la API)' : 'DRY-RUN (solo lecturas; no escribe nada)'}`);
+  console.log(`Línea 16 (vueltas / Vía Molinos) — API ${API_URL} — modo: ${APLICAR ? 'APPLY (escribe vía la API)' : 'DRY-RUN (solo lecturas; no escribe nada)'}`);
   console.log('='.repeat(90));
 
   console.log('\n--- Paso 0: insumos (KML + trazado por calles) ---');
@@ -1258,10 +1450,13 @@ async function main(): Promise<void> {
     const sindicato = await resolverSindicato();
     await preVuelo(sindicato, plan);
     const lineaId = await sincronizarLinea(sindicato);
-    const rutaId = await sincronizarRuta(lineaId, plan);
-    await sincronizarPuntosControl(rutaId, plan);
+    const { rutaId, existente } = await sincronizarRuta(lineaId, plan);
+    // Orden (la API valida contra base ∪ tramos de variantes activas): tramo → base → PC → paradas → vínculo.
+    const variante = await sincronizarVariante(rutaId, plan);
+    await parchearGeometriaRuta(existente, plan);
+    const pcIds = await sincronizarPuntosControl(rutaId, plan);
     await sincronizarParadas(rutaId, plan);
-    await sincronizarVariante(rutaId);
+    await vincularPuntoEspera(variante, pcIds.get(1));
 
     if (APLICAR) {
       await verificar(lineaId, plan);

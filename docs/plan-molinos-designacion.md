@@ -28,7 +28,7 @@
 ### Datos (migración + RLS `tenant_isolation`, ENABLE+FORCE)
 - **`puntos_control.rol`:** `TEXT NULL`, con `CHECK` en `'terminal' | 'retorno' | 'espera'`, más `espera_min INT NULL` (solo para `espera`). En la L16: SR = `terminal`, Honduras = `retorno`, Molinos = `espera` con 30 min.
 - **`variantes.geometria`:** `geography(LineString,4326) NULL`, el **tramo adicional** de la variante (no el recorrido completo). Más `variantes.punto_espera_id` (FK a PC, NULL).
-  - En la L16, la variante "vía Molinos" tiene como tramo el conector + Putucu (la ida; la vuelta usa las mismas calles) y como punto de espera el PC Molinos.
+  - En la L16, la variante "vía Molinos" tiene como tramo `conector + ramal + bajada` del trazado por calles (v43 → Molinos → v43, ida y vuelta: la bajada va por la calzada contraria; 208 vértices, 2,54 km) y como punto de espera el PC Molinos. La base es `ida + regreso + salomon` (1218 vértices, 30,26 km), ver `docs/plan-trazado-linea-16.md`.
 - **Tabla `vueltas`:**
   - Columnas: `id, sindicatoId, sesion_id, vehiculo_id, conductor_id, linea_id, ruta_id, fecha (día local Bolivia), numero, inicio_ts, fin_ts NULL, estado ('en_curso'|'completa'|'abierta_al_cierre'), paso_retorno_ts NULL, variante_id NULL, designada_por NULL, designada_en NULL, acuse_en NULL, espera_llegada_ts NULL, espera_salida_ts NULL`.
   - Únicos: `(sesion_id, numero)` y uno parcial `(sesion_id) WHERE estado='en_curso'`.
@@ -101,7 +101,7 @@
 
 ### Datos de la L16 en prod (script, con el ok del CTO antes de `--apply`)
 - `scripts/cargar-linea-16.ts` corrige la geometría base: el circuito v0..v150 + v91..v0 **termina en SR**.
-- Crea la variante "Vía Molinos" con el tramo (conector + Putucu) y `punto_espera` = PC Molinos.
+- Crea la variante "Vía Molinos" con el tramo (`conector + ramal + bajada`) y `punto_espera` = PC Molinos.
 - Setea `rol`/`espera_min` en los 3 PC.
 - Es idempotente y dry-run por defecto. Se corre por la API después del deploy de F1.
 - Antes de pisar la ruta (`460c9015…`, piloto activo), leer qué asignaciones la usan.

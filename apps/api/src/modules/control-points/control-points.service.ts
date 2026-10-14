@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
 import type { Prisma } from '@quivo/db';
 import {
   PuntoControlSchema,
+  type RolPuntoControl,
   type ActualizarPuntoControl,
   type CrearPuntoControl,
   type PuntoControl,
@@ -20,6 +21,36 @@ interface PuntoControlRow {
   radioToleranciaM: number;
   obligatorio: boolean;
   estado: string;
+  rol: string | null;
+  esperaMin: number | null;
+}
+
+/**
+ * `rol`/`esperaMin` (docs/plan-molinos-designacion.md) definen cómo cuenta las vueltas el
+ * worker y qué espera Molinos: solo los admins los editan (`operador` puede crear/editar el
+ * resto del punto, que es CRUD_NUCLEO). Coherencia (espeja los CHECK de la tabla, para dar un
+ * 400 en español y no un 500): `esperaMin` solo con `rol = 'espera'`, y un `espera` lo exige.
+ */
+function validarRolEspera(
+  actor: AuthenticatedUser,
+  data: { rol?: RolPuntoControl | null; esperaMin?: number | null },
+  actual: { rol: string | null; esperaMin: number | null },
+): { rol: string | null; esperaMin: number | null; cambia: boolean } {
+  const tocaRol = data.rol !== undefined || data.esperaMin !== undefined;
+  if (tocaRol && actor.rol === 'operador') {
+    throw new ForbiddenException('Solo un administrador puede configurar el rol y la espera de un punto de control');
+  }
+  const rol = data.rol !== undefined ? data.rol : actual.rol;
+  // Al sacar el rol `espera`, la espera se limpia sola (el CHECK la prohíbe sin rol espera).
+  const esperaMin =
+    data.esperaMin !== undefined ? data.esperaMin : rol === 'espera' ? actual.esperaMin : null;
+  if (tocaRol && rol === 'espera' && !esperaMin) {
+    throw new BadRequestException('Un punto de control con rol "espera" necesita esperaMin (minutos, mayor a 0)');
+  }
+  if (tocaRol && rol !== 'espera' && esperaMin) {
+    throw new BadRequestException('esperaMin solo aplica a un punto de control con rol "espera"');
+  }
+  return { rol, esperaMin: esperaMin ?? null, cambia: tocaRol };
 }
 
 /**
@@ -34,7 +65,7 @@ export class ControlPointsService {
     return withTenantContext(toTenantContext(actor), async (tx) => {
       await asegurarRutaVisible(tx, rutaId);
       const rows = await tx.$queryRaw<PuntoControlRow[]>`
-        SELECT id, "rutaId", orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio, estado
+        SELECT id, "rutaId", orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio, estado, rol, "esperaMin"
         FROM puntos_control WHERE "rutaId" = ${rutaId} ORDER BY orden ASC
       `;
       return rows.map(toPuntoControl);
@@ -53,14 +84,15 @@ export class ControlPointsService {
     return withTenantContext(toTenantContext(actor), async (tx) => {
       await asegurarRutaVisible(tx, rutaId);
       await validarCercaniaARuta(tx, rutaId, data.coord);
+      const { rol, esperaMin } = validarRolEspera(actor, data, { rol: null, esperaMin: null });
 
       const id = randomUUID();
       await tx.$executeRaw`
-        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado, "createdAt", "updatedAt")
+        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado, rol, "esperaMin", "createdAt", "updatedAt")
         VALUES (
           ${id}, ${rutaId}, ${data.orden},
           ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(data.coord)}), 4326)::geography,
-          ${data.radioToleranciaM}, ${data.obligatorio}, ${data.estado}, now(), now()
+          ${data.radioToleranciaM}, ${data.obligatorio}, ${data.estado}, ${rol}, ${esperaMin}, now(), now()
         )
       `;
       return toPuntoControl(await obtenerFila(tx, id));
@@ -75,6 +107,7 @@ export class ControlPointsService {
     return withTenantContext(toTenantContext(actor), async (tx) => {
       const anterior = await obtenerFila(tx, id);
       await asegurarRutaVisible(tx, anterior.rutaId);
+      const nuevoRol = validarRolEspera(actor, data, anterior);
 
       if (data.coord) {
         await validarCercaniaARuta(tx, anterior.rutaId, data.coord);
@@ -101,6 +134,12 @@ export class ControlPointsService {
       if (data.estado !== undefined) {
         await tx.$executeRaw`UPDATE puntos_control SET estado = ${data.estado}, "updatedAt" = now() WHERE id = ${id}`;
       }
+      if (nuevoRol.cambia) {
+        await tx.$executeRaw`
+          UPDATE puntos_control SET rol = ${nuevoRol.rol}, "esperaMin" = ${nuevoRol.esperaMin}, "updatedAt" = now()
+          WHERE id = ${id}
+        `;
+      }
 
       return toPuntoControl(await obtenerFila(tx, id));
     });
@@ -109,7 +148,7 @@ export class ControlPointsService {
 
 async function obtenerFila(tx: Prisma.TransactionClient, id: string): Promise<PuntoControlRow> {
   const rows = await tx.$queryRaw<PuntoControlRow[]>`
-    SELECT id, "rutaId", orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio, estado
+    SELECT id, "rutaId", orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio, estado, rol, "esperaMin"
     FROM puntos_control WHERE id = ${id}
   `;
   const row = rows[0];

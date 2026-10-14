@@ -8,6 +8,7 @@ import {
   PuntoTrazaGpsSchema,
   RecorridoResumenSchema,
 } from './recorrido.js';
+import { VueltaPosicionSchema } from './vuelta.js';
 
 /**
  * ENTREGA 3 (mapa en vivo, `/en-vivo`). Contratos NUEVOS: `RecorridoDetalleSchema` y
@@ -216,8 +217,17 @@ export const PosicionEnVivoSchema = z
     infraccionNivel: GravedadReglaSchema.nullable().optional(),
     /** Cantidad de infracciones `abierta` de la sesión. */
     infraccionesAbiertas: z.number().int().nonnegative().optional(),
+    /** Cantidad de infracciones `atendida`: sin ellas pendientes el marcador deja de parpadear
+     * pero conserva el ícono de severidad (pendiente E #1, docs/plan-molinos-designacion.md). */
+    infraccionesAtendidas: z.number().int().nonnegative().optional(),
+    /** Gravedad máxima entre las infracciones `atendida` (`null` si no hay): ícono estático. */
+    infraccionNivelAtendida: GravedadReglaSchema.nullable().optional(),
     /** PR C — foto de la unidad (URL pública) para el marcador y el panel; `null` si no tiene. */
     fotoUrl: z.string().nullable().optional(),
+    /** Vuelta en curso de la sesión (docs/plan-molinos-designacion.md); `null` si no hay. */
+    vuelta: VueltaPosicionSchema.nullable().optional(),
+    /** El vehículo ya tiene hoy (día local de Bolivia) alguna vuelta designada a una variante. */
+    molinosHoy: z.boolean().optional(),
   })
   .merge(FrescuraEnVivoSchema);
 export type PosicionEnVivo = z.infer<typeof PosicionEnVivoSchema>;

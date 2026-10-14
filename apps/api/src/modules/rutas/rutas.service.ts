@@ -124,10 +124,19 @@ async function validarParadasCercanasAGeometria(
 ): Promise<void> {
   const rows = await tx.$queryRaw<Array<{ id: string; nombre: string | null; cerca: boolean }>>`
     SELECT p.id, p.nombre,
-      ST_DWithin(
-        ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(geometria)}), 4326)::geography,
-        p.coord,
-        ${RUTA_PROXIMIDAD_TOLERANCIA_METROS}
+      (
+        ST_DWithin(
+          ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(geometria)}), 4326)::geography,
+          p.coord,
+          ${RUTA_PROXIMIDAD_TOLERANCIA_METROS}
+        )
+        -- Una parada también puede estar sobre el tramo adicional de una variante activa de la
+        -- ruta (p. ej. Molinos, al final del ramal Putucu), que ya no es parte de la base.
+        OR EXISTS (
+          SELECT 1 FROM variantes v
+          WHERE v."rutaId" = p."rutaId" AND v.estado = 'activo' AND v.geometria IS NOT NULL
+            AND ST_DWithin(v.geometria, p.coord, ${RUTA_PROXIMIDAD_TOLERANCIA_METROS})
+        )
       ) as cerca
     FROM paradas p
     WHERE p."rutaId" = ${rutaId}

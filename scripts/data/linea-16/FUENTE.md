@@ -13,9 +13,10 @@ El boceto no se carga tal cual: `cargar-linea-16.ts` lo ajusta a calles con la G
 usando como `heading` el rumbo
 del boceto en el sentido de cada tramo para caer en la calzada correcta.
 
-- `trazado-calles.json`: resultado versionado (coords por tramo + fecha, sha256 del KML y parámetros). La geometría que se carga es
-  `ida, regreso, conector, ramal, bajada, salomon` unidos: un circuito cerrado v0→v0 (inicio y fin a <= 50 m;
-  hueco máximo entre tramos 30 m).
+- `trazado-calles.json`: resultado versionado (coords por tramo + fecha, sha256 del KML y parámetros). La geometría que se carga se divide en dos:
+  la **base** de la ruta = `ida + regreso + salomon` unidos (circuito cerrado v0→v0 que termina en Salomón Romero;
+  inicio y fin a <= 50 m, fin a <= 150 m del PC SR) y la geometría de la variante "Vía Molinos" =
+  `conector + ramal + bajada` (v43 → Molinos → v43). Hueco máximo entre tramos contiguos: 30 m.
   Mientras el sha256 del KML coincida, el script lo usa sin llamar a Google.
 - `trazado-vista-previa.geojson`: boceto vs. trazado por tramo (`properties.tramo`, `properties.fuente`
   = `boceto` | `calles`), para revisarlo en geojson.io / QGIS.
