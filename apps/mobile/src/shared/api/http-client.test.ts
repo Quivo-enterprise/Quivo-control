@@ -59,4 +59,22 @@ describe('request', () => {
       message: 'No existe',
     });
   });
+
+  it('502 con HTML del proxy es error http con status 502 (reintentable)', async () => {
+    vi.stubGlobal('fetch', responder(502, '<html>Bad Gateway</html>'));
+    const request = await cargarRequest();
+    await expect(request('/x', { method: 'GET' })).rejects.toMatchObject({
+      kind: 'http',
+      status: 502,
+    });
+  });
+
+  it('401 con cuerpo vacío es error http con status 401', async () => {
+    vi.stubGlobal('fetch', responder(401, ''));
+    const request = await cargarRequest();
+    await expect(request('/x', { method: 'GET' })).rejects.toMatchObject({
+      kind: 'http',
+      status: 401,
+    });
+  });
 });

@@ -128,14 +128,13 @@ export default (): ExpoConfig => ({
       // el detalle completo de por qué esto NUNCA bloquea "Iniciar recorrido".
       'ACTIVITY_RECOGNITION',
     ],
-    // `expo-image-picker` declara READ/WRITE_EXTERNAL_STORAGE en su manifest de librería, pero
-    // la app solo usa la cámara (`launchCameraAsync`), nunca la galería. Revisado: ninguna otra
-    // dependencia nativa del proyecto las necesita (background-geolocation, sqlite, audio,
-    // Sentry no las declaran), así que se bloquean para no pedir permisos de más.
-    blockedPermissions: [
-      'android.permission.READ_EXTERNAL_STORAGE',
-      'android.permission.WRITE_EXTERNAL_STORAGE',
-    ],
+    // `expo-image-picker` declara READ/WRITE_EXTERNAL_STORAGE en su manifest de librería. La app
+    // solo usa la cámara (`launchCameraAsync`), nunca la galería, pero en Android < 10
+    // `ensureCameraPermissionsAreGranted` exige WRITE_EXTERNAL_STORAGE JUNTO CON CAMERA (si no
+    // está concedido, la cámara rechaza con UserRejectedPermissionsException), así que NO se puede
+    // bloquear. READ_EXTERNAL_STORAGE no lo pide ninguna ruta de cámara (solo la de galería), por
+    // eso es lo único que se bloquea.
+    blockedPermissions: ['android.permission.READ_EXTERNAL_STORAGE'],
     // Mapa de la ruta activa: motor Google nativo (`react-native-maps` + `PROVIDER_GOOGLE`, ver
     // `docs/adr/0004-motor-mapa-google.md`). La API key de Google Maps SDK for Android vive en
     // el entorno de EAS (`GOOGLE_MAPS_ANDROID_API_KEY`, variable SENSIBLE) — NUNCA se hardcodea

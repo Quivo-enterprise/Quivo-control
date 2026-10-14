@@ -73,19 +73,19 @@ export async function request(path: string, options: RequestOptions): Promise<un
 
 /** Cuerpo vacío en una 2xx (204, `content-length: 0` o texto `''`) => `null`: es el "sin
  * contenido" legítimo (p. ej. Nest serializa un `null` como cuerpo vacío). Un cuerpo NO vacío
- * que no es JSON (una página HTML de un proxy, por ejemplo) sigue siendo error de contrato.
- * En respuestas no-2xx un cuerpo vacío o no-JSON conserva el comportamiento previo. */
+ * que no es JSON en una 2xx (una página HTML de un proxy, por ejemplo) es error de contrato.
+ * En una no-2xx un cuerpo vacío o no-JSON (502 con HTML del proxy, 401 sin cuerpo) devuelve
+ * `null` para que `request` lance el error `http` con su `status`: así un 5xx sigue siendo
+ * reintentable y un 401 sigue significando sesión vencida. */
 async function leerCuerpo(response: Response): Promise<unknown> {
   if (response.status === 204) return null;
   const vacioDeclarado = response.headers.get('content-length') === '0';
   const texto = vacioDeclarado ? '' : await response.text();
-  if (texto === '') {
-    if (response.ok) return null;
-    throw new ApiError('contract', 'La API devolvió una respuesta inválida');
-  }
+  if (texto === '') return null;
   try {
     return JSON.parse(texto);
   } catch {
+    if (!response.ok) return null;
     throw new ApiError('contract', 'La API devolvió una respuesta inválida');
   }
 }

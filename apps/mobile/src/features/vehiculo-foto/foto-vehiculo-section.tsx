@@ -2,7 +2,7 @@ import { ActivityIndicator, Image, Linking, Pressable, StyleSheet, Text, View } 
 import { Ionicons } from '@expo/vector-icons';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { useVehiculoFoto } from './use-vehiculo-foto';
-import { formatearFechaBolivia } from './vehiculo-foto-core';
+import { formatFechaHoraBolivia } from '../../shared/format-hora';
 
 interface Props {
   placa: string;
@@ -12,12 +12,12 @@ interface Props {
 
 /** Sección "Foto del vehículo" del Perfil: foto actual, fecha (Bolivia) y tomar/reemplazar. */
 export function FotoVehiculoSection({ placa, sesionId, obtenerAccessToken }: Props) {
-  const { foto, cargando, estado, mensaje, permisoDenegado, tomarFoto } = useVehiculoFoto({
+  const { foto, cargando, estadoFoto, estado, mensaje, permisoDenegado, requiereAjustes, tomarFoto } = useVehiculoFoto({
     obtenerAccessToken,
     sesionId,
   });
   const ocupado = estado === 'procesando' || estado === 'enviando';
-  const fecha = foto ? formatearFechaBolivia(foto.fotoActualizadaEn) : null;
+  const fecha = foto ? formatFechaHoraBolivia(foto.fotoActualizadaEn) : null;
   const etiquetaBoton = foto ? 'Reemplazar foto' : 'Tomar foto';
   const textoEstado =
     estado === 'procesando'
@@ -40,9 +40,13 @@ export function FotoVehiculoSection({ placa, sesionId, obtenerAccessToken }: Pro
         ) : cargando ? (
           <ActivityIndicator color={quivoColors.primary} />
         ) : (
-          <View style={styles.vacia} accessible accessibilityLabel="El vehículo no tiene foto">
+          <View style={styles.vacia} accessible accessibilityLabel={
+              estadoFoto === 'desconocido' ? 'No se pudo cargar la foto' : 'El vehículo no tiene foto'
+            }>
             <Ionicons name="camera-outline" size={30} color={quivoColors.textMuted} />
-            <Text style={styles.vaciaTexto}>Sin foto</Text>
+            <Text style={styles.vaciaTexto}>
+              {estadoFoto === 'desconocido' ? 'No se pudo cargar la foto' : 'Sin foto'}
+            </Text>
           </View>
         )}
       </View>
@@ -79,7 +83,7 @@ export function FotoVehiculoSection({ placa, sesionId, obtenerAccessToken }: Pro
         <Text style={styles.botonTexto}>{etiquetaBoton}</Text>
       </Pressable>
 
-      {permisoDenegado ? (
+      {permisoDenegado && requiereAjustes ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Abrir ajustes"

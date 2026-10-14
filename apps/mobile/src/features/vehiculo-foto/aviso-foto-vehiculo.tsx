@@ -15,11 +15,11 @@ interface Props {
  * (`tracking` false), nunca bloquea, y se puede descartar por el resto del día (hora de Bolivia).
  */
 export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Props) {
-  const { foto, cargando, estado, mensaje, permisoDenegado, tomarFoto } = useVehiculoFoto({
+  const { foto, estadoFoto, estado, mensaje, permisoDenegado, requiereAjustes, tomarFoto } = useVehiculoFoto({
     obtenerAccessToken,
     sesionId,
   });
-  const { visible, descartar } = useAvisoFoto({ cargando, tieneFoto: foto !== null, tracking });
+  const { visible, descartar } = useAvisoFoto({ estadoFoto, tracking });
   const ocupado = estado === 'procesando' || estado === 'enviando';
 
   // Mientras se toma/envía/queda pendiente, el aviso se mantiene para mostrar el progreso.
@@ -35,7 +35,9 @@ export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Pr
         : estado === 'pendiente'
           ? 'Se enviará al reconectar.'
           : permisoDenegado
-            ? 'Activa el permiso de cámara para tomar la foto.'
+            ? requiereAjustes
+              ? 'Activa el permiso de cámara para tomar la foto.'
+              : 'Necesitamos el permiso de cámara para tomar la foto.'
             : estado === 'error' && mensaje
               ? mensaje
               : 'Tu vehículo no tiene foto';
@@ -49,12 +51,12 @@ export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Pr
       {!enCurso ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={permisoDenegado ? 'Abrir ajustes' : 'Tomar foto'}
+          accessibilityLabel={requiereAjustes ? 'Abrir ajustes' : 'Tomar foto'}
           hitSlop={8}
           style={styles.accion}
-          onPress={() => (permisoDenegado ? void Linking.openSettings() : void tomarFoto())}
+          onPress={() => (requiereAjustes ? void Linking.openSettings() : void tomarFoto())}
         >
-          <Text style={styles.accionTexto}>{permisoDenegado ? 'Abrir ajustes' : 'Tomar foto'}</Text>
+          <Text style={styles.accionTexto}>{requiereAjustes ? 'Abrir ajustes' : 'Tomar foto'}</Text>
         </Pressable>
       ) : null}
       {!enCurso ? (

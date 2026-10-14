@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { claveDiaBolivia, debeMostrarAviso } from './vehiculo-foto-core';
+import { diaBolivia } from '../jornada/jornada-store-core';
+import { debeMostrarAviso, type EstadoFotoVehiculo } from './vehiculo-foto-core';
 
 const CLAVE_DESCARTE = 'quivo:vehiculo-foto:aviso-descartado-dia';
 
 /** Aviso "sin foto" de la pantalla de operación; el descarte vale hasta el fin del día (Bolivia). */
-export function useAvisoFoto(opts: { cargando: boolean; tieneFoto: boolean; tracking: boolean }) {
+export function useAvisoFoto(opts: { estadoFoto: EstadoFotoVehiculo; tracking: boolean }) {
   const [descartadoDia, setDescartadoDia] = useState<string | null>(null);
   const [leido, setLeido] = useState(false);
 
@@ -25,7 +26,7 @@ export function useAvisoFoto(opts: { cargando: boolean; tieneFoto: boolean; trac
   }, []);
 
   const descartar = useCallback(() => {
-    const dia = claveDiaBolivia(new Date());
+    const dia = diaBolivia(new Date());
     setDescartadoDia(dia);
     AsyncStorage.setItem(CLAVE_DESCARTE, dia).catch(() => undefined);
   }, []);
@@ -33,8 +34,7 @@ export function useAvisoFoto(opts: { cargando: boolean; tieneFoto: boolean; trac
   const visible =
     leido &&
     debeMostrarAviso({
-      cargando: opts.cargando,
-      tieneFoto: opts.tieneFoto,
+      estadoFoto: opts.estadoFoto,
       tracking: opts.tracking,
       descartadoDia,
       ahora: new Date(),
