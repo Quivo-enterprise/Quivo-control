@@ -171,6 +171,21 @@ export function construirRecorridos(eventos: readonly EventoRecorrido[]): Recorr
   return recorridos;
 }
 
+/**
+ * ¿El recorrido estaba en curso justo ANTES de `ts`? Lee la misma reconstrucción que usa la
+ * detección de infracciones (`construirRecorridos`: fin huérfano ignorado, a igual `ts` el fin va
+ * antes que el inicio). Sin ningún inicio anterior se asume en curso; el último recorrido iniciado
+ * antes de `ts` está en curso salvo que su fin también sea anterior a `ts`.
+ */
+export function recorridoEnCursoAntesDe(recorridos: readonly Recorrido[], ts: Date): boolean {
+  let previo: Recorrido | null = null;
+  for (const r of recorridos) {
+    if (r.inicioTs.getTime() < ts.getTime()) previo = r;
+  }
+  if (!previo) return true;
+  return !(previo.finTs !== null && previo.finTs.getTime() < ts.getTime());
+}
+
 /** Recorrido que contiene el instante (`desde <= ts < hasta`), o `null` (fuera de recorrido). */
 export function recorridoDeInstante(
   recorridos: readonly Recorrido[],

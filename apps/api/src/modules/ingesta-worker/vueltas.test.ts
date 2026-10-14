@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  avanzarSalidaEspera,
   avanzarVueltas,
+  crearEstadoSalidaEspera,
+  cursorSalidaEspera,
   detectarSalidaEspera,
+  inicioVentanaEspera,
   resolverEspera,
   type EventoVuelta,
   type FilaVuelta,
@@ -224,6 +228,11 @@ describe('avanzarVueltas — Molinos', () => {
     expect(ultimaDe(r)).toMatchObject({ esperaLlegadaTs: null, ultimoPcTs: min(30) });
   });
 
+  it('designada con la variante SIN puntoEsperaId (dato inconsistente): ningún PC de espera cuenta como llegada', () => {
+    const r = avanzar(designada({ puntoEsperaId: null }), [espera(min(30))]);
+    expect(ultimaDe(r)).toMatchObject({ esperaLlegadaTs: null, ultimoPcTs: min(30) });
+  });
+
   it('designada que pasó por Molinos y cierra en SR: sin molinos_omitido', () => {
     const r = avanzar(designada(), [espera(min(30)), terminal(min(70))]);
     expect(r.infracciones).toEqual([]);
@@ -373,20 +382,63 @@ describe('avanzarVueltas — cierre tardío (sesión ya cerrada)', () => {
     expect(r.infracciones.map((i) => i.tipo)).toEqual(['molinos_omitido']);
   });
 
-  it('ignora lo posterior al cierre, lo anterior al inicio de la vuelta y los inicio/fin', () => {
-    expect(tardio(cerrada(), [terminal(min(61))]).cambios).toEqual([]);
+  it('ignora lo posterior al cierre + tolerancia y lo anterior al inicio de la vuelta', () => {
+    expect(tardio(cerrada(), [terminal(seg(60 * 60 + 130))]).cambios).toEqual([]);
     expect(tardio(cerrada({ inicioTs: min(10) }), [retorno(min(5)), terminal(min(5))]).cambios).toEqual([]);
-    expect(tardio(cerrada(), [inicio(min(30)), fin(min(40))]).cambios).toEqual([]);
   });
 
-  it('nunca abre: sin vuelta, con una completa o con una cerrada antes por fin_recorrido (finTs != cierre) no hace nada', () => {
+  it('un terminal 20 s después del cierre (GNSS vs servidor, tolerancia de 120 s) se acepta', () => {
+    const r = tardio(cerrada(), [terminal(seg(60 * 60 + 20))]);
+    expect(ultimaDe(r)).toMatchObject({ estado: 'completa', finTs: seg(60 * 60 + 20) });
+    expect(r.cambios).toHaveLength(1);
+  });
+
+  it('nunca abre: sin vuelta o con una completa no hace nada, ni por terminal ni por inicio', () => {
     expect(tardio(null, [terminal(min(30)), inicio(min(31))]).cambios).toEqual([]);
-    expect(tardio(cerrada({ estado: 'completa' }), [terminal(min(50))]).cambios).toEqual([]);
-    expect(tardio(cerrada({ finTs: min(30) }), [terminal(min(50))]).cambios).toEqual([]);
+    expect(tardio(cerrada({ estado: 'completa' }), [terminal(min(50)), inicio(min(51))]).cambios).toEqual([]);
   });
 
-  it('un terminal SIN retorno no cierra (SR → SR no cuenta vuelta)', () => {
-    expect(tardio(cerrada({ pasoRetornoTs: null }), [terminal(min(50))]).cambios).toEqual([]);
+  it('un terminal SIN retorno no cierra; la vuelta queda vacía y se elimina (el trigger nunca borra)', () => {
+    const r = tardio(cerrada({ pasoRetornoTs: null }), [terminal(min(50))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]).toMatchObject({ eliminada: true, nueva: false });
+    // Con retorno (o cualquier otro PC) la misma situación NO la elimina.
+    expect(tardio(cerrada({ pasoRetornoTs: null }), [comun(min(30))]).cambios[0]!.eliminada).toBe(false);
+  });
+
+  it('un lote tardío sin eventos aplicables (todos posteriores al cierre) deja la vuelta vacía tal cual: no la toca', () => {
+    expect(tardio(cerrada({ pasoRetornoTs: null }), []).cambios).toEqual([]);
+  });
+
+  it('fin a las :00 y terminal :20 en el mismo lote tardío: abierta_al_cierre con finTs del fin, no completa', () => {
+    const r = tardio(cerrada({ pasoRetornoTs: min(5) }), [fin(min(30)), terminal(min(50))]);
+    expect(ultimaDe(r)).toMatchObject({ estado: 'abierta_al_cierre', finTs: min(30) });
+    expect(r.cambios).toHaveLength(1);
+  });
+
+  it('inicio_recorrido tras el retorno en modo tardío cierra la abierta_al_cierre y NO abre otra', () => {
+    const r = tardio(cerrada(), [inicio(min(30))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.nueva).toBe(false);
+    expect(ultimaDe(r)).toMatchObject({ estado: 'abierta_al_cierre', finTs: min(30) });
+  });
+
+  it('fin + terminal a 1 min + logout a 2 min, procesado tarde: completa (rama normal de abierta_al_cierre)', () => {
+    const cierre = seg(60 * 60 + 120);
+    // El trigger cerró la vuelta con el logout (finTs = cierre); el fin y el terminal llegan tarde.
+    const r = avanzarVueltas(
+      cerrada({ finTs: cierre }),
+      [fin(seg(60 * 60)), terminal(seg(60 * 60 + 60))],
+      { nuevoId, cierreTardio: { cierreTs: cierre } },
+    );
+    expect(ultimaDe(r)).toMatchObject({ estado: 'completa', finTs: seg(60 * 60 + 60) });
+  });
+
+  it('abierta_al_cierre por un fin_recorrido anterior (finTs != cierre) no se reabre: el terminal en tolerancia la cierra completa', () => {
+    const r = tardio(cerrada({ finTs: min(30) }), [terminal(seg(30 * 60 + 60))]);
+    expect(ultimaDe(r)).toMatchObject({ estado: 'completa', finTs: seg(30 * 60 + 60) });
+    // Más allá de la tolerancia del fin, no.
+    expect(tardio(cerrada({ finTs: min(30) }), [terminal(min(50))]).cambios).toEqual([]);
   });
 });
 
@@ -423,6 +475,65 @@ describe('detectarSalidaEspera / resolverEspera', () => {
     expect(detectarSalidaEspera(LLEGADA, [fix(60, 200), fix(60, 200), fix(90, 220)], RADIO)?.ts).toEqual(
       new Date(LLEGADA.getTime() + 60_000),
     );
+  });
+
+  it('evaluar por páginas equivale a evaluar todo junto (el estado de la racha pasa de una página a otra)', () => {
+    const todos = [fix(10, 50), fix(60, 200), fix(90, 400), fix(120, 500)];
+    const estado = crearEstadoSalidaEspera();
+    const params = { llegadaTs: LLEGADA, radioM: RADIO };
+    expect(avanzarSalidaEspera(estado, todos.slice(0, 2), params)).toBeNull();
+    expect(estado.racha).toBe(1);
+    expect(avanzarSalidaEspera(estado, todos.slice(2), params)?.ts).toEqual(new Date(LLEGADA.getTime() + 60_000));
+    // Un duplicado en el borde de página tampoco suma.
+    const e2 = crearEstadoSalidaEspera();
+    avanzarSalidaEspera(e2, [fix(60, 200)], params);
+    expect(avanzarSalidaEspera(e2, [fix(60, 200)], params)).toBeNull();
+  });
+
+  describe('cursor y ventana de la espera pendiente', () => {
+    const MARGEN = 120_000;
+    const params = { llegadaTs: LLEGADA, radioM: RADIO };
+
+    it('el cursor es el último fix válido que cerró una racha (quedó dentro del radio)', () => {
+      const e = crearEstadoSalidaEspera();
+      avanzarSalidaEspera(e, [fix(10, 50), fix(20, 60), fix(25, 900, 80)], params);
+      expect(cursorSalidaEspera(e)).toEqual(new Date(LLEGADA.getTime() + 20_000));
+      expect(cursorSalidaEspera(crearEstadoSalidaEspera())).toBeNull();
+    });
+
+    it('con una racha fuera de radio en curso (sin confirmar) el cursor queda justo ANTES de su primer fix', () => {
+      const e = crearEstadoSalidaEspera();
+      expect(avanzarSalidaEspera(e, [fix(10, 50), fix(60, 300)], params)).toBeNull();
+      expect(cursorSalidaEspera(e)).toEqual(new Date(LLEGADA.getTime() + 60_000 - 1));
+    });
+
+    it('ventana = max(llegada, min(cursor, mínimo GPS del lote) - margen); sin cursor, desde la llegada', () => {
+      const cursor = new Date(LLEGADA.getTime() + 10 * 60_000);
+      const gpsMin = new Date(LLEGADA.getTime() + 4 * 60_000);
+      const ventana = (p: { cursor: Date | null; gpsMinTs: Date | null }) =>
+        inicioVentanaEspera({ llegadaTs: LLEGADA, margenMs: MARGEN, ...p });
+      expect(ventana({ cursor, gpsMinTs: null })).toEqual(new Date(cursor.getTime() - MARGEN));
+      expect(ventana({ cursor, gpsMinTs: gpsMin })).toEqual(new Date(gpsMin.getTime() - MARGEN));
+      expect(ventana({ cursor, gpsMinTs: new Date(cursor.getTime() + 60_000) })).toEqual(new Date(cursor.getTime() - MARGEN));
+      expect(ventana({ cursor: new Date(LLEGADA.getTime() + 30_000), gpsMinTs: null })).toEqual(LLEGADA);
+      expect(ventana({ cursor: null, gpsMinTs: gpsMin })).toEqual(LLEGADA);
+    });
+
+    it('fixes confirmados fuera de orden: un lote más viejo procesado DESPUÉS de uno más nuevo igual detecta la salida', () => {
+      // Lote nuevo (ya procesado): fix a 10 min, dentro del radio → cursor = 10 min.
+      const nuevo = crearEstadoSalidaEspera();
+      avanzarSalidaEspera(nuevo, [fix(600, 40)], params);
+      const cursor = cursorSalidaEspera(nuevo)!;
+      // Llega el lote viejo (fixes a 100 s y 130 s fuera del radio = salida a los 100 s).
+      const viejos = [fix(100, 300), fix(130, 400)];
+      const todos = [...viejos, fix(600, 40)];
+      const desde = (gpsMinTs: Date | null) => inicioVentanaEspera({ llegadaTs: LLEGADA, cursor, gpsMinTs, margenMs: MARGEN });
+      const leer = (ventana: Date) => todos.filter((f) => f.ts.getTime() >= ventana.getTime());
+      // Sin el mínimo del lote la ventana arranca en cursor - margen y se pierde la salida...
+      expect(detectarSalidaEspera(LLEGADA, leer(desde(null)), RADIO)).toBeNull();
+      // ...con el mínimo GPS del lote retrocede y la encuentra.
+      expect(detectarSalidaEspera(LLEGADA, leer(desde(viejos[0]!.ts)), RADIO)?.ts).toEqual(viejos[0]!.ts);
+    });
   });
 
   it('ignora fixes anteriores a la llegada y los posteriores al tope', () => {

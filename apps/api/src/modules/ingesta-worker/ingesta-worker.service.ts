@@ -344,6 +344,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
         fines: [],
         hayGps: false,
         ultimoTs: null,
+        gpsMinTs: null,
       };
       sesiones.set(sesionId, e);
       return e;
@@ -358,7 +359,9 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       const e = de(sesionId);
       e.hayGps = true;
       // Mismo `ts` con el que se persiste el fix en `gps_points`.
-      tocar(e, new Date(resolverTsFix(evento.payload, evento.ts)));
+      const tsFix = new Date(resolverTsFix(evento.payload, evento.ts));
+      tocar(e, tsFix);
+      if (Number.isFinite(tsFix.getTime()) && (e.gpsMinTs == null || tsFix < e.gpsMinTs)) e.gpsMinTs = tsFix;
     }
     for (const { evento, ts } of entradas.cumplimientos) {
       const payload = evento.payload as unknown as PayloadCumplimientoPuntoControl;

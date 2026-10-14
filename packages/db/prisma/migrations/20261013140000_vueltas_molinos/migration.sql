@@ -109,9 +109,14 @@ CREATE POLICY tenant_isolation ON vueltas
 -- función fija `app.sindicato_id` al sindicato de LA PROPIA sesión mientras toca `vueltas` y
 -- restaura el valor previo (nunca toca `app.rol`: no escala privilegios, solo apunta a su tenant).
 --
--- Vuelta "vacía" (sin designar, sin retorno, sin otro PC tras abrirse): se ELIMINA en vez de
--- cerrarla `abierta_al_cierre`; es siempre la última del día, así que la numeración no deja huecos.
--- Mismo criterio que la máquina (`esVueltaVacia` en ingesta-worker/vueltas.ts).
+-- El trigger es mínimo y NO destructivo: nunca borra. Hay dos escritores del estado de una vuelta
+-- (este trigger y el worker asíncrono, que puede procesar DESPUÉS del logout eventos sincronizados
+-- ANTES de él), y un DELETE aquí le quitaría al worker la vuelta a la que pertenecen esos eventos.
+-- La vuelta en curso solo queda `abierta_al_cierre` con `finTs` = fin de la sesión; el worker (modo
+-- "cierre tardío") la reabre en memoria, aplica los eventos tardíos y, si al final sigue "vacía"
+-- (sin designar, sin retorno, sin otro PC) la elimina (`esVueltaVacia` en ingesta-worker/vueltas.ts).
+-- RESIDUAL: un logout sin `fin_recorrido` y sin lote tardío deja una `abierta_al_cierre` vacía; no se
+-- cuenta ni se muestra: las consultas la excluyen (`vueltaNoVacia`, modules/vueltas/vuelta-no-vacia.ts).
 --
 -- LIMITACIÓN: este camino NO emite `molinos_omitido` para una vuelta designada que queda
 -- `abierta_al_cierre` (un trigger no registra infracciones con su regla/gravedad). Lo cubrirá el
@@ -123,11 +128,6 @@ BEGIN
   IF NEW.estado = 'cerrada' AND OLD.estado IS DISTINCT FROM 'cerrada' THEN
     sindicato_previo := current_setting('app.sindicato_id', true);
     PERFORM set_config('app.sindicato_id', NEW."sindicatoId"::text, true);
-
-    DELETE FROM vueltas
-    WHERE "sesionId" = NEW.id AND estado = 'en_curso'
-      AND "varianteId" IS NULL AND "pasoRetornoTs" IS NULL AND "ultimoPcTs" IS NULL
-      AND "esperaLlegadaTs" IS NULL;
 
     UPDATE vueltas
     SET estado = 'abierta_al_cierre', "finTs" = COALESCE(NEW.fin, now()), "updatedAt" = now()

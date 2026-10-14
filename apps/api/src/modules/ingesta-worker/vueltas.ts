@@ -43,13 +43,17 @@ import {
  * `inicio_recorrido` nuevo) la dejaría como una fila basura por recorrido, así que se ELIMINA en
  * vez de cerrarla. Nunca se elimina una designada. Como lo eliminado es siempre la ÚLTIMA vuelta,
  * la numeración del día queda sin huecos: la siguiente que se abra reutiliza ese número.
- * (El mismo criterio vive en el trigger `vueltas_cerrar_con_sesion` para el cierre de sesión.)
+ * (El trigger `vueltas_cerrar_con_sesion` NUNCA elimina: solo deja la en curso `abierta_al_cierre`.
+ * Si el cierre trae lote tardío, esta máquina la reabre y, si al final sigue vacía y sin designar,
+ * la elimina por el mismo camino que `fin_recorrido`. Residual documentado: un logout sin `fin` y sin
+ * lote tardío deja una `abierta_al_cierre` vacía; las consultas la excluyen con `vueltaNoVacia`.)
  *
  * Sesión ya cerrada ("cierre tardío", `opciones.cierreTardio`): lo sincronizado antes del logout
- * pero procesado después no se pierde. Nunca se abre una vuelta; se ignora lo posterior al cierre
- * y la última vuelta (la que el trigger dejó `abierta_al_cierre`) se trata como `en_curso` para los
- * cumplimientos entre su inicio y el cierre. Un `terminal` con retorno la cierra `completa` en ese
- * `ts` (con `molinos_omitido` si aplica) y no abre la N+1.
+ * pero procesado después no se pierde. Es la MISMA máquina, sin abrir vueltas nunca (ni por terminal
+ * ni por `inicio_recorrido`) y sin eventos posteriores a `cierreTs` + `VENTANA_RECORRIDO_TOLERANCIA_MS`.
+ * La última vuelta se reabre en memoria solo si es la que cerró el trigger (`abierta_al_cierre` con
+ * `finTs == cierreTs`); si quedó `abierta_al_cierre` por un `fin_recorrido` anterior se deja así y
+ * actúa la rama normal (un terminal dentro de la tolerancia la cierra `completa`).
  *
  * Cualquier cumplimiento de un PC activo de la ruta (la máquina ignora los desconocidos: los filtra
  * el worker) cuenta como progreso (`ultimoPcTs`), también el PC de espera en una vuelta no designada.
@@ -145,12 +149,10 @@ export interface OpcionesAvanzarVueltas {
    */
   recorridoEnCurso?: boolean;
   /**
-   * Modo "cierre tardío" (sesión de login ya cerrada): nunca se abre una vuelta; se ignoran los
-   * eventos posteriores a `cierreTs` y los `inicio`/`fin`; la última vuelta, si el trigger la dejó
-   * `abierta_al_cierre` (su `finTs` es el cierre de la sesión), acepta los cumplimientos con
-   * `inicioTs <= ts <= cierreTs` como si siguiera `en_curso` (retorno, llegada a la espera,
-   * `ultimoPcTs`) y un `terminal` con retorno la cierra `completa` en ese `ts`. Si no se cierra,
-   * conserva `abierta_al_cierre` y su `finTs`.
+   * Modo "cierre tardío" (sesión de login ya cerrada): la máquina normal, pero que nunca abre una
+   * vuelta y descarta lo posterior a `cierreTs` + tolerancia de relojes. La última vuelta, si el
+   * trigger la dejó `abierta_al_cierre` con `finTs == cierreTs`, se reabre en memoria; si no se
+   * cierra durante el lote, conserva `abierta_al_cierre` y su `finTs` (o se elimina si quedó vacía).
    */
   cierreTardio?: { cierreTs: Date };
 }
@@ -166,13 +168,15 @@ export function avanzarVueltas(
   const infracciones: InfraccionVuelta[] = [];
   let actual: FilaVuelta | null = ultima ? { ...ultima } : null;
   let recorridoEnCurso = opciones.recorridoEnCurso ?? true;
+  let reabierta = false;
   if (cierreTardio) {
     // Solo la vuelta que el trigger cerró con la sesión (su `finTs` ES el cierre) se reabre en
-    // memoria; cualquier otra (completa, o cerrada antes por `fin_recorrido`) queda intacta.
-    actual =
-      actual?.estado === 'abierta_al_cierre' && actual.finTs?.getTime() === cierreTardio.cierreTs.getTime()
-        ? { ...actual, estado: 'en_curso', finTs: null }
-        : null;
+    // memoria; cualquier otra (completa, o `abierta_al_cierre` por un `fin_recorrido` anterior)
+    // queda como está y la tratan las ramas normales.
+    if (actual?.estado === 'abierta_al_cierre' && actual.finTs?.getTime() === cierreTardio.cierreTs.getTime()) {
+      actual = { ...actual, estado: 'en_curso', finTs: null };
+      reabierta = true;
+    }
   }
   // Número de la última vuelta que existe (se retrocede al eliminar una vacía: sin huecos).
   let ultimoNumero = ultima?.numero ?? 0;
@@ -237,11 +241,10 @@ export function avanzarVueltas(
   const ordenados = [...eventos]
     .filter(
       (ev) =>
-        !cierreTardio || (ev.clase === 'cumplimiento' && ev.ts.getTime() <= cierreTardio.cierreTs.getTime()),
+        !cierreTardio ||
+        ev.ts.getTime() <= cierreTardio.cierreTs.getTime() + VENTANA_RECORRIDO_TOLERANCIA_MS,
     )
-    .sort(
-    (a, b) => a.ts.getTime() - b.ts.getTime() || PRIORIDAD_CLASE[a.clase] - PRIORIDAD_CLASE[b.clase],
-  );
+    .sort((a, b) => a.ts.getTime() - b.ts.getTime() || PRIORIDAD_CLASE[a.clase] - PRIORIDAD_CLASE[b.clase]);
 
   for (const ev of ordenados) {
     const t = ev.ts.getTime();
@@ -302,7 +305,8 @@ export function avanzarVueltas(
         if (
           actual.varianteId !== null &&
           actual.esperaLlegadaTs === null &&
-          (actual.puntoEsperaId === null || actual.puntoEsperaId === ev.puntoControlId)
+          actual.puntoEsperaId !== null &&
+          actual.puntoEsperaId === ev.puntoControlId
         ) {
           actual.esperaLlegadaTs = ev.ts;
         }
@@ -318,10 +322,14 @@ export function avanzarVueltas(
     }
   }
 
-  if (cierreTardio && ultima && actual?.estado === 'en_curso') {
+  if (reabierta && ultima && actual?.estado === 'en_curso') {
     // No terminó: sigue siendo la vuelta que el trigger cerró con la sesión.
     actual.estado = 'abierta_al_cierre';
     actual.finTs = ultima.finTs;
+    // Con el lote tardío ya aplicado, si sigue vacía y sin designar se elimina (el trigger nunca
+    // borra). Solo si el lote trajo eventos: uno de solo GPS no debe borrar lo que un lote de
+    // eventos posterior todavía podría llenar.
+    if (eventos.length > 0 && esVueltaVacia(actual)) marcar(actual, false, true);
   }
 
   return { cambios: [...cambios.values()], infracciones };
@@ -337,12 +345,99 @@ export interface FixEspera {
 }
 
 /**
- * Salida del punto de espera: el PRIMERO de `ESPERA_SALIDA_PUNTOS_CONSECUTIVOS` (2) fixes
- * consecutivos, posteriores a la llegada, con `accuracy <= ESPERA_MAX_ACCURACY_M` (accuracy nula
- * se acepta, como en el desvío) a más de `radioM + ESPERA_SALIDA_MARGEN_M`. Los fixes imprecisos
- * se descartan antes de contar (no cortan ni suman la racha). Pura y sin estado: el worker la
- * corre sobre los fixes de `gps_points` desde la llegada, así no importa en qué lote cayó cada
- * punto ni su orden de llegada. `hastaTs` acota por arriba (cierre de la vuelta).
+ * Estado incremental de la salida del punto de espera: permite evaluar los fixes página a página
+ * (sin re-correr todo lo acumulado) y deriva el cursor seguro de lo ya evaluado.
+ */
+export interface EstadoSalidaEspera {
+  /** Fixes válidos consecutivos fuera de `radio + margen` hasta ahora. */
+  racha: number;
+  /** Primer fix de la racha en curso (`null` si `racha == 0`). */
+  primero: FixEspera | null;
+  /** `ts` del último fix VÁLIDO evaluado (preciso y con distancia finita). */
+  ultimoValidoTs: Date | null;
+  /** Clave del último fix válido: un duplicado (mismo instante y posición) no suma dos veces. */
+  ultimaClave: string | null;
+}
+
+export function crearEstadoSalidaEspera(): EstadoSalidaEspera {
+  return { racha: 0, primero: null, ultimoValidoTs: null, ultimaClave: null };
+}
+
+/**
+ * Avanza el estado con una página de fixes (cualquier orden dentro de la página; las páginas
+ * llegan en orden de `ts`). Devuelve la salida en cuanto la racha de
+ * `ESPERA_SALIDA_PUNTOS_CONSECUTIVOS` (2) fixes válidos a más de `radioM + ESPERA_SALIDA_MARGEN_M`
+ * se completa; el instante es el del PRIMERO de la racha. Los fixes imprecisos
+ * (`accuracy > ESPERA_MAX_ACCURACY_M`; nula se acepta) o sin distancia finita se descartan antes de
+ * contar: no cortan ni suman la racha. Duplicados: solo se descarta el idéntico inmediatamente
+ * anterior (barato; con el orden por `ts` un duplicado siempre es adyacente).
+ */
+export function avanzarSalidaEspera(
+  estado: EstadoSalidaEspera,
+  fixes: readonly FixEspera[],
+  params: { llegadaTs: Date; radioM: number; hastaTs?: Date | null },
+): { ts: Date; lat: number; lng: number } | null {
+  const umbral = params.radioM + ESPERA_SALIDA_MARGEN_M;
+  const hasta = params.hastaTs ?? null;
+  const validos = fixes
+    .filter(
+      (f) =>
+        f.ts.getTime() > params.llegadaTs.getTime() &&
+        (hasta === null || f.ts.getTime() <= hasta.getTime()) &&
+        (f.accuracy === null || f.accuracy <= ESPERA_MAX_ACCURACY_M) &&
+        Number.isFinite(f.distanciaM),
+    )
+    .sort((a, b) => a.ts.getTime() - b.ts.getTime());
+  for (const f of validos) {
+    const clave = `${f.ts.getTime()}|${f.lat}|${f.lng}`;
+    if (clave === estado.ultimaClave) continue;
+    estado.ultimaClave = clave;
+    estado.ultimoValidoTs = f.ts;
+    if (f.distanciaM > umbral) {
+      if (estado.racha === 0) estado.primero = f;
+      estado.racha += 1;
+      if (estado.racha >= ESPERA_SALIDA_PUNTOS_CONSECUTIVOS && estado.primero) {
+        return { ts: estado.primero.ts, lat: estado.primero.lat, lng: estado.primero.lng };
+      }
+    } else {
+      estado.racha = 0;
+      estado.primero = null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Cursor seguro de lo ya evaluado: solo cubre fixes realmente evaluados (válidos). Con una racha
+ * fuera de radio EN CURSO y sin confirmar nunca pasa del primer fix de la racha (queda 1 ms antes):
+ * el siguiente lote tiene que volver a verlo. Sin racha, es el último fix válido (que quedó dentro).
+ */
+export function cursorSalidaEspera(estado: EstadoSalidaEspera): Date | null {
+  if (estado.racha > 0 && estado.primero) return new Date(estado.primero.ts.getTime() - 1);
+  return estado.ultimoValidoTs;
+}
+
+/**
+ * Inicio de la ventana de fixes de una espera pendiente:
+ * `max(llegada, min(cursor, mínimo GPS del lote) - margen)`. Un lote cuyos fixes son MÁS VIEJOS que
+ * el cursor (se confirmaron después que otros más nuevos) obliga a retroceder hasta ellos. Sin
+ * cursor la espera nunca se evaluó: se empieza en la llegada (un mínimo GPS posterior a la llegada
+ * dejaría sin ver fixes de lotes anteriores). Sin mínimo GPS (lote sin fixes) manda el cursor.
+ */
+export function inicioVentanaEspera(p: {
+  llegadaTs: Date;
+  cursor: Date | null;
+  gpsMinTs: Date | null;
+  margenMs: number;
+}): Date {
+  if (!p.cursor) return p.llegadaTs;
+  const base = p.gpsMinTs ? Math.min(p.cursor.getTime(), p.gpsMinTs.getTime()) : p.cursor.getTime();
+  return new Date(Math.max(p.llegadaTs.getTime(), base - p.margenMs));
+}
+
+/**
+ * Salida del punto de espera sobre una lista completa de fixes (una sola "página"): ver
+ * `avanzarSalidaEspera`. `hastaTs` acota por arriba (cierre de la vuelta).
  */
 export function detectarSalidaEspera(
   llegadaTs: Date,
@@ -350,47 +445,42 @@ export function detectarSalidaEspera(
   radioM: number,
   hastaTs: Date | null = null,
 ): { ts: Date; lat: number; lng: number } | null {
-  const umbral = radioM + ESPERA_SALIDA_MARGEN_M;
-  // Un fix duplicado (mismo instante y posición, p. ej. releído entre páginas o reenviado) NUNCA
-  // suma dos veces a la racha.
-  const vistos = new Set<string>();
-  const validos = fixes
-    .filter((f) => {
-      const clave = `${f.ts.getTime()}|${f.lat}|${f.lng}`;
-      if (vistos.has(clave)) return false;
-      vistos.add(clave);
-      return true;
-    })
-    .filter(
-      (f) =>
-        f.ts.getTime() > llegadaTs.getTime() &&
-        (hastaTs === null || f.ts.getTime() <= hastaTs.getTime()) &&
-        (f.accuracy === null || f.accuracy <= ESPERA_MAX_ACCURACY_M) &&
-        Number.isFinite(f.distanciaM),
-    )
-    .sort((a, b) => a.ts.getTime() - b.ts.getTime());
-  let primero: FixEspera | null = null;
-  let racha = 0;
-  for (const f of validos) {
-    if (f.distanciaM > umbral) {
-      if (racha === 0) primero = f;
-      racha += 1;
-      if (racha >= ESPERA_SALIDA_PUNTOS_CONSECUTIVOS && primero) {
-        return { ts: primero.ts, lat: primero.lat, lng: primero.lng };
-      }
-    } else {
-      racha = 0;
-      primero = null;
-    }
-  }
-  return null;
+  return avanzarSalidaEspera(crearEstadoSalidaEspera(), fixes, { llegadaTs, radioM, hastaTs });
 }
 
 /**
- * Cierra la espera de una vuelta designada: si hay salida confirmada devuelve su `ts` y, si
+ * Cierra la espera de una vuelta designada: dada la salida confirmada, devuelve su `ts` y, si
  * esperó menos de `esperaMin`, la infracción `espera_corta` (`detalle {esperaMin, requeridoMin}`:
- * lo esperado en minutos enteros hacia abajo y lo exigido). `null` si no aplica o todavía no
- * salió. Sin salida confirmada (hueco de GPS) NO se genera alerta: no hay evidencia.
+ * lo esperado en minutos enteros hacia abajo y lo exigido).
+ */
+export function cerrarEspera(
+  vuelta: Pick<FilaVuelta, 'id' | 'esperaLlegadaTs'>,
+  salida: { ts: Date; lat: number; lng: number },
+  esperaMin: number,
+): { esperaSalidaTs: Date; infraccion: InfraccionVuelta | null } {
+  const esperadoMs = salida.ts.getTime() - vuelta.esperaLlegadaTs!.getTime();
+  const infraccion: InfraccionVuelta | null =
+    esperadoMs < esperaMin * 60_000
+      ? {
+          tipo: 'espera_corta',
+          vueltaId: vuelta.id,
+          inicioTs: salida.ts,
+          lat: salida.lat,
+          lng: salida.lng,
+          detalle: {
+            esperaMin: Math.floor(esperadoMs / 60_000),
+            requeridoMin: esperaMin,
+            vueltaId: vuelta.id,
+          },
+          dedupeKey: dedupeKeyEsperaCorta(vuelta.id),
+        }
+      : null;
+  return { esperaSalidaTs: salida.ts, infraccion };
+}
+
+/**
+ * Resuelve la espera de una vuelta designada sobre una lista de fixes: `null` si no aplica o
+ * todavía no salió. Sin salida confirmada (hueco de GPS) NO se genera alerta: no hay evidencia.
  */
 export function resolverEspera(
   vuelta: Pick<FilaVuelta, 'id' | 'varianteId' | 'esperaLlegadaTs' | 'esperaSalidaTs'>,
@@ -401,23 +491,5 @@ export function resolverEspera(
     return null;
   }
   const salida = detectarSalidaEspera(vuelta.esperaLlegadaTs, fixes, params.radioM, params.hastaTs ?? null);
-  if (!salida) return null;
-  const esperadoMs = salida.ts.getTime() - vuelta.esperaLlegadaTs.getTime();
-  const infraccion: InfraccionVuelta | null =
-    esperadoMs < params.esperaMin * 60_000
-      ? {
-          tipo: 'espera_corta',
-          vueltaId: vuelta.id,
-          inicioTs: salida.ts,
-          lat: salida.lat,
-          lng: salida.lng,
-          detalle: {
-            esperaMin: Math.floor(esperadoMs / 60_000),
-            requeridoMin: params.esperaMin,
-            vueltaId: vuelta.id,
-          },
-          dedupeKey: dedupeKeyEsperaCorta(vuelta.id),
-        }
-      : null;
-  return { esperaSalidaTs: salida.ts, infraccion };
+  return salida ? cerrarEspera(vuelta, salida, params.esperaMin) : null;
 }

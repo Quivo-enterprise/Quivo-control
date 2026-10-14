@@ -17,6 +17,7 @@ import { EnVivoService } from '../reportes/en-vivo.service.js';
 import { SancionesService } from '../reglas/sanciones.service.js';
 import { RutasService } from '../rutas/rutas.service.js';
 import { VariantesService } from '../rutas/variantes.service.js';
+import { vueltaNoVacia } from '../vueltas/vuelta-no-vacia.js';
 import { VueltasService } from '../vueltas/vueltas.service.js';
 import { IngestaWorkerService } from './ingesta-worker.service.js';
 
@@ -84,7 +85,8 @@ describe('vueltas y designación a Molinos (F1)', () => {
   const sesiones = {} as Record<
     | 'ciclo' | 'larga' | 'corta' | 'omitida' | 'fin' | 'desorden' | 'sinRoles' | 'desvio' | 'carrera'
     | 'vacia' | 'cierreVacia' | 'cierreDesig' | 'cierreSinTenant' | 'inactiva' | 'esperaTardia' | 'retro'
-    | 'omitidaFin' | 'cierreTardio' | 'estacionado' | 'espNoDesig' | 'cursor',
+    | 'omitidaFin' | 'cierreTardio' | 'estacionado' | 'espNoDesig' | 'cursor'
+    | 'tardioN1' | 'tardioVacia' | 'carreraDesig' | 'gpsDesorden' | 'cierreResidual',
     string
   >;
 
@@ -201,6 +203,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
         'ciclo', 'larga', 'corta', 'omitida', 'fin', 'desorden', 'desvio', 'carrera',
         'vacia', 'cierreVacia', 'cierreDesig', 'cierreSinTenant', 'inactiva', 'esperaTardia', 'retro', 'omitidaFin',
         'cierreTardio', 'estacionado', 'espNoDesig', 'cursor',
+        'tardioN1', 'tardioVacia', 'carreraDesig', 'gpsDesorden', 'cierreResidual',
       ] as const) {
         sesiones[k] = await crearSesion(asigCirc);
       }
@@ -721,12 +724,12 @@ describe('vueltas y designación a Molinos (F1)', () => {
       expect((await infraccionesDe(s)).filter((i) => i.tipo === 'molinos_omitido')).toHaveLength(1);
     });
 
-    it('trigger: al cerrar la sesión se elimina la vuelta en curso vacía y se conserva la designada', async () => {
+    it('trigger: al cerrar la sesión NUNCA borra: la vacía queda abierta_al_cierre (y no se cuenta) y la designada se conserva', async () => {
       const vacia = sesiones.cierreVacia;
       await lote([cumpl(vacia, pcSr, iso(0), LON_SR, LAT_RUTA)]);
       expect(await vueltasDe(vacia)).toHaveLength(1);
       await cerrarSesion(vacia);
-      expect(await vueltasDe(vacia)).toHaveLength(0);
+      expect((await vueltasDe(vacia)).map((f) => [f.numero, f.estado])).toEqual([[1, 'abierta_al_cierre']]);
 
       const designada = sesiones.cierreDesig;
       await lote([cumpl(designada, pcSr, iso(0), LON_SR, LAT_RUTA)]);
@@ -735,6 +738,45 @@ describe('vueltas y designación a Molinos (F1)', () => {
       expect((await vueltasDe(designada)).map((f) => [f.numero, f.estado, f.varianteId])).toEqual([
         [1, 'abierta_al_cierre', varianteId],
       ]);
+    });
+
+    it('residual: la abierta_al_cierre vacía que deja un logout sin lote tardío no entra en molinosHoy ni en el resumen', async () => {
+      const s = sesiones.cierreResidual;
+      await lote([cumpl(s, pcSr, iso(0), LON_SR, LAT_RUTA)]);
+      await cerrarSesion(s);
+      const filas = await vueltasDe(s);
+      expect(filas.map((f) => f.estado)).toEqual(['abierta_al_cierre']);
+      // La fila vacía no pasa el filtro `vueltaNoVacia` (el que usan los conteos y resúmenes).
+      const [r] = await withTenantContext(ADMIN, (tx) =>
+        tx.$queryRaw<{ n: number }[]>`
+          SELECT count(*)::int AS n FROM vueltas v WHERE v."sesionId" = ${s} AND ${vueltaNoVacia('v')}`,
+      );
+      expect(r!.n).toBe(0);
+    });
+
+    it('cierre tardío: la vuelta N+1 con retorno y terminal tardíos que el trigger cerró termina completa y no abre N+2', async () => {
+      const s = sesiones.tardioN1;
+      // Vuelta 1 completa, la 2 abierta por el terminal.
+      await lote([...hastaHonduras(s, 0), cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA)]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'en_curso']]);
+      // Logout (trigger): la 2 queda abierta_al_cierre, VACÍA, y todavía no se borra.
+      await cerrarSesion(s);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'abierta_al_cierre']]);
+      // Llega el lote sincronizado antes del logout: retorno y terminal de la vuelta 2.
+      await lote([cumpl(s, pcHonduras, iso(60), LON_HONDURAS, LAT_RUTA), cumpl(s, pcSr, iso(80), LON_SR, LAT_RUTA)]);
+      const filas = await vueltasDe(s);
+      expect(filas.map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'completa']]);
+      expect(filas[1]!.finTs?.toISOString()).toBe(iso(80));
+    });
+
+    it('cierre tardío: un lote tardío que no llena la vuelta vacía la elimina (mismo camino que fin_recorrido)', async () => {
+      const s = sesiones.tardioVacia;
+      await lote([...hastaHonduras(s, 0), cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA)]);
+      await cerrarSesion(s);
+      expect((await vueltasDe(s)).map((f) => f.estado)).toEqual(['completa', 'abierta_al_cierre']);
+      // Un evento tardío que no aporta nada a la vuelta 2 (otro terminal, sin retorno).
+      await lote([cumpl(s, pcSr, iso(46), LON_SR, LAT_RUTA)]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa']]);
     });
 
     it('trigger: cerrar la sesión SIN contexto de tenant igual cierra su vuelta en curso (la RLS no la oculta)', async () => {
@@ -783,7 +825,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
       const antes = await vueltasDe(s);
       expect(antes.map((f) => f.estado)).toEqual(['abierta_al_cierre']);
       // Una terminal POSTERIOR al cierre cerraría la vuelta y abriría otra si la sesión siguiera activa.
-      const posterior = new Date(Date.now() + 60_000).toISOString();
+      const posterior = new Date(Date.now() + 5 * 60_000).toISOString();
       await lote([cumpl(s, pcSr, posterior, LON_SR, LAT_RUTA), inicio(s, posterior)]);
       const despues = await vueltasDe(s);
       expect(despues.map((f) => [f.numero, f.estado])).toEqual([[1, 'abierta_al_cierre']]);
@@ -818,7 +860,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
       await cerrarSesion(s);
       expect((await vueltasDe(s)).map((f) => f.estado)).toEqual(['abierta_al_cierre']);
       // Llega tarde el terminal fechado antes del cierre (iso 45 << ahora) y otro posterior al cierre.
-      const despuesDelCierre = new Date(Date.now() + 60_000).toISOString();
+      const despuesDelCierre = new Date(Date.now() + 5 * 60_000).toISOString();
       await lote([cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA), cumpl(s, pcSr, despuesDelCierre, LON_SR, LAT_RUTA), inicio(s, iso(60))]);
       const filas = await vueltasDe(s);
       expect(filas.map((f) => [f.numero, f.estado])).toEqual([[1, 'completa']]);
@@ -867,6 +909,60 @@ describe('vueltas y designación a Molinos (F1)', () => {
       await lote([gps(s, iso(50, 20), LON_SR, LAT_RUTA)]);
       [v] = await vueltasDe(s);
       expect(v!.esperaSalidaTs?.toISOString()).toBe(iso(50));
+      expect((await infraccionesDe(s)).filter((i) => i.tipo === 'espera_corta')).toHaveLength(1);
+    });
+
+    it('designar: si tras esperar el lock la vuelta ya cerró, reintenta con la vuelta en curso nueva (no 409)', async () => {
+      const s = sesiones.carreraDesig;
+      await lote([cumpl(s, pcSr, iso(0), LON_SR, LAT_RUTA)]);
+      const [n1] = await vueltasDe(s);
+      // Otra transacción (el worker) tiene la vuelta 1 bloqueada, la cierra y abre la 2 al terminar.
+      const cliente = new Client({ connectionString: process.env.DATABASE_URL });
+      await cliente.connect();
+      try {
+        await cliente.query('BEGIN');
+        await cliente.query('SELECT id FROM vueltas WHERE id = $1 FOR UPDATE', [n1!.id]);
+        const designando = vueltas.designar(adminA, s, varianteId);
+        await new Promise((r) => setTimeout(r, 400)); // designar queda esperando el lock
+        await cliente.query(`UPDATE vueltas SET estado = 'completa', "finTs" = now() WHERE id = $1`, [n1!.id]);
+        await cliente.query(
+          `INSERT INTO vueltas (id, "sindicatoId", "sesionId", "vehiculoId", "conductorId", "lineaId", "rutaId",
+             fecha, numero, "inicioTs", estado, "updatedAt")
+           SELECT $1, "sindicatoId", "sesionId", "vehiculoId", "conductorId", "lineaId", "rutaId",
+             fecha, 2, now(), 'en_curso', now() FROM vueltas WHERE id = $2`,
+          [randomUUID(), n1!.id],
+        );
+        await cliente.query('COMMIT');
+        const resumen = await designando;
+        expect(resumen.numero).toBe(2);
+        expect(resumen.varianteId).toBe(varianteId);
+      } finally {
+        await cliente.query('ROLLBACK').catch(() => undefined);
+        await cliente.end();
+      }
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado, f.varianteId])).toEqual([
+        [1, 'completa', null],
+        [2, 'en_curso', varianteId],
+      ]);
+    });
+
+    it('espera: fixes de un lote MÁS VIEJO confirmado después de uno más nuevo igual detectan la salida (ventana con el mínimo GPS)', async () => {
+      const s = sesiones.gpsDesorden;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      await vueltas.designar(adminA, s, varianteId);
+      await lote([
+        cumpl(s, pcHonduras, iso(20), LON_HONDURAS, LAT_RUTA),
+        cumpl(s, pcMolinos, iso(30), LON_MOLINOS, LAT_SUR),
+      ]);
+      // Primero el lote NUEVO (un fix de vuelta dentro del radio, 20 min después)...
+      await lote([gps(s, iso(50), LON_MOLINOS, LAT_SUR)]);
+      let [v] = await vueltasDe(s);
+      expect(v!.esperaSalidaTs).toBeNull();
+      expect(v!.esperaRevisadaHastaTs?.toISOString()).toBe(iso(50));
+      // ...y después el VIEJO (los dos fixes de la salida, a los 5 min): el cursor ya pasó de ellos.
+      await lote([gps(s, iso(35), LON_SR, LAT_RUTA), gps(s, iso(35, 20), LON_SR, LAT_RUTA)]);
+      [v] = await vueltasDe(s);
+      expect(v!.esperaSalidaTs?.toISOString()).toBe(iso(35));
       expect((await infraccionesDe(s)).filter((i) => i.tipo === 'espera_corta')).toHaveLength(1);
     });
 

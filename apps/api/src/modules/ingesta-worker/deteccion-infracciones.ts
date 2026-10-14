@@ -109,7 +109,7 @@ export async function contextoDeSesion(
  * (`recorridoEstado`/`recorridoEstadoTs` de `sesiones_operativas` solo guardan el estado ACTUAL
  * y no sirven para clasificar puntos históricos o tardíos del outbox.)
  */
-async function cargarRecorridos(
+export async function cargarRecorridos(
   tx: Tx,
   sindicatoId: string,
   sesionId: string,

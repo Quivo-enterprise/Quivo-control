@@ -18,6 +18,7 @@ import {
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { toInfraccion } from '../infracciones/infracciones.mapper.js';
+import { vueltaNoVacia } from '../vueltas/vuelta-no-vacia.js';
 import {
   fechaActualBolivia,
   inicioDeJornadaBolivia,
@@ -503,6 +504,7 @@ export class EnVivoService {
             SELECT 1 FROM vueltas vh
             WHERE vh."vehiculoId" = so."vehiculoId" AND vh."sindicatoId" = so."sindicatoId"
               AND vh.fecha = ${jornadaStr}::date AND vh."varianteId" IS NOT NULL
+              AND ${vueltaNoVacia('vh')}
           ) AS "molinosHoy",
           fix.lat, fix.lng, fix.accuracy, fix.speed,
           fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos",
@@ -556,7 +558,9 @@ export class EnVivoService {
             AND i."sindicatoId" = so."sindicatoId"
         ) inf ON true
         -- docs/plan-molinos-designacion.md: la vuelta EN CURSO de la sesión (a lo sumo una: índice
-        -- parcial único vueltas_sesionId_en_curso_key) con el nombre de la variante designada.
+        -- parcial único vueltas_sesionId_en_curso_key) con el nombre de la variante designada. Una
+        -- en_curso siempre cuenta (recién abierta está vacía); las abierta_al_cierre vacías que
+        -- deja un logout sin lote tardío no son en_curso, así que nunca entran aquí.
         LEFT JOIN LATERAL (
           SELECT v.numero, v."varianteId", va.nombre AS "varianteNombre", v."designadaEn",
                  v."acuseEn", v."esperaLlegadaTs", v."esperaSalidaTs"

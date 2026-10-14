@@ -9,6 +9,7 @@ import {
   descartarFuturos,
   recorridoCerradoEn,
   recorridoDeInstante,
+  recorridoEnCursoAntesDe,
   recorridoIniciadoEn,
   dedupeKeyPcOmitido,
   resolverGravedadInfraccion,
@@ -138,6 +139,20 @@ describe('recorridos (ventanas de PC omitido y gating de desvío)', () => {
   const ini = (seg: number) => ({ tipo: 'inicio_recorrido' as const, ts: t(seg) });
   const fin = (seg: number) => ({ tipo: 'fin_recorrido' as const, ts: t(seg) });
   const TOL = VENTANA_RECORRIDO_TOLERANCIA_MS / 1000;
+
+  it('recorridoEnCursoAntesDe: sin eventos o con un inicio abierto, en curso; tras un fin, no; fin huérfano ignorado', () => {
+    const antes = (evs: (ReturnType<typeof ini> | ReturnType<typeof fin>)[], seg: number) => recorridoEnCursoAntesDe(construirRecorridos(evs), t(seg));
+    expect(antes([], 100)).toBe(true);
+    expect(antes([ini(0)], 100)).toBe(true);
+    expect(antes([ini(0), fin(50)], 100)).toBe(false);
+    expect(antes([ini(0), fin(50), ini(80)], 100)).toBe(true);
+    // Un fin sin recorrido abierto se ignora (misma lectura que las infracciones).
+    expect(antes([fin(10)], 100)).toBe(true);
+    // El fin posterior (o simultáneo) al instante no cuenta como terminado.
+    expect(antes([ini(0), fin(100)], 100)).toBe(true);
+    // Empate de ts: el fin va antes que el inicio, el recorrido queda abierto.
+    expect(antes([ini(50), fin(50)], 100)).toBe(true);
+  });
 
   it('la tolerancia es de 2 minutos', () => {
     expect(VENTANA_RECORRIDO_TOLERANCIA_MS).toBe(120_000);

@@ -5,12 +5,16 @@ import {
   type EstadoVuelta,
   type RolPuntoControl,
 } from '@quivo/shared';
-import { resolverGravedad } from './deteccion-infracciones.js';
+import { cargarRecorridos, resolverGravedad } from './deteccion-infracciones.js';
 import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
-import { descartarFuturos } from './infracciones.logic.js';
+import { descartarFuturos, recorridoEnCursoAntesDe } from './infracciones.logic.js';
 import {
+  avanzarSalidaEspera,
   avanzarVueltas,
-  resolverEspera,
+  cerrarEspera,
+  crearEstadoSalidaEspera,
+  cursorSalidaEspera,
+  inicioVentanaEspera,
   type EventoVuelta,
   type FilaVuelta,
   type FixEspera,
@@ -36,6 +40,12 @@ export interface EntradaVueltasSesion {
   hayGps: boolean;
   /** `ts` más reciente de cualquier evento del lote (referencia de antigüedad de las esperas); `null` si no hay. */
   ultimoTs: Date | null;
+  /**
+   * `ts` MÁS ANTIGUO de los fixes GPS del lote (`null` si no trajo). Un lote confirmado después de
+   * otro con fixes más nuevos puede traer fixes anteriores al cursor de la espera: la ventana de
+   * re-evaluación retrocede hasta ahí.
+   */
+  gpsMinTs?: Date | null;
 }
 
 interface FilaPuntoControlRol {
@@ -165,19 +175,29 @@ export async function procesarVueltasSesion(
   // lotes concurrentes con la primera vuelta chocarían en el unique `(sesionId, numero)`).
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`vueltas:${sesionId}`}, 0))`;
 
-  // Última vuelta con `FOR UPDATE`: una designación concurrente (que bloquea la misma fila antes
-  // de decidir) espera a que este lote termine y re-evalúa su condición.
-  const [ultimaDb] = await tx.$queryRaw<FilaVueltaDb[]>`
-    SELECT v.id, v.numero, v."inicioTs", v."finTs", v.estado, v."pasoRetornoTs", v."varianteId",
-           va."puntoEsperaId", v."esperaLlegadaTs", v."esperaSalidaTs", v."ultimoPcTs",
-           v."esperaRevisadaHastaTs"
-    FROM vueltas v
-    LEFT JOIN variantes va ON va.id = v."varianteId"
-    WHERE v."sesionId" = ${sesionId} AND v."sindicatoId" = ${sindicatoId}
-    ORDER BY v.numero DESC
+  // Última vuelta, en DOS sentencias. (1) Se bloquea la fila con `FOR UPDATE` SOLA: una designación
+  // concurrente (que bloquea la misma fila antes de decidir) espera a que este lote termine. (2) La
+  // lectura con el JOIN a `variantes` va DESPUÉS, ya con el lock tomado: si el `FOR UPDATE` espera a
+  // otra transacción, Postgres re-evalúa la fila con EvalPlanQual y con un `LEFT JOIN ... FOR UPDATE
+  // OF v` los datos del lado nulable (la variante recién designada, su `puntoEsperaId`) pueden
+  // quedar con el snapshot VIEJO. Una sentencia nueva toma un snapshot fresco bajo READ COMMITTED.
+  const [bloqueada] = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM vueltas
+    WHERE "sesionId" = ${sesionId} AND "sindicatoId" = ${sindicatoId}
+    ORDER BY numero DESC
     LIMIT 1
-    FOR UPDATE OF v
+    FOR UPDATE
   `;
+  const [ultimaDb] = bloqueada
+    ? await tx.$queryRaw<FilaVueltaDb[]>`
+        SELECT v.id, v.numero, v."inicioTs", v."finTs", v.estado, v."pasoRetornoTs", v."varianteId",
+               va."puntoEsperaId", v."esperaLlegadaTs", v."esperaSalidaTs", v."ultimoPcTs",
+               v."esperaRevisadaHastaTs"
+        FROM vueltas v
+        LEFT JOIN variantes va ON va.id = v."varianteId"
+        WHERE v.id = ${bloqueada.id}
+      `
+    : [];
   const ultima: FilaVuelta | null = ultimaDb
     ? { ...ultimaDb, estado: ultimaDb.estado as EstadoVuelta }
     : null;
@@ -220,21 +240,18 @@ export async function procesarVueltasSesion(
     : { cierreTs: sesion.fin ?? ultima?.finTs ?? new Date(0) };
 
   // ¿Recorrido en curso al empezar el lote? Solo importa sin vuelta previa (un `terminal` abre la
-  // primera vuelta únicamente con el recorrido en curso). Se lee el ÚLTIMO `inicio_recorrido` /
-  // `fin_recorrido` guardado anterior al primer evento del lote (los del propio lote ya están
-  // persistidos y los aplica la máquina; `recorridoEstado` de la sesión puede reflejar eventos
-  // posteriores y no sirve). Sin ninguno: en curso.
+  // primera vuelta únicamente con el recorrido en curso). Se usa la MISMA reconstrucción de
+  // recorridos que la detección de infracciones (`cargarRecorridos`/`construirRecorridos`: fin
+  // huérfano ignorado, empates de `ts` resueltos igual) sobre lo guardado anterior al primer evento
+  // del lote (los del propio lote ya están persistidos y los aplica la máquina; `recorridoEstado` de
+  // la sesión puede reflejar eventos posteriores y no sirve). Sin ninguno: en curso.
   let recorridoEnCurso = true;
   if (!ultima && !cierreTardio && eventos.length > 0) {
     const primeroMs = Math.min(...eventos.map((e) => e.ts.getTime()));
-    const [marcador] = await tx.$queryRaw<{ tipo: string }[]>`
-      SELECT tipo FROM eventos_operativos
-      WHERE "sesionId" = ${sesionId} AND "sindicatoId" = ${sindicatoId}
-        AND tipo IN ('inicio_recorrido', 'fin_recorrido') AND ts < ${new Date(primeroMs)}
-      ORDER BY ts DESC
-      LIMIT 1
-    `;
-    recorridoEnCurso = marcador?.tipo !== 'fin_recorrido';
+    recorridoEnCurso = recorridoEnCursoAntesDe(
+      await cargarRecorridos(tx, sindicatoId, sesionId, ahora),
+      new Date(primeroMs),
+    );
   }
 
   const { cambios, infracciones } = avanzarVueltas(ultima, eventos, { recorridoEnCurso, cierreTardio });
@@ -271,26 +288,27 @@ export async function procesarVueltasSesion(
     if (fila.varianteId === null || fila.esperaLlegadaTs === null || fila.esperaSalidaTs !== null) continue;
     const pcEspera = fila.puntoEsperaId ? pcPorId.get(fila.puntoEsperaId) : undefined;
     if (!pcEspera?.esperaMin || !fila.puntoEsperaId) continue;
-    // Ventana de fixes: desde el cursor de lo ya evaluado (menos un margen para la histéresis de
-    // fixes consecutivos: el primero de la racha pudo caer antes) y nunca antes de la llegada. No
-    // depende del contenido del lote, así que un lote perdido o fallido se repara solo.
-    const llegadaMs = fila.esperaLlegadaTs.getTime();
-    const desdeMs = fila.esperaRevisadaHastaTs
-      ? Math.max(llegadaMs, fila.esperaRevisadaHastaTs.getTime() - MARGEN_VENTANA_SALIDA_MS)
-      : llegadaMs;
+    // Ventana de fixes: `max(llegada, min(cursor, mínimo GPS del lote) - margen)` (ver
+    // `inicioVentanaEspera`): el margen cubre la histéresis de fixes consecutivos y el mínimo del
+    // lote los fixes confirmados tarde con `ts` anterior al cursor. Nunca antes de la llegada.
+    const desde = inicioVentanaEspera({
+      llegadaTs: fila.esperaLlegadaTs,
+      cursor: fila.esperaRevisadaHastaTs ?? null,
+      gpsMinTs: entrada.gpsMinTs ?? null,
+      margenMs: MARGEN_VENTANA_SALIDA_MS,
+    });
     const hasta = fila.finTs ?? new Date(ahora.getTime() + DRIFT_ALERTA_MS);
-    if (desdeMs > hasta.getTime()) continue;
+    if (desde.getTime() > hasta.getTime()) continue;
     // Paginación por keyset `(ts, event_id)` (la PK de `gps_points` es `(event_id, ts)`): sin
-    // saltos ni repetidos en el borde de página, y el cursor viaja como el TEXTO exacto de la base
-    // (un `Date` de JS truncaría los microsegundos). Se evalúa página a página y se corta al
-    // encontrar la salida; el tope de páginas es solo de seguridad.
-    const fixes: FixEspera[] = [];
-    const vistos = new Set<string>();
-    let cursorTs = new Date(desdeMs).toISOString();
+    // saltos ni repetidos en el borde de página (no hace falta deduplicar por `event_id`), y el
+    // cursor viaja como el TEXTO exacto de la base (un `Date` de JS truncaría los microsegundos).
+    // Cada página se evalúa de forma incremental (el estado de la racha pasa de una a otra) y se
+    // corta al encontrar la salida; el tope de páginas es solo de seguridad.
+    const estado = crearEstadoSalidaEspera();
+    let cursorTs = desde.toISOString();
     let cursorId = ID_NULO;
-    let ultimoFixTs: Date | null = null;
-    let salida: ReturnType<typeof resolverEspera> = null;
-    for (let pagina = 0; pagina < MAX_PAGINAS_FIXES_ESPERA; pagina += 1) {
+    let salida: ReturnType<typeof avanzarSalidaEspera> = null;
+    for (let pagina = 0; pagina < MAX_PAGINAS_FIXES_ESPERA && !salida; pagina += 1) {
       const lote = await tx.$queryRaw<(FixEspera & { tsTxt: string; eventId: string })[]>`
         SELECT gp.ts, gp.ts::text AS "tsTxt", gp.event_id::text AS "eventId", gp.lat, gp.lng, gp.accuracy,
                ST_Distance(ST_SetSRID(ST_MakePoint(gp.lng, gp.lat), 4326)::geography, pc.coord) AS "distanciaM"
@@ -303,31 +321,27 @@ export async function procesarVueltasSesion(
         ORDER BY gp.ts, gp.event_id
         LIMIT ${LIMITE_FIXES_ESPERA}
       `;
-      for (const f of lote) {
-        if (vistos.has(f.eventId)) continue;
-        vistos.add(f.eventId);
-        fixes.push(f);
-      }
-      if (lote.length > 0) {
-        const ultimo = lote[lote.length - 1]!;
-        cursorTs = ultimo.tsTxt;
-        cursorId = ultimo.eventId;
-        ultimoFixTs = ultimo.ts;
-      }
-      salida = resolverEspera(fila, fixes, {
+      salida = avanzarSalidaEspera(estado, lote, {
+        llegadaTs: fila.esperaLlegadaTs,
         radioM: pcEspera.radioToleranciaM,
-        esperaMin: pcEspera.esperaMin,
         hastaTs: fila.finTs,
       });
-      if (salida || lote.length < LIMITE_FIXES_ESPERA) break;
+      if (lote.length < LIMITE_FIXES_ESPERA) break;
+      const ultimo = lote[lote.length - 1]!;
+      cursorTs = ultimo.tsTxt;
+      cursorId = ultimo.eventId;
     }
     if (!salida) {
-      if (ultimoFixTs) cursoresNuevos.set(fila.id, ultimoFixTs);
+      // Solo avanza sobre fixes realmente evaluados y nunca pasa del primero de una racha fuera de
+      // radio todavía sin confirmar (ver `cursorSalidaEspera`).
+      const cursor = cursorSalidaEspera(estado);
+      if (cursor) cursoresNuevos.set(fila.id, cursor);
       continue;
     }
-    fila.esperaSalidaTs = salida.esperaSalidaTs;
+    const cierre = cerrarEspera(fila, salida, pcEspera.esperaMin);
+    fila.esperaSalidaTs = cierre.esperaSalidaTs;
     filas.set(fila.id, fila);
-    if (salida.infraccion) todasInfracciones.push(salida.infraccion);
+    if (cierre.infraccion) todasInfracciones.push(cierre.infraccion);
   }
 
   // Persistencia. El orden de `filas` respeta "cerrar/eliminar la vuelta anterior antes de abrir

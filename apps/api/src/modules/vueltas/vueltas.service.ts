@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { withTenantContext } from '@quivo/db';
 import type { Prisma } from '@quivo/db';
+import { vueltaContable, vueltaNoVacia } from './vuelta-no-vacia.js';
 import {
   MolinosResumenSchema,
   VueltaActualMovilSchema,
@@ -71,13 +72,6 @@ export class VueltasService {
       }
       const SIN_VUELTA =
         'El vehículo todavía no tiene una vuelta en curso: se puede designar desde que sale de la terminal';
-      const candidata = await tx.vuelta.findFirst({
-        where: { sesionId, estado: 'en_curso' },
-        select: { id: true },
-      });
-      if (!candidata) {
-        throw new ConflictException(SIN_VUELTA);
-      }
       // Se BLOQUEA la fila de la vuelta antes de decidir nada (el EXISTS de abajo y las demás
       // reglas leen su estado). Orden de locks: el worker toma FOR SHARE sobre la sesión y luego
       // FOR UPDATE sobre la vuelta; aquí la sesión se leyó SIN lock (arriba), así que solo se
@@ -86,10 +80,22 @@ export class VueltasService {
       // termine, y cada sentencia posterior toma un snapshot NUEVO: el EXISTS sobre
       // `cumplimientos_pc` ve lo que el worker/ingesta acaban de confirmar (sin el lock, un
       // cumplimiento del PC de espera confirmado entre la lectura y el UPDATE se pasaría por alto).
-      await tx.$queryRaw`SELECT id FROM vueltas WHERE id = ${candidata.id} FOR UPDATE`;
-      // Relectura tras el lock: la vuelta pudo cerrarse mientras esperábamos (ya no se designa).
-      const vuelta = await tx.vuelta.findUnique({ where: { id: candidata.id } });
-      if (!vuelta || vuelta.estado !== 'en_curso') {
+      // Si tras esperar el lock la candidata ya no está `en_curso` (el worker la cerró y abrió la
+      // siguiente en esa transacción), se BUSCA de nuevo la vuelta en curso y se reintenta UNA vez
+      // con ese lock: el 409 solo sale si de verdad no hay ninguna.
+      let vuelta: Awaited<ReturnType<typeof tx.vuelta.findUnique>> = null;
+      for (let intento = 0; intento < 2 && vuelta === null; intento += 1) {
+        const candidata = await tx.vuelta.findFirst({
+          where: { sesionId, estado: 'en_curso' },
+          select: { id: true },
+        });
+        if (!candidata) break;
+        await tx.$queryRaw`SELECT id FROM vueltas WHERE id = ${candidata.id} FOR UPDATE`;
+        // Relectura tras el lock: la vuelta pudo cerrarse mientras esperábamos.
+        const releida = await tx.vuelta.findUnique({ where: { id: candidata.id } });
+        if (releida && releida.estado === 'en_curso') vuelta = releida;
+      }
+      if (!vuelta) {
         throw new ConflictException(SIN_VUELTA);
       }
       if (vuelta.esperaLlegadaTs !== null) {
@@ -289,6 +295,7 @@ export class VueltasService {
                  SELECT 1 FROM vueltas vh
                  WHERE vh."vehiculoId" = so."vehiculoId" AND vh."sindicatoId" = so."sindicatoId"
                    AND vh.fecha = ${hoyStr}::date AND vh."varianteId" IS NOT NULL
+                   AND ${vueltaNoVacia('vh')}
                ))::int AS "sinMolinosHoy"
         FROM sesiones_operativas so
         JOIN asignaciones a ON a.id = so."asignacionId"
@@ -314,7 +321,7 @@ export class VueltasService {
                                  AND v."esperaSalidaTs" IS NULL) AS "esperaDesdeTs",
                max(v."designadaEn") FILTER (WHERE v."varianteId" IS NOT NULL) AS "ultimoEnvioTs"
         FROM vueltas v
-        WHERE v.fecha = ${hoyStr}::date
+        WHERE v.fecha = ${hoyStr}::date AND ${vueltaContable('v')}
         GROUP BY v."lineaId"
       `;
       const porLinea = new Map(vueltas.map((v) => [v.lineaId, v]));
