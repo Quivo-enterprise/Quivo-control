@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Infraccion } from '@quivo/shared';
 import {
   actualizarPrimeraVez,
+  alertaMarcador,
+  puedeActuarEnInfracciones,
   contarPorNivel,
   detalleInfraccion,
   etiquetaTipoInfraccion,
@@ -21,6 +23,7 @@ import {
   urlWhatsapp,
   velocidadKmh,
 } from './alertas';
+import { etiquetaAlerta } from '../../../../../packages/design-system/src/ui/route-map-vehiculo';
 
 const pos = (id: string, nivel: 'leve' | 'grave' | 'gravisima' | null, abiertas = nivel ? 1 : 0, placa = id) => ({
   id,
@@ -203,5 +206,65 @@ describe('velocidad y contacto', () => {
     expect(urlLlamada('')).toBeNull();
     expect(urlLlamada('44123456')).toBeNull();
     expect(urlLlamada('+5491123456789')).toBeNull();
+  });
+});
+
+describe('alertaMarcador (pendiente E #1)', () => {
+  const base = { infraccionNivel: null, infraccionesAbiertas: 0, infraccionNivelAtendida: null, infraccionesAtendidas: 0 } as const;
+
+  it('sin abiertas ni atendidas no hay ícono', () => {
+    expect(alertaMarcador(base)).toBeNull();
+    expect(alertaMarcador({})).toBeNull();
+  });
+  it('solo abiertas: parpadea con su nivel', () => {
+    expect(alertaMarcador({ ...base, infraccionNivel: 'grave', infraccionesAbiertas: 2 })).toEqual({
+      nivel: 'grave',
+      abiertas: 2,
+      atendidas: 0,
+      parpadea: true,
+    });
+  });
+  it('solo atendidas: ícono fijo (no parpadea) con el nivel de las atendidas', () => {
+    expect(alertaMarcador({ ...base, infraccionNivelAtendida: 'gravisima', infraccionesAtendidas: 1 })).toEqual({
+      nivel: 'gravisima',
+      abiertas: 0,
+      atendidas: 1,
+      parpadea: false,
+    });
+  });
+  it('abiertas y atendidas: el nivel sale solo de las abiertas y parpadea', () => {
+    expect(
+      alertaMarcador({
+        infraccionNivel: 'leve',
+        infraccionesAbiertas: 1,
+        infraccionNivelAtendida: 'grave',
+        infraccionesAtendidas: 1,
+      }),
+    ).toEqual({ nivel: 'leve', abiertas: 1, atendidas: 1, parpadea: true });
+  });
+  it('1 abierta leve + 1 atendida gravísima: marcador leve que parpadea (la atendida no infla el nivel)', () => {
+    const a = alertaMarcador({
+      infraccionNivel: 'leve',
+      infraccionesAbiertas: 1,
+      infraccionNivelAtendida: 'gravisima',
+      infraccionesAtendidas: 1,
+    });
+    expect(a).toEqual({ nivel: 'leve', abiertas: 1, atendidas: 1, parpadea: true });
+    // El nombre accesible del marcador se arma de este nivel (`etiquetaAlerta` del design-system).
+    expect(etiquetaAlerta(a!)).toContain('leve');
+  });
+  it('un nivel sin cantidad (dato inconsistente) se ignora', () => {
+    expect(alertaMarcador({ ...base, infraccionNivel: 'grave', infraccionesAbiertas: 0 })).toBeNull();
+    expect(alertaMarcador({ ...base, infraccionNivelAtendida: 'leve', infraccionesAtendidas: 0 })).toBeNull();
+  });
+});
+
+describe('puedeActuarEnInfracciones', () => {
+  it('admins sí; operador y roles desconocidos no', () => {
+    expect(puedeActuarEnInfracciones('admin_quivo')).toBe(true);
+    expect(puedeActuarEnInfracciones('admin_sindicato')).toBe(true);
+    expect(puedeActuarEnInfracciones('operador')).toBe(false);
+    expect(puedeActuarEnInfracciones('conductor')).toBe(false);
+    expect(puedeActuarEnInfracciones(undefined)).toBe(false);
   });
 });

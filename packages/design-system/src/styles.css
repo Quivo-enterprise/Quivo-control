@@ -2777,6 +2777,28 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   width: 11px;
   height: 11px;
 }
+/* Vuelta designada a Molinos: letra "M" en un disco de marca abajo a la izquierda. La forma
+   (letra) y el nombre accesible ("vuelta vía Molinos") acompañan al color. */
+.qv-gmap-veh__molinos {
+  position: absolute;
+  bottom: -4px;
+  left: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--qv-color-primary);
+  color: var(--qv-color-on-primary);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 1px 3px rgb(15 23 42 / 0.45);
+  pointer-events: none;
+}
 /* Seleccionado: halo de marca por fuera del anillo (el z-index lo sube el motor). */
 .qv-gmap-veh--seleccionado::before {
   content: '';
@@ -3606,6 +3628,139 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 }
 
+/* Sección "Vuelta N de hoy": control segmentado (radiogroup) + estado del aviso al chofer. */
+.qv-vuelta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.qv-vuelta__chip {
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--qv-radius-full);
+  background: color-mix(in srgb, var(--qv-color-primary) 14%, transparent);
+  color: var(--qv-color-primary);
+  border: 1px solid color-mix(in srgb, var(--qv-color-primary) 35%, transparent);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.qv-vuelta__segmentos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--qv-radius-lg);
+  border: 1px solid var(--qv-border-glass);
+  background: color-mix(in srgb, var(--qv-surface-card) 55%, transparent);
+}
+.qv-vuelta__segmento {
+  /* Base fija + wrap en el contenedor: con nombres largos las opciones bajan de fila en vez de desbordar. */
+  flex: 1 1 5.5rem;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.3rem 0.6rem;
+  overflow-wrap: anywhere;
+  text-align: center;
+  border: 0;
+  border-radius: calc(var(--qv-radius-lg) - 2px);
+  background: transparent;
+  color: var(--qv-text-secondary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    background-color var(--qv-transition-fast),
+    color var(--qv-transition-fast);
+}
+.qv-vuelta__segmento:hover:not(:disabled):not([aria-checked='true']) {
+  background: color-mix(in srgb, var(--qv-color-primary) 10%, transparent);
+  color: var(--qv-text-primary);
+}
+.qv-vuelta__segmento[aria-checked='true'] {
+  background: var(--qv-color-primary);
+  color: var(--qv-color-on-primary);
+  cursor: default;
+}
+.qv-vuelta__segmento[data-pendiente] {
+  opacity: 0.75;
+}
+.qv-vuelta__segmento:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.qv-vuelta__segmento:focus-visible {
+  outline: 2px solid var(--qv-color-primary);
+  outline-offset: 2px;
+}
+.qv-vuelta__segmento[aria-checked='true']:focus-visible {
+  outline-color: var(--qv-text-primary);
+}
+.qv-vuelta__nota,
+.qv-vuelta__acuse,
+.qv-vuelta__espera {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--qv-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.qv-vuelta__acuse[data-visto] {
+  color: var(--qv-color-success);
+  font-weight: 700;
+}
+.qv-vuelta__espera {
+  color: var(--qv-text-primary);
+  font-weight: 700;
+}
+.qv-vuelta__espera[data-cumplida] {
+  color: var(--qv-color-success);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qv-vuelta__segmento {
+    transition: none;
+  }
+}
+
+/* HUD de Molinos por línea (debajo de las alertas). */
+.qv-live-molinos {
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--qv-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.qv-live-molinos svg {
+  flex: none;
+  color: var(--qv-color-primary);
+}
+.qv-live-molinos__lista {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.qv-live-molinos__lista strong {
+  color: var(--qv-text-primary);
+}
+
+/* Hoja de dos alturas: el asa y el resumen solo existen en móvil (ver el @media de abajo). */
+.qv-live-panel__cuerpo {
+  display: contents;
+}
+.qv-live-panel__asa,
+.qv-live-panel__resumen {
+  display: none;
+}
+
 /* Móvil: el panel pasa a hoja inferior a todo el ancho. */
 @media (max-width: 720px) {
   .qv-live-hud-bottom--panel {
@@ -3626,15 +3781,57 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     border-radius: var(--qv-radius-xl) var(--qv-radius-xl) 0 0;
     padding: 0.5rem 1rem calc(0.9rem + env(safe-area-inset-bottom, 0px));
     border-bottom: none;
+    /* El asa sticky (2.75 rem) no debe tapar el control que recibe el foco al desplazar la hoja. */
+    scroll-padding-top: 2.75rem;
   }
-  .qv-live-panel::before {
-    content: '';
+  /* Asa de la hoja: pegada arriba, alcance táctil de 44 px; arrastre o toque alternan la altura. */
+  .qv-live-panel__asa {
+    position: sticky;
+    top: 0;
+    z-index: 1;
     flex: none;
-    align-self: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 2.75rem;
+    margin: -0.5rem -1rem 0;
+    padding: 0;
+    border: 0;
+    background: var(--qv-surface-card);
+    color: var(--qv-text-secondary);
+    cursor: grab;
+    touch-action: none;
+  }
+  .qv-live-panel__asa:focus-visible {
+    outline: 2px solid var(--qv-color-primary);
+    outline-offset: -4px;
+  }
+  .qv-live-panel__asa-barra {
     width: 2.5rem;
     height: 4px;
     border-radius: 2px;
     background: var(--qv-border-strong, var(--qv-color-border));
+  }
+  /* Plegada: solo asa + cabecera + resumen; el mapa queda a la vista. */
+  .qv-live-panel[data-hoja='plegada'] {
+    gap: 0.4rem;
+    padding-bottom: calc(0.6rem + env(safe-area-inset-bottom, 0px));
+  }
+  .qv-live-panel[data-hoja='plegada'] .qv-live-panel__cuerpo {
+    display: none;
+  }
+  .qv-live-panel[data-hoja='plegada'] .qv-live-panel__resumen {
+    display: block;
+    margin: 0;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--qv-text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  /* Con la hoja expandida el HUD de Molinos cede el sitio al detalle; plegada, vuelve a verse. */
+  .qv-live-map-wrapper:has(.qv-live-panel[data-hoja='expandida']) .qv-live-molinos {
+    display: none;
   }
   .qv-live-btn {
     min-height: 2.75rem;

@@ -101,3 +101,23 @@ describe('normalizarFotoUrl', () => {
     expect(fotoUsable('https://x.test/ok.jpg')).toBe(true);
   });
 });
+
+describe('alerta con infracciones atendidas (pendiente E #1)', () => {
+  it('sin abiertas pero con atendidas la alerta sigue visible, fija y con texto propio', () => {
+    const solo = { nivel: 'grave' as const, abiertas: 0, atendidas: 2, parpadea: false };
+    expect(alertaVisible(solo)).toBe(true);
+    expect(etiquetaAlerta(solo)).toBe('2 infracciones atendidas, grave');
+    expect(etiquetaAlerta({ ...solo, atendidas: 1 })).toBe('1 infracción atendida, grave');
+  });
+  it('con abiertas el texto sigue hablando de las abiertas', () => {
+    expect(etiquetaAlerta({ nivel: 'leve', abiertas: 1, atendidas: 3, parpadea: true })).toBe('1 infracción abierta, leve');
+  });
+  it('sin abiertas ni atendidas no hay alerta', () => {
+    expect(alertaVisible({ nivel: 'grave', abiertas: 0, atendidas: 0, parpadea: false })).toBe(false);
+  });
+  it('el badge "M" entra en la firma del contenido', () => {
+    const ctx = { oscuro: false, tipo: 'marker' as const, rol: 'marker' };
+    const base = { pinType: 'vehicle' as const, color: '#000', label: 'x' };
+    expect(firmaPunto({ ...base, molinos: true }, ctx)).not.toBe(firmaPunto(base, ctx));
+  });
+});

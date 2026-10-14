@@ -117,6 +117,7 @@ import {
   ICONO_NIVEL,
   ICONO_RELOJ,
   alertaVisible,
+  ETIQUETA_MOLINOS,
   etiquetaAlerta,
   fotoUsable,
   marcarFotoFallida,
@@ -204,6 +205,7 @@ function etiquetaVehiculo(punto: MapPoint): string {
     estadoYaDicho ? '' : estado,
     descripcion,
     etiquetaAlerta(punto.alerta),
+    punto.molinos ? ETIQUETA_MOLINOS : '',
     // Con `onClick` el estado va en `aria-pressed`; sin él, en el nombre.
     punto.seleccionado && !punto.onClick ? 'seleccionado' : '',
   ]
@@ -327,6 +329,14 @@ function crearElementoVehiculo(punto: MapPoint): HTMLElement {
       badge.appendChild(n);
     }
     raiz.appendChild(badge);
+  }
+  if (punto.molinos) {
+    // Vuelta designada a Molinos: letra "M" abajo a la izquierda (el reloj de `detenido` va a la derecha).
+    const m = document.createElement('span');
+    m.className = 'qv-gmap-veh__molinos';
+    m.setAttribute('aria-hidden', 'true');
+    m.textContent = 'M';
+    raiz.appendChild(m);
   }
   // `detenido` con foto: el sprite ya traía el reloj; con foto va como mini badge.
   if (conFoto && spec.estado === 'detenido') {

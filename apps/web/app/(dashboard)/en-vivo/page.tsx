@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Alert, Button, Loader, RouteMap, Select, type MapPoint } from '@quivo/design-system';
+import { Alert, Button, ConfirmDialog, Loader, RouteMap, Select, type MapPoint } from '@quivo/design-system';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -12,14 +12,17 @@ import {
   CircleCheck,
   Clock,
   Maximize2,
+  LogOut,
   Navigation,
   Radio,
   RefreshCw,
 } from 'lucide-react';
 import type { GravedadRegla, Infraccion } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
+import { isRouteAllowedForRole, NAV_ITEMS } from '../../../src/lib/nav-items';
 import {
   useContextoEnVivo,
+  useMolinosResumen,
   INTERVALO_POLL_POSICIONES_MS,
   usePosicionesEnVivo,
   useRecargarTraza,
@@ -35,6 +38,7 @@ import {
   nivelDeAlerta,
   ordenarAlertas,
   resumenContadores,
+  puedeActuarEnInfracciones,
   siguienteAlertaId,
 } from '../../../src/lib/en-vivo/alertas';
 import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
@@ -47,12 +51,13 @@ import {
   idMarcadorVehiculo,
   mensajeError,
 } from './map-builders';
+import { HudMolinos } from './hud-molinos';
 import { PanelJornada } from './panel-jornada';
 import { IconoNivel, PanelVehiculo, type AvisoPanel, type BorradoresDescarte } from './panel-vehiculo';
 import { conPuntoVivo } from '../../../src/lib/en-vivo/punto-vivo';
 
 export default function EnVivoPage() {
-  const { token } = useAuth();
+  const { token, user, logout } = useAuth();
   const router = useRouter();
 
   // ENTREGA 13 — `posiciones` (TODOS los vehículos, `GET /reportes/en-vivo/posiciones`)
@@ -62,6 +67,14 @@ export default function EnVivoPage() {
   // vehículos activos y `sesionSeleccionada` es solo "cuál tiene el detalle abierto" — nace
   // `null`, nunca gobierna qué se pinta en el mapa.
   const posiciones = usePosicionesEnVivo(token);
+  const molinos = useMolinosResumen(token);
+  // El `operador` (control) no tiene dashboard ni atiende infracciones: "Panel" pasa a "Salir" y
+  // el panel del vehículo muestra las infracciones en solo lectura. Allowlist: sale de los roles
+  // del dashboard (`/`), no de excluir roles a mano. Esos mismos roles son los que pueden leer
+  // `GET /reportes/jornadas` (el `operador` recibiría 403), así que también gobierna `PanelJornada`.
+  const tienePanelAdmin = user ? isRouteAllowedForRole(NAV_ITEMS, '/', user.rol) : false;
+  const [confirmandoSalida, setConfirmandoSalida] = useState(false);
+  const soloLectura = !puedeActuarEnInfracciones(user?.rol);
   const { options: lineaOptions, lineas } = useLineaOptions();
   const [lineaFilter, setLineaFilter] = useState('');
   const [sesionSeleccionada, setSesionSeleccionada] = useState<string | null>(null);
@@ -585,7 +598,7 @@ export default function EnVivoPage() {
               </Button>
               {/* Sin sesiones todavía (típico de madrugada) es justo cuando importa saber quién
                 declaró su jornada: el panel también vive acá, en el flujo, sin mapa debajo. */}
-              <PanelJornada lineaFilter="" flotante={false} />
+              {tienePanelAdmin && <PanelJornada lineaFilter="" flotante={false} />}
             </div>
           )}
         </div>
@@ -600,8 +613,12 @@ export default function EnVivoPage() {
             <div className="qv-live-hud-card" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
               <button
                 type="button"
-                onClick={() => router.push('/')}
-                title="Volver al panel administrativo"
+                onClick={() => {
+                  if (tienePanelAdmin) router.push('/');
+                  else setConfirmandoSalida(true);
+                }}
+                aria-label={tienePanelAdmin ? undefined : 'Cerrar sesión'}
+                title={tienePanelAdmin ? 'Volver al panel administrativo' : 'Cerrar sesión'}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -617,8 +634,8 @@ export default function EnVivoPage() {
                   transition: 'all var(--qv-transition-fast)',
                 }}
               >
-                <ArrowLeft size={13} />
-                <span>Panel</span>
+                {tienePanelAdmin ? <ArrowLeft size={13} /> : <LogOut size={13} />}
+                <span>{tienePanelAdmin ? 'Panel' : 'Salir'}</span>
               </button>
 
               <div
@@ -721,6 +738,12 @@ export default function EnVivoPage() {
                 Siguiente alerta
               </button>
             </div>
+            <HudMolinos
+              lineas={molinos.data?.lineas}
+              lineaFilter={lineaFilter}
+              servidorTs={molinos.data?.servidorTs}
+              recibidoEn={molinos.dataUpdatedAt}
+            />
             </div>
 
             {/* Columna derecha: controles + panel "Jornada de hoy" (release 13). El panel va en el
@@ -816,7 +839,7 @@ export default function EnVivoPage() {
                   </button>
                 </div>
               </div>
-              <PanelJornada lineaFilter={lineaFilter} />
+              {tienePanelAdmin && <PanelJornada lineaFilter={lineaFilter} />}
             </div>
 
           </div>
@@ -994,11 +1017,25 @@ export default function EnVivoPage() {
                 onAviso={anunciar}
                 trazaRecibidoEn={traza.dataUpdatedAt}
                 posicionesRecibidoEn={posiciones.dataUpdatedAt}
+                soloLectura={soloLectura}
               />
             )}
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmandoSalida}
+        title="¿Cerrar sesión?"
+        message="Vas a salir de Quivo. Para volver a ver la flota en vivo tendrás que iniciar sesión de nuevo."
+        confirmLabel="Cerrar sesión"
+        onConfirm={() => {
+          setConfirmandoSalida(false);
+          logout();
+          router.push('/login');
+        }}
+        onCancel={() => setConfirmandoSalida(false)}
+      />
     </div>
   );
 }

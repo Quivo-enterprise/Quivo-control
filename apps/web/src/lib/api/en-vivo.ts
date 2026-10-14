@@ -1,4 +1,11 @@
-import type { ContextoEnVivo, PosicionEnVivo, SesionEnVivoResumen, TrazaEnVivo } from '@quivo/shared';
+import type {
+  ContextoEnVivo,
+  MolinosResumen,
+  PosicionEnVivo,
+  SesionEnVivoResumen,
+  TrazaEnVivo,
+  VueltaResumen,
+} from '@quivo/shared';
 import { apiFetch } from './client';
 
 /** Cliente de los endpoints del mapa en vivo (`apps/api/src/modules/reportes/en-vivo.*`). */
@@ -21,6 +28,18 @@ export const enVivoApi = {
    * habría sido confuso o directamente un bug de pisado.
    */
   posicionesTodas: (token: string) => apiFetch<PosicionEnVivo[]>('/reportes/en-vivo/posiciones', token),
+
+  /** `GET /reportes/en-vivo/molinos` — resumen por línea para el HUD ("Molinos: X en espera…"). */
+  molinos: (token: string) => apiFetch<MolinosResumen>('/reportes/en-vivo/molinos', token),
+
+  /** `PUT /reportes/en-vivo/:sesionId/vuelta-actual/designacion` — designa (o cancela con `null`) la
+   * vuelta en curso a una variante con punto de espera. 409 con motivo en español si ya llegó al
+   * punto de espera o no hay vuelta en curso. */
+  designarVuelta: (token: string, sesionId: string, varianteId: string | null) =>
+    apiFetch<VueltaResumen>(`/reportes/en-vivo/${sesionId}/vuelta-actual/designacion`, token, {
+      method: 'PUT',
+      body: { varianteId },
+    }),
 
   /** Todo lo que no cambia durante el recorrido (ruta, puntos de control, vehículo). */
   contexto: (token: string, sesionId: string) =>

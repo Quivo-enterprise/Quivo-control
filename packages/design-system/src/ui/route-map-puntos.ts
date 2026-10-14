@@ -49,6 +49,7 @@ export function firmaPunto(
     | 'fotoUrl'
     | 'colorLinea'
     | 'alerta'
+    | 'molinos'
     | 'onClick'
     | 'draggable'
     | 'onDragEnd'
@@ -71,6 +72,7 @@ export function firmaPunto(
     // selección se actualizan EN el elemento existente (`actualizarVehiculoEnLugar`): recrearlo
     // por eso recargaría la foto y reiniciaría la animación.
     alertaVisible(punto.alerta) ? `${punto.alerta.nivel}:${punto.alerta.parpadea}` : '',
+    punto.molinos ? 'M' : '',
     esInteractivo(punto, contexto.tipo),
     esArrastrable(punto, contexto.tipo),
   ].join('~');

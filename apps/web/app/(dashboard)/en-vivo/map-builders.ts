@@ -2,6 +2,7 @@ import type { MapPoint, MapRoute, MapZone } from '@quivo/design-system';
 import type { ContextoEnVivo, CumplimientoRecorrido, PosicionEnVivo } from '@quivo/shared';
 import { ApiError } from '../../../src/lib/api/client';
 import { presentacionFrescura, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
+import { alertaMarcador } from '../../../src/lib/en-vivo/alertas';
 import { simplificarTrazaParaDibujo } from '../../../src/lib/en-vivo/simplificar-traza';
 
 /** Color fijo de la traza GPS real, igual que en el detalle histórico
@@ -120,22 +121,21 @@ export interface OpcionesMarcadoresVehiculos {
 }
 
 /**
- * Alerta, foto, color de línea y selección del marcador. `parpadea` = hay infracciones
- * abiertas: la API cuenta solo las `abierta` (LATERAL de `en-vivo.service.ts`, `estado =
- * 'abierta'`), así que al "Atender" o descartar, la infracción sale de la cuenta, el nivel
- * vuelve a `null` y el marcador deja de parpadear en el siguiente poll (el historial queda en
- * el panel). `fotoUrl` viene en `PosicionEnVivo` (vacía/`null` si la unidad no tiene foto).
+ * Alerta, foto, color de línea, selección y badge "M" del marcador. `parpadea` = hay infracciones
+ * abiertas (`alertaMarcador`): al "Atender", la infracción pasa de abierta a atendida y el marcador
+ * deja de parpadear pero conserva el ícono fijo de severidad (pendiente E #1); al descartarla sale
+ * de la cuenta y el ícono desaparece. "M" = la vuelta en curso está designada a una variante con
+ * punto de espera. `fotoUrl` viene en `PosicionEnVivo` (vacía/`null` si la unidad no tiene foto).
  */
 function camposAlertaYFoto(p: PosicionEnVivo, opciones: OpcionesMarcadoresVehiculos): Partial<MapPoint> {
-  const abiertas = p.infraccionesAbiertas ?? 0;
+  const alerta = alertaMarcador(p);
   const foto = p.fotoUrl?.trim();
   const colorLinea = opciones.colorLineaPorId?.[p.lineaId];
   return {
     ...(foto ? { fotoUrl: foto } : {}),
     ...(colorLinea ? { colorLinea } : {}),
-    ...(p.infraccionNivel && abiertas > 0
-      ? { alerta: { nivel: p.infraccionNivel, abiertas, parpadea: true } }
-      : {}),
+    ...(alerta ? { alerta } : {}),
+    ...(p.vuelta?.varianteId ? { molinos: true } : {}),
     ...(opciones.seleccionadoId === p.id ? { seleccionado: true } : {}),
   };
 }

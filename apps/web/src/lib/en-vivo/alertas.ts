@@ -26,6 +26,41 @@ export function nivelDeAlerta(p: Pick<PosicionEnVivo, 'infraccionNivel' | 'infra
   return p.infraccionNivel && (p.infraccionesAbiertas ?? 0) > 0 ? p.infraccionNivel : null;
 }
 
+/** Roles que pueden atender, descartar y sancionar infracciones (la API da 403 al resto: el
+ * `operador` las ve en solo lectura). Allowlist: un rol nuevo no hereda el permiso por omisión. */
+const ROLES_ACTUAN_INFRACCIONES: readonly string[] = ['admin_quivo', 'admin_sindicato'];
+export function puedeActuarEnInfracciones(rol: string | null | undefined): boolean {
+  return rol !== null && rol !== undefined && ROLES_ACTUAN_INFRACCIONES.includes(rol);
+}
+
+export interface AlertaMarcador {
+  nivel: GravedadRegla;
+  abiertas: number;
+  atendidas: number;
+  parpadea: boolean;
+}
+
+/**
+ * Alerta del marcador del vehículo (pendiente E #1): el nivel sale de las infracciones abiertas y,
+ * solo si no queda ninguna, de las atendidas (ícono fijo de "ya la atendieron"); SOLO parpadea si
+ * queda alguna abierta. `null` = sin ninguna: sin ícono.
+ */
+export function alertaMarcador(
+  p: Pick<
+    PosicionEnVivo,
+    'infraccionNivel' | 'infraccionesAbiertas' | 'infraccionNivelAtendida' | 'infraccionesAtendidas'
+  >,
+): AlertaMarcador | null {
+  const abiertas = p.infraccionNivel && (p.infraccionesAbiertas ?? 0) > 0 ? (p.infraccionesAbiertas ?? 0) : 0;
+  const atendidas =
+    p.infraccionNivelAtendida && (p.infraccionesAtendidas ?? 0) > 0 ? (p.infraccionesAtendidas ?? 0) : 0;
+  // Con abiertas el nivel sale SOLO de ellas (una atendida gravísima no debe inflar una abierta leve);
+  // las atendidas definen el nivel únicamente cuando no queda ninguna abierta.
+  const nivel = abiertas > 0 ? p.infraccionNivel : atendidas > 0 ? p.infraccionNivelAtendida : null;
+  if (!nivel) return null;
+  return { nivel, abiertas, atendidas, parpadea: abiertas > 0 };
+}
+
 /** Vehículos (no infracciones) por su nivel máximo, sobre la lista que se está mirando. */
 export function contarPorNivel(
   posiciones: Pick<PosicionEnVivo, 'infraccionNivel' | 'infraccionesAbiertas'>[],

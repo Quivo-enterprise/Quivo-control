@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { colorTextoContraste } from '@quivo/design-system';
@@ -10,6 +11,8 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  ChevronsDown,
+  ChevronsUp,
   CircleAlert,
   Copy,
   MapPin,
@@ -53,7 +56,12 @@ import {
   velocidadKmh,
 } from '../../../src/lib/en-vivo/alertas';
 import { diaLocalIso } from '../../../src/lib/fecha-local';
-import { useInfraccionesSesion } from '../../../src/lib/en-vivo/use-en-vivo';
+import {
+  useDesignarVuelta,
+  useInfraccionesSesion,
+  useMolinosResumen,
+  useOpcionesDesignacion,
+} from '../../../src/lib/en-vivo/use-en-vivo';
 import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
 import {
   antiguedadViva,
@@ -63,6 +71,7 @@ import {
 } from '../../../src/lib/en-vivo/traza';
 import { NuevaSancionModal } from '../reglas/nueva-sancion-modal';
 import { mensajeError, ultimaPasada } from './map-builders';
+import { SeccionVuelta } from './panel-vuelta';
 
 export interface AvisoPanel {
   tono: 'ok' | 'error';
@@ -125,7 +134,14 @@ interface PanelVehiculoProps {
   borradores: BorradoresDescarte;
   trazaRecibidoEn: number;
   posicionesRecibidoEn: number;
+  /** El `operador` (control) ve las infracciones pero no atiende, descarta ni sanciona. */
+  soloLectura: boolean;
 }
+
+/** Hoja inferior de la vista móvil (<= 720 px). */
+const MQ_MOVIL = '(max-width: 720px)';
+/** Desplazamiento vertical (px) del arrastre a partir del cual la hoja cambia de altura. */
+const UMBRAL_ARRASTRE_PX = 32;
 
 export function PanelVehiculo(props: PanelVehiculoProps) {
   const {
@@ -147,9 +163,18 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
     borradores,
     trazaRecibidoEn,
     posicionesRecibidoEn,
+    soloLectura,
   } = props;
   const queryClient = useQueryClient();
   const infracciones = useInfraccionesSesion(token, sesionId);
+  const molinos = useMolinosResumen(token);
+  const { variantes, puntos } = useOpcionesDesignacion(token, contexto?.ruta.id ?? null);
+  const designar = useDesignarVuelta(token);
+  // Hoja inferior de dos alturas (solo se nota en móvil; en escritorio el panel no se pliega).
+  const [hojaPlegada, setHojaPlegada] = useState(false);
+  const arrastre = useRef<{ y: number } | null>(null);
+  const suprimirClic = useRef(false);
+  const asaRef = useRef<HTMLButtonElement>(null);
   const [pcsAbierto, setPcsAbierto] = useState(false);
   // Foto que ya falló al cargar: el avatar vuelve al ícono del bus (igual que el marcador).
   const [fotoRota, setFotoRota] = useState<string | null>(null);
@@ -287,6 +312,17 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
     }
   }
 
+  // "Ver en mapa" pliega la hoja ANTES de que la página mida dónde cae el punto (flushSync: el
+  // layout ya está aplicado cuando `onVerEnMapa` lee la altura de la hoja).
+  function verEnMapa(inf: Infraccion) {
+    if (window.matchMedia(MQ_MOVIL).matches) {
+      flushSync(() => setHojaPlegada(true));
+      // El botón "Ver en mapa" queda oculto al plegar: el foco pasa al asa en vez de perderse.
+      asaRef.current?.focus({ preventScroll: true });
+    }
+    onVerEnMapa(inf);
+  }
+
   async function copiarTelefono() {
     if (!telefono) return;
     try {
@@ -300,6 +336,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   return (
     <section
       className="qv-live-panel"
+      data-hoja={hojaPlegada ? 'plegada' : 'expandida'}
       aria-label={`Detalle del vehículo ${placa}`}
       style={
         colorLinea
@@ -320,6 +357,47 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         onCerrar();
       }}
     >
+      <button
+        ref={asaRef}
+        type="button"
+        className="qv-live-panel__asa"
+        aria-expanded={!hojaPlegada}
+        aria-controls="qv-live-panel-cuerpo"
+        aria-label={hojaPlegada ? 'Expandir detalle del vehículo' : 'Plegar detalle para ver el mapa'}
+        onPointerDown={(e) => {
+          // Un drag táctil no genera `click`: el flag que dejó pegado no debe tragarse el próximo toque.
+          suprimirClic.current = false;
+          arrastre.current = { y: e.clientY };
+          e.currentTarget.setPointerCapture?.(e.pointerId);
+        }}
+        onPointerUp={(e) => {
+          const inicio = arrastre.current;
+          arrastre.current = null;
+          if (!inicio) return;
+          const dy = e.clientY - inicio.y;
+          if (Math.abs(dy) >= UMBRAL_ARRASTRE_PX) {
+            setHojaPlegada(dy > 0);
+            // El `click` que sigue al soltar (si llega) no debe volver a alternar.
+            suprimirClic.current = true;
+          }
+        }}
+        onPointerCancel={() => {
+          arrastre.current = null;
+        }}
+        onClick={() => {
+          if (suprimirClic.current) {
+            suprimirClic.current = false;
+            return;
+          }
+          setHojaPlegada((v) => !v);
+        }}
+      >
+        <span className="qv-live-panel__asa-barra" aria-hidden="true" />
+        <span className="qv-live-panel__asa-icono" aria-hidden="true">
+          {hojaPlegada ? <ChevronsUp size={16} /> : <ChevronsDown size={16} />}
+        </span>
+      </button>
+
       <div className="qv-live-panel__cabecera">
         <span className="qv-live-panel__avatar" aria-hidden="true">
           {fotoUrl && fotoRota !== fotoUrl ? (
@@ -353,6 +431,15 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         </button>
       </div>
 
+      {/* Resumen de la hoja plegada (solo móvil): lo imprescindible sin abrir el detalle. */}
+      <p className="qv-live-panel__resumen">
+        {abiertas.length > 0 ? `${abiertas.length} abierta${abiertas.length === 1 ? '' : 's'}` : 'Sin infracciones abiertas'}
+        {posicion?.vuelta
+          ? ` · Vuelta ${posicion.vuelta.numero} · ${posicion.vuelta.varianteNombre ?? (posicion.vuelta.varianteId ? 'Molinos' : 'Directo')}`
+          : ''}
+      </p>
+
+      <div id="qv-live-panel-cuerpo" className="qv-live-panel__cuerpo">
       {fueraDelMapa && (
         <p className="qv-live-panel__aviso" role="status">
           El vehículo ya no está en el mapa.
@@ -402,6 +489,26 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
           Sin teléfono · <Link href="/conductores">Agregar</Link>
         </span>
       )}
+
+      <SeccionVuelta
+        posicion={posicion}
+        variantes={variantes.data}
+        variantesError={variantes.isError && !variantes.data}
+        puntos={puntos.data}
+        linea={molinos.data?.lineas.find((l) => l.lineaId === (posicion?.lineaId ?? contexto?.linea.id))}
+        molinosServidorTs={molinos.data?.servidorTs}
+        molinosRecibidoEn={molinos.dataUpdatedAt}
+        posicionesServidorTs={posicion?.servidorTs}
+        posicionesRecibidoEn={posicionesRecibidoEn}
+        onDesignar={async (varianteId, varianteNombre) => {
+          // Un rechazo se propaga a la sección, que lo muestra y anuncia en línea (no va al aviso).
+          await designar.mutateAsync({ sesionId, varianteId, varianteNombre });
+          onAviso({
+            tono: 'ok',
+            texto: varianteId ? `Vuelta designada vía ${varianteNombre ?? 'Molinos'}` : 'Designación cancelada',
+          });
+        }}
+      />
 
       <div className="qv-live-panel__seccion">
         <h3 className="qv-live-panel__h">
@@ -457,11 +564,11 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
                     />
                   ) : (
                     <div className="qv-live-inf__acciones">
-                      <button type="button" className="qv-live-btn qv-live-btn--sm" onClick={() => onVerEnMapa(inf)}>
+                      <button type="button" className="qv-live-btn qv-live-btn--sm" onClick={() => verEnMapa(inf)}>
                         <MapPin size={13} aria-hidden="true" />
                         Ver en mapa
                       </button>
-                      {puedeAtender(inf) && (
+                      {!soloLectura && puedeAtender(inf) && (
                         <button
                           type="button"
                           className="qv-live-btn qv-live-btn--sm"
@@ -471,7 +578,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
                           Atender
                         </button>
                       )}
-                      {puedeDescartar(inf) && (
+                      {!soloLectura && puedeDescartar(inf) && (
                         <button
                           type="button"
                           className="qv-live-btn qv-live-btn--sm"
@@ -481,7 +588,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
                           Descartar
                         </button>
                       )}
-                      {puedeSancionar(inf) && (
+                      {!soloLectura && puedeSancionar(inf) && (
                         <button
                           type="button"
                           className="qv-live-btn qv-live-btn--sm qv-live-btn--peligro"
@@ -559,6 +666,8 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
             )}
           </div>
         )}
+      </div>
+
       </div>
 
       {sancion && (

@@ -1,17 +1,23 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TRAZA_EN_VIVO_LIMITE_MAX,
   type ContextoEnVivo,
   type Infraccion,
   type JornadasDelDia,
+  type MolinosResumen,
   type PosicionEnVivo,
+  type PuntoControl,
   type SesionEnVivoResumen,
+  type Variante,
 } from '@quivo/shared';
 import { enVivoApi } from '../api/en-vivo';
 import { infraccionesApi } from '../api/infracciones';
+import { puntosControlApi } from '../api/puntos-control';
 import { reportesApi } from '../api/reportes';
+import { variantesApi } from '../api/variantes';
 import {
   debeRecargar,
   desdeConSolape,
@@ -20,6 +26,7 @@ import {
   intervaloPoll,
   type TrazaAcumulada,
 } from './traza';
+import { aplicarDesignacionesPendientes, type DesignacionPendiente } from './vuelta';
 
 /**
  * Hooks de TanStack Query para `/en-vivo` — el primer consumidor real del `QueryClient` que
@@ -51,6 +58,9 @@ export function useSesionesEnVivo(token: string | null) {
   });
 }
 
+/** Cache (sin fetch) con las designaciones en vuelo por `sesionId`: el overlay del optimista. */
+const KEY_DESIGNACIONES_PENDIENTES = ['en-vivo', 'designaciones-pendientes'] as const;
+
 /** Cadencia del poll de `/posiciones`; también es la duración de la animación del vehículo seleccionado. */
 export const INTERVALO_POLL_POSICIONES_MS = 2_000;
 
@@ -68,7 +78,18 @@ export const INTERVALO_POLL_POSICIONES_MS = 2_000;
  * pollendo un mapa que nadie mira.
  */
 export function usePosicionesEnVivo(token: string | null) {
+  // Designaciones pedidas y aún sin confirmar (ver `useDesignarVuelta`): se aplican por encima de
+  // cada poll al leer, así el valor optimista no parpadea hacia el del servidor mientras el PUT vuela.
+  const { data: pendientes } = useQuery<ReadonlyMap<string, DesignacionPendiente>>({
+    queryKey: KEY_DESIGNACIONES_PENDIENTES,
+    enabled: false,
+  });
+  const select = useCallback(
+    (posiciones: PosicionEnVivo[]) => (pendientes ? aplicarDesignacionesPendientes(posiciones, pendientes) : posiciones),
+    [pendientes],
+  );
   return useQuery<PosicionEnVivo[]>({
+    select,
     queryKey: ['en-vivo', 'posiciones-todas'],
     enabled: Boolean(token),
     queryFn: () => enVivoApi.posicionesTodas(token as string),
@@ -234,5 +255,99 @@ export function useInfraccionesSesion(token: string | null, sesionId: string | n
     refetchOnWindowFocus: true,
     retry: REINTENTOS,
     retryDelay,
+  });
+}
+
+/** Cadencia del HUD de Molinos: cambia al ritmo de los envíos (minutos), no de la telemetría. */
+export const INTERVALO_POLL_MOLINOS_MS = 15_000;
+
+/**
+ * `GET /reportes/en-vivo/molinos` — resumen por línea (en espera, último envío, próximo sugerido).
+ * Poll lento y aparte del de posiciones: agrega por línea/día. Mismo criterio de pestaña oculta.
+ */
+export function useMolinosResumen(token: string | null) {
+  return useQuery<MolinosResumen>({
+    queryKey: ['en-vivo', 'molinos'],
+    enabled: Boolean(token),
+    queryFn: () => enVivoApi.molinos(token as string),
+    refetchInterval: INTERVALO_POLL_MOLINOS_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: REINTENTOS,
+    retryDelay,
+  });
+}
+
+/**
+ * Variantes de la ruta de la sesión (las que tienen punto de espera son las designables) y los
+ * puntos de control de esa ruta (para los minutos de espera). Cambian solo si un admin edita la
+ * ruta: `staleTime` largo. Si fallan, el panel degrada (sin control de designación / 30 min).
+ */
+export function useOpcionesDesignacion(token: string | null, rutaId: string | null) {
+  const variantes = useQuery<Variante[]>({
+    queryKey: ['en-vivo', 'variantes', rutaId],
+    enabled: Boolean(token && rutaId),
+    queryFn: () => variantesApi.listarPorRuta(token as string, rutaId as string),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: REINTENTOS,
+    retryDelay,
+  });
+  const puntos = useQuery<PuntoControl[]>({
+    queryKey: ['en-vivo', 'puntos-control', rutaId],
+    enabled: Boolean(token && rutaId),
+    queryFn: () => puntosControlApi.listarPorRuta(token as string, rutaId as string),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: REINTENTOS,
+    retryDelay,
+  });
+  return { variantes, puntos };
+}
+
+export interface DesignarVars {
+  sesionId: string;
+  varianteId: string | null;
+  varianteNombre: string | null;
+}
+
+/**
+ * Designa (o cancela) la vuelta en curso. Optimista: mientras el PUT está en vuelo la designación
+ * pedida vive como overlay (`KEY_DESIGNACIONES_PENDIENTES`) que `usePosicionesEnVivo` aplica sobre
+ * cada poll, en vez de escribir en la caché de posiciones (el poll de 2 s la pisaría y un rollback
+ * con snapshot viejo pisaría polls más nuevos). Al terminar —con éxito o con 409— se invalida y,
+ * cuando llega el refetch de posiciones, se quita el overlay: el control queda con lo que diga el servidor. `onError` lo maneja el
+ * panel (mensaje en línea).
+ */
+export function useDesignarVuelta(token: string | null) {
+  const queryClient = useQueryClient();
+  const key = ['en-vivo', 'posiciones-todas'];
+  const leer = () => queryClient.getQueryData<ReadonlyMap<string, DesignacionPendiente>>(KEY_DESIGNACIONES_PENDIENTES);
+  const quitarOverlay = (sesionId: string, desde: string) => {
+    const actual = leer();
+    // Si otra designación de la misma sesión la reemplazó mientras tanto, esa es la que manda.
+    if (!actual || actual.get(sesionId)?.ahoraIso !== desde) return;
+    const sig = new Map(actual);
+    sig.delete(sesionId);
+    queryClient.setQueryData(KEY_DESIGNACIONES_PENDIENTES, sig);
+  };
+  return useMutation({
+    mutationFn: (v: DesignarVars) => enVivoApi.designarVuelta(token as string, v.sesionId, v.varianteId),
+    onMutate: async (v) => {
+      // Un poll en vuelo pisaría el cambio optimista con datos previos a la designación.
+      await queryClient.cancelQueries({ queryKey: key });
+      const ahoraIso = new Date().toISOString();
+      const sig = new Map(leer());
+      sig.set(v.sesionId, { varianteId: v.varianteId, varianteNombre: v.varianteNombre, ahoraIso });
+      queryClient.setQueryData(KEY_DESIGNACIONES_PENDIENTES, sig);
+      return { ahoraIso };
+    },
+    onSettled: async (_data, _err, v, ctx) => {
+      void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'molinos'] });
+      // El overlay se mantiene hasta que llega el refetch de posiciones: quitarlo antes dejaría ver
+      // un instante la caché previa a la designación.
+      await queryClient.invalidateQueries({ queryKey: key });
+      if (ctx) quitarOverlay(v.sesionId, ctx.ahoraIso);
+    },
   });
 }
