@@ -92,14 +92,19 @@ async function validarPuntoEspera(
   rutaId: string,
   puntoControlId: string,
 ): Promise<void> {
-  const [pc] = await tx.$queryRaw<{ rutaId: string; rol: string | null; esperaMin: number | null }[]>`
-    SELECT "rutaId", rol, "esperaMin" FROM puntos_control WHERE id = ${puntoControlId}
+  const [pc] = await tx.$queryRaw<
+    { rutaId: string; rol: string | null; esperaMin: number | null; estado: string }[]
+  >`
+    SELECT "rutaId", rol, "esperaMin", estado FROM puntos_control WHERE id = ${puntoControlId}
   `;
   if (!pc || pc.rutaId !== rutaId) {
     throw new BadRequestException('El punto de espera debe ser un punto de control de la misma ruta');
   }
   if (pc.rol !== 'espera' || !pc.esperaMin) {
     throw new BadRequestException('El punto de espera debe tener rol "espera" y minutos de espera');
+  }
+  if (pc.estado !== 'activo') {
+    throw new BadRequestException('El punto de espera está inactivo');
   }
 }
 

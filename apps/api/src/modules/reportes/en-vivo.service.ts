@@ -68,6 +68,7 @@ interface PosicionEnVivoRow {
   infraccionesAbiertas: number | null;
   infraccionesAtendidas: number | null;
   infraccionNivelOrden: number | null;
+  infraccionNivelAtendidaOrden: number | null;
   // docs/plan-molinos-designacion.md — vuelta en curso (LATERAL a `vueltas`) y "ya fue a Molinos hoy".
   vueltaNumero: number | null;
   vueltaVarianteId: string | null;
@@ -493,6 +494,7 @@ export class EnVivoService {
           v.placa as "vehiculoPlaca", v."fotoUrl" as "fotoUrl", c.nombre as "conductorNombre",
           l.id as "lineaId", l.nombre as "lineaNombre", ru.sentido as "rutaSentido",
           inf."infraccionesAbiertas", inf."infraccionesAtendidas", inf."infraccionNivelOrden",
+          inf."infraccionNivelAtendidaOrden",
           vu.numero AS "vueltaNumero", vu."varianteId" AS "vueltaVarianteId",
           vu."varianteNombre" AS "vueltaVarianteNombre", vu."designadaEn" AS "vueltaDesignadaEn",
           vu."acuseEn" AS "vueltaAcuseEn", vu."esperaLlegadaTs" AS "vueltaEsperaLlegadaTs",
@@ -536,15 +538,18 @@ export class EnVivoService {
         -- docs/plan-en-vivo-alertas.md PR A: infracciones ABIERTAS y ATENDIDAS de la sesión. Un
         -- agregado por sesión resuelto por el índice (sesionId, estado); count(*) sin GROUP BY
         -- siempre devuelve una fila (0 si no hay), por eso el LATERAL es seguro con ON true.
-        -- El nivel es el máximo entre abiertas y atendidas: al "atender" el marcador deja de
-        -- parpadear pero conserva el ícono de severidad (pendiente E #1). Orden de gravedad:
-        -- leve(1) < grave(2) < gravisima(3) = GRAVEDAD_ORDEN (@quivo/shared); el test
+        -- infraccionNivelOrden = máximo entre las ABIERTAS (lo que lee la web como nivel de la
+        -- alerta: parpadeo, filtros, orden); infraccionNivelAtendidaOrden = máximo entre las
+        -- ATENDIDAS, para el ícono estático de severidad al "atender" (pendiente E #1). Orden de
+        -- gravedad: leve(1) < grave(2) < gravisima(3) = GRAVEDAD_ORDEN (@quivo/shared); el test
         -- en-vivo.gravedad-orden.test.ts verifica que este CASE y la constante coinciden.
         LEFT JOIN LATERAL (
           SELECT count(*) FILTER (WHERE i.estado = 'abierta')::int AS "infraccionesAbiertas",
                  count(*) FILTER (WHERE i.estado = 'atendida')::int AS "infraccionesAtendidas",
                  max(CASE i.gravedad WHEN 'gravisima' THEN 3 WHEN 'grave' THEN 2 ELSE 1 END)
-                   AS "infraccionNivelOrden"
+                   FILTER (WHERE i.estado = 'abierta') AS "infraccionNivelOrden",
+                 max(CASE i.gravedad WHEN 'gravisima' THEN 3 WHEN 'grave' THEN 2 ELSE 1 END)
+                   FILTER (WHERE i.estado = 'atendida') AS "infraccionNivelAtendidaOrden"
           FROM infracciones i
           WHERE i."sesionId" = so.id
             AND i.estado IN ('abierta', 'atendida')
@@ -575,6 +580,7 @@ export class EnVivoService {
           infraccionesAbiertas: f.infraccionesAbiertas ?? 0,
           infraccionesAtendidas: f.infraccionesAtendidas ?? 0,
           infraccionNivel: nivelDeOrden(f.infraccionNivelOrden),
+          infraccionNivelAtendida: nivelDeOrden(f.infraccionNivelAtendidaOrden),
           fotoUrl: f.fotoUrl ?? null,
           molinosHoy: f.molinosHoy ?? false,
           vuelta:

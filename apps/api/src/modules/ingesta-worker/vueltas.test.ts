@@ -38,6 +38,7 @@ function fila(parcial: Partial<FilaVuelta> = {}): FilaVuelta {
     puntoEsperaId: null,
     esperaLlegadaTs: null,
     esperaSalidaTs: null,
+    ultimoPcTs: null,
     ...parcial,
   };
 }
@@ -84,9 +85,11 @@ describe('avanzarVueltas — apertura y cierre', () => {
     expect(ultimaDe(r).estado).toBe('en_curso');
   });
 
-  it('un PC sin rol no mueve la máquina', () => {
+  it('un PC sin rol no abre/cierra vueltas (solo deja constancia en ultimoPcTs de la en curso)', () => {
     expect(avanzar(null, [comun(min(1))]).cambios).toEqual([]);
-    expect(avanzar(fila(), [comun(min(1))]).cambios).toEqual([]);
+    const r = avanzar(fila(), [comun(min(1))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.fila).toMatchObject({ estado: 'en_curso', pasoRetornoTs: null, ultimoPcTs: min(1) });
   });
 
   it('retorno repetido conserva el primero; retorno sin vuelta abierta se ignora', () => {
@@ -146,6 +149,57 @@ describe('avanzarVueltas — fin de recorrido', () => {
   });
 });
 
+describe('avanzarVueltas — vueltas vacías (fin de recorrido normal)', () => {
+  /** Vueltas que quedan realmente en la base tras aplicar los cambios (sin las eliminadas). */
+  const persistidas = (r: ReturnType<typeof avanzar>) => r.cambios.filter((c) => !c.eliminada);
+
+  it('la terminal cierra N y abre N+1; el fin 30 s después ELIMINA la N+1 vacía: no queda vuelta de más', () => {
+    const r = avanzar(fila({ pasoRetornoTs: min(20), ultimoPcTs: min(20) }), [terminal(min(50)), fin(seg(50 * 60 + 30))]);
+    expect(r.cambios.map((c) => [c.fila.numero, c.fila.estado, c.nueva, !!c.eliminada])).toEqual([
+      [1, 'completa', false, false],
+      [2, 'abierta_al_cierre', true, true],
+    ]);
+    // Solo la vuelta 1 (completa) llega a la base; la 2 nueva+eliminada ni se inserta.
+    expect(persistidas(r).map((c) => [c.fila.numero, c.fila.estado])).toEqual([[1, 'completa']]);
+    expect(r.infracciones).toEqual([]);
+  });
+
+  it('fin 60 s ANTES del terminal (tolerancia de 120 s): la vuelta N+1 ya abierta se elimina, no queda vuelta de más', () => {
+    // La terminal ya abrió la vuelta 2 en un lote anterior; el fin llega tarde con ts 60 s previo.
+    const abiertaPorTerminal = fila({ id: 'v-2', numero: 2, inicioTs: min(50) });
+    const r = avanzar(abiertaPorTerminal, [fin(seg(50 * 60 - 60))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]).toMatchObject({ nueva: false, eliminada: true });
+    expect(r.cambios[0]!.fila.id).toBe('v-2');
+  });
+
+  it('en el mismo lote: fin 60 s antes del terminal cierra la N completa y no abre ni deja otra', () => {
+    const r = avanzar(fila({ pasoRetornoTs: min(20), ultimoPcTs: min(20) }), [fin(seg(50 * 60 - 60)), terminal(min(50))]);
+    expect(persistidas(r).map((c) => [c.fila.numero, c.fila.estado])).toEqual([[1, 'completa']]);
+    expect(r.cambios.some((c) => c.eliminada)).toBe(false);
+  });
+
+  it('tras eliminar la vacía, el inicio_recorrido siguiente reutiliza el número (sin huecos)', () => {
+    const r = avanzar(fila({ pasoRetornoTs: min(20), ultimoPcTs: min(20) }), [
+      terminal(min(50)), fin(min(51)), inicio(min(300)),
+    ]);
+    const vivas = persistidas(r).map((c) => [c.fila.numero, c.fila.estado]);
+    expect(vivas).toEqual([[1, 'completa'], [2, 'en_curso']]);
+  });
+
+  it('una vuelta con retorno, con otro PC o designada NO es vacía: el fin la deja abierta_al_cierre', () => {
+    const conRetorno = avanzar(fila({ pasoRetornoTs: min(20) }), [fin(min(30))]);
+    expect(conRetorno.cambios[0]).toMatchObject({ eliminada: false });
+    expect(conRetorno.cambios[0]!.fila.estado).toBe('abierta_al_cierre');
+    const conComun = avanzar(fila(), [comun(min(10)), fin(min(30))]);
+    expect(conComun.cambios[0]!.fila).toMatchObject({ estado: 'abierta_al_cierre', ultimoPcTs: min(10) });
+    expect(conComun.cambios[0]!.eliminada).toBe(false);
+    const designada = avanzar(fila({ varianteId: 'var-molinos', puntoEsperaId: MOLINOS }), [fin(min(30))]);
+    expect(designada.cambios[0]!.eliminada).toBe(false);
+    expect(designada.cambios[0]!.fila.estado).toBe('abierta_al_cierre');
+  });
+});
+
 describe('avanzarVueltas — Molinos', () => {
   const designada = (parcial: Partial<FilaVuelta> = {}) =>
     fila({ varianteId: 'var-molinos', puntoEsperaId: MOLINOS, pasoRetornoTs: min(20), ...parcial });
@@ -181,6 +235,39 @@ describe('avanzarVueltas — Molinos', () => {
         detalle: { vueltaId: 'v-7', numero: 7, varianteId: 'var-molinos' },
       }),
     ]);
+  });
+
+  it('designada sin llegada a Molinos y cerrada por fin_recorrido: molinos_omitido (sin posición, la completa el worker)', () => {
+    const r = avanzar(designada({ id: 'v-8', numero: 8 }), [fin(min(40))]);
+    expect(r.cambios[0]!.fila.estado).toBe('abierta_al_cierre');
+    expect(r.infracciones).toEqual([
+      expect.objectContaining({
+        tipo: 'molinos_omitido',
+        vueltaId: 'v-8',
+        dedupeKey: 'molinos_omitido:v-8',
+        inicioTs: min(40),
+        lat: null,
+        lng: null,
+        detalle: { vueltaId: 'v-8', numero: 8, varianteId: 'var-molinos' },
+      }),
+    ]);
+  });
+
+  it('designada sin llegada y cerrada por un inicio_recorrido nuevo: molinos_omitido', () => {
+    const r = avanzar(designada({ id: 'v-9', numero: 9 }), [inicio(min(45))]);
+    expect(r.cambios.map((c) => [c.fila.numero, c.fila.estado])).toEqual([[9, 'abierta_al_cierre'], [10, 'en_curso']]);
+    expect(r.infracciones.map((i) => i.vueltaId)).toEqual(['v-9']);
+  });
+
+  it('designada que SÍ pasó por Molinos y cierra por fin_recorrido: sin molinos_omitido', () => {
+    const r = avanzar(designada({ esperaLlegadaTs: min(30) }), [fin(min(60))]);
+    expect(r.infracciones).toEqual([]);
+  });
+
+  it('designada, fin_recorrido y terminal tardío (misma vuelta): una sola infracción por la dedupeKey', () => {
+    const r = avanzar(designada({ id: 'v-7', numero: 7 }), [fin(min(40)), terminal(seg(40 * 60 + 30))]);
+    expect(r.cambios[0]!.fila.estado).toBe('completa');
+    expect(new Set(r.infracciones.map((i) => i.dedupeKey)).size).toBe(1);
   });
 
   it('una vuelta directa (sin designación) que cierra en SR no genera molinos_omitido', () => {

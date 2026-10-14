@@ -25,7 +25,8 @@ import {
  * - Un cumplimiento `terminal` CON `pasoRetornoTs` cierra la vuelta `completa` y abre la
  *   siguiente con el mismo `ts` (siempre hay una en curso). SIN `pasoRetornoTs` no hace nada:
  *   SR → SR sin pasar por Honduras no cuenta vuelta.
- * - `fin_recorrido` deja la vuelta en curso `abierta_al_cierre`. Como `fin_recorrido` usa el
+ * - `fin_recorrido` deja la vuelta en curso `abierta_al_cierre`, salvo que esté VACÍA (ver abajo):
+ *   entonces se ELIMINA. Como `fin_recorrido` usa el
  *   reloj del sistema y el cumplimiento el del GNSS, un `terminal` que llega hasta
  *   `VENTANA_RECORRIDO_TOLERANCIA_MS` (120 s, la misma tolerancia de `pc_omitido`) DESPUÉS de
  *   ese fin todavía cierra la vuelta `completa` (sin abrir otra: el recorrido terminó).
@@ -35,6 +36,14 @@ import {
  * - Espera: la llegada es el cumplimiento del PC de espera de la variante DESIGNADA mientras la
  *   vuelta designada está en curso. Una designada que cierra en la terminal sin llegada genera
  *   `molinos_omitido`. La salida la resuelve `resolverEspera` con los fixes GPS (stateless).
+ *
+ * Vuelta vacía: la que abrió la terminal (o un `inicio_recorrido`) y todavía no registró ningún PC
+ * después (`pasoRetornoTs` y `ultimoPcTs` nulos) ni está designada. Al terminar el recorrido el
+ * cumplimiento de SR cierra la vuelta N y abre la N+1; el `fin_recorrido` que sigue (o un
+ * `inicio_recorrido` nuevo) la dejaría como una fila basura por recorrido, así que se ELIMINA en
+ * vez de cerrarla. Nunca se elimina una designada. Como lo eliminado es siempre la ÚLTIMA vuelta,
+ * la numeración del día queda sin huecos: la siguiente que se abra reutiliza ese número.
+ * (El mismo criterio vive en el trigger `vueltas_cerrar_con_sesion` para el cierre de sesión.)
  *
  * Eventos fuera de orden / tardíos (outbox móvil): NO hay un watermark global. Cada evento se
  * evalúa contra la vuelta actual y uno anterior al inicio de esa vuelta (o que ya no aplica a su
@@ -58,6 +67,20 @@ export interface FilaVuelta {
   puntoEsperaId: string | null;
   esperaLlegadaTs: Date | null;
   esperaSalidaTs: Date | null;
+  /** Último cumplimiento de un PC distinto de la terminal (retorno, espera o común) en la vuelta. */
+  ultimoPcTs: Date | null;
+}
+
+/** Vuelta vacía: sin PC tras abrirse y sin designación (candidata a eliminarse al cerrar). */
+export function esVueltaVacia(
+  fila: Pick<FilaVuelta, 'pasoRetornoTs' | 'ultimoPcTs' | 'varianteId' | 'esperaLlegadaTs'>,
+): boolean {
+  return (
+    fila.varianteId === null &&
+    fila.pasoRetornoTs === null &&
+    fila.ultimoPcTs === null &&
+    fila.esperaLlegadaTs === null
+  );
 }
 
 export type EventoVuelta =
@@ -77,14 +100,17 @@ export interface CambioVuelta {
   fila: FilaVuelta;
   /** `true` si la fila no existía antes de este avance (hay que insertarla). */
   nueva: boolean;
+  /** `true` si la vuelta (vacía) se elimina en vez de cerrarse; si además es `nueva`, no se inserta. */
+  eliminada?: boolean;
 }
 
 export interface InfraccionVuelta {
   tipo: 'molinos_omitido' | 'espera_corta';
   vueltaId: string;
   inicioTs: Date;
-  lat: number;
-  lng: number;
+  /** `null` = la máquina no tiene posición (cierre por evento sin coordenadas): la resuelve el worker. */
+  lat: number | null;
+  lng: number | null;
   detalle: Record<string, unknown>;
   dedupeKey: string;
 }
@@ -106,14 +132,16 @@ export function avanzarVueltas(
   const cambios = new Map<string, CambioVuelta>();
   const infracciones: InfraccionVuelta[] = [];
   let actual: FilaVuelta | null = ultima ? { ...ultima } : null;
+  // Número de la última vuelta que existe (se retrocede al eliminar una vacía: sin huecos).
+  let ultimoNumero = ultima?.numero ?? 0;
 
-  const marcar = (fila: FilaVuelta, nueva = false) => {
-    cambios.set(fila.id, { fila, nueva: cambios.get(fila.id)?.nueva ?? nueva });
+  const marcar = (fila: FilaVuelta, nueva = false, eliminada = false) => {
+    cambios.set(fila.id, { fila, nueva: cambios.get(fila.id)?.nueva ?? nueva, eliminada });
   };
   const abrir = (ts: Date) => {
     const fila: FilaVuelta = {
       id: nuevoId(),
-      numero: (actual?.numero ?? 0) + 1,
+      numero: ultimoNumero + 1,
       inicioTs: ts,
       finTs: null,
       estado: 'en_curso',
@@ -122,31 +150,45 @@ export function avanzarVueltas(
       puntoEsperaId: null,
       esperaLlegadaTs: null,
       esperaSalidaTs: null,
+      ultimoPcTs: null,
     };
+    ultimoNumero = fila.numero;
     actual = fila;
     marcar(fila, true);
+  };
+  // Designada a Molinos que termina SIN haber pasado por el punto de espera.
+  const molinosOmitido = (fila: FilaVuelta, ts: Date, lat: number | null, lng: number | null) => {
+    if (fila.varianteId === null || fila.esperaLlegadaTs !== null) return;
+    infracciones.push({
+      tipo: 'molinos_omitido',
+      vueltaId: fila.id,
+      inicioTs: ts,
+      lat,
+      lng,
+      detalle: { vueltaId: fila.id, numero: fila.numero, varianteId: fila.varianteId },
+      dedupeKey: dedupeKeyMolinosOmitido(fila.id),
+    });
   };
   const cerrarCompleta = (fila: FilaVuelta, ts: Date, lat: number, lng: number) => {
     fila.estado = 'completa';
     fila.finTs = ts;
     marcar(fila);
-    // Designada a Molinos y cerró en la terminal sin haber pasado por el punto de espera.
-    if (fila.varianteId !== null && fila.esperaLlegadaTs === null) {
-      infracciones.push({
-        tipo: 'molinos_omitido',
-        vueltaId: fila.id,
-        inicioTs: ts,
-        lat,
-        lng,
-        detalle: { vueltaId: fila.id, numero: fila.numero, varianteId: fila.varianteId },
-        dedupeKey: dedupeKeyMolinosOmitido(fila.id),
-      });
-    }
+    molinosOmitido(fila, ts, lat, lng);
   };
   const cerrarAbierta = (fila: FilaVuelta, ts: Date) => {
-    fila.estado = 'abierta_al_cierre';
     fila.finTs = ts;
+    if (esVueltaVacia(fila)) {
+      // Vacía: se elimina (es la última vuelta, la numeración no deja hueco). `fila` queda como
+      // marca de "recorrido terminado" para los eventos siguientes del lote.
+      fila.estado = 'abierta_al_cierre';
+      marcar(fila, false, true);
+      if (fila.numero === ultimoNumero) ultimoNumero -= 1;
+      return;
+    }
+    fila.estado = 'abierta_al_cierre';
     marcar(fila);
+    // Se emite sin posición: el worker la toma del último fix GPS de la sesión.
+    molinosOmitido(fila, ts, null, null);
   };
 
   const ordenados = [...eventos].sort(
@@ -199,6 +241,7 @@ export function avanzarVueltas(
     } else if (ev.rol === 'retorno') {
       if (actual?.estado === 'en_curso' && !actual.pasoRetornoTs && t >= actual.inicioTs.getTime()) {
         actual.pasoRetornoTs = ev.ts;
+        actual.ultimoPcTs = ev.ts;
         marcar(actual);
       }
     } else if (ev.rol === 'espera') {
@@ -210,6 +253,13 @@ export function avanzarVueltas(
         (actual.puntoEsperaId === null || actual.puntoEsperaId === ev.puntoControlId)
       ) {
         actual.esperaLlegadaTs = ev.ts;
+        actual.ultimoPcTs = ev.ts;
+        marcar(actual);
+      }
+    } else if (ev.rol === null) {
+      // Punto común: no mueve la máquina, pero la vuelta deja de estar vacía.
+      if (actual?.estado === 'en_curso' && t >= actual.inicioTs.getTime()) {
+        actual.ultimoPcTs = ev.ts;
         marcar(actual);
       }
     }

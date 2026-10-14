@@ -213,14 +213,15 @@ export const PosicionEnVivoSchema = z
      * sanción). Opcionales/nullables: compatibles con respuestas viejas en cache. */
     vehiculoId: uuidSchema.nullable().optional(),
     conductorId: uuidSchema.nullable().optional(),
-    /** Gravedad máxima entre las infracciones `abierta` y `atendida` de la sesión (`null` si no hay). */
+    /** Gravedad máxima entre las infracciones `abierta` de la sesión (`null` si no hay). */
     infraccionNivel: GravedadReglaSchema.nullable().optional(),
     /** Cantidad de infracciones `abierta` de la sesión. */
     infraccionesAbiertas: z.number().int().nonnegative().optional(),
     /** Cantidad de infracciones `atendida`: sin ellas pendientes el marcador deja de parpadear
-     * pero conserva el ícono de severidad. `infraccionNivel` es el máximo entre abiertas Y
-     * atendidas (pendiente E #1, docs/plan-molinos-designacion.md). */
+     * pero conserva el ícono de severidad (pendiente E #1, docs/plan-molinos-designacion.md). */
     infraccionesAtendidas: z.number().int().nonnegative().optional(),
+    /** Gravedad máxima entre las infracciones `atendida` (`null` si no hay): ícono estático. */
+    infraccionNivelAtendida: GravedadReglaSchema.nullable().optional(),
     /** PR C — foto de la unidad (URL pública) para el marcador y el panel; `null` si no tiene. */
     fotoUrl: z.string().nullable().optional(),
     /** Vuelta en curso de la sesión (docs/plan-molinos-designacion.md); `null` si no hay. */

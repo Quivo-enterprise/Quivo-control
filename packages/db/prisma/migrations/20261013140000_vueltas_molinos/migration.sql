@@ -54,6 +54,9 @@ CREATE TABLE "vueltas" (
     "acuseEn" TIMESTAMP(3),
     "esperaLlegadaTs" TIMESTAMP(3),
     "esperaSalidaTs" TIMESTAMP(3),
+    -- Último cumplimiento de un PC distinto de la terminal dentro de la vuelta (retorno, espera o
+    -- común). NULL + sin retorno + sin designar = vuelta "vacía" (se elimina al cerrarse).
+    "ultimoPcTs" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -96,15 +99,40 @@ CREATE POLICY tenant_isolation ON vueltas
   );
 
 -- Al cerrarse la sesión de login (logout, revocación, relogin del vehículo/conductor: todos los
--- caminos pasan por `estado = 'cerrada'`) la vuelta en curso queda `abierta_al_cierre`. Un
--- trigger cubre todos esos caminos sin tocar cada uno. Corre como el invocador, así que la RLS
--- de `vueltas` aplica con el mismo contexto de tenant que cerró la sesión.
+-- caminos pasan por `estado = 'cerrada'`) la vuelta en curso termina. Un trigger cubre todos esos
+-- caminos sin tocar cada uno. Corre como el invocador (FORCE RLS sobre `vueltas`), y el contexto de
+-- tenant de quien cierra la sesión NO está garantizado (p. ej. un job sin `app.sindicato_id`): sin
+-- él la RLS filtraría todas las filas y el UPDATE/DELETE no haría nada EN SILENCIO. Por eso la
+-- función fija `app.sindicato_id` al sindicato de LA PROPIA sesión mientras toca `vueltas` y
+-- restaura el valor previo (nunca toca `app.rol`: no escala privilegios, solo apunta a su tenant).
+--
+-- Vuelta "vacía" (sin designar, sin retorno, sin otro PC tras abrirse): se ELIMINA en vez de
+-- cerrarla `abierta_al_cierre`; es siempre la última del día, así que la numeración no deja huecos.
+-- Mismo criterio que la máquina (`esVueltaVacia` en ingesta-worker/vueltas.ts).
+--
+-- LIMITACIÓN: este camino NO emite `molinos_omitido` para una vuelta designada que queda
+-- `abierta_al_cierre` (un trigger no registra infracciones con su regla/gravedad). Lo cubrirá el
+-- chequeo F2 de "vueltas faltantes".
 CREATE FUNCTION vueltas_cerrar_con_sesion() RETURNS trigger AS $$
+DECLARE
+  sindicato_previo text;
 BEGIN
   IF NEW.estado = 'cerrada' AND OLD.estado IS DISTINCT FROM 'cerrada' THEN
+    sindicato_previo := current_setting('app.sindicato_id', true);
+    PERFORM set_config('app.sindicato_id', NEW."sindicatoId"::text, true);
+
+    DELETE FROM vueltas
+    WHERE "sesionId" = NEW.id AND estado = 'en_curso'
+      AND "varianteId" IS NULL AND "pasoRetornoTs" IS NULL AND "ultimoPcTs" IS NULL
+      AND "esperaLlegadaTs" IS NULL;
+
     UPDATE vueltas
     SET estado = 'abierta_al_cierre', "finTs" = COALESCE(NEW.fin, now()), "updatedAt" = now()
     WHERE "sesionId" = NEW.id AND estado = 'en_curso';
+
+    -- '' (no NULL) cuando no había valor: las políticas comparan contra current_setting y una
+    -- cadena vacía no coincide con ningún sindicato, igual que un GUC sin definir.
+    PERFORM set_config('app.sindicato_id', COALESCE(sindicato_previo, ''), true);
   END IF;
   RETURN NEW;
 END;

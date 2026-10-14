@@ -846,6 +846,9 @@ model Vuelta {
   acuseEn         DateTime?
   esperaLlegadaTs DateTime?
   esperaSalidaTs  DateTime?
+  // Último cumplimiento de un PC distinto de la terminal dentro de la vuelta (retorno, espera o
+  // común). NULL + sin retorno + sin designar = vuelta "vacía": al cerrarse se elimina.
+  ultimoPcTs      DateTime?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 

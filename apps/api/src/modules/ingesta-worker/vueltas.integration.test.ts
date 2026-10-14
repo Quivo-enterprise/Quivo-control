@@ -6,6 +6,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { prisma, withTenantContext } from '@quivo/db';
+import { Client } from 'pg';
 import { fechaActualBolivia, type EventoSync } from '@quivo/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
@@ -81,7 +82,9 @@ describe('vueltas y designación a Molinos (F1)', () => {
   let conductorId: string;
   let reglaId: string;
   const sesiones = {} as Record<
-    'ciclo' | 'larga' | 'corta' | 'omitida' | 'fin' | 'desorden' | 'sinRoles' | 'desvio' | 'carrera',
+    | 'ciclo' | 'larga' | 'corta' | 'omitida' | 'fin' | 'desorden' | 'sinRoles' | 'desvio' | 'carrera'
+    | 'vacia' | 'cierreVacia' | 'cierreDesig' | 'cierreSinTenant' | 'inactiva' | 'esperaTardia' | 'retro'
+    | 'omitidaFin',
     string
   >;
 
@@ -106,6 +109,12 @@ describe('vueltas y designación a Molinos (F1)', () => {
     conductorId,
     deviceId: 'device-vlt',
   });
+  const cerrarSesion = (sesionId: string) => {
+    const fin = new Date();
+    return withTenantContext(ADMIN, (tx) =>
+      tx.sesionOperativa.update({ where: { id: sesionId }, data: { estado: 'cerrada', fin, revokedAt: fin } }),
+    );
+  };
   /** Un ciclo SR → Honduras en `minutos` (deja la vuelta con retorno pasado). */
   const hastaHonduras = (sesionId: string, desde: number) => [
     cumpl(sesionId, pcSr, iso(desde), LON_SR, LAT_RUTA),
@@ -188,7 +197,10 @@ describe('vueltas y designación a Molinos (F1)', () => {
             },
           })
         ).id;
-      for (const k of ['ciclo', 'larga', 'corta', 'omitida', 'fin', 'desorden', 'desvio', 'carrera'] as const) {
+      for (const k of [
+        'ciclo', 'larga', 'corta', 'omitida', 'fin', 'desorden', 'desvio', 'carrera',
+        'vacia', 'cierreVacia', 'cierreDesig', 'cierreSinTenant', 'inactiva', 'esperaTardia', 'retro', 'omitidaFin',
+      ] as const) {
         sesiones[k] = await crearSesion(asigCirc);
       }
       sesiones.sinRoles = await crearSesion(asigSinRoles);
@@ -543,24 +555,30 @@ describe('vueltas y designación a Molinos (F1)', () => {
       expect(sinRoles.infraccionesAtendidas).toBe(0);
     });
 
-    it('el nivel incluye las infracciones ATENDIDAS: sin abiertas queda el ícono fijo (pendiente E #1)', async () => {
+    it('infraccionNivel solo cuenta ABIERTAS; las atendidas dejan el ícono fijo en infraccionNivelAtendida (pendiente E #1)', async () => {
       const s = sesiones.corta;
       const abierta = (await infraccionesDe(s)).find((i) => i.tipo === 'espera_corta')!;
       const antes = (await enVivo.obtenerPosiciones(adminA)).find((p) => p.id === s)!;
-      expect(antes).toMatchObject({ infraccionesAbiertas: 1, infraccionesAtendidas: 0, infraccionNivel: 'leve' });
+      expect(antes).toMatchObject({ infraccionesAbiertas: 1, infraccionesAtendidas: 0, infraccionNivel: 'leve', infraccionNivelAtendida: null });
 
       await infracciones.actualizar(adminA, abierta.id, { accion: 'atender' });
       const atendida = (await enVivo.obtenerPosiciones(adminA)).find((p) => p.id === s)!;
-      // Sin abiertas el marcador NO parpadea, pero conserva el nivel (leve) con las atendidas.
-      expect(atendida).toMatchObject({ infraccionesAbiertas: 0, infraccionesAtendidas: 1, infraccionNivel: 'leve' });
+      // Sin abiertas el marcador NO parpadea (infraccionNivel null: la web lo lee como "nivel de
+      // las abiertas"), pero conserva el ícono fijo vía infraccionNivelAtendida.
+      expect(atendida).toMatchObject({
+        infraccionesAbiertas: 0,
+        infraccionesAtendidas: 1,
+        infraccionNivel: null,
+        infraccionNivelAtendida: 'leve',
+      });
 
       // Descartada o sancionada ya no cuentan.
       await infracciones.actualizar(adminA, abierta.id, { accion: 'descartar' });
       const descartada = (await enVivo.obtenerPosiciones(adminA)).find((p) => p.id === s)!;
-      expect(descartada).toMatchObject({ infraccionesAbiertas: 0, infraccionesAtendidas: 0, infraccionNivel: null });
+      expect(descartada).toMatchObject({ infraccionesAbiertas: 0, infraccionesAtendidas: 0, infraccionNivel: null, infraccionNivelAtendida: null });
     });
 
-    it('el nivel es el máximo entre abiertas y atendidas', async () => {
+    it('infraccionNivel = máximo de las abiertas; infraccionNivelAtendida = máximo de las atendidas', async () => {
       const s = sesiones.larga;
       const base = { sindicatoId: sindicatoA, sesionId: s, vehiculoId, conductorId, lineaId, rutaId, inicioTs: new Date(BASE), lat: 0, lng: 0, detalle: {} };
       await withTenantContext(ADMIN, async (tx) => {
@@ -568,7 +586,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
         await tx.infraccion.create({ data: { ...base, tipo: 'pc_omitido', gravedad: 'leve', estado: 'abierta', dedupeKey: `max:${randomUUID()}` } });
       });
       const p = (await enVivo.obtenerPosiciones(adminA)).find((x) => x.id === s)!;
-      expect(p).toMatchObject({ infraccionesAbiertas: 1, infraccionesAtendidas: 1, infraccionNivel: 'gravisima' });
+      expect(p).toMatchObject({ infraccionesAbiertas: 1, infraccionesAtendidas: 1, infraccionNivel: 'leve', infraccionNivelAtendida: 'gravisima' });
     });
 
     it('resumen Molinos por línea: en espera, último envío y próximo sugerido', async () => {
@@ -677,9 +695,148 @@ describe('vueltas y designación a Molinos (F1)', () => {
     });
   });
 
+  describe('vueltas vacías, sesión cerrada y esperas pendientes (fixes de revisión)', () => {
+    it('terminal + fin_recorrido: no queda la vuelta N+1 vacía; el siguiente inicio reutiliza el número', async () => {
+      const s = sesiones.vacia;
+      await lote([...hastaHonduras(s, 0), cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA)]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'en_curso']]);
+      await lote([fin(s, iso(45, 30))]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa']]);
+      // Numeración sin huecos: la siguiente vuelta del día es la 2.
+      await lote([inicio(s, iso(170))]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'en_curso']]);
+    });
+
+    it('el fin de recorrido sobre una vuelta designada NO la elimina y emite molinos_omitido con posición', async () => {
+      const s = sesiones.omitidaFin;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      await vueltas.designar(adminA, s, varianteId);
+      await lote([fin(s, iso(30))]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'abierta_al_cierre']]);
+      const omitidos = (await infraccionesDe(s)).filter((i) => i.tipo === 'molinos_omitido');
+      expect(omitidos).toHaveLength(1);
+      expect(Number.isFinite(omitidos[0]!.lat) && Number.isFinite(omitidos[0]!.lng)).toBe(true);
+      await lote([fin(s, iso(30))]);
+      expect((await infraccionesDe(s)).filter((i) => i.tipo === 'molinos_omitido')).toHaveLength(1);
+    });
+
+    it('trigger: al cerrar la sesión se elimina la vuelta en curso vacía y se conserva la designada', async () => {
+      const vacia = sesiones.cierreVacia;
+      await lote([cumpl(vacia, pcSr, iso(0), LON_SR, LAT_RUTA)]);
+      expect(await vueltasDe(vacia)).toHaveLength(1);
+      await cerrarSesion(vacia);
+      expect(await vueltasDe(vacia)).toHaveLength(0);
+
+      const designada = sesiones.cierreDesig;
+      await lote([cumpl(designada, pcSr, iso(0), LON_SR, LAT_RUTA)]);
+      await vueltas.designar(adminA, designada, varianteId);
+      await cerrarSesion(designada);
+      expect((await vueltasDe(designada)).map((f) => [f.numero, f.estado, f.varianteId])).toEqual([
+        [1, 'abierta_al_cierre', varianteId],
+      ]);
+    });
+
+    it('trigger: cerrar la sesión SIN contexto de tenant igual cierra su vuelta en curso (la RLS no la oculta)', async () => {
+      const s = sesiones.cierreSinTenant;
+      await lote([...hastaHonduras(s, 0)]);
+      expect((await vueltasDe(s)).map((f) => f.estado)).toEqual(['en_curso']);
+      // Conexión del dueño (superusuario): se desactiva la RLS de `sesiones_operativas` SOLO dentro
+      // de esta transacción (DDL transaccional, se revierte) para que el UPDATE de la sesión pase
+      // como `quivo_app` SIN `app.rol`/`app.sindicato_id`. Con la RLS de `vueltas` intacta, un
+      // trigger que no fije el tenant no vería la fila y la dejaría `en_curso` en silencio.
+      const cliente = new Client({ connectionString: process.env.DATABASE_URL });
+      await cliente.connect();
+      try {
+        await cliente.query('BEGIN');
+        await cliente.query('ALTER TABLE sesiones_operativas DISABLE ROW LEVEL SECURITY');
+        await cliente.query('SET LOCAL ROLE quivo_app');
+        const actual = await cliente.query(`SELECT current_setting('app.sindicato_id', true) AS previo`);
+        const cierre = await cliente.query(
+          `UPDATE sesiones_operativas SET estado = 'cerrada', fin = now() WHERE id = $1`,
+          [s],
+        );
+        expect(cierre.rowCount).toBe(1);
+        const despues = await cliente.query(
+          `SELECT estado, current_setting('app.sindicato_id', true) AS tenant FROM vueltas WHERE "sesionId" = $1`,
+          [s],
+        );
+        // Sin RLS visible no se puede leer `vueltas` como quivo_app: se vuelve al dueño para leer.
+        await cliente.query('RESET ROLE');
+        const filas = await cliente.query(`SELECT estado FROM vueltas WHERE "sesionId" = $1`, [s]);
+        expect(filas.rows.map((r: { estado: string }) => r.estado)).toEqual(['abierta_al_cierre']);
+        // El trigger restauró el valor previo del GUC (nada fijado antes → nada fijado después).
+        expect(despues.rows.every((r: { tenant: string | null }) => !r.tenant)).toBe(true);
+        expect(actual.rows[0]!.previo ?? '').toBe('');
+      } finally {
+        await cliente.query('ROLLBACK').catch(() => undefined);
+        await cliente.end();
+      }
+      // Revertido: la sesión sigue activa y la vuelta en curso.
+      expect((await vueltasDe(s)).map((f) => f.estado)).toEqual(['en_curso']);
+    });
+
+    it('el worker no abre, cierra ni muta vueltas de una sesión ya cerrada', async () => {
+      const s = sesiones.inactiva;
+      await lote([...hastaHonduras(s, 0)]);
+      await cerrarSesion(s);
+      const antes = await vueltasDe(s);
+      expect(antes.map((f) => f.estado)).toEqual(['abierta_al_cierre']);
+      // Una terminal tardía cerraría la vuelta y abriría otra si la sesión siguiera activa.
+      await lote([cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA), inicio(s, iso(60))]);
+      const despues = await vueltasDe(s);
+      expect(despues.map((f) => [f.numero, f.estado])).toEqual([[1, 'abierta_al_cierre']]);
+      expect(despues[0]!.updatedAt.getTime()).toBe(antes[0]!.updatedAt.getTime());
+    });
+
+    it('la salida de una espera pendiente se evalúa aunque la vuelta ya cerró y los fixes lleguen en un lote posterior', async () => {
+      const s = sesiones.esperaTardia;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      await vueltas.designar(adminA, s, varianteId);
+      await lote([
+        cumpl(s, pcHonduras, iso(20), LON_HONDURAS, LAT_RUTA),
+        cumpl(s, pcMolinos, iso(30), LON_MOLINOS, LAT_SUR),
+        gps(s, iso(31), LON_MOLINOS, LAT_SUR),
+      ]);
+      await lote([cumpl(s, pcSr, iso(60), LON_SR, LAT_RUTA)]);
+      let filas = await vueltasDe(s);
+      expect(filas.map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'en_curso']]);
+      expect(filas[0]!.esperaSalidaTs).toBeNull();
+      // Los fixes de la salida (20 min de espera) llegan después del cierre de la vuelta 1.
+      await lote([gps(s, iso(50), LON_SR, LAT_RUTA), gps(s, iso(50, 20), LON_SR, LAT_RUTA)]);
+      filas = await vueltasDe(s);
+      expect(filas[0]!.esperaSalidaTs?.toISOString()).toBe(iso(50));
+      expect((await infraccionesDe(s)).filter((i) => i.tipo === 'espera_corta')).toHaveLength(1);
+    });
+
+    it('designar: el punto de espera inactivo → 422; si ya pasó por el punto de espera en la vuelta → 409', async () => {
+      const s = sesiones.retro;
+      await lote([...hastaHonduras(s, 0), cumpl(s, pcMolinos, iso(30), LON_MOLINOS, LAT_SUR)]);
+      const marcar = (estado: string) =>
+        withTenantContext(ADMIN, (tx) => tx.$executeRaw`UPDATE puntos_control SET estado = ${estado} WHERE id = ${pcMolinos}`);
+      await marcar('inactivo');
+      try {
+        await expect(vueltas.designar(adminA, s, varianteId)).rejects.toBeInstanceOf(UnprocessableEntityException);
+        await expect(vueltas.designar(adminA, s, varianteId)).rejects.toThrow(/inactivo/);
+        await expect(new VariantesService().actualizar(adminA, varianteSinEsperaId, { puntoEsperaId: pcMolinos })).rejects.toThrow(
+          /inactivo/,
+        );
+      } finally {
+        await marcar('activo');
+      }
+      // Pasó por Molinos (iso 30) después del inicio de la vuelta (iso 0): designar ya no corresponde.
+      await expect(vueltas.designar(adminA, s, varianteId)).rejects.toBeInstanceOf(ConflictException);
+      await expect(vueltas.designar(adminA, s, varianteId)).rejects.toThrow(/ya pasó por el punto de espera/);
+      expect((await vueltasDe(s))[0]!.varianteId).toBeNull();
+      // Cancelar (sin variante) sigue permitido.
+      await expect(vueltas.designar(adminA, s, null)).resolves.toBeDefined();
+    });
+  });
+
   describe('cierre de la sesión de login', () => {
     it('al cerrarse la sesión la vuelta en curso queda abierta_al_cierre (trigger; cubre logout y revocaciones)', async () => {
       const s = sesiones.desorden;
+      // La vuelta 2 (abierta por la terminal) todavía está vacía: con un PC encima ya no lo es.
+      await lote([cumpl(s, pcHonduras, iso(100), LON_HONDURAS, LAT_RUTA)]);
       expect((await vueltasDe(s)).at(-1)!.estado).toBe('en_curso');
       const fin = new Date();
       await withTenantContext(ADMIN, (tx) =>

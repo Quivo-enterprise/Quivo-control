@@ -338,13 +338,24 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
   private async procesarVueltas(sindicatoId: string, entradas: EntradasDeteccion): Promise<void> {
     const sesiones = new Map<string, EntradaVueltasSesion>();
     const de = (sesionId: string): EntradaVueltasSesion => {
-      const e = sesiones.get(sesionId) ?? { cumplimientos: [], inicios: [], fines: [], hayGps: false };
+      const e = sesiones.get(sesionId) ?? {
+        cumplimientos: [],
+        inicios: [],
+        fines: [],
+        hayGps: false,
+        gpsDesdeTs: null,
+      };
       sesiones.set(sesionId, e);
       return e;
     };
     for (const evento of entradas.gps) {
       const sesionId = extraerSesionId(evento.payload);
-      if (sesionId) de(sesionId).hayGps = true;
+      if (!sesionId) continue;
+      const e = de(sesionId);
+      e.hayGps = true;
+      // Mismo `ts` con el que se persiste el fix en `gps_points` (acota la ventana de la salida).
+      const ts = new Date(resolverTsFix(evento.payload, evento.ts));
+      if (Number.isFinite(ts.getTime()) && (e.gpsDesdeTs === null || ts < e.gpsDesdeTs)) e.gpsDesdeTs = ts;
     }
     for (const { evento, ts } of entradas.cumplimientos) {
       const payload = evento.payload as unknown as PayloadCumplimientoPuntoControl;

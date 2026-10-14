@@ -16,6 +16,7 @@ import {
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
 
+const MSG_YA_PASO_ESPERA = 'La unidad ya pasó por el punto de espera en esta vuelta';
 const MSG_YA_LLEGO =
   'El vehículo ya llegó al punto de espera: la designación de esta vuelta ya no se puede cambiar';
 
@@ -63,7 +64,7 @@ export class VueltasService {
       // `findUnique` PRIMERO: tenant-check por RLS (una sesión ajena es 404, igual que en /en-vivo).
       const sesion = await tx.sesionOperativa.findUnique({
         where: { id: sesionId },
-        select: { id: true, asignacion: { select: { rutaId: true } } },
+        select: { id: true, sindicatoId: true, asignacion: { select: { rutaId: true } } },
       });
       if (!sesion) {
         throw new NotFoundException('Sesión operativa no encontrada');
@@ -91,17 +92,41 @@ export class VueltasService {
         if (!variante.puntoEsperaId) {
           throw new UnprocessableEntityException('La variante no tiene un punto de espera configurado');
         }
-        const [pc] = await tx.$queryRaw<{ rol: string | null; esperaMin: number | null }[]>`
-          SELECT rol, "esperaMin" FROM puntos_control WHERE id = ${variante.puntoEsperaId}
+        const [pc] = await tx.$queryRaw<
+          { rol: string | null; esperaMin: number | null; estado: string }[]
+        >`
+          SELECT rol, "esperaMin", estado FROM puntos_control WHERE id = ${variante.puntoEsperaId}
         `;
         if (!pc || pc.rol !== 'espera' || !pc.esperaMin) {
           throw new UnprocessableEntityException(
             'El punto de espera de la variante no está configurado (rol "espera" y minutos de espera)',
           );
         }
+        if (pc.estado !== 'activo') {
+          throw new UnprocessableEntityException(
+            'El punto de espera de la variante está inactivo: no se puede designar a esta variante',
+          );
+        }
       }
       if (vuelta.varianteId === varianteId) {
         return this.resumen(tx, vuelta.id);
+      }
+      if (varianteId !== null) {
+        // Designación retroactiva: si la unidad ya pasó por el punto de espera de la variante
+        // desde que empezó la vuelta, la máquina no la tomaría como llegada (la llegada solo se
+        // registra con la vuelta ya designada) y al cerrar saldría un `molinos_omitido` falso.
+        const [paso] = await tx.$queryRaw<{ pasoPorEspera: boolean }[]>`
+          SELECT EXISTS (
+            SELECT 1 FROM cumplimientos_pc cp
+            JOIN variantes va ON va.id = ${varianteId}
+            WHERE cp."sesionId" = ${sesionId} AND cp."sindicatoId" = ${sesion.sindicatoId}
+              AND cp."puntoControlId" = va."puntoEsperaId" AND cp.cumplido = true
+              AND cp.ts >= ${vuelta.inicioTs}
+          ) AS "pasoPorEspera"
+        `;
+        if (paso?.pasoPorEspera) {
+          throw new ConflictException(MSG_YA_PASO_ESPERA);
+        }
       }
       const { count } = await tx.vuelta.updateMany({
         where: { id: vuelta.id, estado: 'en_curso', esperaLlegadaTs: null },
