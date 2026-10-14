@@ -1,5 +1,10 @@
 import type { StyleProp, ViewStyle } from 'react-native';
-import type { ContextoOperativoMovil, PaqueteDia } from '@quivo/shared';
+import type {
+  ContextoOperativoMovil,
+  PaqueteDia,
+  PuntoControlPaquete,
+  VueltaActualMovil,
+} from '@quivo/shared';
 import type { EstadoPuntoVuelta } from '../operacion/progreso-vuelta';
 import type { EstadoCamara } from './modo-camara';
 import type { EmisorRumbo } from './rumbo-mapa';
@@ -35,6 +40,11 @@ export interface RouteMapProps {
   /** Canal por el que el mapa publica el rumbo de su cámara (la brújula de la pantalla se
    * suscribe). Opcional: sin él el mapa funciona igual. */
   emisorRumbo?: EmisorRumbo;
+  /** Designación a Molinos vigente: el mapa resalta su tramo y el PC de espera sobre la ruta base.
+   * `null`/ausente = ruta base sola. */
+  designacion?: Pick<NonNullable<VueltaActualMovil['designacion']>, 'tramo' | 'puntoEspera'> | null;
+  /** Orden efectivo de los PC (`ordenEfectivoPuntos`), ya calculado por `useProgresoVuelta`. */
+  ordenEfectivo: readonly PuntoControlPaquete[];
   style?: StyleProp<ViewStyle>;
 }
 

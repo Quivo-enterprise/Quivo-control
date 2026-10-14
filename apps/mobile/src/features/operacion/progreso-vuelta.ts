@@ -53,6 +53,31 @@ export interface ProgresoDerivado {
   total: number;
 }
 
+/** Designación activa mínima que necesita el orden (estructural: no acopla con `vuelta-actual`). */
+export type DesignacionOrden = { puntoEspera: { id: string } } | null | undefined;
+
+/**
+ * Orden EFECTIVO de los puntos de la vuelta (puro). Un PC con `rol === 'espera'` (Molinos) no es
+ * parte de la base de la ruta: se EXCLUYE salvo que la designación activa apunte a él, en cuyo caso
+ * va inmediatamente DESPUÉS del PC `retorno` (si no hay, queda en su `orden`). Sin ningún `rol`
+ * (paquete viejo u otras líneas) devuelve los puntos ordenados por `orden`, igual que siempre.
+ */
+export function ordenEfectivoPuntos(
+  puntosControl: readonly PuntoControlPaquete[],
+  designacion: DesignacionOrden,
+): PuntoControlPaquete[] {
+  const ordenados = [...puntosControl].sort((a, b) => a.orden - b.orden);
+  if (!ordenados.some((p) => p.rol === 'espera')) return ordenados;
+  const idEspera = designacion?.puntoEspera.id ?? null;
+  const base = ordenados.filter((p) => p.rol !== 'espera');
+  const espera = idEspera === null ? undefined : ordenados.find((p) => p.rol === 'espera' && p.id === idEspera);
+  if (!espera) return base;
+  const idxRetorno = base.findIndex((p) => p.rol === 'retorno');
+  if (idxRetorno >= 0) return [...base.slice(0, idxRetorno + 1), espera, ...base.slice(idxRetorno + 1)];
+  // Sin PC retorno: queda en su `orden` relativo.
+  return ordenados.filter((p) => p.rol !== 'espera' || p.id === espera.id);
+}
+
 /** Fecha local del dispositivo `YYYY-MM-DD` (no UTC: el día del chofer). */
 export function fechaLocal(ahoraMs: number = Date.now()): string {
   const d = new Date(ahoraMs);
@@ -91,16 +116,21 @@ export function estadoInicialVuelta(
  * Ajusta el estado al paquete ACTUAL de puntos (un refresco puede quitar puntos, incluido el de
  * inicio): `pasados` solo conserva ids vigentes; si el inicio ya no existe se re-ancla al primer
  * pasado vigente (o `null`); si el último ya no existe se usa el último pasado vigente (o el
- * inicio). Devuelve el MISMO objeto si no hay nada que ajustar.
+ * inicio). Al re-anclar se saltean los PC de espera (`idsEspera`): nunca anclan la vuelta. Devuelve
+ * el MISMO objeto si no hay nada que ajustar.
  */
 export function normalizarEstado(
   estado: EstadoProgresoVuelta,
   idsActuales: readonly string[],
+  idsEspera: readonly string[] = [],
 ): EstadoProgresoVuelta {
   const vigentes = new Set(idsActuales);
   const pasados = estado.pasados.filter((id) => vigentes.has(id));
+  // Sin inicio no hay nada que re-anclar (puede haber pasos por un PC de espera sin vuelta anclada).
   const inicioId =
-    estado.inicioId !== null && vigentes.has(estado.inicioId) ? estado.inicioId : (pasados[0] ?? null);
+    estado.inicioId === null || vigentes.has(estado.inicioId)
+      ? estado.inicioId
+      : (pasados.find((id) => !idsEspera.includes(id)) ?? null);
   const ultimoId =
     estado.ultimoId !== null && vigentes.has(estado.ultimoId)
       ? estado.ultimoId
@@ -118,31 +148,43 @@ export function normalizarEstado(
 /**
  * Aplica el paso por un punto. Idempotente por `clave` (el `eventId` del cumplimiento, o
  * `${puntoId}:${pasada}`): el mismo paso llegado dos veces (foreground + headless, reintentos) no
- * cuenta dos veces. `idsActuales` = ids del paquete vigente (robustez ante puntos quitados).
+ * cuenta dos veces. `idsActuales` = ids del ORDEN EFECTIVO de la vuelta (`ordenEfectivoPuntos`:
+ * sin el PC de espera salvo designación activa) — define el `total` y qué pasos cuentan.
+ * `idsEspera` = ids de todo PC con `rol === 'espera'`: su paso se registra SIEMPRE en `pasados`
+ * (así, si la designación llega después de pasar por Molinos, figura pasado), pero sin anclar la
+ * vuelta y sin contar en el total ni en el cierre mientras no esté en `idsActuales`.
  */
 export function pasoPunto(
   estadoCrudo: EstadoProgresoVuelta,
   paso: { puntoId: string; clave: string },
   idsActuales: readonly string[],
+  idsEspera: readonly string[] = [],
 ): EstadoProgresoVuelta {
   if (estadoCrudo.procesados.includes(paso.clave)) return estadoCrudo;
   const procesados = [...estadoCrudo.procesados, paso.clave].slice(-MAX_PROCESADOS);
-  const estado = normalizarEstado(estadoCrudo, idsActuales);
+  const estado = normalizarEstado(estadoCrudo, [...idsActuales, ...idsEspera], idsEspera);
+  const esEspera = idsEspera.includes(paso.puntoId);
   // Un punto que ya no está en el paquete no aporta al progreso: solo se recuerda la clave.
-  if (!idsActuales.includes(paso.puntoId)) return { ...estado, procesados };
+  if (!idsActuales.includes(paso.puntoId) && !esEspera) return { ...estado, procesados };
   const base = { ...estado, procesados, ultimoId: paso.puntoId };
 
+  // PC de espera: nunca ancla la vuelta ni la cierra; solo queda registrado como pasado.
+  if (esEspera && (estado.inicioId === null || !idsActuales.includes(paso.puntoId))) {
+    if (estado.pasados.includes(paso.puntoId)) return { ...estado, procesados };
+    return { ...estado, procesados, pasados: [...estado.pasados, paso.puntoId] };
+  }
   if (estado.inicioId === null) {
-    return { ...base, inicioId: paso.puntoId, pasados: [paso.puntoId] };
+    return { ...base, inicioId: paso.puntoId, pasados: [...estado.pasados, paso.puntoId] };
   }
   // Vuelta al punto de inicio habiendo pasado algo más que él mismo: cierra la vuelta y la nueva
   // arranca con ese punto ya pasado. Con solo el inicio pasado (rebote/jitter), no es una vuelta.
-  if (paso.puntoId === estado.inicioId && estado.pasados.length > 1) {
+  const pasadosEfectivos = estado.pasados.filter((id) => idsActuales.includes(id)).length;
+  if (paso.puntoId === estado.inicioId && pasadosEfectivos > 1) {
     const numero = estado.vueltasCompletadas + 1;
     return {
       ...base,
       vueltasCompletadas: numero,
-      ultimaVueltaResumen: { numero, pasados: estado.pasados.length, total: idsActuales.length },
+      ultimaVueltaResumen: { numero, pasados: pasadosEfectivos, total: idsActuales.length },
       pasados: [paso.puntoId],
     };
   }
@@ -162,15 +204,15 @@ export function reiniciarVuelta(estado: EstadoProgresoVuelta): EstadoProgresoVue
   return { ...estado, inicioId: null, pasados: [], ultimoId: null };
 }
 
-/** Id del punto más cercano a `posicion`; `null` sin posición o sin puntos. */
-export function proximoMasCercanoId(
-  puntosControl: readonly PuntoControlPaquete[],
+/** Id del punto más cercano a `posicion` entre los del orden efectivo; `null` sin posición o sin puntos. */
+export function proximoMasCercanoIdEnOrden(
+  ordenEfectivo: readonly PuntoControlPaquete[],
   posicion: { lat: number; lng: number } | null,
 ): string | null {
   if (!posicion) return null;
   let mejor = Infinity;
   let id: string | null = null;
-  for (const p of puntosControl) {
+  for (const p of ordenEfectivo) {
     const d = haversineMetros([posicion.lng, posicion.lat], p.coord.coordinates);
     if (d < mejor) {
       mejor = d;
@@ -187,15 +229,15 @@ export function proximoMasCercanoId(
  * inicio, para cerrar la vuelta). Sin inicio todavía: todo `pendiente` salvo el de menor `orden`
  * como próximo provisional (la UI lo reemplaza por el más cercano con `conProximo`).
  */
-export function derivarProgresoEstatico(
+export function derivarProgresoEstaticoEnOrden(
   estadoCrudo: EstadoProgresoVuelta,
-  puntosControl: readonly PuntoControlPaquete[],
+  ordenados: readonly PuntoControlPaquete[],
 ): ProgresoDerivado {
-  const ordenados = [...puntosControl].sort((a, b) => a.orden - b.orden);
   const total = ordenados.length;
   const estado = normalizarEstado(
     estadoCrudo,
     ordenados.map((p) => p.id),
+    ordenados.filter((p) => p.rol === 'espera').map((p) => p.id),
   );
   const vueltaActual = estado.vueltasCompletadas + 1;
   const idxInicio =
@@ -225,7 +267,6 @@ export function derivarProgresoEstatico(
   );
   let idxProximo = rotados.findIndex((p, i) => i > idxUltimo && !pasadosSet.has(p.id));
   if (idxProximo < 0) idxProximo = 0; // nada pendiente adelante: volver al inicio cierra la vuelta.
-
   let pasados = 0;
   let omitidos = 0;
   const puntos = rotados.map((punto, i): PuntoProgreso => {
@@ -263,14 +304,4 @@ export function conProximo(derivado: ProgresoDerivado, proximoId: string | null)
     }),
   );
   return { ...derivado, puntos, proximo: puntos.find((p) => p.estado === 'proximo')?.punto ?? null };
-}
-
-/** Deriva el progreso completo (estático + próximo por posición cuando aún no hay inicio). */
-export function derivarProgreso(
-  estado: EstadoProgresoVuelta,
-  puntosControl: readonly PuntoControlPaquete[],
-  posicion: { lat: number; lng: number } | null,
-): ProgresoDerivado {
-  const estatico = derivarProgresoEstatico(estado, puntosControl);
-  return conProximo(estatico, estatico.conInicio ? null : proximoMasCercanoId(puntosControl, posicion));
 }

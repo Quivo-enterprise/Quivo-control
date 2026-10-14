@@ -12,7 +12,9 @@ import {
   obtenerAnunciosPendientesDeProgramar,
   reclamarIntencionAnuncio,
 } from '../../db/outbox';
+import { leerDesignacionOrdenLocal } from '../../db/vuelta-actual-local';
 import { formatearDistanciaVoz } from './format-distancia';
+import { ordenEfectivoPuntos } from './progreso-vuelta';
 import { esMotivoAnuncio, type MotivoAnuncio } from './decidir-anuncio';
 
 /**
@@ -199,12 +201,24 @@ function asegurarCanalNotificacion(): Promise<void> {
   return canalConfigurado;
 }
 
-/** `orden` humano (1-indexado, mismo criterio que `next-control-sheet.tsx` y el
- * `gps-provider.tsx` anterior a esta entrega) del punto de control, buscado en el paquete del
- * día — así la voz dice "Punto de control 16" en vez de un id UUID o un genérico "alcanzado". */
-function ordenDe(puntoControlId: string, puntosControl: PuntoControlPaquete[]): number | undefined {
-  const pc = puntosControl.find((p) => p.id === puntoControlId);
-  return pc ? pc.orden + 1 : undefined;
+/**
+ * Posición humana (1-indexada) del punto de control en el ORDEN EFECTIVO de la vuelta — el mismo
+ * que muestran el mapa y el sheet (`ordenEfectivoPuntos`: el PC de espera de Molinos no cuenta
+ * salvo designación activa). La designación se lee del cache SQLite de la vuelta actual, así que
+ * sirve igual en foreground y headless. `numero` = `undefined` si el punto no está en el orden
+ * efectivo; `espera` = es un PC de espera SIN designación activa (no se anuncia).
+ */
+async function ubicarEnOrdenEfectivo(
+  puntoControlId: string,
+  opciones: AnuncioPuntoControlOpciones,
+): Promise<{ numero: number | undefined; esperaSinDesignacion: boolean }> {
+  const designacion = await leerDesignacionOrdenLocal(opciones.sesionId);
+  const idx = ordenEfectivoPuntos(opciones.puntosControl, designacion).findIndex(
+    (p) => p.id === puntoControlId,
+  );
+  if (idx >= 0) return { numero: idx + 1, esperaSinDesignacion: false };
+  const pc = opciones.puntosControl.find((p) => p.id === puntoControlId);
+  return { numero: undefined, esperaSinDesignacion: pc?.rol === 'espera' };
 }
 
 /**
@@ -269,10 +283,17 @@ export async function anunciarPuntoControl(
 ): Promise<void> {
   if (deteccion.fase !== 'aproximacion') return;
 
-  const orden = ordenDe(deteccion.puntoControlId, opciones.puntosControl);
-  const identificador = orden !== undefined ? `Punto de control ${orden}` : 'Punto de control';
-
+  // Dedupe primero: el caso normal (ya anunciado) no lee SQLite ni calcula el orden.
   if (aproximacionesAnunciadas.has(deteccion.puntoControlId)) return;
+  const { numero, esperaSinDesignacion } = await ubicarEnOrdenEfectivo(
+    deteccion.puntoControlId,
+    opciones,
+  );
+  // Molinos sin designación activa no es parte de la ruta: no se anuncia (ni se agrega al set).
+  if (esperaSinDesignacion) return;
+  // Se vuelve a chequear: otro tick pudo anunciarlo mientras se leía la designación.
+  if (aproximacionesAnunciadas.has(deteccion.puntoControlId)) return;
+  const identificador = numero !== undefined ? `Punto de control ${numero}` : 'Punto de control';
   aproximacionesAnunciadas.add(deteccion.puntoControlId);
   try {
     // `volume: 1.0` explícito, mismo criterio que tenía `gps-provider.tsx` antes de esta
@@ -285,6 +306,58 @@ export async function anunciarPuntoControl(
     Sentry.captureException(error, {
       tags: { contexto: 'anuncio-punto-control', paso: 'voz-aproximacion' },
     });
+  }
+}
+
+/**
+ * Aviso genérico (voz + vibración + notificación local) en el MISMO canal del anuncio de punto de
+ * control (`CANAL_ANUNCIO_ANDROID`) — lo usa el aviso de designación a Molinos
+ * (`features/vuelta-actual`) para no crear un canal nuevo. Best-effort como el resto del módulo:
+ * nunca rechaza; un fallo de voz o de notificación va a Sentry y no corta a la otra. Devuelve
+ * `true` si la notificación se programó. `identifier` fijo = un reintento reemplaza en vez de apilar.
+ */
+export async function anunciarAvisoEnCanal(aviso: {
+  identifier: string;
+  titulo: string;
+  cuerpo: string;
+  /** Texto para la voz; `null` = sin voz. */
+  voz: string | null;
+}): Promise<boolean> {
+  Vibration.vibrate([0, 250, 250, 250]);
+  if (aviso.voz) {
+    try {
+      Speech.speak(aviso.voz, { volume: 1.0 });
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { contexto: 'anuncio-punto-control', paso: 'voz-aviso-canal' },
+      });
+    }
+  }
+  try {
+    await asegurarCanalNotificacion();
+    await Notifications.scheduleNotificationAsync({
+      identifier: aviso.identifier,
+      // La voz ya suena en foreground: el sonido del canal se silencia ahí (ver el handler de
+      // arriba); en background Android presenta la notificación directo desde el canal.
+      content: { title: aviso.titulo, body: aviso.cuerpo, data: { silenciarSonidoForeground: true } },
+      trigger: { channelId: CANAL_ANUNCIO_ANDROID },
+    });
+    return true;
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'anuncio-punto-control', paso: 'notificacion-aviso-canal' },
+    });
+    return false;
+  }
+}
+
+/** Quita de la bandeja una notificación local ya presentada (`identifier` del aviso). Best-effort:
+ * nunca rechaza; que no exista o falle el SO no es un problema para el chofer. */
+export async function descartarNotificacionAviso(identifier: string): Promise<void> {
+  try {
+    await Notifications.dismissNotificationAsync(identifier);
+  } catch {
+    // silencioso: la notificación vieja simplemente queda hasta que el chofer la limpie
   }
 }
 
@@ -326,13 +399,13 @@ async function programarNotificacionLlegada(
   motivo: MotivoAnuncio,
   opciones: AnuncioPuntoControlOpciones,
 ): Promise<boolean> {
-  const orden = ordenDe(puntoControlId, opciones.puntosControl);
-  const identificador = orden !== undefined ? `Punto de control ${orden}` : 'Punto de control';
-
   // VIBRACIÓN SIEMPRE (regla dura del plan, Entrega 7): el canal más robusto porque no depende
   // de audio. Va ANTES de cualquier intento de notificación y fuera de su `try/catch`, para que
   // un fallo de notificación nunca se lleve puesta la vibración.
   Vibration.vibrate(300);
+
+  const { numero } = await ubicarEnOrdenEfectivo(puntoControlId, opciones);
+  const identificador = numero !== undefined ? `Punto de control ${numero}` : 'Punto de control';
 
   try {
     await asegurarCanalNotificacion();
@@ -451,6 +524,9 @@ export async function anunciarLlegadaPuntoControl(
   motivo: MotivoAnuncio,
   opciones: AnuncioPuntoControlOpciones,
 ): Promise<boolean> {
+  // PC de espera (Molinos) sin designación activa: no es parte de la ruta, ni vibra ni notifica ni
+  // se reclama la intención (no quedaría nada pendiente que reintentar).
+  if ((await ubicarEnOrdenEfectivo(puntoControlId, opciones)).esperaSinDesignacion) return false;
   let reclamado = false;
   let clave = claveAnuncio(opciones.sesionId, puntoControlId, pasada);
   try {

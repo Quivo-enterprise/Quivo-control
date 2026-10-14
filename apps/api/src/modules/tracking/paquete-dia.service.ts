@@ -22,6 +22,7 @@ interface PuntoControlRow {
   coord: string;
   radioToleranciaM: number;
   obligatorio: boolean;
+  rol: 'terminal' | 'retorno' | 'espera' | null;
 }
 
 /**
@@ -63,7 +64,7 @@ export class PaqueteDiaService {
         FROM paradas WHERE "rutaId" = ${asignacion.rutaId} AND estado = 'activo' ORDER BY orden ASC
       `;
       const puntoControlRows = await tx.$queryRaw<PuntoControlRow[]>`
-        SELECT id, orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio
+        SELECT id, orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", obligatorio, rol
         FROM puntos_control WHERE "rutaId" = ${asignacion.rutaId} AND estado = 'activo' ORDER BY orden ASC
       `;
 
@@ -112,6 +113,7 @@ export class PaqueteDiaService {
           coord: JSON.parse(p.coord),
           radioToleranciaM: p.radioToleranciaM,
           obligatorio: p.obligatorio,
+          rol: p.rol ?? null,
         })),
       });
     });

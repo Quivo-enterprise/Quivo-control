@@ -31,6 +31,7 @@ import {
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
 import { registrarPasoEnVuelta } from '../features/operacion/progreso-vuelta-store';
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
+import { consultarVueltaActual } from '../features/vuelta-actual/vuelta-actual-oportunista';
 // Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
 // `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
 import { confirmarTokenRechazadoVigente, refrescar } from '../features/auth/use-auth-movil';
@@ -606,7 +607,7 @@ async function registrarPuntoGpsInterno(
           contexto.sesionId,
           evento.deteccion.puntoControlId,
           evento.eventId ?? evento.clave,
-          contexto.puntosControl.map((p) => p.id),
+          contexto.puntosControl,
         );
       }
     } else {
@@ -983,7 +984,7 @@ export async function aplicarConfirmacionesForzadas(
   transiciones: ReadonlyMap<string, EstadoPuntoControl>,
   estados: Map<string, EstadoPuntoControl>,
   miGeneracion: number = generacionColaRegistroGps,
-  idsPuntos: readonly string[],
+  puntosControl: readonly PuntoControlPaquete[],
 ): Promise<void> {
   for (const c of emitir) {
     if (!generacionVigente(miGeneracion)) return;
@@ -1024,7 +1025,7 @@ export async function aplicarConfirmacionesForzadas(
       sesionId,
       c.deteccion.puntoControlId,
       derivarEventIdDeterministico([sesionId, c.deteccion.puntoControlId, String(c.pasada)]),
-      idsPuntos,
+      puntosControl,
     );
   }
 }
@@ -1092,7 +1093,7 @@ export function confirmarVisitasVencidasEnCola(
           transiciones,
           estados,
           miGeneracion,
-          puntosControl.map((p) => p.id),
+          puntosControl,
         );
         if (!generacionVigente(miGeneracion)) return { emitir, anunciosLlegada: [] };
       }
@@ -1233,6 +1234,7 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     // abajo, en el camino 'location', para el porqué completo (causa raíz del síntoma más
     // reportado del piloto) y por qué va con `await`.
     await intentarDrenarOportunista(obtenerAccessTokenHeadless);
+    await consultarVueltaActual(obtenerAccessTokenHeadless);
     return;
   }
   if (event.name !== 'location') return;
@@ -1325,6 +1327,8 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
   // considera cerrado, y el trabajo (mutex, POST, liberar el lease) se corta a mitad de camino
   // en cuanto el wake lock se libera.
   await intentarDrenarOportunista(obtenerAccessTokenHeadless);
+  // Aviso de designación a Molinos con la app en segundo plano (piso de 20 s propio; nunca rechaza).
+  await consultarVueltaActual(obtenerAccessTokenHeadless);
 }
 
 /**

@@ -11,11 +11,14 @@ interface VueltaCompletadaBannerProps {
   /** Posición (dp) desde el borde superior de la pantalla, bajo la tarjeta superior. */
   top: number;
   onTerminar: () => void;
+  /** Alto medido (dp) mientras el banner está visible; 0 cuando no hay nada. Permite apilar otros
+   * avisos debajo en vez de taparlo. */
+  onAlto?: (alto: number) => void;
 }
 
 /** Aviso breve "Vuelta N completada · X/Y puntos", una vez por cierre de vuelta (RF-GPS-054).
  * Pasivo (`pointerEvents="none"`): no tapa el mapa ni exige una acción del chofer. */
-export function VueltaCompletadaBanner({ resumen, top, onTerminar }: VueltaCompletadaBannerProps) {
+export function VueltaCompletadaBanner({ resumen, top, onTerminar, onAlto }: VueltaCompletadaBannerProps) {
   const opacidad = useRef(new Animated.Value(0)).current;
   const onTerminarRef = useRef(onTerminar);
   onTerminarRef.current = onTerminar;
@@ -34,12 +37,19 @@ export function VueltaCompletadaBanner({ resumen, top, onTerminar }: VueltaCompl
     return () => animacion.stop();
   }, [resumen, opacidad]);
 
+  const onAltoRef = useRef(onAlto);
+  onAltoRef.current = onAlto;
+  useEffect(() => {
+    if (!resumen) onAltoRef.current?.(0);
+  }, [resumen]);
+
   if (!resumen) return null;
 
   return (
     <Animated.View
       pointerEvents="none"
       style={[styles.contenedor, { top, opacity: opacidad }]}
+      onLayout={(e) => onAlto?.(e.nativeEvent.layout.height)}
       accessibilityRole="alert"
       accessibilityLiveRegion="polite"
     >

@@ -2,15 +2,40 @@ import { describe, expect, it } from 'vitest';
 import type { PuntoControlPaquete } from '@quivo/shared';
 import {
   claveProgresoVuelta,
-  derivarProgreso,
+  conProximo,
+  derivarProgresoEstaticoEnOrden,
+  ordenEfectivoPuntos,
+  proximoMasCercanoIdEnOrden,
   estadoInicialVuelta,
   fechaLocal,
   normalizarEstado,
   pasoPunto,
   reiniciarVuelta,
   separarClaveProgreso,
+  type DesignacionOrden,
   type EstadoProgresoVuelta,
 } from './progreso-vuelta';
+
+// Los tests derivan siempre sobre el orden efectivo (única fuente: `ordenEfectivoPuntos`).
+const derivarProgresoEstatico = (
+  e: EstadoProgresoVuelta,
+  pcs: readonly PuntoControlPaquete[],
+  d?: DesignacionOrden,
+) => derivarProgresoEstaticoEnOrden(e, ordenEfectivoPuntos(pcs, d));
+const proximoMasCercanoId = (
+  pcs: readonly PuntoControlPaquete[],
+  pos: { lat: number; lng: number } | null,
+  d?: DesignacionOrden,
+) => proximoMasCercanoIdEnOrden(ordenEfectivoPuntos(pcs, d), pos);
+const derivarProgreso = (
+  e: EstadoProgresoVuelta,
+  pcs: readonly PuntoControlPaquete[],
+  pos: { lat: number; lng: number } | null,
+  d?: DesignacionOrden,
+) => {
+  const estatico = derivarProgresoEstatico(e, pcs, d);
+  return conProximo(estatico, estatico.conInicio ? null : proximoMasCercanoId(pcs, pos, d));
+};
 
 function punto(id: string, orden: number, lng = 0, lat = 0): PuntoControlPaquete {
   return {
@@ -199,6 +224,15 @@ describe('robustez ante puntos quitados del paquete', () => {
     expect(n.ultimoId).toBe('e');
   });
 
+  it('al re-anclar saltea los PC de espera', () => {
+    const e = { ...estadoInicialVuelta('s'), inicioId: 'A', pasados: ['molinos', 'A', 'B'], ultimoId: 'B' };
+    const n = normalizarEstado(e, ['molinos', 'B'], ['molinos']); // A removido
+    expect(n.pasados).toEqual(['molinos', 'B']);
+    expect(n.inicioId).toBe('B');
+    const solo = normalizarEstado({ ...estadoInicialVuelta('s'), inicioId: 'A', pasados: ['molinos', 'A'], ultimoId: 'A' }, ['molinos'], ['molinos']);
+    expect(solo.inicioId).toBeNull();
+  });
+
   it('sin pasados vigentes, inicio y último quedan en null', () => {
     const e = pasar(estadoInicialVuelta('s'), ['c']);
     const n = normalizarEstado(e, ['a', 'b']);
@@ -273,5 +307,181 @@ describe('clave del progreso', () => {
     const clave = claveProgresoVuelta('ses:ion-1', '2026-10-11');
     expect(clave).toBe('ses:ion-1:2026-10-11');
     expect(separarClaveProgreso(clave)).toEqual({ sesionId: 'ses:ion-1', fecha: '2026-10-11' });
+  });
+});
+
+describe('PC de espera (Molinos) y designación', () => {
+  type Rol = 'terminal' | 'retorno' | 'espera' | null;
+  const conRol = (id: string, orden: number, rol: Rol) => ({ ...punto(id, orden), rol });
+  const l16 = [conRol('sr', 0, 'terminal'), conRol('mol', 1, 'espera'), conRol('hon', 2, 'retorno')];
+  const desig = { puntoEspera: { id: 'mol' } };
+  const lista = (e: EstadoProgresoVuelta, d: typeof desig | null) =>
+    derivarProgresoEstatico(e, l16, d ?? undefined).puntos.map((p) => `${p.punto.id}=${p.estado}`);
+  const pasarL16 = (pasos: string[], vigentes: readonly string[]) =>
+    pasar(estadoInicialVuelta('s1'), pasos, vigentes);
+
+  it('sin designación: Molinos nunca es próximo ni omitido y no cuenta en el total', () => {
+    const vig = ['sr', 'hon'];
+    const tras = derivarProgresoEstatico(pasarL16(['sr'], vig), l16);
+    expect(tras.proximo?.id).toBe('hon');
+    expect(tras.total).toBe(2);
+    const fin = derivarProgresoEstatico(pasarL16(['sr', 'hon'], vig), l16);
+    expect(fin.proximo?.id).toBe('sr');
+    expect(fin.omitidos).toBe(0);
+    expect(fin.puntos.map((p) => p.punto.id)).toEqual(['sr', 'hon']);
+  });
+
+  it('con designación: tras Honduras el próximo es Molinos y luego SR', () => {
+    const vig = ['sr', 'mol', 'hon'];
+    expect(lista(pasarL16(['sr'], vig), desig)).toEqual(['sr=pasado', 'hon=proximo', 'mol=pendiente']);
+    expect(lista(pasarL16(['sr', 'hon'], vig), desig)).toEqual(['sr=pasado', 'hon=pasado', 'mol=proximo']);
+    const fin = derivarProgresoEstatico(pasarL16(['sr', 'hon', 'mol'], vig), l16, desig);
+    expect(fin.proximo?.id).toBe('sr');
+    expect(fin.omitidos).toBe(0);
+    expect(fin.total).toBe(3);
+  });
+
+  it('cancelación a mitad de vuelta: Molinos sale del cálculo sin omitidos espurios', () => {
+    const e = pasarL16(['sr', 'hon'], ['sr', 'mol', 'hon']);
+    const con = derivarProgresoEstatico(e, l16, desig);
+    expect(con.proximo?.id).toBe('mol');
+    const sin = derivarProgresoEstatico(e, l16, null);
+    expect(sin.proximo?.id).toBe('sr');
+    expect(sin.omitidos).toBe(0);
+    expect(sin.total).toBe(2);
+  });
+
+  it('aparece a mitad de vuelta (después de Honduras): el próximo pasa a Molinos', () => {
+    const e = pasarL16(['sr', 'hon'], ['sr', 'hon']);
+    expect(derivarProgresoEstatico(e, l16, null).proximo?.id).toBe('sr');
+    const con = derivarProgresoEstatico(e, l16, desig);
+    expect(con.proximo?.id).toBe('mol');
+    expect(con.omitidos).toBe(0);
+  });
+
+  it('designación que llega tras pasar el retorno y el cierre: Molinos queda omitido (regla general)', () => {
+    // Vuelta anclada en Honduras (SR -> Honduras -> SR): con la designación activa el orden efectivo
+    // rotado es [hon, mol, sr] y ya se pasó un PC posterior a Molinos (sr).
+    const e = pasarL16(['hon', 'sr'], ['sr', 'mol', 'hon']);
+    const d = derivarProgresoEstatico(e, l16, desig);
+    expect(d.puntos.map((p) => `${p.punto.id}=${p.estado}`)).toEqual([
+      'hon=proximo',
+      'mol=omitido',
+      'sr=pasado',
+    ]);
+    expect(d.omitidos).toBe(1);
+  });
+
+  it('[A, R, M, B, C]: tras R el próximo es M; si ya se pasó B, M queda omitido y el próximo es C', () => {
+    const pcs = [
+      conRol('a', 0, 'terminal'),
+      conRol('r', 1, 'retorno'),
+      conRol('m', 2, 'espera'),
+      conRol('b', 3, null),
+      conRol('c', 4, null),
+    ];
+    const d = { puntoEspera: { id: 'm' } };
+    const vig = ['a', 'r', 'm', 'b', 'c'];
+    const tras = (pasos: string[]) =>
+      derivarProgresoEstatico(pasar(estadoInicialVuelta('s1'), pasos, vig), pcs, d);
+    expect(tras(['a', 'r']).proximo?.id).toBe('m');
+    const salteado = tras(['a', 'r', 'b']);
+    expect(salteado.proximo?.id).toBe('c');
+    expect(salteado.puntos.find((p) => p.punto.id === 'm')?.estado).toBe('omitido');
+  });
+
+  it('Molinos no ancla la vuelta: pasar por él sin designación solo queda registrado como pasado', () => {
+    const e = pasoPunto(estadoInicialVuelta('s1'), { puntoId: 'mol', clave: 'k1' }, ['sr', 'hon'], ['mol']);
+    expect(e.inicioId).toBeNull();
+    expect(e.pasados).toEqual(['mol']);
+    expect(e.procesados).toContain('k1');
+    // Idempotente por clave.
+    expect(pasoPunto(e, { puntoId: 'mol', clave: 'k1' }, ['sr', 'hon'], ['mol'])).toBe(e);
+    // Un paso posterior ancla en el PC real y conserva el registro de Molinos.
+    const ancla = pasoPunto(e, { puntoId: 'sr', clave: 'k2' }, ['sr', 'hon'], ['mol']);
+    expect(ancla.inicioId).toBe('sr');
+    expect(ancla.pasados).toEqual(['mol', 'sr']);
+  });
+
+  it('paso por Molinos antes de la designación: al llegar la designación Molinos figura pasado', () => {
+    const efectivos = ['sr', 'hon'];
+    let e = estadoInicialVuelta('s1');
+    for (const [i, id] of ['sr', 'hon', 'mol'].entries()) {
+      e = pasoPunto(e, { puntoId: id, clave: `k${i}` }, efectivos, ['mol']);
+    }
+    // Sin designación no cuenta: ni total ni próximo ni omitidos.
+    const sin = derivarProgresoEstatico(e, l16, null);
+    expect(sin.total).toBe(2);
+    expect(sin.pasados).toBe(2);
+    expect(sin.proximo?.id).toBe('sr');
+    const con = derivarProgresoEstatico(e, l16, desig);
+    expect(con.total).toBe(3);
+    expect(con.pasados).toBe(3);
+    expect(con.puntos.find((p) => p.punto.id === 'mol')?.estado).toBe('pasado');
+    expect(con.omitidos).toBe(0);
+  });
+
+  it('el registro de Molinos sin designación no cuenta para cerrar la vuelta (solo inicio + Molinos)', () => {
+    let e = estadoInicialVuelta('s1');
+    for (const [i, id] of ['sr', 'mol', 'sr'].entries()) {
+      e = pasoPunto(e, { puntoId: id, clave: `k${i}` }, ['sr', 'hon'], ['mol']);
+    }
+    expect(e.vueltasCompletadas).toBe(0);
+  });
+
+  it('vuelta sin designación cerrada: total del resumen con el orden efectivo (4/4, no 4/5)', () => {
+    const base4 = ['a', 'b', 'c', 'd'];
+    const efectivos = ordenEfectivoPuntos(
+      [...base4.map((id, i) => conRol(id, i, null)), conRol('m', 4, 'espera')],
+      null,
+    ).map((p) => p.id);
+    expect(efectivos).toEqual(base4);
+    let e = estadoInicialVuelta('s1');
+    for (const [i, id] of ['a', 'b', 'c', 'd', 'a'].entries()) {
+      e = pasoPunto(e, { puntoId: id, clave: `k${i}` }, efectivos, ['m']);
+    }
+    expect(e.ultimaVueltaResumen).toEqual({ numero: 1, pasados: 4, total: 4 });
+  });
+
+  it('con designación activa el total incluye a Molinos (5/5)', () => {
+    const pcs = [...['a', 'b', 'c', 'd'].map((id, i) => conRol(id, i, null)), conRol('m', 4, 'espera')];
+    const efectivos = ordenEfectivoPuntos(pcs, { puntoEspera: { id: 'm' } }).map((p) => p.id);
+    let e = estadoInicialVuelta('s1');
+    for (const [i, id] of ['a', 'b', 'c', 'd', 'm', 'a'].entries()) {
+      e = pasoPunto(e, { puntoId: id, clave: `k${i}` }, efectivos, ['m']);
+    }
+    expect(e.ultimaVueltaResumen).toEqual({ numero: 1, pasados: 5, total: 5 });
+  });
+
+  it('paquete sin rol: idéntico al comportamiento previo', () => {
+    const sinRol = derivarProgresoEstatico(estadoInicialVuelta('s1'), ruta);
+    expect(derivarProgresoEstatico(estadoInicialVuelta('s1'), ruta, desig)).toEqual(sinRol);
+    const e = pasar(estadoInicialVuelta('s1'), ['a', 'c']);
+    expect(derivarProgresoEstatico(e, ruta, desig)).toEqual(derivarProgresoEstatico(e, ruta));
+    expect(derivarProgresoEstatico(e, ruta).omitidos).toBe(1);
+  });
+
+  it('designación cuyo puntoEspera no coincide con ningún PC: se ignora', () => {
+    const e = pasarL16(['sr'], ['sr', 'hon']);
+    expect(derivarProgresoEstatico(e, l16, { puntoEspera: { id: 'otro' } })).toEqual(
+      derivarProgresoEstatico(e, l16, null),
+    );
+  });
+
+  it('sin PC retorno, Molinos queda en su orden', () => {
+    const pcs = [conRol('sr', 0, 'terminal'), conRol('mol', 1, 'espera'), conRol('x', 2, null)];
+    expect(ordenEfectivoPuntos(pcs, desig).map((p) => p.id)).toEqual(['sr', 'mol', 'x']);
+    expect(ordenEfectivoPuntos(pcs, null).map((p) => p.id)).toEqual(['sr', 'x']);
+  });
+
+  it('proximoMasCercanoId ignora Molinos sin designación', () => {
+    const pcs = [
+      { ...conRol('sr', 0, 'terminal'), coord: { type: 'Point' as const, coordinates: [0, 0] as [number, number] } },
+      { ...conRol('mol', 1, 'espera'), coord: { type: 'Point' as const, coordinates: [1, 1] as [number, number] } },
+      { ...conRol('hon', 2, 'retorno'), coord: { type: 'Point' as const, coordinates: [5, 5] as [number, number] } },
+    ];
+    const pos = { lat: 1, lng: 1 };
+    expect(proximoMasCercanoId(pcs, pos)).toBe('sr');
+    expect(proximoMasCercanoId(pcs, pos, desig)).toBe('mol');
   });
 });

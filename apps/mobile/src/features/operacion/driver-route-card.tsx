@@ -16,6 +16,8 @@ export interface DriverRouteCardProps {
   /** Variante compacta (modo navegación): menos padding y sin líneas secundarias, para que el
    * mapa ocupe la pantalla. */
   compacta?: boolean;
+  /** Hay designación a Molinos vigente: muestra el recorrido "Honduras → Molinos → Salomón Romero". */
+  viaMolinos?: boolean;
 }
 
 export function DriverRouteCard({
@@ -25,6 +27,7 @@ export function DriverRouteCard({
   jornadaIniciada = false,
   inicioTs = null,
   compacta = false,
+  viaMolinos = false,
 }: DriverRouteCardProps) {
   // Entrega 4 (`docs/estados-red-vs-captura.md`): el status pill de abajo se guía solo por
   // `tracking` — mismo criterio que el fix equivalente en `perfil-screen.tsx` — nunca por
@@ -56,6 +59,18 @@ export function DriverRouteCard({
             </Text>
           </>
         )}
+        {viaMolinos ? (
+          <View
+            style={styles.viaMolinosPill}
+            accessible
+            accessibilityLabel="Recorrido: Honduras, Molinos, Salomón Romero"
+          >
+            <Ionicons name="trail-sign" size={13} color={quivoColors.primary} />
+            <Text numberOfLines={1} style={styles.viaMolinosPillText}>
+              Honduras → Molinos → Salomón Romero
+            </Text>
+          </View>
+        ) : null}
         {mostrarJornada ? (
           <View
             style={styles.jornadaPill}
@@ -152,6 +167,23 @@ const styles = StyleSheet.create({
   },
   jornadaPillText: {
     color: '#0F5C42',
+    fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 10.5,
+  },
+  viaMolinosPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    marginTop: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: quivoRadius.pill,
+    backgroundColor: quivoColors.primarySubtle,
+  },
+  viaMolinosPillText: {
+    flexShrink: 1,
+    color: quivoColors.primary,
     fontFamily: quivoFonts.bodySemiBold,
     fontSize: 10.5,
   },

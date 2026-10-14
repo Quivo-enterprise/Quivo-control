@@ -44,8 +44,8 @@ describe('PaqueteDiaService', () => {
         VALUES (${randomUUID()}, ${rutaId}, 'intermedia', 1, ST_SetSRID(ST_GeomFromGeoJSON(${PARADA_COORD}), 4326)::geography, 'inactivo', now(), now())
       `;
       await tx.$executeRaw`
-        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, "createdAt", "updatedAt")
-        VALUES (${randomUUID()}, ${rutaId}, 0, ST_SetSRID(ST_GeomFromGeoJSON(${PC_COORD}), 4326)::geography, 30, true, now(), now())
+        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, rol, "createdAt", "updatedAt")
+        VALUES (${randomUUID()}, ${rutaId}, 0, ST_SetSRID(ST_GeomFromGeoJSON(${PC_COORD}), 4326)::geography, 30, true, 'terminal', now(), now())
       `;
       // Punto de control dado de baja (soft-delete): mismo caso que disparó el bug en
       // producción — el paquete del día no debe devolverlo (QUI-236 hotfix).
@@ -146,6 +146,8 @@ describe('PaqueteDiaService', () => {
     expect(paquete.paradas[0]?.tipo).toBe('origen');
     expect(paquete.puntosControl).toHaveLength(1);
     expect(paquete.puntosControl[0]?.radioToleranciaM).toBe(30);
+    // `rol` viaja en el paquete (el móvil distingue el PC de espera, Molinos).
+    expect(paquete.puntosControl[0]?.rol).toBe('terminal');
   });
 
   it('excluye paradas y puntos de control dados de baja (soft-delete)', async () => {

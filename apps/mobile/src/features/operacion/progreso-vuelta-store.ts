@@ -1,10 +1,13 @@
 import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
+import type { PuntoControlPaquete } from '@quivo/shared';
 import { conReintentoSiHandleMuerto } from '../../db/outbox';
+import { leerDesignacionOrdenLocal } from '../../db/vuelta-actual-local';
 import {
   claveProgresoVuelta,
   estadoInicialVuelta,
   fechaLocal,
+  ordenEfectivoPuntos,
   pasoPunto,
   reiniciarVuelta,
   separarClaveProgreso,
@@ -151,20 +154,26 @@ function encolar(
 
 /**
  * Registra el paso por un punto en la vuelta del día local de la sesión. Idempotente por `clave`
- * (ver `pasoPunto`). `idsPuntos` = ids del paquete vigente. Nunca rechaza.
+ * (ver `pasoPunto`). `puntosControl` = paquete vigente: la vuelta se cuenta con el ORDEN EFECTIVO
+ * (sin el PC de espera de Molinos salvo que haya una designación activa, que se lee del cache
+ * SQLite de la vuelta actual — igual en foreground y headless), y un PC de espera nunca ancla la
+ * vuelta. Nunca rechaza.
  */
-export function registrarPasoEnVuelta(
+export async function registrarPasoEnVuelta(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
   puntoId: string,
   clave: string,
-  idsPuntos: readonly string[],
+  puntosControl: readonly PuntoControlPaquete[],
 ): Promise<void> {
-  return encolar(
+  const designacion = await leerDesignacionOrdenLocal(sesionId);
+  const idsEfectivos = ordenEfectivoPuntos(puntosControl, designacion).map((p) => p.id);
+  const idsEspera = puntosControl.filter((p) => p.rol === 'espera').map((p) => p.id);
+  await encolar(
     db,
     sesionId,
     fechaLocal(),
-    (actual) => pasoPunto(actual, { puntoId, clave }, idsPuntos),
+    (actual) => pasoPunto(actual, { puntoId, clave }, idsEfectivos, idsEspera),
     { paso: 'registrar-paso', extra: { puntoId } },
   );
 }

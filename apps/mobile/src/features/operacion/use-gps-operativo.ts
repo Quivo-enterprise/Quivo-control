@@ -47,7 +47,16 @@ import {
 } from './anuncio-punto-control';
 import type { MotivoAnuncio } from './decidir-anuncio';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
+import { consultarVueltaActual } from '../vuelta-actual/vuelta-actual-oportunista';
 import { marcarRecorridoActivoGlobal } from './estado-recorrido-activo';
+import { cerrarRecorridoLocal } from './cierre-recorrido';
+import { finalizarRecorridoActual, registrarRecorridoActual } from '../../db/recorrido-actual';
+import {
+  asegurarRegistroRecorrido,
+  crearEstadoRegistroRecorrido,
+  reiniciarEstadoRegistroRecorrido,
+  type EstadoRegistroRecorrido,
+} from './registro-recorrido-retry';
 import {
   asegurarInicioRecorrido,
   crearEstadoInicioRecorrido,
@@ -153,6 +162,26 @@ const PERMISO_GPS_INICIAL: DecisionPermisoGps = decidirPermisoGps({
   plataforma: PLATAFORMA_GPS,
   permisoYaSolicitado: false,
 });
+
+/** Reintenta el registro del recorrido activo si `iniciar()` no pudo escribirlo. Nunca rechaza. */
+async function reintentarRegistroRecorrido(
+  estado: EstadoRegistroRecorrido,
+  sesionId: string,
+  origen: 'onlocation' | 'heartbeat',
+): Promise<void> {
+  if (estado.registrado) return;
+  try {
+    await asegurarRegistroRecorrido(
+      estado,
+      { asegurarRecorridoActual: (sesion, recorrido) => registrarRecorridoActual(sesion, recorrido, false) },
+      sesionId,
+    );
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'gps-foreground', paso: `reintentar-registro-recorrido-${origen}` },
+    });
+  }
+}
 
 export function useGpsOperativo(
   sesionId: string,
@@ -320,6 +349,9 @@ export function useGpsOperativo(
   // `eventId: null` (estado inicial) protege el camino de re-enganche (nunca llama `iniciar()`,
   // nunca debe emitir este marcador) — ver el docblock del módulo.
   const estadoInicioRecorrido = useRef(crearEstadoInicioRecorrido()).current;
+  // Registro del recorrido activo (`recorrido_actual`): si su escritura en `iniciar()` falla, se
+  // reintenta en cada `onLocation`/heartbeat (`registro-recorrido-retry.ts`).
+  const estadoRegistroRecorrido = useRef(crearEstadoRegistroRecorrido()).current;
   // QUI-338: si esta app YA invocó `requestPermission()` alguna vez en este dispositivo,
   // persistido en `AsyncStorage` bajo `CLAVE_PERMISO_GPS_SOLICITADO` (ver ese comentario para
   // el porqué). Vive en un ref, no en `useState`: se lee de forma síncrona dentro de
@@ -528,6 +560,8 @@ export function useGpsOperativo(
         }
       }
 
+      await reintentarRegistroRecorrido(estadoRegistroRecorrido, sesionId, 'onlocation');
+
       // Entrega 2 (drenado oportunista del outbox en background): mismo motor que
       // `headless-task.ts`, enganchado acá tras CADA fix de foreground — sin `await` a
       // propósito (a diferencia del headless, acá no hay ninguna promesa de tarea del SDK
@@ -536,8 +570,11 @@ export function useGpsOperativo(
       // nunca rechaza (ver su docblock: todo su cuerpo vive bajo un try/catch defensivo), así
       // que este `void` no deja una unhandled rejection colgando.
       void intentarDrenarOportunista(obtenerAccessToken);
+      // Aviso de designación a Molinos: misma idea que el drenado (el evento de ubicación es el
+      // reloj que sigue vivo en background), con su propio piso de 20 s. Nunca rechaza.
+      void consultarVueltaActual(obtenerAccessToken);
     },
-    [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido],
+    [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido, estadoRegistroRecorrido],
   );
 
   // `onLocation` cambia de identidad cuando cambian `puntosControl`/`sesionId`, pero la
@@ -621,6 +658,7 @@ export function useGpsOperativo(
         });
       }
     }
+    await reintentarRegistroRecorrido(estadoRegistroRecorrido, sesionId, 'heartbeat');
     try {
       await semillaPromise.current;
       const db = await abrirOutbox();
@@ -675,7 +713,8 @@ export function useGpsOperativo(
     // bloque de arriba (un heartbeat que falló en confirmar visitas igual puede tener trabajo
     // de sync pendiente que drenar).
     await intentarDrenarOportunista(obtenerAccessToken);
-  }, [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido, estaEnRecorrido]);
+    await consultarVueltaActual(obtenerAccessToken);
+  }, [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido, estadoRegistroRecorrido, estaEnRecorrido]);
 
   const onHeartbeatRef = useRef(onHeartbeat);
   useEffect(() => {
@@ -1016,6 +1055,16 @@ export function useGpsOperativo(
         // `true`), así que el efecto `[tracking]` de arriba vuelve a correr y publica, siempre
         // que `veredictoPublicable` ya esté en `true` para entonces (se marca acá, antes de la
         // mutación de estado que dispara ese efecto).
+        // Re-enganche: si no hay registro del recorrido activo (app reabierta con el tracking
+        // restaurado), se crea uno con id nuevo; si ya existe, no se pisa. Best-effort.
+        try {
+          await registrarRecorridoActual(sesionId, await generarEventId(), false);
+        } catch (error) {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'reenganche-recorrido-actual' },
+          });
+        }
+        if (!montado) return;
         veredictoPublicable.current = true;
         setTracking(true);
         trackingRef.current = true;
@@ -1340,6 +1389,10 @@ export function useGpsOperativo(
     // viejo. Ver `inicio-recorrido-retry.ts` para el porqué de la idempotencia por `eventId`
     // estable.
     reiniciarEstadoInicioRecorrido(estadoInicioRecorrido, await generarEventId());
+    reiniciarEstadoRegistroRecorrido(
+      estadoRegistroRecorrido,
+      estadoInicioRecorrido.eventId ?? (await generarEventId()),
+    );
     suscribirUbicaciones();
 
     try {
@@ -1380,6 +1433,20 @@ export function useGpsOperativo(
       // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): "Iniciar recorrido"
       // es, junto con "Finalizar", un veredicto real — ver el comentario largo de
       // `veredictoPublicable` al inicio del hook.
+      //
+      // Registro propio del recorrido activo (`recorrido_actual`, ver `db/recorrido-actual.ts`):
+      // se escribe ANTES de `setTracking(true)` con el `eventId` de este intento (el mismo del
+      // `inicio_recorrido`), para que la primera consulta de la vuelta actual ya lo encuentre.
+      // Best-effort: un fallo no impide el recorrido (solo no habrá aviso de designación).
+      try {
+        await registrarRecorridoActual(sesionId, estadoRegistroRecorrido.eventId ?? (await generarEventId()), true);
+        estadoRegistroRecorrido.registrado = true;
+      } catch (error) {
+        // Se reintenta en cada onLocation/heartbeat (asegurarRegistroRecorrido).
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'iniciar-recorrido-actual' },
+        });
+      }
       veredictoPublicable.current = true;
       setTracking(true);
       trackingRef.current = true;
@@ -1493,6 +1560,7 @@ export function useGpsOperativo(
     }
   }, [
     suscribirUbicaciones,
+    estadoRegistroRecorrido,
     sembrarCumplimientos,
     deviceId,
     sesionId,
@@ -1523,30 +1591,46 @@ export function useGpsOperativo(
       // escribir `inicio_recorrido` (y de asentar `trackingRef`). `ejecutarIniciar` nunca
       // rechaza (todos sus fallos internos se atrapan y se reportan a Sentry por su cuenta), así
       // que esperar acá no puede hacer fallar `detener()`.
-      await serializadorIniciar.esperarPendiente();
-      await BackgroundGeolocation.stop();
-      subscription.current?.remove();
-      subscription.current = null;
-      heartbeatSubscription.current?.remove();
-      heartbeatSubscription.current = null;
-      motionChangeSubscription.current?.remove();
-      motionChangeSubscription.current = null;
-      // FIX POST-REVISIÓN (hallazgo ALTO, "store visual nunca se reinicia"): corta el canal
-      // visual y reinicia el store ACÁ, de forma explícita y síncrona — no alcanza con dejarlo
-      // solo al efecto `[tracking]` de `iniciarCanalVisual`/`detenerCanalVisual` (más arriba):
-      // ese efecto recién corre en el PRÓXIMO render tras `setTracking(false)` (abajo), y
-      // mientras tanto `mapa/route-map.tsx` seguía mostrando la posición VIEJA del store
-      // (singleton de módulo, nunca se limpiaba solo) en vez de caer al prop `posicionActual`
-      // fresco. `detenerCanalVisual()` es idempotente (no-op sobre la suscripción si el canal ya
-      // estaba parado o el flag está apagado) — segura de llamar siempre. Ver los docblocks de
-      // `detenerCanalVisual` y `reiniciarEstadoVisual` (`movimiento/store-visual.ts`).
-      detenerCanalVisual();
-      reiniciarEstadoVisual();
-      // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): "Finalizar" también es
-      // un veredicto real — ver el comentario largo de `veredictoPublicable`, al inicio del hook.
-      veredictoPublicable.current = true;
-      setTracking(false);
-      trackingRef.current = false;
+      // Orden (ver `cierre-recorrido.ts`): esperar `iniciar()` en vuelo -> BORRAR el registro
+      // `recorrido_actual` (antes de cualquier await largo y de apagar `tracking`, para que una
+      // consulta de la vuelta actual en vuelo no resucite el cache) -> detener el nativo -> apagar
+      // `tracking`.
+      await cerrarRecorridoLocal({
+        esperarIniciar: () => serializadorIniciar.esperarPendiente(),
+        borrarRegistro: () => finalizarRecorridoActual(sesionId),
+        reportar: (error) => {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'borrar-recorrido-actual' },
+          });
+        },
+        detenerNativo: async () => {
+          await BackgroundGeolocation.stop();
+          subscription.current?.remove();
+          subscription.current = null;
+          heartbeatSubscription.current?.remove();
+          heartbeatSubscription.current = null;
+          motionChangeSubscription.current?.remove();
+          motionChangeSubscription.current = null;
+          // FIX POST-REVISIÓN (hallazgo ALTO, "store visual nunca se reinicia"): corta el canal
+          // visual y reinicia el store ACÁ, de forma explícita y síncrona — no alcanza con dejarlo
+          // solo al efecto `[tracking]` de `iniciarCanalVisual`/`detenerCanalVisual` (más arriba):
+          // ese efecto recién corre en el PRÓXIMO render tras `setTracking(false)` (abajo), y
+          // mientras tanto `mapa/route-map.tsx` seguía mostrando la posición VIEJA del store
+          // (singleton de módulo, nunca se limpiaba solo) en vez de caer al prop `posicionActual`
+          // fresco. `detenerCanalVisual()` es idempotente (no-op sobre la suscripción si el canal ya
+          // estaba parado o el flag está apagado) — segura de llamar siempre. Ver los docblocks de
+          // `detenerCanalVisual` y `reiniciarEstadoVisual` (`movimiento/store-visual.ts`).
+          detenerCanalVisual();
+          reiniciarEstadoVisual();
+        },
+        apagarTracking: () => {
+          // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): "Finalizar" también es
+          // un veredicto real — ver el comentario largo de `veredictoPublicable`, al inicio del hook.
+          veredictoPublicable.current = true;
+          setTracking(false);
+          trackingRef.current = false;
+        },
+      });
       // QUI-P0: reverso de `reafirmarMovimiento` — restaura `disableStopDetection: false` para
       // que un futuro re-enganche o inspección de estado no encuentre la política "nunca
       // apagar el GPS" activa fuera de un recorrido real (ver docblock en
