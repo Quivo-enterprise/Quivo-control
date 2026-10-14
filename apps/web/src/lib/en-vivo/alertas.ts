@@ -1,4 +1,10 @@
-import { GRAVEDAD_ORDEN, type GravedadRegla, type Infraccion, type PosicionEnVivo } from '@quivo/shared';
+import {
+  GRAVEDAD_ORDEN,
+  normalizarTelefonoBolivia,
+  type GravedadRegla,
+  type Infraccion,
+  type PosicionEnVivo,
+} from '@quivo/shared';
 
 /**
  * Lógica pura de las alertas por infracción de `/en-vivo` (PR E, `docs/plan-en-vivo-alertas.md`):
@@ -201,11 +207,10 @@ export function velocidadKmh(speedMs: number | null | undefined): number | null 
   return typeof speedMs === 'number' && Number.isFinite(speedMs) && speedMs >= 0 ? Math.round(speedMs * 3.6) : null;
 }
 
-/** Solo dígitos con prefijo país para `wa.me` (Bolivia: +591 + 8 dígitos). `null` si no sirve. */
+/** Solo dígitos con prefijo país para `wa.me` (`59171234567`). `null` si no es un celular boliviano válido. */
 export function telefonoParaWhatsapp(telefono: string | null | undefined): string | null {
-  const digitos = (telefono ?? '').replace(/\D/g, '');
-  if (digitos.length === 8) return `591${digitos}`;
-  return digitos.length >= 9 && digitos.length <= 15 ? digitos : null;
+  const e164 = normalizarTelefonoBolivia(telefono ?? '');
+  return e164 ? e164.slice(1) : null;
 }
 
 export function urlWhatsapp(
@@ -220,6 +225,6 @@ export function urlWhatsapp(
 }
 
 export function urlLlamada(telefono: string | null | undefined): string | null {
-  const limpio = (telefono ?? '').replace(/[^\d+]/g, '');
-  return limpio.replace(/\D/g, '').length >= 7 ? `tel:${limpio}` : null;
+  const e164 = normalizarTelefonoBolivia(telefono ?? '');
+  return e164 ? `tel:${e164}` : null;
 }

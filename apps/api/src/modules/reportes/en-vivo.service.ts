@@ -599,7 +599,7 @@ export class EnVivoService {
         where: { id: sesionId },
         include: {
           vehiculo: true,
-          conductor: true,
+          conductor: { select: { id: true, nombre: true, telefono: true } },
           asignacion: { include: { ruta: { include: { linea: true } } } },
         },
       });

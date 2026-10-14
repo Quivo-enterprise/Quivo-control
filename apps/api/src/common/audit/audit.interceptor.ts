@@ -5,6 +5,7 @@ import type { Observable } from 'rxjs';
 import { concatMap } from 'rxjs/operators';
 import { AUDIT_ACCION_KEY, AUDIT_ENTIDAD_KEY } from './audit.decorator.js';
 import type { AuthenticatedUser } from '../auth/jwt-auth.guard.js';
+import { redactarPii } from './redactar-pii.js';
 
 const ACCION_POR_METODO: Record<string, string> = {
   POST: 'crear',
@@ -27,7 +28,7 @@ interface RequestConAuditoria {
  * nueve copias casi idénticas. Solo actúa si el handler lleva `@Auditable('entidad')`; sin
  * eso, la request pasa de largo (todos los `GET` quedan afuera).
  *
- * `diff` acá es directamente el body de la request (más simple que reconstruir el
+ * `diff` acá es el body de la request (con las claves PII enmascaradas, ver `redactarPii`) (más simple que reconstruir el
  * `{antes, cambios}` que armaban las versiones manuales) — alcanza para lo que pide QUI-230
  * ("diff JSONB"), sin necesitar leer el estado anterior de la entidad en este nivel genérico.
  *
@@ -79,7 +80,7 @@ export class AuditInterceptor implements NestInterceptor {
               entidad,
               entidadId,
               accion,
-              diff: (request.body ?? {}) as object,
+              diff: redactarPii(request.body ?? {}) as object,
             },
           }),
         );

@@ -134,7 +134,7 @@ export const ContextoEnVivoSchema = z.object({
     id: uuidSchema,
     nombre: z.string(),
     // PII: solo en el contexto (endpoint de administración), nunca en el poll de posiciones.
-    telefono: z.string().nullable().optional(),
+    telefono: z.string().nullable(),
   }),
   linea: z.object({ id: uuidSchema, nombre: z.string(), color: z.string() }),
   ruta: z.object({ id: uuidSchema, geometria: LineaGeoJsonSchema }),

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { colorTextoContraste } from '@quivo/design-system';
+import { formatearTelefonoBolivia } from '@quivo/shared';
 import {
   Bus,
   Check,
@@ -396,7 +397,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
       </div>
       {telefono ? (
         <span className="qv-live-panel__tel">
-          <Phone size={12} aria-hidden="true" /> {telefono}
+          <Phone size={12} aria-hidden="true" /> {formatearTelefonoBolivia(telefono)}
         </span>
       ) : (
         <span className="qv-live-panel__sin-tel">

@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { StatusBadge } from '@quivo/design-system';
 import { CreditCard, FileBadge, Phone, UserCheck } from 'lucide-react';
 import {
@@ -29,6 +30,7 @@ import { ConductorPreviewCard } from './conductor-preview';
 export default function ConductoresPage() {
   const { token, user } = useAuth();
   const { options: sindicatoOptions } = useSindicatoOptions();
+  const queryClient = useQueryClient();
 
   const fields = useMemo<EntityFieldConfig[]>(() => {
     const base: EntityFieldConfig[] = [
@@ -88,7 +90,7 @@ export default function ConductoresPage() {
         maxLength: 20,
         placeholder: '7XXXXXXX o +591 7XXXXXXX',
         helperText: 'Opcional. Celular boliviano para contactar al conductor por WhatsApp o llamada.',
-        normalize: (value) => normalizarTelefonoBolivia(value) ?? value.trim(),
+        normalize: (value) => normalizarTelefonoBolivia(value) ?? value,
         validate: (value) => {
           const result = TelefonoBoliviaSchema.safeParse(value);
           return result.success ? undefined : result.error.issues[0]?.message;
@@ -142,10 +144,20 @@ export default function ConductoresPage() {
   const dataSource = useMemo<ModuleDataSource<Conductor>>(
     () => ({
       list: () => conductoresApi.listar(token ?? ''),
-      create: (values) => conductoresApi.crear(token ?? '', values as never),
-      update: (id, values) => conductoresApi.actualizar(token ?? '', id, values as never),
+      // El contexto de /en-vivo se cachea con staleTime Infinity y trae el teléfono del
+      // conductor: tras crear/editar hay que invalidarlo para que el panel no muestre uno viejo.
+      create: async (values) => {
+        const creado = await conductoresApi.crear(token ?? '', values as never);
+        void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'contexto'] });
+        return creado;
+      },
+      update: async (id, values) => {
+        const actualizado = await conductoresApi.actualizar(token ?? '', id, values as never);
+        void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'contexto'] });
+        return actualizado;
+      },
     }),
-    [token],
+    [token, queryClient],
   );
 
   return (
