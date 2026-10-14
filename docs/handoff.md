@@ -6,7 +6,37 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-14, 01:30 (leer primero): B, C, G y fix del Select mergeados; F1-api (#154) y D (#155) abiertos
+## Punto de retome — 2026-10-14, 05:50 (leer primero): trazado de la línea 16 aplicado en prod; #158 abierto
+
+Plan: [`docs/plan-trazado-linea-16.md`](plan-trazado-linea-16.md). Pedido del CTO 02:15 (bloquea el
+próximo APK, memoria `apk-pre-build-fixes-ruta-16`): retorno en la calzada correcta + polilínea de
+navegación azul del ancho del carril.
+
+- **#158 `fix(scripts)`** (`fix/linea-16-trazado-calzadas`, worktree `.claude/worktrees/l16-trazado`,
+  `a0a9c06`): trazado por calles con Google Routes (key `google-routes-server-key` en Secret Manager,
+  restringida a Routes), 6 tramos `ida, regreso, conector, ramal, bajada, salomon`, circuito cerrado.
+  Regreso al norte de la rotonda Libertador/Atahuallpa sin el rodeo con U. Zona terminal v8..v24
+  ruteada par a par (decisión del CTO: variante del sindicato); huecos Calle Los Tajibos y Calle Aguas
+  Potables Norte con geometría OSM. `/code-review` ×2 (20 hallazgos, aplicados). Tests 40/40.
+  `ci` + `acceptance` SUCCESS. **Falta Codex verify-fix** (cuota agotada hasta 10:31; exit 3 = no
+  verificado) → después merge.
+- **Aplicado en prod 2026-10-14 05:42 con ok del CTO:** `cargar-linea-16.ts --apply` → PATCH de la
+  ruta `460c9015…` (213 → 1425 vértices, 27,2 → 32,8 km). PCs, paradas, variante y asignaciones del
+  piloto sin cambios. Re-corrida en dry-run: 0 escrituras. Reversible: re-PATCH con la geometría de
+  `86533ea` (boceto) si hiciera falta.
+- **No verificado:** que Los Tajibos (v10–v11) y Aguas Potables Norte (v18–v19) sean transitables para
+  el trufi; la ruta nueva en la app (rotonda y terminal, en el teléfono).
+- **Pendiente fuera de alcance:** vecinos delante/detrás en la API (`vecinos-ruta.service.ts`,
+  `ST_LineLocatePoint` global) se rompen con tramos solapados (ida/salomon por la misma calle).
+  Detalle en el plan. El "recorrido inverso" del editor web tiene el mismo defecto que tenía el script.
+- **Fix 2 (polilínea de navegación mobile):** sin empezar, después de F1-mobile (ambos tocan
+  `route-map.tsx`).
+
+**Siguiente:** a las 10:31, Codex verify-fix de #158, #155 (`--base 07a3281`), #154 (`--base 7543b58
+--timeout 900`) y #157; merges #158, #155, #154; rebase de #157 sobre `main`, CI, merge. Después
+F1-mobile, Fix 2, deploy (ok del CTO) y breakpoint del APK (changelog: #150–#158, F1-mobile, Fix 2).
+
+## Punto de retome — 2026-10-14, 01:30 (anterior): B, C, G y fix del Select mergeados; F1-api (#154) y D (#155) abiertos
 
 Plan vigente: [`docs/plan-molinos-designacion.md`](plan-molinos-designacion.md) (F1 bloquea el APK, F2 después).
 
