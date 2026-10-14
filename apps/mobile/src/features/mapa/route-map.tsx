@@ -12,8 +12,10 @@ import MapView, {
   Marker,
   Polyline,
   PROVIDER_GOOGLE,
+  type Camera,
   type Details,
   type LatLng,
+  type Region,
 } from 'react-native-maps';
 import Svg, { Path } from 'react-native-svg';
 import { quivoColors, quivoRadius } from '../../shared/theme/quivo-theme';
@@ -50,7 +52,16 @@ import {
   colorPuntoControl,
   type AspectoPuntoControl,
 } from './estado-punto-control';
-import { debeResaltarRutaCalculada, estiloRuta, COLOR_LINEA } from './estilo-ruta';
+import {
+  COLOR_CASING_DESIGNACION,
+  COLOR_DESIGNACION,
+  COLOR_TRAMO_CALCULADO,
+  cuantizarZoom,
+  debeResaltarRutaCalculada,
+  estiloRuta,
+  estiloTramo,
+  zoomParaEncuadre,
+} from './estilo-ruta';
 import type { ModoCamara, OrientacionCamara } from './modo-camara';
 import { debeCommitearFrame, posicionMapaDesde } from './posicion-mapa';
 import type { EmisorRumbo } from './rumbo-mapa';
@@ -274,6 +285,8 @@ interface MarcadorConductorAnimadoProps {
   /** Zoom vigente de la cámara de navegación (suavizado por velocidad). Lo avanza este
    * componente en cada frame de navegación; el padre lo lee al armar sus propias cámaras. */
   zoomActualRef: RefObject<number>;
+  /** Avisa el zoom vigente tras avanzarlo (el padre lo cuantiza y solo re-renderiza al cruzar un paso). */
+  onZoom: (zoom: number) => void;
 }
 
 /**
@@ -293,6 +306,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   posicionMostradaRef,
   rutaSnap,
   zoomActualRef,
+  onZoom,
 }: MarcadorConductorAnimadoProps) {
   const [posicionMostrada, setPosicionMostrada] = useState<CoordenadaMostrada | null>(null);
   const rafIdRef = useRef<number | null>(null);
@@ -341,6 +355,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
       const dtZoom = Math.min(100, ahora - ultimoZoomMsRef.current);
       ultimoZoomMsRef.current = ahora;
       zoomActualRef.current = suavizarZoom(zoomActualRef.current, zoomObjetivo(), dtZoom);
+      onZoom(zoomActualRef.current);
       const camaraNav = construirCamaraNavegacion(
         posicion,
         orientacionRef.current,
@@ -359,6 +374,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
       camaraSuspendidaHastaRef,
       zoomActualRef,
       zoomObjetivo,
+      onZoom,
     ],
   );
 
@@ -594,47 +610,79 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
           fillColor="rgba(49,39,177,0.12)"
           strokeColor="rgba(49,39,177,0.35)"
           strokeWidth={1}
-          zIndex={1}
+          zIndex={Z_HALO_PRECISION}
         />
       ) : null}
     </>
   );
 });
 
+/** Orden de apilado de los overlays del mapa, explícito y sin empates: casing de la base < base <
+ * halo de precisión del conductor < tramo OSRM < casing de la designación < designación. */
+const Z_RUTA_CASING = 1;
+const Z_RUTA = 2;
+const Z_HALO_PRECISION = 3;
+const Z_TRAMO_CALCULADO = 4;
+const Z_DESIGNACION_CASING = 5;
+const Z_DESIGNACION = 6;
+
+/** Zoom de partida de la polilínea antes del primer encuadre (se corrige al aplicar la cámara). */
+const ZOOM_INICIAL_RUTA = 15;
+
 interface RutaPolylinesProps {
   coordenadasRuta: LatLng[];
   tracking: boolean;
   mostrarCaminoResaltado: boolean;
   caminoResaltadoCoords: LatLng[];
+  /** Zoom de la cámara cuantizado (`cuantizarZoom`): escala el ancho de la línea. */
+  zoom: number;
+  latitud: number;
 }
 
 /** Hallazgo ALTO #2 (perf): memoizado — no vuelve a renderizar (ni a re-diffear sus
  * `Polyline`) por cambios ajenos a estas props, como la animación del marcador del conductor
- * (que ya no vive en este árbol de todos modos, ver `MarcadorConductorAnimado`). */
+ * (que ya no vive en este árbol de todos modos, ver `MarcadorConductorAnimado`).
+ *
+ * En seguimiento: borde oscuro (más ancho, debajo) + línea azul del ancho de la calzada, que
+ * escala con el zoom. El tramo OSRM resaltado va encima como franja interior clara (45 % del
+ * ancho) para que no se confunda con la base ni con el tramo de designación. */
 const RutaPolylines = memo(function RutaPolylines({
   coordenadasRuta,
   tracking,
   mostrarCaminoResaltado,
   caminoResaltadoCoords,
+  zoom,
+  latitud,
 }: RutaPolylinesProps) {
-  const estilo = estiloRuta(tracking);
+  const estilo = estiloRuta(tracking, zoom, latitud);
   return (
     <>
+      {estilo.colorCasing ? (
+        <Polyline
+          coordinates={coordenadasRuta}
+          strokeColor={estilo.colorCasing}
+          strokeWidth={estilo.grosorCasing}
+          lineCap="round"
+          lineJoin="round"
+          zIndex={Z_RUTA_CASING}
+        />
+      ) : null}
       <Polyline
         coordinates={coordenadasRuta}
         strokeColor={estilo.color}
         strokeWidth={estilo.grosor}
         lineCap="round"
         lineJoin="round"
+        zIndex={Z_RUTA}
       />
       {mostrarCaminoResaltado ? (
         <Polyline
           coordinates={caminoResaltadoCoords}
-          strokeColor={COLOR_LINEA}
-          strokeWidth={5.5}
+          strokeColor={COLOR_TRAMO_CALCULADO}
+          strokeWidth={Math.max(2, estilo.grosor * 0.45)}
           lineCap="round"
           lineJoin="round"
-          zIndex={2}
+          zIndex={Z_TRAMO_CALCULADO}
         />
       ) : null}
     </>
@@ -643,34 +691,45 @@ const RutaPolylines = memo(function RutaPolylines({
 
 interface DesignacionMapaProps {
   designacion: NonNullable<RouteMapProps['designacion']>;
+  tracking: boolean;
+  zoom: number;
+  latitud: number;
 }
 
-/** Tramo de la designación a Molinos (resaltado sobre la ruta base, con borde blanco para
- * distinguirlo de la polilínea naranja/azul) y el PC de espera destacado. Componente aparte y
+/** Tramo de la designación a Molinos (acento ámbar con borde naranja oscuro, del mismo ancho por
+ * zoom que la base azul y por encima de ella) y el PC de espera destacado. Componente aparte y
  * memoizado: no toca `RutaPolylines` ni su estilo. */
-const DesignacionMapa = memo(function DesignacionMapa({ designacion }: DesignacionMapaProps) {
+const DesignacionMapa = memo(function DesignacionMapa({
+  designacion,
+  tracking,
+  zoom,
+  latitud,
+}: DesignacionMapaProps) {
   const tramo = useMemo(() => coordenadasTramo(designacion.tramo), [designacion.tramo]);
+  const estilo = estiloTramo(COLOR_DESIGNACION, COLOR_CASING_DESIGNACION, zoom, latitud, tracking);
   const [tracksViewChanges] = useTracksViewChanges();
   const [lng, lat] = designacion.puntoEspera.coord.coordinates;
   return (
     <>
       {tramo.length >= 2 ? (
         <>
+          {estilo.colorCasing ? (
+            <Polyline
+              coordinates={tramo}
+              strokeColor={estilo.colorCasing}
+              strokeWidth={estilo.grosorCasing}
+              lineCap="round"
+              lineJoin="round"
+              zIndex={Z_DESIGNACION_CASING}
+            />
+          ) : null}
           <Polyline
             coordinates={tramo}
-            strokeColor={quivoColors.white}
-            strokeWidth={11}
+            strokeColor={estilo.color}
+            strokeWidth={estilo.grosor}
             lineCap="round"
             lineJoin="round"
-            zIndex={3}
-          />
-          <Polyline
-            coordinates={tramo}
-            strokeColor={quivoColors.primary}
-            strokeWidth={7}
-            lineCap="round"
-            lineJoin="round"
-            zIndex={4}
+            zIndex={Z_DESIGNACION}
           />
         </>
       ) : null}
@@ -784,6 +843,8 @@ export function RouteMap({
       paquete.ruta.geometria.coordinates.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
     [paquete],
   );
+  // Latitud de referencia para el ancho en dp (la ruta abarca pocos km: el coseno apenas varía).
+  const latitudRuta = coordenadasRuta[0]?.latitude ?? 0;
 
   // Polilínea de la ruta preparada para el snap visual del marcador (`snap-ruta.ts`). La identidad
   // sólo cambia si cambia la GEOMETRÍA (firma de contenido): una referencia nueva del paquete con
@@ -803,6 +864,36 @@ export function RouteMap({
   // Zoom vigente de la cámara de navegación: lo avanza el marcador por velocidad; las cámaras
   // puntuales de este componente (entrada, recentrar, padding) lo leen para no pegar un salto.
   const zoomActualRef = useRef(ZOOM_NAVEGACION);
+  // Zoom cuantizado (pasos de 0.25) que escala el ancho de la polilínea: el estado solo cambia al
+  // cruzar un paso, así que el padre no re-renderiza por cada frame de cámara.
+  const [zoomRuta, setZoomRuta] = useState(cuantizarZoom(ZOOM_INICIAL_RUTA));
+  // Último zoom cuantizado publicado: `onZoom` corre por frame de cámara y solo hace `setState`
+  // si cruzó un paso.
+  const zoomRutaRef = useRef(cuantizarZoom(ZOOM_INICIAL_RUTA));
+  const actualizarZoomRuta = useCallback((zoom: number) => {
+    if (!Number.isFinite(zoom)) return;
+    const q = cuantizarZoom(zoom);
+    if (q === zoomRutaRef.current) return;
+    zoomRutaRef.current = q;
+    setZoomRuta(q);
+  }, []);
+  // Ancho/alto del mapa en dp (onLayout): para estimar el zoom del encuadre (`zoomParaEncuadre`).
+  const tamanoMapaRef = useRef({ ancho: 0, alto: 0 });
+  // Secuencia de lecturas `getCamera` (rumbo): una respuesta fuera de orden se descarta.
+  const secLecturaCamaraRef = useRef(0);
+
+  // Aplica una cámara propia (set/animate) y publica su zoom destino para el ancho de la línea:
+  // único camino de cámara programática, así ninguno deja el ancho del modo anterior.
+  const aplicarCamara = useCallback(
+    (camara: Partial<Camera>, duracion?: number) => {
+      const mapa = mapRef.current;
+      if (!mapa) return;
+      if (duracion !== undefined) mapa.animateCamera(camara, { duration: duracion });
+      else mapa.setCamera(camara);
+      if (typeof camara.zoom === 'number') actualizarZoomRuta(camara.zoom);
+    },
+    [actualizarZoomRuta],
+  );
 
   const puntosControlData = useMemo(
     () =>
@@ -864,10 +955,15 @@ export function RouteMap({
       // Vista general = norte arriba: la brújula se reinicia (el botón además se oculta ahí).
       emisorRumbo?.publicar(0, true);
       if (accion === 'ajustar-ruta') {
-        mapa.fitToCoordinates(coordenadasEncuadre(coordenadasRuta, posicion), {
+        const coordsEncuadre = coordenadasEncuadre(coordenadasRuta, posicion);
+        mapa.fitToCoordinates(coordsEncuadre, {
           edgePadding: { ...PADDING_ENCUADRE_RUTA },
           animated,
         });
+        // Zoom estimado del encuadre (el idle de la región lo afina al terminar).
+        const { ancho, alto } = tamanoMapaRef.current;
+        const zoomFit = zoomParaEncuadre(coordsEncuadre, ancho, alto, PADDING_ENCUADRE_RUTA);
+        if (zoomFit !== null) actualizarZoomRuta(zoomFit);
       } else if (accion === 'centrar-posicion' && posicion) {
         const camaraCentrada = {
           center: aLatLng(posicion),
@@ -875,11 +971,10 @@ export function RouteMap({
           pitch: 0,
           zoom: ZOOM_SEGUIMIENTO,
         };
-        if (animated) mapa.animateCamera(camaraCentrada, { duration: 400 });
-        else mapa.setCamera(camaraCentrada);
+        aplicarCamara(camaraCentrada, animated ? 400 : undefined);
       }
     },
-    [coordenadasRuta, emisorRumbo],
+    [coordenadasRuta, emisorRumbo, actualizarZoomRuta, aplicarCamara],
   );
 
   const cancelarTimerSuspension = useCallback(() => {
@@ -909,13 +1004,13 @@ export function RouteMap({
       );
       if (camaraNav.heading !== undefined) emisorRumbo?.publicar(camaraNav.heading);
       if (reanimarSiSuspendida && restante > 80) {
-        mapa.animateCamera(camaraNav, { duration: restante });
+        aplicarCamara(camaraNav, restante);
         return;
       }
       camaraSuspendidaHastaRef.current = 0;
-      mapa.setCamera(camaraNav);
+      aplicarCamara(camaraNav);
     },
-    [emisorRumbo],
+    [emisorRumbo, aplicarCamara],
   );
 
   // Cámara de navegación sobre la posición mostrada. Sin posición todavía no hace nada: el primer
@@ -936,16 +1031,16 @@ export function RouteMap({
       cancelarTimerSuspension();
       if (duracion > 0) {
         camaraSuspendidaHastaRef.current = Date.now() + duracion;
-        mapa.animateCamera(camaraNav, { duration: duracion });
+        aplicarCamara(camaraNav, duracion);
         timerSuspensionRef.current = setTimeout(() => {
           timerSuspensionRef.current = null;
           sincronizarCamaraNavegacion(false);
         }, duracion);
       } else {
-        mapa.setCamera(camaraNav);
+        aplicarCamara(camaraNav);
       }
     },
-    [cancelarTimerSuspension, sincronizarCamaraNavegacion, emisorRumbo],
+    [cancelarTimerSuspension, sincronizarCamaraNavegacion, emisorRumbo, aplicarCamara],
   );
 
   // Cámara inicial, una sola vez cuando se cumplen mapa listo + layout: en navegación (remount
@@ -1040,18 +1135,29 @@ export function RouteMap({
   // `onRegionChangeComplete` llega seguido (cada `moveCamera` propio), `getCamera` cruza el bridge y
   // el rumbo ya se publica desde el `setCamera` por frame. Al resolverse la promesa se vuelve a
   // mirar el modo: una lectura vieja no debe pisar el rumbo que fuerza el recentrar.
-  const onRegionChangeComplete = useCallback(() => {
-    if (modoRef.current === 'navegacion' || !emisorRumbo) return;
-    mapRef.current
-      ?.getCamera()
-      .then((c) => {
-        if (modoRef.current === 'navegacion') return;
-        emisorRumbo.publicar(c.heading);
-      })
-      .catch(() => {
-        // Mapa desmontado o no listo: la aguja queda como estaba.
-      });
-  }, [emisorRumbo]);
+  const onRegionChangeComplete = useCallback(
+    (_region: Region) => {
+      // En navegación la cámara la publica `aplicarCamara`/el marcador.
+      const modoDisparo = modoRef.current;
+      if (modoDisparo === 'navegacion') return;
+      // Una sola lectura de `getCamera` por idle, compartida entre rumbo y zoom: `longitudeDelta`
+      // (bounding box en Android) ignora pitch y rotación y subestimaría el zoom.
+      const secuencia = ++secLecturaCamaraRef.current;
+      mapRef.current
+        ?.getCamera()
+        .then((c) => {
+          // Lectura vieja, modo cambiado desde que se disparó (p. ej. navegación→general) o ya
+          // en navegación: se descarta.
+          if (secuencia !== secLecturaCamaraRef.current || modoRef.current !== modoDisparo) return;
+          emisorRumbo?.publicar(c.heading);
+          if (typeof c.zoom === 'number') actualizarZoomRuta(c.zoom);
+        })
+        .catch(() => {
+          // Mapa desmontado o no listo: la aguja y el zoom quedan como estaban.
+        });
+    },
+    [emisorRumbo, actualizarZoomRuta],
+  );
 
   const onRegionChangeStart = useCallback(
     (event: NativeSyntheticEvent<Details>) => {
@@ -1111,6 +1217,7 @@ export function RouteMap({
     (e: LayoutChangeEvent) => {
       const { width, height } = e.nativeEvent.layout;
       if (width > 0 && height > 0) {
+        tamanoMapaRef.current = { ancho: width, alto: height };
         setAltoMapa(Math.round(height));
         layoutListoRef.current = true;
         intentarCamaraInicial();
@@ -1156,8 +1263,17 @@ export function RouteMap({
           tracking={tracking}
           mostrarCaminoResaltado={mostrarCaminoResaltado}
           caminoResaltadoCoords={caminoResaltadoCoords}
+          zoom={zoomRuta}
+          latitud={latitudRuta}
         />
-        {designacion ? <DesignacionMapa designacion={designacion} /> : null}
+        {designacion ? (
+          <DesignacionMapa
+            designacion={designacion}
+            tracking={tracking}
+            zoom={zoomRuta}
+            latitud={latitudRuta}
+          />
+        ) : null}
         <PuntosControlMarcadores
           puntosControlData={puntosControlData}
           tracking={tracking}
@@ -1174,6 +1290,7 @@ export function RouteMap({
           posicionMostradaRef={posicionMostradaRef}
           rutaSnap={rutaSnap}
           zoomActualRef={zoomActualRef}
+          onZoom={actualizarZoomRuta}
         />
       </MapView>
     </View>
