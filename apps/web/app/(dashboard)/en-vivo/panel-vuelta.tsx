@@ -102,7 +102,23 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
   function onKeyDown(e: React.KeyboardEvent, indice: number) {
     const salto =
       e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-    const destino = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : salto ? (indice + salto + items.length) % items.length : -1;
+    const habilitado = (i: number) => !(bloqueado && items[i]!.id !== seleccion);
+    let destino = -1;
+    if (e.key === 'Home' || e.key === 'End') {
+      // Primer/último ítem habilitado (los deshabilitados no reciben foco).
+      const orden = items.map((_, i) => i);
+      if (e.key === 'End') orden.reverse();
+      destino = orden.find(habilitado) ?? -1;
+    } else if (salto) {
+      // Salta los deshabilitados; si todos los demás lo están, no se mueve.
+      for (let paso = 1; paso < items.length; paso++) {
+        const cand = (indice + salto * paso + items.length * paso) % items.length;
+        if (habilitado(cand)) {
+          destino = cand;
+          break;
+        }
+      }
+    }
     if (destino < 0) return;
     e.preventDefault();
     setFoco(destino);
@@ -192,7 +208,7 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
           )}
           {/* El contador cambia cada 10 s y no se anuncia: solo se avisa cuando la espera se cumple. */}
           <span className="qv-visually-hidden" aria-live="polite">
-            {espera?.cumplida ? espera.texto : ''}
+            {espera?.cumplida ? 'Espera en Molinos cumplida' : ''}
           </span>
         </>
       )}

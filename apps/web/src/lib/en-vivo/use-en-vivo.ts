@@ -315,8 +315,8 @@ export interface DesignarVars {
  * Designa (o cancela) la vuelta en curso. Optimista: mientras el PUT está en vuelo la designación
  * pedida vive como overlay (`KEY_DESIGNACIONES_PENDIENTES`) que `usePosicionesEnVivo` aplica sobre
  * cada poll, en vez de escribir en la caché de posiciones (el poll de 2 s la pisaría y un rollback
- * con snapshot viejo pisaría polls más nuevos). Al terminar —con éxito o con 409— se quita el
- * overlay y se invalida: el control queda con lo que diga el servidor. `onError` lo maneja el
+ * con snapshot viejo pisaría polls más nuevos). Al terminar —con éxito o con 409— se invalida y,
+ * cuando llega el refetch de posiciones, se quita el overlay: el control queda con lo que diga el servidor. `onError` lo maneja el
  * panel (mensaje en línea).
  */
 export function useDesignarVuelta(token: string | null) {
@@ -342,10 +342,12 @@ export function useDesignarVuelta(token: string | null) {
       queryClient.setQueryData(KEY_DESIGNACIONES_PENDIENTES, sig);
       return { ahoraIso };
     },
-    onSettled: (_data, _err, v, ctx) => {
-      if (ctx) quitarOverlay(v.sesionId, ctx.ahoraIso);
-      void queryClient.invalidateQueries({ queryKey: key });
+    onSettled: async (_data, _err, v, ctx) => {
       void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'molinos'] });
+      // El overlay se mantiene hasta que llega el refetch de posiciones: quitarlo antes dejaría ver
+      // un instante la caché previa a la designación.
+      await queryClient.invalidateQueries({ queryKey: key });
+      if (ctx) quitarOverlay(v.sesionId, ctx.ahoraIso);
     },
   });
 }
