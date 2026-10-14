@@ -1,4 +1,5 @@
 import type { MolinosLinea, PosicionEnVivo, PuntoControl, Variante, VueltaPosicion } from '@quivo/shared';
+import { formatearHace, formatearHoraBolivia } from './jornadas';
 import { offsetRelojServidorMs } from './traza';
 
 /**
@@ -28,24 +29,9 @@ export function esperaMinDeVariante(
   return punto?.esperaMin && punto.esperaMin > 0 ? punto.esperaMin : ESPERA_MIN_DEFAULT;
 }
 
-/** Hora local `HH:MM` (24 h) de un ISO; `—` si no parsea. */
-export function horaCorta(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const t = new Date(iso);
-  if (Number.isNaN(t.getTime())) return '—';
-  return t.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
 /** Minutos enteros (hacia abajo, mínimo 0) entre dos instantes en ms. */
 function minutosEntre(desdeMs: number, hastaMs: number): number {
   return Math.max(0, Math.floor((hastaMs - desdeMs) / 60_000));
-}
-
-/** "hace N min" para el HUD; `ahora` si pasó menos de un minuto. */
-export function haceMin(iso: string | null, ahoraServidorMs: number): string | null {
-  if (!iso) return null;
-  const min = minutosEntre(Date.parse(iso), ahoraServidorMs);
-  return min < 1 ? 'hace menos de 1 min' : `hace ${min} min`;
 }
 
 /**
@@ -81,10 +67,10 @@ export type EstadoAcuse =
  */
 export function estadoAcuse(v: Pick<VueltaPosicion, 'varianteId' | 'designadaEn' | 'acuseEn'> | null): EstadoAcuse {
   if (!v || !v.varianteId || !v.designadaEn) return { tipo: 'sin_designacion' };
-  const avisado = horaCorta(v.designadaEn);
+  const avisado = formatearHoraBolivia(v.designadaEn);
   const visto = v.acuseEn && Date.parse(v.acuseEn) >= Date.parse(v.designadaEn);
   if (visto) {
-    const vistoA = horaCorta(v.acuseEn);
+    const vistoA = formatearHoraBolivia(v.acuseEn ?? null);
     return { tipo: 'visto', avisadoA: avisado, vistoA, texto: `Avisado ${avisado} · visto ✓ ${vistoA}` };
   }
   return { tipo: 'esperando', avisadoA: avisado, texto: `Avisado ${avisado} · esperando que el chofer lo vea…` };
@@ -156,11 +142,45 @@ export function aplicarDesignacion(
   };
 }
 
-/** Texto del HUD de una línea: "Molinos: 2 en espera · último envío hace 4 min · próximo sugerido en 3 min". */
-export function textoHudMolinos(l: MolinosLinea, ahoraServidorMs: number): string {
-  const ultimo = haceMin(l.ultimoEnvioTs, ahoraServidorMs);
-  const faltaMs = Date.parse(l.proximoSugeridoEn) - ahoraServidorMs;
-  const proximo = faltaMs <= 0 ? 'ya toca enviar' : `próximo sugerido en ${Math.max(1, Math.ceil(faltaMs / 60_000))} min`;
-  return `Molinos: ${l.enEspera} en espera · ${ultimo ? `último envío ${ultimo}` : 'sin envíos hoy'} · ${proximo}`;
+/** Designación pedida al servidor y todavía sin confirmar (por `sesionId`). */
+export interface DesignacionPendiente {
+  varianteId: string | null;
+  varianteNombre: string | null;
+  /** Instante de la petición: es el `designadaEn` optimista, estable entre polls. */
+  ahoraIso: string;
 }
 
+/**
+ * Posiciones con las designaciones pendientes aplicadas por encima de lo que trajo el poll: así el
+ * poll de 2 s no pisa el valor optimista mientras el PUT está en vuelo. Sin pendientes devuelve el
+ * mismo array (referencia estable, sin re-render de más).
+ */
+export function aplicarDesignacionesPendientes(
+  posiciones: PosicionEnVivo[],
+  pendientes: ReadonlyMap<string, DesignacionPendiente>,
+): PosicionEnVivo[] {
+  if (pendientes.size === 0) return posiciones;
+  return posiciones.map((p) => {
+    const d = pendientes.get(p.id);
+    return d ? aplicarDesignacion(p, d.varianteId, d.varianteNombre, d.ahoraIso) : p;
+  });
+}
+
+/** Texto del HUD de una línea: "Molinos: 2 en espera · último envío hace 4 min · próximo sugerido en 3 min". */
+export function textoHudMolinos(l: MolinosLinea, ahoraServidorMs: number): string {
+  const ultimo = l.ultimoEnvioTs ? formatearHace(l.ultimoEnvioTs, ahoraServidorMs) : null;
+  const faltaMs = Date.parse(l.proximoSugeridoEn) - ahoraServidorMs;
+  // Un `proximoSugeridoEn` que no parsea no se inventa ("NaN min"): se omite esa parte.
+  const proximo = !Number.isFinite(faltaMs)
+    ? null
+    : faltaMs <= 0
+      ? 'ya toca enviar'
+      : `próximo sugerido en ${Math.max(1, Math.ceil(faltaMs / 60_000))} min`;
+  return [
+    `Molinos: ${l.enEspera} en espera`,
+    ultimo && ultimo !== '—' ? `último envío ${ultimo}` : 'sin envíos hoy',
+    proximo,
+  ]
+    .filter((parte): parte is string => parte !== null)
+    .join(' · ');
+}

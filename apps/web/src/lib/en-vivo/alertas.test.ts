@@ -23,6 +23,7 @@ import {
   urlWhatsapp,
   velocidadKmh,
 } from './alertas';
+import { etiquetaAlerta } from '../../../../../packages/design-system/src/ui/route-map-vehiculo';
 
 const pos = (id: string, nivel: 'leve' | 'grave' | 'gravisima' | null, abiertas = nivel ? 1 : 0, placa = id) => ({
   id,
@@ -231,7 +232,7 @@ describe('alertaMarcador (pendiente E #1)', () => {
       parpadea: false,
     });
   });
-  it('abiertas y atendidas: nivel máximo de las dos y parpadea', () => {
+  it('abiertas y atendidas: el nivel sale solo de las abiertas y parpadea', () => {
     expect(
       alertaMarcador({
         infraccionNivel: 'leve',
@@ -239,7 +240,18 @@ describe('alertaMarcador (pendiente E #1)', () => {
         infraccionNivelAtendida: 'grave',
         infraccionesAtendidas: 1,
       }),
-    ).toEqual({ nivel: 'grave', abiertas: 1, atendidas: 1, parpadea: true });
+    ).toEqual({ nivel: 'leve', abiertas: 1, atendidas: 1, parpadea: true });
+  });
+  it('1 abierta leve + 1 atendida gravísima: marcador leve que parpadea (la atendida no infla el nivel)', () => {
+    const a = alertaMarcador({
+      infraccionNivel: 'leve',
+      infraccionesAbiertas: 1,
+      infraccionNivelAtendida: 'gravisima',
+      infraccionesAtendidas: 1,
+    });
+    expect(a).toEqual({ nivel: 'leve', abiertas: 1, atendidas: 1, parpadea: true });
+    // El nombre accesible del marcador se arma de este nivel (`etiquetaAlerta` del design-system).
+    expect(etiquetaAlerta(a!)).toContain('leve');
   });
   it('un nivel sin cantidad (dato inconsistente) se ignora', () => {
     expect(alertaMarcador({ ...base, infraccionNivel: 'grave', infraccionesAbiertas: 0 })).toBeNull();

@@ -21,6 +21,8 @@
   --qv-color-primary: #3226b4;
   --qv-color-primary-soft: #dcd9fb;
   --qv-color-primary-subtle: #efeefc;
+  /* Texto sobre fondo `--qv-color-primary` (en oscuro el primario es claro: blanco no llega a 4,5:1). */
+  --qv-color-on-primary: #ffffff;
   --qv-color-accent: #fd9e15;
   --qv-color-accent-subtle: #ffefd9;
 
@@ -99,6 +101,7 @@
     --qv-color-primary: #6672f5;
     --qv-color-primary-soft: #3226b4;
     --qv-color-primary-subtle: #191943;
+    --qv-color-on-primary: #0f172a;
     --qv-color-accent: #feb83e;
     --qv-color-accent-subtle: #412710;
 

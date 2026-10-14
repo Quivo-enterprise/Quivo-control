@@ -42,6 +42,8 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
   const idTitulo = useId();
   const idError = useId();
   const refs = useRef(new Map<string, HTMLButtonElement>());
+  // Roving tabindex: índice con el foco dentro del grupo (`null` = el grupo no tiene foco).
+  const [foco, setFoco] = useState<number | null>(null);
 
   const vuelta = posicion?.vuelta ?? null;
   const opciones = variantesDeEspera(variantes);
@@ -57,8 +59,15 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
   const numeroVuelta = vuelta?.numero ?? null;
   useEffect(() => setError(null), [numeroVuelta]);
 
-  // Sin variantes designables (la ruta no tiene Molinos) la sección no aporta: no se muestra.
-  if (variantes && opciones.length === 0 && !variantesError) return null;
+  // Una designación activa a una variante que ya no se ofrece (desactivada o sin punto de espera)
+  // se sigue mostrando —marcada— para poder verla y volver a "Directo".
+  const designadaNoListada = Boolean(
+    vuelta?.varianteId && !opciones.some((v) => v.id === vuelta.varianteId),
+  );
+
+  // Sin variantes designables (la ruta no tiene Molinos) la sección no aporta: no se muestra,
+  // salvo que haya una designación activa que no se puede esconder.
+  if (variantes && opciones.length === 0 && !variantesError && !designadaNoListada) return null;
 
   const esperaMin = esperaMinDeVariante(vuelta?.varianteId, variantes, puntos);
   const espera = vuelta?.enEspera ? esperaMolinos(vuelta.esperaDesdeTs, esperaMin, reloj) : null;
@@ -66,7 +75,13 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
   const items = [
     { id: OPCION_DIRECTO, etiqueta: 'Directo', varianteId: null as string | null },
     ...opciones.map((v) => ({ id: v.id, etiqueta: v.nombre, varianteId: v.id as string | null })),
+    ...(designadaNoListada && vuelta?.varianteId
+      ? [{ id: vuelta.varianteId, etiqueta: `${vuelta.varianteNombre ?? 'Molinos'} (inactiva)`, varianteId: vuelta.varianteId as string | null }]
+      : []),
   ];
+  // Un único tabstop: el que tiene el foco o, si no, el marcado (o el primero si ninguno coincide).
+  const indiceActivo = items.findIndex((item) => item.id === seleccion);
+  const indiceTab = foco !== null && foco < items.length ? foco : Math.max(0, indiceActivo);
 
   async function elegir(item: (typeof items)[number]) {
     if (bloqueado || item.id === seleccion) return;
@@ -82,22 +97,22 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
     }
   }
 
-  // Radiogroup: flechas mueven foco y selección (patrón WAI-ARIA); Home/End a los extremos.
+  // Radiogroup: flechas/Home/End SOLO mueven el foco (elegir designa de verdad al chofer y no debe
+  // dispararse al pasar por una opción); Enter y Espacio activan el botón nativo (`onClick`).
   function onKeyDown(e: React.KeyboardEvent, indice: number) {
     const salto =
       e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
     const destino = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : salto ? (indice + salto + items.length) % items.length : -1;
     if (destino < 0) return;
     e.preventDefault();
-    const item = items[destino]!;
-    refs.current.get(item.id)?.focus();
-    void elegir(item);
+    setFoco(destino);
+    refs.current.get(items[destino]!.id)?.focus();
   }
 
   return (
-    <div className="qv-live-panel__seccion qv-vuelta" aria-labelledby={idTitulo}>
-      <h3 className="qv-live-panel__h" id={idTitulo}>
-        <span>{vuelta ? `Vuelta ${vuelta.numero} de hoy` : 'Vuelta de hoy'}</span>
+    <div className="qv-live-panel__seccion qv-vuelta" role="group" aria-labelledby={idTitulo}>
+      <h3 className="qv-live-panel__h">
+        <span id={idTitulo}>{vuelta ? `Vuelta ${vuelta.numero} de hoy` : 'Vuelta de hoy'}</span>
         {sugerido && !bloqueado && <span className="qv-vuelta__chip">Sugerido</span>}
       </h3>
 
@@ -118,7 +133,11 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
             aria-labelledby={idTitulo}
             aria-describedby={error ? idError : undefined}
             aria-disabled={bloqueado || undefined}
+            aria-busy={pendiente !== null || undefined}
             className="qv-vuelta__segmentos"
+            onBlur={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget)) setFoco(null);
+            }}
           >
             {items.map((item, i) => {
               const activo = item.id === seleccion;
@@ -132,11 +151,12 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
                   type="button"
                   role="radio"
                   aria-checked={activo}
-                  tabIndex={activo ? 0 : -1}
+                  tabIndex={i === indiceTab ? 0 : -1}
                   disabled={bloqueado && !activo}
                   className="qv-vuelta__segmento"
                   data-pendiente={pendiente === item.id || undefined}
                   onClick={() => void elegir(item)}
+                  onFocus={() => setFoco(i)}
                   onKeyDown={(e) => onKeyDown(e, i)}
                 >
                   {item.etiqueta}
@@ -145,6 +165,7 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
             })}
           </div>
 
+          {pendiente !== null && <p className="qv-vuelta__nota">Guardando…</p>}
           {bloqueo && (
             <p className="qv-vuelta__nota">
               <Clock size={12} aria-hidden="true" /> {bloqueo}
@@ -165,10 +186,14 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
             </p>
           )}
           {espera && (
-            <p className="qv-vuelta__espera" data-cumplida={espera.cumplida || undefined} role="status">
+            <p className="qv-vuelta__espera" data-cumplida={espera.cumplida || undefined}>
               <Hourglass size={13} aria-hidden="true" /> <span>{espera.texto}</span>
             </p>
           )}
+          {/* El contador cambia cada 10 s y no se anuncia: solo se avisa cuando la espera se cumple. */}
+          <span className="qv-visually-hidden" aria-live="polite">
+            {espera?.cumplida ? espera.texto : ''}
+          </span>
         </>
       )}
     </div>

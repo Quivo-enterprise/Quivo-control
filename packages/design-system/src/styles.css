@@ -2790,7 +2790,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   height: 18px;
   border-radius: 50%;
   background: var(--qv-color-primary);
-  color: #fff;
+  color: var(--qv-color-on-primary);
   font-size: 11px;
   font-weight: 800;
   line-height: 1;
@@ -3646,6 +3646,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 }
 .qv-vuelta__segmentos {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 2px;
   border-radius: var(--qv-radius-lg);
@@ -3653,10 +3654,13 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   background: color-mix(in srgb, var(--qv-surface-card) 55%, transparent);
 }
 .qv-vuelta__segmento {
-  flex: 1 1 0;
+  /* Base fija + wrap en el contenedor: con nombres largos las opciones bajan de fila en vez de desbordar. */
+  flex: 1 1 5.5rem;
   min-width: 0;
   min-height: 2.75rem;
   padding: 0.3rem 0.6rem;
+  overflow-wrap: anywhere;
+  text-align: center;
   border: 0;
   border-radius: calc(var(--qv-radius-lg) - 2px);
   background: transparent;
@@ -3677,7 +3681,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 }
 .qv-vuelta__segmento[aria-checked='true'] {
   background: var(--qv-color-primary);
-  color: #fff;
+  color: var(--qv-color-on-primary);
   cursor: default;
 }
 .qv-vuelta__segmento[data-pendiente] {
@@ -3777,6 +3781,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     border-radius: var(--qv-radius-xl) var(--qv-radius-xl) 0 0;
     padding: 0.5rem 1rem calc(0.9rem + env(safe-area-inset-bottom, 0px));
     border-bottom: none;
+    /* El asa sticky (2.75 rem) no debe tapar el control que recibe el foco al desplazar la hoja. */
+    scroll-padding-top: 2.75rem;
   }
   /* Asa de la hoja: pegada arriba, alcance táctil de 44 px; arrastre o toque alternan la altura. */
   .qv-live-panel__asa {
@@ -3823,8 +3829,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-secondary);
     font-variant-numeric: tabular-nums;
   }
-  /* Con la hoja abierta el HUD de Molinos cede el sitio al detalle. */
-  .qv-live-map-wrapper:has(.qv-live-panel) .qv-live-molinos {
+  /* Con la hoja expandida el HUD de Molinos cede el sitio al detalle; plegada, vuelve a verse. */
+  .qv-live-map-wrapper:has(.qv-live-panel[data-hoja='expandida']) .qv-live-molinos {
     display: none;
   }
   .qv-live-btn {

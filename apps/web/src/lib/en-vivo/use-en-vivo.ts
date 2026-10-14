@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TRAZA_EN_VIVO_LIMITE_MAX,
@@ -25,7 +26,7 @@ import {
   intervaloPoll,
   type TrazaAcumulada,
 } from './traza';
-import { aplicarDesignacion } from './vuelta';
+import { aplicarDesignacionesPendientes, type DesignacionPendiente } from './vuelta';
 
 /**
  * Hooks de TanStack Query para `/en-vivo` — el primer consumidor real del `QueryClient` que
@@ -57,6 +58,9 @@ export function useSesionesEnVivo(token: string | null) {
   });
 }
 
+/** Cache (sin fetch) con las designaciones en vuelo por `sesionId`: el overlay del optimista. */
+const KEY_DESIGNACIONES_PENDIENTES = ['en-vivo', 'designaciones-pendientes'] as const;
+
 /** Cadencia del poll de `/posiciones`; también es la duración de la animación del vehículo seleccionado. */
 export const INTERVALO_POLL_POSICIONES_MS = 2_000;
 
@@ -74,7 +78,18 @@ export const INTERVALO_POLL_POSICIONES_MS = 2_000;
  * pollendo un mapa que nadie mira.
  */
 export function usePosicionesEnVivo(token: string | null) {
+  // Designaciones pedidas y aún sin confirmar (ver `useDesignarVuelta`): se aplican por encima de
+  // cada poll al leer, así el valor optimista no parpadea hacia el del servidor mientras el PUT vuela.
+  const { data: pendientes } = useQuery<ReadonlyMap<string, DesignacionPendiente>>({
+    queryKey: KEY_DESIGNACIONES_PENDIENTES,
+    enabled: false,
+  });
+  const select = useCallback(
+    (posiciones: PosicionEnVivo[]) => (pendientes ? aplicarDesignacionesPendientes(posiciones, pendientes) : posiciones),
+    [pendientes],
+  );
   return useQuery<PosicionEnVivo[]>({
+    select,
     queryKey: ['en-vivo', 'posiciones-todas'],
     enabled: Boolean(token),
     queryFn: () => enVivoApi.posicionesTodas(token as string),
@@ -297,29 +312,38 @@ export interface DesignarVars {
 }
 
 /**
- * Designa (o cancela) la vuelta en curso. Optimista sobre la caché de posiciones (el control
- * responde al instante) con rollback si la API rechaza (409 con motivo en español); al terminar,
- * `invalidate` trae la verdad del servidor. `onError` lo maneja el panel (mensaje + aviso).
+ * Designa (o cancela) la vuelta en curso. Optimista: mientras el PUT está en vuelo la designación
+ * pedida vive como overlay (`KEY_DESIGNACIONES_PENDIENTES`) que `usePosicionesEnVivo` aplica sobre
+ * cada poll, en vez de escribir en la caché de posiciones (el poll de 2 s la pisaría y un rollback
+ * con snapshot viejo pisaría polls más nuevos). Al terminar —con éxito o con 409— se quita el
+ * overlay y se invalida: el control queda con lo que diga el servidor. `onError` lo maneja el
+ * panel (mensaje en línea).
  */
 export function useDesignarVuelta(token: string | null) {
   const queryClient = useQueryClient();
   const key = ['en-vivo', 'posiciones-todas'];
+  const leer = () => queryClient.getQueryData<ReadonlyMap<string, DesignacionPendiente>>(KEY_DESIGNACIONES_PENDIENTES);
+  const quitarOverlay = (sesionId: string, desde: string) => {
+    const actual = leer();
+    // Si otra designación de la misma sesión la reemplazó mientras tanto, esa es la que manda.
+    if (!actual || actual.get(sesionId)?.ahoraIso !== desde) return;
+    const sig = new Map(actual);
+    sig.delete(sesionId);
+    queryClient.setQueryData(KEY_DESIGNACIONES_PENDIENTES, sig);
+  };
   return useMutation({
     mutationFn: (v: DesignarVars) => enVivoApi.designarVuelta(token as string, v.sesionId, v.varianteId),
     onMutate: async (v) => {
       // Un poll en vuelo pisaría el cambio optimista con datos previos a la designación.
       await queryClient.cancelQueries({ queryKey: key });
-      const previo = queryClient.getQueryData<PosicionEnVivo[]>(key);
       const ahoraIso = new Date().toISOString();
-      queryClient.setQueryData<PosicionEnVivo[]>(key, (cur) =>
-        cur?.map((p) => (p.id === v.sesionId ? aplicarDesignacion(p, v.varianteId, v.varianteNombre, ahoraIso) : p)),
-      );
-      return { previo };
+      const sig = new Map(leer());
+      sig.set(v.sesionId, { varianteId: v.varianteId, varianteNombre: v.varianteNombre, ahoraIso });
+      queryClient.setQueryData(KEY_DESIGNACIONES_PENDIENTES, sig);
+      return { ahoraIso };
     },
-    onError: (_err, _v, ctx) => {
-      if (ctx?.previo) queryClient.setQueryData(key, ctx.previo);
-    },
-    onSettled: () => {
+    onSettled: (_data, _err, v, ctx) => {
+      if (ctx) quitarOverlay(v.sesionId, ctx.ahoraIso);
       void queryClient.invalidateQueries({ queryKey: key });
       void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'molinos'] });
     },

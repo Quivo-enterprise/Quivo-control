@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Alert, Button, Loader, RouteMap, Select, type MapPoint } from '@quivo/design-system';
+import { Alert, Button, ConfirmDialog, Loader, RouteMap, Select, type MapPoint } from '@quivo/design-system';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { GravedadRegla, Infraccion } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
+import { isRouteAllowedForRole, NAV_ITEMS } from '../../../src/lib/nav-items';
 import {
   useContextoEnVivo,
   useMolinosResumen,
@@ -68,8 +69,11 @@ export default function EnVivoPage() {
   const posiciones = usePosicionesEnVivo(token);
   const molinos = useMolinosResumen(token);
   // El `operador` (control) no tiene dashboard ni atiende infracciones: "Panel" pasa a "Salir" y
-  // el panel del vehículo muestra las infracciones en solo lectura.
-  const tienePanelAdmin = user?.rol !== 'operador';
+  // el panel del vehículo muestra las infracciones en solo lectura. Allowlist: sale de los roles
+  // del dashboard (`/`), no de excluir roles a mano. Esos mismos roles son los que pueden leer
+  // `GET /reportes/jornadas` (el `operador` recibiría 403), así que también gobierna `PanelJornada`.
+  const tienePanelAdmin = user ? isRouteAllowedForRole(NAV_ITEMS, '/', user.rol) : false;
+  const [confirmandoSalida, setConfirmandoSalida] = useState(false);
   const soloLectura = !puedeActuarEnInfracciones(user?.rol);
   const { options: lineaOptions, lineas } = useLineaOptions();
   const [lineaFilter, setLineaFilter] = useState('');
@@ -594,7 +598,7 @@ export default function EnVivoPage() {
               </Button>
               {/* Sin sesiones todavía (típico de madrugada) es justo cuando importa saber quién
                 declaró su jornada: el panel también vive acá, en el flujo, sin mapa debajo. */}
-              <PanelJornada lineaFilter="" flotante={false} />
+              {tienePanelAdmin && <PanelJornada lineaFilter="" flotante={false} />}
             </div>
           )}
         </div>
@@ -610,13 +614,10 @@ export default function EnVivoPage() {
               <button
                 type="button"
                 onClick={() => {
-                  if (tienePanelAdmin) {
-                    router.push('/');
-                  } else {
-                    logout();
-                    router.push('/login');
-                  }
+                  if (tienePanelAdmin) router.push('/');
+                  else setConfirmandoSalida(true);
                 }}
+                aria-label={tienePanelAdmin ? undefined : 'Cerrar sesión'}
                 title={tienePanelAdmin ? 'Volver al panel administrativo' : 'Cerrar sesión'}
                 style={{
                   display: 'inline-flex',
@@ -838,7 +839,7 @@ export default function EnVivoPage() {
                   </button>
                 </div>
               </div>
-              <PanelJornada lineaFilter={lineaFilter} />
+              {tienePanelAdmin && <PanelJornada lineaFilter={lineaFilter} />}
             </div>
 
           </div>
@@ -1022,6 +1023,19 @@ export default function EnVivoPage() {
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmandoSalida}
+        title="¿Cerrar sesión?"
+        message="Vas a salir de Quivo. Para volver a ver la flota en vivo tendrás que iniciar sesión de nuevo."
+        confirmLabel="Cerrar sesión"
+        onConfirm={() => {
+          setConfirmandoSalida(false);
+          logout();
+          router.push('/login');
+        }}
+        onCancel={() => setConfirmandoSalida(false)}
+      />
     </div>
   );
 }

@@ -172,8 +172,9 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   const designar = useDesignarVuelta(token);
   // Hoja inferior de dos alturas (solo se nota en móvil; en escritorio el panel no se pliega).
   const [hojaPlegada, setHojaPlegada] = useState(false);
-  const arrastre = useRef<{ y: number; movido: boolean } | null>(null);
+  const arrastre = useRef<{ y: number } | null>(null);
   const suprimirClic = useRef(false);
+  const asaRef = useRef<HTMLButtonElement>(null);
   const [pcsAbierto, setPcsAbierto] = useState(false);
   // Foto que ya falló al cargar: el avatar vuelve al ícono del bus (igual que el marcador).
   const [fotoRota, setFotoRota] = useState<string | null>(null);
@@ -314,7 +315,11 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   // "Ver en mapa" pliega la hoja ANTES de que la página mida dónde cae el punto (flushSync: el
   // layout ya está aplicado cuando `onVerEnMapa` lee la altura de la hoja).
   function verEnMapa(inf: Infraccion) {
-    if (window.matchMedia(MQ_MOVIL).matches) flushSync(() => setHojaPlegada(true));
+    if (window.matchMedia(MQ_MOVIL).matches) {
+      flushSync(() => setHojaPlegada(true));
+      // El botón "Ver en mapa" queda oculto al plegar: el foco pasa al asa en vez de perderse.
+      asaRef.current?.focus({ preventScroll: true });
+    }
     onVerEnMapa(inf);
   }
 
@@ -353,13 +358,16 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
       }}
     >
       <button
+        ref={asaRef}
         type="button"
         className="qv-live-panel__asa"
         aria-expanded={!hojaPlegada}
         aria-controls="qv-live-panel-cuerpo"
         aria-label={hojaPlegada ? 'Expandir detalle del vehículo' : 'Plegar detalle para ver el mapa'}
         onPointerDown={(e) => {
-          arrastre.current = { y: e.clientY, movido: false };
+          // Un drag táctil no genera `click`: el flag que dejó pegado no debe tragarse el próximo toque.
+          suprimirClic.current = false;
+          arrastre.current = { y: e.clientY };
           e.currentTarget.setPointerCapture?.(e.pointerId);
         }}
         onPointerUp={(e) => {
@@ -368,10 +376,8 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
           if (!inicio) return;
           const dy = e.clientY - inicio.y;
           if (Math.abs(dy) >= UMBRAL_ARRASTRE_PX) {
-            inicio.movido = true;
             setHojaPlegada(dy > 0);
-            // El `click` que sigue al soltar no debe volver a alternar.
-            e.preventDefault();
+            // El `click` que sigue al soltar (si llega) no debe volver a alternar.
             suprimirClic.current = true;
           }
         }}
@@ -495,16 +501,12 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         posicionesServidorTs={posicion?.servidorTs}
         posicionesRecibidoEn={posicionesRecibidoEn}
         onDesignar={async (varianteId, varianteNombre) => {
-          try {
-            await designar.mutateAsync({ sesionId, varianteId, varianteNombre });
-            onAviso({
-              tono: 'ok',
-              texto: varianteId ? `Vuelta designada vía ${varianteNombre ?? 'Molinos'}` : 'Designación cancelada',
-            });
-          } catch (err) {
-            onAviso({ tono: 'error', texto: mensajeError(err) });
-            throw err;
-          }
+          // Un rechazo se propaga a la sección, que lo muestra y anuncia en línea (no va al aviso).
+          await designar.mutateAsync({ sesionId, varianteId, varianteNombre });
+          onAviso({
+            tono: 'ok',
+            texto: varianteId ? `Vuelta designada vía ${varianteNombre ?? 'Molinos'}` : 'Designación cancelada',
+          });
         }}
       />
 

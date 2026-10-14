@@ -7,10 +7,10 @@ import {
   esperaMinDeVariante,
   esperaMolinos,
   estadoAcuse,
-  horaCorta,
   motivoBloqueo,
   opcionSeleccionada,
   textoHudMolinos,
+  aplicarDesignacionesPendientes,
   variantesDeEspera,
 } from './vuelta';
 
@@ -96,14 +96,6 @@ describe('estadoAcuse', () => {
   it('un acuse anterior a la designación vigente no cuenta', () => {
     const e = estadoAcuse(vuelta({ varianteId: id(1), designadaEn: hace(1), acuseEn: hace(5) }));
     expect(e.tipo).toBe('esperando');
-  });
-});
-
-describe('horaCorta', () => {
-  it('HH:MM de 24 h y guion si no hay dato', () => {
-    expect(horaCorta(null)).toBe('—');
-    expect(horaCorta('basura')).toBe('—');
-    expect(horaCorta(hace(0))).toMatch(/^\d{2}:\d{2}$/);
   });
 });
 
@@ -196,5 +188,33 @@ describe('textoHudMolinos', () => {
   });
   it('faltan segundos: redondea hacia arriba, mínimo 1 min', () => {
     expect(textoHudMolinos(l({ proximoSugeridoEn: new Date(AHORA + 20_000).toISOString() }), AHORA)).toMatch(/en 1 min$/);
+  });
+  it('timestamps inválidos: el texto no contiene NaN', () => {
+    const t = textoHudMolinos(l({ ultimoEnvioTs: 'basura', proximoSugeridoEn: 'basura' }), AHORA);
+    expect(t).not.toContain('NaN');
+    expect(t).toBe('Molinos: 2 en espera · sin envíos hoy');
+  });
+  it('envío de hace menos de 1 min', () => {
+    expect(textoHudMolinos(l({ ultimoEnvioTs: hace(0) }), AHORA)).toContain('último envío hace instantes');
+  });
+});
+describe('aplicarDesignacionesPendientes', () => {
+  const pos = (idp: string, varianteId: string | null) =>
+    ({ id: idp, vuelta: { numero: 1, varianteId, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false } }) as unknown as PosicionEnVivo;
+  const pendiente = { varianteId: id(7), varianteNombre: 'Vía Molinos', ahoraIso: hace(0) };
+
+  it('sin pendientes devuelve el mismo array', () => {
+    const lista = [pos('a', null)];
+    expect(aplicarDesignacionesPendientes(lista, new Map())).toBe(lista);
+  });
+  it('pisa el valor del poll solo en la sesión pendiente', () => {
+    const lista = [pos('a', null), pos('b', null)];
+    const r = aplicarDesignacionesPendientes(lista, new Map([['a', pendiente]]));
+    expect(r[0]!.vuelta?.varianteId).toBe(id(7));
+    expect(r[0]!.vuelta?.designadaEn).toBe(pendiente.ahoraIso);
+    expect(r[1]).toBe(lista[1]);
+  });
+  it('una pendiente de una sesión que ya no está se ignora', () => {
+    expect(aplicarDesignacionesPendientes([pos('a', null)], new Map([['z', pendiente]]))[0]!.vuelta?.varianteId).toBeNull();
   });
 });
