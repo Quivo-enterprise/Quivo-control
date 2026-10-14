@@ -12,7 +12,7 @@
 |---|---|---|
 | #147 | **PR E.** Marcador de vehículo en motor Google: foto con fallback al sprite, anillo del color de línea, frescura, badge de severidad con conteo, parpadeo por nivel (leve 1600 / grave 1000 / gravísima 600 ms, reduced-motion estático), zIndex por severidad, selección y conteo actualizados sin recrear el DOM. HUD `/en-vivo`: contadores por nivel como filtro y "Siguiente alerta". **Panel de vehículo unificado** (reemplaza el drawer): Seguir, Ver recorrido, contacto si hay teléfono, infracciones con Ver en mapa / Atender / Descartar / Sancionar (solo alteración de ruta; prellena `NuevaSancionModal` y POSTea `/infracciones/:id/sancionar`; reglas, vehículos y conductores filtrados al sindicato de la infracción). `fechaHecho` pasa a día local (mediodía), antes caía un día antes en Bolivia. Gates: `/code-review` ×3 (10+10+9, aplicados; 1 omitido con motivo), `web-design-guidelines` (22, aplicados), Playwright 118/118 contra `next start` con API mockeada, CI verde. `/security-review` no corrido: sin endpoints, RLS ni secretos nuevos. | `8004bfe` |
 
-**Estado de E:** mergeado, **no desplegado** (el deploy necesita el ok del CTO). No verificado con API real ni con datos reales de `admin_quivo`. El primer subagente de E murió por límite de uso (429) sin dejar nada; se relanzó desde cero.
+**Estado de E:** mergeado y **desplegado en `r16-20261013`** (2026-10-13, con el ok del CTO). Exit 0, health `ok` (db y redis up), revisiones `quivo-api-00019-9rh` y `quivo-web-00010-5cx`. El primer intento falló en el preflight porque había vencido el token de `gcloud`; el CTO corrió `gcloud auth login` y se relanzó. No verificado con API real ni con datos reales de `admin_quivo`. El primer subagente de E murió por límite de uso (429) sin dejar nada; se relanzó desde cero.
 
 **Pendientes de E** (anotados en el plan):
 - "Atender" quita la alerta del marcador en vez de dejar el ícono fijo, porque el LATERAL de `obtenerPosiciones` solo cuenta `abierta`. Se resuelve en el PR F.
@@ -27,13 +27,13 @@
 - Esto confirma N = directas + 1 para la frecuencia de envíos a Molinos.
 - La geometría en prod (circuito que **termina** en Molinos) no representa el recorrido real. Hace falta una variante "vía Molinos".
 - **Designación de destino (PR F):** el admin designa desde `/en-vivo` (en la operación también puede el control de Honduras), antes o durante la vuelta. El sistema sugiere a quién mandar. **El chofer recibe un aviso en pantalla, como el del PC, y ve la ruta ajustada.** Requiere APK: hoy no hay push, así que la app consulta la designación con la app abierta.
-- **Abierto:** alerta leve si sale de Molinos antes de 30 min (propuesta del chairman, sin respuesta del CTO).
+- **Salir de Molinos antes de 30 min genera una alerta leve** (confirmado por el CTO).
 
 **APK siguiente:** foto (PR D) + designación de Molinos (PR F) + `expo-updates`/EAS Update (OTA para cambios solo JS; plan gratis de 1000 MAU). **Antes del build, avisar al CTO con el changelog: va a sumar cambios estéticos.**
 
 **Siguiente:**
-1. Ok del CTO para desplegar #147 (deploy `r16`).
-2. Plan detallado del PR F con el modelo corregido.
+1. Verificar `/en-vivo` en prod con login real y el piloto `1616PIL`.
+2. Plan detallado del PR F con el modelo corregido, que incluye los dos pendientes de E.
 3. PR B → PR C (bucket con ok del CTO) → PR D. Después, el APK con el changelog previo.
 
 ## Punto de retome — 2026-10-12, tarde (anterior): /en-vivo — fotos, alertas por infracción y acciones rápidas

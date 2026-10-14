@@ -219,7 +219,7 @@ Aplicación: el admin confirma y el sistema agenda la asignación compensatoria.
     - Hoy no hay push hacia el chofer. La app tiene que consultar su designación mientras la sesión está activa (poll o respuesta del sync). Por eso el aviso aparece con la app abierta; en segundo plano no está garantizado.
   - **Verificación:** si la vuelta designada a Molinos llega a SR sin pasar por el PC Molinos, se genera una alerta.
   - **Conteo (CTO):** la vuelta se completa solo al volver a SR, sea directa desde Retorno L16 o vía Molinos.
-  - **Espera en Molinos: 30 min (CTO).** El sistema mide la permanencia en el PC Molinos (entrada y salida de la geocerca). Propuesta del chairman: una alerta leve si sale antes de 30 min; falta confirmarla.
+  - **Espera en Molinos: 30 min (CTO).** El sistema mide la permanencia en el PC Molinos (entrada y salida de la geocerca). **Si sale antes de 30 min: alerta leve** (confirmado por el CTO el 2026-10-13).
   - **Total obligatorio por chofer (CTO, 2026-10-13).** La vuelta vía Molinos es adicional a las directas:
     - Lunes a viernes: 5 = 4 directas + 1 vía Molinos.
     - Sábado: 3 = 2 + 1.
