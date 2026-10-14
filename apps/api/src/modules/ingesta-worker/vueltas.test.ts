@@ -209,13 +209,19 @@ describe('avanzarVueltas — Molinos', () => {
     expect(ultimaDe(r).esperaLlegadaTs).toEqual(min(30));
   });
 
-  it('sin designación, pasar por el PC de espera no registra llegada', () => {
-    expect(avanzar(fila({ pasoRetornoTs: min(20) }), [espera(min(30))]).cambios).toEqual([]);
+  it('sin designación, pasar por el PC de espera no registra llegada pero SÍ cuenta como progreso (ultimoPcTs)', () => {
+    const r = avanzar(fila({ pasoRetornoTs: min(20) }), [espera(min(30))]);
+    expect(ultimaDe(r)).toMatchObject({ esperaLlegadaTs: null, ultimoPcTs: min(30) });
+    // También en una vuelta sin retorno (no vacía: el fin la deja abierta_al_cierre, no la elimina).
+    const r2 = avanzar(fila(), [espera(min(30)), fin(min(40))]);
+    expect(ultimaDe(r2)).toMatchObject({ estado: 'abierta_al_cierre', ultimoPcTs: min(30) });
+    expect(r2.cambios[0]!.eliminada).toBeFalsy();
   });
 
   it('el cumplimiento de OTRO PC de espera no cuenta como llegada de la variante', () => {
     const otro: EventoVuelta = { clase: 'cumplimiento', ts: min(30), puntoControlId: 'otro', rol: 'espera', lat: 0, lng: 0 };
-    expect(avanzar(designada(), [otro]).cambios).toEqual([]);
+    const r = avanzar(designada(), [otro]);
+    expect(ultimaDe(r)).toMatchObject({ esperaLlegadaTs: null, ultimoPcTs: min(30) });
   });
 
   it('designada que pasó por Molinos y cierra en SR: sin molinos_omitido', () => {
@@ -311,6 +317,79 @@ describe('avanzarVueltas — eventos tardíos o desordenados', () => {
   });
 });
 
+describe('avanzarVueltas — primera vuelta y recorrido en curso', () => {
+  it('sin vuelta previa y con el recorrido terminado, un terminal NO reabre una vuelta (bus estacionado)', () => {
+    const r = avanzarVueltas(null, [terminal(min(60))], { nuevoId, recorridoEnCurso: false });
+    expect(r.cambios).toEqual([]);
+  });
+
+  it('un inicio_recorrido del lote reactiva el recorrido: el terminal posterior ya no se ignora (y no duplica)', () => {
+    const r = avanzarVueltas(null, [inicio(min(60)), terminal(min(61))], { nuevoId, recorridoEnCurso: false });
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.fila).toMatchObject({ numero: 1, inicioTs: min(60), estado: 'en_curso' });
+  });
+
+  it('un fin del lote apaga el recorrido: terminal tras el fin, sin vuelta, no abre', () => {
+    const r = avanzarVueltas(null, [fin(min(10)), terminal(min(20))], { nuevoId, recorridoEnCurso: true });
+    expect(r.cambios).toEqual([]);
+  });
+
+  it('por defecto (recorrido desconocido = en curso) el terminal abre la primera vuelta', () => {
+    expect(avanzar(null, [terminal(min(1))]).cambios).toHaveLength(1);
+  });
+});
+
+describe('avanzarVueltas — cierre tardío (sesión ya cerrada)', () => {
+  const CIERRE = min(60);
+  const cerrada = (parcial: Partial<FilaVuelta> = {}) =>
+    fila({ estado: 'abierta_al_cierre', finTs: CIERRE, pasoRetornoTs: min(20), ...parcial });
+  const tardio = (ultima: FilaVuelta | null, eventos: EventoVuelta[]) =>
+    avanzarVueltas(ultima, eventos, { nuevoId, cierreTardio: { cierreTs: CIERRE } });
+
+  it('un terminal con retorno, anterior al cierre, cierra la vuelta completa en ese ts y NO abre la N+1', () => {
+    const r = tardio(cerrada(), [terminal(min(50))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.fila).toMatchObject({ estado: 'completa', finTs: min(50) });
+    expect(r.cambios[0]!.nueva).toBe(false);
+  });
+
+  it('retorno, llegada a la espera y ultimoPcTs se aplican; sin terminal sigue abierta_al_cierre con su finTs', () => {
+    const r = tardio(cerrada({ pasoRetornoTs: null, varianteId: 'var-molinos', puntoEsperaId: MOLINOS }), [
+      retorno(min(20)),
+      espera(min(30)),
+    ]);
+    expect(ultimaDe(r)).toMatchObject({
+      estado: 'abierta_al_cierre',
+      finTs: CIERRE,
+      pasoRetornoTs: min(20),
+      esperaLlegadaTs: min(30),
+      ultimoPcTs: min(30),
+    });
+  });
+
+  it('el terminal tardío de una designada sin llegada emite molinos_omitido', () => {
+    const r = tardio(cerrada({ varianteId: 'var-molinos', puntoEsperaId: MOLINOS }), [terminal(min(50))]);
+    expect(ultimaDe(r).estado).toBe('completa');
+    expect(r.infracciones.map((i) => i.tipo)).toEqual(['molinos_omitido']);
+  });
+
+  it('ignora lo posterior al cierre, lo anterior al inicio de la vuelta y los inicio/fin', () => {
+    expect(tardio(cerrada(), [terminal(min(61))]).cambios).toEqual([]);
+    expect(tardio(cerrada({ inicioTs: min(10) }), [retorno(min(5)), terminal(min(5))]).cambios).toEqual([]);
+    expect(tardio(cerrada(), [inicio(min(30)), fin(min(40))]).cambios).toEqual([]);
+  });
+
+  it('nunca abre: sin vuelta, con una completa o con una cerrada antes por fin_recorrido (finTs != cierre) no hace nada', () => {
+    expect(tardio(null, [terminal(min(30)), inicio(min(31))]).cambios).toEqual([]);
+    expect(tardio(cerrada({ estado: 'completa' }), [terminal(min(50))]).cambios).toEqual([]);
+    expect(tardio(cerrada({ finTs: min(30) }), [terminal(min(50))]).cambios).toEqual([]);
+  });
+
+  it('un terminal SIN retorno no cierra (SR → SR no cuenta vuelta)', () => {
+    expect(tardio(cerrada({ pasoRetornoTs: null }), [terminal(min(50))]).cambios).toEqual([]);
+  });
+});
+
 describe('detectarSalidaEspera / resolverEspera', () => {
   const RADIO = 150;
   const LLEGADA = min(0);
@@ -337,6 +416,13 @@ describe('detectarSalidaEspera / resolverEspera', () => {
     const s = detectarSalidaEspera(LLEGADA, [fix(10, 200), fix(20, 500, 80), fix(30, 220)], RADIO);
     expect(s?.ts).toEqual(new Date(LLEGADA.getTime() + 10_000));
     expect(detectarSalidaEspera(LLEGADA, [fix(10, 200, 80), fix(20, 220, 80)], RADIO)).toBeNull();
+  });
+
+  it('un fix duplicado (mismo ts y posición) nunca suma dos veces a la racha', () => {
+    expect(detectarSalidaEspera(LLEGADA, [fix(60, 200), fix(60, 200)], RADIO)).toBeNull();
+    expect(detectarSalidaEspera(LLEGADA, [fix(60, 200), fix(60, 200), fix(90, 220)], RADIO)?.ts).toEqual(
+      new Date(LLEGADA.getTime() + 60_000),
+    );
   });
 
   it('ignora fixes anteriores a la llegada y los posteriores al tope', () => {

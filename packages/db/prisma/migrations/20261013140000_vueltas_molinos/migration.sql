@@ -57,6 +57,9 @@ CREATE TABLE "vueltas" (
     -- Último cumplimiento de un PC distinto de la terminal dentro de la vuelta (retorno, espera o
     -- común). NULL + sin retorno + sin designar = vuelta "vacía" (se elimina al cerrarse).
     "ultimoPcTs" TIMESTAMP(3),
+    -- Cursor de la salida de la espera: `ts` del último fix GPS ya evaluado. NULL = desde la
+    -- llegada. Se avanza en la misma transacción que evalúa (si falla, el próximo lote re-escanea).
+    "esperaRevisadaHastaTs" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 

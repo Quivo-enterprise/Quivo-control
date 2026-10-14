@@ -84,7 +84,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
   const sesiones = {} as Record<
     | 'ciclo' | 'larga' | 'corta' | 'omitida' | 'fin' | 'desorden' | 'sinRoles' | 'desvio' | 'carrera'
     | 'vacia' | 'cierreVacia' | 'cierreDesig' | 'cierreSinTenant' | 'inactiva' | 'esperaTardia' | 'retro'
-    | 'omitidaFin',
+    | 'omitidaFin' | 'cierreTardio' | 'estacionado' | 'espNoDesig' | 'cursor',
     string
   >;
 
@@ -200,6 +200,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
       for (const k of [
         'ciclo', 'larga', 'corta', 'omitida', 'fin', 'desorden', 'desvio', 'carrera',
         'vacia', 'cierreVacia', 'cierreDesig', 'cierreSinTenant', 'inactiva', 'esperaTardia', 'retro', 'omitidaFin',
+        'cierreTardio', 'estacionado', 'espNoDesig', 'cursor',
       ] as const) {
         sesiones[k] = await crearSesion(asigCirc);
       }
@@ -775,14 +776,15 @@ describe('vueltas y designación a Molinos (F1)', () => {
       expect((await vueltasDe(s)).map((f) => f.estado)).toEqual(['en_curso']);
     });
 
-    it('el worker no abre, cierra ni muta vueltas de una sesión ya cerrada', async () => {
+    it('el worker no abre ni muta vueltas de una sesión ya cerrada con eventos posteriores al cierre', async () => {
       const s = sesiones.inactiva;
       await lote([...hastaHonduras(s, 0)]);
       await cerrarSesion(s);
       const antes = await vueltasDe(s);
       expect(antes.map((f) => f.estado)).toEqual(['abierta_al_cierre']);
-      // Una terminal tardía cerraría la vuelta y abriría otra si la sesión siguiera activa.
-      await lote([cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA), inicio(s, iso(60))]);
+      // Una terminal POSTERIOR al cierre cerraría la vuelta y abriría otra si la sesión siguiera activa.
+      const posterior = new Date(Date.now() + 60_000).toISOString();
+      await lote([cumpl(s, pcSr, posterior, LON_SR, LAT_RUTA), inicio(s, posterior)]);
       const despues = await vueltasDe(s);
       expect(despues.map((f) => [f.numero, f.estado])).toEqual([[1, 'abierta_al_cierre']]);
       expect(despues[0]!.updatedAt.getTime()).toBe(antes[0]!.updatedAt.getTime());
@@ -805,6 +807,66 @@ describe('vueltas y designación a Molinos (F1)', () => {
       await lote([gps(s, iso(50), LON_SR, LAT_RUTA), gps(s, iso(50, 20), LON_SR, LAT_RUTA)]);
       filas = await vueltasDe(s);
       expect(filas[0]!.esperaSalidaTs?.toISOString()).toBe(iso(50));
+      expect((await infraccionesDe(s)).filter((i) => i.tipo === 'espera_corta')).toHaveLength(1);
+    });
+
+    it('cierre tardío: un terminal sincronizado antes del logout pero procesado después cierra la vuelta completa y no abre otra', async () => {
+      const s = sesiones.cierreTardio;
+      await lote([...hastaHonduras(s, 0)]);
+      expect((await vueltasDe(s)).map((f) => f.estado)).toEqual(['en_curso']);
+      // La sesión cierra AHORA (trigger: abierta_al_cierre con finTs = fin de la sesión).
+      await cerrarSesion(s);
+      expect((await vueltasDe(s)).map((f) => f.estado)).toEqual(['abierta_al_cierre']);
+      // Llega tarde el terminal fechado antes del cierre (iso 45 << ahora) y otro posterior al cierre.
+      const despuesDelCierre = new Date(Date.now() + 60_000).toISOString();
+      await lote([cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA), cumpl(s, pcSr, despuesDelCierre, LON_SR, LAT_RUTA), inicio(s, iso(60))]);
+      const filas = await vueltasDe(s);
+      expect(filas.map((f) => [f.numero, f.estado])).toEqual([[1, 'completa']]);
+      expect(filas[0]!.finTs?.toISOString()).toBe(iso(45));
+    });
+
+    it('sin vuelta previa y con el recorrido terminado, el terminal del bus estacionado no reabre una vuelta', async () => {
+      const s = sesiones.estacionado;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      await lote([fin(s, iso(2))]);
+      expect(await vueltasDe(s)).toHaveLength(0); // la vuelta vacía se eliminó
+      await lote([cumpl(s, pcSr, iso(30), LON_SR, LAT_RUTA)]);
+      expect(await vueltasDe(s)).toHaveLength(0);
+      // Un inicio_recorrido nuevo sí abre.
+      await lote([inicio(s, iso(40))]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'en_curso']]);
+    });
+
+    it('el PC de espera en una vuelta NO designada cuenta como progreso: el fin la deja abierta_al_cierre, no la elimina', async () => {
+      const s = sesiones.espNoDesig;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      await lote([cumpl(s, pcMolinos, iso(30), LON_MOLINOS, LAT_SUR)]);
+      const [v] = await vueltasDe(s);
+      expect(v!.esperaLlegadaTs).toBeNull();
+      expect(v!.ultimoPcTs?.toISOString()).toBe(iso(30));
+      await lote([fin(s, iso(40))]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'abierta_al_cierre']]);
+    });
+
+    it('el cursor de la espera avanza con los fixes evaluados y el siguiente lote reanuda desde él (sin depender del lote)', async () => {
+      const s = sesiones.cursor;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      await vueltas.designar(adminA, s, varianteId);
+      await lote([
+        cumpl(s, pcHonduras, iso(20), LON_HONDURAS, LAT_RUTA),
+        cumpl(s, pcMolinos, iso(30), LON_MOLINOS, LAT_SUR),
+        gps(s, iso(31), LON_MOLINOS, LAT_SUR),
+        gps(s, iso(32), LON_MOLINOS, LAT_SUR),
+      ]);
+      let [v] = await vueltasDe(s);
+      expect(v!.esperaSalidaTs).toBeNull();
+      expect(v!.esperaRevisadaHastaTs?.toISOString()).toBe(iso(32));
+      // Un solo fix fuera de radio llega en un lote; el segundo (la racha) en otro: el primero de la
+      // racha cae en la ventana del cursor (-2 min), no en el contenido del lote.
+      await lote([gps(s, iso(50), LON_SR, LAT_RUTA)]);
+      await lote([gps(s, iso(50, 20), LON_SR, LAT_RUTA)]);
+      [v] = await vueltasDe(s);
+      expect(v!.esperaSalidaTs?.toISOString()).toBe(iso(50));
       expect((await infraccionesDe(s)).filter((i) => i.tipo === 'espera_corta')).toHaveLength(1);
     });
 

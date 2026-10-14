@@ -343,23 +343,27 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
         inicios: [],
         fines: [],
         hayGps: false,
-        gpsDesdeTs: null,
+        ultimoTs: null,
       };
       sesiones.set(sesionId, e);
       return e;
+    };
+    // `ts` más reciente del lote por sesión (referencia de antigüedad de las esperas pendientes).
+    const tocar = (e: EntradaVueltasSesion, ts: Date) => {
+      if (Number.isFinite(ts.getTime()) && (e.ultimoTs === null || ts > e.ultimoTs)) e.ultimoTs = ts;
     };
     for (const evento of entradas.gps) {
       const sesionId = extraerSesionId(evento.payload);
       if (!sesionId) continue;
       const e = de(sesionId);
       e.hayGps = true;
-      // Mismo `ts` con el que se persiste el fix en `gps_points` (acota la ventana de la salida).
-      const ts = new Date(resolverTsFix(evento.payload, evento.ts));
-      if (Number.isFinite(ts.getTime()) && (e.gpsDesdeTs === null || ts < e.gpsDesdeTs)) e.gpsDesdeTs = ts;
+      // Mismo `ts` con el que se persiste el fix en `gps_points`.
+      tocar(e, new Date(resolverTsFix(evento.payload, evento.ts)));
     }
     for (const { evento, ts } of entradas.cumplimientos) {
       const payload = evento.payload as unknown as PayloadCumplimientoPuntoControl;
       if (typeof payload.sesionId !== 'string') continue;
+      tocar(de(payload.sesionId), new Date(ts));
       de(payload.sesionId).cumplimientos.push({
         ts: new Date(ts),
         puntoControlId: payload.puntoControlId,
@@ -370,6 +374,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     for (const evento of entradas.operativos) {
       const sesionId = extraerSesionId(evento.payload);
       if (!sesionId) continue;
+      tocar(de(sesionId), new Date(evento.ts));
       (evento.tipo === 'inicio_recorrido' ? de(sesionId).inicios : de(sesionId).fines).push(
         new Date(evento.ts),
       );

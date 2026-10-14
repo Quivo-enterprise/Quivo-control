@@ -45,6 +45,15 @@ import {
  * la numeración del día queda sin huecos: la siguiente que se abra reutiliza ese número.
  * (El mismo criterio vive en el trigger `vueltas_cerrar_con_sesion` para el cierre de sesión.)
  *
+ * Sesión ya cerrada ("cierre tardío", `opciones.cierreTardio`): lo sincronizado antes del logout
+ * pero procesado después no se pierde. Nunca se abre una vuelta; se ignora lo posterior al cierre
+ * y la última vuelta (la que el trigger dejó `abierta_al_cierre`) se trata como `en_curso` para los
+ * cumplimientos entre su inicio y el cierre. Un `terminal` con retorno la cierra `completa` en ese
+ * `ts` (con `molinos_omitido` si aplica) y no abre la N+1.
+ *
+ * Cualquier cumplimiento de un PC activo de la ruta (la máquina ignora los desconocidos: los filtra
+ * el worker) cuenta como progreso (`ultimoPcTs`), también el PC de espera en una vuelta no designada.
+ *
  * Eventos fuera de orden / tardíos (outbox móvil): NO hay un watermark global. Cada evento se
  * evalúa contra la vuelta actual y uno anterior al inicio de esa vuelta (o que ya no aplica a su
  * estado) se ignora — no mueve la máquina hacia atrás, igual que `desvio.ts`. Dentro de un lote
@@ -69,6 +78,8 @@ export interface FilaVuelta {
   esperaSalidaTs: Date | null;
   /** Último cumplimiento de un PC distinto de la terminal (retorno, espera o común) en la vuelta. */
   ultimoPcTs: Date | null;
+  /** Cursor de la salida de la espera: `ts` del último fix GPS ya evaluado (lo usa solo el worker). */
+  esperaRevisadaHastaTs?: Date | null;
 }
 
 /** Vuelta vacía: sin PC tras abrirse y sin designación (candidata a eliminarse al cerrar). */
@@ -123,15 +134,46 @@ export interface ResultadoVueltas {
 /** A igual `ts`: el inicio abre antes que cualquier cumplimiento, y el fin va después. */
 const PRIORIDAD_CLASE = { inicio: 0, cumplimiento: 1, fin: 2 } as const;
 
+export interface OpcionesAvanzarVueltas {
+  nuevoId?: () => string;
+  /**
+   * El recorrido de la sesión está en curso al empezar el lote (último `inicio_recorrido` /
+   * `fin_recorrido` guardado anterior al primer evento; sin ninguno, en curso). Sin vuelta previa
+   * (`ultima = null`) un `terminal` solo abre la primera vuelta si el recorrido está en curso: si
+   * la primera vuelta se eliminó por vacía al terminar el recorrido, el bus estacionado que sigue
+   * pasando por la terminal no debe reabrir otra. Por defecto `true`.
+   */
+  recorridoEnCurso?: boolean;
+  /**
+   * Modo "cierre tardío" (sesión de login ya cerrada): nunca se abre una vuelta; se ignoran los
+   * eventos posteriores a `cierreTs` y los `inicio`/`fin`; la última vuelta, si el trigger la dejó
+   * `abierta_al_cierre` (su `finTs` es el cierre de la sesión), acepta los cumplimientos con
+   * `inicioTs <= ts <= cierreTs` como si siguiera `en_curso` (retorno, llegada a la espera,
+   * `ultimoPcTs`) y un `terminal` con retorno la cierra `completa` en ese `ts`. Si no se cierra,
+   * conserva `abierta_al_cierre` y su `finTs`.
+   */
+  cierreTardio?: { cierreTs: Date };
+}
+
 export function avanzarVueltas(
   ultima: FilaVuelta | null,
   eventos: readonly EventoVuelta[],
-  opciones: { nuevoId?: () => string } = {},
+  opciones: OpcionesAvanzarVueltas = {},
 ): ResultadoVueltas {
   const nuevoId = opciones.nuevoId ?? randomUUID;
+  const cierreTardio = opciones.cierreTardio ?? null;
   const cambios = new Map<string, CambioVuelta>();
   const infracciones: InfraccionVuelta[] = [];
   let actual: FilaVuelta | null = ultima ? { ...ultima } : null;
+  let recorridoEnCurso = opciones.recorridoEnCurso ?? true;
+  if (cierreTardio) {
+    // Solo la vuelta que el trigger cerró con la sesión (su `finTs` ES el cierre) se reabre en
+    // memoria; cualquier otra (completa, o cerrada antes por `fin_recorrido`) queda intacta.
+    actual =
+      actual?.estado === 'abierta_al_cierre' && actual.finTs?.getTime() === cierreTardio.cierreTs.getTime()
+        ? { ...actual, estado: 'en_curso', finTs: null }
+        : null;
+  }
   // Número de la última vuelta que existe (se retrocede al eliminar una vacía: sin huecos).
   let ultimoNumero = ultima?.numero ?? 0;
 
@@ -139,6 +181,7 @@ export function avanzarVueltas(
     cambios.set(fila.id, { fila, nueva: cambios.get(fila.id)?.nueva ?? nueva, eliminada });
   };
   const abrir = (ts: Date) => {
+    if (cierreTardio) return; // sesión cerrada: nunca se abre una vuelta
     const fila: FilaVuelta = {
       id: nuevoId(),
       numero: ultimoNumero + 1,
@@ -191,13 +234,19 @@ export function avanzarVueltas(
     molinosOmitido(fila, ts, null, null);
   };
 
-  const ordenados = [...eventos].sort(
+  const ordenados = [...eventos]
+    .filter(
+      (ev) =>
+        !cierreTardio || (ev.clase === 'cumplimiento' && ev.ts.getTime() <= cierreTardio.cierreTs.getTime()),
+    )
+    .sort(
     (a, b) => a.ts.getTime() - b.ts.getTime() || PRIORIDAD_CLASE[a.clase] - PRIORIDAD_CLASE[b.clase],
   );
 
   for (const ev of ordenados) {
     const t = ev.ts.getTime();
     if (ev.clase === 'inicio') {
+      recorridoEnCurso = true;
       if (!actual) {
         abrir(ev.ts);
       } else if (actual.estado === 'en_curso') {
@@ -212,6 +261,7 @@ export function avanzarVueltas(
     }
 
     if (ev.clase === 'fin') {
+      recorridoEnCurso = false;
       if (
         actual?.estado === 'en_curso' &&
         t >= actual.inicioTs.getTime() - VENTANA_RECORRIDO_TOLERANCIA_MS
@@ -224,7 +274,8 @@ export function avanzarVueltas(
     // cumplimiento
     if (ev.rol === 'terminal') {
       if (!actual) {
-        abrir(ev.ts);
+        // Sin vuelta previa solo abre si el recorrido está en curso (ver `recorridoEnCurso`).
+        if (recorridoEnCurso) abrir(ev.ts);
       } else if (actual.estado === 'en_curso') {
         if (actual.pasoRetornoTs && t >= actual.pasoRetornoTs.getTime()) {
           cerrarCompleta(actual, ev.ts, ev.lat, ev.lng);
@@ -245,14 +296,16 @@ export function avanzarVueltas(
         marcar(actual);
       }
     } else if (ev.rol === 'espera') {
-      if (
-        actual?.estado === 'en_curso' &&
-        actual.varianteId !== null &&
-        actual.esperaLlegadaTs === null &&
-        t >= actual.inicioTs.getTime() &&
-        (actual.puntoEsperaId === null || actual.puntoEsperaId === ev.puntoControlId)
-      ) {
-        actual.esperaLlegadaTs = ev.ts;
+      if (actual?.estado === 'en_curso' && t >= actual.inicioTs.getTime()) {
+        // La llegada solo cuenta en la vuelta designada (y al PC de SU variante), pero cualquier
+        // PC de espera de la ruta es progreso: la vuelta deja de estar vacía, designada o no.
+        if (
+          actual.varianteId !== null &&
+          actual.esperaLlegadaTs === null &&
+          (actual.puntoEsperaId === null || actual.puntoEsperaId === ev.puntoControlId)
+        ) {
+          actual.esperaLlegadaTs = ev.ts;
+        }
         actual.ultimoPcTs = ev.ts;
         marcar(actual);
       }
@@ -263,6 +316,12 @@ export function avanzarVueltas(
         marcar(actual);
       }
     }
+  }
+
+  if (cierreTardio && ultima && actual?.estado === 'en_curso') {
+    // No terminó: sigue siendo la vuelta que el trigger cerró con la sesión.
+    actual.estado = 'abierta_al_cierre';
+    actual.finTs = ultima.finTs;
   }
 
   return { cambios: [...cambios.values()], infracciones };
@@ -292,7 +351,16 @@ export function detectarSalidaEspera(
   hastaTs: Date | null = null,
 ): { ts: Date; lat: number; lng: number } | null {
   const umbral = radioM + ESPERA_SALIDA_MARGEN_M;
+  // Un fix duplicado (mismo instante y posición, p. ej. releído entre páginas o reenviado) NUNCA
+  // suma dos veces a la racha.
+  const vistos = new Set<string>();
   const validos = fixes
+    .filter((f) => {
+      const clave = `${f.ts.getTime()}|${f.lat}|${f.lng}`;
+      if (vistos.has(clave)) return false;
+      vistos.add(clave);
+      return true;
+    })
     .filter(
       (f) =>
         f.ts.getTime() > llegadaTs.getTime() &&

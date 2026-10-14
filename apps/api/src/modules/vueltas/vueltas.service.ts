@@ -69,11 +69,28 @@ export class VueltasService {
       if (!sesion) {
         throw new NotFoundException('Sesión operativa no encontrada');
       }
-      const vuelta = await tx.vuelta.findFirst({ where: { sesionId, estado: 'en_curso' } });
-      if (!vuelta) {
-        throw new ConflictException(
-          'El vehículo todavía no tiene una vuelta en curso: se puede designar desde que sale de la terminal',
-        );
+      const SIN_VUELTA =
+        'El vehículo todavía no tiene una vuelta en curso: se puede designar desde que sale de la terminal';
+      const candidata = await tx.vuelta.findFirst({
+        where: { sesionId, estado: 'en_curso' },
+        select: { id: true },
+      });
+      if (!candidata) {
+        throw new ConflictException(SIN_VUELTA);
+      }
+      // Se BLOQUEA la fila de la vuelta antes de decidir nada (el EXISTS de abajo y las demás
+      // reglas leen su estado). Orden de locks: el worker toma FOR SHARE sobre la sesión y luego
+      // FOR UPDATE sobre la vuelta; aquí la sesión se leyó SIN lock (arriba), así que solo se
+      // toma el de la vuelta: no hay orden inverso (vuelta → sesión) ni deadlock posible.
+      // READ COMMITTED: si el worker tenía la fila, este SELECT espera a que su transacción
+      // termine, y cada sentencia posterior toma un snapshot NUEVO: el EXISTS sobre
+      // `cumplimientos_pc` ve lo que el worker/ingesta acaban de confirmar (sin el lock, un
+      // cumplimiento del PC de espera confirmado entre la lectura y el UPDATE se pasaría por alto).
+      await tx.$queryRaw`SELECT id FROM vueltas WHERE id = ${candidata.id} FOR UPDATE`;
+      // Relectura tras el lock: la vuelta pudo cerrarse mientras esperábamos (ya no se designa).
+      const vuelta = await tx.vuelta.findUnique({ where: { id: candidata.id } });
+      if (!vuelta || vuelta.estado !== 'en_curso') {
+        throw new ConflictException(SIN_VUELTA);
       }
       if (vuelta.esperaLlegadaTs !== null) {
         throw new ConflictException(MSG_YA_LLEGO);

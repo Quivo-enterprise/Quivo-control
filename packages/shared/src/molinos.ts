@@ -10,6 +10,13 @@ export const MOLINOS_VENTANA_DIURNA_H = 10;
 /** Piso del intervalo objetivo (ms): con muy pocos móviles activos no se sugiere "ya" a cada rato. */
 export const MOLINOS_INTERVALO_MIN_MS = 60_000;
 
+/**
+ * Una espera sin salida confirmada deja de re-evaluarse cuando su llegada es más vieja que esto
+ * respecto al último `ts` del lote (horas): una espera de 30 min que a las 3 h no resolvió ya no
+ * lo hará (hueco de GPS, PC dado de baja) y no debe mantener los lotes GPS en el camino pesado.
+ */
+export const MOLINOS_ESPERA_PENDIENTE_MAX_H = 3;
+
 export interface SugerenciaMolinosEntrada {
   /** Sesiones activas de la línea con recorrido no finalizado. */
   flotaActiva: number;
