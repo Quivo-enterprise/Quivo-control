@@ -1,0 +1,4 @@
+# Fotos de vehículos subidas con el driver de disco (desarrollo). En producción viven en GCS;
+# nada de este directorio debe entrar al repositorio salvo este archivo.
+*
+!.gitignore

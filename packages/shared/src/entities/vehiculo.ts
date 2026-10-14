@@ -196,13 +196,37 @@ export const VehiculoSchema = z.object({
     .positive('La capacidad debe ser mayor que cero.')
     .max(200, 'La capacidad no puede superar 200 pasajeros.'),
   estado: EstadoVehiculoSchema,
+  // Foto de la unidad (PR C). Solo lectura: se sube desde la app móvil y se quita con
+  // `DELETE /vehiculos/:id/foto`, por eso Crear/Actualizar la omiten abajo.
+  fotoUrl: z.string().nullable().optional(),
+  fotoActualizadaEn: z.string().datetime().nullable().optional(),
+  fotoSubidaPor: z.object({ id: uuidSchema, nombre: z.string() }).nullable().optional(),
 });
 export type Vehiculo = z.infer<typeof VehiculoSchema>;
+
+/** Tope de la foto de la unidad ya decodificada (`POST /mobile/vehiculo/foto`). */
+export const FOTO_VEHICULO_MAX_BYTES = 2 * 1024 * 1024;
+
+export const SubirFotoVehiculoMovilSchema = z.object({
+  // Base64 de 2 MB ≈ 2,8 M caracteres; el tope real se valida sobre los bytes decodificados.
+  imagenBase64: z.string().min(1).max(2_900_000),
+  contentType: z.enum(['image/jpeg', 'image/webp']),
+});
+export type SubirFotoVehiculoMovil = z.infer<typeof SubirFotoVehiculoMovilSchema>;
+
+export const FotoVehiculoSchema = z.object({
+  fotoUrl: z.string(),
+  fotoActualizadaEn: z.string().datetime(),
+});
+export type FotoVehiculo = z.infer<typeof FotoVehiculoSchema>;
 
 export const CrearVehiculoSchema = VehiculoSchema.omit({
   id: true,
   placaNormalizada: true,
   estado: true,
+  fotoUrl: true,
+  fotoActualizadaEn: true,
+  fotoSubidaPor: true,
   numeroInterno: true,
   distintivo: true,
   cartelSuperior: true,
@@ -220,6 +244,9 @@ export const ActualizarVehiculoSchema = VehiculoSchema.omit({
   sindicatoId: true,
   placaNormalizada: true,
   estado: true,
+  fotoUrl: true,
+  fotoActualizadaEn: true,
+  fotoSubidaPor: true,
 }).partial();
 export type ActualizarVehiculo = z.infer<typeof ActualizarVehiculoSchema>;
 

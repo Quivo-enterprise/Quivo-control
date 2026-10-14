@@ -216,6 +216,8 @@ export const PosicionEnVivoSchema = z
     infraccionNivel: GravedadReglaSchema.nullable().optional(),
     /** Cantidad de infracciones `abierta` de la sesión. */
     infraccionesAbiertas: z.number().int().nonnegative().optional(),
+    /** PR C — foto de la unidad (URL pública) para el marcador y el panel; `null` si no tiene. */
+    fotoUrl: z.string().nullable().optional(),
   })
   .merge(FrescuraEnVivoSchema);
 export type PosicionEnVivo = z.infer<typeof PosicionEnVivoSchema>;

@@ -124,12 +124,11 @@ export interface OpcionesMarcadoresVehiculos {
  * abiertas: la API cuenta solo las `abierta` (LATERAL de `en-vivo.service.ts`, `estado =
  * 'abierta'`), así que al "Atender" o descartar, la infracción sale de la cuenta, el nivel
  * vuelve a `null` y el marcador deja de parpadear en el siguiente poll (el historial queda en
- * el panel). `fotoUrl` todavía no existe en el contrato (llega con el PR C): se lee de forma
- * opcional para que el marcador la use apenas la API la mande.
+ * el panel). `fotoUrl` viene en `PosicionEnVivo` (vacía/`null` si la unidad no tiene foto).
  */
 function camposAlertaYFoto(p: PosicionEnVivo, opciones: OpcionesMarcadoresVehiculos): Partial<MapPoint> {
   const abiertas = p.infraccionesAbiertas ?? 0;
-  const foto = (p as PosicionEnVivo & { fotoUrl?: string | null }).fotoUrl;
+  const foto = p.fotoUrl?.trim();
   const colorLinea = opciones.colorLineaPorId?.[p.lineaId];
   return {
     ...(foto ? { fotoUrl: foto } : {}),

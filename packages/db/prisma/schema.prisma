@@ -186,6 +186,12 @@ model Vehiculo {
   // conductor se identifica al iniciar la sesión operativa. Nunca se hashea en la app;
   // backend usa el hasher scrypt auditado que exporta Better Auth.
   credencialHash   String?
+  // Foto de la unidad (PR C): URL pública del objeto en el bucket de media (GCS), subida por
+  // el conductor desde la app. `fotoSubidaPorId` queda en NULL si el conductor se borra.
+  fotoUrl           String?
+  fotoActualizadaEn DateTime?
+  fotoSubidaPorId   String?
+  fotoSubidaPor     Conductor? @relation("VehiculoFotoSubidaPor", fields: [fotoSubidaPorId], references: [id], onDelete: SetNull)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -204,6 +210,7 @@ model Vehiculo {
   // de baja y volver a registrar la misma placa, incluso en el mismo sindicato); con ese
   // unique, ese ciclo baja/alta queda bloqueado para siempre.
   @@index([sindicatoId])
+  @@index([fotoSubidaPorId])
   @@index([tipo])
   @@index([estado])
   // El índice parcial (`WHERE estado <> 'inactivo'`) no sirve para el lookup del login móvil
@@ -253,6 +260,7 @@ model Conductor {
   asignaciones       Asignacion[]
   desafiosAuthMovil  DesafioAuthMovil[]
   sesionesOperativas SesionOperativa[]
+  vehiculosConFoto   Vehiculo[] @relation("VehiculoFotoSubidaPor")
 
   @@unique([sindicatoId, documentoIdentidad])
   @@index([sindicatoId])

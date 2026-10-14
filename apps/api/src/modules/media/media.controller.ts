@@ -20,26 +20,37 @@ class UploadLineaLogoDto extends createZodDto(
 export class MediaController {
   constructor(@Inject(MediaService) private readonly mediaService: MediaService) {}
 
-  @Get('lineas/:filename')
-  obtenerLogo(@Param('filename') filename: string, @Res() reply: FastifyReply) {
-    const logo = this.mediaService.obtenerLogoLinea(filename);
+  /**
+   * Sirve archivos del driver de disco (dev) y los logos guardados antes de GCS; en producción
+   * las fotos se leen directo del bucket. `carpeta` se valida contra una lista cerrada.
+   */
+  @Get(':carpeta/:filename')
+  obtenerImagen(
+    @Param('carpeta') carpeta: string,
+    @Param('filename') filename: string,
+    @Res() reply: FastifyReply,
+  ) {
+    const imagen = this.mediaService.obtenerArchivoLocal(carpeta, filename);
     reply
       .header('Cache-Control', 'public, max-age=86400')
-      .type(logo.mimeType)
-      .send(createReadStream(logo.path));
+      .type(imagen.mimeType)
+      .send(createReadStream(imagen.path));
   }
 
   @Post('lineas/logo')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin_quivo', 'admin_sindicato', 'operador')
-  subirLogo(
+  async subirLogo(
     @CurrentUser() _actor: AuthenticatedUser,
     @Body() body: UploadLineaLogoDto,
     @Req() request: FastifyRequest,
   ) {
-    const { filename } = this.mediaService.guardarLogoLinea(body as UploadLineaLogo);
+    const { url } = await this.mediaService.guardarLogoLinea(body as UploadLineaLogo);
+    // Absoluta (GCS o `MEDIA_PUBLIC_BASE_URL`): tal cual. Relativa: sin base configurada, se
+    // deriva del request como antes.
+    if (/^https?:\/\//i.test(url)) return { url };
     const forwarded = request.headers['x-forwarded-proto'];
     const protocol = typeof forwarded === 'string' ? forwarded.split(',')[0] : request.protocol;
-    return { url: `${protocol}://${request.headers.host}/v1/media/lineas/${filename}` };
+    return { url: `${protocol}://${request.headers.host}${url}` };
   }
 }

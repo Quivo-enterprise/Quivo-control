@@ -1,12 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { StorageService } from '../storage/storage.service.js';
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 const MIME_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' } as const;
-type SupportedMimeType = keyof typeof MIME_TYPES;
+/** Carpetas servibles por `GET /media/:carpeta/:filename` (lista cerrada). */
+export const CARPETAS_MEDIA = ['lineas', 'vehiculos'] as const;
+export type CarpetaMedia = (typeof CARPETAS_MEDIA)[number];
+export type SupportedMimeType = keyof typeof MIME_TYPES;
 
 export interface UploadLineaLogo {
   mimeType: SupportedMimeType;
@@ -15,11 +18,12 @@ export interface UploadLineaLogo {
 
 @Injectable()
 export class MediaService {
-  private readonly logosDirectory = fileURLToPath(
-    new URL('../../../media/lineas/', import.meta.url),
-  );
+  private readonly mediaDirectory = fileURLToPath(new URL('../../../media/', import.meta.url));
 
-  guardarLogoLinea(upload: UploadLineaLogo): { filename: string } {
+  constructor(@Inject(StorageService) private readonly storage: StorageService) {}
+
+  /** `url` es absoluta con GCS (o con disco + `MEDIA_PUBLIC_BASE_URL`) y relativa (`/v1/media/lineas/...`) con disco sin base. */
+  async guardarLogoLinea(upload: UploadLineaLogo): Promise<{ url: string }> {
     const prefix = `data:${upload.mimeType};base64,`;
     if (!upload.contenido.startsWith(prefix))
       throw new BadRequestException('El contenido no coincide con el tipo de imagen.');
@@ -31,16 +35,24 @@ export class MediaService {
     ) {
       throw new BadRequestException('Sube una imagen PNG, JPG o WebP válida de hasta 2 MB.');
     }
-    mkdirSync(this.logosDirectory, { recursive: true });
-    const filename = `${randomUUID()}.${MIME_TYPES[upload.mimeType]}`;
-    writeFileSync(join(this.logosDirectory, filename), data, { flag: 'wx' });
-    return { filename };
+    const { url } = await this.storage.subir({
+      buffer: data,
+      contentType: upload.mimeType,
+      prefijo: 'lineas',
+    });
+    return { url };
   }
 
-  obtenerLogoLinea(filename: string): { path: string; mimeType: SupportedMimeType } {
+  /** Sirve archivos del driver de disco (dev) y los logos ya guardados antes de GCS. */
+  obtenerArchivoLocal(
+    carpeta: string,
+    filename: string,
+  ): { path: string; mimeType: SupportedMimeType } {
+    if (!(CARPETAS_MEDIA as readonly string[]).includes(carpeta))
+      throw new NotFoundException('Imagen no encontrada.');
     if (!/^[a-z0-9][a-z0-9-]*\.(png|jpe?g|webp)$/i.test(filename))
       throw new NotFoundException('Imagen no encontrada.');
-    const path = join(this.logosDirectory, filename);
+    const path = join(this.mediaDirectory, carpeta, filename);
     if (!existsSync(path)) throw new NotFoundException('Imagen no encontrada.');
     const extension = filename.split('.').pop()?.toLowerCase();
     return {
@@ -51,7 +63,7 @@ export class MediaService {
   }
 }
 
-function coincideFirma(data: Buffer, mimeType: SupportedMimeType): boolean {
+export function coincideFirma(data: Buffer, mimeType: SupportedMimeType): boolean {
   if (mimeType === 'image/png')
     return data
       .subarray(0, 8)

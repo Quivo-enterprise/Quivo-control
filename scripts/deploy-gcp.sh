@@ -180,6 +180,9 @@ readonly VPC_CONNECTOR="quivo-conector"
 # egress, sin pasar por el conector — ver el comentario grande del paso 6 para el porqué.
 readonly VPC_NETWORK="default"
 readonly VPC_SUBNET="default"
+# Bucket de media (logos de línea, fotos de vehículos): acceso uniforme, objetos legibles por
+# URL pública, y la service account de abajo con objectAdmin. Se crea una vez fuera de este script.
+readonly MEDIA_BUCKET="${PROJECT}-media"
 readonly SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 readonly AR_PREFIX="${REGION}-docker.pkg.dev/${PROJECT}/quivo"
 readonly API_IMAGE="${AR_PREFIX}/api:${TAG}"
@@ -759,7 +762,7 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
   # número-de-proyecto en vez de esperar a `status.url`. Se incluye siempre, no sólo cuando
   # ya existe una previa (a diferencia de CORS_ORIGIN_EXISTENTE arriba) porque su valor es
   # una constante calculada, no algo que un run anterior pudo haber seteado distinto.
-  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d%%BETTER_AUTH_URL=${API_URL_PROJECT_NUMBER}"
+  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d%%BETTER_AUTH_URL=${API_URL_PROJECT_NUMBER}%%GCS_MEDIA_BUCKET=${MEDIA_BUCKET}"
   if [[ -n "$CORS_ORIGIN_EXISTENTE" ]]; then
     API_SET_ENV_VARS="${API_SET_ENV_VARS}%%CORS_ORIGIN=${CORS_ORIGIN_EXISTENTE}"
     info "CORS_ORIGIN existente detectado ('$CORS_ORIGIN_EXISTENTE') — se re-incluye en este deploy para no perderlo."

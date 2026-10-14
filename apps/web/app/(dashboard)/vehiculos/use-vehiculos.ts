@@ -61,5 +61,11 @@ export function useVehiculos(token: string) {
     return saved;
   }
 
-  return { rows, socios, isLoading, loadError, crear, actualizar, cambiarEstado };
+  async function quitarFoto(id: string) {
+    const saved = await vehiculosApi.quitarFoto(token, id);
+    setRows((previous) => previous.map((row) => (row.id === saved.id ? saved : row)));
+    return saved;
+  }
+
+  return { rows, socios, isLoading, loadError, crear, actualizar, cambiarEstado, quitarFoto };
 }

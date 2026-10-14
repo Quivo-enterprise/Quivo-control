@@ -33,6 +33,7 @@ import { VehicleFormPanel } from './vehicle-form-panel';
 import { VehicleStateModal, NOMBRE_ESTADO } from './vehicle-state-modal';
 import { VehicleHistoryModal } from './vehicle-history-modal';
 import { VehicleDetailsModal } from './vehicle-details-modal';
+import { FotoVehiculoMiniatura } from './vehicle-photo';
 import { useVehiculos } from './use-vehiculos';
 import { useVehicleHistory } from './use-vehicle-history';
 import { vehiculosApi } from '../../../src/lib/api/vehiculos';
@@ -44,9 +45,8 @@ export default function VehiculosPage() {
   const { token, user } = useAuth();
   const { options: sindicatoOptions } = useSindicatoOptions();
   const { options: lineaOptions, lineaPorId } = useLineaOptions();
-  const { rows, socios, isLoading, loadError, crear, actualizar, cambiarEstado } = useVehiculos(
-    token ?? '',
-  );
+  const { rows, socios, isLoading, loadError, crear, actualizar, cambiarEstado, quitarFoto } =
+    useVehiculos(token ?? '');
   const history = useVehicleHistory(token ?? '');
 
   const [query, setQuery] = useState('');
@@ -334,6 +334,11 @@ export default function VehiculosPage() {
               }
               columns={[
                 {
+                  key: 'foto',
+                  header: 'Foto',
+                  render: (row) => <FotoVehiculoMiniatura vehicle={row} />,
+                },
+                {
                   key: 'placa',
                   header: 'Placa',
                   render: (row) => <PlateBadge plate={row.placaNormalizada} />,
@@ -570,6 +575,14 @@ export default function VehiculosPage() {
         onEdit={openEdit}
         onChangeState={setStateVehicle}
         onHistory={history.open}
+        onRemovePhoto={
+          user?.rol === 'admin_quivo' || user?.rol === 'admin_sindicato'
+            ? async (vehicle) => {
+                const saved = await quitarFoto(vehicle.id);
+                setDetailVehicle((current) => (current?.id === saved.id ? saved : current));
+              }
+            : undefined
+        }
       />
 
       <VehicleStateModal
