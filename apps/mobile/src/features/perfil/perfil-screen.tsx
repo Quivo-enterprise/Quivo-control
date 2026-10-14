@@ -20,6 +20,7 @@ import {
   etiquetaVersion,
 } from '../actualizaciones/actualizaciones-core';
 import { reportarErrorActualizacion } from '../../shared/observability/reportar-actualizacion';
+import { FotoVehiculoSection } from '../vehiculo-foto/foto-vehiculo-section';
 import { createShimmerPlaceholder } from 'react-native-shimmer-placeholder';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -209,6 +210,19 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
             value={contexto.sindicato.nombre}
           />
         </View>
+
+        {/* Sección: Foto del vehículo (PR D) */}
+        <Text
+          style={[styles.sectionTitle, { fontSize: 14 * scale }]}
+          allowFontScaling={!settings.textoGrande}
+        >
+          Foto del vehículo
+        </Text>
+        <FotoVehiculoSection
+          placa={contexto.vehiculo.placa}
+          sesionId={contextoInicial.sesionId}
+          obtenerAccessToken={obtenerAccessToken}
+        />
 
         {/* Sección: Navegación del perfil */}
         <Text

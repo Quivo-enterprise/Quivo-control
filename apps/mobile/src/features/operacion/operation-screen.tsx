@@ -49,6 +49,7 @@ import { DriverRouteCard } from './driver-route-card';
 import { VecinosRutaPanel } from '../vecinos-ruta/vecinos-ruta-panel';
 import { faseControl } from '../jornada/fase-control';
 import { useJornada } from '../jornada/use-jornada';
+import { AvisoFotoVehiculo } from '../vehiculo-foto/aviso-foto-vehiculo';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -463,6 +464,11 @@ export function OperationScreen(
             {paqueteDia.error}
           </Text>
         ) : null}
+        <AvisoFotoVehiculo
+          sesionId={props.contexto.sesionId}
+          tracking={gps.tracking}
+          obtenerAccessToken={props.obtenerAccessToken}
+        />
         {!settings.trabajarOffline && isOffline ? (
           <Text accessibilityRole="alert" style={styles.dangerNotice}>
             Modo offline desactivado en tus Ajustes. Conéctate a internet para iniciar.

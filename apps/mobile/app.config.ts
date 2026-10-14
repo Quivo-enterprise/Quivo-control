@@ -1,6 +1,7 @@
 import type { ExpoConfig } from 'expo/config';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { evaluarClaveMapas } = require('./plugins/clave-mapas.cjs') as typeof import('./plugins/clave-mapas.cjs');
+const { evaluarClaveMapas } =
+  require('./plugins/clave-mapas.cjs') as typeof import('./plugins/clave-mapas.cjs');
 
 const resultadoClaveMapas = evaluarClaveMapas(process.env);
 if (resultadoClaveMapas === 'fallar') {
@@ -127,6 +128,13 @@ export default (): ExpoConfig => ({
       // el detalle completo de por qué esto NUNCA bloquea "Iniciar recorrido".
       'ACTIVITY_RECOGNITION',
     ],
+    // `expo-image-picker` declara READ/WRITE_EXTERNAL_STORAGE en su manifest de librería. La app
+    // solo usa la cámara (`launchCameraAsync`), nunca la galería, pero en Android < 10
+    // `ensureCameraPermissionsAreGranted` exige WRITE_EXTERNAL_STORAGE JUNTO CON CAMERA (si no
+    // está concedido, la cámara rechaza con UserRejectedPermissionsException), así que NO se puede
+    // bloquear. READ_EXTERNAL_STORAGE no lo pide ninguna ruta de cámara (solo la de galería), por
+    // eso es lo único que se bloquea.
+    blockedPermissions: ['android.permission.READ_EXTERNAL_STORAGE'],
     // Mapa de la ruta activa: motor Google nativo (`react-native-maps` + `PROVIDER_GOOGLE`, ver
     // `docs/adr/0004-motor-mapa-google.md`). La API key de Google Maps SDK for Android vive en
     // el entorno de EAS (`GOOGLE_MAPS_ANDROID_API_KEY`, variable SENSIBLE) — NUNCA se hardcodea
@@ -169,6 +177,17 @@ export default (): ExpoConfig => ({
     ],
     'expo-sqlite',
     'expo-secure-store',
+    [
+      'expo-image-picker',
+      {
+        // Solo cámara (foto del vehículo, PR D). `photosPermission: false` omite el texto de
+        // galería (iOS; en Android el plugin no declara permisos de fotos). `microphonePermission:
+        // false` evita que el plugin agregue RECORD_AUDIO (no se graba video ni audio).
+        cameraPermission: 'QUIVO Conductor usa la cámara para tomar la foto del vehículo.',
+        photosPermission: false,
+        microphonePermission: false,
+      },
+    ],
     [
       'expo-notifications',
       {

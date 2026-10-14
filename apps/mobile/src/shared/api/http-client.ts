@@ -32,6 +32,8 @@ interface RequestOptions {
   body?: unknown;
   accessToken?: string;
   headers?: Record<string, string>;
+  /** Por defecto `REQUEST_TIMEOUT_MS`; las subidas pesadas necesitan más. */
+  timeoutMs?: number;
 }
 
 export async function request(path: string, options: RequestOptions): Promise<unknown> {
@@ -43,7 +45,7 @@ export async function request(path: string, options: RequestOptions): Promise<un
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch(`${API_URL}${path}`, {
       method: options.method,
@@ -56,7 +58,7 @@ export async function request(path: string, options: RequestOptions): Promise<un
       },
       ...(options.body ? { body: JSON.stringify(options.body) } : {}),
     });
-    const payload = response.status === 204 ? null : await parseJson(response);
+    const payload = await leerCuerpo(response);
     if (!response.ok) {
       throw new ApiError('http', extraerMensaje(payload), response.status);
     }
@@ -69,10 +71,21 @@ export async function request(path: string, options: RequestOptions): Promise<un
   }
 }
 
-async function parseJson(response: Response): Promise<unknown> {
+/** Cuerpo vacío en una 2xx (204, `content-length: 0` o texto `''`) => `null`: es el "sin
+ * contenido" legítimo (p. ej. Nest serializa un `null` como cuerpo vacío). Un cuerpo NO vacío
+ * que no es JSON en una 2xx (una página HTML de un proxy, por ejemplo) es error de contrato.
+ * En una no-2xx un cuerpo vacío o no-JSON (502 con HTML del proxy, 401 sin cuerpo) devuelve
+ * `null` para que `request` lance el error `http` con su `status`: así un 5xx sigue siendo
+ * reintentable y un 401 sigue significando sesión vencida. */
+async function leerCuerpo(response: Response): Promise<unknown> {
+  if (response.status === 204) return null;
+  const vacioDeclarado = response.headers.get('content-length') === '0';
+  const texto = vacioDeclarado ? '' : await response.text();
+  if (texto === '') return null;
   try {
-    return await response.json();
+    return JSON.parse(texto);
   } catch {
+    if (!response.ok) return null;
     throw new ApiError('contract', 'La API devolvió una respuesta inválida');
   }
 }
