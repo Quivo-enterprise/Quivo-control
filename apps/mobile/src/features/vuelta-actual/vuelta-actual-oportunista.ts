@@ -57,9 +57,18 @@ import {
  */
 
 export const PISO_ENTRE_CONSULTAS_MS = 20_000;
+/** Los eventos de ubicación/heartbeat llegan con jitter: el piso tolera 1 s para que una consulta
+ * a 19,x s del intento anterior no se salte un tick entero (cadencia de 40 s en vez de 20 s). */
+export const TOLERANCIA_PISO_MS = 1_000;
+/** Una consulta en vuelo más vieja que esto se da por colgada (red sin timeout, promesa perdida) y
+ * deja pasar una nueva; la respuesta de la vieja, si llega, se descarta. */
+export const VENCIMIENTO_EN_VUELO_MS = 60_000;
 
 let ultimoIntentoMs = 0;
 let enVuelo = false;
+let enVueloDesdeMs = 0;
+/** Identifica la consulta vigente: una consulta vencida que termina tarde no pisa a la nueva. */
+let secuenciaConsulta = 0;
 /** Se pidió un refresco mientras había una consulta en vuelo: corre apenas ésta termine. */
 let refetchPendiente = false;
 let obtenerTokenReciente: (() => Promise<string | null>) | null = null;
@@ -93,6 +102,8 @@ function emitir(sesionId: string, estado: EstadoLocalVuelta): void {
 export function reiniciarPisoVueltaActualParaTests(): void {
   ultimoIntentoMs = 0;
   enVuelo = false;
+  enVueloDesdeMs = 0;
+  secuenciaConsulta = 0;
   refetchPendiente = false;
   obtenerTokenReciente = null;
 }
@@ -186,8 +197,14 @@ async function incorporarRespuesta(
 
 /** Pide un refresco: si hay una consulta en vuelo queda marcado y corre al terminar ésta (antes se
  * perdía: `consultarVueltaActual` descartaba la llamada); si no, consulta ya. */
+/** ¿Hay una consulta en vuelo VIGENTE? Una que lleva más de `VENCIMIENTO_EN_VUELO_MS` se da por
+ * colgada y no bloquea. */
+function hayConsultaVigente(ahoraMs: number): boolean {
+  return enVuelo && ahoraMs - enVueloDesdeMs < VENCIMIENTO_EN_VUELO_MS;
+}
+
 async function solicitarRefresco(obtenerAccessToken: () => Promise<string | null>): Promise<void> {
-  if (enVuelo) {
+  if (hayConsultaVigente(Date.now())) {
     refetchPendiente = true;
     obtenerTokenReciente = obtenerAccessToken;
     return;
@@ -238,8 +255,11 @@ export async function consultarVueltaActual(
   obtenerAccessToken: () => Promise<string | null>,
   opciones: { forzar?: boolean } = {},
 ): Promise<void> {
-  if (enVuelo) return;
-  if (!opciones.forzar && Date.now() - ultimoIntentoMs < PISO_ENTRE_CONSULTAS_MS) return;
+  // El instante se toma al DISPARAR la llamada (antes de los awaits): el piso se mide entre
+  // disparos, no entre el final de las lecturas previas.
+  const disparoMs = Date.now();
+  if (hayConsultaVigente(disparoMs)) return;
+  if (!opciones.forzar && disparoMs - ultimoIntentoMs < PISO_ENTRE_CONSULTAS_MS - TOLERANCIA_PISO_MS) return;
   // El registro del recorrido se lee ANTES de tomar el slot: sin recorrido (o con la lectura
   // fallida) no se consume el piso ni se marca en vuelo, así la primera consulta tras registrarse
   // el recorrido no queda esperando 20 s.
@@ -257,16 +277,19 @@ export async function consultarVueltaActual(
     return;
   }
   // Los awaits de arriba pudieron ceder el paso a otra consulta: se re-chequea antes del slot.
-  const ahora = Date.now();
-  if (enVuelo) return;
-  if (!opciones.forzar && ahora - ultimoIntentoMs < PISO_ENTRE_CONSULTAS_MS) return;
+  if (hayConsultaVigente(Date.now())) return;
+  if (!opciones.forzar && disparoMs - ultimoIntentoMs < PISO_ENTRE_CONSULTAS_MS - TOLERANCIA_PISO_MS) return;
   enVuelo = true;
-  ultimoIntentoMs = ahora;
+  enVueloDesdeMs = Date.now();
+  ultimoIntentoMs = disparoMs;
+  const miSecuencia = ++secuenciaConsulta;
   try {
     const accessToken = await obtenerAccessToken();
     if (!accessToken) return;
 
     const respuesta = await vueltaActualApi.obtener(accessToken);
+    // Una consulta vencida (otra tomó el slot mientras esta seguía colgada) descarta su respuesta.
+    if (miSecuencia !== secuenciaConsulta) return;
     const estado = await incorporarRespuesta(sesionId, recorridoId, respuesta);
     if (!estado) return; // el recorrido cambió/terminó mientras la consulta estaba en vuelo
     await enviarAcuse(accessToken, sesionId, recorridoId, estado, obtenerAccessToken);
@@ -278,11 +301,14 @@ export async function consultarVueltaActual(
       Sentry.captureException(error, { tags: { contexto: 'vuelta-actual' } });
     }
   } finally {
-    enVuelo = false;
-    if (refetchPendiente) {
-      refetchPendiente = false;
-      const token = obtenerTokenReciente ?? obtenerAccessToken;
-      void consultarVueltaActual(token, { forzar: true });
+    // Solo la consulta vigente libera el slot y dispara el refetch pendiente.
+    if (miSecuencia === secuenciaConsulta) {
+      enVuelo = false;
+      if (refetchPendiente) {
+        refetchPendiente = false;
+        const token = obtenerTokenReciente ?? obtenerAccessToken;
+        void consultarVueltaActual(token, { forzar: true });
+      }
     }
   }
 }

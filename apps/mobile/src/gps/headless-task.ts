@@ -32,6 +32,7 @@ import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
 import { registrarPasoEnVuelta } from '../features/operacion/progreso-vuelta-store';
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
 import { consultarVueltaActual } from '../features/vuelta-actual/vuelta-actual-oportunista';
+import { esperarConTope } from '../features/vuelta-actual/espera-con-tope';
 // Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
 // `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
 import { confirmarTokenRechazadoVigente, refrescar } from '../features/auth/use-auth-movil';
@@ -54,6 +55,9 @@ import {
   UMBRAL_ANUNCIO_PROXIMIDAD_MS,
   type AnuncioDecidido,
 } from '../features/operacion/decidir-anuncio';
+
+/** Tope de espera de la consulta de la vuelta actual dentro de la tarea headless. */
+const TOPE_ESPERA_VUELTA_ACTUAL_MS = 8_000;
 
 /**
  * Margen de gracia antes de apagar el plugin nativo tras vencer el paquete del día (hallazgo
@@ -1234,7 +1238,7 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
     // abajo, en el camino 'location', para el porqué completo (causa raíz del síntoma más
     // reportado del piloto) y por qué va con `await`.
     await intentarDrenarOportunista(obtenerAccessTokenHeadless);
-    await consultarVueltaActual(obtenerAccessTokenHeadless);
+    await esperarConTope(consultarVueltaActual(obtenerAccessTokenHeadless), TOPE_ESPERA_VUELTA_ACTUAL_MS);
     return;
   }
   if (event.name !== 'location') return;
@@ -1327,8 +1331,10 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
   // considera cerrado, y el trabajo (mutex, POST, liberar el lease) se corta a mitad de camino
   // en cuanto el wake lock se libera.
   await intentarDrenarOportunista(obtenerAccessTokenHeadless);
-  // Aviso de designación a Molinos con la app en segundo plano (piso de 20 s propio; nunca rechaza).
-  await consultarVueltaActual(obtenerAccessTokenHeadless);
+  // Aviso de designación a Molinos con la app en segundo plano (piso de 20 s propio; nunca
+  // rechaza). Va al final (después del trabajo crítico) y la tarea la espera como máximo
+  // `TOPE_ESPERA_VUELTA_ACTUAL_MS`: sin red, no cuelga la tarea (la promesa sigue por su cuenta).
+  await esperarConTope(consultarVueltaActual(obtenerAccessTokenHeadless), TOPE_ESPERA_VUELTA_ACTUAL_MS);
 }
 
 /**

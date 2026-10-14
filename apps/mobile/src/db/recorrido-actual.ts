@@ -30,10 +30,12 @@ export async function leerRecorridoActual(sesionId: string): Promise<LecturaReco
   }
 }
 
-/** Escribe el registro de la sesión y limpia las de otras sesiones (el chofer solo tiene una
- * operativa a la vez), en una sola transacción. `reemplazar: true` = arranque (`iniciar()`): pisa
- * el recorrido anterior (INSERT OR REPLACE). `false` = re-enganche o reintento: crea la fila solo
- * si no existe, no pisa un recorrido ya registrado (INSERT OR IGNORE por PK, idempotente). */
+/** Escribe el registro de la sesión con UNA sola sentencia (sin `withTransactionAsync`: la
+ * conexión del paquete es compartida con el flujo crítico de GPS/outbox y una transacción acá
+ * podría barrer sus sentencias o chocar con las suyas; ver `progreso-vuelta-store.ts`). No limpia
+ * filas de otras sesiones: la clave es por `sesion_id`, así que son inertes. `reemplazar: true` =
+ * arranque (`iniciar()`): pisa el recorrido anterior (INSERT OR REPLACE). `false` = re-enganche o
+ * reintento: crea la fila solo si no existe (INSERT OR IGNORE por PK, idempotente). */
 export async function registrarRecorridoActual(
   sesionId: string,
   recorridoId: string,
@@ -41,13 +43,10 @@ export async function registrarRecorridoActual(
 ): Promise<void> {
   const db = await abrirPaqueteDiaDb();
   const sentencia = reemplazar ? 'INSERT OR REPLACE' : 'INSERT OR IGNORE';
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
-      `${sentencia} INTO recorrido_actual (sesion_id, recorrido_id, iniciado_en) VALUES (?, ?, ?)`,
-      [sesionId, recorridoId, new Date().toISOString()],
-    );
-    await db.runAsync('DELETE FROM recorrido_actual WHERE sesion_id <> ?', [sesionId]);
-  });
+  await db.runAsync(
+    `${sentencia} INTO recorrido_actual (sesion_id, recorrido_id, iniciado_en) VALUES (?, ?, ?)`,
+    [sesionId, recorridoId, new Date().toISOString()],
+  );
 }
 
 /** Fin del recorrido: borra el registro de la sesión. */

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VueltaActualMovil } from '@quivo/shared';
 import { ESTADO_LOCAL_INICIAL, type EstadoLocalVuelta } from './vuelta-actual-core';
 
@@ -363,5 +363,67 @@ describe('consulta sin recorrido registrado', () => {
     mocks.recorrido = 'rec-1';
     await consultarVueltaActual(token); // sin forzar: el piso no se gastó
     expect(mocks.obtener).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('cadencia y consulta colgada', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('el piso tolera 1 s de jitter: a 19,5 s consulta; a 18,5 s no', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-14T13:00:00.000Z'));
+    mocks.obtener.mockResolvedValue(ok(vuelta(false)));
+    await consultarVueltaActual(token);
+    expect(mocks.obtener).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(new Date('2026-10-14T13:00:18.500Z'));
+    await consultarVueltaActual(token);
+    expect(mocks.obtener).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(new Date('2026-10-14T13:00:19.500Z'));
+    await consultarVueltaActual(token);
+    expect(mocks.obtener).toHaveBeenCalledTimes(2);
+  });
+
+  it('el piso se mide desde que se dispara la llamada, no desde que terminan las lecturas previas', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-14T13:00:00.000Z'));
+    mocks.obtener.mockImplementation(async () => {
+      // La consulta tarda 3 s en responder.
+      vi.setSystemTime(new Date('2026-10-14T13:00:03.000Z'));
+      return ok(vuelta(false));
+    });
+    await consultarVueltaActual(token);
+    // 19,2 s después del disparo anterior (16,2 s después de su fin): ya toca.
+    vi.setSystemTime(new Date('2026-10-14T13:00:19.200Z'));
+    await consultarVueltaActual(token);
+    expect(mocks.obtener).toHaveBeenCalledTimes(2);
+  });
+
+  it('una consulta colgada vence a los 60 s: se permite una nueva y la respuesta vieja se descarta', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-14T13:00:00.000Z'));
+    let resolverVieja: (v: VueltaActualMovil) => void = () => undefined;
+    mocks.obtener.mockReturnValueOnce(new Promise<VueltaActualMovil>((r) => (resolverVieja = r)));
+    const colgada = consultarVueltaActual(token, { forzar: true });
+    await vi.waitFor(() => expect(mocks.obtener).toHaveBeenCalledTimes(1));
+
+    // Antes de 60 s sigue bloqueada.
+    vi.setSystemTime(new Date('2026-10-14T13:00:59.000Z'));
+    await consultarVueltaActual(token, { forzar: true });
+    expect(mocks.obtener).toHaveBeenCalledTimes(1);
+
+    // Pasados los 60 s se permite una consulta nueva.
+    mocks.obtener.mockResolvedValueOnce(ok(vuelta(false, null, V2)));
+    vi.setSystemTime(new Date('2026-10-14T13:01:01.000Z'));
+    await consultarVueltaActual(token, { forzar: true });
+    expect(mocks.obtener).toHaveBeenCalledTimes(2);
+    expect(estadoGuardado().ultimo?.vueltaId).toBe(V2);
+
+    // La respuesta vieja llega tarde: se descarta (no pisa el estado de la nueva).
+    resolverVieja(ok(vuelta(true)));
+    await colgada;
+    expect(estadoGuardado().ultimo?.vueltaId).toBe(V2);
+    expect(mocks.anunciar).not.toHaveBeenCalled();
   });
 });

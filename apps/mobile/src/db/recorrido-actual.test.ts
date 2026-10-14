@@ -4,6 +4,7 @@ const m = vi.hoisted(() => ({
   filas: new Map<string, string>(),
   falla: false,
   transacciones: 0,
+  sentencias: [] as string[],
 }));
 
 vi.mock('./paquete-dia', () => ({
@@ -19,6 +20,7 @@ vi.mock('./paquete-dia', () => ({
         return id === undefined ? null : { recorrido_id: id };
       },
       runAsync: async (sql: string, params: string[]) => {
+        m.sentencias.push(sql);
         if (sql.startsWith('INSERT OR REPLACE')) m.filas.set(params[0]!, params[1]!);
         else if (sql.startsWith('INSERT OR IGNORE')) {
           if (!m.filas.has(params[0]!)) m.filas.set(params[0]!, params[1]!);
@@ -41,6 +43,7 @@ beforeEach(() => {
   m.filas.clear();
   m.falla = false;
   m.transacciones = 0;
+  m.sentencias = [];
 });
 
 describe('recorrido_actual', () => {
@@ -50,13 +53,13 @@ describe('recorrido_actual', () => {
     expect(await leerRecorridoActual('s')).toEqual({ ok: false });
   });
 
-  it('iniciar escribe el id, reemplaza el anterior y limpia otras sesiones', async () => {
-    m.filas.set('otra', 'x');
+  it('iniciar escribe el id y reemplaza el anterior, sin transacción y con una sola sentencia', async () => {
     await registrarRecorridoActual('s', 'rec-1', true);
     await registrarRecorridoActual('s', 'rec-2', true);
     expect(await leerRecorridoActual('s')).toEqual({ ok: true, recorridoId: 'rec-2' });
-    expect(m.filas.has('otra')).toBe(false);
-    expect(m.transacciones).toBe(2);
+    // Una sola sentencia por registro y NINGUNA transacción sobre la conexión compartida.
+    expect(m.transacciones).toBe(0);
+    expect(m.sentencias).toHaveLength(2);
   });
 
   it('re-enganche: sin fila crea una con id nuevo; con fila no la pisa', async () => {
