@@ -1,6 +1,8 @@
 export const quivoColors = {
   primary: '#3226B4',
   primaryStrong: '#3123C7',
+  // `primary` oscurecido ~40 % — casing (borde) de la polilínea de navegación en el mapa.
+  primaryDark: '#1E176C',
   primarySoft: '#DCD9FB',
   primarySubtle: '#EFEEFC',
   accent: '#FD9E15',
