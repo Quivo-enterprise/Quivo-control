@@ -13,6 +13,7 @@ import {
   recorridoIniciadoEn,
   dedupeKeyPcOmitido,
   resolverGravedadInfraccion,
+  cumplimientoDisparaPcOmitido,
   seleccionarPcOmitidos,
   type PuntoControlCandidato,
   type ReglaCandidata,
@@ -210,5 +211,50 @@ describe('descartarFuturos', () => {
       { ts: new Date(ahora + 86_400_000) },
     ];
     expect(descartarFuturos(items, ahora, 300_000)).toEqual(items.slice(0, 2));
+  });
+});
+
+describe('PC intermedios y pc_omitido en vivo', () => {
+  const pc = (
+    id: string,
+    orden: number,
+    extra: Partial<PuntoControlCandidato> = {},
+  ): PuntoControlCandidato => ({
+    id,
+    orden,
+    obligatorio: false,
+    estado: 'activo',
+    lat: -17.78,
+    lng: -63.18,
+    ...extra,
+  });
+  const honduras = pc('honduras', 8, { obligatorio: true });
+  const intermedio = pc('inter9', 9);
+  const molinos = pc('molinos', 10);
+
+  it('un intermedio (rol null, no obligatorio) no dispara la omisión en vivo', () => {
+    expect(cumplimientoDisparaPcOmitido({ rol: null, obligatorio: false })).toBe(false);
+  });
+
+  it('Molinos (rol espera, no obligatorio) sí dispara y Honduras queda omitido', () => {
+    expect(cumplimientoDisparaPcOmitido({ rol: 'espera', obligatorio: false })).toBe(true);
+    expect(
+      seleccionarPcOmitidos([honduras, intermedio, molinos], new Set(), molinos.orden, 'molinos').map((p) => p.id),
+    ).toEqual(['honduras']);
+  });
+
+  it('un PC con rol o un obligatorio sin rol disparan', () => {
+    expect(cumplimientoDisparaPcOmitido({ rol: 'terminal', obligatorio: true })).toBe(true);
+    expect(cumplimientoDisparaPcOmitido({ rol: 'retorno', obligatorio: true })).toBe(true);
+    expect(cumplimientoDisparaPcOmitido({ rol: null, obligatorio: true })).toBe(true);
+  });
+
+  it('fin_recorrido: Honduras sigue omitido si solo se cumplieron intermedios', () => {
+    const omitidos = seleccionarPcOmitidos(
+      [honduras, intermedio, molinos],
+      new Set(['inter9']),
+      Number.POSITIVE_INFINITY,
+    );
+    expect(omitidos.map((p) => p.id)).toEqual(['honduras']);
   });
 });

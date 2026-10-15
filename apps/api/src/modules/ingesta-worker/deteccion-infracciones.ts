@@ -19,6 +19,7 @@ import {
   recorridoIniciadoEn,
   REGLA_TIPO_POR_INFRACCION,
   resolverGravedadInfraccion,
+  cumplimientoDisparaPcOmitido,
   seleccionarPcOmitidos,
   type PuntoControlCandidato,
   type Recorrido,
@@ -426,11 +427,15 @@ export async function detectarPcOmitidosPorCumplimiento(
 ): Promise<number> {
   const ctx = await contextoDeSesion(tx, sindicatoId, sesionId);
   if (!ctx) return 0;
-  const [pc] = await tx.$queryRaw<{ rutaId: string; orden: number }[]>`
-    SELECT "rutaId", orden FROM puntos_control WHERE id = ${puntoControlId}
+  const [pc] = await tx.$queryRaw<
+    { rutaId: string; orden: number; rol: string | null; obligatorio: boolean }[]
+  >`
+    SELECT "rutaId", orden, rol, obligatorio FROM puntos_control WHERE id = ${puntoControlId}
   `;
   // Un PC de otra ruta no dice nada sobre los PC de la ruta de esta sesión.
   if (!pc || pc.rutaId !== ctx.rutaId) return 0;
+  // Un intermedio (sin rol y no obligatorio) no dispara la omisión en vivo (ver la función).
+  if (!cumplimientoDisparaPcOmitido(pc)) return 0;
   const recorrido = recorridoDeInstante(
     await cargarRecorridos(tx, sindicatoId, sesionId, ahora),
     tsCumplimiento,

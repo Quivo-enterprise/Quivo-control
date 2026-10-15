@@ -61,6 +61,20 @@ export interface PuntoControlCandidato {
 }
 
 /**
+ * ¿El cumplimiento de este PC puede disparar la detección de `pc_omitido` EN VIVO? Solo si el
+ * PC tiene `rol` (terminal/retorno/espera) o es `obligatorio`. Un intermedio (`rol` NULL y no
+ * obligatorio) nunca dispara: con intermedios después de Honduras, cumplir uno temprano (calle
+ * compartida) o fallar el GPS en Honduras marcaría falsamente a Honduras como omitido. El
+ * chequeo de `fin_recorrido` no pasa por acá y sigue revisando todos los obligatorios.
+ */
+export function cumplimientoDisparaPcOmitido(pc: {
+  rol: string | null;
+  obligatorio: boolean;
+}): boolean {
+  return pc.rol !== null || pc.obligatorio;
+}
+
+/**
  * PCs omitidos (docs/plan-en-vivo-alertas.md): los PC `obligatorio` y activos de la ruta, con
  * `orden` < `ordenLimite` (el del PC recién cumplido; `Infinity` en `fin_recorrido` = todos
  * los restantes), que NO tienen un cumplimiento `cumplido` en la ventana del recorrido
