@@ -6,6 +6,26 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-14, 08:00 (leer primero): F1 en main, F1-mobile y Fix 2 por mergear, piloto de 3 trufis
+
+- **Mergeados:** #158 (trazado L16; Codex verify-fix no corrido, el CTO lo eximió), #155 (foto del
+  vehículo), #154 (vueltas/designación API; conflicto en `cargar-linea-16.ts` resuelto: base =
+  `ida + regreso + salomon`, variante "Vía Molinos" = `conector + ramal + bajada`), #157 (web).
+- **Abiertos:** #159 `feat(api,mobile)` aviso de designación a Molinos (F1-mobile; incluye `rol` en el
+  paquete del día y el orden efectivo de PCs). Fix 2 polilínea azul (`feat/mobile-polilinea-navegacion`,
+  worktree `fix2-polilinea`, encima de #159). Decisiones y limitaciones en `docs/plan-molinos-designacion.md`.
+- **Oks del CTO (2026-10-14):** deploy API+web a prod cuando #159 y Fix 2 estén mergeados;
+  `cargar-linea-16.ts --apply` (separación base/variante); build del APK tras pasarle el changelog.
+- **Piloto con 3 trufis (pedido del CTO), APLICADO en prod 2026-10-14 07:55:** 2 vehículos/choferes más (`1616PIB` Bravo, `1616PIC` Charlie, 13 asignaciones c/u del 14 al 26/10; rotación `piloto-linea-16` anulada→ampliada→publicada, 40 asignaciones) con
+  `crear-piloto-linea-16.ts`; PINs en `~/.quivo-piloto16-creds`. Si el APK nuevo se demora, el piloto
+  corre con el **APK anterior**. Con ese APK, dos reglas (CTO, 2026-10-14):
+  1. **La designación a Molinos no le llega al chofer** (el APK viejo no tiene el aviso): se designa en
+     `/en-vivo` y se le avisa por teléfono/radio.
+  2. **NO correr `cargar-linea-16.ts --apply` (separación base/variante) mientras se use el APK viejo.**
+     El APK viejo ordena los PCs por `orden` (SR 0, Molinos 1, Honduras 2): hoy la base pasa por
+     Molinos y no se nota; si Molinos sale de la base, el APK viejo manda al chofer a un punto fuera de
+     la ruta y lo marca omitido. El `--apply` va recién con el APK nuevo instalado en los 3 trufis.
+
 ## Punto de retome — 2026-10-14, 05:50 (leer primero): trazado de la línea 16 aplicado en prod; #158 abierto
 
 Plan: [`docs/plan-trazado-linea-16.md`](plan-trazado-linea-16.md). Pedido del CTO 02:15 (bloquea el
