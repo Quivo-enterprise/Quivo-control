@@ -96,13 +96,19 @@ function puntoEnDistancia(coords: Coord[], acumulado: number[], s: number): Coor
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 }
 
+/** Longitud de arco acumulada (m) en cada vértice: `[0, d01, d01+d12, …]`. */
+function acumuladoDe(coords: Coord[]): number[] {
+  const acumulado = [0];
+  for (let i = 1; i < coords.length; i++) acumulado.push(acumulado[i - 1]! + distanciaM(coords[i - 1]!, coords[i]!));
+  return acumulado;
+}
+
 /**
  * Tramo de la polilínea entre las abscisas `desde` y `hasta` (m de arco, acotadas a [0, total]):
  * puntos interpolados en los extremos y los vértices intermedios.
  */
 export function cortarPolilinea(coords: Coord[], desde: number, hasta: number): Coord[] {
-  const acumulado = [0];
-  for (let i = 1; i < coords.length; i++) acumulado.push(acumulado[i - 1]! + distanciaM(coords[i - 1]!, coords[i]!));
+  const acumulado = acumuladoDe(coords);
   const total = acumulado[acumulado.length - 1]!;
   const a = Math.max(0, Math.min(desde, hasta));
   const b = Math.min(total, Math.max(desde, hasta));
@@ -122,8 +128,7 @@ export interface PuntoEnPolilinea { coord: Coord; abscisaM: number }
  */
 export function puntosCadaN(coords: Coord[], pasoM: number): PuntoEnPolilinea[] {
   if (!(pasoM > 0)) throw new Error('puntosCadaN: pasoM debe ser > 0.');
-  const acumulado = [0];
-  for (let i = 1; i < coords.length; i++) acumulado.push(acumulado[i - 1]! + distanciaM(coords[i - 1]!, coords[i]!));
+  const acumulado = acumuladoDe(coords);
   const total = acumulado[acumulado.length - 1]!;
   const res: PuntoEnPolilinea[] = [];
   for (let k = 1; k * pasoM < total; k++) res.push({ coord: puntoEnDistancia(coords, acumulado, k * pasoM), abscisaM: k * pasoM });
@@ -164,47 +169,43 @@ export function abscisaEnPolilinea(coords: Coord[], punto: Coord, desdeM = 0, ha
 
 export interface OpcionesIntermedios {
   pasoM: number;
-  /** PC ya existentes (SR, Honduras, Molinos): se descartan candidatos a < `minPcM` (recta) de ellos. */
-  existentes: Coord[];
+  /** PC ya existentes (SR, Honduras, Molinos) y las fases en que están activos: se descartan candidatos a < `minPcM` (recta) de los activos en SU fase. */
+  existentes: { coord: Coord; fase: FasePc | 'ambas' }[];
   minPcM: number;
-  minFinM: number;
   minEntreM: number;
   /** Abscisa de Honduras sobre la geometría: separa las fases (abscisa < esta ⇒ `ida`; si no ⇒ `regreso`). */
   sHonduras: number;
 }
 export type FasePc = 'ida' | 'regreso';
-export interface IntermedioPlanificado { coord: Coord; abscisaM: number; distGeomM: number; fase: FasePc }
+export interface IntermedioPlanificado { coord: Coord; abscisaM: number; fase: FasePc }
 export interface ResultadoIntermedios {
   puntos: IntermedioPlanificado[];
   omitidosCercaPc: number;
-  omitidosCercaFin: number;
   omitidosCercaIntermedio: number;
 }
 
 /**
  * PC intermedios cada `pasoM` sobre la geometría base (pura, determinista). Cada candidato recibe una fase
- * (`ida` si su abscisa < `sHonduras`, si no `regreso`). Descartes, en este orden: cerca de un PC existente,
- * cerca del fin, y a < `minEntreM` de otro intermedio ya elegido DE LA MISMA FASE (ida y regreso comparten
+ * (`ida` si su abscisa < `sHonduras`, si no `regreso`). Descartes, en este orden: cerca de un PC existente
+ * activo en su fase (el fin del circuito es SR, ya cubierto), y a < `minEntreM` de otro intermedio ya elegido DE LA MISMA FASE (ida y regreso comparten
  * calles: un PC de ida y uno de regreso pueden quedar juntos; la app los separa por fase).
  */
 export function planificarIntermedios(geometria: Coord[], o: OpcionesIntermedios): ResultadoIntermedios {
-  const fin = geometria[geometria.length - 1]!;
-  const res: ResultadoIntermedios = { puntos: [], omitidosCercaPc: 0, omitidosCercaFin: 0, omitidosCercaIntermedio: 0 };
+  const res: ResultadoIntermedios = { puntos: [], omitidosCercaPc: 0, omitidosCercaIntermedio: 0 };
   for (const c of puntosCadaN(geometria, o.pasoM)) {
-    if (o.existentes.some((e) => distanciaM(e, c.coord) < o.minPcM)) { res.omitidosCercaPc++; continue; }
-    if (distanciaM(fin, c.coord) < o.minFinM) { res.omitidosCercaFin++; continue; }
     const fase: FasePc = c.abscisaM < o.sHonduras ? 'ida' : 'regreso';
+    if (o.existentes.some((e) => (e.fase === 'ambas' || e.fase === fase) && distanciaM(e.coord, c.coord) < o.minPcM)) { res.omitidosCercaPc++; continue; }
     if (res.puntos.some((q) => q.fase === fase && distanciaM(q.coord, c.coord) < o.minEntreM)) { res.omitidosCercaIntermedio++; continue; }
-    res.puntos.push({ coord: c.coord, abscisaM: c.abscisaM, distGeomM: distanciaAPolilineaM(c.coord, geometria), fase });
+    res.puntos.push({ coord: c.coord, abscisaM: c.abscisaM, fase });
   }
   return res;
 }
 
-/** `orden` = orden de marcha: ordena por abscisa (estable) y numera de `paso` en `paso` (por defecto consecutivo: 0, 1, 2…). */
-export function ordenesDeMarcha(abscisas: number[], paso = 1): number[] {
+/** `orden` = orden de marcha: ordena por abscisa (estable) y numera consecutivo (0, 1, 2…). */
+export function ordenesDeMarcha(abscisas: number[]): number[] {
   const idx = abscisas.map((_, i) => i).sort((a, b) => abscisas[a]! - abscisas[b]! || a - b);
   const res = new Array<number>(abscisas.length);
-  idx.forEach((i, k) => { res[i] = k * paso; });
+  idx.forEach((i, k) => { res[i] = k; });
   return res;
 }
 
@@ -232,6 +233,7 @@ export function emparejarPuntosControl(
   });
   planeados.forEach((p, planIdx) => {
     if (p.rol !== null) return;
+    // shortcut: los PC sin rol se emparejan por orden; si se re-traza la ruta y cambia la posición de los intermedios, un id puede heredar el historial de otro km — emparejar por cercanía antes de re-trazar.
     const c = existentes.map((e, i) => ({ e, i })).filter(({ e, i }) => !e.rol && !usados.has(i) && e.orden === p.orden);
     if (c.length > 1) throw new Error(`Hay ${c.length} PC activos sin rol con orden ${p.orden} en la ruta; resolver a mano.`);
     if (c[0]) usados.add(c[0].i);
@@ -272,8 +274,7 @@ function giroAcumulado(coords: Coord[], acumulado: number[], desde: number, hast
 export function remuestrear(coords: Coord[], pasoM: number = ESPACIADO_MUESTRAS_M, ventanaRumboM: number = VENTANA_RUMBO_M, giroSinRumboGrados: number = GIRO_SIN_RUMBO_GRADOS): Muestra[] {
   if (coords.length < 2) throw new Error('remuestrear: hacen falta al menos 2 puntos.');
   if (!(pasoM > 0)) throw new Error('remuestrear: pasoM debe ser > 0.');
-  const acumulado = [0];
-  for (let i = 1; i < coords.length; i++) acumulado.push(acumulado[i - 1]! + distanciaM(coords[i - 1]!, coords[i]!));
+  const acumulado = acumuladoDe(coords);
   const total = acumulado[acumulado.length - 1]!;
   if (!(total > 0)) throw new Error('remuestrear: la polilínea tiene longitud 0.');
   const distancias = [0];
@@ -453,8 +454,7 @@ export async function calcularRutaGoogle(req: RequestRuta, apiKey: string): Prom
  * (p. ej. el retorno en Honduras) es legítimo y no se toca.
  */
 export function primerEspolon(trazado: Coord[], boceto?: Coord[], arcoMinM = 100, toleranciaM = 10, alejamientoMinM = 80): Coord | null {
-  const acumulado = [0];
-  for (let i = 1; i < trazado.length; i++) acumulado.push(acumulado[i - 1]! + distanciaM(trazado[i - 1]!, trazado[i]!));
+  const acumulado = acumuladoDe(trazado);
   for (let i = 0; i < trazado.length; i++) {
     for (let j = i + 1; j < trazado.length; j++) {
       if (acumulado[j]! - acumulado[i]! <= arcoMinM) continue;
