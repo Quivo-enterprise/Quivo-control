@@ -76,7 +76,12 @@ describe('detección de infracciones (PR A)', () => {
   let sesionMismoLote: string;
   let sesionVentana: string;
   let sesionTolerancia: string;
+  let sesionIntermedio: string;
+  let sesionRol: string;
+  let sesionInactivo: string;
   let pc: Record<'1' | '2' | '3' | '4' | '5', string>;
+  let pcRetorno: string;
+  let pcRetornoInactivo: string;
   let reglaAId: string;
   let reglaBId: string;
 
@@ -122,6 +127,16 @@ describe('detección de infracciones (PR A)', () => {
           VALUES (${pc[k]}, ${rutaId}, ${Number(k)}, ST_SetSRID(ST_GeomFromGeoJSON(${pcCoord(lons[k])}), 4326)::geography,
                   30, ${k !== '5'}, now(), now())`;
       }
+      // Fuera de los 5 de arriba (todos obligatorios salvo el 5): un PC con rol (no obligatorio) y
+      // uno con rol pero inactivo, para el filtro de `cumplimientoDisparaPcOmitido` en vivo.
+      pcRetorno = randomUUID();
+      pcRetornoInactivo = randomUUID();
+      await tx.$executeRaw`
+        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, rol, estado, "createdAt", "updatedAt")
+        VALUES (${pcRetorno}, ${rutaId}, 6, ST_SetSRID(ST_GeomFromGeoJSON(${pcCoord(-63.1705)}), 4326)::geography,
+                30, false, 'retorno', 'activo', now(), now()),
+               (${pcRetornoInactivo}, ${rutaId}, 7, ST_SetSRID(ST_GeomFromGeoJSON(${pcCoord(-63.1702)}), 4326)::geography,
+                30, false, 'retorno', 'inactivo', now(), now())`;
       const vehiculo = await tx.vehiculo.create({
         data: {
           sindicatoId: sindicatoA,
@@ -191,6 +206,9 @@ describe('detección de infracciones (PR A)', () => {
       sesionMismoLote = await crearSesion();
       sesionVentana = await crearSesion();
       sesionTolerancia = await crearSesion();
+      sesionIntermedio = await crearSesion();
+      sesionRol = await crearSesion();
+      sesionInactivo = await crearSesion();
       reglaAId = (
         await tx.regla.create({
           data: { sindicatoId: sindicatoA, nombre: 'Sanción genérica', tipo: 'operativo', gravedad: 'grave', aplicaA: 'conductor' },
@@ -217,6 +235,9 @@ describe('detección de infracciones (PR A)', () => {
         sesionMismoLote,
         sesionVentana,
         sesionTolerancia,
+        sesionIntermedio,
+        sesionRol,
+        sesionInactivo,
       ];
       await tx.sancion.deleteMany({ where: { sindicatoId: ids } });
       await tx.infraccion.deleteMany({ where: { sindicatoId: ids } });
@@ -528,6 +549,36 @@ describe('detección de infracciones (PR A)', () => {
       // (fuera de ventana) no dispara detección alguna.
       expect(omitidos.map((o) => o.pc)).toEqual([pc['2']]);
       expect(omitidos[0]!.key.endsWith(`:${iso(1000)}`)).toBe(true);
+    });
+  });
+
+  describe('PC omitido: qué cumplimientos disparan la detección en vivo', () => {
+    const omitidosDe = async (sesionId: string) =>
+      (await infraccionesDe(sesionId)).filter((i) => i.tipo === 'pc_omitido');
+
+    it('un intermedio (sin rol, no obligatorio) cumplido tras obligatorios sin visitar no abre omisiones', async () => {
+      await lote(sindicatoA, [
+        evento('inicio_recorrido', iso(0), { sesionId: sesionIntermedio }),
+        cumplimiento(sesionIntermedio, pc['5'], -63.171, 100),
+      ]);
+      expect(await omitidosDe(sesionIntermedio)).toHaveLength(0);
+    });
+
+    it('un PC con rol (no obligatorio) sí dispara: los 4 obligatorios anteriores quedan omitidos', async () => {
+      await lote(sindicatoA, [
+        evento('inicio_recorrido', iso(0), { sesionId: sesionRol }),
+        cumplimiento(sesionRol, pcRetorno, -63.1705, 100),
+      ]);
+      const ids = (await omitidosDe(sesionRol)).map((f) => (f.detalle as { puntoControlId: string }).puntoControlId);
+      expect(ids.sort()).toEqual([pc['1'], pc['2'], pc['3'], pc['4']].sort());
+    });
+
+    it('un PC con rol pero inactivo no dispara', async () => {
+      await lote(sindicatoA, [
+        evento('inicio_recorrido', iso(0), { sesionId: sesionInactivo }),
+        cumplimiento(sesionInactivo, pcRetornoInactivo, -63.1702, 100),
+      ]);
+      expect(await omitidosDe(sesionInactivo)).toHaveLength(0);
     });
   });
 

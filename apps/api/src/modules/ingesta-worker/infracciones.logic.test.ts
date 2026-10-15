@@ -233,20 +233,24 @@ describe('PC intermedios y pc_omitido en vivo', () => {
   const molinos = pc('molinos', 10);
 
   it('un intermedio (rol null, no obligatorio) no dispara la omisión en vivo', () => {
-    expect(cumplimientoDisparaPcOmitido({ rol: null, obligatorio: false })).toBe(false);
+    expect(cumplimientoDisparaPcOmitido({ rol: null, obligatorio: false, estado: 'activo' })).toBe(false);
   });
 
   it('Molinos (rol espera, no obligatorio) sí dispara y Honduras queda omitido', () => {
-    expect(cumplimientoDisparaPcOmitido({ rol: 'espera', obligatorio: false })).toBe(true);
+    expect(cumplimientoDisparaPcOmitido({ rol: 'espera', obligatorio: false, estado: 'activo' })).toBe(true);
     expect(
       seleccionarPcOmitidos([honduras, intermedio, molinos], new Set(), molinos.orden, 'molinos').map((p) => p.id),
     ).toEqual(['honduras']);
   });
 
   it('un PC con rol o un obligatorio sin rol disparan', () => {
-    expect(cumplimientoDisparaPcOmitido({ rol: 'terminal', obligatorio: true })).toBe(true);
-    expect(cumplimientoDisparaPcOmitido({ rol: 'retorno', obligatorio: true })).toBe(true);
-    expect(cumplimientoDisparaPcOmitido({ rol: null, obligatorio: true })).toBe(true);
+    expect(cumplimientoDisparaPcOmitido({ rol: 'terminal', obligatorio: true, estado: 'activo' })).toBe(true);
+    expect(cumplimientoDisparaPcOmitido({ rol: 'retorno', obligatorio: true, estado: 'activo' })).toBe(true);
+    expect(cumplimientoDisparaPcOmitido({ rol: null, obligatorio: true, estado: 'activo' })).toBe(true);
+  });
+
+  it('un PC inactivo no dispara aunque tenga rol u obligatorio', () => {
+    expect(cumplimientoDisparaPcOmitido({ rol: 'espera', obligatorio: true, estado: 'inactivo' })).toBe(false);
   });
 
   it('fin_recorrido: Honduras sigue omitido si solo se cumplieron intermedios', () => {
