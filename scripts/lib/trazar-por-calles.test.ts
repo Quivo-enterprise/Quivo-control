@@ -22,8 +22,14 @@ import {
   paresDeZona,
   type HuecoSinCalle,
   distanciaM,
+  distanciaAPolilineaM,
   longitudM,
   primerEspolon,
+  puntosCadaN,
+  abscisaEnPolilinea,
+  planificarIntermedios,
+  ordenesDeMarcha,
+  emparejarPuntosControl,
   remuestrear,
   rumboInicial,
   trocear,
@@ -428,4 +434,110 @@ test('localizarProblemas: un rulo dentro de una zona excluida (que después se r
   const trazado: Coord[] = [en(0, 0), en(200, 0), en(200, -80), en(300, -80), en(300, 0), en(600, 0)];
   assert.equal(localizarProblemas(trazado, boceto, 0, [{ desde: 150, hasta: 350 }]).length, 0);
   assert.equal(localizarProblemas(trazado, boceto, 0, [{ desde: 400, hasta: 600 }]).length, 1);
+});
+
+test('puntosCadaN: cada 2 km sobre una polilínea quebrada, sobre la geometría y sin extremos', () => {
+  const linea: Coord[] = [en(0, 0), en(3000, 0), en(3000, 2500)];
+  const pts = puntosCadaN(linea, 2000);
+  assert.deepEqual(pts.map((p) => p.abscisaM), [2000, 4000]);
+  assert.ok(distanciaM(pts[0]!.coord, en(2000, 0)) < 10);
+  assert.ok(distanciaM(pts[1]!.coord, en(3000, 1000)) < 10);
+  for (const p of pts) assert.ok(distanciaAPolilineaM(p.coord, linea) < 0.01);
+  // polilínea más corta que el paso: ninguno.
+  assert.equal(puntosCadaN([en(0, 0), en(1500, 0)], 2000).length, 0);
+  assert.throws(() => puntosCadaN(linea, 0));
+});
+
+test('abscisaEnPolilinea: elige la pasada con desdeM cuando la polilínea vuelve por la misma calle', () => {
+  const linea: Coord[] = [en(0, 0), en(1000, 0), en(1000, 500), en(0, 500), en(0, 20)];
+  const p = en(500, 5);
+  const a = abscisaEnPolilinea(linea, p);
+  assert.ok(Math.abs(a.abscisaM - 500) < 5 && a.distM < 6);
+  const q = en(500, 495);
+  const b = abscisaEnPolilinea(linea, q, 1200);
+  assert.ok(Math.abs(b.abscisaM - 2000) < 5);
+  assert.throws(() => abscisaEnPolilinea(linea, p, 99999));
+});
+
+test('abscisaEnPolilinea: la distancia es al punto acotado a la ventana, no a la proyección libre', () => {
+  const linea: Coord[] = [[0, 0], [0.01, 0]];
+  const largo = distanciaM(linea[0]!, linea[1]!);
+  const r = abscisaEnPolilinea(linea, [0, 0], largo / 2);
+  assert.ok(Math.abs(r.abscisaM - largo / 2) < 0.01);
+  assert.ok(Math.abs(r.distM - largo / 2) < 1, `distM=${r.distM}`);
+  // hastaM también acota
+  const r2 = abscisaEnPolilinea(linea, [0.01, 0], 0, largo / 4);
+  assert.ok(Math.abs(r2.distM - (3 * largo) / 4) < 1);
+  // segmento de largo 0 no revienta
+  assert.equal(abscisaEnPolilinea([[0, 0], [0, 0]], [0, 0]).distM, 0);
+});
+
+test('ordenesDeMarcha: consecutivos (paso 1) por abscisa creciente, estable; paso configurable', () => {
+  assert.deepEqual(ordenesDeMarcha([0, 9000, 3000, 3000]), [0, 3, 1, 2]);
+  assert.deepEqual(ordenesDeMarcha([0, 9000, 3000, 3000], 10), [0, 30, 10, 20]);
+});
+
+test('planificarIntermedios: fase por abscisa; descarta cercanos a PC/fin; 300 m solo dentro de la misma fase; sin guarda pre-Honduras', () => {
+  // ida 0→10 km por x, regreso vuelve por la misma calle (desplazada 100 m) hasta x=0, +3 km de cola.
+  const linea: Coord[] = [en(0, 0), en(10000, 0), en(10000, 100), en(0, 100), en(0, 3000)];
+  const r = planificarIntermedios(linea, {
+    pasoM: 2000, existentes: [en(0, 0)], minPcM: 500, minFinM: 500, minEntreM: 300, sHonduras: 10000,
+  });
+  const km = r.puntos.map((p) => p.abscisaM / 1000);
+  // ida (abscisa < 10 km): 2,4,6,8 (10 km == sHonduras cuenta como regreso)
+  assert.deepEqual(r.puntos.filter((p) => p.fase === 'ida').map((p) => p.abscisaM / 1000), [2, 4, 6, 8]);
+  // regreso: 10, 12, 14, 16, 18 (sobre la misma calle que la ida, a 100 m: AHORA se conservan) y la cola (22, 24 km...)
+  assert.deepEqual(km.filter((k) => k >= 10 && k <= 18), [10, 12, 14, 16, 18]);
+  for (const p of r.puntos) assert.equal(p.fase, p.abscisaM < 10000 ? 'ida' : 'regreso');
+  // un PC de ida y uno de regreso en la misma calle (a ~100 m) coexisten
+  const ida4 = r.puntos.find((p) => p.fase === 'ida' && p.abscisaM === 8000)!;
+  const reg12 = r.puntos.find((p) => p.fase === 'regreso' && p.abscisaM === 12000)!;
+  assert.ok(distanciaM(ida4.coord, reg12.coord) < 5000);
+  // no queda rastro de la guarda eliminada
+  assert.equal('omitidosCercaPreHonduras' in r, false);
+});
+
+test('planificarIntermedios: dedupe de 300 m solo dentro de la misma fase; cruzada se conserva', () => {
+  // línea corta que va y vuelve sobre la misma calle: pasoM 400 → candidatos cada 400 m; minEntreM 1000.
+  const linea: Coord[] = [en(0, 0), en(3000, 0), en(0, 50)];
+  const mismaFase = planificarIntermedios(linea, { pasoM: 400, existentes: [], minPcM: 0, minFinM: 0, minEntreM: 1000, sHonduras: 1e9 });
+  // todo es ida: el filtro de 1000 m deja uno cada >= 1000 m
+  for (let i = 1; i < mismaFase.puntos.length; i++) {
+    assert.ok(mismaFase.puntos.slice(0, i).every((q) => distanciaM(q.coord, mismaFase.puntos[i]!.coord) >= 1000));
+  }
+  assert.ok(mismaFase.omitidosCercaIntermedio > 0);
+  assert.ok(mismaFase.puntos.every((p) => p.fase === 'ida'));
+  // con Honduras en el vértice de giro (3000 m) ida y regreso se separan: hay más puntos y hay pares ida/regreso a < 1000 m
+  const conFases = planificarIntermedios(linea, { pasoM: 400, existentes: [], minPcM: 0, minFinM: 0, minEntreM: 1000, sHonduras: 3000 });
+  assert.ok(conFases.puntos.length > mismaFase.puntos.length);
+  const pares = conFases.puntos.filter((a) => a.fase === 'ida').some((a) => conFases.puntos.some((b) => b.fase === 'regreso' && distanciaM(a.coord, b.coord) < 1000));
+  assert.ok(pares);
+  // dentro de cada fase, sigue la separación mínima
+  for (const fase of ['ida', 'regreso'] as const) {
+    const ps = conFases.puntos.filter((p) => p.fase === fase);
+    for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) assert.ok(distanciaM(ps[i]!.coord, ps[j]!.coord) >= 1000);
+  }
+});
+
+test('emparejarPuntosControl: roled por rol (aunque su orden difiera), intermedios por orden, sin colisiones', () => {
+  const plan = [
+    { orden: 0, rol: 'terminal' as const }, { orden: 10, rol: null }, { orden: 20, rol: 'retorno' as const }, { orden: 1, rol: null }, { orden: 30, rol: 'espera' as const },
+  ];
+  // prod actual: SR 0, Molinos 1, Honduras 2. Un intermedio planeado en orden 1 NO debe tomar a Molinos (roled).
+  const ex = [{ orden: 0, rol: 'terminal' }, { orden: 1, rol: 'espera' }, { orden: 2, rol: 'retorno' }];
+  const m = emparejarPuntosControl(ex, plan);
+  assert.deepEqual(m.map((e) => e.existenteIdx), [0, null, 2, null, 1]);
+  // ambiguo: dos con el mismo rol
+  assert.throws(() => emparejarPuntosControl([...ex, { orden: 5, rol: 'retorno' }], plan), /rol "retorno"/);
+  // inesperado: sin rol y orden no planeado
+  assert.throws(() => emparejarPuntosControl([...ex, { orden: 7, rol: null }], plan), /no previstos/);
+  // inesperado: rol no planeado
+  assert.throws(() => emparejarPuntosControl([...ex, { orden: 9, rol: 'otro' }], plan), /no previstos/);
+  // transición real: prod SR 0, Molinos 1, Honduras 2 → plan con intermedios en orden 1 y 2 (más Honduras/Molinos en su sitio)
+  const plan2 = [
+    { orden: 0, rol: 'terminal' as const }, { orden: 1, rol: null }, { orden: 2, rol: null }, { orden: 3, rol: 'retorno' as const }, { orden: 4, rol: 'espera' as const },
+  ];
+  assert.deepEqual(emparejarPuntosControl(ex, plan2).map((e) => e.existenteIdx), [0, null, null, 2, 1]);
+  // intermedio existente por orden
+  assert.deepEqual(emparejarPuntosControl([...ex, { orden: 10, rol: null }], plan).map((e) => e.existenteIdx), [0, 3, 2, null, 1]);
 });

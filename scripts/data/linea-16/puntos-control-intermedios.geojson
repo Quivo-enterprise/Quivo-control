@@ -1,0 +1,328 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 0,
+    "tipo": "SR",
+    "km": 0,
+    "nombre": "Salomón Romero",
+    "rol": "terminal",
+    "obligatorio": false,
+    "fase": "ambas"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.2280812,
+     -17.3173451
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 1,
+    "tipo": "intermedio",
+    "km": 2,
+    "nombre": "Control km 2",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "ida"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.2182922,
+     -17.3262767
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 2,
+    "tipo": "intermedio",
+    "km": 4,
+    "nombre": "Control km 4",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "ida"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.2120707,
+     -17.3387537
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 3,
+    "tipo": "intermedio",
+    "km": 6,
+    "nombre": "Control km 6",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "ida"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1968165,
+     -17.3456753
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 4,
+    "tipo": "intermedio",
+    "km": 8,
+    "nombre": "Control km 8",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "ida"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1811754,
+     -17.3534454
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 5,
+    "tipo": "intermedio",
+    "km": 10,
+    "nombre": "Control km 10",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "ida"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1661897,
+     -17.3637891
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 6,
+    "tipo": "intermedio",
+    "km": 12,
+    "nombre": "Control km 12",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "ida"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1611276,
+     -17.3779895
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 7,
+    "tipo": "intermedio",
+    "km": 14,
+    "nombre": "Control km 14",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "ida"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1551945,
+     -17.3942052
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 8,
+    "tipo": "Honduras",
+    "km": 14.881,
+    "nombre": "Honduras (RETORNO)",
+    "rol": "retorno",
+    "obligatorio": true,
+    "fase": "retorno"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1532044,
+     -17.4015417
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 9,
+    "tipo": "intermedio",
+    "km": 16,
+    "nombre": "Control km 16",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "regreso"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1581808,
+     -17.3963929
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 10,
+    "tipo": "intermedio",
+    "km": 18,
+    "nombre": "Control km 18",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "regreso"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1600278,
+     -17.3807644
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 11,
+    "tipo": "intermedio",
+    "km": 20,
+    "nombre": "Control km 20",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "regreso"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1634533,
+     -17.3646222
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 12,
+    "tipo": "intermedio",
+    "km": 22,
+    "nombre": "Control km 22",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "regreso"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.1790764,
+     -17.3551142
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 13,
+    "tipo": "intermedio",
+    "km": 24,
+    "nombre": "Control km 24",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "regreso"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.194652,
+     -17.3467359
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 14,
+    "tipo": "intermedio",
+    "km": 26,
+    "nombre": "Control km 26",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "regreso"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.2106861,
+     -17.3378055
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 15,
+    "tipo": "Molinos",
+    "km": 26.023,
+    "nombre": "Molinos (Parada Putucu)",
+    "rol": "espera",
+    "obligatorio": false,
+    "fase": "regreso"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.2056484,
+     -17.3289244
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "orden": 16,
+    "tipo": "intermedio",
+    "km": 28,
+    "nombre": "Control km 28",
+    "rol": null,
+    "obligatorio": false,
+    "fase": "regreso"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -66.2178138,
+     -17.327855
+    ]
+   }
+  }
+ ]
+}
