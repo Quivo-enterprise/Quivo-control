@@ -6,41 +6,133 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-15 (leer primero): fase de la vuelta, PC intermedios y camino al APK
+## Punto de retome — 2026-10-15, 18:00 (leer primero): fase de la vuelta, PC intermedios y camino al APK
 
-Plan vigente: [`docs/plan-fase-vuelta-apk.md`](plan-fase-vuelta-apk.md) (pasos, bloqueantes y orden de salida).
+Plan vigente: [`docs/plan-fase-vuelta-apk.md`](plan-fase-vuelta-apk.md) (pasos 1–10, bloqueantes y orden
+de salida). Para retomar: leer esta sección y seguir **"Siguiente, en orden"**.
 
-- **Corrección del CTO (2026-10-15):** el chofer no ve los PC ni el trazado del regreso mientras
-  va de ida, ni al revés. La fase se deriva del orden de marcha: `orden < retorno.orden` es ida y
-  `orden > retorno.orden` es regreso; `terminal` pertenece a las dos. Esto resuelve la doble
-  detección de los intermedios en las calles compartidas.
-- **#160 mergeado** (piloto de 3 trufis, ya aplicado en prod el 14/10).
-- **#159 (F1-mobile) mergeado** (`a943b7a`). `/code-review` medium: 9 hallazgos, 8 aplicados. El
-  #4 se omitió con motivo: `conReintentoSiHandleMuerto` solo reabre el outbox. **Deuda:** reintento
-  propio ante handle zombi para `quivo-paquete-dia.db`.
-- **#161 `fix(api)`:** los PC intermedios (`rol` NULL, no obligatorios) no disparan `pc_omitido`
-  en vivo.
-  - Codex verify-fix: `fixes_root_cause`.
-  - `/code-review`: 10 hallazgos, aplicados. Se acotó a **rutas con PC `retorno`**: en la 120 y
-    la Z12 (PC opcionales sin rol) el comportamiento no cambia.
-  - Verify-fix de la versión final: **no verificado** (cuota de Codex agotada hasta las 21:41,
-    exit 3). No mergear antes de re-correrlo.
-  - **Tradeoff aceptado:** saltarse Honduras se detecta en `fin_recorrido` o en Molinos, y el
-    worker no cuenta una vuelta sin `retorno`.
-  - **F2:** comparación por fase en el servidor.
-- **PC intermedios por fase:** sin commitear en `feat/linea-16-puntos-control-intermedios`.
-  - 17 PC: SR, km 2–14 de ida, Honduras 8, km 16–26 de regreso, Molinos 15, km 28.
-  - La regla de 300 m solo aplica dentro de cada fase y se quitó la guarda de 250 m antes de
-    Honduras. Tests 47/47.
-  - **No aplicar** hasta que el APK con fases esté instalado en los 3 trufis y la API (#161)
-    desplegada; Codex lo marca en cada revisión.
-  - **Abierto:** km 28 puede quedar salteado en la vuelta vía Molinos si la bajada se reincorpora
-    después.
-- **Fix 2 → #162** (rebaseado sobre `main`, `/code-review` en curso). Fases de la vuelta en
-  `feat/mobile-fase-vuelta`, encima de #162 (subagente).
-- **Siguiente:** merge de #159 → Fix 2 → PR mobile de fases (foreground **y** headless) → PR de
-  intermedios → deploy API+web → changelog al CTO → build del APK → instalación → `--apply`.
-- **Pendiente con el CTO:** #105 (script de asignaciones del 08/10), ¿cerrar?
+**Corrección del CTO (2026-10-15):** el chofer no ve los PC ni el trazado del regreso mientras va de
+ida, ni al revés. La fase sale del orden de marcha:
+- `orden < retorno.orden` es ida (más el propio retorno).
+- `orden > retorno.orden` es regreso.
+- `terminal` pertenece a las dos y `espera` al regreso.
+
+Esto resuelve la doble detección de los intermedios en las calles que comparten ida y regreso.
+
+**Mergeados hoy:**
+
+| PR | Qué |
+|---|---|
+| #160 | Piloto de 3 trufis. |
+| #159 | F1-mobile, aviso de Molinos (`a943b7a`). |
+
+En #159, `/code-review` dio 9 hallazgos y se aplicaron 8. El #4 quedó fuera con motivo:
+`conReintentoSiHandleMuerto` solo reabre el outbox. **Deuda:** un reintento propio ante handle zombi
+para `quivo-paquete-dia.db`.
+
+**Abiertos o en rama:**
+
+- **#161 `fix(api)`, rama `fix/pc-omitido-intermedios` (`50886f5`):** en rutas con un PC `retorno`
+  activo (hoy solo la L16), los PC opcionales sin rol no disparan `pc_omitido` en vivo, y un PC
+  inactivo no dispara en ninguna ruta.
+  - La 120 y la Z12 no cambian.
+  - `ci` y `acceptance` en verde.
+  - Tests de `ingesta-worker` 236/236, con integración contra un postgis temporal.
+  - `/code-review` aplicado.
+  - Codex verify-fix: la versión inicial dio `fixes_root_cause`; la **final quedó NO verificada**
+    (cuota agotada hasta las 21:41 del 15/10, exit 3).
+  - **Antes del merge**, re-correr desde el worktree `.claude/worktrees/agent-a42e38482eac5894b`:
+    `~/.claude/skills/codex-debug/scripts/codex-debug.sh verify-fix --dir .claude/worktrees/agent-a42e38482eac5894b --base origin/main --timeout 900 --symptom "..."`
+  - **Tradeoff aceptado:** en la L16, saltarse Honduras se detecta en Molinos o en `fin_recorrido`,
+    y el worker de vueltas no cuenta una vuelta sin `retorno`.
+  - **F2:** comparación por fase en el servidor. También en F2, los cumplimientos de la fase
+    equivocada quedan en la base sin generar infracción.
+- **#162 `feat(mobile)`, polilínea azul (Fix 2), MERGEADO (`d4cd6f0`):**
+  - Está rebaseada sobre `main`.
+  - `/code-review`: 7 hallazgos, todos aplicados (`5651967`): tramo OSRM discontinuo con borde,
+    zoom publicado al terminar la animación, `emisor-zoom` y `PolylineConBorde`.
+  - Tests mobile 934/934.
+  - Estado del merge: ver la línea "#162" al final de esta sección.
+- **Fases de la vuelta, rama `feat/mobile-fase-vuelta` (`93aebeb`), worktree `.claude/worktrees/fase-vuelta`:**
+  sin PR y **sin review**. Está construida sobre `4dbe6a5`, la versión de #162 anterior a sus fixes:
+  **hay que rebasearla sobre `main`** después del merge de #162. Habrá conflictos probables en
+  `route-map.tsx`, porque #162 movió el zoom a `emisor-zoom` y extrajo `PolylineConBorde`.
+  - **Tests:** mobile 956/956 y shared 135/135, con 6 tests nuevos de `partirCircuitoPorRetorno`
+    en `packages/shared/src/circuito.ts`.
+  - **Dónde se decide la fase:** en `puntosDeLaFaseActual`, dentro de `registrarPuntoGpsInterno`
+    (`headless-task.ts`). Es un punto único para foreground y headless. Si falla, se detectan
+    todos los PC y se reporta a Sentry.
+  - **Persistencia:** la fase y `fixesRegreso` viven en la fila `progreso_vuelta`, con el mismo
+    CAS. Los campos son opcionales: en filas viejas, ausente equivale a ida.
+  - **Fallback si el GPS no detecta Honduras:** 3 fixes seguidos a más de 60 m de la mitad de ida
+    y a menos de 30 m de la de regreso pasan la fase a regreso (constantes en `fase-vuelta.ts`).
+  - **Anclaje de la vuelta:** se ancla en `terminal`. Sin rol `terminal`, se usa el PC de menor
+    `orden`.
+  - **Molinos:** va en su `orden` si es mayor que el de Honduras; si no, justo después de Honduras.
+  - **Numeración "PC N de M":** sobre el orden completo.
+  - **Rutas sin retorno (120 y Z12):** comportamiento idéntico al de hoy.
+  - **A revisar en la review:**
+    - antes de iniciar, el mapa muestra solo la mitad de ida;
+    - el tramo OSRM no se filtra por fase;
+    - si el fallback cambia a regreso, Honduras no queda omitido en la app (el servidor sí lo
+      marca en `fin_recorrido`).
+- **PC intermedios por fase, rama `feat/linea-16-puntos-control-intermedios` (`4aa0561`):** pusheada,
+  sin PR y **sin review**.
+  - **17 PC:** SR 0, km 2–14 de ida (órdenes 1–7), Honduras 8, km 16–26 de regreso (9–14),
+    Molinos 15 y km 28 (16).
+  - **Reglas de generación:** la de 300 m aplica solo dentro de cada fase, y se quitó la guarda
+    de 250 m previa a Honduras.
+  - **Tests de `scripts/lib`:** 47/47.
+  - **Ya conocidos para la review:**
+    - la cabecera de `scripts/cargar-linea-16.ts` dice que "solo `fin_recorrido` marca Honduras",
+      pero Molinos también la dispara (hallazgo 5 de #161);
+    - "Control km 26" queda pegado a la bifurcación de Molinos;
+    - el km 28 puede quedar salteado en una vuelta vía Molinos si la bajada se reincorpora
+      después (verificarlo con la geometría);
+    - el hook de Codex marca en cada revisión que el plan depende del filtrado por fase: es
+      correcto, y por eso **no se aplica** hasta que esté instalado el APK con fases.
+- **#163:** este handoff y el plan, solo docs.
+
+**Siguiente, en orden:**
+1. Si #162 no quedó mergeado: esperar `ci` y `acceptance` en SUCCESS y mergear.
+2. Rebasear `feat/mobile-fase-vuelta` sobre `main`, con un subagente Sonnet que resuelva los
+   conflictos de `route-map.tsx` contra `emisor-zoom` y `PolylineConBorde`. Después: tests, abrir
+   el PR, `/code-review`, fixes con un subagente nuevo, CI y merge.
+3. Después de las 21:41 del 15/10: Codex verify-fix de #161, y merge si pasa.
+4. PR de los PC intermedios:
+   - `/code-review` y fixes, incluido el de la cabecera.
+   - Dry-run de `cargar-linea-16.ts` contra prod, **sin `--apply`**.
+   - Merge.
+5. Deploy de API + web (`scripts/deploy-gcp.sh`, con el ok del CTO ya dado). Verificar el health,
+   `/mobile/vuelta-actual`, la subida a GCS y los logos.
+6. Breakpoint del APK:
+   - Pasar el changelog al CTO (#150–#162, fases y #161). Según su indicación, no hace falta
+     esperar otra respuesta.
+   - Pre-build:
+     - `eas env:list --environment production` (las tres claves del build);
+     - `pnpm install --frozen-lockfile` limpio;
+     - `eas build:list` para el `versionCode`.
+   - **No subir reanimated a 4.x.**
+   - `eas build --platform android --profile production`.
+7. Instalar en `1616PIL`, `1616PIB` y `1616PIC`. Probar un OTA de humo y después
+   `cargar-linea-16.ts --apply` (ok del CTO ya dado para ese momento). Verificar en el dispositivo:
+   - el cambio de fase en Honduras;
+   - la rotonda;
+   - el aviso de Molinos;
+   - la polilínea a zoom 16–18.
+8. Pendiente con el CTO: #105 (script de asignaciones del 08/10), ¿cerrar?
+
+**Worktrees vivos:**
+
+| Worktree | Rama |
+|---|---|
+| `fase-vuelta` | fases |
+| `agent-a42e38482eac5894b` | #161 |
+| `docs-fase` | #163 |
+
+Borrar cada uno al mergear su PR.
+
+**#162:** mergeado el 15/10 (`d4cd6f0`); worktree `fix2-polilinea` y rama borrados. El paso 1 de "Siguiente" ya está hecho.
 
 ## Punto de retome — 2026-10-14, 08:00 (anterior): F1 en main, F1-mobile y Fix 2 por mergear, piloto de 3 trufis
 
