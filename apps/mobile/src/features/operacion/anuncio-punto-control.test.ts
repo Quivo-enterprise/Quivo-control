@@ -330,6 +330,7 @@ describe('anunciarPuntoControl — orden efectivo y Molinos', () => {
   });
 
   it('con designación activa: Molinos entra tras Honduras y se anuncia como "Punto de control 3"', async () => {
+    limpiarAproximacionesAnunciadas(['molinos']); // descarta el veredicto del test anterior
     designacionMock.valor = { puntoEspera: { id: 'molinos' } };
     await anunciarPuntoControl(
       DB_FALSO,
@@ -356,8 +357,32 @@ describe('anunciarPuntoControl — orden efectivo y Molinos', () => {
     await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
     expect(speakMock).not.toHaveBeenCalled();
     designacionMock.valor = { puntoEspera: { id: 'molinos' } };
-    await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+    // El veredicto negativo se recuerda unos segundos: pasado ese lapso, se relee y se anuncia.
+    const ahora = Date.now();
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(ahora + 5_000);
+    try {
+      await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+    } finally {
+      spy.mockRestore();
+    }
     expect(speakMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('Molinos sin designación: los ticks siguientes dentro de la vigencia no leen SQLite', async () => {
+    const det = deteccion({ puntoControlId: 'molinos', fase: 'aproximacion', distanciaM: 100 });
+    limpiarAproximacionesAnunciadas(['molinos']);
+    const ahora = Date.now();
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(ahora + 60_000); // fuera de cualquier veredicto previo
+    try {
+      await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+      designacionMock.lecturas = 0;
+      await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+      await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(designacionMock.lecturas).toBe(0);
+    expect(speakMock).not.toHaveBeenCalled();
   });
 });
 

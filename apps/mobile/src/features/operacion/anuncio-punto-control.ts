@@ -258,8 +258,16 @@ const aproximacionesAnunciadas = new Set<string>();
  * caso normal, ninguna voz re-armó) es un no-op.
  */
 export function limpiarAproximacionesAnunciadas(puntosControlIds: readonly string[]): void {
-  for (const id of puntosControlIds) aproximacionesAnunciadas.delete(id);
+  for (const id of puntosControlIds) {
+    aproximacionesAnunciadas.delete(id);
+    veredictoEsperaSinDesignacion.delete(id);
+  }
 }
+
+/** Cuánto se recuerda que un PC de espera no tiene designación (solo para el aviso de aproximación;
+ * una designación nueva tarda a lo sumo esto en habilitar la voz de Molinos). */
+const VIGENCIA_VEREDICTO_ESPERA_MS = 3_000;
+const veredictoEsperaSinDesignacion = new Map<string, number>();
 
 export interface AnuncioPuntoControlOpciones {
   sesionId: string;
@@ -285,12 +293,21 @@ export async function anunciarPuntoControl(
 
   // Dedupe primero: el caso normal (ya anunciado) no lee SQLite ni calcula el orden.
   if (aproximacionesAnunciadas.has(deteccion.puntoControlId)) return;
+  // Molinos sin designación se vuelve a detectar en cada tick de aproximación (no entra al set):
+  // el veredicto negativo se recuerda unos segundos para no leer/parsear SQLite en cada uno.
+  const ahoraMs = Date.now();
+  const vigenteHasta = veredictoEsperaSinDesignacion.get(deteccion.puntoControlId);
+  if (vigenteHasta !== undefined && ahoraMs < vigenteHasta) return;
   const { numero, esperaSinDesignacion } = await ubicarEnOrdenEfectivo(
     deteccion.puntoControlId,
     opciones,
   );
   // Molinos sin designación activa no es parte de la ruta: no se anuncia (ni se agrega al set).
-  if (esperaSinDesignacion) return;
+  if (esperaSinDesignacion) {
+    veredictoEsperaSinDesignacion.set(deteccion.puntoControlId, ahoraMs + VIGENCIA_VEREDICTO_ESPERA_MS);
+    return;
+  }
+  veredictoEsperaSinDesignacion.delete(deteccion.puntoControlId);
   // Se vuelve a chequear: otro tick pudo anunciarlo mientras se leía la designación.
   if (aproximacionesAnunciadas.has(deteccion.puntoControlId)) return;
   const identificador = numero !== undefined ? `Punto de control ${numero}` : 'Punto de control';
@@ -398,13 +415,15 @@ async function programarNotificacionLlegada(
   puntoControlId: string,
   motivo: MotivoAnuncio,
   opciones: AnuncioPuntoControlOpciones,
+  ubicacionPrecalculada?: { numero: number | undefined },
 ): Promise<boolean> {
   // VIBRACIÓN SIEMPRE (regla dura del plan, Entrega 7): el canal más robusto porque no depende
   // de audio. Va ANTES de cualquier intento de notificación y fuera de su `try/catch`, para que
   // un fallo de notificación nunca se lleve puesta la vibración.
   Vibration.vibrate(300);
 
-  const { numero } = await ubicarEnOrdenEfectivo(puntoControlId, opciones);
+  // El primer intento ya calculó la ubicación (`anunciarLlegadaPuntoControl`); el reintento no.
+  const { numero } = ubicacionPrecalculada ?? (await ubicarEnOrdenEfectivo(puntoControlId, opciones));
   const identificador = numero !== undefined ? `Punto de control ${numero}` : 'Punto de control';
 
   try {
@@ -467,6 +486,7 @@ async function intentarProgramarNotificacion(
   puntoControlId: string,
   motivo: MotivoAnuncio,
   opciones: AnuncioPuntoControlOpciones,
+  ubicacionPrecalculada?: { numero: number | undefined },
 ): Promise<boolean> {
   try {
     await marcarAnuncioProgramando(db, clave);
@@ -475,7 +495,7 @@ async function intentarProgramarNotificacion(
       tags: { contexto: 'anuncio-punto-control', paso: 'marcar-anuncio-programando' },
     });
   }
-  return programarNotificacionLlegada(db, clave, puntoControlId, motivo, opciones);
+  return programarNotificacionLlegada(db, clave, puntoControlId, motivo, opciones, ubicacionPrecalculada);
 }
 
 /**
@@ -526,7 +546,8 @@ export async function anunciarLlegadaPuntoControl(
 ): Promise<boolean> {
   // PC de espera (Molinos) sin designación activa: no es parte de la ruta, ni vibra ni notifica ni
   // se reclama la intención (no quedaría nada pendiente que reintentar).
-  if ((await ubicarEnOrdenEfectivo(puntoControlId, opciones)).esperaSinDesignacion) return false;
+  const ubicacion = await ubicarEnOrdenEfectivo(puntoControlId, opciones);
+  if (ubicacion.esperaSinDesignacion) return false;
   let reclamado = false;
   let clave = claveAnuncio(opciones.sesionId, puntoControlId, pasada);
   try {
@@ -543,7 +564,7 @@ export async function anunciarLlegadaPuntoControl(
   }
   if (!reclamado) return false;
 
-  return intentarProgramarNotificacion(db, clave, puntoControlId, motivo, opciones);
+  return intentarProgramarNotificacion(db, clave, puntoControlId, motivo, opciones, ubicacion);
 }
 
 /**

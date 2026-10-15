@@ -130,14 +130,19 @@ async function modificar(
   });
 }
 
+type AplicarProgreso = (actual: EstadoProgresoVuelta) => EstadoProgresoVuelta;
+
 function encolar(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
   fecha: string,
-  aplicar: (actual: EstadoProgresoVuelta) => EstadoProgresoVuelta,
+  obtenerAplicar: () => AplicarProgreso | Promise<AplicarProgreso>,
   contextoError: { paso: string; extra: Record<string, unknown> },
 ): Promise<void> {
   const operacion = cola.then(async () => {
+    // `obtenerAplicar` corre DENTRO de la cola: lo que lea (p. ej. la designación) no queda
+    // desfasado respecto de las escrituras anteriores encoladas.
+    const aplicar = await obtenerAplicar();
     const nuevo = await modificar(db, sesionId, fecha, aplicar);
     if (nuevo) for (const oyente of oyentes) oyente(nuevo);
   });
@@ -166,14 +171,16 @@ export async function registrarPasoEnVuelta(
   clave: string,
   puntosControl: readonly PuntoControlPaquete[],
 ): Promise<void> {
-  const designacion = await leerDesignacionOrdenLocal(sesionId);
-  const idsEfectivos = ordenEfectivoPuntos(puntosControl, designacion).map((p) => p.id);
-  const idsEspera = puntosControl.filter((p) => p.rol === 'espera').map((p) => p.id);
   await encolar(
     db,
     sesionId,
     fechaLocal(),
-    (actual) => pasoPunto(actual, { puntoId, clave }, idsEfectivos, idsEspera),
+    async () => {
+      const designacion = await leerDesignacionOrdenLocal(sesionId);
+      const idsEfectivos = ordenEfectivoPuntos(puntosControl, designacion).map((p) => p.id);
+      const idsEspera = puntosControl.filter((p) => p.rol === 'espera').map((p) => p.id);
+      return (actual) => pasoPunto(actual, { puntoId, clave }, idsEfectivos, idsEspera);
+    },
     { paso: 'registrar-paso', extra: { puntoId } },
   );
 }
@@ -184,5 +191,5 @@ export async function registrarPasoEnVuelta(
  */
 export function reiniciarVueltaEnCurso(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
   const { sesionId, fecha } = separarClaveProgreso(clave);
-  return encolar(db, sesionId, fecha, reiniciarVuelta, { paso: 'reiniciar-vuelta', extra: {} });
+  return encolar(db, sesionId, fecha, () => reiniciarVuelta, { paso: 'reiniciar-vuelta', extra: {} });
 }

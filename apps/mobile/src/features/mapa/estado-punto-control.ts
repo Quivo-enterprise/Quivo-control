@@ -1,7 +1,7 @@
 /**
  * Reglas de negocio de los puntos de control en el mapa, extraídas a funciones puras (sin React
  * ni `react-native-maps`) para poder testearlas con `vitest`. El estado de cada punto lo deriva
- * `derivarProgreso` (`operacion/progreso-vuelta.ts`, RF-GPS-054): pasados en cualquier orden,
+ * `ordenEfectivoPuntos` → `derivarProgresoEstaticoEnOrden` → `conProximo` (`operacion/progreso-vuelta.ts`, RF-GPS-054): pasados en cualquier orden,
  * omitidos (rojo), próximo y pendientes.
  */
 

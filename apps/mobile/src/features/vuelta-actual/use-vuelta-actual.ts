@@ -127,15 +127,16 @@ export function useVueltaActual({ sesionId, tracking, obtenerAccessToken }: Para
     return () => clearInterval(id);
   }, [enEspera]);
 
-  // La antigüedad del cache NO anula la designación mientras haya recorrido: el contador, el tramo
-  // y el PC de espera se calculan sin red; solo se marca "sin actualizar".
+  // La antigüedad del cache NO anula la designación mientras haya recorrido: el tramo y el PC de
+  // espera se calculan sin red y se marca "sin actualizar". La cuenta regresiva SÍ se corta con
+  // cache viejo: depende de `enEspera`, que solo el servidor confirma (offline quedaría congelada).
   const designacionActiva = designacionCache;
   const restanteEspera = useMemo(
     () =>
-      tracking && enEspera && designacionActiva
+      tracking && !cacheViejo && enEspera && designacionActiva
         ? restanteEsperaMin(designacionActiva.puntoEspera.esperaMin, enEspera.desdeTs, ahora)
         : null,
-    [tracking, enEspera, designacionActiva, ahora],
+    [tracking, cacheViejo, enEspera, designacionActiva, ahora],
   );
 
   return {

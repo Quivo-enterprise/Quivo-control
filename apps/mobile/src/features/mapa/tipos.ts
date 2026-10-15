@@ -20,7 +20,7 @@ export type InsetsNavegacion = { superior: number; inferior: number };
 export interface RouteMapProps {
   paquete: PaqueteDia;
   vehiculo: ContextoOperativoMovil['vehiculo'];
-  /** Estado de cada punto de control por id (`derivarProgreso`, RF-GPS-054): el mapa pinta
+  /** Estado de cada punto de control por id (`ordenEfectivoPuntos` → `derivarProgresoEstaticoEnOrden` → `conProximo`, RF-GPS-054): el mapa pinta
    * verdes los pasados y rojos los omitidos. */
   estadosPuntosControl: Readonly<Record<string, EstadoPuntoVuelta>>;
   posicionActual: { lat: number; lng: number } | null;

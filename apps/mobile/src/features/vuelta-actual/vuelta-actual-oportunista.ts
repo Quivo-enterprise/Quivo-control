@@ -311,10 +311,15 @@ export async function entenderDesignacion(
   const gen = generacion;
   try {
     const estado = await serializar(async () => {
+      // Misma guarda que `incorporarRespuesta`/`enviarAcuse`: si el recorrido terminó/empezó
+      // (limpiarVueltaActual) antes o durante la lectura, no se reescribe el cache borrado.
+      if (gen !== generacion) return null;
       const nuevo = cerrarDesignacion(await leerEstadoVueltaLocal(sesionId));
+      if (gen !== generacion) return null;
       await guardarEstadoVueltaLocal(sesionId, nuevo);
       return nuevo;
     });
+    if (!estado) return;
     emitir(sesionId, estado);
     const clave = estado.ultimo ? claveDesignacion(estado.ultimo.vueltaId, estado.ultimo.designacion) : null;
     if (clave) await descartarNotificacionAviso(idNotificacionDesignacion(clave));

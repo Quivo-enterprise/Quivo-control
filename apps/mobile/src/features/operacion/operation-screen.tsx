@@ -204,7 +204,7 @@ export function OperationScreen(
   const ordenProximoEfectivo = useMemo(() => {
     if (!proximoPuntoControl) return null;
     const idx = progreso.ordenEfectivo.findIndex((p) => p.id === proximoPuntoControl.id);
-    return idx >= 0 ? idx : proximoPuntoControl.orden;
+    return idx >= 0 ? idx : null;
   }, [proximoPuntoControl, progreso.ordenEfectivo]);
   const estadosPuntosControl = useMemo(
     () =>

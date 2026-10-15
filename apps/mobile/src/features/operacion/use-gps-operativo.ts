@@ -1531,8 +1531,6 @@ export function useGpsOperativo(
       // rechaza (todos sus fallos internos se atrapan y se reportan a Sentry por su cuenta), así
       // que esperar acá no puede hacer fallar `detener()`.
       await serializadorIniciar.esperarPendiente();
-      // Fin del recorrido: invalida consultas en vuelo y borra el cache (fire-and-forget).
-      limpiarVueltaActual(sesionId);
       await BackgroundGeolocation.stop();
       subscription.current?.remove();
       subscription.current = null;
@@ -1556,6 +1554,11 @@ export function useGpsOperativo(
       veredictoPublicable.current = true;
       setTracking(false);
       trackingRef.current = false;
+      // Fin del recorrido: invalida consultas en vuelo y borra el cache (fire-and-forget). Va ACÁ,
+      // con el nativo parado, las suscripciones removidas y `tracking` en false: si se limpiara
+      // antes del `await stop()`, un fix/heartbeat o el intervalo de `useVueltaActual` podría
+      // iniciar una consulta bajo la generación NUEVA y reescribir el cache tras el fin.
+      limpiarVueltaActual(sesionId);
       // QUI-P0: reverso de `reafirmarMovimiento` — restaura `disableStopDetection: false` para
       // que un futuro re-enganche o inspección de estado no encuentre la política "nunca
       // apagar el GPS" activa fuera de un recorrido real (ver docblock en

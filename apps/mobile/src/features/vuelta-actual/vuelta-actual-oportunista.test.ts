@@ -236,6 +236,21 @@ describe('limpiarVueltaActual (generación)', () => {
     expect(mocks.acusar).not.toHaveBeenCalled();
   });
 
+  it('"Entendido" iniciado antes de limpiar no resucita el cache borrado ni manda el acuse', async () => {
+    mocks.obtener.mockResolvedValue(ok(vuelta(true)));
+    await consultarVueltaActual(token, { forzar: true });
+    const emitido = vi.fn();
+    const baja = suscribirEstadoVuelta(emitido);
+    const pendiente = entenderDesignacion(token, SESION);
+    limpiarVueltaActual(SESION); // el recorrido termina antes de que la cola corra el "Entendido"
+    emitido.mockClear();
+    await pendiente;
+    baja();
+    expect(mocks.filas.has(SESION)).toBe(false);
+    expect(emitido).not.toHaveBeenCalled();
+    expect(mocks.acusar).not.toHaveBeenCalled();
+  });
+
   it('limpiar no bloquea: devuelve sincrónico y la DB queda pendiente sin trabar nada', async () => {
     mocks.retenerBorrado = true;
     mocks.filas.set(SESION, ESTADO_LOCAL_INICIAL);
