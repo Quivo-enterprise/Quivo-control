@@ -41,8 +41,6 @@ export interface CircuitoPartido {
   ida: Coord[];
   /** Del punto de corte (incluido) hasta el final de la polilínea. */
   regreso: Coord[];
-  /** Índice del segmento (`geometria[i]→geometria[i+1]`) donde cae el corte. */
-  indiceCorte: number;
 }
 
 /**
@@ -88,5 +86,5 @@ export function partirCircuitoPorRetorno(
   if (haversineMetros(ida[0]!, corte) < 1 || haversineMetros(corte, regreso[regreso.length - 1]!) < 1) {
     return null;
   }
-  return { ida, regreso, indiceCorte: mejorK };
+  return { ida, regreso };
 }

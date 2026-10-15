@@ -24,7 +24,6 @@ describe('partirCircuitoPorRetorno', () => {
     expect(corteIda[0]).toBeCloseTo(0.02, 5);
     expect(r.ida[0]).toEqual([0, 0]);
     expect(r.regreso[r.regreso.length - 1]).toEqual([0, 0]);
-    expect(r.indiceCorte).toBeGreaterThanOrEqual(1);
   });
 
   it('con una polilínea que pasa dos veces cerca del retorno corta en la PRIMERA pasada', () => {
@@ -41,7 +40,7 @@ describe('partirCircuitoPorRetorno', () => {
     expect(r).not.toBeNull();
     // La primera aproximación (segmento 2→3, el que roza el retorno) manda: el corte NO se
     // desplaza al tramo de regreso (4→5), que también pasa a ~11 m.
-    expect(r.indiceCorte).toBe(2);
+    expect(r.ida).toHaveLength(4);
     expect(r.regreso).toHaveLength(4);
   });
 
@@ -52,7 +51,8 @@ describe('partirCircuitoPorRetorno', () => {
     const ida = [m(0, 0), m(100, 0), m(200, 0), m(200, 100), m(100, 100), m(100, 300), m(0, 300)];
     const r = partirCircuitoPorRetorno(ida, m(100, 100))!;
     expect(r).not.toBeNull();
-    expect(r.indiceCorte).toBe(3);
+    expect(r.ida).toHaveLength(5);
+    expect(r.regreso).toHaveLength(4);
     expect(r.ida[r.ida.length - 1]![0]).toBeCloseTo(100 / GRADO_M, 7);
     expect(r.ida[r.ida.length - 1]![1]).toBeCloseTo(100 / GRADO_M, 7);
   });

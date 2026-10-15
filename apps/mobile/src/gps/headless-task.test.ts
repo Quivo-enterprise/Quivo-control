@@ -129,6 +129,7 @@ import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportun
 import { puntosDeLaFaseActual } from '../features/operacion/progreso-vuelta-store';
 import {
   obtenerContextoUbicacionPersistido,
+  confirmarVisitasVencidasEnCola,
   registrarPuntoGps,
   tareaHeadlessUbicacion,
 } from './headless-task';
@@ -1103,5 +1104,28 @@ describe('registrarPuntoGps — fase ida/regreso del circuito', () => {
       expect.any(Error),
       expect.objectContaining({ tags: expect.objectContaining({ paso: 'fase-vuelta' }) }),
     );
+  });
+
+  it('un cambio de fase con una visita pendiente (dentro, sin confirmar) NO pierde el cumplimiento: se confirma por vencimiento', async () => {
+    const honduras: PuntoControlPaquete = { ...pcCerca, id: 'pc-honduras' };
+    const contexto = { deviceId: 'd', sesionId: 's-fase', puntosControl: [honduras, pcLejos] };
+    const estados = { current: new Map() };
+    const mock = vi.mocked(puntosDeLaFaseActual);
+    // Fix 1: Honduras en la lista de la fase → entra al radio (visita pendiente).
+    mock.mockResolvedValueOnce([honduras]);
+    await registrarPuntoGps({} as never, fix, contexto, estados);
+    // Fix 2: el fallback geométrico pasó a otra fase y Honduras ya no está en la lista.
+    mock.mockResolvedValueOnce([pcLejos]);
+    await registrarPuntoGps({} as never, fix, contexto, estados);
+    expect(encolarEventoMock.mock.calls.some(([, e]) => e?.tipo === 'cumplimiento_punto_control')).toBe(false);
+
+    const ts = new Date(fix.timestamp).getTime();
+    await confirmarVisitasVencidasEnCola({} as never, 'd', 's-fase', estados, ts + 10 * 60_000, 90_000, true, contexto.puntosControl);
+
+    const cumplimientos = encolarEventoMock.mock.calls
+      .map(([, e]) => e)
+      .filter((e) => e?.tipo === 'cumplimiento_punto_control');
+    expect(cumplimientos).toHaveLength(1);
+    expect(cumplimientos[0].payload).toMatchObject({ puntoControlId: 'pc-honduras' });
   });
 });
