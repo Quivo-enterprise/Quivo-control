@@ -84,6 +84,8 @@ vi.mock('../features/operacion/drenaje-oportunista', () => ({
 // `progreso-vuelta*.test.ts`.
 vi.mock('../features/operacion/progreso-vuelta-store', () => ({
   registrarPasoEnVuelta: vi.fn().mockResolvedValue(undefined),
+  // Fase del circuito (ida/regreso): sin filtro por defecto, todos los PC se detectan.
+  puntosDeLaFaseActual: vi.fn(async (_db: unknown, _sesionId: string, puntosControl: unknown[]) => puntosControl),
 }));
 
 // ENTREGA 7 (plan post-piloto 2026-09-09, "anuncio desde headless"): `anunciarDeteccionesDelTick`
@@ -124,7 +126,12 @@ import {
   reintentarAnunciosLlegadaPendientes,
 } from '../features/operacion/anuncio-punto-control';
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
-import { obtenerContextoUbicacionPersistido, tareaHeadlessUbicacion } from './headless-task';
+import { puntosDeLaFaseActual } from '../features/operacion/progreso-vuelta-store';
+import {
+  obtenerContextoUbicacionPersistido,
+  registrarPuntoGps,
+  tareaHeadlessUbicacion,
+} from './headless-task';
 
 const cargarSesionMovilMock = cargarSesionMovil as unknown as ReturnType<typeof vi.fn>;
 const hayLogoutSolicitadoMock = hayLogoutSolicitado as unknown as ReturnType<typeof vi.fn>;
@@ -1039,5 +1046,62 @@ describe('registrarPuntoGpsInterno — FIX POST-REVISIÓN (Codex verify-fix, pun
     // La única fila escrita es la del tick 2 (candidato con el `tsFix` del segundo fix, no del
     // primero) — prueba que la operación vieja no alcanzó a pisarla.
     expect(llamadaTick2.candidatoTsFixMs).toBe(Date.parse('2026-09-10T12:00:40.000Z'));
+  });
+});
+
+describe('registrarPuntoGps — fase ida/regreso del circuito', () => {
+  const pcCerca: PuntoControlPaquete = {
+    id: 'pc-otra-fase',
+    orden: 5,
+    coord: { type: 'Point', coordinates: [-63.18, -17.78] },
+    radioToleranciaM: 30,
+    obligatorio: true,
+  };
+  const pcLejos: PuntoControlPaquete = { ...pcCerca, id: 'pc-de-la-fase', coord: { type: 'Point', coordinates: [-63.1, -17.7] } };
+  const fix = {
+    timestamp: '2026-10-14T12:00:00.000Z',
+    coords: { latitude: -17.78, longitude: -63.18, accuracy: 5, speed: 0 },
+  } as unknown as Location;
+
+  beforeEach(() => {
+    abrirOutboxMock.mockReset().mockResolvedValue({});
+    encolarEventoMock.mockReset().mockResolvedValue({ eventId: 'evt-fase', insertado: true });
+    obtenerVisitasPendientesMock.mockReset().mockResolvedValue([]);
+  });
+
+  it('detecta y avisa solo los PC que devuelve la fase; el resto del circuito no se evalúa', async () => {
+    const mock = vi.mocked(puntosDeLaFaseActual);
+    mock.mockResolvedValueOnce([pcLejos]);
+    const filtrado = await registrarPuntoGps(
+      {} as never,
+      fix,
+      { deviceId: 'd', sesionId: 's-fase', puntosControl: [pcCerca, pcLejos], geometriaRuta: [[0, 0], [1, 1]] },
+      { current: new Map() },
+    );
+    expect(filtrado.deteccionAproximacion).toBeNull();
+    expect(mock.mock.calls.at(-1)![3]).toEqual([[0, 0], [1, 1]]);
+
+    const completo = await registrarPuntoGps(
+      {} as never,
+      fix,
+      { deviceId: 'd', sesionId: 's-fase', puntosControl: [pcCerca, pcLejos] },
+      { current: new Map() },
+    );
+    expect(completo.deteccionAproximacion?.puntoControlId).toBe('pc-otra-fase');
+  });
+
+  it('si la fase no se puede resolver, detecta todos (no se pierde evidencia) y lo reporta', async () => {
+    vi.mocked(puntosDeLaFaseActual).mockRejectedValueOnce(new Error('sqlite ocupada'));
+    const r = await registrarPuntoGps(
+      {} as never,
+      fix,
+      { deviceId: 'd', sesionId: 's-fase', puntosControl: [pcCerca, pcLejos] },
+      { current: new Map() },
+    );
+    expect(r.deteccionAproximacion?.puntoControlId).toBe('pc-otra-fase');
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: expect.objectContaining({ paso: 'fase-vuelta' }) }),
+    );
   });
 });

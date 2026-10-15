@@ -33,11 +33,19 @@ export function GpsProvider({
     [paqueteDia.paquete],
   );
 
+  const geometriaRuta = paqueteDia.paquete?.ruta.geometria.coordinates;
+
   // Entrega 2 (drenado oportunista del outbox en background): `obtenerAccessToken` ya llega
   // como prop a `GpsProvider` (lo usa `usePaqueteDia`, arriba) — se enhebra tal cual a
   // `useGpsOperativo`, que lo necesita para autenticar el drenado tras cada fix de foreground
   // y en el handler de `onHeartbeat`.
-  const gps = useGpsOperativo(sesionId, deviceId, puntosControl, obtenerAccessToken);
+  const gps = useGpsOperativo(
+    sesionId,
+    deviceId,
+    puntosControl,
+    obtenerAccessToken,
+    geometriaRuta,
+  );
   const { settings } = useOperacionSettings();
 
   /**

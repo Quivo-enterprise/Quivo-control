@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import * as Sentry from '@sentry/react-native';
 import type { PuntoControlPaquete } from '@quivo/shared';
 import { abrirOutbox } from '../../db/outbox';
+import { faseDe, puntoRetorno, puntosDeFase, type FaseVuelta } from './fase-vuelta';
 import {
   conProximo,
   derivarProgresoEstaticoEnOrden,
@@ -25,6 +26,9 @@ export interface ProgresoVueltaUi extends ProgresoDerivado {
   /** Orden efectivo de los PC (`ordenEfectivoPuntos`), calculado UNA vez: lo reutilizan el sheet,
    * el "más cercano" y el mapa en vez de recalcularlo cada uno. */
   ordenEfectivo: PuntoControlPaquete[];
+  /** Fase de la vuelta (`ida`/`regreso`) en rutas con PC retorno; `null` en las demás. `puntos`
+   * y `proximo` ya son solo los de esta fase. */
+  fase: FaseVuelta | null;
 }
 
 /**
@@ -117,21 +121,25 @@ export function useProgresoVuelta(
     () => ordenEfectivoPuntos(puntosControl, designacionOrden),
     [puntosControl, designacionOrden],
   );
-  const estatico = useMemo(
-    () => derivarProgresoEstaticoEnOrden(activo ? estado : vacio, ordenEfectivo),
+  const fase = useMemo<FaseVuelta | null>(
+    () => (puntoRetorno(ordenEfectivo) ? faseDe(activo ? estado : vacio) : null),
     [activo, estado, vacio, ordenEfectivo],
+  );
+  const estatico = useMemo(
+    () => derivarProgresoEstaticoEnOrden(activo ? estado : vacio, ordenEfectivo, fase),
+    [activo, estado, vacio, ordenEfectivo, fase],
   );
   // La posición solo importa mientras no haya punto de inicio (próximo = el más cercano); el
   // memo devuelve un id (string), así que moverse no invalida nada mientras el id no cambie.
   const cercanoId = useMemo(
     () =>
-      estatico.conInicio ? null : proximoMasCercanoIdEnOrden(ordenEfectivo, posicion),
-    [estatico.conInicio, ordenEfectivo, posicion],
+      estatico.conInicio ? null : proximoMasCercanoIdEnOrden(puntosDeFase(ordenEfectivo, fase), posicion),
+    [estatico.conInicio, ordenEfectivo, fase, posicion],
   );
   const derivado = useMemo(() => conProximo(estatico, cercanoId), [estatico, cercanoId]);
 
   return useMemo(
-    () => ({ ...derivado, avisoVuelta, descartarAvisoVuelta, ordenEfectivo }),
-    [derivado, avisoVuelta, descartarAvisoVuelta, ordenEfectivo],
+    () => ({ ...derivado, avisoVuelta, descartarAvisoVuelta, ordenEfectivo, fase }),
+    [derivado, avisoVuelta, descartarAvisoVuelta, ordenEfectivo, fase],
   );
 }
