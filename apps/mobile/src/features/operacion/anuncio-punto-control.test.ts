@@ -56,6 +56,18 @@ vi.mock('../../db/outbox', () => ({
   obtenerAnunciosPendientesDeProgramar: vi.fn().mockResolvedValue([]),
 }));
 
+// La designación activa (orden efectivo de la voz) sale del cache SQLite de la vuelta actual.
+const designacionMock = vi.hoisted(() => ({
+  valor: null as { puntoEspera: { id: string } } | null,
+  lecturas: 0,
+}));
+vi.mock('../../db/vuelta-actual-local', () => ({
+  leerDesignacionOrdenLocal: async () => {
+    designacionMock.lecturas += 1;
+    return designacionMock.valor;
+  },
+}));
+
 import { Platform, Vibration } from 'react-native';
 import * as Speech from 'expo-speech';
 import * as Notifications from 'expo-notifications';
@@ -201,9 +213,9 @@ describe('anunciarPuntoControl — fase "aproximacion" (Entrega 7)', () => {
     );
 
     expect(speakMock).toHaveBeenCalledTimes(1);
-    // ENTREGA 5: la voz redondea a decenas ("a 130 metros", no "a 134 metros") y dice el
-    // número de orden humano (`orden + 1`).
-    expect(speakMock.mock.calls[0]?.[0]).toBe('Punto de control 16, a 130 m.');
+    // ENTREGA 5: la voz redondea a decenas ("a 130 metros", no "a 134 metros") y dice la
+    // posición humana en el orden efectivo (1-indexada; un único PC es el 1).
+    expect(speakMock.mock.calls[0]?.[0]).toBe('Punto de control 1, a 130 m.');
     expect(vibrateMock).not.toHaveBeenCalled();
     expect(scheduleNotificationMock).not.toHaveBeenCalled();
   });
@@ -288,14 +300,117 @@ describe('anunciarPuntoControl — fase "aproximacion" (Entrega 7)', () => {
   });
 });
 
+describe('anunciarPuntoControl — orden efectivo y Molinos', () => {
+  const l16 = (): PuntoControlPaquete[] => [
+    { ...puntoControl('sr', 0), rol: 'terminal' },
+    { ...puntoControl('molinos', 1), rol: 'espera' },
+    { ...puntoControl('honduras', 2), rol: 'retorno' },
+  ];
+
+  beforeEach(() => {
+    speakMock.mockClear();
+    designacionMock.valor = null;
+    configurarTablaAnunciosRealista();
+  });
+
+  it('sin designación: Honduras es el "Punto de control 2" (no 3) y Molinos no se anuncia', async () => {
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'honduras', fase: 'aproximacion', distanciaM: 100 }),
+      opciones(l16()),
+    );
+    expect(speakMock.mock.calls[0]?.[0]).toBe('Punto de control 2, a 100 m.');
+    speakMock.mockClear();
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'molinos', fase: 'aproximacion', distanciaM: 100 }),
+      opciones(l16()),
+    );
+    expect(speakMock).not.toHaveBeenCalled();
+  });
+
+  it('con designación activa: Molinos entra tras Honduras y se anuncia como "Punto de control 3"', async () => {
+    limpiarAproximacionesAnunciadas(['molinos']); // descarta el veredicto del test anterior
+    designacionMock.valor = { puntoEspera: { id: 'molinos' } };
+    await anunciarPuntoControl(
+      DB_FALSO,
+      deteccion({ puntoControlId: 'molinos', fase: 'aproximacion', distanciaM: 100 }),
+      opciones(l16()),
+    );
+    expect(speakMock.mock.calls[0]?.[0]).toBe('Punto de control 3, a 100 m.');
+  });
+
+  it('dedupe primero: un punto ya anunciado no lee la designación (SQLite)', async () => {
+    const det = deteccion({ puntoControlId: 'honduras', fase: 'aproximacion', distanciaM: 100 });
+    limpiarAproximacionesAnunciadas(['honduras']);
+    await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+    designacionMock.lecturas = 0;
+    speakMock.mockClear();
+    await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+    expect(designacionMock.lecturas).toBe(0);
+    expect(speakMock).not.toHaveBeenCalled();
+  });
+
+  it('Molinos sin designación no se agrega al dedupe: al llegar la designación sí se anuncia', async () => {
+    const det = deteccion({ puntoControlId: 'molinos', fase: 'aproximacion', distanciaM: 100 });
+    limpiarAproximacionesAnunciadas(['molinos']);
+    await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+    expect(speakMock).not.toHaveBeenCalled();
+    designacionMock.valor = { puntoEspera: { id: 'molinos' } };
+    // El veredicto negativo se recuerda unos segundos: pasado ese lapso, se relee y se anuncia.
+    const ahora = Date.now();
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(ahora + 5_000);
+    try {
+      await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(speakMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('Molinos sin designación: los ticks siguientes dentro de la vigencia no leen SQLite', async () => {
+    const det = deteccion({ puntoControlId: 'molinos', fase: 'aproximacion', distanciaM: 100 });
+    limpiarAproximacionesAnunciadas(['molinos']);
+    const ahora = Date.now();
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(ahora + 60_000); // fuera de cualquier veredicto previo
+    try {
+      await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+      designacionMock.lecturas = 0;
+      await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+      await anunciarPuntoControl(DB_FALSO, det, opciones(l16()));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(designacionMock.lecturas).toBe(0);
+    expect(speakMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('anunciarLlegadaPuntoControl (REDISEÑO 2026-09-23 — intención durable + motivo)', () => {
   beforeEach(() => {
+    designacionMock.valor = null;
     vibrateMock.mockClear();
     speakMock.mockClear();
     scheduleNotificationMock.mockClear();
     setChannelMock.mockClear();
     captureExceptionMock.mockClear();
     configurarTablaAnunciosRealista();
+  });
+
+  it('PC de espera (Molinos) sin designación: no vibra, no notifica ni reclama la intención', async () => {
+    designacionMock.valor = null;
+    const pcs = [
+      { ...puntoControl('sr', 0), rol: 'terminal' as const },
+      { ...puntoControl('molinos', 1), rol: 'espera' as const },
+    ];
+    const r = await anunciarLlegadaPuntoControl(DB_FALSO, 'molinos', 1, 'proximidad', opciones(pcs));
+    expect(r).toBe(false);
+    expect(vibrateMock).not.toHaveBeenCalled();
+    expect(scheduleNotificationMock).not.toHaveBeenCalled();
+    expect(reclamarIntencionAnuncioMock).not.toHaveBeenCalled();
+    designacionMock.valor = { puntoEspera: { id: 'molinos' } };
+    await anunciarLlegadaPuntoControl(DB_FALSO, 'molinos', 1, 'proximidad', opciones(pcs));
+    expect(vibrateMock).toHaveBeenCalledTimes(1);
   });
 
   it('reclama la intención ANTES de programar, y programa con `identifier` = la clave reclamada', async () => {
@@ -312,7 +427,7 @@ describe('anunciarLlegadaPuntoControl (REDISEÑO 2026-09-23 — intención durab
     expect(scheduleNotificationMock).toHaveBeenCalledTimes(1);
     expect(scheduleNotificationMock.mock.calls[0]?.[0]).toMatchObject({
       identifier: 'sesion-1:pc-1:1',
-      content: { title: 'Punto de control 6: llegaste' },
+      content: { title: 'Punto de control 1: llegaste' },
       trigger: { channelId: 'quivo-anuncio-punto-control-v2' },
     });
     // Reclamó → programó con éxito → marca 'programado'.

@@ -4,6 +4,7 @@ import { LineaDistintivoTipoSchema } from '../entities/linea.js';
 import { TurnoSchema } from '../enums/turno.js';
 import { LineaGeoJsonSchema, PuntoGeoJsonSchema } from '../geo.js';
 import { uuidSchema } from '../primitives.js';
+import { RolPuntoControlSchema } from '../entities/punto-control.js';
 
 /**
  * Punto de control tal como viaja en el paquete del día (RF-68, QUI-236) — mismo shape que
@@ -16,6 +17,8 @@ export const PuntoControlPaqueteSchema = z.object({
   coord: PuntoGeoJsonSchema,
   radioToleranciaM: z.number().positive(),
   obligatorio: z.boolean(),
+  /** Rol del PC en la ruta (`espera` = Molinos). Opcional: paquetes viejos cacheados no lo traen. */
+  rol: RolPuntoControlSchema.nullable().optional(),
 });
 export type PuntoControlPaquete = z.infer<typeof PuntoControlPaqueteSchema>;
 

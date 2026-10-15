@@ -50,6 +50,8 @@ import { VecinosRutaPanel } from '../vecinos-ruta/vecinos-ruta-panel';
 import { faseControl } from '../jornada/fase-control';
 import { useJornada } from '../jornada/use-jornada';
 import { AvisoFotoVehiculo } from '../vehiculo-foto/aviso-foto-vehiculo';
+import { useVueltaActual } from '../vuelta-actual/use-vuelta-actual';
+import { AvisoDesignacion, ContadorEsperaMolinos } from '../vuelta-actual/aviso-designacion';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -99,6 +101,13 @@ export function OperationScreen(
     () => paqueteDia.paquete?.puntosControl ?? [],
     [paqueteDia.paquete],
   );
+  // Designación a Molinos (aviso + mapa + contador de espera). El estado viene de SQLite y de la
+  // consulta de la vuelta actual; los errores de red son silenciosos (ver `use-vuelta-actual.ts`).
+  const vueltaActual = useVueltaActual({
+    sesionId: props.contexto.sesionId,
+    tracking: gps.tracking,
+    obtenerAccessToken: props.obtenerAccessToken,
+  });
   // Progreso de la vuelta (RF-GPS-054): pasos en cualquier orden, omitidos en rojo, vuelta al
   // cerrar en el punto de inicio. Lo escribe el registro de cumplimientos (foreground y headless);
   // acá solo se lee (hidrata al montar y al volver a `active`).
@@ -107,7 +116,9 @@ export function OperationScreen(
     puntosControl,
     gps.posicionActual,
     gps.tracking,
+    vueltaActual.designacionActiva,
   );
+  const [altoBannerVuelta, setAltoBannerVuelta] = useState(0);
   const [observacion, setObservacion] = useState('');
   const [enviandoObservacion, setEnviandoObservacion] = useState(false);
   const [observacionEnviada, setObservacionEnviada] = useState(false);
@@ -188,6 +199,13 @@ export function OperationScreen(
   }, [gps.tracking, props.sesionNoVigente, props.onSesionNoVigenteFinalizada]);
 
   const proximoPuntoControl = progreso.proximo;
+  // Posición (0-indexada) del próximo en el orden efectivo: el PC de espera fuera de la base no
+  // cuenta, así que `orden` crudo desfasaría el "punto N de M".
+  const ordenProximoEfectivo = useMemo(() => {
+    if (!proximoPuntoControl) return null;
+    const idx = progreso.ordenEfectivo.findIndex((p) => p.id === proximoPuntoControl.id);
+    return idx >= 0 ? idx : null;
+  }, [proximoPuntoControl, progreso.ordenEfectivo]);
   const estadosPuntosControl = useMemo(
     () =>
       Object.fromEntries(progreso.puntos.map((p) => [p.punto.id, p.estado])) as Record<
@@ -351,6 +369,8 @@ export function OperationScreen(
         insetsNavegacion={insetsNavegacion}
         rutaCalculada={rutaCalculada}
         emisorRumbo={emisorRumbo}
+        designacion={vueltaActual.designacionActiva}
+        ordenEfectivo={progreso.ordenEfectivo}
       />
 
       <View pointerEvents="box-none" style={styles.topOverlay} onLayout={onLayoutTopOverlay}>
@@ -369,6 +389,7 @@ export function OperationScreen(
                 jornadaIniciada={jornada.jornadaIniciada}
                 inicioTs={jornada.inicioTs}
                 compacta={camara.modo !== 'general'}
+                viaMolinos={vueltaActual.designacionActiva !== null}
               />
             </Pressable>
           </View>
@@ -572,8 +593,8 @@ export function OperationScreen(
 
       <NextControlSheet
         contexto={props.contexto}
-        nextPointOrder={proximoPuntoControl?.orden ?? null}
-        totalPoints={puntosControl.length}
+        nextPointOrder={ordenProximoEfectivo}
+        totalPoints={progreso.total}
         estadosPuntos={estadosStepper}
         vueltaActual={progreso.vueltaActual}
         puntosPasados={progreso.pasados}
@@ -715,10 +736,25 @@ export function OperationScreen(
       </Modal>
 
       <ControlFeedbackToast ultimaDeteccion={gps.ultimaDeteccion} />
+      <ContadorEsperaMolinos
+        restanteMin={vueltaActual.restanteEspera}
+        bottom={altoSheetVisible + quivoSpacing.md}
+      />
+      <AvisoDesignacion
+        esperaMin={vueltaActual.designacionPendiente?.puntoEspera.esperaMin ?? null}
+        cancelada={vueltaActual.cancelacionPendiente}
+        sinActualizar={vueltaActual.sinActualizar}
+        // Si el banner de vuelta completada está visible, la tarjeta se apila debajo (el banner es
+        // pasivo y la tarjeta tiene el botón: no se pueden superponer).
+        top={insetSuperior + 8 + (altoBannerVuelta > 0 ? altoBannerVuelta + 8 : 0)}
+        onEntenderDesignacion={vueltaActual.entenderDesignacion}
+        onEntenderCancelacion={vueltaActual.entenderCancelacion}
+      />
       <VueltaCompletadaBanner
         resumen={progreso.avisoVuelta}
         top={insetSuperior + 8}
         onTerminar={progreso.descartarAvisoVuelta}
+        onAlto={setAltoBannerVuelta}
       />
 
       <QuivoConfirmDialog
@@ -805,6 +841,8 @@ function MapLayer({
   insetsNavegacion,
   rutaCalculada,
   emisorRumbo,
+  designacion,
+  ordenEfectivo,
 }: {
   loading: boolean;
   paquete: PaqueteDia | null;
@@ -817,6 +855,8 @@ function MapLayer({
   insetsNavegacion: InsetsNavegacion;
   rutaCalculada: [number, number][] | null;
   emisorRumbo: RouteMapProps['emisorRumbo'];
+  designacion: RouteMapProps['designacion'];
+  ordenEfectivo: RouteMapProps['ordenEfectivo'];
 }) {
   if (loading) {
     return (
@@ -840,6 +880,8 @@ function MapLayer({
         insetsNavegacion={insetsNavegacion}
         rutaCalculada={rutaCalculada}
         emisorRumbo={emisorRumbo}
+        designacion={designacion}
+        ordenEfectivo={ordenEfectivo}
         style={styles.fullMap}
       />
     </MapErrorBoundary>

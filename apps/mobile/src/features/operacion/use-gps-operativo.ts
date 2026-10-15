@@ -47,6 +47,7 @@ import {
 } from './anuncio-punto-control';
 import type { MotivoAnuncio } from './decidir-anuncio';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
+import { consultarVueltaActual, limpiarVueltaActual } from '../vuelta-actual/vuelta-actual-oportunista';
 import { marcarRecorridoActivoGlobal } from './estado-recorrido-activo';
 import {
   asegurarInicioRecorrido,
@@ -536,6 +537,8 @@ export function useGpsOperativo(
       // nunca rechaza (ver su docblock: todo su cuerpo vive bajo un try/catch defensivo), así
       // que este `void` no deja una unhandled rejection colgando.
       void intentarDrenarOportunista(obtenerAccessToken);
+      // Aviso de designación a Molinos: solo con el recorrido activo; piso propio de 20 s; nunca rechaza.
+      if (trackingRef.current) void consultarVueltaActual(obtenerAccessToken);
     },
     [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido],
   );
@@ -675,6 +678,8 @@ export function useGpsOperativo(
     // bloque de arriba (un heartbeat que falló en confirmar visitas igual puede tener trabajo
     // de sync pendiente que drenar).
     await intentarDrenarOportunista(obtenerAccessToken);
+    // Sin await: nada espera esta consulta en foreground (nunca rechaza).
+    if (trackingRef.current) void consultarVueltaActual(obtenerAccessToken);
   }, [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido, estaEnRecorrido]);
 
   const onHeartbeatRef = useRef(onHeartbeat);
@@ -1340,6 +1345,8 @@ export function useGpsOperativo(
     // viejo. Ver `inicio-recorrido-retry.ts` para el porqué de la idempotencia por `eventId`
     // estable.
     reiniciarEstadoInicioRecorrido(estadoInicioRecorrido, await generarEventId());
+    // Recorrido nuevo: se descarta el cache de la vuelta actual del recorrido anterior (síncrono, sin esperar la DB).
+    limpiarVueltaActual(sesionId);
     suscribirUbicaciones();
 
     try {
@@ -1547,6 +1554,11 @@ export function useGpsOperativo(
       veredictoPublicable.current = true;
       setTracking(false);
       trackingRef.current = false;
+      // Fin del recorrido: invalida consultas en vuelo y borra el cache (fire-and-forget). Va ACÁ,
+      // con el nativo parado, las suscripciones removidas y `tracking` en false: si se limpiara
+      // antes del `await stop()`, un fix/heartbeat o el intervalo de `useVueltaActual` podría
+      // iniciar una consulta bajo la generación NUEVA y reescribir el cache tras el fin.
+      limpiarVueltaActual(sesionId);
       // QUI-P0: reverso de `reafirmarMovimiento` — restaura `disableStopDetection: false` para
       // que un futuro re-enganche o inspección de estado no encuentre la política "nunca
       // apagar el GPS" activa fuera de un recorrido real (ver docblock en

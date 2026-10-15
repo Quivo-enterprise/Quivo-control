@@ -53,7 +53,7 @@ export interface NextControlSheetProps {
   nextPointOrder: number | null;
   totalPoints: number;
   /** Estado de cada punto en el orden ROTADO de la vuelta (inicio primero), para el stepper
-   * (`derivarProgreso`, RF-GPS-054). */
+   * (`ordenEfectivoPuntos` → `derivarProgresoEstaticoEnOrden` → `conProximo`, RF-GPS-054). */
   estadosPuntos: readonly EstadoPuntoVuelta[];
   /** Vuelta en curso ("Vuelta N"). */
   vueltaActual: number;

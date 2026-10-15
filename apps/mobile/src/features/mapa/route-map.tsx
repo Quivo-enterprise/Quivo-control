@@ -16,7 +16,8 @@ import MapView, {
   type LatLng,
 } from 'react-native-maps';
 import Svg, { Path } from 'react-native-svg';
-import { quivoRadius } from '../../shared/theme/quivo-theme';
+import { quivoColors, quivoRadius } from '../../shared/theme/quivo-theme';
+import { coordenadasTramo } from '../vuelta-actual/vuelta-actual-core';
 import {
   distanciaMetros,
   duracionAnimacionMs,
@@ -640,6 +641,57 @@ const RutaPolylines = memo(function RutaPolylines({
   );
 });
 
+interface DesignacionMapaProps {
+  designacion: NonNullable<RouteMapProps['designacion']>;
+}
+
+/** Tramo de la designación a Molinos (resaltado sobre la ruta base, con borde blanco para
+ * distinguirlo de la polilínea naranja/azul) y el PC de espera destacado. Componente aparte y
+ * memoizado: no toca `RutaPolylines` ni su estilo. */
+const DesignacionMapa = memo(function DesignacionMapa({ designacion }: DesignacionMapaProps) {
+  const tramo = useMemo(() => coordenadasTramo(designacion.tramo), [designacion.tramo]);
+  const [tracksViewChanges] = useTracksViewChanges();
+  const [lng, lat] = designacion.puntoEspera.coord.coordinates;
+  return (
+    <>
+      {tramo.length >= 2 ? (
+        <>
+          <Polyline
+            coordinates={tramo}
+            strokeColor={quivoColors.white}
+            strokeWidth={11}
+            lineCap="round"
+            lineJoin="round"
+            zIndex={3}
+          />
+          <Polyline
+            coordinates={tramo}
+            strokeColor={quivoColors.primary}
+            strokeWidth={7}
+            lineCap="round"
+            lineJoin="round"
+            zIndex={4}
+          />
+        </>
+      ) : null}
+      <Marker
+        coordinate={{ latitude: lat as number, longitude: lng as number }}
+        anchor={{ x: 0.5, y: 0.5 }}
+        tracksViewChanges={tracksViewChanges}
+        zIndex={1}
+      >
+        {/* Contenedor transparente centrado en el PC (que queda a la vista con su color de estado)
+            y badge "M" chico en la esquina superior derecha, fuera del círculo del PC. */}
+        <View style={styles.puntoEsperaContenedor}>
+          <View style={styles.puntoEsperaMarcador}>
+            <Text style={styles.puntoEsperaTexto}>M</Text>
+          </View>
+        </View>
+      </Marker>
+    </>
+  );
+});
+
 interface MarcadorPuntoControlItemProps {
   orden: number;
   latitude: number;
@@ -721,6 +773,8 @@ export function RouteMap({
   insetsNavegacion,
   rutaCalculada,
   emisorRumbo,
+  designacion,
+  ordenEfectivo,
   style,
 }: RouteMapProps) {
   const mapRef = useRef<MapView>(null);
@@ -752,13 +806,13 @@ export function RouteMap({
 
   const puntosControlData = useMemo(
     () =>
-      paquete.puntosControl.map((pc, idx) => ({
+      ordenEfectivo.map((pc, idx) => ({
         id: pc.id,
         orden: idx + 1,
         latitude: pc.coord.coordinates[1],
         longitude: pc.coord.coordinates[0],
       })),
-    [paquete],
+    [ordenEfectivo],
   );
 
   // Prioriza el store visual y cae al prop `posicionActual` mientras el store no tiene nada.
@@ -1103,6 +1157,7 @@ export function RouteMap({
           mostrarCaminoResaltado={mostrarCaminoResaltado}
           caminoResaltadoCoords={caminoResaltadoCoords}
         />
+        {designacion ? <DesignacionMapa designacion={designacion} /> : null}
         <PuntosControlMarcadores
           puntosControlData={puntosControlData}
           tracking={tracking}
@@ -1150,6 +1205,27 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  puntoEsperaContenedor: {
+    width: 52,
+    height: 52,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+  },
+  puntoEsperaMarcador: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: quivoColors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  puntoEsperaTexto: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 11,
   },
   puntoControlTexto: {
     color: '#FFFFFF',

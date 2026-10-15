@@ -5,9 +5,11 @@ import type { PuntoControlPaquete } from '@quivo/shared';
 import { abrirOutbox } from '../../db/outbox';
 import {
   conProximo,
-  derivarProgresoEstatico,
+  derivarProgresoEstaticoEnOrden,
   estadoInicialVuelta,
-  proximoMasCercanoId,
+  ordenEfectivoPuntos,
+  proximoMasCercanoIdEnOrden,
+  type DesignacionOrden,
   type EstadoProgresoVuelta,
   type ProgresoDerivado,
 } from './progreso-vuelta';
@@ -20,6 +22,9 @@ export interface ProgresoVueltaUi extends ProgresoDerivado {
    * de avisar; lo que se hidrata de disco (cierres con la app en segundo plano) no dispara aviso. */
   avisoVuelta: ResumenVuelta | null;
   descartarAvisoVuelta: () => void;
+  /** Orden efectivo de los PC (`ordenEfectivoPuntos`), calculado UNA vez: lo reutilizan el sheet,
+   * el "más cercano" y el mapa en vez de recalcularlo cada uno. */
+  ordenEfectivo: PuntoControlPaquete[];
 }
 
 /**
@@ -38,6 +43,7 @@ export function useProgresoVuelta(
   puntosControl: readonly PuntoControlPaquete[],
   posicion: { lat: number; lng: number } | null,
   activo: boolean,
+  designacion: DesignacionOrden = null,
 ): ProgresoVueltaUi {
   const [estado, setEstado] = useState<EstadoProgresoVuelta>(() => estadoInicialVuelta(sesionId));
   const [avisoVuelta, setAvisoVuelta] = useState<ResumenVuelta | null>(null);
@@ -101,20 +107,31 @@ export function useProgresoVuelta(
 
   const vacio = useMemo(() => estadoInicialVuelta(sesionId), [sesionId]);
   // Progreso estático (sin posición): solo se recalcula si cambia el estado o los puntos.
+  // La designación solo importa por el id del PC de espera: se memoiza por id (string).
+  const idEspera = designacion?.puntoEspera.id ?? null;
+  const designacionOrden = useMemo<DesignacionOrden>(
+    () => (idEspera === null ? null : { puntoEspera: { id: idEspera } }),
+    [idEspera],
+  );
+  const ordenEfectivo = useMemo(
+    () => ordenEfectivoPuntos(puntosControl, designacionOrden),
+    [puntosControl, designacionOrden],
+  );
   const estatico = useMemo(
-    () => derivarProgresoEstatico(activo ? estado : vacio, puntosControl),
-    [activo, estado, vacio, puntosControl],
+    () => derivarProgresoEstaticoEnOrden(activo ? estado : vacio, ordenEfectivo),
+    [activo, estado, vacio, ordenEfectivo],
   );
   // La posición solo importa mientras no haya punto de inicio (próximo = el más cercano); el
   // memo devuelve un id (string), así que moverse no invalida nada mientras el id no cambie.
   const cercanoId = useMemo(
-    () => (estatico.conInicio ? null : proximoMasCercanoId(puntosControl, posicion)),
-    [estatico.conInicio, puntosControl, posicion],
+    () =>
+      estatico.conInicio ? null : proximoMasCercanoIdEnOrden(ordenEfectivo, posicion),
+    [estatico.conInicio, ordenEfectivo, posicion],
   );
   const derivado = useMemo(() => conProximo(estatico, cercanoId), [estatico, cercanoId]);
 
   return useMemo(
-    () => ({ ...derivado, avisoVuelta, descartarAvisoVuelta }),
-    [derivado, avisoVuelta, descartarAvisoVuelta],
+    () => ({ ...derivado, avisoVuelta, descartarAvisoVuelta, ordenEfectivo }),
+    [derivado, avisoVuelta, descartarAvisoVuelta, ordenEfectivo],
   );
 }
