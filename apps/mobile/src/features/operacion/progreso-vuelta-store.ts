@@ -1,8 +1,15 @@
 import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
-import type { PuntoControlPaquete } from '@quivo/shared';
+import { distanciaAPolilineaM, type PuntoControlPaquete } from '@quivo/shared';
 import { conReintentoSiHandleMuerto } from '../../db/outbox';
 import { leerDesignacionOrdenLocal } from '../../db/vuelta-actual-local';
+import {
+  evaluarFixFase,
+  faseDe,
+  mitadesDelCircuito,
+  puntoRetorno,
+  puntosDeFase,
+} from './fase-vuelta';
 import {
   claveProgresoVuelta,
   estadoInicialVuelta,
@@ -77,10 +84,10 @@ export async function leerProgresoVuelta(
   sesionId: string,
   fecha: string = fechaLocal(),
 ): Promise<EstadoProgresoVuelta> {
-  const fila = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.getFirstAsync<FilaProgreso>(SQL_LEER, [claveProgresoVuelta(sesionId, fecha)]),
-  );
-  return parsear(sesionId, fecha, fila);
+  return conReintentoSiHandleMuerto(db, async (dbActiva) => {
+    const fila = await dbActiva.getFirstAsync<FilaProgreso>(SQL_LEER, [claveProgresoVuelta(sesionId, fecha)]);
+    return conFaseHeredada(dbActiva, sesionId, fecha, parsear(sesionId, fecha, fila), !!fila);
+  });
 }
 
 // Cadena de promesas: serializa las escrituras de ESTE contexto JS (varios pasos del mismo tick).
@@ -92,6 +99,32 @@ let cola: Promise<unknown> = Promise.resolve();
  * o el MISMO objeto recibido si no hay nada que escribir. Devuelve el estado escrito, o `null`
  * si no hubo escritura.
  */
+/** Día local anterior a `fecha` (`YYYY-MM-DD`). */
+function fechaAnterior(fecha: string): string {
+  const [a, m, d] = fecha.split('-').map(Number) as [number, number, number];
+  return fechaLocal(new Date(a, m - 1, d - 1).getTime());
+}
+
+/**
+ * Sin fila del día (p. ej. pasada la medianoche) la fase NO se reinicia: se hereda del día local
+ * anterior de la misma sesión. Solo la fase y su contador; las vueltas son por día.
+ */
+async function conFaseHeredada(
+  db: SQLite.SQLiteDatabase,
+  sesionId: string,
+  fecha: string,
+  actual: EstadoProgresoVuelta,
+  hayFila: boolean,
+): Promise<EstadoProgresoVuelta> {
+  if (hayFila) return actual;
+  const anterior = parsear(
+    sesionId,
+    fecha,
+    await db.getFirstAsync<FilaProgreso>(SQL_LEER, [claveProgresoVuelta(sesionId, fechaAnterior(fecha))]),
+  );
+  return anterior.fase ? { ...actual, fase: anterior.fase, fixesRegreso: anterior.fixesRegreso } : actual;
+}
+
 async function modificar(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
@@ -102,7 +135,7 @@ async function modificar(
   return conReintentoSiHandleMuerto(db, async (dbActiva) => {
     for (let intento = 0; intento < MAX_INTENTOS_CAS; intento++) {
       const fila = await dbActiva.getFirstAsync<FilaProgreso>(SQL_LEER, [clave]);
-      const actual = parsear(sesionId, fecha, fila);
+      const actual = await conFaseHeredada(dbActiva, sesionId, fecha, parsear(sesionId, fecha, fila), !!fila);
       const calculado = aplicar(actual);
       if (calculado === actual) return null;
       const nuevo: EstadoProgresoVuelta = { ...calculado, version: actual.version + 1 };
@@ -179,7 +212,11 @@ export async function registrarPasoEnVuelta(
       const designacion = await leerDesignacionOrdenLocal(sesionId);
       const idsEfectivos = ordenEfectivoPuntos(puntosControl, designacion).map((p) => p.id);
       const idsEspera = puntosControl.filter((p) => p.rol === 'espera').map((p) => p.id);
-      return (actual) => pasoPunto(actual, { puntoId, clave }, idsEfectivos, idsEspera);
+      const roles = {
+        retornoId: puntoRetorno(puntosControl)?.id ?? null,
+        terminalId: puntosControl.find((p) => p.rol === 'terminal')?.id ?? null,
+      };
+      return (actual) => pasoPunto(actual, { puntoId, clave }, idsEfectivos, idsEspera, roles);
     },
     { paso: 'registrar-paso', extra: { puntoId } },
   );
@@ -192,4 +229,42 @@ export async function registrarPasoEnVuelta(
 export function reiniciarVueltaEnCurso(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
   const { sesionId, fecha } = separarClaveProgreso(clave);
   return encolar(db, sesionId, fecha, () => reiniciarVuelta, { paso: 'reiniciar-vuelta', extra: {} });
+}
+
+/**
+ * PC que se DETECTAN en este fix: los de la fase actual de la vuelta (`fase-vuelta.ts`). Es el
+ * único punto donde foreground y headless deciden la fase, leyéndola del mismo progreso persistido
+ * que escribe `registrarPasoEnVuelta`. Sin PC `retorno` devuelve `puntosControl` tal cual (misma
+ * referencia, sin I/O: líneas 120/Z12 intactas). Además corre el fallback por geometría (el GPS
+ * pudo no capturar el retorno): persiste el contador solo cuando cambia. Best-effort: ante un
+ * fallo de lectura/escritura propaga el error y el llamador cae a todos los PC.
+ */
+export async function puntosDeLaFaseActual(
+  db: SQLite.SQLiteDatabase,
+  sesionId: string,
+  puntosControl: PuntoControlPaquete[],
+  geometriaRuta: [number, number][] | undefined,
+  fix: { lng: number; lat: number; accuracy?: number | null },
+): Promise<PuntoControlPaquete[]> {
+  if (!puntoRetorno(puntosControl)) return puntosControl;
+  const estado = await leerProgresoVuelta(db, sesionId);
+  let fase = faseDe(estado);
+  const mitades = geometriaRuta ? mitadesDelCircuito(geometriaRuta, puntosControl) : null;
+  if (mitades) {
+    const posicion: [number, number] = [fix.lng, fix.lat];
+    const dIda = distanciaAPolilineaM(posicion, mitades.ida);
+    const dRegreso = distanciaAPolilineaM(posicion, mitades.regreso);
+    const evaluado = evaluarFixFase(estado, dIda, dRegreso, fix.accuracy);
+    if (evaluado !== estado) {
+      fase = faseDe(evaluado);
+      await encolar(
+        db,
+        sesionId,
+        fechaLocal(),
+        () => (actual) => evaluarFixFase(actual, dIda, dRegreso, fix.accuracy),
+        { paso: 'fase-fallback', extra: {} },
+      );
+    }
+  }
+  return puntosDeFase(puntosControl, fase);
 }

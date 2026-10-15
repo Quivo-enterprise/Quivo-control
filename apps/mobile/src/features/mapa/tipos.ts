@@ -5,6 +5,7 @@ import type {
   PuntoControlPaquete,
   VueltaActualMovil,
 } from '@quivo/shared';
+import type { FaseVuelta } from '../operacion/fase-vuelta';
 import type { EstadoPuntoVuelta } from '../operacion/progreso-vuelta';
 import type { EstadoCamara } from './modo-camara';
 import type { EmisorRumbo } from './rumbo-mapa';
@@ -45,6 +46,9 @@ export interface RouteMapProps {
   designacion?: Pick<NonNullable<VueltaActualMovil['designacion']>, 'tramo' | 'puntoEspera'> | null;
   /** Orden efectivo de los PC (`ordenEfectivoPuntos`), ya calculado por `useProgresoVuelta`. */
   ordenEfectivo: readonly PuntoControlPaquete[];
+  /** Fase de la vuelta (`useProgresoVuelta`): el mapa dibuja (y ajusta el marcador a) solo la mitad
+   * del circuito y los PC de esa fase. `null`/ausente = ruta sin fases, todo como siempre. */
+  fase?: FaseVuelta | null;
   style?: StyleProp<ViewStyle>;
 }
 

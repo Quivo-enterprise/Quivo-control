@@ -29,7 +29,10 @@ import {
   obtenerVisitasPendientes,
 } from '../db/outbox';
 import { abrirPaqueteDiaDb, obtenerPaqueteDiaLocal } from '../db/paquete-dia';
-import { registrarPasoEnVuelta } from '../features/operacion/progreso-vuelta-store';
+import {
+  puntosDeLaFaseActual,
+  registrarPasoEnVuelta,
+} from '../features/operacion/progreso-vuelta-store';
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
 import { consultarVueltaActual } from '../features/vuelta-actual/vuelta-actual-oportunista';
 import { esperarConTope } from '../features/vuelta-actual/espera-con-tope';
@@ -453,6 +456,39 @@ function ejecutarEnColaRegistroGps<T>(
 }
 
 /**
+ * Circuito ida/regreso (línea 16): solo se DETECTAN (y anuncian) los PC de la fase actual de la
+ * vuelta. La fase vive en el progreso persistido, así que foreground y headless coinciden. El
+ * progreso (`registrarPasoEnVuelta`) sigue usando TODOS los PC. Si la fase no se puede resolver,
+ * se detectan todos (nunca se pierde evidencia por un fallo de lectura).
+ */
+async function contextoDeLaFase(
+  db: SQLite.SQLiteDatabase,
+  location: Location,
+  contexto: ContextoUbicacion,
+): Promise<ContextoUbicacion> {
+  try {
+    const puntosControl = await puntosDeLaFaseActual(
+      db,
+      contexto.sesionId,
+      contexto.puntosControl,
+      contexto.geometriaRuta,
+      {
+        lng: location.coords.longitude,
+        lat: location.coords.latitude,
+        accuracy: location.coords.accuracy,
+      },
+    );
+    return puntosControl === contexto.puntosControl ? contexto : { ...contexto, puntosControl };
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'gps-cola', paso: 'fase-vuelta' },
+      extra: { sesionId: contexto.sesionId },
+    });
+    return contexto;
+  }
+}
+
+/**
  * Cuerpo real de `registrarPuntoGps` — separado para que la serialización de arriba pueda
  * encadenarlo sin ejecutarlo antes de su turno en la cola.
  *
@@ -529,7 +565,7 @@ async function registrarPuntoGpsInterno(
     avisosPrecision,
     puntosRearmados,
     puntosRearmadosVoz,
-  } = construirEventosDeUbicacion(location, contexto, estados);
+  } = construirEventosDeUbicacion(location, await contextoDeLaFase(db, location, contexto), estados);
   // M3: la precisión degradada del fix queda registrada como breadcrumb — es la telemetría que
   // el gate de accuracy anterior NO dejaba (descartaba la pasada en silencio).
   for (const aviso of avisosPrecision) {
@@ -852,6 +888,7 @@ export async function obtenerContextoUbicacionPersistido(): Promise<ContextoUbic
     deviceId,
     sesionId: sesion.contexto.sesionId,
     puntosControl: paqueteLocal?.paquete.puntosControl ?? [],
+    geometriaRuta: paqueteLocal?.paquete.ruta?.geometria?.coordinates,
   };
 }
 

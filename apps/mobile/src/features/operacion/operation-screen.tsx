@@ -371,6 +371,7 @@ export function OperationScreen(
         emisorRumbo={emisorRumbo}
         designacion={vueltaActual.designacionActiva}
         ordenEfectivo={progreso.ordenEfectivo}
+        fase={progreso.fase}
       />
 
       <View pointerEvents="box-none" style={styles.topOverlay} onLayout={onLayoutTopOverlay}>
@@ -843,6 +844,7 @@ function MapLayer({
   emisorRumbo,
   designacion,
   ordenEfectivo,
+  fase,
 }: {
   loading: boolean;
   paquete: PaqueteDia | null;
@@ -857,6 +859,7 @@ function MapLayer({
   emisorRumbo: RouteMapProps['emisorRumbo'];
   designacion: RouteMapProps['designacion'];
   ordenEfectivo: RouteMapProps['ordenEfectivo'];
+  fase: RouteMapProps['fase'];
 }) {
   if (loading) {
     return (
@@ -882,6 +885,7 @@ function MapLayer({
         emisorRumbo={emisorRumbo}
         designacion={designacion}
         ordenEfectivo={ordenEfectivo}
+        fase={fase}
         style={styles.fullMap}
       />
     </MapErrorBoundary>

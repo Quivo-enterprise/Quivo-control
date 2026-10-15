@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PuntoControlPaquete } from '@quivo/shared';
+import { faseDe } from './fase-vuelta';
 import {
   claveProgresoVuelta,
   conProximo,
@@ -483,5 +484,168 @@ describe('PC de espera (Molinos) y designación', () => {
     const pos = { lat: 1, lng: 1 };
     expect(proximoMasCercanoId(pcs, pos)).toBe('sr');
     expect(proximoMasCercanoId(pcs, pos, desig)).toBe('mol');
+  });
+});
+
+describe('fases ida/regreso del circuito (PC retorno)', () => {
+  type Rol = NonNullable<PuntoControlPaquete['rol']>;
+  const conRol = (id: string, orden: number, rol: Rol | null = null) => ({ ...punto(id, orden), rol });
+  const rolesDe = (pcs: PuntoControlPaquete[]) => ({
+    retornoId: pcs.find((p) => p.rol === 'retorno')?.id ?? null,
+    terminalId: pcs.find((p) => p.rol === 'terminal')?.id ?? null,
+  });
+  const paso = (
+    pcs: PuntoControlPaquete[],
+    estado: EstadoProgresoVuelta,
+    pasos: string[],
+    d?: DesignacionOrden,
+  ) =>
+    pasos.reduce(
+      (acc, id, i) =>
+        pasoPunto(
+          acc,
+          { puntoId: id, clave: `${id}:${acc.procesados.length}:${i}` },
+          ordenEfectivoPuntos(pcs, d).map((p) => p.id),
+          pcs.filter((p) => p.rol === 'espera').map((p) => p.id),
+          rolesDe(pcs),
+        ),
+      estado,
+    );
+  const nueva = [
+    conRol('sr', 0, 'terminal'),
+    ...[1, 2, 3, 4, 5, 6, 7].map((n) => conRol(`i${n}`, n)),
+    conRol('h', 8, 'retorno'),
+    ...[9, 10, 11, 12, 13, 14].map((n) => conRol(`r${n}`, n)),
+    conRol('m', 15, 'espera'),
+    conRol('r16', 16),
+  ];
+  const vieja = [conRol('sr', 0, 'terminal'), conRol('m', 1, 'espera'), conRol('h', 2, 'retorno')];
+  const desMolinos: DesignacionOrden = { puntoEspera: { id: 'm' } };
+  const idsDe = (e: { puntos: { punto: PuntoControlPaquete }[] }) => e.puntos.map((p) => p.punto.id);
+
+  it('Molinos con orden posterior al retorno queda en su orden (numeración nueva)', () => {
+    const ids = ordenEfectivoPuntos(nueva, desMolinos).map((p) => p.id);
+    expect(ids.indexOf('m')).toBe(ids.indexOf('r14') + 1);
+    expect(ids.at(-1)).toBe('r16');
+    expect(ordenEfectivoPuntos(nueva, null).map((p) => p.id)).not.toContain('m');
+  });
+
+  it('numeración vieja: Molinos sigue justo después del retorno', () => {
+    expect(ordenEfectivoPuntos(vieja, desMolinos).map((p) => p.id)).toEqual(['sr', 'h', 'm']);
+  });
+
+  it('la vuelta arranca en la terminal; pasos previos por intermedios no la anclan', () => {
+    const e0 = paso(nueva, estadoInicialVuelta('s'), ['i3', 'i4']);
+    expect(e0.inicioId).toBeNull();
+    expect(e0.fase ?? 'ida').toBe('ida');
+    const e1 = paso(nueva, e0, ['sr']);
+    expect(e1.inicioId).toBe('sr');
+    expect(e1.pasados).toEqual(['sr']);
+  });
+
+  it('pasar el retorno cambia a regreso; cerrar la vuelta en la terminal vuelve a ida', () => {
+    let e = paso(nueva, estadoInicialVuelta('s'), ['sr', 'i1', 'i2']);
+    expect(faseDe(e)).toBe('ida');
+    e = paso(nueva, e, ['h']);
+    expect(faseDe(e)).toBe('regreso');
+    e = paso(nueva, e, ['r9', 'r10', 'sr']);
+    expect(e.vueltasCompletadas).toBe(1);
+    expect(faseDe(e)).toBe('ida');
+    expect(e.pasados).toEqual(['sr']);
+  });
+
+  it('sin rol terminal el ancla es el PC de menor orden y nunca el retorno', () => {
+    const sinTerminal = [conRol('a', 0), conRol('b', 1), conRol('h', 2, 'retorno'), conRol('c', 3)];
+    let e = paso(sinTerminal, estadoInicialVuelta('s'), ['h']);
+    expect(e.inicioId).toBeNull(); // Honduras no ancla la vuelta
+    e = paso(sinTerminal, e, ['a', 'b', 'h']);
+    expect(e.inicioId).toBe('a');
+    expect(faseDe(e)).toBe('regreso');
+    // Vuelta siguiente: pasar Honduras no reinicia la fase a ida.
+    e = paso(sinTerminal, e, ['c', 'a']);
+    expect(e.vueltasCompletadas).toBe(1);
+    e = paso(sinTerminal, e, ['b', 'h']);
+    expect(faseDe(e)).toBe('regreso');
+  });
+
+  it('la terminal no cierra la vuelta con solo ella pasada ni toca la fase', () => {
+    const e = paso(nueva, estadoInicialVuelta('s'), ['sr', 'sr']);
+    expect(e.vueltasCompletadas).toBe(0);
+    expect(faseDe(e)).toBe('ida');
+  });
+
+  it('numeración vieja: SR → Honduras (regreso) → Molinos → SR cierra y vuelve a ida', () => {
+    let e = paso(vieja, estadoInicialVuelta('s'), ['sr', 'h'], desMolinos);
+    expect(faseDe(e)).toBe('regreso');
+    e = paso(vieja, e, ['m', 'sr'], desMolinos);
+    expect(e.vueltasCompletadas).toBe(1);
+    expect(faseDe(e)).toBe('ida');
+  });
+
+  it('derivar en ida muestra solo la ida y el próximo es de la ida; el total sigue siendo el de la vuelta', () => {
+    const e = paso(nueva, estadoInicialVuelta('s'), ['sr', 'i1']);
+    const d = derivarProgresoEstaticoEnOrden(e, ordenEfectivoPuntos(nueva, null), 'ida');
+    expect(idsDe(d)).toEqual(['sr', 'i1', 'i2', 'i3', 'i4', 'i5', 'i6', 'i7', 'h']);
+    expect(d.proximo?.id).toBe('i2');
+    expect(d.total).toBe(nueva.length - 1); // sin Molinos (no designado)
+  });
+
+  it('en regreso muestra solo el regreso, el próximo es del regreso y los de la ida no figuran omitidos', () => {
+    // Saltea i2..i7 (omitidos en la ida), pasa Honduras.
+    const e = paso(nueva, estadoInicialVuelta('s'), ['sr', 'i1', 'h']);
+    const d = derivarProgresoEstaticoEnOrden(e, ordenEfectivoPuntos(nueva, desMolinos), 'regreso');
+    expect(idsDe(d)).toEqual(['sr', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'm', 'r16']);
+    expect(d.proximo?.id).toBe('r9');
+    expect(d.puntos.every((p) => p.estado !== 'omitido')).toBe(true);
+    expect(d.omitidos).toBe(0);
+  });
+
+  it('en ida los PC del regreso (adelante) son pendientes, nunca omitidos', () => {
+    const e = paso(nueva, estadoInicialVuelta('s'), ['sr', 'i1', 'i2', 'i3']);
+    const completo = derivarProgresoEstaticoEnOrden(e, ordenEfectivoPuntos(nueva, null));
+    expect(completo.puntos.filter((p) => p.estado === 'omitido')).toEqual([]);
+  });
+
+  it('un PC de la fase salteado sí queda omitido', () => {
+    const e = paso(nueva, estadoInicialVuelta('s'), ['sr', 'i1', 'i3']);
+    const d = derivarProgresoEstaticoEnOrden(e, ordenEfectivoPuntos(nueva, null), 'ida');
+    expect(d.puntos.find((p) => p.punto.id === 'i2')?.estado).toBe('omitido');
+    expect(d.omitidos).toBe(1);
+  });
+
+  it('numeración vieja: ida = SR+Honduras (próximo Honduras); regreso = SR+Molinos', () => {
+    const orden = ordenEfectivoPuntos(vieja, desMolinos);
+    const ida = derivarProgresoEstaticoEnOrden(paso(vieja, estadoInicialVuelta('s'), ['sr'], desMolinos), orden, 'ida');
+    expect(idsDe(ida)).toEqual(['sr', 'h']);
+    expect(ida.proximo?.id).toBe('h');
+    const regreso = derivarProgresoEstaticoEnOrden(
+      paso(vieja, estadoInicialVuelta('s'), ['sr', 'h'], desMolinos),
+      orden,
+      'regreso',
+    );
+    expect(idsDe(regreso)).toEqual(['sr', 'm']);
+    expect(regreso.proximo?.id).toBe('m');
+    // Sin designación, el regreso solo tiene la terminal: el próximo es ella (cierra la vuelta).
+    const sinDes = derivarProgresoEstaticoEnOrden(
+      paso(vieja, estadoInicialVuelta('s'), ['sr', 'h']),
+      ordenEfectivoPuntos(vieja, null),
+      'regreso',
+    );
+    expect(idsDe(sinDes)).toEqual(['sr']);
+    expect(sinDes.proximo?.id).toBe('sr');
+  });
+
+  it('rutas sin roles: sin fase y con el anclaje de siempre (primer PC pasado)', () => {
+    const e = pasar(estadoInicialVuelta('s'), ['c', 'd', 'c']);
+    expect(e.inicioId).toBe('c');
+    expect(e.vueltasCompletadas).toBe(1);
+    expect(e.fase).toBeUndefined();
+    const d = derivarProgresoEstaticoEnOrden(estadoInicialVuelta('s'), ruta);
+    expect(d.puntos).toHaveLength(5);
+  });
+
+  it('reiniciar el recorrido vuelve a ida', () => {
+    const e = paso(nueva, estadoInicialVuelta('s'), ['sr', 'h']);
+    expect(faseDe(reiniciarVuelta(e))).toBe('ida');
   });
 });

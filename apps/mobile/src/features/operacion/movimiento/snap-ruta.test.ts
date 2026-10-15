@@ -208,3 +208,22 @@ describe('interpolarSobreRuta', () => {
     expect(distanciaMetros(puntoEnDistancia(recta, 999), en(200, 0))).toBeLessThan(0.5);
   });
 });
+
+describe('snap a la mitad de la fase (circuito ida/regreso)', () => {
+  // Ida hacia el este por la calle y=0; regreso por la MISMA calle hacia el oeste con un desvío al
+  // norte (y=40). Una polilínea por mitad: el snap solo ve el trazado de su fase.
+  const ida = prepararRutaSnap([en(0, 0), en(0, 200), en(0, 400)])!;
+  const regreso = prepararRutaSnap([en(0, 400), en(40, 400), en(40, 0)])!;
+
+  it('en la ida, un fix sobre el desvío del regreso no engancha; en el regreso sí', () => {
+    const sobreDesvio = fix(en(40, 200));
+    expect(snapARuta(ida, sobreDesvio, null)).toBeNull();
+    expect(snapARuta(regreso, sobreDesvio, null)).not.toBeNull();
+  });
+
+  it('un fix sobre la calle compartida engancha con la mitad de su fase', () => {
+    const r = snapARuta(ida, fix(en(2, 100)), null);
+    expect(r).not.toBeNull();
+    expect(r!.distanciaRecorrida).toBeCloseTo(100, 0);
+  });
+});

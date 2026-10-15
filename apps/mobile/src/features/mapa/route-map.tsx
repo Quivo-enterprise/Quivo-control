@@ -44,6 +44,7 @@ import {
   type RutaSnap,
 } from '../operacion/movimiento/snap-ruta';
 import { useEstadoVisual } from '../operacion/movimiento/store-visual';
+import { crearFiltroFase, firmaGeometria, mitadesDelCircuito } from '../operacion/fase-vuelta';
 import {
   PADDING_ENCUADRE_RUTA,
   ZOOM_NAVEGACION,
@@ -163,16 +164,6 @@ interface CoordenadaMostrada {
    * la interpolación lineal no lleve `distancia`): gobierna el halo de precisión, que no aplica
    * cuando el marcador no está sobre el GPS crudo. */
   ajustadaARuta?: boolean;
-}
-
-/** Firma barata de contenido de la geometría (cantidad + hash de las coordenadas). */
-function firmaGeometria(coordenadas: ReadonlyArray<ReadonlyArray<number>>): string {
-  let hash = 0;
-  for (const c of coordenadas) {
-    hash = (Math.imul(hash, 31) + Math.round((c[0] ?? 0) * 1e6)) | 0;
-    hash = (Math.imul(hash, 31) + Math.round((c[1] ?? 0) * 1e6)) | 0;
-  }
-  return `${coordenadas.length}:${hash}`;
 }
 
 function aLatLng(coordenada: { lat: number; lng: number }): LatLng {
@@ -872,14 +863,22 @@ export function RouteMap({
   emisorRumbo,
   designacion,
   ordenEfectivo,
+  fase = null,
   style,
 }: RouteMapProps) {
   const mapRef = useRef<MapView>(null);
 
+  // Circuito con fases (ida/regreso comparten calles): solo se dibuja (y se ajusta el marcador a)
+  // la mitad de la fase actual. Sin fase, o si el circuito no se pudo partir, el circuito entero.
+  const coordenadasGeometria = useMemo(() => {
+    const completa = paquete.ruta.geometria.coordinates;
+    if (fase === null) return completa;
+    const mitades = mitadesDelCircuito(completa, ordenEfectivo);
+    return mitades ? mitades[fase] : completa;
+  }, [paquete, ordenEfectivo, fase]);
   const coordenadasRuta = useMemo<LatLng[]>(
-    () =>
-      paquete.ruta.geometria.coordinates.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
-    [paquete],
+    () => coordenadasGeometria.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
+    [coordenadasGeometria],
   );
   // Latitud de referencia para el ancho en dp (la ruta abarca pocos km: el coseno apenas varía).
   const latitudRuta = coordenadasRuta[0]?.latitude ?? 0;
@@ -888,7 +887,6 @@ export function RouteMap({
   // sólo cambia si cambia la GEOMETRÍA (firma de contenido): una referencia nueva del paquete con
   // la misma ruta no debe reiniciar el snap ni la animación del marcador.
   const rutaSnapCacheRef = useRef<{ firma: string; ruta: RutaSnap | null } | null>(null);
-  const coordenadasGeometria = paquete.ruta.geometria.coordinates;
   const rutaSnap = useMemo(() => {
     const firma = firmaGeometria(coordenadasGeometria);
     if (rutaSnapCacheRef.current?.firma === firma) return rutaSnapCacheRef.current.ruta;
@@ -959,15 +957,23 @@ export function RouteMap({
     [actualizarZoomRuta, programarZoomRuta],
   );
 
+  const enFase = useMemo(() => crearFiltroFase(ordenEfectivo, fase), [ordenEfectivo, fase]);
   const puntosControlData = useMemo(
     () =>
-      ordenEfectivo.map((pc, idx) => ({
-        id: pc.id,
-        orden: idx + 1,
-        latitude: pc.coord.coordinates[1],
-        longitude: pc.coord.coordinates[0],
-      })),
-    [ordenEfectivo],
+      // La numeración es la del orden efectivo COMPLETO (no salta entre fases); solo se filtran.
+      ordenEfectivo
+        .map((pc, idx) => ({
+          pc,
+          orden: idx + 1,
+        }))
+        .filter(({ pc }) => enFase(pc))
+        .map(({ pc, orden }) => ({
+          id: pc.id,
+          orden,
+          latitude: pc.coord.coordinates[1],
+          longitude: pc.coord.coordinates[0],
+        })),
+    [ordenEfectivo, enFase],
   );
 
   // Prioriza el store visual y cae al prop `posicionActual` mientras el store no tiene nada.
@@ -1336,7 +1342,7 @@ export function RouteMap({
           emisorZoom={emisorZoom}
           latitud={latitudRuta}
         />
-        {designacion ? (
+        {designacion && fase !== 'ida' ? (
           <DesignacionMapa
             designacion={designacion}
             tracking={tracking}

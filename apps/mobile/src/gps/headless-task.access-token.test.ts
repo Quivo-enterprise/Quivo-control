@@ -49,6 +49,8 @@ vi.mock('../features/operacion/drenaje-oportunista', () => ({
 // `progreso-vuelta*.test.ts`.
 vi.mock('../features/operacion/progreso-vuelta-store', () => ({
   registrarPasoEnVuelta: vi.fn().mockResolvedValue(undefined),
+  // Fase del circuito (ida/regreso): sin filtro por defecto, todos los PC se detectan.
+  puntosDeLaFaseActual: vi.fn(async (_db: unknown, _sesionId: string, puntosControl: unknown[]) => puntosControl),
 }));
 
 // REDISEÑO (anuncio de puntos de control): `anuncio-punto-control.ts` importa

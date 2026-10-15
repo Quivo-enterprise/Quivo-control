@@ -164,6 +164,9 @@ export function useGpsOperativo(
   // `GpsProvider` — ver el call site en `onLocation`/`onHeartbeat` más abajo. Requerido (sin
   // default): las dos pantallas que montan `GpsProvider` ya tienen esta función disponible.
   obtenerAccessToken: () => Promise<string | null>,
+  // Geometría de la ruta `[lng, lat][]` para el fallback de fase ida/regreso del circuito
+  // (`progreso-vuelta-store.ts`); opcional: sin ella la fase solo cambia al pasar el retorno.
+  geometriaRuta?: [number, number][],
 ) {
   const [tracking, setTracking] = useState(false);
   // FIX POST-REVISIÓN (hallazgo ALTO, rescope SESION_NO_VIGENTE — Entrega 28): `false` hasta que
@@ -428,7 +431,7 @@ export function useGpsOperativo(
         } = await registrarPuntoGps(
           db,
           location,
-          { deviceId, sesionId, puntosControl: puntosControlDelTick },
+          { deviceId, sesionId, puntosControl: puntosControlDelTick, geometriaRuta },
           // B6 (hallazgo de revisión, bajo): se pasa el REF, no `.current` — la cola FIFO de
           // `registrarPuntoGps` difiere la ejecución, y `sembrarCumplimientos` puede reemplazar
           // el Map en el medio. Ver `ContenedorEstadosPuntosControl` (`gps/headless-task.ts`).
@@ -540,7 +543,7 @@ export function useGpsOperativo(
       // Aviso de designación a Molinos: solo con el recorrido activo; piso propio de 20 s; nunca rechaza.
       if (trackingRef.current) void consultarVueltaActual(obtenerAccessToken);
     },
-    [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido],
+    [deviceId, sesionId, puntosControl, geometriaRuta, obtenerAccessToken, estadoInicioRecorrido],
   );
 
   // `onLocation` cambia de identidad cuando cambian `puntosControl`/`sesionId`, pero la

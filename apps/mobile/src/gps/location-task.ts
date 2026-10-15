@@ -39,6 +39,9 @@ export interface ContextoUbicacion {
   deviceId: string;
   sesionId: string;
   puntosControl: PuntoControlPaquete[];
+  /** Geometría de la ruta `[lng, lat][]`: el fallback de fase del circuito (ida/regreso) la usa
+   * para saber por qué mitad va el vehículo. Opcional: sin ella solo cambia de fase al pasar el retorno. */
+  geometriaRuta?: [number, number][];
 }
 
 /** Evento listo para encolar en el outbox — todavía sin persistir; `registrarPuntoGps`
