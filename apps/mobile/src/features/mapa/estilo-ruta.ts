@@ -14,8 +14,14 @@ export const COLOR_CASING_LINEA = quivoColors.primaryDark;
 export const COLOR_DESIGNACION = quivoColors.accent;
 /** Borde del tramo de designación (`warningStrong`, naranja oscuro del tema). */
 export const COLOR_CASING_DESIGNACION = quivoColors.warningStrong;
-/** Franja interior del tramo OSRM resaltado sobre la base azul. */
-export const COLOR_TRAMO_CALCULADO = quivoColors.primarySoft;
+/** Trazo discontinuo del tramo OSRM: `primaryDark`, legible sobre el mapa claro y sobre la base azul. */
+export const COLOR_TRAMO_CALCULADO = quivoColors.primaryDark;
+/** Banda blanca bajo el trazo del tramo OSRM: lo despega del mapa y de la base azul. */
+export const COLOR_CASING_TRAMO_CALCULADO = quivoColors.white;
+/** Patrón (dp: trazo, hueco) del tramo OSRM; se dibuja con `lineCap="butt"` para que se note. */
+export const PATRON_TRAMO_CALCULADO: readonly number[] = [14, 8];
+/** Fracción del ancho de la base que ocupa el tramo OSRM. */
+export const FRACCION_TRAMO_CALCULADO = 0.7;
 
 /** Ancho real de una calzada de un sentido (m) que representa la polilínea. */
 export const METROS_CALZADA = 7;
@@ -56,6 +62,8 @@ export interface EstiloRuta {
 
 /** Grosor fijo (dp) de un tramo sin seguimiento. */
 export const GROSOR_ESPERA_DP = 4.5;
+/** Grosor (dp) del tramo de designación sin seguimiento: más ancho que la base (4.5) para destacar. */
+export const GROSOR_DESIGNACION_ESPERA_DP = 7;
 
 /**
  * Estilo de un tramo (base o designación) con el mismo criterio de ancho: en seguimiento, el ancho
@@ -71,6 +79,36 @@ export function estiloTramo(
   if (!tracking) return { color, grosor: GROSOR_ESPERA_DP, colorCasing: null, grosorCasing: 0 };
   const grosor = anchoLineaDp(zoom, latitud);
   return { color, grosor, colorCasing, grosorCasing: grosor + 2 * BORDE_CASING_DP };
+}
+
+/**
+ * Tramo de la designación a Molinos. En seguimiento, igual que la base (ancho de calzada por zoom,
+ * borde naranja oscuro). Sin seguimiento conserva su énfasis: más ancho que la base (7 dp vs 4.5) y
+ * con borde.
+ */
+export function estiloDesignacion(zoom: number, latitud: number, tracking: boolean): EstiloRuta {
+  if (tracking)
+    return estiloTramo(COLOR_DESIGNACION, COLOR_CASING_DESIGNACION, zoom, latitud, true);
+  return {
+    color: COLOR_DESIGNACION,
+    grosor: GROSOR_DESIGNACION_ESPERA_DP,
+    colorCasing: COLOR_CASING_DESIGNACION,
+    grosorCasing: GROSOR_DESIGNACION_ESPERA_DP + 2 * BORDE_CASING_DP,
+  };
+}
+
+/**
+ * Tramo OSRM (vehículo → próximo PC) sobre la base azul: trazo discontinuo `primaryDark` sobre una
+ * banda blanca, al 70 % del ancho de la base (mínimo 5.6 dp: el piso de la base es 8).
+ */
+export function estiloTramoCalculado(zoom: number, latitud: number): EstiloRuta {
+  const grosor = anchoLineaDp(zoom, latitud) * FRACCION_TRAMO_CALCULADO;
+  return {
+    color: COLOR_TRAMO_CALCULADO,
+    grosor,
+    colorCasing: COLOR_CASING_TRAMO_CALCULADO,
+    grosorCasing: grosor + 2 * BORDE_CASING_DP,
+  };
 }
 
 /** En espera: oscura y fina, sin borde. En seguimiento: azul del ancho de la calzada (por zoom)

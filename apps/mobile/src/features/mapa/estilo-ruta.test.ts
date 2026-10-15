@@ -8,10 +8,15 @@ import {
   COLOR_DESIGNACION,
   COLOR_ESPERA,
   COLOR_LINEA,
+  COLOR_CASING_TRAMO_CALCULADO,
+  COLOR_TRAMO_CALCULADO,
+  GROSOR_DESIGNACION_ESPERA_DP,
   anchoLineaDp,
   cuantizarZoom,
   debeResaltarRutaCalculada,
+  estiloDesignacion,
   estiloRuta,
+  estiloTramoCalculado,
   estiloTramo,
   zoomParaEncuadre,
 } from './estilo-ruta';
@@ -92,6 +97,39 @@ describe('estiloTramo', () => {
       colorCasing: null,
       grosorCasing: 0,
     });
+  });
+});
+
+describe('estiloDesignacion', () => {
+  it('con tracking: igual que estiloTramo de la designación', () => {
+    expect(estiloDesignacion(18, LAT, true)).toEqual(
+      estiloTramo(COLOR_DESIGNACION, COLOR_CASING_DESIGNACION, 18, LAT, true),
+    );
+  });
+  it('sin tracking: más ancho que la base en espera y con borde', () => {
+    const e = estiloDesignacion(18, LAT, false);
+    expect(e.grosor).toBe(GROSOR_DESIGNACION_ESPERA_DP);
+    expect(e.grosor).toBeGreaterThan(estiloRuta(false, 18, LAT).grosor);
+    expect(e.colorCasing).toBe(COLOR_CASING_DESIGNACION);
+    expect(e.grosorCasing).toBeCloseTo(e.grosor + 2 * BORDE_CASING_DP, 5);
+  });
+});
+
+describe('estiloTramoCalculado (OSRM)', () => {
+  it('banda blanca bajo trazo oscuro, más fino que la base y con borde', () => {
+    const e = estiloTramoCalculado(18, LAT);
+    expect(e.color).toBe(COLOR_TRAMO_CALCULADO);
+    expect(e.colorCasing).toBe(COLOR_CASING_TRAMO_CALCULADO);
+    expect(e.grosor).toBeCloseTo(anchoLineaDp(18, LAT) * 0.7, 5);
+    expect(e.grosor).toBeLessThan(estiloRuta(true, 18, LAT).grosor);
+    expect(e.grosorCasing).toBeCloseTo(e.grosor + 2 * BORDE_CASING_DP, 5);
+  });
+  it('a zoom bajo hereda el piso de la base (70 % de 8 dp)', () => {
+    expect(estiloTramoCalculado(12, LAT).grosor).toBeCloseTo(ANCHO_MIN_DP * 0.7, 5);
+  });
+  it('no usa el color de la base ni el de la designación', () => {
+    expect(COLOR_TRAMO_CALCULADO).not.toBe(COLOR_LINEA);
+    expect(COLOR_TRAMO_CALCULADO).not.toBe(COLOR_DESIGNACION);
   });
 });
 
