@@ -6,7 +6,43 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-14, 08:00 (leer primero): F1 en main, F1-mobile y Fix 2 por mergear, piloto de 3 trufis
+## Punto de retome — 2026-10-15 (leer primero): fase de la vuelta, PC intermedios y camino al APK
+
+Plan vigente: [`docs/plan-fase-vuelta-apk.md`](plan-fase-vuelta-apk.md) (pasos, bloqueantes y orden de salida).
+
+- **Corrección del CTO (2026-10-15):** el chofer no ve los PC ni el trazado del regreso mientras
+  va de ida, ni al revés. La fase se deriva del orden de marcha: `orden < retorno.orden` es ida y
+  `orden > retorno.orden` es regreso; `terminal` pertenece a las dos. Esto resuelve la doble
+  detección de los intermedios en las calles compartidas.
+- **#160 mergeado** (piloto de 3 trufis, ya aplicado en prod el 14/10).
+- **#159 (F1-mobile) mergeado** (`a943b7a`). `/code-review` medium: 9 hallazgos, 8 aplicados. El
+  #4 se omitió con motivo: `conReintentoSiHandleMuerto` solo reabre el outbox. **Deuda:** reintento
+  propio ante handle zombi para `quivo-paquete-dia.db`.
+- **#161 `fix(api)`:** los PC intermedios (`rol` NULL, no obligatorios) no disparan `pc_omitido`
+  en vivo.
+  - Codex verify-fix: `fixes_root_cause`.
+  - `/code-review`: 10 hallazgos, aplicados. Se acotó a **rutas con PC `retorno`**: en la 120 y
+    la Z12 (PC opcionales sin rol) el comportamiento no cambia.
+  - Verify-fix de la versión final: **no verificado** (cuota de Codex agotada hasta las 21:41,
+    exit 3). No mergear antes de re-correrlo.
+  - **Tradeoff aceptado:** saltarse Honduras se detecta en `fin_recorrido` o en Molinos, y el
+    worker no cuenta una vuelta sin `retorno`.
+  - **F2:** comparación por fase en el servidor.
+- **PC intermedios por fase:** sin commitear en `feat/linea-16-puntos-control-intermedios`.
+  - 17 PC: SR, km 2–14 de ida, Honduras 8, km 16–26 de regreso, Molinos 15, km 28.
+  - La regla de 300 m solo aplica dentro de cada fase y se quitó la guarda de 250 m antes de
+    Honduras. Tests 47/47.
+  - **No aplicar** hasta que el APK con fases esté instalado en los 3 trufis y la API (#161)
+    desplegada; Codex lo marca en cada revisión.
+  - **Abierto:** km 28 puede quedar salteado en la vuelta vía Molinos si la bajada se reincorpora
+    después.
+- **Fix 2 → #162** (rebaseado sobre `main`, `/code-review` en curso). Fases de la vuelta en
+  `feat/mobile-fase-vuelta`, encima de #162 (subagente).
+- **Siguiente:** merge de #159 → Fix 2 → PR mobile de fases (foreground **y** headless) → PR de
+  intermedios → deploy API+web → changelog al CTO → build del APK → instalación → `--apply`.
+- **Pendiente con el CTO:** #105 (script de asignaciones del 08/10), ¿cerrar?
+
+## Punto de retome — 2026-10-14, 08:00 (anterior): F1 en main, F1-mobile y Fix 2 por mergear, piloto de 3 trufis
 
 - **Mergeados:** #158 (trazado L16; Codex verify-fix no corrido, el CTO lo eximió), #155 (foto del
   vehículo), #154 (vueltas/designación API; conflicto en `cargar-linea-16.ts` resuelto: base =
