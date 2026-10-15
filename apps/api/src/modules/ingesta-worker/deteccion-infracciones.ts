@@ -416,8 +416,9 @@ async function registrarPcOmitidos(
  * recorrido (sin `inicio_recorrido`, o posterior al fin) no se detecta nada; un cumplimiento
  * tardío del outbox (después de que el de un PC posterior ya disparó la detección) deja la
  * infracción abierta para descarte manual; el cumplimiento de un PC inactivo o de un opcional
- * sin `rol` (`cumplimientoDisparaPcOmitido`) no dispara nada, así que un obligatorio saltado
- * se detecta con el siguiente PC con rol/obligatorio o al `fin_recorrido`.
+ * sin `rol` SOLO en rutas con un PC `retorno` activo (`cumplimientoDisparaPcOmitido`) no dispara
+ * nada, así que ahí un obligatorio saltado se detecta con el siguiente PC con rol/obligatorio o
+ * al `fin_recorrido`; en las demás rutas cualquier PC activo cumplido dispara.
  */
 export async function detectarPcOmitidosPorCumplimiento(
   tx: Tx,
@@ -428,11 +429,23 @@ export async function detectarPcOmitidosPorCumplimiento(
   ahora: Date = new Date(),
 ): Promise<number> {
   const [pc] = await tx.$queryRaw<
-    { rutaId: string; orden: number; rol: RolPuntoControl | null; obligatorio: boolean; estado: string }[]
+    {
+      rutaId: string;
+      orden: number;
+      rol: RolPuntoControl | null;
+      obligatorio: boolean;
+      estado: string;
+      rutaConRetorno: boolean;
+    }[]
   >`
-    SELECT "rutaId", orden, rol, obligatorio, estado FROM puntos_control WHERE id = ${puntoControlId}
+    SELECT pc."rutaId", pc.orden, pc.rol, pc.obligatorio, pc.estado,
+           EXISTS (
+             SELECT 1 FROM puntos_control r
+             WHERE r."rutaId" = pc."rutaId" AND r.rol = 'retorno' AND r.estado = 'activo'
+           ) AS "rutaConRetorno"
+    FROM puntos_control pc WHERE pc.id = ${puntoControlId}
   `;
-  // Un PC inactivo, o un opcional sin rol, no dispara la omisión en vivo (ver la función).
+  // Un PC inactivo no dispara la omisión en vivo; en rutas con retorno tampoco un opcional sin rol.
   if (!pc || !cumplimientoDisparaPcOmitido(pc)) return 0;
   const ctx = await contextoDeSesion(tx, sindicatoId, sesionId);
   if (!ctx) return 0;
