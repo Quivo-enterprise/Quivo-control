@@ -96,13 +96,19 @@ function puntoEnDistancia(coords: Coord[], acumulado: number[], s: number): Coor
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 }
 
+/** Longitud de arco acumulada (m) en cada vértice: `[0, d01, d01+d12, …]`. */
+function acumuladoDe(coords: Coord[]): number[] {
+  const acumulado = [0];
+  for (let i = 1; i < coords.length; i++) acumulado.push(acumulado[i - 1]! + distanciaM(coords[i - 1]!, coords[i]!));
+  return acumulado;
+}
+
 /**
  * Tramo de la polilínea entre las abscisas `desde` y `hasta` (m de arco, acotadas a [0, total]):
  * puntos interpolados en los extremos y los vértices intermedios.
  */
 export function cortarPolilinea(coords: Coord[], desde: number, hasta: number): Coord[] {
-  const acumulado = [0];
-  for (let i = 1; i < coords.length; i++) acumulado.push(acumulado[i - 1]! + distanciaM(coords[i - 1]!, coords[i]!));
+  const acumulado = acumuladoDe(coords);
   const total = acumulado[acumulado.length - 1]!;
   const a = Math.max(0, Math.min(desde, hasta));
   const b = Math.min(total, Math.max(desde, hasta));
@@ -110,6 +116,141 @@ export function cortarPolilinea(coords: Coord[], desde: number, hasta: number): 
   for (let i = 0; i < coords.length; i++) if (acumulado[i]! > a && acumulado[i]! < b) res.push(coords[i]!);
   res.push(puntoEnDistancia(coords, acumulado, b));
   return res;
+}
+
+/** Punto sobre una polilínea a una abscisa dada (m de arco desde el inicio). */
+export interface PuntoEnPolilinea { coord: Coord; abscisaM: number }
+
+/**
+ * Puntos sobre la polilínea cada `pasoM` metros de arco: abscisas `pasoM, 2·pasoM, …` estrictamente
+ * dentro de (0, total) (los extremos no se incluyen). Cada coord está INTERPOLADA sobre el segmento
+ * correspondiente, es decir, a ~0 m de la geometría. Determinista.
+ */
+export function puntosCadaN(coords: Coord[], pasoM: number): PuntoEnPolilinea[] {
+  if (!(pasoM > 0)) throw new Error('puntosCadaN: pasoM debe ser > 0.');
+  const acumulado = acumuladoDe(coords);
+  const total = acumulado[acumulado.length - 1]!;
+  const res: PuntoEnPolilinea[] = [];
+  for (let k = 1; k * pasoM < total; k++) res.push({ coord: puntoEnDistancia(coords, acumulado, k * pasoM), abscisaM: k * pasoM });
+  return res;
+}
+
+/**
+ * Abscisa (m de arco desde el inicio) de la proyección más cercana de `punto` sobre la polilínea, mirando
+ * solo los segmentos que se solapan con [`desdeM`, `hastaM`]. Sirve para elegir UNA de las pasadas
+ * cuando la polilínea se cruza consigo misma (ida y regreso por la misma calle): con `desdeM` se salta la
+ * primera pasada. Devuelve también la distancia (m) del punto a esa proyección. En empates gana la primera.
+ */
+export function abscisaEnPolilinea(coords: Coord[], punto: Coord, desdeM = 0, hastaM = Infinity): { abscisaM: number; distM: number } {
+  if (coords.length < 2) throw new Error('abscisaEnPolilinea: hacen falta >= 2 vértices.');
+  let acum = 0;
+  let mejor: { abscisaM: number; distM: number } | null = null;
+  for (let i = 1; i < coords.length; i++) {
+    const largo = distanciaM(coords[i - 1]!, coords[i]!);
+    const ini = acum;
+    acum += largo;
+    if (acum < desdeM || ini > hastaM) continue;
+    const a = coords[i - 1]!;
+    const b = coords[i]!;
+    // La proyección se acota al sub-intervalo del segmento que cae dentro de [desdeM, hastaM]; la distancia
+    // se mide al punto ACOTADO (no a la proyección libre, que puede quedar fuera de la ventana).
+    const tMin = largo === 0 ? 0 : Math.max(0, (desdeM - ini) / largo);
+    const tMax = largo === 0 ? 1 : Math.min(1, (hastaM - ini) / largo);
+    const tLibre = proyectarEnSegmento(punto, a, b).t;
+    const t = Math.min(Math.max(tLibre, tMin), tMax);
+    const q: Coord = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    const d = distanciaM(punto, q);
+    const s = Math.min(Math.max(ini + t * largo, desdeM), hastaM);
+    if (mejor === null || d < mejor.distM) mejor = { abscisaM: s, distM: d };
+  }
+  if (mejor === null) throw new Error(`abscisaEnPolilinea: ningún segmento en [${desdeM}, ${hastaM}] m.`);
+  return mejor;
+}
+
+export interface OpcionesIntermedios {
+  pasoM: number;
+  /** PC ya existentes (SR, Honduras, Molinos) y las fases en que están activos: se descartan candidatos a < `minPcM` (recta) de los activos en SU fase. */
+  existentes: { coord: Coord; fase: FasePc | 'ambas' }[];
+  minPcM: number;
+  minEntreM: number;
+  /** Abscisa de Honduras sobre la geometría: separa las fases (abscisa < esta ⇒ `ida`; si no ⇒ `regreso`). */
+  sHonduras: number;
+}
+export type FasePc = 'ida' | 'regreso';
+export interface IntermedioPlanificado { coord: Coord; abscisaM: number; fase: FasePc }
+export interface ResultadoIntermedios {
+  puntos: IntermedioPlanificado[];
+  omitidosCercaPc: number;
+  omitidosCercaIntermedio: number;
+}
+
+/**
+ * PC intermedios cada `pasoM` sobre la geometría base (pura, determinista). Cada candidato recibe una fase
+ * (`ida` si su abscisa < `sHonduras`, si no `regreso`). Descartes, en este orden: cerca de un PC existente
+ * activo en su fase (el fin del circuito es SR, ya cubierto), y a < `minEntreM` de otro intermedio ya elegido DE LA MISMA FASE (ida y regreso comparten
+ * calles: un PC de ida y uno de regreso pueden quedar juntos; la app los separa por fase).
+ */
+export function planificarIntermedios(geometria: Coord[], o: OpcionesIntermedios): ResultadoIntermedios {
+  const res: ResultadoIntermedios = { puntos: [], omitidosCercaPc: 0, omitidosCercaIntermedio: 0 };
+  for (const c of puntosCadaN(geometria, o.pasoM)) {
+    const fase: FasePc = c.abscisaM < o.sHonduras ? 'ida' : 'regreso';
+    if (o.existentes.some((e) => (e.fase === 'ambas' || e.fase === fase) && distanciaM(e.coord, c.coord) < o.minPcM)) { res.omitidosCercaPc++; continue; }
+    if (res.puntos.some((q) => q.fase === fase && distanciaM(q.coord, c.coord) < o.minEntreM)) { res.omitidosCercaIntermedio++; continue; }
+    res.puntos.push({ coord: c.coord, abscisaM: c.abscisaM, fase });
+  }
+  return res;
+}
+
+/** `orden` = orden de marcha: ordena por abscisa (estable) y numera consecutivo (0, 1, 2…). */
+export function ordenesDeMarcha(abscisas: number[]): number[] {
+  const idx = abscisas.map((_, i) => i).sort((a, b) => abscisas[a]! - abscisas[b]! || a - b);
+  const res = new Array<number>(abscisas.length);
+  idx.forEach((i, k) => { res[i] = k; });
+  return res;
+}
+
+export type RolPc = 'terminal' | 'retorno' | 'espera';
+export interface EmparejamientoPc { planIdx: number; existenteIdx: number | null }
+
+/**
+ * Empareja los PC activos existentes con los planeados. Los que tienen `rol` se emparejan POR ROL (exactamente
+ * uno activo por rol esperado; 2+ → error; 0 → se creará); los de `rol` null, por `orden`. Un PC activo que no
+ * encaja con nada (rol no planeado u orden sin intermedio planeado) → error: se aborta antes de escribir.
+ * Los roled se excluyen del emparejamiento por orden (un intermedio nunca toma un PC roled que esté en su orden).
+ * Transición: si ningún PC activo tiene el rol planeado (creados por una versión previa del script, sin `rol`),
+ * se toma el PC activo sin rol más cercano a la coord planeada dentro de PC_SIN_ROL_MAX_M (2+ → error): conserva
+ * el id y su historial y el PATCH le asigna `rol`/`orden`. Corre ANTES del emparejamiento por orden.
+ */
+const PC_SIN_ROL_MAX_M = 50;
+export function emparejarPuntosControl(
+  existentes: { orden: number; rol?: string | null; coord?: Coord }[],
+  planeados: { orden: number; rol: RolPc | null; coord?: Coord }[],
+): EmparejamientoPc[] {
+  const usados = new Set<number>();
+  const res: EmparejamientoPc[] = [];
+  planeados.forEach((p, planIdx) => {
+    if (p.rol === null) return;
+    const c = existentes.map((e, i) => ({ e, i })).filter(({ e }) => e.rol === p.rol);
+    if (c.length > 1) throw new Error(`Hay ${c.length} PC activos con rol "${p.rol}" en la ruta; resolver a mano.`);
+    if (c.length === 0 && p.coord) {
+      const cerca = existentes.map((e, i) => ({ e, i })).filter(({ e, i }) => !e.rol && !usados.has(i) && e.coord && distanciaM(e.coord, p.coord!) <= PC_SIN_ROL_MAX_M);
+      if (cerca.length > 1) throw new Error(`Hay ${cerca.length} PC activos sin rol a ≤ ${PC_SIN_ROL_MAX_M} m del PC con rol "${p.rol}" (orden ${p.orden}); resolver a mano.`);
+      if (cerca[0]) c.push(cerca[0]);
+    }
+    if (c[0]) usados.add(c[0].i);
+    res.push({ planIdx, existenteIdx: c[0]?.i ?? null });
+  });
+  planeados.forEach((p, planIdx) => {
+    if (p.rol !== null) return;
+    // shortcut: los PC sin rol se emparejan por orden; si se re-traza la ruta y cambia la posición de los intermedios, un id puede heredar el historial de otro km — emparejar por cercanía antes de re-trazar.
+    const c = existentes.map((e, i) => ({ e, i })).filter(({ e, i }) => !e.rol && !usados.has(i) && e.orden === p.orden);
+    if (c.length > 1) throw new Error(`Hay ${c.length} PC activos sin rol con orden ${p.orden} en la ruta; resolver a mano.`);
+    if (c[0]) usados.add(c[0].i);
+    res.push({ planIdx, existenteIdx: c[0]?.i ?? null });
+  });
+  const sobran = existentes.map((e, i) => ({ e, i })).filter(({ i }) => !usados.has(i));
+  if (sobran.length > 0) throw new Error(`PC activos no previstos en el plan (orden/rol): ${sobran.map(({ e }) => `${e.orden}/${e.rol ?? 'sin rol'}`).join(', ')}. Abortando; resolver a mano.`);
+  return res.sort((a, b) => a.planIdx - b.planIdx);
 }
 
 /** Suma de |cambios de rumbo| (grados) del boceto entre las distancias de arco `desde` y `hasta`, mirando cada 15 m. */
@@ -142,8 +283,7 @@ function giroAcumulado(coords: Coord[], acumulado: number[], desde: number, hast
 export function remuestrear(coords: Coord[], pasoM: number = ESPACIADO_MUESTRAS_M, ventanaRumboM: number = VENTANA_RUMBO_M, giroSinRumboGrados: number = GIRO_SIN_RUMBO_GRADOS): Muestra[] {
   if (coords.length < 2) throw new Error('remuestrear: hacen falta al menos 2 puntos.');
   if (!(pasoM > 0)) throw new Error('remuestrear: pasoM debe ser > 0.');
-  const acumulado = [0];
-  for (let i = 1; i < coords.length; i++) acumulado.push(acumulado[i - 1]! + distanciaM(coords[i - 1]!, coords[i]!));
+  const acumulado = acumuladoDe(coords);
   const total = acumulado[acumulado.length - 1]!;
   if (!(total > 0)) throw new Error('remuestrear: la polilínea tiene longitud 0.');
   const distancias = [0];
@@ -323,8 +463,7 @@ export async function calcularRutaGoogle(req: RequestRuta, apiKey: string): Prom
  * (p. ej. el retorno en Honduras) es legítimo y no se toca.
  */
 export function primerEspolon(trazado: Coord[], boceto?: Coord[], arcoMinM = 100, toleranciaM = 10, alejamientoMinM = 80): Coord | null {
-  const acumulado = [0];
-  for (let i = 1; i < trazado.length; i++) acumulado.push(acumulado[i - 1]! + distanciaM(trazado[i - 1]!, trazado[i]!));
+  const acumulado = acumuladoDe(trazado);
   for (let i = 0; i < trazado.length; i++) {
     for (let j = i + 1; j < trazado.length; j++) {
       if (acumulado[j]! - acumulado[i]! <= arcoMinM) continue;

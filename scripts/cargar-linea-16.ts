@@ -83,16 +83,40 @@
  * ## Puntos de control y paradas
  *
  *   PC (radio 150 m como la 120/Z12), con su `rol` para el conteo de vueltas del servidor:
- *     orden 0 Salomón Romero  rol `terminal` (obligatorio=false) — abre/cierra cada vuelta
- *     orden 1 Molinos         rol `espera`, esperaMin 30 (obligatorio=false) — sobre el TRAMO
- *     orden 2 Honduras        rol `retorno` (obligatorio=true) — marca el medio de la vuelta
- *   **Por qué solo Honduras es obligatorio y va ÚLTIMO (orden 2):** la detección `pc_omitido`
+ *     SR        rol `terminal` orden 0 (obligatorio=false) — abre/cierra cada vuelta
+ *     Honduras  rol `retorno` (obligatorio=true) — marca el medio de la vuelta
+ *     Molinos   rol `espera`, esperaMin 30 (obligatorio=false) — sobre el TRAMO de la variante
+ *   (los 3 `orden` son de marcha, ver abajo; ya no 0/1/2)
+ *   PC INTERMEDIOS (decisión del CTO 2026-10-14): además de los 3, uno cada ~2 km a lo largo de TODO el circuito base,
+ *   `obligatorio=false`, sin `rol` ni `esperaMin`, radio 150 m. Se generan de forma determinista desde la geometría base
+ *   (`planificarIntermedios`, `puntosCadaN`): abscisas 2000, 4000… m interpoladas SOBRE la polilínea. Se descartan los
+ *   candidatos a < 500 m (recta) de SR/Honduras/Molinos (solo de los activos en la fase del candidato: SR y Honduras en ambas,
+ *   Molinos solo en regreso; el fin del circuito es SR); y los que quedan a < 300 m de otro intermedio
+ *   ya elegido **de la MISMA fase**.
+ *   **Fase (decisión del CTO 2026-10-15):** cada intermedio es `ida` (abscisa < la de Honduras: SR → Honduras) o `regreso`
+ *   (abscisa >= la de Honduras: Honduras → SR). La app del conductor es consciente de la fase: durante la ida solo detecta/muestra
+ *   los PC de ida y durante el regreso solo los de regreso; la fase se deriva del orden de marcha (orden < Honduras.orden ⇒ ida;
+ *   orden > Honduras.orden ⇒ regreso). Por eso ida y regreso, que comparten calles, pueden tener cada uno su PC en el mismo
+ *   lugar (el filtro de 300 m aplica solo dentro de la misma fase). **Ya NO existe la guarda de 250 m** que descartaba los
+ *   posteriores a Honduras cercanos al tramo SR→Honduras.
+ *   **⚠ PRECONDICIÓN DE `--apply` (no se verifica por código):** este plan REQUIERE (1) el PR #161 desplegado en la API (los
+ *   intermedios, rol null y no obligatorios, no disparan `pc_omitido` en vivo) y (2) el APK consciente de la fase instalado.
+ *   Motivo: los PC de regreso km 26/28 quedan a ~185 m de los de ida km 2/4; sin #161, un `pc_omitido` en vivo de Honduras
+ *   (falso) salta en cada viaje. El geojson y el dry-run incluyen la `fase` (SR 'ambas', Honduras 'retorno', Molinos 'regreso').
+ *   **`orden` = orden de MARCHA, para TODOS los PC** (consecutivos 0, 1, 2… según la abscisa sobre el circuito
+ *   base; paso 1 porque voz móvil / alertas muestran `orden + 1` como número humano): `pc_omitido` y el stepper/voz móvil comparan/usan `orden`. Por eso los PC existentes se RENUMERAN (solo cambia su
+ *   `orden`, vía PATCH; ids/coords/rol/esperaMin/obligatorio/radio se conservan): SR 0; Honduras en su posición (su proyección sobre la base, ~km 15); Molinos (en la variante) justo después de la bifurcación v43 del REGRESO. Ya no valen los viejos 1 (Molinos) y 2
+ *   (Honduras). Sincronización: los PC con `rol` se emparejan POR ROL, los intermedios por `orden`; cualquier PC activo que no
+ *   encaje aborta antes de escribir.
+ *   `--solo-puntos` (offline, desde `trazado-calles.json`) imprime el plan completo y escribe `puntos-control-intermedios.geojson`.
+ *   **Por qué solo Honduras es obligatorio:** la detección `pc_omitido`
  *   (`ingesta-worker/infracciones.logic.ts`) marca EN VIVO los PC obligatorios de `orden` menor
  *   que el cumplido que no se visitaron, y al `fin_recorrido` cualquier obligatorio sin visitar.
  *   Toda vuelta empieza y termina en SR (no puede ser obligatoria: daría 'omitido' falso en cada
- *   vuelta) y Molinos solo lo visitan los designados. Honduras con el orden MÁS ALTO nunca es
- *   "menor que el cumplido": solo `fin_recorrido` marca una vuelta que se saltó Honduras.
- *   Paradas (orden alineado con los PC): Salomón Romero (origen, 0), Molinos (intermedia, 1, sobre el
+ *   vuelta) y Molinos solo lo visitan los designados. Los intermedios no son
+ *   obligatorios y (con #161 desplegado) no disparan `pc_omitido` en vivo; al `fin_recorrido` marca una vuelta que se saltó
+ *   Honduras cualquier obligatorio sin visitar: Honduras mismo y también Molinos (espera) si se visita sin pasar por Honduras.
+ *   Paradas (orden propio, independiente del de los PC): Salomón Romero (origen, 0), Molinos (intermedia, 1, sobre el
  *   tramo: pasada intermedia, la vuelta termina en SR), Honduras (intermedia, 2). La API acepta un PC/parada a <= 100 m de la base O de una
  *   variante activa de la ruta; se valida localmente ANTES de mandar nada.
  *
@@ -129,8 +153,8 @@
  *
  *   Sindicato: por `QUIVO_SINDICATO_ID` o por nombre (`QUIVO_SINDICATO_NOMBRE`, default
  *   "Sindicato Piloto — Producción"); NO se crea. Línea: `codigo '16'` en ese sindicato. Ruta:
- *   `sentido 'circuito'` de la línea (geometría distinta → PATCH). PC: por `orden` entre los
- *   activos (coord/radio/obligatorio/rol/esperaMin distintos → PATCH). Paradas: por `nombre` entre
+ *   `sentido 'circuito'` de la línea (geometría distinta → PATCH). PC: por `rol` (SR/Molinos/Honduras) o por `orden` (intermedios) entre los
+ *   activos (orden/coord/radio/obligatorio/rol/esperaMin distintos → PATCH). Paradas: por `nombre` entre
  *   las activas (tipo/orden/coord distintos → PATCH). Variante: por nombre (o renombra la vieja).
  *   Orden de escritura con la ruta ya existente (la API valida paradas contra base ∪ tramos): ruta
  *   (solo crea) → variante con su tramo → PATCH de la geometría base → PC → paradas → vínculo de la
@@ -166,7 +190,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { calcularRutaGoogle, detectarRulos, detectarVueltasU, empalmarZona, geometriaDeHueco, paresDeZona, podarEspolones, distanciaAPolilineaM, distanciaM, longitudM, trazarPorCalles, unirTrozos, ESPACIADO_MUESTRAS_M, MAX_INTERMEDIOS, type HuecoSinCalle, type VueltaU } from './lib/trazar-por-calles.js';
+import { abscisaEnPolilinea, emparejarPuntosControl, ordenesDeMarcha, planificarIntermedios, calcularRutaGoogle, detectarRulos, detectarVueltasU, empalmarZona, geometriaDeHueco, paresDeZona, podarEspolones, distanciaAPolilineaM, distanciaM, longitudM, trazarPorCalles, unirTrozos, ESPACIADO_MUESTRAS_M, MAX_INTERMEDIOS, type HuecoSinCalle, type VueltaU } from './lib/trazar-por-calles.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -293,6 +317,11 @@ const OMITIR_MUESTRAS: Partial<Record<NombreTramo, { coord: Coord; motivo: strin
   ],
 };
 const RATIO_LONGITUD_MAX = 1.25;
+/** PC intermedios (CTO 2026-10-14): separación a lo largo del circuito, descartes y numeración de `orden`. */
+const PASO_PC_INTERMEDIO_M = 2000;
+const DIST_MIN_PC_EXISTENTE_M = 500;
+const DIST_MIN_ENTRE_INTERMEDIOS_M = 300;
+const PUNTOS_INTERMEDIOS_GEOJSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/puntos-control-intermedios.geojson');
 const TRAZADO_JSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-calles.json');
 const VISTA_PREVIA_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-vista-previa.geojson');
 const KML_TRAZADO_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-calles.kml');
@@ -441,6 +470,7 @@ const TRAMOS_A_RECALCULAR: NombreTramo[] = (() => {
 const RECALCULAR_ZONAS = argv.includes('--recalcular-zonas');
 const EXCEPCIONES_REVISADAS = argv.includes('--excepciones-revisadas');
 const SOLO_TRAZADO = argv.includes('--solo-trazado');
+const SOLO_PUNTOS = argv.includes('--solo-puntos');
 // Dry-run y --apply NUNCA escriben archivos versionados: recalcular (que llama a Google y reescribe el json) solo con --solo-trazado.
 if ((RECALCULAR_TRAZADO || RECALCULAR_ZONAS) && !SOLO_TRAZADO) {
   console.error('--recalcular-trazado / --recalcular-zonas requieren --solo-trazado: el dry-run y --apply no escriben archivos versionados.');
@@ -452,10 +482,13 @@ if (argv.includes('--help') || argv.includes('-h')) {
 Uso:
   QUIVO_ADMIN_EMAIL=… QUIVO_ADMIN_PASSWORD=… [QUIVO_API_URL=…] tsx scripts/cargar-linea-16.ts [--apply]
   [GOOGLE_ROUTES_API_KEY=…] tsx scripts/cargar-linea-16.ts --solo-trazado [--recalcular-trazado[=tramo1,tramo2]] [--recalcular-zonas]
+  tsx scripts/cargar-linea-16.ts --solo-puntos
 
 Sin --apply: dry-run (login + lecturas GET; NO escribe). Con --apply: escribe vía la API.
 --solo-trazado: calcula/lee el trazado por calles, escribe trazado-calles.json y la vista previa
   (.geojson) y termina SIN tocar la API de Quivo.
+--solo-puntos: OFFLINE (sin Google ni API de Quivo): arma el plan desde trazado-calles.json, imprime los PC intermedios y escribe
+  puntos-control-intermedios.geojson.
 --recalcular-trazado[=a,b]: regenera el trazado con Google Routes API (requiere GOOGLE_ROUTES_API_KEY);
   con lista, solo esos tramos (el resto se conserva del json). Tramos: ida, regreso, conector, ramal, bajada, salomon.
 --recalcular-zonas: re-rutea SOLO las zonas tramo a tramo (ZONAS_TRAMO_A_TRAMO) sobre los tramos guardados; el resto no se toca.
@@ -639,7 +672,7 @@ function huellaComparada(actual: Coord[] | null | undefined, deseada: Coord[]): 
 // Plan de datos (derivado del KML, puro) — lo que DEBE existir al terminar
 // ============================================================================================
 
-interface PuntoPlan { nombre: string; orden: number; coord: Coord; obligatorio: boolean; rol: 'terminal' | 'retorno' | 'espera'; esperaMin: number | null }
+interface PuntoPlan { nombre: string; orden: number; coord: Coord; obligatorio: boolean; rol: 'terminal' | 'retorno' | 'espera' | null; esperaMin: number | null; tipo: 'SR' | 'intermedio' | 'Honduras' | 'Molinos'; abscisaM: number; distRutaM: number; fase: 'ida' | 'regreso' | 'ambas' | 'retorno' | null }
 interface ParadaPlan { nombre: string; tipo: 'origen' | 'intermedia' | 'destino'; orden: number; coord: Coord }
 interface PlanDatos {
   geometria: Coord[];
@@ -1042,11 +1075,32 @@ export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
   console.log(`  Variante: sale de la base a ${salida.toFixed(1)} m y vuelve a ${vuelta.toFixed(1)} m (tope ${HUECO_MAX_TRAMOS_M} m).`);
   if (salida > HUECO_MAX_TRAMOS_M || vuelta > HUECO_MAX_TRAMOS_M) throw new Error(`El tramo de la variante no empalma con la base (sale a ${salida.toFixed(1)} m, vuelve a ${vuelta.toFixed(1)} m; tope ${HUECO_MAX_TRAMOS_M} m).`);
 
-  const puntosControl: PuntoPlan[] = [
-    { nombre: 'Salomón Romero', orden: 0, coord: salomon, obligatorio: false, rol: 'terminal', esperaMin: null },
-    { nombre: 'Molinos (Parada Putucu)', orden: 1, coord: molinos, obligatorio: false, rol: 'espera', esperaMin: ESPERA_MOLINOS_MIN },
-    { nombre: 'Honduras (RETORNO)', orden: 2, coord: honduras, obligatorio: true, rol: 'retorno', esperaMin: null },
+  // `orden` = orden de MARCHA a lo largo del circuito base (pc_omitido compara `orden`; ver cabecera). Posiciones:
+  //  · Honduras: proyección de su coord sobre la base (la `ida` sigue ~3,6 km más por el lazo de retorno, v123..150; Honduras queda ANTES).
+  //  · Molinos (sobre la variante): justo después de la bifurcación (v43, fin de `regreso`) en la pasada del REGRESO.
+  const largoIda = longitudM(trazado.ida);
+  const hond = abscisaEnPolilinea(geometria, honduras, 0, largoIda);
+  if (hond.distM > PROXIMIDAD_API_M) throw new Error(`Honduras a ${hond.distM.toFixed(1)} m de la base (> ${PROXIMIDAD_API_M} m): no se puede ubicar su orden de marcha.`);
+  const sHonduras = hond.abscisaM;
+  const bifur = abscisaEnPolilinea(geometria, trazado.regreso[trazado.regreso.length - 1]!, largoIda);
+  const sMolinos = bifur.abscisaM + 1e-6;
+  console.log(`  Honduras en el km ${(sHonduras / 1000).toFixed(2)} del circuito (a ${hond.distM.toFixed(1)} m de la base; fin de la ida en el km ${(largoIda / 1000).toFixed(2)}); bifurcación Molinos (v43, regreso) en el km ${(bifur.abscisaM / 1000).toFixed(2)}.`);
+  const inter = planificarIntermedios(geometria, {
+    pasoM: PASO_PC_INTERMEDIO_M, minPcM: DIST_MIN_PC_EXISTENTE_M,
+    // SR y Honduras (frontera de fases) valen en ambas fases; Molinos solo en regreso.
+    existentes: [{ coord: salomon, fase: 'ambas' }, { coord: honduras, fase: 'ambas' }, { coord: molinos, fase: 'regreso' }],
+    minEntreM: DIST_MIN_ENTRE_INTERMEDIOS_M, sHonduras,
+  });
+  const sinOrden: Omit<PuntoPlan, 'orden'>[] = [
+    { nombre: 'Salomón Romero', coord: salomon, obligatorio: false, rol: 'terminal', esperaMin: null, tipo: 'SR', abscisaM: 0, distRutaM: distanciaARutaM(geometria, tramo, salomon), fase: 'ambas' },
+    { nombre: 'Molinos (Parada Putucu)', coord: molinos, obligatorio: false, rol: 'espera', esperaMin: ESPERA_MOLINOS_MIN, tipo: 'Molinos', abscisaM: sMolinos, distRutaM: distanciaARutaM(geometria, tramo, molinos), fase: 'regreso' },
+    { nombre: 'Honduras (RETORNO)', coord: honduras, obligatorio: true, rol: 'retorno', esperaMin: null, tipo: 'Honduras', abscisaM: sHonduras, distRutaM: distanciaARutaM(geometria, tramo, honduras), fase: 'retorno' },
+    ...inter.puntos.map((q): Omit<PuntoPlan, 'orden'> => ({ nombre: `Control km ${(q.abscisaM / 1000).toFixed(0)}`, coord: [redondear(q.coord[0]), redondear(q.coord[1])], obligatorio: false, rol: null, esperaMin: null, tipo: 'intermedio', abscisaM: q.abscisaM, distRutaM: distanciaARutaM(geometria, tramo, q.coord), fase: q.fase })),
   ];
+  const ordenes = ordenesDeMarcha(sinOrden.map((p) => p.abscisaM));
+  const puntosControl: PuntoPlan[] = sinOrden.map((p, i) => ({ ...p, orden: ordenes[i]! })).sort((a, b) => a.orden - b.orden);
+  if (puntosControl[0]!.tipo !== 'SR' || puntosControl[0]!.orden !== 0) throw new Error('El PC Salomón Romero debe ser el orden 0 (inicio del circuito).');
+  console.log(`  PC intermedios cada ${PASO_PC_INTERMEDIO_M} m: ${inter.puntos.length} planeados; omitidos: ${inter.omitidosCercaPc} a < ${DIST_MIN_PC_EXISTENTE_M} m de SR/Honduras/Molinos (según la fase), ${inter.omitidosCercaIntermedio} a < ${DIST_MIN_ENTRE_INTERMEDIOS_M} m de otro intermedio de la MISMA fase (ida/regreso).`);
   const paradas: ParadaPlan[] = [
     { nombre: 'Salomón Romero', tipo: 'origen', orden: 0, coord: salomon },
     { nombre: 'Molinos', tipo: 'intermedia', orden: 1, coord: molinos },
@@ -1056,8 +1110,8 @@ export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
   // Mismas reglas que la API (<= 100 m a la geometría), validadas ANTES de mandar nada.
   // La API acepta un punto a <= 100 m de la base O del tramo de una variante activa.
   for (const p of puntosControl) {
-    const d = distanciaARutaM(geometria, tramo, p.coord);
-    console.log(`  PC orden ${p.orden} ${p.nombre} (${p.rol}): a ${d.toFixed(1)} m de la base/tramo.`);
+    const d = p.distRutaM;
+    if (p.tipo !== 'intermedio') console.log(`  PC orden ${p.orden} ${p.nombre} (${p.rol}): a ${d.toFixed(1)} m de la base/tramo.`);
     if (d > PROXIMIDAD_API_M) throw new Error(`PC "${p.nombre}" a ${d.toFixed(1)} m de la base/tramo (> ${PROXIMIDAD_API_M} m: la API lo rechazaría).`);
   }
   for (const p of paradas) {
@@ -1180,16 +1234,19 @@ async function parchearGeometriaRuta(existente: RutaApi | null, plan: PlanDatos)
   await escribir('PATCH', `/rutas/${existente.id}`, patch);
 }
 
-/** PC por `orden` → id (o PENDIENTE en dry-run) para vincular la variante después. */
+/** Aplana `coord` (GeoJSON Point) para `emparejarPuntosControl`. */
+const conCoordPlana = (e: PuntoControlApi) => ({ orden: e.orden, rol: e.rol, coord: e.coord.coordinates });
+
+/** PC por `orden` (el planeado, de marcha) → id (o PENDIENTE en dry-run) para vincular la variante después. */
 async function sincronizarPuntosControl(rutaId: string, plan: PlanDatos): Promise<Map<number, string>> {
   console.log('\n--- Puntos de control (GET/POST /v1/rutas/:id/puntos-control) ---');
   const ids = new Map<number, string>();
   const existentes = rutaId === PENDIENTE ? [] : (await leer<PuntoControlApi[]>(`/rutas/${rutaId}/puntos-control`)).filter((p) => p.estado === 'activo');
-  const ordenes = new Set(plan.puntosControl.map((p) => p.orden));
-  for (const p of existentes.filter((e) => !ordenes.has(e.orden))) {
-    throw new Error(`PC activo orden ${p.orden} (${p.id}) no previsto en la ruta. Abortando; resolver a mano.`);
-  }
-  for (const p of plan.puntosControl) {
+  // Emparejamiento: los PC con `rol` por ROL (su `orden` se renumera al de marcha), los intermedios (sin rol) por `orden`.
+  // Aborta ANTES de la primera escritura si algún PC activo no encaja o hay ambigüedad.
+  const pares = emparejarPuntosControl(existentes.map(conCoordPlana), plan.puntosControl);
+  for (const { planIdx, existenteIdx } of pares) {
+    const p = plan.puntosControl[planIdx]!;
     const cuerpo = {
       orden: p.orden,
       coord: { type: 'Point', coordinates: p.coord },
@@ -1199,14 +1256,12 @@ async function sincronizarPuntosControl(rutaId: string, plan: PlanDatos): Promis
       rol: p.rol,
       esperaMin: p.esperaMin,
     };
-    const iguales = existentes.filter((e) => e.orden === p.orden);
-    if (iguales.length > 1) throw new Error(`Hay ${iguales.length} PC activos con orden ${p.orden} en la ruta; resolver a mano.`);
-    const e = iguales[0];
-    console.log(`  [${p.orden}] ${p.nombre}:`);
+    const e = existenteIdx === null ? undefined : existentes[existenteIdx];
+    console.log(`  [${p.orden}] ${p.nombre}: fase ${p.fase}, a ${p.distRutaM.toFixed(1)} m de la base/tramo`);
     imprimirDiff(
       `PC[${p.orden}]`,
-      e ? { coord: mismaCoord(e.coord.coordinates, p.coord) ? p.coord : e.coord.coordinates, radioToleranciaM: e.radioToleranciaM, obligatorio: e.obligatorio, rol: e.rol ?? null, esperaMin: e.esperaMin ?? null } : null,
-      { coord: p.coord, radioToleranciaM: RADIO_TOLERANCIA_M, obligatorio: p.obligatorio, rol: p.rol, esperaMin: p.esperaMin },
+      e ? { orden: e.orden, coord: mismaCoord(e.coord.coordinates, p.coord) ? p.coord : e.coord.coordinates, radioToleranciaM: e.radioToleranciaM, obligatorio: e.obligatorio, rol: e.rol ?? null, esperaMin: e.esperaMin ?? null } : null,
+      { orden: p.orden, coord: p.coord, radioToleranciaM: RADIO_TOLERANCIA_M, obligatorio: p.obligatorio, rol: p.rol, esperaMin: p.esperaMin },
     );
     if (!e) {
       const creado = await escribir<PuntoControlApi>('POST', `/rutas/${rutaId}/puntos-control`, cuerpo);
@@ -1214,6 +1269,7 @@ async function sincronizarPuntosControl(rutaId: string, plan: PlanDatos): Promis
     } else {
       ids.set(p.orden, e.id);
       if (
+        e.orden !== p.orden ||
         !mismaCoord(e.coord.coordinates, p.coord) ||
         e.radioToleranciaM !== RADIO_TOLERANCIA_M ||
         e.obligatorio !== p.obligatorio ||
@@ -1387,9 +1443,10 @@ async function preVuelo(sindicato: SindicatoApi, plan: PlanDatos): Promise<void>
   const inesperadasPar = paradas.filter((pa) => pa.estado === 'activo' && (!pa.nombre || !nombres.has(pa.nombre)));
   if (inesperadasPar.length > 0) throw new Error(`Paradas activas no previstas: ${inesperadasPar.map((pa) => `"${pa.nombre}" (${pa.id})`).join(', ')}.`);
   const pcs = (await leer<PuntoControlApi[]>(`/rutas/${ruta.id}/puntos-control`)).filter((pc) => pc.estado === 'activo');
-  const ordenes = new Set(plan.puntosControl.map((pc) => pc.orden));
-  const inesperadosPc = pcs.filter((pc) => !ordenes.has(pc.orden));
-  if (inesperadosPc.length > 0) throw new Error(`PC activos no previstos (orden): ${inesperadosPc.map((pc) => `${pc.orden} (${pc.id})`).join(', ')}.`);
+  if (pcs.length > 0 && !pcs.some((e) => 'rol' in e)) {
+    throw new Error('La API no devuelve "rol" en los puntos de control: la versión desplegada es anterior a #154. Desplegar la API antes de correr este script.');
+  }
+  emparejarPuntosControl(pcs.map(conCoordPlana), plan.puntosControl); // lanza si hay PC activos no previstos (rol/orden) o ambiguos
   console.log(`  OK: ${paradas.length} parada(s) y ${pcs.length} PC activo(s) existentes, todo compatible con el plan.`);
 }
 
@@ -1397,7 +1454,37 @@ async function preVuelo(sindicato: SindicatoApi, plan: PlanDatos): Promise<void>
 // main
 // ============================================================================================
 
+function mainSoloPuntos(): void {
+  console.log('Línea 16 — SOLO PUNTOS (offline, desde trazado-calles.json); no toca Google ni la API de Quivo.');
+  const boceto = prepararBoceto(fs.readFileSync(KML_PATH, 'utf8'));
+  const json = JSON.parse(fs.readFileSync(TRAZADO_JSON_PATH, 'utf8')) as { tramos: TramosCoord };
+  const plan = construirPlan(boceto, json.tramos);
+  const inter = plan.puntosControl.filter((p) => p.tipo === 'intermedio');
+  console.log(`\nPlan completo de PC (${plan.puntosControl.length}: SR + Honduras + Molinos + ${inter.length} intermedios), circuito base de ${(longitudM(plan.geometria) / 1000).toFixed(2)} km, ordenado por orden de marcha:`);
+  console.log('  orden  tipo       km_circuito  lat          lng          dist_ruta_m  fase');
+  for (const p of plan.puntosControl) {
+    console.log(`  ${String(p.orden).padStart(5)}  ${p.tipo.padEnd(9)}  ${(p.abscisaM / 1000).toFixed(2).padStart(11)}  ${p.coord[1].toFixed(6)}  ${p.coord[0].toFixed(6)}  ${p.distRutaM.toFixed(2).padStart(11)}  ${p.fase ?? '-'}`);
+  }
+  const features = plan.puntosControl.map((p) => ({
+    type: 'Feature',
+    properties: { orden: p.orden, tipo: p.tipo, km: Number((p.abscisaM / 1000).toFixed(3)), nombre: p.nombre, rol: p.rol, obligatorio: p.obligatorio, fase: p.fase },
+    geometry: { type: 'Point', coordinates: p.coord },
+  }));
+  fs.writeFileSync(PUNTOS_INTERMEDIOS_GEOJSON_PATH, JSON.stringify({ type: 'FeatureCollection', features }, null, 1) + '\n');
+  console.log(`\nEscrito ${path.relative(REPO_ROOT, PUNTOS_INTERMEDIOS_GEOJSON_PATH)} (${features.length} puntos).`);
+}
+
 async function main(): Promise<void> {
+  if (SOLO_PUNTOS) {
+    try {
+      mainSoloPuntos();
+    } catch (err) {
+      console.error('\nAbortado.');
+      console.error(err instanceof Error ? err.message : err);
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (SOLO_TRAZADO) {
     // Sin API de Quivo: ni login ni red salvo Google (y solo si se pidió recalcular).
     console.log('='.repeat(90));
@@ -1432,6 +1519,10 @@ async function main(): Promise<void> {
   console.log(`Línea 16 (vueltas / Vía Molinos) — API ${API_URL} — modo: ${APLICAR ? 'APPLY (escribe vía la API)' : 'DRY-RUN (solo lecturas; no escribe nada)'}`);
   console.log('='.repeat(90));
 
+  if (APLICAR) {
+    console.warn('!!! PRECONDICIÓN (no verificada por el script): el PR #161 (los PC intermedios no disparan pc_omitido en vivo) debe estar DESPLEGADO en la API y el APK consciente de la fase instalado. Sin eso, un pc_omitido falso de Honduras salta en cada viaje (los PC de regreso km 26/28 quedan a ~185 m de los de ida km 2/4).');
+  }
+
   console.log('\n--- Paso 0: insumos (KML + trazado por calles) ---');
   const kmlTexto = fs.readFileSync(KML_PATH, 'utf8');
   const boceto = prepararBoceto(kmlTexto);
@@ -1456,7 +1547,7 @@ async function main(): Promise<void> {
     await parchearGeometriaRuta(existente, plan);
     const pcIds = await sincronizarPuntosControl(rutaId, plan);
     await sincronizarParadas(rutaId, plan);
-    await vincularPuntoEspera(variante, pcIds.get(1));
+    await vincularPuntoEspera(variante, pcIds.get(plan.puntosControl.find((pc) => pc.rol === 'espera')!.orden));
 
     if (APLICAR) {
       await verificar(lineaId, plan);
