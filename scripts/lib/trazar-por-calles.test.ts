@@ -559,3 +559,28 @@ test('emparejarPuntosControl: roled por rol (aunque su orden difiera), intermedi
   // intermedio existente por orden
   assert.deepEqual(emparejarPuntosControl([...ex, { orden: 10, rol: null }], plan).map((e) => e.existenteIdx), [0, 3, 2, null, 1]);
 });
+
+test('emparejarPuntosControl: PC viejos sin rol (SR/Molinos/Honduras, orden 0/1/2) se emparejan por cercanía con los roled; 14 intermedios se crean', () => {
+  const sr: Coord = [-66.1, -17.3], molinos: Coord = [-66.2, -17.35], honduras: Coord = [-66.15, -17.32];
+  const ex = [{ orden: 0, rol: null, coord: sr }, { orden: 1, rol: null, coord: molinos }, { orden: 2, rol: null, coord: honduras }];
+  const plan = [
+    { orden: 0, rol: 'terminal' as const, coord: sr },
+    ...Array.from({ length: 14 }, (_, k) => ({ orden: k + 1, rol: null, coord: [-66.12 - k * 0.001, -17.31] as Coord })),
+    { orden: 15, rol: 'retorno' as const, coord: honduras },
+    { orden: 16, rol: 'espera' as const, coord: molinos },
+  ];
+  const m = emparejarPuntosControl(ex, plan).map((e) => e.existenteIdx);
+  assert.deepEqual([m[0], m[15], m[16]], [0, 2, 1]);
+  assert.equal(m.filter((x) => x === null).length, 14);
+});
+
+test('emparejarPuntosControl: el fallback por cercanía ignora un PC sin rol a más de 50 m (queda como no previsto)', () => {
+  const sr: Coord = [-66.1, -17.3];
+  const lejos: Coord = [-66.1, -17.2995]; // ~55 m
+  assert.ok(distanciaM(sr, lejos) > 50);
+  assert.throws(() => emparejarPuntosControl([{ orden: 0, rol: null, coord: lejos }], [{ orden: 0, rol: 'terminal', coord: sr }]), /no previstos/);
+  assert.throws(
+    () => emparejarPuntosControl([{ orden: 5, rol: null, coord: sr }, { orden: 6, rol: null, coord: sr }], [{ orden: 0, rol: 'terminal', coord: sr }]),
+    /2 PC activos sin rol a ≤ 50 m/,
+  );
+});

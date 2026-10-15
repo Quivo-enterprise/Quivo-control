@@ -217,10 +217,14 @@ export interface EmparejamientoPc { planIdx: number; existenteIdx: number | null
  * uno activo por rol esperado; 2+ → error; 0 → se creará); los de `rol` null, por `orden`. Un PC activo que no
  * encaja con nada (rol no planeado u orden sin intermedio planeado) → error: se aborta antes de escribir.
  * Los roled se excluyen del emparejamiento por orden (un intermedio nunca toma un PC roled que esté en su orden).
+ * Transición: si ningún PC activo tiene el rol planeado (creados por una versión previa del script, sin `rol`),
+ * se toma el PC activo sin rol más cercano a la coord planeada dentro de PC_SIN_ROL_MAX_M (2+ → error): conserva
+ * el id y su historial y el PATCH le asigna `rol`/`orden`. Corre ANTES del emparejamiento por orden.
  */
+const PC_SIN_ROL_MAX_M = 50;
 export function emparejarPuntosControl(
-  existentes: { orden: number; rol?: string | null }[],
-  planeados: { orden: number; rol: RolPc | null }[],
+  existentes: { orden: number; rol?: string | null; coord?: Coord }[],
+  planeados: { orden: number; rol: RolPc | null; coord?: Coord }[],
 ): EmparejamientoPc[] {
   const usados = new Set<number>();
   const res: EmparejamientoPc[] = [];
@@ -228,6 +232,11 @@ export function emparejarPuntosControl(
     if (p.rol === null) return;
     const c = existentes.map((e, i) => ({ e, i })).filter(({ e }) => e.rol === p.rol);
     if (c.length > 1) throw new Error(`Hay ${c.length} PC activos con rol "${p.rol}" en la ruta; resolver a mano.`);
+    if (c.length === 0 && p.coord) {
+      const cerca = existentes.map((e, i) => ({ e, i })).filter(({ e, i }) => !e.rol && !usados.has(i) && e.coord && distanciaM(e.coord, p.coord!) <= PC_SIN_ROL_MAX_M);
+      if (cerca.length > 1) throw new Error(`Hay ${cerca.length} PC activos sin rol a ≤ ${PC_SIN_ROL_MAX_M} m del PC con rol "${p.rol}" (orden ${p.orden}); resolver a mano.`);
+      if (cerca[0]) c.push(cerca[0]);
+    }
     if (c[0]) usados.add(c[0].i);
     res.push({ planIdx, existenteIdx: c[0]?.i ?? null });
   });

@@ -1234,6 +1234,9 @@ async function parchearGeometriaRuta(existente: RutaApi | null, plan: PlanDatos)
   await escribir('PATCH', `/rutas/${existente.id}`, patch);
 }
 
+/** Aplana `coord` (GeoJSON Point) para `emparejarPuntosControl`. */
+const conCoordPlana = (e: PuntoControlApi) => ({ orden: e.orden, rol: e.rol, coord: e.coord.coordinates });
+
 /** PC por `orden` (el planeado, de marcha) → id (o PENDIENTE en dry-run) para vincular la variante después. */
 async function sincronizarPuntosControl(rutaId: string, plan: PlanDatos): Promise<Map<number, string>> {
   console.log('\n--- Puntos de control (GET/POST /v1/rutas/:id/puntos-control) ---');
@@ -1241,7 +1244,7 @@ async function sincronizarPuntosControl(rutaId: string, plan: PlanDatos): Promis
   const existentes = rutaId === PENDIENTE ? [] : (await leer<PuntoControlApi[]>(`/rutas/${rutaId}/puntos-control`)).filter((p) => p.estado === 'activo');
   // Emparejamiento: los PC con `rol` por ROL (su `orden` se renumera al de marcha), los intermedios (sin rol) por `orden`.
   // Aborta ANTES de la primera escritura si algún PC activo no encaja o hay ambigüedad.
-  const pares = emparejarPuntosControl(existentes, plan.puntosControl);
+  const pares = emparejarPuntosControl(existentes.map(conCoordPlana), plan.puntosControl);
   for (const { planIdx, existenteIdx } of pares) {
     const p = plan.puntosControl[planIdx]!;
     const cuerpo = {
@@ -1440,7 +1443,10 @@ async function preVuelo(sindicato: SindicatoApi, plan: PlanDatos): Promise<void>
   const inesperadasPar = paradas.filter((pa) => pa.estado === 'activo' && (!pa.nombre || !nombres.has(pa.nombre)));
   if (inesperadasPar.length > 0) throw new Error(`Paradas activas no previstas: ${inesperadasPar.map((pa) => `"${pa.nombre}" (${pa.id})`).join(', ')}.`);
   const pcs = (await leer<PuntoControlApi[]>(`/rutas/${ruta.id}/puntos-control`)).filter((pc) => pc.estado === 'activo');
-  emparejarPuntosControl(pcs, plan.puntosControl); // lanza si hay PC activos no previstos (rol/orden) o ambiguos
+  if (pcs.length > 0 && !pcs.some((e) => 'rol' in e)) {
+    throw new Error('La API no devuelve "rol" en los puntos de control: la versión desplegada es anterior a #154. Desplegar la API antes de correr este script.');
+  }
+  emparejarPuntosControl(pcs.map(conCoordPlana), plan.puntosControl); // lanza si hay PC activos no previstos (rol/orden) o ambiguos
   console.log(`  OK: ${paradas.length} parada(s) y ${pcs.length} PC activo(s) existentes, todo compatible con el plan.`);
 }
 
