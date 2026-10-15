@@ -44,7 +44,7 @@ import {
   type RutaSnap,
 } from '../operacion/movimiento/snap-ruta';
 import { useEstadoVisual } from '../operacion/movimiento/store-visual';
-import { crearFiltroFase, mitadesDelCircuito } from '../operacion/fase-vuelta';
+import { crearFiltroFase, firmaGeometria, mitadesDelCircuito } from '../operacion/fase-vuelta';
 import {
   PADDING_ENCUADRE_RUTA,
   ZOOM_NAVEGACION,
@@ -164,16 +164,6 @@ interface CoordenadaMostrada {
    * la interpolación lineal no lleve `distancia`): gobierna el halo de precisión, que no aplica
    * cuando el marcador no está sobre el GPS crudo. */
   ajustadaARuta?: boolean;
-}
-
-/** Firma barata de contenido de la geometría (cantidad + hash de las coordenadas). */
-function firmaGeometria(coordenadas: ReadonlyArray<ReadonlyArray<number>>): string {
-  let hash = 0;
-  for (const c of coordenadas) {
-    hash = (Math.imul(hash, 31) + Math.round((c[0] ?? 0) * 1e6)) | 0;
-    hash = (Math.imul(hash, 31) + Math.round((c[1] ?? 0) * 1e6)) | 0;
-  }
-  return `${coordenadas.length}:${hash}`;
 }
 
 function aLatLng(coordenada: { lat: number; lng: number }): LatLng {

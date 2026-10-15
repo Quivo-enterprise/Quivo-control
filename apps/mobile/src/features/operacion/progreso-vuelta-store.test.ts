@@ -9,7 +9,7 @@ vi.mock('../../db/vuelta-actual-local', () => ({
   leerDesignacionOrdenLocal: vi.fn().mockResolvedValue(null),
 }));
 
-import { puntosDeLaFaseActual, registrarPasoEnVuelta } from './progreso-vuelta-store';
+import { leerProgresoVuelta, puntosDeLaFaseActual, registrarPasoEnVuelta } from './progreso-vuelta-store';
 import { faseDe, FIXES_FALLBACK_REGRESO } from './fase-vuelta';
 
 // SQLite mínima en memoria: una fila por clave con `estado_json` y `version` (lo que usa el almacén).
@@ -93,5 +93,31 @@ describe('puntosDeLaFaseActual', () => {
     await consultar(sobreRegreso);
     await consultar(sobreIda);
     expect(ids(await consultar(sobreRegreso))).toEqual(['sr', 'i1', 'h']);
+  });
+
+  it('regreso: fixes sobre la ida exclusiva (lejos del regreso) devuelven a ida', async () => {
+    await registrarPasoEnVuelta(db as never, 's1', 'sr', 'k1', puntos);
+    await registrarPasoEnVuelta(db as never, 's1', 'h', 'k2', puntos);
+    for (let i = 1; i < FIXES_FALLBACK_REGRESO; i++) {
+      expect(ids(await consultar(sobreIda))).toEqual(['sr', 'r1']);
+    }
+    expect(ids(await consultar(sobreIda))).toEqual(['sr', 'i1', 'h']);
+  });
+});
+
+describe('fase a medianoche', () => {
+  it('sin fila del día hereda la fase del día anterior (solo la fase, no las vueltas)', async () => {
+    const db = dbFalsa();
+    db.filas.set('s1:2026-10-14', {
+      estado_json: JSON.stringify({ pasados: ['sr'], vueltasCompletadas: 3, fase: 'regreso' }),
+      version: 4,
+    });
+    const hoy = await leerProgresoVuelta(db as never, 's1', '2026-10-15');
+    expect(faseDe(hoy)).toBe('regreso');
+    expect(hoy.vueltasCompletadas).toBe(0);
+    expect(hoy.pasados).toEqual([]);
+    // Con fila propia del día, manda la suya.
+    db.filas.set('s1:2026-10-15', { estado_json: JSON.stringify({ pasados: [] }), version: 1 });
+    expect(faseDe(await leerProgresoVuelta(db as never, 's1', '2026-10-15'))).toBe('ida');
   });
 });

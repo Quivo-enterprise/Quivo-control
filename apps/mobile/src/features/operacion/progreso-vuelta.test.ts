@@ -554,6 +554,20 @@ describe('fases ida/regreso del circuito (PC retorno)', () => {
     expect(e.pasados).toEqual(['sr']);
   });
 
+  it('sin rol terminal el ancla es el PC de menor orden y nunca el retorno', () => {
+    const sinTerminal = [conRol('a', 0), conRol('b', 1), conRol('h', 2, 'retorno'), conRol('c', 3)];
+    let e = paso(sinTerminal, estadoInicialVuelta('s'), ['h']);
+    expect(e.inicioId).toBeNull(); // Honduras no ancla la vuelta
+    e = paso(sinTerminal, e, ['a', 'b', 'h']);
+    expect(e.inicioId).toBe('a');
+    expect(faseDe(e)).toBe('regreso');
+    // Vuelta siguiente: pasar Honduras no reinicia la fase a ida.
+    e = paso(sinTerminal, e, ['c', 'a']);
+    expect(e.vueltasCompletadas).toBe(1);
+    e = paso(sinTerminal, e, ['b', 'h']);
+    expect(faseDe(e)).toBe('regreso');
+  });
+
   it('la terminal no cierra la vuelta con solo ella pasada ni toca la fase', () => {
     const e = paso(nueva, estadoInicialVuelta('s'), ['sr', 'sr']);
     expect(e.vueltasCompletadas).toBe(0);

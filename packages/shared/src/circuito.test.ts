@@ -45,6 +45,18 @@ describe('partirCircuitoPorRetorno', () => {
     expect(r.regreso).toHaveLength(4);
   });
 
+  it('corta en el mínimo global de la primera racha cercana, no en el primer mínimo local', () => {
+    // Retorno a (100,100) m. La ida roza a 100 m en x=100 (mínimo local), sigue a x=200, sube y
+    // gira al oeste hasta llegar al retorno: el corte real es el final de esa racha (distancia 0).
+    const m = (x: number, y: number): [number, number] => [x / GRADO_M, y / GRADO_M];
+    const ida = [m(0, 0), m(100, 0), m(200, 0), m(200, 100), m(100, 100), m(100, 300), m(0, 300)];
+    const r = partirCircuitoPorRetorno(ida, m(100, 100))!;
+    expect(r).not.toBeNull();
+    expect(r.indiceCorte).toBe(3);
+    expect(r.ida[r.ida.length - 1]![0]).toBeCloseTo(100 / GRADO_M, 7);
+    expect(r.ida[r.ida.length - 1]![1]).toBeCloseTo(100 / GRADO_M, 7);
+  });
+
   it('devuelve null si la polilínea nunca pasa a radioM del retorno', () => {
     expect(partirCircuitoPorRetorno(circuito, [0.02, 0.01])).toBeNull();
     expect(partirCircuitoPorRetorno(circuito, [0.02, 0.0005], 0.5)).not.toBeNull();

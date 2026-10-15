@@ -49,7 +49,7 @@ export interface CircuitoPartido {
  * Parte el circuito cerrado de la línea 16 en ida y regreso por el PC de retorno (Honduras). Ida y
  * regreso comparten calles, así que el retorno se busca desde el INICIO de la polilínea: el corte
  * está en el punto más cercano de la PRIMERA aproximación (primer segmento a ≤ `radioM`; se sigue
- * avanzando mientras la distancia baje). Una segunda pasada cerca del retorno (el regreso por la
+ * avanzando por esa racha hasta su mínimo global). Una segunda pasada cerca del retorno (el regreso por la
  * misma calle) no mueve el corte. El punto proyectado se inserta en ambas mitades. `null` si la
  * polilínea nunca pasa a ≤ `radioM` del retorno o si alguna mitad queda sin segmento.
  */
@@ -67,13 +67,16 @@ export function partirCircuitoPorRetorno(
   }
   if (k >= n) return null;
 
+  // Mínimo GLOBAL dentro de la primera racha de segmentos a ≤ `radioM` (la racha termina al salir).
   let mejorK = k;
   let mejor = proyectarEnSegmento(coordRetorno, geometria[k]!, geometria[k + 1]!);
   for (let i = k + 1; i < n; i += 1) {
     const actual = proyectarEnSegmento(coordRetorno, geometria[i]!, geometria[i + 1]!);
-    if (actual.distanciaM > mejor.distanciaM) break;
-    mejorK = i;
-    mejor = actual;
+    if (actual.distanciaM > radioM) break;
+    if (actual.distanciaM < mejor.distanciaM) {
+      mejorK = i;
+      mejor = actual;
+    }
   }
 
   const a = geometria[mejorK]!;

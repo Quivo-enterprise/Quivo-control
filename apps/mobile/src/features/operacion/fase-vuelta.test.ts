@@ -85,11 +85,24 @@ describe('fallback de fase por geometría', () => {
     expect(e.fixesRegreso ?? 0).toBe(0);
   });
 
-  it('un fix impreciso ni cuenta ni reinicia; en regreso no hace nada', () => {
+  it('un fix impreciso ni cuenta ni reinicia', () => {
     const e = { fixesRegreso: 2 };
     expect(evaluarFixFase(e, 500, 5, DISTANCIA_SOBRE_REGRESO_M + 1)).toBe(e);
-    const r = { fase: 'regreso' as const };
-    expect(evaluarFixFase(r, 500, 5)).toBe(r);
+  });
+
+  it('simétrico: en regreso, FIXES_FALLBACK_REGRESO fixes sobre la ida exclusiva vuelven a ida', () => {
+    type E = { fase?: 'ida' | 'regreso'; fixesRegreso?: number };
+    const sobreIda = (e: E) =>
+      evaluarFixFase(e, DISTANCIA_SOBRE_REGRESO_M - 1, DISTANCIA_FUERA_IDA_M + 1);
+    let e: E = { fase: 'regreso' };
+    for (let i = 1; i < FIXES_FALLBACK_REGRESO; i++) {
+      e = sobreIda(e);
+      expect(faseDe(e)).toBe('regreso');
+    }
+    expect(sobreIda(e)).toEqual({ fase: 'ida', fixesRegreso: 0 });
+    // Sobre el regreso (o calle compartida) no cuenta: reinicia.
+    expect(evaluarFixFase(e, 500, 5).fixesRegreso).toBe(0);
+    expect(evaluarFixFase({ fase: 'regreso' as const }, 10, 10).fase).toBe('regreso');
   });
 });
 

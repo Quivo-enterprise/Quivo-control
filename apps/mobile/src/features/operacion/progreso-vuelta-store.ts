@@ -84,10 +84,10 @@ export async function leerProgresoVuelta(
   sesionId: string,
   fecha: string = fechaLocal(),
 ): Promise<EstadoProgresoVuelta> {
-  const fila = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.getFirstAsync<FilaProgreso>(SQL_LEER, [claveProgresoVuelta(sesionId, fecha)]),
-  );
-  return parsear(sesionId, fecha, fila);
+  return conReintentoSiHandleMuerto(db, async (dbActiva) => {
+    const fila = await dbActiva.getFirstAsync<FilaProgreso>(SQL_LEER, [claveProgresoVuelta(sesionId, fecha)]);
+    return conFaseHeredada(dbActiva, sesionId, fecha, parsear(sesionId, fecha, fila), !!fila);
+  });
 }
 
 // Cadena de promesas: serializa las escrituras de ESTE contexto JS (varios pasos del mismo tick).
@@ -99,6 +99,32 @@ let cola: Promise<unknown> = Promise.resolve();
  * o el MISMO objeto recibido si no hay nada que escribir. Devuelve el estado escrito, o `null`
  * si no hubo escritura.
  */
+/** Día local anterior a `fecha` (`YYYY-MM-DD`). */
+function fechaAnterior(fecha: string): string {
+  const [a, m, d] = fecha.split('-').map(Number) as [number, number, number];
+  return fechaLocal(new Date(a, m - 1, d - 1).getTime());
+}
+
+/**
+ * Sin fila del día (p. ej. pasada la medianoche) la fase NO se reinicia: se hereda del día local
+ * anterior de la misma sesión. Solo la fase y su contador; las vueltas son por día.
+ */
+async function conFaseHeredada(
+  db: SQLite.SQLiteDatabase,
+  sesionId: string,
+  fecha: string,
+  actual: EstadoProgresoVuelta,
+  hayFila: boolean,
+): Promise<EstadoProgresoVuelta> {
+  if (hayFila) return actual;
+  const anterior = parsear(
+    sesionId,
+    fecha,
+    await db.getFirstAsync<FilaProgreso>(SQL_LEER, [claveProgresoVuelta(sesionId, fechaAnterior(fecha))]),
+  );
+  return anterior.fase ? { ...actual, fase: anterior.fase, fixesRegreso: anterior.fixesRegreso } : actual;
+}
+
 async function modificar(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
@@ -109,7 +135,7 @@ async function modificar(
   return conReintentoSiHandleMuerto(db, async (dbActiva) => {
     for (let intento = 0; intento < MAX_INTENTOS_CAS; intento++) {
       const fila = await dbActiva.getFirstAsync<FilaProgreso>(SQL_LEER, [clave]);
-      const actual = parsear(sesionId, fecha, fila);
+      const actual = await conFaseHeredada(dbActiva, sesionId, fecha, parsear(sesionId, fecha, fila), !!fila);
       const calculado = aplicar(actual);
       if (calculado === actual) return null;
       const nuevo: EstadoProgresoVuelta = { ...calculado, version: actual.version + 1 };
@@ -223,7 +249,7 @@ export async function puntosDeLaFaseActual(
   if (!puntoRetorno(puntosControl)) return puntosControl;
   const estado = await leerProgresoVuelta(db, sesionId);
   let fase = faseDe(estado);
-  const mitades = fase === 'ida' && geometriaRuta ? mitadesDelCircuito(geometriaRuta, puntosControl) : null;
+  const mitades = geometriaRuta ? mitadesDelCircuito(geometriaRuta, puntosControl) : null;
   if (mitades) {
     const posicion: [number, number] = [fix.lng, fix.lat];
     const dIda = distanciaAPolilineaM(posicion, mitades.ida);

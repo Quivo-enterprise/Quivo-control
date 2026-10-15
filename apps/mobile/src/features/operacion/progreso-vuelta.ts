@@ -63,7 +63,7 @@ export interface ProgresoDerivado {
 export interface RolesVuelta {
   /** PC `retorno`: pasarlo pasa la vuelta de `ida` a `regreso`. */
   retornoId?: string | null;
-  /** PC `terminal`: donde arranca y cierra la vuelta (sin él, el primer PC pasado, como siempre). */
+  /** PC `terminal`: donde arranca y cierra la vuelta (sin él: el primer PC pasado, o con retorno el de menor `orden`). */
   terminalId?: string | null;
 }
 
@@ -179,8 +179,13 @@ export function pasoPunto(
   idsEspera: readonly string[] = [],
   roles: RolesVuelta = {},
 ): EstadoProgresoVuelta {
-  const nuevo = pasoPuntoBase(estadoCrudo, paso, idsActuales, idsEspera, roles.terminalId ?? null);
   const { retornoId } = roles;
+  // Con retorno y sin terminal, ancla el PC de menor `orden` (idsActuales viene ordenado): nunca
+  // el retorno ni uno de espera, o la fase se invertiría en cada vuelta.
+  const terminalId =
+    roles.terminalId ??
+    (retornoId ? (idsActuales.find((id) => id !== retornoId && !idsEspera.includes(id)) ?? null) : null);
+  const nuevo = pasoPuntoBase(estadoCrudo, paso, idsActuales, idsEspera, terminalId);
   if (nuevo === estadoCrudo || !retornoId) return nuevo;
   // Fase: arrancar la vuelta (ancla en la terminal) o cerrarla la deja en `ida`; pasar el retorno
   // en la vuelta en curso la pasa a `regreso`.

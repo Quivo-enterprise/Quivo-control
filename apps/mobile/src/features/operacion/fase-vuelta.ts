@@ -58,6 +58,16 @@ export function puntosDeFase(
   return puntos.filter(crearFiltroFase(puntos, fase));
 }
 
+/** Firma barata de contenido de la geometría (cantidad + hash de las coordenadas). */
+export function firmaGeometria(coordenadas: ReadonlyArray<ReadonlyArray<number>>): string {
+  let hash = 0;
+  for (const c of coordenadas) {
+    hash = (Math.imul(hash, 31) + Math.round((c[0] ?? 0) * 1e6)) | 0;
+    hash = (Math.imul(hash, 31) + Math.round((c[1] ?? 0) * 1e6)) | 0;
+  }
+  return `${coordenadas.length}:${hash}`;
+}
+
 let cacheMitades: { firma: string; mitades: CircuitoPartido | null } | null = null;
 
 /**
@@ -72,9 +82,7 @@ export function mitadesDelCircuito(
   const retorno = puntoRetorno(puntos);
   if (!retorno || geometria.length < 2) return null;
   const [lng, lat] = retorno.coord.coordinates;
-  const primero = geometria[0]!;
-  const ultimo = geometria[geometria.length - 1]!;
-  const firma = `${geometria.length}|${primero.join(',')}|${ultimo.join(',')}|${lng},${lat}`;
+  const firma = `${firmaGeometria(geometria)}|${lng},${lat}`;
   if (cacheMitades?.firma !== firma) {
     cacheMitades = { firma, mitades: partirCircuitoPorRetorno(geometria, [lng, lat]) };
   }
@@ -82,10 +90,12 @@ export function mitadesDelCircuito(
 }
 
 /**
- * Fallback de fase por geometría (el GPS pudo no capturar Honduras): pasa a `regreso` tras
- * `FIXES_FALLBACK_REGRESO` fixes consecutivos a más de `DISTANCIA_FUERA_IDA_M` de la mitad de ida
- * y a menos de `DISTANCIA_SOBRE_REGRESO_M` de la de regreso. Cualquier otro fix reinicia el
- * contador; un fix impreciso (`accuracy` > radio de regreso) no cuenta ni reinicia. Devuelve el
+ * Fallback de fase por geometría (el GPS pudo no capturar Honduras ni la terminal), simétrico: en
+ * `ida` pasa a `regreso` tras `FIXES_FALLBACK_REGRESO` fixes consecutivos a más de
+ * `DISTANCIA_FUERA_IDA_M` de la mitad de ida y a menos de `DISTANCIA_SOBRE_REGRESO_M` de la de
+ * regreso; en `regreso` pasa a `ida` con la condición inversa (también corrige un cambio erróneo
+ * por un desvío). Cualquier otro fix reinicia el contador (`fixesRegreso`, que cuenta hacia la fase
+ * contraria); un fix impreciso (`accuracy` > radio de regreso) no cuenta ni reinicia. Devuelve el
  * MISMO objeto si no hay nada que cambiar (evita escrituras a SQLite en cada fix).
  */
 export function evaluarFixFase<T extends { fase?: FaseVuelta; fixesRegreso?: number }>(
@@ -94,11 +104,16 @@ export function evaluarFixFase<T extends { fase?: FaseVuelta; fixesRegreso?: num
   distanciaRegresoM: number,
   accuracyM?: number | null,
 ): T {
-  if (faseDe(estado) !== 'ida') return estado;
   if (typeof accuracyM === 'number' && accuracyM > DISTANCIA_SOBRE_REGRESO_M) return estado;
-  const cumple = distanciaIdaM > DISTANCIA_FUERA_IDA_M && distanciaRegresoM < DISTANCIA_SOBRE_REGRESO_M;
+  const fase = faseDe(estado);
+  const cumple =
+    fase === 'ida'
+      ? distanciaIdaM > DISTANCIA_FUERA_IDA_M && distanciaRegresoM < DISTANCIA_SOBRE_REGRESO_M
+      : distanciaRegresoM > DISTANCIA_FUERA_IDA_M && distanciaIdaM < DISTANCIA_SOBRE_REGRESO_M;
   const previos = estado.fixesRegreso ?? 0;
   if (!cumple) return previos === 0 ? estado : { ...estado, fixesRegreso: 0 };
-  if (previos + 1 >= FIXES_FALLBACK_REGRESO) return { ...estado, fase: 'regreso', fixesRegreso: 0 };
+  if (previos + 1 >= FIXES_FALLBACK_REGRESO) {
+    return { ...estado, fase: fase === 'ida' ? 'regreso' : 'ida', fixesRegreso: 0 };
+  }
   return { ...estado, fixesRegreso: previos + 1 };
 }
