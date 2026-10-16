@@ -27,19 +27,33 @@
     `pnpm install` falla en el postinstall de `packages/db` por falta de `DATABASE_URL`; para el build no importa.
 - **Changelog pasado al CTO:** #142, #150, #151 + #155, #152, #154 + #159, #162, #165 (más #161 en la API).
 
-**Siguiente, en orden:**
-1. Instalar el APK en `1616PIL`, `1616PIB` y `1616PIC`.
-2. OTA de humo: `eas update --branch production` con un cambio trivial, y verificar que llega.
-3. `cargar-linea-16.ts --apply`, con el ok del CTO ya dado para este momento, **solo con el APK nuevo en los 3**.
-   Antes, revisar las asignaciones y sesiones activas de la ruta `460c9015…`.
-4. En dispositivo, verificar:
-   - el cambio de fase en Honduras;
-   - que la rotonda muestre solo su tramo;
-   - el aviso de Molinos;
-   - la polilínea a zoom 16–18.
-5. Cuando vuelva la cuota de Codex: verify-fix sobre #161 (ya en `main`).
-6. Rotar la contraseña de `admin@quivo.com`, que quedó en el chat, y guardarla en Secret Manager.
-7. Decidir #105 con el CTO.
+**Checklist para la próxima sesión** (marcar `[x]` al cerrar cada ítem; el dueño va entre corchetes):
+
+*Del lado del CTO, primero:*
+- [ ] **[CTO]** Instalar el APK versionCode 16 en `1616PIL`, `1616PIB` y `1616PIC`
+      (https://expo.dev/artifacts/eas/_ccVx_j29UZRsL7b8UL4UjA9V0d04V8yddqVl6azLD8.apk) y avisar a Claude.
+- [ ] **[CTO]** Rotar la contraseña de `admin@quivo.com` (quedó en el chat del 15/10) y guardarla en Secret Manager
+      (`QUIVO_PANEL_ADMIN_EMAIL`/`QUIVO_PANEL_ADMIN_PASSWORD`). Hacerlo **después** del `--apply`, o pasarle la nueva
+      a Claude para ese paso.
+- [ ] **[CTO]** Decidir #105 (script de asignaciones del 08/10): ¿cerrar?
+
+*Después de la instalación (Claude):*
+- [ ] **[Claude]** OTA de humo: `eas update --branch production` con un cambio trivial y confirmar que llega a los 3.
+- [ ] **[Claude]** Revisar las asignaciones y sesiones activas de la ruta `460c9015…` y correr `cargar-linea-16.ts --apply`
+      (ok del CTO ya dado). **Solo con el APK 16 en los 3.** El dry-run del 15/10 ya validó el plan: 3 PATCH, 14 POST,
+      base y variante.
+
+*Prueba en la calle (CTO, con Claude revisando los datos):*
+- [ ] **[CTO]** Cambio de fase en Honduras: los PC y el trazado de la ida desaparecen y aparecen los del regreso.
+- [ ] **[CTO]** La rotonda muestra solo su tramo, sin la otra pasada.
+- [ ] **[CTO]** Aviso de designación a Molinos.
+- [ ] **[CTO]** Polilínea azul a zoom 16–18.
+- [ ] **[Claude]** Revisar en la base los cumplimientos y las infracciones de esa prueba: sin `pc_omitido` falsos y
+      con las vueltas contadas.
+
+*Pendiente sin bloqueo:*
+- [ ] **[Claude]** Cuando vuelva la cuota de Codex: verify-fix sobre #161 (ya en `main`). Si encuentra algo, fix en
+      un PR nuevo.
 
 **Worktrees vivos:** ninguno.
 
