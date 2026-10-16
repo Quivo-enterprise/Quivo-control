@@ -1,6 +1,6 @@
 import { Prisma } from '@quivo/db';
 import type { Prisma as PrismaTypes } from '@quivo/db';
-import type { GravedadRegla, TipoInfraccion } from '@quivo/shared';
+import type { GravedadRegla, RolPuntoControl, TipoInfraccion } from '@quivo/shared';
 import {
   ESTADO_DESVIO_INICIAL,
   avanzarDesvio,
@@ -19,6 +19,7 @@ import {
   recorridoIniciadoEn,
   REGLA_TIPO_POR_INFRACCION,
   resolverGravedadInfraccion,
+  cumplimientoDisparaPcOmitido,
   seleccionarPcOmitidos,
   type PuntoControlCandidato,
   type Recorrido,
@@ -414,7 +415,10 @@ async function registrarPcOmitidos(
  * las entradas en orden de `ts`. Limitaciones documentadas: si el cumplimiento no cae en ningún
  * recorrido (sin `inicio_recorrido`, o posterior al fin) no se detecta nada; un cumplimiento
  * tardío del outbox (después de que el de un PC posterior ya disparó la detección) deja la
- * infracción abierta para descarte manual.
+ * infracción abierta para descarte manual; el cumplimiento de un PC inactivo o de un opcional
+ * sin `rol` SOLO en rutas con un PC `retorno` activo (`cumplimientoDisparaPcOmitido`) no dispara
+ * nada, así que ahí un obligatorio saltado se detecta con el siguiente PC con rol/obligatorio o
+ * al `fin_recorrido`; en las demás rutas cualquier PC activo cumplido dispara.
  */
 export async function detectarPcOmitidosPorCumplimiento(
   tx: Tx,
@@ -424,13 +428,29 @@ export async function detectarPcOmitidosPorCumplimiento(
   tsCumplimiento: Date,
   ahora: Date = new Date(),
 ): Promise<number> {
+  const [pc] = await tx.$queryRaw<
+    {
+      rutaId: string;
+      orden: number;
+      rol: RolPuntoControl | null;
+      obligatorio: boolean;
+      estado: string;
+      rutaConRetorno: boolean;
+    }[]
+  >`
+    SELECT pc."rutaId", pc.orden, pc.rol, pc.obligatorio, pc.estado,
+           EXISTS (
+             SELECT 1 FROM puntos_control r
+             WHERE r."rutaId" = pc."rutaId" AND r.rol = 'retorno' AND r.estado = 'activo'
+           ) AS "rutaConRetorno"
+    FROM puntos_control pc WHERE pc.id = ${puntoControlId}
+  `;
+  // Un PC inactivo no dispara la omisión en vivo; en rutas con retorno tampoco un opcional sin rol.
+  if (!pc || !cumplimientoDisparaPcOmitido(pc)) return 0;
   const ctx = await contextoDeSesion(tx, sindicatoId, sesionId);
   if (!ctx) return 0;
-  const [pc] = await tx.$queryRaw<{ rutaId: string; orden: number }[]>`
-    SELECT "rutaId", orden FROM puntos_control WHERE id = ${puntoControlId}
-  `;
   // Un PC de otra ruta no dice nada sobre los PC de la ruta de esta sesión.
-  if (!pc || pc.rutaId !== ctx.rutaId) return 0;
+  if (pc.rutaId !== ctx.rutaId) return 0;
   const recorrido = recorridoDeInstante(
     await cargarRecorridos(tx, sindicatoId, sesionId, ahora),
     tsCumplimiento,

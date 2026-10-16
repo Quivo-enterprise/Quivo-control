@@ -76,7 +76,14 @@ describe('detección de infracciones (PR A)', () => {
   let sesionMismoLote: string;
   let sesionVentana: string;
   let sesionTolerancia: string;
+  let sesionIntermedio: string;
+  let sesionRol: string;
+  let sesionInactivo: string;
+  let sesionSinRetorno: string;
+  let pcSinRetorno: Record<'1' | '2' | '3', string>;
   let pc: Record<'1' | '2' | '3' | '4' | '5', string>;
+  let pcRetorno: string;
+  let pcRetornoInactivo: string;
   let reglaAId: string;
   let reglaBId: string;
 
@@ -121,6 +128,24 @@ describe('detección de infracciones (PR A)', () => {
           INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, "createdAt", "updatedAt")
           VALUES (${pc[k]}, ${rutaId}, ${Number(k)}, ST_SetSRID(ST_GeomFromGeoJSON(${pcCoord(lons[k])}), 4326)::geography,
                   30, ${k !== '5'}, now(), now())`;
+      }
+      // Fuera de los 5 de arriba (todos obligatorios salvo el 5): un PC con rol (no obligatorio) y
+      // uno con rol pero inactivo, para el filtro de `cumplimientoDisparaPcOmitido` en vivo.
+      pcRetorno = randomUUID();
+      pcRetornoInactivo = randomUUID();
+      await tx.$executeRaw`
+        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, rol, estado, "createdAt", "updatedAt")
+        VALUES (${pcRetorno}, ${rutaId}, 6, ST_SetSRID(ST_GeomFromGeoJSON(${pcCoord(-63.1705)}), 4326)::geography,
+                30, false, 'retorno', 'activo', now(), now()),
+               (${pcRetornoInactivo}, ${rutaId}, 7, ST_SetSRID(ST_GeomFromGeoJSON(${pcCoord(-63.1702)}), 4326)::geography,
+                30, false, 'retorno', 'inactivo', now(), now())`;
+      // Ruta SIN PC retorno activo (como L120/Z12): 1-2 obligatorios, 3 opcional sin rol.
+      pcSinRetorno = { '1': randomUUID(), '2': randomUUID(), '3': randomUUID() };
+      for (const [k, lon] of [['1', -63.178], ['2', -63.176], ['3', -63.174]] as const) {
+        await tx.$executeRaw`
+          INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, "createdAt", "updatedAt")
+          VALUES (${pcSinRetorno[k]}, ${rutaNoHabId}, ${Number(k)}, ST_SetSRID(ST_GeomFromGeoJSON(${pcCoord(lon)}), 4326)::geography,
+                  30, ${k !== '3'}, now(), now())`;
       }
       const vehiculo = await tx.vehiculo.create({
         data: {
@@ -191,6 +216,10 @@ describe('detección de infracciones (PR A)', () => {
       sesionMismoLote = await crearSesion();
       sesionVentana = await crearSesion();
       sesionTolerancia = await crearSesion();
+      sesionIntermedio = await crearSesion();
+      sesionRol = await crearSesion();
+      sesionInactivo = await crearSesion();
+      sesionSinRetorno = await crearSesion(asignacionNoHab.id);
       reglaAId = (
         await tx.regla.create({
           data: { sindicatoId: sindicatoA, nombre: 'Sanción genérica', tipo: 'operativo', gravedad: 'grave', aplicaA: 'conductor' },
@@ -217,6 +246,10 @@ describe('detección de infracciones (PR A)', () => {
         sesionMismoLote,
         sesionVentana,
         sesionTolerancia,
+        sesionIntermedio,
+        sesionRol,
+        sesionInactivo,
+        sesionSinRetorno,
       ];
       await tx.sancion.deleteMany({ where: { sindicatoId: ids } });
       await tx.infraccion.deleteMany({ where: { sindicatoId: ids } });
@@ -231,7 +264,7 @@ describe('detección de infracciones (PR A)', () => {
       await tx.rotacion.deleteMany({ where: { sindicatoId: ids } });
       await tx.vehiculo.deleteMany({ where: { sindicatoId: ids } });
       await tx.conductor.deleteMany({ where: { sindicatoId: ids } });
-      await tx.$executeRaw`DELETE FROM puntos_control WHERE "rutaId" = ${rutaId}`;
+      await tx.$executeRaw`DELETE FROM puntos_control WHERE "rutaId" IN (${rutaId}, ${rutaNoHabId})`;
       await tx.$executeRaw`DELETE FROM rutas WHERE id IN (${rutaId}, ${rutaNoHabId})`;
       await tx.linea.deleteMany({ where: { sindicatoId: ids } });
       await tx.regla.deleteMany({ where: { sindicatoId: ids } });
@@ -528,6 +561,45 @@ describe('detección de infracciones (PR A)', () => {
       // (fuera de ventana) no dispara detección alguna.
       expect(omitidos.map((o) => o.pc)).toEqual([pc['2']]);
       expect(omitidos[0]!.key.endsWith(`:${iso(1000)}`)).toBe(true);
+    });
+  });
+
+  describe('PC omitido: qué cumplimientos disparan la detección en vivo', () => {
+    const omitidosDe = async (sesionId: string) =>
+      (await infraccionesDe(sesionId)).filter((i) => i.tipo === 'pc_omitido');
+
+    it('ruta con retorno: un intermedio (sin rol, no obligatorio) cumplido tras obligatorios sin visitar no abre omisiones', async () => {
+      await lote(sindicatoA, [
+        evento('inicio_recorrido', iso(0), { sesionId: sesionIntermedio }),
+        cumplimiento(sesionIntermedio, pc['5'], -63.171, 100),
+      ]);
+      expect(await omitidosDe(sesionIntermedio)).toHaveLength(0);
+    });
+
+    it('un PC con rol (no obligatorio) sí dispara: los 4 obligatorios anteriores quedan omitidos', async () => {
+      await lote(sindicatoA, [
+        evento('inicio_recorrido', iso(0), { sesionId: sesionRol }),
+        cumplimiento(sesionRol, pcRetorno, -63.1705, 100),
+      ]);
+      const ids = (await omitidosDe(sesionRol)).map((f) => (f.detalle as { puntoControlId: string }).puntoControlId);
+      expect(ids.sort()).toEqual([pc['1'], pc['2'], pc['3'], pc['4']].sort());
+    });
+
+    it('ruta SIN retorno activo: un opcional sin rol cumplido tras obligatorios sin visitar sí abre pc_omitido (como antes)', async () => {
+      await lote(sindicatoA, [
+        evento('inicio_recorrido', iso(0), { sesionId: sesionSinRetorno }),
+        cumplimiento(sesionSinRetorno, pcSinRetorno['3'], -63.174, 100),
+      ]);
+      const ids = (await omitidosDe(sesionSinRetorno)).map((f) => (f.detalle as { puntoControlId: string }).puntoControlId);
+      expect(ids.sort()).toEqual([pcSinRetorno['1'], pcSinRetorno['2']].sort());
+    });
+
+    it('un PC con rol pero inactivo no dispara', async () => {
+      await lote(sindicatoA, [
+        evento('inicio_recorrido', iso(0), { sesionId: sesionInactivo }),
+        cumplimiento(sesionInactivo, pcRetornoInactivo, -63.1702, 100),
+      ]);
+      expect(await omitidosDe(sesionInactivo)).toHaveLength(0);
     });
   });
 

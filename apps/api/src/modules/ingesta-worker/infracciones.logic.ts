@@ -6,6 +6,7 @@ import {
   REGLA_TIPO_PC_OMITIDO,
   type GravedadRegla,
   type TipoInfraccion,
+  type RolPuntoControl,
 } from '@quivo/shared';
 
 /** `Regla.tipo` reservado por tipo de infracción (`REGLA_TIPOS_RESERVADOS_INFRACCION`). */
@@ -58,6 +59,32 @@ export interface PuntoControlCandidato {
   estado: string;
   lat: number;
   lng: number;
+}
+
+/**
+ * ¿El cumplimiento de este PC puede disparar la detección de `pc_omitido` EN VIVO? Siempre exige
+ * que el PC esté activo. Además, SOLO en rutas con un PC activo de `rol = 'retorno'`
+ * (`rutaConRetorno`, circuitos por fases como la L16 donde ida y regreso comparten calles) un PC
+ * opcional sin rol (intermedio) NO dispara; en el resto de las rutas (sin PC retorno activo, p. ej.
+ * L120 o Z12) cualquier PC activo cumplido dispara, como antes.
+ *
+ * Qué evita: que un intermedio cumplido temprano (calles compartidas de ida/regreso) o tras un
+ * fallo de GPS abra omisiones en vivo de los PC obligatorios anteriores. NO evita en general la
+ * omisión falsa de un obligatorio (p. ej. Honduras en la L16 si el GPS falla ahí): un PC con rol
+ * posterior (p. ej. Molinos, rol espera) o el `fin_recorrido` aún pueden marcarlo.
+ *
+ * Tradeoff aceptado (solo rutas con retorno): un obligatorio realmente saltado se detecta recién
+ * con el siguiente PC con rol/obligatorio o al `fin_recorrido` (que no pasa por acá y revisa todos
+ * los obligatorios). En la L16 el worker de vueltas además no cuenta una vuelta sin el PC `retorno`.
+ */
+export function cumplimientoDisparaPcOmitido(pc: {
+  rol: RolPuntoControl | null;
+  obligatorio: boolean;
+  estado: string;
+  rutaConRetorno: boolean;
+}): boolean {
+  if (pc.estado !== 'activo') return false;
+  return !pc.rutaConRetorno || pc.rol !== null || pc.obligatorio;
 }
 
 /**
