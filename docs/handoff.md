@@ -6,7 +6,44 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-15, 19:30 (leer primero): #164 y #165 mergeados, falta #161, deploy y APK
+## Punto de retome — 2026-10-15, 22:00 (leer primero): deploy r17 y APK versionCode 16 listos; falta instalar y `--apply`
+
+**Hecho:**
+- **#161 mergeado (`de3fc30`).** `/code-review` y `/ponytail-review` (ship). **Codex verify-fix: no verificado (sin
+  cuota)**. Con la regla 13 nueva, la falta de cuota no bloquea; correrlo cuando vuelva la cuota.
+- **Deploy `r17-20261015` de api, web y worker** desde `de3fc30`, corrido por el CTO. El modo automático bloquea
+  los deploys a prod hechos por Claude. Health `ok` (db y redis up), `GET /rutas/:id/puntos-control` ya devuelve
+  `rol` y `/mobile/vuelta-actual` responde 401 sin token.
+- **Dry-run de `cargar-linea-16.ts` contra prod OK, sin escrituras:**
+  - 3 PATCH conservan los ids: SR `ea0f624c` pasa a `terminal`, Honduras `05b57eb2` a `retorno` con orden 8,
+    y Molinos `a660b799` a `espera` con orden 15 y 30 min.
+  - 14 POST de intermedios.
+  - PATCH de la base (1425 → 1218 vértices) y de la variante "Vía Molinos" (208 vértices).
+- **APK versionCode 16:**
+  - Build EAS `ddef9838-54ce-4f80-b8c4-9e91fcc4c8a0`, commit `de3fc30`.
+  - APK: https://expo.dev/artifacts/eas/_ccVx_j29UZRsL7b8UL4UjA9V0d04V8yddqVl6azLD8.apk
+  - Se creó el canal/branch de EAS Update `production`.
+  - Pre-build verificado: las 3 claves de EAS `production`, reanimated `~3.19.0` y `expo config` OK.
+    `pnpm install` falla en el postinstall de `packages/db` por falta de `DATABASE_URL`; para el build no importa.
+- **Changelog pasado al CTO:** #142, #150, #151 + #155, #152, #154 + #159, #162, #165 (más #161 en la API).
+
+**Siguiente, en orden:**
+1. Instalar el APK en `1616PIL`, `1616PIB` y `1616PIC`.
+2. OTA de humo: `eas update --branch production` con un cambio trivial, y verificar que llega.
+3. `cargar-linea-16.ts --apply`, con el ok del CTO ya dado para este momento, **solo con el APK nuevo en los 3**.
+   Antes, revisar las asignaciones y sesiones activas de la ruta `460c9015…`.
+4. En dispositivo, verificar:
+   - el cambio de fase en Honduras;
+   - que la rotonda muestre solo su tramo;
+   - el aviso de Molinos;
+   - la polilínea a zoom 16–18.
+5. Cuando vuelva la cuota de Codex: verify-fix sobre #161 (ya en `main`).
+6. Rotar la contraseña de `admin@quivo.com`, que quedó en el chat, y guardarla en Secret Manager.
+7. Decidir #105 con el CTO.
+
+**Worktrees vivos:** ninguno.
+
+## Punto de retome — 2026-10-15, 19:30 (anterior): #164 y #165 mergeados, falta #161, deploy y APK
 
 Plan vigente: [`docs/plan-fase-vuelta-apk.md`](plan-fase-vuelta-apk.md) y
 [`docs/plan-pc-intermedios-l16.md`](plan-pc-intermedios-l16.md), con el orden de salida.
