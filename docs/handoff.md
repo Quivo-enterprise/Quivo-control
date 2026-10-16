@@ -6,7 +6,66 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-15, 18:00 (leer primero): fase de la vuelta, PC intermedios y camino al APK
+## Punto de retome — 2026-10-15, 19:30 (leer primero): #164 y #165 mergeados, falta #161, deploy y APK
+
+Plan vigente: [`docs/plan-fase-vuelta-apk.md`](plan-fase-vuelta-apk.md) y
+[`docs/plan-pc-intermedios-l16.md`](plan-pc-intermedios-l16.md), con el orden de salida.
+
+**Regla nueva del flujo (CLAUDE.md global, regla 2):** `/ponytail-review` se corre en todo cambio de
+código, sumado a `/code-review`. En esta sesión encontró el bug de los PC sin rol del #164.
+
+**Mergeados:**
+
+- **#165 `feat(mobile)`, fases ida/regreso (`a9b5944`):**
+  - Rebase limpio sobre #162.
+  - `/code-review` dio 10 hallazgos y se aplicaron 5:
+    - el fallback de fase es simétrico (si el GPS no detecta SR, en el regreso vuelve a `ida` por geometría);
+    - el corte del circuito usa el mínimo real dentro de la primera pasada a menos de 150 m;
+    - la vuelta nunca se ancla en `retorno`;
+    - el memo usa `firmaGeometria` completa;
+    - la fase se hereda a medianoche.
+  - **Salteados, con motivo:**
+    - la lectura SQLite por fix (barata);
+    - la geometría duplicada con `snap-ruta`, porque `shared` no puede importar de mobile;
+    - el marcador sale un momento de la polilínea cerca de Honduras antes de que cambie la fase (cosmético).
+  - `/ponytail-review`:
+    - "evidencia de Honduras perdida al cambiar de fase con la visita pendiente": **no se reprodujo**.
+      `confirmarVisitasVencidas` la confirma igual, y quedó un test de guarda.
+    - Se borró `indiceCorte`, que no se usaba.
+  - **Aviso sin fix:** "Iniciar recorrido" a mitad del regreso vuelve a `ida` hasta 3 fixes en calles
+    exclusivas del regreso. Se toma como decisión de diseño; revisar si en la calle molesta.
+  - Tests: mobile 970/970, shared 136/136. **Sin verificar en dispositivo.**
+- **#164 `feat(scripts)`, PC intermedios por fase (`7cd34d6`):** 17 PC. Fixes de las reviews:
+  - la exclusión de 500 m se aplica por fase;
+  - el dry-run muestra la fase y la distancia de cada PC;
+  - la cabecera declara la precondición de #161;
+  - limpieza de código muerto;
+  - **fix crítico:** en prod, SR, Molinos y Honduras existen con orden 0/1/2 y **sin `rol`**, y sus
+    coordenadas son idénticas al plan (verificado por GET). Ahora se emparejan por cercanía a menos de
+    50 m y conservan su id. Si la API no devuelve `rol`, el script aborta.
+  - Tests 50/50.
+  - Dry-run contra prod: abortó sin escribir, porque **la API desplegada no devuelve `rol`** (es anterior
+    a #154). Repetirlo después del deploy.
+
+**Siguiente, en orden:**
+1. Después de las 21:41 del 15/10: Codex verify-fix de #161 desde el worktree `agent-a42e38482eac5894b`
+   (comando en la sección de abajo). Si pasa: `/ponytail-review`, CI y merge. Borrar el worktree.
+2. Deploy de API + web (`scripts/deploy-gcp.sh`, con el ok del CTO ya dado). Verificar:
+   - el health;
+   - `/mobile/vuelta-actual`;
+   - que `GET /rutas/:id/puntos-control` devuelva `rol`.
+3. Dry-run de `cargar-linea-16.ts` contra prod. Debe emparejar los 3 PC existentes por cercanía y
+   planear 14 POST. **Sin `--apply`.**
+   - Las credenciales de admin las pasa el CTO por env.
+   - **Recomendado:** rotar la contraseña de `admin@quivo.com`, que quedó en el chat del 15/10, y
+     guardarla en Secret Manager.
+4. Breakpoint del APK: los pasos 6–7 de la sección de abajo (changelog, pre-build, `eas build`,
+   instalación, OTA de humo y `--apply`).
+5. Pendiente con el CTO: #105, ¿cerrarlo?
+
+**Worktrees vivos:** solo `agent-a42e38482eac5894b` (#161).
+
+## Punto de retome — 2026-10-15, 18:00 (anterior): fase de la vuelta, PC intermedios y camino al APK
 
 Plan vigente: [`docs/plan-fase-vuelta-apk.md`](plan-fase-vuelta-apk.md) (pasos 1–10, bloqueantes y orden
 de salida). Para retomar: leer esta sección y seguir **"Siguiente, en orden"**.
