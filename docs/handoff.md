@@ -6,7 +6,50 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-15, 22:00 (leer primero): deploy r17 y APK versionCode 16 listos; falta instalar y `--apply`
+## Punto de retome — 2026-10-17 (leer primero): APK 16 instalado, OTA de humo publicado y `--apply` de la línea 16 hecho
+
+**Hecho (2026-10-17):**
+- **APK versionCode 16 instalado** por el CTO en `1616PIL`, `1616PIB` y `1616PIC`.
+- **OTA de humo publicado** con `apps/mobile/scripts/publicar-ota.sh`: mismo JS que `de3fc30`, sin cambio de código
+  (el id del update cambia igual). Update group `17fd7e92-226e-4654-a018-8b071ecfe2c7`, Android update id
+  `01a14b63…`, runtime `547d52e7…`, que coincide con el fingerprint del build `ddef9838`. Sin source maps (falta
+  `SENTRY_AUTH_TOKEN`). **Llegada no confirmada:** en Perfil → Aplicación → Versión debe decir `0.1.0 · 01a14b63`;
+  con `integrada` no llegó. "Se aplicará al cerrar" = descargado, se aplica en el próximo arranque en frío.
+- **`cargar-linea-16.ts --apply` en prod, 21 escrituras**, con el ok del CTO. Antes:
+  - sesiones de la ruta: `1616PIL` tenía recorridos abiertos (15:36, 15:40 y 15:48, hora de Bolivia); el CTO los
+    cerró y se aplicó con las 3 en `cerrada` y el último fix de hacía 16 min;
+  - asignaciones: 1 por día por vehículo (`1616PIL/PIB/PIC`) del 17 al 26/10 en la ruta `460c9015…`; el `--apply`
+    conserva ids, así que siguen válidas;
+  - dry-run idéntico al del 15/10.
+  - Verificación: ruta 1218 vértices, 17 PC con rol (SR `terminal`, Honduras `retorno` obligatorio, Molinos
+    `espera` 30 min) a 0–18 m del trazado; re-corrida en dry-run = **0 escrituras**.
+- **Contraseña de `admin@quivo.com`: el CTO decide NO rotarla por ahora** (prod solo tiene pilotos). La credencial
+  vive en `~/.quivo-admin-env` (0600) de la máquina del CTO; los scripts la leen con `source ~/.quivo-admin-env`.
+- **Basura de datos sin bloqueo:** `/en-vivo` lista sesiones viejas nunca cerradas (`9006TST` y `9004TST` desde
+  septiembre, `sin_datos`; `1616PIB` del 14/10, `activa` con el recorrido finalizado).
+
+**Checklist** (marcar `[x]` al cerrar cada ítem; el dueño va entre corchetes):
+
+*Ahora:*
+- [ ] **[CTO]** Confirmar en Perfil de los 3 que la versión dice `0.1.0 · 01a14b63` (OTA de humo).
+- [ ] **[CTO]** Decidir #105 (`scripts/extender-asignaciones-piloto.ts`, abierto desde el 08/10, CI verde, nunca
+      pasó `/code-review`): mergear (tras las revisiones) o cerrar. Las asignaciones del piloto 16 vencen el **26/10**.
+
+*Prueba en la calle (CTO, con Claude revisando los datos):*
+- [ ] **[CTO]** Cambio de fase en Honduras: los PC y el trazado de la ida desaparecen y aparecen los del regreso.
+- [ ] **[CTO]** La rotonda muestra solo su tramo, sin la otra pasada.
+- [ ] **[CTO]** Aviso de designación a Molinos.
+- [ ] **[CTO]** Polilínea azul a zoom 16–18.
+- [ ] **[Claude]** Revisar en la base los cumplimientos y las infracciones de esa prueba: sin `pc_omitido` falsos y
+      con las vueltas contadas.
+
+*Pendiente sin bloqueo:*
+- [ ] **[Claude]** Cuando vuelva la cuota de Codex: verify-fix sobre #161 (ya en `main`). Si encuentra algo, fix en
+      un PR nuevo.
+
+**Worktrees vivos:** ninguno.
+
+## Punto de retome — 2026-10-15, 22:00 (anterior): deploy r17 y APK versionCode 16 listos; falta instalar y `--apply`
 
 **Hecho:**
 - **#161 mergeado (`de3fc30`).** `/code-review` y `/ponytail-review` (ship). **Codex verify-fix: no verificado (sin
@@ -27,7 +70,7 @@
     `pnpm install` falla en el postinstall de `packages/db` por falta de `DATABASE_URL`; para el build no importa.
 - **Changelog pasado al CTO:** #142, #150, #151 + #155, #152, #154 + #159, #162, #165 (más #161 en la API).
 
-**Checklist para la próxima sesión** (marcar `[x]` al cerrar cada ítem; el dueño va entre corchetes):
+**Checklist de esa sesión** (cerrado el 2026-10-17, ver arriba; marcar `[x]` al cerrar cada ítem; el dueño va entre corchetes):
 
 *Del lado del CTO, primero:*
 - [ ] **[CTO]** Instalar el APK versionCode 16 en `1616PIL`, `1616PIB` y `1616PIC`
