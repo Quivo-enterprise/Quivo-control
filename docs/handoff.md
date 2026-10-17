@@ -6,15 +6,29 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-17 (leer primero): APK 16 instalado, OTA de humo publicado y `--apply` de la línea 16 hecho
+## Punto de retome — 2026-10-17, noche (leer primero): #170–#173 en `main` (`ee352ee`) y desplegados en `r18-20261017`
+
+**Estado en una línea:** APK 16 en los 3 trufis, OTA confirmado, línea 16 cargada con sus 17 PC, Molinos se designa en
+cualquier momento (1 por día, la tardía va a la próxima vuelta) y el mapa web dibuja el trazo pegado a la calle. Falta
+la prueba en la calle con el control.
+
+**Guía para el control (cómo designar a Molinos):** [`docs/piloto/guia-control-molinos.md`](piloto/guia-control-molinos.md).
+
+**Deploy `r18-20261017` (2026-10-17, lo corre el CTO):** `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh
+r18-20261017` desde `main` en `ee352ee` (api + worker + web; migración `20261017120000_molinos_proxima_vuelta`). La
+primera corrida cortó en el preflight por falta de `GOOGLE_MAPS_MAP_ID` (sin efectos salvo IAM idempotente).
+**Resultado: exit 0.** Migraciones OK, `/v1/health/ready` = ok (db y redis up), web `/en-vivo` 200, el contexto en vivo
+de L16 trae `variantes: [Vía Molinos, 208 vértices]` y `/reportes/en-vivo/posiciones` responde (la consulta ya lee
+`molinosProximaVarianteId`, así que la columna existe). `molinosProxima` en una vuelta real: **no verificado** (no había
+vueltas en curso); se ve en la prueba en la calle.
 
 **Hecho (2026-10-17):**
 - **APK versionCode 16 instalado** por el CTO en `1616PIL`, `1616PIB` y `1616PIC`.
 - **OTA de humo publicado** con `apps/mobile/scripts/publicar-ota.sh`: mismo JS que `de3fc30`, sin cambio de código
   (el id del update cambia igual). Update group `17fd7e92-226e-4654-a018-8b071ecfe2c7`, Android update id
   `01a14b63…`, runtime `547d52e7…`, que coincide con el fingerprint del build `ddef9838`. Sin source maps (falta
-  `SENTRY_AUTH_TOKEN`). **Llegada no confirmada:** en Perfil → Aplicación → Versión debe decir `0.1.0 · 01a14b63`;
-  con `integrada` no llegó. "Se aplicará al cerrar" = descargado, se aplica en el próximo arranque en frío.
+  `SENTRY_AUTH_TOKEN`). **Llegó a los 3** (Perfil → Aplicación → Versión = `0.1.0 · 01a14b63`). "Se aplicará al
+  cerrar" = descargado, se aplica en el próximo arranque en frío.
 - **`cargar-linea-16.ts --apply` en prod, 21 escrituras**, con el ok del CTO. Antes:
   - sesiones de la ruta: `1616PIL` tenía recorridos abiertos (15:36, 15:40 y 15:48, hora de Bolivia); el CTO los
     cerró y se aplicó con las 3 en `cerrada` y el último fix de hacía 16 min;
@@ -43,8 +57,8 @@
       "Vuelta designada vía Vía Molinos" en la tardía y un flash optimista de ~400 ms: corregido en el PR siguiente
       (aviso según `aplica`; designar no cambia la vuelta hasta la respuesta, cancelar es inmediato). `/code-review` limpio;
       **Codex verify-fix: no verificado (sin cuota hasta el 16/11; el error pide "Upgrade to Plus": revisar la suscripción)**.
-- [ ] **[CTO]** Deploy de api + worker + web desde el `main` que incluya este último PR (antes: `043c91b`) (`scripts/deploy-gcp.sh`; aplica la migración
-      `20261017120000_molinos_proxima_vuelta`). Después Claude verifica que `/reportes/en-vivo/posiciones` traiga `molinosProxima`.
+- [x] **[Claude]** #172 mergeado (`42f892e`): aviso según `aplica` + sin flash optimista + esta lista de pruebas.
+- [x] **[CTO]** Deploy `r18-20261017` de api + worker + web desde `ee352ee`: exit 0, verificado (ver arriba).
 
 *Pruebas pendientes — Molinos en cualquier momento (#170 + #172), después del deploy. El control usa el panel web
 `/en-vivo`; la designación SOLO se hace desde ahí (la app del chofer solo recibe el aviso):*
@@ -61,7 +75,7 @@
       siguiente abre con la designación, y `molinosHoy`/`sinMolinosHoy` cuentan llegadas.
 
 *Mapa web — trazo y cámara como en la app (plan [`docs/plan-mapa-web-traza-snap.md`](plan-mapa-web-traza-snap.md)):*
-- [x] **[Claude]** Implementado en la rama `feat/mapa-web-traza-snap` (PR "feat(mapa-web)…"). Causa del piloto del
+- [x] **[Claude]** **#173 mergeado (`ee352ee`). Causa del piloto del
       **miércoles 14/10** (el jueves 15 no tiene datos en prod): la web dibujaba el GPS crudo unido con rectas (sobre las
       casas, huecos como rectas, saltos de 3 km del PIL) y la cámara seguía al último punto del trazo (cada 10 s) sin
       restar HUD/panel. Ahora: snap del móvil movido a `@quivo/shared`, trazo por segmentos (azul en ruta, alerta fuera
@@ -69,8 +83,8 @@
       reales del 14/10 sobre Google Maps: esquinas limpias, marcador visible 242/242 (escritorio y móvil). Gates:
       `/code-review` high (9 de 10 aplicados; descartado filtrar variantes en borrador), `/security-review` limpio.
       Codex: no verificado (sin cuota).
-- [ ] **[CTO]** Deploy de **api + web** después del merge (el cambio en mobile es solo de imports: no hace falta APK
-      ni OTA ahora).
+- [x] **[CTO]** Deploy en el mismo `r18-20261017` (el cambio en mobile es solo de imports: entra en el próximo APK/OTA
+      que se haga por otra razón).
 - [ ] **[CTO/control]** En `/en-vivo`, seguir un recorrido completo de L16 y "Ver recorrido" al terminar: el trazo va
       por la calle, los desvíos reales salen en naranja y el vehículo no queda tapado por el HUD ni el panel.
 - [ ] **[CTO]** Confirmar si el inicio y el final fuera de la ruta (p. ej. PIB a ~120 m al arrancar) deben verse en
