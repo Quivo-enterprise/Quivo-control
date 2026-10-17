@@ -1,5 +1,9 @@
 # Plan — Designación a Molinos en cualquier momento del viaje (línea 16)
 
+> **Estado (2026-10-17): implementado** en #170 (`043c91b`) y #172 (`42f892e`). Desvíos respecto de este plan: el worker lee la
+> diferida con `findFirst` y la consume al copiarla; solo se difiere si la vuelta actual no está designada; el
+> chequeo retroactivo del punto de espera no aplica a la tardía. Deploy `r18-20261017`.
+
 ## Contexto
 Regla nueva del CTO (2026-10-17): el control (`operador`) y el encargado pueden designar un móvil a
 Molinos **en cualquier momento del viaje**, mientras ese móvil **no haya hecho todavía su pasada por

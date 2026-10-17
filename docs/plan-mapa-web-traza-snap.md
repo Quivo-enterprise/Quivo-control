@@ -1,5 +1,10 @@
 # Plan — Trazo y cámara del mapa web como en la app (en vivo + ver recorrido)
 
+> **Estado (2026-10-17): implementado** en #173 (`ee352ee`). Desvíos respecto de este plan: el solape largo (75 min) va
+> cada 6 polls y no en todos; Douglas–Peucker se aplica a todos los segmentos; la animación del marcador conserva el
+> reparto del intervalo de poll (no usa `duracionAnimacionMs`); el encuadre de "Ver recorrido" sale solo de los
+> segmentos (puntos válidos). Deploy `r18-20261017`.
+
 ## Contexto
 Prueba piloto del **miércoles 14/10** (L16, ruta `460c9015…`; el CTO creía que era el jueves, pero el 15/10 no
 tiene datos en prod). En el panel web el recorrido se dibujó **sobre las casas**, **incompleto**, y el vehículo
