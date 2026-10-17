@@ -14,6 +14,8 @@
     "test": "turbo run test",
     "test:acceptance:prepare": "set -a && . apps/api/.env && set +a && pnpm --filter @quivo/db prisma:migrate:deploy && pnpm --filter @quivo/db prisma:seed",
     "test:acceptance": "playwright test",
+    "piloto:extender-asignaciones": "packages/db/node_modules/.bin/tsx scripts/extender-asignaciones-piloto.ts",
+    "test:scripts": "vitest run scripts/lib",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
