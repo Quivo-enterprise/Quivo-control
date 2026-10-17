@@ -228,6 +228,13 @@ describe('aplicarDesignacionesPendientes', () => {
     );
     expect(r[0]!.vuelta).toMatchObject({ varianteId: null, molinosProxima: true });
   });
+  it('designación en vuelo no cambia la posición (misma referencia); cancelar en vuelo sí aplica', () => {
+    const base = { id: 'a', vuelta: vuelta({ varianteId: id(1), designadaEn: hace(9) }) } as PosicionEnVivo;
+    const enVuelo = { varianteId: id(2), varianteNombre: 'x', ahoraIso: hace(0), enVuelo: true };
+    expect(aplicarDesignacionesPendientes([base], new Map([['a', enVuelo]]))[0]).toBe(base);
+    const cancel = { varianteId: null, varianteNombre: null, ahoraIso: hace(0), enVuelo: false };
+    expect(aplicarDesignacionesPendientes([base], new Map([['a', cancel]]))[0]!.vuelta).toMatchObject({ varianteId: null, designadaEn: null });
+  });
   const pos = (idp: string, varianteId: string | null) =>
     ({ id: idp, vuelta: { numero: 1, varianteId, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false } }) as unknown as PosicionEnVivo;
   const pendiente = { varianteId: id(7), varianteNombre: 'Vía Molinos', ahoraIso: hace(0) };

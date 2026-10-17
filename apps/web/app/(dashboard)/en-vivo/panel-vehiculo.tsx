@@ -502,10 +502,15 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         posicionesRecibidoEn={posicionesRecibidoEn}
         onDesignar={async (varianteId, varianteNombre) => {
           // Un rechazo se propaga a la sección, que lo muestra y anuncia en línea (no va al aviso).
-          await designar.mutateAsync({ sesionId, varianteId, varianteNombre });
+          const res = await designar.mutateAsync({ sesionId, varianteId, varianteNombre });
+          const nombre = varianteNombre ?? 'Molinos';
           onAviso({
             tono: 'ok',
-            texto: varianteId ? `Vuelta designada vía ${varianteNombre ?? 'Molinos'}` : 'Designación cancelada',
+            texto: !varianteId
+              ? 'Designación cancelada'
+              : res.aplica === 'proxima_vuelta'
+                ? `Va a ${nombre} en la próxima vuelta`
+                : `Vuelta designada: ${nombre}`,
           });
         }}
       />

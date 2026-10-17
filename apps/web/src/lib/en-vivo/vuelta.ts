@@ -159,6 +159,8 @@ export interface DesignacionPendiente {
   ahoraIso: string;
   /** La API respondió `aplica: 'proxima_vuelta'`: se marca `molinosProxima` en vez de `varianteId`. */
   proxima?: boolean;
+  /** Designación esperando la respuesta de la API: todavía no cambia la vuelta (puede ser tardía). */
+  enVuelo?: boolean;
 }
 
 /**
@@ -173,7 +175,7 @@ export function aplicarDesignacionesPendientes(
   if (pendientes.size === 0) return posiciones;
   return posiciones.map((p) => {
     const d = pendientes.get(p.id);
-    return d ? aplicarDesignacion(p, d.varianteId, d.varianteNombre, d.ahoraIso, d.proxima) : p;
+    return d && !d.enVuelo ? aplicarDesignacion(p, d.varianteId, d.varianteNombre, d.ahoraIso, d.proxima) : p;
   });
 }
 
