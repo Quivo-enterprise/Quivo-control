@@ -342,6 +342,15 @@ export function useDesignarVuelta(token: string | null) {
       queryClient.setQueryData(KEY_DESIGNACIONES_PENDIENTES, sig);
       return { ahoraIso };
     },
+    onSuccess: (data, v, ctx) => {
+      // Tardía: la vuelta actual no cambia; el optimista pasa de "designada" a "próxima vuelta".
+      const actual = leer();
+      const pend = actual?.get(v.sesionId);
+      if (data.aplica !== 'proxima_vuelta' || !ctx || pend?.ahoraIso !== ctx.ahoraIso) return;
+      const sig = new Map(actual);
+      sig.set(v.sesionId, { ...pend, proxima: true });
+      queryClient.setQueryData(KEY_DESIGNACIONES_PENDIENTES, sig);
+    },
     onSettled: async (_data, _err, v, ctx) => {
       void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'molinos'] });
       // El overlay se mantiene hasta que llega el refetch de posiciones: quitarlo antes dejaría ver

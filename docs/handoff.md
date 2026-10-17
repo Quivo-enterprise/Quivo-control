@@ -471,7 +471,7 @@ efímero de Cloud Run) → D (app, APK 16) → F (vueltas y sanciones compensato
 
 **Deploy `r15-20261012` (2026-10-12):** lo corrió el chairman con el ok del CTO. Exit 0, migraciones OK (incluye `20261012100000_infracciones`), API `ok` (db y redis up), panel y worker actualizados. **No verificado:** el panel en prod con login real (recorridos y editor de rutas con Google) y la detección de infracciones con datos reales.
 
-**Frecuencia de Molinos (estándar propuesto al CTO):** en Honduras se manda a Molinos 1 de cada N llegadas, con N = vueltas a Salomón del día + 1. Con llegadas cada 6-7 min, sale uno a Molinos cada ~30-35 min de lunes a viernes, ~18-21 min el sábado y ~24-28 min el domingo. No depende del tamaño de la flota. El primer cálculo (125 móviles repartidos en la ventana) estaba mal y el CTO lo corrigió. Horario: primera salida entre las 7 y las 8 (después es "fuera de horario"); el diurno termina a las 17:00.
+**Frecuencia de Molinos (estándar propuesto al CTO):** en Honduras (o en cualquier momento del viaje, mientras no haya ido hoy a Molinos) se manda a Molinos 1 de cada N llegadas, con N = vueltas a Salomón del día + 1. Con llegadas cada 6-7 min, sale uno a Molinos cada ~30-35 min de lunes a viernes, ~18-21 min el sábado y ~24-28 min el domingo. No depende del tamaño de la flota. El primer cálculo (125 móviles repartidos en la ventana) estaba mal y el CTO lo corrigió. Horario: primera salida entre las 7 y las 8 (después es "fuera de horario"); el diurno termina a las 17:00.
 
 **Siguiente:**
 1. **Piloto de la 16 en calle desde el 2026-10-13** (placa `1616PIL` + PIN). Mirar en `/en-vivo` los pasos por Salomón y Honduras y los `pc_omitido`. Al terminar: `--desactivar --apply`.

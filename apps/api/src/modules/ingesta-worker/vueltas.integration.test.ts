@@ -76,7 +76,9 @@ describe('vueltas y designación a Molinos (F1)', () => {
   let pcSr: string;
   let pcHonduras: string;
   let pcMolinos: string;
+  let pcBifurcacion: string;
   let varianteId: string;
+  let varianteDosId: string;
   let varianteSinEsperaId: string;
   let varianteOtraRutaId: string;
   let vehiculoId: string;
@@ -86,7 +88,8 @@ describe('vueltas y designación a Molinos (F1)', () => {
     | 'ciclo' | 'larga' | 'corta' | 'omitida' | 'fin' | 'desorden' | 'sinRoles' | 'desvio' | 'carrera'
     | 'vacia' | 'cierreVacia' | 'cierreDesig' | 'cierreSinTenant' | 'inactiva' | 'esperaTardia' | 'retro'
     | 'omitidaFin' | 'cierreTardio' | 'estacionado' | 'espNoDesig' | 'cursor'
-    | 'tardioN1' | 'tardioVacia' | 'carreraDesig' | 'gpsDesorden' | 'cierreResidual',
+    | 'tardioN1' | 'tardioVacia' | 'carreraDesig' | 'gpsDesorden' | 'cierreResidual'
+    | 'desvioDesig' | 'yaFue' | 'omitidaLuego' | 'tardia' | 'cancelaDiferida' | 'esperaLuego' | 'desigYTardia',
     string
   >;
 
@@ -151,6 +154,8 @@ describe('vueltas y designación a Molinos (F1)', () => {
       pcSr = await crearPc(rutaId, 0, LON_SR, LAT_RUTA, 100, 'terminal', null);
       pcHonduras = await crearPc(rutaId, 1, LON_HONDURAS, LAT_RUTA, 100, 'retorno', null);
       pcMolinos = await crearPc(rutaId, 2, LON_MOLINOS, LAT_SUR, 50, 'espera', 30);
+      // Bifurcación: PC común después del retorno, junto al inicio del tramo de la variante.
+      pcBifurcacion = await crearPc(rutaId, 3, LON_MOLINOS, LAT_RUTA, 50, null, null);
       // Ruta sin ningún rol: no cuenta vueltas.
       await crearPc(rutaSinRolesId, 0, LON_SR, LAT_RUTA, 100, null, null);
       const crearVariante = async (ruta: string, nombre: string, puntoEspera: string | null, conGeometria: boolean) => {
@@ -163,6 +168,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
         return id;
       };
       varianteId = await crearVariante(rutaId, 'Vía Molinos', pcMolinos, true);
+      varianteDosId = await crearVariante(rutaId, 'Vía Molinos 2', pcMolinos, true);
       varianteSinEsperaId = await crearVariante(rutaId, 'Sin punto de espera', null, false);
       varianteOtraRutaId = await crearVariante(rutaOtraId, 'Otra ruta', null, false);
 
@@ -189,11 +195,20 @@ describe('vueltas y designación a Molinos (F1)', () => {
         ).id;
       const asigCirc = await asignacion(rutaId, 'manana', 1);
       const asigSinRoles = await asignacion(rutaSinRolesId, 'tarde', 2);
-      const crearSesion = async (asignacionId: string) =>
+      // Cada sesión usa SU vehículo (salvo `ciclo`): el tope "ya fue a Molinos hoy" es por vehículo y
+      // día, y las sesiones que llegan a Molinos no deben bloquear a las demás.
+      const crearSesion = async (asignacionId: string, propio = true) =>
         (
           await tx.sesionOperativa.create({
             data: {
-              sindicatoId: sindicatoA, asignacionId, vehiculoId, conductorId, deviceId: 'device-vlt',
+              sindicatoId: sindicatoA, asignacionId, conductorId,
+              vehiculoId: propio
+                ? (
+                    await tx.vehiculo.create({
+                      data: { sindicatoId: sindicatoA, placa: `VL${randomUUID().slice(0, 5).toUpperCase()}`, tipo: 'bus', marca: 'x', modelo: 'x', color: 'x', capacidad: 10, estado: 'activo' },
+                    })
+                  ).id
+                : vehiculoId, deviceId: 'device-vlt',
               accessTokenHash: randomUUID(), refreshTokenHash: randomUUID(),
               accessExpiresAt: new Date(Date.now() + 3_600_000), refreshExpiresAt: new Date(Date.now() + 3_600_000),
             },
@@ -204,10 +219,11 @@ describe('vueltas y designación a Molinos (F1)', () => {
         'vacia', 'cierreVacia', 'cierreDesig', 'cierreSinTenant', 'inactiva', 'esperaTardia', 'retro', 'omitidaFin',
         'cierreTardio', 'estacionado', 'espNoDesig', 'cursor',
         'tardioN1', 'tardioVacia', 'carreraDesig', 'gpsDesorden', 'cierreResidual',
+        'desvioDesig', 'yaFue', 'omitidaLuego', 'tardia', 'cancelaDiferida', 'esperaLuego', 'desigYTardia',
       ] as const) {
-        sesiones[k] = await crearSesion(asigCirc);
+        sesiones[k] = await crearSesion(asigCirc, k !== 'ciclo');
       }
-      sesiones.sinRoles = await crearSesion(asigSinRoles);
+      sesiones.sinRoles = await crearSesion(asigSinRoles, false);
       reglaId = (
         await tx.regla.create({ data: { sindicatoId: sindicatoA, nombre: 'Sanción genérica', tipo: 'operativo', gravedad: 'grave', aplicaA: 'conductor' } })
       ).id;
@@ -533,27 +549,27 @@ describe('vueltas y designación a Molinos (F1)', () => {
     });
 
     it('con la vuelta designada a la variante, los mismos puntos sobre el tramo NO son desvío (LEAST base/tramo)', async () => {
-      // Sesión nueva con el mismo recorrido, pero designada antes de los puntos.
-      const s = sesiones.carrera;
-      await withTenantContext(ADMIN, (tx) => tx.infraccion.deleteMany({ where: { sesionId: s } }));
-      await lote([gps(s, iso(100), LON_SR, LAT_RUTA)]);
-      // `carrera` ya tiene la vuelta 1 designada y con llegada; abrimos un recorrido nuevo (vuelta 2) designado.
-      await lote([inicio(s, iso(110)), cumpl(s, pcSr, iso(110, 5), LON_SR, LAT_RUTA)]);
-      const act = await vueltasDe(s);
-      expect(act.at(-1)!.estado).toBe('en_curso');
+      // Sesión (y vehículo) propios, designada antes de los puntos: un vehículo que ya llegó a
+      // Molinos hoy no se puede volver a designar.
+      const s = sesiones.desvioDesig;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      expect((await vueltasDe(s)).at(-1)!.estado).toBe('en_curso');
       await vueltas.designar(adminA, s, varianteId);
-      await lote(puntosSobreTramo(s, 115));
+      await lote(puntosSobreTramo(s, 10));
       expect((await infraccionesDe(s)).filter((i) => i.tipo === 'desvio_ruta')).toHaveLength(0);
     });
   });
 
   describe('mapa en vivo: LATERAL de posiciones y resumen Molinos', () => {
-    it('molinosHoy es true para el vehículo con una vuelta designada hoy; vuelta null sin vuelta en curso', async () => {
+    it('molinosHoy es true solo para el vehículo que LLEGÓ a Molinos hoy (no por estar designado); vuelta null sin vuelta en curso', async () => {
       // "Hoy" = el día local de las vueltas del test (no el del reloj de la máquina: pasada la
       // medianoche de Bolivia, `BASE` —hace 3 h— cae en el día anterior).
       const posiciones = await enVivo.obtenerPosiciones(adminA, diaDeLasVueltas);
       const larga = posiciones.find((p) => p.id === sesiones.larga)!;
+      // `larga` llegó a Molinos en su vuelta 1 (ver arriba); `retro` pasó por el PC de espera pero sin
+      // estar designada: no llegó, no cuenta como "ya fue".
       expect(larga.molinosHoy).toBe(true);
+      expect(posiciones.find((p) => p.id === sesiones.retro)!.molinosHoy).toBe(false);
       const sinRoles = posiciones.find((p) => p.id === sesiones.sinRoles)!;
       expect(sinRoles.vuelta).toBeNull();
       expect(sinRoles.infraccionesAtendidas).toBe(0);
@@ -996,6 +1012,112 @@ describe('vueltas y designación a Molinos (F1)', () => {
       expect((await vueltasDe(s))[0]!.varianteId).toBeNull();
       // Cancelar (sin variante) sigue permitido.
       await expect(vueltas.designar(adminA, s, null)).resolves.toBeDefined();
+    });
+  });
+
+  describe('designación en cualquier momento: tope por día y diferida', () => {
+    it('ya llegó a Molinos en la vuelta 1: designar en la vuelta 2 → 409 "Ya fue a Molinos hoy."; molinosHoy y sinMolinosHoy cuentan llegadas', async () => {
+      const s = sesiones.yaFue;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      const antes = (await vueltas.resumenMolinos(adminA, diaDeLasVueltas)).lineas.find((l) => l.lineaId === lineaId)!;
+      await vueltas.designar(adminA, s, varianteId);
+      // Designada pero sin llegar: sigue sin contar como "ya fue".
+      expect((await vueltas.resumenMolinos(adminA, diaDeLasVueltas)).lineas.find((l) => l.lineaId === lineaId)!.sinMolinosHoy).toBe(
+        antes.sinMolinosHoy,
+      );
+      expect((await enVivo.obtenerPosiciones(adminA, diaDeLasVueltas)).find((p) => p.id === s)!.molinosHoy).toBe(false);
+      await lote([
+        cumpl(s, pcHonduras, iso(20), LON_HONDURAS, LAT_RUTA),
+        cumpl(s, pcMolinos, iso(30), LON_MOLINOS, LAT_SUR),
+        cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA),
+      ]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'en_curso']]);
+      const despues = (await vueltas.resumenMolinos(adminA, diaDeLasVueltas)).lineas.find((l) => l.lineaId === lineaId)!;
+      expect(despues.sinMolinosHoy).toBe(antes.sinMolinosHoy - 1);
+      expect((await enVivo.obtenerPosiciones(adminA, diaDeLasVueltas)).find((p) => p.id === s)!.molinosHoy).toBe(true);
+      await expect(vueltas.designar(adminA, s, varianteId)).rejects.toBeInstanceOf(ConflictException);
+      await expect(vueltas.designar(adminA, s, varianteId)).rejects.toThrow('Ya fue a Molinos hoy.');
+      expect((await vueltasDe(s))[1]!.varianteId).toBeNull();
+      // Cancelar sigue permitido.
+      await expect(vueltas.designar(adminA, s, null)).resolves.toMatchObject({ aplica: 'vuelta_actual' });
+    });
+
+    it('designada y omitida en la vuelta 1 (no llegó): en la vuelta 2 se puede designar', async () => {
+      const s = sesiones.omitidaLuego;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      await vueltas.designar(adminA, s, varianteId);
+      await lote([cumpl(s, pcHonduras, iso(20), LON_HONDURAS, LAT_RUTA), cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA)]);
+      expect((await infraccionesDe(s)).filter((i) => i.tipo === 'molinos_omitido')).toHaveLength(1);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'en_curso']]);
+      const r = await vueltas.designar(adminA, s, varianteId);
+      expect(r).toMatchObject({ numero: 2, varianteId, aplica: 'vuelta_actual' });
+    });
+
+    it('tras cumplir la bifurcación en el regreso: aplica a la próxima vuelta; la actual cierra sin molinos_omitido y la nueva abre designada sin acuse', async () => {
+      const s = sesiones.tardia;
+      // La bifurcación pasada en la IDA (antes del retorno) no vuelve tardía la designación.
+      await lote([
+        inicio(s, iso(0)),
+        cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA),
+        cumpl(s, pcBifurcacion, iso(5), LON_MOLINOS, LAT_RUTA),
+        cumpl(s, pcHonduras, iso(20), LON_HONDURAS, LAT_RUTA),
+      ]);
+      const enTiempo = await vueltas.designar(operadorA, s, varianteId);
+      expect(enTiempo).toMatchObject({ numero: 1, varianteId, aplica: 'vuelta_actual' });
+      await vueltas.designar(operadorA, s, null);
+      // En el regreso, después de la bifurcación: diferida.
+      await lote([cumpl(s, pcBifurcacion, iso(25), LON_MOLINOS, LAT_RUTA)]);
+      const r = await vueltas.designar(operadorA, s, varianteId);
+      expect(r).toMatchObject({ numero: 1, varianteId: null, aplica: 'proxima_vuelta' });
+      const [v1] = await vueltasDe(s);
+      expect(v1).toMatchObject({ varianteId: null, molinosProximaVarianteId: varianteId, molinosProximaPor: 'operador-a' });
+      expect(v1!.molinosProximaEn).not.toBeNull();
+      const pos = (await enVivo.obtenerPosiciones(adminA, diaDeLasVueltas)).find((p) => p.id === s)!;
+      expect(pos.vuelta).toMatchObject({ varianteId: null, molinosProxima: true });
+
+      await lote([cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA)]);
+      const filas = await vueltasDe(s);
+      expect(filas.map((f) => [f.numero, f.estado, f.varianteId])).toEqual([[1, 'completa', null], [2, 'en_curso', varianteId]]);
+      expect(filas[1]).toMatchObject({ designadaPor: 'operador-a', acuseEn: null });
+      expect(filas[1]!.designadaEn?.toISOString()).toBe(v1!.molinosProximaEn!.toISOString());
+      // Consumida: la vuelta origen ya no la conserva (no resucita si N+1 se cancela y se reabre).
+      expect(filas[0]).toMatchObject({ molinosProximaVarianteId: null, molinosProximaPor: null, molinosProximaEn: null });
+      expect((await infraccionesDe(s)).filter((i) => i.tipo === 'molinos_omitido')).toHaveLength(0);
+      // La app del chofer la ve como cualquier designación.
+      expect((await vueltas.obtenerActualMovil(sesionMovil(s))).designacion).toMatchObject({ varianteId, acuseEn: null });
+    });
+
+    it('cancelar (null) limpia la designación diferida y la vuelta siguiente abre sin designar', async () => {
+      const s = sesiones.cancelaDiferida;
+      await lote([...hastaHonduras(s, 0), cumpl(s, pcBifurcacion, iso(25), LON_MOLINOS, LAT_RUTA)]);
+      expect((await vueltas.designar(adminA, s, varianteId)).aplica).toBe('proxima_vuelta');
+      const cancelada = await vueltas.designar(adminA, s, null);
+      expect(cancelada.aplica).toBe('vuelta_actual');
+      expect((await vueltasDe(s))[0]).toMatchObject({ molinosProximaVarianteId: null, molinosProximaPor: null, molinosProximaEn: null });
+      await lote([cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA)]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.varianteId])).toEqual([[1, null], [2, null]]);
+    });
+  });
+
+  describe('diferida: casos límite', () => {
+    it('pasó por el PC de espera sin designar y luego la bifurcación en el regreso: designar → proxima_vuelta (no 409)', async () => {
+      const s = sesiones.esperaLuego;
+      await lote([
+        ...hastaHonduras(s, 0),
+        cumpl(s, pcMolinos, iso(22), LON_MOLINOS, LAT_SUR),
+        cumpl(s, pcBifurcacion, iso(25), LON_MOLINOS, LAT_RUTA),
+      ]);
+      await expect(vueltas.designar(adminA, s, varianteId)).resolves.toMatchObject({ aplica: 'proxima_vuelta' });
+    });
+
+    it('vuelta actual ya designada y pasada la bifurcación: otra variante NO se difiere (se aplica a la actual)', async () => {
+      const s = sesiones.desigYTardia;
+      await lote([...hastaHonduras(s, 0)]);
+      await vueltas.designar(adminA, s, varianteId);
+      await lote([cumpl(s, pcBifurcacion, iso(25), LON_MOLINOS, LAT_RUTA)]);
+      const r = await vueltas.designar(adminA, s, varianteDosId);
+      expect(r).toMatchObject({ varianteId: varianteDosId, aplica: 'vuelta_actual' });
+      expect((await vueltasDe(s))[0]).toMatchObject({ molinosProximaVarianteId: null });
     });
   });
 

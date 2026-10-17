@@ -4,7 +4,7 @@ import type {
   PosicionEnVivo,
   SesionEnVivoResumen,
   TrazaEnVivo,
-  VueltaResumen,
+  DesignarVueltaRespuesta,
 } from '@quivo/shared';
 import { apiFetch } from './client';
 
@@ -36,7 +36,7 @@ export const enVivoApi = {
    * vuelta en curso a una variante con punto de espera. 409 con motivo en español si ya llegó al
    * punto de espera o no hay vuelta en curso. */
   designarVuelta: (token: string, sesionId: string, varianteId: string | null) =>
-    apiFetch<VueltaResumen>(`/reportes/en-vivo/${sesionId}/vuelta-actual/designacion`, token, {
+    apiFetch<DesignarVueltaRespuesta>(`/reportes/en-vivo/${sesionId}/vuelta-actual/designacion`, token, {
       method: 'PUT',
       body: { varianteId },
     }),

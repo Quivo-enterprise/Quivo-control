@@ -43,7 +43,7 @@ describe('vuelta (contratos)', () => {
   });
 
   it('VueltaPosicion no admite número de vuelta 0', () => {
-    const base = { varianteId: null, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null };
+    const base = { varianteId: null, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null, molinosProxima: false };
     expect(VueltaPosicionSchema.safeParse({ numero: 1, ...base }).success).toBe(true);
     expect(VueltaPosicionSchema.safeParse({ numero: 0, ...base }).success).toBe(false);
   });

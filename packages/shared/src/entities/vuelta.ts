@@ -28,6 +28,8 @@ export const VueltaPosicionSchema = z.object({
   /** Llegó al punto de espera y todavía no salió. */
   enEspera: z.boolean(),
   esperaDesdeTs: z.string().nullable(),
+  /** Hay una designación diferida: va a Molinos en la PRÓXIMA vuelta (se designó tras la bifurcación). */
+  molinosProxima: z.boolean(),
 });
 export type VueltaPosicion = z.infer<typeof VueltaPosicionSchema>;
 
@@ -59,6 +61,15 @@ export const VueltaResumenSchema = z.object({
 export type VueltaResumen = z.infer<typeof VueltaResumenSchema>;
 
 /**
+ * Respuesta del PUT de designación: la vuelta + a cuál se aplicó. `proxima_vuelta` = se designó
+ * después de pasar la bifurcación en el regreso: queda diferida y la vuelta actual no cambia.
+ */
+export const DesignarVueltaRespuestaSchema = VueltaResumenSchema.extend({
+  aplica: z.enum(['vuelta_actual', 'proxima_vuelta']),
+});
+export type DesignarVueltaRespuesta = z.infer<typeof DesignarVueltaRespuestaSchema>;
+
+/**
  * `GET /reportes/en-vivo/molinos` — resumen por línea para el HUD ("Molinos: X en espera ·
  * último envío hace N min · próximo sugerido en M min"). Se pide aparte del poll de 2 s porque
  * agrega por línea/día y cambia con mucha menos frecuencia.
@@ -74,7 +85,7 @@ export const MolinosLineaSchema = z.object({
   ultimoEnvioTs: z.string().nullable(),
   /** Sesiones activas de la línea con recorrido no finalizado. */
   flotaActiva: z.number().int().nonnegative(),
-  /** De ellas, las que todavía no tienen ninguna vuelta designada hoy. */
+  /** De ellas, las que todavía no llegaron a Molinos hoy. */
   sinMolinosHoy: z.number().int().nonnegative(),
   /** Intervalo objetivo entre envíos (ventana diurna / flota activa, mínimo 1 min). */
   intervaloObjetivoMs: z.number().int().positive(),

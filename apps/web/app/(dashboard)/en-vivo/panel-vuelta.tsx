@@ -47,7 +47,7 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
 
   const vuelta = posicion?.vuelta ?? null;
   const opciones = variantesDeEspera(variantes);
-  const bloqueo = motivoBloqueo(vuelta);
+  const bloqueo = motivoBloqueo(vuelta, posicion?.molinosHoy);
   const reloj = ahoraServidor(props.posicionesServidorTs, props.posicionesRecibidoEn, ahora);
   const relojHud = ahoraServidor(props.molinosServidorTs, props.molinosRecibidoEn, ahora);
   const sugerido = posicion ? esSugerido(posicion, linea, relojHud) : false;
@@ -83,8 +83,9 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
   const indiceActivo = items.findIndex((item) => item.id === seleccion);
   const indiceTab = foco !== null && foco < items.length ? foco : Math.max(0, indiceActivo);
 
-  async function elegir(item: (typeof items)[number]) {
-    if (bloqueado || item.id === seleccion) return;
+  // `forzar`: cancelar una diferida desde "Directo", que ya es la opción marcada.
+  async function elegir(item: (typeof items)[number], forzar = false) {
+    if (bloqueado || (item.id === seleccion && !forzar)) return;
     setError(null);
     setPendiente(item.id);
     try {
@@ -187,8 +188,19 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
               <Clock size={12} aria-hidden="true" /> {bloqueo}
             </p>
           )}
-          {!bloqueo && posicion?.molinosHoy && vuelta.varianteId === null && (
-            <p className="qv-vuelta__nota">Ya fue a Molinos hoy; igual podés enviarlo de nuevo.</p>
+          {vuelta.molinosProxima && (
+            <p className="qv-vuelta__nota">
+              <Clock size={12} aria-hidden="true" /> Va a Molinos en la próxima vuelta.{' '}
+              <button
+                type="button"
+                className="qv-live-btn"
+                disabled={pendiente !== null}
+                aria-label="Cancelar Molinos en la próxima vuelta"
+                onClick={() => void elegir(items.find((item) => item.varianteId === null)!, true)}
+              >
+                Cancelar
+              </button>
+            </p>
           )}
           {error && (
             <p id={idError} className="qv-live-panel__error" role="alert">

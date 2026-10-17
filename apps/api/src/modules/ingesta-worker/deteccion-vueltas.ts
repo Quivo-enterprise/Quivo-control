@@ -366,6 +366,13 @@ export async function procesarVueltasSesion(
       continue;
     }
     if (nuevas.has(fila.id)) {
+      // Designación diferida de la vuelta anterior (el control designó tras la bifurcación): pasa a
+      // ser la designación de esta, sin acuse. Se lee de la base: la anterior pudo cerrarse en este lote.
+      // shortcut: la designación copiada solo la ve la máquina de estados desde el SIGUIENTE lote; un lote offline con cierre N + apertura N+1 + llegada a Molinos perdería la llegada. Mejorar pasando la pendiente a avanzarVueltas si aparecen lotes así de largos.
+      const anterior = await tx.vuelta.findFirst({
+        where: { sesionId, sindicatoId, numero: fila.numero - 1 },
+        select: { molinosProximaVarianteId: true, molinosProximaPor: true, molinosProximaEn: true },
+      });
       await tx.vuelta.create({
         data: {
           id: fila.id,
@@ -384,8 +391,22 @@ export async function procesarVueltasSesion(
           esperaLlegadaTs: fila.esperaLlegadaTs,
           esperaSalidaTs: fila.esperaSalidaTs,
           ultimoPcTs: fila.ultimoPcTs,
+          ...(anterior?.molinosProximaVarianteId
+            ? {
+                varianteId: anterior.molinosProximaVarianteId,
+                designadaPor: anterior.molinosProximaPor,
+                designadaEn: anterior.molinosProximaEn,
+              }
+            : {}),
         },
       });
+      if (anterior?.molinosProximaVarianteId) {
+        // Se consume: si N+1 se cancela/elimina y se reabre, no debe resucitar la diferida.
+        await tx.vuelta.updateMany({
+          where: { sesionId, sindicatoId, numero: fila.numero - 1 },
+          data: { molinosProximaVarianteId: null, molinosProximaPor: null, molinosProximaEn: null },
+        });
+      }
     } else {
       // Solo columnas de la máquina: la designación (`varianteId`/`designada*`/`acuseEn`) es de
       // la web y de la app, y no se pisa con una lectura vieja.

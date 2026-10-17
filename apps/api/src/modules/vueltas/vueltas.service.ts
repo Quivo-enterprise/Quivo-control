@@ -11,6 +11,7 @@ import {
   fechaActualBolivia,
   inicioDeJornadaBolivia,
   type AcuseVuelta,
+  type DesignarVueltaRespuesta,
   type MolinosResumen,
   type VueltaActualMovil,
   type VueltaResumen,
@@ -21,6 +22,7 @@ import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
 const MSG_YA_PASO_ESPERA = 'La unidad ya pasó por el punto de espera en esta vuelta';
 const MSG_YA_LLEGO =
   'El vehículo ya llegó al punto de espera: la designación de esta vuelta ya no se puede cambiar';
+const MSG_YA_FUE_HOY = 'Ya fue a Molinos hoy.';
 
 interface VueltaFila {
   id: string;
@@ -56,12 +58,16 @@ export class VueltasService {
    * función se serializan con el mismo lock de asesoría de la sesión, así que una llegada concurrente gana de forma atómica. Designar la
    * variante que ya tiene (o cancelar sin designación) es un no-op: no reinicia el acuse ni
    * vuelve a avisar al chofer.
+   *
+   * Tope por día: no se designa a un vehículo que ya llegó a Molinos hoy en otra vuelta (409).
+   * Si la designación llega DESPUÉS de pasar la bifurcación en el regreso, queda diferida en
+   * `molinosProxima*` y el worker la copia a la vuelta siguiente (`aplica: 'proxima_vuelta'`).
    */
   async designar(
     actor: AuthenticatedUser,
     sesionId: string,
     varianteId: string | null,
-  ): Promise<VueltaResumen> {
+  ): Promise<DesignarVueltaRespuesta> {
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
       // `findUnique` PRIMERO: tenant-check por RLS (una sesión ajena es 404, igual que en /en-vivo).
       const sesion = await tx.sesionOperativa.findUnique({
@@ -130,14 +136,38 @@ export class VueltasService {
           );
         }
       }
-      if (vuelta.varianteId === varianteId) {
-        return this.resumen(tx, vuelta.id);
+      // Cancelar con una diferida pendiente NO es un no-op: hay que limpiarla.
+      if (
+        vuelta.varianteId === varianteId &&
+        (varianteId !== null || vuelta.molinosProximaVarianteId === null)
+      ) {
+        return { ...(await this.resumen(tx, vuelta.id)), aplica: 'vuelta_actual' };
       }
+      // Tardía: ya pasó la bifurcación en el regreso, la vuelta actual no puede ir a Molinos.
+      // Solo se difiere si la actual NO está designada: si no, iría a Molinos dos veces en el día
+      // y la diferida no se podría cancelar.
+      const tardia =
+        varianteId !== null &&
+        vuelta.varianteId === null &&
+        vuelta.pasoRetornoTs !== null &&
+        (await this.pasoBifurcacionEnRegreso(tx, sesion, vuelta.pasoRetornoTs, varianteId));
       if (varianteId !== null) {
-        // Designación retroactiva: si la unidad ya pasó por el punto de espera de la variante
+        const [yaFue] = await tx.$queryRaw<{ yaFue: boolean }[]>`
+          SELECT EXISTS (
+            SELECT 1 FROM vueltas
+            WHERE "vehiculoId" = ${vuelta.vehiculoId} AND "sindicatoId" = ${sesion.sindicatoId}
+              AND fecha = ${vuelta.fecha.toISOString().slice(0, 10)}::date AND id <> ${vuelta.id} AND "esperaLlegadaTs" IS NOT NULL
+          ) AS "yaFue"
+        `;
+        if (yaFue?.yaFue) {
+          throw new ConflictException(MSG_YA_FUE_HOY);
+        }
+        // Designación retroactiva (solo vuelta actual; una diferida no la toca): si la unidad ya pasó por el punto de espera de la variante
         // desde que empezó la vuelta, la máquina no la tomaría como llegada (la llegada solo se
         // registra con la vuelta ya designada) y al cerrar saldría un `molinos_omitido` falso.
-        const [paso] = await tx.$queryRaw<{ pasoPorEspera: boolean }[]>`
+        const [paso] = tardia
+          ? []
+          : await tx.$queryRaw<{ pasoPorEspera: boolean }[]>`
           SELECT EXISTS (
             SELECT 1 FROM cumplimientos_pc cp
             JOIN variantes va ON va.id = ${varianteId}
@@ -150,16 +180,70 @@ export class VueltasService {
           throw new ConflictException(MSG_YA_PASO_ESPERA);
         }
       }
+      if (tardia && vuelta.molinosProximaVarianteId === varianteId) {
+        // Ya está diferida a esa variante: no reescribir `molinosProximaEn`.
+        return { ...(await this.resumen(tx, vuelta.id)), aplica: 'proxima_vuelta' };
+      }
+      const ahora = new Date();
       const { count } = await tx.vuelta.updateMany({
         where: { id: vuelta.id, estado: 'en_curso', esperaLlegadaTs: null },
-        data: { varianteId, designadaPor: actor.userId, designadaEn: new Date(), acuseEn: null },
+        data: tardia
+          ? { molinosProximaVarianteId: varianteId, molinosProximaPor: actor.userId, molinosProximaEn: ahora }
+          : {
+              varianteId,
+              designadaPor: actor.userId,
+              designadaEn: ahora,
+              acuseEn: null,
+              molinosProximaVarianteId: null,
+              molinosProximaPor: null,
+              molinosProximaEn: null,
+            },
       });
       if (count === 0) {
         // Perdió la carrera contra el worker: la vuelta cerró o el vehículo acaba de llegar.
         throw new ConflictException(MSG_YA_LLEGO);
       }
-      return this.resumen(tx, vuelta.id);
+      return { ...(await this.resumen(tx, vuelta.id)), aplica: tardia ? 'proxima_vuelta' : 'vuelta_actual' };
     });
+  }
+
+  /**
+   * ¿La unidad ya cumplió, en el regreso, un PC en o después de la bifurcación de la variante?
+   * Bifurcación = el PC común (`rol IS NULL`) posterior al retorno más cercano al inicio del
+   * tramo de la variante. Sin ese PC (o sin geometría) nunca es tardía. `ts >= pasoRetornoTs`
+   * deja fuera el paso por la ida.
+   */
+  private async pasoBifurcacionEnRegreso(
+    tx: Prisma.TransactionClient,
+    sesion: { id: string; sindicatoId: string; asignacion: { rutaId: string } },
+    pasoRetornoTs: Date,
+    varianteId: string,
+  ): Promise<boolean> {
+    const [fila] = await tx.$queryRaw<{ tardia: boolean }[]>`
+      WITH bif AS (
+        SELECT pc.orden
+        FROM puntos_control pc
+        JOIN variantes va ON va.id = ${varianteId}
+        WHERE pc."rutaId" = ${sesion.asignacion.rutaId} AND pc.estado = 'activo' AND pc.rol IS NULL
+          AND va.geometria IS NOT NULL
+          AND pc.orden > (
+            SELECT orden FROM puntos_control
+            WHERE "rutaId" = ${sesion.asignacion.rutaId} AND estado = 'activo' AND rol = 'retorno'
+            LIMIT 1
+          )
+        ORDER BY ST_Distance(pc.coord, ST_StartPoint(va.geometria::geometry)::geography)
+        LIMIT 1
+      )
+      SELECT EXISTS (
+        SELECT 1 FROM cumplimientos_pc cp
+        JOIN puntos_control p ON p.id = cp."puntoControlId"
+        JOIN bif ON p.orden >= bif.orden
+        WHERE cp."sesionId" = ${sesion.id} AND cp."sindicatoId" = ${sesion.sindicatoId}
+          AND p."rutaId" = ${sesion.asignacion.rutaId} AND cp.cumplido = true
+          AND cp.ts >= ${pasoRetornoTs}
+      ) AS tardia
+    `;
+    return fila?.tardia ?? false;
   }
 
   private async resumen(tx: Prisma.TransactionClient, vueltaId: string): Promise<VueltaResumen> {
@@ -293,7 +377,7 @@ export class VueltasService {
                count(*) FILTER (WHERE NOT EXISTS (
                  SELECT 1 FROM vueltas vh
                  WHERE vh."vehiculoId" = so."vehiculoId" AND vh."sindicatoId" = so."sindicatoId"
-                   AND vh.fecha = ${hoyStr}::date AND vh."varianteId" IS NOT NULL
+                   AND vh.fecha = ${hoyStr}::date AND vh."esperaLlegadaTs" IS NOT NULL
                    AND ${vueltaNoVacia('vh')}
                ))::int AS "sinMolinosHoy"
         FROM sesiones_operativas so

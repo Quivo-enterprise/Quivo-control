@@ -152,6 +152,7 @@ describe('construirMarcadoresVehiculos — PR E (alertas, color de línea, selec
       acuseEn: null,
       enEspera: false,
       esperaDesdeTs: null,
+      molinosProxima: false,
     });
     const [con, sin, nula] = construirMarcadoresVehiculos(
       [
