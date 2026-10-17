@@ -13,6 +13,7 @@ import {
   offsetRelojServidorMs,
   presentacionFrescura,
   PRESENTACION_FRESCURA,
+  SOLAPE_CURSOR_CORTO_MS,
   SOLAPE_CURSOR_MS,
   UMBRAL_CORTE_POLL_MS,
   INTERVALO_POLL_FINALIZADO_MS,
@@ -54,6 +55,29 @@ function respuesta(overrides: Partial<TrazaEnVivo> = {}): TrazaEnVivo {
 }
 
 describe('fusionarTraza (merge del delta contra la cache)', () => {
+  it('sin puntos nuevos conserva la referencia del array de puntos (y refresca el resto)', () => {
+    const previa = fusionarTraza(
+      undefined,
+      respuesta({ puntos: [punto('2026-08-18T13:00:00.000Z')], totalPuntos: 1 }),
+    );
+    const fusionada = fusionarTraza(
+      previa,
+      respuesta({
+        puntos: [punto('2026-08-18T13:00:00.000Z')],
+        totalPuntos: 1,
+        estadoFrescura: 'reportando',
+      }),
+    );
+    expect(fusionada.puntos).toBe(previa.puntos);
+    expect(fusionada.estadoFrescura).toBe('reportando');
+    const conNuevo = fusionarTraza(
+      previa,
+      respuesta({ puntos: [punto('2026-08-18T13:01:00.000Z')], totalPuntos: 2 }),
+    );
+    expect(conNuevo.puntos).not.toBe(previa.puntos);
+    expect(conNuevo.puntos).toHaveLength(2);
+  });
+
   it('acumula el delta sobre lo que ya había', () => {
     const previa = fusionarTraza(
       undefined,
@@ -148,11 +172,18 @@ describe('fusionarTraza (merge del delta contra la cache)', () => {
   });
 });
 
-describe('desdeConSolape (cursor con 2 min de solape)', () => {
+describe('desdeConSolape (cursor con solape)', () => {
   it('resta el solape al cursor', () => {
     const desde = desdeConSolape('2026-08-18T13:05:00.000Z');
     expect(desde?.toISOString()).toBe(
       new Date(Date.parse('2026-08-18T13:05:00.000Z') - SOLAPE_CURSOR_MS).toISOString(),
+    );
+  });
+
+  it('solape corto (polls intermedios) resta 15 min', () => {
+    const desde = desdeConSolape('2026-08-18T13:05:00.000Z', false);
+    expect(desde?.toISOString()).toBe(
+      new Date(Date.parse('2026-08-18T13:05:00.000Z') - SOLAPE_CURSOR_CORTO_MS).toISOString(),
     );
   });
 

@@ -7,6 +7,7 @@ import {
   PuntoControlRecorridoSchema,
   PuntoTrazaGpsSchema,
   RecorridoResumenSchema,
+  VarianteTramoSchema,
 } from './recorrido.js';
 import { VueltaPosicionSchema } from './vuelta.js';
 
@@ -139,6 +140,7 @@ export const ContextoEnVivoSchema = z.object({
   }),
   linea: z.object({ id: uuidSchema, nombre: z.string(), color: z.string() }),
   ruta: z.object({ id: uuidSchema, geometria: LineaGeoJsonSchema }),
+  variantes: z.array(VarianteTramoSchema).default([]),
   puntosControl: z.array(PuntoControlRecorridoSchema),
   servidorTs: z.string(),
 });
@@ -166,7 +168,8 @@ export type ContextoEnVivo = z.infer<typeof ContextoEnVivoSchema>;
  *
  * `TRAZA_EN_VIVO_LIMITE_DEFAULT` gobierna el poll normal (delta con `desde`, sin `limite`
  * explícito — ver `use-en-vivo.ts`) y el primer request de una sesión en curso (antes de que
- * el auto-heal complete). Con `SOLAPE_CURSOR_MS` de 15 min (`traza.ts`) y un reconexión larga
+ * el auto-heal complete). Con el solape de 15 min de los polls normales
+ * (`SOLAPE_CURSOR_CORTO_MS` en `traza.ts`; cada 6º poll usa 75 min) y una reconexión larga
  * (pestaña en background, teléfono saliendo de un hueco de Doze), la ventana de un solo delta
  * puede cubrir 25-40 min de movimiento continuo — a la densidad nueva (~1 fix cada 1.5-3 s en
  * movimiento) eso son ~1.000-1.800 puntos. 8.000 deja margen holgado (~4-8x) sobre ese caso sin

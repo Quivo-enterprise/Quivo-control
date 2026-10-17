@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FOLLOW_CENTRAL_FRACTION, isWithinCentralViewport } from './route-map-geometry.js';
+import { centroVisibleDesplazado, FOLLOW_CENTRAL_FRACTION, isWithinCentralViewport } from './route-map-geometry.js';
 
 describe('isWithinCentralViewport', () => {
   const size = { x: 1000, y: 800 };
@@ -43,5 +43,36 @@ describe('isWithinCentralViewport', () => {
 
   it('no divide por cero con un viewport de tamaño 0 (mapa todavía sin layout)', () => {
     expect(isWithinCentralViewport({ x: 0, y: 0 }, { x: 0, y: 0 })).toBe(true);
+  });
+});
+
+describe('isWithinCentralViewport con relleno (HUD / panel)', () => {
+  const size = { x: 1000, y: 800 };
+  const relleno = { top: 200, right: 0, bottom: 0, left: 0 };
+  it('un punto central del contenedor entero pero bajo el HUD ya no cuenta como central', () => {
+    // Rect visible y 200..800; 60 % central = y 320..680. El punto en y=250 estaba dentro del 60 % del contenedor.
+    expect(isWithinCentralViewport({ x: 500, y: 250 }, size)).toBe(true);
+    expect(isWithinCentralViewport({ x: 500, y: 250 }, size, FOLLOW_CENTRAL_FRACTION, relleno)).toBe(false);
+  });
+  it('el centro del rectángulo visible es central', () => {
+    expect(isWithinCentralViewport({ x: 500, y: 500 }, size, FOLLOW_CENTRAL_FRACTION, relleno)).toBe(true);
+    expect(isWithinCentralViewport({ x: 500, y: 700 }, size, FOLLOW_CENTRAL_FRACTION, relleno)).toBe(false);
+  });
+  it('un relleno que anula el contenedor se ignora', () => {
+    expect(isWithinCentralViewport({ x: 500, y: 400 }, size, FOLLOW_CENTRAL_FRACTION, { top: 500, right: 0, bottom: 400, left: 0 })).toBe(true);
+  });
+  it('sin relleno es idéntico al comportamiento anterior', () => {
+    expect(isWithinCentralViewport({ x: 100, y: 100 }, size, FOLLOW_CENTRAL_FRACTION, { top: 0, right: 0, bottom: 0, left: 0 })).toBe(
+      isWithinCentralViewport({ x: 100, y: 100 }, size),
+    );
+  });
+});
+
+describe('centroVisibleDesplazado', () => {
+  it('HUD arriba y panel a la derecha: el centro visible queda abajo-izquierda del centro', () => {
+    expect(centroVisibleDesplazado({ x: 1000, y: 800 }, { top: 200, right: 400, bottom: 0, left: 0 })).toEqual({ x: -200, y: 100 });
+  });
+  it('sin relleno no hay desplazamiento', () => {
+    expect(centroVisibleDesplazado({ x: 1000, y: 800 })).toEqual({ x: 0, y: 0 });
   });
 });

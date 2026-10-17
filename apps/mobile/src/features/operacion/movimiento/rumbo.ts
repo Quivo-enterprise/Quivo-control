@@ -1,4 +1,4 @@
-import { calcularBearing, distanciaMetros, normalizarAngulo } from './geo';
+import { calcularBearing, distanciaMetros, normalizarAngulo } from '@quivo/shared';
 import type { Coordenada, FixVisual } from './tipos';
 
 /**

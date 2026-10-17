@@ -1,5 +1,4 @@
-import { deltaAnguloCorto, normalizarAngulo } from './geo';
-import type { Coordenada } from './tipos';
+import { deltaAnguloCorto, normalizarAngulo, type Coordenada } from './geo.js';
 
 /**
  * Snap VISUAL del marcador a la polilínea de la ruta asignada (sin OSRM: no está desplegado en
@@ -328,4 +327,54 @@ export function debeInterpolarPorRuta(
 ): boolean {
   const recorrido = Math.abs(deltaSobreRuta(ruta, desdeDist, hastaDist));
   return recorrido <= Math.max(FACTOR_CUERDA * cuerdaM, cuerdaM + MARGEN_CUERDA_M);
+}
+
+/**
+ * Vértices de la polilínea estrictamente entre las distancias acumuladas `desdeDist` y
+ * `hastaDist`, más los dos extremos interpolados (`puntoEnDistancia`) — la geometría para dibujar
+ * el tramo siguiendo la calle. Mismo criterio de camino que `interpolarSobreRuta`: en un circuito
+ * cerrado, un salto mayor a media vuelta se recorre dando la vuelta (con wrap por el cierre).
+ */
+export function tramoDeRuta(
+  ruta: RutaSnap,
+  desdeDist: number,
+  hastaDist: number,
+): { lat: number; lng: number }[] {
+  const delta = deltaSobreRuta(ruta, desdeDist, hastaDist);
+  const L = ruta.largoTotal;
+  const norm = (d: number) => (ruta.cerrada ? ((d % L) + L) % L : d);
+  const coords: { lat: number; lng: number }[] = [];
+  const empuja = (d: number) => {
+    const p = puntoEnDistancia(ruta, norm(d));
+    coords.push({ lat: p.lat, lng: p.lng });
+  };
+  empuja(desdeDist);
+  const paso = delta >= 0 ? 1 : -1;
+  const fin = desdeDist + delta;
+  // Vueltas virtuales: los vértices están en acumulado + k·L (k entero, solo si cierra).
+  const kMin = ruta.cerrada ? Math.floor(Math.min(desdeDist, fin) / L) : 0;
+  const kMax = ruta.cerrada ? Math.floor(Math.max(desdeDist, fin) / L) : 0;
+  const vertices: number[] = [];
+  const lo = Math.min(desdeDist, fin);
+  const hi = Math.max(desdeDist, fin);
+  const segs = ruta.segmentos;
+  for (let k = kMin; k <= kMax; k += 1) {
+    // `acumulado` es ascendente: búsqueda binaria del primer vértice > lo - k·L y se avanza hasta hi - k·L.
+    let a = 0;
+    let b = segs.length;
+    while (a < b) {
+      const m = (a + b) >> 1;
+      if (segs[m]!.acumulado + k * L <= lo) a = m + 1;
+      else b = m;
+    }
+    for (let i = a; i < segs.length; i += 1) {
+      const d = segs[i]!.acumulado + k * L;
+      if (d >= hi) break;
+      vertices.push(d);
+    }
+  }
+  vertices.sort((a, b) => paso * (a - b));
+  for (const d of vertices) empuja(d);
+  empuja(fin);
+  return coords;
 }

@@ -17,6 +17,7 @@ import {
   type TrazaEnVivoQuery,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import { leerVariantesTramo } from '../../common/geo/variantes-tramo.js';
 import { toInfraccion } from '../infracciones/infracciones.mapper.js';
 import { vueltaNoVacia } from '../vueltas/vuelta-no-vacia.js';
 import {
@@ -681,6 +682,7 @@ export class EnVivoService {
       if (!rutaRow) {
         throw new NotFoundException('Ruta de la asignación no encontrada');
       }
+      const variantes = await leerVariantesTramo(tx, rutaId);
       // `estado = 'activo'`: `puntos_control` es soft-delete y un PC dado de baja
       // desorienta el mapa en vivo — mismo filtro que `tracking/paquete-dia.service.ts`.
       const puntoControlRows = await tx.$queryRaw<PuntoControlRow[]>`
@@ -708,6 +710,7 @@ export class EnVivoService {
           color: sesion.asignacion.ruta.linea.color ?? '#3226B4',
         },
         ruta: { id: rutaRow.id, geometria: JSON.parse(rutaRow.geometria) },
+        variantes,
         puntosControl: puntoControlRows.map((p) => ({
           id: p.id,
           orden: p.orden,

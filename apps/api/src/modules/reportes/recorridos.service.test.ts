@@ -20,6 +20,7 @@ describe('RecorridosService', () => {
   const sindicatoBId = randomUUID();
   let rutaId: string;
   let puntoControlId: string;
+  let varianteTramoId: string;
   let sesionId: string;
   const adminQuivo: AuthenticatedUser = {
     userId: 'test-admin-quivo',
@@ -58,6 +59,14 @@ describe('RecorridosService', () => {
       await tx.$executeRaw`
         INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
         VALUES (${rutaId}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())
+      `;
+      // Variantes: solo la activa CON geometría debe llegar al detalle (tramo para pegar la traza).
+      varianteTramoId = randomUUID();
+      await tx.$executeRaw`
+        INSERT INTO variantes (id, "rutaId", nombre, estado, geometria, "publicStatus", "createdAt", "updatedAt")
+        VALUES (${varianteTramoId}, ${rutaId}, 'Tramo activo', 'activo', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'borrador', now(), now()),
+               (${randomUUID()}, ${rutaId}, 'Sin geometría', 'activo', NULL, 'borrador', now(), now()),
+               (${randomUUID()}, ${rutaId}, 'Inactiva', 'inactivo', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'borrador', now(), now())
       `;
       puntoControlId = randomUUID();
       await tx.$executeRaw`
@@ -179,6 +188,7 @@ describe('RecorridosService', () => {
     expect(detalle.ruta.geometria.type).toBe('LineString');
     expect(detalle.linea.nombre).toBe('Línea Recorridos');
     expect(detalle.puntosControl).toHaveLength(1);
+    expect(detalle.variantes.map((v) => v.id)).toEqual([varianteTramoId]);
     expect(detalle.trazaGps).toHaveLength(2);
     expect(detalle.trazaGps[0]?.lat).toBeCloseTo(-34.6, 3);
     expect(detalle.cumplimientos).toHaveLength(1);

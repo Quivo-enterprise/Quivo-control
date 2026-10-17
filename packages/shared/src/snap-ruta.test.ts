@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { distanciaMetros } from './geo';
+import { distanciaMetros } from './geo.js';
 import {
   MAX_FALLOS_SNAP,
   debeInterpolarPorRuta,
@@ -7,8 +7,9 @@ import {
   prepararRutaSnap,
   puntoEnDistancia,
   snapARuta,
+  tramoDeRuta,
   type FixSnap,
-} from './snap-ruta';
+} from './snap-ruta.js';
 
 // ~1 m en grados, cerca de lat -34.6.
 const M_LAT = 1 / 111_195;
@@ -225,5 +226,47 @@ describe('snap a la mitad de la fase (circuito ida/regreso)', () => {
     const r = snapARuta(ida, fix(en(2, 100)), null);
     expect(r).not.toBeNull();
     expect(r!.distanciaRecorrida).toBeCloseTo(100, 0);
+  });
+});
+
+describe('tramoDeRuta', () => {
+  it('incluye extremos interpolados y la esquina entre ellos', () => {
+    const t = tramoDeRuta(ele, 80, 120);
+    expect(t).toHaveLength(3);
+    expect(distanciaMetros(t[0]!, en(80, 0))).toBeLessThan(0.5);
+    expect(distanciaMetros(t[1]!, en(100, 0))).toBeLessThan(0.5);
+    expect(distanciaMetros(t[2]!, en(100, 20))).toBeLessThan(0.5);
+  });
+
+  it('sin vértices intermedios devuelve solo los extremos', () => {
+    expect(tramoDeRuta(recta, 10, 50)).toHaveLength(2);
+  });
+
+  it('hacia atrás recorre los vértices en orden inverso', () => {
+    const t = tramoDeRuta(ele, 120, 80);
+    expect(t).toHaveLength(3);
+    expect(distanciaMetros(t[0]!, en(100, 20))).toBeLessThan(0.5);
+    expect(distanciaMetros(t[1]!, en(100, 0))).toBeLessThan(0.5);
+    expect(distanciaMetros(t[2]!, en(80, 0))).toBeLessThan(0.5);
+  });
+
+  it('ruta larga (2000 segmentos): mismos vértices que un barrido lineal', () => {
+    const larga = prepararRutaSnap(Array.from({ length: 2001 }, (_, i) => en(i * 10, (i % 2) * 3)))!;
+    for (const [d0, d1] of [[15, 95], [9000, 9500], [12000, 300], [0, larga.largoTotal]] as const) {
+      const lo = Math.min(d0, d1);
+      const hi = Math.max(d0, d1);
+      const esperados = larga.segmentos.filter((s) => s.acumulado > lo && s.acumulado < hi).length;
+      expect(tramoDeRuta(larga, d0, d1)).toHaveLength(esperados + 2);
+    }
+  });
+
+  it('circuito cerrado: da la vuelta por el cierre', () => {
+    const circuito = prepararRutaSnap([en(0, 0), en(100, 0), en(100, 100), en(0, 100), en(0, 0)])!;
+    // De 10 m antes del cierre a 10 m después: extremos + el vértice de cierre (origen).
+    const t = tramoDeRuta(circuito, circuito.largoTotal - 10, 10);
+    expect(t).toHaveLength(3);
+    expect(distanciaMetros(t[0]!, en(0, 10))).toBeLessThan(0.5);
+    expect(distanciaMetros(t[1]!, en(0, 0))).toBeLessThan(0.5);
+    expect(distanciaMetros(t[2]!, en(10, 0))).toBeLessThan(0.5);
   });
 });

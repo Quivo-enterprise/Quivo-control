@@ -97,6 +97,7 @@ describe('EnVivoService', () => {
   const sindicatoBId = randomUUID();
   let rutaId: string;
   let puntoControlId: string;
+  let varianteTramoId: string;
   /** Sesión activa con 2 fixes. */
   let sesionConPuntosId: string;
   /** Sesión activa sin ningún fix — el caso "esperando el primer punto GPS". */
@@ -151,6 +152,14 @@ describe('EnVivoService', () => {
       await tx.$executeRaw`
         INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
         VALUES (${rutaId}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())
+      `;
+      // Variantes: solo la activa CON geometría debe llegar al detalle (tramo para pegar la traza).
+      varianteTramoId = randomUUID();
+      await tx.$executeRaw`
+        INSERT INTO variantes (id, "rutaId", nombre, estado, geometria, "publicStatus", "createdAt", "updatedAt")
+        VALUES (${varianteTramoId}, ${rutaId}, 'Tramo activo', 'activo', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'borrador', now(), now()),
+               (${randomUUID()}, ${rutaId}, 'Sin geometría', 'activo', NULL, 'borrador', now(), now()),
+               (${randomUUID()}, ${rutaId}, 'Inactiva', 'inactivo', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'borrador', now(), now())
       `;
       puntoControlId = randomUUID();
       await tx.$executeRaw`
@@ -590,6 +599,8 @@ describe('EnVivoService', () => {
       expect(ctx.ruta.geometria.type).toBe('LineString');
       expect(ctx.linea.nombre).toBe('Línea En Vivo');
       expect(ctx.puntosControl).toHaveLength(1);
+      expect(ctx.variantes.map((v) => v.id)).toEqual([varianteTramoId]);
+      expect(ctx.variantes[0]?.geometria.type).toBe('LineString');
       expect(ctx.puntosControl[0]?.id).toBe(puntoControlId);
       expect(ctx.servidorTs).toBeTruthy();
     });

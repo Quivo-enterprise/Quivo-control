@@ -47,18 +47,25 @@ export interface PuntoAnimable {
    * con el mismo formato/zona), nunca se parsea a `Date` — no hace falta para solo comparar
    * "más nuevo que" contra el cursor ya consumido. */
   ts: string;
+  /** Cómo ir desde el punto anterior hasta éste (`t ∈ [0,1]`), p. ej. siguiendo la calle por las
+   * esquinas. Sin él se interpola en línea recta. Debe valer `lat/lng` en `t = 1`. */
+  camino?: (t: number) => { lat: number; lng: number };
 }
+
+type Camino = NonNullable<PuntoAnimable['camino']>;
 
 interface SegmentoEnCola {
   lat: number;
   lng: number;
   durationMs: number;
+  camino?: Camino;
 }
 
 interface SegmentoActivo {
   from: { lat: number; lng: number };
   to: { lat: number; lng: number };
   durationMs: number;
+  camino?: Camino;
   /** Timestamp de `requestAnimationFrame` (no `Date.now()`) en el que arrancó este segmento —
    * ver `avanzarAnimacion`. */
   startTs: number;
@@ -156,9 +163,19 @@ export function encolarNuevosPuntos(
   return {
     lastConsumedTs: ultimo.ts,
     current: estado.current,
-    queue: [...estado.queue, ...nuevos.map((p) => ({ lat: p.lat, lng: p.lng, durationMs: duracionSegmento }))],
+    queue: [...estado.queue, ...nuevos.map((p) => ({ lat: p.lat, lng: p.lng, durationMs: duracionSegmento, camino: p.camino }))],
     segment: estado.segment,
   };
+}
+
+/** Tolerancia (m) entre el inicio de un `camino` y la posición real del marcador. */
+const TOLERANCIA_CAMINO_M = 5;
+
+/** `a` a ≤ `TOLERANCIA_CAMINO_M` de `b` (equirectangular, suficiente a esta escala). */
+function cercaDe(a: { lat: number; lng: number }, b: { lat: number; lng: number }): boolean {
+  const dy = (a.lat - b.lat) * 111_195;
+  const dx = (a.lng - b.lng) * 111_195 * Math.cos((b.lat * Math.PI) / 180);
+  return Math.hypot(dx, dy) <= TOLERANCIA_CAMINO_M;
 }
 
 export interface ResultadoAvance {
@@ -193,7 +210,9 @@ export function avanzarAnimacion(estado: EstadoAnimacionVehiculo, timestampMs: n
     if (!siguiente) {
       return { estado, posicion: estado.current, enMovimiento: false };
     }
-    segment = { from: estado.current, to: { lat: siguiente.lat, lng: siguiente.lng }, durationMs: siguiente.durationMs, startTs: timestampMs };
+    // El `camino` solo vale si arranca donde el marcador está de verdad; si no, recta desde `from`.
+    const camino = siguiente.camino && cercaDe(siguiente.camino(0), estado.current) ? siguiente.camino : undefined;
+    segment = { from: estado.current, to: { lat: siguiente.lat, lng: siguiente.lng }, durationMs: siguiente.durationMs, camino, startTs: timestampMs };
     queue = resto;
   }
 
@@ -202,10 +221,12 @@ export function avanzarAnimacion(estado: EstadoAnimacionVehiculo, timestampMs: n
   const terminoSegmento = t >= 1;
   const current = terminoSegmento
     ? segment.to
-    : {
-        lat: segment.from.lat + (segment.to.lat - segment.from.lat) * t,
-        lng: segment.from.lng + (segment.to.lng - segment.from.lng) * t,
-      };
+    : segment.camino
+      ? segment.camino(t)
+      : {
+          lat: segment.from.lat + (segment.to.lat - segment.from.lat) * t,
+          lng: segment.from.lng + (segment.to.lng - segment.from.lng) * t,
+        };
 
   const nuevoEstado: EstadoAnimacionVehiculo = {
     ...estado,

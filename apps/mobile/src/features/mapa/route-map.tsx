@@ -27,22 +27,20 @@ import MapView, {
   type Region,
 } from 'react-native-maps';
 import Svg, { Path } from 'react-native-svg';
-import { quivoColors, quivoRadius } from '../../shared/theme/quivo-theme';
-import { coordenadasTramo } from '../vuelta-actual/vuelta-actual-core';
 import {
+  MAX_FALLOS_SNAP,
+  debeInterpolarPorRuta,
   distanciaMetros,
   duracionAnimacionMs,
   interpolarAngulo,
   interpolarLatLng,
-} from '../operacion/movimiento/geo';
-import {
-  MAX_FALLOS_SNAP,
-  debeInterpolarPorRuta,
   interpolarSobreRuta,
   prepararRutaSnap,
   snapARuta,
   type RutaSnap,
-} from '../operacion/movimiento/snap-ruta';
+} from '@quivo/shared';
+import { quivoColors, quivoRadius } from '../../shared/theme/quivo-theme';
+import { coordenadasTramo } from '../vuelta-actual/vuelta-actual-core';
 import { useEstadoVisual } from '../operacion/movimiento/store-visual';
 import { crearFiltroFase, firmaGeometria, mitadesDelCircuito } from '../operacion/fase-vuelta';
 import {

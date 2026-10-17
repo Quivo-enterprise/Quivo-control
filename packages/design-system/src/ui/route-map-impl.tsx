@@ -46,7 +46,7 @@ import {
   routeVisuals,
 } from './route-map-shared.js';
 
-import { isWithinCentralViewport } from './route-map-geometry.js';
+import { isWithinCentralViewport, type RellenoMapa } from './route-map-geometry.js';
 import {
   encuadreAuto,
   encuadreUnaVez,
@@ -108,8 +108,13 @@ export interface RouteMapProps {
    * seguimiento. `nonce` (solo lo respeta el motor Google): un valor nuevo pide centrar de nuevo
    * aunque el punto no haya cambiado ni salido del 60% central. `offsetY` (px, solo Google y solo
    * junto a `nonce`): corre la cámara para que el punto caiga ese tanto por encima del centro, p. ej.
-   * media altura de una hoja inferior que tapa el mapa. */
-  followPoint?: { lat: number; lng: number; nonce?: number; offsetY?: number } | null;
+   * media altura de una hoja inferior que tapa el mapa. `animado` (solo Google, con `animatedVehicle`):
+   * se sigue la posición ANIMADA del marcador en cada frame en vez de `lat`/`lng` (que quedan de
+   * respaldo hasta que arranque la animación). */
+  followPoint?: { lat: number; lng: number; nonce?: number; offsetY?: number; animado?: boolean } | null;
+  /** Solo Google. Zonas del contenedor tapadas por la UI (px): el seguimiento mide el 60 % central
+   * y centra sobre el rectángulo que queda visible, no sobre el contenedor entero. */
+  followPadding?: RellenoMapa;
   /** Se dispara cuando el usuario mueve el mapa a mano (arrastre o zoom con gesto) — nunca por
    * llamadas programáticas (`fitBounds`/`panTo`/`jumpTo`). Pensado para que el consumidor apague
    * su propio toggle de "seguir" cuando el usuario toma control manual del mapa. */
@@ -187,9 +192,11 @@ function featureCollection(features: MapFeature[]): MapFeatureCollection {
 function routeFeatures(routes: MapRoute[], isDark: boolean): MapFeatureCollection {
   const drawable = routes.filter((route) => route.points.length > 1);
   return featureCollection(
-    drawable.map((route, index) => {
+    drawable.map((route) => {
       const visuals = routeVisuals(resolveColor(route.color, isDark), isDark);
-      const offset = offsetRutaParalela(index, drawable.length);
+      const paralelas = drawable.filter((r) => !r.sinOffset);
+      const offset = route.sinOffset ? 0 : offsetRutaParalela(paralelas.indexOf(route), paralelas.length);
+      const ancho = route.fino ? 3.5 : 5.5;
       return {
         type: 'Feature',
         properties: {
@@ -199,6 +206,7 @@ function routeFeatures(routes: MapRoute[], isDark: boolean): MapFeatureCollectio
           labelColor: visuals.stroke,
           labelHaloColor: isDark ? '#101522' : '#ffffff',
           offset,
+          ancho,
           dashed: Boolean(route.dashed),
           label: route.label?.trim() ?? '',
           clickable: Boolean(route.onClick),
@@ -690,7 +698,7 @@ export function ensureDataLayers(map: MapLibreMap) {
       type: 'line',
       source: 'quivo-routes',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': ['get', 'haloColor'], 'line-width': 10, 'line-opacity': 0.96, 'line-offset': ['get', 'offset'] },
+      paint: { 'line-color': ['get', 'haloColor'], 'line-width': ['+', ['get', 'ancho'], 4.5], 'line-opacity': 0.96, 'line-offset': ['get', 'offset'] },
     });
   }
   if (!map.getLayer('quivo-route-line')) {
@@ -700,7 +708,7 @@ export function ensureDataLayers(map: MapLibreMap) {
       source: 'quivo-routes',
       filter: ['==', ['get', 'dashed'], false],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': ['get', 'color'], 'line-width': 5.5, 'line-opacity': 0.98, 'line-offset': ['get', 'offset'] },
+      paint: { 'line-color': ['get', 'color'], 'line-width': ['get', 'ancho'], 'line-opacity': 0.98, 'line-offset': ['get', 'offset'] },
     });
   }
   if (!map.getLayer('quivo-route-dashed')) {
@@ -712,7 +720,7 @@ export function ensureDataLayers(map: MapLibreMap) {
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
         'line-color': ['get', 'color'],
-        'line-width': 5.5,
+        'line-width': ['get', 'ancho'],
         'line-opacity': 0.98,
         'line-offset': ['get', 'offset'],
         'line-dasharray': [1, 1.6],

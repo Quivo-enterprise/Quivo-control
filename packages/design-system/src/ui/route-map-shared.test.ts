@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { colorTextoContraste, etiquetaFrescura, nodeNumberFromId, offsetRutaParalela } from './route-map-shared.js';
+import { colorTextoContraste, etiquetaFrescura, nodeNumberFromId, offsetRutaParalela, resolveColor } from './route-map-shared.js';
 
 describe('colorTextoContraste', () => {
   it('blanco sobre fondos oscuros y texto oscuro sobre claros', () => {
@@ -40,5 +40,12 @@ describe('offsetRutaParalela', () => {
     expect(offsetRutaParalela(0, 2)).toBe(-2);
     expect(offsetRutaParalela(1, 2)).toBe(2);
     expect([0, 1, 2].map((i) => offsetRutaParalela(i, 3))).toEqual([-4, 0, 4]);
+  });
+});
+
+describe('resolveColor', () => {
+  it('traduce el token de alerta (--qv-color-warning), no cae al primario', () => {
+    expect(resolveColor('var(--qv-color-warning)', false)).toBe('#d97706');
+    expect(resolveColor('var(--qv-color-warning)', true)).toBe('#fbbf24');
   });
 });
