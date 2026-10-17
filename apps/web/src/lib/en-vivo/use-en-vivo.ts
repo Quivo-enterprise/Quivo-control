@@ -312,8 +312,9 @@ export interface DesignarVars {
 }
 
 /**
- * Designa (o cancela) la vuelta en curso. Optimista: mientras el PUT está en vuelo la designación
- * pedida vive como overlay (`KEY_DESIGNACIONES_PENDIENTES`) que `usePosicionesEnVivo` aplica sobre
+ * Designa (o cancela) la vuelta en curso. Cancelar es optimista de inmediato (nunca se difiere); una
+ * designación NO cambia la vuelta hasta que responde la API (puede ser tardía y valer para la próxima
+ * vuelta, `aplica`): mientras tanto el panel muestra "Guardando…". La designación pedida vive como overlay (`KEY_DESIGNACIONES_PENDIENTES`) que `usePosicionesEnVivo` aplica sobre
  * cada poll, en vez de escribir en la caché de posiciones (el poll de 2 s la pisaría y un rollback
  * con snapshot viejo pisaría polls más nuevos). Al terminar —con éxito o con 409— se invalida y,
  * cuando llega el refetch de posiciones, se quita el overlay: el control queda con lo que diga el servidor. `onError` lo maneja el
@@ -338,17 +339,18 @@ export function useDesignarVuelta(token: string | null) {
       await queryClient.cancelQueries({ queryKey: key });
       const ahoraIso = new Date().toISOString();
       const sig = new Map(leer());
-      sig.set(v.sesionId, { varianteId: v.varianteId, varianteNombre: v.varianteNombre, ahoraIso });
+      // Designar espera la respuesta (`enVuelo`: sin cambio visible); cancelar se aplica ya.
+      sig.set(v.sesionId, { varianteId: v.varianteId, varianteNombre: v.varianteNombre, ahoraIso, enVuelo: v.varianteId !== null });
       queryClient.setQueryData(KEY_DESIGNACIONES_PENDIENTES, sig);
       return { ahoraIso };
     },
     onSuccess: (data, v, ctx) => {
-      // Tardía: la vuelta actual no cambia; el optimista pasa de "designada" a "próxima vuelta".
+      // Con la respuesta se aplica el overlay: vuelta actual designada, o (tardía) solo la próxima.
       const actual = leer();
       const pend = actual?.get(v.sesionId);
-      if (data.aplica !== 'proxima_vuelta' || !ctx || pend?.ahoraIso !== ctx.ahoraIso) return;
+      if (!ctx || !pend || pend.ahoraIso !== ctx.ahoraIso) return;
       const sig = new Map(actual);
-      sig.set(v.sesionId, { ...pend, proxima: true });
+      sig.set(v.sesionId, { ...pend, enVuelo: false, proxima: data.aplica === 'proxima_vuelta' });
       queryClient.setQueryData(KEY_DESIGNACIONES_PENDIENTES, sig);
     },
     onSettled: async (_data, _err, v, ctx) => {

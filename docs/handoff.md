@@ -38,7 +38,12 @@
       orden de chequeos aplicados). Tests: api integración 52/52, web 199/199, shared 136/136; CI `ci` + `acceptance` pass.
       Sin cambios en mobile (no APK ni OTA). Límites: llegada perdida por GPS permite re-designar; sin cumplimiento de
       km 26 la tardía se detecta recién en km 28; lote offline cierre+apertura+llegada (`shortcut:` en `deteccion-vueltas.ts`).
-- [ ] **[CTO]** Deploy de api + worker + web desde `043c91b` (`scripts/deploy-gcp.sh`; aplica la migración
+- [x] **[Claude]** Prueba del panel web con Playwright y API mockeada (`next start`): bloqueo "Ya fue a Molinos hoy",
+      "Va a Molinos en la próxima vuelta" + Cancelar (teclado, 390 px), tardía y normal OK. Encontró que el aviso decía
+      "Vuelta designada vía Vía Molinos" en la tardía y un flash optimista de ~400 ms: corregido en el PR siguiente
+      (aviso según `aplica`; designar no cambia la vuelta hasta la respuesta, cancelar es inmediato). `/code-review` limpio;
+      **Codex verify-fix: no verificado (sin cuota hasta el 16/11; el error pide "Upgrade to Plus": revisar la suscripción)**.
+- [ ] **[CTO]** Deploy de api + worker + web desde el `main` que incluya este último PR (antes: `043c91b`) (`scripts/deploy-gcp.sh`; aplica la migración
       `20261017120000_molinos_proxima_vuelta`). Después Claude verifica que `/reportes/en-vivo/posiciones` traiga `molinosProxima`.
 - [ ] **[CTO]** En la calle: designar en la ida; designar tras km 26 (debe avisar al arrancar la vuelta siguiente);
       intentar mandar a Molinos a uno que ya fue (debe bloquear).
