@@ -31,6 +31,8 @@
 **Checklist** (marcar `[x]` al cerrar cada ítem; el dueño va entre corchetes):
 
 *Ahora:*
+- [ ] **[Claude]** Regla nueva del CTO: designar a Molinos en cualquier momento, 1 vez por día, la tardía (tras km 26 en
+      el regreso) vale para la próxima vuelta. Plan: [`docs/plan-molinos-cualquier-momento.md`](plan-molinos-cualquier-momento.md).
 - [ ] **[CTO]** Confirmar en Perfil de los 3 que la versión dice `0.1.0 · 01a14b63` (OTA de humo).
 - [ ] **[CTO]** Decidir #105 (`scripts/extender-asignaciones-piloto.ts`, abierto desde el 08/10, CI verde, nunca
       pasó `/code-review`): mergear (tras las revisiones) o cerrar. Las asignaciones del piloto 16 vencen el **26/10**.
