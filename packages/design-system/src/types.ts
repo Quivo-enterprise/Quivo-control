@@ -98,6 +98,10 @@ export interface MapRoute {
   label?: string;
   color?: string;
   dashed?: boolean;
+  /** Trazo más fino (p. ej. tramo libre de una traza GPS). */
+  fino?: boolean;
+  /** No participa del reparto lateral de rutas paralelas (p. ej. la traza GPS real). */
+  sinOffset?: boolean;
   points: { lat: number; lng: number }[];
   onClick?: () => void;
 }

@@ -66,8 +66,8 @@ import { cx } from '../utils.js';
 import type { MapPoint, MapRoute, MapZone } from '../types.js';
 import { Button, Loader } from './primitives.js';
 import type { RouteMapProps } from './route-map-impl.js';
-import { isWithinCentralViewport } from './route-map-geometry.js';
-import { centroConDesplazamientoY, desplazarCamino, latLngAPixelContenedor } from './route-map-proyeccion.js';
+import { centroVisibleDesplazado, isWithinCentralViewport } from './route-map-geometry.js';
+import { centroConDesplazamientoY, centroConPuntoDesplazado, desplazarCamino, latLngAPixelContenedor } from './route-map-proyeccion.js';
 import {
   decidirActualizacionPunto,
   esArrastrable,
@@ -502,6 +502,7 @@ function Controlador({
   fitMode = 'auto',
   fitKey,
   followPoint,
+  followPadding,
   onUserPan,
   defaultCenter,
   defaultZoom,
@@ -526,6 +527,12 @@ function Controlador({
   interactiveRef.current = interactive;
   const animatedRef = useRef(animatedVehicle);
   animatedRef.current = animatedVehicle;
+  /** `seguirA` vigente + si se sigue al marcador animado: `tick` (60 fps) los usa sin re-crearse. */
+  const seguirAnimadoRef = useRef<{ activo: boolean; seguirA: (p: LatLngSimple) => void; ultimoMs: number }>({
+    activo: false,
+    seguirA: () => {},
+    ultimoMs: 0,
+  });
   const onListoRef = useRef(onListo);
   onListoRef.current = onListo;
 
@@ -754,10 +761,13 @@ function Controlador({
       .filter((ruta) => ruta.points.length > 1)
       .forEach((ruta: MapRoute, indice, dibujables) => {
         vivos.add(ruta.id);
-        // Mismo criterio que MapLibre: con varias rutas se reparten ±4 px alrededor del eje.
-        const offsetPx = offsetRutaParalela(indice, dibujables.length);
+        // Mismo criterio que MapLibre: con varias rutas se reparten ±4 px alrededor del eje;
+        // las `sinOffset` (la traza GPS) quedan en el eje y no cuentan para el reparto.
+        const paralelas = dibujables.filter((r) => !r.sinOffset);
+        const offsetPx = ruta.sinOffset ? 0 : offsetRutaParalela(paralelas.indexOf(ruta), paralelas.length);
+        const grosor = ruta.fino ? 3.5 : 5.5;
         const etiqueta = ruta.label?.trim() ?? '';
-        const firma = [oscuro, ruta.color, ruta.dashed, Boolean(ruta.onClick), etiqueta, indice, offsetPx, firmaPuntos(ruta.points)].join('~');
+        const firma = [oscuro, ruta.color, ruta.dashed, ruta.fino, Boolean(ruta.onClick), etiqueta, indice, offsetPx, firmaPuntos(ruta.points)].join('~');
         const previa = existentes.get(ruta.id);
         if (previa?.firma === firma && (!etiqueta || previa.etiqueta || !libMarker)) {
           return;
@@ -811,13 +821,13 @@ function Controlador({
           path: camino,
           strokeColor: visuales.halo,
           strokeOpacity: 0.96,
-          strokeWeight: 10,
+          strokeWeight: grosor + 4.5,
           clickable,
           zIndex: 1,
         });
         entrada.linea.setOptions({
           path: camino,
-          strokeWeight: 5.5,
+          strokeWeight: grosor,
           clickable,
           zIndex: 2 + indice,
           ...opcionesLinea,
@@ -902,6 +912,12 @@ function Controlador({
       animEstadoRef.current = avance.estado;
       posicionAnimada = avance.posicion;
       if (avance.enMovimiento) seguir = true;
+      // El seguimiento mira ~4 veces por segundo: `panTo` en cada frame se pisaría a sí mismo.
+      const sa = seguirAnimadoRef.current;
+      if (sa.activo && posicionAnimada && ahoraMs - sa.ultimoMs >= 250) {
+        sa.ultimoMs = ahoraMs;
+        sa.seguirA(posicionAnimada);
+      }
     }
     puntosRef.current.forEach((entrada) => {
       if (!entrada.esVehiculo) return;
@@ -1217,36 +1233,50 @@ function Controlador({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- igual que el motor MapLibre: sin `hayPuntos`
   }, [map, listo, centroLat, centroLng, defaultZoom]);
 
-  // Follow: `panTo` solo si el punto salió del 60% central; jamás toca el zoom.
+  // Follow: `panTo` solo si el punto salió del 60% central del RECTÁNGULO VISIBLE (el contenedor
+  // menos `followPadding`: HUD, panel); el `panTo` lo centra en ese rectángulo. Jamás toca el zoom.
   // `nonce` (opcional): cada valor nuevo es un pedido EXPLÍCITO de centrar (p. ej. "Ver en mapa"),
   // que se atiende aunque el punto ya esté dentro del 60% central y aunque sea el mismo punto.
+  // `animado`: se sigue la posición animada del marcador (`tick`), no el último punto de la traza.
   const followLat = followPoint?.lat;
   const followLng = followPoint?.lng;
   const followNonce = followPoint?.nonce;
   const followOffsetY = followPoint?.offsetY ?? 0;
-  useEffect(() => {
-    if (!map || !listo || !Number.isFinite(followLat) || !Number.isFinite(followLng)) return;
-    if (followLat === undefined || followLng === undefined) return;
+  const followAnimado = Boolean(followPoint?.animado);
+  const padTop = followPadding?.top ?? 0;
+  const padRight = followPadding?.right ?? 0;
+  const padBottom = followPadding?.bottom ?? 0;
+  const padLeft = followPadding?.left ?? 0;
+  const seguirA = (punto: LatLngSimple) => {
+    if (!map || !listo) return;
     const centro = map.getCenter();
     const zoom = map.getZoom();
     if (!centro || zoom === undefined) return;
+    const div = map.getDiv();
+    const tamano = { x: div.clientWidth, y: div.clientHeight };
+    const relleno = { top: padTop, right: padRight, bottom: padBottom, left: padLeft };
+    const pixel = latLngAPixelContenedor(punto, { lat: centro.lat(), lng: centro.lng() }, zoom, tamano);
+    if (isWithinCentralViewport(pixel, tamano, undefined, relleno)) return;
+    marcarProgramatico();
+    const d = centroVisibleDesplazado(tamano, relleno);
+    map.panTo(centroConPuntoDesplazado(punto, zoom, d.x, d.y));
+  };
+  seguirAnimadoRef.current.seguirA = seguirA;
+  seguirAnimadoRef.current.activo = followAnimado && followNonce === undefined;
+  useEffect(() => {
+    if (!map || !listo || !Number.isFinite(followLat) || !Number.isFinite(followLng)) return;
+    if (followLat === undefined || followLng === undefined) return;
+    const zoom = map.getZoom();
+    if (zoom === undefined) return;
     if (followNonce !== undefined) {
       marcarProgramatico();
       // `offsetY`: con una hoja inferior tapando el mapa, el punto se centra en la zona visible.
       map.panTo(centroConDesplazamientoY({ lat: followLat, lng: followLng }, zoom, followOffsetY));
       return;
     }
-    const div = map.getDiv();
-    const pixel = latLngAPixelContenedor(
-      { lat: followLat, lng: followLng },
-      { lat: centro.lat(), lng: centro.lng() },
-      zoom,
-      { x: div.clientWidth, y: div.clientHeight },
-    );
-    if (isWithinCentralViewport(pixel, { x: div.clientWidth, y: div.clientHeight })) return;
-    marcarProgramatico();
-    map.panTo({ lat: followLat, lng: followLng });
-  }, [map, listo, followLat, followLng, followNonce, followOffsetY, marcarProgramatico]);
+    seguirA(followAnimado && animEstadoRef.current.current ? animEstadoRef.current.current : { lat: followLat, lng: followLng });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `seguirA` cambia de identidad en cada render; se re-evalúa por estos valores
+  }, [map, listo, followLat, followLng, followNonce, followOffsetY, followAnimado, padTop, padRight, padBottom, padLeft, marcarProgramatico]);
 
   return null;
 }

@@ -15,7 +15,7 @@ import {
   type MapPoint,
   type MapRoute,
 } from '@quivo/design-system';
-import type { RecorridoDetalle } from '@quivo/shared';
+import type { RecorridoDetalle, RutaSnap } from '@quivo/shared';
 import {
   ArrowLeft,
   Bus,
@@ -27,6 +27,7 @@ import {
   User,
   XCircle,
 } from 'lucide-react';
+import { rutasDeTraza, rutasSnapDe } from '../../../../../src/lib/en-vivo/segmentos-traza';
 import { useAuth } from '../../../../../src/lib/auth/auth-context';
 import { recorridosApi } from '../../../../../src/lib/api/recorridos';
 import { ApiError } from '../../../../../src/lib/api/client';
@@ -70,7 +71,11 @@ export default function RecorridoDetallePage() {
   const totalPuntos = detalle?.puntosControl.length ?? 0;
 
   // Referencias estables para el mapa: sin memo, cada render re-proyectaría todo el trazado.
-  const rutasMapa = useMemo(() => (detalle ? construirRutas(detalle) : []), [detalle]);
+  const rutasSnap = useMemo(
+    () => (detalle ? rutasSnapDe(detalle.ruta.geometria.coordinates, detalle.variantes) : []),
+    [detalle],
+  );
+  const rutasMapa = useMemo(() => (detalle ? construirRutas(detalle, rutasSnap) : []), [detalle, rutasSnap]);
   const marcadoresMapa = useMemo(() => (detalle ? construirMarcadores(detalle) : []), [detalle]);
 
   return (
@@ -371,7 +376,7 @@ export default function RecorridoDetallePage() {
   );
 }
 
-function construirRutas(detalle: RecorridoDetalle): MapRoute[] {
+function construirRutas(detalle: RecorridoDetalle, rutasSnap: RutaSnap[]): MapRoute[] {
   const rutas: MapRoute[] = [
     {
       id: 'ruta-asignada',
@@ -381,14 +386,7 @@ function construirRutas(detalle: RecorridoDetalle): MapRoute[] {
       points: detalle.ruta.geometria.coordinates.map(([lng, lat]) => ({ lat, lng })),
     },
   ];
-  if (detalle.trazaGps.length > 0) {
-    rutas.push({
-      id: 'traza-gps',
-      label: 'Traza GPS real',
-      color: '#2563eb',
-      points: detalle.trazaGps.map((p) => ({ lat: p.lat, lng: p.lng })),
-    });
-  }
+  if (detalle.trazaGps.length > 0) rutas.push(...rutasDeTraza(detalle.trazaGps, rutasSnap, 'Traza GPS real'));
   return rutas;
 }
 

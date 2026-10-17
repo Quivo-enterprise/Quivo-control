@@ -2,6 +2,15 @@ import { z } from 'zod';
 import { uuidSchema } from '../primitives.js';
 import { LineaGeoJsonSchema, PuntoGeoJsonSchema } from '../geo.js';
 
+/** Tramo adicional de una variante activa de la ruta (p. ej. Vía Molinos): sirve para pegar la
+ * traza GPS dibujada a la calle también en ese ramal. */
+export const VarianteTramoSchema = z.object({
+  id: uuidSchema,
+  nombre: z.string(),
+  geometria: LineaGeoJsonSchema,
+});
+export type VarianteTramo = z.infer<typeof VarianteTramoSchema>;
+
 /** RNF-24 (QUI-247): fila liviana para `GET /v1/reportes/recorridos` — listado de sesiones
  * operativas para elegir cuál reconstruir. */
 export const RecorridoResumenSchema = z.object({
@@ -77,6 +86,7 @@ export const RecorridoDetalleSchema = z.object({
   conductor: z.object({ id: uuidSchema, nombre: z.string() }),
   linea: z.object({ id: uuidSchema, nombre: z.string(), color: z.string() }),
   ruta: z.object({ id: uuidSchema, geometria: LineaGeoJsonSchema }),
+  variantes: z.array(VarianteTramoSchema).default([]),
   puntosControl: z.array(PuntoControlRecorridoSchema),
   trazaGps: z.array(PuntoTrazaGpsSchema),
   cumplimientos: z.array(CumplimientoRecorridoSchema),

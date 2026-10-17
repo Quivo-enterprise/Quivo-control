@@ -55,6 +55,7 @@ import { HudMolinos } from './hud-molinos';
 import { PanelJornada } from './panel-jornada';
 import { IconoNivel, PanelVehiculo, type AvisoPanel, type BorradoresDescarte } from './panel-vehiculo';
 import { conPuntoVivo } from '../../../src/lib/en-vivo/punto-vivo';
+import { puntosAnimadosSobreRuta, rutasSnapDe } from '../../../src/lib/en-vivo/segmentos-traza';
 
 export default function EnVivoPage() {
   const { token, user, logout } = useAuth();
@@ -323,9 +324,16 @@ export default function EnVivoPage() {
     () => [...puntosControl, ...marcadorFoco, ...vehiculos],
     [puntosControl, marcadorFoco, vehiculos],
   );
+  // Rutas contra las que se ajusta la traza y el marcador (solo cambian con el contexto).
+  const rutasSnap = useMemo(
+    () => (contexto.data ? rutasSnapDe(contexto.data.ruta.geometria.coordinates, contexto.data.variantes) : []),
+    [contexto.data],
+  );
+  // `fusionarTraza` conserva la referencia de `puntos` si el poll no sumó nada: sin recalcular.
+  const puntosTraza = datos?.puntos;
   const routes = useMemo(
-    () => (contexto.data ? construirRutas(contexto.data, datos) : []),
-    [contexto.data, datos],
+    () => (contexto.data ? construirRutas(contexto.data, puntosTraza, rutasSnap) : []),
+    [contexto.data, puntosTraza, rutasSnap],
   );
   const zones = useMemo(
     () => (contexto.data ? construirZonas(contexto.data) : []),
@@ -348,8 +356,13 @@ export default function EnVivoPage() {
   const vivoTs = posicionSeleccionada?.ultimoFixTs ?? null;
   const puntosAnimados = useMemo(
     () =>
-      datos ? conPuntoVivo(datos.puntos, { lat: vivoLat, lng: vivoLng, ultimoFixTs: vivoTs }) : [],
-    [datos, vivoLat, vivoLng, vivoTs],
+      puntosTraza
+        ? puntosAnimadosSobreRuta(
+            conPuntoVivo(puntosTraza, { lat: vivoLat, lng: vivoLng, ultimoFixTs: vivoTs }),
+            rutasSnap,
+          )
+        : [],
+    [puntosTraza, vivoLat, vivoLng, vivoTs, rutasSnap],
   );
   const animatedVehicle = useMemo(
     () =>
@@ -371,7 +384,7 @@ export default function EnVivoPage() {
   const puntoASeguir = focoMapa
     ? { lat: focoMapa.lat, lng: focoMapa.lng, nonce: focoMapa.nonce, offsetY: focoMapa.offsetY }
     : seguir && !seleccionFueraDeLista && ultimoPunto
-      ? { lat: ultimoPunto.lat, lng: ultimoPunto.lng }
+      ? { lat: ultimoPunto.lat, lng: ultimoPunto.lng, animado: true }
       : seguir && !seleccionFueraDeLista && posicionSeleccionada?.lat != null && posicionSeleccionada.lng != null
         ? { lat: posicionSeleccionada.lat, lng: posicionSeleccionada.lng }
         : null;
@@ -466,6 +479,37 @@ export default function EnVivoPage() {
     };
   }, [hayHud]);
 
+  // Zonas del mapa tapadas por la UI (HUD arriba; panel del vehículo: hoja inferior en móvil, tarjeta
+  // a la izquierda en escritorio): el seguimiento centra al vehículo en lo que queda visible.
+  const [rellenoSeguir, setRellenoSeguir] = useState({ top: 0, right: 0, bottom: 0, left: 0 });
+  useEffect(() => {
+    const raiz = mapaRef.current;
+    if (!raiz) return;
+    const medir = () => {
+      const caja = raiz.getBoundingClientRect();
+      const hud = hayHud ? raiz.querySelector<HTMLElement>('.qv-live-hud-top') : null;
+      const panel = sesionSeleccionada ? raiz.querySelector<HTMLElement>('.qv-live-hud-bottom--panel .qv-live-panel') : null;
+      const movil = window.matchMedia('(max-width: 720px)').matches;
+      const cajaPanel = panel?.getBoundingClientRect();
+      const siguiente = {
+        top: hud ? Math.max(0, Math.ceil(hud.getBoundingClientRect().bottom - caja.top)) : 0,
+        right: 0,
+        bottom: cajaPanel && movil ? Math.max(0, Math.ceil(caja.bottom - cajaPanel.top)) : 0,
+        left: cajaPanel && !movil ? Math.max(0, Math.ceil(cajaPanel.right - caja.left)) : 0,
+      };
+      setRellenoSeguir((previo) =>
+        previo.top === siguiente.top && previo.bottom === siguiente.bottom && previo.left === siguiente.left
+          ? previo
+          : siguiente,
+      );
+    };
+    medir();
+    const ro = new ResizeObserver(medir);
+    ro.observe(raiz);
+    raiz.querySelectorAll('.qv-live-hud-top, .qv-live-hud-bottom--panel .qv-live-panel').forEach((el) => ro.observe(el));
+    return () => ro.disconnect();
+  }, [hayHud, sesionSeleccionada]);
+
   // El mapa sigue montado con `fitMode="once"`: cuando la flota pasa de vacía a con vehículos
   // (después de haber tenido alguno), `fitKey` ya se disparó y no los encuadraría. Se bumpea
   // `fitKeyOverride` solo en esa transición (no en cada poll).
@@ -505,6 +549,7 @@ export default function EnVivoPage() {
         fitMode="once"
         fitKey={fitKeyOverride}
         followPoint={puntoASeguir}
+        followPadding={rellenoSeguir}
         onUserPan={() => setSeguir(false)}
         defaultCenter={adminCity.centro}
         defaultZoom={adminCity.zoom}

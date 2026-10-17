@@ -1,4 +1,4 @@
-import { deltaAnguloCorto, normalizarAngulo } from '../operacion/movimiento/geo';
+import { deltaAnguloCorto, normalizarAngulo } from '@quivo/shared';
 
 /**
  * Emisor liviano del rumbo (grados, `[0,360)`) de la cámara del mapa, para la brújula propia de la

@@ -180,6 +180,28 @@ describe('avanzarAnimacion', () => {
   });
 });
 
+describe('avanzarAnimacion con `camino`', () => {
+  it('sigue el camino del punto (esquina) en vez de la recta, y termina en el destino', () => {
+    // Recta (0,0)->(2,2) pasaría por (1,1); el camino da la vuelta por la esquina (0,2).
+    const camino = (t: number) => (t < 0.5 ? { lat: 0, lng: 4 * t } : { lat: 4 * (t - 0.5), lng: 2 });
+    let estado = encolarNuevosPuntos(estadoInicialAnimacion(), [punto('t0', 0, 0)], 1_000);
+    estado = encolarNuevosPuntos(estado, [punto('t0', 0, 0), { ...punto('t1', 2, 2), camino }], 1_000);
+    const mitad = avanzarAnimacion(avanzarAnimacion(estado, 0).estado, 500);
+    expect(mitad.posicion).toEqual({ lat: 0, lng: 2 });
+    expect(avanzarAnimacion(mitad.estado, 2_000).posicion).toEqual({ lat: 2, lng: 2 });
+  });
+});
+
+describe('avanzarAnimacion con `camino` que no arranca en el marcador', () => {
+  it('lo ignora y anima en recta desde la posición real', () => {
+    const camino = () => ({ lat: 50, lng: 50 });
+    let estado = encolarNuevosPuntos(estadoInicialAnimacion(), [punto('t0', 0, 0)], 1_000);
+    estado = encolarNuevosPuntos(estado, [punto('t0', 0, 0), { ...punto('t1', 2, 2), camino }], 1_000);
+    const mitad = avanzarAnimacion(avanzarAnimacion(estado, 0).estado, 500);
+    expect(mitad.posicion).toEqual({ lat: 1, lng: 1 });
+  });
+});
+
 describe('estadoInicialAnimacion', () => {
   it('empieza sin posición, sin cola y sin segmento', () => {
     const estado: EstadoAnimacionVehiculo = estadoInicialAnimacion();

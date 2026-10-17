@@ -54,6 +54,22 @@ export function centroConDesplazamientoY(
   return deMundo(p.x, p.y + offsetPx / 2 ** zoom);
 }
 
+/**
+ * Centro de cámara para que `punto` caiga `dxPx` a la derecha y `dyPx` por debajo del centro del
+ * contenedor (negativos: izquierda / arriba). Generaliza `centroConDesplazamientoY`; no toca el zoom.
+ */
+export function centroConPuntoDesplazado(
+  punto: { lat: number; lng: number },
+  zoom: number,
+  dxPx: number,
+  dyPx: number,
+): { lat: number; lng: number } {
+  if (!dxPx && !dyPx) return punto;
+  const p = aMundo(punto.lat, punto.lng);
+  const escala = 2 ** zoom;
+  return deMundo(p.x - dxPx / escala, p.y - dyPx / escala);
+}
+
 /** Tope de la mitra: el vértice nunca se aleja del eje más de `LIMITE_MITRA` veces el offset. */
 const LIMITE_MITRA = 2;
 

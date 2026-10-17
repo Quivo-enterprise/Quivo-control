@@ -15,13 +15,19 @@ import type { EstadoFrescura, PuntoTrazaGps, TrazaEnVivo } from '@quivo/shared';
  * (153-166 s, medido el 2026-08-18 contra producción) sino su cola: p95 684-814 s, máximo
  * observado 4275 s (~71 min). Un solape de 2 min cubre la mediana pero descarta **para
  * siempre** cualquier ráfaga que aterrice más tarde que eso — el cursor (`desde = ultimo_ts
- * - solape`) ya quedó por encima de su `ts`. 15 min iguala el `UMBRAL_INGESTA_VIVA_MS` que
- * usa el server para declarar una sesión viva y cubre el p95 con margen. El costo es bajo:
- * cada poll re-pide de nuevo los puntos de esa ventana (con el vehículo en movimiento
- * normal, ~90 puntos / 5 KB), que el dedupe por `ts|lat|lng` de `fusionarTraza` absorbe sin
- * duplicarlos.
+ * - solape`) ya quedó por encima de su `ts`. 75 min cubren el máximo observado (71 min, piloto
+ * 14/10). Pedirlos en cada poll sería ~1500 puntos cada 10 s, así que el solape largo se usa
+ * solo cada `POLLS_POR_SOLAPE_LARGO` polls (≈ 1 por minuto) y el resto usa
+ * `SOLAPE_CURSOR_CORTO_MS`; el dedupe por `ts|lat|lng` de `fusionarTraza` absorbe lo repetido.
+ *
+ * shortcut: una ráfaga con más de 75 min de atraso sigue dependiendo del auto-heal (recarga
+ * completa); el siguiente paso es un cursor por hora de ingesta (no de captura) en la API.
  */
-export const SOLAPE_CURSOR_MS = 900_000;
+export const SOLAPE_CURSOR_MS = 4_500_000;
+/** Solape de los polls intermedios (ver `SOLAPE_CURSOR_MS`). */
+export const SOLAPE_CURSOR_CORTO_MS = 15 * 60_000;
+/** Cada cuántos polls del delta se usa el solape largo. */
+export const POLLS_POR_SOLAPE_LARGO = 6;
 
 /** Cadencia normal del poll de posiciones. */
 export const INTERVALO_POLL_MS = 10_000;
@@ -115,7 +121,11 @@ export function fusionarTraza(
   for (const punto of previa?.puntos ?? []) porClave.set(clavePunto(punto), punto);
   for (const punto of delta.puntos) porClave.set(clavePunto(punto), punto);
 
-  const puntos = [...porClave.values()].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  // Sin puntos nuevos se conserva la referencia previa: lo memoizado sobre `puntos` no se recalcula.
+  const puntos =
+    previa && porClave.size === previa.puntos.length
+      ? previa.puntos
+      : [...porClave.values()].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   const ultimo = puntos.at(-1);
 
   return {
@@ -133,11 +143,11 @@ export function fusionarTraza(
   };
 }
 
-/** `desde` del próximo poll: el cursor menos el solape. `undefined` (= carga completa)
- * mientras no haya ningún punto todavía. */
-export function desdeConSolape(cursor: string | null | undefined): Date | undefined {
+/** `desde` del próximo poll: el cursor menos el solape (largo o corto, ver `SOLAPE_CURSOR_MS`).
+ * `undefined` (= carga completa) mientras no haya ningún punto todavía. */
+export function desdeConSolape(cursor: string | null | undefined, largo = true): Date | undefined {
   if (!cursor) return undefined;
-  return new Date(Date.parse(cursor) - SOLAPE_CURSOR_MS);
+  return new Date(Date.parse(cursor) - (largo ? SOLAPE_CURSOR_MS : SOLAPE_CURSOR_CORTO_MS));
 }
 
 /**

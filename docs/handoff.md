@@ -60,6 +60,22 @@
 - [ ] **[Claude]** Con los datos de esa prueba: la vuelta de la designación tardía cierra **sin** `molinos_omitido`, la
       siguiente abre con la designación, y `molinosHoy`/`sinMolinosHoy` cuentan llegadas.
 
+*Mapa web — trazo y cámara como en la app (plan [`docs/plan-mapa-web-traza-snap.md`](plan-mapa-web-traza-snap.md)):*
+- [x] **[Claude]** Implementado en la rama `feat/mapa-web-traza-snap` (PR "feat(mapa-web)…"). Causa del piloto del
+      **miércoles 14/10** (el jueves 15 no tiene datos en prod): la web dibujaba el GPS crudo unido con rectas (sobre las
+      casas, huecos como rectas, saltos de 3 km del PIL) y la cámara seguía al último punto del trazo (cada 10 s) sin
+      restar HUD/panel. Ahora: snap del móvil movido a `@quivo/shared`, trazo por segmentos (azul en ruta, alerta fuera
+      de ruta), huecos cortados, marcador por la calle, seguimiento con `followPadding`. Replay Playwright con los datos
+      reales del 14/10 sobre Google Maps: esquinas limpias, marcador visible 242/242 (escritorio y móvil). Gates:
+      `/code-review` high (9 de 10 aplicados; descartado filtrar variantes en borrador), `/security-review` limpio.
+      Codex: no verificado (sin cuota).
+- [ ] **[CTO]** Deploy de **api + web** después del merge (el cambio en mobile es solo de imports: no hace falta APK
+      ni OTA ahora).
+- [ ] **[CTO/control]** En `/en-vivo`, seguir un recorrido completo de L16 y "Ver recorrido" al terminar: el trazo va
+      por la calle, los desvíos reales salen en naranja y el vehículo no queda tapado por el HUD ni el panel.
+- [ ] **[CTO]** Confirmar si el inicio y el final fuera de la ruta (p. ej. PIB a ~120 m al arrancar) deben verse en
+      naranja como desvío.
+
 *Otros pendientes:*
 - [x] **[CTO]** Confirmar en Perfil de los 3 que la versión dice `0.1.0 · 01a14b63` (OTA de humo): llegó a los 3.
 - [ ] **[CTO]** Decidir #105 (`scripts/extender-asignaciones-piloto.ts`, abierto desde el 08/10, CI verde, nunca

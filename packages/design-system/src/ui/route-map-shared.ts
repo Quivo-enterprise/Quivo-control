@@ -9,6 +9,7 @@
 export const TOKEN_COLORS: Record<string, { light: string; dark: string }> = {
   '--qv-color-primary': { light: '#3226b4', dark: '#6672f5' },
   '--qv-color-accent': { light: '#fd9e15', dark: '#feb83e' },
+  '--qv-color-warning': { light: '#d97706', dark: '#fbbf24' },
 };
 export const DEFAULT_ROUTE_COLOR_LIGHT = '#3226b4';
 export const DEFAULT_ROUTE_COLOR_DARK = '#6672f5';

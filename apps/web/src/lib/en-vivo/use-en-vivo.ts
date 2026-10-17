@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TRAZA_EN_VIVO_LIMITE_MAX,
@@ -21,6 +21,7 @@ import { variantesApi } from '../api/variantes';
 import {
   debeRecargar,
   desdeConSolape,
+  POLLS_POR_SOLAPE_LARGO,
   fusionarTraza,
   INTERVALO_POLL_MS,
   intervaloPoll,
@@ -131,6 +132,8 @@ export function useContextoEnVivo(token: string | null, sesionId: string | null)
 export function useTrazaEnVivo(token: string | null, sesionId: string | null) {
   const queryClient = useQueryClient();
   const queryKey = ['en-vivo', 'traza', sesionId];
+  // Cuenta los polls del delta: el solape largo solo corre cada `POLLS_POR_SOLAPE_LARGO`.
+  const polls = useRef(0);
 
   return useQuery<TrazaAcumulada>({
     queryKey,
@@ -151,7 +154,7 @@ export function useTrazaEnVivo(token: string | null, sesionId: string | null) {
       const ahora = Date.now();
 
       const delta = await enVivoApi.posiciones(autenticacion, sesion, {
-        desde: desdeConSolape(previa?.cursor),
+        desde: desdeConSolape(previa?.cursor, polls.current++ % POLLS_POR_SOLAPE_LARGO === 0),
       });
       const fusionada = fusionarTraza(previa, delta);
       if (!debeRecargar(previa, fusionada, ahora)) {

@@ -1,17 +1,14 @@
 import type { MapPoint, MapRoute, MapZone } from '@quivo/design-system';
-import type { ContextoEnVivo, CumplimientoRecorrido, PosicionEnVivo } from '@quivo/shared';
+import type { ContextoEnVivo, CumplimientoRecorrido, PosicionEnVivo, PuntoTrazaGps, RutaSnap } from '@quivo/shared';
 import { ApiError } from '../../../src/lib/api/client';
 import { presentacionFrescura, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 import { alertaMarcador } from '../../../src/lib/en-vivo/alertas';
-import { simplificarTrazaParaDibujo } from '../../../src/lib/en-vivo/simplificar-traza';
-
-/** Color fijo de la traza GPS real, igual que en el detalle histórico
- * (`/reportes/recorridos/[id]`) para que las dos pantallas se lean igual. */
-export const COLOR_TRAZA = '#2563eb';
+import { rutasDeTraza } from '../../../src/lib/en-vivo/segmentos-traza';
 
 export function construirRutas(
   contexto: ContextoEnVivo,
-  traza: TrazaAcumulada | undefined,
+  puntos: readonly PuntoTrazaGps[] | undefined,
+  rutasSnap: readonly RutaSnap[],
 ): MapRoute[] {
   const rutas: MapRoute[] = [
     {
@@ -22,17 +19,7 @@ export function construirRutas(
       points: contexto.ruta.geometria.coordinates.map(([lng, lat]) => ({ lat, lng })),
     },
   ];
-  if (traza && traza.puntos.length > 1) {
-    // `simplificarTrazaParaDibujo`: por debajo de `UMBRAL_PUNTOS_SIMPLIFICACION` es un no-op
-    // (misma referencia) — ver el comentario de cabecera de `simplificar-traza.ts` para por
-    // qué hace falta a partir de ahí (el redibujo completo de la polilínea en cada poll).
-    rutas.push({
-      id: 'traza-gps',
-      label: 'Recorrido real',
-      color: COLOR_TRAZA,
-      points: simplificarTrazaParaDibujo(traza.puntos).map((p) => ({ lat: p.lat, lng: p.lng })),
-    });
-  }
+  if (puntos && puntos.length > 1) rutas.push(...rutasDeTraza(puntos, rutasSnap, 'Recorrido real'));
   return rutas;
 }
 

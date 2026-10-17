@@ -1,4 +1,4 @@
-import { distanciaMetros } from './geo';
+import { distanciaMetros } from '@quivo/shared';
 import { ESTADO_RUMBO_INICIAL, seleccionarRumbo, type EstadoRumbo } from './rumbo';
 import type { FixVisual } from './tipos';
 

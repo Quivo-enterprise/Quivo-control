@@ -13,3 +13,5 @@ export * from './public-mobility.js';
 export * from './ciudades-bolivia.js';
 export * from './molinos.js';
 export * from './circuito.js';
+export * from './snap-ruta.js';
+export * from './traza-dibujo.js';

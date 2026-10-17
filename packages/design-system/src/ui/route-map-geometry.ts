@@ -23,14 +23,44 @@ export function isWithinCentralViewport(
   point: { x: number; y: number },
   size: { x: number; y: number },
   fraction: number = FOLLOW_CENTRAL_FRACTION,
+  relleno?: RellenoMapa,
 ): boolean {
   if (size.x <= 0 || size.y <= 0) return true;
-  const marginX = (size.x * (1 - fraction)) / 2;
-  const marginY = (size.y * (1 - fraction)) / 2;
+  const { left, top, ancho, alto } = rectVisible(size, relleno);
+  const marginX = left + (ancho * (1 - fraction)) / 2;
+  const marginY = top + (alto * (1 - fraction)) / 2;
   return (
     point.x >= marginX &&
-    point.x <= size.x - marginX &&
+    point.x <= left + ancho - (marginX - left) &&
     point.y >= marginY &&
-    point.y <= size.y - marginY
+    point.y <= top + alto - (marginY - top)
   );
+}
+
+/** Zonas del contenedor tapadas por la UI (HUD arriba, panel abajo o al costado), en px. */
+export interface RellenoMapa {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/** Rectángulo visible del contenedor (menos el relleno). Si el relleno lo anula (ancho o alto
+ * <= 0) se ignora: mejor seguir con el contenedor entero que no seguir nada. */
+function rectVisible(size: { x: number; y: number }, relleno?: RellenoMapa) {
+  const l = Math.max(0, relleno?.left ?? 0);
+  const t = Math.max(0, relleno?.top ?? 0);
+  const ancho = size.x - l - Math.max(0, relleno?.right ?? 0);
+  const alto = size.y - t - Math.max(0, relleno?.bottom ?? 0);
+  return ancho > 0 && alto > 0 ? { left: l, top: t, ancho, alto } : { left: 0, top: 0, ancho: size.x, alto: size.y };
+}
+
+/** Cuánto (px) queda el centro del rectángulo visible respecto del centro del contenedor
+ * (x > 0: a la derecha; y > 0: abajo). Es donde debe caer el punto seguido al centrarlo. */
+export function centroVisibleDesplazado(
+  size: { x: number; y: number },
+  relleno?: RellenoMapa,
+): { x: number; y: number } {
+  const r = rectVisible(size, relleno);
+  return { x: r.left + r.ancho / 2 - size.x / 2, y: r.top + r.alto / 2 - size.y / 2 };
 }

@@ -8,6 +8,7 @@ import {
   type RecorridosQuery,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import { leerVariantesTramo } from '../../common/geo/variantes-tramo.js';
 import {
   inicioDeJornadaBolivia,
   inicioDeJornadaSiguienteBolivia,
@@ -115,6 +116,7 @@ export class RecorridosService {
       if (!rutaRow) {
         throw new NotFoundException('Ruta de la asignación no encontrada');
       }
+      const variantes = await leerVariantesTramo(tx, rutaId);
       const puntoControlRows = await tx.$queryRaw<PuntoControlRow[]>`
         SELECT id, orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM"
         FROM puntos_control WHERE "rutaId" = ${rutaId} ORDER BY orden ASC
@@ -148,6 +150,7 @@ export class RecorridosService {
           color: sesion.asignacion.ruta.linea.color ?? '#3226B4',
         },
         ruta: { id: rutaRow.id, geometria: JSON.parse(rutaRow.geometria) },
+        variantes,
         puntosControl: puntoControlRows.map((p) => ({
           id: p.id,
           orden: p.orden,
