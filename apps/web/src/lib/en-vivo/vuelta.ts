@@ -45,7 +45,7 @@ export function esSugerido(
   ahoraServidorMs: number,
 ): boolean {
   if (p.molinosHoy || !p.vuelta || !linea) return false;
-  if (p.vuelta.varianteId !== null || p.vuelta.enEspera) return false;
+  if (p.vuelta.varianteId !== null || p.vuelta.enEspera || p.vuelta.molinosProxima) return false;
   const proximo = Date.parse(linea.proximoSugeridoEn);
   return Number.isFinite(proximo) && proximo <= ahoraServidorMs;
 }
@@ -109,10 +109,15 @@ export function esperaMolinos(
  * Motivo por el que la designación no se puede tocar ahora (`null` = se puede). Ojo: la API
  * también responde 409 cuando el vehículo ya llegó a Molinos y ya salió, algo que la posición
  * no expone (`enEspera` vuelve a `false`); ese caso se resuelve con el mensaje del 409.
+ * `molinosHoy` = ya llegó a Molinos hoy (en otra vuelta, si la actual no está designada).
  */
-export function motivoBloqueo(v: Pick<VueltaPosicion, 'enEspera'> | null | undefined): string | null {
+export function motivoBloqueo(
+  v: Pick<VueltaPosicion, 'enEspera' | 'varianteId'> | null | undefined,
+  molinosHoy = false,
+): string | null {
   if (!v) return 'Todavía no pasó por la terminal.';
   if (v.enEspera) return 'Ya llegó a Molinos: la designación quedó cerrada.';
+  if (molinosHoy && v.varianteId === null) return 'Ya fue a Molinos hoy.';
   return null;
 }
 
@@ -128,8 +133,11 @@ export function aplicarDesignacion(
   varianteId: string | null,
   varianteNombre: string | null,
   ahoraIso: string,
+  proxima = false,
 ): PosicionEnVivo {
   if (!p.vuelta) return p;
+  // Designación diferida: la vuelta actual no cambia, solo se marca la próxima.
+  if (proxima) return { ...p, vuelta: { ...p.vuelta, molinosProxima: true } };
   return {
     ...p,
     vuelta: {
@@ -138,6 +146,7 @@ export function aplicarDesignacion(
       varianteNombre: varianteId ? varianteNombre : null,
       designadaEn: varianteId ? ahoraIso : null,
       acuseEn: null,
+      molinosProxima: false,
     },
   };
 }
@@ -148,6 +157,8 @@ export interface DesignacionPendiente {
   varianteNombre: string | null;
   /** Instante de la petición: es el `designadaEn` optimista, estable entre polls. */
   ahoraIso: string;
+  /** La API respondió `aplica: 'proxima_vuelta'`: se marca `molinosProxima` en vez de `varianteId`. */
+  proxima?: boolean;
 }
 
 /**
@@ -162,7 +173,7 @@ export function aplicarDesignacionesPendientes(
   if (pendientes.size === 0) return posiciones;
   return posiciones.map((p) => {
     const d = pendientes.get(p.id);
-    return d ? aplicarDesignacion(p, d.varianteId, d.varianteNombre, d.ahoraIso) : p;
+    return d ? aplicarDesignacion(p, d.varianteId, d.varianteNombre, d.ahoraIso, d.proxima) : p;
   });
 }
 

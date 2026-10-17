@@ -211,7 +211,7 @@ Aplicación: el admin confirma y el sistema agenda la asignación compensatoria.
   - **Quién designa:** en la operación pueden hacerlo el control de Honduras y la oficina, pero en esta versión **solo el admin del panel web** (`admin_sindicato`/`admin_quivo`).
   - **Sugerencia:** "Sugerido: Molinos" para el vehículo que todavía no subió hoy, según la regla de 1 de cada N llegadas. Decide el admin.
   - **Registro:** cada designación guarda quién, cuándo, la sesión y la vuelta. Así se puede auditar la regla de Molinos 1×/día.
-  - **Cuándo:** se puede designar antes de llegar a Honduras o durante la vuelta (confirmado por el CTO). Supuesto del chairman: la designación se puede cambiar hasta que el vehículo llega a una terminal.
+  - **Cuándo:** se puede designar en cualquier momento del viaje mientras el vehículo no haya llegado a Molinos hoy (CTO, 2026-10-17; docs/plan-molinos-cualquier-momento.md). Si ya pasó la bifurcación en el regreso, vale para la próxima vuelta.
   - **Recorrido Molinos (corrección del CTO, 2026-10-13):** Honduras → regreso normal → en el desvío (vértice 43) sube el ramal Putucu → Molinos → baja → **sigue hasta Salomón Romero**. Molinos es una pasada intermedia del regreso y toda vuelta termina en SR. La geometría prod actual (circuito que **termina** en Molinos) no representa esto: hace falta una variante "vía Molinos" = circuito + ida y vuelta por Putucu.
   - **App del chofer (CTO): sí cambia.** Requiere APK nuevo.
     - Aviso visual en pantalla, como el del punto de control.

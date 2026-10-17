@@ -23,6 +23,7 @@ const vuelta = (extra: Partial<VueltaPosicion> = {}): VueltaPosicion => ({
   acuseEn: null,
   enEspera: false,
   esperaDesdeTs: null,
+  molinosProxima: false,
   ...extra,
 });
 const variante = (extra: Partial<Variante> = {}): Variante => ({
@@ -72,6 +73,9 @@ describe('esSugerido', () => {
   it('no si ya está designada o en espera', () => {
     expect(esSugerido({ molinosHoy: false, vuelta: vuelta({ varianteId: id(1) }) }, linea, AHORA)).toBe(false);
     expect(esSugerido({ molinosHoy: false, vuelta: vuelta({ enEspera: true }) }, linea, AHORA)).toBe(false);
+  });
+  it('no si ya está programada para la próxima vuelta', () => {
+    expect(esSugerido({ molinosHoy: false, vuelta: vuelta({ molinosProxima: true }) }, linea, AHORA)).toBe(false);
   });
   it('la hora exacta del próximo sugerido cuenta (<=)', () => {
     expect(esSugerido({ molinosHoy: false, vuelta: vuelta() }, { proximoSugeridoEn: hace(0) }, AHORA)).toBe(true);
@@ -132,6 +136,15 @@ describe('motivoBloqueo / opcionSeleccionada', () => {
   it('libre: null', () => {
     expect(motivoBloqueo(vuelta())).toBeNull();
   });
+  it('ya llegó hoy y la vuelta actual no está designada: bloqueada', () => {
+    expect(motivoBloqueo(vuelta(), true)).toBe('Ya fue a Molinos hoy.');
+  });
+  it('ya llegó hoy pero la vuelta actual está designada: no bloquea por eso', () => {
+    expect(motivoBloqueo(vuelta({ varianteId: id(1) }), true)).toBeNull();
+  });
+  it('en espera gana sobre "ya fue hoy"', () => {
+    expect(motivoBloqueo(vuelta({ enEspera: true }), true)).toMatch(/Ya llegó a Molinos/);
+  });
   it('opción: directo o la variante', () => {
     expect(opcionSeleccionada(vuelta())).toBe('directo');
     expect(opcionSeleccionada(null)).toBe('directo');
@@ -158,6 +171,14 @@ describe('aplicarDesignacion (optimista)', () => {
       hace(0),
     );
     expect(r.vuelta).toMatchObject({ varianteId: null, varianteNombre: null, designadaEn: null, acuseEn: null });
+  });
+  it('diferida: marca molinosProxima y no toca la designación de la vuelta actual', () => {
+    const r = aplicarDesignacion(p, id(2), 'Vía Molinos', hace(0), true);
+    expect(r.vuelta).toMatchObject({ varianteId: null, designadaEn: null, molinosProxima: true });
+  });
+  it('designar o cancelar limpia molinosProxima', () => {
+    const conProxima = { vuelta: vuelta({ molinosProxima: true }) } as PosicionEnVivo;
+    expect(aplicarDesignacion(conProxima, null, null, hace(0)).vuelta?.molinosProxima).toBe(false);
   });
   it('sin vuelta no inventa una', () => {
     expect(aplicarDesignacion({ vuelta: null } as PosicionEnVivo, id(2), 'x', hace(0))).toEqual({ vuelta: null });
@@ -199,6 +220,14 @@ describe('textoHudMolinos', () => {
   });
 });
 describe('aplicarDesignacionesPendientes', () => {
+  it('una pendiente con proxima marca molinosProxima', () => {
+    const pos = { id: 'a', vuelta: vuelta() } as PosicionEnVivo;
+    const r = aplicarDesignacionesPendientes(
+      [pos],
+      new Map([['a', { varianteId: id(2), varianteNombre: 'x', ahoraIso: hace(0), proxima: true }]]),
+    );
+    expect(r[0]!.vuelta).toMatchObject({ varianteId: null, molinosProxima: true });
+  });
   const pos = (idp: string, varianteId: string | null) =>
     ({ id: idp, vuelta: { numero: 1, varianteId, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false } }) as unknown as PosicionEnVivo;
   const pendiente = { varianteId: id(7), varianteNombre: 'Vía Molinos', ahoraIso: hace(0) };

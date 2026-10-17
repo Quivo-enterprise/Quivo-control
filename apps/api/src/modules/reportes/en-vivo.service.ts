@@ -76,6 +76,7 @@ interface PosicionEnVivoRow {
   vueltaVarianteNombre: string | null;
   vueltaDesignadaEn: Date | null;
   vueltaAcuseEn: Date | null;
+  vueltaMolinosProxima: boolean | null;
   vueltaEsperaLlegadaTs: Date | null;
   vueltaEsperaSalidaTs: Date | null;
   molinosHoy: boolean | null;
@@ -498,12 +499,13 @@ export class EnVivoService {
           inf."infraccionNivelAtendidaOrden",
           vu.numero AS "vueltaNumero", vu."varianteId" AS "vueltaVarianteId",
           vu."varianteNombre" AS "vueltaVarianteNombre", vu."designadaEn" AS "vueltaDesignadaEn",
-          vu."acuseEn" AS "vueltaAcuseEn", vu."esperaLlegadaTs" AS "vueltaEsperaLlegadaTs",
+          vu."acuseEn" AS "vueltaAcuseEn", vu."molinosProxima" AS "vueltaMolinosProxima",
+          vu."esperaLlegadaTs" AS "vueltaEsperaLlegadaTs",
           vu."esperaSalidaTs" AS "vueltaEsperaSalidaTs",
           EXISTS (
             SELECT 1 FROM vueltas vh
             WHERE vh."vehiculoId" = so."vehiculoId" AND vh."sindicatoId" = so."sindicatoId"
-              AND vh.fecha = ${jornadaStr}::date AND vh."varianteId" IS NOT NULL
+              AND vh.fecha = ${jornadaStr}::date AND vh."esperaLlegadaTs" IS NOT NULL
               AND ${vueltaNoVacia('vh')}
           ) AS "molinosHoy",
           fix.lat, fix.lng, fix.accuracy, fix.speed,
@@ -563,7 +565,8 @@ export class EnVivoService {
         -- deja un logout sin lote tardío no son en_curso, así que nunca entran aquí.
         LEFT JOIN LATERAL (
           SELECT v.numero, v."varianteId", va.nombre AS "varianteNombre", v."designadaEn",
-                 v."acuseEn", v."esperaLlegadaTs", v."esperaSalidaTs"
+                 v."acuseEn", v."esperaLlegadaTs", v."esperaSalidaTs",
+                 (v."molinosProximaVarianteId" IS NOT NULL) AS "molinosProxima"
           FROM vueltas v
           LEFT JOIN variantes va ON va.id = v."varianteId"
           WHERE v."sesionId" = so.id AND v.estado = 'en_curso' AND v."sindicatoId" = so."sindicatoId"
@@ -596,6 +599,7 @@ export class EnVivoService {
                   varianteNombre: f.vueltaVarianteNombre,
                   designadaEn: f.vueltaDesignadaEn?.toISOString() ?? null,
                   acuseEn: f.vueltaAcuseEn?.toISOString() ?? null,
+                  molinosProxima: f.vueltaMolinosProxima ?? false,
                   enEspera: f.vueltaEsperaLlegadaTs != null && f.vueltaEsperaSalidaTs == null,
                   esperaDesdeTs:
                     f.vueltaEsperaLlegadaTs != null && f.vueltaEsperaSalidaTs == null

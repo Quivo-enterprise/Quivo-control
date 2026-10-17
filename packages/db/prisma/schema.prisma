@@ -388,7 +388,8 @@ model Variante {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  vueltas Vuelta[]
+  vueltas Vuelta[] @relation("VueltaVariante")
+  vueltasMolinosProxima Vuelta[] @relation("VueltaMolinosProxima")
 
   @@index([rutaId])
   @@index([puntoEsperaId])
@@ -840,10 +841,16 @@ model Vuelta {
   estado          String          @default("en_curso")
   pasoRetornoTs   DateTime?
   varianteId      String?
-  variante        Variante?       @relation(fields: [varianteId], references: [id], onDelete: SetNull)
+  variante        Variante?       @relation("VueltaVariante", fields: [varianteId], references: [id], onDelete: SetNull)
   designadaPor    String?
   designadaEn     DateTime?
   acuseEn         DateTime?
+  // Designación diferida: la del control DESPUÉS de pasar la bifurcación en el regreso. El worker
+  // la copia a `varianteId`/`designada*` de la vuelta siguiente al abrirla.
+  molinosProximaVarianteId String?
+  molinosProximaVariante   Variante?       @relation("VueltaMolinosProxima", fields: [molinosProximaVarianteId], references: [id], onDelete: SetNull)
+  molinosProximaPor        String?
+  molinosProximaEn         DateTime?
   esperaLlegadaTs DateTime?
   esperaSalidaTs  DateTime?
   // Último cumplimiento de un PC distinto de la terminal dentro de la vuelta (retorno, espera o
