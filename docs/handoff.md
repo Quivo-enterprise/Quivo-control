@@ -6,18 +6,21 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-17, noche (leer primero): #170–#173 en `main` (`ee352ee`), deploy `r18-20261017` en curso
+## Punto de retome — 2026-10-17, noche (leer primero): #170–#173 en `main` (`ee352ee`) y desplegados en `r18-20261017`
 
 **Estado en una línea:** APK 16 en los 3 trufis, OTA confirmado, línea 16 cargada con sus 17 PC, Molinos se designa en
 cualquier momento (1 por día, la tardía va a la próxima vuelta) y el mapa web dibuja el trazo pegado a la calle. Falta
-confirmar el deploy `r18-20261017` y la prueba en la calle con el control.
+la prueba en la calle con el control.
 
 **Guía para el control (cómo designar a Molinos):** [`docs/piloto/guia-control-molinos.md`](piloto/guia-control-molinos.md).
 
 **Deploy `r18-20261017` (2026-10-17, lo corre el CTO):** `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh
 r18-20261017` desde `main` en `ee352ee` (api + worker + web; migración `20261017120000_molinos_proxima_vuelta`). La
 primera corrida cortó en el preflight por falta de `GOOGLE_MAPS_MAP_ID` (sin efectos salvo IAM idempotente).
-**Resultado: pendiente de verificar** (health, `molinosProxima` en posiciones, `variantes` en contexto, web 200).
+**Resultado: exit 0.** Migraciones OK, `/v1/health/ready` = ok (db y redis up), web `/en-vivo` 200, el contexto en vivo
+de L16 trae `variantes: [Vía Molinos, 208 vértices]` y `/reportes/en-vivo/posiciones` responde (la consulta ya lee
+`molinosProximaVarianteId`, así que la columna existe). `molinosProxima` en una vuelta real: **no verificado** (no había
+vueltas en curso); se ve en la prueba en la calle.
 
 **Hecho (2026-10-17):**
 - **APK versionCode 16 instalado** por el CTO en `1616PIL`, `1616PIB` y `1616PIC`.
@@ -55,8 +58,7 @@ primera corrida cortó en el preflight por falta de `GOOGLE_MAPS_MAP_ID` (sin ef
       (aviso según `aplica`; designar no cambia la vuelta hasta la respuesta, cancelar es inmediato). `/code-review` limpio;
       **Codex verify-fix: no verificado (sin cuota hasta el 16/11; el error pide "Upgrade to Plus": revisar la suscripción)**.
 - [x] **[Claude]** #172 mergeado (`42f892e`): aviso según `aplica` + sin flash optimista + esta lista de pruebas.
-- [ ] **[CTO]** Deploy `r18-20261017` de api + worker + web desde `ee352ee` (**en curso**, ver arriba). Después Claude
-      verifica health, `molinosProxima` en `/reportes/en-vivo/posiciones` y `variantes` en el contexto.
+- [x] **[CTO]** Deploy `r18-20261017` de api + worker + web desde `ee352ee`: exit 0, verificado (ver arriba).
 
 *Pruebas pendientes — Molinos en cualquier momento (#170 + #172), después del deploy. El control usa el panel web
 `/en-vivo`; la designación SOLO se hace desde ahí (la app del chofer solo recibe el aviso):*
@@ -81,8 +83,8 @@ primera corrida cortó en el preflight por falta de `GOOGLE_MAPS_MAP_ID` (sin ef
       reales del 14/10 sobre Google Maps: esquinas limpias, marcador visible 242/242 (escritorio y móvil). Gates:
       `/code-review` high (9 de 10 aplicados; descartado filtrar variantes en borrador), `/security-review` limpio.
       Codex: no verificado (sin cuota).
-- [ ] **[CTO]** Deploy: va en el mismo `r18-20261017` (el cambio en mobile es solo de imports: no hace falta APK ni
-      OTA ahora; entra en el próximo APK/OTA que se haga por otra razón).
+- [x] **[CTO]** Deploy en el mismo `r18-20261017` (el cambio en mobile es solo de imports: entra en el próximo APK/OTA
+      que se haga por otra razón).
 - [ ] **[CTO/control]** En `/en-vivo`, seguir un recorrido completo de L16 y "Ver recorrido" al terminar: el trazo va
       por la calle, los desvíos reales salen en naranja y el vehículo no queda tapado por el HUD ni el panel.
 - [ ] **[CTO]** Confirmar si el inicio y el final fuera de la ruta (p. ej. PIB a ~120 m al arrancar) deben verse en
