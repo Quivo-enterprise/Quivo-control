@@ -63,6 +63,7 @@ import {
 import { crearEmisorZoom, type EmisorZoom } from './emisor-zoom';
 import {
   PATRON_TRAMO_CALCULADO,
+  aCoordsRutaCalculada,
   debeResaltarRutaCalculada,
   estiloDesignacion,
   estiloRuta,
@@ -1302,7 +1303,7 @@ export function RouteMap({
 
   const mostrarCaminoResaltado = debeResaltarRutaCalculada(tracking, rutaCalculada);
   const caminoResaltadoCoords = useMemo<LatLng[]>(
-    () => (rutaCalculada ?? []).map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
+    () => aCoordsRutaCalculada(rutaCalculada),
     [rutaCalculada],
   );
 

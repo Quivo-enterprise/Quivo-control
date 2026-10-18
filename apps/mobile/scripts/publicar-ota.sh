@@ -10,7 +10,8 @@
 #   MISMO fingerprint. Todo cambio NATIVO (dependencia con código nativo, plugin, permisos,
 #   versión de SDK) cambia el hash: ese cambio exige un APK nuevo (`eas build`), un OTA no lo
 #   alcanza. Compará con `npx expo-updates fingerprint:generate --platform android` antes.
-# - SENTRY_AUTH_TOKEN debe estar exportado para subir los source maps.
+# - SENTRY_AUTH_TOKEN debe estar exportado, o definido en ~/.quivo-sentry-env (0600; el script lo
+#   carga si existe), para subir los source maps.
 # - El bundle se compila con las variables EXPO_PUBLIC_* del shell/entorno de EAS. Las de
 #   `eas.json` -> build.production.env NO se aplican a `eas update`; este script las toma de ahí
 #   si no están definidas (si faltaran, la app quedaría sin API_URL/DSN).
@@ -36,7 +37,13 @@ npx expo-updates fingerprint:generate --platform android
 read -r -p "¿Continuar con la publicación en el canal production? [y/N] " RESP
 [[ "$RESP" == "y" || "$RESP" == "Y" ]] || { echo "Cancelado."; exit 1; }
 
-# EXPO_PUBLIC_* de producción desde eas.json (sin pisar lo ya exportado).
+# Token de Sentry local (no versionado); si no existe se sigue sin él (se omite la subida).
+if [[ -f "$HOME/.quivo-sentry-env" ]]; then
+  # shellcheck disable=SC1091
+  source "$HOME/.quivo-sentry-env"
+fi
+
+# EXPO_PUBLIC_* y SENTRY_* (ORG/PROJECT) de producción desde eas.json (sin pisar lo ya exportado).
 eval "$(node -e '
   const env = require("./eas.json").build.production.env;
   for (const [k, v] of Object.entries(env)) {

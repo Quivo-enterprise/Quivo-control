@@ -62,8 +62,12 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       `af9371fe…`): se dejan; se limpia todo el día de la entrega del software.
 - [ ] **Plan de los pendientes sin bloqueo:** [`docs/plan-pendientes-post-incidente-ota.md`](plan-pendientes-post-incidente-ota.md)
       (token de Sentry, fix lat/lng, OTA de punta a punta, OTA desde CI con aprobación, `shared` desde `src`: no por ahora).
-- [ ] **[Claude]** Lat/lng invertido de la línea punteada de `ruta-a-punto`: **confirmado por lectura**
-      (`route-map.tsx:1305` lee `[lng,lat]`; la API devuelve `[lat,lng]`). Fix en el plan, punto 2.
+- [x] **[Claude]** Lat/lng invertido de la línea punteada de `ruta-a-punto` (desde agosto se dibujaba en el
+      Atlántico Sur): fix `aCoordsRutaCalculada` en `estilo-ruta.ts` + test (PR `fix/ruta-a-punto-latlng`). Llega
+      con el próximo OTA; **la línea aparece por primera vez** (avisar a choferes).
+- [x] **[Claude]** Token de Sentry en `~/.quivo-sentry-env` (0600; el CTO lo pegó en el chat: **revocar y recrear**);
+      `publicar-ota.sh` lo carga solo. Source maps del OTA `01a15072` subidos (debug id `dd0d7c0c…`).
+- [ ] **[CTO]** OK al changelog y publicar el OTA con el script completo (plan, punto 3).
 - [ ] **[Claude]** Subir source maps del OTA (falta `SENTRY_AUTH_TOKEN` en la máquina del CTO).
 
 ## Punto de retome — 2026-10-17, noche (anterior): #170–#173 en `main` (`ee352ee`) y desplegados en `r18-20261017`
