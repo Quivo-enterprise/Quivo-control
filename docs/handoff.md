@@ -67,7 +67,13 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       con el próximo OTA; **la línea aparece por primera vez** (avisar a choferes).
 - [x] **[Claude]** Token de Sentry en `~/.quivo-sentry-env` (0600; el CTO lo pegó en el chat: **revocar y recrear**);
       `publicar-ota.sh` lo carga solo. Source maps del OTA `01a15072` subidos (debug id `dd0d7c0c…`).
-- [ ] **[CTO]** OK al changelog y publicar el OTA con el script completo (plan, punto 3).
+- [x] **[CTO]** OTA `01a1509e` publicado con el script completo (primera corrida de punta a punta, plan punto 3),
+      desde `c0b7376`: update group `ebc72ea4-68e6-4fe8-88dc-40c3a5650094`, runtime `547d52e7…`, source maps subidos
+      solos. Verificado aparte: URL de la API y DSN en el `.hbc`, fix lat/lng y `vuelta.js` en el bundle. Vuelta atrás:
+      `eas update:republish --group 10ffb271-1693-4e29-95d9-1dae03d2a2d5`.
+- [ ] **[CTO]** Prueba en la calle: aviso de Molinos, solo ida / solo regreso tras Honduras, línea punteada al próximo
+      PC visible. Después Claude revisa Sentry y la base.
+- [ ] **[Claude, cuando el CTO decida]** Plan punto 4: OTA desde CI (GitHub Actions + aprobación).
 - [ ] **[Claude]** Subir source maps del OTA (falta `SENTRY_AUTH_TOKEN` en la máquina del CTO).
 
 ## Punto de retome — 2026-10-17, noche (anterior): #170–#173 en `main` (`ee352ee`) y desplegados en `r18-20261017`
