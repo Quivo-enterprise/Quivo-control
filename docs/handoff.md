@@ -36,13 +36,17 @@ el rebuild). Gates: `/code-review` medium (5 de 10 aplicados; descartados: forma
 y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship. Codex: no verificado (sin cuota).
 
 **Checklist:**
-- [ ] **[Claude]** Mergear el PR del fix (CI `ci` + `acceptance`).
-- [ ] **[CTO → Claude]** OTA correctivo desde `main` con el script nuevo (ok del CTO; confirmar fingerprint = runtime
-      `547d52e7…` del APK 16). Primera corrida real de `--skip-bundler`: verificar en Perfil la versión nueva y que
-      Sentry deje de recibir `QUIVO-CONTROL-CONDUCTOR-C`. Requiere arranque en frío en los 3.
+- [x] **[Claude]** #175 mergeado (`6c5e31d`), CI `ci` + `acceptance` pass.
+- [x] **[Claude]** OTA correctivo publicado con el ok del CTO desde `main` `6c5e31d` con el script nuevo (primera corrida
+      real de `--skip-bundler`: OK). Update group `26833409-ff38-4b9f-a47e-8a423aa797c5`, Android update id
+      `01a15063…`, runtime `547d52e7…` (= fingerprint del APK 16). Guard pasó; el bundle publicado trae
+      `entities/vuelta.js`, `circuito.js` y `rol` en `PuntoControlPaqueteSchema`. Sin source maps (falta `SENTRY_AUTH_TOKEN`).
+- [ ] **[CTO]** En los 3 teléfonos: abrir la app, cerrarla del todo y volver a abrirla (el OTA se descarga en el primer
+      arranque y se aplica en el siguiente). Perfil → Aplicación → Versión debe decir `0.1.0 · 01a15063`.
+- [ ] **[Claude]** Después de la próxima prueba: confirmar que Sentry no registra más `QUIVO-CONTROL-CONDUCTOR-C`.
 - [ ] **[CTO]** Repetir la prueba en la calle (aviso de Molinos + solo ida/solo regreso).
-- [ ] **[CTO]** Decidir si anular las 2 infracciones de la prueba de PIL del 18/10 (`molinos_omitido` grave y
-      `pc_omitido` Honduras, sesión `af9371fe…`, ambas `abierta`).
+- [x] **[CTO]** Infracciones de la prueba de PIL del 18/10 (`molinos_omitido` grave y `pc_omitido` Honduras, sesión
+      `af9371fe…`): se dejan; se limpia todo el día de la entrega del software.
 - [ ] **[CTO]** Decidir si Metro debe resolver `@quivo/shared` desde `src` (elimina la clase de bug; toca APK y tests).
 - [ ] **[Claude]** Verificar el posible lat/lng invertido de la línea punteada de `ruta-a-punto`
       (`route-map.tsx:~1307` vs `ruteo.service.ts` que devuelve `[lat,lng]`); si se confirma, PR aparte.
