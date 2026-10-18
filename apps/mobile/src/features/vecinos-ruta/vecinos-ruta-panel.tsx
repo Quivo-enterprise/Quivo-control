@@ -1,5 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { AppState, StyleSheet, View } from 'react-native';
+import type { FaseCircuito } from '@quivo/shared';
+import type { PosicionVecinos } from '../../shared/api/vecinos-ruta-api';
 import { useVecinosRuta } from './use-vecinos-ruta';
 import { VecinosRutaCard } from './vecinos-ruta-card';
 import { estadoFila, sinActualizar, tarjetaVisible } from './estado-vecinos';
@@ -10,7 +12,9 @@ interface Props {
   obtenerAccessToken: () => Promise<string | null>;
   hayPosicion: boolean;
   /** Getter estable (no la posición misma) para que el GPS a 1 Hz no re-renderice el panel. */
-  obtenerPosicion: () => { lat: number; lng: number } | null;
+  obtenerPosicion: () => PosicionVecinos | null;
+  /** Getter estable de la fase de la vuelta, para que el servidor ubique el progreso en el circuito. */
+  obtenerFase: () => FaseCircuito | null;
   /** Borde inferior medido del overlay superior; el panel se ancla justo debajo. */
   topBase: number;
 }

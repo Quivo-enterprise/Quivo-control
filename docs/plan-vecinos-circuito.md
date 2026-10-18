@@ -96,4 +96,33 @@ Si A ve a B delante a X m, B ve a A detrás a X m.
 - Deploy de la API: lo corre el CTO (`scripts/deploy-gcp.sh`). Después, OTA con `publicar-ota.sh` (lo corre el CTO).
 - Prueba en la calle con 2 trufis: cada uno ve al otro en una sola fila, distancias consistentes entre los dos y nada
   de inversiones al cruzar Honduras ni al volver a SR.
-- Estado: aprobado por el CTO el 18/10. Paso 0 en curso.
+- Estado: aprobado por el CTO el 18/10. Implementado en `fix/vecinos-circuito`.
+
+## Resultado (18/10)
+
+**Paso 0, datos reales del 14/10** (PIB 1639 fixes, PIL 632; 207 polls cada 30 s; `received_at` no está en la API,
+así que el lag se modeló con 0 y 160 s):
+
+| Lógica | Desacuerdos con el orden real | Inversiones | Cambios de fila PIB/PIL | Saltos >300 m PIB/PIL |
+|---|---|---|---|---|
+| Vieja, lag 0 | 74 (36 %) | 0 | 43/43 | 89/89 |
+| Vieja, lag 160 s | 98 (47 %) | 60 | 54/46 | 89/83 |
+| Nueva, lag 0 | 0 | 0 | 4/1 | 8/7 |
+| Nueva, lag 160 s | 0 | 0 | 2/1 | 10/9 |
+
+- 69 de los 74 desacuerdos los explica la proyección en la mitad equivocada; los otros 5, el cierre en SR. Frescura:
+  0 descartes. La verdad del replay usa la misma proyección por fase, así que "0 desacuerdos" es en parte por
+  construcción; lo que importa es 0 inversiones y la caída de cambios de fila y saltos.
+- Costo: el filtro de 100 m deja "nadie" en 26 de 414 lados de poll (fixes fuera de ruta, sobre todo en la terminal).
+
+**Decisiones de la revisión:**
+- Fallback por geometría en el servidor: si el punto queda a más de 100 m de la mitad de su fase y a menos de la otra,
+  usa la otra (cubre retorno no registrado fuera de calles compartidas y el acercamiento a Honduras).
+- Mi fase la manda el teléfono (mi posición es en vivo); la de los demás sale de `vueltas`. Límite conocido: en calles
+  compartidas, un retorno no registrado desubica a ese vehículo (`shortcut:` en el código).
+- El teléfono no manda su posición si la precisión es peor que 50 m (`PRECISION_MAX_M` en shared).
+- `d == L/2` exacto es el único caso no simétrico; aceptado.
+- Gates: `/code-review` (10 hallazgos: 8 aplicados, 2 aceptados con motivo), `/ponytail-review` (aplicados),
+  `/security-review` sin hallazgos. Codex: no verificado (sin cuota hasta el 16/11).
+- No verificado: si la variante de Molinos pasa a más de 100 m del trazado principal (un trufi esperando ahí
+  saldría de la tarjeta). Se ve en la prueba en la calle.

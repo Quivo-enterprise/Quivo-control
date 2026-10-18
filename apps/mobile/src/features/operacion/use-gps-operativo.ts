@@ -253,7 +253,7 @@ export function useGpsOperativo(
     { puntoControlId: string; pasada: number; motivo: MotivoAnuncio } | null
   >(null);
   const [posicionActual, setPosicionActual] = useState<
-    { lat: number; lng: number; speedKmh: number | null } | null
+    { lat: number; lng: number; speedKmh: number | null; accuracy?: number | null } | null
   >(null);
   const bateria = useRef<MuestraBateria[]>([]);
   const puntosRef = useRef(0);
@@ -382,6 +382,7 @@ export function useGpsOperativo(
         lat: location.coords.latitude,
         lng: location.coords.longitude,
         speedKmh: velocidadKmhDesde(location.coords.speed),
+        accuracy: location.coords.accuracy,
       });
       const ts = new Date(location.timestamp).getTime();
       // El tipo del SDK declara `battery: Battery` (con `level: number`) NO opcional, pero
@@ -952,6 +953,7 @@ export function useGpsOperativo(
           lat: location.coords.latitude,
           lng: location.coords.longitude,
           speedKmh: velocidadKmhDesde(location.coords.speed),
+          accuracy: location.coords.accuracy,
         });
       })
       .catch(() => {

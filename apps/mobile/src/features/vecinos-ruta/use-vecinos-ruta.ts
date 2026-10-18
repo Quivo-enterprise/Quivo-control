@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
-import type { VecinosRuta } from '@quivo/shared';
-import { vecinosRutaApi } from '../../shared/api/vecinos-ruta-api';
+import type { FaseCircuito, VecinosRuta } from '@quivo/shared';
+import { vecinosRutaApi, type PosicionVecinos } from '../../shared/api/vecinos-ruta-api';
 
 export const INTERVALO_VECINOS_MS = 30_000;
 
@@ -20,7 +20,12 @@ interface Params {
    * Getter estable de la posición actual. Se lee por ref al consultar, así los cambios de
    * posición (1 Hz) no re-renderizan el panel ni reinician el intervalo.
    */
-  obtenerPosicion: () => { lat: number; lng: number } | null;
+  obtenerPosicion: () => PosicionVecinos | null;
+  /**
+   * Getter estable de la fase de la vuelta (ida/regreso; `null` si la ruta no tiene retorno). Va
+   * por ref, igual que la posición: un cambio de fase no reinicia el intervalo.
+   */
+  obtenerFase: () => FaseCircuito | null;
 }
 
 export interface EstadoVecinosRuta {
@@ -47,6 +52,7 @@ export function useVecinosRuta({
   obtenerAccessToken,
   hayPosicion,
   obtenerPosicion,
+  obtenerFase,
 }: Params): EstadoVecinosRuta {
   const [estado, setEstado] = useState<EstadoVecinosRuta>(ESTADO_INICIAL);
   const [appActiva, setAppActiva] = useState(AppState.currentState === 'active');
@@ -54,7 +60,9 @@ export function useVecinosRuta({
   // Refs para que el cambio de token/getter NO reinicie el intervalo.
   const posicionRef = useRef(obtenerPosicion);
   const tokenRef = useRef(obtenerAccessToken);
+  const faseRef = useRef(obtenerFase);
   posicionRef.current = obtenerPosicion;
+  faseRef.current = obtenerFase;
   tokenRef.current = obtenerAccessToken;
 
   // Generación del recorrido actual; se incrementa al terminarlo y al desmontar.
@@ -84,7 +92,7 @@ export function useVecinosRuta({
     try {
       const token = await tokenRef.current();
       if (!token) throw new Error('sin token');
-      const datos = await vecinosRutaApi.obtener(token, posicionRef.current());
+      const datos = await vecinosRutaApi.obtener(token, posicionRef.current(), faseRef.current());
       if (gen !== generacion.current) return;
       setEstado({ datos, recibidoEn: Date.now(), fallosConsecutivos: 0 });
     } catch {

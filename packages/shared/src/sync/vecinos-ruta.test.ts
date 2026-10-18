@@ -46,6 +46,13 @@ describe('VecinosRutaQuerySchema', () => {
     expect(VecinosRutaQuerySchema.safeParse({ lat: 'Infinity', lng: '0' }).success).toBe(false);
   });
 
+  it('fase es opcional y solo admite ida o regreso', () => {
+    expect(VecinosRutaQuerySchema.parse({ fase: 'regreso' })).toEqual({ fase: 'regreso' });
+    expect(VecinosRutaQuerySchema.parse({ lat: '-16.5', lng: '-68', fase: 'ida' }).fase).toBe('ida');
+    expect(VecinosRutaQuerySchema.safeParse({ fase: 'vuelta' }).success).toBe(false);
+    expect(VecinosRutaQuerySchema.safeParse({ fase: '' }).success).toBe(false);
+  });
+
   it('exige lat y lng juntas o ninguna', () => {
     expect(VecinosRutaQuerySchema.safeParse({ lat: '-16.5' }).success).toBe(false);
     expect(VecinosRutaQuerySchema.safeParse({ lng: '-68.1' }).success).toBe(false);
