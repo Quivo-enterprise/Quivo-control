@@ -75,7 +75,9 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
 - [x] **[CTO, 18/10 ~22:56 UTC]** Prueba en la calle con el OTA `01a1509e`, 1616PIL: tarjeta "Designación — vía
       Molinos" (chip `Honduras → Molinos → Salomón Romero`, 0/17 puntos) y "Designación cancelada — Volvé directo a
       Salomón Romero" (sin chip, 0/16) llegan y se cierran con "Entendido"; el chofer no acepta nada. **OK.**
-- [ ] **[CTO, próxima prueba]** No probado (no pasó por PCs): solo ida / solo regreso tras Honduras y conteo de PCs.
+- [x] **[CTO, 18/10 ~23:13 UTC]** Solo ida: se dibuja una sola línea (bajada hacia Honduras), ya no ida y regreso juntas.
+- [ ] **[CTO, 19/10]** Probar el regreso: al cruzar el PC de Honduras debe cambiar solo a la línea de regreso. Los PCs
+      1–4 de la prueba del 18/10 saldrán omitidos (vuelta iniciada en el #5); el CTO lo da por esperado.
 - [x] **[Claude]** Sentry: único error del día = `safeParse of undefined` del OTA viejo `01a14b63` (18:07–18:22 UTC);
       cero errores con `01a1509e`. Por pedido del CTO se resolvieron los 10 issues abiertos (si reaparecen, Sentry los
       reabre como regresión).
