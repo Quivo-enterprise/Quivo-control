@@ -64,15 +64,24 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       (token de Sentry, fix lat/lng, OTA de punta a punta, OTA desde CI con disparo manual, `shared` desde `src`: no por ahora).
 - [x] **[Claude]** Lat/lng invertido de la línea punteada de `ruta-a-punto` (desde agosto se dibujaba en el
       Atlántico Sur): fix `aCoordsRutaCalculada` en `estilo-ruta.ts` + test (PR `fix/ruta-a-punto-latlng`). Llega
-      con el próximo OTA; **la línea aparece por primera vez** (avisar a choferes).
+      con el próximo OTA. **Corrección (18/10):** en prod la línea no aparece igual: OSRM no está desplegado
+      (Cloud Run sin `OSRM_URL`, `ruta-a-punto` devuelve `null`). El fix es correcto pero inerte hasta decidir OSRM.
 - [x] **[Claude]** Token de Sentry en `~/.quivo-sentry-env` (0600; el CTO lo pegó en el chat: **revocar y recrear**);
       `publicar-ota.sh` lo carga solo. Source maps del OTA `01a15072` subidos (debug id `dd0d7c0c…`).
 - [x] **[CTO]** OTA `01a1509e` publicado con el script completo (primera corrida de punta a punta, plan punto 3),
       desde `c0b7376`: update group `ebc72ea4-68e6-4fe8-88dc-40c3a5650094`, runtime `547d52e7…`, source maps subidos
       solos. Verificado aparte: URL de la API y DSN en el `.hbc`, fix lat/lng y `vuelta.js` en el bundle. Vuelta atrás:
       `eas update:republish --group 10ffb271-1693-4e29-95d9-1dae03d2a2d5`.
-- [ ] **[CTO]** Prueba en la calle: aviso de Molinos, solo ida / solo regreso tras Honduras, línea punteada al próximo
-      PC visible. Después Claude revisa Sentry y la base.
+- [x] **[CTO, 18/10 ~22:56 UTC]** Prueba en la calle con el OTA `01a1509e`, 1616PIL: tarjeta "Designación — vía
+      Molinos" (chip `Honduras → Molinos → Salomón Romero`, 0/17 puntos) y "Designación cancelada — Volvé directo a
+      Salomón Romero" (sin chip, 0/16) llegan y se cierran con "Entendido"; el chofer no acepta nada. **OK.**
+- [ ] **[CTO, próxima prueba]** No probado (no pasó por PCs): solo ida / solo regreso tras Honduras y conteo de PCs.
+- [x] **[Claude]** Sentry: único error del día = `safeParse of undefined` del OTA viejo `01a14b63` (18:07–18:22 UTC);
+      cero errores con `01a1509e`. Por pedido del CTO se resolvieron los 10 issues abiertos (si reaparecen, Sentry los
+      reabre como regresión).
+- [ ] **[CTO]** Decidir OSRM (desplegar en GCP o proveedor externo): sin eso no hay línea punteada al próximo PC.
+- [ ] **[Claude, propuesto]** CI: `cancel-in-progress` solo en PRs (hoy cancela runs de `main`: 14 en octubre) y
+      revisar `admin-panel.spec.ts` (`:154` flaky el 18/10; `:98` rompió 3 runs el 14/10, ya corregido).
 - [x] **[CTO, 2026-10-18]** Plan punto 4 decidido: OTA desde CI con `workflow_dispatch` que dispara el CTO (disparar =
       aprobar; GitHub Free + repo privado no tiene required reviewers), primera corrida a `preview`. Detalle en el plan.
 - [ ] **[Claude, después de la prueba en la calle]** Implementar `ota.yml` + flag `--si` en `publicar-ota.sh`; el CTO
