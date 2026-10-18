@@ -6,7 +6,49 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-17, noche (leer primero): #170–#173 en `main` (`ee352ee`) y desplegados en `r18-20261017`
+## Punto de retome — 2026-10-18, tarde (leer primero): el OTA de humo del 17/10 rompió los 3 teléfonos; fix del script, falta OTA correctivo
+
+**Estado en una línea:** prueba en la calle con 1616PIL (14:07–14:22, fuera de ruta a propósito): la designación a
+Molinos nunca llegó al teléfono y el mapa mostró ida y regreso juntos. **Causa única, verificada: el OTA de humo del
+17/10 (update `01a14b63`) se publicó con un `packages/shared/dist` local VIEJO** (`publicar-ota.sh` corría `eas update`
+sin reconstruir `shared`, que Metro resuelve vía `dist/`, git-ignorado). Las builds de EAS sí reconstruyen
+(`eas-build-post-install`): el APK 16 venía bien y el OTA lo pisó.
+
+**Evidencia:**
+- Source map del OTA (`apps/mobile/dist`, 17/10 15:42): `shared/dist/entities/index.js` sin `vuelta.js`; faltan 6
+  módulos (`entities/vuelta`, `telefono-bolivia`, `molinos`, `circuito`, `snap-ruta`, `traza-dibujo`);
+  `PuntoControlPaqueteSchema` sin `rol`.
+- Sentry `QUIVO-CONTROL-CONDUCTOR-C`: `TypeError: Cannot read property 'safeParse' of undefined` (contexto
+  `vuelta-actual`), 33 eventos 18:07–18:22 UTC = cada consulta. `VueltaActualMovilSchema` es `undefined` → la respuesta
+  se descarta → sin aviso, sin tarjeta, sin acuse (el panel quedó en "esperando que el chofer lo vea").
+- Cloud Run: `GET /mobile/vuelta-actual` cada ~20 s, todas 200, ningún `POST .../acuse`. El servidor está bien.
+- Sin `rol` en el paquete → la app no encuentra el `retorno` → `fase=null` → dibuja el circuito completo. Prod
+  verificado sano: Honduras `rol=retorno` (PC 8), Molinos `espera` 30 min; `partirCircuitoPorRetorno` corta bien la
+  geometría de prod (591/629) y el fallback geométrico no cambia de fase con los fixes del día.
+- **Desde el 17/10 los 3 teléfonos corren sin fase ni aviso de Molinos.**
+
+**Fix (PR `fix/ota-shared-dist-fresco`):** `publicar-ota.sh` reconstruye `pnpm --filter "@quivo/mobile^..." build`,
+exporta (`expo export --platform android --dump-sourcemap --dump-assetmap`), corre el guard y recién después publica
+(`eas update --skip-bundler --platform android --input-dir dist`). Guard nuevo en `scripts/assert-bundle-singletons.mjs`:
+todo módulo re-exportado desde `packages/shared/src/index.ts` debe estar en el source map (rechaza el OTA del 17/10:
+6 faltantes; `--self-test` corre en CI). Límite: no detecta campos nuevos dentro de un módulo existente (lo previene
+el rebuild). Gates: `/code-review` medium (5 de 10 aplicados; descartados: formato de rutas —verificado—, tree-shaking
+y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship. Codex: no verificado (sin cuota).
+
+**Checklist:**
+- [ ] **[Claude]** Mergear el PR del fix (CI `ci` + `acceptance`).
+- [ ] **[CTO → Claude]** OTA correctivo desde `main` con el script nuevo (ok del CTO; confirmar fingerprint = runtime
+      `547d52e7…` del APK 16). Primera corrida real de `--skip-bundler`: verificar en Perfil la versión nueva y que
+      Sentry deje de recibir `QUIVO-CONTROL-CONDUCTOR-C`. Requiere arranque en frío en los 3.
+- [ ] **[CTO]** Repetir la prueba en la calle (aviso de Molinos + solo ida/solo regreso).
+- [ ] **[CTO]** Decidir si anular las 2 infracciones de la prueba de PIL del 18/10 (`molinos_omitido` grave y
+      `pc_omitido` Honduras, sesión `af9371fe…`, ambas `abierta`).
+- [ ] **[CTO]** Decidir si Metro debe resolver `@quivo/shared` desde `src` (elimina la clase de bug; toca APK y tests).
+- [ ] **[Claude]** Verificar el posible lat/lng invertido de la línea punteada de `ruta-a-punto`
+      (`route-map.tsx:~1307` vs `ruteo.service.ts` que devuelve `[lat,lng]`); si se confirma, PR aparte.
+- [ ] **[Claude]** Subir source maps del OTA (falta `SENTRY_AUTH_TOKEN` en la máquina del CTO).
+
+## Punto de retome — 2026-10-17, noche (anterior): #170–#173 en `main` (`ee352ee`) y desplegados en `r18-20261017`
 
 **Estado en una línea:** APK 16 en los 3 trufis, OTA confirmado, línea 16 cargada con sus 17 PC, Molinos se designa en
 cualquier momento (1 por día, la tardía va a la próxima vuelta) y el mapa web dibuja el trazo pegado a la calle. Falta

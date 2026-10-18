@@ -126,7 +126,9 @@ jobs:
         run: pnpm --filter @quivo/mobile exec expo export --platform android --dump-sourcemap --output-dir /tmp/mobile-dist
 
       - name: Verificar que el bundle no lleve paquetes duplicados
-        run: node scripts/assert-bundle-singletons.mjs /tmp/mobile-dist
+        run: |
+          node scripts/assert-bundle-singletons.mjs --self-test
+          node scripts/assert-bundle-singletons.mjs /tmp/mobile-dist
 
   acceptance:
     needs: ci
