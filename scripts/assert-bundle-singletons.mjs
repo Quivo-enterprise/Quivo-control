@@ -21,8 +21,10 @@
 // desde el principio de la clave, pero la clave COMPLETA (con sufijo de peers) es lo que se
 // compara para contar copias y lo que se imprime en el mensaje de error.
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Fuente de verdad única: apps/mobile/paquetes-singleton.cjs (la comparte
 // apps/mobile/metro.config.js — ver el comentario ahí sobre por qué está en un .cjs separado en
@@ -87,7 +89,76 @@ function parsearClave(clave) {
   return { nombre, version };
 }
 
+// Guardia de `@quivo/shared` rancio: Metro resuelve `@quivo/shared` vía `dist/` (git-ignorado). Un
+// `eas update` local con `dist/` viejo publicó un bundle sin `vuelta.js` ni `circuito.js` (OTA
+// 2026-10-17). Regla: todo módulo alcanzable desde `src/index.ts` por `export * from './x.js'`
+// (recursivo) debe aparecer en `sources` como `packages/shared/dist/x.js`. Metro no hace
+// tree-shaking, así que un faltante es siempre un dist desactualizado. Límite (shortcut): no
+// detecta campos nuevos dentro de un módulo ya existente; eso lo previene el rebuild previo.
+const SHARED_SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../packages/shared/src');
+
+/** Módulos (rutas relativas a src, sin extensión) alcanzables desde `src/index.ts`. */
+function modulosShared(srcDir, rel = 'index', vistos = new Set()) {
+  if (vistos.has(rel)) return vistos;
+  vistos.add(rel);
+  const texto = readFileSync(join(srcDir, `${rel}.ts`), 'utf8');
+  // Re-exports relativos: `export *`, `export * as ns`, `export { a } from`, `export type { T } from`.
+  const reexport = /export\s+(?:type\s+)?(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s+from\s+(['"])(\.{1,2}\/[^'"]+?)(?:\.js)?\1/g;
+  for (const [, , destino] of texto.matchAll(reexport)) {
+    modulosShared(srcDir, join(dirname(rel), destino).replace(/\\/g, '/'), vistos);
+  }
+  return vistos;
+}
+
+/** Devuelve los `dist/<mod>.js` de shared que faltan en `sources`. */
+export function sharedFaltantes(sources, srcDir = SHARED_SRC) {
+  return [...modulosShared(srcDir)]
+    .map((mod) => `packages/shared/dist/${mod}.js`)
+    .filter((objetivo) => !sources.some((fuente) => typeof fuente === 'string' && fuente.endsWith(objetivo)));
+}
+
+function autoTest() {
+  const todos = [...modulosShared(SHARED_SRC)].map((mod) => `/x/packages/shared/dist/${mod}.js`);
+  if (!todos.some((f) => f.endsWith('entities/vuelta.js')) || !todos.some((f) => f.endsWith('/circuito.js'))) {
+    throw new Error('el recorrido de src/index.ts no encontró vuelta.js/circuito.js');
+  }
+  if (sharedFaltantes(todos).length !== 0) throw new Error('un bundle completo debía pasar');
+  const rancio = todos.filter((f) => !f.endsWith('entities/vuelta.js') && !f.endsWith('/circuito.js'));
+  const faltan = sharedFaltantes(rancio);
+  if (faltan.length !== 2) throw new Error(`un bundle rancio debía faltar 2 módulos, faltan ${faltan.length}`);
+  // El regex de re-exports debe cubrir todas las sintaxis, con comillas simples y dobles.
+  const tmp = mkdtempSync(join(tmpdir(), 'shared-src-'));
+  try {
+    mkdirSync(join(tmp, 'sub'));
+    for (const f of ['a', 'b', 'c', 'd', 'e', 'sub/f']) writeFileSync(join(tmp, `${f}.ts`), '');
+    writeFileSync(join(tmp, 'sub/g.ts'), '');
+    writeFileSync(join(tmp, 'sub/f.ts'), "export * from '../e.js';\n");
+    writeFileSync(
+      join(tmp, 'index.ts'),
+      [
+        "export * from './a.js';",
+        "export { x, y } from './b.js';",
+        "export * as ns from './c.js';",
+        "export type { T } from './d.js';",
+        'export * from "./sub/f.js";',
+        "export * from 'externo';",
+        "export * from './sub/g.js';",
+      ].join('\n'),
+    );
+    const halladas = [...modulosShared(tmp)].sort().join(',');
+    const esperadas = ['a', 'b', 'c', 'd', 'e', 'index', 'sub/f', 'sub/g'].join(',');
+    if (halladas !== esperadas) throw new Error(`regex de re-exports: esperaba ${esperadas}, halló ${halladas}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('✓ autotest de sharedFaltantes OK');
+}
+
 function main() {
+  if (process.argv[2] === '--self-test') {
+    autoTest();
+    return;
+  }
   const dirExport = process.argv[2];
   if (!dirExport) {
     console.error('Uso: node scripts/assert-bundle-singletons.mjs <directorio-de-export-de-expo>');
@@ -133,6 +204,15 @@ function main() {
     const { sources } = contenido;
     if (!Array.isArray(sources)) {
       console.error(`✗ "${rutaMapa}" no tiene un array "sources" — ¿es realmente un sourcemap de Metro?`);
+      process.exit(1);
+    }
+    const faltantes = sharedFaltantes(sources);
+    if (faltantes.length > 0) {
+      console.error(
+        `✗ "${rutaMapa}": el bundle no incluye ${faltantes.length} módulo(s) de @quivo/shared que` +
+          ' src/index.ts exporta (dist/ rancio). Corré "pnpm --filter @quivo/shared build" y' +
+          ` re-exportá:\n${faltantes.map((f) => `    - ${f}`).join('\n')}`,
+      );
       process.exit(1);
     }
     for (const fuente of sources) {

@@ -46,10 +46,21 @@ eval "$(node -e '
   }
 ')"
 
-# 1) Publicar el update (también deja el bundle exportado en ./dist con sus source maps).
-npx eas-cli update --channel production --environment production --message "$MENSAJE"
+# 0) Reconstruir las dependencias workspace (@quivo/shared resuelve vía dist/, git-ignorado). Sin
+#    esto un `dist/` viejo se empaqueta en el OTA (incidente 2026-10-17). Igual que el hook
+#    `eas-build-post-install` de package.json. `set -e` corta si falla.
+(cd ../.. && pnpm --filter "@quivo/mobile^..." build)
 
-# 2) Source maps del bundle del update a Sentry. Docs de Sentry (Expo > Uploading Source Maps >
+# 1) Exportar el bundle (con source maps) a ./dist con las variables del entorno `production` de
+#    EAS, verificarlo y recién después publicar: un bundle rancio nunca llega a publicarse.
+rm -rf dist
+npx eas-cli env:exec production "npx expo export --platform android --dump-sourcemap --dump-assetmap --output-dir dist"
+node ../../scripts/assert-bundle-singletons.mjs dist
+
+# 2) Publicar el bundle ya exportado y verificado.
+npx eas-cli update --skip-bundler --platform android --input-dir dist --channel production --environment production --message "$MENSAJE"
+
+# 3) Source maps del bundle del update a Sentry. Docs de Sentry (Expo > Uploading Source Maps >
 #    EAS Update): `dist` es el directorio de salida por defecto de `eas update`. El paquete
 #    `@sentry/expo-upload-sourcemaps` existe desde @sentry/react-native 8.9.0; con 7.x (este
 #    repo: ~7.2.0) se invoca el bin incluido en el SDK. Org/proyecto salen del plugin de Sentry
