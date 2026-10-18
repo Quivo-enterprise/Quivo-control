@@ -11,6 +11,7 @@ import {
   COLOR_CASING_TRAMO_CALCULADO,
   COLOR_TRAMO_CALCULADO,
   GROSOR_DESIGNACION_ESPERA_DP,
+  aCoordsRutaCalculada,
   anchoLineaDp,
   cuantizarZoom,
   debeResaltarRutaCalculada,
@@ -173,5 +174,18 @@ describe('debeResaltarRutaCalculada (tramo OSRM)', () => {
     expect(debeResaltarRutaCalculada(true, null)).toBe(false);
     expect(debeResaltarRutaCalculada(true, [])).toBe(false);
     expect(debeResaltarRutaCalculada(true, [[-58.4, -34.6]])).toBe(false);
+  });
+});
+
+describe('aCoordsRutaCalculada', () => {
+  it('lee la tupla como [lat, lng] (Tiquipaya)', () => {
+    expect(aCoordsRutaCalculada([[-17.37, -66.16]])).toEqual([
+      { latitude: -17.37, longitude: -66.16 },
+    ]);
+  });
+
+  it('null/undefined dan []', () => {
+    expect(aCoordsRutaCalculada(null)).toEqual([]);
+    expect(aCoordsRutaCalculada(undefined)).toEqual([]);
   });
 });

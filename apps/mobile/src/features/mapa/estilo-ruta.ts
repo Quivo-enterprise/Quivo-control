@@ -169,3 +169,13 @@ export function debeResaltarRutaCalculada(
 ): boolean {
   return tracking && !!rutaCalculada && rutaCalculada.length >= 2;
 }
+
+/**
+ * Tramo OSRM a coordenadas de mapa. La tupla es `[lat, lng]` (API de ruteo), a diferencia del
+ * GeoJSON `[lng, lat]` de `paquete.ruta.geometria`.
+ */
+export function aCoordsRutaCalculada(
+  ruta: readonly (readonly [number, number])[] | null | undefined,
+): { latitude: number; longitude: number }[] {
+  return (ruta ?? []).map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
+}
