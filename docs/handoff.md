@@ -6,7 +6,7 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-18, tarde (leer primero): el OTA de humo del 17/10 rompió los 3 teléfonos; fix del script, falta OTA correctivo
+## Punto de retome — 2026-10-18, noche (leer primero): OTA de humo del 17/10 rompió los teléfonos; corregido con OTA `01a15072`
 
 **Estado en una línea:** prueba en la calle con 1616PIL (14:07–14:22, fuera de ruta a propósito): la designación a
 Molinos nunca llegó al teléfono y el mapa mostró ida y regreso juntos. **Causa única, verificada: el OTA de humo del
@@ -41,8 +41,22 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       real de `--skip-bundler`: OK). Update group `26833409-ff38-4b9f-a47e-8a423aa797c5`, Android update id
       `01a15063…`, runtime `547d52e7…` (= fingerprint del APK 16). Guard pasó; el bundle publicado trae
       `entities/vuelta.js`, `circuito.js` y `rol` en `PuntoControlPaqueteSchema`. Sin source maps (falta `SENTRY_AUTH_TOKEN`).
-- [ ] **[CTO]** En los 3 teléfonos: abrir la app, cerrarla del todo y volver a abrirla (el OTA se descarga en el primer
-      arranque y se aplica en el siguiente). Perfil → Aplicación → Versión debe decir `0.1.0 · 01a15063`.
+- [x] **INCIDENTE 2026-10-18 (causado por #175):** el OTA `01a15063` salió **sin `EXPO_PUBLIC_API_URL` ni el DSN de
+      Sentry** → la app de prod mostraba "Falta EXPO_PUBLIC_API_URL" y no dejaba iniciar sesión. Causa: el export dentro
+      de `eas-cli env:exec` no inlineaba las `EXPO_PUBLIC_*` que el script exporta desde `eas.json`, y la caché de
+      transformación de Metro reutilizaba el transform sin variables (hizo falta `--clear`). El guard de #175 solo
+      miraba módulos de `shared`, no variables.
+- [x] **Hotfix OTA `01a15072`** (update group `10ffb271-1693-4e29-95d9-1dae03d2a2d5`, runtime `547d52e7…`, desde
+      `3de61e5`): export manual con las variables exportadas + `--clear`, verificado antes de publicar (URL y DSN en el
+      bytecode; guard de `shared` OK). Publicado por el CTO (el modo automático bloquea publicar a prod). El
+      controlador de OTA no depende de la API: el teléfono del CTO **se actualizó al entrar y el login funciona**.
+- [ ] **[CTO]** Abrir la app en los otros 2 teléfonos (se actualizan solos en login). Perfil → Versión debe decir
+      `0.1.0 · 01a15072`.
+- [x] **[Claude]** Fix del script (PR `fix/ota-env-publico`): export sin `env:exec` y con `--clear`; antes de publicar,
+      corta si `EXPO_PUBLIC_API_URL` o `EXPO_PUBLIC_SENTRY_DSN` están vacías o no están literalmente en el `.hbc`
+      (probado: export sin variables → falla; con variables → pasa). `GPS_CANAL_VISUAL` no se chequea (Metro pliega
+      `=== '1'` a booleano). Gates: `/code-review` low (2 aplicados), `/ponytail-review` Ship (2 aplicados). Codex: no
+      verificado (sin cuota).
 - [ ] **[Claude]** Después de la próxima prueba: confirmar que Sentry no registra más `QUIVO-CONTROL-CONDUCTOR-C`.
 - [ ] **[CTO]** Repetir la prueba en la calle (aviso de Molinos + solo ida/solo regreso).
 - [x] **[CTO]** Infracciones de la prueba de PIL del 18/10 (`molinos_omitido` grave y `pc_omitido` Honduras, sesión
