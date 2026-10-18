@@ -51,11 +51,22 @@ eval "$(node -e '
 #    `eas-build-post-install` de package.json. `set -e` corta si falla.
 (cd ../.. && pnpm --filter "@quivo/mobile^..." build)
 
-# 1) Exportar el bundle (con source maps) a ./dist con las variables del entorno `production` de
-#    EAS, verificarlo y recién después publicar: un bundle rancio nunca llega a publicarse.
+# 1) Exportar el bundle (con source maps) a ./dist con las
+#    EXPO_PUBLIC_* de eas.json exportadas arriba, verificarlo y recién después publicar: un bundle
+#    rancio nunca llega a publicarse.
+#    SIN `eas env:exec`: no inlinea las EXPO_PUBLIC_* exportadas arriba y el OTA salió sin API_URL
+#    (incidente 2026-10-18). CON `--clear`: la caché de transformación de Metro reutiliza el
+#    transform hecho sin las variables.
 rm -rf dist
-npx eas-cli env:exec production "npx expo export --platform android --dump-sourcemap --dump-assetmap --output-dir dist"
+npx expo export --clear --platform android --dump-sourcemap --dump-assetmap --output-dir dist
 node ../../scripts/assert-bundle-singletons.mjs dist
+# Las EXPO_PUBLIC_* deben estar literalmente en el bytecode Hermes. GPS_CANAL_VISUAL no se
+# chequea: solo se usa en `=== '1'` y Metro lo pliega a un booleano (el literal no aparece).
+for v in EXPO_PUBLIC_API_URL EXPO_PUBLIC_SENTRY_DSN; do
+  [[ -n "${!v:-}" ]] || { echo "ERROR: $v vacía; NO se publica." >&2; exit 1; }
+  grep -aqF -- "${!v}" dist/_expo/static/js/android/*.hbc \
+    || { echo "ERROR: $v no quedó inlineada en el bundle; NO se publica." >&2; exit 1; }
+done
 
 # 2) Publicar el bundle ya exportado y verificado.
 npx eas-cli update --skip-bundler --platform android --input-dir dist --channel production --environment production --message "$MENSAJE"
