@@ -18,7 +18,7 @@
 | 1 | Token de Sentry local + subir source maps del OTA `01a15072` | CTO (5 min), después Claude | `apps/mobile/dist` todavía es el bundle publicado; si se borra, se pierden esos maps |
 | 2 | Fix lat/lng de la línea punteada | Claude (Sonnet) | Bug confirmado, 1 línea + test |
 | 3 | OTA con el script completo (`publicar-ota.sh`) | CTO publica | Primera corrida real de punta a punta del script, con source maps |
-| 4 | OTA desde CI (GitHub Actions + aprobación) | Claude, CTO aprueba | Saca la publicación de la PC local: la causa raíz real |
+| 4 | OTA desde CI (GitHub Actions, disparo manual del CTO) | Claude, CTO dispara | Saca la publicación de la PC local: la causa raíz real |
 | 5 | `@quivo/shared` desde `src` en Metro | Decisión del CTO | Recomendación: **no por ahora** (ver abajo) |
 
 ## 1. Sentry: token y source maps
@@ -76,22 +76,30 @@ fingerprint = runtime `547d52e7…`, rebuild de shared, export `--clear`, guard 
 **Vuelta atrás (runbook):** `npx eas-cli update:republish --group <group-id-anterior>` vuelve a publicar el update
 anterior en segundos. Anotar el group id vigente antes de cada OTA (hoy: `10ffb271-1693-4e29-95d9-1dae03d2a2d5`).
 
-## 4. OTA desde CI (recomendado)
+## 4. OTA desde CI — decidido 2026-10-18: disparo manual, primero en `preview`
 
 **Problema de fondo:** los dos incidentes vienen de publicar desde una PC con estado local: un `dist/` viejo y
 variables de entorno de shell. La práctica estándar es **publicar desde CI**, con checkout limpio,
 `--frozen-lockfile` y build desde cero, de modo que nada local pueda colarse.
 
-Diseño:
-- `.github/workflows/ota.yml`, `workflow_dispatch` con input `mensaje`.
-- `environment: production` con **aprobación obligatoria del CTO** (GitHub Environments): nadie publica sin el clic.
-- Pasos: checkout del SHA de `main`, `pnpm install --frozen-lockfile`, `pnpm build`, fingerprint ==
-  runtime esperado (si no, falla: hace falta APK), y `publicar-ota.sh` en modo no interactivo (flag `--si`), que
-  corre los mismos guards.
-- Secretos de GitHub: `EXPO_TOKEN` (token de robot de Expo con permiso solo de updates) y `SENTRY_AUTH_TOKEN`
-  (otro token de Sentry, `ota-ci`). El CTO los carga con `gh secret set NOMBRE`, que pide el valor sin mostrarlo.
-- Resultado: el modo automático de Claude ya no bloquea, porque Claude lanza el workflow y el CTO lo aprueba en
-  GitHub. Queda historial de qué SHA se publicó y quién lo aprobó.
+**Corrección al diseño original (verificado 2026-10-18):** la org `Quivo-enterprise` está en GitHub **Free** y el
+repo es privado. En repos privados, los environments con *required reviewers* existen solo en Enterprise; en
+Free/Pro/Team solo funcionan en repos públicos. No hay "clic de aprobación". Tampoco existe un token de Expo "solo
+updates": los robots de Expo tienen roles (Developer también puede lanzar builds).
+
+**Decisión del CTO:**
+- `.github/workflows/ota.yml` con `workflow_dispatch` (inputs `mensaje` y `canal`, default `preview`). **Disparar es
+  aprobar:** lo dispara el CTO (GitHub UI o `gh workflow run`); solo usuarios con write pueden. Claude no lo dispara a
+  production.
+- Pasos: checkout del SHA de `main`, `pnpm install --frozen-lockfile`, `publicar-ota.sh` en modo no interactivo
+  (flag `--si`) con los mismos guards: fingerprint == runtime esperado (si no, falla: hace falta APK), rebuild de
+  shared, export `--clear`, guard de shared, `EXPO_PUBLIC_*` en el `.hbc`, `eas update`, source maps.
+- Secretos de GitHub: `EXPO_TOKEN` (robot de Expo, rol Developer) y `SENTRY_AUTH_TOKEN` (token `ota-ci`, aparte del
+  local). El CTO los carga con `gh secret set NOMBRE`, que pide el valor sin mostrarlo.
+- **Primera corrida al canal `preview`**, nunca a production: valida que el fingerprint calculado en el runner Linux
+  coincida con el local (`apps/mobile/android/` está commiteado; archivos sin trackear podrían cambiarlo).
+- **Cuándo:** después de la prueba en la calle. No urgente: el script local ya frena los dos fallos conocidos. Si
+  antes de la entrega quedan uno o dos OTAs, se hace después de la entrega.
 
 Alternativa evaluada: EAS Workflows (CI de Expo, que ya tiene los secretos de EAS). Descartada por ahora: el
 pipeline, los guards y la CI viven en GitHub Actions, y duplicarlos en dos CIs suma mantenimiento.
@@ -128,4 +136,5 @@ Reabrir después de la entrega si molesta en desarrollo.
 - Punto 1: evento de Sentry con stack legible del release vigente.
 - Punto 2: test verde y, en la calle, la línea punteada del vehículo al próximo PC visible y encima de las calles.
 - Punto 3: Perfil muestra el update nuevo y no hay errores nuevos en Sentry.
-- Punto 4: un workflow de prueba sin aprobación no publica; con aprobación, publica y sube los maps.
+- Punto 4: corrida a `preview` verde (fingerprint del runner == runtime `547d52e7…`, guards pasan, maps subidos);
+  recién después, a production.

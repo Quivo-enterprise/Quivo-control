@@ -61,7 +61,7 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
 - [x] **[CTO]** Infracciones de la prueba de PIL del 18/10 (`molinos_omitido` grave y `pc_omitido` Honduras, sesión
       `af9371fe…`): se dejan; se limpia todo el día de la entrega del software.
 - [ ] **Plan de los pendientes sin bloqueo:** [`docs/plan-pendientes-post-incidente-ota.md`](plan-pendientes-post-incidente-ota.md)
-      (token de Sentry, fix lat/lng, OTA de punta a punta, OTA desde CI con aprobación, `shared` desde `src`: no por ahora).
+      (token de Sentry, fix lat/lng, OTA de punta a punta, OTA desde CI con disparo manual, `shared` desde `src`: no por ahora).
 - [x] **[Claude]** Lat/lng invertido de la línea punteada de `ruta-a-punto` (desde agosto se dibujaba en el
       Atlántico Sur): fix `aCoordsRutaCalculada` en `estilo-ruta.ts` + test (PR `fix/ruta-a-punto-latlng`). Llega
       con el próximo OTA; **la línea aparece por primera vez** (avisar a choferes).
@@ -73,8 +73,10 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       `eas update:republish --group 10ffb271-1693-4e29-95d9-1dae03d2a2d5`.
 - [ ] **[CTO]** Prueba en la calle: aviso de Molinos, solo ida / solo regreso tras Honduras, línea punteada al próximo
       PC visible. Después Claude revisa Sentry y la base.
-- [ ] **[Claude, cuando el CTO decida]** Plan punto 4: OTA desde CI (GitHub Actions + aprobación).
-- [ ] **[Claude]** Subir source maps del OTA (falta `SENTRY_AUTH_TOKEN` en la máquina del CTO).
+- [x] **[CTO, 2026-10-18]** Plan punto 4 decidido: OTA desde CI con `workflow_dispatch` que dispara el CTO (disparar =
+      aprobar; GitHub Free + repo privado no tiene required reviewers), primera corrida a `preview`. Detalle en el plan.
+- [ ] **[Claude, después de la prueba en la calle]** Implementar `ota.yml` + flag `--si` en `publicar-ota.sh`; el CTO
+      carga `EXPO_TOKEN` y `SENTRY_AUTH_TOKEN` con `gh secret set`. Si antes de la entrega quedan 1–2 OTAs: post-entrega.
 
 ## Punto de retome — 2026-10-17, noche (anterior): #170–#173 en `main` (`ee352ee`) y desplegados en `r18-20261017`
 
