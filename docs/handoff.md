@@ -50,8 +50,7 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       `3de61e5`): export manual con las variables exportadas + `--clear`, verificado antes de publicar (URL y DSN en el
       bytecode; guard de `shared` OK). Publicado por el CTO (el modo automático bloquea publicar a prod). El
       controlador de OTA no depende de la API: el teléfono del CTO **se actualizó al entrar y el login funciona**.
-- [ ] **[CTO]** Abrir la app en los otros 2 teléfonos (se actualizan solos en login). Perfil → Versión debe decir
-      `0.1.0 · 01a15072`.
+- [x] **[CTO]** Update `01a15072` visible en Perfil. Falta solo repetir la prueba en la calle.
 - [x] **[Claude]** Fix del script (PR `fix/ota-env-publico`): export sin `env:exec` y con `--clear`; antes de publicar,
       corta si `EXPO_PUBLIC_API_URL` o `EXPO_PUBLIC_SENTRY_DSN` están vacías o no están literalmente en el `.hbc`
       (probado: export sin variables → falla; con variables → pasa). `GPS_CANAL_VISUAL` no se chequea (Metro pliega
@@ -61,9 +60,10 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
 - [ ] **[CTO]** Repetir la prueba en la calle (aviso de Molinos + solo ida/solo regreso).
 - [x] **[CTO]** Infracciones de la prueba de PIL del 18/10 (`molinos_omitido` grave y `pc_omitido` Honduras, sesión
       `af9371fe…`): se dejan; se limpia todo el día de la entrega del software.
-- [ ] **[CTO]** Decidir si Metro debe resolver `@quivo/shared` desde `src` (elimina la clase de bug; toca APK y tests).
-- [ ] **[Claude]** Verificar el posible lat/lng invertido de la línea punteada de `ruta-a-punto`
-      (`route-map.tsx:~1307` vs `ruteo.service.ts` que devuelve `[lat,lng]`); si se confirma, PR aparte.
+- [ ] **Plan de los pendientes sin bloqueo:** [`docs/plan-pendientes-post-incidente-ota.md`](plan-pendientes-post-incidente-ota.md)
+      (token de Sentry, fix lat/lng, OTA de punta a punta, OTA desde CI con aprobación, `shared` desde `src`: no por ahora).
+- [ ] **[Claude]** Lat/lng invertido de la línea punteada de `ruta-a-punto`: **confirmado por lectura**
+      (`route-map.tsx:1305` lee `[lng,lat]`; la API devuelve `[lat,lng]`). Fix en el plan, punto 2.
 - [ ] **[Claude]** Subir source maps del OTA (falta `SENTRY_AUTH_TOKEN` en la máquina del CTO).
 
 ## Punto de retome — 2026-10-17, noche (anterior): #170–#173 en `main` (`ee352ee`) y desplegados en `r18-20261017`
