@@ -82,6 +82,9 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       cero errores con `01a1509e`. Por pedido del CTO se resolvieron los 10 issues abiertos (si reaparecen, Sentry los
       reabre como regresión).
 - [ ] **[CTO]** Decidir OSRM (desplegar en GCP o proveedor externo): sin eso no hay línea punteada al próximo PC.
+- [ ] **[Claude, en curso]** Vecinos delante/detrás en circuito (síntomas del piloto del 14/10: distancia que salta,
+      vecino que desaparece, inversión): plan aprobado [`docs/plan-vecinos-circuito.md`](plan-vecinos-circuito.md).
+      Decisión del CTO: en circuito, cada vehículo en una sola fila, la del lado más cercano.
 - [ ] **[Claude, propuesto]** CI: `cancel-in-progress` solo en PRs (hoy cancela runs de `main`: 14 en octubre) y
       revisar `admin-panel.spec.ts` (`:154` flaky el 18/10; `:98` rompió 3 runs el 14/10, ya corregido).
 - [x] **[CTO, 2026-10-18]** Plan punto 4 decidido: OTA desde CI con `workflow_dispatch` que dispara el CTO (disparar =
