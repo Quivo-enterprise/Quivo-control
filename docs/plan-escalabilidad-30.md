@@ -115,13 +115,20 @@ Logs de `quivo-api` del piloto del 14/10 (2 trufis, 10:00–04:00 UTC): 3.203 re
 
 ## Fase 1 — Obligatorio antes de pasar de 5 conductores
 
+Estado 18/10: puntos 1 (#188) y 7 (#187) mergeados, sin desplegar.
+
 Cada punto es un PR chico. Sonnet implementa y el chairman revisa.
 
 1. **BullMQ** (`apps/api/src/modules/ingesta-worker/ingesta-worker.service.ts`,
    `apps/api/src/modules/sync/sync-queue.service.ts`):
    - `defaultJobOptions`: `removeOnComplete: { age: 3600, count: 1000 }`, `removeOnFail: { age: 7 días }`,
      `attempts: 5`, `backoff` exponencial;
-   - `concurrency` del Worker por variable de entorno, default 4 (el valor lo fija la prueba de carga);
+   - `concurrency` del Worker por variable de entorno. **Default 1 (cambiado en la revisión):** con más de 1, dos lotes
+     del mismo teléfono (típico al vaciar un backlog offline) se procesan en paralelo y el cumplimiento del PC5 puede
+     entrar antes que el del PC4, que queda como omitido (infracción falsa). Subir solo con orden por dispositivo
+     garantizado (p. ej. colas particionadas por hash de `deviceId`);
+   - errores transitorios de la DB (conexión, timeout, pool, deadlock) relanzan para que BullMQ reintente el lote;
+     antes se tragaban en `sync_errors`;
    - log de duración por job;
    - test de que las opciones llegan a `queue.add` y de que el reintento es idempotente.
 

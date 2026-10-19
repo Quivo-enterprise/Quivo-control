@@ -98,6 +98,25 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       Bloqueantes verificados en prod: cola `ingesta-sync` sin `removeOnComplete` (Redis `noeviction` se llena), jobs sin
       reintentos, API/worker sin `SENTRY_DSN`, sin alertas ni budget, PITR y archivo GPS apagados. Fase 0 (medir +
       prueba de carga en entorno efímero) antes de tocar código; Fase 1 obligatoria antes de pasar de 5 conductores.
+- [x] **[Claude, 18/10]** Fase 0 parcial (logs del 14/10): `ruta-a-punto` era el 35 % del tráfico móvil y siempre
+      inútil (OSRM no desplegado); CGNAT no observado (2 teléfonos, IPs propias). `max_connections` sin confirmar.
+- [x] **[Claude, 18/10]** #187 `ruta-a-punto`: sin `OSRM_URL` la API no hace `fetch`; el móvil pide como máximo cada
+      15 s **y** 50 m (la parte móvil llega con el próximo OTA).
+- [x] **[Claude, 18/10]** #188 cola `ingesta-sync`: `removeOnComplete`/`removeOnFail`, 5 reintentos con backoff, errores
+      transitorios de la DB relanzan (antes se tragaban en `sync_errors`), `INGESTA_WORKER_CONCURRENCY` **default 1**:
+      más de 1 procesa lotes del mismo teléfono fuera de orden y genera PC omitidos falsos. Residual: un lote con error
+      permanente + transitorio duplica la fila en `sync_errors`.
+- [x] **[Claude, 18/10]** #189 `scripts/carga-efimera.sh` + generador `conductores-reales.mjs` + seed sintético.
+      Decisión del CTO: instancia nueva, sin clonar prod (sin PII). Nunca ejecutado: flags de gcloud a ajustar en la
+      primera corrida.
+- [ ] **[CTO]** Deploy de API + worker con #187/#188 y, después, limpieza única de los jobs completados viejos de
+      `ingesta-sync` (`queue.clean`). Hasta entonces Redis sigue creciendo (~300 claves/día con 2 trufis).
+- [ ] **[CTO]** Prueba de carga: `scripts/carga-efimera.sh alta` → `migrar` → seed → 30 y 60 conductores → `baja`
+      (README en `scripts/experimentos/gps/carga/README-conductores-reales.md`). La línea base se corre con la imagen
+      vigente; si el deploy de #188 va antes, se pierde la comparación de la cola, no el resto.
+- [ ] **[Claude, siguiente]** Fase 1 restante: `SENTRY_DSN` en API/worker + script de alertas/budget/PITR, rate limit
+      por dispositivo en los endpoints móviles que faltan, pools y `statement_timeout`, vencimiento de rotaciones al
+      worker, archivo GPS (meses a decidir por el CTO).
 - [ ] **[Claude, propuesto]** CI: `cancel-in-progress` solo en PRs (hoy cancela runs de `main`: 14 en octubre) y
       revisar `admin-panel.spec.ts` (`:154` flaky el 18/10; `:98` rompió 3 runs el 14/10, ya corregido).
 - [x] **[CTO, 2026-10-18]** Plan punto 4 decidido: OTA desde CI con `workflow_dispatch` que dispara el CTO (disparar =
