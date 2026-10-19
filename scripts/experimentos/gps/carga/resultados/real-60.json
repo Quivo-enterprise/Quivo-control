@@ -1,0 +1,94 @@
+{
+  "baseUrl": "https://quivo-api-carga-hjqvfgsdnq-tl.a.run.app",
+  "conductores": 60,
+  "admins": 3,
+  "minutos": "30",
+  "filas": [
+    {
+      "endpoint": "GET /mobile/perfil",
+      "n": 1800,
+      "p50": 83.8,
+      "p95": 94.5,
+      "p99": 162,
+      "estados": {
+        "422": 1800
+      }
+    },
+    {
+      "endpoint": "GET /mobile/ruta-a-punto",
+      "n": 7200,
+      "p50": 55.7,
+      "p95": 60.4,
+      "p99": 127.9,
+      "estados": {
+        "200": 7200
+      }
+    },
+    {
+      "endpoint": "GET /mobile/vecinos-ruta",
+      "n": 3600,
+      "p50": 68.8,
+      "p95": 78.6,
+      "p99": 147,
+      "estados": {
+        "200": 3600
+      }
+    },
+    {
+      "endpoint": "GET /mobile/vuelta-actual",
+      "n": 5400,
+      "p50": 67,
+      "p95": 75.1,
+      "p99": 144,
+      "estados": {
+        "200": 5400
+      }
+    },
+    {
+      "endpoint": "GET /reportes/en-vivo/molinos",
+      "n": 360,
+      "p50": 63.3,
+      "p95": 75.1,
+      "p99": 127.7,
+      "estados": {
+        "200": 360
+      }
+    },
+    {
+      "endpoint": "GET /reportes/en-vivo/posiciones",
+      "n": 2700,
+      "p50": 85.9,
+      "p95": 99.8,
+      "p99": 172.6,
+      "estados": {
+        "200": 2700
+      }
+    },
+    {
+      "endpoint": "GET /reportes/jornadas",
+      "n": 180,
+      "p50": 69.8,
+      "p95": 80.9,
+      "p99": 119.8,
+      "estados": {
+        "200": 180
+      }
+    },
+    {
+      "endpoint": "POST /sync/batches",
+      "n": 35999,
+      "p50": 58.4,
+      "p95": 63.8,
+      "p99": 135.4,
+      "estados": {
+        "202": 35999
+      }
+    }
+  ],
+  "totales": {
+    "n": 57239,
+    "c429": 0,
+    "c5xx": 0,
+    "err": 0
+  }
+}

@@ -134,8 +134,11 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       decide la prueba de carga: si con 30 conductores CPU < 60 % y conexiones < 70 % del máximo, sigue `db-g1-small`;
       si no, `db-custom-1-3840` antes de pasar de 5. Ojo: ese cambio NO da SLA (el SLA de Cloud SQL exige HA; excluye
       shared-core y zonal). Costo fijo por hora, ~US$29–35/mes más (precio de Santiago no verificado). PITR se activa igual.
-- [ ] **[CTO]** Prueba de carga: `scripts/carga-efimera.sh alta` → `migrar` → seed → 30 y 60 conductores → `baja`
-      (README en `scripts/experimentos/gps/carga/README-conductores-reales.md`).
+- [x] **[Claude, 19/10]** Prueba de carga en entorno efímero (30 y 60 conductores, 30 min c/u): 0 errores, p95 ≤ 101 ms,
+      CPU Cloud SQL 28 % prom. con 60, conexiones ≤ 9 de 50, Redis plano, ingesta al día. Se queda `db-g1-small`.
+      Tabla en `docs/plan-escalabilidad-30.md`. Entorno dado de baja (`estado` vacío). Fixes del seed: #197 (ruta de
+      `packages/db`, `estado` sin worker pools) y `'mañana'`→`'manana'` (este PR). Residual: `asignaciones.horario` es
+      TEXT sin CHECK; un writer SQL crudo puede volver a meter un valor inválido (candidato a migración con CHECK).
 - [ ] **[Claude, siguiente]** Fase 1 restante: `SENTRY_DSN` en API/worker + script de alertas/budget/PITR, pools y
       `statement_timeout`, vencimiento de rotaciones al worker, archivo GPS (meses a decidir por el CTO).
 - [ ] **[Claude, Fase 2]** Orden por dispositivo real (cola por hash de `deviceId`) o detección de PC omitido insensible
