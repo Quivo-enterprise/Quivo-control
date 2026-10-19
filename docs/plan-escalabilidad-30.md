@@ -115,7 +115,7 @@ Logs de `quivo-api` del piloto del 14/10 (2 trufis, 10:00–04:00 UTC): 3.203 re
 
 ## Fase 1 — Obligatorio antes de pasar de 5 conductores
 
-Estado 18/10: puntos 1 (#188 + #193), 3 (#192) y 7 (#187 + #191) mergeados, sin desplegar. Además #192 corrigió `trustProxy` (bypass de límites por IP).
+Estado 18/10: puntos 1 (#188 + #193), 3 (#192) y 7 (#187 + #191) mergeados y desplegados el 19/10 (API y worker `r20-20261019`, OTA `4781deab`). Además #192 corrigió `trustProxy` (bypass de límites por IP).
 
 Cada punto es un PR chico. Sonnet implementa y el chairman revisa.
 
@@ -132,7 +132,7 @@ Cada punto es un PR chico. Sonnet implementa y el chairman revisa.
    - log de duración por job;
    - test de que las opciones llegan a `queue.add` y de que el reintento es idempotente.
 
-   Después del deploy, limpieza única de los jobs viejos con `queue.clean`. Es escritura en prod: la corre el CTO.
+   Sin `queue.clean`: `removeOnComplete` por edad borra también los completados viejos (verificado en el código de BullMQ 6.0.0).
 2. **Observabilidad:**
    - `SENTRY_DSN` para API y worker en `scripts/deploy-gcp.sh` (desde Secret Manager).
    - `scripts/observabilidad-gcp.sh`, idempotente (lo escribe Sonnet y lo corre el CTO), crea:

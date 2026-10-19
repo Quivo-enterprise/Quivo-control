@@ -122,9 +122,14 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       proceso del lote entero ante errores transitorios (5→60 s, presupuesto 30 min), concurrencia fija 1 (se elimina
       `INGESTA_WORKER_CONCURRENCY`), `sync_errors` al final del intento, apagado devuelve el job al frente de `wait`,
       `scripts/ingesta-reencolar-fallidos.mjs`. Residuales en el PR.
-- [ ] **[CTO]** Deploy de API + worker con #187/#192/#193 (`deploy-gcp.sh`; verificar que despliegue también el
-      worker) y OTA con la parte móvil de #187/#191/#192. Después: limpieza única de los jobs completados viejos de
-      `ingesta-sync` y chequear en logs que `req.ip` sea la IP del cliente. Hasta el deploy Redis sigue creciendo.
+- [x] **[CTO, 19/10 00:35]** Deploy `r20-20261019` desde `a1e583a` (`--solo api` y `--solo worker`, sin web: sin
+      cambios): exit 0. API `quivo-api-00025-vrj` con `/v1/health/ready` ok (db y redis up); worker con imagen r20 y
+      log "escuchando la cola de sync". No hace falta `queue.clean`: con `removeOnComplete {age: 3600}` BullMQ 6.0.0
+      borra los completados viejos al completar cada job (`removeJobsByMaxAge.lua`).
+- [x] **[CTO, 19/10 00:43]** OTA `4781deab` (runtime `547d52e7…`, commit `a1e583a`) con la parte móvil de
+      #187/#191/#192. Verificado: API_URL, DSN de Sentry y el código nuevo en el `.hbc`; source maps en Sentry.
+- [ ] **[Claude, 19/10 con tráfico]** Verificar en logs que `req.ip` sea la IP del cliente y que las claves/memoria
+      de Redis bajen y se aplanen. Confirmar en Perfil que los teléfonos tomaron `4781deab`.
 - [ ] **[CTO]** Prueba de carga: `scripts/carga-efimera.sh alta` → `migrar` → seed → 30 y 60 conductores → `baja`
       (README en `scripts/experimentos/gps/carga/README-conductores-reales.md`).
 - [ ] **[Claude, siguiente]** Fase 1 restante: `SENTRY_DSN` en API/worker + script de alertas/budget/PITR, pools y
