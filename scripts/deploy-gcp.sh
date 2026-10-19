@@ -366,12 +366,27 @@ EOF
     info "Secreto 'REDIS_URL' ya existe — OK."
   fi
 
+  # --- SENTRY_DSN_API: el DSN lo emite Sentry, no se puede inventar -------------------
+  # API y worker inicializan Sentry solo si SENTRY_DSN está seteada (main.ts / worker.ts);
+  # sin el secreto, producción corre a ciegas. Se falla acá, antes de migraciones y deploy.
+  if ! secret_exists SENTRY_DSN_API; then
+    fail "$(cat <<EOS
+Falta el secreto 'SENTRY_DSN_API' en Secret Manager (DSN del proyecto Sentry de la API).
+Sin él quivo-api y quivo-worker no reportan errores. Crealo con el DSN real y volvé a correr:
+
+  printf '%s' 'https://<clave>@<org>.ingest.sentry.io/<proyecto>' \\
+    | gcloud secrets create SENTRY_DSN_API --project=${PROJECT} --replication-policy=automatic --data-file=-
+EOS
+)"
+  fi
+  info "Secreto 'SENTRY_DSN_API' existe — OK."
+
   # secretAccessor para todo lo que usan quivo-api/quivo-worker/el job de migraciones,
   # todos corriendo bajo el mismo service account.
-  for s in DATABASE_URL JWT_SECRET QUIVO_APP_PASSWORD RUNTIME_DATABASE_URL REDIS_URL; do
+  for s in DATABASE_URL JWT_SECRET QUIVO_APP_PASSWORD RUNTIME_DATABASE_URL REDIS_URL SENTRY_DSN_API; do
     grant_secret_access "$s"
   done
-  info "roles/secretmanager.secretAccessor otorgado (idempotente) sobre los 5 secretos a $SERVICE_ACCOUNT."
+  info "roles/secretmanager.secretAccessor otorgado (idempotente) sobre los 6 secretos a $SERVICE_ACCOUNT."
 
   # El conector de Cloud SQL que usa Cloud Run (job de migraciones y quivo-api) necesita
   # `cloudsql.instances.get` para abrir el socket a la instancia — sin roles/cloudsql.client
@@ -814,7 +829,7 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
     --service-account "$SERVICE_ACCOUNT" \
     --vpc-connector "$VPC_CONNECTOR" \
     --add-cloudsql-instances "$CONNECTION_NAME" \
-    --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest" \
+    --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest,SENTRY_DSN=SENTRY_DSN_API:latest" \
     --set-env-vars "^%%^${API_SET_ENV_VARS}"
 
   API_URL="$(gcloud run services describe quivo-api --project "$PROJECT" --region "$REGION" \
@@ -1031,7 +1046,7 @@ if [[ "$NEEDS_WORKER_DEPLOY" == true ]]; then
     --subnet "$VPC_SUBNET" \
     --vpc-egress=private-ranges-only \
     --add-cloudsql-instances "$CONNECTION_NAME" \
-    --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest" \
+    --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest,SENTRY_DSN=SENTRY_DSN_API:latest" \
     --set-env-vars "NODE_ENV=production,MOBILE_LEGACY_AUTH_ENABLED=false,JWT_ACCESS_TTL=15m,JWT_REFRESH_TTL=7d,DB_POOL_MAX=5,DB_CONNECTION_TIMEOUT_MS=5000,DB_STATEMENT_TIMEOUT_MS=60000"
   info "quivo-worker desplegado (Worker Pool, 1 instancia)."
 fi
