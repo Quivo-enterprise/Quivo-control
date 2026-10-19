@@ -9,7 +9,8 @@ import { SyncDeviceThrottlerGuard } from './sync-device-throttler.guard.js';
  * pero no infinito — es el único freno al flood de Bearer aleatorios (cada uno cuesta SHA-256 +
  * lookup en DB) porque el límite por dispositivo corre DESPUÉS de `AuthMovilGuard`.
  */
-export const LIMITE_IP_MOVIL = { limit: 600, ttl: 60_000 } as const;
+// 60 teléfonos × ~30 req/min = 1.800/min tras un CGNAT + margen; solo frena el flood de tokens aleatorios previo al login.
+export const LIMITE_IP_MOVIL = { limit: 3000, ttl: 60_000 } as const;
 
 /**
  * Límite por dispositivo (`limitePorMinuto`) para una ruta móvil autenticada, más el tope por IP

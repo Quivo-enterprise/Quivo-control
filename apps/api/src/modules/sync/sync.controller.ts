@@ -21,7 +21,7 @@ export class SyncController {
   constructor(@Inject(SyncQueueService) private readonly syncQueueService: SyncQueueService) {}
 
   // Rate limit por dispositivo, no por IP (CGNAT; ver `limite-por-dispositivo.decorator.ts` y
-  // `sync-device-throttler.guard.ts`). Tráfico SIN sesión válida: el tope por IP holgado (600/min)
+  // `sync-device-throttler.guard.ts`). Tráfico SIN sesión válida: el tope por IP holgado (3000/min)
   // del decorador lo acota antes de `AuthMovilGuard`, y éste cachea por TOKEN los inválidos
   // (docblock de `canActivate` en `auth-movil.guard.ts`, historia de QUI-240). Un cupo por IP
   // estricto tumbaría a choferes con credencial válida que comparten CGNAT con un teléfono en
