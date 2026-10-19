@@ -5,8 +5,9 @@ import { createZodDto } from '../../common/validation/zod-dto.js';
 import { AuthMovilGuard } from '../auth-movil/auth-movil.guard.js';
 import { CurrentMobileSession } from '../auth-movil/current-mobile-session.decorator.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
-import { LIMITE_IP_MOVIL } from '../sync/limite-por-dispositivo.decorator.js';
-import { FotoVehiculoThrottlerGuard } from './foto-vehiculo-throttler.guard.js';
+import { FotoVehiculoThrottlerGuard } from '../auth-movil/foto-vehiculo-throttler.guard.js';
+import { LIMITE_IP_MOVIL } from '../auth-movil/limite-por-dispositivo.decorator.js';
+import { SyncDeviceThrottlerGuard } from '../auth-movil/sync-device-throttler.guard.js';
 import { VehiculoFotoService } from './vehiculo-foto.service.js';
 
 class SubirFotoVehiculoMovilDto extends createZodDto(SubirFotoVehiculoMovilSchema) {}
@@ -20,13 +21,12 @@ class SubirFotoVehiculoMovilDto extends createZodDto(SubirFotoVehiculoMovilSchem
 export class VehiculoFotoMovilController {
   constructor(@Inject(VehiculoFotoService) private readonly fotoService: VehiculoFotoService) {}
 
-  // Dos límites: el `ThrottlerGuard` global ('default', 100/min por IP) se mantiene a
-  // propósito —los POST de 3 MB sin sesión válida no pueden quedar ilimitados— y
-  // `FotoVehiculoThrottlerGuard` suma 10/hora por dispositivo (ttl/limit definidos allí, única
-  // fuente). Este corre después de `AuthMovilGuard` porque necesita `req.sesionMovil`. A
-  // diferencia de /sync, no hay `@SkipThrottle()`: el volumen es bajo y el tope por IP no
-  // reintroduce el problema de CGNAT. El GET usa el tope
-  // por IP holgado de las demás rutas móviles (`LIMITE_IP_MOVIL`) para no sufrir el CGNAT.
+  // Dos límites en cada ruta: el `ThrottlerGuard` global ('default', por IP) se mantiene a
+  // propósito —tráfico sin sesión válida no puede quedar ilimitado— y un guard por dispositivo
+  // corre después de `AuthMovilGuard` (necesita `req.sesionMovil`; ya está a nivel de clase).
+  // POST: 10/hora (`FotoVehiculoThrottlerGuard`, única fuente del ttl/limit) y tope por IP
+  // global de 100/min (los POST de 3 MB). GET: tope por IP holgado (`LIMITE_IP_MOVIL`, CGNAT)
+  // + 30/min por dispositivo.
   @Post('foto')
   @UseGuards(FotoVehiculoThrottlerGuard)
   subir(
@@ -37,7 +37,8 @@ export class VehiculoFotoMovilController {
   }
 
   @Get('foto')
-  @Throttle({ default: LIMITE_IP_MOVIL })
+  @Throttle({ default: LIMITE_IP_MOVIL, device: { limit: 30, ttl: 60_000 } })
+  @UseGuards(SyncDeviceThrottlerGuard)
   obtener(@CurrentMobileSession() sesion: SesionMovilAutenticada) {
     return this.fotoService.obtenerDesdeMovil(sesion);
   }

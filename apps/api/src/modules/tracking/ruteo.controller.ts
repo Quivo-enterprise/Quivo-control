@@ -1,5 +1,5 @@
 import { BadRequestException, Controller, Get, Inject, Query } from '@nestjs/common';
-import { LimitePorDispositivo } from '../sync/limite-por-dispositivo.decorator.js';
+import { LimitePorDispositivo } from '../auth-movil/limite-por-dispositivo.decorator.js';
 import { RuteoService } from './ruteo.service.js';
 
 @Controller('mobile')

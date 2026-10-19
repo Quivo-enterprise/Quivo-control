@@ -1,17 +1,23 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants.js';
 import { Reflector } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerStorageService, type ThrottlerStorage } from '@nestjs/throttler';
+import {
+  ThrottlerGuard,
+  ThrottlerStorageService,
+  type ThrottlerStorage,
+} from '@nestjs/throttler';
+import { THROTTLER_LIMIT } from '@nestjs/throttler/dist/throttler.constants.js';
 import type { FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
-import { AuthMovilController, PerfilMovilController } from '../auth-movil/auth-movil.controller.js';
+import type { SesionMovilAutenticada } from './auth-movil.types.js';
+import { AuthMovilController, PerfilMovilController } from './auth-movil.controller.js';
 import { VueltasMovilController } from '../vueltas/vueltas-movil.controller.js';
 import { PaqueteDiaController } from '../tracking/paquete-dia.controller.js';
 import { RuteoController } from '../tracking/ruteo.controller.js';
 import { VecinosRutaController } from '../tracking/vecinos-ruta.controller.js';
 import { LIMITE_IP_MOVIL } from './limite-por-dispositivo.decorator.js';
-import { SyncController } from './sync.controller.js';
+import { SyncController } from '../sync/sync.controller.js';
+import { VehiculoFotoMovilController } from '../vehiculos/vehiculo-foto-movil.controller.js';
 import { SyncDeviceThrottlerGuard } from './sync-device-throttler.guard.js';
 
 // Contexto mínimo para ejercitar `canActivate` real (no solo `getTracker`): necesita
@@ -119,10 +125,10 @@ describe('SyncDeviceThrottlerGuard — límite por dispositivo intacto (canActiv
   });
 });
 
-// Todas las rutas móviles con `@LimitePorDispositivo`: metadata real de los controllers + guards
-// reales contra un storage real. El global se instancia con la config de `app.module.ts`
-// (`default`, 100/min): el decorador lo sube a `LIMITE_IP_MOVIL`, NO lo apaga.
-describe('rutas móviles con @LimitePorDispositivo', () => {
+// Todas las rutas móviles con `@LimitePorDispositivo` (+ foto GET): metadata real de los controllers.
+// El tope por IP ('default') se lee de la metadata en vez de agotarlo 3000 veces; la mecánica del
+// guard global se prueba una sola vez abajo con un tope chico.
+describe('rutas móviles con límite por dispositivo', () => {
   const rutas = [
     { nombre: 'sync/batches', clase: SyncController, handler: 'recibirLote', limite: 60 },
     { nombre: 'vecinos-ruta', clase: VecinosRutaController, handler: 'obtener', limite: 60 },
@@ -132,47 +138,67 @@ describe('rutas móviles con @LimitePorDispositivo', () => {
     { nombre: 'asignacion-del-dia', clase: PaqueteDiaController, handler: 'obtener', limite: 10 },
     { nombre: 'contexto-operativo', clase: AuthMovilController, handler: 'obtenerContexto', limite: 10 },
     { nombre: 'perfil', clase: PerfilMovilController, handler: 'obtenerPerfil', limite: 10 },
+    { nombre: 'vehiculo/foto GET', clase: VehiculoFotoMovilController, handler: 'obtener', limite: 30 },
   ] as const;
-  const storageService = new ThrottlerStorageService();
   const reflector = new Reflector();
+
+  for (const { nombre, clase, handler, limite } of rutas) {
+    it(`${nombre}: ${limite}/min por dispositivo y ${LIMITE_IP_MOVIL.limit}/min por IP (no se salta)`, () => {
+      const fn = (clase.prototype as unknown as Record<string, () => unknown>)[handler]!;
+      const guards = (Reflect.getMetadata(GUARDS_METADATA, fn) as { name: string }[]).map((g) => g.name);
+      // `AuthMovilGuard` en foto está a nivel de clase (corre antes que los de método).
+      expect(guards.at(-1)).toBe('SyncDeviceThrottlerGuard');
+      expect(guards.filter((g) => g === 'AuthMovilGuard').length).toBeLessThanOrEqual(1);
+
+      expect(reflector.get(`${THROTTLER_LIMIT}default`, fn)).toBe(LIMITE_IP_MOVIL.limit);
+      expect(reflector.get(`${THROTTLER_LIMIT}device`, fn)).toBe(limite);
+    });
+  }
+});
+
+describe('guard global por IP con tope configurado (mecánica)', () => {
+  const storageService = new ThrottlerStorageService();
 
   afterEach(() => {
     storageService.onApplicationShutdown();
     storageService.storage.clear();
   });
 
-  for (const { nombre, clase, handler, limite } of rutas) {
-    it(`${nombre}: ${limite}/min por dispositivo y ${LIMITE_IP_MOVIL.limit}/min por IP (no se salta)`, async () => {
-      const fn = (clase.prototype as unknown as Record<string, () => unknown>)[handler]!;
-      const guards = (Reflect.getMetadata(GUARDS_METADATA, fn) as { name: string }[]).map((g) => g.name);
-      expect(guards).toEqual(['AuthMovilGuard', 'SyncDeviceThrottlerGuard']);
+  it('pasa hasta el tope, bloquea el siguiente y no mezcla IPs distintas', async () => {
+    const global = new ThrottlerGuard([{ name: 'default', ttl: 60_000, limit: 5 }], storageService, new Reflector());
+    await global.onModuleInit();
+    const ctx = (ip: string) => createContext({ ip });
 
-      const res = { header: vi.fn() };
-      const ctx = (req: unknown) =>
-        ({
-          switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
-          getHandler: () => fn,
-          getClass: () => clase,
-        }) as unknown as ExecutionContext;
-      const reqDe = (deviceId: string) => ({ ip: '190.10.20.30', sesionMovil: { ...sesion, deviceId } });
+    for (let i = 0; i < 5; i += 1) {
+      await expect(global.canActivate(ctx('190.10.20.30'))).resolves.toBe(true);
+    }
+    await expect(global.canActivate(ctx('190.10.20.30'))).rejects.toMatchObject({ status: 429 });
+    await expect(global.canActivate(ctx('190.10.20.31'))).resolves.toBe(true);
+  });
+});
 
-      // Por IP: pasa muy por encima del 100 global (CGNAT) y bloquea justo tras el tope holgado.
-      const global = new ThrottlerGuard([{ name: 'default', ttl: 60_000, limit: 100 }], storageService, reflector);
-      await global.onModuleInit();
-      for (let i = 0; i < LIMITE_IP_MOVIL.limit; i += 1) {
-        await expect(global.canActivate(ctx(reqDe('device-A')))).resolves.toBe(true);
-      }
-      await expect(global.canActivate(ctx(reqDe('device-A')))).rejects.toMatchObject({ status: 429 });
+describe('Retry-After del guard por dispositivo', () => {
+  const storageService = new ThrottlerStorageService();
 
-      // Por dispositivo: cupo propio, sin mezclarse con otro dispositivo de la misma IP.
-      const device = new SyncDeviceThrottlerGuard(storageService, reflector);
-      await device.onModuleInit();
-      for (let i = 0; i < limite; i += 1) {
-        await expect(device.canActivate(ctx(reqDe('device-A')))).resolves.toBe(true);
-      }
-      await expect(device.canActivate(ctx(reqDe('device-A')))).rejects.toMatchObject({ status: 429 });
-      expect(res.header).toHaveBeenCalledWith('Retry-After', expect.any(Number));
-      await expect(device.canActivate(ctx(reqDe('device-B')))).resolves.toBe(true);
-    });
-  }
+  afterEach(() => {
+    storageService.onApplicationShutdown();
+    storageService.storage.clear();
+  });
+
+  it('el propio guard por dispositivo setea Retry-After al bloquear', async () => {
+    const guard = new SyncDeviceThrottlerGuard(storageService, new Reflector());
+    await guard.onModuleInit();
+    const header = vi.fn();
+    const req = { ip: '190.10.20.30', sesionMovil: sesion };
+    const ctx = {
+      switchToHttp: () => ({ getRequest: () => req, getResponse: () => ({ header }) }),
+      getHandler: () => function handlerStub() {},
+      getClass: () => class ControllerStub {},
+    } as unknown as ExecutionContext;
+
+    for (let i = 0; i < 60; i += 1) await guard.canActivate(ctx);
+    expect(header).not.toHaveBeenCalledWith('Retry-After', expect.anything());
+    await expect(guard.canActivate(ctx)).rejects.toMatchObject({ status: 429 });
+    expect(header).toHaveBeenCalledWith('Retry-After', expect.any(Number));
+  });
 });

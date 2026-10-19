@@ -4,7 +4,7 @@ import type { ZodSchema } from 'zod';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { CurrentMobileSession } from '../auth-movil/current-mobile-session.decorator.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
-import { LimitePorDispositivo } from '../sync/limite-por-dispositivo.decorator.js';
+import { LimitePorDispositivo } from '../auth-movil/limite-por-dispositivo.decorator.js';
 import { VecinosRutaService } from './vecinos-ruta.service.js';
 
 // El schema recibe strings (query string) y devuelve números: su tipo de entrada difiere del de

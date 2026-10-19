@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { AuthMovilModule } from '../auth-movil/index.js';
-import { SyncDeviceThrottlerGuard } from '../sync/sync-device-throttler.guard.js';
 import { VueltasMovilController } from './vueltas-movil.controller.js';
 import { VueltasService } from './vueltas.service.js';
 
@@ -9,7 +8,7 @@ import { VueltasService } from './vueltas.service.js';
 @Module({
   imports: [AuthMovilModule],
   controllers: [VueltasMovilController],
-  providers: [VueltasService, SyncDeviceThrottlerGuard],
+  providers: [VueltasService],
   exports: [VueltasService],
 })
 export class VueltasModule {}

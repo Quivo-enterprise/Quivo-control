@@ -1,15 +1,16 @@
 import { applyDecorators, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { AuthMovilGuard } from '../auth-movil/auth-movil.guard.js';
+import { AuthMovilGuard } from './auth-movil.guard.js';
 import { SyncDeviceThrottlerGuard } from './sync-device-throttler.guard.js';
 
 /**
- * Tope por IP de las rutas móviles autenticadas: holgado a propósito (CGNAT de operadores
- * móviles: decenas de teléfonos comparten una IP pública, ver `sync-device-throttler.guard.ts`)
- * pero no infinito — es el único freno al flood de Bearer aleatorios (cada uno cuesta SHA-256 +
- * lookup en DB) porque el límite por dispositivo corre DESPUÉS de `AuthMovilGuard`.
+ * Tope por IP de las rutas móviles autenticadas: holgado a propósito (CGNAT: decenas de teléfonos
+ * comparten una IP pública) pero no infinito — es el único freno al flood de Bearer aleatorios
+ * (cada uno cuesta SHA-256 + lookup en DB) porque el límite por dispositivo corre DESPUÉS de
+ * `AuthMovilGuard`. Se cuenta POR RUTA, por IP y por instancia (la key del throttler hashea
+ * clase+handler). Dimensionado para la ruta más pesada: sync ≤ 20 req/min por teléfono × 60
+ * teléfonos = 1.200/min, con margen.
  */
-// 60 teléfonos × ~30 req/min = 1.800/min tras un CGNAT + margen; solo frena el flood de tokens aleatorios previo al login.
 export const LIMITE_IP_MOVIL = { limit: 3000, ttl: 60_000 } as const;
 
 /**

@@ -3,7 +3,7 @@ import { AcuseVueltaSchema, type AcuseVuelta } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { CurrentMobileSession } from '../auth-movil/current-mobile-session.decorator.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
-import { LimitePorDispositivo } from '../sync/limite-por-dispositivo.decorator.js';
+import { LimitePorDispositivo } from '../auth-movil/limite-por-dispositivo.decorator.js';
 import { VueltasService } from './vueltas.service.js';
 
 class AcuseVueltaDto extends createZodDto(AcuseVueltaSchema) {}

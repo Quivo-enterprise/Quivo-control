@@ -6,6 +6,7 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module.js';
+import { TRUST_PROXY_HOPS } from './common/http/trust-proxy.js';
 import { validateRuntimeConfig } from './config/validate-runtime-config.js';
 
 if (process.env.SENTRY_DSN) {
@@ -17,18 +18,15 @@ async function bootstrap(): Promise<void> {
   // genReqId vive en el adapter Fastify (no en pinoHttp): Fastify asigna req.id antes
   // de que nestjs-pino lo vea, así que el request_id real se fija acá.
   //
-  // trustProxy: Cloud Run termina TLS y hace proxy de cada request hacia el contenedor —
-  // sin esto, Fastify resuelve `req.ip` a la IP interna del load balancer para TODAS las
-  // requests (mismo IP para todo el mundo). El ThrottlerGuard global (ver app.module.ts,
-  // QUI-251) usa `req.ip` como key de rate limit: sin trustProxy, todos los usuarios reales
-  // Y las probes de Cloud Run comparten un único presupuesto de 100 req/min. Con
-  // trustProxy, Fastify confía en `X-Forwarded-For` (que Cloud Run sí setea con la IP real
-  // del cliente) y `req.ip` vuelve a ser por-cliente.
+  // trustProxy: Cloud Run termina TLS y el front end de Google (GFE) agrega la IP real del
+  // cliente al FINAL de `X-Forwarded-For`; lo que venga a la izquierda lo controla el cliente.
+  // Con `true` Fastify tomaría la entrada más a la izquierda (falsificable) como `req.ip` y
+  // todos los límites por IP serían evadibles con un header. Ver `trust-proxy.ts`.
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter({
       genReqId: () => randomUUID(),
-      trustProxy: true,
+      trustProxy: TRUST_PROXY_HOPS,
       bodyLimit: 3 * 1024 * 1024,
     }),
     { bufferLogs: true },

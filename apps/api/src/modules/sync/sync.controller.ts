@@ -3,7 +3,7 @@ import { SyncBatchSchema, type SyncBatchResponse } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { CurrentMobileSession } from '../auth-movil/current-mobile-session.decorator.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
-import { LimitePorDispositivo } from './limite-por-dispositivo.decorator.js';
+import { LimitePorDispositivo } from '../auth-movil/limite-por-dispositivo.decorator.js';
 import { SyncQueueService } from './sync-queue.service.js';
 
 class SyncBatchDto extends createZodDto(SyncBatchSchema) {}
