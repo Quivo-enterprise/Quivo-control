@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { leerConcurrenciaIngesta } from './ingesta-concurrencia.js';
 
 describe('leerConcurrenciaIngesta', () => {
-  it('sin valor (o vacío) usa el default 4', () => {
-    expect(leerConcurrenciaIngesta(undefined)).toBe(4);
-    expect(leerConcurrenciaIngesta('  ')).toBe(4);
+  it('sin valor (o vacío) usa el default 1', () => {
+    expect(leerConcurrenciaIngesta(undefined)).toBe(1);
+    expect(leerConcurrenciaIngesta('  ')).toBe(1);
   });
 
   it('acepta enteros entre 1 y 16', () => {

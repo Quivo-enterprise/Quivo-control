@@ -1,7 +1,8 @@
-const CONCURRENCIA_POR_DEFECTO = 4;
+// shortcut: >1 rompe el orden por dispositivo (PC omitido falso), subir solo con orden por dispositivo garantizado (p. ej. colas particionadas por hash de deviceId)
+const CONCURRENCIA_POR_DEFECTO = 1;
 
 /**
- * `INGESTA_WORKER_CONCURRENCY`: lotes que el worker procesa en paralelo (entero 1–16, default 4).
+ * `INGESTA_WORKER_CONCURRENCY`: lotes que el worker procesa en paralelo (entero 1–16, default 1).
  * Lanza si el valor es inválido: el worker no debe arrancar con una configuración ambigua.
  */
 export function leerConcurrenciaIngesta(valor: string | undefined): number {
