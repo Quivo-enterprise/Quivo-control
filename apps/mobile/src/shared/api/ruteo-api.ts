@@ -3,8 +3,9 @@ import { parseResponse, request } from './http-client';
 
 export const ruteoApi = {
   /** `null` si el servidor respondió sin ruta (OSRM apagado o puntos inalcanzables): el mapa cae
-   * a la línea recta y no se reintenta. Red, timeout o 5xx LANZAN `ApiError`: el llamador
-   * distingue el fallo (reintenta pasados 15 s) de la respuesta vacía. */
+   * a la línea recta y no se reintenta. Todo error LANZA `ApiError`: el llamador reintenta
+   * pasados 15 s solo si es de transporte (`network` o HTTP >= 500); 4xx, contrato y
+   * configuración no se reintentan y se reportan. */
   async rutaAPunto(
     origen: { lat: number; lng: number },
     destino: { lat: number; lng: number },

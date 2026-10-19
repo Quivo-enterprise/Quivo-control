@@ -34,15 +34,10 @@ describe('debePedirRuta', () => {
 });
 
 describe('respuestaRutaVigente', () => {
-  const d: [number, number] = [-66.1, -17.3];
-  it('aplica si es el último pedido y el destino coincide', () => {
-    expect(respuestaRutaVigente({ idPedido: 3, idUltimo: 3, destinoPedido: d, destinoActual: [-66.1, -17.3] })).toBe(true);
+  it('aplica si es el último pedido', () => {
+    expect(respuestaRutaVigente({ idPedido: 3, idUltimo: 3 })).toBe(true);
   });
   it('descarta si hay un pedido más nuevo', () => {
-    expect(respuestaRutaVigente({ idPedido: 2, idUltimo: 3, destinoPedido: d, destinoActual: d })).toBe(false);
-  });
-  it('descarta si el destino cambió o ya no hay', () => {
-    expect(respuestaRutaVigente({ idPedido: 3, idUltimo: 3, destinoPedido: d, destinoActual: [-66.2, -17.3] })).toBe(false);
-    expect(respuestaRutaVigente({ idPedido: 3, idUltimo: 3, destinoPedido: d, destinoActual: null })).toBe(false);
+    expect(respuestaRutaVigente({ idPedido: 2, idUltimo: 3 })).toBe(false);
   });
 });

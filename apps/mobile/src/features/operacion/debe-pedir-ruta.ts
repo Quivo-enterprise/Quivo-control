@@ -20,19 +20,9 @@ export function debePedirRuta(args: {
   return pasoElIntervalo && (anterior.fallo === true || distanciaM >= DISTANCIA_MIN_RUTA_M);
 }
 
-/** La respuesta de un pedido de ruta se aplica solo si sigue siendo el último pedido y su
- * destino es el actual (la posición cambia a 1 Hz; no debe descartar pedidos en vuelo). */
-export function respuestaRutaVigente(args: {
-  idPedido: number;
-  idUltimo: number;
-  destinoPedido: [number, number];
-  destinoActual: [number, number] | null;
-}): boolean {
-  const { idPedido, idUltimo, destinoPedido, destinoActual } = args;
-  return (
-    idPedido === idUltimo &&
-    destinoActual !== null &&
-    destinoActual[0] === destinoPedido[0] &&
-    destinoActual[1] === destinoPedido[1]
-  );
+/** La respuesta de un pedido de ruta se aplica solo si sigue siendo el último pedido: todo
+ * cambio de destino, de tracking o el desmontaje incrementa el id (la posición cambia a 1 Hz y
+ * no debe descartar pedidos en vuelo). */
+export function respuestaRutaVigente(args: { idPedido: number; idUltimo: number }): boolean {
+  return args.idPedido === args.idUltimo;
 }
