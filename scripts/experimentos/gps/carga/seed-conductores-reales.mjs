@@ -5,17 +5,18 @@
 // auth-movil/token-opaco.ts) y un usuario admin_sindicato para las pestañas del panel.
 // Escribe los tokens en un JSON local (0600, gitignored): NO commitear.
 //
-// SOLO CLON / LOCAL. Se niega a correr salvo que:
+// SOLO quivo-db-carga / LOCAL. Se niega a correr salvo que:
 //   - modo remoto: QUIVO_CARGA_DATABASE_URL + QUIVO_CARGA_TEMP_IP (los emite
-//     `scripts/carga-efimera.sh url-seed`; lib/pg.mjs ya exige que coincidan) Y
-//     `--clon <host>` explícito igual al host de la URL, Y el host no es privado (la IP de
-//     prod es privada: el clon recibe IP pública solo para el seed);
+//     `scripts/carga-efimera.sh url-seed`; lib/pg.mjs exige que coincidan) Y el host es
+//     EXACTAMENTE la IP PRIMARY que `gcloud sql instances describe quivo-db-carga` informa
+//     (solo lectura) Y no es una IP privada (prod es solo privada);
 //   - modo local (sin QUIVO_CARGA_DATABASE_URL): flag `--local`, contra localhost.
 //
-// Uso: node seed-conductores-reales.mjs --conductores 60 --clon <ip> [--salida carga-tokens.local.json]
+// Uso: node seed-conductores-reales.mjs --conductores 60 [--salida carga-tokens.local.json]
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { adminClient, adminUrl, ES_REMOTO, logObjetivo } from './lib/pg.mjs';
@@ -24,7 +25,6 @@ import { cargarCircuito } from './lib/geometria-l16.mjs';
 const { values: a } = parseArgs({
   options: {
     conductores: { type: 'string', default: '60' },
-    clon: { type: 'string' },
     local: { type: 'boolean', default: false },
     salida: { type: 'string', default: new URL('./carga-tokens.local.json', import.meta.url).pathname },
   },
@@ -34,10 +34,14 @@ const N = Number(a.conductores);
 function guardas() {
   const host = new URL(adminUrl()).hostname;
   if (ES_REMOTO) {
-    if (a.clon !== host) throw new Error(`GUARDA: --clon '${a.clon ?? ''}' no coincide con el host de la URL ('${host}').`);
     if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) {
-      throw new Error(`GUARDA: '${host}' es una IP privada (así es producción). El clon se siembra por su IP pública.`);
+      throw new Error(`GUARDA: '${host}' es una IP privada (así es producción).`);
     }
+    // Solo lectura: la IP PRIMARY de quivo-db-carga según gcloud es el único host aceptado.
+    const ipCarga = JSON.parse(
+      execFileSync('gcloud', ['sql', 'instances', 'describe', 'quivo-db-carga', '--project=quivo-control-prod', '--format=json'], { encoding: 'utf8' }),
+    ).ipAddresses?.find((i) => i.type === 'PRIMARY')?.ipAddress;
+    if (host !== ipCarga) throw new Error(`GUARDA: '${host}' no es la IP pública de quivo-db-carga ('${ipCarga ?? 'no existe'}').`);
   } else if (!a.local || !['localhost', '127.0.0.1'].includes(host)) {
     throw new Error('GUARDA: sin QUIVO_CARGA_DATABASE_URL solo corro con --local contra localhost.');
   }
@@ -61,7 +65,7 @@ async function main() {
   try {
     await client.query(`SELECT set_config('app.rol', 'admin_quivo', false)`);
     const ya = await client.query(`SELECT 1 FROM sindicatos WHERE nombre = 'carga'`);
-    if (ya.rowCount > 0) throw new Error("Ya existe el sindicato 'carga': este seed no es re-ejecutable (baja + alta del clon).");
+    if (ya.rowCount > 0) throw new Error("Ya existe el sindicato 'carga': este seed no es re-ejecutable (baja + alta).");
 
     await client.query('BEGIN');
     const sindicatoId = randomUUID();

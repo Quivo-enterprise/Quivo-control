@@ -3,29 +3,35 @@
 Mide la pila completa (API -> Redis/BullMQ -> worker -> Cloud SQL) con la cadencia real de la
 app: sync cada 3 s (1-3 puntos), vuelta-actual 20 s, vecinos-ruta 30 s, perfil 60 s,
 ruta-a-punto 15 s, y pestañas del panel (posiciones 2 s, molinos 15 s, jornadas 30 s).
-Prod no se toca (solo lecturas). Todo lo creado termina en `-carga`.
+Prod no se toca (solo lecturas de describe). Todo lo creado termina en `-carga`.
 
 Requisitos: `gcloud` autenticado en `quivo-control-prod`, `node` >= 22, `pnpm install` hecho
-(el seed usa `pg` y `better-auth` del repo).
+(el seed usa `pg` y `better-auth` del repo), `psql`.
 
-## 1. Alta (CTO, ~15-25 min; el clon de Cloud SQL tarda)
+## 1. Alta (CTO, ~10-15 min)
+
+Infra NUEVA y vacía (no es clon de prod, sin datos reales). Cloud SQL con la misma versión,
+tier y edición que `quivo-db` (leídas), disco 10 GB, IP privada en la VPC `default` más IP
+pública autorizada solo a tu IP /32 con SSL obligatorio.
 
 ```bash
-scripts/carga-efimera.sh alta        # clon quivo-db-carga, Redis quivo-redis-carga, secretos, api + worker
-scripts/carga-efimera.sh estado      # verifica que todo existe
+scripts/carga-efimera.sh alta                    # detecta tu IP; o: alta --mi-ip A.B.C.D
+scripts/carga-efimera.sh estado
 ```
 
-## 2. Seed (solo contra el clon)
+## 2. Migrar y sembrar
 
 ```bash
+scripts/carga-efimera.sh migrar     # prisma migrate deploy desde tu laptop, rota quivo_app y relanza api/worker
 eval "$(scripts/carga-efimera.sh url-seed)"     # exporta QUIVO_CARGA_DATABASE_URL y QUIVO_CARGA_TEMP_IP
 cd scripts/experimentos/gps/carga
-node seed-conductores-reales.mjs --conductores 60 --clon "$QUIVO_CARGA_TEMP_IP"
+node seed-conductores-reales.mjs --conductores 60
 # genera carga-tokens.local.json (0600, gitignored): tokens de 60 sesiones + admin del panel
 ```
 
-El seed se niega si el host es privado (prod), si `--clon` no coincide con el host, o si el
-sindicato `carga` ya existe (re-hacer baja + alta).
+`migrar` necesita `pnpm` y `psql`. El seed se niega si el host no es exactamente la IP
+pública de `quivo-db-carga` según `gcloud` (o es privada), o si el sindicato `carga` ya existe
+(re-hacer baja + alta).
 
 ## 3. Escalones (30 y luego 60, 30 min cada uno)
 
@@ -55,7 +61,7 @@ Cloud Monitoring (Metrics Explorer, proyecto `quivo-control-prod`, filtrar por l
 | Conexiones Redis | `redis.googleapis.com/clients/connected` |
 | Cloud Run | `run.googleapis.com/container/cpu/utilizations`, `request_latencies`, `instance_count` (servicio `quivo-api-carga`) |
 
-`max_connections` del clon (mismo valor que prod, mismo tier):
+`max_connections` (mismo tier que prod, debería dar el mismo valor):
 
 ```bash
 eval "$(scripts/carga-efimera.sh url-seed)"
@@ -79,6 +85,8 @@ rm scripts/experimentos/gps/carga/carga-tokens.local.json
 
 - `ruta-a-punto` pega a OSRM: si OSRM no está desplegado en el entorno, mide el camino de
   fallback, no el ruteo real.
-- El clon contiene datos de producción (PII); su IP pública queda autorizada solo a tu IP.
+- La base es nueva y sintética: no reproduce el tamaño ni la distribución de datos de prod
+  (tablas chicas, `gps_points` sin historia). Mide throughput/concurrencia, no el efecto de
+  años de datos.
 - El generador corre desde una sola IP/conexión de origen: mide la API, no el reparto de
   CGNAT de los teléfonos. Las pestañas admin comparten un token (login limitado a 5/min).
