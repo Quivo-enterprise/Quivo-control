@@ -139,8 +139,13 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       Tabla en `docs/plan-escalabilidad-30.md`. Entorno dado de baja (`estado` vacío). Fixes del seed: #197 (ruta de
       `packages/db`, `estado` sin worker pools) y `'mañana'`→`'manana'` (este PR). Residual: `asignaciones.horario` es
       TEXT sin CHECK; un writer SQL crudo puede volver a meter un valor inválido (candidato a migración con CHECK).
-- [ ] **[Claude, siguiente]** Fase 1 restante: `SENTRY_DSN` en API/worker + script de alertas/budget/PITR, pools y
-      `statement_timeout`, vencimiento de rotaciones al worker, archivo GPS (meses a decidir por el CTO).
+- [ ] **[Claude, siguiente — 19/10]** Preparar el día D (prueba real con 30 conductores; fecha la avisa el CTO):
+      plan aprobado en [`docs/plan-dia-30.md`](plan-dia-30.md). Antes de D: A1 login (hoy `/mobile/auth/sesion` es
+      5/min **por IP**: detrás de CGNAT o un WiFi compartido bloquea a 25 de 30; clave IP+placa, lockout hasta 15 min,
+      dispositivo conocido exento, web IP+email, legado apagado por default), A2 observabilidad (`SENTRY_DSN` +
+      `observabilidad-gcp.sh`), A3 pools/timeouts (con 3 instancias de API se puede pasar de `max_connections=50`),
+      ensayo efímero con login real, ráfaga y worker caído, credenciales de los 30, runbook. Vencimiento de rotaciones
+      al worker y archivo GPS pasan a después de D (motivo en el plan).
 - [ ] **[Claude, Fase 2]** Orden por dispositivo real (cola por hash de `deviceId`) o detección de PC omitido insensible
       al orden: requisito para subir la concurrencia del worker y para que una caída de la DB de más de 30 min no deje
       infracciones falsas.
