@@ -20,7 +20,7 @@ type RequestConUsuario = FastifyRequest & { user?: AuthenticatedUser };
  * (limita 'default' global a un tope holgado por IP, pre-auth) y este guard, con nombre propio
  * 'usuario', va DESPUÉS de `JwtAuthGuard` y ANTES de `RolesGuard` en el `@UseGuards(...)` (así
  * también se cuentan usuarios autenticados con rol equivocado). Mismo patrón que
- * `SyncDeviceThrottlerGuard`.
+ * `DispositivoThrottlerGuard`.
  *
  * Fuente única del límite: 600/60 s vive SOLO en el constructor de abajo; el controller NO
  * lleva `@Throttle({ usuario })` (un decorator ganaría sobre el constructor y duplicaría el valor).
@@ -33,7 +33,7 @@ type RequestConUsuario = FastifyRequest & { user?: AuthenticatedUser };
  */
 @Injectable()
 export class EnVivoUsuarioThrottlerGuard extends ThrottlerGuard {
-  // `@Inject(Reflector)` explícito: ver `sync-device-throttler.guard.ts` (bug tsx/esbuild#257).
+  // `@Inject(Reflector)` explícito: ver `dispositivo-throttler.guard.ts` (bug tsx/esbuild#257).
   constructor(
     @InjectThrottlerStorage() storageService: ThrottlerStorage,
     @Inject(Reflector) reflector: Reflector,

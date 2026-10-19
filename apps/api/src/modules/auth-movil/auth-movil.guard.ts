@@ -35,7 +35,7 @@ export class AuthMovilGuard implements CanActivate {
    *
    * 1er intento: `POST /sync/batches` apagaba el `ThrottlerGuard` global con
    * `@SkipThrottle()` (necesario para no reventar por CGNAT — ver
-   * `sync-device-throttler.guard.ts`) y `SyncDeviceThrottlerGuard` corre DESPUÉS de este
+   * `dispositivo-throttler.guard.ts`) y `DispositivoThrottlerGuard` corre DESPUÉS de este
    * guard, así que un Bearer ausente/inválido nunca llegaba a él. Tráfico sin sesión válida
    * quedaba SIN ningún rate limit, pagando un SHA-256 + una consulta a Postgres en
    * `validarAccessToken` por request.

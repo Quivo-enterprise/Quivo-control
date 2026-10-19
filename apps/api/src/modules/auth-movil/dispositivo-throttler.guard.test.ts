@@ -6,7 +6,7 @@ import {
   ThrottlerStorageService,
   type ThrottlerStorage,
 } from '@nestjs/throttler';
-import { THROTTLER_LIMIT } from '@nestjs/throttler/dist/throttler.constants.js';
+import { THROTTLER_LIMIT, THROTTLER_TTL } from '@nestjs/throttler/dist/throttler.constants.js';
 import type { FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SesionMovilAutenticada } from './auth-movil.types.js';
@@ -18,7 +18,7 @@ import { VecinosRutaController } from '../tracking/vecinos-ruta.controller.js';
 import { LIMITE_IP_MOVIL } from './limite-por-dispositivo.decorator.js';
 import { SyncController } from '../sync/sync.controller.js';
 import { VehiculoFotoMovilController } from '../vehiculos/vehiculo-foto-movil.controller.js';
-import { SyncDeviceThrottlerGuard } from './sync-device-throttler.guard.js';
+import { DispositivoThrottlerGuard } from './dispositivo-throttler.guard.js';
 
 // Contexto mínimo para ejercitar `canActivate` real (no solo `getTracker`): necesita
 // `switchToHttp().getRequest()/getResponse()` (guard base) y `getHandler()/getClass()`
@@ -45,18 +45,18 @@ const sesion: SesionMovilAutenticada = {
 // `getTracker` es `protected` — el guard base de @nestjs/throttler lo invoca desde
 // `canActivate`, pero acceder directo acá es lo más simple para probarlo en aislamiento sin
 // levantar todo el pipeline de Nest (guards, storage, reflector metadata real).
-function getTracker(guard: SyncDeviceThrottlerGuard, req: unknown): Promise<string> {
+function getTracker(guard: DispositivoThrottlerGuard, req: unknown): Promise<string> {
   return (
     guard as unknown as { getTracker(req: unknown): Promise<string> }
   ).getTracker(req);
 }
 
-describe('SyncDeviceThrottlerGuard', () => {
+describe('DispositivoThrottlerGuard', () => {
   const storageStub = {} as ThrottlerStorage;
   const reflectorStub = new Reflector();
 
   it('usa el deviceId de la sesión móvil cuando está seteada (QUI-CGNAT)', async () => {
-    const guard = new SyncDeviceThrottlerGuard(storageStub, reflectorStub);
+    const guard = new DispositivoThrottlerGuard(storageStub, reflectorStub);
     const req = { ip: '190.10.20.30', sesionMovil: sesion } as FastifyRequest & {
       sesionMovil?: SesionMovilAutenticada;
     };
@@ -65,7 +65,7 @@ describe('SyncDeviceThrottlerGuard', () => {
   });
 
   it('cae a req.ip cuando no hay sesión móvil en el request', async () => {
-    const guard = new SyncDeviceThrottlerGuard(storageStub, reflectorStub);
+    const guard = new DispositivoThrottlerGuard(storageStub, reflectorStub);
     const req = { ip: '190.10.20.30' } as FastifyRequest & {
       sesionMovil?: SesionMovilAutenticada;
     };
@@ -78,7 +78,7 @@ describe('SyncDeviceThrottlerGuard', () => {
 // tiene que seguir intacto después de mover el guard de fallos-por-IP a `AuthMovilGuard` —
 // acá se ejercita `canActivate` real (no solo `getTracker`) contra un `ThrottlerStorageService`
 // real para probar que efectivamente bloquea con 429 al superar 60/min por dispositivo.
-describe('SyncDeviceThrottlerGuard — límite por dispositivo intacto (canActivate real)', () => {
+describe('DispositivoThrottlerGuard — límite por dispositivo intacto (canActivate real)', () => {
   const storageService = new ThrottlerStorageService();
   const reflectorStub = new Reflector();
 
@@ -90,7 +90,7 @@ describe('SyncDeviceThrottlerGuard — límite por dispositivo intacto (canActiv
   });
 
   it('deja pasar hasta 60 requests/min de un mismo dispositivo y bloquea la 61 con 429', async () => {
-    const guard = new SyncDeviceThrottlerGuard(storageService, reflectorStub);
+    const guard = new DispositivoThrottlerGuard(storageService, reflectorStub);
     await guard.onModuleInit();
     const req = { ip: '190.10.20.30', sesionMovil: sesion } as FastifyRequest & {
       sesionMovil?: SesionMovilAutenticada;
@@ -106,7 +106,7 @@ describe('SyncDeviceThrottlerGuard — límite por dispositivo intacto (canActiv
   });
 
   it('no mezcla el cupo de dos dispositivos distintos aunque compartan IP (CGNAT)', async () => {
-    const guard = new SyncDeviceThrottlerGuard(storageService, reflectorStub);
+    const guard = new DispositivoThrottlerGuard(storageService, reflectorStub);
     await guard.onModuleInit();
     const reqA = {
       ip: '190.10.20.30',
@@ -140,20 +140,40 @@ describe('rutas móviles con límite por dispositivo', () => {
     { nombre: 'perfil', clase: PerfilMovilController, handler: 'obtenerPerfil', limite: 10 },
     { nombre: 'vehiculo/foto GET', clase: VehiculoFotoMovilController, handler: 'obtener', limite: 30 },
   ] as const;
+  // Cada ruta debe llevar `AuthMovilGuard` (a nivel de método o de clase) ANTES del guard por
+  // dispositivo: es el invariante de seguridad (el segundo necesita `req.sesionMovil`).
+  function guardsEfectivos(clase: object, fn: () => unknown): string[] {
+    const nombres = (meta: unknown) => ((meta ?? []) as { name: string }[]).map((g) => g.name);
+    return [...nombres(Reflect.getMetadata(GUARDS_METADATA, clase)), ...nombres(Reflect.getMetadata(GUARDS_METADATA, fn))];
+  }
   const reflector = new Reflector();
 
   for (const { nombre, clase, handler, limite } of rutas) {
     it(`${nombre}: ${limite}/min por dispositivo y ${LIMITE_IP_MOVIL.limit}/min por IP (no se salta)`, () => {
       const fn = (clase.prototype as unknown as Record<string, () => unknown>)[handler]!;
-      const guards = (Reflect.getMetadata(GUARDS_METADATA, fn) as { name: string }[]).map((g) => g.name);
-      // `AuthMovilGuard` en foto está a nivel de clase (corre antes que los de método).
-      expect(guards.at(-1)).toBe('SyncDeviceThrottlerGuard');
-      expect(guards.filter((g) => g === 'AuthMovilGuard').length).toBeLessThanOrEqual(1);
+      const guards = guardsEfectivos(clase, fn);
+      expect(guards.filter((g) => g === 'AuthMovilGuard')).toHaveLength(1);
+      expect(guards.indexOf('AuthMovilGuard')).toBeLessThan(guards.indexOf('DispositivoThrottlerGuard'));
+      expect(guards.at(-1)).toBe('DispositivoThrottlerGuard');
 
       expect(reflector.get(`${THROTTLER_LIMIT}default`, fn)).toBe(LIMITE_IP_MOVIL.limit);
       expect(reflector.get(`${THROTTLER_LIMIT}device`, fn)).toBe(limite);
     });
   }
+});
+
+describe('POST vehiculo/foto', () => {
+  const reflector = new Reflector();
+  const fn = VehiculoFotoMovilController.prototype.subir;
+
+  it('exige sesión móvil antes del guard por dispositivo y limita 10/hora por dispositivo', () => {
+    const guards = ((Reflect.getMetadata(GUARDS_METADATA, fn) ?? []) as { name: string }[]).map((g) => g.name);
+    expect(guards).toEqual(['AuthMovilGuard', 'DispositivoThrottlerGuard']);
+    expect(reflector.get(`${THROTTLER_LIMIT}device`, fn)).toBe(10);
+    expect(reflector.get(`${THROTTLER_TTL}device`, fn)).toBe(3_600_000);
+    // El tope por IP queda en el default global (no se sobreescribe).
+    expect(reflector.get(`${THROTTLER_LIMIT}default`, fn)).toBeUndefined();
+  });
 });
 
 describe('guard global por IP con tope configurado (mecánica)', () => {
@@ -186,7 +206,7 @@ describe('Retry-After del guard por dispositivo', () => {
   });
 
   it('el propio guard por dispositivo setea Retry-After al bloquear', async () => {
-    const guard = new SyncDeviceThrottlerGuard(storageService, new Reflector());
+    const guard = new DispositivoThrottlerGuard(storageService, new Reflector());
     await guard.onModuleInit();
     const header = vi.fn();
     const req = { ip: '190.10.20.30', sesionMovil: sesion };

@@ -31,7 +31,7 @@ class DesignarVueltaDto extends createZodDto(DesignarVueltaSchema) {}
  * usar la IP) se sube acá a 1000/min/IP con `@Throttle({ default })`: sigue siendo el único
  * freno pre-auth (cada request inválida pega al JwtAuthGuard/jwks) pero holgado para NAT. Y `EnVivoUsuarioThrottlerGuard` —DESPUÉS de
  * `JwtAuthGuard`, cuando `req.user` ya existe— aplica el cupo por `userId`. Misma forma
- * que `SyncDeviceThrottlerGuard` en `POST /sync/batches`. El límite
+ * que `DispositivoThrottlerGuard` en `POST /sync/batches`. El límite
  * por usuario (600/min, nombre 'usuario') vive SOLO en el constructor del guard, y su key es por
  * usuario en todo el controller (no por handler).
  *

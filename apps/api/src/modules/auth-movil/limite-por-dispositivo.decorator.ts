@@ -1,7 +1,7 @@
 import { applyDecorators, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthMovilGuard } from './auth-movil.guard.js';
-import { SyncDeviceThrottlerGuard } from './sync-device-throttler.guard.js';
+import { DispositivoThrottlerGuard } from './dispositivo-throttler.guard.js';
 
 /**
  * Tope por IP de las rutas móviles autenticadas: holgado a propósito (CGNAT: decenas de teléfonos
@@ -16,12 +16,12 @@ export const LIMITE_IP_MOVIL = { limit: 3000, ttl: 60_000 } as const;
 /**
  * Límite por dispositivo (`limitePorMinuto`) para una ruta móvil autenticada, más el tope por IP
  * holgado `LIMITE_IP_MOVIL`. Los dos guards leen nombres de throttler distintos: el global
- * (`APP_GUARD`, siempre primero) lee `default` → el tope por IP; `SyncDeviceThrottlerGuard` lee
- * `device`, con clave = deviceId. Orden fijo `AuthMovilGuard` → `SyncDeviceThrottlerGuard`: el
+ * (`APP_GUARD`, siempre primero) lee `default` → el tope por IP; `DispositivoThrottlerGuard` lee
+ * `device`, con clave = deviceId. Orden fijo `AuthMovilGuard` → `DispositivoThrottlerGuard`: el
  * segundo necesita `req.sesionMovil` ya seteado. No usar `@SkipThrottle()` en estas rutas.
  */
 export const LimitePorDispositivo = (limitePorMinuto: number): MethodDecorator =>
   applyDecorators(
     Throttle({ default: LIMITE_IP_MOVIL, device: { limit: limitePorMinuto, ttl: 60_000 } }),
-    UseGuards(AuthMovilGuard, SyncDeviceThrottlerGuard),
+    UseGuards(AuthMovilGuard, DispositivoThrottlerGuard),
   );
