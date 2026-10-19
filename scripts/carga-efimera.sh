@@ -130,13 +130,19 @@ print(json.dumps({
 
 json_get() { python3 -c 'import json,sys; v=json.loads(sys.argv[1])[sys.argv[2]]; print(v if not isinstance(v,(dict,list)) else json.dumps(v))' "$1" "$2"; }
 
-# Env vars planas de prod -> "^%%^k=v%%k=v" (delimitador alternativo, ver deploy-gcp.sh).
-# Se descartan SENTRY_* (no ensuciar el Sentry de prod) y CORS_ORIGIN; se pisa BETTER_AUTH_URL.
+# Env vars del entorno de carga -> "^%%^k=v%%k=v" (delimitador alternativo, ver deploy-gcp.sh).
+# Allowlist (no se copia todo lo plano de prod): solo lo que el API necesita para arrancar y
+# autenticar. Se excluyen SENTRY_*, CORS_ORIGIN, OSRM_URL y todo lo que apunte a recursos de prod.
+# BETTER_AUTH_URL se pisa con la URL propia. GCS_MEDIA_BUCKET apunta a un bucket que no existe
+# (el API no lo valida al arrancar, solo al subir/borrar media): la carga no puede tocar la media de prod.
 env_flag() { # json_env url_propia
   python3 -c '
 import json, sys
-env = json.loads(sys.argv[1]); env["BETTER_AUTH_URL"] = sys.argv[2]
-env = {k: v for k, v in env.items() if not k.startswith("SENTRY") and k != "CORS_ORIGIN"}
+prod = json.loads(sys.argv[1])
+permitidas = ("NODE_ENV", "MOBILE_LEGACY_AUTH_ENABLED", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL")
+env = {k: prod[k] for k in permitidas if k in prod}
+env["BETTER_AUTH_URL"] = sys.argv[2]
+env["GCS_MEDIA_BUCKET"] = "quivo-carga-sin-media"
 bad = [k for k, v in env.items() if "%%" in v]
 if bad: sys.exit("valor con %% en " + ",".join(bad))
 print("^%%^" + "%%".join(f"{k}={v}" for k, v in env.items()))' "$1" "$2"

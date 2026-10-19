@@ -86,12 +86,23 @@ async function main() {
        VALUES ($1, $2, 'ida', ST_GeogFromText($3), 'activo', 'borrador', now(), now())`,
       [rutaId, lineaId, `SRID=4326;${wkt}`],
     );
+    // El circuito es cerrado (primer vértice == último): se reparte en sextos para que el PC 5 no
+    // caiga sobre el PC 0. El PC más cercano al punto de retorno del fixture toma ese vértice y
+    // rol='retorno', como en prod.
+    const idxPc = Array.from({ length: 6 }, (_, i) => Math.floor((i / 6) * (c.ruta.length - 1)));
+    const dist2 = ([a, b], [x, y]) => (a - x) ** 2 + (b - y) ** 2;
+    let vRet = 0;
+    c.ruta.forEach((v, j) => {
+      if (dist2(v, c.retorno) < dist2(c.ruta[vRet], c.retorno)) vRet = j;
+    });
+    const slotRet = idxPc.reduce((m, v, i) => (Math.abs(v - vRet) < Math.abs(idxPc[m] - vRet) ? i : m), 0);
+    idxPc[slotRet] = vRet;
     for (let i = 0; i < 6; i++) {
-      const [lng, lat] = c.ruta[Math.floor((i / 5) * (c.ruta.length - 1))];
+      const [lng, lat] = c.ruta[idxPc[i]];
       await client.query(
-        `INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado, "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, 40, true, 'activo', now(), now())`,
-        [randomUUID(), rutaId, i, lng, lat],
+        `INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, rol, estado, "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, 40, true, $6, 'activo', now(), now())`,
+        [randomUUID(), rutaId, i, lng, lat, i === slotRet ? 'retorno' : null],
       );
     }
     const rotacionId = randomUUID();

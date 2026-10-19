@@ -21,7 +21,7 @@ export function cargarCircuito() {
   const puntos = f.ruta; // "retorno"/"terminal" del fixture son puntos sueltos, no tramos
   const acum = [0];
   for (let i = 1; i < puntos.length; i++) acum.push(acum[i - 1] + haversine(puntos[i - 1], puntos[i]));
-  return { puntos, acum, largoM: acum[acum.length - 1], ruta: f.ruta };
+  return { puntos, acum, largoM: acum[acum.length - 1], ruta: f.ruta, retorno: f.retorno };
 }
 
 /** Posición {lat, lng} a `d` metros del inicio, dando la vuelta al circuito (módulo). */
