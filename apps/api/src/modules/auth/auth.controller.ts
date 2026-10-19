@@ -1,11 +1,12 @@
 import { Body, Controller, Get, HttpCode, Inject, Post, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle } from '@nestjs/throttler';
 import {
   AdminResetPasswordRequestSchema,
   LoginRequestSchema,
   LogoutRequestSchema,
   RefreshRequestSchema,
 } from '@quivo/shared';
+import { LoginWebThrottlerGuard } from '../../common/auth/login-throttler.guard.js';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { CurrentUser } from '../../common/auth/current-user.decorator.js';
 import { JwtAuthGuard, type AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
@@ -24,9 +25,11 @@ export class AuthController {
 
   /** POST /v1/auth/login — contrato en apps/web/src/lib/auth/api-client.ts. Límite mucho
    * más estricto que el default global (QUI-251): sin esto, un login con contraseña
-   * incorrecta no tenía ningún freno — fuerza bruta ilimitada por IP. */
+   * incorrecta no tenía ningún freno — fuerza bruta ilimitada por IP. Dos cubos de 60 s:
+   * ip+email 5 e ip sola 20 (oficinas detrás de una IP); ver `LoginWebThrottlerGuard`. */
   @Post('login')
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @SkipThrottle()
+  @UseGuards(LoginWebThrottlerGuard)
   login(@Body() body: LoginDto) {
     return this.authService.login(body);
   }
