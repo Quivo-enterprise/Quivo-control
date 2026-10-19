@@ -762,8 +762,11 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
   # número-de-proyecto en vez de esperar a `status.url`. Se incluye siempre, no sólo cuando
   # ya existe una previa (a diferencia de CORS_ORIGIN_EXISTENTE arriba) porque su valor es
   # una constante calculada, no algo que un run anterior pudo haber seteado distinto.
-  # Pool de DB (packages/db/src/pool-config.ts). Presupuesto de conexiones: 3 API x 8 + worker 5 + retención 1 = 30 de 50 (60%).
-  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d%%BETTER_AUTH_URL=${API_URL_PROJECT_NUMBER}%%GCS_MEDIA_BUCKET=${MEDIA_BUCKET}%%DB_POOL_MAX=8%%DB_CONNECTION_TIMEOUT_MS=5000%%DB_STATEMENT_TIMEOUT_MS=10000"
+  # Pool de DB (packages/db/src/pool-config.ts). Presupuesto de conexiones (max_connections=50):
+  # régimen estable 3x6 + 5 (worker) + 1 (retención) = 24. En un rolling deploy pueden solaparse
+  # revisiones viejas y nuevas (hasta 6x6 + 2x5 + 1 = 47) y Cloud SQL reserva 3 slots de superuser:
+  # justo solo durante un deploy a escala plena, por eso los deploys se congelan el día de la prueba.
+  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d%%BETTER_AUTH_URL=${API_URL_PROJECT_NUMBER}%%GCS_MEDIA_BUCKET=${MEDIA_BUCKET}%%DB_POOL_MAX=6%%DB_CONNECTION_TIMEOUT_MS=5000%%DB_STATEMENT_TIMEOUT_MS=10000"
   if [[ -n "$CORS_ORIGIN_EXISTENTE" ]]; then
     API_SET_ENV_VARS="${API_SET_ENV_VARS}%%CORS_ORIGIN=${CORS_ORIGIN_EXISTENTE}"
     info "CORS_ORIGIN existente detectado ('$CORS_ORIGIN_EXISTENTE') — se re-incluye en este deploy para no perderlo."
@@ -791,11 +794,10 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
   # "postgres" de Cloud SQL: dueño de las tablas y cloudsqlsuperuser, capaz de un
   # `ALTER TABLE ... DISABLE ROW LEVEL SECURITY` sobre todo el modelo multi-tenant. Ningún
   # código de runtime la usa — packages/db/src/client.ts:41-66 conecta con
-  # RUNTIME_DATABASE_URL (rol "quivo_app", sin BYPASSRLS) fuera de development, y los otros
-  # dos consumidores (apps/api/src/health/health.service.ts,
-  # apps/api/src/modules/retencion-gps/retencion-gps.service.ts) hacen
+  # RUNTIME_DATABASE_URL (rol "quivo_app", sin BYPASSRLS) fuera de development, y el otro
+  # consumidor (apps/api/src/modules/retencion-gps/retencion-gps.service.ts) hace
   # `RUNTIME_DATABASE_URL ?? DATABASE_URL`, así que con RUNTIME_DATABASE_URL seteada tampoco
-  # la tocan. apps/api/src/main.ts (validateRuntimeConfig) exige RUNTIME_DATABASE_URL, no
+  # la toca (el health check usa el cliente Prisma compartido). apps/api/src/main.ts (validateRuntimeConfig) exige RUNTIME_DATABASE_URL, no
   # DATABASE_URL — así que este --set-secrets ya no necesita cargarla para pasar ese gate.
   # quivo-api corre con --allow-unauthenticated (expuesto a internet): montarle igual la
   # credencial dueña de las tablas sería darle a un servicio público más blast radius del
@@ -1055,7 +1057,7 @@ if [[ "$NEEDS_API_DEPLOY" == true || -n "$WEB_URL" ]]; then
       --format='value(status.url)')"
   fi
 
-  # Forma exacta confirmada en apps/api/src/health/health.service.ts (HealthStatus):
+  # Forma de la respuesta de /health (apps/api/src/health, HealthStatus):
   # {"status":"ok"|"degraded","db":"up"|"down","redis":"up"|"down"}.
   #
   # Presupuesto: 45 intentos × 4s = 180s (3 min) de espera entre reintentos, más hasta 5s de

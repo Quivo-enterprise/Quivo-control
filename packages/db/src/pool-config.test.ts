@@ -6,7 +6,7 @@ describe('resolvePoolConfig', () => {
     expect(resolvePoolConfig({})).toEqual({
       max: 8,
       connectionTimeoutMillis: 5000,
-      statement_timeout: 10000,
+      statement_timeout: 0,
     });
   });
 
@@ -22,5 +22,17 @@ describe('resolvePoolConfig', () => {
 
   it.each(['0', '-1', 'abc', '1.5', '8 '])('rechaza DB_POOL_MAX="%s"', (v) => {
     expect(() => resolvePoolConfig({ DB_POOL_MAX: v })).toThrow(/DB_POOL_MAX/);
+  });
+
+  it('acepta DB_STATEMENT_TIMEOUT_MS=0 (sin límite)', () => {
+    expect(resolvePoolConfig({ DB_STATEMENT_TIMEOUT_MS: '0' }).statement_timeout).toBe(0);
+  });
+
+  it.each(['-1', 'abc', '1.5'])('rechaza DB_STATEMENT_TIMEOUT_MS="%s"', (v) => {
+    expect(() => resolvePoolConfig({ DB_STATEMENT_TIMEOUT_MS: v })).toThrow(/DB_STATEMENT_TIMEOUT_MS/);
+  });
+
+  it('rechaza DB_CONNECTION_TIMEOUT_MS=0', () => {
+    expect(() => resolvePoolConfig({ DB_CONNECTION_TIMEOUT_MS: '0' })).toThrow(/DB_CONNECTION_TIMEOUT_MS/);
   });
 });
