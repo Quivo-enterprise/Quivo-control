@@ -55,6 +55,8 @@ type RequestConSesionMovil = FastifyRequest & { sesionMovil?: SesionMovilAutenti
  * balanceador, cada una lleva su propio contador y el límite EFECTIVO total es N×60 req/min,
  * no 60/min duro. Aceptable para este caso (el objetivo es amortiguar el CGNAT compartido, no
  * fijar un techo exacto), pero que quede escrito para que nadie lo lea como una garantía dura.
+ *
+ * shortcut: límite por instancia (máx 3× con 3 instancias), pasar a Redis si se sube max-instances
  */
 @Injectable()
 export class SyncDeviceThrottlerGuard extends ThrottlerGuard {

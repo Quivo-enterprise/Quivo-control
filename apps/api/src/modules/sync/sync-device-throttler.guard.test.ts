@@ -1,9 +1,12 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ThrottlerStorageService, type ThrottlerStorage } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerStorageService, type ThrottlerStorage } from '@nestjs/throttler';
 import type { FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
+import { AuthMovilController, PerfilMovilController } from '../auth-movil/auth-movil.controller.js';
+import { PaqueteDiaController } from '../tracking/paquete-dia.controller.js';
+import { RuteoController } from '../tracking/ruteo.controller.js';
 import { SyncDeviceThrottlerGuard } from './sync-device-throttler.guard.js';
 
 // Contexto mínimo para ejercitar `canActivate` real (no solo `getTracker`): necesita
@@ -109,4 +112,52 @@ describe('SyncDeviceThrottlerGuard — límite por dispositivo intacto (canActiv
     // Device B arranca su propio cupo limpio pese a compartir IP con A, que ya lo agotó.
     await expect(guard.canActivate(createContext(reqB))).resolves.toBe(true);
   });
+});
+
+// Rutas móviles autenticadas que salen del límite global por IP (CGNAT): metadata real de los
+// controllers + guards reales contra un storage real.
+describe('rutas móviles con límite por dispositivo', () => {
+  const rutas = [
+    { nombre: 'ruta-a-punto', clase: RuteoController, handler: 'obtener', limite: 20 },
+    { nombre: 'asignacion-del-dia', clase: PaqueteDiaController, handler: 'obtener', limite: 10 },
+    { nombre: 'contexto-operativo', clase: AuthMovilController, handler: 'obtenerContexto', limite: 10 },
+    { nombre: 'perfil', clase: PerfilMovilController, handler: 'obtenerPerfil', limite: 10 },
+  ] as const;
+  const storageService = new ThrottlerStorageService();
+  const reflector = new Reflector();
+
+  afterEach(() => {
+    storageService.onApplicationShutdown();
+    storageService.storage.clear();
+  });
+
+  for (const { nombre, clase, handler, limite } of rutas) {
+    it(`${nombre}: ${limite}/min por dispositivo, sin compartir cupo por IP, y el global por IP no aplica`, async () => {
+      const fn = (clase.prototype as unknown as Record<string, () => unknown>)[handler]!;
+      const guards = (Reflect.getMetadata('__guards__', fn) as { name: string }[]).map((g) => g.name);
+      expect(guards).toEqual(['AuthMovilGuard', 'SyncDeviceThrottlerGuard']);
+
+      const ctx = (req: unknown) =>
+        ({
+          switchToHttp: () => ({ getRequest: () => req, getResponse: () => ({ header: () => undefined }) }),
+          getHandler: () => fn,
+          getClass: () => clase,
+        }) as unknown as ExecutionContext;
+      const reqDe = (deviceId: string) => ({ ip: '190.10.20.30', sesionMovil: { ...sesion, deviceId } });
+
+      // Global por IP con límite 1: si no se saltara, la 2ª request ya daría 429.
+      const global = new ThrottlerGuard([{ name: 'default', ttl: 60_000, limit: 1 }], storageService, reflector);
+      await global.onModuleInit();
+      await expect(global.canActivate(ctx(reqDe('device-A')))).resolves.toBe(true);
+      await expect(global.canActivate(ctx(reqDe('device-A')))).resolves.toBe(true);
+
+      const device = new SyncDeviceThrottlerGuard(storageService, reflector);
+      await device.onModuleInit();
+      for (let i = 0; i < limite; i += 1) {
+        await expect(device.canActivate(ctx(reqDe('device-A')))).resolves.toBe(true);
+      }
+      await expect(device.canActivate(ctx(reqDe('device-A')))).rejects.toMatchObject({ status: 429 });
+      await expect(device.canActivate(ctx(reqDe('device-B')))).resolves.toBe(true);
+    });
+  }
 });

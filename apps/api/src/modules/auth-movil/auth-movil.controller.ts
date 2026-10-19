@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Inject, Post, UseFilters, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import {
   AuthConductorMovilRequestSchema,
   AuthSesionMovilRequestSchema,
@@ -9,6 +9,7 @@ import {
   SeleccionAsignacionMovilRequestSchema,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
+import { SyncDeviceThrottlerGuard } from '../sync/sync-device-throttler.guard.js';
 import { AuthMovilGuard } from './auth-movil.guard.js';
 import { AuthMovilService } from './auth-movil.service.js';
 import { CurrentMobileSession } from './current-mobile-session.decorator.js';
@@ -26,6 +27,7 @@ class LogoutMovilDto extends createZodDto(LogoutMovilRequestSchema) {}
 export class AuthMovilController {
   constructor(@Inject(AuthMovilService) private readonly authMovilService: AuthMovilService) {}
 
+  // Login/refresh sin sesión: se quedan por IP a propósito (limitar por usuario permitiría password spraying desde una IP).
   @Post('vehiculo')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   autenticarVehiculo(@Body() body: AuthVehiculoMovilDto) {
@@ -68,7 +70,11 @@ export class AuthMovilController {
   }
 
   @Get('contexto-operativo')
-  @UseGuards(AuthMovilGuard)
+  // Límite por dispositivo, no por IP (CGNAT; ver `sync-device-throttler.guard.ts`): `@SkipThrottle()` apaga el
+  // global y `SyncDeviceThrottlerGuard` va DESPUÉS de `AuthMovilGuard`. Consulta ocasional: 10/min.
+  @SkipThrottle()
+  @Throttle({ device: { limit: 10, ttl: 60_000 } })
+  @UseGuards(AuthMovilGuard, SyncDeviceThrottlerGuard)
   obtenerContexto(@CurrentMobileSession() sesion: SesionMovilAutenticada) {
     return this.authMovilService.obtenerContexto(sesion);
   }
@@ -79,7 +85,11 @@ export class PerfilMovilController {
   constructor(@Inject(AuthMovilService) private readonly authMovilService: AuthMovilService) {}
 
   @Get('perfil')
-  @UseGuards(AuthMovilGuard)
+  // Límite por dispositivo, no por IP (CGNAT; ver `sync-device-throttler.guard.ts`): `@SkipThrottle()` apaga el
+  // global y `SyncDeviceThrottlerGuard` va DESPUÉS de `AuthMovilGuard`. Cadencia real ~1/min: 10/min deja margen.
+  @SkipThrottle()
+  @Throttle({ device: { limit: 10, ttl: 60_000 } })
+  @UseGuards(AuthMovilGuard, SyncDeviceThrottlerGuard)
   obtenerPerfil(@CurrentMobileSession() sesion: SesionMovilAutenticada) {
     // El perfil retorna la misma estructura rica que el contexto operativo,
     // que incluye toda la información del conductor, vehículo, sindicato y asignación.
