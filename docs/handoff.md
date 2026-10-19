@@ -130,6 +130,10 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       #187/#191/#192. Verificado: API_URL, DSN de Sentry y el código nuevo en el `.hbc`; source maps en Sentry.
 - [ ] **[Claude, 19/10 con tráfico]** Verificar en logs que `req.ip` sea la IP del cliente y que las claves/memoria
       de Redis bajen y se aplanen. Confirmar en Perfil que los teléfonos tomaron `4781deab`.
+- [x] **[CTO, 19/10]** Decisiones: retención GPS **6 meses** (va con el archivo GPS de la Fase 1). Tier de Cloud SQL lo
+      decide la prueba de carga: si con 30 conductores CPU < 60 % y conexiones < 70 % del máximo, sigue `db-g1-small`;
+      si no, `db-custom-1-3840` antes de pasar de 5. Ojo: ese cambio NO da SLA (el SLA de Cloud SQL exige HA; excluye
+      shared-core y zonal). Costo fijo por hora, ~US$29–35/mes más (precio de Santiago no verificado). PITR se activa igual.
 - [ ] **[CTO]** Prueba de carga: `scripts/carga-efimera.sh alta` → `migrar` → seed → 30 y 60 conductores → `baja`
       (README en `scripts/experimentos/gps/carga/README-conductores-reales.md`).
 - [ ] **[Claude, siguiente]** Fase 1 restante: `SENTRY_DSN` en API/worker + script de alertas/budget/PITR, pools y
