@@ -14,7 +14,7 @@ describe('esErrorTransitorioDb', () => {
     ['P1008', { code: 'P1008' }],
     ['P1017', { code: 'P1017' }],
     ['P2024', { code: 'P2024' }],
-    ['P2028', { code: 'P2028' }],
+    ['P2028 maxWait', { code: 'P2028', message: 'Transaction API error: Unable to start a transaction in the given time.' }],
     ['P2034', { code: 'P2034' }],
     ['PrismaClientInitializationError (errorCode)', { errorCode: 'P1001' }],
     ['pg: Connection terminated unexpectedly', new Error('Connection terminated unexpectedly')],
@@ -39,6 +39,8 @@ describe('esErrorTransitorioDb', () => {
   it.each([
     ['violación de FK 23503', prismaRaw('23503')],
     ['columna inexistente P2022', { code: 'P2022', meta: { driverAdapterError: { cause: { originalCode: '42703', kind: 'ColumnNotFound' } } } }],
+    ['P2028 timeout de la transacción', { code: 'P2028', message: 'Transaction API error: Transaction already closed: A query cannot be executed on an expired transaction.' }],
+    ['P2028 sin mensaje', { code: 'P2028' }],
     ['unique P2002', { code: 'P2002' }],
     ['Error genérico', new Error('Punto de control no encontrado')],
     ['string', 'P1001'],

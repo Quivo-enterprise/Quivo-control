@@ -5,7 +5,6 @@ const PRISMA_TRANSITORIOS = new Set([
   'P1008', // timeout de la operación
   'P1017', // el servidor cerró la conexión
   'P2024', // timeout esperando una conexión del pool
-  'P2028', // timeout / maxWait de una transacción interactiva
   'P2034', // conflicto de escritura / deadlock
   'P2037', // demasiadas conexiones
 ]);
@@ -20,6 +19,13 @@ const MENSAJES_TRANSITORIOS = [
   'timeout exceeded when trying to connect',
   'Client has encountered a connection error and is not queryable',
 ];
+
+/**
+ * P2028 tiene dos causas. "Unable to start a transaction in the given time" (maxWait / pool
+ * saturado) es transitorio. "Transaction already closed ... expired transaction" (el `timeout` de la
+ * transacción) NO: un lote demasiado pesado expiraría en cada reintento y bloquearía la cola.
+ */
+const MENSAJE_P2028_TRANSITORIO = 'Unable to start a transaction';
 
 const SOCKET_TRANSITORIOS = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT']);
 
@@ -57,6 +63,7 @@ export function esErrorTransitorioDb(error: unknown): boolean {
       esCodigoTransitorio(e.errorCode) ||
       esCodigoTransitorio(driver?.originalCode) ||
       esCodigoTransitorio(driver?.code) ||
+      (e.code === 'P2028' && typeof e.message === 'string' && e.message.includes(MENSAJE_P2028_TRANSITORIO)) ||
       (typeof e.message === 'string' && MENSAJES_TRANSITORIOS.some((m) => (e.message as string).includes(m)))
     ) {
       return true;

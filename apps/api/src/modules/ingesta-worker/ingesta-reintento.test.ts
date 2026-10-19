@@ -27,12 +27,17 @@ const cumplimiento: EventoSync = {
 };
 
 const warn = vi.fn();
+const error = vi.fn();
 const createMany = vi.fn();
+
+const apagado = new AbortController();
+let getWaitingCount = async (): Promise<number> => 0;
 
 function procesarLote(eventos: EventoSync[]) {
   const servicio = Object.create(IngestaWorkerService.prototype) as Record<string, unknown>;
-  servicio.logger = { log: () => undefined, warn, error: () => undefined };
-  servicio.ingestaQueueStats = { getWaitingCount: async () => 0 };
+  servicio.logger = { log: () => undefined, warn, error, debug: () => undefined };
+  servicio.ingestaQueueStats = { getWaitingCount: () => getWaitingCount() };
+  servicio.apagado = apagado;
   return (servicio as never as { procesarLote(job: unknown): Promise<unknown> }).procesarLote({
     id: 'job-test',
     data: { sindicatoId: 's', eventos },
@@ -51,6 +56,8 @@ describe('procesarLote — reintento en proceso ante errores transitorios', () =
     withTenantContext.mockReset();
     withTenantContext.mockImplementation(async (ctx, fn) => porDefecto(ctx, fn));
     warn.mockReset();
+    error.mockReset();
+    getWaitingCount = async () => 0;
     createMany.mockReset();
   });
   afterEach(() => vi.useRealTimers());
@@ -116,5 +123,44 @@ describe('procesarLote — reintento en proceso ante errores transitorios', () =
     await expect(p).resolves.toMatchObject({ errores: 0 });
     // Intento 2: gps + desvío A + desvío B + vueltas A + vueltas B = 5.
     expect(withTenantContext).toHaveBeenCalledTimes(3 + 5);
+  });
+
+  it('presupuesto agotado: loguea en una línea estructurada los rechazos bufereados (sin payload) y relanza', async () => {
+    withTenantContext
+      .mockRejectedValueOnce(new Error('dato corrupto')) // gps → permanente (bufereado)
+      .mockRejectedValue({ code: 'P1017' }); // cumplimiento → transitorio, siempre
+    const aserto = expect(procesarLote([gps(1), cumplimiento])).rejects.toMatchObject({ code: 'P1017' });
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
+    await aserto;
+    expect(createMany).not.toHaveBeenCalled();
+    const linea = error.mock.calls.map((c) => c[0] as string).find((m) => m.includes('presupuesto'));
+    expect(linea).toContain('job-test');
+    expect(linea).toContain(gps(1).eventId);
+    expect(linea).toContain('gps_point');
+    expect(linea).toContain('dato corrupto');
+    expect(linea).not.toContain('lat');
+  });
+
+  it('contarPendientesCola fallando NO re-corre el lote ni duplica sync_errors', async () => {
+    getWaitingCount = async () => {
+      throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    };
+    withTenantContext.mockRejectedValueOnce(new Error('dato corrupto'));
+    await expect(procesarLote([gps(1)])).resolves.toMatchObject({ errores: 1 });
+    expect(createMany).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('abortar durante el sueño relanza de inmediato un WaitingError (BullMQ no lo manda a failed)', async () => {
+    withTenantContext.mockRejectedValue({ code: 'P1017' });
+    const aserto = expect(procesarLote([gps(1)])).rejects.toMatchObject({ name: 'IngestaAbortadaError' });
+    await vi.advanceTimersByTimeAsync(1_000); // dentro del primer backoff de 5 s
+    expect(withTenantContext).toHaveBeenCalledTimes(1);
+    apagado.abort();
+    await aserto;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(withTenantContext).toHaveBeenCalledTimes(1);
+    const { WaitingError } = await import('bullmq');
+    await expect(procesarLote([gps(1)])).rejects.toBeInstanceOf(WaitingError); // ya abortado: no duerme
   });
 });
