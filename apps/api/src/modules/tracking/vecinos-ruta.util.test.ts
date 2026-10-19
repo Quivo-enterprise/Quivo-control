@@ -4,6 +4,8 @@ import { CacheTtl, seleccionarVecinos, type CandidatoVecino } from './vecinos-ru
 
 const AHORA = new Date('2026-10-10T16:00:00.000Z');
 const LARGO_M = 1000;
+const LINEAL = { largoM: LARGO_M, circular: false };
+const CIRCULAR = { largoM: LARGO_M, circular: true };
 
 function cand(
   sesionId: string,
@@ -20,7 +22,7 @@ function cand(
     modelo: 'x',
     color: 'blanco',
     colorSecundario: null,
-    frac,
+    progresoM: frac * LARGO_M,
     ultimoFixTs: new Date(AHORA.getTime() - 30_000),
     ...extra,
   };
@@ -28,14 +30,19 @@ function cand(
 
 describe('seleccionarVecinos', () => {
   it('sin candidatos: ni delante ni detrás', () => {
-    expect(seleccionarVecinos(0.5, [], 'yo', LARGO_M, AHORA)).toEqual({
+    expect(seleccionarVecinos({ progresoM: 0.5 * LARGO_M, ...LINEAL }, [], 'yo', AHORA)).toEqual({
       delante: null,
       detras: null,
     });
   });
 
   it('solo uno adelante', () => {
-    const r = seleccionarVecinos(0.5, [cand('a', 0.7)], 'yo', LARGO_M, AHORA);
+    const r = seleccionarVecinos(
+      { progresoM: 0.5 * LARGO_M, ...LINEAL },
+      [cand('a', 0.7)],
+      'yo',
+      AHORA,
+    );
     expect(r.delante?.placa).toBe('P-a');
     expect(r.delante?.distanciaM).toBeCloseTo(200, 6);
     expect(r.delante?.edadFixS).toBe(30);
@@ -43,7 +50,12 @@ describe('seleccionarVecinos', () => {
   });
 
   it('solo uno atrás', () => {
-    const r = seleccionarVecinos(0.5, [cand('a', 0.1)], 'yo', LARGO_M, AHORA);
+    const r = seleccionarVecinos(
+      { progresoM: 0.5 * LARGO_M, ...LINEAL },
+      [cand('a', 0.1)],
+      'yo',
+      AHORA,
+    );
     expect(r.detras?.placa).toBe('P-a');
     expect(r.detras?.distanciaM).toBeCloseTo(400, 6);
     expect(r.delante).toBeNull();
@@ -51,7 +63,7 @@ describe('seleccionarVecinos', () => {
 
   it('ambos: elige el más cercano de cada lado', () => {
     const r = seleccionarVecinos(
-      0.5,
+      { progresoM: 0.5 * LARGO_M, ...LINEAL },
       [
         cand('lejosAdelante', 0.9),
         cand('cercaAdelante', 0.6),
@@ -59,7 +71,6 @@ describe('seleccionarVecinos', () => {
         cand('lejosAtras', 0.1),
       ],
       'yo',
-      LARGO_M,
       AHORA,
     );
     expect(r.delante?.placa).toBe('P-cercaAdelante');
@@ -74,26 +85,46 @@ describe('seleccionarVecinos', () => {
     const justo = cand('justo', 0.7, {
       ultimoFixTs: new Date(AHORA.getTime() - UMBRAL_VECINO_FRESCO_MS),
     });
-    const r = seleccionarVecinos(0.5, [viejo, justo], 'yo', LARGO_M, AHORA);
+    const r = seleccionarVecinos(
+      { progresoM: 0.5 * LARGO_M, ...LINEAL },
+      [viejo, justo],
+      'yo',
+      AHORA,
+    );
     expect(r.delante?.placa).toBe('P-justo');
   });
 
   it('una entrada cacheada descarta a quien se volvió viejo después (frescura relativa a ahora)', () => {
     const c = cand('a', 0.6);
-    expect(seleccionarVecinos(0.5, [c], 'yo', LARGO_M, AHORA).delante).not.toBeNull();
+    expect(
+      seleccionarVecinos({ progresoM: 0.5 * LARGO_M, ...LINEAL }, [c], 'yo', AHORA).delante,
+    ).not.toBeNull();
     const despues = new Date(AHORA.getTime() + UMBRAL_VECINO_FRESCO_MS);
-    expect(seleccionarVecinos(0.5, [c], 'yo', LARGO_M, despues).delante).toBeNull();
+    expect(
+      seleccionarVecinos({ progresoM: 0.5 * LARGO_M, ...LINEAL }, [c], 'yo', despues).delante,
+    ).toBeNull();
   });
 
   it('excluye mi propia sesión y otras sesiones de mi mismo vehículo', () => {
     const propia = cand('yo', 0.6);
     const mismoVehiculo = cand('otra', 0.7, { vehiculoId: 'mi-veh' });
-    const r = seleccionarVecinos(0.5, [propia, mismoVehiculo], 'yo', LARGO_M, AHORA, 'mi-veh');
+    const r = seleccionarVecinos(
+      { progresoM: 0.5 * LARGO_M, ...LINEAL },
+      [propia, mismoVehiculo],
+      'yo',
+      AHORA,
+      'mi-veh',
+    );
     expect(r).toEqual({ delante: null, detras: null });
   });
 
   it('empate con mi frac: va a detrás, nunca a delante', () => {
-    const r = seleccionarVecinos(0.5, [cand('igual', 0.5)], 'yo', LARGO_M, AHORA);
+    const r = seleccionarVecinos(
+      { progresoM: 0.5 * LARGO_M, ...LINEAL },
+      [cand('igual', 0.5)],
+      'yo',
+      AHORA,
+    );
     expect(r.detras?.placa).toBe('P-igual');
     expect(r.detras?.distanciaM).toBe(0);
     expect(r.delante).toBeNull();
@@ -101,13 +132,12 @@ describe('seleccionarVecinos', () => {
 
   it('empate entre candidatos de igual frac: gana el fix más reciente', () => {
     const r = seleccionarVecinos(
-      0.5,
+      { progresoM: 0.5 * LARGO_M, ...LINEAL },
       [
         cand('viejo', 0.7, { ultimoFixTs: new Date(AHORA.getTime() - 120_000) }),
         cand('nuevo', 0.7, { ultimoFixTs: new Date(AHORA.getTime() - 5_000) }),
       ],
       'yo',
-      LARGO_M,
       AHORA,
     );
     expect(r.delante?.placa).toBe('P-nuevo');
@@ -115,11 +145,19 @@ describe('seleccionarVecinos', () => {
 
   it('edadFixS nunca es negativa ante skew de reloj', () => {
     const futuro = cand('a', 0.6, { ultimoFixTs: new Date(AHORA.getTime() + 5_000) });
-    expect(seleccionarVecinos(0.5, [futuro], 'yo', LARGO_M, AHORA).delante?.edadFixS).toBe(0);
+    expect(
+      seleccionarVecinos({ progresoM: 0.5 * LARGO_M, ...LINEAL }, [futuro], 'yo', AHORA).delante
+        ?.edadFixS,
+    ).toBe(0);
   });
 
   it('el vecino expone solo los campos del contrato (sin lat/lng/conductor/sesionId)', () => {
-    const r = seleccionarVecinos(0.5, [cand('a', 0.6), cand('b', 0.4)], 'yo', LARGO_M, AHORA);
+    const r = seleccionarVecinos(
+      { progresoM: 0.5 * LARGO_M, ...LINEAL },
+      [cand('a', 0.6), cand('b', 0.4)],
+      'yo',
+      AHORA,
+    );
     const esperadas = [
       'color',
       'colorSecundario',
@@ -133,6 +171,78 @@ describe('seleccionarVecinos', () => {
     ];
     expect(Object.keys(r.delante!).sort()).toEqual(esperadas);
     expect(Object.keys(r.detras!).sort()).toEqual(esperadas);
+  });
+});
+
+describe('seleccionarVecinos — circuito cerrado', () => {
+  it('cada vecino aparece en UNA sola fila: el lado más corto', () => {
+    // Yo en 900 de 1000; uno en 100 está a 200 m "delante" (cruza el cierre), no a 800 detrás.
+    const r = seleccionarVecinos({ progresoM: 900, ...CIRCULAR }, [cand('a', 0.1)], 'yo', AHORA);
+    expect(r.delante?.placa).toBe('P-a');
+    expect(r.delante?.distanciaM).toBeCloseTo(200, 6);
+    expect(r.detras).toBeNull();
+  });
+
+  it('uno que sale de la terminal y otro que llega: detrás a pocos metros, no a una vuelta', () => {
+    // Yo recién salí (20 m); el otro está llegando (990 m). Lineal los vería a 970 m.
+    const circ = seleccionarVecinos(
+      { progresoM: 20, ...CIRCULAR },
+      [cand('llega', 0.99)],
+      'yo',
+      AHORA,
+    );
+    expect(circ.detras?.distanciaM).toBeCloseTo(30, 6);
+    expect(circ.delante).toBeNull();
+    const lineal = seleccionarVecinos(
+      { progresoM: 20, ...LINEAL },
+      [cand('llega', 0.99)],
+      'yo',
+      AHORA,
+    );
+    expect(lineal.delante?.distanciaM).toBeCloseTo(970, 6);
+  });
+
+  it('simetría: A ve a B delante a X si y solo si B ve a A detrás a X', () => {
+    const a = seleccionarVecinos({ progresoM: 100, ...CIRCULAR }, [cand('b', 0.3)], 'a', AHORA);
+    const b = seleccionarVecinos({ progresoM: 300, ...CIRCULAR }, [cand('a', 0.1)], 'b', AHORA);
+    expect(a.delante?.distanciaM).toBeCloseTo(200, 6);
+    expect(b.detras?.distanciaM).toBeCloseTo(200, 6);
+    expect(a.detras).toBeNull();
+    expect(b.delante).toBeNull();
+  });
+
+  it('con dos vehículos nunca hay inversión: no pueden verse ambos delante', () => {
+    for (let a = 0; a < 1000; a += 70) {
+      for (let b = 0; b < 1000; b += 90) {
+        // Opuestos exactos (d = L/2): ambos lados empatan, caso de medida cero.
+        if (a === b || Math.abs(a - b) === LARGO_M / 2) continue;
+        const veA = seleccionarVecinos(
+          { progresoM: a, ...CIRCULAR },
+          [cand('b', b / LARGO_M)],
+          'a',
+          AHORA,
+        );
+        const veB = seleccionarVecinos(
+          { progresoM: b, ...CIRCULAR },
+          [cand('a', a / LARGO_M)],
+          'b',
+          AHORA,
+        );
+        expect(veA.delante !== null && veB.delante !== null).toBe(false);
+        expect(veA.detras !== null && veB.detras !== null).toBe(false);
+      }
+    }
+  });
+
+  it('elige el más cercano de cada lado entre varios', () => {
+    const r = seleccionarVecinos(
+      { progresoM: 950, ...CIRCULAR },
+      [cand('d1', 0.1), cand('d2', 0.3), cand('t1', 0.8), cand('t2', 0.6)],
+      'yo',
+      AHORA,
+    );
+    expect(r.delante?.placa).toBe('P-d1'); // 150 m, cruzando el cierre
+    expect(r.detras?.placa).toBe('P-t1'); // 150 m
   });
 });
 

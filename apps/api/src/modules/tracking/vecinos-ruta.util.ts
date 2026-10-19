@@ -1,4 +1,9 @@
-import { UMBRAL_VECINO_FRESCO_MS, type VecinoRuta } from '@quivo/shared';
+import {
+  separacionCircular,
+  UMBRAL_VECINO_FRESCO_MS,
+  type ProgresoCircuito,
+  type VecinoRuta,
+} from '@quivo/shared';
 
 /**
  * Tiempo de vida de la lista de candidatos de una ruta en memoria. Con N vehículos pidiendo
@@ -15,6 +20,12 @@ export const VECINOS_CACHE_TTL_MS = 15_000;
  */
 export const VECINOS_CACHE_MAX_RUTAS = 2000;
 
+/**
+ * Tiempo de vida de la geometría de la ruta y su PC de retorno. Cambian solo al editar la ruta, y
+ * cada recarga trae ~30 KB: mucho más largo que el de los candidatos.
+ */
+export const VECINOS_GEOMETRIA_TTL_MS = 5 * 60_000;
+
 /** Candidato a vecino: otro vehículo en curso sobre la misma ruta, ya proyectado sobre ella. */
 export interface CandidatoVecino {
   sesionId: string;
@@ -26,15 +37,13 @@ export interface CandidatoVecino {
   modelo: string;
   color: string;
   colorSecundario: string | null;
-  /** `ST_LineLocatePoint` del último fix del candidato sobre la ruta, en [0, 1]. */
-  frac: number;
+  /** Metros recorridos por el último fix bueno del candidato, proyectado en la mitad de su fase. */
+  progresoM: number;
   ultimoFixTs: Date;
 }
 
 /** Valor cacheado por `(sindicatoId, rutaId)`. */
 export interface EntradaRuta {
-  /** Largo de la ruta en metros (`ST_Length` sobre geography). */
-  largoM: number;
   candidatos: CandidatoVecino[];
 }
 
@@ -86,7 +95,7 @@ export class CacheTtl<V> {
   }
 }
 
-function aVecino(c: CandidatoVecino, miFrac: number, largoM: number, ahora: Date): VecinoRuta {
+function aVecino(c: CandidatoVecino, distanciaM: number, ahora: Date): VecinoRuta {
   return {
     placa: c.placa,
     numeroInterno: c.numeroInterno,
@@ -95,7 +104,7 @@ function aVecino(c: CandidatoVecino, miFrac: number, largoM: number, ahora: Date
     modelo: c.modelo,
     color: c.color,
     colorSecundario: c.colorSecundario,
-    distanciaM: Math.abs(c.frac - miFrac) * largoM,
+    distanciaM,
     // Entero >= 0: un skew de reloj entre Postgres y Node no debe dar edad negativa.
     edadFixS: Math.max(0, Math.floor((ahora.getTime() - c.ultimoFixTs.getTime()) / 1000)),
   };
@@ -104,26 +113,26 @@ function aVecino(c: CandidatoVecino, miFrac: number, largoM: number, ahora: Date
 /**
  * Elige el vecino de adelante y el de atrás entre los candidatos de la ruta.
  *
- * - `delante`: el de MENOR `frac` estrictamente mayor que el mío.
- * - `detras`: el de MAYOR `frac` menor o IGUAL al mío. **Empate** (mismo `frac` que yo): se
- *   asigna a `detras` — convención arbitraria pero determinista, para que dos vehículos en
- *   el mismo punto no se muestren ambos "delante".
+ * - Cada candidato cae en UN solo lado (`separacionCircular`): en un circuito, el más corto; en
+ *   una ruta lineal, según su progreso. `delante`/`detras` son los más cercanos de cada lado.
+ * - **Empate** (mismo punto que yo, distancia 0): va a `detras`, para que dos vehículos en el
+ *   mismo punto no se muestren ambos "delante".
  * - Se excluye mi propia sesión y cualquier otra sesión de mi mismo vehículo.
  * - La frescura se evalúa AQUÍ contra `ahora` (no al armar el caché): una entrada cacheada
  *   sigue descartando a quien se volvió viejo dentro del TTL.
  *
- * Entre candidatos con idéntico `frac`, gana el de fix más reciente.
+ * Entre candidatos a igual distancia, gana el de fix más reciente.
  */
 export function seleccionarVecinos(
-  miFrac: number,
+  /** Mi progreso, el largo de la polilínea (m) y si es un circuito cerrado (separación por el lado más corto). */
+  yo: Pick<ProgresoCircuito, 'progresoM' | 'largoM' | 'circular'>,
   candidatos: readonly CandidatoVecino[],
   miSesionId: string,
-  largoM: number,
   ahora: Date,
   miVehiculoId?: string,
 ): { delante: VecinoRuta | null; detras: VecinoRuta | null } {
-  let delante: CandidatoVecino | null = null;
-  let detras: CandidatoVecino | null = null;
+  type Elegido = { c: CandidatoVecino; distanciaM: number };
+  const elegidos: Record<'delante' | 'detras', Elegido | null> = { delante: null, detras: null };
   const ahoraMs = ahora.getTime();
 
   for (const c of candidatos) {
@@ -131,25 +140,26 @@ export function seleccionarVecinos(
     if (miVehiculoId !== undefined && c.vehiculoId === miVehiculoId) continue;
     if (ahoraMs - c.ultimoFixTs.getTime() > UMBRAL_VECINO_FRESCO_MS) continue;
 
-    if (c.frac > miFrac) {
-      if (
-        !delante ||
-        c.frac < delante.frac ||
-        (c.frac === delante.frac && c.ultimoFixTs > delante.ultimoFixTs)
-      ) {
-        delante = c;
-      }
-    } else if (
-      !detras ||
-      c.frac > detras.frac ||
-      (c.frac === detras.frac && c.ultimoFixTs > detras.ultimoFixTs)
+    const { lado, distanciaM } = separacionCircular(
+      yo.progresoM,
+      c.progresoM,
+      yo.largoM,
+      yo.circular,
+    );
+    const mejor = elegidos[lado];
+    if (
+      !mejor ||
+      distanciaM < mejor.distanciaM ||
+      (distanciaM === mejor.distanciaM && c.ultimoFixTs > mejor.c.ultimoFixTs)
     ) {
-      detras = c;
+      elegidos[lado] = { c, distanciaM };
     }
   }
 
   return {
-    delante: delante ? aVecino(delante, miFrac, largoM, ahora) : null,
-    detras: detras ? aVecino(detras, miFrac, largoM, ahora) : null,
+    delante: elegidos.delante
+      ? aVecino(elegidos.delante.c, elegidos.delante.distanciaM, ahora)
+      : null,
+    detras: elegidos.detras ? aVecino(elegidos.detras.c, elegidos.detras.distanciaM, ahora) : null,
   };
 }

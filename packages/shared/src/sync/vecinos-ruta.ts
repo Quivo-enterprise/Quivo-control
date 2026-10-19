@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FASES_CIRCUITO } from '../circuito.js';
 
 /** Un vecino cuyo último fix es más viejo que esto no se muestra (se considera sin señal). */
 export const UMBRAL_VECINO_FRESCO_MS = 10 * 60 * 1000;
@@ -16,13 +17,15 @@ const coordenadaQuery = (min: number, max: number) =>
     .optional();
 
 /**
- * Query de vecinos de ruta: posición actual del solicitante, opcional. `lat` y `lng` van
+ * Query de vecinos de ruta: posición actual del solicitante y fase, opcionales. `lat` y `lng` van
  * juntas o ninguna.
  */
 export const VecinosRutaQuerySchema = z
   .object({
     lat: coordenadaQuery(-90, 90),
     lng: coordenadaQuery(-180, 180),
+    /** Fase de MI vuelta en el circuito; si falta, el servidor la deriva de `vueltas`. */
+    fase: z.enum(FASES_CIRCUITO).optional(),
   })
   .refine((q) => (q.lat === undefined) === (q.lng === undefined), {
     message: 'lat y lng deben enviarse juntas o ninguna',

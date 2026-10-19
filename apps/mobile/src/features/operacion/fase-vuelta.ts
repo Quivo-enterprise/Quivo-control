@@ -1,6 +1,7 @@
 import {
   partirCircuitoPorRetorno,
   type CircuitoPartido,
+  type FaseCircuito,
   type PuntoControlPaquete,
 } from '@quivo/shared';
 
@@ -10,7 +11,7 @@ import {
  * chofer solo ve (y solo se le detectan/anuncian) los PC y el trazado de SU fase. Módulo PURO.
  * Solo hay fases si la ruta tiene un PC con `rol === 'retorno'`; sin él todo vale como siempre.
  */
-export type FaseVuelta = 'ida' | 'regreso';
+export type FaseVuelta = FaseCircuito;
 
 /** Fallback si el GPS no captura el retorno: fixes consecutivos que hacen falta para pasar a regreso. */
 export const FIXES_FALLBACK_REGRESO = 3;

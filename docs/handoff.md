@@ -82,6 +82,14 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       cero errores con `01a1509e`. Por pedido del CTO se resolvieron los 10 issues abiertos (si reaparecen, Sentry los
       reabre como regresión).
 - [ ] **[CTO]** Decidir OSRM (desplegar en GCP o proveedor externo): sin eso no hay línea punteada al próximo PC.
+- [x] **[Claude]** Vecinos delante/detrás en circuito (piloto del 14/10: distancia que salta, vecino que desaparece,
+      inversión): proyección por fase (ida/regreso) + distancia circular por el lado más cercano + fixes >50 m
+      descartados. Replay con datos reales: 0 inversiones (antes 60 con lag 160 s), cambios de fila 43→4. Detalle y
+      decisiones en [`docs/plan-vecinos-circuito.md`](plan-vecinos-circuito.md). PR `fix/vecinos-circuito`.
+- [ ] **[CTO]** Deploy de la API con el fix de vecinos (`scripts/deploy-gcp.sh`), después el OTA (la app manda `fase`;
+      la API vieja la ignora, así que el orden no rompe nada, pero sin la API nueva el fix no tiene efecto).
+- [ ] **[CTO]** Prueba en la calle con 2 trufis: una sola fila por vehículo, distancias iguales en ambos, sin
+      inversiones en Honduras ni en SR; mirar qué pasa con un trufi esperando en Molinos.
 - [ ] **[Claude, propuesto]** CI: `cancel-in-progress` solo en PRs (hoy cancela runs de `main`: 14 en octubre) y
       revisar `admin-panel.spec.ts` (`:154` flaky el 18/10; `:98` rompió 3 runs el 14/10, ya corregido).
 - [x] **[CTO, 2026-10-18]** Plan punto 4 decidido: OTA desde CI con `workflow_dispatch` que dispara el CTO (disparar =

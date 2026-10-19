@@ -153,6 +153,10 @@ export function OperationScreen(
   const posicionVecinosRef = useRef(gps.posicionActual);
   posicionVecinosRef.current = gps.posicionActual;
   const obtenerPosicionVecinos = useCallback(() => posicionVecinosRef.current, []);
+  // Fase por ref, igual que la posición: que cambie no re-renderiza el panel ni reinicia su intervalo.
+  const faseVecinosRef = useRef(progreso.fase);
+  faseVecinosRef.current = progreso.fase;
+  const obtenerFaseVecinos = useCallback(() => faseVecinosRef.current, []);
   const insetsNavegacion = useMemo(
     () => ({
       superior: insetSuperior,
@@ -506,6 +510,7 @@ export function OperationScreen(
         obtenerAccessToken={props.obtenerAccessToken}
         hayPosicion={gps.posicionActual !== null}
         obtenerPosicion={obtenerPosicionVecinos}
+        obtenerFase={obtenerFaseVecinos}
         topBase={insetSuperior}
       />
 

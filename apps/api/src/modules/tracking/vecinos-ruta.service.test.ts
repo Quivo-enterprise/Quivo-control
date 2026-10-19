@@ -42,6 +42,25 @@ const CIRCULAR = JSON.stringify({
   ],
 });
 
+/**
+ * Circuito CERRADO con ida y regreso por la misma calle (11 m de separación entre carriles), como
+ * la L16: ida hacia el este por y=-34.6, retorno en el extremo este y regreso hacia el oeste por
+ * y=-34.6001. Largo ≈ 3,7 km; ida ≈ 1,84 km.
+ */
+const LAT_REGRESO = -34.6001;
+const CERRADA = JSON.stringify({
+  type: 'LineString',
+  coordinates: [
+    [-58.4, LAT],
+    [-58.39, LAT],
+    [-58.38, LAT],
+    [-58.38, LAT_REGRESO],
+    [-58.39, LAT_REGRESO],
+    [-58.4, LAT_REGRESO],
+    [-58.4, LAT],
+  ],
+});
+
 describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
   const service = new VecinosRutaService();
   const sindicatoAId = randomUUID();
@@ -52,6 +71,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
   let rutaId: string;
   let rutaOpuestaId: string;
   let rutaCircularId: string;
+  let rutaCerradaId: string;
   const sesionesCreadas: string[] = [];
   let seq = 0;
 
@@ -65,6 +85,12 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     /** `null` ⇒ sin fila de resumen (sin posición). */
     pos?: { lng: number; lat: number } | null;
     edadFixMs?: number;
+    /** Precisión (m) del último fix del resumen; por defecto 5. */
+    accuracy?: number;
+    /** Vuelta en curso de la sesión: 'regreso' ⇒ ya pasó por el retorno. Sin esto no hay vuelta. */
+    fase?: 'ida' | 'regreso';
+    /** Fixes en `gps_points` (ya ingestados), p. ej. el último fix bueno tras uno impreciso. */
+    puntosGps?: { lng: number; lat: number; accuracy: number | null; edadMs: number }[];
   }
 
   /** Crea vehículo+conductor+asignación+sesión (+resumen GPS) y devuelve la sesión móvil. */
@@ -130,7 +156,30 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
       if (spec.pos !== null) {
         const pos = spec.pos ?? { lng: LNG_INICIO, lat: LAT };
         const ts = new Date(AHORA.getTime() - (spec.edadFixMs ?? 30_000));
-        await insertarResumen(tx, sesion.id, sindicatoId, pos, ts);
+        await insertarResumen(tx, sesion.id, sindicatoId, pos, ts, spec.accuracy ?? 5);
+      }
+      if (spec.fase) {
+        await tx.vuelta.create({
+          data: {
+            sindicatoId,
+            sesionId: sesion.id,
+            vehiculoId: vehiculo.id,
+            conductorId: conductor.id,
+            lineaId: lineaAId,
+            rutaId: ruta,
+            fecha: AHORA,
+            numero: 1,
+            inicioTs: new Date(AHORA.getTime() - 30 * MINUTO),
+            estado: 'en_curso',
+            pasoRetornoTs: spec.fase === 'regreso' ? new Date(AHORA.getTime() - 10 * MINUTO) : null,
+          },
+        });
+      }
+      for (const g of spec.puntosGps ?? []) {
+        await tx.$executeRaw`
+          INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
+          VALUES (${randomUUID()}::uuid, ${sesion.id}::uuid, ${`dev-vr-${n}`}, ${new Date(AHORA.getTime() - g.edadMs)}::timestamptz, ${g.lat}, ${g.lng}, ${g.accuracy}, 8, now(), ${sindicatoId})
+        `;
       }
       return {
         sesionId: sesion.id,
@@ -149,11 +198,12 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     sindicatoId: string,
     pos: { lng: number; lat: number },
     ts: Date,
+    accuracy: number,
   ): Promise<void> {
     await tx.$executeRaw`
       INSERT INTO gps_sesion_resumen
         (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng, accuracy, speed, updated_at)
-      VALUES (${sesionId}::uuid, ${JORNADA}::date, ${sindicatoId}, 1, ${ts}::timestamptz, ${ts}::timestamptz, ${pos.lat}, ${pos.lng}, 5, 8, now())
+      VALUES (${sesionId}::uuid, ${JORNADA}::date, ${sindicatoId}, 1, ${ts}::timestamptz, ${ts}::timestamptz, ${pos.lat}, ${pos.lng}, ${accuracy}, 8, now())
       ON CONFLICT (sesion_id, jornada, "sindicatoId") DO UPDATE SET
         ultimo_fix_ts = EXCLUDED.ultimo_fix_ts, lat = EXCLUDED.lat, lng = EXCLUDED.lng
     `;
@@ -196,6 +246,15 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     rutaId = await crearRuta(lineaAId, 'ida', RECTA);
     rutaOpuestaId = await crearRuta(lineaAId, 'vuelta', RECTA);
     rutaCircularId = await crearRuta(lineaAId, 'circular', CIRCULAR);
+    rutaCerradaId = await crearRuta(lineaAId, 'cerrada', CERRADA);
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      // PC de retorno en el extremo este, entre ambos carriles.
+      await tx.$executeRaw`
+        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, rol, estado, "createdAt", "updatedAt")
+        VALUES (${randomUUID()}, ${rutaCerradaId}, 1, ST_SetSRID(ST_MakePoint(-58.38, -34.60005), 4326)::geography, 150, false, 'retorno', 'activo', now(), now())
+      `;
+      await tx.$executeRaw`SELECT crear_particion_gps_points(${JORNADA}::date)`;
+    });
   });
 
   beforeEach(() => {
@@ -211,11 +270,12 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
   async function limpiarFixtures(): Promise<void> {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
       await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE "sindicatoId" IN (${sindicatoAId}, ${sindicatoBId})`;
+      await tx.$executeRaw`DELETE FROM gps_points WHERE "sindicatoId" IN (${sindicatoAId}, ${sindicatoBId})`;
       await tx.sesionOperativa.deleteMany({
         where: { sindicatoId: { in: [sindicatoAId, sindicatoBId] } },
       });
       await tx.asignacion.deleteMany({
-        where: { rutaId: { in: [rutaId, rutaOpuestaId, rutaCircularId] } },
+        where: { rutaId: { in: [rutaId, rutaOpuestaId, rutaCircularId, rutaCerradaId] } },
       });
       await tx.vehiculo.deleteMany({
         where: { sindicatoId: { in: [sindicatoAId, sindicatoBId] } },
@@ -238,7 +298,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
       await tx.conductor.deleteMany({
         where: { sindicatoId: { in: [sindicatoAId, sindicatoBId] } },
       });
-      await tx.$executeRaw`DELETE FROM rutas WHERE id IN (${rutaId}, ${rutaOpuestaId}, ${rutaCircularId})`;
+      await tx.$executeRaw`DELETE FROM rutas WHERE id IN (${rutaId}, ${rutaOpuestaId}, ${rutaCircularId}, ${rutaCerradaId})`;
       await tx.linea.deleteMany({ where: { sindicatoId: sindicatoAId } });
       await tx.sindicato.deleteMany({ where: { id: { in: [sindicatoAId, sindicatoBId] } } });
     });
@@ -474,11 +534,10 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     expect(t1.delante).toBeNull();
   });
 
-  it('LIMITACIÓN CONOCIDA — ruta circular (inicio ≈ fin): un vehículo pegado al mío puede salir a ~una vuelta entera', async () => {
-    // Yo estoy en el primer vértice (frac 0). Otro vehículo está físicamente a pocos metros,
-    // pero justo ANTES del cierre del anillo: ST_LineLocatePoint lo proyecta al final de la
-    // línea (frac ≈ 1). Resultado: lo reporta "delante" a ~el perímetro completo (no a metros).
-    // No se corrige acá (v2: desempatar con el último punto de control cumplido).
+  it('ruta circular sin retorno: el vecino pegado al cierre queda a metros (lado más corto), no a una vuelta', async () => {
+    // Yo estoy en el primer vértice. Otro vehículo está a ~1,5 m, justo ANTES del cierre del
+    // anillo: la proyección lo pone al final de la línea (progreso ≈ perímetro). Con distancia
+    // circular queda DETRÁS a metros; antes salía "delante" a casi el perímetro completo.
     const yo = await crearSesion({
       placa: 'VRCIRY',
       rutaId: rutaCircularId,
@@ -489,19 +548,150 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
       rutaId: rutaCircularId,
       pos: { lng: -58.40001, lat: -34.60001 }, // ≈ 1,5 m del vértice de cierre, lado del final
     });
-    const perimetroM = await withTenantContext(
-      { rol: 'admin_quivo', sindicatoId: null },
-      async (tx) => {
-        const [fila] = await tx.$queryRaw<{ largo: number }[]>`
-        SELECT ST_Length(geometria) AS largo FROM rutas WHERE id = ${rutaCircularId}
-      `;
-        return fila!.largo;
-      },
-    );
 
     const r = await service.obtener(yo, {}, AHORA);
 
-    expect(r.delante?.placa).toBe('VRCIRV');
-    expect(r.delante!.distanciaM).toBeGreaterThan(perimetroM * 0.9);
+    expect(r.detras?.placa).toBe('VRCIRV');
+    expect(r.detras!.distanciaM).toBeLessThan(10);
+    expect(r.delante).toBeNull();
+  });
+
+  describe('circuito cerrado con ida y regreso por la misma calle (fase desde `vueltas`)', () => {
+    // Yo voy de REGRESO por el carril sur pero mi GPS cae a 3 m del carril norte (la ida): la
+    // proyección global me pondría en la ida, a 183 m del otro. Con mi fase (`pasoRetornoTs`)
+    // estoy ~2,76 km de recorrido, y el otro (ida, ~1,10 km) queda DETRÁS por el lado corto (~1,66 km).
+    const MIA_REGRESO = { lng: -58.39, lat: -34.60003 };
+    const OTRO_IDA = { lng: -58.388, lat: LAT };
+
+    it('la fase de `vueltas` ubica a cada uno en su mitad y la fila es única y simétrica', async () => {
+      const yo = await crearSesion({
+        placa: 'VRCEY',
+        rutaId: rutaCerradaId,
+        pos: MIA_REGRESO,
+        fase: 'regreso',
+      });
+      const otro = await crearSesion({
+        placa: 'VRCEO',
+        rutaId: rutaCerradaId,
+        pos: OTRO_IDA,
+        fase: 'ida',
+      });
+
+      const mio = await service.obtener(yo, {}, AHORA);
+      expect(mio.delante).toBeNull();
+      expect(mio.detras?.placa).toBe('VRCEO');
+      expect(mio.detras!.distanciaM).toBeGreaterThan(1_600);
+      expect(mio.detras!.distanciaM).toBeLessThan(1_720);
+
+      // Simetría: el otro me ve DELANTE a la misma distancia, en una sola fila.
+      const suyo = await service.obtener(otro, {}, AHORA);
+      expect(suyo.detras).toBeNull();
+      expect(suyo.delante?.placa).toBe('VRCEY');
+      expect(suyo.delante!.distanciaM).toBeCloseTo(mio.detras!.distanciaM, 0);
+    });
+
+    it('`fase` del request manda sobre la derivada de `vueltas` (y sin vuelta se usa la del request)', async () => {
+      const yo = await crearSesion({ placa: 'VRCFY', rutaId: rutaCerradaId, pos: MIA_REGRESO });
+      await crearSesion({ placa: 'VRCFO', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida' });
+
+      // Sin vuelta ni fase: proyección global (me pone en la ida) ⇒ el otro queda DELANTE a ~183 m.
+      const sinFase = await service.obtener(yo, {}, AHORA);
+      expect(sinFase.delante?.placa).toBe('VRCFO');
+      expect(sinFase.delante!.distanciaM).toBeLessThan(250);
+
+      service.limpiarCache();
+      const conFase = await service.obtener(yo, { fase: 'regreso' }, AHORA);
+      expect(conFase.delante).toBeNull();
+      expect(conFase.detras?.placa).toBe('VRCFO');
+      expect(conFase.detras!.distanciaM).toBeGreaterThan(1_600);
+    });
+
+    it('un fix impreciso se ignora a favor del último fix bueno de gps_points', async () => {
+      const yo = await crearSesion({
+        placa: 'VRACY',
+        rutaId: rutaCerradaId,
+        pos: MIA_REGRESO,
+        fase: 'regreso',
+      });
+      // El resumen del otro es un salto impreciso (120 m, lejos de la ruta); su último fix bueno
+      // (hace 90 s) está sobre la ida. Debe verse en el fix bueno, no en el malo.
+      await crearSesion({
+        placa: 'VRACO',
+        rutaId: rutaCerradaId,
+        pos: { lng: -58.3, lat: -34.5 },
+        accuracy: 120,
+        fase: 'ida',
+        puntosGps: [
+          { lng: -58.388, lat: LAT, accuracy: 8, edadMs: 90_000 },
+          { lng: -58.37, lat: -34.59, accuracy: 120, edadMs: 20_000 },
+        ],
+      });
+
+      const r = await service.obtener(yo, {}, AHORA);
+
+      expect(r.detras?.placa).toBe('VRACO');
+      expect(r.detras!.distanciaM).toBeGreaterThan(1_600);
+      expect(r.detras!.edadFixS).toBe(90); // la edad es la del fix bueno, no la del resumen
+    });
+
+    it('un par con fix impreciso y sin ningún fix bueno reciente no se ubica en ningún lado', async () => {
+      const yo = await crearSesion({
+        placa: 'VRSBY',
+        rutaId: rutaCerradaId,
+        pos: MIA_REGRESO,
+        fase: 'regreso',
+      });
+      await crearSesion({
+        placa: 'VRSBO',
+        rutaId: rutaCerradaId,
+        pos: OTRO_IDA,
+        accuracy: 120,
+        fase: 'ida',
+        // Fix bueno, pero más viejo que la ventana de frescura.
+        puntosGps: [{ lng: -58.388, lat: LAT, accuracy: 8, edadMs: UMBRAL_VECINO_FRESCO_MS + 60_000 }],
+      });
+
+      const r = await service.obtener(yo, {}, AHORA);
+
+      expect(r.delante).toBeNull();
+      expect(r.detras).toBeNull();
+    });
+
+    it('un par a ~3 km de su mitad del trazado (fix errado) se descarta', async () => {
+      const yo = await crearSesion({
+        placa: 'VRLEY',
+        rutaId: rutaCerradaId,
+        pos: MIA_REGRESO,
+        fase: 'regreso',
+      });
+      await crearSesion({
+        placa: 'VRLEO',
+        rutaId: rutaCerradaId,
+        pos: { lng: -58.388, lat: LAT + 0.027 }, // ≈ 3 km al norte, precisión "buena"
+        fase: 'ida',
+      });
+
+      const r = await service.obtener(yo, {}, AHORA);
+
+      expect(r.delante).toBeNull();
+      expect(r.detras).toBeNull();
+    });
+
+    it('mi fix impreciso del resumen se reemplaza por mi último fix bueno de gps_points', async () => {
+      const yo = await crearSesion({
+        placa: 'VRMIY',
+        rutaId: rutaCerradaId,
+        pos: { lng: -58.3, lat: -34.5 },
+        accuracy: 120,
+        fase: 'regreso',
+        puntosGps: [{ ...MIA_REGRESO, accuracy: 6, edadMs: 60_000 }],
+      });
+      await crearSesion({ placa: 'VRMIO', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida' });
+
+      const r = await service.obtener(yo, {}, AHORA);
+
+      expect(r.detras?.placa).toBe('VRMIO');
+      expect(r.detras!.distanciaM).toBeGreaterThan(1_600);
+    });
   });
 });
