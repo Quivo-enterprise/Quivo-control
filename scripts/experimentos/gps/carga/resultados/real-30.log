@@ -1,0 +1,43 @@
+Carga -> https://quivo-api-carga-hjqvfgsdnq-tl.a.run.app | 30 conductores, 3 pestañas admin, 30 min
+[1 min] requests=1008 429=0 5xx=0 errRed=0
+[2 min] requests=2016 429=0 5xx=0 errRed=0
+[3 min] requests=3024 429=0 5xx=0 errRed=0
+[4 min] requests=4032 429=0 5xx=0 errRed=0
+[5 min] requests=5040 429=0 5xx=0 errRed=0
+[6 min] requests=6048 429=0 5xx=0 errRed=0
+[7 min] requests=7056 429=0 5xx=0 errRed=0
+[8 min] requests=8064 429=0 5xx=0 errRed=0
+[9 min] requests=9072 429=0 5xx=0 errRed=0
+[10 min] requests=10080 429=0 5xx=0 errRed=0
+[11 min] requests=11087 429=0 5xx=0 errRed=0
+[12 min] requests=12095 429=0 5xx=0 errRed=0
+[13 min] requests=13103 429=0 5xx=0 errRed=0
+[14 min] requests=14111 429=0 5xx=0 errRed=0
+[15 min] requests=15119 429=0 5xx=0 errRed=0
+[16 min] requests=16127 429=0 5xx=0 errRed=0
+[17 min] requests=17135 429=0 5xx=0 errRed=0
+[18 min] requests=18143 429=0 5xx=0 errRed=0
+[19 min] requests=19151 429=0 5xx=0 errRed=0
+[20 min] requests=20159 429=0 5xx=0 errRed=0
+[21 min] requests=21167 429=0 5xx=0 errRed=0
+[22 min] requests=22175 429=0 5xx=0 errRed=0
+[23 min] requests=23182 429=0 5xx=0 errRed=0
+[24 min] requests=24190 429=0 5xx=0 errRed=0
+[25 min] requests=25198 429=0 5xx=0 errRed=0
+[26 min] requests=26206 429=0 5xx=0 errRed=0
+[27 min] requests=27214 429=0 5xx=0 errRed=0
+[28 min] requests=28222 429=0 5xx=0 errRed=0
+[29 min] requests=29230 429=0 5xx=0 errRed=0
+
+=== Resultado final (latencias en ms) ===
+endpoint                                  n      p50      p95      p99  estados
+GET /mobile/perfil                      900     86.6     95.1    160.7  {"422":900}
+GET /mobile/ruta-a-punto               3600     56.7     60.8    131.7  {"200":3600}
+GET /mobile/vecinos-ruta               1800     70.5     78.1    141.9  {"200":1800}
+GET /mobile/vuelta-actual              2700     68.7       74      143  {"200":2700}
+GET /reportes/en-vivo/molinos           360       64     69.6     87.3  {"200":360}
+GET /reportes/en-vivo/posiciones       2700     85.2     98.6    190.6  {"200":2700}
+GET /reportes/jornadas                  180     71.8    101.4    180.3  {"200":180}
+POST /sync/batches                    17998     59.5     64.7    133.7  {"202":17998}
+totales: {"n":30238,"c429":0,"c5xx":0,"err":0}
+Resultado escrito en resultados/real-30.json

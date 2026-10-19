@@ -111,7 +111,32 @@ Logs de `quivo-api` del piloto del 14/10 (2 trufis, 10:00–04:00 UTC): 3.203 re
   pero no se descarta con 2 equipos: el punto 1.3 queda, con menor prioridad.
 - **Status:** cero 429 y cero 5xx; 5 respuestas 401 (refresh de token).
 - **`max_connections`: no confirmado.** No hay acceso SQL directo desde fuera de la VPC. El default documentado de
-  Cloud SQL para 1,7 GB es 50. Se confirma con `SHOW max_connections` en el clon efímero.
+  Cloud SQL para 1,7 GB es 50. Confirmado 50 en la prueba del 19/10.
+
+### Prueba de carga en el entorno efímero (19/10)
+
+Imagen `r20-20261019`, Cloud SQL `db-g1-small` (mismo tier que prod), base vacía con 60 conductores sembrados, 3
+pestañas del panel en vivo, 30 min por escalón, generador desde una sola laptop. Crudos en
+`scripts/experimentos/gps/carga/resultados/real-30.*` y `real-60.*`. Métricas de Cloud Monitoring por minuto.
+
+| Métrica | 30 conductores | 60 conductores | Criterio en 60 |
+|---|---|---|---|
+| Requests | 30.238 (~17/s) | 57.239 (~32/s) | — |
+| 5xx / 429 / error de red | 0 / 0 / 0 | 0 / 0 / 0 | 0 |
+| p95 por endpoint | 60–101 ms | 60–100 ms | < 500 ms |
+| CPU Cloud SQL (prom. / máx.) | 17 % / 18,5 % | 28 % / 33 % | < 60 % |
+| Conexiones (máx.) | 8 de 50 | 9 de 50 | < 35 |
+| Memoria Redis | 0,7 % plana | 0,7 % plana | estable |
+| API Cloud Run | 1 instancia, CPU p99 14 % | 1 instancia, CPU p99 21 % | — |
+| Puntos ingeridos | 35.907 (= enviados, sin atraso) | ~71.900 (= enviados, sin atraso) | cola acotada |
+
+- **`max_connections` = 50** confirmado con `SHOW max_connections` en `db-g1-small`.
+- **Veredicto:** pasa todos los criterios con margen. **Se queda `db-g1-small`** (decisión del CTO: que decida la
+  prueba). Se revisa con métricas reales al pasar de 15 conductores (alertas del punto 2).
+- **Límites de la prueba:** base vacía (índices chicos; en prod `gps_points` crece ~250 MB/día con 30), un solo origen
+  de red, sin ráfagas de reconexión (teléfonos vaciando el outbox a la vez).
+- `GET /mobile/perfil` dio 422 en todas las llamadas por un bug del seed (`'mañana'` en vez de `'manana'`), no de la
+  API; corregido en el mismo PR que registra esto.
 
 ## Fase 1 — Obligatorio antes de pasar de 5 conductores
 

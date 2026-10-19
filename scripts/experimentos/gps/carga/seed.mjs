@@ -125,7 +125,7 @@ async function main() {
       );
       await client.query(
         `INSERT INTO asignaciones (id, "rotacionId", "vehiculoId", "conductorId", "rutaId", fecha, horario, orden, "venceAt", estado, "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5, $6, 'mañana', $7, now() + interval '1 day', 'vigente', now(), now())`,
+         VALUES ($1, $2, $3, $4, $5, $6, 'manana', $7, now() + interval '1 day', 'vigente', now(), now())`,
         [asignacionId, rotacionId, vehiculoId, conductorId, rutaId, hoy, i],
       );
       await client.query(
