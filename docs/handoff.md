@@ -93,6 +93,11 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       `eas update:republish --group ebc72ea4-68e6-4fe8-88dc-40c3a5650094`.
 - [ ] **[CTO]** Prueba en la calle con 2 trufis: una sola fila por vehículo, distancias iguales en ambos, sin
       inversiones en Honduras ni en SR; mirar qué pasa con un trufi esperando en Molinos.
+- [ ] **[Claude, en curso]** Escalar a 30 conductores simultáneos: plan aprobado 18/10 en
+      [`docs/plan-escalabilidad-30.md`](plan-escalabilidad-30.md). Sin LB externo, sin Kubernetes, sin PgBouncer.
+      Bloqueantes verificados en prod: cola `ingesta-sync` sin `removeOnComplete` (Redis `noeviction` se llena), jobs sin
+      reintentos, API/worker sin `SENTRY_DSN`, sin alertas ni budget, PITR y archivo GPS apagados. Fase 0 (medir +
+      prueba de carga en entorno efímero) antes de tocar código; Fase 1 obligatoria antes de pasar de 5 conductores.
 - [ ] **[Claude, propuesto]** CI: `cancel-in-progress` solo en PRs (hoy cancela runs de `main`: 14 en octubre) y
       revisar `admin-panel.spec.ts` (`:154` flaky el 18/10; `:98` rompió 3 runs el 14/10, ya corregido).
 - [x] **[CTO, 2026-10-18]** Plan punto 4 decidido: OTA desde CI con `workflow_dispatch` que dispara el CTO (disparar =
