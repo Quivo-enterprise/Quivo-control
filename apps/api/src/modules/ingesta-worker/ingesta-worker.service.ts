@@ -8,7 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma, withTenantContext } from '@quivo/db';
 import type { Prisma as PrismaTypes } from '@quivo/db';
-import { Queue, Worker, type Job } from 'bullmq';
+import { Queue, WaitingError, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import {
   PayloadInicioJornadaSchema,
@@ -19,8 +19,7 @@ import {
   type PayloadCumplimientoPuntoControl,
 } from '@quivo/shared';
 import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
-import { leerConcurrenciaIngesta } from './ingesta-concurrencia.js';
-import { esErrorTransitorioDb } from './error-transitorio.js';
+import { esErrorTransitorioDb, sqlstateDe } from './error-transitorio.js';
 import {
   detectarPcOmitidosAlFinRecorrido,
   detectarPcOmitidosPorCumplimiento,
@@ -37,6 +36,66 @@ const CADA_MS_PARTICIONES = 24 * 60 * 60 * 1000; // diario alcanza — se crean 
 const DIAS_ANTICIPACION_PARTICION = 5;
 
 const CONTEXTO_ADMIN = { rol: 'admin_quivo', sindicatoId: null } as const;
+
+/**
+ * Reintento EN PROCESO de un lote ante un error transitorio de la DB (no `attempts` de BullMQ: un
+ * job fallido iría a `delayed` y el worker procesaría antes lotes más nuevos del mismo teléfono,
+ * lo que genera PC omitidos falsos). Con concurrencia 1 la cola espera mientras este lote se
+ * reintenta, así que el orden por dispositivo se conserva. Espera: 5 s, 10 s, 20 s, 40 s y luego 60 s.
+ */
+const REINTENTO_BASE_MS = 5_000;
+const REINTENTO_TOPE_MS = 60_000;
+/**
+ * Ordenado para cualquier caída realista (un failover de Cloud SQL tarda 60-90 s): rendirse antes
+ * reordena los lotes del dispositivo (PC omitido falso) y no gana nada, el siguiente lote choca con
+ * la misma caída. Un lote mal clasificado como transitorio bloquea la ingesta como mucho 30 min
+ * (alerta por profundidad de cola pendiente: plan Fase 1.2).
+ * Si se agota, `procesarLote` relanza: el job queda en el set `failed` de BullMQ (`removeOnFail` 7 d /
+ * 5000) con el payload completo. Para reencolarlos: `node scripts/ingesta-reencolar-fallidos.mjs`
+ * (resumen por motivo) y `--reencolar --motivo <texto>` (el lote es idempotente).
+ */
+const REINTENTO_PRESUPUESTO_MS = 30 * 60_000;
+/**
+ * Transacciones de ingesta: el default de Prisma (5 s) hace que un lote pesado expire en CADA
+ * intento; con 30 s solo expira uno realmente anómalo. Un lote realmente pesado (P2028 por expirar)
+ * se reintenta hasta el presupuesto de 30 min y luego queda en `failed`, reencolable: nunca se
+ * absorbe evidencia como rechazo permanente por un timeout.
+ */
+const TX_INGESTA = { timeout: 30_000 } as const;
+
+/**
+ * Se lanza al apagar el worker mientras el lote duerme entre reintentos, DESPUÉS de devolver el job
+ * al frente de `wait` con `job.moveToWait(token)` (lock liberado, orden por dispositivo intacto).
+ * Extiende `WaitingError` a propósito: BullMQ lo ignora en `handleFailed` y no lo manda a `failed`.
+ * `name = 'WaitingError'` para que el fallback por nombre de BullMQ funcione aunque haya una copia
+ * duplicada de bullmq (el `instanceof` falla entre copias); `instanceof` sigue funcionando.
+ */
+class IngestaAbortadaError extends WaitingError {
+  constructor() {
+    super('Ingesta abortada por apagado del worker');
+    this.name = 'WaitingError';
+  }
+}
+
+const dormir = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new IngestaAbortadaError());
+    const alAbortar = () => {
+      clearTimeout(timer);
+      reject(new IngestaAbortadaError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', alAbortar);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', alAbortar, { once: true });
+  });
+
+/** Error permanente de un evento, retenido hasta que el intento termine sin fallo transitorio. */
+interface ErrorSyncPendiente {
+  evento: EventoSync;
+  error: unknown;
+}
 
 type Tx = PrismaTypes.TransactionClient;
 
@@ -59,6 +118,8 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(IngestaWorkerService.name);
   private readonly connection: Redis;
   private readonly ingestaWorker: Worker<LoteIngestaJob>;
+  /** Corta el sueño del reintento en proceso al apagar (ver `onModuleDestroy`). */
+  private readonly apagado = new AbortController();
   private readonly ingestaQueueStats: Queue;
   private readonly particionesQueue: Queue;
   private readonly particionesWorker: Worker;
@@ -73,22 +134,22 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     // Solo para leer profundidad de cola (métrica) — el productor real vive en
     // `SyncQueueService` (QUI-240, otro módulo/proceso).
     this.ingestaQueueStats = new Queue(COLA_INGESTA_SYNC, { connection: this.connection });
+    // Sin `lockDuration`/`stalledInterval` propios: el worker renueva el lock del job cada
+    // `lockDuration / 2` (15 s) mientras el proceso vive (bullmq `LockManager`), así que el
+    // reintento en proceso de varios minutos no se marca como stalled. Si el proceso muere, el
+    // lock vence a los 30 s y el chequeo de stalled re-despacha el lote (idempotente). En un apagado
+    // limpio el job vuelve a `wait` por `moveToWait` (ver `IngestaAbortadaError`), sin pasar por stalled.
     this.ingestaWorker = new Worker<LoteIngestaJob>(
       COLA_INGESTA_SYNC,
-      async (job: Job<LoteIngestaJob>) => this.procesarLote(job),
+      async (job: Job<LoteIngestaJob>, token?: string) => this.procesarLote(job, token),
       {
         connection: this.connection,
-        concurrency: leerConcurrenciaIngesta(config.get<string>('INGESTA_WORKER_CONCURRENCY')),
+        // shortcut: concurrencia 1 = orden por dispositivo; para más throughput hace falta orden por dispositivo (cola por hash de deviceId) o detección insensible al orden
+        concurrency: 1,
       },
     );
     this.ingestaWorker.on('failed', (job, error) => {
-      // `attemptsMade` ya incluye el intento que acaba de fallar; es el último si agotó `attempts`.
-      const hechos = job?.attemptsMade ?? 0;
-      const definitivo = hechos >= (job?.opts.attempts ?? 1);
-      this.logger.error(
-        `Job ${job?.id} de ingesta falló (intento ${hechos}, ${definitivo ? 'definitivo' : 'se reintenta'}): ${error.message}`,
-        error.stack,
-      );
+      this.logger.error(`Job ${job?.id} de ingesta falló definitivamente: ${error.message}`, error.stack);
     });
 
     this.particionesQueue = new Queue(NOMBRE_COLA_PARTICIONES, { connection: this.connection });
@@ -110,6 +171,9 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
+    // Sin esto `close()` esperaría hasta 10 min a un lote dormido en el reintento. Abortar y cerrar
+    // en el mismo tick: `close()` debe estar en curso cuando el job relance (ver `IngestaAbortadaError`).
+    this.apagado.abort();
     await this.ingestaWorker.close();
     await this.ingestaQueueStats.close();
     await this.particionesWorker.close();
@@ -176,26 +240,75 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Corre el lote entero y, ante un error transitorio de la DB, lo vuelve a correr (es
+   * idempotente: ON CONFLICT / skipDuplicates por `eventId`, `dedupeKey` en infracciones, advisory
+   * locks) con backoff exponencial hasta agotar `REINTENTO_PRESUPUESTO_MS`; entonces relanza y el
+   * job queda en `failed`.
+   */
   private async procesarLote(
     job: Job<LoteIngestaJob>,
+    token?: string,
+  ): Promise<{ procesados: number; errores: number }> {
+    const inicio = Date.now();
+    this.detectarDriftReloj(job.data.eventos); // una vez por lote, no por reintento
+    // Rechazos permanentes vistos en cualquier intento (son deterministas por evento): un intento que
+    // cae antes de llegar a un evento no debe hacer olvidar los que ya se vieron.
+    const conocidos = new Map<string, ErrorSyncPendiente>();
+    for (let intento = 1; ; intento++) {
+      // Por intento: los de un intento fallido NO se escriben (el re-run los recalcula).
+      const rechazados: ErrorSyncPendiente[] = [];
+      try {
+        return await this.procesarLoteUnaVez(job, intento, rechazados);
+      } catch (error) {
+        for (const rz of rechazados) conocidos.set(rz.evento.eventId, rz);
+        const esperaMs = Math.min(REINTENTO_BASE_MS * 2 ** (intento - 1), REINTENTO_TOPE_MS);
+        if (!esErrorTransitorioDb(error) || Date.now() - inicio + esperaMs > REINTENTO_PRESUPUESTO_MS) {
+          // Los permanentes ya bufereados NO llegan a `sync_errors` (la escritura es el último paso del
+          // intento): que al menos no queden mudos. El payload completo sigue en el set `failed`.
+          this.registrarRechazadosPerdidos(job, [...conocidos.values()], error);
+          throw error;
+        }
+        const e = error as { code?: unknown; errorCode?: unknown };
+        const codigo = e.code ?? e.errorCode;
+        this.logger.warn(
+          `Job ${job.id}: error transitorio de la DB (${typeof codigo === 'string' ? codigo : 'sin código'}) ` +
+            `en el intento ${intento}; se reintenta en ${esperaMs / 1000}s`,
+        );
+        try {
+          await dormir(esperaMs, this.apagado.signal);
+        } catch (abortada) {
+          // Apagado: el job vuelve al FRENTE de `wait` con el lock liberado (BullMQ lo trata como
+          // WaitingError), así el siguiente worker lo toma primero y el orden se conserva.
+          if (abortada instanceof IngestaAbortadaError) await job.moveToWait(token);
+          throw abortada; // apagado: el job vuelve a `wait`, nada se pierde
+        }
+      }
+    }
+  }
+
+  private async procesarLoteUnaVez(
+    job: Job<LoteIngestaJob>,
+    intento: number,
+    rechazados: ErrorSyncPendiente[],
   ): Promise<{ procesados: number; errores: number }> {
     const inicio = Date.now();
     const { sindicatoId, eventos } = job.data;
-    this.detectarDriftReloj(eventos);
 
-    let errores = 0;
+    // `rechazados` (errores permanentes) se escribe a `sync_errors` solo al final, si el intento no
+    // falló por un error transitorio (si falla, el lote se re-corre y se descartan, sin duplicar filas).
     const porTipo = agruparPorTipo(eventos);
     // Entradas de la detección de infracciones: SOLO lo efectivamente persistido en este lote.
     const entradas: EntradasDeteccion = { gps: [], cumplimientos: [], operativos: [] };
 
     if (porTipo.gps_point.length > 0) {
       const r = await this.procesarGpsPoints(sindicatoId, porTipo.gps_point);
-      errores += r.errores;
-      if (r.errores === 0) entradas.gps = porTipo.gps_point;
+      rechazados.push(...r);
+      if (r.length === 0) entradas.gps = porTipo.gps_point;
     }
     for (const evento of porTipo.cumplimiento_punto_control) {
       const r = await this.procesarCumplimiento(sindicatoId, evento);
-      errores += r.errores;
+      if (r.rechazado) rechazados.push(r.rechazado);
       if (r.cumplido) entradas.cumplimientos.push({ evento, ts: r.cumplido.ts });
     }
     const operativos = [
@@ -206,8 +319,8 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     ];
     for (const evento of operativos) {
       const r = await this.procesarEventoOperativo(sindicatoId, evento);
-      errores += r;
-      if (r === 0 && (evento.tipo === 'inicio_recorrido' || evento.tipo === 'fin_recorrido')) {
+      if (r) rechazados.push(r);
+      if (!r && (evento.tipo === 'inicio_recorrido' || evento.tipo === 'fin_recorrido')) {
         entradas.operativos.push(evento);
       }
     }
@@ -223,24 +336,57 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     const latenciaMs = Date.now() - inicio;
     const pendientes = await this.contarPendientesCola();
     this.logger.log(
-      `Job ${job.id} (intento ${job.attemptsMade + 1}): ${eventos.length} eventos (${porTipo.gps_point.length} gps, ` +
+      `Job ${job.id} (intento ${intento}): ${eventos.length} eventos (${porTipo.gps_point.length} gps, ` +
         `${porTipo.cumplimiento_punto_control.length} PC, ${operativos.length} operativos), ` +
-        `${errores} error(es), ${latenciaMs}ms, cola pendiente=${pendientes}`,
+        `${rechazados.length} error(es), ${latenciaMs}ms, cola pendiente=${pendientes}`,
     );
+    // Último paso que puede fallar: un transitorio posterior re-correría el lote y duplicaría
+    // `sync_errors`. Residual: si se pierde el ack tras el commit, el re-run los duplica igual.
+    await this.registrarErroresSync(sindicatoId, rechazados);
+    const errores = rechazados.length;
     return { procesados: eventos.length - errores, errores };
   }
 
+  /** Solo métrica: un fallo de Redis acá no debe re-correr un lote ya persistido. */
   private async contarPendientesCola(): Promise<number> {
-    return this.ingestaQueueStats.getWaitingCount();
+    try {
+      return await this.ingestaQueueStats.getWaitingCount();
+    } catch (error) {
+      this.logger.debug(`No se pudo leer la cola pendiente: ${error instanceof Error ? error.message : String(error)}`);
+      return -1;
+    }
+  }
+
+  /** Una línea estructurada (sin payloads: PII) con lo que se perdería al agotar el presupuesto. */
+  private registrarRechazadosPerdidos(
+    job: Job<LoteIngestaJob>,
+    rechazados: ErrorSyncPendiente[],
+    causa: unknown,
+  ): void {
+    if (rechazados.length === 0) return;
+    this.logger.error(
+      `Job ${job.id}: el lote falló definitivamente (${esErrorTransitorioDb(causa) ? 'presupuesto de reintento agotado' : 'error permanente'}); ` +
+        `${rechazados.length} rechazo(s) permanente(s) NO ` +
+        `quedaron en sync_errors: ` +
+        JSON.stringify(
+          rechazados.map(({ evento, error }) => ({
+            eventId: evento.eventId,
+            tipo: evento.tipo,
+            motivo: error instanceof Error ? error.message : String(error),
+          })),
+        ),
+    );
   }
 
   private async procesarGpsPoints(
     sindicatoId: string,
     eventos: EventoSync[],
-  ): Promise<{ errores: number }> {
+  ): Promise<ErrorSyncPendiente[]> {
     try {
-      const tsFixDescartados = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-        insertarGpsPoints(tx, sindicatoId, eventos),
+      const tsFixDescartados = await withTenantContext(
+        { rol: 'admin_quivo', sindicatoId },
+        (tx) => insertarGpsPoints(tx, sindicatoId, eventos),
+        TX_INGESTA,
       );
       if (tsFixDescartados > 0) {
         // El evento traía `tsFix` pero no se pudo usar (formato inesperado del SDK, reloj del
@@ -253,14 +399,11 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
         );
       }
     } catch (error) {
-      // Transitorio (conexión, timeout, deadlock): el job falla y BullMQ reintenta el lote entero.
+      // Transitorio (conexión, timeout, deadlock): `procesarLote` re-corre el lote entero.
       if (esErrorTransitorioDb(error)) throw error;
-      await Promise.all(
-        eventos.map((evento) => this.registrarErrorSync(sindicatoId, evento, error)),
-      );
-      return { errores: eventos.length };
+      return eventos.map((evento) => ({ evento, error }));
     }
-    return { errores: 0 };
+    return [];
   }
 
   /**
@@ -315,6 +458,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
           const { abiertas, cerradas } = await withTenantContext(
             { rol: 'admin_quivo', sindicatoId },
             (tx) => procesarDesvioSesion(tx, sindicatoId, sesionId, e.puntos, e.marcadores),
+            TX_INGESTA,
           );
           if (abiertas > 0 || cerradas > 0) {
             this.logger.log(
@@ -331,10 +475,13 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       );
       for (const pc of pcs) {
         try {
-          await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-            pc.tipo === 'cumplimiento'
-              ? detectarPcOmitidosPorCumplimiento(tx, sindicatoId, sesionId, pc.puntoControlId, pc.ts)
-              : detectarPcOmitidosAlFinRecorrido(tx, sindicatoId, sesionId, pc.ts),
+          await withTenantContext(
+            { rol: 'admin_quivo', sindicatoId },
+            (tx) =>
+              pc.tipo === 'cumplimiento'
+                ? detectarPcOmitidosPorCumplimiento(tx, sindicatoId, sesionId, pc.puntoControlId, pc.ts)
+                : detectarPcOmitidosAlFinRecorrido(tx, sindicatoId, sesionId, pc.ts),
+            TX_INGESTA,
           );
         } catch (error) {
           this.registrarFalloDeteccion(sindicatoId, sesionId, 'pc_omitido', error);
@@ -397,8 +544,10 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     }
     for (const [sesionId, entrada] of sesiones) {
       try {
-        const r = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-          procesarVueltasSesion(tx, sindicatoId, sesionId, entrada),
+        const r = await withTenantContext(
+          { rol: 'admin_quivo', sindicatoId },
+          (tx) => procesarVueltasSesion(tx, sindicatoId, sesionId, entrada),
+          TX_INGESTA,
         );
         if (r.abiertas > 0 || r.cerradas > 0 || r.infracciones > 0) {
           this.logger.log(
@@ -414,8 +563,8 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Falla de la detección: solo log estructurado (sesión + error). No va a `sync_errors`.
-   * Si es transitorio de la DB se relanza: la evidencia ya está guardada y el reintento del lote
-   * (idempotente) vuelve a correr la detección; tragárselo la perdería para siempre.
+   * Si es transitorio de la DB se relanza: la evidencia ya está guardada y `procesarLote` re-corre
+   * el lote entero (idempotente), detección de TODAS las sesiones incluida; tragárselo la perdería.
    */
   private registrarFalloDeteccion(
     sindicatoId: string,
@@ -439,11 +588,12 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
   private async procesarCumplimiento(
     sindicatoId: string,
     evento: EventoSync,
-  ): Promise<{ errores: number; cumplido?: { ts: string } }> {
+  ): Promise<{ rechazado?: ErrorSyncPendiente; cumplido?: { ts: string } }> {
     try {
       const { tsFixDescartado, cumplido, ts } = await withTenantContext(
         { rol: 'admin_quivo', sindicatoId },
         (tx) => procesarCumplimientoEnTx(tx, sindicatoId, evento),
+        TX_INGESTA,
       );
       if (tsFixDescartado) {
         // Mismo criterio que `procesarGpsPoints`: el fallback al `ts` de encolado NUNCA debe
@@ -454,19 +604,22 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
             `ingestado con el ts de encolado`,
         );
       }
-      return cumplido ? { errores: 0, cumplido: { ts } } : { errores: 0 };
+      return cumplido ? { cumplido: { ts } } : {};
     } catch (error) {
       if (esErrorTransitorioDb(error)) throw error;
-      await this.registrarErrorSync(sindicatoId, evento, error);
-      return { errores: 1 };
+      return { rechazado: { evento, error } };
     }
   }
 
-  private async procesarEventoOperativo(sindicatoId: string, evento: EventoSync): Promise<number> {
+  private async procesarEventoOperativo(
+    sindicatoId: string,
+    evento: EventoSync,
+  ): Promise<ErrorSyncPendiente | null> {
     try {
       const { recorridoEstadoOmitidoPorDriftFuturo, driftFuturoMs } = await withTenantContext(
         { rol: 'admin_quivo', sindicatoId },
         (tx) => insertarEventoOperativoEnTx(tx, sindicatoId, evento),
+        TX_INGESTA,
       );
       if (recorridoEstadoOmitidoPorDriftFuturo) {
         // Mismo criterio que `procesarGpsPoints`/`procesarCumplimiento`: esto NUNCA debe
@@ -479,36 +632,61 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
             `drift +${((driftFuturoMs ?? 0) / 1000).toFixed(0)}s — recorridoEstado NO actualizado`,
         );
       }
-      return 0;
+      return null;
     } catch (error) {
       if (esErrorTransitorioDb(error)) throw error;
-      await this.registrarErrorSync(sindicatoId, evento, error);
-      return 1;
+      return { evento, error };
     }
   }
 
-  private async registrarErrorSync(
+  /**
+   * Una sola transacción: si falla (transitorio), no queda nada escrito y el lote se re-corre. Solo si
+   * falla por un error de DATOS de Postgres (SQLSTATE clase 22: una fila que Postgres rechaza, p. ej.
+   * `\u0000` en jsonb) se cae a insertar fila por fila y se omiten (log sin payload) las que fallen
+   * con clase 22, para no perder las demás. Cualquier otro error (permisos, esquema) se relanza: el
+   * job falla y el payload queda en el set `failed`. Residual aceptado: un transitorio a mitad del
+   * fallback re-corre el lote y duplica las filas de `sync_errors` ya insertadas.
+   */
+  private async registrarErroresSync(
     sindicatoId: string,
-    evento: EventoSync,
-    error: unknown,
+    rechazados: ErrorSyncPendiente[],
   ): Promise<void> {
-    this.logger.error(
-      `Evento ${evento.eventId} (${evento.tipo}) rechazado: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    await withTenantContext(CONTEXTO_ADMIN, (tx) =>
-      tx.syncError.create({
-        data: {
-          sindicatoId,
-          deviceId: evento.deviceId,
-          // Best-effort desde el payload (QUI-242) — no todos los fallos lo tienen (ej. un
-          // evento operativo sin sesionId falla precisamente por no traerlo).
-          sesionId: extraerSesionId(evento.payload),
-          eventId: evento.eventId,
-          payload: evento.payload as PrismaTypes.InputJsonValue,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      }),
-    );
+    if (rechazados.length === 0) return;
+    for (const { evento, error } of rechazados) {
+      this.logger.error(
+        `Evento ${evento.eventId} (${evento.tipo}) rechazado: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const fila = ({ evento, error }: ErrorSyncPendiente) => ({
+      sindicatoId,
+      deviceId: evento.deviceId,
+      // Best-effort desde el payload (QUI-242) — no todos los fallos lo tienen (ej. un
+      // evento operativo sin sesionId falla precisamente por no traerlo).
+      sesionId: extraerSesionId(evento.payload),
+      eventId: evento.eventId,
+      payload: evento.payload as PrismaTypes.InputJsonValue,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    try {
+      await withTenantContext(
+        CONTEXTO_ADMIN,
+        (tx) => tx.syncError.createMany({ data: rechazados.map(fila) }),
+        TX_INGESTA,
+      );
+    } catch (error) {
+      if (esErrorTransitorioDb(error) || !sqlstateDe(error)?.startsWith('22')) throw error;
+      for (const rz of rechazados) {
+        try {
+          await withTenantContext(CONTEXTO_ADMIN, (tx) => tx.syncError.create({ data: fila(rz) }), TX_INGESTA);
+        } catch (errorFila) {
+          if (!sqlstateDe(errorFila)?.startsWith('22')) throw errorFila;
+          this.logger.error(
+            `Evento ${rz.evento.eventId} (${rz.evento.tipo}): no se pudo guardar en sync_errors, se omite: ` +
+              (errorFila instanceof Error ? errorFila.message : String(errorFila)),
+          );
+        }
+      }
+    }
   }
 
   private detectarDriftReloj(eventos: EventoSync[]): void {

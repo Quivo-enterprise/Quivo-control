@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { esErrorTransitorioDb } from './error-transitorio.js';
+import { esErrorTransitorioDb, sqlstateDe } from './error-transitorio.js';
 
 // Forma real con `PrismaPg` (verificada contra Postgres): SQL crudo → P2010 + SQLSTATE en meta.
 const prismaRaw = (originalCode: string) => ({
@@ -14,7 +14,14 @@ describe('esErrorTransitorioDb', () => {
     ['P1008', { code: 'P1008' }],
     ['P1017', { code: 'P1017' }],
     ['P2024', { code: 'P2024' }],
+    ['P2028 maxWait', { code: 'P2028', message: 'Transaction API error: Unable to start a transaction in the given time.' }],
     ['P2034', { code: 'P2034' }],
+    ['PrismaClientInitializationError (errorCode)', { errorCode: 'P1001' }],
+    ['pg: Connection terminated unexpectedly', new Error('Connection terminated unexpectedly')],
+    ['pg-pool: timeout exceeded when trying to connect', new Error('timeout exceeded when trying to connect')],
+    ['pg-pool: Connection terminated due to connection timeout', new Error('Connection terminated due to connection timeout')],
+    ['pg: client not queryable', new Error('Client has encountered a connection error and is not queryable')],
+    ['mensaje envuelto en cause', new Error('x', { cause: new Error('Connection terminated unexpectedly') })],
     ['statement_timeout 57014 (P2010)', prismaRaw('57014')],
     ['serialization 40001', prismaRaw('40001')],
     ['deadlock 40P01', prismaRaw('40P01')],
@@ -24,6 +31,13 @@ describe('esErrorTransitorioDb', () => {
     ['ECONNRESET', Object.assign(new Error('x'), { code: 'ECONNRESET' })],
     ['ECONNREFUSED', Object.assign(new Error('x'), { code: 'ECONNREFUSED' })],
     ['ETIMEDOUT', Object.assign(new Error('x'), { code: 'ETIMEDOUT' })],
+    ['EHOSTUNREACH', Object.assign(new Error('x'), { code: 'EHOSTUNREACH' })],
+    ['ENETUNREACH', Object.assign(new Error('x'), { code: 'ENETUNREACH' })],
+    ['ENOTFOUND', Object.assign(new Error('x'), { code: 'ENOTFOUND' })],
+    ['EAI_AGAIN', Object.assign(new Error('x'), { code: 'EAI_AGAIN' })],
+    ['EPIPE', Object.assign(new Error('x'), { code: 'EPIPE' })],
+    ['P2028 expirada', { code: 'P2028', message: 'Transaction already closed: expired transaction' }],
+    ['P2028 sin mensaje', { code: 'P2028' }],
     ['envuelto en cause', new Error('x', { cause: { code: 'P1017' } })],
   ])('%s → transitorio', (_nombre, error) => {
     expect(esErrorTransitorioDb(error)).toBe(true);
@@ -39,5 +53,18 @@ describe('esErrorTransitorioDb', () => {
     ['undefined', undefined],
   ])('%s → permanente', (_nombre, error) => {
     expect(esErrorTransitorioDb(error)).toBe(false);
+  });
+});
+
+describe('sqlstateDe', () => {
+  it.each([
+    ['P2010 con originalCode', prismaRaw('22P05'), '22P05'],
+    ['code de Postgres directo', { code: '42501' }, '42501'],
+    ['envuelto en cause', new Error('x', { cause: prismaRaw('22021') }), '22021'],
+    ['código Prisma sin SQLSTATE', { code: 'P2002' }, undefined],
+    ['sin código', new Error('x'), undefined],
+    ['null', null, undefined],
+  ])('%s', (_nombre, error, esperado) => {
+    expect(sqlstateDe(error)).toBe(esperado);
   });
 });

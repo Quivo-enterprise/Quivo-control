@@ -6,13 +6,32 @@ const PRISMA_TRANSITORIOS = new Set([
   'P1017', // el servidor cerró la conexión
   'P2024', // timeout esperando una conexión del pool
   'P2034', // conflicto de escritura / deadlock
+  'P2028', // transacción: maxWait o expirada (socket colgado en failover); un lote pesado agota el presupuesto del worker
   'P2037', // demasiadas conexiones
 ]);
 
 /** SQLSTATE de Postgres (o `08xxx`: errores de conexión). 57P01/57P03: failover o reinicio de Cloud SQL. */
 const PG_TRANSITORIOS = new Set(['57014', '40001', '40P01', '53300', '57P01', '57P02', '57P03']);
 
-const SOCKET_TRANSITORIOS = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT']);
+/** `pg` / `pg-pool` fallan sin `code` en estos casos (cierre del socket, pool saturado). */
+const MENSAJES_TRANSITORIOS = [
+  'Connection terminated unexpectedly',
+  'Connection terminated due to connection timeout',
+  'timeout exceeded when trying to connect',
+  'Client has encountered a connection error and is not queryable',
+];
+
+/** Errores de red de Node (sockets de `pg`). */
+const SOCKET_TRANSITORIOS = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EPIPE',
+]);
 
 function esCodigoTransitorio(codigo: unknown): boolean {
   if (typeof codigo !== 'string') return false;
@@ -26,7 +45,7 @@ function esCodigoTransitorio(codigo: unknown): boolean {
 
 /**
  * ¿El error es un fallo transitorio de la base (conexión, timeout, deadlock, pool)? Si lo es, el
- * worker debe relanzarlo para que BullMQ reintente el lote entero (es idempotente) en vez de
+ * worker debe relanzarlo para re-correr el lote entero en proceso (es idempotente) en vez de
  * mandar el evento a `sync_errors`. Con el adapter `PrismaPg` los fallos de Postgres llegan como
  * `PrismaClientKnownRequestError` (`P2010` en SQL crudo) con el SQLSTATE real en
  * `meta.driverAdapterError.cause.originalCode`; los de conexión traen su propio `P10xx`. También
@@ -37,14 +56,43 @@ export function esErrorTransitorioDb(error: unknown): boolean {
   for (let i = 0; i < 5 && typeof actual === 'object' && actual !== null; i++) {
     const e = actual as {
       code?: unknown;
+      errorCode?: unknown; // PrismaClientInitializationError
+      message?: unknown;
       cause?: unknown;
       meta?: { driverAdapterError?: { cause?: { originalCode?: unknown; code?: unknown } } };
     };
     const driver = e.meta?.driverAdapterError?.cause;
-    if (esCodigoTransitorio(e.code) || esCodigoTransitorio(driver?.originalCode) || esCodigoTransitorio(driver?.code)) {
+    if (
+      esCodigoTransitorio(e.code) ||
+      esCodigoTransitorio(e.errorCode) ||
+      esCodigoTransitorio(driver?.originalCode) ||
+      esCodigoTransitorio(driver?.code) ||
+      (typeof e.message === 'string' && MENSAJES_TRANSITORIOS.some((m) => (e.message as string).includes(m)))
+    ) {
       return true;
     }
     actual = e.cause;
   }
   return false;
+}
+
+/**
+ * SQLSTATE de Postgres del error (mismas fuentes y recorrido de `cause` que el clasificador), o
+ * undefined si no hay uno. La clase `22` son errores de datos (valor que la fila no admite).
+ */
+export function sqlstateDe(error: unknown): string | undefined {
+  let actual: unknown = error;
+  for (let i = 0; i < 5 && typeof actual === 'object' && actual !== null; i++) {
+    const e = actual as {
+      code?: unknown;
+      cause?: unknown;
+      meta?: { driverAdapterError?: { cause?: { originalCode?: unknown; code?: unknown } } };
+    };
+    const driver = e.meta?.driverAdapterError?.cause;
+    for (const c of [driver?.originalCode, driver?.code, e.code]) {
+      if (typeof c === 'string' && /^[0-9A-Z]{5}$/.test(c) && !/^P\d{4}$/.test(c)) return c;
+    }
+    actual = e.cause;
+  }
+  return undefined;
 }

@@ -8,15 +8,14 @@ export const COLA_INGESTA_SYNC = 'ingesta-sync';
 
 /**
  * Opciones de cada lote encolado. Sin `removeOn*` los jobs terminados se acumulan en Redis
- * (`noeviction`, 1 GB) hasta llenarlo; sin `attempts` un fallo transitorio de la DB perdería
- * el lote, que el teléfono ya recibió con 202. El reintento es seguro: `procesarLote` es
- * idempotente (ON CONFLICT / skipDuplicates por `eventId`, `dedupeKey` en infracciones).
+ * (`noeviction`, 1 GB) hasta llenarlo, y `removeOnFail` lleva también `count` para que una caída
+ * larga de la DB no lo llene. Sin `attempts`/`backoff` a propósito: BullMQ mandaría el lote
+ * fallido a `delayed` y el worker procesaría antes lotes más nuevos del mismo teléfono (PC omitido
+ * falso); el reintento ante errores transitorios de la DB es en proceso (`procesarLote`).
  */
 export const OPCIONES_JOB_INGESTA: JobsOptions = {
   removeOnComplete: { age: 3600, count: 1000 },
-  removeOnFail: { age: 7 * 24 * 3600 },
-  attempts: 5,
-  backoff: { type: 'exponential', delay: 2000 },
+  removeOnFail: { age: 7 * 24 * 3600, count: 5000 },
 };
 
 export interface LoteIngestaJob {
