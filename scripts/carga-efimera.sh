@@ -141,7 +141,7 @@ env_flag() { # json_env url_propia
 import json, sys
 prod = json.loads(sys.argv[1])
 permitidas = ("NODE_ENV", "MOBILE_LEGACY_AUTH_ENABLED", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
-             "INGESTA_WORKER_CONCURRENCY", "GPS_RETENTION_MONTHS")
+             "GPS_RETENTION_MONTHS")
 env = {k: prod[k] for k in permitidas if k in prod}
 env["BETTER_AUTH_URL"] = sys.argv[2]
 bad = [k for k, v in env.items() if "%%" in v]

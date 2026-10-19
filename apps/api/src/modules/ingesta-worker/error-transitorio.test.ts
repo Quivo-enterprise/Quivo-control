@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { esErrorTransitorioDb } from './error-transitorio.js';
+import { esErrorTransitorioDb, esP2028Expirada } from './error-transitorio.js';
 
 // Forma real con `PrismaPg` (verificada contra Postgres): SQL crudo → P2010 + SQLSTATE en meta.
 const prismaRaw = (originalCode: string) => ({
@@ -48,5 +48,16 @@ describe('esErrorTransitorioDb', () => {
     ['undefined', undefined],
   ])('%s → permanente', (_nombre, error) => {
     expect(esErrorTransitorioDb(error)).toBe(false);
+  });
+});
+
+describe('esP2028Expirada', () => {
+  it('distingue la transacción expirada de la variante maxWait', () => {
+    expect(esP2028Expirada({ code: 'P2028', message: 'Transaction already closed: expired transaction' })).toBe(true);
+    expect(esP2028Expirada({ code: 'P2028' })).toBe(true);
+    expect(esP2028Expirada(new Error('x', { cause: { code: 'P2028', message: 'expired' } }))).toBe(true);
+    expect(esP2028Expirada({ code: 'P2028', message: 'Unable to start a transaction in the given time' })).toBe(false);
+    expect(esP2028Expirada({ code: 'P1017' })).toBe(false);
+    expect(esP2028Expirada(null)).toBe(false);
   });
 });

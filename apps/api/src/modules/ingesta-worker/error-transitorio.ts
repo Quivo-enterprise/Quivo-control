@@ -22,8 +22,10 @@ const MENSAJES_TRANSITORIOS = [
 
 /**
  * P2028 tiene dos causas. "Unable to start a transaction in the given time" (maxWait / pool
- * saturado) es transitorio. "Transaction already closed ... expired transaction" (el `timeout` de la
- * transacción) NO: un lote demasiado pesado expiraría en cada reintento y bloquearía la cola.
+ * saturado) es siempre transitorio. "Transaction already closed ... expired transaction" (el
+ * `timeout` de la transacción) NO lo es para `esErrorTransitorioDb`: un lote demasiado pesado
+ * expiraría en cada reintento. Pero en un failover un socket colgado también termina así, por eso
+ * `esP2028Expirada` la expone aparte y el worker la tolera un número acotado de veces por lote.
  */
 const MENSAJE_P2028_TRANSITORIO = 'Unable to start a transaction';
 
@@ -67,6 +69,19 @@ export function esErrorTransitorioDb(error: unknown): boolean {
       (typeof e.message === 'string' && MENSAJES_TRANSITORIOS.some((m) => (e.message as string).includes(m)))
     ) {
       return true;
+    }
+    actual = e.cause;
+  }
+  return false;
+}
+
+/** P2028 de transacción expirada (no la variante `maxWait`, que es transitoria). Ver arriba. */
+export function esP2028Expirada(error: unknown): boolean {
+  let actual: unknown = error;
+  for (let i = 0; i < 5 && typeof actual === 'object' && actual !== null; i++) {
+    const e = actual as { code?: unknown; message?: unknown; cause?: unknown };
+    if (e.code === 'P2028') {
+      return !(typeof e.message === 'string' && e.message.includes(MENSAJE_P2028_TRANSITORIO));
     }
     actual = e.cause;
   }

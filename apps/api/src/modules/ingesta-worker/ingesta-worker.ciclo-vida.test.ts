@@ -24,10 +24,11 @@ vi.mock('ioredis', () => ({ Redis: class { disconnect = () => undefined; } }));
 import { IngestaWorkerService } from './ingesta-worker.service.js';
 
 describe('IngestaWorkerService — Worker de ingesta', () => {
-  it('se crea con concurrencia 1 y maxStalledCount 3; onModuleDestroy aborta antes de cerrar', async () => {
+  it('se crea con concurrencia 1 y maxStalledCount por defecto; onModuleDestroy aborta antes de cerrar', async () => {
     const servicio = new IngestaWorkerService({ get: () => undefined } as never);
     const ingesta = workers.find((w) => w.name === 'ingesta-sync')!;
-    expect(ingesta.opts).toMatchObject({ concurrency: 1, maxStalledCount: 3 });
+    expect(ingesta.opts).toMatchObject({ concurrency: 1 });
+    expect(ingesta.opts).not.toHaveProperty('maxStalledCount');
 
     const apagado = (servicio as unknown as { apagado: AbortController }).apagado;
     let abortadoAlCerrar: boolean | undefined;

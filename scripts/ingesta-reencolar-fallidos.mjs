@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// Lista los jobs fallidos de la cola `ingesta-sync` (los que agotaron el presupuesto de reintento
-// del worker, ver `REINTENTO_PRESUPUESTO_MS`) y, con `--reencolar`, los reintenta todos tras una
-// confirmación y/N. Reencolar es seguro: el lote es idempotente. REDIS_URL sale del entorno.
-//   REDIS_URL=redis://... node scripts/ingesta-reencolar-fallidos.mjs [--reencolar]
+// Resume los jobs fallidos de la cola `ingesta-sync` (los que agotaron el presupuesto de reintento
+// del worker, ver `REINTENTO_PRESUPUESTO_MS`) agrupados por `failedReason` y, con
+// `--reencolar --motivo <texto>`, reintenta solo los que lo contengan tras una confirmación y/N.
+// Reencolar es seguro: el lote es idempotente. REDIS_URL sale del entorno.
+//   REDIS_URL=redis://... node scripts/ingesta-reencolar-fallidos.mjs [--reencolar --motivo <texto>]
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 
 // bullmq/ioredis son dependencias de apps/api, no del paquete raíz.
 const require = createRequire(new URL('../apps/api/package.json', import.meta.url));
-const { Queue } = require('bullmq');
+const { Queue, Job } = require('bullmq');
 const { Redis } = require('ioredis');
 
 const url = process.env.REDIS_URL;
@@ -16,30 +17,66 @@ if (!url) {
   console.error('Falta REDIS_URL en el entorno.');
   process.exit(1);
 }
-const reencolar = process.argv.includes('--reencolar');
+const args = process.argv.slice(2);
+const reencolar = args.includes('--reencolar');
+const iMotivo = args.indexOf('--motivo');
+const motivo = iMotivo >= 0 ? args[iMotivo + 1] : undefined;
+if (reencolar && !motivo) {
+  console.error('--reencolar exige --motivo <texto> (substring del failedReason).');
+  process.exit(1);
+}
 
 const connection = new Redis(url, { maxRetriesPerRequest: null });
+// El nombre debe coincidir con COLA_INGESTA_SYNC (apps/api/src/modules/sync/sync-queue.service.ts).
 const queue = new Queue('ingesta-sync', { connection });
 let codigo = 0;
 try {
-  const fallidos = await queue.getJobs(['failed'], 0, -1, true);
-  if (fallidos.length === 0) {
+  const total = await queue.getFailedCount();
+  if (total === 0) {
     console.log('Sin jobs fallidos en ingesta-sync.');
   } else {
-    const ts = fallidos.map((j) => j.timestamp).sort((a, b) => a - b);
+    // Solo ids + campos `failedReason`/`timestamp` del hash: sin cargar los payloads de los lotes.
+    const ids = await queue.getRanges(['failed'], 0, -1, true);
+    const pipeline = connection.pipeline();
+    for (const id of ids) pipeline.hmget(queue.toKey(id), 'failedReason', 'timestamp');
+    const filas = (await pipeline.exec()).map(([, [razon, ts]], i) => ({
+      id: ids[i],
+      razon: razon ?? '(sin motivo)',
+      ts: Number(ts),
+    }));
+    const porMotivo = new Map();
+    for (const { razon } of filas) porMotivo.set(razon, (porMotivo.get(razon) ?? 0) + 1);
+    const tiempos = filas.map((f) => f.ts).filter(Number.isFinite).sort((a, b) => a - b);
     console.log(
-      `${fallidos.length} job(s) fallido(s). Más antiguo: ${new Date(ts[0]).toISOString()}; ` +
-        `más nuevo: ${new Date(ts.at(-1)).toISOString()}.`,
+      `${total} job(s) fallido(s). Más antiguo: ${new Date(tiempos[0]).toISOString()}; ` +
+        `más nuevo: ${new Date(tiempos.at(-1)).toISOString()}.`,
     );
+    for (const [razon, n] of [...porMotivo].sort((a, b) => b[1] - a[1])) console.log(`  ${n} x ${razon}`);
+
     if (reencolar) {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const resp = (await rl.question(`¿Reencolar los ${fallidos.length} job(s)? [y/N] `)).trim().toLowerCase();
-      rl.close();
-      if (resp === 'y') {
-        await queue.retryJobs({ state: 'failed' });
-        console.log('Reencolados.');
+      const elegidos = filas.filter((f) => f.razon.includes(motivo));
+      if (elegidos.length === 0) {
+        console.log(`Ningún job fallido con motivo que contenga "${motivo}".`);
       } else {
-        console.log('Cancelado.');
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const resp = (
+          await rl.question(`¿Reencolar los ${elegidos.length} job(s) con motivo "${motivo}"? [y/N] `)
+        )
+          .trim()
+          .toLowerCase();
+        rl.close();
+        if (resp === 'y') {
+          let hechos = 0;
+          for (const { id } of elegidos) {
+            const job = await Job.fromId(queue, id);
+            if (!job) continue; // expiró entre el resumen y ahora
+            await job.retry('failed');
+            hechos++;
+          }
+          console.log(`Reencolados ${hechos}.`);
+        } else {
+          console.log('Cancelado.');
+        }
       }
     }
   }
