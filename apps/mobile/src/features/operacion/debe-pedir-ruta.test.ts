@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { debePedirRuta, respuestaRutaVigente } from './debe-pedir-ruta';
+import { ApiError } from '../../shared/api/http-client';
+import { debePedirRuta, esFalloReintentable, respuestaRutaVigente } from './debe-pedir-ruta';
 
 const base = { acabaDeIniciar: false, anterior: { ts: 0 }, mismoDestino: true };
 
@@ -39,5 +40,19 @@ describe('respuestaRutaVigente', () => {
   });
   it('descarta si hay un pedido más nuevo', () => {
     expect(respuestaRutaVigente({ idPedido: 2, idUltimo: 3 })).toBe(false);
+  });
+});
+
+describe('esFalloReintentable', () => {
+  it('reintenta red, 5xx y 429', () => {
+    expect(esFalloReintentable(new ApiError('network', 'x'))).toBe(true);
+    expect(esFalloReintentable(new ApiError('http', 'x', 500))).toBe(true);
+    expect(esFalloReintentable(new ApiError('http', 'x', 429))).toBe(true);
+  });
+  it('no reintenta 400, 401, contrato ni errores ajenos', () => {
+    expect(esFalloReintentable(new ApiError('http', 'x', 400))).toBe(false);
+    expect(esFalloReintentable(new ApiError('http', 'x', 401))).toBe(false);
+    expect(esFalloReintentable(new ApiError('contract', 'x'))).toBe(false);
+    expect(esFalloReintentable(new Error('x'))).toBe(false);
   });
 });

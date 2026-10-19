@@ -1,11 +1,9 @@
-import { BadRequestException, Body, Controller, HttpCode, Inject, Post, UseGuards } from '@nestjs/common';
-import { SkipThrottle, Throttle } from '@nestjs/throttler';
+import { BadRequestException, Body, Controller, HttpCode, Inject, Post } from '@nestjs/common';
 import { SyncBatchSchema, type SyncBatchResponse } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
-import { AuthMovilGuard } from '../auth-movil/auth-movil.guard.js';
 import { CurrentMobileSession } from '../auth-movil/current-mobile-session.decorator.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
-import { SyncDeviceThrottlerGuard } from './sync-device-throttler.guard.js';
+import { LimitePorDispositivo } from '../auth-movil/limite-por-dispositivo.decorator.js';
 import { SyncQueueService } from './sync-queue.service.js';
 
 class SyncBatchDto extends createZodDto(SyncBatchSchema) {}
@@ -22,30 +20,15 @@ class SyncBatchDto extends createZodDto(SyncBatchSchema) {}
 export class SyncController {
   constructor(@Inject(SyncQueueService) private readonly syncQueueService: SyncQueueService) {}
 
-  // Rate limit por dispositivo, no por IP (ver el comentario largo en
-  // `sync-device-throttler.guard.ts` para el porqué — CGNAT de operadores móviles y el
-  // orden de guards). `@SkipThrottle()` apaga acá el `ThrottlerGuard` global (100/60 por
-  // IP, `app.module.ts`); `SyncDeviceThrottlerGuard` DEBE ir después de `AuthMovilGuard` en
-  // este array para que `sesionMovil` ya exista cuando lee el tracker.
-  //
-  // Tráfico SIN sesión válida (Bearer ausente/inválido) queda fuera de `SkipThrottle()` Y
-  // fuera de `SyncDeviceThrottlerGuard` (nunca llega: `AuthMovilGuard` corta antes con 401).
-  // Eso NO significa costo ilimitado para ese tráfico: `AuthMovilGuard` mismo cachea (por
-  // TOKEN, no por IP — ver el docblock de `canActivate` en `auth-movil.guard.ts`, historia
-  // completa de QUI-240 con dos diseños descartados) los tokens que ya confirmó inválidos,
-  // así que un Bearer basura REPETIDO no vuelve a pagar el SHA-256 + query a Postgres. A
-  // propósito NO es un bloqueo por IP: eso tumbaría a cualquier chofer con credencial válida
-  // que comparta CGNAT con un teléfono en bucle de reintentos (caso real, documentado en
-  // `docs/handoff.md`) — exactamente el reventón que `SyncDeviceThrottlerGuard` existe para
-  // evitar del otro lado (por dispositivo autenticado). El caso no cubierto a propósito: un
-  // atacante rotando un token distinto por request nunca repite hash, así que nunca cachea y
-  // paga el costo real en cada intento — igual que sin este fix. Trade-off aceptado: ese
-  // patrón (tokens únicos ilimitados) no es el que se observó en producción.
+  // Rate limit por dispositivo, no por IP (CGNAT; ver `limite-por-dispositivo.decorator.ts` y
+  // `dispositivo-throttler.guard.ts`). Tráfico SIN sesión válida: el tope por IP holgado (3000/min)
+  // del decorador lo acota antes de `AuthMovilGuard`, y éste cachea por TOKEN los inválidos
+  // (docblock de `canActivate` en `auth-movil.guard.ts`, historia de QUI-240). Un cupo por IP
+  // estricto tumbaría a choferes con credencial válida que comparten CGNAT con un teléfono en
+  // bucle de reintentos. Tokens únicos rotando bajo el tope de IP: costo real, trade-off aceptado.
   @Post('batches')
   @HttpCode(202)
-  @SkipThrottle()
-  @Throttle({ device: { ttl: 60_000, limit: 60 } })
-  @UseGuards(AuthMovilGuard, SyncDeviceThrottlerGuard)
+  @LimitePorDispositivo(60)
   async recibirLote(
     @Body() body: SyncBatchDto,
     @CurrentMobileSession() sesion: SesionMovilAutenticada,

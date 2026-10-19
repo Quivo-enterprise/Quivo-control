@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { AuthMovilModule } from '../auth-movil/index.js';
 import { PaqueteDiaController } from './paquete-dia.controller.js';
 import { PaqueteDiaService } from './paquete-dia.service.js';
-import { SyncDeviceThrottlerGuard } from '../sync/sync-device-throttler.guard.js';
 import { RuteoController } from './ruteo.controller.js';
 import { RuteoService } from './ruteo.service.js';
 import { VecinosRutaController } from './vecinos-ruta.controller.js';
@@ -13,6 +12,6 @@ import { VecinosRutaService } from './vecinos-ruta.service.js';
 @Module({
   imports: [AuthMovilModule],
   controllers: [PaqueteDiaController, RuteoController, VecinosRutaController],
-  providers: [PaqueteDiaService, RuteoService, VecinosRutaService, SyncDeviceThrottlerGuard],
+  providers: [PaqueteDiaService, RuteoService, VecinosRutaService],
 })
 export class TrackingModule {}

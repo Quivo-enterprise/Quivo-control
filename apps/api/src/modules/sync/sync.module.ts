@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthMovilModule } from '../auth-movil/index.js';
 import { SyncController } from './sync.controller.js';
-import { SyncDeviceThrottlerGuard } from './sync-device-throttler.guard.js';
 import { SyncErroresController } from './sync-errores.controller.js';
 import { SyncErroresService } from './sync-errores.service.js';
 import { SyncQueueService } from './sync-queue.service.js';
@@ -11,6 +10,6 @@ import { SyncQueueService } from './sync-queue.service.js';
 @Module({
   imports: [AuthMovilModule],
   controllers: [SyncController, SyncErroresController],
-  providers: [SyncQueueService, SyncErroresService, SyncDeviceThrottlerGuard],
+  providers: [SyncQueueService, SyncErroresService],
 })
 export class SyncModule {}

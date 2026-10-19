@@ -1,3 +1,5 @@
+import { ApiError } from '../../shared/api/http-client';
+
 export const INTERVALO_MIN_RUTA_MS = 15_000;
 export const DISTANCIA_MIN_RUTA_M = 50;
 
@@ -25,4 +27,12 @@ export function debePedirRuta(args: {
  * no debe descartar pedidos en vuelo). */
 export function respuestaRutaVigente(args: { idPedido: number; idUltimo: number }): boolean {
   return args.idPedido === args.idUltimo;
+}
+
+/** Fallo de transporte o de límite que reintenta pasados 15 s: red/timeout, 5xx y 429 (límite
+ * por dispositivo de `ruta-a-punto`, 20/min). Cualquier otro error (400/401/contrato) no. */
+export function esFalloReintentable(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  if (error.kind === 'network') return true;
+  return error.kind === 'http' && ((error.status ?? 0) >= 500 || error.status === 429);
 }

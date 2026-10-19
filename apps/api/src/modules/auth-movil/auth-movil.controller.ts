@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Inject, Post, UseFilters, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Post, UseFilters } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
   AuthConductorMovilRequestSchema,
@@ -9,7 +9,7 @@ import {
   SeleccionAsignacionMovilRequestSchema,
 } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
-import { AuthMovilGuard } from './auth-movil.guard.js';
+import { LimitePorDispositivo } from './limite-por-dispositivo.decorator.js';
 import { AuthMovilService } from './auth-movil.service.js';
 import { CurrentMobileSession } from './current-mobile-session.decorator.js';
 import { LockoutMovilExceptionFilter } from './lockout-movil-exception.filter.js';
@@ -26,6 +26,7 @@ class LogoutMovilDto extends createZodDto(LogoutMovilRequestSchema) {}
 export class AuthMovilController {
   constructor(@Inject(AuthMovilService) private readonly authMovilService: AuthMovilService) {}
 
+  // Logins con credencial/PIN (vehiculo, conductor, sesion): estrictos por IP a propósito (limitar por usuario permitiría password spraying desde una IP).
   @Post('vehiculo')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   autenticarVehiculo(@Body() body: AuthVehiculoMovilDto) {
@@ -48,15 +49,18 @@ export class AuthMovilController {
     return this.authMovilService.autenticarSesion(body);
   }
 
+  // Holgado por IP como refresh: `seleccionToken` es opaco y de alta entropía (min 32), no hay PIN que adivinar.
   @Post('sesion/asignacion')
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
   seleccionarAsignacion(@Body() body: SeleccionAsignacionMovilDto) {
     return this.authMovilService.seleccionarAsignacion(body);
   }
 
+  // Refresh holgado por IP: el refresh token es opaco y de alta entropía (no hay qué adivinar) y
+  // el CGNAT (muchos teléfonos tras una IP) pega justo acá; no aplica el criterio de los logins.
   @Post('refresh')
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
   refresh(@Body() body: RefreshMovilDto) {
     return this.authMovilService.refresh(body);
   }
@@ -68,7 +72,7 @@ export class AuthMovilController {
   }
 
   @Get('contexto-operativo')
-  @UseGuards(AuthMovilGuard)
+  @LimitePorDispositivo(10)
   obtenerContexto(@CurrentMobileSession() sesion: SesionMovilAutenticada) {
     return this.authMovilService.obtenerContexto(sesion);
   }
@@ -79,7 +83,7 @@ export class PerfilMovilController {
   constructor(@Inject(AuthMovilService) private readonly authMovilService: AuthMovilService) {}
 
   @Get('perfil')
-  @UseGuards(AuthMovilGuard)
+  @LimitePorDispositivo(10)
   obtenerPerfil(@CurrentMobileSession() sesion: SesionMovilAutenticada) {
     // El perfil retorna la misma estructura rica que el contexto operativo,
     // que incluye toda la información del conductor, vehículo, sindicato y asignación.

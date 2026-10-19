@@ -1,5 +1,5 @@
-import { BadRequestException, Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
-import { AuthMovilGuard } from '../auth-movil/auth-movil.guard.js';
+import { BadRequestException, Controller, Get, Inject, Query } from '@nestjs/common';
+import { LimitePorDispositivo } from '../auth-movil/limite-por-dispositivo.decorator.js';
 import { RuteoService } from './ruteo.service.js';
 
 @Controller('mobile')
@@ -7,7 +7,7 @@ export class RuteoController {
   constructor(@Inject(RuteoService) private readonly ruteoService: RuteoService) {}
 
   @Get('ruta-a-punto')
-  @UseGuards(AuthMovilGuard)
+  @LimitePorDispositivo(20)
   async obtener(
     @Query('origenLat') origenLat: string,
     @Query('origenLng') origenLng: string,

@@ -106,7 +106,7 @@ describe('/reportes/en-vivo para el operador y la designación (guards + DTO Zod
 
   it('los endpoints móviles usan AuthMovilGuard y la sesión del token (sin sesionId en la URL ni en el body)', () => {
     const guards = (fn: unknown) => (Reflect.getMetadata('__guards__', fn as object) as { name: string }[]).map((g) => g.name);
-    expect(guards(VueltasMovilController.prototype.obtener)).toEqual(['AuthMovilGuard', 'SyncDeviceThrottlerGuard']);
-    expect(guards(VueltasMovilController.prototype.acusar)).toEqual(['AuthMovilGuard', 'SyncDeviceThrottlerGuard']);
+    expect(guards(VueltasMovilController.prototype.obtener)).toEqual(['AuthMovilGuard', 'DispositivoThrottlerGuard']);
+    expect(guards(VueltasMovilController.prototype.acusar)).toEqual(['AuthMovilGuard', 'DispositivoThrottlerGuard']);
   });
 });

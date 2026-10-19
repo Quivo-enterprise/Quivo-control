@@ -37,7 +37,7 @@ import { useModoCamara } from '../mapa/use-modo-camara';
 import type { InsetsNavegacion, RouteMapProps } from '../mapa/tipos';
 import { useSyncStatus } from './use-sync-status';
 import { formatearDistancia } from './format-distancia';
-import { debePedirRuta, respuestaRutaVigente } from './debe-pedir-ruta';
+import { debePedirRuta, esFalloReintentable, respuestaRutaVigente } from './debe-pedir-ruta';
 import { ApiError } from '../../shared/api/http-client';
 import { ruteoApi } from '../../shared/api/ruteo-api';
 import { ControlFeedbackToast } from './control-feedback-toast';
@@ -308,11 +308,9 @@ export function OperationScreen(
         );
         if (vigente()) setRutaCalculada(resultado?.coordenadas ?? null);
       } catch (error) {
-        // Solo el fallo de transporte (red/timeout/5xx) reintenta pasados 15 s aunque el conductor
-        // esté quieto; cualquier otro error se reporta y se trata como respuesta sin ruta.
-        const transporte =
-          error instanceof ApiError &&
-          (error.kind === 'network' || (error.kind === 'http' && (error.status ?? 0) >= 500));
+        // Solo el fallo de transporte (red/timeout/5xx) o el límite 429 reintenta pasados 15 s aunque
+        // el conductor esté quieto; cualquier otro error se reporta y se trata como respuesta sin ruta.
+        const transporte = esFalloReintentable(error);
         pedido.fallo = transporte;
         if (!transporte) {
           Sentry.captureException(error, {
