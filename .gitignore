@@ -75,3 +75,6 @@ CREDENCIALES.md
 # trazado de la línea 16 rechazado por la validación (diagnóstico local)
 scripts/data/linea-16/trazado-rechazado.json
 scripts/data/linea-16/trazado-rechazado.kml
+
+# scripts/experimentos/gps/carga/seed-conductores-reales.mjs: tokens de sesiones y password del admin de la prueba de carga
+carga-tokens.local.json
