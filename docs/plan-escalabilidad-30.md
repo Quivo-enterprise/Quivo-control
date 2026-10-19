@@ -93,6 +93,26 @@ Lectura en prod (GETs y `gcloud` de solo lectura, lo corre Claude):
 
 Salida: tabla de hallazgos confirmados y descartados con números. Lo que no se confirme sale del plan.
 
+### Resultados de la Fase 0 (parcial, 18/10)
+
+Logs de `quivo-api` del piloto del 14/10 (2 trufis, 10:00–04:00 UTC): 3.203 requests móviles.
+
+| Endpoint | Requests | Nota |
+|---|---|---|
+| `POST /v1/sync/batches` | 1.824 | esperado |
+| `GET /v1/mobile/ruta-a-punto` | **1.111** | 35 % del tráfico móvil, todo inútil: OSRM no está desplegado y siempre devuelve `null` |
+| `GET /v1/mobile/vecinos-ruta` | 212 | esperado |
+| resto | 56 | refresh, asignación, sesión, perfil |
+
+- **`ruta-a-punto` (hallazgo nuevo):** el throttle del cliente pide ruta si el vehículo se movió 50 m **o** pasaron
+  15 s, con la posición a 1 Hz. Son ~4–10 req/min por conductor, que el estimado inicial no contaba, y el endpoint
+  queda bajo el límite global por IP. Pasa a la Fase 1, punto 7.
+- **CGNAT: no observado.** 5 IPs distintas para 2 teléfonos (IPv4 y IPv6 propias, sin IP compartida). El riesgo baja
+  pero no se descarta con 2 equipos: el punto 1.3 queda, con menor prioridad.
+- **Status:** cero 429 y cero 5xx; 5 respuestas 401 (refresh de token).
+- **`max_connections`: no confirmado.** No hay acceso SQL directo desde fuera de la VPC. El default documentado de
+  Cloud SQL para 1,7 GB es 50. Se confirma con `SHOW max_connections` en el clon efímero.
+
 ## Fase 1 — Obligatorio antes de pasar de 5 conductores
 
 Cada punto es un PR chico. Sonnet implementa y el chairman revisa.
@@ -131,6 +151,11 @@ Cada punto es un PR chico. Sonnet implementa y el chairman revisa.
 5. **Retención GPS:** activar `GPS_ARCHIVE_ENABLED` con los meses que decida el CTO (default 6) y verificar una
    corrida en el entorno efímero antes de prod.
 6. **Vencimiento de rotaciones** pasa del proceso de la API al worker.
+7. **`ruta-a-punto` sin OSRM** (hallazgo de la Fase 0):
+   - API (`apps/api/src/modules/tracking/ruteo.service.ts`): sin `OSRM_URL` devuelve `null` sin hacer `fetch` y avisa
+     una sola vez. Hoy cae a `localhost:5001`, falla en cada llamada y escribe un warn por request.
+   - Mobile (`operation-screen.tsx:264-272`): el throttle refetchea si se movió 50 m **o** pasaron 15 s. Pasa a ser
+     ambas condiciones (máximo 1 cada 15 s y solo si se movió 50 m). Llega por OTA.
 
 ## Fase 2 — Optimización guiada por la prueba de carga
 
