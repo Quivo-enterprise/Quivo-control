@@ -109,14 +109,29 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
 - [x] **[Claude, 18/10]** #189 `scripts/carga-efimera.sh` + generador `conductores-reales.mjs` + seed sintético.
       Decisión del CTO: instancia nueva, sin clonar prod (sin PII). Nunca ejecutado: flags de gcloud a ajustar en la
       primera corrida.
-- [ ] **[CTO]** Deploy de API + worker con #187/#188 y, después, limpieza única de los jobs completados viejos de
-      `ingesta-sync` (`queue.clean`). Hasta entonces Redis sigue creciendo (~300 claves/día con 2 trufis).
+- [x] **[Claude, 18/10]** Reviews con skills (`/code-review` + `/ponytail-review`, regla del CTO: siempre, antes de
+      todo commit) sobre #187–#189 y sus fixes: varias rondas hasta cerrar bugs/seguridad/pérdida de datos.
+- [x] **[Claude, 18/10]** #191 mobile: el pedido de ruta ya no se cancela con cada posición (1 Hz), limpia la ruta al
+      fallar y solo reintenta red/5xx/429; `carga-efimera.sh` con allowlist de env (no copia el bucket de prod); seed con
+      PC terminal y retorno.
+- [x] **[Claude, 18/10]** #192 seguridad + límites: **`trustProxy: true` dejaba falsificar la IP con `X-Forwarded-For`
+      y saltear todo límite por IP (incluido el login con PIN)**; ahora `trustProxy: 1` (verificado en logs de prod: XFF
+      de una entrada, proxy 169.254.x). `@LimitePorDispositivo(n)` (por `deviceId` + tope por IP 3000/min por ruta) en
+      todas las rutas móviles autenticadas; `refresh` y `sesion/asignacion` 120/min por IP; logins con PIN siguen 5/min.
+- [x] **[Claude, 18/10]** #193 ingesta: sin `attempts` de BullMQ (reordenaban lotes → PC omitido falso). Reintento en
+      proceso del lote entero ante errores transitorios (5→60 s, presupuesto 30 min), concurrencia fija 1 (se elimina
+      `INGESTA_WORKER_CONCURRENCY`), `sync_errors` al final del intento, apagado devuelve el job al frente de `wait`,
+      `scripts/ingesta-reencolar-fallidos.mjs`. Residuales en el PR.
+- [ ] **[CTO]** Deploy de API + worker con #187/#192/#193 (`deploy-gcp.sh`; verificar que despliegue también el
+      worker) y OTA con la parte móvil de #187/#191/#192. Después: limpieza única de los jobs completados viejos de
+      `ingesta-sync` y chequear en logs que `req.ip` sea la IP del cliente. Hasta el deploy Redis sigue creciendo.
 - [ ] **[CTO]** Prueba de carga: `scripts/carga-efimera.sh alta` → `migrar` → seed → 30 y 60 conductores → `baja`
-      (README en `scripts/experimentos/gps/carga/README-conductores-reales.md`). La línea base se corre con la imagen
-      vigente; si el deploy de #188 va antes, se pierde la comparación de la cola, no el resto.
-- [ ] **[Claude, siguiente]** Fase 1 restante: `SENTRY_DSN` en API/worker + script de alertas/budget/PITR, rate limit
-      por dispositivo en los endpoints móviles que faltan, pools y `statement_timeout`, vencimiento de rotaciones al
-      worker, archivo GPS (meses a decidir por el CTO).
+      (README en `scripts/experimentos/gps/carga/README-conductores-reales.md`).
+- [ ] **[Claude, siguiente]** Fase 1 restante: `SENTRY_DSN` en API/worker + script de alertas/budget/PITR, pools y
+      `statement_timeout`, vencimiento de rotaciones al worker, archivo GPS (meses a decidir por el CTO).
+- [ ] **[Claude, Fase 2]** Orden por dispositivo real (cola por hash de `deviceId`) o detección de PC omitido insensible
+      al orden: requisito para subir la concurrencia del worker y para que una caída de la DB de más de 30 min no deje
+      infracciones falsas.
 - [ ] **[Claude, propuesto]** CI: `cancel-in-progress` solo en PRs (hoy cancela runs de `main`: 14 en octubre) y
       revisar `admin-panel.spec.ts` (`:154` flaky el 18/10; `:98` rompió 3 runs el 14/10, ya corregido).
 - [x] **[CTO, 2026-10-18]** Plan punto 4 decidido: OTA desde CI con `workflow_dispatch` que dispara el CTO (disparar =
