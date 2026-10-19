@@ -100,7 +100,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
     return servicio as never;
   }
   const lote = (eventos: EventoSync[], sindicatoId = sindicatoA) =>
-    servicioSinCola().procesarLote({ id: 'job-vlt', data: { sindicatoId, eventos } });
+    servicioSinCola().procesarLote({ id: 'job-vlt', attemptsMade: 0, data: { sindicatoId, eventos } });
 
   const vueltasDe = (sesionId: string) =>
     withTenantContext(ADMIN, (tx) => tx.vuelta.findMany({ where: { sesionId }, orderBy: { numero: 'asc' } }));
@@ -285,6 +285,29 @@ describe('vueltas y designación a Molinos (F1)', () => {
       await lote(reenvio);
       await lote(reenvio);
       expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'en_curso']]);
+    });
+
+    it('reintento de BullMQ: procesar dos veces el mismo job no duplica filas ni infla el resumen GPS', async () => {
+      const s = sesiones.ciclo;
+      const eventos = [
+        gps(s, iso(46), LON_SR, LAT_RUTA),
+        cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA),
+        evento('observacion', iso(46, 5), { sesionId: s }),
+      ];
+      const ids = eventos.map((e) => e.eventId);
+      const contar = () =>
+        withTenantContext(ADMIN, async (tx) => ({
+          gps: (await tx.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM gps_points WHERE event_id = ${ids[0]}::uuid`)[0]!.n,
+          cumpl: await tx.cumplimientoPc.count({ where: { eventId: ids[1] } }),
+          oper: await tx.eventoOperativo.count({ where: { eventId: ids[2] } }),
+          resumen: (await tx.$queryRaw<{ n: number }[]>`SELECT coalesce(sum(total_puntos), 0)::int AS n FROM gps_sesion_resumen WHERE sesion_id = ${s}::uuid`)[0]!.n,
+        }));
+
+      await lote(eventos);
+      const tras1 = await contar();
+      expect(tras1).toMatchObject({ gps: 1, cumpl: 1, oper: 1 });
+      await lote(eventos);
+      expect(await contar()).toEqual(tras1);
     });
 
     it('SR → SR sin Honduras no cuenta vuelta; un cumplimiento tardío (anterior a la vuelta) no mueve la máquina', async () => {
