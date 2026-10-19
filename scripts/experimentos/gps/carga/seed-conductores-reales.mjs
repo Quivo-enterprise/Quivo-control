@@ -51,7 +51,7 @@ const sha256 = (s) => createHash('sha256').update(s, 'utf8').digest('hex');
 const token = (prefijo) => `${prefijo}${randomBytes(32).toString('base64url')}`; // = emitirTokenOpaco
 
 async function hashPasswordBetterAuth(pw) {
-  const req = createRequire(new URL('../../../../../packages/db/package.json', import.meta.url));
+  const req = createRequire(new URL('../../../../packages/db/package.json', import.meta.url));
   const { hashPassword } = await import(pathToFileURL(req.resolve('better-auth/crypto')).href);
   return hashPassword(pw);
 }
