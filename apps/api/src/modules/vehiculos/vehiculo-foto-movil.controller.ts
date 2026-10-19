@@ -1,9 +1,11 @@
 import { Body, Controller, Get, Inject, Post, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { SubirFotoVehiculoMovilSchema } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { AuthMovilGuard } from '../auth-movil/auth-movil.guard.js';
 import { CurrentMobileSession } from '../auth-movil/current-mobile-session.decorator.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
+import { LIMITE_IP_MOVIL } from '../sync/limite-por-dispositivo.decorator.js';
 import { FotoVehiculoThrottlerGuard } from './foto-vehiculo-throttler.guard.js';
 import { VehiculoFotoService } from './vehiculo-foto.service.js';
 
@@ -23,7 +25,8 @@ export class VehiculoFotoMovilController {
   // `FotoVehiculoThrottlerGuard` suma 10/hora por dispositivo (ttl/limit definidos allí, única
   // fuente). Este corre después de `AuthMovilGuard` porque necesita `req.sesionMovil`. A
   // diferencia de /sync, no hay `@SkipThrottle()`: el volumen es bajo y el tope por IP no
-  // reintroduce el problema de CGNAT.
+  // reintroduce el problema de CGNAT. El GET usa el tope
+  // por IP holgado de las demás rutas móviles (`LIMITE_IP_MOVIL`) para no sufrir el CGNAT.
   @Post('foto')
   @UseGuards(FotoVehiculoThrottlerGuard)
   subir(
@@ -34,6 +37,7 @@ export class VehiculoFotoMovilController {
   }
 
   @Get('foto')
+  @Throttle({ default: LIMITE_IP_MOVIL })
   obtener(@CurrentMobileSession() sesion: SesionMovilAutenticada) {
     return this.fotoService.obtenerDesdeMovil(sesion);
   }

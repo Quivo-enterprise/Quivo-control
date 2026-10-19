@@ -1,6 +1,11 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { InjectThrottlerStorage, ThrottlerGuard, type ThrottlerStorage } from '@nestjs/throttler';
+import {
+  InjectThrottlerStorage,
+  ThrottlerGuard,
+  type ThrottlerLimitDetail,
+  type ThrottlerStorage,
+} from '@nestjs/throttler';
 import type { FastifyRequest } from 'fastify';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
 
@@ -40,23 +45,21 @@ type RequestConSesionMovil = FastifyRequest & { sesionMovil?: SesionMovilAutenti
  * `request.sesionMovil` ya exista cuando `getTracker` lo lee. Si se pusiera antes, siempre
  * caería al fallback de IP y este guard no serviría de nada.
  *
- * Nombre de throttler propio ('device', no 'default'): `recibirLote` lleva `@SkipThrottle()`
- * para apagar el guard GLOBAL (nombre 'default') en esta ruta — si no, el 100/60 por IP se
- * seguiría aplicando ADEMÁS de este, y el cupo compartido por IP volvería a reventar en el
- * mismo escenario de CGNAT que se está arreglando. `@SkipThrottle()` apaga a CUALQUIER guard
- * que consulte el nombre 'default' en esa ruta (la metadata de skip se indexa por nombre de
- * throttler, no por clase de guard) — si este guard también usara 'default' se apagaría a sí
- * mismo. Por eso recibe su config de throttlers directo en el constructor (no inyectada desde
- * `ThrottlerModule.forRoot()` de `app.module.ts`), con nombre 'device': queda desacoplada del
- * guard global y no afecta ninguna otra ruta de la API.
+ * Nombre de throttler propio ('device', no 'default'): la metadata de `@Throttle`/`@SkipThrottle`
+ * se indexa por nombre, no por clase de guard. El guard global lee 'default' (100/min por IP
+ * por defecto; las rutas móviles lo suben a `LIMITE_IP_MOVIL` vía `@LimitePorDispositivo`, que
+ * NO lo apaga: sigue siendo el único tope previo a `AuthMovilGuard`) y este lee 'device' (límite
+ * por ruta). Recibe su config directo en el constructor (no de `ThrottlerModule.forRoot()`),
+ * así queda desacoplado del guard global y no afecta ninguna otra ruta de la API.
  *
  * Storage en memoria por instancia: `ThrottlerStorage` (inyectado acá, el mismo que usa el
  * guard global) vive en el heap del proceso Node — con N instancias de Cloud Run detrás del
- * balanceador, cada una lleva su propio contador y el límite EFECTIVO total es N×60 req/min,
- * no 60/min duro. Aceptable para este caso (el objetivo es amortiguar el CGNAT compartido, no
- * fijar un techo exacto), pero que quede escrito para que nadie lo lea como una garantía dura.
+ * balanceador, cada una lleva su propio contador y el límite EFECTIVO total es N× el límite de
+ * la ruta (`@LimitePorDispositivo`), no un tope duro. Aceptable para este caso (el objetivo es
+ * amortiguar el CGNAT compartido, no fijar un techo exacto), pero que quede escrito para que
+ * nadie lo lea como una garantía dura.
  *
- * shortcut: límite por instancia (máx 3× con 3 instancias), pasar a Redis si se sube max-instances
+ * shortcut: límite por instancia (N× con N instancias), pasar a Redis si se sube max-instances
  */
 @Injectable()
 export class SyncDeviceThrottlerGuard extends ThrottlerGuard {
@@ -72,5 +75,14 @@ export class SyncDeviceThrottlerGuard extends ThrottlerGuard {
 
   protected async getTracker(req: RequestConSesionMovil): Promise<string> {
     return req.sesionMovil?.deviceId ?? req.ip;
+  }
+
+  // Con throttler nombrado la base emite `Retry-After-device`; el estándar es `Retry-After`.
+  protected async throwThrottlingException(
+    context: ExecutionContext,
+    detalle: ThrottlerLimitDetail,
+  ): Promise<void> {
+    this.getRequestResponse(context).res.header('Retry-After', detalle.timeToBlockExpire);
+    return super.throwThrottlingException(context, detalle);
   }
 }
