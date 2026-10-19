@@ -1,6 +1,7 @@
 import { config } from 'dotenv';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import { resolvePoolConfig } from './pool-config.js';
 
 /**
  * Carga `.env` acá mismo (no confiar en que quien importe este paquete ya lo haya
@@ -65,7 +66,12 @@ if (runtimeDatabaseUrl) {
   );
 }
 
-const adapter = new PrismaPg(resolvedDatabaseUrl);
+// Pool acotado con timeouts (DB_POOL_MAX / DB_CONNECTION_TIMEOUT_MS / DB_STATEMENT_TIMEOUT_MS,
+// ver pool-config.ts); `statement_timeout` viaja como parámetro de arranque de cada conexión.
+const adapter = new PrismaPg({
+  connectionString: resolvedDatabaseUrl,
+  ...resolvePoolConfig(process.env),
+});
 
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({ adapter });
 

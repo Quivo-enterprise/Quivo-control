@@ -762,7 +762,8 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
   # número-de-proyecto en vez de esperar a `status.url`. Se incluye siempre, no sólo cuando
   # ya existe una previa (a diferencia de CORS_ORIGIN_EXISTENTE arriba) porque su valor es
   # una constante calculada, no algo que un run anterior pudo haber seteado distinto.
-  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d%%BETTER_AUTH_URL=${API_URL_PROJECT_NUMBER}%%GCS_MEDIA_BUCKET=${MEDIA_BUCKET}"
+  # Pool de DB (packages/db/src/pool-config.ts). Presupuesto de conexiones: 3 API x 8 + worker 5 + retención 1 = 30 de 50 (60%).
+  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d%%BETTER_AUTH_URL=${API_URL_PROJECT_NUMBER}%%GCS_MEDIA_BUCKET=${MEDIA_BUCKET}%%DB_POOL_MAX=8%%DB_CONNECTION_TIMEOUT_MS=5000%%DB_STATEMENT_TIMEOUT_MS=10000"
   if [[ -n "$CORS_ORIGIN_EXISTENTE" ]]; then
     API_SET_ENV_VARS="${API_SET_ENV_VARS}%%CORS_ORIGIN=${CORS_ORIGIN_EXISTENTE}"
     info "CORS_ORIGIN existente detectado ('$CORS_ORIGIN_EXISTENTE') — se re-incluye en este deploy para no perderlo."
@@ -1029,7 +1030,7 @@ if [[ "$NEEDS_WORKER_DEPLOY" == true ]]; then
     --vpc-egress=private-ranges-only \
     --add-cloudsql-instances "$CONNECTION_NAME" \
     --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest" \
-    --set-env-vars "NODE_ENV=production,MOBILE_LEGACY_AUTH_ENABLED=false,JWT_ACCESS_TTL=15m,JWT_REFRESH_TTL=7d"
+    --set-env-vars "NODE_ENV=production,MOBILE_LEGACY_AUTH_ENABLED=false,JWT_ACCESS_TTL=15m,JWT_REFRESH_TTL=7d,DB_POOL_MAX=5,DB_CONNECTION_TIMEOUT_MS=5000,DB_STATEMENT_TIMEOUT_MS=60000"
   info "quivo-worker desplegado (Worker Pool, 1 instancia)."
 fi
 

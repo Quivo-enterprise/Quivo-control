@@ -37,7 +37,7 @@ async function bootstrap(): Promise<void> {
 
   // QUI-354: sin esto, Nest no engancha los listeners de señales del proceso — el SIGTERM
   // que Cloud Run manda al desplegar o escalar a cero mata el proceso directo, sin correr
-  // ningún `onModuleDestroy()` (HealthService cierra su Pool/Redis, VencimientoProcessor y
+  // ningún `onModuleDestroy()` (HealthService cierra su Redis, VencimientoProcessor y
   // SyncQueueService cierran su Worker/conexiones de BullMQ). Sin drenar eso, un rolling
   // deploy corta conexiones a mitad de request/job en vez de terminarlas prolijo.
   app.enableShutdownHooks();
