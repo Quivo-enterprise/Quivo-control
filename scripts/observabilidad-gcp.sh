@@ -275,11 +275,24 @@ else
 fi
 
 # ---------- 5. PITR de Cloud SQL ----------
-pitr_activo="$(gcloud sql instances describe "$SQL_INSTANCE" --project="$PROJECT" \
-  --format='value(settings.backupConfiguration.pointInTimeRecoveryEnabled)' 2>/dev/null || true)"
-backup_activo="$(gcloud sql instances describe "$SQL_INSTANCE" --project="$PROJECT" \
-  --format='value(settings.backupConfiguration.enabled)' 2>/dev/null || true)"
-if [[ "${pitr_activo,,}" == "true" ]]; then
+# Un solo describe: si falla o viene vacío el estado es desconocido y NUNCA se parchea (evita pisar backups).
+estado_sql="$(gcloud sql instances describe "$SQL_INSTANCE" --project="$PROJECT" \
+  --format='value(settings.backupConfiguration.pointInTimeRecoveryEnabled,settings.backupConfiguration.enabled)' 2>/dev/null)" \
+  || estado_sql=""
+if [[ -z "${estado_sql//[[:space:]]/}" ]]; then
+  if [[ "$APPLY" == true ]]; then
+    fail "No se pudo leer el estado de PITR/backups de '$SQL_INSTANCE' (¿sesión de gcloud vencida, falta de permisos o instancia incorrecta?). No se aplica nada."
+  fi
+  warn "No se pudo leer el estado de PITR/backups de '$SQL_INSTANCE'. Se omite el paso de PITR."
+  pitr_activo="omitir"
+else
+  # read con IFS=tab colapsaría un primer campo vacío; se separa por expansión.
+  pitr_activo="${estado_sql%%$'\t'*}"
+  backup_activo="${estado_sql#*$'\t'}"
+fi
+if [[ "$pitr_activo" == "omitir" ]]; then
+  :
+elif [[ "${pitr_activo,,}" == "true" ]]; then
   info "PITR ya está activo en '$SQL_INSTANCE' — OK."
 elif [[ "$CON_REINICIO" != true ]]; then
   warn "PITR NO activo en '$SQL_INSTANCE'. Habilitarlo REINICIA la base: correlo fuera de horario con --con-reinicio. Se omite."
