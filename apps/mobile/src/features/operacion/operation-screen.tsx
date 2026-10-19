@@ -37,7 +37,8 @@ import { useModoCamara } from '../mapa/use-modo-camara';
 import type { InsetsNavegacion, RouteMapProps } from '../mapa/tipos';
 import { useSyncStatus } from './use-sync-status';
 import { formatearDistancia } from './format-distancia';
-import { debePedirRuta } from './debe-pedir-ruta';
+import { debePedirRuta, respuestaRutaVigente } from './debe-pedir-ruta';
+import { ApiError } from '../../shared/api/http-client';
 import { ruteoApi } from '../../shared/api/ruteo-api';
 import { ControlFeedbackToast } from './control-feedback-toast';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
@@ -237,17 +238,31 @@ export function OperationScreen(
     lat: number;
     lng: number;
     destino: [number, number];
+    fallo?: boolean;
   } | null>(null);
+  // Cada pedido lleva un id: la respuesta se aplica solo si sigue siendo el último (todo cambio
+  // de destino, de tracking o desmontaje lo incrementa). La posición cambia a 1 Hz, así que no
+  // se cancela el pedido en cada cambio.
+  const idPedidoRuta = useRef(0);
   const trackingAnterior = useRef(gps.tracking);
   const destinoRuteo =
     proximoPuntoControl?.coord.coordinates ??
     paqueteDia.paquete?.ruta.geometria.coordinates.at(-1) ??
     null;
+  useEffect(
+    () => () => {
+      idPedidoRuta.current += 1; // al desmontar, ninguna respuesta en vuelo se aplica
+    },
+    [],
+  );
   useEffect(() => {
     const acabaDeIniciar = gps.tracking && !trackingAnterior.current;
     trackingAnterior.current = gps.tracking;
+    // `posicionActual` NO se anula al detener (use-gps-operativo.ts), así que el id se invalida aquí.
+    if (!gps.tracking) idPedidoRuta.current += 1;
 
     if (!gps.posicionActual || !destinoRuteo) {
+      idPedidoRuta.current += 1;
       setRutaCalculada(null);
       return;
     }
@@ -274,26 +289,40 @@ export function OperationScreen(
       return;
     }
 
-    ultimoFetchRuta.current = {
-      ts: ahora,
-      lat: posicion.lat,
-      lng: posicion.lng,
-      destino: destinoRuteo,
-    };
-    let cancelado = false;
+    const pedido = { ts: ahora, lat: posicion.lat, lng: posicion.lng, destino: destinoRuteo, fallo: false };
+    ultimoFetchRuta.current = pedido;
+    const id = ++idPedidoRuta.current;
+    const vigente = () => respuestaRutaVigente({ idPedido: id, idUltimo: idPedidoRuta.current });
     void (async () => {
-      const token = await props.obtenerAccessToken();
-      if (!token || cancelado) return;
-      const resultado = await ruteoApi.rutaAPunto(
-        posicion,
-        { lat: destinoRuteo[1], lng: destinoRuteo[0] },
-        token,
-      );
-      if (!cancelado) setRutaCalculada(resultado?.coordenadas ?? null);
+      try {
+        const token = await props.obtenerAccessToken();
+        if (!token) {
+          pedido.fallo = true;
+          if (vigente()) setRutaCalculada(null);
+          return;
+        }
+        const resultado = await ruteoApi.rutaAPunto(
+          posicion,
+          { lat: destinoRuteo[1], lng: destinoRuteo[0] },
+          token,
+        );
+        if (vigente()) setRutaCalculada(resultado?.coordenadas ?? null);
+      } catch (error) {
+        // Solo el fallo de transporte (red/timeout/5xx) reintenta pasados 15 s aunque el conductor
+        // esté quieto; cualquier otro error se reporta y se trata como respuesta sin ruta.
+        const transporte =
+          error instanceof ApiError &&
+          (error.kind === 'network' || (error.kind === 'http' && (error.status ?? 0) >= 500));
+        pedido.fallo = transporte;
+        if (!transporte) {
+          Sentry.captureException(error, {
+            tags: { contexto: 'operation-screen', paso: 'ruta-a-punto' },
+          });
+        }
+        // Sin ruta vigente el mapa vuelve a la línea recta: no deja la ruta al punto anterior.
+        if (vigente()) setRutaCalculada(null);
+      }
     })();
-    return () => {
-      cancelado = true;
-    };
   }, [gps.tracking, gps.posicionActual, destinoRuteo, props.obtenerAccessToken]);
 
   const enviarObservacion = useCallback(async () => {
