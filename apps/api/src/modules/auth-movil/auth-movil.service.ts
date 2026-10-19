@@ -80,6 +80,14 @@ type AsignacionOperativa = Prisma.AsignacionGetPayload<{
   };
 }>;
 
+const TOPE_LOCKOUT_S = 900;
+const TOPE_LOCKOUT_DISPOSITIVO_CONOCIDO_S = 60;
+
+/** Espera tras el fallo nº `fallos` (0 si ≤ 3): min(2^(fallos-3), tope) segundos. */
+function esperaLockoutSegundos(fallos: number, tope: number): number {
+  return fallos > 3 ? Math.min(2 ** (fallos - 3), tope) : 0;
+}
+
 @Injectable()
 export class AuthMovilService {
   private readonly logger = new Logger(AuthMovilService.name);
@@ -887,10 +895,12 @@ export class AuthMovilService {
     return resultados;
   }
 
-  /** Un `deviceId` que ya tuvo una sesión EXITOSA con este vehículo no queda bloqueado por la
-   * espera: quien solo conoce la placa (pintada en la puerta) no puede dejar afuera al chofer.
-   * El PIN se verifica igual y los fallos se registran igual; el atacante no conoce el
-   * `deviceId` aleatorio, y solo se consulta con lockout activo. Usa `[vehiculoId, estado]`. */
+  /** Un `deviceId` que ya tuvo una sesión EXITOSA con este vehículo conserva el tope previo de
+   * 60 s en vez de la espera de hasta 900 s: quien solo conoce la placa (pintada en la puerta)
+   * no puede dejar afuera al chofer más de 60 s. NO queda exento: el `deviceId` lo ven los roles
+   * de panel (`GET /reportes/en-vivo`, `/posiciones`, `/:sesionId/contexto`), así que un
+   * operador podría copiarlo y forzar el PIN sin espera. Solo se consulta con lockout activo.
+   * Usa `[vehiculoId, estado]`. */
   private async dispositivoConocido(vehiculoId: string, deviceId: string): Promise<boolean> {
     const sesion = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
       tx.sesionOperativa.findFirst({ where: { vehiculoId, deviceId }, select: { id: true } }),
@@ -904,17 +914,23 @@ export class AuthMovilService {
     );
     const ahora = new Date();
     if (intento?.bloqueadoHasta && intento.bloqueadoHasta > ahora) {
-      if (await this.dispositivoConocido(vehiculoId, deviceId)) return;
-      const retryAfterSeconds = Math.ceil(
-        (intento.bloqueadoHasta.getTime() - ahora.getTime()) / 1_000,
-      );
+      let hasta = intento.bloqueadoHasta;
+      if (await this.dispositivoConocido(vehiculoId, deviceId)) {
+        // `updatedAt` = instante del último fallo; misma curva que antes, con tope 60 s.
+        hasta = sumarSegundos(
+          intento.updatedAt,
+          esperaLockoutSegundos(intento.fallos, TOPE_LOCKOUT_DISPOSITIVO_CONOCIDO_S),
+        );
+        if (hasta <= ahora) return;
+      }
+      const retryAfterSeconds = Math.ceil((hasta.getTime() - ahora.getTime()) / 1_000);
       throw new LockoutMovilException(retryAfterSeconds);
     }
   }
 
   /** Retraso exponencial, no bloqueo duro (plan §1.g.2): la placa está pintada en la
    * puerta del vehículo, así que un bloqueo duro es un botón de "dejá a este trufi sin
-   * GPS" que cualquiera aprieta. `retryAfterSeconds = min(2^(fallos-3), 900)` desde el
+   * GPS" que cualquiera aprieta. `retryAfterSeconds = min(2^(fallos-3), 900)` (`esperaLockoutSegundos`) desde el
    * tercer fallo — antes de eso no hay espera. */
   /**
    * H2 (hallazgo de revisión, bajo): antes esto era `tx.intentoAuthMovil.upsert(...)`.
@@ -956,7 +972,7 @@ export class AuthMovilService {
       if (!actualizado || actualizado.fallos <= 3) {
         return;
       }
-      const esperaSegundos = Math.min(2 ** (actualizado.fallos - 3), 900);
+      const esperaSegundos = esperaLockoutSegundos(actualizado.fallos, TOPE_LOCKOUT_S);
       await tx.intentoAuthMovil.update({
         where: { vehiculoId },
         data: { bloqueadoHasta: sumarSegundos(new Date(), esperaSegundos) },

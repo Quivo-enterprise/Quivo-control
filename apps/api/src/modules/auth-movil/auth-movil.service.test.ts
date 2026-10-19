@@ -892,7 +892,7 @@ describe('AuthMovilService — autenticarSesion (login de un paso, placa + PIN d
     expect(espera).toBeLessThanOrEqual(900);
   });
 
-  it('un dispositivo con sesión previa exitosa en el vehículo no queda frenado por la espera; uno desconocido sí', async () => {
+  it('un dispositivo con sesión previa exitosa en el vehículo conserva el tope de 60 s; uno desconocido espera la curva de 900 s', async () => {
     const conductor = await crearConductor('Chofer Un Paso K', '777777');
     const vehiculo = await crearVehiculo(placaUnica());
     const rotacion = await crearRotacion('publicada');
@@ -911,31 +911,47 @@ describe('AuthMovilService — autenticarSesion (login de un paso, placa + PIN d
     });
     expect(primero.status).toBe('autenticado');
 
-    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
-      tx.intentoAuthMovil.upsert({
-        where: { vehiculoId: vehiculo.id },
-        create: {
-          sindicatoId,
-          vehiculoId: vehiculo.id,
-          fallos: 9,
-          bloqueadoHasta: new Date(Date.now() + 300_000),
-        },
-        update: { fallos: 9, bloqueadoHasta: new Date(Date.now() + 300_000) },
-      }),
-    );
+    const fijarLockout = (updatedAt: Date) =>
+      withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+        tx.intentoAuthMovil.upsert({
+          where: { vehiculoId: vehiculo.id },
+          create: {
+            sindicatoId,
+            vehiculoId: vehiculo.id,
+            fallos: 9,
+            bloqueadoHasta: new Date(Date.now() + 300_000),
+            updatedAt,
+          },
+          update: { fallos: 9, bloqueadoHasta: new Date(Date.now() + 300_000), updatedAt },
+        }),
+      );
 
-    // Desconocido: 429 aunque el PIN sea el correcto.
+    // Último fallo hace 10 s: el conocido espera ≤ 60 s (no queda exento); el desconocido ~300 s.
+    await fijarLockout(new Date(Date.now() - 10_000));
     await expect(
       service.autenticarSesion({
         placa: vehiculo.placa,
         pin: '777777',
         deviceId: `android:${randomUUID()}`,
       }),
-    ).rejects.toMatchObject({ status: 429 });
-    // Conocido: la espera no lo frena, pero el PIN se sigue verificando (incorrecto → 401).
+    ).rejects.toMatchObject({ status: 429, retryAfterSeconds: expect.any(Number) });
+    const desconocido = await service
+      .autenticarSesion({ placa: vehiculo.placa, pin: '777777', deviceId: `android:${randomUUID()}` })
+      .catch((e: { retryAfterSeconds?: number }) => e);
+    expect((desconocido as { retryAfterSeconds: number }).retryAfterSeconds).toBeGreaterThan(60);
+    const conocido = await service
+      .autenticarSesion({ placa: vehiculo.placa, pin: '777777', deviceId: deviceConocido })
+      .catch((e: { status?: number; retryAfterSeconds?: number }) => e);
+    expect(conocido).toMatchObject({ status: 429 });
+    expect((conocido as { retryAfterSeconds: number }).retryAfterSeconds).toBeLessThanOrEqual(50);
+
+    // Pasada la ventana de 60 s desde el último fallo, el conocido llega a verificar el PIN
+    // aunque `bloqueadoHasta` (900 s) siga en el futuro.
+    await fijarLockout(new Date(Date.now() - 61_000));
     await expect(
       service.autenticarSesion({ placa: vehiculo.placa, pin: '000000', deviceId: deviceConocido }),
     ).rejects.toMatchObject({ status: 401 });
+    await fijarLockout(new Date(Date.now() - 61_000));
     const ok = await service.autenticarSesion({
       placa: vehiculo.placa,
       pin: '777777',
