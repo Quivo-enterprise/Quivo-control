@@ -304,7 +304,7 @@ cmd_estado() {
   echo "--- Cloud SQL";    gc sql instances list --filter='name~-carga$' --format='table(name,state,databaseVersion,settings.tier)'
   echo "--- Redis";        gc redis instances list --region="$REGION" --filter='name~-carga$' --format='table(name,tier,memorySizeGb,state,host)'
   echo "--- Cloud Run";    gc run services list --region="$REGION" --filter='metadata.name~-carga$' --format='table(metadata.name,status.url)'
-  echo "--- Worker pools"; gc run worker-pools list --region="$REGION" --filter='name~-carga$' --format='table(name)' || true
+  echo "--- Worker pools"; gc run worker-pools list --region="$REGION" --filter='metadata.name~-carga$' --format='table(metadata.name)' || true
   echo "--- Secretos";     gc secrets list --filter='name~-carga$' --format='table(name)'
   nota_costo
 }
