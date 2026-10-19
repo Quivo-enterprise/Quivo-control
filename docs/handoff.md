@@ -86,8 +86,11 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       inversión): proyección por fase (ida/regreso) + distancia circular por el lado más cercano + fixes >50 m
       descartados. Replay con datos reales: 0 inversiones (antes 60 con lag 160 s), cambios de fila 43→4. Detalle y
       decisiones en [`docs/plan-vecinos-circuito.md`](plan-vecinos-circuito.md). PR `fix/vecinos-circuito`.
-- [ ] **[CTO]** Deploy de la API con el fix de vecinos (`scripts/deploy-gcp.sh`), después el OTA (la app manda `fase`;
-      la API vieja la ignora, así que el orden no rompe nada, pero sin la API nueva el fix no tiene efecto).
+- [x] **[CTO, 18/10]** Deploy de la API `r19-20261018` (`--solo api`): revisión `quivo-api-00024-f5c`, 100 % del
+      tráfico, `/v1/health/ready` ok (db y redis arriba), sin migraciones nuevas. OTA `01a151bf` (group
+      `51a0b361-4109-477e-b4fb-57db2d3a31ca`, desde `42c4f1e`), source maps subidos. Verificado aparte: URL de la API, DSN,
+      `vecinos-ruta` y `circuito.js` de shared con `prepararCircuito` en el bundle. Vuelta atrás del OTA:
+      `eas update:republish --group ebc72ea4-68e6-4fe8-88dc-40c3a5650094`.
 - [ ] **[CTO]** Prueba en la calle con 2 trufis: una sola fila por vehículo, distancias iguales en ambos, sin
       inversiones en Honduras ni en SR; mirar qué pasa con un trufi esperando en Molinos.
 - [ ] **[Claude, propuesto]** CI: `cancel-in-progress` solo en PRs (hoy cancela runs de `main`: 14 en octubre) y
