@@ -2,7 +2,9 @@
 // Resume los jobs fallidos de la cola `ingesta-sync` (los que agotaron el presupuesto de reintento
 // del worker, ver `REINTENTO_PRESUPUESTO_MS`) agrupados por `failedReason` y, con
 // `--reencolar --motivo <texto>`, reintenta solo los que lo contengan tras una confirmación y/N.
-// Reencolar es seguro: el lote es idempotente. REDIS_URL sale del entorno.
+// El lote es idempotente, pero reprocesar uno viejo DESPUÉS de lotes más nuevos del mismo dispositivo
+// no deshace las infracciones creadas mientras tanto (puede quedar un PC omitido falso): revisar las
+// infracciones de esos dispositivos. REDIS_URL sale del entorno.
 //   REDIS_URL=redis://... node scripts/ingesta-reencolar-fallidos.mjs [--reencolar --motivo <texto>]
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
@@ -39,11 +41,13 @@ try {
     const ids = await queue.getRanges(['failed'], 0, -1, true);
     const pipeline = connection.pipeline();
     for (const id of ids) pipeline.hmget(queue.toKey(id), 'failedReason', 'timestamp');
-    const filas = (await pipeline.exec()).map(([, [razon, ts]], i) => ({
-      id: ids[i],
-      razon: razon ?? '(sin motivo)',
-      ts: Number(ts),
-    }));
+    const filas = [];
+    let conError = 0;
+    (await pipeline.exec()).forEach(([err, res], i) => {
+      if (err || !res) return void conError++; // comando fallido: sin datos del job
+      filas.push({ id: ids[i], razon: res[0] ?? '(sin motivo)', ts: Number(res[1]) });
+    });
+    if (conError > 0) console.warn(`${conError} job(s) omitidos: error al leer su hash.`);
     const porMotivo = new Map();
     for (const { razon } of filas) porMotivo.set(razon, (porMotivo.get(razon) ?? 0) + 1);
     const tiempos = filas.map((f) => f.ts).filter(Number.isFinite).sort((a, b) => a - b);
@@ -67,13 +71,23 @@ try {
         rl.close();
         if (resp === 'y') {
           let hechos = 0;
+          const fallidos = [];
           for (const { id } of elegidos) {
-            const job = await Job.fromId(queue, id);
-            if (!job) continue; // expiró entre el resumen y ahora
-            await job.retry('failed');
-            hechos++;
+            try {
+              const job = await Job.fromId(queue, id);
+              if (!job) continue; // expiró entre el resumen y ahora
+              await job.retry('failed');
+              hechos++;
+            } catch (error) {
+              fallidos.push(id);
+              console.error(`Job ${id}: no se pudo reencolar: ${error?.message ?? error}`);
+            }
           }
-          console.log(`Reencolados ${hechos}.`);
+          console.log(`Reencolados ${hechos}; fallaron ${fallidos.length}.`);
+          if (fallidos.length > 0) {
+            console.error(`Ids que fallaron: ${fallidos.join(', ')}`);
+            codigo = 1;
+          }
         } else {
           console.log('Cancelado.');
         }

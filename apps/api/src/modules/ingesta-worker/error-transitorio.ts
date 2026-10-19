@@ -6,6 +6,7 @@ const PRISMA_TRANSITORIOS = new Set([
   'P1017', // el servidor cerró la conexión
   'P2024', // timeout esperando una conexión del pool
   'P2034', // conflicto de escritura / deadlock
+  'P2028', // transacción: maxWait o expirada (socket colgado en failover); un lote pesado agota el presupuesto del worker
   'P2037', // demasiadas conexiones
 ]);
 
@@ -20,16 +21,17 @@ const MENSAJES_TRANSITORIOS = [
   'Client has encountered a connection error and is not queryable',
 ];
 
-/**
- * P2028 tiene dos causas. "Unable to start a transaction in the given time" (maxWait / pool
- * saturado) es siempre transitorio. "Transaction already closed ... expired transaction" (el
- * `timeout` de la transacción) NO lo es para `esErrorTransitorioDb`: un lote demasiado pesado
- * expiraría en cada reintento. Pero en un failover un socket colgado también termina así, por eso
- * `esP2028Expirada` la expone aparte y el worker la tolera un número acotado de veces por lote.
- */
-const MENSAJE_P2028_TRANSITORIO = 'Unable to start a transaction';
-
-const SOCKET_TRANSITORIOS = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT']);
+/** Errores de red de Node (sockets de `pg`). */
+const SOCKET_TRANSITORIOS = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EPIPE',
+]);
 
 function esCodigoTransitorio(codigo: unknown): boolean {
   if (typeof codigo !== 'string') return false;
@@ -65,7 +67,6 @@ export function esErrorTransitorioDb(error: unknown): boolean {
       esCodigoTransitorio(e.errorCode) ||
       esCodigoTransitorio(driver?.originalCode) ||
       esCodigoTransitorio(driver?.code) ||
-      (e.code === 'P2028' && typeof e.message === 'string' && e.message.includes(MENSAJE_P2028_TRANSITORIO)) ||
       (typeof e.message === 'string' && MENSAJES_TRANSITORIOS.some((m) => (e.message as string).includes(m)))
     ) {
       return true;
@@ -75,15 +76,23 @@ export function esErrorTransitorioDb(error: unknown): boolean {
   return false;
 }
 
-/** P2028 de transacción expirada (no la variante `maxWait`, que es transitoria). Ver arriba. */
-export function esP2028Expirada(error: unknown): boolean {
+/**
+ * SQLSTATE de Postgres del error (mismas fuentes y recorrido de `cause` que el clasificador), o
+ * undefined si no hay uno. La clase `22` son errores de datos (valor que la fila no admite).
+ */
+export function sqlstateDe(error: unknown): string | undefined {
   let actual: unknown = error;
   for (let i = 0; i < 5 && typeof actual === 'object' && actual !== null; i++) {
-    const e = actual as { code?: unknown; message?: unknown; cause?: unknown };
-    if (e.code === 'P2028') {
-      return !(typeof e.message === 'string' && e.message.includes(MENSAJE_P2028_TRANSITORIO));
+    const e = actual as {
+      code?: unknown;
+      cause?: unknown;
+      meta?: { driverAdapterError?: { cause?: { originalCode?: unknown; code?: unknown } } };
+    };
+    const driver = e.meta?.driverAdapterError?.cause;
+    for (const c of [driver?.originalCode, driver?.code, e.code]) {
+      if (typeof c === 'string' && /^[0-9A-Z]{5}$/.test(c) && !/^P\d{4}$/.test(c)) return c;
     }
     actual = e.cause;
   }
-  return false;
+  return undefined;
 }

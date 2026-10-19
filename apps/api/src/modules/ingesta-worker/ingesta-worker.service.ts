@@ -19,7 +19,7 @@ import {
   type PayloadCumplimientoPuntoControl,
 } from '@quivo/shared';
 import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
-import { esErrorTransitorioDb, esP2028Expirada } from './error-transitorio.js';
+import { esErrorTransitorioDb, sqlstateDe } from './error-transitorio.js';
 import {
   detectarPcOmitidosAlFinRecorrido,
   detectarPcOmitidosPorCumplimiento,
@@ -56,15 +56,10 @@ const REINTENTO_TOPE_MS = 60_000;
  */
 const REINTENTO_PRESUPUESTO_MS = 30 * 60_000;
 /**
- * P2028 "expired transaction" también es lo que termina un socket colgado en un failover (tras los
- * 30 s de `TX_INGESTA`), pero un lote realmente pesado expira en cada intento: las primeras 2
- * ocurrencias por lote se reintentan, desde la 3ª es permanente.
- */
-const P2028_EXPIRADA_MAX_TRANSITORIAS = 2;
-
-/**
  * Transacciones de ingesta: el default de Prisma (5 s) hace que un lote pesado expire en CADA
- * intento; con 30 s solo expira uno realmente anómalo (y ese se trata como permanente).
+ * intento; con 30 s solo expira uno realmente anómalo. Un lote realmente pesado (P2028 por expirar)
+ * se reintenta hasta el presupuesto de 30 min y luego queda en `failed`, reencolable: nunca se
+ * absorbe evidencia como rechazo permanente por un timeout.
  */
 const TX_INGESTA = { timeout: 30_000 } as const;
 
@@ -125,8 +120,6 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
   private readonly ingestaWorker: Worker<LoteIngestaJob>;
   /** Corta el sueño del reintento en proceso al apagar (ver `onModuleDestroy`). */
   private readonly apagado = new AbortController();
-  /** Ver `procesarLote`: con true, el P2028 expirado deja de relanzarse y va a `sync_errors`. */
-  private p2028Permanente = false;
   private readonly ingestaQueueStats: Queue;
   private readonly particionesQueue: Queue;
   private readonly particionesWorker: Worker;
@@ -259,46 +252,21 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ procesados: number; errores: number }> {
     const inicio = Date.now();
     this.detectarDriftReloj(job.data.eventos); // una vez por lote, no por reintento
-    // Diseño del P2028 "expired": los `catch` por evento relanzan la variante expirada mientras
-    // `p2028Permanente` sea false (ver `debeRelanzar`); acá se cuentan y, a la 3ª, se activa el modo
-    // permanente y se re-corre el lote: esa variante cae entonces a `sync_errors` como cualquier
-    // permanente. Estado de instancia: válido porque la concurrencia del worker es 1.
-    let expiradas = 0;
     // Rechazos permanentes vistos en cualquier intento (son deterministas por evento): un intento que
     // cae antes de llegar a un evento no debe hacer olvidar los que ya se vieron.
     const conocidos = new Map<string, ErrorSyncPendiente>();
-    try {
-      return await this.reintentarLote(job, token, inicio, conocidos, () => ++expiradas);
-    } finally {
-      this.p2028Permanente = false;
-    }
-  }
-
-  private async reintentarLote(
-    job: Job<LoteIngestaJob>,
-    token: string | undefined,
-    inicio: number,
-    conocidos: Map<string, ErrorSyncPendiente>,
-    contarExpirada: () => number,
-  ): Promise<{ procesados: number; errores: number }> {
     for (let intento = 1; ; intento++) {
       // Por intento: los de un intento fallido NO se escriben (el re-run los recalcula).
       const rechazados: ErrorSyncPendiente[] = [];
       try {
         return await this.procesarLoteUnaVez(job, intento, rechazados);
       } catch (error) {
-        const expirada = !esErrorTransitorioDb(error) && esP2028Expirada(error) && !this.p2028Permanente;
-        if (!expirada && !esErrorTransitorioDb(error)) throw error;
         for (const rz of rechazados) conocidos.set(rz.evento.eventId, rz);
-        if (expirada && contarExpirada() > P2028_EXPIRADA_MAX_TRANSITORIAS) {
-          this.p2028Permanente = true;
-          continue; // re-corre ya, sin espera: no es una caída que esperar
-        }
         const esperaMs = Math.min(REINTENTO_BASE_MS * 2 ** (intento - 1), REINTENTO_TOPE_MS);
-        if (Date.now() - inicio + esperaMs > REINTENTO_PRESUPUESTO_MS) {
-          // Los permanentes ya bufereados NO llegan a `sync_errors` (se re-correría el lote): que al
-          // menos no queden mudos. El payload completo sigue en el set `failed` para reencolar.
-          this.registrarRechazadosPerdidos(job, [...conocidos.values()]);
+        if (!esErrorTransitorioDb(error) || Date.now() - inicio + esperaMs > REINTENTO_PRESUPUESTO_MS) {
+          // Los permanentes ya bufereados NO llegan a `sync_errors` (la escritura es el último paso del
+          // intento): que al menos no queden mudos. El payload completo sigue en el set `failed`.
+          this.registrarRechazadosPerdidos(job, [...conocidos.values()], error);
           throw error;
         }
         const e = error as { code?: unknown; errorCode?: unknown };
@@ -313,7 +281,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
           // Apagado: el job vuelve al FRENTE de `wait` con el lock liberado (BullMQ lo trata como
           // WaitingError), así el siguiente worker lo toma primero y el orden se conserva.
           if (abortada instanceof IngestaAbortadaError) await job.moveToWait(token);
-          throw abortada;
+          throw abortada; // apagado: el job vuelve a `wait`, nada se pierde
         }
       }
     }
@@ -390,10 +358,15 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Una línea estructurada (sin payloads: PII) con lo que se perdería al agotar el presupuesto. */
-  private registrarRechazadosPerdidos(job: Job<LoteIngestaJob>, rechazados: ErrorSyncPendiente[]): void {
+  private registrarRechazadosPerdidos(
+    job: Job<LoteIngestaJob>,
+    rechazados: ErrorSyncPendiente[],
+    causa: unknown,
+  ): void {
     if (rechazados.length === 0) return;
     this.logger.error(
-      `Job ${job.id}: presupuesto de reintento agotado; ${rechazados.length} rechazo(s) permanente(s) NO ` +
+      `Job ${job.id}: el lote falló definitivamente (${esErrorTransitorioDb(causa) ? 'presupuesto de reintento agotado' : 'error permanente'}); ` +
+        `${rechazados.length} rechazo(s) permanente(s) NO ` +
         `quedaron en sync_errors: ` +
         JSON.stringify(
           rechazados.map(({ evento, error }) => ({
@@ -427,7 +400,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (error) {
       // Transitorio (conexión, timeout, deadlock): `procesarLote` re-corre el lote entero.
-      if (this.debeRelanzar(error)) throw error;
+      if (esErrorTransitorioDb(error)) throw error;
       return eventos.map((evento) => ({ evento, error }));
     }
     return [];
@@ -599,7 +572,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     detector: 'desvio_ruta' | 'pc_omitido' | 'vueltas',
     error: unknown,
   ): void {
-    if (this.debeRelanzar(error)) throw error;
+    if (esErrorTransitorioDb(error)) throw error;
     this.logger.error(
       {
         mensaje: 'Falló la detección de infracciones',
@@ -633,7 +606,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       }
       return cumplido ? { cumplido: { ts } } : {};
     } catch (error) {
-      if (this.debeRelanzar(error)) throw error;
+      if (esErrorTransitorioDb(error)) throw error;
       return { rechazado: { evento, error } };
     }
   }
@@ -661,20 +634,18 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       }
       return null;
     } catch (error) {
-      if (this.debeRelanzar(error)) throw error;
+      if (esErrorTransitorioDb(error)) throw error;
       return { evento, error };
     }
   }
 
-  /** ¿Relanzar para que `procesarLote` re-corra el lote (transitorio, o P2028 expirado aún tolerado)? */
-  private debeRelanzar(error: unknown): boolean {
-    return esErrorTransitorioDb(error) || (esP2028Expirada(error) && !this.p2028Permanente);
-  }
-
   /**
-   * Una sola transacción: si falla (transitorio), no queda nada escrito y el lote se re-corre. Si
-   * falla de forma permanente (una fila que Postgres rechaza, p. ej. `\u0000` en jsonb), se cae a
-   * insertar fila por fila y se omiten (log sin payload) las que fallen, para no perder las demás.
+   * Una sola transacción: si falla (transitorio), no queda nada escrito y el lote se re-corre. Solo si
+   * falla por un error de DATOS de Postgres (SQLSTATE clase 22: una fila que Postgres rechaza, p. ej.
+   * `\u0000` en jsonb) se cae a insertar fila por fila y se omiten (log sin payload) las que fallen
+   * con clase 22, para no perder las demás. Cualquier otro error (permisos, esquema) se relanza: el
+   * job falla y el payload queda en el set `failed`. Residual aceptado: un transitorio a mitad del
+   * fallback re-corre el lote y duplica las filas de `sync_errors` ya insertadas.
    */
   private async registrarErroresSync(
     sindicatoId: string,
@@ -703,12 +674,12 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
         TX_INGESTA,
       );
     } catch (error) {
-      if (this.debeRelanzar(error)) throw error;
+      if (esErrorTransitorioDb(error) || !sqlstateDe(error)?.startsWith('22')) throw error;
       for (const rz of rechazados) {
         try {
           await withTenantContext(CONTEXTO_ADMIN, (tx) => tx.syncError.create({ data: fila(rz) }), TX_INGESTA);
         } catch (errorFila) {
-          if (this.debeRelanzar(errorFila)) throw errorFila;
+          if (!sqlstateDe(errorFila)?.startsWith('22')) throw errorFila;
           this.logger.error(
             `Evento ${rz.evento.eventId} (${rz.evento.tipo}): no se pudo guardar en sync_errors, se omite: ` +
               (errorFila instanceof Error ? errorFila.message : String(errorFila)),

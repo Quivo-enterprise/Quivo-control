@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { esErrorTransitorioDb, esP2028Expirada } from './error-transitorio.js';
+import { esErrorTransitorioDb, sqlstateDe } from './error-transitorio.js';
 
 // Forma real con `PrismaPg` (verificada contra Postgres): SQL crudo → P2010 + SQLSTATE en meta.
 const prismaRaw = (originalCode: string) => ({
@@ -31,6 +31,13 @@ describe('esErrorTransitorioDb', () => {
     ['ECONNRESET', Object.assign(new Error('x'), { code: 'ECONNRESET' })],
     ['ECONNREFUSED', Object.assign(new Error('x'), { code: 'ECONNREFUSED' })],
     ['ETIMEDOUT', Object.assign(new Error('x'), { code: 'ETIMEDOUT' })],
+    ['EHOSTUNREACH', Object.assign(new Error('x'), { code: 'EHOSTUNREACH' })],
+    ['ENETUNREACH', Object.assign(new Error('x'), { code: 'ENETUNREACH' })],
+    ['ENOTFOUND', Object.assign(new Error('x'), { code: 'ENOTFOUND' })],
+    ['EAI_AGAIN', Object.assign(new Error('x'), { code: 'EAI_AGAIN' })],
+    ['EPIPE', Object.assign(new Error('x'), { code: 'EPIPE' })],
+    ['P2028 expirada', { code: 'P2028', message: 'Transaction already closed: expired transaction' }],
+    ['P2028 sin mensaje', { code: 'P2028' }],
     ['envuelto en cause', new Error('x', { cause: { code: 'P1017' } })],
   ])('%s → transitorio', (_nombre, error) => {
     expect(esErrorTransitorioDb(error)).toBe(true);
@@ -39,8 +46,6 @@ describe('esErrorTransitorioDb', () => {
   it.each([
     ['violación de FK 23503', prismaRaw('23503')],
     ['columna inexistente P2022', { code: 'P2022', meta: { driverAdapterError: { cause: { originalCode: '42703', kind: 'ColumnNotFound' } } } }],
-    ['P2028 timeout de la transacción', { code: 'P2028', message: 'Transaction API error: Transaction already closed: A query cannot be executed on an expired transaction.' }],
-    ['P2028 sin mensaje', { code: 'P2028' }],
     ['unique P2002', { code: 'P2002' }],
     ['Error genérico', new Error('Punto de control no encontrado')],
     ['string', 'P1001'],
@@ -51,13 +56,15 @@ describe('esErrorTransitorioDb', () => {
   });
 });
 
-describe('esP2028Expirada', () => {
-  it('distingue la transacción expirada de la variante maxWait', () => {
-    expect(esP2028Expirada({ code: 'P2028', message: 'Transaction already closed: expired transaction' })).toBe(true);
-    expect(esP2028Expirada({ code: 'P2028' })).toBe(true);
-    expect(esP2028Expirada(new Error('x', { cause: { code: 'P2028', message: 'expired' } }))).toBe(true);
-    expect(esP2028Expirada({ code: 'P2028', message: 'Unable to start a transaction in the given time' })).toBe(false);
-    expect(esP2028Expirada({ code: 'P1017' })).toBe(false);
-    expect(esP2028Expirada(null)).toBe(false);
+describe('sqlstateDe', () => {
+  it.each([
+    ['P2010 con originalCode', prismaRaw('22P05'), '22P05'],
+    ['code de Postgres directo', { code: '42501' }, '42501'],
+    ['envuelto en cause', new Error('x', { cause: prismaRaw('22021') }), '22021'],
+    ['código Prisma sin SQLSTATE', { code: 'P2002' }, undefined],
+    ['sin código', new Error('x'), undefined],
+    ['null', null, undefined],
+  ])('%s', (_nombre, error, esperado) => {
+    expect(sqlstateDe(error)).toBe(esperado);
   });
 });

@@ -26,6 +26,12 @@ const cumplimiento: EventoSync = {
   payload: { sesionId: SESION_A, puntoControlId: 'pc', lat: -17.78, lng: -63.18 },
 };
 
+// Forma real con `PrismaPg`: SQLSTATE en meta.driverAdapterError.cause.originalCode.
+const prismaRaw = (originalCode: string) => ({
+  code: 'P2010',
+  meta: { driverAdapterError: { cause: { originalCode, kind: 'postgres', code: originalCode } } },
+});
+
 const warn = vi.fn();
 const error = vi.fn();
 const createMany = vi.fn();
@@ -168,42 +174,51 @@ describe('procesarLote — reintento en proceso ante errores transitorios', () =
     await expect(procesarLote([gps(1)])).rejects.toBeInstanceOf(WaitingError); // ya abortado: no duerme
   });
 
-  describe('P2028 de transacción expirada', () => {
+  it('P2028 expirada es transitoria: nunca se absorbe como rechazo, agota el presupuesto y relanza', async () => {
     const expirada = {
       code: 'P2028',
       message: 'Transaction already closed: A query cannot be executed on an expired transaction.',
     };
+    withTenantContext.mockRejectedValue(expirada);
+    const aserto = expect(procesarLote([gps(1)])).rejects.toMatchObject({ code: 'P2028' });
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    await aserto;
+    expect(createMany).not.toHaveBeenCalled();
+  });
 
-    it('expira 2 veces y luego éxito: se reintenta, sin sync_errors', async () => {
-      withTenantContext.mockRejectedValueOnce(expirada).mockRejectedValueOnce(expirada);
-      const p = procesarLote([gps(1)]);
-      await vi.advanceTimersByTimeAsync(5_000 + 10_000);
-      await expect(p).resolves.toMatchObject({ errores: 0, procesados: 1 });
-      expect(createMany).not.toHaveBeenCalled();
-    });
+  it('error no transitorio fuera del bucle por evento: loguea los rechazos bufereados y relanza', async () => {
+    withTenantContext.mockImplementation(async (ctx, fn) =>
+      ctx.sindicatoId === null ? fn({ syncError: { createMany } }) : Promise.reject(new Error('dato corrupto')),
+    );
+    createMany.mockRejectedValue(prismaRaw('42501'));
+    await expect(procesarLote([gps(1)])).rejects.toMatchObject({ code: 'P2010' });
+    const linea = error.mock.calls.map((c) => c[0] as string).find((m) => m.includes('NO quedaron'));
+    expect(linea).toContain(gps(1).eventId);
+    expect(linea).toContain('error permanente');
+    expect(linea).not.toContain('lat');
+  });
 
-    it('expira 3 veces: desde la 3ª es permanente y el evento va a sync_errors', async () => {
-      withTenantContext.mockImplementation(async (ctx, fn) =>
-        ctx.sindicatoId === null ? fn({ syncError: { createMany } }) : Promise.reject(expirada),
-      );
-      const p = procesarLote([gps(1)]);
-      await vi.advanceTimersByTimeAsync(5_000 + 10_000);
-      await expect(p).resolves.toMatchObject({ errores: 1 });
-      expect(createMany).toHaveBeenCalledTimes(1);
-      expect(createMany.mock.calls[0]![0].data).toHaveLength(1);
-    });
+  it('apagado durante el sueño NO loguea rechazos perdidos (el job vuelve a wait)', async () => {
+    withTenantContext
+      .mockRejectedValueOnce(new Error('dato corrupto'))
+      .mockRejectedValue({ code: 'P1017' });
+    const aserto = expect(procesarLote([gps(1), cumplimiento])).rejects.toMatchObject({ name: 'WaitingError' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    apagado.abort();
+    await aserto;
+    expect(error.mock.calls.map((c) => c[0] as string).some((m) => m.includes('NO quedaron'))).toBe(false);
   });
 
   describe('registrarErroresSync', () => {
     it('una fila que Postgres rechaza no tira las demás: cae a insertar fila por fila', async () => {
       const create = vi.fn(async ({ data }: { data: { eventId: string } }) => {
-        if (data.eventId === gps(1).eventId) throw new Error('invalid input: \\u0000');
+        if (data.eventId === gps(1).eventId) throw prismaRaw('22P05');
       });
       withTenantContext
         .mockRejectedValueOnce(new Error('dato corrupto')) // gps(1) y gps(2) van en el mismo grupo gps
         .mockImplementation(async (ctx, fn) =>
           ctx.sindicatoId === null
-            ? fn({ syncError: { createMany: createMany.mockRejectedValue(new Error('22P05')), create } })
+            ? fn({ syncError: { createMany: createMany.mockRejectedValue(prismaRaw('22P05')), create } })
             : { abiertas: 0, cerradas: 0, infracciones: 0 },
         );
       await expect(procesarLote([gps(1), gps(2)])).resolves.toMatchObject({ errores: 2 });
@@ -223,6 +238,30 @@ describe('procesarLote — reintento en proceso ante errores transitorios', () =
       await vi.advanceTimersByTimeAsync(5_000);
       await expect(p).resolves.toMatchObject({ errores: 1 });
       expect(createMany).toHaveBeenCalledTimes(2);
+    });
+
+    it('permisos (42501) en el createMany: relanza, sin fallback fila por fila', async () => {
+      const create = vi.fn();
+      withTenantContext.mockImplementation(async (ctx, fn) =>
+        ctx.sindicatoId === null
+          ? fn({ syncError: { createMany: createMany.mockRejectedValue(prismaRaw('42501')), create } })
+          : Promise.reject(new Error('dato corrupto')),
+      );
+      await expect(procesarLote([gps(1)])).rejects.toMatchObject({ code: 'P2010' });
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('en el fallback, un error que no es clase 22 en una fila relanza (no se descarta)', async () => {
+      const create = vi.fn(async () => {
+        throw prismaRaw('42501');
+      });
+      withTenantContext.mockImplementation(async (ctx, fn) =>
+        ctx.sindicatoId === null
+          ? fn({ syncError: { createMany: createMany.mockRejectedValue(prismaRaw('22021')), create } })
+          : Promise.reject(new Error('dato corrupto')),
+      );
+      await expect(procesarLote([gps(1)])).rejects.toMatchObject({ code: 'P2010' });
+      expect(create).toHaveBeenCalledTimes(1);
     });
   });
 });
