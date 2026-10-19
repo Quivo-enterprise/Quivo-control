@@ -20,6 +20,7 @@ import {
 } from '@quivo/shared';
 import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
 import { leerConcurrenciaIngesta } from './ingesta-concurrencia.js';
+import { esErrorTransitorioDb } from './error-transitorio.js';
 import {
   detectarPcOmitidosAlFinRecorrido,
   detectarPcOmitidosPorCumplimiento,
@@ -252,6 +253,8 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
         );
       }
     } catch (error) {
+      // Transitorio (conexión, timeout, deadlock): el job falla y BullMQ reintenta el lote entero.
+      if (esErrorTransitorioDb(error)) throw error;
       await Promise.all(
         eventos.map((evento) => this.registrarErrorSync(sindicatoId, evento, error)),
       );
@@ -409,13 +412,18 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Falla de la detección: solo log estructurado (sesión + error). No va a `sync_errors`. */
+  /**
+   * Falla de la detección: solo log estructurado (sesión + error). No va a `sync_errors`.
+   * Si es transitorio de la DB se relanza: la evidencia ya está guardada y el reintento del lote
+   * (idempotente) vuelve a correr la detección; tragárselo la perdería para siempre.
+   */
   private registrarFalloDeteccion(
     sindicatoId: string,
     sesionId: string,
     detector: 'desvio_ruta' | 'pc_omitido' | 'vueltas',
     error: unknown,
   ): void {
+    if (esErrorTransitorioDb(error)) throw error;
     this.logger.error(
       {
         mensaje: 'Falló la detección de infracciones',
@@ -448,6 +456,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       }
       return cumplido ? { errores: 0, cumplido: { ts } } : { errores: 0 };
     } catch (error) {
+      if (esErrorTransitorioDb(error)) throw error;
       await this.registrarErrorSync(sindicatoId, evento, error);
       return { errores: 1 };
     }
@@ -472,6 +481,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
       }
       return 0;
     } catch (error) {
+      if (esErrorTransitorioDb(error)) throw error;
       await this.registrarErrorSync(sindicatoId, evento, error);
       return 1;
     }
