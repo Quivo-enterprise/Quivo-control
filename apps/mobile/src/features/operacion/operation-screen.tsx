@@ -37,6 +37,7 @@ import { useModoCamara } from '../mapa/use-modo-camara';
 import type { InsetsNavegacion, RouteMapProps } from '../mapa/tipos';
 import { useSyncStatus } from './use-sync-status';
 import { formatearDistancia } from './format-distancia';
+import { debePedirRuta } from './debe-pedir-ruta';
 import { ruteoApi } from '../../shared/api/ruteo-api';
 import { ControlFeedbackToast } from './control-feedback-toast';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
@@ -254,19 +255,21 @@ export function OperationScreen(
     const anterior = ultimoFetchRuta.current;
     const ahora = Date.now();
     // Si el destino cambió (se completó un punto de control y avanzamos al siguiente),
-    // el throttle por distancia/tiempo no aplica: sin esto, el mapa seguía mostrando la
-    // ruta OSRM calculada para el punto anterior hasta que el conductor se movía 50m.
+    // el throttle no aplica: sin esto, el mapa seguía mostrando la ruta OSRM del punto
+    // anterior. Con el mismo destino se re-pide solo si pasaron >=15 s Y se movió >=50 m.
     const mismoDestino =
       anterior?.destino[0] === destinoRuteo[0] && anterior?.destino[1] === destinoRuteo[1];
     const distanciaDesdeUltimoFetch = anterior
       ? haversineMetros([posicion.lng, posicion.lat], [anterior.lng, anterior.lat])
       : Infinity;
     if (
-      !acabaDeIniciar &&
-      mismoDestino &&
-      anterior &&
-      distanciaDesdeUltimoFetch < 50 &&
-      ahora - anterior.ts < 15_000
+      !debePedirRuta({
+        acabaDeIniciar,
+        anterior,
+        mismoDestino,
+        ahoraMs: ahora,
+        distanciaM: distanciaDesdeUltimoFetch,
+      })
     ) {
       return;
     }
