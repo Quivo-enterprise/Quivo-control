@@ -143,8 +143,8 @@ Cada punto es un PR chico. Sonnet implementa y el chairman revisa.
      - presupuesto de facturación con avisos al 50, 90 y 100 %;
      - PITR activado.
 3. **Rate limit:**
-   - endpoints móviles restantes con `SyncDeviceThrottlerGuard` (clave por dispositivo) y fuera del límite global
-     por IP;
+   - endpoints móviles restantes con `@LimitePorDispositivo(n)` (límite por dispositivo + tope por IP holgado
+     `LIMITE_IP_MOVIL` por CGNAT; nunca `@SkipThrottle()`), con `trustProxy: 1` para la IP real;
    - login con clave IP + usuario o teléfono, no solo IP;
    - el almacenamiento queda en memoria, con comentario
      `shortcut: límite por instancia (máx 3×), pasar a Redis si se sube max-instances`.
