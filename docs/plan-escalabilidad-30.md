@@ -115,7 +115,7 @@ Logs de `quivo-api` del piloto del 14/10 (2 trufis, 10:00–04:00 UTC): 3.203 re
 
 ## Fase 1 — Obligatorio antes de pasar de 5 conductores
 
-Estado 18/10: puntos 1 (#188) y 7 (#187) mergeados, sin desplegar.
+Estado 18/10: puntos 1 (#188 + #193), 3 (#192) y 7 (#187 + #191) mergeados, sin desplegar. Además #192 corrigió `trustProxy` (bypass de límites por IP).
 
 Cada punto es un PR chico. Sonnet implementa y el chairman revisa.
 
