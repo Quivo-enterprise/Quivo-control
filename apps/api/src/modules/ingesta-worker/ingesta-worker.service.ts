@@ -19,6 +19,7 @@ import {
   type PayloadCumplimientoPuntoControl,
 } from '@quivo/shared';
 import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
+import { leerConcurrenciaIngesta } from './ingesta-concurrencia.js';
 import {
   detectarPcOmitidosAlFinRecorrido,
   detectarPcOmitidosPorCumplimiento,
@@ -74,10 +75,19 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     this.ingestaWorker = new Worker<LoteIngestaJob>(
       COLA_INGESTA_SYNC,
       async (job: Job<LoteIngestaJob>) => this.procesarLote(job),
-      { connection: this.connection },
+      {
+        connection: this.connection,
+        concurrency: leerConcurrenciaIngesta(config.get<string>('INGESTA_WORKER_CONCURRENCY')),
+      },
     );
     this.ingestaWorker.on('failed', (job, error) => {
-      this.logger.error(`Job ${job?.id} de ingesta falló: ${error.message}`, error.stack);
+      // `attemptsMade` ya incluye el intento que acaba de fallar; es el último si agotó `attempts`.
+      const hechos = job?.attemptsMade ?? 0;
+      const definitivo = hechos >= (job?.opts.attempts ?? 1);
+      this.logger.error(
+        `Job ${job?.id} de ingesta falló (intento ${hechos}, ${definitivo ? 'definitivo' : 'se reintenta'}): ${error.message}`,
+        error.stack,
+      );
     });
 
     this.particionesQueue = new Queue(NOMBRE_COLA_PARTICIONES, { connection: this.connection });
@@ -92,7 +102,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     await this.particionesQueue.upsertJobScheduler(
       NOMBRE_JOB_PARTICIONES,
       { every: CADA_MS_PARTICIONES },
-      { name: NOMBRE_JOB_PARTICIONES },
+      { name: NOMBRE_JOB_PARTICIONES, opts: { removeOnComplete: true, removeOnFail: 100 } },
     );
     // No esperar al primer disparo programado (hasta 24h) para tener margen de particiones.
     await this.asegurarParticionesFuturas();
@@ -212,7 +222,7 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     const latenciaMs = Date.now() - inicio;
     const pendientes = await this.contarPendientesCola();
     this.logger.log(
-      `Job ${job.id}: ${eventos.length} eventos (${porTipo.gps_point.length} gps, ` +
+      `Job ${job.id} (intento ${job.attemptsMade + 1}): ${eventos.length} eventos (${porTipo.gps_point.length} gps, ` +
         `${porTipo.cumplimiento_punto_control.length} PC, ${operativos.length} operativos), ` +
         `${errores} error(es), ${latenciaMs}ms, cola pendiente=${pendientes}`,
     );

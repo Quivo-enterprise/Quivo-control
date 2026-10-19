@@ -52,7 +52,10 @@ export class VencimientoProcessor implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     // `upsertJobScheduler` (no `add` con `repeat`) es idempotente: reinicios del proceso no
     // acumulan schedulers duplicados para el mismo `NOMBRE_JOB_REPETIBLE`.
-    await this.queue.upsertJobScheduler(NOMBRE_JOB_REPETIBLE, { every: CADA_MS }, { name: NOMBRE_JOB_REPETIBLE });
+    await this.queue.upsertJobScheduler(NOMBRE_JOB_REPETIBLE, { every: CADA_MS }, {
+      name: NOMBRE_JOB_REPETIBLE,
+      opts: { removeOnComplete: true, removeOnFail: 100 },
+    });
   }
 
   async onModuleDestroy(): Promise<void> {

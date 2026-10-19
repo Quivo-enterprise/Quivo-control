@@ -1,10 +1,23 @@
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Queue } from 'bullmq';
+import { Queue, type JobsOptions } from 'bullmq';
 import { Redis } from 'ioredis';
 import type { EventoSync } from '@quivo/shared';
 
 export const COLA_INGESTA_SYNC = 'ingesta-sync';
+
+/**
+ * Opciones de cada lote encolado. Sin `removeOn*` los jobs terminados se acumulan en Redis
+ * (`noeviction`, 1 GB) hasta llenarlo; sin `attempts` un fallo transitorio de la DB perdería
+ * el lote, que el teléfono ya recibió con 202. El reintento es seguro: `procesarLote` es
+ * idempotente (ON CONFLICT / skipDuplicates por `eventId`, `dedupeKey` en infracciones).
+ */
+export const OPCIONES_JOB_INGESTA: JobsOptions = {
+  removeOnComplete: { age: 3600, count: 1000 },
+  removeOnFail: { age: 7 * 24 * 3600 },
+  attempts: 5,
+  backoff: { type: 'exponential', delay: 2000 },
+};
 
 export interface LoteIngestaJob {
   sindicatoId: string;
@@ -33,7 +46,7 @@ export class SyncQueueService implements OnModuleDestroy {
   }
 
   async encolarLote(job: LoteIngestaJob): Promise<void> {
-    await this.queue.add('lote', job);
+    await this.queue.add('lote', job, OPCIONES_JOB_INGESTA);
   }
 
   async onModuleDestroy(): Promise<void> {
