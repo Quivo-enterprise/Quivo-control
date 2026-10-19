@@ -17,7 +17,7 @@ import {
   RefreshMovilRequestSchema,
   SeleccionAsignacionMovilRequestSchema,
 } from '@quivo/shared';
-import { LoginMovilThrottlerGuard } from '../../common/auth/login-throttler.guard.js';
+import { LoginMovilThrottlerGuard } from './login-movil-throttler.guard.js';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { LimitePorDispositivo } from './limite-por-dispositivo.decorator.js';
 import { AuthMovilService } from './auth-movil.service.js';

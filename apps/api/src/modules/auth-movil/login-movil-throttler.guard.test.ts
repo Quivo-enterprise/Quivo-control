@@ -2,7 +2,7 @@ import type { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ThrottlerStorageService } from '@nestjs/throttler';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LoginMovilThrottlerGuard, LoginWebThrottlerGuard } from './login-throttler.guard.js';
+import { LoginMovilThrottlerGuard } from './login-movil-throttler.guard.js';
 
 function contexto(req: unknown, header = vi.fn()): ExecutionContext {
   return {
@@ -14,7 +14,6 @@ function contexto(req: unknown, header = vi.fn()): ExecutionContext {
 
 const IP = '190.10.20.30';
 const movil = (placa: unknown, ip = IP) => contexto({ ip, body: { placa, pin: '123456' } });
-const web = (email: unknown, ip = IP) => contexto({ ip, body: { email, password: 'x' } });
 
 describe('LoginMovilThrottlerGuard (POST /mobile/auth/sesion)', () => {
   const storage = new ThrottlerStorageService();
@@ -78,36 +77,5 @@ describe('LoginMovilThrottlerGuard (POST /mobile/auth/sesion)', () => {
     const guard = await crear();
     for (let i = 0; i < 5; i += 1) await guard.canActivate(movil('1234ABC'));
     await expect(guard.canActivate(movil('1234ABC', '190.10.20.31'))).resolves.toBe(true);
-  });
-});
-
-describe('LoginWebThrottlerGuard (POST /auth/login)', () => {
-  const storage = new ThrottlerStorageService();
-  const crear = async () => {
-    const guard = new LoginWebThrottlerGuard(storage, new Reflector());
-    await guard.onModuleInit();
-    return guard;
-  };
-
-  afterEach(() => {
-    storage.onApplicationShutdown();
-    storage.storage.clear();
-  });
-
-  it('ip+email: 5 por minuto, el 6.º 429; el email se normaliza (trim + minúsculas)', async () => {
-    const guard = await crear();
-    for (const e of ['a@x.com', 'A@X.com', ' a@x.com ', 'a@X.COM', 'A@x.com']) {
-      await expect(guard.canActivate(web(e))).resolves.toBe(true);
-    }
-    await expect(guard.canActivate(web('a@x.com'))).rejects.toMatchObject({ status: 429 });
-    await expect(guard.canActivate(web('b@x.com'))).resolves.toBe(true);
-  });
-
-  it('ip sola: 20 por minuto con emails distintos, el 21 recibe 429', async () => {
-    const guard = await crear();
-    for (let i = 0; i < 20; i += 1) {
-      await expect(guard.canActivate(web(`u${i}@x.com`))).resolves.toBe(true);
-    }
-    await expect(guard.canActivate(web('otro@x.com'))).rejects.toMatchObject({ status: 429 });
   });
 });

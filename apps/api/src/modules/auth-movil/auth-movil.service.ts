@@ -13,6 +13,7 @@ import * as Sentry from '@sentry/node';
 import {
   LineaDistintivoTipoSchema,
   TurnoSchema,
+  normalizarPlacaVehiculo,
   type AuthConductorMovilRequest,
   type AuthConductorMovilResponse,
   type AuthSesionMovilRequest,
@@ -96,7 +97,7 @@ export class AuthMovilService {
     if (!legacyAuthMovilHabilitado()) {
       throw endpointLegadoApagado();
     }
-    const placaNormalizada = normalizarPlaca(data.placa);
+    const placaNormalizada = normalizarPlacaVehiculo(data.placa);
     const candidatos = await this.buscarVehiculosActivosPorPlaca(placaNormalizada);
 
     const verificaciones = await Promise.all(
@@ -277,7 +278,7 @@ export class AuthMovilService {
    */
   async autenticarSesion(data: AuthSesionMovilRequest): Promise<AuthSesionMovilResponse> {
     const ahora = new Date();
-    const placaNormalizada = normalizarPlaca(data.placa);
+    const placaNormalizada = normalizarPlacaVehiculo(data.placa);
     const candidatosVehiculo = await this.buscarVehiculosActivosPorPlaca(placaNormalizada);
     const vehiculo = candidatosVehiculo[0] ?? null;
 
@@ -1196,13 +1197,6 @@ function toContextoOperativo(sesionId: string, row: AsignacionOperativa): Contex
     },
     ruta: { id: row.ruta.id, sentido: row.ruta.sentido },
   };
-}
-
-function normalizarPlaca(placa: string): string {
-  return placa
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '');
 }
 
 async function verificarCredencial(pin: string, hash: string | null): Promise<boolean> {
