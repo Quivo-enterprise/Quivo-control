@@ -6,7 +6,45 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-18, noche (leer primero): OTA de humo del 17/10 rompió los teléfonos; corregido con OTA `01a15072`
+## Punto de retome — 2026-10-19, noche (leer primero): bug Comenzar/Finalizar (#206) y herramientas del ensayo B (#205)
+
+**Bug de campo (CTO, 19/10 ~21:30–22:20 BOT, Redmi Note 10 Pro, APK 16 + OTA `4781deab`):** con el recorrido
+iniciado, a ratos la app mostraba "Comenzar" o "Finalizar" parpadeaba sin cerrar; salir y volver a entrar lo arreglaba.
+- **Evidencia (Cloud Run):** `GET /mobile/vuelta-actual` (solo se consulta con `tracking && appActiva`) cada 20 s hasta
+  01:27:49 UTC y nada hasta 02:09, con la app en primer plano (`GET /mobile/perfil` 02:01/02:02). Tras el re-login de
+  02:09:13 la consulta volvió al instante: el re-enganche del montaje encontró el plugin nativo `enabled`. **El estado
+  React `tracking` quedó en false con el GPS nativo grabando**; nada lo resincronizaba salvo el montaje. Mismo proceso
+  todo el tiempo (Sentry `app_start_time` 01:04:48). Sin 401 (refresh 201 cada ~15 min). Sentry
+  `QUIVO-CONTROL-CONDUCTOR-8` (`Error: 499` en `changePace`, paso `reenganche-reafirmar-movimiento`, 02:20:56) es
+  ruido del re-enganche, no la causa. `ACTIVITY_RECOGNITION` no concedido en ese teléfono.
+- **Disparador exacto: desconocido** (candidatos: `catch` silencioso del montaje tras un remontaje, u otro). Quedó
+  instrumentado en Sentry (pasos `reconciliar-foreground`, `iniciar-con-nativo-activo`,
+  `nativo-detenido-con-ui-en-finalizar`, `reenganche-getstate`/`reenganche-ready`, `detener-espera-larga`).
+- **Fix #206 (`8c6f5b4`):** al volver a primer plano se relee `getState()` y, si el nativo graba con la UI en
+  "Comenzar", se re-engancha sin `inicio_recorrido` nuevo (QUI-247). "Comenzar" con el nativo ya activo re-engancha en
+  vez de `ready()/start()` + segundo inicio; si el re-engancha falla, aviso al chofer, sin caer al arranque normal.
+  Nativo detenido con la UI en "Finalizar": aviso "El GPS se detuvo. Toca Finalizar y vuelve a Comenzar." Re-enganche
+  single-flight (gana la vigencia del último llamador), generación contra ABA, `iniciar()` registrado entero en el
+  serializador. `detener()` sin cambio de comportamiento (solo mide esperas > 10 s). 3 rondas de `/code-review` +
+  `/ponytail-review`; descartados: `ready()` repetido (ya pasaba en cada Comenzar/re-login y funciona en campo) y el
+  `eventId` pendiente en el re-enganche (es del mismo recorrido). Tests: solo los predicados puros (no hay arnés de
+  hook). Codex: no verificado (sin cuota). CI `ci` + `acceptance` pass.
+- **Falta: OTA** (lo publica el CTO): fingerprint local `547d52e7…` = APK 16, cambio solo JS. Desde `main` limpio:
+  `! cd apps/mobile && ./scripts/publicar-ota.sh "fix: reconciliar Comenzar/Finalizar con el GPS nativo"` (reconstruye
+  `shared`, exporta, corre el guard y publica). Después: abrir la app dos veces en cada teléfono y confirmar el update
+  en Perfil; mirar en Sentry si aparece `reconciliar-foreground` (= el bug pasó y se auto-corrigió).
+- **No verificado en dispositivo.** Si vuelve a pasar con el OTA nuevo, Sentry dirá por qué rama.
+
+**#205 (`597dbcb`) — herramientas del ensayo B:** seed con PIN por chofer y placa reservada `9999MSM`;
+`conductores-reales.mjs` con `--login-real`, `--probar-misma-placa` (solo con la API en 1 instancia:
+`carga-efimera.sh api-instancias 1`; resetea los fallos con el PIN bueno ≥ 61 s después del 6.º intento),
+`--offline-desde/--offline-minutos`, refresh single-flight (el refresh responde **201**; solo un 401 mata la sesión);
+`verificar-ingesta.mjs` por sesión y con los pendientes como perdidos; `carga-efimera.sh worker-pausa|worker-reanuda|
+api-instancias N`. Receta y criterios en `scripts/experimentos/gps/carga/README-conductores-reales.md`. Probado contra
+Nest local y contra un mock; **nada contra GCP**. 2 rondas de review.
+- **Sigue pendiente: quién corre el ensayo B en el entorno efímero** (cuesta y escribe en GCP: CTO, o Claude con su ok).
+
+## Punto de retome — 2026-10-18, noche (anterior): OTA de humo del 17/10 rompió los teléfonos; corregido con OTA `01a15072`
 
 **Estado en una línea:** prueba en la calle con 1616PIL (14:07–14:22, fuera de ruta a propósito): la designación a
 Molinos nunca llegó al teléfono y el mapa mostró ida y regreso juntos. **Causa única, verificada: el OTA de humo del
