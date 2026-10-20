@@ -49,6 +49,7 @@ import type { MotivoAnuncio } from './decidir-anuncio';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
 import { consultarVueltaActual, limpiarVueltaActual } from '../vuelta-actual/vuelta-actual-oportunista';
 import { marcarRecorridoActivoGlobal } from './estado-recorrido-activo';
+import { decidirReconciliacionTracking } from './reconciliar-tracking';
 import {
   asegurarInicioRecorrido,
   crearEstadoInicioRecorrido,
@@ -313,6 +314,9 @@ export function useGpsOperativo(
   // docblock de `crearSerializadorPromesaEnCurso` (`gps/seguimiento-continuo.ts`) y su test
   // dedicado a esta carrera.
   const serializadorIniciar = useRef(crearSerializadorPromesaEnCurso()).current;
+  // Cuenta de `iniciar()`/`detener()` en curso: `serializadorIniciar` se vacía solo al consumirse,
+  // no sirve para saber si hay una operación en transición. La usa la reconciliación con el nativo.
+  const operacionesEnVueloRef = useRef(0);
   // LOW-MED (hallazgo de revisión, QUI-247): estado mutable compartido del marcador
   // `inicio_recorrido` del intento de `iniciar()` en curso — `reiniciarEstadoInicioRecorrido`
   // le asigna un `eventId` ESTABLE al arrancar cada intento, y `asegurarInicioRecorrido`
@@ -942,6 +946,56 @@ export function useGpsOperativo(
     }
   }, [sesionId]);
 
+  /**
+   * Re-engancha la app a un plugin nativo que YA está `enabled` (sin `start()` ni
+   * `inicio_recorrido` nuevo, QUI-247). Lo usan el montaje, la reconciliación al volver a primer
+   * plano y `iniciar()` cuando el nativo ya corre. `vigente` permite cancelar si el efecto que lo
+   * invocó se desmontó mientras esperaba el SDK.
+   */
+  const reengancharNativoActivo = useCallback(
+    async (vigente: () => boolean = () => true): Promise<void> => {
+    // LOW, verificado contra la doc oficial del SDK instalado (`react-native-background-
+    // geolocation@5.4.0`, hallazgo de revisión): "You must call `.ready(config)` once and
+    // only once, each time your app is launched" — y el patrón canónico de la propia doc
+    // (`ready(config).then(state => { if (!state.enabled) start(); })`) llama `ready()`
+    // SIEMPRE, incluso cuando espera que el plugin ya esté `enabled`; el chequeo de
+    // `state.enabled` es solo para decidir si hace falta `start()`, nunca para saltear
+    // `ready()`. Antes de este fix, este camino de re-enganche (el chofer mata la app a
+    // mitad de turno y la reabre con el plugin ya corriendo) llamaba `changePace`/
+    // `setConfig` (`reafirmarMovimiento`, abajo) sin haber llamado `ready()` en ESTE
+    // lanzamiento del proceso — `ready()` solo corre dentro de `iniciar()`, que este camino
+    // nunca ejecuta. `ready()` es seguro de llamar acá aunque el plugin ya esté `enabled`:
+    // no lo reinicia ni lo detiene (mismo `gpsSpikeConfig` que usa `iniciar()`, para que la
+    // config reafirmada sea la misma en los dos caminos de entrada).
+    await BackgroundGeolocation.ready(gpsSpikeConfig);
+    if (!vigente()) return;
+    suscribirUbicaciones();
+    // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): este SÍ es un
+    // veredicto real ("re-enganchado, hay recorrido activo") — a diferencia del `false`
+    // inicial del montaje, este `setTracking(true)` cambia el valor de verdad (`false` →
+    // `true`), así que el efecto `[tracking]` de arriba vuelve a correr y publica, siempre
+    // que `veredictoPublicable` ya esté en `true` para entonces (se marca acá, antes de la
+    // mutación de estado que dispara ese efecto).
+    veredictoPublicable.current = true;
+    setTracking(true);
+    trackingRef.current = true;
+    // QUI-P0: SEGUNDO punto de entrada de `reafirmarMovimiento` (ver su docblock,
+    // `gps/seguimiento-continuo.ts`) — este camino de re-enganche NUNCA pasa por
+    // `iniciar()` (el plugin ya está `enabled`, el botón va directo a "Finalizar
+    // recorrido"), así que sin esta llamada el freeze del CTO ("mato la app para que se
+    // actualice, la reabro, la flecha sigue sin moverse") reaparecería exactamente acá.
+    // No se llama `iniciarSeguimientoContinuo` (que además hace `start()`): el plugin YA
+    // está arrancado, volver a `start()` sería redundante e innecesario. Best-effort — un
+    // fallo acá no debe impedir que el re-enganche deje la app usable.
+    void reafirmarMovimiento(BackgroundGeolocation).catch((error) => {
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'reenganche-reafirmar-movimiento' },
+      });
+    });
+    },
+    [suscribirUbicaciones],
+  );
+
   useEffect(() => {
     // Attempt to get the initial location without starting the tracker
     BackgroundGeolocation.getCurrentPosition({
@@ -1004,46 +1058,12 @@ export function useGpsOperativo(
           marcarRecorridoActivoGlobal(false);
           return;
         }
-        // LOW, verificado contra la doc oficial del SDK instalado (`react-native-background-
-        // geolocation@5.4.0`, hallazgo de revisión): "You must call `.ready(config)` once and
-        // only once, each time your app is launched" — y el patrón canónico de la propia doc
-        // (`ready(config).then(state => { if (!state.enabled) start(); })`) llama `ready()`
-        // SIEMPRE, incluso cuando espera que el plugin ya esté `enabled`; el chequeo de
-        // `state.enabled` es solo para decidir si hace falta `start()`, nunca para saltear
-        // `ready()`. Antes de este fix, este camino de re-enganche (el chofer mata la app a
-        // mitad de turno y la reabre con el plugin ya corriendo) llamaba `changePace`/
-        // `setConfig` (`reafirmarMovimiento`, abajo) sin haber llamado `ready()` en ESTE
-        // lanzamiento del proceso — `ready()` solo corre dentro de `iniciar()`, que este camino
-        // nunca ejecuta. `ready()` es seguro de llamar acá aunque el plugin ya esté `enabled`:
-        // no lo reinicia ni lo detiene (mismo `gpsSpikeConfig` que usa `iniciar()`, para que la
-        // config reafirmada sea la misma en los dos caminos de entrada).
-        await BackgroundGeolocation.ready(gpsSpikeConfig);
-        if (!montado) return;
-        suscribirUbicaciones();
-        // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): este SÍ es un
-        // veredicto real ("re-enganchado, hay recorrido activo") — a diferencia del `false`
-        // inicial del montaje, este `setTracking(true)` cambia el valor de verdad (`false` →
-        // `true`), así que el efecto `[tracking]` de arriba vuelve a correr y publica, siempre
-        // que `veredictoPublicable` ya esté en `true` para entonces (se marca acá, antes de la
-        // mutación de estado que dispara ese efecto).
-        veredictoPublicable.current = true;
-        setTracking(true);
-        trackingRef.current = true;
-        // QUI-P0: SEGUNDO punto de entrada de `reafirmarMovimiento` (ver su docblock,
-        // `gps/seguimiento-continuo.ts`) — este camino de re-enganche NUNCA pasa por
-        // `iniciar()` (el plugin ya está `enabled`, el botón va directo a "Finalizar
-        // recorrido"), así que sin esta llamada el freeze del CTO ("mato la app para que se
-        // actualice, la reabro, la flecha sigue sin moverse") reaparecería exactamente acá.
-        // No se llama `iniciarSeguimientoContinuo` (que además hace `start()`): el plugin YA
-        // está arrancado, volver a `start()` sería redundante e innecesario. Best-effort — un
-        // fallo acá no debe impedir que el re-enganche deje la app usable.
-        void reafirmarMovimiento(BackgroundGeolocation).catch((error) => {
-          Sentry.captureException(error, {
-            tags: { contexto: 'gps-foreground', paso: 'reenganche-reafirmar-movimiento' },
-          });
-        });
-      } catch {
+        await reengancharNativoActivo(() => montado);
+      } catch (error) {
         // Sin estado del plugin no hay nada que re-enganchar: "Iniciar" sigue disponible.
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'reenganche-getstate' },
+        });
         //
         // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): mismo veredicto real
         // que la rama `!estado.enabled` de arriba ("nada que re-enganchar" — la app no sabe si
@@ -1074,7 +1094,7 @@ export function useGpsOperativo(
       // `reiniciarEstadoVisual` (`movimiento/store-visual.ts`).
       reiniciarEstadoVisual();
     };
-  }, [sesionId, suscribirUbicaciones, sembrarCumplimientos]);
+  }, [sesionId, suscribirUbicaciones, sembrarCumplimientos, reengancharNativoActivo]);
 
   /**
    * QUI-338: chequeo PASIVO (solo lectura, nunca pide permiso) del estado real de ubicación
@@ -1133,15 +1153,49 @@ export function useGpsOperativo(
     // desde el propio flujo de esta pantalla, o desde la notificación de Android) sin que la
     // app se haya reiniciado — sin esto, el botón se quedaba mostrando el estado bloqueado
     // viejo hasta el próximo toque en "Iniciar recorrido".
+    // Reconciliación `tracking` ↔ plugin nativo (campo, build 16): `tracking` es un `useState`
+    // que solo el efecto de montaje sincroniza con el nativo; si se desincroniza, la pantalla
+    // muestra "Comenzar" con el plugin grabando (y nada vuelve a pollear `vuelta-actual`).
+    // Al volver a primer plano se relee el estado real y se re-engancha sin `inicio_recorrido`.
+    const reconciliarConNativo = async () => {
+      try {
+        const estado = await BackgroundGeolocation.getState();
+        if (!montado) return;
+        const decision = decidirReconciliacionTracking({
+          nativoActivo: estado.enabled,
+          tracking: trackingRef.current,
+          operacionEnVuelo: operacionesEnVueloRef.current > 0,
+        });
+        if (decision === 'reenganchar') {
+          Sentry.captureMessage('tracking desincronizado: nativo activo con UI en Comenzar', {
+            level: 'warning',
+            tags: { contexto: 'gps-foreground', paso: 'reconciliar-foreground' },
+          });
+          await reengancharNativoActivo(() => montado && operacionesEnVueloRef.current === 0);
+        } else if (decision === 'nativo-detenido') {
+          Sentry.captureMessage('tracking desincronizado: nativo detenido con UI en Finalizar', {
+            level: 'warning',
+            tags: { contexto: 'gps-foreground', paso: 'nativo-detenido-con-ui-en-finalizar' },
+          });
+        }
+      } catch (error) {
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'reconciliar-foreground-error' },
+        });
+      }
+    };
     const subscripcionAppState = AppState.addEventListener('change', (estadoApp) => {
-      if (estadoApp === 'active') void verificarPermisoGpsPasivo();
+      if (estadoApp === 'active') {
+        void verificarPermisoGpsPasivo();
+        void reconciliarConNativo();
+      }
       manejadorForegroundActivo(estadoApp);
     });
     return () => {
       montado = false;
       subscripcionAppState.remove();
     };
-  }, [verificarPermisoGpsPasivo, estaEnRecorrido]);
+  }, [verificarPermisoGpsPasivo, estaEnRecorrido, reengancharNativoActivo]);
 
   /**
    * QUI-338: lleva al conductor a la pantalla del sistema que corresponde según `accion`
@@ -1521,13 +1575,51 @@ export function useGpsOperativo(
   // sin importar qué tan rápido se toquen los dos botones. Ver el test dedicado a esta carrera
   // en `gps/seguimiento-continuo.test.ts` (`crearSerializadorPromesaEnCurso`).
   const iniciar = useCallback(async () => {
-    const promesa = ejecutarIniciar();
-    serializadorIniciar.registrar(promesa);
-    await promesa;
-  }, [ejecutarIniciar, serializadorIniciar]);
+    operacionesEnVueloRef.current += 1;
+    try {
+      // Nativo ya grabando con la UI en "Comenzar" (desincronización): re-enganchar en vez de
+      // `ready()/start()` + un segundo `inicio_recorrido`, que deformaría el recorrido (QUI-247).
+      // Si `getState()` falla se sigue con el arranque normal.
+      let nativoActivo = false;
+      try {
+        nativoActivo = (await BackgroundGeolocation.getState()).enabled;
+      } catch {
+        // Arranque normal.
+      }
+      if (nativoActivo && !trackingRef.current) {
+        Sentry.captureMessage('iniciar con el GPS nativo ya activo: se re-engancha', {
+          level: 'warning',
+          tags: { contexto: 'gps-foreground', paso: 'iniciar-con-nativo-activo' },
+        });
+        setErrorGps(null);
+        await reengancharNativoActivo();
+        return;
+      }
+      const promesa = ejecutarIniciar();
+      serializadorIniciar.registrar(promesa);
+      await promesa;
+    } finally {
+      operacionesEnVueloRef.current -= 1;
+    }
+  }, [ejecutarIniciar, serializadorIniciar, reengancharNativoActivo]);
 
   const detener = useCallback(async () => {
     setErrorGps(null);
+    operacionesEnVueloRef.current += 1;
+    // Solo observabilidad: avisa a Sentry si un paso del cierre tarda > 10 s (sigue esperándolo).
+    const avisarSiTarda = async <T,>(paso: string, promesa: Promise<T>): Promise<T> => {
+      const timer = setTimeout(() => {
+        Sentry.captureMessage('detener: espera larga', {
+          level: 'warning',
+          tags: { contexto: 'gps-foreground', paso: 'detener-espera-larga', espera: paso },
+        });
+      }, 10_000);
+      try {
+        return await promesa;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
     try {
       // MEDIO (hallazgo de revisión, QUI-247): si hay un `iniciar()` en vuelo, esperarlo ACÁ —
       // antes de tocar el nativo, las suscripciones, el outbox o `tracking` — para que
@@ -1535,8 +1627,8 @@ export function useGpsOperativo(
       // escribir `inicio_recorrido` (y de asentar `trackingRef`). `ejecutarIniciar` nunca
       // rechaza (todos sus fallos internos se atrapan y se reportan a Sentry por su cuenta), así
       // que esperar acá no puede hacer fallar `detener()`.
-      await serializadorIniciar.esperarPendiente();
-      await BackgroundGeolocation.stop();
+      await avisarSiTarda('serializador-iniciar', serializadorIniciar.esperarPendiente());
+      await avisarSiTarda('background-geolocation-stop', BackgroundGeolocation.stop());
       subscription.current?.remove();
       subscription.current = null;
       heartbeatSubscription.current?.remove();
@@ -1744,6 +1836,8 @@ export function useGpsOperativo(
       );
     } catch {
       setErrorGps('No se pudo detener correctamente el GPS. Intenta nuevamente.');
+    } finally {
+      operacionesEnVueloRef.current -= 1;
     }
   }, [
     deviceId,
