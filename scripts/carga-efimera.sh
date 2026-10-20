@@ -167,7 +167,7 @@ cmd_alta() {
     case "$1" in
       --mi-ip) mi_ip="${2:-}"; shift 2 ;;
       --api-min-instances) api_min="${2:-}"; shift 2 ;;
-      --imagen) imagen="${2:-}"; shift 2 ;;
+      --imagen) [[ -n "${2:-}" ]] || fail "Falta valor para --imagen"; imagen="$2"; shift 2 ;;
       *) fail "Argumento desconocido: $1" ;;
     esac
   done
@@ -182,6 +182,9 @@ cmd_alta() {
     local api_max
     api_max="$(json_get "$cfg" max)"
     (( api_min <= api_max )) || fail "--api-min-instances / QUIVO_CARGA_API_MIN ($api_min) supera max-instances copiado de prod ($api_max): Cloud Run lo rechazaría."
+  fi
+  if [[ -n "$imagen" ]]; then
+    gc artifacts docker images describe "$imagen" >/dev/null 2>&1 || fail "La imagen no existe en Artifact Registry: $imagen"
   fi
   info "Alta del entorno efímero en $PROJECT ($REGION). IP autorizada: $mi_ip/32"
   nota_costo
@@ -245,10 +248,12 @@ cmd_alta() {
 
   # 4. API y worker con la imagen y el dimensionamiento de prod (solo lectura)
   local image envjson url_propia envflag
-  image="${imagen:-$(json_get "$cfg" image)}"; envjson="$(json_get "$cfg" env)"
-  if [[ -n "$imagen" ]]; then info "Imagen propia (API y worker): $image"; else info "Imagen en prod (se reusa tal cual): $image"; fi
+  envjson="$(json_get "$cfg" env)"
+  if [[ -n "$imagen" ]]; then image="$imagen"; info "Imagen propia (API y worker): $image"
+  else image="$(json_get "$cfg" image)"; info "Imagen en prod (se reusa tal cual): $image"; fi
   url_propia="https://${API_CARGA}-${PROJECT_NUMBER}.${REGION}.run.app"
   # Pool de la API como deploy-gcp.sh (prod r20 aún no tiene estas vars: sin esto se usarían los defaults).
+  # Mismos valores que deploy-gcp.sh (API l.784, worker l.1050): cambiar juntos.
   envflag="$(env_flag "$envjson" "$url_propia" "DB_POOL_MAX=6%%DB_CONNECTION_TIMEOUT_MS=5000%%DB_STATEMENT_TIMEOUT_MS=10000")"
   local secrets="RUNTIME_DATABASE_URL=${S_RUNTIME}:latest,JWT_SECRET=${S_JWT}:latest,REDIS_URL=${S_REDIS}:latest"
   # Worker: mismos valores que el worker pool de prod (deploy-gcp.sh), no los de la API.
