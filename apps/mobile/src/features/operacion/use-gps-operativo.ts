@@ -347,6 +347,7 @@ export function useGpsOperativo(
   }, []);
   // Re-enganche en curso (single-flight): evita dos `ready()` simultáneos (montaje + foreground).
   const reenganchePendienteRef = useRef<Promise<void> | null>(null);
+  const vigenteReengancheRef = useRef<() => boolean>(() => true);
   // LOW-MED (hallazgo de revisión, QUI-247): estado mutable compartido del marcador
   // `inicio_recorrido` del intento de `iniciar()` en curso — `reiniciarEstadoInicioRecorrido`
   // le asigna un `eventId` ESTABLE al arrancar cada intento, y `asegurarInicioRecorrido`
@@ -984,7 +985,8 @@ export function useGpsOperativo(
    */
   const reengancharNativoActivo = useCallback(
     async (vigente: () => boolean = () => true): Promise<void> => {
-      // Single-flight: si ya hay un re-enganche corriendo (montaje + foreground), se comparte.
+      // Single-flight compartido; la intención del ÚLTIMO llamador gana (su `vigente` reemplaza al anterior).
+      vigenteReengancheRef.current = vigente;
       if (reenganchePendienteRef.current) return reenganchePendienteRef.current;
       const promesa = (async () => {
         // Un `restaurarComportamientoNormal` de un `detener()` previo no debe caer DESPUÉS de
@@ -1004,7 +1006,7 @@ export function useGpsOperativo(
         // no lo reinicia ni lo detiene (mismo `gpsSpikeConfig` que usa `iniciar()`, para que la
         // config reafirmada sea la misma en los dos caminos de entrada).
         await BackgroundGeolocation.ready(gpsSpikeConfig);
-        if (!vigente()) return;
+        if (!vigenteReengancheRef.current()) return;
         suscribirUbicaciones();
         // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): este SÍ es un
         // veredicto real ("re-enganchado, hay recorrido activo") — a diferencia del `false`
