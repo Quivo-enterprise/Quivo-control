@@ -1,0 +1,51 @@
+Carga -> https://quivo-api-carga-hjqvfgsdnq-tl.a.run.app | 60 conductores, 3 pestañas admin, 30 min
+[1 min] requests=989 429=0 5xx=0 errRed=0
+[2 min] requests=2899 429=0 5xx=0 errRed=0
+[3 min] requests=4806 429=0 5xx=0 errRed=0
+[4 min] requests=6715 429=0 5xx=0 errRed=0
+[5 min] requests=8622 429=0 5xx=0 errRed=0
+[6 min] requests=10530 429=0 5xx=0 errRed=0
+[7 min] requests=12438 429=0 5xx=0 errRed=0
+[8 min] requests=14346 429=0 5xx=0 errRed=0
+[9 min] requests=16254 429=0 5xx=0 errRed=0
+[10 min] requests=18162 429=0 5xx=0 errRed=0
+[11 min] requests=18271 429=0 5xx=0 errRed=0
+[12 min] requests=18379 429=0 5xx=0 errRed=0
+[13 min] requests=18487 429=0 5xx=0 errRed=0
+[14 min] requests=18595 429=0 5xx=0 errRed=0
+[15 min] requests=18703 429=0 5xx=0 errRed=0
+[16 min] requests=20731 429=0 5xx=0 errRed=0
+[17 min] requests=22641 429=0 5xx=0 errRed=0
+[18 min] requests=24549 429=0 5xx=0 errRed=0
+[19 min] requests=26457 429=0 5xx=0 errRed=0
+[20 min] requests=28365 429=0 5xx=0 errRed=0
+[21 min] requests=30273 429=0 5xx=0 errRed=0
+[22 min] requests=32181 429=0 5xx=0 errRed=0
+[23 min] requests=34089 429=0 5xx=0 errRed=0
+[24 min] requests=35997 429=0 5xx=0 errRed=0
+[25 min] requests=37905 429=0 5xx=0 errRed=0
+[26 min] requests=39813 429=0 5xx=0 errRed=0
+[27 min] requests=41721 429=0 5xx=0 errRed=0
+[28 min] requests=43629 429=0 5xx=0 errRed=0
+[29 min] requests=45537 429=0 5xx=0 errRed=0
+
+=== Resultado final (latencias en ms) ===
+endpoint                                  n      p50      p95      p99  estados
+401 -> refresh                           63     56.6     62.1    116.6  {"401":63}
+GET /mobile/perfil                     1467     86.8       98    160.6  {"200":1467}
+GET /mobile/ruta-a-punto               5874       57     62.6      134  {"200":5874}
+GET /mobile/vecinos-ruta               2932     71.2     83.5    148.3  {"200":2932}
+GET /mobile/vuelta-actual              4397     68.8     76.2    145.3  {"200":4397}
+GET /reportes/en-vivo/molinos           360       65     70.5    290.3  {"200":360}
+GET /reportes/en-vivo/posiciones       2699     95.2    157.3    335.4  {"200":2699}
+GET /reportes/jornadas                  180     68.4     75.8      193  {"200":180}
+POST /mobile/auth/refresh                60     68.5     88.6    110.6  {"201":60}
+POST /mobile/auth/sesion                 60   1474.2     2956   3189.7  {"200":60}
+POST /sync/batches (volcado)             60     77.7    176.1    215.7  {"202":60}
+POST /sync/batches                    29294     59.1     68.9    137.1  {"202":29294}
+totales: {"n":47446,"c429":0,"c5xx":0,"err":0}
+login: {"429":0,"ok":60,"otros":0}
+offline: {"puntosAcumulados":11873,"lotesVolcados":60,"erroresVolcado":0,"volcadoMaxMs":217}
+puntos enviados (aceptados por la API): 70613; sin enviar: 0
+Resultado escrito en resultados/ensayo-60.json
+exit 0

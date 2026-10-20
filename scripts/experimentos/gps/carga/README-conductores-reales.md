@@ -50,10 +50,14 @@ Criterios en 60 (plan): p95 API < 500 ms, 0 5xx/429, `waiting` < 100 y estable, 
 
 ## 3b. Ensayo del día D (30 conductores reales, login real)
 
-Receta completa (el CTO corre lo de GCP):
+Receta completa (el CTO corre lo de GCP). La imagen de prod puede ser anterior al código a probar
+(p. ej. sin el throttle de login por ip+placa): construir desde `main` y pasarla con `QUIVO_CARGA_IMAGEN`
+(o `--imagen`); sin eso se reusa la de prod.
 
 ```bash
-scripts/carga-efimera.sh alta --api-min-instances 3        # 3 instancias de API (default: las de prod)
+# docker buildx build --platform linux/amd64 -f Dockerfile -t southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api:carga-$(git rev-parse --short HEAD) --push .   (desde un checkout limpio de `main`; tag NUEVO, nunca uno existente)
+QUIVO_CARGA_IMAGEN=southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api:carga-<sha> \
+  scripts/carga-efimera.sh alta --api-min-instances 3      # 3 instancias de API (default: las de prod)
 scripts/carga-efimera.sh migrar
 eval "$(scripts/carga-efimera.sh url-seed)"
 cd scripts/experimentos/gps/carga
@@ -76,6 +80,8 @@ node conductores-reales.mjs --base-url "$API" --conductores 30 --admins 3 --minu
 # 3) al terminar: enviados vs ingeridos (espera a que el conteo deje de cambiar)
 node verificar-ingesta.mjs --resultado resultados/ensayo-30.json
 # 4) repetir con 60 (baja + alta + seed --conductores 60), y por último: baja
+# 5) borrar la imagen de prueba (tag de prueba, nunca uno de release):
+# gcloud artifacts docker images delete southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api:carga-<sha> --project quivo-control-prod --quiet
 ```
 
 `verificar-ingesta.mjs` lee `gps_points` por `sesion_id` con la URL de `url-seed` (solo lectura);

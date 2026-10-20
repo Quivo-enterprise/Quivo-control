@@ -1,0 +1,2 @@
+[seed-conductores-reales.mjs] modo REMOTO -> host=34.176.21.99 puerto=5432 db=quivo_control sslmode=require
+Sembrado: 30 conductores + 1 reservado (misma placa) + admin. Tokens en /home/shadowfreak/Documents/Quivo-App/Quivo-control/.claude/worktrees/agent-ad77dc4432b8ca12f/scripts/experimentos/gps/carga/carga-tokens.local.json (0600; no commitear).

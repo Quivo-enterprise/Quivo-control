@@ -1,0 +1,67 @@
+[1;36m[CARGA-EFIMERA][0m Alta del entorno efímero en quivo-control-prod (southamerica-west1). IP autorizada: 192.223.121.16/32
+Costo estimado (precio de lista, verificar en southamerica-west1): Cloud SQL db-g1-small ~US$0.03-0.05/h
++ 10 GB SSD, Redis BASIC 1GB ~US$0.05/h, Cloud Run api/worker con min-instances 1 ~US$0.05-0.10/h,
+conector VPC compartido (ya existe). Orden de magnitud: US$0.15-0.25/h, o sea menos de US$1-2 por
+una sesión de 4-6 h. Se cobra mientras existan: corré `baja` al terminar.
+[1;36m[CARGA-EFIMERA][0m Creando quivo-db-carga (POSTGRES_16, db-g1-small, ENTERPRISE, 10 GB; IP privada + pública /32, SSL obligatorio)...
+Creating Cloud SQL instance for POSTGRES_16...
+..............done.
+Created [https://sqladmin.googleapis.com/sql/v1beta4/projects/quivo-control-prod/instances/quivo-db-carga].
+NAME            DATABASE_VERSION  LOCATION              TIER         PRIMARY_ADDRESS  PRIVATE_ADDRESS  STATUS
+quivo-db-carga  POSTGRES_16       southamerica-west1-b  db-g1-small  34.176.21.99     10.60.0.7        RUNNABLE
+Creating Cloud SQL database...
+.done.
+Created database [quivo_control].
+instance: quivo-db-carga
+name: quivo_control
+project: quivo-control-prod
+Created version [1] of the secret [DATABASE_URL-carga].
+[1;36m[CARGA-EFIMERA][0m Secreto 'DATABASE_URL-carga' creado (valor no impreso).
+Updated IAM policy for secret [DATABASE_URL-carga].
+The following message will be used for the patch API method.
+{"name": "quivo-db-carga", "project": "quivo-control-prod", "settings": {"ipConfiguration": {"authorizedNetworks": [{"value": "192.223.121.16/32"}]}}}
+Patching Cloud SQL instance...
+...done.
+Updated [https://sqladmin.googleapis.com/sql/v1beta4/projects/quivo-control-prod/instances/quivo-db-carga].
+[1;36m[CARGA-EFIMERA][0m Creando Redis quivo-redis-carga (REDIS_7_2, BASIC 1GB, DIRECT_PEERING)...
+AUTH prevents accidental access to the instance by requiring an AUTH string 
+(automatically generated for you). AUTH credentials are not confidential when 
+transmitted or intended to protect against malicious actors.
+
+Do you want to proceed? (Y/n)?  
+Create request issued for: [quivo-redis-carga]
+Waiting for operation [projects/quivo-control-prod/locations/southamerica-west1/operations/operation-1792467765294-65e3d6c6bf47a-88559bf2-5b5cb7f1] to complete...
+.................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................done.
+Created instance [quivo-redis-carga].
+Created version [1] of the secret [RUNTIME_DATABASE_URL-carga].
+[1;36m[CARGA-EFIMERA][0m Secreto 'RUNTIME_DATABASE_URL-carga' creado (valor no impreso).
+Updated IAM policy for secret [RUNTIME_DATABASE_URL-carga].
+Created version [1] of the secret [REDIS_URL-carga].
+[1;36m[CARGA-EFIMERA][0m Secreto 'REDIS_URL-carga' creado (valor no impreso).
+Updated IAM policy for secret [REDIS_URL-carga].
+Created version [1] of the secret [JWT_SECRET-carga].
+[1;36m[CARGA-EFIMERA][0m Secreto 'JWT_SECRET-carga' creado (valor no impreso).
+Updated IAM policy for secret [JWT_SECRET-carga].
+[1;36m[CARGA-EFIMERA][0m Imagen propia (API y worker): southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api:carga-3ff172a
+[1;36m[CARGA-EFIMERA][0m Desplegando quivo-api-carga (cpu/mem/min/max/concurrencia copiados de quivo-api)...
+Deploying container to Cloud Run service [[1mquivo-api-carga[m] in project [[1mquivo-control-prod[m] region [[1msouthamerica-west1[m]
+Deploying new service...
+Setting IAM Policy.............done
+Creating Revision...................................................................................................................................................................................................................................................................................................................................................................................................................................................................................done
+Routing traffic.....done
+Done.
+Service [[1mquivo-api-carga[m] revision [[1mquivo-api-carga-00001-rp9[m] has been deployed and is serving [1m100[m percent of traffic.
+Service URL: [1mhttps://quivo-api-carga-741758083365.southamerica-west1.run.app[m
+[1;36m[CARGA-EFIMERA][0m Desplegando quivo-worker-carga (Direct VPC egress, mismo comando que prod)...
+Deploying container to Cloud Run worker pool [[1mquivo-worker-carga[m] in project [[1mquivo-control-prod[m] region [[1msouthamerica-west1[m]
+Deploying new worker pool...
+Done.
+Worker pool [[1mquivo-worker-carga[m] revision [[1mquivo-worker-carga-00001-pbj[m] has been deployed.
+Done.
+
+See logs with:
+gcloud beta run worker-pools logs tail quivo-worker-carga
+
+Or visit https://console.cloud.google.com/run/worker-pools/details/southamerica-west1/quivo-worker-carga
+[1;36m[CARGA-EFIMERA][0m Listo. La base está VACÍA: siguiente paso 'scripts/carga-efimera.sh migrar'.
+exit 0

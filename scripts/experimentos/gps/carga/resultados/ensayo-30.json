@@ -1,0 +1,328 @@
+{
+  "baseUrl": "https://quivo-api-carga-hjqvfgsdnq-tl.a.run.app",
+  "conductores": 30,
+  "admins": 3,
+  "minutos": "30",
+  "filas": [
+    {
+      "endpoint": "401 -> refresh",
+      "n": 30,
+      "p50": 54.9,
+      "p95": 58.9,
+      "p99": 67.5,
+      "estados": {
+        "401": 30
+      }
+    },
+    {
+      "endpoint": "GET /mobile/perfil",
+      "n": 733,
+      "p50": 78.2,
+      "p95": 92.3,
+      "p99": 168.7,
+      "estados": {
+        "200": 733
+      }
+    },
+    {
+      "endpoint": "GET /mobile/ruta-a-punto",
+      "n": 2944,
+      "p50": 55,
+      "p95": 60.1,
+      "p99": 130.6,
+      "estados": {
+        "200": 2944
+      }
+    },
+    {
+      "endpoint": "GET /mobile/vecinos-ruta",
+      "n": 1467,
+      "p50": 67.7,
+      "p95": 80.4,
+      "p99": 111.6,
+      "estados": {
+        "200": 1467
+      }
+    },
+    {
+      "endpoint": "GET /mobile/vuelta-actual",
+      "n": 2210,
+      "p50": 64.5,
+      "p95": 71.9,
+      "p99": 142,
+      "estados": {
+        "200": 2210
+      }
+    },
+    {
+      "endpoint": "GET /reportes/en-vivo/molinos",
+      "n": 360,
+      "p50": 62.6,
+      "p95": 68,
+      "p99": 104.6,
+      "estados": {
+        "200": 360
+      }
+    },
+    {
+      "endpoint": "GET /reportes/en-vivo/posiciones",
+      "n": 2699,
+      "p50": 84.4,
+      "p95": 96.6,
+      "p99": 213.9,
+      "estados": {
+        "200": 2699
+      }
+    },
+    {
+      "endpoint": "GET /reportes/jornadas",
+      "n": 180,
+      "p50": 62.4,
+      "p95": 143,
+      "p99": 582.2,
+      "estados": {
+        "200": 180
+      }
+    },
+    {
+      "endpoint": "POST /mobile/auth/refresh",
+      "n": 30,
+      "p50": 68.6,
+      "p95": 129.3,
+      "p99": 137.1,
+      "estados": {
+        "201": 30
+      }
+    },
+    {
+      "endpoint": "POST /mobile/auth/sesion",
+      "n": 30,
+      "p50": 961.3,
+      "p95": 2511.8,
+      "p99": 2532.4,
+      "estados": {
+        "200": 30
+      }
+    },
+    {
+      "endpoint": "POST /sync/batches (volcado)",
+      "n": 30,
+      "p50": 107.9,
+      "p95": 169.2,
+      "p99": 184.4,
+      "estados": {
+        "202": 30
+      }
+    },
+    {
+      "endpoint": "POST /sync/batches",
+      "n": 14697,
+      "p50": 57.4,
+      "p95": 70.8,
+      "p99": 133.4,
+      "estados": {
+        "202": 14697
+      }
+    }
+  ],
+  "totales": {
+    "n": 25410,
+    "c429": 0,
+    "c5xx": 0,
+    "err": 0
+  },
+  "login": {
+    "429": 0,
+    "ok": 30,
+    "otros": 0
+  },
+  "offline": {
+    "puntosAcumulados": 6056,
+    "lotesVolcados": 30,
+    "erroresVolcado": 0,
+    "volcadoMaxMs": 186.18121299997438
+  },
+  "puntosEnviados": 35539,
+  "conductoresDetalle": [
+    {
+      "placa": "1000CRG",
+      "sesionId": "dfc4b5c3-0cb4-4078-9e0f-0c202bdefa1f",
+      "enviados": 1147,
+      "pendientes": 0
+    },
+    {
+      "placa": "1001CRG",
+      "sesionId": "3be5a9fc-e4d5-4809-afe7-debd8fa77da8",
+      "enviados": 1176,
+      "pendientes": 0
+    },
+    {
+      "placa": "1002CRG",
+      "sesionId": "e9b737f7-6898-4d7d-a2c7-ccadbdfa40d8",
+      "enviados": 1196,
+      "pendientes": 0
+    },
+    {
+      "placa": "1003CRG",
+      "sesionId": "9eec9397-3f99-48f7-b090-b26fabc1b344",
+      "enviados": 1190,
+      "pendientes": 0
+    },
+    {
+      "placa": "1004CRG",
+      "sesionId": "68ce3bab-181b-4c0c-bb3e-b5c015b18c90",
+      "enviados": 1173,
+      "pendientes": 0
+    },
+    {
+      "placa": "1005CRG",
+      "sesionId": "cefb71c6-4019-4e06-8d78-6547f6190d42",
+      "enviados": 1195,
+      "pendientes": 0
+    },
+    {
+      "placa": "1006CRG",
+      "sesionId": "0b5126f3-57c2-40d8-9048-4d510b0d47be",
+      "enviados": 1194,
+      "pendientes": 0
+    },
+    {
+      "placa": "1007CRG",
+      "sesionId": "490f35eb-5126-4c83-bf7f-228e35c94737",
+      "enviados": 1251,
+      "pendientes": 0
+    },
+    {
+      "placa": "1008CRG",
+      "sesionId": "f5d3e2bf-e404-46f1-ad21-7e4577428655",
+      "enviados": 1212,
+      "pendientes": 0
+    },
+    {
+      "placa": "1009CRG",
+      "sesionId": "86798681-6d9c-4398-9ce5-8797cf87e53d",
+      "enviados": 1190,
+      "pendientes": 0
+    },
+    {
+      "placa": "1010CRG",
+      "sesionId": "47b67942-63b7-4b90-8cdb-b7f6dd89875c",
+      "enviados": 1186,
+      "pendientes": 0
+    },
+    {
+      "placa": "1011CRG",
+      "sesionId": "cd9d38ff-fb1c-4de4-b4a6-ab4abe881a71",
+      "enviados": 1180,
+      "pendientes": 0
+    },
+    {
+      "placa": "1012CRG",
+      "sesionId": "d8e33997-fdd2-4664-8487-a5a88b03f383",
+      "enviados": 1166,
+      "pendientes": 0
+    },
+    {
+      "placa": "1013CRG",
+      "sesionId": "5c52e013-73a1-43cd-9488-0af7c3df80ff",
+      "enviados": 1191,
+      "pendientes": 0
+    },
+    {
+      "placa": "1014CRG",
+      "sesionId": "979f677f-c5c4-4ab9-95c7-ce811656c9f7",
+      "enviados": 1205,
+      "pendientes": 0
+    },
+    {
+      "placa": "1015CRG",
+      "sesionId": "a978ad22-93ec-4b59-b358-2ceee5ff76f1",
+      "enviados": 1158,
+      "pendientes": 0
+    },
+    {
+      "placa": "1016CRG",
+      "sesionId": "c305c188-498f-4f8b-b00f-455c9d2d41fd",
+      "enviados": 1211,
+      "pendientes": 0
+    },
+    {
+      "placa": "1017CRG",
+      "sesionId": "8da87c87-c287-4ba9-940b-00e932969d78",
+      "enviados": 1164,
+      "pendientes": 0
+    },
+    {
+      "placa": "1018CRG",
+      "sesionId": "211eacb1-4502-494d-b1df-9db589109562",
+      "enviados": 1189,
+      "pendientes": 0
+    },
+    {
+      "placa": "1019CRG",
+      "sesionId": "25381cda-96c5-404c-9566-9580b64343d2",
+      "enviados": 1184,
+      "pendientes": 0
+    },
+    {
+      "placa": "1020CRG",
+      "sesionId": "142acf47-da41-403d-9071-c049c195c320",
+      "enviados": 1149,
+      "pendientes": 0
+    },
+    {
+      "placa": "1021CRG",
+      "sesionId": "e51cbc3f-b629-4327-b97c-fcc1586fdec1",
+      "enviados": 1183,
+      "pendientes": 0
+    },
+    {
+      "placa": "1022CRG",
+      "sesionId": "5fcc30af-6069-44cd-afe2-45c2b29b4574",
+      "enviados": 1208,
+      "pendientes": 0
+    },
+    {
+      "placa": "1023CRG",
+      "sesionId": "36a0df99-031b-4f40-9727-a8b3adda13a1",
+      "enviados": 1185,
+      "pendientes": 0
+    },
+    {
+      "placa": "1024CRG",
+      "sesionId": "407496c2-2d9c-445b-a57f-30babd259a5e",
+      "enviados": 1167,
+      "pendientes": 0
+    },
+    {
+      "placa": "1025CRG",
+      "sesionId": "21f65590-98cd-466c-8545-f4318f5e8324",
+      "enviados": 1214,
+      "pendientes": 0
+    },
+    {
+      "placa": "1026CRG",
+      "sesionId": "4c457551-941b-4934-b3eb-8e541988ca47",
+      "enviados": 1202,
+      "pendientes": 0
+    },
+    {
+      "placa": "1027CRG",
+      "sesionId": "3ed28750-a559-48ff-9a8e-8edb719d2284",
+      "enviados": 1150,
+      "pendientes": 0
+    },
+    {
+      "placa": "1028CRG",
+      "sesionId": "d481de18-d88d-4625-b848-d83194265810",
+      "enviados": 1154,
+      "pendientes": 0
+    },
+    {
+      "placa": "1029CRG",
+      "sesionId": "4c693ac8-9363-4151-b504-f31b79144728",
+      "enviados": 1169,
+      "pendientes": 0
+    }
+  ]
+}
