@@ -13,6 +13,7 @@ import * as Sentry from '@sentry/node';
 import {
   LineaDistintivoTipoSchema,
   TurnoSchema,
+  normalizarPlacaVehiculo,
   type AuthConductorMovilRequest,
   type AuthConductorMovilResponse,
   type AuthSesionMovilRequest,
@@ -80,6 +81,14 @@ type AsignacionOperativa = Prisma.AsignacionGetPayload<{
   };
 }>;
 
+const TOPE_LOCKOUT_S = 900;
+const TOPE_LOCKOUT_DISPOSITIVO_CONOCIDO_S = 60;
+
+/** Espera tras el fallo nº `fallos` (0 si ≤ 3): min(2^(fallos-3), tope) segundos. */
+function esperaLockoutSegundos(fallos: number, tope: number): number {
+  return fallos > 3 ? Math.min(2 ** (fallos - 3), tope) : 0;
+}
+
 @Injectable()
 export class AuthMovilService {
   private readonly logger = new Logger(AuthMovilService.name);
@@ -88,7 +97,7 @@ export class AuthMovilService {
     if (!legacyAuthMovilHabilitado()) {
       throw endpointLegadoApagado();
     }
-    const placaNormalizada = normalizarPlaca(data.placa);
+    const placaNormalizada = normalizarPlacaVehiculo(data.placa);
     const candidatos = await this.buscarVehiculosActivosPorPlaca(placaNormalizada);
 
     const verificaciones = await Promise.all(
@@ -269,7 +278,7 @@ export class AuthMovilService {
    */
   async autenticarSesion(data: AuthSesionMovilRequest): Promise<AuthSesionMovilResponse> {
     const ahora = new Date();
-    const placaNormalizada = normalizarPlaca(data.placa);
+    const placaNormalizada = normalizarPlacaVehiculo(data.placa);
     const candidatosVehiculo = await this.buscarVehiculosActivosPorPlaca(placaNormalizada);
     const vehiculo = candidatosVehiculo[0] ?? null;
 
@@ -281,7 +290,7 @@ export class AuthMovilService {
       throw credencialesInvalidasSesion();
     }
 
-    await this.verificarLockout(vehiculo.id);
+    await this.verificarLockout(vehiculo.id, data.deviceId);
 
     const candidatosNivel1 = await this.buscarCandidatosNivel1(vehiculo, ahora);
     const resultadosNivel1 = await this.verificarPinConPadding(
@@ -887,22 +896,42 @@ export class AuthMovilService {
     return resultados;
   }
 
-  private async verificarLockout(vehiculoId: string): Promise<void> {
+  /** Un `deviceId` que ya tuvo una sesión EXITOSA con este vehículo conserva el tope previo de
+   * 60 s en vez de la espera de hasta 900 s: quien solo conoce la placa (pintada en la puerta)
+   * no puede dejar afuera al chofer más de 60 s. NO queda exento: el `deviceId` lo ven los roles
+   * de panel (`GET /reportes/en-vivo`, `/posiciones`, `/:sesionId/contexto`), así que un
+   * operador podría copiarlo y forzar el PIN sin espera. Solo se consulta con lockout activo.
+   * Usa `[vehiculoId, estado]`. */
+  private async dispositivoConocido(vehiculoId: string, deviceId: string): Promise<boolean> {
+    const sesion = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
+      tx.sesionOperativa.findFirst({ where: { vehiculoId, deviceId }, select: { id: true } }),
+    );
+    return sesion !== null;
+  }
+
+  private async verificarLockout(vehiculoId: string, deviceId: string): Promise<void> {
     const intento = await withTenantContext(CONTEXTO_ADMIN, (tx) =>
       tx.intentoAuthMovil.findUnique({ where: { vehiculoId } }),
     );
     const ahora = new Date();
     if (intento?.bloqueadoHasta && intento.bloqueadoHasta > ahora) {
-      const retryAfterSeconds = Math.ceil(
-        (intento.bloqueadoHasta.getTime() - ahora.getTime()) / 1_000,
-      );
+      let hasta = intento.bloqueadoHasta;
+      if (await this.dispositivoConocido(vehiculoId, deviceId)) {
+        // `updatedAt` = instante del último fallo; misma curva que antes, con tope 60 s.
+        hasta = sumarSegundos(
+          intento.updatedAt,
+          esperaLockoutSegundos(intento.fallos, TOPE_LOCKOUT_DISPOSITIVO_CONOCIDO_S),
+        );
+        if (hasta <= ahora) return;
+      }
+      const retryAfterSeconds = Math.ceil((hasta.getTime() - ahora.getTime()) / 1_000);
       throw new LockoutMovilException(retryAfterSeconds);
     }
   }
 
   /** Retraso exponencial, no bloqueo duro (plan §1.g.2): la placa está pintada en la
    * puerta del vehículo, así que un bloqueo duro es un botón de "dejá a este trufi sin
-   * GPS" que cualquiera aprieta. `retryAfterSeconds = min(2^(fallos-3), 60)` desde el
+   * GPS" que cualquiera aprieta. `retryAfterSeconds = min(2^(fallos-3), 900)` (`esperaLockoutSegundos`) desde el
    * tercer fallo — antes de eso no hay espera. */
   /**
    * H2 (hallazgo de revisión, bajo): antes esto era `tx.intentoAuthMovil.upsert(...)`.
@@ -944,7 +973,7 @@ export class AuthMovilService {
       if (!actualizado || actualizado.fallos <= 3) {
         return;
       }
-      const esperaSegundos = Math.min(2 ** (actualizado.fallos - 3), 60);
+      const esperaSegundos = esperaLockoutSegundos(actualizado.fallos, TOPE_LOCKOUT_S);
       await tx.intentoAuthMovil.update({
         where: { vehiculoId },
         data: { bloqueadoHasta: sumarSegundos(new Date(), esperaSegundos) },
@@ -1170,13 +1199,6 @@ function toContextoOperativo(sesionId: string, row: AsignacionOperativa): Contex
   };
 }
 
-function normalizarPlaca(placa: string): string {
-  return placa
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '');
-}
-
 async function verificarCredencial(pin: string, hash: string | null): Promise<boolean> {
   const hashVerificable = hash ?? (await DUMMY_HASH_PROMISE);
   try {
@@ -1213,11 +1235,10 @@ function endpointLegadoApagado(): GoneException {
   );
 }
 
-/** Default `true`: los 2 teléfonos en la calle no dependen del contrato de login (el
- * refresh token dura 30 días y la sesión se restaura desde SecureStore) — apagar esto es
- * una decisión explícita, nunca el estado por defecto. */
+/** Default apagado: solo se habilita con `MOBILE_LEGACY_AUTH_ENABLED=true` explícito (los
+ * teléfonos en la calle usan `/sesion`; las sesiones viejas se restauran por refresh token). */
 function legacyAuthMovilHabilitado(): boolean {
-  return process.env.MOBILE_LEGACY_AUTH_ENABLED !== 'false';
+  return process.env.MOBILE_LEGACY_AUTH_ENABLED === 'true';
 }
 
 /** PIN de 6 dígitos con CSPRNG (plan §1.f/ítem 3): `crypto.randomInt` hace rechazo interno

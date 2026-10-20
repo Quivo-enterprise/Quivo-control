@@ -12,6 +12,18 @@ import type { SesionMovilAutenticada } from './auth-movil.types.js';
 
 type RequestConSesionMovil = FastifyRequest & { sesionMovil?: SesionMovilAutenticada };
 
+/** Con throttler nombrado la base emite `Retry-After-<nombre>`; el estándar es `Retry-After`
+ * (el cliente móvil lo lee de ahí). Base común de los guards nombrados de auth-movil. */
+export abstract class RetryAfterThrottlerGuard extends ThrottlerGuard {
+  protected async throwThrottlingException(
+    context: ExecutionContext,
+    detalle: ThrottlerLimitDetail,
+  ): Promise<void> {
+    this.getRequestResponse(context).res.header('Retry-After', detalle.timeToBlockExpire);
+    return super.throwThrottlingException(context, detalle);
+  }
+}
+
 /**
  * Límite por dispositivo de las rutas móviles autenticadas (`/sync/batches`, vuelta actual,
  * paquete del día, perfil, foto, etc.; ver `@LimitePorDispositivo`). El `ThrottlerGuard` global
@@ -33,7 +45,7 @@ type RequestConSesionMovil = FastifyRequest & { sesionMovil?: SesionMovilAutenti
  * Run), pasar a Redis si se sube max-instances.
  */
 @Injectable()
-export class DispositivoThrottlerGuard extends ThrottlerGuard {
+export class DispositivoThrottlerGuard extends RetryAfterThrottlerGuard {
   // `@Inject(Reflector)` explícito — ver `roles.guard.ts`/`audit.interceptor.ts` (bug
   // conocido de `tsx` con `emitDecoratorMetadata` en clases de paquetes externos, evanw/
   // esbuild#257: sin esto, `dev`/`dev:worker` no resuelven bien el tipo del parámetro).
@@ -46,14 +58,5 @@ export class DispositivoThrottlerGuard extends ThrottlerGuard {
 
   protected async getTracker(req: RequestConSesionMovil): Promise<string> {
     return req.sesionMovil?.deviceId ?? req.ip;
-  }
-
-  // Con throttler nombrado la base emite `Retry-After-<nombre>`; el estándar es `Retry-After`.
-  protected async throwThrottlingException(
-    context: ExecutionContext,
-    detalle: ThrottlerLimitDetail,
-  ): Promise<void> {
-    this.getRequestResponse(context).res.header('Retry-After', detalle.timeToBlockExpire);
-    return super.throwThrottlingException(context, detalle);
   }
 }

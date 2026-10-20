@@ -1,5 +1,14 @@
-import { Body, Controller, Get, HttpCode, Inject, Post, UseFilters } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Inject,
+  Post,
+  UseFilters,
+  UseGuards,
+} from '@nestjs/common';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import {
   AuthConductorMovilRequestSchema,
   AuthSesionMovilRequestSchema,
@@ -8,6 +17,7 @@ import {
   RefreshMovilRequestSchema,
   SeleccionAsignacionMovilRequestSchema,
 } from '@quivo/shared';
+import { LoginMovilThrottlerGuard } from './login-movil-throttler.guard.js';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { LimitePorDispositivo } from './limite-por-dispositivo.decorator.js';
 import { AuthMovilService } from './auth-movil.service.js';
@@ -43,7 +53,9 @@ export class AuthMovilController {
    * `/conductor` (vivos detrás de `MOBILE_LEGACY_AUTH_ENABLED`, ver ese servicio). */
   @Post('sesion')
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  // 5/min por ip+placa y 60/min por ip (30 choferes detrás de un CGNAT): ver `LoginMovilThrottlerGuard`.
+  @SkipThrottle()
+  @UseGuards(LoginMovilThrottlerGuard)
   @UseFilters(LockoutMovilExceptionFilter)
   autenticarSesion(@Body() body: AuthSesionMovilDto) {
     return this.authMovilService.autenticarSesion(body);

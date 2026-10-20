@@ -86,8 +86,10 @@ la imagen con `RUNTIME_DATABASE_URL` y `JWT_SECRET` desde Secret Manager, config
 
 ### Auth operativa móvil
 
-- `POST /v1/mobile/auth/vehiculo` — placa + PIN + dispositivo; emite desafío corto.
-- `POST /v1/mobile/auth/conductor` — documento + PIN + desafío; crea sesión operativa.
+- `POST /v1/mobile/auth/vehiculo` — placa + PIN + dispositivo; emite desafío corto. Legado:
+  apagado por defecto (responde 410), solo con `MOBILE_LEGACY_AUTH_ENABLED=true`.
+- `POST /v1/mobile/auth/conductor` — documento + PIN + desafío; crea sesión operativa. Legado:
+  igual que `/vehiculo`, solo con `MOBILE_LEGACY_AUTH_ENABLED=true`.
 - `POST /v1/mobile/auth/refresh` — rota access y refresh opacos.
 - `POST /v1/mobile/auth/logout` — revoca la sesión.
 - `GET /v1/mobile/auth/contexto-operativo` — recupera asignación, línea y ruta.
