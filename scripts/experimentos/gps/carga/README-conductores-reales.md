@@ -50,10 +50,14 @@ Criterios en 60 (plan): p95 API < 500 ms, 0 5xx/429, `waiting` < 100 y estable, 
 
 ## 3b. Ensayo del día D (30 conductores reales, login real)
 
-Receta completa (el CTO corre lo de GCP):
+Receta completa (el CTO corre lo de GCP). La imagen de prod puede ser anterior al código a probar
+(p. ej. sin el throttle de login por ip+placa): construir desde `main` y pasarla con `QUIVO_CARGA_IMAGEN`
+(o `--imagen`); sin eso se reusa la de prod.
 
 ```bash
-scripts/carga-efimera.sh alta --api-min-instances 3        # 3 instancias de API (default: las de prod)
+# docker buildx build --platform linux/amd64 -f Dockerfile -t southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api:carga-<sha> --push .   (tag NUEVO, nunca uno existente)
+QUIVO_CARGA_IMAGEN=southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api:carga-<sha> \
+  scripts/carga-efimera.sh alta --api-min-instances 3      # 3 instancias de API (default: las de prod)
 scripts/carga-efimera.sh migrar
 eval "$(scripts/carga-efimera.sh url-seed)"
 cd scripts/experimentos/gps/carga

@@ -4,9 +4,10 @@
 # de quivo-db / quivo-redis / quivo-api para copiar versión, tier, imagen y dimensionamiento.
 #
 # Uso:
-#   scripts/carga-efimera.sh alta [--mi-ip A.B.C.D] [--api-min-instances N]
+#   scripts/carga-efimera.sh alta [--mi-ip A.B.C.D] [--api-min-instances N] [--imagen IMG]
 #                                                    # crea SQL, Redis, secretos y despliega api + worker
 #                                                    # (min-instances de la API: flag, o QUIVO_CARGA_API_MIN, o el de prod)
+#                                                    # (imagen: flag, o QUIVO_CARGA_IMAGEN, o la que corre hoy en prod)
 #   scripts/carga-efimera.sh migrar                  # prisma migrate deploy desde la laptop + rota quivo_app
 #   scripts/carga-efimera.sh url-seed                # `export` para seed-conductores-reales.mjs
 #   scripts/carga-efimera.sh url-api                 # URL de quivo-api-carga
@@ -30,7 +31,8 @@
 #     laptop. Las contraseñas se generan y viven solo en Secret Manager (*-carga).
 #   - API con el conector VPC quivo-conector y worker con Direct VPC egress, como deploy-gcp.sh.
 #   - GPS_RETENTION_MONTHS se copia de prod si existe ahí.
-#   - Imagen: la que corre HOY quivo-api en prod (no construye nada).
+#   - Imagen: por defecto la que corre HOY quivo-api en prod (no construye nada). Para probar código
+#     más nuevo que prod: construir/pushear un tag NUEVO `api:carga-<sha>` y pasarlo con --imagen.
 set -Eeuo pipefail
 
 readonly PROJECT="quivo-control-prod"
@@ -160,11 +162,12 @@ print("^%%^" + "%%".join(f"{k}={v}" for k, v in env.items()))' "$1" "$2" "${3:-}
 }
 
 cmd_alta() {
-  local mi_ip="" api_min="${QUIVO_CARGA_API_MIN:-}"
+  local mi_ip="" api_min="${QUIVO_CARGA_API_MIN:-}" imagen="${QUIVO_CARGA_IMAGEN:-}"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --mi-ip) mi_ip="${2:-}"; shift 2 ;;
       --api-min-instances) api_min="${2:-}"; shift 2 ;;
+      --imagen) imagen="${2:-}"; shift 2 ;;
       *) fail "Argumento desconocido: $1" ;;
     esac
   done
@@ -242,14 +245,15 @@ cmd_alta() {
 
   # 4. API y worker con la imagen y el dimensionamiento de prod (solo lectura)
   local image envjson url_propia envflag
-  image="$(json_get "$cfg" image)"; envjson="$(json_get "$cfg" env)"
-  info "Imagen en prod (se reusa tal cual): $image"
+  image="${imagen:-$(json_get "$cfg" image)}"; envjson="$(json_get "$cfg" env)"
+  if [[ -n "$imagen" ]]; then info "Imagen propia (API y worker): $image"; else info "Imagen en prod (se reusa tal cual): $image"; fi
   url_propia="https://${API_CARGA}-${PROJECT_NUMBER}.${REGION}.run.app"
-  envflag="$(env_flag "$envjson" "$url_propia")"
+  # Pool de la API como deploy-gcp.sh (prod r20 aún no tiene estas vars: sin esto se usarían los defaults).
+  envflag="$(env_flag "$envjson" "$url_propia" "DB_POOL_MAX=6%%DB_CONNECTION_TIMEOUT_MS=5000%%DB_STATEMENT_TIMEOUT_MS=10000")"
   local secrets="RUNTIME_DATABASE_URL=${S_RUNTIME}:latest,JWT_SECRET=${S_JWT}:latest,REDIS_URL=${S_REDIS}:latest"
   # Worker: mismos valores que el worker pool de prod (deploy-gcp.sh), no los de la API.
   local envflag_worker
-  envflag_worker="$(env_flag "$envjson" "$url_propia" "DB_POOL_MAX=5%%DB_STATEMENT_TIMEOUT_MS=60000")"
+  envflag_worker="$(env_flag "$envjson" "$url_propia" "DB_POOL_MAX=5%%DB_CONNECTION_TIMEOUT_MS=5000%%DB_STATEMENT_TIMEOUT_MS=60000")"
   local throttle_flag=()
   [[ "$(json_get "$cfg" cpu_throttling)" == "false" ]] && throttle_flag=(--no-cpu-throttling)
 
