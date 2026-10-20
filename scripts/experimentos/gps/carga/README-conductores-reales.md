@@ -61,10 +61,13 @@ node seed-conductores-reales.mjs --conductores 30         # tokens, placa y PIN 
 API="$(../../../carga-efimera.sh url-api)"
 # 0) misma placa, con la API en EXACTAMENTE 1 instancia (el throttle del login es en memoria por instancia:
 #    con varias, los 6 intentos se reparten y el 6.º no da 429). Después de los 6 intentos hace un login con el
-#    PIN bueno (~61 s tras el 1.º) que resetea los fallos; si falla el reseteo, re-sembrar o esperar el lockout.
+#    PIN bueno (≥ 61 s tras el 6.º: el throttler bloquea 60 s desde ese intento) que resetea los fallos.
+#    Si el reseteo falla: login manual con el PIN correcto de 9999MSM (en carga-tokens.local.json) pasados
+#    > 60 s del último intento, o baja + alta completa (el seed no re-ejecuta y `fallos` no decae solo).
 ../../../carga-efimera.sh api-instancias 1
 node conductores-reales.mjs --base-url "$API" --conductores 1 --admins 0 --minutos 1 --probar-misma-placa
-../../../carga-efimera.sh api-instancias 3
+../../../carga-efimera.sh api-instancias 3   # fija min=max=3 a propósito: peor caso de conexiones Cloud SQL
+                                             # (criterio < 35 con 3 instancias); no restaura el autoscaling de prod
 # 1) 30 con login real (ráfaga de 60 s desde esta IP = CGNAT) + escenario offline (min 10 a 15)
 node conductores-reales.mjs --base-url "$API" --conductores 30 --admins 3 --minutos 30 \
   --login-real --offline-desde 10 --offline-minutos 5 --salida resultados/ensayo-30.json
@@ -80,10 +83,13 @@ no hay endpoint admin con conteos exactos por sesión, así que no se agregó ni
 Con `--login-real`, un 429 en cualquiera de los N logins (`POST /v1/mobile/auth/sesion`) es una
 línea `FAIL` y exit 1. La placa `9999MSM` queda reservada para `--probar-misma-placa` (5x401 y el
 6.º 429 del throttle, sin `retryAfterSeconds`; si ya hay fallos de una corrida anterior sin reseteo
-imprime `lockoutPrevio: re-seed o esperar`). Si se combina con `--login-real` arranca ≥ 61 s después
+imprime `lockoutPrevio`; arreglo: login manual con el PIN correcto de 9999MSM pasados > 60 s del último
+intento, o baja + alta; ni re-seed ni esperar sirven). Si se combina con `--login-real` arranca ≥ 61 s después
 del último login (comparte el cubo `ip` de 60/min con los N). Un 401 durante la corrida rota con
 `/mobile/auth/refresh` (el access dura ~15 min; single-flight por conductor; si el refresh falla la
-sesión se da por muerta, cuenta como error y la corrida sale con exit 1).
+sesión se da por muerta, cuenta como error y la corrida sale con exit 1; el refresh responde 201 y solo un 401
+suyo mata la sesión: red, timeout, 5xx y 429 se reintentan en el próximo 401). Los puntos que sigan en la cola
+al final (`pendientes`) son FAIL y exit 1, y `verificar-ingesta` los cuenta como perdidos.
 
 Criterios de aprobación:
 

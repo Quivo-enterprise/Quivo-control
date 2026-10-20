@@ -173,6 +173,13 @@ cmd_alta() {
     mi_ip="$(curl -fsS https://api.ipify.org)" || fail "No pude detectar tu IP pública: pasá --mi-ip A.B.C.D."
   fi
   [[ "$mi_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || fail "IP inválida: '$mi_ip'."
+  local cfg # describe de prod (solo lectura); se valida antes de crear nada
+  cfg="$(config_prod_api)"
+  if [[ -n "$api_min" ]]; then
+    local api_max
+    api_max="$(json_get "$cfg" max)"
+    (( api_min <= api_max )) || fail "--api-min-instances / QUIVO_CARGA_API_MIN ($api_min) supera max-instances copiado de prod ($api_max): Cloud Run lo rechazaría."
+  fi
   info "Alta del entorno efímero en $PROJECT ($REGION). IP autorizada: $mi_ip/32"
   nota_costo
 
@@ -234,8 +241,7 @@ cmd_alta() {
   unset rauth rauth_enc
 
   # 4. API y worker con la imagen y el dimensionamiento de prod (solo lectura)
-  local cfg image envjson url_propia envflag
-  cfg="$(config_prod_api)"
+  local image envjson url_propia envflag
   image="$(json_get "$cfg" image)"; envjson="$(json_get "$cfg" env)"
   info "Imagen en prod (se reusa tal cual): $image"
   url_propia="https://${API_CARGA}-${PROJECT_NUMBER}.${REGION}.run.app"
