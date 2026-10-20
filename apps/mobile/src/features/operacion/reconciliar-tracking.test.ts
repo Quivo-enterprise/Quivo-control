@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decidirReconciliacionTracking } from './reconciliar-tracking';
+import { decidirReconciliacionTracking, reconciliacionVigente } from './reconciliar-tracking';
 
 describe('decidirReconciliacionTracking', () => {
   it('nativo activo con la UI en "Comenzar" → reenganchar', () => {
@@ -30,5 +30,22 @@ describe('decidirReconciliacionTracking', () => {
     expect(
       decidirReconciliacionTracking({ nativoActivo: false, tracking: true, operacionEnVuelo: true }),
     ).toBe('nada');
+  });
+});
+
+describe('reconciliacionVigente', () => {
+  const base = { montado: true, generacionCapturada: 3, generacionActual: 3, operacionesEnVuelo: 0 };
+
+  it('montado, misma generación y sin operaciones en vuelo → vigente', () => {
+    expect(reconciliacionVigente(base)).toBe(true);
+  });
+
+  it('ABA: una operación empezó y terminó (contador en 0) pero la generación cambió → no vigente', () => {
+    expect(reconciliacionVigente({ ...base, generacionActual: 4 })).toBe(false);
+  });
+
+  it('desmontado o con operación en vuelo → no vigente', () => {
+    expect(reconciliacionVigente({ ...base, montado: false })).toBe(false);
+    expect(reconciliacionVigente({ ...base, operacionesEnVuelo: 1 })).toBe(false);
   });
 });

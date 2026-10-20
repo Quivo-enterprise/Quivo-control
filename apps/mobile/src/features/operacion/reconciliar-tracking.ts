@@ -20,3 +20,21 @@ export function decidirReconciliacionTracking(entrada: {
   if (!entrada.nativoActivo && entrada.tracking) return 'nativo-detenido';
   return 'nada';
 }
+
+/**
+ * ¿Sigue vigente una reconciliación/re-enganche? Compara la generación capturada al empezar con
+ * la actual (se incrementa en cada `iniciar()`/`detener()`): el contador de operaciones en vuelo
+ * solo no alcanza (ABA: una operación que empieza y termina durante el `await` lo deja en 0).
+ */
+export function reconciliacionVigente(entrada: {
+  montado: boolean;
+  generacionCapturada: number;
+  generacionActual: number;
+  operacionesEnVuelo: number;
+}): boolean {
+  return (
+    entrada.montado &&
+    entrada.generacionCapturada === entrada.generacionActual &&
+    entrada.operacionesEnVuelo === 0
+  );
+}

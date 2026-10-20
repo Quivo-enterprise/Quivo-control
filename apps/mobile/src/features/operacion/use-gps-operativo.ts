@@ -49,7 +49,7 @@ import type { MotivoAnuncio } from './decidir-anuncio';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
 import { consultarVueltaActual, limpiarVueltaActual } from '../vuelta-actual/vuelta-actual-oportunista';
 import { marcarRecorridoActivoGlobal } from './estado-recorrido-activo';
-import { decidirReconciliacionTracking } from './reconciliar-tracking';
+import { decidirReconciliacionTracking, reconciliacionVigente } from './reconciliar-tracking';
 import {
   asegurarInicioRecorrido,
   crearEstadoInicioRecorrido,
@@ -105,6 +105,22 @@ const PLATAFORMA_GPS: 'android' | 'ios' = Platform.OS === 'ios' ? 'ios' : 'andro
  * instalación nueva sin que el conductor vea jamás el diálogo del sistema — la regresión que
  * motivó esta revisión. */
 const CLAVE_PERMISO_GPS_SOLICITADO = 'quivo-gps:permiso-solicitado';
+
+// Solo observabilidad: avisa a Sentry si un paso del cierre tarda > 10 s (sigue esperándolo).
+async function avisarSiTarda<T>(paso: string, promesa: Promise<T>): Promise<T> {
+  const timer = setTimeout(() => {
+    Sentry.captureMessage('detener: espera larga', {
+      level: 'warning',
+      tags: { contexto: 'gps-foreground', paso: 'detener-espera-larga', espera: paso },
+    });
+  }, 10_000);
+
+  try {
+    return await promesa;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * QUI-338 (hallazgo ALTO #2 de revisión): `RNBackgroundGeolocationModule.java`
@@ -317,6 +333,10 @@ export function useGpsOperativo(
   // Cuenta de `iniciar()`/`detener()` en curso: `serializadorIniciar` se vacía solo al consumirse,
   // no sirve para saber si hay una operación en transición. La usa la reconciliación con el nativo.
   const operacionesEnVueloRef = useRef(0);
+  // Generación de operación: se incrementa al EMPEZAR cada `iniciar()`/`detener()`. El contador de
+  // arriba solo no basta (ABA: una operación que empieza y termina durante un `await` lo deja en
+  // 0), así que la reconciliación compara la generación que capturó con la actual.
+  const generacionOperacionRef = useRef(0);
   // LOW-MED (hallazgo de revisión, QUI-247): estado mutable compartido del marcador
   // `inicio_recorrido` del intento de `iniciar()` en curso — `reiniciarEstadoInicioRecorrido`
   // le asigna un `eventId` ESTABLE al arrancar cada intento, y `asegurarInicioRecorrido`
@@ -1043,6 +1063,7 @@ export function useGpsOperativo(
     // el Map vacío" la da ahora `onLocation`, que espera `semillaPromise` antes de escribir.
     let montado = true;
     void (async () => {
+      let pasoReenganche = 'reenganche-getstate';
       try {
         const estado = await BackgroundGeolocation.getState();
         if (!montado) return;
@@ -1058,11 +1079,12 @@ export function useGpsOperativo(
           marcarRecorridoActivoGlobal(false);
           return;
         }
+        pasoReenganche = 'reenganche-ready';
         await reengancharNativoActivo(() => montado);
       } catch (error) {
         // Sin estado del plugin no hay nada que re-enganchar: "Iniciar" sigue disponible.
         Sentry.captureException(error, {
-          tags: { contexto: 'gps-foreground', paso: 'reenganche-getstate' },
+          tags: { contexto: 'gps-foreground', paso: pasoReenganche },
         });
         //
         // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): mismo veredicto real
@@ -1158,6 +1180,7 @@ export function useGpsOperativo(
     // muestra "Comenzar" con el plugin grabando (y nada vuelve a pollear `vuelta-actual`).
     // Al volver a primer plano se relee el estado real y se re-engancha sin `inicio_recorrido`.
     const reconciliarConNativo = async () => {
+      const generacion = generacionOperacionRef.current;
       try {
         const estado = await BackgroundGeolocation.getState();
         if (!montado) return;
@@ -1171,12 +1194,21 @@ export function useGpsOperativo(
             level: 'warning',
             tags: { contexto: 'gps-foreground', paso: 'reconciliar-foreground' },
           });
-          await reengancharNativoActivo(() => montado && operacionesEnVueloRef.current === 0);
+          await reengancharNativoActivo(() =>
+            reconciliacionVigente({
+              montado,
+              generacionCapturada: generacion,
+              generacionActual: generacionOperacionRef.current,
+              operacionesEnVuelo: operacionesEnVueloRef.current,
+            }),
+          );
         } else if (decision === 'nativo-detenido') {
           Sentry.captureMessage('tracking desincronizado: nativo detenido con UI en Finalizar', {
             level: 'warning',
             tags: { contexto: 'gps-foreground', paso: 'nativo-detenido-con-ui-en-finalizar' },
           });
+          // Que el chofer lo vea: "Finalizar" sigue funcionando sobre un plugin detenido.
+          setErrorGps('El GPS se detuvo. Toca Finalizar y vuelve a Comenzar.');
         }
       } catch (error) {
         Sentry.captureException(error, {
@@ -1576,50 +1608,50 @@ export function useGpsOperativo(
   // en `gps/seguimiento-continuo.test.ts` (`crearSerializadorPromesaEnCurso`).
   const iniciar = useCallback(async () => {
     operacionesEnVueloRef.current += 1;
-    try {
-      // Nativo ya grabando con la UI en "Comenzar" (desincronización): re-enganchar en vez de
-      // `ready()/start()` + un segundo `inicio_recorrido`, que deformaría el recorrido (QUI-247).
-      // Si `getState()` falla se sigue con el arranque normal.
-      let nativoActivo = false;
+    const generacion = ++generacionOperacionRef.current;
+    // Cubre el cuerpo ENTERO (getState, re-enganche y arranque) y se registra de forma síncrona,
+    // antes de cualquier await: así `detener()` espera también al re-enganche.
+    const promesa = (async () => {
       try {
-        nativoActivo = (await BackgroundGeolocation.getState()).enabled;
-      } catch {
-        // Arranque normal.
+        // Nativo ya grabando con la UI en "Comenzar" (desincronización): re-enganchar en vez de
+        // `ready()/start()` + un segundo `inicio_recorrido`, que deformaría el recorrido
+        // (QUI-247). Si `getState()` falla se sigue con el arranque normal.
+        let nativoActivo = false;
+        try {
+          nativoActivo = (await BackgroundGeolocation.getState()).enabled;
+        } catch {
+          // Arranque normal.
+        }
+        if (nativoActivo && !trackingRef.current) {
+          try {
+            Sentry.captureMessage('iniciar con el GPS nativo ya activo: se re-engancha', {
+              level: 'warning',
+              tags: { contexto: 'gps-foreground', paso: 'iniciar-con-nativo-activo' },
+            });
+            setErrorGps(null);
+            // Un `detener()` que empezó mientras tanto (otra generación) cancela el re-enganche.
+            await reengancharNativoActivo(() => generacionOperacionRef.current === generacion);
+            return;
+          } catch (error) {
+            // Nunca rechaza (el llamador hace `void gps.iniciar()`): se cae al arranque normal.
+            Sentry.captureException(error, {
+              tags: { contexto: 'gps-foreground', paso: 'iniciar-reenganche' },
+            });
+          }
+        }
+        await ejecutarIniciar();
+      } finally {
+        operacionesEnVueloRef.current -= 1;
       }
-      if (nativoActivo && !trackingRef.current) {
-        Sentry.captureMessage('iniciar con el GPS nativo ya activo: se re-engancha', {
-          level: 'warning',
-          tags: { contexto: 'gps-foreground', paso: 'iniciar-con-nativo-activo' },
-        });
-        setErrorGps(null);
-        await reengancharNativoActivo();
-        return;
-      }
-      const promesa = ejecutarIniciar();
-      serializadorIniciar.registrar(promesa);
-      await promesa;
-    } finally {
-      operacionesEnVueloRef.current -= 1;
-    }
+    })();
+    serializadorIniciar.registrar(promesa);
+    await promesa;
   }, [ejecutarIniciar, serializadorIniciar, reengancharNativoActivo]);
 
   const detener = useCallback(async () => {
     setErrorGps(null);
     operacionesEnVueloRef.current += 1;
-    // Solo observabilidad: avisa a Sentry si un paso del cierre tarda > 10 s (sigue esperándolo).
-    const avisarSiTarda = async <T,>(paso: string, promesa: Promise<T>): Promise<T> => {
-      const timer = setTimeout(() => {
-        Sentry.captureMessage('detener: espera larga', {
-          level: 'warning',
-          tags: { contexto: 'gps-foreground', paso: 'detener-espera-larga', espera: paso },
-        });
-      }, 10_000);
-      try {
-        return await promesa;
-      } finally {
-        clearTimeout(timer);
-      }
-    };
+    generacionOperacionRef.current += 1;
     try {
       // MEDIO (hallazgo de revisión, QUI-247): si hay un `iniciar()` en vuelo, esperarlo ACÁ —
       // antes de tocar el nativo, las suscripciones, el outbox o `tracking` — para que
