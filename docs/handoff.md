@@ -6,7 +6,50 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-19, noche (leer primero): bug Comenzar/Finalizar (#206) y herramientas del ensayo B (#205)
+## Punto de retome — 2026-10-20 (leer primero): ensayo B corrido (#208) y escalera de costos
+
+**OTA vigente en los teléfonos:** grupo `9306212c-fa6b-46f5-9186-7de1879dd171`, update Android `01a1575f…` (lo que
+muestra Perfil), runtime `547d52e7…` (= APK 16). Lleva el fix #206. Rollback: grupo `4781deab-564b-4fab-920f-d2badd5fd8a2`.
+El CTO pudo finalizar e iniciar normalmente y Sentry no muestra eventos nuevos: la desincronización no se repitió,
+así que **el fix sigue sin probarse en el caso real**.
+
+**Ensayo B (20/10, Claude con autorización del CTO), entorno efímero dado de baja** (`estado` sin recursos `-carga`).
+Imagen `api:carga-3ff172a` (= `main` 3ff172a, con A1–A3), API en 3 instancias, worker pausado 4 min en el minuto ~18,
+5 min offline. Resultados crudos en `scripts/experimentos/gps/carga/resultados/ensayo-*`.
+
+| Criterio | 30 | 60 |
+|---|---|---|
+| 0 respuestas 429 en el login | pasa 30/30 | pasa 60/60 |
+| Misma placa: 6.º intento 429 sin `retryAfterSeconds`, reseteo con PIN bueno | pasa | no se corrió |
+| p95 < 500 ms | **no pasa solo en `POST /mobile/auth/sesion`**: p95 2.512 ms (p50 961) | igual: p95 2.956 ms (p50 1.474) |
+| resto de endpoints p95 | sync 71 ms, posiciones 97 ms, jornadas 143 ms | 69 / 157 / 76 ms |
+| `num_backends` < 35 con 3 instancias | pasa, máx 12 | pasa, máx 21 |
+| verificar-ingesta | pasa 35.539/35.539 | pasa 70.613/70.613 |
+| Redis plano | pasa, máx 0,95 % | pasa, máx 1,2 % |
+| Cola vuelve a ~0 | solo indirecto: 0 pendientes al reanudar (el worker no loguea la profundidad a INFO) | igual |
+
+- **Login lento en ráfaga:** cada login hace 3 verificaciones scrypt (padding de tiempo, `auth-movil.service.ts:886`) en
+  1 vCPU; 30–60 logins en el mismo minuto hacen cola. Aceptado para D: es una vez por chofer, D-1 ya ensaya el login y
+  el refresh no usa scrypt. Si molesta: menos K o más CPU solo para la API, después de D.
+- **Hallazgo arreglado en #208:** el entorno efímero no tenía las variables de pool de A3 (`env_flag` las copiaba de
+  prod y r20 no las tiene); ahora las fija como `deploy-gcp.sh`.
+- Redis efímero con `volatile-lru` (BullMQ avisa); **prod está en `noeviction`** (verificado), sin acción.
+- La API llegó a 4 instancias en el 60 con min=max=3 (probable solapamiento de revisiones; no investigado).
+- Quedó en el registro de prod la imagen de prueba `api:carga-3ff172a` (borrar con el paso 5 de la receta).
+
+**#208:** `carga-efimera.sh alta --imagen IMG` / `QUIVO_CARGA_IMAGEN` (valida que la imagen exista antes de crear
+recursos), pool de A3 en el efímero, resultados del ensayo. `/code-review` + `/ponytail-review`; Codex: no verificado
+(sin cuota).
+
+**Escalera de costos 30 → 600 trufis (pedido del CTO):** [`docs/costos-escalera-2026-10.md`](costos-escalera-2026-10.md) y https://claude.ai/artifact/GdjWsvXYRUkne8jfp6hN3Y (privado
+del CTO). Mensual, precios de lista: 30 trufis **$194 hoy / $100 optimizada**; 100: $228 / $137; 300: $425 / $263;
+600: **$612 / $334**. Piloto actual ~$165 (casi todo fijo). Nuevo contra el modelo de septiembre ($437 / $205 en 600):
+logs (~2,2 KB por request, medido: 389 MB en 30 días), cobro por requests sobre 2 M, egreso del panel (la pantalla de
+supervisión recibe todos los vehículos cada 2 s), 2 workers desde 400 (exige Fase 2) y la API con CPU real. Ninguna
+palanca está aplicada. Supuestos y lo no verificado, en la página. Sin billing real: habilitar el export a BigQuery
+(CTO) para calibrar.
+
+## Punto de retome — 2026-10-19, noche (anterior): bug Comenzar/Finalizar (#206) y herramientas del ensayo B (#205)
 
 **Bug de campo (CTO, 19/10 ~21:30–22:20 BOT, Redmi Note 10 Pro, APK 16 + OTA `4781deab`):** con el recorrido
 iniciado, a ratos la app mostraba "Comenzar" o "Finalizar" parpadeaba sin cerrar; salir y volver a entrar lo arreglaba.

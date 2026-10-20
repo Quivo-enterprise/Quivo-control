@@ -8,7 +8,7 @@
 | Cuándo | Qué | Quién | Hecho |
 |---|---|---|---|
 | D-5 o antes | Secreto `SENTRY_DSN_API` creado; token viejo de Sentry revocado | CTO | [ ] |
-| D-4 | Ensayo B en el entorno efímero con todos los criterios en pase (ver plan, sección B) | Claude | [ ] |
+| D-4 | Ensayo B en el entorno efímero (20/10: todo pasa salvo el p95 del login en ráfaga, 2,5–3 s, aceptado; ver handoff) | Claude | [x] |
 | D-4 | Credenciales de los 30 creadas (script con `--apply`); rotación **publicada** | Claude + CTO | [ ] |
 | D-3 | Deploy r21 (`scripts/deploy-gcp.sh r21-<fecha> --solo api` y `--solo worker`); `/v1/health/ready` ok | CTO | [ ] |
 | D-3 | `scripts/observabilidad-gcp.sh` sin `--apply`, revisar, y después con `--apply` | CTO | [ ] |
@@ -20,14 +20,15 @@
 Datos para volver atrás (se completan en D-3):
 - Revisión de la API anterior a r21: `quivo-api-00025-vrj` (r20). Revisión r21: `<…>`.
 - Imagen del worker anterior: `southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api:r20-20261019`.
-- OTA vigente en los teléfonos: `4781deab` (runtime `547d52e7…`). Group anterior para `republish`: `<…>`.
+- OTA vigente en los teléfonos: grupo `9306212c-fa6b-46f5-9186-7de1879dd171`, update Android `01a1575f…` (runtime
+  `547d52e7…`). Group anterior para `republish`: `4781deab-564b-4fab-920f-d2badd5fd8a2`.
 
 ## Checklist por teléfono (imprimir uno por chofer)
 
 Chofer: ________________  Placa: ____________
 
 - [ ] APK 16 instalado (Perfil muestra versión 16).
-- [ ] OTA `4781deab` en Perfil. Si no aparece: cerrar la app del todo y abrirla dos veces (la 1.ª descarga, la 2.ª
+- [ ] OTA `01a1575f` en Perfil. Si no aparece: cerrar la app del todo y abrirla dos veces (la 1.ª descarga, la 2.ª
       aplica).
 - [ ] Ubicación: "Permitir todo el tiempo".
 - [ ] Batería: "Sin restricciones" para Quivo.
@@ -50,7 +51,7 @@ de ese vehículo.
 
 | Señal | Dónde | Normal | Frenar si |
 |---|---|---|---|
-| Logins | logs de Cloud Run: `POST /v1/mobile/auth/sesion` por status | 200 | > 3 respuestas 429 por placa distinta en 5 min |
+| Logins | logs de Cloud Run: `POST /v1/mobile/auth/sesion` por status | 200 (2–3 s si entran todos juntos: normal) | > 3 respuestas 429 por placa distinta en 5 min |
 | Errores API | Sentry (proyecto de la API) + 5xx en Cloud Run | 0 | > 5 5xx en 5 min, o un error nuevo que se repite |
 | Errores móvil | Sentry `quivo-control-conductor` | 0 nuevos | crash o error repetido en > 2 teléfonos |
 | Base | Cloud SQL: CPU y conexiones | CPU < 40 %, conexiones < 30 | CPU > 80 % o conexiones > 40 por 5 min |
