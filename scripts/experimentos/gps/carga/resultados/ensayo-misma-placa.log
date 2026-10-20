@@ -1,0 +1,15 @@
+Carga -> https://quivo-api-carga-hjqvfgsdnq-tl.a.run.app | 1 conductores, 0 pestañas admin, 1 min
+[1 min] requests=36 429=1 5xx=0 errRed=0
+
+=== Resultado final (latencias en ms) ===
+endpoint                                  n      p50      p95      p99  estados
+GET /mobile/perfil                        1    332.3    332.3    332.3  {"200":1}
+GET /mobile/ruta-a-punto                  4     59.2    197.4    197.4  {"200":4}
+GET /mobile/vecinos-ruta                  2     96.2     96.2     96.2  {"200":2}
+GET /mobile/vuelta-actual                 3     68.8     70.1     70.1  {"200":3}
+POST /mobile/auth/sesion (misma placa)        6    862.9   1120.3   1120.3  {"401":5,"429":1}
+POST /sync/batches                       20     63.5    304.5    304.5  {"202":20}
+totales: {"n":36,"c429":1,"c5xx":0,"err":0}
+PASS: misma placa, 6 logins con PIN malo -> 401,401,401,401,401,429 (6.º es lockout: false) [válido solo con la API en 1 instancia: el throttle es en memoria por instancia]
+reseteo de fallos (login con PIN bueno): ok
+puntos enviados (aceptados por la API): 43; sin enviar: 0

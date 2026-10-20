@@ -1,0 +1,34 @@
+[verificar-ingesta.mjs] modo REMOTO -> host=34.176.21.99 puerto=5432 db=quivo_control sslmode=require
+placa       enviados  ingeridos  diferencia  pendientes
+1000CRG         1147       1147           0           0
+1001CRG         1176       1176           0           0
+1002CRG         1196       1196           0           0
+1003CRG         1190       1190           0           0
+1004CRG         1173       1173           0           0
+1005CRG         1195       1195           0           0
+1006CRG         1194       1194           0           0
+1007CRG         1251       1251           0           0
+1008CRG         1212       1212           0           0
+1009CRG         1190       1190           0           0
+1010CRG         1186       1186           0           0
+1011CRG         1180       1180           0           0
+1012CRG         1166       1166           0           0
+1013CRG         1191       1191           0           0
+1014CRG         1205       1205           0           0
+1015CRG         1158       1158           0           0
+1016CRG         1211       1211           0           0
+1017CRG         1164       1164           0           0
+1018CRG         1189       1189           0           0
+1019CRG         1184       1184           0           0
+1020CRG         1149       1149           0           0
+1021CRG         1183       1183           0           0
+1022CRG         1208       1208           0           0
+1023CRG         1185       1185           0           0
+1024CRG         1167       1167           0           0
+1025CRG         1214       1214           0           0
+1026CRG         1202       1202           0           0
+1027CRG         1150       1150           0           0
+1028CRG         1154       1154           0           0
+1029CRG         1169       1169           0           0
+TOTAL enviados=35539 ingeridos=35539 perdidos=0 pendientes=0
+PASS: 0 puntos perdidos

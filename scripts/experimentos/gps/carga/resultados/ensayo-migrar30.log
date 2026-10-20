@@ -1,0 +1,200 @@
+[1;36m[CARGA-EFIMERA][0m prisma migrate deploy contra quivo-db-carga (34.176.21.99)...
+.                                        | [WARN] Unsupported engine: wanted: {"node":">=22 <23"} (current: {"node":"v24.22.0","pnpm":"11.3.0"})
+[WARN] Unsupported engine: wanted: {"node":">=22 <23"} (current: {"node":"v24.22.0","pnpm":"11.3.0"})
+Scope: all 9 workspace projects
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages: +1329
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1329, reused 1319, downloaded 0, added 1325
+Progress: resolved 1329, reused 1319, downloaded 0, added 1329, done
+
+devDependencies:
++ @eslint/js 9.39.5
++ @playwright/test 1.62.1
++ @quivo/db 0.0.0 <- packages/db
++ dotenv 17.4.2
++ eslint 9.39.5
++ eslint-config-prettier 9.1.2
++ eslint-plugin-react-hooks 7.1.1
++ prettier 3.9.5
++ turbo 2.10.5
++ typescript 5.9.3
++ typescript-eslint 8.64.0
++ vitest 3.2.7
+
+packages/db postinstall$ prisma generate
+packages/db postinstall: Loaded Prisma config from prisma.config.ts.
+packages/db postinstall: Prisma schema loaded from prisma/schema.prisma.
+packages/db postinstall: ✔ Generated Prisma Client (v7.9.1) to ./../../node_modules/.pnpm/@prisma+client@7.9.1_prisma@7.9.1_@types+react-dom@18.3.7_@types+react@19.1.17__@types+_4420c5cb2a59a6208a0a53e23eb7881d/node_modules/@prisma/client in 301ms
+packages/db postinstall: Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+packages/db postinstall: Done
+Done in 3.8s using pnpm v11.3.0
+$ prisma migrate deploy
+Loaded Prisma config from prisma.config.ts.
+
+Prisma schema loaded from prisma/schema.prisma.
+Datasource "db": PostgreSQL database "quivo_control", schema "public" at "34.176.21.99:5432"
+
+42 migrations found in prisma/migrations
+
+Applying migration `20260730030000_habilitar_postgis`
+Applying migration `20260730030424_init_auth`
+Applying migration `20260730151939_core_entities`
+Applying migration `20260730152500_rls_multi_tenant`
+Applying migration `20260730190000_vehiculo_credencial_hash`
+Applying migration `20260731060000_rotaciones_asignaciones`
+Applying migration `20260731130000_asignaciones_estado_vencimiento`
+Applying migration `20260731150000_reglas_sanciones`
+Applying migration `20260801090000_auth_movil_operativa`
+Applying migration `20260801153000_mejora_entidad_vehiculo`
+Applying migration `20260802160000_ingesta_gps_worker`
+Applying migration `20260802161000_particion_gps_security_definer`
+Applying migration `20260802162000_cumplimientos_eventos_fk_sesion`
+Applying migration `20260802163000_idempotencia_cumplimientos_eventos`
+Applying migration `20260802164000_sync_errors_sesion_id`
+Applying migration `20260802190000_gps_archives`
+Applying migration `20260802224500_ci_unico_por_sindicato`
+Applying migration `20260810034050_asignacion_hora_salida_presentacion`
+Applying migration `20260810172532_paradas_puntos_control_variantes_estado`
+Applying migration `20260815120000_gps_points_sindicato_rls`
+Applying migration `20260817130000_particion_gps_points_idempotente`
+Applying migration `20260817140000_cumplimientos_pc_pasada`
+Applying migration `20260817150000_sesiones_operativas_vehiculo_estado_idx`
+Applying migration `20260817160000_linea_branding`
+Applying migration `20260817161000_line_identity_markers`
+Applying migration `20260817162000_linea_cartel_editor`
+Applying migration `20260817163000_public_mobility_publication`
+Applying migration `20260818163000_public_mobility_indexes`
+Applying migration `20260819100000_mobility_city_scope`
+Applying migration `20260829180000_reconciliar_gps_points_sindicato_rls`
+Applying migration `20260906120000_demo_requests`
+Applying migration `20260907100000_intento_auth_movil`
+Applying migration `20260908151800_unicidad_placa_generada`
+Applying migration `20260922100000_gps_sesion_resumen`
+Applying migration `20260923090000_refresh_token_hash_anterior`
+Applying migration `20260926120000_sesion_recorrido_estado`
+Applying migration `20261010120000_idx_eventos_operativos_tipo_ts`
+Applying migration `20261012100000_infracciones`
+Applying migration `20261013100000_conductor_telefono`
+Applying migration `20261013120000_vehiculo_foto`
+Applying migration `20261013140000_vueltas_molinos`
+Applying migration `20261017120000_molinos_proxima_vuelta`
+
+┌─────────────────────────────────────────────────────────┐
+│  Update available 7.9.1 -> 8.0.0-rc.23                  │
+│                                                         │
+│  This is a major update - please follow the guide at    │
+│  https://pris.ly/d/major-version-upgrade                │
+│                                                         │
+│  Run the following to update                            │
+│    npm i --save-dev prisma@latest                       │
+│    npm i @prisma/client@latest                          │
+└─────────────────────────────────────────────────────────┘
+The following migration(s) have been applied:
+
+migrations/
+  └─ 20260730030000_habilitar_postgis/
+    └─ migration.sql
+  └─ 20260730030424_init_auth/
+    └─ migration.sql
+  └─ 20260730151939_core_entities/
+    └─ migration.sql
+  └─ 20260730152500_rls_multi_tenant/
+    └─ migration.sql
+  └─ 20260730190000_vehiculo_credencial_hash/
+    └─ migration.sql
+  └─ 20260731060000_rotaciones_asignaciones/
+    └─ migration.sql
+  └─ 20260731130000_asignaciones_estado_vencimiento/
+    └─ migration.sql
+  └─ 20260731150000_reglas_sanciones/
+    └─ migration.sql
+  └─ 20260801090000_auth_movil_operativa/
+    └─ migration.sql
+  └─ 20260801153000_mejora_entidad_vehiculo/
+    └─ migration.sql
+  └─ 20260802160000_ingesta_gps_worker/
+    └─ migration.sql
+  └─ 20260802161000_particion_gps_security_definer/
+    └─ migration.sql
+  └─ 20260802162000_cumplimientos_eventos_fk_sesion/
+    └─ migration.sql
+  └─ 20260802163000_idempotencia_cumplimientos_eventos/
+    └─ migration.sql
+  └─ 20260802164000_sync_errors_sesion_id/
+    └─ migration.sql
+  └─ 20260802190000_gps_archives/
+    └─ migration.sql
+  └─ 20260802224500_ci_unico_por_sindicato/
+    └─ migration.sql
+  └─ 20260810034050_asignacion_hora_salida_presentacion/
+    └─ migration.sql
+  └─ 20260810172532_paradas_puntos_control_variantes_estado/
+    └─ migration.sql
+  └─ 20260815120000_gps_points_sindicato_rls/
+    └─ migration.sql
+  └─ 20260817130000_particion_gps_points_idempotente/
+    └─ migration.sql
+  └─ 20260817140000_cumplimientos_pc_pasada/
+    └─ migration.sql
+  └─ 20260817150000_sesiones_operativas_vehiculo_estado_idx/
+    └─ migration.sql
+  └─ 20260817160000_linea_branding/
+    └─ migration.sql
+  └─ 20260817161000_line_identity_markers/
+    └─ migration.sql
+  └─ 20260817162000_linea_cartel_editor/
+    └─ migration.sql
+  └─ 20260817163000_public_mobility_publication/
+    └─ migration.sql
+  └─ 20260818163000_public_mobility_indexes/
+    └─ migration.sql
+  └─ 20260819100000_mobility_city_scope/
+    └─ migration.sql
+  └─ 20260829180000_reconciliar_gps_points_sindicato_rls/
+    └─ migration.sql
+  └─ 20260906120000_demo_requests/
+    └─ migration.sql
+  └─ 20260907100000_intento_auth_movil/
+    └─ migration.sql
+  └─ 20260908151800_unicidad_placa_generada/
+    └─ migration.sql
+  └─ 20260922100000_gps_sesion_resumen/
+    └─ migration.sql
+  └─ 20260923090000_refresh_token_hash_anterior/
+    └─ migration.sql
+  └─ 20260926120000_sesion_recorrido_estado/
+    └─ migration.sql
+  └─ 20261010120000_idx_eventos_operativos_tipo_ts/
+    └─ migration.sql
+  └─ 20261012100000_infracciones/
+    └─ migration.sql
+  └─ 20261013100000_conductor_telefono/
+    └─ migration.sql
+  └─ 20261013120000_vehiculo_foto/
+    └─ migration.sql
+  └─ 20261013140000_vueltas_molinos/
+    └─ migration.sql
+  └─ 20261017120000_molinos_proxima_vuelta/
+    └─ migration.sql
+
+All migrations have been successfully applied.
+[1;36m[CARGA-EFIMERA][0m Migraciones aplicadas y quivo_app rotada.
+Deploying...
+Creating Revision.........................................................................................................................................................................................done
+Routing traffic.....done
+Done.
+Service [[1mquivo-api-carga[m] revision [[1mquivo-api-carga-00002-rz7[m] has been deployed and is serving [1m100[m percent of traffic.
+Service URL: [1mhttps://quivo-api-carga-741758083365.southamerica-west1.run.app[m
+Updating...
+Done.
+Worker pool [[1mquivo-worker-carga[m] revision [[1mquivo-worker-carga-00002-sh9[m] has been deployed.
+Done.
+
+See logs with:
+gcloud beta run worker-pools logs tail quivo-worker-carga
+
+Or visit https://console.cloud.google.com/run/worker-pools/details/southamerica-west1/quivo-worker-carga
+{"status":"ok","db":"up","redis":"up"}
+[1;36m[CARGA-EFIMERA][0m Siguiente: seed (README-conductores-reales.md).

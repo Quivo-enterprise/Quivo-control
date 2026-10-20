@@ -1,0 +1,49 @@
+[1;36m[CARGA-EFIMERA][0m Recursos *-carga en quivo-control-prod:
+--- Cloud SQL
+NAME            STATUS    DATABASE_VERSION  TIER
+quivo-db-carga  RUNNABLE  POSTGRES_16       db-g1-small
+--- Redis
+INSTANCE_NAME      TIER   SIZE_GB  STATUS  HOST
+quivo-redis-carga  BASIC  1        READY   10.103.213.3
+--- Cloud Run
+NAME             URL
+quivo-api-carga  https://quivo-api-carga-hjqvfgsdnq-tl.a.run.app
+--- Worker pools
+NAME
+quivo-worker-carga
+--- Secretos
+NAME
+DATABASE_URL-carga
+JWT_SECRET-carga
+REDIS_URL-carga
+RUNTIME_DATABASE_URL-carga
+Costo estimado (precio de lista, verificar en southamerica-west1): Cloud SQL db-g1-small ~US$0.03-0.05/h
++ 10 GB SSD, Redis BASIC 1GB ~US$0.05/h, Cloud Run api/worker con min-instances 1 ~US$0.05-0.10/h,
+conector VPC compartido (ya existe). Orden de magnitud: US$0.15-0.25/h, o sea menos de US$1-2 por
+una sesión de 4-6 h. Se cobra mientras existan: corré `baja` al terminar.
+[1;36m[CARGA-EFIMERA][0m Borrando worker pool 'quivo-worker-carga' ...
+Deleting [quivo-worker-carga]...
+.............done.
+Deleted worker pool [quivo-worker-carga].
+[1;36m[CARGA-EFIMERA][0m Borrando servicio Cloud Run 'quivo-api-carga' ...
+Deleting [quivo-api-carga]...
+.............done.
+Deleted service [quivo-api-carga].
+[1;36m[CARGA-EFIMERA][0m Borrando Redis 'quivo-redis-carga' ...
+Delete request issued for: [quivo-redis-carga]
+Waiting for operation [projects/quivo-control-prod/locations/southamerica-west1/operations/operation-1792470229116-65e3dff46e829-b7c2b493-17a9f31e] to complete...
+.............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................done.
+Deleted instance [quivo-redis-carga].
+[1;36m[CARGA-EFIMERA][0m Borrando Cloud SQL 'quivo-db-carga' ...
+Deleting Cloud SQL instance...
+...........done.
+Deleted [https://sqladmin.googleapis.com/sql/v1beta4/projects/quivo-control-prod/instances/quivo-db-carga].
+[1;36m[CARGA-EFIMERA][0m Borrando secreto 'DATABASE_URL-carga' ...
+Deleted secret [DATABASE_URL-carga].
+[1;36m[CARGA-EFIMERA][0m Borrando secreto 'RUNTIME_DATABASE_URL-carga' ...
+Deleted secret [RUNTIME_DATABASE_URL-carga].
+[1;36m[CARGA-EFIMERA][0m Borrando secreto 'REDIS_URL-carga' ...
+Deleted secret [REDIS_URL-carga].
+[1;36m[CARGA-EFIMERA][0m Borrando secreto 'JWT_SECRET-carga' ...
+Deleted secret [JWT_SECRET-carga].
+[1;36m[CARGA-EFIMERA][0m Baja completa. Verificá con: scripts/carga-efimera.sh estado (todo vacío).

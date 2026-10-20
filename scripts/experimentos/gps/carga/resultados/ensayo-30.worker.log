@@ -1,0 +1,15 @@
+2026-10-20T04:10:38.172350Z			
+2026-10-20T04:10:38.976271Z			
+2026-10-20T04:10:39.102443Z			
+2026-10-20T04:14:42.285190Z			
+2026-10-20T04:14:45.844853Z	Default STARTUP START_COMPLETE probe succeeded after 2 attempts for container "api-1".		
+2026-10-20T04:14:47.622657Z			
+2026-10-20T04:14:47.746573Z			
+2026-10-20T04:14:48.564699Z	◇ injected env (0) from .env // tip: ◈ encrypted .env [www.dotenvx.com]		
+2026-10-20T04:14:49.096301Z	IMPORTANT! Eviction policy is volatile-lru. It should be "noeviction"		
+2026-10-20T04:14:49.098554Z	IMPORTANT! Eviction policy is volatile-lru. It should be "noeviction"		
+2026-10-20T04:14:49.098736Z	IMPORTANT! Eviction policy is volatile-lru. It should be "noeviction"		
+2026-10-20T04:14:49.098862Z	IMPORTANT! Eviction policy is volatile-lru. It should be "noeviction"		
+2026-10-20T04:14:49.098975Z	IMPORTANT! Eviction policy is volatile-lru. It should be "noeviction"		
+2026-10-20T04:14:49.445909Z	IMPORTANT! Eviction policy is volatile-lru. It should be "noeviction"		
+2026-10-20T04:14:49.851183Z	Worker de ingesta QUIVO listo — escuchando la cola de sync.		
