@@ -48,6 +48,59 @@ endpoint con n, p50/p95/p99 y histograma de estados. Entre escalones esperá que
 Criterios en 60 (plan): p95 API < 500 ms, 0 5xx/429, `waiting` < 100 y estable, CPU Cloud SQL
 < 60 %, conexiones < 70 % del máximo, Redis estable entre el minuto 10 y el 30.
 
+## 3b. Ensayo del día D (30 conductores reales, login real)
+
+Receta completa (el CTO corre lo de GCP):
+
+```bash
+scripts/carga-efimera.sh alta --api-min-instances 3        # 3 instancias de API (default: las de prod)
+scripts/carga-efimera.sh migrar
+eval "$(scripts/carga-efimera.sh url-seed)"
+cd scripts/experimentos/gps/carga
+node seed-conductores-reales.mjs --conductores 30         # tokens, placa y PIN en carga-tokens.local.json (0600)
+API="$(../../../carga-efimera.sh url-api)"
+# 0) misma placa, con la API en EXACTAMENTE 1 instancia (el throttle del login es en memoria por instancia:
+#    con varias, los 6 intentos se reparten y el 6.º no da 429). Después de los 6 intentos hace un login con el
+#    PIN bueno (≥ 61 s tras el 6.º: el throttler bloquea 60 s desde ese intento) que resetea los fallos.
+#    Si el reseteo falla: login manual con el PIN correcto de 9999MSM (en carga-tokens.local.json) pasados
+#    > 60 s del último intento, o baja + alta completa (el seed no re-ejecuta y `fallos` no decae solo).
+../../../carga-efimera.sh api-instancias 1
+node conductores-reales.mjs --base-url "$API" --conductores 1 --admins 0 --minutos 1 --probar-misma-placa
+../../../carga-efimera.sh api-instancias 3   # fija min=max=3 a propósito: peor caso de conexiones Cloud SQL
+                                             # (criterio < 35 con 3 instancias); no restaura el autoscaling de prod
+# 1) 30 con login real (ráfaga de 60 s desde esta IP = CGNAT) + escenario offline (min 10 a 15)
+node conductores-reales.mjs --base-url "$API" --conductores 30 --admins 3 --minutos 30 \
+  --login-real --offline-desde 10 --offline-minutos 5 --salida resultados/ensayo-30.json
+# 2) en otra terminal, a mitad de la corrida (p.ej. minuto 20): pausar el worker 3-5 min y reanudarlo
+../../../carga-efimera.sh worker-pausa ; sleep 240 ; ../../../carga-efimera.sh worker-reanuda
+# 3) al terminar: enviados vs ingeridos (espera a que el conteo deje de cambiar)
+node verificar-ingesta.mjs --resultado resultados/ensayo-30.json
+# 4) repetir con 60 (baja + alta + seed --conductores 60), y por último: baja
+```
+
+`verificar-ingesta.mjs` lee `gps_points` por `sesion_id` con la URL de `url-seed` (solo lectura);
+no hay endpoint admin con conteos exactos por sesión, así que no se agregó ninguno.
+Con `--login-real`, un 429 en cualquiera de los N logins (`POST /v1/mobile/auth/sesion`) es una
+línea `FAIL` y exit 1. La placa `9999MSM` queda reservada para `--probar-misma-placa` (5x401 y el
+6.º 429 del throttle, sin `retryAfterSeconds`; si ya hay fallos de una corrida anterior sin reseteo
+imprime `lockoutPrevio`; arreglo: login manual con el PIN correcto de 9999MSM pasados > 60 s del último
+intento, o baja + alta; ni re-seed ni esperar sirven). Si se combina con `--login-real` arranca ≥ 61 s después
+del último login (comparte el cubo `ip` de 60/min con los N). Un 401 durante la corrida rota con
+`/mobile/auth/refresh` (el access dura ~15 min; single-flight por conductor; si el refresh falla la
+sesión se da por muerta, cuenta como error y la corrida sale con exit 1; el refresh responde 201 y solo un 401
+suyo mata la sesión: red, timeout, 5xx y 429 se reintentan en el próximo 401). Los puntos que sigan en la cola
+al final (`pendientes`) son FAIL y exit 1, y `verificar-ingesta` los cuenta como perdidos.
+
+Criterios de aprobación:
+
+- 0 logins 429 entre los 30.
+- Misma placa (con la API en 1 instancia): el 6.º intento es 429 (throttle, no lockout).
+- p95 de la API < 500 ms.
+- Conexiones Cloud SQL (`num_backends`) < 35 con 3 instancias de API.
+- 0 puntos perdidos tras pausar el worker (`verificar-ingesta` PASS).
+- Redis plano (memoria y clientes sin crecimiento sostenido).
+- Cola `waiting` vuelve a 0 tras el volcado offline y tras `worker-reanuda`.
+
 ## 4. Qué mirar durante la corrida
 
 Cloud Monitoring (Metrics Explorer, proyecto `quivo-control-prod`, filtrar por la instancia

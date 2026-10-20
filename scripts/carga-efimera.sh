@@ -4,11 +4,16 @@
 # de quivo-db / quivo-redis / quivo-api para copiar versión, tier, imagen y dimensionamiento.
 #
 # Uso:
-#   scripts/carga-efimera.sh alta [--mi-ip A.B.C.D]  # crea SQL, Redis, secretos y despliega api + worker
+#   scripts/carga-efimera.sh alta [--mi-ip A.B.C.D] [--api-min-instances N]
+#                                                    # crea SQL, Redis, secretos y despliega api + worker
+#                                                    # (min-instances de la API: flag, o QUIVO_CARGA_API_MIN, o el de prod)
 #   scripts/carga-efimera.sh migrar                  # prisma migrate deploy desde la laptop + rota quivo_app
 #   scripts/carga-efimera.sh url-seed                # `export` para seed-conductores-reales.mjs
 #   scripts/carga-efimera.sh url-api                 # URL de quivo-api-carga
 #   scripts/carga-efimera.sh estado                  # lista los recursos *-carga
+#   scripts/carga-efimera.sh worker-pausa            # worker pool a 0 instancias (la cola se acumula en Redis)
+#   scripts/carga-efimera.sh worker-reanuda          # worker pool a 1 instancia
+#   scripts/carga-efimera.sh api-instancias N        # API con min=max=N instancias (1 para la prueba de misma placa)
 #   scripts/carga-efimera.sh baja [--si]             # borra SOLO recursos cuyo nombre termina en -carga
 #
 # Recursos (todos terminan en -carga; es lo único que `baja` puede tocar):
@@ -155,17 +160,26 @@ print("^%%^" + "%%".join(f"{k}={v}" for k, v in env.items()))' "$1" "$2" "${3:-}
 }
 
 cmd_alta() {
-  local mi_ip=""
+  local mi_ip="" api_min="${QUIVO_CARGA_API_MIN:-}"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --mi-ip) mi_ip="${2:-}"; shift 2 ;;
+      --api-min-instances) api_min="${2:-}"; shift 2 ;;
       *) fail "Argumento desconocido: $1" ;;
     esac
   done
+  [[ -z "$api_min" || "$api_min" =~ ^[0-9]+$ ]] || fail "--api-min-instances / QUIVO_CARGA_API_MIN debe ser un entero (recibí '$api_min')."
   if [[ -z "$mi_ip" ]]; then
     mi_ip="$(curl -fsS https://api.ipify.org)" || fail "No pude detectar tu IP pública: pasá --mi-ip A.B.C.D."
   fi
   [[ "$mi_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || fail "IP inválida: '$mi_ip'."
+  local cfg # describe de prod (solo lectura); se valida antes de crear nada
+  cfg="$(config_prod_api)"
+  if [[ -n "$api_min" ]]; then
+    local api_max
+    api_max="$(json_get "$cfg" max)"
+    (( api_min <= api_max )) || fail "--api-min-instances / QUIVO_CARGA_API_MIN ($api_min) supera max-instances copiado de prod ($api_max): Cloud Run lo rechazaría."
+  fi
   info "Alta del entorno efímero en $PROJECT ($REGION). IP autorizada: $mi_ip/32"
   nota_costo
 
@@ -227,8 +241,7 @@ cmd_alta() {
   unset rauth rauth_enc
 
   # 4. API y worker con la imagen y el dimensionamiento de prod (solo lectura)
-  local cfg image envjson url_propia envflag
-  cfg="$(config_prod_api)"
+  local image envjson url_propia envflag
   image="$(json_get "$cfg" image)"; envjson="$(json_get "$cfg" env)"
   info "Imagen en prod (se reusa tal cual): $image"
   url_propia="https://${API_CARGA}-${PROJECT_NUMBER}.${REGION}.run.app"
@@ -245,7 +258,7 @@ cmd_alta() {
   gc run deploy "$API_CARGA" --region="$REGION" --image="$image" --platform=managed \
     --allow-unauthenticated \
     --cpu="$(json_get "$cfg" cpu)" --memory="$(json_get "$cfg" memory)" \
-    --min-instances="$(json_get "$cfg" min)" --max-instances="$(json_get "$cfg" max)" \
+    --min-instances="${api_min:-$(json_get "$cfg" min)}" --max-instances="$(json_get "$cfg" max)" \
     --concurrency="$(json_get "$cfg" concurrency)" --timeout="$(json_get "$cfg" timeout)" \
     "${throttle_flag[@]}" \
     --service-account="$SERVICE_ACCOUNT" --vpc-connector="$VPC_CONNECTOR" \
@@ -290,6 +303,23 @@ cmd_migrar() {
   local api_url; api_url="$(cmd_url_api)"
   if curl -fsS --max-time 20 "${api_url}/v1/health/ready"; then echo; else warn "health/ready aún no OK; reintentá en un minuto."; fi
   info "Siguiente: seed (README-conductores-reales.md)."
+}
+
+# Pausa/reanuda la ingesta (worker) para probar que la cola retiene los puntos. Solo *-carga.
+cmd_worker_instancias() { # 0|1
+  exigir_sufijo "$WORKER_CARGA"
+  existe_worker || fail "'$WORKER_CARGA' no existe: corré 'alta' primero."
+  gc run worker-pools update "$WORKER_CARGA" --region="$REGION" --instances="$1"
+  info "$WORKER_CARGA -> $1 instancia(s)."
+}
+
+# Fija min=max=N en la API (el throttle del login es en memoria por instancia). Solo quivo-api-carga.
+cmd_api_instancias() { # N
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || fail "uso: api-instancias N (entero >= 1)."
+  exigir_sufijo "$API_CARGA"
+  existe_api || fail "'$API_CARGA' no existe: corré 'alta' primero."
+  gc run services update "$API_CARGA" --region="$REGION" --min-instances="$1" --max-instances="$1"
+  info "$API_CARGA -> $1 instancia(s) (min=max)."
 }
 
 cmd_url_seed() {
@@ -347,6 +377,9 @@ cmd_baja() {
 case "${1:-}" in
   alta)     shift; cmd_alta "$@" ;;
   migrar)   cmd_migrar ;;
+  worker-pausa)   cmd_worker_instancias 0 ;;
+  worker-reanuda) cmd_worker_instancias 1 ;;
+  api-instancias) cmd_api_instancias "${2:-}" ;;
   baja)     shift; cmd_baja "${1:-}" ;;
   estado)   cmd_estado ;;
   url-seed) cmd_url_seed ;;
