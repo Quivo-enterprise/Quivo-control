@@ -446,8 +446,9 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
   });
 
   it('marca no cumplido un punto de control fuera del radio, aunque el app haya reportado que sí', async () => {
+    const eventId = randomUUID();
     const eventoCumplimiento = evento({
-      eventId: randomUUID(),
+      eventId,
       tipo: 'cumplimiento_punto_control',
       // ~1km de distancia real, aunque el payload venga marcado como si el app lo hubiera
       // detectado — el worker es la fuente de verdad, no confía en el reporte del cliente.
@@ -458,12 +459,11 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       procesarCumplimientoEnTx(tx, sindicatoId, eventoCumplimiento),
     );
 
-    const registros = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-      tx.cumplimientoPc.findMany({ where: { sesionId, puntoControlId } }),
+    const registro = await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+      tx.cumplimientoPc.findFirst({ where: { eventId } }),
     );
-    const ultimo = registros[registros.length - 1];
-    expect(ultimo?.cumplido).toBe(false);
-    expect(ultimo?.distanciaM).toBeGreaterThan(30);
+    expect(registro?.cumplido).toBe(false);
+    expect(registro?.distanciaM).toBeGreaterThan(30);
   });
 
   it('rechaza un cumplimiento contra un punto de control inexistente', async () => {
