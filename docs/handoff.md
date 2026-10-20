@@ -29,8 +29,8 @@ Imagen `api:carga-3ff172a` (= `main` 3ff172a, con A1–A3), API en 3 instancias,
 | Cola vuelve a ~0 | solo indirecto: 0 pendientes al reanudar (el worker no loguea la profundidad a INFO) | igual |
 
 - **Login lento en ráfaga:** cada login hace 3 verificaciones scrypt (padding de tiempo, `auth-movil.service.ts:886`) en
-  1 vCPU; 30–60 logins en el mismo minuto hacen cola. Aceptado para D: es una vez por chofer, D-1 ya ensaya el login y
-  el refresh no usa scrypt. Si molesta: menos K o más CPU solo para la API, después de D.
+  1 vCPU; 30–60 logins en el mismo minuto hacen cola. **Aprobado por el CTO (20/10)** para D: es una vez por chofer,
+  D-1 ya ensaya el login y el refresh no usa scrypt. Si molesta: menos K o más CPU solo para la API, después de D.
 - **Hallazgo arreglado en #208:** el entorno efímero no tenía las variables de pool de A3 (`env_flag` las copiaba de
   prod y r20 no las tiene); ahora las fija como `deploy-gcp.sh`.
 - Redis efímero con `volatile-lru` (BullMQ avisa); **prod está en `noeviction`** (verificado), sin acción.
@@ -46,8 +46,14 @@ del CTO). Mensual, precios de lista: 30 trufis **$194 hoy / $100 optimizada**; 1
 600: **$612 / $334**. Piloto actual ~$165 (casi todo fijo). Nuevo contra el modelo de septiembre ($437 / $205 en 600):
 logs (~2,2 KB por request, medido: 389 MB en 30 días), cobro por requests sobre 2 M, egreso del panel (la pantalla de
 supervisión recibe todos los vehículos cada 2 s), 2 workers desde 400 (exige Fase 2) y la API con CPU real. Ninguna
-palanca está aplicada. Supuestos y lo no verificado, en la página. Sin billing real: habilitar el export a BigQuery
-(CTO) para calibrar.
+palanca está aplicada. Supuestos y lo no verificado, en la página.
+
+**Export de facturación a BigQuery (20/10):** creado el dataset `quivo-control-prod:billing_export` en multi-región
+`US` (solo multi-región hace backfill del mes actual y el anterior; sin expiración). BigQuery API ya estaba activa.
+**Falta el paso del CTO, que solo existe en consola** (no hay API ni gcloud): Billing → cuenta `016F26-6DB017-B5B1E7`
+→ Exportación de facturación → BigQuery → "Datos estándar de costo de uso" → proyecto `quivo-control-prod`, dataset
+`billing_export`. Requiere Billing Account Administrator o Costs Manager. El backfill tarda hasta 5 días; después
+Claude contrasta la escalera con la tabla `gcp_billing_export_v1_*`.
 
 ## Punto de retome — 2026-10-19, noche (anterior): bug Comenzar/Finalizar (#206) y herramientas del ensayo B (#205)
 
@@ -1578,7 +1584,8 @@ arquitectura "actual": de las seis palancas de agosto no se aplicó ninguna
 
 **Pendientes técnicos sin costo directo (bloquean confiar en los números):**
 
-- Activar el export de facturación a BigQuery: hoy ningún número se contrasta con la factura real.
+- Activar el export de facturación a BigQuery: hoy ningún número se contrasta con la factura real. (20/10: dataset
+  `billing_export` creado; falta activar el export en la consola de Billing, CTO.)
 - Tiers de 4 y 8 vCPU de Cloud SQL sin medir (extrapolados); el multiplicador de RAM 4× es
   heurística declarada. A 2000 decide el tier (rango $994–$1,270).
 - k6 a 300 pts/s nunca corrió contra `quivo-control-prod`.
