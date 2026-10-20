@@ -8,7 +8,7 @@
 | Cuándo | Qué | Quién | Hecho |
 |---|---|---|---|
 | D-5 o antes | Secreto `SENTRY_DSN_API` creado; token viejo de Sentry revocado | CTO | [ ] |
-| D-4 | Ensayo B en el entorno efímero (20/10: todo pasa salvo el p95 del login en ráfaga, 2,5–3 s, aceptado; ver handoff) | Claude | [x] |
+| D-4 | Ensayo B en el entorno efímero (20/10: todo pasa salvo el p95 del login en ráfaga, 2,5–3 s, aprobado por el CTO el 20/10; ver handoff) | Claude | [x] |
 | D-4 | Credenciales de los 30 creadas (script con `--apply`); rotación **publicada** | Claude + CTO | [ ] |
 | D-3 | Deploy r21 (`scripts/deploy-gcp.sh r21-<fecha> --solo api` y `--solo worker`); `/v1/health/ready` ok | CTO | [ ] |
 | D-3 | `scripts/observabilidad-gcp.sh` sin `--apply`, revisar, y después con `--apply` | CTO | [ ] |

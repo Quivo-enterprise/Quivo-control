@@ -29,13 +29,14 @@ Imagen `api:carga-3ff172a` (= `main` 3ff172a, con A1–A3), API en 3 instancias,
 | Cola vuelve a ~0 | solo indirecto: 0 pendientes al reanudar (el worker no loguea la profundidad a INFO) | igual |
 
 - **Login lento en ráfaga:** cada login hace 3 verificaciones scrypt (padding de tiempo, `auth-movil.service.ts:886`) en
-  1 vCPU; 30–60 logins en el mismo minuto hacen cola. Aceptado para D: es una vez por chofer, D-1 ya ensaya el login y
-  el refresh no usa scrypt. Si molesta: menos K o más CPU solo para la API, después de D.
+  1 vCPU; 30–60 logins en el mismo minuto hacen cola. **Aprobado por el CTO (20/10)** para D: es una vez por chofer,
+  D-1 ya ensaya el login y el refresh no usa scrypt. Si molesta: menos K o más CPU solo para la API, después de D.
 - **Hallazgo arreglado en #208:** el entorno efímero no tenía las variables de pool de A3 (`env_flag` las copiaba de
   prod y r20 no las tiene); ahora las fija como `deploy-gcp.sh`.
 - Redis efímero con `volatile-lru` (BullMQ avisa); **prod está en `noeviction`** (verificado), sin acción.
 - La API llegó a 4 instancias en el 60 con min=max=3 (probable solapamiento de revisiones; no investigado).
-- Quedó en el registro de prod la imagen de prueba `api:carga-3ff172a` (borrar con el paso 5 de la receta).
+- Imagen de prueba `api:carga-3ff172a` **borrada** del registro de prod (20/10, ok del CTO; único tag de su digest y
+  ninguna revisión la usaba: API y worker en `api:r20-20261019`, web en `web:r18-20261017`).
 
 **#208:** `carga-efimera.sh alta --imagen IMG` / `QUIVO_CARGA_IMAGEN` (valida que la imagen exista antes de crear
 recursos), pool de A3 en el efímero, resultados del ensayo. `/code-review` + `/ponytail-review`; Codex: no verificado
@@ -46,8 +47,13 @@ del CTO). Mensual, precios de lista: 30 trufis **$194 hoy / $100 optimizada**; 1
 600: **$612 / $334**. Piloto actual ~$165 (casi todo fijo). Nuevo contra el modelo de septiembre ($437 / $205 en 600):
 logs (~2,2 KB por request, medido: 389 MB en 30 días), cobro por requests sobre 2 M, egreso del panel (la pantalla de
 supervisión recibe todos los vehículos cada 2 s), 2 workers desde 400 (exige Fase 2) y la API con CPU real. Ninguna
-palanca está aplicada. Supuestos y lo no verificado, en la página. Sin billing real: habilitar el export a BigQuery
-(CTO) para calibrar.
+palanca está aplicada. Supuestos y lo no verificado, en la página.
+
+**Export de facturación a BigQuery (20/10):** creado el dataset `quivo-control-prod:billing_export` en multi-región
+`US` (solo multi-región hace backfill del mes actual y el anterior; sin expiración). BigQuery API ya estaba activa.
+**Export "Costo de uso estándar" habilitado por el CTO en la consola** (20/10, cuenta `016F26-6DB017-B5B1E7`, proyecto
+Quivo Control, dataset `billing_export`; captura del CTO). Detallado y FOCUS siguen apagados. El backfill del mes
+actual y el anterior tarda hasta 5 días; después Claude contrasta la escalera con la tabla `gcp_billing_export_v1_*`.
 
 ## Punto de retome — 2026-10-19, noche (anterior): bug Comenzar/Finalizar (#206) y herramientas del ensayo B (#205)
 
@@ -1578,7 +1584,8 @@ arquitectura "actual": de las seis palancas de agosto no se aplicó ninguna
 
 **Pendientes técnicos sin costo directo (bloquean confiar en los números):**
 
-- Activar el export de facturación a BigQuery: hoy ningún número se contrasta con la factura real.
+- Activar el export de facturación a BigQuery: hoy ningún número se contrasta con la factura real. (20/10: export estándar
+  habilitado en `billing_export`; contrastar cuando termine el backfill, hasta 5 días.)
 - Tiers de 4 y 8 vCPU de Cloud SQL sin medir (extrapolados); el multiplicador de RAM 4× es
   heurística declarada. A 2000 decide el tier (rango $994–$1,270).
 - k6 a 300 pts/s nunca corrió contra `quivo-control-prod`.
