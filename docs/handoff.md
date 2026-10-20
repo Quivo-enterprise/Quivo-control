@@ -146,6 +146,32 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       `observabilidad-gcp.sh`), A3 pools/timeouts (con 3 instancias de API se puede pasar de `max_connections=50`),
       ensayo efímero con login real, ráfaga y worker caído, credenciales de los 30, runbook. Vencimiento de rotaciones
       al worker y archivo GPS pasan a después de D (motivo en el plan).
+- [x] **[Claude, 19/10]** A1 #202 (`74afcc0`): `/mobile/auth/sesion` con cubos ip+placa 5/min e ip 60/min
+      (`auth-movil/login-movil-throttler.guard.ts`, base `RetryAfterThrottlerGuard` compartida con
+      `DispositivoThrottlerGuard`); lockout por vehículo hasta 900 s; un `deviceId` que ya tuvo sesión en el vehículo
+      conserva el tope viejo de 60 s (**no exento**: `/security-review` encontró que el `deviceId` lo ven los roles de
+      panel en `/reportes/en-vivo`); `MOBILE_LEGACY_AUTH_ENABLED` apagado por default. **Cambio respecto del plan:** el
+      login web `/auth/login` quedó como estaba (5/min por IP): subir el tope abarataba el password spraying y las
+      cuentas web no tienen lockout. Riesgo aceptado: quien conoce la placa puede demorar hasta 15 min el login de un
+      teléfono NUEVO en ese vehículo. Falta probar el guard con Nest+Fastify reales (lee `req.body.placa`): lo cubre el
+      ensayo B.
+- [x] **[Claude, 19/10]** A3 #201 (`45d2937`): pool por `DB_POOL_MAX` (API 6, worker 5), `DB_CONNECTION_TIMEOUT_MS`
+      5000, `DB_STATEMENT_TIMEOUT_MS` solo por env (API 10 s, worker 60 s; default 0 = sin límite para seeds/scripts).
+      Health sin pool propio. Presupuesto 3×6+5+1 = 24 de 50; en un deploy con solapamiento se acerca al tope (por eso
+      el congelamiento de D-2).
+- [x] **[Claude, 19/10]** A2 #200 (`93b03d8`): `SENTRY_DSN` desde el secreto `SENTRY_DSN_API` en API y worker; **el
+      Paso 0 de `deploy-gcp.sh` falla si el secreto no existe** (el CTO tiene que crearlo antes del próximo deploy).
+      `scripts/observabilidad-gcp.sh` (dry-run por defecto; `--apply`; `--con-reinicio` para PITR, que reinicia la base):
+      canal de mail, uptime `/v1/health/ready`, alertas 5xx/CPU/conexiones/disco/Redis/worker sin instancias,
+      presupuesto 50/90/100 %. Sin alerta de worker trabado (vivo sin consumir): se mira a mano el día D.
+- [x] **[Claude, 19/10]** #203: test inestable de ingesta (`findMany` sin orden) que rompió el CI de #200.
+- [ ] **[Claude, en curso]** B: herramientas del ensayo (login real, misma placa, ráfaga offline, pausa del worker,
+      verificar ingesta, API con 3 instancias). Después, correr el ensayo en el entorno efímero (pendiente: ¿lo corre el
+      CTO o lo autoriza?).
+- [ ] **[CTO]** Revocar el token de Sentry pegado en el chat; crear el proyecto Node de Sentry y el secreto
+      `SENTRY_DSN_API`; pasar billing account + monto USD del presupuesto; correr `observabilidad-gcp.sh` (primero sin
+      `--apply`); deploy r21 de API y worker.
+- Gates de A1–A3: `/code-review` + `/ponytail-review` en todos, `/security-review` en A1. Codex: no verificado (sin cuota).
 - [ ] **[Claude, Fase 2]** Orden por dispositivo real (cola por hash de `deviceId`) o detección de PC omitido insensible
       al orden: requisito para subir la concurrencia del worker y para que una caída de la DB de más de 30 min no deje
       infracciones falsas.
