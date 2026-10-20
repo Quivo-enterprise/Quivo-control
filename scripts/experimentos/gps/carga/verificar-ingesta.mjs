@@ -38,7 +38,7 @@ try {
     );
     return new Map(rows.map((r) => [r.id, r.n]));
   };
-  // Estable = 3 lecturas seguidas (10 s) iguales Y sin faltantes, o se acabó la espera.
+  // Estable = 3 lecturas seguidas (10 s) iguales Y cada sesión con ingeridos >= enviados, o se acabó la espera.
   const limite = Date.now() + Number(a['espera-segundos']) * 1000;
   const enviadosTotal = detalle.reduce((s, c) => s + c.enviados, 0);
   let previo = -1;
@@ -47,7 +47,8 @@ try {
   for (;;) {
     const total = [...conteo.values()].reduce((s, n) => s + n, 0);
     iguales = total === previo ? iguales + 1 : 0;
-    if ((iguales >= 2 && total >= enviadosTotal) || Date.now() > limite) break;
+    const completo = detalle.every((c) => (conteo.get(c.sesionId) ?? 0) >= c.enviados);
+    if ((iguales >= 2 && completo) || Date.now() > limite) break;
     previo = total;
     console.error(`ingeridos=${total}/${enviadosTotal}, esperando...`);
     await sleep(5_000);
@@ -62,8 +63,7 @@ try {
     perdidos += Math.max(0, c.enviados - n);
     console.log(c.placa.padEnd(10), String(c.enviados).padStart(9), String(n).padStart(10), String(n - c.enviados).padStart(11));
   }
-  const total = detalle.reduce((s, c) => s + c.enviados, 0);
-  console.log(`TOTAL enviados=${total} ingeridos=${ingTotal} perdidos=${perdidos}`);
+  console.log(`TOTAL enviados=${enviadosTotal} ingeridos=${ingTotal} perdidos=${perdidos}`);
   console.log(perdidos === 0 ? 'PASS: 0 puntos perdidos' : `FAIL: ${perdidos} puntos enviados no aparecen en gps_points`);
   process.exitCode = perdidos === 0 ? 0 : 1;
 } finally {

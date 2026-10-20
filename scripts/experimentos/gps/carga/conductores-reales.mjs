@@ -12,7 +12,8 @@
 //        [--tokens carga-tokens.local.json] [--salida resultado.json]
 //        [--login-real [--rafaga-segundos 60]]  cada conductor hace POST /mobile/auth/sesion (placa+PIN)
 //                                               repartido al azar en la ráfaga, todos desde esta IP (CGNAT)
-//        [--probar-misma-placa]                 6 logins con PIN malo a la placa reservada: el 6.º debe dar 429 del throttle
+//        [--probar-misma-placa]                 6 logins con PIN malo a la placa reservada: el 6.º debe dar 429 del throttle;
+//                                               solo vale con la API en 1 instancia; luego resetea fallos con el PIN bueno
 //        [--offline-desde K --offline-minutos M] del minuto K al K+M no se envía; al volver se vuelca el backlog
 // Los tokens/PIN salen de seed-conductores-reales.mjs (solo contra el clon). Después de la corrida:
 // verificar-ingesta.mjs --resultado <salida.json> compara puntos enviados vs ingeridos.
@@ -54,6 +55,10 @@ if (TOKENS.conductores.length < N) {
   console.error(`El archivo de tokens tiene ${TOKENS.conductores.length} conductores, pidieron ${N}. Re-sembrar con --conductores >= ${N}.`);
   process.exit(1);
 }
+if (a['probar-misma-placa'] && !TOKENS.mismaPlaca) {
+  console.error("El archivo de tokens no trae 'mismaPlaca': re-sembrar con el seed nuevo.");
+  process.exit(1);
+}
 
 if ((a['offline-desde'] === undefined) !== (a['offline-minutos'] === undefined)) {
   console.error('--offline-desde y --offline-minutos van juntos.');
@@ -62,8 +67,14 @@ if ((a['offline-desde'] === undefined) !== (a['offline-minutos'] === undefined))
 const OFFLINE = a['offline-desde'] !== undefined;
 const OFF_DESDE_MS = Number(a['offline-desde']) * 60_000;
 const OFF_HASTA_MS = OFF_DESDE_MS + Number(a['offline-minutos']) * 60_000;
+if (OFFLINE && !(Number.isFinite(OFF_DESDE_MS) && OFF_DESDE_MS >= 0 && Number.isFinite(OFF_HASTA_MS) && Number(a['offline-minutos']) > 0)) {
+  console.error('--offline-desde debe ser un número >= 0 y --offline-minutos un número > 0.');
+  process.exit(1);
+}
 const MAX_LOTE = 500; // SyncBatchSchema (packages/shared/src/sync/evento.ts): eventos .min(1).max(500)
 const login = { ok: 0, 429: 0, otros: 0 };
+let sesionesMuertas = 0;
+const loginsEnCurso = []; // promesas de los N logins; la prueba de misma placa espera a que terminen
 let tInicio = Date.now();
 const offlineAhora = () => OFFLINE && Date.now() - tInicio >= OFF_DESDE_MS && Date.now() - tInicio < OFF_HASTA_MS;
 const offline = { puntosAcumulados: 0, lotesVolcados: 0, erroresVolcado: 0, volcadoMaxMs: 0 };
@@ -76,12 +87,14 @@ const detalle = []; // estado por conductor (sesionId, enviados, cola) para el r
 
 // `c` = conductor (token rotable); `token` = token fijo (admin); `salida` recibe el JSON de la respuesta.
 async function http(etiqueta, metodo, ruta, { token, c, body, headers = {}, salida, reintento = true } = {}) {
+  if (c?.muerta) return 'ERR'; // refresh fallido: no se vuelve a pegar con una sesión muerta
   const t0 = performance.now();
+  const tokenUsado = token ?? c?.accessToken;
   let estado;
   try {
     const res = await fetch(BASE + ruta, {
       method: metodo,
-      headers: { Accept: 'application/json', ...(token || c ? { Authorization: `Bearer ${token ?? c.accessToken}` } : {}), ...headers },
+      headers: { Accept: 'application/json', ...(tokenUsado ? { Authorization: `Bearer ${tokenUsado}` } : {}), ...headers },
       body,
       signal: AbortSignal.timeout(20_000),
     });
@@ -99,23 +112,32 @@ async function http(etiqueta, metodo, ruta, { token, c, body, headers = {}, sali
   }
   registrar(etiqueta, performance.now() - t0, estado);
   // El access móvil dura ~15 min y la corrida 30: ante 401 se rota con el refresh y se reintenta una vez.
-  if (estado === 401 && c?.refreshToken && reintento && (await refrescar(c))) {
-    return http(etiqueta, metodo, ruta, { c, body, headers, salida, reintento: false });
+  // Si otro request ya rotó el token (el que dio 401 usó uno viejo), se reintenta con el actual sin refrescar.
+  if (estado === 401 && c?.refreshToken && reintento) {
+    if (c.accessToken !== tokenUsado || (await refrescar(c))) {
+      return http(etiqueta, metodo, ruta, { c, body, headers, salida, reintento: false });
+    }
   }
   return estado;
 }
 
-/** POST /mobile/auth/refresh del conductor; una sola rotación en vuelo por conductor. */
+/** POST /mobile/auth/refresh del conductor: single-flight (los 401 concurrentes comparten una rotación).
+ * Si falla, la sesión queda muerta (`muerta`): no se refresca ni se envía más y cuenta como error. */
 function refrescar(c) {
   c.refrescando ??= (async () => {
     const salida = {};
     const estado = await jsonPost('POST /mobile/auth/refresh', '/v1/mobile/auth/refresh', { refreshToken: c.refreshToken }, salida);
+    c.refrescando = null;
     if (estado === 200 && salida.cuerpo?.accessToken) {
       c.accessToken = salida.cuerpo.accessToken;
       c.refreshToken = salida.cuerpo.refreshToken;
+      return true;
     }
-    c.refrescando = null;
-    return estado === 200;
+    c.muerta = true;
+    sesionesMuertas++;
+    registrar('sesión muerta (refresh falló)', 0, 'ERR');
+    console.error(`FAIL refresh ${c.placa}: HTTP ${estado}; sesión muerta, sin más envíos`);
+    return false;
   })();
   return c.refrescando;
 }
@@ -149,22 +171,29 @@ async function loginReal(c) {
 
 /** 6 logins con PIN malo a la placa reservada. Se espacian tras el 4.º y 5.º para que el lockout por
  * vehículo (espera 2^(fallos-3) s desde el 4.º fallo) no se confunda con el throttle: el 6.º debe ser
- * 429 SIN `retryAfterSeconds` en el body (ese campo solo lo pone el filtro del lockout). */
+ * 429 SIN `retryAfterSeconds` en el body (ese campo solo lo pone el filtro del lockout). Un 429 CON
+ * `retryAfterSeconds` en los 5 primeros = fallos de una corrida anterior (`lockoutPrevio`).
+ * Al pasar la ventana `cuenta` (61 s tras el 1.º) se hace un login con el PIN bueno: resetea `fallos`
+ * para que la prueba se pueda repetir sin re-sembrar. Si ese reseteo falla se informa, no tumba el check. */
 async function probarMismaPlaca() {
   const r = TOKENS.mismaPlaca;
-  if (!r) throw new Error("El archivo de tokens no trae 'mismaPlaca': re-sembrar con el seed nuevo.");
   const pinMalo = r.pin === '00000000' ? '11111111' : '00000000';
   const estados = [];
-  let cuerpo;
+  const cuerpos = [];
+  const t1 = Date.now();
   for (let i = 1; i <= 6; i++) {
     const salida = {};
     estados.push(await jsonPost('POST /mobile/auth/sesion (misma placa)', '/v1/mobile/auth/sesion', { placa: r.placa, pin: pinMalo, deviceId: r.deviceId }, salida));
-    cuerpo = salida.cuerpo;
+    cuerpos.push(salida.cuerpo);
     if (i === 4) await sleep(2_500);
     if (i === 5) await sleep(4_500);
   }
-  const sextoEsLockout = cuerpo?.retryAfterSeconds !== undefined;
-  return { pass: estados.slice(0, 5).every((e) => e === 401) && estados[5] === 429 && !sextoEsLockout, estados, sextoEsLockout };
+  const sextoEsLockout = cuerpos[5]?.retryAfterSeconds !== undefined;
+  const lockoutPrevio = cuerpos.slice(0, 5).some((c, i) => estados[i] === 429 && c?.retryAfterSeconds !== undefined);
+  await sleep(Math.max(0, t1 + 61_000 - Date.now()));
+  const estadoReset = await jsonPost('POST /mobile/auth/sesion (reseteo misma placa)', '/v1/mobile/auth/sesion', { placa: r.placa, pin: r.pin, deviceId: r.deviceId }, {});
+  const reseteo = estadoReset === 200 || estadoReset === 409; // 409 = PIN bueno sin rotación: también resetea `fallos`
+  return { pass: !lockoutPrevio && estados.slice(0, 5).every((e) => e === 401) && estados[5] === 429 && !sextoEsLockout, estados, sextoEsLockout, lockoutPrevio, reseteo, estadoReset };
 }
 
 /** Ejecuta fn cada `periodoMs` (sin solaparse consigo misma) hasta que termine la corrida. */
@@ -189,7 +218,7 @@ function conductor(i) {
   const drenarUno = async () => {
     while (c.cola.length > 0) {
       const lote = c.cola.slice(0, MAX_LOTE);
-      const volcado = lote.length > 3; // más de lo que genera un tick normal = backlog
+      const volcado = c.estuvoOffline === true; // backlog = lo acumulado offline; un reintento de un envío normal no cuenta
       const t0 = performance.now();
       const estado = await http(volcado ? 'POST /sync/batches (volcado)' : 'POST /sync/batches', 'POST', '/v1/sync/batches', {
         c,
@@ -206,6 +235,7 @@ function conductor(i) {
       if (!ok) return;
       c.cola.splice(0, lote.length);
       c.enviados += lote.length;
+      if (c.cola.length === 0) c.estuvoOffline = false; // backlog vaciado
     }
   };
 
@@ -220,7 +250,10 @@ function conductor(i) {
       dist += VELOCIDAD_MS * ((ahora - ultimoTs) / k / 1000);
       const p = posicionEn(circuito, dist);
       c.cola.push(eventoGps({ deviceId: c.deviceId, sesionId: c.sesionId, lat: p.lat, lng: p.lng, ts: Math.round(ts) }));
-      if (offlineAhora()) offline.puntosAcumulados++;
+      if (offlineAhora()) {
+        offline.puntosAcumulados++;
+        c.estuvoOffline = true;
+      }
     }
     ultimoTs = ahora;
     if (!offlineAhora()) await c.drenar();
@@ -237,8 +270,9 @@ function conductor(i) {
   // Con --login-real el conductor entra en un instante al azar de la ráfaga y recién ahí empieza su ciclo.
   const arrancar = async () => {
     if (a['login-real']) {
-      await sleep(Math.random() * Number(a['rafaga-segundos']) * 1000);
-      if (!(await loginReal(c))) return;
+      const entrada = sleep(Math.random() * Number(a['rafaga-segundos']) * 1000).then(() => loginReal(c));
+      loginsEnCurso.push(entrada);
+      if (!(await entrada)) return;
     }
     await Promise.all([
       periodico(3_000, sync),
@@ -301,8 +335,12 @@ async function main() {
 
   const t0 = Date.now();
   tInicio = t0;
+  // Comparte el cubo `ip` (60/min) con los N logins: arranca ≥ 61 s después del último login real.
   const mismaPlaca = a['probar-misma-placa']
-    ? sleep(a['login-real'] ? (Number(a['rafaga-segundos']) + 2) * 1000 : 0).then(probarMismaPlaca)
+    ? Promise.allSettled(loginsEnCurso)
+        .then(() => sleep(a['login-real'] ? 61_000 : 0))
+        .then(probarMismaPlaca)
+        .catch((e) => ({ pass: false, error: e.message, estados: [] }))
     : null;
   const reloj = setInterval(() => {
     const t = totales();
@@ -329,9 +367,13 @@ async function main() {
   }
   const misma = mismaPlaca ? await mismaPlaca : null;
   if (misma) {
-    console.log(`${misma.pass ? 'PASS' : 'FAIL'}: misma placa, 6 logins con PIN malo -> ${misma.estados.join(',')} (6.º es lockout: ${misma.sextoEsLockout})`);
+    if (misma.error) console.log(`FAIL: misma placa, la prueba falló: ${misma.error}`);
+    else if (misma.lockoutPrevio) console.log(`FAIL: misma placa, lockout previo (fallos de una corrida anterior): re-seed o esperar -> ${misma.estados.join(',')}`);
+    else console.log(`${misma.pass ? 'PASS' : 'FAIL'}: misma placa, 6 logins con PIN malo -> ${misma.estados.join(',')} (6.º es lockout: ${misma.sextoEsLockout}) [válido solo con la API en 1 instancia: el throttle es en memoria por instancia]`);
+    if (!misma.error) console.log(`reseteo de fallos (login con PIN bueno): ${misma.reseteo ? 'ok' : `FALLÓ (HTTP ${misma.estadoReset}); la próxima corrida dará lockout previo: re-seed o esperar`}`);
     fallo ||= !misma.pass;
   }
+  if (sesionesMuertas > 0) console.log(`FAIL: ${sesionesMuertas} sesiones murieron (refresh falló)`), (fallo = true);
   if (OFFLINE) console.log('offline:', JSON.stringify({ ...offline, volcadoMaxMs: Math.round(offline.volcadoMaxMs) }));
   const conductoresDetalle = detalle.filter((c) => c.sesionId).map((c) => ({ placa: c.placa, sesionId: c.sesionId, enviados: c.enviados, pendientes: c.cola.length }));
   const enviados = conductoresDetalle.reduce((s, c) => s + c.enviados, 0);

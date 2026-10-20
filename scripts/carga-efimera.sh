@@ -13,6 +13,7 @@
 #   scripts/carga-efimera.sh estado                  # lista los recursos *-carga
 #   scripts/carga-efimera.sh worker-pausa            # worker pool a 0 instancias (la cola se acumula en Redis)
 #   scripts/carga-efimera.sh worker-reanuda          # worker pool a 1 instancia
+#   scripts/carga-efimera.sh api-instancias N        # API con min=max=N instancias (1 para la prueba de misma placa)
 #   scripts/carga-efimera.sh baja [--si]             # borra SOLO recursos cuyo nombre termina en -carga
 #
 # Recursos (todos terminan en -carga; es lo único que `baja` puede tocar):
@@ -306,6 +307,15 @@ cmd_worker_instancias() { # 0|1
   info "$WORKER_CARGA -> $1 instancia(s)."
 }
 
+# Fija min=max=N en la API (el throttle del login es en memoria por instancia). Solo quivo-api-carga.
+cmd_api_instancias() { # N
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || fail "uso: api-instancias N (entero >= 1)."
+  exigir_sufijo "$API_CARGA"
+  existe_api || fail "'$API_CARGA' no existe: corré 'alta' primero."
+  gc run services update "$API_CARGA" --region="$REGION" --min-instances="$1" --max-instances="$1"
+  info "$API_CARGA -> $1 instancia(s) (min=max)."
+}
+
 cmd_url_seed() {
   existe_sql || fail "'$SQL_CARGA' no existe: corré 'alta' primero."
   local ip url
@@ -363,6 +373,7 @@ case "${1:-}" in
   migrar)   cmd_migrar ;;
   worker-pausa)   cmd_worker_instancias 0 ;;
   worker-reanuda) cmd_worker_instancias 1 ;;
+  api-instancias) cmd_api_instancias "${2:-}" ;;
   baja)     shift; cmd_baja "${1:-}" ;;
   estado)   cmd_estado ;;
   url-seed) cmd_url_seed ;;
