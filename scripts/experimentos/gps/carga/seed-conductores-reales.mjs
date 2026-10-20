@@ -2,8 +2,11 @@
 // Seed para conductores-reales.mjs: sindicato de prueba `carga` con la línea 16 REAL
 // (geometría de l16-circuito.json), N vehículos/conductores/asignaciones de hoy, una sesión
 // operativa móvil por conductor (token opaco con el mismo formato y hash que
-// auth-movil/token-opaco.ts) y un usuario admin_sindicato para las pestañas del panel.
-// Escribe los tokens en un JSON local (0600, gitignored): NO commitear.
+// auth-movil/token-opaco.ts), un PIN conocido por conductor (credencialHash con el mismo
+// hashPassword de better-auth que usa auth-movil.service.ts; lo verifica POST /mobile/auth/sesion),
+// un vehículo+conductor extra reservado para `--probar-misma-placa` y un usuario admin_sindicato
+// para las pestañas del panel. Escribe tokens, placas y PIN en un JSON local (0600, gitignored,
+// nunca por stdout): NO commitear.
 //
 // SOLO quivo-db-carga / LOCAL. Se niega a correr salvo que:
 //   - modo remoto: QUIVO_CARGA_DATABASE_URL + QUIVO_CARGA_TEMP_IP (los emite
@@ -13,7 +16,7 @@
 //   - modo local (sin QUIVO_CARGA_DATABASE_URL): flag `--local`, contra localhost.
 //
 // Uso: node seed-conductores-reales.mjs --conductores 60 [--salida carga-tokens.local.json]
-import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
@@ -48,6 +51,7 @@ function guardas() {
 }
 
 const sha256 = (s) => createHash('sha256').update(s, 'utf8').digest('hex');
+const pinAleatorio = () => String(randomInt(10_000_000, 100_000_000)); // 8 dígitos (PinMovilSchema: 6-12)
 const token = (prefijo) => `${prefijo}${randomBytes(32).toString('base64url')}`; // = emitirTokenOpaco
 
 async function hashPasswordBetterAuth(pw) {
@@ -115,12 +119,11 @@ async function main() {
 
     const hoy = new Date(Date.now() - 4 * 3_600_000).toISOString().slice(0, 10); // día Bolivia (UTC-4)
     const conductores = [];
-    for (let i = 0; i < N; i++) {
+    // `reservada` = unidad extra para --probar-misma-placa: sin sesión, así su lockout no toca a los N.
+    const sembrarUnidad = async (i, placa, reservada) => {
       const [socioId, vehiculoId, conductorId, asignacionId] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
-      const placa = `CRG${String(i).padStart(4, '0')}`;
-      const deviceId = `carga-device-${String(i).padStart(4, '0')}`;
-      const access = token('mobile_at_');
-      const refresh = token('mobile_rt_');
+      const deviceId = `carga-device-${reservada ? 'misma-placa' : String(i).padStart(4, '0')}`;
+      const pin = pinAleatorio();
       await client.query(
         `INSERT INTO socios (id, "sindicatoId", nombre, "documentoIdentidad", estado, "createdAt", "updatedAt")
          VALUES ($1, $2, $3, $4, 'activo', now(), now())`,
@@ -132,15 +135,18 @@ async function main() {
         [vehiculoId, sindicatoId, socioId, placa],
       );
       await client.query(
-        `INSERT INTO conductores (id, "sindicatoId", nombre, "documentoIdentidad", "licenciaConducir", estado, "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5, 'activo', now(), now())`,
-        [conductorId, sindicatoId, `Conductor carga ${i}`, `CRG-CI-${i}`, `CRG-LIC-${i}`],
+        `INSERT INTO conductores (id, "sindicatoId", nombre, "documentoIdentidad", "licenciaConducir", "credencialHash", estado, "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, $6, 'activo', now(), now())`,
+        [conductorId, sindicatoId, `Conductor carga ${i}`, `CRG-CI-${i}`, `CRG-LIC-${i}`, await hashPasswordBetterAuth(pin)],
       );
       await client.query(
         `INSERT INTO asignaciones (id, "rotacionId", "vehiculoId", "conductorId", "rutaId", fecha, horario, orden, "venceAt", estado, "createdAt", "updatedAt")
          VALUES ($1, $2, $3, $4, $5, $6, 'manana', $7, now() + interval '1 day', 'vigente', now(), now())`,
         [asignacionId, rotacionId, vehiculoId, conductorId, rutaId, hoy, i],
       );
+      if (reservada) return { placa, pin, deviceId };
+      const access = token('mobile_at_');
+      const refresh = token('mobile_rt_');
       const r = await client.query(
         `INSERT INTO sesiones_operativas
            (id, "sindicatoId", "asignacionId", "vehiculoId", "conductorId", "deviceId", inicio, estado,
@@ -149,8 +155,10 @@ async function main() {
          RETURNING id`,
         [randomUUID(), sindicatoId, asignacionId, vehiculoId, conductorId, deviceId, sha256(access), sha256(refresh)],
       );
-      conductores.push({ sesionId: r.rows[0].id, deviceId, placa, accessToken: access });
-    }
+      return { sesionId: r.rows[0].id, deviceId, placa, pin, accessToken: access, refreshToken: refresh };
+    };
+    for (let i = 0; i < N; i++) conductores.push(await sembrarUnidad(i, `${1000 + i}CRG`, false));
+    const mismaPlaca = await sembrarUnidad(N, '9999MSM', true);
 
     // Admin del panel: mismas tablas que Better-Auth (user + account credential), contraseña aleatoria.
     const email = `carga-admin-${randomBytes(3).toString('hex')}@carga.invalid`;
@@ -168,9 +176,9 @@ async function main() {
     );
     await client.query('COMMIT');
 
-    writeFileSync(a.salida, JSON.stringify({ sindicatoId, admin: { email, password }, conductores }, null, 2));
+    writeFileSync(a.salida, JSON.stringify({ sindicatoId, admin: { email, password }, conductores, mismaPlaca }, null, 2));
     chmodSync(a.salida, 0o600);
-    console.log(`Sembrado: ${N} conductores + admin. Tokens en ${a.salida} (0600; no commitear).`);
+    console.log(`Sembrado: ${N} conductores + 1 reservado (misma placa) + admin. Tokens en ${a.salida} (0600; no commitear).`);
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;

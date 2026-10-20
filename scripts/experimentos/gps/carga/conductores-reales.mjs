@@ -10,7 +10,12 @@
 //
 // Uso: node conductores-reales.mjs --base-url https://... --conductores 30 --admins 3 --minutos 30
 //        [--tokens carga-tokens.local.json] [--salida resultado.json]
-// Los tokens salen de seed-conductores-reales.mjs (solo contra el clon).
+//        [--login-real [--rafaga-segundos 60]]  cada conductor hace POST /mobile/auth/sesion (placa+PIN)
+//                                               repartido al azar en la ráfaga, todos desde esta IP (CGNAT)
+//        [--probar-misma-placa]                 6 logins con PIN malo a la placa reservada: el 6.º debe dar 429 del throttle
+//        [--offline-desde K --offline-minutos M] del minuto K al K+M no se envía; al volver se vuelca el backlog
+// Los tokens/PIN salen de seed-conductores-reales.mjs (solo contra el clon). Después de la corrida:
+// verificar-ingesta.mjs --resultado <salida.json> compara puntos enviados vs ingeridos.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { cargarCircuito, cuerpoLoteGzip, eventoGps, posicionEn } from './lib/geometria-l16.mjs';
@@ -24,6 +29,11 @@ const { values: a } = parseArgs({
     minutos: { type: 'string', default: '30' },
     tokens: { type: 'string', default: new URL('./carga-tokens.local.json', import.meta.url).pathname },
     salida: { type: 'string' },
+    'login-real': { type: 'boolean', default: false },
+    'rafaga-segundos': { type: 'string', default: '60' },
+    'probar-misma-placa': { type: 'boolean', default: false },
+    'offline-desde': { type: 'string' },
+    'offline-minutos': { type: 'string' },
   },
 });
 if (!a['base-url']) {
@@ -45,28 +55,116 @@ if (TOKENS.conductores.length < N) {
   process.exit(1);
 }
 
+if ((a['offline-desde'] === undefined) !== (a['offline-minutos'] === undefined)) {
+  console.error('--offline-desde y --offline-minutos van juntos.');
+  process.exit(1);
+}
+const OFFLINE = a['offline-desde'] !== undefined;
+const OFF_DESDE_MS = Number(a['offline-desde']) * 60_000;
+const OFF_HASTA_MS = OFF_DESDE_MS + Number(a['offline-minutos']) * 60_000;
+const MAX_LOTE = 500; // SyncBatchSchema (packages/shared/src/sync/evento.ts): eventos .min(1).max(500)
+const login = { ok: 0, 429: 0, otros: 0 };
+let tInicio = Date.now();
+const offlineAhora = () => OFFLINE && Date.now() - tInicio >= OFF_DESDE_MS && Date.now() - tInicio < OFF_HASTA_MS;
+const offline = { puntosAcumulados: 0, lotesVolcados: 0, erroresVolcado: 0, volcadoMaxMs: 0 };
+
 const circuito = cargarCircuito();
 const VELOCIDAD_MS = 8; // ~29 km/h
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let corriendo = true;
+const detalle = []; // estado por conductor (sesionId, enviados, cola) para el resumen y verificar-ingesta
 
-async function http(etiqueta, metodo, ruta, { token, body, headers = {} } = {}) {
+// `c` = conductor (token rotable); `token` = token fijo (admin); `salida` recibe el JSON de la respuesta.
+async function http(etiqueta, metodo, ruta, { token, c, body, headers = {}, salida, reintento = true } = {}) {
   const t0 = performance.now();
   let estado;
   try {
     const res = await fetch(BASE + ruta, {
       method: metodo,
-      headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
+      headers: { Accept: 'application/json', ...(token || c ? { Authorization: `Bearer ${token ?? c.accessToken}` } : {}), ...headers },
       body,
       signal: AbortSignal.timeout(20_000),
     });
-    await res.arrayBuffer(); // consumir el body: la latencia incluye la descarga
+    const bytes = await res.arrayBuffer(); // consumir el body: la latencia incluye la descarga
     estado = res.status;
+    if (salida) {
+      try {
+        salida.cuerpo = JSON.parse(Buffer.from(bytes).toString('utf8'));
+      } catch {
+        salida.cuerpo = null;
+      }
+    }
   } catch {
     estado = 'ERR';
   }
   registrar(etiqueta, performance.now() - t0, estado);
+  // El access móvil dura ~15 min y la corrida 30: ante 401 se rota con el refresh y se reintenta una vez.
+  if (estado === 401 && c?.refreshToken && reintento && (await refrescar(c))) {
+    return http(etiqueta, metodo, ruta, { c, body, headers, salida, reintento: false });
+  }
   return estado;
+}
+
+/** POST /mobile/auth/refresh del conductor; una sola rotación en vuelo por conductor. */
+function refrescar(c) {
+  c.refrescando ??= (async () => {
+    const salida = {};
+    const estado = await jsonPost('POST /mobile/auth/refresh', '/v1/mobile/auth/refresh', { refreshToken: c.refreshToken }, salida);
+    if (estado === 200 && salida.cuerpo?.accessToken) {
+      c.accessToken = salida.cuerpo.accessToken;
+      c.refreshToken = salida.cuerpo.refreshToken;
+    }
+    c.refrescando = null;
+    return estado === 200;
+  })();
+  return c.refrescando;
+}
+
+const jsonPost = (etiqueta, ruta, obj, salida) =>
+  http(etiqueta, 'POST', ruta, { body: JSON.stringify(obj), headers: { 'Content-Type': 'application/json' }, salida });
+
+/** Login de un paso (placa + PIN + deviceId); si la API pide elegir asignación (>=2 hoy) toma la primera. */
+async function loginReal(c) {
+  const salida = {};
+  let estado = await jsonPost('POST /mobile/auth/sesion', '/v1/mobile/auth/sesion', { placa: c.placa, pin: c.pin, deviceId: c.deviceId }, salida);
+  if (estado === 200 && salida.cuerpo?.status === 'seleccion_requerida') {
+    estado = await jsonPost(
+      'POST /mobile/auth/sesion/asignacion',
+      '/v1/mobile/auth/sesion/asignacion',
+      { seleccionToken: salida.cuerpo.seleccionToken, asignacionId: salida.cuerpo.asignaciones[0].id, deviceId: c.deviceId },
+      salida,
+    );
+  }
+  if (estado === 200 && salida.cuerpo?.status === 'autenticado') {
+    const r = salida.cuerpo;
+    Object.assign(c, { accessToken: r.accessToken, refreshToken: r.refreshToken, sesionId: r.contexto.sesionId });
+    login.ok++;
+    return true;
+  }
+  if (estado === 429) login[429]++;
+  else login.otros++;
+  console.error(`FAIL login ${c.placa}: HTTP ${estado}`);
+  return false;
+}
+
+/** 6 logins con PIN malo a la placa reservada. Se espacian tras el 4.º y 5.º para que el lockout por
+ * vehículo (espera 2^(fallos-3) s desde el 4.º fallo) no se confunda con el throttle: el 6.º debe ser
+ * 429 SIN `retryAfterSeconds` en el body (ese campo solo lo pone el filtro del lockout). */
+async function probarMismaPlaca() {
+  const r = TOKENS.mismaPlaca;
+  if (!r) throw new Error("El archivo de tokens no trae 'mismaPlaca': re-sembrar con el seed nuevo.");
+  const pinMalo = r.pin === '00000000' ? '11111111' : '00000000';
+  const estados = [];
+  let cuerpo;
+  for (let i = 1; i <= 6; i++) {
+    const salida = {};
+    estados.push(await jsonPost('POST /mobile/auth/sesion (misma placa)', '/v1/mobile/auth/sesion', { placa: r.placa, pin: pinMalo, deviceId: r.deviceId }, salida));
+    cuerpo = salida.cuerpo;
+    if (i === 4) await sleep(2_500);
+    if (i === 5) await sleep(4_500);
+  }
+  const sextoEsLockout = cuerpo?.retryAfterSeconds !== undefined;
+  return { pass: estados.slice(0, 5).every((e) => e === 401) && estados[5] === 429 && !sextoEsLockout, estados, sextoEsLockout };
 }
 
 /** Ejecuta fn cada `periodoMs` (sin solaparse consigo misma) hasta que termine la corrida. */
@@ -80,29 +178,52 @@ async function periodico(periodoMs, fn) {
 }
 
 function conductor(i) {
-  const c = TOKENS.conductores[i];
+  const c = { ...TOKENS.conductores[i], cola: [], enviados: 0 };
+  detalle.push(c);
   let dist = (circuito.largoM / N) * i; // reparte las unidades a lo largo del circuito
   let ultimoTs = Date.now();
   const pos = () => posicionEn(circuito, dist);
-  const get = (etiqueta, ruta) => http(etiqueta, 'GET', ruta, { token: c.accessToken });
+  const get = (etiqueta, ruta) => (offlineAhora() ? null : http(etiqueta, 'GET', ruta, { c }));
+
+  /** Como el outbox móvil: lotes de <= 500 en orden; si uno falla se queda en la cola y se reintenta. */
+  const drenarUno = async () => {
+    while (c.cola.length > 0) {
+      const lote = c.cola.slice(0, MAX_LOTE);
+      const volcado = lote.length > 3; // más de lo que genera un tick normal = backlog
+      const t0 = performance.now();
+      const estado = await http(volcado ? 'POST /sync/batches (volcado)' : 'POST /sync/batches', 'POST', '/v1/sync/batches', {
+        c,
+        body: cuerpoLoteGzip(lote),
+        // X-Content-Encoding y no Content-Encoding: OkHttp descarta el estándar (ver sync-api.ts)
+        headers: { 'Content-Type': 'application/json', 'X-Content-Encoding': 'gzip' },
+      });
+      const ok = estado >= 200 && estado < 300;
+      if (volcado) {
+        offline.volcadoMaxMs = Math.max(offline.volcadoMaxMs, performance.now() - t0);
+        if (ok) offline.lotesVolcados++;
+        else offline.erroresVolcado++;
+      }
+      if (!ok) return;
+      c.cola.splice(0, lote.length);
+      c.enviados += lote.length;
+    }
+  };
+
+  // Serializa: el vaciado final no debe pisar un envío en vuelo del tick periódico.
+  c.drenar = () => (c.turno = (c.turno ?? Promise.resolve()).then(drenarUno));
 
   const sync = async () => {
     const ahora = Date.now();
     const k = 1 + Math.floor(Math.random() * 3);
-    const eventos = [];
     for (let j = 1; j <= k; j++) {
       const ts = ultimoTs + ((ahora - ultimoTs) * j) / k;
       dist += VELOCIDAD_MS * ((ahora - ultimoTs) / k / 1000);
       const p = posicionEn(circuito, dist);
-      eventos.push(eventoGps({ deviceId: c.deviceId, sesionId: c.sesionId, lat: p.lat, lng: p.lng, ts: Math.round(ts) }));
+      c.cola.push(eventoGps({ deviceId: c.deviceId, sesionId: c.sesionId, lat: p.lat, lng: p.lng, ts: Math.round(ts) }));
+      if (offlineAhora()) offline.puntosAcumulados++;
     }
     ultimoTs = ahora;
-    await http('POST /sync/batches', 'POST', '/v1/sync/batches', {
-      token: c.accessToken,
-      body: cuerpoLoteGzip(eventos),
-      // X-Content-Encoding y no Content-Encoding: OkHttp descarta el estándar (ver sync-api.ts)
-      headers: { 'Content-Type': 'application/json', 'X-Content-Encoding': 'gzip' },
-    });
+    if (!offlineAhora()) await c.drenar();
   };
   const vecinos = () => {
     const p = pos();
@@ -113,13 +234,21 @@ function conductor(i) {
     const d = posicionEn(circuito, dist + 1000);
     return get('GET /mobile/ruta-a-punto', `/v1/mobile/ruta-a-punto?origenLat=${o.lat}&origenLng=${o.lng}&destinoLat=${d.lat}&destinoLng=${d.lng}`);
   };
-  return [
-    periodico(3_000, sync),
-    periodico(20_000, () => get('GET /mobile/vuelta-actual', '/v1/mobile/vuelta-actual')),
-    periodico(30_000, vecinos),
-    periodico(60_000, () => get('GET /mobile/perfil', '/v1/mobile/perfil')),
-    periodico(15_000, rutaAPunto),
-  ];
+  // Con --login-real el conductor entra en un instante al azar de la ráfaga y recién ahí empieza su ciclo.
+  const arrancar = async () => {
+    if (a['login-real']) {
+      await sleep(Math.random() * Number(a['rafaga-segundos']) * 1000);
+      if (!(await loginReal(c))) return;
+    }
+    await Promise.all([
+      periodico(3_000, sync),
+      periodico(20_000, () => get('GET /mobile/vuelta-actual', '/v1/mobile/vuelta-actual')),
+      periodico(30_000, vecinos),
+      periodico(60_000, () => get('GET /mobile/perfil', '/v1/mobile/perfil')),
+      periodico(15_000, rutaAPunto),
+    ]);
+  };
+  return [arrancar()];
 }
 
 // --- Admin: un login (5/min por IP) y refresh del JWT cada 10 min; las N pestañas comparten token.
@@ -171,6 +300,10 @@ async function main() {
   if (NADMIN > 0) tareas.push(refrescarAdmin());
 
   const t0 = Date.now();
+  tInicio = t0;
+  const mismaPlaca = a['probar-misma-placa']
+    ? sleep(a['login-real'] ? (Number(a['rafaga-segundos']) + 2) * 1000 : 0).then(probarMismaPlaca)
+    : null;
   const reloj = setInterval(() => {
     const t = totales();
     console.log(
@@ -181,16 +314,40 @@ async function main() {
   corriendo = false;
   clearInterval(reloj);
   await sleep(1_000); // las requests en vuelo terminan solas (timeout 20 s); no se esperan
+  await Promise.all(detalle.map((c) => c.drenar())); // vacía lo que haya quedado en la cola (backlog offline o envíos fallidos)
+  const sinLogin = a['login-real'] ? login.ok < N : false;
 
   const filas = resumen();
   console.log('\n=== Resultado final (latencias en ms) ===');
   imprimirTabla(filas);
   console.log('totales:', JSON.stringify(totales()));
+  let fallo = false;
+  if (a['login-real']) {
+    console.log('login:', JSON.stringify(login));
+    if (login[429] > 0) console.log(`FAIL: ${login[429]} de ${N} logins recibieron 429`), (fallo = true);
+    if (sinLogin) console.log(`FAIL: solo ${login.ok} de ${N} conductores lograron entrar`), (fallo = true);
+  }
+  const misma = mismaPlaca ? await mismaPlaca : null;
+  if (misma) {
+    console.log(`${misma.pass ? 'PASS' : 'FAIL'}: misma placa, 6 logins con PIN malo -> ${misma.estados.join(',')} (6.º es lockout: ${misma.sextoEsLockout})`);
+    fallo ||= !misma.pass;
+  }
+  if (OFFLINE) console.log('offline:', JSON.stringify({ ...offline, volcadoMaxMs: Math.round(offline.volcadoMaxMs) }));
+  const conductoresDetalle = detalle.filter((c) => c.sesionId).map((c) => ({ placa: c.placa, sesionId: c.sesionId, enviados: c.enviados, pendientes: c.cola.length }));
+  const enviados = conductoresDetalle.reduce((s, c) => s + c.enviados, 0);
+  console.log(`puntos enviados (aceptados por la API): ${enviados}; sin enviar: ${conductoresDetalle.reduce((s, c) => s + c.pendientes, 0)}`);
   if (a.salida) {
-    writeFileSync(a.salida, JSON.stringify({ baseUrl: BASE, conductores: N, admins: NADMIN, minutos: a.minutos, filas, totales: totales() }, null, 2));
+    writeFileSync(
+      a.salida,
+      JSON.stringify(
+        { baseUrl: BASE, conductores: N, admins: NADMIN, minutos: a.minutos, filas, totales: totales(), login: a['login-real'] ? login : undefined, mismaPlaca: misma ?? undefined, offline: OFFLINE ? offline : undefined, puntosEnviados: enviados, conductoresDetalle },
+        null,
+        2,
+      ),
+    );
     console.log(`Resultado escrito en ${a.salida}`);
   }
-  process.exit(0);
+  process.exit(fallo ? 1 : 0);
 }
 
 main().catch((e) => {

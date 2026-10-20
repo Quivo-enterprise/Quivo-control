@@ -48,6 +48,44 @@ endpoint con n, p50/p95/p99 y histograma de estados. Entre escalones esperá que
 Criterios en 60 (plan): p95 API < 500 ms, 0 5xx/429, `waiting` < 100 y estable, CPU Cloud SQL
 < 60 %, conexiones < 70 % del máximo, Redis estable entre el minuto 10 y el 30.
 
+## 3b. Ensayo del día D (30 conductores reales, login real)
+
+Receta completa (el CTO corre lo de GCP):
+
+```bash
+scripts/carga-efimera.sh alta --api-min-instances 3        # 3 instancias de API (default: las de prod)
+scripts/carga-efimera.sh migrar
+eval "$(scripts/carga-efimera.sh url-seed)"
+cd scripts/experimentos/gps/carga
+node seed-conductores-reales.mjs --conductores 30         # tokens, placa y PIN en carga-tokens.local.json (0600)
+API="$(../../../carga-efimera.sh url-api)"
+# 1) 30 con login real (ráfaga de 60 s desde esta IP = CGNAT) + prueba de misma placa + escenario offline (min 10 a 15)
+node conductores-reales.mjs --base-url "$API" --conductores 30 --admins 3 --minutos 30 \
+  --login-real --probar-misma-placa --offline-desde 10 --offline-minutos 5 --salida resultados/ensayo-30.json
+# 2) en otra terminal, a mitad de la corrida (p.ej. minuto 20): pausar el worker 3-5 min y reanudarlo
+../../../carga-efimera.sh worker-pausa ; sleep 240 ; ../../../carga-efimera.sh worker-reanuda
+# 3) al terminar: enviados vs ingeridos (espera a que el conteo deje de cambiar)
+node verificar-ingesta.mjs --resultado resultados/ensayo-30.json
+# 4) repetir con 60 (baja + alta + seed --conductores 60), y por último: baja
+```
+
+`verificar-ingesta.mjs` lee `gps_points` por `sesion_id` con la URL de `url-seed` (solo lectura);
+no hay endpoint admin con conteos exactos por sesión, así que no se agregó ninguno.
+Con `--login-real`, un 429 en cualquiera de los N logins (`POST /v1/mobile/auth/sesion`) es una
+línea `FAIL` y exit 1. La placa `9999MSM` queda reservada para `--probar-misma-placa` (5x401 y el
+6.º 429 del throttle, sin `retryAfterSeconds`). Un 401 durante la corrida rota con
+`/mobile/auth/refresh` (el access dura ~15 min).
+
+Criterios de aprobación:
+
+- 0 logins 429 entre los 30.
+- Misma placa: el 6.º intento es 429 (throttle, no lockout).
+- p95 de la API < 500 ms.
+- Conexiones Cloud SQL (`num_backends`) < 35 con 3 instancias de API.
+- 0 puntos perdidos tras pausar el worker (`verificar-ingesta` PASS).
+- Redis plano (memoria y clientes sin crecimiento sostenido).
+- Cola `waiting` vuelve a 0 tras el volcado offline y tras `worker-reanuda`.
+
 ## 4. Qué mirar durante la corrida
 
 Cloud Monitoring (Metrics Explorer, proyecto `quivo-control-prod`, filtrar por la instancia
