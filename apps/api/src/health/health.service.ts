@@ -1,7 +1,7 @@
 import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { prisma } from '@quivo/db';
 import { Redis } from 'ioredis';
-import { Pool } from 'pg';
 
 export interface HealthStatus {
   status: 'ok' | 'degraded';
@@ -11,7 +11,6 @@ export interface HealthStatus {
 
 @Injectable()
 export class HealthService implements OnModuleDestroy {
-  private readonly pool: Pool;
   private readonly redis: Redis;
 
   // `@Inject(ConfigService)` explícito: `tsx`/esbuild (usado por `dev`/`dev:worker`) no
@@ -23,10 +22,6 @@ export class HealthService implements OnModuleDestroy {
   // esta app no usa inyección de constructor (llaman a `withTenantContext`/`prisma`
   // directamente), por eso este bug no se había manifestado antes.
   constructor(@Inject(ConfigService) config: ConfigService) {
-    this.pool = new Pool({
-      connectionString:
-        config.get<string>('RUNTIME_DATABASE_URL') ?? config.get<string>('DATABASE_URL'),
-    });
     this.redis = new Redis(config.get<string>('REDIS_URL') ?? 'redis://localhost:6380', {
       lazyConnect: true,
       maxRetriesPerRequest: 1,
@@ -44,7 +39,8 @@ export class HealthService implements OnModuleDestroy {
 
   private async checkDb(): Promise<'up' | 'down'> {
     try {
-      await this.pool.query('SELECT 1');
+      // Pool compartido de Prisma (acotado y con timeouts): no abre conexiones propias.
+      await prisma.$queryRaw`SELECT 1`;
       return 'up';
     } catch {
       return 'down';
@@ -64,7 +60,6 @@ export class HealthService implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.pool.end();
     this.redis.disconnect();
   }
 }

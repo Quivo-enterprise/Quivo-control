@@ -136,17 +136,22 @@ json_get() { python3 -c 'import json,sys; v=json.loads(sys.argv[1])[sys.argv[2]]
 # BETTER_AUTH_URL se pisa con la URL propia. GCS_MEDIA_BUCKET NO se setea (es opcional: sin ella
 # la media cae a disco local, validate-runtime-config.ts solo avisa) y GPS_ARCHIVE_* tampoco se copia
 # (apunta al bucket de prod): la carga no puede tocar la media ni el archivo de prod.
-env_flag() { # json_env url_propia
+env_flag() { # json_env url_propia [overrides K=V%%K=V]
   python3 -c '
 import json, sys
 prod = json.loads(sys.argv[1])
 permitidas = ("NODE_ENV", "MOBILE_LEGACY_AUTH_ENABLED", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
-             "GPS_RETENTION_MONTHS")
+             "GPS_RETENTION_MONTHS", "DB_POOL_MAX", "DB_CONNECTION_TIMEOUT_MS",
+             "DB_STATEMENT_TIMEOUT_MS")
 env = {k: prod[k] for k in permitidas if k in prod}
 env["BETTER_AUTH_URL"] = sys.argv[2]
+# Overrides opcionales "K=V%%K=V" (el worker de prod usa otro pool/timeout que la API).
+for kv in (sys.argv[3].split("%%") if len(sys.argv) > 3 and sys.argv[3] else []):
+    k, v = kv.split("=", 1)
+    env[k] = v
 bad = [k for k, v in env.items() if "%%" in v]
 if bad: sys.exit("valor con %% en " + ",".join(bad))
-print("^%%^" + "%%".join(f"{k}={v}" for k, v in env.items()))' "$1" "$2"
+print("^%%^" + "%%".join(f"{k}={v}" for k, v in env.items()))' "$1" "$2" "${3:-}"
 }
 
 cmd_alta() {
@@ -229,6 +234,9 @@ cmd_alta() {
   url_propia="https://${API_CARGA}-${PROJECT_NUMBER}.${REGION}.run.app"
   envflag="$(env_flag "$envjson" "$url_propia")"
   local secrets="RUNTIME_DATABASE_URL=${S_RUNTIME}:latest,JWT_SECRET=${S_JWT}:latest,REDIS_URL=${S_REDIS}:latest"
+  # Worker: mismos valores que el worker pool de prod (deploy-gcp.sh), no los de la API.
+  local envflag_worker
+  envflag_worker="$(env_flag "$envjson" "$url_propia" "DB_POOL_MAX=5%%DB_STATEMENT_TIMEOUT_MS=60000")"
   local throttle_flag=()
   [[ "$(json_get "$cfg" cpu_throttling)" == "false" ]] && throttle_flag=(--no-cpu-throttling)
 
@@ -249,7 +257,7 @@ cmd_alta() {
     --command=node --args=apps/api/dist/worker.js --instances=1 \
     --service-account="$SERVICE_ACCOUNT" \
     --network="$VPC_NETWORK" --subnet="$VPC_SUBNET" --vpc-egress=private-ranges-only \
-    --add-cloudsql-instances="$conn" --set-secrets="$secrets" --set-env-vars="$envflag"
+    --add-cloudsql-instances="$conn" --set-secrets="$secrets" --set-env-vars="$envflag_worker"
 
   info "Listo. La base está VACÍA: siguiente paso 'scripts/carga-efimera.sh migrar'."
 }

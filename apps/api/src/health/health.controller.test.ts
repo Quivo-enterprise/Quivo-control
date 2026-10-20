@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { HealthController } from './health.controller.js';
 import type { HealthService } from './health.service.js';
 
+// El service ahora importa el cliente Prisma compartido, que exige RUNTIME_DATABASE_URL/JWT_SECRET
+// al cargarse: el controller se prueba con un service falso, no necesita la base.
+vi.mock('@quivo/db', () => ({ prisma: {} }));
+
 function fakeService(result: {
   status: 'ok' | 'degraded';
   db: 'up' | 'down';
