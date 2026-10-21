@@ -5,11 +5,12 @@ import {
   guardarEstadoVueltaLocal,
   leerEstadoVueltaLocal,
 } from '../../db/vuelta-actual-local';
-import type { VueltaActualMovil } from '@quivo/shared';
+import type { EstadoFilaSalida, VueltaActualMovil } from '@quivo/shared';
 import { vueltaActualApi } from '../../shared/api/vuelta-actual-api';
 import { cargarSesionMovil } from '../../shared/security/sesion-movil-store';
 import { anunciarAvisoEnCanal, descartarNotificacionAviso } from '../operacion/anuncio-punto-control';
 import { cancelarAvisoFilaDe, sincronizarAvisoFila } from '../fila-salida/fila-salida-aviso';
+import { reiniciarDeteccionFila } from '../fila-salida/fila-salida-estado';
 import {
   TEXTO_AVISO_CANCELADA,
   abandonarAcuse,
@@ -19,6 +20,7 @@ import {
   cerrarDesignacion,
   claveDesignacion,
   rearmarFila,
+  respuestaConFila,
   esErrorAcusePermanente,
   idNotificacionDesignacion,
   marcarAnunciada,
@@ -137,17 +139,25 @@ async function anunciar(aviso: AvisoVuelta): Promise<boolean> {
  * dispara los avisos y descarta de la bandeja las notificaciones que ya no valen. Una respuesta
  * idéntica a la anterior no escribe SQLite ni emite. Devuelve el estado resultante, o `null` si la
  * respuesta se descartó porque `limpiarVueltaActual` corrió mientras la consulta estaba en vuelo.
+ * `respuesta` puede ser una función del estado previo (la respuesta de un POST de la fila se arma
+ * sobre la última vuelta conocida, ya dentro de la cola).
  */
 async function incorporarRespuesta(
   sesionId: string,
   gen: number,
-  respuesta: VueltaActualMovil,
+  respuesta: VueltaActualMovil | ((previo: EstadoLocalVuelta) => VueltaActualMovil),
 ): Promise<EstadoLocalVuelta | null> {
   const ahoraMs = Date.now();
   const { previo, resultado, descartada } = await serializar(async () => {
     if (gen !== generacion) return { previo: ESTADO_LOCAL_INICIAL, resultado: null, descartada: true };
     const previo = await leerEstadoVueltaLocal(sesionId);
-    const resultado = aplicarRespuesta(previo, respuesta, { ahoraMs });
+    const resultado = aplicarRespuesta(
+      previo,
+      typeof respuesta === 'function' ? respuesta(previo) : respuesta,
+      {
+        ahoraMs,
+      },
+    );
     // Se persiste ANTES de hablar/notificar: el intento queda contado y un reinicio (o el otro
     // contexto JS) no entra en bucle. Se re-chequea la generación tras la lectura: si el recorrido
     // terminó entretanto, no se escribe.
@@ -164,6 +174,8 @@ async function incorporarRespuesta(
     await descartarNotificacionAviso(id);
   }
   // Aviso T-1 de la fila de salida: se reprograma con la última respuesta (también en headless).
+  // Si el recorrido terminó durante los awaits de arriba, no se programa uno que nadie cancelaría.
+  if (gen !== generacion) return resultado.estado;
   await sincronizarAvisoFila(previo, resultado.estado, ahoraMs);
   let estado = resultado.estado;
   for (const aviso of resultado.avisos) {
@@ -202,6 +214,21 @@ export async function solicitarRefresco(obtenerAccessToken: () => Promise<string
     return;
   }
   await consultarVueltaActual(obtenerAccessToken, { forzar: true });
+}
+
+/** Incorpora la `fila` que devolvió un POST de llegada/salida (`null` = ya no está en la fila) sin
+ * esperar al próximo GET. Nunca rechaza; descarta si el recorrido cambió. */
+export async function incorporarFilaDeAccion(fila: EstadoFilaSalida | null): Promise<void> {
+  const gen = generacion;
+  try {
+    const sesion = await cargarSesionMovil();
+    if (!sesion) return;
+    await incorporarRespuesta(sesion.contexto.sesionId, gen, (previo) =>
+      respuestaConFila(previo.ultimo, fila),
+    );
+  } catch (error) {
+    Sentry.captureException(error, { tags: { contexto: 'vuelta-actual', paso: 'fila-accion' } });
+  }
 }
 
 /** Manda el acuse de una designación cerrada localmente que el servidor aún no confirmó. La
@@ -364,6 +391,8 @@ export function limpiarVueltaActual(sesionId: string): void {
   enVuelo = false;
   secuenciaConsulta += 1;
   ultimoIntentoMs = 0;
+  // Racha/anti-rebote/último fix de la detección de zona no pasan al recorrido siguiente.
+  reiniciarDeteccionFila();
   // La lectura y el borrado se emiten en este orden y sin await entre ambos.
   emitir(sesionId, ESTADO_LOCAL_INICIAL);
   const previo = leerEstadoVueltaLocal(sesionId).catch(() => ESTADO_LOCAL_INICIAL);

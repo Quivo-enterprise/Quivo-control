@@ -19,6 +19,7 @@ import {
   notificacionesObsoletas,
   partesAvisoDesignada,
   rearmarFila,
+  respuestaConFila,
   respuestasIguales,
   MARGEN_ESPERA_MIN,
   restanteEsperaMin,
@@ -446,27 +447,81 @@ describe('fila de salida en el cache', () => {
     fila: { ...FILA, servidorTs },
   });
 
-  it('una respuesta con fila distinta (aunque sea solo servidorTs) es cambio y refresca la recepcion', () => {
+  // El servidor dice explícitamente que ya no está en la fila.
+  const sinFilaNull = (): VueltaActualMovil => ({ ...vuelta(V1, null), fila: null });
+
+  it('solo cambia servidorTs: no es cambio, conserva la referencia y no reescribe', () => {
     const a = aplicarRespuesta(ESTADO_LOCAL_INICIAL, conFila(), { ahoraMs: 1_000 });
     expect(a.estado.ultimo?.fila?.posicion).toBe(2);
+    // servidorTs 20 s después, recibido 20 s después: mismo desfase
     const b = aplicarRespuesta(a.estado, conFila('2026-10-20T11:05:20.000Z'), { ahoraMs: 21_000 });
-    expect(b.cambio).toBe(true);
-    expect(b.estado.actualizadoEn).toBe(21_000);
-    expect(respuestasIguales(a.estado.ultimo, conFila())).toBe(true);
-    expect(respuestasIguales(a.estado.ultimo, conFila('2026-10-20T11:05:20.000Z'))).toBe(false);
+    expect(b.cambio).toBe(false);
+    expect(b.estado).toBe(a.estado);
+    expect(respuestasIguales(a.estado.ultimo, conFila('2026-10-20T11:05:20.000Z'))).toBe(true);
+  });
+
+  it('el desfase solo se persiste de nuevo si varía más de 1 s', () => {
+    const base = Date.parse(FILA.servidorTs);
+    const a = aplicarRespuesta(ESTADO_LOCAL_INICIAL, conFila(), { ahoraMs: base - 90_000 });
+    expect(a.estado.desfaseFilaMs).toBe(90_000);
+    const poco = aplicarRespuesta(a.estado, conFila(), { ahoraMs: base - 90_500 });
+    expect(poco.cambio).toBe(false);
+    const mucho = aplicarRespuesta(a.estado, conFila(), { ahoraMs: base - 92_000 });
+    expect(mucho.cambio).toBe(true);
+    expect(mucho.estado.desfaseFilaMs).toBe(92_000);
+    expect(mucho.estado.ultimo).toBe(a.estado.ultimo);
+    // sin fila (null explícito) se olvida
+    expect(
+      aplicarRespuesta(a.estado, sinFilaNull(), { ahoraMs: 5 }).estado.desfaseFilaMs,
+    ).toBeUndefined();
+  });
+
+  it('una respuesta SIN el campo fila (acuse) conserva fila y desfase y no desarma', () => {
+    const enFila = aplicarRespuesta(ESTADO_LOCAL_INICIAL, conFila(), { ahoraMs: 1_000 }).estado;
+    const sinFila: VueltaActualMovil = { ...conFila(), fila: undefined };
+    const r = aplicarRespuesta(enFila, sinFila, { ahoraMs: 2_000 });
+    expect(r.estado.ultimo?.fila).toEqual(enFila.ultimo?.fila);
+    expect(r.estado.desfaseFilaMs).toBe(enFila.desfaseFilaMs);
+    expect(r.estado.filaDesarmada).toBe(false);
+    // y si ya estaba desarmada, sigue igual
+    const desarmado = { ...ESTADO_LOCAL_INICIAL, filaDesarmada: true };
+    expect(aplicarRespuesta(desarmado, sinFila, { ahoraMs: 3_000 }).estado.filaDesarmada).toBe(
+      true,
+    );
+  });
+
+  it('respuestaConFila: la fila de un POST se incorpora como una respuesta (null = salió)', () => {
+    const enFila = aplicarRespuesta(ESTADO_LOCAL_INICIAL, conFila(), { ahoraMs: 1_000 }).estado;
+    const salio = aplicarRespuesta(enFila, respuestaConFila(enFila.ultimo, null), {
+      ahoraMs: 2_000,
+    }).estado;
+    expect(salio.ultimo?.fila).toBeNull();
+    expect(salio.filaDesarmada).toBe(true);
+    expect(salio.desfaseFilaMs).toBeUndefined();
+    expect(salio.ultimo?.vueltaId).toBe(enFila.ultimo?.vueltaId);
+    // sin vuelta conocida todavía, igual se guarda la fila
+    const sola = aplicarRespuesta(
+      ESTADO_LOCAL_INICIAL,
+      respuestaConFila(null, conFila().fila ?? null),
+      {
+        ahoraMs: 3_000,
+      },
+    ).estado;
+    expect(sola.ultimo?.fila?.posicion).toBe(2);
+    expect(sola.ultimo?.vueltaId).toBeNull();
   });
 
   it('salir de la fila desarma la llegada automatica; tener fila otra vez la rearma', () => {
     const enFila = aplicarRespuesta(ESTADO_LOCAL_INICIAL, conFila(), { ahoraMs: 1_000 }).estado;
     expect(enFila.filaDesarmada).toBe(false);
-    const salio = aplicarRespuesta(enFila, vuelta(V1, null), { ahoraMs: 2_000 }).estado;
+    const salio = aplicarRespuesta(enFila, sinFilaNull(), { ahoraMs: 2_000 }).estado;
     expect(salio.filaDesarmada).toBe(true);
-    expect(aplicarRespuesta(salio, vuelta(V1, null), { ahoraMs: 3_000 }).estado.filaDesarmada).toBe(true);
+    expect(aplicarRespuesta(salio, sinFilaNull(), { ahoraMs: 3_000 }).estado.filaDesarmada).toBe(true);
     expect(aplicarRespuesta(salio, conFila(), { ahoraMs: 4_000 }).estado.filaDesarmada).toBe(false);
   });
 
   it('sin fila previa no se desarma; rearmarFila limpia la marca', () => {
-    expect(aplicarRespuesta(ESTADO_LOCAL_INICIAL, vuelta(V1, null), { ahoraMs: 1 }).estado.filaDesarmada).toBe(false);
+    expect(aplicarRespuesta(ESTADO_LOCAL_INICIAL, sinFilaNull(), { ahoraMs: 1 }).estado.filaDesarmada).toBe(false);
     const desarmado: EstadoLocalVuelta = { ...ESTADO_LOCAL_INICIAL, filaDesarmada: true };
     expect(rearmarFila(desarmado).filaDesarmada).toBe(false);
     expect(rearmarFila(ESTADO_LOCAL_INICIAL)).toBe(ESTADO_LOCAL_INICIAL);

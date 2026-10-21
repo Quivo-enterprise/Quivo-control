@@ -14,23 +14,22 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
   const { vista, ocupado, error, puedeEstoyEnLaFila, salir, estoyEnLaFila } = fila;
 
   if (!vista) {
-    if (!puedeEstoyEnLaFila && !error) return null;
+    // Un error suelto, sin botón ni fila que lo expliquen, no se muestra.
+    if (!puedeEstoyEnLaFila) return null;
     return (
       <View style={styles.contenedor}>
-        {puedeEstoyEnLaFila ? (
-          <Button
-            variant="ghost"
-            loading={ocupado}
-            onPress={estoyEnLaFila}
-            style={styles.respaldo}
-            textStyle={styles.respaldoTexto}
-            leftIcon={<Ionicons name="flag-outline" size={20} color={quivoColors.white} />}
-            accessibilityHint="Te anota en la fila de salida si la app no lo hizo sola"
-            fullWidth
-          >
-            Estoy en la fila
-          </Button>
-        ) : null}
+        <Button
+          variant="ghost"
+          loading={ocupado}
+          onPress={estoyEnLaFila}
+          style={styles.respaldo}
+          textStyle={styles.respaldoTexto}
+          leftIcon={<Ionicons name="flag-outline" size={20} color={quivoColors.white} />}
+          accessibilityHint="Te anota en la fila de salida si la app no lo hizo sola"
+          fullWidth
+        >
+          Estoy en la fila
+        </Button>
         {error ? (
           <Text accessibilityRole="alert" style={styles.error}>
             {error}
@@ -55,6 +54,7 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
         >
           {vista.horaSalidaTexto ?? ' '}
         </Text>
+        {vista.sinActualizar ? <Text style={styles.sinActualizar}>Sin actualizar</Text> : null}
         <View style={styles.fila}>
           <Text
             style={[styles.turno, vista.habilitado && styles.turnoListo]}
@@ -112,6 +112,11 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.85)',
     fontFamily: quivoFonts.bodyMedium,
     fontSize: 13,
+  },
+  sinActualizar: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontFamily: quivoFonts.bodyMedium,
+    fontSize: 11.5,
   },
   turno: {
     color: quivoColors.white,

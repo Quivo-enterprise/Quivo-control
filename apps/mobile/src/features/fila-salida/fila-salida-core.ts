@@ -12,35 +12,31 @@ export const AVISO_ANTES_MS = 60_000;
 export const TEXTO_AVISO_FILA = 'En 1 minuto es tu turno de salida';
 export const TITULO_AVISO_FILA = 'Fila de salida';
 
-function msDe(iso: string): number {
-  const ms = Date.parse(iso);
-  return Number.isFinite(ms) ? ms : NaN;
-}
-
 /** `servidor - local` en ms (positivo = el teléfono va atrasado). 0 si `servidorTs` no parsea. */
-export function desfaseReloj(fila: Pick<EstadoFilaSalida, 'servidorTs'>, recibidoLocalMs: number): number {
-  const servidor = msDe(fila.servidorTs);
+export function desfaseReloj(
+  fila: Pick<EstadoFilaSalida, 'servidorTs'>,
+  recibidoLocalMs: number,
+): number {
+  const servidor = Date.parse(fila.servidorTs);
   return Number.isFinite(servidor) ? servidor - recibidoLocalMs : 0;
 }
 
-/** Hora del servidor estimada a partir del reloj local. */
-export function ahoraCorregido(ahoraLocalMs: number, desfaseMs: number): number {
-  return ahoraLocalMs + desfaseMs;
-}
-
 /** ms que faltan para la hora de salida (negativo = ya pasó). `NaN` si `etaTs` no parsea. */
-export function restanteMs(fila: Pick<EstadoFilaSalida, 'etaTs'>, ahoraCorregidoMs: number): number {
-  return msDe(fila.etaTs) - ahoraCorregidoMs;
+export function restanteMs(
+  fila: Pick<EstadoFilaSalida, 'etaTs'>,
+  ahoraCorregidoMs: number,
+): number {
+  return Date.parse(fila.etaTs) - ahoraCorregidoMs;
 }
 
 /** Instante LOCAL (epoch ms) en que debe sonar el aviso T-1; `null` si no es calculable. */
 export function momentoLocalAviso(
-  fila: Pick<EstadoFilaSalida, 'etaTs' | 'servidorTs'>,
-  recibidoLocalMs: number,
+  fila: Pick<EstadoFilaSalida, 'etaTs'>,
+  desfaseMs: number,
 ): number | null {
-  const eta = msDe(fila.etaTs);
+  const eta = Date.parse(fila.etaTs);
   if (!Number.isFinite(eta)) return null;
-  return eta - desfaseReloj(fila, recibidoLocalMs) - AVISO_ANTES_MS;
+  return eta - desfaseMs - AVISO_ANTES_MS;
 }
 
 /** SALIR se habilita cuando el servidor lo dice o, siendo el primero, cuando llegó su hora (con
@@ -51,21 +47,27 @@ export function habilitadoLocal(fila: EstadoFilaSalida, ahoraCorregidoMs: number
   return fila.posicion === 1 && Number.isFinite(resto) && resto <= 0;
 }
 
+/** Pasada la hora de salida por más de `DEMORA_VISIBLE_MS` (no en el segundo siguiente: el chofer
+ * necesita unos segundos para tocar SALIR). Se ignora `fila.demorado` del servidor a propósito. */
+export const DEMORA_VISIBLE_MS = 60_000;
+
 export function estaDemorado(fila: EstadoFilaSalida, ahoraCorregidoMs: number): boolean {
-  if (fila.demorado) return true;
-  return habilitadoLocal(fila, ahoraCorregidoMs) && restanteMs(fila, ahoraCorregidoMs) < 0;
+  return (
+    habilitadoLocal(fila, ahoraCorregidoMs) &&
+    restanteMs(fila, ahoraCorregidoMs) < -DEMORA_VISIBLE_MS
+  );
 }
 
 /**
- * ¿Toca avisar "falta 1 minuto"? Una sola vez por `etaTs` (`etaAvisado`), cuando faltan entre 0
- * (excluido) y 60 s; nunca si el servidor ya la traía habilitada.
+ * ¿Toca avisar "falta 1 minuto"? Solo al primero de la fila, una sola vez por `etaTs`
+ * (`etaAvisado`), cuando faltan entre 0 (excluido) y 60 s; nunca si el servidor ya la traía habilitada.
  */
 export function debeAvisar(
   fila: EstadoFilaSalida,
   ahoraCorregidoMs: number,
   etaAvisado: string | null,
 ): boolean {
-  if (fila.habilitado || etaAvisado === fila.etaTs) return false;
+  if (fila.posicion !== 1 || fila.habilitado || etaAvisado === fila.etaTs) return false;
   const resto = restanteMs(fila, ahoraCorregidoMs);
   return Number.isFinite(resto) && resto > 0 && resto <= AVISO_ANTES_MS;
 }
@@ -80,7 +82,9 @@ export function formatearCuenta(restante: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 }
 
-export function textoPosicion(fila: Pick<EstadoFilaSalida, 'posicion' | 'total' | 'delantePlaca'>): string {
+export function textoPosicion(
+  fila: Pick<EstadoFilaSalida, 'posicion' | 'total' | 'delantePlaca'>,
+): string {
   const base = `Posición ${fila.posicion} de ${fila.total}`;
   return fila.delantePlaca ? `${base} · delante ${fila.delantePlaca}` : base;
 }
@@ -91,8 +95,9 @@ export function textoHoraSalida(fila: Pick<EstadoFilaSalida, 'etaTs'>): string |
   return hora ? `Salís a las ${hora}` : null;
 }
 
-export function textoTurno(habilitado: boolean, restante: number): string {
-  return habilitado ? 'Es tu turno' : `Te toca en ${formatearCuenta(restante)}`;
+/** La cuenta regresiva va solo en el botón (`textoBoton`): acá no se repite. */
+export function textoTurno(habilitado: boolean): string {
+  return habilitado ? 'Es tu turno' : 'En espera';
 }
 
 export function textoBoton(habilitado: boolean, restante: number): string {

@@ -1,13 +1,16 @@
 import { ApiError } from '../../shared/api/http-client';
 import { filaApi } from '../../shared/api/fila-api';
 import { esErrorAcusePermanente } from '../vuelta-actual/vuelta-actual-core';
-import { solicitarRefresco } from '../vuelta-actual/vuelta-actual-oportunista';
+import {
+  incorporarFilaDeAccion,
+  solicitarRefresco,
+} from '../vuelta-actual/vuelta-actual-oportunista';
 import type { FixFila } from './zona-terminal';
 
 /**
  * Acciones de red de la fila de salida (sin React: las usan el botón y la detección de zona, que
- * también corre en headless). Tras un éxito se pide un refresco de la vuelta actual, que es el
- * canal por el que baja el estado de la fila. Nunca rechazan.
+ * también corre en headless). Tras un éxito se incorpora la `fila` que devuelve el POST al estado
+ * local y se pide un refresco de la vuelta actual (el canal normal del estado). Nunca rechazan.
  */
 
 export type ResultadoFila = { ok: true } | { ok: false; mensaje: string };
@@ -48,7 +51,8 @@ export async function registrarSalida(
     try {
       const token = await obtenerToken();
       if (!token) return { ok: false, mensaje: MENSAJE_SESION };
-      await filaApi.salida(token, { origen });
+      const r = await filaApi.salida(token, { origen });
+      await incorporarFilaDeAccion(r.fila);
       await solicitarRefresco(obtenerToken);
       return { ok: true };
     } catch (error) {
@@ -60,11 +64,20 @@ export async function registrarSalida(
 }
 
 /** `POST /mobile/fila/llegada`: un solo intento (quien llama decide cuándo repetir). */
-export async function registrarLlegada(obtenerToken: ObtenerToken, fix: FixFila): Promise<ResultadoFila> {
+export async function registrarLlegada(
+  obtenerToken: ObtenerToken,
+  fix: FixFila,
+): Promise<ResultadoFila> {
   try {
     const token = await obtenerToken();
     if (!token) return { ok: false, mensaje: MENSAJE_SESION };
-    await filaApi.llegada(token, { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy, tsFix: fix.ts });
+    const r = await filaApi.llegada(token, {
+      lat: fix.lat,
+      lng: fix.lng,
+      accuracy: fix.accuracy,
+      tsFix: fix.ts,
+    });
+    await incorporarFilaDeAccion(r.fila);
     await solicitarRefresco(obtenerToken);
     return { ok: true };
   } catch (error) {

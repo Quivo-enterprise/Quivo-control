@@ -1,4 +1,5 @@
-import type { VueltaActualMovil } from '@quivo/shared';
+import type { EstadoFilaSalida, VueltaActualMovil } from '@quivo/shared';
+import { desfaseReloj } from '../fila-salida/fila-salida-core';
 
 /**
  * Lógica pura (sin React ni módulos nativos) del aviso de designación a Molinos
@@ -32,6 +33,9 @@ export interface EstadoLocalVuelta {
   /** Salió de la fila de salida y todavía no se alejó de la terminal: la detección automática no
    * lo vuelve a encolar (ver `fila-salida/zona-terminal.ts`). Ausente = `false`. */
   filaDesarmada?: boolean;
+  /** `servidorTs - momento de recepción local` (ms) de la última respuesta con fila: base de la
+   * cuenta regresiva. Solo se reescribe si varía más de `TOLERANCIA_DESFASE_MS`. Ausente = sin fila. */
+  desfaseFilaMs?: number;
 }
 
 export const ESTADO_LOCAL_INICIAL: EstadoLocalVuelta = {
@@ -134,8 +138,8 @@ function coordsIguales(a: readonly (readonly number[])[], b: readonly (readonly 
   return true;
 }
 
-/** Incluye `servidorTs`: mientras hay fila cada respuesta es "distinta", y eso es lo que refresca
- * `actualizadoEn`, que es el momento de recepción con el que se calcula el desfase del reloj. */
+/** Excluye `servidorTs` a propósito: cambia en cada respuesta y reescribiría SQLite en cada poll;
+ * su efecto (el desfase del reloj) se guarda aparte en `desfaseFilaMs`. */
 function filasIguales(a: VueltaActualMovil['fila'], b: VueltaActualMovil['fila']): boolean {
   if (!a || !b) return (a ?? null) === (b ?? null);
   return (
@@ -145,8 +149,7 @@ function filasIguales(a: VueltaActualMovil['fila'], b: VueltaActualMovil['fila']
     a.etaTs === b.etaTs &&
     a.esperaMs === b.esperaMs &&
     a.habilitado === b.habilitado &&
-    a.demorado === b.demorado &&
-    a.servidorTs === b.servidorTs
+    a.demorado === b.demorado
   );
 }
 
@@ -176,6 +179,9 @@ export function respuestasIguales(a: VueltaActualMovil | null, b: VueltaActualMo
   return coordsIguales(da.tramo.coordinates, db.tramo.coordinates);
 }
 
+/** Cuánto puede variar el desfase del reloj antes de que valga la pena persistirlo de nuevo. */
+export const TOLERANCIA_DESFASE_MS = 1_000;
+
 export interface ContextoRespuesta {
   /** Reloj del teléfono al recibir la respuesta. */
   ahoraMs: number;
@@ -188,14 +194,20 @@ export interface ContextoRespuesta {
  *   el anuncio salió bien (`marcarAnunciada`); si falló, se reintenta en las consultas
  *   siguientes hasta `MAX_INTENTOS_ANUNCIO`.
  * - Una designación nueva (clave distinta) limpia una cancelación pendiente de la anterior.
+ * - `fila` AUSENTE (p. ej. la respuesta del acuse) conserva la fila previa y no toca
+ *   `filaDesarmada`; solo un `null` explícito significa "salió de la fila".
  * - Una respuesta idéntica a la anterior no cambia nada: devuelve el MISMO `estado` (misma
  *   referencia) y `cambio: false`, para no reescribir SQLite ni re-renderizar en cada poll.
  */
 export function aplicarRespuesta(
   estado: EstadoLocalVuelta,
-  nuevo: VueltaActualMovil,
+  respuesta: VueltaActualMovil,
   ctx: ContextoRespuesta = { ahoraMs: Date.now() },
 ): { estado: EstadoLocalVuelta; avisos: AvisoVuelta[]; cambio: boolean } {
+  const nuevo =
+    respuesta.fila === undefined && estado.ultimo?.fila
+      ? { ...respuesta, fila: estado.ultimo.fila }
+      : respuesta;
   const claveNueva = claveDesignacion(nuevo.vueltaId, nuevo.designacion);
   const cancelBase =
     claveNueva && estado.cancelacionPendiente !== claveCancelacion(claveNueva)
@@ -208,19 +220,28 @@ export function aplicarRespuesta(
   const iguales = respuestasIguales(estado.ultimo, nuevo);
   const marcaVencida =
     estado.actualizadoEn === null || ctx.ahoraMs - estado.actualizadoEn >= REFRESCO_ACTUALIZADO_MS;
-  // Salir de la fila (la fila pasa de abierta a ausente) desarma la llegada automática; volver a
-  // tener fila (p. ej. con el botón "Estoy en la fila") la rearma.
-  const filaDesarmada = nuevo.fila
+  // Salir de la fila (`null` explícito tras tener una) desarma la llegada automática; volver a
+  // tener fila (p. ej. con el botón "Estoy en la fila") la rearma; sin el campo no se toca.
+  const filaDesarmada = respuesta.fila
     ? false
-    : estado.ultimo?.fila
+    : respuesta.fila === null && estado.ultimo?.fila
       ? true
       : estado.filaDesarmada === true;
+  let desfaseFilaMs = estado.desfaseFilaMs;
+  if (respuesta.fila) {
+    const d = desfaseReloj(respuesta.fila, ctx.ahoraMs);
+    if (desfaseFilaMs === undefined || Math.abs(d - desfaseFilaMs) > TOLERANCIA_DESFASE_MS)
+      desfaseFilaMs = d;
+  } else if (respuesta.fila === null) {
+    desfaseFilaMs = undefined;
+  }
   const cambio =
     !iguales ||
     avisos.length > 0 ||
     marcaVencida ||
     cancelacionPendiente !== estado.cancelacionPendiente ||
-    filaDesarmada !== (estado.filaDesarmada === true);
+    filaDesarmada !== (estado.filaDesarmada === true) ||
+    desfaseFilaMs !== estado.desfaseFilaMs;
   if (!cambio) return { estado, avisos: [], cambio: false };
 
   const intentos: Record<string, number> = {};
@@ -240,6 +261,7 @@ export function aplicarRespuesta(
       ultimo: iguales && estado.ultimo ? estado.ultimo : nuevo,
       cancelacionPendiente,
       filaDesarmada,
+      desfaseFilaMs,
       actualizadoEn: ctx.ahoraMs,
       intentosAnuncio: intentos,
     },
@@ -400,4 +422,13 @@ export function designacionVigente(estado: EstadoLocalVuelta): Designacion | nul
 /** La detección de zona se alejó lo suficiente: la llegada automática vuelve a estar armada. */
 export function rearmarFila(estado: EstadoLocalVuelta): EstadoLocalVuelta {
   return estado.filaDesarmada === true ? { ...estado, filaDesarmada: false } : estado;
+}
+
+/** Respuesta sintética con la `fila` que devolvió un POST de la fila (llegada/salida), sobre la
+ * última vuelta conocida: se incorpora con `aplicarRespuesta` como si fuera un GET. */
+export function respuestaConFila(
+  ultimo: VueltaActualMovil | null,
+  fila: EstadoFilaSalida | null,
+): VueltaActualMovil {
+  return { vueltaId: null, numero: null, designacion: null, enEspera: null, ...ultimo, fila };
 }

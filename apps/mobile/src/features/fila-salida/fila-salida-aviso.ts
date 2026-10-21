@@ -12,7 +12,7 @@ const MARGEN_MINIMO_MS = 2_000;
 
 /**
  * Mantiene UNA notificación local programada para "falta 1 minuto" (T-1) de la fila de salida,
- * a la hora corregida por el desfase del reloj. Se llama cada vez que cambia el estado local de la
+ * a la hora corregida por el desfase del reloj (`desfaseFilaMs`). Se llama cada vez que cambia el estado local de la
  * vuelta (foreground y headless): reprograma (mismo `identifier` = reemplazo) y cancela la del
  * `etaTs` anterior cuando cambia, el trufi sale de la fila o se habilita. Best-effort: nunca rechaza.
  */
@@ -28,12 +28,13 @@ export async function sincronizarAvisoFila(
       await cancelarAvisoProgramado(idAvisoFila(anterior.etaTs));
     }
     if (!fila) return;
-    if (fila.habilitado) {
+    // Solo se avisa al primero: el 2.º recibiría un T-1 que se vuelve a calcular al pasar a 1.º.
+    if (fila.habilitado || fila.posicion !== 1) {
       await cancelarAvisoProgramado(idAvisoFila(fila.etaTs));
       return;
     }
-    if (nuevo.actualizadoEn === null) return;
-    const momento = momentoLocalAviso(fila, nuevo.actualizadoEn);
+    if (nuevo.desfaseFilaMs === undefined) return;
+    const momento = momentoLocalAviso(fila, nuevo.desfaseFilaMs);
     if (momento === null || momento - ahoraMs < MARGEN_MINIMO_MS) return;
     await programarAvisoEnCanal({
       identifier: idAvisoFila(fila.etaTs),

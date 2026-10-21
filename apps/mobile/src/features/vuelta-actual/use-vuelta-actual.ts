@@ -45,10 +45,15 @@ export interface EstadoVueltaActualUi {
   sinActualizar: boolean;
   /** Minutos que faltan para salir de Molinos; `null` = no está en espera (o cache viejo). */
   restanteEspera: number | null;
-  /** Fila de salida de la terminal (del mismo cache); `null` = no está en la fila o el cache es viejo. */
+  /** Fila de salida de la terminal (del mismo cache); `null` = no está en la fila. Con recorrido
+   * activo se sigue mostrando aunque el cache sea viejo (ver `filaSinActualizar`). */
   fila: EstadoFilaSalida | null;
-  /** Reloj del teléfono (epoch ms) al recibir `fila`: base del desfase con el reloj del servidor. */
-  filaRecibidaEn: number | null;
+  /** Hay `fila` pero la última consulta buena es vieja (> 15 min). */
+  filaSinActualizar: boolean;
+  /** `servidorTs - recepción local` (ms) de `fila`: base de la cuenta regresiva. */
+  desfaseFilaMs: number | null;
+  /** Salió de la fila y todavía no se alejó de la terminal (no se ofrece "Estoy en la fila"). */
+  filaDesarmada: boolean;
   entenderDesignacion: () => void;
   entenderCancelacion: () => void;
 }
@@ -144,14 +149,18 @@ export function useVueltaActual({ sesionId, tracking, obtenerAccessToken }: Para
     [tracking, cacheViejo, enEspera, designacionActiva, ahora],
   );
 
+  const fila = tracking ? (estado.ultimo?.fila ?? null) : null;
+
   return {
     designacionPendiente: tracking ? designacionPendienteDeAviso(estado) : null,
     cancelacionPendiente: tracking && estado.cancelacionPendiente !== null,
     designacionActiva,
     sinActualizar: cacheViejo && designacionCache !== null,
     restanteEspera,
-    fila: tracking && !cacheViejo ? (estado.ultimo?.fila ?? null) : null,
-    filaRecibidaEn: estado.actualizadoEn,
+    fila,
+    filaSinActualizar: cacheViejo && fila !== null,
+    desfaseFilaMs: estado.desfaseFilaMs ?? null,
+    filaDesarmada: estado.filaDesarmada === true,
     entenderDesignacion: () => {
       if (tracking) void entenderDesignacion(obtenerToken, sesionId);
     },

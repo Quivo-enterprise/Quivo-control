@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EstadoFilaSalida } from '@quivo/shared';
-import { anunciarAvisoEnCanal } from '../operacion/anuncio-punto-control';
+import { anunciarAvisoEnCanal, cancelarProgramada } from '../operacion/anuncio-punto-control';
 import { registrarLlegada, registrarSalida } from './fila-salida-acciones';
 import { ultimoFixFila } from './fila-salida-deteccion';
 import {
   TEXTO_AVISO_FILA,
   TITULO_AVISO_FILA,
-  ahoraCorregido,
   debeAvisar,
-  desfaseReloj,
   estaDemorado,
   habilitadoLocal,
   idAvisoFila,
@@ -27,7 +25,12 @@ let etaAvisado: string | null = null;
 interface Params {
   /** Del cache de vuelta-actual (`useVueltaActual`): este hook no consulta la red por su cuenta. */
   fila: EstadoFilaSalida | null;
-  recibidoEn: number | null;
+  /** Cache de más de 15 min: se muestra la fila pero marcada y sin aviso de foreground. */
+  sinActualizar: boolean;
+  /** `servidorTs - recepción local` (ms) de `fila`; `null` = desconocido (se asume 0). */
+  desfaseMs: number | null;
+  /** Salió de la fila y todavía no se alejó de la terminal. */
+  desarmada: boolean;
   tracking: boolean;
   terminal: TerminalZona | null;
   posicion: { lat: number; lng: number } | null;
@@ -43,6 +46,7 @@ export interface VistaFilaSalida {
   anuncioAccesible: string;
   habilitado: boolean;
   demorado: boolean;
+  sinActualizar: boolean;
 }
 
 export interface FilaSalidaUi {
@@ -57,7 +61,9 @@ export interface FilaSalidaUi {
 
 export function useFilaSalida({
   fila,
-  recibidoEn,
+  sinActualizar,
+  desfaseMs,
+  desarmada,
   tracking,
   terminal,
   posicion,
@@ -80,56 +86,75 @@ export function useFilaSalida({
     return () => clearInterval(id);
   }, [hayFila]);
 
-  // Un error de una acción deja de valer cuando cambia el estado de la fila.
+  const puedeEstoyEnLaFila =
+    tracking &&
+    !fila &&
+    !desarmada &&
+    terminal !== null &&
+    posicion !== null &&
+    estaCercaDeTerminal(posicion, terminal);
+
+  // Un error de una acción deja de valer cuando cambia la fila o desaparece el botón que lo originó.
   useEffect(() => {
     setError(null);
-  }, [hayFila]);
+  }, [hayFila, puedeEstoyEnLaFila]);
 
   const calculo = useMemo(() => {
     if (!fila) return null;
-    const desfase = desfaseReloj(fila, recibidoEn ?? ahora);
-    const ahoraC = ahoraCorregido(ahora, desfase);
-    return { ahoraC, restante: restanteMs(fila, ahoraC), habilitado: habilitadoLocal(fila, ahoraC) };
-  }, [fila, recibidoEn, ahora]);
+    const ahoraC = ahora + (desfaseMs ?? 0);
+    return {
+      ahoraC,
+      restante: restanteMs(fila, ahoraC),
+      habilitado: habilitadoLocal(fila, ahoraC),
+    };
+  }, [fila, desfaseMs, ahora]);
 
   // Aviso T-1 en primer plano (la notificación programada cubre la pantalla apagada).
   useEffect(() => {
-    if (!fila || !calculo || !debeAvisar(fila, calculo.ahoraC, etaAvisado)) return;
+    if (!fila || !calculo || sinActualizar || !debeAvisar(fila, calculo.ahoraC, etaAvisado)) return;
     etaAvisado = fila.etaTs;
-    void anunciarAvisoEnCanal({
-      identifier: idAvisoFila(fila.etaTs),
-      titulo: TITULO_AVISO_FILA,
-      cuerpo: TEXTO_AVISO_FILA,
-      voz: TEXTO_AVISO_FILA,
-    });
-  }, [fila, calculo]);
+    const identifier = idAvisoFila(fila.etaTs);
+    // Se cancela la programada (sin tocar lo presentado) para que no suene dos veces.
+    void cancelarProgramada(identifier).then(() =>
+      anunciarAvisoEnCanal({
+        identifier,
+        titulo: TITULO_AVISO_FILA,
+        cuerpo: TEXTO_AVISO_FILA,
+        voz: TEXTO_AVISO_FILA,
+      }),
+    );
+  }, [fila, calculo, sinActualizar]);
 
   const vista = useMemo<VistaFilaSalida | null>(() => {
     if (!fila || !calculo) return null;
     return {
       posicionTexto: textoPosicion(fila),
       horaSalidaTexto: textoHoraSalida(fila),
-      turnoTexto: textoTurno(calculo.habilitado, calculo.restante),
+      turnoTexto: textoTurno(calculo.habilitado),
       botonTexto: textoBoton(calculo.habilitado, calculo.restante),
       anuncioAccesible: textoAccesible(calculo.habilitado, calculo.restante),
       habilitado: calculo.habilitado,
       demorado: estaDemorado(fila, calculo.ahoraC),
+      sinActualizar,
     };
-  }, [fila, calculo]);
+  }, [fila, calculo, sinActualizar]);
 
-  const ejecutar = useCallback(async (accion: () => Promise<{ ok: true } | { ok: false; mensaje: string }>) => {
-    if (ocupadoRef.current) return;
-    ocupadoRef.current = true;
-    setOcupado(true);
-    setError(null);
-    try {
-      const r = await accion();
-      if (!r.ok) setError(r.mensaje);
-    } finally {
-      ocupadoRef.current = false;
-      setOcupado(false);
-    }
-  }, []);
+  const ejecutar = useCallback(
+    async (accion: () => Promise<{ ok: true } | { ok: false; mensaje: string }>) => {
+      if (ocupadoRef.current) return;
+      ocupadoRef.current = true;
+      setOcupado(true);
+      setError(null);
+      try {
+        const r = await accion();
+        if (!r.ok) setError(r.mensaje);
+      } finally {
+        ocupadoRef.current = false;
+        setOcupado(false);
+      }
+    },
+    [],
+  );
 
   const salir = useCallback(() => {
     void ejecutar(() => registrarSalida(obtenerToken, 'boton'));
@@ -138,13 +163,11 @@ export function useFilaSalida({
   const estoyEnLaFila = useCallback(() => {
     void ejecutar(async () => {
       const fix = ultimoFixFila();
-      if (!fix) return { ok: false, mensaje: 'Todavía no tengo tu ubicación. Esperá unos segundos.' };
+      if (!fix)
+        return { ok: false, mensaje: 'Todavía no tengo tu ubicación. Esperá unos segundos.' };
       return registrarLlegada(obtenerToken, fix);
     });
   }, [ejecutar, obtenerToken]);
-
-  const puedeEstoyEnLaFila =
-    tracking && !fila && terminal !== null && posicion !== null && estaCercaDeTerminal(posicion, terminal);
 
   return { vista, ocupado, error, puedeEstoyEnLaFila, salir, estoyEnLaFila };
 }
