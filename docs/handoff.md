@@ -13,6 +13,10 @@ que vence el 26/10). **Miércoles 21 y jueves 22/10: dos pilotos con pasantes en
 Calendario y propuesta de deploy en [`docs/runbook-dia-30.md`](runbook-dia-30.md): r21 **antes** del piloto del 21 para
 que esos dos días lo prueben en la calle; congelamiento después del piloto del 22.
 
+- **Feature nueva aprobada (20/10): fila de salida con frecuencias en Salomón Romero.** Plan en
+  [`plan-fila-salida-sr.md`](plan-fila-salida-sr.md). Decisiones del CTO: frecuencia = espera después del de adelante
+  (una sola fila); frecuencia base por parada y reglas del día hasta medianoche; se bloquea SALIR (no COMENZAR RUTA);
+  admin y operador manejan fila y frecuencias, grupos solo admin. Entrega en 4 PRs + piloto; merges después de D.
 - **Plan de escalamiento a 30 CERRADO (20/10, CTO).** Tabla de estado en
   [`plan-escalabilidad-30.md`](plan-escalabilidad-30.md). Backlog que queda: archivo GPS (A5, **antes de enero**),
   vencimiento de rotaciones al worker (A4), Fase 2 (orden por dispositivo; requisito para subir la concurrencia del
