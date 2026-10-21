@@ -1,5 +1,5 @@
 /**
- * Crea el **piloto de la línea 16 con 3 trufis** en el sindicato piloto de producción, **hablando
+ * Crea el **piloto de la línea 16 con 8 trufis** en el sindicato piloto de producción, **hablando
  * SOLO con la API HTTP pública** (nunca con la base: Cloud SQL es de IP privada). Mismo patrón que
  * `sembrar-piloto-produccion.ts` / `cargar-linea-16.ts`: login de admin por variables de entorno
  * (fail-closed), 401 aborta, 429 con reintento, idempotente por lookups (los ids los pone el
@@ -9,11 +9,11 @@
  *
  * ## ⚠ ADVERTENCIA — LEER ANTES DE GENERAR OTRAS ROTACIONES
  *
- * Mientras los vehículos `1616PIL`/`1616PIB`/`1616PIC` y sus conductores estén ACTIVOS, cualquier
+ * Mientras los vehículos `1616PIL`/`PIB`/`PIC`/`PID`/`PIE`/`PIF`/`PIG`/`PIH` y sus conductores estén ACTIVOS, cualquier
  * `POST /rotaciones` (generar) que se lance desde el panel para este sindicato los incluirá en el
  * reparto round-robin. Al terminar el piloto (2026-10-26) —o antes de generar otras rotaciones— correr:
  *     tsx scripts/crear-piloto-linea-16.ts --desactivar --apply
- * (deja inactivos los 3 vehículos, los 3 conductores y el socio placeholder).
+ * (deja inactivos los 8 vehículos, los 8 conductores y el socio placeholder).
  *
  * Nota: cliente HTTP y login están duplicados a propósito con los otros scripts standalone de
  * `scripts/`. Las funciones PURAS (hoy en La Paz, plan de faltantes, decisión de anular, fusión del
@@ -21,17 +21,22 @@
  *
  * ## Qué crea (todo en el sindicato "Sindicato Piloto — Producción")
  *
- *   0. Un **socio** placeholder (propietario de los 3 vehículos).
- *   1. Tres **vehículos** `1616PIL`, `1616PIB`, `1616PIC` (placa PTA válida: 4 dígitos + 3 letras),
+ *   0. Un **socio** placeholder (propietario de los 8 vehículos).
+ *   1. Ocho **vehículos** `1616PIL`, `1616PIB`, `1616PIC`, `1616PID`, `1616PIE`, `1616PIF`, `1616PIG`, `1616PIH` (placa PTA válida: 4 dígitos + 3 letras),
  *      `estado` activo. El esquema exige tipo/marca/modelo/color/capacidad; NO se inventan datos
  *      reales: tipo `otro` (exige admin_quivo, que es quien corre esto), marca `Piloto`, modelo
  *      `Linea 16 piloto`, color `otro`, capacidad 12 (placeholder, NO un dato del vehículo). Socio
  *      propietario placeholder "Socio Piloto Línea Dieciséis" (CI `9000116 CB`): la API exige socio
  *      para activar un vehículo. Cuando haya móviles reales, editar esos campos desde el panel.
- *   2. Tres **conductores** (CI sintéticos, nombres sin dígitos: `NombrePersonaSchema` los rechaza):
+ *   2. Ocho **conductores** (CI sintéticos, nombres sin dígitos: `NombrePersonaSchema` los rechaza):
  *        1616PIL  "Piloto Línea Dieciséis"          CI 9000016 CB  LIC-9000016   (el piloto original)
  *        1616PIB  "Piloto Línea Dieciséis Bravo"    CI 9000017 CB  LIC-9000017
  *        1616PIC  "Piloto Línea Dieciséis Charlie"  CI 9000018 CB  LIC-9000018
+ *        1616PID  "Piloto Línea Dieciséis Delta"    CI 9000019 CB  LIC-9000019
+ *        1616PIE  "Piloto Línea Dieciséis Eco"      CI 9000020 CB  LIC-9000020
+ *        1616PIF  "Piloto Línea Dieciséis Fox"      CI 9000021 CB  LIC-9000021
+ *        1616PIG  "Piloto Línea Dieciséis Golf"     CI 9000022 CB  LIC-9000022
+ *        1616PIH  "Piloto Línea Dieciséis Hotel"    CI 9000023 CB  LIC-9000023
  *   3. **Credencial móvil**: el login vigente es de UN paso (`POST /mobile/auth/sesion`): placa +
  *      **PIN del CONDUCTOR** (+ deviceId). Por default solo se fija el PIN del conductor
  *      (`PUT /mobile/credenciales/conductores/:id`); el PIN del vehículo (solo login LEGADO) se fija
@@ -57,7 +62,7 @@
  *   - Socio, vehículos, conductores y PIN se crean ANTES de anular: la ventana sin login es solo
  *     los POST de asignaciones + publicar.
  *   - Pre-vuelo: `GET /reportes/en-vivo` (en-vivo.controller.ts, solo lectura). Si hay una sesión
- *     activa (`activa` y `estadoFrescura` reportando/detenido) en alguno de los 3 vehículos, se
+ *     activa (`activa` y `estadoFrescura` reportando/detenido) en alguno de los 8 vehículos, se
  *     aborta antes de anular, salvo `--forzar-anular` (aun así la sesión abierta no se corta; el
  *     riesgo es que un re-login/cambio de dispositivo falle durante la ventana).
  *   - `publicar` se reintenta 3 veces con backoff. Si igual falla: mensaje MUY visible con el
@@ -70,7 +75,7 @@
  * La API NO permite crear una rotación vacía: `POST /rotaciones` es `generar()` y SIEMPRE reparte
  * round-robin entre TODOS los vehículos activos del sindicato. Se usa con UNA fecha, UN horario y UNA
  * ruta (= 1 asignación) y se espera `1616PIL`; para eso en la primera corrida se crea/activa SOLO
- * el piloto 1 antes de generar, y los otros dos después. Si `generar` devuelve algo distinto de
+ * el piloto 1 antes de generar, y los otros siete después. Si `generar` devuelve algo distinto de
  * exactamente 1 asignación de `1616PIL`, se BORRAN las que creó (es borrador, sin sesiones), se
  * verifica por GET y se aborta sin publicar. El conductor que le pone (el primero por nombre) se
  * corrige con `PATCH`. Es una rotación NUEVA y separada de la del piloto de 6 vehículos.
@@ -81,7 +86,7 @@
  *   default "Sindicato Piloto — Producción"). Línea: código '16' + única ruta `circuito` activa.
  *   Vehículo: por placa normalizada. Conductor: por CI dentro del sindicato. Rotación: por `periodo`.
  *   Asignaciones: por (vehículo, fecha, horario). Re-correr con todo ya creado = 0 escrituras. Los PIN
- *   NO se regeneran si el conductor ya existía, salvo `--reset-credenciales` (afecta a los 3; rotar un
+ *   NO se regeneran si el conductor ya existía, salvo `--reset-credenciales` (afecta a los 8; rotar un
  *   PIN revoca sus sesiones activas). La API no expone si un conductor tiene PIN: si una corrida murió
  *   entre crear el conductor y fijar su PIN, usar `--reset-credenciales`.
  *
@@ -166,6 +171,11 @@ const PILOTOS: readonly PilotoDef[] = [
   { placa: '1616PIL', conductor: { nombre: 'Piloto Línea Dieciséis', documentoIdentidad: '9000016 CB', licenciaConducir: 'LIC-9000016' }, nuevo: false },
   { placa: '1616PIB', conductor: { nombre: 'Piloto Línea Dieciséis Bravo', documentoIdentidad: '9000017 CB', licenciaConducir: 'LIC-9000017' }, nuevo: true },
   { placa: '1616PIC', conductor: { nombre: 'Piloto Línea Dieciséis Charlie', documentoIdentidad: '9000018 CB', licenciaConducir: 'LIC-9000018' }, nuevo: true },
+  { placa: '1616PID', conductor: { nombre: 'Piloto Línea Dieciséis Delta', documentoIdentidad: '9000019 CB', licenciaConducir: 'LIC-9000019' }, nuevo: true },
+  { placa: '1616PIE', conductor: { nombre: 'Piloto Línea Dieciséis Eco', documentoIdentidad: '9000020 CB', licenciaConducir: 'LIC-9000020' }, nuevo: true },
+  { placa: '1616PIF', conductor: { nombre: 'Piloto Línea Dieciséis Fox', documentoIdentidad: '9000021 CB', licenciaConducir: 'LIC-9000021' }, nuevo: true },
+  { placa: '1616PIG', conductor: { nombre: 'Piloto Línea Dieciséis Golf', documentoIdentidad: '9000022 CB', licenciaConducir: 'LIC-9000022' }, nuevo: true },
+  { placa: '1616PIH', conductor: { nombre: 'Piloto Línea Dieciséis Hotel', documentoIdentidad: '9000023 CB', licenciaConducir: 'LIC-9000023' }, nuevo: true },
 ];
 const PILOTO_1 = PILOTOS[0]!;
 
@@ -199,10 +209,10 @@ Uso:
 
 Opciones:
   --apply                Escribe vía la API. Sin esto: dry-run (login + GETs, NO escribe).
-  --reset-credenciales   Re-fija el PIN de los 3 conductores aunque ya existan (revoca sus sesiones activas).
+  --reset-credenciales   Re-fija el PIN de los 8 conductores aunque ya existan (revoca sus sesiones activas).
   --pin-vehiculo         También fija el PIN del vehículo 1616PIL (solo lo usa el login legado).
   --forzar-anular        Anula la rotación publicada aunque haya una sesión activa en alguno de los vehículos.
-  --desactivar           Fin del piloto: deja inactivos los 3 vehículos, los 3 conductores y el socio (no crea nada).
+  --desactivar           Fin del piloto: deja inactivos los 8 vehículos, los 8 conductores y el socio (no crea nada).
   --help                 Esta ayuda.
 
 Opcionales: QUIVO_SINDICATO_ID, QUIVO_SINDICATO_NOMBRE, QUIVO_PILOTO16_PIN, QUIVO_PILOTO16_VEHICULO_PIN,
@@ -502,7 +512,7 @@ interface Descubierto {
   motivoAccion: string;
 }
 
-/** Sesiones activas ahora en los 3 vehículos (GET /v1/reportes/en-vivo, solo lectura). */
+/** Sesiones activas ahora en los 8 vehículos (GET /v1/reportes/en-vivo, solo lectura). */
 async function sesionesActivasPilotos(): Promise<SesionEnVivoLike[]> {
   const sesiones = await leer<SesionEnVivoLike[]>('/reportes/en-vivo');
   return sesionesBloqueantes(sesiones, PILOTOS.map((p) => p.placa));
@@ -973,7 +983,7 @@ const ADVERTENCIA_ROTACIONES =
   'para este sindicato los incluirá en el reparto. Cuando termine el piloto (2026-10-26) o antes de generar otras rotaciones, correr:\n' +
   '    tsx scripts/crear-piloto-linea-16.ts --desactivar --apply';
 
-/** Fin del piloto: deja inactivos los 3 vehículos, los 3 conductores y el socio. Idempotente, no crea nada. */
+/** Fin del piloto: deja inactivos los 8 vehículos, los 8 conductores y el socio. Idempotente, no crea nada. */
 async function desactivar(sindicato: SindicatoApi): Promise<void> {
   console.log('\n--- Desactivar piloto (PATCH estado → inactivo) ---');
   const vehiculos = (await leer<VehiculoApi[]>('/vehiculos')).filter((v) => v.sindicatoId === sindicato.id);
@@ -1022,12 +1032,12 @@ async function main(): Promise<void> {
   leerPinEnv('QUIVO_PILOTO16_VEHICULO_PIN');
 
   console.log('='.repeat(90));
-  console.log(`Piloto línea 16 (3 trufis) — API ${API_URL} — modo: ${APLICAR ? 'APPLY (escribe vía la API)' : 'DRY-RUN (solo lecturas; no escribe nada)'}`);
+  console.log(`Piloto línea 16 (8 trufis) — API ${API_URL} — modo: ${APLICAR ? 'APPLY (escribe vía la API)' : 'DRY-RUN (solo lecturas; no escribe nada)'}`);
   for (const p of PILOTOS) {
     const f = fechasPorPlaca.get(p.placa)!;
     console.log(`  ${p.placa} · "${p.conductor.nombre}" · ${f.length} día(s): ${f[0]} … ${f[f.length - 1]} · horario ${HORARIO}`);
   }
-  if (RESET_CREDENCIALES) console.log('--reset-credenciales: se re-fijará el PIN de los 3 conductores.');
+  if (RESET_CREDENCIALES) console.log('--reset-credenciales: se re-fijará el PIN de los 8 conductores.');
   if (FORZAR_ANULAR) console.log('--forzar-anular: se ignoran sesiones activas al anular.');
   console.log(ADVERTENCIA_ROTACIONES.replace(/^/gm, '  '));
   console.log('='.repeat(90));
