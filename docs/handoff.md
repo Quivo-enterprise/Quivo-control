@@ -30,9 +30,7 @@ republicar la OTA anterior ("fix: reconciliar Comenzar/Finalizar con el GPS nati
   `quivo-api-00027-g4g` 100 %** (health ok, db+redis up; `/v1/mobile/fila/llegada` sin token ⇒ 401), **worker en
   `api:r22-20261021`**. **Web:** el 1.er intento cortó en preflight por falta de `GOOGLE_MAPS_MAP_ID` (sin efectos);
   relanzado con `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh r22-20261021 --solo web`
-  (log en job tmp `deploy-r22-web.log`). **A las 09:01 seguía corriendo; prod web seguía en `quivo-web-00012-8wn`
-  (`web:r18-20261017`). VERIFICAR al retomar** (`gcloud run services describe quivo-web … --format='value(spec.template.spec.containers[0].image)'`
-  debe dar `web:r22-20261021`); si no, re-correr ese comando.
+  (log en job tmp `deploy-r22-web.log`). **Terminó OK: web `quivo-web-00013-gms` (`web:r22-20261021`), https://quivo-web-hjqvfgsdnq-tl.a.run.app.**
 - **OTA: NO publicada todavía.** El 1.er intento del CTO se canceló solo: `publicar-ota.sh` pide `[y/N]` y `!` no
   pasa stdin. Comando para el CTO:
   `! cd ~/Documents/Quivo-App/Quivo-control/apps/mobile && printf 'y\n' | ./scripts/publicar-ota.sh "Fila de salida en Salomón Romero (r22)" 2>&1 | grep -v '"type":"dir"' | tail -40`.
@@ -40,7 +38,7 @@ republicar la OTA anterior ("fix: reconciliar Comenzar/Finalizar con el GPS nati
   con `npx eas-cli update:list --branch production --limit 2`.
 
 **Pendiente antes de las 15:00 (en orden):**
-1. Confirmar web r22 (arriba) y publicar la OTA (CTO).
+1. Publicar la OTA (CTO). Web r22 ya está.
 2. Panel (CTO): Salomón Romero con `rol='terminal'` en la ruta de la L16 (puntos de control) y **frecuencia base 6
    min** en `/salidas`. No se leyó prod para saber si ya es terminal.
 3. Prueba en la parada (el CTO estará en SR) antes de las 13:30, con un teléfono con la OTA: entrada automática a la
