@@ -19,6 +19,10 @@
 | Vie 23/10 | Ensayo de login: cada chofer entra una vez en su teléfono (checklist de abajo) | CTO | [ ] |
 
 Datos para volver atrás:
+- **r22 (21/10, fila de salida, decisión del CTO para el piloto de las 15:00):** API `quivo-api-00027-g4g` (imagen
+  `api:r22-20261021`), worker en `api:r22-20261021`, migración `20261020120000_fila_salida` aplicada (aditiva: r21
+  corre igual con ella). Volver atrás = API a `quivo-api-00026-tvm` + worker a `api:r21-20261020` + republicar la OTA
+  `9306212c…`. Web r22 y OTA de la fila: ver el punto de retome del 21/10 en `handoff.md`.
 - Revisión de la API anterior a r21: `quivo-api-00025-vrj` (r20). Revisión r21: `quivo-api-00026-tvm` (imagen `api:r21-20261020`, 20/10 22:14). Worker en `api:r21-20261020`.
 - Imagen del worker anterior: `southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api:r20-20261019`.
 - OTA vigente en los teléfonos: grupo `9306212c-fa6b-46f5-9186-7de1879dd171`, update Android `01a1575f…` (runtime
