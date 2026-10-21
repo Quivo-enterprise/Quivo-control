@@ -6,7 +6,30 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-20 (leer primero): ensayo B corrido (#208) y escalera de costos
+## Punto de retome — 2026-10-20, tarde (leer primero): fecha de D, Vecinos en la escalera, mapa de la línea
+
+**Día D = sábado 24/10** (supuesto: "el sábado que viene", dicho el martes 20/10; si es el 31, extender el piloto L16,
+que vence el 26/10). **Miércoles 21 y jueves 22/10: dos pilotos con pasantes en unos 5 trufis** (no los 30).
+Calendario y propuesta de deploy en [`docs/runbook-dia-30.md`](runbook-dia-30.md): r21 **antes** del piloto del 21 para
+que esos dos días lo prueben en la calle; congelamiento después del piloto del 22.
+
+- **Presupuesto:** el CTO no quiere monto; solo saber cuánto se gasta. Lo cubre el export a BigQuery (abajo).
+  `observabilidad-gcp.sh` ya omite el presupuesto si falta `BUDGET_USD`; no hace falta cambiar código.
+- **Repo público** hasta que vuelvan los minutos de Actions en privado (1/11). Decisión del CTO; objeción registrada
+  (código, historial e infra expuestos). Credenciales demo de dev en el repo: el CTO las rota antes del piloto real.
+- **Escalera de costos v2:** Vecinos de la ruta no estaba en lo medido (logs del 14/10; Vecinos llegó con el APK 16 el
+  17/10). Suma 2 req/min por trufi (poll 30 s, del código, sin medir): 30 trufis $199 hoy / $106 optimizada; 600:
+  $640 / $378. Sección nueva: **mapa de la línea en vivo para el chofer**. Si la consulta de Vecinos devuelve la línea
+  entera cada 30 s, el costo es casi solo egreso: $0,13/mes con 30 y $13/mes con 600. Con una consulta propia cada 10 s:
+  $15 a $124/mes. El límite real son los megas del chofer, unos 190 MB/mes con 150 trufis por línea si se manda
+  compacto. Ver [`docs/costos-escalera-2026-10.md`](costos-escalera-2026-10.md) y la página.
+- **"Actividad física" (`ACTIVITY_RECOGNITION`):** no entra al checklist. Solo acelera detectar que el trufi arrancó.
+  El tracking no depende de él (`changePace(true)` + `disableStopDetection`, ver `permiso-actividad.ts`). Si el
+  teléfono lo pide: Permitir; si el chofer lo deniega, no pasa nada.
+- **gcloud de esta máquina con la sesión vencida** ("Reauthentication failed"): el CTO corre `gcloud auth login`. Sin
+  eso, Claude no puede mirar logs ni métricas el día D.
+
+## Punto de retome — 2026-10-20 (anterior): ensayo B corrido (#208) y escalera de costos
 
 **OTA vigente en los teléfonos:** grupo `9306212c-fa6b-46f5-9186-7de1879dd171`, update Android `01a1575f…` (lo que
 muestra Perfil), runtime `547d52e7…` (= APK 16). Lleva el fix #206. Rollback: grupo `4781deab-564b-4fab-920f-d2badd5fd8a2`.
@@ -42,8 +65,8 @@ Imagen `api:carga-3ff172a` (= `main` 3ff172a, con A1–A3), API en 3 instancias,
 recursos), pool de A3 en el efímero, resultados del ensayo. `/code-review` + `/ponytail-review`; Codex: no verificado
 (sin cuota).
 
-**Escalera de costos 30 → 600 trufis (pedido del CTO):** [`docs/costos-escalera-2026-10.md`](costos-escalera-2026-10.md) y https://claude.ai/artifact/GdjWsvXYRUkne8jfp6hN3Y (privado
-del CTO). Mensual, precios de lista: 30 trufis **$194 hoy / $100 optimizada**; 100: $228 / $137; 300: $425 / $263;
+**Escalera de costos 30 → 600 trufis (pedido del CTO):** [`docs/costos-escalera-2026-10.md`](costos-escalera-2026-10.md) y https://claude.ai/artifact/GdjWsvXYRUkne8jfp6hN3Y (compartida
+por link). Mensual, precios de lista: 30 trufis **$194 hoy / $100 optimizada**; 100: $228 / $137; 300: $425 / $263;
 600: **$612 / $334**. Piloto actual ~$165 (casi todo fijo). Nuevo contra el modelo de septiembre ($437 / $205 en 600):
 logs (~2,2 KB por request, medido: 389 MB en 30 días), cobro por requests sobre 2 M, egreso del panel (la pantalla de
 supervisión recibe todos los vehículos cada 2 s), 2 workers desde 400 (exige Fase 2) y la API con CPU real. Ninguna
@@ -180,7 +203,7 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       `eas update:republish --group ebc72ea4-68e6-4fe8-88dc-40c3a5650094`.
 - [ ] **[CTO]** Prueba en la calle con 2 trufis: una sola fila por vehículo, distancias iguales en ambos, sin
       inversiones en Honduras ni en SR; mirar qué pasa con un trufi esperando en Molinos.
-- [ ] **[Claude, en curso]** Escalar a 30 conductores simultáneos: plan aprobado 18/10 en
+- [x] **[Claude, 18–20/10]** Escalar a 30 conductores simultáneos (cerrado: sigue en el plan del día D): plan aprobado 18/10 en
       [`docs/plan-escalabilidad-30.md`](plan-escalabilidad-30.md). Sin LB externo, sin Kubernetes, sin PgBouncer.
       Bloqueantes verificados en prod: cola `ingesta-sync` sin `removeOnComplete` (Redis `noeviction` se llena), jobs sin
       reintentos, API/worker sin `SENTRY_DSN`, sin alertas ni budget, PITR y archivo GPS apagados. Fase 0 (medir +
@@ -226,7 +249,8 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       Tabla en `docs/plan-escalabilidad-30.md`. Entorno dado de baja (`estado` vacío). Fixes del seed: #197 (ruta de
       `packages/db`, `estado` sin worker pools) y `'mañana'`→`'manana'` (este PR). Residual: `asignaciones.horario` es
       TEXT sin CHECK; un writer SQL crudo puede volver a meter un valor inválido (candidato a migración con CHECK).
-- [ ] **[Claude, siguiente — 19/10]** Preparar el día D (prueba real con 30 conductores; fecha la avisa el CTO):
+- [ ] **[Claude, en curso]** Preparar el día D, **sábado 24/10**. Hecho: A1–A3, B, runbook y checklist. Falta C (credenciales
+      de los 30, espera la lista del CTO) y completar r21 en el runbook. Plan original:
       plan aprobado en [`docs/plan-dia-30.md`](plan-dia-30.md). Antes de D: A1 login (hoy `/mobile/auth/sesion` es
       5/min **por IP**: detrás de CGNAT o un WiFi compartido bloquea a 25 de 30; clave IP+placa, lockout hasta 15 min,
       dispositivo conocido exento, web IP+email, legado apagado por default), A2 observabilidad (`SENTRY_DSN` +
@@ -252,12 +276,11 @@ y multi-map —hipotéticos—, src-vs-dist del árbol), `/ponytail-review` Ship
       canal de mail, uptime `/v1/health/ready`, alertas 5xx/CPU/conexiones/disco/Redis/worker sin instancias,
       presupuesto 50/90/100 %. Sin alerta de worker trabado (vivo sin consumir): se mira a mano el día D.
 - [x] **[Claude, 19/10]** #203: test inestable de ingesta (`findMany` sin orden) que rompió el CI de #200.
-- [ ] **[Claude, en curso]** B: herramientas del ensayo (login real, misma placa, ráfaga offline, pausa del worker,
-      verificar ingesta, API con 3 instancias). Después, correr el ensayo en el entorno efímero (pendiente: ¿lo corre el
-      CTO o lo autoriza?).
+- [x] **[Claude, 19–20/10]** B: herramientas del ensayo (#205, #208) y ensayo corrido el 20/10 (resultados arriba).
 - [ ] **[CTO]** Revocar el token de Sentry pegado en el chat; crear el proyecto Node de Sentry y el secreto
-      `SENTRY_DSN_API`; pasar billing account + monto USD del presupuesto; correr `observabilidad-gcp.sh` (primero sin
-      `--apply`); deploy r21 de API y worker.
+      `SENTRY_DSN_API`; correr `observabilidad-gcp.sh` (primero sin `--apply`; sin presupuesto, decisión del 20/10); deploy
+      r21 de API y worker; `gcloud auth login` en esta máquina; lista de los 30 y credenciales para los ~5 del piloto
+      del 21/10.
 - Gates de A1–A3: `/code-review` + `/ponytail-review` en todos, `/security-review` en A1. Codex: no verificado (sin cuota).
 - [ ] **[Claude, Fase 2]** Orden por dispositivo real (cola por hash de `deviceId`) o detección de PC omitido insensible
       al orden: requisito para subir la concurrencia del worker y para que una caída de la DB de más de 30 min no deje
