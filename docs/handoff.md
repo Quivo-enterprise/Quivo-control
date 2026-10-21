@@ -31,14 +31,14 @@ republicar la OTA anterior ("fix: reconciliar Comenzar/Finalizar con el GPS nati
   `api:r22-20261021`**. **Web:** el 1.er intento cortó en preflight por falta de `GOOGLE_MAPS_MAP_ID` (sin efectos);
   relanzado con `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh r22-20261021 --solo web`
   (log en job tmp `deploy-r22-web.log`). **Terminó OK: web `quivo-web-00013-gms` (`web:r22-20261021`), https://quivo-web-hjqvfgsdnq-tl.a.run.app.**
-- **OTA: NO publicada todavía.** El 1.er intento del CTO se canceló solo: `publicar-ota.sh` pide `[y/N]` y `!` no
-  pasa stdin. Comando para el CTO:
-  `! cd ~/Documents/Quivo-App/Quivo-control/apps/mobile && printf 'y\n' | ./scripts/publicar-ota.sh "Fila de salida en Salomón Romero (r22)" 2>&1 | grep -v '"type":"dir"' | tail -40`.
-  Fingerprint esperado `547d52e7d5b095dfbc0f04f547a66bf625382393` (igual a los 2 últimos updates). Verificar después
-  con `npx eas-cli update:list --branch production --limit 2`.
+- **OTA publicada (CTO, 21/10 09:09):** "Fila de salida en Salomón Romero (r22)", grupo
+  `04887c22-1938-4d8b-9373-b0ac9d05d831`, runtime `547d52e7d5b095dfbc0f04f547a66bf625382393` (= APK instalado),
+  source maps en Sentry (`quivo-control-conductor`). El aviso `[app.config] GOOGLE_MAPS_ANDROID_API_KEY no está
+  definida` al publicar es normal: la key vive en el APK; solo importa al compilar un APK. `publicar-ota.sh` pide
+  `[y/N]`: con `!` hay que pasarle `printf 'y\n' |`.
 
 **Pendiente antes de las 15:00 (en orden):**
-1. Publicar la OTA (CTO). Web r22 ya está.
+1. Web r22 y OTA ya están. En cada teléfono del piloto: abrir la app dos veces (descarga y aplica la OTA).
 2. Panel (CTO): Salomón Romero con `rol='terminal'` en la ruta de la L16 (puntos de control) y **frecuencia base 6
    min** en `/salidas`. No se leyó prod para saber si ya es terminal.
 3. Prueba en la parada (el CTO estará en SR) antes de las 13:30, con un teléfono con la OTA: entrada automática a la
