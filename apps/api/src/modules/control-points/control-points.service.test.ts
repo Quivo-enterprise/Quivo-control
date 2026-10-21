@@ -121,4 +121,26 @@ describe('ControlPointsService', () => {
     expect(actualizado.radioToleranciaM).toBe(30);
     expect(actualizado.obligatorio).toBe(false);
   });
+
+  it('cambiar el rol de una terminal con base cargada limpia frecuenciaSalidaMin (sin 500 por el CHECK)', async () => {
+    const punto = await service.crear(adminSindicatoA, rutaAId, {
+      orden: 3,
+      coord: { type: 'Point', coordinates: [-58.396, -34.6] },
+      radioToleranciaM: 15,
+      obligatorio: true,
+      estado: 'activo',
+      rol: 'terminal',
+    });
+    const leerBase = () =>
+      withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+        tx.$queryRaw<{ f: number | null }[]>`SELECT "frecuenciaSalidaMin" AS f FROM puntos_control WHERE id = ${punto.id}`,
+      );
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+      tx.$executeRaw`UPDATE puntos_control SET "frecuenciaSalidaMin" = 8 WHERE id = ${punto.id}`,
+    );
+    await service.actualizar(adminSindicatoA, punto.id, { rol: 'terminal' });
+    expect((await leerBase())[0]!.f).toBe(8);
+    await service.actualizar(adminSindicatoA, punto.id, { rol: 'retorno' });
+    expect((await leerBase())[0]!.f).toBeNull();
+  });
 });

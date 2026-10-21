@@ -136,7 +136,11 @@ export class ControlPointsService {
       }
       if (nuevoRol.cambia) {
         await tx.$executeRaw`
-          UPDATE puntos_control SET rol = ${nuevoRol.rol}, "esperaMin" = ${nuevoRol.esperaMin}, "updatedAt" = now()
+          UPDATE puntos_control
+          SET rol = ${nuevoRol.rol}, "esperaMin" = ${nuevoRol.esperaMin},
+              -- La base de la fila de salida solo vale en la terminal (CHECK): se limpia al cambiar el rol.
+              "frecuenciaSalidaMin" = CASE WHEN ${nuevoRol.rol}::text = 'terminal' THEN "frecuenciaSalidaMin" END,
+              "updatedAt" = now()
           WHERE id = ${id}
         `;
       }
