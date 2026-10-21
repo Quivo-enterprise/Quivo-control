@@ -17,6 +17,16 @@ que esos dos días lo prueben en la calle; congelamiento después del piloto del
   [`plan-fila-salida-sr.md`](plan-fila-salida-sr.md). Decisiones del CTO: frecuencia = espera después del de adelante
   (una sola fila); frecuencia base por parada y reglas del día hasta medianoche; se bloquea SALIR (no COMENZAR RUTA);
   admin y operador manejan fila y frecuencias, grupos solo admin. Entrega en 4 PRs + piloto; merges después de D.
+  - **PR 1 #216** (shared + DB, `e115129`): migración `20261020120000_fila_salida` (4 tablas con RLS, FK compuestas
+    `(id, sindicatoId)` anti cross-tenant, CHECK de `fecha` = día Bolivia de `creadaEn`), cálculo puro
+    `resolverFrecuencia`/`calcularFilaSalida`. CI verde. **Abierto, sin mergear.** Al desplegar: la migración agrega
+    UNIQUE `(id, sindicatoId)` en `vehiculos` y `sesiones_operativas` (fuera de horario).
+  - **PR 2 #217** (API, apilado sobre #216: revisar `51eb636` + `54fe694`): módulo `salidas`, campo `fila` en
+    `vuelta-actual`, panel, grupos, lock por terminal, backstop del worker, logout ⇒ retirado. CI verde. **Abierto, sin
+    mergear.** Orden de merge: #216 y después #217, el domingo 25 o más tarde.
+  - Revisiones: /code-review, /ponytail-review y /security-review (sin hallazgos ≥ 8) en ambos; hallazgos aplicados.
+    Codex: no verificado (sin cuota). Sin test de concurrencia real del lock por terminal.
+  - Siguiente: PR 3 (panel `/salidas`) y PR 4 (móvil, OTA; verificar trigger de fecha de `expo-notifications`).
 - **Plan de escalamiento a 30 CERRADO (20/10, CTO).** Tabla de estado en
   [`plan-escalabilidad-30.md`](plan-escalabilidad-30.md). Backlog que queda: archivo GPS (A5, **antes de enero**),
   vencimiento de rotaciones al worker (A4), Fase 2 (orden por dispositivo; requisito para subir la concurrencia del
