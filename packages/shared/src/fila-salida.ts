@@ -22,6 +22,7 @@ export interface ReglaFrecuenciaCalculo {
 
 export interface VehiculoFrecuencia {
   id: string;
+  /** El caller pasa null si el grupo está inactivo. */
   grupoId: string | null;
 }
 
@@ -62,10 +63,11 @@ function aplica(
   v: VehiculoFrecuencia,
   t: Date,
   minuto: number,
+  vigentesHasta: Date,
 ): boolean {
   if (r.anuladaEn !== null) return false;
   // Una regla vale desde que se crea hasta la medianoche de Bolivia de ese mismo día.
-  if (r.creadaEn.getTime() > t.getTime()) return false;
+  if (r.creadaEn.getTime() > vigentesHasta.getTime()) return false;
   if (fechaActualBolivia(r.creadaEn).getTime() !== fechaActualBolivia(t).getTime()) return false;
   if (r.alcance === 'vehiculo' && r.vehiculoId !== v.id) return false;
   if (r.alcance === 'grupo' && (v.grupoId === null || r.grupoId !== v.grupoId)) return false;
@@ -75,8 +77,10 @@ function aplica(
 }
 
 /**
- * Minutos de espera tras la salida del de adelante para el trufi `vehiculo` en el instante `t`.
- * Precedencia: vehículo > grupo > todos > base; dentro de un nivel gana la regla cuya franja
+ * Minutos de espera tras la salida del de adelante para el trufi `vehiculo`, con la franja/día
+ * evaluados en el instante ancla `t`. "Qué reglas existen" se corta en `vigentesHasta` (por
+ * defecto `t`; la fila pasa `ahora`, así una regla creada después de la última salida igual
+ * afecta a los que esperan). Precedencia: vehículo > grupo > todos > base; dentro de un nivel gana la regla cuya franja
  * contiene `t` sobre la que no tiene franja, y entre iguales la más reciente.
  * Sin regla aplicable ni base devuelve 0 (sale en orden, sin espera).
  */
@@ -85,11 +89,12 @@ export function resolverFrecuencia(
   t: Date,
   reglas: readonly ReglaFrecuenciaCalculo[],
   baseMin: number | null,
+  vigentesHasta: Date = t,
 ): number {
   const minuto = minutoDelDiaBolivia(t);
   let mejor: ReglaFrecuenciaCalculo | null = null;
   for (const r of reglas) {
-    if (!aplica(r, vehiculo, t, minuto)) continue;
+    if (!aplica(r, vehiculo, t, minuto, vigentesHasta)) continue;
     if (mejor === null || esMejor(r, mejor)) mejor = r;
   }
   return mejor?.minutos ?? baseMin ?? 0;
@@ -133,6 +138,7 @@ export function calcularFilaSalida(entrada: CalcularFilaSalidaEntrada): Posicion
         new Date(t),
         reglas,
         baseMin,
+        ahora,
       );
     let etaMs: number;
     if (i === 0) {
@@ -143,9 +149,10 @@ export function calcularFilaSalida(entrada: CalcularFilaSalidaEntrada): Posicion
           : Math.max(ultimaSalidaTs.getTime() + frec(ultimaSalidaTs.getTime()) * MS_MIN, ordenMs);
       primeroDemorado = ahoraMs > etaMs;
     } else {
-      // Si el 1.º está demorado, "ahora" corre la estimación de los de atrás (solo para mostrarla).
+      // Si el 1.º está demorado, "ahora" corre la estimación de los de atrás (solo para mostrarla);
+      // la franja se evalúa en esa misma base.
       const base = primeroDemorado ? Math.max(etaAnteriorMs, ahoraMs) : etaAnteriorMs;
-      etaMs = base + frec(etaAnteriorMs) * MS_MIN;
+      etaMs = base + frec(base) * MS_MIN;
     }
     etaAnteriorMs = etaMs;
     resultado.push({

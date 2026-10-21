@@ -8,6 +8,8 @@ type TenantTx = Prisma.TransactionClient;
 
 // Extiende `rls.integration.test.ts` a las tablas de la fila de salida (migración
 // `20261020120000_fila_salida`). Archivo aparte por el tope de líneas; mismo rol `quivo_app`.
+// 10:00 en Bolivia (UTC-4) del 20/10/2026: `fecha` de la regla debe ser ese día.
+const CREADA_EN = new Date('2026-10-20T14:00:00Z');
 const GEOMETRIA = '{"type":"LineString","coordinates":[[-66.15,-17.38],[-66.14,-17.39]]}';
 
 interface Ids {
@@ -17,7 +19,20 @@ interface Ids {
   reglaId: string;
   filaId: string;
   sesionId: string;
+  /** Vehículo sin grupo ni fila: para probar referencias cross-tenant sin chocar con los únicos. */
+  libreId: string;
 }
+
+const vehiculoData = (sindicatoId: string, placa: string) => ({
+  sindicatoId,
+  placa,
+  tipo: 'bus',
+  marca: 'x',
+  modelo: 'x',
+  color: 'x',
+  capacidad: 10,
+  estado: 'activo',
+});
 
 async function crearTenant(tx: TenantTx, sindicatoId: string, sufijo: string): Promise<Ids> {
   await tx.sindicato.create({
@@ -36,18 +51,8 @@ async function crearTenant(tx: TenantTx, sindicatoId: string, sufijo: string): P
     INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, rol, "frecuenciaSalidaMin", estado, "createdAt", "updatedAt")
     VALUES (${puntoId}, ${rutaId}, 0, ST_SetSRID(ST_MakePoint(-66.15, -17.38), 4326)::geography, 150, true, 'terminal', 6, 'activo', now(), now())
   `;
-  const vehiculo = await tx.vehiculo.create({
-    data: {
-      sindicatoId,
-      placa: `FS${sufijo}01`,
-      tipo: 'bus',
-      marca: 'x',
-      modelo: 'x',
-      color: 'x',
-      capacidad: 10,
-      estado: 'activo',
-    },
-  });
+  const vehiculo = await tx.vehiculo.create({ data: vehiculoData(sindicatoId, `FS${sufijo}01`) });
+  const libre = await tx.vehiculo.create({ data: vehiculoData(sindicatoId, `FS${sufijo}02`) });
   const conductor = await tx.conductor.create({
     data: {
       sindicatoId,
@@ -94,6 +99,7 @@ async function crearTenant(tx: TenantTx, sindicatoId: string, sufijo: string): P
       sindicatoId,
       puntoControlId: puntoId,
       fecha: new Date('2026-10-20'),
+      creadaEn: CREADA_EN,
       alcance: 'grupo',
       grupoId: grupo.id,
       minutos: 10,
@@ -119,6 +125,7 @@ async function crearTenant(tx: TenantTx, sindicatoId: string, sufijo: string): P
     reglaId: regla.id,
     filaId: fila.id,
     sesionId: sesion.id,
+    libreId: libre.id,
   };
 }
 
@@ -216,6 +223,7 @@ describe('RLS fila de salida', () => {
             sindicatoId: sindicatoBId,
             puntoControlId: b.puntoId,
             fecha: new Date('2026-10-20'),
+            creadaEn: CREADA_EN,
             alcance: 'todos',
             minutos: 5,
             creadaPor: 'hack',
@@ -247,6 +255,83 @@ describe('RLS fila de salida', () => {
           },
         }),
       ),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: 'P2002' });
+  });
+
+  describe('referencias cross-tenant (FK compuestas con sindicatoId)', () => {
+    const fk = { code: 'P2003' };
+    const filaData = (vehiculoId: string, sesionId: string) => ({
+      sindicatoId: sindicatoAId,
+      puntoControlId: a.puntoId,
+      fecha: new Date('2026-10-20'),
+      sesionId,
+      vehiculoId,
+      llegadaTs: new Date(),
+      ordenTs: new Date(),
+    });
+    const reglaData = (extra: { grupoId?: string; vehiculoId?: string }) => ({
+      sindicatoId: sindicatoAId,
+      puntoControlId: a.puntoId,
+      fecha: new Date('2026-10-20'),
+      creadaEn: CREADA_EN,
+      alcance: extra.grupoId ? 'grupo' : 'vehiculo',
+      minutos: 5,
+      creadaPor: 'rls-test',
+      ...extra,
+    });
+
+    it('A no puede meter un vehículo de B en un grupo, ni un vehículo suyo en un grupo de B', async () => {
+      await expect(
+        comoA((tx) =>
+          tx.grupoVehiculoMiembro.create({
+            data: { grupoId: a.grupoId, vehiculoId: b.libreId, sindicatoId: sindicatoAId },
+          }),
+        ),
+      ).rejects.toMatchObject(fk);
+      await expect(
+        comoA((tx) =>
+          tx.grupoVehiculoMiembro.create({
+            data: { grupoId: b.grupoId, vehiculoId: a.libreId, sindicatoId: sindicatoAId },
+          }),
+        ),
+      ).rejects.toMatchObject(fk);
+    });
+
+    it('A no puede crear una fila con vehículo o sesión de B', async () => {
+      await expect(
+        comoA((tx) => tx.filaSalida.create({ data: filaData(b.libreId, a.sesionId) })),
+      ).rejects.toMatchObject(fk);
+      await expect(
+        comoA((tx) => tx.filaSalida.create({ data: filaData(a.libreId, b.sesionId) })),
+      ).rejects.toMatchObject(fk);
+    });
+
+    it('A no puede crear una regla que apunte a un grupo o vehículo de B', async () => {
+      await expect(
+        comoA((tx) => tx.frecuenciaRegla.create({ data: reglaData({ grupoId: b.grupoId }) })),
+      ).rejects.toMatchObject(fk);
+      await expect(
+        comoA((tx) => tx.frecuenciaRegla.create({ data: reglaData({ vehiculoId: b.vehiculoId }) })),
+      ).rejects.toMatchObject(fk);
+    });
+  });
+
+  it('CHECK: `fecha` de la regla debe ser el día Bolivia de `creadaEn`', async () => {
+    const data = (fecha: string, creadaEn: string) => ({
+      sindicatoId: sindicatoAId,
+      puntoControlId: a.puntoId,
+      fecha: new Date(fecha),
+      creadaEn: new Date(creadaEn),
+      alcance: 'todos',
+      minutos: 5,
+      creadaPor: 'rls-test',
+    });
+    await expect(
+      comoA((tx) => tx.frecuenciaRegla.create({ data: data('2026-10-21', '2026-10-20T14:00:00Z') })),
+    ).rejects.toThrow(/frecuencia_reglas_fecha_check|check constraint/i);
+    // 02:00Z del 21 = 22:00 del 20 en Bolivia: sigue siendo el día 20.
+    await expect(
+      comoA((tx) => tx.frecuenciaRegla.create({ data: data('2026-10-20', '2026-10-21T02:00:00Z') })),
+    ).resolves.toBeDefined();
   });
 });

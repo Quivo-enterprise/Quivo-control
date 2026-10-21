@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { PuntoGeoJsonSchema } from '../geo.js';
 import { EstadoPuntoControlSchema } from '../enums/estados.js';
 import { uuidSchema } from '../primitives.js';
+import { FRECUENCIA_MAX_MINUTOS, FRECUENCIA_MIN_MINUTOS } from './fila-salida.js';
 
 /**
  * Rol del PC en el ciclo de vueltas (docs/plan-molinos-designacion.md): `terminal` abre/cierra
@@ -27,8 +28,17 @@ export const PuntoControlSchema = z.object({
   rol: RolPuntoControlSchema.nullable().optional(),
   /** Minutos de espera obligatoria; solo con `rol = 'espera'` (el servicio lo valida). */
   esperaMin: z.number().int().positive().nullable().optional(),
-  /** Frecuencia base de la fila de salida (min); solo con `rol = 'terminal'` (el servicio lo valida). */
-  frecuenciaSalidaMin: z.number().int().min(1).max(120).nullable().optional(),
+  /**
+   * Frecuencia base de la fila de salida (min); solo con `rol = 'terminal'`. Solo lectura: se
+   * fija con un endpoint dedicado, por eso no está en Crear/Actualizar.
+   */
+  frecuenciaSalidaMin: z
+    .number()
+    .int()
+    .min(FRECUENCIA_MIN_MINUTOS)
+    .max(FRECUENCIA_MAX_MINUTOS)
+    .nullable()
+    .optional(),
 });
 export type PuntoControl = z.infer<typeof PuntoControlSchema>;
 
@@ -37,13 +47,18 @@ export const CrearPuntoControlSchema = PuntoControlSchema.omit({
   rutaId: true,
   obligatorio: true,
   estado: true,
+  frecuenciaSalidaMin: true,
 }).extend({
   obligatorio: z.boolean().default(true),
   estado: EstadoPuntoControlSchema.default('activo'),
 });
 export type CrearPuntoControl = z.infer<typeof CrearPuntoControlSchema>;
 
-export const ActualizarPuntoControlSchema = PuntoControlSchema.omit({ id: true, rutaId: true }).partial();
+export const ActualizarPuntoControlSchema = PuntoControlSchema.omit({
+  id: true,
+  rutaId: true,
+  frecuenciaSalidaMin: true,
+}).partial();
 export type ActualizarPuntoControl = z.infer<typeof ActualizarPuntoControlSchema>;
 
 /**

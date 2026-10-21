@@ -229,18 +229,41 @@ describe('calcularFilaSalida', () => {
     expect(r.map((x) => x.etaTs)).toEqual([bo(9, 4), bo(9, 13), bo(9, 19)]);
   });
 
-  it('regla nueva a mitad del día no reescribe la salida ya hecha: el ancla usa la regla vigente en ese instante', () => {
-    const reglas = [regla({ minutos: 15, creadaEn: bo(9, 30) })];
+  it('regla creada después de la última salida afecta al que espera: el corte de reglas es ahora', () => {
+    const reglas = [regla({ minutos: 20, creadaEn: bo(10, 2) })];
     const [p] = calcularFilaSalida({
-      enFila: [fila('a', bo(9, 10))],
-      ultimaSalidaTs: bo(9, 20),
+      enFila: [fila('a', bo(9, 50))],
+      ultimaSalidaTs: bo(10, 0),
+      reglas,
+      baseMin: 10,
+      ahora: bo(10, 3),
+    });
+    expect(p!.etaTs).toEqual(bo(10, 20));
+  });
+
+  it('regla creada después de ahora no cuenta', () => {
+    const reglas = [regla({ minutos: 20, creadaEn: bo(10, 5) })];
+    const [p] = calcularFilaSalida({
+      enFila: [fila('a', bo(9, 50))],
+      ultimaSalidaTs: bo(10, 0),
+      reglas,
+      baseMin: 10,
+      ahora: bo(10, 3),
+    });
+    expect(p!.etaTs).toEqual(bo(10, 10));
+  });
+
+  it('1.º demorado: la franja del 2.º se evalúa en su base real (ahora), no en la ETA del 1.º', () => {
+    const reglas = [regla({ minutos: 15, desdeMin: 7 * 60, hastaMin: 8 * 60 })];
+    const r = calcularFilaSalida({
+      enFila: [fila('a', bo(6, 0)), fila('b', bo(6, 1))],
+      ultimaSalidaTs: bo(6, 52),
       reglas,
       baseMin: 6,
-      ahora: bo(9, 31),
+      ahora: bo(7, 5),
     });
-    // La regla de 15 no existía a las 9:20: ETA = 9:26 (base), ya demorado.
-    expect(p!.etaTs).toEqual(bo(9, 26));
-    expect(p!.demorado).toBe(true);
+    // a: 6:52 + 6 (fuera de franja) = 6:58, demorado; b: base = ahora 7:05, en franja: +15 = 7:20.
+    expect(r.map((x) => x.etaTs)).toEqual([bo(6, 58), bo(7, 20)]);
   });
 
   it('regla anulada se ignora en la fila', () => {
