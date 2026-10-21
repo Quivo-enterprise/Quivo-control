@@ -96,7 +96,7 @@ describe('fila de salida: backstop del worker y logout', () => {
     };
     await expect(
       aplicarBackstopFila(tx as never, {
-        sindicatoId: m.sindicatoA, sesionId: m.a[4]!.sesion.sesionId, terminalId: m.pcTerminalA,
+        sindicatoId: m.sindicatoA, sesionId: m.a[4]!.sesion.sesionId, terminalesIds: new Set([m.pcTerminalA]),
         cumplimientos: [{ ts: hace(5), puntoControlId: m.pcRetornoA }], fines: [], ahora: new Date(),
       }),
     ).resolves.toBeUndefined();

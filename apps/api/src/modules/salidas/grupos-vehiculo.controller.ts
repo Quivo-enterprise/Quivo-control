@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import {
   ActualizarGrupoVehiculoSchema,
   AgregarMiembroGrupoSchema,
@@ -41,7 +41,7 @@ export class GruposVehiculoController {
   @Auditable('grupo_vehiculo')
   actualizar(
     @CurrentUser() actor: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() body: ActualizarGrupoVehiculoDto,
   ) {
     return this.gruposService.actualizar(actor, id, body as ActualizarGrupoVehiculo);
@@ -51,7 +51,7 @@ export class GruposVehiculoController {
   @Auditable('grupo_vehiculo', 'agregar_miembro')
   agregarMiembro(
     @CurrentUser() actor: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() body: AgregarMiembroGrupoDto,
   ) {
     return this.gruposService.agregarMiembro(actor, id, (body as AgregarMiembroGrupo).vehiculoId);
@@ -61,8 +61,8 @@ export class GruposVehiculoController {
   @Auditable('grupo_vehiculo', 'quitar_miembro')
   quitarMiembro(
     @CurrentUser() actor: AuthenticatedUser,
-    @Param('id') id: string,
-    @Param('vehiculoId') vehiculoId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('vehiculoId', ParseUUIDPipe) vehiculoId: string,
   ) {
     return this.gruposService.quitarMiembro(actor, id, vehiculoId);
   }

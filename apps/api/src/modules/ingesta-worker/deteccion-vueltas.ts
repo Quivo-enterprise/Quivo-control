@@ -189,7 +189,7 @@ export async function procesarVueltasSesion(
   await aplicarBackstopFila(tx, {
     sindicatoId,
     sesionId,
-    terminalId: terminal.id,
+    terminalesIds: new Set(pcs.filter((pc) => pc.rol === 'terminal').map((pc) => pc.id)),
     cumplimientos: entrada.cumplimientos.filter((c) => pcPorId.has(c.puntoControlId)),
     fines: entrada.fines,
     ahora,

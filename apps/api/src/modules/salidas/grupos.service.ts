@@ -81,10 +81,11 @@ export class GruposService {
       withTenantContext(contexto(actor), async (tx) => {
         const grupo = await this.obtener(tx, grupoId);
         await this.validarVehiculos(tx, grupo.sindicatoId, [vehiculoId], grupoId);
-        await tx.grupoVehiculoMiembro.createMany({
-          data: [{ grupoId, vehiculoId, sindicatoId: grupo.sindicatoId }],
-          skipDuplicates: true,
-        });
+        // Idempotente solo para ESTE grupo; el unique global de `vehiculoId` (otro grupo, o una carrera) es 409 vía P2002.
+        const yaEsta = await tx.grupoVehiculoMiembro.findFirst({ where: { grupoId, vehiculoId }, select: { vehiculoId: true } });
+        if (!yaEsta) {
+          await tx.grupoVehiculoMiembro.create({ data: { grupoId, vehiculoId, sindicatoId: grupo.sindicatoId } });
+        }
         return aGrupo(await this.obtener(tx, grupoId));
       }),
     );

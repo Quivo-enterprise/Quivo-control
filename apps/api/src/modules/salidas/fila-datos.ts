@@ -16,6 +16,16 @@ type Tx = Prisma.TransactionClient;
 
 export const diaStr = (fecha: Date): string => fecha.toISOString().slice(0, 10);
 
+/**
+ * Serializa las mutaciones de la fila de una terminal (llegada, salida, panel, backstop): `anticipada`
+ * y el orden se calculan leyendo la fila, y dos transacciones concurrentes verían el estado viejo.
+ * Lock de transacción; va ANTES de leer. Las mutaciones móviles/panel solo toman este lock; el
+ * backstop lo toma tras el advisory de la sesión (mismo orden siempre: sin ciclo).
+ */
+export async function bloquearTerminal(tx: Tx, puntoControlId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`fila_salida:${puntoControlId}`}::text))`;
+}
+
 export interface PuntoControlTerminal {
   id: string;
   sindicatoId: string;
@@ -49,12 +59,20 @@ export interface FilaDelPc {
 }
 
 /**
- * Fila del día de una terminal: 3 consultas (en fila + grupo activo; última salida + base; reglas
+ * Fila de una terminal: 3 consultas (en fila + grupo activo; última salida + base; reglas
  * no anuladas) y `calcularFilaSalida`. Solo cuentan filas con la sesión `activa`: si la sesión se
- * cerró por otra vía (rotación de PIN, etc.) el trufi no puede bloquear la cola.
+ * cerró por otra vía (rotación de PIN, etc.) el trufi no puede bloquear la cola. Los `en_fila` NO se
+ * filtran por `fecha` (una fila no desaparece a medianoche); `ultimaSalidaTs` y reglas sí son del día
+ * de Bolivia de `fecha`. `hasta` (backstop): la última salida se toma al instante del evento.
  * shortcut: fila calculada en cada request, agregar CacheTtl por puntoControl si el p95 de vuelta-actual pasa 150 ms
  */
-export async function calcularFilaPc(tx: Tx, puntoControlId: string, fecha: Date, ahora: Date): Promise<FilaDelPc> {
+export async function calcularFilaPc(
+  tx: Tx,
+  puntoControlId: string,
+  fecha: Date,
+  ahora: Date,
+  hasta: Date | null = null,
+): Promise<FilaDelPc> {
   const dia = diaStr(fecha);
   const filas = await tx.$queryRaw<(FilaCalculada & { ordenTs: Date; grupoId: string | null })[]>`
     SELECT f.id, f."vehiculoId", v.placa, f."llegadaTs", f."ordenTs", g.id AS "grupoId"
@@ -63,12 +81,13 @@ export async function calcularFilaPc(tx: Tx, puntoControlId: string, fecha: Date
     JOIN sesiones_operativas s ON s.id = f."sesionId" AND s.estado = 'activa'
     LEFT JOIN grupo_vehiculo_miembros m ON m."vehiculoId" = f."vehiculoId"
     LEFT JOIN grupos_vehiculo g ON g.id = m."grupoId" AND g.estado = 'activo'
-    WHERE f."puntoControlId" = ${puntoControlId} AND f.fecha = ${dia}::date AND f.estado = 'en_fila'
+    WHERE f."puntoControlId" = ${puntoControlId} AND f.estado = 'en_fila'
   `;
   const [meta] = await tx.$queryRaw<{ baseMin: number | null; ultimaSalidaTs: Date | null }[]>`
     SELECT pc."frecuenciaSalidaMin" AS "baseMin",
            (SELECT max(f."salidaTs") FROM fila_salida f
-            WHERE f."puntoControlId" = pc.id AND f.fecha = ${dia}::date AND f.estado = 'salio') AS "ultimaSalidaTs"
+            WHERE f."puntoControlId" = pc.id AND f.fecha = ${dia}::date AND f.estado = 'salio'
+              AND (${hasta}::timestamptz IS NULL OR f."salidaTs" <= ${hasta}::timestamptz)) AS "ultimaSalidaTs"
     FROM puntos_control pc WHERE pc.id = ${puntoControlId}
   `;
   const reglasDb = await tx.frecuenciaRegla.findMany({

@@ -218,6 +218,12 @@ describe('fila de salida (API contra Postgres real)', () => {
       expect((await adminA('POST', '/grupos-vehiculo', { nombre: 'Dup', vehiculoIds: [m.a[tres]!.vehiculoId] })).statusCode).toBe(409);
       // Agregar al mismo grupo es idempotente.
       expect((await adminA('POST', `/grupos-vehiculo/${g1}/miembros`, { vehiculoId: m.a[tres]!.vehiculoId })).statusCode).toBe(201);
+      // Carrera: el mismo trufi a dos grupos a la vez ⇒ uno entra y el otro recibe 409 (nunca dos 201).
+      const g3 = (await adminA('POST', '/grupos-vehiculo', { nombre: 'Carrera' })).json();
+      const carrera = await Promise.all(
+        [g2.id, g3.id].map((g) => adminA('POST', `/grupos-vehiculo/${g}/miembros`, { vehiculoId: m.a[uno]!.vehiculoId })),
+      );
+      expect(carrera.map((r) => r.statusCode).sort()).toEqual([201, 409]);
       // Vehículo de B: igual que uno inexistente.
       const ajeno = await adminA('POST', `/grupos-vehiculo/${g2.id}/miembros`, { vehiculoId: m.vehiculoB });
       const inexistente = await adminA('POST', `/grupos-vehiculo/${g2.id}/miembros`, { vehiculoId: randomUUID() });
@@ -279,6 +285,10 @@ describe('fila de salida (API contra Postgres real)', () => {
     it('un PC que no es terminal es 422 y el id desconocido 404; la base valida el rango', async () => {
       expect((await operadorA('GET', `/salidas/${m.pcRetornoA}/fila`)).statusCode).toBe(422);
       expect((await operadorA('GET', `/salidas/${randomUUID()}/fila`)).statusCode).toBe(404);
+      // Id mal formado: 400 de la validación de ruta, no un 500 por el cast a uuid.
+      expect((await operadorA('GET', '/salidas/no-es-uuid/fila')).statusCode).toBe(400);
+      expect((await operadorA('POST', `/salidas/${m.pcTerminalA}/fila/xyz/despachar`)).statusCode).toBe(400);
+      expect((await adminA('PATCH', '/grupos-vehiculo/xyz', { nombre: 'X' })).statusCode).toBe(400);
       expect((await operadorA('PUT', `/salidas/${m.pcTerminalA}/base`, { frecuenciaSalidaMin: 0 })).statusCode).toBe(400);
       expect((await operadorA('PUT', `/salidas/${m.pcTerminalA}/base`, { frecuenciaSalidaMin: null })).statusCode).toBe(200);
       expect((await operadorA('GET', `/salidas/${m.pcTerminalA}/reglas`)).json().baseMin).toBeNull();
