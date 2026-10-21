@@ -7,21 +7,19 @@
 
 | Cuándo | Qué | Quién | Hecho |
 |---|---|---|---|
-| Mar 20/10 | Secreto `SENTRY_DSN_API` creado; token viejo de Sentry revocado | CTO | [ ] |
+| Mar 20/10 | Secreto `SENTRY_DSN_API` creado (proyecto Sentry `quivo-api`, Nest.js) | CTO + Claude | [x] |
+| — | Token viejo de Sentry (pegado en el chat) revocado | CTO | [ ] |
 | 20/10 | Ensayo B en el entorno efímero (20/10: todo pasa salvo el p95 del login en ráfaga, 2,5–3 s, aprobado por el CTO el 20/10; ver handoff) | Claude | [x] |
 | Mar 20/10 | Credenciales del piloto con pasantes: 8 trufis `1616PIL`…`1616PIH` (#211, aplicado 21:20; PINs en `~/.quivo-piloto16-creds`) | Claude + CTO | [x] |
-| Mar 20/10, noche | **Propuesto:** deploy r21 + `observabilidad-gcp.sh` + PITR con reinicio, fuera de horario, para que los pilotos del 21 y 22 lo prueben en la calle | CTO | [ ] |
+| Mar 20/10, 22:00–22:40 | Deploy r21 (API `quivo-api-00026-tvm`, worker) + `observabilidad-gcp.sh --apply --con-reinicio` (canal de mail, uptime, 7 alertas, PITR activo) | CTO + Claude | [x] |
 | Mié 21 y jue 22/10 | Pilotos con pasantes (~5 trufis): mirar logins, Vecinos, ingesta y Sentry como en D | CTO + Claude | [ ] |
 | Jue 22/10, como tarde | Credenciales de los 30 creadas (script con `--apply`); rotación **publicada** | Claude + CTO | [ ] |
-| D-3 (mié 21/10) si no se hizo antes | Deploy r21 (`scripts/deploy-gcp.sh r21-<fecha> --solo api` y `--solo worker`); `/v1/health/ready` ok | CTO | [ ] |
-| Mié 21/10 | `scripts/observabilidad-gcp.sh` sin `--apply`, revisar, y después con `--apply` | CTO | [ ] |
-| Mié 21/10 | Alerta de prueba llega al mail; error de prueba de la API aparece en Sentry | CTO + Claude | [ ] |
-| Mié 21/10 | PITR con `--con-reinicio`, **fuera de horario** (reinicia la base) | CTO | [ ] |
+| Mié 21/10 | Mail de prueba del canal de alertas (Monitoring → Alerting → canales → Send test notification); primer error real de la API en Sentry `quivo-api` | CTO + Claude | [ ] |
 | Jue 22/10, después del piloto | **Congelamiento:** ni deploys ni OTAs hasta después de D | todos | [ ] |
 | Vie 23/10 | Ensayo de login: cada chofer entra una vez en su teléfono (checklist de abajo) | CTO | [ ] |
 
-Datos para volver atrás (se completan después del deploy r21):
-- Revisión de la API anterior a r21: `quivo-api-00025-vrj` (r20). Revisión r21: `<…>`.
+Datos para volver atrás:
+- Revisión de la API anterior a r21: `quivo-api-00025-vrj` (r20). Revisión r21: `quivo-api-00026-tvm` (imagen `api:r21-20261020`, 20/10 22:14). Worker en `api:r21-20261020`.
 - Imagen del worker anterior: `southamerica-west1-docker.pkg.dev/quivo-control-prod/quivo/api:r20-20261019`.
 - OTA vigente en los teléfonos: grupo `9306212c-fa6b-46f5-9186-7de1879dd171`, update Android `01a1575f…` (runtime
   `547d52e7…`). Group anterior para `republish`: `4781deab-564b-4fab-920f-d2badd5fd8a2`.
