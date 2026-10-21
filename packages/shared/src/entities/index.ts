@@ -18,3 +18,4 @@ export * from './en-vivo.js';
 export * from './infraccion.js';
 export * from './jornada.js';
 export * from './vuelta.js';
+export * from './fila-salida.js';

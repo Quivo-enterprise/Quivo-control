@@ -134,6 +134,10 @@ model Sindicato {
   syncErrors               SyncError[]
   infracciones             Infraccion[]
   vueltas                  Vuelta[]
+  gruposVehiculo           GrupoVehiculo[]
+  grupoVehiculoMiembros    GrupoVehiculoMiembro[]
+  frecuenciaReglas         FrecuenciaRegla[]
+  filaSalida               FilaSalida[]
 
   @@map("sindicatos")
 }
@@ -156,12 +160,12 @@ model Socio {
 }
 
 model Vehiculo {
-  id               String    @id @default(uuid())
-  sindicatoId      String
-  sindicato        Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
-  socioId          String?
-  socio            Socio?    @relation(fields: [socioId], references: [id], onDelete: SetNull)
-  placa            String
+  id                String     @id @default(uuid())
+  sindicatoId       String
+  sindicato         Sindicato  @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  socioId           String?
+  socio             Socio?     @relation(fields: [socioId], references: [id], onDelete: SetNull)
+  placa             String
   // Unicidad de placa (docs/plan-unicidad-placa.md): columna GENERATED ALWAYS por Postgres,
   // NOT NULL, con índice único PARCIAL `WHERE estado <> 'inactivo'` (creado en SQL crudo en
   // la migración — Prisma no expresa índices parciales en el datamodel, sólo via
@@ -172,35 +176,38 @@ model Vehiculo {
   // próximo `migrate dev` emite un `ALTER COLUMN ... SET DEFAULT` que falla contra una
   // columna generada ("column ... is a generated column"). No editar a mano sin volver a
   // correr `db pull` y comparar con `prisma migrate diff` en ambas direcciones.
-  placaNormalizada String    @unique(map: "vehiculos_placa_norm_vigente_key", where: raw("(estado <> 'inactivo'::text)")) @default(dbgenerated("regexp_replace(upper(btrim(placa)), '[^A-Z0-9]'::text, ''::text, 'g'::text)"))
-  tipo             String
-  marca            String
-  modelo           String
-  color            String
-  colorSecundario  String?
-  numeroInterno    String?
-  distintivo       String?
-  cartelSuperior   String?
-  capacidad        Int
-  estado           String    @default("pendiente")
+  placaNormalizada  String     @unique(map: "vehiculos_placa_norm_vigente_key", where: raw("(estado <> 'inactivo'::text)")) @default(dbgenerated("regexp_replace(upper(btrim(placa)), '[^A-Z0-9]'::text, ''::text, 'g'::text)"))
+  tipo              String
+  marca             String
+  modelo            String
+  color             String
+  colorSecundario   String?
+  numeroInterno     String?
+  distintivo        String?
+  cartelSuperior    String?
+  capacidad         Int
+  estado            String     @default("pendiente")
   // Login por vehículo (M3, doc técnico §15.3): credencial emitida por el sindicato, el
   // conductor se identifica al iniciar la sesión operativa. Nunca se hashea en la app;
   // backend usa el hasher scrypt auditado que exporta Better Auth.
-  credencialHash   String?
+  credencialHash    String?
   // Foto de la unidad (PR C): URL pública del objeto en el bucket de media (GCS), subida por
   // el conductor desde la app. `fotoSubidaPorId` queda en NULL si el conductor se borra.
   fotoUrl           String?
   fotoActualizadaEn DateTime?
   fotoSubidaPorId   String?
   fotoSubidaPor     Conductor? @relation("VehiculoFotoSubidaPor", fields: [fotoSubidaPorId], references: [id], onDelete: SetNull)
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
 
   asignaciones       Asignacion[]
   desafiosAuthMovil  DesafioAuthMovil[]
   intentoAuthMovil   IntentoAuthMovil?
   sesionesOperativas SesionOperativa[]
   historialEstados   HistorialEstadoVehiculo[]
+  grupoMiembro       GrupoVehiculoMiembro?
+  frecuenciaReglas   FrecuenciaRegla[]
+  filaSalida         FilaSalida[]
 
   // NO hay @@unique([sindicatoId, placaNormalizada]) (dropea el viejo @@unique([sindicatoId,
   // placa]) sobre la placa CRUDA sin reemplazarlo por un equivalente sobre la normalizada):
@@ -261,7 +268,7 @@ model Conductor {
   asignaciones       Asignacion[]
   desafiosAuthMovil  DesafioAuthMovil[]
   sesionesOperativas SesionOperativa[]
-  vehiculosConFoto   Vehiculo[] @relation("VehiculoFotoSubidaPor")
+  vehiculosConFoto   Vehiculo[]         @relation("VehiculoFotoSubidaPor")
 
   @@unique([sindicatoId, documentoIdentidad])
   @@index([sindicatoId])
@@ -274,21 +281,21 @@ model Conductor {
 // sigue perteneciendo a un sindicato; la ciudad solo evita mezclar códigos iguales entre
 // departamentos y permite activar nuevas fuentes de forma gradual.
 model MobilityCity {
-  id                  String   @id
+  id                  String    @id
   nombre              String
   departamentoCodigo  String?
   departamentoNombre  String?
-  paisCodigo          String   @default("BO")
-  zonaHoraria         String   @default("America/La_Paz")
-  estadoCobertura     String   @default("coming_soon")
+  paisCodigo          String    @default("BO")
+  zonaHoraria         String    @default("America/La_Paz")
+  estadoCobertura     String    @default("coming_soon")
   fuenteTipo          String?
   fuenteNombre        String?
   fuenteLicencia      String?
   fuenteActualizadaAt DateTime?
-  modosDisponibles    String[] @default([])
-  serviciosAuxiliares String[] @default([])
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @default(now()) @updatedAt
+  modosDisponibles    String[]  @default([])
+  serviciosAuxiliares String[]  @default([])
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @default(now()) @updatedAt
 
   lineas Linea[]
 
@@ -297,38 +304,38 @@ model MobilityCity {
 }
 
 model Linea {
-  id              String    @id @default(uuid())
-  sindicatoId     String
-  sindicato       Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
-  cityId          String    @default("cochabamba")
-  mobilityCity    MobilityCity @relation(fields: [cityId], references: [id], onDelete: Restrict)
-  codigo          String
-  nombre          String
-  color           String?
-  colorSecundario String?
-  colorTexto      String?
-  colorTerciario  String?
-  colorFondo      String?
-  nombreCorto     String?
-  lema            String?
-  descripcion     String?
-  logoUrl         String?
-  distintivoTipo  String?
-  distintivoValor String?
-  cartelSuperior  String?
-  cartelFormato   String?
-  cartelTitulo    String?
-  cartelDetalle   String?
+  id                   String       @id @default(uuid())
+  sindicatoId          String
+  sindicato            Sindicato    @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  cityId               String       @default("cochabamba")
+  mobilityCity         MobilityCity @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  codigo               String
+  nombre               String
+  color                String?
+  colorSecundario      String?
+  colorTexto           String?
+  colorTerciario       String?
+  colorFondo           String?
+  nombreCorto          String?
+  lema                 String?
+  descripcion          String?
+  logoUrl              String?
+  distintivoTipo       String?
+  distintivoValor      String?
+  cartelSuperior       String?
+  cartelFormato        String?
+  cartelTitulo         String?
+  cartelDetalle        String?
   cartelNumeroPosicion String?
   cartelLogoPosicion   String?
   cartelColorTitulo    String?
   cartelColorDetalle   String?
   cartelColorNumero    String?
   cartelColorBorde     String?
-  publicStatus         String    @default("borrador")
+  publicStatus         String       @default("borrador")
   publishedAt          DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
   rutas Ruta[]
 
@@ -345,20 +352,20 @@ model Linea {
 // crudo tal cual en la migración (PostGIS ya está habilitado en la DB, ver docker-compose.yml).
 // Sin CRUD todavía (llega con QUI-225/226) — este es solo el shape de la tabla.
 model Ruta {
-  id        String                                    @id @default(uuid())
-  lineaId   String
-  linea     Linea                                     @relation(fields: [lineaId], references: [id], onDelete: Cascade)
-  sentido   String
-  geometria Unsupported("geography(LineString,4326)")
-  estado    String                                    @default("activo")
+  id               String                                    @id @default(uuid())
+  lineaId          String
+  linea            Linea                                     @relation(fields: [lineaId], references: [id], onDelete: Cascade)
+  sentido          String
+  geometria        Unsupported("geography(LineString,4326)")
+  estado           String                                    @default("activo")
   // Solo las geometrías trazadas con GPS real admiten detección de desvío (un boceto KML con
   // vértices a cientos de metros genera falsos desvíos). Se habilita por SQL; ver la migración
   // `20261012100000_infracciones`.
-  desvioHabilitado Boolean                             @default(false)
-  publicStatus String                                  @default("borrador")
-  publishedAt DateTime?
-  createdAt DateTime                                  @default(now())
-  updatedAt DateTime                                  @updatedAt
+  desvioHabilitado Boolean                                   @default(false)
+  publicStatus     String                                    @default("borrador")
+  publishedAt      DateTime?
+  createdAt        DateTime                                  @default(now())
+  updatedAt        DateTime                                  @updatedAt
 
   variantes     Variante[]
   paradas       Parada[]
@@ -372,23 +379,23 @@ model Ruta {
 }
 
 model Variante {
-  id        String   @id @default(uuid())
-  rutaId    String
-  ruta      Ruta     @relation(fields: [rutaId], references: [id], onDelete: Cascade)
-  nombre    String
+  id            String                                     @id @default(uuid())
+  rutaId        String
+  ruta          Ruta                                       @relation(fields: [rutaId], references: [id], onDelete: Cascade)
+  nombre        String
   // Soft-delete (nunca DELETE real): mismo criterio que el resto del dominio.
-  estado    String   @default("activo")
+  estado        String                                     @default("activo")
   // Tramo ADICIONAL de la variante (no el recorrido completo) + punto donde debe esperar
   // (docs/plan-molinos-designacion.md). Ambos NULL = variante sin geometría propia.
-  geometria Unsupported("geography(LineString,4326)")?
+  geometria     Unsupported("geography(LineString,4326)")?
   puntoEsperaId String?
-  puntoEspera PuntoControl? @relation("VariantePuntoEspera", fields: [puntoEsperaId], references: [id], onDelete: SetNull)
-  publicStatus String @default("borrador")
-  publishedAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  puntoEspera   PuntoControl?                              @relation("VariantePuntoEspera", fields: [puntoEsperaId], references: [id], onDelete: SetNull)
+  publicStatus  String                                     @default("borrador")
+  publishedAt   DateTime?
+  createdAt     DateTime                                   @default(now())
+  updatedAt     DateTime                                   @updatedAt
 
-  vueltas Vuelta[] @relation("VueltaVariante")
+  vueltas               Vuelta[] @relation("VueltaVariante")
   vueltasMolinosProxima Vuelta[] @relation("VueltaMolinosProxima")
 
   @@index([rutaId])
@@ -399,20 +406,20 @@ model Variante {
 }
 
 model Parada {
-  id        String                               @id @default(uuid())
-  rutaId    String
-  ruta      Ruta                                 @relation(fields: [rutaId], references: [id], onDelete: Cascade)
-  tipo      String
-  orden     Int
-  nombre    String?
-  referencia String?
-  coord     Unsupported("geography(Point,4326)")
+  id           String                               @id @default(uuid())
+  rutaId       String
+  ruta         Ruta                                 @relation(fields: [rutaId], references: [id], onDelete: Cascade)
+  tipo         String
+  orden        Int
+  nombre       String?
+  referencia   String?
+  coord        Unsupported("geography(Point,4326)")
   // Soft-delete (nunca DELETE real): mismo criterio que el resto del dominio.
-  estado    String                               @default("activo")
-  publicStatus String                             @default("borrador")
-  publishedAt DateTime?
-  createdAt DateTime                             @default(now())
-  updatedAt DateTime                             @updatedAt
+  estado       String                               @default("activo")
+  publicStatus String                               @default("borrador")
+  publishedAt  DateTime?
+  createdAt    DateTime                             @default(now())
+  updatedAt    DateTime                             @updatedAt
 
   @@index([rutaId])
   @@index([publicStatus])
@@ -421,26 +428,31 @@ model Parada {
 }
 
 model PuntoControl {
-  id               String                               @id @default(uuid())
-  rutaId           String
-  ruta             Ruta                                 @relation(fields: [rutaId], references: [id], onDelete: Cascade)
-  orden            Int
-  coord            Unsupported("geography(Point,4326)")
-  radioToleranciaM Int
-  obligatorio      Boolean                              @default(true)
+  id                  String                               @id @default(uuid())
+  rutaId              String
+  ruta                Ruta                                 @relation(fields: [rutaId], references: [id], onDelete: Cascade)
+  orden               Int
+  coord               Unsupported("geography(Point,4326)")
+  radioToleranciaM    Int
+  obligatorio         Boolean                              @default(true)
   // Rol dentro del ciclo de vueltas (docs/plan-molinos-designacion.md): 'terminal' | 'retorno' |
   // 'espera' (CHECK en la migración `20261013140000_vueltas_molinos`). NULL = punto común.
-  rol              String?
+  rol                 String?
   // Minutos de espera obligatoria; solo con rol = 'espera' (CHECK).
-  esperaMin        Int?
+  esperaMin           Int?
+  // Frecuencia base de la fila de salida (min); solo con rol = 'terminal', 1..120 (CHECK en la
+  // migración `20261020120000_fila_salida`).
+  frecuenciaSalidaMin Int?
   // Soft-delete (nunca DELETE real): `CumplimientoPc.puntoControlId` referencia este id sin
   // FK (mismo patrón polimórfico que Sancion.sujetoId/AuditLog.entidadId) — un DELETE real
   // dejaría ese historial apuntando a un id inexistente.
-  estado           String                               @default("activo")
-  createdAt        DateTime                             @default(now())
-  updatedAt        DateTime                             @updatedAt
+  estado              String                               @default("activo")
+  createdAt           DateTime                             @default(now())
+  updatedAt           DateTime                             @updatedAt
 
-  variantesEspera  Variante[]                           @relation("VariantePuntoEspera")
+  variantesEspera  Variante[]        @relation("VariantePuntoEspera")
+  frecuenciaReglas FrecuenciaRegla[]
+  filaSalida       FilaSalida[]
 
   @@index([rutaId])
   @@map("puntos_control")
@@ -566,21 +578,21 @@ model IntentoAuthMovil {
 }
 
 model SesionOperativa {
-  id               String     @id @default(uuid())
-  sindicatoId      String
-  sindicato        Sindicato  @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
-  asignacionId     String
-  asignacion       Asignacion @relation(fields: [asignacionId], references: [id], onDelete: Restrict)
-  vehiculoId       String
-  vehiculo         Vehiculo   @relation(fields: [vehiculoId], references: [id], onDelete: Restrict)
-  conductorId      String
-  conductor        Conductor  @relation(fields: [conductorId], references: [id], onDelete: Restrict)
-  deviceId         String
-  inicio           DateTime   @default(now())
-  fin              DateTime?
-  estado           String     @default("activa")
-  accessTokenHash  String     @unique
-  refreshTokenHash String     @unique
+  id                       String     @id @default(uuid())
+  sindicatoId              String
+  sindicato                Sindicato  @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  asignacionId             String
+  asignacion               Asignacion @relation(fields: [asignacionId], references: [id], onDelete: Restrict)
+  vehiculoId               String
+  vehiculo                 Vehiculo   @relation(fields: [vehiculoId], references: [id], onDelete: Restrict)
+  conductorId              String
+  conductor                Conductor  @relation(fields: [conductorId], references: [id], onDelete: Restrict)
+  deviceId                 String
+  inicio                   DateTime   @default(now())
+  fin                      DateTime?
+  estado                   String     @default("activa")
+  accessTokenHash          String     @unique
+  refreshTokenHash         String     @unique
   // Hallazgo 5 (code review, SEGURIDAD — `docs/plan-correccion-post-piloto-2026-09-09.md`):
   // el hash del refreshToken que `refresh()` ACABA de rotar hacia afuera, para poder probar
   // "prueba de posesión" en el fallback de `logout()` sin necesitar una tabla de historial
@@ -588,11 +600,11 @@ model SesionOperativa {
   // refrescaron (o instaladas antes de esta columna) simplemente no tienen fallback posible,
   // que es el comportamiento seguro por defecto.
   refreshTokenHashAnterior String?
-  accessExpiresAt  DateTime
-  refreshExpiresAt DateTime
-  revokedAt        DateTime?
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
+  accessExpiresAt          DateTime
+  refreshExpiresAt         DateTime
+  revokedAt                DateTime?
+  createdAt                DateTime   @default(now())
+  updatedAt                DateTime   @updatedAt
   // Fase A (docs/plan-ubicacion-fluida.md) — estado DERIVADO del recorrido, distinto de
   // `fin`/`estado` de arriba (esos son de la sesión de LOGIN y solo los toca `logout` en
   // auth-movil; "Finalizar" en la app no los cambia). `recorridoEstado`/`recorridoEstadoTs`
@@ -602,13 +614,14 @@ model SesionOperativa {
   // mandó ninguno de esos dos eventos. Sin `@map` a propósito, igual que el resto del
   // modelo: la columna en Postgres queda camelCase entre comillas (`"recorridoEstado"`),
   // no snake_case — este modelo no usa `@map` por campo en ningún otro lugar.
-  recorridoEstado   String?
-  recorridoEstadoTs DateTime?
+  recorridoEstado          String?
+  recorridoEstadoTs        DateTime?
 
   cumplimientosPc   CumplimientoPc[]
   eventosOperativos EventoOperativo[]
   infracciones      Infraccion[]
   vueltas           Vuelta[]
+  filaSalida        FilaSalida[]
 
   @@index([sindicatoId])
   @@index([asignacionId, estado])
@@ -772,13 +785,11 @@ model EventoOperativo {
  * docs/plan-en-vivo-alertas.md, PR A — infracciones detectadas por el worker de ingesta
  * (`desvio_ruta`: máquina de estados sobre los fixes GPS; `pc_omitido`: PC obligatorio que se
  * saltó) y accionables por el admin desde `/en-vivo` (atender / descartar / sancionar).
- *
  * Columnas camelCase (sin `@map` por campo), igual que `CumplimientoPc`/`EventoOperativo` —
  * los vecinos que SÍ tienen modelo Prisma. Solo `sindicatoId` y `sesionId` tienen FK real;
  * `vehiculoId`/`conductorId`/`lineaId`/`rutaId`/`reglaId`/`sancionId` son snapshots sin FK
  * (mismo patrón polimórfico que `Sancion.sujetoId`): la infracción es evidencia histórica y
  * no debe bloquear ni caer en cascada con cambios en esas entidades.
- *
  * `dedupeKey` UNIQUE hace idempotente la detección (reintentos de lote, reproceso):
  * `desvio:{sesionId}:{inicioTs iso}` / `pc_omitido:{sesionId}:{pcId}:{inicioRecorridoTs iso}`.
  */
@@ -824,43 +835,43 @@ model Infraccion {
 // `fecha` es el día LOCAL de Bolivia. Índice parcial único (sesionId) WHERE estado='en_curso'
 // solo existe en SQL (Prisma no lo modela).
 model Vuelta {
-  id              String          @id @default(uuid())
-  sindicatoId     String
-  sindicato       Sindicato       @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
-  sesionId        String
-  sesion          SesionOperativa @relation(fields: [sesionId], references: [id], onDelete: Cascade)
-  vehiculoId      String
-  conductorId     String
-  lineaId         String
-  rutaId          String
-  fecha           DateTime        @db.Date
-  numero          Int
-  inicioTs        DateTime
-  finTs           DateTime?
+  id                       String          @id @default(uuid())
+  sindicatoId              String
+  sindicato                Sindicato       @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  sesionId                 String
+  sesion                   SesionOperativa @relation(fields: [sesionId], references: [id], onDelete: Cascade)
+  vehiculoId               String
+  conductorId              String
+  lineaId                  String
+  rutaId                   String
+  fecha                    DateTime        @db.Date
+  numero                   Int
+  inicioTs                 DateTime
+  finTs                    DateTime?
   // 'en_curso' | 'completa' | 'abierta_al_cierre'.
-  estado          String          @default("en_curso")
-  pasoRetornoTs   DateTime?
-  varianteId      String?
-  variante        Variante?       @relation("VueltaVariante", fields: [varianteId], references: [id], onDelete: SetNull)
-  designadaPor    String?
-  designadaEn     DateTime?
-  acuseEn         DateTime?
+  estado                   String          @default("en_curso")
+  pasoRetornoTs            DateTime?
+  varianteId               String?
+  variante                 Variante?       @relation("VueltaVariante", fields: [varianteId], references: [id], onDelete: SetNull)
+  designadaPor             String?
+  designadaEn              DateTime?
+  acuseEn                  DateTime?
   // Designación diferida: la del control DESPUÉS de pasar la bifurcación en el regreso. El worker
   // la copia a `varianteId`/`designada*` de la vuelta siguiente al abrirla.
   molinosProximaVarianteId String?
   molinosProximaVariante   Variante?       @relation("VueltaMolinosProxima", fields: [molinosProximaVarianteId], references: [id], onDelete: SetNull)
   molinosProximaPor        String?
   molinosProximaEn         DateTime?
-  esperaLlegadaTs DateTime?
-  esperaSalidaTs  DateTime?
+  esperaLlegadaTs          DateTime?
+  esperaSalidaTs           DateTime?
   // Último cumplimiento de un PC distinto de la terminal dentro de la vuelta (retorno, espera o
   // común). NULL + sin retorno + sin designar = vuelta "vacía": al cerrarse se elimina.
-  ultimoPcTs      DateTime?
+  ultimoPcTs               DateTime?
   // `ts` del último fix GPS ya evaluado para la salida de la espera (cursor; NULL = desde la
   // llegada). Lo avanza el worker en la misma transacción que evalúa: si falla, no avanza.
-  esperaRevisadaHastaTs DateTime?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  esperaRevisadaHastaTs    DateTime?
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
 
   @@unique([sesionId, numero])
   @@index([vehiculoId, fecha])
@@ -931,4 +942,95 @@ model DemoRequest {
   @@index([createdAt])
   @@index([status, createdAt])
   @@map("demo_requests")
+}
+
+// Fila de salida con frecuencias (plan "fila de salida", PR 1). Migración `20261020120000_fila_salida`.
+// Un trufi pertenece a un solo grupo (unique en GrupoVehiculoMiembro.vehiculoId).
+model GrupoVehiculo {
+  id          String    @id @default(uuid())
+  sindicatoId String
+  sindicato   Sindicato @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  nombre      String
+  // 'activo' | 'inactivo' (CHECK).
+  estado      String    @default("activo")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  miembros GrupoVehiculoMiembro[]
+  reglas   FrecuenciaRegla[]
+
+  @@index([sindicatoId])
+  @@map("grupos_vehiculo")
+}
+
+model GrupoVehiculoMiembro {
+  grupoId     String
+  grupo       GrupoVehiculo @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  vehiculoId  String        @unique
+  vehiculo    Vehiculo      @relation(fields: [vehiculoId], references: [id], onDelete: Cascade)
+  sindicatoId String
+  sindicato   Sindicato     @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+
+  @@id([grupoId, vehiculoId])
+  @@index([sindicatoId])
+  @@map("grupo_vehiculo_miembros")
+}
+
+// Se anula (`anuladaEn`), nunca se borra. El índice (puntoControlId, fecha) es PARCIAL
+// (WHERE anuladaEn IS NULL, solo SQL); los CHECK de alcance<->ids, minutos y franja viven en la migración.
+model FrecuenciaRegla {
+  id             String         @id @default(uuid())
+  sindicatoId    String
+  sindicato      Sindicato      @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  puntoControlId String
+  puntoControl   PuntoControl   @relation(fields: [puntoControlId], references: [id], onDelete: Restrict)
+  // Día LOCAL de Bolivia.
+  fecha          DateTime       @db.Date
+  // 'todos' | 'grupo' | 'vehiculo'.
+  alcance        String
+  grupoId        String?
+  grupo          GrupoVehiculo? @relation(fields: [grupoId], references: [id], onDelete: Restrict)
+  vehiculoId     String?
+  vehiculo       Vehiculo?      @relation(fields: [vehiculoId], references: [id], onDelete: Restrict)
+  minutos        Int
+  // Minuto del día local (0..1440); ambos o ninguno.
+  desdeMin       Int?
+  hastaMin       Int?
+  creadaPor      String
+  creadaEn       DateTime       @default(now())
+  anuladaEn      DateTime?
+  anuladaPor     String?
+
+  @@index([sindicatoId])
+  @@map("frecuencia_reglas")
+}
+
+// Único PARCIAL (vehiculoId) WHERE estado = 'en_fila' (solo SQL): idempotencia de la llegada.
+// CHECK: estado = 'salio' <=> salidaTs y salidaOrigen no nulos.
+model FilaSalida {
+  id             String          @id @default(uuid())
+  sindicatoId    String
+  sindicato      Sindicato       @relation(fields: [sindicatoId], references: [id], onDelete: Restrict)
+  puntoControlId String
+  puntoControl   PuntoControl    @relation(fields: [puntoControlId], references: [id], onDelete: Restrict)
+  fecha          DateTime        @db.Date
+  sesionId       String
+  sesion         SesionOperativa @relation(fields: [sesionId], references: [id], onDelete: Cascade)
+  vehiculoId     String
+  vehiculo       Vehiculo        @relation(fields: [vehiculoId], references: [id], onDelete: Restrict)
+  llegadaTs      DateTime
+  // Arranca igual a `llegadaTs`; "mover al final" lo pone en now().
+  ordenTs        DateTime
+  salidaTs       DateTime?
+  // 'boton' | 'geocerca' | 'deteccion' | 'panel'.
+  salidaOrigen   String?
+  anticipada     Boolean         @default(false)
+  // 'en_fila' | 'salio' | 'retirado'.
+  estado         String          @default("en_fila")
+  createdAt      DateTime        @default(now())
+
+  @@index([puntoControlId, fecha, estado, ordenTs])
+  @@index([sesionId])
+  @@index([sindicatoId])
+  @@map("fila_salida")
 }

@@ -27,6 +27,8 @@ export const PuntoControlSchema = z.object({
   rol: RolPuntoControlSchema.nullable().optional(),
   /** Minutos de espera obligatoria; solo con `rol = 'espera'` (el servicio lo valida). */
   esperaMin: z.number().int().positive().nullable().optional(),
+  /** Frecuencia base de la fila de salida (min); solo con `rol = 'terminal'` (el servicio lo valida). */
+  frecuenciaSalidaMin: z.number().int().min(1).max(120).nullable().optional(),
 });
 export type PuntoControl = z.infer<typeof PuntoControlSchema>;
 
