@@ -13,6 +13,12 @@ que vence el 26/10). **Miércoles 21 y jueves 22/10: dos pilotos con pasantes en
 Calendario y propuesta de deploy en [`docs/runbook-dia-30.md`](runbook-dia-30.md): r21 **antes** del piloto del 21 para
 que esos dos días lo prueben en la calle; congelamiento después del piloto del 22.
 
+- **Plan de escalamiento a 30 CERRADO (20/10, CTO).** Tabla de estado en
+  [`plan-escalabilidad-30.md`](plan-escalabilidad-30.md). Backlog que queda: archivo GPS (A5, **antes de enero**),
+  vencimiento de rotaciones al worker (A4), Fase 2 (orden por dispositivo; requisito para subir la concurrencia del
+  worker o pasar de ~300 trufis), Fase 3 (mantenibilidad), mail de prueba del canal de alertas (el CTO lo deja para
+  después), informe de métricas reales después de D. Lo del día D sigue en el runbook: credenciales de los 30 (lista
+  del CTO, como tarde el jueves 22), congelamiento, ensayo de login el viernes.
 - **r21 en prod (20/10, 22:00–22:40, Claude con autorización del CTO):** API `quivo-api-00026-tvm` (100 %, imagen
   `api:r21-20261020`; trae A1 login por placa, A2 Sentry, A3 pool/timeouts) y worker `quivo-worker` en la misma imagen.
   Health ok (db y redis up). Secreto `SENTRY_DSN_API` creado (proyecto Sentry `quivo-api`, Nest.js, solo errores, alerta

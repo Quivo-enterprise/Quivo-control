@@ -1,5 +1,25 @@
 # Plan — Llevar Quivo a 30 conductores simultáneos (capacidad, resiliencia, costos, mantenibilidad)
 
+> **CERRADO el 20/10 (decisión del CTO).** Capacidad para 30 hecha y medida: ensayo B del 20/10 con 30 y 60 choferes
+> sintéticos (60 sintéticos ≈ 160–220 trufis reales), 0 puntos perdidos, conexiones máx 21 de 50; todo en prod con
+> r21 (`quivo-api-00026-tvm`) desde el 20/10, más alertas, uptime y PITR. La validación real es el día D (24/10,
+> [`runbook-dia-30.md`](runbook-dia-30.md)); el informe de métricas reales va después de D.
+>
+> | Punto | Estado |
+> |---|---|
+> | Fase 1.1 BullMQ (retención, reintentos, concurrencia 1) | hecho (#188, #193) |
+> | Fase 1.2 Observabilidad | hecho (#200; desplegado 20/10). Sin presupuesto (decisión del CTO) ni alerta de cola trabada. Mail de prueba del canal: pendiente |
+> | Fase 1.3 Rate limit | hecho (#192, #202) |
+> | Fase 1.4 Pools y timeouts | hecho (#201) |
+> | Fase 1.5 Retención/archivo GPS | **pendiente**: hace falta antes de enero (bucket + credenciales HMAC) |
+> | Fase 1.6 Vencimiento de rotaciones al worker | **pendiente**, sin urgencia (no duplica; motivo en `plan-dia-30.md`) |
+> | Fase 1.7 `ruta-a-punto` sin OSRM | hecho (#187, #191) |
+> | Fase 2 Optimización | no hizo falta para 30; candidatos en la escalera de costos (`costos-escalera-2026-10.md`) |
+> | Fase 3 Mantenibilidad | no empezada; backlog |
+> | Despliegue gradual 5 → 15 → 30 | reemplazado por: 3 → 8 (pasantes 21–22/10) → 30 (D) |
+>
+> Lo pendiente pasa al backlog del handoff; este archivo queda como histórico.
+
 ## Contexto
 
 Pedido del CTO (18/10): optimizar y escalar la app a **mínimo 30 usuarios**, evaluando load balancers, Docker,
