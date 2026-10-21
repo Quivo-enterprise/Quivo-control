@@ -368,6 +368,49 @@ export async function anunciarAvisoEnCanal(aviso: {
   }
 }
 
+/**
+ * Programa una notificación local para `fechaMs` (trigger por fecha de `expo-notifications`, en el
+ * canal del anuncio): suena aunque la app no esté en primer plano. Con el mismo `identifier` REEMPLAZA
+ * a la anterior. Sin el permiso de alarma exacta Android la entrega "inexacta" (puede atrasarse en
+ * Doze). `true` solo si quedó programada.
+ */
+export async function programarAvisoEnCanal(aviso: {
+  identifier: string;
+  titulo: string;
+  cuerpo: string;
+  fechaMs: number;
+}): Promise<boolean> {
+  try {
+    await asegurarCanalNotificacion();
+    await Notifications.scheduleNotificationAsync({
+      identifier: aviso.identifier,
+      content: { title: aviso.titulo, body: aviso.cuerpo, data: { silenciarSonidoForeground: true } },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date: aviso.fechaMs,
+        channelId: CANAL_ANUNCIO_ANDROID,
+      },
+    });
+    return true;
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { contexto: 'anuncio-punto-control', paso: 'programar-aviso-canal' },
+    });
+    return false;
+  }
+}
+
+/** Cancela la notificación programada con ese `identifier` y quita la ya presentada. Best-effort:
+ * nunca rechaza. */
+export async function cancelarAvisoProgramado(identifier: string): Promise<void> {
+  try {
+    await Notifications.cancelScheduledNotificationAsync(identifier);
+  } catch {
+    // silencioso: si no existía o falla el SO, no hay nada más que hacer
+  }
+  await descartarNotificacionAviso(identifier);
+}
+
 /** Quita de la bandeja una notificación local ya presentada (`identifier` del aviso). Best-effort:
  * nunca rechaza; que no exista o falle el SO no es un problema para el chofer. */
 export async function descartarNotificacionAviso(identifier: string): Promise<void> {

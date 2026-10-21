@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
+import type { EstadoFilaSalida } from '@quivo/shared';
 import { leerEstadoVueltaLocal } from '../../db/vuelta-actual-local';
 import {
   ESTADO_LOCAL_INICIAL,
@@ -44,6 +45,10 @@ export interface EstadoVueltaActualUi {
   sinActualizar: boolean;
   /** Minutos que faltan para salir de Molinos; `null` = no está en espera (o cache viejo). */
   restanteEspera: number | null;
+  /** Fila de salida de la terminal (del mismo cache); `null` = no está en la fila o el cache es viejo. */
+  fila: EstadoFilaSalida | null;
+  /** Reloj del teléfono (epoch ms) al recibir `fila`: base del desfase con el reloj del servidor. */
+  filaRecibidaEn: number | null;
   entenderDesignacion: () => void;
   entenderCancelacion: () => void;
 }
@@ -145,6 +150,8 @@ export function useVueltaActual({ sesionId, tracking, obtenerAccessToken }: Para
     designacionActiva,
     sinActualizar: cacheViejo && designacionCache !== null,
     restanteEspera,
+    fila: tracking && !cacheViejo ? (estado.ultimo?.fila ?? null) : null,
+    filaRecibidaEn: estado.actualizadoEn,
     entenderDesignacion: () => {
       if (tracking) void entenderDesignacion(obtenerToken, sesionId);
     },

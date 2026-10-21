@@ -53,6 +53,8 @@ import { faseControl } from '../jornada/fase-control';
 import { useJornada } from '../jornada/use-jornada';
 import { AvisoFotoVehiculo } from '../vehiculo-foto/aviso-foto-vehiculo';
 import { useVueltaActual } from '../vuelta-actual/use-vuelta-actual';
+import { useFilaSalida } from '../fila-salida/use-fila-salida';
+import { terminalDeLaRuta } from '../fila-salida/fila-salida-deteccion';
 import { AvisoDesignacion, ContadorEsperaMolinos } from '../vuelta-actual/aviso-designacion';
 
 interface OperationScreenProps {
@@ -108,6 +110,16 @@ export function OperationScreen(
   const vueltaActual = useVueltaActual({
     sesionId: props.contexto.sesionId,
     tracking: gps.tracking,
+    obtenerAccessToken: props.obtenerAccessToken,
+  });
+  // Fila de salida de la terminal: sale del mismo cache (sin polling propio).
+  const terminalZona = useMemo(() => terminalDeLaRuta(puntosControl), [puntosControl]);
+  const filaSalida = useFilaSalida({
+    fila: vueltaActual.fila,
+    recibidoEn: vueltaActual.filaRecibidaEn,
+    tracking: gps.tracking,
+    terminal: terminalZona,
+    posicion: gps.posicionActual,
     obtenerAccessToken: props.obtenerAccessToken,
   });
   // Progreso de la vuelta (RF-GPS-054): pasos en cualquier orden, omitidos en rojo, vuelta al
@@ -657,6 +669,7 @@ export function OperationScreen(
         }
         onStart={() => void gps.iniciar()}
         onFinish={confirmarFinalizacion}
+        filaSalida={filaSalida}
         panY={sheetPanY}
         onAlto={setAltoSheet}
         onAltoVisible={setAltoSheetVisible}

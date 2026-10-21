@@ -36,6 +36,7 @@ import {
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
 import { consultarVueltaActual } from '../features/vuelta-actual/vuelta-actual-oportunista';
 import { esperarConTope } from '../features/vuelta-actual/espera-con-tope';
+import { fixDeLocation, procesarFixFila } from '../features/fila-salida/fila-salida-deteccion';
 // Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
 // `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
 import { confirmarTokenRechazadoVigente, refrescar } from '../features/auth/use-auth-movil';
@@ -1338,6 +1339,16 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
           tags: { contexto: 'headless-task', paso: 'anunciar-punto-control' },
         });
       });
+      // Fila de salida: entrada/salida de la zona de la terminal con este mismo fix. Con tope de
+      // espera como la vuelta actual: sin red no cuelga la tarea (la promesa sigue por su cuenta).
+      await esperarConTope(
+        procesarFixFila(fixDeLocation(location), {
+          sesionId: contexto.sesionId,
+          puntosControl: contexto.puntosControl,
+          obtenerAccessToken: obtenerAccessTokenHeadless,
+        }),
+        TOPE_ESPERA_VUELTA_ACTUAL_MS,
+      );
     }
     // `contexto === null`: sin turno vigente (sesión cerrada, logout solicitado o paquete del
     // día vencido) — el punto se descarta, decisión ya tomada dentro de
