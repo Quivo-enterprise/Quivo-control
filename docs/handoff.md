@@ -6,7 +6,58 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-20, tarde (leer primero): fecha de D, Vecinos en la escalera, mapa de la línea
+## Punto de retome — 2026-10-21, 09:00 (leer primero): fila de salida en prod para el piloto de las 15:00
+
+**Cambio de plan del CTO (21/10, 08:30): la fila de salida entra HOY en el piloto de pasantes de las 15:00**, no
+después de D. Objeción dicha y registrada (los pilotos del 21–22 eran para validar r21 tal cual para D; toca el aviso de
+Molinos y la tarea GPS headless sin prueba en dispositivo; la OTA llega a todos los teléfonos del canal). El CTO
+confirmó que **solo entran trufis designados por él, coordinado con la L16** (no hace falta gate por grupo). Con esto,
+**r22 + la OTA de la fila pasan a ser la versión del día D**. Si un piloto sale mal: volver la API a r21
+(`quivo-api-00026-tvm`, la migración es aditiva y r21 corre igual con ella), worker a `api:r21-20261020`, y
+republicar la OTA anterior ("fix: reconciliar Comenzar/Finalizar con el GPS nativo", grupo
+`9306212c-fa6b-46f5-9186-7de1879dd171`).
+
+**Hecho hoy:**
+- E2E LOCAL (Postgres+Redis en docker, API y worker compilados, 5 choferes sintéticos por login móvil real): 9/9
+  escenarios OK — posiciones/ETA con base, idempotencia (6 llegadas concurrentes ⇒ 1 fila), 422 fuera de zona y por
+  precisión, precedencia de reglas (vehículo > grupo > todos > base), salida anticipada, backstop del worker por
+  `cumplimiento_punto_control` (<1,5 s), panel con `operador` (403 en grupos), logout ⇒ `retirado`, `vuelta-actual`
+  p95 9,3 ms con 5 en fila (+3 ms). Sin probar: franjas `desdeMin/hastaMin`, acuse real de Molinos, backstop con GPS
+  crudo, cliente real. Log: job tmp `e2e-fila.md` (no versionado).
+- **#220 mergeado en main por rebase (`95b15b4`)** con los 8 commits de los 4 PRs; #216/#217/#219 cerrados como
+  incluidos; ramas borradas.
+- **Deploy r22 (`r22-20261021`) en prod:** migración `20261020120000_fila_salida` OK (job de migraciones), **API
+  `quivo-api-00027-g4g` 100 %** (health ok, db+redis up; `/v1/mobile/fila/llegada` sin token ⇒ 401), **worker en
+  `api:r22-20261021`**. **Web:** el 1.er intento cortó en preflight por falta de `GOOGLE_MAPS_MAP_ID` (sin efectos);
+  relanzado con `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh r22-20261021 --solo web`
+  (log en job tmp `deploy-r22-web.log`). **A las 09:01 seguía corriendo; prod web seguía en `quivo-web-00012-8wn`
+  (`web:r18-20261017`). VERIFICAR al retomar** (`gcloud run services describe quivo-web … --format='value(spec.template.spec.containers[0].image)'`
+  debe dar `web:r22-20261021`); si no, re-correr ese comando.
+- **OTA: NO publicada todavía.** El 1.er intento del CTO se canceló solo: `publicar-ota.sh` pide `[y/N]` y `!` no
+  pasa stdin. Comando para el CTO:
+  `! cd ~/Documents/Quivo-App/Quivo-control/apps/mobile && printf 'y\n' | ./scripts/publicar-ota.sh "Fila de salida en Salomón Romero (r22)" 2>&1 | grep -v '"type":"dir"' | tail -40`.
+  Fingerprint esperado `547d52e7d5b095dfbc0f04f547a66bf625382393` (igual a los 2 últimos updates). Verificar después
+  con `npx eas-cli update:list --branch production --limit 2`.
+
+**Pendiente antes de las 15:00 (en orden):**
+1. Confirmar web r22 (arriba) y publicar la OTA (CTO).
+2. Panel (CTO): Salomón Romero con `rol='terminal'` en la ruta de la L16 (puntos de control) y **frecuencia base 6
+   min** en `/salidas`. No se leyó prod para saber si ya es terminal.
+3. Prueba en la parada (el CTO estará en SR) antes de las 13:30, con un teléfono con la OTA: entrada automática a la
+   fila, tarjeta y cuenta, SALIR habilitado en el turno, salida por geocerca, "Estoy en la fila", aviso T−1 con
+   pantalla prendida y apagada (medir segundos de atraso), panel `/salidas` mostrando la fila.
+4. 14:00: go/no-go. Si falla, piloto con r21 sin fila (rollback de arriba).
+5. Durante el piloto: monitorear r22 en vivo (logins, Sentry `quivo-api` y app RN, ingesta, logs de Cloud Run,
+   `Fila de salida: falló el estado` en warn).
+
+**Comportamientos a explicar en la calle (no son bugs):** en el panel el 1.º figura "demorado" apenas llega (la app
+del chofer solo lo muestra tras 60 s); si el 2.º sale antes de turno, el 1.º vuelve a esperar la frecuencia completa
+desde esa salida; despachar desde el panel a un no habilitado queda `anticipada`.
+
+**No verificado:** nada en dispositivo (UI, TalkBack, notificación con Doze); logout con recorrido activo vs aviso
+programado; si la ruta L16 pasa a <150 m de SR a mitad de vuelta (llegada falsa); Codex (sin cuota).
+
+## Punto de retome — 2026-10-20, tarde: fecha de D, Vecinos en la escalera, mapa de la línea
 
 **Día D = sábado 24/10** (supuesto: "el sábado que viene", dicho el martes 20/10; si es el 31, extender el piloto L16,
 que vence el 26/10). **Miércoles 21 y jueves 22/10: dos pilotos con pasantes en unos 5 trufis** (no los 30).
