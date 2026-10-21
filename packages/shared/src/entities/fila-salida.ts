@@ -150,11 +150,82 @@ export const FilaSalidaPanelItemSchema = z.object({
 });
 export type FilaSalidaPanelItem = z.infer<typeof FilaSalidaPanelItemSchema>;
 
+/** Salida reciente del día (solo informativa en el panel). */
+export const SalidaRecientePanelSchema = z.object({
+  id: uuidSchema,
+  vehiculoId: uuidSchema,
+  placa: z.string(),
+  llegadaTs: z.string(),
+  salidaTs: z.string(),
+  salidaOrigen: OrigenSalidaSchema,
+  anticipada: z.boolean(),
+});
+export type SalidaRecientePanel = z.infer<typeof SalidaRecientePanelSchema>;
+
 export const EstadoFilaSalidaPanelSchema = z.object({
   puntoControlId: uuidSchema,
   /** Frecuencia base de la parada; `null` = sin configurar. */
   baseMin: minutosSchema.nullable(),
   servidorTs: z.string(),
   items: z.array(FilaSalidaPanelItemSchema),
+  /** Últimas salidas del día en la parada (más reciente primero). */
+  salidasRecientes: z.array(SalidaRecientePanelSchema).default([]),
 });
 export type EstadoFilaSalidaPanel = z.infer<typeof EstadoFilaSalidaPanelSchema>;
+
+// --- Requests y respuestas de la API (PR 2) ---------------------------------------------------
+
+/**
+ * `POST /mobile/fila/llegada`. El servidor valida la distancia con `ST_DWithin` y registra la
+ * llegada con SU hora: `tsFix` es informativo (el reloj del teléfono no es confiable).
+ */
+export const LlegadaFilaSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  accuracy: z.number().nonnegative(),
+  tsFix: z.string().datetime({ offset: true }),
+});
+export type LlegadaFila = z.infer<typeof LlegadaFilaSchema>;
+
+/** `POST /mobile/fila/salida`. El origen `deteccion`/`panel` solo lo escribe el servidor. */
+export const SalidaFilaMovilSchema = z.object({
+  origen: z.enum(['boton', 'geocerca']),
+});
+export type SalidaFilaMovil = z.infer<typeof SalidaFilaMovilSchema>;
+
+/** Respuesta de llegada/salida: la fila actual (`null` si ya no está en la fila). */
+export const RespuestaFilaMovilSchema = z.object({
+  fila: EstadoFilaSalidaSchema.nullable(),
+  /** Solo en la salida que acaba de registrarse; `null` si no hubo salida en esta llamada. */
+  anticipada: z.boolean().nullable(),
+});
+export type RespuestaFilaMovil = z.infer<typeof RespuestaFilaMovilSchema>;
+
+/** `PUT /salidas/:puntoControlId/base`. */
+export const BaseFrecuenciaSchema = z.object({
+  frecuenciaSalidaMin: minutosSchema.nullable(),
+});
+export type BaseFrecuencia = z.infer<typeof BaseFrecuenciaSchema>;
+
+/** `GET /salidas/:puntoControlId/reglas`: reglas no anuladas del día + base. */
+export const ReglasFrecuenciaPanelSchema = z.object({
+  puntoControlId: uuidSchema,
+  /** Día local de Bolivia, `YYYY-MM-DD`. */
+  fecha: z.string(),
+  baseMin: minutosSchema.nullable(),
+  reglas: z.array(FrecuenciaReglaSchema),
+});
+export type ReglasFrecuenciaPanel = z.infer<typeof ReglasFrecuenciaPanelSchema>;
+
+export const ActualizarGrupoVehiculoSchema = z
+  .object({
+    nombre: z.string().trim().min(1).max(80).optional(),
+    estado: EstadoGrupoVehiculoSchema.optional(),
+  })
+  .refine((g) => g.nombre !== undefined || g.estado !== undefined, {
+    message: 'Indicá nombre o estado',
+  });
+export type ActualizarGrupoVehiculo = z.infer<typeof ActualizarGrupoVehiculoSchema>;
+
+export const AgregarMiembroGrupoSchema = z.object({ vehiculoId: uuidSchema });
+export type AgregarMiembroGrupo = z.infer<typeof AgregarMiembroGrupoSchema>;

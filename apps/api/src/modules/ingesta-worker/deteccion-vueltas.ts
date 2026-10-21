@@ -6,6 +6,7 @@ import {
   type RolPuntoControl,
 } from '@quivo/shared';
 import { cargarRecorridos, resolverGravedad } from './deteccion-infracciones.js';
+import { aplicarBackstopFila } from './fila-backstop.js';
 import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
 import { descartarFuturos, recorridoEnCursoAntesDe } from './infracciones.logic.js';
 import {
@@ -183,6 +184,16 @@ export async function procesarVueltasSesion(
   // Serializa los lotes de la MISMA sesión (también cuando todavía no hay fila que bloquear: dos
   // lotes concurrentes con la primera vuelta chocarían en el unique `(sesionId, numero)`).
   await bloquearVueltasSesion(tx, sesionId);
+
+  // Fila de salida (backstop): no toca vueltas y nunca lanza (ver `fila-backstop.ts`).
+  await aplicarBackstopFila(tx, {
+    sindicatoId,
+    sesionId,
+    terminalId: terminal.id,
+    cumplimientos: entrada.cumplimientos.filter((c) => pcPorId.has(c.puntoControlId)),
+    fines: entrada.fines,
+    ahora,
+  });
 
   // Última vuelta, en DOS sentencias. (1) Se bloquea la fila con `FOR UPDATE` SOLA: la designación
   // ya espera en el advisory de arriba; esto protege frente a quien toque la fila sin él. (2) La
