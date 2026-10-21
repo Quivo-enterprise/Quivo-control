@@ -6,6 +6,43 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-21, 17:00: piloto L16 en curso; hallazgos y fixes pendientes
+
+**Cambio en prod durante el piloto (sin deploy):** la parada de Salomón Romero se mudó al sur y es definitiva.
+- El PC SR `ea0f624c…` pasó de `-17.3173451, -66.2280812` a `-17.3185525, -66.2277902` (PATCH, 15:28).
+- No se pudo poner sobre la parada real (`-17.3188935, -66.2280664`) porque está a 138 m del trazado y el límite es 100 m. Quedó a 90 m del trazado y a ~48 m de la parada, con el radio en 150 m.
+
+**Qué funcionó:**
+- Fila de salida: llegadas, orden, ETA a la base de 6 min, habilitado, salida por botón, salida por geocerca y salida anticipada.
+- Pausar/reanudar.
+- Vuelta 1 anclada en SR (PID pasó PC 5 y 4 antes de SR sin abrir vuelta).
+- Cambio de tramo en la app al pasar por Honduras.
+
+**Problemas vistos y causa:**
+- **Teléfonos con el PC SR viejo.** La app baja los PC solo al entrar a la pantalla de operación. Los que no reabrieron después de las 15:28 tuvieron estos efectos:
+  - Sin vuelta en el servidor (PIB, PIF, PID y PIC con `vuelta: null`), porque nunca reportaron el paso por SR.
+  - Salida falsa de PID a las 15:54:21, 2 s después de su llegada manual.
+  - Sin auto-llegada a la fila.
+  - Vecinos que saltan de lado o desaparecen, porque sin vuelta no hay fase (ida/regreso) y la proyección cae en el tramo equivocado donde ida y regreso comparten calles.
+- **Salida de PIF no detectada** (sesión `dd0220ed`, salió a las 15:41): causa no confirmada. La sacó de la fila el backstop al hacer fin, como `retirado`.
+- **Fila sin margen:** el 1.º se marca "demorado" apenas pasa la ETA.
+- **Vecinos en la parada nueva:** los trufis que esperan en la fila no se ven como vecinos, porque la parada está a más de 100 m del trazado.
+- **Check verde de "control registrado":** PIL reportó que no apareció en el PC 11 y sí en el 12. No confirmó si tenía la app en pantalla. Las OTAs de hoy no tocaron ese aviso.
+
+**Fixes acordados con el CTO para después del piloto** (antes del sábado 25/10):
+1. **Trazado L16 en SR:** redibujar el tramo para que pase por la parada nueva sin subir a la vieja (y la variante "Vía Molinos" si arranca ahí). Después mover el PC SR sobre la parada y pedir que todos reabran la app.
+2. **Refresco de los PC:** que la app vuelva a bajar el paquete del día al volver a primer plano o cada cierto tiempo, no solo al entrar a la pantalla.
+3. **Racha "afuera" de la fila:** que `decidirAccionFila` la reinicie al entrar a la fila; hoy arrastra la de antes de la llegada.
+4. **Salida detectada por el servidor:** con el GPS en el worker, contando como salida; hoy el backstop deja `retirado`, que no cuenta para la frecuencia.
+5. **Variante designada en el mapa:** dibujar el trazado de "Vía Molinos" cuando la vuelta tiene designación, en /en-vivo y en la línea azul de la app. El desvío del servidor ya mide contra base o variante (verificado en código, no con una subida real).
+6. **Fase de vecinos sin vuelta:** deducir ida/regreso desde el último PC cumplido en vez de la cercanía al trazado. El costo en GCP es despreciable (un dato más en la misma consulta, cacheada 15 s por ruta). Verificar que haya índice en `cumplimientos` por sesión y ts.
+7. **Opcionales:**
+   - Margen para "demorado".
+   - Límite de distancia para mostrar vecinos.
+   - Diagnosticar la salida de PIF y el check verde con un emulador y GPS simulado (el SDK de Android está en la máquina; el emulador no se terminó de instalar).
+
+**Operativo:** el login admin del panel tiene throttle de 5/min por IP. Para consultas desde scripts hay que cachear el token.
+
 ## Punto de retome — 2026-10-21, 12:40: r24 + OTA de la pausa en prod para el piloto de las 15:00
 
 - **#226 (pausar/reanudar) mergeado** en `b716d85`, con CI y acceptance en verde.
