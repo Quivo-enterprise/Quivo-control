@@ -22,15 +22,26 @@ export interface TerminalOpcion {
   etiqueta: string;
 }
 
+export interface TerminalesCargadas {
+  opciones: TerminalOpcion[];
+  /** Cantidad de líneas/rutas que no se pudieron consultar (la lista puede estar incompleta). */
+  fallidas: number;
+}
+
 /** Cliente de la fila de salida (`apps/api/src/modules/salidas`). Las respuestas se parsean con los schemas de shared. */
 export const salidasApi = {
-  /** Terminales (PC con `rol = 'terminal'`, activos) de las líneas visibles: línea → rutas → puntos de control. */
-  async listarTerminales(token: string): Promise<TerminalOpcion[]> {
+  /**
+   * Terminales (PC con `rol = 'terminal'`, activos) de las líneas visibles: línea → rutas → puntos de control.
+   * Una ruta que falla no tumba la lista: se devuelven las que cargaron y cuántas fallaron.
+   * shortcut: N+1 de líneas→rutas→PCs; endpoint de terminales en la API si el sindicato tiene muchas líneas.
+   */
+  async listarTerminales(token: string): Promise<TerminalesCargadas> {
+    let fallidas = 0;
     const lineas = await lineasApi.listar(token);
-    const porLinea = await Promise.all(
+    const porLinea = await Promise.allSettled(
       lineas.map(async (linea) => {
         const rutas = await rutasApi.listarPorLinea(token, linea.id);
-        const porRuta = await Promise.all(
+        const porRuta = await Promise.allSettled(
           rutas.map(async (ruta) =>
             (await puntosControlApi.listarPorRuta(token, ruta.id))
               .filter((pc) => pc.rol === 'terminal' && pc.estado === 'activo')
@@ -40,10 +51,13 @@ export const salidasApi = {
               })),
           ),
         );
-        return porRuta.flat();
+        fallidas += porRuta.filter((r) => r.status === 'rejected').length;
+        return porRuta.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
       }),
     );
-    return [...new Map(porLinea.flat().map((t) => [t.id, t])).values()];
+    fallidas += porLinea.filter((r) => r.status === 'rejected').length;
+    const opciones = porLinea.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+    return { opciones: [...new Map(opciones.map((t) => [t.id, t])).values()], fallidas };
   },
 
   fila: async (token: string, pcId: string): Promise<EstadoFilaSalidaPanel> =>

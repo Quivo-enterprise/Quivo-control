@@ -1,8 +1,5 @@
 import type { FilaSalidaPanelItem, FrecuenciaRegla, GrupoVehiculo } from '@quivo/shared';
 
-/** Bolivia es UTC-4 todo el año, sin horario de verano (misma regla que `packages/shared/src/tiempo/jornada.ts`). */
-const OFFSET_BOLIVIA_MS = -4 * 60 * 60 * 1000;
-
 /** `HH:mm` → minutos del día (0–1439); `null` si el texto no es una hora válida. */
 export function horaAMinutos(texto: string): number | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(texto.trim());
@@ -18,14 +15,6 @@ export function minutosAHora(minutos: number): string {
   const h = Math.floor(minutos / 60);
   const m = minutos % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
-/** Hora local de Bolivia (`HH:mm`) de un instante ISO; `—` si no parsea. */
-export function horaLocalBolivia(iso: string): string {
-  const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return '—';
-  const d = new Date(ms + OFFSET_BOLIVIA_MS);
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 }
 
 /** Diferencia reloj-servidor − reloj-navegador, medida al recibir la respuesta. */
@@ -90,3 +79,47 @@ export const ETIQUETA_ORIGEN: Record<string, string> = {
   deteccion: 'Detectada',
   panel: 'Panel',
 };
+
+/** Fin del día como `hastaMin` de una franja (el schema admite hasta 1440). */
+export const FIN_DEL_DIA_MIN = 1440;
+
+/** `YYYY-MM-DD` → `DD/MM` (string puro: un `Date` de fecha sola se corre de día por zona horaria). */
+export function fechaCorta(fecha: string): string {
+  const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(fecha);
+  return m ? `${m[2]}/${m[1]}` : fecha;
+}
+
+/** `hastaMin` del formulario: fin del día (1440) si el checkbox está marcado; si no, la hora o `null`. */
+export function hastaMinDeFormulario(hasta: string, hastaFinDelDia: boolean): number | null {
+  if (hastaFinDelDia) return FIN_DEL_DIA_MIN;
+  return hasta ? horaAMinutos(hasta) : null;
+}
+
+/** Mapea los issues de zod por `path` (no por texto) a un mensaje por campo del formulario de regla. */
+export function mensajesReglaPorCampo(
+  issues: { path: PropertyKey[] }[],
+  entrada: { alcance: 'todos' | 'grupo' | 'vehiculo'; desdeMin: number | null; hastaMin: number | null },
+  limites: { min: number; max: number },
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const issue of issues) {
+    const campo = String(issue.path[0] ?? 'alcance');
+    if (out[campo] || (campo === 'alcance' && (out.grupoId || out.vehiculoId))) continue;
+    if (campo === 'minutos') {
+      out.minutos = `Ingresá minutos enteros de ${limites.min} a ${limites.max}.`;
+    } else if (campo === 'hastaMin') {
+      // Un solo path para dos errores: con ambos extremos presentes solo puede ser el rango invertido.
+      out.hastaMin =
+        entrada.desdeMin !== null && entrada.hastaMin !== null
+          ? '"Hasta" tiene que ser posterior a "Desde".'
+          : 'Completá "Desde" y "Hasta", o dejá ambos vacíos.';
+    } else if (campo === 'alcance') {
+      if (entrada.alcance === 'grupo') out.grupoId = 'Elegí un grupo.';
+      else if (entrada.alcance === 'vehiculo') out.vehiculoId = 'Elegí un trufi.';
+      else out.alcance = 'Alcance inválido.';
+    } else {
+      out[campo] = 'Valor inválido.';
+    }
+  }
+  return out;
+}

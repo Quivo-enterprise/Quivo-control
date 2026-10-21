@@ -1,9 +1,12 @@
+import { CrearFrecuenciaReglaSchema } from '@quivo/shared';
 import { describe, expect, it } from 'vitest';
 import {
   estadoVisualFila,
   formatearCuenta,
   horaAMinutos,
-  horaLocalBolivia,
+  fechaCorta,
+  hastaMinDeFormulario,
+  mensajesReglaPorCampo,
   minutosAHora,
   offsetServidorMs,
   restanteMs,
@@ -26,13 +29,51 @@ describe('horaAMinutos / minutosAHora', () => {
   });
 });
 
-describe('horaLocalBolivia', () => {
-  it('resta 4 horas al UTC', () => {
-    expect(horaLocalBolivia('2026-10-21T12:05:00.000Z')).toBe('08:05');
-    expect(horaLocalBolivia('2026-10-21T02:00:00.000Z')).toBe('22:00');
+describe('fechaCorta', () => {
+  it('formatea DD/MM sin tocar zona horaria', () => {
+    expect(fechaCorta('2026-10-21')).toBe('21/10');
+    expect(fechaCorta('raro')).toBe('raro');
   });
-  it('devuelve guion si no parsea', () => {
-    expect(horaLocalBolivia('nope')).toBe('—');
+});
+
+describe('hastaMinDeFormulario', () => {
+  it('hasta fin del día vale 1440 aunque el input esté vacío', () => {
+    expect(hastaMinDeFormulario('', true)).toBe(1440);
+    expect(hastaMinDeFormulario('10:30', true)).toBe(1440);
+  });
+  it('sin checkbox usa la hora o null', () => {
+    expect(hastaMinDeFormulario('10:30', false)).toBe(630);
+    expect(hastaMinDeFormulario('', false)).toBeNull();
+  });
+  it('el schema acepta 1440 como fin de franja', () => {
+    expect(
+      CrearFrecuenciaReglaSchema.safeParse({ alcance: 'todos', minutos: 10, desdeMin: 1200, hastaMin: 1440 }).success,
+    ).toBe(true);
+  });
+});
+
+describe('mensajesReglaPorCampo', () => {
+  const lim = { min: 1, max: 120 };
+  const base = { alcance: 'todos', minutos: 10 } as const;
+  it('rango invertido se mapea por path y valores, no por el texto', () => {
+    const r = CrearFrecuenciaReglaSchema.safeParse({ ...base, desdeMin: 600, hastaMin: 480 });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const m = mensajesReglaPorCampo(r.error.issues, { alcance: 'todos', desdeMin: 600, hastaMin: 480 }, lim);
+      expect(m.hastaMin).toContain('posterior');
+    }
+  });
+  it('franja incompleta pide ambos extremos', () => {
+    const r = CrearFrecuenciaReglaSchema.safeParse({ ...base, desdeMin: 600, hastaMin: null });
+    if (r.success) throw new Error('debía fallar');
+    const m = mensajesReglaPorCampo(r.error.issues, { alcance: 'todos', desdeMin: 600, hastaMin: null }, lim);
+    expect(m.hastaMin).toContain('Completá');
+  });
+  it('alcance grupo sin grupo marca el campo grupoId', () => {
+    const r = CrearFrecuenciaReglaSchema.safeParse({ ...base, alcance: 'grupo' });
+    if (r.success) throw new Error('debía fallar');
+    const m = mensajesReglaPorCampo(r.error.issues, { alcance: 'grupo', desdeMin: null, hastaMin: null }, lim);
+    expect(m.grupoId).toBe('Elegí un grupo.');
   });
 });
 

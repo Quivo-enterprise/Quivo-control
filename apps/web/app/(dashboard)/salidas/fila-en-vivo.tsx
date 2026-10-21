@@ -4,13 +4,13 @@ import { useMemo, useState } from 'react';
 import { Alert, Button, Card, ConfirmDialog, DataTable, PlateBadge, StatusBadge, Tag } from '@quivo/design-system';
 import type { FilaSalidaPanelItem, SalidaRecientePanel } from '@quivo/shared';
 import { Clock3, History } from 'lucide-react';
+import { formatearHoraBolivia } from '../../../src/lib/en-vivo/jornadas';
 import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
 import {
   ETIQUETA_ESTADO_FILA,
   ETIQUETA_ORIGEN,
   estadoVisualFila,
   formatearCuenta,
-  horaLocalBolivia,
   offsetServidorMs,
   restanteMs,
   type EstadoVisualFila,
@@ -26,7 +26,34 @@ const ESTADO_BADGE: Record<EstadoVisualFila, 'active' | 'warning' | 'idle'> = {
 const MUTED = { color: 'var(--qv-text-secondary)', fontSize: 'var(--qv-text-sm)' } as const;
 const NUM = { fontVariantNumeric: 'tabular-nums' } as const;
 
-type Accion = { tipo: 'despachar' | 'retirar'; item: FilaSalidaPanelItem };
+type TipoAccion = 'despachar' | 'moverAlFinal' | 'retirar';
+type Accion = { tipo: TipoAccion; item: FilaSalidaPanelItem };
+
+const TEXTO_PROGRESO: Record<TipoAccion, string> = {
+  despachar: 'Despachando…',
+  moverAlFinal: 'Moviendo…',
+  retirar: 'Retirando…',
+};
+
+const DIALOGO: Record<TipoAccion, { titulo: string; confirmar: string; mensaje: (placa: string) => string }> = {
+  despachar: {
+    titulo: 'Despachar antes de su hora',
+    confirmar: 'Despachar',
+    mensaje: (placa) => `${placa} todavía no está habilitado. La salida queda marcada como anticipada.`,
+  },
+  moverAlFinal: {
+    titulo: 'Mover al final de la fila',
+    confirmar: 'Mover al final',
+    mensaje: (placa) => `${placa} pasa al último lugar y se recalculan las horas de salida de toda la fila.`,
+  },
+  retirar: {
+    titulo: 'Retirar de la fila',
+    confirmar: 'Retirar',
+    mensaje: (placa) => `${placa} sale de la fila sin registrarse como salida.`,
+  },
+};
+
+const hhmm = (ms: number) => formatearHoraBolivia(new Date(ms).toISOString());
 
 /**
  * Cuenta hasta la salida. El tick de 1 Hz vive en esta hoja (como `PanelFrescura`): repinta
@@ -55,6 +82,7 @@ export function FilaEnVivo({
   const acciones = useAccionesFila(token, pcId);
   const [pendiente, setPendiente] = useState<Accion | null>(null);
   const [errorAccion, setErrorAccion] = useState<string | null>(null);
+  const [enCurso, setEnCurso] = useState<{ tipo: TipoAccion; id: string } | null>(null);
 
   const data = fila.data;
   // `dataUpdatedAt` = cuándo llegó esta respuesta al navegador; con `servidorTs` da el desfase de reloj.
@@ -63,12 +91,15 @@ export function FilaEnVivo({
     [data, fila.dataUpdatedAt],
   );
 
-  const ejecutar = async (accion: 'despachar' | 'moverAlFinal' | 'retirar', item: FilaSalidaPanelItem) => {
+  const ejecutar = async (accion: TipoAccion, item: FilaSalidaPanelItem) => {
     setErrorAccion(null);
+    setEnCurso({ tipo: accion, id: item.id });
     try {
       await acciones[accion].mutateAsync(item.id);
     } catch (e) {
       setErrorAccion(mensajeError(e));
+    } finally {
+      setEnCurso(null);
     }
   };
 
@@ -79,7 +110,10 @@ export function FilaEnVivo({
     void ejecutar(tipo, item);
   };
 
-  const ocupado = acciones.despachar.isPending || acciones.moverAlFinal.isPending || acciones.retirar.isPending;
+  const ocupado = enCurso !== null;
+  // `isError` con datos en caché = el poll falla pero se sigue mostrando la última respuesta.
+  const sinConexionConDatos = fila.isError && Boolean(data);
+  const progreso = (tipo: TipoAccion, id: string) => enCurso?.tipo === tipo && enCurso.id === id;
   const items = data?.items ?? [];
 
   return (
@@ -92,6 +126,11 @@ export function FilaEnVivo({
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        {sinConexionConDatos && (
+          <Alert variant="warning" title="Sin conexión">
+            Datos de las {hhmm(fila.dataUpdatedAt)}, pueden estar desactualizados. Se reintenta solo.
+          </Alert>
+        )}
         {errorAccion && (
           <Alert variant="danger" title="No se pudo completar la acción">
             {errorAccion}
@@ -116,8 +155,8 @@ export function FilaEnVivo({
                 </span>
               ),
             },
-            { key: 'llegada', header: 'Llegó', render: (r) => <span style={NUM}>{horaLocalBolivia(r.llegadaTs)}</span> },
-            { key: 'eta', header: 'Sale', render: (r) => <span style={NUM}>{horaLocalBolivia(r.etaTs)}</span> },
+            { key: 'llegada', header: 'Llegó', render: (r) => <span style={NUM}>{formatearHoraBolivia(r.llegadaTs)}</span> },
+            { key: 'eta', header: 'Sale', render: (r) => <span style={NUM}>{formatearHoraBolivia(r.etaTs)}</span> },
             {
               key: 'cuenta',
               header: 'Faltan',
@@ -143,28 +182,31 @@ export function FilaEnVivo({
                 size="sm"
                 variant={r.habilitado ? 'primary' : 'secondary'}
                 disabled={ocupado}
+                aria-busy={progreso('despachar', r.id)}
                 aria-label={`Despachar ${r.placa}`}
                 onClick={() => (r.habilitado ? void ejecutar('despachar', r) : setPendiente({ tipo: 'despachar', item: r }))}
               >
-                Despachar
+                {progreso('despachar', r.id) ? TEXTO_PROGRESO.despachar : 'Despachar'}
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
                 disabled={ocupado || items.length < 2}
+                aria-busy={progreso('moverAlFinal', r.id)}
                 aria-label={`Mover ${r.placa} al final`}
-                onClick={() => void ejecutar('moverAlFinal', r)}
+                onClick={() => setPendiente({ tipo: 'moverAlFinal', item: r })}
               >
-                Al final
+                {progreso('moverAlFinal', r.id) ? TEXTO_PROGRESO.moverAlFinal : 'Al final'}
               </Button>
               <Button
                 size="sm"
                 variant="danger"
                 disabled={ocupado}
+                aria-busy={progreso('retirar', r.id)}
                 aria-label={`Retirar ${r.placa}`}
                 onClick={() => setPendiente({ tipo: 'retirar', item: r })}
               >
-                Retirar
+                {progreso('retirar', r.id) ? TEXTO_PROGRESO.retirar : 'Retirar'}
               </Button>
             </span>
           )}
@@ -173,7 +215,9 @@ export function FilaEnVivo({
           <p style={{ ...MUTED, margin: 0 }}>
             {data.baseMin === null
               ? 'La parada no tiene frecuencia base: configurala abajo para calcular las horas de salida.'
-              : `Frecuencia base: ${data.baseMin} min. Se actualiza cada 5 segundos.`}
+              : `Frecuencia base: ${data.baseMin} min.`}{' '}
+            <span style={NUM}>Última actualización {hhmm(fila.dataUpdatedAt)}</span>
+            {sinConexionConDatos ? '. Sin conexión: no se está actualizando.' : '. Se actualiza cada 5 segundos.'}
           </p>
         )}
         <Recientes salidas={data?.salidasRecientes ?? []} />
@@ -181,13 +225,9 @@ export function FilaEnVivo({
       <ConfirmDialog
         open={pendiente !== null}
         variant={pendiente?.tipo === 'retirar' ? 'danger' : 'primary'}
-        title={pendiente?.tipo === 'retirar' ? 'Retirar de la fila' : 'Despachar antes de su hora'}
-        message={
-          pendiente?.tipo === 'retirar'
-            ? `${pendiente.item.placa} sale de la fila sin registrarse como salida.`
-            : `${pendiente?.item.placa ?? ''} todavía no está habilitado. La salida queda marcada como anticipada.`
-        }
-        confirmLabel={pendiente?.tipo === 'retirar' ? 'Retirar' : 'Despachar'}
+        title={DIALOGO[pendiente?.tipo ?? 'despachar'].titulo}
+        message={pendiente ? DIALOGO[pendiente.tipo].mensaje(pendiente.item.placa) : undefined}
+        confirmLabel={DIALOGO[pendiente?.tipo ?? 'despachar'].confirmar}
         onConfirm={confirmar}
         onCancel={() => setPendiente(null)}
       />
@@ -205,7 +245,7 @@ function Recientes({ salidas }: { salidas: SalidaRecientePanel[] }) {
         rows={salidas}
         empty="Todavía no salió ningún trufi hoy."
         columns={[
-          { key: 'hora', header: 'Salió', render: (r) => <span style={NUM}>{horaLocalBolivia(r.salidaTs)}</span> },
+          { key: 'hora', header: 'Salió', render: (r) => <span style={NUM}>{formatearHoraBolivia(r.salidaTs)}</span> },
           { key: 'placa', header: 'Trufi', render: (r) => <PlateBadge plate={r.placa} /> },
           { key: 'origen', header: 'Origen', render: (r) => ETIQUETA_ORIGEN[r.salidaOrigen] ?? r.salidaOrigen },
           {

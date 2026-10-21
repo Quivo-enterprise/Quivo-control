@@ -11,7 +11,7 @@ import type {
   ReglasFrecuenciaPanel,
   Vehiculo,
 } from '@quivo/shared';
-import { salidasApi, type TerminalOpcion } from '../../../src/lib/api/salidas';
+import { salidasApi, type TerminalesCargadas } from '../../../src/lib/api/salidas';
 import { vehiculosApi } from '../../../src/lib/api/vehiculos';
 
 /** Cadencia del poll de la fila: 1 request cada 5 s por pantalla (plan "fila de salida"). */
@@ -22,7 +22,7 @@ const keyReglas = (pcId: string) => ['salidas', 'reglas', pcId] as const;
 const KEY_GRUPOS = ['salidas', 'grupos'] as const;
 
 export function useTerminales(token: string | null) {
-  return useQuery<TerminalOpcion[]>({
+  return useQuery<TerminalesCargadas>({
     queryKey: ['salidas', 'terminales'],
     enabled: Boolean(token),
     queryFn: () => salidasApi.listarTerminales(token as string),
@@ -43,12 +43,17 @@ export function useFilaSalida(token: string | null, pcId: string | null) {
   });
 }
 
-/** Reglas del día: sin poll, se invalidan tras cada mutación. */
+/** Cadencia de refresco de las reglas: otro operador puede cambiarlas y el día de Bolivia puede rodar. */
+export const INTERVALO_REGLAS_MS = 60_000;
+
+/** Reglas del día: se invalidan tras cada mutación propia y se refrescan cada 60 s (sin pestaña oculta). */
 export function useReglasSalida(token: string | null, pcId: string | null) {
   return useQuery<ReglasFrecuenciaPanel>({
     queryKey: keyReglas(pcId ?? ''),
     enabled: Boolean(token && pcId),
     queryFn: () => salidasApi.reglas(token as string, pcId as string),
+    refetchInterval: INTERVALO_REGLAS_MS,
+    refetchIntervalInBackground: false,
   });
 }
 
