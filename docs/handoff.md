@@ -13,6 +13,16 @@ que vence el 26/10). **Miércoles 21 y jueves 22/10: dos pilotos con pasantes en
 Calendario y propuesta de deploy en [`docs/runbook-dia-30.md`](runbook-dia-30.md): r21 **antes** del piloto del 21 para
 que esos dos días lo prueben en la calle; congelamiento después del piloto del 22.
 
+- **Piloto L16 ampliado a 8 trufis (#211, `--apply` en prod el 20/10 21:20 con ok del CTO):** `1616PIL`/`PIB`/`PIC` +
+  `1616PID`/`PIE`/`PIF`/`PIG`/`PIH` (sintéticos, CI 9000019–9000023). Rotación `piloto-linea-16` anulada y
+  republicada: 75 asignaciones, turno `manana`, nuevos del 20 al 26/10. 57 escrituras; re-corrida en dry-run = 0. PINs
+  de los 5 nuevos en `~/.quivo-piloto16-creds` (0600, fuera del repo); los 3 viejos sin tocar. Al terminar:
+  `--desactivar --apply` (si no, cualquier `POST /rotaciones` desde el panel los mete en el reparto).
+- **Mapa con los 125 trufis de la línea para cada chofer:** el costo NO sirve como argumento ante el sindicato:
+  ~$2,34/mes para toda la flota (sobre Vecinos, cada 30 s) o $13–23/mes (consulta propia cada 10 s); compartir la
+  ubicación ya ocurre ($0 extra). Argumentos reales para quedarse con delante/detrás: control de frecuencia
+  (amontonarse, carreras), distracción al manejar, privacidad entre socios, megas del chofer (156–585 MB/mes),
+  batería y días de desarrollo.
 - **Presupuesto:** el CTO no quiere monto; solo saber cuánto se gasta. Lo cubre el export a BigQuery (abajo).
   `observabilidad-gcp.sh` ya omite el presupuesto si falta `BUDGET_USD`; no hace falta cambiar código.
 - **Repo público** hasta que vuelvan los minutos de Actions en privado (1/11). Decisión del CTO; objeción registrada
