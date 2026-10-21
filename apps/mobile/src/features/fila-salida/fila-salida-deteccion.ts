@@ -3,13 +3,8 @@ import type { PuntoControlPaquete } from '@quivo/shared';
 import { leerEstadoVueltaLocal } from '../../db/vuelta-actual-local';
 import { rearmarFilaLocal } from '../vuelta-actual/vuelta-actual-oportunista';
 import { registrarLlegada, registrarSalida } from './fila-salida-acciones';
-import {
-  ESTADO_DETECCION_INICIAL,
-  decidirAccionFila,
-  type EstadoDeteccionFila,
-  type FixFila,
-  type TerminalZona,
-} from './zona-terminal';
+import { deteccion } from './fila-salida-estado';
+import { decidirAccionFila, type FixFila, type TerminalZona } from './zona-terminal';
 
 /**
  * Detección automática de entrada/salida de la zona de la terminal. Un único punto de entrada
@@ -19,20 +14,12 @@ import {
  * último fix. Nunca rechaza. Quien llama garantiza que hay recorrido activo.
  */
 
-let estado: EstadoDeteccionFila = ESTADO_DETECCION_INICIAL;
-let enCurso = false;
-let ultimoFix: FixFila | null = null;
+/** Un fix más viejo que esto no sirve para "Estoy en la fila" (el trufi pudo moverse). */
+export const MAX_EDAD_FIX_MS = 60_000;
 
-/** SOLO tests/cambio de sesión: olvida racha, anti-rebote y último fix. */
-export function reiniciarDeteccionFila(): void {
-  estado = ESTADO_DETECCION_INICIAL;
-  enCurso = false;
-  ultimoFix = null;
-}
-
-/** Último fix visto por este contexto JS (para el botón "Estoy en la fila"). */
+/** Último fix visto por este contexto JS (para el botón "Estoy en la fila"); `null` si no hay o es viejo. */
 export function ultimoFixFila(): FixFila | null {
-  return ultimoFix;
+  return Date.now() - deteccion.ultimoFixRecibidoMs <= MAX_EDAD_FIX_MS ? deteccion.ultimoFix : null;
 }
 
 /** PC `terminal` de la ruta del día con su radio, o `null` si la ruta no tiene (no hay fila). */
@@ -69,10 +56,11 @@ export async function procesarFixFila(
   },
 ): Promise<void> {
   if (!fix) return;
-  ultimoFix = fix;
+  deteccion.ultimoFix = fix;
+  deteccion.ultimoFixRecibidoMs = Date.now();
   const terminal = terminalDeLaRuta(ctx.puntosControl);
-  if (!terminal || enCurso) return;
-  enCurso = true;
+  if (!terminal || deteccion.enCurso) return;
+  deteccion.enCurso = true;
   try {
     const local = await leerEstadoVueltaLocal(ctx.sesionId);
     const r = decidirAccionFila({
@@ -80,16 +68,16 @@ export async function procesarFixFila(
       terminal,
       enFila: Boolean(local.ultimo?.fila),
       desarmada: local.filaDesarmada === true,
-      estado,
+      estado: deteccion.estado,
       ahoraMs: Date.now(),
     });
-    estado = r.estado;
+    deteccion.estado = r.estado;
     if (r.accion === 'rearmar') await rearmarFilaLocal(ctx.sesionId);
     else if (r.accion === 'llegada') await registrarLlegada(ctx.obtenerAccessToken, fix);
     else if (r.accion === 'salida') await registrarSalida(ctx.obtenerAccessToken, 'geocerca', 1);
   } catch (error) {
     Sentry.captureException(error, { tags: { contexto: 'fila-salida', paso: 'deteccion' } });
   } finally {
-    enCurso = false;
+    deteccion.enCurso = false;
   }
 }

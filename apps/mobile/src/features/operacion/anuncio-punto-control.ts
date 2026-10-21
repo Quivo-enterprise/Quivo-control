@@ -400,14 +400,19 @@ export async function programarAvisoEnCanal(aviso: {
   }
 }
 
-/** Cancela la notificación programada con ese `identifier` y quita la ya presentada. Best-effort:
+/** Cancela SOLO la notificación programada con ese `identifier` (no la ya presentada). Best-effort:
  * nunca rechaza. */
-export async function cancelarAvisoProgramado(identifier: string): Promise<void> {
+export async function cancelarProgramada(identifier: string): Promise<void> {
   try {
     await Notifications.cancelScheduledNotificationAsync(identifier);
   } catch {
     // silencioso: si no existía o falla el SO, no hay nada más que hacer
   }
+}
+
+/** Cancela la programada y quita de la bandeja la ya presentada. Best-effort: nunca rechaza. */
+export async function cancelarAvisoProgramado(identifier: string): Promise<void> {
+  await cancelarProgramada(identifier);
   await descartarNotificacionAviso(identifier);
 }
 

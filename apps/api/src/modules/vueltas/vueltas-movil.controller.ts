@@ -25,7 +25,8 @@ export class VueltasMovilController {
 
   private readonly logger = new Logger(VueltasMovilController.name);
 
-  /** La fila es un adicional: si falla, `vuelta-actual` responde igual con `fila: null` (y se loguea). */
+  /** La fila es un adicional: si falla, `vuelta-actual` responde igual SIN el campo `fila` (y se loguea).
+   * Nunca `null`: el móvil lo leería como "salió de la fila" (desarma y cancela el aviso). */
   private async filaOpcional(sesion: SesionMovilAutenticada) {
     try {
       return await this.filaService.estadoMovil(sesion);
@@ -33,7 +34,7 @@ export class VueltasMovilController {
       this.logger.warn(
         `Fila de salida: falló el estado en vuelta-actual (sesión ${sesion.sesionId}): ${error instanceof Error ? error.message : String(error)}`,
       );
-      return null;
+      return undefined;
     }
   }
 

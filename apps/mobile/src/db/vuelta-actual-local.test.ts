@@ -94,4 +94,13 @@ describe('interpretarEstadoLocal', () => {
       ESTADO_LOCAL_INICIAL,
     );
   });
+
+  it('persiste desfaseFilaMs solo si es un número finito', () => {
+    expect(interpretarEstadoLocal(JSON.stringify({ desfaseFilaMs: -4200 })).desfaseFilaMs).toBe(
+      -4200,
+    );
+    expect(interpretarEstadoLocal(JSON.stringify({ desfaseFilaMs: 'x' }))).toEqual(
+      ESTADO_LOCAL_INICIAL,
+    );
+  });
 });

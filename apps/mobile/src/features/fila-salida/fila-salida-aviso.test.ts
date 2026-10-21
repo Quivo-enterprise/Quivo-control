@@ -13,7 +13,7 @@ import { cancelarAvisoFilaDe, sincronizarAvisoFila } from './fila-salida-aviso';
 
 const SERVIDOR = Date.parse('2026-10-20T11:00:00.000Z');
 const fila = (parcial: Partial<EstadoFilaSalida> = {}): EstadoFilaSalida => ({
-  posicion: 2,
+  posicion: 1,
   total: 4,
   delantePlaca: 'ABC',
   etaTs: new Date(SERVIDOR + 300_000).toISOString(),
@@ -23,7 +23,10 @@ const fila = (parcial: Partial<EstadoFilaSalida> = {}): EstadoFilaSalida => ({
   servidorTs: new Date(SERVIDOR).toISOString(),
   ...parcial,
 });
-const estado = (f: EstadoFilaSalida | null, actualizadoEn: number | null = SERVIDOR): EstadoLocalVuelta => ({
+const estado = (
+  f: EstadoFilaSalida | null,
+  desfaseFilaMs: number | undefined = 0,
+): EstadoLocalVuelta => ({
   ...ESTADO_LOCAL_INICIAL,
   ultimo: {
     vueltaId: null,
@@ -32,7 +35,8 @@ const estado = (f: EstadoFilaSalida | null, actualizadoEn: number | null = SERVI
     enEspera: null,
     fila: f,
   } as EstadoLocalVuelta['ultimo'],
-  actualizadoEn,
+  actualizadoEn: SERVIDOR,
+  ...(f && desfaseFilaMs !== undefined ? { desfaseFilaMs } : {}),
 });
 
 beforeEach(() => {
@@ -42,9 +46,8 @@ beforeEach(() => {
 
 describe('sincronizarAvisoFila', () => {
   it('programa a eta - 60 s corregido por el desfase del reloj', async () => {
-    // el teléfono recibió la respuesta 90 s "antes" que el servidor: desfase +90 s
-    const recibido = SERVIDOR - 90_000;
-    await sincronizarAvisoFila(estado(null), estado(fila(), recibido), recibido);
+    // el teléfono va 90 s atrasado: desfase +90 s
+    await sincronizarAvisoFila(estado(null), estado(fila(), 90_000), SERVIDOR - 90_000);
     expect(mocks.programar).toHaveBeenCalledTimes(1);
     const arg = mocks.programar.mock.calls[0]![0] as { identifier: string; fechaMs: number };
     expect(arg.identifier).toBe(idAvisoFila(fila().etaTs));
@@ -55,7 +58,15 @@ describe('sincronizarAvisoFila', () => {
     const nueva = fila({ etaTs: new Date(SERVIDOR + 400_000).toISOString() });
     await sincronizarAvisoFila(estado(fila()), estado(nueva), SERVIDOR);
     expect(mocks.cancelar).toHaveBeenCalledWith(idAvisoFila(fila().etaTs));
-    expect(mocks.programar.mock.calls[0]![0]).toMatchObject({ identifier: idAvisoFila(nueva.etaTs) });
+    expect(mocks.programar.mock.calls[0]![0]).toMatchObject({
+      identifier: idAvisoFila(nueva.etaTs),
+    });
+  });
+
+  it('no programa al que no es el primero y cancela la que hubiera', async () => {
+    await sincronizarAvisoFila(estado(fila()), estado(fila({ posicion: 2 })), SERVIDOR);
+    expect(mocks.programar).not.toHaveBeenCalled();
+    expect(mocks.cancelar).toHaveBeenCalledWith(idAvisoFila(fila().etaTs));
   });
 
   it('cancela al salir de la fila y al habilitarse, y no programa', async () => {
@@ -74,7 +85,9 @@ describe('sincronizarAvisoFila', () => {
 
   it('nunca rechaza', async () => {
     mocks.programar.mockRejectedValue(new Error('x'));
-    await expect(sincronizarAvisoFila(estado(null), estado(fila()), SERVIDOR)).resolves.toBeUndefined();
+    await expect(
+      sincronizarAvisoFila(estado(null), estado(fila()), SERVIDOR),
+    ).resolves.toBeUndefined();
   });
 
   it('cancelarAvisoFilaDe cancela la del estado vigente', async () => {

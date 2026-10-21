@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EstadoFilaSalida } from '@quivo/shared';
 import {
-  ahoraCorregido,
+  DEMORA_VISIBLE_MS,
   debeAvisar,
   desfaseReloj,
   estaDemorado,
@@ -38,15 +38,16 @@ describe('reloj', () => {
     const d = desfaseReloj(fila(), recibido);
     expect(d).toBe(90_000);
     // 10 s después de recibir, faltan 120 s
-    expect(restanteMs(fila(), ahoraCorregido(recibido + 10_000, d))).toBe(120_000);
+    expect(restanteMs(fila(), recibido + 10_000 + d)).toBe(120_000);
   });
   it('servidorTs inválido => desfase 0', () => {
     expect(desfaseReloj(fila({ servidorTs: 'x' }), 5)).toBe(0);
   });
   it('momento local del aviso = eta - desfase - 60 s', () => {
     const recibido = SERVIDOR - 90_000;
-    expect(momentoLocalAviso(fila(), recibido)).toBe(SERVIDOR + 130_000 - 90_000 - 60_000);
-    expect(momentoLocalAviso(fila({ etaTs: 'x' }), recibido)).toBeNull();
+    const d = desfaseReloj(fila(), recibido);
+    expect(momentoLocalAviso(fila(), d)).toBe(SERVIDOR + 130_000 - 90_000 - 60_000);
+    expect(momentoLocalAviso(fila({ etaTs: 'x' }), d)).toBeNull();
   });
 });
 
@@ -62,16 +63,17 @@ describe('habilitado / demorado', () => {
   it('un trufi que no es el primero NO se habilita por reloj', () => {
     expect(habilitadoLocal(fila({ posicion: 2 }), SERVIDOR + 999_000)).toBe(false);
   });
-  it('demorado: flag del servidor o primero habilitado y pasado de hora', () => {
-    expect(estaDemorado(fila({ demorado: true }), SERVIDOR)).toBe(true);
+  it('demorado solo pasado DEMORA_VISIBLE_MS de la hora (el flag del servidor se ignora)', () => {
+    expect(estaDemorado(fila({ demorado: true }), SERVIDOR)).toBe(false);
     const f = fila({ posicion: 1 });
-    expect(estaDemorado(f, SERVIDOR + 130_000)).toBe(false);
-    expect(estaDemorado(f, SERVIDOR + 131_000)).toBe(true);
+    expect(estaDemorado(f, SERVIDOR + 131_000)).toBe(false); // recién pasó la hora
+    expect(estaDemorado(f, SERVIDOR + 130_000 + DEMORA_VISIBLE_MS)).toBe(false);
+    expect(estaDemorado(f, SERVIDOR + 130_000 + DEMORA_VISIBLE_MS + 1)).toBe(true);
   });
 });
 
 describe('debeAvisar', () => {
-  const f = fila();
+  const f = fila({ posicion: 1, delantePlaca: null });
   it('solo cuando faltan <= 60 s y > 0', () => {
     expect(debeAvisar(f, SERVIDOR + 69_000, null)).toBe(false); // faltan 61 s
     expect(debeAvisar(f, SERVIDOR + 70_000, null)).toBe(true); // faltan 60 s
@@ -82,8 +84,13 @@ describe('debeAvisar', () => {
     expect(debeAvisar(f, SERVIDOR + 100_000, f.etaTs)).toBe(false);
     expect(debeAvisar(f, SERVIDOR + 100_000, 'otro')).toBe(true);
   });
+  it('no avisa a quien no es el primero', () => {
+    expect(debeAvisar(fila({ posicion: 2 }), SERVIDOR + 100_000, null)).toBe(false);
+  });
   it('no avisa si el servidor ya la trae habilitada', () => {
-    expect(debeAvisar(fila({ habilitado: true }), SERVIDOR + 100_000, null)).toBe(false);
+    expect(debeAvisar(fila({ posicion: 1, habilitado: true }), SERVIDOR + 100_000, null)).toBe(
+      false,
+    );
   });
 });
 
@@ -98,8 +105,8 @@ describe('textos', () => {
   it('posición, turno, botón', () => {
     expect(textoPosicion(fila())).toBe('Posición 3 de 7 · delante 1234ABC');
     expect(textoPosicion(fila({ delantePlaca: null, posicion: 1 }))).toBe('Posición 1 de 7');
-    expect(textoTurno(false, 130_000)).toBe('Te toca en 2:10');
-    expect(textoTurno(true, 0)).toBe('Es tu turno');
+    expect(textoTurno(false)).toBe('En espera');
+    expect(textoTurno(true)).toBe('Es tu turno');
     expect(textoBoton(false, 130_000)).toBe('SALIR · 2:10');
     expect(textoBoton(true, 0)).toBe('SALIR');
   });

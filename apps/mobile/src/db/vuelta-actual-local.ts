@@ -38,6 +38,9 @@ export function interpretarEstadoLocal(crudo: string | null | undefined): Estado
       intentosAnuncio: intentos,
       acusesAbandonados: lista(o.acusesAbandonados),
       ...(o.filaDesarmada === true ? { filaDesarmada: true } : {}),
+      ...(typeof o.desfaseFilaMs === 'number' && Number.isFinite(o.desfaseFilaMs)
+        ? { desfaseFilaMs: o.desfaseFilaMs }
+        : {}),
     };
   } catch {
     return ESTADO_LOCAL_INICIAL;

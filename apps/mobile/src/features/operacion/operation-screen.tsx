@@ -116,7 +116,9 @@ export function OperationScreen(
   const terminalZona = useMemo(() => terminalDeLaRuta(puntosControl), [puntosControl]);
   const filaSalida = useFilaSalida({
     fila: vueltaActual.fila,
-    recibidoEn: vueltaActual.filaRecibidaEn,
+    sinActualizar: vueltaActual.filaSinActualizar,
+    desfaseMs: vueltaActual.desfaseFilaMs,
+    desarmada: vueltaActual.filaDesarmada,
     tracking: gps.tracking,
     terminal: terminalZona,
     posicion: gps.posicionActual,
