@@ -33,9 +33,17 @@ export function esErrorFk(e: unknown): boolean {
   return typeof e === 'object' && e !== null && (e as { code?: string }).code === 'P2003';
 }
 
-/** `anticipada` = el trufi no estaba habilitado (no era el 1.º o no llegó su hora). */
-export function esAnticipada(posiciones: readonly PosicionFila[], filaId: string): boolean {
-  return !(posiciones.find((p) => p.id === filaId)?.habilitado ?? false);
+/**
+ * Un 1.º que sale hasta 15 s antes de su ETA cuenta en turno: la cuenta regresiva del teléfono
+ * puede llegar a 0 unos segundos antes que el reloj del servidor.
+ */
+export const TOLERANCIA_SALIDA_MS = 15_000;
+
+/** `anticipada` = el trufi no estaba habilitado (no era el 1.º o no llegó su hora, con tolerancia). */
+export function esAnticipada(posiciones: readonly PosicionFila[], filaId: string, ahora: Date): boolean {
+  const p = posiciones.find((x) => x.id === filaId);
+  if (!p) return true;
+  return !(p.habilitado || (p.posicion === 1 && p.etaTs.getTime() - ahora.getTime() <= TOLERANCIA_SALIDA_MS));
 }
 
 export interface FilaCalculada {

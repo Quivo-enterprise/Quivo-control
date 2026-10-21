@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Inject, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Logger, Post } from '@nestjs/common';
 import { AcuseVueltaSchema, type AcuseVuelta } from '@quivo/shared';
 import { createZodDto } from '../../common/validation/zod-dto.js';
 import { CurrentMobileSession } from '../auth-movil/current-mobile-session.decorator.js';
@@ -23,13 +23,27 @@ export class VueltasMovilController {
     @Inject(FilaService) private readonly filaService: FilaService,
   ) {}
 
+  private readonly logger = new Logger(VueltasMovilController.name);
+
+  /** La fila es un adicional: si falla, `vuelta-actual` responde igual con `fila: null` (y se loguea). */
+  private async filaOpcional(sesion: SesionMovilAutenticada) {
+    try {
+      return await this.filaService.estadoMovil(sesion);
+    } catch (error) {
+      this.logger.warn(
+        `Fila de salida: falló el estado en vuelta-actual (sesión ${sesion.sesionId}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
   @Get()
   @LimitePorDispositivo(60)
   async obtener(@CurrentMobileSession() sesion: SesionMovilAutenticada) {
     // La fila de salida se compone acá (no en `VueltasService`): campo opcional `fila`, `null` si no está en la fila.
     const [actual, fila] = await Promise.all([
       this.vueltasService.obtenerActualMovil(sesion),
-      this.filaService.estadoMovil(sesion),
+      this.filaOpcional(sesion),
     ]);
     return { ...actual, fila };
   }

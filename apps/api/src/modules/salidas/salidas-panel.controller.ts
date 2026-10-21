@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, ParseUUIDPipe, Post, Put, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
   BaseFrecuenciaSchema,
@@ -35,7 +35,7 @@ export class SalidasPanelController {
   ) {}
 
   @Get('fila')
-  fila(@CurrentUser() actor: AuthenticatedUser, @Param('puntoControlId') pcId: string) {
+  fila(@CurrentUser() actor: AuthenticatedUser, @Param('puntoControlId', ParseUUIDPipe) pcId: string) {
     return this.filaService.estadoPanel(actor, pcId);
   }
 
@@ -44,8 +44,8 @@ export class SalidasPanelController {
   @Auditable('fila_salida', 'despachar')
   despachar(
     @CurrentUser() actor: AuthenticatedUser,
-    @Param('puntoControlId') pcId: string,
-    @Param('filaId') filaId: string,
+    @Param('puntoControlId', ParseUUIDPipe) pcId: string,
+    @Param('filaId', ParseUUIDPipe) filaId: string,
   ) {
     return this.filaService.despachar(actor, pcId, filaId);
   }
@@ -55,8 +55,8 @@ export class SalidasPanelController {
   @Auditable('fila_salida', 'mover_al_final')
   moverAlFinal(
     @CurrentUser() actor: AuthenticatedUser,
-    @Param('puntoControlId') pcId: string,
-    @Param('filaId') filaId: string,
+    @Param('puntoControlId', ParseUUIDPipe) pcId: string,
+    @Param('filaId', ParseUUIDPipe) filaId: string,
   ) {
     return this.filaService.moverAlFinal(actor, pcId, filaId);
   }
@@ -66,14 +66,14 @@ export class SalidasPanelController {
   @Auditable('fila_salida', 'retirar')
   retirar(
     @CurrentUser() actor: AuthenticatedUser,
-    @Param('puntoControlId') pcId: string,
-    @Param('filaId') filaId: string,
+    @Param('puntoControlId', ParseUUIDPipe) pcId: string,
+    @Param('filaId', ParseUUIDPipe) filaId: string,
   ) {
     return this.filaService.retirar(actor, pcId, filaId);
   }
 
   @Get('reglas')
-  reglas(@CurrentUser() actor: AuthenticatedUser, @Param('puntoControlId') pcId: string) {
+  reglas(@CurrentUser() actor: AuthenticatedUser, @Param('puntoControlId', ParseUUIDPipe) pcId: string) {
     return this.frecuenciasService.listar(actor, pcId);
   }
 
@@ -81,7 +81,7 @@ export class SalidasPanelController {
   @Auditable('frecuencia_regla')
   crearRegla(
     @CurrentUser() actor: AuthenticatedUser,
-    @Param('puntoControlId') pcId: string,
+    @Param('puntoControlId', ParseUUIDPipe) pcId: string,
     @Body() body: CrearFrecuenciaReglaDto,
   ) {
     return this.frecuenciasService.crear(actor, pcId, body as CrearFrecuenciaRegla);
@@ -91,8 +91,8 @@ export class SalidasPanelController {
   @Auditable('frecuencia_regla')
   anularRegla(
     @CurrentUser() actor: AuthenticatedUser,
-    @Param('puntoControlId') pcId: string,
-    @Param('reglaId') reglaId: string,
+    @Param('puntoControlId', ParseUUIDPipe) pcId: string,
+    @Param('reglaId', ParseUUIDPipe) reglaId: string,
   ) {
     return this.frecuenciasService.anular(actor, pcId, reglaId);
   }
@@ -101,7 +101,7 @@ export class SalidasPanelController {
   @Auditable('punto_control', 'fijar_frecuencia_base')
   fijarBase(
     @CurrentUser() actor: AuthenticatedUser,
-    @Param('puntoControlId') pcId: string,
+    @Param('puntoControlId', ParseUUIDPipe) pcId: string,
     @Body() body: BaseFrecuenciaDto,
   ) {
     return this.frecuenciasService.fijarBase(actor, pcId, body as BaseFrecuencia);
