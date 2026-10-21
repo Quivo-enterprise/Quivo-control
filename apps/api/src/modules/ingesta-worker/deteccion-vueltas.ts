@@ -226,6 +226,31 @@ export async function procesarVueltasSesion(
   // "en el futuro" y bloquearía, por orden de `ts`, los eventos reales posteriores. Un
   // cumplimiento de un PC que no es un PC activo de la ruta (inactivo o ajeno) se ignora por
   // completo: no abre, no cierra ni cuenta como progreso de la vuelta.
+  // Ancla: un `inicio_recorrido` hecho DENTRO de la terminal abre vuelta (la app no re-emite el
+  // cumplimiento si el chofer toca FIN → COMENZAR sin salir del radio). `enTerminal`: posición del
+  // inicio = el PRIMER fix de la sesión en [inicio, inicio + 120 s]; si no hay, el ÚLTIMO anterior
+  // sin límite de antigüedad (tras FIN el GPS queda apagado: ese fix es donde se tocó FIN). Está a
+  // ≤ `radioToleranciaM` de un PC `terminal`; sin fix, no. Con la sesión cerrada `abrir` es no-op: no se consulta.
+  const iniciosEnTerminal = new Set<number>();
+  for (const ts of sesionActiva ? entrada.inicios : []) {
+    const [dentro] = await tx.$queryRaw<{ uno: number }[]>`
+      SELECT 1 AS uno
+      FROM (
+        SELECT gp.lat, gp.lng FROM gps_points gp
+        WHERE gp.sesion_id = ${sesionId}::uuid AND gp."sindicatoId" = ${sindicatoId}
+          AND gp.ts <= ${ts}::timestamptz + interval '120 seconds'
+        ORDER BY (gp.ts >= ${ts}::timestamptz) DESC,
+                 CASE WHEN gp.ts >= ${ts}::timestamptz THEN gp.ts END ASC,
+                 gp.ts DESC
+        LIMIT 1
+      ) fix
+      JOIN puntos_control pc ON pc."rutaId" = ${ctx.rutaId} AND pc.estado = 'activo' AND pc.rol = 'terminal'
+      WHERE ST_DWithin(ST_SetSRID(ST_MakePoint(fix.lng, fix.lat), 4326)::geography, pc.coord, pc."radioToleranciaM")
+      LIMIT 1
+    `;
+    if (dentro) iniciosEnTerminal.add(ts.getTime());
+  }
+
   const eventos: EventoVuelta[] = [
     ...descartarFuturos(
       entrada.cumplimientos
@@ -242,7 +267,7 @@ export async function procesarVueltasSesion(
       DRIFT_ALERTA_MS,
     ),
     ...descartarFuturos(
-      entrada.inicios.map((ts) => ({ clase: 'inicio' as const, ts })),
+      entrada.inicios.map((ts) => ({ clase: 'inicio' as const, ts, enTerminal: iniciosEnTerminal.has(ts.getTime()) })),
       ahora.getTime(),
       DRIFT_ALERTA_MS,
     ),
@@ -259,22 +284,29 @@ export async function procesarVueltasSesion(
     ? undefined
     : { cierreTs: sesion.fin ?? ultima?.finTs ?? new Date(0) };
 
-  // ¿Recorrido en curso al empezar el lote? Solo importa sin vuelta previa (un `terminal` abre la
-  // primera vuelta únicamente con el recorrido en curso). Se usa la MISMA reconstrucción de
+  // ¿Recorrido en curso al empezar el lote? Solo importa sin vuelta previa o con la previa terminada
+  // (`completa`/`abierta_al_cierre`): un `terminal` abre vuelta únicamente con el recorrido en curso. Se usa la MISMA reconstrucción de
   // recorridos que la detección de infracciones (`cargarRecorridos`/`construirRecorridos`: fin
   // huérfano ignorado, empates de `ts` resueltos igual) sobre lo guardado anterior al primer evento
   // del lote (los del propio lote ya están persistidos y los aplica la máquina; `recorridoEstado` de
   // la sesión puede reflejar eventos posteriores y no sirve). Sin ninguno: en curso.
   let recorridoEnCurso = true;
-  if (!ultima && !cierreTardio && eventos.length > 0) {
+  if ((!ultima || ultima.estado !== 'en_curso') && !cierreTardio && eventos.length > 0) {
     const primeroMs = Math.min(...eventos.map((e) => e.ts.getTime()));
-    recorridoEnCurso = recorridoEnCursoAntesDe(
-      await cargarRecorridos(tx, sindicatoId, sesionId, ahora),
-      new Date(primeroMs),
-    );
+    const recorridos = await cargarRecorridos(tx, sindicatoId, sesionId, ahora);
+    recorridoEnCurso = ultima
+      // Vuelta previa terminada: en curso solo con un recorrido iniciado después de su fin y aún sin fin.
+      ? recorridos.some(
+          (r) =>
+            r.inicioTs.getTime() >= (ultima.finTs ?? ultima.inicioTs).getTime() &&
+            r.inicioTs.getTime() < primeroMs &&
+            (r.finTs === null || r.finTs.getTime() >= primeroMs),
+        )
+      : recorridoEnCursoAntesDe(recorridos, new Date(primeroMs));
   }
 
-  const { cambios, infracciones } = avanzarVueltas(ultima, eventos, { recorridoEnCurso, cierreTardio });
+  // Ancla: la ruta tiene terminal (arriba, si no, `return NADA`): una vuelta es terminal → terminal.
+  const { cambios, infracciones } = avanzarVueltas(ultima, eventos, { recorridoEnCurso, cierreTardio, anclaEnTerminal: true });
   const filas = new Map<string, FilaVuelta>(cambios.map((c) => [c.fila.id, c.fila]));
   const nuevas = new Set(cambios.filter((c) => c.nueva).map((c) => c.fila.id));
   const eliminadas = new Set(cambios.filter((c) => c.eliminada).map((c) => c.fila.id));

@@ -26,7 +26,7 @@ const terminal = (ts: Date): EventoVuelta => ({ clase: 'cumplimiento', ts, punto
 const retorno = (ts: Date): EventoVuelta => ({ clase: 'cumplimiento', ts, puntoControlId: HONDURAS, rol: 'retorno', lat: -17.5, lng: -66.1 });
 const espera = (ts: Date): EventoVuelta => ({ clase: 'cumplimiento', ts, puntoControlId: MOLINOS, rol: 'espera', lat: -17.6, lng: -66.0 });
 const comun = (ts: Date): EventoVuelta => ({ clase: 'cumplimiento', ts, puntoControlId: 'pc-x', rol: null, lat: 0, lng: 0 });
-const inicio = (ts: Date): EventoVuelta => ({ clase: 'inicio', ts });
+const inicio = (ts: Date, enTerminal?: boolean): EventoVuelta => ({ clase: 'inicio', ts, enTerminal });
 const fin = (ts: Date): EventoVuelta => ({ clase: 'fin', ts });
 
 function fila(parcial: Partial<FilaVuelta> = {}): FilaVuelta {
@@ -344,6 +344,86 @@ describe('avanzarVueltas — primera vuelta y recorrido en curso', () => {
 
   it('por defecto (recorrido desconocido = en curso) el terminal abre la primera vuelta', () => {
     expect(avanzar(null, [terminal(min(1))]).cambios).toHaveLength(1);
+  });
+});
+
+describe('avanzarVueltas — ancla en la terminal (vuelta = terminal → terminal)', () => {
+  const anclado = (ultima: FilaVuelta | null, eventos: EventoVuelta[], recorridoEnCurso = true) =>
+    avanzarVueltas(ultima, eventos, { nuevoId, anclaEnTerminal: true, recorridoEnCurso });
+
+  it('inicio lejos, retorno y luego terminal: ninguna vuelta completa; la 1 abre en el terminal', () => {
+    const r = anclado(null, [inicio(min(0)), retorno(min(10)), terminal(min(20))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.fila).toMatchObject({ numero: 1, estado: 'en_curso', inicioTs: min(20), pasoRetornoTs: null });
+    expect(r.cambios.some((c) => c.fila.estado === 'completa')).toBe(false);
+  });
+
+  it('inicio y luego terminal (arranca en SR): la vuelta 1 abre en el terminal', () => {
+    const r = anclado(null, [inicio(min(0)), terminal(min(1))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.fila).toMatchObject({ numero: 1, inicioTs: min(1) });
+  });
+
+  it('inicio enTerminal sin vuelta abre en el inicio (FIN -> COMENZAR parado en la terminal)', () => {
+    const r = anclado(null, [inicio(min(0), true)]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.fila).toMatchObject({ numero: 1, estado: 'en_curso', inicioTs: min(0) });
+  });
+
+  it('terminal -> retorno -> terminal -> fin -> inicio enTerminal: la vuelta vacía 2 se elimina y la nueva reutiliza el 2 (sin hueco)', () => {
+    const r1 = anclado(null, [inicio(min(0)), terminal(min(1)), retorno(min(10)), terminal(min(20))]);
+    const r2 = anclado(ultimaDe(r1), [fin(min(21)), inicio(min(25), true)], true);
+    expect(r2.cambios.find((c) => c.eliminada)?.fila.numero).toBe(2);
+    expect(ultimaDe(r2)).toMatchObject({ numero: 2, estado: 'en_curso', inicioTs: min(25) });
+  });
+
+  it('inicio lejos (enTerminal false/undefined) sigue sin abrir', () => {
+    expect(anclado(null, [inicio(min(0), false)]).cambios).toEqual([]);
+  });
+
+  it('inicio solo no abre vuelta', () => {
+    expect(anclado(null, [inicio(min(0))]).cambios).toEqual([]);
+  });
+
+  it('tras el anclaje, terminal -> retorno -> terminal cierra completa y abre la 2', () => {
+    const r = anclado(null, [inicio(min(0)), terminal(min(1)), retorno(min(10)), terminal(min(20))]);
+    const ult = ultimaDe(r);
+    expect(ult).toMatchObject({ numero: 2, estado: 'en_curso', inicioTs: min(20) });
+    expect(r.cambios.find((c) => c.fila.numero === 1)!.fila).toMatchObject({ estado: 'completa', finTs: min(20) });
+  });
+
+  it('inicio con vuelta en curso con retorno: la deja abierta_al_cierre y no abre otra hasta el terminal', () => {
+    const r1 = anclado(fila({ pasoRetornoTs: min(10), ultimoPcTs: min(10) }), [inicio(min(30))]);
+    expect(r1.cambios).toHaveLength(1);
+    expect(r1.cambios[0]!.fila).toMatchObject({ estado: 'abierta_al_cierre', finTs: min(30) });
+    const r2 = anclado(fila({ pasoRetornoTs: min(10), ultimoPcTs: min(10) }), [inicio(min(30)), retorno(min(35)), terminal(min(40))]);
+    expect(r2.cambios).toHaveLength(2);
+    expect(ultimaDe(r2)).toMatchObject({ numero: 2, estado: 'en_curso', inicioTs: min(40) });
+  });
+
+  it('inicio tras un fin (vuelta abierta_al_cierre de un lote anterior): el terminal siguiente abre la N+1', () => {
+    const previa = fila({ estado: 'abierta_al_cierre', finTs: min(30), pasoRetornoTs: min(10), ultimoPcTs: min(10) });
+    const r = anclado(previa, [inicio(min(60)), terminal(min(70))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.fila).toMatchObject({ numero: 2, inicioTs: min(70), estado: 'en_curso' });
+  });
+
+  it('inicio tras una vuelta completa (la N+1 vacía se eliminó): el terminal siguiente abre la N+1', () => {
+    const previa = fila({ estado: 'completa', finTs: min(30), pasoRetornoTs: min(10) });
+    const r = anclado(previa, [inicio(min(60)), terminal(min(70))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.fila).toMatchObject({ numero: 2, inicioTs: min(70) });
+  });
+
+  it('terminal tras el fin con el recorrido terminado no reabre (bus estacionado)', () => {
+    const previa = fila({ estado: 'abierta_al_cierre', finTs: min(30), pasoRetornoTs: min(10), ultimoPcTs: min(10) });
+    expect(anclado(previa, [terminal(min(60))], false).cambios).toEqual([]);
+  });
+
+  it('PC común y espera antes del terminal se ignoran: sin vuelta ni ultimoPcTs', () => {
+    const r = anclado(null, [inicio(min(0)), comun(min(2)), espera(min(4)), terminal(min(10))]);
+    expect(r.cambios).toHaveLength(1);
+    expect(r.cambios[0]!.fila).toMatchObject({ inicioTs: min(10), ultimoPcTs: null });
   });
 });
 

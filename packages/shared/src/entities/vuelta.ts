@@ -104,7 +104,7 @@ export type MolinosResumen = z.infer<typeof MolinosResumenSchema>;
 /**
  * `GET /mobile/vuelta-actual` — lo que necesita la app del chofer (la sesión sale del token,
  * nunca de un id del cliente). `vueltaId`/`numero` en `null` = la sesión todavía no tiene una
- * vuelta en curso (antes de pasar por la terminal).
+ * vuelta en curso (antes de que el servidor abra la vuelta 1 al pasar por la terminal).
  */
 export const VueltaActualMovilSchema = z.object({
   vueltaId: uuidSchema.nullable(),
