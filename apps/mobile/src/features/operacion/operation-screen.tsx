@@ -115,6 +115,7 @@ export function OperationScreen(
   // Fila de salida de la terminal: sale del mismo cache (sin polling propio).
   const terminalZona = useMemo(() => terminalDeLaRuta(puntosControl), [puntosControl]);
   const filaSalida = useFilaSalida({
+    sesionId: props.contexto.sesionId,
     fila: vueltaActual.fila,
     sinActualizar: vueltaActual.filaSinActualizar,
     desfaseMs: vueltaActual.desfaseFilaMs,
@@ -671,6 +672,9 @@ export function OperationScreen(
         }
         onStart={() => void gps.iniciar()}
         onFinish={confirmarFinalizacion}
+        pausadoDesde={gps.pausadoDesde}
+        onPause={() => void gps.pausar()}
+        onResume={() => void gps.reanudar()}
         filaSalida={filaSalida}
         panY={sheetPanY}
         onAlto={setAltoSheet}

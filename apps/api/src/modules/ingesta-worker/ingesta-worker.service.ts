@@ -314,15 +314,21 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
     const operativos = [
       ...porTipo.inicio_recorrido,
       ...porTipo.fin_recorrido,
+      ...porTipo.pausa_recorrido,
+      ...porTipo.reanudar_recorrido,
       ...porTipo.observacion,
       ...porTipo.inicio_jornada,
-    ];
+      // Cronológico (sort estable: empates conservan el orden por tipo): la guarda de estado de
+      // pausa/reanudar depende del orden real de los eventos de un lote offline.
+    ].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
     for (const evento of operativos) {
       const r = await this.procesarEventoOperativo(sindicatoId, evento);
       if (r) rechazados.push(r);
       if (!r && (evento.tipo === 'inicio_recorrido' || evento.tipo === 'fin_recorrido')) {
         entradas.operativos.push(evento);
       }
+      // La pausa NO es un límite de recorrido: solo retira de la fila (backstop); reanudar no hace nada acá.
+      if (!r && evento.tipo === 'pausa_recorrido') (entradas.pausas ??= []).push(evento);
     }
 
     // Detección DESPUÉS de persistir toda la evidencia del lote (gps, cumplimientos y eventos
@@ -542,6 +548,12 @@ export class IngestaWorkerService implements OnModuleInit, OnModuleDestroy {
         new Date(evento.ts),
       );
     }
+    for (const evento of entradas.pausas ?? []) {
+      const sesionId = extraerSesionId(evento.payload);
+      if (!sesionId) continue;
+      tocar(de(sesionId), new Date(evento.ts));
+      (de(sesionId).pausas ??= []).push(new Date(evento.ts));
+    }
     for (const [sesionId, entrada] of sesiones) {
       try {
         const r = await withTenantContext(
@@ -713,6 +725,7 @@ interface EntradasDeteccion {
   gps: EventoSync[];
   cumplimientos: { evento: EventoSync; ts: string }[];
   operativos: EventoSync[];
+  pausas?: EventoSync[];
 }
 
 export interface EventosPorTipo {
@@ -720,6 +733,8 @@ export interface EventosPorTipo {
   cumplimiento_punto_control: EventoSync[];
   inicio_recorrido: EventoSync[];
   fin_recorrido: EventoSync[];
+  pausa_recorrido: EventoSync[];
+  reanudar_recorrido: EventoSync[];
   observacion: EventoSync[];
   inicio_jornada: EventoSync[];
 }
@@ -730,6 +745,8 @@ export function agruparPorTipo(eventos: EventoSync[]): EventosPorTipo {
     cumplimiento_punto_control: [],
     inicio_recorrido: [],
     fin_recorrido: [],
+    pausa_recorrido: [],
+    reanudar_recorrido: [],
     observacion: [],
     inicio_jornada: [],
   };
@@ -973,13 +990,17 @@ export async function procesarCumplimientoEnTx(
 }
 
 /**
- * `tipo` → `SesionOperativa.recorridoEstado` que le corresponde. Solo `inicio_recorrido` y
- * `fin_recorrido` mueven el estado derivado (Fase A, docs/plan-ubicacion-fluida.md);
- * `observacion` no participa — no representa un cambio de estado del recorrido.
+ * `tipo` → `SesionOperativa.recorridoEstado` que le corresponde. Solo `inicio_recorrido`,
+ * `fin_recorrido` y la pausa/reanudación mueven el estado derivado (Fase A,
+ * docs/plan-ubicacion-fluida.md; docs/plan-pausa-recorrido.md); `observacion` no participa — no representa un cambio de estado del recorrido.
  */
-const RECORRIDO_ESTADO_POR_TIPO: Partial<Record<EventoSync['tipo'], 'en_curso' | 'finalizado'>> = {
+export const RECORRIDO_ESTADO_POR_TIPO: Partial<
+  Record<EventoSync['tipo'], 'en_curso' | 'en_pausa' | 'finalizado'>
+> = {
   inicio_recorrido: 'en_curso',
   fin_recorrido: 'finalizado',
+  pausa_recorrido: 'en_pausa',
+  reanudar_recorrido: 'en_curso',
 };
 
 /**
@@ -1121,6 +1142,8 @@ export async function insertarEventoOperativoEnTx(
       WHERE id = ${payload.sesionId} AND "sindicatoId" = ${sindicatoId}
         AND "deviceId" = ${evento.deviceId}
         AND ("recorridoEstadoTs" IS NULL OR "recorridoEstadoTs" < ${new Date(evento.ts)})
+        AND (${evento.tipo}::text NOT IN ('pausa_recorrido', 'reanudar_recorrido')
+             OR "recorridoEstado" = ${evento.tipo === 'pausa_recorrido' ? 'en_curso' : 'en_pausa'})
     `;
   }
   return { recorridoEstadoOmitidoPorDriftFuturo: false };

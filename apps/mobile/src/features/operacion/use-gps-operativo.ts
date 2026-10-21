@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Linking, PermissionsAndroid, Platform, type AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { borrarPausa, guardarPausa, leerPausa } from './pausa-recorrido';
 import * as Sentry from '@sentry/react-native';
 import BackgroundGeolocation, { type Location } from 'react-native-background-geolocation';
 import { resolverTsFix, type PuntoControlPaquete } from '@quivo/shared';
@@ -187,6 +188,58 @@ export function useGpsOperativo(
   geometriaRuta?: [number, number][],
 ) {
   const [tracking, setTracking] = useState(false);
+  // Pausa del recorrido (ISO del inicio, `null` = no pausado). El GPS NO se detiene en pausa.
+  const [pausadoDesde, setPausadoDesde] = useState<string | null>(null);
+  // Cambia con cada intención (iniciar/detener/pausar/reanudar): la lectura del montaje solo
+  // aplica si nadie decidió nada mientras tanto.
+  const intencionPausaRef = useRef(0);
+  const pausaEnVueloRef = useRef(false);
+  // Las escrituras a AsyncStorage van en cola: gana la última intención (no rechazan).
+  const colaPausaRef = useRef<Promise<void>>(Promise.resolve());
+  const escribirPausa = useCallback((fn: () => Promise<void>) => {
+    colaPausaRef.current = colaPausaRef.current.then(fn);
+  }, []);
+  useEffect(() => {
+    let vigente = true;
+    const intencion = intencionPausaRef.current;
+    void leerPausa(sesionId).then((desde) => {
+      if (vigente && intencionPausaRef.current === intencion) setPausadoDesde(desde);
+    });
+    return () => {
+      vigente = false;
+    };
+  }, [sesionId]);
+  const cambiarPausa = useCallback(
+    async (tipo: 'pausa_recorrido' | 'reanudar_recorrido') => {
+      if (pausaEnVueloRef.current) return;
+      pausaEnVueloRef.current = true;
+      try {
+        const db = await abrirOutbox();
+        await encolarEvento(db, { deviceId, tipo, payload: { sesionId } });
+        intencionPausaRef.current += 1;
+        if (tipo === 'pausa_recorrido') {
+          const desde = new Date().toISOString();
+          setPausadoDesde(desde);
+          escribirPausa(() => guardarPausa(sesionId, desde));
+        } else {
+          setPausadoDesde(null);
+          escribirPausa(borrarPausa);
+        }
+      } catch (error) {
+        Sentry.captureException(error, { tags: { contexto: 'gps-foreground', paso: tipo } });
+        setErrorGps(
+          tipo === 'pausa_recorrido'
+            ? 'No se pudo pausar. Intentá de nuevo.'
+            : 'No se pudo reanudar. Intentá de nuevo.',
+        );
+      } finally {
+        pausaEnVueloRef.current = false;
+      }
+    },
+    [deviceId, sesionId, escribirPausa],
+  );
+  const pausar = useCallback(() => cambiarPausa('pausa_recorrido'), [cambiarPausa]);
+  const reanudar = useCallback(() => cambiarPausa('reanudar_recorrido'), [cambiarPausa]);
   // FIX POST-REVISIÓN (hallazgo ALTO, rescope SESION_NO_VIGENTE — Entrega 28): `false` hasta que
   // este hook tenga un VEREDICTO REAL sobre si hay un recorrido activo — el re-enganche nativo
   // (efecto más abajo: `getState()`/`ready()` resuelven, con o sin plugin `enabled`) o un cambio
@@ -1640,6 +1693,9 @@ export function useGpsOperativo(
   // sin importar qué tan rápido se toquen los dos botones. Ver el test dedicado a esta carrera
   // en `gps/seguimiento-continuo.test.ts` (`crearSerializadorPromesaEnCurso`).
   const iniciar = useCallback(async () => {
+    setPausadoDesde(null);
+    intencionPausaRef.current += 1;
+    escribirPausa(borrarPausa);
     operacionesEnVueloRef.current += 1;
     const generacion = ++generacionOperacionRef.current;
     // Cubre el cuerpo ENTERO (getState, re-enganche y arranque) y se registra de forma síncrona,
@@ -1689,6 +1745,9 @@ export function useGpsOperativo(
 
   const detener = useCallback(async () => {
     setErrorGps(null);
+    setPausadoDesde(null);
+    intencionPausaRef.current += 1;
+    escribirPausa(borrarPausa);
     operacionesEnVueloRef.current += 1;
     generacionOperacionRef.current += 1;
     try {
@@ -1987,6 +2046,9 @@ export function useGpsOperativo(
     posicionActual,
     iniciar,
     detener,
+    pausadoDesde,
+    pausar,
+    reanudar,
     simularDeteccion,
   };
 }

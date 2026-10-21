@@ -37,6 +37,8 @@ export interface EntradaVueltasSesion {
   cumplimientos: { ts: Date; puntoControlId: string; lat: number; lng: number }[];
   inicios: Date[];
   fines: Date[];
+  /** `pausa_recorrido` del lote: no cierra vueltas, solo retira de la fila de salida (backstop). */
+  pausas?: Date[];
   /** El lote trajo fixes GPS de la sesión: hay que re-evaluar la salida del punto de espera. */
   hayGps: boolean;
   /** `ts` más reciente de cualquier evento del lote (referencia de antigüedad de las esperas); `null` si no hay. */
@@ -133,7 +135,10 @@ export async function procesarVueltasSesion(
   // es resolver la salida de una espera pendiente RESOLVIBLE (PC de espera todavía activo y llegada
   // reciente): se comprueba con una lectura barata ANTES de tomar locks.
   const hayEventos =
-    entrada.cumplimientos.length > 0 || entrada.inicios.length > 0 || entrada.fines.length > 0;
+    entrada.cumplimientos.length > 0 ||
+    entrada.inicios.length > 0 ||
+    entrada.fines.length > 0 ||
+    (entrada.pausas?.length ?? 0) > 0;
   if (!hayEventos) {
     if (!entrada.hayGps) return NADA;
     const pendiente = await tx.$queryRaw<{ uno: number }[]>`
@@ -191,7 +196,7 @@ export async function procesarVueltasSesion(
     sesionId,
     terminalesIds: new Set(pcs.filter((pc) => pc.rol === 'terminal').map((pc) => pc.id)),
     cumplimientos: entrada.cumplimientos.filter((c) => pcPorId.has(c.puntoControlId)),
-    fines: entrada.fines,
+    fines: [...entrada.fines, ...(entrada.pausas ?? [])],
     ahora,
   });
 

@@ -66,7 +66,12 @@ export interface NextControlSheetProps {
   canStart: boolean;
   gpsError: string | null;
   onStart: () => void;
+  /** Termina el día (`gps.detener()` tras confirmar). Con la ruta en curso es la acción secundaria. */
   onFinish: () => void;
+  /** Inicio (ISO) de la pausa del recorrido; `null` = en marcha. */
+  pausadoDesde?: string | null;
+  onPause?: () => void;
+  onResume?: () => void;
   /** Fila de salida de la terminal (tarjeta + SALIR); solo se dibuja con el recorrido activo. */
   filaSalida?: FilaSalidaUi;
   panY: Animated.Value;
@@ -350,16 +355,54 @@ export function NextControlSheet(props: NextControlSheetProps) {
             COMENZAR RUTA
           </Button>
         ) : (
-          <Button
-            variant="ghost"
-            onPress={props.onFinish}
-            style={styles.finishButton}
-            textStyle={styles.finishButtonText}
-            leftIcon={<Ionicons name="stop-circle-outline" size={20} color={quivoColors.white} />}
-            fullWidth
-          >
-            FINALIZAR RUTA
-          </Button>
+          <>
+            {props.pausadoDesde ? (
+              <>
+                <Text style={styles.hintText}>
+                  En pausa desde{' '}
+                  {new Date(props.pausadoDesde).toLocaleTimeString('es-BO', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false,
+                  })}
+                </Text>
+                <Button
+                  variant="secondary"
+                  onPress={props.onResume}
+                  style={styles.startButton}
+                  textStyle={styles.startButtonText}
+                  accessibilityHint="Vuelves a aparecer como en recorrido"
+                  fullWidth
+                >
+                  REANUDAR
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="ghost"
+                onPress={props.onPause}
+                style={styles.finishButton}
+                textStyle={styles.finishButtonText}
+                leftIcon={<Ionicons name="pause-circle-outline" size={20} color={quivoColors.white} />}
+                accessibilityHint="Pausa el recorrido; el GPS sigue activo"
+                fullWidth
+              >
+                PAUSAR
+              </Button>
+            )}
+            {props.pausadoDesde ? (
+              <Button
+                variant="ghost"
+                onPress={props.onFinish}
+                style={styles.finishButton}
+                textStyle={styles.finishButtonText}
+                leftIcon={<Ionicons name="stop-circle-outline" size={20} color={quivoColors.white} />}
+                fullWidth
+              >
+                Terminar el día
+              </Button>
+            ) : null}
+          </>
         )}
       </View>
 

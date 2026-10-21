@@ -1,7 +1,7 @@
 import type { MapPoint, MapRoute, MapZone } from '@quivo/design-system';
 import type { ContextoEnVivo, CumplimientoRecorrido, PosicionEnVivo, PuntoTrazaGps, RutaSnap } from '@quivo/shared';
 import { ApiError } from '../../../src/lib/api/client';
-import { presentacionFrescura, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
+import { presentacionFrescura, sufijoPausa, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 import { alertaMarcador } from '../../../src/lib/en-vivo/alertas';
 import { rutasDeTraza } from '../../../src/lib/en-vivo/segmentos-traza';
 
@@ -152,7 +152,7 @@ export function construirMarcadoresVehiculos(
         lat: p.lat,
         lng: p.lng,
         label: p.vehiculoPlaca,
-        description: `${p.lineaNombre} · ${p.conductorNombre} · ${presentacion.etiqueta}`,
+        description: `${p.lineaNombre} · ${p.conductorNombre} · ${presentacion.etiqueta}${sufijoPausa(p)}`,
         color: presentacion.color,
         // ENTREGA 16 — `'vehicle'`, no `'pulse'`: un fix de code-review le devolvió `'pulse'` a
         // su significado original (nodos pulsantes del editor de trazado/demo de landing) — los

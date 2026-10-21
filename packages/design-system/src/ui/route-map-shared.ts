@@ -93,7 +93,7 @@ export function resolvePointId(point: { id?: string; lat: number; lng: number },
   return point.id ?? `${point.lat}:${point.lng}:${index}`;
 }
 
-export type EstadoIconoVehiculo = 'reportando' | 'detenido' | 'perdido' | 'finalizado';
+export type EstadoIconoVehiculo = 'reportando' | 'detenido' | 'perdido' | 'finalizado' | 'en_pausa';
 
 export const ICONO_BUS_PATH =
   'M18 11H6V6h12m-1.5 11a1.5 1.5 0 0 1-1.5-1.5a1.5 1.5 0 0 1 1.5-1.5a1.5 1.5 0 0 1 1.5 1.5a1.5 1.5 0 0 1-1.5 1.5m-9 0A1.5 1.5 0 0 1 6 15.5A1.5 1.5 0 0 1 7.5 14A1.5 1.5 0 0 1 9 15.5A1.5 1.5 0 0 1 7.5 17M4 16c0 .88.39 1.67 1 2.22V20a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-1h8v1a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-1.78c.61-.55 1-1.34 1-2.22V6c0-3.5-3.58-4-8-4s-8 .5-8 4z';
@@ -101,6 +101,9 @@ export const ICONO_BUS_CLOCK_PATH =
   'M16.5 4v4.25l2.86 1.69l-.75 1.22L15 9V4zm-.5 9c1.36 0 2.54-.5 3.5-1.47c1-.97 1.5-2.14 1.5-3.53c0-1.36-.5-2.54-1.5-3.5c-.96-1-2.14-1.5-3.5-1.5c-1.39 0-2.56.5-3.53 1.5C11.5 5.46 11 6.64 11 8c0 1.39.5 2.56 1.47 3.53S14.61 13 16 13m-2.5 6c.44 0 .8-.16 1.08-.46s.42-.65.42-1.04c0-.42-.14-.77-.42-1.07S13.94 16 13.5 16s-.8.13-1.08.43s-.42.65-.42 1.07c0 .39.14.74.42 1.04s.64.46 1.08.46M3 13h8.11C9.7 11.64 9 10 9 8H3zm1.5 6c.44 0 .8-.16 1.08-.46S6 17.89 6 17.5c0-.42-.14-.77-.42-1.07S4.94 16 4.5 16s-.8.13-1.08.43S3 17.08 3 17.5c0 .39.14.74.42 1.04s.64.46 1.08.46M16 1c1.92 0 3.58.67 4.95 2.05C22.33 4.42 23 6.08 23 8c0 1.77-.56 3.29-1.72 4.59c-1.15 1.29-2.58 2.07-4.28 2.32V18c0 .84-.33 1.58-1 2.2V22c0 .27-.11.5-.3.71c-.2.2-.42.29-.7.29h-1c-.27 0-.5-.09-.71-.29A.98.98 0 0 1 13 22v-1H5v1c0 .27-.09.5-.29.71c-.21.2-.44.29-.71.29H3c-.28 0-.5-.09-.7-.29c-.19-.21-.3-.44-.3-.71v-1.8c-.67-.62-1-1.36-1-2.2V8c0-1.58.67-2.65 2.05-3.2C4.42 4.26 6.41 4 9 4h.61c.28 0 .48.03.61.03C11.63 2 13.55 1 16 1';
 export const ICONO_BUS_ALERT_PATH =
   'M16 1a7 7 0 0 1 7 7c0 3.53-2.61 6.45-6 6.93V18c0 .84-.35 1.58-1.04 2.2V22c0 .27-.09.5-.28.71c-.18.2-.42.29-.68.29h-1a.98.98 0 0 1-.73-.29a.96.96 0 0 1-.31-.71v-1H5.04v1c0 .27-.1.5-.31.71c-.2.2-.44.29-.73.29H3c-.26 0-.5-.09-.68-.29c-.19-.21-.28-.44-.28-.71v-1.8C1.35 19.58 1 18.84 1 18V8c0-1.58.7-2.65 2.07-3.2C4.44 4.26 6.42 4 9 4l1.23.03A7.01 7.01 0 0 1 16 1m0 2a5 5 0 0 0-5 5a5 5 0 0 0 5 5a5 5 0 0 0 5-5a5 5 0 0 0-5-5m-1 7h2v2h-2zm0-6h2v5h-2zM3 13h8.09A7 7 0 0 1 9 8H3zm1.5 3c-.81 0-1.5.67-1.5 1.5A1.5 1.5 0 0 0 4.5 19c.85 0 1.5-.67 1.5-1.5A1.5 1.5 0 0 0 4.5 16m9 0c-.85 0-1.5.67-1.5 1.5a1.5 1.5 0 0 0 1.5 1.5c.81 0 1.5-.67 1.5-1.5a1.5 1.5 0 0 0-1.5-1.5';
+
+/** mdi:pause — glifo de la pausa del recorrido (almuerzo). */
+export const ICONO_PAUSA_PATH = 'M14 19h4V5h-4M6 19h4V5H6z';
 
 export interface VehiculoIconoSpec {
   estado: EstadoIconoVehiculo;
@@ -151,6 +154,9 @@ export const VEHICULO_ICONOS: VehiculoIconoSpec[] = [
   // no `bus-alert`) y contorno PUNTEADO (`outline: true`, como `detenido`): la forma dice
   // "no es una falla" antes de leer texto, aunque el color de fondo sea el mismo tono neutro.
   { estado: 'finalizado', path: ICONO_BUS_PATH, background: '#94a3b8', outline: true, opacity: 0.85 },
+  // Pausa del recorrido (docs/plan-pausa-recorrido.md): glifo de pausa en ámbar punteado
+  // (`--qv-color-warning`), distinto del reloj cian de `detenido`.
+  { estado: 'en_pausa', path: ICONO_PAUSA_PATH, background: '#d97706', outline: true, opacity: 1 },
 ];
 
 export const VEHICULO_ICONO_PX = 64;
@@ -203,6 +209,7 @@ export const ETIQUETA_FRESCURA: Record<EstadoIconoVehiculo, string> = {
   detenido: 'Detenido',
   perdido: 'Sin señal',
   finalizado: 'Recorrido finalizado',
+  en_pausa: 'En pausa',
 };
 
 /** Etiqueta de un `estadoFrescura` cualquiera; vacía si no se conoce (no se inventa un estado). */

@@ -6,6 +6,23 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-21, 12:00: r23 en prod; PAUSAR/REANUDAR (r24 + OTA) para el piloto de las 15:00
+
+- **r23 desplegada:** #225 (vuelta 1 anclada en SR) está en la API `quivo-api-00029-qdm` y en el worker
+  `quivo-worker-00013-kt8`, las dos con `api:r23-20261021`. `/v1/health` responde 200 y no hay ERROR en Cloud Logging
+  en los 20 minutos posteriores. El worker avisa por `BETTER_AUTH_URL`; no está verificado si ya pasaba con r22.
+  Rollback: API a `quivo-api-00028-tzs`, worker a `api:r22-20261021`. Falta la prueba en la calle (COMENZAR lejos de
+  SR: en /en-vivo no tiene que haber vuelta antes de pasar por SR).
+- **Pausa del recorrido:** el CTO la pidió para el almuerzo en lugar de FINALIZAR. Plan:
+  [`plan-pausa-recorrido.md`](plan-pausa-recorrido.md). Rama `feat/pausa-recorrido`.
+  - Durante la pausa el GPS sigue activo.
+  - No hay límite de duración.
+  - El trufi sale de vecinos y de la fila.
+  - Durante la pausa no se evalúa desvío. Un desvío que ya estaba en curso antes de pausar sigue siendo falta.
+  - Despliegue: migración + API + worker (r24), después la web y recién después la OTA, que publica el CTO.
+- **Revisiones de la pausa:** `/ponytail-review` y `/code-review` aplicadas. El hallazgo "la pausa cierra el desvío"
+  se descartó por decisión del CTO. Codex: no verificado (sin cuota).
+
 ## Punto de retome — 2026-10-21, 11:00: anclar la vuelta 1 en SR (r23, para el piloto de las 15:00)
 
 - **Hecho:** web r22 (`quivo-web-00013-gms`) y OTA "Fila de salida en Salomón Romero (r22)" (grupo `04887c22…`)

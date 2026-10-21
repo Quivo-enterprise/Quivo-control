@@ -15,8 +15,10 @@ import {
   dedupeKeyPcOmitido,
   descartarFuturos,
   recorridoCerradoEn,
+  enPausa,
   recorridoDeInstante,
   recorridoIniciadoEn,
+  ventanasDePausa,
   REGLA_TIPO_POR_INFRACCION,
   resolverGravedadInfraccion,
   cumplimientoDisparaPcOmitido,
@@ -110,25 +112,33 @@ export async function contextoDeSesion(
  * (`recorridoEstado`/`recorridoEstadoTs` de `sesiones_operativas` solo guardan el estado ACTUAL
  * y no sirven para clasificar puntos históricos o tardíos del outbox.)
  */
+async function cargarEventosRecorrido(tx: Tx, sindicatoId: string, sesionId: string, ahora: Date) {
+  return tx.eventoOperativo.findMany({
+    where: {
+      sindicatoId,
+      sesionId,
+      tipo: { in: ['inicio_recorrido', 'fin_recorrido', 'pausa_recorrido', 'reanudar_recorrido'] },
+      ts: { lte: new Date(ahora.getTime() + DRIFT_ALERTA_MS) },
+    },
+    select: { tipo: true, ts: true },
+    orderBy: { ts: 'asc' },
+  });
+}
+
+const recorridosDe = (eventos: { tipo: string; ts: Date }[]): Recorrido[] =>
+  construirRecorridos(
+    eventos
+      .filter((e) => e.tipo === 'inicio_recorrido' || e.tipo === 'fin_recorrido')
+      .map((e) => ({ tipo: e.tipo as 'inicio_recorrido' | 'fin_recorrido', ts: e.ts })),
+  );
+
 export async function cargarRecorridos(
   tx: Tx,
   sindicatoId: string,
   sesionId: string,
   ahora: Date,
 ): Promise<Recorrido[]> {
-  const eventos = await tx.eventoOperativo.findMany({
-    where: {
-      sindicatoId,
-      sesionId,
-      tipo: { in: ['inicio_recorrido', 'fin_recorrido'] },
-      ts: { lte: new Date(ahora.getTime() + DRIFT_ALERTA_MS) },
-    },
-    select: { tipo: true, ts: true },
-    orderBy: { ts: 'asc' },
-  });
-  return construirRecorridos(
-    eventos.map((e) => ({ tipo: e.tipo as 'inicio_recorrido' | 'fin_recorrido', ts: e.ts })),
-  );
+  return recorridosDe(await cargarEventosRecorrido(tx, sindicatoId, sesionId, ahora));
 }
 
 interface FilaEstadoDesvio {
@@ -177,15 +187,19 @@ export async function procesarDesvioSesion(
   const marcadoresVigentes = descartarFuturos(marcadores, ahora.getTime(), DRIFT_ALERTA_MS);
   if (candidatos.length === 0 && marcadoresVigentes.length === 0) return nada;
 
-  const recorridos = await cargarRecorridos(tx, sindicatoId, sesionId, ahora);
+  const eventosRecorrido = await cargarEventosRecorrido(tx, sindicatoId, sesionId, ahora);
+  const recorridos = recorridosDe(eventosRecorrido);
   const marcadoresDesvio: MarcadorDesvio[] = [];
   for (const m of marcadoresVigentes) {
     const rec =
       m.tipo === 'inicio' ? recorridoIniciadoEn(recorridos, m.ts) : recorridoCerradoEn(recorridos, m.ts);
     if (rec) marcadoresDesvio.push({ tipo: m.tipo, ts: m.ts, recorridoTs: rec.inicioTs });
   }
-  // Solo puntos dentro de un recorrido: el resto (traslado en vacío) no mueve la máquina.
+  // Solo puntos dentro de un recorrido y fuera de una pausa (almuerzo fuera del trazado es legítimo,
+  // docs/plan-pausa-recorrido.md): el resto no mueve la máquina.
+  const pausas = ventanasDePausa(eventosRecorrido);
   const enRecorrido = candidatos
+    .filter((p) => !enPausa(pausas, p.ts))
     .map((p) => ({ p, rec: recorridoDeInstante(recorridos, p.ts) }))
     .filter((x): x is { p: PuntoGpsEntrante; rec: Recorrido } => x.rec !== null);
   if (enRecorrido.length === 0 && marcadoresDesvio.length === 0) return nada;

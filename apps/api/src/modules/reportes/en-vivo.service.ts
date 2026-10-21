@@ -247,6 +247,8 @@ function clasificarFrescura(
   }
   // Ingesta viva. Si además el último fix es reciente, el vehículo se está moviendo;
   // si no, el teléfono sincroniza pero el vehículo está quieto (terminal).
+  // En pausa (almuerzo) manda sobre reportando/detenido: el GPS sigue, pero el estado es la pausa.
+  if (recorridoEstado === 'en_pausa') return 'en_pausa';
   if (antiguedadFixMs !== null && antiguedadFixMs <= UMBRAL_FIX_EN_MOVIMIENTO_MS) {
     return 'reportando';
   }
@@ -292,6 +294,7 @@ export function derivarFrescura(
     // de un `en_curso` (o de un `finalizado` descartado por un fix posterior) no es una hora
     // de fin válida para mostrarle al cliente.
     recorridoFinTs: estadoFrescura === 'finalizado' ? (recorridoEstadoTs?.toISOString() ?? null) : null,
+    pausaDesdeTs: estadoFrescura === 'en_pausa' ? (recorridoEstadoTs?.toISOString() ?? null) : null,
   };
 }
 

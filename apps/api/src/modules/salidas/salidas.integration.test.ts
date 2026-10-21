@@ -86,6 +86,17 @@ describe('fila de salida (API contra Postgres real)', () => {
       expect(filas).toBe(0);
     });
 
+    it('con el recorrido en pausa la llegada es 409 y no entra a la fila', async () => {
+      const sesionId = m.a[uno]!.sesion.sesionId;
+      await withTenantContext(ADMIN, (tx) => tx.$executeRaw`UPDATE sesiones_operativas SET "recorridoEstado" = 'en_pausa' WHERE id = ${sesionId}`);
+      try {
+        await expect(fila.registrarLlegada(m.a[uno]!.sesion, DENTRO)).rejects.toMatchObject({ status: 409 });
+        expect(await withTenantContext(ADMIN, (tx) => tx.filaSalida.count({ where: { sindicatoId: m.sindicatoA } }))).toBe(0);
+      } finally {
+        await withTenantContext(ADMIN, (tx) => tx.$executeRaw`UPDATE sesiones_operativas SET "recorridoEstado" = NULL WHERE id = ${sesionId}`);
+      }
+    });
+
     it('dentro de la zona entra a la fila (1.º, habilitado); la llegada doble es idempotente', async () => {
       const r1 = await fila.registrarLlegada(m.a[uno]!.sesion, DENTRO);
       expect(r1.fila).toMatchObject({ posicion: 1, total: 1, delantePlaca: null, habilitado: true, demorado: false });
