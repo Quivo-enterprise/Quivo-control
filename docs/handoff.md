@@ -6,6 +6,32 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-21, 12:40: r24 + OTA de la pausa en prod para el piloto de las 15:00
+
+- **#226 (pausar/reanudar) mergeado** en `b716d85`, con CI y acceptance en verde.
+- **r24 desplegada:**
+  - Migración `20261021120000_pausa_recorrido` aplicada con el job de migraciones.
+  - API `quivo-api-00031-5z9` (`api:r24-20261021`). La 00030 era la misma imagen; la 00031 sale del update de
+    `CORS_ORIGIN` que hace el deploy de la web.
+  - Worker `quivo-worker-00014-8cs` (`api:r24-20261021`).
+  - Web `quivo-web-00014-cpj` (`web:r24-20261021`).
+  - `/v1/health/ready` da ok (db y redis arriba), `/login` responde 200 y no hay ERROR en la API ni en el worker.
+  - Los builds fallaron dos veces por timeouts contra registry.npmjs.org (red local); al reintentar salieron.
+- **OTA publicada:** "Pausar y reanudar recorrido (r24)", grupo `08acdc79-af82-49e2-8b67-f55e1eed6534`, runtime
+  `547d52e7…` (el mismo de los APK instalados).
+  - El bundle `index-835cd580….hbc` trae `pausa_recorrido`, `reanudar_recorrido`, "En pausa desde" y la URL de la API.
+  - Los source maps están en Sentry.
+  - `publicar-ota.sh` pide confirmar con `read`: desde `!` hay que correrlo como `echo y | ./scripts/publicar-ota.sh "…"`.
+- **Rollback:**
+  - API a `quivo-api-00029-qdm` y worker a `api:r23-20261021`. La migración es compatible con r23.
+  - Si se vuelve atrás la API, republicar la OTA anterior (grupo `04887c22-1938-4d8b-9373-b0ac9d05d831`), porque una
+    API vieja rechaza el lote con los tipos de pausa.
+- **Pendiente:**
+  - Prueba en la calle de r23 (vuelta 1 anclada en SR) y de la pausa.
+  - Guía para los pasantes: pausar **antes** de desviarse y no usar "Terminar el día" en medio de una vuelta.
+  - El cierre de un desvío abierto cuando el chofer pausa ya fuera de ruta lo decide el admin (decisión del CTO).
+  - No probado en dispositivo.
+
 ## Punto de retome — 2026-10-21, 12:00: r23 en prod; PAUSAR/REANUDAR (r24 + OTA) para el piloto de las 15:00
 
 - **r23 desplegada:** #225 (vuelta 1 anclada en SR) está en la API `quivo-api-00029-qdm` y en el worker
