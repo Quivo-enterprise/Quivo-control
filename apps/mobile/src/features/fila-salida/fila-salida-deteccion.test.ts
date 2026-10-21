@@ -7,11 +7,13 @@ const mocks = vi.hoisted(() => ({
   llegada: vi.fn(),
   salida: vi.fn(),
   rearmar: vi.fn(),
+  pausa: vi.fn(),
 }));
 
 vi.mock('@sentry/react-native', () => ({ captureException: vi.fn() }));
 vi.mock('../../db/vuelta-actual-local', () => ({ leerEstadoVueltaLocal: mocks.leer }));
 vi.mock('../vuelta-actual/vuelta-actual-oportunista', () => ({ rearmarFilaLocal: mocks.rearmar }));
+vi.mock('../operacion/pausa-recorrido', () => ({ leerPausa: mocks.pausa }));
 vi.mock('./fila-salida-acciones', () => ({
   registrarLlegada: mocks.llegada,
   registrarSalida: mocks.salida,
@@ -36,11 +38,19 @@ beforeEach(() => {
   Object.values(mocks).forEach((m) => m.mockReset());
   mocks.leer.mockResolvedValue(ESTADO_LOCAL_INICIAL);
   mocks.llegada.mockResolvedValue({ ok: true });
+  mocks.pausa.mockResolvedValue(null);
   reiniciarDeteccionFila();
 });
 afterEach(() => vi.useRealTimers());
 
 describe('procesarFixFila', () => {
+  it('en pausa no registra la llegada', async () => {
+    mocks.pausa.mockResolvedValue('2026-10-20T11:00:00.000Z');
+    await procesarFixFila(fixEnTerminal, ctx);
+    expect(mocks.pausa).toHaveBeenCalledWith('s1');
+    expect(mocks.llegada).not.toHaveBeenCalled();
+  });
+
   it('dos llamadas concurrentes producen un solo POST de llegada (candado enCurso)', async () => {
     await Promise.all([procesarFixFila(fixEnTerminal, ctx), procesarFixFila(fixEnTerminal, ctx)]);
     expect(mocks.llegada).toHaveBeenCalledTimes(1);

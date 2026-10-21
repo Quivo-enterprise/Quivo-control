@@ -397,6 +397,10 @@ describe('intervaloPoll', () => {
     expect(intervaloPoll(undefined)).toBe(INTERVALO_POLL_MS);
   });
 
+  it('en_pausa nunca corta el poll, ni con >30 min de inactividad', () => {
+    expect(intervaloPoll({ hayMas: false, inactivaDesdeMs: UMBRAL_CORTE_POLL_MS * 4, estadoFrescura: 'en_pausa' })).toBe(INTERVALO_POLL_MS);
+  });
+
   it('acelera mientras el server avisa hayMas', () => {
     expect(intervaloPoll({ hayMas: true, inactivaDesdeMs: 0, estadoFrescura: 'reportando' })).toBe(
       INTERVALO_POLL_RAPIDO_MS,

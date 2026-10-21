@@ -3,6 +3,7 @@ import { prisma, withTenantContext } from '@quivo/db';
 import { fechaActualBolivia, type EventoSync } from '@quivo/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  RECORRIDO_ESTADO_POR_TIPO,
   agruparPorTipo,
   insertarEventoOperativoEnTx,
   IngestaWorkerService,
@@ -156,6 +157,12 @@ describe('IngestaWorkerService — lógica de procesamiento por tipo', () => {
       await tx.sindicato.delete({ where: { id: sindicatoOtroId } });
     });
     await prisma.$disconnect();
+  });
+
+  it('pausa/reanudar mueven recorridoEstado a en_pausa/en_curso y observacion no', () => {
+    expect(RECORRIDO_ESTADO_POR_TIPO.pausa_recorrido).toBe('en_pausa');
+    expect(RECORRIDO_ESTADO_POR_TIPO.reanudar_recorrido).toBe('en_curso');
+    expect(RECORRIDO_ESTADO_POR_TIPO.observacion).toBeUndefined();
   });
 
   it('agruparPorTipo separa los eventos por su tipo de outbox', () => {

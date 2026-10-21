@@ -47,6 +47,9 @@ import { VueltaPosicionSchema } from './vuelta.js';
  *                   `fin`/`estado` de la sesión de login (esos siguen sin cerrarse). Es un
  *                   cierre correcto, no una falla: antes de esta entrega un recorrido
  *                   finalizado se veía "Reportando" → "Detenido" → "Sin señal" (rojo).
+ * - `en_pausa`   — docs/plan-pausa-recorrido.md: el chofer pausó el recorrido (almuerzo); el
+ *                   GPS sigue reportando y `pausaDesdeTs` dice desde cuándo. Gana sobre
+ *                   `reportando`/`detenido`, pero si la ingesta se corta sigue siendo `perdido`.
  *
  * Es un campo **adicional**: la respuesta siempre trae también `ultimoFixTs`,
  * `ultimoIngresoTs` y `servidorTs` crudos. Los umbrales de **color** (verde/ámbar/rojo)
@@ -59,6 +62,7 @@ export const EstadoFrescuraSchema = z.enum([
   'perdido',
   'sin_datos',
   'finalizado',
+  'en_pausa',
 ]);
 export type EstadoFrescura = z.infer<typeof EstadoFrescuraSchema>;
 
@@ -96,6 +100,8 @@ export const FrescuraEnVivoSchema = z.object({
    * mostrar "Finalizó hace X" con la misma lógica de reloj-de-servidor que ya usa para
    * `ultimoFixTs`/`ultimoIngresoTs` (`antiguedadViva`, `apps/web/src/lib/en-vivo/traza.ts`). */
   recorridoFinTs: z.string().nullable(),
+  /** `recorridoEstadoTs` cuando `estadoFrescura === 'en_pausa'`; ausente/`null` en cualquier otro. */
+  pausaDesdeTs: z.string().nullable().optional(),
 });
 export type FrescuraEnVivo = z.infer<typeof FrescuraEnVivoSchema>;
 

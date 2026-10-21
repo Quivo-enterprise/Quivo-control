@@ -60,6 +60,9 @@ export class FilaService {
       if (ctx.recorridoEstado === 'finalizado') {
         throw new ConflictException('El recorrido está finalizado: no se puede entrar a la fila');
       }
+      if (ctx.recorridoEstado === 'en_pausa') {
+        throw new ConflictException('El recorrido está en pausa: reanudalo para entrar a la fila');
+      }
       // `puntos_control` no tiene RLS: se filtra por la línea del sindicato del token.
       const [terminal] = await tx.$queryRaw<{ id: string; dentro: boolean }[]>`
         SELECT pc.id,

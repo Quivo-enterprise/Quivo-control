@@ -1,7 +1,7 @@
 import { Loader, Tag } from '@quivo/design-system';
 import type { SesionEnVivoResumen } from '@quivo/shared';
 import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
-import { antiguedadViva, formatearAntiguedad, presentacionFrescura, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
+import { antiguedadViva, formatearAntiguedad, presentacionFrescura, sufijoPausa, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 
 /**
  * Las **dos** antigüedades, siempre juntas: `antiguedadFixMs` dice cuándo se capturó la
@@ -74,6 +74,7 @@ export function PanelFrescura({
             lector de pantalla. */}
         <span aria-live="polite" aria-atomic="true">
           <strong>{presentacion.etiqueta}</strong>
+          {sufijoPausa(fuente)}
         </span>
         {datos && (
           <Tag variant="neutral">

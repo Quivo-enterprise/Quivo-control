@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EstadoFilaSalida } from '@quivo/shared';
 import { anunciarAvisoEnCanal, cancelarProgramada } from '../operacion/anuncio-punto-control';
 import { registrarLlegada, registrarSalida } from './fila-salida-acciones';
+import { leerPausa } from '../operacion/pausa-recorrido';
 import { ultimoFixFila } from './fila-salida-deteccion';
 import {
   TEXTO_AVISO_FILA,
@@ -23,6 +24,7 @@ import { estaCercaDeTerminal, type TerminalZona } from './zona-terminal';
 let etaAvisado: string | null = null;
 
 interface Params {
+  sesionId: string;
   /** Del cache de vuelta-actual (`useVueltaActual`): este hook no consulta la red por su cuenta. */
   fila: EstadoFilaSalida | null;
   /** Cache de más de 15 min: se muestra la fila pero marcada y sin aviso de foreground. */
@@ -60,6 +62,7 @@ export interface FilaSalidaUi {
 }
 
 export function useFilaSalida({
+  sesionId,
   fila,
   sinActualizar,
   desfaseMs,
@@ -162,12 +165,14 @@ export function useFilaSalida({
 
   const estoyEnLaFila = useCallback(() => {
     void ejecutar(async () => {
+      if (await leerPausa(sesionId))
+        return { ok: false, mensaje: 'Estás en pausa: reanudá el recorrido para entrar a la fila.' };
       const fix = ultimoFixFila();
       if (!fix)
         return { ok: false, mensaje: 'Todavía no tengo tu ubicación. Esperá unos segundos.' };
       return registrarLlegada(obtenerToken, fix);
     });
-  }, [ejecutar, obtenerToken]);
+  }, [ejecutar, obtenerToken, sesionId]);
 
   return { vista, ocupado, error, puedeEstoyEnLaFila, salir, estoyEnLaFila };
 }

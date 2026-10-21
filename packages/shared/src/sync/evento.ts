@@ -9,6 +9,8 @@ export const TipoEventoSyncSchema = z.enum([
   'gps_point',
   'inicio_recorrido',
   'fin_recorrido',
+  'pausa_recorrido',
+  'reanudar_recorrido',
   'cumplimiento_punto_control',
   'observacion',
   'inicio_jornada',

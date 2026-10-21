@@ -1,4 +1,5 @@
 import type { EstadoFrescura, PuntoTrazaGps, TrazaEnVivo } from '@quivo/shared';
+import { formatearHoraBolivia } from './jornadas';
 
 /**
  * Lógica pura del mapa en vivo (`/en-vivo`, ENTREGA 3). Vive fuera del componente a
@@ -250,6 +251,11 @@ export function antiguedadViva(
  */
 export const INTERVALO_POLL_FINALIZADO_MS = 60_000;
 
+/** Sufijo " · desde HH:MM" de la etiqueta de frescura cuando el vehículo está en pausa. */
+export function sufijoPausa(f: { estadoFrescura: EstadoFrescura; pausaDesdeTs?: string | null }): string {
+  return f.estadoFrescura === 'en_pausa' ? ` · desde ${formatearHoraBolivia(f.pausaDesdeTs ?? null)}` : '';
+}
+
 /** Cadencia del `refetchInterval`, según el último payload recibido. */
 export function intervaloPoll(
   datos: Pick<TrazaEnVivo, 'hayMas' | 'inactivaDesdeMs' | 'estadoFrescura'> | undefined,
@@ -263,6 +269,9 @@ export function intervaloPoll(
   if (datos.estadoFrescura === 'finalizado') {
     return datos.hayMas ? INTERVALO_POLL_RAPIDO_MS : INTERVALO_POLL_FINALIZADO_MS;
   }
+  // En pausa (almuerzo) el GPS sigue pero la sesión puede quedar quieta >30 min: nunca cortar,
+  // o el admin no vería REANUDAR.
+  if (datos.estadoFrescura === 'en_pausa') return datos.hayMas ? INTERVALO_POLL_RAPIDO_MS : INTERVALO_POLL_MS;
   // El corte por inactividad va PRIMERO que `hayMas`: una sesión zombi cuya traza además
   // excede `limite` (`hayMas: true`) tiene que cortar, no pollear a 1 s para siempre.
   if (datos.inactivaDesdeMs > UMBRAL_CORTE_POLL_MS) return false;
@@ -324,6 +333,12 @@ export const PRESENTACION_FRESCURA: Record<EstadoFrescura, PresentacionFrescura>
     etiqueta: 'Recorrido finalizado',
     descripcion: 'El conductor finalizó el recorrido. No es una falla.',
     color: 'var(--qv-text-muted)',
+    esFalla: false,
+  },
+  en_pausa: {
+    etiqueta: 'En pausa',
+    descripcion: 'El conductor pausó el recorrido (almuerzo); el GPS sigue reportando. No es una falla.',
+    color: 'var(--qv-color-warning)',
     esFalla: false,
   },
 };

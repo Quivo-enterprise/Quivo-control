@@ -89,7 +89,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
     | 'vacia' | 'cierreVacia' | 'cierreDesig' | 'cierreSinTenant' | 'inactiva' | 'esperaTardia' | 'retro'
     | 'omitidaFin' | 'cierreTardio' | 'estacionado' | 'espNoDesig' | 'cursor' | 'inicioEnSr' | 'inicioLejos' | 'inicioSinFix' | 'inicioCierraRet'
     | 'tardioN1' | 'tardioVacia' | 'carreraDesig' | 'gpsDesorden' | 'cierreResidual'
-    | 'desvioDesig' | 'yaFue' | 'omitidaLuego' | 'tardia' | 'cancelaDiferida' | 'esperaLuego' | 'desigYTardia',
+    | 'pausa' | 'pausaRep' | 'pausaFin' | 'pausaOrden' | 'pausaDesvio' | 'desvioDesig' | 'yaFue' | 'omitidaLuego' | 'tardia' | 'cancelaDiferida' | 'esperaLuego' | 'desigYTardia',
     string
   >;
 
@@ -219,7 +219,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
         'vacia', 'cierreVacia', 'cierreDesig', 'cierreSinTenant', 'inactiva', 'esperaTardia', 'retro', 'omitidaFin',
         'cierreTardio', 'estacionado', 'espNoDesig', 'cursor', 'inicioEnSr', 'inicioLejos', 'inicioSinFix', 'inicioCierraRet',
         'tardioN1', 'tardioVacia', 'carreraDesig', 'gpsDesorden', 'cierreResidual',
-        'desvioDesig', 'yaFue', 'omitidaLuego', 'tardia', 'cancelaDiferida', 'esperaLuego', 'desigYTardia',
+        'pausa', 'pausaRep', 'pausaFin', 'pausaOrden', 'pausaDesvio', 'desvioDesig', 'yaFue', 'omitidaLuego', 'tardia', 'cancelaDiferida', 'esperaLuego', 'desigYTardia',
       ] as const) {
         sesiones[k] = await crearSesion(asigCirc, k !== 'ciclo');
       }
@@ -581,6 +581,74 @@ describe('vueltas y designación a Molinos (F1)', () => {
       await vueltas.designar(adminA, s, varianteId);
       await lote(puntosSobreTramo(s, 10));
       expect((await infraccionesDe(s)).filter((i) => i.tipo === 'desvio_ruta')).toHaveLength(0);
+    });
+  });
+
+  describe('pausa del recorrido (docs/plan-pausa-recorrido.md)', () => {
+    const estadoRecorrido = (sesionId: string) =>
+      withTenantContext(ADMIN, (tx) =>
+        tx.$queryRaw<{ recorridoEstado: string | null }[]>`
+          SELECT "recorridoEstado" FROM sesiones_operativas WHERE id = ${sesionId}`,
+      ).then((r) => r[0]?.recorridoEstado);
+    const fuera = (s: string, desdeMin: number) =>
+      [0, 20, 40, 60].map((seg) => gps(s, iso(desdeMin, seg), LON_MOLINOS, LAT_SUR));
+
+    it('pausa → fixes fuera de ruta (sin desvío) → reanudar: la vuelta sigue en curso y el estado vuelve a en_curso', async () => {
+      const s = sesiones.pausa;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA)]);
+      await lote([evento('pausa_recorrido', iso(5), { sesionId: s }), ...fuera(s, 10)]);
+      expect(await estadoRecorrido(s)).toBe('en_pausa');
+      expect((await infraccionesDe(s)).filter((i) => i.tipo === 'desvio_ruta' || i.tipo === 'pc_omitido')).toHaveLength(0);
+      expect((await vueltasDe(s)).map((v) => v.estado)).toEqual(['en_curso']);
+
+      await lote([evento('reanudar_recorrido', iso(30), { sesionId: s })]);
+      expect(await estadoRecorrido(s)).toBe('en_curso');
+      expect((await vueltasDe(s)).map((v) => v.estado)).toEqual(['en_curso']);
+      // Control: la ventana de pausa no apaga el desvío para siempre.
+      await lote(fuera(s, 35));
+      expect((await infraccionesDe(s)).filter((i) => i.tipo === 'desvio_ruta')).toHaveLength(1);
+    });
+
+    const estadoTs = (sesionId: string) =>
+      withTenantContext(ADMIN, (tx) =>
+        tx.$queryRaw<{ ts: Date | null }[]>`
+          SELECT "recorridoEstadoTs" AS ts FROM sesiones_operativas WHERE id = ${sesionId}`,
+      ).then((r) => r[0]?.ts?.toISOString());
+
+    it('pausa repetida no adelanta recorridoEstadoTs (pausaDesdeTs estable)', async () => {
+      const s = sesiones.pausaRep;
+      await lote([inicio(s, iso(0)), evento('pausa_recorrido', iso(5), { sesionId: s })]);
+      await lote([evento('pausa_recorrido', iso(45), { sesionId: s })]);
+      expect(await estadoRecorrido(s)).toBe('en_pausa');
+      expect(await estadoTs(s)).toBe(iso(5));
+    });
+
+    it('lote offline [reanudar T1, pausa T2] se procesa en orden de ts: queda en_pausa con ts T2', async () => {
+      const s = sesiones.pausaOrden;
+      await lote([inicio(s, iso(0)), evento('pausa_recorrido', iso(5), { sesionId: s })]);
+      await lote([
+        evento('reanudar_recorrido', iso(20), { sesionId: s }),
+        evento('pausa_recorrido', iso(30), { sesionId: s }),
+      ]);
+      expect(await estadoRecorrido(s)).toBe('en_pausa');
+      expect(await estadoTs(s)).toBe(iso(30));
+    });
+
+    it('reanudar posterior a un fin_recorrido no reabre la sesión finalizada', async () => {
+      const s = sesiones.pausaFin;
+      await lote([inicio(s, iso(0)), fin(s, iso(10))]);
+      await lote([evento('reanudar_recorrido', iso(20), { sesionId: s })]);
+      expect(await estadoRecorrido(s)).toBe('finalizado');
+    });
+
+    it('decisión CTO: un desvío ya abierto antes de PAUSAR sigue abierto (la pausa no lo cierra)', async () => {
+      const s = sesiones.pausaDesvio;
+      await lote([inicio(s, iso(0)), cumpl(s, pcSr, iso(0, 5), LON_SR, LAT_RUTA), ...fuera(s, 10)]);
+      expect((await infraccionesDe(s)).filter((i) => i.tipo === 'desvio_ruta')).toHaveLength(1);
+      await lote([evento('pausa_recorrido', iso(12), { sesionId: s })]);
+      const desvios = (await infraccionesDe(s)).filter((i) => i.tipo === 'desvio_ruta');
+      expect(desvios).toHaveLength(1);
+      expect(desvios[0]!.finTs).toBeNull();
     });
   });
 

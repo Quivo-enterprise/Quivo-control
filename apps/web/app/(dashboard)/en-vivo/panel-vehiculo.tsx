@@ -67,6 +67,7 @@ import {
   antiguedadViva,
   formatearAntiguedad,
   presentacionFrescura,
+  sufijoPausa,
   type TrazaAcumulada,
 } from '../../../src/lib/en-vivo/traza';
 import { NuevaSancionModal } from '../reglas/nueva-sancion-modal';
@@ -714,7 +715,10 @@ function FrescuraPanel({
   return (
     <span className="qv-live-panel__frescura">
       <span className="qv-live-panel__punto" aria-hidden="true" style={{ backgroundColor: presentacion.color }} />
-      <span>{presentacion.etiqueta}</span>
+      <span>
+        {presentacion.etiqueta}
+        {sufijoPausa(fuente)}
+      </span>
       <span className="qv-live-panel__tabular">· hace {formatearAntiguedad(antiguedadFix)}</span>
     </span>
   );

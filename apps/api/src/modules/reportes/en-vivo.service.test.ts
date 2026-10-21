@@ -405,6 +405,20 @@ describe('EnVivoService', () => {
       expect(f.inactivaDesdeMs).toBe(60_000);
     });
 
+    it('recorridoEstado en_pausa ⇒ "en_pausa" con pausaDesdeTs, aunque el GPS reporte o esté quieto; sin ingesta sigue "perdido"', () => {
+      const desde = new Date(ahora.getTime() - 20 * MINUTO);
+      const ing = new Date(ahora.getTime() - 3_000);
+      const mov = derivarFrescura(ahora, inicio, new Date(ahora.getTime() - 5_000), ing, 'en_pausa', desde);
+      expect(mov.estadoFrescura).toBe('en_pausa');
+      expect(mov.pausaDesdeTs).toBe(desde.toISOString());
+      expect(mov.recorridoFinTs).toBeNull();
+      const quieto = derivarFrescura(ahora, inicio, new Date(ahora.getTime() - 40 * MINUTO), ing, 'en_pausa', desde);
+      expect(quieto.estadoFrescura).toBe('en_pausa');
+      const sinIngesta = derivarFrescura(ahora, inicio, new Date(ahora.getTime() - 40 * MINUTO), new Date(ahora.getTime() - 40 * MINUTO), 'en_pausa', desde);
+      expect(sinIngesta.estadoFrescura).toBe('perdido');
+      expect(sinIngesta.pausaDesdeTs).toBeNull();
+    });
+
     it('un lag de ingesta dentro del p95 medido (814 s) sigue siendo "reportando"', () => {
       const lag = 814_000;
       const f = derivarFrescura(

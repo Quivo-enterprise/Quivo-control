@@ -45,7 +45,7 @@ describe('fila de salida: backstop del worker y logout', () => {
     );
 
   beforeAll(async () => {
-    m = await crearMundo(5);
+    m = await crearMundo(6);
   });
 
   afterAll(async () => {
@@ -78,6 +78,12 @@ describe('fila de salida: backstop del worker y logout', () => {
     await enFila(2, hace(300));
     await lote([evento('fin_recorrido', hace(20), { sesionId: m.a[2]!.sesion.sesionId })]);
     expect(await filaDe(2)).toMatchObject({ estado: 'retirado', salidaTs: null, salidaOrigen: null });
+  });
+
+  it('pausa_recorrido también retira al trufi de la fila (docs/plan-pausa-recorrido.md)', async () => {
+    await enFila(5, hace(300));
+    await lote([evento('pausa_recorrido', hace(20), { sesionId: m.a[5]!.sesion.sesionId })]);
+    expect(await filaDe(5)).toMatchObject({ estado: 'retirado', salidaTs: null, salidaOrigen: null });
   });
 
   it('un evento anterior a la llegada a la fila (lote offline viejo) no la toca', async () => {

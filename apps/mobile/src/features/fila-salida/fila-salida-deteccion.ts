@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/react-native';
 import type { PuntoControlPaquete } from '@quivo/shared';
 import { leerEstadoVueltaLocal } from '../../db/vuelta-actual-local';
+import { leerPausa } from '../operacion/pausa-recorrido';
 import { rearmarFilaLocal } from '../vuelta-actual/vuelta-actual-oportunista';
 import { registrarLlegada, registrarSalida } from './fila-salida-acciones';
 import { deteccion } from './fila-salida-estado';
@@ -73,7 +74,10 @@ export async function procesarFixFila(
     });
     deteccion.estado = r.estado;
     if (r.accion === 'rearmar') await rearmarFilaLocal(ctx.sesionId);
-    else if (r.accion === 'llegada') await registrarLlegada(ctx.obtenerAccessToken, fix);
+    else if (r.accion === 'llegada') {
+      // En pausa no se hace fila: el server responde 409 y, si la pausa aún está en el outbox, la llegada la pisaría.
+      if (!(await leerPausa(ctx.sesionId))) await registrarLlegada(ctx.obtenerAccessToken, fix);
+    }
     else if (r.accion === 'salida') await registrarSalida(ctx.obtenerAccessToken, 'geocerca', 1);
   } catch (error) {
     Sentry.captureException(error, { tags: { contexto: 'fila-salida', paso: 'deteccion' } });

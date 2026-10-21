@@ -249,3 +249,36 @@ export function descartarFuturos<T extends { ts: Date }>(
 ): T[] {
   return items.filter((i) => i.ts.getTime() <= ahoraMs + toleranciaMs);
 }
+
+/** Ventana de pausa `[desde, hasta)`; `hasta: null` = sigue en pausa. */
+export interface VentanaPausa {
+  desde: Date;
+  hasta: Date | null;
+}
+
+/**
+ * Ventanas de pausa (docs/plan-pausa-recorrido.md) de los eventos `pausa_recorrido` /
+ * `reanudar_recorrido` / `inicio_recorrido` / `fin_recorrido` de la sesión. La pausa se cierra con
+ * lo que venga después (reanudar, fin o un inicio nuevo); una `pausa` con otra ya abierta no hace nada.
+ */
+export function ventanasDePausa(
+  eventos: readonly { tipo: string; ts: Date }[],
+): VentanaPausa[] {
+  const ventanas: VentanaPausa[] = [];
+  let abierta: VentanaPausa | null = null;
+  for (const e of [...eventos].sort((a, b) => a.ts.getTime() - b.ts.getTime())) {
+    if (e.tipo === 'pausa_recorrido') {
+      if (!abierta) ventanas.push((abierta = { desde: e.ts, hasta: null }));
+    } else if (abierta) {
+      abierta.hasta = e.ts;
+      abierta = null;
+    }
+  }
+  return ventanas;
+}
+
+export function enPausa(ventanas: readonly VentanaPausa[], ts: Date): boolean {
+  return ventanas.some(
+    (v) => ts.getTime() >= v.desde.getTime() && (v.hasta === null || ts.getTime() < v.hasta.getTime()),
+  );
+}

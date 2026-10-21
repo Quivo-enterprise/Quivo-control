@@ -12,6 +12,8 @@ import {
   recorridoEnCursoAntesDe,
   recorridoIniciadoEn,
   dedupeKeyPcOmitido,
+  enPausa,
+  ventanasDePausa,
   resolverGravedadInfraccion,
   cumplimientoDisparaPcOmitido,
   seleccionarPcOmitidos,
@@ -275,5 +277,29 @@ describe('PC intermedios y pc_omitido en vivo', () => {
       Number.POSITIVE_INFINITY,
     );
     expect(omitidos.map((p) => p.id)).toEqual(['honduras']);
+  });
+});
+
+describe('ventanasDePausa / enPausa', () => {
+  const t = (min: number) => new Date(Date.UTC(2026, 9, 21, 16, min));
+  const ev = (tipo: string, min: number) => ({ tipo, ts: t(min) });
+
+  it('[pausa, reanudar) es ventana; fuera de ella no hay pausa', () => {
+    const v = ventanasDePausa([ev('inicio_recorrido', 0), ev('pausa_recorrido', 10), ev('reanudar_recorrido', 40)]);
+    expect(v).toEqual([{ desde: t(10), hasta: t(40) }]);
+    expect([5, 10, 39, 40, 50].map((m) => enPausa(v, t(m)))).toEqual([false, true, true, false, false]);
+  });
+
+  it('sin reanudar queda abierta; un fin o un inicio nuevo la cierran; llegan desordenados', () => {
+    expect(enPausa(ventanasDePausa([ev('pausa_recorrido', 10)]), t(500))).toBe(true);
+    const cierraFin = ventanasDePausa([ev('fin_recorrido', 30), ev('pausa_recorrido', 10)]);
+    expect([20, 30, 31].map((m) => enPausa(cierraFin, t(m)))).toEqual([true, false, false]);
+    const cierraInicio = ventanasDePausa([ev('pausa_recorrido', 10), ev('inicio_recorrido', 20), ev('pausa_recorrido', 25)]);
+    expect(cierraInicio).toEqual([{ desde: t(10), hasta: t(20) }, { desde: t(25), hasta: null }]);
+  });
+
+  it('una segunda pausa con otra abierta no la reinicia', () => {
+    const v = ventanasDePausa([ev('pausa_recorrido', 10), ev('pausa_recorrido', 15), ev('reanudar_recorrido', 20)]);
+    expect(v).toEqual([{ desde: t(10), hasta: t(20) }]);
   });
 });
