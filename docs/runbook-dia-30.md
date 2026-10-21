@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Mar 20/10 | Secreto `SENTRY_DSN_API` creado; token viejo de Sentry revocado | CTO | [ ] |
 | 20/10 | Ensayo B en el entorno efímero (20/10: todo pasa salvo el p95 del login en ráfaga, 2,5–3 s, aprobado por el CTO el 20/10; ver handoff) | Claude | [x] |
-| Mar 20/10 | Credenciales de los ~5 trufis del piloto del 21/10 (los 3 de L16 sirven; faltan 2 si son otros) | Claude + CTO | [ ] |
+| Mar 20/10 | Credenciales del piloto con pasantes: 8 trufis `1616PIL`…`1616PIH` (#211, aplicado 21:20; PINs en `~/.quivo-piloto16-creds`) | Claude + CTO | [x] |
 | Mar 20/10, noche | **Propuesto:** deploy r21 + `observabilidad-gcp.sh` + PITR con reinicio, fuera de horario, para que los pilotos del 21 y 22 lo prueben en la calle | CTO | [ ] |
 | Mié 21 y jue 22/10 | Pilotos con pasantes (~5 trufis): mirar logins, Vecinos, ingesta y Sentry como en D | CTO + Claude | [ ] |
 | Jue 22/10, como tarde | Credenciales de los 30 creadas (script con `--apply`); rotación **publicada** | Claude + CTO | [ ] |
