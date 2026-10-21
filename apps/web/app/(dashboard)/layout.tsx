@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   LogOut,
   MapPin,
+  ListOrdered,
   Radio,
   RotateCw,
   Scale,
@@ -37,6 +38,8 @@ function getNavIcon(iconName?: string) {
   switch (iconName) {
     case 'LayoutDashboard':
       return <LayoutDashboard size={size} strokeWidth={strokeWidth} />;
+    case 'ListOrdered':
+      return <ListOrdered size={size} strokeWidth={strokeWidth} />;
     case 'Radio':
       return <Radio size={size} strokeWidth={strokeWidth} />;
     case 'Building2':

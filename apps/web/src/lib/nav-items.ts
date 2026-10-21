@@ -32,6 +32,15 @@ export const NAV_ITEMS: NavItem[] = [
     iconName: 'Radio',
   },
   {
+    id: 'salidas',
+    label: 'Salidas',
+    href: '/salidas',
+    // Mismos roles que "En vivo": el control maneja la fila; los grupos de trufis son solo admin (lo oculta la página).
+    roles: ['admin_quivo', 'admin_sindicato', 'operador'],
+    section: 'Operación',
+    iconName: 'ListOrdered',
+  },
+  {
     id: 'sindicatos',
     label: 'Sindicatos',
     href: '/sindicatos',
