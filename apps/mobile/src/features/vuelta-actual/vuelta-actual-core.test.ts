@@ -18,6 +18,7 @@ import {
   marcarAnunciada,
   notificacionesObsoletas,
   partesAvisoDesignada,
+  rearmarFila,
   respuestasIguales,
   MARGEN_ESPERA_MIN,
   restanteEsperaMin,
@@ -426,5 +427,48 @@ describe('vuelta cerrada localmente', () => {
   it('designacionVigente = designación del cache, sin supresión local', () => {
     expect(designacionVigente({ ...ESTADO_LOCAL_INICIAL, ultimo: conDesignacion(V) })).not.toBeNull();
     expect(designacionVigente(ESTADO_LOCAL_INICIAL)).toBeNull();
+  });
+});
+
+describe('fila de salida en el cache', () => {
+  const FILA = {
+    posicion: 2,
+    total: 4,
+    delantePlaca: '1234ABC',
+    etaTs: '2026-10-20T11:10:00.000Z',
+    esperaMs: 300_000,
+    habilitado: false,
+    demorado: false,
+    servidorTs: '2026-10-20T11:05:00.000Z',
+  };
+  const conFila = (servidorTs = FILA.servidorTs): VueltaActualMovil => ({
+    ...vuelta(V1, null),
+    fila: { ...FILA, servidorTs },
+  });
+
+  it('una respuesta con fila distinta (aunque sea solo servidorTs) es cambio y refresca la recepcion', () => {
+    const a = aplicarRespuesta(ESTADO_LOCAL_INICIAL, conFila(), { ahoraMs: 1_000 });
+    expect(a.estado.ultimo?.fila?.posicion).toBe(2);
+    const b = aplicarRespuesta(a.estado, conFila('2026-10-20T11:05:20.000Z'), { ahoraMs: 21_000 });
+    expect(b.cambio).toBe(true);
+    expect(b.estado.actualizadoEn).toBe(21_000);
+    expect(respuestasIguales(a.estado.ultimo, conFila())).toBe(true);
+    expect(respuestasIguales(a.estado.ultimo, conFila('2026-10-20T11:05:20.000Z'))).toBe(false);
+  });
+
+  it('salir de la fila desarma la llegada automatica; tener fila otra vez la rearma', () => {
+    const enFila = aplicarRespuesta(ESTADO_LOCAL_INICIAL, conFila(), { ahoraMs: 1_000 }).estado;
+    expect(enFila.filaDesarmada).toBe(false);
+    const salio = aplicarRespuesta(enFila, vuelta(V1, null), { ahoraMs: 2_000 }).estado;
+    expect(salio.filaDesarmada).toBe(true);
+    expect(aplicarRespuesta(salio, vuelta(V1, null), { ahoraMs: 3_000 }).estado.filaDesarmada).toBe(true);
+    expect(aplicarRespuesta(salio, conFila(), { ahoraMs: 4_000 }).estado.filaDesarmada).toBe(false);
+  });
+
+  it('sin fila previa no se desarma; rearmarFila limpia la marca', () => {
+    expect(aplicarRespuesta(ESTADO_LOCAL_INICIAL, vuelta(V1, null), { ahoraMs: 1 }).estado.filaDesarmada).toBe(false);
+    const desarmado: EstadoLocalVuelta = { ...ESTADO_LOCAL_INICIAL, filaDesarmada: true };
+    expect(rearmarFila(desarmado).filaDesarmada).toBe(false);
+    expect(rearmarFila(ESTADO_LOCAL_INICIAL)).toBe(ESTADO_LOCAL_INICIAL);
   });
 });

@@ -37,6 +37,7 @@ export function interpretarEstadoLocal(crudo: string | null | undefined): Estado
         typeof o.actualizadoEn === 'number' && Number.isFinite(o.actualizadoEn) ? o.actualizadoEn : null,
       intentosAnuncio: intentos,
       acusesAbandonados: lista(o.acusesAbandonados),
+      ...(o.filaDesarmada === true ? { filaDesarmada: true } : {}),
     };
   } catch {
     return ESTADO_LOCAL_INICIAL;

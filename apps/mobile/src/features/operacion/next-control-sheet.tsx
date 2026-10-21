@@ -18,6 +18,8 @@ import { formatearDistancia } from './format-distancia';
 import type { FaseControl } from '../jornada/fase-control';
 import { subtituloJornada } from '../jornada/jornada-store-core';
 import type { EstadoPuntoVuelta } from './progreso-vuelta';
+import { FilaSalidaCard } from '../fila-salida/fila-salida-card';
+import type { FilaSalidaUi } from '../fila-salida/use-fila-salida';
 
 const NUMERO_EMERGENCIAS = '911';
 
@@ -65,6 +67,8 @@ export interface NextControlSheetProps {
   gpsError: string | null;
   onStart: () => void;
   onFinish: () => void;
+  /** Fila de salida de la terminal (tarjeta + SALIR); solo se dibuja con el recorrido activo. */
+  filaSalida?: FilaSalidaUi;
   panY: Animated.Value;
   /** Alto (dp, redondeado) del sheet expandido, medido en el layout de su raíz. */
   onAlto?: (alto: number) => void;
@@ -289,6 +293,8 @@ export function NextControlSheet(props: NextControlSheetProps) {
       )}
 
       {props.gpsError && <Text style={styles.error}>{props.gpsError}</Text>}
+
+      {tracking && props.filaSalida ? <FilaSalidaCard fila={props.filaSalida} /> : null}
 
       {/* Action Button Row */}
       <View style={[styles.actionsRow, cabeceraJornada && styles.actionsRowSinStepper]}>

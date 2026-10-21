@@ -29,6 +29,9 @@ export interface EstadoLocalVuelta {
   intentosAnuncio: Record<string, number>;
   /** Claves cuyo acuse el servidor rechazó de forma permanente (4xx): no se reintenta más. */
   acusesAbandonados: string[];
+  /** Salió de la fila de salida y todavía no se alejó de la terminal: la detección automática no
+   * lo vuelve a encolar (ver `fila-salida/zona-terminal.ts`). Ausente = `false`. */
+  filaDesarmada?: boolean;
 }
 
 export const ESTADO_LOCAL_INICIAL: EstadoLocalVuelta = {
@@ -131,11 +134,28 @@ function coordsIguales(a: readonly (readonly number[])[], b: readonly (readonly 
   return true;
 }
 
+/** Incluye `servidorTs`: mientras hay fila cada respuesta es "distinta", y eso es lo que refresca
+ * `actualizadoEn`, que es el momento de recepción con el que se calcula el desfase del reloj. */
+function filasIguales(a: VueltaActualMovil['fila'], b: VueltaActualMovil['fila']): boolean {
+  if (!a || !b) return (a ?? null) === (b ?? null);
+  return (
+    a.posicion === b.posicion &&
+    a.total === b.total &&
+    a.delantePlaca === b.delantePlaca &&
+    a.etaTs === b.etaTs &&
+    a.esperaMs === b.esperaMs &&
+    a.habilitado === b.habilitado &&
+    a.demorado === b.demorado &&
+    a.servidorTs === b.servidorTs
+  );
+}
+
 /** ¿Dos respuestas del servidor dicen lo mismo? (clave, acuse, espera, número, vuelta y el tramo
  * por contenido). Cada poll devuelve objetos nuevos, así que la igualdad por referencia no sirve. */
 export function respuestasIguales(a: VueltaActualMovil | null, b: VueltaActualMovil): boolean {
   if (!a) return false;
   if (a.vueltaId !== b.vueltaId || a.numero !== b.numero) return false;
+  if (!filasIguales(a.fila, b.fila)) return false;
   if ((a.enEspera?.desdeTs ?? null) !== (b.enEspera?.desdeTs ?? null)) return false;
   const da = a.designacion;
   const db = b.designacion;
@@ -188,11 +208,19 @@ export function aplicarRespuesta(
   const iguales = respuestasIguales(estado.ultimo, nuevo);
   const marcaVencida =
     estado.actualizadoEn === null || ctx.ahoraMs - estado.actualizadoEn >= REFRESCO_ACTUALIZADO_MS;
+  // Salir de la fila (la fila pasa de abierta a ausente) desarma la llegada automática; volver a
+  // tener fila (p. ej. con el botón "Estoy en la fila") la rearma.
+  const filaDesarmada = nuevo.fila
+    ? false
+    : estado.ultimo?.fila
+      ? true
+      : estado.filaDesarmada === true;
   const cambio =
     !iguales ||
     avisos.length > 0 ||
     marcaVencida ||
-    cancelacionPendiente !== estado.cancelacionPendiente;
+    cancelacionPendiente !== estado.cancelacionPendiente ||
+    filaDesarmada !== (estado.filaDesarmada === true);
   if (!cambio) return { estado, avisos: [], cambio: false };
 
   const intentos: Record<string, number> = {};
@@ -211,6 +239,7 @@ export function aplicarRespuesta(
       // Misma referencia si el contenido no cambió: la UI y el mapa no se re-dibujan.
       ultimo: iguales && estado.ultimo ? estado.ultimo : nuevo,
       cancelacionPendiente,
+      filaDesarmada,
       actualizadoEn: ctx.ahoraMs,
       intentosAnuncio: intentos,
     },
@@ -366,4 +395,9 @@ export function coordenadasTramo(
 /** Designación del cache del recorrido actual. El servidor es la única verdad: no hay supresión local. */
 export function designacionVigente(estado: EstadoLocalVuelta): Designacion | null {
   return estado.ultimo?.designacion ?? null;
+}
+
+/** La detección de zona se alejó lo suficiente: la llegada automática vuelve a estar armada. */
+export function rearmarFila(estado: EstadoLocalVuelta): EstadoLocalVuelta {
+  return estado.filaDesarmada === true ? { ...estado, filaDesarmada: false } : estado;
 }

@@ -9,6 +9,7 @@ import type { VueltaActualMovil } from '@quivo/shared';
 import { vueltaActualApi } from '../../shared/api/vuelta-actual-api';
 import { cargarSesionMovil } from '../../shared/security/sesion-movil-store';
 import { anunciarAvisoEnCanal, descartarNotificacionAviso } from '../operacion/anuncio-punto-control';
+import { cancelarAvisoFilaDe, sincronizarAvisoFila } from '../fila-salida/fila-salida-aviso';
 import {
   TEXTO_AVISO_CANCELADA,
   abandonarAcuse,
@@ -17,6 +18,7 @@ import {
   cerrarCancelacion,
   cerrarDesignacion,
   claveDesignacion,
+  rearmarFila,
   esErrorAcusePermanente,
   idNotificacionDesignacion,
   marcarAnunciada,
@@ -161,6 +163,8 @@ async function incorporarRespuesta(
   for (const id of notificacionesObsoletas(previo, resultado.estado)) {
     await descartarNotificacionAviso(id);
   }
+  // Aviso T-1 de la fila de salida: se reprograma con la última respuesta (también en headless).
+  await sincronizarAvisoFila(previo, resultado.estado, ahoraMs);
   let estado = resultado.estado;
   for (const aviso of resultado.avisos) {
     if (gen !== generacion) return estado;
@@ -191,7 +195,7 @@ function hayConsultaVigente(ahoraMs: number): boolean {
   return transcurrido >= 0 && transcurrido < VENCIMIENTO_EN_VUELO_MS;
 }
 
-async function solicitarRefresco(obtenerAccessToken: () => Promise<string | null>): Promise<void> {
+export async function solicitarRefresco(obtenerAccessToken: () => Promise<string | null>): Promise<void> {
   if (hayConsultaVigente(Date.now())) {
     refetchPendiente = true;
     obtenerTokenReciente = obtenerAccessToken;
@@ -366,9 +370,11 @@ export function limpiarVueltaActual(sesionId: string): void {
   const borrado = borrarEstadoVueltaLocal(sesionId);
   void (async () => {
     await borrado;
-    for (const id of notificacionesObsoletas(await previo, ESTADO_LOCAL_INICIAL)) {
+    const previoEstado = await previo;
+    for (const id of notificacionesObsoletas(previoEstado, ESTADO_LOCAL_INICIAL)) {
       await descartarNotificacionAviso(id);
     }
+    await cancelarAvisoFilaDe(previoEstado);
   })().catch((error: unknown) => {
     Sentry.captureException(error, { tags: { contexto: 'vuelta-actual', paso: 'limpiar' } });
   });
@@ -381,5 +387,24 @@ export async function limpiarVueltaActualDeOtrasSesiones(sesionId: string): Prom
     await serializar(() => borrarEstadosVueltaLocalDeOtrasSesiones(sesionId));
   } catch (error) {
     Sentry.captureException(error, { tags: { contexto: 'vuelta-actual', paso: 'limpiar-otras' } });
+  }
+}
+
+/** La detección de zona confirmó que el trufi se alejó de la terminal: la llegada automática
+ * vuelve a estar armada (se desarma al salir de la fila). Persistido, para que lo lean ambos contextos. */
+export async function rearmarFilaLocal(sesionId: string): Promise<void> {
+  const gen = generacion;
+  try {
+    const nuevo = await serializar(async () => {
+      if (gen !== generacion) return null;
+      const previo = await leerEstadoVueltaLocal(sesionId);
+      const rearmado = rearmarFila(previo);
+      if (rearmado === previo || gen !== generacion) return null;
+      await guardarEstadoVueltaLocal(sesionId, rearmado);
+      return rearmado;
+    });
+    if (nuevo) emitir(sesionId, nuevo);
+  } catch (error) {
+    Sentry.captureException(error, { tags: { contexto: 'vuelta-actual', paso: 'rearmar-fila' } });
   }
 }

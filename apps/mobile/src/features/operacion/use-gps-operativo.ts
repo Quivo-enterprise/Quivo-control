@@ -48,6 +48,7 @@ import {
 import type { MotivoAnuncio } from './decidir-anuncio';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
 import { consultarVueltaActual, limpiarVueltaActual } from '../vuelta-actual/vuelta-actual-oportunista';
+import { fixDeLocation, procesarFixFila } from '../fila-salida/fila-salida-deteccion';
 import { marcarRecorridoActivoGlobal } from './estado-recorrido-activo';
 import { decidirReconciliacionTracking, reconciliacionVigente } from './reconciliar-tracking';
 import {
@@ -577,7 +578,11 @@ export function useGpsOperativo(
       // que este `void` no deja una unhandled rejection colgando.
       void intentarDrenarOportunista(obtenerAccessToken);
       // Aviso de designación a Molinos: solo con el recorrido activo; piso propio de 20 s; nunca rechaza.
-      if (trackingRef.current) void consultarVueltaActual(obtenerAccessToken);
+      if (trackingRef.current) {
+        void consultarVueltaActual(obtenerAccessToken);
+        // Fila de salida: entrada/salida de la zona de la terminal con este mismo fix (nunca rechaza).
+        void procesarFixFila(fixDeLocation(location), { sesionId, puntosControl, obtenerAccessToken });
+      }
     },
     [deviceId, sesionId, puntosControl, geometriaRuta, obtenerAccessToken, estadoInicioRecorrido],
   );
