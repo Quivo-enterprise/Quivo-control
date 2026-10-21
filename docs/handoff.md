@@ -13,6 +13,14 @@ que vence el 26/10). **Miércoles 21 y jueves 22/10: dos pilotos con pasantes en
 Calendario y propuesta de deploy en [`docs/runbook-dia-30.md`](runbook-dia-30.md): r21 **antes** del piloto del 21 para
 que esos dos días lo prueben en la calle; congelamiento después del piloto del 22.
 
+- **r21 en prod (20/10, 22:00–22:40, Claude con autorización del CTO):** API `quivo-api-00026-tvm` (100 %, imagen
+  `api:r21-20261020`; trae A1 login por placa, A2 Sentry, A3 pool/timeouts) y worker `quivo-worker` en la misma imagen.
+  Health ok (db y redis up). Secreto `SENTRY_DSN_API` creado (proyecto Sentry `quivo-api`, Nest.js, solo errores, alerta
+  en cada issue nuevo). `observabilidad-gcp.sh --apply --con-reinicio` (lo corrió el CTO): canal de mail
+  `jencarlosmoral3@gmail.com`, uptime de `/v1/health/ready`, 7 alertas habilitadas, **PITR activo** (7 días de logs,
+  7 backups). Sin presupuesto. Sin errores en API ni worker en los 15 min posteriores al reinicio. Rollback de la API:
+  `quivo-api-00025-vrj` (r20). Sin verificar: login real contra r21 (lo prueban los pasantes el 21/10), un error real
+  en Sentry y el mail de prueba del canal.
 - **Piloto L16 ampliado a 8 trufis (#211, `--apply` en prod el 20/10 21:20 con ok del CTO):** `1616PIL`/`PIB`/`PIC` +
   `1616PID`/`PIE`/`PIF`/`PIG`/`PIH` (sintéticos, CI 9000019–9000023). Rotación `piloto-linea-16` anulada y
   republicada: 75 asignaciones, turno `manana`, nuevos del 20 al 26/10. 57 escrituras; re-corrida en dry-run = 0. PINs
