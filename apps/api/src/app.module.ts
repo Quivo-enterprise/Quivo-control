@@ -28,6 +28,7 @@ import { AuthMovilModule } from './modules/auth-movil/index.js';
 import { MediaModule } from './modules/media/index.js';
 import { PublicMobilityModule } from './modules/public-mobility/public-mobility.module.js';
 import { VueltasModule } from './modules/vueltas/index.js';
+import { SalidasModule } from './modules/salidas/index.js';
 import { DemoRequestsModule } from './modules/demo-requests/index.js';
 
 @Module({
@@ -67,6 +68,7 @@ import { DemoRequestsModule } from './modules/demo-requests/index.js';
     SyncModule,
     ReportesModule,
     VueltasModule,
+    SalidasModule,
     AuditoriaModule,
   ],
   controllers: [PingController],

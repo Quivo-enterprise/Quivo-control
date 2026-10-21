@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { LineaGeoJsonSchema, PuntoGeoJsonSchema } from '../geo.js';
 import { uuidSchema } from '../primitives.js';
+import { EstadoFilaSalidaSchema } from './fila-salida.js';
 
 // docs/plan-molinos-designacion.md, F1 — vueltas en el servidor y designación a Molinos.
 
@@ -126,6 +127,8 @@ export const VueltaActualMovilSchema = z.object({
     })
     .nullable(),
   enEspera: z.object({ desdeTs: z.string() }).nullable(),
+  /** Fila de salida de la terminal (PR "fila de salida"); ausente/`null` si no está en la fila. */
+  fila: EstadoFilaSalidaSchema.nullable().optional(),
 });
 export type VueltaActualMovil = z.infer<typeof VueltaActualMovilSchema>;
 
