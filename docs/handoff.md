@@ -6,7 +6,18 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-21, 09:00 (leer primero): fila de salida en prod para el piloto de las 15:00
+## Punto de retome — 2026-10-21, 11:00: anclar la vuelta 1 en SR (r23, para el piloto de las 15:00)
+
+- **Hecho:** web r22 (`quivo-web-00013-gms`) y OTA "Fila de salida en Salomón Romero (r22)" (grupo `04887c22…`)
+  verificadas en prod. La API está en `quivo-api-00028-tzs` (r22; hubo un redeploy después de las 09:00 que no quedó
+  anotado). SR ya es `terminal`: `/salidas` muestra sus secciones. El CTO fijó la frecuencia base de 6 min.
+- **Bug encontrado:** COMENZAR RUTA lejos de SR abre la vuelta 1 en ese lugar. Si camino a SR pasa por Honduras, al
+  llegar se cuenta una vuelta `completa` falsa (y `pc_omitido` falsos). La app ya anclaba su contador en SR; el
+  servidor no.
+- **Decisión del CTO:** no bloquear COMENZAR RUTA; anclar en el servidor, hoy, antes de las 15:00. Plan en
+  [`plan-ancla-vuelta-terminal.md`](plan-ancla-vuelta-terminal.md). Rama `fix/ancla-vuelta-terminal`.
+
+## Punto de retome — 2026-10-21, 09:00: fila de salida en prod para el piloto de las 15:00
 
 **Cambio de plan del CTO (21/10, 08:30): la fila de salida entra HOY en el piloto de pasantes de las 15:00**, no
 después de D. Objeción dicha y registrada (los pilotos del 21–22 eran para validar r21 tal cual para D; toca el aviso de

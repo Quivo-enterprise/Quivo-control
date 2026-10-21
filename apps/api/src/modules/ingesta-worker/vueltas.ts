@@ -18,8 +18,15 @@ import {
  * lote ya ordenados/filtrados y aplica los cambios + infracciones resultantes.
  *
  * Reglas:
- * - La PRIMERA vuelta de la sesión se abre con lo que llegue primero: cumplimiento de un PC
- *   `terminal` o `inicio_recorrido`. Después de un `fin_recorrido` solo un `inicio_recorrido`
+ * - Una vuelta es terminal → terminal. Con `anclaEnTerminal` (la ruta tiene un PC `terminal`
+ *   activo; el worker siempre lo activa) un `inicio_recorrido` NUNCA abre vuelta: solo marca el
+ *   recorrido en curso, y la vuelta 1 la abre el primer cumplimiento `terminal` posterior. Así los
+ *   PC que el chofer pasa camino a la terminal (COMENZAR RUTA tocado lejos de ella) no cuentan.
+ *   EXCEPCIÓN: un `inicio_recorrido` con `enTerminal` (hecho dentro de la terminal; la app no
+ *   re-emite el cumplimiento si FIN → COMENZAR sin salir del radio) abre como sin ancla.
+ *   Sin ancla (default, rutas sin terminal), la PRIMERA vuelta se abre con lo que llegue primero:
+ *   `terminal` o `inicio_recorrido`.
+ *   Después de un `fin_recorrido` solo un `inicio_recorrido` (o, anclado, el siguiente `terminal`)
  *   abre una vuelta nueva (el GPS sigue pasando por la terminal con el recorrido terminado).
  * - Un cumplimiento `retorno` marca `pasoRetornoTs` en la vuelta en curso (el primero gana).
  * - Un cumplimiento `terminal` CON `pasoRetornoTs` cierra la vuelta `completa` y abre la
@@ -32,7 +39,7 @@ import {
  *   ese fin todavía cierra la vuelta `completa` (sin abrir otra: el recorrido terminó).
  * - Un `inicio_recorrido` con la vuelta en curso SIN `pasoRetornoTs` no hace nada (es el mismo
  *   recorrido, el chofer esperó en la terminal); con `pasoRetornoTs` es un recorrido nuevo: la
- *   vuelta en curso queda `abierta_al_cierre` y se abre otra.
+ *   vuelta en curso queda `abierta_al_cierre` y se abre otra (anclado: no se abre, espera al `terminal`).
  * - Espera: la llegada es el cumplimiento del PC de espera de la variante DESIGNADA mientras la
  *   vuelta designada está en curso. Una designada que cierra en la terminal sin llegada genera
  *   `molinos_omitido`. La salida la resuelve el worker con `avanzarSalidaEspera`/`cerrarEspera` sobre los fixes GPS (por páginas).
@@ -100,7 +107,7 @@ export function esVueltaVacia(
 }
 
 export type EventoVuelta =
-  | { clase: 'inicio'; ts: Date }
+  | { clase: 'inicio'; ts: Date; enTerminal?: boolean }
   | { clase: 'fin'; ts: Date }
   | {
       clase: 'cumplimiento';
@@ -157,6 +164,11 @@ export interface OpcionesAvanzarVueltas {
    * (nunca anterior a sus hitos) y nunca se elimina.
    */
   cierreTardio?: { cierreTs: Date };
+  /**
+   * La ruta tiene un PC `terminal` activo: el `inicio_recorrido` no abre vueltas (ver cabecera),
+   * solo el cumplimiento `terminal`. Por defecto `false` (comportamiento anterior).
+   */
+  anclaEnTerminal?: boolean;
 }
 
 export function avanzarVueltas(
@@ -166,6 +178,7 @@ export function avanzarVueltas(
 ): ResultadoVueltas {
   const nuevoId = opciones.nuevoId ?? randomUUID;
   const cierreTardio = opciones.cierreTardio ?? null;
+  const ancla = opciones.anclaEnTerminal ?? false;
   const cambios = new Map<string, CambioVuelta>();
   const infracciones: InfraccionVuelta[] = [];
   let actual: FilaVuelta | null = ultima ? { ...ultima } : null;
@@ -256,14 +269,14 @@ export function avanzarVueltas(
     if (ev.clase === 'inicio') {
       recorridoEnCurso = true;
       if (!actual) {
-        abrir(ev.ts);
+        if (!ancla || ev.enTerminal) abrir(ev.ts);
       } else if (actual.estado === 'en_curso') {
         if (actual.pasoRetornoTs && t > actual.pasoRetornoTs.getTime()) {
           cerrarAbierta(actual, ev.ts);
-          abrir(ev.ts);
+          if (!ancla || ev.enTerminal) abrir(ev.ts);
         }
       } else if (t > (actual.finTs ?? actual.inicioTs).getTime()) {
-        abrir(ev.ts);
+        if (!ancla || ev.enTerminal) abrir(ev.ts);
       }
       continue;
     }
@@ -296,6 +309,11 @@ export function avanzarVueltas(
         t <= (actual.finTs ?? actual.inicioTs).getTime() + VENTANA_RECORRIDO_TOLERANCIA_MS
       ) {
         cerrarCompleta(actual, ev.ts, ev.lat, ev.lng);
+        // Anclado: un `inicio_recorrido` posterior dejó el recorrido en curso y esta terminal arranca el siguiente.
+        if (ancla && recorridoEnCurso) abrir(ev.ts);
+      } else if (ancla && recorridoEnCurso && t > (actual.finTs ?? actual.inicioTs).getTime()) {
+        // Anclado: la vuelta anterior ya terminó (`completa`/`abierta_al_cierre`) y el `inicio_recorrido` nuevo esperaba la terminal.
+        abrir(ev.ts);
       }
     } else if (ev.rol === 'retorno') {
       if (actual?.estado === 'en_curso' && !actual.pasoRetornoTs && t >= actual.inicioTs.getTime()) {

@@ -87,7 +87,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
   const sesiones = {} as Record<
     | 'ciclo' | 'larga' | 'corta' | 'omitida' | 'fin' | 'desorden' | 'sinRoles' | 'desvio' | 'carrera'
     | 'vacia' | 'cierreVacia' | 'cierreDesig' | 'cierreSinTenant' | 'inactiva' | 'esperaTardia' | 'retro'
-    | 'omitidaFin' | 'cierreTardio' | 'estacionado' | 'espNoDesig' | 'cursor'
+    | 'omitidaFin' | 'cierreTardio' | 'estacionado' | 'espNoDesig' | 'cursor' | 'inicioEnSr' | 'inicioLejos' | 'inicioSinFix' | 'inicioCierraRet'
     | 'tardioN1' | 'tardioVacia' | 'carreraDesig' | 'gpsDesorden' | 'cierreResidual'
     | 'desvioDesig' | 'yaFue' | 'omitidaLuego' | 'tardia' | 'cancelaDiferida' | 'esperaLuego' | 'desigYTardia',
     string
@@ -217,7 +217,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
       for (const k of [
         'ciclo', 'larga', 'corta', 'omitida', 'fin', 'desorden', 'desvio', 'carrera',
         'vacia', 'cierreVacia', 'cierreDesig', 'cierreSinTenant', 'inactiva', 'esperaTardia', 'retro', 'omitidaFin',
-        'cierreTardio', 'estacionado', 'espNoDesig', 'cursor',
+        'cierreTardio', 'estacionado', 'espNoDesig', 'cursor', 'inicioEnSr', 'inicioLejos', 'inicioSinFix', 'inicioCierraRet',
         'tardioN1', 'tardioVacia', 'carreraDesig', 'gpsDesorden', 'cierreResidual',
         'desvioDesig', 'yaFue', 'omitidaLuego', 'tardia', 'cancelaDiferida', 'esperaLuego', 'desigYTardia',
       ] as const) {
@@ -264,8 +264,9 @@ describe('vueltas y designación a Molinos (F1)', () => {
       let filas = await vueltasDe(s);
       expect(filas).toHaveLength(1);
       expect(filas[0]).toMatchObject({ numero: 1, estado: 'en_curso', vehiculoId, conductorId, lineaId, rutaId });
-      // El `inicio_recorrido` (reloj del sistema) y el SR (GNSS) del mismo arranque no duplican.
-      expect(filas[0]!.inicioTs.toISOString()).toBe(iso(0));
+      // El `inicio_recorrido` (reloj del sistema) y el SR (GNSS) del mismo arranque no duplican; la
+      // vuelta está anclada en la terminal: abre en el cumplimiento de SR, no en el inicio.
+      expect(filas[0]!.inicioTs.toISOString()).toBe(iso(0, 10));
       expect(filas[0]!.fecha.getTime()).toBe(fechaActualBolivia(filas[0]!.inicioTs).getTime());
 
       await lote([cumpl(s, pcHonduras, iso(20), LON_HONDURAS, LAT_RUTA)]);
@@ -746,7 +747,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
       await lote([fin(s, iso(45, 30))]);
       expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa']]);
       // Numeración sin huecos: la siguiente vuelta del día es la 2.
-      await lote([inicio(s, iso(170))]);
+      await lote([inicio(s, iso(170)), cumpl(s, pcSr, iso(170, 5), LON_SR, LAT_RUTA)]);
       expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'completa'], [2, 'en_curso']]);
     });
 
@@ -920,7 +921,46 @@ describe('vueltas y designación a Molinos (F1)', () => {
       expect(await vueltasDe(s)).toHaveLength(0);
       // Un inicio_recorrido nuevo sí abre.
       await lote([inicio(s, iso(40))]);
+      expect(await vueltasDe(s)).toHaveLength(0); // el inicio solo no abre: la ancla es la terminal
+      await lote([cumpl(s, pcSr, iso(41), LON_SR, LAT_RUTA)]);
       expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'en_curso']]);
+    });
+
+    it('un inicio_recorrido con un fix GPS en la terminal (±120 s) abre la vuelta en el inicio', async () => {
+      const s = sesiones.inicioEnSr;
+      await lote([gps(s, iso(0, 60), LON_SR, LAT_RUTA), inicio(s, iso(0))]);
+      const filas = await vueltasDe(s);
+      expect(filas.map((f) => [f.numero, f.estado])).toEqual([[1, 'en_curso']]);
+      expect(filas[0]!.inicioTs.toISOString()).toBe(iso(0));
+    });
+
+    it('un inicio_recorrido con el fix lejos de la terminal no abre hasta el cumplimiento de SR', async () => {
+      const s = sesiones.inicioLejos;
+      await lote([gps(s, iso(0, 60), LON_HONDURAS, LAT_RUTA), inicio(s, iso(0))]);
+      expect(await vueltasDe(s)).toHaveLength(0);
+      await lote([cumpl(s, pcSr, iso(5), LON_SR, LAT_RUTA)]);
+      const filas = await vueltasDe(s);
+      expect(filas.map((f) => [f.numero, f.estado])).toEqual([[1, 'en_curso']]);
+      expect(filas[0]!.inicioTs.toISOString()).toBe(iso(5));
+    });
+
+    it('FIN en la terminal e inicio 10 min después sin fixes nuevos: abre en el inicio (último fix previo)', async () => {
+      const s = sesiones.inicioSinFix;
+      await lote([gps(s, iso(0), LON_SR, LAT_RUTA), fin(s, iso(1))]);
+      await lote([inicio(s, iso(11))]);
+      const filas = await vueltasDe(s);
+      expect(filas.map((f) => [f.numero, f.estado])).toEqual([[1, 'en_curso']]);
+      expect(filas[0]!.inicioTs.toISOString()).toBe(iso(11));
+    });
+
+    it('un inicio lejos cierra la vuelta con retorno abierta_al_cierre; el cumplimiento de SR del lote siguiente abre la 2', async () => {
+      const s = sesiones.inicioCierraRet;
+      await lote([cumpl(s, pcSr, iso(0), LON_SR, LAT_RUTA), cumpl(s, pcHonduras, iso(10), LON_HONDURAS, LAT_RUTA), inicio(s, iso(20))]);
+      expect((await vueltasDe(s)).map((f) => [f.numero, f.estado])).toEqual([[1, 'abierta_al_cierre']]);
+      await lote([cumpl(s, pcSr, iso(25), LON_SR, LAT_RUTA)]);
+      const filas = await vueltasDe(s);
+      expect(filas.map((f) => [f.numero, f.estado])).toEqual([[1, 'abierta_al_cierre'], [2, 'en_curso']]);
+      expect(filas[1]!.inicioTs.toISOString()).toBe(iso(25));
     });
 
     it('el PC de espera en una vuelta NO designada cuenta como progreso: el fin la deja abierta_al_cierre, no la elimina', async () => {
