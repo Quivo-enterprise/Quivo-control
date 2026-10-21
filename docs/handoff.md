@@ -26,7 +26,22 @@ que esos dos días lo prueben en la calle; congelamiento después del piloto del
     mergear.** Orden de merge: #216 y después #217, el domingo 25 o más tarde.
   - Revisiones: /code-review, /ponytail-review y /security-review (sin hallazgos ≥ 8) en ambos; hallazgos aplicados.
     Codex: no verificado (sin cuota). Sin test de concurrencia real del lock por terminal.
-  - Siguiente: PR 3 (panel `/salidas`) y PR 4 (móvil, OTA; verificar trigger de fecha de `expo-notifications`).
+  - **PR 3 #219** (panel `/salidas`, apilado: revisar `ba9159e` + `0ba4022`): fila en vivo, frecuencias de hoy,
+    grupos (solo admins). CI verde. **Abierto, sin mergear.** El control usará el panel web por ahora (CTO, 21/10);
+    el panel en celular (390 px, sidebar fijo del design system) queda en backlog sin prioridad.
+  - **PR 4 #220** (app del chofer, **OTA**, apilado: revisar `32057e0` + `a23d6ab`): tarjeta con SALIR · m:ss,
+    desfase de reloj guardado aparte (`desfaseFilaMs`), detección pura de zona (entrada ≤100 m dentro del radio;
+    salida 2 fixes a >1,5×radio, origen `geocerca`; llegada desarmada tras salir), respaldo "Estoy en la fila", aviso
+    T−1 solo para el 1.º (foreground + `expo-notifications` trigger DATE). Fingerprint android sin cambios
+    (`547d52e7…`): no requiere APK. Sin `SCHEDULE_EXACT_ALARM` la notificación programada es inexacta en Doze
+    (**medir el atraso en la calle**). Incluye un cambio de API: si falla el cálculo de la fila, `vuelta-actual` omite
+    `fila` (antes `null`, que el móvil lee como "salió"). 15 hallazgos de /code-review + /ponytail-review aplicados;
+    mobile 1000/1000 tests. **Abierto, sin mergear.**
+  - Orden de merge después de D: #216 → #217 → #219 → #220; migración fuera de horario; OTA la publica el CTO
+    verificando el bundle. Luego piloto con pasantes en SR.
+  - No verificado en PR 4: nada en dispositivo (UI, TalkBack, notificación con pantalla apagada); si un logout con
+    recorrido activo cancela el aviso programado; si la ruta L16 pasa a <150 m de SR a mitad de vuelta (llegada
+    falsa). Hooks de React sin tests.
 - **Plan de escalamiento a 30 CERRADO (20/10, CTO).** Tabla de estado en
   [`plan-escalabilidad-30.md`](plan-escalabilidad-30.md). Backlog que queda: archivo GPS (A5, **antes de enero**),
   vencimiento de rotaciones al worker (A4), Fase 2 (orden por dispositivo; requisito para subir la concurrencia del
