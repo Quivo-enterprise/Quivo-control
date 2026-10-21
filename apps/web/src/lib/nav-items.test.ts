@@ -91,3 +91,17 @@ describe('rutaInicialParaRol', () => {
     expect(rutaInicialParaRol(NAV_ITEMS, 'conductor')).toBe('/');
   });
 });
+
+describe('NAV_ITEMS ("Salidas")', () => {
+  it('va justo después de "En vivo", en la misma sección', () => {
+    expect(NAV_ITEMS[2]?.id).toBe('salidas');
+    expect(NAV_ITEMS[2]?.section).toBe(NAV_ITEMS[1]?.section);
+  });
+
+  it('los tres roles operativos entran a /salidas; un rol desconocido no', () => {
+    for (const rol of ['admin_quivo', 'admin_sindicato', 'operador']) {
+      expect(isRouteAllowedForRole(NAV_ITEMS, '/salidas', rol)).toBe(true);
+    }
+    expect(isRouteAllowedForRole(NAV_ITEMS, '/salidas', 'conductor')).toBe(false);
+  });
+});
