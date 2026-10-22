@@ -79,12 +79,15 @@ const fixElegido = (fixDesde: Date, buscarSi: Prisma.Sql) => Prisma.sql`
 `;
 
 /**
- * Fase de una vuelta: el worker marca `pasoRetornoTs` al cumplir el PC de retorno (Honduras).
- * `null` si la sesión no tiene vuelta en curso.
+ * Fase de la sesión: la de su vuelta en curso (el worker marca `pasoRetornoTs` al cumplir el PC de
+ * retorno, Honduras). Sin vuelta en curso se deduce del último cumplimiento cumplido de la sesión:
+ * PC `terminal` ⇒ 'ida'; si no, 'regreso' cuando su `orden` alcanza al del PC de retorno activo de
+ * la ruta, 'ida' si no. `null` sin vuelta, sin cumplimientos o sin PC de retorno activo.
  *
- * shortcut: la fase de un candidato depende de que el worker registre el PC de retorno (Honduras,
- * obligatorio). Fuera de calles compartidas el fallback geométrico de `progresoEnCircuito` lo cubre;
- * en calles compartidas un retorno no registrado igual desubica a ese vehículo. Revisar si se ve en campo.
+ * shortcut: la fase depende de que el worker registre el PC de retorno (Honduras, obligatorio).
+ * Fuera de calles compartidas el fallback geométrico de `progresoEnCircuito` lo cubre; en calles
+ * compartidas un retorno no registrado igual desubica a ese vehículo. Revisar si se ve en campo.
+ * `cumplimientos_pc` tiene RLS por sindicato; `puntos_control` no, por eso se filtra por `rutaId`.
  */
 const FASE_LATERAL = Prisma.sql`
   LEFT JOIN LATERAL (
@@ -94,7 +97,29 @@ const FASE_LATERAL = Prisma.sql`
     ORDER BY v.numero DESC
     LIMIT 1
   ) vu ON true
+  LEFT JOIN LATERAL (
+    SELECT CASE
+      WHEN pc.rol = 'terminal' THEN 'ida'
+      WHEN ret.orden IS NULL THEN NULL
+      WHEN pc.orden >= ret.orden THEN 'regreso'
+      ELSE 'ida'
+    END AS fase
+    FROM cumplimientos_pc c
+    JOIN puntos_control pc ON pc.id = c."puntoControlId"
+    LEFT JOIN LATERAL (
+      SELECT MIN(r.orden) AS orden
+      FROM puntos_control r
+      WHERE r."rutaId" = a."rutaId" AND r.estado = 'activo' AND r.rol = 'retorno'
+    ) ret ON true
+    WHERE vu.fase IS NULL
+      AND c."sesionId" = so.id AND c."sindicatoId" = so."sindicatoId" AND c.cumplido
+    ORDER BY c.ts DESC
+    LIMIT 1
+  ) cu ON true
 `;
+
+/** Columna `fase` de las consultas que usan `FASE_LATERAL`. */
+const FASE_COL = Prisma.sql`COALESCE(vu.fase, cu.fase)`;
 
 /**
  * Release 13 / B — vehículo de adelante y de atrás sobre MI ruta.
@@ -147,7 +172,7 @@ export class VecinosRutaService {
         SELECT a."rutaId" AS "rutaId",
           COALESCE(${lat}::float8, pos.lat) AS lat,
           COALESCE(${lng}::float8, pos.lng) AS lng,
-          vu.fase AS fase
+          ${FASE_COL} AS fase
         FROM sesiones_operativas so
         JOIN asignaciones a ON a.id = so."asignacionId"
         LEFT JOIN LATERAL (
@@ -211,7 +236,7 @@ export class VecinosRutaService {
           SELECT so.id AS "sesionId", so."vehiculoId" AS "vehiculoId",
             v.placa, v."numeroInterno", v.tipo, v.marca, v.modelo, v.color, v."colorSecundario",
             pos.lat, pos.lng, pos.ts AS "ultimoFixTs",
-            vu.fase AS fase
+            ${FASE_COL} AS fase
           FROM sesiones_operativas so
           JOIN asignaciones a ON a.id = so."asignacionId"
           JOIN vehiculos v ON v.id = so."vehiculoId" AND v."sindicatoId" = so."sindicatoId"

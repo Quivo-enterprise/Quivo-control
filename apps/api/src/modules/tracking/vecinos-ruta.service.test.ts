@@ -72,6 +72,9 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
   let rutaOpuestaId: string;
   let rutaCircularId: string;
   let rutaCerradaId: string;
+  let pcTerminalId: string;
+  let pcRetornoId: string;
+  let pcComunId: string;
   const sesionesCreadas: string[] = [];
   let seq = 0;
 
@@ -248,10 +251,16 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     rutaCircularId = await crearRuta(lineaAId, 'circular', CIRCULAR);
     rutaCerradaId = await crearRuta(lineaAId, 'cerrada', CERRADA);
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      // PC de retorno en el extremo este, entre ambos carriles.
+      // PCs de la ruta cerrada: terminal (orden 0), retorno en el extremo este, entre ambos
+      // carriles (orden 1), y un PC común posterior al retorno (orden 2).
+      pcTerminalId = randomUUID();
+      pcRetornoId = randomUUID();
+      pcComunId = randomUUID();
       await tx.$executeRaw`
         INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, rol, estado, "createdAt", "updatedAt")
-        VALUES (${randomUUID()}, ${rutaCerradaId}, 1, ST_SetSRID(ST_MakePoint(-58.38, -34.60005), 4326)::geography, 150, false, 'retorno', 'activo', now(), now())
+        VALUES (${pcTerminalId}, ${rutaCerradaId}, 0, ST_SetSRID(ST_MakePoint(-58.4, ${LAT}::float8), 4326)::geography, 150, false, 'terminal', 'activo', now(), now()),
+               (${pcRetornoId}, ${rutaCerradaId}, 1, ST_SetSRID(ST_MakePoint(-58.38, -34.60005), 4326)::geography, 150, false, 'retorno', 'activo', now(), now()),
+               (${pcComunId}, ${rutaCerradaId}, 2, ST_SetSRID(ST_MakePoint(-58.39, ${LAT_REGRESO}::float8), 4326)::geography, 150, false, NULL, 'activo', now(), now())
       `;
       await tx.$executeRaw`SELECT crear_particion_gps_points(${JORNADA}::date)`;
     });
@@ -648,7 +657,9 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
         accuracy: 120,
         fase: 'ida',
         // Fix bueno, pero más viejo que la ventana de frescura.
-        puntosGps: [{ lng: -58.388, lat: LAT, accuracy: 8, edadMs: UMBRAL_VECINO_FRESCO_MS + 60_000 }],
+        puntosGps: [
+          { lng: -58.388, lat: LAT, accuracy: 8, edadMs: UMBRAL_VECINO_FRESCO_MS + 60_000 },
+        ],
       });
 
       const r = await service.obtener(yo, {}, AHORA);
@@ -692,6 +703,83 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
 
       expect(r.detras?.placa).toBe('VRMIO');
       expect(r.detras!.distanciaM).toBeGreaterThan(1_600);
+    });
+  });
+
+  describe('fase deducida del último cumplimiento (sesión sin vuelta en curso)', () => {
+    // Mismo GPS ambiguo (3 m de la ida) que arriba: sin fase cae en la ida (~183 m DETRÁS del otro);
+    // en regreso queda ~1,66 km por delante del otro (que va por la ida, ~1,10 km).
+    const AMBIGUA = { lng: -58.39, lat: -34.60003 };
+    const OTRO_IDA = { lng: -58.388, lat: LAT };
+
+    async function cumplir(
+      sesion: SesionMovilAutenticada,
+      puntoControlId: string,
+      minAtras: number,
+      cumplido = true,
+    ): Promise<void> {
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        await tx.cumplimientoPc.create({
+          data: {
+            eventId: randomUUID(),
+            sindicatoId: sesion.sindicatoId,
+            sesionId: sesion.sesionId,
+            puntoControlId,
+            ts: new Date(AHORA.getTime() - minAtras * MINUTO),
+            distanciaM: 10,
+            cumplido,
+            validadoPor: 'worker',
+          },
+        });
+      });
+    }
+
+    /** Veo al candidato (sin vuelta) desde un vecino en la ida; devuelve a qué distancia lo ubico. */
+    async function distanciaAlCandidato(
+      cumplimientos: (c: SesionMovilAutenticada) => Promise<void>,
+    ): Promise<{ delante: number | null; detras: number | null }> {
+      const yo = await crearSesion({
+        placa: 'VRFDY',
+        rutaId: rutaCerradaId,
+        pos: OTRO_IDA,
+        fase: 'ida',
+      });
+      const cand = await crearSesion({ placa: 'VRFDC', rutaId: rutaCerradaId, pos: AMBIGUA });
+      await cumplimientos(cand);
+      const r = await service.obtener(yo, {}, AHORA);
+      return { delante: r.delante?.distanciaM ?? null, detras: r.detras?.distanciaM ?? null };
+    }
+
+    it('último cumplimiento en el PC de retorno ⇒ regreso', async () => {
+      const r = await distanciaAlCandidato(async (c) => {
+        await cumplir(c, pcTerminalId, 30);
+        await cumplir(c, pcRetornoId, 10);
+      });
+      expect(r.delante).toBeGreaterThan(1_600);
+      expect(r.delante).toBeLessThan(1_720);
+    });
+
+    it('último cumplimiento en el terminal ⇒ ida (aunque antes pasó por el retorno)', async () => {
+      const r = await distanciaAlCandidato(async (c) => {
+        await cumplir(c, pcRetornoId, 30);
+        await cumplir(c, pcTerminalId, 10);
+      });
+      expect(r.detras).toBeLessThan(250);
+    });
+
+    it('último cumplimiento en un PC común posterior al retorno ⇒ regreso', async () => {
+      const r = await distanciaAlCandidato((c) => cumplir(c, pcComunId, 10));
+      expect(r.delante).toBeGreaterThan(1_600);
+    });
+
+    it('sin cumplimientos (o con cumplido=false) ⇒ sin fase: proyección global como antes', async () => {
+      const sin = await distanciaAlCandidato(async () => {});
+      expect(sin.detras).toBeLessThan(250);
+
+      service.limpiarCache();
+      await limpiarFixtures();
+      const fallido = await distanciaAlCandidato((c) => cumplir(c, pcRetornoId, 10, false));
+      expect(fallido.detras).toBeLessThan(250);
     });
   });
 });
