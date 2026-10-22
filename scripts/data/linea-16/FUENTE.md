@@ -56,3 +56,11 @@ El 21/10/2026 se corrigió la parada SR por decisión del CTO: el KML original l
   (sesiones 1616PID/PIB/PIL/PIF, simplificadas a 5 m), no con Google Routes: entrada y salida usan calles distintas entre SR y v18.
   El boceto v0..v18 es una línea media entre ambas. Los demás tramos se conservaron byte a byte; solo cambió `meta.kmlSha256`.
 - `ZONAS_TRAMO_A_TRAMO` (v8..v24) y `HUECOS_SIN_CALLE` (v10→v11) ya no describen v8..v17; no correr `--recalcular-zonas` sin revisarlos.
+
+## Plan de PC fijado a prod (2026-10-22)
+
+Tras retrazar SR (PR #233) la base pasó a 29,52 km y el generador de PC daba 16 puntos, pero prod tiene 17 (creados con la
+geometría anterior; retorno en orden 8, espera en orden 15). Decisión del CTO: prod manda y no se toca.
+- `puntos-control.json` fija el plan de PC a los 17 PC activos de prod (coords exactas, `rol`, `esperaMin`, `obligatorio`);
+  `cargar-linea-16.ts` lo lee en lugar de generarlo desde la geometría. Radio: siempre 150 m (`RADIO_TOLERANCIA_M`).
+- Para cambiar los PC, editar ese JSON (no hay generador).
