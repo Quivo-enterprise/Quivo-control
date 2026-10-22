@@ -61,3 +61,51 @@ Fuera de alcance (anotar en handoff): no hay job que cierre sesiones de login co
 
 ## Al aprobar
 Volcar este plan a `docs/plan-en-vivo.md` + puntero en `docs/handoff.md` (regla 8), y arrancar el PR 1.
+
+## PR 1.b — Recorridos abandonados: una sola regla de "vigente" (decidido 2026-10-22)
+Hallazgo: el panel "Jornada de hoy" mostraba 1616PID `en_recorrido` hoy. `jornadas.service.ts` mira el último
+`inicio_recorrido`/`fin_recorrido` de una ventana que arranca 12 h antes de las 00:00, y el `inicio_recorrido` del
+21/10 15:24 BO nunca tuvo `fin_recorrido` (último GPS a las 17:54). Hay 4 definiciones de "en recorrido" que pueden
+contradecirse: jornada, mapa en vivo, vecinos/Molinos y fila de salida.
+Decisión del CTO (revisada el mismo día tras `/code-review`): **no se escribe nada**. Cerrar el recorrido desde el
+servidor trababa al chofer que sigue con la misma sesión al día siguiente (409 en `registrarLlegada`, vueltas que no
+abren); lo mismo con backlogs de más de 2 h. Se unifica la LECTURA: todos los lugares que deciden "está en recorrido" usan la
+misma regla de vigencia. Este PR va antes del rediseño.
+1. Regla única "vigente" (`sesionesVisiblesSql`) en `apps/api/src/common/sesiones/vigencia.ts`, usada por en-vivo y jornadas.
+2. Jornadas (fecha = hoy): un `inicio_recorrido` anterior a las 00:00 cuenta `en_recorrido` solo si la sesión está vigente.
+3. Fila de salida y resumen de Molinos: una sesión no vigente no cuenta.
+4. Vecinos y cola de Molinos de `vuelta-actual` siguen exigiendo un fix fresco (10 min): es otra pregunta ("¿dónde está
+   ahora?"), más estricta que la vigencia, y no la contradice.
+5. Sin job de cierre: los recorridos abandonados quedan `en_curso` en la base, pero ninguna pantalla los muestra.
+
+## PR 2 — Dirección elegida: Propuesta B (CTO, 2026-10-22)
+Artifacts: A https://claude.ai/artifact/HbDoVhV76Ms4cpF79TH1vi · **B (elegida)** https://claude.ai/artifact/RP4Gmh127fE1x9nJrgkFS3
+B = mapa a sangre, barra de mando opaca (salud del refresco, línea, alertas, "Siguiente alerta", "Días anteriores"),
+panel izquierdo con resumen grande + 6 estados con conteo que filtran + pestañas "Atención | Toda la flota" +
+Molinos y Jornada compactos, cajón de vehículo angosto a la derecha. Tipografía Oxanium (placas/cifras) + Public Sans.
+Debilidades a resolver en la implementación: barra en móvil (~190 px), estado vacío de "Atención" con flota sana,
+cajón + panel a 1280 px, quitar la alerta "Espera en Molinos" (salida libre).
+Empieza después de mergear PR 1.b.
+Ajuste del CTO: en los pines del **mapa** va la foto del trufi (`fotoUrl`, la que sube la app), no el glifo de estado.
+El estado (forma + color) queda como insignia chica sobre la foto, junto al anillo de línea, la insignia de severidad,
+la de Molinos y la placa. Sin foto, el fallback actual. El resto de los íconos (lista, leyenda, panel, cajón) como en B.
+
+### PR 2 — Fases (mapeo del 22/10; cada fase deja la página funcionando)
+Decisiones del chairman: texto en Montserrat (Oxanium ya cargada para placas/cifras; Public Sans cambiaría todo el
+dashboard); sin toggle de tema en v1 (hoy solo `prefers-color-scheme`); motivo de "Atención" genérico (la API de
+posiciones no trae el tipo de infracción; campo `infraccionTipoTop` = PR aparte de backend).
+- **2a — Lógica, tokens y marcador.** `src/lib/en-vivo/atencion.ts` (+test: necesita acción, score, motivo, conteo por
+  estado, cola de Molinos derivada de `vuelta.enEspera`/`esperaDesdeTs`) y salud del refresco (`dataUpdatedAt`,
+  `isError`, `useReloj`). Tokens en `packages/design-system/src/tokens.css` (texto por estado, gris de estado, molinos).
+  Marcador (`route-map-google.tsx` + `styles.css` ~2571-2830): foto + insignia `.qv-gmap-veh__estado` con las formas de B,
+  anillo de línea, placa con barra de color, badge de severidad, "M2" (`MapPoint.molinos?: boolean | number`).
+- **2b — Barra de mando + panel izquierdo + cajón (desktop).** Reemplaza los HUD de `page.tsx` (~655-896) por
+  `barra-mando.tsx`, `panel-flota.tsx` (resumen, 6 estados que filtran, pestañas Atención | Toda la flota),
+  `modulo-molinos.tsx`, `modulo-jornada.tsx` ("debía salir" desde `horaSalida`). `PanelVehiculo` NO se reescribe:
+  cambia el contenedor a cajón de 372 px y el orden de la cabecera; se conservan formulario de descarte y `ModalSancion`.
+  Los inline styles pasan a clases `qv-live-*`. Los "sin GPS" se pueden seleccionar desde la lista (cajón sin lat/lng).
+- **2c — Móvil y estados de página.** Panel izquierdo como hoja inferior coordinada con la del vehículo; barra compacta
+  (resolver los ~190 px); estados cargando/error/vacío sin Jornada duplicada; estado vacío de "Atención".
+Conservar: roles (operador solo lectura, "Salir", sin Jornada), foco, `rellenoSeguir`, `siguienteAlertaRef`, borradores.
+Gate de cada fase: tests, `tsc`, capturas playwright (claro/oscuro, 1440/1280/390), `web-design-guidelines`,
+`impeccable audit`, `/code-review`, `/ponytail-review`.

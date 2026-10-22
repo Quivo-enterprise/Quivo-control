@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, withTenantContext } from '@quivo/db';
+import { withTenantContext } from '@quivo/db';
 import {
   ContextoEnVivoSchema,
   PosicionEnVivoSchema,
@@ -20,10 +20,8 @@ import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { leerVariantesTramo } from '../../common/geo/variantes-tramo.js';
 import { toInfraccion } from '../infracciones/infracciones.mapper.js';
 import { vueltaNoVacia } from '../vueltas/vuelta-no-vacia.js';
-import {
-  fechaActualBolivia,
-  inicioDeJornadaBolivia,
-} from '../../common/tiempo/jornada.js';
+import { sesionesVisiblesSql } from '../../common/sesiones/vigencia.js';
+import { fechaActualBolivia } from '../../common/tiempo/jornada.js';
 
 interface SesionEnVivoRow {
   id: string;
@@ -183,48 +181,8 @@ const PISO_ANTES_DEL_INICIO_MS = 60_000;
 const TECHO_DESPUES_DEL_FIN_MS = 2 * 60 * MINUTO_MS;
 const TECHO_MAXIMO_DESDE_INICIO_MS = 36 * 60 * MINUTO_MS;
 
-/**
- * Regla de SESIONES visibles (`listarHoy` y `obtenerPosiciones`, la misma, ver
- * `sesionesVisiblesSql`): entra la sesión que arrancó en la jornada boliviana de hoy
- * (`so.inicio >= trazaDesde`) O que tiene actividad (`GREATEST(ultimo_fix_ts,
- * ultimo_ingreso_ts)`) de hoy o de las últimas `GRACIA_ACTIVIDAD_MEDIANOCHE_MS`. Una sesión
- * abierta sin actividad de hoy ni de la gracia (la app no cierra sesión al "Finalizar
- * recorrido") es un zombi de un día previo y NO entra; una cerrada ayer tampoco.
- * `LIMITE_SESIONES_POSICIONES` es margen de sobra para los vehículos de un sindicato.
- */
+/** Margen de sobra para los vehículos de un sindicato (regla de vigencia: `common/sesiones/vigencia.ts`). */
 const LIMITE_SESIONES_POSICIONES = 500;
-/**
- * Gracia al cruzar medianoche: un turno de anoche que sigue vivo (lag de ingesta de hasta
- * ~71 min medido, pérdida de señal, o backlog cuyos fixes son todos de antes de medianoche)
- * no desaparece justo a las 00:00.
- */
-const GRACIA_ACTIVIDAD_MEDIANOCHE_MS = 2 * 60 * MINUTO_MS;
-
-/**
- * Predicado WHERE único de sesiones visibles. El conjunto "con actividad reciente" es una
- * subquery NO correlacionada (`(id, sindicatoId) IN (...)`: semi-join por hash, sin evaluar
- * un EXISTS por cada fila histórica de `sesiones_operativas`); `sesion_id` se castea del
- * lado de la subquery (`::text`) para no tocar `so.id` y conservar su índice. El par
- * `(id, sindicatoId)` mantiene el aislamiento por tenant que tenían los LATERAL: una fila
- * de resumen de OTRO tenant no hace visible la sesión, ni siquiera como admin_quivo.
- * Sin cota superior en `so.inicio` en ambos: una sesión no arranca en el futuro.
- */
-function sesionesVisiblesSql(ahora: Date, jornada: Date): Prisma.Sql {
-  const trazaDesde = inicioDeJornadaBolivia(jornada);
-  const desdeActividad = new Date(
-    Math.min(trazaDesde.getTime(), ahora.getTime() - GRACIA_ACTIVIDAD_MEDIANOCHE_MS),
-  );
-  const jornadaStr = jornada.toISOString().slice(0, 10);
-  const jornadaAyerStr = new Date(jornada.getTime() - 24 * 60 * MINUTO_MS)
-    .toISOString()
-    .slice(0, 10);
-  return Prisma.sql`(so.inicio >= ${trazaDesde}
-    OR (so.id, so."sindicatoId") IN (
-      SELECT gx.sesion_id::text, gx."sindicatoId" FROM gps_sesion_resumen gx
-      WHERE gx.jornada IN (${jornadaStr}::date, ${jornadaAyerStr}::date)
-        AND GREATEST(gx.ultimo_fix_ts, gx.ultimo_ingreso_ts) >= ${desdeActividad}
-    ))`;
-}
 
 function diferenciaMs(ahora: Date, ts: Date | null): number | null {
   if (!ts) return null;

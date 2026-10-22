@@ -121,7 +121,7 @@ export class FilaService {
       if (!mia) return { fila: null, anticipada: null };
       // La terminal se conoce recién al leer la fila; el UPDATE condicional cubre que cambie en el medio.
       await bloquearTerminal(tx, mia.puntoControlId);
-      const { posiciones } = await calcularFilaPc(tx, mia.puntoControlId, fecha, ahora);
+      const { posiciones } = await calcularFilaPc(tx, mia.puntoControlId, fecha, ahora, null, sesion.sesionId);
       const anticipada = esAnticipada(posiciones, mia.id, ahora);
       const n = await tx.$executeRaw`
         UPDATE fila_salida
@@ -150,7 +150,7 @@ export class FilaService {
     const fecha = fechaActualBolivia(ahora);
     const mia = await this.filaAbiertaDe(tx, sesion);
     if (!mia) return null;
-    const { filas, posiciones } = await calcularFilaPc(tx, mia.puntoControlId, fecha, ahora);
+    const { filas, posiciones } = await calcularFilaPc(tx, mia.puntoControlId, fecha, ahora, null, sesion.sesionId);
     return armarEstadoMovil(posiciones, filas, mia.id, ahora);
   }
 

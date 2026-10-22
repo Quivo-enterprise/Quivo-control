@@ -20,6 +20,11 @@ Plan: `docs/plan-en-vivo.md`.
 1. Deploy de la API, lo corre el CTO, con `scripts/deploy-gcp.sh`. Después verificar que `GET /v1/reportes/en-vivo/posiciones` ya no traiga las 5 sesiones de L16 del 21/10 (1616PIF/PID/PIB/PIL/PIC).
 2. PR 2: rediseño de /en-vivo con bake-off (ver el plan).
 
+**Pendientes de PR #250 (regla única de vigencia), aceptados con `shortcut:` en el código:**
+1. **Fila: app y panel pueden diferir en el 1.º.** Una sesión con más de 2 h sin GPS cuya app sigue abierta (por ejemplo, estacionada en la fila de noche) cuenta en su propia fila (`sesionPropiaId`), pero el panel la oculta. Arreglo posible: contar el poll de la app como actividad. Hacerlo si aparece en el piloto. Código: `apps/api/src/modules/salidas/fila-datos.ts` (`calcularFilaPc`).
+2. **Fila vieja que reaparece primera.** Las filas `en_fila` de una sesión no vigente quedan ocultas en la base. Si esa sesión vuelve a usarse otro día (mismo login), la fila reaparece con el `ordenTs` viejo, adelante de todos. Arreglo de fondo: retirar o renovar la fila vieja en `registrarLlegada`. PR aparte. Código: `fila-datos.ts`.
+3. **Índices faltantes.** No hay índice en `gps_sesion_resumen(jornada)` ni en `sesiones_operativas(inicio)`, y la regla corre en cada poll (en-vivo cada 2 s, `vuelta-actual`). Agregarlos con una migración cuando el p95 de `vuelta-actual` se acerque a 150 ms. Código: `apps/api/src/common/sesiones/vigencia.ts`.
+
 **Anotado, fuera de alcance:**
 - Nada cierra las sesiones de login colgadas, y /en-vivo ya no las muestra. Haría falta un cierre del lado del servidor.
 - `salidas/fila-datos.ts:81` filtra solo `estado='activa'`.
