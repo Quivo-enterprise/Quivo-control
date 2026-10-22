@@ -137,18 +137,19 @@ describe('calcularFilaSalida', () => {
     expect(p).toMatchObject({ habilitado: true, demorado: false });
   });
 
-  it('margen de demora: a ETA+2 min no demorado y sin correr a los de atrás; ETA+2 min+1 ms sí', () => {
+  it('margen de demora: a ETA+1 min no demorado y la ETA del 2.º ya corre (continuo); ETA+2 min+1 ms demorado', () => {
     const args = {
       ...base,
       enFila: [fila('a', bo(9)), fila('b', bo(9))],
       ultimaSalidaTs: null,
     };
     const eta = bo(9).getTime();
-    const dentro = calcularFilaSalida({ ...args, ahora: new Date(eta + 60_000) });
+    const ahoraDentro = eta + 60_000;
+    const dentro = calcularFilaSalida({ ...args, ahora: new Date(ahoraDentro) });
     expect(dentro[0]).toMatchObject({ habilitado: true, demorado: false });
+    expect(dentro[1]!.etaTs.getTime()).toBe(ahoraDentro + 6 * 60_000);
     const limite = calcularFilaSalida({ ...args, ahora: new Date(eta + MARGEN_DEMORADO_MS) });
     expect(limite[0]!.demorado).toBe(false);
-    expect(limite[1]!.etaTs).toEqual(bo(9, 6));
     const fuera = calcularFilaSalida({ ...args, ahora: new Date(eta + MARGEN_DEMORADO_MS + 1) });
     expect(fuera[0]!.demorado).toBe(true);
     expect(fuera[1]!.etaTs.getTime()).toBe(eta + MARGEN_DEMORADO_MS + 1 + 6 * 60_000);

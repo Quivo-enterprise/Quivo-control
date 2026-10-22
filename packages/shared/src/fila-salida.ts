@@ -150,9 +150,9 @@ export function calcularFilaSalida(entrada: CalcularFilaSalidaEntrada): Posicion
         ultimaSalidaTs === null
           ? ordenMs
           : Math.max(ultimaSalidaTs.getTime() + frec(ultimaSalidaTs.getTime()) * MS_MIN, ordenMs);
-      primeroDemorado = ahoraMs > etaMs + MARGEN_DEMORADO_MS;
+      primeroDemorado = ahoraMs > etaMs;
     } else {
-      // Si el 1.º está demorado (pasado el margen), "ahora" corre la estimación de los de atrás (solo para mostrarla);
+      // Si el 1.º está demorado, "ahora" corre la estimación de los de atrás (solo para mostrarla);
       // la franja se evalúa en esa misma base.
       const base = primeroDemorado ? Math.max(etaAnteriorMs, ahoraMs) : etaAnteriorMs;
       etaMs = base + frec(base) * MS_MIN;
@@ -165,7 +165,7 @@ export function calcularFilaSalida(entrada: CalcularFilaSalidaEntrada): Posicion
       etaTs: new Date(etaMs),
       esperaMs: Math.max(0, etaMs - ahoraMs),
       habilitado: i === 0 && ahoraMs >= etaMs,
-      demorado: i === 0 && primeroDemorado,
+      demorado: i === 0 && ahoraMs > etaMs + MARGEN_DEMORADO_MS,
     });
   });
   return resultado;
