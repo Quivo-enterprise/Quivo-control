@@ -8,7 +8,23 @@
 
 ## En curso — 2026-10-22: /en-vivo solo con la jornada de hoy + rediseño
 
-Plan: `docs/plan-en-vivo.md`. PR 1 (fix del servidor, rama `fix/en-vivo-solo-hoy`) en implementación; PR 2 (rediseño con bake-off) después.
+Plan: `docs/plan-en-vivo.md`.
+
+**PR 1 (#248) mergeado, SIN desplegar.**
+- `sesionesVisiblesSql` (`apps/api/src/modules/reportes/en-vivo.service.ts`) es la regla única de `listarHoy` y `obtenerPosiciones`: entra la sesión que arrancó en la jornada boliviana de hoy, o que tuvo actividad (fix o ingesta) hoy o en las últimas 2 h (gracia de medianoche).
+- Las sesiones de hoy terminadas siguen visibles como `finalizado`.
+- Tests: 53/53 en `en-vivo*` local; CI `ci` y `acceptance` en pass.
+- Codex: no verificado (sin cuota).
+
+**Pendiente:**
+1. Deploy de la API, lo corre el CTO, con `scripts/deploy-gcp.sh`. Después verificar que `GET /v1/reportes/en-vivo/posiciones` ya no traiga las 5 sesiones de L16 del 21/10 (1616PIF/PID/PIB/PIL/PIC).
+2. PR 2: rediseño de /en-vivo con bake-off (ver el plan).
+
+**Anotado, fuera de alcance:**
+- Nada cierra las sesiones de login colgadas, y /en-vivo ya no las muestra. Haría falta un cierre del lado del servidor.
+- `salidas/fila-datos.ts:81` filtra solo `estado='activa'`.
+- `listarHoy`: el LATERAL `res` lee solo la jornada de hoy, así que una sesión de ayer que entra por la gracia sale `sin_datos` ahí.
+- No hay índice en `sesiones_operativas(inicio)` ni en `gps_sesion_resumen(jornada)`: el filtro es lineal en el historial.
 
 ## Punto de retome — 2026-10-22, 10:10 (BO): Molinos salida libre APLICADO en prod
 
