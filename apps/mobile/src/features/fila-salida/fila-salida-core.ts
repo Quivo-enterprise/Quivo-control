@@ -1,4 +1,4 @@
-import type { EstadoFilaSalida } from '@quivo/shared';
+import { MARGEN_DEMORADO_MS, type EstadoFilaSalida } from '@quivo/shared';
 import { formatHoraBolivia } from '../../shared/format-hora';
 
 /**
@@ -47,9 +47,9 @@ export function habilitadoLocal(fila: EstadoFilaSalida, ahoraCorregidoMs: number
   return fila.posicion === 1 && Number.isFinite(resto) && resto <= 0;
 }
 
-/** Pasada la hora de salida por más de `DEMORA_VISIBLE_MS` (no en el segundo siguiente: el chofer
- * necesita unos segundos para tocar SALIR). Se ignora `fila.demorado` del servidor a propósito. */
-export const DEMORA_VISIBLE_MS = 60_000;
+/** Pasada la hora de salida por más de `DEMORA_VISIBLE_MS` (mismo margen que el servidor: el chofer
+ * necesita tiempo para tocar SALIR). Se ignora `fila.demorado` del servidor a propósito. */
+export const DEMORA_VISIBLE_MS = MARGEN_DEMORADO_MS;
 
 export function estaDemorado(fila: EstadoFilaSalida, ahoraCorregidoMs: number): boolean {
   return (

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   calcularFilaSalida,
+  MARGEN_DEMORADO_MS,
   resolverFrecuencia,
   type EnFilaEntrada,
   type ReglaFrecuenciaCalculo,
@@ -119,7 +120,7 @@ describe('calcularFilaSalida', () => {
       ...base,
       enFila: [fila('a', bo(9))],
       ultimaSalidaTs: null,
-      ahora: bo(9, 1),
+      ahora: bo(9, 3),
     });
     expect(p).toMatchObject({ posicion: 1, habilitado: true, demorado: true });
     expect(p!.etaTs).toEqual(bo(9));
@@ -134,6 +135,24 @@ describe('calcularFilaSalida', () => {
       ahora: bo(9),
     });
     expect(p).toMatchObject({ habilitado: true, demorado: false });
+  });
+
+  it('margen de demora: a ETA+1 min no demorado y la ETA del 2.º ya corre (continuo); ETA+2 min+1 ms demorado', () => {
+    const args = {
+      ...base,
+      enFila: [fila('a', bo(9)), fila('b', bo(9))],
+      ultimaSalidaTs: null,
+    };
+    const eta = bo(9).getTime();
+    const ahoraDentro = eta + 60_000;
+    const dentro = calcularFilaSalida({ ...args, ahora: new Date(ahoraDentro) });
+    expect(dentro[0]).toMatchObject({ habilitado: true, demorado: false });
+    expect(dentro[1]!.etaTs.getTime()).toBe(ahoraDentro + 6 * 60_000);
+    const limite = calcularFilaSalida({ ...args, ahora: new Date(eta + MARGEN_DEMORADO_MS) });
+    expect(limite[0]!.demorado).toBe(false);
+    const fuera = calcularFilaSalida({ ...args, ahora: new Date(eta + MARGEN_DEMORADO_MS + 1) });
+    expect(fuera[0]!.demorado).toBe(true);
+    expect(fuera[1]!.etaTs.getTime()).toBe(eta + MARGEN_DEMORADO_MS + 1 + 6 * 60_000);
   });
 
   it('ETA del 1.º = última salida + frecuencia; los siguientes encadenan', () => {

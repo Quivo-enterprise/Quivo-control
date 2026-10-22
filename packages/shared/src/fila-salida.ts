@@ -8,6 +8,9 @@ import { fechaActualBolivia, inicioDeJornadaBolivia } from './tiempo/jornada.js'
 
 const MS_MIN = 60_000;
 
+/** Gracia tras la ETA del 1.º antes de marcarlo `demorado` (el chofer necesita tiempo para tocar SALIR). */
+export const MARGEN_DEMORADO_MS = 2 * MS_MIN;
+
 export interface ReglaFrecuenciaCalculo {
   alcance: 'todos' | 'grupo' | 'vehiculo';
   grupoId: string | null;
@@ -162,7 +165,7 @@ export function calcularFilaSalida(entrada: CalcularFilaSalidaEntrada): Posicion
       etaTs: new Date(etaMs),
       esperaMs: Math.max(0, etaMs - ahoraMs),
       habilitado: i === 0 && ahoraMs >= etaMs,
-      demorado: i === 0 && ahoraMs > etaMs,
+      demorado: i === 0 && ahoraMs > etaMs + MARGEN_DEMORADO_MS,
     });
   });
   return resultado;
