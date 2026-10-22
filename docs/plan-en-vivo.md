@@ -89,3 +89,23 @@ Empieza después de mergear PR 1.b.
 Ajuste del CTO: en los pines del **mapa** va la foto del trufi (`fotoUrl`, la que sube la app), no el glifo de estado.
 El estado (forma + color) queda como insignia chica sobre la foto, junto al anillo de línea, la insignia de severidad,
 la de Molinos y la placa. Sin foto, el fallback actual. El resto de los íconos (lista, leyenda, panel, cajón) como en B.
+
+### PR 2 — Fases (mapeo del 22/10; cada fase deja la página funcionando)
+Decisiones del chairman: texto en Montserrat (Oxanium ya cargada para placas/cifras; Public Sans cambiaría todo el
+dashboard); sin toggle de tema en v1 (hoy solo `prefers-color-scheme`); motivo de "Atención" genérico (la API de
+posiciones no trae el tipo de infracción; campo `infraccionTipoTop` = PR aparte de backend).
+- **2a — Lógica, tokens y marcador.** `src/lib/en-vivo/atencion.ts` (+test: necesita acción, score, motivo, conteo por
+  estado, cola de Molinos derivada de `vuelta.enEspera`/`esperaDesdeTs`) y salud del refresco (`dataUpdatedAt`,
+  `isError`, `useReloj`). Tokens en `packages/design-system/src/tokens.css` (texto por estado, gris de estado, molinos).
+  Marcador (`route-map-google.tsx` + `styles.css` ~2571-2830): foto + insignia `.qv-gmap-veh__estado` con las formas de B,
+  anillo de línea, placa con barra de color, badge de severidad, "M2" (`MapPoint.molinos?: boolean | number`).
+- **2b — Barra de mando + panel izquierdo + cajón (desktop).** Reemplaza los HUD de `page.tsx` (~655-896) por
+  `barra-mando.tsx`, `panel-flota.tsx` (resumen, 6 estados que filtran, pestañas Atención | Toda la flota),
+  `modulo-molinos.tsx`, `modulo-jornada.tsx` ("debía salir" desde `horaSalida`). `PanelVehiculo` NO se reescribe:
+  cambia el contenedor a cajón de 372 px y el orden de la cabecera; se conservan formulario de descarte y `ModalSancion`.
+  Los inline styles pasan a clases `qv-live-*`. Los "sin GPS" se pueden seleccionar desde la lista (cajón sin lat/lng).
+- **2c — Móvil y estados de página.** Panel izquierdo como hoja inferior coordinada con la del vehículo; barra compacta
+  (resolver los ~190 px); estados cargando/error/vacío sin Jornada duplicada; estado vacío de "Atención".
+Conservar: roles (operador solo lectura, "Salir", sin Jornada), foco, `rellenoSeguir`, `siguienteAlertaRef`, borradores.
+Gate de cada fase: tests, `tsc`, capturas playwright (claro/oscuro, 1440/1280/390), `web-design-guidelines`,
+`impeccable audit`, `/code-review`, `/ponytail-review`.
