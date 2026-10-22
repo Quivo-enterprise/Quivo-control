@@ -77,3 +77,12 @@ misma regla de vigencia. Este PR va antes del rediseño.
 4. Vecinos y cola de Molinos de `vuelta-actual` siguen exigiendo un fix fresco (10 min): es otra pregunta ("¿dónde está
    ahora?"), más estricta que la vigencia, y no la contradice.
 5. Sin job de cierre: los recorridos abandonados quedan `en_curso` en la base, pero ninguna pantalla los muestra.
+
+## PR 2 — Dirección elegida: Propuesta B (CTO, 2026-10-22)
+Artifacts: A https://claude.ai/artifact/HbDoVhV76Ms4cpF79TH1vi · **B (elegida)** https://claude.ai/artifact/RP4Gmh127fE1x9nJrgkFS3
+B = mapa a sangre, barra de mando opaca (salud del refresco, línea, alertas, "Siguiente alerta", "Días anteriores"),
+panel izquierdo con resumen grande + 6 estados con conteo que filtran + pestañas "Atención | Toda la flota" +
+Molinos y Jornada compactos, cajón de vehículo angosto a la derecha. Tipografía Oxanium (placas/cifras) + Public Sans.
+Debilidades a resolver en la implementación: barra en móvil (~190 px), estado vacío de "Atención" con flota sana,
+cajón + panel a 1280 px, quitar la alerta "Espera en Molinos" (salida libre).
+Empieza después de mergear PR 1.b.
