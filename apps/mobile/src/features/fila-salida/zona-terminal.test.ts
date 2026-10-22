@@ -72,7 +72,7 @@ describe('salida y re-armado', () => {
   it('un fix impreciso no cuenta ni corta la racha', () => {
     const a = paso(fix(300), { enFila: true });
     const sinPrecision = paso(fix(10, 500), { enFila: true, estado: a.estado });
-    expect(sinPrecision.estado).toBe(a.estado);
+    expect(sinPrecision.estado).toEqual(a.estado);
     expect(paso(fix(300), { enFila: true, estado: sinPrecision.estado }).accion).toBe('salida');
   });
   it('si el POST de salida falló, no reintenta antes de 1 minuto', () => {
@@ -80,6 +80,34 @@ describe('salida y re-armado', () => {
     const b = paso(fix(300), { enFila: true, estado: a.estado, ahoraMs: 1_000_000 });
     expect(b.accion).toBe('salida');
     expect(paso(fix(300), { enFila: true, estado: b.estado, ahoraMs: 1_010_000 }).accion).toBeNull();
+  });
+  it('entrar a la fila (llegada manual) reinicia la racha previa: no hay salida falsa', () => {
+    // Racha de 2 fixes lejos ANTES de la llegada manual; enFila pasa a true.
+    const racha = { fuerasConsecutivos: 2, ultimoIntentoMs: null, enFilaPrevio: false };
+    const t0 = 1_000_000;
+    const a = paso(fix(300), { enFila: true, estado: racha, ahoraMs: t0 });
+    expect(a.accion).toBeNull();
+    expect(a.estado.fuerasConsecutivos).toBe(1);
+    const b = paso(fix(300), { enFila: true, estado: a.estado, ahoraMs: t0 + 2_000 });
+    expect(b.accion).toBeNull();
+    // Pasado el anti-rebote, 2 fixes lejos frescos sí disparan la salida.
+    const c = paso(fix(300), { enFila: true, estado: b.estado, ahoraMs: t0 + MIN_ENTRE_INTENTOS_MS });
+    expect(c.accion).toBe('salida');
+  });
+  it('estado inicial (arranque en frío) ya en fila: salida sin esperar el anti-rebote', () => {
+    const a = paso(fix(300), { enFila: true });
+    const b = paso(fix(300), { enFila: true, estado: a.estado });
+    expect(b.accion).toBe('salida');
+  });
+  it('salir y volver a entrar con fixes imprecisos de por medio igual reinicia la racha', () => {
+    const t0 = 1_000_000;
+    const a = paso(fix(300), { enFila: true, ahoraMs: t0 });
+    expect(a.estado.fuerasConsecutivos).toBe(1);
+    const fuera = paso(fix(10, 500), { enFila: false, estado: a.estado, ahoraMs: t0 + 1_000 });
+    expect(fuera.estado.enFilaPrevio).toBe(false);
+    const b = paso(fix(300), { enFila: true, estado: fuera.estado, ahoraMs: t0 + 2_000 });
+    expect(b.accion).toBeNull();
+    expect(b.estado.fuerasConsecutivos).toBe(1);
   });
   it('desarmada: se re-arma tras 2 fixes lejos', () => {
     const a = paso(fix(300), { desarmada: true });
