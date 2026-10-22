@@ -386,47 +386,33 @@ export function construirEventosDeUbicacion(
  *   purga se comió filas viejas pero la más reciente que sobrevive ya traía `pasada: 8`, el
  *   `Math.max` la respeta aunque solo quede 1 fila en el outbox.
  * - `ultimoEmitidoMs` = el `max` de los timestamps resueltos de esa clave.
- * - `dentro` es SIEMPRE `true` cuando hay al menos una emisión previa para la clave — nunca en
- *   función del tiempo transcurrido (A1, hallazgo de revisión CRÍTICO; ver el porqué debajo).
+ * - `dentro` es `true` salvo evidencia posterior de que el vehículo se fue: si DESPUÉS de la
+ *   última emisión de la clave se emitió otro punto que, aun en el mejor caso (el vehículo en el
+ *   borde más cercano del radio de ese otro punto), quedaba a más de `radio * FACTOR_REARME_RADIO`
+ *   de este, se siembra `dentro: false`. Nunca depende del tiempo transcurrido: `PASADA_MIN_MS`
+ *   no prueba que el vehículo se movió (layover parado + app reabierta emitiría una pasada
+ *   fantasma, A1).
+ * - shortcut: la evidencia de re-armado son solo emisiones posteriores de OTROS puntos lejanos;
+ *   una ruta con un único punto, o una vuelta donde no se emitió otro, siembra `dentro: true`
+ *   igual. Mejorar: persistir el estado de re-armado en vivo como `visitas_pendientes`.
  *
  * Es best-effort a propósito: si el outbox ya purgó TODAS las filas de una clave, la semilla
  * queda incompleta y el contador puede arrancar más bajo de lo real — sigue siendo
  * estrictamente mejor que arrancar siempre vacío (que reiniciaría SIEMPRE en pasada 1), y
  * nunca suprime evidencia de una sesión distinta.
  *
- * ---
- *
- * ### Por qué `dentro` YA NO depende del tiempo transcurrido (A1)
- *
- * La versión anterior derivaba `dentro = ahoraMs - ultimoEmitidoMs < PASADA_MIN_MS`: si la
- * última emisión fue hace más de `PASADA_MIN_MS` (2 min), sembraba `dentro: false` — es decir,
- * usaba el PISO de tiempo entre pasadas como si fuera una prueba de que el vehículo ya se
- * había ido del punto. No lo es: `PASADA_MIN_MS` existe para no colapsar dos pasadas reales
- * separadas por un salto de reloj del fix, NO para inferir si el vehículo se movió. Con el
- * vehículo PARADO cerca de un punto de control (layover en terminal) y la app matada/reabierta
- * — o el contexto JS headless reciclado por Android — más de 2 minutos después, la semilla
- * derivaba `dentro: false` y el próximo fix (a 10 m, el vehículo nunca se movió) emitía una
- * pasada 2 FANTASMA. Pasaba en dos escenarios reales: cada vez que Android recicla el contexto
- * JS headless durante un layover de más de 2 min en la terminal, y cada vez que el chofer
- * aprieta "Iniciar" estando parado dentro de un punto.
- *
- * Sembrar `dentro: true` siempre (cuando hay pasadas previas) no pierde ninguna pasada real: la
- * máquina de estados (`filtrarNuevosCumplimientos`, `geofence.ts`) se re-arma sola en el primer
- * fix a más de `radio * FACTOR_REARME_RADIO` (y, desde A2, en el SEGUNDO fix consecutivo — ver
- * `FIXES_REARME_CONSECUTIVOS`) — con `locationUpdateInterval: 10_000` eso llega en 10-20 s de
- * movimiento real, así que la próxima pasada de verdad se habilita casi de inmediato en cuanto
- * el vehículo sale del radio, sin que haga falta (ni corresponda) adivinar acá cuánto tiempo
- * pasó reabriendo la app.
  */
 export function clavesCumplimientoDesdePayloads(
   eventos: { ts: string; payload: Record<string, unknown> }[],
   puntosControl: readonly PuntoControlPaquete[] = [],
 ): Map<string, EstadoPuntoControl> {
   const porId = new Map(puntosControl.map((pc) => [pc.id, pc]));
-  const emisiones: { sesionId: string; puntoControlId: string; ms: number }[] = [];
+  // Los eventos llegan ya filtrados por `sesionId` (`obtenerEventosPorTipo(db, tipo, sesionId)`
+  // en ambos llamadores), así que todas las claves son de la misma sesión.
+  const emisiones: { clave: string; puntoControlId: string; ms: number }[] = [];
   const acumulado = new Map<
     string,
-    { ultimoEmitidoMs: number; filas: number; maxPasadaPayload: number; sesionId: string; puntoControlId: string }
+    { ultimoEmitidoMs: number; filas: number; maxPasadaPayload: number }
   >();
 
   for (const evento of eventos) {
@@ -436,7 +422,7 @@ export function clavesCumplimientoDesdePayloads(
 
     const clave = claveCumplimiento(sesionId, puntoControlId);
     const tsResueltoMs = Date.parse(resolverTsFix(evento.payload, evento.ts));
-    emisiones.push({ sesionId, puntoControlId, ms: tsResueltoMs });
+    emisiones.push({ clave, puntoControlId, ms: tsResueltoMs });
     const pasadaPayload = evento.payload['pasada'];
     const pasadaNumerica =
       typeof pasadaPayload === 'number' && Number.isFinite(pasadaPayload) ? pasadaPayload : 0;
@@ -444,12 +430,8 @@ export function clavesCumplimientoDesdePayloads(
       ultimoEmitidoMs: -Infinity,
       filas: 0,
       maxPasadaPayload: 0,
-      sesionId,
-      puntoControlId,
     };
     acumulado.set(clave, {
-      sesionId,
-      puntoControlId,
       filas: previo.filas + 1,
       maxPasadaPayload: Math.max(previo.maxPasadaPayload, pasadaNumerica),
       ultimoEmitidoMs: Number.isNaN(tsResueltoMs)
@@ -459,31 +441,35 @@ export function clavesCumplimientoDesdePayloads(
   }
 
   const estados = new Map<string, EstadoPuntoControl>();
-  for (const [clave, { ultimoEmitidoMs, filas, maxPasadaPayload, sesionId, puntoControlId }] of acumulado) {
+  for (const [clave, { ultimoEmitidoMs, filas, maxPasadaPayload }] of acumulado) {
     // M2: ver el comentario de arriba — el máximo entre "cuántas filas quedan" y "la pasada
     // más alta que alguna fila sobreviviente reporta" sobrevive a una purga parcial.
     const pasadas = Math.max(maxPasadaPayload, filas);
-    // Resiembra del PIL (21/10): si DESPUÉS de la última emisión de este punto se emitió otro
-    // punto a más de `radio * FACTOR_REARME_RADIO`, el vehículo ya se había alejado lo
-    // suficiente para re-armarlo — sembrar `dentro: true` lo dejaba trabado estando estacionado
-    // adentro. Sin coordenadas o sin esa evidencia, se mantiene `dentro: true` (A1).
-    const pc = porId.get(puntoControlId);
+    // Re-armado por evidencia (PIL 21/10): `dentro: true` salvo que, tras la última emisión de
+    // este punto, se haya emitido otro cuya posición MÁS CERCANA posible (centro menos su radio:
+    // la emisión pudo ocurrir en cualquier lugar de su radio) queda fuera de `radio *
+    // FACTOR_REARME_RADIO` de este. Sin `ultimoEmitidoMs` finito (todos los ts ilegibles) nunca
+    // se re-arma; emisiones con ms NaN no cuentan (NaN > x es false).
+    // shortcut: solo hay evidencia si se emitió otro PC lejano después; ruta de un solo PC o
+    // vuelta sin otras emisiones queda `dentro: true`. Mejorar: persistir el re-armado en vivo
+    // como `visitas_pendientes`.
+    const puntoControlId = emisiones.find((e) => e.clave === clave)?.puntoControlId;
+    const pc = puntoControlId === undefined ? undefined : porId.get(puntoControlId);
     const rearmado =
       pc !== undefined &&
+      Number.isFinite(ultimoEmitidoMs) &&
       emisiones.some((e) => {
         const otro = porId.get(e.puntoControlId);
         return (
           otro !== undefined &&
-          e.sesionId === sesionId &&
-          e.puntoControlId !== pc.id &&
+          e.clave !== clave &&
           e.ms > ultimoEmitidoMs &&
-          haversineMetros(pc.coord.coordinates, otro.coord.coordinates) >
+          haversineMetros(pc.coord.coordinates, otro.coord.coordinates) - otro.radioToleranciaM >
             pc.radioToleranciaM * FACTOR_REARME_RADIO
         );
       });
     estados.set(clave, {
-      // A1: ver el comentario largo de arriba — toda clave que llega hasta acá tiene al menos
-      // una emisión previa (por construcción del loop de arriba), así que siempre es `true`.
+      // `true` salvo evidencia posterior de que se fue (ver arriba).
       dentro: !rearmado,
       ultimoEmitidoMs,
       pasadas,

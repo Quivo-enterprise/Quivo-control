@@ -735,7 +735,8 @@ export function useGpsOperativo(
         Date.now(),
         UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
         false,
-        puntosControl,
+        // Mismo gate que `onLocation`: sin semilla hidratada no se procesa cumplimiento.
+        semillaHidratadaRef.current ? puntosControl : [],
       );
       if (emitir.length > 0) {
         // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
@@ -1009,6 +1010,9 @@ export function useGpsOperativo(
    * headless (`asegurarSemillaCumplimientos`).
    */
   const sembrarCumplimientos = useCallback(async (): Promise<void> => {
+    // Sin PC el re-armado no puede aplicarse: no se lee SQLite ni se hidrata; `onLocation`
+    // reintenta en un fix posterior, cuando el paquete ya cargó.
+    if (puntosControlRef.current.length === 0) return;
     try {
       const db = await abrirOutbox();
       const eventosCumplimiento = await obtenerEventosPorTipo(
@@ -1033,7 +1037,7 @@ export function useGpsOperativo(
       // hidrata, y `onLocation` reintenta en el proximo fix (hasta entonces los ticks usan
       // `puntosControl: []`, asi que no se acumula estado que la re-siembra pise). Solo se
       // reintenta mientras la lista este vacia — no al cambiar el array en cada refresco del paquete.
-      semillaHidratadaRef.current = pcs.length > 0;
+      semillaHidratadaRef.current = true;
     } catch (error) {
       console.error('[QUIVO][gps] No se pudo sembrar cumplimientos desde el outbox', error);
       Sentry.captureException(error, {

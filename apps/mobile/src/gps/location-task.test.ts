@@ -869,6 +869,33 @@ describe('clavesCumplimientoDesdePayloads: re-armado por evidencia (PIL 21/10)',
     expect(estados.get(claveT)?.dentro).toBe(true);
   });
 
+  it('usa la posición más cercana posible: centro lejano pero borde cercano no re-arma', () => {
+    // ~300 m entre centros: pasa el chequeo viejo (> 225 m) pero 300 - 150 = 150 m no.
+    const medio = puntoControl('medio', [-63.18, -17.7827], 150);
+    const estados = clavesCumplimientoDesdePayloads(
+      [
+        emision('terminal', '2026-10-21T19:31:00.000Z', 1),
+        emision('medio', '2026-10-21T21:07:00.000Z', 1),
+      ],
+      [terminal, medio],
+    );
+    expect(estados.get(claveT)?.dentro).toBe(true);
+  });
+
+  it('ts ilegible: sin ultimoEmitidoMs finito nunca re-arma; emisiones NaN no cuentan', () => {
+    const pcs = [terminal, lejano];
+    const sinTs = clavesCumplimientoDesdePayloads(
+      [emision('terminal', 'basura', 1), emision('lejano', '2026-10-21T21:07:00.000Z', 1)],
+      pcs,
+    );
+    expect(sinTs.get(claveT)?.dentro).toBe(true);
+    const otroNaN = clavesCumplimientoDesdePayloads(
+      [emision('terminal', '2026-10-21T19:31:00.000Z', 1), emision('lejano', 'basura', 1)],
+      pcs,
+    );
+    expect(otroNaN.get(claveT)?.dentro).toBe(true);
+  });
+
   it('sin coordenadas de los PCs mantiene dentro: true', () => {
     const estados = clavesCumplimientoDesdePayloads([
       emision('terminal', '2026-10-21T19:31:00.000Z', 1),

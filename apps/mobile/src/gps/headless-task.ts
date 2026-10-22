@@ -950,11 +950,14 @@ export function estaSemillaHidratada(sesionId: string): boolean {
   return semillasHidratadasPorSesion.get(sesionId) === true;
 }
 
-async function asegurarSemillaCumplimientos(
+export async function asegurarSemillaCumplimientos(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
   puntosControl: readonly PuntoControlPaquete[],
 ): Promise<void> {
+  // Sin PC el re-armado no puede aplicarse: no se lee el outbox ni se hidrata; el reintento
+  // ocurre en un tick posterior, cuando el contexto ya traiga los PC.
+  if (puntosControl.length === 0) return;
   // FIX POST-REVISIÓN (punto 5): si ya hidrató alguna vez, no hay nada que reintentar — evita
   // releer el outbox en cada tick de una sesión que ya sembró bien.
   if (semillasHidratadasPorSesion.get(sesionId) === true) return;
@@ -976,10 +979,7 @@ async function asegurarSemillaCumplimientos(
         }
         // FIX POST-REVISIÓN (punto 5): recién ACÁ, tras terminar sin excepción, se marca
         // hidratada — es la señal que habilita procesar transiciones de cumplimiento.
-        // Sin PC el re-armado no pudo aplicarse: no se hidrata y se saca del cache para reintentar
-        // en el proximo tick (con `puntosControl: []` ese tick no procesa cumplimientos).
-        if (puntosControl.length > 0) semillasHidratadasPorSesion.set(sesionId, true);
-        else semillasCumplimientosPorSesion.delete(sesionId);
+        semillasHidratadasPorSesion.set(sesionId, true);
       } catch (error) {
         console.error('[QUIVO][headless] No se pudo sembrar cumplimientos desde el outbox', error);
         // QUI-365: este catch es best-effort a propósito (ver doc de la función) — sin captura
@@ -1425,6 +1425,8 @@ async function manejarHeartbeatHeadless(): Promise<void> {
     // `anunciosLlegada`, decidido por `evaluarAnuncioDeHeartbeat` DENTRO de
     // `confirmarVisitasVencidasEnCola` (punto 2 del brief: el fallback de 90 s ahora SÍ corre en
     // producción, desde este mismo punto de llamada).
+    // Mismo gate que el tick de ubicación: sin semilla hidratada no se toca el estado de
+    // cumplimiento con PC reales (Map posiblemente vacío/incompleto).
     const { anunciosLlegada } = await confirmarVisitasVencidasEnCola(
       db,
       contexto.deviceId,
@@ -1433,7 +1435,7 @@ async function manejarHeartbeatHeadless(): Promise<void> {
       Date.now(),
       UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
       true,
-      contexto.puntosControl,
+      estaSemillaHidratada(contexto.sesionId) ? contexto.puntosControl : [],
     );
     if (anunciosLlegada.length === 0) return;
 
