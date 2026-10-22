@@ -4,7 +4,9 @@ import type { Prisma } from '@quivo/db';
 import { bloquearVueltasSesion } from '../ingesta-worker/deteccion-vueltas.js';
 import { vueltaContable, vueltaNoVacia } from './vuelta-no-vacia.js';
 import {
+  MOLINOS_ESPERA_PENDIENTE_MAX_H,
   MolinosResumenSchema,
+  UMBRAL_VECINO_FRESCO_MS,
   VueltaActualMovilSchema,
   VueltaResumenSchema,
   calcularSugerenciaMolinos,
@@ -277,9 +279,9 @@ export class VueltasService {
   }
 
   /** `GET /mobile/vuelta-actual` — la sesión sale del token, nunca de un id del cliente. */
-  async obtenerActualMovil(sesion: SesionMovilAutenticada): Promise<VueltaActualMovil> {
+  async obtenerActualMovil(sesion: SesionMovilAutenticada, ahora: Date = new Date()): Promise<VueltaActualMovil> {
     return withTenantContext({ rol: 'conductor', sindicatoId: sesion.sindicatoId }, (tx) =>
-      this.leerActualMovil(tx, sesion),
+      this.leerActualMovil(tx, sesion, ahora),
     );
   }
 
@@ -309,6 +311,7 @@ export class VueltasService {
   private async leerActualMovil(
     tx: Prisma.TransactionClient,
     sesion: SesionMovilAutenticada,
+    ahora: Date = new Date(),
   ): Promise<VueltaActualMovil> {
     const vuelta = await tx.vuelta.findFirst({
       where: { sesionId: sesion.sesionId, sindicatoId: sesion.sindicatoId, estado: 'en_curso' },
@@ -331,7 +334,7 @@ export class VueltasService {
                ST_AsGeoJSON(pc.coord) AS "pcCoord", pc."esperaMin"
         FROM variantes va
         JOIN puntos_control pc ON pc.id = va."puntoEsperaId"
-        WHERE va.id = ${vuelta.varianteId}
+        WHERE va.id = ${vuelta.varianteId} AND pc.rol = 'espera' AND pc.estado = 'activo'
       `;
       if (d) {
         designacion = {
@@ -348,14 +351,26 @@ export class VueltasService {
     if (vuelta.esperaLlegadaTs && !vuelta.esperaSalidaTs && vuelta.varianteId) {
       // Cola de Molinos = orden de llegada: 1 + las vueltas en curso del mismo punto de espera que
       // llegaron antes y todavía no salieron (empate: por id). Informativo, no bloquea nada.
+      // Solo cuentan las que el worker todavía puede cerrar (llegada dentro de la ventana de espera
+      // pendiente) y cuya sesión sigue activa con un fix reciente: un teléfono muerto o sin GPS no
+      // traba a los de atrás.
+      const llegadaMinima = new Date(ahora.getTime() - MOLINOS_ESPERA_PENDIENTE_MAX_H * 3_600_000);
+      const fixDesde = new Date(ahora.getTime() - UMBRAL_VECINO_FRESCO_MS);
       const [cola] = await tx.$queryRaw<{ n: number }[]>`
         SELECT count(*)::int AS n
         FROM vueltas o
         JOIN variantes ov ON ov.id = o."varianteId"
+        JOIN sesiones_operativas os ON os.id = o."sesionId" AND os.estado = 'activa' AND os.fin IS NULL
         WHERE ov."puntoEsperaId" = (SELECT "puntoEsperaId" FROM variantes WHERE id = ${vuelta.varianteId})
           AND o."sindicatoId" = ${sesion.sindicatoId}
           AND o.estado = 'en_curso'
           AND o."esperaSalidaTs" IS NULL
+          AND o."esperaLlegadaTs" >= ${llegadaMinima}
+          AND EXISTS (
+            SELECT 1 FROM gps_sesion_resumen gr
+            WHERE gr.sesion_id = o."sesionId"::uuid AND gr."sindicatoId" = o."sindicatoId"
+              AND gr.ultimo_fix_ts >= ${fixDesde}
+          )
           AND (o."esperaLlegadaTs" < ${vuelta.esperaLlegadaTs}
                OR (o."esperaLlegadaTs" = ${vuelta.esperaLlegadaTs} AND o.id < ${vuelta.id}))
       `;

@@ -144,9 +144,15 @@ export function useVueltaActual({ sesionId, tracking, obtenerAccessToken }: Para
   const pastilla = useMemo(
     () =>
       tracking && !cacheViejo && enEspera && designacionActiva
-        ? pastillaEspera(designacionActiva.puntoEspera.esperaMin, enEspera.desdeTs, ahora, enEspera.posicion)
+        ? pastillaEspera(
+            designacionActiva.puntoEspera.esperaMin,
+            enEspera.desdeTs,
+            ahora,
+            enEspera.posicion,
+            estado.actualizadoEn === null ? Infinity : ahora - estado.actualizadoEn,
+          )
         : null,
-    [tracking, cacheViejo, enEspera, designacionActiva, ahora],
+    [tracking, cacheViejo, enEspera, designacionActiva, ahora, estado.actualizadoEn],
   );
 
   const fila = tracking ? (estado.ultimo?.fila ?? null) : null;

@@ -23,6 +23,7 @@ import {
   respuestasIguales,
   MARGEN_ESPERA_MIN,
   pastillaEspera,
+  MAX_EDAD_POSICION_COLA_MS,
   restanteEsperaMin,
   textoAvisoDesignada,
   textoContadorEspera,
@@ -36,7 +37,7 @@ const DESIGNADA_EN = '2026-10-14T13:05:00.000Z';
 function vuelta(
   vueltaId: string | null,
   designacion: { designadaEn: string; acuseEn?: string | null } | null,
-  enEspera: { desdeTs: string } | null = null,
+  enEspera: { desdeTs: string; posicion?: number } | null = null,
 ): VueltaActualMovil {
   return {
     vueltaId,
@@ -147,6 +148,20 @@ function aplicarYAnunciar(estado: EstadoLocalVuelta, nuevo: VueltaActualMovil, a
   for (const a of r.avisos) e = marcarAnunciada(e, a.clave);
   return { ...r, estado: e };
 }
+
+describe('marca de recepción con posición en la cola', () => {
+  const DESDE = '2026-10-14T13:10:00.000Z';
+  const enCola = () => vuelta(V1, { designadaEn: DESIGNADA_EN, acuseEn: DESDE }, { desdeTs: DESDE, posicion: 2 });
+  it('respuesta idéntica con posición: refresca la marca a los 15 s (sin posición recién a los 2 min)', () => {
+    const r1 = aplicarRespuesta(ESTADO_LOCAL_INICIAL, enCola(), { ahoraMs: T0 });
+    expect(aplicarRespuesta(r1.estado, enCola(), { ahoraMs: T0 + 14_000 }).cambio).toBe(false);
+    const r2 = aplicarRespuesta(r1.estado, enCola(), { ahoraMs: T0 + 20_000 });
+    expect(r2.cambio).toBe(true);
+    expect(r2.estado.actualizadoEn).toBe(T0 + 20_000);
+    const sin = aplicarRespuesta(ESTADO_LOCAL_INICIAL, vuelta(V1, { designadaEn: DESIGNADA_EN, acuseEn: DESDE }), { ahoraMs: T0 });
+    expect(aplicarRespuesta(sin.estado, vuelta(V1, { designadaEn: DESIGNADA_EN, acuseEn: DESDE }), { ahoraMs: T0 + 20_000 }).cambio).toBe(false);
+  });
+});
 
 describe('aplicarRespuesta + persistencia lógica', () => {
   it('marcarAnunciada: la segunda respuesta igual no avisa', () => {
@@ -368,18 +383,23 @@ describe('pastillaEspera', () => {
   const desde = '2026-10-14T13:00:00.000Z';
   const t = Date.parse(desde);
   it('con minutos de espera: cuenta regresiva (la posición no cambia nada)', () => {
-    expect(pastillaEspera(30, desde, t, 3)).toEqual({ texto: 'Podés salir en 31 min', listo: false });
-    expect(pastillaEspera(30, desde, t + 40 * 60_000, undefined)).toEqual({ texto: 'Ya podés salir', listo: true });
+    expect(pastillaEspera(30, desde, t, 3, 0)).toEqual({ texto: 'Podés salir en 31 min', listo: false });
+    expect(pastillaEspera(30, desde, t + 40 * 60_000, undefined, 0)).toEqual({ texto: 'Ya podés salir', listo: true });
   });
   it('salida libre: lugar en la cola', () => {
-    expect(pastillaEspera(null, desde, t, 1)).toEqual({ texto: 'Es tu turno. Podés salir', listo: true });
-    expect(pastillaEspera(null, desde, t, 3)).toEqual({
+    expect(pastillaEspera(null, desde, t, 1, 0)).toEqual({ texto: 'Es tu turno. Podés salir', listo: true });
+    expect(pastillaEspera(null, desde, t, 3, 0)).toEqual({
       texto: 'Sos el 3.º en Molinos. Salís después del que está adelante.',
       listo: false,
     });
   });
   it('salida libre sin posición (servidor viejo): sin pastilla', () => {
-    expect(pastillaEspera(null, desde, t, undefined)).toBeNull();
+    expect(pastillaEspera(null, desde, t, undefined, 0)).toBeNull();
+  });
+  it('salida libre con la respuesta del servidor vieja (> 60 s): sin pastilla; en el límite sí; la cuenta regresiva no cambia', () => {
+    expect(pastillaEspera(null, desde, t, 2, MAX_EDAD_POSICION_COLA_MS + 1)).toBeNull();
+    expect(pastillaEspera(null, desde, t, 2, MAX_EDAD_POSICION_COLA_MS)).not.toBeNull();
+    expect(pastillaEspera(30, desde, t, 2, MAX_EDAD_POSICION_COLA_MS * 10)).not.toBeNull();
   });
 });
 
