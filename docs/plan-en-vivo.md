@@ -61,3 +61,15 @@ Fuera de alcance (anotar en handoff): no hay job que cierre sesiones de login co
 
 ## Al aprobar
 Volcar este plan a `docs/plan-en-vivo.md` + puntero en `docs/handoff.md` (regla 8), y arrancar el PR 1.
+
+## PR 1.b — Recorridos abandonados: una sola regla de "vigente" (decidido 2026-10-22)
+Hallazgo: el panel "Jornada de hoy" mostraba 1616PID `en_recorrido` hoy. `jornadas.service.ts` mira el último
+`inicio_recorrido`/`fin_recorrido` de una ventana que arranca 12 h antes de las 00:00, y el `inicio_recorrido` del
+21/10 15:24 BO nunca tuvo `fin_recorrido` (último GPS a las 17:54). Hay 4 definiciones de "en recorrido" que pueden
+contradecirse: jornada, mapa en vivo, vecinos/Molinos y fila de salida.
+Decisión del CTO: cerrar el **recorrido** abandonado, no el login. Este PR va antes del rediseño.
+1. Regla única "vigente" (`sesionesVisiblesSql`) movida a un módulo común y usada por en-vivo, jornadas y el job.
+2. Jornadas (fecha = hoy): un `inicio_recorrido` anterior a las 00:00 cuenta `en_recorrido` solo si la sesión está vigente.
+3. Job del worker: los recorridos `en_curso`/`en_pausa` que no estén vigentes se cierran. Escribe `fin_recorrido` con la
+   hora de la última actividad (no la de ahora), pone `recorridoEstado='finalizado'` y saca de la fila como el backstop.
+   El login no se toca. Es idempotente.
