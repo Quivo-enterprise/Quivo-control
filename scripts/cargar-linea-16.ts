@@ -14,7 +14,7 @@
  *   2. En Honduras el control (rol `operador` en la web) designa quién vuelve directo a SR y
  *      quién va a Molinos.
  *   3. Directo: vuelve por la ruta hasta SR.
- *   4. Vía Molinos: en el vértice 43 sube por el ramal Putucu hasta Molinos, ESPERA 30 min,
+ *   4. Vía Molinos: en el vértice 43 sube por el ramal Putucu hasta Molinos, salida libre (sin espera; esperaMin null, CTO 2026-10-22),
  *      baja por las mismas calles y **sigue hasta Salomón Romero**: Molinos es una pasada
  *      intermedia, **toda vuelta termina en SR** (corrección del CTO, 2026-10-13).
  *   5. Una vuelta = SR → Honduras → SR (vía Molinos o directa). La vuelta se cuenta recién al
@@ -47,7 +47,7 @@
  *   + ramal    Putucu (13 vértices) hasta Molinos
  *   + bajada   de Putucu: el ramal invertido (Molinos → ramal[0], 13 vértices) y el v43
  *
- * y como **punto de espera** el PC Molinos (esperaMin 30). La vuelta designada hace base hasta v43,
+ * y como **punto de espera** el PC Molinos (esperaMin null = salida libre, CTO 2026-10-22). La vuelta designada hace base hasta v43,
  * toma el tramo (sube, espera, baja por las mismas calles) y sigue por la base hasta SR; por eso
  * el tramo se guarda una sola vez y la base termina en SR. El desvío de una vuelta designada se mide
  * contra LEAST(base, tramo) (`ingesta-worker/deteccion-infracciones.ts`).
@@ -85,7 +85,7 @@
  *   PC (radio 150 m como la 120/Z12), con su `rol` para el conteo de vueltas del servidor:
  *     SR        rol `terminal` orden 0 (obligatorio=false) — abre/cierra cada vuelta
  *     Honduras  rol `retorno` (obligatorio=true) — marca el medio de la vuelta
- *     Molinos   rol `espera`, esperaMin 30 (obligatorio=false) — sobre el TRAMO de la variante
+ *     Molinos   rol `espera`, esperaMin null = salida libre (obligatorio=false) — sobre el TRAMO de la variante
  *   (los 3 `orden` son de marcha, ver abajo; ya no 0/1/2)
  *   **PLAN DE PC FIJADO A PROD (2026-10-21):** los PC YA NO se generan desde la geometría. Se leen de
  *   `scripts/data/linea-16/puntos-control.json` (17 PC: SR, 7 de ida, Honduras, 6 de regreso, Molinos y 1 de regreso tras Molinos),
@@ -213,8 +213,6 @@ const SENTIDO_RUTA = 'circuito';
 const NOMBRE_VARIANTE = 'Vía Molinos';
 /** Nombre del catálogo anterior (sin geometría): si existe se RENOMBRA en el mismo registro. */
 const NOMBRES_VARIANTE_LEGACY = ['Molinos (ramal Putucu)'];
-/** Minutos de espera obligatoria en Molinos (CTO, 2026-10-13). */
-const ESPERA_MOLINOS_MIN = 30;
 
 /** Mismo valor que la 120 y los PC activos de la Z12. */
 const RADIO_TOLERANCIA_M = 150;
@@ -1114,7 +1112,7 @@ export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
       : f.rol === 'espera' ? sMolinos
       : fase === 'ida' ? abscisaEnPolilinea(geometria, f.coord, 0, sHonduras).abscisaM
       : abscisaEnPolilinea(geometria, f.coord, sHonduras).abscisaM;
-    if (f.rol === 'espera' && f.esperaMin !== ESPERA_MOLINOS_MIN) throw new Error(`Molinos: esperaMin ${f.esperaMin} ≠ ${ESPERA_MOLINOS_MIN}.`);
+    if (f.rol === 'espera' && f.esperaMin !== null) throw new Error(`Molinos: esperaMin ${f.esperaMin} debe ser null (salida libre, CTO 2026-10-22).`);
     if (f.rol === 'espera' && distanciaAGeometriaM(tramo, f.coord) > PROXIMIDAD_API_M) throw new Error(`Molinos a > ${PROXIMIDAD_API_M} m del tramo de la variante: el PC de espera debe estar sobre la variante.`);
     return { nombre: f.nombre, orden: f.orden, coord: f.coord, obligatorio: f.obligatorio, rol: f.rol, esperaMin: f.esperaMin, tipo: f.rol ? TIPO_POR_ROL[f.rol] : 'intermedio', abscisaM, distRutaM: f.rol === null ? distanciaAGeometriaM(geometria, f.coord) : distanciaARutaM(geometria, tramo, f.coord), fase };
   });
@@ -1429,7 +1427,7 @@ async function verificar(lineaId: string, plan: PlanDatos): Promise<void> {
   const pcMolinos = pcs.find((p) => p.rol === 'espera');
   if (!variante.geometria || !mismaGeometria(variante.geometria.coordinates, plan.tramo)) throw new Error(`El tramo guardado de "${NOMBRE_VARIANTE}" no coincide con el planeado.`);
   if (!pcMolinos || variante.puntoEsperaId !== pcMolinos.id) throw new Error(`"${NOMBRE_VARIANTE}" no está vinculada al PC de espera (Molinos).`);
-  console.log(`  Variante "${NOMBRE_VARIANTE}": tramo ${variante.geometria.coordinates.length} vértices, punto de espera ${variante.puntoEsperaId} (Molinos, ${pcMolinos.esperaMin} min). OK.`);
+  console.log(`  Variante "${NOMBRE_VARIANTE}": tramo ${variante.geometria.coordinates.length} vértices, punto de espera ${variante.puntoEsperaId} (Molinos, salida libre: esperaMin ${pcMolinos.esperaMin ?? null}). OK.`);
 }
 
 /**

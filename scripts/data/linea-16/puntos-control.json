@@ -14,6 +14,6 @@
   {"orden":12,"nombre":"Control km 22","coord":[-66.1790764,-17.3551142],"rol":null,"esperaMin":null,"obligatorio":false},
   {"orden":13,"nombre":"Control km 24","coord":[-66.194652,-17.3467359],"rol":null,"esperaMin":null,"obligatorio":false},
   {"orden":14,"nombre":"Control km 26","coord":[-66.2106861,-17.3378055],"rol":null,"esperaMin":null,"obligatorio":false},
-  {"orden":15,"nombre":"Molinos (Parada Putucu)","coord":[-66.2056484,-17.3289244],"rol":"espera","esperaMin":30,"obligatorio":false},
+  {"orden":15,"nombre":"Molinos (Parada Putucu)","coord":[-66.2056484,-17.3289244],"rol":"espera","esperaMin":null,"obligatorio":false},
   {"orden":16,"nombre":"Control km 28","coord":[-66.2178138,-17.327855],"rol":null,"esperaMin":null,"obligatorio":false}
 ]
