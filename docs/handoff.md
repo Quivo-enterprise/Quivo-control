@@ -6,6 +6,39 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-21, 22:30: r25 + OTA + trazado SR en prod para el piloto del 22/10
+
+**En prod:**
+- **r25:** API `quivo-api-00032-w5h` y worker `quivo-worker-00015-97b` (`api:r25-20261021`). Health 200 y log del worker "listo". Incluye #231: el worker detecta la salida física de la fila con el GPS.
+- **OTA** "Fila: racha al entrar y confirmar pausa; refresco del paquete del día (r25)":
+  - grupo `ec674f05-3871-4be3-b989-cd3f07b264cd`, update android `01a16121-20af-772b-8027-a31a91d39150`, runtime `547d52e7`;
+  - incluye #230 (racha al entrar a la fila y confirmación al PAUSAR en la fila) y #232 (refresco del paquete al volver a primer plano y cada 10 min);
+  - bundle verificado: URL de la API, textos y `enFilaPrevio` presentes.
+- **Trazado L16 en SR** (#233, datos):
+  - geometría base nueva, 1065 vértices y 29,52 km, cerrada en la parada oficial (-17.3188935, -66.2280664);
+  - parada y PC SR movidos ahí;
+  - todos los PC y paradas a ≤ 18 m de la base, salvo PC 15 y la parada Molinos, a 7 m de la variante.
+
+**Cómo se aplicó el trazado:** `cargar-linea-16.ts --apply` aborta en el pre-vuelo con "PC activos no previstos en el plan: 7/sin rol, 13/sin rol, 16/sin rol". En prod el retorno es el PC 8 y la espera el 15, y el plan del script los espera en 7 y 13. Se hizo a mano:
+1. La parada SR se movió a un punto intermedio, porque el servidor exige ≤ 100 m del trazado al mover la parada y al cambiar la geometría.
+2. PATCH de la geometría base.
+3. La parada y el PC SR se movieron a la parada oficial.
+
+El backup (geometría de 1218 vértices, parada y PC) está en el scratchpad de la sesión del 21/10. **Pendiente:** alinear el plan del script con los PC reales de prod antes de volver a usar `--apply`.
+
+**Rollback:**
+- API a `quivo-api-00031-5z9` y worker a `api:r24-20261021`.
+- OTA: republicar el grupo `08acdc79-af82-49e2-8b67-f55e1eed6534`.
+- Trazado: PATCH con la geometría del backup y la parada/PC SR a `-17.3185525, -66.2277902`.
+
+**Antes del piloto del 22/10:** que todos los choferes abran la app, esperen a que baje la OTA y la reabran. Así toman la OTA y el paquete con el PC SR nuevo.
+
+**Abierto:**
+- Ítem 9, terminal no re-detectado: sin causa. En el caso de PIL a las 21:15Z no hubo reinicio ni error en Sentry, y el test de la segunda pasada pasa. Se descartó el cambio de la semilla porque producía pasadas fantasma. Queda diagnosticarlo con el emulador y GPS simulado.
+- Ítems 5 y 6 (variante en el mapa, fase de vecinos sin vuelta) para antes del sábado 25.
+- Seguimiento del #232: no reportar a Sentry los errores de red del refresco.
+- Codex: no verificado (sin cuota) en #230, #231 y #232.
+
 ## Punto de retome — 2026-10-21, 21:00: fixes para el piloto del 22/10 en curso
 
 **Plan:** [`docs/plan-post-piloto-21-10.md`](plan-post-piloto-21-10.md).
