@@ -6,6 +6,32 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-22, 00:40 (BO): script L16 realineado (#242) y Molinos salida libre (#243), SIN desplegar
+
+**#242, `cargar-linea-16.ts` realineado con prod:**
+- Los PC salen de `scripts/data/linea-16/puntos-control.json`, con los 17 PC activos de prod; ya no hay generador.
+- Validaciones: forma de cada fila, campos según el rol, cada rol una sola vez, PC a ≤ 100 m de la ruta, y abscisa estrictamente creciente con el orden.
+- Dry-run contra prod: **0 escrituras**. Ya se puede volver a usar `--apply`.
+
+**#243, Molinos salida libre** (pedido del CTO, plan `docs/plan-molinos-salida-libre.md`):
+- `esperaMin = null` en el PC `espera` significa salida libre: sin espera mínima, sin cuenta regresiva y sin `espera_corta`. Un número conserva el comportamiento de antes.
+- **Cola de Molinos por orden de llegada, sin tiempo.** Es informativa: `vuelta-actual` devuelve `enEspera.posicion` y la app muestra "Es tu turno. Podés salir" o "Sos el N.º en Molinos…".
+  - Cuentan solo las sesiones activas con fix GPS en los últimos 10 min y llegada dentro de las últimas 3 h.
+  - La pastilla se oculta si la última respuesta tiene más de 60 s.
+- La frecuencia base sigue rigiendo solo en SR; no cambió.
+- Codex: no verificado (sin cuota). La pastilla no se vio en pantalla.
+
+**Pendiente, en este orden:**
+1. **Deploy de API, web y worker (r27)**, lo corre el CTO: `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh r27-20261022`.
+2. **OTA** con `publicar-ota.sh`, verificando el bundle (que tenga `pastillaEspera` y `MAX_EDAD_POSICION_COLA_MS`).
+3. Los choferes reabren la app.
+4. **Recién después:**
+   - poner `esperaMin: null` en `puntos-control.json` y ajustar la validación del script (hoy exige 30);
+   - dry-run, que debe dar 1 escritura;
+   - `--apply` sin sesiones activas.
+   - Una app sin la OTA nueva no parsea `esperaMin: null` y deja de ver la designación.
+- **Rollback del dato:** Molinos de vuelta a `esperaMin: 30`.
+
 ## Punto de retome — 2026-10-21, 22:50 (BO): pendientes 5, 6, 7 y 9 en prod (r26 + OTA)
 
 Plan: `docs/plan-pendientes-post-piloto-22-10.md`.
@@ -42,7 +68,7 @@ Plan: `docs/plan-pendientes-post-piloto-22-10.md`.
 
 **Abierto:**
 - Codex: no verificado en #230 a #238. La cuota se renueva el 16/11 y el mensaje pide "Upgrade to Plus": revisar la suscripción.
-- Alinear el plan de `cargar-linea-16.ts` con los PC de prod (retorno=8, espera=15, PC16) antes de otro `--apply`.
+- ~~Alinear el plan de `cargar-linea-16.ts` con los PC de prod~~: hecho en #242.
 - Ítem 9 sin verificar en dispositivo. Mirar en el piloto si el terminal se detecta tras reabrir la app en SR.
 
 ## Punto de retome — 2026-10-21, 22:30: r25 + OTA + trazado SR en prod para el piloto del 22/10
