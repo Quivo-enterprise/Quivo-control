@@ -11,6 +11,11 @@ export const MIN_ENTRE_REFRESCOS_MS = 60_000;
 /** Refresco periódico con la app en primer plano. */
 export const INTERVALO_REFRESCO_MS = 10 * 60_000;
 
+/** Un refresco en segundo plano sin red (offline, timeout, fetch caído) es esperado: no va a Sentry. */
+export function debeReportarFalloRefresco(error: unknown): boolean {
+  return !(error instanceof PaqueteDiaApiError && error.kind === 'network');
+}
+
 /** Throttle del refresco por AppState: `ultimaCargaMs` es el inicio de la última descarga. */
 export function puedeRefrescarPaquete(ultimaCargaMs: number, ahoraMs: number): boolean {
   return ahoraMs - ultimaCargaMs >= MIN_ENTRE_REFRESCOS_MS;
@@ -81,7 +86,9 @@ export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) 
     } catch (error) {
       // Refresco en segundo plano fallido: se conserva el paquete actual tal cual.
       if (refresco) {
-        Sentry.captureException(error, { tags: { contexto: 'paquete-dia', paso: 'refresco-descarga' } });
+        if (debeReportarFalloRefresco(error)) {
+          Sentry.captureException(error, { tags: { contexto: 'paquete-dia', paso: 'refresco-descarga' } });
+        }
         return;
       }
       // Hallazgo 1 (CRÍTICO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): antes de aceptar
