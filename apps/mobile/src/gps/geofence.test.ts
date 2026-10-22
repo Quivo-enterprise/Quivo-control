@@ -926,3 +926,46 @@ describe('confirmarVisitasVencidas (FIX POST-REVISIÓN, bug 2)', () => {
   });
 });
 
+
+describe('segunda pasada por la terminal tras un recorrido largo (piloto 21/10, PIL f34d5d70)', () => {
+  const M_POR_GRADO_LAT = 111_195;
+  const LNG = -66.15;
+  const LAT0 = -17.38;
+  const alNorte = (m: number): [number, number] => [LNG, LAT0 + m / M_POR_GRADO_LAT];
+  const pcs = [
+    puntoControl('terminal', alNorte(0), 150),
+    puntoControl('pc-2', alNorte(2_000), 150),
+    puntoControl('pc-3', alNorte(4_000), 150),
+  ];
+
+  /** Un fix a `norteM` metros al norte de la terminal; devuelve los puntos de control emitidos. */
+  function fix(estados: Map<string, EstadoPuntoControl>, norteM: number, tsFixMs: number) {
+    const pos = alNorte(norteM);
+    const { emitir, transiciones } = filtrarNuevosCumplimientos(
+      estados,
+      detectarPuntosControlCercanos(pos, pcs, 4),
+      'sesion-1',
+      tsFixMs,
+      { lat: pos[1], lng: pos[0] },
+    );
+    aplicarTransiciones(estados, transiciones);
+    return emitir.map((e) => e.deteccion.puntoControlId);
+  }
+
+  it('emite la terminal, se aleja >5 km por otros puntos, vuelve y estaciona a ~50 m: emite una 2ª pasada', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    const emitidos: string[] = [];
+    let ts = 0;
+    // 1ª pasada: llega y sale de la terminal.
+    for (const m of [200, 100, 50, 50, 60, 120, 200, 300, 500]) emitidos.push(...fix(estados, m, (ts += 12_000)));
+    // Ida: 5,5 km al norte pasando por pc-2 y pc-3 (un fix cada 100 m, 10 s).
+    for (let m = 600; m <= 5_500; m += 100) emitidos.push(...fix(estados, m, (ts += 10_000)));
+    // Vuelta hasta 150 m de la terminal.
+    for (let m = 5_400; m >= 200; m -= 100) emitidos.push(...fix(estados, m, (ts += 10_000)));
+    // Estacionado a 48-51 m, 21 fixes cada ~12 s.
+    for (let i = 0; i < 21; i++) emitidos.push(...fix(estados, 48 + (i % 4), (ts += 12_000)));
+
+    expect(emitidos.filter((id) => id === 'terminal')).toHaveLength(2);
+    expect(emitidos).toEqual(expect.arrayContaining(['pc-2', 'pc-3']));
+  });
+});
