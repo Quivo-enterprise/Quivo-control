@@ -6,11 +6,22 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## Punto de retome — 2026-10-21, 22:00 (BO): pendientes 5, 6, 7 y 9 mergeados, falta desplegar
+## Punto de retome — 2026-10-21, 22:50 (BO): pendientes 5, 6, 7 y 9 en prod (r26 + OTA)
 
 Plan: `docs/plan-pendientes-post-piloto-22-10.md`.
 
-**Mergeado en main** (`fde4b21`), **sin desplegar todavía**:
+**Desplegado por el CTO** (02:50Z), imagen `r26-20261022`:
+- API `quivo-api-00034-j88`, health `ok/db up/redis up`.
+- Web `quivo-web-00015-jkv`.
+- Worker `quivo-worker-00016-wf5`, log "listo".
+- 0 logs ERROR en los 20 min siguientes.
+
+**OTA:**
+- Grupo `0df12fb9-6f49-413c-ac35-4ad819d21cec`, update android `01a16180-9e85-7f97-9b58-f9677c3528ba`, runtime `547d52e7`, commit `93cd530`.
+- Bundle verificado: URL de la API, DSN de Sentry, `asegurarSemillaCumplimientos`, `debeReportarFalloRefresco` y `MARGEN_DEMORADO_MS`.
+- No se verificó /en-vivo con una variante designada a la vista: no había trufis en calle.
+
+**Mergeado en main** (`fde4b21`):
 - **#235, ítem 5:** /en-vivo superpone en ámbar el tramo de la variante designada de la vuelta actual (`vuelta.varianteId`, no `molinosProxima`). La app ya lo dibujaba con `DesignacionMapa` en la fase de regreso; no se tocó.
 - **#236, ítem 7:** `MARGEN_DEMORADO_MS = 2 min` en shared. El 1.º de la fila se marca demorado recién 2 min después de su ETA, y la app usa la misma constante (antes 60 s). El corrimiento de ETAs de los de atrás sigue continuo.
 - **#237, ítem 6:** sin vuelta en curso, la fase de vecinos sale del último cumplimiento: terminal da ida; un `orden` mayor o igual al del retorno da regreso; si no, ida. Sin cumplimientos queda null.
@@ -20,11 +31,9 @@ Plan: `docs/plan-pendientes-post-piloto-22-10.md`.
   - Ahora re-arma el PC si después se emitió otro PC lejano. La siembra espera a tener los PC del paquete, y además los errores de red del refresco ya no van a Sentry.
   - `shortcut:` la evidencia sale solo de las emisiones de otros PC.
 
-**Para desplegar.** El modo automático bloqueó el deploy a prod; lo corre el CTO:
-1. Revisar que no haya trufis reportando (último fix de las 21:54Z).
-2. `! cd /home/shadowfreak/Documents/Quivo-App/Quivo-control && GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh r26-20261022` (api, web y worker; shared cambió).
-3. OTA (#236 y #238): `! cd /home/shadowfreak/Documents/Quivo-App/Quivo-control/apps/mobile && echo y | ./scripts/publicar-ota.sh "Terminal tras reabrir la app; margen de demorado (r26)" > /tmp/ota-r26.log 2>&1`
-4. Pedir a los choferes que reabran la app.
+**El modo automático bloquea `scripts/deploy-gcp.sh`.** Lo corre el CTO con `!`, con `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7`.
+
+**Antes del piloto:** pedir a los choferes que reabran la app.
 
 **Rollback:**
 - API `quivo-api-00032-w5h` / worker `api:r25-20261021`.
