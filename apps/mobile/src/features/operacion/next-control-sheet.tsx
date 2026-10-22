@@ -89,6 +89,7 @@ export interface NextControlSheetProps {
 export function NextControlSheet(props: NextControlSheetProps) {
   const { panY, onAlto, onAltoVisible } = props;
   const [confirmarEmergencia, setConfirmarEmergencia] = useState(false);
+  const [confirmarPausa, setConfirmarPausa] = useState(false);
   const { fase, onEmpezarDia, empezandoDia = false, puedeEmpezarDia = true } = props;
   const tracking = fase === 'recorrido';
   // Con `tracking` la fase 'recorrido' manda de inmediato; si no, mientras se lee la jornada
@@ -380,7 +381,8 @@ export function NextControlSheet(props: NextControlSheetProps) {
             ) : (
               <Button
                 variant="ghost"
-                onPress={props.onPause}
+                // `vista` refleja el último estado conocido de la fila del propio trufi (se actualiza con la respuesta de llegada/salida y con el refresco); no es garantía.
+                onPress={() => (props.filaSalida?.vista ? setConfirmarPausa(true) : props.onPause?.())}
                 style={styles.finishButton}
                 textStyle={styles.finishButtonText}
                 leftIcon={<Ionicons name="pause-circle-outline" size={20} color={quivoColors.white} />}
@@ -405,6 +407,21 @@ export function NextControlSheet(props: NextControlSheetProps) {
           </>
         )}
       </View>
+
+      <QuivoConfirmDialog
+        visible={confirmarPausa}
+        variant="danger"
+        icon="pause-circle"
+        title="¿Pausar el recorrido?"
+        message="Si pausás, perdés tu lugar en la fila. ¿Pausar igual?"
+        cancelLabel="Cancelar"
+        confirmLabel="Pausar"
+        onCancel={() => setConfirmarPausa(false)}
+        onConfirm={() => {
+          setConfirmarPausa(false);
+          props.onPause?.();
+        }}
+      />
 
       <QuivoConfirmDialog
         visible={confirmarEmergencia}

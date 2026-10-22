@@ -34,11 +34,14 @@ export interface FixFila {
 export interface EstadoDeteccionFila {
   fuerasConsecutivos: number;
   ultimoIntentoMs: number | null;
+  /** `enFila` del fix anterior (`null` = desconocido: arranque en frío): detecta la entrada a la fila. */
+  enFilaPrevio: boolean | null;
 }
 
 export const ESTADO_DETECCION_INICIAL: EstadoDeteccionFila = {
   fuerasConsecutivos: 0,
   ultimoIntentoMs: null,
+  enFilaPrevio: null,
 };
 
 export type AccionFila = 'llegada' | 'salida' | 'rearmar' | null;
@@ -62,8 +65,16 @@ export function decidirAccionFila(entrada: {
   estado: EstadoDeteccionFila;
   ahoraMs: number;
 }): { accion: AccionFila; estado: EstadoDeteccionFila } {
-  const { fix, terminal, enFila, desarmada, estado, ahoraMs } = entrada;
-  // Un fix impreciso (o corrupto) no prueba ni entrada ni salida: se ignora sin tocar el estado.
+  const { fix, terminal, enFila, desarmada, ahoraMs } = entrada;
+  let { estado } = entrada;
+  // Entrar a la fila (false -> true, también por llegada manual) invalida la racha previa de fixes
+  // lejanos y arma el anti-rebote. Se evalúa ANTES de filtrar fixes: aunque todos los de la
+  // transición se ignoren, `enFilaPrevio` se actualiza. `null` (estado inicial) no cuenta como entrada.
+  if (enFila && estado.enFilaPrevio === false) {
+    estado = { ...estado, fuerasConsecutivos: 0, ultimoIntentoMs: ahoraMs };
+  }
+  estado = { ...estado, enFilaPrevio: enFila };
+  // Un fix impreciso (o corrupto) no prueba ni entrada ni salida: se ignora sin tocar la racha.
   if (!Number.isFinite(fix.lat) || !Number.isFinite(fix.lng) || !Number.isFinite(fix.accuracy)) {
     return { accion: null, estado };
   }
