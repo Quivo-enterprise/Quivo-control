@@ -168,6 +168,8 @@ jobs:
       JWT_ACCESS_TTL: 15m
       JWT_REFRESH_TTL: 30d
       BETTER_AUTH_URL: http://localhost:3001
+      # next dev en frío tarda ~120 s con telemetría (supera el timeout de webServer de Playwright)
+      NEXT_TELEMETRY_DISABLED: 1
       # Fuera de development, packages/db/prisma/seed.ts exige estas tres explícitas y aborta
       # si faltan (ver resolveSeedSecret() ahí) — CI corre NODE_ENV=test, así que sin esto el
       # paso "Seed acceptance data" fallaría. Mismos valores que el default de development:
