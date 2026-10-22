@@ -5,10 +5,14 @@ import { presentacionFrescura, sufijoPausa, type TrazaAcumulada } from '../../..
 import { alertaMarcador } from '../../../src/lib/en-vivo/alertas';
 import { rutasDeTraza } from '../../../src/lib/en-vivo/segmentos-traza';
 
+// Ámbar: distinto del azul de la traza y de los colores de línea; lee como "desvío designado".
+const COLOR_VARIANTE = '#f59e0b';
+
 export function construirRutas(
   contexto: ContextoEnVivo,
   puntos: readonly PuntoTrazaGps[] | undefined,
   rutasSnap: readonly RutaSnap[],
+  varianteId: string | null,
 ): MapRoute[] {
   const rutas: MapRoute[] = [
     {
@@ -19,6 +23,17 @@ export function construirRutas(
       points: contexto.ruta.geometria.coordinates.map(([lng, lat]) => ({ lat, lng })),
     },
   ];
+  // La geometría de la variante es solo el tramo extra (ida y vuelta sobre la base): se superpone, sin desplazarla.
+  const variante = varianteId ? contexto.variantes.find((v) => v.id === varianteId) : undefined;
+  if (variante && variante.geometria.coordinates.length > 1) {
+    rutas.push({
+      id: 'ruta-variante',
+      label: `Variante: ${variante.nombre}`,
+      color: COLOR_VARIANTE,
+      sinOffset: true,
+      points: variante.geometria.coordinates.map(([lng, lat]) => ({ lat, lng })),
+    });
+  }
   if (puntos && puntos.length > 1) rutas.push(...rutasDeTraza(puntos, rutasSnap, 'Recorrido real'));
   return rutas;
 }
