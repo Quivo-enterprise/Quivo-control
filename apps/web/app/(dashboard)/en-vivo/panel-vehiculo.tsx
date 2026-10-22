@@ -71,6 +71,8 @@ import {
   type TrazaAcumulada,
 } from '../../../src/lib/en-vivo/traza';
 import { NuevaSancionModal } from '../reglas/nueva-sancion-modal';
+import { estadoDe } from '../../../src/lib/en-vivo/atencion';
+import { GlifoEstado } from './glifo-estado';
 import { mensajeError, ultimaPasada } from './map-builders';
 import { SeccionVuelta } from './panel-vuelta';
 
@@ -238,7 +240,8 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   const colorLinea = contexto?.linea.color || undefined;
   const fotoUrl = posicion?.fotoUrl?.trim() || null;
   const telefono = contexto?.conductor.telefono ?? null;
-  const kmh = velocidadKmh(posicion?.speed);
+  // Sin posición (sin GPS aún) un 0 km/h engaña: no hay dato.
+  const kmh = posicion?.lat == null || posicion.lng == null ? null : velocidadKmh(posicion.speed);
   const lista = ordenarInfracciones(infracciones.data ?? []);
   const abiertas = lista.filter((i) => i.estado === 'abierta');
   const idsPc = contexto?.puntosControl.map((pc) => pc.id) ?? [];
@@ -414,9 +417,6 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
             </h2>
             {lineaNombre && <span className="qv-live-panel__linea">{lineaNombre}</span>}
           </div>
-          <span className="qv-live-panel__meta">
-            <User size={12} aria-hidden="true" /> {conductor}
-          </span>
           <div className="qv-live-panel__fila">
             <FrescuraPanel
               datos={datos}
@@ -426,6 +426,9 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
             />
             {kmh !== null && <span className="qv-live-panel__tabular">{kmh} km/h</span>}
           </div>
+          <span className="qv-live-panel__meta">
+            <User size={12} aria-hidden="true" /> {conductor}
+          </span>
         </div>
         <button type="button" className="qv-live-panel__cerrar" onClick={onCerrar} aria-label="Cerrar detalle del vehículo" title="Cerrar">
           <X size={18} aria-hidden="true" />
@@ -714,7 +717,7 @@ function FrescuraPanel({
   const antiguedadFix = antiguedadViva(fuente.ultimoFixTs, fuente.servidorTs, referencia, ahora);
   return (
     <span className="qv-live-panel__frescura">
-      <span className="qv-live-panel__punto" aria-hidden="true" style={{ backgroundColor: presentacion.color }} />
+      <GlifoEstado estado={estadoDe(fuente)} />
       <span>
         {presentacion.etiqueta}
         {sufijoPausa(fuente)}

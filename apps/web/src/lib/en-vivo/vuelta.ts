@@ -179,7 +179,7 @@ export function aplicarDesignacionesPendientes(
   });
 }
 
-/** Texto del HUD de una línea: "Molinos: 2 en espera · último envío hace 4 min · próximo sugerido en 3 min". */
+/** Texto del HUD de una línea: "2 en espera · último envío hace 4 min · próximo sugerido en 3 min". */
 export function textoHudMolinos(l: MolinosLinea, ahoraServidorMs: number): string {
   const ultimo = l.ultimoEnvioTs ? formatearHace(l.ultimoEnvioTs, ahoraServidorMs) : null;
   const faltaMs = Date.parse(l.proximoSugeridoEn) - ahoraServidorMs;
@@ -190,7 +190,7 @@ export function textoHudMolinos(l: MolinosLinea, ahoraServidorMs: number): strin
       ? 'ya toca enviar'
       : `próximo sugerido en ${Math.max(1, Math.ceil(faltaMs / 60_000))} min`;
   return [
-    `Molinos: ${l.enEspera} en espera`,
+    `${l.enEspera} en espera`,
     ultimo && ultimo !== '—' ? `último envío ${ultimo}` : 'sin envíos hoy',
     proximo,
   ]

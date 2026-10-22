@@ -78,7 +78,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
 
   // Si la ruta es '/en-vivo', se renderiza a pantalla completa sin la barra lateral
   if (pathname === '/en-vivo') {
-    return <div className="qv-live-standalone-shell">{children}</div>;
+    return <main className="qv-live-standalone-shell">{children}</main>;
   }
 
   const allowedItems = filterNavItemsByRole(NAV_ITEMS, user?.rol ?? '');

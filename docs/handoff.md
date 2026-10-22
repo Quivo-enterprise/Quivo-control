@@ -27,7 +27,32 @@ Los pines del mapa llevan la foto del trufi.
 - **Marcador Google:** foto + insignia de estado con las formas de B, disco neutro sin foto, anillo siempre del color de la línea, severidad solo en su badge, "M1/M2" con contorno, forced-colors, hover y área táctil.
 - **Tokens nuevos:** texto por estado, inactivo, Molinos (`#b45309` en claro, por contraste) y tinta del glifo.
 
-**Siguiente:** fase 2b (barra de mando, panel izquierdo, cajón del vehículo), después la 2c (móvil y estados de página).
+**Fase 2a mergeada (#251) y desplegada en `r30` (CTO, 22/10):** API `quivo-api-00040-8q5`, web `quivo-web-00017-j5z`,
+worker `quivo-worker-00019-2vb`. Health ok, `/reportes/en-vivo/molinos` trae `colas`, 0 ERROR en logs. Los pines nuevos
+sobre Google Maps real de prod no se vieron todavía (0 vehículos al verificar; mirar en el piloto).
+
+**Fase 2b (rama `feat/en-vivo-b-2b`, desktop ≥ 1024 px):**
+- `barra-mando.tsx`: barra opaca de una fila (Panel/Salir, salud del refresco con texto, segmento de línea, chips por
+  nivel, "Siguiente alerta", "Días anteriores" solo si el rol puede ver `/reportes/recorridos`; texto oculto < 1360 px).
+- `panel-flota.tsx`: resumen grande, 6 estados que filtran (selección única, se combina con el de nivel, conserva el
+  seleccionado), pestañas Atención | Toda la flota (teclado), filas seleccionables (los "sin GPS" abren el cajón sin
+  centrar). El cuerpo del panel scrollea entero; con cajón abierto los chips pasan a 3 columnas compactas.
+- `modulo-molinos.tsx` (reemplaza `hud-molinos.tsx`): cola filtrada con `colasVerificadas` (la misma regla que Atención).
+  Una sola lista: `shortcut:` hoy solo la L16 hace cola (la 120 nunca, dato del CTO).
+- `modulo-jornada.tsx` (era `panel-jornada.tsx`): compacta, una sola instancia, "Debía salir HH:MM · hace X" y
+  "N debían salir ya" (`debiaSalir`/`contarAtrasados` en `jornadas.ts`).
+- Cajón del vehículo de 372 px a la derecha; `PanelVehiculo` sin reescribir (solo cabecera + glifo; sin velocidad si no
+  hay posición). `panel-frescura.tsx` borrado (no lo usaba nadie). Estados con la etiqueta compartida de `traza.ts`
+  (`corta` solo en los chips). Shell del operador ahora es `<main>`.
+- Verificación: tsc, lint (0 errores), vitest web 259/259. Capturas con API falsa (harness en el scratchpad de la sesión,
+  `fase-2b/run.mjs`) en 1440/1280/390, claro/oscuro, admin y operador; teclado de pestañas OK; sin scroll horizontal.
+- Gate: `/code-review` (10 hallazgos, 9 aplicados; el de agrupar colas descartado por el dato de la 120),
+  `/ponytail-review`, `web-design-guidelines` + `impeccable audit` (14/20; 11 aplicados, el resto es de 2c).
+- Preexistente, no tocado: `use-en-vivo.ts:85` (`designaciones-pendientes`, `useQuery` sin `queryFn`) llena la consola
+  con ~500 avisos "No queryFn" por sesión. Arreglo chico en PR aparte.
+
+**Siguiente:** 2c (móvil < 1024 px: hoja de flota coordinada con la del vehículo, barra compacta —hoy ~260 px en 390—,
+foco atrapado y cierre tocando afuera en la hoja, objetivos táctiles de 44 px en chips y segmento; estados de página).
 
 **Pendientes de PR #250 (regla única de vigencia), aceptados con `shortcut:` en el código:**
 1. **Fila: app y panel pueden diferir en el 1.º.** Una sesión con más de 2 h sin GPS cuya app sigue abierta (por ejemplo, estacionada en la fila de noche) cuenta en su propia fila (`sesionPropiaId`), pero el panel la oculta. Arreglo posible: contar el poll de la app como actividad. Hacerlo si aparece en el piloto. Código: `apps/api/src/modules/salidas/fila-datos.ts` (`calcularFilaPc`).

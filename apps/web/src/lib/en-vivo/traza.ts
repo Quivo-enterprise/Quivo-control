@@ -281,6 +281,8 @@ export function intervaloPoll(
 
 export interface PresentacionFrescura {
   etiqueta: string;
+  /** Etiqueta corta para chips angostos (filtros del panel de flota). */
+  corta: string;
   descripcion: string;
   color: string;
   /** `true` solo cuando el estado es una falla real. `detenido` NO lo es. */
@@ -306,12 +308,14 @@ export interface PresentacionFrescura {
 export const PRESENTACION_FRESCURA: Record<EstadoFrescura, PresentacionFrescura> = {
   reportando: {
     etiqueta: 'Reportando',
+    corta: 'Reportando',
     descripcion: 'El vehículo se mueve y el teléfono sincroniza.',
     color: 'var(--qv-color-success)',
     esFalla: false,
   },
   detenido: {
     etiqueta: 'Detenido',
+    corta: 'Detenido',
     descripcion:
       'El teléfono sincroniza pero no hay fixes nuevos: el vehículo está quieto (terminal o parada larga). No es una falla.',
     color: 'var(--qv-color-info)',
@@ -319,24 +323,28 @@ export const PRESENTACION_FRESCURA: Record<EstadoFrescura, PresentacionFrescura>
   },
   perdido: {
     etiqueta: 'Sin señal',
+    corta: 'Sin señal',
     descripcion: 'El teléfono no está llegando al servidor. Revisar batería, datos y permisos.',
     color: 'var(--qv-color-danger)',
     esFalla: true,
   },
   sin_datos: {
     etiqueta: 'Sin datos',
+    corta: 'Sin datos',
     descripcion: 'La sesión existe pero todavía no entró ningún punto GPS.',
     color: 'var(--qv-text-secondary)',
     esFalla: false,
   },
   finalizado: {
     etiqueta: 'Recorrido finalizado',
+    corta: 'Finalizado',
     descripcion: 'El conductor finalizó el recorrido. No es una falla.',
     color: 'var(--qv-text-muted)',
     esFalla: false,
   },
   en_pausa: {
     etiqueta: 'En pausa',
+    corta: 'En pausa',
     descripcion: 'El conductor pausó el recorrido (almuerzo); el GPS sigue reportando. No es una falla.',
     color: 'var(--qv-color-warning)',
     esFalla: false,

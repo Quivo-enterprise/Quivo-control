@@ -2965,6 +2965,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 
 .qv-live-map-wrapper {
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: 100% !important;
   height: 100% !important;
   min-height: 100% !important;
@@ -2985,117 +2987,779 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   box-shadow: none !important;
 }
 
-.qv-live-hud-top {
-  position: absolute;
-  top: 1rem;
-  left: 1rem;
-  right: 1rem;
-  z-index: 1000;
+/* Estructura de /en-vivo (desktop >= 1024 px): barra de mando opaca arriba y, debajo, tres columnas
+   en flujo — panel de flota | mapa | cajón del vehículo (372 px). El mapa se encoge con las otras
+   dos en vez de quedar tapado. < 1024 px: el panel es una hoja desde la barra y el cajón flota. */
+.qv-live-barra {
+  flex: none;
+  z-index: 30;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
   flex-wrap: wrap;
-  pointer-events: none;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--qv-surface-card);
+  border-bottom: 1px solid var(--qv-border-strong);
+  color: var(--qv-text-primary);
 }
-
-/* Columna derecha del HUD superior: controles del mapa + panel "Jornada de hoy". Apilar en
-   flujo (en vez de un `top` fijo) hace que el panel siempre quede debajo de los controles,
-   ocupen una o dos filas (p. ej. con la píldora de frescura de un vehículo seleccionado). */
-.qv-live-hud-right {
+.qv-live-barra__fila {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
   min-width: 0;
-  max-width: 100%;
+}
+.qv-live-barra__fila:first-child {
+  flex: 1 1 22rem;
+}
+.qv-live-barra__fila:last-child {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
+/* Escritorio: sin base que fuerce el salto; la barra es una fila y solo envuelve si de verdad no entra. */
+@media (min-width: 1024px) {
+  .qv-live-barra__fila:first-child {
+    flex: 0 1 auto;
+  }
+}
+/* Por debajo de 1360 px "Días anteriores" cede su texto (el nombre accesible queda en aria-label). */
+@media (max-width: 1359px) {
+  .qv-live-barra__dias-texto {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+.qv-live-barra__titulo {
+  margin: 0;
+  font-family: var(--qv-font-display);
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.qv-live-barra__espacio {
+  flex: 1 1 0;
+}
+.qv-live-barra__select {
+  min-width: 11rem;
+}
+.qv-live-btn.qv-live-barra__flota {
+  display: none;
 }
 
-.qv-live-hud-card {
-  pointer-events: auto;
+/* Salud del refresco: ícono + texto (nunca solo color). */
+.qv-live-salud {
   display: inline-flex;
   align-items: center;
-  gap: 0.625rem;
-  padding: 0.45rem 0.85rem;
-  background: var(--qv-surface-glass);
-  backdrop-filter: blur(24px) saturate(190%);
-  -webkit-backdrop-filter: blur(24px) saturate(190%);
-  border: 1px solid var(--qv-border-glass);
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid currentColor;
+  border-radius: var(--qv-radius-full);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+.qv-live-salud--ok {
+  color: var(--qv-estado-reportando-texto);
+}
+.qv-live-salud--lento {
+  color: var(--qv-estado-en-pausa-texto);
+}
+.qv-live-salud--sin_conexion {
+  color: var(--qv-estado-perdido-texto);
+}
+.qv-live-salud__seg {
+  color: var(--qv-text-secondary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* Filtro de línea como segmento. */
+.qv-live-segmento {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--qv-border-strong);
+  border-radius: var(--qv-radius-md);
+}
+.qv-live-segmento__op {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.25rem;
+  padding: 0.2rem 0.85rem;
+  border: 0;
+  background: var(--qv-surface-card);
+  color: var(--qv-text-primary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.qv-live-segmento__op + .qv-live-segmento__op {
+  border-left: 1px solid var(--qv-border-strong);
+}
+.qv-live-segmento__op:hover {
+  background: var(--qv-surface-soft);
+}
+.qv-live-segmento__op[aria-pressed='true'] {
+  background: var(--qv-color-primary);
+  color: var(--qv-color-on-primary);
+}
+.qv-live-linea-punto {
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--qv-linea, var(--qv-color-primary));
+  box-shadow: 0 0 0 1.5px var(--qv-surface-card);
+}
+
+.qv-live-cuerpo {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+}
+.qv-live-mapa {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+/* Controles del mapa (esquina superior derecha del mapa). */
+.qv-live-controles {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 10;
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.3rem;
+  background: var(--qv-surface-card);
+  border: 1px solid var(--qv-border-subtle);
   border-radius: var(--qv-radius-lg);
   box-shadow: var(--qv-shadow-sm);
-  transition: all var(--qv-transition-smooth);
+}
+.qv-live-btn--icono {
+  width: 2.25rem;
+  padding: 0;
+}
+.qv-live-ico-seguir {
+  transform: rotate(45deg);
+}
+.qv-live-ico-girando {
+  animation: qv-live-girar 0.6s linear infinite;
+}
+@keyframes qv-live-girar {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qv-live-ico-girando {
+    animation: none;
+  }
 }
 
-.qv-live-hud-card:hover {
-  box-shadow: var(--qv-shadow-lg);
-}
-
-/* Pila inferior: avisos (`.qv-live-toasts`) sobre el panel del vehículo (`.qv-live-panel`), ambos
-   hijos en flujo de un mismo contenedor anclado abajo-izquierda. No depende de la altura de las
-   columnas del HUD superior (p. ej. la lista expandida de "Jornada de hoy") y, al ser flujo, los
-   avisos nunca se montan sobre el panel. El contenedor no captura punteros (el mapa debajo sigue
-   siendo arrastrable); lo hacen sus hijos. Su altura se acota para no llegar al HUD superior: el
-   panel (con scroll propio) se encoge antes que los avisos. */
-.qv-live-hud-bottom {
+/* Estados de página (cargando / error / vacío): capa sobre el mapa, que sigue montado. */
+.qv-live-pagina {
   position: absolute;
-  bottom: 1.25rem;
-  left: 1.25rem;
-  z-index: 1000;
-  max-width: 26rem;
-  width: calc(100% - 2.5rem);
-  /* `--qv-hud-top-h` (borde inferior del HUD superior, medido por la página con un
-     ResizeObserver) hace que la pila nunca tape el HUD aunque éste crezca; 9rem es el respaldo. */
-  max-height: calc(100% - var(--qv-hud-top-h, 7.75rem) - 1.25rem - 0.5rem);
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
+  background: var(--qv-surface-sunken);
+}
+.qv-live-pagina__centro {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+.qv-live-pagina__error {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 4rem 2rem 2rem;
+}
+.qv-live-pagina__columna {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  pointer-events: none;
+  gap: 0.75rem;
+}
+.qv-live-vacio {
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 2rem;
+  text-align: center;
+}
+.qv-live-vacio__icono {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 4rem;
+  height: 4rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--qv-color-primary) 12%, transparent);
+  color: var(--qv-color-primary);
+}
+.qv-live-vacio__texto {
+  max-width: 28rem;
+}
+.qv-live-vacio__texto h2 {
+  margin: 0 0 0.5rem;
+  font-family: var(--qv-font-display);
+  font-size: 1.25rem;
+}
+.qv-live-vacio__texto p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--qv-text-secondary);
+}
+.qv-live-vacio__ico-btn {
+  margin-right: 0.35rem;
+}
+.qv-live-vacio__jornada {
+  width: min(24rem, 100%);
+  text-align: left;
 }
 
-/* Panel "Jornada de hoy" (release 13). Vive dentro de `.qv-live-hud-right`, en flujo debajo de
-   los controles. Por debajo de 1180 px el HUD superior se parte en filas: la columna derecha
-   pasa a ocupar todo el ancho y el panel con ella. Con el detalle del vehículo abierto
-   (`.qv-live-panel`) el panel se oculta en ese rango: el detalle es lo que el operador
-   acaba de pedir y las cifras vuelven al cerrarlo. */
-.qv-live-hud-jornada {
-  width: min(22rem, 100%);
-  pointer-events: auto;
+/* Panel de flota (izquierda). */
+.qv-live-flota {
+  flex: none;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  width: clamp(16rem, 24vw, 21rem);
+  min-height: 0;
+  background: var(--qv-surface-card);
+  border-right: 1px solid var(--qv-border-strong);
+  color: var(--qv-text-primary);
+}
+.qv-live-flota__cuerpo {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.qv-live-resumen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.5rem;
+  padding: 0.85rem 1rem 0.5rem;
+}
+.qv-live-resumen__grande {
+  font-family: var(--qv-font-display);
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.qv-live-resumen__de {
+  font-size: 0.875rem;
+  color: var(--qv-text-secondary);
+}
+.qv-live-resumen__de strong {
+  color: var(--qv-text-primary);
+}
+.qv-live-resumen__sin-gps {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--qv-text-secondary);
 }
 
-.qv-live-hud-jornada-lista {
-  max-height: min(22rem, 50vh);
+/* Forma + color por estado. `--qv-gmap-est` lo leen las formas del design-system (`.qv-gmap-g-*`). */
+.qv-live-glifo {
+  flex: none;
+  display: block;
+  width: 1.25rem;
+  height: 1.25rem;
+  overflow: visible;
+}
+.qv-live-est--reportando {
+  --qv-gmap-est: var(--qv-color-success);
+  color: var(--qv-estado-reportando-texto);
+}
+.qv-live-est--detenido {
+  --qv-gmap-est: var(--qv-color-info);
+  color: var(--qv-estado-detenido-texto);
+}
+.qv-live-est--perdido {
+  --qv-gmap-est: var(--qv-color-danger);
+  color: var(--qv-estado-perdido-texto);
+}
+.qv-live-est--en_pausa {
+  --qv-gmap-est: var(--qv-color-warning);
+  color: var(--qv-estado-en-pausa-texto);
+}
+.qv-live-est--sin_datos,
+.qv-live-est--finalizado {
+  --qv-gmap-est: var(--qv-estado-inactivo);
+  color: var(--qv-estado-inactivo-texto);
 }
 
-/* Botón de plegar/desplegar: fondo sutil al pasar el cursor; el foco usa el contorno por
-   defecto del navegador (no se anula). Transición solo de la propiedad que cambia. */
-.qv-live-hud-jornada-toggle {
-  background: transparent;
+.qv-live-estados {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem;
+  padding: 0.25rem 1rem 0.75rem;
+}
+.qv-live-estado {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.25rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--qv-border-strong);
   border-radius: var(--qv-radius-md);
+  background: var(--qv-surface-card);
+  color: var(--qv-text-primary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
   touch-action: manipulation;
   transition: background-color var(--qv-transition-fast);
 }
-
-.qv-live-hud-jornada-toggle:hover {
-  background: color-mix(in srgb, var(--qv-surface-card) 60%, transparent);
+.qv-live-estado:hover:not(:disabled) {
+  background: var(--qv-surface-soft);
+}
+.qv-live-estado:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.qv-live-estado[aria-pressed='true'] {
+  border-color: var(--qv-color-primary);
+  background: var(--qv-color-primary-subtle);
+  box-shadow: inset 0 0 0 1px var(--qv-color-primary);
+}
+.qv-live-estado__texto {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qv-live-estado__n {
+  font-family: var(--qv-font-display);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
-@media (max-width: 1180px) {
-  .qv-live-hud-right {
-    flex: 1 1 100%;
-    align-items: stretch;
-  }
+.qv-live-pestanas {
+  display: flex;
+  border-top: 1px solid var(--qv-border-subtle);
+  border-bottom: 1px solid var(--qv-border-subtle);
+  background: var(--qv-surface-soft);
+}
+.qv-live-pestana {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--qv-estado-inactivo-texto);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.qv-live-pestana[aria-selected='true'] {
+  border-bottom-color: var(--qv-color-primary);
+  background: var(--qv-surface-card);
+  color: var(--qv-text-primary);
+}
+.qv-live-pestana__n {
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--qv-radius-full);
+  background: var(--qv-border-strong);
+  font-family: var(--qv-font-display);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.qv-live-pestana[aria-selected='true'] .qv-live-pestana__n {
+  background: var(--qv-text-primary);
+  color: var(--qv-surface-card);
+}
 
-  .qv-live-hud-jornada {
-    width: 100%;
-    max-width: 26rem;
-  }
+.qv-live-lista {
+  flex: none;
+}
+.qv-live-lista ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.qv-live-lista__vacio {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 1.25rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--qv-text-secondary);
+}
+.qv-live-lista__vacio svg {
+  flex: none;
+  color: var(--qv-color-success);
+}
+.qv-live-fila {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+  grid-template-areas: 'glifo placa linea' '. motivo motivo';
+  align-items: center;
+  gap: 0.15rem 0.6rem;
+  width: 100%;
+  padding: 0.6rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--qv-border-subtle);
+  border-left: 3px solid transparent;
+  background: var(--qv-surface-card);
+  color: var(--qv-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.qv-live-fila .qv-live-glifo {
+  grid-area: glifo;
+}
+.qv-live-fila:hover {
+  background: var(--qv-surface-soft);
+}
+.qv-live-fila[aria-current='true'] {
+  border-left-color: var(--qv-color-primary);
+  background: var(--qv-color-primary-subtle);
+}
+.qv-live-fila__placa {
+  grid-area: placa;
+  font-family: var(--qv-font-display);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.qv-live-fila__linea {
+  grid-area: linea;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--qv-text-secondary);
+}
+.qv-live-fila__motivo {
+  grid-area: motivo;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: var(--qv-text-secondary);
+}
+.qv-live-fila__motivo > span {
+  font-weight: 700;
+}
 
-  .qv-live-hud-jornada-lista {
-    max-height: min(22rem, 40vh);
-  }
+/* Módulos compactos del panel de flota: Molinos y Jornada. */
+.qv-live-modulo {
+  flex: none;
+  padding: 0.65rem 1rem;
+  border-top: 1px solid var(--qv-border-subtle);
+  font-size: 0.75rem;
+  color: var(--qv-text-secondary);
+}
+.qv-live-modulo__titulo {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--qv-text-primary);
+}
+.qv-live-modulo__titulo svg {
+  color: var(--qv-molinos);
+}
+.qv-live-modulo__lista {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.qv-live-modulo__lista strong {
+  color: var(--qv-text-primary);
+}
+.qv-live-cola {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.qv-live-cola li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.45rem;
+  border: 2px solid var(--qv-molinos);
+  border-radius: 0.35rem;
+  font-family: var(--qv-font-display);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--qv-text-primary);
+}
+.qv-live-cola__pos {
+  color: var(--qv-molinos);
+}
 
-  .qv-live-map-wrapper:has(.qv-live-panel) .qv-live-hud-jornada {
+.qv-live-jornada__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--qv-radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.qv-live-jornada__toggle:hover {
+  background: var(--qv-surface-soft);
+}
+.qv-live-jornada__icono {
+  flex: none;
+  color: var(--qv-color-primary);
+}
+.qv-live-jornada__cabecera {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.qv-live-jornada__cabecera strong {
+  font-size: 0.8125rem;
+  color: var(--qv-text-primary);
+}
+.qv-live-jornada__atraso {
+  font-weight: 700;
+  color: var(--qv-estado-en-pausa-texto);
+}
+.qv-live-jornada__sec {
+  font-size: 0.75rem;
+  color: var(--qv-estado-inactivo-texto);
+}
+.qv-live-jornada__lista {
+  max-height: min(20rem, 40vh);
+  margin-top: 0.4rem;
+  padding-top: 0.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--qv-border-subtle);
+}
+.qv-live-jornada__lista[hidden] {
+  display: none;
+}
+.qv-live-jornada__aviso {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--qv-estado-en-pausa-texto);
+}
+.qv-live-jornada__aviso--columna {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.qv-live-jornada__grupo {
+  margin-bottom: 0.625rem;
+}
+.qv-live-jornada__h {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--qv-text-secondary);
+}
+.qv-live-jornada__punto {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+.qv-live-jornada__punto--sin-iniciar {
+  background: var(--qv-color-warning);
+}
+.qv-live-jornada__punto--dia-iniciado {
+  background: var(--qv-color-primary);
+}
+.qv-live-jornada__punto--en-recorrido {
+  background: var(--qv-color-success);
+}
+.qv-live-jornada__punto--finalizado {
+  background: var(--qv-estado-inactivo);
+}
+.qv-live-jornada__grupo ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.qv-live-jornada__fila {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: var(--qv-radius-md);
+  background: var(--qv-surface-soft);
+}
+.qv-live-jornada__linea1 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.qv-live-jornada__placa {
+  font-family: var(--qv-font-display);
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--qv-text-primary);
+}
+.qv-live-jornada__tiempo {
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--qv-text-primary);
+}
+.qv-live-jornada__tiempo--atenuado {
+  color: var(--qv-estado-inactivo-texto);
+}
+.qv-live-jornada__tiempo--atraso {
+  font-weight: 700;
+  color: var(--qv-estado-en-pausa-texto);
+}
+
+/* Cajón del vehículo (derecha). Escritorio: columna de 372 px en flujo. */
+.qv-live-cajon {
+  flex: none;
+  z-index: 26;
+  display: flex;
+  width: 372px;
+  min-height: 0;
+  background: var(--qv-surface-card);
+  border-left: 1px solid var(--qv-border-subtle);
+}
+@media (min-width: 721px) {
+  .qv-live-cajon .qv-live-panel {
+    height: 100%;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+    overflow-y: auto;
+  }
+}
+/* A 1280 px el panel de flota cede ancho al cajón: el mapa conserva espacio. */
+@media (min-width: 1024px) and (max-width: 1439px) {
+  /* Sin cajón: 20.5rem para que "Reportando" + glifo + conteo entren sin elipsis en 2 columnas (a 307 px faltaban ~8 px por chip). */
+  .qv-live-flota {
+    width: 20.5rem;
+  }
+  .qv-live-cuerpo:has(.qv-live-cajon) .qv-live-flota {
+    width: 18rem;
+  }
+  /* A 18rem no entran dos chips por fila con su texto: 3 columnas con glifo + número (el texto sigue en el aria-label). */
+  .qv-live-cuerpo:has(.qv-live-cajon) .qv-live-estados {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .qv-live-cuerpo:has(.qv-live-cajon) .qv-live-estado {
+    justify-content: center;
+  }
+  .qv-live-cuerpo:has(.qv-live-cajon) .qv-live-estado__texto {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+
+.qv-live-fila:focus-visible,
+.qv-live-estado:focus-visible,
+.qv-live-pestana:focus-visible,
+.qv-live-segmento__op:focus-visible,
+.qv-live-jornada__toggle:focus-visible,
+.qv-live-toast__btn:focus-visible {
+  outline: 2px solid var(--qv-color-primary);
+  outline-offset: -2px;
+}
+
+/* < 1024 px: el panel de flota es una hoja que se abre desde la barra; el cajón flota sobre el mapa. */
+@media (max-width: 1023px) {
+  .qv-live-btn.qv-live-barra__flota {
+    display: inline-flex;
+  }
+  .qv-live-flota {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
     display: none;
+    width: min(22rem, 100%);
+    box-shadow: var(--qv-shadow-lg);
+  }
+  .qv-live-flota--abierto {
+    display: flex;
+  }
+  .qv-live-cajon {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(372px, 100%);
+    box-shadow: var(--qv-shadow-lg);
+  }
+  /* Los controles del mapa se corren a la izquierda del cajón para no quedar tapados. */
+  .qv-live-cuerpo:has(.qv-live-cajon) .qv-live-controles {
+    right: calc(min(372px, 100%) + 0.75rem);
+  }
+}
+/* Móvil: la hoja del vehículo ocupa abajo, no el costado. */
+@media (max-width: 720px) {
+  .qv-live-cuerpo:has(.qv-live-cajon) .qv-live-controles {
+    right: 0.75rem;
   }
 }
 
@@ -3113,12 +3777,15 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   transition: all var(--qv-transition-smooth);
 }
 
-/* Pila de avisos: UN contenedor en flujo dentro de `.qv-live-hud-bottom`, encima del panel del
-   vehículo (o sola, abajo-izquierda, sin panel). Los toasts son hijos en flujo, así no se
+/* Pila de avisos: UN contenedor anclado abajo-izquierda del mapa. Los toasts son hijos en flujo, así no se
    superponen entre sí. Las regiones aria-live viven dentro: están siempre montadas (vacías no
    ocupan espacio). */
 .qv-live-toasts {
-  flex: none;
+  position: absolute;
+  bottom: 1.25rem;
+  left: 0.75rem;
+  z-index: 10;
+  max-width: min(26rem, calc(100% - 1.5rem));
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -3134,15 +3801,61 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   gap: 0.5rem;
   padding: 0.45rem 1rem;
   border-radius: var(--qv-radius-full);
-  background: var(--qv-surface-glass);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 1px solid var(--qv-border-glass);
+  background: var(--qv-surface-card);
+  border: 1px solid var(--qv-border-subtle);
+  color: var(--qv-text-primary);
   box-shadow: var(--qv-shadow-lg);
   font-size: var(--qv-text-xs);
   font-weight: 600;
   pointer-events: auto;
   animation: qv-toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.qv-live-toast--ok {
+  border-color: var(--qv-color-success);
+}
+.qv-live-toast--error,
+.qv-live-toast--falla {
+  border-color: var(--qv-color-danger);
+}
+.qv-live-toast--falla {
+  color: var(--qv-estado-perdido-texto);
+}
+.qv-live-toast--aviso {
+  border-color: var(--qv-color-accent);
+}
+.qv-live-toast--warning {
+  border-color: var(--qv-color-warning);
+}
+.qv-live-toast--info {
+  border-color: var(--qv-color-primary);
+}
+.qv-live-toast__ico--ok {
+  color: var(--qv-color-success);
+}
+.qv-live-toast__ico--error {
+  color: var(--qv-color-danger);
+}
+.qv-live-toast__ico--aviso {
+  color: var(--qv-color-accent);
+}
+.qv-live-toast__ico--warning {
+  color: var(--qv-color-warning);
+}
+.qv-live-toast__btn {
+  padding: 0.15rem 0.5rem;
+  border: 0;
+  border-radius: var(--qv-radius-full);
+  background: var(--qv-color-primary);
+  color: var(--qv-color-on-primary);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.qv-live-toast__btn--warning {
+  background: var(--qv-molinos);
+  color: var(--qv-alerta-fg);
 }
 
 @keyframes qv-toast-in {
@@ -3159,8 +3872,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   .qv-live-toasts {
     align-items: stretch;
   }
-  .qv-live-hud-bottom--panel .qv-live-toasts {
-    margin: 0 0.75rem;
+  /* La hoja del vehículo ocupa abajo: los avisos pasan arriba del mapa. */
+  .qv-live-toasts {
+    top: 4.25rem; /* bajo los controles del mapa (esquina superior) */
+    bottom: auto;
+    z-index: 9;
   }
   .qv-live-toast {
     border-radius: var(--qv-radius-lg);
@@ -3172,28 +3888,12 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
    docs/plan-en-vivo-alertas.md). Tokens de severidad: --qv-alerta-* (tokens.css).
    ========================================================================= */
 
-.qv-live-hud-left {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.5rem;
-  min-width: 0;
-  max-width: 100%;
-}
-
 /* Leyenda + contadores por nivel (filtros) + "Siguiente alerta". */
 .qv-live-alertas {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.4rem;
-  padding: 0.35rem 0.5rem;
-}
-.qv-live-alertas__titulo {
-  font-size: 0.6875rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--qv-text-secondary);
-  padding: 0 0.15rem;
 }
 .qv-live-alertas__vacio {
   display: inline-flex;
@@ -3202,6 +3902,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--qv-text-secondary);
+}
+.qv-live-alertas__vacio svg {
+  color: var(--qv-color-success);
 }
 .qv-live-nivel {
   --qv-nivel: var(--qv-alerta-leve);
@@ -3290,15 +3993,22 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 .qv-live-btn[aria-pressed='true'] {
   background: var(--qv-color-primary);
   border-color: var(--qv-color-primary);
-  color: #fff;
+  color: var(--qv-color-on-primary);
 }
 .qv-live-btn--primario {
   background: var(--qv-color-primary);
   border-color: var(--qv-color-primary);
-  color: #fff;
+  color: var(--qv-color-on-primary);
 }
 .qv-live-btn--primario:hover:not(:disabled) {
   background: color-mix(in srgb, var(--qv-color-primary) 88%, black);
+}
+/* Deshabilitado legible: colores propios en vez de atenuar el primario (texto >= 4.5:1). */
+.qv-live-btn--primario:disabled {
+  background: var(--qv-surface-soft);
+  border-color: var(--qv-border-strong);
+  color: var(--qv-text-secondary);
+  opacity: 1;
 }
 .qv-live-btn--peligro {
   color: var(--qv-color-danger);
@@ -3310,9 +4020,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 }
 
 /* Panel unificado del vehículo. */
-.qv-live-hud-bottom--panel {
-  max-width: 27rem;
-}
 .qv-live-panel {
   display: flex;
   flex-direction: column;
@@ -3406,11 +4113,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   gap: 0.35rem;
   font-size: 0.75rem;
   font-weight: 700;
-}
-.qv-live-panel__punto {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
 }
 .qv-live-panel__tabular {
   font-variant-numeric: tabular-nums;
@@ -3817,30 +4519,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 }
 
-/* HUD de Molinos por línea (debajo de las alertas). */
-.qv-live-molinos {
-  gap: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--qv-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-.qv-live-molinos svg {
-  flex: none;
-  color: var(--qv-color-primary);
-}
-.qv-live-molinos__lista {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-.qv-live-molinos__lista strong {
-  color: var(--qv-text-primary);
-}
-
 /* Hoja de dos alturas: el asa y el resumen solo existen en móvil (ver el @media de abajo). */
 .qv-live-panel__cuerpo {
   display: contents;
@@ -3852,14 +4530,14 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 
 /* Móvil: el panel pasa a hoja inferior a todo el ancho. */
 @media (max-width: 720px) {
-  .qv-live-hud-bottom--panel {
+  .qv-live-cajon {
+    top: auto;
     left: 0;
-    right: 0;
-    bottom: 0;
     width: 100%;
-    max-width: none;
-    /* Hoja pegada abajo (bottom: 0): sin el margen inferior de escritorio. */
-    max-height: calc(100% - var(--qv-hud-top-h, 7.75rem) - 0.5rem);
+    background: transparent;
+    border-left: 0;
+    box-shadow: none;
+    max-height: calc(100% - 0.5rem);
   }
   .qv-live-panel {
     max-height: min(72vh, 34rem);
@@ -3918,10 +4596,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-secondary);
     font-variant-numeric: tabular-nums;
   }
-  /* Con la hoja expandida el HUD de Molinos cede el sitio al detalle; plegada, vuelve a verse. */
-  .qv-live-map-wrapper:has(.qv-live-panel[data-hoja='expandida']) .qv-live-molinos {
-    display: none;
-  }
   .qv-live-btn {
     min-height: 2.75rem;
   }
@@ -3941,9 +4615,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   /* Contadores en 0: fuera en móvil (salvo el filtro activo) para que "Siguiente alerta" quepa. */
   .qv-live-nivel:disabled:not([aria-pressed='true']) {
     display: none;
-  }
-  .qv-live-hud-left {
-    width: 100%;
   }
 }
 

@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { PosicionEnVivo } from '@quivo/shared';
-import { conteoPorEstado, ordenColaMolinos, motivosAtencion, necesitaAtencion, puntajeAtencion } from './atencion';
+import { EstadoFrescuraSchema, type PosicionEnVivo } from '@quivo/shared';
+import {
+  colasVerificadas,
+  colasVisibles,
+  ORDEN_ESTADOS_FRESCURA,
+  conteoPorEstado,
+  estadoDe,
+  filtrarPorEstado,
+  listaAtencion,
+  listaFlota,
+  motivosAtencion,
+  necesitaAtencion,
+  ordenColaMolinos,
+  puntajeAtencion,
+  resumenFlota,
+} from './atencion';
 
 const SERVIDOR = '2026-10-22T15:00:00.000Z';
 const hace = (min: number) => new Date(Date.parse(SERVIDOR) - min * 60_000).toISOString();
@@ -25,8 +39,8 @@ describe('motivosAtencion / necesitaAtencion / puntajeAtencion', () => {
     expect(puntajeAtencion(pos())).toBe(0);
   });
   it('perdido con hace X; sin GPS aún', () => {
-    expect(motivosAtencion(pos({ estadoFrescura: 'perdido', ultimoFixTs: hace(18) }))).toEqual(['Perdido hace 18 min']);
-    expect(motivosAtencion(pos({ estadoFrescura: 'perdido', ultimoFixTs: null }))).toEqual(['Perdido']);
+    expect(motivosAtencion(pos({ estadoFrescura: 'perdido', ultimoFixTs: hace(18) }))).toEqual(['hace 18 min']);
+    expect(motivosAtencion(pos({ estadoFrescura: 'perdido', ultimoFixTs: null }))).toEqual([]);
     expect(motivosAtencion(pos({ estadoFrescura: 'sin_datos', ultimoFixTs: null }))).toEqual(['Sin GPS aún']);
   });
   it('infracciones abiertas con singular/plural y nivel; ignora nivel sin abiertas', () => {
@@ -73,5 +87,94 @@ describe('ordenColaMolinos', () => {
     const colas = [{ puntoEsperaId: 'p', lineas: [], entradas: [{ sesionId: 'a', vehiculoId: 'v', placa: 'A', posicion: 2 }] }];
     expect(ordenColaMolinos({ colas }).get('a')).toBe(2);
     expect(ordenColaMolinos(undefined).size).toBe(0);
+  });
+});
+
+describe('filtrarPorEstado / estadoDe / resumenFlota', () => {
+  const lista = [
+    pos({ id: 'a' }),
+    pos({ id: 'b', estadoFrescura: 'perdido' }),
+    pos({ id: 'c', estadoFrescura: 'raro' as never }),
+    pos({ id: 'd', estadoFrescura: 'finalizado' }),
+  ];
+  it('sin estado devuelve todos; con estado, solo ese (lo desconocido es sin_datos)', () => {
+    expect(filtrarPorEstado(lista, null)).toHaveLength(4);
+    expect(filtrarPorEstado(lista, 'perdido').map((p) => p.id)).toEqual(['b']);
+    expect(filtrarPorEstado(lista, 'sin_datos').map((p) => p.id)).toEqual(['c']);
+    expect(estadoDe(lista[2]!)).toBe('sin_datos');
+  });
+  it('conserva el vehículo con el cajón abierto', () => {
+    expect(filtrarPorEstado(lista, 'perdido', 'a').map((p) => p.id)).toEqual(['a', 'b']);
+  });
+  it('en servicio = flota menos finalizados', () => {
+    expect(resumenFlota(conteoPorEstado(lista))).toEqual({ total: 4, enServicio: 3 });
+  });
+});
+
+describe('listaAtencion / listaFlota', () => {
+  const lista = [
+    pos({ id: 'z', vehiculoPlaca: 'ZZZ' }),
+    pos({ id: 'p', vehiculoPlaca: 'PER', estadoFrescura: 'perdido', ultimoFixTs: hace(20) }),
+    pos({ id: 'g', vehiculoPlaca: 'GRA', infraccionNivel: 'gravisima', infraccionesAbiertas: 1 }),
+    pos({ id: 's', vehiculoPlaca: 'AAA', estadoFrescura: 'sin_datos', lat: null, lng: null }),
+  ];
+  it('Atención: solo los que la necesitan, por puntaje desc, con motivos', () => {
+    const filas = listaAtencion(lista, new Map());
+    expect(filas.map((f) => f.posicion.id)).toEqual(['g', 'p', 's']);
+    expect(filas[1]!.motivos).toEqual(['hace 20 min']);
+  });
+  it('Atención vacía con flota sana', () => {
+    expect(listaAtencion([pos({ id: 'z' })], new Map())).toEqual([]);
+  });
+  it('Atención: el 1.º de la cola de Molinos entra; el 2.º no', () => {
+    const e = esperando({ id: 'm1' });
+    const f = esperando({ id: 'm2' });
+    expect(listaAtencion([e, f], new Map([['m1', 1], ['m2', 2]])).map((x) => x.posicion.id)).toEqual(['m1']);
+  });
+  it('Toda la flota: orden estable por placa, incluye sin GPS', () => {
+    expect(listaFlota(lista, new Map()).map((f) => f.posicion.vehiculoPlaca)).toEqual(['AAA', 'GRA', 'PER', 'ZZZ']);
+    expect(listaFlota([...lista].reverse(), new Map()).map((f) => f.posicion.id)).toEqual(['s', 'g', 'p', 'z']);
+  });
+});
+
+describe('colasVisibles', () => {
+  const cola = (lineaId: string, n: number) => ({
+    puntoEsperaId: `pe-${lineaId}`,
+    lineas: [{ lineaId, lineaNombre: lineaId }],
+    entradas: Array.from({ length: n }, (_, i) => ({ sesionId: `s${i}`, vehiculoId: `v${i}`, placa: `P${i}`, posicion: i + 1 })),
+  });
+  it('descarta colas vacías y filtra por línea', () => {
+    const colas = [cola('L16', 2), cola('L120', 0), cola('L120', 1)];
+    expect(colasVisibles(colas, '')).toHaveLength(2);
+    expect(colasVisibles(colas, 'L16')).toHaveLength(1);
+    expect(colasVisibles(undefined, '')).toEqual([]);
+  });
+});
+
+describe('colasVerificadas', () => {
+  const colas = [{ puntoEsperaId: 'p', lineas: [], entradas: [
+    { sesionId: 'a', vehiculoId: 'v', placa: 'A', posicion: 1 },
+    { sesionId: 'b', vehiculoId: 'v', placa: 'B', posicion: 2 },
+    { sesionId: 'z', vehiculoId: 'v', placa: 'Z', posicion: 3 },
+  ] }];
+  it('deja solo a los que la posición fresca confirma en espera', () => {
+    const r = colasVerificadas(colas, [esperando({ id: 'a' }), pos({ id: 'b' })]);
+    expect(r[0]!.entradas.map((e) => e.sesionId)).toEqual(['a']);
+    expect(colasVerificadas(undefined, [])).toEqual([]);
+  });
+});
+
+describe('estado desconocido (API más nueva que el panel)', () => {
+  const raro = pos({ estadoFrescura: 'raro' as never });
+  it('se trata como sin_datos en motivos, atención y puntaje', () => {
+    expect(motivosAtencion(raro)).toEqual(['Sin GPS aún']);
+    expect(necesitaAtencion(raro)).toBe(true);
+    expect(puntajeAtencion(raro)).toBe(70);
+  });
+});
+
+describe('ORDEN_ESTADOS_FRESCURA', () => {
+  it('cubre exactamente los estados del schema', () => {
+    expect([...ORDEN_ESTADOS_FRESCURA].sort()).toEqual([...EstadoFrescuraSchema.options].sort());
   });
 });
