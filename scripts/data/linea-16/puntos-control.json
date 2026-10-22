@@ -1,0 +1,19 @@
+[
+  {"orden":0,"nombre":"Salomón Romero","coord":[-66.2280664,-17.3188935],"rol":"terminal","esperaMin":null,"obligatorio":false},
+  {"orden":1,"nombre":"Control km 2","coord":[-66.2182922,-17.3262767],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":2,"nombre":"Control km 4","coord":[-66.2120707,-17.3387537],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":3,"nombre":"Control km 6","coord":[-66.1968165,-17.3456753],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":4,"nombre":"Control km 8","coord":[-66.1811754,-17.3534454],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":5,"nombre":"Control km 10","coord":[-66.1661897,-17.3637891],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":6,"nombre":"Control km 12","coord":[-66.1611276,-17.3779895],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":7,"nombre":"Control km 14","coord":[-66.1551945,-17.3942052],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":8,"nombre":"Honduras (RETORNO)","coord":[-66.1532044,-17.4015417],"rol":"retorno","esperaMin":null,"obligatorio":true},
+  {"orden":9,"nombre":"Control km 16","coord":[-66.1581808,-17.3963929],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":10,"nombre":"Control km 18","coord":[-66.1600278,-17.3807644],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":11,"nombre":"Control km 20","coord":[-66.1634533,-17.3646222],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":12,"nombre":"Control km 22","coord":[-66.1790764,-17.3551142],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":13,"nombre":"Control km 24","coord":[-66.194652,-17.3467359],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":14,"nombre":"Control km 26","coord":[-66.2106861,-17.3378055],"rol":null,"esperaMin":null,"obligatorio":false},
+  {"orden":15,"nombre":"Molinos (Parada Putucu)","coord":[-66.2056484,-17.3289244],"rol":"espera","esperaMin":30,"obligatorio":false},
+  {"orden":16,"nombre":"Control km 28","coord":[-66.2178138,-17.327855],"rol":null,"esperaMin":null,"obligatorio":false}
+]

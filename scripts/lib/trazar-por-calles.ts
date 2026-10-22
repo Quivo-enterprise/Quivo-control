@@ -118,23 +118,6 @@ export function cortarPolilinea(coords: Coord[], desde: number, hasta: number): 
   return res;
 }
 
-/** Punto sobre una polilínea a una abscisa dada (m de arco desde el inicio). */
-export interface PuntoEnPolilinea { coord: Coord; abscisaM: number }
-
-/**
- * Puntos sobre la polilínea cada `pasoM` metros de arco: abscisas `pasoM, 2·pasoM, …` estrictamente
- * dentro de (0, total) (los extremos no se incluyen). Cada coord está INTERPOLADA sobre el segmento
- * correspondiente, es decir, a ~0 m de la geometría. Determinista.
- */
-export function puntosCadaN(coords: Coord[], pasoM: number): PuntoEnPolilinea[] {
-  if (!(pasoM > 0)) throw new Error('puntosCadaN: pasoM debe ser > 0.');
-  const acumulado = acumuladoDe(coords);
-  const total = acumulado[acumulado.length - 1]!;
-  const res: PuntoEnPolilinea[] = [];
-  for (let k = 1; k * pasoM < total; k++) res.push({ coord: puntoEnDistancia(coords, acumulado, k * pasoM), abscisaM: k * pasoM });
-  return res;
-}
-
 /**
  * Abscisa (m de arco desde el inicio) de la proyección más cercana de `punto` sobre la polilínea, mirando
  * solo los segmentos que se solapan con [`desdeM`, `hastaM`]. Sirve para elegir UNA de las pasadas
@@ -165,48 +148,6 @@ export function abscisaEnPolilinea(coords: Coord[], punto: Coord, desdeM = 0, ha
   }
   if (mejor === null) throw new Error(`abscisaEnPolilinea: ningún segmento en [${desdeM}, ${hastaM}] m.`);
   return mejor;
-}
-
-export interface OpcionesIntermedios {
-  pasoM: number;
-  /** PC ya existentes (SR, Honduras, Molinos) y las fases en que están activos: se descartan candidatos a < `minPcM` (recta) de los activos en SU fase. */
-  existentes: { coord: Coord; fase: FasePc | 'ambas' }[];
-  minPcM: number;
-  minEntreM: number;
-  /** Abscisa de Honduras sobre la geometría: separa las fases (abscisa < esta ⇒ `ida`; si no ⇒ `regreso`). */
-  sHonduras: number;
-}
-export type FasePc = 'ida' | 'regreso';
-export interface IntermedioPlanificado { coord: Coord; abscisaM: number; fase: FasePc }
-export interface ResultadoIntermedios {
-  puntos: IntermedioPlanificado[];
-  omitidosCercaPc: number;
-  omitidosCercaIntermedio: number;
-}
-
-/**
- * PC intermedios cada `pasoM` sobre la geometría base (pura, determinista). Cada candidato recibe una fase
- * (`ida` si su abscisa < `sHonduras`, si no `regreso`). Descartes, en este orden: cerca de un PC existente
- * activo en su fase (el fin del circuito es SR, ya cubierto), y a < `minEntreM` de otro intermedio ya elegido DE LA MISMA FASE (ida y regreso comparten
- * calles: un PC de ida y uno de regreso pueden quedar juntos; la app los separa por fase).
- */
-export function planificarIntermedios(geometria: Coord[], o: OpcionesIntermedios): ResultadoIntermedios {
-  const res: ResultadoIntermedios = { puntos: [], omitidosCercaPc: 0, omitidosCercaIntermedio: 0 };
-  for (const c of puntosCadaN(geometria, o.pasoM)) {
-    const fase: FasePc = c.abscisaM < o.sHonduras ? 'ida' : 'regreso';
-    if (o.existentes.some((e) => (e.fase === 'ambas' || e.fase === fase) && distanciaM(e.coord, c.coord) < o.minPcM)) { res.omitidosCercaPc++; continue; }
-    if (res.puntos.some((q) => q.fase === fase && distanciaM(q.coord, c.coord) < o.minEntreM)) { res.omitidosCercaIntermedio++; continue; }
-    res.puntos.push({ coord: c.coord, abscisaM: c.abscisaM, fase });
-  }
-  return res;
-}
-
-/** `orden` = orden de marcha: ordena por abscisa (estable) y numera consecutivo (0, 1, 2…). */
-export function ordenesDeMarcha(abscisas: number[]): number[] {
-  const idx = abscisas.map((_, i) => i).sort((a, b) => abscisas[a]! - abscisas[b]! || a - b);
-  const res = new Array<number>(abscisas.length);
-  idx.forEach((i, k) => { res[i] = k; });
-  return res;
 }
 
 export type RolPc = 'terminal' | 'retorno' | 'espera';

@@ -87,12 +87,14 @@
  *     Honduras  rol `retorno` (obligatorio=true) — marca el medio de la vuelta
  *     Molinos   rol `espera`, esperaMin 30 (obligatorio=false) — sobre el TRAMO de la variante
  *   (los 3 `orden` son de marcha, ver abajo; ya no 0/1/2)
- *   PC INTERMEDIOS (decisión del CTO 2026-10-14): además de los 3, uno cada ~2 km a lo largo de TODO el circuito base,
- *   `obligatorio=false`, sin `rol` ni `esperaMin`, radio 150 m. Se generan de forma determinista desde la geometría base
- *   (`planificarIntermedios`, `puntosCadaN`): abscisas 2000, 4000… m interpoladas SOBRE la polilínea. Se descartan los
- *   candidatos a < 500 m (recta) de SR/Honduras/Molinos (solo de los activos en la fase del candidato: SR y Honduras en ambas,
- *   Molinos solo en regreso; el fin del circuito es SR); y los que quedan a < 300 m de otro intermedio
- *   ya elegido **de la MISMA fase**.
+ *   **PLAN DE PC FIJADO A PROD (2026-10-21):** los PC YA NO se generan desde la geometría. Se leen de
+ *   `scripts/data/linea-16/puntos-control.json` (17 PC: SR, 7 de ida, Honduras, 6 de regreso, Molinos y 1 de regreso tras Molinos),
+ *   copia exacta de los PC activos de prod; para cambiarlos, editar ese JSON (orden consecutivo desde 0, `rol`, `esperaMin`,
+ *   `obligatorio`; radio siempre `RADIO_TOLERANCIA_M`; tipo, fase y abscisa se derivan). Motivo: tras retrazar SR (PR #233) el
+ *   generador daba 16 PC y prod tiene 17 (creados con la geometría anterior); prod manda. Los intermedios (decisión del CTO
+ *   2026-10-14, uno cada ~2 km) son `obligatorio=false`, sin `rol` ni `esperaMin`. Se siguen validando: cada PC a <= 100 m de
+ *   la base/tramo, cada rol exactamente una vez, SR en el orden 0, Molinos sobre el tramo de la variante y que el `orden`
+ *   crezca con la abscisa sobre el circuito.
  *   **Fase (decisión del CTO 2026-10-15):** cada intermedio es `ida` (abscisa < la de Honduras: SR → Honduras) o `regreso`
  *   (abscisa >= la de Honduras: Honduras → SR). La app del conductor es consciente de la fase: durante la ida solo detecta/muestra
  *   los PC de ida y durante el regreso solo los de regreso; la fase se deriva del orden de marcha (orden < Honduras.orden ⇒ ida;
@@ -108,7 +110,7 @@
  *   `orden`, vía PATCH; ids/coords/rol/esperaMin/obligatorio/radio se conservan): SR 0; Honduras en su posición (su proyección sobre la base, ~km 15); Molinos (en la variante) justo después de la bifurcación v43 del REGRESO. Ya no valen los viejos 1 (Molinos) y 2
  *   (Honduras). Sincronización: los PC con `rol` se emparejan POR ROL, los intermedios por `orden`; cualquier PC activo que no
  *   encaje aborta antes de escribir.
- *   `--solo-puntos` (offline, desde `trazado-calles.json`) imprime el plan completo y escribe `puntos-control-intermedios.geojson`.
+ *   `--solo-puntos` (offline, desde `trazado-calles.json` y `puntos-control.json`) imprime el plan completo y escribe `puntos-control-intermedios.geojson`.
  *   **Por qué solo Honduras es obligatorio:** la detección `pc_omitido`
  *   (`ingesta-worker/infracciones.logic.ts`) marca EN VIVO los PC obligatorios de `orden` menor
  *   que el cumplido que no se visitaron, y al `fin_recorrido` cualquier obligatorio sin visitar.
@@ -190,7 +192,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { abscisaEnPolilinea, emparejarPuntosControl, ordenesDeMarcha, planificarIntermedios, calcularRutaGoogle, detectarRulos, detectarVueltasU, empalmarZona, geometriaDeHueco, paresDeZona, podarEspolones, distanciaAPolilineaM, distanciaM, longitudM, trazarPorCalles, unirTrozos, ESPACIADO_MUESTRAS_M, MAX_INTERMEDIOS, type HuecoSinCalle, type VueltaU } from './lib/trazar-por-calles.js';
+import { abscisaEnPolilinea, emparejarPuntosControl, calcularRutaGoogle, detectarRulos, detectarVueltasU, empalmarZona, geometriaDeHueco, paresDeZona, podarEspolones, distanciaAPolilineaM, distanciaM, longitudM, trazarPorCalles, unirTrozos, ESPACIADO_MUESTRAS_M, MAX_INTERMEDIOS, type HuecoSinCalle, type VueltaU } from './lib/trazar-por-calles.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -317,10 +319,8 @@ const OMITIR_MUESTRAS: Partial<Record<NombreTramo, { coord: Coord; motivo: strin
   ],
 };
 const RATIO_LONGITUD_MAX = 1.25;
-/** PC intermedios (CTO 2026-10-14): separación a lo largo del circuito, descartes y numeración de `orden`. */
-const PASO_PC_INTERMEDIO_M = 2000;
-const DIST_MIN_PC_EXISTENTE_M = 500;
-const DIST_MIN_ENTRE_INTERMEDIOS_M = 300;
+/** Plan de PC fijado a los reales de prod (2026-10-21); para cambiarlo, editar este JSON. */
+const PUNTOS_CONTROL_JSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/puntos-control.json');
 const PUNTOS_INTERMEDIOS_GEOJSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/puntos-control-intermedios.geojson');
 const TRAZADO_JSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-calles.json');
 const VISTA_PREVIA_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-vista-previa.geojson');
@@ -487,7 +487,7 @@ Uso:
 Sin --apply: dry-run (login + lecturas GET; NO escribe). Con --apply: escribe vía la API.
 --solo-trazado: calcula/lee el trazado por calles, escribe trazado-calles.json y la vista previa
   (.geojson) y termina SIN tocar la API de Quivo.
---solo-puntos: OFFLINE (sin Google ni API de Quivo): arma el plan desde trazado-calles.json, imprime los PC intermedios y escribe
+--solo-puntos: OFFLINE (sin Google ni API de Quivo): arma el plan desde trazado-calles.json y puntos-control.json, imprime los PC intermedios y escribe
   puntos-control-intermedios.geojson.
 --recalcular-trazado[=a,b]: regenera el trazado con Google Routes API (requiere GOOGLE_ROUTES_API_KEY);
   con lista, solo esos tramos (el resto se conserva del json). Tramos: ida, regreso, conector, ramal, bajada, salomon.
@@ -673,6 +673,8 @@ function huellaComparada(actual: Coord[] | null | undefined, deseada: Coord[]): 
 // ============================================================================================
 
 interface PuntoPlan { nombre: string; orden: number; coord: Coord; obligatorio: boolean; rol: 'terminal' | 'retorno' | 'espera' | null; esperaMin: number | null; tipo: 'SR' | 'intermedio' | 'Honduras' | 'Molinos'; abscisaM: number; distRutaM: number; fase: 'ida' | 'regreso' | 'ambas' | 'retorno' | null }
+/** Fila de `puntos-control.json` (radio: siempre `RADIO_TOLERANCIA_M`; tipo/fase/abscisa se derivan). */
+interface PuntoFijado { orden: number; nombre: string; coord: Coord; rol: PuntoPlan['rol']; esperaMin: number | null; obligatorio: boolean }
 interface ParadaPlan { nombre: string; tipo: 'origen' | 'intermedia' | 'destino'; orden: number; coord: Coord }
 interface PlanDatos {
   geometria: Coord[];
@@ -1038,7 +1040,7 @@ export function armarKmlTrazado(boceto: Boceto, trazado: TramosCoord): string {
   ].join('\n');
 }
 
-/** Construye y valida todo lo que se va a cargar. Pura: no toca la red. */
+/** Construye y valida todo lo que se va a cargar. No toca la red; sí lee `puntos-control.json` del disco. */
 export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
   const { salomon, honduras, molinos } = boceto;
   for (const t of TRAMOS) {
@@ -1078,29 +1080,48 @@ export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
   // `orden` = orden de MARCHA a lo largo del circuito base (pc_omitido compara `orden`; ver cabecera). Posiciones:
   //  · Honduras: proyección de su coord sobre la base (la `ida` sigue ~3,6 km más por el lazo de retorno, v123..150; Honduras queda ANTES).
   //  · Molinos (sobre la variante): justo después de la bifurcación (v43, fin de `regreso`) en la pasada del REGRESO.
+  // PC FIJADOS a los reales de prod (2026-10-21): se leen de puntos-control.json, ya no se generan desde la geometría.
+  const fijados = JSON.parse(fs.readFileSync(PUNTOS_CONTROL_JSON_PATH, 'utf8')) as PuntoFijado[];
+  if (!Array.isArray(fijados) || fijados.length === 0) throw new Error(`${path.relative(REPO_ROOT, PUNTOS_CONTROL_JSON_PATH)} debe ser un array no vacío.`);
+  fijados.forEach((f, i) => {
+    if (f.orden !== i) throw new Error(`puntos-control.json: el PC en la posición ${i} tiene orden ${f.orden} (deben ser consecutivos desde 0).`);
+    if (!Array.isArray(f.coord) || f.coord.length !== 2 || !f.coord.every(Number.isFinite)) throw new Error(`puntos-control.json: el PC orden ${i} debe tener coord = [lon, lat] con 2 números finitos.`);
+    if (typeof f.nombre !== 'string' || f.nombre === '') throw new Error(`puntos-control.json: el PC orden ${i} debe tener un nombre no vacío.`);
+    if (typeof f.obligatorio !== 'boolean') throw new Error(`puntos-control.json: el PC orden ${i} ("${f.nombre}") debe tener obligatorio booleano.`);
+    if (f.obligatorio !== (f.rol === 'retorno')) throw new Error(`puntos-control.json: el PC orden ${i} ("${f.nombre}"): obligatorio debe ser true solo en el rol "retorno".`);
+    if (f.rol !== 'espera' && f.esperaMin !== null) throw new Error(`puntos-control.json: el PC orden ${i} ("${f.nombre}"): esperaMin debe ser null salvo en el rol "espera".`);
+  });
+  const TIPO_POR_ROL = { terminal: 'SR', retorno: 'Honduras', espera: 'Molinos' } as const;
+  for (const rol of Object.keys(TIPO_POR_ROL) as (keyof typeof TIPO_POR_ROL)[]) {
+    const n = fijados.filter((f) => f.rol === rol).length;
+    if (n !== 1) throw new Error(`puntos-control.json: el rol "${rol}" debe aparecer exactamente una vez (aparece ${n}).`);
+  }
+  if (fijados.some((f) => f.rol !== null && !Object.hasOwn(TIPO_POR_ROL, f.rol))) throw new Error('puntos-control.json: rol inválido (solo terminal, retorno, espera o null).');
   const largoIda = longitudM(trazado.ida);
-  const hond = abscisaEnPolilinea(geometria, honduras, 0, largoIda);
+  const hond = abscisaEnPolilinea(geometria, fijados.find((f) => f.rol === 'retorno')!.coord, 0, largoIda);
   if (hond.distM > PROXIMIDAD_API_M) throw new Error(`Honduras a ${hond.distM.toFixed(1)} m de la base (> ${PROXIMIDAD_API_M} m): no se puede ubicar su orden de marcha.`);
   const sHonduras = hond.abscisaM;
   const bifur = abscisaEnPolilinea(geometria, trazado.regreso[trazado.regreso.length - 1]!, largoIda);
   const sMolinos = bifur.abscisaM + 1e-6;
   console.log(`  Honduras en el km ${(sHonduras / 1000).toFixed(2)} del circuito (a ${hond.distM.toFixed(1)} m de la base; fin de la ida en el km ${(largoIda / 1000).toFixed(2)}); bifurcación Molinos (v43, regreso) en el km ${(bifur.abscisaM / 1000).toFixed(2)}.`);
-  const inter = planificarIntermedios(geometria, {
-    pasoM: PASO_PC_INTERMEDIO_M, minPcM: DIST_MIN_PC_EXISTENTE_M,
-    // SR y Honduras (frontera de fases) valen en ambas fases; Molinos solo en regreso.
-    existentes: [{ coord: salomon, fase: 'ambas' }, { coord: honduras, fase: 'ambas' }, { coord: molinos, fase: 'regreso' }],
-    minEntreM: DIST_MIN_ENTRE_INTERMEDIOS_M, sHonduras,
+  if (fijados[0]!.rol !== 'terminal') throw new Error('El PC Salomón Romero debe ser el orden 0 (inicio del circuito).');
+  const ordenHonduras = fijados.find((f) => f.rol === 'retorno')!.orden;
+  const puntosControl: PuntoPlan[] = fijados.map((f) => {
+    const fase: PuntoPlan['fase'] = f.orden === 0 ? 'ambas' : f.orden < ordenHonduras ? 'ida' : f.orden === ordenHonduras ? 'retorno' : 'regreso';
+    // Misma ventana de búsqueda que antes: la ida se acota a Honduras, el regreso arranca ahí; Molinos cuelga de la bifurcación (v43).
+    const abscisaM = f.rol === 'terminal' ? 0
+      : f.rol === 'retorno' ? sHonduras
+      : f.rol === 'espera' ? sMolinos
+      : fase === 'ida' ? abscisaEnPolilinea(geometria, f.coord, 0, sHonduras).abscisaM
+      : abscisaEnPolilinea(geometria, f.coord, sHonduras).abscisaM;
+    if (f.rol === 'espera' && f.esperaMin !== ESPERA_MOLINOS_MIN) throw new Error(`Molinos: esperaMin ${f.esperaMin} ≠ ${ESPERA_MOLINOS_MIN}.`);
+    if (f.rol === 'espera' && distanciaAGeometriaM(tramo, f.coord) > PROXIMIDAD_API_M) throw new Error(`Molinos a > ${PROXIMIDAD_API_M} m del tramo de la variante: el PC de espera debe estar sobre la variante.`);
+    return { nombre: f.nombre, orden: f.orden, coord: f.coord, obligatorio: f.obligatorio, rol: f.rol, esperaMin: f.esperaMin, tipo: f.rol ? TIPO_POR_ROL[f.rol] : 'intermedio', abscisaM, distRutaM: f.rol === null ? distanciaAGeometriaM(geometria, f.coord) : distanciaARutaM(geometria, tramo, f.coord), fase };
   });
-  const sinOrden: Omit<PuntoPlan, 'orden'>[] = [
-    { nombre: 'Salomón Romero', coord: salomon, obligatorio: false, rol: 'terminal', esperaMin: null, tipo: 'SR', abscisaM: 0, distRutaM: distanciaARutaM(geometria, tramo, salomon), fase: 'ambas' },
-    { nombre: 'Molinos (Parada Putucu)', coord: molinos, obligatorio: false, rol: 'espera', esperaMin: ESPERA_MOLINOS_MIN, tipo: 'Molinos', abscisaM: sMolinos, distRutaM: distanciaARutaM(geometria, tramo, molinos), fase: 'regreso' },
-    { nombre: 'Honduras (RETORNO)', coord: honduras, obligatorio: true, rol: 'retorno', esperaMin: null, tipo: 'Honduras', abscisaM: sHonduras, distRutaM: distanciaARutaM(geometria, tramo, honduras), fase: 'retorno' },
-    ...inter.puntos.map((q): Omit<PuntoPlan, 'orden'> => ({ nombre: `Control km ${(q.abscisaM / 1000).toFixed(0)}`, coord: [redondear(q.coord[0]), redondear(q.coord[1])], obligatorio: false, rol: null, esperaMin: null, tipo: 'intermedio', abscisaM: q.abscisaM, distRutaM: distanciaARutaM(geometria, tramo, q.coord), fase: q.fase })),
-  ];
-  const ordenes = ordenesDeMarcha(sinOrden.map((p) => p.abscisaM));
-  const puntosControl: PuntoPlan[] = sinOrden.map((p, i) => ({ ...p, orden: ordenes[i]! })).sort((a, b) => a.orden - b.orden);
-  if (puntosControl[0]!.tipo !== 'SR' || puntosControl[0]!.orden !== 0) throw new Error('El PC Salomón Romero debe ser el orden 0 (inicio del circuito).');
-  console.log(`  PC intermedios cada ${PASO_PC_INTERMEDIO_M} m: ${inter.puntos.length} planeados; omitidos: ${inter.omitidosCercaPc} a < ${DIST_MIN_PC_EXISTENTE_M} m de SR/Honduras/Molinos (según la fase), ${inter.omitidosCercaIntermedio} a < ${DIST_MIN_ENTRE_INTERMEDIOS_M} m de otro intermedio de la MISMA fase (ida/regreso).`);
+  puntosControl.forEach((p, i) => {
+    if (i > 0 && p.abscisaM <= puntosControl[i - 1]!.abscisaM) throw new Error(`PC orden ${p.orden} ("${p.nombre}", km ${(p.abscisaM / 1000).toFixed(2)}) no queda después del orden ${i - 1} sobre el circuito: el orden de marcha no coincide con la geometría.`);
+  });
+  console.log(`  PC fijados a prod (puntos-control.json): ${puntosControl.length} (${puntosControl.filter((p) => p.tipo === 'intermedio').length} intermedios).`);
   const paradas: ParadaPlan[] = [
     { nombre: 'Salomón Romero', tipo: 'origen', orden: 0, coord: salomon },
     { nombre: 'Molinos', tipo: 'intermedia', orden: 1, coord: molinos },
