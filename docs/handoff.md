@@ -6,6 +6,46 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-22, 08:30 (BO): r27 + OTA de Molinos en prod; falta SOLO el dato de Molinos
+
+**Desplegado por el CTO** (10:04Z), imagen `r27-20261022`:
+- API `quivo-api-00036-x5l`, health `ok/db up/redis up`.
+- Web `quivo-web-00016-9gz`.
+- Worker `quivo-worker-00017-8kj`, log "listo".
+- 0 logs ERROR en los 15 min siguientes.
+
+**OTA** "Molinos: salida libre y posición en la cola (r27)":
+- Grupo `9047feb2-c467-44a6-aa08-5f186e826ef1`, update android `01a16372-a046-7a4a-9d33-fb3e7f2ae938`, runtime `547d52e7`, commit `53505bc`.
+- Bundle verificado:
+  - `pastillaEspera` y `MAX_EDAD_POSICION_COLA_MS`;
+  - los textos nuevos, guardados en UTF-16 dentro del `.hbc` (`grep -a` no los encuentra: buscar con `python` y `utf-16-le`);
+  - la URL de la API y el DSN de Sentry.
+
+**#245, mergeado (`2ee5979`):** `puntos-control.json` deja Molinos en `esperaMin: null` y el script lo exige.
+- Dry-run contra prod: **1 escritura**, `PATCH /puntos-control/a660b799-0400-48f9-9043-081d31e16e83` con `"esperaMin":null`.
+- **NO aplicado todavía.** En prod Molinos sigue en `esperaMin: 30`, así que la app y el worker se comportan como antes: espera de 30 min y `espera_corta`.
+
+**Para retomar, en este orden:**
+1. El CTO confirma que los choferes reabrieron la app (OTA `9047feb2`) y que no hay sesiones activas en L16.
+2. Chequear 0 sesiones activas en L16 (SQL de solo lectura).
+3. Aplicar desde `main` actualizado, con las credenciales en `~/.quivo-admin-env` (no imprimirlas):
+   `set -a; . ~/.quivo-admin-env; set +a; packages/db/node_modules/.bin/tsx scripts/cargar-linea-16.ts --apply`.
+   - Antes, un dry-run sin `--apply` debe dar exactamente 1 escritura.
+4. Verificar con `GET /v1/rutas/460c9015-7045-48f2-8627-01c0c60d5b56/puntos-control`: el orden 15 debe tener `esperaMin: null`. Después, un dry-run debe dar 0 escrituras.
+5. En el piloto, mirar:
+   - la tarjeta de designación sin "esperá 30";
+   - la pastilla de la cola en Molinos, que en pantalla no se probó (el texto largo puede cortarse);
+   - que el worker cierre la espera (`esperaSalidaTs`) sin `espera_corta`.
+- **Riesgo:** una app sin la OTA no parsea `esperaMin: null` y deja de ver la designación.
+- **Rollback del dato:** Molinos a `esperaMin: 30`, con PATCH, o con `30` en el JSON más `--apply`.
+- **Rollback del código:**
+  - API `quivo-api-00034-j88` / worker `api:r26-20261022`;
+  - OTA: republicar el grupo `0df12fb9-6f49-413c-ac35-4ad819d21cec`.
+
+**Abierto, sigue igual:**
+- Codex no verificado de #230 a #245 (sin cuota hasta el 16/11; revisar la suscripción).
+- Ítem 9 (terminal tras reabrir en SR) sin verificar en un dispositivo.
+
 ## Punto de retome — 2026-10-22, 00:40 (BO): script L16 realineado (#242) y Molinos salida libre (#243), SIN desplegar
 
 **#242, `cargar-linea-16.ts` realineado con prod:**
@@ -21,7 +61,7 @@
 - La frecuencia base sigue rigiendo solo en SR; no cambió.
 - Codex: no verificado (sin cuota). La pastilla no se vio en pantalla.
 
-**Pendiente, en este orden:**
+**Pendiente, en este orden** (pasos 1-2 hechos; ver el punto de retome de 08:30):
 1. **Deploy de API, web y worker (r27)**, lo corre el CTO: `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh r27-20261022`.
 2. **OTA** con `publicar-ota.sh`, verificando el bundle (que tenga `pastillaEspera` y `MAX_EDAD_POSICION_COLA_MS`).
 3. Los choferes reabren la app.
