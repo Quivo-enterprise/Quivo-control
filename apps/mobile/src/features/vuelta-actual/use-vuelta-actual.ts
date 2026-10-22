@@ -7,7 +7,7 @@ import {
   designacionPendienteDeAviso,
   designacionVigente,
   esCacheDesactualizado,
-  restanteEsperaMin,
+  pastillaEspera,
   type Designacion,
   type EstadoLocalVuelta,
 } from './vuelta-actual-core';
@@ -44,7 +44,7 @@ export interface EstadoVueltaActualUi {
   /** La última consulta buena es vieja (> 15 min): la tarjeta lo marca "sin actualizar". */
   sinActualizar: boolean;
   /** Minutos que faltan para salir de Molinos; `null` = no está en espera (o cache viejo). */
-  restanteEspera: number | null;
+  pastillaEspera: { texto: string; listo: boolean } | null;
   /** Fila de salida de la terminal (del mismo cache); `null` = no está en la fila. Con recorrido
    * activo se sigue mostrando aunque el cache sea viejo (ver `filaSinActualizar`). */
   fila: EstadoFilaSalida | null;
@@ -141,10 +141,10 @@ export function useVueltaActual({ sesionId, tracking, obtenerAccessToken }: Para
   // espera se calculan sin red y se marca "sin actualizar". La cuenta regresiva SÍ se corta con
   // cache viejo: depende de `enEspera`, que solo el servidor confirma (offline quedaría congelada).
   const designacionActiva = designacionCache;
-  const restanteEspera = useMemo(
+  const pastilla = useMemo(
     () =>
       tracking && !cacheViejo && enEspera && designacionActiva
-        ? restanteEsperaMin(designacionActiva.puntoEspera.esperaMin, enEspera.desdeTs, ahora)
+        ? pastillaEspera(designacionActiva.puntoEspera.esperaMin, enEspera.desdeTs, ahora, enEspera.posicion)
         : null,
     [tracking, cacheViejo, enEspera, designacionActiva, ahora],
   );
@@ -156,7 +156,7 @@ export function useVueltaActual({ sesionId, tracking, obtenerAccessToken }: Para
     cancelacionPendiente: tracking && estado.cancelacionPendiente !== null,
     designacionActiva,
     sinActualizar: cacheViejo && designacionCache !== null,
-    restanteEspera,
+    pastillaEspera: pastilla,
     fila,
     filaSinActualizar: cacheViejo && fila !== null,
     desfaseFilaMs: estado.desfaseFilaMs ?? null,

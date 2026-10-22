@@ -29,7 +29,7 @@ interface PuntoControlRow {
  * `rol`/`esperaMin` (docs/plan-molinos-designacion.md) definen cómo cuenta las vueltas el
  * worker y qué espera Molinos: solo los admins los editan (`operador` puede crear/editar el
  * resto del punto, que es CRUD_NUCLEO). Coherencia (espeja los CHECK de la tabla, para dar un
- * 400 en español y no un 500): `esperaMin` solo con `rol = 'espera'`, y un `espera` lo exige.
+ * 400 en español y no un 500): `esperaMin` solo con `rol = 'espera'`; en un `espera`, `null` = salida libre (sin espera mínima).
  */
 function validarRolEspera(
   actor: AuthenticatedUser,
@@ -44,9 +44,6 @@ function validarRolEspera(
   // Al sacar el rol `espera`, la espera se limpia sola (el CHECK la prohíbe sin rol espera).
   const esperaMin =
     data.esperaMin !== undefined ? data.esperaMin : rol === 'espera' ? actual.esperaMin : null;
-  if (tocaRol && rol === 'espera' && !esperaMin) {
-    throw new BadRequestException('Un punto de control con rol "espera" necesita esperaMin (minutos, mayor a 0)');
-  }
   if (tocaRol && rol !== 'espera' && esperaMin) {
     throw new BadRequestException('esperaMin solo aplica a un punto de control con rol "espera"');
   }

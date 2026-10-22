@@ -100,8 +100,8 @@ async function validarPuntoEspera(
   if (!pc || pc.rutaId !== rutaId) {
     throw new BadRequestException('El punto de espera debe ser un punto de control de la misma ruta');
   }
-  if (pc.rol !== 'espera' || !pc.esperaMin) {
-    throw new BadRequestException('El punto de espera debe tener rol "espera" y minutos de espera');
+  if (pc.rol !== 'espera') {
+    throw new BadRequestException('El punto de espera debe tener rol "espera"');
   }
   if (pc.estado !== 'activo') {
     throw new BadRequestException('El punto de espera está inactivo');

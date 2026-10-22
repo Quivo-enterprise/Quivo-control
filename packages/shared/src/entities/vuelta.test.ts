@@ -42,6 +42,23 @@ describe('vuelta (contratos)', () => {
     expect(completa.success).toBe(true);
   });
 
+  it('VueltaActualMovil acepta esperaMin null (salida libre)', () => {
+    const r = VueltaActualMovilSchema.safeParse({
+      vueltaId: UUID,
+      numero: 2,
+      designacion: {
+        varianteId: UUID,
+        nombre: 'Vía Molinos',
+        designadaEn: '2026-10-13T15:00:00.000Z',
+        acuseEn: null,
+        tramo: null,
+        puntoEspera: { id: UUID, coord: { type: 'Point', coordinates: [-65.91, -17.31] }, esperaMin: null },
+      },
+      enEspera: null,
+    });
+    expect(r.success).toBe(true);
+  });
+
   it('VueltaPosicion no admite número de vuelta 0', () => {
     const base = { varianteId: null, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null, molinosProxima: false };
     expect(VueltaPosicionSchema.safeParse({ numero: 1, ...base }).success).toBe(true);

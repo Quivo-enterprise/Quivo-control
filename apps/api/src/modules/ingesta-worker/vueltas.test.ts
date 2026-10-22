@@ -668,6 +668,13 @@ describe('salida de la espera (camino de producción: avanzarSalidaEspera / cerr
     });
   });
 
+  it('salida libre (esperaMin null): cierra la espera y no hay alerta aunque salga al instante', () => {
+    const salida = salidaDe([fix(60, 20), fix(120, 300), fix(140, 400)]);
+    const r = cerrarEspera(vuelta, salida!, null);
+    expect(r.esperaSalidaTs).toEqual(new Date(LLEGADA.getTime() + 120_000));
+    expect(r.infraccion).toBeNull();
+  });
+
   it('29 min 40 s cuenta como 29 (hacia abajo) y sigue siendo alerta', () => {
     const r = resolver([fix(29 * 60 + 40, 300), fix(29 * 60 + 60, 400)], 30);
     expect(r?.infraccion?.detalle).toMatchObject({ esperaMin: 29, requeridoMin: 30 });

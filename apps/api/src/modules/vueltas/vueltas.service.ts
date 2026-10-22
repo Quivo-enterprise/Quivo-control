@@ -125,9 +125,9 @@ export class VueltasService {
         >`
           SELECT rol, "esperaMin", estado FROM puntos_control WHERE id = ${variante.puntoEsperaId}
         `;
-        if (!pc || pc.rol !== 'espera' || !pc.esperaMin) {
+        if (!pc || pc.rol !== 'espera') {
           throw new UnprocessableEntityException(
-            'El punto de espera de la variante no está configurado (rol "espera" y minutos de espera)',
+            'El punto de espera de la variante no está configurado (rol "espera")',
           );
         }
         if (pc.estado !== 'activo') {
@@ -333,7 +333,7 @@ export class VueltasService {
         JOIN puntos_control pc ON pc.id = va."puntoEsperaId"
         WHERE va.id = ${vuelta.varianteId}
       `;
-      if (d?.esperaMin) {
+      if (d) {
         designacion = {
           varianteId: vuelta.varianteId,
           nombre: d.nombre,
@@ -344,14 +344,30 @@ export class VueltasService {
         };
       }
     }
+    let enEspera: { desdeTs: string; posicion?: number } | null = null;
+    if (vuelta.esperaLlegadaTs && !vuelta.esperaSalidaTs && vuelta.varianteId) {
+      // Cola de Molinos = orden de llegada: 1 + las vueltas en curso del mismo punto de espera que
+      // llegaron antes y todavía no salieron (empate: por id). Informativo, no bloquea nada.
+      const [cola] = await tx.$queryRaw<{ n: number }[]>`
+        SELECT count(*)::int AS n
+        FROM vueltas o
+        JOIN variantes ov ON ov.id = o."varianteId"
+        WHERE ov."puntoEsperaId" = (SELECT "puntoEsperaId" FROM variantes WHERE id = ${vuelta.varianteId})
+          AND o."sindicatoId" = ${sesion.sindicatoId}
+          AND o.estado = 'en_curso'
+          AND o."esperaSalidaTs" IS NULL
+          AND (o."esperaLlegadaTs" < ${vuelta.esperaLlegadaTs}
+               OR (o."esperaLlegadaTs" = ${vuelta.esperaLlegadaTs} AND o.id < ${vuelta.id}))
+      `;
+      enEspera = { desdeTs: vuelta.esperaLlegadaTs.toISOString(), posicion: (cola?.n ?? 0) + 1 };
+    } else if (vuelta.esperaLlegadaTs && !vuelta.esperaSalidaTs) {
+      enEspera = { desdeTs: vuelta.esperaLlegadaTs.toISOString() };
+    }
     return VueltaActualMovilSchema.parse({
       vueltaId: vuelta.id,
       numero: vuelta.numero,
       designacion,
-      enEspera:
-        vuelta.esperaLlegadaTs && !vuelta.esperaSalidaTs
-          ? { desdeTs: vuelta.esperaLlegadaTs.toISOString() }
-          : null,
+      enEspera,
     });
   }
 

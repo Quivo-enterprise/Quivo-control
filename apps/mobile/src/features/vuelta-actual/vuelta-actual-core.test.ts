@@ -22,6 +22,7 @@ import {
   respuestaConFila,
   respuestasIguales,
   MARGEN_ESPERA_MIN,
+  pastillaEspera,
   restanteEsperaMin,
   textoAvisoDesignada,
   textoContadorEspera,
@@ -353,6 +354,32 @@ describe('tarjeta pendiente y acuse', () => {
 
   it('sin designación no hay nada que cerrar', () => {
     expect(cerrarDesignacion(ESTADO_LOCAL_INICIAL)).toBe(ESTADO_LOCAL_INICIAL);
+  });
+});
+
+describe('salida libre (esperaMin null)', () => {
+  it('el texto no menciona espera', () => {
+    expect(textoAvisoDesignada(null)).toBe('Esta vuelta: vía Molinos. Después de Honduras subí por Putucu.');
+    expect(textoAvisoDesignada(30)).toContain('esperá 30 minutos');
+  });
+});
+
+describe('pastillaEspera', () => {
+  const desde = '2026-10-14T13:00:00.000Z';
+  const t = Date.parse(desde);
+  it('con minutos de espera: cuenta regresiva (la posición no cambia nada)', () => {
+    expect(pastillaEspera(30, desde, t, 3)).toEqual({ texto: 'Podés salir en 31 min', listo: false });
+    expect(pastillaEspera(30, desde, t + 40 * 60_000, undefined)).toEqual({ texto: 'Ya podés salir', listo: true });
+  });
+  it('salida libre: lugar en la cola', () => {
+    expect(pastillaEspera(null, desde, t, 1)).toEqual({ texto: 'Es tu turno. Podés salir', listo: true });
+    expect(pastillaEspera(null, desde, t, 3)).toEqual({
+      texto: 'Sos el 3.º en Molinos. Salís después del que está adelante.',
+      listo: false,
+    });
+  });
+  it('salida libre sin posición (servidor viejo): sin pastilla', () => {
+    expect(pastillaEspera(null, desde, t, undefined)).toBeNull();
   });
 });
 

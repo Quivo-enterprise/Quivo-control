@@ -7,7 +7,7 @@ import { FRECUENCIA_MAX_MINUTOS, FRECUENCIA_MIN_MINUTOS } from './fila-salida.js
 /**
  * Rol del PC en el ciclo de vueltas (docs/plan-molinos-designacion.md): `terminal` abre/cierra
  * la vuelta (Salomón Romero), `retorno` es el punto del medio (Honduras), `espera` es donde la
- * unidad designada espera `esperaMin` minutos (Molinos).
+ * unidad designada espera `esperaMin` minutos (Molinos); `esperaMin` null = salida libre.
  */
 export const RolPuntoControlSchema = z.enum(['terminal', 'retorno', 'espera']);
 export type RolPuntoControl = z.infer<typeof RolPuntoControlSchema>;
@@ -26,7 +26,7 @@ export const PuntoControlSchema = z.object({
   estado: EstadoPuntoControlSchema,
   /** `null`/ausente = punto común. Solo un admin lo edita. */
   rol: RolPuntoControlSchema.nullable().optional(),
-  /** Minutos de espera obligatoria; solo con `rol = 'espera'` (el servicio lo valida). */
+  /** Minutos de espera mínima; null = salida libre. Solo con `rol = 'espera'` (el servicio lo valida). */
   esperaMin: z.number().int().positive().nullable().optional(),
   /**
    * Frecuencia base de la fila de salida (min); solo con `rol = 'terminal'`. Solo lectura: se

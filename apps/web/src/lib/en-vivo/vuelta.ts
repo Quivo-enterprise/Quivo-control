@@ -8,9 +8,6 @@ import { offsetRelojServidorMs } from './traza';
  * la espera y el bloqueo con motivo. Sin React: se testea en `node`.
  */
 
-/** Minutos de espera si la API no trae el `esperaMin` del punto de espera (plan: 30 min). */
-export const ESPERA_MIN_DEFAULT = 30;
-
 export type PosicionConVuelta = Pick<PosicionEnVivo, 'vuelta' | 'molinosHoy'>;
 
 /** Variantes que se pueden designar: activas y con punto de espera (la de "Vía Molinos"). */
@@ -18,15 +15,15 @@ export function variantesDeEspera(variantes: readonly Variante[] | undefined): V
   return (variantes ?? []).filter((v) => v.estado === 'activo' && Boolean(v.puntoEsperaId));
 }
 
-/** Minutos de espera de una variante: el `esperaMin` de su punto de espera, o el default. */
+/** Minutos de espera de una variante: el `esperaMin` de su punto de espera, o `null` = salida libre. */
 export function esperaMinDeVariante(
   varianteId: string | null | undefined,
   variantes: readonly Variante[] | undefined,
   puntos: readonly Pick<PuntoControl, 'id' | 'esperaMin'>[] | undefined,
-): number {
+): number | null {
   const variante = variantes?.find((v) => v.id === varianteId);
   const punto = puntos?.find((p) => p.id === variante?.puntoEsperaId);
-  return punto?.esperaMin && punto.esperaMin > 0 ? punto.esperaMin : ESPERA_MIN_DEFAULT;
+  return punto?.esperaMin && punto.esperaMin > 0 ? punto.esperaMin : null;
 }
 
 /** Minutos enteros (hacia abajo, mínimo 0) entre dos instantes en ms. */
@@ -83,16 +80,19 @@ export interface EsperaMolinos {
   texto: string;
 }
 
-/** "en Molinos hace 12 min (faltan 18)"; cumplida: "en Molinos hace 35 min (espera cumplida)". */
+/** "en Molinos hace 12 min (faltan 18)"; salida libre (`null`): "en Molinos hace 12 min"; cumplida: "en Molinos hace 35 min (espera cumplida)". */
 export function esperaMolinos(
   esperaDesdeTs: string | null,
-  esperaMin: number,
+  esperaMin: number | null,
   ahoraServidorMs: number,
 ): EsperaMolinos | null {
   if (!esperaDesdeTs) return null;
   const desde = Date.parse(esperaDesdeTs);
   if (!Number.isFinite(desde)) return null;
   const transcurridoMin = minutosEntre(desde, ahoraServidorMs);
+  if (esperaMin === null) {
+    return { transcurridoMin, faltanMin: 0, cumplida: false, texto: `en Molinos hace ${transcurridoMin} min` };
+  }
   const faltanMin = Math.max(0, esperaMin - transcurridoMin);
   const cumplida = faltanMin === 0;
   return {
