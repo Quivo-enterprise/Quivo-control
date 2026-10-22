@@ -179,6 +179,22 @@ export function lineaTiempo(
 }
 
 /**
+ * "Debía salir 06:42 · hace 18 min" para un `sin_iniciar` cuya `horaSalida` ya pasó (el delegado
+ * debe llamarlo); `null` si todavía no le toca o no hay hora. Menos de 1 min no cuenta como atraso.
+ */
+export function debiaSalir(v: Pick<JornadaVehiculo, 'estado' | 'horaSalida'>, ahoraMs: number): string | null {
+  if (v.estado !== 'sin_iniciar' || v.horaSalida === null) return null;
+  const ms = Date.parse(v.horaSalida);
+  if (Number.isNaN(ms) || ahoraMs - ms < 60_000) return null;
+  return `Debía salir ${formatearHoraBolivia(v.horaSalida)} · ${formatearHace(v.horaSalida, ahoraMs)}`;
+}
+
+/** Cuántos `sin_iniciar` ya pasaron su hora de salida (respeta el filtro de línea, `''` = todas). */
+export function contarAtrasados(vehiculos: readonly JornadaVehiculo[], lineaId: string, ahoraMs: number): number {
+  return vehiculos.filter((v) => (!lineaId || v.lineaId === lineaId) && debiaSalir(v, ahoraMs) !== null).length;
+}
+
+/**
  * La `fecha` (YYYY-MM-DD) de la respuesta solo merece mostrarse si NO es la jornada boliviana
  * de hoy — p. ej. pestaña abierta durante el cambio de día con datos del anterior. Devuelve
  * `null` cuando coincide (caso normal: no se muestra nada).

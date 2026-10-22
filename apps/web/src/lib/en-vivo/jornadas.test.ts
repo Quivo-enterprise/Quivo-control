@@ -5,6 +5,8 @@ import {
   formatearHace,
   fechaSiDifiereDeHoy,
   formatearHoraBolivia,
+  contarAtrasados,
+  debiaSalir,
   lineaTiempo,
   textoResumen,
 } from './jornadas';
@@ -208,5 +210,29 @@ describe('fechaSiDifiereDeHoy', () => {
   });
   it('distinta: devuelve la fecha', () => {
     expect(fechaSiDifiereDeHoy('2026-10-10', Date.parse('2026-10-11T05:00:00.000Z'))).toBe('2026-10-10');
+  });
+});
+
+describe('debiaSalir / contarAtrasados', () => {
+  const ahora = Date.parse('2026-10-11T12:00:00.000Z');
+  it('sin_iniciar con la hora ya pasada: debía salir + hace X', () => {
+    expect(debiaSalir({ estado: 'sin_iniciar', horaSalida: '2026-10-11T10:42:00.000Z' }, ahora)).toBe(
+      'Debía salir 06:42 · hace 1 h 18 min',
+    );
+  });
+  it('todavía no le toca, menos de 1 min, sin hora o ya iniciado: null', () => {
+    expect(debiaSalir({ estado: 'sin_iniciar', horaSalida: '2026-10-11T12:30:00.000Z' }, ahora)).toBeNull();
+    expect(debiaSalir({ estado: 'sin_iniciar', horaSalida: '2026-10-11T11:59:30.000Z' }, ahora)).toBeNull();
+    expect(debiaSalir({ estado: 'sin_iniciar', horaSalida: null }, ahora)).toBeNull();
+    expect(debiaSalir({ estado: 'en_recorrido', horaSalida: '2026-10-11T10:00:00.000Z' }, ahora)).toBeNull();
+  });
+  it('cuenta atrasados respetando la línea', () => {
+    const vs = [
+      veh({ placa: '111A', horaSalida: '2026-10-11T10:00:00.000Z', lineaId: L1 }),
+      veh({ placa: '222B', horaSalida: '2026-10-11T10:00:00.000Z', lineaId: L2 }),
+      veh({ placa: '333C', horaSalida: '2026-10-11T13:00:00.000Z', lineaId: L1 }),
+    ];
+    expect(contarAtrasados(vs, '', ahora)).toBe(2);
+    expect(contarAtrasados(vs, L1, ahora)).toBe(1);
   });
 });

@@ -22,3 +22,4 @@ export * from './ui/dashboard.js';
 export * from './ui/charts.js';
 export * from './ui/RouteMap.js';
 export { colorTextoContraste } from './ui/route-map-shared.js';
+export { GLIFOS_ESTADO, type EstadoGlifo } from './ui/route-map-vehiculo.js';

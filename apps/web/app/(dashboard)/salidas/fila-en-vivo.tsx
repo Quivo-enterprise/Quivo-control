@@ -56,7 +56,7 @@ const DIALOGO: Record<TipoAccion, { titulo: string; confirmar: string; mensaje: 
 const hhmm = (ms: number) => formatearHoraBolivia(new Date(ms).toISOString());
 
 /**
- * Cuenta hasta la salida. El tick de 1 Hz vive en esta hoja (como `PanelFrescura`): repinta
+ * Cuenta hasta la salida. El tick de 1 Hz vive en esta hoja (como `SaludRefrescoVista`): repinta
  * solo el texto, no la tabla. La hora de referencia es la del servidor (`offsetMs`).
  */
 function CuentaFila({ etaTs, offsetMs }: { etaTs: string; offsetMs: number }) {

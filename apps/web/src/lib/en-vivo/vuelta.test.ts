@@ -204,11 +204,11 @@ describe('textoHudMolinos', () => {
     ...extra,
   });
   it('en espera, último envío y próximo sugerido', () => {
-    expect(textoHudMolinos(l(), AHORA)).toBe('Molinos: 2 en espera · último envío hace 4 min · próximo sugerido en 3 min');
+    expect(textoHudMolinos(l(), AHORA)).toBe('2 en espera · último envío hace 4 min · próximo sugerido en 3 min');
   });
   it('sin envíos hoy y ya toca', () => {
     expect(textoHudMolinos(l({ enEspera: 0, ultimoEnvioTs: null, proximoSugeridoEn: hace(1) }), AHORA)).toBe(
-      'Molinos: 0 en espera · sin envíos hoy · ya toca enviar',
+      '0 en espera · sin envíos hoy · ya toca enviar',
     );
   });
   it('faltan segundos: redondea hacia arriba, mínimo 1 min', () => {
@@ -217,7 +217,7 @@ describe('textoHudMolinos', () => {
   it('timestamps inválidos: el texto no contiene NaN', () => {
     const t = textoHudMolinos(l({ ultimoEnvioTs: 'basura', proximoSugeridoEn: 'basura' }), AHORA);
     expect(t).not.toContain('NaN');
-    expect(t).toBe('Molinos: 2 en espera · sin envíos hoy');
+    expect(t).toBe('2 en espera · sin envíos hoy');
   });
   it('envío de hace menos de 1 min', () => {
     expect(textoHudMolinos(l({ ultimoEnvioTs: hace(0) }), AHORA)).toContain('último envío hace instantes');
