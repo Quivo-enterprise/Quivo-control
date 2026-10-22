@@ -17,6 +17,7 @@ describe('colorTextoContraste', () => {
 describe('etiquetaFrescura', () => {
   it('mapea estados conocidos y devuelve vacío para el resto', () => {
     expect(etiquetaFrescura('perdido')).toBe('Sin señal');
+    expect(etiquetaFrescura('sin_datos')).toBe('Sin datos');
     expect(etiquetaFrescura('reportando')).toBe('Reportando');
     expect(etiquetaFrescura('inventado')).toBe('');
     expect(etiquetaFrescura(undefined)).toBe('');

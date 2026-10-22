@@ -204,17 +204,18 @@ export function buildVehiculoIconoSvg(spec: VehiculoIconoSpec): string {
  * `PRESENTACION_FRESCURA` (`apps/web/src/lib/en-vivo/traza.ts`), que este paquete no puede
  * importar. Se usa para el `aria-label` del marcador (el estado no puede depender solo de la
  * forma/color del badge). */
-export const ETIQUETA_FRESCURA: Record<EstadoIconoVehiculo, string> = {
+export const ETIQUETA_FRESCURA: Record<EstadoIconoVehiculo | 'sin_datos', string> = {
   reportando: 'Reportando',
   detenido: 'Detenido',
   perdido: 'Sin señal',
   finalizado: 'Recorrido finalizado',
   en_pausa: 'En pausa',
+  sin_datos: 'Sin datos',
 };
 
 /** Etiqueta de un `estadoFrescura` cualquiera; vacía si no se conoce (no se inventa un estado). */
 export function etiquetaFrescura(estado: string | undefined): string {
-  return estado && estado in ETIQUETA_FRESCURA ? ETIQUETA_FRESCURA[estado as EstadoIconoVehiculo] : '';
+  return estado && Object.hasOwn(ETIQUETA_FRESCURA, estado) ? ETIQUETA_FRESCURA[estado as keyof typeof ETIQUETA_FRESCURA] : '';
 }
 
 /** Color de texto legible (contraste WCAG) sobre un fondo dado: oscuro si el fondo es claro,

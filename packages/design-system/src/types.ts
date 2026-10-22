@@ -85,8 +85,9 @@ export interface MapPoint {
    * atendida" (pendiente E #1, docs/plan-molinos-designacion.md). */
   alerta?: { nivel: 'leve' | 'grave' | 'gravisima'; abiertas: number; parpadea: boolean; atendidas?: number };
   /** La vuelta en curso está designada a Molinos: pequeño badge "M" en el marcador (solo motor
-   * Google, `pinType: 'vehicle'`). */
-  molinos?: boolean;
+   * Google, `pinType: 'vehicle'`). Un número (>= 1) es además su lugar en la cola de Molinos
+   * ("M2"); `true` solo dice "M". */
+  molinos?: boolean | number;
   /** Vehículo con el panel de detalle abierto: se apila por encima de todos y se resalta. */
   seleccionado?: boolean;
 }

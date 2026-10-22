@@ -120,6 +120,8 @@ export interface OpcionesMarcadoresVehiculos {
   seleccionadoId?: string | null;
   /** Color de la línea por `lineaId` (el poll de posiciones no lo trae): anillo del marcador. */
   colorLineaPorId?: Readonly<Record<string, string | null | undefined>>;
+  /** Lugar en la cola de Molinos por `sesionId`, del servidor (`ordenColaMolinos`). */
+  ordenMolinos?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -127,9 +129,13 @@ export interface OpcionesMarcadoresVehiculos {
  * abiertas (`alertaMarcador`): al "Atender", la infracción pasa de abierta a atendida y el marcador
  * deja de parpadear pero conserva el ícono fijo de severidad (pendiente E #1); al descartarla sale
  * de la cuenta y el ícono desaparece. "M" = la vuelta en curso está designada a una variante con
- * punto de espera. `fotoUrl` viene en `PosicionEnVivo` (vacía/`null` si la unidad no tiene foto).
+ * punto de espera; con número cuando ya espera en la cola (`ordenMolinos`). `fotoUrl` viene en `PosicionEnVivo` (vacía/`null` si la unidad no tiene foto).
  */
-function camposAlertaYFoto(p: PosicionEnVivo, opciones: OpcionesMarcadoresVehiculos): Partial<MapPoint> {
+function camposAlertaYFoto(
+  p: PosicionEnVivo,
+  opciones: OpcionesMarcadoresVehiculos,
+  ordenMolinos?: number,
+): Partial<MapPoint> {
   const alerta = alertaMarcador(p);
   const foto = p.fotoUrl?.trim();
   const colorLinea = opciones.colorLineaPorId?.[p.lineaId];
@@ -137,7 +143,9 @@ function camposAlertaYFoto(p: PosicionEnVivo, opciones: OpcionesMarcadoresVehicu
     ...(foto ? { fotoUrl: foto } : {}),
     ...(colorLinea ? { colorLinea } : {}),
     ...(alerta ? { alerta } : {}),
-    ...(p.vuelta?.varianteId ? { molinos: true } : {}),
+    // "M2" = 2.º en la cola de Molinos (espera real); "M" = vuelta designada, todavía sin llegar.
+    // El orden viene del resumen de 15 s: solo vale si la posición fresca (2 s) confirma que espera.
+    ...(ordenMolinos && p.vuelta?.enEspera ? { molinos: ordenMolinos } : p.vuelta?.varianteId ? { molinos: true } : {}),
     ...(opciones.seleccionadoId === p.id ? { seleccionado: true } : {}),
   };
 }
@@ -177,7 +185,7 @@ export function construirMarcadoresVehiculos(
         pinType: 'vehicle',
         estadoFrescura: p.estadoFrescura,
         placa: p.vehiculoPlaca,
-        ...camposAlertaYFoto(p, opciones),
+        ...camposAlertaYFoto(p, opciones, opciones.ordenMolinos?.get(p.id)),
         onClick: () => onSeleccionar(p.id),
       };
     });

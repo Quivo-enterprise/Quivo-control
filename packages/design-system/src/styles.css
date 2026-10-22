@@ -2571,7 +2571,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 .qv-gmap-veh.qv-gmap--clickable::after {
   content: '';
   position: absolute;
-  inset: -4px;
+  /* Más ancho a la derecha: la insignia de severidad sobresale ~9 px y un toque en ella debe abrir el vehículo. */
+  inset: -4px -10px -4px -8px;
   border-radius: 50%;
 }
 .qv-gmap-pt.qv-gmap--clickable:hover .qv-gmap-pt__dot {
@@ -2596,14 +2597,22 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   outline-offset: 2px;
   box-shadow: 0 1px 3px rgb(15 23 42 / 0.35);
 }
-.qv-gmap-veh.qv-gmap--clickable:hover .qv-gmap-veh__badge {
-  filter: drop-shadow(0 2px 5px rgb(15 23 42 / 0.6));
+.qv-gmap-veh.qv-gmap--clickable:hover .qv-gmap-veh__anillo {
+  box-shadow:
+    0 0 0 1px rgb(15 17 26 / 0.85),
+    inset 0 0 0 1px rgb(15 17 26 / 0.35),
+    0 0 0 4px color-mix(in srgb, var(--qv-gmap-veh-anillo) 40%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .qv-gmap-veh__anillo {
+    transition: box-shadow 120ms ease-out;
+  }
 }
 
 .qv-gmap-veh {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   transform: translateY(50%);
   cursor: pointer;
   border-radius: 50%;
@@ -2612,21 +2621,22 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   outline: 3px solid var(--qv-color-primary);
   outline-offset: 2px;
 }
-.qv-gmap-veh__badge {
-  display: block;
-  width: 40px;
-  height: 40px;
-  filter: drop-shadow(0 1px 3px rgb(15 23 42 / 0.4));
-}
 .qv-gmap-veh__placa {
   position: absolute;
-  top: calc(100% + 2px);
+  top: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
-  padding: 0 4px;
+  /* Barra izquierda con el color de la línea (como la placa de la Propuesta B): la placa dice a
+     qué línea pertenece sin depender solo del anillo. */
+  padding: 0 5px 0 4px;
+  border-left: 4px solid var(--qv-gmap-veh-linea, var(--qv-color-primary));
+  /* Hilo claro por dentro de la barra: una línea oscura no se pierde contra el chip oscuro. */
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.25);
+  font-family: var(--qv-font-display);
   font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.03em;
   line-height: 1.35;
   /* Chip de placa: oscuro fijo en ambos temas (legible sobre cualquier mapa base). */
   --qv-gmap-placa-fg: #fff;
@@ -2636,19 +2646,27 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   border-radius: 3px;
 }
 
-/* ---- Vehículo con foto, anillo de línea y alerta por infracción (PR E, docs/plan-en-vivo-alertas.md) ----
-   Raíz de 44 px con foto (40 px con sprite). El anillo es un hermano absoluto: así el parpadeo
-   solo repinta un borde y no toca la foto. */
-.qv-gmap-veh--foto {
-  width: 44px;
-  height: 44px;
-}
+/* ---- Vehículo: disco (foto o neutro), anillo de línea y alerta por infracción (PR E, docs/plan-en-vivo-alertas.md) ----
+   Raíz de 44 px. El anillo es un hermano absoluto: así el parpadeo solo repinta un borde y no toca el disco.
+   Sin foto, el disco es neutro (superficie + glifo de bus): el estado lo dice solo la insignia. */
 .qv-gmap-veh__disco {
   position: absolute;
   inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
   border-radius: 50%;
+  background: var(--qv-surface-card);
+  color: var(--qv-text-secondary);
+}
+.qv-gmap-veh--foto .qv-gmap-veh__disco {
   background: var(--qv-surface-soft, #e2e8f0);
+}
+.qv-gmap-veh__bus {
+  display: block;
+  width: 24px;
+  height: 24px;
 }
 .qv-gmap-veh__foto {
   display: block;
@@ -2657,11 +2675,12 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   object-fit: cover;
   -webkit-user-drag: none;
 }
-.qv-gmap-veh--perdido .qv-gmap-veh__foto {
+/* El atenuado vive SOLO en la foto (`img`): la insignia de estado es hermana del disco y conserva su color. */
+.qv-gmap-veh--est-perdido .qv-gmap-veh__foto {
   filter: grayscale(1);
   opacity: 0.6;
 }
-.qv-gmap-veh--finalizado .qv-gmap-veh__foto {
+.qv-gmap-veh--est-finalizado .qv-gmap-veh__foto {
   filter: grayscale(1);
 }
 .qv-gmap-veh__anillo {
@@ -2677,9 +2696,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     inset 0 0 0 1px rgb(15 17 26 / 0.35);
   pointer-events: none;
 }
-.qv-gmap-veh:not(.qv-gmap-veh--foto) .qv-gmap-veh__anillo {
-  inset: -3px;
-}
 
 /* Severidad: tokens de alerta + ícono con FORMA propia por nivel (no solo color). */
 .qv-gmap-veh--alerta-leve {
@@ -2694,35 +2710,33 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   --qv-gmap-veh-sev: var(--qv-alerta-gravisima);
   --qv-gmap-veh-periodo: 600ms;
 }
-/* Sin parpadeo (atendida o filtro estático): el anillo queda en el color de la severidad. */
-.qv-gmap-veh[class*='--alerta-']:not(.qv-gmap-veh--parpadea) .qv-gmap-veh__anillo {
-  border-color: var(--qv-gmap-veh-sev);
-}
-.qv-gmap-veh--parpadea .qv-gmap-veh__anillo {
+/* El anillo es SIEMPRE el color de la línea (Propuesta B); la severidad se ve solo en su badge, que
+   parpadea (halo) mientras haya infracciones abiertas. */
+.qv-gmap-veh--parpadea .qv-gmap-veh__alerta {
   animation: qv-gmap-veh-parpadeo var(--qv-gmap-veh-periodo, 1000ms) ease-in-out infinite;
 }
-/* Un ciclo completo (línea -> severidad -> línea) dura el periodo: 600 ms = 1,67 Hz, siempre < 3 Hz. */
+/* Un ciclo completo (sin halo -> halo -> sin halo) dura el periodo: 600 ms = 1,67 Hz, siempre < 3 Hz. */
 @keyframes qv-gmap-veh-parpadeo {
   0%,
   100% {
-    border-color: var(--qv-gmap-veh-anillo);
+    box-shadow:
+      0 0 0 1.5px #fff,
+      0 1px 3px rgb(15 23 42 / 0.45);
   }
   50% {
-    border-color: var(--qv-gmap-veh-sev);
     box-shadow:
-      0 0 0 1px rgb(15 17 26 / 0.85),
-      inset 0 0 0 1px rgb(15 17 26 / 0.35),
+      0 0 0 1.5px #fff,
+      0 1px 3px rgb(15 23 42 / 0.45),
       0 0 10px 3px var(--qv-gmap-veh-sev);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  /* Estático pero tan visible como el estado "encendido" del parpadeo: mismo color y mismo halo. */
-  .qv-gmap-veh--parpadea .qv-gmap-veh__anillo {
+  /* Estático pero tan visible como el estado "encendido" del parpadeo: mismo halo. */
+  .qv-gmap-veh--parpadea .qv-gmap-veh__alerta {
     animation: none;
-    border-color: var(--qv-gmap-veh-sev);
     box-shadow:
-      0 0 0 1px rgb(15 17 26 / 0.85),
-      inset 0 0 0 1px rgb(15 17 26 / 0.35),
+      0 0 0 1.5px #fff,
+      0 1px 3px rgb(15 23 42 / 0.45),
       0 0 10px 3px var(--qv-gmap-veh-sev);
   }
 }
@@ -2738,7 +2752,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   height: 20px;
   box-sizing: border-box;
   padding: 0 3px;
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--qv-gmap-veh-sev);
   color: var(--qv-alerta-fg);
   box-shadow:
@@ -2758,42 +2772,79 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   font-variant-numeric: tabular-nums;
   padding-right: 2px;
 }
-.qv-gmap-veh__reloj {
-  position: absolute;
-  bottom: -3px;
-  right: -5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  background: #0891b2;
-  color: #fff;
-  box-shadow: 0 0 0 1.5px #fff;
-  pointer-events: none;
+/* Insignia de estado (forma + color por `estadoFrescura`, también con foto): abajo a la derecha.
+   Aro blanco con 4 sombras sin desenfoque (los glifos no son redondos, un `box-shadow` no sirve).
+   Los colores salen de `--qv-gmap-est` (rellenos) y de la tinta de glifo (tokens.css). */
+.qv-gmap-veh {
+  --qv-gmap-est: var(--qv-estado-inactivo);
 }
-.qv-gmap-veh__reloj-icono {
-  width: 11px;
-  height: 11px;
+.qv-gmap-veh--est-reportando {
+  --qv-gmap-est: var(--qv-color-success);
 }
-/* Vuelta designada a Molinos: letra "M" en un disco de marca abajo a la izquierda. La forma
-   (letra) y el nombre accesible ("vuelta vía Molinos") acompañan al color. */
-.qv-gmap-veh__molinos {
+.qv-gmap-veh--est-detenido {
+  --qv-gmap-est: var(--qv-color-info);
+}
+.qv-gmap-veh--est-perdido {
+  --qv-gmap-est: var(--qv-color-danger);
+}
+.qv-gmap-veh--est-en_pausa {
+  --qv-gmap-est: var(--qv-color-warning);
+}
+.qv-gmap-veh__estado {
   position: absolute;
-  bottom: -4px;
-  left: -6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  bottom: -5px;
+  right: -6px;
+  display: block;
   width: 18px;
   height: 18px;
-  border-radius: 50%;
-  background: var(--qv-color-primary);
-  color: var(--qv-color-on-primary);
+  pointer-events: none;
+  filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff)
+    drop-shadow(0 1px 2px rgb(15 23 42 / 0.45));
+}
+.qv-gmap-veh__estado-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.qv-gmap-g-f {
+  fill: var(--qv-gmap-est);
+}
+.qv-gmap-g-s {
+  stroke: var(--qv-gmap-est);
+}
+.qv-gmap-g-i {
+  fill: var(--qv-estado-glifo-tinta);
+}
+.qv-gmap-g-is {
+  stroke: var(--qv-estado-glifo-tinta);
+}
+.qv-gmap-g-p {
+  fill: var(--qv-surface-card);
+}
+/* Vuelta designada a Molinos: "M" / "M2" (orden en la cola) en ámbar abajo a la izquierda. La
+   forma (letra + número) y el nombre accesible acompañan al color. */
+.qv-gmap-veh__molinos {
+  position: absolute;
+  bottom: -5px;
+  left: -8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 3px;
+  border-radius: 5px;
+  /* Contorno (no relleno): se distingue de la insignia de severidad leve, que también es ámbar-marrón. */
+  background: var(--qv-surface-card);
+  border: 2px solid var(--qv-molinos);
+  color: var(--qv-molinos);
+  font-family: var(--qv-font-display);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
   box-shadow:
     0 0 0 1.5px #fff,
     0 1px 3px rgb(15 23 42 / 0.45);
@@ -2808,6 +2859,44 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   border: 2px solid var(--qv-color-primary);
   box-shadow: 0 0 0 2px #fff;
   pointer-events: none;
+}
+/* El halo (8 + 2 + 2 px) no debe tocar la placa: baja unos px mientras está seleccionado. */
+.qv-gmap-veh--seleccionado .qv-gmap-veh__placa {
+  top: calc(100% + 15px);
+}
+
+/* Colores forzados: los rellenos de marca se pierden; todo pasa a Canvas/CanvasText y el foco a Highlight. */
+@media (forced-colors: active) {
+  .qv-gmap-veh__alerta,
+  .qv-gmap-veh__molinos,
+  .qv-gmap-veh__placa {
+    forced-color-adjust: none;
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+  .qv-gmap-veh__disco {
+    forced-color-adjust: none;
+    background: Canvas;
+    color: CanvasText;
+  }
+  .qv-gmap-veh__anillo,
+  .qv-gmap-veh--seleccionado::before {
+    border-color: CanvasText;
+    box-shadow: none;
+  }
+  .qv-gmap-veh__estado {
+    forced-color-adjust: none;
+    filter: none;
+    color: CanvasText;
+    --qv-gmap-est: CanvasText;
+    --qv-estado-glifo-tinta: Canvas;
+    --qv-surface-card: Canvas;
+  }
+  .qv-gmap-veh:focus-visible {
+    outline-color: Highlight;
+  }
 }
 
 /* =========================================================================

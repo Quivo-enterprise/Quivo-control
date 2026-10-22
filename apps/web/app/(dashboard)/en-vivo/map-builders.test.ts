@@ -167,6 +167,23 @@ describe('construirMarcadoresVehiculos — PR E (alertas, color de línea, selec
     expect(nula!.molinos).toBeUndefined();
   });
 
+  it('"M2": el lugar en la cola del servidor llega como número; designado fuera de cola = true', () => {
+    const designada = { numero: 1, varianteId: 'v', varianteNombre: 'Vía Molinos', designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null, molinosProxima: false };
+    const espera = { ...designada, enEspera: true };
+    const [a, b, c, d] = construirMarcadoresVehiculos(
+      [
+        posicion({ id: 'a' }),
+        posicion({ id: 'b', vuelta: espera }),
+        posicion({ id: 'c', vuelta: espera }),
+        posicion({ id: 'd', vuelta: designada }),
+      ],
+      () => {},
+      { ordenMolinos: new Map([['a', 2], ['b', 1], ['d', 3]]) },
+    );
+    // `a` (sin vuelta) y `d` (ya no espera según la posición fresca): el orden viejo del resumen no gana.
+    expect([a!.molinos, b!.molinos, c!.molinos, d!.molinos]).toEqual([undefined, 1, true, true]);
+  });
+
   it('colorLinea por lineaId y seleccionado solo para la sesión abierta', () => {
     const markers = construirMarcadoresVehiculos(
       [posicion({ id: 'a', lineaId: 'L1' }), posicion({ id: 'b', lineaId: 'L2' })],

@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { firmaPunto } from './route-map-puntos.js';
 import {
   PERIODO_PARPADEO_MS,
+  GLIFOS_ESTADO,
   alertaVisible,
+  esEstadoGlifo,
+  etiquetaMolinos,
+  molinosActivo,
+  svgGlifoEstado,
+  textoMolinos,
   etiquetaAlerta,
   fotoUsable,
   marcarFotoFallida,
@@ -119,5 +125,34 @@ describe('alerta con infracciones atendidas (pendiente E #1)', () => {
     const ctx = { oscuro: false, tipo: 'marker' as const, rol: 'marker' };
     const base = { pinType: 'vehicle' as const, color: '#000', label: 'x' };
     expect(firmaPunto({ ...base, molinos: true }, ctx)).not.toBe(firmaPunto(base, ctx));
+  });
+  it('el orden en la cola de Molinos cambia la firma; true y 0 siguen siendo "M" / nada', () => {
+    const ctx = { oscuro: false, tipo: 'marker' as const, rol: 'marker' };
+    const base = { pinType: 'vehicle' as const, color: '#000', label: 'x' };
+    expect(firmaPunto({ ...base, molinos: 1 }, ctx)).not.toBe(firmaPunto({ ...base, molinos: 2 }, ctx));
+    expect(firmaPunto({ ...base, molinos: 2 }, ctx)).not.toBe(firmaPunto({ ...base, molinos: true }, ctx));
+    expect(firmaPunto({ ...base, molinos: 0 }, ctx)).toBe(firmaPunto(base, ctx));
+  });
+});
+
+describe('Molinos con orden', () => {
+  it('texto del badge y nombre accesible', () => {
+    expect(textoMolinos(true)).toBe('M');
+    expect(textoMolinos(2)).toBe('M2');
+    expect(etiquetaMolinos(true)).toBe('vuelta vía Molinos');
+    expect(etiquetaMolinos(2)).toBe('vuelta vía Molinos, 2.º en la cola');
+    expect(etiquetaMolinos(undefined)).toBe('');
+    expect(molinosActivo(0)).toBe(false);
+  });
+});
+
+describe('insignia de estado', () => {
+  it('una forma por cada uno de los 6 estados, y los desconocidos no tienen', () => {
+    const estados = ['reportando', 'detenido', 'perdido', 'sin_datos', 'finalizado', 'en_pausa'];
+    for (const e of estados) expect(esEstadoGlifo(e)).toBe(true);
+    expect(new Set(estados.map((e) => GLIFOS_ESTADO[e as keyof typeof GLIFOS_ESTADO])).size).toBe(6);
+    expect(esEstadoGlifo('inventado')).toBe(false);
+    expect(esEstadoGlifo('toString')).toBe(false);
+    expect(svgGlifoEstado('perdido')).toContain('aria-hidden="true"');
   });
 });

@@ -90,7 +90,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
     | 'vacia' | 'cierreVacia' | 'cierreDesig' | 'cierreSinTenant' | 'inactiva' | 'esperaTardia' | 'retro'
     | 'omitidaFin' | 'cierreTardio' | 'estacionado' | 'espNoDesig' | 'cursor' | 'inicioEnSr' | 'inicioLejos' | 'inicioSinFix' | 'inicioCierraRet'
     | 'tardioN1' | 'tardioVacia' | 'carreraDesig' | 'gpsDesorden' | 'cierreResidual'
-    | 'pausa' | 'pausaRep' | 'pausaFin' | 'pausaOrden' | 'pausaDesvio' | 'desvioDesig' | 'yaFue' | 'omitidaLuego' | 'tardia' | 'cancelaDiferida' | 'esperaLuego' | 'desigYTardia' | 'colaA' | 'colaB' | 'colaC' | 'colaD' | 'colaE' | 'colaF',
+    | 'pausa' | 'pausaRep' | 'pausaFin' | 'pausaOrden' | 'pausaDesvio' | 'desvioDesig' | 'yaFue' | 'omitidaLuego' | 'tardia' | 'cancelaDiferida' | 'esperaLuego' | 'desigYTardia' | 'colaA' | 'colaB' | 'colaC' | 'colaD' | 'colaE' | 'colaF' | 'colaG' | 'colaH' | 'colaI',
     string
   >;
 
@@ -221,7 +221,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
         'cierreTardio', 'estacionado', 'espNoDesig', 'cursor', 'inicioEnSr', 'inicioLejos', 'inicioSinFix', 'inicioCierraRet',
         'tardioN1', 'tardioVacia', 'carreraDesig', 'gpsDesorden', 'cierreResidual',
         'pausa', 'pausaRep', 'pausaFin', 'pausaOrden', 'pausaDesvio', 'desvioDesig', 'yaFue', 'omitidaLuego', 'tardia', 'cancelaDiferida', 'esperaLuego', 'desigYTardia',
-        'colaA', 'colaB', 'colaC', 'colaD', 'colaE', 'colaF',
+        'colaA', 'colaB', 'colaC', 'colaD', 'colaE', 'colaF', 'colaG', 'colaH', 'colaI',
       ] as const) {
         sesiones[k] = await crearSesion(asigCirc, k !== 'ciclo');
       }
@@ -511,6 +511,29 @@ describe('vueltas y designación a Molinos (F1)', () => {
         tx.sesionOperativa.update({ where: { id: sesiones.colaE }, data: { estado: 'cerrada', fin: new Date() } }),
       );
       expect(await pos(sesiones.colaF, 86)).toBe(1);
+    });
+
+    it('la cola del panel (resumen Molinos) y la `posicion` del chofer coinciden; el de fix viejo no está en ninguna', async () => {
+      await llegar(sesiones.colaG, 36);
+      await llegar(sesiones.colaH, 37);
+      await llegar(sesiones.colaI, 38);
+      // F, G y H siguen mandando GPS; I calló (su último fix es el de la llegada, ya viejo).
+      await lote([gps(sesiones.colaF, iso(88), LON_MOLINOS, LAT_SUR), gps(sesiones.colaG, iso(88), LON_MOLINOS, LAT_SUR), gps(sesiones.colaH, iso(88), LON_MOLINOS, LAT_SUR)]);
+      const ahora = new Date(BASE + 89 * 60_000);
+      const { colas, lineas } = await vueltas.resumenMolinos(adminA, ahora);
+      // Una sola definición de "en espera": el de fix viejo tampoco cuenta en `lineas[].enEspera`.
+      const linea = lineas.find((l) => l.lineaId === lineaId)!;
+      expect(linea.enEspera).toBe(3);
+      expect(linea.esperaDesdeTs).not.toBeNull();
+      const cola = colas.find((c) => c.entradas.some((e) => e.sesionId === sesiones.colaF))!;
+      expect(cola.lineas.map((l) => l.lineaId)).toEqual([lineaId]);
+      expect(cola.entradas.map((e) => [e.sesionId, e.posicion])).toEqual([
+        [sesiones.colaF, 1], [sesiones.colaG, 2], [sesiones.colaH, 3],
+      ]);
+      for (const e of cola.entradas) expect(await pos(e.sesionId, 89)).toBe(e.posicion);
+      expect(cola.entradas.some((e) => e.sesionId === sesiones.colaI)).toBe(false);
+      // Otro tenant no ve esta cola.
+      expect((await vueltas.resumenMolinos(adminB, ahora)).colas).toEqual([]);
     });
 
     it('un PC que dejó de ser punto de espera activo oculta la designación', async () => {
