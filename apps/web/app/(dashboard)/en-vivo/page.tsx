@@ -41,6 +41,7 @@ import {
   puedeActuarEnInfracciones,
   siguienteAlertaId,
 } from '../../../src/lib/en-vivo/alertas';
+import { ordenColaMolinos } from '../../../src/lib/en-vivo/atencion';
 import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
 import { useLineaOptions } from '../../../src/lib/api/use-linea-options';
 import {
@@ -295,13 +296,15 @@ export default function EnVivoPage() {
     if (contexto.data) mapa[contexto.data.linea.id] = contexto.data.linea.color;
     return mapa;
   }, [lineas, contexto.data]);
+  const ordenMolinos = useMemo(() => ordenColaMolinos(molinos.data), [molinos.data]);
   const vehiculos = useMemo(
     () =>
       construirMarcadoresVehiculos(posicionesFiltradas, seleccionarSesion, {
         seleccionadoId: sesionSeleccionada,
         colorLineaPorId,
+        ordenMolinos,
       }),
-    [posicionesFiltradas, seleccionarSesion, sesionSeleccionada, colorLineaPorId],
+    [posicionesFiltradas, seleccionarSesion, sesionSeleccionada, colorLineaPorId, ordenMolinos],
   );
   // Punto de la infracción que "Ver en mapa" centró: un pin del color de su severidad.
   const marcadorFoco = useMemo<MapPoint[]>(

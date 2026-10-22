@@ -102,9 +102,7 @@ import {
   type LatLngSimple,
 } from './route-map-interpolacion.js';
 import {
-  VEHICULO_ICONOS,
-  VEHICULO_ICONO_FALLBACK,
-  buildVehiculoIconoSvg,
+  ICONO_BUS_PATH,
   colorTextoContraste,
   etiquetaFrescura,
   nodeNumberFromId,
@@ -115,9 +113,12 @@ import {
 } from './route-map-shared.js';
 import {
   ICONO_NIVEL,
-  ICONO_RELOJ,
   alertaVisible,
-  ETIQUETA_MOLINOS,
+  esEstadoGlifo,
+  etiquetaMolinos,
+  molinosActivo,
+  svgGlifoEstado,
+  textoMolinos,
   etiquetaAlerta,
   fotoUsable,
   marcarFotoFallida,
@@ -205,7 +206,7 @@ function etiquetaVehiculo(punto: MapPoint): string {
     estadoYaDicho ? '' : estado,
     descripcion,
     etiquetaAlerta(punto.alerta),
-    punto.molinos ? ETIQUETA_MOLINOS : '',
+    etiquetaMolinos(punto.molinos),
     // Con `onClick` el estado va en `aria-pressed`; sin él, en el nombre.
     punto.seleccionado && !punto.onClick ? 'seleccionado' : '',
   ]
@@ -238,19 +239,18 @@ function actualizarVehiculoEnLugar(raiz: HTMLElement, punto: MapPoint): void {
   }
 }
 
-/** Marcador de vehículo. Sin foto: mismo badge que los sprites de MapLibre
- * (`buildVehiculoIconoSvg`, forma y color por `estadoFrescura`). Con `fotoUrl` (PR E): círculo de
- * 44 px con la foto, que vuelve al sprite si no carga. En ambos casos: anillo del color de la
+/** Marcador de vehículo: disco de 44 px con la foto (`fotoUrl`) o, sin ella / si no carga, disco
+ * neutro con glifo de bus. En ambos casos: insignia de estado (forma +
+ * color, `qv-gmap-veh__estado`), anillo del color de la
  * línea (+ contorno oscuro de 1 px para contraste de líneas blancas), badge de severidad con
  * ícono propio por nivel (+ cantidad) si hay infracciones abiertas, y la placa debajo. La raíz
  * mide lo que el disco; la placa cuelga. Con `onClick` es un botón enfocable; sin él, una imagen
  * con nombre accesible (frescura y alerta van en el texto, no solo en forma/color). */
 function crearElementoVehiculo(punto: MapPoint): HTMLElement {
-  const spec =
-    VEHICULO_ICONOS.find((s) => s.estado === punto.estadoFrescura) ??
-    VEHICULO_ICONOS.find((s) => s.estado === VEHICULO_ICONO_FALLBACK)!;
+  // Un estado desconocido (API más nueva) cae a `sin_datos`: nunca queda sin insignia.
+  const glifo = esEstadoGlifo(punto.estadoFrescura) ? punto.estadoFrescura : 'sin_datos';
   const raiz = document.createElement('div');
-  raiz.className = `qv-gmap-veh qv-gmap-veh--${spec.estado}`;
+  raiz.className = `qv-gmap-veh qv-gmap-veh--est-${glifo}`;
   const placa = punto.placa?.trim() ?? '';
   const alerta = alertaVisible(punto.alerta) ? punto.alerta : undefined;
   raiz.setAttribute('aria-label', etiquetaVehiculo(punto));
@@ -271,14 +271,21 @@ function crearElementoVehiculo(punto: MapPoint): HTMLElement {
   const colorLinea = punto.colorLinea?.trim();
   if (colorLinea) raiz.style.setProperty('--qv-gmap-veh-linea', colorLinea);
 
-  const spriteSvg = () =>
-    buildVehiculoIconoSvg(spec).replace('<svg ', '<svg class="qv-gmap-veh__badge" aria-hidden="true" ');
+  // Disco de 44 px: la foto si hay y carga; si no, disco neutro (superficie + glifo de bus). El estado
+  // lo dice SOLO la insignia `qv-gmap-veh__estado` (no se dibuja dos veces). Constantes del módulo: sin datos del usuario.
+  const disco = document.createElement('span');
+  disco.className = 'qv-gmap-veh__disco';
+  const ponerNeutro = () => {
+    raiz.classList.remove('qv-gmap-veh--foto');
+    disco.replaceChildren();
+    disco.insertAdjacentHTML(
+      'afterbegin',
+      `<svg class="qv-gmap-veh__bus" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path fill="currentColor" d="${ICONO_BUS_PATH}"/></svg>`,
+    );
+  };
   const foto = normalizarFotoUrl(punto.fotoUrl);
-  const conFoto = foto !== null && fotoUsable(foto);
-  if (conFoto) {
+  if (foto !== null && fotoUsable(foto)) {
     raiz.classList.add('qv-gmap-veh--foto');
-    const disco = document.createElement('span');
-    disco.className = 'qv-gmap-veh__disco';
     const img = document.createElement('img');
     img.className = 'qv-gmap-veh__foto';
     img.alt = '';
@@ -294,27 +301,22 @@ function crearElementoVehiculo(punto: MapPoint): HTMLElement {
       'error',
       () => {
         marcarFotoFallida(foto);
-        // Vuelve al sprite de siempre sin recrear el marcador (la firma no cambia).
-        raiz.classList.remove('qv-gmap-veh--foto');
-        disco.remove();
-        raiz.insertAdjacentHTML('afterbegin', spriteSvg());
+        // Vuelve al disco neutro sin recrear el marcador (la firma no cambia).
+        ponerNeutro();
       },
       { once: true },
     );
     disco.appendChild(img);
-    raiz.appendChild(disco);
   } else {
-    // El SVG sale de constantes del módulo (sin datos del usuario): innerHTML es seguro acá.
-    raiz.innerHTML = spriteSvg();
+    ponerNeutro();
   }
+  raiz.appendChild(disco);
 
-  // Anillo (línea <-> severidad). En modo sprite solo se dibuja si hay color de línea o alerta.
-  if (conFoto || colorLinea || alerta) {
-    const anillo = document.createElement('span');
-    anillo.className = 'qv-gmap-veh__anillo';
-    anillo.setAttribute('aria-hidden', 'true');
-    raiz.appendChild(anillo);
-  }
+  // Anillo: SIEMPRE el color de la línea; la severidad vive solo en su badge.
+  const anillo = document.createElement('span');
+  anillo.className = 'qv-gmap-veh__anillo';
+  anillo.setAttribute('aria-hidden', 'true');
+  raiz.appendChild(anillo);
   if (alerta) {
     raiz.classList.add(`qv-gmap-veh--alerta-${alerta.nivel}`);
     if (alerta.parpadea) raiz.classList.add('qv-gmap-veh--parpadea');
@@ -330,22 +332,21 @@ function crearElementoVehiculo(punto: MapPoint): HTMLElement {
     }
     raiz.appendChild(badge);
   }
-  if (punto.molinos) {
-    // Vuelta designada a Molinos: letra "M" abajo a la izquierda (el reloj de `detenido` va a la derecha).
+  if (molinosActivo(punto.molinos)) {
+    // Vuelta designada a Molinos: "M" (o "M2" = 2.º en la cola) abajo a la izquierda.
     const m = document.createElement('span');
     m.className = 'qv-gmap-veh__molinos';
     m.setAttribute('aria-hidden', 'true');
-    m.textContent = 'M';
+    m.textContent = textoMolinos(punto.molinos);
     raiz.appendChild(m);
   }
-  // `detenido` con foto: el sprite ya traía el reloj; con foto va como mini badge.
-  if (conFoto && spec.estado === 'detenido') {
-    const reloj = document.createElement('span');
-    reloj.className = 'qv-gmap-veh__reloj';
-    reloj.setAttribute('aria-hidden', 'true');
-    reloj.innerHTML = svgIcono(ICONO_RELOJ, 'qv-gmap-veh__reloj-icono');
-    raiz.appendChild(reloj);
-  }
+  // Insignia de estado (forma + color, también con foto) abajo a la derecha; el texto del estado va en el nombre accesible.
+  const estado = document.createElement('span');
+  estado.className = 'qv-gmap-veh__estado';
+  estado.setAttribute('aria-hidden', 'true');
+  // El SVG sale de constantes del módulo (sin datos del usuario): innerHTML es seguro acá.
+  estado.innerHTML = svgGlifoEstado(glifo);
+  raiz.appendChild(estado);
   if (placa) {
     const etiqueta = document.createElement('span');
     etiqueta.className = 'qv-gmap-veh__placa';

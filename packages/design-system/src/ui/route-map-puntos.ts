@@ -4,7 +4,7 @@
 // posición. Sin imports de mapas ni de React, así se testea en `node`.
 
 import type { MapPoint } from '../types.js';
-import { alertaVisible } from './route-map-vehiculo.js';
+import { alertaVisible, molinosActivo, textoMolinos } from './route-map-vehiculo.js';
 
 export interface LatLngPlano {
   lat: number;
@@ -72,7 +72,8 @@ export function firmaPunto(
     // selección se actualizan EN el elemento existente (`actualizarVehiculoEnLugar`): recrearlo
     // por eso recargaría la foto y reiniciaría la animación.
     alertaVisible(punto.alerta) ? `${punto.alerta.nivel}:${punto.alerta.parpadea}` : '',
-    punto.molinos ? 'M' : '',
+    // El número (orden en la cola) cambia el texto del badge: rehacer el marcador.
+    molinosActivo(punto.molinos) ? textoMolinos(punto.molinos) : '',
     esInteractivo(punto, contexto.tipo),
     esArrastrable(punto, contexto.tipo),
   ].join('~');

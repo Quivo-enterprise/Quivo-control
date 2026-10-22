@@ -6,19 +6,28 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## En curso — 2026-10-22: /en-vivo solo con la jornada de hoy + rediseño
+## En curso — 2026-10-22: /en-vivo solo con la jornada de hoy + rediseño B
 
 Plan: `docs/plan-en-vivo.md`.
 
-**PR 1 (#248) mergeado, SIN desplegar.**
-- `sesionesVisiblesSql` (`apps/api/src/modules/reportes/en-vivo.service.ts`) es la regla única de `listarHoy` y `obtenerPosiciones`: entra la sesión que arrancó en la jornada boliviana de hoy, o que tuvo actividad (fix o ingesta) hoy o en las últimas 2 h (gracia de medianoche).
-- Las sesiones de hoy terminadas siguen visibles como `finalizado`.
-- Tests: 53/53 en `en-vivo*` local; CI `ci` y `acceptance` en pass.
-- Codex: no verificado (sin cuota).
+**Desplegado en prod (CTO, 22/10):**
+- #248 (solo la jornada de hoy) en `r28`.
+- #250 (regla única de vigencia) en `r29`: API `quivo-api-00038-7xz`, worker `quivo-worker-00018-dsb`.
+- Verificado: `/reportes/jornadas` hoy da los 8 de L16 `sin_iniciar`. 1616PID ya no figura `en_recorrido`.
 
-**Pendiente:**
-1. Deploy de la API, lo corre el CTO, con `scripts/deploy-gcp.sh`. Después verificar que `GET /v1/reportes/en-vivo/posiciones` ya no traiga las 5 sesiones de L16 del 21/10 (1616PIF/PID/PIB/PIL/PIC).
-2. PR 2: rediseño de /en-vivo con bake-off (ver el plan).
+**Rediseño B, elegido por el CTO.** Mocks:
+- A https://claude.ai/artifact/HbDoVhV76Ms4cpF79TH1vi
+- **B** https://claude.ai/artifact/RP4Gmh127fE1x9nJrgkFS3
+
+Los pines del mapa llevan la foto del trufi.
+
+**Fase 2a (rama `feat/en-vivo-b-2a`):**
+- **Cola de Molinos en un solo lugar:** `apps/api/src/modules/vueltas/cola-molinos.ts` (`leerColaMolinos`). La usan `vuelta-actual` (posición del chofer) y `resumenMolinos`, que ahora devuelve `colas` y `lineas[].enEspera` sacados de la misma cola.
+- **Lógica nueva:** `apps/web/src/lib/en-vivo/atencion.ts` (conteo por estado, Atención, orden de Molinos) y `use-salud-refresco.ts`. Todavía no están conectadas a la página; se conectan en la fase 2b.
+- **Marcador Google:** foto + insignia de estado con las formas de B, disco neutro sin foto, anillo siempre del color de la línea, severidad solo en su badge, "M1/M2" con contorno, forced-colors, hover y área táctil.
+- **Tokens nuevos:** texto por estado, inactivo, Molinos (`#b45309` en claro, por contraste) y tinta del glifo.
+
+**Siguiente:** fase 2b (barra de mando, panel izquierdo, cajón del vehículo), después la 2c (móvil y estados de página).
 
 **Pendientes de PR #250 (regla única de vigencia), aceptados con `shortcut:` en el código:**
 1. **Fila: app y panel pueden diferir en el 1.º.** Una sesión con más de 2 h sin GPS cuya app sigue abierta (por ejemplo, estacionada en la fila de noche) cuenta en su propia fila (`sesionPropiaId`), pero el panel la oculta. Arreglo posible: contar el poll de la app como actividad. Hacerlo si aparece en el piloto. Código: `apps/api/src/modules/salidas/fila-datos.ts` (`calcularFilaPc`).

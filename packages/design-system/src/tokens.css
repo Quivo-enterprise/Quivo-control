@@ -41,6 +41,20 @@
   --qv-alerta-fg: #ffffff;
   --qv-color-white: #ffffff;
 
+  /* Estado de frescura (/en-vivo). Relleno de la forma del marcador = success/info/danger/warning
+     de arriba (3:1 contra el mapa, con aro blanco). `-texto` = el mismo matiz oscurecido para
+     TEXTO sobre `--qv-surface-card` (>= 4,5:1; el relleno solo llega a 3:1). `inactivo` = gris de
+     sin_datos y finalizado. `glifo-tinta` = trazo/relleno dibujado SOBRE el relleno. */
+  --qv-estado-reportando-texto: #166534;
+  --qv-estado-detenido-texto: #0e7490;
+  --qv-estado-perdido-texto: #b91c1c;
+  --qv-estado-en-pausa-texto: #92400e;
+  --qv-estado-inactivo: #64748b;
+  --qv-estado-inactivo-texto: #475569;
+  --qv-estado-glifo-tinta: #ffffff;
+  /* Molinos: ámbar oscuro (el #d97706 de warning no da 4,5:1 con texto blanco de 11 px). */
+  --qv-molinos: #b45309;
+
   /* Texto */
   --qv-text-primary: #0f172a;
   --qv-text-secondary: #64748b;
@@ -117,6 +131,15 @@
     --qv-alerta-gravisima: #f87171;
     --qv-alerta-fg: #1c1917;
     --qv-color-white: #ffffff;
+
+    --qv-estado-reportando-texto: #4ade80;
+    --qv-estado-detenido-texto: #22d3ee;
+    --qv-estado-perdido-texto: #fca5a5;
+    --qv-estado-en-pausa-texto: #fcd34d;
+    --qv-estado-inactivo: #94a3b8;
+    --qv-estado-inactivo-texto: #b6c0d4;
+    --qv-estado-glifo-tinta: #0f172a;
+    --qv-molinos: #fbbf24;
 
     --qv-text-primary: #f1f5f9;
     --qv-text-secondary: #94a3b8;

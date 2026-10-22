@@ -44,6 +44,22 @@ export function etiquetaAlerta(alerta: MapPoint['alerta']): string {
 /** Texto del badge "M" para el nombre accesible. */
 export const ETIQUETA_MOLINOS = 'vuelta vía Molinos';
 
+/** `MapPoint.molinos`: `true` = designado a Molinos; número (>= 1) = además, su lugar en la cola. */
+export function molinosActivo(molinos: MapPoint['molinos']): boolean {
+  return molinos === true || (typeof molinos === 'number' && molinos >= 1);
+}
+
+/** Texto del badge: "M" o "M2" (orden en la cola). */
+export function textoMolinos(molinos: MapPoint['molinos']): string {
+  return typeof molinos === 'number' && molinos >= 1 ? `M${Math.floor(molinos)}` : 'M';
+}
+
+/** Nombre accesible: "vuelta vía Molinos" o "vuelta vía Molinos, 2.º en la cola". */
+export function etiquetaMolinos(molinos: MapPoint['molinos']): string {
+  if (!molinosActivo(molinos)) return '';
+  return typeof molinos === 'number' ? `${ETIQUETA_MOLINOS}, ${Math.floor(molinos)}.º en la cola` : ETIQUETA_MOLINOS;
+}
+
 /** Orden de apilado del vehículo: seleccionado > gravísima > grave > leve > resto. */
 export function zIndexVehiculo(punto: Pick<MapPoint, 'seleccionado' | 'alerta'>): number {
   if (punto.seleccionado) return 1400;
@@ -61,7 +77,35 @@ export const ICONO_NIVEL: Record<NivelAlerta, string> = {
     '<path d="M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
 };
 
-export const ICONO_RELOJ = '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>';
+/** Insignia de estado del marcador: una FORMA por estado (viewBox 28, mismas de la Propuesta B de
+ * `/en-vivo`). Los colores salen de clases CSS (`.qv-gmap-g-*`, `styles.css`) y no de `style=""`:
+ * así no choca con una CSP sin `unsafe-inline`. f = relleno del estado, s = trazo del estado,
+ * i = tinta sobre el relleno, p = fondo (superficie). Sin `sin_datos` en la tabla de íconos del
+ * mapa (no tiene fix, no se dibuja), pero la forma existe para la leyenda y el panel. */
+export type EstadoGlifo = 'reportando' | 'detenido' | 'perdido' | 'sin_datos' | 'finalizado' | 'en_pausa';
+
+export const GLIFOS_ESTADO: Record<EstadoGlifo, string> = {
+  reportando: '<circle cx="14" cy="14" r="12" class="qv-gmap-g-f"/><path d="M14 7l5 13-5-3-5 3z" class="qv-gmap-g-i"/>',
+  detenido:
+    '<rect x="2" y="2" width="24" height="24" rx="5" class="qv-gmap-g-f"/><rect x="9" y="9" width="10" height="10" rx="1.5" class="qv-gmap-g-i"/>',
+  perdido:
+    '<path d="M14 3 26.5 25h-25z" stroke-linejoin="round" stroke-width="2" class="qv-gmap-g-f qv-gmap-g-s"/><path d="M14 11v6" fill="none" stroke-width="2.6" stroke-linecap="round" class="qv-gmap-g-is"/><circle cx="14" cy="21" r="1.5" class="qv-gmap-g-i"/>',
+  finalizado:
+    '<circle cx="14" cy="14" r="11" stroke-width="2.6" class="qv-gmap-g-p qv-gmap-g-s"/><path d="M9 14.5l3.5 3.5 6.5-7" fill="none" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" class="qv-gmap-g-s"/>',
+  en_pausa:
+    '<path d="M8 3h12l7 11-7 11H8L1 14z" class="qv-gmap-g-f"/><rect x="10" y="9" width="3" height="10" rx="1" class="qv-gmap-g-i"/><rect x="15" y="9" width="3" height="10" rx="1" class="qv-gmap-g-i"/>',
+  sin_datos:
+    '<circle cx="14" cy="14" r="11" stroke-width="2.6" stroke-dasharray="3.4 3" class="qv-gmap-g-p qv-gmap-g-s"/><path d="M11 11.5a3 3 0 1 1 5.2 2c-1 1-2.2 1.5-2.2 3" fill="none" stroke-width="2.4" stroke-linecap="round" class="qv-gmap-g-s"/><circle cx="14" cy="20.5" r="1.4" class="qv-gmap-g-f"/>',
+};
+
+export function esEstadoGlifo(estado: unknown): estado is EstadoGlifo {
+  return typeof estado === 'string' && Object.hasOwn(GLIFOS_ESTADO, estado);
+}
+
+/** SVG de la insignia de estado (sale de constantes del módulo: sin datos del usuario). */
+export function svgGlifoEstado(estado: EstadoGlifo): string {
+  return `<svg class="qv-gmap-veh__estado-svg" aria-hidden="true" focusable="false" viewBox="0 0 28 28">${GLIFOS_ESTADO[estado]}</svg>`;
+}
 
 /** SVG inline de un ícono lucide (sale de las constantes de arriba: sin datos del usuario). */
 export function svgIcono(nodos: string, clase: string): string {

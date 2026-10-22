@@ -1,0 +1,77 @@
+import { describe, expect, it } from 'vitest';
+import type { PosicionEnVivo } from '@quivo/shared';
+import { conteoPorEstado, ordenColaMolinos, motivosAtencion, necesitaAtencion, puntajeAtencion } from './atencion';
+
+const SERVIDOR = '2026-10-22T15:00:00.000Z';
+const hace = (min: number) => new Date(Date.parse(SERVIDOR) - min * 60_000).toISOString();
+const pos = (o: Partial<PosicionEnVivo> = {}) =>
+  ({ id: 's', lineaId: 'L16', vehiculoPlaca: 'AAA', estadoFrescura: 'reportando', servidorTs: SERVIDOR, ultimoFixTs: hace(0), ...o }) as PosicionEnVivo;
+const esperando = (o: Partial<PosicionEnVivo> = {}) =>
+  pos({ vuelta: { numero: 1, varianteId: 'v', varianteNombre: 'M', designadaEn: null, acuseEn: null, enEspera: true, esperaDesdeTs: null, molinosProxima: false }, ...o });
+
+describe('conteoPorEstado', () => {
+  it('cuenta los 6 estados (en 0 los ausentes) y manda lo desconocido a sin_datos', () => {
+    const c = conteoPorEstado([
+      pos(), pos(), pos({ estadoFrescura: 'perdido' }), pos({ estadoFrescura: 'raro' as never }),
+    ]);
+    expect(c).toEqual({ reportando: 2, detenido: 0, perdido: 1, sin_datos: 1, finalizado: 0, en_pausa: 0 });
+  });
+});
+
+describe('motivosAtencion / necesitaAtencion / puntajeAtencion', () => {
+  it('flota sana: sin motivos ni puntaje', () => {
+    expect(motivosAtencion(pos())).toEqual([]);
+    expect(necesitaAtencion(pos())).toBe(false);
+    expect(puntajeAtencion(pos())).toBe(0);
+  });
+  it('perdido con hace X; sin GPS aún', () => {
+    expect(motivosAtencion(pos({ estadoFrescura: 'perdido', ultimoFixTs: hace(18) }))).toEqual(['Perdido hace 18 min']);
+    expect(motivosAtencion(pos({ estadoFrescura: 'perdido', ultimoFixTs: null }))).toEqual(['Perdido']);
+    expect(motivosAtencion(pos({ estadoFrescura: 'sin_datos', ultimoFixTs: null }))).toEqual(['Sin GPS aún']);
+  });
+  it('infracciones abiertas con singular/plural y nivel; ignora nivel sin abiertas', () => {
+    expect(motivosAtencion(pos({ infraccionNivel: 'grave', infraccionesAbiertas: 2 }))).toEqual(['2 infracciones · grave']);
+    expect(motivosAtencion(pos({ infraccionNivel: 'leve', infraccionesAbiertas: 1 }))).toEqual(['1 infracción · leve']);
+    expect(necesitaAtencion(pos({ infraccionNivel: 'grave', infraccionesAbiertas: 0 }))).toBe(false);
+  });
+  it('cola de Molinos: solo con lugar en la cola del servidor', () => {
+    expect(motivosAtencion(esperando(), 2)).toEqual(['2.º en cola de Molinos']);
+    expect(necesitaAtencion(esperando(), 1)).toBe(true);
+    expect(necesitaAtencion(esperando(), 2)).toBe(false);
+    expect(necesitaAtencion(esperando())).toBe(false);
+  });
+  it('cola de Molinos: un orden viejo no vale si la posición fresca ya no espera', () => {
+    expect(motivosAtencion(pos(), 1)).toEqual([]);
+    expect(necesitaAtencion(pos(), 1)).toBe(false);
+    expect(puntajeAtencion(pos(), 1)).toBe(0);
+  });
+  it('puntaje de Molinos conserva el orden más allá del 20.º', () => {
+    expect(puntajeAtencion(esperando(), 20)).toBe(1);
+    expect(puntajeAtencion(esperando(), 40)).toBe(1);
+    expect(puntajeAtencion(esperando(), 18)).toBeGreaterThan(puntajeAtencion(esperando(), 20));
+  });
+  it('necesitaAtencion: perdido, sin datos o infracción abierta', () => {
+    expect(necesitaAtencion(pos({ estadoFrescura: 'perdido' }))).toBe(true);
+    expect(necesitaAtencion(pos({ estadoFrescura: 'sin_datos' }))).toBe(true);
+    expect(necesitaAtencion(pos({ infraccionNivel: 'leve', infraccionesAbiertas: 1 }))).toBe(true);
+  });
+  it('acumula motivos y ordena: gravísima > perdido > sin datos > leve > Molinos', () => {
+    const grav = pos({ infraccionNivel: 'gravisima', infraccionesAbiertas: 1 });
+    const perd = pos({ estadoFrescura: 'perdido' });
+    const sin = pos({ estadoFrescura: 'sin_datos' });
+    const leve = pos({ infraccionNivel: 'leve', infraccionesAbiertas: 1 });
+    const mol = esperando();
+    const orden = [grav, perd, sin, leve].map((p) => puntajeAtencion(p)).concat(puntajeAtencion(mol, 1));
+    expect(orden).toEqual([...orden].sort((a, b) => b - a));
+    expect(puntajeAtencion(mol, 1)).toBeGreaterThan(puntajeAtencion(mol, 3));
+    expect(motivosAtencion(esperando({ estadoFrescura: 'perdido', infraccionNivel: 'leve', infraccionesAbiertas: 1 }), 1)).toHaveLength(3);
+  });
+});
+
+describe('ordenColaMolinos', () => {
+  it('sesionId -> posición del servidor; sin resumen, vacío', () => {
+    const colas = [{ puntoEsperaId: 'p', lineas: [], entradas: [{ sesionId: 'a', vehiculoId: 'v', placa: 'A', posicion: 2 }] }];
+    expect(ordenColaMolinos({ colas }).get('a')).toBe(2);
+    expect(ordenColaMolinos(undefined).size).toBe(0);
+  });
+});

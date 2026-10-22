@@ -2,18 +2,18 @@ import { ConflictException, Injectable, NotFoundException, UnprocessableEntityEx
 import { withTenantContext } from '@quivo/db';
 import type { Prisma } from '@quivo/db';
 import { bloquearVueltasSesion } from '../ingesta-worker/deteccion-vueltas.js';
+import { leerColaMolinos } from './cola-molinos.js';
 import { vueltaContable, vueltaNoVacia } from './vuelta-no-vacia.js';
 import { sesionesVisiblesSql } from '../../common/sesiones/vigencia.js';
 import {
-  MOLINOS_ESPERA_PENDIENTE_MAX_H,
   MolinosResumenSchema,
-  UMBRAL_VECINO_FRESCO_MS,
   VueltaActualMovilSchema,
   VueltaResumenSchema,
   calcularSugerenciaMolinos,
   fechaActualBolivia,
   type AcuseVuelta,
   type DesignarVueltaRespuesta,
+  type MolinosCola,
   type MolinosResumen,
   type VueltaActualMovil,
   type VueltaResumen,
@@ -349,32 +349,13 @@ export class VueltasService {
     }
     let enEspera: { desdeTs: string; posicion?: number } | null = null;
     if (vuelta.esperaLlegadaTs && !vuelta.esperaSalidaTs && vuelta.varianteId) {
-      // Cola de Molinos = orden de llegada: 1 + las vueltas en curso del mismo punto de espera que
-      // llegaron antes y todavía no salieron (empate: por id). Informativo, no bloquea nada.
-      // Solo cuentan las que el worker todavía puede cerrar (llegada dentro de la ventana de espera
-      // pendiente) y cuya sesión sigue activa con un fix reciente: un teléfono muerto o sin GPS no
-      // traba a los de atrás.
-      const llegadaMinima = new Date(ahora.getTime() - MOLINOS_ESPERA_PENDIENTE_MAX_H * 3_600_000);
-      const fixDesde = new Date(ahora.getTime() - UMBRAL_VECINO_FRESCO_MS);
-      const [cola] = await tx.$queryRaw<{ n: number }[]>`
-        SELECT count(*)::int AS n
-        FROM vueltas o
-        JOIN variantes ov ON ov.id = o."varianteId"
-        JOIN sesiones_operativas os ON os.id = o."sesionId" AND os.estado = 'activa' AND os.fin IS NULL
-        WHERE ov."puntoEsperaId" = (SELECT "puntoEsperaId" FROM variantes WHERE id = ${vuelta.varianteId})
-          AND o."sindicatoId" = ${sesion.sindicatoId}
-          AND o.estado = 'en_curso'
-          AND o."esperaSalidaTs" IS NULL
-          AND o."esperaLlegadaTs" >= ${llegadaMinima}
-          AND EXISTS (
-            SELECT 1 FROM gps_sesion_resumen gr
-            WHERE gr.sesion_id = o."sesionId"::uuid AND gr."sindicatoId" = o."sindicatoId"
-              AND gr.ultimo_fix_ts >= ${fixDesde}
-          )
-          AND (o."esperaLlegadaTs" < ${vuelta.esperaLlegadaTs}
-               OR (o."esperaLlegadaTs" = ${vuelta.esperaLlegadaTs} AND o.id < ${vuelta.id}))
-      `;
-      enEspera = { desdeTs: vuelta.esperaLlegadaTs.toISOString(), posicion: (cola?.n ?? 0) + 1 };
+      // Posición en la cola de Molinos (`leerColaMolinos`, la misma que ve el panel). Si la propia
+      // vuelta no entra en la cola (llegada fuera de ventana), cuenta las de adelante + 1.
+      const cola = await leerColaMolinos(tx, sesion.sindicatoId, ahora, vuelta.varianteId);
+      const propia = cola.find((e) => e.vueltaId === vuelta.id);
+      // Solo por `esperaLlegadaTs` (no por id en JS: el orden de ids de Postgres depende del collation).
+      const posicion = propia?.posicion ?? cola.filter((e) => e.esperaLlegadaTs < vuelta.esperaLlegadaTs!).length + 1;
+      enEspera = { desdeTs: vuelta.esperaLlegadaTs.toISOString(), posicion };
     } else if (vuelta.esperaLlegadaTs && !vuelta.esperaSalidaTs) {
       enEspera = { desdeTs: vuelta.esperaLlegadaTs.toISOString() };
     }
@@ -425,23 +406,36 @@ export class VueltasService {
         ORDER BY l.nombre
       `;
       const vueltas = await tx.$queryRaw<
-        { lineaId: string; enEspera: number; esperaDesdeTs: Date | null; ultimoEnvioTs: Date | null }[]
+        { lineaId: string; ultimoEnvioTs: Date | null }[]
       >`
         SELECT v."lineaId",
-               count(*) FILTER (WHERE v.estado = 'en_curso' AND v."esperaLlegadaTs" IS NOT NULL
-                                 AND v."esperaSalidaTs" IS NULL)::int AS "enEspera",
-               min(v."esperaLlegadaTs") FILTER (WHERE v.estado = 'en_curso'
-                                 AND v."esperaSalidaTs" IS NULL) AS "esperaDesdeTs",
                max(v."designadaEn") FILTER (WHERE v."varianteId" IS NOT NULL) AS "ultimoEnvioTs"
         FROM vueltas v
         WHERE v.fecha = ${hoyStr}::date AND ${vueltaContable('v')}
         GROUP BY v."lineaId"
       `;
       const porLinea = new Map(vueltas.map((v) => [v.lineaId, v]));
+      const colas = new Map<string, MolinosCola>();
+      // `enEspera`/`esperaDesdeTs` por línea salen de la MISMA cola (una sola definición de "en espera").
+      const esperaPorLinea = new Map<string, { n: number; desde: Date }>();
+      for (const e of await leerColaMolinos(tx, actor.sindicatoId ?? null, ahora)) {
+        const w = esperaPorLinea.get(e.lineaId);
+        if (!w) esperaPorLinea.set(e.lineaId, { n: 1, desde: e.esperaLlegadaTs });
+        else {
+          w.n += 1;
+          if (e.esperaLlegadaTs < w.desde) w.desde = e.esperaLlegadaTs;
+        }
+        const c = colas.get(e.puntoEsperaId) ?? { puntoEsperaId: e.puntoEsperaId, lineas: [], entradas: [] };
+        if (!c.lineas.some((l) => l.lineaId === e.lineaId)) c.lineas.push({ lineaId: e.lineaId, lineaNombre: e.lineaNombre });
+        c.entradas.push({ sesionId: e.sesionId, vehiculoId: e.vehiculoId, placa: e.placa, posicion: e.posicion });
+        colas.set(e.puntoEsperaId, c);
+      }
       return MolinosResumenSchema.parse({
         servidorTs: ahora.toISOString(),
+        colas: [...colas.values()],
         lineas: flota.map((f) => {
           const v = porLinea.get(f.lineaId);
+          const w = esperaPorLinea.get(f.lineaId);
           const sugerencia = calcularSugerenciaMolinos({
             flotaActiva: f.flotaActiva,
             ultimoEnvioTs: v?.ultimoEnvioTs ?? null,
@@ -450,8 +444,8 @@ export class VueltasService {
           return {
             lineaId: f.lineaId,
             lineaNombre: f.lineaNombre,
-            enEspera: v?.enEspera ?? 0,
-            esperaDesdeTs: v && v.enEspera > 0 ? iso(v.esperaDesdeTs) : null,
+            enEspera: w?.n ?? 0,
+            esperaDesdeTs: iso(w?.desde ?? null),
             ultimoEnvioTs: iso(v?.ultimoEnvioTs ?? null),
             flotaActiva: f.flotaActiva,
             sinMolinosHoy: f.sinMolinosHoy,

@@ -95,9 +95,23 @@ export const MolinosLineaSchema = z.object({
 });
 export type MolinosLinea = z.infer<typeof MolinosLineaSchema>;
 
+/** Cola de un punto de espera: la MISMA que da `posicion` en `vuelta-actual` del chofer. */
+export const MolinosColaSchema = z.object({
+  puntoEsperaId: uuidSchema,
+  /** Líneas de los vehículos en esa cola (normalmente una). */
+  lineas: z.array(z.object({ lineaId: uuidSchema, lineaNombre: z.string() })),
+  /** Orden de llegada; `posicion` 1 = primero. */
+  entradas: z.array(
+    z.object({ sesionId: uuidSchema, vehiculoId: uuidSchema, placa: z.string(), posicion: z.number().int().positive() }),
+  ),
+});
+export type MolinosCola = z.infer<typeof MolinosColaSchema>;
+
 export const MolinosResumenSchema = z.object({
   servidorTs: z.string(),
   lineas: z.array(MolinosLineaSchema),
+  /** Ausente en servidores viejos: el panel lo trata como sin cola. */
+  colas: z.array(MolinosColaSchema).default([]),
 });
 export type MolinosResumen = z.infer<typeof MolinosResumenSchema>;
 
