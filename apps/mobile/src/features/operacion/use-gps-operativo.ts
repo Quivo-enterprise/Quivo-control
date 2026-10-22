@@ -330,6 +330,9 @@ export function useGpsOperativo(
   const puntosRef = useRef(0);
   const erroresEscritura = useRef(0);
   const puntosControlDetectados = useRef<Map<string, EstadoPuntoControl>>(new Map());
+  // Ref para que `sembrarCumplimientos` lea los PCs sin cambiar de identidad (re-dispararía el re-enganche).
+  const puntosControlRef = useRef(puntosControl);
+  puntosControlRef.current = puntosControl;
   const subscription = useRef<{ remove: () => void } | null>(null);
   // FIX POST-REVISIÓN (bug 2): suscripción SEPARADA de `onHeartbeat` — ver `onHeartbeat` más
   // abajo. No comparte el mismo `subscription.current` que `onLocation`: las dos deben poder
@@ -732,7 +735,8 @@ export function useGpsOperativo(
         Date.now(),
         UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
         false,
-        puntosControl,
+        // Mismo gate que `onLocation`: sin semilla hidratada no se procesa cumplimiento.
+        semillaHidratadaRef.current ? puntosControl : [],
       );
       if (emitir.length > 0) {
         // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
@@ -1006,6 +1010,9 @@ export function useGpsOperativo(
    * headless (`asegurarSemillaCumplimientos`).
    */
   const sembrarCumplimientos = useCallback(async (): Promise<void> => {
+    // Sin PC el re-armado no puede aplicarse: no se lee SQLite ni se hidrata; `onLocation`
+    // reintenta en un fix posterior, cuando el paquete ya cargó.
+    if (puntosControlRef.current.length === 0) return;
     try {
       const db = await abrirOutbox();
       const eventosCumplimiento = await obtenerEventosPorTipo(
@@ -1013,7 +1020,9 @@ export function useGpsOperativo(
         'cumplimiento_punto_control',
         sesionId,
       );
-      const base = clavesCumplimientoDesdePayloads(eventosCumplimiento);
+      // Lee los PC una sola vez: el re-armado de `clavesCumplimientoDesdePayloads` los necesita.
+      const pcs = puntosControlRef.current;
+      const base = clavesCumplimientoDesdePayloads(eventosCumplimiento, pcs);
       // FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"):
       // superpone las visitas PENDIENTES persistidas (SQLite) — ver el docblock de
       // `combinarConVisitasPendientes` (`gps/location-task.ts`). Sin esto, matar y reabrir la
@@ -1024,6 +1033,10 @@ export function useGpsOperativo(
       puntosControlDetectados.current = combinarConVisitasPendientes(base, visitasPendientes);
       // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): recién ACÁ, tras terminar sin
       // excepción, se marca hidratada — ver el comentario largo de `semillaHidratadaRef`.
+      // Sin PC (el paquete del dia carga async desde SQLite) el re-armado no pudo aplicarse: NO se
+      // hidrata, y `onLocation` reintenta en el proximo fix (hasta entonces los ticks usan
+      // `puntosControl: []`, asi que no se acumula estado que la re-siembra pise). Solo se
+      // reintenta mientras la lista este vacia — no al cambiar el array en cada refresco del paquete.
       semillaHidratadaRef.current = true;
     } catch (error) {
       console.error('[QUIVO][gps] No se pudo sembrar cumplimientos desde el outbox', error);

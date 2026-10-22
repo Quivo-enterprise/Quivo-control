@@ -5,12 +5,22 @@ vi.mock('@sentry/react-native', () => ({ captureException: vi.fn(), captureMessa
 vi.mock('../../db/paquete-dia', () => ({}));
 vi.mock('../../shared/api/paquete-dia-api', () => ({
   paqueteDiaApi: {},
-  PaqueteDiaApiError: class extends Error {},
+  PaqueteDiaApiError: class extends Error {
+    constructor(public kind: string, message: string) {
+      super(message);
+    }
+  },
 }));
 vi.mock('../../shared/security/sesion-movil-store', () => ({}));
 
 import type { PaqueteDia } from '@quivo/shared';
-import { MIN_ENTRE_REFRESCOS_MS, mismoPaquete, perteneceAAsignacion, puedeRefrescarPaquete } from './use-paquete-dia';
+import { PaqueteDiaApiError } from '../../shared/api/paquete-dia-api';
+import {
+  MIN_ENTRE_REFRESCOS_MS,
+  debeReportarFalloRefresco,
+  mismoPaquete, perteneceAAsignacion,
+  puedeRefrescarPaquete,
+} from './use-paquete-dia';
 
 describe('puedeRefrescarPaquete', () => {
   it('respeta el piso de 60 s entre descargas', () => {
@@ -30,5 +40,13 @@ describe('mismoPaquete / perteneceAAsignacion', () => {
     expect(perteneceAAsignacion(p, 'a1')).toBe(true);
     expect(perteneceAAsignacion(p, 'a2')).toBe(false);
     expect(perteneceAAsignacion(p, undefined)).toBe(false);
+  });
+});
+
+describe('debeReportarFalloRefresco', () => {
+  it('no reporta errores de red; sí los demás', () => {
+    expect(debeReportarFalloRefresco(new PaqueteDiaApiError('network', 'x'))).toBe(false);
+    expect(debeReportarFalloRefresco(new PaqueteDiaApiError('http', 'x'))).toBe(true);
+    expect(debeReportarFalloRefresco(new Error('boom'))).toBe(true);
   });
 });

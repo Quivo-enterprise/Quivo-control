@@ -950,10 +950,14 @@ export function estaSemillaHidratada(sesionId: string): boolean {
   return semillasHidratadasPorSesion.get(sesionId) === true;
 }
 
-async function asegurarSemillaCumplimientos(
+export async function asegurarSemillaCumplimientos(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
+  puntosControl: readonly PuntoControlPaquete[],
 ): Promise<void> {
+  // Sin PC el re-armado no puede aplicarse: no se lee el outbox ni se hidrata; el reintento
+  // ocurre en un tick posterior, cuando el contexto ya traiga los PC.
+  if (puntosControl.length === 0) return;
   // FIX POST-REVISIÓN (punto 5): si ya hidrató alguna vez, no hay nada que reintentar — evita
   // releer el outbox en cada tick de una sesión que ya sembró bien.
   if (semillasHidratadasPorSesion.get(sesionId) === true) return;
@@ -963,7 +967,7 @@ async function asegurarSemillaCumplimientos(
     semilla = (async () => {
       try {
         const eventos = await obtenerEventosPorTipo(db, 'cumplimiento_punto_control', sesionId);
-        const base = clavesCumplimientoDesdePayloads(eventos);
+        const base = clavesCumplimientoDesdePayloads(eventos, puntosControl);
         // FIX POST-REVISIÓN (bug 5): superpone las visitas PENDIENTES persistidas — ver el
         // docblock de `combinarConVisitasPendientes` (`location-task.ts`) para el porqué. Sin
         // esto, una visita en curso al momento del kill/reciclado volvía como si nunca hubiera
@@ -1302,7 +1306,7 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
       const location = event.params as unknown as Location;
 
       const db = await abrirOutbox();
-      await asegurarSemillaCumplimientos(db, contexto.sesionId);
+      await asegurarSemillaCumplimientos(db, contexto.sesionId, contexto.puntosControl);
       // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): mientras la semilla de esta sesión no
       // haya hidratado (lectura fallida, se reintenta en el próximo tick — ver
       // `asegurarSemillaCumplimientos`), este fix se procesa SOLO para `gps_point` — la máquina
@@ -1415,12 +1419,14 @@ async function manejarHeartbeatHeadless(): Promise<void> {
     if (!contexto) return;
 
     const db = await abrirOutbox();
-    await asegurarSemillaCumplimientos(db, contexto.sesionId);
+    await asegurarSemillaCumplimientos(db, contexto.sesionId, contexto.puntosControl);
     // REDISEÑO: `emitir` (confirmaciones de EVIDENCIA forzadas por antigüedad) YA NO se anuncia
     // — la evidencia nunca dispara ningún canal hacia el chofer (gap 1 y 2 del brief). Solo
     // `anunciosLlegada`, decidido por `evaluarAnuncioDeHeartbeat` DENTRO de
     // `confirmarVisitasVencidasEnCola` (punto 2 del brief: el fallback de 90 s ahora SÍ corre en
     // producción, desde este mismo punto de llamada).
+    // Mismo gate que el tick de ubicación: sin semilla hidratada no se toca el estado de
+    // cumplimiento con PC reales (Map posiblemente vacío/incompleto).
     const { anunciosLlegada } = await confirmarVisitasVencidasEnCola(
       db,
       contexto.deviceId,
@@ -1429,7 +1435,7 @@ async function manejarHeartbeatHeadless(): Promise<void> {
       Date.now(),
       UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
       true,
-      contexto.puntosControl,
+      estaSemillaHidratada(contexto.sesionId) ? contexto.puntosControl : [],
     );
     if (anunciosLlegada.length === 0) return;
 
