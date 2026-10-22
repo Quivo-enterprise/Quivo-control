@@ -67,9 +67,13 @@ Hallazgo: el panel "Jornada de hoy" mostraba 1616PID `en_recorrido` hoy. `jornad
 `inicio_recorrido`/`fin_recorrido` de una ventana que arranca 12 h antes de las 00:00, y el `inicio_recorrido` del
 21/10 15:24 BO nunca tuvo `fin_recorrido` (último GPS a las 17:54). Hay 4 definiciones de "en recorrido" que pueden
 contradecirse: jornada, mapa en vivo, vecinos/Molinos y fila de salida.
-Decisión del CTO: cerrar el **recorrido** abandonado, no el login. Este PR va antes del rediseño.
-1. Regla única "vigente" (`sesionesVisiblesSql`) movida a un módulo común y usada por en-vivo, jornadas y el job.
+Decisión del CTO (revisada el mismo día tras `/code-review`): **no se escribe nada**. Cerrar el recorrido desde el
+servidor trababa al chofer que sigue con la misma sesión al día siguiente (409 en `registrarLlegada`, vueltas que no
+abren); lo mismo con backlogs de más de 2 h. Se unifica la LECTURA: todos los lugares que deciden "está en recorrido" usan la
+misma regla de vigencia. Este PR va antes del rediseño.
+1. Regla única "vigente" (`sesionesVisiblesSql`) en `apps/api/src/common/sesiones/vigencia.ts`, usada por en-vivo y jornadas.
 2. Jornadas (fecha = hoy): un `inicio_recorrido` anterior a las 00:00 cuenta `en_recorrido` solo si la sesión está vigente.
-3. Job del worker: los recorridos `en_curso`/`en_pausa` que no estén vigentes se cierran. Escribe `fin_recorrido` con la
-   hora de la última actividad (no la de ahora), pone `recorridoEstado='finalizado'` y saca de la fila como el backstop.
-   El login no se toca. Es idempotente.
+3. Fila de salida y resumen de Molinos: una sesión no vigente no cuenta.
+4. Vecinos y cola de Molinos de `vuelta-actual` siguen exigiendo un fix fresco (10 min): es otra pregunta ("¿dónde está
+   ahora?"), más estricta que la vigencia, y no la contradice.
+5. Sin job de cierre: los recorridos abandonados quedan `en_curso` en la base, pero ninguna pantalla los muestra.
