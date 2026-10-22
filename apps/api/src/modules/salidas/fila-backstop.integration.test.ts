@@ -6,6 +6,7 @@ import { AuthMovilService } from '../auth-movil/auth-movil.service.js';
 import { hashTokenOpaco } from '../auth-movil/token-opaco.js';
 import { aplicarBackstopFila } from '../ingesta-worker/fila-backstop.js';
 import { IngestaWorkerService } from '../ingesta-worker/ingesta-worker.service.js';
+import { calcularFilaPc } from './fila-datos.js';
 import { ADMIN, LAT, LON, borrarMundo, crearMundo, type MundoSalidas } from './salidas.fixtures.js';
 
 /**
@@ -45,12 +46,15 @@ describe('fila de salida: backstop del worker y logout', () => {
     );
 
   beforeAll(async () => {
-    m = await crearMundo(6);
+    m = await crearMundo(9);
   });
 
   afterAll(async () => {
     await withTenantContext(ADMIN, async (tx) => {
       const ids = { in: [m.sindicatoA, m.sindicatoB] };
+      await tx.$executeRaw`DELETE FROM gps_points WHERE "sindicatoId" IN (${m.sindicatoA}, ${m.sindicatoB})`;
+      await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE "sindicatoId" IN (${m.sindicatoA}, ${m.sindicatoB})`;
+      await tx.$executeRaw`DELETE FROM sesion_desvio_estado WHERE "sindicatoId" IN (${m.sindicatoA}, ${m.sindicatoB})`;
       await tx.vuelta.deleteMany({ where: { sindicatoId: ids } });
       await tx.cumplimientoPc.deleteMany({ where: { sindicatoId: ids } });
       await tx.eventoOperativo.deleteMany({ where: { sindicatoId: ids } });
@@ -90,6 +94,51 @@ describe('fila de salida: backstop del worker y logout', () => {
     await enFila(3, hace(60));
     await lote([cumple(3, m.pcRetornoA, hace(600))]);
     expect(await filaDe(3)).toMatchObject({ estado: 'en_fila' });
+  });
+
+  it('salida física por GPS (sin POST ni cumplimiento): 2 fixes lejos de la terminal ⇒ salio/deteccion y ancla la frecuencia', async () => {
+    await withTenantContext(ADMIN, (tx) =>
+      tx.$executeRaw`UPDATE puntos_control SET "frecuenciaSalidaMin" = 10 WHERE id = ${m.pcTerminalA}`,
+    );
+    await enFila(6, hace(600));
+    await enFila(7, hace(590));
+    const gps = (i: number, ts: Date, lat: number, accuracy = 10) =>
+      evento('gps_point', ts, { sesionId: m.a[i]!.sesion.sesionId, lat, lng: LON, accuracy, tsFix: ts.toISOString() });
+    // El teléfono sube ~1 fix por POST: la racha de 2 se arma con lotes SEPARADOS (lee `gps_points`).
+    await lote([gps(6, hace(25), LAT)]);
+    await lote([gps(6, hace(15), LAT + 0.003)]);
+    expect(await filaDe(6)).toMatchObject({ estado: 'en_fila' });
+    await lote([gps(6, hace(10), LAT + 0.004)]);
+    const fila = await filaDe(6);
+    expect(fila).toMatchObject({ estado: 'salio', salidaOrigen: 'deteccion' });
+    expect(fila!.salidaTs!.getTime()).toBe(hace(15).getTime());
+    // El siguiente de la fila toma la salida real como ancla de la frecuencia.
+    const { posiciones, baseMin } = await withTenantContext(ADMIN, (tx) =>
+      calcularFilaPc(tx, m.pcTerminalA, fechaActualBolivia(new Date()), new Date()),
+    );
+    const sig = posiciones.find((p) => p.vehiculoId === m.a[7]!.vehiculoId);
+    expect(baseMin).toBeGreaterThan(0);
+    expect(sig!.etaTs.getTime()).toBe(hace(15).getTime() + baseMin! * 60_000);
+  });
+
+  it('trufi parado en la terminal de su fila con OTRA terminal lejos en la ruta: no sale', async () => {
+    const otraTerminal = randomUUID();
+    await withTenantContext(ADMIN, (tx) =>
+      tx.$executeRaw`
+        INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, rol, "createdAt", "updatedAt")
+        VALUES (${otraTerminal}, ${m.rutaA}, 5, ST_SetSRID(ST_MakePoint(-63.175, ${LAT}), 4326)::geography, 100, false, 'terminal', now(), now())`,
+    );
+    try {
+      await enFila(8, hace(600));
+      const gps = (ts: Date) =>
+        evento('gps_point', ts, { sesionId: m.a[8]!.sesion.sesionId, lat: LAT, lng: LON, accuracy: 10, tsFix: ts.toISOString() });
+      await lote([gps(hace(30))]);
+      await lote([gps(hace(20))]);
+      await lote([gps(hace(10))]);
+      expect(await filaDe(8)).toMatchObject({ estado: 'en_fila', salidaTs: null });
+    } finally {
+      await withTenantContext(ADMIN, (tx) => tx.$executeRaw`DELETE FROM puntos_control WHERE id = ${otraTerminal}`);
+    }
   });
 
   it('una falla del backstop se loguea y no rompe: el SAVEPOINT se revierte y la transacción sigue viva', async () => {

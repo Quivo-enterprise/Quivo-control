@@ -141,16 +141,22 @@ export async function procesarVueltasSesion(
     (entrada.pausas?.length ?? 0) > 0;
   if (!hayEventos) {
     if (!entrada.hayGps) return NADA;
-    const pendiente = await tx.$queryRaw<{ uno: number }[]>`
-      SELECT 1 AS uno FROM vueltas v
-      JOIN variantes va ON va.id = v."varianteId"
-      JOIN puntos_control pe ON pe.id = va."puntoEsperaId" AND pe.estado = 'activo'
-      WHERE v."sesionId" = ${sesionId} AND v."sindicatoId" = ${sindicatoId}
-        AND v."esperaLlegadaTs" IS NOT NULL AND v."esperaSalidaTs" IS NULL
-        AND v."esperaLlegadaTs" >= ${llegadaMinima}
-      LIMIT 1
+    // Con SOLO GPS hay trabajo si la sesión está en la fila (salida física) o tiene una espera pendiente.
+    const [hay] = await tx.$queryRaw<{ enFila: boolean; pendiente: boolean }[]>`
+      SELECT EXISTS(
+               SELECT 1 FROM fila_salida
+               WHERE "sesionId" = ${sesionId} AND "sindicatoId" = ${sindicatoId} AND estado = 'en_fila'
+             ) AS "enFila",
+             EXISTS(
+               SELECT 1 FROM vueltas v
+               JOIN variantes va ON va.id = v."varianteId"
+               JOIN puntos_control pe ON pe.id = va."puntoEsperaId" AND pe.estado = 'activo'
+               WHERE v."sesionId" = ${sesionId} AND v."sindicatoId" = ${sindicatoId}
+                 AND v."esperaLlegadaTs" IS NOT NULL AND v."esperaSalidaTs" IS NULL
+                 AND v."esperaLlegadaTs" >= ${llegadaMinima}
+             ) AS pendiente
     `;
-    if (pendiente.length === 0) return NADA;
+    if (!hay?.enFila && !hay?.pendiente) return NADA;
   }
 
   // PRIMER lock: la fila de la sesión con `FOR SHARE`, ANTES de cualquier `FOR UPDATE` sobre
@@ -197,6 +203,7 @@ export async function procesarVueltasSesion(
     terminalesIds: new Set(pcs.filter((pc) => pc.rol === 'terminal').map((pc) => pc.id)),
     cumplimientos: entrada.cumplimientos.filter((c) => pcPorId.has(c.puntoControlId)),
     fines: [...entrada.fines, ...(entrada.pausas ?? [])],
+    hayGps: entrada.hayGps,
     ahora,
   });
 
