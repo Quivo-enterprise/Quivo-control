@@ -86,3 +86,6 @@ Molinos y Jornada compactos, cajón de vehículo angosto a la derecha. Tipograf�
 Debilidades a resolver en la implementación: barra en móvil (~190 px), estado vacío de "Atención" con flota sana,
 cajón + panel a 1280 px, quitar la alerta "Espera en Molinos" (salida libre).
 Empieza después de mergear PR 1.b.
+Ajuste del CTO: en los pines del **mapa** va la foto del trufi (`fotoUrl`, la que sube la app), no el glifo de estado.
+El estado (forma + color) queda como insignia chica sobre la foto, junto al anillo de línea, la insignia de severidad,
+la de Molinos y la placa. Sin foto, el fallback actual. El resto de los íconos (lista, leyenda, panel, cajón) como en B.
