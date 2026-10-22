@@ -6,6 +6,36 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-21, 22:00 (BO): pendientes 5, 6, 7 y 9 mergeados, falta desplegar
+
+Plan: `docs/plan-pendientes-post-piloto-22-10.md`.
+
+**Mergeado en main** (`fde4b21`), **sin desplegar todavía**:
+- **#235, ítem 5:** /en-vivo superpone en ámbar el tramo de la variante designada de la vuelta actual (`vuelta.varianteId`, no `molinosProxima`). La app ya lo dibujaba con `DesignacionMapa` en la fase de regreso; no se tocó.
+- **#236, ítem 7:** `MARGEN_DEMORADO_MS = 2 min` en shared. El 1.º de la fila se marca demorado recién 2 min después de su ETA, y la app usa la misma constante (antes 60 s). El corrimiento de ETAs de los de atrás sigue continuo.
+- **#237, ítem 6:** sin vuelta en curso, la fase de vecinos sale del último cumplimiento: terminal da ida; un `orden` mayor o igual al del retorno da regreso; si no, ida. Sin cumplimientos queda null.
+- **#238, ítem 9, terminal no re-detectado.** Causa: la re-siembra de la geocerca al reabrir la app.
+  - PIL emitió todos los PC hasta las 21:07Z, entró al terminal a las 21:15:32Z, tuvo un hueco de GPS de 78 s y quedó estacionado a 48 m.
+  - La siembra marcaba `dentro:true` a todo PC con una emisión previa.
+  - Ahora re-arma el PC si después se emitió otro PC lejano. La siembra espera a tener los PC del paquete, y además los errores de red del refresco ya no van a Sentry.
+  - `shortcut:` la evidencia sale solo de las emisiones de otros PC.
+
+**Para desplegar.** El modo automático bloqueó el deploy a prod; lo corre el CTO:
+1. Revisar que no haya trufis reportando (último fix de las 21:54Z).
+2. `! cd /home/shadowfreak/Documents/Quivo-App/Quivo-control && GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh r26-20261022` (api, web y worker; shared cambió).
+3. OTA (#236 y #238): `! cd /home/shadowfreak/Documents/Quivo-App/Quivo-control/apps/mobile && echo y | ./scripts/publicar-ota.sh "Terminal tras reabrir la app; margen de demorado (r26)" > /tmp/ota-r26.log 2>&1`
+4. Pedir a los choferes que reabran la app.
+
+**Rollback:**
+- API `quivo-api-00032-w5h` / worker `api:r25-20261021`.
+- Web: la revisión previa de `quivo-web`.
+- OTA: republicar el grupo `ec674f05-3871-4be3-b989-cd3f07b264cd`.
+
+**Abierto:**
+- Codex: no verificado en #230 a #238. La cuota se renueva el 16/11 y el mensaje pide "Upgrade to Plus": revisar la suscripción.
+- Alinear el plan de `cargar-linea-16.ts` con los PC de prod (retorno=8, espera=15, PC16) antes de otro `--apply`.
+- Ítem 9 sin verificar en dispositivo. Mirar en el piloto si el terminal se detecta tras reabrir la app en SR.
+
 ## Punto de retome — 2026-10-21, 22:30: r25 + OTA + trazado SR en prod para el piloto del 22/10
 
 **En prod:**
