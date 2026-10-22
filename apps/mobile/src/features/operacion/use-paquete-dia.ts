@@ -1,9 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import * as Sentry from '@sentry/react-native';
 import type { PaqueteDia } from '@quivo/shared';
 import { abrirPaqueteDiaDb, guardarPaqueteDia, obtenerPaqueteDiaLocal } from '../../db/paquete-dia';
 import { paqueteDiaApi, PaqueteDiaApiError } from '../../shared/api/paquete-dia-api';
 import { cargarSesionMovil } from '../../shared/security/sesion-movil-store';
+
+/** Mínimo entre descargas al volver a primer plano. */
+export const MIN_ENTRE_REFRESCOS_MS = 60_000;
+/** Refresco periódico con la app en primer plano. */
+export const INTERVALO_REFRESCO_MS = 10 * 60_000;
+
+/** Throttle del refresco por AppState: `ultimaCargaMs` es el inicio de la última descarga. */
+export function puedeRefrescarPaquete(ultimaCargaMs: number, ahoraMs: number): boolean {
+  return ahoraMs - ultimaCargaMs >= MIN_ENTRE_REFRESCOS_MS;
+}
+
+/** Mismo contenido (comparación barata por JSON): evita re-renders del mapa cada refresco. */
+export function mismoPaquete(a: PaqueteDia | null, b: PaqueteDia): boolean {
+  return a !== null && JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** El paquete descargado es de la asignación de la sesión actual. */
+export function perteneceAAsignacion(paquete: PaqueteDia, asignacionId: string | null | undefined): boolean {
+  return !!asignacionId && paquete.asignacion.id === asignacionId;
+}
 
 export interface EstadoPaqueteDia {
   cargando: boolean;
@@ -16,6 +37,9 @@ export interface EstadoPaqueteDia {
  * Descarga el paquete del día (QUI-236) al entrar a la pantalla de operación y lo guarda en
  * SQLite; si falla (sin red, sesión no renovable) cae al último paquete descargado —
  * el recorrido completo debe poder hacerse sin red (RF-67) mientras no haya vencido.
+ * Se vuelve a descargar al volver a primer plano y cada `INTERVALO_REFRESCO_MS` (un punto de
+ * control movido en prod no llegaba a los teléfonos ya abiertos); un refresco fallido conserva el
+ * paquete actual y no muestra spinner.
  */
 export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) {
   const [estado, setEstado] = useState<EstadoPaqueteDia>({
@@ -25,9 +49,13 @@ export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) 
     error: null,
   });
   const yaCargo = useRef(false);
+  const ultimaCargaMs = useRef(0);
+  const enVuelo = useRef(false);
+  const recargaPendiente = useRef(false);
+  const paqueteActual = useRef<PaqueteDia | null>(null);
 
-  const cargar = useCallback(async () => {
-    setEstado((actual) => ({ ...actual, cargando: true, error: null }));
+  const descargar = useCallback(async (refresco: boolean) => {
+    if (!refresco) setEstado((actual) => ({ ...actual, cargando: true, error: null }));
     const db = await abrirPaqueteDiaDb();
     try {
       const accessToken = await obtenerAccessToken();
@@ -35,9 +63,27 @@ export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) 
         throw new PaqueteDiaApiError('network', 'Sin conexión o sesión no renovable');
       }
       const paquete = await paqueteDiaApi.obtenerAsignacionDelDia(accessToken);
+      if (refresco) {
+        // Un refresco en segundo plano no pisa el paquete si es de otra asignación (sesión cambiada).
+        const sesion = await cargarSesionMovil().catch(() => null);
+        if (!perteneceAAsignacion(paquete, sesion?.contexto.asignacion.id)) {
+          Sentry.captureMessage('Refresco del paquete del día de otra asignación: descartado', {
+            level: 'warning',
+            tags: { contexto: 'paquete-dia', paso: 'refresco-otra-asignacion' },
+          });
+          return;
+        }
+        if (mismoPaquete(paqueteActual.current, paquete)) return;
+      }
       await guardarPaqueteDia(db, paquete);
+      paqueteActual.current = paquete;
       setEstado({ cargando: false, paquete, vencido: false, error: null });
     } catch (error) {
+      // Refresco en segundo plano fallido: se conserva el paquete actual tal cual.
+      if (refresco) {
+        Sentry.captureException(error, { tags: { contexto: 'paquete-dia', paso: 'refresco-descarga' } });
+        return;
+      }
       // Hallazgo 1 (CRÍTICO, ver docs/plan-v2-app-y-mapa-en-vivo.md §2.4): antes de aceptar
       // el fallback local hay que saber a qué asignación pertenece la fila en SQLite — la
       // fila sobrevive al logout y a cualquier turno anterior en este mismo teléfono. La
@@ -65,6 +111,7 @@ export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) 
       }
       const local = sesion ? await obtenerPaqueteDiaLocal(db, sesion.contexto.asignacion.id) : null;
       if (local) {
+        paqueteActual.current = local.paquete;
         setEstado({ cargando: false, paquete: local.paquete, vencido: local.vencido, error: null });
         return;
       }
@@ -80,11 +127,52 @@ export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) 
     }
   }, [obtenerAccessToken]);
 
+  const cargar = useCallback(
+    async (refresco = false) => {
+      if (enVuelo.current) {
+        // Una recarga manual no se pierde: corre al terminar la descarga en vuelo.
+        if (!refresco) recargaPendiente.current = true;
+        return;
+      }
+      enVuelo.current = true;
+      ultimaCargaMs.current = Date.now();
+      try {
+        await descargar(refresco);
+      } catch (error) {
+        // Un refresco nunca debe dejar una promesa rechazada colgando (`void cargar(true)`).
+        if (!refresco) throw error;
+        Sentry.captureException(error, { tags: { contexto: 'paquete-dia', paso: 'refresco' } });
+      } finally {
+        enVuelo.current = false;
+        if (recargaPendiente.current) {
+          recargaPendiente.current = false;
+          void cargar(false);
+        }
+      }
+    },
+    [descargar],
+  );
+
   useEffect(() => {
     if (yaCargo.current) return;
     yaCargo.current = true;
     void cargar();
   }, [cargar]);
 
-  return { ...estado, recargar: cargar };
+  // Refresco con la app en primer plano: al volver a 'active' (con piso de `MIN_ENTRE_REFRESCOS_MS`)
+  // y por intervalo (`setInterval` no corre en background, así que no hace falta pausarlo).
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (estadoApp) => {
+      if (estadoApp === 'active' && puedeRefrescarPaquete(ultimaCargaMs.current, Date.now())) {
+        void cargar(true);
+      }
+    });
+    const timer = setInterval(() => void cargar(true), INTERVALO_REFRESCO_MS);
+    return () => {
+      sub.remove();
+      clearInterval(timer);
+    };
+  }, [cargar]);
+
+  return { ...estado, recargar: () => cargar() };
 }
