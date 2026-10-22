@@ -7,11 +7,12 @@ import {
   TEXTO_AVISO_CANCELADA,
   partesAvisoDesignada,
   textoAvisoDesignada,
-  textoContadorEspera,
 } from './vuelta-actual-core';
 
 interface AvisoDesignacionProps {
-  /** `null` = no hay designación por confirmar. */
+  /** Hay una designación por confirmar. */
+  designada: boolean;
+  /** Minutos de espera en Molinos; `null` = salida libre. */
   esperaMin: number | null;
   cancelada: boolean;
   /** La última consulta buena es vieja: se muestra la designación con una marca discreta. */
@@ -29,6 +30,7 @@ interface AvisoDesignacionProps {
  * sombra y tipografía Oxanium del tema Quivo.
  */
 export function AvisoDesignacion({
+  designada,
   esperaMin,
   cancelada,
   sinActualizar = false,
@@ -36,10 +38,10 @@ export function AvisoDesignacion({
   onEntenderDesignacion,
   onEntenderCancelacion,
 }: AvisoDesignacionProps) {
-  if (esperaMin === null && !cancelada) return null;
+  if (!designada && !cancelada) return null;
   // La cancelación manda: si coexisten, lo último que pasó es que se canceló.
   const esCancelacion = cancelada;
-  const partes = esperaMin === null ? null : partesAvisoDesignada(esperaMin, 'min');
+  const partes = partesAvisoDesignada(esperaMin, 'min');
 
   return (
     <View pointerEvents="box-none" style={[styles.contenedor, { top }]}>
@@ -50,7 +52,7 @@ export function AvisoDesignacion({
         accessibilityLabel={
           esCancelacion
             ? TEXTO_AVISO_CANCELADA
-            : textoAvisoDesignada(esperaMin ?? 0)
+            : textoAvisoDesignada(esperaMin)
         }
       >
         <View style={styles.encabezado}>
@@ -66,13 +68,11 @@ export function AvisoDesignacion({
         {esCancelacion ? (
           <Text style={styles.cuerpo}>{CUERPO_AVISO_CANCELADA}</Text>
         ) : (
-          partes && (
-            <Text style={styles.cuerpo}>
-              {partes.antes}
-              <Text style={styles.cuerpoNegrita}>{partes.destacado}</Text>
-              {partes.despues}
-            </Text>
-          )
+          <Text style={styles.cuerpo}>
+            {partes.antes}
+            <Text style={styles.cuerpoNegrita}>{partes.destacado}</Text>
+            {partes.despues}
+          </Text>
         )}
         {!esCancelacion && sinActualizar ? (
           <Text style={styles.sinActualizar}>sin actualizar</Text>
@@ -94,18 +94,17 @@ export function AvisoDesignacion({
 }
 
 interface ContadorEsperaMolinosProps {
-  /** `null` = no está en Molinos: no se dibuja. */
-  restanteMin: number | null;
+  /** `null` = no está en Molinos (o sin dato): no se dibuja. */
+  pastilla: { texto: string; listo: boolean } | null;
   /** Posición (dp) desde el borde inferior, justo sobre el sheet de próximo control. */
   bottom: number;
 }
 
-/** "Podés salir en N min" / "Ya podés salir" mientras el vehículo está en el PC de espera.
+/** "Podés salir en N min" / "Ya podés salir" (o el lugar en la cola si la salida es libre) mientras el vehículo está en el PC de espera.
  * Informativo: no bloquea nada y no intercepta toques. */
-export function ContadorEsperaMolinos({ restanteMin, bottom }: ContadorEsperaMolinosProps) {
-  if (restanteMin === null) return null;
-  const listo = restanteMin <= 0;
-  const texto = textoContadorEspera(restanteMin);
+export function ContadorEsperaMolinos({ pastilla, bottom }: ContadorEsperaMolinosProps) {
+  if (pastilla === null) return null;
+  const { texto, listo } = pastilla;
   return (
     <View pointerEvents="none" style={[styles.contenedor, { bottom }]}>
       <View

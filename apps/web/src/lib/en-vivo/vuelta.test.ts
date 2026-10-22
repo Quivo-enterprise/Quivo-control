@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PosicionEnVivo, Variante, VueltaPosicion } from '@quivo/shared';
 import {
-  ESPERA_MIN_DEFAULT,
   aplicarDesignacion,
   esSugerido,
   esperaMinDeVariante,
@@ -53,9 +52,9 @@ describe('variantesDeEspera / esperaMinDeVariante', () => {
   it('minutos del punto de espera; 30 si no se conocen', () => {
     const vs = [variante()];
     expect(esperaMinDeVariante(id(1), vs, [{ id: id(50), esperaMin: 45 }])).toBe(45);
-    expect(esperaMinDeVariante(id(1), vs, [{ id: id(50), esperaMin: null }])).toBe(ESPERA_MIN_DEFAULT);
-    expect(esperaMinDeVariante(id(1), vs, undefined)).toBe(ESPERA_MIN_DEFAULT);
-    expect(esperaMinDeVariante(null, vs, [{ id: id(50), esperaMin: 45 }])).toBe(ESPERA_MIN_DEFAULT);
+    expect(esperaMinDeVariante(id(1), vs, [{ id: id(50), esperaMin: null }])).toBeNull();
+    expect(esperaMinDeVariante(id(1), vs, undefined)).toBeNull();
+    expect(esperaMinDeVariante(null, vs, [{ id: id(50), esperaMin: 45 }])).toBeNull();
   });
 });
 
@@ -108,6 +107,11 @@ describe('esperaMolinos', () => {
     const e = esperaMolinos(hace(12), 30, AHORA)!;
     expect(e.texto).toBe('en Molinos hace 12 min (faltan 18)');
     expect(e.faltanMin).toBe(18);
+    expect(e.cumplida).toBe(false);
+  });
+  it('salida libre (null): "en Molinos hace N min", sin faltan ni cumplida', () => {
+    const e = esperaMolinos(hace(35), null, AHORA)!;
+    expect(e.texto).toBe('en Molinos hace 35 min');
     expect(e.cumplida).toBe(false);
   });
   it('cumplida cuando pasó el mínimo; nunca faltan negativos', () => {

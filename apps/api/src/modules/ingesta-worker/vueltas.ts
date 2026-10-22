@@ -466,16 +466,17 @@ export function inicioVentanaEspera(p: {
 /**
  * Cierra la espera de una vuelta designada: dada la salida confirmada, devuelve su `ts` y, si
  * esperó menos de `esperaMin`, la infracción `espera_corta` (`detalle {esperaMin, requeridoMin}`:
- * lo esperado en minutos enteros hacia abajo y lo exigido).
+ * lo esperado en minutos enteros hacia abajo y lo exigido). `esperaMin` null = salida libre: solo
+ * cierra la espera, sin infracción.
  */
 export function cerrarEspera(
   vuelta: Pick<FilaVuelta, 'id' | 'esperaLlegadaTs'>,
   salida: { ts: Date; lat: number; lng: number },
-  esperaMin: number,
+  esperaMin: number | null,
 ): { esperaSalidaTs: Date; infraccion: InfraccionVuelta | null } {
   const esperadoMs = salida.ts.getTime() - vuelta.esperaLlegadaTs!.getTime();
   const infraccion: InfraccionVuelta | null =
-    esperadoMs < esperaMin * 60_000
+    esperaMin !== null && esperadoMs < esperaMin * 60_000
       ? {
           tipo: 'espera_corta',
           vueltaId: vuelta.id,

@@ -52,11 +52,18 @@ export const ESTADO_LOCAL_INICIAL: EstadoLocalVuelta = {
 export const MAX_INTENTOS_ANUNCIO = 3;
 /** Más viejo que esto, el cache de la vuelta ya no se dibuja/cuenta como actual. */
 export const MAX_EDAD_CACHE_MS = 15 * 60_000;
+/** La posición en la cola de Molinos solo la confirma el servidor: con la última respuesta más
+ * vieja que esto (3 consultas de 20 s perdidas) la pastilla se oculta en vez de mostrar un lugar
+ * que pudo cambiar. */
+export const MAX_EDAD_POSICION_COLA_MS = 60_000;
 /** Cada cuánto se reescribe `actualizadoEn` aunque la respuesta sea idéntica. */
 export const REFRESCO_ACTUALIZADO_MS = 2 * 60_000;
+/** Igual, pero mientras haya posición en la cola de Molinos: `actualizadoEn` es la edad de la
+ * posición mostrada (`MAX_EDAD_POSICION_COLA_MS`), así que sigue cada poll de 20 s. */
+export const REFRESCO_POSICION_COLA_MS = 15_000;
 
 export type AvisoVuelta =
-  | { tipo: 'designada'; clave: string; esperaMin: number }
+  | { tipo: 'designada'; clave: string; esperaMin: number | null }
   | { tipo: 'cancelada'; clave: string };
 
 /** Identidad de una designación: la vuelta + el instante exacto en que se designó. */
@@ -160,6 +167,7 @@ export function respuestasIguales(a: VueltaActualMovil | null, b: VueltaActualMo
   if (a.vueltaId !== b.vueltaId || a.numero !== b.numero) return false;
   if (!filasIguales(a.fila, b.fila)) return false;
   if ((a.enEspera?.desdeTs ?? null) !== (b.enEspera?.desdeTs ?? null)) return false;
+  if ((a.enEspera?.posicion ?? null) !== (b.enEspera?.posicion ?? null)) return false;
   const da = a.designacion;
   const db = b.designacion;
   if (!da || !db) return da === db;
@@ -219,7 +227,9 @@ export function aplicarRespuesta(
 
   const iguales = respuestasIguales(estado.ultimo, nuevo);
   const marcaVencida =
-    estado.actualizadoEn === null || ctx.ahoraMs - estado.actualizadoEn >= REFRESCO_ACTUALIZADO_MS;
+    estado.actualizadoEn === null ||
+    ctx.ahoraMs - estado.actualizadoEn >=
+      (nuevo.enEspera?.posicion !== undefined ? REFRESCO_POSICION_COLA_MS : REFRESCO_ACTUALIZADO_MS);
   // Salir de la fila (`null` explícito tras tener una) desarma la llegada automática; volver a
   // tener fila (p. ej. con el botón "Estoy en la fila") la rearma; sin el campo no se toca.
   const filaDesarmada = respuesta.fila
@@ -379,6 +389,26 @@ export function restanteEsperaMin(esperaMin: number, desdeTs: string, ahoraMs: n
   return Math.max(0, Math.ceil(total - transcurridoMin));
 }
 
+/** Pastilla de Molinos. Con minutos de espera: cuenta regresiva. Sin minutos (salida libre): el
+ * lugar en la cola por orden de llegada; sin `posicion` (servidor viejo) o con la respuesta del
+ * servidor más vieja que `MAX_EDAD_POSICION_COLA_MS` no hay pastilla. */
+export function pastillaEspera(
+  esperaMin: number | null,
+  desdeTs: string,
+  ahoraMs: number,
+  posicion: number | undefined,
+  edadRespuestaMs: number,
+): { texto: string; listo: boolean } | null {
+  if (esperaMin !== null) {
+    const restante = restanteEsperaMin(esperaMin, desdeTs, ahoraMs);
+    return { texto: textoContadorEspera(restante), listo: restante <= 0 };
+  }
+  if (posicion === undefined || edadRespuestaMs > MAX_EDAD_POSICION_COLA_MS) return null;
+  return posicion === 1
+    ? { texto: 'Es tu turno. Podés salir', listo: true }
+    : { texto: `Sos el ${posicion}.º en Molinos. Salís después del que está adelante.`, listo: false };
+}
+
 export function textoContadorEspera(restanteMin: number): string {
   return restanteMin > 0 ? `Podés salir en ${restanteMin} min` : 'Ya podés salir';
 }
@@ -387,17 +417,21 @@ export function textoContadorEspera(restanteMin: number): string {
  * resalta `destacado`; la voz, la notificación y la etiqueta de accesibilidad usan la versión
  * hablada (`textoAvisoDesignada`, "minutos" completo). */
 export function partesAvisoDesignada(
-  esperaMin: number,
+  esperaMin: number | null,
   unidad: 'min' | 'minutos' = 'minutos',
 ): { antes: string; destacado: string; despues: string } {
   return {
     antes: 'Esta vuelta: ',
     destacado: 'vía Molinos',
-    despues: `. Después de Honduras subí por Putucu y esperá ${esperaMin} ${unidad}.`,
+    // `esperaMin` null = salida libre en Molinos: no hay espera que avisar.
+    despues:
+      esperaMin === null
+        ? '. Después de Honduras subí por Putucu.'
+        : `. Después de Honduras subí por Putucu y esperá ${esperaMin} ${unidad}.`,
   };
 }
 
-export function textoAvisoDesignada(esperaMin: number): string {
+export function textoAvisoDesignada(esperaMin: number | null): string {
   const p = partesAvisoDesignada(esperaMin, 'minutos');
   return `${p.antes}${p.destacado}${p.despues}`;
 }

@@ -284,7 +284,7 @@ export function useMolinosResumen(token: string | null) {
 /**
  * Variantes de la ruta de la sesión (las que tienen punto de espera son las designables) y los
  * puntos de control de esa ruta (para los minutos de espera). Cambian solo si un admin edita la
- * ruta: `staleTime` largo. Si fallan, el panel degrada (sin control de designación / 30 min).
+ * ruta: `staleTime` largo. Si fallan, el panel degrada (sin control de designación / sin minutos de espera).
  */
 export function useOpcionesDesignacion(token: string | null, rutaId: string | null) {
   const variantes = useQuery<Variante[]>({

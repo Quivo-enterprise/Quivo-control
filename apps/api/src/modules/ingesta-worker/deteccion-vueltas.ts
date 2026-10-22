@@ -351,7 +351,7 @@ export async function procesarVueltasSesion(
     if (eliminadas.has(fila.id)) continue;
     if (fila.varianteId === null || fila.esperaLlegadaTs === null || fila.esperaSalidaTs !== null) continue;
     const pcEspera = fila.puntoEsperaId ? pcPorId.get(fila.puntoEsperaId) : undefined;
-    if (!pcEspera?.esperaMin || !fila.puntoEsperaId) continue;
+    if (!pcEspera || !fila.puntoEsperaId || pcEspera.rol !== 'espera') continue;
     // Ventana de fixes: `max(llegada, min(cursor, mínimo GPS del lote) - margen)` (ver
     // `inicioVentanaEspera`): el margen cubre la histéresis de fixes consecutivos y el mínimo del
     // lote los fixes confirmados tarde con `ts` anterior al cursor. Nunca antes de la llegada.

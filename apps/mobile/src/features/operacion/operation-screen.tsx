@@ -792,10 +792,11 @@ export function OperationScreen(
 
       <ControlFeedbackToast ultimaDeteccion={gps.ultimaDeteccion} />
       <ContadorEsperaMolinos
-        restanteMin={vueltaActual.restanteEspera}
+        pastilla={vueltaActual.pastillaEspera}
         bottom={altoSheetVisible + quivoSpacing.md}
       />
       <AvisoDesignacion
+        designada={vueltaActual.designacionPendiente !== null}
         esperaMin={vueltaActual.designacionPendiente?.puntoEspera.esperaMin ?? null}
         cancelada={vueltaActual.cancelacionPendiente}
         sinActualizar={vueltaActual.sinActualizar}

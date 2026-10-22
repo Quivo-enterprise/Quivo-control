@@ -122,11 +122,17 @@ export const VueltaActualMovilSchema = z.object({
       puntoEspera: z.object({
         id: uuidSchema,
         coord: PuntoGeoJsonSchema,
-        esperaMin: z.number().int().positive(),
+        esperaMin: z.number().int().positive().nullable(),
       }),
     })
     .nullable(),
-  enEspera: z.object({ desdeTs: z.string() }).nullable(),
+  enEspera: z
+    .object({
+      desdeTs: z.string(),
+      /** Lugar en la cola de Molinos (1 = primero en llegar y sin salir); ausente en servidores viejos. */
+      posicion: z.number().int().positive().optional(),
+    })
+    .nullable(),
   /** Fila de salida de la terminal (PR "fila de salida"); ausente/`null` si no está en la fila. */
   fila: EstadoFilaSalidaSchema.nullable().optional(),
 });

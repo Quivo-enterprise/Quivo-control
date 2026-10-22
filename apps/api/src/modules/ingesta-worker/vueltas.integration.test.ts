@@ -89,7 +89,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
     | 'vacia' | 'cierreVacia' | 'cierreDesig' | 'cierreSinTenant' | 'inactiva' | 'esperaTardia' | 'retro'
     | 'omitidaFin' | 'cierreTardio' | 'estacionado' | 'espNoDesig' | 'cursor' | 'inicioEnSr' | 'inicioLejos' | 'inicioSinFix' | 'inicioCierraRet'
     | 'tardioN1' | 'tardioVacia' | 'carreraDesig' | 'gpsDesorden' | 'cierreResidual'
-    | 'pausa' | 'pausaRep' | 'pausaFin' | 'pausaOrden' | 'pausaDesvio' | 'desvioDesig' | 'yaFue' | 'omitidaLuego' | 'tardia' | 'cancelaDiferida' | 'esperaLuego' | 'desigYTardia',
+    | 'pausa' | 'pausaRep' | 'pausaFin' | 'pausaOrden' | 'pausaDesvio' | 'desvioDesig' | 'yaFue' | 'omitidaLuego' | 'tardia' | 'cancelaDiferida' | 'esperaLuego' | 'desigYTardia' | 'colaA' | 'colaB' | 'colaC' | 'colaD' | 'colaE' | 'colaF',
     string
   >;
 
@@ -220,6 +220,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
         'cierreTardio', 'estacionado', 'espNoDesig', 'cursor', 'inicioEnSr', 'inicioLejos', 'inicioSinFix', 'inicioCierraRet',
         'tardioN1', 'tardioVacia', 'carreraDesig', 'gpsDesorden', 'cierreResidual',
         'pausa', 'pausaRep', 'pausaFin', 'pausaOrden', 'pausaDesvio', 'desvioDesig', 'yaFue', 'omitidaLuego', 'tardia', 'cancelaDiferida', 'esperaLuego', 'desigYTardia',
+        'colaA', 'colaB', 'colaC', 'colaD', 'colaE', 'colaF',
       ] as const) {
         sesiones[k] = await crearSesion(asigCirc, k !== 'ciclo');
       }
@@ -459,6 +460,71 @@ describe('vueltas y designación a Molinos (F1)', () => {
     });
   });
 
+  describe('cola de Molinos (posición por orden de llegada)', () => {
+    const llegar = async (s: string, minLlegada: number) => {
+      await lote([inicio(s, iso(0)), ...hastaHonduras(s, 0).slice(0, 1)]);
+      await vueltas.designar(adminA, s, varianteId);
+      await lote([
+        cumpl(s, pcHonduras, iso(20), LON_HONDURAS, LAT_RUTA),
+        cumpl(s, pcMolinos, iso(minLlegada), LON_MOLINOS, LAT_SUR),
+        gps(s, iso(minLlegada + 1), LON_MOLINOS, LAT_SUR),
+      ]);
+    };
+    // `ahora` explícito: los fixes del test son de hace horas y la cola solo cuenta sesiones con fix reciente.
+    const pos = async (s: string, minAhora: number) =>
+      (await vueltas.obtenerActualMovil(sesionMovil(s), new Date(BASE + minAhora * 60_000))).enEspera?.posicion;
+    it('A,B,C llegan en orden -> 1,2,3; sale A -> B=1, C=2; una vuelta que no está en_curso no cuenta', async () => {
+      // D llega primero pero su vuelta ya no está en curso: no bloquea la cola.
+      await llegar(sesiones.colaD, 29);
+      await withTenantContext(ADMIN, (tx) =>
+        tx.vuelta.updateMany({ where: { sesionId: sesiones.colaD }, data: { estado: 'completa' } }),
+      );
+      await llegar(sesiones.colaA, 30);
+      await llegar(sesiones.colaB, 31);
+      await llegar(sesiones.colaC, 32);
+      expect([await pos(sesiones.colaA, 35), await pos(sesiones.colaB, 35), await pos(sesiones.colaC, 35)]).toEqual([1, 2, 3]);
+
+      // A sale (dos fixes consecutivos lejos): B pasa a 1 y C a 2.
+      await lote([gps(sesiones.colaA, iso(60), LON_SR, LAT_RUTA), gps(sesiones.colaA, iso(60, 20), LON_SR, LAT_RUTA)]);
+      expect((await vueltasDe(sesiones.colaA))[0]!.esperaSalidaTs).not.toBeNull();
+      // B y C siguen mandando GPS en Molinos (fix reciente respecto de `ahora`).
+      await lote([gps(sesiones.colaB, iso(60, 30), LON_MOLINOS, LAT_SUR), gps(sesiones.colaC, iso(60, 30), LON_MOLINOS, LAT_SUR)]);
+      expect([await pos(sesiones.colaB, 61), await pos(sesiones.colaC, 61)]).toEqual([1, 2]);
+    });
+
+    it('el de adelante deja de mandar GPS (teléfono muerto): no traba a los de atrás', async () => {
+      await withTenantContext(ADMIN, (tx) =>
+        tx.vuelta.updateMany({ where: { sesionId: { in: [sesiones.colaB, sesiones.colaC] } }, data: { estado: 'completa' } }),
+      );
+      await llegar(sesiones.colaE, 33);
+      await llegar(sesiones.colaF, 34);
+      await lote([gps(sesiones.colaE, iso(70), LON_MOLINOS, LAT_SUR), gps(sesiones.colaF, iso(70), LON_MOLINOS, LAT_SUR)]);
+      expect(await pos(sesiones.colaF, 72)).toBe(2);
+      // E calla; F sigue: 16 min después el último fix de E ya es viejo (> UMBRAL_VECINO_FRESCO_MS).
+      await lote([gps(sesiones.colaF, iso(85), LON_MOLINOS, LAT_SUR)]);
+      expect(await pos(sesiones.colaF, 86)).toBe(1);
+      // Una sesión cerrada tampoco cuenta aunque su último fix sea reciente.
+      await lote([gps(sesiones.colaE, iso(85), LON_MOLINOS, LAT_SUR)]);
+      expect(await pos(sesiones.colaF, 86)).toBe(2);
+      await withTenantContext(ADMIN, (tx) =>
+        tx.sesionOperativa.update({ where: { id: sesiones.colaE }, data: { estado: 'cerrada', fin: new Date() } }),
+      );
+      expect(await pos(sesiones.colaF, 86)).toBe(1);
+    });
+
+    it('un PC que dejó de ser punto de espera activo oculta la designación', async () => {
+      const act = () => vueltas.obtenerActualMovil(sesionMovil(sesiones.colaF));
+      expect((await act()).designacion).not.toBeNull();
+      await withTenantContext(ADMIN, (tx) => tx.$executeRaw`UPDATE puntos_control SET rol = 'retorno', "esperaMin" = NULL WHERE id = ${pcMolinos}`);
+      try {
+        expect((await act()).designacion).toBeNull();
+      } finally {
+        await withTenantContext(ADMIN, (tx) => tx.$executeRaw`UPDATE puntos_control SET rol = 'espera', "esperaMin" = 30 WHERE id = ${pcMolinos}`);
+      }
+      expect((await act()).designacion).not.toBeNull();
+    });
+  });
+
   describe('espera en Molinos', () => {
     it('vía Molinos con 35 min de espera: llegada, salida y SIN alerta; luego cierra en SR sin molinos_omitido', async () => {
       const s = sesiones.larga;
@@ -476,7 +542,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
       // Designar ahora es 409: ya llegó al punto de espera.
       await expect(vueltas.designar(adminA, s, null)).rejects.toBeInstanceOf(ConflictException);
       await expect(vueltas.designar(operadorA, s, varianteId)).rejects.toBeInstanceOf(ConflictException);
-      expect((await vueltas.obtenerActualMovil(sesionMovil(s))).enEspera).toEqual({ desdeTs: iso(30) });
+      expect((await vueltas.obtenerActualMovil(sesionMovil(s))).enEspera).toEqual({ desdeTs: iso(30), posicion: 1 });
 
       // Sale a los 35 min: dos fixes consecutivos lejos (en lotes distintos: el estado se rederiva de gps_points).
       await lote([gps(s, iso(65), LON_SR, LAT_RUTA)]);
@@ -742,12 +808,24 @@ describe('vueltas y designación a Molinos (F1)', () => {
     const puntos = new ControlPointsService();
     const variantes = new VariantesService();
 
+    it('Molinos con esperaMin null (salida libre): PATCH 200, la variante sigue designable y vuelta-actual devuelve esperaMin null', async () => {
+      expect(await puntos.actualizar(adminA, pcMolinos, { esperaMin: null })).toMatchObject({ rol: 'espera', esperaMin: null });
+      try {
+        const act = await vueltas.obtenerActualMovil(sesionMovil(sesiones.colaF));
+        expect(act.designacion).toMatchObject({ varianteId, puntoEspera: { id: pcMolinos, esperaMin: null } });
+        await expect(puntos.actualizar(adminA, pcSr, { esperaMin: 10 })).rejects.toThrow(/esperaMin solo aplica/);
+      } finally {
+        await puntos.actualizar(adminA, pcMolinos, { esperaMin: 30 });
+      }
+    });
+
     it('un operador no puede configurar rol/esperaMin de un PC (403) pero un admin sí; incoherencias → 400', async () => {
       await expect(puntos.actualizar(operadorA, pcSr, { rol: 'terminal' })).rejects.toBeInstanceOf(ForbiddenException);
       const ok = await puntos.actualizar(adminA, pcHonduras, { rol: 'retorno' });
       expect(ok.rol).toBe('retorno');
       await expect(puntos.actualizar(adminA, pcHonduras, { esperaMin: 10 })).rejects.toThrow(/esperaMin solo aplica/);
-      await expect(puntos.actualizar(adminA, pcHonduras, { rol: 'espera' })).rejects.toThrow(/necesita esperaMin/);
+      // Un `espera` sin minutos es válido: salida libre.
+      expect(await puntos.actualizar(adminA, pcHonduras, { rol: 'espera' })).toMatchObject({ rol: 'espera', esperaMin: null });
       const espera = await puntos.actualizar(adminA, pcHonduras, { rol: 'espera', esperaMin: 15 });
       expect(espera).toMatchObject({ rol: 'espera', esperaMin: 15 });
       // Al sacar el rol espera, la espera se limpia sola.
