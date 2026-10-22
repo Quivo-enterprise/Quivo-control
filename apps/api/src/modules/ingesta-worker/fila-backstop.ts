@@ -1,6 +1,8 @@
 import { Logger } from '@nestjs/common';
 import type { Prisma } from '@quivo/db';
 import { fechaActualBolivia } from '@quivo/shared';
+import { DRIFT_ALERTA_MS } from './ingesta-drift.js';
+import { avanzarSalidaEspera, crearEstadoSalidaEspera, type FixEspera } from './vueltas.js';
 import { esAnticipada } from '../salidas/salidas.logic.js';
 import { bloquearTerminal, calcularFilaPc } from '../salidas/fila-datos.js';
 
@@ -15,6 +17,10 @@ const logger = new Logger('FilaBackstop');
  */
 export const MARGEN_RELOJ_BACKSTOP_MS = 60_000;
 
+/** Ventana hacia atrás de los fixes que se leen de `gps_points` (el teléfono sube ~1 fix por POST). */
+const VENTANA_GPS_BACKSTOP_MS = 10 * 60_000;
+const LIMITE_FIXES_BACKSTOP = 500;
+
 export interface EntradaBackstopFila {
   sindicatoId: string;
   sesionId: string;
@@ -23,6 +29,8 @@ export interface EntradaBackstopFila {
   /** Cumplimientos del lote de PC activos de la ruta de la sesión. */
   cumplimientos: { ts: Date; puntoControlId: string }[];
   fines: Date[];
+  /** El lote trae GPS de la sesión: ya está persistido, se mira la salida física de la fila. */
+  hayGps?: boolean;
   ahora: Date;
 }
 
@@ -41,10 +49,10 @@ export async function aplicarBackstopFila(tx: Tx, entrada: EntradaBackstopFila):
   const eventos = [
     ...entrada.cumplimientos
       .filter((c) => !entrada.terminalesIds.has(c.puntoControlId))
-      .map((c) => ({ ts: c.ts, tipo: 'salio' as const, pcId: c.puntoControlId })),
+      .map((c) => ({ ts: c.ts, tipo: 'salio' as const, pcId: c.puntoControlId as string | null })),
     ...entrada.fines.map((ts) => ({ ts, tipo: 'retirado' as const, pcId: null })),
   ].sort((a, b) => a.ts.getTime() - b.ts.getTime());
-  if (eventos.length === 0) return;
+  if (eventos.length === 0 && !entrada.hayGps) return;
   try {
     await tx.$executeRaw`SAVEPOINT fila_backstop`;
     const [fila] = await tx.$queryRaw<{ id: string; puntoControlId: string; llegadaTs: Date }[]>`
@@ -52,11 +60,17 @@ export async function aplicarBackstopFila(tx: Tx, entrada: EntradaBackstopFila):
       WHERE "sesionId" = ${entrada.sesionId} AND "sindicatoId" = ${entrada.sindicatoId} AND estado = 'en_fila'
     `;
     // La terminal de la fila nunca cuenta como salida, aunque `terminalesIds` no la trajera.
-    const evento =
+    let evento =
       fila &&
       eventos.find(
         (e) => e.pcId !== fila.puntoControlId && e.ts.getTime() >= fila.llegadaTs.getTime() + MARGEN_RELOJ_BACKSTOP_MS,
       );
+    // Salida física por GPS (sin cumplimiento ni POST): mismo detector que la salida de la espera
+    // (2 fixes seguidos a más de `radio + margen`, sobre `gps_points`); gana si es anterior al evento hallado.
+    const tsGps = fila && entrada.hayGps ? await salidaFisicaGps(tx, entrada, fila) : null;
+    if (tsGps && (!evento || tsGps.getTime() < evento.ts.getTime())) {
+      evento = { ts: tsGps, tipo: 'salio', pcId: null };
+    }
     if (fila && evento) {
       await bloquearTerminal(tx, fila.puntoControlId);
       if (evento.tipo === 'retirado') {
@@ -85,4 +99,38 @@ export async function aplicarBackstopFila(tx: Tx, entrada: EntradaBackstopFila):
       `Fila de salida: backstop falló en la sesión ${entrada.sesionId}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+/**
+ * `ts` del primer fix de la primera racha de salida respecto a la terminal PROPIA de la fila, con
+ * `ts >= llegadaTs + MARGEN_RELOJ_BACKSTOP_MS`, en una ventana reciente y sin fijar fixes futuros
+ * (`> ahora + DRIFT_ALERTA_MS`, como el resto del worker). Los fixes del lote ya están persistidos.
+ */
+async function salidaFisicaGps(
+  tx: Tx,
+  entrada: EntradaBackstopFila,
+  fila: { puntoControlId: string; llegadaTs: Date },
+): Promise<Date | null> {
+  const llegada = fila.llegadaTs.getTime() + MARGEN_RELOJ_BACKSTOP_MS;
+  const desde = new Date(Math.max(llegada, entrada.ahora.getTime() - VENTANA_GPS_BACKSTOP_MS));
+  const hasta = new Date(entrada.ahora.getTime() + DRIFT_ALERTA_MS);
+  const fixes = await tx.$queryRaw<FixEspera[]>`
+    SELECT gp.ts, gp.lat, gp.lng, gp.accuracy,
+           ST_Distance(ST_SetSRID(ST_MakePoint(gp.lng, gp.lat), 4326)::geography, pc.coord) AS "distanciaM",
+           pc."radioToleranciaM" AS "radioM"
+    FROM gps_points gp
+    JOIN puntos_control pc ON pc.id = ${fila.puntoControlId}
+    WHERE gp.sesion_id = ${entrada.sesionId}::uuid AND gp."sindicatoId" = ${entrada.sindicatoId}
+      AND gp.ts >= ${desde} AND gp.ts <= ${hasta}
+    ORDER BY gp.ts
+    LIMIT ${LIMITE_FIXES_BACKSTOP}
+  `;
+  if (fixes.length === 0) return null;
+  const radioM = (fixes[0] as FixEspera & { radioM: number }).radioM;
+  // `llegadaTs` es exclusivo en el detector: un ms antes para incluir `desde`.
+  const salida = avanzarSalidaEspera(crearEstadoSalidaEspera(), fixes, {
+    llegadaTs: new Date(desde.getTime() - 1),
+    radioM,
+  });
+  return salida?.ts ?? null;
 }
