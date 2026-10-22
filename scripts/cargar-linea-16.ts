@@ -87,7 +87,7 @@
  *     Honduras  rol `retorno` (obligatorio=true) — marca el medio de la vuelta
  *     Molinos   rol `espera`, esperaMin 30 (obligatorio=false) — sobre el TRAMO de la variante
  *   (los 3 `orden` son de marcha, ver abajo; ya no 0/1/2)
- *   **PLAN DE PC FIJADO A PROD (2026-10-22):** los PC YA NO se generan desde la geometría. Se leen de
+ *   **PLAN DE PC FIJADO A PROD (2026-10-21):** los PC YA NO se generan desde la geometría. Se leen de
  *   `scripts/data/linea-16/puntos-control.json` (17 PC: SR, 7 de ida, Honduras, 6 de regreso, Molinos y 1 de regreso tras Molinos),
  *   copia exacta de los PC activos de prod; para cambiarlos, editar ese JSON (orden consecutivo desde 0, `rol`, `esperaMin`,
  *   `obligatorio`; radio siempre `RADIO_TOLERANCIA_M`; tipo, fase y abscisa se derivan). Motivo: tras retrazar SR (PR #233) el
@@ -319,7 +319,7 @@ const OMITIR_MUESTRAS: Partial<Record<NombreTramo, { coord: Coord; motivo: strin
   ],
 };
 const RATIO_LONGITUD_MAX = 1.25;
-/** Plan de PC fijado a los reales de prod (2026-10-22); para cambiarlo, editar este JSON. */
+/** Plan de PC fijado a los reales de prod (2026-10-21); para cambiarlo, editar este JSON. */
 const PUNTOS_CONTROL_JSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/puntos-control.json');
 const PUNTOS_INTERMEDIOS_GEOJSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/puntos-control-intermedios.geojson');
 const TRAZADO_JSON_PATH = path.join(REPO_ROOT, 'scripts/data/linea-16/trazado-calles.json');
@@ -1040,7 +1040,7 @@ export function armarKmlTrazado(boceto: Boceto, trazado: TramosCoord): string {
   ].join('\n');
 }
 
-/** Construye y valida todo lo que se va a cargar. Pura: no toca la red. */
+/** Construye y valida todo lo que se va a cargar. No toca la red; sí lee `puntos-control.json` del disco. */
 export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
   const { salomon, honduras, molinos } = boceto;
   for (const t of TRAMOS) {
@@ -1080,25 +1080,30 @@ export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
   // `orden` = orden de MARCHA a lo largo del circuito base (pc_omitido compara `orden`; ver cabecera). Posiciones:
   //  · Honduras: proyección de su coord sobre la base (la `ida` sigue ~3,6 km más por el lazo de retorno, v123..150; Honduras queda ANTES).
   //  · Molinos (sobre la variante): justo después de la bifurcación (v43, fin de `regreso`) en la pasada del REGRESO.
-  const largoIda = longitudM(trazado.ida);
-  const hond = abscisaEnPolilinea(geometria, honduras, 0, largoIda);
-  if (hond.distM > PROXIMIDAD_API_M) throw new Error(`Honduras a ${hond.distM.toFixed(1)} m de la base (> ${PROXIMIDAD_API_M} m): no se puede ubicar su orden de marcha.`);
-  const sHonduras = hond.abscisaM;
-  const bifur = abscisaEnPolilinea(geometria, trazado.regreso[trazado.regreso.length - 1]!, largoIda);
-  const sMolinos = bifur.abscisaM + 1e-6;
-  console.log(`  Honduras en el km ${(sHonduras / 1000).toFixed(2)} del circuito (a ${hond.distM.toFixed(1)} m de la base; fin de la ida en el km ${(largoIda / 1000).toFixed(2)}); bifurcación Molinos (v43, regreso) en el km ${(bifur.abscisaM / 1000).toFixed(2)}.`);
-  // PC FIJADOS a los reales de prod (2026-10-22): se leen de puntos-control.json, ya no se generan desde la geometría.
+  // PC FIJADOS a los reales de prod (2026-10-21): se leen de puntos-control.json, ya no se generan desde la geometría.
   const fijados = JSON.parse(fs.readFileSync(PUNTOS_CONTROL_JSON_PATH, 'utf8')) as PuntoFijado[];
   if (!Array.isArray(fijados) || fijados.length === 0) throw new Error(`${path.relative(REPO_ROOT, PUNTOS_CONTROL_JSON_PATH)} debe ser un array no vacío.`);
   fijados.forEach((f, i) => {
     if (f.orden !== i) throw new Error(`puntos-control.json: el PC en la posición ${i} tiene orden ${f.orden} (deben ser consecutivos desde 0).`);
+    if (!Array.isArray(f.coord) || f.coord.length !== 2 || !f.coord.every(Number.isFinite)) throw new Error(`puntos-control.json: el PC orden ${i} debe tener coord = [lon, lat] con 2 números finitos.`);
+    if (typeof f.nombre !== 'string' || f.nombre === '') throw new Error(`puntos-control.json: el PC orden ${i} debe tener un nombre no vacío.`);
+    if (typeof f.obligatorio !== 'boolean') throw new Error(`puntos-control.json: el PC orden ${i} ("${f.nombre}") debe tener obligatorio booleano.`);
+    if (f.obligatorio !== (f.rol === 'retorno')) throw new Error(`puntos-control.json: el PC orden ${i} ("${f.nombre}"): obligatorio debe ser true solo en el rol "retorno".`);
+    if (f.rol !== 'espera' && f.esperaMin !== null) throw new Error(`puntos-control.json: el PC orden ${i} ("${f.nombre}"): esperaMin debe ser null salvo en el rol "espera".`);
   });
   const TIPO_POR_ROL = { terminal: 'SR', retorno: 'Honduras', espera: 'Molinos' } as const;
   for (const rol of Object.keys(TIPO_POR_ROL) as (keyof typeof TIPO_POR_ROL)[]) {
     const n = fijados.filter((f) => f.rol === rol).length;
     if (n !== 1) throw new Error(`puntos-control.json: el rol "${rol}" debe aparecer exactamente una vez (aparece ${n}).`);
   }
-  if (fijados.some((f) => f.rol !== null && !(f.rol in TIPO_POR_ROL))) throw new Error('puntos-control.json: rol inválido (solo terminal, retorno, espera o null).');
+  if (fijados.some((f) => f.rol !== null && !Object.hasOwn(TIPO_POR_ROL, f.rol))) throw new Error('puntos-control.json: rol inválido (solo terminal, retorno, espera o null).');
+  const largoIda = longitudM(trazado.ida);
+  const hond = abscisaEnPolilinea(geometria, fijados.find((f) => f.rol === 'retorno')!.coord, 0, largoIda);
+  if (hond.distM > PROXIMIDAD_API_M) throw new Error(`Honduras a ${hond.distM.toFixed(1)} m de la base (> ${PROXIMIDAD_API_M} m): no se puede ubicar su orden de marcha.`);
+  const sHonduras = hond.abscisaM;
+  const bifur = abscisaEnPolilinea(geometria, trazado.regreso[trazado.regreso.length - 1]!, largoIda);
+  const sMolinos = bifur.abscisaM + 1e-6;
+  console.log(`  Honduras en el km ${(sHonduras / 1000).toFixed(2)} del circuito (a ${hond.distM.toFixed(1)} m de la base; fin de la ida en el km ${(largoIda / 1000).toFixed(2)}); bifurcación Molinos (v43, regreso) en el km ${(bifur.abscisaM / 1000).toFixed(2)}.`);
   if (fijados[0]!.rol !== 'terminal') throw new Error('El PC Salomón Romero debe ser el orden 0 (inicio del circuito).');
   const ordenHonduras = fijados.find((f) => f.rol === 'retorno')!.orden;
   const puntosControl: PuntoPlan[] = fijados.map((f) => {
@@ -1111,10 +1116,10 @@ export function construirPlan(boceto: Boceto, trazado: TramosCoord): PlanDatos {
       : abscisaEnPolilinea(geometria, f.coord, sHonduras).abscisaM;
     if (f.rol === 'espera' && f.esperaMin !== ESPERA_MOLINOS_MIN) throw new Error(`Molinos: esperaMin ${f.esperaMin} ≠ ${ESPERA_MOLINOS_MIN}.`);
     if (f.rol === 'espera' && distanciaAGeometriaM(tramo, f.coord) > PROXIMIDAD_API_M) throw new Error(`Molinos a > ${PROXIMIDAD_API_M} m del tramo de la variante: el PC de espera debe estar sobre la variante.`);
-    return { nombre: f.nombre, orden: f.orden, coord: f.coord, obligatorio: f.obligatorio, rol: f.rol, esperaMin: f.esperaMin, tipo: f.rol ? TIPO_POR_ROL[f.rol] : 'intermedio', abscisaM, distRutaM: distanciaARutaM(geometria, tramo, f.coord), fase };
+    return { nombre: f.nombre, orden: f.orden, coord: f.coord, obligatorio: f.obligatorio, rol: f.rol, esperaMin: f.esperaMin, tipo: f.rol ? TIPO_POR_ROL[f.rol] : 'intermedio', abscisaM, distRutaM: f.rol === null ? distanciaAGeometriaM(geometria, f.coord) : distanciaARutaM(geometria, tramo, f.coord), fase };
   });
   puntosControl.forEach((p, i) => {
-    if (i > 0 && p.abscisaM < puntosControl[i - 1]!.abscisaM) throw new Error(`PC orden ${p.orden} ("${p.nombre}", km ${(p.abscisaM / 1000).toFixed(2)}) queda antes que el orden ${i - 1} sobre el circuito: el orden de marcha no coincide con la geometría.`);
+    if (i > 0 && p.abscisaM <= puntosControl[i - 1]!.abscisaM) throw new Error(`PC orden ${p.orden} ("${p.nombre}", km ${(p.abscisaM / 1000).toFixed(2)}) no queda después del orden ${i - 1} sobre el circuito: el orden de marcha no coincide con la geometría.`);
   });
   console.log(`  PC fijados a prod (puntos-control.json): ${puntosControl.length} (${puntosControl.filter((p) => p.tipo === 'intermedio').length} intermedios).`);
   const paradas: ParadaPlan[] = [

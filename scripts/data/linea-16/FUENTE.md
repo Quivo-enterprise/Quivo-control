@@ -57,7 +57,7 @@ El 21/10/2026 se corrigió la parada SR por decisión del CTO: el KML original l
   El boceto v0..v18 es una línea media entre ambas. Los demás tramos se conservaron byte a byte; solo cambió `meta.kmlSha256`.
 - `ZONAS_TRAMO_A_TRAMO` (v8..v24) y `HUECOS_SIN_CALLE` (v10→v11) ya no describen v8..v17; no correr `--recalcular-zonas` sin revisarlos.
 
-## Plan de PC fijado a prod (2026-10-22)
+## Plan de PC fijado a prod (2026-10-21)
 
 Tras retrazar SR (PR #233) la base pasó a 29,52 km y el generador de PC daba 16 puntos, pero prod tiene 17 (creados con la
 geometría anterior; retorno en orden 8, espera en orden 15). Decisión del CTO: prod manda y no se toca.
