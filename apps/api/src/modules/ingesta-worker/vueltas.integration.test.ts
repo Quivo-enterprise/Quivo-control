@@ -18,6 +18,7 @@ import { SancionesService } from '../reglas/sanciones.service.js';
 import { RutasService } from '../rutas/rutas.service.js';
 import { VariantesService } from '../rutas/variantes.service.js';
 import { vueltaContable, vueltaNoVacia } from '../vueltas/vuelta-no-vacia.js';
+import { insertarActividadResumen } from '../salidas/salidas.fixtures.js';
 import { VueltasService } from '../vueltas/vueltas.service.js';
 import { IngestaWorkerService } from './ingesta-worker.service.js';
 
@@ -779,6 +780,37 @@ describe('vueltas y designación a Molinos (F1)', () => {
       expect(linea.proximoSugeridoEn).toBe(esperado.toISOString());
       // Otro tenant no ve la línea.
       expect((await vueltas.resumenMolinos(adminB, ahora)).lineas.find((l) => l.lineaId === lineaId)).toBeUndefined();
+    });
+  });
+
+  describe('resumen Molinos: flota = sesiones vigentes (regla única de vigencia)', () => {
+    it('un zombi de ayer sin actividad no cuenta; un turno de anoche con actividad reciente sí', async () => {
+      const flota = async () =>
+        (await vueltas.resumenMolinos(adminA, diaDeLasVueltas)).lineas.find((l) => l.lineaId === lineaId)!.flotaActiva;
+      const antes = await flota();
+      // 3 días antes del `ahora` inyectado (`diaDeLasVueltas`): zombi a cualquier hora del día.
+      const inicioAyer = new Date(BASE - 72 * 3_600_000);
+      const fixTs = new Date(BASE - 10 * 60_000);
+      const { zombi, noche } = await withTenantContext(ADMIN, async (tx) => {
+        const base = await tx.sesionOperativa.findUniqueOrThrow({ where: { id: sesiones.colaA! } });
+        const nueva = async (deviceId: string) =>
+          (
+            await tx.sesionOperativa.create({
+              data: {
+                sindicatoId: sindicatoA, asignacionId: base.asignacionId, conductorId: base.conductorId,
+                vehiculoId: base.vehiculoId, deviceId, inicio: inicioAyer,
+                accessTokenHash: randomUUID(), refreshTokenHash: randomUUID(),
+                accessExpiresAt: new Date(Date.now() + 3_600_000), refreshExpiresAt: new Date(Date.now() + 3_600_000),
+              },
+            })
+          ).id;
+        const z = await nueva('device-vlt-zombi');
+        const n = await nueva('device-vlt-noche');
+        await insertarActividadResumen(tx, { sesionId: n, sindicatoId: sindicatoA, jornada: fechaActualBolivia(fixTs).toISOString().slice(0, 10), ultimoFixTs: fixTs });
+        return { zombi: z, noche: n };
+      });
+      expect(zombi).not.toBe(noche);
+      expect(await flota()).toBe(antes + 1);
     });
   });
 

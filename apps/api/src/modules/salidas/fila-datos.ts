@@ -1,4 +1,5 @@
 import type { Prisma } from '@quivo/db';
+import { sesionesVisiblesSql } from '../../common/sesiones/vigencia.js';
 import {
   calcularFilaSalida,
   type PosicionFila,
@@ -61,9 +62,19 @@ export interface FilaDelPc {
 /**
  * Fila de una terminal: 3 consultas (en fila + grupo activo; última salida + base; reglas
  * no anuladas) y `calcularFilaSalida`. Solo cuentan filas con la sesión `activa`: si la sesión se
- * cerró por otra vía (rotación de PIN, etc.) el trufi no puede bloquear la cola. Los `en_fila` NO se
- * filtran por `fecha` (una fila no desaparece a medianoche); `ultimaSalidaTs` y reglas sí son del día
- * de Bolivia de `fecha`. `hasta` (backstop): la última salida se toma al instante del evento.
+ * cerró por otra vía (rotación de PIN, etc.) el trufi no puede bloquear la cola. La sesión además debe
+ * ser vigente (`sesionesVisiblesSql`: un zombi de ayer sin actividad no ocupa lugar); el turno que
+ * cruza medianoche sigue por la gracia, así que los `en_fila` no se filtran por `fecha`.
+ * `sesionPropiaId`: la sesión que hace el request (o del lote del backstop) cuenta siempre, aunque la
+ * actividad aún no llegó al resumen; sin esto su propia fila saldría de `posiciones` y `esAnticipada`
+ * la marcaría anticipada. `ultimaSalidaTs` y reglas sí son del día de Bolivia de `fecha`. `hasta` (backstop): la última salida se toma al instante del evento.
+ * shortcut: `sesionPropiaId` queda exenta para que su fila y `anticipada` sean correctas, pero el panel (sin
+ * `sesionPropiaId`) puede ocultar una sesión sin GPS >2 h cuya app sigue haciendo poll (p. ej. estacionada de noche
+ * en la fila): app y panel pueden discrepar en la posición 1; mejorar si aparece en el piloto (p. ej. contar el poll
+ * de la app como actividad).
+ * shortcut: los `en_fila` de una sesión no vigente quedan ocultos en BD; si la sesión revive (mismo login al día
+ * siguiente) su fila reaparece con el `ordenTs` viejo a la cabeza; mejorar retirando/refrescando la fila vieja en
+ * `registrarLlegada`.
  * shortcut: fila calculada en cada request, agregar CacheTtl por puntoControl si el p95 de vuelta-actual pasa 150 ms
  */
 export async function calcularFilaPc(
@@ -72,13 +83,15 @@ export async function calcularFilaPc(
   fecha: Date,
   ahora: Date,
   hasta: Date | null = null,
+  sesionPropiaId: string | null = null,
 ): Promise<FilaDelPc> {
   const dia = diaStr(fecha);
   const filas = await tx.$queryRaw<(FilaCalculada & { ordenTs: Date; grupoId: string | null })[]>`
     SELECT f.id, f."vehiculoId", v.placa, f."llegadaTs", f."ordenTs", g.id AS "grupoId"
     FROM fila_salida f
     JOIN vehiculos v ON v.id = f."vehiculoId"
-    JOIN sesiones_operativas s ON s.id = f."sesionId" AND s.estado = 'activa'
+    JOIN sesiones_operativas so ON so.id = f."sesionId" AND so.estado = 'activa'
+      AND (so.id = ${sesionPropiaId} OR ${sesionesVisiblesSql(ahora, fecha)})
     LEFT JOIN grupo_vehiculo_miembros m ON m."vehiculoId" = f."vehiculoId"
     LEFT JOIN grupos_vehiculo g ON g.id = m."grupoId" AND g.estado = 'activo'
     WHERE f."puntoControlId" = ${puntoControlId} AND f.estado = 'en_fila'

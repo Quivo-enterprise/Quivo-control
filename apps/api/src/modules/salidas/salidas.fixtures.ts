@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { withTenantContext } from '@quivo/db';
+import { withTenantContext, type Prisma } from '@quivo/db';
 import { fechaActualBolivia } from '@quivo/shared';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
 
@@ -108,4 +108,15 @@ export async function borrarMundo(m: MundoSalidas): Promise<void> {
     await tx.linea.deleteMany({ where: { sindicatoId: ids } });
     await tx.sindicato.deleteMany({ where: { id: ids } });
   });
+}
+
+/** Fila de `gps_sesion_resumen` (actividad GPS de una sesión en una jornada 'YYYY-MM-DD') para tests de vigencia. */
+export async function insertarActividadResumen(
+  tx: Pick<Prisma.TransactionClient, '$executeRaw'>,
+  a: { sesionId: string; sindicatoId: string; jornada: string; ultimoFixTs: Date; ultimoIngresoTs?: Date },
+): Promise<void> {
+  const ingreso = a.ultimoIngresoTs ?? a.ultimoFixTs;
+  await tx.$executeRaw`
+    INSERT INTO gps_sesion_resumen (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng, accuracy, speed, updated_at)
+    VALUES (${a.sesionId}::uuid, ${a.jornada}::date, ${a.sindicatoId}, 1, ${a.ultimoFixTs}, ${ingreso}, ${LAT}, ${LON}, 5, 0, now())`;
 }

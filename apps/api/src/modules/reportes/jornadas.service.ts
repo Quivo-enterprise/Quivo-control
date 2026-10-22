@@ -7,6 +7,7 @@ import {
   inicioDeJornadaBolivia,
   inicioDeJornadaSiguienteBolivia,
 } from '../../common/tiempo/jornada.js';
+import { sesionConActividadEnJornadaSql, sesionesVisiblesSql } from '../../common/sesiones/vigencia.js';
 import { DRIFT_ALERTA_MS } from '../ingesta-worker/ingesta-drift.js';
 
 /**
@@ -38,7 +39,9 @@ interface JornadaRow {
  * Precedencia del estado de la jornada de un vehículo (release 13): el recorrido manda sobre
  * la declaración. Se mira el último evento de recorrido (puede venir de hasta
  * `VENTANA_TURNO_NOCTURNO_HORAS` antes de `desde`, por turnos que cruzan medianoche):
- * - `inicio_recorrido` → `en_recorrido`, aunque sea anterior a `desde` (sigue en ruta);
+ * - `inicio_recorrido` → `en_recorrido`, aunque sea anterior a `desde` (sigue en ruta). Para la
+ *   jornada consultada, `listar` ya descartó en SQL los `inicio_recorrido` anteriores a `desde` cuya
+ *   sesión no está vigente (recorrido abandonado: la app nunca mandó `fin_recorrido`);
  * - `fin_recorrido` de la jornada (`ts >= desde`) → `finalizado`;
  * - `fin_recorrido` anterior a `desde` → pertenece a la jornada previa y se ignora.
  * Sin recorrido vigente, una declaración `inicio_jornada` del día → `dia_iniciado`; si no
@@ -98,6 +101,12 @@ export class JornadasService {
     const hasta = inicioDeJornadaSiguienteBolivia(dia);
     const toleranciaFuturoS = DRIFT_ALERTA_MS / 1000;
     const desdeRecorrido = new Date(desde.getTime() - VENTANA_TURNO_NOCTURNO_HORAS * 3_600_000);
+    // Un `inicio_recorrido` de antes de `desde` solo cuenta si su sesión está vigente: hoy, la misma regla
+    // que el mapa en vivo; en un día pasado, si tuvo actividad GPS ese día.
+    const vigenteSql =
+      dia.getTime() === fechaActualBolivia(ahora).getTime()
+        ? sesionesVisiblesSql(ahora, dia)
+        : sesionConActividadEnJornadaSql(dia);
 
     const filas = await withTenantContext(
       { rol: actor.rol, sindicatoId: actor.sindicatoId },
@@ -158,6 +167,7 @@ export class JornadasService {
           WHERE eo."sindicatoId" = v."sindicatoId"
             AND eo.tipo IN ('inicio_recorrido', 'fin_recorrido')
             AND eo.ts >= ${desdeRecorrido} AND eo.ts < ${hasta}
+            AND (eo.tipo <> 'inicio_recorrido' OR eo.ts >= ${desde} OR ${vigenteSql})
             AND eo.ts <= eo."receivedAt" + make_interval(secs => ${toleranciaFuturoS}::double precision)
             AND so."vehiculoId" = a."vehiculoId"
           ORDER BY eo.ts DESC, eo."receivedAt" DESC, eo.id DESC

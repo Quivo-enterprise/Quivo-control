@@ -79,7 +79,7 @@ export async function aplicarBackstopFila(tx: Tx, entrada: EntradaBackstopFila):
         // `ts` acotado a `ahora` (un reloj adelantado no puede fechar la salida en el futuro). La
         // anticipada se evalúa con la fila, las reglas y la última salida a ese instante.
         const ts = new Date(Math.min(evento.ts.getTime(), entrada.ahora.getTime()));
-        const { posiciones } = await calcularFilaPc(tx, fila.puntoControlId, fechaActualBolivia(ts), ts, ts);
+        const { posiciones } = await calcularFilaPc(tx, fila.puntoControlId, fechaActualBolivia(ts), ts, ts, entrada.sesionId);
         const anticipada = esAnticipada(posiciones, fila.id, ts);
         await tx.$executeRaw`
           UPDATE fila_salida

@@ -3,6 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import { prisma, withTenantContext } from '@quivo/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import { insertarActividadResumen } from '../salidas/salidas.fixtures.js';
 import { DRIFT_ALERTA_MS } from '../ingesta-worker/ingesta-drift.js';
 import { JornadasService, derivarEstadoJornada } from './jornadas.service.js';
 
@@ -121,6 +122,8 @@ describe('JornadasService (Postgres real + RLS)', () => {
           horas?: Array<number | null>;
           dias?: Date[];
           eventos?: Array<{ tipo: string; ts: Date; deviceId?: string; receivedAt?: Date }>;
+          /** Actividad GPS de la sesión en esa jornada (un `inicio_recorrido` previo al día solo cuenta con ella). */
+          actividadEn?: { jornada: string; ts: Date };
         } = {},
       ) {
         const v = await tx.vehiculo.create({
@@ -189,6 +192,9 @@ describe('JornadasService (Postgres real + RLS)', () => {
               },
             });
           }
+          if (opciones.actividadEn) {
+            await insertarActividadResumen(tx, { sesionId: sesion.id, sindicatoId, jornada: opciones.actividadEn.jornada, ultimoFixTs: opciones.actividadEn.ts });
+          }
         }
       }
 
@@ -244,6 +250,8 @@ describe('JornadasService (Postgres real + RLS)', () => {
       // sigue en_recorrido.
       await vehiculo('noche_inicio', sindicatoAId, a, rutaAId, {
         eventos: [{ tipo: 'inicio_recorrido', ts: new Date(DIA.getTime() + 3.5 * HORA) }],
+        // En un día pasado, el turno de anoche cuenta solo si la sesión tuvo GPS ese día.
+        actividadEn: { jornada: FECHA, ts: new Date(DIA.getTime() + 6 * HORA) },
       });
       // fin_recorrido a las 23:50 Bolivia del día anterior: es de la jornada previa, hoy no
       // cuenta como finalizado.
@@ -303,6 +311,7 @@ describe('JornadasService (Postgres real + RLS)', () => {
   afterAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
       const ids = [sindicatoAId, sindicatoBId];
+      await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE "sindicatoId" IN (${sindicatoAId}, ${sindicatoBId})`;
       await tx.eventoOperativo.deleteMany({ where: { sindicatoId: { in: ids } } });
       await tx.sesionOperativa.deleteMany({ where: { sindicatoId: { in: ids } } });
       await tx.asignacion.deleteMany({ where: { rutaId: { in: [rutaAId, rutaBId] } } });
@@ -444,5 +453,111 @@ describe('JornadasService (Postgres real + RLS)', () => {
 
   it('rechaza una fecha con forma válida pero inexistente', async () => {
     await expect(service.listar(adminA, '2031-02-31')).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+/**
+ * Jornada de HOY: un `inicio_recorrido` de antes de las 00:00 solo cuenta si la sesión está vigente
+ * (`sesionesVisiblesSql`); un recorrido abandonado de ayer (sin `fin_recorrido`) no queda `en_recorrido`.
+ * En un día pasado cuenta solo si la sesión tuvo actividad GPS ese día. `ahora` es fijo: independiente del reloj.
+ */
+describe('JornadasService: recorridos abandonados (jornada de hoy)', () => {
+  const service = new JornadasService();
+  const sindicatoId = randomUUID();
+  const rutaId = randomUUID();
+  const admin: AuthenticatedUser = { userId: 'test-admin-v', rol: 'admin_sindicato', sindicatoId };
+  const ahora = new Date('2032-05-10T16:00:00.000Z'); // 12:00 Bolivia del 2032-05-10
+  const hoy = '2032-05-10';
+  const hoyDate = new Date(`${hoy}T00:00:00.000Z`);
+  const ayerTarde = new Date('2032-05-09T19:24:00.000Z'); // 15:24 Bolivia de ayer
+  const diaPasado = '2032-05-09';
+  const diaPasadoDate = new Date(`${diaPasado}T00:00:00.000Z`);
+  const anteayerTarde = new Date('2032-05-08T19:24:00.000Z'); // 15:24 Bolivia de anteayer
+  const v: Record<string, string> = {};
+
+  beforeAll(async () => {
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      await tx.sindicato.create({ data: { id: sindicatoId, nombre: 'Jornadas Vigencia', estado: 'activo' } });
+      const linea = await tx.linea.create({ data: { sindicatoId, codigo: 'JV1', nombre: 'Línea JV' } });
+      await tx.$executeRaw`
+        INSERT INTO rutas (id, "lineaId", sentido, geometria, estado, "createdAt", "updatedAt")
+        VALUES (${rutaId}, ${linea.id}, 'ida', ST_SetSRID(ST_GeomFromGeoJSON(${GEOMETRIA_GEOJSON}), 4326)::geography, 'activo', now(), now())`;
+      const conductor = await tx.conductor.create({
+        data: { sindicatoId, nombre: 'Conductor JV', documentoIdentidad: `JV-${randomUUID()}`, licenciaConducir: 'L' },
+      });
+      const rotacion = await tx.rotacion.create({ data: { sindicatoId, periodo: '2032-05', estado: 'publicada' } });
+      const caso = async (
+        clave: string, inicioSesion: Date, inicioRecorrido: Date, actividad: Date | null,
+        fecha = hoyDate, jornadaActividad = hoy,
+      ) => {
+        const vh = await tx.vehiculo.create({
+          data: { sindicatoId, placa: `JV${clave}${randomUUID().slice(0, 3).toUpperCase()}`, tipo: 'bus', marca: 'x', modelo: 'x', color: 'x', capacidad: 10, estado: 'activo' },
+        });
+        v[clave] = vh.id;
+        const asig = await tx.asignacion.create({
+          data: {
+            rotacionId: rotacion.id, vehiculoId: vh.id, conductorId: conductor.id, rutaId, fecha,
+            horario: 'manana', orden: 1, venceAt: new Date(hoyDate.getTime() + 28 * HORA), estado: 'vigente',
+          },
+        });
+        const ses = await tx.sesionOperativa.create({
+          data: {
+            sindicatoId, asignacionId: asig.id, vehiculoId: vh.id, conductorId: conductor.id,
+            deviceId: `dev-${clave}`, inicio: inicioSesion, accessTokenHash: randomUUID(), refreshTokenHash: randomUUID(),
+            accessExpiresAt: new Date(hoyDate.getTime() + 28 * HORA), refreshExpiresAt: new Date(hoyDate.getTime() + 28 * HORA),
+          },
+        });
+        await tx.eventoOperativo.create({
+          data: {
+            eventId: randomUUID(), sindicatoId, sesionId: ses.id, deviceId: `dev-${clave}`, tipo: 'inicio_recorrido',
+            ts: inicioRecorrido, receivedAt: inicioRecorrido, payload: { sesionId: ses.id },
+          },
+        });
+        if (actividad) {
+          await insertarActividadResumen(tx, { sesionId: ses.id, sindicatoId, jornada: jornadaActividad, ultimoFixTs: actividad });
+        }
+      };
+      // Zombi: inicio_recorrido de ayer 15:24, último GPS de ayer (fuera de la gracia de 2 h).
+      await caso('zombi', ayerTarde, ayerTarde, null);
+      // Turno de anoche vivo: mismo inicio de ayer, pero con GPS hace 30 min.
+      await caso('noche', ayerTarde, ayerTarde, new Date(ahora.getTime() - 30 * 60_000));
+      // Flujo normal de hoy: inicio_recorrido de las 10:00 Bolivia.
+      await caso('hoy', new Date('2032-05-10T14:00:00.000Z'), new Date('2032-05-10T14:00:00.000Z'), null);
+      // Día pasado (09/05): inicio_recorrido de anteayer; sin actividad el 09 vs con actividad el 09.
+      await caso('pasadoSin', anteayerTarde, anteayerTarde, null, diaPasadoDate);
+      await caso('pasadoCon', anteayerTarde, anteayerTarde, new Date('2032-05-09T15:00:00.000Z'), diaPasadoDate, diaPasado);
+    });
+  });
+
+  afterAll(async () => {
+    await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE "sindicatoId" = ${sindicatoId}`;
+      await tx.eventoOperativo.deleteMany({ where: { sindicatoId } });
+      await tx.sesionOperativa.deleteMany({ where: { sindicatoId } });
+      await tx.asignacion.deleteMany({ where: { rutaId } });
+      await tx.rotacion.deleteMany({ where: { sindicatoId } });
+      await tx.vehiculo.deleteMany({ where: { sindicatoId } });
+      await tx.conductor.deleteMany({ where: { sindicatoId } });
+      await tx.$executeRaw`DELETE FROM rutas WHERE id = ${rutaId}`;
+      await tx.linea.deleteMany({ where: { sindicatoId } });
+      await tx.sindicato.deleteMany({ where: { id: sindicatoId } });
+    });
+  });
+
+  it('inicio_recorrido de ayer sin actividad hoy → sin_iniciar; con actividad reciente → en_recorrido; el de hoy no cambia', async () => {
+    const r = await service.listar(admin, undefined, ahora);
+    const estado = (k: string) => r.vehiculos.find((x) => x.vehiculoId === v[k])?.estado;
+    expect(r.fecha).toBe(hoy);
+    expect(estado('zombi')).toBe('sin_iniciar');
+    expect(estado('noche')).toBe('en_recorrido');
+    expect(estado('hoy')).toBe('en_recorrido');
+  });
+
+  it('día pasado: inicio_recorrido de la víspera sin actividad ese día → sin_iniciar; con actividad ese día → en_recorrido', async () => {
+    const r = await service.listar(admin, diaPasado, ahora);
+    const estado = (k: string) => r.vehiculos.find((x) => x.vehiculoId === v[k])?.estado;
+    expect(r.fecha).toBe(diaPasado);
+    expect(estado('pasadoSin')).toBe('sin_iniciar');
+    expect(estado('pasadoCon')).toBe('en_recorrido');
   });
 });

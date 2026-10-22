@@ -3,6 +3,7 @@ import { withTenantContext } from '@quivo/db';
 import type { Prisma } from '@quivo/db';
 import { bloquearVueltasSesion } from '../ingesta-worker/deteccion-vueltas.js';
 import { vueltaContable, vueltaNoVacia } from './vuelta-no-vacia.js';
+import { sesionesVisiblesSql } from '../../common/sesiones/vigencia.js';
 import {
   MOLINOS_ESPERA_PENDIENTE_MAX_H,
   MolinosResumenSchema,
@@ -11,7 +12,6 @@ import {
   VueltaResumenSchema,
   calcularSugerenciaMolinos,
   fechaActualBolivia,
-  inicioDeJornadaBolivia,
   type AcuseVuelta,
   type DesignarVueltaRespuesta,
   type MolinosResumen,
@@ -392,13 +392,12 @@ export class VueltasService {
    * el poll de 2 s de posiciones: cambia poco y agrega por línea, no por vehículo. Solo entran las
    * líneas con alguna variante activa con punto de espera.
    *
-   * Flota activa = sesiones de la jornada local sin `fin`, `activa` y con el recorrido no
-   * `finalizado` (las sesiones de login no se cierran solas, ver `FrescuraEnVivoSchema`).
+   * Flota activa = sesiones vigentes hoy (`sesionesVisiblesSql`) sin `fin`, `activa` y con el recorrido
+   * no `finalizado` (las sesiones de login no se cierran solas, ver `FrescuraEnVivoSchema`).
    */
   async resumenMolinos(actor: AuthenticatedUser, ahora: Date = new Date()): Promise<MolinosResumen> {
     const jornada = fechaActualBolivia(ahora);
     const hoyStr = jornada.toISOString().slice(0, 10);
-    const desde = inicioDeJornadaBolivia(jornada);
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
       const flota = await tx.$queryRaw<
         { lineaId: string; lineaNombre: string; flotaActiva: number; sinMolinosHoy: number }[]
@@ -417,7 +416,7 @@ export class VueltasService {
         JOIN lineas l ON l.id = ru."lineaId"
         WHERE so.fin IS NULL AND so.estado = 'activa'
           AND so."recorridoEstado" IS DISTINCT FROM 'finalizado'
-          AND so.inicio >= ${desde}
+          AND ${sesionesVisiblesSql(ahora, jornada)}
           AND EXISTS (
             SELECT 1 FROM variantes va
             WHERE va."rutaId" = ru.id AND va.estado = 'activo' AND va."puntoEsperaId" IS NOT NULL
