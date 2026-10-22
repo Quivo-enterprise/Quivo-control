@@ -44,3 +44,15 @@ del boceto en el sentido de cada tramo para caer en la calzada correcta.
   calle real copiada a la config (sin dependencia de red; la calle queda a ~16 m de la recta del boceto).
   Fuente de esos vértices: © colaboradores de OpenStreetMap, licencia ODbL (https://www.openstreetmap.org/copyright),
   consulta Overpass del 2026-10-14. Solo se copiaron ~17 vértices de 6 ways; no hay otros datos de OSM en el repo.
+
+## Corrección de la parada Salomón Romero (2026-10-21)
+
+El 21/10/2026 se corrigió la parada SR por decisión del CTO: el KML original la ubicaba mal.
+- Parada vieja (KML original): -17.3173451, -66.2280812. Parada oficial nueva: **-17.3188935, -66.2280664**.
+- `linea-16-my-maps.kml` se editó SOLO en esa zona: el placemark "PARADA SALOMON ROMERO LINEA 16" y los vértices v0..v18 de
+  "Línea 1" (mismos 151 vértices; el resto byte a byte). Ya no es el KML descargado el 2026-10-12 (sha256 anterior
+  `a4088382bb2b…`, actual `0b5b080e8493…`).
+- Los tramos `ida` (hasta v18) y `salomon` (desde v18) de `trazado-calles.json` se trazaron con las trazas GPS del 21/10
+  (sesiones 1616PID/PIB/PIL/PIF, simplificadas a 5 m), no con Google Routes: entrada y salida usan calles distintas entre SR y v18.
+  El boceto v0..v18 es una línea media entre ambas. Los demás tramos se conservaron byte a byte; solo cambió `meta.kmlSha256`.
+- `ZONAS_TRAMO_A_TRAMO` (v8..v24) y `HUECOS_SIN_CALLE` (v10→v11) ya no describen v8..v17; no correr `--recalcular-zonas` sin revisarlos.
