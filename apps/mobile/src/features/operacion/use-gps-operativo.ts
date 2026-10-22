@@ -1016,7 +1016,9 @@ export function useGpsOperativo(
         'cumplimiento_punto_control',
         sesionId,
       );
-      const base = clavesCumplimientoDesdePayloads(eventosCumplimiento, puntosControlRef.current);
+      // Lee los PC una sola vez: el re-armado de `clavesCumplimientoDesdePayloads` los necesita.
+      const pcs = puntosControlRef.current;
+      const base = clavesCumplimientoDesdePayloads(eventosCumplimiento, pcs);
       // FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"):
       // superpone las visitas PENDIENTES persistidas (SQLite) — ver el docblock de
       // `combinarConVisitasPendientes` (`gps/location-task.ts`). Sin esto, matar y reabrir la
@@ -1027,7 +1029,11 @@ export function useGpsOperativo(
       puntosControlDetectados.current = combinarConVisitasPendientes(base, visitasPendientes);
       // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): recién ACÁ, tras terminar sin
       // excepción, se marca hidratada — ver el comentario largo de `semillaHidratadaRef`.
-      semillaHidratadaRef.current = true;
+      // Sin PC (el paquete del dia carga async desde SQLite) el re-armado no pudo aplicarse: NO se
+      // hidrata, y `onLocation` reintenta en el proximo fix (hasta entonces los ticks usan
+      // `puntosControl: []`, asi que no se acumula estado que la re-siembra pise). Solo se
+      // reintenta mientras la lista este vacia — no al cambiar el array en cada refresco del paquete.
+      semillaHidratadaRef.current = pcs.length > 0;
     } catch (error) {
       console.error('[QUIVO][gps] No se pudo sembrar cumplimientos desde el outbox', error);
       Sentry.captureException(error, {

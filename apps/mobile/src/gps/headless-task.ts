@@ -976,7 +976,10 @@ async function asegurarSemillaCumplimientos(
         }
         // FIX POST-REVISIÓN (punto 5): recién ACÁ, tras terminar sin excepción, se marca
         // hidratada — es la señal que habilita procesar transiciones de cumplimiento.
-        semillasHidratadasPorSesion.set(sesionId, true);
+        // Sin PC el re-armado no pudo aplicarse: no se hidrata y se saca del cache para reintentar
+        // en el proximo tick (con `puntosControl: []` ese tick no procesa cumplimientos).
+        if (puntosControl.length > 0) semillasHidratadasPorSesion.set(sesionId, true);
+        else semillasCumplimientosPorSesion.delete(sesionId);
       } catch (error) {
         console.error('[QUIVO][headless] No se pudo sembrar cumplimientos desde el outbox', error);
         // QUI-365: este catch es best-effort a propósito (ver doc de la función) — sin captura
