@@ -578,9 +578,9 @@ describe('EnVivoService', () => {
       expect(fila?.inactivaDesdeMs).toBe(10 * MINUTO);
     });
 
-    it('incluye una sesión colgada de un día anterior (fin NULL + estado activa)', async () => {
-      // Reproduce el defecto real: "Finalizar recorrido" no cierra la sesión, así que
-      // `fin` queda NULL para siempre y la rama por día calendario no la alcanzaría.
+    it('NO incluye una sesión colgada de un día anterior sin GPS hoy (fin NULL + estado activa)', async () => {
+      // Reproduce el defecto real: "Finalizar recorrido" no cierra la sesión, así que `fin`
+      // queda NULL para siempre — pero sin GPS hoy es un zombi de otro día y no se muestra.
       await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
         tx.sesionOperativa.update({
           where: { id: sesionSinPuntosId },
@@ -588,15 +588,17 @@ describe('EnVivoService', () => {
         }),
       );
 
-      const filas = await service.listarHoy(adminQuivo, AHORA);
-      expect(filas.some((f) => f.id === sesionSinPuntosId)).toBe(true);
-
-      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
-        tx.sesionOperativa.update({
-          where: { id: sesionSinPuntosId },
-          data: { inicio: new Date(AHORA.getTime() - 10 * MINUTO) },
-        }),
-      );
+      try {
+        const filas = await service.listarHoy(adminQuivo, AHORA);
+        expect(filas.some((f) => f.id === sesionSinPuntosId)).toBe(false);
+      } finally {
+        await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+          tx.sesionOperativa.update({
+            where: { id: sesionSinPuntosId },
+            data: { inicio: new Date(AHORA.getTime() - 10 * MINUTO) },
+          }),
+        );
+      }
     });
 
     it('admin_sindicato de otro tenant no ve las sesiones (RLS)', async () => {
@@ -807,11 +809,9 @@ describe('EnVivoService', () => {
       expect(linea2?.ultimoFixTs).toBe(tsFixLinea2.toISOString());
     });
 
-    it('una sesión colgada de días previos (fin NULL + estado activa) sigue apareciendo', async () => {
-      // Reproduce el mismo defecto que cubre `listarHoy`: "Finalizar recorrido" no
-      // cierra la sesión, así que una sesión de hace varios días con `fin` NULL debe
-      // seguir viéndose (para no esconder un teléfono zombi que el admin necesita cerrar
-      // a mano) aunque quede fuera de la ventana rodante de 24 h por `so.inicio`.
+    it('una sesión colgada de días previos (fin NULL + estado activa) NO aparece si no tiene GPS hoy', async () => {
+      // Mismo criterio que `listarHoy`: "Finalizar recorrido" no cierra la sesión, así que
+      // una sesión de hace días con `fin` NULL y sin GPS hoy es un zombi y no se muestra.
       await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
         tx.sesionOperativa.update({
           where: { id: sesionSinPuntosId },
@@ -821,7 +821,7 @@ describe('EnVivoService', () => {
 
       try {
         const filas = await service.obtenerPosiciones(adminQuivo, AHORA);
-        expect(filas.some((f) => f.id === sesionSinPuntosId)).toBe(true);
+        expect(filas.some((f) => f.id === sesionSinPuntosId)).toBe(false);
       } finally {
         await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
           tx.sesionOperativa.update({
@@ -880,13 +880,21 @@ describe('EnVivoService', () => {
     const fixAntesMedianoche = new Date(AHORA_MEDIANOCHE.getTime() - 90 * MINUTO); // hoy 03:00 UTC
     const fixDespuesMedianoche = new Date(AHORA_MEDIANOCHE.getTime() - 10 * MINUTO); // hoy 04:20 UTC
 
-    // Sesión cuyo ÚNICO fix es de AYER a la noche (19:30 Bolivia = 23:30 UTC ayer): antes
-    // de la medianoche boliviana Y antes de la medianoche UTC, así que cae en la partición
-    // `gps_points_<AYER>` — esta sí hace falta crearla explícito, es el caso que pide el
-    // encargo ("si la tabla de test necesita la partición del día anterior, crearla").
+    // Zombi: su ÚNICO fix es de AYER a la noche (19:30 Bolivia = 23:30 UTC ayer), recibido
+    // en el acto: última actividad hace 5 h, antes de hoy Y fuera de la gracia de 2 h.
+    // Cae en la partición `gps_points_<AYER>`, que se crea explícito en el `beforeAll`.
     let sesionSoloAntesId: string;
     const inicioSoloAntes = new Date(AHORA_MEDIANOCHE.getTime() - 330 * MINUTO); // ayer 23:00 UTC
     const fixSoloAntes = new Date(AHORA_MEDIANOCHE.getTime() - 300 * MINUTO); // ayer 23:30 UTC
+
+    // (b) Perdió señal a las 23:50 Bolivia (03:50 UTC), `ahora` 00:30 Bolivia: última
+    // actividad hace 40 min (dentro de la gracia) y ningún dato de hoy.
+    let sesionPerdioSenalId: string;
+    const fixPerdioSenal = new Date(AHORA_MEDIANOCHE.getTime() - 40 * MINUTO); // 23:50 Bolivia
+
+    // (c) Flush de backlog a las 00:29: fix con ts de ayer (5 h atrás), ingesta hace 1 min —
+    // `insertarGpsPoints` solo toca la fila de la jornada de AYER.
+    let sesionBacklogId: string;
 
     /**
      * code-review LOW (docs/plan-en-vivo-resumen-sesion.md) — "un dispositivo activo parece
@@ -956,6 +964,24 @@ describe('EnVivoService', () => {
         });
         sesionSoloAntesId = soloAntes.id;
 
+        const crearSimple = async (deviceId: string, inicio: Date): Promise<string> =>
+          (
+            await tx.sesionOperativa.create({
+              data: {
+                sindicatoId: sindicatoAId,
+                asignacionId: base.asignacionId,
+                vehiculoId: base.vehiculoId,
+                conductorId: base.conductorId,
+                deviceId,
+                inicio,
+                estado: 'activa',
+                ...credenciales(),
+              },
+            })
+          ).id;
+        sesionPerdioSenalId = await crearSimple('device-en-vivo-medianoche-sin-senal', inicioSoloAntes);
+        sesionBacklogId = await crearSimple('device-en-vivo-medianoche-backlog', inicioSoloAntes);
+
         const ingresoTardio = await tx.sesionOperativa.create({
           data: {
             sindicatoId: sindicatoAId,
@@ -976,6 +1002,8 @@ describe('EnVivoService', () => {
             (${randomUUID()}::uuid, ${sesionCruceId}::uuid, 'device-en-vivo-medianoche-cruce', ${fixAntesMedianoche}::timestamptz, -34.61, -58.41, 5, 7.2, ${fixAntesMedianoche}::timestamptz, ${sindicatoAId}),
             (${randomUUID()}::uuid, ${sesionCruceId}::uuid, 'device-en-vivo-medianoche-cruce', ${fixDespuesMedianoche}::timestamptz, -34.612, -58.412, 5, 7.5, ${fixDespuesMedianoche}::timestamptz, ${sindicatoAId}),
             (${randomUUID()}::uuid, ${sesionSoloAntesId}::uuid, 'device-en-vivo-medianoche-solo-antes', ${fixSoloAntes}::timestamptz, -34.62, -58.42, 5, 0, ${fixSoloAntes}::timestamptz, ${sindicatoAId}),
+            (${randomUUID()}::uuid, ${sesionPerdioSenalId}::uuid, 'device-en-vivo-medianoche-sin-senal', ${fixPerdioSenal}::timestamptz, -34.65, -58.45, 5, 0, ${fixPerdioSenal}::timestamptz, ${sindicatoAId}),
+            (${randomUUID()}::uuid, ${sesionBacklogId}::uuid, 'device-en-vivo-medianoche-backlog', ${fixSoloAntes}::timestamptz, -34.66, -58.46, 5, 0, ${ingresoTardioReciente}::timestamptz, ${sindicatoAId}),
             (${randomUUID()}::uuid, ${sesionIngresoTardioId}::uuid, 'device-en-vivo-medianoche-ingreso-tardio', ${fixHoyIngresoViejo}::timestamptz, -34.63, -58.43, 5, 0, ${fixHoyIngresoViejo}::timestamptz, ${sindicatoAId}),
             (${randomUUID()}::uuid, ${sesionIngresoTardioId}::uuid, 'device-en-vivo-medianoche-ingreso-tardio', ${fixAyerIngresoTardio}::timestamptz, -34.64, -58.44, 5, 0, ${ingresoTardioReciente}::timestamptz, ${sindicatoAId})
         `;
@@ -986,16 +1014,32 @@ describe('EnVivoService', () => {
         // `insertarGpsPoints` en producción con un lote que cruza medianoche. Mismo criterio
         // para `sesionIngresoTardioId`: 2 filas (HOY con `ultimo_ingreso_ts` viejo, AYER con
         // `ultimo_ingreso_ts` recién llegado).
-        await recalcularResumen(tx, [sesionCruceId, sesionSoloAntesId, sesionIngresoTardioId]);
+        await recalcularResumen(tx, [
+          sesionCruceId,
+          sesionSoloAntesId,
+          sesionIngresoTardioId,
+          sesionPerdioSenalId,
+          sesionBacklogId,
+        ]);
       });
     });
 
     afterAll(async () => {
       await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-        await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id IN (${sesionCruceId}::uuid, ${sesionSoloAntesId}::uuid, ${sesionIngresoTardioId}::uuid)`;
-        await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id IN (${sesionCruceId}::uuid, ${sesionSoloAntesId}::uuid, ${sesionIngresoTardioId}::uuid)`;
+        await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id IN (${sesionCruceId}::uuid, ${sesionSoloAntesId}::uuid, ${sesionIngresoTardioId}::uuid, ${sesionPerdioSenalId}::uuid, ${sesionBacklogId}::uuid)`;
+        await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id IN (${sesionCruceId}::uuid, ${sesionSoloAntesId}::uuid, ${sesionIngresoTardioId}::uuid, ${sesionPerdioSenalId}::uuid, ${sesionBacklogId}::uuid)`;
         await tx.sesionOperativa.deleteMany({
-          where: { id: { in: [sesionCruceId, sesionSoloAntesId, sesionIngresoTardioId] } },
+          where: {
+            id: {
+              in: [
+                sesionCruceId,
+                sesionSoloAntesId,
+                sesionIngresoTardioId,
+                sesionPerdioSenalId,
+                sesionBacklogId,
+              ],
+            },
+          },
         });
       });
     });
@@ -1021,23 +1065,32 @@ describe('EnVivoService', () => {
       expect(fila?.activa).toBe(true);
     });
 
-    it('sesión cuyo único fix es ANTERIOR a medianoche Bolivia (ninguno después): igual devuelve esa posición, no "sin_datos"', async () => {
-      const filas = await service.obtenerPosiciones(adminQuivo, AHORA_MEDIANOCHE);
-      const fila = filas.find((f) => f.id === sesionSoloAntesId);
+    it('(a) zombi: última actividad ayer hace 5 h (> gracia de 2 h) ⇒ ausente en ambas queries', async () => {
+      const pos = await service.obtenerPosiciones(adminQuivo, AHORA_MEDIANOCHE);
+      const lista = await service.listarHoy(adminQuivo, AHORA_MEDIANOCHE);
+      expect(pos.some((f) => f.id === sesionSoloAntesId)).toBe(false);
+      expect(lista.some((f) => f.id === sesionSoloAntesId)).toBe(false);
+    });
 
+    it('(b) sesión de ayer, último fix 23:50 y ahora 00:30 ⇒ sigue visible, con la posición de ayer', async () => {
+      const pos = await service.obtenerPosiciones(adminQuivo, AHORA_MEDIANOCHE);
+      const fila = pos.find((f) => f.id === sesionPerdioSenalId);
       expect(fila).toBeDefined();
-      // Reproducción directa del bug: antes del fix, el `LATERAL` acotado a `trazaDesde`
-      // (medianoche boliviana de HOY) no veía este fix (de ayer a la noche) y devolvía
-      // `lat`/`lng` `NULL` + `estadoFrescura: 'sin_datos'` — el vehículo desaparecía del
-      // mapa pese a tener una posición última conocida.
-      expect(fila?.lat).toBe(-34.62);
-      expect(fila?.lng).toBe(-58.42);
-      expect(fila?.ultimoFixTs).toBe(fixSoloAntes.toISOString());
-      expect(fila?.totalPuntos).toBe(1);
-      // El fix tiene 5 h de antigüedad: la ingesta ya no está viva, así que la clasificación
-      // correcta es "perdido" (dato viejo), NO "reportando" — lo que importa acá es que
-      // haya DATO (no sea `sin_datos`), no que parezca recién reportado.
-      expect(fila?.estadoFrescura).toBe('perdido');
+      expect(fila?.lat).toBe(-34.65);
+      expect(fila?.lng).toBe(-58.45);
+      expect(fila?.ultimoFixTs).toBe(fixPerdioSenal.toISOString());
+      const lista = await service.listarHoy(adminQuivo, AHORA_MEDIANOCHE);
+      expect(lista.some((f) => f.id === sesionPerdioSenalId)).toBe(true);
+    });
+
+    it('(c) flush de backlog: fix de ayer, ingesta de ahora ⇒ visible (y con posición)', async () => {
+      const pos = await service.obtenerPosiciones(adminQuivo, AHORA_MEDIANOCHE);
+      const fila = pos.find((f) => f.id === sesionBacklogId);
+      expect(fila).toBeDefined();
+      expect(fila?.lat).toBe(-34.66);
+      expect(fila?.ultimoIngresoTs).toBe(ingresoTardioReciente.toISOString());
+      const lista = await service.listarHoy(adminQuivo, AHORA_MEDIANOCHE);
+      expect(lista.some((f) => f.id === sesionBacklogId)).toBe(true);
     });
 
     it('code-review LOW — ultimoIngresoTs es el MAX entre la fila de HOY y la de AYER, no solo la del fix ganador', async () => {
@@ -1062,6 +1115,93 @@ describe('EnVivoService', () => {
       // movimiento) ⇒ "detenido" (vehículo parado, teléfono vivo) — la clasificación
       // correcta, no "perdido".
       expect(fila?.estadoFrescura).toBe('detenido');
+    });
+  });
+
+  describe('regla de sesiones visibles: inicio hoy O actividad GPS hoy/gracia 2 h (listarHoy y obtenerPosiciones)', () => {
+    // AHORA = 12:00 UTC (08:00 Bolivia); la jornada de hoy arranca a las 04:00 UTC.
+    const ayer14Z = new Date(AHORA.getTime() - 22 * 60 * MINUTO); // ayer 14:00 UTC
+    const ayer18Z = new Date(AHORA.getTime() - 18 * 60 * MINUTO); // ayer 18:00 UTC
+    const hoy05Z = new Date(AHORA.getTime() - 7 * 60 * MINUTO); // hoy 05:00 UTC
+    const hoy06Z = new Date(AHORA.getTime() - 6 * 60 * MINUTO); // hoy 06:00 UTC
+    const fixHoy = new Date(AHORA.getTime() - 30 * MINUTO); // hoy 11:30 UTC
+    const ids = {
+      ayerConGps: '',
+      ayerSinGps: '',
+      hoyCerrada: '',
+      ayerCerrada: '',
+    };
+
+    beforeAll(async () => {
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        const base = await tx.sesionOperativa.findUniqueOrThrow({
+          where: { id: sesionConPuntosId },
+        });
+        const crear = async (
+          deviceId: string,
+          inicio: Date,
+          fin: Date | null,
+        ): Promise<string> => {
+          const r = await tx.sesionOperativa.create({
+            data: {
+              sindicatoId: sindicatoAId,
+              asignacionId: base.asignacionId,
+              vehiculoId: base.vehiculoId,
+              conductorId: base.conductorId,
+              deviceId,
+              inicio,
+              fin,
+              estado: fin ? 'finalizada' : 'activa',
+              accessTokenHash: randomUUID(),
+              refreshTokenHash: randomUUID(),
+              accessExpiresAt: new Date(AHORA.getTime() + 60 * MINUTO),
+              refreshExpiresAt: new Date(AHORA.getTime() + 60 * MINUTO),
+            },
+          });
+          return r.id;
+        };
+        ids.ayerConGps = await crear('device-regla-ayer-gps', ayer14Z, null);
+        ids.ayerSinGps = await crear('device-regla-ayer-sin-gps', ayer14Z, null);
+        ids.hoyCerrada = await crear('device-regla-hoy-cerrada', hoy05Z, hoy06Z);
+        ids.ayerCerrada = await crear('device-regla-ayer-cerrada', ayer14Z, ayer18Z);
+
+        await tx.$executeRaw`
+          INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
+          VALUES (${randomUUID()}::uuid, ${ids.ayerConGps}::uuid, 'device-regla-ayer-gps', ${fixHoy}::timestamptz, -34.6, -58.4, 5, 5, ${fixHoy}::timestamptz, ${sindicatoAId})
+        `;
+        await recalcularResumen(tx, [ids.ayerConGps]);
+      });
+    });
+
+    afterAll(async () => {
+      const lista = Object.values(ids).filter(Boolean);
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id = ANY(${lista}::uuid[])`;
+        await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id = ANY(${lista}::uuid[])`;
+        await tx.sesionOperativa.deleteMany({ where: { id: { in: lista } } });
+      });
+    });
+
+    it('listarHoy: (f) ayer + GPS hoy entra; (e) ayer cerrada sin actividad no; (d) hoy cerrada entra; ayer sin GPS no', async () => {
+      const filas = await service.listarHoy(adminQuivo, AHORA);
+      expect(filas.some((f) => f.id === ids.ayerConGps)).toBe(true);
+      expect(filas.some((f) => f.id === ids.ayerSinGps)).toBe(false);
+      expect(filas.some((f) => f.id === ids.ayerCerrada)).toBe(false);
+      const cerrada = filas.find((f) => f.id === ids.hoyCerrada);
+      expect(cerrada).toBeDefined();
+      // Sin ningún fix, la frescura se calcula como `sin_datos` aun estando cerrada.
+      expect(cerrada?.activa).toBe(false);
+      expect(cerrada?.estadoFrescura).toBe('sin_datos');
+    });
+
+    it('obtenerPosiciones: misma regla (d)(e)(f)', async () => {
+      const filas = await service.obtenerPosiciones(adminQuivo, AHORA);
+      const cruce = filas.find((f) => f.id === ids.ayerConGps);
+      expect(cruce).toBeDefined();
+      expect(cruce?.ultimoFixTs).toBe(fixHoy.toISOString());
+      expect(filas.some((f) => f.id === ids.ayerSinGps)).toBe(false);
+      expect(filas.some((f) => f.id === ids.ayerCerrada)).toBe(false);
+      expect(filas.some((f) => f.id === ids.hoyCerrada)).toBe(true);
     });
   });
 });

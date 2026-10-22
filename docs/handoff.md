@@ -6,6 +6,10 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## En curso — 2026-10-22: /en-vivo solo con la jornada de hoy + rediseño
+
+Plan: `docs/plan-en-vivo.md`. PR 1 (fix del servidor, rama `fix/en-vivo-solo-hoy`) en implementación; PR 2 (rediseño con bake-off) después.
+
 ## Punto de retome — 2026-10-22, 10:10 (BO): Molinos salida libre APLICADO en prod
 
 **Dato de #245 aplicado** (14:08Z) con `cargar-linea-16.ts --apply` desde `main` (`5cb04b9`):

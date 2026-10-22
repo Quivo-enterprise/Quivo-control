@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { withTenantContext } from '@quivo/db';
+import { Prisma, withTenantContext } from '@quivo/db';
 import {
   ContextoEnVivoSchema,
   PosicionEnVivoSchema,
@@ -23,7 +23,6 @@ import { vueltaNoVacia } from '../vueltas/vuelta-no-vacia.js';
 import {
   fechaActualBolivia,
   inicioDeJornadaBolivia,
-  inicioDeJornadaSiguienteBolivia,
 } from '../../common/tiempo/jornada.js';
 
 interface SesionEnVivoRow {
@@ -185,29 +184,47 @@ const TECHO_DESPUES_DEL_FIN_MS = 2 * 60 * MINUTO_MS;
 const TECHO_MAXIMO_DESDE_INICIO_MS = 36 * 60 * MINUTO_MS;
 
 /**
- * ENTREGA 10 — ventana y tope de `obtenerPosiciones`. `listarHoy` filtra por
- * `so.inicio` dentro de la jornada boliviana exacta (`trazaDesde`/`trazaHasta`) con
- * `LIMIT 100`; con sesiones colgadas de días previos (`fin IS NULL` para siempre, la
- * app no cierra sesión al "Finalizar recorrido") ese límite puede esconder a las vivas
- * detrás de zombies. Acá el filtro de SESIONES (`so.inicio`) es una ventana **rodante**
- * de 24 h (no la jornada calendario) con un tope más alto: cubre un turno completo
- * aunque cruce medianoche boliviana, y 500 sesiones es más margen del que cualquier
- * sindicato real tiene hoy en simultáneo.
- *
- * CORRECCIÓN (code-review, hallazgo detectado en producción ~00:40 Bolivia): esta
- * garantía de "cubre un turno completo aunque cruce medianoche" es sobre qué SESIONES
- * entran, no sobre qué POSICIONES se les encuentran. Hasta este fix, el `LATERAL` de
- * `obtenerPosiciones` seguía acotado a `trazaDesde` (arranque de la jornada calendario,
- * no de esta ventana rodante) — un vehículo que arrancó anoche y sigue reportando sin
- * parar SÍ entraba por este `WHERE` (`so.inicio >= sesionesDesde` o sesión abierta), pero
- * sus fixes de antes de medianoche quedaban fuera del `LATERAL`, y si todavía no había
- * un fix nuevo posterior a medianoche, la posición salía `NULL`/`sin_datos`: el vehículo
- * desaparecía del mapa justo cuando más se lo necesitaba. Ver `posicionesDesde` en
- * `obtenerPosiciones` — ahora el `LATERAL` comparte el mismo piso rodante que este
- * `WHERE`, así que la garantía de "cubre un turno completo" aplica a AMBOS.
+ * Regla de SESIONES visibles (`listarHoy` y `obtenerPosiciones`, la misma, ver
+ * `sesionesVisiblesSql`): entra la sesión que arrancó en la jornada boliviana de hoy
+ * (`so.inicio >= trazaDesde`) O que tiene actividad (`GREATEST(ultimo_fix_ts,
+ * ultimo_ingreso_ts)`) de hoy o de las últimas `GRACIA_ACTIVIDAD_MEDIANOCHE_MS`. Una sesión
+ * abierta sin actividad de hoy ni de la gracia (la app no cierra sesión al "Finalizar
+ * recorrido") es un zombi de un día previo y NO entra; una cerrada ayer tampoco.
+ * `LIMITE_SESIONES_POSICIONES` es margen de sobra para los vehículos de un sindicato.
  */
-const VENTANA_SESIONES_POSICIONES_MS = 24 * 60 * MINUTO_MS;
 const LIMITE_SESIONES_POSICIONES = 500;
+/**
+ * Gracia al cruzar medianoche: un turno de anoche que sigue vivo (lag de ingesta de hasta
+ * ~71 min medido, pérdida de señal, o backlog cuyos fixes son todos de antes de medianoche)
+ * no desaparece justo a las 00:00.
+ */
+const GRACIA_ACTIVIDAD_MEDIANOCHE_MS = 2 * 60 * MINUTO_MS;
+
+/**
+ * Predicado WHERE único de sesiones visibles. El conjunto "con actividad reciente" es una
+ * subquery NO correlacionada (`(id, sindicatoId) IN (...)`: semi-join por hash, sin evaluar
+ * un EXISTS por cada fila histórica de `sesiones_operativas`); `sesion_id` se castea del
+ * lado de la subquery (`::text`) para no tocar `so.id` y conservar su índice. El par
+ * `(id, sindicatoId)` mantiene el aislamiento por tenant que tenían los LATERAL: una fila
+ * de resumen de OTRO tenant no hace visible la sesión, ni siquiera como admin_quivo.
+ * Sin cota superior en `so.inicio` en ambos: una sesión no arranca en el futuro.
+ */
+function sesionesVisiblesSql(ahora: Date, jornada: Date): Prisma.Sql {
+  const trazaDesde = inicioDeJornadaBolivia(jornada);
+  const desdeActividad = new Date(
+    Math.min(trazaDesde.getTime(), ahora.getTime() - GRACIA_ACTIVIDAD_MEDIANOCHE_MS),
+  );
+  const jornadaStr = jornada.toISOString().slice(0, 10);
+  const jornadaAyerStr = new Date(jornada.getTime() - 24 * 60 * MINUTO_MS)
+    .toISOString()
+    .slice(0, 10);
+  return Prisma.sql`(so.inicio >= ${trazaDesde}
+    OR (so.id, so."sindicatoId") IN (
+      SELECT gx.sesion_id::text, gx."sindicatoId" FROM gps_sesion_resumen gx
+      WHERE gx.jornada IN (${jornadaStr}::date, ${jornadaAyerStr}::date)
+        AND GREATEST(gx.ultimo_fix_ts, gx.ultimo_ingreso_ts) >= ${desdeActividad}
+    ))`;
+}
 
 function diferenciaMs(ahora: Date, ts: Date | null): number | null {
   if (!ts) return null;
@@ -317,14 +334,14 @@ export function derivarFrescura(
 @Injectable()
 export class EnVivoService {
   /**
-   * Sesiones de la jornada boliviana en curso **más** las que quedaron abiertas de días
-   * anteriores (`fin IS NULL AND estado = 'activa'`): la app no cierra la sesión de LOGIN al
-   * "Finalizar" — sigue siendo así después de Fase A, y sigue siendo intencional (el
-   * conductor puede iniciar un recorrido nuevo sin volver a loguearse) —, así que hay
-   * sesiones colgadas indefinidamente y omitirlas escondería vehículos que sí están
-   * reportando. Lo que Fase A SÍ agrega es que ahora se sabe, por sesión, si el RECORRIDO
-   * (no la sesión de login) terminó: ver `recorridoEstado`/`estadoFrescura: 'finalizado'`
-   * más abajo.
+   * Sesiones visibles hoy (regla única `sesionesVisiblesSql`): las que arrancaron en la
+   * jornada boliviana en curso **más** las de un turno previo que siguen con actividad GPS
+   * (fix o ingesta) de hoy o de las últimas 2 h (gracia al cruzar medianoche). La app no
+   * cierra la sesión de LOGIN al "Finalizar" (`fin IS NULL AND estado = 'activa'` para
+   * siempre — sigue siendo intencional: el conductor puede iniciar un recorrido nuevo sin
+   * volver a loguearse), así que las colgadas de días previos sin actividad reciente son
+   * zombis y no se listan. Fase A: por sesión se sabe si el RECORRIDO (no la sesión de
+   * login) terminó: ver `recorridoEstado`/`estadoFrescura: 'finalizado'` más abajo.
    *
    * docs/plan-en-vivo-resumen-sesion.md — el `LEFT JOIN LATERAL` que agregaba sobre TODOS
    * los puntos de la jornada de cada sesión (O(puntos del día de la flota), 10,65 s medidos
@@ -357,8 +374,6 @@ export class EnVivoService {
     // solo sirve para fijar la PK `(sesion_id, jornada, sindicatoId)` del resumen a leer —
     // ya no acota un rango de partición de `gps_points`.
     const jornada = fechaActualBolivia(ahora);
-    const trazaDesde = inicioDeJornadaBolivia(jornada);
-    const trazaHasta = inicioDeJornadaSiguienteBolivia(jornada);
     // `YYYY-MM-DD` en vez de pasar el `Date` (medianoche UTC) directo al placeholder
     // (code-review MEDIUM): Prisma tipa un parámetro `Date` como `timestamptz`, así que
     // `${jornada}::date` haría a Postgres convertir ese instante al TimeZone de la SESIÓN
@@ -396,8 +411,7 @@ export class EnVivoService {
             AND gr."sindicatoId" = so."sindicatoId"
           LIMIT 1
         ) res ON true
-        WHERE (so.inicio >= ${trazaDesde} AND so.inicio < ${trazaHasta})
-           OR (so.fin IS NULL AND so.estado = 'activa')
+        WHERE ${sesionesVisiblesSql(ahora, jornada)}
         ORDER BY (so.fin IS NULL) DESC, res.ultimo_fix_ts DESC NULLS LAST, so.inicio DESC
         LIMIT 100
       `;
@@ -437,7 +451,7 @@ export class EnVivoService {
    * docs/plan-en-vivo-resumen-sesion.md — igual que `listarHoy`, el `LEFT JOIN LATERAL`
    * sobre `gps_points` (10,49 s medidos con 1.000 sesiones/6,7M filas) se reemplaza por un
    * `LEFT JOIN LATERAL` sobre `gps_sesion_resumen`: a lo sumo 2 filas por sesión (jornada de
-   * HOY y de AYER — ver `posicionesDesde`/`VENTANA_SESIONES_POSICIONES_MS` abajo, nunca hace
+   * HOY y de AYER — ver `posicionesDesde` abajo, nunca hace
    * falta mirar más atrás), resuelto por índice (PK `(sesion_id, jornada)`), no un escaneo
    * de los puntos crudos de la sesión.
    *
@@ -483,10 +497,9 @@ export class EnVivoService {
     // Un día calendario exacto atrás — `jornada` es siempre medianoche UTC de un día
     // boliviano, así que restarle 24 h da la fecha del día anterior sin drift.
     const jornadaAyer = new Date(jornada.getTime() - 24 * 60 * MINUTO_MS);
-    const trazaDesde = inicioDeJornadaBolivia(jornada);
-    const sesionesDesde = new Date(ahora.getTime() - VENTANA_SESIONES_POSICIONES_MS);
-    const posicionesDesde =
-      trazaDesde.getTime() < sesionesDesde.getTime() ? trazaDesde : sesionesDesde;
+    // Piso del LATERAL de posiciones: 24 h rodantes (siempre <= inicio de la jornada de hoy),
+    // para que una sesión de anoche conserve sus fixes de antes de medianoche.
+    const posicionesDesde = new Date(ahora.getTime() - 24 * 60 * MINUTO_MS);
     // `YYYY-MM-DD`, no el `Date` directo (code-review MEDIUM — mismo motivo que
     // `listarHoy`): evita que Postgres reinterprete el instante según el TimeZone de la
     // sesión al castear a `date`.
@@ -576,8 +589,7 @@ export class EnVivoService {
           WHERE v."sesionId" = so.id AND v.estado = 'en_curso' AND v."sindicatoId" = so."sindicatoId"
           LIMIT 1
         ) vu ON true
-        WHERE (so.inicio >= ${sesionesDesde})
-           OR (so.fin IS NULL AND so.estado = 'activa')
+        WHERE ${sesionesVisiblesSql(ahora, jornada)}
         ORDER BY (so.fin IS NULL) DESC, fix."ultimoFixTs" DESC NULLS LAST, so.inicio DESC
         LIMIT ${LIMITE_SESIONES_POSICIONES}
       `;
