@@ -801,6 +801,83 @@ describe('clavesCumplimientoDesdePayloads', () => {
   });
 });
 
+describe('clavesCumplimientoDesdePayloads: re-armado por evidencia (PIL 21/10)', () => {
+  const terminal = puntoControl('terminal', [-63.18, -17.78], 150);
+  const lejano = puntoControl('lejano', [-63.18, -17.79], 150); // ~1.1 km
+  const cercano = puntoControl('cercano', [-63.18, -17.7815], 150); // ~170 m < 225 m
+  const emision = (pc: string, ts: string, pasada: number) => ({
+    ts,
+    payload: { sesionId: 'sesion-1', puntoControlId: pc, pasada },
+  });
+  const claveT = claveCumplimiento('sesion-1', 'terminal');
+  // Estacionado a ~48 m de la terminal.
+  const latParqueado = -17.78 + 48 / 111_320;
+
+  it('terminal sembrado re-armado si después se emitió un PC lejano: un cumplimiento nuevo estando estacionado', () => {
+    const pcs = [terminal, lejano];
+    let estados = clavesCumplimientoDesdePayloads(
+      [
+        emision('terminal', '2026-10-21T19:31:00.000Z', 1),
+        emision('lejano', '2026-10-21T21:07:00.000Z', 1),
+      ],
+      pcs,
+    );
+    expect(estados.get(claveT)).toMatchObject({ dentro: false, pasadas: 1, confirmado: true, anuncioHecho: true });
+
+    const t0 = Date.parse('2026-10-21T21:17:17.000Z');
+    const emitidos: unknown[] = [];
+    for (let i = 0; i < 14; i += 1) {
+      const r = construirEventosDeUbicacion(
+        ubicacion(latParqueado, -63.18, new Date(t0 + i * 10_000).toISOString()),
+        contexto(pcs),
+        estados,
+      );
+      emitidos.push(...r.eventos.filter((e) => e.tipo === 'cumplimiento_punto_control'));
+      estados = conTransicionesAplicadas(estados, r.transicionesEstado);
+    }
+    expect(emitidos).toHaveLength(1);
+    expect((emitidos[0] as { payload: unknown }).payload).toMatchObject({ puntoControlId: 'terminal', pasada: 2 });
+  });
+
+  it('regresión: reinicio justo tras la pasada real (nada emitido después) no re-emite', () => {
+    const pcs = [terminal, lejano];
+    let estados = clavesCumplimientoDesdePayloads(
+      [emision('terminal', '2026-10-21T21:15:00.000Z', 1)],
+      pcs,
+    );
+    expect(estados.get(claveT)?.dentro).toBe(true);
+    const t0 = Date.parse('2026-10-21T21:17:17.000Z');
+    for (let i = 0; i < 14; i += 1) {
+      const r = construirEventosDeUbicacion(
+        ubicacion(latParqueado, -63.18, new Date(t0 + i * 10_000).toISOString()),
+        contexto(pcs),
+        estados,
+      );
+      expect(r.eventos.some((e) => e.tipo === 'cumplimiento_punto_control')).toBe(false);
+      estados = conTransicionesAplicadas(estados, r.transicionesEstado);
+    }
+  });
+
+  it('el último PC emitido a menos de 1.5 x radio del terminal no re-arma', () => {
+    const estados = clavesCumplimientoDesdePayloads(
+      [
+        emision('terminal', '2026-10-21T19:31:00.000Z', 1),
+        emision('cercano', '2026-10-21T21:07:00.000Z', 1),
+      ],
+      [terminal, cercano],
+    );
+    expect(estados.get(claveT)?.dentro).toBe(true);
+  });
+
+  it('sin coordenadas de los PCs mantiene dentro: true', () => {
+    const estados = clavesCumplimientoDesdePayloads([
+      emision('terminal', '2026-10-21T19:31:00.000Z', 1),
+      emision('lejano', '2026-10-21T21:07:00.000Z', 1),
+    ]);
+    expect(estados.get(claveT)?.dentro).toBe(true);
+  });
+});
+
 /**
  * FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"): tests de
  * `combinarConVisitasPendientes` — antes de este fix, una visita EN CURSO (dentro del radio,

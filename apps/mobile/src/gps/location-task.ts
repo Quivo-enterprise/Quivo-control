@@ -1,6 +1,7 @@
 import type { Location } from 'react-native-background-geolocation';
 import {
   derivarEventIdDeterministico,
+  haversineMetros,
   RADIO_AVISO_M,
   resolverTsFix,
   type PuntoControlPaquete,
@@ -10,6 +11,7 @@ import {
   detectarPuntosControlCercanos,
   filtrarNuevosCumplimientos,
   claveCumplimiento,
+  FACTOR_REARME_RADIO,
   type AvisoPrecision,
   type DeteccionPuntoControl,
   type EstadoPuntoControl,
@@ -418,10 +420,13 @@ export function construirEventosDeUbicacion(
  */
 export function clavesCumplimientoDesdePayloads(
   eventos: { ts: string; payload: Record<string, unknown> }[],
+  puntosControl: readonly PuntoControlPaquete[] = [],
 ): Map<string, EstadoPuntoControl> {
+  const porId = new Map(puntosControl.map((pc) => [pc.id, pc]));
+  const emisiones: { sesionId: string; puntoControlId: string; ms: number }[] = [];
   const acumulado = new Map<
     string,
-    { ultimoEmitidoMs: number; filas: number; maxPasadaPayload: number }
+    { ultimoEmitidoMs: number; filas: number; maxPasadaPayload: number; sesionId: string; puntoControlId: string }
   >();
 
   for (const evento of eventos) {
@@ -431,11 +436,20 @@ export function clavesCumplimientoDesdePayloads(
 
     const clave = claveCumplimiento(sesionId, puntoControlId);
     const tsResueltoMs = Date.parse(resolverTsFix(evento.payload, evento.ts));
+    emisiones.push({ sesionId, puntoControlId, ms: tsResueltoMs });
     const pasadaPayload = evento.payload['pasada'];
     const pasadaNumerica =
       typeof pasadaPayload === 'number' && Number.isFinite(pasadaPayload) ? pasadaPayload : 0;
-    const previo = acumulado.get(clave) ?? { ultimoEmitidoMs: -Infinity, filas: 0, maxPasadaPayload: 0 };
+    const previo = acumulado.get(clave) ?? {
+      ultimoEmitidoMs: -Infinity,
+      filas: 0,
+      maxPasadaPayload: 0,
+      sesionId,
+      puntoControlId,
+    };
     acumulado.set(clave, {
+      sesionId,
+      puntoControlId,
       filas: previo.filas + 1,
       maxPasadaPayload: Math.max(previo.maxPasadaPayload, pasadaNumerica),
       ultimoEmitidoMs: Number.isNaN(tsResueltoMs)
@@ -445,14 +459,32 @@ export function clavesCumplimientoDesdePayloads(
   }
 
   const estados = new Map<string, EstadoPuntoControl>();
-  for (const [clave, { ultimoEmitidoMs, filas, maxPasadaPayload }] of acumulado) {
+  for (const [clave, { ultimoEmitidoMs, filas, maxPasadaPayload, sesionId, puntoControlId }] of acumulado) {
     // M2: ver el comentario de arriba — el máximo entre "cuántas filas quedan" y "la pasada
     // más alta que alguna fila sobreviviente reporta" sobrevive a una purga parcial.
     const pasadas = Math.max(maxPasadaPayload, filas);
+    // Resiembra del PIL (21/10): si DESPUÉS de la última emisión de este punto se emitió otro
+    // punto a más de `radio * FACTOR_REARME_RADIO`, el vehículo ya se había alejado lo
+    // suficiente para re-armarlo — sembrar `dentro: true` lo dejaba trabado estando estacionado
+    // adentro. Sin coordenadas o sin esa evidencia, se mantiene `dentro: true` (A1).
+    const pc = porId.get(puntoControlId);
+    const rearmado =
+      pc !== undefined &&
+      emisiones.some((e) => {
+        const otro = porId.get(e.puntoControlId);
+        return (
+          otro !== undefined &&
+          e.sesionId === sesionId &&
+          e.puntoControlId !== pc.id &&
+          e.ms > ultimoEmitidoMs &&
+          haversineMetros(pc.coord.coordinates, otro.coord.coordinates) >
+            pc.radioToleranciaM * FACTOR_REARME_RADIO
+        );
+      });
     estados.set(clave, {
       // A1: ver el comentario largo de arriba — toda clave que llega hasta acá tiene al menos
       // una emisión previa (por construcción del loop de arriba), así que siempre es `true`.
-      dentro: true,
+      dentro: !rearmado,
       ultimoEmitidoMs,
       pasadas,
       // ENTREGA 6: explícito (aunque el `=== false` de `filtrarNuevosCumplimientos` ya trata

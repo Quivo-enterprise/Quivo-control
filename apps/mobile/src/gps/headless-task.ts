@@ -953,6 +953,7 @@ export function estaSemillaHidratada(sesionId: string): boolean {
 async function asegurarSemillaCumplimientos(
   db: SQLite.SQLiteDatabase,
   sesionId: string,
+  puntosControl: readonly PuntoControlPaquete[],
 ): Promise<void> {
   // FIX POST-REVISIÓN (punto 5): si ya hidrató alguna vez, no hay nada que reintentar — evita
   // releer el outbox en cada tick de una sesión que ya sembró bien.
@@ -963,7 +964,7 @@ async function asegurarSemillaCumplimientos(
     semilla = (async () => {
       try {
         const eventos = await obtenerEventosPorTipo(db, 'cumplimiento_punto_control', sesionId);
-        const base = clavesCumplimientoDesdePayloads(eventos);
+        const base = clavesCumplimientoDesdePayloads(eventos, puntosControl);
         // FIX POST-REVISIÓN (bug 5): superpone las visitas PENDIENTES persistidas — ver el
         // docblock de `combinarConVisitasPendientes` (`location-task.ts`) para el porqué. Sin
         // esto, una visita en curso al momento del kill/reciclado volvía como si nunca hubiera
@@ -1302,7 +1303,7 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
       const location = event.params as unknown as Location;
 
       const db = await abrirOutbox();
-      await asegurarSemillaCumplimientos(db, contexto.sesionId);
+      await asegurarSemillaCumplimientos(db, contexto.sesionId, contexto.puntosControl);
       // FIX POST-REVISIÓN (Codex `verify-fix`, punto 5): mientras la semilla de esta sesión no
       // haya hidratado (lectura fallida, se reintenta en el próximo tick — ver
       // `asegurarSemillaCumplimientos`), este fix se procesa SOLO para `gps_point` — la máquina
@@ -1415,7 +1416,7 @@ async function manejarHeartbeatHeadless(): Promise<void> {
     if (!contexto) return;
 
     const db = await abrirOutbox();
-    await asegurarSemillaCumplimientos(db, contexto.sesionId);
+    await asegurarSemillaCumplimientos(db, contexto.sesionId, contexto.puntosControl);
     // REDISEÑO: `emitir` (confirmaciones de EVIDENCIA forzadas por antigüedad) YA NO se anuncia
     // — la evidencia nunca dispara ningún canal hacia el chofer (gap 1 y 2 del brief). Solo
     // `anunciosLlegada`, decidido por `evaluarAnuncioDeHeartbeat` DENTRO de

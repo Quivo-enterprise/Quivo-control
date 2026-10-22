@@ -330,6 +330,9 @@ export function useGpsOperativo(
   const puntosRef = useRef(0);
   const erroresEscritura = useRef(0);
   const puntosControlDetectados = useRef<Map<string, EstadoPuntoControl>>(new Map());
+  // Ref para que `sembrarCumplimientos` lea los PCs sin cambiar de identidad (re-dispararía el re-enganche).
+  const puntosControlRef = useRef(puntosControl);
+  puntosControlRef.current = puntosControl;
   const subscription = useRef<{ remove: () => void } | null>(null);
   // FIX POST-REVISIÓN (bug 2): suscripción SEPARADA de `onHeartbeat` — ver `onHeartbeat` más
   // abajo. No comparte el mismo `subscription.current` que `onLocation`: las dos deben poder
@@ -1013,7 +1016,7 @@ export function useGpsOperativo(
         'cumplimiento_punto_control',
         sesionId,
       );
-      const base = clavesCumplimientoDesdePayloads(eventosCumplimiento);
+      const base = clavesCumplimientoDesdePayloads(eventosCumplimiento, puntosControlRef.current);
       // FIX POST-REVISIÓN (bug 5, "reabrir la app a mitad de visita pierde la pasada"):
       // superpone las visitas PENDIENTES persistidas (SQLite) — ver el docblock de
       // `combinarConVisitasPendientes` (`gps/location-task.ts`). Sin esto, matar y reabrir la
