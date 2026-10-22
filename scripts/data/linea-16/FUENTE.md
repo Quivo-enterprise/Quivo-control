@@ -64,3 +64,4 @@ geometría anterior; retorno en orden 8, espera en orden 15). Decisión del CTO:
 - `puntos-control.json` fija el plan de PC a los 17 PC activos de prod (coords exactas, `rol`, `esperaMin`, `obligatorio`);
   `cargar-linea-16.ts` lo lee en lugar de generarlo desde la geometría. Radio: siempre 150 m (`RADIO_TOLERANCIA_M`).
 - Para cambiar los PC, editar ese JSON (no hay generador).
+- 2026-10-22: Molinos `esperaMin` null (salida libre, orden de llegada; sin minutos de espera), PR #243.
