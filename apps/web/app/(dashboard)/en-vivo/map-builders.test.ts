@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { PosicionEnVivo } from '@quivo/shared';
-import { construirMarcadoresVehiculos, filtrarPorLinea, idMarcadorVehiculo } from './map-builders';
+import type { ContextoEnVivo, PosicionEnVivo } from '@quivo/shared';
+import { construirMarcadoresVehiculos, construirRutas, filtrarPorLinea, idMarcadorVehiculo } from './map-builders';
 
 // Fixture mínima de `PosicionEnVivo` (`GET /reportes/en-vivo/posiciones`, Entregas 10/13):
 // todos los campos que NO le importan a `map-builders.ts` quedan con un valor fijo cualquiera
@@ -184,5 +184,29 @@ describe('construirMarcadoresVehiculos — PR E (alertas, color de línea, selec
     const [a, b] = construirMarcadoresVehiculos([conFoto, posicion({ id: 'b' })], () => {});
     expect(a!.fotoUrl).toBe('https://x.test/a.jpg');
     expect(b!.fotoUrl).toBeUndefined();
+  });
+});
+
+describe('construirRutas', () => {
+  const linea = (coords: number[][]) => ({ type: 'LineString' as const, coordinates: coords });
+  const contexto = {
+    linea: { color: '#16a34a' },
+    ruta: { geometria: linea([[-66.15, -17.39], [-66.14, -17.39]]) },
+    variantes: [
+      { id: 'v1', nombre: 'Molinos', geometria: linea([[-66.14, -17.39], [-66.13, -17.4]]) },
+      { id: 'v2', nombre: 'Vacía', geometria: linea([]) },
+    ],
+  } as unknown as ContextoEnVivo;
+
+  it('dibuja la variante designada entre la base y la traza, sin desplazarla', () => {
+    const rutas = construirRutas(contexto, undefined, [], 'v1');
+    expect(rutas.map((r) => r.id)).toEqual(['ruta-asignada', 'ruta-variante']);
+    expect(rutas[1]).toMatchObject({ sinOffset: true });
+    expect(rutas[1]!.dashed).toBeUndefined();
+    expect(rutas[1]!.points[1]).toEqual({ lat: -17.4, lng: -66.13 });
+  });
+
+  it.each([[null], ['desconocida'], ['v2']])('no dibuja variante con varianteId=%s', (id) => {
+    expect(construirRutas(contexto, undefined, [], id).map((r) => r.id)).toEqual(['ruta-asignada']);
   });
 });

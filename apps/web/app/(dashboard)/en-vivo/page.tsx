@@ -331,9 +331,10 @@ export default function EnVivoPage() {
   );
   // `fusionarTraza` conserva la referencia de `puntos` si el poll no sumó nada: sin recalcular.
   const puntosTraza = datos?.puntos;
+  const varianteId = posicionSeleccionada?.vuelta?.varianteId ?? null;
   const routes = useMemo(
-    () => (contexto.data ? construirRutas(contexto.data, puntosTraza, rutasSnap) : []),
-    [contexto.data, puntosTraza, rutasSnap],
+    () => (contexto.data ? construirRutas(contexto.data, puntosTraza, rutasSnap, varianteId) : []),
+    [contexto.data, puntosTraza, rutasSnap, varianteId],
   );
   const zones = useMemo(
     () => (contexto.data ? construirZonas(contexto.data) : []),
