@@ -6,6 +6,22 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Punto de retome — 2026-10-21, 21:00: fixes para el piloto del 22/10 en curso
+
+**Plan:** [`docs/plan-post-piloto-21-10.md`](plan-post-piloto-21-10.md).
+
+**Para el 22/10 entran:**
+- 1: trazado SR con el GPS real; el CTO lo revisa antes de aplicarlo.
+- 2: refresco de los PC.
+- 3: racha de la fila.
+- 4: salida detectada por el servidor.
+- 8: confirmación al PAUSAR en la fila.
+- 9: terminal no re-detectado.
+
+**Quedan para el sábado 25:** 5 (la variante en el mapa) y 6 (la fase de vecinos sin vuelta).
+
+**No va:** el límite de distancia de vecinos (decisión del CTO).
+
 ## Punto de retome — 2026-10-21, 17:00: piloto L16 en curso; hallazgos y fixes pendientes
 
 **Cambio en prod durante el piloto (sin deploy):** la parada de Salomón Romero se mudó al sur y es definitiva.
