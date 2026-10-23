@@ -9,7 +9,7 @@ vi.mock('../../db/vuelta-actual-local', () => ({
   leerDesignacionOrdenLocal: vi.fn().mockResolvedValue(null),
 }));
 
-import { leerProgresoVuelta, puntosDeLaFaseActual, registrarPasoEnVuelta } from './progreso-vuelta-store';
+import { leerProgresoVuelta, puntosDeLaFaseActual, registrarPasoEnVuelta, rumboConfiable } from './progreso-vuelta-store';
 import { faseDe, FIXES_FALLBACK_REGRESO } from './fase-vuelta';
 
 // SQLite mínima en memoria: una fila por clave con `estado_json` y `version` (lo que usa el almacén).
@@ -49,16 +49,28 @@ const ids = (l: PuntoControlPaquete[]) => l.map((p) => p.id);
 
 // Ida por y=0 hacia el este; regreso por y=0.001 (≈111 m al norte) hacia el oeste.
 const geometria: [number, number][] = [[0, 0], [0.002, 0], [0.002, 0.001], [0, 0.001], [0, 0]];
-const sobreIda = { lng: 0.001, lat: 0 };
-const sobreRegreso = { lng: 0.001, lat: 0.001 };
+const sobreIda = { lng: 0.001, lat: 0, heading: 90 };
+const sobreRegreso = { lng: 0.001, lat: 0.001, heading: 270 };
 
 describe('puntosDeLaFaseActual', () => {
   let db: ReturnType<typeof dbFalsa>;
   beforeEach(() => {
     db = dbFalsa();
   });
-  const consultar = (fix: { lng: number; lat: number; accuracy?: number }, lista = puntos) =>
-    puntosDeLaFaseActual(db as never, 's1', lista, geometria, fix);
+  // `heading` = rumbo GPS del vehículo (10 m/s); `undefined` = detenido, sin rumbo confiable.
+  const consultar = (
+    fix: { lng: number; lat: number; accuracy?: number; heading?: number },
+    lista = puntos,
+    velocidad = 10,
+  ) =>
+    puntosDeLaFaseActual(db as never, 's1', lista, geometria, fix, {
+      lat: fix.lat,
+      lng: fix.lng,
+      ts: 0,
+      speed: velocidad,
+      heading: fix.heading ?? -1,
+      accuracy: fix.accuracy ?? 5,
+    });
 
   it('sin PC retorno devuelve la misma lista sin tocar SQLite', async () => {
     const sinRoles = [pc('a', 0), pc('b', 1)];
@@ -79,7 +91,8 @@ describe('puntosDeLaFaseActual', () => {
 
   it('fallback: FIXES_FALLBACK_REGRESO fixes sobre el regreso (lejos de la ida) lo persisten', async () => {
     for (let i = 1; i < FIXES_FALLBACK_REGRESO; i++) {
-      expect(ids(await consultar(sobreRegreso))).toEqual(['sr', 'i1', 'h']);
+      // En fase ida pero yendo en sentido de regreso: la compuerta deja terminal y retorno (exento).
+      expect(ids(await consultar(sobreRegreso))).toEqual(['sr', 'h']);
     }
     expect(ids(await consultar(sobreRegreso))).toEqual(['sr', 'r1']);
     const fila = [...db.filas.values()][0]!;
@@ -92,12 +105,35 @@ describe('puntosDeLaFaseActual', () => {
     await consultar(sobreRegreso);
     await consultar(sobreRegreso);
     await consultar(sobreIda);
-    expect(ids(await consultar(sobreRegreso))).toEqual(['sr', 'i1', 'h']);
+    expect(ids(await consultar(sobreRegreso))).toEqual(['sr', 'h']);
   });
 
-  it('regreso: fixes sobre la ida exclusiva (lejos del regreso) devuelven a ida', async () => {
+  it('rumbo opuesto al de la calle compartida (o sin velocidad) no cambia la fase', async () => {
+    const contraMano = { ...sobreRegreso, heading: 90 };
+    for (let i = 0; i < 2 * FIXES_FALLBACK_REGRESO; i++) await consultar(contraMano);
+    for (let i = 0; i < 2 * FIXES_FALLBACK_REGRESO; i++) await consultar(sobreRegreso, puntos, 0.5);
+    expect(ids(await consultar(sobreRegreso, puntos, 0.5))).toEqual(['sr', 'i1', 'h']);
+    expect(db.runAsync).not.toHaveBeenCalled();
+  });
+
+  it('compuerta de sentido: yendo en contra del trazado de un PC de ida no se detecta; lento sí', async () => {
+    // i1 está sobre la ida (hacia el este): con rumbo oeste se descarta (terminal y retorno quedan exentos).
+    const oesteSobreIda = { ...sobreIda, heading: 270 };
+    expect(ids(await consultar(oesteSobreIda))).toEqual(['sr', 'h']);
+    expect(ids(await consultar(oesteSobreIda, puntos, 0.5))).toEqual(['sr', 'i1', 'h']);
+  });
+
+  it('regreso con el retorno ya pasado: fixes sobre la ida exclusiva NO devuelven a ida', async () => {
     await registrarPasoEnVuelta(db as never, 's1', 'sr', 'k1', puntos);
     await registrarPasoEnVuelta(db as never, 's1', 'h', 'k2', puntos);
+    for (let i = 0; i < 2 * FIXES_FALLBACK_REGRESO; i++) {
+      expect(ids(await consultar(sobreIda))).toEqual(['sr', 'r1']);
+    }
+  });
+
+  it('regreso por fallback (retorno sin pasar): fixes sobre la ida exclusiva y en su sentido devuelven a ida', async () => {
+    for (let i = 0; i < FIXES_FALLBACK_REGRESO; i++) await consultar(sobreRegreso);
+    expect(ids(await consultar(sobreRegreso))).toEqual(['sr', 'r1']);
     for (let i = 1; i < FIXES_FALLBACK_REGRESO; i++) {
       expect(ids(await consultar(sobreIda))).toEqual(['sr', 'r1']);
     }
@@ -119,5 +155,22 @@ describe('fase a medianoche', () => {
     // Con fila propia del día, manda la suya.
     db.filas.set('s1:2026-10-15', { estado_json: JSON.stringify({ pasados: [] }), version: 1 });
     expect(faseDe(await leerProgresoVuelta(db as never, 's1', '2026-10-15'))).toBe('ida');
+  });
+});
+
+describe('rumboConfiable', () => {
+  const f = (ts: number, lng: number) => ({ lat: 0, lng, ts, speed: 10, heading: -1, accuracy: 5 });
+
+  it('calcula bearing entre fixes cercanos en el tiempo; pasados 30 s descarta la referencia', () => {
+    rumboConfiable('r1', f(0, 0));
+    expect(rumboConfiable('r1', f(1000, 0.001))).toBeCloseTo(90, 0);
+    rumboConfiable('r1', f(2000, 0.002));
+    expect(rumboConfiable('r1', f(2000 + 31_000, 0.01))).toBeNull();
+  });
+
+  it('solo conserva la sesión vigente: al ver otra sesión descarta el estado de la anterior', () => {
+    rumboConfiable('a', f(0, 0));
+    rumboConfiable('b', f(500, 0));
+    expect(rumboConfiable('a', f(1000, 0.001))).toBeNull(); // estado de "a" podado: primer fix otra vez
   });
 });

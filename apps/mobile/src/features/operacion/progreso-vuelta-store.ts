@@ -1,15 +1,23 @@
 import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
-import { distanciaAPolilineaM, type PuntoControlPaquete } from '@quivo/shared';
+import {
+  distanciaAPolilineaM,
+  segmentoMasCercano,
+  type PuntoControlPaquete,
+} from '@quivo/shared';
 import { conReintentoSiHandleMuerto } from '../../db/outbox';
 import { leerDesignacionOrdenLocal } from '../../db/vuelta-actual-local';
 import {
   evaluarFixFase,
   faseDe,
-  mitadesDelCircuito,
+  filtrarPorSentido,
   puntoRetorno,
   puntosDeFase,
+  retornoBloqueaIda,
+  rutasDelCircuito,
 } from './fase-vuelta';
+import { ESTADO_RUMBO_INICIAL, rumboDeMovimiento, type EstadoRumbo } from './movimiento/rumbo';
+import type { FixVisual } from './movimiento/tipos';
 import {
   claveProgresoVuelta,
   estadoInicialVuelta,
@@ -254,26 +262,48 @@ export async function puntosDeLaFaseActual(
   puntosControl: PuntoControlPaquete[],
   geometriaRuta: [number, number][] | undefined,
   fix: { lng: number; lat: number; accuracy?: number | null },
+  fixVisual?: FixVisual,
 ): Promise<PuntoControlPaquete[]> {
   if (!puntoRetorno(puntosControl)) return puntosControl;
   const estado = await leerProgresoVuelta(db, sesionId);
   let fase = faseDe(estado);
-  const mitades = geometriaRuta ? mitadesDelCircuito(geometriaRuta, puntosControl) : null;
-  if (mitades) {
+  const rutas = geometriaRuta ? rutasDelCircuito(geometriaRuta, puntosControl) : null;
+  // Rumbo del movimiento: solo es confiable con velocidad de curso (`seleccionarRumbo` lo sostiene
+  // con el fix parado, y ese rumbo viejo no sirve para decidir sentido). Una vez por fix.
+  const rumbo = fixVisual ? rumboConfiable(sesionId, fixVisual) : null;
+  if (rutas?.mitades) {
     const posicion: [number, number] = [fix.lng, fix.lat];
-    const dIda = distanciaAPolilineaM(posicion, mitades.ida);
-    const dRegreso = distanciaAPolilineaM(posicion, mitades.regreso);
-    const evaluado = evaluarFixFase(estado, dIda, dRegreso, fix.accuracy);
+    const dIda = distanciaAPolilineaM(posicion, rutas.mitades.ida);
+    const dRegreso = distanciaAPolilineaM(posicion, rutas.mitades.regreso);
+    const rumboMitad = (r: typeof rutas.rutaIda) => (r ? (segmentoMasCercano(r, fix.lat, fix.lng)?.rumbo ?? null) : null);
+    const sentido = { rumbo, rumboIda: rumboMitad(rutas.rutaIda), rumboRegreso: rumboMitad(rutas.rutaRegreso) };
+    const retorno = puntoRetorno(puntosControl)!;
+    const bloqueado = (e: typeof estado) => retornoBloqueaIda(e.pasados.includes(retorno.id), posicion, retorno);
+    const evaluado = evaluarFixFase(estado, dIda, dRegreso, fix.accuracy, sentido, bloqueado(estado));
     if (evaluado !== estado) {
       fase = faseDe(evaluado);
       await encolar(
         db,
         sesionId,
         fechaLocal(),
-        () => (actual) => evaluarFixFase(actual, dIda, dRegreso, fix.accuracy),
+        () => (actual) => evaluarFixFase(actual, dIda, dRegreso, fix.accuracy, sentido, bloqueado(actual)),
         { paso: 'fase-fallback', extra: {} },
       );
     }
   }
-  return puntosDeFase(puntosControl, fase);
+  return filtrarPorSentido(puntosDeFase(puntosControl, fase), rutas?.rumboPc ?? new Map(), rumbo);
+}
+
+const estadosRumbo = new Map<string, { estado: EstadoRumbo; ts: number }>();
+/** Más viejo que esto (hueco de GPS / app reiniciada) el rumbo de referencia no vale para medir un bearing. */
+const VIGENCIA_RUMBO_MS = 30_000;
+
+/** Rumbo de movimiento del fix (`rumboDeMovimiento`) llevando el estado de la sesión vigente; `null` si no es confiable. */
+export function rumboConfiable(sesionId: string, fix: FixVisual): number | null {
+  for (const otra of estadosRumbo.keys()) if (otra !== sesionId) estadosRumbo.delete(otra);
+  const guardado = estadosRumbo.get(sesionId);
+  const vigente = guardado && Math.abs(fix.ts - guardado.ts) <= VIGENCIA_RUMBO_MS;
+  const { estado, rumbo } = rumboDeMovimiento(fix, vigente ? guardado.estado : ESTADO_RUMBO_INICIAL);
+  estadosRumbo.set(sesionId, { estado, ts: fix.ts });
+  return rumbo;
 }
