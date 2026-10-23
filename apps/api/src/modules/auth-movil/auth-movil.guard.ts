@@ -1,5 +1,13 @@
-import { CanActivate, ExecutionContext, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Inject,
+  Injectable,
+  Optional,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
+import { PinoLogger } from 'nestjs-pino';
 import { AuthMovilService } from './auth-movil.service.js';
 import type { SesionMovilAutenticada } from './auth-movil.types.js';
 import { hashTokenOpaco } from './token-opaco.js';
@@ -27,7 +35,11 @@ export class AuthMovilGuard implements CanActivate {
   // IP como en los primeros dos intentos de este fix.
   private readonly tokensInvalidosConocidos = new Map<string, number>();
 
-  constructor(@Inject(AuthMovilService) private readonly authMovilService: AuthMovilService) {}
+  constructor(
+    @Inject(AuthMovilService) private readonly authMovilService: AuthMovilService,
+    // Opcional: módulos de test sin LoggerModule siguen resolviendo el guard.
+    @Optional() @Inject(PinoLogger) private readonly logger?: PinoLogger,
+  ) {}
 
   /**
    * Historia completa (QUI-240 code-review, para que nadie repita los mismos dos intentos
@@ -85,6 +97,7 @@ export class AuthMovilGuard implements CanActivate {
 
     try {
       request.sesionMovil = await this.authMovilService.validarAccessToken(token);
+      this.ligarSesionAlLog(request.sesionMovil);
     } catch (error) {
       if (error instanceof UnauthorizedException) {
         this.registrarTokenInvalido(hash);
@@ -93,6 +106,15 @@ export class AuthMovilGuard implements CanActivate {
     }
 
     return true;
+  }
+
+  /** Solo ids opacos (sin token ni deviceId) para correlacionar los logs de la request. */
+  private ligarSesionAlLog({ sesionId, vehiculoId }: SesionMovilAutenticada): void {
+    try {
+      this.logger?.assign({ sesionId, vehiculoId });
+    } catch {
+      // Fuera de contexto de request (tests/jobs): el log es best-effort.
+    }
   }
 
   private esTokenInvalidoConocido(hash: string): boolean {

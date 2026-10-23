@@ -39,6 +39,8 @@ import { DemoRequestsModule } from './modules/demo-requests/index.js';
     // `AuthController.login` pisa esto con uno mucho más estricto (ver ese archivo).
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 100 }]),
     LoggerModule.forRoot({
+      // El guard móvil liga sesionId/vehiculoId con `PinoLogger.assign`; esto los lleva al log de respuesta.
+      assignResponse: true,
       pinoHttp: {
         redact: pinoHttpRedaction,
         // req.id ya viene de Fastify (genReqId configurado en main.ts).

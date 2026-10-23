@@ -3,7 +3,7 @@ import { prisma, withTenantContext } from '@quivo/db';
 import type { Prisma as PrismaTypes } from '@quivo/db';
 import { UMBRAL_VECINO_FRESCO_MS } from '@quivo/shared';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { fechaActualBolivia } from '../../common/tiempo/jornada.js';
+import { fechaActualBolivia, inicioDeJornadaBolivia } from '../../common/tiempo/jornada.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
 import { VecinosRutaService } from './vecinos-ruta.service.js';
 
@@ -15,6 +15,9 @@ const AHORA = (() => {
   return new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate(), 12));
 })();
 const JORNADA = fechaActualBolivia(AHORA).toISOString().slice(0, 10);
+/** Edad (ms) de una vuelta iniciada `minAntes` minutos antes del inicio de la jornada de hoy. */
+const edadAntesDeJornada = (minAntes: number) =>
+  AHORA.getTime() - inicioDeJornadaBolivia(fechaActualBolivia(AHORA)).getTime() + minAntes * MINUTO;
 
 /** Ruta recta oeste→este (~916 m): el sentido de avance es lng creciente. */
 const LAT = -34.6;
@@ -92,6 +95,8 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     accuracy?: number;
     /** Vuelta en curso de la sesión: 'regreso' ⇒ ya pasó por el retorno. Sin esto no hay vuelta. */
     fase?: 'ida' | 'regreso';
+    /** Antigüedad (ms) del inicio de esa vuelta; por defecto 30 min. */
+    edadVueltaMs?: number;
     /** Fixes en `gps_points` (ya ingestados), p. ej. el último fix bueno tras uno impreciso. */
     puntosGps?: { lng: number; lat: number; accuracy: number | null; edadMs: number }[];
   }
@@ -172,7 +177,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
             rutaId: ruta,
             fecha: AHORA,
             numero: 1,
-            inicioTs: new Date(AHORA.getTime() - 30 * MINUTO),
+            inicioTs: new Date(AHORA.getTime() - (spec.edadVueltaMs ?? 30 * MINUTO)),
             estado: 'en_curso',
             pasoRetornoTs: spec.fase === 'regreso' ? new Date(AHORA.getTime() - 10 * MINUTO) : null,
           },
@@ -599,6 +604,46 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
       expect(suyo.delante!.distanciaM).toBeCloseTo(mio.detras!.distanciaM, 0);
     });
 
+    it('una vuelta en curso de ayer (regreso) no da fase: proyección global', async () => {
+      const yo = await crearSesion({ placa: 'VRAYM', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida' });
+      await crearSesion({
+        placa: 'VRAYC',
+        rutaId: rutaCerradaId,
+        pos: MIA_REGRESO,
+        fase: 'regreso',
+        edadVueltaMs: 24 * 60 * MINUTO,
+      });
+      const r = await service.obtener(yo, {}, AHORA);
+      // Sin la fase de ayer cae en la ida (~183 m DETRÁS), no ~1,66 km por delante.
+      expect(r.detras!.distanciaM).toBeLessThan(250);
+    });
+
+    it('una vuelta iniciada 30 min antes de la jornada (gracia de medianoche) conserva su fase', async () => {
+      const yo = await crearSesion({ placa: 'VRGRM', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida' });
+      await crearSesion({
+        placa: 'VRGRC',
+        rutaId: rutaCerradaId,
+        pos: MIA_REGRESO,
+        fase: 'regreso',
+        edadVueltaMs: edadAntesDeJornada(30),
+      });
+      const r = await service.obtener(yo, {}, AHORA);
+      expect(r.delante?.placa).toBe('VRGRC');
+    });
+
+    it('una vuelta iniciada más de 2 h antes de la jornada pierde la fase', async () => {
+      const yo = await crearSesion({ placa: 'VRGLM', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida' });
+      await crearSesion({
+        placa: 'VRGLC',
+        rutaId: rutaCerradaId,
+        pos: MIA_REGRESO,
+        fase: 'regreso',
+        edadVueltaMs: edadAntesDeJornada(150),
+      });
+      const r = await service.obtener(yo, {}, AHORA);
+      expect(r.detras!.distanciaM).toBeLessThan(250);
+    });
+
     it('`fase` del request manda sobre la derivada de `vueltas` (y sin vuelta se usa la del request)', async () => {
       const yo = await crearSesion({ placa: 'VRCFY', rutaId: rutaCerradaId, pos: MIA_REGRESO });
       await crearSesion({ placa: 'VRCFO', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida' });
@@ -770,6 +815,11 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     it('último cumplimiento en un PC común posterior al retorno ⇒ regreso', async () => {
       const r = await distanciaAlCandidato((c) => cumplir(c, pcComunId, 10));
       expect(r.delante).toBeGreaterThan(1_600);
+    });
+
+    it('un cumplimiento de la jornada de ayer no da fase (sesión abierta de ayer)', async () => {
+      const r = await distanciaAlCandidato((c) => cumplir(c, pcRetornoId, 24 * 60));
+      expect(r.detras).toBeLessThan(250);
     });
 
     it('sin cumplimientos (o con cumplido=false) ⇒ sin fase: proyección global como antes', async () => {

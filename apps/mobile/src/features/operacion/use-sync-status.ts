@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { Vibration } from 'react-native';
 import * as Sentry from '@sentry/react-native';
-import { abrirOutbox, contarEventosPendientes } from '../../db/outbox';
+import { abrirOutbox, obtenerSaludOutbox } from '../../db/outbox';
+import { reportarSaludOutbox } from '../../shared/observability/sentry-contexto';
 import {
   iniciarSyncAutomatico,
   sincronizarPendientesConLease,
@@ -128,7 +129,9 @@ export function useSyncStatus(
 
   const actualizarPendientes = useCallback(async () => {
     const db = await abrirOutbox();
-    setPendientes(await contarEventosPendientes(db));
+    const salud = await obtenerSaludOutbox(db);
+    setPendientes(salud.pendientes);
+    reportarSaludOutbox(salud);
   }, []);
 
   useEffect(() => {
@@ -146,7 +149,7 @@ export function useSyncStatus(
       try {
         await actualizarPendientes();
       } catch (error) {
-        // Rechazo no manejado (abrirOutbox/contarEventosPendientes pueden fallar por SQLite):
+        // Rechazo no manejado (abrirOutbox/obtenerSaludOutbox pueden fallar por SQLite):
         // `iniciar` corre disparada con `void iniciar()` más abajo, así que un throw acá
         // quedaba como unhandled promise rejection — en RN eso puede tumbar el proceso. Es
         // solo el contador de pendientes de esta pasada; el siguiente tick del intervalo

@@ -12,7 +12,8 @@ import {
   type VecinosRutaQuery,
 } from '@quivo/shared';
 import { RUTA_PROXIMIDAD_TOLERANCIA_METROS } from '../../common/geo/proximidad-ruta.js';
-import { fechaActualBolivia } from '../../common/tiempo/jornada.js';
+import { GRACIA_ACTIVIDAD_MEDIANOCHE_MS } from '../../common/sesiones/vigencia.js';
+import { fechaActualBolivia, inicioDeJornadaBolivia } from '../../common/tiempo/jornada.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
 import {
   CacheTtl,
@@ -84,16 +85,20 @@ const fixElegido = (fixDesde: Date, buscarSi: Prisma.Sql) => Prisma.sql`
  * PC `terminal` ⇒ 'ida'; si no, 'regreso' cuando su `orden` alcanza al del PC de retorno activo de
  * la ruta, 'ida' si no. `null` sin vuelta, sin cumplimientos o sin PC de retorno activo.
  *
+ * Ambas búsquedas se acotan a la jornada de hoy (`desde` = inicio de la jornada boliviana menos la gracia de medianoche): una
+ * sesión que quedó abierta de ayer no hereda la fase de ayer.
+ *
  * shortcut: la fase depende de que el worker registre el PC de retorno (Honduras, obligatorio).
  * Fuera de calles compartidas el fallback geométrico de `progresoEnCircuito` lo cubre; en calles
  * compartidas un retorno no registrado igual desubica a ese vehículo. Revisar si se ve en campo.
  * `cumplimientos_pc` tiene RLS por sindicato; `puntos_control` no, por eso se filtra por `rutaId`.
  */
-const FASE_LATERAL = Prisma.sql`
+const faseLateral = (desde: Date) => Prisma.sql`
   LEFT JOIN LATERAL (
     SELECT CASE WHEN v."pasoRetornoTs" IS NOT NULL THEN 'regreso' ELSE 'ida' END AS fase
     FROM vueltas v
     WHERE v."sesionId" = so.id AND v."sindicatoId" = so."sindicatoId" AND v.estado = 'en_curso'
+      AND v."inicioTs" >= ${desde}
     ORDER BY v.numero DESC
     LIMIT 1
   ) vu ON true
@@ -113,12 +118,13 @@ const FASE_LATERAL = Prisma.sql`
     ) ret ON true
     WHERE vu.fase IS NULL
       AND c."sesionId" = so.id AND c."sindicatoId" = so."sindicatoId" AND c.cumplido
+      AND c.ts >= ${desde}
     ORDER BY c.ts DESC
     LIMIT 1
   ) cu ON true
 `;
 
-/** Columna `fase` de las consultas que usan `FASE_LATERAL`. */
+/** Columna `fase` de las consultas que usan `faseLateral`. */
 const FASE_COL = Prisma.sql`COALESCE(vu.fase, cu.fase)`;
 
 /**
@@ -165,6 +171,10 @@ export class VecinosRutaService {
     const jornadaAyerStr = new Date(jornada.getTime() - DIA_MS).toISOString().slice(0, 10);
     // `gps_points` está particionada por `ts`: siempre se acota para que el plan solo toque las
     // particiones recientes.
+    // Misma gracia que la vigencia: una vuelta iniciada 23:30 conserva su fase pasada la medianoche.
+    const jornadaDesde = new Date(
+      inicioDeJornadaBolivia(jornada).getTime() - GRACIA_ACTIVIDAD_MEDIANOCHE_MS,
+    );
     const fixDesde = new Date(ahora.getTime() - UMBRAL_VECINO_FRESCO_MS);
 
     return withTenantContext({ rol: 'conductor', sindicatoId: sesion.sindicatoId }, async (tx) => {
@@ -188,7 +198,7 @@ export class VecinosRutaService {
           ) res
           CROSS JOIN LATERAL (${fixElegido(fixDesde, Prisma.sql`${lat}::float8 IS NULL`)}) p
         ) pos ON true
-        ${FASE_LATERAL}
+        ${faseLateral(jornadaDesde)}
         WHERE so.id = ${sesion.sesionId} AND so."sindicatoId" = ${sesion.sindicatoId}
       `;
       if (!mia) {
@@ -254,7 +264,7 @@ export class VecinosRutaService {
             ) res
             CROSS JOIN LATERAL (${fixElegido(fixDesde, Prisma.sql`true`)}) p
           ) pos ON true
-          ${FASE_LATERAL}
+          ${faseLateral(jornadaDesde)}
           WHERE so."sindicatoId" = ${sesion.sindicatoId}
             AND a."rutaId" = ${mia.rutaId}
             AND so."recorridoEstado" = 'en_curso'

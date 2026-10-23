@@ -9,6 +9,7 @@ import {
   marcarAcusados,
   marcarEnviados,
   obtenerLotePendiente,
+  obtenerSaludOutbox,
   purgarAcusadosAntesDe,
   recuperarEnviadosHuerfanos,
   renovarLease,
@@ -19,6 +20,7 @@ import {
 } from '../../db/outbox';
 import { ApiError } from '../../shared/api/http-client';
 import { syncApi } from '../../shared/api/sync-api';
+import { reportarSaludOutbox } from '../../shared/observability/sentry-contexto';
 import { idsNoAcusados } from './sync-diff';
 
 const LOTE_MAXIMO = 500;
@@ -115,6 +117,25 @@ export function programarPurgaOutbox(sesionIdActiva?: string): Promise<void> {
  * `drenarLotesConLease` para el porqué: decidir si el LOTE salió lleno tiene que mirar cuánto
  * se LEYÓ del outbox, no cuánto se ACEPTÓ. */
 export async function sincronizarPendientes(
+  accessToken: string,
+): Promise<{ enviados: number; leidos: number }> {
+  try {
+    return await sincronizarUnLote(accessToken);
+  } finally {
+    // Tras cada intento (foreground y headless pasan por acá) Sentry ve el atraso real del outbox.
+    await reportarSaludDelOutbox();
+  }
+}
+
+async function reportarSaludDelOutbox(): Promise<void> {
+  try {
+    reportarSaludOutbox(await obtenerSaludOutbox(await abrirOutbox()));
+  } catch {
+    // Observabilidad best-effort: nunca altera el resultado del sync.
+  }
+}
+
+async function sincronizarUnLote(
   accessToken: string,
 ): Promise<{ enviados: number; leidos: number }> {
   const db = await abrirOutbox();
