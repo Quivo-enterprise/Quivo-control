@@ -106,6 +106,7 @@ describe('AuthMovilService', () => {
       await tx.rotacion.deleteMany({ where: { sindicatoId } });
       await tx.vehiculo.deleteMany({ where: { sindicatoId } });
       await tx.conductor.deleteMany({ where: { sindicatoId } });
+      await tx.$executeRaw`DELETE FROM puntos_control WHERE "rutaId" = ${rutaId}`;
       await tx.$executeRaw`DELETE FROM rutas WHERE id = ${rutaId}`;
       await tx.linea.deleteMany({ where: { sindicatoId } });
       await tx.sindicato.delete({ where: { id: sindicatoId } });
@@ -413,6 +414,108 @@ describe('AuthMovilService', () => {
 
     // Limpieza.
     await service.logout({ refreshToken: login1.refreshToken, deviceId });
+  });
+
+  describe('logout retira la fila de salida de las sesiones que cierra', () => {
+    const admin = { rol: 'admin_quivo', sindicatoId: null } as const;
+
+    async function loguear() {
+      const v = await service.autenticarVehiculo({ placa, pin: pinVehiculo, deviceId });
+      const login = await service.autenticarConductor({
+        challengeToken: v.challengeToken,
+        deviceId,
+        documentoIdentidad: documento,
+        pin: pinConductor,
+      });
+      if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
+      return login;
+    }
+
+    /** Pone en `en_fila` al vehículo de la sesión indicada; devuelve el id de la fila. */
+    async function ponerEnFila(sesionId: string) {
+      return withTenantContext(admin, async (tx) => {
+        const sesion = await tx.sesionOperativa.findUniqueOrThrow({
+          where: { id: sesionId },
+          select: { vehiculoId: true },
+        });
+        const puntoId = randomUUID();
+        await tx.$executeRaw`
+          INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado, "createdAt", "updatedAt")
+          VALUES (${puntoId}, ${rutaId}, 1, ST_SetSRID(ST_MakePoint(-68.15, -16.5), 4326)::geography, 30, true, 'activo', now(), now())
+        `;
+        const ahora = new Date();
+        const fila = await tx.filaSalida.create({
+          data: { sindicatoId, puntoControlId: puntoId, fecha: ahora, sesionId, vehiculoId: sesion.vehiculoId, llegadaTs: ahora, ordenTs: ahora },
+        });
+        return fila.id;
+      });
+    }
+
+    const sesionPorRefresh = (refreshToken: string) =>
+      withTenantContext(admin, (tx) =>
+        tx.sesionOperativa.findFirstOrThrow({ where: { refreshTokenHash: hashTokenOpaco(refreshToken) }, select: { id: true } }),
+      );
+    const estados = (sesionId: string, filaId: string) =>
+      withTenantContext(admin, async (tx) => ({
+        sesion: (await tx.sesionOperativa.findUniqueOrThrow({ where: { id: sesionId }, select: { estado: true } })).estado,
+        fila: (await tx.filaSalida.findUniqueOrThrow({ where: { id: filaId }, select: { estado: true } })).estado,
+      }));
+
+    it('(a) logout con el refresh token vigente cierra la sesión y retira su fila', async () => {
+      const login = await loguear();
+      const { id: sesionId } = await sesionPorRefresh(login.refreshToken);
+      const filaId = await ponerEnFila(sesionId);
+
+      await service.logout({ refreshToken: login.refreshToken });
+
+      expect(await estados(sesionId, filaId)).toEqual({ sesion: 'cerrada', fila: 'retirado' });
+    });
+
+    it('(b) logout por el fallback deviceId + refreshTokenHashAnterior también retira la fila', async () => {
+      const login = await loguear();
+      const { id: sesionId } = await sesionPorRefresh(login.refreshToken);
+      await service.refresh({ refreshToken: login.refreshToken }); // el token original queda como "anterior"
+      const filaId = await ponerEnFila(sesionId);
+
+      await service.logout({ refreshToken: login.refreshToken, deviceId });
+
+      expect(await estados(sesionId, filaId)).toEqual({ sesion: 'cerrada', fila: 'retirado' });
+    });
+
+    it('(c) una sesión que el logout NO cierra (otro vehículo) conserva su fila en_fila', async () => {
+      const login = await loguear();
+      const { id: sesionId } = await sesionPorRefresh(login.refreshToken);
+      const filaId = await ponerEnFila(sesionId);
+      // Sesión ajena de otro vehículo, también en fila, con su propio token.
+      const ajena = await withTenantContext(admin, async (tx) => {
+        const sufijo = randomUUID().slice(0, 6);
+        const vehiculo = await tx.vehiculo.create({
+          data: { sindicatoId, placa: `AJ${sufijo}`, tipo: 'minibus', marca: 'x', modelo: 'x', color: 'x', capacidad: 10, estado: 'activo' },
+        });
+        const conductor = await tx.conductor.create({
+          data: { sindicatoId, nombre: 'Ajeno', documentoIdentidad: `AJ-${sufijo}`, licenciaConducir: `LIC-AJ-${sufijo}` },
+        });
+        const rotacion = await tx.rotacion.create({ data: { sindicatoId, periodo: `ajena-${sufijo}`, estado: 'publicada' } });
+        const fecha = fechaActualBolivia();
+        const asignacion = await tx.asignacion.create({
+          data: { rotacionId: rotacion.id, vehiculoId: vehiculo.id, conductorId: conductor.id, rutaId, fecha, horario: 'manana', orden: 1, venceAt: finDeJornadaBolivia(fecha) },
+        });
+        const sesion = await tx.sesionOperativa.create({
+          data: {
+            sindicatoId, asignacionId: asignacion.id, vehiculoId: vehiculo.id, conductorId: conductor.id,
+            inicio: new Date(), deviceId: `android:ajeno-${sufijo}`, accessTokenHash: `a-${randomUUID()}`, refreshTokenHash: `r-${randomUUID()}`,
+            accessExpiresAt: new Date(Date.now() + 3_600_000), refreshExpiresAt: new Date(Date.now() + 3_600_000),
+          },
+        });
+        return sesion.id;
+      });
+      const filaAjenaId = await ponerEnFila(ajena);
+
+      await service.logout({ refreshToken: login.refreshToken });
+
+      expect(await estados(sesionId, filaId)).toEqual({ sesion: 'cerrada', fila: 'retirado' });
+      expect(await estados(ajena, filaAjenaId)).toEqual({ sesion: 'activa', fila: 'en_fila' });
+    });
   });
 
   it('al rotar el PIN revoca sesiones y audita sin exponer la credencial', async () => {

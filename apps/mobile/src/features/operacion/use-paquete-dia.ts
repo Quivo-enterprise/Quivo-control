@@ -26,6 +26,14 @@ export function mismoPaquete(a: PaqueteDia | null, b: PaqueteDia): boolean {
   return a !== null && JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** Refresco exitoso con el mismo paquete: restaura `paquete` (un fallback offline pudo dejarlo en null) y
+ * limpia `vencido`/`error` (antes quedaba pegado el banner). Misma referencia si nada cambia. */
+export function estadoTrasRefrescoIgual(actual: EstadoPaqueteDia, paquete: PaqueteDia | null): EstadoPaqueteDia {
+  return actual.paquete === paquete && !actual.vencido && !actual.error
+    ? actual
+    : { ...actual, paquete, vencido: false, error: null };
+}
+
 /** El paquete descargado es de la asignación de la sesión actual. */
 export function perteneceAAsignacion(paquete: PaqueteDia, asignacionId: string | null | undefined): boolean {
   return !!asignacionId && paquete.asignacion.id === asignacionId;
@@ -78,7 +86,10 @@ export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) 
           });
           return;
         }
-        if (mismoPaquete(paqueteActual.current, paquete)) return;
+        if (mismoPaquete(paqueteActual.current, paquete)) {
+          setEstado((e) => estadoTrasRefrescoIgual(e, paqueteActual.current));
+          return;
+        }
       }
       await guardarPaqueteDia(db, paquete);
       paqueteActual.current = paquete;

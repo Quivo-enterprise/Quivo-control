@@ -590,4 +590,108 @@ describe('RotacionesService', () => {
       expect(segunda).toBeLessThanOrEqual(primera);
     });
   });
+
+  describe('cerrarSesionesVencidas (sesiones zombi)', () => {
+    const HORA_MS = 60 * 60 * 1000;
+
+    async function crearSesion(venceAt: Date, ultimoFix: Date | null, placa: string) {
+      return withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        const vehiculo = await tx.vehiculo.create({
+          data: { sindicatoId: sindicatoAId, placa, tipo: 'bus', marca: 'x', modelo: 'x', color: 'x', capacidad: 10, estado: 'activo' },
+        });
+        const conductor = await tx.conductor.create({
+          data: { sindicatoId: sindicatoAId, nombre: placa, documentoIdentidad: `DOC-${placa}`, licenciaConducir: 'L' },
+        });
+        const rotacion = await tx.rotacion.create({ data: { sindicatoId: sindicatoAId, periodo: `zombi-${placa}`, estado: 'publicada' } });
+        const asignacion = await tx.asignacion.create({
+          data: {
+            rotacionId: rotacion.id, vehiculoId: vehiculo.id, conductorId: conductor.id, rutaId: rutaAId,
+            fecha: new Date('2020-01-01'), horario: 'manana', orden: 1, venceAt, estado: 'vencida',
+          },
+        });
+        const sesion = await tx.sesionOperativa.create({
+          data: {
+            sindicatoId: sindicatoAId, asignacionId: asignacion.id, vehiculoId: vehiculo.id, conductorId: conductor.id,
+            inicio: new Date(venceAt.getTime() - 8 * HORA_MS), deviceId: `dev-${placa}`, accessTokenHash: `a-${randomUUID()}`, refreshTokenHash: `r-${randomUUID()}`,
+            accessExpiresAt: new Date(Date.now() + HORA_MS), refreshExpiresAt: new Date(Date.now() + HORA_MS),
+          },
+        });
+        if (ultimoFix) {
+          await tx.$executeRaw`
+            INSERT INTO gps_sesion_resumen (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng)
+            VALUES (${sesion.id}::uuid, ${ultimoFix.toISOString().slice(0, 10)}::date, ${sindicatoAId}, 1, ${ultimoFix}, ${ultimoFix}, 0, 0)
+          `;
+        }
+        return sesion.id;
+      });
+    }
+
+    const estadoDe = (id: string) =>
+      withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+        tx.sesionOperativa.findUniqueOrThrow({ where: { id }, select: { estado: true, fin: true, revokedAt: true } }),
+      );
+
+    afterAll(async () => {
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE "sindicatoId" = ${sindicatoAId}`;
+        await tx.sesionOperativa.deleteMany({ where: { sindicatoId: sindicatoAId } }); // cascada a fila_salida
+      });
+    });
+
+    // Las aserciones miran SOLO las sesiones creadas acá: otros archivos corren en paralelo contra la misma DB.
+    it('no cierra un turno nocturno con GPS reciente ni una asignación vencida hace menos de 4 h', async () => {
+      const ahora = new Date();
+      const nocturna = await crearSesion(new Date(ahora.getTime() - 24 * HORA_MS), new Date(ahora.getTime() - 30 * 60 * 1000), 'ZMB001');
+      const entre2y4h = await crearSesion(new Date(ahora.getTime() - 3 * HORA_MS), null, 'ZMB002');
+      const vigente = await crearSesion(new Date(ahora.getTime() + HORA_MS), null, 'ZMB003');
+
+      await service.cerrarSesionesVencidas(ahora);
+
+      for (const id of [nocturna, entre2y4h, vigente]) {
+        expect((await estadoDe(id)).estado).toBe('activa');
+      }
+    });
+
+    it('cierra la sesión vencida hace más de 4 h sin actividad y retira su fila de salida; es idempotente', async () => {
+      const ahora = new Date();
+      const vieja = new Date(ahora.getTime() - 24 * HORA_MS);
+      const zombi = await crearSesion(vieja, null, 'ZMB004');
+      const ultimaActividad = new Date(vieja.getTime() + HORA_MS);
+      const zombiActividadVieja = await crearSesion(vieja, ultimaActividad, 'ZMB005');
+      const filaId = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        const puntoId = randomUUID();
+        await tx.$executeRaw`
+          INSERT INTO puntos_control (id, "rutaId", orden, coord, "radioToleranciaM", obligatorio, estado, "createdAt", "updatedAt")
+          VALUES (${puntoId}, ${rutaAId}, 1, ST_SetSRID(ST_MakePoint(-58.4, -34.6), 4326)::geography, 30, true, 'activo', now(), now())
+        `;
+        const sesion = await tx.sesionOperativa.findUniqueOrThrow({ where: { id: zombi }, select: { vehiculoId: true } });
+        const fila = await tx.filaSalida.create({
+          data: { sindicatoId: sindicatoAId, puntoControlId: puntoId, fecha: vieja, sesionId: zombi, vehiculoId: sesion.vehiculoId, llegadaTs: vieja, ordenTs: vieja },
+        });
+        return fila.id;
+      });
+
+      await service.cerrarSesionesVencidas(ahora);
+
+      for (const id of [zombi, zombiActividadVieja]) {
+        const s = await estadoDe(id);
+        expect(s.estado).toBe('cerrada');
+        expect(s.fin).not.toBeNull();
+        expect(s.revokedAt).not.toBeNull();
+      }
+      // fin = fin real: última actividad GPS; sin GPS, el venceAt de la asignación.
+      expect((await estadoDe(zombi)).fin).toEqual(vieja);
+      expect((await estadoDe(zombiActividadVieja)).fin).toEqual(ultimaActividad);
+      const filaDe = () =>
+        withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+          tx.filaSalida.findUniqueOrThrow({ where: { id: filaId }, select: { estado: true } }),
+        );
+      expect((await filaDe()).estado).toBe('retirado');
+
+      // Segunda corrida: las filas ya cerradas no cambian (fin/revokedAt intactos).
+      const antes = await estadoDe(zombi);
+      await service.cerrarSesionesVencidas(new Date(ahora.getTime() + 60_000));
+      expect(await estadoDe(zombi)).toEqual(antes);
+    });
+  });
 });
