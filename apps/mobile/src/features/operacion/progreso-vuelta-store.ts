@@ -16,6 +16,7 @@ import {
   fechaLocal,
   ordenEfectivoPuntos,
   pasoPunto,
+  puntoTerminal,
   reiniciarVuelta,
   separarClaveProgreso,
   type EstadoProgresoVuelta,
@@ -214,7 +215,7 @@ export async function registrarPasoEnVuelta(
       const idsEspera = puntosControl.filter((p) => p.rol === 'espera').map((p) => p.id);
       const roles = {
         retornoId: puntoRetorno(puntosControl)?.id ?? null,
-        terminalId: puntosControl.find((p) => p.rol === 'terminal')?.id ?? null,
+        terminalId: puntoTerminal(puntosControl)?.id ?? null,
       };
       return (actual) => pasoPunto(actual, { puntoId, clave }, idsEfectivos, idsEspera, roles);
     },
@@ -224,11 +225,19 @@ export async function registrarPasoEnVuelta(
 
 /**
  * Arranca un recorrido: la vuelta en curso de `clave` (`sesionId:fecha`) empieza de cero y se
- * conserva el conteo de vueltas del día. Sin fila previa no escribe nada. Nunca rechaza.
+ * conserva el conteo de vueltas del día. Con `anclaTerminalId` la vuelta nace anclada en la terminal.
+ * Sin fila previa y sin ancla no escribe nada. Nunca rechaza.
  */
-export function reiniciarVueltaEnCurso(db: SQLite.SQLiteDatabase, clave: string): Promise<void> {
+export function reiniciarVueltaEnCurso(
+  db: SQLite.SQLiteDatabase,
+  clave: string,
+  anclaTerminalId: string | null = null,
+): Promise<void> {
   const { sesionId, fecha } = separarClaveProgreso(clave);
-  return encolar(db, sesionId, fecha, () => reiniciarVuelta, { paso: 'reiniciar-vuelta', extra: {} });
+  return encolar(db, sesionId, fecha, () => (actual) => reiniciarVuelta(actual, anclaTerminalId), {
+    paso: 'reiniciar-vuelta',
+    extra: {},
+  });
 }
 
 /**

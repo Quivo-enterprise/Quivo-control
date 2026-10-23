@@ -12,6 +12,8 @@ import {
   normalizarEstado,
   pasoPunto,
   reiniciarVuelta,
+  terminalParaInicio,
+  POSICION_INICIO_MAX_EDAD_MS,
   separarClaveProgreso,
   type DesignacionOrden,
   type EstadoProgresoVuelta,
@@ -294,6 +296,63 @@ describe('reiniciarVuelta', () => {
   it('devuelve el mismo objeto si ya estaba limpia', () => {
     const e = estadoInicialVuelta('s');
     expect(reiniciarVuelta(e)).toBe(e);
+  });
+});
+
+describe('COMENZAR RUTA y la terminal', () => {
+  // `sr` es la terminal (orden 0) en (0,0); radio 30 m.
+  const pcs = [{ ...punto('sr', 0), rol: 'terminal' as const }, ...['p1', 'p2', 'p3'].map((id, i) => punto(id, i + 1, 0.01 * (i + 1)))];
+  const vigentes = pcs.map((p) => p.id);
+  const roles = { terminalId: 'sr' };
+  const AHORA = 1_000_000;
+  const pos = (lat: number, lng: number, extra: { ts?: number; accuracy?: number | null } = {}) => ({
+    lat,
+    lng,
+    ts: AHORA,
+    accuracy: null,
+    ...extra,
+  });
+
+  it('dentro del radio de la terminal: ancla la vuelta en ella y el siguiente PC es el primero de la ida', () => {
+    const { terminalId, enTerminal } = terminalParaInicio(pcs, pos(0, 0.0001), AHORA);
+    expect(enTerminal).toBe(true);
+    // Estado previo: la terminal se emitió ANTES de COMENZAR y luego se reinició la vuelta.
+    const previo = pasoPunto(estadoInicialVuelta('s'), { puntoId: 'sr', clave: 'k0' }, vigentes, [], roles);
+    const e = reiniciarVuelta(previo, enTerminal ? terminalId : null);
+    expect(e.inicioId).toBe('sr');
+    expect(e.pasados).toEqual(['sr']);
+    const prog = derivarProgresoEstatico(e, pcs);
+    expect(prog.conInicio).toBe(true);
+    expect(prog.pasados).toBe(1);
+    expect(prog.total).toBe(4);
+    expect(prog.proximo?.id).toBe('p1');
+  });
+
+  it('fuera del radio (o sin fix): no ancla; el siguiente paso por la terminal sí ancla', () => {
+    expect(terminalParaInicio(pcs, pos(0, 0.01), AHORA).enTerminal).toBe(false);
+    expect(terminalParaInicio(pcs, null, AHORA).enTerminal).toBe(false);
+    const e = reiniciarVuelta(pasoPunto(estadoInicialVuelta('s'), { puntoId: 'sr', clave: 'k0' }, vigentes, [], roles));
+    expect(e.inicioId).toBeNull();
+    const anclado = pasoPunto(e, { puntoId: 'sr', clave: 'k1' }, vigentes, [], roles);
+    expect(anclado.inicioId).toBe('sr');
+    expect(anclado.pasados).toEqual(['sr']);
+  });
+
+  it('fix viejo o impreciso se trata como posición desconocida', () => {
+    expect(terminalParaInicio(pcs, pos(0, 0.0001, { ts: AHORA - POSICION_INICIO_MAX_EDAD_MS }), AHORA).enTerminal).toBe(true);
+    expect(terminalParaInicio(pcs, pos(0, 0.0001, { ts: AHORA - POSICION_INICIO_MAX_EDAD_MS - 1 }), AHORA).enTerminal).toBe(false);
+    expect(terminalParaInicio(pcs, pos(0, 0.0001, { accuracy: 10 }), AHORA).enTerminal).toBe(true);
+    expect(terminalParaInicio(pcs, pos(0, 0.0001, { accuracy: 80 }), AHORA).enTerminal).toBe(false);
+  });
+
+  it('reiniciarVuelta con ancla devuelve el mismo objeto si ya está anclada en esa terminal', () => {
+    const e = reiniciarVuelta(estadoInicialVuelta('s'), 'sr');
+    expect(reiniciarVuelta(e, 'sr')).toBe(e);
+    expect(reiniciarVuelta(e, 'p1')).not.toBe(e);
+  });
+
+  it('sin PC terminal no hay ancla', () => {
+    expect(terminalParaInicio(ruta, pos(0, 0), AHORA)).toEqual({ terminalId: null, enTerminal: false });
   });
 });
 

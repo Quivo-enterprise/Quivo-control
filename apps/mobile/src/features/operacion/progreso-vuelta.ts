@@ -252,7 +252,32 @@ function pasoPuntoBase(
  * el conteo de vueltas del día (`vueltasCompletadas`) se conserva. Devuelve el MISMO objeto si ya
  * estaba limpia.
  */
-export function reiniciarVuelta(estado: EstadoProgresoVuelta): EstadoProgresoVuelta {
+export function reiniciarVuelta(
+  estado: EstadoProgresoVuelta,
+  anclaTerminalId: string | null = null,
+): EstadoProgresoVuelta {
+  // COMENZAR RUTA dentro de la terminal: la vuelta nace anclada ahí (espejo de `enTerminal` del
+  // servidor); la geocerca no re-emite la terminal porque el chofer ya estaba dentro.
+  if (anclaTerminalId !== null) {
+    if (
+      estado.inicioId === anclaTerminalId &&
+      estado.pasados.length === 1 &&
+      estado.pasados[0] === anclaTerminalId &&
+      estado.ultimoId === anclaTerminalId &&
+      estado.fase === undefined &&
+      estado.fixesRegreso === undefined
+    ) {
+      return estado;
+    }
+    return {
+      ...estado,
+      inicioId: anclaTerminalId,
+      pasados: [anclaTerminalId],
+      ultimoId: anclaTerminalId,
+      fase: undefined,
+      fixesRegreso: undefined,
+    };
+  }
   if (
     estado.inicioId === null &&
     estado.pasados.length === 0 &&
@@ -263,6 +288,34 @@ export function reiniciarVuelta(estado: EstadoProgresoVuelta): EstadoProgresoVue
     return estado;
   }
   return { ...estado, inicioId: null, pasados: [], ultimoId: null, fase: undefined, fixesRegreso: undefined };
+}
+
+/** Un fix más viejo que esto no sirve para decidir si COMENZAR RUTA ocurre dentro de la terminal. */
+export const POSICION_INICIO_MAX_EDAD_MS = 2 * 60 * 1000;
+
+/** PC terminal del paquete (`rol === 'terminal'`), o `undefined` si no hay. */
+export function puntoTerminal(puntos: readonly PuntoControlPaquete[]): PuntoControlPaquete | undefined {
+  return puntos.find((p) => p.rol === 'terminal');
+}
+
+/**
+ * PC terminal del paquete y si `posicion` (último fix) cae dentro de su radio. Misma regla que el
+ * servidor: sin fix, con un fix de más de `POSICION_INICIO_MAX_EDAD_MS` o con precisión peor que el
+ * radio, no está en la terminal.
+ */
+export function terminalParaInicio(
+  puntos: readonly PuntoControlPaquete[],
+  posicion: { lat: number; lng: number; ts: number; accuracy: number | null } | null,
+  ahoraMs: number = Date.now(),
+): { terminalId: string | null; enTerminal: boolean } {
+  const terminal = puntoTerminal(puntos);
+  if (!terminal) return { terminalId: null, enTerminal: false };
+  const enTerminal =
+    posicion !== null &&
+    ahoraMs - posicion.ts <= POSICION_INICIO_MAX_EDAD_MS &&
+    (posicion.accuracy === null || posicion.accuracy <= terminal.radioToleranciaM) &&
+    haversineMetros([posicion.lng, posicion.lat], terminal.coord.coordinates) <= terminal.radioToleranciaM;
+  return { terminalId: terminal.id, enTerminal };
 }
 
 /** Id del punto más cercano a `posicion` entre los del orden efectivo; `null` sin posición o sin puntos. */

@@ -21,6 +21,9 @@ export const DISTANCIA_MAX_ACEPTADA_M = 40;
 export const VELOCIDAD_MIN_RUMBO_MS = 2;
 /** Diferencia circular máxima (°) entre el rumbo del fix y el bearing del segmento. */
 export const TOLERANCIA_RUMBO_GRADOS = 60;
+/** Sin rumbo confiable (lento), diferencia circular máxima (°) entre el bearing del segmento y el
+ * último rumbo mostrado: un segmento casi opuesto (carril contrario) no se adopta. */
+export const TOLERANCIA_RUMBO_PREVIO_GRADOS = 120;
 /** Ventana de histéresis alrededor del segmento anterior. */
 export const VENTANA_SEGMENTOS = 15;
 export const VENTANA_METROS = 300;
@@ -140,6 +143,7 @@ function mejorCandidato(
   umbral: number,
   rumbo: number | null,
   base: number | null = null,
+  rumboPrevio: number | null = null,
 ): Candidato | null {
   const n = ruta.segmentos.length;
   let mejor: Candidato | null = null;
@@ -153,6 +157,13 @@ function mejorCandidato(
     const distancia = Math.hypot(x - (s.ax + dx * t), y - (s.ay + dy * t));
     if (distancia > umbral) continue;
     if (rumbo !== null && Math.abs(deltaAnguloCorto(s.bearing, rumbo)) > TOLERANCIA_RUMBO_GRADOS) {
+      continue;
+    }
+    if (
+      rumbo === null &&
+      rumboPrevio !== null &&
+      Math.abs(deltaAnguloCorto(s.bearing, rumboPrevio)) > TOLERANCIA_RUMBO_PREVIO_GRADOS
+    ) {
       continue;
     }
     let salto = base !== null ? Math.abs(i - base) : 0;
@@ -182,13 +193,17 @@ function acumuladoVirtual(ruta: RutaSnap, k: number): number {
  * ahí no hay candidato aceptable busca en toda la ruta, salvo que el rumbo se ignore (parado o
  * lento, sin rumbo confiable): ahí un tramo lejano o del carril opuesto sería un falso positivo,
  * así que solo se admite la búsqueda global tras `MAX_FALLOS_SNAP` fixes consecutivos sin snap
- * (`fallosConsecutivos`, lo lleva el llamador).
+ * (`fallosConsecutivos`, lo lleva el llamador). Sin rumbo confiable, con `rumboPrevio` (último
+ * rumbo confiable del llamador) no se adopta, ni en la ventana ni en la búsqueda global, un
+ * segmento a más de `TOLERANCIA_RUMBO_PREVIO_GRADOS` de él: sin candidato → `null` y el llamador
+ * conserva el rumbo previo.
  */
 export function snapARuta(
   ruta: RutaSnap,
   fix: FixSnap,
   anterior: { indiceSegmento: number } | null,
   fallosConsecutivos = 0,
+  rumboPrevio: number | null = null,
 ): ResultadoSnap | null {
   const x = (fix.lng - ruta.lng0) * ruta.kx;
   const y = (fix.lat - ruta.lat0) * ruta.ky;
@@ -231,13 +246,13 @@ export function snapARuta(
     ) {
       hi += 1;
     }
-    candidato = mejorCandidato(ruta, x, y, lo, hi, umbral, rumbo, base);
+    candidato = mejorCandidato(ruta, x, y, lo, hi, umbral, rumbo, base, rumboPrevio);
   }
   if (
     !candidato &&
     (!ventanaIntentada || rumbo !== null || fallosConsecutivos >= MAX_FALLOS_SNAP)
   ) {
-    candidato = mejorCandidato(ruta, x, y, 0, ultimo, umbral, rumbo);
+    candidato = mejorCandidato(ruta, x, y, 0, ultimo, umbral, rumbo, null, rumboPrevio);
   }
   if (!candidato) return null;
 
