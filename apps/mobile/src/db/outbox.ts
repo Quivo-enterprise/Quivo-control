@@ -936,12 +936,20 @@ export async function encolarEventoYLimpiarVisita(
  * reapertura porque no se intenta ninguna escritura (`sincronizarPendientes` quedaría
  * bloqueado acá mismo, el badge de pendientes de `use-sync-status.ts` se congela). */
 export async function contarEventosPendientes(db: SQLite.SQLiteDatabase): Promise<number> {
+  return (await obtenerSaludOutbox(db)).pendientes;
+}
+
+/** Salud del outbox para Sentry (ver `reportarSaludOutbox`): cuántos eventos no están acusados
+ * y el `ts` del más viejo. Misma guarda de handle muerto que `contarEventosPendientes`. */
+export async function obtenerSaludOutbox(
+  db: SQLite.SQLiteDatabase,
+): Promise<{ pendientes: number; masViejoTs: string | null }> {
   const row = await conReintentoSiHandleMuerto(db, (dbActiva) =>
-    dbActiva.getFirstAsync<{ total: number }>(
-      "SELECT COUNT(*) as total FROM outbox WHERE estado != 'acusado'",
+    dbActiva.getFirstAsync<{ total: number; masViejo: string | null }>(
+      "SELECT COUNT(*) as total, MIN(ts) as masViejo FROM outbox WHERE estado != 'acusado'",
     ),
   );
-  return row?.total ?? 0;
+  return { pendientes: row?.total ?? 0, masViejoTs: row?.masViejo ?? null };
 }
 
 /** Toma hasta `limite` eventos `pendiente` (los más viejos primero) para armar el próximo

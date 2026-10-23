@@ -15,6 +15,7 @@ import {
   ID_LEASE_REVOCACIONES_PENDIENTES,
   TTL_LEASE_REVOCACIONES_PENDIENTES_MS,
 } from '../../db/outbox';
+import { etiquetarSesionSentry } from '../observability/sentry-contexto';
 /**
  * G2 (hallazgo de `/codex-debug verify-fix` ronda 4, ALTO — reemplaza el diseño de una sola
  * clave combinada): `SESSION_KEY_LEGACY` guardaba credenciales (`accessToken`/`refreshToken`/
@@ -83,6 +84,7 @@ export async function guardarSesionMovil(sesion: SesionMovilGuardada): Promise<v
     SecureStore.setItemAsync(CREDENCIALES_KEY, JSON.stringify(credenciales), OPTIONS),
     SecureStore.setItemAsync(CONTEXTO_KEY, JSON.stringify({ contexto }), OPTIONS),
   ]);
+  etiquetarSesionSentry(contexto);
 }
 
 export async function cargarSesionMovil(): Promise<SesionMovilGuardada | null> {
@@ -107,6 +109,7 @@ export async function cargarSesionMovil(): Promise<SesionMovilGuardada | null> {
       await borrarSesionMovil();
       return null;
     }
+    etiquetarSesionSentry(parsed.data.contexto);
     return parsed.data;
   } catch {
     await borrarSesionMovil();
@@ -152,6 +155,7 @@ export async function actualizarContextoSesionMovil(
   const vigente = await cargarSesionMovil();
   if (!vigente) return null;
   await SecureStore.setItemAsync(CONTEXTO_KEY, JSON.stringify({ contexto }), OPTIONS);
+  etiquetarSesionSentry(contexto);
   return { ...vigente, contexto };
 }
 
@@ -160,6 +164,7 @@ export async function borrarSesionMovil(): Promise<void> {
     SecureStore.deleteItemAsync(CREDENCIALES_KEY, OPTIONS),
     SecureStore.deleteItemAsync(CONTEXTO_KEY, OPTIONS),
   ]);
+  etiquetarSesionSentry(null);
 }
 
 export async function obtenerDeviceIdMovil(): Promise<string> {

@@ -1,6 +1,7 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { UnauthorizedException } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
+import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import { AuthMovilGuard } from './auth-movil.guard.js';
 import type { AuthMovilService } from './auth-movil.service.js';
@@ -152,5 +153,30 @@ describe('AuthMovilGuard — caché negativa por token (QUI-240 code-review, 3ra
       guard.canActivate(createContext(req('190.10.20.80'))),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(validarAccessToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthMovilGuard — correlación de logs', () => {
+  it('liga solo sesionId y vehiculoId al logger (sin token ni deviceId)', async () => {
+    const assign = vi.fn();
+    const validarAccessToken = vi.fn().mockResolvedValue(sesion);
+    const guard = new AuthMovilGuard(
+      { validarAccessToken } as unknown as AuthMovilService,
+      { assign } as unknown as PinoLogger,
+    );
+    await guard.canActivate(createContext(req('1.1.1.1', 'Bearer tk')));
+    expect(assign).toHaveBeenCalledWith({ sesionId: 's-1', vehiculoId: 'veh-1' });
+  });
+
+  it('si assign lanza (fuera de request) el guard igual deja pasar', async () => {
+    const assign = vi.fn(() => {
+      throw new Error('out of scope');
+    });
+    const validarAccessToken = vi.fn().mockResolvedValue(sesion);
+    const guard = new AuthMovilGuard(
+      { validarAccessToken } as unknown as AuthMovilService,
+      { assign } as unknown as PinoLogger,
+    );
+    await expect(guard.canActivate(createContext(req('1.1.1.1', 'Bearer tk')))).resolves.toBe(true);
   });
 });

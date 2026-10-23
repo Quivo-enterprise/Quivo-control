@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import * as Sentry from '@sentry/node';
 import { NestFactory } from '@nestjs/core';
+import { Logger } from 'nestjs-pino';
 import { WorkerModule } from './worker.module.js';
 
 if (process.env.SENTRY_DSN) {
@@ -16,6 +17,7 @@ if (process.env.SENTRY_DSN) {
  */
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.createApplicationContext(WorkerModule, { bufferLogs: true });
+  app.useLogger(app.get(Logger));
 
   // QUI-354: mismo motivo que apps/api/src/main.ts — sin esto, el SIGTERM que Cloud Run
   // manda al desplegar o escalar a cero mata este proceso sin correr `onModuleDestroy()`
