@@ -58,7 +58,7 @@ import {
   reiniciarEstadoInicioRecorrido,
 } from './inicio-recorrido-retry';
 import { resolverResultadoIniciar } from './resultado-iniciar-recorrido';
-import { claveProgresoVuelta, fechaLocal } from './progreso-vuelta';
+import { claveProgresoVuelta, fechaLocal, terminalParaInicio } from './progreso-vuelta';
 import { reiniciarVueltaEnCurso } from './progreso-vuelta-store';
 import {
   AUTORIZACION_DENEGADA,
@@ -326,6 +326,13 @@ export function useGpsOperativo(
   const [posicionActual, setPosicionActual] = useState<
     { lat: number; lng: number; speedKmh: number | null; accuracy?: number | null } | null
   >(null);
+  // Último fix recibido: `iniciar()` decide con él si COMENZAR RUTA ocurre dentro de la terminal.
+  const ultimaPosicionRef = useRef<{
+    lat: number;
+    lng: number;
+    ts: number;
+    accuracy: number | null;
+  } | null>(null);
   const bateria = useRef<MuestraBateria[]>([]);
   const puntosRef = useRef(0);
   const erroresEscritura = useRef(0);
@@ -470,6 +477,12 @@ export function useGpsOperativo(
       // escribir se cuenta aparte, en `erroresEscritura`, y vuelve NO-GO el veredicto.
       puntosRef.current += 1;
       setPuntos(puntosRef.current);
+      ultimaPosicionRef.current = {
+        lat: location.coords.latitude,
+        lng: location.coords.longitude,
+        ts: new Date(location.timestamp).getTime(),
+        accuracy: location.coords.accuracy,
+      };
       setPosicionActual({
         lat: location.coords.latitude,
         lng: location.coords.longitude,
@@ -1117,6 +1130,12 @@ export function useGpsOperativo(
       persist: false,
     })
       .then((location) => {
+        ultimaPosicionRef.current = {
+          lat: location.coords.latitude,
+          lng: location.coords.longitude,
+          ts: new Date(location.timestamp).getTime(),
+          accuracy: location.coords.accuracy,
+        };
         setPosicionActual({
           lat: location.coords.latitude,
           lng: location.coords.longitude,
@@ -1585,9 +1604,16 @@ export function useGpsOperativo(
       // cero; el conteo de vueltas del día se conserva. Best-effort: nunca rechaza el progreso,
       // pero abrir el outbox sí puede fallar y no debe afectar el arranque.
       try {
+        // Ancla en la terminal si COMENZAR cae dentro de su radio. Fuera de él no se toca la
+        // geocerca: ella misma rearma la terminal tras unos fixes fuera de su radio.
+        const { terminalId, enTerminal } = terminalParaInicio(
+          puntosControlRef.current,
+          ultimaPosicionRef.current,
+        );
         await reiniciarVueltaEnCurso(
           await abrirOutbox(),
           claveProgresoVuelta(sesionId, fechaLocal()),
+          enTerminal ? terminalId : null,
         );
       } catch (error) {
         Sentry.captureException(error, {

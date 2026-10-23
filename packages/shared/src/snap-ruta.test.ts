@@ -151,6 +151,39 @@ describe('snapARuta', () => {
   });
 });
 
+describe('snapARuta: rumbo previo a baja velocidad', () => {
+  const lento = fix(en(100, 6), { velocidadMs: 1 });
+
+  it('sin rumbo previo toma el segmento más cercano (carril opuesto)', () => {
+    expect(snapARuta(avenida, lento, null)!.rumbo).toBeCloseTo(180, 0);
+  });
+
+  it('con rumbo previo no adopta un segmento a más de 120° y elige el alineado', () => {
+    const r = snapARuta(avenida, lento, null, 0, 0)!;
+    expect(r.indiceSegmento).toBe(0);
+    expect(r.rumbo).toBeCloseTo(0, 0);
+  });
+
+  it('sin segmento alineado cerca devuelve null (el llamador conserva el rumbo)', () => {
+    // Solo hay carril contrario a 4 m; el rumbo previo apunta al norte.
+    const sur = prepararRutaSnap([en(200, 10), en(0, 10)])!;
+    expect(snapARuta(sur, fix(en(100, 6), { velocidadMs: 1 }), null, 0, 0)).toBeNull();
+  });
+
+  it('con `anterior` (búsqueda en ventana) también descarta el segmento a más de 120° del rumbo previo', () => {
+    // Tramo anterior en el carril sur (segmento 3); el rumbo previo apunta al norte (carril de ida).
+    expect(snapARuta(avenida, lento, { indiceSegmento: 3 }, 0, null)!.rumbo).toBeCloseTo(180, 0);
+    const r = snapARuta(avenida, lento, { indiceSegmento: 3 }, 0, 0)!;
+    expect(r.indiceSegmento).toBe(0);
+    expect(r.rumbo).toBeCloseTo(0, 0);
+  });
+
+  it('con rumbo confiable (rápido) manda la regla de ±60°, no el rumbo previo', () => {
+    const rapido = fix(en(100, 6), { rumbo: 180, velocidadMs: 8 });
+    expect(snapARuta(avenida, rapido, null, 0, 0)!.rumbo).toBeCloseTo(180, 0);
+  });
+});
+
 describe('debeInterpolarPorRuta', () => {
   it('mismo carril: el recorrido por la calle ~ la cuerda', () => {
     expect(debeInterpolarPorRuta(recta, 50, 80, 30)).toBe(true);

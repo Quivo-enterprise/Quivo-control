@@ -29,6 +29,7 @@ import MapView, {
 import Svg, { Path } from 'react-native-svg';
 import {
   MAX_FALLOS_SNAP,
+  VELOCIDAD_MIN_RUMBO_MS,
   debeInterpolarPorRuta,
   distanciaMetros,
   duracionAnimacionMs,
@@ -144,6 +145,8 @@ const DURACION_REENCUADRE_PADDING_MS = 300;
 
 /** El loop de convergencia del zoom se detiene cuando el zoom queda a menos de esto del objetivo. */
 const UMBRAL_CONVERGENCIA_ZOOM = 0.01;
+/** Vigencia del último rumbo confiable para el snap a baja velocidad (ms). */
+const RUMBO_CONFIABLE_TTL_MS = 60_000;
 
 /** Factor de mezcla por frame (~30 Hz) del rumbo mostrado hacia el rumbo del tramo de la ruta:
  * suaviza el giro sin adelantarse a la esquina. */
@@ -316,6 +319,9 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   const snapPrevioRef = useRef<{ indiceSegmento: number } | null>(null);
   // Fixes consecutivos sin snap: el tramo previo sobrevive a `MAX_FALLOS_SNAP` fallos seguidos.
   const fallosSnapRef = useRef(0);
+  // Último rumbo CONFIABLE (fix rápido con rumbo, o snap aceptado con la regla de ±60°): guía el snap
+  // a baja velocidad. Caduca a los `RUMBO_CONFIABLE_TTL_MS` para no frenar un giro lento en la terminal.
+  const rumboConfiableRef = useRef<{ rumbo: number; ts: number } | null>(null);
   // Último fix (ts|lat|lng) y ruta ya procesados: un re-disparo del efecto sin cambios reales (p. ej.
   // otra referencia del paquete) no debe reiniciar la animación en vuelo.
   const fixProcesadoRef = useRef<{ clave: string; ruta: RutaSnap | null } | null>(null);
@@ -415,6 +421,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
   useEffect(() => {
     snapPrevioRef.current = null;
     fallosSnapRef.current = 0;
+    rumboConfiableRef.current = null;
     const mostrada = posicionMostradaRef.current;
     if (mostrada && mostrada.distancia !== undefined) {
       posicionMostradaRef.current = { ...mostrada, distancia: undefined, ajustadaARuta: false };
@@ -453,6 +460,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
       fixProcesadoRef.current = null;
       snapPrevioRef.current = null;
       fallosSnapRef.current = 0;
+      rumboConfiableRef.current = null;
       velocidadKmhRef.current = null;
       publicarPosicion(null);
       return;
@@ -480,8 +488,20 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
           { lat, lng, rumbo: rumboFix, velocidadMs: velocidadFix, accuracy: precisionFix },
           snapPrevioRef.current,
           fallosSnapRef.current,
+          rumboConfiableRef.current && tsFix - rumboConfiableRef.current.ts <= RUMBO_CONFIABLE_TTL_MS
+            ? rumboConfiableRef.current.rumbo
+            : null,
         )
       : null;
+    if (
+      rumboFix !== null &&
+      Number.isFinite(rumboFix) &&
+      rumboFix >= 0 &&
+      velocidadFix !== null &&
+      velocidadFix >= VELOCIDAD_MIN_RUMBO_MS
+    ) {
+      rumboConfiableRef.current = { rumbo: snap?.rumbo ?? rumboFix, ts: tsFix };
+    }
     if (snap) {
       snapPrevioRef.current = { indiceSegmento: snap.indiceSegmento };
       fallosSnapRef.current = 0;
