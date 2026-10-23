@@ -62,6 +62,11 @@ function headingValido(fix: FixVisual): boolean {
  *    ninguno).
  */
 export function seleccionarRumbo(fix: FixVisual, previo: EstadoRumbo): EstadoRumbo {
+  return seleccionarConFuente(fix, previo).estado;
+}
+
+/** Igual que `seleccionarRumbo`; `deEsteFix` es `true` solo si el rumbo salió de ESTE fix (heading o bearing), no sostenido. */
+function seleccionarConFuente(fix: FixVisual, previo: EstadoRumbo): { estado: EstadoRumbo; deEsteFix: boolean } {
   let enRumboDeCurso = previo.enRumboDeCurso;
   if (fix.speed >= 0) {
     if (fix.speed >= VELOCIDAD_ENTRADA_MPS) enRumboDeCurso = true;
@@ -72,22 +77,39 @@ export function seleccionarRumbo(fix: FixVisual, previo: EstadoRumbo): EstadoRum
   // base para decidir un cambio de modo.
 
   if (enRumboDeCurso && headingValido(fix)) {
-    return { rumbo: normalizarAngulo(fix.heading), enRumboDeCurso, referencia: fix };
+    return { estado: { rumbo: normalizarAngulo(fix.heading), enRumboDeCurso, referencia: fix }, deEsteFix: true };
   }
 
   if (previo.referencia) {
     const desplazamiento = distanciaMetros(previo.referencia, fix);
     const umbral = Math.max(DESPLAZAMIENTO_MIN_FALLBACK_M, fix.accuracy);
     if (desplazamiento > umbral) {
-      return { rumbo: calcularBearing(previo.referencia, fix), enRumboDeCurso, referencia: fix };
+      return {
+        estado: { rumbo: calcularBearing(previo.referencia, fix), enRumboDeCurso, referencia: fix },
+        deEsteFix: true,
+      };
     }
     // Desplazamiento insuficiente para confiar en un bearing nuevo: mantiene rumbo y referencia
     // previos — no se "gasta" la referencia en un movimiento que puede ser solo ruido del fix.
-    return { rumbo: previo.rumbo, enRumboDeCurso, referencia: previo.referencia };
+    return { estado: { rumbo: previo.rumbo, enRumboDeCurso, referencia: previo.referencia }, deEsteFix: false };
   }
 
   // Primera posición conocida: todavía no hay un segundo punto para calcular un bearing. Guarda
   // ésta como referencia para el próximo fix; el rumbo queda como estaba (`null` si nunca hubo
   // ninguno).
-  return { rumbo: previo.rumbo, enRumboDeCurso, referencia: fix };
+  return { estado: { rumbo: previo.rumbo, enRumboDeCurso, referencia: fix }, deEsteFix: false };
+}
+
+/**
+ * Rumbo para decisiones de SENTIDO (fase de la vuelta, compuerta de PC): el de `seleccionarRumbo`
+ * solo si el vehículo va a velocidad de curso (≥ `VELOCIDAD_ENTRADA_MPS`, igual que el snap del
+ * mapa) Y salió de este fix (nunca un rumbo sostenido); parado, lento o sostenido es viejo → `null`. Devuelve también el
+ * estado para el fix siguiente.
+ */
+export function rumboDeMovimiento(
+  fix: FixVisual,
+  previo: EstadoRumbo,
+): { estado: EstadoRumbo; rumbo: number | null } {
+  const { estado, deEsteFix } = seleccionarConFuente(fix, previo);
+  return { estado, rumbo: deEsteFix && fix.speed >= VELOCIDAD_ENTRADA_MPS ? estado.rumbo : null };
 }

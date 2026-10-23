@@ -177,6 +177,29 @@ function mejorCandidato(
   return mejor;
 }
 
+/**
+ * Distancia (m) y bearing del segmento de la ruta más cercano a `(lat, lng)`; `null` si la ruta no
+ * tiene segmentos. Sin ventana ni filtro de rumbo: sirve para saber en qué sentido corre la ruta en
+ * un punto (p. ej. un PC), no para seguir al vehículo.
+ */
+export function segmentoMasCercano(
+  ruta: RutaSnap,
+  lat: number,
+  lng: number,
+): { distancia: number; rumbo: number } | null {
+  const x = (lng - ruta.lng0) * ruta.kx;
+  const y = (lat - ruta.lat0) * ruta.ky;
+  let mejor: { distancia: number; rumbo: number } | null = null;
+  for (const s of ruta.segmentos) {
+    const dx = s.bx - s.ax;
+    const dy = s.by - s.ay;
+    const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / (s.largo * s.largo)));
+    const distancia = Math.hypot(x - (s.ax + dx * t), y - (s.ay + dy * t));
+    if (mejor === null || distancia < mejor.distancia) mejor = { distancia, rumbo: s.bearing };
+  }
+  return mejor;
+}
+
 /** Distancia acumulada (m) al inicio del segmento con índice virtual `k` (módulo en circuito cerrado). */
 function acumuladoVirtual(ruta: RutaSnap, k: number): number {
   const n = ruta.segmentos.length;

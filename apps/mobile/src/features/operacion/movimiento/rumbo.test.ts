@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ESTADO_RUMBO_INICIAL, seleccionarRumbo, type EstadoRumbo } from './rumbo';
+import { ESTADO_RUMBO_INICIAL, rumboDeMovimiento, seleccionarRumbo, type EstadoRumbo } from './rumbo';
 import type { FixVisual } from './tipos';
 
 /** Fix de prueba con defaults razonables — cada test pisa solo lo que le importa. */
@@ -186,5 +186,19 @@ describe('seleccionarRumbo — hold (mantiene el último rumbo)', () => {
     const previo: EstadoRumbo = { rumbo: 123, enRumboDeCurso: false, referencia: { lat: 0, lng: 0 } };
     const estado = seleccionarRumbo(fix({ lat: 0, lng: 0, speed: 0.2, heading: 300 }), previo);
     expect(estado.rumbo).toBe(123);
+  });
+});
+
+describe('rumboDeMovimiento', () => {
+  it('rumbo de este fix (heading a velocidad de curso) sí; sostenido del fix previo, lento o sin velocidad no', () => {
+    const rapido = rumboDeMovimiento(fix({ lat: 0, lng: 0, speed: 10, heading: 90 }), ESTADO_RUMBO_INICIAL);
+    expect(rapido.rumbo).toBe(90);
+    // Mismo lugar, speed alto pero heading inválido y sin desplazamiento: se sostiene el 90 → null.
+    const sostenido = rumboDeMovimiento(fix({ lat: 0, lng: 0, speed: 10, heading: -1 }), rapido.estado);
+    expect(sostenido.estado.rumbo).toBe(90);
+    expect(sostenido.rumbo).toBeNull();
+    expect(rumboDeMovimiento(fix({ lat: 0, lng: 0, speed: 0.5, heading: 90 }), rapido.estado).rumbo).toBeNull();
+    // Desplazamiento real calculado en este fix (sin heading): bearing este.
+    expect(rumboDeMovimiento(fix({ lat: 0, lng: 0.001, speed: 10, heading: -1 }), rapido.estado).rumbo).toBeCloseTo(90, 0);
   });
 });

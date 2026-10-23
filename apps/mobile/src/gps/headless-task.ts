@@ -33,6 +33,7 @@ import {
   puntosDeLaFaseActual,
   registrarPasoEnVuelta,
 } from '../features/operacion/progreso-vuelta-store';
+import { fixVisualDesdeLocation } from '../features/operacion/movimiento/fix-visual';
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
 import { consultarVueltaActual } from '../features/vuelta-actual/vuelta-actual-oportunista';
 import { esperarConTope } from '../features/vuelta-actual/espera-con-tope';
@@ -478,6 +479,7 @@ async function contextoDeLaFase(
         lat: location.coords.latitude,
         accuracy: location.coords.accuracy,
       },
+      fixVisualDesdeLocation(location),
     );
     return puntosControl === contexto.puntosControl ? contexto : { ...contexto, puntosControl };
   } catch (error) {
