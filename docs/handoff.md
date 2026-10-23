@@ -6,6 +6,18 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## En curso — 2026-10-23: fallas del piloto del 22/10 (fase invertida al salir de SR)
+
+Plan y diagnóstico: [`docs/plan-post-piloto-22-10-fase.md`](plan-post-piloto-22-10-fase.md). El piloto pasó al **lunes 27/10**.
+
+- **Causa raíz (confirmada por replay):** el trazado de SR de #233 manda la ida y el regreso por calles distintas cerca de SR. Los choferes salen por la calle del regreso. A unos 740 m, `evaluarFixFase` pasa a regreso y no vuelve hasta Honduras.
+- **Consecuencia:** la app cumple PCs de regreso durante la ida. En el servidor quedó `0,16,14,13,12,11,10,7,8,…` en todos los trufis.
+- **Fases:**
+  - **0:** trazado de la ida en SR (dato).
+  - **1:** fase por sentido de marcha, compuerta de sentido en PC, ancla al COMENZAR en SR, flecha y banner (OTA).
+  - **2:** sesiones zombi (job + re-login), vecinos por jornada, observabilidad.
+- **Pendiente de datos:** descartar los `pc_omitido` falsos de PC 1–6 del 22/10.
+
 ## En curso — 2026-10-22: /en-vivo solo con la jornada de hoy + rediseño B
 
 Plan: `docs/plan-en-vivo.md`.
