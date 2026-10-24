@@ -59,11 +59,23 @@ Plan y diagnóstico: [`docs/plan-post-piloto-22-10-fase.md`](plan-post-piloto-22
   - **Diferido (post-piloto):** botón manual "Estoy en la fila" no cierra la vuelta; bloque "aplicar confirmación forzada + anunciar" duplicado en onLocation/heartbeat/fila (extraer helper); ventana corta entre `start()` del SDK y el silenciado (requiere calcular `terminalParaInicio` antes del start); si Android mata el proceso tras COMENZAR, headless no ve el silencio.
   - **Falla 3 sin causa:** diagnóstico estático descartó que un fix a igual distancia refresque el candidato; logcat muestra a MIUI (SmartPower) pasando la app a `hibernation` y la app NO está en la whitelist de batería del teléfono de prueba. Sin evidencia de runtime (Sentry vacío para la sesión). Se re-mide en la re-prueba.
 - Observación: el PC 7 marcó a 133 m y el PC 10 a 119 m (calles que tomaron los choferes reales; dentro del radio de 150 m).
+- **#261 mergeado + OTA `5b3f7f2c` (update `01a16f26`) y re-probado en el teléfono:** vuelta completa a 4x (ida+regreso, retorno PC 8) → al entrar a la fila de SR (19:25:10Z) el terminal se confirmó **en el mismo segundo** que la llegada a la fila, con la app en segundo plano. COMENZAR RUTA en SR (tras FINALIZAR): **sin voz** (lo escuchó el CTO). Ojo: la app solo descarga OTAs con el recorrido inactivo; con recorrido activo hay que ir a Perfil → "Buscar actualización" y reiniciar.
+
+**Fila y punto de SR (24/10, tarde) — en prod:**
+- **#263** (`docs/plan-espera-desde-llegada.md`): la hora de salida espera la frecuencia **también desde la llegada** (1.º: máx(última salida + frec, llegada + frec, `ordenTs`); i-ésimo: máx(anterior + frec, llegada + frec)). Regla B confirmada por el CTO: los de atrás siguen separados por la frecuencia entre salidas. SALIR habilitado durante la cuenta con confirmación ("solo si el delegado te autorizó") → `anticipada`. Efecto aceptado por el CTO: una salida detectada por GPS antes de llegada + frec también queda `anticipada` (registro, no sanción).
+  - Diferido: fila que cruza medianoche evalúa la frecuencia en el día de la llegada (usa la base, no la regla de hoy).
+- **#262:** punto de SR movido al cruce que eligió el CTO (`[-66.2280166,-17.3190431]`, 17 m al sur); ida arranca y regreso termina ahí (base 1062 → 1060 vértices). Replay de fase 5/5. Dry-run: 2 escrituras (`PATCH /rutas/460c9015…`, `PATCH /puntos-control/ea0f624c…`). **`--apply` pendiente: el clasificador de permisos se lo bloqueó al chairman; lo corre el CTO.** La parada de pasajeros SR y el croquis KML quedan en el punto viejo (a propósito).
+- **Deploy `r33-20261024`** (API `quivo-api-00045-f9b`, web `quivo-web-00020-jdv`, worker `quivo-worker-00021-r99`), health ok. **OTA** update `01a16f83` (runtime `547d52e7`), bundle verificado (diálogo de salida anticipada presente).
+- Sesión de prueba de PIL cerrada (20:05Z), 0 infracciones generadas por la prueba.
+
+**Bug anotado (post-piloto):** `/en-vivo` muestra una sesión ya cerrada (logout) como "Reportando · hace N min" con icono en ruta: `estadoFrescura` se calcula por la edad del último fix sin mirar `activa=false`/`fin` (con logout no hay `recorridoFinTs`). El banner "Sesión finalizada" sí aparece.
 
 **Pendiente antes del piloto del lunes 27/10 (CTO):**
+0. **`--apply` del punto de SR** (desde la raíz): `set -a && source ~/.quivo-admin-env && set +a && apps/api/node_modules/.bin/tsx scripts/cargar-linea-16.ts --apply`, con 0 sesiones L16 activas.
 1. **Choferes:** que reabran la app para bajar la OTA y el trazado nuevo. Confirmar que los 6 trufis tienen el APK 16 (el handoff solo registra 3). Avisarles: si paran en un PC, marca al arrancar; si el delegado dice "salí", pueden salir: la salida se registra sola (`anticipada`).
 2. **Datos:** la premisa de "`pc_omitido` falsos de PC 1–6 del 22/10" era falsa: en prod no existen. Hay 10 `pc_omitido` abiertos del **PC 8 del 21/10** y 1 `molinos_omitido` abierto de PIE del 22/10 (`d88805f3`, probable falso). Script para descartar por ID en el scratchpad (`descartar-infracciones.mjs`); decide el CTO.
-3. **Limpieza de la prueba:** cerrar la sesión de PIL en el teléfono, desinstalar Appium Settings, desactivar la depuración inalámbrica. Descartar las infracciones que genere el cierre de la sesión de prueba.
+3. **Limpieza de la prueba:** sesión de PIL ya cerrada (0 infracciones). Falta desinstalar Appium Settings y desactivar la depuración inalámbrica del teléfono del CTO.
+4. **Teléfonos de choferes:** batería de Quivo en "Sin restricciones" (MIUI/Xiaomi: la app entra en `hibernation` y puede no correr el respaldo por tiempo). Posible causa de la Falla 3; no verificado.
 
 **Abierto:**
 - No se sabe por qué el outbox de PIF dejó de sincronizar (184 puntos en el servidor). Ahora queda visible en Sentry (`outboxAtrasado`). Si se repite, revisar el teléfono: ahorro de batería, datos y versión de la OTA.
