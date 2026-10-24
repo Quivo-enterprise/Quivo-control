@@ -40,14 +40,18 @@ Plan y diagnóstico: [`docs/plan-post-piloto-22-10-fase.md`](plan-post-piloto-22
 - **#258 (Fase 2.3):** la fase de ida/regreso se hereda de la fila anterior solo si `actualizado_ms` tiene menos de 2 h.
 - Reviews: `/code-review` y `/ponytail-review` en cada PR. **Codex: no verificado (sin cuota)**. Correrlo sobre #254–#258 cuando vuelva.
 
-**Pendiente antes del piloto del lunes 27/10 (todo del CTO):**
-1. **Deploy de API y worker**, porque #256 y #257 son de servidor: `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh <tag>`.
-2. **OTA**, que lleva #254, #255, #256 (Sentry), #257 (banner) y #258.
-   - Comando: `cd apps/mobile && ./scripts/publicar-ota.sh "..."`, con el árbol limpio en `main`.
-   - Desde #253 no hay cambios nativos (ni package.json ni plugins), pero conviene comparar el fingerprint con el del APK instalado.
-   - Antes de publicar, verificar que el bundle traiga API URL, DSN y los símbolos nuevos (`rumboDeMovimiento`, `filtrarPorSentido`, `HERENCIA_FASE_MAX_MS`).
-3. **Choferes:** que reabran la app para bajar la OTA y el trazado nuevo.
-4. **Datos:** descartar los `pc_omitido` falsos de PC 1–6 del 22/10 en `/infracciones`.
+**En prod (24/10, ~02:10 BO, corrido por el chairman a pedido del CTO, desde `main` `aad2c60`):**
+1. **Deploy `r32-20261024`** (`GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh r32-20261024`), exit 0.
+   - API y web en `r32-20261024`, worker pool revisión `quivo-worker-00020-2qw`, migraciones OK.
+   - `/v1/health/ready`: ok (db y redis up). Worker arriba con logs pino.
+   - No verificado: que `cerrarSesionesVencidas` corra en prod (esperar su primera ejecución en logs).
+2. **OTA** canal `production`: grupo `d3bc4849-5d68-4a2e-b149-e99ca47bf298`, update android `01a16c84-9be9-7d30-b078-a38e3031a644`, runtime `547d52e7` (= APK 16, el último build, `ddef9838`). Source maps en Sentry. Rollback: grupo `9047feb2-c467-44a6-aa08-5f186e826ef1`.
+   - Fingerprint: `eas fingerprint:compare --build-id ddef9838-…` coincide. Ojo: `npx expo-updates fingerprint:generate` pelado da otro hash (`e4057087…`) porque corre sin el env de EAS; no sirve para comparar.
+   - Bundle verificado antes de publicar: API URL y DSN inlineadas; `rumboDeMovimiento`, `filtrarPorSentido`, `terminalParaInicio`, `estadoTrasRefrescoIgual`, `obtenerSaludOutbox` en el `.hbc`; `HERENCIA_FASE_MAX_MS` solo en el map (constante inlineada por Hermes).
+
+**Pendiente antes del piloto del lunes 27/10 (CTO):**
+1. **Choferes:** que reabran la app para bajar la OTA y el trazado nuevo. Confirmar que los 6 trufis tienen el APK 16 (el handoff solo registra 3).
+2. **Datos:** descartar los `pc_omitido` falsos de PC 1–6 del 22/10 en `/infracciones`.
 
 **Abierto:**
 - No se sabe por qué el outbox de PIF dejó de sincronizar (184 puntos en el servidor). Ahora queda visible en Sentry (`outboxAtrasado`). Si se repite, revisar el teléfono: ahorro de batería, datos y versión de la OTA.
