@@ -252,6 +252,17 @@ async function ubicarEnOrdenEfectivo(
 const aproximacionesAnunciadas = new Set<string>();
 
 /**
+ * Terminales anclados por COMENZAR RUTA dentro de su radio: el progreso ya los da por visitados,
+ * así que no se anuncia su aproximación/llegada ni se muestra el toast de la primera confirmación
+ * (el cumplimiento SÍ se emite). Dura toda la visita al terminal: se libera con la histéresis de voz
+ * (`limpiarAproximacionesAnunciadas`, al alejarse) y se vacía al iniciar un recorrido.
+ */
+const terminalesSilenciados = new Set<string>();
+export const silenciarTerminalAnclado = (id: string): void => void terminalesSilenciados.add(id);
+export const terminalSilenciado = (id: string): boolean => terminalesSilenciados.has(id);
+export const limpiarSilenciosTerminal = (): void => terminalesSilenciados.clear();
+
+/**
  * FIX POST-REVISIÓN (G1): libera el dedupe de aproximación para los puntos cuya histéresis de
  * VOZ (`puntosRearmadosVoz`, `gps/geofence.ts`) ACABA de re-armar en este tick/heartbeat — ver
  * el comentario largo de `aproximacionesAnunciadas` arriba. Llamarla con una lista vacía (el
@@ -260,6 +271,7 @@ const aproximacionesAnunciadas = new Set<string>();
 export function limpiarAproximacionesAnunciadas(puntosControlIds: readonly string[]): void {
   for (const id of puntosControlIds) {
     aproximacionesAnunciadas.delete(id);
+    terminalesSilenciados.delete(id);
     veredictoEsperaSinDesignacion.delete(id);
   }
 }
@@ -290,6 +302,7 @@ export async function anunciarPuntoControl(
   opciones: AnuncioPuntoControlOpciones,
 ): Promise<void> {
   if (deteccion.fase !== 'aproximacion') return;
+  if (terminalSilenciado(deteccion.puntoControlId)) return;
 
   // Dedupe primero: el caso normal (ya anunciado) no lee SQLite ni calcula el orden.
   if (aproximacionesAnunciadas.has(deteccion.puntoControlId)) return;
@@ -592,6 +605,7 @@ export async function anunciarLlegadaPuntoControl(
   motivo: MotivoAnuncio,
   opciones: AnuncioPuntoControlOpciones,
 ): Promise<boolean> {
+  if (terminalSilenciado(puntoControlId)) return false;
   // PC de espera (Molinos) sin designación activa: no es parte de la ruta, ni vibra ni notifica ni
   // se reclama la intención (no quedaría nada pendiente que reintentar).
   const ubicacion = await ubicarEnOrdenEfectivo(puntoControlId, opciones);

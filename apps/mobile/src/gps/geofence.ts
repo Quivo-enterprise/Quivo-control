@@ -894,12 +894,15 @@ export function confirmarVisitasVencidas(
   estados: ReadonlyMap<string, EstadoPuntoControl>,
   ahoraMs: number,
   umbralMs: number = UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+  /** Si viene, solo se evalúa la visita de ese punto de control (p. ej. el terminal al llegar a la fila). */
+  soloPuntoControlId?: string,
 ): ResultadoFiltrado {
   const emitir: CumplimientoAEmitir[] = [];
   const transiciones = new Map<string, EstadoPuntoControl>();
 
   for (const [clave, estado] of estados) {
     if (!estado.dentro || estado.confirmado !== false) continue;
+    if (soloPuntoControlId !== undefined && estado.puntoControlId !== soloPuntoControlId) continue;
     if (
       estado.candidatoTsFixMs === undefined ||
       estado.candidatoLat === undefined ||

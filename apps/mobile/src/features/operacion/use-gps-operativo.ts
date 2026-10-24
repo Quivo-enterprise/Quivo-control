@@ -45,11 +45,14 @@ import {
   anunciarLlegadaPuntoControl,
   asegurarPermisoNotificaciones,
   limpiarAproximacionesAnunciadas,
+  limpiarSilenciosTerminal,
+  terminalSilenciado,
+  silenciarTerminalAnclado,
 } from './anuncio-punto-control';
 import type { MotivoAnuncio } from './decidir-anuncio';
 import { intentarDrenarOportunista } from './drenaje-oportunista';
 import { consultarVueltaActual, limpiarVueltaActual } from '../vuelta-actual/vuelta-actual-oportunista';
-import { fixDeLocation, procesarFixFila } from '../fila-salida/fila-salida-deteccion';
+import { fixDeLocation, procesarFixFila, terminalIdDeLaRuta } from '../fila-salida/fila-salida-deteccion';
 import { marcarRecorridoActivoGlobal } from './estado-recorrido-activo';
 import { decidirReconciliacionTracking, reconciliacionVigente } from './reconciliar-tracking';
 import {
@@ -550,7 +553,8 @@ export function useGpsOperativo(
         // gatea en `settings.navegacionVoz`): limpiar el Set nunca hace daño si la voz está
         // apagada (el Set solo tiene entradas de anuncios que SÍ se emitieron).
         if (puntosRearmadosVoz.length > 0) limpiarAproximacionesAnunciadas(puntosRearmadosVoz);
-        if (deteccion) setUltimaDeteccion(deteccion);
+        // Terminal anclado al COMENZAR: su primera confirmación no muestra toast (el cumplimiento ya se emitió).
+        if (deteccion && !terminalSilenciado(deteccion.puntoControlId)) setUltimaDeteccion(deteccion);
         // ENTREGA 6/7: se actualiza en CADA tick con puntos de control (incluso a `null` cuando
         // ninguno está en rango) — a diferencia de `ultimaDeteccion`, que solo cambia con una
         // confirmación real. Sin el `null` explícito, la última aproximación anunciada quedaría
@@ -650,7 +654,61 @@ export function useGpsOperativo(
       if (trackingRef.current) {
         void consultarVueltaActual(obtenerAccessToken);
         // Fila de salida: entrada/salida de la zona de la terminal con este mismo fix (nunca rechaza).
-        void procesarFixFila(fixDeLocation(location), { sesionId, puntosControl, obtenerAccessToken });
+        void procesarFixFila(fixDeLocation(location), {
+          sesionId,
+          puntosControl,
+          obtenerAccessToken,
+          // Llegar a la fila cierra la vuelta: confirma YA la visita pendiente del terminal (por la
+          // cola), sin esperar al POST. Repetida (POST fallido, decisión a los 60 s) es no-op: ya confirmada.
+          alDetectarLlegada: () => {
+            const terminalId = terminalIdDeLaRuta(puntosControl);
+            if (!terminalId) return;
+            void (async () => {
+              await semillaPromise.current;
+              const db = await abrirOutbox();
+              const { emitir, anunciosLlegada } = await confirmarVisitasVencidasEnCola(
+                db,
+                deviceId,
+                sesionId,
+                puntosControlDetectados,
+                Date.now(),
+                0,
+                false,
+                semillaHidratadaRef.current ? puntosControl : [],
+                undefined,
+                terminalId,
+              );
+              if (emitir.length > 0) {
+                const ultima = emitir[emitir.length - 1]?.deteccion ?? null;
+                if (ultima && !terminalSilenciado(ultima.puntoControlId)) setUltimaDeteccion(ultima);
+              }
+              for (const anuncio of anunciosLlegada) {
+                anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
+                  sesionId,
+                  puntosControl,
+                })
+                  .then((exitoso) => {
+                    if (exitoso) {
+                      setUltimoAnuncioLlegada({
+                        puntoControlId: anuncio.puntoControlId,
+                        pasada: anuncio.pasada,
+                        motivo: anuncio.motivo,
+                      });
+                    }
+                  })
+                  .catch((error: unknown) => {
+                    Sentry.captureException(error, {
+                      tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-fila' },
+                    });
+                  });
+              }
+            })().catch((error: unknown) => {
+              Sentry.captureException(error, {
+                tags: { contexto: 'gps-foreground', paso: 'confirmar-terminal-llegada-fila' },
+              });
+            });
+          },
+        });
       }
     },
     [deviceId, sesionId, puntosControl, geometriaRuta, obtenerAccessToken, estadoInicioRecorrido],
@@ -754,7 +812,8 @@ export function useGpsOperativo(
       if (emitir.length > 0) {
         // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
         // ve el punto tachado aunque haya sido el heartbeat, no un fix nuevo, quien lo cerró.
-        setUltimaDeteccion(emitir[emitir.length - 1]?.deteccion ?? null);
+        const ultima = emitir[emitir.length - 1]?.deteccion ?? null;
+        if (!ultima || !terminalSilenciado(ultima.puntoControlId)) setUltimaDeteccion(ultima);
       }
       // REDISEÑO: fallback de TIEMPO del anuncio de llegada — ver el docblock de
       // `confirmarVisitasVencidasEnCola`. Mismo camino de ejecución que `onLocation`.
@@ -1392,6 +1451,7 @@ export function useGpsOperativo(
     erroresEscritura.current = 0;
     setPuntos(0);
     setUltimaDeteccion(null);
+    limpiarSilenciosTerminal();
 
     // HALLAZGO DE CAMPO (Entrega 7, Sentry build 10, Galaxy A71 Android 13): pedir
     // `POST_NOTIFICATIONS` ACÁ, con la app en foreground y ANTES de tocar el SDK de
@@ -1610,6 +1670,9 @@ export function useGpsOperativo(
           puntosControlRef.current,
           ultimaPosicionRef.current,
         );
+        // Anclado: la geocerca lo confirmará igual, pero sin voz de aproximación ni toast.
+        // Antes de cualquier await: el SDK ya arrancó y un fix podría anunciarlo primero.
+        if (enTerminal && terminalId) silenciarTerminalAnclado(terminalId);
         await reiniciarVueltaEnCurso(
           await abrirOutbox(),
           claveProgresoVuelta(sesionId, fechaLocal()),
