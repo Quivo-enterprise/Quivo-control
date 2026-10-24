@@ -14,7 +14,7 @@ import { faseDe, FIXES_FALLBACK_REGRESO } from './fase-vuelta';
 
 // SQLite mínima en memoria: una fila por clave con `estado_json` y `version` (lo que usa el almacén).
 function dbFalsa() {
-  const filas = new Map<string, { estado_json: string; version: number }>();
+  const filas = new Map<string, { estado_json: string; version: number; actualizado_ms?: number }>();
   const db = {
     filas,
     getFirstAsync: vi.fn(async (_sql: string, [clave]: [string]) => filas.get(clave) ?? null),
@@ -142,18 +142,27 @@ describe('puntosDeLaFaseActual', () => {
 });
 
 describe('fase a medianoche', () => {
-  it('sin fila del día hereda la fase del día anterior (solo la fase, no las vueltas)', async () => {
+  const filaAyer = (hace: number) => ({
+    estado_json: JSON.stringify({ pasados: ['sr'], vueltasCompletadas: 3, fase: 'regreso' }),
+    version: 4,
+    actualizado_ms: Date.now() - hace,
+  });
+
+  it('sin fila del día hereda la fase del día anterior si se escribió hace menos de 2 h (solo la fase)', async () => {
     const db = dbFalsa();
-    db.filas.set('s1:2026-10-14', {
-      estado_json: JSON.stringify({ pasados: ['sr'], vueltasCompletadas: 3, fase: 'regreso' }),
-      version: 4,
-    });
+    db.filas.set('s1:2026-10-14', filaAyer(60 * 60 * 1000));
     const hoy = await leerProgresoVuelta(db as never, 's1', '2026-10-15');
     expect(faseDe(hoy)).toBe('regreso');
     expect(hoy.vueltasCompletadas).toBe(0);
     expect(hoy.pasados).toEqual([]);
     // Con fila propia del día, manda la suya.
     db.filas.set('s1:2026-10-15', { estado_json: JSON.stringify({ pasados: [] }), version: 1 });
+    expect(faseDe(await leerProgresoVuelta(db as never, 's1', '2026-10-15'))).toBe('ida');
+  });
+
+  it('sesión olvidada de ayer (fila previa de hace más de 2 h): arranca en ida', async () => {
+    const db = dbFalsa();
+    db.filas.set('s1:2026-10-14', filaAyer(3 * 60 * 60 * 1000));
     expect(faseDe(await leerProgresoVuelta(db as never, 's1', '2026-10-15'))).toBe('ida');
   });
 });
