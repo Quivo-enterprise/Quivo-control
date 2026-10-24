@@ -51,6 +51,9 @@ import {
 /** Filas sin actualizarse en este lapso se descartan (limpieza al escribir). */
 const RETENCION_MS = 3 * 24 * 60 * 60 * 1000;
 const MAX_INTENTOS_CAS = 5;
+/** Un turno que cruza la medianoche escribe seguido; una fila previa más vieja es una sesión
+ * olvidada abierta de ayer y no debe imponer su fase al día nuevo. */
+const HERENCIA_FASE_MAX_MS = 2 * 60 * 60 * 1000;
 
 type Oyente = (estado: EstadoProgresoVuelta) => void;
 const oyentes = new Set<Oyente>();
@@ -67,6 +70,7 @@ export function suscribirProgresoVuelta(oyente: Oyente): () => void {
 interface FilaProgreso {
   estado_json: string;
   version: number;
+  actualizado_ms?: number;
 }
 
 function parsear(
@@ -85,7 +89,7 @@ function parsear(
   }
 }
 
-const SQL_LEER = 'SELECT estado_json, version FROM progreso_vuelta WHERE clave = ?';
+const SQL_LEER = 'SELECT estado_json, version, actualizado_ms FROM progreso_vuelta WHERE clave = ?';
 
 /** Estado persistido de la sesión en el día local `fecha`; uno nuevo y vacío si no hay. */
 export async function leerProgresoVuelta(
@@ -116,7 +120,8 @@ function fechaAnterior(fecha: string): string {
 
 /**
  * Sin fila del día (p. ej. pasada la medianoche) la fase NO se reinicia: se hereda del día local
- * anterior de la misma sesión. Solo la fase y su contador; las vueltas son por día.
+ * anterior de la misma sesión, si esa fila se escribió hace menos de `HERENCIA_FASE_MAX_MS`. Solo
+ * la fase y su contador; las vueltas son por día.
  */
 async function conFaseHeredada(
   db: SQLite.SQLiteDatabase,
@@ -126,11 +131,11 @@ async function conFaseHeredada(
   hayFila: boolean,
 ): Promise<EstadoProgresoVuelta> {
   if (hayFila) return actual;
-  const anterior = parsear(
-    sesionId,
-    fecha,
-    await db.getFirstAsync<FilaProgreso>(SQL_LEER, [claveProgresoVuelta(sesionId, fechaAnterior(fecha))]),
-  );
+  const filaAnterior = await db.getFirstAsync<FilaProgreso>(SQL_LEER, [
+    claveProgresoVuelta(sesionId, fechaAnterior(fecha)),
+  ]);
+  if (!filaAnterior || Date.now() - (filaAnterior.actualizado_ms ?? 0) >= HERENCIA_FASE_MAX_MS) return actual;
+  const anterior = parsear(sesionId, fecha, filaAnterior);
   return anterior.fase ? { ...actual, fase: anterior.fase, fixesRegreso: anterior.fixesRegreso } : actual;
 }
 
