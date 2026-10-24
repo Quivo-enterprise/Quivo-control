@@ -15,8 +15,8 @@
    "geometry": {
     "type": "Point",
     "coordinates": [
-     -66.2280664,
-     -17.3188935
+     -66.2280166,
+     -17.3190431
     ]
    }
   },
@@ -25,7 +25,7 @@
    "properties": {
     "orden": 1,
     "tipo": "intermedio",
-    "km": 1.648,
+    "km": 1.599,
     "nombre": "Control km 2",
     "rol": null,
     "obligatorio": false,
@@ -44,7 +44,7 @@
    "properties": {
     "orden": 2,
     "tipo": "intermedio",
-    "km": 3.648,
+    "km": 3.599,
     "nombre": "Control km 4",
     "rol": null,
     "obligatorio": false,
@@ -63,7 +63,7 @@
    "properties": {
     "orden": 3,
     "tipo": "intermedio",
-    "km": 5.648,
+    "km": 5.599,
     "nombre": "Control km 6",
     "rol": null,
     "obligatorio": false,
@@ -82,7 +82,7 @@
    "properties": {
     "orden": 4,
     "tipo": "intermedio",
-    "km": 7.648,
+    "km": 7.599,
     "nombre": "Control km 8",
     "rol": null,
     "obligatorio": false,
@@ -101,7 +101,7 @@
    "properties": {
     "orden": 5,
     "tipo": "intermedio",
-    "km": 9.648,
+    "km": 9.599,
     "nombre": "Control km 10",
     "rol": null,
     "obligatorio": false,
@@ -120,7 +120,7 @@
    "properties": {
     "orden": 6,
     "tipo": "intermedio",
-    "km": 11.648,
+    "km": 11.599,
     "nombre": "Control km 12",
     "rol": null,
     "obligatorio": false,
@@ -139,7 +139,7 @@
    "properties": {
     "orden": 7,
     "tipo": "intermedio",
-    "km": 13.648,
+    "km": 13.599,
     "nombre": "Control km 14",
     "rol": null,
     "obligatorio": false,
@@ -158,7 +158,7 @@
    "properties": {
     "orden": 8,
     "tipo": "Honduras",
-    "km": 14.529,
+    "km": 14.48,
     "nombre": "Honduras (RETORNO)",
     "rol": "retorno",
     "obligatorio": true,
@@ -177,7 +177,7 @@
    "properties": {
     "orden": 9,
     "tipo": "intermedio",
-    "km": 15.648,
+    "km": 15.599,
     "nombre": "Control km 16",
     "rol": null,
     "obligatorio": false,
@@ -196,7 +196,7 @@
    "properties": {
     "orden": 10,
     "tipo": "intermedio",
-    "km": 17.648,
+    "km": 17.599,
     "nombre": "Control km 18",
     "rol": null,
     "obligatorio": false,
@@ -215,7 +215,7 @@
    "properties": {
     "orden": 11,
     "tipo": "intermedio",
-    "km": 19.648,
+    "km": 19.599,
     "nombre": "Control km 20",
     "rol": null,
     "obligatorio": false,
@@ -234,7 +234,7 @@
    "properties": {
     "orden": 12,
     "tipo": "intermedio",
-    "km": 21.648,
+    "km": 21.599,
     "nombre": "Control km 22",
     "rol": null,
     "obligatorio": false,
@@ -253,7 +253,7 @@
    "properties": {
     "orden": 13,
     "tipo": "intermedio",
-    "km": 23.648,
+    "km": 23.599,
     "nombre": "Control km 24",
     "rol": null,
     "obligatorio": false,
@@ -272,7 +272,7 @@
    "properties": {
     "orden": 14,
     "tipo": "intermedio",
-    "km": 25.648,
+    "km": 25.599,
     "nombre": "Control km 26",
     "rol": null,
     "obligatorio": false,
@@ -291,7 +291,7 @@
    "properties": {
     "orden": 15,
     "tipo": "Molinos",
-    "km": 25.671,
+    "km": 25.622,
     "nombre": "Molinos (Parada Putucu)",
     "rol": "espera",
     "obligatorio": false,
@@ -310,7 +310,7 @@
    "properties": {
     "orden": 16,
     "tipo": "intermedio",
-    "km": 27.648,
+    "km": 27.599,
     "nombre": "Control km 28",
     "rol": null,
     "obligatorio": false,

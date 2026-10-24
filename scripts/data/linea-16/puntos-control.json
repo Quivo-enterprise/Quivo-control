@@ -1,5 +1,5 @@
 [
-  {"orden":0,"nombre":"Salomón Romero","coord":[-66.2280664,-17.3188935],"rol":"terminal","esperaMin":null,"obligatorio":false},
+  {"orden":0,"nombre":"Salomón Romero","coord":[-66.2280166,-17.3190431],"rol":"terminal","esperaMin":null,"obligatorio":false},
   {"orden":1,"nombre":"Control km 2","coord":[-66.2182922,-17.3262767],"rol":null,"esperaMin":null,"obligatorio":false},
   {"orden":2,"nombre":"Control km 4","coord":[-66.2120707,-17.3387537],"rol":null,"esperaMin":null,"obligatorio":false},
   {"orden":3,"nombre":"Control km 6","coord":[-66.1968165,-17.3456753],"rol":null,"esperaMin":null,"obligatorio":false},
