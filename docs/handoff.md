@@ -68,7 +68,13 @@ Plan y diagnóstico: [`docs/plan-post-piloto-22-10-fase.md`](plan-post-piloto-22
 - **Deploy `r33-20261024`** (API `quivo-api-00045-f9b`, web `quivo-web-00020-jdv`, worker `quivo-worker-00021-r99`), health ok. **OTA** update `01a16f83` (runtime `547d52e7`), bundle verificado (diálogo de salida anticipada presente).
 - Sesión de prueba de PIL cerrada (20:05Z), 0 infracciones generadas por la prueba.
 
-**Bug anotado (post-piloto):** `/en-vivo` muestra una sesión ya cerrada (logout) como "Reportando · hace N min" con icono en ruta: `estadoFrescura` se calcula por la edad del último fix sin mirar `activa=false`/`fin` (con logout no hay `recorridoFinTs`). El banner "Sesión finalizada" sí aparece.
+**Prueba de la fila nueva en el teléfono (24/10, 16:24 BO, OTA `01a16f83`):** llegada 20:24:28Z → "Salís a las 16:30" (llegada + 6), SALIR habilitado con la cuenta → diálogo "¿Salir antes de tu turno?" → salida `boton`, `anticipada: true` en el servidor. OK. Ojo: la OTA no bajó sola porque al loguearse se retomó el recorrido del día (la app solo descarga con recorrido inactivo); hubo que usar Perfil → "Buscar actualización" + reiniciar.
+
+**Bugs anotados (post-piloto):**
+- Toast "Control registrado automáticamente" muestra "Punto de Control #ea0f" (prefijo del UUID) en vez del número del PC.
+- Al loguearse con el día ya iniciado, la app retoma el recorrido sin `iniciar()` → el terminal no queda silenciado y sale el toast de SR (fix 2 solo cubre COMENZAR RUTA).
+- **Numeración de PC panel vs app (reporte del CTO):** el panel muestra "Punto de control 17" y la app cuenta "16" en el mismo lugar; además ese PC no se ve en el recorrido de la app del chofer. Hipótesis sin verificar: el panel numera `orden + 1` sobre los 17 PC (incluye Molinos) y la app usa el orden efectivo sin Molinos no designado (16 puntos) → el "17" del panel es "Control km 28" (`orden` 16). Falta verificar por qué no se dibuja su marcador en el mapa del chofer.
+- `/en-vivo` muestra una sesión ya cerrada (logout) como "Reportando · hace N min" con icono en ruta: `estadoFrescura` se calcula por la edad del último fix sin mirar `activa=false`/`fin` (con logout no hay `recorridoFinTs`). El banner "Sesión finalizada" sí aparece.
 
 **Pendiente antes del piloto del lunes 27/10 (CTO):**
 0. ~~`--apply` del punto de SR~~ hecho.
