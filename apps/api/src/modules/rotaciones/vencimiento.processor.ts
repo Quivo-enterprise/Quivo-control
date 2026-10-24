@@ -38,9 +38,27 @@ export class VencimientoProcessor implements OnModuleInit, OnModuleDestroy {
     this.worker = new Worker(
       NOMBRE_COLA,
       async (job: Job) => {
-        const count = await this.rotacionesService.marcarVencidas();
-        this.logger.log(`Job ${job.id}: ${count} asignación(es) marcadas como vencidas`);
-        return { count };
+        // Pasos independientes: si uno falla, el otro corre igual; se relanza al final para BullMQ.
+        const fallos: unknown[] = [];
+        let count = 0;
+        let sesiones = 0;
+        try {
+          count = await this.rotacionesService.marcarVencidas();
+          this.logger.log(`Job ${job.id}: ${count} asignación(es) marcadas como vencidas`);
+        } catch (error) {
+          this.logger.error(`Job ${job.id}: falló marcarVencidas`, error);
+          fallos.push(error);
+        }
+        try {
+          sesiones = await this.rotacionesService.cerrarSesionesVencidas();
+          this.logger.log(`Job ${job.id}: ${sesiones} sesión(es) zombi cerradas`);
+        } catch (error) {
+          this.logger.error(`Job ${job.id}: falló cerrarSesionesVencidas`, error);
+          fallos.push(error);
+        }
+        if (fallos.length === 1) throw fallos[0];
+        if (fallos.length > 1) throw new AggregateError(fallos, `Job ${job.id}: fallaron ${fallos.length} pasos`);
+        return { count, sesiones };
       },
       { connection: this.connection },
     );

@@ -30,6 +30,7 @@ import {
   type SeleccionAsignacionMovilRequest,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
+import { retirarFilaDeSesiones } from '../../common/sesiones/retirar-fila.js';
 import { fechaActualBolivia } from '../../common/tiempo/jornada.js';
 import { LockoutMovilException, SesionNoVigenteException } from './auth-movil.exceptions.js';
 import type { SesionMovilAutenticada } from './auth-movil.types.js';
@@ -595,41 +596,23 @@ export class AuthMovilService {
     const ahora = new Date();
     const hash = hashTokenOpaco(refreshToken);
     await withTenantContext(CONTEXTO_ADMIN, async (tx) => {
-      let cerradas = (
-        await tx.sesionOperativa.updateMany({
-          where: { refreshTokenHash: hash, estado: 'activa', revokedAt: null },
+      const ids: string[] = [];
+      const cerrar = async (where: Prisma.SesionOperativaWhereInput) => {
+        const vivas = await tx.sesionOperativa.findMany({ where: { ...where, estado: 'activa', revokedAt: null }, select: { id: true } });
+        const { count } = await tx.sesionOperativa.updateMany({
+          where: { id: { in: vivas.map((v) => v.id) }, estado: 'activa', revokedAt: null },
           data: { estado: 'cerrada', fin: ahora, revokedAt: ahora },
-        })
-      ).count;
+        });
+        if (count > 0) ids.push(...vivas.map((v) => v.id));
+        return count;
+      };
+      let cerradas = await cerrar({ refreshTokenHash: hash });
       if (cerradas === 0 && deviceId) {
-        cerradas = (
-          await tx.sesionOperativa.updateMany({
-            where: {
-              deviceId,
-              estado: 'activa',
-              revokedAt: null,
-              // Hallazgo 5: prueba de posesión — ver el docblock de arriba. Sin esto, cualquiera
-              // que conociera el `deviceId` (no es secreto) cerraba la sesión con un token
-              // inventado.
-              refreshTokenHashAnterior: hash,
-            },
-            data: { estado: 'cerrada', fin: ahora, revokedAt: ahora },
-          })
-        ).count;
+        // Hallazgo 5: prueba de posesión — ver el docblock de arriba. Sin esto, cualquiera
+        // que conociera el `deviceId` (no es secreto) cerraba la sesión con un token inventado.
+        cerradas = await cerrar({ deviceId, refreshTokenHashAnterior: hash });
       }
-      if (cerradas > 0) {
-        // Fila de salida: el trufi de la sesión que se cierra sale de la fila (`retirado`). Va acá y no
-        // en un trigger SQL porque solo el logout es una salida voluntaria; los demás cierres de
-        // sesión (rotar PIN) ya quedan fuera de la fila porque el cálculo solo cuenta sesiones activas.
-        await tx.$executeRaw`
-          UPDATE fila_salida SET estado = 'retirado'
-          WHERE estado = 'en_fila' AND "sesionId" IN (
-            SELECT id FROM sesiones_operativas
-            WHERE estado = 'cerrada' AND "revokedAt" = ${ahora}
-              AND ("refreshTokenHash" = ${hash} OR "refreshTokenHashAnterior" = ${hash})
-          )
-        `;
-      }
+      if (cerradas > 0) await retirarFilaDeSesiones(tx, ids);
     });
   }
 

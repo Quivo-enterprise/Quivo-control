@@ -11,10 +11,16 @@ import {
   type Rotacion,
 } from '@quivo/shared';
 import { asegurarRutaVisible } from '../../common/geo/tenant-checks.js';
+import { retirarFilaDeSesiones } from '../../common/sesiones/retirar-fila.js';
+import { GRACIA_ACTIVIDAD_MEDIANOCHE_MS } from '../../common/sesiones/vigencia.js';
 import { finDeJornadaBolivia, horaEnBolivia } from '../../common/tiempo/jornada.js';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
 const CONFLICTO_UNICIDAD = 'P2002';
+const LOTE_SESIONES_ZOMBI = 500;
+/** Un turno nocturno sin señal (offline) puede seguir vivo horas después de que vence su asignación
+ * (00:00 BO); el zombi solo se cierra pasadas ~04:00 BO del día siguiente. */
+const VENCIMIENTO_ZOMBI_MS = 4 * 60 * 60 * 1000;
 
 export interface SinCobertura {
   vehiculoId: string;
@@ -285,6 +291,56 @@ export class RotacionesService {
       }),
     );
     return count;
+  }
+
+  /** Sesiones zombi (incidente 22/10, PID): la sesión de login (refresh 30 días) solo la cierran
+   * logout, rotar PIN o un login nuevo — si el chofer no hace nada, sigue "activa" con la
+   * asignación de ayer. Cierra las `activa` cuya asignación venció hace más de
+   * `VENCIMIENTO_ZOMBI_MS` Y sin actividad GPS en las últimas `GRACIA_ACTIVIDAD_MEDIANOCHE_MS`.
+   * Misma transición que `AuthMovilService.logout` (el trigger `vueltas_cerrar_con_sesion` deja la
+   * vuelta en `abierta_al_cierre`) y el mismo retiro de `fila_salida` (`retirarFilaDeSesiones`).
+   * Idempotente; hasta `LOTE_SESIONES_ZOMBI` por corrida (el resto cae en la siguiente, cada 5 min). Devuelve cuántas cerró. */
+  async cerrarSesionesVencidas(ahora: Date = new Date()): Promise<number> {
+    const corteVencimiento = new Date(ahora.getTime() - VENCIMIENTO_ZOMBI_MS);
+    const corteActividad = new Date(ahora.getTime() - GRACIA_ACTIVIDAD_MEDIANOCHE_MS);
+    return withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+      // Un solo UPDATE con la misma condición de actividad reciente: un fix que entre entre el SELECT del
+      // lote y el UPDATE no puede cerrar una sesión viva. `fin` = fin real (última actividad GPS; sin GPS,
+      // el venceAt), nunca antes de `inicio`; `revokedAt` = ahora.
+      // shortcut: turno nocturno offline >2 h pasadas ~04:00 BO se cierra y su evidencia encolada se
+      // rechaza; subir el umbral si el servicio nocturno pasa de las 04:00 o aparecen huecos offline.
+      const cerradas = await tx.$queryRaw<{ id: string }[]>`
+        WITH lote AS (
+          SELECT so.id FROM sesiones_operativas so
+          JOIN asignaciones a ON a.id = so."asignacionId"
+          WHERE so.estado = 'activa' AND so.fin IS NULL AND so."revokedAt" IS NULL
+            AND a."venceAt" < ${corteVencimiento}
+            AND NOT EXISTS (
+              SELECT 1 FROM gps_sesion_resumen gx
+              WHERE gx.sesion_id = so.id::uuid AND gx."sindicatoId" = so."sindicatoId"
+                AND GREATEST(gx.ultimo_fix_ts, gx.ultimo_ingreso_ts) >= ${corteActividad}
+            )
+          LIMIT ${LOTE_SESIONES_ZOMBI}
+        )
+        UPDATE sesiones_operativas so
+        SET estado = 'cerrada', "revokedAt" = ${ahora},
+            fin = GREATEST(so.inicio, COALESCE(
+              (SELECT max(GREATEST(g.ultimo_fix_ts, g.ultimo_ingreso_ts)) FROM gps_sesion_resumen g
+               WHERE g.sesion_id = so.id::uuid AND g."sindicatoId" = so."sindicatoId"),
+              a."venceAt"))
+        FROM asignaciones a
+        WHERE a.id = so."asignacionId" AND so.id IN (SELECT id FROM lote)
+          AND so.estado = 'activa' AND so.fin IS NULL AND so."revokedAt" IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM gps_sesion_resumen gx
+            WHERE gx.sesion_id = so.id::uuid AND gx."sindicatoId" = so."sindicatoId"
+              AND GREATEST(gx.ultimo_fix_ts, gx.ultimo_ingreso_ts) >= ${corteActividad}
+          )
+        RETURNING so.id
+      `;
+      await retirarFilaDeSesiones(tx, cerradas.map((c) => c.id));
+      return cerradas.length;
+    });
   }
 }
 

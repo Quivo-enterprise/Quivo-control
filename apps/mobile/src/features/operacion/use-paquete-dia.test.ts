@@ -18,6 +18,8 @@ import { PaqueteDiaApiError } from '../../shared/api/paquete-dia-api';
 import {
   MIN_ENTRE_REFRESCOS_MS,
   debeReportarFalloRefresco,
+  estadoTrasRefrescoIgual,
+  type EstadoPaqueteDia,
   mismoPaquete, perteneceAAsignacion,
   puedeRefrescarPaquete,
 } from './use-paquete-dia';
@@ -48,5 +50,20 @@ describe('debeReportarFalloRefresco', () => {
     expect(debeReportarFalloRefresco(new PaqueteDiaApiError('network', 'x'))).toBe(false);
     expect(debeReportarFalloRefresco(new PaqueteDiaApiError('http', 'x'))).toBe(true);
     expect(debeReportarFalloRefresco(new Error('boom'))).toBe(true);
+  });
+});
+
+describe('estadoTrasRefrescoIgual (banner pegado)', () => {
+  const paq = { asignacion: { id: 'a1' } } as unknown as PaqueteDia;
+  const base: EstadoPaqueteDia = { cargando: false, paquete: paq, vencido: false, error: null };
+  it('limpia vencido y error tras un refresco exitoso con el mismo paquete', () => {
+    const limpio = estadoTrasRefrescoIgual({ ...base, vencido: true, error: 'x' }, paq);
+    expect(limpio).toEqual(base);
+  });
+  it('restaura el paquete si el estado lo tenía en null', () => {
+    expect(estadoTrasRefrescoIgual({ ...base, paquete: null, vencido: true }, paq)).toEqual(base);
+  });
+  it('sin cambios devuelve la misma referencia (sin re-render)', () => {
+    expect(estadoTrasRefrescoIgual(base, paq)).toBe(base);
   });
 });
