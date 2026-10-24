@@ -126,6 +126,10 @@ describe('fila de salida (API contra Postgres real)', () => {
       expect((await operadorA('PUT', `/salidas/${m.pcTerminalA}/base`, { frecuenciaSalidaMin: 5 })).statusCode).toBe(200);
       const reglas = (await operadorA('GET', `/salidas/${m.pcTerminalA}/reglas`)).json();
       expect(reglas).toMatchObject({ puntoControlId: m.pcTerminalA, baseMin: 5, reglas: [] });
+      // Con la base ya fijada, "en turno" exige haber esperado la frecuencia desde la llegada: se envejece la fila de `uno`.
+      await withTenantContext(ADMIN, (tx) => tx.$executeRaw`
+        UPDATE fila_salida SET "llegadaTs" = now() - interval '10 minutes', "ordenTs" = now() - interval '10 minutes'
+        WHERE "vehiculoId" = ${m.a[uno]!.vehiculoId} AND estado = 'en_fila'`);
       const s = await fila.registrarSalida(m.a[uno]!.sesion, { origen: 'boton' });
       expect(s).toEqual({ fila: null, anticipada: false });
       // Idempotente: sin fila abierta es 200 con `fila: null`.

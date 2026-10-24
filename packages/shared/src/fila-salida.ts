@@ -1,7 +1,8 @@
 import { fechaActualBolivia, inicioDeJornadaBolivia } from './tiempo/jornada.js';
 
 /**
- * Cálculo de la fila de salida (plan "fila de salida", "Reglas de cálculo"). Funciones puras: el
+ * Cálculo de la fila de salida (plan "fila de salida", "Reglas de cálculo"). Cada trufi espera la
+ * frecuencia desde su llegada Y desde la salida del de adelante (manda la mayor). Funciones puras: el
  * servidor las llama con las filas del día y `ahora`; el ancla de la hora de salida es la última
  * salida REAL, nunca `now()`.
  */
@@ -120,7 +121,11 @@ export interface CalcularFilaSalidaEntrada {
   ahora: Date;
 }
 
-/** Fila ordenada por `ordenTs` (desempate `llegadaTs`, luego `id`) con hora de salida estimada. */
+/**
+ * Fila ordenada por `ordenTs` (desempate `llegadaTs`, luego `id`) con hora de salida estimada.
+ * ETA del 1.º = max(última salida + frec, llegada + frec, ordenTs) (sin última salida: sin ese término); la del
+ * i-ésimo = max(base + frec, llegada_i + frec) con base = ETA anterior (o `ahora` si el 1.º está demorado).
+ */
 export function calcularFilaSalida(entrada: CalcularFilaSalidaEntrada): PosicionFila[] {
   const { ultimaSalidaTs, reglas, baseMin, ahora } = entrada;
   const ordenados = [...entrada.enFila].sort(
@@ -143,19 +148,27 @@ export function calcularFilaSalida(entrada: CalcularFilaSalidaEntrada): Posicion
         baseMin,
         ahora,
       );
+    const llegadaMs = item.llegadaTs.getTime();
+    // Espera de frecuencia contada desde la llegada real (no desde `ordenTs`).
+    const desdeLlegadaMs = llegadaMs + frec(llegadaMs) * MS_MIN;
     let etaMs: number;
     if (i === 0) {
+      // `ordenTs` es piso: "mover al final" no puede habilitar antes de ese instante.
       const ordenMs = item.ordenTs.getTime();
       etaMs =
         ultimaSalidaTs === null
-          ? ordenMs
-          : Math.max(ultimaSalidaTs.getTime() + frec(ultimaSalidaTs.getTime()) * MS_MIN, ordenMs);
+          ? Math.max(desdeLlegadaMs, ordenMs)
+          : Math.max(
+              ultimaSalidaTs.getTime() + frec(ultimaSalidaTs.getTime()) * MS_MIN,
+              desdeLlegadaMs,
+              ordenMs,
+            );
       primeroDemorado = ahoraMs > etaMs;
     } else {
       // Si el 1.º está demorado, "ahora" corre la estimación de los de atrás (solo para mostrarla);
       // la franja se evalúa en esa misma base.
       const base = primeroDemorado ? Math.max(etaAnteriorMs, ahoraMs) : etaAnteriorMs;
-      etaMs = base + frec(base) * MS_MIN;
+      etaMs = Math.max(base + frec(base) * MS_MIN, desdeLlegadaMs);
     }
     etaAnteriorMs = etaMs;
     resultado.push({
