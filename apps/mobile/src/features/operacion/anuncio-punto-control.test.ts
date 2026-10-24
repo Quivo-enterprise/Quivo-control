@@ -85,8 +85,11 @@ import {
   asegurarPermisoNotificaciones,
   limpiarAproximacionesAnunciadas,
   limpiarCanalesObsoletos,
+  limpiarSilenciosTerminal,
   obtenerEstadoPermisoNotificaciones,
   reintentarAnunciosLlegadaPendientes,
+  silenciarTerminalAnclado,
+  terminalSilenciado,
   type AnuncioPuntoControlOpciones,
 } from './anuncio-punto-control';
 
@@ -829,5 +832,36 @@ describe('limpiarCanalesObsoletos', () => {
     deleteChannelMock.mockRejectedValue(new Error('x'));
     expect(() => limpiarCanalesObsoletos()).not.toThrow();
     await Promise.resolve();
+  });
+});
+
+describe('terminal anclado al COMENZAR RUTA (silencio)', () => {
+  beforeEach(() => {
+    limpiarSilenciosTerminal();
+    speakMock.mockClear();
+    configurarTablaAnunciosRealista();
+  });
+
+  it('un id silenciado no anuncia aproximación ni llegada; otro id no se afecta', async () => {
+    silenciarTerminalAnclado('pc-term');
+    const o = opciones([puntoControl('pc-term', 1), puntoControl('pc-2', 2)]);
+    await anunciarPuntoControl(DB_FALSO, deteccion({ puntoControlId: 'pc-term', fase: 'aproximacion' }), o);
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(await anunciarLlegadaPuntoControl(DB_FALSO, 'pc-term', 1, 'proximidad', o)).toBe(false);
+    await anunciarPuntoControl(DB_FALSO, deteccion({ puntoControlId: 'pc-2', fase: 'aproximacion' }), o);
+    expect(speakMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('el silencio dura toda la visita y se libera al re-armar la voz (otros ids intactos)', async () => {
+    silenciarTerminalAnclado('pc-term');
+    const o = opciones([puntoControl('pc-term', 1)]);
+    for (let i = 0; i < 3; i++) {
+      expect(await anunciarLlegadaPuntoControl(DB_FALSO, 'pc-term', 1, 'proximidad', o)).toBe(false);
+    }
+    limpiarAproximacionesAnunciadas(['otro']);
+    expect(terminalSilenciado('pc-term')).toBe(true);
+    limpiarAproximacionesAnunciadas(['pc-term']);
+    expect(terminalSilenciado('pc-term')).toBe(false);
+    expect(await anunciarLlegadaPuntoControl(DB_FALSO, 'pc-term', 1, 'proximidad', o)).toBe(true);
   });
 });

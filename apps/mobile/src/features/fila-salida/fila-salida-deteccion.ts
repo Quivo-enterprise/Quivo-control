@@ -32,6 +32,11 @@ export function terminalDeLaRuta(puntos: readonly PuntoControlPaquete[]): Termin
   return { lat, lng, radioM: t.radioToleranciaM };
 }
 
+/** Id del PC `terminal` de la ruta del día, o `null` si no tiene. */
+export function terminalIdDeLaRuta(puntos: readonly PuntoControlPaquete[]): string | null {
+  return puntos.find((p) => p.rol === 'terminal')?.id ?? null;
+}
+
 /** Convierte un `Location` del SDK (o equivalente) al fix mínimo; `null` si faltan datos. */
 export function fixDeLocation(l: {
   timestamp?: string | number;
@@ -54,6 +59,8 @@ export async function procesarFixFila(
     sesionId: string;
     puntosControl: readonly PuntoControlPaquete[];
     obtenerAccessToken: () => Promise<string | null>;
+    /** Se invoca en el acto al DETECTAR la entrada a la fila (fuera de pausa), antes del POST. */
+    alDetectarLlegada?: () => void;
   },
 ): Promise<void> {
   if (!fix) return;
@@ -76,7 +83,10 @@ export async function procesarFixFila(
     if (r.accion === 'rearmar') await rearmarFilaLocal(ctx.sesionId);
     else if (r.accion === 'llegada') {
       // En pausa no se hace fila: el server responde 409 y, si la pausa aún está en el outbox, la llegada la pisaría.
-      if (!(await leerPausa(ctx.sesionId))) await registrarLlegada(ctx.obtenerAccessToken, fix);
+      if (!(await leerPausa(ctx.sesionId))) {
+        ctx.alDetectarLlegada?.();
+        await registrarLlegada(ctx.obtenerAccessToken, fix);
+      }
     }
     else if (r.accion === 'salida') await registrarSalida(ctx.obtenerAccessToken, 'geocerca', 1);
   } catch (error) {

@@ -44,14 +44,26 @@ Plan y diagnóstico: [`docs/plan-post-piloto-22-10-fase.md`](plan-post-piloto-22
 1. **Deploy `r32-20261024`** (`GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh r32-20261024`), exit 0.
    - API y web en `r32-20261024`, worker pool revisión `quivo-worker-00020-2qw`, migraciones OK.
    - `/v1/health/ready`: ok (db y redis up). Worker arriba con logs pino.
-   - No verificado: que `cerrarSesionesVencidas` corra en prod (esperar su primera ejecución en logs).
+   - `cerrarSesionesVencidas` **verificado (24/10)**: corre cada 5 min dentro de la API (`RotacionesModule`, no el worker). Primera corrida 06:08Z cerró 3 sesiones zombi. 3 fallos de `marcarVencidas` por timeout de transacción Prisma (5 s) a las 06:08, 06:12 y 07:37Z; los siguientes 97 OK. Causa no investigada.
+   - Worker: `connect ETIMEDOUT` contra Redis durante ~45 s al arrancar (nuevo en esta revisión). Después ingiere bien (verificado con la prueba de abajo: `validadoPor: worker`).
 2. **OTA** canal `production`: grupo `d3bc4849-5d68-4a2e-b149-e99ca47bf298`, update android `01a16c84-9be9-7d30-b078-a38e3031a644`, runtime `547d52e7` (= APK 16, el último build, `ddef9838`). Source maps en Sentry. Rollback: grupo `9047feb2-c467-44a6-aa08-5f186e826ef1`.
    - Fingerprint: `eas fingerprint:compare --build-id ddef9838-…` coincide. Ojo: `npx expo-updates fingerprint:generate` pelado da otro hash (`e4057087…`) porque corre sin el env de EAS; no sirve para comparar.
    - Bundle verificado antes de publicar: API URL y DSN inlineadas; `rumboDeMovimiento`, `filtrarPorSentido`, `terminalParaInicio`, `estadoTrasRefrescoIgual`, `obtenerSaludOutbox` en el `.hbc`; `HERENCIA_FASE_MAX_MS` solo en el map (constante inlineada por Hermes).
 
+**Prueba en teléfono real (24/10, 11:20–13:41 BO, chairman por ADB Wi-Fi, CTO mirando):** Redmi del CTO, APK 16 + OTA `d3bc4849`, sesión `7288cb24` de **1616PIL** (vehículo de prueba elegido por el CTO). GPS simulado con Appium Settings (`io.appium.settings`) reproduciendo en tiempo real las trazas del fixture: ida `5e19c201` completa, regreso `4d3b08a1` desde idx 814, salida `5e19c201` idx 0–46. Scripts en el scratchpad de la sesión (`reproducir.py`).
+- **Funciona:** servidor `0,1,…,8,9,10,11,12,13,14,16` en orden, 0 infracciones (la misma traza el 22/10 dio `0 → 16,14,13…`). Ancla en SR al COMENZAR (1/16). Corte de red de 4 min solo para la app (`cmd connectivity set-package-networking-enabled`): sincronizó al volver. Fila: llegada automática (`Posición 1 de 1`) y salida detectada por el servidor (`deteccion`). Flecha estable.
+- **Falla 1:** parado en la fila de SR la vuelta **no se cierra** hasta que el trufi arranca (18 min con "Próximo #1 a 16 m"). **Falla 2:** COMENZAR RUTA en SR repite la confirmación del terminal (voz "Punto de control 1, a 20 metros" + toast). **Falla 3:** el respaldo por heartbeat (90 s) no confirmó en 15 min parado (también retuvo 60 s el PC 6). Plan: [`docs/plan-cierre-vuelta-fila-sr.md`](plan-cierre-vuelta-fila-sr.md), rama `fix/cierre-vuelta-fila-sr`.
+  - **Fix 1:** al detectar la entrada a la zona de la fila (`procesarFixFila` → `alDetectarLlegada`, antes del POST), se confirma la visita pendiente del terminal por la cola (`confirmarVisitasVencidasEnCola`, `umbralMs=0`, `soloPuntoControlId`). Foreground y headless. El terminal queda con el fix de entrada (hasta ~150 m), no el mínimo local.
+  - **Fix 2:** `silenciarTerminalAnclado` al COMENZAR en SR: sin voz de aproximación, sin anuncio/toast de llegada para ESA visita; se libera cuando la histéresis de voz se re-arma (`limpiarAproximacionesAnunciadas`). El cumplimiento se emite igual.
+  - Reviews: `/code-review` (9 hallazgos: 5 aplicados, 4 descartados/diferidos) y `/ponytail-review`. **Codex: no verificado (sin cuota).**
+  - **Diferido (post-piloto):** botón manual "Estoy en la fila" no cierra la vuelta; bloque "aplicar confirmación forzada + anunciar" duplicado en onLocation/heartbeat/fila (extraer helper); ventana corta entre `start()` del SDK y el silenciado (requiere calcular `terminalParaInicio` antes del start); si Android mata el proceso tras COMENZAR, headless no ve el silencio.
+  - **Falla 3 sin causa:** diagnóstico estático descartó que un fix a igual distancia refresque el candidato; logcat muestra a MIUI (SmartPower) pasando la app a `hibernation` y la app NO está en la whitelist de batería del teléfono de prueba. Sin evidencia de runtime (Sentry vacío para la sesión). Se re-mide en la re-prueba.
+- Observación: el PC 7 marcó a 133 m y el PC 10 a 119 m (calles que tomaron los choferes reales; dentro del radio de 150 m).
+
 **Pendiente antes del piloto del lunes 27/10 (CTO):**
-1. **Choferes:** que reabran la app para bajar la OTA y el trazado nuevo. Confirmar que los 6 trufis tienen el APK 16 (el handoff solo registra 3).
-2. **Datos:** descartar los `pc_omitido` falsos de PC 1–6 del 22/10 en `/infracciones`.
+1. **Choferes:** que reabran la app para bajar la OTA y el trazado nuevo. Confirmar que los 6 trufis tienen el APK 16 (el handoff solo registra 3). Avisarles: si paran en un PC, marca al arrancar; si el delegado dice "salí", pueden salir: la salida se registra sola (`anticipada`).
+2. **Datos:** la premisa de "`pc_omitido` falsos de PC 1–6 del 22/10" era falsa: en prod no existen. Hay 10 `pc_omitido` abiertos del **PC 8 del 21/10** y 1 `molinos_omitido` abierto de PIE del 22/10 (`d88805f3`, probable falso). Script para descartar por ID en el scratchpad (`descartar-infracciones.mjs`); decide el CTO.
+3. **Limpieza de la prueba:** cerrar la sesión de PIL en el teléfono, desinstalar Appium Settings, desactivar la depuración inalámbrica. Descartar las infracciones que genere el cierre de la sesión de prueba.
 
 **Abierto:**
 - No se sabe por qué el outbox de PIF dejó de sincronizar (184 puntos en el servidor). Ahora queda visible en Sentry (`outboxAtrasado`). Si se repite, revisar el teléfono: ahorro de batería, datos y versión de la OTA.

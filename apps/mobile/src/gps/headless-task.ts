@@ -37,7 +37,7 @@ import { fixVisualDesdeLocation } from '../features/operacion/movimiento/fix-vis
 import { intentarDrenarOportunista } from '../features/operacion/drenaje-oportunista';
 import { consultarVueltaActual } from '../features/vuelta-actual/vuelta-actual-oportunista';
 import { esperarConTope } from '../features/vuelta-actual/espera-con-tope';
-import { fixDeLocation, procesarFixFila } from '../features/fila-salida/fila-salida-deteccion';
+import { fixDeLocation, procesarFixFila, terminalIdDeLaRuta } from '../features/fila-salida/fila-salida-deteccion';
 // Hallazgo 4 (code review de la Entrega 2/3): `refrescar` en vez de llamar directo a
 // `intentarRefrescarConCircuito` — ver el docblock de `obtenerAccessTokenHeadless` más abajo.
 import { confirmarTokenRechazadoVigente, refrescar } from '../features/auth/use-auth-movil';
@@ -1124,6 +1124,7 @@ export function confirmarVisitasVencidasEnCola(
   filtrarSesionActual: boolean,
   puntosControl: PuntoControlPaquete[],
   umbralAnuncioMs: number = UMBRAL_ANUNCIO_PROXIMIDAD_MS,
+  soloPuntoControlId?: string,
 ): Promise<{ emitir: CumplimientoAEmitir[]; anunciosLlegada: AnuncioDecidido[] }> {
   return ejecutarEnColaRegistroGps(
     db,
@@ -1131,7 +1132,12 @@ export function confirmarVisitasVencidasEnCola(
       const miGeneracion = generacionColaRegistroGps;
       const estados = estadosPuntosControl.current;
       const estadosAEvaluar = filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados;
-      const { emitir, transiciones } = confirmarVisitasVencidas(estadosAEvaluar, ahoraMs, umbralMs);
+      const { emitir, transiciones } = confirmarVisitasVencidas(
+        estadosAEvaluar,
+        ahoraMs,
+        umbralMs,
+        soloPuntoControlId,
+      );
       if (emitir.length > 0) {
         await aplicarConfirmacionesForzadas(
           db,
@@ -1148,8 +1154,11 @@ export function confirmarVisitasVencidasEnCola(
 
       // REDISEÑO: fallback de TIEMPO del anuncio — independiente de la evidencia de arriba
       // (`emitir`/`transiciones`), evaluado sobre el estado YA actualizado. Nunca lee `emitir`.
+      const estadosAnuncio = filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados;
       const { anuncios: anunciosLlegada, transiciones: transicionesAnuncio } = evaluarAnuncioDeHeartbeat(
-        filtrarSesionActual ? filtrarPorSesion(estados, sesionId) : estados,
+        soloPuntoControlId === undefined
+          ? estadosAnuncio
+          : new Map([...estadosAnuncio].filter(([, e]) => e.puntoControlId === soloPuntoControlId)),
         ahoraMs,
         umbralAnuncioMs,
       );
@@ -1352,6 +1361,43 @@ export async function tareaHeadlessUbicacion(event: HeadlessEvent): Promise<void
           sesionId: contexto.sesionId,
           puntosControl: contexto.puntosControl,
           obtenerAccessToken: obtenerAccessTokenHeadless,
+          // Llegar a la fila cierra la vuelta: confirma YA la visita pendiente del terminal (por la
+          // cola), sin esperar al POST ni al tope. Repetida es no-op: la visita ya está confirmada.
+          alDetectarLlegada: () => {
+            const terminalId = terminalIdDeLaRuta(contexto.puntosControl);
+            if (!terminalId) return;
+            void (async () => {
+              const { anunciosLlegada: anunciosFila } = await confirmarVisitasVencidasEnCola(
+                db,
+                contexto.deviceId,
+                contexto.sesionId,
+                puntosControlDetectadosHeadless,
+                Date.now(),
+                0,
+                true,
+                estaSemillaHidratada(contexto.sesionId) ? contexto.puntosControl : [],
+                undefined,
+                terminalId,
+              );
+              for (const anuncio of anunciosFila) {
+                await anunciarLlegadaPuntoControl(
+                  db,
+                  anuncio.puntoControlId,
+                  anuncio.pasada,
+                  anuncio.motivo,
+                  { sesionId: contexto.sesionId, puntosControl: contexto.puntosControl },
+                ).catch((error) => {
+                  Sentry.captureException(error, {
+                    tags: { contexto: 'headless-task', paso: 'anunciar-llegada-fila' },
+                  });
+                });
+              }
+            })().catch((error: unknown) => {
+              Sentry.captureException(error, {
+                tags: { contexto: 'headless-task', paso: 'confirmar-terminal-llegada-fila' },
+              });
+            });
+          },
         }),
         TOPE_ESPERA_VUELTA_ACTUAL_MS,
       );

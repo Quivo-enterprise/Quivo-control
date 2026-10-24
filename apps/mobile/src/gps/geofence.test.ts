@@ -798,6 +798,15 @@ describe('confirmarVisitasVencidas (FIX POST-REVISIÓN, bug 2)', () => {
     return claveCumplimiento(sesionId, puntoControlId);
   }
 
+  it('soloPuntoControlId confirma únicamente la visita de ese punto', () => {
+    const estados = new Map<string, EstadoPuntoControl>();
+    const claveA = entrarYDetenerse(estados, { puntoControlId: 'pc-a' });
+    entrarYDetenerse(estados, { puntoControlId: 'pc-b' });
+    const { emitir, transiciones } = confirmarVisitasVencidas(estados, 0, 0, 'pc-a');
+    expect(emitir.map((e) => e.clave)).toEqual([claveA]);
+    expect([...transiciones.keys()]).toEqual([claveA]);
+  });
+
   it('vehículo detenido dentro del radio: un heartbeat ANTES de cumplirse UMBRAL_ANTIGUEDAD_CANDIDATO_MS todavía NO confirma', () => {
     const estados = new Map<string, EstadoPuntoControl>();
     entrarYDetenerse(estados, { tsFixMs: 0 });

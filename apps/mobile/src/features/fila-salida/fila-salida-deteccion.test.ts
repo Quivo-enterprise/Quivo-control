@@ -51,6 +51,24 @@ describe('procesarFixFila', () => {
     expect(mocks.llegada).not.toHaveBeenCalled();
   });
 
+  it('avisa alDetectarLlegada al detectar la entrada, antes del POST, y no en pausa', async () => {
+    const orden: string[] = [];
+    const alDetectarLlegada = vi.fn(() => orden.push('cb'));
+    mocks.llegada.mockImplementation(async () => {
+      orden.push('post');
+      return { ok: false, mensaje: 'x' };
+    });
+    await procesarFixFila(fixEnTerminal, { ...ctx, alDetectarLlegada });
+    expect(alDetectarLlegada).toHaveBeenCalledTimes(1);
+    expect(orden).toEqual(['cb', 'post']);
+
+    reiniciarDeteccionFila();
+    alDetectarLlegada.mockClear();
+    mocks.pausa.mockResolvedValue('2026-10-20T11:00:00.000Z');
+    await procesarFixFila(fixEnTerminal, { ...ctx, alDetectarLlegada });
+    expect(alDetectarLlegada).not.toHaveBeenCalled();
+  });
+
   it('dos llamadas concurrentes producen un solo POST de llegada (candado enCurso)', async () => {
     await Promise.all([procesarFixFila(fixEnTerminal, ctx), procesarFixFila(fixEnTerminal, ctx)]);
     expect(mocks.llegada).toHaveBeenCalledTimes(1);

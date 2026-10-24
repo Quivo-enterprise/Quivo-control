@@ -1106,6 +1106,26 @@ describe('registrarPuntoGps — fase ida/regreso del circuito', () => {
     );
   });
 
+  it('con soloPuntoControlId el anuncio de heartbeat se evalúa solo para ese PC', async () => {
+    const estadoDe = (id: string) => ({
+      puntoControlId: id,
+      radioToleranciaM: 30,
+      dentro: true,
+      confirmado: false,
+      pasadas: 0,
+      anuncioHecho: false,
+      anuncioDesdeMs: 0,
+    });
+    const crear = () => ({ current: new Map<string, never>([['s:pc-a', estadoDe('pc-a') as never], ['s:pc-b', estadoDe('pc-b') as never]]) });
+    const args: [number, boolean, never[], number] = [90_000, false, [], 0];
+    const todos = await confirmarVisitasVencidasEnCola({} as never, 'd', 's', crear(), 10 * 60_000, ...args);
+    expect(todos.anunciosLlegada.map((x) => x.puntoControlId).sort()).toEqual(['pc-a', 'pc-b']);
+    const estados = crear();
+    const solo = await confirmarVisitasVencidasEnCola({} as never, 'd', 's', estados, 10 * 60_000, ...args, 'pc-a');
+    expect(solo.anunciosLlegada.map((x) => x.puntoControlId)).toEqual(['pc-a']);
+    expect(estados.current.get('s:pc-b')).toMatchObject({ anuncioHecho: false });
+  });
+
   it('un cambio de fase con una visita pendiente (dentro, sin confirmar) NO pierde el cumplimiento: se confirma por vencimiento', async () => {
     const honduras: PuntoControlPaquete = { ...pcCerca, id: 'pc-honduras' };
     const contexto = { deviceId: 'd', sesionId: 's-fase', puntosControl: [honduras, pcLejos] };
