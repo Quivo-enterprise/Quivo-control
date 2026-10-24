@@ -12,11 +12,46 @@ Plan y diagnóstico: [`docs/plan-post-piloto-22-10-fase.md`](plan-post-piloto-22
 
 - **Causa raíz (confirmada por replay):** el trazado de SR de #233 manda la ida y el regreso por calles distintas cerca de SR. Los choferes salen por la calle del regreso. A unos 740 m, `evaluarFixFase` pasa a regreso y no vuelve hasta Honduras.
 - **Consecuencia:** la app cumple PCs de regreso durante la ida. En el servidor quedó `0,16,14,13,12,11,10,7,8,…` en todos los trufis.
-- **Fases:**
-  - **0:** trazado de la ida en SR (dato).
-  - **1:** fase por sentido de marcha, compuerta de sentido en PC, ancla al COMENZAR en SR, flecha y banner (OTA).
-  - **2:** sesiones zombi (job + re-login), vecinos por jornada, observabilidad.
-- **Pendiente de datos:** descartar los `pc_omitido` falsos de PC 1–6 del 22/10.
+**Todo mergeado (24/10):**
+- **#253 (Fase 0):** la ida sale de SR por la calle que usan los choferes, compartida con el regreso.
+  - `trazado-calles.json`: `tramos.ida[0..11]` reemplazado por `reverse(salomon[129..137])`. El trazado base pasa de 1065 a 1062 vértices.
+  - **Aplicado en prod el 23/10** con OK del CTO, vía `cargar-linea-16.ts --apply`. Había 0 sesiones en vivo y el dry-run marcaba 1 escritura.
+  - Después: re-dry-run con 0 escrituras y 1062 vértices.
+  - **Rollback:** el backup JSON quedó en el `/tmp` de la sesión, que ya se borró. Para volver atrás:
+    1. `git show 2891bd9^:scripts/data/linea-16/trazado-calles.json`
+    2. Reponer ese archivo.
+    3. `cargar-linea-16.ts --apply`, con 0 sesiones activas.
+- **#254 (Fase 1b):** ancla de la vuelta al COMENZAR dentro del radio de SR (`terminalParaInicio`, fix de 2 min con accuracy ≤ radio). La flecha ya no toma un segmento opuesto a baja velocidad (`snapARuta` con `rumboPrevio`, 120°).
+- **#255 (Fase 1a):**
+  - `evaluarFixFase` exige rumbo propio a ≥ 2 m/s, alineado ±60° con la mitad candidata.
+  - Candado de retorno a 1500 m.
+  - `filtrarPorSentido` descarta PC a más de 90°. Exentos: terminal, retorno y espera.
+  - Replay con trazas reales en `fase-vuelta.replay.test.ts`; fixture `l16-piloto-trazas.json`.
+- **#256 (Fases 2.2 y 2.4):**
+  - Vecinos con la fase acotada a la jornada.
+  - `sesionId` y `vehiculoId` en los logs pino de requests móviles.
+  - pino en el worker.
+  - Tags `placa` y `sesionId` en Sentry, más contexto y tag `outboxAtrasado`.
+- **#257 (Fase 2.1):**
+  - El job `cerrarSesionesVencidas` cierra las sesiones con `venceAt` vencido hace más de 4 h y sin GPS en 2 h. Lotes de 500. Saca la sesión de la fila con `retirarFilaDeSesiones`, el mismo helper que usa el logout.
+  - El banner "vencida" se limpia al refrescar con éxito aunque el paquete sea igual.
+  - El re-login forzado en la app se descartó. Ya lo cubre `SESION_NO_VIGENTE` en el refresh.
+  - El CI fallaba por un test frágil (`findFirst` sin filtro por documento), arreglado.
+- **#258 (Fase 2.3):** la fase de ida/regreso se hereda de la fila anterior solo si `actualizado_ms` tiene menos de 2 h.
+- Reviews: `/code-review` y `/ponytail-review` en cada PR. **Codex: no verificado (sin cuota)**. Correrlo sobre #254–#258 cuando vuelva.
+
+**Pendiente antes del piloto del lunes 27/10 (todo del CTO):**
+1. **Deploy de API y worker**, porque #256 y #257 son de servidor: `GOOGLE_MAPS_MAP_ID=430254e21207af4870419ff7 scripts/deploy-gcp.sh <tag>`.
+2. **OTA**, que lleva #254, #255, #256 (Sentry), #257 (banner) y #258.
+   - Comando: `cd apps/mobile && ./scripts/publicar-ota.sh "..."`, con el árbol limpio en `main`.
+   - Desde #253 no hay cambios nativos (ni package.json ni plugins), pero conviene comparar el fingerprint con el del APK instalado.
+   - Antes de publicar, verificar que el bundle traiga API URL, DSN y los símbolos nuevos (`rumboDeMovimiento`, `filtrarPorSentido`, `HERENCIA_FASE_MAX_MS`).
+3. **Choferes:** que reabran la app para bajar la OTA y el trazado nuevo.
+4. **Datos:** descartar los `pc_omitido` falsos de PC 1–6 del 22/10 en `/infracciones`.
+
+**Abierto:**
+- No se sabe por qué el outbox de PIF dejó de sincronizar (184 puntos en el servidor). Ahora queda visible en Sentry (`outboxAtrasado`). Si se repite, revisar el teléfono: ahorro de batería, datos y versión de la OTA.
+- Las trazas crudas del 21 y 22/10 (`rec_*.json`) se perdieron con el `/tmp`. Solo queda el recorte del fixture.
 
 ## En curso — 2026-10-22: /en-vivo solo con la jornada de hoy + rediseño B
 
