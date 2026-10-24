@@ -1,17 +1,25 @@
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '../../shared/components/Button';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import type { FilaSalidaUi } from './use-fila-salida';
 
 /**
  * Tarjeta de la fila de salida dentro del sheet de operación. Con fila abierta: posición, trufi de
- * adelante, hora de salida, cuenta regresiva y SALIR (deshabilitado con la cuenta hasta el turno).
+ * adelante, hora de salida, cuenta regresiva y SALIR (antes del turno pide confirmación: salida anticipada).
  * Sin fila: solo el botón de respaldo "Estoy en la fila" cuando la detección no lo hizo y el trufi
  * está cerca de la terminal. FINALIZAR RUTA no depende de esto.
  */
 export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
   const { vista, ocupado, error, puedeEstoyEnLaFila, salir, estoyEnLaFila } = fila;
+  const [confirmarAnticipada, setConfirmarAnticipada] = useState(false);
+  // La confirmación solo tiene sentido con fila y antes del turno: si desaparece o llega el turno, se cierra.
+  const sinAnticipada = !vista || vista.habilitado;
+  useEffect(() => {
+    if (sinAnticipada) setConfirmarAnticipada(false);
+  }, [sinAnticipada]);
 
   if (!vista) {
     // Un error suelto, sin botón ni fila que lo expliquen, no se muestra.
@@ -72,12 +80,14 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
         <Button
           variant="accent"
           loading={ocupado}
-          disabled={!vista.habilitado || ocupado}
-          onPress={salir}
+          disabled={ocupado}
+          onPress={vista.habilitado ? salir : () => setConfirmarAnticipada(true)}
           style={styles.salir}
           textStyle={styles.salirTexto}
           accessibilityHint={
-            vista.habilitado ? 'Registra tu salida de la terminal' : 'Se habilita cuando sea tu turno'
+            vista.habilitado
+              ? 'Registra tu salida de la terminal'
+              : 'Aún no es tu turno: pide confirmar la salida anticipada'
           }
           fullWidth
         >
@@ -89,6 +99,20 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
           </Text>
         ) : null}
       </View>
+      <QuivoConfirmDialog
+        visible={confirmarAnticipada}
+        variant="danger"
+        icon="alert-circle"
+        title="¿Salir antes de tu turno?"
+        message="Solo si el delegado te autorizó. Quedará registrada como salida anticipada."
+        cancelLabel="Cancelar"
+        confirmLabel="Salir"
+        onCancel={() => setConfirmarAnticipada(false)}
+        onConfirm={() => {
+          setConfirmarAnticipada(false);
+          salir();
+        }}
+      />
     </View>
   );
 }

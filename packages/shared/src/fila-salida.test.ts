@@ -115,26 +115,92 @@ describe('calcularFilaSalida', () => {
     );
   });
 
-  it('un solo trufi sin salidas previas: ETA = su llegada, habilitado de inmediato', () => {
+  it('un solo trufi sin salidas previas: ETA = llegada + frecuencia, habilitado desde ahí', () => {
     const [p] = calcularFilaSalida({
       ...base,
       enFila: [fila('a', bo(9))],
       ultimaSalidaTs: null,
-      ahora: bo(9, 3),
+      ahora: bo(9, 9),
     });
     expect(p).toMatchObject({ posicion: 1, habilitado: true, demorado: true });
-    expect(p!.etaTs).toEqual(bo(9));
+    expect(p!.etaTs).toEqual(bo(9, 6));
     expect(p!.esperaMs).toBe(0);
   });
 
-  it('sin salidas previas y recién llegado: habilitado exacto en ahora = ETA, no demorado', () => {
+  it('sin salidas previas y recién llegado: espera la frecuencia, no habilitado', () => {
     const [p] = calcularFilaSalida({
       ...base,
       enFila: [fila('a', bo(9))],
       ultimaSalidaTs: null,
       ahora: bo(9),
     });
+    expect(p).toMatchObject({ habilitado: false, demorado: false });
+    expect(p!.esperaMs).toBe(min(6));
+  });
+
+  it('sin salidas previas y sin frecuencia: ETA = llegada, habilitado exacto, no demorado', () => {
+    const [p] = calcularFilaSalida({
+      reglas: [],
+      baseMin: null,
+      enFila: [fila('a', bo(9))],
+      ultimaSalidaTs: null,
+      ahora: bo(9),
+    });
     expect(p).toMatchObject({ habilitado: true, demorado: false });
+  });
+
+  it('llegada tardía (después de última salida + frec): manda llegada + frec', () => {
+    const [p] = calcularFilaSalida({
+      ...base,
+      enFila: [fila('a', bo(9, 30))],
+      ultimaSalidaTs: bo(9),
+      ahora: bo(9, 31),
+    });
+    expect(p!.etaTs).toEqual(bo(9, 36));
+  });
+
+  it('llegada temprana (antes de última salida + frec): manda la última salida', () => {
+    const [p] = calcularFilaSalida({
+      ...base,
+      enFila: [fila('a', bo(8, 50))],
+      ultimaSalidaTs: bo(9),
+      ahora: bo(9, 1),
+    });
+    expect(p!.etaTs).toEqual(bo(9, 6));
+  });
+
+  it('movido al final (ordenTs = ahora, llegada vieja, sin salida reciente): ETA = ordenTs', () => {
+    const [p] = calcularFilaSalida({
+      ...base,
+      enFila: [{ ...fila('a', bo(8, 0)), ordenTs: bo(9, 30) }],
+      ultimaSalidaTs: bo(8, 10),
+      ahora: bo(9, 30),
+    });
+    expect(p!.etaTs).toEqual(bo(9, 30));
+    expect(p!.habilitado).toBe(true);
+  });
+
+  it('2.º con llegada tardía: manda su llegada + frec, no la cadena', () => {
+    const r = calcularFilaSalida({
+      ...base,
+      enFila: [fila('a', bo(8, 50)), fila('b', bo(9, 20))],
+      ultimaSalidaTs: bo(9),
+      ahora: bo(9, 1),
+    });
+    // a: 9:06; b: max(9:06 + 6 = 9:12, 9:20 + 6 = 9:26) = 9:26.
+    expect(r.map((x) => x.etaTs)).toEqual([bo(9, 6), bo(9, 26)]);
+  });
+
+  it('franja: la espera desde la llegada usa la frecuencia vigente en la llegada', () => {
+    const reglas = [regla({ minutos: 10, desdeMin: 7 * 60, hastaMin: 8 * 60 })];
+    const [p] = calcularFilaSalida({
+      enFila: [fila('a', bo(7, 55))],
+      ultimaSalidaTs: null,
+      reglas,
+      baseMin: 6,
+      ahora: bo(7, 56),
+    });
+    expect(p!.etaTs).toEqual(bo(8, 5));
   });
 
   it('margen de demora: a ETA+1 min no demorado y la ETA del 2.º ya corre (continuo); ETA+2 min+1 ms demorado', () => {
@@ -143,7 +209,7 @@ describe('calcularFilaSalida', () => {
       enFila: [fila('a', bo(9)), fila('b', bo(9))],
       ultimaSalidaTs: null,
     };
-    const eta = bo(9).getTime();
+    const eta = bo(9, 6).getTime();
     const ahoraDentro = eta + 60_000;
     const dentro = calcularFilaSalida({ ...args, ahora: new Date(ahoraDentro) });
     expect(dentro[0]).toMatchObject({ habilitado: true, demorado: false });
@@ -179,17 +245,6 @@ describe('calcularFilaSalida', () => {
       ahora: bo(9, 1),
     });
     expect(r.map((x) => x.id)).toEqual(['b', 'a']);
-  });
-
-  it('ETA del 1.º nunca es anterior a su llegada (llegó después de cumplida la frecuencia)', () => {
-    const [p] = calcularFilaSalida({
-      ...base,
-      enFila: [fila('a', bo(9, 30))],
-      ultimaSalidaTs: bo(9),
-      ahora: bo(9, 30),
-    });
-    expect(p!.etaTs).toEqual(bo(9, 30));
-    expect(p!.habilitado).toBe(true);
   });
 
   it('habilitado solo para el 1.º, desde su ETA', () => {
