@@ -529,7 +529,7 @@ describe('AuthMovilService', () => {
     if (login.status !== 'autenticado') throw new Error('Se esperaba autenticación completa');
 
     const conductor = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
-      tx.conductor.findFirstOrThrow({ where: { sindicatoId }, select: { id: true } }),
+      tx.conductor.findFirstOrThrow({ where: { sindicatoId, documentoIdentidad: documento }, select: { id: true } }),
     );
     await service.establecerPinConductor(
       { userId: 'admin-auth-movil-test', rol: 'admin_quivo', sindicatoId: null },
