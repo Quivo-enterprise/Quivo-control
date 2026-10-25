@@ -124,6 +124,7 @@ export function OperationScreen(
     terminal: terminalZona,
     posicion: gps.posicionActual,
     obtenerAccessToken: props.obtenerAccessToken,
+    confirmarLlegadaTerminal: gps.confirmarLlegadaTerminal,
   });
   // Progreso de la vuelta (RF-GPS-054): pasos en cualquier orden, omitidos en rojo, vuelta al
   // cerrar en el punto de inicio. Lo escribe el registro de cumplimientos (foreground y headless);
@@ -134,6 +135,14 @@ export function OperationScreen(
     gps.posicionActual,
     gps.tracking,
     vueltaActual.designacionActiva,
+  );
+  // Número del PC en el orden efectivo (igual que la voz); `undefined` si no está en él.
+  const numeroDePuntoControl = useCallback(
+    (puntoControlId: string): number | undefined => {
+      const idx = progreso.ordenEfectivo.findIndex((p) => p.id === puntoControlId);
+      return idx >= 0 ? idx + 1 : undefined;
+    },
+    [progreso.ordenEfectivo],
   );
   const [altoBannerVuelta, setAltoBannerVuelta] = useState(0);
   const [observacion, setObservacion] = useState('');
@@ -790,7 +799,10 @@ export function OperationScreen(
         </View>
       </Modal>
 
-      <ControlFeedbackToast ultimaDeteccion={gps.ultimaDeteccion} />
+      <ControlFeedbackToast
+        ultimaDeteccion={gps.ultimaDeteccion}
+        numeroDePuntoControl={numeroDePuntoControl}
+      />
       <ContadorEsperaMolinos
         pastilla={vueltaActual.pastillaEspera}
         bottom={altoSheetVisible + quivoSpacing.md}
