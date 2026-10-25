@@ -225,7 +225,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
       ] as const) {
         sesiones[k] = await crearSesion(asigCirc, k !== 'ciclo');
       }
-      sesiones.sinRoles = await crearSesion(asigSinRoles, false);
+      sesiones.sinRoles = await crearSesion(asigSinRoles);
       reglaId = (
         await tx.regla.create({ data: { sindicatoId: sindicatoA, nombre: 'Sanción genérica', tipo: 'operativo', gravedad: 'grave', aplicaA: 'conductor' } })
       ).id;

@@ -210,7 +210,11 @@ function clasificarFrescura(
   recorridoEstado: string | null,
   recorridoEstadoTs: Date | null,
   ultimoFixTs: Date | null,
+  sesionCerrada = false,
 ): EstadoFrescura {
+  // Sesión de LOGIN cerrada (logout): nunca "reporta", aunque el flush del logout deje la ingesta
+  // fresca y `recorridoEstado` siga en 'en_curso'.
+  if (sesionCerrada) return 'finalizado';
   if (recorridoEstado === 'finalizado' && recorridoEstadoTs) {
     const finMs = recorridoEstadoTs.getTime() + TOLERANCIA_FIN_RECORRIDO_MS;
     const fixEsPosteriorAlFin = ultimoFixTs !== null && ultimoFixTs.getTime() > finMs;
@@ -230,6 +234,9 @@ function clasificarFrescura(
   return 'detenido';
 }
 
+/** Única definición de "sesión de login abierta" (la cerrada se muestra `finalizado`). */
+const sesionActiva = (s: { fin: Date | null; estado: string }) => s.fin === null && s.estado === 'activa';
+
 /**
  * Deriva el bloque de frescura. `inicio` es el fallback de `inactivaDesdeMs` para sesiones
  * que nunca recibieron un punto: sin él, una sesión colgada sin datos tendría inactividad
@@ -247,6 +254,7 @@ export function derivarFrescura(
   ultimoIngresoTs: Date | null,
   recorridoEstado: string | null = null,
   recorridoEstadoTs: Date | null = null,
+  sesionCerrada = false,
 ): FrescuraEnVivo {
   const antiguedadFixMs = diferenciaMs(ahora, ultimoFixTs);
   const antiguedadIngestaMs = diferenciaMs(ahora, ultimoIngresoTs);
@@ -256,6 +264,7 @@ export function derivarFrescura(
     recorridoEstado,
     recorridoEstadoTs,
     ultimoFixTs,
+    sesionCerrada,
   );
   return {
     ultimoFixTs: ultimoFixTs?.toISOString() ?? null,
@@ -268,7 +277,7 @@ export function derivarFrescura(
     // Solo no-null cuando el estado ganó "finalizado" (plan §Fase A) — un `recorridoEstadoTs`
     // de un `en_curso` (o de un `finalizado` descartado por un fix posterior) no es una hora
     // de fin válida para mostrarle al cliente.
-    recorridoFinTs: estadoFrescura === 'finalizado' ? (recorridoEstadoTs?.toISOString() ?? null) : null,
+    recorridoFinTs: estadoFrescura === 'finalizado' && recorridoEstado === 'finalizado' ? (recorridoEstadoTs?.toISOString() ?? null) : null,
     pausaDesdeTs: estadoFrescura === 'en_pausa' ? (recorridoEstadoTs?.toISOString() ?? null) : null,
   };
 }
@@ -381,7 +390,7 @@ export class EnVivoService {
           fin: f.fin?.toISOString() ?? null,
           estado: f.estado,
           deviceId: f.deviceId,
-          activa: f.fin === null && f.estado === 'activa',
+          activa: sesionActiva(f),
           vehiculoPlaca: f.vehiculoPlaca,
           conductorNombre: f.conductorNombre,
           lineaNombre: f.lineaNombre,
@@ -393,6 +402,7 @@ export class EnVivoService {
             f.ultimoIngresoTs,
             f.recorridoEstado,
             f.recorridoEstadoTs,
+            !sesionActiva(f),
           ),
         }),
       );
@@ -552,7 +562,17 @@ export class EnVivoService {
         LIMIT ${LIMITE_SESIONES_POSICIONES}
       `;
 
-      return filas.map((f) =>
+      // Una fila por vehículo: gana la sesión activa (fin NULL) y, entre iguales, la de `inicio` más
+      // reciente. No se usa el fix: una sesión activa colgada (teléfono caído sin logout) tiene un fix
+      // viejo y taparía a la nueva que aún no reportó. El orden de `filas` se conserva.
+      const mejor = new Map<string, (typeof filas)[number]>();
+      for (const f of filas) {
+        const m = mejor.get(f.vehiculoId);
+        const gana = !m || ((f.fin === null) !== (m.fin === null) ? f.fin === null : f.inicio > m.inicio);
+        if (gana) mejor.set(f.vehiculoId, f);
+      }
+      const unicas = filas.filter((f) => mejor.get(f.vehiculoId) === f);
+      return unicas.map((f) =>
         PosicionEnVivoSchema.parse({
           id: f.id,
           deviceId: f.deviceId,
@@ -580,7 +600,7 @@ export class EnVivoService {
                       ? f.vueltaEsperaLlegadaTs.toISOString()
                       : null,
                 },
-          activa: f.fin === null && f.estado === 'activa',
+          activa: sesionActiva(f),
           vehiculoPlaca: f.vehiculoPlaca,
           conductorNombre: f.conductorNombre,
           lineaId: f.lineaId,
@@ -598,6 +618,7 @@ export class EnVivoService {
             f.ultimoIngresoTs,
             f.recorridoEstado,
             f.recorridoEstadoTs,
+            !sesionActiva(f),
           ),
         }),
       );
@@ -787,6 +808,7 @@ export class EnVivoService {
           agregados?.ultimoIngresoTs ?? null,
           sesion.recorridoEstado,
           sesion.recorridoEstadoTs,
+          !sesionActiva(sesion),
         ),
       });
     });
