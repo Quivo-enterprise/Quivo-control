@@ -10,10 +10,30 @@
 
 Plan: [`docs/plan-pre-piloto-27-10.md`](plan-pre-piloto-27-10.md).
 
-- **PR A** (`fix/en-vivo-sesiones-cerradas`, API + web): sesión cerrada mostrada "Reportando" y sesión vieja duplicada en `/en-vivo`.
-- **PR B** (`fix/relogin-fila-toast`, OTA): el re-login emite `inicio_recorrido` para la sesión nueva; "Estoy en la fila" cierra la vuelta; el toast muestra el número de PC.
-- **PR C** (`fix/heartbeat-quieto`, OTA): un vehículo quieto en recorrido sigue mandando un fix por heartbeat. Primero se diagnostica en el emulador.
-- **Corrección:** el km 26 tiene `obligatorio=false`, así que el ramal Molinos mal trazado no genera `pc_omitido`; su efecto es visual. Se corrige después del piloto, con la traza real de una vuelta designada.
+**Mergeado:**
+- **#267** (API): `/en-vivo` muestra la sesión cerrada como `finalizado` y una sola sesión por vehículo (la activa; entre activas, la de `inicio` más reciente). **Deploy r34 pendiente: lo corre el CTO** (el clasificador lo bloquea aun con autorización explícita).
+- **#266** (móvil): el re-enganche con sesión NUEVA (re-login a mitad del día) emite `inicio_recorrido`, ancla la vuelta y silencia el terminal si está dentro; misma sesión o sin clave guardada no re-emite. "Estoy en la fila" confirma el terminal antes del POST. Toast "Punto de control N".
+- **#268** (móvil): latido de primer plano. **Causa raíz** (doc del SDK 5.4.0): `onHeartbeat` solo dispara en estado *stationary* y la app fuerza *moving* todo el recorrido → parado no salía ningún fix ni corría el heartbeat (no era MIUI). Ticker de 60 s corre `onHeartbeat` si no hubo fix ni latido en 50 s. **Solo primer plano.**
+- **#269** (móvil): `applicationId` → `com.quivotech.conductor.piloto`.
+
+**Licencia Transistorsoft:** el trial de `com.quivotech.conductor.app` **venció el 25/10** en tiempo de ejecución: el APK 16 falla en `start()` con `LICENSE_VALIDATION_FAILURE` (Sentry QUIVO-CONTROL-CONDUCTOR-J/K) y la app dice "No se pudo activar el GPS". Decisión del CTO: trial nuevo (aún en pruebas, sin compra) para `.piloto`, **vence el 2026-11-24** (`max_build_stamp` 20261124). Cargado como secret `TRANSISTORSOFT_LICENSE_KEY` (EAS, `production`).
+
+**APK 17** (EAS build `785c5b42`, `main@014ac97`, versionCode 2, paquete `.piloto`, runtime `8bd0b896` — `eas fingerprint:compare` coincide con local; canal `production`): https://expo.dev/artifacts/eas/DBAdtS6LT9mMid-yIv2sRGBom1qX2-8yxjpaPsAZ640.apk. Keystore nuevo (SHA-1 `5947036f7b08f7d86b92ed7e255a9fa492420685`), agregado a la key de Maps `quivo-conductor-maps-android` junto al de `.app`.
+**OTA `01a17412`** (#266+#268) quedó publicada para el runtime viejo `547d52e7` (APK 16, ya sin GPS): huérfana; el APK 17 trae ese JS.
+
+**Verificado en emulador con el APK 17:** GPS arranca ("trial license key has 29 days remaining"); COMENZAR en SR → vuelta 1, 1/16, fila posición 1. Quieto con la app en pantalla: el fix del servidor avanza cada ~60 s. **Minimizada: se congela** (limitación conocida). Re-login a mitad del recorrido: la sesión nueva emitió `inicio_recorrido` y el servidor le abrió la vuelta 1; la entrada automática a la fila cerró SR. **No probado en vivo:** el botón manual "Estoy en la fila" (la detección automática le ganó; cubierto por test unitario).
+
+**Pendiente antes del lunes:**
+- CTO: deploy r34; instalar el APK 17 en los 6 teléfonos (Cerrar sesión en la app vieja → desinstalar → instalar → login → ubicación "todo el tiempo", notificaciones, actividad física → batería sin restricciones + inicio automático → probar COMENZAR); limpiar Appium Settings de su teléfono; decidir infracciones de prueba (PIC b4b9cfe0/c7f91ff7, d88805f3, PC8 del 22/10).
+- Operativo: en la fila, la app abierta y la pantalla encendida (sin eso no hay latido). Designar al menos una vuelta a Molinos para tener la traza real.
+
+**Después del piloto:**
+- Latido nativo en segundo plano.
+- Trazado Molinos con la traza real (el km 26 tiene `obligatorio=false`: el efecto actual es visual).
+- Numeración de PC del panel según la variante.
+- Marcador antes de SR en el detalle de `/en-vivo`.
+- **Comprar la licencia antes del 24/11** o se repite el cambio de paquete.
+- Codex sobre #261–#269 cuando vuelva la cuota.
 
 ## 2026-10-23: fallas del piloto del 22/10 (fase invertida al salir de SR)
 
