@@ -66,6 +66,10 @@ import {
   crearEstadoInicioRecorrido,
   reiniciarEstadoInicioRecorrido,
 } from './inicio-recorrido-retry';
+import {
+  debeCorrerLatidoPrimerPlano,
+  INTERVALO_LATIDO_PRIMER_PLANO_MS,
+} from './latido-primer-plano';
 import { resolverResultadoIniciar } from './resultado-iniciar-recorrido';
 import { claveProgresoVuelta, fechaLocal, terminalParaInicio } from './progreso-vuelta';
 import { reiniciarVueltaEnCurso } from './progreso-vuelta-store';
@@ -380,6 +384,12 @@ export function useGpsOperativo(
   // siempre en `false`, el valor inicial). Se actualiza en los tres lugares donde cambia
   // `tracking` (reenganche, `iniciar()`, `detener()`).
   const trackingRef = useRef(false);
+  const ultimoLatidoTs = useRef(0);
+  const ultimoFixEvidenciaTs = useRef(0);
+  // Latido en curso (cualquier origen): el ticker no solapa uno nuevo encima.
+  const latidoEnCurso = useRef(false);
+  // El fix forzado del propio latido vuelve por `onLocation`: no cuenta como movimiento del vehículo.
+  const forzandoFixLatido = useRef(false);
   const estaEnRecorrido = useCallback(() => trackingRef.current, []);
   // R1 (merge post-drenado, Entrega 31a — gap de revisión): `detener()` dispara
   // `restaurarComportamientoNormal` (setConfig disableStopDetection:false) SIN esperarlo, para
@@ -532,6 +542,8 @@ export function useGpsOperativo(
       // nunca debería depender de él como único filtro.
       alimentarEstadoVisual(fixVisualDesdeLocation(location));
       if (esFixVisual(location)) return;
+      // Hora de RECEPCIÓN (no `location.timestamp`, que puede ser viejo/mock) del último fix de evidencia.
+      if (!forzandoFixLatido.current) ultimoFixEvidenciaTs.current = Date.now();
 
       // El contador cuenta UBICACIONES RECIBIDAS del SDK, y se incrementa antes de cualquier
       // `await`: si la escritura al outbox falla, la línea "Puntos GPS: N" del veredicto NO
@@ -751,7 +763,7 @@ export function useGpsOperativo(
    * — ver `manejarHeartbeatHeadless` (`gps/headless-task.ts`) para la mitad headless y el
    * porqué completo. Sin un fix nuevo (vehículo detenido, `distanceFilter: 15`) ninguna visita
    * en curso puede cerrar por el camino normal — el `heartbeat` del SDK
-   * (`heartbeatInterval: 60`) es el único evento que sigue llegando con el vehículo quieto.
+   * (`heartbeatInterval: 60`) llega con el vehículo quieto (solo en estado estacionario; ver el ticker abajo).
    *
    * Deliberadamente NO escribe ningún `gps_point`: el heartbeat no trae una posición fresca
    * (`HeartbeatEvent.location` es "the last-known location", no una lectura nueva) — solo
@@ -769,119 +781,155 @@ export function useGpsOperativo(
    * que el paso se contaba dos veces. `filtrarSesionActual: false` — a diferencia del heartbeat
    * headless, `puntosControlDetectados` ya está scopeado a la sesión actual (`sembrarCumplimientos`
    * lo reemplaza entero en cada cambio de `sesionId`), no hace falta filtrar de nuevo.
+   *
+   * El `heartbeat` del SDK SOLO dispara en estado estacionario ("will cease once the plugin enters
+   * the moving state"), y esta app fuerza MOVING todo el recorrido (`disableStopDetection` +
+   * `changePace(true)`): un vehículo parado en la fila no recibía latido. El ticker de primer plano
+   * (`useEffect` de abajo) invoca este mismo handler cada 60 s mientras hay recorrido, SOLO si el
+   * vehículo está parado (sin fix de evidencia hace ≥ 50 s: en marcha nunca corrían los caminos
+   * exclusivos del latido) y no corrió un latido hace < 50 s (`ultimoLatidoTs`). El fix del propio
+   * latido llega unos segundos después del tick y cuenta como fix: el siguiente tick (60 s) ve
+   * ≥ 50 s sin fixes mientras ese fix llegue en < 10 s; si no, se salta un tick.
+   * shortcut: solo primer plano; con la app en segundo plano no hay latido — después del piloto, solución nativa
+   * (los timers JS se pausan con el host en background, RN Android).
    */
   const onHeartbeat = useCallback(async () => {
-    // Entrega 2 (drenado oportunista del outbox en background): fuerza un fix fresco
-    // (`HeartbeatEvent.location` es la ÚLTIMA posición conocida, no una lectura nueva — ver el
-    // docblock de arriba) y lo persiste igual que cualquier otro punto — si el vehículo lleva
-    // rato detenido sin emitir por `onLocation` (`distanceFilter: 15` no dispara nada quieto),
-    // este es el único mecanismo que sigue dejando evidencia GPS cada 60 s durante ese layover.
-    // Va ANTES del resto (confirmación de visitas/anuncios) y en su PROPIO try/catch: un fallo
-    // acá es de instrumentación, nunca debe impedir que el resto del heartbeat corra.
+    ultimoLatidoTs.current = Date.now();
+    latidoEnCurso.current = true;
     try {
-      await BackgroundGeolocation.getCurrentPosition({ samples: 1, persist: true });
-    } catch (error) {
-      reportarErrorUbicacionSentry(error, {
-        contexto: 'gps-foreground',
-        paso: 'heartbeat-getCurrentPosition',
-      });
-    }
-    // G1 (merge post-drenado, Entrega 31a): el heartbeat es, junto con el regreso a
-    // foreground (`crearManejadorForegroundActivo`), uno de los dos puntos que NO dependen
-    // de `onMotionChange`/`ACTIVITY_RECOGNITION` para notar que el plugin volvió a
-    // estacionario — ver el docblock de `reafirmarMovimientoSiEstacionario`
-    // (`gps/seguimiento-continuo.ts`). Corre cada 60 s pase lo que pase, con o sin ese
-    // permiso concedido.
-    try {
-      await reafirmarMovimientoSiEstacionario(BackgroundGeolocation, estaEnRecorrido);
-    } catch (error) {
-      Sentry.captureException(error, {
-        tags: { contexto: 'gps-foreground', paso: 'heartbeat-reafirmar-movimiento' },
-      });
-    }
-    // LOW-MED (hallazgo de revisión, QUI-247): mismo reintento oportunista que `onLocation`
-    // (ver ese comentario) — el heartbeat es el ÚNICO evento que sigue llegando cada 60 s con
-    // o sin movimiento, así que sin este segundo enganche un layover prolongado justo después
-    // de un `iniciar()` que falló al escribir `inicio_recorrido` podía dejar el marcador sin
-    // ningún reintento hasta el próximo fix de `onLocation` (que puede tardar de más con el
-    // vehículo detenido).
-    if (!estadoInicioRecorrido.confirmado) {
+      // Entrega 2 (drenado oportunista del outbox en background): fuerza un fix fresco
+      // (`HeartbeatEvent.location` es la ÚLTIMA posición conocida, no una lectura nueva — ver el
+      // docblock de arriba) y lo persiste igual que cualquier otro punto — si el vehículo lleva
+      // rato detenido sin emitir por `onLocation` (`distanceFilter: 15` no dispara nada quieto),
+      // este es el único mecanismo que sigue dejando evidencia GPS cada 60 s durante ese layover.
+      // Va ANTES del resto (confirmación de visitas/anuncios) y en su PROPIO try/catch: un fallo
+      // acá es de instrumentación, nunca debe impedir que el resto del heartbeat corra.
+      forzandoFixLatido.current = true;
       try {
-        await asegurarInicioRecorrido(
-          estadoInicioRecorrido,
-          { abrirOutbox, encolarEvento },
-          { deviceId, sesionId },
-        );
+        await BackgroundGeolocation.getCurrentPosition({ samples: 1, persist: true });
+      } catch (error) {
+        reportarErrorUbicacionSentry(error, {
+          contexto: 'gps-foreground',
+          paso: 'heartbeat-getCurrentPosition',
+        });
+      } finally {
+        forzandoFixLatido.current = false;
+      }
+      // Si el recorrido terminó durante la espera, no hay nada que confirmar ni anunciar.
+      if (!trackingRef.current) return;
+      // G1 (merge post-drenado, Entrega 31a): el heartbeat es, junto con el regreso a
+      // foreground (`crearManejadorForegroundActivo`), uno de los dos puntos que NO dependen
+      // de `onMotionChange`/`ACTIVITY_RECOGNITION` para notar que el plugin volvió a
+      // estacionario — ver el docblock de `reafirmarMovimientoSiEstacionario`
+      // (`gps/seguimiento-continuo.ts`). Corre con o sin ese permiso concedido.
+      try {
+        await reafirmarMovimientoSiEstacionario(BackgroundGeolocation, estaEnRecorrido);
       } catch (error) {
         Sentry.captureException(error, {
-          tags: { contexto: 'gps-foreground', paso: 'heartbeat-reintentar-inicio-recorrido' },
+          tags: { contexto: 'gps-foreground', paso: 'heartbeat-reafirmar-movimiento' },
         });
       }
-    }
-    try {
-      await semillaPromise.current;
-      const db = await abrirOutbox();
-      const { emitir, anunciosLlegada } = await confirmarVisitasVencidasEnCola(
-        db,
-        deviceId,
-        sesionId,
-        puntosControlDetectados,
-        Date.now(),
-        UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
-        false,
-        // Mismo gate que `onLocation`: sin semilla hidratada no se procesa cumplimiento.
-        semillaHidratadaRef.current ? puntosControl : [],
-      );
-      if (emitir.length > 0) {
-        // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
-        // ve el punto tachado aunque haya sido el heartbeat, no un fix nuevo, quien lo cerró.
-        const ultima = emitir[emitir.length - 1]?.deteccion ?? null;
-        if (!ultima || !terminalSilenciado(ultima.puntoControlId)) setUltimaDeteccion(ultima);
-      }
-      // REDISEÑO: fallback de TIEMPO del anuncio de llegada — ver el docblock de
-      // `confirmarVisitasVencidasEnCola`. Mismo camino de ejecución que `onLocation`.
-      // FIX POST-REVISIÓN (hallazgo 3): el chime (`setUltimoAnuncioLlegada`) solo se dispara si
-      // `anunciarLlegadaPuntoControl` reclamó Y programó de verdad — ver el comentario largo en
-      // `onLocation`, arriba.
-      for (const anuncio of anunciosLlegada) {
-        anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
-          sesionId,
-          puntosControl,
-        })
-          .then((exitoso) => {
-            if (exitoso) {
-              setUltimoAnuncioLlegada({
-                puntoControlId: anuncio.puntoControlId,
-                pasada: anuncio.pasada,
-                motivo: anuncio.motivo,
-              });
-            }
-          })
-          .catch((error: unknown) => {
-            Sentry.captureException(error, {
-              tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-heartbeat' },
-            });
+      // LOW-MED (hallazgo de revisión, QUI-247): mismo reintento oportunista que `onLocation`
+      // (ver ese comentario) — con el vehículo quieto el latido (ticker de primer plano) es lo que
+      // sigue corriendo cada 60 s, así que sin este segundo enganche un layover prolongado justo después
+      // de un `iniciar()` que falló al escribir `inicio_recorrido` podía dejar el marcador sin
+      // ningún reintento hasta el próximo fix de `onLocation` (que puede tardar de más con el
+      // vehículo detenido).
+      if (!estadoInicioRecorrido.confirmado) {
+        try {
+          await asegurarInicioRecorrido(
+            estadoInicioRecorrido,
+            { abrirOutbox, encolarEvento },
+            { deviceId, sesionId },
+          );
+        } catch (error) {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'heartbeat-reintentar-inicio-recorrido' },
           });
+        }
       }
-    } catch (error) {
-      console.error('[QUIVO][gps] No se pudo procesar el heartbeat', error);
-      Sentry.captureException(error, {
-        tags: { contexto: 'gps-foreground', paso: 'procesar-heartbeat' },
-      });
+      try {
+        await semillaPromise.current;
+        const db = await abrirOutbox();
+        const { emitir, anunciosLlegada } = await confirmarVisitasVencidasEnCola(
+          db,
+          deviceId,
+          sesionId,
+          puntosControlDetectados,
+          Date.now(),
+          UMBRAL_ANTIGUEDAD_CANDIDATO_MS,
+          false,
+          // Mismo gate que `onLocation`: sin semilla hidratada no se procesa cumplimiento.
+          semillaHidratadaRef.current ? puntosControl : [],
+        );
+        if (emitir.length > 0) {
+          // Refleja la confirmación forzada en la UI igual que una confirmación normal — el chofer
+          // ve el punto tachado aunque haya sido el heartbeat, no un fix nuevo, quien lo cerró.
+          const ultima = emitir[emitir.length - 1]?.deteccion ?? null;
+          if (!ultima || !terminalSilenciado(ultima.puntoControlId)) setUltimaDeteccion(ultima);
+        }
+        // REDISEÑO: fallback de TIEMPO del anuncio de llegada — ver el docblock de
+        // `confirmarVisitasVencidasEnCola`. Mismo camino de ejecución que `onLocation`.
+        // FIX POST-REVISIÓN (hallazgo 3): el chime (`setUltimoAnuncioLlegada`) solo se dispara si
+        // `anunciarLlegadaPuntoControl` reclamó Y programó de verdad — ver el comentario largo en
+        // `onLocation`, arriba.
+        for (const anuncio of anunciosLlegada) {
+          anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
+            sesionId,
+            puntosControl,
+          })
+            .then((exitoso) => {
+              if (exitoso) {
+                setUltimoAnuncioLlegada({
+                  puntoControlId: anuncio.puntoControlId,
+                  pasada: anuncio.pasada,
+                  motivo: anuncio.motivo,
+                });
+              }
+            })
+            .catch((error: unknown) => {
+              Sentry.captureException(error, {
+                tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-heartbeat' },
+              });
+            });
+        }
+      } catch (error) {
+        console.error('[QUIVO][gps] No se pudo procesar el heartbeat', error);
+        Sentry.captureException(error, {
+          tags: { contexto: 'gps-foreground', paso: 'procesar-heartbeat' },
+        });
+      }
+      // Entrega 2: mismo motor que `onLocation` — `intentarDrenarOportunista` nunca rechaza (ver
+      // su docblock), así que corre sin su propio try/catch, incondicional al resultado del
+      // bloque de arriba (un heartbeat que falló en confirmar visitas igual puede tener trabajo
+      // de sync pendiente que drenar).
+      await intentarDrenarOportunista(obtenerAccessToken);
+      // Sin await: nada espera esta consulta en foreground (nunca rechaza).
+      if (trackingRef.current) void consultarVueltaActual(obtenerAccessToken);
+    } finally {
+      latidoEnCurso.current = false;
     }
-    // Entrega 2: mismo motor que `onLocation` — `intentarDrenarOportunista` nunca rechaza (ver
-    // su docblock), así que corre sin su propio try/catch, incondicional al resultado del
-    // bloque de arriba (un heartbeat que falló en confirmar visitas igual puede tener trabajo
-    // de sync pendiente que drenar).
-    await intentarDrenarOportunista(obtenerAccessToken);
-    // Sin await: nada espera esta consulta en foreground (nunca rechaza).
-    if (trackingRef.current) void consultarVueltaActual(obtenerAccessToken);
   }, [deviceId, sesionId, puntosControl, obtenerAccessToken, estadoInicioRecorrido, estaEnRecorrido]);
 
   const onHeartbeatRef = useRef(onHeartbeat);
   useEffect(() => {
     onHeartbeatRef.current = onHeartbeat;
   }, [onHeartbeat]);
+
+  // Ticker de primer plano: ver el docblock de `onHeartbeat`. Va por ref para que el intervalo no
+  // se reinicie cuando cambia la identidad del handler.
+  useEffect(() => {
+    if (!tracking) return;
+    const id = setInterval(() => {
+      if (
+        !latidoEnCurso.current &&
+        debeCorrerLatidoPrimerPlano(Date.now(), ultimoLatidoTs.current, ultimoFixEvidenciaTs.current)
+      ) {
+        void onHeartbeatRef.current();
+      }
+    }, INTERVALO_LATIDO_PRIMER_PLANO_MS);
+    return () => clearInterval(id);
+  }, [tracking]);
 
   const suscribirUbicaciones = useCallback(() => {
     subscription.current?.remove();
