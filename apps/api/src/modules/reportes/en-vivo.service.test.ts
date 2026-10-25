@@ -91,6 +91,21 @@ const AHORA = (() => {
   return new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate(), 12));
 })();
 
+/** Vehículo propio: `obtenerPosiciones` devuelve una sola sesión por vehículo. */
+const vehiculoNuevo = (tx: Pick<typeof prisma, 'vehiculo'>, sindicatoId: string) =>
+  tx.vehiculo.create({
+    data: {
+      sindicatoId,
+      placa: `X${randomUUID().slice(0, 6)}`,
+      tipo: 'bus',
+      marca: 'x',
+      modelo: 'x',
+      color: 'x',
+      capacidad: 10,
+      estado: 'activo',
+    },
+  });
+
 describe('EnVivoService', () => {
   const service = new EnVivoService();
   const sindicatoAId = randomUUID();
@@ -238,7 +253,7 @@ describe('EnVivoService', () => {
         data: {
           sindicatoId: sindicatoAId,
           asignacionId: asignacion.id,
-          vehiculoId: vehiculo.id,
+          vehiculoId: (await vehiculoNuevo(tx, sindicatoAId)).id,
           conductorId: conductor.id,
           deviceId: 'device-en-vivo-2',
           inicio: new Date(ahora.getTime() - 10 * MINUTO),
@@ -469,6 +484,14 @@ describe('EnVivoService', () => {
   describe('derivarFrescura — Fase A: estado "finalizado" derivado del recorrido', () => {
     const ahora = new Date('2026-08-18T18:00:00.000Z');
     const inicio = new Date('2026-08-18T12:00:00.000Z');
+
+    it('sesión de login cerrada ⇒ "finalizado" aunque la ingesta esté fresca y el recorrido siga "en_curso"', () => {
+      // Logout: el flush deja ultimo_ingreso_ts fresco y recorridoEstado queda en 'en_curso'.
+      const fresco = new Date(ahora.getTime() - 2_000);
+      const f = derivarFrescura(ahora, inicio, fresco, fresco, 'en_curso', fresco, true);
+      expect(f.estadoFrescura).toBe('finalizado');
+      expect(f.recorridoFinTs).toBeNull();
+    });
 
     it('recorrido finalizado sin fix posterior ⇒ "finalizado", con recorridoFinTs', () => {
       const finTs = new Date(ahora.getTime() - 10 * MINUTO);
@@ -832,6 +855,85 @@ describe('EnVivoService', () => {
       }
     });
 
+    it('un vehículo con sesión vieja cerrada y sesión nueva activa sale UNA vez, con la activa', async () => {
+      const ids = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        const base = await tx.sesionOperativa.findUniqueOrThrow({ where: { id: sesionConPuntosId } });
+        const vehiculo = await vehiculoNuevo(tx, sindicatoAId);
+        const crear = async (deviceId: string, minAtras: number, fin: Date | null) =>
+          (
+            await tx.sesionOperativa.create({
+              data: {
+                sindicatoId: sindicatoAId,
+                asignacionId: base.asignacionId,
+                vehiculoId: vehiculo.id,
+                conductorId: base.conductorId,
+                deviceId,
+                inicio: new Date(AHORA.getTime() - minAtras * MINUTO),
+                fin,
+                estado: fin ? 'cerrada' : 'activa',
+                accessTokenHash: randomUUID(),
+                refreshTokenHash: randomUUID(),
+                accessExpiresAt: new Date(AHORA.getTime() + 60 * MINUTO),
+                refreshExpiresAt: new Date(AHORA.getTime() + 60 * MINUTO),
+              },
+            })
+          ).id;
+        return {
+          vieja: await crear('device-dedup-vieja', 60, new Date(AHORA.getTime() - 20 * MINUTO)),
+          nueva: await crear('device-dedup-nueva', 10, null),
+        };
+      });
+
+      const filas = await service.obtenerPosiciones(adminQuivo, AHORA);
+      expect(filas.some((f) => f.id === ids.nueva)).toBe(true);
+      expect(filas.some((f) => f.id === ids.vieja)).toBe(false);
+    });
+
+    it('dos sesiones activas del mismo vehículo: gana la nueva sin fix, no la vieja con fix de hace 2 h', async () => {
+      const ids = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        const base = await tx.sesionOperativa.findUniqueOrThrow({ where: { id: sesionConPuntosId } });
+        const vehiculo = await vehiculoNuevo(tx, sindicatoAId);
+        const crear = async (deviceId: string, minAtras: number) =>
+          (
+            await tx.sesionOperativa.create({
+              data: {
+                sindicatoId: sindicatoAId,
+                asignacionId: base.asignacionId,
+                vehiculoId: vehiculo.id,
+                conductorId: base.conductorId,
+                deviceId,
+                inicio: new Date(AHORA.getTime() - minAtras * MINUTO),
+                estado: 'activa',
+                accessTokenHash: randomUUID(),
+                refreshTokenHash: randomUUID(),
+                accessExpiresAt: new Date(AHORA.getTime() + 60 * MINUTO),
+                refreshExpiresAt: new Date(AHORA.getTime() + 60 * MINUTO),
+              },
+            })
+          ).id;
+        const vieja = await crear('device-dedup-colgada', 180);
+        const nueva = await crear('device-dedup-relogin', 5);
+        const fixViejo = new Date(AHORA.getTime() - 120 * MINUTO);
+        await tx.$executeRaw`
+          INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
+          VALUES (${randomUUID()}::uuid, ${vieja}::uuid, 'device-dedup-colgada', ${fixViejo}::timestamptz, -34.6, -58.4, 5, 0, ${fixViejo}::timestamptz, ${sindicatoAId})
+        `;
+        await recalcularResumen(tx, [vieja]);
+        return { vieja, nueva };
+      });
+
+      try {
+        const filas = await service.obtenerPosiciones(adminQuivo, AHORA);
+        expect(filas.some((f) => f.id === ids.nueva)).toBe(true);
+        expect(filas.some((f) => f.id === ids.vieja)).toBe(false);
+      } finally {
+        await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+          await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id = ${ids.vieja}::uuid`;
+          await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id = ${ids.vieja}::uuid`;
+        });
+      }
+    });
+
     it('admin_sindicato de otro tenant no ve las sesiones de este sindicato (RLS)', async () => {
       const filas = await service.obtenerPosiciones(adminSindicatoB, AHORA);
       expect(filas.some((f) => f.id === sesionConPuntosId)).toBe(false);
@@ -940,7 +1042,7 @@ describe('EnVivoService', () => {
           data: {
             sindicatoId: sindicatoAId,
             asignacionId: base.asignacionId,
-            vehiculoId: base.vehiculoId,
+            vehiculoId: (await vehiculoNuevo(tx, sindicatoAId)).id,
             conductorId: base.conductorId,
             deviceId: 'device-en-vivo-medianoche-cruce',
             inicio: inicioCruce,
@@ -954,7 +1056,7 @@ describe('EnVivoService', () => {
           data: {
             sindicatoId: sindicatoAId,
             asignacionId: base.asignacionId,
-            vehiculoId: base.vehiculoId,
+            vehiculoId: (await vehiculoNuevo(tx, sindicatoAId)).id,
             conductorId: base.conductorId,
             deviceId: 'device-en-vivo-medianoche-solo-antes',
             inicio: inicioSoloAntes,
@@ -970,7 +1072,7 @@ describe('EnVivoService', () => {
               data: {
                 sindicatoId: sindicatoAId,
                 asignacionId: base.asignacionId,
-                vehiculoId: base.vehiculoId,
+                vehiculoId: (await vehiculoNuevo(tx, sindicatoAId)).id,
                 conductorId: base.conductorId,
                 deviceId,
                 inicio,
@@ -986,7 +1088,7 @@ describe('EnVivoService', () => {
           data: {
             sindicatoId: sindicatoAId,
             asignacionId: base.asignacionId,
-            vehiculoId: base.vehiculoId,
+            vehiculoId: (await vehiculoNuevo(tx, sindicatoAId)).id,
             conductorId: base.conductorId,
             deviceId: 'device-en-vivo-medianoche-ingreso-tardio',
             inicio: inicioIngresoTardio,
@@ -1146,7 +1248,7 @@ describe('EnVivoService', () => {
             data: {
               sindicatoId: sindicatoAId,
               asignacionId: base.asignacionId,
-              vehiculoId: base.vehiculoId,
+              vehiculoId: (await vehiculoNuevo(tx, sindicatoAId)).id,
               conductorId: base.conductorId,
               deviceId,
               inicio,
@@ -1189,9 +1291,9 @@ describe('EnVivoService', () => {
       expect(filas.some((f) => f.id === ids.ayerCerrada)).toBe(false);
       const cerrada = filas.find((f) => f.id === ids.hoyCerrada);
       expect(cerrada).toBeDefined();
-      // Sin ningún fix, la frescura se calcula como `sin_datos` aun estando cerrada.
+      // Sesión cerrada (logout) ⇒ "finalizado", nunca "reportando".
       expect(cerrada?.activa).toBe(false);
-      expect(cerrada?.estadoFrescura).toBe('sin_datos');
+      expect(cerrada?.estadoFrescura).toBe('finalizado');
     });
 
     it('obtenerPosiciones: misma regla (d)(e)(f)', async () => {

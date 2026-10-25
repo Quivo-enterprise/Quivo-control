@@ -69,6 +69,9 @@ describe('detección de infracciones (PR A)', () => {
   let conductorId: string;
   let sesionDesvio: string;
   let sesionPc: string;
+  /** Vehículo propio de `sesionPc`: `obtenerPosiciones` devuelve una sola sesión por vehículo. */
+  let vehiculoPcId: string;
+  let vehiculoDesvioId: string;
   let sesionSinInicio: string;
   let sesionPrecision: string;
   let sesionRecorridos: string;
@@ -191,13 +194,19 @@ describe('detección de infracciones (PR A)', () => {
           estado: 'vigente',
         },
       });
-      const crearSesion = async (asignacionId = asignacion.id) =>
+      const vehiculoPropio = async () =>
+        (
+          await tx.vehiculo.create({
+            data: { sindicatoId: sindicatoA, placa: `DT${randomUUID().slice(0, 5).toUpperCase()}`, tipo: 'bus', marca: 'x', modelo: 'x', color: 'x', capacidad: 10, estado: 'activo' },
+          })
+        ).id;
+      const crearSesion = async (asignacionId = asignacion.id, vehiculoSesionId = vehiculoId) =>
         (
           await tx.sesionOperativa.create({
             data: {
               sindicatoId: sindicatoA,
               asignacionId,
-              vehiculoId,
+              vehiculoId: vehiculoSesionId,
               conductorId,
               deviceId: 'device-det',
               accessTokenHash: randomUUID(),
@@ -207,9 +216,11 @@ describe('detección de infracciones (PR A)', () => {
             },
           })
         ).id;
-      sesionDesvio = await crearSesion();
-      sesionPc = await crearSesion();
-      sesionSinInicio = await crearSesion();
+      vehiculoDesvioId = await vehiculoPropio();
+      sesionDesvio = await crearSesion(undefined, vehiculoDesvioId);
+      vehiculoPcId = await vehiculoPropio();
+      sesionPc = await crearSesion(undefined, vehiculoPcId);
+      sesionSinInicio = await crearSesion(undefined, await vehiculoPropio());
       sesionPrecision = await crearSesion();
       sesionRecorridos = await crearSesion();
       sesionNoHab = await crearSesion(asignacionNoHab.id);
@@ -300,7 +311,7 @@ describe('detección de infracciones (PR A)', () => {
       expect(inf).toMatchObject({
         sindicatoId: sindicatoA,
         sesionId: sesionDesvio,
-        vehiculoId,
+        vehiculoId: vehiculoDesvioId,
         conductorId,
         lineaId,
         rutaId,
@@ -471,7 +482,7 @@ describe('detección de infracciones (PR A)', () => {
         .sort((a, b) => a.orden - b.orden);
       expect(porOrden.map((d) => d.puntoControlId)).toEqual([pc['1'], pc['2']]);
       for (const f of filas) {
-        expect(f).toMatchObject({ gravedad: 'leve', reglaId: null, estado: 'abierta', sesionId: sesionPc, vehiculoId, conductorId });
+        expect(f).toMatchObject({ gravedad: 'leve', reglaId: null, estado: 'abierta', sesionId: sesionPc, vehiculoId: vehiculoPcId, conductorId });
         expect(f.dedupeKey).toBe(`pc_omitido:${sesionPc}:${(f.detalle as { puntoControlId: string }).puntoControlId}:${iso(0)}`);
         expect(f.inicioTs.toISOString()).toBe(iso(100));
       }
@@ -744,10 +755,10 @@ describe('detección de infracciones (PR A)', () => {
       const posiciones = await enVivo.obtenerPosiciones(adminA);
       const desvio = posiciones.find((p) => p.id === sesionDesvio)!;
       // Abiertas en la sesión de desvío: la gravísima (activa) — la grave quedó sancionada.
-      expect(desvio).toMatchObject({ vehiculoId, conductorId, infraccionNivel: 'gravisima', infraccionesAbiertas: 1 });
+      expect(desvio).toMatchObject({ vehiculoId: vehiculoDesvioId, conductorId, infraccionNivel: 'gravisima', infraccionesAbiertas: 1 });
       const pcSesion = posiciones.find((p) => p.id === sesionPc);
       // La sesión de PC no tiene gps: puede no tener fix pero sigue listada por estar activa.
-      expect(pcSesion).toMatchObject({ vehiculoId, conductorId, infraccionNivel: 'leve', infraccionesAbiertas: 2 });
+      expect(pcSesion).toMatchObject({ vehiculoId: vehiculoPcId, conductorId, infraccionNivel: 'leve', infraccionesAbiertas: 2 });
       const sinInfracciones = posiciones.find((p) => p.id === sesionSinInicio)!;
       expect(sinInfracciones).toMatchObject({ infraccionNivel: null, infraccionesAbiertas: 0 });
     });
