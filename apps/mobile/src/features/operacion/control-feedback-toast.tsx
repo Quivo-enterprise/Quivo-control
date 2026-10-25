@@ -12,11 +12,19 @@ import { quivoColors, quivoFonts, quivoSpacing } from '../../shared/theme/quivo-
 import type { DeteccionPuntoControl } from '../../gps/geofence';
 import { debeMostrarToast, type IdentidadToastMostrado } from './control-feedback-toast.logic';
 
+const textoPuntoControl = (numero: number | undefined) =>
+  numero === undefined ? 'Punto de control' : `Punto de control ${numero}`;
+
 interface ControlFeedbackToastProps {
   ultimaDeteccion: DeteccionPuntoControl | null;
+  /** Número del PC en el orden efectivo de la vuelta; `undefined` = sin número (como la voz). */
+  numeroDePuntoControl: (puntoControlId: string) => number | undefined;
 }
 
-export function ControlFeedbackToast({ ultimaDeteccion }: ControlFeedbackToastProps) {
+export function ControlFeedbackToast({
+  ultimaDeteccion,
+  numeroDePuntoControl,
+}: ControlFeedbackToastProps) {
   const [queue, setQueue] = useState<DeteccionPuntoControl[]>([]);
   const [current, setCurrent] = useState<DeteccionPuntoControl | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -154,7 +162,7 @@ export function ControlFeedbackToast({ ultimaDeteccion }: ControlFeedbackToastPr
           <Text style={styles.title}>Control registrado automáticamente</Text>
           
           <View style={styles.infoContainer}>
-            <Text style={styles.infoText}>Punto de Control #{current.puntoControlId.substring(0,4)}</Text>
+            <Text style={styles.infoText}>{textoPuntoControl(numeroDePuntoControl(current.puntoControlId))}</Text>
             <Text style={styles.infoText}>
               {new Date().toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
             </Text>

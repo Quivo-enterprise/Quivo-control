@@ -63,11 +63,14 @@ export async function registrarSalida(
   return { ok: false, mensaje: mensajeDeError(ultimo) };
 }
 
-/** `POST /mobile/fila/llegada`: un solo intento (quien llama decide cuándo repetir). */
+/** `POST /mobile/fila/llegada`: un solo intento (quien llama decide cuándo repetir).
+ * `confirmarAntes` (botón manual): cierra la vuelta como la detección automática (no rechaza). */
 export async function registrarLlegada(
   obtenerToken: ObtenerToken,
   fix: FixFila,
+  confirmarAntes?: () => Promise<void>,
 ): Promise<ResultadoFila> {
+  await confirmarAntes?.();
   try {
     const token = await obtenerToken();
     if (!token) return { ok: false, mensaje: MENSAJE_SESION };

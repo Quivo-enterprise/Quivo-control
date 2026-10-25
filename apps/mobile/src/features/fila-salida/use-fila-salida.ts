@@ -37,6 +37,8 @@ interface Params {
   terminal: TerminalZona | null;
   posicion: { lat: number; lng: number } | null;
   obtenerAccessToken: () => Promise<string | null>;
+  /** Cierra la vuelta al llegar a la terminal (misma confirmación que la detección automática). */
+  confirmarLlegadaTerminal: () => Promise<void>;
 }
 
 export interface VistaFilaSalida {
@@ -71,6 +73,7 @@ export function useFilaSalida({
   terminal,
   posicion,
   obtenerAccessToken,
+  confirmarLlegadaTerminal,
 }: Params): FilaSalidaUi {
   const [ahora, setAhora] = useState(() => Date.now());
   const [ocupado, setOcupado] = useState(false);
@@ -170,9 +173,9 @@ export function useFilaSalida({
       const fix = ultimoFixFila();
       if (!fix)
         return { ok: false, mensaje: 'Todavía no tengo tu ubicación. Esperá unos segundos.' };
-      return registrarLlegada(obtenerToken, fix);
+      return registrarLlegada(obtenerToken, fix, confirmarLlegadaTerminal);
     });
-  }, [ejecutar, obtenerToken, sesionId]);
+  }, [ejecutar, obtenerToken, sesionId, confirmarLlegadaTerminal]);
 
   return { vista, ocupado, error, puedeEstoyEnLaFila, salir, estoyEnLaFila };
 }

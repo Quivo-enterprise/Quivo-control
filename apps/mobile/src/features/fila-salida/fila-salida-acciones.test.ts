@@ -68,4 +68,17 @@ describe('registrarLlegada', () => {
     expect(r.ok).toBe(false);
     expect(mocks.llegada).toHaveBeenCalledTimes(1);
   });
+
+  it('confirma la llegada antes del POST', async () => {
+    const orden: string[] = [];
+    mocks.llegada.mockImplementation(async () => {
+      orden.push('post');
+      return { fila: null };
+    });
+    const fix = { lat: 1, lng: 2, accuracy: 5, ts: '2026-10-20T11:00:00.000Z' };
+    await registrarLlegada(token, fix, async () => {
+      orden.push('confirmar');
+    });
+    expect(orden).toEqual(['confirmar', 'post']);
+  });
 });

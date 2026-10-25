@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Linking, PermissionsAndroid, Platform, type AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { borrarPausa, guardarPausa, leerPausa } from './pausa-recorrido';
+import {
+  borrarSesionRecorrido,
+  debeReemitirInicio,
+  guardarSesionRecorrido,
+  leerSesionRecorrido,
+} from './sesion-recorrido';
 import * as Sentry from '@sentry/react-native';
 import BackgroundGeolocation, { type Location } from 'react-native-background-geolocation';
 import { resolverTsFix, type PuntoControlPaquete } from '@quivo/shared';
@@ -448,6 +454,60 @@ export function useGpsOperativo(
   // cumplimientos (ver más abajo).
   const semillaHidratadaRef = useRef(false);
 
+  /**
+   * Llegar a la fila cierra la vuelta: confirma YA la visita pendiente del terminal (por la cola),
+   * sin esperar al POST. Repetida (POST fallido, decisión a los 60 s) es no-op: ya confirmada.
+   * La usan la detección automática (`onLocation`) y el botón manual "Estoy en la fila". Nunca rechaza.
+   */
+  const confirmarLlegadaTerminal = useCallback(async (): Promise<void> => {
+    const terminalId = terminalIdDeLaRuta(puntosControl);
+    if (!terminalId) return;
+    await (async () => {
+      await semillaPromise.current;
+      const db = await abrirOutbox();
+      const { emitir, anunciosLlegada } = await confirmarVisitasVencidasEnCola(
+        db,
+        deviceId,
+        sesionId,
+        puntosControlDetectados,
+        Date.now(),
+        0,
+        false,
+        semillaHidratadaRef.current ? puntosControl : [],
+        undefined,
+        terminalId,
+      );
+      if (emitir.length > 0) {
+        const ultima = emitir[emitir.length - 1]?.deteccion ?? null;
+        if (ultima && !terminalSilenciado(ultima.puntoControlId)) setUltimaDeteccion(ultima);
+      }
+      for (const anuncio of anunciosLlegada) {
+        anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
+          sesionId,
+          puntosControl,
+        })
+          .then((exitoso) => {
+            if (exitoso) {
+              setUltimoAnuncioLlegada({
+                puntoControlId: anuncio.puntoControlId,
+                pasada: anuncio.pasada,
+                motivo: anuncio.motivo,
+              });
+            }
+          })
+          .catch((error: unknown) => {
+            Sentry.captureException(error, {
+              tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-fila' },
+            });
+          });
+      }
+    })().catch((error: unknown) => {
+      Sentry.captureException(error, {
+        tags: { contexto: 'gps-foreground', paso: 'confirmar-terminal-llegada-fila' },
+      });
+    });
+  }, [deviceId, sesionId, puntosControl]);
+
   const onLocation = useCallback(
     // La escritura al outbox (gps_point + cumplimiento_punto_control) vive en
     // `registrarPuntoGps` (`gps/headless-task.ts`), compartida con el headless task que
@@ -661,57 +721,20 @@ export function useGpsOperativo(
           // Llegar a la fila cierra la vuelta: confirma YA la visita pendiente del terminal (por la
           // cola), sin esperar al POST. Repetida (POST fallido, decisión a los 60 s) es no-op: ya confirmada.
           alDetectarLlegada: () => {
-            const terminalId = terminalIdDeLaRuta(puntosControl);
-            if (!terminalId) return;
-            void (async () => {
-              await semillaPromise.current;
-              const db = await abrirOutbox();
-              const { emitir, anunciosLlegada } = await confirmarVisitasVencidasEnCola(
-                db,
-                deviceId,
-                sesionId,
-                puntosControlDetectados,
-                Date.now(),
-                0,
-                false,
-                semillaHidratadaRef.current ? puntosControl : [],
-                undefined,
-                terminalId,
-              );
-              if (emitir.length > 0) {
-                const ultima = emitir[emitir.length - 1]?.deteccion ?? null;
-                if (ultima && !terminalSilenciado(ultima.puntoControlId)) setUltimaDeteccion(ultima);
-              }
-              for (const anuncio of anunciosLlegada) {
-                anunciarLlegadaPuntoControl(db, anuncio.puntoControlId, anuncio.pasada, anuncio.motivo, {
-                  sesionId,
-                  puntosControl,
-                })
-                  .then((exitoso) => {
-                    if (exitoso) {
-                      setUltimoAnuncioLlegada({
-                        puntoControlId: anuncio.puntoControlId,
-                        pasada: anuncio.pasada,
-                        motivo: anuncio.motivo,
-                      });
-                    }
-                  })
-                  .catch((error: unknown) => {
-                    Sentry.captureException(error, {
-                      tags: { contexto: 'gps-foreground', paso: 'anunciar-llegada-fila' },
-                    });
-                  });
-              }
-            })().catch((error: unknown) => {
-              Sentry.captureException(error, {
-                tags: { contexto: 'gps-foreground', paso: 'confirmar-terminal-llegada-fila' },
-              });
-            });
+            void confirmarLlegadaTerminal();
           },
         });
       }
     },
-    [deviceId, sesionId, puntosControl, geometriaRuta, obtenerAccessToken, estadoInicioRecorrido],
+    [
+      deviceId,
+      sesionId,
+      puntosControl,
+      geometriaRuta,
+      obtenerAccessToken,
+      estadoInicioRecorrido,
+      confirmarLlegadaTerminal,
+    ],
   );
 
   // `onLocation` cambia de identidad cuando cambian `puntosControl`/`sesionId`, pero la
@@ -1150,7 +1173,66 @@ export function useGpsOperativo(
         // config reafirmada sea la misma en los dos caminos de entrada).
         await BackgroundGeolocation.ready(gpsSpikeConfig);
         if (!vigenteReengancheRef.current()) return;
+        // Re-login a mitad del día (sesión NUEVA con el nativo ya corriendo): este camino nunca
+        // pasa por `iniciar()`, así que la sesión nueva quedaría sin `inicio_recorrido` (oculta
+        // para los vecinos y sin vueltas). Misma sesión (app reabierta) NO re-emite.
+        let reemitirInicio = false;
+        try {
+          reemitirInicio = debeReemitirInicio(await leerSesionRecorrido(), sesionId);
+          if (reemitirInicio) {
+            reiniciarEstadoInicioRecorrido(estadoInicioRecorrido, await generarEventId());
+            // Se guarda al ASIGNAR el inicio (antes de otro await): un re-enganche concurrente
+            // ya ve la sesión guardada; los reintentos de `onLocation`/heartbeat usan el mismo eventId.
+            await guardarSesionRecorrido(sesionId);
+            // Tras el remonte `ultimaPosicionRef` suele estar en null: se pide un fix.
+            let pos = ultimaPosicionRef.current;
+            try {
+              const loc = await BackgroundGeolocation.getCurrentPosition({
+                samples: 1,
+                persist: false,
+                maximumAge: 60000,
+                timeout: 5,
+              });
+              pos = {
+                lat: loc.coords.latitude,
+                lng: loc.coords.longitude,
+                ts: new Date(loc.timestamp).getTime(),
+                accuracy: loc.coords.accuracy,
+              };
+            } catch {
+              // Sin fix fresco: se usa la última posición conocida.
+            }
+            if (!vigenteReengancheRef.current()) return;
+            // Mismo criterio que `ejecutarIniciar`: anclado en la terminal, sin voz ni toast.
+            const { terminalId, enTerminal } = terminalParaInicio(puntosControlRef.current, pos);
+            if (enTerminal && terminalId) silenciarTerminalAnclado(terminalId);
+            await reiniciarVueltaEnCurso(
+              await abrirOutbox(),
+              claveProgresoVuelta(sesionId, fechaLocal()),
+              enTerminal ? terminalId : null,
+            );
+          }
+        } catch (error) {
+          Sentry.captureException(error, {
+            tags: { contexto: 'gps-foreground', paso: 'reenganche-nueva-sesion' },
+          });
+        }
+        if (!vigenteReengancheRef.current()) return;
         suscribirUbicaciones();
+        if (reemitirInicio) {
+          // Si falla, `onLocation`/heartbeat siguen reintentando con el mismo `eventId`.
+          try {
+            await asegurarInicioRecorrido(
+              estadoInicioRecorrido,
+              { abrirOutbox, encolarEvento },
+              { deviceId, sesionId },
+            );
+          } catch (error) {
+            Sentry.captureException(error, {
+              tags: { contexto: 'gps-foreground', paso: 'reenganche-inicio-recorrido' },
+            });
+          }
+        }
         // FIX POST-REVISIÓN (hallazgo ALTO, sesión no vigente — Entrega 28): este SÍ es un
         // veredicto real ("re-enganchado, hay recorrido activo") — a diferencia del `false`
         // inicial del montaje, este `setTracking(true)` cambia el valor de verdad (`false` →
@@ -1179,7 +1261,7 @@ export function useGpsOperativo(
       reenganchePendienteRef.current = promesa;
       return promesa;
     },
-    [suscribirUbicaciones, serializadorRestauracion],
+    [suscribirUbicaciones, serializadorRestauracion, estadoInicioRecorrido, deviceId, sesionId],
   );
 
   useEffect(() => {
@@ -1614,6 +1696,8 @@ export function useGpsOperativo(
     // viejo. Ver `inicio-recorrido-retry.ts` para el porqué de la idempotencia por `eventId`
     // estable.
     reiniciarEstadoInicioRecorrido(estadoInicioRecorrido, await generarEventId());
+    // Se guarda al asignar el inicio (no tras escribirlo): ver `reengancharNativoActivo`.
+    await guardarSesionRecorrido(sesionId);
     // Recorrido nuevo: se descarta el cache de la vuelta actual del recorrido anterior (síncrono, sin esperar la DB).
     limpiarVueltaActual(sesionId);
     suscribirUbicaciones();
@@ -1883,6 +1967,7 @@ export function useGpsOperativo(
       veredictoPublicable.current = true;
       setTracking(false);
       trackingRef.current = false;
+      void borrarSesionRecorrido();
       // Fin del recorrido: invalida consultas en vuelo y borra el cache (fire-and-forget). Va ACÁ,
       // con el nativo parado, las suscripciones removidas y `tracking` en false: si se limpiara
       // antes del `await stop()`, un fix/heartbeat o el intervalo de `useVueltaActual` podría
@@ -2152,5 +2237,6 @@ export function useGpsOperativo(
     pausar,
     reanudar,
     simularDeteccion,
+    confirmarLlegadaTerminal,
   };
 }
