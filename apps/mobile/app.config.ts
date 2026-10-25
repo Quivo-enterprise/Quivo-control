@@ -74,12 +74,14 @@ export default (): ExpoConfig => ({
   },
   icon: './assets/images/icon.png',
   android: {
-    // QUI-… (decisión del CTO, ronda de verify-fix del logout/sesión): el trial de
-    // Transistorsoft del `applicationId` viejo (`com.quivotech.conductor`) venció, así que este
-    // build usa uno nuevo (`.app`). SecureStore es por `applicationId`: por eso NO hay
-    // migración de la clave legacy `quivo.mobile.session.v2` (ver el comentario de
-    // `sesion-movil-store.ts`) — el cambio de paquete ya implica instalación limpia.
-    package: 'com.quivotech.conductor.app',
+    // Historial del `applicationId` (decisión del CTO): `com.quivotech.conductor` → `.app`
+    // (trial de Transistorsoft del viejo vencido) → `.piloto` (2026-10-25: venció el trial de
+    // `.app`, LICENSE_VALIDATION_FAILURE y el GPS no arranca; Transistorsoft registra un trial
+    // nuevo de 30 días por nombre de paquete). Es una app NUEVA: no actualiza sobre el APK
+    // anterior (desinstalar + instalar, re-login, re-otorgar permisos). SecureStore es por
+    // `applicationId`, así que no hay migración de sesión (ver `sesion-movil-store.ts`). El
+    // trial de `.piloto` vence de nuevo en 30 días.
+    package: 'com.quivotech.conductor.piloto',
     // QUI-357: con el backend en Cloud Run (HTTPS nativo) no hay excusa para permitir
     // cleartext en release — los PINs de conductor y la evidencia GPS legal viajarían en
     // claro sobre WiFi público. La excepción para desarrollo local (`http://` en la LAN) va
