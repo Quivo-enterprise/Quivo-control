@@ -6,7 +6,16 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## En curso — 2026-10-23: fallas del piloto del 22/10 (fase invertida al salir de SR)
+## En curso — 2026-10-25: correcciones antes del piloto del lunes 27/10
+
+Plan: [`docs/plan-pre-piloto-27-10.md`](plan-pre-piloto-27-10.md).
+
+- **PR A** (`fix/en-vivo-sesiones-cerradas`, API + web): sesión cerrada mostrada "Reportando" y sesión vieja duplicada en `/en-vivo`.
+- **PR B** (`fix/relogin-fila-toast`, OTA): el re-login emite `inicio_recorrido` para la sesión nueva; "Estoy en la fila" cierra la vuelta; el toast muestra el número de PC.
+- **PR C** (`fix/heartbeat-quieto`, OTA): un vehículo quieto en recorrido sigue mandando un fix por heartbeat. Primero se diagnostica en el emulador.
+- **Corrección:** el km 26 tiene `obligatorio=false`, así que el ramal Molinos mal trazado no genera `pc_omitido`; su efecto es visual. Se corrige después del piloto, con la traza real de una vuelta designada.
+
+## 2026-10-23: fallas del piloto del 22/10 (fase invertida al salir de SR)
 
 Plan y diagnóstico: [`docs/plan-post-piloto-22-10-fase.md`](plan-post-piloto-22-10-fase.md). El piloto pasó al **lunes 27/10**.
 
