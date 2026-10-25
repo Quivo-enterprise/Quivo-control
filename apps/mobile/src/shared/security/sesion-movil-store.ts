@@ -36,9 +36,9 @@ import { etiquetarSesionSentry } from '../observability/sentry-contexto';
  * compartida por dos escritores con información independiente.
  *
  * Punto 1/2 (`/codex-debug verify-fix` ronda 6, decisión del CTO: SIMPLIFICAR en vez de
- * parchear la migración de `quivo.mobile.session.v2`) — sin migración: el próximo APK cambia de
- * `applicationId` (`com.quivotech.conductor` → `com.quivotech.conductor.app`) por licencia, es
- * instalación limpia, y SecureStore es por app, así que esa clave legacy nunca va a existir acá.
+ * parchear la migración de `quivo.mobile.session.v2`) — sin migración: el APK cambia de
+ * `applicationId` por licencia (`com.quivotech.conductor` → `.app` → `.piloto`, 2026-10-25, trial
+ * vencido), es instalación limpia, y SecureStore es por app, así que esa clave legacy nunca va a existir acá.
  */
 const CREDENCIALES_KEY = 'quivo.mobile.credenciales.v1';
 const CONTEXTO_KEY = 'quivo.mobile.contexto.v1';
