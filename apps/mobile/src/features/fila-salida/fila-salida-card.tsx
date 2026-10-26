@@ -34,6 +34,7 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
           onPress={estoyEnLaFila}
           accessibilityHint="Te anota en la fila de salida si la app no lo hizo sola"
           style={styles.accion}
+          fullWidth
         >
           Estoy en la fila
         </Button>
@@ -50,30 +51,36 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
     <View style={styles.contenedor}>
       <Burbuja direction="column" style={styles.tarjeta}>
         <View style={styles.fila}>
-          <Ionicons name="people-outline" size={20} color={dsColors.primary} />
-          <Text size="sm" weight="semibold" style={styles.posicion}>
-            {vista.posicionTexto}
+          <Ionicons name="flag-outline" size={18} color={dsColors.primary} />
+          <Text size="sm" style={styles.etiqueta}>
+            Fila de salida · {vista.posicion} de {vista.total}
           </Text>
-          <Badge variant={vista.demorado ? 'warning' : 'neutral'} size="sm">
-            {vista.demorado ? 'Demorado' : 'En fila'}
+          <Badge
+            variant={vista.demorado ? 'warning' : vista.habilitado ? 'success' : 'neutral'}
+            size="sm"
+          >
+            {vista.demorado ? 'Demorado' : vista.turnoTexto}
           </Badge>
         </View>
-        {/* Región viva con granularidad de minuto: el lector no recita la cuenta segundo a segundo. */}
+        {/* Lo que el chofer necesita de un vistazo en la terminal: a quién sigue. */}
         <Heading
           size="lg"
           accessibilityLiveRegion="polite"
-          accessibilityLabel={`${vista.horaSalidaTexto ?? 'Fila de salida'}. ${vista.anuncioAccesible}`}
+          accessibilityLabel={`${tituloFila(vista)}. ${vista.horaSalidaTexto ?? ''}. ${vista.anuncioAccesible}`}
         >
-          {vista.horaSalidaTexto ?? 'Fila de salida'}
+          {tituloFila(vista)}
         </Heading>
-        {vista.sinActualizar ? (
+        <ColaSalida posicion={vista.posicion} total={vista.total} />
+        {vista.horaSalidaTexto ? (
+          <Text size="md" variant="secondary">
+            {vista.horaSalidaTexto}
+            {vista.sinActualizar ? ' · sin actualizar' : ''}
+          </Text>
+        ) : vista.sinActualizar ? (
           <Text size="sm" variant="secondary">
             Sin actualizar
           </Text>
         ) : null}
-        <Text size="md" weight="semibold" style={vista.habilitado && styles.turnoListo}>
-          {vista.turnoTexto}
-        </Text>
         <Button
           variant="primary"
           loading={ocupado}
@@ -85,6 +92,7 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
               : 'Aún no es tu turno: pide confirmar la salida anticipada'
           }
           style={styles.accion}
+          fullWidth
         >
           {vista.botonTexto}
         </Button>
@@ -112,12 +120,91 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
   );
 }
 
+/** "Sales detrás de 1234ABC"; el primero ya no sigue a nadie. */
+function tituloFila(vista: { posicion: number; delantePlaca: string | null }): string {
+  if (vista.posicion === 1) return 'Eres el primero en salir';
+  return vista.delantePlaca
+    ? `Sales detrás de ${vista.delantePlaca}`
+    : `Posición ${vista.posicion}`;
+}
+
+/** Hasta este total se dibuja un punto por trufi; con más, la fila se resume alrededor del chofer. */
+const MAX_PUNTOS_COLA = 8;
+
+/**
+ * La fila dibujada de izquierda (sale primero) a derecha: los de adelante en gris, el chofer
+ * resaltado. Decorativa para el lector de pantalla (el título y la etiqueta ya dicen la posición).
+ */
+function ColaSalida({ posicion, total }: { posicion: number; total: number }) {
+  if (total < 2) return null;
+  const puntos: (number | 'mas')[] =
+    total <= MAX_PUNTOS_COLA
+      ? Array.from({ length: total }, (_, i) => i + 1)
+      : [
+          1,
+          ...(posicion > 3 ? ['mas' as const] : []),
+          ...[posicion - 1, posicion, posicion + 1].filter((n) => n > 1 && n < total),
+          ...(posicion < total - 2 ? ['mas' as const] : []),
+          total,
+        ];
+  return (
+    <View
+      style={styles.cola}
+      importantForAccessibility="no-hide-descendants"
+      accessibilityElementsHidden
+    >
+      <Ionicons name="chevron-back" size={16} color={dsColors.textTertiary} />
+      {puntos.map((n, i) =>
+        n === 'mas' ? (
+          <Text key={`mas-${i}`} size="sm" style={styles.colaMas}>
+            …
+          </Text>
+        ) : (
+          <View
+            key={n}
+            style={[
+              styles.colaPunto,
+              n < posicion && styles.colaAdelante,
+              n === posicion && styles.colaYo,
+            ]}
+          >
+            {n === posicion ? (
+              <Text size="xs" weight="bold" style={styles.colaYoTexto}>
+                Tú
+              </Text>
+            ) : null}
+          </View>
+        ),
+      )}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   contenedor: { marginBottom: dsSpace.sm },
   tarjeta: { alignItems: 'stretch' },
   fila: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm, flexWrap: 'wrap' },
-  posicion: { color: dsColors.textSecondary, flexShrink: 1 },
-  turnoListo: { color: dsColors.success },
+  etiqueta: { color: dsColors.textSecondary, flex: 1 },
+  cola: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.xs, flexWrap: 'wrap' },
+  colaPunto: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: dsColors.borderSubtle,
+  },
+  colaAdelante: { backgroundColor: dsColors.borderSubtle },
+  colaYo: {
+    width: 32,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 0,
+    backgroundColor: dsColors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  colaYoTexto: { color: dsColors.textInverse },
+  colaMas: { color: dsColors.textTertiary },
   accion: { minHeight: 48, borderRadius: quivoBubble.innerRadius },
   error: { color: dsColors.danger, marginTop: dsSpace.sm },
 });

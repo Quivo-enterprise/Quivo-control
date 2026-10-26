@@ -43,6 +43,11 @@ interface Params {
 
 export interface VistaFilaSalida {
   posicionTexto: string;
+  /** 1 = el próximo en salir. */
+  posicion: number;
+  total: number;
+  /** Placa del trufi de adelante; `null` si es el primero. */
+  delantePlaca: string | null;
   horaSalidaTexto: string | null;
   turnoTexto: string;
   botonTexto: string;
@@ -135,6 +140,9 @@ export function useFilaSalida({
     if (!fila || !calculo) return null;
     return {
       posicionTexto: textoPosicion(fila),
+      posicion: fila.posicion,
+      total: fila.total,
+      delantePlaca: fila.delantePlaca,
       horaSalidaTexto: textoHoraSalida(fila),
       turnoTexto: textoTurno(calculo.habilitado),
       botonTexto: textoBoton(calculo.habilitado, calculo.restante),
@@ -169,7 +177,10 @@ export function useFilaSalida({
   const estoyEnLaFila = useCallback(() => {
     void ejecutar(async () => {
       if (await leerPausa(sesionId))
-        return { ok: false, mensaje: 'Estás en pausa: reanudá el recorrido para entrar a la fila.' };
+        return {
+          ok: false,
+          mensaje: 'Estás en pausa: reanudá el recorrido para entrar a la fila.',
+        };
       const fix = ultimoFixFila();
       if (!fix)
         return { ok: false, mensaje: 'Todavía no tengo tu ubicación. Esperá unos segundos.' };
