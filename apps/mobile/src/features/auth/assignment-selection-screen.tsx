@@ -4,7 +4,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { resolverMarcaLinea, type ResumenAsignacionMovil } from '@quivo/shared';
 import { Heading, Loader, Text, fontStyle } from '@quivo/design-system-native';
 import { Button } from '../../shared/components/Button';
-import { Burbuja } from '../../shared/components/burbuja';
 import { formatHoraBolivia } from '../../shared/format-hora';
 import { dsColors, dsElevation, dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
@@ -16,6 +15,7 @@ import {
   resolverIconoTurno,
 } from './turnos-core';
 import { FondoLogin } from './components/fondo-login';
+import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import { MENSAJE_SELECCION_VENCIDA } from './use-auth-movil';
 
 interface AssignmentSelectionScreenProps {
@@ -39,6 +39,13 @@ export function AssignmentSelectionScreen({
 }: AssignmentSelectionScreenProps) {
   const [ahora, setAhora] = useState(() => Date.now());
   const [elegida, setElegida] = useState<string | null>(null);
+  // Error ya cerrado por el chofer; se olvida cuando `error` vuelve a null (nuevo intento).
+  const [errorVisto, setErrorVisto] = useState<string | null>(null);
+  useEffect(() => {
+    if (!error) setErrorVisto(null);
+  }, [error]);
+  const errorVisible = !!error && error !== errorVisto;
+  const vencida = error === MENSAJE_SELECCION_VENCIDA;
 
   // El "en 6 h 9 min" avanza por minuto; no hace falta más resolución.
   useEffect(() => {
@@ -97,24 +104,6 @@ export function AssignmentSelectionScreen({
           {resumenDelDia(asignaciones.length, ahora)}
         </Text>
 
-        {error ? (
-          <View accessibilityRole="alert">
-            <Burbuja direction="column" style={styles.aviso}>
-              <View style={styles.avisoFila}>
-                <Ionicons name="alert-circle" size={20} color={dsColors.danger} />
-                <Text size="sm" style={styles.avisoTexto}>
-                  {error}
-                </Text>
-              </View>
-              {error === MENSAJE_SELECCION_VENCIDA ? (
-                <Button variant="ghost" size="sm" onPress={onBack} style={styles.ingresarPin}>
-                  Ingresar PIN
-                </Button>
-              ) : null}
-            </Burbuja>
-          </View>
-        ) : null}
-
         {destacada ? (
           <TurnoDestacado
             asignacion={destacada}
@@ -144,6 +133,15 @@ export function AssignmentSelectionScreen({
           </View>
         ) : null}
       </ScrollView>
+      {/* El error es emergente: no empuja la pantalla. Turno vencido lleva directo al PIN. */}
+      <QuivoConfirmDialog
+        visible={errorVisible}
+        icon="alert-circle-outline"
+        title={vencida ? 'Vuelve a ingresar tu PIN' : 'No se pudo elegir el turno'}
+        message={error ?? undefined}
+        confirmLabel={vencida ? 'Ingresar PIN' : 'Entendido'}
+        onConfirm={vencida ? onBack : () => setErrorVisto(error)}
+      />
     </View>
   );
 }
@@ -365,17 +363,6 @@ const styles = StyleSheet.create({
   huecoSimetrico: { width: quivoBubble.touch },
   titulo: { flex: 1, textAlign: 'center', color: dsColors.textInverse },
   subtitulo: { textAlign: 'center', color: 'rgba(255, 255, 255, 0.8)' },
-  aviso: {
-    width: '100%',
-    alignItems: 'stretch',
-  },
-  avisoFila: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: dsSpace.sm,
-  },
-  avisoTexto: { flex: 1, color: dsColors.danger },
-  ingresarPin: { minHeight: quivoBubble.touch, alignSelf: 'flex-end' },
   // La tarjeta del próximo turno crece con el espacio libre: es lo que el chofer viene a tocar.
   destacada: {
     flexGrow: 1,
