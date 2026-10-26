@@ -23,8 +23,16 @@ Plan: [`docs/plan-pre-piloto-27-10.md`](plan-pre-piloto-27-10.md).
 
 **Verificado en emulador con el APK 17:** GPS arranca ("trial license key has 29 days remaining"); COMENZAR en SR → vuelta 1, 1/16, fila posición 1. Quieto con la app en pantalla: el fix del servidor avanza cada ~60 s. **Minimizada: se congela** (limitación conocida). Re-login a mitad del recorrido: la sesión nueva emitió `inicio_recorrido` y el servidor le abrió la vuelta 1; la entrada automática a la fila cerró SR. **No probado en vivo:** el botón manual "Estoy en la fila" (la detección automática le ganó; cubierto por test unitario).
 
+**26/10 (móvil, solo JS — van juntos en la próxima OTA para el runtime `8bd0b896`):**
+- **#272** fix: el APK 17 recién instalado quedaba en "Preparando tu ruta…". Sentry QUIVO-CONTROL-CONDUCTOR-D (13 eventos/7 usuarios desde 18/10): carrera de `mkdirs` del directorio `SQLite/` en expo-sqlite 16.0.10 entre outbox y paquete del día en el **primer arranque**; `abrirPaqueteDiaDb()` fuera del `try` dejaba `cargando=true`. Reintento único solo ante "Couldn't create directory" + apertura dentro del `try`. **Workaround para los teléfonos ya instalados: tras el primer login, cerrar la app del todo y reabrir.** Codex: no verificado (sin cuota hasta 16/11).
+- **#273** visual: cabecera solo badge de línea + `EN VIVO`/`EN ESPERA`; panel "Siguiente parada" sin distancia ni contador (solo puntitos) + píldora "Vía Molinos"; Empezar día sin soles, sin aviso ni COMENZAR RUTA bloqueado; Perfil `EN LINEA` → `EN VIVO`.
+- **#274**: Reportar incidencia con 5 opciones fijas (`texto` = etiqueta, `categoria` = código); botón de registro automático → WhatsApp al delegado (`shortcut:` número fijo 59161604399, solo L16); vecinos: semáforo Delante 500/300 m + voz "Vehículo delante a N metros" (empieza desarmado, re-arme > 350 m).
+- **No verificado en dispositivo** ninguno de los tres: revisar en teléfono tras la OTA.
+
+**Después del piloto (pedido CTO 26/10, requieren API + deploy):** Hoja de ruta del día + Historial mensual (no existe endpoint móvil de vueltas con horas por PC; definir qué PC es "parada intermedia" — el modelo no tiene ese rol; `CumplimientoPc` no tiene `vueltaId`); pantalla Sanciones en Ajustes (endpoint móvil nuevo; decidir chofer vs vehículo); teléfono del delegado por Línea/Sindicato en la API (reemplaza el número fijo).
+
 **Pendiente antes del lunes:**
-- CTO: ~~deploy r34~~ hecho; instalar el APK 17 en los 6 teléfonos (Cerrar sesión en la app vieja → desinstalar → instalar → login → ubicación "todo el tiempo", notificaciones, actividad física → batería sin restricciones + inicio automático → probar COMENZAR); limpiar Appium Settings de su teléfono; decidir infracciones de prueba (PIC b4b9cfe0/c7f91ff7, d88805f3, PC8 del 22/10).
+- CTO: publicar la OTA de #272–#274; ~~deploy r34~~ hecho; instalar el APK 17 en los 6 teléfonos (Cerrar sesión en la app vieja → desinstalar → instalar → login → **cerrar la app del todo y reabrir** (#272) → ubicación "todo el tiempo", notificaciones, actividad física → batería sin restricciones + inicio automático → probar COMENZAR); limpiar Appium Settings de su teléfono; decidir infracciones de prueba (PIC b4b9cfe0/c7f91ff7, d88805f3, PC8 del 22/10).
 - Operativo: en la fila, la app abierta y la pantalla encendida (sin eso no hay latido). Designar al menos una vuelta a Molinos para tener la traza real.
 
 **Después del piloto:**
