@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Button } from '../../shared/components/Button';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { Badge, Button, Heading, Text } from '@quivo/design-system-native';
+import { Burbuja } from '../../shared/components/burbuja';
+import { dsColors, dsSpace } from '../../shared/theme/design-system';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import type { FilaSalidaUi } from './use-fila-salida';
 
@@ -27,14 +29,11 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
     return (
       <View style={styles.contenedor}>
         <Button
-          variant="ghost"
+          variant="outline"
           loading={ocupado}
           onPress={estoyEnLaFila}
-          style={styles.respaldo}
-          textStyle={styles.respaldoTexto}
-          leftIcon={<Ionicons name="flag-outline" size={20} color={quivoColors.white} />}
           accessibilityHint="Te anota en la fila de salida si la app no lo hizo sola"
-          fullWidth
+          style={styles.accion}
         >
           Estoy en la fila
         </Button>
@@ -49,47 +48,43 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
 
   return (
     <View style={styles.contenedor}>
-      <View style={styles.tarjeta}>
+      <Burbuja direction="column" style={styles.tarjeta}>
         <View style={styles.fila}>
-          <Ionicons name="people-outline" size={18} color={quivoColors.white} />
-          <Text style={styles.posicion}>{vista.posicionTexto}</Text>
+          <Ionicons name="people-outline" size={20} color={dsColors.primary} />
+          <Text size="sm" weight="semibold" style={styles.posicion}>
+            {vista.posicionTexto}
+          </Text>
+          <Badge variant={vista.demorado ? 'warning' : 'neutral'} size="sm">
+            {vista.demorado ? 'Demorado' : 'En fila'}
+          </Badge>
         </View>
         {/* Región viva con granularidad de minuto: el lector no recita la cuenta segundo a segundo. */}
-        <Text
-          style={styles.hora}
+        <Heading
+          size="lg"
           accessibilityLiveRegion="polite"
           accessibilityLabel={`${vista.horaSalidaTexto ?? 'Fila de salida'}. ${vista.anuncioAccesible}`}
         >
-          {vista.horaSalidaTexto ?? ' '}
-        </Text>
-        {vista.sinActualizar ? <Text style={styles.sinActualizar}>Sin actualizar</Text> : null}
-        <View style={styles.fila}>
-          <Text
-            style={[styles.turno, vista.habilitado && styles.turnoListo]}
-            accessible={false}
-            importantForAccessibility="no"
-          >
-            {vista.turnoTexto}
+          {vista.horaSalidaTexto ?? 'Fila de salida'}
+        </Heading>
+        {vista.sinActualizar ? (
+          <Text size="sm" variant="secondary">
+            Sin actualizar
           </Text>
-          {vista.demorado ? (
-            <View style={styles.insignia}>
-              <Text style={styles.insigniaTexto}>Demorado</Text>
-            </View>
-          ) : null}
-        </View>
+        ) : null}
+        <Text size="md" weight="semibold" style={vista.habilitado && styles.turnoListo}>
+          {vista.turnoTexto}
+        </Text>
         <Button
-          variant="accent"
+          variant="primary"
           loading={ocupado}
           disabled={ocupado}
           onPress={vista.habilitado ? salir : () => setConfirmarAnticipada(true)}
-          style={styles.salir}
-          textStyle={styles.salirTexto}
           accessibilityHint={
             vista.habilitado
               ? 'Registra tu salida de la terminal'
               : 'Aún no es tu turno: pide confirmar la salida anticipada'
           }
-          fullWidth
+          style={styles.accion}
         >
           {vista.botonTexto}
         </Button>
@@ -98,7 +93,7 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
             {error}
           </Text>
         ) : null}
-      </View>
+      </Burbuja>
       <QuivoConfirmDialog
         visible={confirmarAnticipada}
         variant="danger"
@@ -118,78 +113,11 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
 }
 
 const styles = StyleSheet.create({
-  contenedor: { marginBottom: quivoSpacing.sm },
-  tarjeta: {
-    backgroundColor: 'rgba(255, 255, 255, 0.14)',
-    borderRadius: quivoRadius.lg,
-    padding: quivoSpacing.md,
-    gap: quivoSpacing.xs,
-  },
-  fila: { flexDirection: 'row', alignItems: 'center', gap: quivoSpacing.sm },
-  posicion: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 13,
-    flexShrink: 1,
-  },
-  hora: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 13,
-  },
-  sinActualizar: {
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 11.5,
-  },
-  turno: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 22,
-  },
-  turnoListo: { color: '#7FE3B5' },
-  insignia: {
-    backgroundColor: quivoColors.warningSoft,
-    borderRadius: quivoRadius.pill,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  insigniaTexto: {
-    color: quivoColors.warningText,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 11.5,
-  },
-  salir: {
-    backgroundColor: quivoColors.accent,
-    borderColor: quivoColors.accent,
-    borderRadius: quivoRadius.pill,
-    height: 52,
-    marginTop: quivoSpacing.xs,
-  },
-  salirTexto: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 16,
-    letterSpacing: 1,
-  },
-  respaldo: {
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    borderColor: 'rgba(255, 255, 255, 0.5)',
-    borderWidth: 1.5,
-    borderRadius: quivoRadius.pill,
-    height: 48,
-  },
-  respaldoTexto: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 14.5,
-    letterSpacing: 0.8,
-  },
-  error: {
-    color: '#FFB4B4',
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 12,
-    marginTop: 6,
-    textAlign: 'center',
-  },
+  contenedor: { marginBottom: dsSpace.sm },
+  tarjeta: { alignItems: 'stretch' },
+  fila: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm, flexWrap: 'wrap' },
+  posicion: { color: dsColors.textSecondary, flexShrink: 1 },
+  turnoListo: { color: dsColors.success },
+  accion: { minHeight: 48, borderRadius: quivoBubble.innerRadius },
+  error: { color: dsColors.danger, marginTop: dsSpace.sm },
 });

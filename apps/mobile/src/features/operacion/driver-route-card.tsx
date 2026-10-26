@@ -3,7 +3,7 @@ import { Badge, Text } from '@quivo/design-system-native';
 import type { ContextoOperativoMovil, LineaBrand } from '@quivo/shared';
 import { Burbuja } from '../../shared/components/burbuja';
 import { formatHoraBolivia } from '../../shared/format-hora';
-import { dsColors, dsFontFamily, dsFontSize, dsSpace } from '../../shared/theme/design-system';
+import { dsColors, dsFontSize, dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
 
 export interface DriverRouteCardProps {
@@ -26,18 +26,6 @@ export function DriverRouteCard({ contexto, tracking, pausadoDesde, brand }: Dri
       </View>
       <View style={styles.detalles}>
         <View style={styles.estadoFila}>
-          <View
-            style={[
-              styles.punto,
-              {
-                backgroundColor: !tracking
-                  ? dsColors.textTertiary
-                  : pausadoDesde
-                    ? dsColors.warning
-                    : dsColors.success,
-              },
-            ]}
-          />
           <Badge variant={!tracking ? 'neutral' : pausadoDesde ? 'warning' : 'success'} size="sm">
             {estado}
           </Badge>
@@ -62,9 +50,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  codigo: { fontFamily: dsFontFamily.display, fontSize: dsFontSize.lg },
+  codigo: { fontSize: dsFontSize.lg },
   detalles: { gap: dsSpace.xs, flexShrink: 1 },
   estadoFila: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.xs },
-  punto: { width: dsSpace.sm, height: dsSpace.sm, borderRadius: dsSpace.xs },
   salida: { color: dsColors.textSecondary },
 });

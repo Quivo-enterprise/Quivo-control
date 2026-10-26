@@ -1,9 +1,10 @@
 import { memo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { quivoColors, quivoFonts, quivoRadius } from '../../shared/theme/quivo-theme';
-import { SiluetaVehiculo } from './silueta-vehiculo';
+import { Heading, Text } from '@quivo/design-system-native';
+import { Burbuja } from '../../shared/components/burbuja';
+import { dsColors, dsSpace } from '../../shared/theme/design-system';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 import {
   TEXTO_SIN_DATO,
   etiquetaAccesibleFila,
@@ -24,6 +25,9 @@ interface Props {
   sinActualizar: boolean;
 }
 
+const DISTANCIA_ATENCION_M = 500;
+const DISTANCIA_CERCA_M = 300;
+
 function Fila({
   lado,
   estado,
@@ -34,44 +38,57 @@ function Fila({
   transcurridoMs: number;
 }) {
   const vecino = estado.tipo === 'vecino' ? estado.vecino : null;
+  const cerca = vecino !== null && vecino.distanciaM <= DISTANCIA_CERCA_M;
+  const atencion = vecino !== null && vecino.distanciaM <= DISTANCIA_ATENCION_M;
+  const color = cerca ? dsColors.danger : atencion ? dsColors.warning : dsColors.borderSubtle;
   return (
     <View
-      style={styles.fila}
+      style={[styles.fila, { borderColor: color }]}
       accessible
       accessibilityLabel={etiquetaAccesibleFila(lado, estado, transcurridoMs)}
     >
-      <View style={[styles.chevron, !vecino && styles.chevronVacio]}>
-        <Ionicons
-          name={lado === 'delante' ? 'chevron-up' : 'chevron-down'}
-          size={16}
-          color={vecino ? quivoColors.primary : quivoColors.textMuted}
-        />
-      </View>
-      <SiluetaVehiculo
-        tipo={vecino?.tipo ?? ''}
-        color={vecino?.color ?? ''}
-        colorSecundario={vecino?.colorSecundario ?? null}
-        fantasma={!vecino}
+      <Ionicons
+        name={
+          cerca
+            ? 'alert-circle'
+            : atencion
+              ? 'warning'
+              : lado === 'delante'
+                ? 'arrow-up'
+                : 'arrow-down'
+        }
+        size={20}
+        color={cerca ? dsColors.danger : atencion ? dsColors.warning : dsColors.primary}
       />
       {vecino ? (
-        <>
-          <View style={styles.texto}>
-            <Text style={styles.placa} numberOfLines={1}>
-              {vecino.placa}
-              {vecino.numeroInterno ? (
-                <Text style={styles.interno}>{`  #${vecino.numeroInterno}`}</Text>
-              ) : null}
-            </Text>
-            <Text style={styles.edad} numberOfLines={1}>
-              {etiquetaLado(lado)} · {textoEdad(vecino.edadFixS, transcurridoMs)}
+        <View style={styles.datos}>
+          <View style={styles.linea}>
+            <View style={styles.placaBloque}>
+              <Text size="sm" weight="semibold" variant="secondary">
+                {etiquetaLado(lado).toUpperCase()}
+              </Text>
+              <Heading size="lg" numberOfLines={1}>
+                {vecino.placa}
+              </Heading>
+            </View>
+            <Text size="lg" weight="bold" style={styles.distancia}>
+              {textoDistancia(vecino.distanciaM)}
             </Text>
           </View>
-          <Text style={styles.distancia}>{textoDistancia(vecino.distanciaM)}</Text>
-        </>
-      ) : estado.tipo === 'nadie' ? (
-        <Text style={styles.vacio}>{textoVacio(lado)}</Text>
+          {cerca ? (
+            <Text size="sm" weight="semibold" style={styles.alerta}>
+              Vehículo de {lado === 'delante' ? 'adelante' : 'atrás'} demasiado cerca
+            </Text>
+          ) : (
+            <Text size="sm" variant="secondary">
+              {textoEdad(vecino.edadFixS, transcurridoMs)}
+            </Text>
+          )}
+        </View>
       ) : (
-        <Text style={styles.sinDato}>{TEXTO_SIN_DATO}</Text>
+        <Text size="sm" variant="secondary">
+          {estado.tipo === 'nadie' ? textoVacio(lado) : TEXTO_SIN_DATO}
+        </Text>
       )}
     </View>
   );
@@ -85,91 +102,33 @@ export const VecinosRutaCard = memo(function VecinosRutaCard({
   sinActualizar,
 }: Props) {
   return (
-    <BlurView intensity={100} tint="light" style={styles.card}>
+    <Burbuja direction="column" style={styles.card}>
       <Fila lado="delante" estado={delante} transcurridoMs={transcurridoMs} />
-      <View style={styles.separador} />
       <Fila lado="detras" estado={detras} transcurridoMs={transcurridoMs} />
       {sinActualizar ? (
-        <>
-          <View style={styles.separador} />
-          <Text style={styles.pie} accessibilityLiveRegion="polite">
-            {`Sin actualizar · último dato ${textoEdad(0, transcurridoMs)}`}
-          </Text>
-        </>
+        <Text size="sm" variant="secondary" accessibilityLiveRegion="polite">
+          {`Sin actualizar · último dato ${textoEdad(0, transcurridoMs)}`}
+        </Text>
       ) : null}
-    </BlurView>
+    </Burbuja>
   );
 });
 
 const styles = StyleSheet.create({
-  card: {
-    borderRadius: quivoRadius.lg,
-    overflow: 'hidden',
-    paddingHorizontal: 12,
-    backgroundColor: quivoColors.glassSurfaceStrong,
-    borderWidth: 1,
-    borderColor: quivoColors.glassBorder,
-  },
+  card: { width: '100%', alignItems: 'stretch' },
   fila: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    height: 48,
+    gap: dsSpace.sm,
+    minHeight: quivoBubble.touch,
+    padding: dsSpace.sm,
+    borderWidth: 1,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.surfaceRaised,
   },
-  separador: { height: 1, backgroundColor: quivoColors.glassDivider },
-  chevron: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: quivoColors.primarySubtle,
-  },
-  chevronVacio: {
-    backgroundColor: 'transparent',
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: quivoColors.textMuted,
-  },
-  texto: { flex: 1, minWidth: 0, gap: 1 },
-  placa: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.mono,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  interno: {
-    color: quivoColors.textSecondary,
-    fontFamily: quivoFonts.mono,
-    fontSize: 12,
-  },
-  edad: {
-    color: quivoColors.textSecondary,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 12,
-  },
-  distancia: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 22,
-    textAlign: 'right',
-  },
-  vacio: {
-    flex: 1,
-    color: quivoColors.textSecondary,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 14,
-  },
-  sinDato: {
-    flex: 1,
-    color: quivoColors.textMuted,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 14,
-  },
-  pie: {
-    color: quivoColors.textMuted,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 11,
-    paddingVertical: 6,
-  },
+  datos: { flex: 1, minWidth: 0, gap: dsSpace.xs },
+  linea: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm },
+  placaBloque: { flex: 1, minWidth: 0 },
+  distancia: { color: dsColors.textPrimary, fontVariant: ['tabular-nums'] },
+  alerta: { color: dsColors.danger },
 });

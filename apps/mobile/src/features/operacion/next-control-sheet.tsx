@@ -253,7 +253,7 @@ export function NextControlSheet(props: NextControlSheetProps) {
                 Siguiente parada
               </Text>
               <Heading size="xl" numberOfLines={2}>
-                {props.nombreProximaParada || 'Próxima parada'}
+                {props.nombreProximaParada || `Punto de control ${props.nextPointOrder ?? 1}`}
               </Heading>
               {props.viaMolinos ? (
                 <View

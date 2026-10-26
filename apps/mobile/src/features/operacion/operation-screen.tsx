@@ -9,7 +9,6 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
 import * as Sentry from '@sentry/react-native';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,10 +20,15 @@ import {
 } from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
 import { Input } from '../../shared/components/Input';
-import { quivoFonts, quivoRadius, quivoSpacing, quivoBubble } from '../../shared/theme/quivo-theme';
-import { dsColors, dsSpace, dsDuration } from '../../shared/theme/design-system';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
+import { dsColors, dsSpace, dsDuration, dsElevation } from '../../shared/theme/design-system';
 import { Burbuja, BotonBurbuja, PildoraBurbuja } from '../../shared/components/burbuja';
-import { Button as DsButton, Text as DsText } from '@quivo/design-system-native';
+import {
+  Button as DsButton,
+  Heading,
+  Text as DsText,
+  fontStyle,
+} from '@quivo/design-system-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MapErrorBoundary } from './map-error-boundary';
 import { useProgresoVuelta } from './use-progreso-vuelta';
@@ -55,6 +59,14 @@ import { useVueltaActual } from '../vuelta-actual/use-vuelta-actual';
 import { useFilaSalida } from '../fila-salida/use-fila-salida';
 import { terminalDeLaRuta } from '../fila-salida/fila-salida-deteccion';
 import { AvisoDesignacion, ContadorEsperaMolinos } from '../vuelta-actual/aviso-designacion';
+
+const MOTIVOS_REPORTE = [
+  'Bloqueo o trancadera',
+  'Falla mecánica',
+  'Salud o emergencia',
+  'Almuerzo',
+  'Combustible',
+] as const;
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -664,33 +676,15 @@ export function OperationScreen(
         gpsError={gps.errorGps}
       />
 
-      <Modal
+      <QuivoConfirmDialog
         visible={showInfo}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowInfo(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <BlurView intensity={85} tint="light" style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Ionicons name="checkmark-circle-outline" size={20} color={dsColors.primaryText} />
-              <Text style={styles.modalTitle}>Registro automatico</Text>
-            </View>
-            <Text style={styles.modalText}>
-              Al entrar al radio del punto de control, este se registra automáticamente en el
-              sistema
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Entendido"
-              onPress={() => setShowInfo(false)}
-              style={({ pressed }) => [styles.modalPillButton, pressed && styles.pressedButton]}
-            >
-              <Text style={styles.modalPillButtonText}>ENTENDIDO</Text>
-            </Pressable>
-          </BlurView>
-        </View>
-      </Modal>
+        icon="checkmark-circle-outline"
+        title="Registro automático"
+        message="Al entrar al radio del punto de control, este se registra automáticamente en el sistema"
+        confirmLabel="Entendido"
+        onConfirm={() => setShowInfo(false)}
+        onCancel={() => setShowInfo(false)}
+      />
 
       {/* Observación modal */}
       <Modal
@@ -702,35 +696,44 @@ export function OperationScreen(
         }}
       >
         <View style={styles.modalOverlay}>
-          <BlurView intensity={85} tint="light" style={styles.modalContent}>
+          <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Ionicons name="alert-circle-outline" size={20} color={dsColors.primaryText} />
-              <Text style={styles.modalTitle}>Registrar observación</Text>
+              <Ionicons name="alert-circle-outline" size={24} color={dsColors.primary} />
+              <Heading size="lg" style={styles.modalTitle}>
+                Reportar un problema
+              </Heading>
             </View>
             {observacionEnviada ? (
               <>
-                <Text style={styles.modalText}>
+                <DsText size="sm" style={styles.modalText}>
                   Observación enviada. Se sincroniza junto con tu recorrido.
-                </Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Listo"
-                  onPress={cerrarModalObservacion}
-                  style={({ pressed }) => [styles.modalPillButton, pressed && styles.pressedButton]}
-                >
-                  <Text style={styles.modalPillButtonText}>LISTO</Text>
-                </Pressable>
+                </DsText>
+                <DsButton variant="primary" onPress={cerrarModalObservacion}>
+                  Listo
+                </DsButton>
               </>
             ) : (
               <>
                 {errorObservacion ? (
-                  <Text
+                  <DsText
                     accessibilityRole="alert"
                     style={[styles.dangerNotice, styles.observacionError]}
                   >
                     {errorObservacion}
-                  </Text>
+                  </DsText>
                 ) : null}
+                <View style={styles.motivos}>
+                  {MOTIVOS_REPORTE.map((motivo) => (
+                    <DsButton
+                      key={motivo}
+                      variant={observacion === motivo ? 'primary' : 'outline'}
+                      onPress={() => setObservacion(motivo)}
+                      style={styles.motivo}
+                    >
+                      {motivo}
+                    </DsButton>
+                  ))}
+                </View>
                 <Input
                   controlSize="lg"
                   multiline
@@ -743,39 +746,26 @@ export function OperationScreen(
                   accessibilityLabel="Texto de la observación"
                 />
                 <View style={styles.observacionActions}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Cancelar"
+                  <DsButton
+                    variant="outline"
                     onPress={cerrarModalObservacion}
                     disabled={enviandoObservacion}
-                    style={({ pressed }) => [
-                      styles.modalCancelButton,
-                      pressed && styles.pressedButton,
-                    ]}
+                    style={styles.modalAction}
                   >
-                    <Text style={styles.modalCancelButtonText}>CANCELAR</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Enviar"
+                    Cancelar
+                  </DsButton>
+                  <DsButton
+                    variant="primary"
                     onPress={() => void enviarObservacion()}
                     disabled={!observacion.trim() || enviandoObservacion}
-                    style={({ pressed }) => [
-                      styles.modalConfirmButton,
-                      (!observacion.trim() || enviandoObservacion) && styles.disabledButton,
-                      pressed && styles.pressedButton,
-                    ]}
+                    style={styles.modalAction}
                   >
-                    {enviandoObservacion ? (
-                      <ActivityIndicator color={dsColors.white} size="small" />
-                    ) : (
-                      <Text style={styles.modalConfirmButtonText}>ENVIAR</Text>
-                    )}
-                  </Pressable>
+                    {enviandoObservacion ? 'Enviando…' : 'Enviar'}
+                  </DsButton>
                 </View>
               </>
             )}
-          </BlurView>
+          </View>
         </View>
       </Modal>
 
@@ -785,7 +775,7 @@ export function OperationScreen(
       />
       <ContadorEsperaMolinos
         pastilla={vueltaActual.pastillaEspera}
-        bottom={altoSheetVisible + quivoSpacing.md}
+        bottom={altoSheetVisible + dsSpace.md}
       />
       <AvisoDesignacion
         designada={vueltaActual.designacionPendiente !== null}
@@ -794,13 +784,15 @@ export function OperationScreen(
         sinActualizar={vueltaActual.sinActualizar}
         // Si el banner de vuelta completada está visible, la tarjeta se apila debajo (el banner es
         // pasivo y la tarjeta tiene el botón: no se pueden superponer).
-        top={insetSuperior + 8 + (altoBannerVuelta > 0 ? altoBannerVuelta + 8 : 0)}
+        top={
+          insetSuperior + dsSpace.sm + (altoBannerVuelta > 0 ? altoBannerVuelta + dsSpace.sm : 0)
+        }
         onEntenderDesignacion={vueltaActual.entenderDesignacion}
         onEntenderCancelacion={vueltaActual.entenderCancelacion}
       />
       <VueltaCompletadaBanner
         resumen={progreso.avisoVuelta}
-        top={insetSuperior + 8}
+        top={insetSuperior + dsSpace.sm}
         onTerminar={progreso.descartarAvisoVuelta}
         onAlto={setAltoBannerVuelta}
       />
@@ -959,12 +951,12 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: quivoSpacing.sm,
+    gap: dsSpace.sm,
     paddingBottom: 180,
   },
   mapFallbackText: {
     color: dsColors.textSecondary,
-    fontFamily: quivoFonts.bodyMedium,
+    ...fontStyle('body', '500'),
     fontSize: 12,
   },
   topOverlay: {
@@ -992,7 +984,7 @@ const styles = StyleSheet.create({
   },
   senalDebilTexto: {
     color: dsColors.warningText,
-    fontFamily: quivoFonts.bodySemiBold,
+    ...fontStyle('body', '600'),
     fontSize: 14,
   },
   fabsContainer: { position: 'absolute', right: quivoBubble.edge },
@@ -1030,116 +1022,27 @@ const styles = StyleSheet.create({
     backgroundColor: quivoBubble.scrim,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: quivoSpacing.lg,
+    padding: dsSpace.md,
   },
   modalContent: {
-    backgroundColor: quivoBubble.surface,
-    borderRadius: 22,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: quivoBubble.border,
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 16,
+    backgroundColor: dsColors.surfaceRaised,
+    borderRadius: quivoBubble.radius,
+    padding: dsSpace.md,
+    gap: dsSpace.md,
     width: '100%',
-    maxWidth: 290,
-    shadowColor: dsColors.dark,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.16,
-    shadowRadius: 16,
-    elevation: 12,
+    maxWidth: 400,
+    ...dsElevation(3),
   },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
-  },
-  modalTitle: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 16,
-    color: dsColors.primaryText,
-    letterSpacing: 0.2,
-    flex: 1,
-  },
-  modalText: {
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 12,
-    lineHeight: 16.5,
-    color: dsColors.textSecondary,
-    marginBottom: 16,
-  },
-  modalPillButton: {
-    height: 38,
-    borderRadius: quivoRadius.pill,
-    backgroundColor: dsColors.primaryText,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: dsColors.primaryStrong,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  modalPillButtonText: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 13,
-    letterSpacing: 0.8,
-    color: dsColors.white,
-  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm },
+  modalTitle: { flex: 1, color: dsColors.textPrimary },
+  modalText: { color: dsColors.textSecondary },
+  motivos: { flexDirection: 'row', flexWrap: 'wrap', gap: dsSpace.sm },
+  motivo: { minHeight: quivoBubble.touch, borderRadius: quivoBubble.innerRadius },
   observacionShell: {
     backgroundColor: dsColors.surfaceSunken,
-    borderRadius: 14,
-    borderWidth: 0,
+    borderRadius: quivoBubble.innerRadius,
   },
-  observacionError: {
-    marginBottom: 8,
-  },
-  observacionActions: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
-  },
-  modalCancelButton: {
-    flex: 1,
-    height: 38,
-    borderRadius: quivoRadius.pill,
-    backgroundColor: dsColors.surfaceSunken,
-    borderWidth: 1.5,
-    borderColor: dsColors.primaryText,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalCancelButtonText: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 12.5,
-    letterSpacing: 0.6,
-    color: dsColors.primaryText,
-  },
-  modalConfirmButton: {
-    flex: 1,
-    height: 38,
-    borderRadius: quivoRadius.pill,
-    backgroundColor: dsColors.primaryText,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: dsColors.primaryStrong,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  modalConfirmButtonText: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 12.5,
-    letterSpacing: 0.6,
-    color: dsColors.white,
-  },
-  disabledButton: {
-    opacity: 0.5,
-  },
-  pressedButton: {
-    opacity: 0.8,
-    transform: [{ scale: 0.98 }],
-  },
+  observacionError: { marginBottom: dsSpace.sm },
+  observacionActions: { flexDirection: 'row', gap: dsSpace.sm },
+  modalAction: { flex: 1, minHeight: quivoBubble.touch },
 });

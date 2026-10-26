@@ -1,7 +1,9 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Button } from '../../shared/components/Button';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { Button, Heading, Text } from '@quivo/design-system-native';
+import { Burbuja, PildoraBurbuja } from '../../shared/components/burbuja';
+import { dsColors, dsSpace } from '../../shared/theme/design-system';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 import {
   CUERPO_AVISO_CANCELADA,
   TEXTO_AVISO_CANCELADA,
@@ -25,9 +27,8 @@ interface AvisoDesignacionProps {
 
 /**
  * Aviso grande y PERSISTENTE de la designación a Molinos (o de su cancelación): se queda hasta
- * que el chofer toca "Entendido". A diferencia de `VueltaCompletadaBanner` (pasivo, se apaga
- * solo) este SÍ intercepta toques — exige una acción. Misma familia visual: tarjeta `card`,
- * sombra y tipografía Oxanium del tema Quivo.
+ * que el chofer toca "Entendido". A diferencia de `VueltaCompletadaBanner` este SÍ intercepta
+ * toques — exige una acción.
  */
 export function AvisoDesignacion({
   designada,
@@ -45,50 +46,56 @@ export function AvisoDesignacion({
 
   return (
     <View pointerEvents="box-none" style={[styles.contenedor, { top }]}>
-      <View
-        style={[styles.tarjeta, esCancelacion ? styles.tarjetaCancelada : styles.tarjetaDesignada]}
-        accessibilityRole="alert"
-        accessibilityLiveRegion="assertive"
-        accessibilityLabel={
-          esCancelacion
-            ? TEXTO_AVISO_CANCELADA
-            : textoAvisoDesignada(esperaMin)
-        }
-      >
-        <View style={styles.encabezado}>
-          <Ionicons
-            name={esCancelacion ? 'close-circle' : 'trail-sign'}
-            size={26}
-            color={esCancelacion ? quivoColors.danger : quivoColors.primary}
-          />
-          <Text style={[styles.titulo, esCancelacion && styles.tituloCancelada]}>
-            {esCancelacion ? 'Designación cancelada' : 'Designación'}
-          </Text>
+      <Burbuja direction="column" style={styles.tarjeta}>
+        <View
+          style={styles.contenido}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="assertive"
+          accessibilityLabel={
+            esCancelacion ? TEXTO_AVISO_CANCELADA : textoAvisoDesignada(esperaMin)
+          }
+        >
+          <View style={styles.encabezado}>
+            <Ionicons
+              name={esCancelacion ? 'close-circle' : 'trail-sign'}
+              size={24}
+              color={esCancelacion ? dsColors.danger : dsColors.primary}
+            />
+            <Heading
+              size="md"
+              style={{ color: esCancelacion ? dsColors.danger : dsColors.primary }}
+            >
+              {esCancelacion ? 'Designación cancelada' : 'Designación'}
+            </Heading>
+          </View>
+          {esCancelacion ? (
+            <Text size="md">{CUERPO_AVISO_CANCELADA}</Text>
+          ) : (
+            <Text size="md">
+              {partes.antes}
+              <Text size="md" weight="bold" style={styles.destacado}>
+                {partes.destacado}
+              </Text>
+              {partes.despues}
+            </Text>
+          )}
+          {!esCancelacion && sinActualizar ? (
+            <Text size="sm" variant="secondary">
+              Sin actualizar
+            </Text>
+          ) : null}
         </View>
-        {esCancelacion ? (
-          <Text style={styles.cuerpo}>{CUERPO_AVISO_CANCELADA}</Text>
-        ) : (
-          <Text style={styles.cuerpo}>
-            {partes.antes}
-            <Text style={styles.cuerpoNegrita}>{partes.destacado}</Text>
-            {partes.despues}
-          </Text>
-        )}
-        {!esCancelacion && sinActualizar ? (
-          <Text style={styles.sinActualizar}>sin actualizar</Text>
-        ) : null}
         <Button
-          variant={esCancelacion ? 'danger' : 'primary'}
-          size="lg"
-          fullWidth
+          variant="primary"
           onPress={esCancelacion ? onEntenderCancelacion : onEntenderDesignacion}
           accessibilityHint={
             esCancelacion ? 'Cierra el aviso de cancelación' : 'Confirma que leíste la designación'
           }
+          style={styles.accion}
         >
           Entendido
         </Button>
-      </View>
+      </Burbuja>
     </View>
   );
 }
@@ -106,19 +113,13 @@ export function ContadorEsperaMolinos({ pastilla, bottom }: ContadorEsperaMolino
   if (pastilla === null) return null;
   const { texto, listo } = pastilla;
   return (
-    <View pointerEvents="none" style={[styles.contenedor, { bottom }]}>
+    <View pointerEvents="none" style={[styles.contador, { bottom }]}>
       <View
-        style={styles.pill}
         accessibilityRole="alert"
         accessibilityLiveRegion="polite"
         accessibilityLabel={`Molinos: ${texto}`}
       >
-        <Ionicons
-          name={listo ? 'checkmark-circle' : 'time-outline'}
-          size={18}
-          color={listo ? quivoColors.success : quivoColors.accentStrong}
-        />
-        <Text style={styles.pillTexto}>{texto}</Text>
+        <PildoraBurbuja icono={listo ? 'checkmark-circle' : 'time-outline'}>{texto}</PildoraBurbuja>
       </View>
     </View>
   );
@@ -127,61 +128,20 @@ export function ContadorEsperaMolinos({ pastilla, bottom }: ContadorEsperaMolino
 const styles = StyleSheet.create({
   contenedor: {
     position: 'absolute',
-    left: quivoSpacing.lg,
-    right: quivoSpacing.lg,
+    left: quivoBubble.edge,
+    right: quivoBubble.edge,
     zIndex: 1600,
   },
-  tarjeta: {
-    backgroundColor: quivoColors.card,
-    borderRadius: quivoRadius.lg,
-    borderLeftWidth: 6,
-    padding: quivoSpacing.lg,
-    gap: quivoSpacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    elevation: 8,
-  },
-  tarjetaDesignada: { borderLeftColor: quivoColors.accent },
-  tarjetaCancelada: { borderLeftColor: quivoColors.danger },
-  encabezado: { flexDirection: 'row', alignItems: 'center', gap: quivoSpacing.sm },
-  titulo: {
-    color: quivoColors.primary,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 18,
-  },
-  tituloCancelada: { color: quivoColors.danger },
-  cuerpo: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 17,
-    lineHeight: 24,
-  },
-  sinActualizar: {
-    color: quivoColors.textMuted,
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 12,
-  },
-  cuerpoNegrita: { fontFamily: quivoFonts.displayBold, color: quivoColors.primary },
-  pill: {
-    alignSelf: 'center',
-    flexDirection: 'row',
+  tarjeta: { alignItems: 'stretch' },
+  contenido: { gap: dsSpace.sm, padding: dsSpace.sm },
+  encabezado: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm },
+  destacado: { color: dsColors.primary },
+  accion: { minHeight: 48, borderRadius: quivoBubble.innerRadius },
+  contador: {
+    position: 'absolute',
+    left: quivoBubble.edge,
+    right: quivoBubble.edge,
     alignItems: 'center',
-    gap: quivoSpacing.sm,
-    backgroundColor: quivoColors.card,
-    borderRadius: quivoRadius.pill,
-    paddingHorizontal: quivoSpacing.lg,
-    paddingVertical: quivoSpacing.sm,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    elevation: 6,
-  },
-  pillTexto: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 14,
+    zIndex: 1600,
   },
 });

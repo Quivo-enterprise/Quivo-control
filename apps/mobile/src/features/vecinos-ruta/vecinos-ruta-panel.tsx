@@ -4,6 +4,8 @@ import type { FaseCircuito } from '@quivo/shared';
 import type { PosicionVecinos } from '../../shared/api/vecinos-ruta-api';
 import { useVecinosRuta } from './use-vecinos-ruta';
 import { VecinosRutaCard } from './vecinos-ruta-card';
+import { dsSpace } from '../../shared/theme/design-system';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { estadoFila, sinActualizar, tarjetaVisible } from './estado-vecinos';
 
 interface Props {
@@ -19,7 +21,7 @@ interface Props {
   topBase: number;
 }
 
-const SEPARACION_PX = 8;
+const SEPARACION_PX = dsSpace.sm;
 
 /**
  * Conecta el hook con la tarjeta. Es un overlay propio (NO dentro del `topOverlay` medido): así
@@ -55,10 +57,7 @@ export const VecinosRutaPanel = memo(function VecinosRutaPanel({ topBase, ...par
   if (!tarjetaVisible(delante, detras)) return null;
 
   return (
-    <View
-      pointerEvents="box-none"
-      style={[styles.overlay, { top: topBase + SEPARACION_PX }]}
-    >
+    <View pointerEvents="box-none" style={[styles.overlay, { top: topBase + SEPARACION_PX }]}>
       <VecinosRutaCard
         delante={delante}
         detras={detras}
@@ -71,5 +70,5 @@ export const VecinosRutaPanel = memo(function VecinosRutaPanel({ topBase, ...par
 
 const styles = StyleSheet.create({
   // Mismos márgenes horizontales que `topOverlay` de la pantalla de operación.
-  overlay: { position: 'absolute', left: 16, right: 16 },
+  overlay: { position: 'absolute', left: quivoBubble.edge, right: quivoBubble.edge + 64 },
 });

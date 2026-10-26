@@ -1,7 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { Animated, StyleSheet, Text, View } from 'react-native';
+import { Animated, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { Button, Text } from '@quivo/design-system-native';
+import { Burbuja } from '../../shared/components/burbuja';
+import { dsColors, dsDuration, dsEasing } from '../../shared/theme/design-system';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 
 const DURACION_AVISO_MS = 4000;
 
@@ -17,8 +20,13 @@ interface VueltaCompletadaBannerProps {
 }
 
 /** Aviso breve "Vuelta N completada · X/Y puntos", una vez por cierre de vuelta (RF-GPS-054).
- * Pasivo (`pointerEvents="none"`): no tapa el mapa ni exige una acción del chofer. */
-export function VueltaCompletadaBanner({ resumen, top, onTerminar, onAlto }: VueltaCompletadaBannerProps) {
+ * Se apaga solo; la acción permite cerrarlo antes. */
+export function VueltaCompletadaBanner({
+  resumen,
+  top,
+  onTerminar,
+  onAlto,
+}: VueltaCompletadaBannerProps) {
   const opacidad = useRef(new Animated.Value(0)).current;
   const onTerminarRef = useRef(onTerminar);
   onTerminarRef.current = onTerminar;
@@ -27,9 +35,19 @@ export function VueltaCompletadaBanner({ resumen, top, onTerminar, onAlto }: Vue
     if (!resumen) return;
     opacidad.setValue(0);
     const animacion = Animated.sequence([
-      Animated.timing(opacidad, { toValue: 1, duration: 200, useNativeDriver: true }),
+      Animated.timing(opacidad, {
+        toValue: 1,
+        duration: dsDuration.base,
+        easing: dsEasing.easeOut,
+        useNativeDriver: true,
+      }),
       Animated.delay(DURACION_AVISO_MS),
-      Animated.timing(opacidad, { toValue: 0, duration: 400, useNativeDriver: true }),
+      Animated.timing(opacidad, {
+        toValue: 0,
+        duration: dsDuration.base,
+        easing: dsEasing.easeIn,
+        useNativeDriver: true,
+      }),
     ]);
     animacion.start(({ finished }) => {
       if (finished) onTerminarRef.current();
@@ -44,21 +62,22 @@ export function VueltaCompletadaBanner({ resumen, top, onTerminar, onAlto }: Vue
   }, [resumen]);
 
   if (!resumen) return null;
-
   return (
     <Animated.View
-      pointerEvents="none"
       style={[styles.contenedor, { top, opacity: opacidad }]}
       onLayout={(e) => onAlto?.(e.nativeEvent.layout.height)}
       accessibilityRole="alert"
       accessibilityLiveRegion="polite"
     >
-      <View style={styles.pill}>
-        <Ionicons name="repeat" size={18} color={quivoColors.success} />
-        <Text style={styles.texto}>
+      <Burbuja style={styles.burbuja}>
+        <Ionicons name="repeat" size={20} color={dsColors.success} />
+        <Text size="sm" weight="semibold" style={styles.texto}>
           Vuelta {resumen.numero} completada · {resumen.pasados}/{resumen.total} puntos
         </Text>
-      </View>
+        <Button variant="outline" onPress={onTerminar}>
+          Terminar
+        </Button>
+      </Burbuja>
     </Animated.View>
   );
 }
@@ -66,28 +85,11 @@ export function VueltaCompletadaBanner({ resumen, top, onTerminar, onAlto }: Vue
 const styles = StyleSheet.create({
   contenedor: {
     position: 'absolute',
-    left: 0,
-    right: 0,
+    left: quivoBubble.edge,
+    right: quivoBubble.edge,
     alignItems: 'center',
     zIndex: 1500,
   },
-  pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: quivoSpacing.sm,
-    backgroundColor: quivoColors.card,
-    borderRadius: quivoRadius.pill,
-    paddingHorizontal: quivoSpacing.lg,
-    paddingVertical: quivoSpacing.sm,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    elevation: 6,
-  },
-  texto: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 14,
-  },
+  burbuja: { width: '100%', flexWrap: 'wrap' },
+  texto: { color: dsColors.textPrimary, flex: 1, minWidth: 120 },
 });
