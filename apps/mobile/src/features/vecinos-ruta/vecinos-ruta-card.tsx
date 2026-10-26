@@ -1,10 +1,11 @@
 import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Heading, Text } from '@quivo/design-system-native';
+import { Heading, Text, fontStyle } from '@quivo/design-system-native';
 import { Burbuja } from '../../shared/components/burbuja';
-import { dsColors, dsSpace } from '../../shared/theme/design-system';
+import { dsColors, dsFontSize, dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
+import { SiluetaVehiculo } from './silueta-vehiculo';
 import {
   TEXTO_SIN_DATO,
   etiquetaAccesibleFila,
@@ -105,6 +106,129 @@ function Fila({
   );
 }
 
+function FilaEnLinea({
+  lado,
+  estado,
+  transcurridoMs,
+  buscando,
+  sinActualizar,
+}: {
+  lado: Lado;
+  estado: EstadoFila;
+  transcurridoMs: number;
+  buscando: boolean;
+  sinActualizar: boolean;
+}) {
+  const vecino = estado.tipo === 'vecino' ? estado.vecino : null;
+  const nivel = lado === 'delante' && vecino ? estadoDistanciaVecino(vecino.distanciaM) : null;
+  const semaforo = nivel ? COLOR_SEMAFORO[nivel] : null;
+  const etiqueta = buscando
+    ? 'Buscando…'
+    : vecino
+      ? etiquetaLado(lado).toUpperCase()
+      : estado.tipo === 'nadie'
+        ? lado === 'delante'
+          ? 'Nadie delante'
+          : 'Nadie detrás'
+        : 'Sin datos';
+  return (
+    <View
+      style={[
+        styles.filaEnLinea,
+        { borderColor: semaforo?.borde ?? dsColors.borderSubtle },
+        nivel && { borderWidth: 2 },
+        nivel === 'alerta' && styles.filaEnAlerta,
+      ]}
+      accessible
+      accessibilityLabel={
+        buscando
+          ? `${etiquetaLado(lado)}: buscando`
+          : etiquetaAccesibleFila(lado, estado, transcurridoMs)
+      }
+    >
+      <SiluetaVehiculo
+        tipo={vecino?.tipo ?? 'micro'}
+        color={vecino?.color ?? ''}
+        colorSecundario={vecino?.colorSecundario ?? null}
+        fantasma={!vecino}
+        ancho={quivoBubble.touch - dsSpace.xs}
+        alto={dsSpace.sm * 3}
+      />
+      <View style={styles.datosEnLinea}>
+        <View style={styles.etiquetaEnLinea}>
+          <Text size="xs" variant="secondary" numberOfLines={1}>
+            {etiqueta}
+          </Text>
+          {vecino?.numeroInterno ? (
+            <Text size="sm" variant="secondary" numberOfLines={1}>
+              · {vecino.numeroInterno}
+            </Text>
+          ) : null}
+          {vecino && sinActualizar ? (
+            <Text size="xs" variant="secondary" numberOfLines={1}>
+              {textoEdad(vecino.edadFixS, transcurridoMs)}
+            </Text>
+          ) : null}
+        </View>
+        {vecino ? (
+          <Text numberOfLines={1} style={[styles.placaEnLinea, fontStyle('display', '700')]}>
+            {vecino.placa}
+          </Text>
+        ) : null}
+      </View>
+      {vecino ? (
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.distanciaEnLinea,
+            fontStyle('display', '700'),
+            semaforo && {
+              color: nivel === 'normal' ? dsColors.success : semaforo.texto,
+            },
+          ]}
+        >
+          {textoDistancia(vecino.distanciaM)}
+        </Text>
+      ) : null}
+      {vecino && sinActualizar ? <View style={styles.puntoDesactualizado} /> : null}
+    </View>
+  );
+}
+
+/** Las dos filas permanecen visibles para mantener la altura de la barra durante la ruta. */
+export const VecinosRutaFilas = memo(function VecinosRutaFilas({
+  delante,
+  detras,
+  transcurridoMs,
+  buscando = false,
+  sinActualizar = false,
+}: {
+  delante: EstadoFila;
+  detras: EstadoFila;
+  transcurridoMs: number;
+  buscando?: boolean;
+  sinActualizar?: boolean;
+}) {
+  return (
+    <View style={styles.filasEnLinea}>
+      <FilaEnLinea
+        lado="delante"
+        estado={delante}
+        transcurridoMs={transcurridoMs}
+        buscando={buscando}
+        sinActualizar={sinActualizar}
+      />
+      <FilaEnLinea
+        lado="detras"
+        estado={detras}
+        transcurridoMs={transcurridoMs}
+        buscando={buscando}
+        sinActualizar={sinActualizar}
+      />
+    </View>
+  );
+});
+
 /** Panel compacto "Delante / Detrás" de la pantalla de operación. */
 export const VecinosRutaCard = memo(function VecinosRutaCard({
   delante,
@@ -143,4 +267,46 @@ const styles = StyleSheet.create({
   placaBloque: { flex: 1, minWidth: 0 },
   distancia: { color: dsColors.textPrimary, fontVariant: ['tabular-nums'] },
   alerta: { color: dsColors.danger },
+  filasEnLinea: { width: '100%', gap: quivoBubble.gap },
+  filaEnLinea: {
+    width: '100%',
+    height: quivoBubble.touch + quivoBubble.padding,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: quivoBubble.gap,
+    paddingHorizontal: quivoBubble.padding,
+    borderWidth: 1,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.surfaceSoft,
+  },
+  datosEnLinea: {
+    flex: 1,
+    minWidth: 0,
+    gap: dsSpace.xs,
+  },
+  etiquetaEnLinea: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: dsSpace.xs,
+    minWidth: 0,
+  },
+  placaEnLinea: {
+    color: dsColors.textPrimary,
+    fontSize: dsFontSize.lg,
+  },
+  distanciaEnLinea: {
+    color: dsColors.textPrimary,
+    fontSize: dsFontSize.xl,
+    fontVariant: ['tabular-nums'],
+  },
+  filaEnAlerta: { backgroundColor: dsColors.dangerSoft },
+  puntoDesactualizado: {
+    position: 'absolute',
+    top: quivoBubble.padding,
+    right: quivoBubble.padding,
+    width: quivoBubble.padding / 2,
+    height: quivoBubble.padding / 2,
+    borderRadius: quivoBubble.padding / 2,
+    backgroundColor: dsColors.warning,
+  },
 });

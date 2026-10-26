@@ -5,7 +5,7 @@ import * as Sentry from '@sentry/react-native';
 import type { FaseCircuito } from '@quivo/shared';
 import type { PosicionVecinos } from '../../shared/api/vecinos-ruta-api';
 import { useVecinosRuta } from './use-vecinos-ruta';
-import { VecinosRutaCard } from './vecinos-ruta-card';
+import { VecinosRutaCard, VecinosRutaFilas } from './vecinos-ruta-card';
 import { dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
 import {
@@ -27,17 +27,22 @@ interface Props {
   obtenerFase: () => FaseCircuito | null;
   /** Borde inferior medido del overlay superior; el panel se ancla justo debajo. */
   topBase: number;
+  /** Renderiza la fila compacta para incluirla en la cabecera; el panel sigue montado para la voz. */
+  enLinea?: boolean;
 }
 
 const SEPARACION_PX = dsSpace.sm;
 
 /**
- * Conecta el hook con la tarjeta. Es un overlay propio (NO dentro del `topOverlay` medido): así
- * su montaje tardío no altera `insetSuperior` ni el padding de la cámara de navegación. No
- * renderiza nada sin datos ni cuando ambas filas están sin dato. Solo re-renderiza por datos,
- * tick, AppState o tracking.
+ * Conecta el hook con la tarjeta. El modo `enLinea` reutiliza el panel como fila dentro de la
+ * cabecera; el modo normal conserva el overlay separado para los usos existentes. El efecto de
+ * voz permanece antes de las decisiones de render, así que funciona aunque no haya fila visible.
  */
-export const VecinosRutaPanel = memo(function VecinosRutaPanel({ topBase, ...params }: Props) {
+export const VecinosRutaPanel = memo(function VecinosRutaPanel({
+  topBase,
+  enLinea = false,
+  ...params
+}: Props) {
   const { datos, recibidoEn, fallosConsecutivos } = useVecinosRuta(params);
   const [ahora, setAhora] = useState(() => Date.now());
 
@@ -81,6 +86,20 @@ export const VecinosRutaPanel = memo(function VecinosRutaPanel({ topBase, ...par
   useEffect(() => {
     if (!params.tracking) alertaArmada.current = false;
   }, [params.tracking]);
+
+  if (enLinea) {
+    if (!params.tracking) return null;
+    const detrasLinea = estadoFila(datos?.detras ?? null, transcurridoMs);
+    return (
+      <VecinosRutaFilas
+        delante={delante}
+        detras={detrasLinea}
+        transcurridoMs={transcurridoMs}
+        buscando={datos === null || recibidoEn === null}
+        sinActualizar={sinActualizar(fallosConsecutivos)}
+      />
+    );
+  }
 
   if (!params.tracking || !datos || recibidoEn === null) return null;
   const detras = estadoFila(datos.detras, transcurridoMs);

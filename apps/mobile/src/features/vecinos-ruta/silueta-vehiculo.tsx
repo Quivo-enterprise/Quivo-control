@@ -1,5 +1,5 @@
 import Svg, { ClipPath, Circle, Defs, Path, Rect } from 'react-native-svg';
-import { quivoColors } from '../../shared/theme/quivo-theme';
+import { dsColors } from '../../shared/theme/design-system';
 import { variantePorTipo, type VarianteSilueta } from './silueta-vehiculo-variante';
 import { colorSecundarioAHex, colorVehiculoAHex } from './color-vehiculo';
 
@@ -10,6 +10,8 @@ interface Props {
   /** Fila vacía / sin dato: contorno punteado sin color. */
   fantasma?: boolean;
   escala?: number;
+  ancho?: number;
+  alto?: number;
 }
 
 const CUERPO: Record<VarianteSilueta, string> = {
@@ -29,16 +31,26 @@ const VENTANAS: Record<VarianteSilueta, string> = {
  * Silueta lateral decorativa; el color real del vehículo entra como relleno. La franja del color
  * secundario se recorta al cuerpo de cada variante para que no sobresalga de la carrocería.
  */
-export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma, escala = 1 }: Props) {
+export function SiluetaVehiculo({
+  tipo,
+  color,
+  colorSecundario,
+  fantasma,
+  escala = 1,
+  ancho,
+  alto,
+}: Props) {
   const variante = variantePorTipo(tipo);
   const cuerpo = CUERPO[variante];
+  const width = ancho ?? 48 * escala;
+  const height = alto ?? 24 * escala;
   if (fantasma) {
     return (
-      <Svg width={48 * escala} height={24 * escala} viewBox="0 0 64 32" accessible={false}>
+      <Svg width={width} height={height} viewBox="0 0 64 32" accessible={false}>
         <Path
           d={cuerpo}
           fill="none"
-          stroke={quivoColors.textMuted}
+          stroke={dsColors.textTertiary}
           strokeWidth={1.8}
           strokeDasharray="3 3"
           strokeLinejoin="round"
@@ -48,7 +60,7 @@ export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma, escala
           cy={25}
           r={4.5}
           fill="none"
-          stroke={quivoColors.textMuted}
+          stroke={dsColors.textTertiary}
           strokeWidth={1.8}
         />
         <Circle
@@ -56,7 +68,7 @@ export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma, escala
           cy={25}
           r={4.5}
           fill="none"
-          stroke={quivoColors.textMuted}
+          stroke={dsColors.textTertiary}
           strokeWidth={1.8}
         />
       </Svg>
@@ -65,7 +77,7 @@ export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma, escala
   const secundario = colorSecundarioAHex(colorSecundario);
   const idClip = `cuerpo-${variante}`;
   return (
-    <Svg width={48 * escala} height={24 * escala} viewBox="0 0 64 32" accessible={false}>
+    <Svg width={width} height={height} viewBox="0 0 64 32" accessible={false}>
       <Defs>
         <ClipPath id={idClip}>
           <Path d={cuerpo} />
@@ -74,7 +86,7 @@ export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma, escala
       <Path
         d={cuerpo}
         fill={colorVehiculoAHex(color)}
-        stroke={quivoColors.text}
+        stroke={dsColors.textPrimary}
         strokeOpacity={0.6}
         strokeWidth={1.5}
         strokeLinejoin="round"
@@ -82,11 +94,11 @@ export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma, escala
       {secundario ? (
         <Rect x={0} y={19.5} width={64} height={3} fill={secundario} clipPath={`url(#${idClip})`} />
       ) : null}
-      <Path d={VENTANAS[variante]} fill={quivoColors.white} fillOpacity={0.92} />
-      <Circle cx={16} cy={25} r={5} fill={quivoColors.text} />
-      <Circle cx={16} cy={25} r={2} fill={quivoColors.border} />
-      <Circle cx={47} cy={25} r={5} fill={quivoColors.text} />
-      <Circle cx={47} cy={25} r={2} fill={quivoColors.border} />
+      <Path d={VENTANAS[variante]} fill={dsColors.surfaceRaised} fillOpacity={0.92} />
+      <Circle cx={16} cy={25} r={5} fill={dsColors.textPrimary} />
+      <Circle cx={16} cy={25} r={2} fill={dsColors.borderStrong} />
+      <Circle cx={47} cy={25} r={5} fill={dsColors.textPrimary} />
+      <Circle cx={47} cy={25} r={2} fill={dsColors.borderStrong} />
     </Svg>
   );
 }

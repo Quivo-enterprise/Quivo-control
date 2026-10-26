@@ -22,8 +22,15 @@ import {
 } from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
-import { dsColors, dsSpace, dsDuration, dsElevation } from '../../shared/theme/design-system';
-import { Burbuja, BotonBurbuja, PildoraBurbuja } from '../../shared/components/burbuja';
+import {
+  dsColors,
+  dsSpace,
+  dsDuration,
+  dsElevation,
+  dsFontSize,
+  dsRadius,
+} from '../../shared/theme/design-system';
+import { Burbuja, BotonBurbuja } from '../../shared/components/burbuja';
 import {
   Button as DsButton,
   Heading,
@@ -186,11 +193,15 @@ export function OperationScreen(
   // `altoSheet` = alto del sheet expandido (ancla los FABs); `altoSheetVisible` = lo que asoma hoy
   // desde el borde inferior, margen incluido (el sheet lo avisa al terminar cada snap).
   const [insetSuperior, setInsetSuperior] = useState(0);
+  const [altoBarra, setAltoBarra] = useState(quivoBubble.touch + 2 * quivoBubble.padding);
   const [altoSheet, setAltoSheet] = useState(0);
   const [altoSheetVisible, setAltoSheetVisible] = useState(0);
   const onLayoutTopOverlay = useCallback((e: LayoutChangeEvent) => {
     const { y, height } = e.nativeEvent.layout;
     setInsetSuperior(Math.round(y + height));
+  }, []);
+  const onLayoutBarra = useCallback((e: LayoutChangeEvent) => {
+    setAltoBarra(Math.round(e.nativeEvent.layout.height));
   }, []);
   // Getter estable de la posición para el panel de vecinos: así el GPS a 1 Hz no cambia sus props.
   const posicionVecinosRef = useRef(gps.posicionActual);
@@ -213,7 +224,7 @@ export function OperationScreen(
   const fabsBottom =
     altoSheet > 0
       ? altoSheet + margenInferiorSheet + quivoBubble.gap
-      : quivoBubble.sheetEstimatedHeight + insets.bottom;
+      : quivoBubble.sheetEstimatedHeight + margenInferiorSheet;
 
   // Rescope SESION_NO_VIGENTE, punto C: dispara `onSesionNoVigenteFinalizada` cuando
   // `sesionNoVigente` está prendido y `gps.tracking` está en `false` — la señal de que
@@ -477,10 +488,10 @@ export function OperationScreen(
 
       <View
         pointerEvents="box-none"
-        style={[styles.topOverlay, { top: quivoBubble.edge - dsSpace.xs }]}
+        style={[styles.topOverlay, { top: quivoBubble.edge }]}
         onLayout={onLayoutTopOverlay}
       >
-        <View style={styles.cabeceraAncha}>
+        <View style={styles.cabeceraAncha} onLayout={onLayoutBarra}>
           <DriverRouteCard
             contexto={props.contexto}
             brand={lineaBrand}
@@ -488,11 +499,27 @@ export function OperationScreen(
             pausadoDesde={gps.pausadoDesde}
             compacta={camara.modo !== 'general'}
             onAbrirPerfil={() => props.navigation.navigate('Perfil')}
+            vecinos={
+              gps.tracking ? (
+                <VecinosRutaPanel
+                  tracking={gps.tracking}
+                  online={!isOffline}
+                  obtenerAccessToken={props.obtenerAccessToken}
+                  hayPosicion={gps.posicionActual !== null}
+                  obtenerPosicion={obtenerPosicionVecinos}
+                  obtenerFase={obtenerFaseVecinos}
+                  topBase={insetSuperior}
+                  enLinea
+                />
+              ) : undefined
+            }
             fotoVehiculo={
-              <FotoVehiculoControl
-                sesionId={props.contexto.sesionId}
-                obtenerAccessToken={props.obtenerAccessToken}
-              />
+              gps.tracking ? undefined : (
+                <FotoVehiculoControl
+                  sesionId={props.contexto.sesionId}
+                  obtenerAccessToken={props.obtenerAccessToken}
+                />
+              )
             }
           />
         </View>
@@ -576,25 +603,13 @@ export function OperationScreen(
         ) : null}
       </View>
 
-      {/* Vecinos de ruta: overlay propio FUERA del `topOverlay` medido, para que su montaje tardío
-          no cambie `insetSuperior` (padding de la cámara de navegación). */}
-      <VecinosRutaPanel
-        tracking={gps.tracking}
-        online={!isOffline}
-        obtenerAccessToken={props.obtenerAccessToken}
-        hayPosicion={gps.posicionActual !== null}
-        obtenerPosicion={obtenerPosicionVecinos}
-        obtenerFase={obtenerFaseVecinos}
-        topBase={insetSuperior}
-      />
-
       <Animated.View
         style={[
-          styles.fabsContainer,
+          styles.accionesInferiores,
           { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] },
         ]}
       >
-        <Burbuja direction="column">
+        <Burbuja direction="column" style={styles.accionesColumna}>
           <BotonBurbuja
             icono="alert-circle-outline"
             variante="activo"
@@ -608,7 +623,7 @@ export function OperationScreen(
               onPress={abrirWhatsAppDelegado}
             />
           ) : null}
-          {camara.modo === 'libre' && !gps.tracking ? (
+          {camara.modo === 'libre' ? (
             <BotonBurbuja icono="navigate" accessibilityLabel="Recentrar" onPress={recentrar} />
           ) : null}
           {camara.modo === 'general' ? (
@@ -648,14 +663,18 @@ export function OperationScreen(
             { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] },
           ]}
         >
-          {camara.modo === 'libre' ? (
-            <PildoraBurbuja icono="navigate" accessibilityLabel="Recentrar" onPress={recentrar}>
-              Centrar
-            </PildoraBurbuja>
-          ) : null}
-          <PildoraBurbuja icono="speedometer-outline">
-            {Math.round(gps.posicionActual?.speedKmh ?? 0)} km/h
-          </PildoraBurbuja>
+          <View
+            style={styles.velocidadPildora}
+            accessible
+            accessibilityLabel={`${Math.round(gps.posicionActual?.speedKmh ?? 0)} kilómetros por hora`}
+          >
+            <DsText style={styles.velocidadNumero}>
+              {Math.round(gps.posicionActual?.speedKmh ?? 0)}
+            </DsText>
+            <DsText size="sm" variant="secondary">
+              km/h
+            </DsText>
+          </View>
         </Animated.View>
       ) : null}
 
@@ -663,6 +682,7 @@ export function OperationScreen(
         contexto={props.contexto}
         nextPointOrder={ordenProximoEfectivo}
         nombreProximaParada={null}
+        distanciaProximaParadaM={distanciaProximoPunto}
         totalPoints={progreso.total}
         estadosPuntos={estadosStepper}
         vueltaActual={progreso.vueltaActual}
@@ -791,6 +811,7 @@ export function OperationScreen(
 
       <ControlFeedbackToast
         ultimaDeteccion={gps.ultimaDeteccion}
+        top={quivoBubble.edge + altoBarra + quivoBubble.gap}
         numeroDePuntoControl={numeroDePuntoControl}
       />
       <ContadorEsperaMolinos
@@ -820,9 +841,10 @@ export function OperationScreen(
       <QuivoConfirmDialog
         visible={confirmarFinVisible}
         variant="danger"
+        icon={null}
         title="¿Finalizar el recorrido?"
         message="El GPS dejará de registrar la jornada. Esta acción requiere confirmación."
-        cancelLabel="Seguir recorriendo"
+        cancelLabel="Seguir"
         confirmLabel="Finalizar"
         onCancel={() => setConfirmarFinVisible(false)}
         onConfirm={() => {
@@ -1008,17 +1030,41 @@ const styles = StyleSheet.create({
     ...fontStyle('body', '600'),
     fontSize: 14,
   },
-  fabsContainer: { position: 'absolute', right: quivoBubble.edge },
+  accionesInferiores: {
+    position: 'absolute',
+    right: quivoBubble.edge,
+  },
+  accionesColumna: { alignItems: 'center' },
+  velocidadContenedor: {
+    position: 'absolute',
+    left: quivoBubble.edge,
+  },
+  velocidadPildora: {
+    minHeight: quivoBubble.touch,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: dsSpace.xs,
+    paddingHorizontal: dsSpace.md,
+    borderRadius: dsRadius.full,
+    backgroundColor: quivoBubble.surface,
+    borderWidth: 1,
+    borderColor: quivoBubble.border,
+    ...dsElevation(2),
+  },
+  // El design system salta de 20 a 24; la spec de velocidad pide el punto medio (22).
+  velocidadNumero: {
+    ...fontStyle('display', '700'),
+    fontSize: dsFontSize.xl + dsSpace['2xs'],
+    fontVariant: ['tabular-nums'],
+    color: dsColors.textPrimary,
+  },
   brujula: {
     width: quivoBubble.touch,
     height: quivoBubble.touch,
     borderRadius: quivoBubble.innerRadius,
-  },
-  velocidadContenedor: {
-    position: 'absolute',
-    left: quivoBubble.edge,
-    gap: dsSpace.sm,
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   notice: {
     color: dsColors.warningText,
@@ -1057,13 +1103,18 @@ const styles = StyleSheet.create({
   modalHeader: { alignItems: 'center', padding: dsSpace.sm },
   modalTitle: { color: dsColors.textPrimary, textAlign: 'center' },
   modalText: { color: dsColors.textSecondary, textAlign: 'center', paddingHorizontal: dsSpace.sm },
-  motivos: { gap: quivoBubble.gap },
+  motivos: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: quivoBubble.gap,
+  },
   motivo: {
-    width: '100%',
-    minHeight: quivoBubble.touch,
+    width: '31%',
+    minHeight: quivoBubble.touch + dsSpace.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: dsSpace.md,
+    paddingHorizontal: dsSpace.xs,
     borderWidth: 1,
     borderColor: dsColors.borderSubtle,
     borderRadius: quivoBubble.innerRadius,

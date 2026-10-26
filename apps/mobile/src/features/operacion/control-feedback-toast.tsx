@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Animated, StyleSheet, Vibration } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Heading } from '@quivo/design-system-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Burbuja } from '../../shared/components/burbuja';
 import { dsColors, dsDuration, dsEasing } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
@@ -11,18 +10,20 @@ import { debeMostrarToast, type IdentidadToastMostrado } from './control-feedbac
 
 interface ControlFeedbackToastProps {
   ultimaDeteccion: DeteccionPuntoControl | null;
+  /** Borde inferior real de la barra más el gap del slot de avisos. */
+  top: number;
   /** Número del PC en el orden efectivo de la vuelta; `undefined` = sin número (como la voz). */
   numeroDePuntoControl: (puntoControlId: string) => number | undefined;
 }
 
 export function ControlFeedbackToast({
   ultimaDeteccion,
+  top,
   numeroDePuntoControl,
 }: ControlFeedbackToastProps) {
   const [queue, setQueue] = useState<DeteccionPuntoControl[]>([]);
   const [current, setCurrent] = useState<DeteccionPuntoControl | null>(null);
   const opacidad = useRef(new Animated.Value(0)).current;
-  const insets = useSafeAreaInsets();
   // ENTREGA 9 (plan post-piloto 2026-09-09, "deduplicar el toast de confirmación", síntoma 11):
   // comparación por identidad análoga a `ultimoSonado` (`gps-provider.tsx`) — identidad de la
   // última detección ya encolada, para no pushear de nuevo solo porque cambió la REFERENCIA de
@@ -93,7 +94,7 @@ export function ControlFeedbackToast({
   return (
     <Animated.View
       pointerEvents="none"
-      style={[styles.contenedor, { top: insets.top + quivoBubble.edge + 64, opacity: opacidad }]}
+      style={[styles.contenedor, { top, opacity: opacidad }]}
       accessibilityRole="alert"
       accessibilityLiveRegion="polite"
       accessibilityLabel={`Control registrado automáticamente. Punto de control. Hora: ${new Date().toLocaleTimeString('es-BO')}`}
@@ -116,6 +117,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 1500,
   },
-  burbuja: { maxWidth: '100%', minHeight: quivoBubble.touch + 2 * quivoBubble.padding },
+  // Ocupa todo el ancho del slot para tapar el aviso inferior mientras confirma el control.
+  burbuja: { width: '100%', minHeight: quivoBubble.touch + 2 * quivoBubble.padding },
   texto: { color: dsColors.textPrimary, flexShrink: 1 },
 });

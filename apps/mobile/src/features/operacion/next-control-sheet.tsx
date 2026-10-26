@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button, Heading, Text } from '@quivo/design-system-native';
+import { Button as LocalButton } from '../../shared/components/Button';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HojaBurbuja, PildoraBurbuja } from '../../shared/components/burbuja';
 import { dsColors, dsRadius, dsSpace } from '../../shared/theme/design-system';
@@ -19,16 +20,19 @@ import type { FaseControl } from '../jornada/fase-control';
 import type { EstadoPuntoVuelta } from './progreso-vuelta';
 import { FilaSalidaCard } from '../fila-salida/fila-salida-card';
 import type { FilaSalidaUi } from '../fila-salida/use-fila-salida';
+import { formatearDistancia } from './format-distancia';
 
 const NUMERO_EMERGENCIAS = '911';
 
 /** Separación (dp) entre el sheet y el borde inferior de la pantalla (`styles.sheet.bottom`). */
 export const MARGEN_INFERIOR_SHEET = quivoBubble.edge;
 
-/** En jornada la hoja se alinea con el mismo borde exterior en los tres lados visibles.
- * La zona segura inferior no se suma: elevaría el botón respecto a los costados. */
-export function calcularMargenInferiorSheet(fase: FaseControl, insetInferior: number): number {
-  return fase === 'jornada' ? MARGEN_INFERIOR_SHEET : MARGEN_INFERIOR_SHEET + insetInferior;
+/** La hoja queda a `edge` del borde visible del mapa en todas las fases, igual que a los costados
+ * (reglas-burbujas §2). La zona segura inferior no se suma: el mapa ya termina antes de la barra de
+ * gestos, y sumarla dejaba bajo el botón el triple de aire que a los costados. Se conservan los
+ * parámetros para no tocar a los llamadores. */
+export function calcularMargenInferiorSheet(_fase: FaseControl, _insetInferior: number): number {
+  return MARGEN_INFERIOR_SHEET;
 }
 
 /** Aire (dp) bajo la cabecera, DENTRO del contenedor táctil de la cabecera: la franja visible al
@@ -59,6 +63,8 @@ export interface NextControlSheetProps {
   jornadaCargando?: boolean;
   nextPointOrder: number | null;
   nombreProximaParada?: string | null;
+  /** Distancia ya calculada por la pantalla al próximo control; solo se presenta en ruta. */
+  distanciaProximaParadaM?: number | null;
   totalPoints: number;
   /** Estado de cada punto en el orden ROTADO de la vuelta (inicio primero), para el stepper
    * (`ordenEfectivoPuntos` → `derivarProgresoEstaticoEnOrden` → `conProximo`, RF-GPS-054). */
@@ -177,8 +183,8 @@ export function NextControlSheet(props: NextControlSheetProps) {
     else recalcularSnap();
   };
 
-  // Cabecera = asa + título/distancia/"#N" + aire, medida desde el borde superior del sheet (incluye
-  // su padding superior): `y + height` es todo lo que debe seguir visible al colapsar.
+  // Cabecera = título/distancia/"#N" + aire, medida desde el borde superior del sheet (incluye su
+  // padding superior): `y + height` es todo lo que debe seguir visible al colapsar.
   const onLayoutCabecera = (e: LayoutChangeEvent) => {
     const { y, height } = e.nativeEvent.layout;
     const alto = Math.round(y + height);
@@ -250,16 +256,21 @@ export function NextControlSheet(props: NextControlSheetProps) {
       <HojaBurbuja>
         {fase !== 'jornada' ? (
           <View style={styles.cabecera} onLayout={onLayoutCabecera} {...panResponder.panHandlers}>
-            <View style={styles.dragArea}>
-              <View style={styles.dragHandle} />
-            </View>
             <View style={styles.headerLeft}>
-              <Text size="sm" style={styles.etiqueta}>
-                Siguiente parada
-              </Text>
-              <Heading size="xl" numberOfLines={tracking ? 2 : 1}>
-                {props.nombreProximaParada || `Punto de control ${props.nextPointOrder ?? 1}`}
-              </Heading>
+              <View style={tracking ? styles.paradaEnRuta : undefined}>
+                <Heading
+                  size={tracking ? 'lg' : 'xl'}
+                  numberOfLines={1}
+                  style={tracking ? styles.nombreParadaEnRuta : undefined}
+                >
+                  {props.nombreProximaParada || `Punto de control ${props.nextPointOrder ?? 1}`}
+                </Heading>
+                {tracking && props.distanciaProximaParadaM != null ? (
+                  <Heading size="lg" numberOfLines={1} style={styles.distanciaParada}>
+                    a {formatearDistancia(props.distanciaProximaParadaM)}
+                  </Heading>
+                ) : null}
+              </View>
               {props.viaMolinos ? (
                 <View
                   accessible
@@ -274,7 +285,7 @@ export function NextControlSheet(props: NextControlSheetProps) {
           </View>
         ) : null}
         {fase !== 'jornada' ? (
-          <View style={styles.stepperSection}>
+          <View style={[styles.stepperSection, tracking && styles.stepperAligned]}>
             <MiniStepper
               estados={props.estadosPuntos}
               tracking={tracking}
@@ -329,41 +340,57 @@ export function NextControlSheet(props: NextControlSheetProps) {
           ) : (
             <>
               {props.pausadoDesde ? (
-                <>
-                  <Text size="sm" variant="secondary">
-                    En pausa desde{' '}
-                    {new Date(props.pausadoDesde).toLocaleTimeString('es-BO', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      hour12: false,
-                    })}
-                  </Text>
-                  <Button
-                    variant="primary"
+                <Text size="sm" variant="secondary">
+                  En pausa desde{' '}
+                  {new Date(props.pausadoDesde).toLocaleTimeString('es-BO', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false,
+                  })}
+                </Text>
+              ) : null}
+              <View style={styles.accionesRecorrido}>
+                {/* Cada acción en su mitad exacta: el Button del DS y el local no reparten `flex` igual. */}
+                <View style={styles.mitad}>
+                  {props.pausadoDesde ? (
+                    <Button
+                      variant="primary"
+                      size="lg"
+                      onPress={props.onResume}
+                      accessibilityHint="Vuelves a aparecer como en recorrido"
+                      style={styles.accionMedia}
+                      fullWidth
+                    >
+                      Reanudar
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onPress={() =>
+                        props.filaSalida?.vista ? setConfirmarPausa(true) : props.onPause?.()
+                      }
+                      accessibilityHint="Pausa el recorrido; el GPS sigue activo"
+                      style={styles.accionMedia}
+                      fullWidth
+                    >
+                      Pausar
+                    </Button>
+                  )}
+                </View>
+                <View style={styles.mitad}>
+                  <LocalButton
+                    variant="outline"
                     size="lg"
-                    onPress={props.onResume}
-                    accessibilityHint="Vuelves a aparecer como en recorrido"
+                    onPress={props.onFinish}
+                    style={[styles.accionMedia, styles.finalizarOutline]}
                     fullWidth
+                    textStyle={styles.finalizarTexto}
                   >
-                    Reanudar ruta
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="lg"
-                  onPress={() =>
-                    props.filaSalida?.vista ? setConfirmarPausa(true) : props.onPause?.()
-                  }
-                  accessibilityHint="Pausa el recorrido; el GPS sigue activo"
-                  fullWidth
-                >
-                  Pausar ruta
-                </Button>
-              )}
-              <Button variant="danger" size="lg" onPress={props.onFinish} fullWidth>
-                Finalizar ruta
-              </Button>
+                    Finalizar
+                  </LocalButton>
+                </View>
+              </View>
             </>
           )}
         </View>
@@ -448,17 +475,13 @@ function MiniStepper({
 const styles = StyleSheet.create({
   sheet: { position: 'absolute', left: quivoBubble.edge, right: quivoBubble.edge },
   cabecera: { paddingBottom: AIRE_BAJO_CABECERA },
-  dragArea: { height: quivoBubble.padding, alignItems: 'center', justifyContent: 'flex-start' },
-  dragHandle: {
-    width: quivoBubble.touch - quivoBubble.padding,
-    height: dsSpace.xs,
-    borderRadius: dsSpace.xs,
-    backgroundColor: dsColors.borderStrong,
-  },
   headerLeft: { gap: dsSpace.xs, marginHorizontal: quivoBubble.padding },
-  etiqueta: { color: dsColors.textSecondary },
+  paradaEnRuta: { flexDirection: 'row', alignItems: 'center', gap: quivoBubble.gap },
+  nombreParadaEnRuta: { flex: 1, minWidth: 0 },
+  distanciaParada: { flexShrink: 0, color: dsColors.textPrimary, fontVariant: ['tabular-nums'] },
   viaMolinos: { alignSelf: 'flex-start' },
   stepperSection: { marginBottom: dsSpace.sm },
+  stepperAligned: { marginHorizontal: quivoBubble.padding },
   stepperContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -486,6 +509,11 @@ const styles = StyleSheet.create({
   },
   stepperDotInactive: { backgroundColor: dsColors.surfaceRaised },
   actionsRow: { gap: dsSpace.sm },
+  accionesRecorrido: { flexDirection: 'row', gap: quivoBubble.gap },
+  mitad: { flex: 1, minWidth: 0 },
+  accionMedia: { minHeight: 52, borderRadius: quivoBubble.innerRadius },
+  finalizarOutline: { borderColor: dsColors.danger },
+  finalizarTexto: { color: dsColors.danger },
   // La acción de marca conserva la píldora completa y usa solo la sombra exterior de la hoja.
   botonJornada: {
     borderRadius: dsRadius.full,
