@@ -57,37 +57,60 @@ teléfono el entorno de cada fase; tú no necesitas provocarlas.
 ## Fase 2b — En ruta (`recorrido`)
 
 ### Lo que se vio en el teléfono
-- **Vecinos**: una burbuja aparte bajo la barra, de 80 % del ancho y con dos filas. Aun cuando no hay
-  nadie ("Nadie delante / Nadie detrás"), se come unos 90 dp del mapa.
-- **Velocidad**: una píldora suelta a la izquierda, sobre la hoja. Es una cuarta zona y rompe la regla 3.
+- **Vecinos**: una burbuja aparte bajo la barra, de 80 % del ancho. Las dos filas se necesitan, pero
+  sumadas a la barra de la línea ocupan unos 200 dp arriba.
+- **Velocidad**: bien ubicada abajo a la izquierda, pero flota a una altura propia en vez de anclarse a la hoja.
 - **Hoja**: "Pausar ruta" (outline) y "Finalizar ruta" (rojo lleno) en dos filas de 52. El rojo lleno grita
   más que todo lo demás, aunque es una acción que se usa una vez por vuelta.
 - **Siguiente parada**: no dice a qué distancia está. Los puntos de progreso empiezan 7 dp más a la
   izquierda que el texto.
 - **Aviso de punto registrado**: va a `insets.top + edge + 64`, fuera del slot de avisos.
 
-### Barra superior en ruta (`driver-route-card.tsx`)
+### Barra superior en ruta: línea vertical + vecinos (`driver-route-card.tsx` y `vecinos-ruta/`)
+**Decisión del responsable**: las dos burbujas de vecinos (Delante y Detrás) **se quedan**, siempre
+visibles y con la **silueta del vehículo**, que próximamente se pintará con el color de cada vehículo. Para
+ahorrar espacio, la línea se vuelve una columna vertical a su lado y todo queda en **una sola burbuja**:
 ```
-[120]  EN RUTA                                   42 km/h
-       ↑ 1234ABC · 420 m        ↓ 5678DEF · 1,2 km
+┌──────────────────────────────────────────────────┐
+│ ┌──────┐  ┌────────────────────────────────────┐ │
+│ │      │  │ 🚐  DELANTE   1234ABC      420 m   │ │
+│ │ 120  │  └────────────────────────────────────┘ │
+│ │      │  ┌────────────────────────────────────┐ │
+│ │EN RUTA│ │ 🚐  DETRÁS    5678DEF      1,2 km  │ │
+│ └──────┘  └────────────────────────────────────┘ │
+└──────────────────────────────────────────────────┘
 ```
-- **Fila 1**: línea, estado y, a la derecha, la **velocidad** en vez de la foto (en ruta no se toma foto).
-  La velocidad va en Oxanium 700 de 22 con `tabular-nums` y `km/h` en Text sm `secondary`.
-- **Fila 2** (opcional, solo si hay al menos un vecino con dato): los vecinos en una sola línea.
-  - Cada lado es una pastilla con flecha, placa (Oxanium) y distancia.
-  - **Delante** usa el semáforo del #274: borde y distancia en `success`, `warning` o `danger` según
-    `estadoDistanciaVecino`. Detrás queda neutro.
-  - Si un lado es "nadie" o "sin dato", esa pastilla no se muestra. Si ninguno tiene dato, la fila 2 desaparece y la barra vuelve a 60.
-  - En `alerta` (≤ 300 m), la pastilla de Delante pasa a fondo `danger` suave y la barra no crece.
-  - Tocar la fila 2 despliega el detalle actual (placa grande, interno, hace cuánto), como una hoja de la barra.
-    Al tocar de nuevo o a los 6 s, se repliega.
-- Altura: 60 sin vecinos y 60 + 36 + `gap` con vecinos. El cambio se anima (regla 7).
+- **Columna de la línea**: 64 de ancho y alto de las dos filas (2 × 52 + `gap`). Fondo del color de la
+  línea, radio `innerRadius`. `120` en Oxanium 700 grande y, abajo, el estado (`EN RUTA` / `EN PAUSA`) en
+  Text xs blanco, que puede partirse en dos líneas. Tocarla abre Perfil (`onAbrirPerfil`).
+- **Filas de vecinos** (52 cada una, radio `innerRadius`, fondo `surfaceSoft`):
+  - `SiluetaVehiculo` a la izquierda (40×24). El color sale de `color-vehiculo.ts` como hoy; deja la prop de
+    color lista para cuando llegue el dato.
+  - Etiqueta `DELANTE` / `DETRÁS` en Text xs `secondary` sobre la placa en Oxanium 700 de 18. Si hay número
+    interno, va al lado en Text sm `secondary`.
+  - La distancia a la derecha, en Oxanium 700 de 20 con `tabular-nums`.
+  - **Delante** lleva el semáforo del #274: borde de 2 y distancia en `success`, `warning` o `danger` según
+    `estadoDistanciaVecino`. En `alerta`, el fondo de la fila pasa a `danger` suave. Detrás queda neutro.
+  - **Nadie** o **sin dato**: la fila **se mantiene** (el layout no salta), con la silueta en línea punteada
+    `textTertiary` y el texto `Nadie delante` / `Sin datos` en `secondary`.
+  - Si los datos son viejos, un punto `warning` en la esquina de la fila y la etiqueta dice `hace 2 min`.
+- **Una sola burbuja** de ancho completo: la columna y las filas van dentro, con `padding` y `gap`.
+  Reemplaza a la barra de la 2a y al panel suelto de vecinos de hoy.
+- En reposo (`jornada` y `listo`), la barra es la de la 2a. La versión con vecinos es solo para `recorrido`.
+
+### Velocidad
+- **Se queda abajo a la izquierda**, como estaba: una píldora (`PildoraBurbuja`) anclada **justo encima de
+  la hoja**, a `gap`, a la misma altura que el riel de la derecha y moviéndose con la hoja (`sheetPanY`).
+  Velocidad y riel quedan simétricos a los dos lados.
+- Formato: ícono de velocímetro, número en Oxanium 700 con `tabular-nums` y `km/h` en Text sm.
+- Excepción a la regla 3: la píldora de velocidad cuenta como parte de la zona inferior, el espejo del riel.
 
 ### Vecinos (`features/vecinos-ruta/`)
-- `VecinosRutaPanel` deja de ser un overlay absoluto: recibe `enLinea` y, con él, renderiza la fila
-  compacta para meterla en la barra. Sin `enLinea` se comporta como hoy, por compatibilidad.
-- La lógica del hook, el semáforo y la **alerta por voz** del #274 no cambian. Ojo: la voz se dispara en
-  un efecto del panel, así que el panel tiene que seguir **montado** en ruta aunque no muestre nada.
+- `VecinosRutaPanel` deja de ser un overlay absoluto: con la prop `enLinea` renderiza las dos filas para
+  meterlas en la barra. Sin `enLinea` se comporta como hoy, por compatibilidad. Sin ningún dato todavía,
+  muestra las dos filas en estado `Buscando…`, para que la barra tenga siempre la misma altura en ruta.
+- La lógica del hook, el semáforo y la **alerta por voz** del #274 no cambian. La voz sale de un efecto del
+  panel, así que el panel tiene que seguir **montado** en ruta.
 
 ### Hoja en ruta (`next-control-sheet.tsx`)
 - **Fila de parada**: `Siguiente parada` (Text sm `secondary`). Debajo, `Punto de control N` (Heading lg,
@@ -110,14 +133,16 @@ teléfono el entorno de cada fase; tú no necesitas provocarlas.
   `estado-vecinos.ts` y `use-vecinos-ruta.ts`).
 - **codex-trabajo1**: `operation-screen.tsx`, `next-control-sheet.tsx` y `control-feedback-toast.tsx`.
 - **Contrato**:
-  - `DriverRouteCard` agrega `velocidadKmh?: number | null` y `filaVecinos?: ReactNode`.
-  - En ruta, codex1 le pasa la velocidad (la misma cuenta de hoy) y
-    `<VecinosRutaPanel enLinea … />` como `filaVecinos`, y quita la píldora suelta y el overlay de vecinos.
+  - `DriverRouteCard` agrega `vecinos?: ReactNode`. Si llega, dibuja el layout de línea vertical + vecinos.
+  - En ruta, codex1 le pasa `<VecinosRutaPanel enLinea … />` como `vecinos` y quita el overlay suelto de vecinos.
+  - codex1 ancla la píldora de velocidad encima de la hoja, a la izquierda, espejo del riel.
   - `NextControlSheet` agrega `distanciaProximaParadaM?: number | null` (codex1 es dueño de los dos lados).
 
 ### Criterio de aceptación (2b)
-- En ruta hay exactamente tres zonas: barra, riel y hoja. No queda ninguna burbuja suelta.
-- Sin vecinos, la barra mide 60. Con vecinos, una fila más. El mapa gana unos 90 dp frente a hoy.
+- Arriba hay una sola burbuja (línea vertical + Delante + Detrás). Abajo, la velocidad y el riel quedan
+  simétricos, pegados a la hoja.
+- Las dos filas de vecinos siempre están, con su silueta, y la barra mide siempre lo mismo en ruta.
+- El mapa gana unos 70 dp frente a hoy.
 - La alerta por voz de vecinos sigue funcionando (el panel queda montado en ruta).
 - Ningún botón rojo lleno en ruta.
 - typecheck, lint y test en verde. Informe en `resultados/pantalla-02b-<tu-nombre>.md`.
