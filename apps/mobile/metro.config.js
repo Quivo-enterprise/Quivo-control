@@ -149,4 +149,11 @@ config.resolver.resolveRequest = (context, moduleName, ...resto) => {
   }
 };
 
+// `.claude-flow/` (estado de herramientas de IA, sin seguimiento en git) crea y borra `.lock` todo
+// el tiempo: el watcher de Metro intentaba vigilar uno que ya no existía y se caía con ENOENT.
+config.resolver.blockList = [
+  ...[].concat(config.resolver.blockList ?? []),
+  /[\\/]\.claude-flow[\\/].*/,
+];
+
 module.exports = config;

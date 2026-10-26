@@ -1,0 +1,22 @@
+{
+  "name": "@quivo/design-system-native",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.17",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-native": "*"
+  }
+}

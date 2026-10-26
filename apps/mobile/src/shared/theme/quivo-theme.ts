@@ -1,3 +1,26 @@
+// Sin imports a propósito: este archivo también lo usa lógica pura (`features/mapa/estilo-ruta.ts`)
+// que corre en vitest, y `@quivo/design-system-native` arrastra `react-native`. Los tokens y
+// componentes del design system se toman de `./design-system`.
+
+/**
+ * Ritmo de burbujas de QUIVO Rutas (`--qv-bubble-*` y `--qv-control-touch-size` en `tokens.css`):
+ * el relleno es igual a la separación entre controles y el radio interior es el radio menos el
+ * relleno, para que las píldoras de dentro sigan la curva de la burbuja.
+ */
+export const quivoBubble = {
+  touch: 44,
+  padding: 8,
+  gap: 8,
+  radius: 30,
+  innerRadius: 22,
+  edge: 12,
+  // Burbujas flotando sobre el mapa: `surfaceRaised` al 92 % y borde con el primario al 14 %
+  // sobre `borderSubtle` (`--rutas-glass-border` de Rutas).
+  surface: 'rgba(255, 255, 255, 0.92)',
+  border: '#CCCCE3',
+  scrim: 'rgba(15, 15, 20, 0.48)',
+} as const;
+
 export const quivoColors = {
   primary: '#3226B4',
   primaryStrong: '#3123C7',

@@ -53,11 +53,15 @@ function QuivoApp() {
     Montserrat_400Regular,
     Montserrat_500Medium,
     Montserrat_600SemiBold,
+    // `@quivo/design-system-native` pide la familia por nombre corto (`fontFamily.body`/`display`):
+    // sin estos alias, `Text`/`Heading`/`Button` caen a la fuente del sistema.
+    Montserrat: Montserrat_500Medium,
   });
   const [oxaniumLoaded, oxaniumError] = useOxanium({
     Oxanium_400Regular,
     Oxanium_600SemiBold,
     Oxanium_700Bold,
+    Oxanium: Oxanium_600SemiBold,
   });
   const [monoLoaded, monoError] = useJetBrainsMono({ JetBrainsMono_400Regular });
 
