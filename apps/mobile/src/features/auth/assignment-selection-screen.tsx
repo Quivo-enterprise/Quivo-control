@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { resolverMarcaLinea, type ResumenAsignacionMovil } from '@quivo/shared';
 import { Heading, Loader, Text, fontStyle } from '@quivo/design-system-native';
@@ -38,7 +37,6 @@ export function AssignmentSelectionScreen({
   onSelect,
   onBack,
 }: AssignmentSelectionScreenProps) {
-  const insets = useSafeAreaInsets();
   const [ahora, setAhora] = useState(() => Date.now());
   const [elegida, setElegida] = useState<string | null>(null);
 
@@ -71,8 +69,10 @@ export function AssignmentSelectionScreen({
         contentContainerStyle={[
           styles.contenido,
           {
-            paddingTop: insets.top + quivoBubble.edge,
-            paddingBottom: insets.bottom + quivoBubble.edge,
+            // Mismo margen en los cuatro lados (reglas-burbujas §2): la ventana ya empieza bajo la barra
+            // de estado y termina sobre la de gestos, así que no se suman las zonas seguras.
+            paddingTop: quivoBubble.edge,
+            paddingBottom: quivoBubble.edge,
           },
         ]}
       >
