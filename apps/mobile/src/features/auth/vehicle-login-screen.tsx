@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
@@ -32,12 +34,15 @@ export function VehicleLoginScreen({
   onSubmit,
 }: VehicleLoginScreenProps) {
   const [isSimulating, setIsSimulating] = useState(false);
+  const [verPin, setVerPin] = useState(false);
+  const pinRef = useRef<TextInput>(null);
 
   const loading = parentLoading || isSimulating;
 
   const {
     control,
     handleSubmit,
+    setValue,
     formState: { isValid, errors },
   } = useForm<VehicleLoginFormValues>({
     resolver: zodResolver(vehicleLoginSchema),
@@ -47,6 +52,13 @@ export function VehicleLoginScreen({
       pin: '',
     },
   });
+
+  // PIN rechazado: se vacía y vuelve el foco para reintentar sin borrar a mano (la placa queda).
+  useEffect(() => {
+    if (!serverError) return;
+    setValue('pin', '', { shouldValidate: true });
+    pinRef.current?.focus();
+  }, [serverError, setValue]);
 
   const onSubmitForm = async (data: VehicleLoginFormValues) => {
     setIsSimulating(true);
@@ -102,6 +114,8 @@ export function VehicleLoginScreen({
                       autoCapitalize="characters"
                       autoCorrect={false}
                       returnKeyType="next"
+                      submitBehavior="submit"
+                      onSubmitEditing={() => pinRef.current?.focus()}
                       maxLength={20}
                       value={value}
                       onChangeText={(text) => onChange(text.toUpperCase())}
@@ -120,19 +134,42 @@ export function VehicleLoginScreen({
                 render={({ field: { onChange, onBlur, value } }) => {
                   return (
                     <Input
+                      ref={pinRef}
                       label="PIN del conductor"
                       labelStyle={styles.inputLabel}
                       placeholder="6 a 12 dígitos"
                       placeholderTextColor={colors.light.textTertiary}
                       error={errors.pin?.message}
-                      keyboardType="numeric"
+                      keyboardType="number-pad"
+                      secureTextEntry={!verPin}
+                      autoComplete="off"
+                      importantForAutofill="no"
+                      returnKeyType="go"
+                      onSubmitEditing={() => {
+                        if (isValid && !loading) void handleSubmit(onSubmitForm)();
+                      }}
+                      rightSlot={
+                        <Pressable
+                          onPress={() => setVerPin((v) => !v)}
+                          hitSlop={8}
+                          accessibilityRole="button"
+                          accessibilityLabel={verPin ? 'Ocultar PIN' : 'Mostrar PIN'}
+                          style={styles.ojo}
+                        >
+                          <Ionicons
+                            name={verPin ? 'eye-off-outline' : 'eye-outline'}
+                            size={22}
+                            color={c.textSecondary}
+                          />
+                        </Pressable>
+                      }
                       maxLength={12}
                       value={value}
                       onChangeText={onChange}
                       onBlur={onBlur}
                       editable={!loading}
                       inputShellStyle={styles.inputShell}
-                      style={styles.inputText}
+                      style={[styles.inputText, !verPin && value ? styles.pinOculto : null]}
                     />
                   );
                 }}
@@ -210,6 +247,15 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   inputText: { color: c.textPrimary, fontSize: fontSize.md },
+  // Los puntos del PIN oculto, separados para poder contarlos.
+  pinOculto: { letterSpacing: 4, fontSize: fontSize['2xl'] },
+  ojo: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: -space.sm,
+  },
   submitButton: { marginTop: space.sm, minHeight: 48 },
   submitButtonText: { fontSize: fontSize.md },
   infoNotice: {

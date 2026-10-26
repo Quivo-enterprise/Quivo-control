@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import {
   StyleSheet,
   TextInput,
@@ -31,6 +31,8 @@ export interface InputProps extends Omit<TextInputProps, 'size'> {
   inputShellStyle?: ViewStyle | ViewStyle[];
   labelStyle?: TextStyle | TextStyle[];
   mask?: Mask;
+  /** React 19: llega como prop y viaja en `...props` hasta el `TextInput` (foco programático). */
+  ref?: Ref<TextInput>;
 }
 const c = colors.light;
 const heights = { sm: 44, md: 48, lg: 52 };
@@ -112,7 +114,7 @@ export function Input({
       {description ? (
         <Text
           size="sm"
-          variant={error ? 'error' : 'muted'}
+          variant={error ? 'error' : 'secondary'}
           accessibilityLiveRegion={error ? 'polite' : 'none'}
         >
           {description}
