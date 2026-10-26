@@ -11,7 +11,7 @@
 Plan: [`docs/plan-pre-piloto-27-10.md`](plan-pre-piloto-27-10.md).
 
 **Mergeado:**
-- **#267** (API): `/en-vivo` muestra la sesión cerrada como `finalizado` y una sola sesión por vehículo (la activa; entre activas, la de `inicio` más reciente). **Deploy r34 pendiente: lo corre el CTO** (el clasificador lo bloquea aun con autorización explícita).
+- **#267** (API): `/en-vivo` muestra la sesión cerrada como `finalizado` y una sola sesión por vehículo (la activa; entre activas, la de `inicio` más reciente). **Deploy `r34-20261025` hecho (CTO, 25/10):** API `quivo-api-00049-lqb`, web `quivo-web-00022-7p8`, worker `quivo-worker-00023-hlm`, imágenes `r34-20261025`, migraciones OK, `/v1/health/ready` ok (db y redis up). Falta la verificación end-to-end en `/en-vivo`.
 - **#266** (móvil): el re-enganche con sesión NUEVA (re-login a mitad del día) emite `inicio_recorrido`, ancla la vuelta y silencia el terminal si está dentro; misma sesión o sin clave guardada no re-emite. "Estoy en la fila" confirma el terminal antes del POST. Toast "Punto de control N".
 - **#268** (móvil): latido de primer plano. **Causa raíz** (doc del SDK 5.4.0): `onHeartbeat` solo dispara en estado *stationary* y la app fuerza *moving* todo el recorrido → parado no salía ningún fix ni corría el heartbeat (no era MIUI). Ticker de 60 s corre `onHeartbeat` si no hubo fix ni latido en 50 s. **Solo primer plano.**
 - **#269** (móvil): `applicationId` → `com.quivotech.conductor.piloto`.
@@ -24,7 +24,7 @@ Plan: [`docs/plan-pre-piloto-27-10.md`](plan-pre-piloto-27-10.md).
 **Verificado en emulador con el APK 17:** GPS arranca ("trial license key has 29 days remaining"); COMENZAR en SR → vuelta 1, 1/16, fila posición 1. Quieto con la app en pantalla: el fix del servidor avanza cada ~60 s. **Minimizada: se congela** (limitación conocida). Re-login a mitad del recorrido: la sesión nueva emitió `inicio_recorrido` y el servidor le abrió la vuelta 1; la entrada automática a la fila cerró SR. **No probado en vivo:** el botón manual "Estoy en la fila" (la detección automática le ganó; cubierto por test unitario).
 
 **Pendiente antes del lunes:**
-- CTO: deploy r34; instalar el APK 17 en los 6 teléfonos (Cerrar sesión en la app vieja → desinstalar → instalar → login → ubicación "todo el tiempo", notificaciones, actividad física → batería sin restricciones + inicio automático → probar COMENZAR); limpiar Appium Settings de su teléfono; decidir infracciones de prueba (PIC b4b9cfe0/c7f91ff7, d88805f3, PC8 del 22/10).
+- CTO: ~~deploy r34~~ hecho; instalar el APK 17 en los 6 teléfonos (Cerrar sesión en la app vieja → desinstalar → instalar → login → ubicación "todo el tiempo", notificaciones, actividad física → batería sin restricciones + inicio automático → probar COMENZAR); limpiar Appium Settings de su teléfono; decidir infracciones de prueba (PIC b4b9cfe0/c7f91ff7, d88805f3, PC8 del 22/10).
 - Operativo: en la fila, la app abierta y la pantalla encendida (sin eso no hay latido). Designar al menos una vuelta a Molinos para tener la traza real.
 
 **Después del piloto:**
