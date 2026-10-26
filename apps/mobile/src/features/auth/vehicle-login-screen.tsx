@@ -1,13 +1,22 @@
 import { useState } from 'react';
-import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { normalizarPlacaVehiculo } from '@quivo/shared';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { Button } from '../../shared/components/Button';
 import { Card } from '../../shared/components/Card';
 import { Input } from '../../shared/components/Input';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { colors, radius, space, fontSize, fontStyle } from '@quivo/design-system-native';
 import logoWhite from '../../../assets/images/logo-white.png';
 import { vehicleLoginSchema, type VehicleLoginFormValues } from './vehicle-login-schema';
 
@@ -17,7 +26,11 @@ interface VehicleLoginScreenProps {
   onSubmit: (placa: string, pin: string) => Promise<void>;
 }
 
-export function VehicleLoginScreen({ loading: parentLoading, error: serverError, onSubmit }: VehicleLoginScreenProps) {
+export function VehicleLoginScreen({
+  loading: parentLoading,
+  error: serverError,
+  onSubmit,
+}: VehicleLoginScreenProps) {
   const [isSimulating, setIsSimulating] = useState(false);
 
   const loading = parentLoading || isSimulating;
@@ -48,7 +61,7 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
     <View style={styles.screen}>
       <LinearGradient
         colors={['#E78A1B', '#8B5962', '#3D2EA5', '#A3654F', '#F08F14']}
-        locations={[0, 0.22, 0.50, 0.78, 1]}
+        locations={[0, 0.22, 0.5, 0.78, 1]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}
@@ -68,7 +81,8 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
               Conecta tu vehículo
             </Text>
             <Text style={styles.subtitle}>
-              Ingresa la placa del vehículo y el credencial proporcionado por tu sindicato para comenzar la jornada.
+              Ingresa la placa del vehículo y el credencial proporcionado por tu sindicato para
+              comenzar la jornada.
             </Text>
           </View>
 
@@ -83,7 +97,7 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
                       label="Placa del vehículo"
                       labelStyle={styles.inputLabel}
                       placeholder="1234ABC o 123ABC"
-                      placeholderTextColor="#94A3B8"
+                      placeholderTextColor={colors.light.textTertiary}
                       error={errors.placa?.message}
                       autoCapitalize="characters"
                       autoCorrect={false}
@@ -109,7 +123,7 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
                       label="PIN del conductor"
                       labelStyle={styles.inputLabel}
                       placeholder="6 a 12 dígitos"
-                      placeholderTextColor="#94A3B8"
+                      placeholderTextColor={colors.light.textTertiary}
                       error={errors.pin?.message}
                       keyboardType="numeric"
                       maxLength={12}
@@ -135,8 +149,14 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
                 textStyle={styles.submitButtonText}
                 fullWidth
               >
-                SIGUIENTE
+                Ingresar
               </Button>
+              <View style={styles.infoNotice}>
+                <Ionicons name="information-circle-outline" size={20} color={c.info} />
+                <Text style={styles.infoNoticeText}>
+                  ¿No tienes tu PIN? Solicítalo a tu sindicato antes de comenzar.
+                </Text>
+              </View>
             </View>
           </Card>
 
@@ -149,107 +169,76 @@ export function VehicleLoginScreen({ loading: parentLoading, error: serverError,
   );
 }
 
+const c = colors.light;
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#3D2EA5' },
+  screen: { flex: 1, backgroundColor: c.primary },
   flex: { flex: 1 },
   content: {
     flexGrow: 1,
-    paddingHorizontal: 28,
-    paddingTop: Platform.OS === 'ios' ? 44 : 32,
-    paddingBottom: 28,
+    paddingHorizontal: space.lg,
+    paddingTop: Platform.OS === 'ios' ? space['2xl'] : space.xl,
+    paddingBottom: space.lg,
     justifyContent: 'space-between',
   },
-  header: {
-    gap: quivoSpacing.sm,
-    alignItems: 'center',
-    marginBottom: quivoSpacing.xl,
-    marginTop: quivoSpacing.md,
-  },
+  header: { gap: space.sm, alignItems: 'center', marginBottom: space.lg, marginTop: space.md },
   title: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 27,
-    lineHeight: 33,
+    color: c.textInverse,
+    fontSize: fontSize['2xl'],
+    ...fontStyle('display', '700'),
     textAlign: 'center',
-    letterSpacing: 0.3,
   },
   subtitle: {
-    color: 'rgba(255, 255, 255, 0.90)',
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 13.5,
-    lineHeight: 19,
+    ...fontStyle('body'),
+    color: c.textInverse,
+    fontSize: fontSize.sm,
+    lineHeight: 22,
     textAlign: 'center',
-    paddingHorizontal: quivoSpacing.xs,
+    paddingHorizontal: space.xs,
   },
   card: {
-    backgroundColor: quivoColors.white,
-    borderRadius: 28,
+    backgroundColor: c.surfaceRaised,
+    borderRadius: radius.lg,
     borderWidth: 0,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.22,
-    shadowRadius: 20,
-    elevation: 8,
     overflow: 'hidden',
   },
-  formContainer: {
-    paddingHorizontal: 22,
-    paddingTop: 26,
-    paddingBottom: 24,
-    gap: 16,
-  },
-  inputLabel: {
-    color: '#334155',
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 14.5,
-    marginBottom: 2,
-  },
+  formContainer: { padding: space.lg, gap: space.md },
+  inputLabel: { color: c.textPrimary, fontSize: fontSize.sm },
   inputShell: {
-    backgroundColor: '#DCE0E8',
-    borderColor: 'transparent',
-    borderWidth: 0,
-    borderRadius: 13,
+    backgroundColor: c.surfaceCard,
+    borderColor: c.borderSubtle,
+    borderRadius: radius.full,
     minHeight: 48,
-    paddingHorizontal: 14,
   },
-  inputText: {
-    color: '#1E293B',
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 15,
+  inputText: { color: c.textPrimary, fontSize: fontSize.md },
+  submitButton: { marginTop: space.sm, minHeight: 48 },
+  submitButtonText: { fontSize: fontSize.md },
+  infoNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: c.infoSoft,
+    borderRadius: radius.md,
+    padding: space.md,
   },
-  submitButton: {
-    marginTop: 8,
-    backgroundColor: '#3127B1',
-    borderColor: '#3127B1',
-    borderRadius: quivoRadius.pill,
-    minHeight: 50,
-    shadowColor: '#1A0E70',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  submitButtonText: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 15.5,
-    letterSpacing: 0.8,
-    color: quivoColors.white,
+  infoNoticeText: {
+    ...fontStyle('body'),
+    flex: 1,
+    color: c.primaryText,
+    fontSize: fontSize.sm,
+    lineHeight: 20,
   },
   error: {
-    color: quivoColors.danger,
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 13,
-    lineHeight: 18,
+    ...fontStyle('body'),
+    color: c.danger,
+    fontSize: fontSize.sm,
+    lineHeight: 22,
     textAlign: 'center',
   },
   footerContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: quivoSpacing.xl,
-    paddingBottom: quivoSpacing.xs,
+    marginTop: space.lg,
+    paddingBottom: space.xs,
   },
-  footerLogo: {
-    width: 115,
-    height: 46,
-  },
+  footerLogo: { width: 115, height: 46 },
 });

@@ -1,7 +1,6 @@
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import {
   StyleSheet,
-  Text,
   TextInput,
   View,
   type TextInputProps,
@@ -9,7 +8,16 @@ import {
   type ViewStyle,
 } from 'react-native';
 import MaskInput, { type Mask } from 'react-native-mask-input';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../theme/quivo-theme';
+import {
+  Input as DSInput,
+  fontStyle,
+  Text,
+  colors,
+  fontSize,
+  radius,
+  space,
+} from '@quivo/design-system-native';
+import { quivoBubble } from '../theme/quivo-theme';
 
 export interface InputProps extends Omit<TextInputProps, 'size'> {
   label?: string;
@@ -24,7 +32,8 @@ export interface InputProps extends Omit<TextInputProps, 'size'> {
   labelStyle?: TextStyle | TextStyle[];
   mask?: Mask;
 }
-
+const c = colors.light;
+const heights = { sm: 44, md: 48, lg: 52 };
 export function Input({
   label,
   helperText,
@@ -38,60 +47,73 @@ export function Input({
   inputShellStyle,
   labelStyle,
   mask,
+  multiline,
   ...props
 }: InputProps) {
   const description = error ?? helperText;
-  
+  if (
+    !mask &&
+    !inputShellStyle &&
+    !containerStyle &&
+    !labelStyle &&
+    !multiline &&
+    controlSize !== 'sm'
+  ) {
+    return (
+      <DSInput
+        label={label}
+        helperText={helperText}
+        error={error}
+        controlSize={controlSize}
+        fullWidth={fullWidth}
+        leftSlot={leftSlot}
+        rightSlot={rightSlot}
+        style={style}
+        {...props}
+      />
+    );
+  }
+  const inputStyle = [
+    styles.input,
+    { fontSize: controlSize === 'lg' ? fontSize.lg : fontSize.md },
+    style,
+  ];
+  const inputProps = {
+    ...props,
+    multiline,
+    accessibilityLabel: props.accessibilityLabel ?? label,
+    accessibilityHint: props.accessibilityHint ?? description,
+    placeholderTextColor: props.placeholderTextColor ?? c.textTertiary,
+    selectionColor: props.selectionColor ?? c.primary,
+    style: inputStyle,
+  };
   return (
     <View style={[styles.group, fullWidth && styles.fullWidth, containerStyle]}>
-      {label ? <Text style={[styles.label, labelStyle]}>{label}</Text> : null}
-      
+      {label ? (
+        <Text weight="bold" size="sm" style={labelStyle}>
+          {label}
+        </Text>
+      ) : null}
       <View
         style={[
-          styles.inputShell,
-          (styles[`shell_${controlSize}` as keyof typeof styles] as ViewStyle) || styles.shell_md,
-          error ? styles.inputShellError : null,
+          styles.shell,
+          {
+            minHeight: heights[controlSize],
+            borderRadius: multiline ? quivoBubble.innerRadius : radius.full,
+            borderColor: error ? c.danger : c.borderSubtle,
+          },
           inputShellStyle,
         ]}
       >
         {leftSlot ? <View style={styles.slot}>{leftSlot}</View> : null}
-        
-        {mask ? (
-          <MaskInput
-            mask={mask}
-            accessibilityLabel={label}
-            accessibilityHint={description}
-            placeholderTextColor={quivoColors.textMuted}
-            selectionColor={quivoColors.primary}
-            style={[
-              styles.input,
-              (styles[`input_${controlSize}` as keyof typeof styles] as TextStyle) || styles.input_md,
-              style,
-            ]}
-            {...props}
-          />
-        ) : (
-          <TextInput
-            accessibilityLabel={label}
-            accessibilityHint={description}
-            placeholderTextColor={quivoColors.textMuted}
-            selectionColor={quivoColors.primary}
-            style={[
-              styles.input,
-              (styles[`input_${controlSize}` as keyof typeof styles] as TextStyle) || styles.input_md,
-              style,
-            ]}
-            {...props}
-          />
-        )}
-        
+        {mask ? <MaskInput mask={mask} {...inputProps} /> : <TextInput {...inputProps} />}
         {rightSlot ? <View style={styles.slot}>{rightSlot}</View> : null}
       </View>
-      
       {description ? (
         <Text
+          size="sm"
+          variant={error ? 'error' : 'muted'}
           accessibilityLiveRegion={error ? 'polite' : 'none'}
-          style={[styles.help, error ? styles.error : null]}
         >
           {description}
         </Text>
@@ -99,54 +121,16 @@ export function Input({
     </View>
   );
 }
-
 const styles = StyleSheet.create({
-  group: { 
-    gap: quivoSpacing.sm,
-  },
-  fullWidth: {
-    width: '100%',
-  },
-  label: { 
-    color: quivoColors.text, 
-    fontFamily: quivoFonts.bodySemiBold, 
-    fontSize: 13 
-  },
-  inputShell: {
+  group: { gap: space.sm },
+  fullWidth: { width: '100%' },
+  shell: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: c.surfaceCard,
     borderWidth: 1,
-    borderColor: quivoColors.border,
-    borderRadius: quivoRadius.md,
-    backgroundColor: quivoColors.card,
+    paddingHorizontal: space.ms,
   },
-  inputShellError: { 
-    borderColor: quivoColors.danger, 
-    backgroundColor: quivoColors.dangerSoft 
-  },
-  slot: {
-    paddingHorizontal: quivoSpacing.md,
-  },
-  input: {
-    flex: 1,
-    color: quivoColors.text,
-    fontFamily: quivoFonts.bodyMedium,
-  },
-  
-  // Control Sizes
-  shell_sm: { minHeight: 40 },
-  shell_md: { minHeight: 52 },
-  shell_lg: { minHeight: 60 },
-
-  input_sm: { fontSize: 14, paddingHorizontal: quivoSpacing.md, paddingVertical: quivoSpacing.sm },
-  input_md: { fontSize: 16, paddingHorizontal: quivoSpacing.lg, paddingVertical: quivoSpacing.md },
-  input_lg: { fontSize: 18, paddingHorizontal: quivoSpacing.xl, paddingVertical: quivoSpacing.lg },
-  
-  help: {
-    color: quivoColors.textMuted,
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  error: { color: quivoColors.danger },
+  slot: { paddingHorizontal: space.sm },
+  input: { ...fontStyle('body'), flex: 1, color: c.textPrimary, paddingVertical: space.sm },
 });

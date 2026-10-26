@@ -1,10 +1,10 @@
-import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { resolverMarcaLinea, type ResumenAsignacionMovil } from '@quivo/shared';
+import { Badge, Heading, Text, colors, radius, space, fontSize } from '@quivo/design-system-native';
 import { Button } from '../../shared/components/Button';
-import { Card } from '../../shared/components/Card';
 import { formatHoraBolivia } from '../../shared/format-hora';
 import { QuivoHeader } from '../../shared/components/quivo-header';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 
 interface AssignmentSelectionScreenProps {
   asignaciones: ResumenAsignacionMovil[];
@@ -13,7 +13,7 @@ interface AssignmentSelectionScreenProps {
   onSelect: (id: string) => Promise<void>;
   onBack: () => void;
 }
-
+const c = colors.light;
 export function AssignmentSelectionScreen({
   asignaciones,
   loading,
@@ -23,163 +23,124 @@ export function AssignmentSelectionScreen({
 }: AssignmentSelectionScreenProps) {
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <QuivoHeader
-        title="Elige tu turno"
-        subtitle="Encontramos más de una asignación vigente. Confirma cuál iniciarás ahora."
-      />
-      <View accessibilityRole="list" style={styles.list}>
-        {asignaciones.map((asignacion) => (
-          <Card
-            key={asignacion.id}
-            style={[
-              styles.assignmentCard,
-              { borderTopColor: resolverMarcaLinea(asignacion.linea).secondary },
-            ]}
-            accessibilityLabel={`${asignacion.horario}, ${asignacion.linea.nombre}`}
-          >
-            <Text style={styles.turno}>{labelTurno(asignacion.horario)}</Text>
-            {formatHoraBolivia(asignacion.horaSalida) ? (
-              <Text style={styles.hora}>Salida {formatHoraBolivia(asignacion.horaSalida)}</Text>
-            ) : null}
-            <View
-              style={[
-                styles.lineBrand,
-                { backgroundColor: resolverMarcaLinea(asignacion.linea).primary },
-              ]}
-            >
-              {resolverMarcaLinea(asignacion.linea).logoUrl ? (
-                <Image
-                  source={{ uri: resolverMarcaLinea(asignacion.linea).logoUrl }}
-                  style={styles.lineLogo}
-                />
-              ) : null}
-              <Text style={[styles.lineCode, { color: resolverMarcaLinea(asignacion.linea).text }]}>
-                {resolverMarcaLinea(asignacion.linea).shortName}
-              </Text>
-              <View style={styles.lineCopy}>
-                <Text
-                  numberOfLines={1}
-                  style={[styles.linea, { color: resolverMarcaLinea(asignacion.linea).text }]}
-                >
-                  {asignacion.linea.nombre}
-                </Text>
-                {asignacion.linea.lema ? (
-                  <Text
-                    numberOfLines={1}
-                    style={[styles.lineLema, { color: resolverMarcaLinea(asignacion.linea).text }]}
-                  >
-                    {asignacion.linea.lema}
-                  </Text>
-                ) : null}
-              </View>
-            </View>
-            <View style={styles.lineMarkerRow}>
-              <Text
-                style={[
-                  styles.lineMarker,
-                  {
-                    backgroundColor: resolverMarcaLinea(asignacion.linea).secondary,
-                    color: resolverMarcaLinea(asignacion.linea).text,
-                  },
-                ]}
-              >
-                {resolverMarcaLinea(asignacion.linea).markerValue}
-              </Text>
-              {resolverMarcaLinea(asignacion.linea).roofSign ? (
-                <Text numberOfLines={1} style={styles.lineRoofSign}>
-                  {resolverMarcaLinea(asignacion.linea).roofSign}
-                </Text>
-              ) : null}
-            </View>
-            <Text style={styles.ruta}>Ruta {asignacion.ruta.sentido}</Text>
-            <Button
-              loading={loading}
-              onPress={() => void onSelect(asignacion.id)}
-              style={styles.button}
-            >
-              Seleccionar turno
-            </Button>
-          </Card>
-        ))}
+      <View style={styles.headerWrapper}>
+        <QuivoHeader
+          title="Elige tu turno"
+          subtitle="Encontramos más de una asignación vigente. Confirma cuál iniciarás ahora."
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Volver a comenzar"
+          accessibilityState={{ disabled: loading }}
+          disabled={loading}
+          onPress={onBack}
+          style={({ pressed }) => [styles.backAction, pressed && styles.backActionPressed]}
+        />
       </View>
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      <View accessibilityRole="list" style={styles.list}>
+        {asignaciones.map((asignacion) => {
+          const marca = resolverMarcaLinea(asignacion.linea);
+          const hora = formatHoraBolivia(asignacion.horaSalida);
+          return (
+            <Pressable
+              key={asignacion.id}
+              accessibilityRole="button"
+              accessibilityLabel={`${asignacion.horario}, ${asignacion.linea.nombre}`}
+              disabled={loading}
+              onPress={() => void onSelect(asignacion.id)}
+              style={({ pressed }) => [styles.assignmentCard, pressed && styles.pressed]}
+            >
+              <View style={styles.topRow}>
+                <View style={[styles.lineBrand, { backgroundColor: marca.primary }]}>
+                  {marca.logoUrl ? (
+                    <Image source={{ uri: marca.logoUrl }} style={styles.lineLogo} />
+                  ) : null}
+                  <Text weight="bold" style={{ color: marca.text, fontSize: fontSize.lg }}>
+                    {marca.shortName}
+                  </Text>
+                </View>
+                <View style={styles.turnCopy}>
+                  <Heading size="md" numberOfLines={1}>
+                    {asignacion.linea.nombre}
+                  </Heading>
+                  <Text size="sm" variant="secondary">
+                    {labelTurno(asignacion.horario)}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.details}>
+                {hora ? <Badge variant="accent">{`Salida ${hora}`}</Badge> : null}
+                <Text size="sm" variant="secondary">
+                  Ruta {asignacion.ruta.sentido}
+                </Text>
+              </View>
+              <Button
+                variant="outline"
+                disabled={loading}
+                onPress={() => void onSelect(asignacion.id)}
+                fullWidth
+              >
+                Seleccionar turno
+              </Button>
+            </Pressable>
+          );
+        })}
+      </View>
+      {error ? (
+        <Text size="sm" variant="error">
+          {error}
+        </Text>
+      ) : null}
       <Button variant="secondary" disabled={loading} onPress={onBack}>
         Volver a comenzar
       </Button>
     </ScrollView>
   );
 }
-
 function labelTurno(turno: ResumenAsignacionMovil['horario']): string {
   return { manana: 'Turno mañana', tarde: 'Turno tarde', noche: 'Turno noche' }[turno];
 }
-
 const styles = StyleSheet.create({
-  content: { padding: quivoSpacing.xl, gap: quivoSpacing.xl, paddingBottom: quivoSpacing.xxxl },
-  list: { gap: quivoSpacing.lg },
-  assignmentCard: { borderTopWidth: 4 },
-  turno: {
-    color: quivoColors.primary,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 13,
-    textTransform: 'uppercase',
+  content: { padding: space.lg, gap: space.lg, paddingBottom: space['2xl'] },
+  headerWrapper: { position: 'relative' },
+  backAction: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: radius.full,
   },
-  linea: {
-    fontFamily: quivoFonts.displaySemiBold,
-    fontSize: 19,
+  backActionPressed: { backgroundColor: c.primarySoft, opacity: 0.4 },
+  list: { gap: space.md },
+  assignmentCard: {
+    backgroundColor: c.surfaceCard,
+    borderColor: c.borderSubtle,
+    borderWidth: 1,
+    borderRadius: quivoBubble.radius,
+    padding: space.md,
+    gap: space.md,
+    minHeight: quivoBubble.touch,
   },
+  pressed: { backgroundColor: c.accentSoft, borderColor: c.accent },
+  topRow: { flexDirection: 'row', alignItems: 'center', gap: space.ms },
   lineBrand: {
-    borderRadius: quivoRadius.md,
+    minWidth: 64,
+    minHeight: 52,
+    paddingHorizontal: space.sm,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: space.xs,
+  },
+  lineLogo: { width: 28, height: 28, borderRadius: radius.full },
+  turnCopy: { flex: 1, minWidth: 0, gap: space.xs },
+  details: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: quivoSpacing.md,
-    marginTop: quivoSpacing.sm,
-    padding: quivoSpacing.md,
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: space.sm,
   },
-  lineCode: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 26,
-  },
-  lineLogo: { height: 34, width: 34, borderRadius: quivoRadius.sm },
-  lineCopy: { flex: 1, minWidth: 0 },
-  lineLema: {
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 11,
-    marginTop: quivoSpacing.xs,
-    opacity: 0.88,
-  },
-  lineMarkerRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: quivoSpacing.sm,
-    marginTop: quivoSpacing.sm,
-  },
-  lineMarker: {
-    borderRadius: quivoRadius.pill,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 11,
-    overflow: 'hidden',
-    paddingHorizontal: quivoSpacing.sm,
-    paddingVertical: quivoSpacing.xs,
-  },
-  lineRoofSign: {
-    color: quivoColors.textSecondary,
-    flex: 1,
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 11,
-  },
-  hora: {
-    color: quivoColors.success,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 13,
-    marginTop: quivoSpacing.xs,
-  },
-  ruta: {
-    color: quivoColors.textSecondary,
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 13,
-    marginTop: quivoSpacing.xs,
-  },
-  button: { marginTop: quivoSpacing.lg },
-  error: { color: quivoColors.danger, fontFamily: quivoFonts.bodyMedium, fontSize: 13 },
 });

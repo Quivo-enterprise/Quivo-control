@@ -1,21 +1,12 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Heading, Text, Loader, colors, space, fontSize } from '@quivo/design-system-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, {
-  Easing,
-  FadeIn,
-  FadeOut,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import NetInfo from '@react-native-community/netinfo';
-import Svg, { Circle } from 'react-native-svg';
 import { VectorLogo } from './components/vector-logo';
 import { Button } from '../../shared/components/Button';
-import { quivoColors, quivoFonts, quivoSpacing } from '../../shared/theme/quivo-theme';
 
 export interface SplashScreenProps {
   onLoadData: () => Promise<void>;
@@ -27,27 +18,6 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
   // 'sin_conexion' es SOLO para cuando `NetInfo.fetch()` confirmó que no hay red — nunca para
   // una restauración de sesión lenta (ver el motivo del estado 'tardanza' más abajo).
   const [status, setStatus] = useState<'verificando' | 'sin_conexion' | 'tardanza'>('verificando');
-
-  const rotation = useSharedValue(0);
-
-  useEffect(() => {
-    rotation.value = withRepeat(
-      withTiming(360, {
-        duration: 1200,
-        easing: Easing.linear,
-      }),
-      -1,
-      false
-    );
-  }, [rotation]);
-
-  const animatedSpinnerStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ rotate: `${rotation.value}deg` }],
-    };
-  });
-  
-  const AnimatedSvg = Animated.createAnimatedComponent(Svg);
 
   const checkConnectionAndData = async () => {
     const startTime = Date.now();
@@ -92,7 +62,9 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
       // Sólo 'no_network' viene de una verificación real de conectividad (`NetInfo.fetch()`).
       // Cualquier otra causa —el timeout de arriba, o un error inesperado dentro de
       // `onLoadData`— NO es evidencia de que falle la red: no le mentimos al conductor.
-      setStatus(error instanceof Error && error.message === 'no_network' ? 'sin_conexion' : 'tardanza');
+      setStatus(
+        error instanceof Error && error.message === 'no_network' ? 'sin_conexion' : 'tardanza',
+      );
     }
   };
 
@@ -101,12 +73,9 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
   }, []);
 
   return (
-    <Animated.View 
-      style={styles.container} 
-      exiting={FadeOut.duration(300)}
-    >
+    <Animated.View style={styles.container} exiting={FadeOut.duration(300)}>
       <LinearGradient
-        colors={['#0F1B5C', '#1a2d7f']}
+        colors={[colors.light.dark, colors.light.primary]}
         style={[styles.gradient, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
       >
         <Animated.View entering={FadeIn.duration(400)} style={styles.logoContainer}>
@@ -117,24 +86,32 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
           {status === 'verificando' ? (
             <>
               <View style={styles.spinnerWrapper}>
-                <AnimatedSvg width="60" height="60" viewBox="0 0 100 100" style={animatedSpinnerStyle}>
-                  <Circle cx="50" cy="50" r="40" stroke="#FD9E15" strokeWidth="12" fill="none" strokeDasharray="180 250" strokeLinecap="round" />
-                </AnimatedSvg>
+                <Loader size="lg" tone="accent" />
               </View>
-              <Text style={styles.title}>Preparando tu jornada</Text>
+              <Heading size="xl" style={styles.title}>
+                Preparando tu jornada
+              </Heading>
               <Text style={styles.subtitle}>Verificando conexión y{'\n'}datos operativos</Text>
             </>
           ) : (
             <Animated.View entering={FadeIn}>
               {status === 'sin_conexion' ? (
                 <>
-                  <Text style={styles.title}>Error de conexión</Text>
-                  <Text style={styles.subtitle}>No pudimos verificar tus datos.{'\n'}Revisa tu conexión a internet.</Text>
+                  <Heading size="xl" style={styles.title}>
+                    Error de conexión
+                  </Heading>
+                  <Text style={styles.subtitle}>
+                    No pudimos verificar tus datos.{'\n'}Revisa tu conexión a internet.
+                  </Text>
                 </>
               ) : (
                 <>
-                  <Text style={styles.title}>Esto está tardando</Text>
-                  <Text style={styles.subtitle}>Preparar tu sesión está tardando más de lo esperado.{'\n'}Puedes reintentar.</Text>
+                  <Heading size="xl" style={styles.title}>
+                    Esto está tardando
+                  </Heading>
+                  <Text style={styles.subtitle}>
+                    Preparar tu sesión está tardando más de lo esperado.{'\n'}Puedes reintentar.
+                  </Text>
                 </>
               )}
               <Button
@@ -145,7 +122,7 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
                 style={styles.retryButton}
                 onPress={() => void checkConnectionAndData()}
               >
-                {status === 'sin_conexion' ? 'Reintentar Conexión' : 'Reintentar'}
+                {status === 'sin_conexion' ? 'Reintentar' : 'Reintentar'}
               </Button>
             </Animated.View>
           )}
@@ -155,56 +132,25 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
   );
 }
 
-
+const c = colors.light;
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 999,
-  },
-  gradient: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  container: { flex: 1, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 },
+  gradient: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   logoContainer: {
     alignItems: 'center',
     justifyContent: 'center',
     height: 160,
     width: '100%',
-    marginBottom: quivoSpacing.xxxl * 2,
+    marginBottom: space['2xl'] * 2,
   },
-  contentContainer: {
-    alignItems: 'center',
-    minHeight: 180,
-    paddingHorizontal: quivoSpacing.xxl,
-  },
+  contentContainer: { alignItems: 'center', minHeight: 180, paddingHorizontal: space.xl },
   spinnerWrapper: {
-    marginBottom: quivoSpacing.xl,
+    marginBottom: space.lg,
     justifyContent: 'center',
     alignItems: 'center',
     height: 60,
   },
-  title: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 18,
-    marginBottom: quivoSpacing.sm,
-    textAlign: 'center',
-  },
-  subtitle: {
-    color: quivoColors.primarySoft,
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 14,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  retryButton: {
-    marginTop: quivoSpacing.xxl,
-    width: 220,
-  },
+  title: { color: c.textInverse, marginBottom: space.sm, textAlign: 'center' },
+  subtitle: { color: c.textInverse, fontSize: fontSize.sm, textAlign: 'center', lineHeight: 22 },
+  retryButton: { marginTop: space.xl, width: 220, minHeight: 48 },
 });

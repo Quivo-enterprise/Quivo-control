@@ -1,7 +1,8 @@
-import { Modal, StyleSheet, Text, View, Pressable } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { Modal, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../theme/quivo-theme';
+import { Heading, Text, colors, elevation, space } from '@quivo/design-system-native';
+import { Button } from './Button';
+import { quivoBubble } from '../theme/quivo-theme';
 
 export interface QuivoConfirmDialogProps {
   visible: boolean;
@@ -15,8 +16,7 @@ export interface QuivoConfirmDialogProps {
   onCancel?: () => void;
   confirmDisabled?: boolean;
 }
-
-/** Reemplazo con la identidad visual de QUIVO para diálogos de confirmación / avisos */
+const c = colors.light;
 export function QuivoConfirmDialog({
   visible,
   title,
@@ -29,147 +29,69 @@ export function QuivoConfirmDialog({
   onCancel,
   confirmDisabled = false,
 }: QuivoConfirmDialogProps) {
-  const iconoNombre = icon ?? (variant === 'danger' ? 'warning-outline' : 'checkmark-circle-outline');
-  const iconoColor = variant === 'danger' ? '#E50914' : '#3127B1';
-
+  const { width } = useWindowDimensions();
+  const stacked = width < 360 || confirmLabel.length + (cancelLabel?.length ?? 0) > 28;
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <View style={styles.overlay}>
-        <BlurView intensity={85} tint="light" style={styles.card}>
+        <View style={styles.card}>
           <View style={styles.header}>
-            <Ionicons name={iconoNombre} size={20} color={iconoColor} />
-            <Text style={[styles.title, { color: variant === 'danger' ? '#E50914' : '#3127B1' }]}>
-              {title}
-            </Text>
-          </View>
-
-          <Text style={styles.message}>{message}</Text>
-
-          <View style={styles.actions}>
-            {cancelLabel && onCancel && (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={cancelLabel}
-                onPress={onCancel}
-                style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
-              >
-                <Text style={styles.cancelButtonText}>{cancelLabel.toUpperCase()}</Text>
-              </Pressable>
-            )}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={confirmLabel}
-              onPress={onConfirm}
-              disabled={confirmDisabled}
-              style={({ pressed }) => [
-                styles.confirmButton,
-                variant === 'danger' && styles.dangerButton,
-                confirmDisabled && styles.disabled,
-                pressed && styles.pressed,
-              ]}
+            <Ionicons
+              name={icon ?? (variant === 'danger' ? 'warning-outline' : 'checkmark-circle-outline')}
+              size={24}
+              color={variant === 'danger' ? c.danger : c.primary}
+            />
+            <Heading
+              size="lg"
+              style={[styles.title, { color: variant === 'danger' ? c.danger : c.textPrimary }]}
             >
-              <Text style={styles.confirmButtonText}>{confirmLabel.toUpperCase()}</Text>
-            </Pressable>
+              {title}
+            </Heading>
           </View>
-        </BlurView>
+          <Text size="sm" style={styles.message}>
+            {message}
+          </Text>
+          <View style={[styles.actions, stacked && styles.stacked]}>
+            {cancelLabel && onCancel ? (
+              <Button variant="outline" onPress={onCancel} style={styles.action}>
+                {cancelLabel}
+              </Button>
+            ) : null}
+            <Button
+              variant={variant === 'danger' ? 'danger' : 'primary'}
+              disabled={confirmDisabled}
+              onPress={onConfirm}
+              style={styles.action}
+            >
+              {confirmLabel}
+            </Button>
+          </View>
+        </View>
       </View>
     </Modal>
   );
 }
-
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(25, 20, 60, 0.22)',
+    backgroundColor: quivoBubble.scrim,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: quivoSpacing.lg,
+    padding: space.md,
   },
   card: {
-    backgroundColor: 'rgba(236, 239, 244, 0.92)',
-    borderRadius: 22,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.85)',
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 16,
     width: '100%',
-    maxWidth: 290,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.16,
-    shadowRadius: 16,
-    elevation: 12,
+    maxWidth: 400,
+    backgroundColor: c.surfaceRaised,
+    borderRadius: quivoBubble.radius,
+    padding: space.md,
+    gap: space.md,
+    ...elevation(3),
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
-  },
-  title: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 16,
-    color: '#3127B1',
-    letterSpacing: 0.2,
-    flex: 1,
-  },
-  message: {
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 12,
-    lineHeight: 16.5,
-    color: '#475569',
-    marginBottom: 16,
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  cancelButton: {
-    flex: 1,
-    height: 38,
-    borderRadius: quivoRadius.pill,
-    backgroundColor: '#DCE0E8',
-    borderWidth: 1.5,
-    borderColor: '#3127B1',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cancelButtonText: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 12.5,
-    letterSpacing: 0.6,
-    color: '#3127B1',
-  },
-  confirmButton: {
-    flex: 1,
-    height: 38,
-    borderRadius: quivoRadius.pill,
-    backgroundColor: '#3127B1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#1A0E70',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  dangerButton: {
-    backgroundColor: '#E50914',
-    shadowColor: '#7A0000',
-  },
-  confirmButtonText: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 12.5,
-    letterSpacing: 0.6,
-    color: quivoColors.white,
-  },
-  disabled: {
-    opacity: 0.5,
-  },
-  pressed: {
-    opacity: 0.8,
-    transform: [{ scale: 0.98 }],
-  },
+  header: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  title: { flex: 1 },
+  message: { lineHeight: 22 },
+  actions: { flexDirection: 'row', gap: space.sm },
+  stacked: { flexDirection: 'column' },
+  action: { flex: 1, minHeight: quivoBubble.touch },
 });

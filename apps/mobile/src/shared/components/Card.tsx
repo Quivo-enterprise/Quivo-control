@@ -1,10 +1,9 @@
-import { ReactNode } from 'react';
-import { StyleSheet, View, type ViewProps, type ViewStyle } from 'react-native';
-import { quivoColors, quivoRadius, quivoSpacing } from '../theme/quivo-theme';
-
-export type CardVariant = 'surface' | 'soft' | 'brand' | 'glass' | 'accent' | 'outline' | 'elevated' | 'interactive';
+import type { ReactNode } from 'react';
+import { View, type ViewProps, type ViewStyle } from 'react-native';
+import { Card as DSCard, colors, radius, space } from '@quivo/design-system-native';
+export type CardVariant =
+  'surface' | 'soft' | 'brand' | 'glass' | 'accent' | 'outline' | 'elevated' | 'interactive';
 export type CardPadding = 'none' | 'sm' | 'md' | 'lg';
-
 export interface CardProps extends ViewProps {
   variant?: CardVariant;
   padding?: CardPadding;
@@ -12,7 +11,8 @@ export interface CardProps extends ViewProps {
   footer?: ReactNode;
   children?: ReactNode;
 }
-
+const c = colors.light;
+const pad = { none: 0, sm: space.sm, md: space.md, lg: space.lg };
 export function Card({
   variant = 'surface',
   padding = 'md',
@@ -22,117 +22,36 @@ export function Card({
   children,
   ...props
 }: CardProps) {
+  const mapped = variant === 'glass' || variant === 'interactive' ? 'surface' : variant;
+  const override: ViewStyle = {
+    borderRadius: radius.lg,
+    padding: 0,
+    backgroundColor:
+      variant === 'glass'
+        ? c.surfaceRaised
+        : variant === 'surface' || variant === 'interactive'
+          ? c.surfaceCard
+          : undefined,
+    borderColor:
+      variant === 'glass' || variant === 'interactive' || variant === 'surface'
+        ? c.borderSubtle
+        : undefined,
+  };
   return (
-    <View
-      style={[
-        styles.card,
-        (styles[`variant_${variant}` as keyof typeof styles] as ViewStyle) || styles.variant_surface,
-        style,
-      ]}
-      {...props}
-    >
+    <DSCard variant={mapped} style={[override, style]} {...props}>
       {header ? (
         <View
-          style={[
-            styles.header,
-            (styles[`padding_${padding}` as keyof typeof styles] as ViewStyle) || styles.padding_md,
-          ]}
+          style={{ padding: pad[padding], borderBottomWidth: 1, borderBottomColor: c.borderSubtle }}
         >
           {header}
         </View>
       ) : null}
-
-      <View
-        style={[
-          styles.body,
-          (styles[`padding_${padding}` as keyof typeof styles] as ViewStyle) || styles.padding_md,
-        ]}
-      >
-        {children}
-      </View>
-
+      <View style={{ padding: pad[padding] }}>{children}</View>
       {footer ? (
-        <View
-          style={[
-            styles.footer,
-            (styles[`padding_${padding}` as keyof typeof styles] as ViewStyle) || styles.padding_md,
-          ]}
-        >
+        <View style={{ padding: pad[padding], borderTopWidth: 1, borderTopColor: c.borderSubtle }}>
           {footer}
         </View>
       ) : null}
-    </View>
+    </DSCard>
   );
 }
-
-const styles = StyleSheet.create({
-  card: {
-    borderRadius: quivoRadius.lg,
-    overflow: 'hidden',
-  },
-  header: {
-    borderBottomWidth: 1,
-    borderBottomColor: quivoColors.border,
-  },
-  body: {
-    flex: 1,
-  },
-  footer: {
-    borderTopWidth: 1,
-    borderTopColor: quivoColors.border,
-  },
-
-  // Paddings
-  padding_none: { padding: 0 },
-  padding_sm: { padding: quivoSpacing.sm },
-  padding_md: { padding: quivoSpacing.md },
-  padding_lg: { padding: quivoSpacing.xl },
-
-  // Variants
-  variant_surface: {
-    backgroundColor: quivoColors.card,
-    borderWidth: 1,
-    borderColor: quivoColors.border,
-    shadowColor: quivoColors.text,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 3,
-  },
-  variant_soft: {
-    backgroundColor: quivoColors.primarySubtle,
-    borderWidth: 0,
-  },
-  variant_brand: {
-    backgroundColor: quivoColors.primary,
-    borderWidth: 0,
-  },
-  variant_glass: {
-    backgroundColor: quivoColors.glassSurface,
-    borderColor: quivoColors.glassBorder,
-    borderWidth: 1,
-  },
-  variant_accent: {
-    backgroundColor: quivoColors.accentSoft,
-    borderWidth: 0,
-  },
-  variant_outline: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: quivoColors.border,
-  },
-  variant_elevated: {
-    backgroundColor: quivoColors.card,
-    borderWidth: 0,
-    shadowColor: quivoColors.text,
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.12,
-    shadowRadius: 24,
-    elevation: 5,
-  },
-  variant_interactive: {
-    backgroundColor: quivoColors.card,
-    borderWidth: 1,
-    borderColor: quivoColors.border,
-  }
-});

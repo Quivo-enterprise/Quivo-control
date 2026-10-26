@@ -1,52 +1,49 @@
-import { StyleSheet, Text, View, Image } from 'react-native';
-import { quivoColors, quivoFonts, quivoSpacing } from '../theme/quivo-theme';
-import logo from '../../../assets/images/logo.png';
-
+import { StyleSheet, View } from 'react-native';
+import { Heading, Text, colors, radius, space } from '@quivo/design-system-native';
+import { quivoBubble } from '../theme/quivo-theme';
 interface QuivoHeaderProps {
   title: string;
   subtitle?: string;
 }
-
 export function QuivoHeader({ title, subtitle }: QuivoHeaderProps) {
   return (
     <View style={styles.container}>
-      <View style={styles.brandRow}>
-        <Image
-          source={logo}
-          style={styles.logo}
-          resizeMode="contain"
-        />
+      <View style={styles.row}>
+        <View
+          style={styles.backButton}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          <Text style={styles.backIcon}>‹</Text>
+        </View>
+        <Heading size="xl" style={styles.title}>
+          {title}
+        </Heading>
+        <View style={styles.spacer} />
       </View>
-      <Text accessibilityRole="header" style={styles.title}>
-        {title}
-      </Text>
-      {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+      {subtitle ? (
+        <Text size="sm" variant="secondary" style={styles.subtitle}>
+          {subtitle}
+        </Text>
+      ) : null}
     </View>
   );
 }
-
 const styles = StyleSheet.create({
-  container: { gap: quivoSpacing.sm },
-  brandRow: {
-    flexDirection: 'row',
+  container: { gap: space.sm },
+  row: { flexDirection: 'row', alignItems: 'center' },
+  backButton: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.light.borderSubtle,
+    backgroundColor: colors.light.surfaceCard,
     alignItems: 'center',
-    gap: quivoSpacing.md,
-    marginBottom: quivoSpacing.sm,
+    justifyContent: 'center',
   },
-  logo: {
-    height: 38,
-    width: 150, // adjust width based on aspect ratio
-  },
-  title: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 30,
-    lineHeight: 37,
-  },
-  subtitle: {
-    color: quivoColors.textSecondary,
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 14,
-    lineHeight: 22,
-  },
+  backIcon: { color: colors.light.primaryText, fontSize: 30, lineHeight: 32 },
+  spacer: { width: quivoBubble.touch, height: quivoBubble.touch },
+  title: { flex: 1, textAlign: 'center', color: colors.light.textPrimary },
+  subtitle: { textAlign: 'center' },
 });

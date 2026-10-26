@@ -1,14 +1,21 @@
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
   Pressable,
   StyleSheet,
-  Text,
-  type StyleProp,
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../theme/quivo-theme';
+import {
+  Button as DSButton,
+  Text,
+  colors,
+  elevation,
+  fontSize,
+  radius,
+  space,
+} from '@quivo/design-system-native';
+import { quivoBubble } from '../theme/quivo-theme';
 
 export type ButtonVariant =
   | 'primary'
@@ -22,9 +29,7 @@ export type ButtonVariant =
   | 'dark'
   | 'glass'
   | 'link';
-
 export type ButtonSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
-
 export interface ButtonProps {
   children?: ReactNode;
   onPress?: () => void;
@@ -42,6 +47,15 @@ export interface ButtonProps {
   style?: ViewStyle | ViewStyle[];
   textStyle?: TextStyle | TextStyle[];
 }
+const minHeight: Record<ButtonSize, number> = { xs: 44, sm: 44, md: 48, lg: 52, xl: 60 };
+const textSize: Record<ButtonSize, number> = {
+  xs: fontSize.sm,
+  sm: fontSize.sm,
+  md: fontSize.md,
+  lg: fontSize.lg,
+  xl: fontSize.xl,
+};
+const c = colors.light;
 
 export function Button({
   children,
@@ -60,55 +74,94 @@ export function Button({
   style,
   textStyle,
 }: ButtonProps) {
-  const bloqueado = disabled || loading;
-
-  const buttonStyles: StyleProp<ViewStyle>[] = [
+  const blocked = disabled || loading;
+  const commonStyle = [
     styles.base,
-    (styles[`variant_${variant}` as keyof typeof styles] as ViewStyle) || styles.variant_primary,
-    (styles[`size_${size}` as keyof typeof styles] as ViewStyle) || styles.size_md,
+    { minHeight: minHeight[size] },
     fullWidth && styles.fullWidth,
     rounded && styles.rounded,
-    elevated && styles.elevated,
+    elevated && elevation(2),
     iconOnly && styles.iconOnly,
-    ...(Array.isArray(style) ? style : [style]),
+    style,
   ];
-
+  const isPlainText = typeof children === 'string' || typeof children === 'number';
+  if (isPlainText && !leftIcon && !rightIcon && !iconOnly && !textStyle && variant !== 'glass') {
+    return (
+      <DSButton
+        accessibilityHint={accessibilityHint}
+        disabled={disabled}
+        loading={loading}
+        onPress={onPress}
+        variant={variant}
+        size={size}
+        fullWidth={fullWidth}
+        style={commonStyle}
+      >
+        {String(children)}
+      </DSButton>
+    );
+  }
+  const background =
+    variant === 'glass'
+      ? c.surfaceRaised
+      : variant === 'accent'
+        ? c.accent
+        : variant === 'danger'
+          ? c.danger
+          : variant === 'success'
+            ? c.success
+            : variant === 'warning'
+              ? c.warning
+              : variant === 'dark'
+                ? c.dark
+                : variant === 'secondary'
+                  ? c.primarySubtle
+                  : variant === 'outline' || variant === 'ghost' || variant === 'link'
+                    ? 'transparent'
+                    : c.primary;
+  const foreground = ['primary', 'danger', 'success', 'dark'].includes(variant)
+    ? c.textInverse
+    : variant === 'accent' || variant === 'warning'
+      ? c.black
+      : c.primaryText;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityHint={accessibilityHint}
-      accessibilityState={{ disabled: bloqueado, busy: loading }}
-      disabled={bloqueado}
+      accessibilityState={{ disabled: blocked, busy: loading }}
+      disabled={blocked}
       onPress={onPress}
       style={({ pressed }) => [
-        ...buttonStyles,
-        pressed && !bloqueado ? styles.pressed : null,
-        bloqueado ? styles.disabled : null,
+        commonStyle,
+        {
+          backgroundColor: background,
+          borderWidth: variant === 'outline' || variant === 'glass' ? 1 : 0,
+          borderColor: variant === 'glass' ? c.borderSubtle : c.primaryText,
+          opacity: blocked ? 0.65 : pressed ? 0.85 : 1,
+        },
       ]}
     >
       {loading ? (
-        <ActivityIndicator
-          color={
-            ['secondary', 'outline', 'ghost'].includes(variant)
-              ? quivoColors.primary
-              : quivoColors.white
-          }
-        />
+        <ActivityIndicator size="small" color={foreground} />
       ) : (
         <>
           {leftIcon}
-          {children && (
+          {isPlainText ? (
             <Text
+              weight="bold"
               style={[
-                styles.label,
-                (styles[`label_size_${size}` as keyof typeof styles] as TextStyle) || styles.label_size_md,
-                (styles[`label_variant_${variant}` as keyof typeof styles] as TextStyle) ||
-                  styles.label_variant_primary,
+                {
+                  color: foreground,
+                  fontSize: textSize[size],
+                  textAlign: 'center',
+                },
                 textStyle,
               ]}
             >
               {children}
             </Text>
+          ) : (
+            children
           )}
           {rightIcon}
         </>
@@ -116,82 +169,16 @@ export function Button({
     </Pressable>
   );
 }
-
 const styles = StyleSheet.create({
   base: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderRadius: quivoRadius.md,
-    gap: quivoSpacing.sm,
+    flexDirection: 'row',
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    borderRadius: radius.full,
   },
-  fullWidth: {
-    width: '100%',
-  },
-  rounded: {
-    borderRadius: quivoRadius.pill,
-  },
-  elevated: {
-    elevation: 4,
-    shadowColor: quivoColors.text,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  iconOnly: {
-    paddingHorizontal: 0,
-    width: 52,
-  },
-  pressed: {
-    opacity: 0.84,
-    transform: [{ scale: 0.98 }],
-  },
-  disabled: {
-    opacity: 0.5,
-  },
-  
-  // Sizes
-  size_xs: { minHeight: 32, paddingHorizontal: quivoSpacing.sm },
-  size_sm: { minHeight: 40, paddingHorizontal: quivoSpacing.md },
-  size_md: { minHeight: 52, paddingHorizontal: quivoSpacing.xl },
-  size_lg: { minHeight: 60, paddingHorizontal: quivoSpacing.xxl },
-  size_xl: { minHeight: 72, paddingHorizontal: quivoSpacing.xxxl },
-
-  // Label sizes
-  label_size_xs: { fontSize: 12 },
-  label_size_sm: { fontSize: 14 },
-  label_size_md: { fontSize: 15 },
-  label_size_lg: { fontSize: 16 },
-  label_size_xl: { fontSize: 18 },
-
-  label: {
-    fontFamily: quivoFonts.bodySemiBold,
-  },
-
-  // Variants (Button Background and Border)
-  variant_primary: { backgroundColor: quivoColors.primary, borderColor: quivoColors.primary },
-  variant_secondary: { backgroundColor: quivoColors.card, borderColor: quivoColors.primarySoft },
-  variant_accent: { backgroundColor: quivoColors.accent, borderColor: quivoColors.accent },
-  variant_outline: { backgroundColor: 'transparent', borderColor: quivoColors.border },
-  variant_ghost: { backgroundColor: 'transparent', borderColor: 'transparent' },
-  variant_danger: { backgroundColor: quivoColors.danger, borderColor: quivoColors.danger },
-  variant_success: { backgroundColor: quivoColors.success, borderColor: quivoColors.success },
-  variant_warning: { backgroundColor: quivoColors.accent, borderColor: quivoColors.accent },
-  variant_dark: { backgroundColor: quivoColors.text, borderColor: quivoColors.text },
-  variant_glass: { backgroundColor: quivoColors.glassSurface, borderColor: quivoColors.glassBorder },
-  variant_link: { backgroundColor: 'transparent', borderColor: 'transparent', paddingHorizontal: 0, minHeight: 0 },
-
-  // Variants (Text Color)
-  label_variant_primary: { color: quivoColors.white },
-  label_variant_secondary: { color: quivoColors.primary },
-  label_variant_accent: { color: quivoColors.white },
-  label_variant_outline: { color: quivoColors.text },
-  label_variant_ghost: { color: quivoColors.primary },
-  label_variant_danger: { color: quivoColors.white },
-  label_variant_success: { color: quivoColors.white },
-  label_variant_warning: { color: quivoColors.white },
-  label_variant_dark: { color: quivoColors.white },
-  label_variant_glass: { color: quivoColors.primary },
-  label_variant_link: { color: quivoColors.primary, textDecorationLine: 'underline' },
+  fullWidth: { width: '100%' },
+  rounded: { borderRadius: radius.full },
+  iconOnly: { width: quivoBubble.touch, paddingHorizontal: 0 },
 });
