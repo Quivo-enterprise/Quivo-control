@@ -75,6 +75,7 @@ const variantes: Record<Variante, Mancha[]> = {
       phase: 0.4,
     },
   ],
+  // c: la elegida; el responsable pidió más dinamismo (más recorrido y ciclos más cortos).
   c: [
     {
       id: 'indigo-1',
@@ -83,8 +84,8 @@ const variantes: Record<Variante, Mancha[]> = {
       y: 0.2,
       size: 0.85,
       opacity: 0.38,
-      travel: 18,
-      duration: 16000,
+      travel: 70,
+      duration: 9000,
       phase: 0,
     },
     {
@@ -94,8 +95,8 @@ const variantes: Record<Variante, Mancha[]> = {
       y: 0.8,
       size: 0.45,
       opacity: 0.17,
-      travel: 12,
-      duration: 19000,
+      travel: 50,
+      duration: 11000,
       phase: 0.4,
     },
     {
@@ -105,8 +106,8 @@ const variantes: Record<Variante, Mancha[]> = {
       y: 0.48,
       size: 0.65,
       opacity: 0.24,
-      travel: 16,
-      duration: 17500,
+      travel: 60,
+      duration: 10000,
       phase: 0.7,
     },
   ],
