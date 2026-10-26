@@ -4,11 +4,7 @@ import { COLORES_VEHICULO } from '@quivo/shared';
 export const COLOR_VEHICULO_NEUTRO = '#9A9AB0';
 
 function normalizar(valor: string): string {
-  return valor
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .trim()
-    .toLowerCase();
+  return valor.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
 }
 
 // Los hex salen de `COLORES_VEHICULO` (fuente única de la web); `multicolor` trae un gradiente

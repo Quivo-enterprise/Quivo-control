@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
+  Linking,
   Modal,
   Pressable,
   StyleSheet,
@@ -19,7 +21,6 @@ import {
   type PaqueteDia,
 } from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
-import { Input } from '../../shared/components/Input';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { dsColors, dsSpace, dsDuration, dsElevation } from '../../shared/theme/design-system';
 import { Burbuja, BotonBurbuja, PildoraBurbuja } from '../../shared/components/burbuja';
@@ -60,13 +61,17 @@ import { useFilaSalida } from '../fila-salida/use-fila-salida';
 import { terminalDeLaRuta } from '../fila-salida/fila-salida-deteccion';
 import { AvisoDesignacion, ContadorEsperaMolinos } from '../vuelta-actual/aviso-designacion';
 
-const MOTIVOS_REPORTE = [
-  'Bloqueo o trancadera',
-  'Falla mecánica',
-  'Salud o emergencia',
-  'Almuerzo',
-  'Combustible',
+/** Opciones fijas del modal "Reportar incidencia"; viajan como `categoria` (código estable) y `texto` (etiqueta). */
+const OPCIONES_INCIDENCIA = [
+  { categoria: 'bloqueo', etiqueta: 'Bloqueo', icono: 'close-circle-outline' },
+  { categoria: 'salud', etiqueta: 'Salud', icono: 'medkit-outline' },
+  { categoria: 'fantasma', etiqueta: 'Fantasma', icono: 'eye-off-outline' },
+  { categoria: 'incidente', etiqueta: 'Incidente', icono: 'warning-outline' },
+  { categoria: 'falla_tecnica', etiqueta: 'Falla técnica', icono: 'construct-outline' },
 ] as const;
+
+// shortcut: número fijo del delegado, válido SOLO para la L16 (el botón se oculta en otras líneas) en el piloto; mover a un campo de Línea/Sindicato servido por la API después del piloto.
+const WHATSAPP_DELEGADO = '59161604399';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -162,7 +167,6 @@ export function OperationScreen(
   const [observacionEnviada, setObservacionEnviada] = useState(false);
   const [errorObservacion, setErrorObservacion] = useState<string | null>(null);
   const [observacionModalVisible, setObservacionModalVisible] = useState(false);
-  const [showInfo, setShowInfo] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
   const { camara, onPanUsuario, recentrar, alternarOrientacion } = useModoCamara(gps.tracking);
   // Canal mapa -> brújula del rumbo de la cámara: no pasa por estado de React (llega a ~30 Hz).
@@ -368,9 +372,26 @@ export function OperationScreen(
     })();
   }, [gps.tracking, gps.posicionActual, destinoRuteo, props.obtenerAccessToken]);
 
+  const abrirWhatsAppDelegado = useCallback(() => {
+    const { conductor, vehiculo, linea } = props.contexto;
+    const msg = `Hola, soy ${conductor.nombre} (${vehiculo.placa}), Línea ${linea.codigo}.`;
+    Linking.openURL(`https://wa.me/${WHATSAPP_DELEGADO}?text=${encodeURIComponent(msg)}`).catch(
+      (error) => {
+        Sentry.captureException(error, {
+          tags: { contexto: 'operation-screen', paso: 'abrir-whatsapp-delegado' },
+        });
+        Alert.alert(
+          'No se pudo abrir WhatsApp',
+          'Revisa que WhatsApp esté instalado o escribe al delegado al 61604399.',
+        );
+      },
+    );
+  }, [props.contexto]);
+
   const enviarObservacion = useCallback(async () => {
-    const texto = observacion.trim();
-    if (!texto) return;
+    const texto = observacion; // etiqueta de la opción elegida
+    const categoria = OPCIONES_INCIDENCIA.find((o) => o.etiqueta === texto)?.categoria;
+    if (!texto || !categoria) return;
     setEnviandoObservacion(true);
     setErrorObservacion(null);
     try {
@@ -378,7 +399,7 @@ export function OperationScreen(
       await encolarEvento(db, {
         deviceId: props.deviceId,
         tipo: 'observacion',
-        payload: { sesionId: props.contexto.sesionId, texto },
+        payload: { sesionId: props.contexto.sesionId, texto, categoria },
       });
       setObservacion('');
       setObservacionEnviada(true);
@@ -394,7 +415,7 @@ export function OperationScreen(
       Sentry.captureException(error, {
         tags: { contexto: 'operation-screen', paso: 'enviar-observacion' },
       });
-      setErrorObservacion('No se pudo guardar la observación. Vuelve a intentarlo.');
+      setErrorObservacion('No se pudo guardar el reporte. Vuelve a intentarlo.');
     } finally {
       setEnviandoObservacion(false);
     }
@@ -567,14 +588,16 @@ export function OperationScreen(
           <BotonBurbuja
             icono="alert-circle-outline"
             variante="activo"
-            accessibilityLabel="Reportar un problema"
+            accessibilityLabel="Reportar incidencia"
             onPress={() => setObservacionModalVisible(true)}
           />
-          <BotonBurbuja
-            icono="checkmark-circle-outline"
-            accessibilityLabel="Información de registro"
-            onPress={() => setShowInfo(true)}
-          />
+          {String(props.contexto.linea.codigo).trim() === '16' ? (
+            <BotonBurbuja
+              icono="logo-whatsapp"
+              accessibilityLabel="Escribir al delegado por WhatsApp"
+              onPress={abrirWhatsAppDelegado}
+            />
+          ) : null}
           {__DEV__ && gps.tracking && proximoPuntoControl ? (
             <BotonBurbuja
               icono="bug"
@@ -676,17 +699,7 @@ export function OperationScreen(
         gpsError={gps.errorGps}
       />
 
-      <QuivoConfirmDialog
-        visible={showInfo}
-        icon="checkmark-circle-outline"
-        title="Registro automático"
-        message="Al entrar al radio del punto de control, este se registra automáticamente en el sistema"
-        confirmLabel="Entendido"
-        onConfirm={() => setShowInfo(false)}
-        onCancel={() => setShowInfo(false)}
-      />
-
-      {/* Observación modal */}
+      {/* Reportar incidencia: opciones fijas, sin texto libre */}
       <Modal
         visible={observacionModalVisible}
         transparent
@@ -700,13 +713,13 @@ export function OperationScreen(
             <View style={styles.modalHeader}>
               <Ionicons name="alert-circle-outline" size={24} color={dsColors.primary} />
               <Heading size="lg" style={styles.modalTitle}>
-                Reportar un problema
+                Reportar incidencia
               </Heading>
             </View>
             {observacionEnviada ? (
               <>
                 <DsText size="sm" style={styles.modalText}>
-                  Observación enviada. Se sincroniza junto con tu recorrido.
+                  Incidencia reportada. Se sincroniza junto con tu recorrido.
                 </DsText>
                 <DsButton variant="primary" onPress={cerrarModalObservacion}>
                   Listo
@@ -722,29 +735,23 @@ export function OperationScreen(
                     {errorObservacion}
                   </DsText>
                 ) : null}
-                <View style={styles.motivos}>
-                  {MOTIVOS_REPORTE.map((motivo) => (
-                    <DsButton
-                      key={motivo}
-                      variant={observacion === motivo ? 'primary' : 'outline'}
-                      onPress={() => setObservacion(motivo)}
-                      style={styles.motivo}
-                    >
-                      {motivo}
-                    </DsButton>
-                  ))}
+                <View accessibilityRole="radiogroup" style={styles.motivos}>
+                  {OPCIONES_INCIDENCIA.map(({ etiqueta, icono }) => {
+                    const elegida = observacion === etiqueta;
+                    return (
+                      <PildoraBurbuja
+                        key={etiqueta}
+                        icono={icono}
+                        interior
+                        accessibilityLabel={etiqueta}
+                        onPress={enviandoObservacion ? undefined : () => setObservacion(etiqueta)}
+                        style={elegida ? styles.motivoElegido : undefined}
+                      >
+                        {etiqueta}
+                      </PildoraBurbuja>
+                    );
+                  })}
                 </View>
-                <Input
-                  controlSize="lg"
-                  multiline
-                  numberOfLines={3}
-                  value={observacion}
-                  onChangeText={setObservacion}
-                  placeholder="Describe lo que pasó…"
-                  editable={!enviandoObservacion}
-                  inputShellStyle={styles.observacionShell}
-                  accessibilityLabel="Texto de la observación"
-                />
                 <View style={styles.observacionActions}>
                   <DsButton
                     variant="outline"
@@ -757,7 +764,7 @@ export function OperationScreen(
                   <DsButton
                     variant="primary"
                     onPress={() => void enviarObservacion()}
-                    disabled={!observacion.trim() || enviandoObservacion}
+                    disabled={!observacion || enviandoObservacion}
                     style={styles.modalAction}
                   >
                     {enviandoObservacion ? 'Enviando…' : 'Enviar'}
@@ -1037,11 +1044,7 @@ const styles = StyleSheet.create({
   modalTitle: { flex: 1, color: dsColors.textPrimary },
   modalText: { color: dsColors.textSecondary },
   motivos: { flexDirection: 'row', flexWrap: 'wrap', gap: dsSpace.sm },
-  motivo: { minHeight: quivoBubble.touch, borderRadius: quivoBubble.innerRadius },
-  observacionShell: {
-    backgroundColor: dsColors.surfaceSunken,
-    borderRadius: quivoBubble.innerRadius,
-  },
+  motivoElegido: { backgroundColor: dsColors.primarySoft, borderColor: dsColors.primary },
   observacionError: { marginBottom: dsSpace.sm },
   observacionActions: { flexDirection: 'row', gap: dsSpace.sm },
   modalAction: { flex: 1, minHeight: quivoBubble.touch },

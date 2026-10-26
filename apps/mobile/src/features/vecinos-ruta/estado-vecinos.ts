@@ -8,7 +8,8 @@ export type Lado = 'delante' | 'detras';
  * - `nadie`: la respuesta es fresca y dice que no hay nadie en ese lado.
  * - `sinDato`: el dato guardado venció (o no se sabe) — NO equivale a "nadie".
  */
-export type EstadoFila = { tipo: 'vecino'; vecino: VecinoRuta } | { tipo: 'nadie' } | { tipo: 'sinDato' };
+export type EstadoFila =
+  { tipo: 'vecino'; vecino: VecinoRuta } | { tipo: 'nadie' } | { tipo: 'sinDato' };
 
 /** Fallos consecutivos de red a partir de los cuales el panel avisa "Sin actualizar". */
 export const FALLOS_PARA_AVISO = 2;
@@ -76,7 +77,7 @@ export function textoDistancia(metros: number): string {
   return `${valor} ${unidad}`;
 }
 
-function distanciaHablada(metros: number): string {
+export function distanciaHablada(metros: number): string {
   const { valor, unidad } = distanciaPartes(metros);
   if (unidad === 'm') return valor === '1' ? '1 metro' : `${valor} metros`;
   return `${valor.replace('.', ',')} kilómetros`;
@@ -98,5 +99,40 @@ export function etiquetaAccesibleFila(lado: Lado, estado: EstadoFila, transcurri
   if (estado.tipo === 'sinDato') return `${etiquetaLado(lado)}: ${TEXTO_SIN_DATO.toLowerCase()}`;
   const { vecino } = estado;
   const interno = vecino.numeroInterno ? `, interno ${vecino.numeroInterno}` : '';
-  return `${etiquetaLado(lado)}: placa ${vecino.placa}${interno}, a ${distanciaHablada(vecino.distanciaM)}, ${textoEdadHablado(vecino.edadFixS, transcurridoMs)}`;
+  const semaforo =
+    lado === 'delante'
+      ? { normal: '', atencion: ', cerca', alerta: ', muy cerca' }[
+          estadoDistanciaVecino(vecino.distanciaM)
+        ]
+      : '';
+  return `${etiquetaLado(lado)}: placa ${vecino.placa}${interno}, a ${distanciaHablada(vecino.distanciaM)}${semaforo}, ${textoEdadHablado(vecino.edadFixS, transcurridoMs)}`;
+}
+
+/** Umbrales (m) de la tarjeta "Delante": por encima de ATENCION es normal; en ALERTA_M o menos, alerta. */
+export const DISTANCIA_ATENCION_M = 500;
+export const DISTANCIA_ALERTA_M = 300;
+/** Histéresis: la alerta hablada solo se re-arma al superar esta distancia (jitter GPS alrededor de 300 m). */
+export const DISTANCIA_REARME_M = 350;
+
+export type EstadoDistanciaVecino = 'normal' | 'atencion' | 'alerta';
+
+/** Semáforo de la distancia al vehículo de adelante. */
+export function estadoDistanciaVecino(metros: number): EstadoDistanciaVecino {
+  if (metros <= DISTANCIA_ALERTA_M) return 'alerta';
+  if (metros <= DISTANCIA_ATENCION_M) return 'atencion';
+  return 'normal';
+}
+
+/**
+ * Decide si hablar la alerta: una vez por cruce a ALERTA y re-arme solo pasando de DISTANCIA_REARME_M.
+ * `metros` null (sin dato/nadie) no cambia nada. Devuelve el nuevo estado `armada` del llamador.
+ */
+export function decidirAlertaVecino(
+  metros: number | null,
+  armada: boolean,
+): { hablar: boolean; armada: boolean } {
+  if (metros === null) return { hablar: false, armada };
+  if (armada && estadoDistanciaVecino(metros) === 'alerta') return { hablar: true, armada: false };
+  if (!armada && metros > DISTANCIA_REARME_M) return { hablar: false, armada: true };
+  return { hablar: false, armada };
 }

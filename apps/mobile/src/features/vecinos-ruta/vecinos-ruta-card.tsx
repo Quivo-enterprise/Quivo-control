@@ -8,10 +8,12 @@ import { quivoBubble } from '../../shared/theme/quivo-theme';
 import {
   TEXTO_SIN_DATO,
   etiquetaAccesibleFila,
+  estadoDistanciaVecino,
   etiquetaLado,
   textoDistancia,
   textoEdad,
   textoVacio,
+  type EstadoDistanciaVecino,
   type EstadoFila,
   type Lado,
 } from './estado-vecinos';
@@ -25,8 +27,12 @@ interface Props {
   sinActualizar: boolean;
 }
 
-const DISTANCIA_ATENCION_M = 500;
-const DISTANCIA_CERCA_M = 300;
+// Semáforo de "Delante" (umbrales en `estado-vecinos.ts`); "Detrás" queda neutro.
+const COLOR_SEMAFORO: Record<EstadoDistanciaVecino, { borde: string; texto: string }> = {
+  normal: { borde: dsColors.success, texto: dsColors.textPrimary },
+  atencion: { borde: dsColors.warning, texto: dsColors.warningText },
+  alerta: { borde: dsColors.danger, texto: dsColors.danger },
+};
 
 function Fila({
   lado,
@@ -38,12 +44,13 @@ function Fila({
   transcurridoMs: number;
 }) {
   const vecino = estado.tipo === 'vecino' ? estado.vecino : null;
-  const cerca = vecino !== null && vecino.distanciaM <= DISTANCIA_CERCA_M;
-  const atencion = vecino !== null && vecino.distanciaM <= DISTANCIA_ATENCION_M;
-  const color = cerca ? dsColors.danger : atencion ? dsColors.warning : dsColors.borderSubtle;
+  const nivel = lado === 'delante' && vecino ? estadoDistanciaVecino(vecino.distanciaM) : null;
+  const semaforo = nivel ? COLOR_SEMAFORO[nivel] : null;
+  const cerca = nivel === 'alerta';
+  const atencion = nivel === 'atencion';
   return (
     <View
-      style={[styles.fila, { borderColor: color }]}
+      style={[styles.fila, { borderColor: semaforo?.borde ?? dsColors.borderSubtle }]}
       accessible
       accessibilityLabel={etiquetaAccesibleFila(lado, estado, transcurridoMs)}
     >
@@ -58,7 +65,7 @@ function Fila({
                 : 'arrow-down'
         }
         size={20}
-        color={cerca ? dsColors.danger : atencion ? dsColors.warning : dsColors.primary}
+        color={cerca ? dsColors.danger : atencion ? dsColors.warningText : dsColors.primary}
       />
       {vecino ? (
         <View style={styles.datos}>
@@ -71,13 +78,17 @@ function Fila({
                 {vecino.placa}
               </Heading>
             </View>
-            <Text size="lg" weight="bold" style={styles.distancia}>
+            <Text
+              size="lg"
+              weight="bold"
+              style={[styles.distancia, semaforo && { color: semaforo.texto }]}
+            >
               {textoDistancia(vecino.distanciaM)}
             </Text>
           </View>
           {cerca ? (
             <Text size="sm" weight="semibold" style={styles.alerta}>
-              Vehículo de {lado === 'delante' ? 'adelante' : 'atrás'} demasiado cerca
+              Vehículo de adelante demasiado cerca
             </Text>
           ) : (
             <Text size="sm" variant="secondary">
@@ -122,7 +133,8 @@ const styles = StyleSheet.create({
     gap: dsSpace.sm,
     minHeight: quivoBubble.touch,
     padding: dsSpace.sm,
-    borderWidth: 1,
+    // Borde de 2 siempre presente (neutro en Detrás) para que las dos filas queden alineadas.
+    borderWidth: 2,
     borderRadius: quivoBubble.innerRadius,
     backgroundColor: dsColors.surfaceRaised,
   },

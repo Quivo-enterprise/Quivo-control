@@ -42,8 +42,22 @@ export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma }: Prop
           strokeDasharray="3 3"
           strokeLinejoin="round"
         />
-        <Circle cx={16} cy={25} r={4.5} fill="none" stroke={quivoColors.textMuted} strokeWidth={1.8} />
-        <Circle cx={47} cy={25} r={4.5} fill="none" stroke={quivoColors.textMuted} strokeWidth={1.8} />
+        <Circle
+          cx={16}
+          cy={25}
+          r={4.5}
+          fill="none"
+          stroke={quivoColors.textMuted}
+          strokeWidth={1.8}
+        />
+        <Circle
+          cx={47}
+          cy={25}
+          r={4.5}
+          fill="none"
+          stroke={quivoColors.textMuted}
+          strokeWidth={1.8}
+        />
       </Svg>
     );
   }
@@ -65,14 +79,7 @@ export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma }: Prop
         strokeLinejoin="round"
       />
       {secundario ? (
-        <Rect
-          x={0}
-          y={19.5}
-          width={64}
-          height={3}
-          fill={secundario}
-          clipPath={`url(#${idClip})`}
-        />
+        <Rect x={0} y={19.5} width={64} height={3} fill={secundario} clipPath={`url(#${idClip})`} />
       ) : null}
       <Path d={VENTANAS[variante]} fill={quivoColors.white} fillOpacity={0.92} />
       <Circle cx={16} cy={25} r={5} fill={quivoColors.text} />
