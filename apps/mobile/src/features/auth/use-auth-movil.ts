@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Sentry from '@sentry/react-native';
 import type * as SQLite from 'expo-sqlite';
-import type { ContextoOperativoMovil, ResumenAsignacionMovil } from '@quivo/shared';
+import {
+  CODIGO_SESION_NO_VIGENTE,
+  type ContextoOperativoMovil,
+  type ResumenAsignacionMovil,
+} from '@quivo/shared';
 import {
   AuthMovilApiError,
   authMovilApi,
@@ -47,6 +51,9 @@ import {
 } from '../operacion/estado-recorrido-activo';
 
 export type EtapaAuthMovil = 'restaurando' | 'vehiculo' | 'asignacion' | 'operacion';
+
+export const MENSAJE_SELECCION_VENCIDA =
+  'Pasó mucho tiempo desde que ingresaste tu PIN. Vuelve a ingresarlo para elegir tu turno.';
 
 export interface EstadoAuthMovil {
   etapa: EtapaAuthMovil;
@@ -568,11 +575,23 @@ export function useAuthMovil() {
         if (!seleccionToken) {
           throw new Error('La selección de turno expiró. Vuelve a comenzar.');
         }
-        const respuesta = await authMovilApi.seleccionarAsignacionSesion({
-          seleccionToken,
-          asignacionId,
-          deviceId: await asegurarDeviceId(),
-        });
+        let respuesta: Awaited<ReturnType<typeof authMovilApi.seleccionarAsignacionSesion>>;
+        try {
+          respuesta = await authMovilApi.seleccionarAsignacionSesion({
+            seleccionToken,
+            asignacionId,
+            deviceId: await asegurarDeviceId(),
+          });
+        } catch (error: unknown) {
+          if (
+            error instanceof AuthMovilApiError &&
+            error.status === 401 &&
+            error.codigo !== CODIGO_SESION_NO_VIGENTE
+          ) {
+            throw new Error(MENSAJE_SELECCION_VENCIDA);
+          }
+          throw error;
+        }
         if (respuesta.status !== 'autenticado') {
           throw new Error('La asignación no pudo confirmarse');
         }

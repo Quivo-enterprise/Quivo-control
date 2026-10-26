@@ -1,4 +1,4 @@
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -26,11 +26,12 @@ import { VehicleLoginScreen } from './src/features/auth/vehicle-login-screen';
 import { guardarUltimaPlaca } from './src/features/auth/ultima-placa';
 import { OperationNavigator } from './src/app/operation-navigator';
 import { SplashScreen } from './src/features/auth/splash-screen';
-import { quivoColors, quivoFonts, quivoSpacing } from './src/shared/theme/quivo-theme';
+import { quivoColors } from './src/shared/theme/quivo-theme';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { limpiarCanalesObsoletos } from './src/features/operacion/anuncio-punto-control';
 import { useActualizacionesAutomaticas } from './src/features/actualizaciones/use-actualizaciones-automaticas';
 import { esPantallaPreOperacion } from './src/features/actualizaciones/actualizaciones-core';
+import { PantallaCarga } from './src/features/auth/components/pantalla-carga';
 
 const queryClient = new QueryClient();
 
@@ -135,7 +136,7 @@ function QuivoApp() {
   }
   if (fontError) {
     console.error('Font load error:', fontError);
-    return <LoadingScreen label="No se pudieron cargar los recursos visuales de QUIVO." error />;
+    return <PantallaCarga label="No se pudieron cargar los recursos visuales de QUIVO." error />;
   }
 
   const contenido = (() => {
@@ -177,7 +178,7 @@ function QuivoApp() {
         />
       );
     }
-    return <LoadingScreen label="Preparando tu contexto operativo…" />;
+    return <PantallaCarga label="Preparando tu ruta…" />;
   })();
 
   return (
@@ -195,39 +196,7 @@ function QuivoApp() {
   );
 }
 
-function LoadingScreen({ label, error = false }: { label: string; error?: boolean }) {
-  return (
-    <SafeAreaView edges={['top', 'bottom']} style={styles.loading}>
-      <StatusBar style="light" backgroundColor={quivoColors.primaryStrong} />
-      {!error ? <ActivityIndicator size="large" color={quivoColors.accent} /> : null}
-      <Text style={styles.loadingBrand}>QUIVO</Text>
-      <Text style={[styles.loadingText, error ? styles.loadingError : null]}>{label}</Text>
-    </SafeAreaView>
-  );
-}
-
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#F4F6F8' },
   page: { flex: 1, backgroundColor: quivoColors.page },
-  loading: {
-    flex: 1,
-    backgroundColor: quivoColors.primaryStrong,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: quivoSpacing.md,
-    padding: quivoSpacing.xl,
-  },
-  loadingBrand: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 30,
-    letterSpacing: 2,
-  },
-  loadingText: {
-    color: quivoColors.primarySoft,
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  loadingError: { color: quivoColors.accentSoft },
 });

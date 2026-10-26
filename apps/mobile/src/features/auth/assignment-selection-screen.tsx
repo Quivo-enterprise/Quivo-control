@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { resolverMarcaLinea, type ResumenAsignacionMovil } from '@quivo/shared';
 import { Heading, Loader, Text, fontStyle } from '@quivo/design-system-native';
 import { Button } from '../../shared/components/Button';
+import { Burbuja } from '../../shared/components/burbuja';
 import { formatHoraBolivia } from '../../shared/format-hora';
 import { dsColors, dsElevation, dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
@@ -16,6 +17,7 @@ import {
   resolverIconoTurno,
 } from './turnos-core';
 import { FondoLogin } from './components/fondo-login';
+import { MENSAJE_SELECCION_VENCIDA } from './use-auth-movil';
 
 interface AssignmentSelectionScreenProps {
   asignaciones: ResumenAsignacionMovil[];
@@ -95,11 +97,20 @@ export function AssignmentSelectionScreen({
         </View>
 
         {error ? (
-          <View style={styles.aviso} accessibilityRole="alert">
-            <Ionicons name="alert-circle" size={20} color={dsColors.danger} />
-            <Text size="sm" style={styles.avisoTexto}>
-              {error}
-            </Text>
+          <View accessibilityRole="alert">
+            <Burbuja direction="column" style={styles.aviso}>
+              <View style={styles.avisoFila}>
+                <Ionicons name="alert-circle" size={20} color={dsColors.danger} />
+                <Text size="sm" style={styles.avisoTexto}>
+                  {error}
+                </Text>
+              </View>
+              {error === MENSAJE_SELECCION_VENCIDA ? (
+                <Button variant="ghost" size="sm" onPress={onBack} style={styles.ingresarPin}>
+                  Ingresar PIN
+                </Button>
+              ) : null}
+            </Burbuja>
           </View>
         ) : null}
 
@@ -353,15 +364,16 @@ const styles = StyleSheet.create({
   titulo: { color: dsColors.textInverse },
   subtitulo: { color: 'rgba(255, 255, 255, 0.8)' },
   aviso: {
+    width: '100%',
+    alignItems: 'stretch',
+  },
+  avisoFila: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: dsSpace.sm,
-    minHeight: quivoBubble.touch,
-    padding: quivoBubble.padding + dsSpace.xs,
-    borderRadius: quivoBubble.radius,
-    backgroundColor: quivoBubble.surface,
   },
   avisoTexto: { flex: 1, color: dsColors.danger },
+  ingresarPin: { minHeight: quivoBubble.touch, alignSelf: 'flex-end' },
   // La tarjeta del próximo turno crece con el espacio libre: es lo que el chofer viene a tocar.
   destacada: {
     flexGrow: 1,

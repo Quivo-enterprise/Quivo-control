@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ScrollView, StyleSheet, View, Pressable, Platform, ToastAndroid } from 'react-native';
-import { Badge, Divider, Heading, Switch, Text, fontStyle } from '@quivo/design-system-native';
+import { Divider, Heading, Switch, Text } from '@quivo/design-system-native';
 import { dsColors, dsElevation, dsRadius, dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { Ionicons } from '@expo/vector-icons';
@@ -115,7 +115,9 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
           // el aviso de éxito por esto, el rescate en sí ya terminó bien.
           console.error('[QUIVO][ajustes] No se pudo guardar el resultado del rescate', error);
         }
-        showToast(`Rescate completo: ${resultado.encolados} encolados${resumenExtra(resultado)}.`);
+        showToast(
+          `Recorrido preparado: ${resultado.encolados} puntos listos para enviar${resumenExtra(resultado)}.`,
+        );
         // H2: re-consultar el conteo para no dejar en pantalla un número que ya no refleja lo
         // que queda en la SQLite nativa del SDK.
         try {
@@ -150,13 +152,13 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
   const turnoAsignacion = labelTurno(contexto.asignacion.horario);
   const atribucionMensaje = `Los puntos se van a atribuir a la sesión ${sesionCorta}… (asignación del ${fechaAsignacion}, ${turnoAsignacion}).`;
   const mensajeConfirmacion = resultadoGuardado
-    ? `Ya se ejecutó este rescate el ${formatearFechaHora(resultadoGuardado.fechaIso)} · ${resultadoGuardado.encolados} puntos encolados${resumenExtra(resultadoGuardado)}. Volver a ejecutarlo es seguro: los puntos que ya se sincronizaron NO se duplican (el sistema los reconoce y descarta solo). ${atribucionMensaje}`
-    : `Se van a copiar al outbox ${conteoRescatable ?? 0} puntos GPS que el dispositivo grabó pero todavía no se sincronizaron. No se borra nada del teléfono. ${atribucionMensaje}`;
+    ? `Este recorrido se preparó el ${formatearFechaHora(resultadoGuardado.fechaIso)} · ${resultadoGuardado.encolados} puntos listos para enviar${resumenExtra(resultadoGuardado)}. Volver a prepararlo es seguro: los puntos que ya llegaron al servidor no se duplican. ${atribucionMensaje}`
+    : `Se prepararán ${conteoRescatable ?? 0} puntos guardados en este teléfono para enviarlos cuando vuelva la conexión. No se borra nada del teléfono. ${atribucionMensaje}`;
 
   const handleToggle = (key: keyof OperacionSettings, value: boolean) => {
     // Regla especial: trabajarOffline requiere GPS activo (aunque en MVP asumiremos que está)
     if (key === 'trabajarOffline' && value === true && !gps.tracking) {
-      showToast('Requiere GPS activo para funcionar offline completamente.');
+      showToast('Trabajar sin conexión necesita el GPS activo.');
     }
     updateSetting(key, value);
     showToast(`Preferencia actualizada.`);
@@ -181,152 +183,112 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
         />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text
-          size="sm"
-          variant="secondary"
-          style={{ fontSize: 14 * scale }}
-          allowFontScaling={!settings.textoGrande}
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <SettingsGroup
+          title="Durante el recorrido"
+          scale={scale}
+          textoGrande={settings.textoGrande}
         >
-          Operación
-        </Text>
-
-        <View style={styles.cardBlock}>
-          <SettingToggleRow
-            icon="volume-high-outline"
-            title="Navegación por voz"
-            description="Indicaciones habladas durante el recorrido."
-            helper="Requiere permisos de audio."
-            value={settings.navegacionVoz}
-            onToggle={(v) => handleToggle('navegacionVoz', v)}
-          />
-          <SettingToggleRow
-            icon="notifications-outline"
-            title="Sonido de confirmación"
-            description="Una campanita al registrar un punto de control, para saber que quedó registrado sin mirar la pantalla."
-            helper="Suena aunque el teléfono esté en silencio."
-            value={settings.sonidoConfirmacion}
-            onToggle={(v) => handleToggle('sonidoConfirmacion', v)}
-          />
-          <SettingToggleRow
-            icon="shield-checkmark-outline"
-            title="Registro automático de controles"
-            description="El registro se realiza de forma automática y segura."
-            helper="Próximamente: Validación manual."
-            badge="AUTOMÁTICO"
-            value={settings.registroAutomatico}
-            onToggle={(v) => handleToggle('registroAutomatico', v)}
-            disabled={true}
-          />
-          <SettingToggleRow
-            icon="cellular-outline"
-            title="Modo ahorro de datos"
-            description="Reduce el consumo de datos móviles en segundo plano."
-            helper="Útil con planes limitados."
-            value={settings.ahorroDatos}
-            onToggle={(v) => handleToggle('ahorroDatos', v)}
-          />
-          <SettingToggleRow
-            icon="cloud-offline-outline"
-            title="Trabajar offline"
-            description="Permite operar sin conexión. Los datos se guardan para sincronizar después."
-            helper="Requiere GPS activo."
-            badge="ACTIVO"
-            badgeColor={dsColors.success}
-            value={settings.trabajarOffline}
-            onToggle={(v) => handleToggle('trabajarOffline', v)}
-          />
-          <SettingToggleRow
-            icon="text-outline"
-            title="Texto grande"
-            description="Aumenta el tamaño del texto para mejor legibilidad."
-            helper="Útil en condiciones de luz solar."
-            value={settings.textoGrande}
-            onToggle={(v) => handleToggle('textoGrande', v)}
-            noBorder
-          />
-        </View>
-
-        <Text
-          size="sm"
-          variant="secondary"
-          style={{ fontSize: 14 * scale }}
-          allowFontScaling={!settings.textoGrande}
-        >
-          Rescate de datos — día 1
-        </Text>
-        <View style={styles.cardBlock}>
-          <View style={styles.rescateRow}>
-            <View style={styles.iconCircle}>
-              <Ionicons name="medkit-outline" size={20} color={dsColors.primaryText} />
-            </View>
-            <View style={styles.rowTextContent}>
-              <Text
-                style={[styles.title, fontStyle('body', '600'), { fontSize: 15 * scale }]}
-                allowFontScaling={!settings.textoGrande}
-              >
-                Recuperar recorrido no sincronizado
-              </Text>
-              <Text
-                style={[styles.description, fontStyle('body', '400'), { fontSize: 14 * scale }]}
-                allowFontScaling={!settings.textoGrande}
-              >
-                Copia al outbox los puntos GPS que el dispositivo grabó pero todavía no se
-                sincronizaron. No borra nada del teléfono.
-              </Text>
-            </View>
+          <View style={styles.cardBlock}>
+            <SettingToggleRow
+              icon="volume-high-outline"
+              title="Navegación por voz"
+              description="Te dice las paradas y los avisos."
+              value={settings.navegacionVoz}
+              onToggle={(v) => handleToggle('navegacionVoz', v)}
+            />
+            <SettingToggleRow
+              icon="notifications-outline"
+              title="Sonido de confirmación"
+              description="Una campanita al registrar cada punto."
+              value={settings.sonidoConfirmacion}
+              onToggle={(v) => handleToggle('sonidoConfirmacion', v)}
+              noBorder
+            />
           </View>
+        </SettingsGroup>
 
-          {cargandoConteo || cargandoResultadoGuardado ? (
-            <View style={styles.rescateConteoRow}>
-              <Text
-                style={[styles.helper, fontStyle('body', '400'), { fontSize: 13 * scale }]}
-                allowFontScaling={!settings.textoGrande}
-              >
-                Consultando estado del rescate…
-              </Text>
-            </View>
-          ) : resultadoGuardado ? (
-            // H2 (hallazgo de revisión, alto): con una marca ya guardada, el botón principal
-            // queda deshabilitado — la única forma de volver a correrlo es este enlace
-            // secundario, que pasa por la MISMA confirmación explícita de abajo (H5).
-            <View style={styles.rescateConteoRow}>
-              <Text
-                style={[styles.helper, fontStyle('body', '400'), { fontSize: 13 * scale }]}
-                allowFontScaling={!settings.textoGrande}
-              >
-                Ya se ejecutó el {formatearFechaHora(resultadoGuardado.fechaIso)} ·{' '}
-                {resultadoGuardado.encolados} puntos encolados
-                {resumenExtra(resultadoGuardado)}
-              </Text>
-              <Button
-                variant="link"
-                size="sm"
-                onPress={abrirConfirmacion}
-                disabled={rescatando}
-                style={styles.rescateEjecutarDeNuevo}
-              >
-                <Text
-                  weight="semibold"
-                  style={{ fontSize: 14 * scale }}
-                  allowFontScaling={!settings.textoGrande}
-                >
-                  Ejecutar de nuevo
-                </Text>
-              </Button>
-            </View>
-          ) : (
-            <>
-              <View style={styles.rescateConteoRow}>
-                <Text
-                  style={[styles.helper, fontStyle('body', '400'), { fontSize: 13 * scale }]}
-                  allowFontScaling={!settings.textoGrande}
-                >
-                  {conteoRescatable === null
-                    ? 'No se pudo consultar el almacenamiento del GPS.'
-                    : `${conteoRescatable} puntos disponibles para rescatar.`}
-                </Text>
+        <SettingsGroup title="Pantalla" scale={scale} textoGrande={settings.textoGrande}>
+          <View style={styles.cardBlock}>
+            <SettingToggleRow
+              icon="text-outline"
+              title="Texto grande"
+              description="Letras más grandes para leer al sol."
+              value={settings.textoGrande}
+              onToggle={(v) => handleToggle('textoGrande', v)}
+              noBorder
+            />
+          </View>
+        </SettingsGroup>
+
+        <SettingsGroup title="Conexión" scale={scale} textoGrande={settings.textoGrande}>
+          <View style={styles.cardBlock}>
+            <SettingToggleRow
+              icon="cloud-offline-outline"
+              title="Trabajar sin conexión"
+              description="Guarda todo y lo envía cuando vuelva la señal."
+              value={settings.trabajarOffline}
+              onToggle={(v) => handleToggle('trabajarOffline', v)}
+            />
+            <SettingToggleRow
+              icon="cellular-outline"
+              title="Ahorro de datos"
+              description="Usa menos datos móviles en segundo plano."
+              value={settings.ahorroDatos}
+              onToggle={(v) => handleToggle('ahorroDatos', v)}
+              noBorder
+            />
+          </View>
+        </SettingsGroup>
+
+        <SettingsGroup title="Registro de puntos" scale={scale} textoGrande={settings.textoGrande}>
+          <View style={styles.cardBlock}>
+            <InformativeRow
+              icon="shield-checkmark"
+              title="Automático"
+              description="Cada punto se registra solo al pasar por él."
+              scale={scale}
+              textoGrande={settings.textoGrande}
+            />
+          </View>
+        </SettingsGroup>
+
+        {!cargandoConteo &&
+        (conteoRescatable === null ||
+          (conteoRescatable ?? 0) > 0 ||
+          Boolean(resultadoGuardado) ||
+          rescatando ||
+          Boolean(progresoRescate) ||
+          Boolean(errorRescate)) ? (
+          <SettingsGroup title="Ayuda" scale={scale} textoGrande={settings.textoGrande}>
+            <View style={styles.helpBubble}>
+              <View style={styles.helpHeader}>
+                <View style={styles.iconCircle}>
+                  <Ionicons name="cloud-upload-outline" size={20} color={dsColors.primaryText} />
+                </View>
+                <View style={styles.rowTextContent}>
+                  <Text
+                    size="md"
+                    weight="semibold"
+                    style={[styles.title, scaled(16, scale)]}
+                    allowFontScaling={!settings.textoGrande}
+                  >
+                    Enviar recorrido guardado
+                  </Text>
+                  <Text
+                    size="sm"
+                    variant="secondary"
+                    numberOfLines={2}
+                    style={scaled(14, scale)}
+                    allowFontScaling={!settings.textoGrande}
+                  >
+                    {conteoRescatable === null
+                      ? 'No se pudo consultar el recorrido guardado.'
+                      : `Hay ${conteoRescatable} puntos de tu recorrido en el teléfono que todavía no se enviaron.`}
+                  </Text>
+                </View>
               </View>
+
               <Button
                 variant="primary"
                 onPress={abrirConfirmacion}
@@ -337,41 +299,55 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
               >
                 <Text
                   weight="bold"
-                  style={{ fontSize: 16 * scale, color: dsColors.textInverse }}
+                  style={[{ color: dsColors.textInverse }, scaled(16, scale)]}
                   allowFontScaling={!settings.textoGrande}
                 >
-                  {rescatando ? 'Rescatando…' : 'Rescatar puntos ahora'}
+                  {rescatando ? 'Preparando…' : 'Enviar ahora'}
                 </Text>
               </Button>
-            </>
-          )}
 
-          {progresoRescate && (
-            <Text
-              style={[styles.helper, fontStyle('body', '400'), { fontSize: 13 * scale }]}
-              allowFontScaling={!settings.textoGrande}
-            >
-              Encolados {progresoRescate.encolados} de {progresoRescate.total}
-              {resumenExtra(progresoRescate)}
-            </Text>
-          )}
+              {conteoRescatable === null ? (
+                <RescueStatus warning scale={scale} textoGrande={settings.textoGrande}>
+                  No se pudo consultar el recorrido guardado.
+                </RescueStatus>
+              ) : null}
 
-          {errorRescate && (
-            <Text
-              style={[styles.rescateError, fontStyle('body', '400'), { fontSize: 13 * scale }]}
-              allowFontScaling={!settings.textoGrande}
-            >
-              {errorRescate}
-            </Text>
-          )}
-        </View>
+              {cargandoResultadoGuardado ? (
+                <RescueStatus scale={scale} textoGrande={settings.textoGrande}>
+                  Consultando el recorrido guardado…
+                </RescueStatus>
+              ) : resultadoGuardado ? (
+                // H2: se conserva la confirmación adicional antes de repetir el rescate ya registrado.
+                <RescueStatus scale={scale} textoGrande={settings.textoGrande}>
+                  Ya se preparó el {formatearFechaHora(resultadoGuardado.fechaIso)} ·{' '}
+                  {resultadoGuardado.encolados} puntos listos para enviar
+                  {resumenExtra(resultadoGuardado)}
+                </RescueStatus>
+              ) : null}
+
+              {progresoRescate ? (
+                <RescueStatus scale={scale} textoGrande={settings.textoGrande}>
+                  Preparados para enviar {progresoRescate.encolados} de {progresoRescate.total}
+                  {resumenExtra(progresoRescate)}
+                </RescueStatus>
+              ) : null}
+              {errorRescate ? (
+                <RescueStatus warning scale={scale} textoGrande={settings.textoGrande}>
+                  {errorRescate.toLocaleLowerCase('es-BO').includes('sesión activa')
+                    ? 'Vuelve a iniciar sesión para preparar los puntos guardados.'
+                    : 'No se pudo preparar el recorrido. Inténtalo de nuevo.'}
+                </RescueStatus>
+              ) : null}
+            </View>
+          </SettingsGroup>
+        ) : null}
       </ScrollView>
 
       <QuivoConfirmDialog
         visible={confirmVisible}
-        title={resultadoGuardado ? 'Ejecutar el rescate de nuevo' : 'Confirmar rescate de puntos'}
+        title={resultadoGuardado ? 'Preparar el recorrido de nuevo' : 'Enviar recorrido guardado'}
         message={mensajeConfirmacion}
-        confirmLabel="Rescatar"
+        confirmLabel="Enviar ahora"
         cancelLabel="Cancelar"
         variant={resultadoGuardado ? 'danger' : 'default'}
         icon="medkit-outline"
@@ -455,10 +431,10 @@ function resumenExtra(resultado: {
   omitidosPorAntiguedad: number;
 }): string {
   const partes: string[] = [];
-  if (resultado.yaExistente > 0) partes.push(`${resultado.yaExistente} ya existentes`);
-  if (resultado.fallidos > 0) partes.push(`${resultado.fallidos} fallidos`);
+  if (resultado.yaExistente > 0) partes.push(`${resultado.yaExistente} ya estaban preparados`);
+  if (resultado.fallidos > 0) partes.push(`${resultado.fallidos} no se pudieron preparar`);
   if (resultado.omitidosPorAntiguedad > 0) {
-    partes.push(`${resultado.omitidosPorAntiguedad} omitidos por antigüedad`);
+    partes.push(`${resultado.omitidosPorAntiguedad} puntos antiguos no se guardaron`);
   }
   return partes.length > 0 ? ` · ${partes.join(' · ')}` : '';
 }
@@ -467,23 +443,16 @@ function SettingToggleRow({
   icon,
   title,
   description,
-  helper,
-  badge,
   value,
   onToggle,
   noBorder,
-  disabled,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
   description: string;
-  helper?: string;
-  badge?: string;
-  badgeColor?: string;
   value: boolean;
   onToggle: (v: boolean) => void;
   noBorder?: boolean;
-  disabled?: boolean;
 }) {
   const { settings } = useOperacionSettings();
   const scale = useTextScale();
@@ -491,55 +460,40 @@ function SettingToggleRow({
     <View>
       <Pressable
         accessibilityRole="switch"
-        accessibilityState={{ checked: value, disabled }}
-        disabled={disabled}
+        accessibilityLabel={`${title}. ${description}`}
+        accessibilityState={{ checked: value }}
         onPress={() => onToggle(!value)}
-        style={styles.row}
+        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       >
         <View style={styles.iconCircle}>
           <Ionicons name={icon} size={20} color={dsColors.primaryText} />
         </View>
         <View style={styles.rowTextContent}>
-          <View style={styles.titleRow}>
-            <Text
-              size="sm"
-              weight="semibold"
-              style={{ fontSize: 15 * scale }}
-              allowFontScaling={!settings.textoGrande}
-            >
-              {title}
-            </Text>
-            {badge ? (
-              <Badge size="sm" variant="neutral">
-                {badge}
-              </Badge>
-            ) : null}
-          </View>
+          <Text
+            size="md"
+            weight="semibold"
+            numberOfLines={1}
+            style={[styles.title, scaled(16, scale)]}
+            allowFontScaling={!settings.textoGrande}
+          >
+            {title}
+          </Text>
           <Text
             size="sm"
             variant="secondary"
-            style={{ fontSize: 14 * scale }}
+            numberOfLines={2}
+            style={scaled(14, scale)}
             allowFontScaling={!settings.textoGrande}
           >
             {description}
           </Text>
-          {helper ? (
-            <Text
-              size="sm"
-              variant="secondary"
-              style={[styles.helper, { fontSize: 14 * scale }]}
-              allowFontScaling={!settings.textoGrande}
-            >
-              {helper}
-            </Text>
-          ) : null}
         </View>
-        <View style={styles.switchSlot}>
+        <View pointerEvents="none" style={styles.switchSlot}>
           <Switch
             value={value}
-            onValueChange={onToggle}
-            disabled={disabled}
             accessibilityLabel={title}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
           />
         </View>
       </Pressable>
@@ -550,6 +504,95 @@ function SettingToggleRow({
       ) : null}
     </View>
   );
+}
+
+function SettingsGroup({
+  title,
+  scale,
+  textoGrande,
+  children,
+}: {
+  title: string;
+  scale: number;
+  textoGrande: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <View style={styles.group}>
+      <Text size="sm" variant="secondary" style={scaled(14, scale)} allowFontScaling={!textoGrande}>
+        {title}
+      </Text>
+      {children}
+    </View>
+  );
+}
+
+function InformativeRow({
+  icon,
+  title,
+  description,
+  scale,
+  textoGrande,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  description: string;
+  scale: number;
+  textoGrande: boolean;
+}) {
+  return (
+    <View style={styles.row}>
+      <View style={[styles.iconCircle, styles.successIconCircle]}>
+        <Ionicons name={icon} size={20} color={dsColors.success} />
+      </View>
+      <View style={styles.rowTextContent}>
+        <Text
+          size="md"
+          weight="semibold"
+          style={[styles.successTitle, scaled(16, scale)]}
+          allowFontScaling={!textoGrande}
+        >
+          {title}
+        </Text>
+        <Text
+          size="sm"
+          variant="secondary"
+          numberOfLines={2}
+          style={scaled(14, scale)}
+          allowFontScaling={!textoGrande}
+        >
+          {description}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function RescueStatus({
+  children,
+  scale,
+  textoGrande,
+  warning = false,
+}: {
+  children: ReactNode;
+  scale: number;
+  textoGrande: boolean;
+  warning?: boolean;
+}) {
+  return (
+    <Text
+      size="sm"
+      variant={warning ? 'warning' : 'secondary'}
+      style={[styles.rescueStatus, scaled(14, scale)]}
+      allowFontScaling={!textoGrande}
+    >
+      {children}
+    </Text>
+  );
+}
+
+function scaled(fontSize: number, scale: number) {
+  return { fontSize: fontSize * scale };
 }
 
 const styles = StyleSheet.create({
@@ -580,6 +623,7 @@ const styles = StyleSheet.create({
     paddingBottom: quivoBubble.edge,
     gap: quivoBubble.gap,
   },
+  group: { gap: dsSpace.xs },
   cardBlock: {
     backgroundColor: quivoBubble.surface,
     borderRadius: quivoBubble.radius,
@@ -588,14 +632,33 @@ const styles = StyleSheet.create({
     padding: quivoBubble.padding,
     ...dsElevation(3),
   },
+  helpBubble: {
+    gap: quivoBubble.gap,
+    backgroundColor: quivoBubble.surface,
+    borderRadius: quivoBubble.radius,
+    borderWidth: 1,
+    borderColor: quivoBubble.border,
+    padding: quivoBubble.padding,
+    ...dsElevation(3),
+  },
+  helpHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: quivoBubble.gap,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: quivoBubble.touch,
+    minHeight: dsSpace['3xl'],
     gap: quivoBubble.gap,
     paddingVertical: dsSpace.xs,
   },
-  rowSeparator: { height: quivoBubble.gap, justifyContent: 'center' },
+  rowPressed: { opacity: 0.78 },
+  rowSeparator: {
+    height: quivoBubble.gap,
+    justifyContent: 'center',
+    paddingLeft: quivoBubble.touch + quivoBubble.gap,
+  },
   iconCircle: {
     width: quivoBubble.touch,
     height: quivoBubble.touch,
@@ -604,28 +667,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  successIconCircle: { backgroundColor: dsColors.successSoft },
   switchSlot: {
-    width: quivoBubble.touch + quivoBubble.gap,
+    width: dsSpace['3xl'] + quivoBubble.gap,
     minHeight: quivoBubble.touch,
     alignItems: 'center',
     justifyContent: 'center',
   },
   rowTextContent: { flex: 1, minWidth: 0, gap: dsSpace.xs },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm, flexWrap: 'wrap' },
   title: { color: dsColors.textPrimary },
-  description: { color: dsColors.textSecondary },
-  helper: { color: dsColors.textTertiary },
-  rescateRow: { flexDirection: 'row', alignItems: 'flex-start', gap: quivoBubble.gap },
-  // Los mensajes de rescate empiezan bajo el texto, no bajo el icono.
-  rescateConteoRow: {
-    paddingLeft: quivoBubble.touch + quivoBubble.gap,
-    paddingVertical: dsSpace.sm,
-  },
-  rescateError: {
-    color: dsColors.danger,
-    paddingLeft: quivoBubble.touch + quivoBubble.gap,
-    paddingVertical: dsSpace.sm,
-  },
+  successTitle: { color: dsColors.success },
+  rescueStatus: { paddingHorizontal: dsSpace.xs },
   rescateBoton: { minHeight: 52, borderRadius: dsRadius.full },
-  rescateEjecutarDeNuevo: { alignSelf: 'flex-start', marginTop: dsSpace.xs },
 });

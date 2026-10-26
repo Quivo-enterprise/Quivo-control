@@ -1,15 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated as RNAnimated, Easing, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  Button,
-  Heading,
-  Text,
-  colors,
-  fontStyle,
-  radius,
-  space,
-} from '@quivo/design-system-native';
+import { Button, Heading, Text, colors, fontStyle, space } from '@quivo/design-system-native';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import NetInfo from '@react-native-community/netinfo';
@@ -17,51 +9,11 @@ import { VectorLogo } from './components/vector-logo';
 import { FondoLogin } from './components/fondo-login';
 import { Burbuja } from '../../shared/components/burbuja';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
+import { LineaProgreso, useReduceMotion } from './components/linea-progreso';
 
 export interface SplashScreenProps {
   onLoadData: () => Promise<void>;
   onReady: () => void;
-}
-
-function ProgressLine({ reduceMotion }: { reduceMotion: boolean }) {
-  const position = useRef(new RNAnimated.Value(0)).current;
-  useEffect(() => {
-    position.stopAnimation();
-    position.setValue(0);
-    if (reduceMotion) return;
-    const animation = RNAnimated.loop(
-      RNAnimated.timing(position, {
-        toValue: 1,
-        duration: 1200,
-        easing: Easing.inOut(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [position, reduceMotion]);
-  return (
-    <View
-      accessibilityRole="progressbar"
-      accessibilityLabel="Preparando tu jornada"
-      style={styles.progressTrack}
-    >
-      <RNAnimated.View
-        style={[
-          styles.progressSegment,
-          {
-            transform: [
-              {
-                translateX: reduceMotion
-                  ? 0
-                  : position.interpolate({ inputRange: [0, 1], outputRange: [-48, 72] }),
-              },
-            ],
-          },
-        ]}
-      />
-    </View>
-  );
 }
 
 export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
@@ -71,18 +23,7 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
   const [status, setStatus] = useState<'verificando' | 'sin_conexion' | 'tardanza'>('verificando');
   const [showCaption, setShowCaption] = useState(false);
   const [verificationDone, setVerificationDone] = useState(false);
-  const [reduceMotion, setReduceMotion] = useState(true);
-  useEffect(() => {
-    let active = true;
-    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
-      if (active) setReduceMotion(enabled);
-    });
-    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
-    return () => {
-      active = false;
-      subscription.remove();
-    };
-  }, []);
+  const reduceMotion = useReduceMotion();
   useEffect(() => {
     if (status !== 'verificando' || verificationDone) {
       setShowCaption(false);
@@ -151,7 +92,7 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
           <VectorLogo checking={status === 'verificando'} reduceMotion={reduceMotion} />
           {status === 'verificando' && (
             <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.progressArea}>
-              <ProgressLine reduceMotion={reduceMotion} />
+              <LineaProgreso reduceMotion={reduceMotion} />
               {showCaption && (
                 <Animated.View entering={FadeIn.duration(200)}>
                   <Text size="sm" style={styles.caption}>
@@ -200,21 +141,11 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
 }
 
 const c = colors.light;
-// Blanco de marca al 20 % para la pista que queda detrás del segmento de progreso.
-const BLANCO_PISTA = 'rgba(255, 255, 255, 0.2)';
 const styles = StyleSheet.create({
   container: { flex: 1, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 },
   content: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   logoArea: { alignItems: 'center', justifyContent: 'center', minHeight: 180 },
   progressArea: { alignItems: 'center', marginTop: space.lg, minHeight: 48 },
-  progressTrack: {
-    width: 120,
-    height: 3,
-    overflow: 'hidden',
-    borderRadius: radius.full,
-    backgroundColor: BLANCO_PISTA,
-  },
-  progressSegment: { width: 48, height: 3, borderRadius: radius.full, backgroundColor: c.accent },
   caption: {
     marginTop: space.md,
     color: c.white,
