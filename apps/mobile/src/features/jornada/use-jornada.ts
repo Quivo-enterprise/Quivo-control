@@ -22,8 +22,6 @@ export interface UseJornadaParams {
 
 export interface UseJornadaResult {
   jornadaIniciada: boolean;
-  /** Instante ISO de la declaración vigente (la pantalla lo formatea en hora de Bolivia). */
-  inicioTs: string | null;
   /** `true` hasta que termina la primera lectura del almacenamiento local. */
   cargando: boolean;
   /** `true` mientras `empezarDia` está en curso (también protegido por una ref). */
@@ -126,7 +124,6 @@ export function useJornada(params: UseJornadaParams): UseJornadaResult {
   const vigente = declaracionVigente(declaracion, identidad, hoy);
   return {
     jornadaIniciada: vigente,
-    inicioTs: vigente && declaracion ? declaracion.ts : null,
     cargando,
     empezando,
     errorEmpezarDia,

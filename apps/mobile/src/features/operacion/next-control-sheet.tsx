@@ -14,7 +14,6 @@ import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button } from '../../shared/components/Button';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import { quivoColors, quivoFonts, quivoRadius } from '../../shared/theme/quivo-theme';
-import { formatearDistancia } from './format-distancia';
 import type { FaseControl } from '../jornada/fase-control';
 import { subtituloJornada } from '../jornada/jornada-store-core';
 import type { EstadoPuntoVuelta } from './progreso-vuelta';
@@ -59,10 +58,11 @@ export interface NextControlSheetProps {
   estadosPuntos: readonly EstadoPuntoVuelta[];
   /** Vuelta en curso ("Vuelta N"). */
   vueltaActual: number;
-  /** Puntos ya pasados / omitidos (en rojo) de la vuelta en curso. */
+  /** Puntos pasados / omitidos: solo alimentan la etiqueta accesible del stepper (no se muestran). */
   puntosPasados: number;
   puntosOmitidos: number;
-  distanciaMetros: number | null;
+  /** Hay designación a Molinos vigente: muestra la píldora "Vía Molinos" bajo el título. */
+  viaMolinos?: boolean;
   canStart: boolean;
   gpsError: string | null;
   onStart: () => void;
@@ -230,10 +230,6 @@ export function NextControlSheet(props: NextControlSheetProps) {
   ).current;
 
   const currentControlNumber = props.nextPointOrder !== null ? props.nextPointOrder + 1 : 1;
-  const distanceText =
-    props.distanciaMetros === null
-      ? '95m.'
-      : formatearDistancia(props.distanciaMetros);
 
   return (
     <Animated.View
@@ -253,9 +249,6 @@ export function NextControlSheet(props: NextControlSheetProps) {
 
         {cabeceraJornada ? (
           <View style={styles.headerRow}>
-            <View style={styles.jornadaIcono}>
-              <Ionicons name="sunny-outline" size={22} color={quivoColors.warningText} />
-            </View>
             <View style={styles.headerLeft}>
               <Text style={styles.title}>Día sin iniciar</Text>
               <Text style={styles.subtitle}>
@@ -264,18 +257,29 @@ export function NextControlSheet(props: NextControlSheetProps) {
             </View>
           </View>
         ) : (
-          // Title + Distance on left, Control Number on right
+          // Title on left, Control Number on right
           <View style={styles.headerRow}>
             <View style={styles.headerLeft}>
               <View style={styles.tituloRow}>
-                <Text style={styles.title}>Próximo Control</Text>
+                <Text style={styles.title}>Siguiente parada</Text>
                 {tracking && (
                   <View style={styles.vueltaPill}>
                     <Text style={styles.vueltaPillTexto}>Vuelta {props.vueltaActual}</Text>
                   </View>
                 )}
               </View>
-              <Text style={styles.subtitle}>Se encuentra a {distanceText}</Text>
+              {props.viaMolinos ? (
+                <View
+                  style={styles.viaMolinosPill}
+                  accessible
+                  accessibilityLabel="Vía Molinos: Honduras, Molinos, Salomón Romero"
+                >
+                  <Ionicons name="trail-sign" size={13} color={quivoColors.primary} />
+                  <Text numberOfLines={1} style={styles.viaMolinosPillText}>
+                    Vía Molinos
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
             <Text style={styles.controlNumber}>#{currentControlNumber}</Text>
@@ -286,15 +290,12 @@ export function NextControlSheet(props: NextControlSheetProps) {
       {/* Puntos restantes Stepper */}
       {!cabeceraJornada && (
         <View style={styles.stepperSection}>
-          <Text style={styles.puntosLabel}>
-            {tracking
-              ? `${props.puntosPasados}/${props.totalPoints} puntos`
-              : `${props.totalPoints} puntos`}
-            {tracking && props.puntosOmitidos > 0 ? (
-              <Text style={styles.puntosOmitidos}>{`  ·  ${props.puntosOmitidos} omitidos`}</Text>
-            ) : null}
-          </Text>
-          <MiniStepper estados={props.estadosPuntos} tracking={tracking} />
+          <MiniStepper
+            estados={props.estadosPuntos}
+            tracking={tracking}
+            pasados={props.puntosPasados}
+            omitidos={props.puntosOmitidos}
+          />
         </View>
       )}
 
@@ -317,7 +318,6 @@ export function NextControlSheet(props: NextControlSheetProps) {
               onPress={() => void onEmpezarDia()}
               style={styles.empezarButton}
               textStyle={styles.empezarButtonText}
-              leftIcon={<Ionicons name="sunny" size={22} color={quivoColors.text} />}
               accessibilityHint="Avisa a tu delegado que hoy trabajas"
               fullWidth
             >
@@ -328,21 +328,6 @@ export function NextControlSheet(props: NextControlSheetProps) {
                 {props.errorEmpezarDia}
               </Text>
             ) : null}
-            <View style={styles.hintRow}>
-              <Ionicons name="notifications-outline" size={16} color="#FFD28A" />
-              <Text style={styles.hintText}>Avisa a tu delegado que hoy trabajas</Text>
-            </View>
-            <Button
-              variant="ghost"
-              disabled
-              style={styles.lockedButton}
-              textStyle={styles.lockedButtonText}
-              leftIcon={<Ionicons name="lock-closed" size={18} color="rgba(255, 255, 255, 0.82)" />}
-              accessibilityHint="Disponible después de empezar el día"
-              fullWidth
-            >
-              COMENZAR RUTA
-            </Button>
           </>
         ) : fase === 'listo' ? (
           <Button
@@ -444,9 +429,13 @@ export function NextControlSheet(props: NextControlSheetProps) {
 function MiniStepper({
   estados,
   tracking,
+  pasados,
+  omitidos,
 }: {
   estados: readonly EstadoPuntoVuelta[];
   tracking: boolean;
+  pasados: number;
+  omitidos: number;
 }) {
   // Un puntito por punto de control REAL de la ruta, en el orden rotado de la vuelta (el punto
   // donde arrancó va primero). Sin recorrido en curso todos se ven pendientes (ruta "virgen").
@@ -467,7 +456,15 @@ function MiniStepper({
     );
   });
 
-  return <View style={styles.stepperContainer}>{dots}</View>;
+  const etiqueta = tracking
+    ? `${pasados} de ${estados.length} puntos${omitidos > 0 ? `, ${omitidos} omitidos` : ''}`
+    : `${estados.length} puntos`;
+
+  return (
+    <View style={styles.stepperContainer} accessible accessibilityLabel={etiqueta}>
+      {dots}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -534,12 +531,6 @@ const styles = StyleSheet.create({
     marginTop: 10 - AIRE_BAJO_CABECERA,
     marginBottom: 4,
   },
-  puntosLabel: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 11.5,
-    marginBottom: 6,
-  },
   tituloRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -556,9 +547,22 @@ const styles = StyleSheet.create({
     fontFamily: quivoFonts.bodySemiBold,
     fontSize: 11.5,
   },
-  puntosOmitidos: {
-    color: '#FF8A96',
+  viaMolinosPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    marginTop: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: quivoRadius.pill,
+    backgroundColor: quivoColors.primarySubtle,
+  },
+  viaMolinosPillText: {
+    flexShrink: 1,
+    color: quivoColors.primary,
     fontFamily: quivoFonts.bodySemiBold,
+    fontSize: 10.5,
   },
   stepperContainer: {
     flexDirection: 'row',
@@ -626,15 +630,6 @@ const styles = StyleSheet.create({
     fontSize: 14.5,
     letterSpacing: 0.8,
   },
-  jornadaIcono: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: quivoColors.accentSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
   empezarButton: {
     backgroundColor: quivoColors.accent,
     borderColor: quivoColors.accent,
@@ -652,31 +647,10 @@ const styles = StyleSheet.create({
     fontSize: 17,
     letterSpacing: 1,
   },
-  hintRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginVertical: 10,
-  },
   hintText: {
     color: 'rgba(255, 255, 255, 0.9)',
     fontFamily: quivoFonts.bodyMedium,
     fontSize: 13,
-  },
-  lockedButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    borderColor: 'rgba(255, 255, 255, 0.5)',
-    borderStyle: 'dashed',
-    borderWidth: 1.5,
-    borderRadius: quivoRadius.pill,
-    height: 48,
-  },
-  lockedButtonText: {
-    color: 'rgba(255, 255, 255, 0.82)',
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 14.5,
-    letterSpacing: 0.8,
   },
   cargandoJornada: {
     height: 120,

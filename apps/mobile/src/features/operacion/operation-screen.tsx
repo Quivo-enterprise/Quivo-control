@@ -436,7 +436,7 @@ export function OperationScreen(
         <View style={{ flexDirection: 'column', gap: quivoSpacing.sm }}>
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: quivoSpacing.md }}>
             <Pressable
-              style={{ flex: 1 }}
+              hitSlop={12}
               accessibilityRole="button"
               accessibilityLabel="Perfil y configuración"
               onPress={() => props.navigation.navigate('Perfil')}
@@ -445,10 +445,7 @@ export function OperationScreen(
                 contexto={props.contexto}
                 brand={lineaBrand}
                 tracking={gps.tracking}
-                jornadaIniciada={jornada.jornadaIniciada}
-                inicioTs={jornada.inicioTs}
                 compacta={camara.modo !== 'general'}
-                viaMolinos={vueltaActual.designacionActiva !== null}
               />
             </Pressable>
           </View>
@@ -659,7 +656,7 @@ export function OperationScreen(
         vueltaActual={progreso.vueltaActual}
         puntosPasados={progreso.pasados}
         puntosOmitidos={progreso.omitidos}
-        distanciaMetros={distanciaProximoPunto}
+        viaMolinos={vueltaActual.designacionActiva !== null}
         fase={fase}
         onEmpezarDia={jornada.empezarDia}
         empezandoDia={jornada.empezando}
