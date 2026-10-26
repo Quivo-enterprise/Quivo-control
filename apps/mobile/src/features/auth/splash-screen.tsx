@@ -122,7 +122,7 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
                 style={styles.retryButton}
                 onPress={() => void checkConnectionAndData()}
               >
-                {status === 'sin_conexion' ? 'Reintentar' : 'Reintentar'}
+                Reintentar
               </Button>
             </Animated.View>
           )}

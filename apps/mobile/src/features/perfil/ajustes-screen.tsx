@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View, Switch, Pressable, Platform, ToastAndroid, Image } from 'react-native';
+import { ScrollView, StyleSheet, View, Pressable, Platform, ToastAndroid } from 'react-native';
+import { Badge, Divider, Switch, Text, fontStyle } from '@quivo/design-system-native';
+import { QuivoHeader } from '../../shared/components/quivo-header';
+import { dsColors, dsElevation, dsSpace } from '../../shared/theme/design-system';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import type { OperationStackParamList } from '../../app/operation-navigator';
-import { useOperacionSettings, useTextScale, type OperacionSettings } from './use-operacion-settings';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import {
+  useOperacionSettings,
+  useTextScale,
+  type OperacionSettings,
+} from './use-operacion-settings';
+
 import { useGpsContext } from '../operacion/gps-provider';
 import { Button } from '../../shared/components/Button';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
@@ -17,7 +25,6 @@ import {
   type ProgresoRescateDia1,
   type ResultadoRescateGuardado,
 } from './rescate-dia1';
-import logo from '../../../assets/images/logo.png';
 
 type AjustesScreenProps = NativeStackScreenProps<OperationStackParamList, 'Ajustes'> & {
   /** H5 (hallazgo de revisión, rescate del día 1): la misma sesión que `OperationNavigator` ya
@@ -168,20 +175,17 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
   return (
     <View style={styles.container}>
       <View style={styles.headerTop}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={20} color={quivoColors.primaryStrong} />
-          <Text style={styles.backText}>Perfil</Text>
-        </Pressable>
-        <Image
-          source={logo}
-          style={styles.logo}
-          resizeMode="contain"
+        <QuivoHeader
+          title="Ajustes"
+          onBack={() => navigation.goBack()}
+          backLabel="Volver a Perfil"
         />
-        <View style={{ width: 60 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={[styles.screenTitle, { fontSize: 20 * scale }]} allowFontScaling={!settings.textoGrande}>Ajustes de operación</Text>
+        <Text size="sm" variant="secondary" style={styles.screenTitle}>
+          Operación
+        </Text>
 
         <View style={styles.cardBlock}>
           <SettingToggleRow
@@ -224,7 +228,7 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
             description="Permite operar sin conexión. Los datos se guardan para sincronizar después."
             helper="Requiere GPS activo."
             badge="ACTIVO"
-            badgeColor={quivoColors.success}
+            badgeColor={dsColors.success}
             value={settings.trabajarOffline}
             onToggle={(v) => handleToggle('trabajarOffline', v)}
           />
@@ -239,17 +243,28 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
           />
         </View>
 
-        <Text style={[styles.screenTitle, { fontSize: 16 * scale, marginTop: quivoSpacing.lg }]} allowFontScaling={!settings.textoGrande}>
+        <Text size="sm" variant="secondary" style={styles.screenTitle}>
           Rescate de datos — día 1
         </Text>
         <View style={styles.cardBlock}>
           <View style={styles.rescateRow}>
-            <Ionicons name="medkit-outline" size={24} color={quivoColors.primaryStrong} style={styles.rowIcon} />
+            <Ionicons
+              name="medkit-outline"
+              size={24}
+              color={dsColors.primaryText}
+              style={styles.rowIcon}
+            />
             <View style={styles.rowTextContent}>
-              <Text style={[styles.title, { fontSize: 15 * scale }]} allowFontScaling={!settings.textoGrande}>
+              <Text
+                style={[styles.title, fontStyle('body', '600'), { fontSize: 15 * scale }]}
+                allowFontScaling={!settings.textoGrande}
+              >
                 Recuperar recorrido no sincronizado
               </Text>
-              <Text style={[styles.description, { fontSize: 14 * scale }]} allowFontScaling={!settings.textoGrande}>
+              <Text
+                style={[styles.description, fontStyle('body', '400'), { fontSize: 14 * scale }]}
+                allowFontScaling={!settings.textoGrande}
+              >
                 Copia al outbox los puntos GPS que el dispositivo grabó pero todavía no se
                 sincronizaron. No borra nada del teléfono.
               </Text>
@@ -258,7 +273,10 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
 
           {cargandoConteo || cargandoResultadoGuardado ? (
             <View style={styles.rescateConteoRow}>
-              <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+              <Text
+                style={[styles.helper, fontStyle('body', '400'), { fontSize: 13 * scale }]}
+                allowFontScaling={!settings.textoGrande}
+              >
                 Consultando estado del rescate…
               </Text>
             </View>
@@ -267,7 +285,10 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
             // queda deshabilitado — la única forma de volver a correrlo es este enlace
             // secundario, que pasa por la MISMA confirmación explícita de abajo (H5).
             <View style={styles.rescateConteoRow}>
-              <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+              <Text
+                style={[styles.helper, fontStyle('body', '400'), { fontSize: 13 * scale }]}
+                allowFontScaling={!settings.textoGrande}
+              >
                 Ya se ejecutó el {formatearFechaHora(resultadoGuardado.fechaIso)} ·{' '}
                 {resultadoGuardado.encolados} puntos encolados
                 {resumenExtra(resultadoGuardado)}
@@ -285,7 +306,10 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
           ) : (
             <>
               <View style={styles.rescateConteoRow}>
-                <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+                <Text
+                  style={[styles.helper, fontStyle('body', '400'), { fontSize: 13 * scale }]}
+                  allowFontScaling={!settings.textoGrande}
+                >
                   {conteoRescatable === null
                     ? 'No se pudo consultar el almacenamiento del GPS.'
                     : `${conteoRescatable} puntos disponibles para rescatar.`}
@@ -305,14 +329,20 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
           )}
 
           {progresoRescate && (
-            <Text style={[styles.helper, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+            <Text
+              style={[styles.helper, fontStyle('body', '400'), { fontSize: 13 * scale }]}
+              allowFontScaling={!settings.textoGrande}
+            >
               Encolados {progresoRescate.encolados} de {progresoRescate.total}
               {resumenExtra(progresoRescate)}
             </Text>
           )}
 
           {errorRescate && (
-            <Text style={[styles.rescateError, { fontSize: 13 * scale }]} allowFontScaling={!settings.textoGrande}>
+            <Text
+              style={[styles.rescateError, fontStyle('body', '400'), { fontSize: 13 * scale }]}
+              allowFontScaling={!settings.textoGrande}
+            >
               {errorRescate}
             </Text>
           )}
@@ -354,7 +384,11 @@ function formatearFechaHora(fechaIso: string): string {
   const fecha = new Date(fechaIso);
   if (Number.isNaN(fecha.getTime())) return fechaIso;
   const dia = fecha.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit' });
-  const hora = fecha.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const hora = fecha.toLocaleTimeString('es-BO', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
   return `${dia} a las ${hora}`;
 }
 
@@ -385,7 +419,6 @@ function SettingToggleRow({
   description,
   helper,
   badge,
-  badgeColor,
   value,
   onToggle,
   noBorder,
@@ -405,148 +438,96 @@ function SettingToggleRow({
   const { settings } = useOperacionSettings();
   const scale = useTextScale();
   return (
-    <View style={[styles.row, !noBorder && styles.rowBorder, disabled && { opacity: 0.6 }]}>
-      <Ionicons name={icon} size={24} color={quivoColors.primaryStrong} style={styles.rowIcon} />
-      <View style={styles.rowTextContent}>
-        <View style={styles.titleRow}>
-          <Text style={[styles.title, { fontSize: 15 * scale }]} allowFontScaling={!settings.textoGrande}>{title}</Text>
-          {badge && (
-            <View style={[styles.badge, badgeColor ? { backgroundColor: badgeColor + '20' } : null]}>
-              <Text style={[styles.badgeText, badgeColor ? { color: badgeColor } : null]}>{badge}</Text>
-            </View>
-          )}
-        </View>
-        <Text style={[styles.description, { fontSize: 14 * scale }]} allowFontScaling={!settings.textoGrande}>{description}</Text>
-        {helper && <Text style={[styles.helper, { fontSize: 12 * scale }]} allowFontScaling={!settings.textoGrande}>{helper}</Text>}
-      </View>
-      <Switch
-        value={value}
-        onValueChange={onToggle}
-        trackColor={{ false: quivoColors.border, true: quivoColors.primaryStrong }}
-        thumbColor={Platform.OS === 'android' ? quivoColors.white : undefined}
+    <View>
+      <Pressable
+        accessibilityRole="switch"
+        accessibilityState={{ checked: value, disabled }}
         disabled={disabled}
-      />
+        onPress={() => onToggle(!value)}
+        style={styles.row}
+      >
+        <View style={styles.iconCircle}>
+          <Ionicons name={icon} size={20} color={dsColors.primaryText} />
+        </View>
+        <View style={styles.rowTextContent}>
+          <View style={styles.titleRow}>
+            <Text
+              size="sm"
+              weight="semibold"
+              style={{ fontSize: 15 * scale }}
+              allowFontScaling={!settings.textoGrande}
+            >
+              {title}
+            </Text>
+            {badge ? (
+              <Badge size="sm" variant="neutral">
+                {badge}
+              </Badge>
+            ) : null}
+          </View>
+          <Text
+            size="sm"
+            variant="secondary"
+            style={{ fontSize: 14 * scale }}
+            allowFontScaling={!settings.textoGrande}
+          >
+            {description}
+          </Text>
+          {helper ? (
+            <Text size="sm" variant="secondary" style={styles.helper}>
+              {helper}
+            </Text>
+          ) : null}
+        </View>
+        <Switch
+          value={value}
+          onValueChange={onToggle}
+          disabled={disabled}
+          accessibilityLabel={title}
+        />
+      </Pressable>
+      {!noBorder ? <Divider /> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FE' },
-  headerTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: quivoSpacing.xl + quivoSpacing.lg,
-    paddingHorizontal: quivoSpacing.md,
-    paddingBottom: quivoSpacing.sm,
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: quivoSpacing.xs,
-    width: 80,
-  },
-  backText: {
-    color: quivoColors.primaryStrong,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 15,
-    marginLeft: 4,
-  },
-  logo: {
-    height: 20,
-    width: 80,
-  },
-  scrollContent: { padding: quivoSpacing.lg, paddingBottom: 60 },
-  screenTitle: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 20,
-    color: quivoColors.primaryStrong,
-    marginBottom: quivoSpacing.lg,
-  },
+  container: { flex: 1, backgroundColor: dsColors.surfaceSoft },
+  headerTop: { paddingTop: dsSpace.lg, paddingHorizontal: dsSpace.md, paddingBottom: dsSpace.sm },
+  scrollContent: { padding: dsSpace.md, paddingBottom: dsSpace['3xl'] },
+  screenTitle: { marginTop: dsSpace.lg, marginBottom: dsSpace.sm },
   cardBlock: {
-    backgroundColor: quivoColors.white,
-    borderRadius: quivoRadius.lg,
-    padding: quivoSpacing.sm,
-    shadowColor: quivoColors.text,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    elevation: 2,
+    backgroundColor: dsColors.surfaceRaised,
+    borderRadius: quivoBubble.radius,
+    borderWidth: 1,
+    borderColor: quivoBubble.border,
+    padding: quivoBubble.padding,
+    ...dsElevation(2),
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: quivoSpacing.md,
-    paddingHorizontal: quivoSpacing.xs,
+    minHeight: quivoBubble.touch,
+    gap: dsSpace.sm,
+    paddingVertical: dsSpace.sm,
   },
-  rowBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: quivoColors.border,
-  },
-  rowIcon: {
-    marginRight: quivoSpacing.sm,
-  },
-  rowTextContent: {
-    flex: 1,
-    paddingRight: quivoSpacing.md,
-  },
-  titleRow: {
-    flexDirection: 'row',
+  iconCircle: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.primarySubtle,
     alignItems: 'center',
-    gap: quivoSpacing.sm,
-    flexWrap: 'wrap',
-    marginBottom: 4,
+    justifyContent: 'center',
   },
-  title: {
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 15,
-    color: quivoColors.primaryStrong,
-  },
-  badge: {
-    backgroundColor: quivoColors.primarySubtle,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  badgeText: {
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 10,
-    color: quivoColors.primary,
-  },
-  description: {
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 14,
-    color: quivoColors.textSecondary,
-    lineHeight: 18,
-  },
-  helper: {
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 12,
-    color: quivoColors.textMuted,
-    marginTop: 2,
-  },
-  rescateRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingVertical: quivoSpacing.md,
-    paddingHorizontal: quivoSpacing.xs,
-  },
-  rescateConteoRow: {
-    paddingHorizontal: quivoSpacing.xs,
-    paddingBottom: quivoSpacing.sm,
-  },
-  rescateError: {
-    fontFamily: quivoFonts.bodyRegular,
-    color: quivoColors.danger,
-    paddingHorizontal: quivoSpacing.xs,
-    paddingBottom: quivoSpacing.sm,
-  },
-  rescateBoton: {
-    marginHorizontal: quivoSpacing.xs,
-    marginBottom: quivoSpacing.xs,
-  },
-  rescateEjecutarDeNuevo: {
-    alignSelf: 'flex-start',
-    marginTop: quivoSpacing.xs,
-  },
+  rowIcon: { marginRight: dsSpace.sm },
+  rowTextContent: { flex: 1, gap: dsSpace.xs },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm, flexWrap: 'wrap' },
+  title: { color: dsColors.textPrimary },
+  description: { color: dsColors.textSecondary },
+  helper: { color: dsColors.textTertiary },
+  rescateRow: { flexDirection: 'row', alignItems: 'flex-start', padding: dsSpace.sm },
+  rescateConteoRow: { padding: dsSpace.sm },
+  rescateError: { color: dsColors.danger, padding: dsSpace.sm },
+  rescateBoton: { marginHorizontal: dsSpace.sm, marginBottom: dsSpace.sm },
+  rescateEjecutarDeNuevo: { alignSelf: 'flex-start', marginTop: dsSpace.xs },
 });

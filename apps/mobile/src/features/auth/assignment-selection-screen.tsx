@@ -23,20 +23,12 @@ export function AssignmentSelectionScreen({
 }: AssignmentSelectionScreenProps) {
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <View style={styles.headerWrapper}>
-        <QuivoHeader
-          title="Elige tu turno"
-          subtitle="Encontramos más de una asignación vigente. Confirma cuál iniciarás ahora."
-        />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Volver a comenzar"
-          accessibilityState={{ disabled: loading }}
-          disabled={loading}
-          onPress={onBack}
-          style={({ pressed }) => [styles.backAction, pressed && styles.backActionPressed]}
-        />
-      </View>
+      <QuivoHeader
+        title="Elige tu turno"
+        subtitle="Encontramos más de una asignación vigente. Confirma cuál iniciarás ahora."
+        onBack={onBack}
+        backLabel="Volver a comenzar"
+      />
       <View accessibilityRole="list" style={styles.list}>
         {asignaciones.map((asignacion) => {
           const marca = resolverMarcaLinea(asignacion.linea);
@@ -102,16 +94,6 @@ function labelTurno(turno: ResumenAsignacionMovil['horario']): string {
 }
 const styles = StyleSheet.create({
   content: { padding: space.lg, gap: space.lg, paddingBottom: space['2xl'] },
-  headerWrapper: { position: 'relative' },
-  backAction: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: quivoBubble.touch,
-    height: quivoBubble.touch,
-    borderRadius: radius.full,
-  },
-  backActionPressed: { backgroundColor: c.primarySoft, opacity: 0.4 },
   list: { gap: space.md },
   assignmentCard: {
     backgroundColor: c.surfaceCard,

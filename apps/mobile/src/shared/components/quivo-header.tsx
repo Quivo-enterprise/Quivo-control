@@ -1,21 +1,34 @@
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { Heading, Text, colors, radius, space } from '@quivo/design-system-native';
 import { quivoBubble } from '../theme/quivo-theme';
 interface QuivoHeaderProps {
   title: string;
   subtitle?: string;
+  onBack?: () => void;
+  backLabel?: string;
 }
-export function QuivoHeader({ title, subtitle }: QuivoHeaderProps) {
+export function QuivoHeader({ title, subtitle, onBack, backLabel = 'Volver' }: QuivoHeaderProps) {
   return (
     <View style={styles.container}>
       <View style={styles.row}>
-        <View
-          style={styles.backButton}
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-        >
-          <Text style={styles.backIcon}>‹</Text>
-        </View>
+        {onBack ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={backLabel}
+            onPress={onBack}
+            style={styles.backButton}
+          >
+            <Text style={styles.backIcon}>‹</Text>
+          </Pressable>
+        ) : (
+          <View
+            style={styles.backButton}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            <Text style={styles.backIcon}>‹</Text>
+          </View>
+        )}
         <Heading size="xl" style={styles.title}>
           {title}
         </Heading>

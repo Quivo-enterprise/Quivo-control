@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View, Pressable, Platform } from 'react-native';
+import { Alert, ScrollView, StyleSheet, View, Pressable } from 'react-native';
 import * as Updates from 'expo-updates';
 import * as Application from 'expo-application';
 import { useIsFocused } from '@react-navigation/native';
@@ -10,9 +10,13 @@ import type { OperationStackParamList } from '../../app/operation-navigator';
 import { useGpsContext } from '../operacion/gps-provider';
 import { useSyncStatus } from '../operacion/use-sync-status';
 import { usePerfilQuery } from './use-perfil-query';
-import { useTextScale, useOperacionSettings } from './use-operacion-settings';
+import { useOperacionSettings, useTextScale } from './use-operacion-settings';
 import { CerrarSesionDialog } from '../../shared/components/cerrar-sesion-dialog';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
+import { dsColors, dsElevation, dsRadius, dsSpace } from '../../shared/theme/design-system';
+import { Avatar, Badge, Divider, Heading, Text } from '@quivo/design-system-native';
+import { QuivoHeader } from '../../shared/components/quivo-header';
+import { Button } from '../../shared/components/Button';
 import {
   MENSAJE_SE_APLICARA_AL_CERRAR,
   estaInactivoAhora,
@@ -26,15 +30,30 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 const ShimmerPlaceHolder = createShimmerPlaceholder(LinearGradient);
 
-export interface PerfilScreenProps extends NativeStackScreenProps<OperationStackParamList, 'Perfil'> {
+export interface PerfilScreenProps extends NativeStackScreenProps<
+  OperationStackParamList,
+  'Perfil'
+> {
   contexto: ContextoOperativoMovil;
   obtenerAccessToken: () => Promise<string | null>;
   onLogout: () => void;
 }
 
-export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAccessToken, onLogout }: PerfilScreenProps) {
-  const { data: contexto, isLoading, refetch } = usePerfilQuery(contextoInicial, obtenerAccessToken);
+export function PerfilScreen({
+  navigation,
+  contexto: contextoInicial,
+  obtenerAccessToken,
+  onLogout,
+}: PerfilScreenProps) {
+  const {
+    data: contexto,
+    isLoading,
+    refetch,
+  } = usePerfilQuery(contextoInicial, obtenerAccessToken);
   const { gps } = useGpsContext();
+  // "Texto grande" de Ajustes: la escala propia reemplaza a la del sistema (sin sumarse).
+  const scale = useTextScale();
+  const { settings } = useOperacionSettings();
   // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
   // el llamado a `useSyncStatus` se CONSERVA — drena el outbox también mientras esta pantalla
   // está abierta (ver el comentario M5 en `sync-outbox.ts` sobre el doble montaje con
@@ -43,8 +62,6 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   // alarmar con un color distinto.
   useSyncStatus(obtenerAccessToken, contextoInicial.sesionId);
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
-  const scale = useTextScale();
-  const { settings } = useOperacionSettings();
   const [estadoActualizacion, setEstadoActualizacion] = useState<string | null>(null);
   const [buscando, setBuscando] = useState(false);
   // Guardas en refs (no estado): el closure de `onPress` del Alert queda viejo y `setBuscando`
@@ -62,7 +79,10 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   }, []);
   const pantallaViva = () => montadoRef.current && enfocadoRef.current;
 
-  const botonActualizar = estadoBotonActualizar({ isDev: __DEV__, updatesHabilitado: Updates.isEnabled });
+  const botonActualizar = estadoBotonActualizar({
+    isDev: __DEV__,
+    updatesHabilitado: Updates.isEnabled,
+  });
 
   const buscarActualizacion = async () => {
     if (buscandoRef.current) return;
@@ -131,88 +151,59 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
     return <PerfilSkeleton navigation={navigation} />;
   }
 
-  const modeloVehiculo = `${contexto.vehiculo.marca} ${contexto.vehiculo.modelo}`.trim() || 'Toyota Hiace';
+  const modeloVehiculo =
+    `${contexto.vehiculo.marca} ${contexto.vehiculo.modelo}`.trim() || 'Toyota Hiace';
   const statusLabel = gps.tracking ? 'EN VIVO' : 'EN ESPERA';
-  // En Figma: EN ESPERA es azul (#3127B1) y EN VIVO es naranja/ámbar (#FD9E15)
-  const statusColor = gps.tracking ? '#FD9E15' : '#3127B1';
 
   return (
     <View style={styles.container}>
-      {/* Top Header Bar */}
       <View style={styles.headerBar}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Volver al mapa"
-          onPress={() => navigation.goBack()}
-          style={styles.headerBackPressable}
-          hitSlop={12}
-        >
-          <Ionicons name="arrow-back" size={22} color={quivoColors.white} />
-          <Text style={styles.headerTitle}>Perfil</Text>
-        </Pressable>
+        <QuivoHeader title="Perfil" onBack={() => navigation.goBack()} backLabel="Volver al mapa" />
       </View>
-
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Avatar & Driver Hero Section */}
         <View style={styles.heroSection}>
-          <View style={styles.avatar} />
-
-          <Text
+          <Avatar
+            name={contexto.conductor.nombre}
+            size="xl"
+            status={gps.tracking ? 'online' : 'offline'}
+          />
+          <Heading
+            size="xl"
             style={[styles.driverName, { fontSize: 24 * scale }]}
             allowFontScaling={!settings.textoGrande}
           >
             {contexto.conductor.nombre}
-          </Text>
-
+          </Heading>
           <Text
-            style={[styles.sindicatoText, { fontSize: 13 * scale }]}
+            variant="secondary"
+            style={{ fontSize: 14 * scale }}
             allowFontScaling={!settings.textoGrande}
           >
-            {contexto.sindicato.nombre}
+            CI {contexto.conductor.documentoIdentidad} · {contexto.sindicato.nombre}
           </Text>
-
-          <View style={styles.statusIndicator}>
-            <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-            <Text style={[styles.statusText, { color: statusColor }]}>
-              {statusLabel}
-            </Text>
-          </View>
+          <Badge variant={gps.tracking ? 'success' : 'neutral'}>{statusLabel}</Badge>
         </View>
 
         {/* Sección: Información del usuario */}
         <Text
+          size="sm"
+          variant="secondary"
           style={[styles.sectionTitle, { fontSize: 14 * scale }]}
           allowFontScaling={!settings.textoGrande}
         >
-          Información del usuario
+          Vehículo
         </Text>
         <View style={styles.card}>
-          <InfoItem
-            label="Cédula de identidad"
-            value={contexto.conductor.documentoIdentidad}
-          />
-          <View style={styles.divider} />
-
-          <InfoItem
-            label="Modelo del vehículo"
-            value={modeloVehiculo}
-          />
-          <View style={styles.divider} />
-
-          <InfoItem
-            label="Placa del vehículo"
-            value={contexto.vehiculo.placa}
-          />
-          <View style={styles.divider} />
-
-          <InfoItem
-            label="Sindicato"
-            value={contexto.sindicato.nombre}
-          />
+          <InfoItem icon="car-outline" label="Modelo" value={modeloVehiculo} />
+          <Divider />
+          <InfoItem icon="pricetag-outline" label="Placa" value={contexto.vehiculo.placa} />
         </View>
 
         {/* Sección: Foto del vehículo (PR D) */}
         <Text
+          size="sm"
+          variant="secondary"
           style={[styles.sectionTitle, { fontSize: 14 * scale }]}
           allowFontScaling={!settings.textoGrande}
         >
@@ -226,38 +217,27 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
 
         {/* Sección: Navegación del perfil */}
         <Text
+          size="sm"
+          variant="secondary"
           style={[styles.sectionTitle, { fontSize: 14 * scale }]}
           allowFontScaling={!settings.textoGrande}
         >
-          Navegación del perfil
+          Opciones
         </Text>
         <View style={styles.card}>
           <NavigationItem
-            icon="settings-sharp"
+            icon="settings-outline"
             title="Ajustes de operación"
-            description="Configura como opera la app"
             onPress={() => navigation.navigate('Ajustes')}
           />
-          <View style={styles.divider} />
-
-          <NavigationItem
-            icon="sync-outline"
-            title="Sincronización"
-            description="Sincroniza los servicios activos"
-            onPress={() => refetch()}
-          />
-          <View style={styles.divider} />
-
-          <NavigationItem
-            icon="log-out-outline"
-            title="Cerrar Sesión"
-            description="Salir de tu cuenta en este dispositivo"
-            onPress={() => setConfirmarLogoutVisible(true)}
-          />
+          <Divider />
+          <NavigationItem icon="sync-outline" title="Sincronización" onPress={() => refetch()} />
         </View>
 
         {/* Sección: Versión y actualizaciones (OTA, expo-updates) */}
         <Text
+          size="sm"
+          variant="secondary"
           style={[styles.sectionTitle, { fontSize: 14 * scale }]}
           allowFontScaling={!settings.textoGrande}
         >
@@ -265,6 +245,7 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
         </Text>
         <View style={styles.card}>
           <InfoItem
+            icon="information-circle-outline"
             label="Versión"
             value={etiquetaVersion(
               Application.nativeApplicationVersion,
@@ -272,7 +253,7 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
               Updates.isEmbeddedLaunch,
             )}
           />
-          <View style={styles.divider} />
+          <Divider />
           <NavigationItem
             icon="cloud-download-outline"
             title="Buscar actualización"
@@ -285,8 +266,14 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
             onPress={() => void buscarActualizacion()}
           />
         </View>
+        <Button
+          variant="outline"
+          onPress={() => setConfirmarLogoutVisible(true)}
+          style={styles.logoutButton}
+        >
+          Cerrar sesión
+        </Button>
       </ScrollView>
-
       {/* Modal de confirmación seguro de cierre de sesión */}
       <CerrarSesionDialog
         visible={confirmarLogoutVisible}
@@ -300,20 +287,34 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   );
 }
 
-function InfoItem({ label, value }: { label: string; value: string }) {
+function InfoItem({
+  icon,
+  label,
+  value,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+}) {
   const scale = useTextScale();
   const { settings } = useOperacionSettings();
-
   return (
     <View style={styles.infoItem}>
+      <View style={styles.iconCircle}>
+        <Ionicons name={icon} size={20} color={dsColors.primaryText} />
+      </View>
       <Text
-        style={[styles.infoLabel, { fontSize: 11.5 * scale }]}
+        size="sm"
+        variant="secondary"
+        style={[styles.itemLabel, { fontSize: 14 * scale }]}
         allowFontScaling={!settings.textoGrande}
       >
         {label}
       </Text>
       <Text
-        style={[styles.infoValue, { fontSize: 14.5 * scale }]}
+        size="sm"
+        weight="semibold"
+        style={[styles.itemValue, { fontSize: 14.5 * scale }]}
         allowFontScaling={!settings.textoGrande}
       >
         {value}
@@ -331,37 +332,45 @@ function NavigationItem({
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
-  description: string;
+  description?: string;
   onPress: () => void;
   disabled?: boolean;
 }) {
   const scale = useTextScale();
   const { settings } = useOperacionSettings();
-
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={title}
       accessibilityState={{ disabled }}
       disabled={disabled}
-      style={({ pressed }) => [styles.navItem, (pressed || disabled) && styles.navItemPressed]}
       onPress={onPress}
+      style={({ pressed }) => [styles.infoItem, pressed && styles.pressed]}
     >
-      <Ionicons name={icon} size={25} color="#3127B1" style={styles.navIcon} />
+      <View style={styles.iconCircle}>
+        <Ionicons name={icon} size={20} color={dsColors.primaryText} />
+      </View>
       <View style={styles.navTextContainer}>
         <Text
-          style={[styles.navTitle, { fontSize: 14.5 * scale }]}
+          size="sm"
+          weight="semibold"
+          style={{ fontSize: 15 * scale }}
           allowFontScaling={!settings.textoGrande}
         >
           {title}
         </Text>
-        <Text
-          style={[styles.navDescription, { fontSize: 11.5 * scale }]}
-          allowFontScaling={!settings.textoGrande}
-        >
-          {description}
-        </Text>
+        {description ? (
+          <Text
+            size="sm"
+            variant="secondary"
+            style={{ fontSize: 13 * scale }}
+            allowFontScaling={!settings.textoGrande}
+          >
+            {description}
+          </Text>
+        ) : null}
       </View>
+      <Ionicons name="chevron-forward" size={20} color={dsColors.textSecondary} />
     </Pressable>
   );
 }
@@ -374,32 +383,16 @@ function PerfilSkeleton({
   return (
     <View style={styles.container}>
       <View style={styles.headerBar}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.headerBackPressable}>
-          <Ionicons name="arrow-back" size={22} color={quivoColors.white} />
-          <Text style={styles.headerTitle}>Perfil</Text>
-        </Pressable>
+        <QuivoHeader title="Perfil" onBack={() => navigation.goBack()} backLabel="Volver al mapa" />
       </View>
-
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.heroSection}>
-          <ShimmerPlaceHolder style={styles.avatar} />
-          <ShimmerPlaceHolder style={{ width: 160, height: 24, borderRadius: 6, marginVertical: 8 }} />
-          <ShimmerPlaceHolder style={{ width: 180, height: 16, borderRadius: 4 }} />
+          <ShimmerPlaceHolder style={styles.avatarPlaceholder} />
+          <ShimmerPlaceHolder style={styles.namePlaceholder} />
         </View>
-
-        <ShimmerPlaceHolder style={{ width: 150, height: 18, borderRadius: 4, marginVertical: 12 }} />
-        <View style={[styles.card, { gap: 12 }]}>
-          <ShimmerPlaceHolder style={{ width: '100%', height: 36, borderRadius: 4 }} />
-          <ShimmerPlaceHolder style={{ width: '100%', height: 36, borderRadius: 4 }} />
-          <ShimmerPlaceHolder style={{ width: '100%', height: 36, borderRadius: 4 }} />
-          <ShimmerPlaceHolder style={{ width: '100%', height: 36, borderRadius: 4 }} />
-        </View>
-
-        <ShimmerPlaceHolder style={{ width: 150, height: 18, borderRadius: 4, marginVertical: 12 }} />
-        <View style={[styles.card, { gap: 12 }]}>
-          <ShimmerPlaceHolder style={{ width: '100%', height: 44, borderRadius: 4 }} />
-          <ShimmerPlaceHolder style={{ width: '100%', height: 44, borderRadius: 4 }} />
-          <ShimmerPlaceHolder style={{ width: '100%', height: 44, borderRadius: 4 }} />
+        <View style={styles.card}>
+          <ShimmerPlaceHolder style={styles.rowPlaceholder} />
+          <ShimmerPlaceHolder style={styles.rowPlaceholder} />
         </View>
       </ScrollView>
     </View>
@@ -407,134 +400,46 @@ function PerfilSkeleton({
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F4F6F8',
-  },
-  headerBar: {
-    backgroundColor: '#3127B1',
-    paddingTop: Platform.OS === 'ios' ? 12 : 16,
-    paddingBottom: 16,
-    paddingHorizontal: 20,
-  },
-  headerBackPressable: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  headerTitle: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 18,
-    letterSpacing: 0.2,
-  },
-  scrollContent: {
-    paddingHorizontal: 22,
-    paddingTop: 24,
-    paddingBottom: 48,
-  },
-  heroSection: {
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  avatar: {
-    width: 66,
-    height: 66,
-    borderRadius: 33,
-    backgroundColor: '#3127B1',
-    marginBottom: 12,
-  },
-  driverName: {
-    color: '#3127B1',
-    fontFamily: quivoFonts.displayBold,
-    textAlign: 'center',
-    letterSpacing: 0.2,
-  },
-  sindicatoText: {
-    color: '#334155',
-    fontFamily: quivoFonts.bodySemiBold,
-    textAlign: 'center',
-    marginTop: 3,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  statusText: {
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 11,
-    letterSpacing: 0.8,
-  },
-  sectionTitle: {
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 14,
-    color: '#334155',
-    marginTop: 22,
-    marginBottom: 8,
-    paddingLeft: 4,
-  },
+  container: { flex: 1, backgroundColor: dsColors.surfaceSoft },
+  headerBar: { paddingTop: dsSpace.lg, paddingHorizontal: dsSpace.md, paddingBottom: dsSpace.sm },
+  scrollContent: { paddingHorizontal: dsSpace.md, paddingBottom: dsSpace['3xl'] },
+  heroSection: { alignItems: 'center', gap: dsSpace.sm, paddingVertical: dsSpace.lg },
+  driverName: { color: dsColors.textPrimary, textAlign: 'center' },
+  sectionTitle: { marginTop: dsSpace.lg, marginBottom: dsSpace.sm },
   card: {
-    backgroundColor: quivoColors.white,
-    borderRadius: 20,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#E8ECF2',
-    marginVertical: 8,
+    backgroundColor: dsColors.surfaceRaised,
+    borderRadius: quivoBubble.radius,
+    borderWidth: 1,
+    borderColor: quivoBubble.border,
+    padding: quivoBubble.padding,
+    ...dsElevation(2),
   },
   infoItem: {
-    paddingVertical: 3,
-  },
-  infoLabel: {
-    color: '#8A94A6',
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 11.5,
-  },
-  infoValue: {
-    color: '#3127B1',
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 14.5,
-    marginTop: 2,
-  },
-  navItem: {
+    minHeight: quivoBubble.touch,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 4,
+    gap: dsSpace.sm,
+    paddingVertical: dsSpace.xs,
   },
-  navItemPressed: {
-    opacity: 0.7,
+  iconCircle: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.primarySubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  navIcon: {
-    width: 28,
-    textAlign: 'center',
-  },
-  navTextContainer: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  navTitle: {
-    color: '#3127B1',
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 14.5,
-  },
-  navDescription: {
-    color: '#8A94A6',
-    fontFamily: quivoFonts.bodyRegular,
-    fontSize: 11.5,
-    marginTop: 1,
+  itemLabel: { flex: 1 },
+  itemValue: { flexShrink: 1, textAlign: 'right' },
+  navTextContainer: { flex: 1 },
+  pressed: { opacity: 0.7 },
+  logoutButton: { marginTop: dsSpace.lg, borderColor: dsColors.danger },
+  avatarPlaceholder: { width: 72, height: 72, borderRadius: 36 },
+  namePlaceholder: { width: 160, height: 24, borderRadius: dsRadius.sm },
+  rowPlaceholder: {
+    width: '100%',
+    height: 44,
+    borderRadius: dsRadius.sm,
+    marginVertical: dsSpace.xs,
   },
 });

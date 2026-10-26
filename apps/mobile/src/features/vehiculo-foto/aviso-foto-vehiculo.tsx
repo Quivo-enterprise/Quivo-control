@@ -1,6 +1,9 @@
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet } from 'react-native';
+import { Text } from '@quivo/design-system-native';
+import { Burbuja } from '../../shared/components/burbuja';
+import { dsColors, dsSpace } from '../../shared/theme/design-system';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { Ionicons } from '@expo/vector-icons';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { useAvisoFoto } from './use-aviso-foto';
 import { useVehiculoFoto } from './use-vehiculo-foto';
 
@@ -15,10 +18,11 @@ interface Props {
  * (`tracking` false), nunca bloquea, y se puede descartar por el resto del día (hora de Bolivia).
  */
 export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Props) {
-  const { foto, estadoFoto, estado, mensaje, permisoDenegado, requiereAjustes, tomarFoto } = useVehiculoFoto({
-    obtenerAccessToken,
-    sesionId,
-  });
+  const { foto, estadoFoto, estado, mensaje, permisoDenegado, requiereAjustes, tomarFoto } =
+    useVehiculoFoto({
+      obtenerAccessToken,
+      sesionId,
+    });
   const { visible, descartar } = useAvisoFoto({ estadoFoto, tracking });
   const ocupado = estado === 'procesando' || estado === 'enviando';
 
@@ -43,9 +47,9 @@ export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Pr
               : 'Tu vehículo no tiene foto';
 
   return (
-    <View style={styles.fila}>
-      <Ionicons name="camera-outline" size={16} color={quivoColors.accentStrong} />
-      <Text style={styles.texto} numberOfLines={2}>
+    <Burbuja style={styles.fila}>
+      <Ionicons name="camera-outline" size={16} color={dsColors.primaryText} />
+      <Text size="sm" style={styles.texto} numberOfLines={2}>
         {texto}
       </Text>
       {!enCurso ? (
@@ -56,7 +60,9 @@ export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Pr
           style={styles.accion}
           onPress={() => (requiereAjustes ? void Linking.openSettings() : void tomarFoto())}
         >
-          <Text style={styles.accionTexto}>{requiereAjustes ? 'Abrir ajustes' : 'Tomar foto'}</Text>
+          <Text size="sm" weight="semibold" style={styles.accionTexto}>
+            {requiereAjustes ? 'Abrir ajustes' : 'Tomar foto'}
+          </Text>
         </Pressable>
       ) : null}
       {!enCurso ? (
@@ -66,29 +72,16 @@ export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Pr
           hitSlop={10}
           onPress={descartar}
         >
-          <Ionicons name="close" size={16} color={quivoColors.accentStrong} />
+          <Ionicons name="close" size={16} color={dsColors.primaryText} />
         </Pressable>
       ) : null}
-    </View>
+    </Burbuja>
   );
 }
 
 const styles = StyleSheet.create({
-  fila: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: quivoSpacing.sm,
-    backgroundColor: quivoColors.accentSoft,
-    borderRadius: quivoRadius.md,
-    paddingHorizontal: quivoSpacing.md,
-    paddingVertical: quivoSpacing.sm,
-  },
-  texto: { flex: 1, color: quivoColors.accentStrong, fontFamily: quivoFonts.bodyMedium, fontSize: 11 },
-  accion: { paddingVertical: quivoSpacing.xs },
-  accionTexto: {
-    color: quivoColors.accentStrong,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 11,
-    textDecorationLine: 'underline',
-  },
+  fila: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm },
+  texto: { flex: 1, color: dsColors.textPrimary },
+  accion: { minHeight: quivoBubble.touch, justifyContent: 'center', paddingHorizontal: dsSpace.sm },
+  accionTexto: { color: dsColors.primaryText },
 });
