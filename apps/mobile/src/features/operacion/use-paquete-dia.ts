@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import * as Sentry from '@sentry/react-native';
 import type { PaqueteDia } from '@quivo/shared';
+import type { SQLiteDatabase } from 'expo-sqlite';
 import { abrirPaqueteDiaDb, guardarPaqueteDia, obtenerPaqueteDiaLocal } from '../../db/paquete-dia';
 import { paqueteDiaApi, PaqueteDiaApiError } from '../../shared/api/paquete-dia-api';
 import { cargarSesionMovil } from '../../shared/security/sesion-movil-store';
@@ -69,8 +70,11 @@ export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) 
 
   const descargar = useCallback(async (refresco: boolean) => {
     if (!refresco) setEstado((actual) => ({ ...actual, cargando: true, error: null }));
-    const db = await abrirPaqueteDiaDb();
+    // La apertura va DENTRO del try: si rechaza (p. ej. carrera de mkdirs en el primer arranque) debe
+    // caer al catch y poner `cargando:false`; antes escapaba y dejaba el spinner permanente.
+    let db: SQLiteDatabase | null = null;
     try {
+      db = await abrirPaqueteDiaDb();
       const accessToken = await obtenerAccessToken();
       if (!accessToken) {
         throw new PaqueteDiaApiError('network', 'Sin conexión o sesión no renovable');
@@ -127,11 +131,15 @@ export function usePaqueteDia(obtenerAccessToken: () => Promise<string | null>) 
           tags: { contexto: 'paquete-dia', paso: 'leer-sesion-para-fallback-local' },
         });
       }
-      const local = sesion ? await obtenerPaqueteDiaLocal(db, sesion.contexto.asignacion.id) : null;
+      const local = sesion && db ? await obtenerPaqueteDiaLocal(db, sesion.contexto.asignacion.id) : null;
       if (local) {
         paqueteActual.current = local.paquete;
         setEstado({ cargando: false, paquete: local.paquete, vencido: local.vencido, error: null });
         return;
+      }
+      // Errores no-API (p. ej. la DB local no abrió) no tienen otro rastro: a Sentry.
+      if (!(error instanceof PaqueteDiaApiError)) {
+        Sentry.captureException(error, { tags: { contexto: 'paquete-dia', paso: 'carga-inicial' } });
       }
       setEstado({
         cargando: false,

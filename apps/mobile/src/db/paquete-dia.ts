@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import * as Sentry from '@sentry/react-native';
 import type { PaqueteDia } from '@quivo/shared';
+import { abrirSqlite } from './abrir-sqlite';
 import {
   interpretarFilaPaqueteDia,
   type FilaPaqueteDia,
@@ -37,7 +38,7 @@ async function abrirPaqueteDiaDbNueva(): Promise<SQLite.SQLiteDatabase> {
     data: { path: PAQUETE_DIA_DB_PATH, esPrimeraApertura },
   });
 
-  const db = await SQLite.openDatabaseAsync(PAQUETE_DIA_DB_PATH);
+  const db = await abrirSqlite(PAQUETE_DIA_DB_PATH);
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS paquete_dia (
       asignacion_id TEXT PRIMARY KEY,

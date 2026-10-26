@@ -2,6 +2,7 @@ import * as Crypto from 'expo-crypto';
 import * as SQLite from 'expo-sqlite';
 import * as Sentry from '@sentry/react-native';
 import { generarUuidV7, type TipoEventoSync } from '@quivo/shared';
+import { abrirSqlite } from './abrir-sqlite';
 
 /**
  * Outbox local (RF-67..73, doc técnico §6): todo evento nace con `event_id` UUIDv7 +
@@ -286,7 +287,7 @@ async function abrirOutboxNueva(useNewConnection: boolean): Promise<SQLite.SQLit
     data: { path: OUTBOX_DB_PATH, esPrimeraApertura, useNewConnection },
   });
 
-  const db = await SQLite.openDatabaseAsync(
+  const db = await abrirSqlite(
     OUTBOX_DB_PATH,
     useNewConnection ? { useNewConnection: true } : undefined,
   );
