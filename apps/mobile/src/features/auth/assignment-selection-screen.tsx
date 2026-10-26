@@ -76,25 +76,26 @@ export function AssignmentSelectionScreen({
           },
         ]}
       >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Volver"
-          onPress={onBack}
-          disabled={loading}
-          hitSlop={8}
-          style={({ pressed }) => [styles.volver, pressed && styles.presionado]}
-        >
-          <Ionicons name="chevron-back" size={24} color={dsColors.textInverse} />
-        </Pressable>
-
-        <View style={styles.cabecera}>
-          <Heading size="xl" style={styles.titulo}>
+        {/* Fila de cabecera como en Perfil: ‹ a la izquierda, título centrado y un hueco simétrico. */}
+        <View style={styles.cabeceraFila}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Volver"
+            onPress={onBack}
+            disabled={loading}
+            hitSlop={8}
+            style={({ pressed }) => [styles.volver, pressed && styles.presionado]}
+          >
+            <Ionicons name="chevron-back" size={24} color={dsColors.textInverse} />
+          </Pressable>
+          <Heading size="lg" numberOfLines={1} style={styles.titulo}>
             Elige tu turno
           </Heading>
-          <Text size="md" style={styles.subtitulo}>
-            {resumenDelDia(asignaciones.length, ahora)}
-          </Text>
+          <View style={styles.huecoSimetrico} />
         </View>
+        <Text size="md" style={styles.subtitulo}>
+          {resumenDelDia(asignaciones.length, ahora)}
+        </Text>
 
         {error ? (
           <View accessibilityRole="alert">
@@ -360,9 +361,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.16)',
   },
   presionado: { opacity: 0.8 },
-  cabecera: { gap: dsSpace.xs, paddingHorizontal: dsSpace.xs },
-  titulo: { color: dsColors.textInverse },
-  subtitulo: { color: 'rgba(255, 255, 255, 0.8)' },
+  cabeceraFila: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm },
+  huecoSimetrico: { width: quivoBubble.touch },
+  titulo: { flex: 1, textAlign: 'center', color: dsColors.textInverse },
+  subtitulo: { textAlign: 'center', color: 'rgba(255, 255, 255, 0.8)' },
   aviso: {
     width: '100%',
     alignItems: 'stretch',
