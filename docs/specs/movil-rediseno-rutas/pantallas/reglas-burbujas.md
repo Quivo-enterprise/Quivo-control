@@ -16,6 +16,12 @@ valor, se agrega a `quivoBubble` con un comentario.
 
 ## 2. Simetría
 - Mismo margen (`edge`) a izquierda, derecha, arriba y abajo. Nada "flota" a una distancia distinta.
+- **Se mide contra el área visible del mapa, no contra la pantalla.** En el Motorola la ventana de la app
+  ya termina antes de la barra de estado y de la barra de gestos, así que sumar `insets.top` o
+  `insets.bottom` encima de eso duplica el margen. Debajo del último botón quedaba el triple que a los
+  costados. Regla: el borde de la burbuja queda a `edge` del borde del mapa en los cuatro lados, y se
+  verifica en una captura (los píxeles a izquierda, derecha, arriba y abajo tienen que coincidir).
+- Lo mismo **dentro** de una burbuja: el aire bajo el último control es igual al de los costados (`padding`).
 - Una burbuja ocupa **todo el ancho útil** (`left: edge`, `right: edge`) o **se alinea a un borde** (el
   riel a la derecha). Nunca una burbuja ancha a medias que deja un hueco sin uso al lado.
 - Los textos de una burbuja empiezan en la misma línea vertical (la que marca `padding`). Si la burbuja
