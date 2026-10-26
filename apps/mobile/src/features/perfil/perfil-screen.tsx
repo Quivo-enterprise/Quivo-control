@@ -182,7 +182,9 @@ export function PerfilScreen({
           >
             CI {contexto.conductor.documentoIdentidad} · {contexto.sindicato.nombre}
           </Text>
-          <Badge variant={gps.tracking ? 'success' : 'neutral'}>{statusLabel}</Badge>
+          <Badge variant={gps.tracking ? 'success' : 'primary'} style={styles.estado}>
+            {statusLabel}
+          </Badge>
         </View>
 
         {/* Sección: Información del usuario */}
@@ -270,6 +272,7 @@ export function PerfilScreen({
           variant="outline"
           onPress={() => setConfirmarLogoutVisible(true)}
           style={styles.logoutButton}
+          textStyle={styles.logoutTexto}
         >
           Cerrar sesión
         </Button>
@@ -420,6 +423,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: dsSpace.sm,
     paddingVertical: dsSpace.xs,
+    // Valor de la derecha separado del borde curvo de la tarjeta.
+    paddingRight: dsSpace.md,
   },
   iconCircle: {
     width: quivoBubble.touch,
@@ -434,6 +439,9 @@ const styles = StyleSheet.create({
   navTextContainer: { flex: 1 },
   pressed: { opacity: 0.7 },
   logoutButton: { marginTop: dsSpace.lg, borderColor: dsColors.danger },
+  logoutTexto: { color: dsColors.danger },
+  // La pastilla de estado va centrada bajo el nombre, no estirada al ancho del bloque.
+  estado: { alignSelf: 'center' },
   avatarPlaceholder: { width: 72, height: 72, borderRadius: 36 },
   namePlaceholder: { width: 160, height: 24, borderRadius: dsRadius.sm },
   rowPlaceholder: {

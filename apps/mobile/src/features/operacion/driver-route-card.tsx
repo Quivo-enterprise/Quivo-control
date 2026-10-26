@@ -26,7 +26,7 @@ export function DriverRouteCard({ contexto, tracking, pausadoDesde, brand }: Dri
       </View>
       <View style={styles.detalles}>
         <View style={styles.estadoFila}>
-          <Badge variant={!tracking ? 'neutral' : pausadoDesde ? 'warning' : 'success'} size="sm">
+          <Badge variant={!tracking ? 'primary' : pausadoDesde ? 'warning' : 'success'} size="sm">
             {estado}
           </Badge>
         </View>

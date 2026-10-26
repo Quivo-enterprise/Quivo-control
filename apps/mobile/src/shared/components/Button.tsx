@@ -139,6 +139,8 @@ export function Button({
           borderColor: variant === 'glass' ? c.borderSubtle : c.primaryText,
           opacity: blocked ? 0.65 : pressed ? 0.85 : 1,
         },
+        // El `style` de quien llama gana sobre el color del variante (p. ej. borde `danger` en un outline).
+        style,
       ]}
     >
       {loading ? (

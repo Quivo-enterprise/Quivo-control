@@ -12,4 +12,6 @@ No se edita acá. Los cambios van primero a `Quivo-UI-UX` y se vuelven a copiar 
   El peso se elige por nombre de archivo (`Montserrat_600SemiBold`, `Oxanium_700Bold`, …) y `fontWeight` queda
   en `"normal"`. Antes, `Text` ni siquiera ponía `fontFamily`.
 - `Input`: el placeholder y el texto de ayuda usan `textTertiary`; `textMuted` en claro es `#1a1a1a` y el
-  placeholder parecía un valor escrito (el token `textMuted` del original también hay que revisarlo).
+  placeholder parecía un valor escrito.
+- `textMuted` en tema claro pasa de `#1a1a1a` a `#6b7280`: con el valor original, el punto de estado
+  "offline" del `Avatar` salía negro y todo texto `muted` se leía como texto principal.

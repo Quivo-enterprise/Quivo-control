@@ -14,9 +14,11 @@ export const quivoBubble = {
   radius: 30,
   innerRadius: 22,
   edge: 12,
-  // Burbujas flotando sobre el mapa: `surfaceRaised` al 92 % y borde con el primario al 14 %
+  // Burbujas flotando sobre el mapa: superficie blanca y borde con el primario al 14 %
   // sobre `borderSubtle` (`--rutas-glass-border` de Rutas).
-  surface: 'rgba(255, 255, 255, 0.92)',
+  // Opaca: en Android la `elevation` dibuja su sombra debajo y se ve a través de una superficie
+  // translúcida como un rectángulo fantasma (en nativo no hay desenfoque de fondo que lo justifique).
+  surface: '#FFFFFF',
   border: '#CCCCE3',
   scrim: 'rgba(15, 15, 20, 0.48)',
 } as const;

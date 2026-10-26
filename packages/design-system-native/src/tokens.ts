@@ -82,7 +82,8 @@ export const colors: Record<QuivoTheme, QuivoColors> = {
     textPrimary: "#0f0f14",
     textSecondary: "#333333",
     textTertiary: "#666666",
-    textMuted: "#1a1a1a",
+    // Local: el original trae "#1a1a1a" (casi negro) y lo usan placeholders y el estado "offline".
+    textMuted: "#6b7280",
     textInverse: "#ffffff",
     textOnPrimary: "#ffffff",
     primaryText: "#3226b4",

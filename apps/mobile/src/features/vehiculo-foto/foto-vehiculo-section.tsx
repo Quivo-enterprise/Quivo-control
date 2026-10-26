@@ -72,11 +72,15 @@ export function FotoVehiculoSection({ placa, sesionId, obtenerAccessToken }: Pro
         </Text>
       ) : null}
 
-      <Badge
-        variant={estado === 'error' ? 'danger' : ocupado ? 'warning' : foto ? 'success' : 'neutral'}
-      >
-        {estado === 'error' ? 'Error' : ocupado ? 'Subiendo' : foto ? 'Lista' : 'Sin foto'}
-      </Badge>
+      {/* Sin foto ya lo dice el recuadro vacío: la pastilla solo aparece cuando agrega algo. */}
+      {estado === 'error' || ocupado || foto ? (
+        <Badge
+          variant={estado === 'error' ? 'danger' : ocupado ? 'warning' : 'success'}
+          style={styles.pastilla}
+        >
+          {estado === 'error' ? 'Error' : ocupado ? 'Subiendo' : 'Lista'}
+        </Badge>
+      ) : null}
 
       {textoEstado ? (
         <Text
@@ -99,6 +103,7 @@ export function FotoVehiculoSection({ placa, sesionId, obtenerAccessToken }: Pro
         disabled={ocupado}
         onPress={() => void tomarFoto()}
         style={styles.boton}
+        fullWidth
       >
         {etiquetaBoton}
       </Button>
@@ -128,4 +133,5 @@ const styles = StyleSheet.create({
   estadoError: { color: dsColors.danger },
   estadoOk: { color: dsColors.success },
   boton: { minHeight: 48, borderRadius: dsRadius.full },
+  pastilla: { alignSelf: 'flex-start' },
 });
