@@ -48,8 +48,8 @@ export function VecinoPerfilModal({ visible, vecino, lado, onClose }: Props) {
               tipo={vecino.tipo}
               color={vecino.color}
               colorSecundario={vecino.colorSecundario}
-              ancho={56}
-              alto={32}
+              ancho={224}
+              alto={112}
             />
           </View>
 
