@@ -35,9 +35,8 @@ export function calcularMargenInferiorSheet(_fase: FaseControl, _insetInferior: 
   return MARGEN_INFERIOR_SHEET;
 }
 
-/** Aire (dp) bajo la cabecera, DENTRO del contenedor táctil de la cabecera: la franja visible al
- * colapsar es la cabecera (asa + "Próximo Control" + distancia + "#N") más este respiro, y toda ella
- * es zona de arrastre/toque. */
+/** Aire (dp) bajo la cabecera; al colapsar queda visible el bloque de parada o la fila de salida,
+ * más este respiro. El contenido informativo de la cabecera conserva la zona de arrastre/toque. */
 const AIRE_BAJO_CABECERA = dsSpace.sm;
 
 // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
@@ -107,6 +106,8 @@ export function NextControlSheet(props: NextControlSheetProps) {
   const { fase, onEmpezarDia, empezandoDia = false, puedeEmpezarDia = true } = props;
   const margenInferior = calcularMargenInferiorSheet(fase, insets.bottom);
   const tracking = fase === 'recorrido';
+  const reemplazaParadaPorFila =
+    tracking && (Boolean(props.filaSalida?.vista) || Boolean(props.filaSalida?.puedeEstoyEnLaFila));
   // Con `tracking` la fase 'recorrido' manda de inmediato; si no, mientras se lee la jornada
   // no se sabe aún si toca EMPEZAR DÍA o COMENZAR RUTA.
   const cargandoJornada = Boolean(props.jornadaCargando) && !tracking;
@@ -183,8 +184,8 @@ export function NextControlSheet(props: NextControlSheetProps) {
     else recalcularSnap();
   };
 
-  // Cabecera = título/distancia/"#N" + aire, medida desde el borde superior del sheet (incluye su
-  // padding superior): `y + height` es todo lo que debe seguir visible al colapsar.
+  // Cabecera = bloque de parada o fila de salida + aire, medida desde el borde superior del sheet
+  // (incluye su padding superior): `y + height` es todo lo que debe seguir visible al colapsar.
   const onLayoutCabecera = (e: LayoutChangeEvent) => {
     const { y, height } = e.nativeEvent.layout;
     const alto = Math.round(y + height);
@@ -255,36 +256,40 @@ export function NextControlSheet(props: NextControlSheetProps) {
     >
       <HojaBurbuja>
         {fase !== 'jornada' ? (
-          <View style={styles.cabecera} onLayout={onLayoutCabecera} {...panResponder.panHandlers}>
-            <View style={styles.headerLeft}>
-              <View style={tracking ? styles.paradaEnRuta : undefined}>
-                <Heading
-                  size={tracking ? 'lg' : 'xl'}
-                  numberOfLines={1}
-                  style={tracking ? styles.nombreParadaEnRuta : undefined}
-                >
-                  {props.nombreProximaParada || `Punto de control ${props.nextPointOrder ?? 1}`}
-                </Heading>
-                {tracking && props.distanciaProximaParadaM != null ? (
-                  <Heading size="lg" numberOfLines={1} style={styles.distanciaParada}>
-                    a {formatearDistancia(props.distanciaProximaParadaM)}
+          <View style={styles.cabecera} onLayout={onLayoutCabecera}>
+            {reemplazaParadaPorFila && props.filaSalida ? (
+              <FilaSalidaCard fila={props.filaSalida} panHandlers={panResponder.panHandlers} />
+            ) : (
+              <View style={styles.headerLeft} {...panResponder.panHandlers}>
+                <View style={tracking ? styles.paradaEnRuta : undefined}>
+                  <Heading
+                    size={tracking ? 'lg' : 'xl'}
+                    numberOfLines={1}
+                    style={tracking ? styles.nombreParadaEnRuta : undefined}
+                  >
+                    {props.nombreProximaParada || `Punto de control ${props.nextPointOrder ?? 1}`}
                   </Heading>
+                  {tracking && props.distanciaProximaParadaM != null ? (
+                    <Heading size="lg" numberOfLines={1} style={styles.distanciaParada}>
+                      a {formatearDistancia(props.distanciaProximaParadaM)}
+                    </Heading>
+                  ) : null}
+                </View>
+                {props.viaMolinos ? (
+                  <View
+                    accessible
+                    accessibilityLabel="Vía Molinos: Honduras, Molinos, Salomón Romero"
+                  >
+                    <PildoraBurbuja icono="trail-sign" style={styles.viaMolinos}>
+                      Vía Molinos
+                    </PildoraBurbuja>
+                  </View>
                 ) : null}
               </View>
-              {props.viaMolinos ? (
-                <View
-                  accessible
-                  accessibilityLabel="Vía Molinos: Honduras, Molinos, Salomón Romero"
-                >
-                  <PildoraBurbuja icono="trail-sign" style={styles.viaMolinos}>
-                    Vía Molinos
-                  </PildoraBurbuja>
-                </View>
-              ) : null}
-            </View>
+            )}
           </View>
         ) : null}
-        {fase !== 'jornada' ? (
+        {fase !== 'jornada' && !reemplazaParadaPorFila ? (
           <View style={[styles.stepperSection, tracking && styles.stepperAligned]}>
             <MiniStepper
               estados={props.estadosPuntos}
@@ -296,12 +301,9 @@ export function NextControlSheet(props: NextControlSheetProps) {
             />
           </View>
         ) : null}
-        {fase !== 'jornada' && props.gpsError ? (
-          <Text size="sm" variant="error" accessibilityRole="alert">
-            {props.gpsError}
-          </Text>
+        {tracking && !reemplazaParadaPorFila && props.filaSalida ? (
+          <FilaSalidaCard fila={props.filaSalida} />
         ) : null}
-        {tracking && props.filaSalida ? <FilaSalidaCard fila={props.filaSalida} /> : null}
         <View style={styles.actionsRow}>
           {cargandoJornada ? (
             <View style={styles.cargandoJornada}>
@@ -340,7 +342,7 @@ export function NextControlSheet(props: NextControlSheetProps) {
           ) : (
             <>
               {props.pausadoDesde ? (
-                <Text size="sm" variant="secondary">
+                <Text size="md" variant="secondary">
                   En pausa desde{' '}
                   {new Date(props.pausadoDesde).toLocaleTimeString('es-BO', {
                     hour: '2-digit',

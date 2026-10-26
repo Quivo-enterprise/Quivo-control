@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -59,8 +59,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OperationStackParamList } from '../../app/operation-navigator';
 import { useOperacionSettings } from '../perfil/use-operacion-settings';
 import { DriverRouteCard } from './driver-route-card';
-import { FotoVehiculoControl } from './foto-vehiculo-control';
 import { SlotAvisos, AvisoEnSlot } from './slot-avisos';
+import { AvisoFotoVehiculo } from '../vehiculo-foto/aviso-foto-vehiculo';
 import { VecinosRutaPanel } from '../vecinos-ruta/vecinos-ruta-panel';
 import { faseControl } from '../jornada/fase-control';
 import { useJornada } from '../jornada/use-jornada';
@@ -169,7 +169,6 @@ export function OperationScreen(
     },
     [progreso.ordenEfectivo],
   );
-  const [altoBannerVuelta, setAltoBannerVuelta] = useState(0);
   const [observacion, setObservacion] = useState('');
   const [enviandoObservacion, setEnviandoObservacion] = useState(false);
   const [observacionEnviada, setObservacionEnviada] = useState(false);
@@ -513,14 +512,6 @@ export function OperationScreen(
                 />
               ) : undefined
             }
-            fotoVehiculo={
-              gps.tracking ? undefined : (
-                <FotoVehiculoControl
-                  sesionId={props.contexto.sesionId}
-                  obtenerAccessToken={props.obtenerAccessToken}
-                />
-              )
-            }
           />
         </View>
 
@@ -549,6 +540,121 @@ export function OperationScreen(
               ),
             },
             {
+              id: 'sesion-vencida',
+              prioridad: 0,
+              visible: props.sesionNoVigente,
+              contenido: (
+                <AvisoEnSlot
+                  icono="alert-circle-outline"
+                  mensaje="Tu sesión venció. Toca Finalizar y vuelve a iniciar sesión."
+                  accion="Finalizar recorrido"
+                  onAccion={confirmarFinalizacion}
+                />
+              ),
+            },
+            {
+              id: 'asignacion-vencida',
+              prioridad: 0,
+              visible: paqueteDia.vencido,
+              contenido: (
+                <AvisoEnSlot
+                  icono="alert-circle-outline"
+                  mensaje="Asignación vencida. Reconecta antes de iniciar otro recorrido."
+                />
+              ),
+            },
+            {
+              id: 'error-paquete',
+              prioridad: 0,
+              visible: Boolean(paqueteDia.error),
+              contenido: (
+                <AvisoEnSlot icono="alert-circle-outline" mensaje={paqueteDia.error ?? ''} />
+              ),
+            },
+            {
+              id: 'error-gps',
+              prioridad: 1,
+              visible: fase !== 'jornada' && Boolean(gps.errorGps),
+              contenido: (
+                <AvisoEnSlot
+                  icono="warning-outline"
+                  tono="warning"
+                  mensaje={`Sin señal GPS · ${gps.errorGps ?? ''}`}
+                />
+              ),
+            },
+            {
+              id: 'sesion-no-revalidada',
+              prioridad: 1,
+              visible: props.sesionNoRevalidada,
+              contenido: (
+                <AvisoEnSlot
+                  icono="alert-circle-outline"
+                  mensaje="No se pudo revalidar tu sesión. El recorrido se sigue grabando, pero no va a sincronizar hasta que vuelvas a iniciar sesión."
+                  accion="Vuelve a iniciar sesión para sincronizar"
+                  onAccion={confirmarCierreSesion}
+                />
+              ),
+            },
+            {
+              id: 'aviso-general',
+              prioridad: 1,
+              visible: Boolean(props.aviso),
+              contenido: (
+                <AvisoEnSlot icono="information-circle-outline" mensaje={props.aviso ?? ''} />
+              ),
+            },
+            {
+              id: 'designacion',
+              prioridad: 2,
+              visible:
+                vueltaActual.designacionPendiente !== null || vueltaActual.cancelacionPendiente,
+              contenido: (
+                <AvisoDesignacion
+                  designada={vueltaActual.designacionPendiente !== null}
+                  esperaMin={vueltaActual.designacionPendiente?.puntoEspera.esperaMin ?? null}
+                  cancelada={vueltaActual.cancelacionPendiente}
+                  sinActualizar={vueltaActual.sinActualizar}
+                  onEntenderDesignacion={vueltaActual.entenderDesignacion}
+                  onEntenderCancelacion={vueltaActual.entenderCancelacion}
+                />
+              ),
+            },
+            {
+              id: 'vuelta-completada',
+              prioridad: 3,
+              visible: progreso.avisoVuelta !== null,
+              contenido: (
+                <VueltaCompletadaBanner
+                  resumen={progreso.avisoVuelta}
+                  onTerminar={progreso.descartarAvisoVuelta}
+                />
+              ),
+            },
+            {
+              id: 'sin-conexion',
+              prioridad: 4,
+              visible: !settings.trabajarOffline && isOffline,
+              contenido: (
+                <AvisoEnSlot
+                  icono="cloud-offline-outline"
+                  mensaje="Modo offline desactivado en tus Ajustes. Conéctate a internet para iniciar."
+                />
+              ),
+            },
+            {
+              id: 'foto-vehiculo',
+              prioridad: 5,
+              visible: !gps.tracking,
+              contenido: !gps.tracking ? (
+                <AvisoFotoVehiculo
+                  sesionId={props.contexto.sesionId}
+                  tracking={gps.tracking}
+                  obtenerAccessToken={props.obtenerAccessToken}
+                />
+              ) : null,
+            },
+            {
               id: 'senal-gps',
               prioridad: 1,
               visible: gps.tracking && gps.senalGpsDebil,
@@ -556,26 +662,6 @@ export function OperationScreen(
             },
           ]}
         />
-
-        {props.aviso ? (
-          <AvisoBurbuja icono="information-circle-outline" mensaje={props.aviso} />
-        ) : null}
-        {props.sesionNoRevalidada ? (
-          <AvisoBurbuja
-            icono="alert-circle-outline"
-            mensaje="No se pudo revalidar tu sesión. El recorrido se sigue grabando, pero no va a sincronizar hasta que vuelvas a iniciar sesión."
-            accion="Vuelve a iniciar sesión para sincronizar"
-            onAccion={confirmarCierreSesion}
-          />
-        ) : null}
-        {props.sesionNoVigente ? (
-          <AvisoBurbuja
-            icono="alert-circle-outline"
-            mensaje="Tu sesión venció. Toca Finalizar y vuelve a iniciar sesión."
-            accion="Finalizar recorrido"
-            onAccion={confirmarFinalizacion}
-          />
-        ) : null}
         {/* Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`): acá vivían el banner
             de `errorSync` ("no se pudo sincronizar") y el de `pendientes >= 800`
             ("almacenamiento casi lleno") — los dos eran TRANSPORTE puro: el primero es un
@@ -586,21 +672,6 @@ export function OperationScreen(
             `docs/estados-red-vs-captura.md`. La detección REAL de disco lleno (escritura
             canaria / `SQLITE_FULL`) queda para la Entrega 26 (preflight), que si corresponde
             sí debe mostrarse porque ESA es una falla de captura. */}
-        {paqueteDia.vencido ? (
-          <AvisoBurbuja
-            icono="alert-circle-outline"
-            mensaje="Asignación vencida. Reconecta antes de iniciar otro recorrido."
-          />
-        ) : null}
-        {paqueteDia.error ? (
-          <AvisoBurbuja icono="alert-circle-outline" mensaje={paqueteDia.error} />
-        ) : null}
-        {!settings.trabajarOffline && isOffline ? (
-          <AvisoBurbuja
-            icono="cloud-offline-outline"
-            mensaje="Modo offline desactivado en tus Ajustes. Conéctate a internet para iniciar."
-          />
-        ) : null}
       </View>
 
       <Animated.View
@@ -656,28 +727,6 @@ export function OperationScreen(
         </Burbuja>
       </Animated.View>
 
-      {gps.tracking ? (
-        <Animated.View
-          style={[
-            styles.velocidadContenedor,
-            { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] },
-          ]}
-        >
-          <View
-            style={styles.velocidadPildora}
-            accessible
-            accessibilityLabel={`${Math.round(gps.posicionActual?.speedKmh ?? 0)} kilómetros por hora`}
-          >
-            <DsText style={styles.velocidadNumero}>
-              {Math.round(gps.posicionActual?.speedKmh ?? 0)}
-            </DsText>
-            <DsText size="sm" variant="secondary">
-              km/h
-            </DsText>
-          </View>
-        </Animated.View>
-      ) : null}
-
       <NextControlSheet
         contexto={props.contexto}
         nextPointOrder={ordenProximoEfectivo}
@@ -717,7 +766,8 @@ export function OperationScreen(
         panY={sheetPanY}
         onAlto={setAltoSheet}
         onAltoVisible={setAltoSheetVisible}
-        gpsError={gps.errorGps}
+        // El contrato de la hoja conserva `gpsError`; su aviso se presenta arriba en el slot.
+        gpsError={null}
       />
 
       {/* Reportar incidencia: opciones fijas, sin texto libre */}
@@ -732,7 +782,7 @@ export function OperationScreen(
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Heading size="lg" style={styles.modalTitle}>
+              <Heading size="md" style={styles.modalTitle}>
                 Reportar incidencia
               </Heading>
             </View>
@@ -814,29 +864,28 @@ export function OperationScreen(
         top={quivoBubble.edge + altoBarra + quivoBubble.gap}
         numeroDePuntoControl={numeroDePuntoControl}
       />
-      <ContadorEsperaMolinos
-        pastilla={vueltaActual.pastillaEspera}
-        bottom={altoSheetVisible + dsSpace.md}
-      />
-      <AvisoDesignacion
-        designada={vueltaActual.designacionPendiente !== null}
-        esperaMin={vueltaActual.designacionPendiente?.puntoEspera.esperaMin ?? null}
-        cancelada={vueltaActual.cancelacionPendiente}
-        sinActualizar={vueltaActual.sinActualizar}
-        // Si el banner de vuelta completada está visible, la tarjeta se apila debajo (el banner es
-        // pasivo y la tarjeta tiene el botón: no se pueden superponer).
-        top={
-          insetSuperior + dsSpace.sm + (altoBannerVuelta > 0 ? altoBannerVuelta + dsSpace.sm : 0)
-        }
-        onEntenderDesignacion={vueltaActual.entenderDesignacion}
-        onEntenderCancelacion={vueltaActual.entenderCancelacion}
-      />
-      <VueltaCompletadaBanner
-        resumen={progreso.avisoVuelta}
-        top={insetSuperior + dsSpace.sm}
-        onTerminar={progreso.descartarAvisoVuelta}
-        onAlto={setAltoBannerVuelta}
-      />
+      <Animated.View
+        style={[
+          styles.indicadoresInferiores,
+          { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] },
+        ]}
+      >
+        <ContadorEsperaMolinos pastilla={vueltaActual.pastillaEspera} />
+        {gps.tracking ? (
+          <View
+            style={styles.velocidadPildora}
+            accessible
+            accessibilityLabel={`${Math.round(gps.posicionActual?.speedKmh ?? 0)} kilómetros por hora`}
+          >
+            <DsText style={styles.velocidadNumero}>
+              {Math.round(gps.posicionActual?.speedKmh ?? 0)}
+            </DsText>
+            <DsText size="sm" variant="secondary">
+              km/h
+            </DsText>
+          </View>
+        ) : null}
+      </Animated.View>
 
       <QuivoConfirmDialog
         visible={confirmarFinVisible}
@@ -865,40 +914,6 @@ export function OperationScreen(
   );
 }
 
-function AvisoBurbuja({
-  icono,
-  mensaje,
-  accion,
-  onAccion,
-}: {
-  icono: React.ComponentProps<typeof Ionicons>['name'];
-  mensaje: ReactNode;
-  accion?: string;
-  onAccion?: () => void;
-}) {
-  return (
-    <Burbuja direction="column" style={styles.avisoBurbuja}>
-      <View style={styles.avisoFila}>
-        <Ionicons name={icono} size={20} color={dsColors.danger} />
-        <DsText size="sm" variant="error" accessibilityRole="alert" style={styles.avisoTexto}>
-          {mensaje}
-        </DsText>
-      </View>
-      {accion && onAccion ? (
-        <DsButton
-          variant="danger"
-          size="md"
-          onPress={onAccion}
-          style={styles.avisoAccion}
-          fullWidth
-        >
-          {accion}
-        </DsButton>
-      ) : null}
-    </Burbuja>
-  );
-}
-
 /** Chip calmo bajo el pill de distancia/velocidad: el 408 de ubicación es transitorio y no tiene
  * acción para el conductor, así que se informa sin alarma (paleta warning, sin animación más
  * allá de un fade-in) en vez de un error. Se monta solo mientras hay tracking + señal débil. */
@@ -913,12 +928,14 @@ function SenalGpsDebilChip() {
   }, [opacidad]);
   return (
     <Animated.View
-      style={[styles.senalDebilChip, { opacity: opacidad }]}
+      style={[styles.senalDebilAviso, { opacity: opacidad }]}
       accessible
       accessibilityLiveRegion="polite"
       accessibilityLabel="Señal GPS débil: los puntos pueden registrarse con retraso"
     >
-      <Ionicons name="cellular-outline" size={14} color={dsColors.warningText} />
+      <View style={styles.senalDebilIcono}>
+        <Ionicons name="cellular-outline" size={20} color={dsColors.warningText} />
+      </View>
       <Text style={styles.senalDebilTexto}>Señal GPS débil</Text>
     </Animated.View>
   );
@@ -1009,21 +1026,27 @@ const styles = StyleSheet.create({
   },
   // Solo la cabecera gana 4 dp por lado; el slot conserva el margen habitual de 12 dp.
   cabeceraAncha: { marginHorizontal: -dsSpace.xs },
-  avisoBurbuja: { alignItems: 'stretch', alignSelf: 'stretch' },
-  avisoFila: { flexDirection: 'row', alignItems: 'flex-start', gap: dsSpace.sm },
-  avisoTexto: { flex: 1 },
-  avisoAccion: { borderRadius: quivoBubble.innerRadius },
-  senalDebilChip: {
-    alignSelf: 'flex-start',
+  senalDebilAviso: {
+    alignSelf: 'stretch',
     flexDirection: 'row',
     alignItems: 'center',
     gap: dsSpace.sm,
     minHeight: quivoBubble.touch,
-    paddingHorizontal: dsSpace.md,
-    borderRadius: quivoBubble.innerRadius,
+    width: '100%',
+    padding: quivoBubble.padding,
+    borderRadius: quivoBubble.radius,
     backgroundColor: dsColors.warningSoft,
     borderWidth: 1,
     borderColor: dsColors.warning,
+    ...dsElevation(3),
+  },
+  senalDebilIcono: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.warningSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   senalDebilTexto: {
     color: dsColors.warningText,
@@ -1035,9 +1058,12 @@ const styles = StyleSheet.create({
     right: quivoBubble.edge,
   },
   accionesColumna: { alignItems: 'center' },
-  velocidadContenedor: {
+  indicadoresInferiores: {
     position: 'absolute',
     left: quivoBubble.edge,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: quivoBubble.gap,
   },
   velocidadPildora: {
     minHeight: quivoBubble.touch,
@@ -1094,14 +1120,14 @@ const styles = StyleSheet.create({
   modalContent: {
     backgroundColor: dsColors.surfaceRaised,
     borderRadius: quivoBubble.radius,
-    padding: quivoBubble.padding,
+    padding: dsSpace.md,
     gap: quivoBubble.gap,
     width: '100%',
     maxWidth: 400,
     ...dsElevation(3),
   },
-  modalHeader: { alignItems: 'center', padding: dsSpace.sm },
-  modalTitle: { color: dsColors.textPrimary, textAlign: 'center' },
+  modalHeader: { alignItems: 'flex-start' },
+  modalTitle: { color: dsColors.textPrimary },
   modalText: { color: dsColors.textSecondary, textAlign: 'center', paddingHorizontal: dsSpace.sm },
   motivos: {
     flexDirection: 'row',

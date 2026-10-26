@@ -25,7 +25,7 @@ export function SlotAvisos({ avisos }: { avisos: readonly AvisoDelSlot[] }) {
   return (
     <>
       {avisos.map((aviso) => (
-        <View key={aviso.id} style={aviso.id === primero.id ? undefined : styles.oculto}>
+        <View key={aviso.id} style={aviso.id === primero.id ? styles.visible : styles.oculto}>
           {aviso.contenido}
         </View>
       ))}
@@ -40,19 +40,25 @@ export function AvisoEnSlot({
   accion,
   onAccion,
   onCerrar,
+  tono = 'neutral',
 }: {
   icono: React.ComponentProps<typeof Ionicons>['name'];
   mensaje: string;
   accion?: string;
   onAccion?: () => void;
   onCerrar?: () => void;
+  tono?: 'neutral' | 'warning';
 }) {
   return (
     <Burbuja style={styles.fila}>
-      <View style={styles.icono}>
-        <Ionicons name={icono} size={20} color={dsColors.primaryText} />
+      <View style={[styles.icono, tono === 'warning' && styles.iconoWarning]}>
+        <Ionicons
+          name={icono}
+          size={20}
+          color={tono === 'warning' ? dsColors.warningText : dsColors.primaryText}
+        />
       </View>
-      <Text size="sm" accessibilityRole="alert" numberOfLines={1} style={styles.mensaje}>
+      <Text size="sm" accessibilityRole="alert" numberOfLines={2} style={styles.mensaje}>
         {mensaje}
       </Text>
       {accion && onAccion ? (
@@ -75,6 +81,7 @@ export function AvisoEnSlot({
 }
 
 const styles = StyleSheet.create({
+  visible: { width: '100%' },
   oculto: { display: 'none' },
   fila: { width: '100%', alignItems: 'center' },
   icono: {
@@ -85,7 +92,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  mensaje: { flex: 1, color: dsColors.textPrimary },
+  iconoWarning: { backgroundColor: dsColors.warningSoft },
+  mensaje: { flex: 1, minWidth: 0, color: dsColors.textPrimary },
   accion: { minHeight: quivoBubble.touch, borderRadius: quivoBubble.innerRadius },
   cerrar: {
     width: quivoBubble.touch,

@@ -29,7 +29,8 @@ export function DriverRouteCard({
 }: DriverRouteCardProps) {
   const estado = !tracking ? 'EN ESPERA' : pausadoDesde ? 'EN PAUSA' : 'EN RUTA';
   const salida = !tracking ? formatHoraBolivia(contexto.asignacion.horaSalida) : null;
-  const colorLinea = contexto.linea.color || brand.primary;
+  const enPausa = tracking && Boolean(pausadoDesde);
+  const colorLinea = enPausa ? dsColors.warning : contexto.linea.color || brand.primary;
 
   if (tracking && vecinos !== undefined && vecinos !== null) {
     return (
@@ -41,10 +42,22 @@ export function DriverRouteCard({
             onPress={onAbrirPerfil}
             style={[styles.columnaLinea, { backgroundColor: colorLinea }]}
           >
-            <Heading size="2xl" style={[styles.codigoEnRuta, fontStyle('display', '700')]}>
+            <Heading
+              size="2xl"
+              style={[
+                styles.codigoEnRuta,
+                enPausa && styles.codigoEnPausa,
+                fontStyle('display', '700'),
+              ]}
+            >
               {contexto.linea.codigo}
             </Heading>
-            <Text size="xs" weight="semibold" numberOfLines={2} style={styles.estadoEnRuta}>
+            <Text
+              size="xs"
+              weight="semibold"
+              numberOfLines={2}
+              style={[styles.estadoEnRuta, enPausa && styles.estadoEnPausa]}
+            >
               {estado}
             </Text>
           </Pressable>
@@ -102,7 +115,9 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
     textAlign: 'center',
   },
+  codigoEnPausa: { color: dsColors.warningText },
   estadoEnRuta: { width: '100%', color: dsColors.textInverse, textAlign: 'center' },
+  estadoEnPausa: { color: dsColors.warningText },
   vecinos: { flex: 1, minWidth: 0, gap: quivoBubble.gap },
   tarjetaReposo: {
     width: '100%',

@@ -4,29 +4,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { Button, Text } from '@quivo/design-system-native';
 import { Burbuja } from '../../shared/components/burbuja';
 import { dsColors, dsDuration, dsEasing } from '../../shared/theme/design-system';
-import { quivoBubble } from '../../shared/theme/quivo-theme';
 
 const DURACION_AVISO_MS = 4000;
 
 interface VueltaCompletadaBannerProps {
   /** Resumen de la vuelta que acaba de cerrarse; `null` = nada que mostrar. */
   resumen: { numero: number; pasados: number; total: number } | null;
-  /** Posición (dp) desde el borde superior de la pantalla, bajo la tarjeta superior. */
-  top: number;
   onTerminar: () => void;
-  /** Alto medido (dp) mientras el banner está visible; 0 cuando no hay nada. Permite apilar otros
-   * avisos debajo en vez de taparlo. */
-  onAlto?: (alto: number) => void;
 }
 
 /** Aviso breve "Vuelta N completada · X/Y puntos", una vez por cierre de vuelta (RF-GPS-054).
  * Se apaga solo; la acción permite cerrarlo antes. */
-export function VueltaCompletadaBanner({
-  resumen,
-  top,
-  onTerminar,
-  onAlto,
-}: VueltaCompletadaBannerProps) {
+export function VueltaCompletadaBanner({ resumen, onTerminar }: VueltaCompletadaBannerProps) {
   const opacidad = useRef(new Animated.Value(0)).current;
   const onTerminarRef = useRef(onTerminar);
   onTerminarRef.current = onTerminar;
@@ -55,17 +44,10 @@ export function VueltaCompletadaBanner({
     return () => animacion.stop();
   }, [resumen, opacidad]);
 
-  const onAltoRef = useRef(onAlto);
-  onAltoRef.current = onAlto;
-  useEffect(() => {
-    if (!resumen) onAltoRef.current?.(0);
-  }, [resumen]);
-
   if (!resumen) return null;
   return (
     <Animated.View
-      style={[styles.contenedor, { top, opacity: opacidad }]}
-      onLayout={(e) => onAlto?.(e.nativeEvent.layout.height)}
+      style={[styles.contenedor, { opacity: opacidad }]}
       accessibilityRole="alert"
       accessibilityLiveRegion="polite"
     >
@@ -75,7 +57,7 @@ export function VueltaCompletadaBanner({
           Vuelta {resumen.numero} completada · {resumen.pasados}/{resumen.total} puntos
         </Text>
         <Button variant="outline" onPress={onTerminar}>
-          Terminar
+          Listo
         </Button>
       </Burbuja>
     </Animated.View>
@@ -83,13 +65,7 @@ export function VueltaCompletadaBanner({
 }
 
 const styles = StyleSheet.create({
-  contenedor: {
-    position: 'absolute',
-    left: quivoBubble.edge,
-    right: quivoBubble.edge,
-    alignItems: 'center',
-    zIndex: 1500,
-  },
+  contenedor: { width: '100%' },
   burbuja: { width: '100%', flexWrap: 'wrap' },
   texto: { color: dsColors.textPrimary, flex: 1, minWidth: 120 },
 });

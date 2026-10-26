@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, View, type PanResponderInstance } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Badge, Button, Heading, Text } from '@quivo/design-system-native';
-import { Burbuja } from '../../shared/components/burbuja';
 import { dsColors, dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
@@ -14,7 +13,13 @@ import type { FilaSalidaUi } from './use-fila-salida';
  * Sin fila: solo el botón de respaldo "Estoy en la fila" cuando la detección no lo hizo y el trufi
  * está cerca de la terminal. FINALIZAR RUTA no depende de esto.
  */
-export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
+export function FilaSalidaCard({
+  fila,
+  panHandlers,
+}: {
+  fila: FilaSalidaUi;
+  panHandlers?: PanResponderInstance['panHandlers'];
+}) {
   const { vista, ocupado, error, puedeEstoyEnLaFila, salir, estoyEnLaFila } = fila;
   const [confirmarAnticipada, setConfirmarAnticipada] = useState(false);
   // La confirmación solo tiene sentido con fila y antes del turno: si desaparece o llega el turno, se cierra.
@@ -28,6 +33,11 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
     if (!puedeEstoyEnLaFila) return null;
     return (
       <View style={styles.contenedor}>
+        <View {...panHandlers}>
+          <Text size="md" variant="secondary">
+            ¿Ya estás en la fila de salida?
+          </Text>
+        </View>
         <Button
           variant="outline"
           loading={ocupado}
@@ -49,40 +59,50 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
 
   return (
     <View style={styles.contenedor}>
-      <Burbuja direction="column" style={styles.tarjeta}>
-        <View style={styles.fila}>
-          <Ionicons name="flag-outline" size={18} color={dsColors.primary} />
-          <Text size="sm" style={styles.etiqueta}>
-            Fila de salida · {vista.posicion} de {vista.total}
-          </Text>
-          <Badge
-            variant={vista.demorado ? 'warning' : vista.habilitado ? 'success' : 'neutral'}
-            size="sm"
+      <View style={styles.tarjeta}>
+        <View style={styles.informacion} {...panHandlers}>
+          <View style={styles.fila}>
+            <Ionicons name="flag-outline" size={18} color={dsColors.primary} />
+            <Text size="sm" style={styles.etiqueta}>
+              Fila de salida · {vista.posicion} de {vista.total}
+            </Text>
+            <Badge
+              variant={vista.demorado ? 'warning' : vista.habilitado ? 'success' : 'neutral'}
+              size="sm"
+            >
+              {vista.demorado ? 'Demorado' : vista.turnoTexto}
+            </Badge>
+          </View>
+          {/* Lo que el chofer necesita de un vistazo en la terminal: a quién sigue. */}
+          <Heading
+            size="lg"
+            accessibilityLiveRegion="polite"
+            accessibilityLabel={`${tituloFila(vista)}. ${vista.anuncioAccesible}`}
           >
-            {vista.demorado ? 'Demorado' : vista.turnoTexto}
-          </Badge>
+            {tituloFila(vista)}
+          </Heading>
+          <ColaSalida posicion={vista.posicion} total={vista.total} />
+          {/* La hora de salida y, si el dato es viejo, el aviso, en la misma línea. */}
+          {vista.horaSalidaTexto || vista.sinActualizar ? (
+            <View style={styles.sinActualizar}>
+              {vista.horaSalidaTexto ? (
+                <Text size="md" variant="secondary">
+                  {vista.horaSalidaTexto}
+                </Text>
+              ) : null}
+              {vista.sinActualizar ? (
+                <>
+                  <View style={styles.puntoDesactualizado} />
+                  <Text size="sm" variant="secondary">
+                    sin actualizar
+                  </Text>
+                </>
+              ) : null}
+            </View>
+          ) : null}
         </View>
-        {/* Lo que el chofer necesita de un vistazo en la terminal: a quién sigue. */}
-        <Heading
-          size="lg"
-          accessibilityLiveRegion="polite"
-          accessibilityLabel={`${tituloFila(vista)}. ${vista.horaSalidaTexto ?? ''}. ${vista.anuncioAccesible}`}
-        >
-          {tituloFila(vista)}
-        </Heading>
-        <ColaSalida posicion={vista.posicion} total={vista.total} />
-        {vista.horaSalidaTexto ? (
-          <Text size="md" variant="secondary">
-            {vista.horaSalidaTexto}
-            {vista.sinActualizar ? ' · sin actualizar' : ''}
-          </Text>
-        ) : vista.sinActualizar ? (
-          <Text size="sm" variant="secondary">
-            Sin actualizar
-          </Text>
-        ) : null}
         <Button
-          variant="primary"
+          variant={vista.habilitado ? 'primary' : 'outline'}
           loading={ocupado}
           disabled={ocupado}
           onPress={vista.habilitado ? salir : () => setConfirmarAnticipada(true)}
@@ -101,7 +121,7 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
             {error}
           </Text>
         ) : null}
-      </Burbuja>
+      </View>
       <QuivoConfirmDialog
         visible={confirmarAnticipada}
         variant="danger"
@@ -121,7 +141,12 @@ export function FilaSalidaCard({ fila }: { fila: FilaSalidaUi }) {
 }
 
 /** "Sales detrás de 1234ABC"; el primero ya no sigue a nadie. */
-function tituloFila(vista: { posicion: number; delantePlaca: string | null }): string {
+function tituloFila(vista: {
+  posicion: number;
+  delantePlaca: string | null;
+  demorado: boolean;
+}): string {
+  if (vista.demorado) return 'Sal ahora';
   if (vista.posicion === 1) return 'Eres el primero en salir';
   return vista.delantePlaca
     ? `Sales detrás de ${vista.delantePlaca}`
@@ -181,23 +206,30 @@ function ColaSalida({ posicion, total }: { posicion: number; total: number }) {
 }
 
 const styles = StyleSheet.create({
-  contenedor: { marginBottom: dsSpace.sm },
-  tarjeta: { alignItems: 'stretch' },
+  contenedor: { gap: dsSpace.sm },
+  tarjeta: {
+    alignItems: 'stretch',
+    gap: dsSpace.sm,
+    padding: quivoBubble.padding,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.surfaceSoft,
+  },
+  informacion: { gap: dsSpace.sm },
   fila: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm, flexWrap: 'wrap' },
   etiqueta: { color: dsColors.textSecondary, flex: 1 },
   cola: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.xs, flexWrap: 'wrap' },
   colaPunto: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    borderWidth: 1.5,
+    width: dsSpace.sm,
+    height: dsSpace.sm,
+    borderRadius: dsSpace.sm,
+    borderWidth: 1,
     borderColor: dsColors.borderSubtle,
   },
   colaAdelante: { backgroundColor: dsColors.borderSubtle },
   colaYo: {
-    width: 32,
-    height: 24,
-    borderRadius: 12,
+    width: dsSpace.xl,
+    height: dsSpace.lg,
+    borderRadius: dsSpace.ms,
     borderWidth: 0,
     backgroundColor: dsColors.primary,
     alignItems: 'center',
@@ -205,6 +237,13 @@ const styles = StyleSheet.create({
   },
   colaYoTexto: { color: dsColors.textInverse },
   colaMas: { color: dsColors.textTertiary },
+  sinActualizar: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.xs },
+  puntoDesactualizado: {
+    width: dsSpace.xs,
+    height: dsSpace.xs,
+    borderRadius: dsSpace.xs,
+    backgroundColor: dsColors.warning,
+  },
   accion: { minHeight: 48, borderRadius: quivoBubble.innerRadius },
   error: { color: dsColors.danger, marginTop: dsSpace.sm },
 });
