@@ -54,9 +54,73 @@ teléfono el entorno de cada fase; tú no necesitas provocarlas.
   - codex1 conecta `onAbrirPerfil` y quita el `Pressable` que hoy envuelve la tarjeta.
   - La altura de la barra es fija (60) y la usan los dos.
 
-## Fase 2b — En ruta (`recorrido`) — spec aparte, después de revisar la 2a
-Navegación, siguiente parada, velocidad integrada a una zona, vecinos con semáforo dentro de la barra o
-de la hoja, y aviso de punto registrado.
+## Fase 2b — En ruta (`recorrido`)
+
+### Lo que se vio en el teléfono
+- **Vecinos**: una burbuja aparte bajo la barra, de 80 % del ancho y con dos filas. Aun cuando no hay
+  nadie ("Nadie delante / Nadie detrás"), se come unos 90 dp del mapa.
+- **Velocidad**: una píldora suelta a la izquierda, sobre la hoja. Es una cuarta zona y rompe la regla 3.
+- **Hoja**: "Pausar ruta" (outline) y "Finalizar ruta" (rojo lleno) en dos filas de 52. El rojo lleno grita
+  más que todo lo demás, aunque es una acción que se usa una vez por vuelta.
+- **Siguiente parada**: no dice a qué distancia está. Los puntos de progreso empiezan 7 dp más a la
+  izquierda que el texto.
+- **Aviso de punto registrado**: va a `insets.top + edge + 64`, fuera del slot de avisos.
+
+### Barra superior en ruta (`driver-route-card.tsx`)
+```
+[120]  EN RUTA                                   42 km/h
+       ↑ 1234ABC · 420 m        ↓ 5678DEF · 1,2 km
+```
+- **Fila 1**: línea, estado y, a la derecha, la **velocidad** en vez de la foto (en ruta no se toma foto).
+  La velocidad va en Oxanium 700 de 22 con `tabular-nums` y `km/h` en Text sm `secondary`.
+- **Fila 2** (opcional, solo si hay al menos un vecino con dato): los vecinos en una sola línea.
+  - Cada lado es una pastilla con flecha, placa (Oxanium) y distancia.
+  - **Delante** usa el semáforo del #274: borde y distancia en `success`, `warning` o `danger` según
+    `estadoDistanciaVecino`. Detrás queda neutro.
+  - Si un lado es "nadie" o "sin dato", esa pastilla no se muestra. Si ninguno tiene dato, la fila 2 desaparece y la barra vuelve a 60.
+  - En `alerta` (≤ 300 m), la pastilla de Delante pasa a fondo `danger` suave y la barra no crece.
+  - Tocar la fila 2 despliega el detalle actual (placa grande, interno, hace cuánto), como una hoja de la barra.
+    Al tocar de nuevo o a los 6 s, se repliega.
+- Altura: 60 sin vecinos y 60 + 36 + `gap` con vecinos. El cambio se anima (regla 7).
+
+### Vecinos (`features/vecinos-ruta/`)
+- `VecinosRutaPanel` deja de ser un overlay absoluto: recibe `enLinea` y, con él, renderiza la fila
+  compacta para meterla en la barra. Sin `enLinea` se comporta como hoy, por compatibilidad.
+- La lógica del hook, el semáforo y la **alerta por voz** del #274 no cambian. Ojo: la voz se dispara en
+  un efecto del panel, así que el panel tiene que seguir **montado** en ruta aunque no muestre nada.
+
+### Hoja en ruta (`next-control-sheet.tsx`)
+- **Fila de parada**: `Siguiente parada` (Text sm `secondary`). Debajo, `Punto de control N` (Heading lg,
+  una línea) y, a la derecha y en la misma línea, la distancia (`a 350 m`, Oxanium 700, `tabular-nums`).
+  Sin distancia, no se muestra nada.
+- Los puntos de progreso se alinean con el texto (misma sangría).
+- **Acciones**: una sola fila con dos botones de 52 a medias:
+  - `Pausar` en outline;
+  - `Finalizar` en outline **danger** (borde y texto rojos).
+  - Ninguno va lleno. Los diálogos de confirmación siguen como hoy.
+- Asa y padding como en la 2a.
+
+### Aviso de punto registrado (`control-feedback-toast.tsx`)
+- Va en la posición del slot de avisos: bajo la barra, a `gap`. Se calcula con la altura real de la barra,
+  que `operation-screen` ya mide (`onLayout`). Mientras se ve, tapa el slot; no se apila.
+- Cola, deduplicación, vibración y duración: sin cambios.
+
+### Reparto (en paralelo, sin pisarse)
+- **codex-trabajo2**: `driver-route-card.tsx` y todo `features/vecinos-ruta/` (excepto la lógica de
+  `estado-vecinos.ts` y `use-vecinos-ruta.ts`).
+- **codex-trabajo1**: `operation-screen.tsx`, `next-control-sheet.tsx` y `control-feedback-toast.tsx`.
+- **Contrato**:
+  - `DriverRouteCard` agrega `velocidadKmh?: number | null` y `filaVecinos?: ReactNode`.
+  - En ruta, codex1 le pasa la velocidad (la misma cuenta de hoy) y
+    `<VecinosRutaPanel enLinea … />` como `filaVecinos`, y quita la píldora suelta y el overlay de vecinos.
+  - `NextControlSheet` agrega `distanciaProximaParadaM?: number | null` (codex1 es dueño de los dos lados).
+
+### Criterio de aceptación (2b)
+- En ruta hay exactamente tres zonas: barra, riel y hoja. No queda ninguna burbuja suelta.
+- Sin vecinos, la barra mide 60. Con vecinos, una fila más. El mapa gana unos 90 dp frente a hoy.
+- La alerta por voz de vecinos sigue funcionando (el panel queda montado en ruta).
+- Ningún botón rojo lleno en ruta.
+- typecheck, lint y test en verde. Informe en `resultados/pantalla-02b-<tu-nombre>.md`.
 
 ## Fase 2c — Situaciones — spec aparte
 Fila en el punto maestro, pausa, vuelta completada, designación a Molinos y errores de GPS o conexión.
