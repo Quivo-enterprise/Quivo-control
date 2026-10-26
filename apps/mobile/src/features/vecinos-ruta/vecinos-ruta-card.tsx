@@ -1,7 +1,8 @@
-import { memo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { memo, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Heading, Text, fontStyle } from '@quivo/design-system-native';
+import type { VecinoRuta } from '@quivo/shared';
 import { Burbuja } from '../../shared/components/burbuja';
 import { dsColors, dsFontSize, dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
@@ -11,6 +12,7 @@ import {
   etiquetaAccesibleFila,
   estadoDistanciaVecino,
   etiquetaLado,
+  distanciaHablada,
   textoDistancia,
   textoEdad,
   textoVacio,
@@ -18,6 +20,7 @@ import {
   type EstadoFila,
   type Lado,
 } from './estado-vecinos';
+import { VecinoPerfilModal } from './vecino-perfil-modal';
 
 interface Props {
   delante: EstadoFila;
@@ -112,33 +115,78 @@ function FilaEnLinea({
   transcurridoMs,
   buscando,
   sinActualizar,
+  onAbrirPerfil,
 }: {
   lado: Lado;
   estado: EstadoFila;
   transcurridoMs: number;
   buscando: boolean;
   sinActualizar: boolean;
+  onAbrirPerfil: (vecino: VecinoRuta, lado: Lado) => void;
 }) {
   const vecino = estado.tipo === 'vecino' ? estado.vecino : null;
   const nivel = lado === 'delante' && vecino ? estadoDistanciaVecino(vecino.distanciaM) : null;
   const semaforo = nivel ? COLOR_SEMAFORO[nivel] : null;
-  const etiqueta = buscando
-    ? 'Buscando…'
-    : vecino
-      ? etiquetaLado(lado).toUpperCase()
-      : estado.tipo === 'nadie'
-        ? lado === 'delante'
-          ? 'Nadie delante'
-          : 'Nadie detrás'
-        : 'Sin datos';
+  const contenido = (
+    <>
+      <SiluetaVehiculo
+        tipo={vecino?.tipo ?? 'micro'}
+        color={vecino?.color ?? ''}
+        colorSecundario={vecino?.colorSecundario ?? null}
+        fantasma={!vecino}
+        ancho={56}
+        alto={32}
+      />
+      <Text size="lg" numberOfLines={1} style={[styles.placaEnLinea, fontStyle('display', '700')]}>
+        {vecino?.placa ?? '—'}
+      </Text>
+      {vecino ? (
+        <Text
+          size="sm"
+          numberOfLines={1}
+          style={[
+            styles.distanciaEnLinea,
+            fontStyle('body', '400'),
+            { fontVariant: ['tabular-nums'] },
+            semaforo && { color: nivel === 'normal' ? dsColors.success : semaforo.texto },
+          ]}
+        >
+          {textoDistancia(vecino.distanciaM)}
+        </Text>
+      ) : null}
+      <View style={styles.indicadorDerecha}>
+        <Ionicons
+          name={lado === 'delante' ? 'chevron-up' : 'chevron-down'}
+          size={20}
+          color={dsColors.textSecondary}
+        />
+      </View>
+      {sinActualizar ? <View style={styles.puntoDesactualizado} /> : null}
+    </>
+  );
+  const estiloFila = [
+    styles.filaEnLinea,
+    { borderColor: semaforo?.borde ?? dsColors.borderSubtle },
+    nivel && { borderWidth: 2 },
+    nivel === 'alerta' && styles.filaEnAlerta,
+  ];
+
+  if (vecino) {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Vehículo de ${lado === 'delante' ? 'adelante' : 'atrás'}, placa ${vecino.placa}, a ${distanciaHablada(vecino.distanciaM)}. Ver perfil`}
+        onPress={() => onAbrirPerfil(vecino, lado)}
+        style={({ pressed }) => [estiloFila, pressed && styles.filaPresionada]}
+      >
+        {contenido}
+      </Pressable>
+    );
+  }
+
   return (
     <View
-      style={[
-        styles.filaEnLinea,
-        { borderColor: semaforo?.borde ?? dsColors.borderSubtle },
-        nivel && { borderWidth: 2 },
-        nivel === 'alerta' && styles.filaEnAlerta,
-      ]}
+      style={estiloFila}
       accessible
       accessibilityLabel={
         buscando
@@ -146,51 +194,7 @@ function FilaEnLinea({
           : etiquetaAccesibleFila(lado, estado, transcurridoMs)
       }
     >
-      <SiluetaVehiculo
-        tipo={vecino?.tipo ?? 'micro'}
-        color={vecino?.color ?? ''}
-        colorSecundario={vecino?.colorSecundario ?? null}
-        fantasma={!vecino}
-        ancho={quivoBubble.touch - dsSpace.xs}
-        alto={dsSpace.sm * 3}
-      />
-      <View style={styles.datosEnLinea}>
-        <View style={styles.etiquetaEnLinea}>
-          <Text size="xs" variant="secondary" numberOfLines={1}>
-            {etiqueta}
-          </Text>
-          {vecino?.numeroInterno ? (
-            <Text size="sm" variant="secondary" numberOfLines={1}>
-              · {vecino.numeroInterno}
-            </Text>
-          ) : null}
-          {vecino && sinActualizar ? (
-            <Text size="xs" variant="secondary" numberOfLines={1}>
-              {textoEdad(vecino.edadFixS, transcurridoMs)}
-            </Text>
-          ) : null}
-        </View>
-        {vecino ? (
-          <Text numberOfLines={1} style={[styles.placaEnLinea, fontStyle('display', '700')]}>
-            {vecino.placa}
-          </Text>
-        ) : null}
-      </View>
-      {vecino ? (
-        <Text
-          numberOfLines={1}
-          style={[
-            styles.distanciaEnLinea,
-            fontStyle('display', '700'),
-            semaforo && {
-              color: nivel === 'normal' ? dsColors.success : semaforo.texto,
-            },
-          ]}
-        >
-          {textoDistancia(vecino.distanciaM)}
-        </Text>
-      ) : null}
-      {vecino && sinActualizar ? <View style={styles.puntoDesactualizado} /> : null}
+      {contenido}
     </View>
   );
 }
@@ -209,23 +213,48 @@ export const VecinosRutaFilas = memo(function VecinosRutaFilas({
   buscando?: boolean;
   sinActualizar?: boolean;
 }) {
+  const [perfilAbierto, setPerfilAbierto] = useState<{ vecino: VecinoRuta; lado: Lado } | null>(
+    null,
+  );
+  const vecinoVisibleAhora = perfilAbierto
+    ? perfilAbierto.lado === 'delante'
+      ? delante
+      : detras
+    : null;
+  const vecinoPerfil =
+    perfilAbierto &&
+    vecinoVisibleAhora?.tipo === 'vecino' &&
+    vecinoVisibleAhora.vecino.placa === perfilAbierto.vecino.placa
+      ? { ...perfilAbierto.vecino, distanciaM: vecinoVisibleAhora.vecino.distanciaM }
+      : (perfilAbierto?.vecino ?? null);
+
   return (
-    <View style={styles.filasEnLinea}>
-      <FilaEnLinea
-        lado="delante"
-        estado={delante}
-        transcurridoMs={transcurridoMs}
-        buscando={buscando}
-        sinActualizar={sinActualizar}
+    <>
+      <View style={styles.filasEnLinea}>
+        <FilaEnLinea
+          lado="delante"
+          estado={delante}
+          transcurridoMs={transcurridoMs}
+          buscando={buscando}
+          sinActualizar={sinActualizar}
+          onAbrirPerfil={(vecino, lado) => setPerfilAbierto({ vecino: { ...vecino }, lado })}
+        />
+        <FilaEnLinea
+          lado="detras"
+          estado={detras}
+          transcurridoMs={transcurridoMs}
+          buscando={buscando}
+          sinActualizar={sinActualizar}
+          onAbrirPerfil={(vecino, lado) => setPerfilAbierto({ vecino: { ...vecino }, lado })}
+        />
+      </View>
+      <VecinoPerfilModal
+        visible={perfilAbierto !== null}
+        vecino={vecinoPerfil}
+        lado={perfilAbierto?.lado ?? null}
+        onClose={() => setPerfilAbierto(null)}
       />
-      <FilaEnLinea
-        lado="detras"
-        estado={detras}
-        transcurridoMs={transcurridoMs}
-        buscando={buscando}
-        sinActualizar={sinActualizar}
-      />
-    </View>
+    </>
   );
 });
 
@@ -279,25 +308,23 @@ const styles = StyleSheet.create({
     borderRadius: quivoBubble.innerRadius,
     backgroundColor: dsColors.surfaceSoft,
   },
-  datosEnLinea: {
+  filaPresionada: { backgroundColor: dsColors.primarySubtle },
+  placaEnLinea: {
     flex: 1,
     minWidth: 0,
-    gap: dsSpace.xs,
-  },
-  etiquetaEnLinea: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: dsSpace.xs,
-    minWidth: 0,
-  },
-  placaEnLinea: {
     color: dsColors.textPrimary,
-    fontSize: dsFontSize.lg,
+    fontSize: 20,
   },
   distanciaEnLinea: {
     color: dsColors.textPrimary,
-    fontSize: dsFontSize.xl,
+    fontSize: dsFontSize.sm,
     fontVariant: ['tabular-nums'],
+  },
+  indicadorDerecha: {
+    width: dsSpace.xl,
+    height: dsSpace.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   filaEnAlerta: { backgroundColor: dsColors.dangerSoft },
   puntoDesactualizado: {
