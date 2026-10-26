@@ -66,7 +66,7 @@ export function AssignmentSelectionScreen({
 
   return (
     <View style={styles.screen}>
-      <FondoLogin variante="a" />
+      <FondoLogin variante="c" />
       <ScrollView
         contentContainerStyle={[
           styles.contenido,

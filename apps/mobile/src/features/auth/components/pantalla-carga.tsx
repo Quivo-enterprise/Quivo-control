@@ -18,7 +18,7 @@ export function PantallaCarga({ label, error = false }: PantallaCargaProps) {
 
   return (
     <View style={styles.container}>
-      <FondoLogin variante="a" />
+      <FondoLogin variante="c" />
       <SafeAreaView edges={['top', 'bottom']} style={styles.safeContent}>
         <StatusBar style="light" backgroundColor="transparent" />
         <View style={styles.content}>

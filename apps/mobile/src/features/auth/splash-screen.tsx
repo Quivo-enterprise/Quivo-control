@@ -86,7 +86,7 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
 
   return (
     <Animated.View style={styles.container} exiting={FadeOut.duration(200)}>
-      <FondoLogin variante="a" />
+      <FondoLogin variante="c" />
       <View style={[styles.content, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         <View style={styles.logoArea}>
           <VectorLogo checking={status === 'verificando'} reduceMotion={reduceMotion} />

@@ -187,7 +187,7 @@ export function VehicleLoginScreen({
         setAltoDisponible((anterior) => (anterior === alto ? anterior : alto));
       }}
     >
-      <FondoLogin variante="a" />
+      <FondoLogin variante="c" />
       {vista === 'cargando' ? null : vista === 'placa' ? (
         <KeyboardAvoidingView
           behavior={Platform.OS === 'android' ? 'height' : 'padding'}
