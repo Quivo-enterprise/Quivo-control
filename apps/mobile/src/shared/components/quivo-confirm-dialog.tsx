@@ -11,7 +11,8 @@ export interface QuivoConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: 'default' | 'danger';
-  icon?: keyof typeof Ionicons.glyphMap;
+  /** `null` oculta el icono; sin prop se conserva el icono predeterminado. */
+  icon?: keyof typeof Ionicons.glyphMap | null;
   onConfirm: () => void;
   onCancel?: () => void;
   confirmDisabled?: boolean;
@@ -36,11 +37,15 @@ export function QuivoConfirmDialog({
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={styles.header}>
-            <Ionicons
-              name={icon ?? (variant === 'danger' ? 'warning-outline' : 'checkmark-circle-outline')}
-              size={24}
-              color={variant === 'danger' ? c.danger : c.primary}
-            />
+            {icon !== null ? (
+              <Ionicons
+                name={
+                  icon ?? (variant === 'danger' ? 'warning-outline' : 'checkmark-circle-outline')
+                }
+                size={24}
+                color={variant === 'danger' ? c.danger : c.primary}
+              />
+            ) : null}
             <Heading
               size="lg"
               style={[styles.title, { color: variant === 'danger' ? c.danger : c.textPrimary }]}

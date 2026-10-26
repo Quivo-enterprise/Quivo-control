@@ -12,7 +12,7 @@ import type { ContextoOperativoMovil } from '@quivo/shared';
 import { Button, Heading, Text } from '@quivo/design-system-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HojaBurbuja, PildoraBurbuja } from '../../shared/components/burbuja';
-import { dsColors, dsSpace } from '../../shared/theme/design-system';
+import { dsColors, dsRadius, dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import type { FaseControl } from '../jornada/fase-control';
@@ -24,6 +24,12 @@ const NUMERO_EMERGENCIAS = '911';
 
 /** Separación (dp) entre el sheet y el borde inferior de la pantalla (`styles.sheet.bottom`). */
 export const MARGEN_INFERIOR_SHEET = quivoBubble.edge;
+
+/** En jornada la hoja se alinea con el mismo borde exterior en los tres lados visibles.
+ * La zona segura inferior no se suma: elevaría el botón respecto a los costados. */
+export function calcularMargenInferiorSheet(fase: FaseControl, insetInferior: number): number {
+  return fase === 'jornada' ? MARGEN_INFERIOR_SHEET : MARGEN_INFERIOR_SHEET + insetInferior;
+}
 
 /** Aire (dp) bajo la cabecera, DENTRO del contenedor táctil de la cabecera: la franja visible al
  * colapsar es la cabecera (asa + "Próximo Control" + distancia + "#N") más este respiro, y toda ella
@@ -90,15 +96,14 @@ export interface NextControlSheetProps {
 export function NextControlSheet(props: NextControlSheetProps) {
   const { panY, onAlto, onAltoVisible } = props;
   const insets = useSafeAreaInsets();
-  const margenInferior = MARGEN_INFERIOR_SHEET + insets.bottom;
   const [confirmarEmergencia, setConfirmarEmergencia] = useState(false);
   const [confirmarPausa, setConfirmarPausa] = useState(false);
   const { fase, onEmpezarDia, empezandoDia = false, puedeEmpezarDia = true } = props;
+  const margenInferior = calcularMargenInferiorSheet(fase, insets.bottom);
   const tracking = fase === 'recorrido';
   // Con `tracking` la fase 'recorrido' manda de inmediato; si no, mientras se lee la jornada
   // no se sabe aún si toca EMPEZAR DÍA o COMENZAR RUTA.
   const cargandoJornada = Boolean(props.jornadaCargando) && !tracking;
-  const cabeceraJornada = fase === 'jornada' && !cargandoJornada;
 
   // El sheet arranca EXPANDIDO y solo se colapsa cuando el conductor lo arrastra hacia abajo (no
   // hay colapso automático al iniciar la ruta: cortaba FINALIZAR RUTA a la mitad). Todo el estado
@@ -167,7 +172,9 @@ export function NextControlSheet(props: NextControlSheetProps) {
     if (alto === altoSheetRef.current) return;
     altoSheetRef.current = alto;
     onAlto?.(alto);
-    recalcularSnap();
+    // En jornada no hay cabecera para medir: la hoja muestra solo la acción principal.
+    if (fase === 'jornada') emitirAltoVisible(false);
+    else recalcularSnap();
   };
 
   // Cabecera = asa + título/distancia/"#N" + aire, medida desde el borde superior del sheet (incluye
@@ -241,18 +248,16 @@ export function NextControlSheet(props: NextControlSheetProps) {
       style={[styles.sheet, { bottom: margenInferior, transform: [{ translateY: panY }] }]}
     >
       <HojaBurbuja>
-        <View style={styles.cabecera} onLayout={onLayoutCabecera} {...panResponder.panHandlers}>
-          <View style={styles.dragArea}>
-            <View style={styles.dragHandle} />
-          </View>
-          {cabeceraJornada ? (
-            <Heading size="xl">Día sin iniciar</Heading>
-          ) : (
+        {fase !== 'jornada' ? (
+          <View style={styles.cabecera} onLayout={onLayoutCabecera} {...panResponder.panHandlers}>
+            <View style={styles.dragArea}>
+              <View style={styles.dragHandle} />
+            </View>
             <View style={styles.headerLeft}>
               <Text size="sm" style={styles.etiqueta}>
                 Siguiente parada
               </Text>
-              <Heading size="xl" numberOfLines={2}>
+              <Heading size="xl" numberOfLines={tracking ? 2 : 1}>
                 {props.nombreProximaParada || `Punto de control ${props.nextPointOrder ?? 1}`}
               </Heading>
               {props.viaMolinos ? (
@@ -266,9 +271,9 @@ export function NextControlSheet(props: NextControlSheetProps) {
                 </View>
               ) : null}
             </View>
-          )}
-        </View>
-        {!cabeceraJornada ? (
+          </View>
+        ) : null}
+        {fase !== 'jornada' ? (
           <View style={styles.stepperSection}>
             <MiniStepper
               estados={props.estadosPuntos}
@@ -280,7 +285,7 @@ export function NextControlSheet(props: NextControlSheetProps) {
             />
           </View>
         ) : null}
-        {props.gpsError ? (
+        {fase !== 'jornada' && props.gpsError ? (
           <Text size="sm" variant="error" accessibilityRole="alert">
             {props.gpsError}
           </Text>
@@ -301,6 +306,7 @@ export function NextControlSheet(props: NextControlSheetProps) {
                 onPress={() => void onEmpezarDia()}
                 accessibilityHint="Avisa a tu delegado que hoy trabajas"
                 fullWidth
+                style={styles.botonJornada}
               >
                 Empezar día
               </Button>
@@ -442,15 +448,15 @@ function MiniStepper({
 const styles = StyleSheet.create({
   sheet: { position: 'absolute', left: quivoBubble.edge, right: quivoBubble.edge },
   cabecera: { paddingBottom: AIRE_BAJO_CABECERA },
-  dragArea: { height: dsSpace.md, alignItems: 'center', justifyContent: 'center' },
+  dragArea: { height: quivoBubble.padding, alignItems: 'center', justifyContent: 'flex-start' },
   dragHandle: {
-    width: 40,
+    width: quivoBubble.touch - quivoBubble.padding,
     height: dsSpace.xs,
     borderRadius: dsSpace.xs,
     backgroundColor: dsColors.borderStrong,
   },
-  headerLeft: { gap: dsSpace.xs },
-  etiqueta: { color: dsColors.textTertiary },
+  headerLeft: { gap: dsSpace.xs, marginHorizontal: quivoBubble.padding },
+  etiqueta: { color: dsColors.textSecondary },
   viaMolinos: { alignSelf: 'flex-start' },
   stepperSection: { marginBottom: dsSpace.sm },
   stepperContainer: {
@@ -480,5 +486,11 @@ const styles = StyleSheet.create({
   },
   stepperDotInactive: { backgroundColor: dsColors.surfaceRaised },
   actionsRow: { gap: dsSpace.sm },
+  // La acción de marca conserva la píldora completa y usa solo la sombra exterior de la hoja.
+  botonJornada: {
+    borderRadius: dsRadius.full,
+    elevation: 0,
+    shadowOpacity: 0,
+  },
   cargandoJornada: { minHeight: 52, alignItems: 'center', justifyContent: 'center' },
 });

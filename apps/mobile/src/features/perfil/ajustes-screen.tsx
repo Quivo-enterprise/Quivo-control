@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View, Pressable, Platform, ToastAndroid } from 'react-native';
-import { Badge, Divider, Switch, Text, fontStyle } from '@quivo/design-system-native';
-import { QuivoHeader } from '../../shared/components/quivo-header';
-import { dsColors, dsElevation, dsSpace } from '../../shared/theme/design-system';
+import { Badge, Divider, Heading, Switch, Text, fontStyle } from '@quivo/design-system-native';
+import { dsColors, dsElevation, dsRadius, dsSpace } from '../../shared/theme/design-system';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -175,15 +174,20 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
   return (
     <View style={styles.container}>
       <View style={styles.headerTop}>
-        <QuivoHeader
-          title="Ajustes"
+        <AjustesHeader
           onBack={() => navigation.goBack()}
-          backLabel="Volver a Perfil"
+          scale={scale}
+          textoGrande={settings.textoGrande}
         />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text size="sm" variant="secondary" style={styles.screenTitle}>
+        <Text
+          size="sm"
+          variant="secondary"
+          style={{ fontSize: 14 * scale }}
+          allowFontScaling={!settings.textoGrande}
+        >
           Operación
         </Text>
 
@@ -243,17 +247,19 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
           />
         </View>
 
-        <Text size="sm" variant="secondary" style={styles.screenTitle}>
+        <Text
+          size="sm"
+          variant="secondary"
+          style={{ fontSize: 14 * scale }}
+          allowFontScaling={!settings.textoGrande}
+        >
           Rescate de datos — día 1
         </Text>
         <View style={styles.cardBlock}>
           <View style={styles.rescateRow}>
-            <Ionicons
-              name="medkit-outline"
-              size={24}
-              color={dsColors.primaryText}
-              style={styles.rowIcon}
-            />
+            <View style={styles.iconCircle}>
+              <Ionicons name="medkit-outline" size={20} color={dsColors.primaryText} />
+            </View>
             <View style={styles.rowTextContent}>
               <Text
                 style={[styles.title, fontStyle('body', '600'), { fontSize: 15 * scale }]}
@@ -300,7 +306,13 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
                 disabled={rescatando}
                 style={styles.rescateEjecutarDeNuevo}
               >
-                Ejecutar de nuevo
+                <Text
+                  weight="semibold"
+                  style={{ fontSize: 14 * scale }}
+                  allowFontScaling={!settings.textoGrande}
+                >
+                  Ejecutar de nuevo
+                </Text>
               </Button>
             </View>
           ) : (
@@ -323,7 +335,13 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
                 fullWidth
                 style={styles.rescateBoton}
               >
-                {rescatando ? 'Rescatando…' : 'Rescatar puntos ahora'}
+                <Text
+                  weight="bold"
+                  style={{ fontSize: 16 * scale, color: dsColors.textInverse }}
+                  allowFontScaling={!settings.textoGrande}
+                >
+                  {rescatando ? 'Rescatando…' : 'Rescatar puntos ahora'}
+                </Text>
               </Button>
             </>
           )}
@@ -361,6 +379,38 @@ export function AjustesScreen({ navigation, contexto }: AjustesScreenProps) {
         onCancel={cancelarConfirmacion}
         confirmDisabled={rescatando}
       />
+    </View>
+  );
+}
+
+function AjustesHeader({
+  onBack,
+  scale,
+  textoGrande,
+}: {
+  onBack: () => void;
+  scale: number;
+  textoGrande: boolean;
+}) {
+  return (
+    <View style={styles.headerRow}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Volver a Perfil"
+        onPress={onBack}
+        style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+      >
+        <Ionicons name="arrow-back" size={20} color={dsColors.primaryText} />
+      </Pressable>
+      <Heading
+        size="xl"
+        numberOfLines={1}
+        style={[styles.headerTitle, { fontSize: 22 * scale }]}
+        allowFontScaling={!textoGrande}
+      >
+        Ajustes
+      </Heading>
+      <View style={styles.headerSpacer} />
     </View>
   );
 }
@@ -474,43 +524,78 @@ function SettingToggleRow({
             {description}
           </Text>
           {helper ? (
-            <Text size="sm" variant="secondary" style={styles.helper}>
+            <Text
+              size="sm"
+              variant="secondary"
+              style={[styles.helper, { fontSize: 14 * scale }]}
+              allowFontScaling={!settings.textoGrande}
+            >
               {helper}
             </Text>
           ) : null}
         </View>
-        <Switch
-          value={value}
-          onValueChange={onToggle}
-          disabled={disabled}
-          accessibilityLabel={title}
-        />
+        <View style={styles.switchSlot}>
+          <Switch
+            value={value}
+            onValueChange={onToggle}
+            disabled={disabled}
+            accessibilityLabel={title}
+          />
+        </View>
       </Pressable>
-      {!noBorder ? <Divider /> : null}
+      {!noBorder ? (
+        <View style={styles.rowSeparator}>
+          <Divider />
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: dsColors.surfaceSoft },
-  headerTop: { paddingTop: dsSpace.lg, paddingHorizontal: dsSpace.md, paddingBottom: dsSpace.sm },
-  scrollContent: { padding: dsSpace.md, paddingBottom: dsSpace['3xl'] },
-  screenTitle: { marginTop: dsSpace.lg, marginBottom: dsSpace.sm },
+  // App.tsx ya aplica SafeAreaView; el encabezado usa el mismo edge que Perfil.
+  headerTop: {
+    paddingTop: quivoBubble.edge,
+    paddingHorizontal: quivoBubble.edge,
+    paddingBottom: dsSpace.xs,
+  },
+  headerRow: { flexDirection: 'row', alignItems: 'center' },
+  backButton: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: dsRadius.full,
+    borderWidth: 1,
+    borderColor: dsColors.primarySoft,
+    backgroundColor: dsColors.primarySubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: { flex: 1, textAlign: 'center' },
+  headerSpacer: { width: quivoBubble.touch },
+  pressed: { opacity: 0.7 },
+  scrollContent: {
+    paddingHorizontal: quivoBubble.edge,
+    paddingTop: quivoBubble.edge,
+    paddingBottom: quivoBubble.edge,
+    gap: quivoBubble.gap,
+  },
   cardBlock: {
-    backgroundColor: dsColors.surfaceRaised,
+    backgroundColor: quivoBubble.surface,
     borderRadius: quivoBubble.radius,
     borderWidth: 1,
     borderColor: quivoBubble.border,
     padding: quivoBubble.padding,
-    ...dsElevation(2),
+    ...dsElevation(3),
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     minHeight: quivoBubble.touch,
-    gap: dsSpace.sm,
-    paddingVertical: dsSpace.sm,
+    gap: quivoBubble.gap,
+    paddingVertical: dsSpace.xs,
   },
+  rowSeparator: { height: quivoBubble.gap, justifyContent: 'center' },
   iconCircle: {
     width: quivoBubble.touch,
     height: quivoBubble.touch,
@@ -519,15 +604,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  rowIcon: { marginRight: dsSpace.sm },
-  rowTextContent: { flex: 1, gap: dsSpace.xs },
+  switchSlot: {
+    width: quivoBubble.touch + quivoBubble.gap,
+    minHeight: quivoBubble.touch,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowTextContent: { flex: 1, minWidth: 0, gap: dsSpace.xs },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm, flexWrap: 'wrap' },
   title: { color: dsColors.textPrimary },
   description: { color: dsColors.textSecondary },
   helper: { color: dsColors.textTertiary },
-  rescateRow: { flexDirection: 'row', alignItems: 'flex-start', padding: dsSpace.sm },
-  rescateConteoRow: { padding: dsSpace.sm },
-  rescateError: { color: dsColors.danger, padding: dsSpace.sm },
-  rescateBoton: { marginHorizontal: dsSpace.sm, marginBottom: dsSpace.sm },
+  rescateRow: { flexDirection: 'row', alignItems: 'flex-start', gap: quivoBubble.gap },
+  // Los mensajes de rescate empiezan bajo el texto, no bajo el icono.
+  rescateConteoRow: {
+    paddingLeft: quivoBubble.touch + quivoBubble.gap,
+    paddingVertical: dsSpace.sm,
+  },
+  rescateError: {
+    color: dsColors.danger,
+    paddingLeft: quivoBubble.touch + quivoBubble.gap,
+    paddingVertical: dsSpace.sm,
+  },
+  rescateBoton: { minHeight: 52, borderRadius: dsRadius.full },
   rescateEjecutarDeNuevo: { alignSelf: 'flex-start', marginTop: dsSpace.xs },
 });

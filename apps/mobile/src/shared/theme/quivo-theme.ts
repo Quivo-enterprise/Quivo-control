@@ -14,6 +14,8 @@ export const quivoBubble = {
   radius: 30,
   innerRadius: 22,
   edge: 12,
+  // Altura provisional del sheet hasta que onLayout mide su tamaño real; mantiene el riel encima.
+  sheetEstimatedHeight: 180,
   // Burbujas flotando sobre el mapa: superficie blanca y borde con el primario al 14 %
   // sobre `borderSubtle` (`--rutas-glass-border` de Rutas).
   // Opaca: en Android la `elevation` dibuja su sombra debajo y se ve a través de una superficie

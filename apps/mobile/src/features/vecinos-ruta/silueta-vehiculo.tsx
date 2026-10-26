@@ -9,6 +9,7 @@ interface Props {
   colorSecundario: string | null;
   /** Fila vacía / sin dato: contorno punteado sin color. */
   fantasma?: boolean;
+  escala?: number;
 }
 
 const CUERPO: Record<VarianteSilueta, string> = {
@@ -28,12 +29,12 @@ const VENTANAS: Record<VarianteSilueta, string> = {
  * Silueta lateral decorativa; el color real del vehículo entra como relleno. La franja del color
  * secundario se recorta al cuerpo de cada variante para que no sobresalga de la carrocería.
  */
-export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma }: Props) {
+export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma, escala = 1 }: Props) {
   const variante = variantePorTipo(tipo);
   const cuerpo = CUERPO[variante];
   if (fantasma) {
     return (
-      <Svg width={48} height={24} viewBox="0 0 64 32" accessible={false}>
+      <Svg width={48 * escala} height={24 * escala} viewBox="0 0 64 32" accessible={false}>
         <Path
           d={cuerpo}
           fill="none"
@@ -64,7 +65,7 @@ export function SiluetaVehiculo({ tipo, color, colorSecundario, fantasma }: Prop
   const secundario = colorSecundarioAHex(colorSecundario);
   const idClip = `cuerpo-${variante}`;
   return (
-    <Svg width={48} height={24} viewBox="0 0 64 32" accessible={false}>
+    <Svg width={48 * escala} height={24 * escala} viewBox="0 0 64 32" accessible={false}>
       <Defs>
         <ClipPath id={idClip}>
           <Path d={cuerpo} />

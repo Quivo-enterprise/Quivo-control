@@ -4,6 +4,7 @@ import * as Updates from 'expo-updates';
 import * as Application from 'expo-application';
 import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Path } from 'react-native-svg';
 import type { ContextoOperativoMovil } from '@quivo/shared';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OperationStackParamList } from '../../app/operation-navigator';
@@ -12,10 +13,10 @@ import { useSyncStatus } from '../operacion/use-sync-status';
 import { usePerfilQuery } from './use-perfil-query';
 import { useOperacionSettings, useTextScale } from './use-operacion-settings';
 import { CerrarSesionDialog } from '../../shared/components/cerrar-sesion-dialog';
+import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
 import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { dsColors, dsElevation, dsRadius, dsSpace } from '../../shared/theme/design-system';
-import { Avatar, Badge, Divider, Heading, Text } from '@quivo/design-system-native';
-import { QuivoHeader } from '../../shared/components/quivo-header';
+import { Avatar, Divider, Heading, Loader, Text } from '@quivo/design-system-native';
 import { Button } from '../../shared/components/Button';
 import {
   MENSAJE_SE_APLICARA_AL_CERRAR,
@@ -48,6 +49,7 @@ export function PerfilScreen({
   const {
     data: contexto,
     isLoading,
+    isFetching,
     refetch,
   } = usePerfilQuery(contextoInicial, obtenerAccessToken);
   const { gps } = useGpsContext();
@@ -62,6 +64,9 @@ export function PerfilScreen({
   // alarmar con un color distinto.
   useSyncStatus(obtenerAccessToken, contextoInicial.sesionId);
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
+  const [dialogoCambioClave, setDialogoCambioClave] = useState<'confirmar' | 'proximamente' | null>(
+    null,
+  );
   const [estadoActualizacion, setEstadoActualizacion] = useState<string | null>(null);
   const [buscando, setBuscando] = useState(false);
   // Guardas en refs (no estado): el closure de `onPress` del Alert queda viejo y `setBuscando`
@@ -83,6 +88,10 @@ export function PerfilScreen({
     isDev: __DEV__,
     updatesHabilitado: Updates.isEnabled,
   });
+
+  const confirmarCambioClave = () => {
+    setDialogoCambioClave('confirmar');
+  };
 
   const buscarActualizacion = async () => {
     if (buscandoRef.current) return;
@@ -153,98 +162,115 @@ export function PerfilScreen({
 
   const modeloVehiculo =
     `${contexto.vehiculo.marca} ${contexto.vehiculo.modelo}`.trim() || 'Toyota Hiace';
-  const statusLabel = gps.tracking ? 'EN VIVO' : 'EN ESPERA';
+  const escalado = (fontSize: number) => ({ fontSize: fontSize * scale });
+  const sinEscalaSistema = !settings.textoGrande;
 
   return (
     <View style={styles.container}>
       <View style={styles.headerBar}>
-        <QuivoHeader title="Perfil" onBack={() => navigation.goBack()} backLabel="Volver al mapa" />
+        <PerfilHeader
+          onBack={() => navigation.goBack()}
+          scale={scale}
+          textoGrande={settings.textoGrande}
+        />
       </View>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Avatar & Driver Hero Section */}
-        <View style={styles.heroSection}>
-          <Avatar
-            name={contexto.conductor.nombre}
-            size="xl"
-            status={gps.tracking ? 'online' : 'offline'}
+        <View style={[styles.card, styles.profileCard]}>
+          <FotoVehiculoSection
+            placa={contexto.vehiculo.placa}
+            sesionId={contextoInicial.sesionId}
+            obtenerAccessToken={obtenerAccessToken}
+            modeloVehiculo={modeloVehiculo}
+            tipoVehiculo={contexto.vehiculo.tipo}
+            embedded
+            fotoOverlay={
+              <View style={styles.avatarBurbuja}>
+                <Avatar
+                  name={contexto.conductor.nombre}
+                  size="md"
+                  status={gps.tracking ? 'online' : 'offline'}
+                />
+              </View>
+            }
           />
-          <Heading
-            size="xl"
-            style={[styles.driverName, { fontSize: 24 * scale }]}
-            allowFontScaling={!settings.textoGrande}
-          >
-            {contexto.conductor.nombre}
-          </Heading>
-          <Text
-            variant="secondary"
-            style={{ fontSize: 14 * scale }}
-            allowFontScaling={!settings.textoGrande}
-          >
-            CI {contexto.conductor.documentoIdentidad} · {contexto.sindicato.nombre}
-          </Text>
-          <Badge variant={gps.tracking ? 'success' : 'primary'} style={styles.estado}>
-            {statusLabel}
-          </Badge>
+          <Divider style={styles.profileDivider} />
+          <View style={styles.conductorRow}>
+            <View style={styles.conductorInfo}>
+              <Heading
+                size="sm"
+                numberOfLines={2}
+                style={escalado(16)}
+                allowFontScaling={sinEscalaSistema}
+              >
+                {contexto.conductor.nombre}
+              </Heading>
+              <Text
+                size="sm"
+                variant="secondary"
+                numberOfLines={1}
+                style={escalado(14)}
+                allowFontScaling={sinEscalaSistema}
+              >
+                CI {contexto.conductor.documentoIdentidad}
+              </Text>
+              <Text
+                size="sm"
+                variant="secondary"
+                numberOfLines={1}
+                style={escalado(14)}
+                allowFontScaling={sinEscalaSistema}
+              >
+                {contexto.sindicato.nombre}
+              </Text>
+            </View>
+            <View style={styles.conductorActions}>
+              {gps.tracking ? (
+                <View style={styles.estado}>
+                  <Text
+                    size="sm"
+                    weight="bold"
+                    numberOfLines={1}
+                    style={[styles.estadoEnVivoTexto, escalado(14)]}
+                    allowFontScaling={sinEscalaSistema}
+                  >
+                    EN VIVO
+                  </Text>
+                </View>
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Cambiar clave"
+                accessibilityHint="Abre una confirmación. El cambio de clave estará disponible próximamente."
+                onPress={confirmarCambioClave}
+                style={({ pressed }) => [styles.cambiarClaveButton, pressed && styles.pressed]}
+              >
+                <Ionicons name="key-outline" size={22} color={dsColors.primaryText} />
+              </Pressable>
+            </View>
+          </View>
         </View>
 
-        {/* Sección: Información del usuario */}
-        <Text
-          size="sm"
-          variant="secondary"
-          style={[styles.sectionTitle, { fontSize: 14 * scale }]}
-          allowFontScaling={!settings.textoGrande}
-        >
-          Vehículo
-        </Text>
-        <View style={styles.card}>
-          <InfoItem icon="car-outline" label="Modelo" value={modeloVehiculo} />
-          <Divider />
-          <InfoItem icon="pricetag-outline" label="Placa" value={contexto.vehiculo.placa} />
-        </View>
-
-        {/* Sección: Foto del vehículo (PR D) */}
-        <Text
-          size="sm"
-          variant="secondary"
-          style={[styles.sectionTitle, { fontSize: 14 * scale }]}
-          allowFontScaling={!settings.textoGrande}
-        >
-          Foto del vehículo
-        </Text>
-        <FotoVehiculoSection
-          placa={contexto.vehiculo.placa}
-          sesionId={contextoInicial.sesionId}
-          obtenerAccessToken={obtenerAccessToken}
-        />
-
-        {/* Sección: Navegación del perfil */}
-        <Text
-          size="sm"
-          variant="secondary"
-          style={[styles.sectionTitle, { fontSize: 14 * scale }]}
-          allowFontScaling={!settings.textoGrande}
-        >
-          Opciones
-        </Text>
+        <SectionTitle label="Opciones" scale={scale} textoGrande={settings.textoGrande} />
         <View style={styles.card}>
           <NavigationItem
             icon="settings-outline"
             title="Ajustes de operación"
+            description="Voz, texto grande y alertas"
             onPress={() => navigation.navigate('Ajustes')}
           />
-          <Divider />
-          <NavigationItem icon="sync-outline" title="Sincronización" onPress={() => refetch()} />
+          <View style={styles.optionSeparator}>
+            <Divider />
+          </View>
+          <NavigationItem
+            icon="sync-outline"
+            title="Sincronización"
+            description="Actualizar mis datos"
+            busy={isFetching}
+            onPress={() => refetch()}
+          />
         </View>
 
-        {/* Sección: Versión y actualizaciones (OTA, expo-updates) */}
-        <Text
-          size="sm"
-          variant="secondary"
-          style={[styles.sectionTitle, { fontSize: 14 * scale }]}
-          allowFontScaling={!settings.textoGrande}
-        >
-          Aplicación
-        </Text>
+        <SectionTitle label="Aplicación" scale={scale} textoGrande={settings.textoGrande} />
         <View style={styles.card}>
           <InfoItem
             icon="information-circle-outline"
@@ -255,7 +281,9 @@ export function PerfilScreen({
               Updates.isEmbeddedLaunch,
             )}
           />
-          <Divider />
+          <View style={styles.optionSeparator}>
+            <Divider />
+          </View>
           <NavigationItem
             icon="cloud-download-outline"
             title="Buscar actualización"
@@ -272,9 +300,15 @@ export function PerfilScreen({
           variant="outline"
           onPress={() => setConfirmarLogoutVisible(true)}
           style={styles.logoutButton}
-          textStyle={styles.logoutTexto}
+          fullWidth
         >
-          Cerrar sesión
+          <Text
+            weight="bold"
+            style={[styles.logoutTexto, escalado(16)]}
+            allowFontScaling={sinEscalaSistema}
+          >
+            Cerrar sesión
+          </Text>
         </Button>
       </ScrollView>
       {/* Modal de confirmación seguro de cierre de sesión */}
@@ -286,7 +320,81 @@ export function PerfilScreen({
           onLogout();
         }}
       />
+      <QuivoConfirmDialog
+        visible={dialogoCambioClave !== null}
+        title={
+          dialogoCambioClave === 'proximamente'
+            ? 'Próximamente'
+            : 'Cambiar clave de inicio de sesión'
+        }
+        message={
+          dialogoCambioClave === 'proximamente'
+            ? 'El cambio de clave estará disponible pronto.'
+            : '¿Quieres cambiar tu clave?'
+        }
+        confirmLabel={dialogoCambioClave === 'proximamente' ? 'Entendido' : 'Continuar'}
+        cancelLabel={dialogoCambioClave === 'confirmar' ? 'Cancelar' : undefined}
+        icon={null}
+        onConfirm={() =>
+          setDialogoCambioClave(dialogoCambioClave === 'confirmar' ? 'proximamente' : null)
+        }
+        onCancel={() => setDialogoCambioClave(null)}
+      />
     </View>
+  );
+}
+
+/** Flecha centrada en el círculo de 44 del patrón de navegación QUIVO. */
+function PerfilHeader({
+  onBack,
+  scale,
+  textoGrande,
+}: {
+  onBack: () => void;
+  scale: number;
+  textoGrande: boolean;
+}) {
+  return (
+    <View style={styles.headerRow}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Volver al mapa"
+        onPress={onBack}
+        style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+      >
+        <Ionicons name="arrow-back" size={20} color={dsColors.primaryText} />
+      </Pressable>
+      <Heading
+        size="xl"
+        numberOfLines={1}
+        style={[styles.headerTitle, { fontSize: 22 * scale }]}
+        allowFontScaling={!textoGrande}
+      >
+        Perfil
+      </Heading>
+      <View style={styles.headerSpacer} />
+    </View>
+  );
+}
+
+function SectionTitle({
+  label,
+  scale,
+  textoGrande,
+}: {
+  label: string;
+  scale: number;
+  textoGrande: boolean;
+}) {
+  return (
+    <Text
+      size="sm"
+      variant="secondary"
+      style={{ fontSize: 14 * scale }}
+      allowFontScaling={!textoGrande}
+    >
+      {label}
+    </Text>
   );
 }
 
@@ -308,16 +416,16 @@ function InfoItem({
       </View>
       <Text
         size="sm"
-        variant="secondary"
-        style={[styles.itemLabel, { fontSize: 14 * scale }]}
+        style={[styles.itemLabel, { fontSize: 15 * scale }]}
         allowFontScaling={!settings.textoGrande}
       >
         {label}
       </Text>
       <Text
         size="sm"
-        weight="semibold"
-        style={[styles.itemValue, { fontSize: 14.5 * scale }]}
+        variant="secondary"
+        numberOfLines={1}
+        style={[styles.itemValue, { fontSize: 14 * scale }]}
         allowFontScaling={!settings.textoGrande}
       >
         {value}
@@ -332,12 +440,14 @@ function NavigationItem({
   description,
   onPress,
   disabled = false,
+  busy = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
   description?: string;
   onPress: () => void;
   disabled?: boolean;
+  busy?: boolean;
 }) {
   const scale = useTextScale();
   const { settings } = useOperacionSettings();
@@ -345,10 +455,14 @@ function NavigationItem({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={title}
-      accessibilityState={{ disabled }}
+      accessibilityState={{ disabled, busy }}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.infoItem, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.infoItem,
+        pressed && styles.pressed,
+        disabled && styles.disabled,
+      ]}
     >
       <View style={styles.iconCircle}>
         <Ionicons name={icon} size={20} color={dsColors.primaryText} />
@@ -357,6 +471,7 @@ function NavigationItem({
         <Text
           size="sm"
           weight="semibold"
+          numberOfLines={1}
           style={{ fontSize: 15 * scale }}
           allowFontScaling={!settings.textoGrande}
         >
@@ -366,14 +481,30 @@ function NavigationItem({
           <Text
             size="sm"
             variant="secondary"
-            style={{ fontSize: 13 * scale }}
+            numberOfLines={2}
+            style={{ fontSize: 14 * scale }}
             allowFontScaling={!settings.textoGrande}
           >
             {description}
           </Text>
         ) : null}
       </View>
-      <Ionicons name="chevron-forward" size={20} color={dsColors.textSecondary} />
+      <View style={styles.chevronSlot}>
+        {busy ? (
+          <Loader size="sm" />
+        ) : (
+          <Svg width={20} height={20} viewBox="0 0 20 20" accessible={false}>
+            <Path
+              d="M7 4 L13 10 L7 16"
+              fill="none"
+              stroke={dsColors.textSecondary}
+              strokeWidth={2.4}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </Svg>
+        )}
+      </View>
     </Pressable>
   );
 }
@@ -383,18 +514,23 @@ function PerfilSkeleton({
 }: {
   navigation: NativeStackScreenProps<OperationStackParamList, 'Perfil'>['navigation'];
 }) {
+  const scale = useTextScale();
+  const { settings } = useOperacionSettings();
   return (
     <View style={styles.container}>
       <View style={styles.headerBar}>
-        <QuivoHeader title="Perfil" onBack={() => navigation.goBack()} backLabel="Volver al mapa" />
+        <PerfilHeader
+          onBack={() => navigation.goBack()}
+          scale={scale}
+          textoGrande={settings.textoGrande}
+        />
       </View>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.heroSection}>
-          <ShimmerPlaceHolder style={styles.avatarPlaceholder} />
-          <ShimmerPlaceHolder style={styles.namePlaceholder} />
+        <View style={styles.card}>
+          <ShimmerPlaceHolder style={styles.photoPlaceholder} />
+          <ShimmerPlaceHolder style={styles.rowPlaceholder} />
         </View>
         <View style={styles.card}>
-          <ShimmerPlaceHolder style={styles.rowPlaceholder} />
           <ShimmerPlaceHolder style={styles.rowPlaceholder} />
         </View>
       </ScrollView>
@@ -404,27 +540,83 @@ function PerfilSkeleton({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: dsColors.surfaceSoft },
-  headerBar: { paddingTop: dsSpace.lg, paddingHorizontal: dsSpace.md, paddingBottom: dsSpace.sm },
-  scrollContent: { paddingHorizontal: dsSpace.md, paddingBottom: dsSpace['3xl'] },
-  heroSection: { alignItems: 'center', gap: dsSpace.sm, paddingVertical: dsSpace.lg },
-  driverName: { color: dsColors.textPrimary, textAlign: 'center' },
-  sectionTitle: { marginTop: dsSpace.lg, marginBottom: dsSpace.sm },
+  // App.tsx ya aplica SafeAreaView arriba y abajo; aquí solo va el margen visual de la burbuja.
+  headerBar: {
+    paddingTop: quivoBubble.edge,
+    paddingHorizontal: quivoBubble.edge,
+    paddingBottom: dsSpace.xs,
+  },
+  headerRow: { flexDirection: 'row', alignItems: 'center' },
+  backButton: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: dsRadius.full,
+    borderWidth: 1,
+    borderColor: dsColors.primarySoft,
+    backgroundColor: dsColors.primarySubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: { flex: 1, textAlign: 'center' },
+  headerSpacer: { width: quivoBubble.touch },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'flex-end',
+    paddingHorizontal: quivoBubble.edge,
+    paddingTop: quivoBubble.edge,
+    paddingBottom: quivoBubble.edge,
+    gap: quivoBubble.gap,
+  },
   card: {
-    backgroundColor: dsColors.surfaceRaised,
+    backgroundColor: quivoBubble.surface,
     borderRadius: quivoBubble.radius,
     borderWidth: 1,
     borderColor: quivoBubble.border,
     padding: quivoBubble.padding,
+    ...dsElevation(3),
+  },
+  // El hueco entre filas coincide con el relleno exterior de 8 dp; la línea va al centro.
+  optionSeparator: { height: quivoBubble.gap, justifyContent: 'center' },
+  profileCard: { gap: quivoBubble.gap },
+  profileDivider: { marginHorizontal: dsSpace.xs },
+  avatarBurbuja: {
+    padding: dsSpace.xs,
+    borderRadius: dsRadius.full,
+    borderWidth: 1,
+    borderColor: quivoBubble.border,
+    backgroundColor: quivoBubble.surface,
     ...dsElevation(2),
   },
+  conductorRow: { flexDirection: 'row', alignItems: 'center', gap: quivoBubble.gap },
+  conductorInfo: { gap: dsSpace.xs, flex: 1, minWidth: 0 },
+  conductorActions: { alignItems: 'flex-end' },
+  cambiarClaveButton: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.primarySubtle,
+    borderWidth: 1,
+    borderColor: dsColors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  estado: {
+    alignSelf: 'center',
+    flexShrink: 1,
+    borderRadius: dsRadius.full,
+    paddingHorizontal: dsSpace.sm,
+    paddingVertical: dsSpace.xs,
+    backgroundColor: dsColors.successSoft,
+  },
+  estadoEnVivoTexto: { color: dsColors.success },
   infoItem: {
+    // Círculo de 44 a 8 dp del borde: centro a 30 dp, concéntrico con radio exterior 30.
     minHeight: quivoBubble.touch,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: dsSpace.sm,
-    paddingVertical: dsSpace.xs,
-    // Valor de la derecha separado del borde curvo de la tarjeta.
-    paddingRight: dsSpace.md,
+    gap: quivoBubble.gap,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
   },
   iconCircle: {
     width: quivoBubble.touch,
@@ -434,19 +626,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  chevronSlot: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   itemLabel: { flex: 1 },
-  itemValue: { flexShrink: 1, textAlign: 'right' },
-  navTextContainer: { flex: 1 },
+  itemValue: { flexShrink: 1, maxWidth: '50%', textAlign: 'right' },
+  navTextContainer: { flex: 1, minWidth: 0 },
   pressed: { opacity: 0.7 },
-  logoutButton: { marginTop: dsSpace.lg, borderColor: dsColors.danger },
+  disabled: { opacity: 0.55 },
+  logoutButton: {
+    // El gap exterior (8) más este margen (16) separa la salida 24 dp de la lista.
+    marginTop: dsSpace.md,
+    minHeight: 52,
+    borderColor: dsColors.danger,
+    borderRadius: dsRadius.full,
+  },
   logoutTexto: { color: dsColors.danger },
-  // La pastilla de estado va centrada bajo el nombre, no estirada al ancho del bloque.
-  estado: { alignSelf: 'center' },
-  avatarPlaceholder: { width: 72, height: 72, borderRadius: 36 },
-  namePlaceholder: { width: 160, height: 24, borderRadius: dsRadius.sm },
+  photoPlaceholder: { width: '100%', height: 180, borderRadius: quivoBubble.innerRadius },
   rowPlaceholder: {
     width: '100%',
-    height: 44,
+    height: quivoBubble.touch,
     borderRadius: dsRadius.sm,
     marginVertical: dsSpace.xs,
   },

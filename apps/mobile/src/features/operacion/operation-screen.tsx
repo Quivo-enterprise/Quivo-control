@@ -36,7 +36,7 @@ import { useProgresoVuelta } from './use-progreso-vuelta';
 import { VueltaCompletadaBanner } from './vuelta-completada-banner';
 import type { EstadoPuntoVuelta } from './progreso-vuelta';
 import { RouteMap } from '../mapa/route-map';
-import { MARGEN_INFERIOR_SHEET, NextControlSheet } from './next-control-sheet';
+import { calcularMargenInferiorSheet, NextControlSheet } from './next-control-sheet';
 import { BrujulaMapa } from './brujula-mapa';
 import { crearEmisorRumbo } from '../mapa/rumbo-mapa';
 import { useModoCamara } from '../mapa/use-modo-camara';
@@ -52,10 +52,11 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OperationStackParamList } from '../../app/operation-navigator';
 import { useOperacionSettings } from '../perfil/use-operacion-settings';
 import { DriverRouteCard } from './driver-route-card';
+import { FotoVehiculoControl } from './foto-vehiculo-control';
+import { SlotAvisos, AvisoEnSlot } from './slot-avisos';
 import { VecinosRutaPanel } from '../vecinos-ruta/vecinos-ruta-panel';
 import { faseControl } from '../jornada/fase-control';
 import { useJornada } from '../jornada/use-jornada';
-import { AvisoFotoVehiculo } from '../vehiculo-foto/aviso-foto-vehiculo';
 import { useVueltaActual } from '../vuelta-actual/use-vuelta-actual';
 import { useFilaSalida } from '../fila-salida/use-fila-salida';
 import { terminalDeLaRuta } from '../fila-salida/fila-salida-deteccion';
@@ -63,11 +64,11 @@ import { AvisoDesignacion, ContadorEsperaMolinos } from '../vuelta-actual/aviso-
 
 /** Opciones fijas del modal "Reportar incidencia"; viajan como `categoria` (código estable) y `texto` (etiqueta). */
 const OPCIONES_INCIDENCIA = [
-  { categoria: 'bloqueo', etiqueta: 'Bloqueo', icono: 'close-circle-outline' },
-  { categoria: 'salud', etiqueta: 'Salud', icono: 'medkit-outline' },
-  { categoria: 'fantasma', etiqueta: 'Fantasma', icono: 'eye-off-outline' },
-  { categoria: 'incidente', etiqueta: 'Incidente', icono: 'warning-outline' },
-  { categoria: 'falla_tecnica', etiqueta: 'Falla técnica', icono: 'construct-outline' },
+  { categoria: 'bloqueo', etiqueta: 'Bloqueo' },
+  { categoria: 'salud', etiqueta: 'Salud' },
+  { categoria: 'fantasma', etiqueta: 'Fantasma' },
+  { categoria: 'incidente', etiqueta: 'Incidente' },
+  { categoria: 'falla_tecnica', etiqueta: 'Falla técnica' },
 ] as const;
 
 // shortcut: número fijo del delegado, válido SOLO para la L16 (el botón se oculta en otras líneas) en el piloto; mover a un campo de Línea/Sindicato servido por la API después del piloto.
@@ -206,13 +207,13 @@ export function OperationScreen(
     }),
     [insetSuperior, altoSheetVisible],
   );
-  // Base de los FABs y del botón "Centrar": justo encima del sheet EXPANDIDO (no del colapsado, así
-  // nunca quedan tapados); se mueven con el sheet por `translateY: sheetPanY`. 180 mientras el
-  // sheet no se midió.
+  // Base del riel: justo encima del sheet EXPANDIDO (no del colapsado, así nunca queda tapado);
+  // acompaña el arrastre por `translateY: sheetPanY`.
+  const margenInferiorSheet = calcularMargenInferiorSheet(fase, insets.bottom);
   const fabsBottom =
     altoSheet > 0
-      ? altoSheet + MARGEN_INFERIOR_SHEET + insets.bottom + dsSpace.ms
-      : 180 + insets.bottom;
+      ? altoSheet + margenInferiorSheet + quivoBubble.gap
+      : quivoBubble.sheetEstimatedHeight + insets.bottom;
 
   // Rescope SESION_NO_VIGENTE, punto C: dispara `onSesionNoVigenteFinalizada` cuando
   // `sesionNoVigente` está prendido y `gps.tracking` está en `false` — la señal de que
@@ -476,47 +477,61 @@ export function OperationScreen(
 
       <View
         pointerEvents="box-none"
-        style={[styles.topOverlay, { top: insets.top + quivoBubble.edge }]}
+        style={[styles.topOverlay, { top: quivoBubble.edge - dsSpace.xs }]}
         onLayout={onLayoutTopOverlay}
       >
-        <Pressable
-          hitSlop={12}
-          accessibilityRole="button"
-          accessibilityLabel={`Línea ${props.contexto.linea.codigo}, ${!gps.tracking ? 'en espera' : gps.pausadoDesde ? 'en pausa' : 'en ruta'}. Abrir perfil`}
-          onPress={() => props.navigation.navigate('Perfil')}
-          style={styles.cabeceraBoton}
-        >
+        <View style={styles.cabeceraAncha}>
           <DriverRouteCard
             contexto={props.contexto}
             brand={lineaBrand}
             tracking={gps.tracking}
             pausadoDesde={gps.pausadoDesde}
             compacta={camara.modo !== 'general'}
+            onAbrirPerfil={() => props.navigation.navigate('Perfil')}
+            fotoVehiculo={
+              <FotoVehiculoControl
+                sesionId={props.contexto.sesionId}
+                obtenerAccessToken={props.obtenerAccessToken}
+              />
+            }
           />
-        </Pressable>
+        </View>
 
-        {gps.tracking && gps.senalGpsDebil ? <SenalGpsDebilChip /> : null}
-
-        {props.aviso ? (
-          <AvisoBurbuja icono="information-circle-outline" mensaje={props.aviso} />
-        ) : null}
         {/* QUI-338 (reportado desde la calle: Samsung Galaxy A71, Android 10-13 — conductor
             sin ubicación y sin ningún mensaje que le dijera qué tocar): antes, "Iniciar
             recorrido" quedaba habilitado sin importar el permiso y `iniciar()` fallaba en
             silencio contra un mensaje genérico sin acción. Se oculta mientras `gps.tracking`
             porque el permiso ya estaba en orden cuando arrancó — mismo criterio que el resto
             de los banners de esta pantalla, uno por causa raíz, sin duplicar alarmas. Reusa
-            el patrón exacto de `sesionNoRevalidada` de abajo (texto `dangerNotice` + botón de
-            acción a todo el ancho). */}
-        {!gps.tracking && gps.permisoGps.bloqueante ? (
-          <AvisoBurbuja
-            icono="location-outline"
-            mensaje={gps.permisoGps.mensaje}
-            accion={
-              gps.permisoGps.accion ? (gps.permisoGps.etiquetaAccion ?? undefined) : undefined
-            }
-            onAccion={gps.permisoGps.accion ? manejarAbrirAjustesPermisoGps : undefined}
-          />
+            el mismo callback de Ajustes al slot prioritario. */}
+        <SlotAvisos
+          avisos={[
+            {
+              id: 'permiso-gps',
+              prioridad: 0,
+              visible: !gps.tracking && gps.permisoGps.bloqueante,
+              contenido: (
+                <AvisoEnSlot
+                  icono="location-outline"
+                  mensaje={gps.permisoGps.mensaje}
+                  accion={
+                    gps.permisoGps.accion ? (gps.permisoGps.etiquetaAccion ?? undefined) : undefined
+                  }
+                  onAccion={gps.permisoGps.accion ? manejarAbrirAjustesPermisoGps : undefined}
+                />
+              ),
+            },
+            {
+              id: 'senal-gps',
+              prioridad: 1,
+              visible: gps.tracking && gps.senalGpsDebil,
+              contenido: <SenalGpsDebilChip />,
+            },
+          ]}
+        />
+
+        {props.aviso ? (
+          <AvisoBurbuja icono="information-circle-outline" mensaje={props.aviso} />
         ) : null}
         {props.sesionNoRevalidada ? (
           <AvisoBurbuja
@@ -553,11 +568,6 @@ export function OperationScreen(
         {paqueteDia.error ? (
           <AvisoBurbuja icono="alert-circle-outline" mensaje={paqueteDia.error} />
         ) : null}
-        <AvisoFotoVehiculo
-          sesionId={props.contexto.sesionId}
-          tracking={gps.tracking}
-          obtenerAccessToken={props.obtenerAccessToken}
-        />
         {!settings.trabajarOffline && isOffline ? (
           <AvisoBurbuja
             icono="cloud-offline-outline"
@@ -598,11 +608,14 @@ export function OperationScreen(
               onPress={abrirWhatsAppDelegado}
             />
           ) : null}
-          {__DEV__ && gps.tracking && proximoPuntoControl ? (
+          {camara.modo === 'libre' && !gps.tracking ? (
+            <BotonBurbuja icono="navigate" accessibilityLabel="Recentrar" onPress={recentrar} />
+          ) : null}
+          {camara.modo === 'general' ? (
             <BotonBurbuja
-              icono="bug"
-              accessibilityLabel="Simular detección (Debug)"
-              onPress={() => gps.simularDeteccion(proximoPuntoControl.id, distanciaProximoPunto)}
+              icono="locate"
+              accessibilityLabel="Ver ruta completa"
+              onPress={recentrar}
             />
           ) : null}
           {camara.modo === 'navegacion' ? (
@@ -618,11 +631,11 @@ export function OperationScreen(
               onPress={alternarOrientacion}
             />
           ) : null}
-          {camara.modo === 'general' ? (
+          {__DEV__ && gps.tracking && proximoPuntoControl ? (
             <BotonBurbuja
-              icono="locate"
-              accessibilityLabel="Ver ruta completa"
-              onPress={recentrar}
+              icono="bug"
+              accessibilityLabel="Simular detección (Debug)"
+              onPress={() => gps.simularDeteccion(proximoPuntoControl.id, distanciaProximoPunto)}
             />
           ) : null}
         </Burbuja>
@@ -642,18 +655,6 @@ export function OperationScreen(
           ) : null}
           <PildoraBurbuja icono="speedometer-outline">
             {Math.round(gps.posicionActual?.speedKmh ?? 0)} km/h
-          </PildoraBurbuja>
-        </Animated.View>
-      ) : null}
-      {!gps.tracking && camara.modo === 'libre' ? (
-        <Animated.View
-          style={[
-            styles.velocidadContenedor,
-            { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] },
-          ]}
-        >
-          <PildoraBurbuja icono="navigate" accessibilityLabel="Recentrar" onPress={recentrar}>
-            Centrar
           </PildoraBurbuja>
         </Animated.View>
       ) : null}
@@ -711,7 +712,6 @@ export function OperationScreen(
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Ionicons name="alert-circle-outline" size={24} color={dsColors.primary} />
               <Heading size="lg" style={styles.modalTitle}>
                 Reportar incidencia
               </Heading>
@@ -721,34 +721,47 @@ export function OperationScreen(
                 <DsText size="sm" style={styles.modalText}>
                   Incidencia reportada. Se sincroniza junto con tu recorrido.
                 </DsText>
-                <DsButton variant="primary" onPress={cerrarModalObservacion}>
+                <DsButton
+                  variant="primary"
+                  fullWidth
+                  style={styles.modalPrimaryAction}
+                  onPress={cerrarModalObservacion}
+                >
                   Listo
                 </DsButton>
               </>
             ) : (
               <>
                 {errorObservacion ? (
-                  <DsText
-                    accessibilityRole="alert"
-                    style={[styles.dangerNotice, styles.observacionError]}
-                  >
+                  <DsText accessibilityRole="alert" style={styles.dangerNotice}>
                     {errorObservacion}
                   </DsText>
                 ) : null}
                 <View accessibilityRole="radiogroup" style={styles.motivos}>
-                  {OPCIONES_INCIDENCIA.map(({ etiqueta, icono }) => {
+                  {OPCIONES_INCIDENCIA.map(({ etiqueta }) => {
                     const elegida = observacion === etiqueta;
                     return (
-                      <PildoraBurbuja
+                      <Pressable
                         key={etiqueta}
-                        icono={icono}
-                        interior
+                        accessibilityRole="radio"
                         accessibilityLabel={etiqueta}
+                        accessibilityState={{ checked: elegida, disabled: enviandoObservacion }}
+                        disabled={enviandoObservacion}
                         onPress={enviandoObservacion ? undefined : () => setObservacion(etiqueta)}
-                        style={elegida ? styles.motivoElegido : undefined}
+                        style={({ pressed }) => [
+                          styles.motivo,
+                          elegida && styles.motivoElegido,
+                          pressed && styles.motivoPresionado,
+                        ]}
                       >
-                        {etiqueta}
-                      </PildoraBurbuja>
+                        <DsText
+                          size="sm"
+                          weight="semibold"
+                          style={[styles.motivoTexto, elegida && styles.motivoTextoElegido]}
+                        >
+                          {etiqueta}
+                        </DsText>
+                      </Pressable>
                     );
                   })}
                 </View>
@@ -970,9 +983,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: quivoBubble.edge,
     right: quivoBubble.edge,
-    gap: dsSpace.sm,
+    gap: quivoBubble.gap,
   },
-  cabeceraBoton: { alignSelf: 'flex-start', minHeight: quivoBubble.touch },
+  // Solo la cabecera gana 4 dp por lado; el slot conserva el margen habitual de 12 dp.
+  cabeceraAncha: { marginHorizontal: -dsSpace.xs },
   avisoBurbuja: { alignItems: 'stretch', alignSelf: 'stretch' },
   avisoFila: { flexDirection: 'row', alignItems: 'flex-start', gap: dsSpace.sm },
   avisoTexto: { flex: 1 },
@@ -1029,23 +1043,48 @@ const styles = StyleSheet.create({
     backgroundColor: quivoBubble.scrim,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: dsSpace.md,
+    padding: quivoBubble.edge,
   },
   modalContent: {
     backgroundColor: dsColors.surfaceRaised,
     borderRadius: quivoBubble.radius,
-    padding: dsSpace.md,
-    gap: dsSpace.md,
+    padding: quivoBubble.padding,
+    gap: quivoBubble.gap,
     width: '100%',
     maxWidth: 400,
     ...dsElevation(3),
   },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm },
-  modalTitle: { flex: 1, color: dsColors.textPrimary },
-  modalText: { color: dsColors.textSecondary },
-  motivos: { flexDirection: 'row', flexWrap: 'wrap', gap: dsSpace.sm },
-  motivoElegido: { backgroundColor: dsColors.primarySoft, borderColor: dsColors.primary },
-  observacionError: { marginBottom: dsSpace.sm },
-  observacionActions: { flexDirection: 'row', gap: dsSpace.sm },
-  modalAction: { flex: 1, minHeight: quivoBubble.touch },
+  modalHeader: { alignItems: 'center', padding: dsSpace.sm },
+  modalTitle: { color: dsColors.textPrimary, textAlign: 'center' },
+  modalText: { color: dsColors.textSecondary, textAlign: 'center', paddingHorizontal: dsSpace.sm },
+  motivos: { gap: quivoBubble.gap },
+  motivo: {
+    width: '100%',
+    minHeight: quivoBubble.touch,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: dsSpace.md,
+    borderWidth: 1,
+    borderColor: dsColors.borderSubtle,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.surfaceSoft,
+  },
+  motivoElegido: { backgroundColor: dsColors.primarySubtle, borderColor: dsColors.primary },
+  motivoPresionado: { opacity: 0.85 },
+  motivoTexto: { color: dsColors.textPrimary, textAlign: 'center' },
+  motivoTextoElegido: { color: dsColors.primaryText },
+  observacionActions: { flexDirection: 'row', gap: quivoBubble.gap },
+  modalAction: {
+    flex: 1,
+    minHeight: 52,
+    borderRadius: quivoBubble.innerRadius,
+    elevation: 0,
+    shadowOpacity: 0,
+  },
+  modalPrimaryAction: {
+    minHeight: 52,
+    borderRadius: quivoBubble.innerRadius,
+    elevation: 0,
+    shadowOpacity: 0,
+  },
 });

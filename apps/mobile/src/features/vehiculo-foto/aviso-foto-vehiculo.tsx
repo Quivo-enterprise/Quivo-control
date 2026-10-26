@@ -1,4 +1,4 @@
-import { Linking, Pressable, StyleSheet } from 'react-native';
+import { Linking, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@quivo/design-system-native';
 import { Burbuja } from '../../shared/components/burbuja';
 import { dsColors, dsSpace } from '../../shared/theme/design-system';
@@ -48,8 +48,10 @@ export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Pr
 
   return (
     <Burbuja style={styles.fila}>
-      <Ionicons name="camera-outline" size={16} color={dsColors.primaryText} />
-      <Text size="sm" style={styles.texto} numberOfLines={2}>
+      <View style={styles.icono}>
+        <Ionicons name="camera-outline" size={dsSpace.lg} color={dsColors.primaryText} />
+      </View>
+      <Text size="sm" style={styles.texto} numberOfLines={1}>
         {texto}
       </Text>
       {!enCurso ? (
@@ -60,7 +62,7 @@ export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Pr
           style={styles.accion}
           onPress={() => (requiereAjustes ? void Linking.openSettings() : void tomarFoto())}
         >
-          <Text size="sm" weight="semibold" style={styles.accionTexto}>
+          <Text size="sm" weight="semibold" style={styles.accionTexto} numberOfLines={1}>
             {requiereAjustes ? 'Abrir ajustes' : 'Tomar foto'}
           </Text>
         </Pressable>
@@ -70,9 +72,10 @@ export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Pr
           accessibilityRole="button"
           accessibilityLabel="Descartar aviso de foto por hoy"
           hitSlop={10}
+          style={styles.descartar}
           onPress={descartar}
         >
-          <Ionicons name="close" size={16} color={dsColors.primaryText} />
+          <Ionicons name="close" size={dsSpace.lg} color={dsColors.primaryText} />
         </Pressable>
       ) : null}
     </Burbuja>
@@ -81,7 +84,21 @@ export function AvisoFotoVehiculo({ sesionId, tracking, obtenerAccessToken }: Pr
 
 const styles = StyleSheet.create({
   fila: { flexDirection: 'row', alignItems: 'center', gap: dsSpace.sm },
-  texto: { flex: 1, color: dsColors.textPrimary },
-  accion: { minHeight: quivoBubble.touch, justifyContent: 'center', paddingHorizontal: dsSpace.sm },
+  icono: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.primarySubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  texto: { flex: 1, minWidth: 0, color: dsColors.textPrimary },
+  accion: { minHeight: quivoBubble.touch, justifyContent: 'center', paddingHorizontal: dsSpace.xs },
   accionTexto: { color: dsColors.primaryText },
+  descartar: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
