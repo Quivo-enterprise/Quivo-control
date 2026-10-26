@@ -147,8 +147,86 @@ ahorrar espacio, la línea se vuelve una columna vertical a su lado y todo queda
 - Ningún botón rojo lleno en ruta.
 - typecheck, lint y test en verde. Informe en `resultados/pantalla-02b-<tu-nombre>.md`.
 
-## Fase 2c — Situaciones — spec aparte
-Fila en el punto maestro, pausa, vuelta completada, designación a Molinos y errores de GPS o conexión.
+## Fase 2c — Situaciones durante la ruta
+Lo de la 2a y la 2b ya está cerrado: barra, riel, velocidad, hoja y márgenes no se rediseñan. Aquí se
+ordena **todo lo que aparece y desaparece** encima, con dos reglas:
+- Lo que **informa** va al **slot de avisos** (uno a la vez, por prioridad).
+- Lo que **pide una acción del chofer en la terminal o en la parada** va a la **hoja**.
+
+### Prioridades del slot de avisos (`SlotAvisos`)
+| Prioridad | Aviso | Qué muestra | ¿Se cierra? |
+|---|---|---|---|
+| 0 | Permiso de ubicación / GPS bloqueante | icono `location`, mensaje corto (2 líneas máx.) y acción `Abrir ajustes` | No |
+| 1 | Error de GPS en ruta (`gpsError`) | icono `warning`, `Sin señal GPS` + detalle en 1 línea | No, se va solo |
+| 2 | Designación a Molinos | icono `navigate`, `Ve a Molinos · espera 10 min`, acción `Entendido` | Con Entendido |
+| 2 | Designación cancelada | icono `close-circle`, `Se canceló tu designación`, acción `Entendido` | Con Entendido |
+| 3 | Vuelta completada | icono `checkmark-circle` en `success`, `Vuelta N completada` y lo que hoy muestre el banner, acción `Listo` | Con Listo o solo, como hoy |
+| 4 | Sin conexión (`isOffline`) | icono `cloud-offline`, `Sin conexión · tus datos se guardan` | No, se va solo |
+| 5 | Foto del vehículo | como en la 2a | Con ✕ |
+- El aviso de punto registrado (`ControlFeedbackToast`) sigue encima del slot mientras dura (2,5 s).
+- Hoy `AvisoDesignacion` y `VueltaCompletadaBanner` se posicionan solos (`top`, `onAlto`) y se apilan
+  entre ellos. Pasan a entrar en el slot como contenido, sin posición propia. El texto largo del permiso
+  "todo el tiempo" (hoy en rojo y de 5 líneas) se acorta a 2 líneas, y el detalle va en la pantalla de ajustes del sistema.
+- El mensaje de `gpsError` deja de estar dentro de la hoja.
+
+### Espera en Molinos (`ContadorEsperaMolinos`)
+- Mientras corre la espera, la pastilla **ocupa el lugar de la velocidad** (abajo a la izquierda, sobre la
+  hoja): `⏱ 7:42` en Oxanium con `tabular-nums`. Esperando, la velocidad es 0 y no aporta.
+- Al terminar la espera, vuelve la velocidad.
+
+### Pausa
+- Barra: la columna de la línea pasa a fondo `warning` con `EN PAUSA`. Las filas de vecinos siguen.
+- Hoja: `En pausa desde 12:40` (Text md), `Reanudar` primario (la única acción llena) y `Finalizar` outline
+  danger, en mitades iguales.
+
+### Fila en el punto maestro (hoja)
+En la terminal, la fila es lo único que importa: **reemplaza** el bloque de "Siguiente parada" mientras
+haya fila. Pausar y Finalizar siguen debajo.
+- **En espera**: lo que ya existe (`Sales detrás de PLACA`, `2 de 5`, fila dibujada, `Salís a las 07:24`) y
+  `SALIR · 4:41` en **outline**. Antes del turno pide la confirmación de salida anticipada, como hoy.
+- **Es tu turno** (`habilitado`): `SALIR` pasa a **primario** lleno y la pastilla dice `Es tu turno` en `success`.
+- **Demorado**: pastilla `warning` `Demorado` y el título `Sal ahora`.
+- **Sin actualizar**: punto `warning` y `sin actualizar` junto a la hora.
+- **Cerca de la terminal y sin fila**: `Estoy en la fila` en outline, en el lugar del bloque, con el texto
+  `¿Ya estás en la fila de salida?` encima.
+- La lógica de `use-fila-salida.ts`, los avisos T-1 y la confirmación anticipada no cambian.
+
+### Diálogos (una sola familia)
+`QuivoConfirmDialog`, `CerrarSesionDialog`, la confirmación de pausa en fila y el modal **Reportar incidencia**:
+- Velo `quivoBubble.scrim`. Tarjeta-burbuja de ancho completo menos `edge`, centrada, radio 30 y `padding` 16.
+- Icono en círculo de 44 arriba a la izquierda, título `Heading` md y mensaje `Text` md `secondary`.
+- Acciones en una fila de dos mitades iguales de 52: `Cancelar` outline y la acción. La acción es
+  primaria, o **danger llena** si es destructiva (finalizar, cerrar sesión). Es el único lugar donde se
+  permite el rojo lleno.
+- **Reportar incidencia**: las 5 opciones del #274 como **lista de filas** de 52, con icono en círculo y
+  radio de selección a la derecha (`accessibilityRole="radio"`). Abajo, `Cancelar` / `Enviar`. El
+  estado "enviada" muestra el check `success`, `Incidencia reportada` y `Listo`.
+
+### Reparto (en paralelo, sin pisarse)
+- **codex-trabajo1**:
+  - `operation-screen.tsx` (prioridades del slot, contador en lugar de la velocidad, modal Reportar);
+  - `slot-avisos.tsx`, `vuelta-completada-banner.tsx`, `vuelta-actual/aviso-designacion.tsx` (los dos pasan
+    a ser contenido de slot, sin `top` ni `onAlto`).
+- **codex-trabajo2**:
+  - `next-control-sheet.tsx` (pausa, fila como bloque, sin `gpsError` dentro);
+  - `driver-route-card.tsx` (EN PAUSA);
+  - `fila-salida/fila-salida-card.tsx`;
+  - `shared/components/quivo-confirm-dialog.tsx` y `shared/components/cerrar-sesion-dialog.tsx`.
+- **Contrato**:
+  - `NextControlSheet` mantiene la prop `gpsError` pero deja de dibujarla: codex1 la lleva al slot.
+  - El modal Reportar (codex1) usa el mismo esqueleto visual que `QuivoConfirmDialog` (codex2). Si el diálogo
+    expone un `children` o un `contenido`, úsalo; si no, copia el esqueleto y dilo en el informe.
+
+### Entornos que prepara el supervisor (tú no los provocas)
+Ruta normal; fila (en espera, es tu turno, demorado, cerca sin fila); pausa; vuelta completada;
+designación y cancelación; espera en Molinos; sin permiso "todo el tiempo"; sin conexión con la API.
+
+### Criterio de aceptación (2c)
+- Nunca hay dos avisos apilados arriba; el de mayor prioridad se ve y los demás esperan.
+- En la terminal, la hoja muestra la fila y una sola acción llena cuando es el turno.
+- Todos los diálogos se ven de la misma familia, y el rojo lleno solo aparece en confirmaciones destructivas.
+- No cambia ninguna lógica, cola, temporización ni condición de visibilidad: solo dónde y cómo se dibuja.
+- typecheck, lint y test en verde. Informe en `resultados/pantalla-02c-<tu-nombre>.md`.
 
 ## Criterio de aceptación (2a)
 - En 360×640 y en 412×915, márgenes iguales de 12 en los cuatro lados. La barra y la hoja ocupan el
