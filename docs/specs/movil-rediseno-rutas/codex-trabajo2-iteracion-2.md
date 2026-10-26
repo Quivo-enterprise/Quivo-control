@@ -35,4 +35,17 @@ Aplica primero todo lo que el supervisor anote abajo, en "Correcciones".
 - typecheck, lint y test en verde. Informe en `docs/specs/movil-rediseno-rutas/resultados/codex-trabajo2-iteracion-2.md`.
 
 ## Correcciones del supervisor (iteración 1)
-_(el supervisor completa esta sección antes de lanzar la iteración 2)_
+1. **Formato:** tu entrega 1 venía compactada en líneas larguísimas y sin comentarios. El supervisor la pasó por
+   Prettier y recuperó el spinner del `Button` cargando (tenía "…"). Escribe con el formato del repo y conserva los
+   comentarios que explican el porqué.
+2. **Fuentes y colores:** en Android todo salía en Roboto. El supervisor agregó `fontStyle` al design system
+   (ver las reglas nuevas del README). Nada de `fontWeight`/`fontFamily` sueltos ni `textMuted`/`variant="muted"`
+   (en claro es casi negro: el placeholder del login parecía un valor escrito). Revisa tus pantallas de la
+   iteración 1 con esas reglas (`assignment-selection-screen.tsx`, `splash-screen.tsx`, los diálogos) y corrígelas.
+3. **`QuivoHeader`:** apruebo agregar una prop **opcional** `onBack?: () => void` (y `backLabel`, por defecto
+   "Volver"). Con ella dibuja el ‹ circular de 44 px a la izquierda; sin ella, el espacio simétrico de hoy. Es un
+   cambio compatible: no rompe a quien ya la usa. Úsalo en Perfil y Ajustes.
+4. **Splash:** el botón decía "Reintentar Conexión" sin conexión y ahora dice "Reintentar" en los dos casos, con un
+   ternario que devuelve lo mismo en ambas ramas. Deja un solo texto, sin ternario.
+5. **Observación para el responsable (no lo cambies):** el campo PIN del login se ve en claro (no tiene
+   `secureTextEntry`), igual que antes del rediseño.

@@ -44,4 +44,15 @@ Aplica primero todo lo que el supervisor anote abajo, en "Correcciones".
 - typecheck, lint y test en verde. Informe en `docs/specs/movil-rediseno-rutas/resultados/codex-trabajo1-iteracion-2.md`.
 
 ## Correcciones del supervisor (iteración 1)
-_(el supervisor completa esta sección antes de lanzar la iteración 2)_
+1. **Formato:** tu entrega 1 venía compactada (líneas de 200+ caracteres). El supervisor la pasó por Prettier.
+   Escribe ya con ese formato y **no borres comentarios existentes** que explican el porqué (QUI-xxx, planes).
+2. **Fuentes y colores:** cumple las reglas nuevas del README (sin `fontWeight`/`fontFamily` sueltos, sin
+   `textMuted` ni `variant="muted"`). En los estilos viejos de `operation-screen.tsx` que toques, pasa de
+   `quivoFonts.*` a `Text`/`Heading` o a `fontStyle(...)`.
+3. **Hoja, nombre de la parada:** el paquete no trae el nombre, así que hoy sale "Siguiente parada" y debajo
+   "Próxima parada": lo mismo dos veces. Sin nombre, el `Heading` muestra "Punto de control N" (el número que ya
+   calcula la hoja). Con nombre, el nombre.
+4. **Cabecera:** el punto de color y el `Badge` dicen lo mismo. Deja solo el `Badge` (con su color) y quita el punto.
+5. **Sin prueba en el teléfono:** la build `.piloto` no trae la API key de Google Maps y se cierra al abrir el mapa,
+   así que esta iteración tampoco se puede ver en el Motorola. Cuida especialmente los solapes: cabecera, vecinos
+   (que ahora suben), toast, banner y aviso de designación apilados, columna de acciones y hoja.
