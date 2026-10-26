@@ -5,17 +5,17 @@ import {
   Linking,
   PanResponder,
   StyleSheet,
-  Text,
   View,
   type LayoutChangeEvent,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import type { ContextoOperativoMovil } from '@quivo/shared';
-import { Button } from '../../shared/components/Button';
+import { Button, Heading, Text } from '@quivo/design-system-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { HojaBurbuja, PildoraBurbuja } from '../../shared/components/burbuja';
+import { dsColors, dsSpace } from '../../shared/theme/design-system';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
-import { quivoColors, quivoFonts, quivoRadius } from '../../shared/theme/quivo-theme';
 import type { FaseControl } from '../jornada/fase-control';
-import { subtituloJornada } from '../jornada/jornada-store-core';
 import type { EstadoPuntoVuelta } from './progreso-vuelta';
 import { FilaSalidaCard } from '../fila-salida/fila-salida-card';
 import type { FilaSalidaUi } from '../fila-salida/use-fila-salida';
@@ -23,12 +23,12 @@ import type { FilaSalidaUi } from '../fila-salida/use-fila-salida';
 const NUMERO_EMERGENCIAS = '911';
 
 /** Separación (dp) entre el sheet y el borde inferior de la pantalla (`styles.sheet.bottom`). */
-export const MARGEN_INFERIOR_SHEET = 12;
+export const MARGEN_INFERIOR_SHEET = quivoBubble.edge;
 
 /** Aire (dp) bajo la cabecera, DENTRO del contenedor táctil de la cabecera: la franja visible al
  * colapsar es la cabecera (asa + "Próximo Control" + distancia + "#N") más este respiro, y toda ella
  * es zona de arrastre/toque. */
-const AIRE_BAJO_CABECERA = 14;
+const AIRE_BAJO_CABECERA = dsSpace.sm;
 
 // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
 // esta interfaz tenía `pendingEvents`/`isOffline`/`isSyncing` — ninguno se leía en el render
@@ -52,6 +52,7 @@ export interface NextControlSheetProps {
    * placeholder neutro en vez de destellar EMPEZAR DÍA y luego COMENZAR RUTA. */
   jornadaCargando?: boolean;
   nextPointOrder: number | null;
+  nombreProximaParada?: string | null;
   totalPoints: number;
   /** Estado de cada punto en el orden ROTADO de la vuelta (inicio primero), para el stepper
    * (`ordenEfectivoPuntos` → `derivarProgresoEstaticoEnOrden` → `conProximo`, RF-GPS-054). */
@@ -88,6 +89,8 @@ export interface NextControlSheetProps {
 
 export function NextControlSheet(props: NextControlSheetProps) {
   const { panY, onAlto, onAltoVisible } = props;
+  const insets = useSafeAreaInsets();
+  const margenInferior = MARGEN_INFERIOR_SHEET + insets.bottom;
   const [confirmarEmergencia, setConfirmarEmergencia] = useState(false);
   const [confirmarPausa, setConfirmarPausa] = useState(false);
   const { fase, onEmpezarDia, empezandoDia = false, puedeEmpezarDia = true } = props;
@@ -117,16 +120,19 @@ export function NextControlSheet(props: NextControlSheetProps) {
   onAltoVisibleRef.current = onAltoVisible;
 
   // Alto visible del DESTINO (`minimizado`), no del estado confirmado: se avisa al arrancar el snap.
-  const emitirAltoVisible = useCallback((minimizado: boolean) => {
-    if (altoSheetRef.current <= 0) return;
-    const visible = Math.max(
-      0,
-      altoSheetRef.current + MARGEN_INFERIOR_SHEET - (minimizado ? offsetRef.current : 0),
-    );
-    if (visible === altoVisibleEmitidoRef.current) return;
-    altoVisibleEmitidoRef.current = visible;
-    onAltoVisibleRef.current?.(visible);
-  }, []);
+  const emitirAltoVisible = useCallback(
+    (minimizado: boolean) => {
+      if (altoSheetRef.current <= 0) return;
+      const visible = Math.max(
+        0,
+        altoSheetRef.current + margenInferior - (minimizado ? offsetRef.current : 0),
+      );
+      if (visible === altoVisibleEmitidoRef.current) return;
+      altoVisibleEmitidoRef.current = visible;
+      onAltoVisibleRef.current?.(visible);
+    },
+    [margenInferior],
+  );
 
   // Anima al snap y avisa el alto visible del destino ya al arrancar; SOLO si el spring terminó (no
   // fue interrumpido por otro gesto) confirma `minimizedRef` para los handlers del arrastre.
@@ -149,12 +155,12 @@ export function NextControlSheet(props: NextControlSheetProps) {
     const alto = altoSheetRef.current;
     const cabecera = altoCabeceraRef.current;
     if (alto <= 0 || cabecera <= 0) return;
-    const nuevo = Math.max(0, Math.round(alto + MARGEN_INFERIOR_SHEET - cabecera));
+    const nuevo = Math.max(0, Math.round(alto + margenInferior - cabecera));
     const cambio = nuevo !== offsetRef.current;
     offsetRef.current = nuevo;
     if (objetivoColapsadoRef.current && cambio) animarA(nuevo, true);
     else emitirAltoVisible(objetivoColapsadoRef.current);
-  }, [animarA, emitirAltoVisible]);
+  }, [animarA, emitirAltoVisible, margenInferior]);
 
   const onLayoutSheet = (e: LayoutChangeEvent) => {
     const alto = Math.round(e.nativeEvent.layout.height);
@@ -229,170 +235,133 @@ export function NextControlSheet(props: NextControlSheetProps) {
     }),
   ).current;
 
-  const currentControlNumber = props.nextPointOrder !== null ? props.nextPointOrder + 1 : 1;
-
   return (
     <Animated.View
       onLayout={onLayoutSheet}
-      style={[
-        styles.sheet,
-        {
-          transform: [{ translateY: panY }],
-        },
-      ]}
+      style={[styles.sheet, { bottom: margenInferior, transform: [{ translateY: panY }] }]}
     >
-      {/* Cabecera: asa + título. Es lo único que queda visible al colapsar y la zona de arrastre. */}
-      <View style={styles.cabecera} onLayout={onLayoutCabecera} {...panResponder.panHandlers}>
-        <View style={styles.dragArea}>
-          <View style={styles.dragHandle} />
-        </View>
-
-        {cabeceraJornada ? (
-          <View style={styles.headerRow}>
-            <View style={styles.headerLeft}>
-              <Text style={styles.title}>Día sin iniciar</Text>
-              <Text style={styles.subtitle}>
-                {subtituloJornada(props.contexto.linea.codigo, props.totalPoints)}
-              </Text>
-            </View>
+      <HojaBurbuja>
+        <View style={styles.cabecera} onLayout={onLayoutCabecera} {...panResponder.panHandlers}>
+          <View style={styles.dragArea}>
+            <View style={styles.dragHandle} />
           </View>
-        ) : (
-          // Title on left, Control Number on right
-          <View style={styles.headerRow}>
+          {cabeceraJornada ? (
+            <Heading size="xl">Día sin iniciar</Heading>
+          ) : (
             <View style={styles.headerLeft}>
-              <View style={styles.tituloRow}>
-                <Text style={styles.title}>Siguiente parada</Text>
-                {tracking && (
-                  <View style={styles.vueltaPill}>
-                    <Text style={styles.vueltaPillTexto}>Vuelta {props.vueltaActual}</Text>
-                  </View>
-                )}
-              </View>
+              <Text size="sm" style={styles.etiqueta}>
+                Siguiente parada
+              </Text>
+              <Heading size="xl" numberOfLines={2}>
+                {props.nombreProximaParada || 'Próxima parada'}
+              </Heading>
               {props.viaMolinos ? (
                 <View
-                  style={styles.viaMolinosPill}
                   accessible
                   accessibilityLabel="Vía Molinos: Honduras, Molinos, Salomón Romero"
                 >
-                  <Ionicons name="trail-sign" size={13} color={quivoColors.primary} />
-                  <Text numberOfLines={1} style={styles.viaMolinosPillText}>
+                  <PildoraBurbuja icono="trail-sign" style={styles.viaMolinos}>
                     Vía Molinos
-                  </Text>
+                  </PildoraBurbuja>
                 </View>
               ) : null}
             </View>
-
-            <Text style={styles.controlNumber}>#{currentControlNumber}</Text>
-          </View>
-        )}
-      </View>
-
-      {/* Puntos restantes Stepper */}
-      {!cabeceraJornada && (
-        <View style={styles.stepperSection}>
-          <MiniStepper
-            estados={props.estadosPuntos}
-            tracking={tracking}
-            pasados={props.puntosPasados}
-            omitidos={props.puntosOmitidos}
-          />
+          )}
         </View>
-      )}
-
-      {props.gpsError && <Text style={styles.error}>{props.gpsError}</Text>}
-
-      {tracking && props.filaSalida ? <FilaSalidaCard fila={props.filaSalida} /> : null}
-
-      {/* Action Button Row */}
-      <View style={[styles.actionsRow, cabeceraJornada && styles.actionsRowSinStepper]}>
-        {cargandoJornada ? (
-          <View style={styles.cargandoJornada}>
-            <ActivityIndicator color={quivoColors.white} size="small" />
+        {!cabeceraJornada ? (
+          <View style={styles.stepperSection}>
+            <MiniStepper
+              estados={props.estadosPuntos}
+              tracking={tracking}
+              pasados={props.puntosPasados}
+              omitidos={props.puntosOmitidos}
+              vuelta={props.vueltaActual}
+              proximo={props.nextPointOrder}
+            />
           </View>
-        ) : fase === 'jornada' ? (
-          <>
+        ) : null}
+        {props.gpsError ? (
+          <Text size="sm" variant="error" accessibilityRole="alert">
+            {props.gpsError}
+          </Text>
+        ) : null}
+        {tracking && props.filaSalida ? <FilaSalidaCard fila={props.filaSalida} /> : null}
+        <View style={styles.actionsRow}>
+          {cargandoJornada ? (
+            <View style={styles.cargandoJornada}>
+              <ActivityIndicator color={dsColors.primary} size="small" />
+            </View>
+          ) : fase === 'jornada' ? (
+            <>
+              <Button
+                variant="primary"
+                size="lg"
+                loading={empezandoDia}
+                disabled={!puedeEmpezarDia || empezandoDia}
+                onPress={() => void onEmpezarDia()}
+                accessibilityHint="Avisa a tu delegado que hoy trabajas"
+                fullWidth
+              >
+                Empezar día
+              </Button>
+              {props.errorEmpezarDia ? (
+                <Text size="sm" variant="error" accessibilityRole="alert">
+                  {props.errorEmpezarDia}
+                </Text>
+              ) : null}
+            </>
+          ) : fase === 'listo' ? (
             <Button
-              variant="accent"
-              loading={empezandoDia}
-              disabled={!puedeEmpezarDia || empezandoDia}
-              onPress={() => void onEmpezarDia()}
-              style={styles.empezarButton}
-              textStyle={styles.empezarButtonText}
-              accessibilityHint="Avisa a tu delegado que hoy trabajas"
+              variant="primary"
+              size="lg"
+              disabled={!props.canStart}
+              onPress={props.onStart}
               fullWidth
             >
-              EMPEZAR DÍA
+              Iniciar ruta
             </Button>
-            {props.errorEmpezarDia ? (
-              <Text accessibilityRole="alert" style={styles.error}>
-                {props.errorEmpezarDia}
-              </Text>
-            ) : null}
-          </>
-        ) : fase === 'listo' ? (
-          <Button
-            variant="secondary"
-            disabled={!props.canStart}
-            onPress={props.onStart}
-            style={styles.startButton}
-            textStyle={styles.startButtonText}
-            fullWidth
-          >
-            COMENZAR RUTA
-          </Button>
-        ) : (
-          <>
-            {props.pausadoDesde ? (
-              <>
-                <Text style={styles.hintText}>
-                  En pausa desde{' '}
-                  {new Date(props.pausadoDesde).toLocaleTimeString('es-BO', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: false,
-                  })}
-                </Text>
+          ) : (
+            <>
+              {props.pausadoDesde ? (
+                <>
+                  <Text size="sm" variant="secondary">
+                    En pausa desde{' '}
+                    {new Date(props.pausadoDesde).toLocaleTimeString('es-BO', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      hour12: false,
+                    })}
+                  </Text>
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    onPress={props.onResume}
+                    accessibilityHint="Vuelves a aparecer como en recorrido"
+                    fullWidth
+                  >
+                    Reanudar ruta
+                  </Button>
+                </>
+              ) : (
                 <Button
-                  variant="secondary"
-                  onPress={props.onResume}
-                  style={styles.startButton}
-                  textStyle={styles.startButtonText}
-                  accessibilityHint="Vuelves a aparecer como en recorrido"
+                  variant="outline"
+                  size="lg"
+                  onPress={() =>
+                    props.filaSalida?.vista ? setConfirmarPausa(true) : props.onPause?.()
+                  }
+                  accessibilityHint="Pausa el recorrido; el GPS sigue activo"
                   fullWidth
                 >
-                  REANUDAR
+                  Pausar ruta
                 </Button>
-              </>
-            ) : (
-              <Button
-                variant="ghost"
-                // `vista` refleja el último estado conocido de la fila del propio trufi (se actualiza con la respuesta de llegada/salida y con el refresco); no es garantía.
-                onPress={() => (props.filaSalida?.vista ? setConfirmarPausa(true) : props.onPause?.())}
-                style={styles.finishButton}
-                textStyle={styles.finishButtonText}
-                leftIcon={<Ionicons name="pause-circle-outline" size={20} color={quivoColors.white} />}
-                accessibilityHint="Pausa el recorrido; el GPS sigue activo"
-                fullWidth
-              >
-                PAUSAR
+              )}
+              <Button variant="danger" size="lg" onPress={props.onFinish} fullWidth>
+                Finalizar ruta
               </Button>
-            )}
-            {props.pausadoDesde ? (
-              <Button
-                variant="ghost"
-                onPress={props.onFinish}
-                style={styles.finishButton}
-                textStyle={styles.finishButtonText}
-                leftIcon={<Ionicons name="stop-circle-outline" size={20} color={quivoColors.white} />}
-                fullWidth
-              >
-                Terminar el día
-              </Button>
-            ) : null}
-          </>
-        )}
-      </View>
-
+            </>
+          )}
+        </View>
+      </HojaBurbuja>
       <QuivoConfirmDialog
         visible={confirmarPausa}
         variant="danger"
@@ -407,7 +376,6 @@ export function NextControlSheet(props: NextControlSheetProps) {
           props.onPause?.();
         }}
       />
-
       <QuivoConfirmDialog
         visible={confirmarEmergencia}
         variant="danger"
@@ -431,11 +399,15 @@ function MiniStepper({
   tracking,
   pasados,
   omitidos,
+  vuelta,
+  proximo,
 }: {
   estados: readonly EstadoPuntoVuelta[];
   tracking: boolean;
   pasados: number;
   omitidos: number;
+  vuelta: number;
+  proximo: number | null;
 }) {
   // Un puntito por punto de control REAL de la ruta, en el orden rotado de la vuelta (el punto
   // donde arrancó va primero). Sin recorrido en curso todos se ven pendientes (ruta "virgen").
@@ -457,7 +429,7 @@ function MiniStepper({
   });
 
   const etiqueta = tracking
-    ? `${pasados} de ${estados.length} puntos${omitidos > 0 ? `, ${omitidos} omitidos` : ''}`
+    ? `Vuelta ${vuelta}, punto ${(proximo ?? pasados) + 1} de ${estados.length}${omitidos > 0 ? `, ${omitidos} omitidos` : ''}`
     : `${estados.length} puntos`;
 
   return (
@@ -468,200 +440,45 @@ function MiniStepper({
 }
 
 const styles = StyleSheet.create({
-  sheet: {
-    position: 'absolute',
-    left: 10,
-    right: 10,
-    bottom: MARGEN_INFERIOR_SHEET,
-    backgroundColor: '#3127B1',
-    borderRadius: 28,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 20,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.28,
-    shadowRadius: 18,
-    elevation: 14,
-  },
-  // Contenedor táctil de la cabecera; su `paddingBottom` es el aire visible al colapsar.
-  cabecera: {
-    paddingBottom: AIRE_BAJO_CABECERA,
-  },
-  dragArea: {
-    paddingVertical: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  sheet: { position: 'absolute', left: quivoBubble.edge, right: quivoBubble.edge },
+  cabecera: { paddingBottom: AIRE_BAJO_CABECERA },
+  dragArea: { height: dsSpace.md, alignItems: 'center', justifyContent: 'center' },
   dragHandle: {
-    width: 36,
-    height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.35)',
-    borderRadius: 2,
+    width: 40,
+    height: dsSpace.xs,
+    borderRadius: dsSpace.xs,
+    backgroundColor: dsColors.borderStrong,
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginTop: 4,
-  },
-  headerLeft: {
-    flex: 1,
-  },
-  title: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 18,
-    letterSpacing: 0.2,
-  },
-  subtitle: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 13,
-    marginTop: 2,
-  },
-  controlNumber: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 26,
-    letterSpacing: 0.5,
-  },
-  stepperSection: {
-    // 10 de antes menos el aire que ahora vive dentro de la cabecera: el layout expandido no cambia.
-    marginTop: 10 - AIRE_BAJO_CABECERA,
-    marginBottom: 4,
-  },
-  tituloRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  vueltaPill: {
-    backgroundColor: 'rgba(255, 255, 255, 0.16)',
-    borderRadius: quivoRadius.pill,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  vueltaPillTexto: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 11.5,
-  },
-  viaMolinosPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 4,
-    marginTop: 5,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: quivoRadius.pill,
-    backgroundColor: quivoColors.primarySubtle,
-  },
-  viaMolinosPillText: {
-    flexShrink: 1,
-    color: quivoColors.primary,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 10.5,
-  },
+  headerLeft: { gap: dsSpace.xs },
+  etiqueta: { color: dsColors.textTertiary },
+  viaMolinos: { alignSelf: 'flex-start' },
+  stepperSection: { marginBottom: dsSpace.sm },
   stepperContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
-    columnGap: 6,
-    rowGap: 6,
+    gap: dsSpace.sm,
   },
   stepperDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: dsSpace.ms,
+    height: dsSpace.ms,
+    borderRadius: dsSpace.sm,
+    borderWidth: 1,
+    borderColor: dsColors.borderStrong,
   },
-  stepperDotPasado: {
-    backgroundColor: '#22C55E',
-  },
-  // Rojo más claro que el del mapa (#C53B4A): sobre el índigo del sheet el otro casi no contrasta.
+  stepperDotPasado: { backgroundColor: dsColors.success, borderRadius: dsSpace.sm },
   stepperDotOmitido: {
-    backgroundColor: '#FF5C6C',
+    backgroundColor: dsColors.dangerSoft,
+    borderColor: dsColors.danger,
+    borderRadius: 0,
   },
-  // Próximo punto: blanco y más grande, el único que "pesa" entre los puntitos.
   stepperDotProximo: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: quivoColors.white,
-  },
-  stepperDotInactive: {
-    backgroundColor: 'rgba(255, 255, 255, 0.10)',
-  },
-  actionsRow: {
-    marginTop: 14,
-  },
-  // Sin stepper, el aire de la cabecera ya separa las acciones (14 + 14 se veía el doble).
-  actionsRowSinStepper: {
-    marginTop: 14 - AIRE_BAJO_CABECERA,
-  },
-  startButton: {
-    backgroundColor: quivoColors.white,
-    borderColor: quivoColors.white,
-    borderRadius: quivoRadius.pill,
-    height: 46,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  startButtonText: {
-    color: '#3127B1',
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 14.5,
-    letterSpacing: 0.8,
-  },
-  finishButton: {
-    backgroundColor: 'transparent',
-    borderColor: 'rgba(255, 255, 255, 0.6)',
+    backgroundColor: dsColors.accent,
+    borderColor: dsColors.warningText,
     borderWidth: 2,
-    borderRadius: quivoRadius.pill,
-    height: 46,
+    borderRadius: dsSpace.sm,
   },
-  finishButtonText: {
-    color: quivoColors.white,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 14.5,
-    letterSpacing: 0.8,
-  },
-  empezarButton: {
-    backgroundColor: quivoColors.accent,
-    borderColor: quivoColors.accent,
-    borderRadius: quivoRadius.pill,
-    height: 56,
-    shadowColor: quivoColors.accentStrong,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  empezarButtonText: {
-    color: quivoColors.text,
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 17,
-    letterSpacing: 1,
-  },
-  hintText: {
-    color: 'rgba(255, 255, 255, 0.9)',
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 13,
-  },
-  cargandoJornada: {
-    height: 120,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  error: {
-    color: '#FFB4B4',
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 12,
-    marginTop: 6,
-    textAlign: 'center',
-  },
+  stepperDotInactive: { backgroundColor: dsColors.surfaceRaised },
+  actionsRow: { gap: dsSpace.sm },
+  cargandoJornada: { minHeight: 52, alignItems: 'center', justifyContent: 'center' },
 });

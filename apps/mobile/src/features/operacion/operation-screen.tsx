@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Animated,
   Modal,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -18,13 +17,15 @@ import {
   haversineMetros,
   resolverMarcaLinea,
   type ContextoOperativoMovil,
-  type LineaBrand,
   type PaqueteDia,
 } from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
-import { Button } from '../../shared/components/Button';
 import { Input } from '../../shared/components/Input';
-import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
+import { quivoFonts, quivoRadius, quivoSpacing, quivoBubble } from '../../shared/theme/quivo-theme';
+import { dsColors, dsSpace, dsDuration } from '../../shared/theme/design-system';
+import { Burbuja, BotonBurbuja, PildoraBurbuja } from '../../shared/components/burbuja';
+import { Button as DsButton, Text as DsText } from '@quivo/design-system-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MapErrorBoundary } from './map-error-boundary';
 import { useProgresoVuelta } from './use-progreso-vuelta';
 import { VueltaCompletadaBanner } from './vuelta-completada-banner';
@@ -36,9 +37,7 @@ import { crearEmisorRumbo } from '../mapa/rumbo-mapa';
 import { useModoCamara } from '../mapa/use-modo-camara';
 import type { InsetsNavegacion, RouteMapProps } from '../mapa/tipos';
 import { useSyncStatus } from './use-sync-status';
-import { formatearDistancia } from './format-distancia';
 import { debePedirRuta, esFalloReintentable, respuestaRutaVigente } from './debe-pedir-ruta';
-import { ApiError } from '../../shared/api/http-client';
 import { ruteoApi } from '../../shared/api/ruteo-api';
 import { ControlFeedbackToast } from './control-feedback-toast';
 import { QuivoConfirmDialog } from '../../shared/components/quivo-confirm-dialog';
@@ -85,6 +84,7 @@ export function OperationScreen(
   props: OperationScreenProps & NativeStackScreenProps<OperationStackParamList, 'Map'>,
 ) {
   useKeepAwake();
+  const insets = useSafeAreaInsets();
   const { gps, paqueteDia } = useGpsContext();
   // Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`, `docs/estados-red-vs-captura.md`):
   // `pendientes`/`errorSync`/`isSyncing` YA NO se leen acá — eran exactamente los widgets de
@@ -193,7 +193,10 @@ export function OperationScreen(
   // Base de los FABs y del botón "Centrar": justo encima del sheet EXPANDIDO (no del colapsado, así
   // nunca quedan tapados); se mueven con el sheet por `translateY: sheetPanY`. 180 mientras el
   // sheet no se midió.
-  const fabsBottom = altoSheet > 0 ? altoSheet + MARGEN_INFERIOR_SHEET + 12 : 180;
+  const fabsBottom =
+    altoSheet > 0
+      ? altoSheet + MARGEN_INFERIOR_SHEET + insets.bottom + dsSpace.ms
+      : 180 + insets.bottom;
 
   // Rescope SESION_NO_VIGENTE, punto C: dispara `onSesionNoVigenteFinalizada` cuando
   // `sesionNoVigente` está prendido y `gps.tracking` está en `false` — la señal de que
@@ -313,7 +316,13 @@ export function OperationScreen(
       return;
     }
 
-    const pedido = { ts: ahora, lat: posicion.lat, lng: posicion.lng, destino: destinoRuteo, fallo: false };
+    const pedido = {
+      ts: ahora,
+      lat: posicion.lat,
+      lng: posicion.lng,
+      destino: destinoRuteo,
+      fallo: false,
+    };
     ultimoFetchRuta.current = pedido;
     const id = ++idPedidoRuta.current;
     const vigente = () => respuestaRutaVigente({ idPedido: id, idUltimo: idPedidoRuta.current });
@@ -432,36 +441,32 @@ export function OperationScreen(
         fase={progreso.fase}
       />
 
-      <View pointerEvents="box-none" style={styles.topOverlay} onLayout={onLayoutTopOverlay}>
-        <View style={{ flexDirection: 'column', gap: quivoSpacing.sm }}>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: quivoSpacing.md }}>
-            <Pressable
-              hitSlop={12}
-              accessibilityRole="button"
-              accessibilityLabel="Perfil y configuración"
-              onPress={() => props.navigation.navigate('Perfil')}
-            >
-              <DriverRouteCard
-                contexto={props.contexto}
-                brand={lineaBrand}
-                tracking={gps.tracking}
-                compacta={camara.modo !== 'general'}
-              />
-            </Pressable>
-          </View>
-        </View>
-
-        {gps.tracking && proximoPuntoControl && (
-          <NavigationInstructionCard
-            distanciaMetros={distanciaProximoPunto}
-            velocidadKmh={gps.posicionActual?.speedKmh ?? null}
+      <View
+        pointerEvents="box-none"
+        style={[styles.topOverlay, { top: insets.top + quivoBubble.edge }]}
+        onLayout={onLayoutTopOverlay}
+      >
+        <Pressable
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel={`Línea ${props.contexto.linea.codigo}, ${!gps.tracking ? 'en espera' : gps.pausadoDesde ? 'en pausa' : 'en ruta'}. Abrir perfil`}
+          onPress={() => props.navigation.navigate('Perfil')}
+          style={styles.cabeceraBoton}
+        >
+          <DriverRouteCard
+            contexto={props.contexto}
             brand={lineaBrand}
+            tracking={gps.tracking}
+            pausadoDesde={gps.pausadoDesde}
+            compacta={camara.modo !== 'general'}
           />
-        )}
+        </Pressable>
 
         {gps.tracking && gps.senalGpsDebil ? <SenalGpsDebilChip /> : null}
 
-        {props.aviso ? <Text style={styles.notice}>{props.aviso}</Text> : null}
+        {props.aviso ? (
+          <AvisoBurbuja icono="information-circle-outline" mensaje={props.aviso} />
+        ) : null}
         {/* QUI-338 (reportado desde la calle: Samsung Galaxy A71, Android 10-13 — conductor
             sin ubicación y sin ningún mensaje que le dijera qué tocar): antes, "Iniciar
             recorrido" quedaba habilitado sin importar el permiso y `iniciar()` fallaba en
@@ -471,55 +476,30 @@ export function OperationScreen(
             el patrón exacto de `sesionNoRevalidada` de abajo (texto `dangerNotice` + botón de
             acción a todo el ancho). */}
         {!gps.tracking && gps.permisoGps.bloqueante ? (
-          <View style={styles.permisoGpsContainer}>
-            <Text accessibilityRole="alert" style={styles.dangerNotice}>
-              {gps.permisoGps.mensaje}
-            </Text>
-            {gps.permisoGps.accion ? (
-              <Button
-                variant="danger"
-                onPress={manejarAbrirAjustesPermisoGps}
-                style={styles.permisoGpsButton}
-              >
-                {gps.permisoGps.etiquetaAccion}
-              </Button>
-            ) : null}
-          </View>
+          <AvisoBurbuja
+            icono="location-outline"
+            mensaje={gps.permisoGps.mensaje}
+            accion={
+              gps.permisoGps.accion ? (gps.permisoGps.etiquetaAccion ?? undefined) : undefined
+            }
+            onAccion={gps.permisoGps.accion ? manejarAbrirAjustesPermisoGps : undefined}
+          />
         ) : null}
         {props.sesionNoRevalidada ? (
-          <View style={styles.sesionNoRevalidadaContainer}>
-            <Text accessibilityRole="alert" style={styles.dangerNotice}>
-              No se pudo revalidar tu sesión. El recorrido se sigue grabando, pero no va a
-              sincronizar hasta que vuelvas a iniciar sesión.
-            </Text>
-            <Button
-              variant="danger"
-              onPress={confirmarCierreSesion}
-              style={styles.sesionNoRevalidadaButton}
-            >
-              Vuelve a iniciar sesión para sincronizar
-            </Button>
-          </View>
+          <AvisoBurbuja
+            icono="alert-circle-outline"
+            mensaje="No se pudo revalidar tu sesión. El recorrido se sigue grabando, pero no va a sincronizar hasta que vuelvas a iniciar sesión."
+            accion="Vuelve a iniciar sesión para sincronizar"
+            onAccion={confirmarCierreSesion}
+          />
         ) : null}
-        {/* Rescope SESION_NO_VIGENTE, punto C: bloqueante y NO descartable a propósito — sin
-            botón para cerrarlo, distinto del banner de `sesionNoRevalidada` de arriba (que sí
-            puede ignorarse, esto no: el servidor ya dio la sesión por muerta). El único botón
-            abre el MISMO diálogo de confirmación de "Finalizar" que ya usa `NextControlSheet`
-            (`confirmarFinalizacion`) — al confirmar, `gps.detener()` escribe `fin_recorrido` y
-            recién ahí el efecto de arriba dispara `onSesionNoVigenteFinalizada`. */}
         {props.sesionNoVigente ? (
-          <View style={styles.sesionNoRevalidadaContainer}>
-            <Text accessibilityRole="alert" style={styles.dangerNotice}>
-              Tu sesión venció. Toca Finalizar y vuelve a iniciar sesión.
-            </Text>
-            <Button
-              variant="danger"
-              onPress={confirmarFinalizacion}
-              style={styles.sesionNoRevalidadaButton}
-            >
-              Finalizar recorrido
-            </Button>
-          </View>
+          <AvisoBurbuja
+            icono="alert-circle-outline"
+            mensaje="Tu sesión venció. Toca Finalizar y vuelve a iniciar sesión."
+            accion="Finalizar recorrido"
+            onAccion={confirmarFinalizacion}
+          />
         ) : null}
         {/* Entrega 4 (`docs/plan-correccion-post-piloto-2026-09-09.md`): acá vivían el banner
             de `errorSync` ("no se pudo sincronizar") y el de `pendientes >= 800`
@@ -532,14 +512,13 @@ export function OperationScreen(
             canaria / `SQLITE_FULL`) queda para la Entrega 26 (preflight), que si corresponde
             sí debe mostrarse porque ESA es una falla de captura. */}
         {paqueteDia.vencido ? (
-          <Text accessibilityRole="alert" style={styles.dangerNotice}>
-            Asignación vencida. Reconecta antes de iniciar otro recorrido.
-          </Text>
+          <AvisoBurbuja
+            icono="alert-circle-outline"
+            mensaje="Asignación vencida. Reconecta antes de iniciar otro recorrido."
+          />
         ) : null}
         {paqueteDia.error ? (
-          <Text accessibilityRole="alert" style={styles.dangerNotice}>
-            {paqueteDia.error}
-          </Text>
+          <AvisoBurbuja icono="alert-circle-outline" mensaje={paqueteDia.error} />
         ) : null}
         <AvisoFotoVehiculo
           sesionId={props.contexto.sesionId}
@@ -547,9 +526,10 @@ export function OperationScreen(
           obtenerAccessToken={props.obtenerAccessToken}
         />
         {!settings.trabajarOffline && isOffline ? (
-          <Text accessibilityRole="alert" style={styles.dangerNotice}>
-            Modo offline desactivado en tus Ajustes. Conéctate a internet para iniciar.
-          </Text>
+          <AvisoBurbuja
+            icono="cloud-offline-outline"
+            mensaje="Modo offline desactivado en tus Ajustes. Conéctate a internet para iniciar."
+          />
         ) : null}
       </View>
 
@@ -566,91 +546,87 @@ export function OperationScreen(
       />
 
       <Animated.View
-        style={[styles.fabsContainer, { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] }]}
+        style={[
+          styles.fabsContainer,
+          { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] },
+        ]}
       >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Registrar observación"
-          style={styles.recenterButton}
-          onPress={() => setObservacionModalVisible(true)}
-        >
-          <Ionicons name="alert-circle-outline" size={24} color="#3127B1" />
-        </Pressable>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Información de registro"
-          style={styles.recenterButton}
-          onPress={() => setShowInfo(true)}
-        >
-          <Ionicons
-            name="checkmark-circle-outline"
-            size={24}
-            color={gps.tracking ? '#FD9E15' : '#3127B1'}
+        <Burbuja direction="column">
+          <BotonBurbuja
+            icono="alert-circle-outline"
+            variante="activo"
+            accessibilityLabel="Reportar un problema"
+            onPress={() => setObservacionModalVisible(true)}
           />
-        </Pressable>
-
-        {__DEV__ && gps.tracking && proximoPuntoControl && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Simular detección (Debug)"
-            style={[styles.recenterButton, { backgroundColor: quivoColors.accentSoft }]}
-            onPress={() => gps.simularDeteccion(proximoPuntoControl.id, distanciaProximoPunto)}
-          >
-            <Ionicons name="bug" size={22} color={quivoColors.accentStrong} />
-          </Pressable>
-        )}
-
-        {/* Brújula propia (la nativa está apagada). Solo en navegación: alterna rumbo arriba / norte
-            arriba. En libre el único control de recentrado es el pill "Centrar"; en la vista general
-            (norte fijo) no hace falta. */}
-        {camara.modo === 'navegacion' && (
-          <BrujulaMapa
-            emisor={emisorRumbo}
-            style={styles.recenterButton}
-            norteFijo={camara.orientacion === 'norte'}
-            accessibilityLabel={
-              camara.orientacion === 'norte'
-                ? 'Brújula: orientar el mapa según tu rumbo'
-                : 'Brújula: fijar el norte arriba'
-            }
-            onPress={alternarOrientacion}
+          <BotonBurbuja
+            icono="checkmark-circle-outline"
+            accessibilityLabel="Información de registro"
+            onPress={() => setShowInfo(true)}
           />
-        )}
-
-        {camara.modo === 'general' && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Ver ruta completa"
-            style={styles.recenterButton}
-            onPress={recentrar}
-          >
-            <Ionicons name="locate" size={24} color="#3127B1" />
-          </Pressable>
-        )}
+          {__DEV__ && gps.tracking && proximoPuntoControl ? (
+            <BotonBurbuja
+              icono="bug"
+              accessibilityLabel="Simular detección (Debug)"
+              onPress={() => gps.simularDeteccion(proximoPuntoControl.id, distanciaProximoPunto)}
+            />
+          ) : null}
+          {camara.modo === 'navegacion' ? (
+            <BrujulaMapa
+              emisor={emisorRumbo}
+              style={styles.brujula}
+              norteFijo={camara.orientacion === 'norte'}
+              accessibilityLabel={
+                camara.orientacion === 'norte'
+                  ? 'Brújula: orientar el mapa según tu rumbo'
+                  : 'Brújula: fijar el norte arriba'
+              }
+              onPress={alternarOrientacion}
+            />
+          ) : null}
+          {camara.modo === 'general' ? (
+            <BotonBurbuja
+              icono="locate"
+              accessibilityLabel="Ver ruta completa"
+              onPress={recentrar}
+            />
+          ) : null}
+        </Burbuja>
       </Animated.View>
 
-      {/* "Centrar": solo en modo libre, bien visible (estilo Google Maps) abajo a la izquierda,
-          encima del sheet y siguiéndolo al arrastrar. */}
-      {camara.modo === 'libre' && (
+      {gps.tracking ? (
         <Animated.View
-          style={[styles.centrarContenedor, { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] }]}
+          style={[
+            styles.velocidadContenedor,
+            { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] },
+          ]}
         >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Recentrar"
-            style={styles.centrarPill}
-            onPress={recentrar}
-          >
-            <Ionicons name="navigate" size={20} color="#3127B1" />
-            <Text style={styles.centrarTexto}>Centrar</Text>
-          </Pressable>
+          {camara.modo === 'libre' ? (
+            <PildoraBurbuja icono="navigate" accessibilityLabel="Recentrar" onPress={recentrar}>
+              Centrar
+            </PildoraBurbuja>
+          ) : null}
+          <PildoraBurbuja icono="speedometer-outline">
+            {Math.round(gps.posicionActual?.speedKmh ?? 0)} km/h
+          </PildoraBurbuja>
         </Animated.View>
-      )}
+      ) : null}
+      {!gps.tracking && camara.modo === 'libre' ? (
+        <Animated.View
+          style={[
+            styles.velocidadContenedor,
+            { bottom: fabsBottom, transform: [{ translateY: sheetPanY }] },
+          ]}
+        >
+          <PildoraBurbuja icono="navigate" accessibilityLabel="Recentrar" onPress={recentrar}>
+            Centrar
+          </PildoraBurbuja>
+        </Animated.View>
+      ) : null}
 
       <NextControlSheet
         contexto={props.contexto}
         nextPointOrder={ordenProximoEfectivo}
+        nombreProximaParada={null}
         totalPoints={progreso.total}
         estadosPuntos={estadosStepper}
         vueltaActual={progreso.vueltaActual}
@@ -697,11 +673,12 @@ export function OperationScreen(
         <View style={styles.modalOverlay}>
           <BlurView intensity={85} tint="light" style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Ionicons name="checkmark-circle-outline" size={20} color="#3127B1" />
+              <Ionicons name="checkmark-circle-outline" size={20} color={dsColors.primaryText} />
               <Text style={styles.modalTitle}>Registro automatico</Text>
             </View>
             <Text style={styles.modalText}>
-              Al entrar al radio del punto de control, este se registra automáticamente en el sistema
+              Al entrar al radio del punto de control, este se registra automáticamente en el
+              sistema
             </Text>
             <Pressable
               accessibilityRole="button"
@@ -727,7 +704,7 @@ export function OperationScreen(
         <View style={styles.modalOverlay}>
           <BlurView intensity={85} tint="light" style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Ionicons name="alert-circle-outline" size={20} color="#3127B1" />
+              <Ionicons name="alert-circle-outline" size={20} color={dsColors.primaryText} />
               <Text style={styles.modalTitle}>Registrar observación</Text>
             </View>
             {observacionEnviada ? (
@@ -747,7 +724,10 @@ export function OperationScreen(
             ) : (
               <>
                 {errorObservacion ? (
-                  <Text accessibilityRole="alert" style={[styles.dangerNotice, styles.observacionError]}>
+                  <Text
+                    accessibilityRole="alert"
+                    style={[styles.dangerNotice, styles.observacionError]}
+                  >
                     {errorObservacion}
                   </Text>
                 ) : null}
@@ -768,7 +748,10 @@ export function OperationScreen(
                     accessibilityLabel="Cancelar"
                     onPress={cerrarModalObservacion}
                     disabled={enviandoObservacion}
-                    style={({ pressed }) => [styles.modalCancelButton, pressed && styles.pressedButton]}
+                    style={({ pressed }) => [
+                      styles.modalCancelButton,
+                      pressed && styles.pressedButton,
+                    ]}
                   >
                     <Text style={styles.modalCancelButtonText}>CANCELAR</Text>
                   </Pressable>
@@ -784,7 +767,7 @@ export function OperationScreen(
                     ]}
                   >
                     {enviandoObservacion ? (
-                      <ActivityIndicator color={quivoColors.white} size="small" />
+                      <ActivityIndicator color={dsColors.white} size="small" />
                     ) : (
                       <Text style={styles.modalConfirmButtonText}>ENVIAR</Text>
                     )}
@@ -848,28 +831,37 @@ export function OperationScreen(
   );
 }
 
-function NavigationInstructionCard({
-  distanciaMetros,
-  velocidadKmh,
+function AvisoBurbuja({
+  icono,
+  mensaje,
+  accion,
+  onAccion,
 }: {
-  distanciaMetros: number | null;
-  velocidadKmh: number | null;
-  brand: LineaBrand;
+  icono: React.ComponentProps<typeof Ionicons>['name'];
+  mensaje: ReactNode;
+  accion?: string;
+  onAccion?: () => void;
 }) {
-  const distanciaFormateada = distanciaMetros === null ? '120m' : formatearDistancia(distanciaMetros);
-  // Siempre visible mientras hay recorrido activo (antes se ocultaba del todo sin un fix de
-  // GPS con velocidad válida, así que en la práctica nunca se veía) — sin velocidad real
-  // todavía, se muestra "0 km/h" en vez de nada: el conductor espera ver el dato ahí, no que
-  // aparezca y desaparezca según la calidad del fix.
-  const velocidadRedondeada = velocidadKmh === null ? 0 : Math.round(velocidadKmh);
   return (
-    <BlurView intensity={80} tint="light" style={styles.navInstructionCard}>
-      <Ionicons name="arrow-up" size={18} color="#3127B1" />
-      <Text style={styles.navDistance}>{distanciaFormateada}</Text>
-      <View style={styles.navDivider} />
-      <Ionicons name="speedometer-outline" size={16} color="#4B4B6B" />
-      <Text style={styles.navSpeed}>{velocidadRedondeada} km/h</Text>
-    </BlurView>
+    <Burbuja direction="column" style={styles.avisoBurbuja}>
+      <View style={styles.avisoFila}>
+        <Ionicons name={icono} size={20} color={dsColors.danger} />
+        <DsText size="sm" variant="error" accessibilityRole="alert" style={styles.avisoTexto}>
+          {mensaje}
+        </DsText>
+      </View>
+      {accion && onAccion ? (
+        <DsButton
+          variant="danger"
+          size="md"
+          onPress={onAccion}
+          style={styles.avisoAccion}
+          fullWidth
+        >
+          {accion}
+        </DsButton>
+      ) : null}
+    </Burbuja>
   );
 }
 
@@ -879,7 +871,11 @@ function NavigationInstructionCard({
 function SenalGpsDebilChip() {
   const opacidad = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(opacidad, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    Animated.timing(opacidad, {
+      toValue: 1,
+      duration: dsDuration.fast,
+      useNativeDriver: true,
+    }).start();
   }, [opacidad]);
   return (
     <Animated.View
@@ -888,7 +884,7 @@ function SenalGpsDebilChip() {
       accessibilityLiveRegion="polite"
       accessibilityLabel="Señal GPS débil: los puntos pueden registrarse con retraso"
     >
-      <Ionicons name="cellular-outline" size={14} color={quivoColors.warningText} />
+      <Ionicons name="cellular-outline" size={14} color={dsColors.warningText} />
       <Text style={styles.senalDebilTexto}>Señal GPS débil</Text>
     </Animated.View>
   );
@@ -928,7 +924,7 @@ function MapLayer({
   if (loading) {
     return (
       <View style={styles.mapFallback}>
-        <ActivityIndicator color={quivoColors.primary} />
+        <ActivityIndicator color={dsColors.primary} />
         <Text style={styles.mapFallbackText}>Preparando tu ruta…</Text>
       </View>
     );
@@ -957,7 +953,7 @@ function MapLayer({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: quivoColors.page },
+  container: { flex: 1, backgroundColor: dsColors.surfacePage },
   fullMap: { flex: 1, height: undefined, borderRadius: 0 },
   mapFallback: {
     flex: 1,
@@ -967,174 +963,87 @@ const styles = StyleSheet.create({
     paddingBottom: 180,
   },
   mapFallbackText: {
-    color: quivoColors.textSecondary,
+    color: dsColors.textSecondary,
     fontFamily: quivoFonts.bodyMedium,
     fontSize: 12,
   },
   topOverlay: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 12 : 16,
-    left: 16,
-    right: 16,
-    gap: 8,
+    left: quivoBubble.edge,
+    right: quivoBubble.edge,
+    gap: dsSpace.sm,
   },
-  navInstructionCard: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255, 255, 255, 0.88)',
-    borderRadius: 14,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.8)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    gap: 8,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 6,
-    elevation: 4,
-    marginTop: 2,
-  },
+  cabeceraBoton: { alignSelf: 'flex-start', minHeight: quivoBubble.touch },
+  avisoBurbuja: { alignItems: 'stretch', alignSelf: 'stretch' },
+  avisoFila: { flexDirection: 'row', alignItems: 'flex-start', gap: dsSpace.sm },
+  avisoTexto: { flex: 1 },
+  avisoAccion: { borderRadius: quivoBubble.innerRadius },
   senalDebilChip: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: quivoRadius.pill,
-    backgroundColor: quivoColors.warningSoft,
+    gap: dsSpace.sm,
+    minHeight: quivoBubble.touch,
+    paddingHorizontal: dsSpace.md,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: dsColors.warningSoft,
     borderWidth: 1,
-    borderColor: quivoColors.warningBorder,
+    borderColor: dsColors.warning,
   },
   senalDebilTexto: {
-    color: quivoColors.warningText,
+    color: dsColors.warningText,
     fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 12,
+    fontSize: 14,
   },
-  navDistance: {
-    color: '#3127B1',
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 16,
+  fabsContainer: { position: 'absolute', right: quivoBubble.edge },
+  brujula: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: quivoBubble.innerRadius,
   },
-  navDivider: {
-    width: 1,
-    height: 16,
-    backgroundColor: 'rgba(49, 39, 177, 0.18)',
-  },
-  navSpeed: {
-    color: '#4B4B6B',
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 13,
-  },
-  // Fila horizontal de FABs a la derecha, a la altura del pill "Centrar" (izquierda). En navegación
-  // son hasta 4 (obs, info, bug de dev, brújula) = 4×42 + 3×12 = 204 dp; el pill (~120 dp) solo
-  // existe en libre, donde la brújula no se muestra, así que en 360 dp nunca se solapan.
-  fabsContainer: {
+  velocidadContenedor: {
     position: 'absolute',
-    right: 16,
-    flexDirection: 'row',
-    gap: 12,
-    alignItems: 'center',
-  },
-  centrarContenedor: {
-    position: 'absolute',
-    left: 16,
-  },
-  centrarPill: {
-    height: 44,
-    paddingHorizontal: 18,
-    borderRadius: quivoRadius.pill,
-    backgroundColor: quivoColors.white,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 6,
-  },
-  centrarTexto: {
-    color: '#3127B1',
-    fontFamily: quivoFonts.displayBold,
-    fontSize: 15,
-    letterSpacing: 0.3,
-  },
-  recenterButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.8)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    elevation: 5,
+    left: quivoBubble.edge,
+    gap: dsSpace.sm,
+    alignItems: 'flex-start',
   },
   notice: {
-    color: quivoColors.accentStrong,
-    backgroundColor: quivoColors.accentSoft,
-    borderRadius: quivoRadius.md,
-    padding: quivoSpacing.md,
-    fontFamily: quivoFonts.bodyMedium,
-    fontSize: 11,
+    color: dsColors.warningText,
+    backgroundColor: dsColors.warningSoft,
+    borderRadius: quivoBubble.innerRadius,
+    padding: dsSpace.md,
+    fontSize: 14,
   },
   dangerNotice: {
-    color: quivoColors.danger,
-    backgroundColor: quivoColors.dangerSoft,
-    borderRadius: quivoRadius.md,
-    padding: quivoSpacing.md,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 11,
+    color: dsColors.danger,
+    backgroundColor: dsColors.dangerSoft,
+    borderRadius: quivoBubble.innerRadius,
+    padding: dsSpace.md,
+    fontSize: 14,
   },
-  sesionNoRevalidadaContainer: {
-    gap: quivoSpacing.xs,
-  },
-  sesionNoRevalidadaButton: {
-    alignSelf: 'stretch',
-  },
-  permisoGpsContainer: {
-    gap: quivoSpacing.xs,
-  },
-  permisoGpsButton: {
-    alignSelf: 'stretch',
-  },
-  successNotice: {
-    alignSelf: 'center',
-    color: quivoColors.success,
-    backgroundColor: quivoColors.successSoft,
-    borderRadius: quivoRadius.pill,
-    paddingHorizontal: quivoSpacing.lg,
-    paddingVertical: quivoSpacing.sm,
-    fontFamily: quivoFonts.bodySemiBold,
-    fontSize: 11,
-  },
+  sesionNoRevalidadaContainer: { gap: dsSpace.sm },
+  sesionNoRevalidadaButton: { alignSelf: 'stretch' },
+  permisoGpsContainer: { gap: dsSpace.sm },
+  permisoGpsButton: { alignSelf: 'stretch' },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(25, 20, 60, 0.22)',
+    backgroundColor: quivoBubble.scrim,
     justifyContent: 'center',
     alignItems: 'center',
     padding: quivoSpacing.lg,
   },
   modalContent: {
-    backgroundColor: 'rgba(236, 239, 244, 0.92)',
+    backgroundColor: quivoBubble.surface,
     borderRadius: 22,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.85)',
+    borderColor: quivoBubble.border,
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 16,
     width: '100%',
     maxWidth: 290,
-    shadowColor: '#000000',
+    shadowColor: dsColors.dark,
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.16,
     shadowRadius: 16,
@@ -1149,7 +1058,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: quivoFonts.displayBold,
     fontSize: 16,
-    color: '#3127B1',
+    color: dsColors.primaryText,
     letterSpacing: 0.2,
     flex: 1,
   },
@@ -1157,16 +1066,16 @@ const styles = StyleSheet.create({
     fontFamily: quivoFonts.bodyMedium,
     fontSize: 12,
     lineHeight: 16.5,
-    color: '#475569',
+    color: dsColors.textSecondary,
     marginBottom: 16,
   },
   modalPillButton: {
     height: 38,
     borderRadius: quivoRadius.pill,
-    backgroundColor: '#3127B1',
+    backgroundColor: dsColors.primaryText,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#1A0E70',
+    shadowColor: dsColors.primaryStrong,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.35,
     shadowRadius: 6,
@@ -1176,10 +1085,10 @@ const styles = StyleSheet.create({
     fontFamily: quivoFonts.displayBold,
     fontSize: 13,
     letterSpacing: 0.8,
-    color: quivoColors.white,
+    color: dsColors.white,
   },
   observacionShell: {
-    backgroundColor: '#DCE0E8',
+    backgroundColor: dsColors.surfaceSunken,
     borderRadius: 14,
     borderWidth: 0,
   },
@@ -1195,9 +1104,9 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 38,
     borderRadius: quivoRadius.pill,
-    backgroundColor: '#DCE0E8',
+    backgroundColor: dsColors.surfaceSunken,
     borderWidth: 1.5,
-    borderColor: '#3127B1',
+    borderColor: dsColors.primaryText,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1205,16 +1114,16 @@ const styles = StyleSheet.create({
     fontFamily: quivoFonts.displayBold,
     fontSize: 12.5,
     letterSpacing: 0.6,
-    color: '#3127B1',
+    color: dsColors.primaryText,
   },
   modalConfirmButton: {
     flex: 1,
     height: 38,
     borderRadius: quivoRadius.pill,
-    backgroundColor: '#3127B1',
+    backgroundColor: dsColors.primaryText,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#1A0E70',
+    shadowColor: dsColors.primaryStrong,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.35,
     shadowRadius: 6,
@@ -1224,7 +1133,7 @@ const styles = StyleSheet.create({
     fontFamily: quivoFonts.displayBold,
     fontSize: 12.5,
     letterSpacing: 0.6,
-    color: quivoColors.white,
+    color: dsColors.white,
   },
   disabledButton: {
     opacity: 0.5,
