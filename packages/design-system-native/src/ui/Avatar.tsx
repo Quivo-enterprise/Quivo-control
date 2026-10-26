@@ -1,5 +1,5 @@
 import { Image, Text, View, type ViewProps } from "react-native";
-import { colors, fontSize, fontWeight, radius, type QuivoColors, type QuivoTheme } from "../tokens";
+import { colors, fontSize, fontStyle, fontWeight, radius, type QuivoColors, type QuivoTheme } from "../tokens";
 
 export type AvatarSize = "sm" | "md" | "lg" | "xl";
 export type AvatarStatus = "online" | "busy" | "offline";
@@ -70,7 +70,7 @@ export function Avatar({ src, name, size = "md", status, theme = "light", style,
       {src ? (
         <Image source={{ uri: src }} style={{ width: box, height: box, borderRadius: radius.full }} />
       ) : (
-        <Text style={{ color: c.textInverse, fontSize: font, fontWeight: fontWeight.extrabold }}>{initials(name)}</Text>
+        <Text style={{ color: c.textInverse, fontSize: font, ...fontStyle("body", fontWeight.extrabold) }}>{initials(name)}</Text>
       )}
       {status && (
         <View

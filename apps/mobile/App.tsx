@@ -5,6 +5,7 @@ import {
   Montserrat_400Regular,
   Montserrat_500Medium,
   Montserrat_600SemiBold,
+  Montserrat_700Bold,
   useFonts as useMontserrat,
 } from '@expo-google-fonts/montserrat';
 import {
@@ -53,6 +54,7 @@ function QuivoApp() {
     Montserrat_400Regular,
     Montserrat_500Medium,
     Montserrat_600SemiBold,
+    Montserrat_700Bold,
     // `@quivo/design-system-native` pide la familia por nombre corto (`fontFamily.body`/`display`):
     // sin estos alias, `Text`/`Heading`/`Button` caen a la fuente del sistema.
     Montserrat: Montserrat_500Medium,

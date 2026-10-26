@@ -185,6 +185,39 @@ export const fontFamily = {
   body: Platform.select({ ios: "Montserrat", android: "Montserrat", default: "System" }),
 } as const;
 
+/*
+ * QUIVO Control (adaptación local, ver README del paquete): en Android una fuente cargada con
+ * expo-font solo trae su variante normal, y pedir `fontWeight: "700"` sobre esa familia cae a la
+ * fuente del sistema. Por eso el peso se elige por nombre de archivo (los que carga la app con
+ * `@expo-google-fonts/*`) y `fontWeight` queda en "normal".
+ */
+const FAMILIA_POR_PESO = {
+  display: {
+    "300": "Oxanium_400Regular",
+    "400": "Oxanium_400Regular",
+    "500": "Oxanium_600SemiBold",
+    "600": "Oxanium_600SemiBold",
+    "700": "Oxanium_700Bold",
+    "800": "Oxanium_700Bold",
+  },
+  body: {
+    "300": "Montserrat_400Regular",
+    "400": "Montserrat_400Regular",
+    "500": "Montserrat_500Medium",
+    "600": "Montserrat_600SemiBold",
+    "700": "Montserrat_700Bold",
+    "800": "Montserrat_700Bold",
+  },
+} as const;
+
+/** Estilo de fuente para un tipo (`display` o `body`) y un peso de `fontWeight`. */
+export function fontStyle(
+  kind: keyof typeof FAMILIA_POR_PESO,
+  weight: (typeof fontWeight)[keyof typeof fontWeight] = fontWeight.normal,
+): { fontFamily: string; fontWeight: "normal" } {
+  return { fontFamily: FAMILIA_POR_PESO[kind][weight], fontWeight: "normal" };
+}
+
 /** Animation durations in ms, mirroring `--qv-duration-*` in tokens.css. */
 export const duration = {
   fast: 150,

@@ -28,6 +28,15 @@ Si una propuesta choca con una regla de este README, gana la propuesta en lo de 
   Geometría de burbuja: `quivoBubble` en `apps/mobile/src/shared/theme/quivo-theme.ts`. `quivoColors` sigue ahí por
   compatibilidad: en lo que toques, pásate a `dsColors`. Si te falta un token, **no pongas un hex suelto**: anótalo.
 - Las fuentes ya están registradas con el nombre corto que pide el design system (`Oxanium`, `Montserrat`).
+- **Fuentes en Android (obligatorio):** nunca pongas `fontWeight` ni `fontFamily` sueltos en un estilo: en Android la
+  fuente cae a Roboto. Usa `Text` con la prop `weight` (`regular` · `medium` · `semibold` · `bold`), `Heading`, o en
+  un `StyleSheet` `...fontStyle('body' | 'display', '400' | '500' | '600' | '700')` de `@quivo/design-system-native`.
+  Todo texto de la app sale de `Text`/`Heading` del design system o lleva `fontStyle`: el `Text` de `react-native`
+  sin `fontStyle` también cae a Roboto.
+- **No uses `textMuted` ni `variant="muted"`**: en tema claro es `#1a1a1a` (error del token). Para texto
+  secundario usa `textSecondary`/`variant="secondary"`; para placeholders y ayudas, `textTertiary`.
+- Código con el formato del repo (Prettier, `printWidth` 100) y conservando los comentarios que explican el
+  porqué. Nada de componentes compactados en una sola línea.
 - Si un componente del design system no cubre un caso (por ejemplo, no hay hoja inferior, diálogo ni botón de icono),
   crea la pieza local **sobre los tokens del design system** y anótala en tu informe como "hueco del design system".
   **No edites `Quivo-UI-UX` ni `packages/design-system-native`.**

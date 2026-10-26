@@ -1,5 +1,5 @@
 import { Text as RNText, type TextProps as RNTextProps, type TextStyle } from "react-native";
-import { colors, fontSize, fontWeight, type QuivoTheme } from "../tokens";
+import { colors, fontSize, fontStyle, fontWeight, type QuivoTheme } from "../tokens";
 
 export type TextSize = "xs" | "sm" | "md" | "lg" | "xl";
 export type TextWeight = "regular" | "medium" | "semibold" | "bold";
@@ -12,7 +12,7 @@ export type TextProps = RNTextProps & {
   theme?: QuivoTheme;
 };
 
-const WEIGHT_MAP: Record<TextWeight, TextStyle["fontWeight"]> = {
+const WEIGHT_MAP: Record<TextWeight, (typeof fontWeight)[keyof typeof fontWeight]> = {
   regular: fontWeight.normal,
   medium: fontWeight.medium,
   semibold: fontWeight.semibold,
@@ -60,7 +60,7 @@ export function Text({
       style={[
         {
           fontSize: fontSize[size],
-          fontWeight: WEIGHT_MAP[weight],
+          ...fontStyle("body", WEIGHT_MAP[weight]),
           color: variantColor(variant, theme),
         },
         style,

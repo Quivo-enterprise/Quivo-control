@@ -1,5 +1,5 @@
 import { Text as RNText, type TextProps as RNTextProps } from "react-native";
-import { colors, fontFamily, fontSize, fontWeight, type QuivoTheme } from "../tokens";
+import { colors, fontSize, fontStyle, fontWeight, type QuivoTheme } from "../tokens";
 
 export type HeadingLevel = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
 export type HeadingSize = "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" | "5xl";
@@ -28,9 +28,8 @@ export function Heading({ level = "h2", size, theme = "light", style, children, 
       accessibilityRole="header"
       style={[
         {
-          fontFamily: fontFamily.display,
           fontSize: fontSize[headingSize],
-          fontWeight: fontWeight.bold,
+          ...fontStyle("display", fontWeight.bold),
           color: colors[theme].textPrimary,
           lineHeight: fontSize[headingSize] * 1.15,
         },

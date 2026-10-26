@@ -1,4 +1,4 @@
-export { colors, space, radius, fontSize, fontWeight, fontFamily, duration, easing, elevation } from "./tokens";
+export { colors, space, radius, fontSize, fontWeight, fontFamily, fontStyle, duration, easing, elevation } from "./tokens";
 export type { QuivoTheme, QuivoColors } from "./tokens";
 
 export { Button } from "./ui/Button";

@@ -1,5 +1,5 @@
 import { Text, View, type ViewProps } from "react-native";
-import { colors, fontSize, fontWeight, radius, space, type QuivoTheme } from "../tokens";
+import { colors, fontSize, fontStyle, fontWeight, radius, space, type QuivoTheme } from "../tokens";
 
 export type BadgeVariant = "primary" | "accent" | "success" | "warning" | "danger" | "neutral";
 export type BadgeSize = "sm" | "md";
@@ -54,7 +54,7 @@ export function Badge({ children, variant = "primary", size = "md", theme = "lig
       ]}
       {...props}
     >
-      <Text style={{ color: text, fontSize: size === "sm" ? fontSize.xs : fontSize.sm, fontWeight: fontWeight.bold }}>
+      <Text style={{ color: text, fontSize: size === "sm" ? fontSize.xs : fontSize.sm, ...fontStyle("body", fontWeight.bold) }}>
         {children}
       </Text>
     </View>

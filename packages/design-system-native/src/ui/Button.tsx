@@ -1,5 +1,5 @@
 import { ActivityIndicator, Pressable, Text, type PressableProps, type StyleProp, type ViewStyle } from "react-native";
-import { colors, elevation, fontSize, fontWeight, radius, space, type QuivoTheme } from "../tokens";
+import { colors, elevation, fontSize, fontStyle, fontWeight, radius, space, type QuivoTheme } from "../tokens";
 
 export type ButtonVariant =
   | "primary"
@@ -115,7 +115,7 @@ export function Button({
         style={{
           color: text,
           fontSize: sizing.fontSize,
-          fontWeight: fontWeight.bold,
+          ...fontStyle("body", fontWeight.bold),
           textDecorationLine: variant === "link" ? "underline" : "none",
         }}
       >

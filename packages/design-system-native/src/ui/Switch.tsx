@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { Switch as RNSwitch, Text, View, type SwitchProps as RNSwitchProps } from "react-native";
-import { colors, fontSize, fontWeight, space, type QuivoTheme } from "../tokens";
+import { colors, fontSize, fontStyle, fontWeight, space, type QuivoTheme } from "../tokens";
 
 export type SwitchProps = Omit<RNSwitchProps, "trackColor" | "thumbColor" | "ios_backgroundColor"> & {
   label?: string;
@@ -38,8 +38,8 @@ export function Switch({ label, description, theme = "light", disabled, ...props
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, opacity: disabled ? 0.55 : 1 }}>
       <View style={{ flex: 1, gap: 2 }}>
-        {label && <Text style={{ color: c.textPrimary, fontSize: fontSize.sm, fontWeight: fontWeight.bold }}>{label}</Text>}
-        {description && <Text style={{ color: c.textSecondary, fontSize: fontSize.xs }}>{description}</Text>}
+        {label && <Text style={{ color: c.textPrimary, fontSize: fontSize.sm, ...fontStyle("body", fontWeight.bold) }}>{label}</Text>}
+        {description && <Text style={{ color: c.textSecondary, fontSize: fontSize.xs, ...fontStyle("body") }}>{description}</Text>}
       </View>
       {control}
     </View>

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Text as RNText, TextInput, View, type TextInputProps, type ViewStyle } from "react-native";
-import { colors, fontSize, fontWeight, radius, space, type QuivoTheme } from "../tokens";
+import { colors, fontSize, fontStyle, fontWeight, radius, space, type QuivoTheme } from "../tokens";
 
 export type InputControlSize = "sm" | "md" | "lg";
 
@@ -55,7 +55,7 @@ export function Input({
 
   return (
     <View style={containerStyle}>
-      {label && <RNText style={{ color: c.textPrimary, fontSize: fontSize.sm, fontWeight: fontWeight.bold }}>{label}</RNText>}
+      {label && <RNText style={{ color: c.textPrimary, fontSize: fontSize.sm, ...fontStyle("body", fontWeight.bold) }}>{label}</RNText>}
       <View
         style={{
           flexDirection: "row",
@@ -71,8 +71,8 @@ export function Input({
       >
         {leftSlot}
         <TextInput
-          style={[{ flex: 1, fontSize: sizing.fontSize, color: c.textPrimary, padding: 0 }, style]}
-          placeholderTextColor={c.textMuted}
+          style={[{ flex: 1, fontSize: sizing.fontSize, color: c.textPrimary, padding: 0, ...fontStyle("body") }, style]}
+          placeholderTextColor={c.textTertiary}
           onFocus={(e) => {
             setFocused(true);
             onFocus?.(e);
@@ -86,9 +86,9 @@ export function Input({
         {rightSlot}
       </View>
       {error ? (
-        <RNText style={{ color: c.danger, fontSize: fontSize.xs }}>{error}</RNText>
+        <RNText style={{ color: c.danger, fontSize: fontSize.xs, ...fontStyle("body") }}>{error}</RNText>
       ) : helperText ? (
-        <RNText style={{ color: c.textMuted, fontSize: fontSize.xs }}>{helperText}</RNText>
+        <RNText style={{ color: c.textTertiary, fontSize: fontSize.xs, ...fontStyle("body") }}>{helperText}</RNText>
       ) : null}
     </View>
   );
