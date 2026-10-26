@@ -109,6 +109,8 @@ describe('textos', () => {
     expect(textoTurno(true)).toBe('Es tu turno');
     expect(textoBoton(false, 130_000)).toBe('SALIR · 2:10');
     expect(textoBoton(true, 0)).toBe('SALIR');
+    expect(textoBoton(true, -500)).toBe('SALIR');
+    expect(textoBoton(true, -135_000)).toBe('SALIR · −2:15');
   });
   it('hora de salida en Bolivia (UTC-4)', () => {
     expect(textoHoraSalida({ etaTs: '2026-10-20T11:24:00.000Z' })).toBe('Salís a las 07:24');

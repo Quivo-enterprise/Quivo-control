@@ -82,27 +82,19 @@ export function FilaSalidaCard({
             {tituloFila(vista)}
           </Heading>
           <ColaSalida posicion={vista.posicion} total={vista.total} />
-          {/* La hora de salida y, si el dato es viejo, el aviso, en la misma línea. */}
-          {vista.horaSalidaTexto || vista.sinActualizar ? (
+          {/* La hora va en el botón SALIR como cuenta (negativa si ya pasó); aquí solo si el dato es viejo. */}
+          {vista.sinActualizar ? (
             <View style={styles.sinActualizar}>
-              {vista.horaSalidaTexto ? (
-                <Text size="md" variant="secondary">
-                  {vista.horaSalidaTexto}
-                </Text>
-              ) : null}
-              {vista.sinActualizar ? (
-                <>
-                  <View style={styles.puntoDesactualizado} />
-                  <Text size="sm" variant="secondary">
-                    sin actualizar
-                  </Text>
-                </>
-              ) : null}
+              <View style={styles.puntoDesactualizado} />
+              <Text size="sm" variant="secondary">
+                sin actualizar
+              </Text>
             </View>
           ) : null}
         </View>
         <Button
-          variant={vista.habilitado ? 'primary' : 'outline'}
+          // Demorado: rojo lleno y la cuenta en negativo, para que se vea cuánto tiempo se está perdiendo.
+          variant={vista.demorado ? 'danger' : 'primary'}
           loading={ocupado}
           disabled={ocupado}
           onPress={vista.habilitado ? salir : () => setConfirmarAnticipada(true)}

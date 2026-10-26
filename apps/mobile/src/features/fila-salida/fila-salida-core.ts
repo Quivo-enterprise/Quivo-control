@@ -100,8 +100,13 @@ export function textoTurno(habilitado: boolean): string {
   return habilitado ? 'Es tu turno' : 'En espera';
 }
 
+/** Antes de la hora: cuánto falta. Pasada la hora: en negativo, para que el chofer vea cuánto lleva
+ * de retraso (desde el primer segundo completo, para no mostrar "−0:00"). En la hora justa: "SALIR". */
 export function textoBoton(habilitado: boolean, restante: number): string {
-  return habilitado ? 'SALIR' : `SALIR · ${formatearCuenta(restante)}`;
+  if (!habilitado) return `SALIR · ${formatearCuenta(restante)}`;
+  if (Number.isFinite(restante) && restante <= -1000)
+    return `SALIR · −${formatearCuenta(-restante)}`;
+  return 'SALIR';
 }
 
 /** Texto para el lector de pantalla: cambia solo al cambiar de minuto o al habilitarse. */

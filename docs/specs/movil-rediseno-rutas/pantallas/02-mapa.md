@@ -183,9 +183,11 @@ ordena **todo lo que aparece y desaparece** encima, con dos reglas:
 En la terminal, la fila es lo único que importa: **reemplaza** el bloque de "Siguiente parada" mientras
 haya fila. Pausar y Finalizar siguen debajo.
 - **En espera**: lo que ya existe (`Sales detrás de PLACA`, `2 de 5`, fila dibujada, `Salís a las 07:24`) y
-  `SALIR · 4:41` en **outline**. Antes del turno pide la confirmación de salida anticipada, como hoy.
+  `SALIR · 4:41` **lleno morado** (el responsable lo prefiere así: se distingue de Pausar/Finalizar). Sin línea
+  "Salís a las…": la cuenta del botón ya lo dice. Antes del turno pide la confirmación anticipada, como hoy.
 - **Es tu turno** (`habilitado`): `SALIR` pasa a **primario** lleno y la pastilla dice `Es tu turno` en `success`.
-- **Demorado**: pastilla `warning` `Demorado` y el título `Sal ahora`.
+- **Demorado**: pastilla `warning` `Demorado`, título `Sal ahora` y SALIR **rojo lleno** con la cuenta en
+  negativo (`SALIR · −8:17`): cuánto tiempo lleva perdido.
 - **Sin actualizar**: punto `warning` y `sin actualizar` junto a la hora.
 - **Cerca de la terminal y sin fila**: `Estoy en la fila` en outline, en el lugar del bloque, con el texto
   `¿Ya estás en la fila de salida?` encima.
