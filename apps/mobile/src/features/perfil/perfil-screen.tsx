@@ -132,8 +132,8 @@ export function PerfilScreen({ navigation, contexto: contextoInicial, obtenerAcc
   }
 
   const modeloVehiculo = `${contexto.vehiculo.marca} ${contexto.vehiculo.modelo}`.trim() || 'Toyota Hiace';
-  const statusLabel = gps.tracking ? 'EN LINEA' : 'EN ESPERA';
-  // En Figma: EN ESPERA es azul (#3127B1) y EN LINEA es naranja/ámbar (#FD9E15)
+  const statusLabel = gps.tracking ? 'EN VIVO' : 'EN ESPERA';
+  // En Figma: EN ESPERA es azul (#3127B1) y EN VIVO es naranja/ámbar (#FD9E15)
   const statusColor = gps.tracking ? '#FD9E15' : '#3127B1';
 
   return (
