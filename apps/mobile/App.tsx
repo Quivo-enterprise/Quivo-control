@@ -23,6 +23,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AssignmentSelectionScreen } from './src/features/auth/assignment-selection-screen';
 import { contextoDe, useAuthMovil } from './src/features/auth/use-auth-movil';
 import { VehicleLoginScreen } from './src/features/auth/vehicle-login-screen';
+import { guardarUltimaPlaca } from './src/features/auth/ultima-placa';
 import { OperationNavigator } from './src/app/operation-navigator';
 import { SplashScreen } from './src/features/auth/splash-screen';
 import { quivoColors, quivoFonts, quivoSpacing } from './src/shared/theme/quivo-theme';
@@ -68,6 +69,23 @@ function QuivoApp() {
   const [monoLoaded, monoError] = useJetBrainsMono({ JetBrainsMono_400Regular });
 
   const auth = useAuthMovil();
+  const placaEnviadaRef = useRef<string | null>(null);
+  const enviarLogin = useCallback(
+    (placa: string, pin: string) => {
+      placaEnviadaRef.current = placa;
+      return auth.autenticarSesion(placa, pin);
+    },
+    [auth.autenticarSesion],
+  );
+
+  // Solo un login que avance de etapa recuerda la placa; restaurar sesión no escribe nada.
+  useEffect(() => {
+    if (auth.estado.etapa !== 'asignacion' && auth.estado.etapa !== 'operacion') return;
+    const placa = placaEnviadaRef.current;
+    if (!placa) return;
+    placaEnviadaRef.current = null;
+    void guardarUltimaPlaca(placa);
+  }, [auth.estado.etapa]);
   // OTA: aplica una actualización ya descargada solo en login/selección de asignación (nunca con
   // un recorrido activo). Ver `use-actualizaciones-automaticas.ts`.
   useActualizacionesAutomaticas(esPantallaPreOperacion(auth.estado.etapa, auth.estado.cargando));
@@ -121,14 +139,13 @@ function QuivoApp() {
   }
 
   const contenido = (() => {
-    if (auth.estado.etapa === 'restaurando')
-      return <View style={styles.page} />; // Queda tapado por el SplashScreen mientras se restaura la sesión
+    if (auth.estado.etapa === 'restaurando') return <View style={styles.page} />; // Queda tapado por el SplashScreen mientras se restaura la sesión
     if (auth.estado.etapa === 'vehiculo') {
       return (
         <VehicleLoginScreen
           loading={auth.estado.cargando}
           error={auth.estado.error}
-          onSubmit={auth.autenticarSesion}
+          onSubmit={enviarLogin}
         />
       );
     }

@@ -30,7 +30,10 @@ vi.mock('@sentry/react-native', () => ({
   addBreadcrumb: vi.fn(),
 }));
 
-import { cargarSesionMovil, type SesionMovilGuardada } from '../../shared/security/sesion-movil-store';
+import {
+  cargarSesionMovil,
+  type SesionMovilGuardada,
+} from '../../shared/security/sesion-movil-store';
 import {
   huboLecturaDeRecorridoActivo,
   marcarRecorridoActivoGlobal,

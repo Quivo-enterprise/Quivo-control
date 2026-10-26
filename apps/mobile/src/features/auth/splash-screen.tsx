@@ -1,16 +1,67 @@
-import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Heading, Text, Loader, colors, space, fontSize } from '@quivo/design-system-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, Animated as RNAnimated, Easing, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import {
+  Button,
+  Heading,
+  Text,
+  colors,
+  fontStyle,
+  radius,
+  space,
+} from '@quivo/design-system-native';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import NetInfo from '@react-native-community/netinfo';
 import { VectorLogo } from './components/vector-logo';
-import { Button } from '../../shared/components/Button';
+import { FondoLogin } from './components/fondo-login';
+import { Burbuja } from '../../shared/components/burbuja';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
 
 export interface SplashScreenProps {
   onLoadData: () => Promise<void>;
   onReady: () => void;
+}
+
+function ProgressLine({ reduceMotion }: { reduceMotion: boolean }) {
+  const position = useRef(new RNAnimated.Value(0)).current;
+  useEffect(() => {
+    position.stopAnimation();
+    position.setValue(0);
+    if (reduceMotion) return;
+    const animation = RNAnimated.loop(
+      RNAnimated.timing(position, {
+        toValue: 1,
+        duration: 1200,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [position, reduceMotion]);
+  return (
+    <View
+      accessibilityRole="progressbar"
+      accessibilityLabel="Preparando tu jornada"
+      style={styles.progressTrack}
+    >
+      <RNAnimated.View
+        style={[
+          styles.progressSegment,
+          {
+            transform: [
+              {
+                translateX: reduceMotion
+                  ? 0
+                  : position.interpolate({ inputRange: [0, 1], outputRange: [-48, 72] }),
+              },
+            ],
+          },
+        ]}
+      />
+    </View>
+  );
 }
 
 export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
@@ -18,9 +69,32 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
   // 'sin_conexion' es SOLO para cuando `NetInfo.fetch()` confirmó que no hay red — nunca para
   // una restauración de sesión lenta (ver el motivo del estado 'tardanza' más abajo).
   const [status, setStatus] = useState<'verificando' | 'sin_conexion' | 'tardanza'>('verificando');
+  const [showCaption, setShowCaption] = useState(false);
+  const [verificationDone, setVerificationDone] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(true);
+  useEffect(() => {
+    let active = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+      if (active) setReduceMotion(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, []);
+  useEffect(() => {
+    if (status !== 'verificando' || verificationDone) {
+      setShowCaption(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowCaption(true), 800);
+    return () => clearTimeout(timer);
+  }, [status, verificationDone]);
 
   const checkConnectionAndData = async () => {
     const startTime = Date.now();
+    setVerificationDone(false);
     setStatus('verificando');
 
     // Cota de seguridad real, no estética: `onLoadData` (= `esperarRestauracion()` en App.tsx)
@@ -50,14 +124,11 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
         timeoutPromise,
       ]);
 
+      setVerificationDone(true);
       const elapsed = Date.now() - startTime;
-      const remainingTime = Math.max(0, 2500 - elapsed);
+      const remainingTime = Math.max(0, 900 - elapsed);
 
-      setTimeout(() => {
-        setTimeout(() => {
-          onReady();
-        }, 300);
-      }, remainingTime);
+      setTimeout(onReady, remainingTime);
     } catch (error) {
       // Sólo 'no_network' viene de una verificación real de conectividad (`NetInfo.fetch()`).
       // Cualquier otra causa —el timeout de arriba, o un error inesperado dentro de
@@ -73,84 +144,95 @@ export function SplashScreen({ onLoadData, onReady }: SplashScreenProps) {
   }, []);
 
   return (
-    <Animated.View style={styles.container} exiting={FadeOut.duration(300)}>
-      <LinearGradient
-        colors={[colors.light.dark, colors.light.primary]}
-        style={[styles.gradient, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
-      >
-        <Animated.View entering={FadeIn.duration(400)} style={styles.logoContainer}>
-          <VectorLogo />
-        </Animated.View>
-
-        <View style={styles.contentContainer}>
-          {status === 'verificando' ? (
-            <>
-              <View style={styles.spinnerWrapper}>
-                <Loader size="lg" tone="accent" />
-              </View>
-              <Heading size="xl" style={styles.title}>
-                Preparando tu jornada
-              </Heading>
-              <Text style={styles.subtitle}>Verificando conexión y{'\n'}datos operativos</Text>
-            </>
-          ) : (
-            <Animated.View entering={FadeIn}>
-              {status === 'sin_conexion' ? (
-                <>
-                  <Heading size="xl" style={styles.title}>
-                    Error de conexión
-                  </Heading>
-                  <Text style={styles.subtitle}>
-                    No pudimos verificar tus datos.{'\n'}Revisa tu conexión a internet.
+    <Animated.View style={styles.container} exiting={FadeOut.duration(200)}>
+      <FondoLogin variante="a" />
+      <View style={[styles.content, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <View style={styles.logoArea}>
+          <VectorLogo checking={status === 'verificando'} reduceMotion={reduceMotion} />
+          {status === 'verificando' && (
+            <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.progressArea}>
+              <ProgressLine reduceMotion={reduceMotion} />
+              {showCaption && (
+                <Animated.View entering={FadeIn.duration(200)}>
+                  <Text size="sm" style={styles.caption}>
+                    Preparando tu jornada
                   </Text>
-                </>
-              ) : (
-                <>
-                  <Heading size="xl" style={styles.title}>
-                    Esto está tardando
-                  </Heading>
-                  <Text style={styles.subtitle}>
-                    Preparar tu sesión está tardando más de lo esperado.{'\n'}Puedes reintentar.
-                  </Text>
-                </>
+                </Animated.View>
               )}
-              <Button
-                variant="accent"
-                size="lg"
-                rounded
-                elevated
-                style={styles.retryButton}
-                onPress={() => void checkConnectionAndData()}
-              >
-                Reintentar
-              </Button>
             </Animated.View>
           )}
         </View>
-      </LinearGradient>
+        {status !== 'verificando' && (
+          <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.errorArea}>
+            <View accessibilityRole="alert">
+              <Burbuja direction="column" style={styles.errorBubble}>
+                <View style={styles.errorIcon}>
+                  <Ionicons
+                    name={status === 'sin_conexion' ? 'cloud-offline-outline' : 'time-outline'}
+                    size={24}
+                    color={colors.light.primaryText}
+                  />
+                </View>
+                <Heading size="md" style={styles.errorTitle}>
+                  {status === 'sin_conexion' ? 'Sin conexión' : 'Esto está tardando'}
+                </Heading>
+                <Text size="sm" variant="secondary" style={styles.errorMessage}>
+                  {status === 'sin_conexion'
+                    ? 'No pudimos verificar tus datos. Revisa tu conexión a internet.'
+                    : 'Preparar tu sesión está tardando más de lo esperado. Puedes reintentar.'}
+                </Text>
+                <Button
+                  variant="primary"
+                  size="lg"
+                  fullWidth
+                  style={styles.retryButton}
+                  onPress={() => void checkConnectionAndData()}
+                >
+                  Reintentar
+                </Button>
+              </Burbuja>
+            </View>
+          </Animated.View>
+        )}
+      </View>
     </Animated.View>
   );
 }
 
 const c = colors.light;
+// Blanco de marca al 20 % para la pista que queda detrás del segmento de progreso.
+const BLANCO_PISTA = 'rgba(255, 255, 255, 0.2)';
 const styles = StyleSheet.create({
   container: { flex: 1, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 },
-  gradient: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  logoContainer: {
+  content: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  logoArea: { alignItems: 'center', justifyContent: 'center', minHeight: 180 },
+  progressArea: { alignItems: 'center', marginTop: space.lg, minHeight: 48 },
+  progressTrack: {
+    width: 120,
+    height: 3,
+    overflow: 'hidden',
+    borderRadius: radius.full,
+    backgroundColor: BLANCO_PISTA,
+  },
+  progressSegment: { width: 48, height: 3, borderRadius: radius.full, backgroundColor: c.accent },
+  caption: {
+    marginTop: space.md,
+    color: c.white,
+    opacity: 0.8,
+    textAlign: 'center',
+    ...fontStyle('body', '500'),
+  },
+  errorArea: { position: 'absolute', top: '60%', left: quivoBubble.edge, right: quivoBubble.edge },
+  errorBubble: { width: '100%', padding: space.lg },
+  errorIcon: {
+    width: quivoBubble.touch,
+    height: quivoBubble.touch,
+    borderRadius: quivoBubble.innerRadius,
+    backgroundColor: c.primarySubtle,
     alignItems: 'center',
     justifyContent: 'center',
-    height: 160,
-    width: '100%',
-    marginBottom: space['2xl'] * 2,
   },
-  contentContainer: { alignItems: 'center', minHeight: 180, paddingHorizontal: space.xl },
-  spinnerWrapper: {
-    marginBottom: space.lg,
-    justifyContent: 'center',
-    alignItems: 'center',
-    height: 60,
-  },
-  title: { color: c.textInverse, marginBottom: space.sm, textAlign: 'center' },
-  subtitle: { color: c.textInverse, fontSize: fontSize.sm, textAlign: 'center', lineHeight: 22 },
-  retryButton: { marginTop: space.xl, width: 220, minHeight: 48 },
+  errorTitle: { textAlign: 'center' },
+  errorMessage: { textAlign: 'center' },
+  retryButton: { minHeight: 52, borderRadius: quivoBubble.innerRadius, marginTop: space.sm },
 });

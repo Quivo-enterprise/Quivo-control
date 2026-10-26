@@ -44,11 +44,17 @@ vi.mock('../../shared/api/auth-movil-api', () => ({
 }));
 
 vi.mock('../../shared/security/sesion-movil-store', () => ({
-  actualizarSesionMovil: vi.fn(async (actual: SesionMovilGuardada, tokens: RefreshMovilResponse, contexto = actual.contexto) => {
-    const nueva = { status: 'autenticado', ...tokens, contexto };
-    compartido.sesionEnDisco = nueva;
-    return nueva;
-  }),
+  actualizarSesionMovil: vi.fn(
+    async (
+      actual: SesionMovilGuardada,
+      tokens: RefreshMovilResponse,
+      contexto = actual.contexto,
+    ) => {
+      const nueva = { status: 'autenticado', ...tokens, contexto };
+      compartido.sesionEnDisco = nueva;
+      return nueva;
+    },
+  ),
   borrarSesionMovil: vi.fn(),
   cargarSesionMovil: vi.fn(async () => compartido.sesionEnDisco),
   guardarSesionMovil: vi.fn(async (s: unknown) => {

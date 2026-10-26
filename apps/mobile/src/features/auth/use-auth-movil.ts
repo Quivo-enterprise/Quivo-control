@@ -352,7 +352,9 @@ export function useAuthMovil() {
         // caso en que el PRIMER `refrescar(guardada)` (arriba, fuera de este catch) ya vino
         // con `SESION_NO_VIGENTE`: no hay backoff que valga, se corta de raíz.
         if (esSesionNoVigente(error)) {
-          await cerrarSesionPorNoVigente(obtenerRefreshTokenRechazado(error) ?? guardada.refreshToken);
+          await cerrarSesionPorNoVigente(
+            obtenerRefreshTokenRechazado(error) ?? guardada.refreshToken,
+          );
           return;
         }
         // Punto 10 (code review 2026-09-25): `CircuitoRefreshAbiertoError` tiene
@@ -703,7 +705,12 @@ export function useAuthMovil() {
       // `cerrarSesionPorNoVigente` arriba).
       return null;
     }
-  }, [estado.sesion, estado.sesionNoVigente, sincronizarSesionIrrecuperable, cerrarSesionPorNoVigente]);
+  }, [
+    estado.sesion,
+    estado.sesionNoVigente,
+    sincronizarSesionIrrecuperable,
+    cerrarSesionPorNoVigente,
+  ]);
 
   async function ejecutar(accion: () => Promise<void>): Promise<void> {
     setEstado((actual) => ({ ...actual, cargando: true, error: null, aviso: null }));

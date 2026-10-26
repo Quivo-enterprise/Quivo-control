@@ -1,26 +1,39 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Animated,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
+  Vibration,
   View,
+  useWindowDimensions,
 } from 'react-native';
-import { useForm, Controller } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { normalizarPlacaVehiculo } from '@quivo/shared';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { Button } from '../../shared/components/Button';
-import { Card } from '../../shared/components/Card';
+import { normalizarPlacaVehiculo } from '@quivo/shared';
+import {
+  Button,
+  Heading,
+  Text,
+  colors,
+  duration,
+  fontSize,
+  fontStyle,
+  radius,
+  space,
+} from '@quivo/design-system-native';
 import { Input } from '../../shared/components/Input';
-import { colors, radius, space, fontSize, fontStyle } from '@quivo/design-system-native';
+import { Burbuja } from '../../shared/components/burbuja';
+import { quivoBubble } from '../../shared/theme/quivo-theme';
+import { FondoLogin } from './components/fondo-login';
+import { SaludoIdiomas } from './components/saludo-idiomas';
 import logoWhite from '../../../assets/images/logo-white.png';
-import { vehicleLoginSchema, type VehicleLoginFormValues } from './vehicle-login-schema';
+import { vehicleLoginSchema } from './vehicle-login-schema';
+import { agregarDigito, borrarDigito, cantidadPuntos, puedeEnviar } from './teclado-pin';
+import { leerUltimaPlaca } from './ultima-placa';
 
 interface VehicleLoginScreenProps {
   loading: boolean;
@@ -28,263 +41,467 @@ interface VehicleLoginScreenProps {
   onSubmit: (placa: string, pin: string) => Promise<void>;
 }
 
+type Vista = 'cargando' | 'placa' | 'pin';
+const c = colors.light;
+// Aire reservado para marca, cabecera, ayuda y márgenes en pantallas bajas.
+const RESERVA_VERTICAL_LOGIN = 288;
+const filasTeclado = [
+  ['1', '2', '3'],
+  ['4', '5', '6'],
+  ['7', '8', '9'],
+  ['borrar', '0', 'ingresar'],
+] as const;
+
 export function VehicleLoginScreen({
   loading: parentLoading,
-  error: serverError,
+  error,
   onSubmit,
 }: VehicleLoginScreenProps) {
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [verPin, setVerPin] = useState(false);
-  const pinRef = useRef<TextInput>(null);
+  const { width, height } = useWindowDimensions();
+  const [altoDisponible, setAltoDisponible] = useState<number | null>(null);
+  // La cuadrícula crece con el área segura medida sin quitar espacio al título ni al pie.
+  const diametroTecla = Math.max(
+    56,
+    Math.min(
+      88,
+      Math.floor(((altoDisponible ?? height - 48) - RESERVA_VERTICAL_LOGIN) / 4),
+      Math.floor((width - 2 * space.md - 2 * quivoBubble.padding - 2 * space.sm) / 3),
+    ),
+  );
+  const anchoTeclado = 3 * diametroTecla + 2 * space.sm;
+  const radioTeclado = diametroTecla / 2 + quivoBubble.padding;
+  const [vista, setVista] = useState<Vista>('cargando');
+  const [placaRecordada, setPlacaRecordada] = useState<string | null>(null);
+  const [placa, setPlaca] = useState('');
+  const [errorPlaca, setErrorPlaca] = useState<string | null>(null);
+  const [pin, setPin] = useState('');
+  const [mostrarError, setMostrarError] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [tecladoAbierto, setTecladoAbierto] = useState(false);
+  const temblor = useRef(new Animated.Value(0)).current;
+  const loading = parentLoading || enviando;
 
-  const loading = parentLoading || isSimulating;
-
-  const {
-    control,
-    handleSubmit,
-    setValue,
-    formState: { isValid, errors },
-  } = useForm<VehicleLoginFormValues>({
-    resolver: zodResolver(vehicleLoginSchema),
-    mode: 'onChange',
-    defaultValues: {
-      placa: '',
-      pin: '',
-    },
-  });
-
-  // PIN rechazado: se vacía y vuelve el foco para reintentar sin borrar a mano (la placa queda).
   useEffect(() => {
-    if (!serverError) return;
-    setValue('pin', '', { shouldValidate: true });
-    pinRef.current?.focus();
-  }, [serverError, setValue]);
+    const abrir = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setTecladoAbierto(true),
+    );
+    const cerrar = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setTecladoAbierto(false),
+    );
+    return () => {
+      abrir.remove();
+      cerrar.remove();
+    };
+  }, []);
 
-  const onSubmitForm = async (data: VehicleLoginFormValues) => {
-    setIsSimulating(true);
-    try {
-      await onSubmit(normalizarPlacaVehiculo(data.placa), data.pin);
-    } finally {
-      setIsSimulating(false);
+  // Esperar la lectura evita que aparezca un formulario vacío antes de la placa recordada.
+  useEffect(() => {
+    let vigente = true;
+    void leerUltimaPlaca().then((guardada) => {
+      if (!vigente) return;
+      setPlacaRecordada(guardada);
+      setPlaca(guardada ?? '');
+      setVista(guardada ? 'pin' : 'placa');
+    });
+    return () => {
+      vigente = false;
+    };
+  }, []);
+
+  // Un rechazo limpia el PIN y comunica el error sin volver a enfocar el teclado del sistema.
+  useEffect(() => {
+    if (!error) return;
+    setPin('');
+    setMostrarError(true);
+    Vibration.vibrate(40);
+    Animated.sequence([
+      Animated.timing(temblor, {
+        toValue: -space.sm,
+        duration: duration.fast / 2,
+        useNativeDriver: true,
+      }),
+      Animated.timing(temblor, {
+        toValue: space.sm,
+        duration: duration.fast / 2,
+        useNativeDriver: true,
+      }),
+      Animated.timing(temblor, {
+        toValue: -space.xs,
+        duration: duration.fast / 2,
+        useNativeDriver: true,
+      }),
+      Animated.timing(temblor, { toValue: 0, duration: duration.fast / 2, useNativeDriver: true }),
+    ]).start();
+  }, [error, temblor]);
+
+  const continuar = useCallback(() => {
+    const normalizada = normalizarPlacaVehiculo(placa);
+    const resultado = vehicleLoginSchema.shape.placa.safeParse(placa);
+    if (!resultado.success) {
+      setErrorPlaca(resultado.error.issues[0]?.message ?? 'Escribe una placa válida');
+      return;
     }
+    setPlaca(normalizada);
+    setErrorPlaca(null);
+    setPin('');
+    setMostrarError(false);
+    setVista('pin');
+  }, [placa]);
+
+  const tocarTecla = useCallback(
+    (tecla: string) => {
+      if (loading) return;
+      Vibration.vibrate(10);
+      if (tecla === 'borrar') {
+        setPin(borrarDigito);
+        return;
+      }
+      if (tecla === 'ingresar') {
+        if (!puedeEnviar(pin)) return;
+        setEnviando(true);
+        void onSubmit(placa, pin).finally(() => setEnviando(false));
+        return;
+      }
+      setMostrarError(false);
+      setPin((actual) => agregarDigito(actual, tecla));
+    },
+    [loading, onSubmit, pin, placa],
+  );
+
+  const volverARecordada = () => {
+    if (!placaRecordada) return;
+    setPlaca(placaRecordada);
+    setErrorPlaca(null);
+    setPin('');
+    setMostrarError(false);
+    setVista('pin');
   };
 
   return (
-    <View style={styles.screen}>
-      <LinearGradient
-        colors={['#E78A1B', '#8B5962', '#3D2EA5', '#A3654F', '#F08F14']}
-        locations={[0, 0.22, 0.5, 0.78, 1]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'android' ? 'height' : 'padding'}
-        style={styles.flex}
-      >
-        <ScrollView
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
+    <View
+      style={styles.screen}
+      onLayout={(evento) => {
+        const alto = Math.round(evento.nativeEvent.layout.height);
+        setAltoDisponible((anterior) => (anterior === alto ? anterior : alto));
+      }}
+    >
+      <FondoLogin variante="a" />
+      {vista === 'cargando' ? null : vista === 'placa' ? (
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'android' ? 'height' : 'padding'}
+          style={styles.body}
         >
-          <View style={styles.header}>
-            <Text accessibilityRole="header" style={styles.title}>
-              Conecta tu vehículo
-            </Text>
-            <Text style={styles.subtitle}>
-              Ingresa la placa del vehículo y el credencial proporcionado por tu sindicato para
-              comenzar la jornada.
-            </Text>
+          {!tecladoAbierto ? (
+            <View style={styles.logoContenedor}>
+              <Image source={logoWhite} style={styles.logo} resizeMode="contain" />
+            </View>
+          ) : null}
+          <View style={styles.protagonista}>
+            <View pointerEvents="none" style={styles.saludoCapa}>
+              <SaludoIdiomas pausado={tecladoAbierto} />
+            </View>
+            {tecladoAbierto ? (
+              <View style={[styles.logoContenedor, styles.logoContenedorTeclado]}>
+                <Image source={logoWhite} style={styles.logoTeclado} resizeMode="contain" />
+              </View>
+            ) : null}
           </View>
-
-          <Card style={styles.card} padding="none">
-            <View style={styles.formContainer}>
-              <Controller
-                control={control}
-                name="placa"
-                render={({ field: { onChange, onBlur, value } }) => {
-                  return (
-                    <Input
-                      label="Placa del vehículo"
-                      labelStyle={styles.inputLabel}
-                      placeholder="1234ABC o 123ABC"
-                      placeholderTextColor={colors.light.textTertiary}
-                      error={errors.placa?.message}
-                      autoCapitalize="characters"
-                      autoCorrect={false}
-                      returnKeyType="next"
-                      submitBehavior="submit"
-                      onSubmitEditing={() => pinRef.current?.focus()}
-                      maxLength={20}
-                      value={value}
-                      onChangeText={(text) => onChange(text.toUpperCase())}
-                      onBlur={onBlur}
-                      editable={!loading}
-                      inputShellStyle={styles.inputShell}
-                      style={styles.inputText}
-                    />
-                  );
+          <View style={styles.accionPlaca}>
+            <Heading level="h1" size="xl" style={styles.titulo}>
+              Conecta tu vehículo
+            </Heading>
+            <Burbuja direction="column" style={styles.burbujaPlaca}>
+              <Input
+                accessibilityLabel="Placa del vehículo"
+                controlSize="lg"
+                placeholder="Placa · 1234ABC"
+                placeholderTextColor={c.textTertiary}
+                error={errorPlaca ?? undefined}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                returnKeyType="next"
+                onSubmitEditing={continuar}
+                maxLength={20}
+                value={placa}
+                onChangeText={(valor) => {
+                  setPlaca(valor.toUpperCase());
+                  setErrorPlaca(null);
                 }}
+                editable={!loading}
+                inputShellStyle={styles.campoPlaca}
+                style={styles.textoPlaca}
               />
-
-              <Controller
-                control={control}
-                name="pin"
-                render={({ field: { onChange, onBlur, value } }) => {
-                  return (
-                    <Input
-                      ref={pinRef}
-                      label="PIN del conductor"
-                      labelStyle={styles.inputLabel}
-                      placeholder="6 a 12 dígitos"
-                      placeholderTextColor={colors.light.textTertiary}
-                      error={errors.pin?.message}
-                      keyboardType="number-pad"
-                      secureTextEntry={!verPin}
-                      autoComplete="off"
-                      importantForAutofill="no"
-                      returnKeyType="go"
-                      onSubmitEditing={() => {
-                        if (isValid && !loading) void handleSubmit(onSubmitForm)();
-                      }}
-                      rightSlot={
-                        <Pressable
-                          onPress={() => setVerPin((v) => !v)}
-                          hitSlop={8}
-                          accessibilityRole="button"
-                          accessibilityLabel={verPin ? 'Ocultar PIN' : 'Mostrar PIN'}
-                          style={styles.ojo}
-                        >
-                          <Ionicons
-                            name={verPin ? 'eye-off-outline' : 'eye-outline'}
-                            size={22}
-                            color={c.textSecondary}
-                          />
-                        </Pressable>
-                      }
-                      maxLength={12}
-                      value={value}
-                      onChangeText={onChange}
-                      onBlur={onBlur}
-                      editable={!loading}
-                      inputShellStyle={styles.inputShell}
-                      style={[styles.inputText, !verPin && value ? styles.pinOculto : null]}
-                    />
-                  );
-                }}
-              />
-
-              {serverError ? <Text style={styles.error}>{serverError}</Text> : null}
-
               <Button
                 variant="primary"
-                loading={loading}
-                disabled={!isValid || loading}
-                onPress={handleSubmit(onSubmitForm)}
-                style={styles.submitButton}
-                textStyle={styles.submitButtonText}
+                size="lg"
                 fullWidth
+                disabled={loading}
+                onPress={continuar}
+                style={styles.botonContinuar}
               >
-                Ingresar
+                Continuar
               </Button>
-              <View style={styles.infoNotice}>
-                <Ionicons name="information-circle-outline" size={20} color={c.info} />
-                <Text style={styles.infoNoticeText}>
-                  ¿No tienes tu PIN? Solicítalo a tu sindicato antes de comenzar.
+            </Burbuja>
+            {placaRecordada ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Volver a ${placaRecordada}`}
+                onPress={volverARecordada}
+                style={styles.volver}
+              >
+                <Text size="sm" weight="semibold" style={styles.textoBlanco}>
+                  Volver a {placaRecordada}
                 </Text>
+              </Pressable>
+            ) : null}
+          </View>
+          <Text size="sm" style={styles.ayuda}>
+            ¿No tienes tu PIN? Solicítalo a tu sindicato.
+          </Text>
+        </KeyboardAvoidingView>
+      ) : (
+        <View style={styles.body}>
+          <View style={styles.logoContenedor}>
+            <Image source={logoWhite} style={styles.logo} resizeMode="contain" />
+          </View>
+          <View style={styles.protagonista}>
+            <View style={styles.pinSuperior}>
+              <Heading level="h1" size="2xl" style={styles.titulo}>
+                Ingresa tu PIN
+              </Heading>
+              <View style={styles.placaPastilla}>
+                <Ionicons name="car-outline" size={20} color={c.white} />
+                <Text size="md" weight="semibold" style={styles.placaTexto}>
+                  {placa}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Cambiar placa"
+                  disabled={loading}
+                  onPress={() => setVista('placa')}
+                  style={styles.cambiar}
+                >
+                  <Text size="sm" weight="semibold" style={styles.textoBlanco}>
+                    Cambiar
+                  </Text>
+                </Pressable>
+              </View>
+              <Animated.View
+                style={[styles.puntosYError, { transform: [{ translateX: temblor }] }]}
+              >
+                <View
+                  accessible
+                  accessibilityLiveRegion="polite"
+                  accessibilityLabel={`PIN, ${pin.length} dígitos escritos`}
+                  style={styles.puntos}
+                >
+                  {Array.from({ length: cantidadPuntos(pin) }, (_, indice) => (
+                    <View
+                      key={indice}
+                      style={[
+                        styles.punto,
+                        indice < pin.length ? styles.puntoLleno : styles.puntoVacio,
+                        mostrarError && error ? styles.puntoError : null,
+                      ]}
+                    />
+                  ))}
+                </View>
+                {mostrarError && error ? (
+                  <Text size="sm" accessibilityRole="alert" style={styles.error}>
+                    {error}
+                  </Text>
+                ) : null}
+              </Animated.View>
+            </View>
+          </View>
+          <View style={styles.pinInferior}>
+            <View
+              style={[
+                styles.tecladoGrupo,
+                { width: anchoTeclado + 2 * quivoBubble.padding, borderRadius: radioTeclado },
+              ]}
+            >
+              <View pointerEvents="none" style={styles.tecladoSuperficie} />
+              <View style={[styles.teclado, { width: anchoTeclado }]}>
+                {filasTeclado.map((fila, indice) => (
+                  <View key={indice} style={[styles.filaTeclado, { width: anchoTeclado }]}>
+                    {fila.map((tecla) => {
+                      const deshabilitada = loading || (tecla === 'ingresar' && !puedeEnviar(pin));
+                      const etiqueta =
+                        tecla === 'borrar' ? 'Borrar' : tecla === 'ingresar' ? 'Ingresar' : tecla;
+                      return (
+                        <Pressable
+                          key={tecla}
+                          accessibilityRole="button"
+                          accessibilityLabel={etiqueta}
+                          accessibilityState={{ disabled: deshabilitada }}
+                          disabled={deshabilitada}
+                          onPress={() => tocarTecla(tecla)}
+                          onLongPress={
+                            tecla === 'borrar'
+                              ? () => {
+                                  Vibration.vibrate(10);
+                                  setPin('');
+                                  setMostrarError(false);
+                                }
+                              : undefined
+                          }
+                          style={[
+                            styles.tecla,
+                            {
+                              width: diametroTecla,
+                              height: diametroTecla,
+                              borderRadius: diametroTecla / 2,
+                            },
+                          ]}
+                        >
+                          {({ pressed }) => (
+                            <>
+                              <View
+                                style={[
+                                  styles.fondoTecla,
+                                  {
+                                    opacity: pressed ? 0.28 : 0.16,
+                                  },
+                                ]}
+                              />
+                              <View
+                                style={[
+                                  styles.contenidoTecla,
+                                  deshabilitada && styles.teclaDeshabilitada,
+                                ]}
+                              >
+                                {tecla === 'ingresar' && loading ? (
+                                  <ActivityIndicator color={c.white} />
+                                ) : tecla === 'borrar' ? (
+                                  <Ionicons
+                                    name="backspace-outline"
+                                    size={fontSize['2xl']}
+                                    color={c.white}
+                                  />
+                                ) : tecla === 'ingresar' ? (
+                                  <Ionicons
+                                    name="checkmark"
+                                    size={fontSize['3xl']}
+                                    color={c.white}
+                                  />
+                                ) : (
+                                  <Text size="xl" weight="bold" style={styles.digito}>
+                                    {tecla}
+                                  </Text>
+                                )}
+                              </View>
+                            </>
+                          )}
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ))}
               </View>
             </View>
-          </Card>
-
-          <View style={styles.footerContainer}>
-            <Image source={logoWhite} style={styles.footerLogo} resizeMode="contain" />
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          <Text size="sm" style={styles.ayuda}>
+            ¿No tienes tu PIN? Solicítalo a tu sindicato.
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
 
-const c = colors.light;
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: c.primary },
-  flex: { flex: 1 },
-  content: {
-    flexGrow: 1,
-    paddingHorizontal: space.lg,
-    paddingTop: Platform.OS === 'ios' ? space['2xl'] : space.xl,
-    paddingBottom: space.lg,
-    justifyContent: 'space-between',
+  body: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: space.md,
+    paddingTop: space.sm,
+    paddingBottom: space.sm,
   },
-  header: { gap: space.sm, alignItems: 'center', marginBottom: space.lg, marginTop: space.md },
-  title: {
-    color: c.textInverse,
-    fontSize: fontSize['2xl'],
-    ...fontStyle('display', '700'),
-    textAlign: 'center',
-  },
-  subtitle: {
-    ...fontStyle('body'),
-    color: c.textInverse,
-    fontSize: fontSize.sm,
-    lineHeight: 22,
-    textAlign: 'center',
-    paddingHorizontal: space.xs,
-  },
-  card: {
-    backgroundColor: c.surfaceRaised,
-    borderRadius: radius.lg,
-    borderWidth: 0,
-    overflow: 'hidden',
-  },
-  formContainer: { padding: space.lg, gap: space.md },
-  inputLabel: { color: c.textPrimary, fontSize: fontSize.sm },
-  inputShell: {
-    backgroundColor: c.surfaceCard,
-    borderColor: c.borderSubtle,
-    borderRadius: radius.full,
-    minHeight: 48,
-  },
-  inputText: { color: c.textPrimary, fontSize: fontSize.md },
-  // Los puntos del PIN oculto, separados para poder contarlos.
-  pinOculto: { letterSpacing: 4, fontSize: fontSize['2xl'] },
-  ojo: {
-    width: 44,
-    height: 44,
+  logoContenedor: { alignSelf: 'flex-start', padding: space.sm, borderRadius: radius.md },
+  logoContenedorTeclado: { alignSelf: 'center' },
+  logo: { width: 96, height: 38 },
+  logoTeclado: { width: 128, height: 52 },
+  protagonista: {
+    flex: 1,
+    minHeight: 0,
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: -space.sm,
+    overflow: 'hidden',
   },
-  submitButton: { marginTop: space.sm, minHeight: 48 },
-  submitButtonText: { fontSize: fontSize.md },
-  infoNotice: {
+  saludoCapa: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  titulo: { color: c.white, textAlign: 'center' },
+  accionPlaca: { width: '100%', maxWidth: 360, alignItems: 'center', gap: space.sm },
+  burbujaPlaca: { width: '100%', alignItems: 'stretch' },
+  campoPlaca: {
+    height: 52,
+    backgroundColor: c.surfaceSoft,
+    borderColor: c.borderSubtle,
+    borderRadius: quivoBubble.innerRadius,
+  },
+  textoPlaca: {
+    color: c.textPrimary,
+    fontSize: fontSize.xl,
+    letterSpacing: 1,
+    ...fontStyle('display', '600'),
+  },
+  botonContinuar: { height: 52, borderRadius: quivoBubble.innerRadius },
+  volver: { minHeight: quivoBubble.touch, alignItems: 'center', justifyContent: 'center' },
+  textoBlanco: { color: c.white },
+  pinSuperior: { alignItems: 'center', gap: space.sm, width: '100%' },
+  placaPastilla: {
+    minHeight: quivoBubble.touch,
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
-    backgroundColor: c.infoSoft,
-    borderRadius: radius.md,
-    padding: space.md,
+    paddingLeft: space.md,
+    paddingRight: space.xs,
+    borderRadius: quivoBubble.innerRadius,
+    borderWidth: 1,
+    borderColor: c.white,
   },
-  infoNoticeText: {
-    ...fontStyle('body'),
-    flex: 1,
-    color: c.primaryText,
-    fontSize: fontSize.sm,
-    lineHeight: 20,
+  placaTexto: {
+    color: c.white,
+    fontSize: fontSize.xl,
+    letterSpacing: 1,
+    ...fontStyle('display', '600'),
   },
-  error: {
-    ...fontStyle('body'),
-    color: c.danger,
-    fontSize: fontSize.sm,
-    lineHeight: 22,
-    textAlign: 'center',
-  },
-  footerContainer: {
+  cambiar: { minHeight: quivoBubble.touch, justifyContent: 'center', paddingHorizontal: space.ms },
+  puntosYError: {
+    minHeight: quivoBubble.touch,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: space.lg,
-    paddingBottom: space.xs,
+    gap: space.xs,
   },
-  footerLogo: { width: 115, height: 46 },
+  puntos: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.sm },
+  punto: { width: space.ms, height: space.ms, borderRadius: radius.full },
+  puntoLleno: { backgroundColor: c.white },
+  puntoVacio: { backgroundColor: c.white, opacity: 0.4 },
+  puntoError: { backgroundColor: c.danger, opacity: 1 },
+  error: { color: c.white, textAlign: 'center', maxWidth: 320 },
+  pinInferior: { alignItems: 'center', gap: space.xs, width: '100%' },
+  tecladoGrupo: {
+    padding: quivoBubble.padding,
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  tecladoSuperficie: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: c.white,
+    opacity: 0.08,
+  },
+  teclado: { gap: space.sm, alignItems: 'center' },
+  filaTeclado: { flexDirection: 'row', gap: space.sm },
+  tecla: { overflow: 'hidden' },
+  fondoTecla: { ...StyleSheet.absoluteFillObject, backgroundColor: c.white },
+  contenidoTecla: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  teclaDeshabilitada: { opacity: 0.4 },
+  digito: { color: c.white, fontSize: fontSize['2xl'], ...fontStyle('display', '700') },
+  ayuda: { color: c.white, textAlign: 'center', marginTop: space.sm },
 });
