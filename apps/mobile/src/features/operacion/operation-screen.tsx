@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -23,7 +25,6 @@ import {
 } from '@quivo/shared';
 import { abrirOutbox, encolarEvento } from '../../db/outbox';
 import { Button } from '../../shared/components/Button';
-import { Input } from '../../shared/components/Input';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { MapErrorBoundary } from './map-error-boundary';
 import { useProgresoVuelta } from './use-progreso-vuelta';
@@ -56,6 +57,18 @@ import { useVueltaActual } from '../vuelta-actual/use-vuelta-actual';
 import { useFilaSalida } from '../fila-salida/use-fila-salida';
 import { terminalDeLaRuta } from '../fila-salida/fila-salida-deteccion';
 import { AvisoDesignacion, ContadorEsperaMolinos } from '../vuelta-actual/aviso-designacion';
+
+/** Opciones fijas del modal "Reportar incidencia"; viajan como `categoria` (código estable) y `texto` (etiqueta). */
+const OPCIONES_INCIDENCIA = [
+  { categoria: 'bloqueo', etiqueta: 'Bloqueo', icono: 'close-circle-outline' },
+  { categoria: 'salud', etiqueta: 'Salud', icono: 'medkit-outline' },
+  { categoria: 'fantasma', etiqueta: 'Fantasma', icono: 'eye-off-outline' },
+  { categoria: 'incidente', etiqueta: 'Incidente', icono: 'warning-outline' },
+  { categoria: 'falla_tecnica', etiqueta: 'Falla técnica', icono: 'construct-outline' },
+] as const;
+
+// shortcut: número fijo del delegado, válido SOLO para la L16 (el botón se oculta en otras líneas) en el piloto; mover a un campo de Línea/Sindicato servido por la API después del piloto.
+const WHATSAPP_DELEGADO = '59161604399';
 
 interface OperationScreenProps {
   contexto: ContextoOperativoMovil;
@@ -150,7 +163,6 @@ export function OperationScreen(
   const [observacionEnviada, setObservacionEnviada] = useState(false);
   const [errorObservacion, setErrorObservacion] = useState<string | null>(null);
   const [observacionModalVisible, setObservacionModalVisible] = useState(false);
-  const [showInfo, setShowInfo] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
   const { camara, onPanUsuario, recentrar, alternarOrientacion } = useModoCamara(gps.tracking);
   // Canal mapa -> brújula del rumbo de la cámara: no pasa por estado de React (llega a ~30 Hz).
@@ -347,9 +359,24 @@ export function OperationScreen(
     })();
   }, [gps.tracking, gps.posicionActual, destinoRuteo, props.obtenerAccessToken]);
 
+  const abrirWhatsAppDelegado = useCallback(() => {
+    const { conductor, vehiculo, linea } = props.contexto;
+    const msg = `Hola, soy ${conductor.nombre} (${vehiculo.placa}), Línea ${linea.codigo}.`;
+    Linking.openURL(`https://wa.me/${WHATSAPP_DELEGADO}?text=${encodeURIComponent(msg)}`).catch((error) => {
+      Sentry.captureException(error, {
+        tags: { contexto: 'operation-screen', paso: 'abrir-whatsapp-delegado' },
+      });
+      Alert.alert(
+        'No se pudo abrir WhatsApp',
+        'Revisa que WhatsApp esté instalado o escribe al delegado al 61604399.',
+      );
+    });
+  }, [props.contexto]);
+
   const enviarObservacion = useCallback(async () => {
-    const texto = observacion.trim();
-    if (!texto) return;
+    const texto = observacion; // etiqueta de la opción elegida
+    const categoria = OPCIONES_INCIDENCIA.find((o) => o.etiqueta === texto)?.categoria;
+    if (!texto || !categoria) return;
     setEnviandoObservacion(true);
     setErrorObservacion(null);
     try {
@@ -357,7 +384,7 @@ export function OperationScreen(
       await encolarEvento(db, {
         deviceId: props.deviceId,
         tipo: 'observacion',
-        payload: { sesionId: props.contexto.sesionId, texto },
+        payload: { sesionId: props.contexto.sesionId, texto, categoria },
       });
       setObservacion('');
       setObservacionEnviada(true);
@@ -373,7 +400,7 @@ export function OperationScreen(
       Sentry.captureException(error, {
         tags: { contexto: 'operation-screen', paso: 'enviar-observacion' },
       });
-      setErrorObservacion('No se pudo guardar la observación. Vuelve a intentarlo.');
+      setErrorObservacion('No se pudo guardar el reporte. Vuelve a intentarlo.');
     } finally {
       setEnviandoObservacion(false);
     }
@@ -570,25 +597,23 @@ export function OperationScreen(
       >
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Registrar observación"
+          accessibilityLabel="Reportar incidencia"
           style={styles.recenterButton}
           onPress={() => setObservacionModalVisible(true)}
         >
           <Ionicons name="alert-circle-outline" size={24} color="#3127B1" />
         </Pressable>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Información de registro"
-          style={styles.recenterButton}
-          onPress={() => setShowInfo(true)}
-        >
-          <Ionicons
-            name="checkmark-circle-outline"
-            size={24}
-            color={gps.tracking ? '#FD9E15' : '#3127B1'}
-          />
-        </Pressable>
+        {String(props.contexto.linea.codigo).trim() === '16' && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Escribir al delegado por WhatsApp"
+            style={styles.recenterButton}
+            onPress={abrirWhatsAppDelegado}
+          >
+            <Ionicons name="logo-whatsapp" size={24} color="#3127B1" />
+          </Pressable>
+        )}
 
         {__DEV__ && gps.tracking && proximoPuntoControl && (
           <Pressable
@@ -688,34 +713,7 @@ export function OperationScreen(
         gpsError={gps.errorGps}
       />
 
-      <Modal
-        visible={showInfo}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowInfo(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <BlurView intensity={85} tint="light" style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Ionicons name="checkmark-circle-outline" size={20} color="#3127B1" />
-              <Text style={styles.modalTitle}>Registro automatico</Text>
-            </View>
-            <Text style={styles.modalText}>
-              Al entrar al radio del punto de control, este se registra automáticamente en el sistema
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Entendido"
-              onPress={() => setShowInfo(false)}
-              style={({ pressed }) => [styles.modalPillButton, pressed && styles.pressedButton]}
-            >
-              <Text style={styles.modalPillButtonText}>ENTENDIDO</Text>
-            </Pressable>
-          </BlurView>
-        </View>
-      </Modal>
-
-      {/* Observación modal */}
+      {/* Reportar incidencia: opciones fijas, sin texto libre */}
       <Modal
         visible={observacionModalVisible}
         transparent
@@ -728,12 +726,12 @@ export function OperationScreen(
           <BlurView intensity={85} tint="light" style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Ionicons name="alert-circle-outline" size={20} color="#3127B1" />
-              <Text style={styles.modalTitle}>Registrar observación</Text>
+              <Text style={styles.modalTitle}>Reportar incidencia</Text>
             </View>
             {observacionEnviada ? (
               <>
                 <Text style={styles.modalText}>
-                  Observación enviada. Se sincroniza junto con tu recorrido.
+                  Incidencia reportada. Se sincroniza junto con tu recorrido.
                 </Text>
                 <Pressable
                   accessibilityRole="button"
@@ -751,17 +749,31 @@ export function OperationScreen(
                     {errorObservacion}
                   </Text>
                 ) : null}
-                <Input
-                  controlSize="lg"
-                  multiline
-                  numberOfLines={3}
-                  value={observacion}
-                  onChangeText={setObservacion}
-                  placeholder="Describe lo que pasó…"
-                  editable={!enviandoObservacion}
-                  inputShellStyle={styles.observacionShell}
-                  accessibilityLabel="Texto de la observación"
-                />
+                <View accessibilityRole="radiogroup" style={styles.incidenciaOpciones}>
+                  {OPCIONES_INCIDENCIA.map(({ etiqueta, icono }) => {
+                    const elegida = observacion === etiqueta;
+                    return (
+                      <Pressable
+                        key={etiqueta}
+                        accessibilityRole="radio"
+                        accessibilityLabel={etiqueta}
+                        accessibilityState={{ selected: elegida, disabled: enviandoObservacion }}
+                        disabled={enviandoObservacion}
+                        onPress={() => setObservacion(etiqueta)}
+                        style={({ pressed }) => [
+                          styles.incidenciaOpcion,
+                          elegida && styles.incidenciaOpcionElegida,
+                          pressed && styles.pressedButton,
+                        ]}
+                      >
+                        <Ionicons name={icono} size={22} color={elegida ? quivoColors.white : '#3127B1'} />
+                        <Text style={[styles.incidenciaTexto, elegida && styles.incidenciaTextoElegido]}>
+                          {etiqueta}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
                 <View style={styles.observacionActions}>
                   <Pressable
                     accessibilityRole="button"
@@ -776,10 +788,10 @@ export function OperationScreen(
                     accessibilityRole="button"
                     accessibilityLabel="Enviar"
                     onPress={() => void enviarObservacion()}
-                    disabled={!observacion.trim() || enviandoObservacion}
+                    disabled={!observacion || enviandoObservacion}
                     style={({ pressed }) => [
                       styles.modalConfirmButton,
-                      (!observacion.trim() || enviandoObservacion) && styles.disabledButton,
+                      (!observacion || enviandoObservacion) && styles.disabledButton,
                       pressed && styles.pressedButton,
                     ]}
                   >
@@ -1030,7 +1042,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   // Fila horizontal de FABs a la derecha, a la altura del pill "Centrar" (izquierda). En navegación
-  // son hasta 4 (obs, info, bug de dev, brújula) = 4×42 + 3×12 = 204 dp; el pill (~120 dp) solo
+  // son hasta 4 (obs, WhatsApp, bug de dev, brújula) = 4×42 + 3×12 = 204 dp; el pill (~120 dp) solo
   // existe en libre, donde la brújula no se muestra, así que en 360 dp nunca se solapan.
   fabsContainer: {
     position: 'absolute',
@@ -1178,10 +1190,31 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     color: quivoColors.white,
   },
-  observacionShell: {
-    backgroundColor: '#DCE0E8',
+  incidenciaOpciones: {
+    gap: 8,
+  },
+  incidenciaOpcion: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
     borderRadius: 14,
-    borderWidth: 0,
+    backgroundColor: '#DCE0E8',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  incidenciaOpcionElegida: {
+    backgroundColor: '#3127B1',
+    borderColor: '#1A0E70',
+  },
+  incidenciaTexto: {
+    fontFamily: quivoFonts.displayBold,
+    fontSize: 15,
+    color: '#3127B1',
+  },
+  incidenciaTextoElegido: {
+    color: quivoColors.white,
   },
   observacionError: {
     marginBottom: 8,

@@ -7,10 +7,12 @@ import { SiluetaVehiculo } from './silueta-vehiculo';
 import {
   TEXTO_SIN_DATO,
   etiquetaAccesibleFila,
+  estadoDistanciaVecino,
   etiquetaLado,
   textoDistancia,
   textoEdad,
   textoVacio,
+  type EstadoDistanciaVecino,
   type EstadoFila,
   type Lado,
 } from './estado-vecinos';
@@ -24,6 +26,12 @@ interface Props {
   sinActualizar: boolean;
 }
 
+const COLOR_SEMAFORO: Record<EstadoDistanciaVecino, { borde: string; texto: string }> = {
+  normal: { borde: quivoColors.success, texto: quivoColors.success },
+  atencion: { borde: quivoColors.warning, texto: quivoColors.warningStrong },
+  alerta: { borde: quivoColors.danger, texto: quivoColors.danger },
+};
+
 function Fila({
   lado,
   estado,
@@ -34,9 +42,12 @@ function Fila({
   transcurridoMs: number;
 }) {
   const vecino = estado.tipo === 'vecino' ? estado.vecino : null;
+  // Solo "Delante" lleva semáforo; "Detrás" queda neutro.
+  const semaforo =
+    lado === 'delante' && vecino ? COLOR_SEMAFORO[estadoDistanciaVecino(vecino.distanciaM)] : null;
   return (
     <View
-      style={styles.fila}
+      style={[styles.fila, semaforo && { borderColor: semaforo.borde }]}
       accessible
       accessibilityLabel={etiquetaAccesibleFila(lado, estado, transcurridoMs)}
     >
@@ -66,7 +77,9 @@ function Fila({
               {etiquetaLado(lado)} · {textoEdad(vecino.edadFixS, transcurridoMs)}
             </Text>
           </View>
-          <Text style={styles.distancia}>{textoDistancia(vecino.distanciaM)}</Text>
+          <Text style={[styles.distancia, semaforo && { color: semaforo.texto }]}>
+            {textoDistancia(vecino.distanciaM)}
+          </Text>
         </>
       ) : estado.tipo === 'nadie' ? (
         <Text style={styles.vacio}>{textoVacio(lado)}</Text>
@@ -115,6 +128,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     height: 48,
+    // Borde siempre presente (transparente) para que Delante y Detrás queden alineados.
+    borderWidth: 2,
+    borderColor: 'transparent',
+    borderRadius: quivoRadius.md,
+    paddingHorizontal: 8,
   },
   separador: { height: 1, backgroundColor: quivoColors.glassDivider },
   chevron: {
