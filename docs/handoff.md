@@ -6,6 +6,13 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## En curso — 2026-10-27: QA E2E de `/en-vivo` (Playwright + emulador)
+
+Plan: [`docs/plan-qa-en-vivo.md`](plan-qa-en-vivo.md). Scan local (escribe) + prod solo lectura →
+reporte priorizado `docs/qa-en-vivo-2026-10-27.md` → CTO prioriza → fixes en PRs. Incluye bug filtro
+L16 (oculta todos los trufis) y feature nueva "ruta de la línea al filtrar" (hoy la ruta solo se
+dibuja al seleccionar un vehículo).
+
 ## Próximo — 2026-10-27: piloto del jueves 29/10 (9:00, 30 usuarios) y rediseño móvil de Jairo
 
 **Piloto:** jueves 29/10 a las 9:00 con 30 usuarios, sobre el APK 17 + OTA `c71a761b`.
