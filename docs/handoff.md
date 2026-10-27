@@ -6,6 +6,22 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Próximo — 2026-10-27: piloto del jueves 29/10 (9:00, 30 usuarios) y rediseño móvil de Jairo
+
+**Piloto:** jueves 29/10 a las 9:00 con 30 usuarios, sobre el APK 17 + OTA `c71a761b`.
+**Congelado hasta entonces:** nada de la rama de Jairo entra antes del piloto.
+
+**Después del piloto — revisar `feat/mobile-rediseno-rutas` (Jairo) e implementar su login y lo
+demás que sirva de UI/UX.** Plan: [`docs/plan-rediseno-movil-jairo.md`](plan-rediseno-movil-jairo.md).
+- Orden: (1) login + splash + carga, (2) elegir turno, (3) Perfil + Ajustes, (4) mapa en ruta.
+- Revisión 27/10: tsc ok, 1099/1099 tests, lint 0 errores. Visto en emulador: login, mapa en
+  reposo, Perfil, Ajustes. **No probado:** Empezar día ni la pantalla en ruta.
+- **Decisión CTO 27/10:** se quita el interruptor "Trabajar sin conexión" (hoy no tiene efecto;
+  la app siempre está online y se reconcilia). Solo el switch; el outbox de SQLite se queda.
+- **Bug aparte (en `main`):** el dev client no puede usar HTTP porque
+  `withAndroidNetworkSecurityConfig` pone `cleartextTrafficPermitted` en `<debug-overrides>`, donde
+  Android lo ignora. El release no se afecta. Detalle y arreglo en el plan.
+
 ## En curso — 2026-10-25: correcciones antes del piloto del lunes 27/10
 
 Plan: [`docs/plan-pre-piloto-27-10.md`](plan-pre-piloto-27-10.md).
