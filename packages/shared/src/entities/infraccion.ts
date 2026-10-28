@@ -37,10 +37,10 @@ export const REGLA_TIPOS_RESERVADOS_INFRACCION = [
 
 /**
  * Tipos de infracción que son SOLO una alerta: la API responde 409 al intentar sancionarlos
- * (decisión del CTO para `pc_omitido`, 2026-10-12, y `espera_corta`, 2026-10-13). `desvio_ruta`
- * y `molinos_omitido` ("una vuelta más") sí se sancionan.
+ * (decisión del CTO para `espera_corta`, 2026-10-13). `desvio_ruta`, `molinos_omitido`
+ * ("una vuelta más") y `pc_omitido` (decisión del CTO, 2026-10-27) sí se sancionan.
  */
-export const TIPOS_INFRACCION_SOLO_ALERTA: readonly TipoInfraccion[] = ['pc_omitido', 'espera_corta'];
+export const TIPOS_INFRACCION_SOLO_ALERTA: readonly TipoInfraccion[] = ['espera_corta'];
 
 /** Gravedad cuando el sindicato NO definió una `Regla` con el `tipo` reservado. */
 export const GRAVEDAD_DEFAULT_POR_TIPO: Record<TipoInfraccion, z.infer<typeof GravedadReglaSchema>> = {

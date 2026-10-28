@@ -705,15 +705,20 @@ describe('detección de infracciones (PR A)', () => {
       ...extra,
     });
 
-    it('pc_omitido es solo alerta: sancionar da 409 y no crea sanción ni cambia la infracción', async () => {
+    it('pc_omitido es sancionable: crea la sanción y marca la infracción sancionada', async () => {
       const pcAbierta = (await infraccionesDe(sesionPc)).find((i) => i.tipo === 'pc_omitido' && i.estado === 'abierta')!;
       const antes = await withTenantContext(ADMIN, (tx) => tx.sancion.count({ where: { sindicatoId: sindicatoA } }));
-      await expect(infracciones.sancionar(adminA, pcAbierta.id, sancionDe())).rejects.toBeInstanceOf(
-        ConflictException,
-      );
-      expect(await withTenantContext(ADMIN, (tx) => tx.sancion.count({ where: { sindicatoId: sindicatoA } }))).toBe(antes);
-      const despues = (await infraccionesDe(sesionPc)).find((i) => i.id === pcAbierta.id)!;
-      expect(despues).toMatchObject({ estado: 'abierta', sancionId: null });
+      const r = await infracciones.sancionar(adminA, pcAbierta.id, sancionDe());
+      expect(r).toMatchObject({ id: pcAbierta.id, estado: 'sancionada' });
+      expect(r.sancionId).toBeTruthy();
+      const despues = await withTenantContext(ADMIN, (tx) => tx.sancion.count({ where: { sindicatoId: sindicatoA } }));
+      expect(despues).toBe(antes + 1);
+      expect(await sanciones.obtener(adminA, r.sancionId!)).toMatchObject({
+        reglaId: reglaAId,
+        sujetoTipo: 'conductor',
+        sujetoId: conductorId,
+        estado: 'pendiente',
+      });
     });
 
     it('el sujeto debe ser el conductor o el vehículo de la infracción (400); socio no se admite', async () => {
@@ -751,14 +756,15 @@ describe('detección de infracciones (PR A)', () => {
   });
 
   describe('mapa en vivo', () => {
+    // Depende de 'pc_omitido es sancionable' (arriba): deja una de las 2 abiertas de la sesión PC sancionada.
     it('obtenerPosiciones agrega nivel máximo y cantidad de abiertas, y trae vehiculoId/conductorId', async () => {
       const posiciones = await enVivo.obtenerPosiciones(adminA);
       const desvio = posiciones.find((p) => p.id === sesionDesvio)!;
       // Abiertas en la sesión de desvío: la gravísima (activa) — la grave quedó sancionada.
       expect(desvio).toMatchObject({ vehiculoId: vehiculoDesvioId, conductorId, infraccionNivel: 'gravisima', infraccionesAbiertas: 1 });
       const pcSesion = posiciones.find((p) => p.id === sesionPc);
-      // La sesión de PC no tiene gps: puede no tener fix pero sigue listada por estar activa.
-      expect(pcSesion).toMatchObject({ vehiculoId: vehiculoPcId, conductorId, infraccionNivel: 'leve', infraccionesAbiertas: 2 });
+      // La sesión de PC no tiene gps: puede no tener fix pero sigue listada por estar activa (2 abiertas menos la sancionada arriba).
+      expect(pcSesion).toMatchObject({ vehiculoId: vehiculoPcId, conductorId, infraccionNivel: 'leve', infraccionesAbiertas: 1 });
       const sinInfracciones = posiciones.find((p) => p.id === sesionSinInicio)!;
       expect(sinInfracciones).toMatchObject({ infraccionNivel: null, infraccionesAbiertas: 0 });
     });

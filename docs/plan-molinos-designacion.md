@@ -34,7 +34,7 @@
   - Únicos: `(sesion_id, numero)` y uno parcial `(sesion_id) WHERE estado='en_curso'`.
 - **Infracciones:** se suman los tipos `molinos_omitido` (default `grave`, porque es una alteración de ruta) y `espera_corta` (default `leve`, por decisión del CTO).
   - Cambian el `CHECK` y `TipoInfraccionSchema`, se agregan a `REGLA_TIPO_POR_INFRACCION`/`GRAVEDAD_DEFAULT_POR_TIPO` y a las sugerencias de `/reglas`, y se actualizan las etiquetas en la web.
-  - `espera_corta` solo alerta, como `pc_omitido`. `molinos_omitido` sí se puede sancionar ("una vuelta más").
+  - `espera_corta` solo alerta (`pc_omitido` pasó a sancionable el 2026-10-27). `molinos_omitido` sí se puede sancionar ("una vuelta más").
 
 ### Conteo de vueltas (worker, después de `procesarCumplimientoEnTx`)
 - **Apertura de la primera vuelta:** con el primer cumplimiento del PC `terminal`, o con `inicio_recorrido`, lo que llegue primero.

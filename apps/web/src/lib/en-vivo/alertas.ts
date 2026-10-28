@@ -1,6 +1,7 @@
 import {
   GRAVEDAD_ORDEN,
   normalizarTelefonoBolivia,
+  TIPOS_INFRACCION_SOLO_ALERTA,
   type GravedadRegla,
   type Infraccion,
   type PosicionEnVivo,
@@ -208,11 +209,10 @@ export function duracionInfraccion(i: Pick<Infraccion, 'inicioTs' | 'finTs'>): s
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
 }
 
-/** `desvio_ruta` y `molinos_omitido` se pueden sancionar; `pc_omitido` y `espera_corta` son solo
- * alerta (la API da 409). */
+/** Se sanciona todo tipo salvo los de `TIPOS_INFRACCION_SOLO_ALERTA` (hoy `espera_corta`; la API da 409). */
 export function puedeSancionar(i: Pick<Infraccion, 'tipo' | 'estado'>): boolean {
   return (
-    (i.tipo === 'desvio_ruta' || i.tipo === 'molinos_omitido') &&
+    !(TIPOS_INFRACCION_SOLO_ALERTA as readonly string[]).includes(i.tipo) &&
     (i.estado === 'abierta' || i.estado === 'atendida')
   );
 }
@@ -243,13 +243,17 @@ export function reglasSancionables<R extends { sindicatoId: string; estado: stri
 }
 
 /** Regla preseleccionada de la sanción: la de la infracción si sigue activa; si no, la regla activa
- * de "Alteración de ruta". Sin ninguna, `undefined`: el admin la elige (no se asume la primera). */
+ * del mismo tipo (las infracciones previas a la regla no tienen `reglaId`); si no, la de "Alteración
+ * de ruta". Sin ninguna, `undefined`: el admin la elige (no se asume la primera). */
 export function reglaInicialSancion(
-  inf: Pick<Infraccion, 'reglaId'>,
+  inf: Pick<Infraccion, 'reglaId' | 'tipo'>,
   reglasActivas: { id: string; tipo: string }[],
 ): string | undefined {
   if (inf.reglaId && reglasActivas.some((r) => r.id === inf.reglaId)) return inf.reglaId;
-  return reglasActivas.find((r) => r.tipo === 'desvio_ruta')?.id;
+  const delMismoTipo = reglasActivas.find((r) => r.tipo === inf.tipo);
+  // Solo desvío y Molinos caen a la regla de desvío; un PC omitido sin su regla no preselecciona la grave.
+  const cae = inf.tipo === 'desvio_ruta' || inf.tipo === 'molinos_omitido';
+  return (delMismoTipo ?? (cae ? reglasActivas.find((r) => r.tipo === 'desvio_ruta') : undefined))?.id;
 }
 
 // ---------------------------------------------------------------------------------------------

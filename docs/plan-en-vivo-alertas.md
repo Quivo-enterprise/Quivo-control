@@ -161,7 +161,7 @@ Cada PR sigue la misma regla: código por un Sonnet; `/code-review`; CI por exit
 - **El desvío solo se mide dentro de un recorrido**, entre `inicio_recorrido` y `fin_recorrido`. Al terminar el recorrido se cierra el desvío abierto y la máquina se reinicia.
 - **Puntos con fecha futura:** se ignoran si superan `DRIFT_ALERTA_MS`, para que `ultimo_ts` no se congele.
 - **Ventana de `pc_omitido`:** el recorrido termina en la referencia y los cumplimientos de un recorrido posterior no cuentan. Hay una tolerancia de 120 s porque inicio y fin usan el reloj del sistema y los cumplimientos el GNSS.
-- **`pc_omitido` es solo alerta** (decisión del CTO): no se puede sancionar y la API devuelve 409. La sanción tiene que ser del conductor o del vehículo de la infracción.
+- **`pc_omitido` es sancionable** (decisión del CTO 2026-10-27; antes era solo alerta y la API devolvía 409). La sanción tiene que ser del conductor o del vehículo de la infracción.
 - **Atención:** la primera atención no se pisa. Los fallos de detección van al logger, no a `sync_errors`.
 
 ### Sanciones reales del sindicato (CTO)

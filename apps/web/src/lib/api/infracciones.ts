@@ -22,7 +22,7 @@ export const infraccionesApi = {
 
   /** `POST /infracciones/:id/sancionar` — crea la sanción y la vincula a la infracción; responde
    * la INFRACCIÓN actualizada (estado `sancionada`), no la sanción. El sujeto debe ser el conductor
-   * o el vehículo de la infracción; `pc_omitido` responde 409. */
+   * o el vehículo de la infracción; `espera_corta` responde 409. */
   sancionar: async (token: string, id: string, data: SancionarInfraccion): Promise<Infraccion> =>
     InfraccionSchema.parse(
       await apiFetch<unknown>(`/infracciones/${id}/sancionar`, token, { method: 'POST', body: data }),
