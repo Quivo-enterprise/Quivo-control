@@ -331,6 +331,6 @@ describe('vacioSobreMapa', () => {
 
   it('sin filtro de línea, o sin ruta, mantiene el vacío a pantalla completa', () => {
     expect(vacioSobreMapa('', true, false)).toBe(false);
-    expect(vacioSobreMapa('l1', false, false)).toBe(false);
+    expect(vacioSobreMapa('l1', false, false)).toBe(false); // error de la query: ni mapa ni carga
   });
 });

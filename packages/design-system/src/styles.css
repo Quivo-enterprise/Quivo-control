@@ -3242,6 +3242,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   pointer-events: none;
 }
 .qv-live-vacio--compacto {
+  display: flex;
   position: absolute;
   top: 4.5rem;
   left: 50%;

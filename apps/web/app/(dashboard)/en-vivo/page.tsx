@@ -34,12 +34,12 @@ import { useLineaOptions } from '../../../src/lib/api/use-linea-options';
 import {
   construirMarcadoresVehiculos,
   construirMapaDeLinea,
-  vacioSobreMapa,
   construirPuntosControl,
   construirRutas,
   construirZonas,
   idMarcadorVehiculo,
   mensajeError,
+  vacioSobreMapa,
 } from './map-builders';
 import { BarraMando } from './barra-mando';
 import { ModuloJornada } from './modulo-jornada';
@@ -474,7 +474,7 @@ export default function EnVivoPage() {
 
   const hayHud = !estadoSuperpuesto;
   // Con 0 vehículos la barra de mando sigue visible: el filtro de línea y "Días anteriores" siguen siendo útiles.
-  const vacioCompacto = estadoSuperpuesto === 'vacio' && vacioSobreMapa(lineaFilter, hayMapaLinea, rutasLinea.data === undefined);
+  const vacioCompacto = estadoSuperpuesto === 'vacio' && vacioSobreMapa(lineaFilter, hayMapaLinea, rutasLinea.cargando);
   const hayBarra = hayHud || estadoSuperpuesto === 'vacio';
 
   // Zonas del mapa tapadas por el cajón del vehículo: el seguimiento centra al vehículo en lo que
