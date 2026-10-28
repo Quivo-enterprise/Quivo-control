@@ -1,6 +1,7 @@
 import {
   GRAVEDAD_ORDEN,
   normalizarTelefonoBolivia,
+  TIPOS_INFRACCION_SOLO_ALERTA,
   type GravedadRegla,
   type Infraccion,
   type PosicionEnVivo,
@@ -208,11 +209,10 @@ export function duracionInfraccion(i: Pick<Infraccion, 'inicioTs' | 'finTs'>): s
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
 }
 
-/** `desvio_ruta`, `molinos_omitido` y `pc_omitido` se pueden sancionar; `espera_corta` es solo
- * alerta (la API da 409). */
+/** Se sanciona todo tipo salvo los de `TIPOS_INFRACCION_SOLO_ALERTA` (hoy `espera_corta`; la API da 409). */
 export function puedeSancionar(i: Pick<Infraccion, 'tipo' | 'estado'>): boolean {
   return (
-    (i.tipo === 'desvio_ruta' || i.tipo === 'molinos_omitido' || i.tipo === 'pc_omitido') &&
+    !(TIPOS_INFRACCION_SOLO_ALERTA as readonly string[]).includes(i.tipo) &&
     (i.estado === 'abierta' || i.estado === 'atendida')
   );
 }
