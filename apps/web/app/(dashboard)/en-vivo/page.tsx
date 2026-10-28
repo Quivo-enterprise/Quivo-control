@@ -270,12 +270,10 @@ export default function EnVivoPage() {
   const estado = datos?.estadoFrescura ?? posicionSeleccionada?.estadoFrescura ?? 'sin_datos';
   const presentacion = presentacionFrescura(estado);
 
+  const varianteId = posicionSeleccionada?.vuelta?.varianteId ?? null;
   const puntosControl = useMemo(
-    () =>
-      contexto.data
-        ? construirPuntosControl(contexto.data, datos, posicionSeleccionada?.vuelta?.varianteId)
-        : [],
-    [contexto.data, datos, posicionSeleccionada?.vuelta?.varianteId],
+    () => (contexto.data ? construirPuntosControl(contexto.data, datos, varianteId) : []),
+    [contexto.data, datos, varianteId],
   );
   // Color de la línea para el anillo del marcador: el catálogo de líneas (si cargó) y, con
   // seguridad, la de la sesión con el panel abierto (viene en su `contexto`).
@@ -323,14 +321,13 @@ export default function EnVivoPage() {
   );
   // `fusionarTraza` conserva la referencia de `puntos` si el poll no sumó nada: sin recalcular.
   const puntosTraza = datos?.puntos;
-  const varianteId = posicionSeleccionada?.vuelta?.varianteId ?? null;
   const routes = useMemo(
     () => (contexto.data ? construirRutas(contexto.data, puntosTraza, rutasSnap, varianteId) : []),
     [contexto.data, puntosTraza, rutasSnap, varianteId],
   );
   const zones = useMemo(
-    () => (contexto.data ? construirZonas(contexto.data, varianteId) : []),
-    [contexto.data, varianteId],
+    () => (contexto.data ? construirZonas(contexto.data) : []),
+    [contexto.data],
   );
 
   // Animación del marcador de vehículo (`route-map-impl.tsx` hace el trabajo real — ver el

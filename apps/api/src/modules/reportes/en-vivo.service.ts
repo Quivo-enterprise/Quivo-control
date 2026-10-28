@@ -684,9 +684,11 @@ export class EnVivoService {
         SELECT id, orden, ST_AsGeoJSON(coord) as coord, "radioToleranciaM", rol
         FROM puntos_control WHERE "rutaId" = ${rutaId} AND estado = 'activo' ORDER BY orden ASC
       `;
+      // Sin filtro de `estado`: el worker de ingesta resuelve el PC de espera sin filtrarlo
+      // (`deteccion-vueltas.ts`), así una variante dada de baja pero aún designada conserva su PC.
       const esperaRows = await tx.$queryRaw<{ id: string; puntoEsperaId: string }[]>`
         SELECT id, "puntoEsperaId" FROM variantes
-        WHERE "rutaId" = ${rutaId} AND estado = 'activo' AND "puntoEsperaId" IS NOT NULL
+        WHERE "rutaId" = ${rutaId} AND "puntoEsperaId" IS NOT NULL
       `;
 
       return ContextoEnVivoSchema.parse({

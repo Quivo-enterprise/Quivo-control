@@ -8,6 +8,8 @@ type PcContexto = ContextoEnVivo['puntosControl'][number];
  * mantener en sincronía. El PC `espera` (Molinos) solo cuenta si la variante de la vuelta lo designa;
  * entonces va tras el `retorno` si su `orden` es menor que el del retorno, o en su `orden`.
  */
+// shortcut: copia de `ordenEfectivoPuntos` (apps/mobile), puede divergir; moverla a packages/shared e importarla
+// desde ambos la próxima vez que se toque la app (requiere OTA).
 export function pcsEfectivos(
   contexto: Pick<ContextoEnVivo, 'puntosControl' | 'puntoEsperaPorVariante'>,
   varianteId: string | null | undefined,

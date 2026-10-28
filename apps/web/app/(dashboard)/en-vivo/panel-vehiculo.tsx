@@ -246,6 +246,9 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   const lista = ordenarInfracciones(infracciones.data ?? []);
   const abiertas = lista.filter((i) => i.estado === 'abierta');
   const pcs = contexto ? pcsEfectivos(contexto, posicion?.vuelta?.varianteId) : [];
+  // shortcut: las infracciones de vueltas anteriores se numeran con el orden efectivo de la vuelta ACTUAL;
+  // puede salir corrido en 1 si esa vuelta tuvo otra designación de Molinos. Numerar por la vuelta de cada
+  // infracción si los despachadores lo reportan.
   const idsPc = pcs.map((pc) => pc.id);
   // Un borrador de una infracción que ya no se puede descartar (la atendió otro, se cerró) no se
   // muestra ni cuenta como trabajo a medias.
