@@ -38,7 +38,7 @@ export const REGLA_TIPOS_RESERVADOS_INFRACCION = [
 /**
  * Tipos de infracción que son SOLO una alerta: la API responde 409 al intentar sancionarlos
  * (decisión del CTO para `espera_corta`, 2026-10-13). `desvio_ruta`, `molinos_omitido`
- * ("una vuelta más") y `pc_omitido` (decisión del CTO, 2026-10-28) sí se sancionan.
+ * ("una vuelta más") y `pc_omitido` (decisión del CTO, 2026-10-27) sí se sancionan.
  */
 export const TIPOS_INFRACCION_SOLO_ALERTA: readonly TipoInfraccion[] = ['espera_corta'];
 

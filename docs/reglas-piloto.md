@@ -13,14 +13,14 @@ Se cargan a mano en `/reglas` → "Nueva regla", sindicato **Sindicato Piloto �
 - Campos obligatorios del formulario: Nombre, Tipo (escribir el `tipo` exacto de abajo), Gravedad,
   Aplica a, Sindicato (admin global).
 
-## Cargadas por pedido del CTO (2026-10-28): `desvio_ruta`, `vueltas_incumplidas`, `pc_omitido`
+## Cargadas por pedido del CTO (2026-10-27): `desvio_ruta`, `vueltas_incumplidas`, `pc_omitido`
 
 ## Obligatorias (cubren infracciones automáticas sancionables)
 | Nombre | Tipo (exacto) | Gravedad | Aplica a | Descripción (sanción) |
 |---|---|---|---|---|
 | Alteración de ruta (desvío) | `desvio_ruta` | grave | conductor | Una vuelta más, en la misma línea. |
 | Molinos omitido | `molinos_omitido` | grave | conductor | Alteración de ruta: una vuelta más, en la misma línea. |
-| PC omitido | `pc_omitido` | leve | conductor | Pasó sin validar un punto de control. Sancionable desde 2026-10-28 (requiere deploy). |
+| PC omitido | `pc_omitido` | leve | conductor | Pasó sin validar un punto de control. Sancionable desde 2026-10-27 (requiere deploy). |
 
 ## Opcionales (solo sanción manual, no hay infracción automática)
 | Nombre | Tipo | Gravedad | Aplica a | Descripción (sanción) |

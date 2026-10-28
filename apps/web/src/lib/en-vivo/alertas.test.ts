@@ -98,7 +98,7 @@ describe('infracciones del panel', () => {
     expect(duracionInfraccion({ ...base, finTs: new Date('2026-10-13T14:12:00Z') })).toBe('12 min');
     expect(duracionInfraccion({ ...base, finTs: new Date('2026-10-13T14:00:45Z') })).toBe('45 s');
   });
-  it('el desvío y Molinos omitido se pueden sancionar; PC omitido y espera corta son solo alerta', () => {
+  it('desvío, Molinos omitido y PC omitido se pueden sancionar; espera corta es solo alerta', () => {
     expect(puedeSancionar(base)).toBe(true);
     expect(puedeSancionar({ ...base, estado: 'sancionada' })).toBe(false);
     expect(puedeSancionar({ ...base, tipo: 'pc_omitido' })).toBe(true);
@@ -170,7 +170,12 @@ describe('reglaInicialSancion', () => {
     const con = [...reglas, { id: 'r3', tipo: 'pc_omitido' }];
     expect(reglaInicialSancion({ reglaId: null, tipo: 'pc_omitido' }, con)).toBe('r3');
     expect(reglaInicialSancion({ reglaId: 'inactiva', tipo: 'pc_omitido' }, con)).toBe('r3');
-    expect(reglaInicialSancion({ reglaId: null, tipo: 'pc_omitido' }, reglas)).toBe('r2');
+    expect(reglaInicialSancion({ reglaId: null, tipo: 'pc_omitido' }, reglas)).toBeUndefined();
+  });
+  it('molinos_omitido: prefiere su regla y si no hay cae a desvío_ruta', () => {
+    const con = [...reglas, { id: 'r4', tipo: 'molinos_omitido' }];
+    expect(reglaInicialSancion({ reglaId: null, tipo: 'molinos_omitido' }, con)).toBe('r4');
+    expect(reglaInicialSancion({ reglaId: null, tipo: 'molinos_omitido' }, reglas)).toBe('r2');
   });
 });
 

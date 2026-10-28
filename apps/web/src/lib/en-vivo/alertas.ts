@@ -250,7 +250,10 @@ export function reglaInicialSancion(
   reglasActivas: { id: string; tipo: string }[],
 ): string | undefined {
   if (inf.reglaId && reglasActivas.some((r) => r.id === inf.reglaId)) return inf.reglaId;
-  return (reglasActivas.find((r) => r.tipo === inf.tipo) ?? reglasActivas.find((r) => r.tipo === 'desvio_ruta'))?.id;
+  const delMismoTipo = reglasActivas.find((r) => r.tipo === inf.tipo);
+  // Solo desvío y Molinos caen a la regla de desvío; un PC omitido sin su regla no preselecciona la grave.
+  const cae = inf.tipo === 'desvio_ruta' || inf.tipo === 'molinos_omitido';
+  return (delMismoTipo ?? (cae ? reglasActivas.find((r) => r.tipo === 'desvio_ruta') : undefined))?.id;
 }
 
 // ---------------------------------------------------------------------------------------------
