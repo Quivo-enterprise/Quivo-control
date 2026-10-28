@@ -652,23 +652,6 @@ body::-webkit-scrollbar {
   padding-inline-end: var(--qv-space-xs);
 }
 
-/* DatePicker: el icono propio se dibuja encima y el indicador nativo (invisible) ocupa su sitio
-   y sigue abriendo el selector; así no se ven dos calendarios. */
-.qv-input--has-right {
-  position: relative;
-}
-
-.qv-input--has-right > input[type='date']::-webkit-calendar-picker-indicator {
-  position: absolute;
-  inset-block: 0;
-  inset-inline-end: 0;
-  width: 2.25rem;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
 .qv-input__slot {
   display: inline-flex;
   align-items: center;
@@ -2725,10 +2708,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   --qv-gmap-veh-sev: var(--qv-alerta-gravisima);
   --qv-gmap-veh-periodo: 600ms;
 }
-/* Solo atendidas (sin abiertas): badge fijo, con el color/ícono de su severidad pero atenuado,
-   para que no se lea como alerta pendiente. */
+/* Solo atendidas (sin abiertas): badge fijo con su color de severidad y un aro discontinuo (pista
+   que no depende del color ni baja el contraste; el texto " infracción atendida" va en el nombre). */
 .qv-gmap-veh--alerta-atendida .qv-gmap-veh__alerta {
-  opacity: 0.55;
+  outline: 2px dashed var(--qv-gmap-veh-sev);
+  outline-offset: 2px;
 }
 /* El anillo es SIEMPRE el color de la línea (Propuesta B); la severidad se ve solo en su badge, que
    parpadea (halo) mientras haya infracciones abiertas. */
