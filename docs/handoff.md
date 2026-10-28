@@ -27,7 +27,7 @@ en prod, 5 en local): falta repro del CTO (fecha, ¿vehículo seleccionado?, ¿s
 - Codex: **no verificado (sin cuota hasta 16/11)** en los 5. Reviews: `/code-review` (2 rondas en #280/#281) + `/ponytail-review`; gate `web-design-guidelines` en #283.
 
 **Hecho 28/10 (madrugada):**
-- **Deploy r35-20261027** (CTO): #279–#285, migraciones OK (`quivo-migraciones`), `/v1/health/ready` ok. #286 (ruta de la línea visible con 0 vehículos) mergeado; deploy **solo web** `r36-20261028 --solo web` pendiente/en curso (CTO).
+- **Deploy r35-20261027** (CTO): #279–#285, migraciones OK (`quivo-migraciones`), `/v1/health/ready` ok. #286 (ruta de la línea visible con 0 vehículos) mergeado; deploy **solo web** `r36-20261028` OK (revisión `quivo-web-00024-dv2`, health ok). Verificado en prod 28/10 con Playwright: "Línea 16" con 0 trufis dibuja trazado + PCs con la tarjeta compacta arriba; "Jornada de hoy" lista los 8 trufis (PIB–PIH, PIL) sin iniciar; consola sin errores. Detalle menor: la tarjeta tapa parte del trazado cerca de PC3 al encuadre inicial.
 - **Reglas cargadas en prod** (Sindicato Piloto — Producción, activas): Desvío fuera de la ruta `desvio_ruta` grave · Vueltas incumplidas `vueltas_incumplidas` grave · PC omitido `pc_omitido` leve (sancionable desde #285).
 - **Rotación `piloto-linea-16` extendida** con `crear-piloto-linea-16.ts --apply` (`QUIVO_PILOTO16_HASTA=2026-11-02`): 8 trufis × 28/10–02/11 mañana, publicada (124 asignaciones), **sin tocar PINs**.
 - Rotación QA `qa-envivo-2026-10-27` anulada (borrador); asignación de PIB borrada; la de PIL 27/10 no se puede borrar (sesión de prueba enganchada) → pasada a `tarde` para que el script no la vea como conflicto.
