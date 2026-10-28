@@ -10,6 +10,7 @@ import {
   type MolinosResumen,
   type PosicionEnVivo,
   type PuntoControl,
+  type Ruta,
   type SesionEnVivoResumen,
   type Variante,
 } from '@quivo/shared';
@@ -17,6 +18,7 @@ import { enVivoApi } from '../api/en-vivo';
 import { infraccionesApi } from '../api/infracciones';
 import { puntosControlApi } from '../api/puntos-control';
 import { reportesApi } from '../api/reportes';
+import { rutasApi } from '../api/rutas';
 import { variantesApi } from '../api/variantes';
 import {
   debeRecargar,
@@ -306,6 +308,30 @@ export function useOpcionesDesignacion(token: string | null, rutaId: string | nu
     retryDelay,
   });
   return { variantes, puntos };
+}
+
+/**
+ * Rutas + puntos de control de una línea (endpoints de /rutas y /lineas, mismos roles que /en-vivo):
+ * dibuja el trazado de la línea filtrada aunque no haya vehículos reportando. Geometría casi
+ * estática: `staleTime` largo.
+ */
+export function useRutasDeLinea(token: string | null, lineaId: string | null) {
+  return useQuery<{ ruta: Ruta; puntos: PuntoControl[] }[]>({
+    queryKey: ['en-vivo', 'rutas-linea', lineaId],
+    enabled: Boolean(token && lineaId),
+    queryFn: async () => {
+      const rutas = await rutasApi.listarPorLinea(token as string, lineaId as string);
+      return Promise.all(
+        rutas
+          .filter((ruta) => ruta.estado === 'activo')
+          .map(async (ruta) => ({ ruta, puntos: await puntosControlApi.listarPorRuta(token as string, ruta.id) })),
+      );
+    },
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: REINTENTOS,
+    retryDelay,
+  });
 }
 
 export interface DesignarVars {
