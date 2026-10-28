@@ -16,7 +16,7 @@ import {
 import { createPortal } from 'react-dom';
 import { cx } from '../utils.js';
 import type { SelectChangeEvent, SelectOption } from '../types.js';
-import { CalendarIcon, ChevronDownIcon, CloseIcon, SearchIcon } from './icons.js';
+import { ChevronDownIcon, CloseIcon, SearchIcon } from './icons.js';
 
 // `useLayoutEffect` avisa por consola si corre durante SSR ("does nothing on the server") —
 // este archivo es `'use client'`, pero Next igual prerrenderiza los client components en el
@@ -208,13 +208,8 @@ export function DatePicker({
           {label}
         </label>
       )}
-      <span
-        className={cx('qv-input', 'qv-input--has-right', fullWidth && 'qv-input--full', className)}
-      >
+      <span className={cx('qv-input', fullWidth && 'qv-input--full', className)}>
         <input id={controlId} type="date" className="qv-input__control" {...rest} />
-        <span className="qv-input__slot qv-input__slot--right" aria-hidden="true">
-          <CalendarIcon />
-        </span>
       </span>
       {helperText && <span className="qv-field__helper">{helperText}</span>}
     </div>

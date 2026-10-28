@@ -984,9 +984,7 @@ body::-webkit-scrollbar {
   width: 100%;
   max-width: 32rem;
   max-height: 90vh;
-  background: var(--qv-surface-glass);
-  backdrop-filter: blur(32px) saturate(190%);
-  -webkit-backdrop-filter: blur(32px) saturate(190%);
+  background: var(--qv-surface-card);
   border: 1px solid var(--qv-border-glass);
   border-radius: var(--qv-radius-2xl);
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 30px -10px color-mix(in srgb, var(--qv-color-primary) 30%, transparent);
@@ -2710,6 +2708,12 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   --qv-gmap-veh-sev: var(--qv-alerta-gravisima);
   --qv-gmap-veh-periodo: 600ms;
 }
+/* Solo atendidas (sin abiertas): badge fijo con su color de severidad y un aro discontinuo (pista
+   que no depende del color ni baja el contraste; el texto " infracción atendida" va en el nombre). */
+.qv-gmap-veh--alerta-atendida .qv-gmap-veh__alerta {
+  outline: 2px dashed var(--qv-gmap-veh-sev);
+  outline-offset: 2px;
+}
 /* El anillo es SIEMPRE el color de la línea (Propuesta B); la severidad se ve solo en su badge, que
    parpadea (halo) mientras haya infracciones abiertas. */
 .qv-gmap-veh--parpadea .qv-gmap-veh__alerta {
@@ -3192,6 +3196,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   gap: 0.75rem;
 }
 .qv-live-vacio {
+  /* Alto mínimo (no fijo): si el contenido crece (módulo de jornada) se desplaza en vez de recortarse arriba. */
+  height: auto;
+  min-height: 100%;
   flex-direction: column;
   gap: 1.25rem;
   padding: 2rem;
@@ -4118,6 +4125,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   font-variant-numeric: tabular-nums;
   color: var(--qv-text-secondary);
   font-weight: 600;
+}
+/* "hace N s" nunca se parte: si falta ancho, envuelve el texto del estado. */
+.qv-live-panel__frescura .qv-live-panel__tabular {
+  flex: none;
+  white-space: nowrap;
 }
 .qv-live-panel__cerrar {
   flex: none;

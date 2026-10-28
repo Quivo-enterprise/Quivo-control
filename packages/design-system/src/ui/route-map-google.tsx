@@ -320,6 +320,7 @@ function crearElementoVehiculo(punto: MapPoint): HTMLElement {
   if (alerta) {
     raiz.classList.add(`qv-gmap-veh--alerta-${alerta.nivel}`);
     if (alerta.parpadea) raiz.classList.add('qv-gmap-veh--parpadea');
+    else raiz.classList.add('qv-gmap-veh--alerta-atendida');
     const badge = document.createElement('span');
     badge.className = 'qv-gmap-veh__alerta';
     badge.setAttribute('aria-hidden', 'true');
