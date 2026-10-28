@@ -6,12 +6,37 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## En curso — 2026-10-27: QA E2E de `/en-vivo` (Playwright + emulador)
+## Hecho — 2026-10-27/28: QA E2E de `/en-vivo` y 5 PRs de fixes
 
-Plan: [`docs/plan-qa-en-vivo.md`](plan-qa-en-vivo.md). Scan local (escribe) + prod solo lectura →
-reporte priorizado `docs/qa-en-vivo-2026-10-27.md` → CTO prioriza → fixes en PRs. Incluye bug filtro
-L16 (oculta todos los trufis) y feature nueva "ruta de la línea al filtrar" (hoy la ruta solo se
-dibuja al seleccionar un vehículo).
+Plan: [`docs/plan-qa-en-vivo.md`](plan-qa-en-vivo.md). Reporte (35 hallazgos):
+[`docs/qa-en-vivo-2026-10-27.md`](qa-en-vivo-2026-10-27.md).
+
+**QA:** Playwright sobre prod + local (`quivo_qa_envivo`) y **APK 17 en emulador contra prod con 1616PIL**
+(decisión CTO), GPS por `adb emu geo fix` con las trazas del fixture L16. Probado app↔panel: login, Empezar
+día, ida+regreso con PCs, pausa/reanudar, incidencia, WhatsApp, Sin señal (minimizada), designación Molinos +
+acuse, despacho desde `/salidas`, atender infracción, finalizar, logout **sin sesión fantasma**
+(`activa:false`, `finalizado`). El bug "filtro L16 oculta todos los trufis" **no se reprodujo** (1 vehículo
+en prod, 5 en local): falta repro del CTO (fecha, ¿vehículo seleccionado?, ¿segmento o Select?).
+
+**Mergeado (deploy pendiente — lo corre el CTO, trae 2 migraciones):**
+- **#279** chips de PC visibles (había `max-height` con scroll oculto) y conteo/numeración = app (sin PC de espera salvo designación). Incluye `docs/reglas-piloto.md`.
+- **#280** incidencias del chofer en `/en-vivo` (Atención 30 min desde la recepción, Salud primero; panel; recorridos). Migración: índice `eventos_operativos (sesionId, tipo, receivedAt)` + DROP del `(sesionId)`.
+- **#281** "Detenido" por movimiento (ancla + precisión ≤ 50 m, 30 m / 2 m/s), no por edad del fix; velocidad 0 en detenido. Migración: `gps_sesion_resumen.ultimo_movimiento_ts, mov_lat, mov_lng` con backfill.
+- **#282** al filtrar una línea se dibuja su ruta + PCs sin vehículo seleccionado (feature pedida).
+- **#283** visuales/a11y: modales opacos, fecha nativa, barra con 0 vehículos, errores de consola, copy, etiquetas de línea, abanico de marcadores apilados, badge "atendida".
+- Codex: **no verificado (sin cuota hasta 16/11)** en los 5. Reviews: `/code-review` (2 rondas en #280/#281) + `/ponytail-review`; gate `web-design-guidelines` en #283.
+
+**Pendiente para el CTO antes del jueves 29/10:**
+1. **Cargar reglas en prod** (`/reglas` tiene 0 → Sancionar inutilizable): lista en [`docs/reglas-piloto.md`](reglas-piloto.md) (obligatorias `desvio_ruta`, `molinos_omitido`).
+2. **Deploy** r35 con #279–#283 (migraciones corren antes de API/worker en `deploy-gcp.sh`).
+3. **Limpieza prod (CTO: aún no):** rotación `qa-envivo-2026-10-27` (`120b6ab9…`, asigna PIL y PIB hoy); infracción de prueba PIL atendida; incidencia "Bloqueo"; salidas anticipadas 19:48/20:55.
+4. Volver a crear la rotación del piloto: `piloto-linea-16` terminaba el 26/10 (hoy no había asignaciones).
+
+**Sigue abierto (del QA, sin PR):** infracciones/sanciones no llegan a la app (H19); despacho sin aviso al
+chofer (H30); app: "Terminar el día" en la posición de PAUSAR y badge "EN VIVO" en pausa (H23); Jornada "1 en
+recorrido" tras finalizar y "Todavía no pasó por la terminal" (H31); Molinos "601 min" con flota chica (H20,
+por diseño); cambio de asignación a mitad del día sin re-login (H22); etiquetas de PC superpuestas (H4);
+minimizada no manda GPS (conocido, latido nativo pendiente).
 
 ## Próximo — 2026-10-27: piloto del jueves 29/10 (9:00, 30 usuarios) y rediseño móvil de Jairo
 
