@@ -535,9 +535,12 @@ export default function RotacionesPage() {
                                   label={r.estado}
                                 />
                               </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--qv-text-secondary)' }}>
-                                <span>{r.asignaciones.length} asignaciones</span>
-                                <span>{new Set(r.asignaciones.map((a) => a.vehiculoId)).size} unidades</span>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '0 0.5rem', fontSize: '0.75rem', color: 'var(--qv-text-secondary)' }}>
+                                <span>{r.asignaciones.length} {r.asignaciones.length === 1 ? 'asignación' : 'asignaciones'}</span>
+                                <span>
+                                  {new Set(r.asignaciones.map((a) => a.vehiculoId)).size}{' '}
+                                  {new Set(r.asignaciones.map((a) => a.vehiculoId)).size === 1 ? 'unidad' : 'unidades'}
+                                </span>
                               </div>
                             </button>
                           );

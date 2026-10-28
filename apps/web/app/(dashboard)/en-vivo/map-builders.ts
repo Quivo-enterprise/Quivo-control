@@ -170,14 +170,16 @@ export function construirMarcadoresVehiculos(
   onSeleccionar: (sesionId: string) => void,
   opciones: OpcionesMarcadoresVehiculos = {},
 ): MapPoint[] {
-  return posiciones
-    .filter((p): p is PosicionEnVivo & { lat: number; lng: number } => p.lat !== null && p.lng !== null)
-    .map((p) => {
+  const conPosicion = posiciones.filter(
+    (p): p is PosicionEnVivo & { lat: number; lng: number } => p.lat !== null && p.lng !== null,
+  );
+  const desfases = desfasesDeApilados(conPosicion, opciones.seleccionadoId ?? null);
+  return conPosicion.map((p, i) => {
       const presentacion = presentacionFrescura(p.estadoFrescura);
       return {
         id: idMarcadorVehiculo(p.id),
-        lat: p.lat,
-        lng: p.lng,
+        lat: p.lat + desfases[i]!.dLat,
+        lng: p.lng + desfases[i]!.dLng,
         label: p.vehiculoPlaca,
         description: `${p.lineaNombre} · ${p.conductorNombre} · ${presentacion.etiqueta}${sufijoPausa(p)}`,
         color: presentacion.color,
@@ -192,7 +194,53 @@ export function construirMarcadoresVehiculos(
         ...camposAlertaYFoto(p, opciones, opciones.ordenMolinos?.get(p.id)),
         onClick: () => onSeleccionar(p.id),
       };
+  });
+}
+
+const RADIO_APILADO_M = 10;
+const RADIO_ABANICO_M = 7;
+const M_POR_GRADO = 111_320;
+
+/**
+ * Solo para dibujar: vehículos a <= 10 m entre sí (típico en la terminal) se abren en abanico de
+ * 7 m alrededor del primero, así el de arriba no se come los clics de los demás. El vehículo
+ * seleccionado conserva su posición real (la animación y el seguimiento parten de ella).
+ * Agrupa de forma voraz por orden de entrada: determinista para las mismas posiciones.
+ */
+function desfasesDeApilados(
+  ps: Array<{ id: string; lat: number; lng: number }>,
+  seleccionadoId: string | null,
+): Array<{ dLat: number; dLng: number }> {
+  const out = ps.map(() => ({ dLat: 0, dLng: 0 }));
+  const grupoDe: number[] = ps.map(() => -1);
+  const grupos: number[][] = [];
+  ps.forEach((p, i) => {
+    const g = grupos.findIndex((idx) => {
+      const c = ps[idx[0]!]!;
+      const dy = (p.lat - c.lat) * M_POR_GRADO;
+      const dx = (p.lng - c.lng) * M_POR_GRADO * Math.cos((c.lat * Math.PI) / 180);
+      return Math.hypot(dx, dy) <= RADIO_APILADO_M;
     });
+    if (g === -1) {
+      grupoDe[i] = grupos.length;
+      grupos.push([i]);
+    } else {
+      grupoDe[i] = g;
+      grupos[g]!.push(i);
+    }
+  });
+  for (const idxs of grupos) {
+    const otros = idxs.length - 1;
+    idxs.forEach((i, k) => {
+      if (k === 0 || ps[i]!.id === seleccionadoId) return;
+      const ang = (2 * Math.PI * (k - 1)) / otros;
+      out[i] = {
+        dLat: (RADIO_ABANICO_M * Math.cos(ang)) / M_POR_GRADO,
+        dLng: (RADIO_ABANICO_M * Math.sin(ang)) / (M_POR_GRADO * Math.cos((ps[i]!.lat * Math.PI) / 180)),
+      };
+    });
+  }
+  return out;
 }
 
 export function construirZonas(contexto: Pick<ContextoEnVivo, 'puntosControl'>): MapZone[] {

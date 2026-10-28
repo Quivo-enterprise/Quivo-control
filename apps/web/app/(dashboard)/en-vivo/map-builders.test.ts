@@ -96,6 +96,26 @@ describe('construirMarcadoresVehiculos', () => {
     expect(markers.map((m) => m.id)).toEqual(['vehiculo:s1', 'vehiculo:s2', 'vehiculo:s3']);
   });
 
+  it('abre en abanico (solo para dibujar) los vehículos apilados a <= 10 m y respeta al seleccionado', () => {
+    const posiciones = [
+      posicion({ id: 'a', lat: -17.39, lng: -66.15 }),
+      posicion({ id: 'b', lat: -17.39, lng: -66.15 }),
+      posicion({ id: 'c', lat: -17.39, lng: -66.15 }),
+      posicion({ id: 'lejos', lat: -17.5, lng: -66.15 }),
+    ];
+    const m = construirMarcadoresVehiculos(posiciones, () => {}, { seleccionadoId: 'c' });
+    const dist = (x: { lat: number; lng: number }, y: { lat: number; lng: number }) =>
+      Math.hypot((x.lat - y.lat) * 111_320, (x.lng - y.lng) * 111_320 * Math.cos((-17.39 * Math.PI) / 180));
+    expect(m[0]).toMatchObject({ lat: -17.39, lng: -66.15 }); // ancla del grupo
+    expect(dist(m[0]!, m[1]!)).toBeCloseTo(7, 1);
+    expect(m[2]).toMatchObject({ lat: -17.39, lng: -66.15 }); // seleccionado: posición real
+    expect(m[3]).toMatchObject({ lat: -17.5, lng: -66.15 }); // aislado: intacto
+    expect(construirMarcadoresVehiculos(posiciones, () => {}, { seleccionadoId: 'c' })[1]).toMatchObject({
+      lat: m[1]!.lat,
+      lng: m[1]!.lng,
+    }); // determinista
+  });
+
   it('un vehículo sin primer fix (lat/lng null) NO se dibuja', () => {
     const posiciones = [
       posicion({ id: 's1', lat: -17.39, lng: -66.15 }),

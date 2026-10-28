@@ -462,7 +462,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         <button
           type="button"
           className="qv-live-btn"
-          aria-pressed={seguir}
+          aria-pressed={seguir && puedeSeguir}
           disabled={!puedeSeguir}
           onClick={onToggleSeguir}
         >

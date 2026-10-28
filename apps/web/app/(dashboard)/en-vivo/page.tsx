@@ -472,6 +472,8 @@ export default function EnVivoPage() {
   const sinConexionConDatos = posiciones.isError && hayDatos;
 
   const hayHud = !estadoSuperpuesto;
+  // Con 0 vehículos la barra de mando sigue visible: el filtro de línea y "Días anteriores" siguen siendo útiles.
+  const hayBarra = hayHud || estadoSuperpuesto === 'vacio';
 
   // Zonas del mapa tapadas por el cajón del vehículo: el seguimiento centra al vehículo en lo que
   // queda visible. En escritorio el cajón es una columna al lado del mapa (no tapa nada: 0); en
@@ -521,7 +523,7 @@ export default function EnVivoPage() {
 
   return (
     <div className="qv-live-map-wrapper" ref={mapaRef} tabIndex={-1}>
-      {hayHud && (
+      {hayBarra && (
         <BarraMando
           consulta={{ dataUpdatedAt: posiciones.dataUpdatedAt, isError: posiciones.isError }}
           tienePanelAdmin={tienePanelAdmin}
@@ -658,10 +660,10 @@ export default function EnVivoPage() {
                   className="qv-live-btn"
                   onClick={alternarSeguir}
                   disabled={!puedeSeguir}
-                  aria-pressed={seguir}
+                  aria-pressed={seguir && puedeSeguir}
                   title="Seguir vehículo en tiempo real"
                 >
-                  <Navigation size={14} aria-hidden="true" className={seguir ? 'qv-live-ico-seguir' : undefined} />
+                  <Navigation size={14} aria-hidden="true" className={seguir && puedeSeguir ? 'qv-live-ico-seguir' : undefined} />
                   Seguir
                 </button>
                 <button
@@ -728,7 +730,7 @@ export default function EnVivoPage() {
                         </>
                       ) : (
                         <span>
-                          Ningún vehículo de esta línea está reportando ahora. Probá con &quot;Todas las líneas&quot;.
+                          Ningún vehículo de esta línea está reportando ahora. Probá con todas las líneas.
                         </span>
                       )}
                     </div>

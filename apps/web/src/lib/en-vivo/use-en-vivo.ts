@@ -83,8 +83,13 @@ export const INTERVALO_POLL_POSICIONES_MS = 2_000;
 export function usePosicionesEnVivo(token: string | null) {
   // Designaciones pedidas y aún sin confirmar (ver `useDesignarVuelta`): se aplican por encima de
   // cada poll al leer, así el valor optimista no parpadea hacia el del servidor mientras el PUT vuela.
-  const { data: pendientes } = useQuery<ReadonlyMap<string, DesignacionPendiente>>({
+  const queryClient = useQueryClient();
+  const { data: pendientes } = useQuery<ReadonlyMap<string, DesignacionPendiente> | null>({
     queryKey: KEY_DESIGNACIONES_PENDIENTES,
+    // Solo se escribe con `setQueryData`; el `queryFn` devuelve lo ya cacheado para que la
+    // invalidación no dispare "No queryFn". `null` (no `undefined`) porque v5 rechaza `undefined`.
+    queryFn: () =>
+      queryClient.getQueryData<ReadonlyMap<string, DesignacionPendiente>>(KEY_DESIGNACIONES_PENDIENTES) ?? null,
     enabled: false,
   });
   const select = useCallback(
