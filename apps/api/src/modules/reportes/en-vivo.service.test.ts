@@ -365,6 +365,21 @@ describe('EnVivoService', () => {
       // (ver comentario de `recalcularResumen` arriba). Sin este paso, todas sus aserciones
       // de abajo verían `totalPuntos: 0`/`lat: null` para estas 2 sesiones.
       await recalcularResumen(tx, [sesionConPuntosId, sesionLinea2Id]);
+
+      // Incidencias del chofer (evento `observacion`) de sesionConPuntos: la más reciente gana.
+      for (const [min, categoria, texto] of [[10, 'bloqueo', 'Bloqueo'], [3, 'salud', 'Salud']] as const) {
+        await tx.eventoOperativo.create({
+          data: {
+            eventId: randomUUID(),
+            sindicatoId: sindicatoAId,
+            sesionId: sesionConPuntosId,
+            deviceId: 'device-en-vivo-1',
+            tipo: 'observacion',
+            ts: new Date(ahora.getTime() - min * MINUTO),
+            payload: { sesionId: sesionConPuntosId, texto, categoria },
+          },
+        });
+      }
     });
   });
 
@@ -644,6 +659,7 @@ describe('EnVivoService', () => {
       expect(ctx.puntosControl[0]?.rol).toBeNull();
       expect(ctx.puntoEsperaPorVariante).toEqual({});
       expect(ctx.servidorTs).toBeTruthy();
+      expect(ctx.incidencias.map((i) => i.texto)).toEqual(['Salud', 'Bloqueo']);
     });
 
     it('admin_sindicato de otro tenant recibe 404 (RLS, no 403)', async () => {
@@ -816,12 +832,18 @@ describe('EnVivoService', () => {
       expect(conPuntos?.totalPuntos).toBe(2);
       expect(conPuntos?.estadoFrescura).toBe('reportando');
       expect(conPuntos?.activa).toBe(true);
+      expect(conPuntos?.ultimaIncidencia).toEqual({
+        categoria: 'salud',
+        texto: 'Salud',
+        ts: new Date(AHORA.getTime() - 3 * MINUTO).toISOString(),
+      });
 
       const sinPuntos = filas.find((f) => f.id === sesionSinPuntosId);
       expect(sinPuntos).toBeDefined();
       expect(sinPuntos?.lat).toBeNull();
       expect(sinPuntos?.lng).toBeNull();
       expect(sinPuntos?.estadoFrescura).toBe('sin_datos');
+      expect(sinPuntos?.ultimaIncidencia).toBeNull();
 
       const linea2 = filas.find((f) => f.id === sesionLinea2Id);
       expect(linea2).toBeDefined();

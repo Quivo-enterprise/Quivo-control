@@ -23,6 +23,30 @@ const pos = (o: Partial<PosicionEnVivo> = {}) =>
 const esperando = (o: Partial<PosicionEnVivo> = {}) =>
   pos({ vuelta: { numero: 1, varianteId: 'v', varianteNombre: 'M', designadaEn: null, acuseEn: null, enEspera: true, esperaDesdeTs: null, molinosProxima: false }, ...o });
 
+describe('incidencias del chofer', () => {
+  const inc = (min: number, o: { categoria?: string; texto?: string } = {}) => ({
+    categoria: o.categoria ?? 'bloqueo',
+    texto: o.texto ?? 'Bloqueo',
+    ts: hace(min),
+  });
+  it('dentro de 30 min: motivo con texto y hace N min, y pide atención', () => {
+    const p = pos({ ultimaIncidencia: inc(5) });
+    expect(motivosAtencion(p)).toEqual(['Incidencia: Bloqueo · hace 5 min']);
+    expect(necesitaAtencion(p)).toBe(true);
+  });
+  it('pasados 30 min, sin incidencia o respuesta vieja sin el campo: no aparece', () => {
+    expect(necesitaAtencion(pos({ ultimaIncidencia: inc(31) }))).toBe(false);
+    expect(motivosAtencion(pos({ ultimaIncidencia: null }))).toEqual([]);
+    expect(necesitaAtencion(pos())).toBe(false);
+  });
+  it('salud rankea sobre las demás incidencias', () => {
+    const salud = pos({ id: 'a', ultimaIncidencia: inc(1, { categoria: 'salud', texto: 'Salud' }) });
+    const otra = pos({ id: 'b', vehiculoPlaca: 'AAA', ultimaIncidencia: inc(1) });
+    expect(puntajeAtencion(salud)).toBeGreaterThan(puntajeAtencion(otra));
+    expect(listaAtencion([otra, salud], new Map()).map((f) => f.posicion.id)).toEqual(['a', 'b']);
+  });
+});
+
 describe('conteoPorEstado', () => {
   it('cuenta los 6 estados (en 0 los ausentes) y manda lo desconocido a sin_datos', () => {
     const c = conteoPorEstado([

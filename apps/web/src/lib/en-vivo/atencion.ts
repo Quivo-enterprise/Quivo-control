@@ -19,7 +19,19 @@ import { formatearHace } from './jornadas';
 type Entrada = Pick<
   PosicionEnVivo,
   'estadoFrescura' | 'infraccionNivel' | 'infraccionesAbiertas' | 'vuelta' | 'ultimoFixTs' | 'servidorTs'
->;
+> &
+  Pick<PosicionEnVivo, 'ultimaIncidencia'>;
+
+/** Una incidencia del chofer pide atención durante esta ventana desde que la reportó. */
+const VENTANA_INCIDENCIA_MS = 30 * 60_000;
+
+/** La incidencia reciente (contra el reloj del servidor), o `null`. */
+function incidenciaVigente(p: Entrada) {
+  const inc = p.ultimaIncidencia;
+  if (!inc) return null;
+  const edad = Date.parse(p.servidorTs) - Date.parse(inc.ts);
+  return edad <= VENTANA_INCIDENCIA_MS ? inc : null; // NaN (fecha inválida) no pasa
+}
 
 /** Vehículos por `estadoFrescura`; un valor desconocido (API más nueva que el panel) cuenta como `sin_datos`. */
 export function conteoPorEstado(posiciones: readonly Pick<PosicionEnVivo, 'estadoFrescura'>[]): Record<EstadoFrescura, number> {
@@ -50,6 +62,8 @@ export function motivosAtencion(p: Entrada, ordenCola?: number): string[] {
     const n = p.infraccionesAbiertas ?? 0;
     motivos.push(`${n} ${n === 1 ? 'infracción' : 'infracciones'} · ${ETIQUETA_NIVEL[nivel].singular}`);
   }
+  const inc = incidenciaVigente(p);
+  if (inc) motivos.push(`Incidencia: ${inc.texto} · ${formatearHace(inc.ts, Date.parse(p.servidorTs))}`);
   const orden = ordenVigente(p, ordenCola);
   if (orden) motivos.push(`${orden}.º en cola de Molinos`);
   return motivos;
@@ -57,14 +71,16 @@ export function motivosAtencion(p: Entrada, ordenCola?: number): string[] {
 
 /** Estar en la cola no es una falla: solo el 1.º cuenta (el despachador puede tener que designar; está por salir). */
 export const necesitaAtencion = (p: Entrada, ordenCola?: number): boolean =>
-  estadoDe(p) === 'perdido' || estadoDe(p) === 'sin_datos' || nivelDeAlerta(p) !== null || ordenVigente(p, ordenCola) === 1;
+  estadoDe(p) === 'perdido' || estadoDe(p) === 'sin_datos' || nivelDeAlerta(p) !== null || incidenciaVigente(p) !== null || ordenVigente(p, ordenCola) === 1;
 
-/** Prioridad para ordenar "Atención" (mayor = más urgente): infracción por nivel, perdido 85, sin datos 70, Molinos 20 - orden. */
+/** Prioridad para ordenar "Atención" (mayor = más urgente): infracción por nivel, incidencia (salud 100, otras 40), perdido 85, sin datos 70, Molinos 20 - orden. */
 export function puntajeAtencion(p: Entrada, ordenCola?: number): number {
   const nivel = nivelDeAlerta(p);
   let s = nivel ? GRAVEDAD_ORDEN[nivel] * 30 + (p.infraccionesAbiertas ?? 0) : 0;
   if (estadoDe(p) === 'perdido') s += 85;
   if (estadoDe(p) === 'sin_datos') s += 70;
+  const inc = incidenciaVigente(p);
+  if (inc) s += inc.categoria === 'salud' ? 100 : 40; // salud sobre todo; el resto, como una infracción grave
   const orden = ordenVigente(p, ordenCola);
   if (orden) s += Math.max(1, 20 - orden);
   return s;

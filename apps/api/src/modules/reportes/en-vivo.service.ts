@@ -91,6 +91,16 @@ interface PosicionEnVivoRow {
   recorridoEstadoTs: Date | null;
   // PR C — `vehiculos.fotoUrl` (JOIN directo, sin costo extra de query).
   fotoUrl: string | null;
+  // Última `observacion` (incidencia del chofer) de la sesión; las tres son null si no hay.
+  incCategoria: string | null;
+  incTexto: string | null;
+  incTs: Date | null;
+}
+
+interface IncidenciaRow {
+  categoria: string | null;
+  texto: string | null;
+  ts: Date;
 }
 
 interface AgregadosFixRow {
@@ -496,7 +506,8 @@ export class EnVivoService {
           ) AS "molinosHoy",
           fix.lat, fix.lng, fix.accuracy, fix.speed,
           fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos",
-          so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs"
+          so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs",
+          inc.categoria AS "incCategoria", inc.texto AS "incTexto", inc.ts AS "incTs"
         FROM sesiones_operativas so
         JOIN vehiculos v ON v.id = so."vehiculoId"
         JOIN conductores c ON c.id = so."conductorId"
@@ -558,6 +569,15 @@ export class EnVivoService {
           WHERE v."sesionId" = so.id AND v.estado = 'en_curso' AND v."sindicatoId" = so."sindicatoId"
           LIMIT 1
         ) vu ON true
+        -- Última incidencia del chofer (evento observacion): índice (sesionId, tipo, ts), un
+        -- acceso por sesión. Piso de 24 h rodantes, igual que el LATERAL de posiciones.
+        LEFT JOIN LATERAL (
+          SELECT e.payload->>'categoria' AS categoria, e.payload->>'texto' AS texto, e.ts
+          FROM eventos_operativos e
+          WHERE e."sesionId" = so.id AND e.tipo = 'observacion' AND e.ts >= ${posicionesDesde}
+          ORDER BY e.ts DESC
+          LIMIT 1
+        ) inc ON true
         WHERE ${sesionesVisiblesSql(ahora, jornada)}
         ORDER BY (so.fin IS NULL) DESC, fix."ultimoFixTs" DESC NULLS LAST, so.inicio DESC
         LIMIT ${LIMITE_SESIONES_POSICIONES}
@@ -585,6 +605,9 @@ export class EnVivoService {
           infraccionNivelAtendida: nivelDeOrden(f.infraccionNivelAtendidaOrden),
           fotoUrl: f.fotoUrl ?? null,
           molinosHoy: f.molinosHoy ?? false,
+          ultimaIncidencia: f.incTs
+            ? { categoria: f.incCategoria ?? 'incidente', texto: f.incTexto ?? 'Incidencia', ts: f.incTs.toISOString() }
+            : null,
           vuelta:
             f.vueltaNumero === null || f.vueltaNumero === undefined
               ? null
@@ -690,6 +713,13 @@ export class EnVivoService {
         SELECT id, "puntoEsperaId" FROM variantes
         WHERE "rutaId" = ${rutaId} AND "puntoEsperaId" IS NOT NULL
       `;
+      const incidencias = await tx.$queryRaw<IncidenciaRow[]>`
+        SELECT payload->>'categoria' AS categoria, payload->>'texto' AS texto, ts
+        FROM eventos_operativos
+        WHERE "sesionId" = ${sesionId} AND tipo = 'observacion'
+        ORDER BY ts DESC
+        LIMIT 50
+      `;
 
       return ContextoEnVivoSchema.parse({
         sesion: {
@@ -720,6 +750,12 @@ export class EnVivoService {
           rol: p.rol,
         })),
         puntoEsperaPorVariante: Object.fromEntries(esperaRows.map((v) => [v.id, v.puntoEsperaId])),
+      `;
+        incidencias: incidencias.map((i) => ({
+          categoria: i.categoria ?? 'incidente',
+          texto: i.texto ?? 'Incidencia',
+          ts: i.ts.toISOString(),
+        })),
         servidorTs: ahora.toISOString(),
       });
     });
