@@ -9,6 +9,7 @@ import {
   RecorridoResumenSchema,
   VarianteTramoSchema,
 } from './recorrido.js';
+import { RolPuntoControlSchema } from './punto-control.js';
 import { VueltaPosicionSchema } from './vuelta.js';
 
 /**
@@ -147,7 +148,10 @@ export const ContextoEnVivoSchema = z.object({
   linea: z.object({ id: uuidSchema, nombre: z.string(), color: z.string() }),
   ruta: z.object({ id: uuidSchema, geometria: LineaGeoJsonSchema }),
   variantes: z.array(VarianteTramoSchema).default([]),
-  puntosControl: z.array(PuntoControlRecorridoSchema),
+  // `rol` y `puntoEsperaPorVariante` permiten reproducir el orden efectivo de la app (el PC de
+  // espera solo cuenta si la variante de la vuelta lo designa) — ver `ordenEfectivoPuntos` web.
+  puntosControl: z.array(PuntoControlRecorridoSchema.extend({ rol: RolPuntoControlSchema.nullable().default(null) })),
+  puntoEsperaPorVariante: z.record(uuidSchema, uuidSchema).default({}),
   servidorTs: z.string(),
 });
 export type ContextoEnVivo = z.infer<typeof ContextoEnVivoSchema>;

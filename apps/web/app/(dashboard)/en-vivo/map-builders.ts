@@ -4,6 +4,7 @@ import { ApiError } from '../../../src/lib/api/client';
 import { presentacionFrescura, sufijoPausa, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 import { alertaMarcador } from '../../../src/lib/en-vivo/alertas';
 import { rutasDeTraza } from '../../../src/lib/en-vivo/segmentos-traza';
+import { pcsEfectivos } from '../../../src/lib/en-vivo/pcs-efectivos';
 
 // Ámbar: distinto del azul de la traza y de los colores de línea; lee como "desvío designado".
 const COLOR_VARIANTE = '#f59e0b';
@@ -73,21 +74,30 @@ export function ultimaPasada(
 export function construirPuntosControl(
   contexto: ContextoEnVivo,
   traza: TrazaAcumulada | undefined,
+  varianteId?: string | null,
 ): MapPoint[] {
-  return contexto.puntosControl.map((pc, index) => {
+  const efectivos = pcsEfectivos(contexto, varianteId);
+  const punto = (pc: ContextoEnVivo['puntosControl'][number], label: string): MapPoint => {
     const cumplimiento = ultimaPasada(traza, pc.id);
     const cumplido = cumplimiento?.cumplido ?? false;
     return {
       lat: pc.coord.coordinates[1],
       lng: pc.coord.coordinates[0],
-      label: `Punto de control ${index + 1}`,
+      label,
       description: cumplimiento
         ? `${cumplido ? 'Cumplido' : 'No cumplido'} — ${cumplimiento.distanciaM.toFixed(0)} m`
         : 'Todavía sin pasada validada',
       color: cumplido ? 'var(--qv-color-success)' : 'var(--qv-text-muted)',
       pinType: 'stop',
     };
-  });
+  };
+  // El PC de espera (Molinos) se dibuja siempre, aunque la vuelta no lo designe (sin número):
+  // el despachador lo necesita ver en el mapa.
+  const idsEfectivos = new Set(efectivos.map((pc) => pc.id));
+  const espera = contexto.puntosControl
+    .filter((pc) => pc.rol === 'espera' && !idsEfectivos.has(pc.id))
+    .map((pc) => punto(pc, 'Espera Molinos'));
+  return [...efectivos.map((pc, index) => punto(pc, `Punto de control ${index + 1}`)), ...espera];
 }
 
 /** Filtro por línea, client-side — mismo patrón que `vehiculos/page.tsx` (`filteredRows` de
@@ -192,7 +202,7 @@ export function construirMarcadoresVehiculos(
 }
 
 export function construirZonas(contexto: ContextoEnVivo): MapZone[] {
-  return contexto.puntosControl.map((pc, index) => ({
+  return [...contexto.puntosControl].sort((a, b) => a.orden - b.orden).map((pc, index) => ({
     lat: pc.coord.coordinates[1],
     lng: pc.coord.coordinates[0],
     radiusMeters: pc.radioToleranciaM,

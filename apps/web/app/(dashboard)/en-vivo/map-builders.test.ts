@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContextoEnVivo, PosicionEnVivo } from '@quivo/shared';
-import { construirMarcadoresVehiculos, construirRutas, filtrarPorLinea, idMarcadorVehiculo } from './map-builders';
+import { construirMarcadoresVehiculos, construirPuntosControl, construirRutas, filtrarPorLinea, idMarcadorVehiculo } from './map-builders';
 
 // Fixture mínima de `PosicionEnVivo` (`GET /reportes/en-vivo/posiciones`, Entregas 10/13):
 // todos los campos que NO le importan a `map-builders.ts` quedan con un valor fijo cualquiera
@@ -225,5 +225,35 @@ describe('construirRutas', () => {
 
   it.each([[null], ['desconocida'], ['v2']])('no dibuja variante con varianteId=%s', (id) => {
     expect(construirRutas(contexto, undefined, [], id).map((r) => r.id)).toEqual(['ruta-asignada']);
+  });
+});
+
+describe('construirPuntosControl', () => {
+  const pc = (id: string, orden: number, rol: string | null) => ({
+    id,
+    orden,
+    rol,
+    coord: { type: 'Point' as const, coordinates: [-66.15 + orden / 1000, -17.39] },
+    radioToleranciaM: 30,
+  });
+  const contexto = {
+    puntosControl: [pc('a', 1, null), pc('m', 2, 'espera'), pc('r', 3, 'retorno')],
+    puntoEsperaPorVariante: { v1: 'm' },
+  } as unknown as ContextoEnVivo;
+
+  it('dibuja el PC de espera sin número cuando la vuelta no lo designa', () => {
+    expect(construirPuntosControl(contexto, undefined, null).map((p) => p.label)).toEqual([
+      'Punto de control 1',
+      'Punto de control 2',
+      'Espera Molinos',
+    ]);
+  });
+
+  it('lo numera dentro del orden efectivo cuando la vuelta lo designa', () => {
+    expect(construirPuntosControl(contexto, undefined, 'v1').map((p) => p.label)).toEqual([
+      'Punto de control 1',
+      'Punto de control 2',
+      'Punto de control 3',
+    ]);
   });
 });
