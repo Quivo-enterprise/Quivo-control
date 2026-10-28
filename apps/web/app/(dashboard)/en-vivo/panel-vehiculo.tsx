@@ -71,8 +71,9 @@ import {
   type TrazaAcumulada,
 } from '../../../src/lib/en-vivo/traza';
 import { NuevaSancionModal } from '../reglas/nueva-sancion-modal';
-import { estadoDe } from '../../../src/lib/en-vivo/atencion';
+import { estadoDe, incidenciasVisibles } from '../../../src/lib/en-vivo/atencion';
 import { pcsEfectivos } from '../../../src/lib/en-vivo/pcs-efectivos';
+import { formatearHoraBolivia } from '../../../src/lib/en-vivo/jornadas';
 import { GlifoEstado } from './glifo-estado';
 import { mensajeError, ultimaPasada } from './map-builders';
 import { SeccionVuelta } from './panel-vuelta';
@@ -171,6 +172,8 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   } = props;
   const queryClient = useQueryClient();
   const infracciones = useInfraccionesSesion(token, sesionId);
+  // shortcut: si llegan varias incidencias entre aperturas del panel, solo la última entra en vivo; las intermedias aparecen al reabrir; pasar incidencias a su propia query si molesta
+  const incidencias = contexto ? incidenciasVisibles(contexto.incidencias, posicion?.ultimaIncidencia) : [];
   const molinos = useMolinosResumen(token);
   const { variantes, puntos } = useOpcionesDesignacion(token, contexto?.ruta.id ?? null);
   const designar = useDesignarVuelta(token);
@@ -622,6 +625,27 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
                 </li>
               );
             })}
+          </ul>
+        )}
+      </div>
+
+      <div className="qv-live-panel__seccion">
+        <h3 className="qv-live-panel__h">
+          <span>Incidencias reportadas</span>
+        </h3>
+        {!contexto ? (
+          <p className="qv-live-panel__vacio" role="status">
+            Cargando…
+          </p>
+        ) : incidencias.length === 0 ? (
+          <p className="qv-live-panel__vacio">Sin incidencias en esta sesión.</p>
+        ) : (
+          <ul className="qv-live-infracciones">
+            {incidencias.map((i) => (
+              <li key={i.id} className="qv-live-inf__detalle">
+                {formatearHoraBolivia(i.recibidoTs)} · {i.texto}
+              </li>
+            ))}
           </ul>
         )}
       </div>

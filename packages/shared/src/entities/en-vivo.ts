@@ -124,6 +124,19 @@ export const SesionEnVivoResumenSchema = RecorridoResumenSchema.extend({
 }).merge(FrescuraEnVivoSchema);
 export type SesionEnVivoResumen = z.infer<typeof SesionEnVivoResumenSchema>;
 
+/** Incidencia que el chofer reporta desde la app (evento `observacion`): `categoria` y `texto` salen del payload. */
+export const IncidenciaEnVivoSchema = z.object({
+  /** Id del evento (clave estable en listas). */
+  id: z.string(),
+  categoria: z.string(),
+  texto: z.string().max(200),
+  /** Hora del dispositivo (para mostrar). */
+  ts: z.string(),
+  /** Hora de recepción en el servidor: la ventana de "atención" se mide con esta, no con `ts`. */
+  recibidoTs: z.string(),
+});
+export type IncidenciaEnVivo = z.infer<typeof IncidenciaEnVivoSchema>;
+
 /**
  * `GET /v1/reportes/en-vivo/:sesionId/contexto` — todo lo que NO cambia durante el
  * recorrido. Se pide una sola vez (`staleTime: Infinity` en el cliente): la geometría de
@@ -152,6 +165,8 @@ export const ContextoEnVivoSchema = z.object({
   // espera solo cuenta si la variante de la vuelta lo designa) — ver `ordenEfectivoPuntos` web.
   puntosControl: z.array(PuntoControlRecorridoSchema.extend({ rol: RolPuntoControlSchema.nullable().default(null) })),
   puntoEsperaPorVariante: z.record(uuidSchema, uuidSchema).default({}),
+  /** Incidencias del chofer en la sesión, la más reciente primero (tope 50). */
+  incidencias: z.array(IncidenciaEnVivoSchema).default([]),
   servidorTs: z.string(),
 });
 export type ContextoEnVivo = z.infer<typeof ContextoEnVivoSchema>;
@@ -241,6 +256,8 @@ export const PosicionEnVivoSchema = z
     vuelta: VueltaPosicionSchema.nullable().optional(),
     /** El vehículo ya tiene hoy (día local de Bolivia) alguna vuelta designada a una variante. */
     molinosHoy: z.boolean().optional(),
+    /** Última incidencia (`observacion`) que el chofer reportó en la sesión; `null` si no hay. */
+    ultimaIncidencia: IncidenciaEnVivoSchema.nullable().optional(),
   })
   .merge(FrescuraEnVivoSchema);
 export type PosicionEnVivo = z.infer<typeof PosicionEnVivoSchema>;

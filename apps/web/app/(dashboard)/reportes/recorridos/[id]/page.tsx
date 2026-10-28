@@ -409,13 +409,18 @@ function construirMarcadores(detalle: RecorridoDetalle): MapPoint[] {
   });
 }
 
+function textoIncidencia(payload: unknown): string {
+  const texto = (payload as { texto?: unknown } | null)?.texto;
+  return typeof texto === 'string' ? texto : '';
+}
+
 function construirTimeline(detalle: RecorridoDetalle): ItemTimeline[] {
   const items: ItemTimeline[] = [
     ...detalle.eventos.map((e) => ({
       ts: e.ts,
       tipo: 'evento' as const,
-      titulo: e.tipo,
-      detalle: '',
+      titulo: e.tipo === 'observacion' ? 'Incidencia' : e.tipo,
+      detalle: e.tipo === 'observacion' ? textoIncidencia(e.payload) : '',
     })),
     ...detalle.cumplimientos.map((c) => ({
       ts: c.ts,

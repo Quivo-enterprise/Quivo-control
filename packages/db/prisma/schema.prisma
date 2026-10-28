@@ -780,8 +780,8 @@ model EventoOperativo {
   receivedAt  DateTime        @default(now())
 
   @@index([sindicatoId])
-  @@index([sesionId])
   @@index([sindicatoId, tipo, ts])
+  @@index([sesionId, tipo, receivedAt])
   @@map("eventos_operativos")
 }
 

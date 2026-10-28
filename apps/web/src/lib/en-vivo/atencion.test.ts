@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EstadoFrescuraSchema, type PosicionEnVivo } from '@quivo/shared';
 import {
+  incidenciasVisibles,
   colasVerificadas,
   colasVisibles,
   ORDEN_ESTADOS_FRESCURA,
@@ -22,6 +23,51 @@ const pos = (o: Partial<PosicionEnVivo> = {}) =>
   ({ id: 's', lineaId: 'L16', vehiculoPlaca: 'AAA', estadoFrescura: 'reportando', servidorTs: SERVIDOR, ultimoFixTs: hace(0), ...o }) as PosicionEnVivo;
 const esperando = (o: Partial<PosicionEnVivo> = {}) =>
   pos({ vuelta: { numero: 1, varianteId: 'v', varianteNombre: 'M', designadaEn: null, acuseEn: null, enEspera: true, esperaDesdeTs: null, molinosProxima: false }, ...o });
+
+describe('incidencias del chofer', () => {
+  const inc = (min: number, o: { categoria?: string; texto?: string; tsDispositivo?: string } = {}) => ({
+    id: 'e1',
+    categoria: o.categoria ?? 'bloqueo',
+    texto: o.texto ?? 'Bloqueo',
+    ts: o.tsDispositivo ?? hace(min),
+    recibidoTs: hace(min),
+  });
+  it('dentro de 30 min: motivo con texto y hace N min, y pide atención', () => {
+    const p = pos({ ultimaIncidencia: inc(5) });
+    expect(motivosAtencion(p)).toEqual(['Incidencia: Bloqueo · hace 5 min']);
+    expect(necesitaAtencion(p)).toBe(true);
+  });
+  it('pasados 30 min, sin incidencia o respuesta vieja sin el campo: no aparece', () => {
+    expect(necesitaAtencion(pos({ ultimaIncidencia: inc(31) }))).toBe(false);
+    expect(motivosAtencion(pos({ ultimaIncidencia: null }))).toEqual([]);
+    expect(necesitaAtencion(pos())).toBe(false);
+  });
+  it('la ventana usa la recepción en el servidor, no el reloj del dispositivo', () => {
+    // Reloj del dispositivo 3 h adelantado: igual cuenta 5 min desde la recepción.
+    const adelantado = pos({ ultimaIncidencia: inc(5, { tsDispositivo: hace(-180) }) });
+    expect(motivosAtencion(adelantado)).toEqual(['Incidencia: Bloqueo · hace 5 min']);
+    // Outbox demorado: el evento es de hace 35 min en el dispositivo, pero llegó hace 1 min.
+    const demorado = pos({ ultimaIncidencia: inc(1, { categoria: 'salud', texto: 'Salud', tsDispositivo: hace(35) }) });
+    expect(necesitaAtencion(demorado)).toBe(true);
+  });
+  it('salud rankea sobre las demás incidencias', () => {
+    const salud = pos({ id: 'a', ultimaIncidencia: inc(1, { categoria: 'salud', texto: 'Salud' }) });
+    const otra = pos({ id: 'b', vehiculoPlaca: 'AAA', ultimaIncidencia: inc(1) });
+    expect(puntajeAtencion(salud)).toBeGreaterThan(puntajeAtencion(otra));
+    expect(listaAtencion([otra, salud], new Map()).map((f) => f.posicion.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('incidenciasVisibles', () => {
+  const inc = (id: string) => ({ id, categoria: 'salud', texto: id, ts: 't', recibidoTs: 't' });
+  it('antepone la última en vivo si no está en el contexto', () => {
+    expect(incidenciasVisibles([inc('a')], inc('b')).map((i) => i.id)).toEqual(['b', 'a']);
+  });
+  it('no duplica si ya está, ni falla sin última', () => {
+    expect(incidenciasVisibles([inc('a')], inc('a')).map((i) => i.id)).toEqual(['a']);
+    expect(incidenciasVisibles([inc('a')], null).map((i) => i.id)).toEqual(['a']);
+  });
+});
 
 describe('conteoPorEstado', () => {
   it('cuenta los 6 estados (en 0 los ausentes) y manda lo desconocido a sin_datos', () => {

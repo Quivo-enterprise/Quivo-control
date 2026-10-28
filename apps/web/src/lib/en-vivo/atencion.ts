@@ -2,6 +2,7 @@ import {
   EstadoFrescuraSchema,
   GRAVEDAD_ORDEN,
   type EstadoFrescura,
+  type IncidenciaEnVivo,
   type MolinosCola,
   type MolinosResumen,
   type PosicionEnVivo,
@@ -18,8 +19,19 @@ import { formatearHace } from './jornadas';
 
 type Entrada = Pick<
   PosicionEnVivo,
-  'estadoFrescura' | 'infraccionNivel' | 'infraccionesAbiertas' | 'vuelta' | 'ultimoFixTs' | 'servidorTs'
+  'estadoFrescura' | 'infraccionNivel' | 'infraccionesAbiertas' | 'vuelta' | 'ultimoFixTs' | 'servidorTs' | 'ultimaIncidencia'
 >;
+
+/** Una incidencia del chofer pide atención durante esta ventana desde que el servidor la recibió. */
+const VENTANA_INCIDENCIA_MS = 30 * 60_000;
+
+/** La incidencia reciente (recepción vs. reloj del servidor; el `ts` del dispositivo no cuenta), o `null`. */
+function incidenciaVigente(p: Entrada) {
+  const inc = p.ultimaIncidencia;
+  if (!inc) return null;
+  const edad = Math.max(0, Date.parse(p.servidorTs) - Date.parse(inc.recibidoTs)); // reloj desfasado: no negativo
+  return edad <= VENTANA_INCIDENCIA_MS ? inc : null; // NaN (fecha inválida) no pasa
+}
 
 /** Vehículos por `estadoFrescura`; un valor desconocido (API más nueva que el panel) cuenta como `sin_datos`. */
 export function conteoPorEstado(posiciones: readonly Pick<PosicionEnVivo, 'estadoFrescura'>[]): Record<EstadoFrescura, number> {
@@ -50,6 +62,8 @@ export function motivosAtencion(p: Entrada, ordenCola?: number): string[] {
     const n = p.infraccionesAbiertas ?? 0;
     motivos.push(`${n} ${n === 1 ? 'infracción' : 'infracciones'} · ${ETIQUETA_NIVEL[nivel].singular}`);
   }
+  const inc = incidenciaVigente(p);
+  if (inc) motivos.push(`Incidencia: ${inc.texto} · ${formatearHace(inc.recibidoTs, Date.parse(p.servidorTs))}`);
   const orden = ordenVigente(p, ordenCola);
   if (orden) motivos.push(`${orden}.º en cola de Molinos`);
   return motivos;
@@ -57,14 +71,16 @@ export function motivosAtencion(p: Entrada, ordenCola?: number): string[] {
 
 /** Estar en la cola no es una falla: solo el 1.º cuenta (el despachador puede tener que designar; está por salir). */
 export const necesitaAtencion = (p: Entrada, ordenCola?: number): boolean =>
-  estadoDe(p) === 'perdido' || estadoDe(p) === 'sin_datos' || nivelDeAlerta(p) !== null || ordenVigente(p, ordenCola) === 1;
+  estadoDe(p) === 'perdido' || estadoDe(p) === 'sin_datos' || nivelDeAlerta(p) !== null || incidenciaVigente(p) !== null || ordenVigente(p, ordenCola) === 1;
 
-/** Prioridad para ordenar "Atención" (mayor = más urgente): infracción por nivel, perdido 85, sin datos 70, Molinos 20 - orden. */
+/** Prioridad para ordenar "Atención" (mayor = más urgente): infracción por nivel, incidencia (salud 100, otras 40), perdido 85, sin datos 70, Molinos 20 - orden. */
 export function puntajeAtencion(p: Entrada, ordenCola?: number): number {
   const nivel = nivelDeAlerta(p);
   let s = nivel ? GRAVEDAD_ORDEN[nivel] * 30 + (p.infraccionesAbiertas ?? 0) : 0;
   if (estadoDe(p) === 'perdido') s += 85;
   if (estadoDe(p) === 'sin_datos') s += 70;
+  const inc = incidenciaVigente(p);
+  if (inc) s += inc.categoria === 'salud' ? 100 : 40; // salud sobre todo; el resto, como una infracción grave
   const orden = ordenVigente(p, ordenCola);
   if (orden) s += Math.max(1, 20 - orden);
   return s;
@@ -138,4 +154,9 @@ export function colasVerificadas(
 /** Colas de Molinos con gente, de la línea elegida (`''` = todas). */
 export function colasVisibles(colas: readonly MolinosCola[] | undefined, lineaId: string): MolinosCola[] {
   return (colas ?? []).filter((c) => c.entradas.length > 0 && (!lineaId || c.lineas.some((l) => l.lineaId === lineaId)));
+}
+
+/** Incidencias del contexto; si la última de la posición (en vivo) no está, va primero. */
+export function incidenciasVisibles(lista: IncidenciaEnVivo[], ultima: IncidenciaEnVivo | null | undefined) {
+  return ultima && !lista.some((i) => i.id === ultima.id) ? [ultima, ...lista] : lista;
 }
