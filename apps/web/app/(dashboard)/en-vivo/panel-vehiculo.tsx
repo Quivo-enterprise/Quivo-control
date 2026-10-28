@@ -57,6 +57,7 @@ import {
 } from '../../../src/lib/en-vivo/alertas';
 import { diaLocalIso } from '../../../src/lib/fecha-local';
 import {
+  useContextoEnVivo,
   useDesignarVuelta,
   useInfraccionesSesion,
   useMolinosResumen,
@@ -172,6 +173,12 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   } = props;
   const queryClient = useQueryClient();
   const infracciones = useInfraccionesSesion(token, sesionId);
+  const ctxQuery = useContextoEnVivo(token, sesionId);
+  // El contexto se pide una sola vez (staleTime Infinity): una incidencia nueva lo refresca.
+  const incidenciaRecibida = posicion?.ultimaIncidencia?.recibidoTs;
+  useEffect(() => {
+    if (incidenciaRecibida) void queryClient.invalidateQueries({ queryKey: ['en-vivo', 'contexto', sesionId] });
+  }, [incidenciaRecibida, queryClient, sesionId]);
   const molinos = useMolinosResumen(token);
   const { variantes, puntos } = useOpcionesDesignacion(token, contexto?.ruta.id ?? null);
   const designar = useDesignarVuelta(token);
@@ -631,12 +638,20 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         <h3 className="qv-live-panel__h">
           <span>Incidencias reportadas</span>
         </h3>
-        {!contexto || contexto.incidencias.length === 0 ? (
+        {ctxQuery.isPending ? (
+          <p className="qv-live-panel__vacio" role="status">
+            Cargando…
+          </p>
+        ) : !contexto ? (
+          <p className="qv-live-panel__error" role="alert">
+            No se pudieron cargar las incidencias. {mensajeError(ctxQuery.error)}
+          </p>
+        ) : contexto.incidencias.length === 0 ? (
           <p className="qv-live-panel__vacio">Sin incidencias en esta sesión.</p>
         ) : (
           <ul className="qv-live-infracciones">
             {contexto.incidencias.map((i) => (
-              <li key={`${i.ts}-${i.categoria}`} className="qv-live-inf__detalle">
+              <li key={i.id} className="qv-live-inf__detalle">
                 {formatearHoraBolivia(i.ts)} · {i.texto}
               </li>
             ))}

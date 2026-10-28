@@ -24,10 +24,12 @@ const esperando = (o: Partial<PosicionEnVivo> = {}) =>
   pos({ vuelta: { numero: 1, varianteId: 'v', varianteNombre: 'M', designadaEn: null, acuseEn: null, enEspera: true, esperaDesdeTs: null, molinosProxima: false }, ...o });
 
 describe('incidencias del chofer', () => {
-  const inc = (min: number, o: { categoria?: string; texto?: string } = {}) => ({
+  const inc = (min: number, o: { categoria?: string; texto?: string; tsDispositivo?: string } = {}) => ({
+    id: 'e1',
     categoria: o.categoria ?? 'bloqueo',
     texto: o.texto ?? 'Bloqueo',
-    ts: hace(min),
+    ts: o.tsDispositivo ?? hace(min),
+    recibidoTs: hace(min),
   });
   it('dentro de 30 min: motivo con texto y hace N min, y pide atención', () => {
     const p = pos({ ultimaIncidencia: inc(5) });
@@ -38,6 +40,14 @@ describe('incidencias del chofer', () => {
     expect(necesitaAtencion(pos({ ultimaIncidencia: inc(31) }))).toBe(false);
     expect(motivosAtencion(pos({ ultimaIncidencia: null }))).toEqual([]);
     expect(necesitaAtencion(pos())).toBe(false);
+  });
+  it('la ventana usa la recepción en el servidor, no el reloj del dispositivo', () => {
+    // Reloj del dispositivo 3 h adelantado: igual cuenta 5 min desde la recepción.
+    const adelantado = pos({ ultimaIncidencia: inc(5, { tsDispositivo: hace(-180) }) });
+    expect(motivosAtencion(adelantado)).toEqual(['Incidencia: Bloqueo · hace 5 min']);
+    // Outbox demorado: el evento es de hace 35 min en el dispositivo, pero llegó hace 1 min.
+    const demorado = pos({ ultimaIncidencia: inc(1, { categoria: 'salud', texto: 'Salud', tsDispositivo: hace(35) }) });
+    expect(necesitaAtencion(demorado)).toBe(true);
   });
   it('salud rankea sobre las demás incidencias', () => {
     const salud = pos({ id: 'a', ultimaIncidencia: inc(1, { categoria: 'salud', texto: 'Salud' }) });

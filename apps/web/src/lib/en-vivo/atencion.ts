@@ -18,18 +18,17 @@ import { formatearHace } from './jornadas';
 
 type Entrada = Pick<
   PosicionEnVivo,
-  'estadoFrescura' | 'infraccionNivel' | 'infraccionesAbiertas' | 'vuelta' | 'ultimoFixTs' | 'servidorTs'
-> &
-  Pick<PosicionEnVivo, 'ultimaIncidencia'>;
+  'estadoFrescura' | 'infraccionNivel' | 'infraccionesAbiertas' | 'vuelta' | 'ultimoFixTs' | 'servidorTs' | 'ultimaIncidencia'
+>;
 
-/** Una incidencia del chofer pide atención durante esta ventana desde que la reportó. */
+/** Una incidencia del chofer pide atención durante esta ventana desde que el servidor la recibió. */
 const VENTANA_INCIDENCIA_MS = 30 * 60_000;
 
-/** La incidencia reciente (contra el reloj del servidor), o `null`. */
+/** La incidencia reciente (recepción vs. reloj del servidor; el `ts` del dispositivo no cuenta), o `null`. */
 function incidenciaVigente(p: Entrada) {
   const inc = p.ultimaIncidencia;
   if (!inc) return null;
-  const edad = Date.parse(p.servidorTs) - Date.parse(inc.ts);
+  const edad = Math.max(0, Date.parse(p.servidorTs) - Date.parse(inc.recibidoTs)); // reloj desfasado: no negativo
   return edad <= VENTANA_INCIDENCIA_MS ? inc : null; // NaN (fecha inválida) no pasa
 }
 
@@ -63,7 +62,7 @@ export function motivosAtencion(p: Entrada, ordenCola?: number): string[] {
     motivos.push(`${n} ${n === 1 ? 'infracción' : 'infracciones'} · ${ETIQUETA_NIVEL[nivel].singular}`);
   }
   const inc = incidenciaVigente(p);
-  if (inc) motivos.push(`Incidencia: ${inc.texto} · ${formatearHace(inc.ts, Date.parse(p.servidorTs))}`);
+  if (inc) motivos.push(`Incidencia: ${inc.texto} · ${formatearHace(inc.recibidoTs, Date.parse(p.servidorTs))}`);
   const orden = ordenVigente(p, ordenCola);
   if (orden) motivos.push(`${orden}.º en cola de Molinos`);
   return motivos;

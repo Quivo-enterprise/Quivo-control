@@ -126,9 +126,14 @@ export type SesionEnVivoResumen = z.infer<typeof SesionEnVivoResumenSchema>;
 
 /** Incidencia que el chofer reporta desde la app (evento `observacion`): `categoria` y `texto` salen del payload. */
 export const IncidenciaEnVivoSchema = z.object({
+  /** Id del evento (clave estable en listas). */
+  id: z.string(),
   categoria: z.string(),
-  texto: z.string(),
+  texto: z.string().max(200),
+  /** Hora del dispositivo (para mostrar). */
   ts: z.string(),
+  /** Hora de recepción en el servidor: la ventana de "atención" se mide con esta, no con `ts`. */
+  recibidoTs: z.string(),
 });
 export type IncidenciaEnVivo = z.infer<typeof IncidenciaEnVivoSchema>;
 

@@ -833,9 +833,11 @@ describe('EnVivoService', () => {
       expect(conPuntos?.estadoFrescura).toBe('reportando');
       expect(conPuntos?.activa).toBe(true);
       expect(conPuntos?.ultimaIncidencia).toEqual({
+        id: expect.any(String),
         categoria: 'salud',
         texto: 'Salud',
         ts: new Date(AHORA.getTime() - 3 * MINUTO).toISOString(),
+        recibidoTs: expect.any(String),
       });
 
       const sinPuntos = filas.find((f) => f.id === sesionSinPuntosId);
