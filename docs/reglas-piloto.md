@@ -13,11 +13,14 @@ Se cargan a mano en `/reglas` → "Nueva regla", sindicato **Sindicato Piloto �
 - Campos obligatorios del formulario: Nombre, Tipo (escribir el `tipo` exacto de abajo), Gravedad,
   Aplica a, Sindicato (admin global).
 
+## Cargadas por pedido del CTO (2026-10-28): `desvio_ruta`, `vueltas_incumplidas`, `pc_omitido`
+
 ## Obligatorias (cubren infracciones automáticas sancionables)
 | Nombre | Tipo (exacto) | Gravedad | Aplica a | Descripción (sanción) |
 |---|---|---|---|---|
 | Alteración de ruta (desvío) | `desvio_ruta` | grave | conductor | Una vuelta más, en la misma línea. |
 | Molinos omitido | `molinos_omitido` | grave | conductor | Alteración de ruta: una vuelta más, en la misma línea. |
+| PC omitido | `pc_omitido` | leve | conductor | Pasó sin validar un punto de control. Sancionable desde 2026-10-28 (requiere deploy). |
 
 ## Opcionales (solo sanción manual, no hay infracción automática)
 | Nombre | Tipo | Gravedad | Aplica a | Descripción (sanción) |
@@ -26,7 +29,7 @@ Se cargan a mano en `/reglas` → "Nueva regla", sindicato **Sindicato Piloto �
 | Turno no cumplido | `turno_incumplido` | grave | conductor | Repetir el turno al día siguiente. |
 | Vueltas incumplidas | `vueltas_incumplidas` | grave | conductor | Las faltantes al día siguiente en nocturno (desde 17:01; desde 15:00 si debe 3). Cupo L16: L–V 5, sáb 3, dom 4 (incluye Molinos). |
 
-**No necesitan regla:** `pc_omitido`, `espera_corta` (solo alerta; la API rechaza sancionarlas).
+**No necesita regla:** `espera_corta` (solo alerta; la API rechaza sancionarla).
 
 Fuentes: `docs/plan-en-vivo-alertas.md:167-176`, `docs/plan-molinos-designacion.md:35`, memoria
 `operacion-lineas-tiquipaya`. Las gravedades de las opcionales son propuesta, no decisión del CTO.
