@@ -89,6 +89,7 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
   let asignacionId: string;
   let sesionDuplicadosId: string;
   let sesionTardiosId: string;
+  let sesionMovimientoId: string;
 
   const adminQuivo: AuthenticatedUser = {
     userId: 'test-admin',
@@ -179,6 +180,18 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
         },
       });
       sesionTardiosId = sesionTardios.id;
+      const sesionMovimiento = await tx.sesionOperativa.create({
+        data: {
+          sindicatoId,
+          asignacionId,
+          vehiculoId,
+          conductorId,
+          deviceId: 'device-equivalencia-movimiento',
+          estado: 'activa',
+          ...credenciales(),
+        },
+      });
+      sesionMovimientoId = sesionMovimiento.id;
 
       // `crear_particion_gps_points` es idempotente (`20260817130000_particion_gps_points_idempotente`):
       // el bootstrap de la migración de `gps_points` crea CURRENT_DATE..+6 relativo a CUANDO
@@ -191,8 +204,8 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
 
   afterAll(async () => {
     await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id IN (${sesionDuplicadosId}::uuid, ${sesionTardiosId}::uuid)`;
-      await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id IN (${sesionDuplicadosId}::uuid, ${sesionTardiosId}::uuid)`;
+      await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id IN (${sesionDuplicadosId}::uuid, ${sesionTardiosId}::uuid, ${sesionMovimientoId}::uuid)`;
+      await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id IN (${sesionDuplicadosId}::uuid, ${sesionTardiosId}::uuid, ${sesionMovimientoId}::uuid)`;
       await tx.sesionOperativa.deleteMany({ where: { sindicatoId } });
       await tx.asignacion.deleteMany({ where: { rutaId } });
       await tx.rotacion.deleteMany({ where: { sindicatoId } });
@@ -300,6 +313,37 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
     const posicion = posiciones.find((f) => f.id === sesionTardiosId);
     expect(posicion?.lat).toBe(-17.79);
     expect(posicion?.lng).toBe(-63.19);
+  });
+
+  it('ultimo_movimiento_ts: primer fix cuenta; latido quieto (<30 m, <2 m/s) no avanza; ≥30 m o ≥2 m/s sí', async () => {
+    const sesionId = sesionMovimientoId;
+    const t = (min: number) => new Date(AHORA.getTime() - min * MINUTO).toISOString();
+    const ingerir = (min: number, lat: number, lng: number, speed: number | null) =>
+      withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarGpsPoints(tx, sindicatoId, [
+          evento({ ts: t(min), payload: { sesionId, lat, lng, accuracy: 5, speed } }),
+        ]),
+      );
+    const movimiento = async () => {
+      const [r] = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+        tx.$queryRaw<{ m: Date | null }[]>`
+          SELECT ultimo_movimiento_ts AS m FROM gps_sesion_resumen WHERE sesion_id = ${sesionId}::uuid`,
+      );
+      return r?.m?.toISOString();
+    };
+
+    await ingerir(30, -17.78, -63.18, 0);
+    expect(await movimiento()).toBe(t(30)); // primer fix
+    await ingerir(29, -17.78001, -63.18, 0); // ~1 m, quieto
+    expect(await movimiento()).toBe(t(30));
+    await ingerir(28, -17.78025, -63.18, null); // ~27 m desde el fix anterior: bajo el umbral
+    expect(await movimiento()).toBe(t(30));
+    await ingerir(27, -17.7807, -63.18, 0); // ~50 m desde el anterior: movimiento por distancia
+    expect(await movimiento()).toBe(t(27));
+    await ingerir(26, -17.7807, -63.18, 2); // misma posición, velocidad 2 m/s
+    expect(await movimiento()).toBe(t(26));
+    await ingerir(40, -17.9, -63.3, 0); // punto tardío: no mueve nada
+    expect(await movimiento()).toBe(t(26));
   });
 
   /** docs/plan-en-vivo-resumen-sesion.md §4.2 — RLS directa sobre `gps_sesion_resumen`

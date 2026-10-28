@@ -34,6 +34,7 @@ interface SesionEnVivoRow {
   lineaNombre: string;
   ultimoFixTs: Date | null;
   ultimoIngresoTs: Date | null;
+  ultimoMovimientoTs: Date | null;
   totalPuntos: number | null;
   // Fase A (docs/plan-ubicacion-fluida.md) — estado DERIVADO del recorrido, mantenido por
   // `insertarEventoOperativoEnTx` (ingesta-worker.service.ts). Distinto de `fin`/`estado` de
@@ -84,6 +85,7 @@ interface PosicionEnVivoRow {
   speed: number | null;
   ultimoFixTs: Date | null;
   ultimoIngresoTs: Date | null;
+  ultimoMovimientoTs: Date | null;
   totalPuntos: number | null;
   // Fase A — igual que en `SesionEnVivoRow`, sale directo de `so`, no del LATERAL a
   // `gps_sesion_resumen` (el estado del recorrido vive en la sesión, no en el resumen GPS).
@@ -176,6 +178,7 @@ export function nivelDeOrden(orden: number | null | undefined): GravedadRegla | 
  * crudos, que siempre viajan en la respuesta.
  */
 export const UMBRAL_INGESTA_VIVA_MS = 15 * MINUTO_MS;
+/** Tiempo sin MOVIMIENTO (`ultimo_movimiento_ts`; fallback al fix) pasado el cual la sesión es `detenido`. */
 export const UMBRAL_FIX_EN_MOVIMIENTO_MS = 15 * MINUTO_MS;
 
 /**
@@ -236,6 +239,7 @@ function clasificarFrescura(
   recorridoEstado: string | null,
   recorridoEstadoTs: Date | null,
   ultimoFixTs: Date | null,
+  antiguedadMovimientoMs: number | null,
   sesionCerrada = false,
 ): EstadoFrescura {
   // Sesión de LOGIN cerrada (logout): nunca "reporta", aunque el flush del logout deje la ingesta
@@ -250,11 +254,13 @@ function clasificarFrescura(
   if (antiguedadIngestaMs === null || antiguedadIngestaMs > UMBRAL_INGESTA_VIVA_MS) {
     return 'perdido';
   }
-  // Ingesta viva. Si además el último fix es reciente, el vehículo se está moviendo;
-  // si no, el teléfono sincroniza pero el vehículo está quieto (terminal).
+  // Ingesta viva. Si además el vehículo se movió hace poco, reporta; si no, el teléfono
+  // sincroniza pero el vehículo está quieto (terminal). Se mide por MOVIMIENTO y no por edad del
+  // fix: desde #268 la app en primer plano persiste un fix cada 60 s aun detenida.
   // En pausa (almuerzo) manda sobre reportando/detenido: el GPS sigue, pero el estado es la pausa.
   if (recorridoEstado === 'en_pausa') return 'en_pausa';
-  if (antiguedadFixMs !== null && antiguedadFixMs <= UMBRAL_FIX_EN_MOVIMIENTO_MS) {
+  const antiguedadAvanceMs = antiguedadMovimientoMs ?? antiguedadFixMs;
+  if (antiguedadAvanceMs !== null && antiguedadAvanceMs <= UMBRAL_FIX_EN_MOVIMIENTO_MS) {
     return 'reportando';
   }
   return 'detenido';
@@ -281,6 +287,7 @@ export function derivarFrescura(
   recorridoEstado: string | null = null,
   recorridoEstadoTs: Date | null = null,
   sesionCerrada = false,
+  ultimoMovimientoTs: Date | null = null,
 ): FrescuraEnVivo {
   const antiguedadFixMs = diferenciaMs(ahora, ultimoFixTs);
   const antiguedadIngestaMs = diferenciaMs(ahora, ultimoIngresoTs);
@@ -290,6 +297,7 @@ export function derivarFrescura(
     recorridoEstado,
     recorridoEstadoTs,
     ultimoFixTs,
+    diferenciaMs(ahora, ultimoMovimientoTs),
     sesionCerrada,
   );
   return {
@@ -382,7 +390,7 @@ export class EnVivoService {
         SELECT so.id, so.inicio, so.fin, so.estado, so."deviceId",
           v.placa as "vehiculoPlaca", c.nombre as "conductorNombre", l.nombre as "lineaNombre",
           res.ultimo_fix_ts AS "ultimoFixTs", res.ultimo_ingreso_ts AS "ultimoIngresoTs",
-          res.total_puntos AS "totalPuntos",
+          res.ultimo_movimiento_ts AS "ultimoMovimientoTs", res.total_puntos AS "totalPuntos",
           so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs"
         FROM sesiones_operativas so
         JOIN vehiculos v ON v.id = so."vehiculoId"
@@ -391,7 +399,7 @@ export class EnVivoService {
         JOIN rutas ru ON ru.id = a."rutaId"
         JOIN lineas l ON l.id = ru."lineaId"
         LEFT JOIN LATERAL (
-          SELECT ultimo_fix_ts, ultimo_ingreso_ts, total_puntos
+          SELECT ultimo_fix_ts, ultimo_ingreso_ts, ultimo_movimiento_ts, total_puntos
           FROM gps_sesion_resumen gr
           WHERE gr.sesion_id = so.id::uuid AND gr.jornada = ${jornadaStr}::date
             -- Cierre explícito por tenant (code-review MEDIUM, cross-tenant poisoning): no
@@ -429,6 +437,7 @@ export class EnVivoService {
             f.recorridoEstado,
             f.recorridoEstadoTs,
             !sesionActiva(f),
+            f.ultimoMovimientoTs,
           ),
         }),
       );
@@ -520,7 +529,7 @@ export class EnVivoService {
               AND ${vueltaNoVacia('vh')}
           ) AS "molinosHoy",
           fix.lat, fix.lng, fix.accuracy, fix.speed,
-          fix."ultimoFixTs", fix."ultimoIngresoTs", fix."totalPuntos",
+          fix."ultimoFixTs", fix."ultimoIngresoTs", fix."ultimoMovimientoTs", fix."totalPuntos",
           so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs",
           inc.id AS "incId", inc.categoria AS "incCategoria", inc.texto AS "incTexto", inc.ts AS "incTs",
           inc."recibidoTs" AS "incRecibidoTs"
@@ -533,6 +542,7 @@ export class EnVivoService {
         LEFT JOIN LATERAL (
           SELECT gr.lat, gr.lng, gr.accuracy, gr.speed,
                  gr.ultimo_fix_ts AS "ultimoFixTs",
+                 gr.ultimo_movimiento_ts AS "ultimoMovimientoTs",
                  -- max(...) OVER (), no gr.ultimo_ingreso_ts liso: ver el docblock de arriba
                  -- ("ultimoIngresoTs — hallazgo adicional del code-review"). Se evalúa sobre
                  -- TODAS las filas hoy+ayer que pasan el WHERE, antes del ORDER BY/LIMIT de
@@ -612,8 +622,18 @@ export class EnVivoService {
         if (gana) mejor.set(f.vehiculoId, f);
       }
       const unicas = filas.filter((f) => mejor.get(f.vehiculoId) === f);
-      return unicas.map((f) =>
-        PosicionEnVivoSchema.parse({
+      return unicas.map((f) => {
+        const frescura = derivarFrescura(
+          ahora,
+          f.inicio,
+          f.ultimoFixTs,
+          f.ultimoIngresoTs,
+          f.recorridoEstado,
+          f.recorridoEstadoTs,
+          !sesionActiva(f),
+          f.ultimoMovimientoTs,
+        );
+        return PosicionEnVivoSchema.parse({
           id: f.id,
           deviceId: f.deviceId,
           vehiculoId: f.vehiculoId,
@@ -659,19 +679,12 @@ export class EnVivoService {
           lat: f.lat,
           lng: f.lng,
           accuracy: f.accuracy,
-          speed: f.speed,
+          // Detenido: la velocidad del último fix es de cuando aún andaba; no se muestra rodando.
+          speed: frescura.estadoFrescura === 'detenido' ? 0 : f.speed,
           totalPuntos: f.totalPuntos ?? 0,
-          ...derivarFrescura(
-            ahora,
-            f.inicio,
-            f.ultimoFixTs,
-            f.ultimoIngresoTs,
-            f.recorridoEstado,
-            f.recorridoEstadoTs,
-            !sesionActiva(f),
-          ),
-        }),
-      );
+          ...frescura,
+        });
+      });
     });
   }
 

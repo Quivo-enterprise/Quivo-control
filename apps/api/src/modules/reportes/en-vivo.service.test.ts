@@ -437,6 +437,16 @@ describe('EnVivoService', () => {
       expect(f.inactivaDesdeMs).toBe(60_000);
     });
 
+    it('latidos de fix pero sin movimiento hace 16 min ⇒ "detenido"; movimiento hace 2 min ⇒ "reportando"; null cae al fix', () => {
+      const fixReciente = new Date(ahora.getTime() - 30_000);
+      const ing = new Date(ahora.getTime() - 3_000);
+      const estado = (mov: Date | null) =>
+        derivarFrescura(ahora, inicio, fixReciente, ing, null, null, false, mov).estadoFrescura;
+      expect(estado(new Date(ahora.getTime() - 16 * MINUTO))).toBe('detenido');
+      expect(estado(new Date(ahora.getTime() - 2 * MINUTO))).toBe('reportando');
+      expect(estado(null)).toBe('reportando');
+    });
+
     it('recorridoEstado en_pausa ⇒ "en_pausa" con pausaDesdeTs, aunque el GPS reporte o esté quieto; sin ingesta sigue "perdido"', () => {
       const desde = new Date(ahora.getTime() - 20 * MINUTO);
       const ing = new Date(ahora.getTime() - 3_000);

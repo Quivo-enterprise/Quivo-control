@@ -35,7 +35,12 @@ const NOMBRE_JOB_PARTICIONES = 'crear-particiones-futuras';
 const CADA_MS_PARTICIONES = 24 * 60 * 60 * 1000; // diario alcanza — se crean con varios días de margen
 const DIAS_ANTICIPACION_PARTICION = 5;
 
-const CONTEXTO_ADMIN = { rol: 'admin_quivo', sindicatoId: null } as const;
+// "Se movió" para `gps_sesion_resumen.ultimo_movimiento_ts`: sobre el jitter típico del GPS
+// parado (< 15 m) vs. un trufi que arranca; 2 m/s ≈ 7 km/h, bajo la marcha más lenta en tráfico.
+export const UMBRAL_DISTANCIA_MOVIMIENTO_M = 30;
+export const UMBRAL_VELOCIDAD_MOVIMIENTO_MS = 2;
+
+const CONTEXTO_ADMIN ={ rol: 'admin_quivo', sindicatoId: null } as const;
 
 /**
  * Reintento EN PROCESO de un lote ante un error transitorio de la DB (no `attempts` de BullMQ: un
@@ -867,7 +872,8 @@ export async function insertarGpsPoints(
         "sindicatoId",
         count(*)::int AS total_puntos,
         max(ts) AS ultimo_fix_ts,
-        max(received_at) AS ultimo_ingreso_ts
+        max(received_at) AS ultimo_ingreso_ts,
+        max(ts) FILTER (WHERE speed >= ${UMBRAL_VELOCIDAD_MOVIMIENTO_MS}) AS mov_velocidad_ts
       FROM ins
       GROUP BY sesion_id, ((ts AT TIME ZONE 'UTC') - interval '4 hours')::date, "sindicatoId"
     ),
@@ -881,12 +887,25 @@ export async function insertarGpsPoints(
       ORDER BY sesion_id, ((ts AT TIME ZONE 'UTC') - interval '4 hours')::date, "sindicatoId", ts DESC
     )
     INSERT INTO gps_sesion_resumen
-      (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng, accuracy, speed, updated_at)
+      (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng, accuracy, speed, ultimo_movimiento_ts, updated_at)
     SELECT
       a.sesion_id, a.jornada, a."sindicatoId", a.total_puntos, a.ultimo_fix_ts, a.ultimo_ingreso_ts,
-      u.lat, u.lng, u.accuracy, u.speed, now()
+      u.lat, u.lng, u.accuracy, u.speed,
+      -- Movimiento: fila nueva = primer fix, cuenta; si no, velocidad reportada o desplazamiento
+      -- (equirectangular, sobra a 30 m) respecto de la última posición guardada. GREATEST ignora
+      -- NULL; el DO UPDATE hace GREATEST con lo previo.
+      CASE WHEN r.sesion_id IS NULL THEN a.ultimo_fix_ts
+        ELSE GREATEST(
+          a.mov_velocidad_ts,
+          CASE WHEN a.ultimo_fix_ts > r.ultimo_fix_ts
+            AND sqrt(power((u.lat - r.lat) * 111320, 2)
+                   + power((u.lng - r.lng) * 111320 * cos(radians(r.lat)), 2)) >= ${UMBRAL_DISTANCIA_MOVIMIENTO_M}
+            THEN a.ultimo_fix_ts END
+        ) END,
+      now()
     FROM agregados a
     JOIN ultimo_punto u ON u.sesion_id = a.sesion_id AND u.jornada = a.jornada AND u."sindicatoId" = a."sindicatoId"
+    LEFT JOIN gps_sesion_resumen r ON r.sesion_id = a.sesion_id AND r.jornada = a.jornada AND r."sindicatoId" = a."sindicatoId"
     ORDER BY a.sesion_id, a.jornada, a."sindicatoId"
     ON CONFLICT (sesion_id, jornada, "sindicatoId") DO UPDATE SET
       total_puntos = gps_sesion_resumen.total_puntos + EXCLUDED.total_puntos,
@@ -896,6 +915,7 @@ export async function insertarGpsPoints(
       accuracy = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts THEN EXCLUDED.accuracy ELSE gps_sesion_resumen.accuracy END,
       speed = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts THEN EXCLUDED.speed ELSE gps_sesion_resumen.speed END,
       ultimo_fix_ts = GREATEST(gps_sesion_resumen.ultimo_fix_ts, EXCLUDED.ultimo_fix_ts),
+      ultimo_movimiento_ts = GREATEST(gps_sesion_resumen.ultimo_movimiento_ts, EXCLUDED.ultimo_movimiento_ts),
       updated_at = now()
   `);
   return tsFixDescartados;
