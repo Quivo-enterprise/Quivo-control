@@ -39,8 +39,21 @@ const DIAS_ANTICIPACION_PARTICION = 5;
 // parado (< 15 m) vs. un trufi que arranca; 2 m/s ≈ 7 km/h, bajo la marcha más lenta en tráfico.
 export const UMBRAL_DISTANCIA_MOVIMIENTO_M = 30;
 export const UMBRAL_VELOCIDAD_MOVIMIENTO_MS = 2;
+// Un fix con accuracy peor que esto no prueba desplazamiento (el GPS parado salta decenas de m en interiores).
+export const UMBRAL_PRECISION_MOVIMIENTO_M = 50;
 
-const CONTEXTO_ADMIN ={ rol: 'admin_quivo', sindicatoId: null } as const;
+/** SQL: distancia equirectangular en metros entre dos pares lat/lng (sobra a 30 m). Args = SQL crudo. */
+const distanciaSql = (aLat: string, aLng: string, bLat: string, bLng: string) =>
+  Prisma.raw(
+    `sqrt(power((${aLat} - ${bLat}) * 111320, 2) + power((${aLng} - ${bLng}) * 111320 * cos(radians(${bLat})), 2))`,
+  );
+
+/** SQL: el fix (lat/lng/acc) se alejó del ancla ≥ max(umbral, accuracy) y es lo bastante preciso. */
+const seMovioSql = (lat: string, lng: string, acc: string, ancLat: string, ancLng: string) =>
+  Prisma.sql`(${Prisma.raw(acc)} IS NULL OR ${Prisma.raw(acc)} <= ${UMBRAL_PRECISION_MOVIMIENTO_M})
+    AND ${distanciaSql(lat, lng, ancLat, ancLng)} >= GREATEST(${UMBRAL_DISTANCIA_MOVIMIENTO_M}::float8, COALESCE(${Prisma.raw(acc)}, 0))`;
+
+const CONTEXTO_ADMIN = { rol: 'admin_quivo', sindicatoId: null } as const;
 
 /**
  * Reintento EN PROCESO de un lote ante un error transitorio de la DB (no `attempts` de BullMQ: un
@@ -887,25 +900,42 @@ export async function insertarGpsPoints(
       ORDER BY sesion_id, ((ts AT TIME ZONE 'UTC') - interval '4 hours')::date, "sindicatoId", ts DESC
     )
     INSERT INTO gps_sesion_resumen
-      (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng, accuracy, speed, ultimo_movimiento_ts, updated_at)
+      (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng, accuracy, speed, ultimo_movimiento_ts, mov_lat, mov_lng, updated_at)
     SELECT
       a.sesion_id, a.jornada, a."sindicatoId", a.total_puntos, a.ultimo_fix_ts, a.ultimo_ingreso_ts,
       u.lat, u.lng, u.accuracy, u.speed,
-      -- Movimiento: fila nueva = primer fix, cuenta; si no, velocidad reportada o desplazamiento
-      -- (equirectangular, sobra a 30 m) respecto de la última posición guardada. GREATEST ignora
-      -- NULL; el DO UPDATE hace GREATEST con lo previo.
-      CASE WHEN r.sesion_id IS NULL THEN a.ultimo_fix_ts
-        ELSE GREATEST(
-          a.mov_velocidad_ts,
-          CASE WHEN a.ultimo_fix_ts > r.ultimo_fix_ts
-            AND sqrt(power((u.lat - r.lat) * 111320, 2)
-                   + power((u.lng - r.lng) * 111320 * cos(radians(r.lat)), 2)) >= ${UMBRAL_DISTANCIA_MOVIMIENTO_M}
-            THEN a.ultimo_fix_ts END
-        ) END,
+      -- Fila que YA existía (snapshot): el DO UPDATE no usa estos dos valores como están; solo
+      -- necesita la velocidad cruda del lote (a.mov_velocidad_ts) y la posición candidata
+      -- (EXCLUDED.lat/lng/accuracy), y decide contra la fila bloqueada. Fila NUEVA (primer fix, o
+      -- cambio de jornada a medianoche): hereda ts y ancla de la jornada previa de la sesión y
+      -- aplica la misma regla contra ese ancla; sin jornada previa, el primer fix cuenta.
+      CASE WHEN e.existe THEN a.mov_velocidad_ts
+        WHEN p.sesion_id IS NULL THEN a.ultimo_fix_ts
+        ELSE COALESCE(
+          GREATEST(a.mov_velocidad_ts, CASE WHEN ${seMovioSql('u.lat', 'u.lng', 'u.accuracy', 'COALESCE(p.mov_lat, p.lat)', 'COALESCE(p.mov_lng, p.lng)')} THEN a.ultimo_fix_ts END),
+          p.ultimo_movimiento_ts, p.ultimo_fix_ts) END,
+      CASE WHEN p.sesion_id IS NULL OR a.mov_velocidad_ts IS NOT NULL
+          OR ${seMovioSql('u.lat', 'u.lng', 'u.accuracy', 'COALESCE(p.mov_lat, p.lat)', 'COALESCE(p.mov_lng, p.lng)')}
+        THEN u.lat ELSE COALESCE(p.mov_lat, p.lat) END,
+      CASE WHEN p.sesion_id IS NULL OR a.mov_velocidad_ts IS NOT NULL
+          OR ${seMovioSql('u.lat', 'u.lng', 'u.accuracy', 'COALESCE(p.mov_lat, p.lat)', 'COALESCE(p.mov_lng, p.lng)')}
+        THEN u.lng ELSE COALESCE(p.mov_lng, p.lng) END,
       now()
     FROM agregados a
     JOIN ultimo_punto u ON u.sesion_id = a.sesion_id AND u.jornada = a.jornada AND u."sindicatoId" = a."sindicatoId"
-    LEFT JOIN gps_sesion_resumen r ON r.sesion_id = a.sesion_id AND r.jornada = a.jornada AND r."sindicatoId" = a."sindicatoId"
+    CROSS JOIN LATERAL (
+      SELECT EXISTS (
+        SELECT 1 FROM gps_sesion_resumen r
+        WHERE r.sesion_id = a.sesion_id AND r.jornada = a.jornada AND r."sindicatoId" = a."sindicatoId"
+      ) AS existe
+    ) e
+    LEFT JOIN LATERAL (
+      SELECT pr.sesion_id, pr.lat, pr.lng, pr.mov_lat, pr.mov_lng, pr.ultimo_movimiento_ts, pr.ultimo_fix_ts
+      FROM gps_sesion_resumen pr
+      WHERE pr.sesion_id = a.sesion_id AND pr."sindicatoId" = a."sindicatoId" AND pr.jornada < a.jornada
+      ORDER BY pr.jornada DESC
+      LIMIT 1
+    ) p ON true
     ORDER BY a.sesion_id, a.jornada, a."sindicatoId"
     ON CONFLICT (sesion_id, jornada, "sindicatoId") DO UPDATE SET
       total_puntos = gps_sesion_resumen.total_puntos + EXCLUDED.total_puntos,
@@ -914,8 +944,27 @@ export async function insertarGpsPoints(
       lng = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts THEN EXCLUDED.lng ELSE gps_sesion_resumen.lng END,
       accuracy = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts THEN EXCLUDED.accuracy ELSE gps_sesion_resumen.accuracy END,
       speed = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts THEN EXCLUDED.speed ELSE gps_sesion_resumen.speed END,
+      -- Movimiento contra la fila BLOQUEADA (no un snapshot previo): dos lotes concurrentes se
+      -- serializan en el lock y el segundo ve el ancla que dejó el primero. EXCLUDED.ultimo_movimiento_ts
+      -- trae la velocidad cruda del lote. Solo el fix más nuevo que el guardado puede mover el ancla.
+      -- shortcut: no se ve el desplazamiento entre puntos INTERMEDIOS de un lote (round trip del
+      -- outbox offline con speed null/baja); solo último punto vs ancla + velocidad máxima. Pasar a
+      -- escaneo por punto si los despachadores lo reportan.
+      ultimo_movimiento_ts = GREATEST(
+        gps_sesion_resumen.ultimo_movimiento_ts,
+        EXCLUDED.ultimo_movimiento_ts,
+        CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts
+          AND ${seMovioSql('EXCLUDED.lat', 'EXCLUDED.lng', 'EXCLUDED.accuracy', 'COALESCE(gps_sesion_resumen.mov_lat, gps_sesion_resumen.lat)', 'COALESCE(gps_sesion_resumen.mov_lng, gps_sesion_resumen.lng)')}
+          THEN EXCLUDED.ultimo_fix_ts END),
+      mov_lat = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts
+          AND (EXCLUDED.ultimo_movimiento_ts IS NOT NULL
+            OR ${seMovioSql('EXCLUDED.lat', 'EXCLUDED.lng', 'EXCLUDED.accuracy', 'COALESCE(gps_sesion_resumen.mov_lat, gps_sesion_resumen.lat)', 'COALESCE(gps_sesion_resumen.mov_lng, gps_sesion_resumen.lng)')})
+        THEN EXCLUDED.lat ELSE COALESCE(gps_sesion_resumen.mov_lat, gps_sesion_resumen.lat) END,
+      mov_lng = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts
+          AND (EXCLUDED.ultimo_movimiento_ts IS NOT NULL
+            OR ${seMovioSql('EXCLUDED.lat', 'EXCLUDED.lng', 'EXCLUDED.accuracy', 'COALESCE(gps_sesion_resumen.mov_lat, gps_sesion_resumen.lat)', 'COALESCE(gps_sesion_resumen.mov_lng, gps_sesion_resumen.lng)')})
+        THEN EXCLUDED.lng ELSE COALESCE(gps_sesion_resumen.mov_lng, gps_sesion_resumen.lng) END,
       ultimo_fix_ts = GREATEST(gps_sesion_resumen.ultimo_fix_ts, EXCLUDED.ultimo_fix_ts),
-      ultimo_movimiento_ts = GREATEST(gps_sesion_resumen.ultimo_movimiento_ts, EXCLUDED.ultimo_movimiento_ts),
       updated_at = now()
   `);
   return tsFixDescartados;

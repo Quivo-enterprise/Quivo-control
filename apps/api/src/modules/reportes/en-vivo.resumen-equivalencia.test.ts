@@ -346,6 +346,101 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
     expect(await movimiento()).toBe(t(26));
   });
 
+  describe('ultimo_movimiento_ts con ancla y precisión', () => {
+    const ids: string[] = [];
+    afterAll(async () => {
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        for (const id of ids) {
+          await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id = ${id}::uuid`;
+          await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id = ${id}::uuid`;
+        }
+      });
+    });
+    const nueva = () => {
+      const id = randomUUID();
+      ids.push(id);
+      return {
+        id,
+        ingerir: (ts: Date, lat: number, lng: number, accuracy: number | null, speed: number | null) =>
+          withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+            insertarGpsPoints(tx, sindicatoId, [
+              evento({ ts: ts.toISOString(), payload: { sesionId: id, lat, lng, accuracy, speed } }),
+            ]),
+          ),
+        movimiento: async () => {
+          const filas = await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
+            tx.$queryRaw<{ m: Date | null }[]>`
+              SELECT ultimo_movimiento_ts AS m FROM gps_sesion_resumen WHERE sesion_id = ${id}::uuid ORDER BY jornada DESC`,
+          );
+          return filas.map((f) => f.m?.toISOString());
+        },
+      };
+    };
+    const min = (m: number) => new Date(AHORA.getTime() - m * MINUTO);
+    const M = 0.00001; // grados de latitud ≈ 1.11 m
+
+    it('arrastre lento (24 m por fix, speed null): se acumula contra el ancla y cuenta al 2.º fix', async () => {
+      const s = nueva();
+      await s.ingerir(min(30), -17.78, -63.18, 5, null); // ancla
+      await s.ingerir(min(29), -17.78 - 21.6 * M, -63.18, 5, null); // ~24 m: no
+      expect(await s.movimiento()).toEqual([min(30).toISOString()]);
+      await s.ingerir(min(28), -17.78 - 43.2 * M, -63.18, 5, null); // ~48 m desde el ancla: sí
+      expect(await s.movimiento()).toEqual([min(28).toISOString()]);
+    });
+
+    it('parado con accuracy alternando 8/60 m y saltos de 40 m: no hay movimiento', async () => {
+      const s = nueva();
+      await s.ingerir(min(30), -17.78, -63.18, 8, 0);
+      await s.ingerir(min(29), -17.78 - 36 * M, -63.18, 60, 0); // 40 m pero accuracy 60: se ignora
+      await s.ingerir(min(28), -17.78, -63.18, 8, 0);
+      await s.ingerir(min(27), -17.78 - 36 * M, -63.18, 60, null);
+      await s.ingerir(min(26), -17.78 + 18 * M, -63.18, 25, 0); // 20 m < max(30, 25)
+      expect(await s.movimiento()).toEqual([min(30).toISOString()]);
+    });
+
+    it('speed >= 2 es movimiento aunque no cambie la posición', async () => {
+      const s = nueva();
+      await s.ingerir(min(30), -17.78, -63.18, 5, 0);
+      await s.ingerir(min(29), -17.78, -63.18, 5, 2);
+      expect(await s.movimiento()).toEqual([min(29).toISOString()]);
+    });
+
+    it('cambio de jornada estando parado hereda el ultimo_movimiento_ts anterior (no pasa a reportando)', async () => {
+      const s = nueva();
+      const hoy = new Date(Date.UTC(AHORA.getUTCFullYear(), AHORA.getUTCMonth(), AHORA.getUTCDate()));
+      const ayer = new Date(hoy.getTime() + 2 * 60 * MINUTO); // 02:00 UTC = 22:00 Bolivia, jornada previa
+      const hoyJornada = new Date(hoy.getTime() + 5 * 60 * MINUTO); // 05:00 UTC, jornada nueva
+      await s.ingerir(ayer, -17.78, -63.18, 5, 0);
+      await s.ingerir(new Date(ayer.getTime() + 10 * MINUTO), -17.78 - 50 * M, -63.18, 5, 0); // movió
+      const antes = await s.movimiento();
+      await s.ingerir(hoyJornada, -17.78 - 50 * M, -63.18, 5, 0); // parado en la jornada nueva
+      const despues = await s.movimiento();
+      expect(despues).toHaveLength(2);
+      expect(despues[0]).toBe(antes[0]); // la fila nueva hereda, no arranca en "ahora"
+    });
+
+    it('obtenerTraza y obtenerPosiciones coinciden en detenido (y speed 0)', async () => {
+      const service = new EnVivoService();
+      const sesionId = sesionMovimientoId;
+      // La sesión del primer test quedó con último movimiento hace >15 min; este latido es quieto.
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+        insertarGpsPoints(tx, sindicatoId, [
+          evento({ ts: min(1).toISOString(), payload: { sesionId, lat: -17.7807, lng: -63.18, accuracy: 5, speed: 0 } }),
+        ]),
+      );
+      // `received_at` es el reloj real; el test usa AHORA fijo: se alinea para que la ingesta cuente "viva".
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        await tx.$executeRaw`UPDATE gps_sesion_resumen SET ultimo_ingreso_ts = ${AHORA} WHERE sesion_id = ${sesionId}::uuid`;
+        await tx.$executeRaw`UPDATE gps_points SET received_at = ${AHORA} WHERE sesion_id = ${sesionId}::uuid`;
+      });
+      const traza = await service.obtenerTraza(adminQuivo, sesionId, { limite: 100 }, AHORA);
+      const pos = (await service.obtenerPosiciones(adminQuivo, AHORA)).find((f) => f.id === sesionId);
+      expect(traza.estadoFrescura).toBe('detenido');
+      expect(pos?.estadoFrescura).toBe('detenido');
+      expect(pos?.speed).toBe(0);
+    });
+  });
+
   /** docs/plan-en-vivo-resumen-sesion.md §4.2 — RLS directa sobre `gps_sesion_resumen`
    * (no a través del join con `sesiones_operativas`, que ya prueban las suites de
    * `en-vivo.service.test.ts`): un sindicato NO ve filas de resumen de otro; `admin_quivo` sí. */

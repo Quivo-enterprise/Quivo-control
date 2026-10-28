@@ -124,6 +124,7 @@ interface AgregadosFixRow {
   ultimoFixTs: Date | null;
   ultimoIngresoTs: Date | null;
   totalPuntos: number | null;
+  ultimoMovimientoTs: Date | null;
 }
 
 interface RutaGeomRow {
@@ -179,7 +180,7 @@ export function nivelDeOrden(orden: number | null | undefined): GravedadRegla | 
  */
 export const UMBRAL_INGESTA_VIVA_MS = 15 * MINUTO_MS;
 /** Tiempo sin MOVIMIENTO (`ultimo_movimiento_ts`; fallback al fix) pasado el cual la sesión es `detenido`. */
-export const UMBRAL_FIX_EN_MOVIMIENTO_MS = 15 * MINUTO_MS;
+export const UMBRAL_SIN_MOVIMIENTO_MS = 15 * MINUTO_MS;
 
 /**
  * Fase A (docs/plan-ubicacion-fluida.md) — tolerancia entre `recorridoEstadoTs` (el `ts` del
@@ -260,7 +261,7 @@ function clasificarFrescura(
   // En pausa (almuerzo) manda sobre reportando/detenido: el GPS sigue, pero el estado es la pausa.
   if (recorridoEstado === 'en_pausa') return 'en_pausa';
   const antiguedadAvanceMs = antiguedadMovimientoMs ?? antiguedadFixMs;
-  if (antiguedadAvanceMs !== null && antiguedadAvanceMs <= UMBRAL_FIX_EN_MOVIMIENTO_MS) {
+  if (antiguedadAvanceMs !== null && antiguedadAvanceMs <= UMBRAL_SIN_MOVIMIENTO_MS) {
     return 'reportando';
   }
   return 'detenido';
@@ -847,7 +848,8 @@ export class EnVivoService {
       const [agregados] = await tx.$queryRaw<AgregadosFixRow[]>`
         SELECT max(ts) AS "ultimoFixTs",
                max(received_at) AS "ultimoIngresoTs",
-               count(*)::int AS "totalPuntos"
+               count(*)::int AS "totalPuntos",
+               (SELECT max(ultimo_movimiento_ts) FROM gps_sesion_resumen WHERE sesion_id = ${sesionId}::uuid) AS "ultimoMovimientoTs"
         FROM gps_points
         WHERE sesion_id = ${sesionId}::uuid AND ts >= ${piso} AND ts < ${techo}
       `;
@@ -890,6 +892,7 @@ export class EnVivoService {
           sesion.recorridoEstado,
           sesion.recorridoEstadoTs,
           !sesionActiva(sesion),
+          agregados?.ultimoMovimientoTs ?? null,
         ),
       });
     });
