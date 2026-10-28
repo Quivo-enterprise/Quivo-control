@@ -1,5 +1,6 @@
 import type { MapPoint, MapRoute, MapZone } from '@quivo/design-system';
-import type { ContextoEnVivo, CumplimientoRecorrido, PosicionEnVivo, PuntoTrazaGps, RutaSnap } from '@quivo/shared';
+import type { ContextoEnVivo, CumplimientoRecorrido, PosicionEnVivo, PuntoControl, PuntoTrazaGps, Ruta, RutaSnap } from '@quivo/shared';
+import { capitalizar } from '../rutas/route-utils';
 import { ApiError } from '../../../src/lib/api/client';
 import { presentacionFrescura, sufijoPausa, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 import { alertaMarcador } from '../../../src/lib/en-vivo/alertas';
@@ -72,7 +73,7 @@ export function ultimaPasada(
  * capa `quivo-marker-points`, donde `var(--qv-color-*)` sí se resuelve (`resolveColor`).
  */
 export function construirPuntosControl(
-  contexto: ContextoEnVivo,
+  contexto: Pick<ContextoEnVivo, 'puntosControl' | 'puntoEsperaPorVariante'>,
   traza: TrazaAcumulada | undefined,
   varianteId?: string | null,
 ): MapPoint[] {
@@ -98,13 +99,6 @@ export function construirPuntosControl(
     .filter((pc) => pc.rol === 'espera' && !idsEfectivos.has(pc.id))
     .map((pc) => punto(pc, 'Espera Molinos'));
   return [...efectivos.map((pc, index) => punto(pc, `Punto de control ${index + 1}`)), ...espera];
-}
-
-/** Filtro por línea, client-side — mismo patrón que `vehiculos/page.tsx` (`filteredRows` de
- * `use-vehiculos.ts`): el endpoint trae TODA la flota activa/reciente y el `<Select>` de
- * línea filtra en memoria, sin round-trip. `lineaId === ''` ("Todas las líneas") es un no-op. */
-export function filtrarPorLinea(posiciones: PosicionEnVivo[], lineaId: string): PosicionEnVivo[] {
-  return lineaId ? posiciones.filter((p) => p.lineaId === lineaId) : posiciones;
 }
 
 /** Id ESTABLE del marker de un vehículo — no el id sintético `${lat}:${lng}:${index}` que
@@ -201,7 +195,7 @@ export function construirMarcadoresVehiculos(
     });
 }
 
-export function construirZonas(contexto: ContextoEnVivo): MapZone[] {
+export function construirZonas(contexto: Pick<ContextoEnVivo, 'puntosControl'>): MapZone[] {
   return [...contexto.puntosControl].sort((a, b) => a.orden - b.orden).map((pc, index) => ({
     lat: pc.coord.coordinates[1],
     lng: pc.coord.coordinates[0],
@@ -215,6 +209,52 @@ export function construirZonas(contexto: ContextoEnVivo): MapZone[] {
     // claro; no reacciona a `prefers-color-scheme` en oscuro.
     color: '#94a3b8',
   }));
+}
+
+/** Ruta de una línea con sus puntos de control, tal como los devuelven `/lineas/:id/rutas` y `/rutas/:id/puntos-control`. */
+export interface RutaDeLinea {
+  ruta: Ruta;
+  puntos: PuntoControl[];
+}
+
+/**
+ * Mapa de una línea elegida en el filtro sin vehículo con detalle abierto: sus rutas (ya activas), los
+ * puntos de control activos (misma numeración que `construirPuntosControl`, sin variante) y zonas.
+ * shortcut: sin variantes (Molinos) ni cumplimiento; el trazado de la variante solo sale con un vehículo seleccionado.
+ */
+export function construirMapaDeLinea(
+  color: string,
+  rutas: readonly RutaDeLinea[],
+): { routes: MapRoute[]; markers: MapPoint[]; zones: MapZone[] } {
+  const routes: MapRoute[] = [];
+  const markers: MapPoint[] = [];
+  const zones: MapZone[] = [];
+  for (const { ruta, puntos } of rutas) {
+    const sentido = capitalizar(ruta.sentido);
+    routes.push({
+      id: `ruta-linea-${ruta.id}`,
+      label: `Ruta ${sentido}`,
+      color,
+      dashed: true,
+      points: ruta.geometria.coordinates.map(([lng, lat]) => ({ lat, lng })),
+    });
+    const contexto = {
+      puntosControl: puntos
+        .filter((pc) => pc.estado === 'activo')
+        .map((pc) => ({ ...pc, rol: pc.rol ?? null })),
+      puntoEsperaPorVariante: {},
+    };
+    markers.push(
+      ...construirPuntosControl(contexto, undefined).map((m) => ({
+        ...m,
+        // Con varias rutas los "Punto de control N" se repiten: el sentido los distingue.
+        label: rutas.length > 1 ? `${sentido} · ${m.label}` : m.label,
+        description: `Ruta ${sentido}`,
+      })),
+    );
+    zones.push(...construirZonas(contexto));
+  }
+  return { routes, markers, zones };
 }
 
 export function mensajeError(err: unknown): string {

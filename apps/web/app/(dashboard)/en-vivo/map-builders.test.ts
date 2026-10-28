@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ContextoEnVivo, PosicionEnVivo } from '@quivo/shared';
-import { construirMarcadoresVehiculos, construirPuntosControl, construirRutas, filtrarPorLinea, idMarcadorVehiculo } from './map-builders';
+import type { ContextoEnVivo, PosicionEnVivo, PuntoControl, Ruta } from '@quivo/shared';
+import { construirMarcadoresVehiculos, construirPuntosControl, construirMapaDeLinea, construirRutas, idMarcadorVehiculo } from './map-builders';
 
 // Fixture mínima de `PosicionEnVivo` (`GET /reportes/en-vivo/posiciones`, Entregas 10/13):
 // todos los campos que NO le importan a `map-builders.ts` quedan con un valor fijo cualquiera
@@ -40,22 +40,47 @@ describe('idMarcadorVehiculo', () => {
   });
 });
 
-describe('filtrarPorLinea', () => {
-  const z12 = posicion({ id: 's1', lineaId: 'z12' });
-  const l120 = posicion({ id: 's2', lineaId: 'l120' });
-  const todas = [z12, l120];
-
-  it('con lineaId vacío ("Todas las líneas") devuelve la lista completa sin filtrar', () => {
-    expect(filtrarPorLinea(todas, '')).toEqual(todas);
+describe('construirMapaDeLinea', () => {
+  const ruta = (id: string, estado: Ruta['estado'], sentido = 'ida'): Ruta => ({
+    id,
+    lineaId: 'l1',
+    sentido,
+    geometria: { type: 'LineString', coordinates: [[-66.15, -17.39], [-66.16, -17.4]] },
+    estado,
+    publicStatus: 'borrador',
+    publishedAt: null,
+  });
+  const pc = (id: string, orden: number, estado: PuntoControl['estado'] = 'activo'): PuntoControl => ({
+    id,
+    rutaId: 'r1',
+    orden,
+    coord: { type: 'Point', coordinates: [-66.15 - orden / 100, -17.39] },
+    radioToleranciaM: 40,
+    obligatorio: true,
+    estado,
   });
 
-  it('filtra solo los vehículos de la línea pedida', () => {
-    expect(filtrarPorLinea(todas, 'z12')).toEqual([z12]);
-    expect(filtrarPorLinea(todas, 'l120')).toEqual([l120]);
+  it('dibuja las rutas con el color de la línea y numera los PC activos por orden', () => {
+    const r = construirMapaDeLinea('#123456', [
+      { ruta: ruta('r1', 'activo'), puntos: [pc('b', 2), pc('a', 1), pc('x', 3, 'inactivo')] },
+    ]);
+    expect(r.routes).toHaveLength(1);
+    expect(r.routes[0]).toMatchObject({ color: '#123456', points: [{ lat: -17.39, lng: -66.15 }, { lat: -17.4, lng: -66.16 }] });
+    expect(r.markers.map((m) => m.label)).toEqual(['Punto de control 1', 'Punto de control 2']);
+    expect(r.zones).toHaveLength(2);
   });
 
-  it('una línea sin vehículos activos devuelve un array vacío, no undefined/null', () => {
-    expect(filtrarPorLinea(todas, 'linea-inexistente')).toEqual([]);
+  it('con varias rutas prefija los PC con el sentido legible', () => {
+    const r = construirMapaDeLinea('#123456', [
+      { ruta: ruta('r1', 'activo', 'ida'), puntos: [pc('a', 1)] },
+      { ruta: ruta('r2', 'activo', 'vuelta'), puntos: [pc('b', 1)] },
+    ]);
+    expect(r.routes.map((x) => x.label)).toEqual(['Ruta Ida', 'Ruta Vuelta']);
+    expect(r.markers.map((m) => m.label)).toEqual(['Ida · Punto de control 1', 'Vuelta · Punto de control 1']);
+  });
+
+  it('sin rutas devuelve todo vacío', () => {
+    expect(construirMapaDeLinea('#123456', [])).toEqual({ routes: [], markers: [], zones: [] });
   });
 });
 

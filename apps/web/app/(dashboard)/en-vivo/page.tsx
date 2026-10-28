@@ -9,6 +9,7 @@ import { useAuth } from '../../../src/lib/auth/auth-context';
 import { isRouteAllowedForRole, NAV_ITEMS } from '../../../src/lib/nav-items';
 import {
   useContextoEnVivo,
+  useRutasDeLinea,
   useMolinosResumen,
   INTERVALO_POLL_POSICIONES_MS,
   usePosicionesEnVivo,
@@ -32,6 +33,7 @@ import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
 import { useLineaOptions } from '../../../src/lib/api/use-linea-options';
 import {
   construirMarcadoresVehiculos,
+  construirMapaDeLinea,
   construirPuntosControl,
   construirRutas,
   construirZonas,
@@ -310,9 +312,16 @@ export default function EnVivoPage() {
         : [],
     [focoMapa],
   );
+  // Línea filtrada sin vehículo con detalle de ESA línea: se dibuja su ruta aunque nadie reporte.
+  const rutasLinea = useRutasDeLinea(token, lineaFilter || null);
+  const mapaLinea = useMemo(() => {
+    if (!lineaFilter || sesionSeleccionada || !rutasLinea.data) return null;
+    const color = lineas.find((l) => l.id === lineaFilter)?.color ?? 'var(--qv-color-primary)';
+    return construirMapaDeLinea(color, rutasLinea.data);
+  }, [lineaFilter, sesionSeleccionada, rutasLinea.data, lineas]);
   const markers = useMemo(
-    () => [...puntosControl, ...marcadorFoco, ...vehiculos],
-    [puntosControl, marcadorFoco, vehiculos],
+    () => [...(mapaLinea?.markers ?? puntosControl), ...marcadorFoco, ...vehiculos],
+    [mapaLinea, puntosControl, marcadorFoco, vehiculos],
   );
   // Rutas contra las que se ajusta la traza y el marcador (solo cambian con el contexto).
   const rutasSnap = useMemo(
@@ -321,14 +330,28 @@ export default function EnVivoPage() {
   );
   // `fusionarTraza` conserva la referencia de `puntos` si el poll no sumó nada: sin recalcular.
   const puntosTraza = datos?.puntos;
-  const routes = useMemo(
+  const routesContexto = useMemo(
     () => (contexto.data ? construirRutas(contexto.data, puntosTraza, rutasSnap, varianteId) : []),
     [contexto.data, puntosTraza, rutasSnap, varianteId],
   );
-  const zones = useMemo(
+  const zonesContexto = useMemo(
     () => (contexto.data ? construirZonas(contexto.data) : []),
     [contexto.data],
   );
+  const routes = mapaLinea?.routes ?? routesContexto;
+  const zones = mapaLinea?.zones ?? zonesContexto;
+
+  // Reencuadre una vez al cargar la ruta de la línea elegida (sin vehículo seleccionado).
+  // `lineaReencuadrada` evita reencuadrar al cerrar el panel de un vehículo (la línea no cambió).
+  const hayMapaLinea = Boolean(mapaLinea && mapaLinea.routes.length > 0);
+  const lineaReencuadrada = useRef('');
+  useEffect(() => {
+    if (!lineaFilter) lineaReencuadrada.current = '';
+    else if (hayMapaLinea && lineaReencuadrada.current !== lineaFilter) {
+      lineaReencuadrada.current = lineaFilter;
+      setFitKeyOverride((k) => k + 1);
+    }
+  }, [hayMapaLinea, lineaFilter]);
 
   // Animación del marcador de vehículo (`route-map-impl.tsx` hace el trabajo real — ver el
   // comentario de `animatedVehicle` en `RouteMapProps`). Solo se anima la sesión CON DETALLE
