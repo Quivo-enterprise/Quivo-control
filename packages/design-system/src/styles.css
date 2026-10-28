@@ -3235,6 +3235,32 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   text-align: left;
 }
 
+/* Vacío con la ruta de la línea filtrada: tarjeta compacta que deja ver y tocar el mapa. */
+.qv-live-pagina--sobre-mapa {
+  overflow: visible;
+  background: transparent;
+  pointer-events: none;
+}
+.qv-live-vacio--compacto {
+  position: absolute;
+  top: 4.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(26rem, calc(100% - 2rem));
+  min-height: 0;
+  max-height: calc(100% - 5.5rem);
+  overflow-y: auto;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--qv-border-subtle);
+  border-radius: var(--qv-radius-lg);
+  background: var(--qv-surface-card);
+  pointer-events: auto;
+}
+.qv-live-vacio--compacto .qv-live-vacio__icono {
+  display: none;
+}
+
 /* Panel de flota (izquierda). */
 .qv-live-flota {
   flex: none;

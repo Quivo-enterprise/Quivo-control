@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContextoEnVivo, PosicionEnVivo, PuntoControl, Ruta } from '@quivo/shared';
-import { construirMarcadoresVehiculos, construirPuntosControl, construirMapaDeLinea, construirRutas, idMarcadorVehiculo } from './map-builders';
+import { construirMarcadoresVehiculos, construirPuntosControl, construirMapaDeLinea, construirRutas, idMarcadorVehiculo, vacioSobreMapa } from './map-builders';
 
 // Fixture mínima de `PosicionEnVivo` (`GET /reportes/en-vivo/posiciones`, Entregas 10/13):
 // todos los campos que NO le importan a `map-builders.ts` quedan con un valor fijo cualquiera
@@ -320,5 +320,17 @@ describe('construirPuntosControl', () => {
       'Punto de control 2',
       'Punto de control 3',
     ]);
+  });
+});
+
+describe('vacioSobreMapa', () => {
+  it('con línea filtrada y ruta (o cargándola) deja el mapa visible', () => {
+    expect(vacioSobreMapa('l1', true, false)).toBe(true);
+    expect(vacioSobreMapa('l1', false, true)).toBe(true);
+  });
+
+  it('sin filtro de línea, o sin ruta, mantiene el vacío a pantalla completa', () => {
+    expect(vacioSobreMapa('', true, false)).toBe(false);
+    expect(vacioSobreMapa('l1', false, false)).toBe(false);
   });
 });

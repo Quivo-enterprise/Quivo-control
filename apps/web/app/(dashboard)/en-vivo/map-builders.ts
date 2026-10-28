@@ -306,3 +306,8 @@ export function mensajeError(err: unknown): string {
   if (err instanceof ApiError) return err.message;
   return err instanceof Error ? err.message : 'Error inesperado';
 }
+
+/** Sin vehículos pero con línea filtrada y su ruta (o cargándola): el vacío va como tarjeta sobre el mapa, no a pantalla completa. */
+export function vacioSobreMapa(lineaFilter: string, hayMapaLinea: boolean, cargandoRuta: boolean): boolean {
+  return Boolean(lineaFilter) && (hayMapaLinea || cargandoRuta);
+}
