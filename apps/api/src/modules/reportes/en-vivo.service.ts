@@ -681,7 +681,7 @@ export class EnVivoService {
           lng: f.lng,
           accuracy: f.accuracy,
           // Detenido: la velocidad del último fix es de cuando aún andaba; no se muestra rodando.
-          speed: frescura.estadoFrescura === 'detenido' ? 0 : f.speed,
+          speed: frescura.estadoFrescura === 'detenido' && f.speed != null ? 0 : f.speed,
           totalPuntos: f.totalPuntos ?? 0,
           ...frescura,
         });
@@ -849,7 +849,9 @@ export class EnVivoService {
         SELECT max(ts) AS "ultimoFixTs",
                max(received_at) AS "ultimoIngresoTs",
                count(*)::int AS "totalPuntos",
-               (SELECT max(ultimo_movimiento_ts) FROM gps_sesion_resumen WHERE sesion_id = ${sesionId}::uuid) AS "ultimoMovimientoTs"
+               (SELECT gr.ultimo_movimiento_ts FROM gps_sesion_resumen gr
+                 WHERE gr.sesion_id = ${sesionId}::uuid AND gr."sindicatoId" = ${sesion.sindicatoId}
+                 ORDER BY gr.ultimo_fix_ts DESC LIMIT 1) AS "ultimoMovimientoTs"
         FROM gps_points
         WHERE sesion_id = ${sesionId}::uuid AND ts >= ${piso} AND ts < ${techo}
       `;

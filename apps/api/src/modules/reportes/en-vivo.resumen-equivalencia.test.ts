@@ -43,6 +43,10 @@ const AHORA = (() => {
   return new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate(), 12));
 })();
 
+// El movimiento guardado se acota a now() (reloj de DB): AHORA (12:00 UTC de hoy) puede ser futuro,
+// así que los tests de movimiento cuelgan de ayer, que siempre es pasado.
+const MOV_BASE = new Date(AHORA.getTime() - 24 * 60 * 60 * 1000);
+
 function evento(overrides: Partial<EventoSync> & { payload: EventoSync['payload'] }): EventoSync {
   return {
     eventId: randomUUID(),
@@ -199,6 +203,9 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
       // abajo puede fallar con "no partition of relation found for row" en una base migrada
       // hace varios días (mismo motivo por el que `en-vivo.service.test.ts` la llama también).
       await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE)`;
+      // Los tests de movimiento usan ayer (ver MOV_BASE) y un fix de ahora + 2 h (puede cruzar 00:00 UTC).
+      await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE - 1)`;
+      await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE + 1)`;
     });
   });
 
@@ -317,7 +324,7 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
 
   it('ultimo_movimiento_ts: primer fix cuenta; latido quieto (<30 m, <2 m/s) no avanza; ≥30 m o ≥2 m/s sí', async () => {
     const sesionId = sesionMovimientoId;
-    const t = (min: number) => new Date(AHORA.getTime() - min * MINUTO).toISOString();
+    const t = (min: number) => new Date(MOV_BASE.getTime() - min * MINUTO).toISOString();
     const ingerir = (min: number, lat: number, lng: number, speed: number | null) =>
       withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
         insertarGpsPoints(tx, sindicatoId, [
@@ -376,7 +383,8 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
         },
       };
     };
-    const min = (m: number) => new Date(AHORA.getTime() - m * MINUTO);
+    const min = (m: number) => new Date(MOV_BASE.getTime() - m * MINUTO);
+    const minHoy = (m: number) => new Date(AHORA.getTime() - m * MINUTO);
     const M = 0.00001; // grados de latitud ≈ 1.11 m
 
     it('arrastre lento (24 m por fix, speed null): se acumula contra el ancla y cuenta al 2.º fix', async () => {
@@ -419,25 +427,58 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
       expect(despues[0]).toBe(antes[0]); // la fila nueva hereda, no arranca en "ahora"
     });
 
-    it('obtenerTraza y obtenerPosiciones coinciden en detenido (y speed 0)', async () => {
-      const service = new EnVivoService();
-      const sesionId = sesionMovimientoId;
-      // La sesión del primer test quedó con último movimiento hace >15 min; este latido es quieto.
-      await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
-        insertarGpsPoints(tx, sindicatoId, [
-          evento({ ts: min(1).toISOString(), payload: { sesionId, lat: -17.7807, lng: -63.18, accuracy: 5, speed: 0 } }),
-        ]),
-      );
-      // `received_at` es el reloj real; el test usa AHORA fijo: se alinea para que la ingesta cuente "viva".
-      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-        await tx.$executeRaw`UPDATE gps_sesion_resumen SET ultimo_ingreso_ts = ${AHORA} WHERE sesion_id = ${sesionId}::uuid`;
-        await tx.$executeRaw`UPDATE gps_points SET received_at = ${AHORA} WHERE sesion_id = ${sesionId}::uuid`;
+    it('speed >= 2 con accuracy 70 no es movimiento', async () => {
+      const s = nueva();
+      await s.ingerir(min(30), -17.78, -63.18, 5, 0);
+      await s.ingerir(min(29), -17.78, -63.18, 70, 3);
+      expect(await s.movimiento()).toEqual([min(30).toISOString()]);
+    });
+
+    it('fix con reloj adelantado (ahora + 2 h) y speed >= 2: el movimiento guardado no pasa de ahora', async () => {
+      const s = nueva();
+      await s.ingerir(new Date(Date.now() + 2 * 60 * MINUTO), -17.78, -63.18, 5, 3);
+      const [m] = await s.movimiento();
+      expect(new Date(m!).getTime()).toBeLessThanOrEqual(Date.now());
+    });
+
+    describe('lectura de sesión detenida', () => {
+      // Estado propio: no depende de otros `it`.
+      const preparar = async (speed: number | null) => {
+        const sesionId = sesionMovimientoId;
+        await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+          await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id = ${sesionId}::uuid`;
+          await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id = ${sesionId}::uuid`;
+        });
+        await withTenantContext({ rol: 'admin_quivo', sindicatoId }, async (tx) => {
+          await insertarGpsPoints(tx, sindicatoId, [
+            evento({ ts: minHoy(30).toISOString(), payload: { sesionId, lat: -17.78, lng: -63.18, accuracy: 5, speed: 0 } }),
+            evento({ ts: minHoy(1).toISOString(), payload: { sesionId, lat: -17.78, lng: -63.18, accuracy: 5, speed } }),
+          ]);
+        });
+        // `received_at` es el reloj real; el test usa AHORA fijo: se alinea para que la ingesta cuente "viva".
+        await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+          await tx.$executeRaw`UPDATE gps_sesion_resumen SET ultimo_ingreso_ts = ${AHORA} WHERE sesion_id = ${sesionId}::uuid`;
+          await tx.$executeRaw`UPDATE gps_points SET received_at = ${AHORA} WHERE sesion_id = ${sesionId}::uuid`;
+        });
+        const service = new EnVivoService();
+        return {
+          traza: await service.obtenerTraza(adminQuivo, sesionId, { limite: 100 }, AHORA),
+          pos: (await service.obtenerPosiciones(adminQuivo, AHORA)).find((f) => f.id === sesionId),
+        };
+      };
+
+      it('obtenerTraza y obtenerPosiciones coinciden en detenido (y speed 0)', async () => {
+        const { traza, pos } = await preparar(0);
+        expect(traza.estadoFrescura).toBe('detenido');
+        expect(pos?.estadoFrescura).toBe('detenido');
+        expect(pos?.speed).toBe(0);
       });
-      const traza = await service.obtenerTraza(adminQuivo, sesionId, { limite: 100 }, AHORA);
-      const pos = (await service.obtenerPosiciones(adminQuivo, AHORA)).find((f) => f.id === sesionId);
-      expect(traza.estadoFrescura).toBe('detenido');
-      expect(pos?.estadoFrescura).toBe('detenido');
-      expect(pos?.speed).toBe(0);
+
+      it('detenido con speed desconocida (null) la deja null', async () => {
+        const { pos } = await preparar(null);
+        expect(pos?.estadoFrescura).toBe('detenido');
+        expect(pos?.speed).toBeNull();
+      });
     });
   });
 

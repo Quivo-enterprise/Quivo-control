@@ -48,9 +48,13 @@ const distanciaSql = (aLat: string, aLng: string, bLat: string, bLng: string) =>
     `sqrt(power((${aLat} - ${bLat}) * 111320, 2) + power((${aLng} - ${bLng}) * 111320 * cos(radians(${bLat})), 2))`,
   );
 
+/** SQL: el fix tiene accuracy NULL o <= umbral (Transistorsoft siempre la manda, NULL cuenta como preciso). */
+const precisaSql = (acc: string) =>
+  Prisma.sql`(${Prisma.raw(acc)} IS NULL OR ${Prisma.raw(acc)} <= ${UMBRAL_PRECISION_MOVIMIENTO_M})`;
+
 /** SQL: el fix (lat/lng/acc) se alejó del ancla ≥ max(umbral, accuracy) y es lo bastante preciso. */
 const seMovioSql = (lat: string, lng: string, acc: string, ancLat: string, ancLng: string) =>
-  Prisma.sql`(${Prisma.raw(acc)} IS NULL OR ${Prisma.raw(acc)} <= ${UMBRAL_PRECISION_MOVIMIENTO_M})
+  Prisma.sql`${precisaSql(acc)}
     AND ${distanciaSql(lat, lng, ancLat, ancLng)} >= GREATEST(${UMBRAL_DISTANCIA_MOVIMIENTO_M}::float8, COALESCE(${Prisma.raw(acc)}, 0))`;
 
 const CONTEXTO_ADMIN = { rol: 'admin_quivo', sindicatoId: null } as const;
@@ -871,6 +875,11 @@ export async function insertarGpsPoints(
   // outbox móvil reenviando tras estar offline) nunca pisa la última posición conocida.
   // `"sindicatoId"` NUNCA se toca en el `SET` — es parte de la PK, no hay fila existente con
   // otro valor con la que pueda entrar en conflicto.
+  // Movimiento del DO UPDATE contra la fila bloqueada (Postgres no deja referenciar columnas calculadas ahí).
+  const seMovioUpd = seMovioSql('EXCLUDED.lat', 'EXCLUDED.lng', 'EXCLUDED.accuracy', 'COALESCE(gps_sesion_resumen.mov_lat, gps_sesion_resumen.lat)', 'COALESCE(gps_sesion_resumen.mov_lng, gps_sesion_resumen.lng)');
+  // EXCLUDED.ultimo_movimiento_ts no nulo = velocidad (o herencia) del lote; el ancla igual exige último punto preciso.
+  const mueveAnclaUpd = Prisma.sql`EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts
+          AND (${seMovioUpd} OR (${precisaSql('EXCLUDED.accuracy')} AND EXCLUDED.ultimo_movimiento_ts IS NOT NULL))`;
   await tx.$executeRaw(Prisma.sql`
     WITH ins AS (
       INSERT INTO gps_points (event_id, sesion_id, device_id, ts, lat, lng, accuracy, speed, received_at, "sindicatoId")
@@ -886,7 +895,8 @@ export async function insertarGpsPoints(
         count(*)::int AS total_puntos,
         max(ts) AS ultimo_fix_ts,
         max(received_at) AS ultimo_ingreso_ts,
-        max(ts) FILTER (WHERE speed >= ${UMBRAL_VELOCIDAD_MOVIMIENTO_MS}) AS mov_velocidad_ts
+        -- LEAST(ts, now()): un reloj de dispositivo adelantado no deja el movimiento en el futuro.
+        max(LEAST(ts, now())) FILTER (WHERE speed >= ${UMBRAL_VELOCIDAD_MOVIMIENTO_MS} AND ${precisaSql('accuracy')}) AS mov_velocidad_ts
       FROM ins
       GROUP BY sesion_id, ((ts AT TIME ZONE 'UTC') - interval '4 hours')::date, "sindicatoId"
     ),
@@ -904,22 +914,23 @@ export async function insertarGpsPoints(
     SELECT
       a.sesion_id, a.jornada, a."sindicatoId", a.total_puntos, a.ultimo_fix_ts, a.ultimo_ingreso_ts,
       u.lat, u.lng, u.accuracy, u.speed,
+      -- shortcut: e.existe es un snapshot; dos primeros lotes concurrentes pueden registrar un movimiento espurio (≤15 min reportando), subir a lock si molesta.
+      -- shortcut: accuracy NULL cuenta como preciso (Transistorsoft siempre la manda), exigirla si entra otro origen.
+      -- shortcut: filas creadas por el worker viejo en la ventana de deploy quedan con ultimo_movimiento_ts NULL: el lector cae a la edad del fix hasta el próximo movimiento, backfill si pesa.
       -- Fila que YA existía (snapshot): el DO UPDATE no usa estos dos valores como están; solo
       -- necesita la velocidad cruda del lote (a.mov_velocidad_ts) y la posición candidata
       -- (EXCLUDED.lat/lng/accuracy), y decide contra la fila bloqueada. Fila NUEVA (primer fix, o
       -- cambio de jornada a medianoche): hereda ts y ancla de la jornada previa de la sesión y
       -- aplica la misma regla contra ese ancla; sin jornada previa, el primer fix cuenta.
+      -- LEAST(.., now()): un reloj de dispositivo adelantado no deja el movimiento en el futuro
+      -- (se aplica a valores no nulos: LEAST ignora NULL y devolvería now()).
       CASE WHEN e.existe THEN a.mov_velocidad_ts
-        WHEN p.sesion_id IS NULL THEN a.ultimo_fix_ts
+        WHEN p.sesion_id IS NULL THEN LEAST(a.ultimo_fix_ts, now())
         ELSE COALESCE(
-          GREATEST(a.mov_velocidad_ts, CASE WHEN ${seMovioSql('u.lat', 'u.lng', 'u.accuracy', 'COALESCE(p.mov_lat, p.lat)', 'COALESCE(p.mov_lng, p.lng)')} THEN a.ultimo_fix_ts END),
-          p.ultimo_movimiento_ts, p.ultimo_fix_ts) END,
-      CASE WHEN p.sesion_id IS NULL OR a.mov_velocidad_ts IS NOT NULL
-          OR ${seMovioSql('u.lat', 'u.lng', 'u.accuracy', 'COALESCE(p.mov_lat, p.lat)', 'COALESCE(p.mov_lng, p.lng)')}
-        THEN u.lat ELSE COALESCE(p.mov_lat, p.lat) END,
-      CASE WHEN p.sesion_id IS NULL OR a.mov_velocidad_ts IS NOT NULL
-          OR ${seMovioSql('u.lat', 'u.lng', 'u.accuracy', 'COALESCE(p.mov_lat, p.lat)', 'COALESCE(p.mov_lng, p.lng)')}
-        THEN u.lng ELSE COALESCE(p.mov_lng, p.lng) END,
+          GREATEST(a.mov_velocidad_ts, CASE WHEN m.se_movio THEN LEAST(a.ultimo_fix_ts, now()) END),
+          LEAST(COALESCE(p.ultimo_movimiento_ts, p.ultimo_fix_ts), now())) END,
+      CASE WHEN n.ancla THEN u.lat ELSE COALESCE(p.mov_lat, p.lat) END,
+      CASE WHEN n.ancla THEN u.lng ELSE COALESCE(p.mov_lng, p.lng) END,
       now()
     FROM agregados a
     JOIN ultimo_punto u ON u.sesion_id = a.sesion_id AND u.jornada = a.jornada AND u."sindicatoId" = a."sindicatoId"
@@ -936,6 +947,15 @@ export async function insertarGpsPoints(
       ORDER BY pr.jornada DESC
       LIMIT 1
     ) p ON true
+    -- Predicado de movimiento UNA vez por fila. El ancla solo se mueve si el último punto (la
+    -- posición candidata) es preciso Y hubo velocidad ≥ umbral en el lote o desplazamiento.
+    -- shortcut: el primer fix de una sesión (p null) es el ancla sin chequeo de accuracy; subir a exigirlo si aparecen anclas malas.
+    CROSS JOIN LATERAL (
+      SELECT ${seMovioSql('u.lat', 'u.lng', 'u.accuracy', 'COALESCE(p.mov_lat, p.lat)', 'COALESCE(p.mov_lng, p.lng)')} AS se_movio
+    ) m
+    CROSS JOIN LATERAL (
+      SELECT (p.sesion_id IS NULL OR m.se_movio OR (${precisaSql('u.accuracy')} AND a.mov_velocidad_ts IS NOT NULL)) AS ancla
+    ) n
     ORDER BY a.sesion_id, a.jornada, a."sindicatoId"
     ON CONFLICT (sesion_id, jornada, "sindicatoId") DO UPDATE SET
       total_puntos = gps_sesion_resumen.total_puntos + EXCLUDED.total_puntos,
@@ -953,16 +973,11 @@ export async function insertarGpsPoints(
       ultimo_movimiento_ts = GREATEST(
         gps_sesion_resumen.ultimo_movimiento_ts,
         EXCLUDED.ultimo_movimiento_ts,
-        CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts
-          AND ${seMovioSql('EXCLUDED.lat', 'EXCLUDED.lng', 'EXCLUDED.accuracy', 'COALESCE(gps_sesion_resumen.mov_lat, gps_sesion_resumen.lat)', 'COALESCE(gps_sesion_resumen.mov_lng, gps_sesion_resumen.lng)')}
-          THEN EXCLUDED.ultimo_fix_ts END),
-      mov_lat = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts
-          AND (EXCLUDED.ultimo_movimiento_ts IS NOT NULL
-            OR ${seMovioSql('EXCLUDED.lat', 'EXCLUDED.lng', 'EXCLUDED.accuracy', 'COALESCE(gps_sesion_resumen.mov_lat, gps_sesion_resumen.lat)', 'COALESCE(gps_sesion_resumen.mov_lng, gps_sesion_resumen.lng)')})
+        CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts AND ${seMovioUpd}
+          THEN LEAST(EXCLUDED.ultimo_fix_ts, now()) END),
+      mov_lat = CASE WHEN ${mueveAnclaUpd}
         THEN EXCLUDED.lat ELSE COALESCE(gps_sesion_resumen.mov_lat, gps_sesion_resumen.lat) END,
-      mov_lng = CASE WHEN EXCLUDED.ultimo_fix_ts > gps_sesion_resumen.ultimo_fix_ts
-          AND (EXCLUDED.ultimo_movimiento_ts IS NOT NULL
-            OR ${seMovioSql('EXCLUDED.lat', 'EXCLUDED.lng', 'EXCLUDED.accuracy', 'COALESCE(gps_sesion_resumen.mov_lat, gps_sesion_resumen.lat)', 'COALESCE(gps_sesion_resumen.mov_lng, gps_sesion_resumen.lng)')})
+      mov_lng = CASE WHEN ${mueveAnclaUpd}
         THEN EXCLUDED.lng ELSE COALESCE(gps_sesion_resumen.mov_lng, gps_sesion_resumen.lng) END,
       ultimo_fix_ts = GREATEST(gps_sesion_resumen.ultimo_fix_ts, EXCLUDED.ultimo_fix_ts),
       updated_at = now()
