@@ -845,7 +845,7 @@ function ModalSancion({
       sujetoTipos={['conductor', 'vehiculo']}
       sujetosPermitidos={{ conductor: inf.conductorId, vehiculo: inf.vehiculoId }}
       sujetosEtiquetas={{ conductor: conductor || undefined, vehiculo: placa || undefined }}
-      avisoRegla="No hay una regla de Alteración de ruta; elegí la regla."
+      avisoRegla="No hay una regla activa para este tipo de infracción; elegí la regla."
       valoresIniciales={{
         reglaId,
         sujetoTipo: 'conductor',

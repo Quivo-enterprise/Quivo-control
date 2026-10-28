@@ -705,15 +705,11 @@ describe('detección de infracciones (PR A)', () => {
       ...extra,
     });
 
-    it('pc_omitido es solo alerta: sancionar da 409 y no crea sanción ni cambia la infracción', async () => {
+    it('pc_omitido es sancionable: crea la sanción y marca la infracción sancionada', async () => {
       const pcAbierta = (await infraccionesDe(sesionPc)).find((i) => i.tipo === 'pc_omitido' && i.estado === 'abierta')!;
-      const antes = await withTenantContext(ADMIN, (tx) => tx.sancion.count({ where: { sindicatoId: sindicatoA } }));
-      await expect(infracciones.sancionar(adminA, pcAbierta.id, sancionDe())).rejects.toBeInstanceOf(
-        ConflictException,
-      );
-      expect(await withTenantContext(ADMIN, (tx) => tx.sancion.count({ where: { sindicatoId: sindicatoA } }))).toBe(antes);
-      const despues = (await infraccionesDe(sesionPc)).find((i) => i.id === pcAbierta.id)!;
-      expect(despues).toMatchObject({ estado: 'abierta', sancionId: null });
+      const r = await infracciones.sancionar(adminA, pcAbierta.id, sancionDe());
+      expect(r).toMatchObject({ id: pcAbierta.id, estado: 'sancionada' });
+      expect(r.sancionId).toBeTruthy();
     });
 
     it('el sujeto debe ser el conductor o el vehículo de la infracción (400); socio no se admite', async () => {
@@ -757,8 +753,8 @@ describe('detección de infracciones (PR A)', () => {
       // Abiertas en la sesión de desvío: la gravísima (activa) — la grave quedó sancionada.
       expect(desvio).toMatchObject({ vehiculoId: vehiculoDesvioId, conductorId, infraccionNivel: 'gravisima', infraccionesAbiertas: 1 });
       const pcSesion = posiciones.find((p) => p.id === sesionPc);
-      // La sesión de PC no tiene gps: puede no tener fix pero sigue listada por estar activa.
-      expect(pcSesion).toMatchObject({ vehiculoId: vehiculoPcId, conductorId, infraccionNivel: 'leve', infraccionesAbiertas: 2 });
+      // La sesión de PC no tiene gps: puede no tener fix pero sigue listada por estar activa (2 abiertas menos la sancionada arriba).
+      expect(pcSesion).toMatchObject({ vehiculoId: vehiculoPcId, conductorId, infraccionNivel: 'leve', infraccionesAbiertas: 1 });
       const sinInfracciones = posiciones.find((p) => p.id === sesionSinInicio)!;
       expect(sinInfracciones).toMatchObject({ infraccionNivel: null, infraccionesAbiertas: 0 });
     });

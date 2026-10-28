@@ -208,11 +208,11 @@ export function duracionInfraccion(i: Pick<Infraccion, 'inicioTs' | 'finTs'>): s
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
 }
 
-/** `desvio_ruta` y `molinos_omitido` se pueden sancionar; `pc_omitido` y `espera_corta` son solo
+/** `desvio_ruta`, `molinos_omitido` y `pc_omitido` se pueden sancionar; `espera_corta` es solo
  * alerta (la API da 409). */
 export function puedeSancionar(i: Pick<Infraccion, 'tipo' | 'estado'>): boolean {
   return (
-    (i.tipo === 'desvio_ruta' || i.tipo === 'molinos_omitido') &&
+    (i.tipo === 'desvio_ruta' || i.tipo === 'molinos_omitido' || i.tipo === 'pc_omitido') &&
     (i.estado === 'abierta' || i.estado === 'atendida')
   );
 }
@@ -243,13 +243,14 @@ export function reglasSancionables<R extends { sindicatoId: string; estado: stri
 }
 
 /** Regla preseleccionada de la sanción: la de la infracción si sigue activa; si no, la regla activa
- * de "Alteración de ruta". Sin ninguna, `undefined`: el admin la elige (no se asume la primera). */
+ * del mismo tipo (las infracciones previas a la regla no tienen `reglaId`); si no, la de "Alteración
+ * de ruta". Sin ninguna, `undefined`: el admin la elige (no se asume la primera). */
 export function reglaInicialSancion(
-  inf: Pick<Infraccion, 'reglaId'>,
+  inf: Pick<Infraccion, 'reglaId' | 'tipo'>,
   reglasActivas: { id: string; tipo: string }[],
 ): string | undefined {
   if (inf.reglaId && reglasActivas.some((r) => r.id === inf.reglaId)) return inf.reglaId;
-  return reglasActivas.find((r) => r.tipo === 'desvio_ruta')?.id;
+  return (reglasActivas.find((r) => r.tipo === inf.tipo) ?? reglasActivas.find((r) => r.tipo === 'desvio_ruta'))?.id;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -39,8 +39,8 @@ describe('infraccion', () => {
     });
     // Los tipos reservados cubren exactamente los tipos de infracción.
     expect([...REGLA_TIPOS_RESERVADOS_INFRACCION].sort()).toEqual([...TipoInfraccionSchema.options].sort());
-    // `pc_omitido` y `espera_corta` son solo alerta (la API responde 409 al sancionar).
-    expect([...TIPOS_INFRACCION_SOLO_ALERTA].sort()).toEqual(['espera_corta', 'pc_omitido']);
+    // Solo `espera_corta` es solo alerta (la API responde 409 al sancionar); `pc_omitido` se sanciona.
+    expect([...TIPOS_INFRACCION_SOLO_ALERTA]).toEqual(['espera_corta']);
   });
 
   it('ActualizarInfraccion: acción acotada y nota <= 500', () => {

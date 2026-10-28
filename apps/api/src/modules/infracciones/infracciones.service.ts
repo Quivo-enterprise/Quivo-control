@@ -83,7 +83,7 @@ export class InfraccionesService {
    * `sancionada` con `sancionId`, todo en UNA transacción: si cualquiera falla (regla
    * inexistente, estado inválido) no queda ni sanción huérfana ni infracción marcada.
    *
-   * Reglas de negocio: `pc_omitido` y `espera_corta` son solo alerta (decisión del CTO) → 409; el sujeto debe ser
+   * Reglas de negocio: `espera_corta` es solo alerta (decisión del CTO) → 409; el sujeto debe ser
    * el conductor o el vehículo de la propia infracción → 400; `evidenciaRef` por defecto
    * `infraccion:{id} sesion:{sesionId}`.
    */
@@ -94,11 +94,7 @@ export class InfraccionesService {
         throw new NotFoundException('Infracción no encontrada');
       }
       if ((TIPOS_INFRACCION_SOLO_ALERTA as readonly string[]).includes(infraccion.tipo)) {
-        throw new ConflictException(
-          infraccion.tipo === 'espera_corta'
-            ? 'Una infracción de espera corta en Molinos es solo una alerta: no se puede sancionar'
-            : 'Una infracción de punto de control omitido es solo una alerta: no se puede sancionar',
-        );
+        throw new ConflictException('Una infracción de espera corta en Molinos es solo una alerta: no se puede sancionar');
       }
       const sujetoEsperado =
         data.sujetoTipo === 'conductor'

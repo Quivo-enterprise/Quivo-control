@@ -101,7 +101,7 @@ describe('infracciones del panel', () => {
   it('el desvío y Molinos omitido se pueden sancionar; PC omitido y espera corta son solo alerta', () => {
     expect(puedeSancionar(base)).toBe(true);
     expect(puedeSancionar({ ...base, estado: 'sancionada' })).toBe(false);
-    expect(puedeSancionar({ ...base, tipo: 'pc_omitido' })).toBe(false);
+    expect(puedeSancionar({ ...base, tipo: 'pc_omitido' })).toBe(true);
     expect(puedeSancionar({ ...base, tipo: 'espera_corta' })).toBe(false);
     expect(puedeSancionar({ ...base, tipo: 'molinos_omitido' })).toBe(true);
   });
@@ -159,12 +159,18 @@ describe('reglaInicialSancion', () => {
     { id: 'r2', tipo: 'desvio_ruta' },
   ];
   it('usa la regla de la infracción si sigue activa', () => {
-    expect(reglaInicialSancion({ reglaId: 'r1' }, reglas)).toBe('r1');
+    expect(reglaInicialSancion({ reglaId: 'r1', tipo: 'desvio_ruta' }, reglas)).toBe('r1');
   });
   it('si no, la regla activa de desvío; sin ninguna, undefined (no se asume la primera)', () => {
-    expect(reglaInicialSancion({ reglaId: null }, reglas)).toBe('r2');
-    expect(reglaInicialSancion({ reglaId: 'inactiva' }, reglas)).toBe('r2');
-    expect(reglaInicialSancion({ reglaId: null }, [{ id: 'r1', tipo: 'otro' }])).toBeUndefined();
+    expect(reglaInicialSancion({ reglaId: null, tipo: 'desvio_ruta' }, reglas)).toBe('r2');
+    expect(reglaInicialSancion({ reglaId: 'inactiva', tipo: 'desvio_ruta' }, reglas)).toBe('r2');
+    expect(reglaInicialSancion({ reglaId: null, tipo: 'desvio_ruta' }, [{ id: 'r1', tipo: 'otro' }])).toBeUndefined();
+  });
+  it('sin reglaId (infracción previa a la regla): la activa del mismo tipo, antes que desvío', () => {
+    const con = [...reglas, { id: 'r3', tipo: 'pc_omitido' }];
+    expect(reglaInicialSancion({ reglaId: null, tipo: 'pc_omitido' }, con)).toBe('r3');
+    expect(reglaInicialSancion({ reglaId: 'inactiva', tipo: 'pc_omitido' }, con)).toBe('r3');
+    expect(reglaInicialSancion({ reglaId: null, tipo: 'pc_omitido' }, reglas)).toBe('r2');
   });
 });
 
@@ -177,11 +183,11 @@ describe('reglasSancionables (sindicato de la infracción)', () => {
   });
   it('con una regla de desvío ajena primero, la preselección es la del sindicato propio', () => {
     const reglas = reglasSancionables([ajena, propia], 'S1');
-    expect(reglaInicialSancion({ reglaId: null }, reglas)).toBe('r2');
-    expect(reglaInicialSancion({ reglaId: 'rx' }, reglas)).toBe('r2');
+    expect(reglaInicialSancion({ reglaId: null, tipo: 'desvio_ruta' }, reglas)).toBe('r2');
+    expect(reglaInicialSancion({ reglaId: 'rx', tipo: 'desvio_ruta' }, reglas)).toBe('r2');
   });
   it('sin regla de desvío propia no hay preselección (nunca la ajena)', () => {
-    expect(reglaInicialSancion({ reglaId: null }, reglasSancionables([ajena], 'S1'))).toBeUndefined();
+    expect(reglaInicialSancion({ reglaId: null, tipo: 'desvio_ruta' }, reglasSancionables([ajena], 'S1'))).toBeUndefined();
   });
 });
 
