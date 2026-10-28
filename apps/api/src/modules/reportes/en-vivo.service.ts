@@ -91,7 +91,7 @@ interface PosicionEnVivoRow {
   recorridoEstadoTs: Date | null;
   // PR C — `vehiculos.fotoUrl` (JOIN directo, sin costo extra de query).
   fotoUrl: string | null;
-  // Última `observacion` (incidencia del chofer) de la sesión; las tres son null si no hay.
+  // Última `observacion` (incidencia del chofer) de la sesión; todos null si no hay (el mapper se guarda por `incId`).
   incId: string | null;
   incCategoria: string | null;
   incTexto: string | null;
@@ -111,8 +111,8 @@ interface IncidenciaRow {
 function aIncidencia(i: IncidenciaRow) {
   return {
     id: i.id,
-    categoria: i.categoria ?? 'incidente',
-    texto: (i.texto ?? 'Incidencia').slice(0, 200),
+    categoria: (i.categoria ?? '').trim() || 'incidente',
+    texto: ((i.texto ?? '').trim() || 'Incidencia').slice(0, 200),
     ts: i.ts.toISOString(),
     recibidoTs: i.recibidoTs.toISOString(),
   };
@@ -585,14 +585,14 @@ export class EnVivoService {
           WHERE v."sesionId" = so.id AND v.estado = 'en_curso' AND v."sindicatoId" = so."sindicatoId"
           LIMIT 1
         ) vu ON true
-        -- Última incidencia del chofer (evento observacion): índice (sesionId, tipo, ts), un
+        -- Última incidencia del chofer (evento observacion): índice (sesionId, tipo, receivedAt), un
         -- acceso por sesión. Piso de 24 h rodantes, igual que el LATERAL de posiciones. "Última" =
         -- la última RECIBIDA (receivedAt, reloj del servidor); ts es del dispositivo.
         LEFT JOIN LATERAL (
           SELECT e.id, e.payload->>'categoria' AS categoria, e.payload->>'texto' AS texto, e.ts,
                  e."receivedAt" AS "recibidoTs"
           FROM eventos_operativos e
-          WHERE e."sesionId" = so.id AND e.tipo = 'observacion' AND e.ts >= ${posicionesDesde}
+          WHERE e."sesionId" = so.id AND e.tipo = 'observacion' AND e."receivedAt" >= ${posicionesDesde}
             AND e."sindicatoId" = so."sindicatoId"
           ORDER BY e."receivedAt" DESC
           LIMIT 1
@@ -744,8 +744,8 @@ export class EnVivoService {
                "receivedAt" AS "recibidoTs"
         FROM eventos_operativos
         WHERE "sesionId" = ${sesionId} AND "sindicatoId" = ${sesion.sindicatoId} AND tipo = 'observacion'
-          AND ts >= ${new Date(ahora.getTime() - 24 * 60 * MINUTO_MS)}
-        ORDER BY ts DESC
+          AND "receivedAt" >= ${new Date(ahora.getTime() - 24 * 60 * MINUTO_MS)}
+        ORDER BY "receivedAt" DESC
         LIMIT 50
       `;
 

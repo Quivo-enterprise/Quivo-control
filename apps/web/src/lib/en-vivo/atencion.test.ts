@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EstadoFrescuraSchema, type PosicionEnVivo } from '@quivo/shared';
 import {
+  incidenciasVisibles,
   colasVerificadas,
   colasVisibles,
   ORDEN_ESTADOS_FRESCURA,
@@ -54,6 +55,17 @@ describe('incidencias del chofer', () => {
     const otra = pos({ id: 'b', vehiculoPlaca: 'AAA', ultimaIncidencia: inc(1) });
     expect(puntajeAtencion(salud)).toBeGreaterThan(puntajeAtencion(otra));
     expect(listaAtencion([otra, salud], new Map()).map((f) => f.posicion.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('incidenciasVisibles', () => {
+  const inc = (id: string) => ({ id, categoria: 'salud', texto: id, ts: 't', recibidoTs: 't' });
+  it('antepone la última en vivo si no está en el contexto', () => {
+    expect(incidenciasVisibles([inc('a')], inc('b')).map((i) => i.id)).toEqual(['b', 'a']);
+  });
+  it('no duplica si ya está, ni falla sin última', () => {
+    expect(incidenciasVisibles([inc('a')], inc('a')).map((i) => i.id)).toEqual(['a']);
+    expect(incidenciasVisibles([inc('a')], null).map((i) => i.id)).toEqual(['a']);
   });
 });
 

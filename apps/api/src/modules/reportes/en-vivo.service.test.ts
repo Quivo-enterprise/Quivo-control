@@ -376,6 +376,8 @@ describe('EnVivoService', () => {
             deviceId: 'device-en-vivo-1',
             tipo: 'observacion',
             ts: new Date(ahora.getTime() - min * MINUTO),
+            // Las incidencias se ordenan y se acotan por recepción (reloj del servidor), no por `ts`.
+            receivedAt: new Date(ahora.getTime() - min * MINUTO + 1000),
             payload: { sesionId: sesionConPuntosId, texto, categoria },
           },
         });
@@ -837,7 +839,7 @@ describe('EnVivoService', () => {
         categoria: 'salud',
         texto: 'Salud',
         ts: new Date(AHORA.getTime() - 3 * MINUTO).toISOString(),
-        recibidoTs: expect.any(String),
+        recibidoTs: new Date(AHORA.getTime() - 3 * MINUTO + 1000).toISOString(),
       });
 
       const sinPuntos = filas.find((f) => f.id === sesionSinPuntosId);

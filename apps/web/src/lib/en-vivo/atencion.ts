@@ -2,6 +2,7 @@ import {
   EstadoFrescuraSchema,
   GRAVEDAD_ORDEN,
   type EstadoFrescura,
+  type IncidenciaEnVivo,
   type MolinosCola,
   type MolinosResumen,
   type PosicionEnVivo,
@@ -153,4 +154,9 @@ export function colasVerificadas(
 /** Colas de Molinos con gente, de la línea elegida (`''` = todas). */
 export function colasVisibles(colas: readonly MolinosCola[] | undefined, lineaId: string): MolinosCola[] {
   return (colas ?? []).filter((c) => c.entradas.length > 0 && (!lineaId || c.lineas.some((l) => l.lineaId === lineaId)));
+}
+
+/** Incidencias del contexto; si la última de la posición (en vivo) no está, va primero. */
+export function incidenciasVisibles(lista: IncidenciaEnVivo[], ultima: IncidenciaEnVivo | null | undefined) {
+  return ultima && !lista.some((i) => i.id === ultima.id) ? [ultima, ...lista] : lista;
 }
