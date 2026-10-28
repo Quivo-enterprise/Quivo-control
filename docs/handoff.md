@@ -26,11 +26,18 @@ en prod, 5 en local): falta repro del CTO (fecha, ¿vehículo seleccionado?, ¿s
 - **#283** visuales/a11y: modales opacos, fecha nativa, barra con 0 vehículos, errores de consola, copy, etiquetas de línea, abanico de marcadores apilados, badge "atendida".
 - Codex: **no verificado (sin cuota hasta 16/11)** en los 5. Reviews: `/code-review` (2 rondas en #280/#281) + `/ponytail-review`; gate `web-design-guidelines` en #283.
 
+**Hecho 28/10 (madrugada):**
+- **Deploy r35-20261027** (CTO): #279–#285, migraciones OK (`quivo-migraciones`), `/v1/health/ready` ok. #286 (ruta de la línea visible con 0 vehículos) mergeado; deploy **solo web** `r36-20261028 --solo web` pendiente/en curso (CTO).
+- **Reglas cargadas en prod** (Sindicato Piloto — Producción, activas): Desvío fuera de la ruta `desvio_ruta` grave · Vueltas incumplidas `vueltas_incumplidas` grave · PC omitido `pc_omitido` leve (sancionable desde #285).
+- **Rotación `piloto-linea-16` extendida** con `crear-piloto-linea-16.ts --apply` (`QUIVO_PILOTO16_HASTA=2026-11-02`): 8 trufis × 28/10–02/11 mañana, publicada (124 asignaciones), **sin tocar PINs**.
+- Rotación QA `qa-envivo-2026-10-27` anulada (borrador); asignación de PIB borrada; la de PIL 27/10 no se puede borrar (sesión de prueba enganchada) → pasada a `tarde` para que el script no la vea como conflicto.
+- Al terminar el piloto: `tsx scripts/crear-piloto-linea-16.ts --desactivar --apply` antes de generar otras rotaciones.
+
 **Pendiente para el CTO antes del jueves 29/10:**
-1. **Cargar reglas en prod** (`/reglas` tiene 0 → Sancionar inutilizable): lista en [`docs/reglas-piloto.md`](reglas-piloto.md) (obligatorias `desvio_ruta`, `molinos_omitido`).
-2. **Deploy** r35 con #279–#283 (migraciones corren antes de API/worker en `deploy-gcp.sh`).
+1. ~~Cargar reglas en prod~~ hecho 28/10 (ver arriba). Lista base: lista en [`docs/reglas-piloto.md`](reglas-piloto.md) (obligatorias `desvio_ruta`, `molinos_omitido`).
+2. ~~Deploy r35~~ hecho.
 3. **Limpieza prod (CTO: aún no):** rotación `qa-envivo-2026-10-27` (`120b6ab9…`, asigna PIL y PIB hoy); infracción de prueba PIL atendida; incidencia "Bloqueo"; salidas anticipadas 19:48/20:55.
-4. Volver a crear la rotación del piloto: `piloto-linea-16` terminaba el 26/10 (hoy no había asignaciones).
+4. ~~Rotación del piloto~~ extendida hasta 02/11.
 
 **Sigue abierto (del QA, sin PR):** infracciones/sanciones no llegan a la app (H19); despacho sin aviso al
 chofer (H30); app: "Terminar el día" en la posición de PAUSAR y badge "EN VIVO" en pausa (H23); Jornada "1 en
