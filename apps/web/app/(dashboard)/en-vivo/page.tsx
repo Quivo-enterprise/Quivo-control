@@ -39,6 +39,7 @@ import {
   construirZonas,
   idMarcadorVehiculo,
   mensajeError,
+  vacioSobreMapa,
 } from './map-builders';
 import { BarraMando } from './barra-mando';
 import { ModuloJornada } from './modulo-jornada';
@@ -473,6 +474,7 @@ export default function EnVivoPage() {
 
   const hayHud = !estadoSuperpuesto;
   // Con 0 vehículos la barra de mando sigue visible: el filtro de línea y "Días anteriores" siguen siendo útiles.
+  const vacioCompacto = estadoSuperpuesto === 'vacio' && vacioSobreMapa(lineaFilter, hayMapaLinea, rutasLinea.cargando);
   const hayBarra = hayHud || estadoSuperpuesto === 'vacio';
 
   // Zonas del mapa tapadas por el cajón del vehículo: el seguimiento centra al vehículo en lo que
@@ -602,7 +604,7 @@ export default function EnVivoPage() {
 
           {/* ESTADOS SIN DATOS: capa sobre el mapa (que sigue montado, ver `estadoSuperpuesto`) */}
           {estadoSuperpuesto && (
-            <div className="qv-live-pagina">
+            <div className={vacioCompacto ? 'qv-live-pagina qv-live-pagina--sobre-mapa' : 'qv-live-pagina'}>
               {estadoSuperpuesto === 'cargando' && (
                 <div className="qv-live-pagina__centro">
                   <Loader label="Cargando flota en vivo..." />
@@ -623,7 +625,7 @@ export default function EnVivoPage() {
                 </div>
               )}
               {estadoSuperpuesto === 'vacio' && (
-                <div className="qv-live-pagina__centro qv-live-vacio">
+                <div className={vacioCompacto ? 'qv-live-vacio qv-live-vacio--compacto' : 'qv-live-pagina__centro qv-live-vacio'}>
                   <div className="qv-live-vacio__icono">
                     <Radio size={28} aria-hidden="true" />
                   </div>

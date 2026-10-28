@@ -350,7 +350,9 @@ export function useRutasDeLinea(token: string | null, lineaId: string | null) {
     () => (rutas.data ? activas.map((ruta, i) => ({ ruta, puntos: puntos[i] ?? [] })) : undefined),
     [rutas.data, activas, puntos],
   );
-  return { data };
+  // En vuelo de verdad: pendiente y no deshabilitada (v5: isPending && fetchStatus !== 'idle').
+  const cargando = rutas.isPending && rutas.fetchStatus !== 'idle';
+  return { data, cargando };
 }
 
 export interface DesignarVars {
