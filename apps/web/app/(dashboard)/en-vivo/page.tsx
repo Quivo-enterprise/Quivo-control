@@ -271,8 +271,11 @@ export default function EnVivoPage() {
   const presentacion = presentacionFrescura(estado);
 
   const puntosControl = useMemo(
-    () => (contexto.data ? construirPuntosControl(contexto.data, datos) : []),
-    [contexto.data, datos],
+    () =>
+      contexto.data
+        ? construirPuntosControl(contexto.data, datos, posicionSeleccionada?.vuelta?.varianteId)
+        : [],
+    [contexto.data, datos, posicionSeleccionada?.vuelta?.varianteId],
   );
   // Color de la línea para el anillo del marcador: el catálogo de líneas (si cargó) y, con
   // seguridad, la de la sesión con el panel abierto (viene en su `contexto`).
@@ -326,8 +329,8 @@ export default function EnVivoPage() {
     [contexto.data, puntosTraza, rutasSnap, varianteId],
   );
   const zones = useMemo(
-    () => (contexto.data ? construirZonas(contexto.data) : []),
-    [contexto.data],
+    () => (contexto.data ? construirZonas(contexto.data, varianteId) : []),
+    [contexto.data, varianteId],
   );
 
   // Animación del marcador de vehículo (`route-map-impl.tsx` hace el trabajo real — ver el

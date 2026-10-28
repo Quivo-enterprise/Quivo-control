@@ -641,6 +641,8 @@ describe('EnVivoService', () => {
       expect(ctx.variantes.map((v) => v.id)).toEqual([varianteTramoId]);
       expect(ctx.variantes[0]?.geometria.type).toBe('LineString');
       expect(ctx.puntosControl[0]?.id).toBe(puntoControlId);
+      expect(ctx.puntosControl[0]?.rol).toBeNull();
+      expect(ctx.puntoEsperaPorVariante).toEqual({});
       expect(ctx.servidorTs).toBeTruthy();
     });
 

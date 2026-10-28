@@ -72,6 +72,7 @@ import {
 } from '../../../src/lib/en-vivo/traza';
 import { NuevaSancionModal } from '../reglas/nueva-sancion-modal';
 import { estadoDe } from '../../../src/lib/en-vivo/atencion';
+import { pcsEfectivos } from '../../../src/lib/en-vivo/pcs-efectivos';
 import { GlifoEstado } from './glifo-estado';
 import { mensajeError, ultimaPasada } from './map-builders';
 import { SeccionVuelta } from './panel-vuelta';
@@ -244,7 +245,8 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   const kmh = posicion?.lat == null || posicion.lng == null ? null : velocidadKmh(posicion.speed);
   const lista = ordenarInfracciones(infracciones.data ?? []);
   const abiertas = lista.filter((i) => i.estado === 'abierta');
-  const idsPc = contexto?.puntosControl.map((pc) => pc.id) ?? [];
+  const pcs = contexto ? pcsEfectivos(contexto, posicion?.vuelta?.varianteId) : [];
+  const idsPc = pcs.map((pc) => pc.id);
   // Un borrador de una infracción que ya no se puede descartar (la atendió otro, se cerró) no se
   // muestra ni cuenta como trabajo a medias.
   useEffect(() => {
@@ -644,17 +646,17 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
                 <strong>{datos?.puntos.length ?? 0} registrados</strong>
               </div>
             </div>
-            {contexto && contexto.puntosControl.length > 0 && (
+            {pcs.length > 0 && (
               <div className="qv-live-pcs-bloque">
                 <span className="qv-live-panel__h">
                   <span>Puntos de control</span>
                   <span className="qv-live-pcs-resumen">
-                    {contexto.puntosControl.filter((pc) => ultimaPasada(datos, pc.id)?.cumplido).length} /{' '}
-                    {contexto.puntosControl.length} validados
+                    {pcs.filter((pc) => ultimaPasada(datos, pc.id)?.cumplido).length} /{' '}
+                    {pcs.length} validados
                   </span>
                 </span>
                 <ul className="qv-live-panel__pcs" aria-label="Puntos de control">
-                  {contexto.puntosControl.map((pc, idx) => {
+                  {pcs.map((pc, idx) => {
                     const pasada = ultimaPasada(datos, pc.id);
                     const cumplido = Boolean(pasada?.cumplido);
                     return (

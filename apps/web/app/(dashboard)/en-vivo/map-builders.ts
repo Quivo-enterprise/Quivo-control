@@ -4,6 +4,7 @@ import { ApiError } from '../../../src/lib/api/client';
 import { presentacionFrescura, sufijoPausa, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 import { alertaMarcador } from '../../../src/lib/en-vivo/alertas';
 import { rutasDeTraza } from '../../../src/lib/en-vivo/segmentos-traza';
+import { pcsEfectivos } from '../../../src/lib/en-vivo/pcs-efectivos';
 
 // Ámbar: distinto del azul de la traza y de los colores de línea; lee como "desvío designado".
 const COLOR_VARIANTE = '#f59e0b';
@@ -73,8 +74,9 @@ export function ultimaPasada(
 export function construirPuntosControl(
   contexto: ContextoEnVivo,
   traza: TrazaAcumulada | undefined,
+  varianteId?: string | null,
 ): MapPoint[] {
-  return contexto.puntosControl.map((pc, index) => {
+  return pcsEfectivos(contexto, varianteId).map((pc, index) => {
     const cumplimiento = ultimaPasada(traza, pc.id);
     const cumplido = cumplimiento?.cumplido ?? false;
     return {
@@ -191,8 +193,8 @@ export function construirMarcadoresVehiculos(
     });
 }
 
-export function construirZonas(contexto: ContextoEnVivo): MapZone[] {
-  return contexto.puntosControl.map((pc, index) => ({
+export function construirZonas(contexto: ContextoEnVivo, varianteId?: string | null): MapZone[] {
+  return pcsEfectivos(contexto, varianteId).map((pc, index) => ({
     lat: pc.coord.coordinates[1],
     lng: pc.coord.coordinates[0],
     radiusMeters: pc.radioToleranciaM,

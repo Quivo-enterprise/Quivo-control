@@ -4342,8 +4342,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
-  max-height: 6rem;
-  overflow-y: auto;
   margin: 0;
   padding: 0;
   list-style: none;
