@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useRef } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useRef } from 'react';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TRAZA_EN_VIVO_LIMITE_MAX,
   type ContextoEnVivo,
@@ -311,27 +311,41 @@ export function useOpcionesDesignacion(token: string | null, rutaId: string | nu
 }
 
 /**
- * Rutas + puntos de control de una línea (endpoints de /rutas y /lineas, mismos roles que /en-vivo):
- * dibuja el trazado de la línea filtrada aunque no haya vehículos reportando. Geometría casi
- * estática: `staleTime` largo.
+ * Rutas activas de una línea + sus puntos de control (endpoints de /rutas y /lineas, mismos roles que
+ * /en-vivo): dibuja el trazado de la línea filtrada aunque no haya vehículos reportando. Las rutas
+ * se piden con una query (`staleTime` 60 s: una edición de geometría se ve en un minuto) y los PC con
+ * una query por ruta, en la misma clave que `useOpcionesDesignacion` (caché compartida). Una ruta
+ * cuyos PC fallan se dibuja igual, sin PC.
  */
 export function useRutasDeLinea(token: string | null, lineaId: string | null) {
-  return useQuery<{ ruta: Ruta; puntos: PuntoControl[] }[]>({
+  const rutas = useQuery<Ruta[]>({
     queryKey: ['en-vivo', 'rutas-linea', lineaId],
     enabled: Boolean(token && lineaId),
-    queryFn: async () => {
-      const rutas = await rutasApi.listarPorLinea(token as string, lineaId as string);
-      return Promise.all(
-        rutas
-          .filter((ruta) => ruta.estado === 'activo')
-          .map(async (ruta) => ({ ruta, puntos: await puntosControlApi.listarPorRuta(token as string, ruta.id) })),
-      );
-    },
-    staleTime: 5 * 60_000,
+    queryFn: () => rutasApi.listarPorLinea(token as string, lineaId as string),
+    staleTime: 60_000,
     refetchOnWindowFocus: false,
     retry: REINTENTOS,
     retryDelay,
   });
+  const activas = useMemo(() => (rutas.data ?? []).filter((r) => r.estado === 'activo'), [rutas.data]);
+  // `combine` con compartición estructural: la referencia solo cambia si llegan datos nuevos.
+  const puntos = useQueries({
+    queries: activas.map((ruta) => ({
+      queryKey: ['en-vivo', 'puntos-control', ruta.id],
+      enabled: Boolean(token),
+      queryFn: () => puntosControlApi.listarPorRuta(token as string, ruta.id),
+      staleTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
+      retry: REINTENTOS,
+      retryDelay,
+    })),
+    combine: (res) => res.map((r) => r.data),
+  });
+  const data = useMemo(
+    () => (rutas.data ? activas.map((ruta, i) => ({ ruta, puntos: puntos[i] ?? [] })) : undefined),
+    [rutas.data, activas, puntos],
+  );
+  return { data };
 }
 
 export interface DesignarVars {

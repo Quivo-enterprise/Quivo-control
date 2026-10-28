@@ -1,5 +1,6 @@
 import type { MapPoint, MapRoute, MapZone } from '@quivo/design-system';
 import type { ContextoEnVivo, CumplimientoRecorrido, PosicionEnVivo, PuntoControl, PuntoTrazaGps, Ruta, RutaSnap } from '@quivo/shared';
+import { capitalizar } from '../rutas/route-utils';
 import { ApiError } from '../../../src/lib/api/client';
 import { presentacionFrescura, sufijoPausa, type TrazaAcumulada } from '../../../src/lib/en-vivo/traza';
 import { alertaMarcador } from '../../../src/lib/en-vivo/alertas';
@@ -217,7 +218,7 @@ export interface RutaDeLinea {
 }
 
 /**
- * Mapa de una línea elegida en el filtro sin vehículo con detalle abierto: sus rutas activas, los
+ * Mapa de una línea elegida en el filtro sin vehículo con detalle abierto: sus rutas (ya activas), los
  * puntos de control activos (misma numeración que `construirPuntosControl`, sin variante) y zonas.
  * shortcut: sin variantes (Molinos) ni cumplimiento; el trazado de la variante solo sale con un vehículo seleccionado.
  */
@@ -229,10 +230,10 @@ export function construirMapaDeLinea(
   const markers: MapPoint[] = [];
   const zones: MapZone[] = [];
   for (const { ruta, puntos } of rutas) {
-    if (ruta.estado !== 'activo') continue;
+    const sentido = capitalizar(ruta.sentido);
     routes.push({
       id: `ruta-linea-${ruta.id}`,
-      label: `Ruta ${ruta.sentido}`,
+      label: `Ruta ${sentido}`,
       color,
       dashed: true,
       points: ruta.geometria.coordinates.map(([lng, lat]) => ({ lat, lng })),
@@ -244,7 +245,12 @@ export function construirMapaDeLinea(
       puntoEsperaPorVariante: {},
     };
     markers.push(
-      ...construirPuntosControl(contexto, undefined).map((m) => ({ ...m, description: `Ruta ${ruta.sentido}` })),
+      ...construirPuntosControl(contexto, undefined).map((m) => ({
+        ...m,
+        // Con varias rutas los "Punto de control N" se repiten: el sentido los distingue.
+        label: rutas.length > 1 ? `${sentido} · ${m.label}` : m.label,
+        description: `Ruta ${sentido}`,
+      })),
     );
     zones.push(...construirZonas(contexto));
   }

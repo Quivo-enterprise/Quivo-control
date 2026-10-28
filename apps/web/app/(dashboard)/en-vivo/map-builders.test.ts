@@ -60,15 +60,23 @@ describe('construirMapaDeLinea', () => {
     estado,
   });
 
-  it('dibuja solo rutas activas con el color de la línea y numera los PC activos por orden', () => {
+  it('dibuja las rutas con el color de la línea y numera los PC activos por orden', () => {
     const r = construirMapaDeLinea('#123456', [
       { ruta: ruta('r1', 'activo'), puntos: [pc('b', 2), pc('a', 1), pc('x', 3, 'inactivo')] },
-      { ruta: ruta('r2', 'inactivo'), puntos: [pc('c', 1)] },
     ]);
     expect(r.routes).toHaveLength(1);
     expect(r.routes[0]).toMatchObject({ color: '#123456', points: [{ lat: -17.39, lng: -66.15 }, { lat: -17.4, lng: -66.16 }] });
     expect(r.markers.map((m) => m.label)).toEqual(['Punto de control 1', 'Punto de control 2']);
     expect(r.zones).toHaveLength(2);
+  });
+
+  it('con varias rutas prefija los PC con el sentido legible', () => {
+    const r = construirMapaDeLinea('#123456', [
+      { ruta: ruta('r1', 'activo', 'ida'), puntos: [pc('a', 1)] },
+      { ruta: ruta('r2', 'activo', 'vuelta'), puntos: [pc('b', 1)] },
+    ]);
+    expect(r.routes.map((x) => x.label)).toEqual(['Ruta Ida', 'Ruta Vuelta']);
+    expect(r.markers.map((m) => m.label)).toEqual(['Ida · Punto de control 1', 'Vuelta · Punto de control 1']);
   });
 
   it('sin rutas devuelve todo vacío', () => {

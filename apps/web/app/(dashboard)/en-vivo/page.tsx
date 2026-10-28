@@ -315,10 +315,10 @@ export default function EnVivoPage() {
   // Línea filtrada sin vehículo con detalle de ESA línea: se dibuja su ruta aunque nadie reporte.
   const rutasLinea = useRutasDeLinea(token, lineaFilter || null);
   const mapaLinea = useMemo(() => {
-    if (!lineaFilter || !rutasLinea.data || contexto.data?.linea.id === lineaFilter) return null;
-    const color = lineas.find((l) => l.id === lineaFilter)?.color ?? '#2563eb';
+    if (!lineaFilter || sesionSeleccionada || !rutasLinea.data) return null;
+    const color = lineas.find((l) => l.id === lineaFilter)?.color ?? 'var(--qv-color-primary)';
     return construirMapaDeLinea(color, rutasLinea.data);
-  }, [lineaFilter, rutasLinea.data, contexto.data, lineas]);
+  }, [lineaFilter, sesionSeleccionada, rutasLinea.data, lineas]);
   const markers = useMemo(
     () => [...(mapaLinea?.markers ?? puntosControl), ...marcadorFoco, ...vehiculos],
     [mapaLinea, puntosControl, marcadorFoco, vehiculos],
@@ -342,10 +342,16 @@ export default function EnVivoPage() {
   const zones = mapaLinea?.zones ?? zonesContexto;
 
   // Reencuadre una vez al cargar la ruta de la línea elegida (sin vehículo seleccionado).
+  // `lineaReencuadrada` evita reencuadrar al cerrar el panel de un vehículo (la línea no cambió).
   const hayMapaLinea = Boolean(mapaLinea && mapaLinea.routes.length > 0);
+  const lineaReencuadrada = useRef('');
   useEffect(() => {
-    if (hayMapaLinea && !sesionSeleccionada) setFitKeyOverride((k) => k + 1);
-  }, [hayMapaLinea, lineaFilter]); // eslint-disable-line react-hooks/exhaustive-deps -- solo al cambiar de línea
+    if (!lineaFilter) lineaReencuadrada.current = '';
+    else if (hayMapaLinea && lineaReencuadrada.current !== lineaFilter) {
+      lineaReencuadrada.current = lineaFilter;
+      setFitKeyOverride((k) => k + 1);
+    }
+  }, [hayMapaLinea, lineaFilter]);
 
   // Animación del marcador de vehículo (`route-map-impl.tsx` hace el trabajo real — ver el
   // comentario de `animatedVehicle` en `RouteMapProps`). Solo se anima la sesión CON DETALLE
@@ -715,7 +721,6 @@ export default function EnVivoPage() {
                             onClick={() => {
                               setNivelFiltro(null);
                               setEstadoFiltro(null);
-                              setLineaFilter('');
                             }}
                           >
                             Quitar filtros
