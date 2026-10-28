@@ -519,6 +519,7 @@ export default function RotacionesPage() {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '24rem', overflowY: 'auto' }}>
                         {rotacionesFiltradas.map((r) => {
                           const activa = r.id === data.rotacionActual?.id;
+                          const unidades = new Set(r.asignaciones.map((a) => a.vehiculoId)).size;
                           return (
                             <button
                               key={r.id}
@@ -538,8 +539,7 @@ export default function RotacionesPage() {
                               <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '0 0.5rem', fontSize: '0.75rem', color: 'var(--qv-text-secondary)' }}>
                                 <span>{r.asignaciones.length} {r.asignaciones.length === 1 ? 'asignación' : 'asignaciones'}</span>
                                 <span>
-                                  {new Set(r.asignaciones.map((a) => a.vehiculoId)).size}{' '}
-                                  {new Set(r.asignaciones.map((a) => a.vehiculoId)).size === 1 ? 'unidad' : 'unidades'}
+                                  {unidades} {unidades === 1 ? 'unidad' : 'unidades'}
                                 </span>
                               </div>
                             </button>

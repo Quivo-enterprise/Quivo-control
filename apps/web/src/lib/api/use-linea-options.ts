@@ -14,13 +14,17 @@ export interface LineaOptionsResult {
   lineaPorId: Record<string, Linea>;
 }
 
-/** Nombre de la línea sin duplicar el código ("Línea 16", no "Línea 16 - Línea 16"). */
-function etiquetaLinea(l: Linea): string {
-  return l.nombre.includes(l.codigo) ? l.nombre : `${l.codigo} - ${l.nombre}`;
+/** Etiqueta (nombreCorto si existe, como en `nombrePorId`) sin duplicar el código ("Línea 16", no "Línea 16 - Línea 16"); el código se busca como palabra entera. */
+export function etiquetaLinea(l: Pick<Linea, 'codigo' | 'nombre' | 'nombreCorto'>): string {
+  const nombre = l.nombreCorto || l.nombre;
+  const codigo = l.codigo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${codigo}(?![\\p{L}\\p{N}])`, 'u').test(nombre) ? nombre : `${l.codigo} - ${nombre}`;
 }
 
 export function useLineaOptions(): LineaOptionsResult {
   const { token, isDevBypass } = useAuth();
+  // shortcut: `useSindicatoOptions` (useEffect + fetch simple) ahora también lo llama este hook, así que
+  // /vehiculos pide /v1/sindicatos dos veces para admin_quivo; pasar a React Query si importa.
   // Solo `admin_quivo` recibe nombres (ver el hook); para el resto queda vacío y no se agrega nada.
   const { nombrePorId: sindicatoPorId } = useSindicatoOptions();
   const [result, setResult] = useState<LineaOptionsResult>({

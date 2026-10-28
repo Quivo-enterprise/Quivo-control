@@ -96,24 +96,44 @@ describe('construirMarcadoresVehiculos', () => {
     expect(markers.map((m) => m.id)).toEqual(['vehiculo:s1', 'vehiculo:s2', 'vehiculo:s3']);
   });
 
-  it('abre en abanico (solo para dibujar) los vehículos apilados a <= 10 m y respeta al seleccionado', () => {
-    const posiciones = [
+  it('abre en abanico (solo para dibujar) alrededor del ancla: estable, sin depender del orden ni de la selección', () => {
+    const dist = (x: { lat: number; lng: number }, y: { lat: number; lng: number }) =>
+      Math.hypot((x.lat - y.lat) * 111_320, (x.lng - y.lng) * 111_320 * Math.cos((-17.39 * Math.PI) / 180));
+    const base = [
       posicion({ id: 'a', lat: -17.39, lng: -66.15 }),
       posicion({ id: 'b', lat: -17.39, lng: -66.15 }),
       posicion({ id: 'c', lat: -17.39, lng: -66.15 }),
       posicion({ id: 'lejos', lat: -17.5, lng: -66.15 }),
     ];
-    const m = construirMarcadoresVehiculos(posiciones, () => {}, { seleccionadoId: 'c' });
-    const dist = (x: { lat: number; lng: number }, y: { lat: number; lng: number }) =>
-      Math.hypot((x.lat - y.lat) * 111_320, (x.lng - y.lng) * 111_320 * Math.cos((-17.39 * Math.PI) / 180));
-    expect(m[0]).toMatchObject({ lat: -17.39, lng: -66.15 }); // ancla del grupo
-    expect(dist(m[0]!, m[1]!)).toBeCloseTo(7, 1);
-    expect(m[2]).toMatchObject({ lat: -17.39, lng: -66.15 }); // seleccionado: posición real
-    expect(m[3]).toMatchObject({ lat: -17.5, lng: -66.15 }); // aislado: intacto
-    expect(construirMarcadoresVehiculos(posiciones, () => {}, { seleccionadoId: 'c' })[1]).toMatchObject({
-      lat: m[1]!.lat,
-      lng: m[1]!.lng,
-    }); // determinista
+    const porId = (ms: ReturnType<typeof construirMarcadoresVehiculos>) =>
+      Object.fromEntries(ms.map((x) => [x.id, { lat: x.lat, lng: x.lng }]));
+    const sinSel = porId(construirMarcadoresVehiculos(base, () => {}));
+    expect(sinSel['vehiculo:a']).toEqual({ lat: -17.39, lng: -66.15 }); // ancla: real
+    expect(dist(sinSel['vehiculo:a']!, sinSel['vehiculo:b']!)).toBeCloseTo(7, 1);
+    expect(dist(sinSel['vehiculo:a']!, sinSel['vehiculo:c']!)).toBeCloseTo(7, 1);
+    expect(dist(sinSel['vehiculo:b']!, sinSel['vehiculo:c']!)).toBeGreaterThan(5);
+    expect(sinSel['vehiculo:lejos']).toEqual({ lat: -17.5, lng: -66.15 });
+    // La selección no mueve a nadie.
+    expect(porId(construirMarcadoresVehiculos(base, () => {}, { seleccionadoId: 'c' }))).toEqual(sinSel);
+    // Orden de entrada invertido: mismas posiciones por id.
+    expect(porId(construirMarcadoresVehiculos([...base].reverse(), () => {}))).toEqual(sinSel);
+  });
+
+  it('vehículos a 7 m entre sí se agrupan y no caen unos sobre otros', () => {
+    const dLat = 7 / 111_320;
+    const ms = construirMarcadoresVehiculos(
+      [
+        posicion({ id: 'a', lat: -17.39, lng: -66.15 }),
+        posicion({ id: 'b', lat: -17.39 + dLat, lng: -66.15 }),
+        posicion({ id: 'c', lat: -17.39 - dLat, lng: -66.15 }),
+      ],
+      () => {},
+    );
+    const d = (i: number, j: number) =>
+      Math.hypot((ms[i]!.lat - ms[j]!.lat) * 111_320, (ms[i]!.lng - ms[j]!.lng) * 111_320 * Math.cos((-17.39 * Math.PI) / 180));
+    expect(d(0, 1)).toBeGreaterThan(5);
+    expect(d(0, 2)).toBeGreaterThan(5);
+    expect(d(1, 2)).toBeGreaterThan(5);
   });
 
   it('un vehículo sin primer fix (lat/lng null) NO se dibuja', () => {

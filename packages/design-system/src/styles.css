@@ -2725,9 +2725,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   --qv-gmap-veh-sev: var(--qv-alerta-gravisima);
   --qv-gmap-veh-periodo: 600ms;
 }
-/* Solo atendidas (sin abiertas): badge fijo y apagado, para que no se lea como alerta pendiente. */
-.qv-gmap-veh--alerta-atendida {
-  --qv-gmap-veh-sev: var(--qv-estado-inactivo);
+/* Solo atendidas (sin abiertas): badge fijo, con el color/ícono de su severidad pero atenuado,
+   para que no se lea como alerta pendiente. */
+.qv-gmap-veh--alerta-atendida .qv-gmap-veh__alerta {
+  opacity: 0.55;
 }
 /* El anillo es SIEMPRE el color de la línea (Propuesta B); la severidad se ve solo en su badge, que
    parpadea (halo) mientras haya infracciones abiertas. */
@@ -3211,6 +3212,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   gap: 0.75rem;
 }
 .qv-live-vacio {
+  /* Alto mínimo (no fijo): si el contenido crece (módulo de jornada) se desplaza en vez de recortarse arriba. */
+  height: auto;
+  min-height: 100%;
   flex-direction: column;
   gap: 1.25rem;
   padding: 2rem;

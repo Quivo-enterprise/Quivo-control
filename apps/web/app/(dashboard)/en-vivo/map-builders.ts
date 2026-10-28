@@ -131,7 +131,7 @@ export interface OpcionesMarcadoresVehiculos {
 /**
  * Alerta, foto, color de línea, selección y badge "M" del marcador. `parpadea` = hay infracciones
  * abiertas (`alertaMarcador`): al "Atender", la infracción pasa de abierta a atendida y el marcador
- * deja de parpadear pero conserva el ícono fijo de severidad (pendiente E #1); al descartarla sale
+ * deja de parpadear pero conserva el ícono de severidad con su color, atenuado (pendiente E #1); al descartarla sale
  * de la cuenta y el ícono desaparece. "M" = la vuelta en curso está designada a una variante con
  * punto de espera; con número cuando ya espera en la cola (`ordenMolinos`). `fotoUrl` viene en `PosicionEnVivo` (vacía/`null` si la unidad no tiene foto).
  */
@@ -173,13 +173,13 @@ export function construirMarcadoresVehiculos(
   const conPosicion = posiciones.filter(
     (p): p is PosicionEnVivo & { lat: number; lng: number } => p.lat !== null && p.lng !== null,
   );
-  const desfases = desfasesDeApilados(conPosicion, opciones.seleccionadoId ?? null);
+  const dibujadas = posicionesAbanico(conPosicion);
   return conPosicion.map((p, i) => {
       const presentacion = presentacionFrescura(p.estadoFrescura);
       return {
         id: idMarcadorVehiculo(p.id),
-        lat: p.lat + desfases[i]!.dLat,
-        lng: p.lng + desfases[i]!.dLng,
+        lat: dibujadas[i]!.lat,
+        lng: dibujadas[i]!.lng,
         label: p.vehiculoPlaca,
         description: `${p.lineaNombre} · ${p.conductorNombre} · ${presentacion.etiqueta}${sufijoPausa(p)}`,
         color: presentacion.color,
@@ -202,41 +202,38 @@ const RADIO_ABANICO_M = 7;
 const M_POR_GRADO = 111_320;
 
 /**
- * Solo para dibujar: vehículos a <= 10 m entre sí (típico en la terminal) se abren en abanico de
- * 7 m alrededor del primero, así el de arriba no se come los clics de los demás. El vehículo
- * seleccionado conserva su posición real (la animación y el seguimiento parten de ella).
- * Agrupa de forma voraz por orden de entrada: determinista para las mismas posiciones.
+ * Solo para dibujar: vehículos a <= 10 m del ancla del grupo (típico en la terminal) se abren en
+ * abanico de 7 m ALREDEDOR DEL ANCLA, así el de arriba no se come los clics de los demás. El ancla
+ * (el primero por id) queda en su posición real. Agrupa de forma voraz sobre los ids ordenados:
+ * mismo resultado sin importar el orden de entrada ni la selección. El seguimiento y la animación
+ * del seleccionado usan su posición real (`page.tsx`), no la del marcador.
  */
-function desfasesDeApilados(
+function posicionesAbanico(
   ps: Array<{ id: string; lat: number; lng: number }>,
-  seleccionadoId: string | null,
-): Array<{ dLat: number; dLng: number }> {
-  const out = ps.map(() => ({ dLat: 0, dLng: 0 }));
-  const grupoDe: number[] = ps.map(() => -1);
+): Array<{ lat: number; lng: number }> {
+  const out = ps.map((p) => ({ lat: p.lat, lng: p.lng }));
+  const orden = ps.map((_, i) => i).sort((i, j) => (ps[i]!.id < ps[j]!.id ? -1 : ps[i]!.id > ps[j]!.id ? 1 : 0));
   const grupos: number[][] = [];
-  ps.forEach((p, i) => {
-    const g = grupos.findIndex((idx) => {
+  for (const i of orden) {
+    const p = ps[i]!;
+    const g = grupos.find((idx) => {
       const c = ps[idx[0]!]!;
       const dy = (p.lat - c.lat) * M_POR_GRADO;
       const dx = (p.lng - c.lng) * M_POR_GRADO * Math.cos((c.lat * Math.PI) / 180);
       return Math.hypot(dx, dy) <= RADIO_APILADO_M;
     });
-    if (g === -1) {
-      grupoDe[i] = grupos.length;
-      grupos.push([i]);
-    } else {
-      grupoDe[i] = g;
-      grupos[g]!.push(i);
-    }
-  });
+    if (g) g.push(i);
+    else grupos.push([i]);
+  }
   for (const idxs of grupos) {
+    const ancla = ps[idxs[0]!]!;
     const otros = idxs.length - 1;
     idxs.forEach((i, k) => {
-      if (k === 0 || ps[i]!.id === seleccionadoId) return;
+      if (k === 0) return;
       const ang = (2 * Math.PI * (k - 1)) / otros;
       out[i] = {
-        dLat: (RADIO_ABANICO_M * Math.cos(ang)) / M_POR_GRADO,
-        dLng: (RADIO_ABANICO_M * Math.sin(ang)) / (M_POR_GRADO * Math.cos((ps[i]!.lat * Math.PI) / 180)),
+        lat: ancla.lat + (RADIO_ABANICO_M * Math.cos(ang)) / M_POR_GRADO,
+        lng: ancla.lng + (RADIO_ABANICO_M * Math.sin(ang)) / (M_POR_GRADO * Math.cos((ancla.lat * Math.PI) / 180)),
       };
     });
   }
