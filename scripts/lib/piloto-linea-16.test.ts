@@ -68,6 +68,22 @@ test('planearRotacion: conductor del piloto aún inexistente con asignación exi
   assert.equal(plan.hayDiferencias, true);
 });
 
+test('planearRotacion: estado real (8 pilotos publicados, antes de 38) + 30 nuevos = 150 faltantes sin diferencias', () => {
+  const dias = ['2026-10-29', '2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02'];
+  const previos = ['2026-10-26', '2026-10-27', '2026-10-28'];
+  const ids = Array.from({ length: 38 }, (_, i) => `V${i}`);
+  const existentes = ids.slice(0, 8).flatMap((v, i) => [...(i === 0 ? ['2026-10-13'] : []), ...previos, ...dias].map((f) => as(v, f)));
+  // Los 8 originales: piloto 1 estricto (fuera = diferencia) con su rango completo; el resto con `nuevo`.
+  const entrada = ids.map((v, i) => i === 0
+    ? pil(v, ['2026-10-13', ...previos, ...dias], true)
+    : pil(v, i < 8 ? [...previos, ...dias] : dias));
+  const plan = planearRotacion(existentes, entrada, RUTA, 'manana');
+  assert.equal(plan.porPiloto.reduce((n, p) => n + p.faltan.length, 0), 150);
+  assert.equal(plan.hayDiferencias, false);
+  assert.equal(plan.ajenas, 0);
+  assert.equal(plan.hayFaltantes, true);
+});
+
 const base = { hayFaltantes: true, hayDiferencias: false, sesionesActivas: 0, forzar: false };
 
 test('decidirAnular', () => {
