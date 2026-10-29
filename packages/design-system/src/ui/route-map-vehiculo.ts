@@ -82,7 +82,7 @@ export const ICONO_NIVEL: Record<NivelAlerta, string> = {
  * así no choca con una CSP sin `unsafe-inline`. f = relleno del estado, s = trazo del estado,
  * i = tinta sobre el relleno, p = fondo (superficie). Sin `sin_datos` en la tabla de íconos del
  * mapa (no tiene fix, no se dibuja), pero la forma existe para la leyenda y el panel. */
-export type EstadoGlifo = 'reportando' | 'detenido' | 'perdido' | 'sin_datos' | 'finalizado' | 'en_pausa';
+export type EstadoGlifo = 'reportando' | 'detenido' | 'perdido' | 'sin_datos' | 'finalizado' | 'en_pausa' | 'inactivo';
 
 export const GLIFOS_ESTADO: Record<EstadoGlifo, string> = {
   reportando: '<circle cx="14" cy="14" r="12" class="qv-gmap-g-f"/><path d="M14 7l5 13-5-3-5 3z" class="qv-gmap-g-i"/>',
@@ -94,6 +94,8 @@ export const GLIFOS_ESTADO: Record<EstadoGlifo, string> = {
     '<circle cx="14" cy="14" r="11" stroke-width="2.6" class="qv-gmap-g-p qv-gmap-g-s"/><path d="M9 14.5l3.5 3.5 6.5-7" fill="none" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" class="qv-gmap-g-s"/>',
   en_pausa:
     '<path d="M8 3h12l7 11-7 11H8L1 14z" class="qv-gmap-g-f"/><rect x="10" y="9" width="3" height="10" rx="1" class="qv-gmap-g-i"/><rect x="15" y="9" width="3" height="10" rx="1" class="qv-gmap-g-i"/>',
+  inactivo:
+    '<circle cx="14" cy="14" r="11" stroke-width="2.6" class="qv-gmap-g-p qv-gmap-g-s"/><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" transform="translate(7.4 7.4) scale(0.55)" fill="none" stroke-width="3.4" stroke-linejoin="round" class="qv-gmap-g-s"/>',
   sin_datos:
     '<circle cx="14" cy="14" r="11" stroke-width="2.6" stroke-dasharray="3.4 3" class="qv-gmap-g-p qv-gmap-g-s"/><path d="M11 11.5a3 3 0 1 1 5.2 2c-1 1-2.2 1.5-2.2 3" fill="none" stroke-width="2.4" stroke-linecap="round" class="qv-gmap-g-s"/><circle cx="14" cy="20.5" r="1.4" class="qv-gmap-g-f"/>',
 };

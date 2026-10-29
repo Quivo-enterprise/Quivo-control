@@ -401,6 +401,11 @@ describe('intervaloPoll', () => {
     expect(intervaloPoll({ hayMas: false, inactivaDesdeMs: UMBRAL_CORTE_POLL_MS * 4, estadoFrescura: 'en_pausa' })).toBe(INTERVALO_POLL_MS);
   });
 
+  it('inactivo (estado terminal) sigue cargando una traza truncada y, si no, pollea lento', () => {
+    expect(intervaloPoll({ hayMas: true, inactivaDesdeMs: UMBRAL_CORTE_POLL_MS * 4, estadoFrescura: 'inactivo' })).toBe(INTERVALO_POLL_RAPIDO_MS);
+    expect(intervaloPoll({ hayMas: false, inactivaDesdeMs: UMBRAL_CORTE_POLL_MS * 4, estadoFrescura: 'inactivo' })).toBe(INTERVALO_POLL_FINALIZADO_MS);
+  });
+
   it('acelera mientras el server avisa hayMas', () => {
     expect(intervaloPoll({ hayMas: true, inactivaDesdeMs: 0, estadoFrescura: 'reportando' })).toBe(
       INTERVALO_POLL_RAPIDO_MS,

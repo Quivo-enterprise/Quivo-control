@@ -520,6 +520,19 @@ describe('EnVivoService', () => {
       expect(f.recorridoFinTs).toBeNull();
     });
 
+    it('sesión cerrada por el sistema (inactividad) ⇒ "inactivo"; con recorrido finalizado ⇒ "finalizado"; logout ⇒ "finalizado"', () => {
+      const viejo = new Date(ahora.getTime() - 4 * 60 * MINUTO);
+      const porSistema = derivarFrescura(ahora, inicio, viejo, viejo, 'en_curso', viejo, true, null, true);
+      expect(porSistema.estadoFrescura).toBe('inactivo');
+      expect(porSistema.recorridoFinTs).toBeNull();
+      const finTs = new Date(viejo.getTime() + 60_000);
+      const finalizada = derivarFrescura(ahora, inicio, viejo, viejo, 'finalizado', finTs, true, null, true);
+      expect(finalizada.estadoFrescura).toBe('finalizado');
+      expect(finalizada.recorridoFinTs).toBe(finTs.toISOString());
+      const logout = derivarFrescura(ahora, inicio, viejo, viejo, 'en_curso', viejo, true, null, false);
+      expect(logout.estadoFrescura).toBe('finalizado');
+    });
+
     it('recorrido finalizado sin fix posterior ⇒ "finalizado", con recorridoFinTs', () => {
       const finTs = new Date(ahora.getTime() - 10 * MINUTO);
       const f = derivarFrescura(ahora, inicio, null, null, 'finalizado', finTs);

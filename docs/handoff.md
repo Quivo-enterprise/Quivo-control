@@ -6,6 +6,31 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Hecho — 2026-10-28: cierre automático por inactividad (3 h) + estado "Inactivo"
+
+Plan: [`docs/plan-cierre-inactividad.md`](plan-cierre-inactividad.md). Rama `feat/cierre-inactividad`.
+Origen: 1616PIB "Sin señal" 5 h 37 min en Atención; la sesión solo se cerraba ~04:00 BO del día siguiente.
+- Diagnóstico prod (solo lectura): el chofer **pausó** 16:25 BO y el teléfono dejó de transmitir; nunca
+  finalizó ni hizo logout. No es bug de outbox. La app **no tiene** "Finalizar día".
+- `cerrarSesionesVencidas` (job de la API, cada 5 min) suma la regla B: recorrido `en_curso`/`en_pausa`,
+  última actividad (GPS, evento de recorrido o `inicio`) > 3 h, **y** ingesta global posterior + 15 min
+  (si el worker de ingesta cae, no cierra la flota). Chofer en fila o entre recorridos: no se cierra.
+  Marca `cerradaPorSistema` (migración `20261029110000`); `fin` = último GPS / evento, nunca futuro.
+- Estado nuevo `inactivo` (shared + API + web + design-system): gris, glifo luna, fuera de "en servicio";
+  si el chofer había finalizado, sigue `finalizado`. Con infracción abierta sigue en Atención (igual que
+  `finalizado`).
+- Gates: `/code-review` (9: 6 aplicados; lag de ingesta → `shortcut:`, nocturno sin cobertura = riesgo
+  aceptado, infracción en Atención = decisión), `/ponytail-review` (guard de ingesta global + test),
+  `/security-review` (0 ≥ 8), `web-design-guidelines` (pass). Codex: no verificado (sin cuota).
+  Tests: API rotaciones+reportes 145, web en-vivo 195, design-system 164, typecheck 7/7. Playwright local
+  (copia `quivo_cierre_qa`): el job cerró la sesión en pausa de 4 h; `/en-vivo` muestra "Inactivo 1",
+  "0 en servicio de 2".
+- **Deploy (CTO):** trae migración; API + web juntas (si la API sale antes, la web vieja muestra
+  `inactivo` como "Sin datos" unos minutos). Al primer run cierra de una vez las sesiones de hoy que
+  cumplan la regla B. Se suma a r37 (sanción compensatoria).
+- Riesgo aceptado: celular apagado/sin cobertura > 3 h con recorrido en curso ⇒ vuelve al login y la
+  evidencia offline de esa sesión se rechaza.
+
 ## Hecho — 2026-10-28: "Sancionar" agenda sanción compensatoria (hecho inmutable)
 
 Plan: [`docs/plan-sancion-compensatoria.md`](plan-sancion-compensatoria.md). Rama

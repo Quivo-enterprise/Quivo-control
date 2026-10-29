@@ -2678,7 +2678,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   filter: grayscale(1);
   opacity: 0.6;
 }
-.qv-gmap-veh--est-finalizado .qv-gmap-veh__foto {
+.qv-gmap-veh--est-finalizado .qv-gmap-veh__foto,
+.qv-gmap-veh--est-inactivo .qv-gmap-veh__foto {
   filter: grayscale(1);
 }
 .qv-gmap-veh__anillo {
@@ -3335,7 +3336,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   color: var(--qv-estado-en-pausa-texto);
 }
 .qv-live-est--sin_datos,
-.qv-live-est--finalizado {
+.qv-live-est--finalizado,
+.qv-live-est--inactivo {
   --qv-gmap-est: var(--qv-estado-inactivo);
   color: var(--qv-estado-inactivo-texto);
 }

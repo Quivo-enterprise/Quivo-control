@@ -93,7 +93,7 @@ export function resolvePointId(point: { id?: string; lat: number; lng: number },
   return point.id ?? `${point.lat}:${point.lng}:${index}`;
 }
 
-export type EstadoIconoVehiculo = 'reportando' | 'detenido' | 'perdido' | 'finalizado' | 'en_pausa';
+export type EstadoIconoVehiculo = 'reportando' | 'detenido' | 'perdido' | 'finalizado' | 'en_pausa' | 'inactivo';
 
 export const ICONO_BUS_PATH =
   'M18 11H6V6h12m-1.5 11a1.5 1.5 0 0 1-1.5-1.5a1.5 1.5 0 0 1 1.5-1.5a1.5 1.5 0 0 1 1.5 1.5a1.5 1.5 0 0 1-1.5 1.5m-9 0A1.5 1.5 0 0 1 6 15.5A1.5 1.5 0 0 1 7.5 14A1.5 1.5 0 0 1 9 15.5A1.5 1.5 0 0 1 7.5 17M4 16c0 .88.39 1.67 1 2.22V20a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-1h8v1a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-1.78c.61-.55 1-1.34 1-2.22V6c0-3.5-3.58-4-8-4s-8 .5-8 4z';
@@ -157,6 +157,9 @@ export const VEHICULO_ICONOS: VehiculoIconoSpec[] = [
   // Pausa del recorrido (docs/plan-pausa-recorrido.md): glifo de pausa en ámbar punteado
   // (`--qv-color-warning`), distinto del reloj cian de `detenido`.
   { estado: 'en_pausa', path: ICONO_PAUSA_PATH, background: '#d97706', outline: true, opacity: 1 },
+  // El sistema cerró la sesión por inactividad: bus liso en gris slate (`--qv-estado-inactivo`), punteado y
+  // más tenue que `finalizado` (el chofer no finalizó; la posición es la última conocida).
+  { estado: 'inactivo', path: ICONO_BUS_PATH, background: '#64748b', outline: true, opacity: 0.6 },
 ];
 
 export const VEHICULO_ICONO_PX = 64;
@@ -210,6 +213,7 @@ export const ETIQUETA_FRESCURA: Record<EstadoIconoVehiculo | 'sin_datos', string
   perdido: 'Sin señal',
   finalizado: 'Recorrido finalizado',
   en_pausa: 'En pausa',
+  inactivo: 'Inactivo',
   sin_datos: 'Sin datos',
 };
 

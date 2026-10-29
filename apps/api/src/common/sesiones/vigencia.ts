@@ -20,7 +20,8 @@ export const GRACIA_ACTIVIDAD_MEDIANOCHE_MS = 2 * 60 * MINUTO_MS;
  * `GRACIA_ACTIVIDAD_MEDIANOCHE_MS`. Una sesión abierta sin actividad de hoy ni de la gracia (la app
  * no cierra sesión al "Finalizar recorrido") es un zombi de un día previo y NO entra; una cerrada
  * ayer tampoco. Al leer solo se ocultan; el cierre real lo hace el job de vencimiento
- * (`RotacionesService.cerrarSesionesVencidas`) pasadas `venceAt` + 4 h sin GPS en las últimas 2 h.
+ * (`RotacionesService.cerrarSesionesVencidas`): pasadas `venceAt` + 4 h sin GPS en las últimas 2 h, o 3 h
+ * sin actividad desde `inicio` (aunque la asignación siga vigente).
  *
  * El conjunto "con actividad reciente" es una
  * subquery NO correlacionada (`(id, sindicatoId) IN (...)`: semi-join por hash, sin evaluar

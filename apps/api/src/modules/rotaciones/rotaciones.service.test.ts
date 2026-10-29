@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { prisma, withTenantContext } from '@quivo/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { fechaActualBolivia } from '@quivo/shared';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RotacionesService } from './rotaciones.service.js';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
@@ -594,7 +595,13 @@ describe('RotacionesService', () => {
   describe('cerrarSesionesVencidas (sesiones zombi)', () => {
     const HORA_MS = 60 * 60 * 1000;
 
-    async function crearSesion(venceAt: Date, ultimoFix: Date | null, placa: string) {
+    async function crearSesion(
+      venceAt: Date,
+      ultimoFix: Date | null,
+      placa: string,
+      opc: { inicio?: Date; recorridoEstado?: string; recorridoEstadoTs?: Date; jornada?: string } = {},
+    ) {
+      const inicio = opc.inicio ?? new Date(venceAt.getTime() - 8 * HORA_MS);
       return withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
         const vehiculo = await tx.vehiculo.create({
           data: { sindicatoId: sindicatoAId, placa, tipo: 'bus', marca: 'x', modelo: 'x', color: 'x', capacidad: 10, estado: 'activo' },
@@ -612,14 +619,15 @@ describe('RotacionesService', () => {
         const sesion = await tx.sesionOperativa.create({
           data: {
             sindicatoId: sindicatoAId, asignacionId: asignacion.id, vehiculoId: vehiculo.id, conductorId: conductor.id,
-            inicio: new Date(venceAt.getTime() - 8 * HORA_MS), deviceId: `dev-${placa}`, accessTokenHash: `a-${randomUUID()}`, refreshTokenHash: `r-${randomUUID()}`,
+            inicio, deviceId: `dev-${placa}`, accessTokenHash: `a-${randomUUID()}`, refreshTokenHash: `r-${randomUUID()}`,
             accessExpiresAt: new Date(Date.now() + HORA_MS), refreshExpiresAt: new Date(Date.now() + HORA_MS),
+            recorridoEstado: opc.recorridoEstado, recorridoEstadoTs: opc.recorridoEstadoTs,
           },
         });
         if (ultimoFix) {
           await tx.$executeRaw`
             INSERT INTO gps_sesion_resumen (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng)
-            VALUES (${sesion.id}::uuid, ${ultimoFix.toISOString().slice(0, 10)}::date, ${sindicatoAId}, 1, ${ultimoFix}, ${ultimoFix}, 0, 0)
+            VALUES (${sesion.id}::uuid, ${opc.jornada ?? ultimoFix.toISOString().slice(0, 10)}::date, ${sindicatoAId}, 1, ${ultimoFix}, ${ultimoFix}, 0, 0)
           `;
         }
         return sesion.id;
@@ -628,8 +636,19 @@ describe('RotacionesService', () => {
 
     const estadoDe = (id: string) =>
       withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, (tx) =>
-        tx.sesionOperativa.findUniqueOrThrow({ where: { id }, select: { estado: true, fin: true, revokedAt: true } }),
+        tx.sesionOperativa.findUniqueOrThrow({ where: { id }, select: { estado: true, fin: true, revokedAt: true, cerradaPorSistema: true } }),
       );
+
+    // Testigo de ingesta global (regla B): una sesión sana con ingesta de hoy (jornada BO) en `ingreso`.
+    const testigo = (ingreso: Date, placa: string, base = new Date()) =>
+      crearSesion(new Date(base.getTime() + HORA_MS), ingreso, placa, { inicio: new Date(base.getTime() - HORA_MS), jornada: fechaActualBolivia(base).toISOString().slice(0, 10) });
+
+    // Los testigos de un test no deben contar como ingesta para el siguiente (guard global).
+    beforeEach(async () => {
+      await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
+        await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE "sindicatoId" = ${sindicatoAId}`;
+      });
+    });
 
     afterAll(async () => {
       await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
@@ -678,6 +697,7 @@ describe('RotacionesService', () => {
         expect(s.estado).toBe('cerrada');
         expect(s.fin).not.toBeNull();
         expect(s.revokedAt).not.toBeNull();
+        expect(s.cerradaPorSistema).toBe(true);
       }
       // fin = fin real: última actividad GPS; sin GPS, el venceAt de la asignación.
       expect((await estadoDe(zombi)).fin).toEqual(vieja);
@@ -692,6 +712,95 @@ describe('RotacionesService', () => {
       const antes = await estadoDe(zombi);
       await service.cerrarSesionesVencidas(new Date(ahora.getTime() + 60_000));
       expect(await estadoDe(zombi)).toEqual(antes);
+    });
+
+    const enCurso = { recorridoEstado: 'en_curso' };
+
+    it('regla B: cierra con recorrido en curso >3 h sin GPS aunque la asignación siga vigente; con GPS de hace 2 h 55 no', async () => {
+      const ahora = new Date();
+      const vigente = new Date(ahora.getTime() + HORA_MS);
+      const inicio = new Date(ahora.getTime() - 6 * HORA_MS);
+      const ultimoGps = new Date(ahora.getTime() - 3 * HORA_MS - 5 * 60_000);
+      const inactiva = await crearSesion(vigente, ultimoGps, 'ZMB006', { inicio, ...enCurso });
+      const conGps = await crearSesion(vigente, new Date(ahora.getTime() - 3 * HORA_MS + 5 * 60_000), 'ZMB007', { inicio, ...enCurso });
+      await testigo(new Date(ahora.getTime() - 60_000), 'ZMB020');
+
+      await service.cerrarSesionesVencidas(ahora);
+
+      const cerrada = await estadoDe(inactiva);
+      expect(cerrada.estado).toBe('cerrada');
+      expect(cerrada.cerradaPorSistema).toBe(true);
+      expect(cerrada.fin).toEqual(ultimoGps);
+      expect(cerrada.revokedAt).not.toBeNull();
+      const viva = await estadoDe(conGps);
+      expect(viva.estado).toBe('activa');
+      expect(viva.cerradaPorSistema).toBe(false);
+    });
+
+    it('regla B sin GPS: cierra con fin = recorridoEstadoTs (nunca en el futuro); recorrido iniciado hace 1 h (inicio hace 5 h) no', async () => {
+      const ahora = new Date();
+      const vigente = new Date(ahora.getTime() + HORA_MS);
+      const tsViejo = new Date(ahora.getTime() - 4 * HORA_MS);
+      const sinGpsVieja = await crearSesion(vigente, null, 'ZMB008', { inicio: new Date(ahora.getTime() - 5 * HORA_MS), recorridoEstado: 'en_curso', recorridoEstadoTs: tsViejo });
+      const iniciadoHaceUnaHora = await crearSesion(vigente, null, 'ZMB009', { inicio: new Date(ahora.getTime() - 5 * HORA_MS), recorridoEstado: 'en_curso', recorridoEstadoTs: new Date(ahora.getTime() - HORA_MS) });
+      await testigo(new Date(ahora.getTime() - 60_000), 'ZMB021');
+
+      await service.cerrarSesionesVencidas(ahora);
+
+      const cerrada = await estadoDe(sinGpsVieja);
+      expect(cerrada.estado).toBe('cerrada');
+      expect(cerrada.cerradaPorSistema).toBe(true);
+      expect(cerrada.fin).toEqual(tsViejo);
+      expect((await estadoDe(iniciadoHaceUnaHora)).estado).toBe('activa');
+    });
+
+    it('regla B: cierra una sesión en_pausa >3 h (pausa y luego silencio)', async () => {
+      const ahora = new Date();
+      const pausa = new Date(ahora.getTime() - 4 * HORA_MS);
+      const enPausa = await crearSesion(new Date(ahora.getTime() + HORA_MS), pausa, 'ZMB010', { inicio: new Date(ahora.getTime() - 6 * HORA_MS), recorridoEstado: 'en_pausa', recorridoEstadoTs: pausa });
+      await testigo(new Date(ahora.getTime() - 60_000), 'ZMB022');
+
+      await service.cerrarSesionesVencidas(ahora);
+
+      expect((await estadoDe(enPausa)).estado).toBe('cerrada');
+    });
+
+    it('regla B no aplica sin recorrido en curso: sin iniciar (NULL) ni finalizado, aunque lleven >3 h sin GPS', async () => {
+      const ahora = new Date();
+      const vigente = new Date(ahora.getTime() + HORA_MS);
+      const inicio = new Date(ahora.getTime() - 6 * HORA_MS);
+      const sinIniciar = await crearSesion(vigente, null, 'ZMB011', { inicio });
+      const finalizado = await crearSesion(vigente, null, 'ZMB012', { inicio, recorridoEstado: 'finalizado', recorridoEstadoTs: new Date(ahora.getTime() - 4 * HORA_MS) });
+      await testigo(new Date(ahora.getTime() - 60_000), 'ZMB023');
+
+      await service.cerrarSesionesVencidas(ahora);
+
+      for (const id of [sinIniciar, finalizado]) expect((await estadoDe(id)).estado).toBe('activa');
+    });
+
+    it('regla B no cierra si la ingesta global está caída (sin testigo, o testigo anterior al silencio + 15 min)', async () => {
+      // ahora ~1 año en el pasado: ningún otro archivo (en paralelo) tiene filas ni sesiones vencibles en esa jornada, así el max global solo ve este test y la regla A no toca sesiones ajenas.
+      const ahora = new Date(Date.now() - 400 * 24 * HORA_MS);
+      const vigente = new Date(ahora.getTime() + HORA_MS);
+      const ultimoGps = new Date(ahora.getTime() - 4 * HORA_MS);
+      const sinTestigo = await crearSesion(vigente, ultimoGps, 'ZMB013', { inicio: new Date(ahora.getTime() - 6 * HORA_MS), ...enCurso });
+      await service.cerrarSesionesVencidas(ahora);
+      expect((await estadoDe(sinTestigo)).estado).toBe('activa');
+
+      // Testigo con ingesta solo 10 min después del último GPS de la sesión: dentro del margen de 15 min.
+      await testigo(new Date(ultimoGps.getTime() + 10 * 60_000), 'ZMB024', ahora);
+      await service.cerrarSesionesVencidas(ahora);
+      expect((await estadoDe(sinTestigo)).estado).toBe('activa');
+    });
+
+    it('sesión con inicio hace 8 h, sin GPS, asignación vencida hace 3 h y sin recorrido: no se cierra (ni A ni B)', async () => {
+      const ahora = new Date();
+      const sesion = await crearSesion(new Date(ahora.getTime() - 3 * HORA_MS), null, 'ZMB014');
+      await testigo(new Date(ahora.getTime() - 60_000), 'ZMB025');
+
+      await service.cerrarSesionesVencidas(ahora);
+
+      expect((await estadoDe(sesion)).estado).toBe('activa');
     });
   });
 });
