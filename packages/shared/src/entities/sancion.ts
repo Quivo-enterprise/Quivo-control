@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { EstadoSancionSchema, SujetoTipoSchema } from '../enums/estados.js';
+import { ParadaSalidaSchema } from '../enums/parada-salida.js';
+import { TurnoSchema } from '../enums/turno.js';
 import { sindicatoIdSchema, uuidSchema } from '../primitives.js';
 
 export const SancionSchema = z.object({
@@ -17,6 +19,11 @@ export const SancionSchema = z.object({
   // registra la sanción.
   evidenciaRef: z.string().max(2000).nullable(),
   estado: EstadoSancionSchema,
+  // Sanción compensatoria (solo las nacidas de una infracción): los 4 vienen juntos o ninguno.
+  fechaCumplimiento: z.coerce.date().nullable(),
+  vueltas: z.number().int().nullable(),
+  turno: TurnoSchema.nullable(),
+  paradaSalida: ParadaSalidaSchema.nullable(),
 });
 export type Sancion = z.infer<typeof SancionSchema>;
 

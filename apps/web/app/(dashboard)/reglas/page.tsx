@@ -18,7 +18,7 @@ import {
   Tooltip,
   type StatusBadgeStatus,
 } from '@quivo/design-system';
-import { REGLA_TIPOS_RESERVADOS_INFRACCION, type EstadoSancion, type Regla, type Sancion } from '@quivo/shared';
+import { ETIQUETA_PARADA_SALIDA, REGLA_TIPOS_RESERVADOS_INFRACCION, type EstadoSancion, type Regla, type Sancion } from '@quivo/shared';
 import {
   AlertCircle,
   AlertTriangle,
@@ -46,6 +46,7 @@ import {
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { reglasApi } from '../../../src/lib/api/reglas';
 import { useSindicatoOptions } from '../../../src/lib/api/use-sindicato-options';
+import { etiquetaHorario } from '../rotaciones/rotacion-constants';
 import { NuevaSancionModal, SUJETO_TIPOS } from './nueva-sancion-modal';
 import { useSanciones, FILTROS_SANCIONES_VACIOS, type Transicion } from './use-sanciones';
 import { ReglaPreviewCard } from './regla-preview';
@@ -1029,6 +1030,11 @@ function SancionesTab() {
                           <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--qv-text-secondary)', maxWidth: '24rem', lineHeight: 1.4 }}>
                             {s.motivo}
                           </p>
+                          {s.vueltas != null && (
+                            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.75rem', color: 'var(--qv-text-secondary)' }}>
+                              {resumenCumplimiento(s)}
+                            </p>
+                          )}
                         </td>
                         <td>
                           <StatusBadge
@@ -1203,6 +1209,11 @@ function SancionesTab() {
                 <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8125rem', color: 'var(--qv-text-primary)', lineHeight: 1.45 }}>
                   {detalleSancion.motivo}
                 </p>
+                {detalleSancion.vueltas != null && (
+                  <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8125rem', color: 'var(--qv-text-secondary)' }}>
+                    {resumenCumplimiento(detalleSancion)}
+                  </p>
+                )}
               </div>
 
               {/* Evidencia / Referencia si existe */}
@@ -1263,6 +1274,18 @@ function SancionesTab() {
       )}
     </div>
   );
+}
+
+/** "3 vueltas · Noche · desde Molinos · cumplir el 05/11/2026" (solo sanciones compensatorias). */
+function resumenCumplimiento(s: Sancion): string {
+  return [
+    `${s.vueltas} ${s.vueltas === 1 ? 'vuelta' : 'vueltas'}`,
+    s.turno ? etiquetaHorario(s.turno) : null,
+    s.paradaSalida ? `desde ${ETIQUETA_PARADA_SALIDA[s.paradaSalida]}` : null,
+    s.fechaCumplimiento ? `cumplir el ${formatearFecha(s.fechaCumplimiento)}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function formatearFecha(fecha: Date): string {

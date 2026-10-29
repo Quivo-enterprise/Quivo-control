@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { prisma, withTenantContext } from '@quivo/db';
 import { Client } from 'pg';
-import { fechaActualBolivia, type EventoSync } from '@quivo/shared';
+import { fechaActualBolivia, rangoCumplimiento, type EventoSync, type SancionarInfraccion } from '@quivo/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { ControlPointsService } from '../control-points/control-points.service.js';
@@ -61,6 +61,12 @@ const inicio = (sesionId: string, ts: string) => evento('inicio_recorrido', ts, 
 const fin = (sesionId: string, ts: string) => evento('fin_recorrido', ts, { sesionId });
 
 describe('vueltas y designación a Molinos (F1)', () => {
+  const sancionDe = (): SancionarInfraccion => ({
+    fechaCumplimiento: new Date(rangoCumplimiento(fechaActualBolivia().toISOString().slice(0, 10)).min),
+    vueltas: 1,
+    turno: 'manana',
+    paradaSalida: 'salomon_romero',
+  });
   const sindicatoA = randomUUID();
   const sindicatoB = randomUUID();
   const adminA: AuthenticatedUser = { userId: 'admin-a', rol: 'admin_sindicato', sindicatoId: sindicatoA };
@@ -84,7 +90,6 @@ describe('vueltas y designación a Molinos (F1)', () => {
   let varianteOtraRutaId: string;
   let vehiculoId: string;
   let conductorId: string;
-  let reglaId: string;
   const sesiones = {} as Record<
     | 'ciclo' | 'larga' | 'corta' | 'omitida' | 'fin' | 'desorden' | 'sinRoles' | 'desvio' | 'carrera'
     | 'vacia' | 'cierreVacia' | 'cierreDesig' | 'cierreSinTenant' | 'inactiva' | 'esperaTardia' | 'retro'
@@ -226,9 +231,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
         sesiones[k] = await crearSesion(asigCirc, k !== 'ciclo');
       }
       sesiones.sinRoles = await crearSesion(asigSinRoles);
-      reglaId = (
-        await tx.regla.create({ data: { sindicatoId: sindicatoA, nombre: 'Sanción genérica', tipo: 'operativo', gravedad: 'grave', aplicaA: 'conductor' } })
-      ).id;
+      await tx.regla.create({ data: { sindicatoId: sindicatoA, nombre: 'Molinos omitido', tipo: 'molinos_omitido', gravedad: 'grave', aplicaA: 'conductor' } });
     });
   });
 
@@ -606,7 +609,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
       await lote([gps(s, iso(50, 40), LON_SR, LAT_RUTA)]);
       expect((await infraccionesDe(s)).filter((i) => i.tipo === 'espera_corta')).toHaveLength(1);
       await expect(
-        infracciones.sancionar(adminA, alertas[0]!.id, { reglaId, sujetoTipo: 'conductor', sujetoId: conductorId, motivo: 'x', fechaHecho: new Date() }),
+        infracciones.sancionar(adminA, alertas[0]!.id, sancionDe()),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -627,9 +630,7 @@ describe('vueltas y designación a Molinos (F1)', () => {
       });
       await lote([cumpl(s, pcSr, iso(45), LON_SR, LAT_RUTA)]);
       expect((await infraccionesDe(s)).filter((i) => i.tipo === 'molinos_omitido')).toHaveLength(1);
-      const sancionada = await infracciones.sancionar(adminA, omitidas[0]!.id, {
-        reglaId, sujetoTipo: 'conductor', sujetoId: conductorId, motivo: 'Molinos omitido', fechaHecho: new Date(),
-      });
+      const sancionada = await infracciones.sancionar(adminA, omitidas[0]!.id, sancionDe());
       expect(sancionada.estado).toBe('sancionada');
     });
 

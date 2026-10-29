@@ -40,6 +40,7 @@ describe('PATCH/POST /infracciones (guards + DTO Zod + DI)', () => {
     authorization: `Bearer ${JSON.stringify({ sub: 'usuario-test', rol, sindicatoId: sindicato })}`,
   });
   const headers = tokenDe('admin_sindicato');
+  const cumplimiento = { fechaCumplimiento: '2026-11-05', vueltas: 3, turno: 'noche', paradaSalida: 'molinos' };
 
   beforeAll(async () => {
     vi.spyOn(auth.api, 'verifyJWT').mockImplementation((async ({ body }: { body: { token: string } }) => ({
@@ -82,26 +83,23 @@ describe('PATCH/POST /infracciones (guards + DTO Zod + DI)', () => {
     const operador = tokenDe('operador');
     expect((await patch(randomUUID(), { accion: 'atender' }, operador)).statusCode).toBe(403);
     expect((await patch(randomUUID(), { accion: 'descartar', nota: 'x' }, operador)).statusCode).toBe(403);
-    const res = await sancionar(
-      randomUUID(),
-      { reglaId: randomUUID(), sujetoTipo: 'conductor', sujetoId: 'x', motivo: 'm', fechaHecho: '2026-10-12' },
-      operador,
-    );
+    const res = await sancionar(randomUUID(), cumplimiento, operador);
     expect(res.statusCode).toBe(403);
   });
 
-  it('sancionar valida el body (sin motivo → 400) y descarta un sindicatoId enviado por el cliente', async () => {
-    expect((await sancionar(randomUUID(), { reglaId: randomUUID(), sujetoTipo: 'conductor', sujetoId: 'x' })).statusCode).toBe(400);
-    // Con body válido llega al service: la infracción no existe → 404 (el sindicatoId extra se ignora).
-    const res = await sancionar(randomUUID(), {
-      reglaId: randomUUID(),
-      sujetoTipo: 'conductor',
-      sujetoId: 'x',
-      motivo: 'm',
-      fechaHecho: '2026-10-12',
-      sindicatoId: randomUUID(),
-    });
-    expect(res.statusCode).toBe(404);
+  it('sancionar solo acepta el agendado: cualquier campo del hecho (motivo, fechaHecho, regla, sujeto) o un valor fuera de rango es 400', async () => {
+    const hecho = { motivo: 'm', fechaHecho: '2026-10-12', reglaId: randomUUID(), sujetoTipo: 'conductor', sujetoId: 'x', sindicatoId: randomUUID() };
+    for (const [k, v] of Object.entries(hecho)) {
+      expect((await sancionar(randomUUID(), { ...cumplimiento, [k]: v })).statusCode).toBe(400);
+    }
+    expect((await sancionar(randomUUID(), { ...cumplimiento, vueltas: 11 })).statusCode).toBe(400);
+    expect((await sancionar(randomUUID(), { ...cumplimiento, turno: 'madrugada' })).statusCode).toBe(400);
+    expect((await sancionar(randomUUID(), { ...cumplimiento, paradaSalida: 'otra' })).statusCode).toBe(400);
+    expect((await sancionar(randomUUID(), { fechaCumplimiento: '2026-11-05' })).statusCode).toBe(400);
+    // El body viejo (el cliente fijaba el hecho) ya no pasa.
+    expect((await sancionar(randomUUID(), hecho)).statusCode).toBe(400);
+    // Con el body nuevo llega al service: la infracción no existe → 404.
+    expect((await sancionar(randomUUID(), cumplimiento)).statusCode).toBe(404);
   });
 
   it('ambas escrituras son @Auditable (entidad infraccion)', () => {

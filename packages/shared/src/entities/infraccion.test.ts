@@ -50,16 +50,17 @@ describe('infraccion', () => {
     expect(ActualizarInfraccionSchema.safeParse({ accion: 'sancionar' }).success).toBe(false);
   });
 
-  it('SancionarInfraccion no acepta (descarta) sindicatoId', () => {
-    const r = SancionarInfraccionSchema.parse({
-      reglaId: '00000000-0000-4000-8000-000000000001',
-      sujetoTipo: 'conductor',
-      sujetoId: 'c1',
-      motivo: 'm',
-      fechaHecho: '2026-10-12',
-      sindicatoId: '00000000-0000-4000-8000-000000000002',
-    });
-    expect('sindicatoId' in r).toBe(false);
+  it('SancionarInfraccion: solo agenda el cumplimiento; el hecho no se puede mandar (strict)', () => {
+    const ok = { fechaCumplimiento: '2026-11-05', vueltas: 3, turno: 'noche', paradaSalida: 'molinos' };
+    expect(SancionarInfraccionSchema.safeParse(ok).success).toBe(true);
+    for (const extra of [{ motivo: 'x' }, { fechaHecho: '2026-10-12' }, { reglaId: '00000000-0000-4000-8000-000000000001' }, { sindicatoId: 's' }]) {
+      expect(SancionarInfraccionSchema.safeParse({ ...ok, ...extra }).success).toBe(false);
+    }
+    expect(SancionarInfraccionSchema.safeParse({ ...ok, vueltas: 0 }).success).toBe(false);
+    expect(SancionarInfraccionSchema.safeParse({ ...ok, vueltas: 11 }).success).toBe(false);
+    expect(SancionarInfraccionSchema.safeParse({ ...ok, vueltas: 1.5 }).success).toBe(false);
+    expect(SancionarInfraccionSchema.safeParse({ ...ok, turno: 'madrugada' }).success).toBe(false);
+    expect(SancionarInfraccionSchema.safeParse({ ...ok, paradaSalida: 'otra' }).success).toBe(false);
   });
 
   it('PosicionEnVivo: los campos nuevos son opcionales (respuestas viejas siguen parseando)', () => {

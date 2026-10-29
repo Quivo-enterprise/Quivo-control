@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Alert, Button, ConfirmDialog, Loader, RouteMap, type MapPoint } from '@quivo/design-system';
 import { AlertTriangle, CheckCircle2, Clock, Maximize2, Navigation, Radio, RefreshCw } from 'lucide-react';
-import type { EstadoFrescura, GravedadRegla, Infraccion } from '@quivo/shared';
+import { etiquetaTipoInfraccion, type EstadoFrescura, type GravedadRegla, type Infraccion } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { isRouteAllowedForRole, NAV_ITEMS } from '../../../src/lib/nav-items';
 import {
@@ -21,7 +21,6 @@ import {
   ETIQUETA_NIVEL,
   actualizarPrimeraVez,
   contarPorNivel,
-  etiquetaTipoInfraccion,
   nivelDeAlerta,
   ordenarAlertas,
   resumenContadores,

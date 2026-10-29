@@ -25,37 +25,29 @@ import {
   User,
   X,
 } from 'lucide-react';
-import type {
-  Conductor,
-  ContextoEnVivo,
-  GravedadRegla,
-  Infraccion,
-  PosicionEnVivo,
-  Regla,
-  Vehiculo,
+import {
+  detalleInfraccion,
+  etiquetaTipoInfraccion,
+  type ContextoEnVivo,
+  type GravedadRegla,
+  type Infraccion,
+  type PosicionEnVivo,
+  type Regla,
 } from '@quivo/shared';
-import { conductoresApi } from '../../../src/lib/api/conductores';
 import { infraccionesApi } from '../../../src/lib/api/infracciones';
 import { reglasApi } from '../../../src/lib/api/reglas';
-import { vehiculosApi } from '../../../src/lib/api/vehiculos';
 import {
   ETIQUETA_ESTADO_INFRACCION,
   ETIQUETA_NIVEL,
-  detalleInfraccion,
   duracionInfraccion,
-  etiquetaTipoInfraccion,
-  motivoSancion,
   ordenarInfracciones,
   puedeAtender,
   puedeDescartar,
   puedeSancionar,
-  reglaInicialSancion,
-  reglasSancionables,
   urlLlamada,
   urlWhatsapp,
   velocidadKmh,
 } from '../../../src/lib/en-vivo/alertas';
-import { diaLocalIso } from '../../../src/lib/fecha-local';
 import {
   useDesignarVuelta,
   useInfraccionesSesion,
@@ -70,11 +62,11 @@ import {
   sufijoPausa,
   type TrazaAcumulada,
 } from '../../../src/lib/en-vivo/traza';
-import { NuevaSancionModal } from '../reglas/nueva-sancion-modal';
 import { estadoDe, incidenciasVisibles } from '../../../src/lib/en-vivo/atencion';
 import { pcsEfectivos } from '../../../src/lib/en-vivo/pcs-efectivos';
 import { formatearHoraBolivia } from '../../../src/lib/en-vivo/jornadas';
 import { GlifoEstado } from './glifo-estado';
+import { ModalSancionar } from './modal-sancionar';
 import { mensajeError, ultimaPasada } from './map-builders';
 import { SeccionVuelta } from './panel-vuelta';
 
@@ -97,12 +89,6 @@ function mensajeAccion(err: unknown): string {
   if (status === 409) return `${base} Revisá el estado actual de la infracción.`;
   if (status === 404) return 'La infracción ya no existe.';
   return base;
-}
-
-interface OpcionesSancion {
-  reglas: Regla[];
-  vehiculos: Vehiculo[];
-  conductores: Conductor[];
 }
 
 /** Borrador del formulario de descarte de una infracción. */
@@ -198,7 +184,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   // abrir el modal; una respuesta vieja se ignora (si no, abriría el modal de otra infracción).
   const [cargandoSancion, setCargandoSancion] = useState<ReadonlySet<string>>(new Set());
   const ultimoPedidoSancion = useRef(0);
-  const [sancion, setSancion] = useState<{ inf: Infraccion; opciones: OpcionesSancion } | null>(null);
+  const [sancion, setSancion] = useState<{ inf: Infraccion; reglas: Regla[] } | null>(null);
 
   // El foco (al abrir -> encabezado; al cerrar -> marcador) lo gestiona la página: aquí cambiar de
   // vehículo remonta el panel (`key`) y no debe robar el foco a quien navega con "Siguiente alerta".
@@ -293,26 +279,19 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
     }
   }
 
-  // Reglas/vehículos/conductores solo se piden al pulsar "Sancionar" (el modal los necesita); la
-  // caché de 60 s evita pedirlos de nuevo. Si fallan, el error queda junto a ESA infracción.
+  // Las reglas se piden frescas (staleTime 0) al pulsar "Sancionar": el modal resuelve la regla del hecho
+  // y el servidor la re-deriva al enviar, así que no se muestra una regla en caché. Si fallan, el error queda junto a ESA infracción.
   async function abrirSancion(inf: Infraccion) {
     ponerError(inf.id, null);
     const pedido = ++ultimoPedidoSancion.current;
     setCargandoSancion((prev) => new Set(prev).add(inf.id));
     try {
-      const opciones = await queryClient.fetchQuery<OpcionesSancion>({
-        queryKey: ['en-vivo', 'opciones-sancion'],
-        staleTime: 60_000,
-        queryFn: async () => {
-          const [reglas, vehiculos, conductores] = await Promise.all([
-            reglasApi.listar(token as string),
-            vehiculosApi.listar(token as string),
-            conductoresApi.listar(token as string),
-          ]);
-          return { reglas, vehiculos, conductores };
-        },
+      const reglas = await queryClient.fetchQuery<Regla[]>({
+        queryKey: ['en-vivo', 'reglas-sancion'],
+        staleTime: 0,
+        queryFn: () => reglasApi.listar(token as string),
       });
-      if (pedido === ultimoPedidoSancion.current) setSancion({ inf, opciones });
+      if (pedido === ultimoPedidoSancion.current) setSancion({ inf, reglas });
     } catch (err) {
       ponerError(inf.id, `No se pudieron cargar las reglas para sancionar. ${mensajeError(err)}`);
     } finally {
@@ -709,12 +688,14 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
       </div>
 
       {sancion && (
-        <ModalSancion
+        <ModalSancionar
           key={sancion.inf.id}
           token={token}
-          sancion={sancion}
+          inf={sancion.inf}
+          reglas={sancion.reglas}
           placa={placa}
           conductor={conductor}
+          idsPc={idsPc}
           onClose={() => setSancion(null)}
           onCreada={() => {
             setSancion(null);
@@ -808,55 +789,5 @@ function FormularioDescarte({
         Cancelar
       </button>
     </form>
-  );
-}
-
-function ModalSancion({
-  token,
-  sancion,
-  placa,
-  conductor,
-  onClose,
-  onCreada,
-}: {
-  token: string | null;
-  sancion: { inf: Infraccion; opciones: OpcionesSancion };
-  placa: string;
-  conductor: string;
-  onClose: () => void;
-  onCreada: () => void;
-}) {
-  const { inf, opciones } = sancion;
-  // `admin_quivo` recibe reglas/vehículos/conductores de TODOS los sindicatos: solo los del
-  // sindicato de la infracción se ofrecen y se preseleccionan.
-  const reglasActivas = reglasSancionables(opciones.reglas, inf.sindicatoId);
-  const vehiculos = opciones.vehiculos.filter((v) => v.sindicatoId === inf.sindicatoId);
-  const conductores = opciones.conductores.filter((c) => c.sindicatoId === inf.sindicatoId);
-  const reglaId = reglaInicialSancion(inf, reglasActivas);
-  return (
-    <NuevaSancionModal
-      key={inf.id}
-      token={token}
-      sindicatoId={inf.sindicatoId}
-      reglas={reglasActivas}
-      vehiculos={vehiculos}
-      conductores={conductores}
-      socios={[]}
-      sujetoTipos={['conductor', 'vehiculo']}
-      sujetosPermitidos={{ conductor: inf.conductorId, vehiculo: inf.vehiculoId }}
-      sujetosEtiquetas={{ conductor: conductor || undefined, vehiculo: placa || undefined }}
-      avisoRegla="No hay una regla activa para este tipo de infracción; elegí la regla."
-      valoresIniciales={{
-        reglaId,
-        sujetoTipo: 'conductor',
-        sujetoId: inf.conductorId,
-        motivo: motivoSancion(inf, placa),
-        fechaHecho: diaLocalIso(inf.inicioTs),
-        evidenciaRef: `infraccion:${inf.id} sesion:${inf.sesionId}`,
-      }}
-      onSubmitOverride={(datos) => infraccionesApi.sancionar(token as string, inf.id, datos)}
-      onClose={onClose}
-      onCreada={onCreada}
-    />
   );
 }

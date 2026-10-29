@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { prisma, withTenantContext } from '@quivo/db';
-import { fechaActualBolivia, type EventoSync, type SancionarInfraccion } from '@quivo/shared';
+import { fechaActualBolivia, rangoCumplimiento, type EventoSync, type SancionarInfraccion } from '@quivo/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { InfraccionesService } from '../infracciones/infracciones.service.js';
@@ -87,8 +87,6 @@ describe('detección de infracciones (PR A)', () => {
   let pc: Record<'1' | '2' | '3' | '4' | '5', string>;
   let pcRetorno: string;
   let pcRetornoInactivo: string;
-  let reglaAId: string;
-  let reglaBId: string;
 
   function servicioSinCola(): { procesarLote(job: unknown): Promise<{ procesados: number; errores: number }> } {
     const servicio = Object.create(IngestaWorkerService.prototype) as Record<string, unknown>;
@@ -231,16 +229,6 @@ describe('detección de infracciones (PR A)', () => {
       sesionRol = await crearSesion();
       sesionInactivo = await crearSesion();
       sesionSinRetorno = await crearSesion(asignacionNoHab.id);
-      reglaAId = (
-        await tx.regla.create({
-          data: { sindicatoId: sindicatoA, nombre: 'Sanción genérica', tipo: 'operativo', gravedad: 'grave', aplicaA: 'conductor' },
-        })
-      ).id;
-      reglaBId = (
-        await tx.regla.create({
-          data: { sindicatoId: sindicatoB, nombre: 'Regla B', tipo: 'operativo', gravedad: 'leve', aplicaA: 'conductor' },
-        })
-      ).id;
     });
   });
 
@@ -615,6 +603,23 @@ describe('detección de infracciones (PR A)', () => {
   });
 
   describe('acciones del admin', () => {
+    // La sanción deriva la regla del tipo de la infracción: el desvío ya tiene la suya (test de gravedad);
+    // el PC omitido no, porque los tests de detección esperan `reglaId: null`.
+    beforeAll(async () => {
+      await withTenantContext(ADMIN, (tx) =>
+        tx.regla.create({ data: { sindicatoId: sindicatoA, nombre: 'PC omitido', tipo: 'pc_omitido', gravedad: 'leve', aplicaA: 'conductor' } }),
+      );
+    });
+
+    const mañana = () => new Date(rangoCumplimiento(fechaActualBolivia().toISOString().slice(0, 10)).min);
+    const sancionDe = (extra: Partial<SancionarInfraccion> = {}): SancionarInfraccion => ({
+      fechaCumplimiento: mañana(),
+      vueltas: 2,
+      turno: 'noche',
+      paradaSalida: 'molinos',
+      ...extra,
+    });
+
     it('atender: abierta → atendida (registra actor y hora); repetir da 409', async () => {
       const [primera] = (await infraccionesDe(sesionPc)).filter((i) => i.tipo === 'pc_omitido');
       const r = await infracciones.actualizar(adminA, primera!.id, { accion: 'atender', nota: 'Llamé al conductor' });
@@ -640,13 +645,7 @@ describe('detección de infracciones (PR A)', () => {
         NotFoundException,
       );
       await expect(
-        infracciones.sancionar(adminB, cualquiera!.id, {
-          reglaId: reglaBId,
-          sujetoTipo: 'conductor',
-          sujetoId: conductorId,
-          motivo: 'x',
-          fechaHecho: new Date(),
-        }),
+        infracciones.sancionar(adminB, cualquiera!.id, sancionDe()),
       ).rejects.toBeInstanceOf(NotFoundException);
       const intacta = await infraccionesDe(sesionDesvio);
       expect(intacta.find((i) => i.id === cualquiera!.id)?.estado).toBe('abierta');
@@ -654,55 +653,59 @@ describe('detección de infracciones (PR A)', () => {
 
     it('sancionar crea la sanción y marca la infracción sancionada en una transacción; repetir da 409 sin segunda sanción', async () => {
       const abierta = (await infraccionesDe(sesionDesvio)).find((i) => i.estado === 'abierta' && i.finTs !== null)!;
-      const r = await infracciones.sancionar(adminA, abierta.id, {
-        reglaId: reglaAId,
-        sujetoTipo: 'conductor',
-        sujetoId: conductorId,
-        motivo: 'Desvío de ruta',
-        fechaHecho: new Date(),
-        evidenciaRef: `infraccion:${abierta.id}`,
-      });
+      const r = await infracciones.sancionar(adminA, abierta.id, sancionDe());
       expect(r.estado).toBe('sancionada');
       expect(r.sancionId).toBeTruthy();
       const sancion = await sanciones.obtener(adminA, r.sancionId!);
-      expect(sancion).toMatchObject({ reglaId: reglaAId, sujetoId: conductorId, estado: 'pendiente', sindicatoId: sindicatoA });
-      await expect(
-        infracciones.sancionar(adminA, abierta.id, {
-          reglaId: reglaAId,
-          sujetoTipo: 'conductor',
-          sujetoId: conductorId,
-          motivo: 'otra vez',
-          fechaHecho: new Date(),
-        }),
-      ).rejects.toBeInstanceOf(ConflictException);
+      // El hecho sale de la infracción, no del cliente.
+      expect(sancion).toMatchObject({
+        sujetoTipo: 'conductor',
+        sujetoId: conductorId,
+        estado: 'pendiente',
+        sindicatoId: sindicatoA,
+        vueltas: 2,
+        turno: 'noche',
+        paradaSalida: 'molinos',
+        evidenciaRef: `infraccion:${abierta.id} sesion:${sesionDesvio}`,
+      });
+      expect(sancion.fechaHecho.getTime()).toBe(fechaActualBolivia(abierta.inicioTs).getTime());
+      expect(sancion.fechaCumplimiento?.getTime()).toBe(sancionDe().fechaCumplimiento.getTime());
+      expect(sancion.motivo).toMatch(/^Alteración de ruta del vehículo .+: .+\(\d\d:\d\d\)\.$/);
+      const regla = await withTenantContext(ADMIN, (tx) => tx.regla.findUnique({ where: { id: sancion.reglaId } }));
+      expect(regla).toMatchObject({ tipo: 'desvio_ruta', estado: 'activo' });
+      // La sanción viene de una infracción: el hecho no se edita (409); una manual sigue editable.
+      await expect(sanciones.actualizar(adminA, sancion.id, { motivo: 'otro' })).rejects.toBeInstanceOf(ConflictException);
+      const manual = await sanciones.crear(adminA, {
+        sindicatoId: sindicatoA,
+        reglaId: sancion.reglaId,
+        sujetoTipo: 'conductor',
+        sujetoId: conductorId,
+        motivo: 'manual',
+        fechaHecho: new Date(),
+      });
+      expect(manual.vueltas).toBeNull();
+      expect(await sanciones.actualizar(adminA, manual.id, { motivo: 'editado' })).toMatchObject({ motivo: 'editado' });
+      await withTenantContext(ADMIN, (tx) => tx.sancion.delete({ where: { id: manual.id } }));
+      await expect(infracciones.sancionar(adminA, abierta.id, sancionDe())).rejects.toBeInstanceOf(ConflictException);
       const total = await withTenantContext(ADMIN, (tx) => tx.sancion.count({ where: { sindicatoId: sindicatoA } }));
       expect(total).toBe(1);
     });
 
-    it('si la sanción falla (regla de otro sindicato) la infracción NO queda sancionada (rollback)', async () => {
+    it('sin regla activa para el tipo: 409 y la infracción queda intacta', async () => {
       const objetivo = (await infraccionesDe(sesionRecorridos)).find((i) => i.tipo === 'desvio_ruta' && i.estado === 'abierta')!;
-      await expect(
-        infracciones.sancionar(adminA, objetivo.id, {
-          reglaId: reglaBId,
-          sujetoTipo: 'conductor',
-          sujetoId: conductorId,
-          motivo: 'x',
-          fechaHecho: new Date(),
-        }),
-      ).rejects.toBeInstanceOf(NotFoundException);
+      const desvio = { sindicatoId: sindicatoA, tipo: 'desvio_ruta', estado: 'activo' };
+      await withTenantContext(ADMIN, (tx) => tx.regla.updateMany({ where: desvio, data: { estado: 'inactivo' } }));
+      try {
+        await expect(infracciones.sancionar(adminA, objetivo.id, sancionDe())).rejects.toBeInstanceOf(ConflictException);
+      } finally {
+        await withTenantContext(ADMIN, (tx) =>
+          tx.regla.updateMany({ where: { ...desvio, estado: 'inactivo' }, data: { estado: 'activo' } }),
+        );
+      }
       const despues = (await infraccionesDe(sesionRecorridos)).find((i) => i.id === objetivo.id)!;
       expect(despues.estado).toBe('abierta');
       expect(despues.sancionId).toBeNull();
       expect(despues.atendidaPor).toBeNull();
-    });
-
-    const sancionDe = (extra: Partial<SancionarInfraccion> = {}): SancionarInfraccion => ({
-      reglaId: reglaAId,
-      sujetoTipo: 'conductor',
-      sujetoId: conductorId,
-      motivo: 'm',
-      fechaHecho: new Date(),
-      ...extra,
     });
 
     it('pc_omitido es sancionable: crea la sanción y marca la infracción sancionada', async () => {
@@ -713,30 +716,40 @@ describe('detección de infracciones (PR A)', () => {
       expect(r.sancionId).toBeTruthy();
       const despues = await withTenantContext(ADMIN, (tx) => tx.sancion.count({ where: { sindicatoId: sindicatoA } }));
       expect(despues).toBe(antes + 1);
-      expect(await sanciones.obtener(adminA, r.sancionId!)).toMatchObject({
-        reglaId: reglaAId,
+      const sancionPc = await sanciones.obtener(adminA, r.sancionId!);
+      expect(sancionPc).toMatchObject({
         sujetoTipo: 'conductor',
         sujetoId: conductorId,
         estado: 'pendiente',
+        vueltas: 2,
+        turno: 'noche',
+        paradaSalida: 'molinos',
       });
+      // El número de PC del motivo es su posición en la ruta (sin `espera`), no `orden + 1`.
+      const pcsRuta = await withTenantContext(ADMIN, (tx) =>
+        tx.puntoControl.findMany({ where: { rutaId: pcAbierta.rutaId, estado: 'activo' }, orderBy: { orden: 'asc' }, select: { id: true, rol: true } }),
+      );
+      const posicion = pcsRuta.filter((p) => p.rol !== 'espera').findIndex((p) => p.id === (pcAbierta.detalle as { puntoControlId: string }).puntoControlId);
+      expect(posicion).toBeGreaterThanOrEqual(0);
+      expect(sancionPc.motivo).toContain(`PC ${posicion + 1} omitido`);
     });
 
-    it('el sujeto debe ser el conductor o el vehículo de la infracción (400); socio no se admite', async () => {
+    it('el día de cumplimiento debe estar entre mañana y hoy + 1 mes (400); no se reclama la infracción', async () => {
       const objetivo = (await infraccionesDe(sesionRecorridos)).find((i) => i.tipo === 'desvio_ruta' && i.estado === 'abierta')!;
-      const llamar = (extra: Partial<SancionarInfraccion>) =>
-        infracciones.sancionar(adminA, objetivo.id, sancionDe(extra));
-      await expect(llamar({ sujetoId: randomUUID() })).rejects.toBeInstanceOf(BadRequestException);
-      // Cruzado: tipo conductor con el id del vehículo, y viceversa.
-      await expect(llamar({ sujetoTipo: 'conductor', sujetoId: vehiculoId })).rejects.toBeInstanceOf(BadRequestException);
-      await expect(llamar({ sujetoTipo: 'vehiculo', sujetoId: conductorId })).rejects.toBeInstanceOf(BadRequestException);
-      await expect(llamar({ sujetoTipo: 'socio', sujetoId: conductorId })).rejects.toBeInstanceOf(BadRequestException);
+      const { min, max } = rangoCumplimiento(fechaActualBolivia().toISOString().slice(0, 10));
+      const dia = (ymd: string, dias: number) => new Date(Date.parse(ymd) + dias * 86_400_000);
+      for (const fecha of [dia(min, -1), dia(max, 1)]) {
+        await expect(infracciones.sancionar(adminA, objetivo.id, sancionDe({ fechaCumplimiento: fecha }))).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+      }
       expect((await infraccionesDe(sesionRecorridos)).find((i) => i.id === objetivo.id)?.estado).toBe('abierta');
     });
 
-    it('sancionar desde atendida conserva la PRIMERA atención y completa evidenciaRef por defecto', async () => {
+    it('sancionar desde atendida conserva la PRIMERA atención y fija evidenciaRef', async () => {
       const objetivo = (await infraccionesDe(sesionRecorridos)).find((i) => i.tipo === 'desvio_ruta' && i.estado === 'abierta')!;
       const atendida = await infracciones.actualizar(adminA, objetivo.id, { accion: 'atender' });
-      const r = await infracciones.sancionar(adminA2, objetivo.id, sancionDe({ sujetoTipo: 'vehiculo', sujetoId: vehiculoId }));
+      const r = await infracciones.sancionar(adminA2, objetivo.id, sancionDe());
       expect(r.estado).toBe('sancionada');
       expect(r.atendidaPor).toBe('admin-a');
       expect(r.atendidaEn?.toISOString()).toBe(atendida.atendidaEn?.toISOString());

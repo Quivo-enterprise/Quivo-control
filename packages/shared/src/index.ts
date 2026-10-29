@@ -16,3 +16,4 @@ export * from './fila-salida.js';
 export * from './circuito.js';
 export * from './snap-ruta.js';
 export * from './traza-dibujo.js';
+export * from './infraccion-sancion.js';
