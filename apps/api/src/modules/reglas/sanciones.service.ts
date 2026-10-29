@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, withTenantContext } from '@quivo/db';
 import {
   SancionSchema,
@@ -6,6 +6,7 @@ import {
   type CrearSancion,
   type EstadoSancion,
   type Sancion,
+  type SancionarInfraccion,
   type SancionesQuery,
 } from '@quivo/shared';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
@@ -71,7 +72,11 @@ export class SancionesService {
    * sanción y actualice su propia entidad en UNA sola transacción. `crear` la usa tal cual, así
    * que su comportamiento público no cambia.
    */
-  async crearEnTx(tx: Prisma.TransactionClient, actor: AuthenticatedUser, data: CrearSancion): Promise<Sancion> {
+  async crearEnTx(
+    tx: Prisma.TransactionClient,
+    actor: AuthenticatedUser,
+    data: CrearSancion & Partial<SancionarInfraccion>,
+  ): Promise<Sancion> {
     const sindicatoId = resolverSindicatoId(actor, data.sindicatoId);
     const regla = await tx.regla.findUnique({ where: { id: data.reglaId } });
     if (!regla || regla.sindicatoId !== sindicatoId) {
@@ -86,6 +91,10 @@ export class SancionesService {
         motivo: data.motivo,
         fechaHecho: data.fechaHecho,
         evidenciaRef: data.evidenciaRef ?? null,
+        fechaCumplimiento: data.fechaCumplimiento ?? null,
+        vueltas: data.vueltas ?? null,
+        turno: data.turno ?? null,
+        paradaSalida: data.paradaSalida ?? null,
         estado: 'pendiente',
       },
     });
@@ -97,6 +106,9 @@ export class SancionesService {
       const anterior = await obtenerOFallar(tx, id);
       if (anterior.estado !== 'pendiente') {
         throw new BadRequestException('Solo se puede editar una sanción pendiente');
+      }
+      if (await tx.infraccion.count({ where: { sancionId: id } })) {
+        throw new ConflictException('La sanción viene de una infracción: el hecho no se edita');
       }
       return tx.sancion.update({ where: { id }, data });
     });
@@ -167,6 +179,10 @@ function toSancion(row: {
   fechaHecho: Date;
   evidenciaRef: string | null;
   estado: string;
+  fechaCumplimiento: Date | null;
+  vueltas: number | null;
+  turno: string | null;
+  paradaSalida: string | null;
 }): Sancion {
   return SancionSchema.parse(row);
 }

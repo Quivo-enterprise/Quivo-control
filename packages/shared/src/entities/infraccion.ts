@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { GravedadReglaSchema } from '../enums/estados.js';
 import { sindicatoIdSchema, uuidSchema } from '../primitives.js';
-import { CrearSancionSchema } from './sancion.js';
+import { ParadaSalidaSchema } from '../enums/parada-salida.js';
+import { TurnoSchema } from '../enums/turno.js';
 
 // docs/plan-en-vivo-alertas.md, PR A — infracciones detectadas automáticamente por el worker
 // de ingesta (desvío de ruta, punto de control omitido) y accionables por el admin.
@@ -138,7 +139,15 @@ export const ActualizarInfraccionSchema = z.object({
 });
 export type ActualizarInfraccion = z.infer<typeof ActualizarInfraccionSchema>;
 
-/** `POST /infracciones/:id/sancionar` — mismos campos que `CrearSancion`, sin `sindicatoId`
- * (se deriva de la infracción). */
-export const SancionarInfraccionSchema = CrearSancionSchema.omit({ sindicatoId: true });
+/** `POST /infracciones/:id/sancionar` — solo agenda el cumplimiento (sanción compensatoria). El hecho
+ * (regla, sujeto, motivo, fecha, evidencia) lo deriva el servidor de la infracción: `.strict()` hace
+ * que mandarlos sea 400. El rango de `fechaCumplimiento` lo valida el servidor (`rangoCumplimiento`). */
+export const SancionarInfraccionSchema = z
+  .object({
+    fechaCumplimiento: z.coerce.date(),
+    vueltas: z.number().int().min(1).max(10),
+    turno: TurnoSchema,
+    paradaSalida: ParadaSalidaSchema,
+  })
+  .strict();
 export type SancionarInfraccion = z.infer<typeof SancionarInfraccionSchema>;

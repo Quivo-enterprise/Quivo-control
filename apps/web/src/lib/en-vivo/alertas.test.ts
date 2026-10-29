@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { Infraccion } from '@quivo/shared';
+import { reglaInicialSancion, type Infraccion } from '@quivo/shared';
 import {
   actualizarPrimeraVez,
   alertaMarcador,
   puedeActuarEnInfracciones,
   contarPorNivel,
-  detalleInfraccion,
-  etiquetaTipoInfraccion,
   duracionInfraccion,
   filtrarPorNivel,
   ordenarAlertas,
@@ -14,7 +12,6 @@ import {
   puedeAtender,
   puedeDescartar,
   puedeSancionar,
-  reglaInicialSancion,
   reglasSancionables,
   resumenContadores,
   siguienteAlertaId,
@@ -79,20 +76,6 @@ describe('infracciones del panel', () => {
     inicioTs: new Date('2026-10-13T14:00:00Z'),
     finTs: null,
   } as unknown as Infraccion;
-  it('detalle de desvío y de PC omitido', () => {
-    expect(detalleInfraccion(base)).toBe('a 180 m de la ruta');
-    const pc = { ...base, tipo: 'pc_omitido', detalle: { puntoControlId: 'p3', orden: 7 } } as unknown as Infraccion;
-    expect(detalleInfraccion(pc, ['p1', 'p2', 'p3'])).toBe('PC 3 omitido');
-    expect(detalleInfraccion(pc)).toBe('PC 8 omitido');
-  });
-  it('detalle y etiqueta de las alertas de Molinos', () => {
-    const corta = { ...base, tipo: 'espera_corta', detalle: { esperaMin: 20, requeridoMin: 30 } } as unknown as Infraccion;
-    expect(detalleInfraccion(corta)).toBe('esperó 20 de 30 min en Molinos');
-    expect(etiquetaTipoInfraccion('espera_corta')).toBe('Espera corta en Molinos');
-    const omitido = { ...base, tipo: 'molinos_omitido', detalle: {} } as unknown as Infraccion;
-    expect(detalleInfraccion(omitido)).toBe('cerró la vuelta sin pasar por Molinos');
-    expect(etiquetaTipoInfraccion('molinos_omitido')).toBe('Molinos omitido');
-  });
   it('duración solo si cerró', () => {
     expect(duracionInfraccion(base)).toBeNull();
     expect(duracionInfraccion({ ...base, finTs: new Date('2026-10-13T14:12:00Z') })).toBe('12 min');
@@ -150,32 +133,6 @@ describe('actualizarPrimeraVez', () => {
     let mapa = actualizarPrimeraVez(new Map(), [vehiculos[0]!], 100);
     mapa = actualizarPrimeraVez(mapa, vehiculos, 200);
     expect(ordenarAlertas(vehiculos, mapa).map((v) => v.id)).toEqual(['z', 'x', 'y']);
-  });
-});
-
-describe('reglaInicialSancion', () => {
-  const reglas = [
-    { id: 'r1', tipo: 'otro' },
-    { id: 'r2', tipo: 'desvio_ruta' },
-  ];
-  it('usa la regla de la infracción si sigue activa', () => {
-    expect(reglaInicialSancion({ reglaId: 'r1', tipo: 'desvio_ruta' }, reglas)).toBe('r1');
-  });
-  it('si no, la regla activa de desvío; sin ninguna, undefined (no se asume la primera)', () => {
-    expect(reglaInicialSancion({ reglaId: null, tipo: 'desvio_ruta' }, reglas)).toBe('r2');
-    expect(reglaInicialSancion({ reglaId: 'inactiva', tipo: 'desvio_ruta' }, reglas)).toBe('r2');
-    expect(reglaInicialSancion({ reglaId: null, tipo: 'desvio_ruta' }, [{ id: 'r1', tipo: 'otro' }])).toBeUndefined();
-  });
-  it('sin reglaId (infracción previa a la regla): la activa del mismo tipo, antes que desvío', () => {
-    const con = [...reglas, { id: 'r3', tipo: 'pc_omitido' }];
-    expect(reglaInicialSancion({ reglaId: null, tipo: 'pc_omitido' }, con)).toBe('r3');
-    expect(reglaInicialSancion({ reglaId: 'inactiva', tipo: 'pc_omitido' }, con)).toBe('r3');
-    expect(reglaInicialSancion({ reglaId: null, tipo: 'pc_omitido' }, reglas)).toBeUndefined();
-  });
-  it('molinos_omitido: prefiere su regla y si no hay cae a desvío_ruta', () => {
-    const con = [...reglas, { id: 'r4', tipo: 'molinos_omitido' }];
-    expect(reglaInicialSancion({ reglaId: null, tipo: 'molinos_omitido' }, con)).toBe('r4');
-    expect(reglaInicialSancion({ reglaId: null, tipo: 'molinos_omitido' }, reglas)).toBe('r2');
   });
 });
 

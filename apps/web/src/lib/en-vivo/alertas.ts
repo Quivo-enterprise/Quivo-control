@@ -143,17 +143,6 @@ export function siguienteAlertaId(ordenadas: { id: string }[], actualId: string 
 // Lista de infracciones del panel
 // ---------------------------------------------------------------------------------------------
 
-const ETIQUETA_TIPO_INFRACCION: Record<Infraccion['tipo'], string> = {
-  desvio_ruta: 'Alteración de ruta',
-  pc_omitido: 'Punto de control omitido',
-  molinos_omitido: 'Molinos omitido',
-  espera_corta: 'Espera corta en Molinos',
-};
-
-export function etiquetaTipoInfraccion(tipo: Infraccion['tipo']): string {
-  return ETIQUETA_TIPO_INFRACCION[tipo];
-}
-
 export const ETIQUETA_ESTADO_INFRACCION: Record<Infraccion['estado'], string> = {
   abierta: 'Abierta',
   atendida: 'Atendida',
@@ -169,35 +158,6 @@ export function ordenarInfracciones(infracciones: Infraccion[]): Infraccion[] {
     if (aa !== bb) return aa - bb;
     return b.inicioTs.getTime() - a.inicioTs.getTime();
   });
-}
-
-function numero(valor: unknown): number | null {
-  return typeof valor === 'number' && Number.isFinite(valor) ? valor : null;
-}
-
-/** "a 180 m de la ruta" (desvío) / "PC 3 omitido". El número del PC es su posición en la lista
- * del recorrido (`idsPuntosControl`, la misma que el mapa y el panel) y, si no se conoce, `orden + 1`. */
-export function detalleInfraccion(
-  i: Pick<Infraccion, 'tipo' | 'detalle'>,
-  idsPuntosControl: readonly string[] = [],
-): string {
-  if (i.tipo === 'desvio_ruta') {
-    const m = numero(i.detalle.distanciaMaxM);
-    return m === null ? 'fuera de la ruta' : `a ${Math.round(m)} m de la ruta`;
-  }
-  if (i.tipo === 'molinos_omitido') return 'cerró la vuelta sin pasar por Molinos';
-  if (i.tipo === 'espera_corta') {
-    const esperado = numero(i.detalle.esperaMin);
-    const requerido = numero(i.detalle.requeridoMin);
-    return esperado !== null && requerido !== null
-      ? `esperó ${esperado} de ${requerido} min en Molinos`
-      : 'salió de Molinos antes de tiempo';
-  }
-  const posicion = typeof i.detalle.puntoControlId === 'string' ? idsPuntosControl.indexOf(i.detalle.puntoControlId) : -1;
-  const orden = posicion >= 0 ? posicion : numero(i.detalle.orden);
-  const nombre = typeof i.detalle.nombre === 'string' && i.detalle.nombre.trim() ? i.detalle.nombre.trim() : null;
-  const base = orden === null ? 'PC omitido' : `PC ${orden + 1} omitido`;
-  return nombre ? `${base} (${nombre})` : base;
 }
 
 /** Duración "12 min" / "45 s" solo si la infracción ya cerró (`finTs`). */
@@ -227,12 +187,6 @@ export function puedeDescartar(i: Pick<Infraccion, 'estado'>): boolean {
   return i.estado === 'abierta' || i.estado === 'atendida';
 }
 
-/** Valores iniciales de la sanción para una infracción de desvío. */
-export function motivoSancion(i: Pick<Infraccion, 'tipo' | 'detalle' | 'inicioTs'>, placa?: string): string {
-  const hora = i.inicioTs.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' });
-  return `${etiquetaTipoInfraccion(i.tipo)}${placa ? ` del vehículo ${placa}` : ''}: ${detalleInfraccion(i)} (${hora}).`;
-}
-
 /** Solo las reglas activas del sindicato de la infracción: `admin_quivo` recibe las de TODOS los
  * sindicatos y una ajena no puede ofrecerse ni preseleccionarse. */
 export function reglasSancionables<R extends { sindicatoId: string; estado: string }>(
@@ -240,20 +194,6 @@ export function reglasSancionables<R extends { sindicatoId: string; estado: stri
   sindicatoId: string,
 ): R[] {
   return reglas.filter((r) => r.sindicatoId === sindicatoId && r.estado === 'activo');
-}
-
-/** Regla preseleccionada de la sanción: la de la infracción si sigue activa; si no, la regla activa
- * del mismo tipo (las infracciones previas a la regla no tienen `reglaId`); si no, la de "Alteración
- * de ruta". Sin ninguna, `undefined`: el admin la elige (no se asume la primera). */
-export function reglaInicialSancion(
-  inf: Pick<Infraccion, 'reglaId' | 'tipo'>,
-  reglasActivas: { id: string; tipo: string }[],
-): string | undefined {
-  if (inf.reglaId && reglasActivas.some((r) => r.id === inf.reglaId)) return inf.reglaId;
-  const delMismoTipo = reglasActivas.find((r) => r.tipo === inf.tipo);
-  // Solo desvío y Molinos caen a la regla de desvío; un PC omitido sin su regla no preselecciona la grave.
-  const cae = inf.tipo === 'desvio_ruta' || inf.tipo === 'molinos_omitido';
-  return (delMismoTipo ?? (cae ? reglasActivas.find((r) => r.tipo === 'desvio_ruta') : undefined))?.id;
 }
 
 // ---------------------------------------------------------------------------------------------

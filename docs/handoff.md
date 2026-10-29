@@ -6,6 +6,28 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## Hecho — 2026-10-28: "Sancionar" agenda sanción compensatoria (hecho inmutable)
+
+Plan: [`docs/plan-sancion-compensatoria.md`](plan-sancion-compensatoria.md). Rama
+`feat/sancion-compensatoria`.
+- `POST /infracciones/:id/sancionar` acepta solo `{fechaCumplimiento, vueltas 1..10, turno, paradaSalida}`
+  (`.strict()`: mandar `motivo`/`fechaHecho`/`reglaId` = 400). Regla (`reglaInicialSancion`, ahora en shared),
+  sujeto = conductor, motivo (hora Bolivia, PC numerado sin `espera`), fecha del hecho y evidencia los deriva
+  el servidor. Día: mañana..hoy+1 mes (Bolivia), si no 400. Sin regla activa → 409.
+- `PATCH /sanciones/:id` de una sanción vinculada a infracción → 409.
+- Migración `20261029100000_sancion_compensatoria`: 4 columnas en `sanciones` + CHECKs (todo-o-nada).
+  `paradaSalida` = enum `salomon_romero|molinos` (shortcut L16: migrar a FK a `puntos_control` con otra línea).
+- Web: modal nuevo `en-vivo/modal-sancionar.tsx` (resumen solo lectura + 4 campos, turno por defecto Noche);
+  `/reglas` muestra "3 vueltas · Noche · desde Molinos · cumplir el …". `NuevaSancionModal` sin modo infracción.
+- Gates: `/code-review` (10 hallazgos: 7 aplicados; descartados deploy-skew —deploy manual conjunto—, borde de
+  medianoche, export CSV), `/ponytail-review`, `/security-review` (0 ≥8). Codex: no verificado (sin cuota).
+  Tests: shared 268, web 274, API (infracciones/reglas/detección/vueltas) 203. Playwright local (copia de
+  `quivo_qa_envivo`): modal, submit, fila en `/reglas`, curl 400 con `motivo` y 409 en PATCH — todo OK.
+- **Deploy: API + web juntas** (el body cambió) y trae migración. Lo decide el CTO, después del piloto 29/10.
+- Shortcut abierto: el motivo no inserta el PC de espera designado (la infracción no guarda `varianteId`).
+- Fuera: crear la `Asignacion` compensatoria, avisar al chofer en la app, contar si cumplió, columnas en el
+  export CSV de sanciones.
+
 ## Hecho — 2026-10-27/28: QA E2E de `/en-vivo` y 5 PRs de fixes
 
 Plan: [`docs/plan-qa-en-vivo.md`](plan-qa-en-vivo.md). Reporte (35 hallazgos):

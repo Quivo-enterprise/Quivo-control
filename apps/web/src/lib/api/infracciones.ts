@@ -20,9 +20,9 @@ export const infraccionesApi = {
   actualizar: async (token: string, id: string, data: ActualizarInfraccion): Promise<Infraccion> =>
     InfraccionSchema.parse(await apiFetch<unknown>(`/infracciones/${id}`, token, { method: 'PATCH', body: data })),
 
-  /** `POST /infracciones/:id/sancionar` — crea la sanción y la vincula a la infracción; responde
-   * la INFRACCIÓN actualizada (estado `sancionada`), no la sanción. El sujeto debe ser el conductor
-   * o el vehículo de la infracción; `espera_corta` responde 409. */
+  /** `POST /infracciones/:id/sancionar` — agenda la sanción compensatoria y la vincula a la infracción;
+   * responde la INFRACCIÓN actualizada (estado `sancionada`), no la sanción. Solo se manda el
+   * cumplimiento: el hecho lo deriva el servidor. `espera_corta` o sin regla activa responde 409. */
   sancionar: async (token: string, id: string, data: SancionarInfraccion): Promise<Infraccion> =>
     InfraccionSchema.parse(
       await apiFetch<unknown>(`/infracciones/${id}/sancionar`, token, { method: 'POST', body: data }),

@@ -677,6 +677,11 @@ model Sancion {
   fechaHecho   DateTime  @db.Date
   evidenciaRef String?
   estado       String    @default("pendiente")
+  // Sanción compensatoria (todo-o-nada, CHECK en la migración): solo las nacidas de una infracción.
+  fechaCumplimiento DateTime? @db.Date
+  vueltas           Int?
+  turno             String?
+  paradaSalida      String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 

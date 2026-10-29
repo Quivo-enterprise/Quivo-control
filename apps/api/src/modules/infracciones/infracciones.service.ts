@@ -7,6 +7,10 @@ import {
 } from '@nestjs/common';
 import { withTenantContext, type Prisma } from '@quivo/db';
 import {
+  fechaActualBolivia,
+  motivoSancion,
+  rangoCumplimiento,
+  reglaInicialSancion,
   TIPOS_INFRACCION_SOLO_ALERTA,
   type ActualizarInfraccion,
   type EstadoInfraccion,
@@ -79,13 +83,13 @@ export class InfraccionesService {
   }
 
   /**
-   * Crea la `Sancion` (reusando `SancionesService.crearEnTx`) y marca la infracción
-   * `sancionada` con `sancionId`, todo en UNA transacción: si cualquiera falla (regla
-   * inexistente, estado inválido) no queda ni sanción huérfana ni infracción marcada.
+   * Agenda una sanción compensatoria: crea la `Sancion` (reusando `SancionesService.crearEnTx`) y
+   * marca la infracción `sancionada` con `sancionId`, todo en UNA transacción: si cualquiera falla
+   * (sin regla, estado inválido) no queda ni sanción huérfana ni infracción marcada.
    *
-   * Reglas de negocio: `espera_corta` es solo alerta (decisión del CTO) → 409; el sujeto debe ser
-   * el conductor o el vehículo de la propia infracción → 400; `evidenciaRef` por defecto
-   * `infraccion:{id} sesion:{sesionId}`.
+   * El hecho es inmutable: regla, sujeto (el conductor), motivo, fecha del hecho y evidencia salen
+   * de la infracción, nunca del cliente; el cliente solo agenda el cumplimiento. `espera_corta` es
+   * solo alerta (decisión del CTO) → 409.
    */
   async sancionar(actor: AuthenticatedUser, id: string, data: SancionarInfraccion): Promise<Infraccion> {
     return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
@@ -96,17 +100,25 @@ export class InfraccionesService {
       if ((TIPOS_INFRACCION_SOLO_ALERTA as readonly string[]).includes(infraccion.tipo)) {
         throw new ConflictException('Una infracción de espera corta en Molinos es solo una alerta: no se puede sancionar');
       }
-      const sujetoEsperado =
-        data.sujetoTipo === 'conductor'
-          ? infraccion.conductorId
-          : data.sujetoTipo === 'vehiculo'
-            ? infraccion.vehiculoId
-            : null;
-      if (sujetoEsperado === null || data.sujetoId !== sujetoEsperado) {
-        throw new BadRequestException(
-          'El sujeto de la sanción debe ser el conductor o el vehículo de la infracción',
-        );
+      const { min, max } = rangoCumplimiento(fechaActualBolivia().toISOString().slice(0, 10));
+      const dia = data.fechaCumplimiento.toISOString().slice(0, 10);
+      if (dia < min || dia > max) {
+        throw new BadRequestException(`El día de cumplimiento debe estar entre ${min} y ${max}`);
       }
+      const reglas = await tx.regla.findMany({ where: { sindicatoId: infraccion.sindicatoId, estado: 'activo' } });
+      const reglaId = reglaInicialSancion({ reglaId: infraccion.reglaId, tipo: infraccion.tipo as Infraccion['tipo'] }, reglas);
+      if (!reglaId) {
+        throw new ConflictException(`No hay una regla activa para infracciones de tipo "${infraccion.tipo}"`);
+      }
+      // Numeración del motivo (inmutable) = la del panel: PCs activos sin `espera`. shortcut: la infracción
+      // no guarda la variante, así que no se inserta el PC de espera designado; revisar si se guarda `varianteId`.
+      const pcs = await tx.puntoControl.findMany({
+        where: { rutaId: infraccion.rutaId, estado: 'activo' },
+        orderBy: { orden: 'asc' },
+        select: { id: true, rol: true },
+      });
+      const idsPc = pcs.filter((p) => p.rol !== 'espera').map((p) => p.id);
+      const vehiculo = await tx.vehiculo.findUnique({ where: { id: infraccion.vehiculoId }, select: { placa: true } });
       // Reclamo atómico del estado ANTES de crear la sanción: evita dos sanciones para la
       // misma infracción ante doble click / dos admins.
       const { count } = await tx.infraccion.updateMany({
@@ -118,9 +130,21 @@ export class InfraccionesService {
       }
       await registrarPrimeraAtencion(tx, id, actor);
       const sancion = await this.sancionesService.crearEnTx(tx, actor, {
-        ...data,
         sindicatoId: infraccion.sindicatoId,
-        evidenciaRef: data.evidenciaRef ?? `infraccion:${infraccion.id} sesion:${infraccion.sesionId}`,
+        reglaId,
+        sujetoTipo: 'conductor',
+        sujetoId: infraccion.conductorId,
+        motivo: motivoSancion(
+          { tipo: infraccion.tipo as Infraccion['tipo'], detalle: infraccion.detalle as Infraccion['detalle'], inicioTs: infraccion.inicioTs },
+          vehiculo?.placa,
+          idsPc,
+        ),
+        fechaHecho: fechaActualBolivia(infraccion.inicioTs),
+        evidenciaRef: `infraccion:${infraccion.id} sesion:${infraccion.sesionId}`,
+        fechaCumplimiento: data.fechaCumplimiento,
+        vueltas: data.vueltas,
+        turno: data.turno,
+        paradaSalida: data.paradaSalida,
       });
       const actualizada = await tx.infraccion.update({
         where: { id },
