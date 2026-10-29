@@ -1,5 +1,5 @@
 /**
- * Crea el **piloto de la línea 16 con 8 trufis** en el sindicato piloto de producción, **hablando
+ * Crea el **piloto de la línea 16 con 38 trufis** (8 originales + 30 añadidos 2026-10-29) en el sindicato piloto de producción, **hablando
  * SOLO con la API HTTP pública** (nunca con la base: Cloud SQL es de IP privada). Mismo patrón que
  * `sembrar-piloto-produccion.ts` / `cargar-linea-16.ts`: login de admin por variables de entorno
  * (fail-closed), 401 aborta, 429 con reintento, idempotente por lookups (los ids los pone el
@@ -9,11 +9,11 @@
  *
  * ## ⚠ ADVERTENCIA — LEER ANTES DE GENERAR OTRAS ROTACIONES
  *
- * Mientras los vehículos `1616PIL`/`PIB`/`PIC`/`PID`/`PIE`/`PIF`/`PIG`/`PIH` y sus conductores estén ACTIVOS, cualquier
+ * Mientras los vehículos del piloto (ver `PILOTOS`: `1616PIL`..`1616PIH` y `1616PJA`..`1616PKD`) y sus conductores estén ACTIVOS, cualquier
  * `POST /rotaciones` (generar) que se lance desde el panel para este sindicato los incluirá en el
- * reparto round-robin. Al terminar el piloto (2026-10-26) —o antes de generar otras rotaciones— correr:
+ * reparto round-robin. Al terminar el piloto (2026-11-02) —o antes de generar otras rotaciones— correr:
  *     tsx scripts/crear-piloto-linea-16.ts --desactivar --apply
- * (deja inactivos los 8 vehículos, los 8 conductores y el socio placeholder).
+ * (deja inactivos todos los vehículos, conductores y el socio placeholder).
  *
  * Nota: cliente HTTP y login están duplicados a propósito con los otros scripts standalone de
  * `scripts/`. Las funciones PURAS (hoy en La Paz, plan de faltantes, decisión de anular, fusión del
@@ -21,14 +21,14 @@
  *
  * ## Qué crea (todo en el sindicato "Sindicato Piloto — Producción")
  *
- *   0. Un **socio** placeholder (propietario de los 8 vehículos).
- *   1. Ocho **vehículos** `1616PIL`, `1616PIB`, `1616PIC`, `1616PID`, `1616PIE`, `1616PIF`, `1616PIG`, `1616PIH` (placa PTA válida: 4 dígitos + 3 letras),
+ *   0. Un **socio** placeholder (propietario de todos los vehículos).
+ *   1. **Vehículos** (38): `1616PIL`, `1616PIB`..`1616PIH` (originales) y, añadidos 2026-10-29, `1616PJA`..`1616PJZ` y `1616PKA`..`1616PKD` (placa PTA válida: 4 dígitos + 3 letras),
  *      `estado` activo. El esquema exige tipo/marca/modelo/color/capacidad; NO se inventan datos
  *      reales: tipo `otro` (exige admin_quivo, que es quien corre esto), marca `Piloto`, modelo
  *      `Linea 16 piloto`, color `otro`, capacidad 12 (placeholder, NO un dato del vehículo). Socio
  *      propietario placeholder "Socio Piloto Línea Dieciséis" (CI `9000116 CB`): la API exige socio
  *      para activar un vehículo. Cuando haya móviles reales, editar esos campos desde el panel.
- *   2. Ocho **conductores** (CI sintéticos, nombres sin dígitos: `NombrePersonaSchema` los rechaza):
+ *   2. **Conductores** (38; CI sintéticos, nombres sin dígitos: `NombrePersonaSchema` los rechaza). Los 8 originales:
  *        1616PIL  "Piloto Línea Dieciséis"          CI 9000016 CB  LIC-9000016   (el piloto original)
  *        1616PIB  "Piloto Línea Dieciséis Bravo"    CI 9000017 CB  LIC-9000017
  *        1616PIC  "Piloto Línea Dieciséis Charlie"  CI 9000018 CB  LIC-9000018
@@ -37,6 +37,8 @@
  *        1616PIF  "Piloto Línea Dieciséis Fox"      CI 9000021 CB  LIC-9000021
  *        1616PIG  "Piloto Línea Dieciséis Golf"     CI 9000022 CB  LIC-9000022
  *        1616PIH  "Piloto Línea Dieciséis Hotel"    CI 9000023 CB  LIC-9000023
+ *      Añadidos 2026-10-29 (30): 1616PJA..1616PJZ, 1616PKA..1616PKD; CI 9000024..9000053 CB (LIC-<CI>);
+ *      nombres 'Piloto Línea Dieciséis Nueve'..'Piloto Línea Dieciséis Treinta y ocho'.
  *   3. **Credencial móvil**: el login vigente es de UN paso (`POST /mobile/auth/sesion`): placa +
  *      **PIN del CONDUCTOR** (+ deviceId). Por default solo se fija el PIN del conductor
  *      (`PUT /mobile/credenciales/conductores/:id`); el PIN del vehículo (solo login LEGADO) se fija
@@ -44,7 +46,7 @@
  *      node:crypto y se escriben SOLO al archivo `QUIVO_PILOTO16_CREDS_FILE` (0600, fuera del repo),
  *      NUNCA por stdout. Si no hay archivo y hay que fijar algún PIN generado, se aborta ANTES de escribir.
  *   4. Una **rotación** (periodo `piloto-linea-16`) con una asignación por día por piloto, horario
- *      `manana`, la ruta `circuito` de la línea 16, hasta `QUIVO_PILOTO16_HASTA` (default 2026-10-26).
+ *      `manana`, la ruta `circuito` de la línea 16, hasta `QUIVO_PILOTO16_HASTA` (default 2026-11-02).
  *      Rango del piloto 1: `QUIVO_PILOTO16_DESDE` (default 2026-10-13). Rango de los NUEVOS:
  *      `QUIVO_PILOTO16_DESDE_NUEVOS` (default = HOY en America/La_Paz, no se crean días pasados).
  *      Queda **publicada** (el login exige rotación publicada); `horaSalida`/`horaPresentacion` null.
@@ -62,7 +64,7 @@
  *   - Socio, vehículos, conductores y PIN se crean ANTES de anular: la ventana sin login es solo
  *     los POST de asignaciones + publicar.
  *   - Pre-vuelo: `GET /reportes/en-vivo` (en-vivo.controller.ts, solo lectura). Si hay una sesión
- *     activa (`activa` y `estadoFrescura` reportando/detenido) en alguno de los 8 vehículos, se
+ *     activa (`activa` y `estadoFrescura` reportando/detenido) en alguno de los vehículos del piloto, se
  *     aborta antes de anular, salvo `--forzar-anular` (aun así la sesión abierta no se corta; el
  *     riesgo es que un re-login/cambio de dispositivo falle durante la ventana).
  *   - `publicar` se reintenta 3 veces con backoff. Si igual falla: mensaje MUY visible con el
@@ -75,7 +77,7 @@
  * La API NO permite crear una rotación vacía: `POST /rotaciones` es `generar()` y SIEMPRE reparte
  * round-robin entre TODOS los vehículos activos del sindicato. Se usa con UNA fecha, UN horario y UNA
  * ruta (= 1 asignación) y se espera `1616PIL`; para eso en la primera corrida se crea/activa SOLO
- * el piloto 1 antes de generar, y los otros siete después. Si `generar` devuelve algo distinto de
+ * el piloto 1 antes de generar, y los demás después. Si `generar` devuelve algo distinto de
  * exactamente 1 asignación de `1616PIL`, se BORRAN las que creó (es borrador, sin sesiones), se
  * verifica por GET y se aborta sin publicar. El conductor que le pone (el primero por nombre) se
  * corrige con `PATCH`. Es una rotación NUEVA y separada de la del piloto de 6 vehículos.
@@ -86,7 +88,7 @@
  *   default "Sindicato Piloto — Producción"). Línea: código '16' + única ruta `circuito` activa.
  *   Vehículo: por placa normalizada. Conductor: por CI dentro del sindicato. Rotación: por `periodo`.
  *   Asignaciones: por (vehículo, fecha, horario). Re-correr con todo ya creado = 0 escrituras. Los PIN
- *   NO se regeneran si el conductor ya existía, salvo `--reset-credenciales` (afecta a los 8; rotar un
+ *   NO se regeneran si el conductor ya existía, salvo `--reset-credenciales` (afecta a todos los conductores; rotar un
  *   PIN revoca sus sesiones activas). La API no expone si un conductor tiene PIN: si una corrida murió
  *   entre crear el conductor y fijar su PIN, usar `--reset-credenciales`.
  *
@@ -112,7 +114,7 @@
  *                              existente sin pisar; formato `PLACA | Conductor | pin=NNNNNNNN`.
  *   QUIVO_PILOTO16_DESDE       Opcional, YYYY-MM-DD, rango del piloto 1 (default 2026-10-13).
  *   QUIVO_PILOTO16_DESDE_NUEVOS  Opcional, rango de los pilotos nuevos (default: hoy en La Paz).
- *   QUIVO_PILOTO16_HASTA       Opcional, YYYY-MM-DD (default 2026-10-26).
+ *   QUIVO_PILOTO16_HASTA       Opcional, YYYY-MM-DD (default 2026-11-02).
  */
 
 import { randomInt } from 'node:crypto';
@@ -176,13 +178,43 @@ const PILOTOS: readonly PilotoDef[] = [
   { placa: '1616PIF', conductor: { nombre: 'Piloto Línea Dieciséis Fox', documentoIdentidad: '9000021 CB', licenciaConducir: 'LIC-9000021' }, nuevo: true },
   { placa: '1616PIG', conductor: { nombre: 'Piloto Línea Dieciséis Golf', documentoIdentidad: '9000022 CB', licenciaConducir: 'LIC-9000022' }, nuevo: true },
   { placa: '1616PIH', conductor: { nombre: 'Piloto Línea Dieciséis Hotel', documentoIdentidad: '9000023 CB', licenciaConducir: 'LIC-9000023' }, nuevo: true },
+  { placa: '1616PJA', conductor: { nombre: 'Piloto Línea Dieciséis Nueve', documentoIdentidad: '9000024 CB', licenciaConducir: 'LIC-9000024' }, nuevo: true },
+  { placa: '1616PJB', conductor: { nombre: 'Piloto Línea Dieciséis Diez', documentoIdentidad: '9000025 CB', licenciaConducir: 'LIC-9000025' }, nuevo: true },
+  { placa: '1616PJC', conductor: { nombre: 'Piloto Línea Dieciséis Once', documentoIdentidad: '9000026 CB', licenciaConducir: 'LIC-9000026' }, nuevo: true },
+  { placa: '1616PJD', conductor: { nombre: 'Piloto Línea Dieciséis Doce', documentoIdentidad: '9000027 CB', licenciaConducir: 'LIC-9000027' }, nuevo: true },
+  { placa: '1616PJE', conductor: { nombre: 'Piloto Línea Dieciséis Trece', documentoIdentidad: '9000028 CB', licenciaConducir: 'LIC-9000028' }, nuevo: true },
+  { placa: '1616PJF', conductor: { nombre: 'Piloto Línea Dieciséis Catorce', documentoIdentidad: '9000029 CB', licenciaConducir: 'LIC-9000029' }, nuevo: true },
+  { placa: '1616PJG', conductor: { nombre: 'Piloto Línea Dieciséis Quince', documentoIdentidad: '9000030 CB', licenciaConducir: 'LIC-9000030' }, nuevo: true },
+  { placa: '1616PJH', conductor: { nombre: 'Piloto Línea Dieciséis Dieciséis', documentoIdentidad: '9000031 CB', licenciaConducir: 'LIC-9000031' }, nuevo: true },
+  { placa: '1616PJI', conductor: { nombre: 'Piloto Línea Dieciséis Diecisiete', documentoIdentidad: '9000032 CB', licenciaConducir: 'LIC-9000032' }, nuevo: true },
+  { placa: '1616PJJ', conductor: { nombre: 'Piloto Línea Dieciséis Dieciocho', documentoIdentidad: '9000033 CB', licenciaConducir: 'LIC-9000033' }, nuevo: true },
+  { placa: '1616PJK', conductor: { nombre: 'Piloto Línea Dieciséis Diecinueve', documentoIdentidad: '9000034 CB', licenciaConducir: 'LIC-9000034' }, nuevo: true },
+  { placa: '1616PJL', conductor: { nombre: 'Piloto Línea Dieciséis Veinte', documentoIdentidad: '9000035 CB', licenciaConducir: 'LIC-9000035' }, nuevo: true },
+  { placa: '1616PJM', conductor: { nombre: 'Piloto Línea Dieciséis Veintiuno', documentoIdentidad: '9000036 CB', licenciaConducir: 'LIC-9000036' }, nuevo: true },
+  { placa: '1616PJN', conductor: { nombre: 'Piloto Línea Dieciséis Veintidós', documentoIdentidad: '9000037 CB', licenciaConducir: 'LIC-9000037' }, nuevo: true },
+  { placa: '1616PJO', conductor: { nombre: 'Piloto Línea Dieciséis Veintitrés', documentoIdentidad: '9000038 CB', licenciaConducir: 'LIC-9000038' }, nuevo: true },
+  { placa: '1616PJP', conductor: { nombre: 'Piloto Línea Dieciséis Veinticuatro', documentoIdentidad: '9000039 CB', licenciaConducir: 'LIC-9000039' }, nuevo: true },
+  { placa: '1616PJQ', conductor: { nombre: 'Piloto Línea Dieciséis Veinticinco', documentoIdentidad: '9000040 CB', licenciaConducir: 'LIC-9000040' }, nuevo: true },
+  { placa: '1616PJR', conductor: { nombre: 'Piloto Línea Dieciséis Veintiséis', documentoIdentidad: '9000041 CB', licenciaConducir: 'LIC-9000041' }, nuevo: true },
+  { placa: '1616PJS', conductor: { nombre: 'Piloto Línea Dieciséis Veintisiete', documentoIdentidad: '9000042 CB', licenciaConducir: 'LIC-9000042' }, nuevo: true },
+  { placa: '1616PJT', conductor: { nombre: 'Piloto Línea Dieciséis Veintiocho', documentoIdentidad: '9000043 CB', licenciaConducir: 'LIC-9000043' }, nuevo: true },
+  { placa: '1616PJU', conductor: { nombre: 'Piloto Línea Dieciséis Veintinueve', documentoIdentidad: '9000044 CB', licenciaConducir: 'LIC-9000044' }, nuevo: true },
+  { placa: '1616PJV', conductor: { nombre: 'Piloto Línea Dieciséis Treinta', documentoIdentidad: '9000045 CB', licenciaConducir: 'LIC-9000045' }, nuevo: true },
+  { placa: '1616PJW', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y uno', documentoIdentidad: '9000046 CB', licenciaConducir: 'LIC-9000046' }, nuevo: true },
+  { placa: '1616PJX', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y dos', documentoIdentidad: '9000047 CB', licenciaConducir: 'LIC-9000047' }, nuevo: true },
+  { placa: '1616PJY', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y tres', documentoIdentidad: '9000048 CB', licenciaConducir: 'LIC-9000048' }, nuevo: true },
+  { placa: '1616PJZ', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y cuatro', documentoIdentidad: '9000049 CB', licenciaConducir: 'LIC-9000049' }, nuevo: true },
+  { placa: '1616PKA', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y cinco', documentoIdentidad: '9000050 CB', licenciaConducir: 'LIC-9000050' }, nuevo: true },
+  { placa: '1616PKB', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y seis', documentoIdentidad: '9000051 CB', licenciaConducir: 'LIC-9000051' }, nuevo: true },
+  { placa: '1616PKC', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y siete', documentoIdentidad: '9000052 CB', licenciaConducir: 'LIC-9000052' }, nuevo: true },
+  { placa: '1616PKD', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y ocho', documentoIdentidad: '9000053 CB', licenciaConducir: 'LIC-9000053' }, nuevo: true },
 ];
 const PILOTO_1 = PILOTOS[0]!;
 
 const PERIODO = 'piloto-linea-16';
 const HORARIO = 'manana';
 const DESDE_DEFAULT = '2026-10-13';
-const HASTA_DEFAULT = '2026-10-26';
+const HASTA_DEFAULT = '2026-11-02';
 const MAX_DIAS = 60;
 
 const PIN_REGEX = /^\d{6,12}$/;
@@ -209,10 +241,10 @@ Uso:
 
 Opciones:
   --apply                Escribe vía la API. Sin esto: dry-run (login + GETs, NO escribe).
-  --reset-credenciales   Re-fija el PIN de los 8 conductores aunque ya existan (revoca sus sesiones activas).
+  --reset-credenciales   Re-fija el PIN de todos los conductores aunque ya existan (revoca sus sesiones activas).
   --pin-vehiculo         También fija el PIN del vehículo 1616PIL (solo lo usa el login legado).
   --forzar-anular        Anula la rotación publicada aunque haya una sesión activa en alguno de los vehículos.
-  --desactivar           Fin del piloto: deja inactivos los 8 vehículos, los 8 conductores y el socio (no crea nada).
+  --desactivar           Fin del piloto: deja inactivos todos los vehículos, conductores y el socio (no crea nada).
   --help                 Esta ayuda.
 
 Opcionales: QUIVO_SINDICATO_ID, QUIVO_SINDICATO_NOMBRE, QUIVO_PILOTO16_PIN, QUIVO_PILOTO16_VEHICULO_PIN,
@@ -512,7 +544,7 @@ interface Descubierto {
   motivoAccion: string;
 }
 
-/** Sesiones activas ahora en los 8 vehículos (GET /v1/reportes/en-vivo, solo lectura). */
+/** Sesiones activas ahora en los vehículos del piloto (GET /v1/reportes/en-vivo, solo lectura). */
 async function sesionesActivasPilotos(): Promise<SesionEnVivoLike[]> {
   const sesiones = await leer<SesionEnVivoLike[]>('/reportes/en-vivo');
   return sesionesBloqueantes(sesiones, PILOTOS.map((p) => p.placa));
@@ -980,10 +1012,10 @@ async function verificar(sindicato: SindicatoApi, rutaId: string, rotacionId: st
 
 const ADVERTENCIA_ROTACIONES =
   `ADVERTENCIA: mientras los vehículos ${PILOTOS.map((p) => p.placa).join('/')} y sus conductores estén ACTIVOS, cualquier POST /rotaciones (generar) lanzado desde el panel ` +
-  'para este sindicato los incluirá en el reparto. Cuando termine el piloto (2026-10-26) o antes de generar otras rotaciones, correr:\n' +
+  'para este sindicato los incluirá en el reparto. Cuando termine el piloto (2026-11-02) o antes de generar otras rotaciones, correr:\n' +
   '    tsx scripts/crear-piloto-linea-16.ts --desactivar --apply';
 
-/** Fin del piloto: deja inactivos los 8 vehículos, los 8 conductores y el socio. Idempotente, no crea nada. */
+/** Fin del piloto: deja inactivos todos los vehículos, conductores y el socio. Idempotente, no crea nada. */
 async function desactivar(sindicato: SindicatoApi): Promise<void> {
   console.log('\n--- Desactivar piloto (PATCH estado → inactivo) ---');
   const vehiculos = (await leer<VehiculoApi[]>('/vehiculos')).filter((v) => v.sindicatoId === sindicato.id);
@@ -1032,12 +1064,12 @@ async function main(): Promise<void> {
   leerPinEnv('QUIVO_PILOTO16_VEHICULO_PIN');
 
   console.log('='.repeat(90));
-  console.log(`Piloto línea 16 (8 trufis) — API ${API_URL} — modo: ${APLICAR ? 'APPLY (escribe vía la API)' : 'DRY-RUN (solo lecturas; no escribe nada)'}`);
+  console.log(`Piloto línea 16 (${PILOTOS.length} trufis) — API ${API_URL} — modo: ${APLICAR ? 'APPLY (escribe vía la API)' : 'DRY-RUN (solo lecturas; no escribe nada)'}`);
   for (const p of PILOTOS) {
     const f = fechasPorPlaca.get(p.placa)!;
     console.log(`  ${p.placa} · "${p.conductor.nombre}" · ${f.length} día(s): ${f[0]} … ${f[f.length - 1]} · horario ${HORARIO}`);
   }
-  if (RESET_CREDENCIALES) console.log('--reset-credenciales: se re-fijará el PIN de los 8 conductores.');
+  if (RESET_CREDENCIALES) console.log(`--reset-credenciales: se re-fijará el PIN de los ${PILOTOS.length} conductores.`);
   if (FORZAR_ANULAR) console.log('--forzar-anular: se ignoran sesiones activas al anular.');
   console.log(ADVERTENCIA_ROTACIONES.replace(/^/gm, '  '));
   console.log('='.repeat(90));
