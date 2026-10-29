@@ -13,7 +13,7 @@ import {
 import { asegurarRutaVisible } from '../../common/geo/tenant-checks.js';
 import { retirarFilaDeSesiones } from '../../common/sesiones/retirar-fila.js';
 import { GRACIA_ACTIVIDAD_MEDIANOCHE_MS } from '../../common/sesiones/vigencia.js';
-import { finDeJornadaBolivia, horaEnBolivia } from '../../common/tiempo/jornada.js';
+import { fechaActualBolivia, finDeJornadaBolivia, horaEnBolivia } from '../../common/tiempo/jornada.js';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 
 const CONFLICTO_UNICIDAD = 'P2002';
@@ -21,6 +21,12 @@ const LOTE_SESIONES_ZOMBI = 500;
 /** Un turno nocturno sin señal (offline) puede seguir vivo horas después de que vence su asignación
  * (00:00 BO); el zombi solo se cierra pasadas ~04:00 BO del día siguiente. */
 const VENCIMIENTO_ZOMBI_MS = 4 * 60 * 60 * 1000;
+/** Sesión con recorrido en curso/en pausa sin actividad (GPS, ingesta o evento de recorrido) por más
+ * de 3 h: se cierra aunque la asignación siga vigente. */
+const INACTIVIDAD_CIERRE_MS = 3 * 60 * 60 * 1000;
+/** Regla B: debe haber ingesta global posterior a la última actividad de la sesión + este margen; si
+ * el worker de ingesta cayó, el silencio es nuestro y no del chofer. */
+const MARGEN_INGESTA_SANA_MIN = 15;
 
 export interface SinCobertura {
   vehiculoId: string;
@@ -295,47 +301,62 @@ export class RotacionesService {
 
   /** Sesiones zombi (incidente 22/10, PID): la sesión de login (refresh 30 días) solo la cierran
    * logout, rotar PIN o un login nuevo — si el chofer no hace nada, sigue "activa" con la
-   * asignación de ayer. Cierra las `activa` cuya asignación venció hace más de
-   * `VENCIMIENTO_ZOMBI_MS` Y sin actividad GPS en las últimas `GRACIA_ACTIVIDAD_MEDIANOCHE_MS`.
+   * asignación de ayer. Cierra las `activa` que cumplan una de dos:
+   *  (A) su asignación venció hace más de `VENCIMIENTO_ZOMBI_MS` Y sin actividad GPS en las últimas
+   *      `GRACIA_ACTIVIDAD_MEDIANOCHE_MS`;
+   *  (B) con recorrido `en_curso`/`en_pausa` y sin actividad (GPS, ingesta o evento de recorrido; o
+   *      `inicio`) en `INACTIVIDAD_CIERRE_MS` (aunque la asignación siga vigente), y con ingesta global
+   *      sana posterior al silencio. La app solo manda GPS entre "Iniciar" y "Finalizar recorrido":
+   *      el chofer en cola o entre recorridos no se cierra por B.
+   * Marca `cerradaPorSistema` (en-vivo la muestra "Inactivo", no "Finalizado").
    * Misma transición que `AuthMovilService.logout` (el trigger `vueltas_cerrar_con_sesion` deja la
    * vuelta en `abierta_al_cierre`) y el mismo retiro de `fila_salida` (`retirarFilaDeSesiones`).
    * Idempotente; hasta `LOTE_SESIONES_ZOMBI` por corrida (el resto cae en la siguiente, cada 5 min). Devuelve cuántas cerró. */
   async cerrarSesionesVencidas(ahora: Date = new Date()): Promise<number> {
     const corteVencimiento = new Date(ahora.getTime() - VENCIMIENTO_ZOMBI_MS);
     const corteActividad = new Date(ahora.getTime() - GRACIA_ACTIVIDAD_MEDIANOCHE_MS);
+    const corteInactividad = new Date(ahora.getTime() - INACTIVIDAD_CIERRE_MS);
+    // Misma condición en el SELECT del lote y en el guard del UPDATE: un fix que entre entre ambos
+    // no puede cerrar una sesión viva. Alias: `so` sesión, `a` asignación.
+    const hoyBO = fechaActualBolivia(ahora);
+    const jornadasStr = [hoyBO, new Date(hoyBO.getTime() - 24 * 60 * 60 * 1000)].map((d) => d.toISOString().slice(0, 10));
+    const sinActividadDesde = (corte: Date) => Prisma.sql`NOT EXISTS (
+      SELECT 1 FROM gps_sesion_resumen gx
+      WHERE gx.sesion_id = so.id::uuid AND gx."sindicatoId" = so."sindicatoId"
+        AND GREATEST(gx.ultimo_fix_ts, gx.ultimo_ingreso_ts) >= ${corte})`;
+    const ultimaGps = Prisma.sql`(SELECT max(GREATEST(g.ultimo_fix_ts, g.ultimo_ingreso_ts)) FROM gps_sesion_resumen g
+      WHERE g.sesion_id = so.id::uuid AND g."sindicatoId" = so."sindicatoId")`;
+    // GREATEST ignora NULL: un evento de recorrido (pausa/reanudar) cuenta como actividad.
+    const ultimaActividad = Prisma.sql`GREATEST(${ultimaGps}, so."recorridoEstadoTs", so.inicio)`;
+    // shortcut: el lag de ingesta (p95 ~13 min) hace que un celular que reanuda justo a las 3 h aún
+    // pueda cerrarse; subir INACTIVIDAD_CIERRE_MS si aparece.
+    // El max de ingesta es global entre sindicatos a propósito (salud del pipeline; corre como admin_quivo).
+    const reglaB = Prisma.sql`so."recorridoEstado" IN ('en_curso', 'en_pausa')
+        AND ${ultimaActividad} < ${corteInactividad}
+        AND (SELECT max(g2.ultimo_ingreso_ts) FROM gps_sesion_resumen g2
+             WHERE g2.jornada IN (${jornadasStr[0]}::date, ${jornadasStr[1]}::date))
+            > ${ultimaActividad} + ${Prisma.raw(`interval '${MARGEN_INGESTA_SANA_MIN} minutes'`)}`;
+    const condicion = Prisma.sql`so.estado = 'activa' AND so.fin IS NULL AND so."revokedAt" IS NULL
+      AND ((a."venceAt" < ${corteVencimiento} AND ${sinActividadDesde(corteActividad)}) OR (${reglaB}))`;
     return withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
-      // Un solo UPDATE con la misma condición de actividad reciente: un fix que entre entre el SELECT del
-      // lote y el UPDATE no puede cerrar una sesión viva. `fin` = fin real (última actividad GPS; sin GPS,
-      // el venceAt), nunca antes de `inicio`; `revokedAt` = ahora.
+      // `fin` = fin real (última actividad GPS; sin GPS, el último evento de recorrido o el venceAt acotado a ahora), nunca antes de
+      // `inicio` ni en el futuro; `revokedAt` = ahora.
       // shortcut: turno nocturno offline >2 h pasadas ~04:00 BO se cierra y su evidencia encolada se
-      // rechaza; subir el umbral si el servicio nocturno pasa de las 04:00 o aparecen huecos offline.
+      // rechaza (igual un celular apagado >3 h con asignación vigente); subir los umbrales si el
+      // servicio nocturno pasa de las 04:00 o aparecen huecos offline.
       const cerradas = await tx.$queryRaw<{ id: string }[]>`
         WITH lote AS (
           SELECT so.id FROM sesiones_operativas so
           JOIN asignaciones a ON a.id = so."asignacionId"
-          WHERE so.estado = 'activa' AND so.fin IS NULL AND so."revokedAt" IS NULL
-            AND a."venceAt" < ${corteVencimiento}
-            AND NOT EXISTS (
-              SELECT 1 FROM gps_sesion_resumen gx
-              WHERE gx.sesion_id = so.id::uuid AND gx."sindicatoId" = so."sindicatoId"
-                AND GREATEST(gx.ultimo_fix_ts, gx.ultimo_ingreso_ts) >= ${corteActividad}
-            )
+          WHERE ${condicion}
           LIMIT ${LOTE_SESIONES_ZOMBI}
         )
         UPDATE sesiones_operativas so
-        SET estado = 'cerrada', "revokedAt" = ${ahora},
-            fin = GREATEST(so.inicio, COALESCE(
-              (SELECT max(GREATEST(g.ultimo_fix_ts, g.ultimo_ingreso_ts)) FROM gps_sesion_resumen g
-               WHERE g.sesion_id = so.id::uuid AND g."sindicatoId" = so."sindicatoId"),
-              a."venceAt"))
+        SET estado = 'cerrada', "revokedAt" = ${ahora}, "cerradaPorSistema" = true,
+            fin = GREATEST(so.inicio, COALESCE(${ultimaGps}, so."recorridoEstadoTs", LEAST(a."venceAt", ${ahora}::timestamptz)))
         FROM asignaciones a
         WHERE a.id = so."asignacionId" AND so.id IN (SELECT id FROM lote)
-          AND so.estado = 'activa' AND so.fin IS NULL AND so."revokedAt" IS NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM gps_sesion_resumen gx
-            WHERE gx.sesion_id = so.id::uuid AND gx."sindicatoId" = so."sindicatoId"
-              AND GREATEST(gx.ultimo_fix_ts, gx.ultimo_ingreso_ts) >= ${corteActividad}
-          )
+          AND ${condicion}
         RETURNING so.id
       `;
       await retirarFilaDeSesiones(tx, cerradas.map((c) => c.id));

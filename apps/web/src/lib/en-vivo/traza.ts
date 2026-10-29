@@ -266,7 +266,7 @@ export function intervaloPoll(
   // normal ni caer en el corte de 30 min, tiene su propia cadencia lenta. `hayMas` manda
   // primero: si la carga inicial vino truncada por `limite`, sigue el catch-up normal a 1 s
   // — no tiene sentido frenarlo solo porque el estado actual es `finalizado`.
-  if (datos.estadoFrescura === 'finalizado') {
+  if (datos.estadoFrescura === 'finalizado' || datos.estadoFrescura === 'inactivo') {
     return datos.hayMas ? INTERVALO_POLL_RAPIDO_MS : INTERVALO_POLL_FINALIZADO_MS;
   }
   // En pausa (almuerzo) el GPS sigue pero la sesión puede quedar quieta >30 min: nunca cortar,
@@ -340,6 +340,13 @@ export const PRESENTACION_FRESCURA: Record<EstadoFrescura, PresentacionFrescura>
     corta: 'Finalizado',
     descripcion: 'El conductor finalizó el recorrido. No es una falla.',
     color: 'var(--qv-text-muted)',
+    esFalla: false,
+  },
+  inactivo: {
+    etiqueta: 'Inactivo',
+    corta: 'Inactivo',
+    descripcion: 'El sistema cerró la sesión por inactividad (horas sin GPS). El conductor no finalizó el recorrido.',
+    color: 'var(--qv-estado-inactivo)',
     esFalla: false,
   },
   en_pausa: {

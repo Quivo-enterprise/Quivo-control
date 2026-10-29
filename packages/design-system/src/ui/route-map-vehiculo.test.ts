@@ -147,10 +147,10 @@ describe('Molinos con orden', () => {
 });
 
 describe('insignia de estado', () => {
-  it('una forma por cada uno de los 6 estados, y los desconocidos no tienen', () => {
-    const estados = ['reportando', 'detenido', 'perdido', 'sin_datos', 'finalizado', 'en_pausa'];
+  it('una forma por cada uno de los 7 estados, y los desconocidos no tienen', () => {
+    const estados = ['reportando', 'detenido', 'perdido', 'sin_datos', 'finalizado', 'en_pausa', 'inactivo'];
     for (const e of estados) expect(esEstadoGlifo(e)).toBe(true);
-    expect(new Set(estados.map((e) => GLIFOS_ESTADO[e as keyof typeof GLIFOS_ESTADO])).size).toBe(6);
+    expect(new Set(estados.map((e) => GLIFOS_ESTADO[e as keyof typeof GLIFOS_ESTADO])).size).toBe(7);
     expect(esEstadoGlifo('inventado')).toBe(false);
     expect(esEstadoGlifo('toString')).toBe(false);
     expect(svgGlifoEstado('perdido')).toContain('aria-hidden="true"');

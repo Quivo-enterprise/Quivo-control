@@ -619,6 +619,8 @@ model SesionOperativa {
   // no snake_case — este modelo no usa `@map` por campo en ningún otro lugar.
   recorridoEstado   String?
   recorridoEstadoTs DateTime?
+  // `true` si la sesión la cerró el job de cierre (inactividad / asignación vencida) y no un logout.
+  cerradaPorSistema Boolean    @default(false)
 
   cumplimientosPc   CumplimientoPc[]
   eventosOperativos EventoOperativo[]

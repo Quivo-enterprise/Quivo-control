@@ -86,7 +86,7 @@ export function puntajeAtencion(p: Entrada, ordenCola?: number): number {
   return s;
 }
 
-/** Orden de los 6 estados en el panel de flota: normales primero, fallas al final. */
+/** Orden de los 7 estados en el panel de flota: normales primero, fallas al final. */
 export const ORDEN_ESTADOS_FRESCURA: readonly EstadoFrescura[] = [
   'reportando',
   'detenido',
@@ -94,6 +94,7 @@ export const ORDEN_ESTADOS_FRESCURA: readonly EstadoFrescura[] = [
   'perdido',
   'sin_datos',
   'finalizado',
+  'inactivo',
 ];
 
 /** Estado normalizado: lo desconocido cuenta como `sin_datos`, igual que en `conteoPorEstado`. */
@@ -109,10 +110,10 @@ export function filtrarPorEstado<T extends Pick<PosicionEnVivo, 'id' | 'estadoFr
   return estado ? posiciones.filter((p) => p.id === conservarId || estadoDe(p) === estado) : posiciones;
 }
 
-/** Total de la flota y los que siguen en servicio (todo menos `finalizado`; `sin_datos` sí: ya inició sesión). */
+/** Total de la flota y los que siguen en servicio (todo menos `finalizado` e `inactivo`; `sin_datos` sí: ya inició sesión). */
 export function resumenFlota(conteo: Record<EstadoFrescura, number>): { total: number; enServicio: number } {
   const total = Object.values(conteo).reduce((a, n) => a + n, 0);
-  return { total, enServicio: total - conteo.finalizado };
+  return { total, enServicio: total - conteo.finalizado - conteo.inactivo };
 }
 
 export interface FilaFlota<T> {

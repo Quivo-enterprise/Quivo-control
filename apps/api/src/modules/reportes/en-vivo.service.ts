@@ -41,6 +41,7 @@ interface SesionEnVivoRow {
   // arriba, que son de la sesión de LOGIN.
   recorridoEstado: string | null;
   recorridoEstadoTs: Date | null;
+  cerradaPorSistema: boolean;
 }
 
 /**
@@ -91,6 +92,7 @@ interface PosicionEnVivoRow {
   // `gps_sesion_resumen` (el estado del recorrido vive en la sesión, no en el resumen GPS).
   recorridoEstado: string | null;
   recorridoEstadoTs: Date | null;
+  cerradaPorSistema: boolean;
   // PR C — `vehiculos.fotoUrl` (JOIN directo, sin costo extra de query).
   fotoUrl: string | null;
   // Última `observacion` (incidencia del chofer) de la sesión; todos null si no hay (el mapper se guarda por `incId`).
@@ -242,15 +244,18 @@ function clasificarFrescura(
   ultimoFixTs: Date | null,
   antiguedadMovimientoMs: number | null,
   sesionCerrada = false,
+  cerradaPorSistema = false,
 ): EstadoFrescura {
-  // Sesión de LOGIN cerrada (logout): nunca "reporta", aunque el flush del logout deje la ingesta
+  // Sesión de LOGIN cerrada por logout: nunca "reporta", aunque el flush del logout deje la ingesta
   // fresca y `recorridoEstado` siga en 'en_curso'.
-  if (sesionCerrada) return 'finalizado';
+  if (sesionCerrada && !cerradaPorSistema) return 'finalizado';
   if (recorridoEstado === 'finalizado' && recorridoEstadoTs) {
     const finMs = recorridoEstadoTs.getTime() + TOLERANCIA_FIN_RECORRIDO_MS;
     const fixEsPosteriorAlFin = ultimoFixTs !== null && ultimoFixTs.getTime() > finMs;
     if (!fixEsPosteriorAlFin) return 'finalizado';
   }
+  // Cerrada por el job (inactividad / asignación vencida) sin que el chofer finalizara el recorrido.
+  if (sesionCerrada) return 'inactivo';
   if (antiguedadFixMs === null && antiguedadIngestaMs === null) return 'sin_datos';
   if (antiguedadIngestaMs === null || antiguedadIngestaMs > UMBRAL_INGESTA_VIVA_MS) {
     return 'perdido';
@@ -289,6 +294,7 @@ export function derivarFrescura(
   recorridoEstadoTs: Date | null = null,
   sesionCerrada = false,
   ultimoMovimientoTs: Date | null = null,
+  cerradaPorSistema = false,
 ): FrescuraEnVivo {
   const antiguedadFixMs = diferenciaMs(ahora, ultimoFixTs);
   const antiguedadIngestaMs = diferenciaMs(ahora, ultimoIngresoTs);
@@ -300,6 +306,7 @@ export function derivarFrescura(
     ultimoFixTs,
     diferenciaMs(ahora, ultimoMovimientoTs),
     sesionCerrada,
+    cerradaPorSistema,
   );
   return {
     ultimoFixTs: ultimoFixTs?.toISOString() ?? null,
@@ -392,7 +399,8 @@ export class EnVivoService {
           v.placa as "vehiculoPlaca", c.nombre as "conductorNombre", l.nombre as "lineaNombre",
           res.ultimo_fix_ts AS "ultimoFixTs", res.ultimo_ingreso_ts AS "ultimoIngresoTs",
           res.ultimo_movimiento_ts AS "ultimoMovimientoTs", res.total_puntos AS "totalPuntos",
-          so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs"
+          so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs",
+          so."cerradaPorSistema" AS "cerradaPorSistema"
         FROM sesiones_operativas so
         JOIN vehiculos v ON v.id = so."vehiculoId"
         JOIN conductores c ON c.id = so."conductorId"
@@ -439,6 +447,7 @@ export class EnVivoService {
             f.recorridoEstadoTs,
             !sesionActiva(f),
             f.ultimoMovimientoTs,
+            f.cerradaPorSistema,
           ),
         }),
       );
@@ -532,6 +541,7 @@ export class EnVivoService {
           fix.lat, fix.lng, fix.accuracy, fix.speed,
           fix."ultimoFixTs", fix."ultimoIngresoTs", fix."ultimoMovimientoTs", fix."totalPuntos",
           so."recorridoEstado" AS "recorridoEstado", so."recorridoEstadoTs" AS "recorridoEstadoTs",
+          so."cerradaPorSistema" AS "cerradaPorSistema",
           inc.id AS "incId", inc.categoria AS "incCategoria", inc.texto AS "incTexto", inc.ts AS "incTs",
           inc."recibidoTs" AS "incRecibidoTs"
         FROM sesiones_operativas so
@@ -633,6 +643,7 @@ export class EnVivoService {
           f.recorridoEstadoTs,
           !sesionActiva(f),
           f.ultimoMovimientoTs,
+          f.cerradaPorSistema,
         );
         return PosicionEnVivoSchema.parse({
           id: f.id,
@@ -895,6 +906,7 @@ export class EnVivoService {
           sesion.recorridoEstadoTs,
           !sesionActiva(sesion),
           agregados?.ultimoMovimientoTs ?? null,
+          sesion.cerradaPorSistema,
         ),
       });
     });

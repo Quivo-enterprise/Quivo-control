@@ -51,6 +51,8 @@ import { VueltaPosicionSchema } from './vuelta.js';
  * - `en_pausa`   — docs/plan-pausa-recorrido.md: el chofer pausó el recorrido (almuerzo); el
  *                   GPS sigue reportando y `pausaDesdeTs` dice desde cuándo. Gana sobre
  *                   `reportando`/`detenido`, pero si la ingesta se corta sigue siendo `perdido`.
+ * - `inactivo`   — el job de cierre (`cerrarSesionesVencidas`) cerró la sesión por inactividad
+ *                   (horas sin GPS) y el chofer no había finalizado el recorrido. Distinto de `finalizado`.
  *
  * Es un campo **adicional**: la respuesta siempre trae también `ultimoFixTs`,
  * `ultimoIngresoTs` y `servidorTs` crudos. Los umbrales de **color** (verde/ámbar/rojo)
@@ -64,6 +66,7 @@ export const EstadoFrescuraSchema = z.enum([
   'sin_datos',
   'finalizado',
   'en_pausa',
+  'inactivo',
 ]);
 export type EstadoFrescura = z.infer<typeof EstadoFrescuraSchema>;
 

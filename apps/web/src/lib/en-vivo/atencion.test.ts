@@ -70,11 +70,11 @@ describe('incidenciasVisibles', () => {
 });
 
 describe('conteoPorEstado', () => {
-  it('cuenta los 6 estados (en 0 los ausentes) y manda lo desconocido a sin_datos', () => {
+  it('cuenta los 7 estados (en 0 los ausentes) y manda lo desconocido a sin_datos', () => {
     const c = conteoPorEstado([
       pos(), pos(), pos({ estadoFrescura: 'perdido' }), pos({ estadoFrescura: 'raro' as never }),
     ]);
-    expect(c).toEqual({ reportando: 2, detenido: 0, perdido: 1, sin_datos: 1, finalizado: 0, en_pausa: 0 });
+    expect(c).toEqual({ reportando: 2, detenido: 0, perdido: 1, sin_datos: 1, finalizado: 0, en_pausa: 0, inactivo: 0 });
   });
 });
 
@@ -142,9 +142,10 @@ describe('filtrarPorEstado / estadoDe / resumenFlota', () => {
     pos({ id: 'b', estadoFrescura: 'perdido' }),
     pos({ id: 'c', estadoFrescura: 'raro' as never }),
     pos({ id: 'd', estadoFrescura: 'finalizado' }),
+    pos({ id: 'e', estadoFrescura: 'inactivo' }),
   ];
   it('sin estado devuelve todos; con estado, solo ese (lo desconocido es sin_datos)', () => {
-    expect(filtrarPorEstado(lista, null)).toHaveLength(4);
+    expect(filtrarPorEstado(lista, null)).toHaveLength(5);
     expect(filtrarPorEstado(lista, 'perdido').map((p) => p.id)).toEqual(['b']);
     expect(filtrarPorEstado(lista, 'sin_datos').map((p) => p.id)).toEqual(['c']);
     expect(estadoDe(lista[2]!)).toBe('sin_datos');
@@ -152,8 +153,9 @@ describe('filtrarPorEstado / estadoDe / resumenFlota', () => {
   it('conserva el vehículo con el cajón abierto', () => {
     expect(filtrarPorEstado(lista, 'perdido', 'a').map((p) => p.id)).toEqual(['a', 'b']);
   });
-  it('en servicio = flota menos finalizados', () => {
-    expect(resumenFlota(conteoPorEstado(lista))).toEqual({ total: 4, enServicio: 3 });
+  it('en servicio = flota menos finalizados e inactivos; inactivo no necesita atención', () => {
+    expect(resumenFlota(conteoPorEstado(lista))).toEqual({ total: 5, enServicio: 3 });
+    expect(necesitaAtencion(lista[4]!)).toBe(false);
   });
 });
 
