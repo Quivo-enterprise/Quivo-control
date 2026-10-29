@@ -115,6 +115,10 @@
  *   QUIVO_PILOTO16_DESDE       Opcional, YYYY-MM-DD, rango del piloto 1 (default 2026-10-13).
  *   QUIVO_PILOTO16_DESDE_NUEVOS  Opcional, rango de los pilotos nuevos (default: hoy en La Paz).
  *   QUIVO_PILOTO16_HASTA       Opcional, YYYY-MM-DD (default 2026-11-02).
+ *   QUIVO_PILOTO16_REALES_FILE Opcional, ruta ABSOLUTA fuera del repo (TSV de `renombrar-piloto-linea-16.ts`). Tras el renombrado
+ *                              mapea placa sintética→real para hallar los vehículos (los nombres no se leen; los conductores se
+ *                              identifican SOLO por CI) y excluye del flujo normal a los pilotos marcados `-` (desactivados).
+ *                              Sin él, si un conductor ya tiene asignaciones pero no se halla su vehículo, ABORTA (no duplica).
  */
 
 import { randomInt } from 'node:crypto';
@@ -125,10 +129,13 @@ import {
   decidirAnular,
   fusionarCreds,
   hoyLaPaz,
+  leerMapaPlacas,
+  PILOTOS as PILOTOS_TODOS,
   planearRotacion,
   rangoFechas,
   sesionesBloqueantes,
   type AccionRotacion,
+  type PilotoDef,
   type PlanRotacion,
   type SesionEnVivoLike,
 } from './lib/piloto-linea-16.js';
@@ -161,54 +168,25 @@ const SOCIO = {
   documentoIdentidad: '9000116 CB',
 } as const;
 
-interface PilotoDef {
-  placa: string;
-  conductor: { nombre: string; documentoIdentidad: string; licenciaConducir: string };
-  /** true = piloto agregado después (rango por defecto: desde HOY, no días pasados). */
-  nuevo: boolean;
-}
-
-/** El primero es el piloto original (sin cambios). El orden importa: se crea primero. */
-const PILOTOS: readonly PilotoDef[] = [
-  { placa: '1616PIL', conductor: { nombre: 'Piloto Línea Dieciséis', documentoIdentidad: '9000016 CB', licenciaConducir: 'LIC-9000016' }, nuevo: false },
-  { placa: '1616PIB', conductor: { nombre: 'Piloto Línea Dieciséis Bravo', documentoIdentidad: '9000017 CB', licenciaConducir: 'LIC-9000017' }, nuevo: true },
-  { placa: '1616PIC', conductor: { nombre: 'Piloto Línea Dieciséis Charlie', documentoIdentidad: '9000018 CB', licenciaConducir: 'LIC-9000018' }, nuevo: true },
-  { placa: '1616PID', conductor: { nombre: 'Piloto Línea Dieciséis Delta', documentoIdentidad: '9000019 CB', licenciaConducir: 'LIC-9000019' }, nuevo: true },
-  { placa: '1616PIE', conductor: { nombre: 'Piloto Línea Dieciséis Eco', documentoIdentidad: '9000020 CB', licenciaConducir: 'LIC-9000020' }, nuevo: true },
-  { placa: '1616PIF', conductor: { nombre: 'Piloto Línea Dieciséis Fox', documentoIdentidad: '9000021 CB', licenciaConducir: 'LIC-9000021' }, nuevo: true },
-  { placa: '1616PIG', conductor: { nombre: 'Piloto Línea Dieciséis Golf', documentoIdentidad: '9000022 CB', licenciaConducir: 'LIC-9000022' }, nuevo: true },
-  { placa: '1616PIH', conductor: { nombre: 'Piloto Línea Dieciséis Hotel', documentoIdentidad: '9000023 CB', licenciaConducir: 'LIC-9000023' }, nuevo: true },
-  { placa: '1616PJA', conductor: { nombre: 'Piloto Línea Dieciséis Nueve', documentoIdentidad: '9000024 CB', licenciaConducir: 'LIC-9000024' }, nuevo: true },
-  { placa: '1616PJB', conductor: { nombre: 'Piloto Línea Dieciséis Diez', documentoIdentidad: '9000025 CB', licenciaConducir: 'LIC-9000025' }, nuevo: true },
-  { placa: '1616PJC', conductor: { nombre: 'Piloto Línea Dieciséis Once', documentoIdentidad: '9000026 CB', licenciaConducir: 'LIC-9000026' }, nuevo: true },
-  { placa: '1616PJD', conductor: { nombre: 'Piloto Línea Dieciséis Doce', documentoIdentidad: '9000027 CB', licenciaConducir: 'LIC-9000027' }, nuevo: true },
-  { placa: '1616PJE', conductor: { nombre: 'Piloto Línea Dieciséis Trece', documentoIdentidad: '9000028 CB', licenciaConducir: 'LIC-9000028' }, nuevo: true },
-  { placa: '1616PJF', conductor: { nombre: 'Piloto Línea Dieciséis Catorce', documentoIdentidad: '9000029 CB', licenciaConducir: 'LIC-9000029' }, nuevo: true },
-  { placa: '1616PJG', conductor: { nombre: 'Piloto Línea Dieciséis Quince', documentoIdentidad: '9000030 CB', licenciaConducir: 'LIC-9000030' }, nuevo: true },
-  { placa: '1616PJH', conductor: { nombre: 'Piloto Línea Dieciséis Dieciséis', documentoIdentidad: '9000031 CB', licenciaConducir: 'LIC-9000031' }, nuevo: true },
-  { placa: '1616PJI', conductor: { nombre: 'Piloto Línea Dieciséis Diecisiete', documentoIdentidad: '9000032 CB', licenciaConducir: 'LIC-9000032' }, nuevo: true },
-  { placa: '1616PJJ', conductor: { nombre: 'Piloto Línea Dieciséis Dieciocho', documentoIdentidad: '9000033 CB', licenciaConducir: 'LIC-9000033' }, nuevo: true },
-  { placa: '1616PJK', conductor: { nombre: 'Piloto Línea Dieciséis Diecinueve', documentoIdentidad: '9000034 CB', licenciaConducir: 'LIC-9000034' }, nuevo: true },
-  { placa: '1616PJL', conductor: { nombre: 'Piloto Línea Dieciséis Veinte', documentoIdentidad: '9000035 CB', licenciaConducir: 'LIC-9000035' }, nuevo: true },
-  { placa: '1616PJM', conductor: { nombre: 'Piloto Línea Dieciséis Veintiuno', documentoIdentidad: '9000036 CB', licenciaConducir: 'LIC-9000036' }, nuevo: true },
-  { placa: '1616PJN', conductor: { nombre: 'Piloto Línea Dieciséis Veintidós', documentoIdentidad: '9000037 CB', licenciaConducir: 'LIC-9000037' }, nuevo: true },
-  { placa: '1616PJO', conductor: { nombre: 'Piloto Línea Dieciséis Veintitrés', documentoIdentidad: '9000038 CB', licenciaConducir: 'LIC-9000038' }, nuevo: true },
-  { placa: '1616PJP', conductor: { nombre: 'Piloto Línea Dieciséis Veinticuatro', documentoIdentidad: '9000039 CB', licenciaConducir: 'LIC-9000039' }, nuevo: true },
-  { placa: '1616PJQ', conductor: { nombre: 'Piloto Línea Dieciséis Veinticinco', documentoIdentidad: '9000040 CB', licenciaConducir: 'LIC-9000040' }, nuevo: true },
-  { placa: '1616PJR', conductor: { nombre: 'Piloto Línea Dieciséis Veintiséis', documentoIdentidad: '9000041 CB', licenciaConducir: 'LIC-9000041' }, nuevo: true },
-  { placa: '1616PJS', conductor: { nombre: 'Piloto Línea Dieciséis Veintisiete', documentoIdentidad: '9000042 CB', licenciaConducir: 'LIC-9000042' }, nuevo: true },
-  { placa: '1616PJT', conductor: { nombre: 'Piloto Línea Dieciséis Veintiocho', documentoIdentidad: '9000043 CB', licenciaConducir: 'LIC-9000043' }, nuevo: true },
-  { placa: '1616PJU', conductor: { nombre: 'Piloto Línea Dieciséis Veintinueve', documentoIdentidad: '9000044 CB', licenciaConducir: 'LIC-9000044' }, nuevo: true },
-  { placa: '1616PJV', conductor: { nombre: 'Piloto Línea Dieciséis Treinta', documentoIdentidad: '9000045 CB', licenciaConducir: 'LIC-9000045' }, nuevo: true },
-  { placa: '1616PJW', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y uno', documentoIdentidad: '9000046 CB', licenciaConducir: 'LIC-9000046' }, nuevo: true },
-  { placa: '1616PJX', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y dos', documentoIdentidad: '9000047 CB', licenciaConducir: 'LIC-9000047' }, nuevo: true },
-  { placa: '1616PJY', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y tres', documentoIdentidad: '9000048 CB', licenciaConducir: 'LIC-9000048' }, nuevo: true },
-  { placa: '1616PJZ', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y cuatro', documentoIdentidad: '9000049 CB', licenciaConducir: 'LIC-9000049' }, nuevo: true },
-  { placa: '1616PKA', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y cinco', documentoIdentidad: '9000050 CB', licenciaConducir: 'LIC-9000050' }, nuevo: true },
-  { placa: '1616PKB', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y seis', documentoIdentidad: '9000051 CB', licenciaConducir: 'LIC-9000051' }, nuevo: true },
-  { placa: '1616PKC', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y siete', documentoIdentidad: '9000052 CB', licenciaConducir: 'LIC-9000052' }, nuevo: true },
-  { placa: '1616PKD', conductor: { nombre: 'Piloto Línea Dieciséis Treinta y ocho', documentoIdentidad: '9000053 CB', licenciaConducir: 'LIC-9000053' }, nuevo: true },
-];
+// Datos reales (opcional, FUERA del repo): tras `renombrar-piloto-linea-16.ts` las placas ya no son las
+// sintéticas. `QUIVO_PILOTO16_REALES_FILE` mapea placa_actual→placa_real (los nombres NO se leen) y marca con `-`
+// los pilotos desactivados (el flujo normal ni los recrea ni los reactiva; `--desactivar` sí los incluye).
+const { mapa: PLACAS_REALES, desactivados: DESACTIVADOS } = (() => {
+  const v = process.env.QUIVO_PILOTO16_REALES_FILE?.trim();
+  if (!v) return { mapa: new Map<string, string>(), desactivados: new Set<string>() };
+  if (!path.isAbsolute(v) || !fs.existsSync(v)) fallar('QUIVO_PILOTO16_REALES_FILE debe ser una ruta absoluta a un archivo existente.');
+  const repo = fs.realpathSync(REPO_ROOT);
+  if (dentroDe(repo, fs.realpathSync(v))) fallar('QUIVO_PILOTO16_REALES_FILE debe estar FUERA del repo (son datos personales).');
+  try {
+    return leerMapaPlacas(fs.readFileSync(v, 'utf8'));
+  } catch (err) {
+    return fallar(err instanceof Error ? err.message : String(err));
+  }
+})();
+/** Placa vigente en la API del piloto (la real si el archivo la mapea; si no, la sintética). */
+const placaDe = (def: { placa: string }): string => PLACAS_REALES.get(def.placa) ?? def.placa;
+/** Flujo normal: sin los desactivados. `PILOTOS_TODOS` solo para `--desactivar`. */
+const PILOTOS: readonly PilotoDef[] = PILOTOS_TODOS.filter((p) => !DESACTIVADOS.has(p.placa));
 const PILOTO_1 = PILOTOS[0]!;
 
 const PERIODO = 'piloto-linea-16';
@@ -447,7 +425,7 @@ const fechaDe = (a: AsignacionApi): string => a.fecha.slice(0, 10);
 
 let rutaCreds: string | undefined;
 /** PIN de conductor fijados en esta corrida, por placa. */
-const pinesConductor = new Map<string, { nombre: string; pin: string }>();
+const pinesConductor = new Map<string, { nombre: string; pin: string; conservarNombre?: boolean }>();
 let pinVehiculo1: string | undefined;
 
 function guardarCredsEnArchivo(): void {
@@ -457,7 +435,7 @@ function guardarCredsEnArchivo(): void {
   try {
     fs.fchmodSync(fd, 0o600);
     const previo = fs.readFileSync(fd, 'utf8');
-    const nuevas = [...pinesConductor].map(([placa, v]) => ({ placa, nombre: v.nombre, pin: v.pin }));
+    const nuevas = [...pinesConductor].map(([placa, v]) => ({ placa, nombre: v.nombre, pin: v.pin, conservarNombre: v.conservarNombre }));
     const extras: Record<string, string> = pinVehiculo1 ? { pin_vehiculo: pinVehiculo1 } : {};
     const salida = fusionarCreds(previo, nuevas, new Date().toISOString(), PILOTO_1.conductor.nombre, extras);
     fs.ftruncateSync(fd, 0);
@@ -534,6 +512,7 @@ interface PilotoEstado {
 }
 
 interface Descubierto {
+  vehDesactivados: Set<string>;
   sindicato: SindicatoApi;
   rutaId: string | null;
   socio: SocioApi | null;
@@ -547,7 +526,7 @@ interface Descubierto {
 /** Sesiones activas ahora en los vehículos del piloto (GET /v1/reportes/en-vivo, solo lectura). */
 async function sesionesActivasPilotos(): Promise<SesionEnVivoLike[]> {
   const sesiones = await leer<SesionEnVivoLike[]>('/reportes/en-vivo');
-  return sesionesBloqueantes(sesiones, PILOTOS.map((p) => p.placa));
+  return sesionesBloqueantes(sesiones, PILOTOS.map(placaDe));
 }
 
 async function preVuelo(sindicato: SindicatoApi, fechasPorPlaca: Map<string, string[]>): Promise<Descubierto> {
@@ -573,7 +552,7 @@ async function preVuelo(sindicato: SindicatoApi, fechasPorPlaca: Map<string, str
 
   const pilotos: PilotoEstado[] = [];
   for (const def of PILOTOS) {
-    const placa = def.placa;
+    const placa = placaDe(def);
     const c = def.conductor;
     // --- Vehículo ---
     const placaV = await leer<VerificarPlacaApi>(`/vehiculos/verificar-placa?placa=${encodeURIComponent(placa)}`);
@@ -599,19 +578,17 @@ async function preVuelo(sindicato: SindicatoApi, fechasPorPlaca: Map<string, str
 
     // --- Conductor ---
     const porDoc = conductores.filter((x) => x.documentoIdentidad.toUpperCase() === c.documentoIdentidad);
-    const porNombre = conductores.filter((x) => x.nombre === c.nombre);
-    if (porDoc.length > 1 || porNombre.length > 1) throw new ErrorApi(`Conductor "${c.nombre}" ambiguo (CI o nombre duplicados); resolver a mano.`);
+    // Se identifica SOLO por el CI sintético: tras `renombrar-piloto-linea-16.ts` el nombre puede ser el real.
+    if (porDoc.length > 1) throw new ErrorApi(`Conductor con CI ${c.documentoIdentidad} ambiguo (CI duplicado); resolver a mano.`);
     const conductor = porDoc[0] ?? null;
+    const porNombre = conductores.filter((x) => x.nombre === c.nombre);
     if (!conductor && porNombre[0]) {
       throw new ErrorApi(`Existe un conductor "${c.nombre}" (${porNombre[0].id}) con otro CI (${porNombre[0].documentoIdentidad}); resolver a mano.`);
     }
-    if (conductor && conductor.nombre !== c.nombre) {
-      throw new ErrorApi(`El CI ${c.documentoIdentidad} pertenece a "${conductor.nombre}" (${conductor.id}), no a "${c.nombre}". Abortando.`);
-    }
-    if (conductor && conductor.estado !== 'activo') throw new ErrorApi(`El conductor "${c.nombre}" (${conductor.id}) está '${conductor.estado}'; resolver a mano.`);
-    console.log(conductor ? `  Conductor "${c.nombre}": ya existe (${conductor.id}).` : `  Conductor "${c.nombre}": no existe.`);
+    if (conductor && conductor.estado !== 'activo') throw new ErrorApi(`El conductor de CI ${c.documentoIdentidad} (${conductor.id}) está '${conductor.estado}'; resolver a mano.`);
+    console.log(conductor ? `  Conductor CI ${c.documentoIdentidad}: ya existe (${conductor.id}).` : `  Conductor "${c.nombre}": no existe.`);
 
-    pilotos.push({ def, fechas: fechasPorPlaca.get(placa)!, vehiculo, conductor });
+    pilotos.push({ def, fechas: fechasPorPlaca.get(def.placa)!, vehiculo, conductor });
   }
 
   // --- Rotaciones: la propia (por periodo) + ocupación de ESTOS vehículos en otras ---
@@ -624,6 +601,20 @@ async function preVuelo(sindicato: SindicatoApi, fechasPorPlaca: Map<string, str
     console.log(`  Rotación '${PERIODO}': ya existe (${rotacion.id}, ${rotacion.estado}, ${rotacion.asignaciones.length} asignación(es)).`);
   } else {
     console.log(`  Rotación '${PERIODO}': no existe.`);
+  }
+  // Vehículos de pilotos desactivados (archivo de reales): sus asignaciones se ignoran en el plan.
+  const vehDesactivados = new Set(
+    PILOTOS_TODOS.filter((p) => DESACTIVADOS.has(p.placa)).flatMap((p) => vehiculos.filter((v) => v.sindicatoId === sindicato.id && v.placaNormalizada === placaDe(p)).map((v) => v.id)),
+  );
+  if (rotacion) rotacion.asignaciones = rotacion.asignaciones.filter((a) => !vehDesactivados.has(a.vehiculoId));
+  // Tras el renombrado, sin el archivo de reales no se halla el vehículo por placa sintética: NO crear uno duplicado.
+  for (const p of pilotos) {
+    if (!p.vehiculo && p.conductor && rotacion?.asignaciones.some((a) => a.conductorId === p.conductor!.id)) {
+      throw new ErrorApi(
+        `El conductor de CI ${p.def.conductor.documentoIdentidad} ya tiene asignaciones pero no hay vehículo con la placa ${placaDe(p.def)}: el piloto fue renombrado. ` +
+          'Definir QUIVO_PILOTO16_REALES_FILE (ruta absoluta al TSV de datos reales, fuera del repo). Para no duplicar vehículos no se crea nada.',
+      );
+    }
   }
   const existentesVeh = pilotos.filter((p) => p.vehiculo);
   if (existentesVeh.length > 0) {
@@ -690,7 +681,7 @@ async function preVuelo(sindicato: SindicatoApi, fechasPorPlaca: Map<string, str
   // --- generar() reparte entre TODOS los vehículos activos. Solo PISTA (best-effort): la red de
   // seguridad real es la limpieza posterior a generar() en crearRotacionConGenerar. ---
   if (!rotacion) {
-    const placasPiloto = new Set(PILOTOS.map((p) => p.placa));
+    const placasPiloto = new Set(PILOTOS_TODOS.map(placaDe));
     const otrosActivos = vehiculos.filter((v) => v.sindicatoId === sindicato.id && v.estado === 'activo' && !placasPiloto.has(v.placaNormalizada));
     const antes = otrosActivos.filter((v) => v.placa.toUpperCase() < PILOTO_1.placa);
     if (antes.length > 0) {
@@ -703,7 +694,7 @@ async function preVuelo(sindicato: SindicatoApi, fechasPorPlaca: Map<string, str
     }
   }
 
-  return { sindicato, rutaId, socio, pilotos, rotacion, plan, accion, motivoAccion: motivo };
+  return { vehDesactivados, sindicato, rutaId, socio, pilotos, rotacion, plan, accion, motivoAccion: motivo };
 }
 
 // ============================================================================================
@@ -754,7 +745,7 @@ async function sincronizarCredenciales(p: PilotoEstado, vehiculoId: string, cond
     const pin = envPin ?? generarPin();
     await escribir('PUT', `/mobile/credenciales/conductores/${conductorId}`, { pin });
     if (APLICAR) {
-      pinesConductor.set(p.def.placa, { nombre: p.def.conductor.nombre, pin });
+      pinesConductor.set(placaDe(p.def), { nombre: p.def.conductor.nombre, pin, conservarNombre: PLACAS_REALES.has(p.def.placa) });
       guardarCredsEnArchivo(); // de inmediato: si algo falla después, el PIN ya no se pierde
     }
   } else {
@@ -969,7 +960,7 @@ async function sincronizarRotacion(d: Descubierto, ids: IdsPiloto[]): Promise<st
 // Verificación final (solo lecturas)
 // ============================================================================================
 
-async function verificar(sindicato: SindicatoApi, rutaId: string, rotacionId: string, pilotos: PilotoEstado[]): Promise<void> {
+async function verificar(sindicato: SindicatoApi, rutaId: string, rotacionId: string, pilotos: PilotoEstado[], vehDesactivados: Set<string>): Promise<void> {
   console.log('\n--- Verificación final (solo lecturas) ---');
   const rot = await leer<RotacionConAsignaciones>(`/rotaciones/${rotacionId}`);
   if (rot.estado !== 'publicada') throw new Error(`La rotación ${rot.id} está '${rot.estado}', no 'publicada'.`);
@@ -982,13 +973,14 @@ async function verificar(sindicato: SindicatoApi, rutaId: string, rotacionId: st
   const idsVeh = new Set<string>();
 
   for (const p of pilotos) {
-    const { placa, conductor: c } = p.def;
+    const { conductor: c } = p.def;
+    const placa = placaDe(p.def);
     const vs = vehiculosApi.filter((v) => v.placaNormalizada === placa);
     if (vs.length !== 1 || vs[0]!.estado !== 'activo') throw new Error(`Vehículo ${placa}: se esperaba 1 activo, hay ${vs.length} (${vs[0]?.estado}).`);
     const veh = vs[0]!;
     idsVeh.add(veh.id);
     const cs = conductoresApi.filter((x) => x.documentoIdentidad.toUpperCase() === c.documentoIdentidad);
-    if (cs.length !== 1 || cs[0]!.estado !== 'activo') throw new Error(`Conductor "${c.nombre}": se esperaba 1 activo, hay ${cs.length}.`);
+    if (cs.length !== 1 || cs[0]!.estado !== 'activo') throw new Error(`Conductor CI ${c.documentoIdentidad}: se esperaba 1 activo, hay ${cs.length}.`);
     const cond = cs[0]!;
     const propias = rot.asignaciones.filter((a) => a.vehiculoId === veh.id);
     const esperadas = new Set(p.fechas);
@@ -998,9 +990,9 @@ async function verificar(sindicato: SindicatoApi, rutaId: string, rotacionId: st
     }
     const malas = dentro.filter((a) => a.conductorId !== cond.id || a.rutaId !== rutaId || a.horario !== HORARIO || !estadoOk(a));
     if (malas.length > 0) throw new Error(`${placa}: ${malas.length} asignación(es) con conductor/ruta/horario/estado incorrectos (${malas.map(fechaDe).join(', ')}).`);
-    console.log(`  ${placa} (${veh.id}) + "${cond.nombre}" (${cond.id}): activos; ${dentro.length} asignaciones ${HORARIO} (${p.fechas[0]} … ${p.fechas[p.fechas.length - 1]}).`);
+    console.log(`  ${p.def.placa} (${veh.id}) + conductor ${c.documentoIdentidad} (${cond.id}): activos; ${dentro.length} asignaciones ${HORARIO} (${p.fechas[0]} … ${p.fechas[p.fechas.length - 1]}).`);
   }
-  const ajenas = rot.asignaciones.filter((a) => !idsVeh.has(a.vehiculoId));
+  const ajenas = rot.asignaciones.filter((a) => !idsVeh.has(a.vehiculoId) && !vehDesactivados.has(a.vehiculoId));
   if (ajenas.length > 0) throw new Error(`La rotación tiene ${ajenas.length} asignación(es) de otros vehículos.`);
   console.log(`  Rotación ${rot.id}: publicada, ${rot.asignaciones.length} asignación(es) en total, ruta ${rutaId}.`);
   console.log('  Credenciales: la API no expone si hay PIN fijado (solo guarda el hash); un login móvil crearía una sesión, por eso NO se prueba acá.');
@@ -1021,10 +1013,10 @@ async function desactivar(sindicato: SindicatoApi): Promise<void> {
   const vehiculos = (await leer<VehiculoApi[]>('/vehiculos')).filter((v) => v.sindicatoId === sindicato.id);
   const conductores = (await leer<ConductorApi[]>('/conductores')).filter((c) => c.sindicatoId === sindicato.id);
   const soc = (await leer<SocioApi[]>('/socios')).find((x) => x.sindicatoId === sindicato.id && x.documentoIdentidad.toUpperCase() === SOCIO.documentoIdentidad && x.nombre === SOCIO.nombre);
-  const encontrados: { veh?: VehiculoApi; cond?: ConductorApi; def: PilotoDef }[] = PILOTOS.map((def) => ({
+  const encontrados: { veh?: VehiculoApi; cond?: ConductorApi; def: PilotoDef }[] = PILOTOS_TODOS.map((def) => ({
     def,
-    veh: vehiculos.find((v) => v.placaNormalizada === def.placa),
-    cond: conductores.find((c) => c.documentoIdentidad.toUpperCase() === def.conductor.documentoIdentidad && c.nombre === def.conductor.nombre),
+    veh: vehiculos.find((v) => v.placaNormalizada === placaDe(def)),
+    cond: conductores.find((c) => c.documentoIdentidad.toUpperCase() === def.conductor.documentoIdentidad),
   }));
   if (!soc && encontrados.every((e) => !e.veh && !e.cond)) console.log('  No existe nada del piloto: nada que desactivar.');
   for (const { def, veh, cond } of encontrados) {
@@ -1033,7 +1025,7 @@ async function desactivar(sindicato: SindicatoApi): Promise<void> {
       else await escribir('PATCH', `/vehiculos/${veh.id}/estado`, { estado: 'inactivo', motivo: 'Fin del piloto línea 16' });
     }
     if (cond) {
-      if (cond.estado === 'inactivo') console.log(`  Conductor "${def.conductor.nombre}": ya inactivo.`);
+      if (cond.estado === 'inactivo') console.log(`  Conductor CI ${def.conductor.documentoIdentidad}: ya inactivo.`);
       else await escribir('PATCH', `/conductores/${cond.id}`, { estado: 'inactivo' });
     }
   }
@@ -1109,7 +1101,7 @@ async function main(): Promise<void> {
     }
 
     if (APLICAR) {
-      await verificar(sindicato, d.rutaId!, rotacionId, d.pilotos);
+      await verificar(sindicato, d.rutaId!, rotacionId, d.pilotos, d.vehDesactivados);
       console.log(`\nOK. ${escriturasEjecutadas} escritura(s) ejecutada(s).`);
       if (pinesConductor.size > 0) console.log(`PIN de ${pinesConductor.size} conductor(es) guardados en ${rutaCreds} (modo 0600); no se imprimen.`);
       console.log('\n' + '!'.repeat(90) + '\n' + ADVERTENCIA_ROTACIONES + '\n' + '!'.repeat(90));
