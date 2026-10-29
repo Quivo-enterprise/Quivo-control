@@ -15,6 +15,7 @@
 - Web prod: `https://quivo-web-741758083365.southamerica-west1.run.app` (la `quivo-web-424426714260…` da 500).
 
 ## Hecho — 2026-10-29: "Terminar el día" real + mapa de navegación (zoom, color, auto-recentrar)
+- **OTA publicado 29/10 07:52 BO** (#293, `2ce51a0`): update `01a18781-4fa8-7ebe-a529-02f8b40e5b42`, canal `production`, runtime `8bd0b896…` (= APK 17). Bundle verificado: API prod en el `.hbc`, textos nuevos presentes, source maps en Sentry. Llega al reabrir la app.
 Plan: `docs/plan-finalizar-dia.md`. Rama `feat/terminar-dia-mapa-nav`. Solo móvil (JS puro, **OTA**, sin APK ni deploy).
 - "Terminar el día" pasa a hacer todo: detener el GPS, drenar el outbox y hacer logout. En la web
   queda "Recorrido finalizado". Si no hay señal, no cierra la sesión y deja reintentar. Aparece en
