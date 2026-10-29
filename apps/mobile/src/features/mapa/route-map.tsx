@@ -81,8 +81,8 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  * Mapa de la ruta activa — motor Google nativo (`react-native-maps` + `PROVIDER_GOOGLE`), el
  * único motor de la app (`docs/adr/0004-motor-mapa-google.md`; reemplazó a Leaflet + WebView).
  * Semántica visual:
- * - Ruta oscura (#1E1B4B) y fina en espera; en seguimiento, azul Quivo del ancho de la calzada
- *   (escala con el zoom) con borde oscuro (`estilo-ruta.ts`).
+ * - Ruta oscura (#1E1B4B) y fina en espera; en seguimiento, fucsia (#C026D3) del ancho de la calzada
+ *   (escala con el zoom) con borde fucsia oscuro (`estilo-ruta.ts`).
  * - Puntos de control: círculos azules (#3127B1) con número blanco, verdes (#22C55E) los ya
  *   pasados y rojos (#C53B4A) los omitidos, solo con `tracking` (`estado-punto-control.ts`).
  * - Resaltado del tramo OSRM (`rutaCalculada`): trazo discontinuo azul oscuro sobre banda blanca,
@@ -94,7 +94,7 @@ import type { PosicionMapa, RouteMapProps } from './tipos';
  * - Cámara en tres modos (`modo-camara.ts`, estado en la pantalla, llega por `camara`):
  *   · `general`: ruta entera + vehículo (`fitToCoordinates` con márgenes), norte arriba y pitch 0.
  *     Es el modo del día sin iniciar y el que vuelve al finalizar el recorrido.
- *   · `navegacion`: cámara bloqueada al vehículo — heading-up, pitch 55, zoom 18, con el vehículo
+ *   · `navegacion`: cámara bloqueada al vehículo — heading-up, pitch 55, zoom 19, con el vehículo
  *     en el tercio inferior de la banda visible (`mapPadding` de `paddingNavegacion`).
  *   · `libre`: el conductor tocó el mapa en navegación (`onPanDrag` para el arrastre y
  *     `onRegionChangeStart` con `isGesture` para pinch/doble-tap, que en Android NO disparan
@@ -346,7 +346,7 @@ const MarcadorConductorAnimado = memo(function MarcadorConductorAnimado({
     [posicionMostradaRef],
   );
 
-  // Zoom objetivo según la velocidad del último fix (≤ 15 km/h o desconocida → 18).
+  // Zoom objetivo según la velocidad del último fix (≤ 15 km/h o desconocida → 19).
   const zoomObjetivo = useCallback(() => zoomPorVelocidad(velocidadKmhRef.current), []);
 
   // En navegación mueve la cámara sobre `posicion` con el zoom automático avanzado un paso. Sin
@@ -716,9 +716,9 @@ interface RutaPolylinesProps {
  * (que ya no vive en este árbol de todos modos, ver `MarcadorConductorAnimado`). El zoom entra por
  * `emisorZoom`: solo este componente (y `DesignacionMapa`) re-renderiza al cruzar un paso de zoom.
  *
- * En seguimiento: borde oscuro (más ancho, debajo) + línea azul del ancho de la calzada, que
+ * En seguimiento: borde oscuro (más ancho, debajo) + línea fucsia del ancho de la calzada, que
  * escala con el zoom. El tramo OSRM resaltado va encima como trazo discontinuo oscuro sobre una
- * banda blanca (70 % del ancho de la base), legible sobre el mapa y sobre la base azul. */
+ * banda blanca (70 % del ancho de la base), legible sobre el mapa y sobre la base fucsia. */
 const RutaPolylines = memo(function RutaPolylines({
   coordenadasRuta,
   tracking,
@@ -758,7 +758,7 @@ interface DesignacionMapaProps {
 }
 
 /** Tramo de la designación a Molinos (acento ámbar con borde naranja oscuro, del mismo ancho por
- * zoom que la base azul y por encima de ella; sin seguimiento más ancho que la base y con borde) y
+ * zoom que la base fucsia y por encima de ella; sin seguimiento más ancho que la base y con borde) y
  * el PC de espera destacado. Componente aparte y memoizado: no toca `RutaPolylines` ni su estilo. */
 const DesignacionMapa = memo(function DesignacionMapa({
   designacion,
@@ -877,6 +877,7 @@ export function RouteMap({
   tracking,
   camara,
   onPanUsuario,
+  onToqueMapa,
   insetsNavegacion,
   rutaCalculada,
   emisorRumbo,
@@ -1178,7 +1179,7 @@ export function RouteMap({
   // `onPanDrag` (en Android sale de `GestureDetector.onScroll`: solo arrastre) y
   // `onRegionChangeStart` con `isGesture` (sale de `OnCameraMoveStartedListener`: cubre pinch con
   // centro estacionario y doble-tap zoom, que NO disparan `onPanDrag`). Sin esto el `setCamera`
-  // por frame (zoom 18) peleaba con el gesto. La cámara propia (`animateCamera`/`setCamera`)
+  // por frame (zoom 19) peleaba con el gesto. La cámara propia (`animateCamera`/`setCamera`)
   // reporta `isGesture: false`, así que nunca saca de navegación.
   const salirANavegacionLibre = useCallback(() => {
     if (modoRef.current !== 'navegacion') return;
@@ -1198,6 +1199,7 @@ export function RouteMap({
   const onTouchStartMapa = useCallback(
     (e: GestureResponderEvent) => {
       const { touches } = e.nativeEvent;
+      onToqueMapa?.(true);
       if (touches.length >= 2) {
         salirANavegacionLibre();
         return;
@@ -1205,8 +1207,10 @@ export function RouteMap({
       const toque = touches[0];
       inicioToqueRef.current = toque ? { x: toque.pageX, y: toque.pageY } : null;
     },
-    [salirANavegacionLibre],
+    [salirANavegacionLibre, onToqueMapa],
   );
+  // Soltar (o cancelar) el dedo arma el auto-recentrado en libre; mientras hay dedo no corre.
+  const onTouchFinMapa = useCallback(() => onToqueMapa?.(false), [onToqueMapa]);
   const onTouchMoveMapa = useCallback(
     (e: GestureResponderEvent) => {
       if (modoRef.current !== 'navegacion') return;
@@ -1332,6 +1336,8 @@ export function RouteMap({
       style={[styles.container, style]}
       onTouchStart={onTouchStartMapa}
       onTouchMove={onTouchMoveMapa}
+      onTouchEnd={onTouchFinMapa}
+      onTouchCancel={onTouchFinMapa}
     >
       <MapView
         ref={mapRef}

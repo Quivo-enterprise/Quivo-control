@@ -66,7 +66,7 @@ export interface NextControlSheetProps {
   canStart: boolean;
   gpsError: string | null;
   onStart: () => void;
-  /** Termina el día (`gps.detener()` tras confirmar). Con la ruta en curso es la acción secundaria. */
+  /** Termina el día (cierre completo: recorrido, envío y logout, tras confirmar). Con la ruta en curso es la acción secundaria. */
   onFinish: () => void;
   /** Inicio (ISO) de la pausa del recorrido; `null` = en marcha. */
   pausadoDesde?: string | null;
@@ -330,16 +330,28 @@ export function NextControlSheet(props: NextControlSheetProps) {
             ) : null}
           </>
         ) : fase === 'listo' ? (
-          <Button
-            variant="secondary"
-            disabled={!props.canStart}
-            onPress={props.onStart}
-            style={styles.startButton}
-            textStyle={styles.startButtonText}
-            fullWidth
-          >
-            COMENZAR RUTA
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              disabled={!props.canStart}
+              onPress={props.onStart}
+              style={styles.startButton}
+              textStyle={styles.startButtonText}
+              fullWidth
+            >
+              COMENZAR RUTA
+            </Button>
+            <Button
+              variant="ghost"
+              onPress={props.onFinish}
+              style={styles.finishButton}
+              textStyle={styles.finishButtonText}
+              leftIcon={<Ionicons name="stop-circle-outline" size={20} color={quivoColors.white} />}
+              fullWidth
+            >
+              Terminar el día
+            </Button>
+          </>
         ) : (
           <>
             {props.pausadoDesde ? (

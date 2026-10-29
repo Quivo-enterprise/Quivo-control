@@ -14,9 +14,9 @@ import {
 } from './camara';
 
 describe('constantes de navegación', () => {
-  it('pitch 55 y zoom 18', () => {
+  it('pitch 55 y zoom 19', () => {
     expect(PITCH_NAVEGACION).toBe(55);
-    expect(ZOOM_NAVEGACION).toBe(18);
+    expect(ZOOM_NAVEGACION).toBe(19);
     expect(ZOOM_SEGUIMIENTO).toBe(17);
   });
 });
@@ -29,14 +29,14 @@ describe('construirCamaraNavegacion', () => {
       center: { latitude: -34.6, longitude: -58.4 },
       heading: 90,
       pitch: 55,
-      zoom: 18,
+      zoom: 19,
     });
   });
 
   it('sin rumbo no manda heading pero sí pitch y zoom', () => {
     const c = construirCamaraNavegacion({ ...pos, rumbo: null });
     expect(c).not.toHaveProperty('heading');
-    expect(c).toEqual({ center: { latitude: -34.6, longitude: -58.4 }, pitch: 55, zoom: 18 });
+    expect(c).toEqual({ center: { latitude: -34.6, longitude: -58.4 }, pitch: 55, zoom: 19 });
   });
 
   it('rumbo 0 (norte) sí se manda', () => {
@@ -48,7 +48,7 @@ describe('construirCamaraNavegacion', () => {
       center: { latitude: -34.6, longitude: -58.4 },
       heading: 0,
       pitch: 55,
-      zoom: 18,
+      zoom: 19,
     });
     expect(construirCamaraNavegacion({ ...pos, rumbo: null }, 'norte').heading).toBe(0);
   });
@@ -160,21 +160,21 @@ describe('esGestoSobreMapa', () => {
 
 describe('zoomPorVelocidad', () => {
   it('puntos de la curva', () => {
-    expect(zoomPorVelocidad(0)).toBe(18);
-    expect(zoomPorVelocidad(15)).toBe(18);
-    expect(zoomPorVelocidad(40)).toBeCloseTo(17.5, 6);
-    expect(zoomPorVelocidad(60)).toBeCloseTo(17, 6);
-    expect(zoomPorVelocidad(90)).toBe(16);
-    expect(zoomPorVelocidad(140)).toBe(16);
+    expect(zoomPorVelocidad(0)).toBe(19);
+    expect(zoomPorVelocidad(15)).toBe(19);
+    expect(zoomPorVelocidad(40)).toBeCloseTo(18.5, 6);
+    expect(zoomPorVelocidad(60)).toBeCloseTo(18, 6);
+    expect(zoomPorVelocidad(90)).toBe(17);
+    expect(zoomPorVelocidad(140)).toBe(17);
   });
   it('interpola linealmente entre puntos', () => {
-    expect(zoomPorVelocidad(27.5)).toBeCloseTo(17.75, 6);
-    expect(zoomPorVelocidad(75)).toBeCloseTo(16.5, 6);
+    expect(zoomPorVelocidad(27.5)).toBeCloseTo(18.75, 6);
+    expect(zoomPorVelocidad(75)).toBeCloseTo(17.5, 6);
   });
-  it('velocidad desconocida o inválida → 18', () => {
-    expect(zoomPorVelocidad(null)).toBe(18);
-    expect(zoomPorVelocidad(-3.6)).toBe(18);
-    expect(zoomPorVelocidad(Number.NaN)).toBe(18);
+  it('velocidad desconocida o inválida → 19', () => {
+    expect(zoomPorVelocidad(null)).toBe(19);
+    expect(zoomPorVelocidad(-3.6)).toBe(19);
+    expect(zoomPorVelocidad(Number.NaN)).toBe(19);
   });
   it('es monótona no creciente', () => {
     let previo = zoomPorVelocidad(0);

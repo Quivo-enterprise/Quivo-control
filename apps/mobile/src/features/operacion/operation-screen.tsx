@@ -23,7 +23,9 @@ import {
   type LineaBrand,
   type PaqueteDia,
 } from '@quivo/shared';
-import { abrirOutbox, encolarEvento } from '../../db/outbox';
+import { abrirOutbox, contarEventosPendientes, encolarEvento } from '../../db/outbox';
+import { sincronizarPendientesConLease } from './sync-outbox';
+import { terminarDia } from './terminar-dia';
 import { Button } from '../../shared/components/Button';
 import { quivoColors, quivoFonts, quivoRadius, quivoSpacing } from '../../shared/theme/quivo-theme';
 import { MapErrorBoundary } from './map-error-boundary';
@@ -164,7 +166,7 @@ export function OperationScreen(
   const [errorObservacion, setErrorObservacion] = useState<string | null>(null);
   const [observacionModalVisible, setObservacionModalVisible] = useState(false);
   const sheetPanY = useRef(new Animated.Value(0)).current;
-  const { camara, onPanUsuario, recentrar, alternarOrientacion } = useModoCamara(gps.tracking);
+  const { camara, onPanUsuario, onToqueMapa, recentrar, alternarOrientacion } = useModoCamara(gps.tracking);
   // Canal mapa -> brújula del rumbo de la cámara: no pasa por estado de React (llega a ~30 Hz).
   const emisorRumbo = useRef(crearEmisorRumbo()).current;
   const jornada = useJornada({
@@ -437,7 +439,59 @@ export function OperationScreen(
   const [confirmarFinVisible, setConfirmarFinVisible] = useState(false);
   const [confirmarLogoutVisible, setConfirmarLogoutVisible] = useState(false);
 
+  const [confirmarTerminarVisible, setConfirmarTerminarVisible] = useState(false);
+  const [terminandoDia, setTerminandoDia] = useState(false);
+  const [errorTerminarDia, setErrorTerminarDia] = useState<string | null>(null);
+  const terminandoDiaRef = useRef(false);
+  // `detener()` apaga `tracking` antes de encolar `fin_recorrido`; si falla, el reintento debe detener igual.
+  const finPendienteRef = useRef(false);
+  // Un error de cierre viejo no debe quedar pegado cuando el chofer retoma la ruta.
+  useEffect(() => {
+    if (gps.tracking) setErrorTerminarDia(null);
+  }, [gps.tracking]);
+
   const confirmarFinalizacion = useCallback(() => setConfirmarFinVisible(true), []);
+  const pedirTerminarDia = useCallback(() => {
+    setErrorTerminarDia(null);
+    setConfirmarTerminarVisible(true);
+  }, []);
+
+  const ejecutarTerminarDia = useCallback(async () => {
+    if (terminandoDiaRef.current) return;
+    terminandoDiaRef.current = true;
+    setTerminandoDia(true);
+    try {
+      const resultado = await terminarDia({
+        necesitaDetener: gps.tracking || finPendienteRef.current,
+        sesionMuerta: props.sesionNoVigente,
+        detener: async () => {
+          const ok = await gps.detener();
+          finPendienteRef.current = !ok;
+          return ok;
+        },
+        // `null` también puede ser "sin red al refrescar": solo `sesionNoVigente` salta el drenado.
+        drenar: async () => {
+          const token = await props.obtenerAccessToken();
+          if (!token) throw new Error('sin sesión');
+          return sincronizarPendientesConLease(token);
+        },
+        contarPendientes: async () => contarEventosPendientes(await abrirOutbox()),
+        logout: props.onLogout,
+        ahora: Date.now,
+        esperar: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      });
+      if (!resultado.ok && resultado.motivo === 'sin_conexion') {
+        setErrorTerminarDia(
+          'Sin conexión: no se pudo terminar el día. Tus datos quedan guardados en el teléfono. Inténtalo de nuevo cuando tengas señal.',
+        );
+      }
+      // motivo 'detener': `gps.errorGps` ya muestra el error.
+    } finally {
+      terminandoDiaRef.current = false;
+      setTerminandoDia(false);
+      setConfirmarTerminarVisible(false);
+    }
+  }, [gps.tracking, gps.detener, props]);
   const confirmarCierreSesion = useCallback(() => setConfirmarLogoutVisible(true), []);
 
   return (
@@ -451,6 +505,7 @@ export function OperationScreen(
         tracking={gps.tracking}
         camara={camara}
         onPanUsuario={onPanUsuario}
+        onToqueMapa={onToqueMapa}
         insetsNavegacion={insetsNavegacion}
         rutaCalculada={rutaCalculada}
         emisorRumbo={emisorRumbo}
@@ -531,8 +586,8 @@ export function OperationScreen(
         {/* Rescope SESION_NO_VIGENTE, punto C: bloqueante y NO descartable a propósito — sin
             botón para cerrarlo, distinto del banner de `sesionNoRevalidada` de arriba (que sí
             puede ignorarse, esto no: el servidor ya dio la sesión por muerta). El único botón
-            abre el MISMO diálogo de confirmación de "Finalizar" que ya usa `NextControlSheet`
-            (`confirmarFinalizacion`) — al confirmar, `gps.detener()` escribe `fin_recorrido` y
+            abre el diálogo de confirmación de "Finalizar" (`confirmarFinalizacion`; el botón
+            "Terminar el día" de `NextControlSheet` usa otro, con cierre completo) — al confirmar, `gps.detener()` escribe `fin_recorrido` y
             recién ahí el efecto de arriba dispara `onSesionNoVigenteFinalizada`. */}
         {props.sesionNoVigente ? (
           <View style={styles.sesionNoRevalidadaContainer}>
@@ -702,7 +757,7 @@ export function OperationScreen(
           !gps.permisoGps.bloqueante
         }
         onStart={() => void gps.iniciar()}
-        onFinish={confirmarFinalizacion}
+        onFinish={pedirTerminarDia}
         pausadoDesde={gps.pausadoDesde}
         onPause={() => void gps.pausar()}
         onResume={() => void gps.reanudar()}
@@ -710,7 +765,7 @@ export function OperationScreen(
         panY={sheetPanY}
         onAlto={setAltoSheet}
         onAltoVisible={setAltoSheetVisible}
-        gpsError={gps.errorGps}
+        gpsError={gps.errorGps ?? errorTerminarDia}
       />
 
       {/* Reportar incidencia: opciones fijas, sin texto libre */}
@@ -848,6 +903,20 @@ export function OperationScreen(
         }}
       />
 
+      <QuivoConfirmDialog
+        visible={confirmarTerminarVisible}
+        variant="danger"
+        title="¿Terminar el día?"
+        message="Se finaliza el recorrido, se envían tus datos y se cierra tu sesión. Para volver a trabajar hoy tienes que iniciar sesión de nuevo."
+        cancelLabel="Seguir trabajando"
+        confirmLabel={terminandoDia ? 'Enviando datos…' : 'Terminar el día'}
+        confirmDisabled={terminandoDia}
+        onCancel={() => {
+          if (!terminandoDia) setConfirmarTerminarVisible(false);
+        }}
+        onConfirm={() => void ejecutarTerminarDia()}
+      />
+
       <CerrarSesionDialog
         visible={confirmarLogoutVisible}
         onCancel={() => setConfirmarLogoutVisible(false)}
@@ -915,6 +984,7 @@ function MapLayer({
   tracking,
   camara,
   onPanUsuario,
+  onToqueMapa,
   insetsNavegacion,
   rutaCalculada,
   emisorRumbo,
@@ -930,6 +1000,7 @@ function MapLayer({
   tracking: boolean;
   camara: RouteMapProps['camara'];
   onPanUsuario: RouteMapProps['onPanUsuario'];
+  onToqueMapa: RouteMapProps['onToqueMapa'];
   insetsNavegacion: InsetsNavegacion;
   rutaCalculada: [number, number][] | null;
   emisorRumbo: RouteMapProps['emisorRumbo'];
@@ -956,6 +1027,7 @@ function MapLayer({
         tracking={tracking}
         camara={camara}
         onPanUsuario={onPanUsuario}
+        onToqueMapa={onToqueMapa}
         insetsNavegacion={insetsNavegacion}
         rutaCalculada={rutaCalculada}
         emisorRumbo={emisorRumbo}

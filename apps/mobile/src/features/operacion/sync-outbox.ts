@@ -218,6 +218,8 @@ export type MotivoFinDrenajeLotes = 'agotado' | 'tope-alcanzado' | 'lease-perdid
 
 export interface ResultadoDrenajeLotes {
   enviados: number;
+  /** Filas que salieron del outbox en el ciclo (aceptadas o no). */
+  leidos: number;
   motivo: MotivoFinDrenajeLotes;
 }
 
@@ -248,13 +250,15 @@ export async function drenarLotesConLease(
   token: string,
 ): Promise<ResultadoDrenajeLotes> {
   let totalEnviados = 0;
+  let totalLeidos = 0;
   for (let lotesDrenados = 0; lotesDrenados < TOPE_LOTES_POR_CICLO_DRENAJE; lotesDrenados++) {
     const renovado = await renovarLease(db, ID_LEASE_DRENAJE, token, Date.now(), TTL_LEASE_DRENAJE_MS);
     if (!renovado) {
-      return { enviados: totalEnviados, motivo: 'lease-perdido' };
+      return { enviados: totalEnviados, leidos: totalLeidos, motivo: 'lease-perdido' };
     }
     const resultado = await sincronizarPendientes(accessToken);
     totalEnviados += resultado.enviados;
+    totalLeidos += resultado.leidos;
     // Punto 6 (code review 2026-09-25): decidir "agotado" con `resultado.enviados` (ACEPTADOS
     // por el servidor) en vez de `resultado.leidos` (filas que de verdad salieron del outbox)
     // cortaba el ciclo después de UN SOLO lote cuando algún evento del lote es rechazado SIEMPRE
@@ -264,10 +268,10 @@ export async function drenarLotesConLease(
     // lleno y quede mucho más atraso real detrás. `leidos` es la señal correcta de "¿este lote
     // vino lleno, probablemente hay más?" — independiente de cuántos acuse el servidor.
     if (resultado.leidos < LOTE_MAXIMO) {
-      return { enviados: totalEnviados, motivo: 'agotado' };
+      return { enviados: totalEnviados, leidos: totalLeidos, motivo: 'agotado' };
     }
   }
-  return { enviados: totalEnviados, motivo: 'tope-alcanzado' };
+  return { enviados: totalEnviados, leidos: totalLeidos, motivo: 'tope-alcanzado' };
 }
 
 /**
@@ -297,7 +301,7 @@ export async function drenarLotesConLease(
  */
 export async function sincronizarPendientesConLease(
   accessToken: string,
-): Promise<{ enviados: number } | null> {
+): Promise<{ enviados: number; leidos: number } | null> {
   const db = await abrirOutbox();
   const ahoraMs = Date.now();
   const token = generarTokenLease();
@@ -324,11 +328,11 @@ export async function sincronizarPendientesConLease(
     // Hallazgo 2 + G1/G2 (verificación posterior): `drenarLotesConLease` es el bucle
     // COMPARTIDO con el camino headless (`intentarDrenarOportunista`) — ver su docblock para
     // el detalle de renovación de lease y de cómo se decide `motivo`.
-    const { enviados, motivo } = await drenarLotesConLease(db, accessToken, token);
+    const { enviados, leidos, motivo } = await drenarLotesConLease(db, accessToken, token);
     if (motivo === 'lease-perdido') {
       // R1: ya no somos el dueño — no liberar acá pisaría el lease legítimo del contexto que
       // lo tomó. El progreso de este ciclo se reporta igual, no es un fallo.
-      return { enviados };
+      return { enviados, leidos };
     }
     // G2: sin enfriamiento si cortamos por el TOPE con pendientes restantes (`tope-alcanzado`)
     // — el próximo `setTimeout(500ms)` de `iniciarSyncAutomatico` debe poder adquirir el lease
@@ -336,7 +340,7 @@ export async function sincronizarPendientesConLease(
     // oportunistas sigue aplicando igual que antes.
     const cooldownMs = motivo === 'tope-alcanzado' ? 0 : PISO_ENTRE_INTENTOS_DRENAJE_MS;
     await liberarLeaseConCooldown(db, ID_LEASE_DRENAJE, token, Date.now(), cooldownMs);
-    return { enviados };
+    return { enviados, leidos };
   } catch (error) {
     // El caller (`intentarSync`/el intervalo de `use-sync-status.ts`) sigue siendo responsable
     // de reportar este fallo (backoff propio, `errorSync`) — acá solo se libera el lease para
