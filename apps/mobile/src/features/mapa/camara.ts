@@ -19,18 +19,18 @@ export const PITCH_NAVEGACION = 55;
 /** Zoom de la cámara de navegación a baja velocidad / sin velocidad conocida: se manda en CADA
  * cámara (cualquier gesto sale de navegación, así que no hay pinch del usuario que respetar).
  * A mayor velocidad baja según `zoomPorVelocidad`. */
-export const ZOOM_NAVEGACION = 18;
+export const ZOOM_NAVEGACION = 19;
 
 /** Puntos (km/h → zoom) de la curva de zoom automático; entre ellos interpola linealmente. */
 const CURVA_ZOOM: ReadonlyArray<readonly [number, number]> = [
-  [15, 18],
-  [40, 17.5],
-  [60, 17],
-  [90, 16],
+  [15, 19],
+  [40, 18.5],
+  [60, 18],
+  [90, 17],
 ];
 
-/** Zoom objetivo de la navegación según la velocidad (km/h): ≤15 → 18, 40 → 17.5, 60 → 17,
- * ≥90 → 16, lineal entre medio. Velocidad desconocida (`null`, no finita o negativa) → 18. */
+/** Zoom objetivo de la navegación según la velocidad (km/h): ≤15 → 19, 40 → 18.5, 60 → 18,
+ * ≥90 → 17, lineal entre medio. Velocidad desconocida (`null`, no finita o negativa) → 19. */
 export function zoomPorVelocidad(kmh: number | null): number {
   if (kmh === null || !Number.isFinite(kmh) || kmh < 0) return ZOOM_NAVEGACION;
   const primero = CURVA_ZOOM[0]!;

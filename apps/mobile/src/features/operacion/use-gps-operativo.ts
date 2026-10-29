@@ -1977,7 +1977,9 @@ export function useGpsOperativo(
     await promesa;
   }, [ejecutarIniciar, serializadorIniciar, reengancharNativoActivo]);
 
-  const detener = useCallback(async () => {
+  // Devuelve `true` si `fin_recorrido` quedó encolado (aunque un paso posterior del cierre falle).
+  const detener = useCallback(async (): Promise<boolean> => {
+    let finEncolado = false;
     setErrorGps(null);
     setPausadoDesde(null);
     intencionPausaRef.current += 1;
@@ -2125,6 +2127,7 @@ export function useGpsOperativo(
       }
 
       await encolarEvento(db, { deviceId, tipo: 'fin_recorrido', payload: { sesionId } });
+      finEncolado = true;
 
       // A1 (hallazgo de revisión, QUI-216 criterio B): los huecos se calculan desde el
       // OUTBOX, no desde un `useRef` en memoria — ese ref solo lo alimentaba `onLocation`,
@@ -2204,6 +2207,7 @@ export function useGpsOperativo(
     } finally {
       operacionesEnVueloRef.current -= 1;
     }
+    return finEncolado;
   }, [
     deviceId,
     sesionId,

@@ -32,6 +32,8 @@ export interface RouteMapProps {
   /** Un gesto del usuario sobre el mapa (solo lo dispara el usuario, nunca la cámara propia):
    * saca de navegación a libre. */
   onPanUsuario: () => void;
+  /** Dedo apoyado (`true`) o suelto (`false`) sobre el mapa: el auto-recentrado de `libre` solo corre sin dedo. */
+  onToqueMapa?: (activo: boolean) => void;
   /** Medidas (dp) de lo que tapa el mapa en navegación, para dejar el vehículo en el tercio
    * inferior de la banda visible (`paddingNavegacion`): borde inferior de la tarjeta superior y
    * alto que ocupa el sheet visible (expandido o colapsado) desde abajo. */

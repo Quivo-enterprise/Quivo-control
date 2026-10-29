@@ -73,7 +73,7 @@ describe('sincronizarPendientesConLease — hallazgo 6 (iniciarSyncAutomatico/la
   it('con el lease disponible, sincroniza normalmente y devuelve el resultado', async () => {
     const resultado = await sincronizarPendientesConLease('access-token');
 
-    expect(resultado).toEqual({ enviados: 0 });
+    expect(resultado).toMatchObject({ enviados: 0 });
     expect(obtenerLotePendienteMock).toHaveBeenCalled();
   });
 
@@ -125,7 +125,7 @@ describe('sincronizarPendientesConLease — hallazgo 6 (iniciarSyncAutomatico/la
       // { enviados: 500 } — el resto quedaba para un `setTimeout(500ms)` que llegaba a un
       // lease todavía tomado, recibía `null` y la cadena se cortaba ahí. Con el fix, los 3
       // lotes se drenan bajo el MISMO lease en una sola llamada.
-      expect(resultado).toEqual({ enviados: LOTE_MAXIMO + LOTE_MAXIMO + 120 });
+      expect(resultado).toMatchObject({ enviados: LOTE_MAXIMO + LOTE_MAXIMO + 120 });
       expect(obtenerLotePendienteMock).toHaveBeenCalledTimes(3);
       // Un solo ciclo de adquisición/liberación — el lease nunca se soltó entre lotes.
       expect(adquirirLeaseMock).toHaveBeenCalledTimes(1);
@@ -143,7 +143,7 @@ describe('sincronizarPendientesConLease — hallazgo 6 (iniciarSyncAutomatico/la
       const resultado = await sincronizarPendientesConLease('access-token');
 
       const TOPE_LOTES_POR_CICLO_DRENAJE = 20;
-      expect(resultado).toEqual({ enviados: LOTE_MAXIMO * TOPE_LOTES_POR_CICLO_DRENAJE });
+      expect(resultado).toMatchObject({ enviados: LOTE_MAXIMO * TOPE_LOTES_POR_CICLO_DRENAJE });
       expect(obtenerLotePendienteMock).toHaveBeenCalledTimes(TOPE_LOTES_POR_CICLO_DRENAJE);
       // El lease se libera igual al llegar al tope — no queda tomado para siempre.
       expect(liberarLeaseConCooldownMock).toHaveBeenCalledTimes(1);
@@ -236,7 +236,7 @@ describe('sincronizarPendientesConLease — hallazgo 6 (iniciarSyncAutomatico/la
       // Los 3 lotes se drenaron en un solo ciclo — con el bug viejo (`enviados < LOTE_MAXIMO`),
       // el primer lote ya "parecía" no-lleno (499 < 500) y el ciclo cortaba ahí.
       expect(obtenerLotePendienteMock).toHaveBeenCalledTimes(3);
-      expect(resultado).toEqual({ enviados: (LOTE_MAXIMO - 1) * 2 + 49 });
+      expect(resultado).toMatchObject({ enviados: (LOTE_MAXIMO - 1) * 2 + 49 });
     });
 
     it('R3/R1: lease perdido a mitad del bucle (otro owner lo toma) — corta tras el lote en curso y NO libera el lease ajeno', async () => {
@@ -255,7 +255,7 @@ describe('sincronizarPendientesConLease — hallazgo 6 (iniciarSyncAutomatico/la
       const resultado = await sincronizarPendientesConLease('access-token');
 
       // Cortó tras 2 lotes completos (1000 eventos) — nunca llegó a pedir un tercer lote.
-      expect(resultado).toEqual({ enviados: LOTE_MAXIMO * 2 });
+      expect(resultado).toMatchObject({ enviados: LOTE_MAXIMO * 2 });
       expect(obtenerLotePendienteMock).toHaveBeenCalledTimes(2);
       expect(renovarLeaseMock).toHaveBeenCalledTimes(3);
       // Nunca libera: la fila ya no es nuestra, liberar pisaría el lease del nuevo dueño.

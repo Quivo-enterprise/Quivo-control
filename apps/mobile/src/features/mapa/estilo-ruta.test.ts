@@ -66,10 +66,10 @@ describe('estiloRuta', () => {
     expect(COLOR_ESPERA).toBe('#1E1B4B');
   });
 
-  it('en seguimiento: azul primario con borde más oscuro y más ancho', () => {
+  it('en seguimiento: fucsia con borde más oscuro y más ancho', () => {
     const e = estiloRuta(true, 18, LAT);
-    expect(e.color).toBe('#3226B4');
-    expect(COLOR_LINEA).toBe('#3226B4');
+    expect(e.color).toBe('#C026D3');
+    expect(COLOR_LINEA).toBe('#C026D3');
     expect(e.colorCasing).toBe(COLOR_CASING_LINEA);
     expect(e.grosor).toBeCloseTo(anchoLineaDp(18, LAT), 5);
     expect(e.grosorCasing).toBeCloseTo(e.grosor + 2 * BORDE_CASING_DP, 5);
@@ -79,7 +79,7 @@ describe('estiloRuta', () => {
     expect(COLOR_DESIGNACION).not.toBe(COLOR_LINEA);
     expect(COLOR_DESIGNACION).toBe('#FD9E15');
     expect(COLOR_CASING_DESIGNACION).toBe('#C96800');
-    expect(COLOR_CASING_LINEA).toBe('#1E176C');
+    expect(COLOR_CASING_LINEA).toBe('#86198F');
   });
 });
 

@@ -6,6 +6,35 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## 2026-10-29: piloto L16 con 30 trufis más (#291, `84966e6`)
+- `crear-piloto-linea-16.ts` ahora tiene 38 pilotos: los 8 originales + `1616PJA`..`1616PJZ`, `1616PKA`..`1616PKD` (CI 9000024..9000053 CB, "Piloto Línea Dieciséis Nueve".."Treinta y ocho"), mañana 29/10–02/11 (150 asignaciones). `HASTA_DEFAULT` = 2026-11-02.
+- Tests 11/11, `/code-review` sin hallazgos, `/ponytail-review` Ship. Codex: no verificado (sin cuota).
+- **Aplicado en prod 29/10 ~05:45 BO** (OK del CTO): 272 escrituras, rotación `f1f38e25…` publicada con 274 asignaciones; 38 vehículos + conductores activos. PINs de los 30 nuevos en `~/.quivo-piloto16-creds` (0600; backup previo `.bak-20261029`). Login móvil de los nuevos no probado (crearía sesión). Al terminar el piloto, `--desactivar --apply` baja los 38.
+- **Renombrados a datos reales (#292, `5c2b3c6`)**, aplicado en prod 29/10 ~07:25 BO con OK del CTO: `scripts/renombrar-piloto-linea-16.ts` hizo 60 PATCH: 29 pilotos (`1616PJA`..`1616PKC`) con placa y nombre reales del sindicato (lista "LINEA 16 4"), mismos ids/asignaciones/PIN; `1616PKD` inactivo (vehículo + conductor). Datos reales SOLO en `~/.quivo-piloto16-reales.tsv` (0600, fuera del repo); creds reescritas con placa real (backup `.bak-20261029-renombre`). PDF para repartir: `~/Downloads/credenciales-linea16-2026-10-29.pdf`.
+- **Desde ahora, toda corrida de `crear-piloto-linea-16.ts` (incluido `--desactivar`) va con `QUIVO_PILOTO16_REALES_FILE=$HOME/.quivo-piloto16-reales.tsv`**; sin él aborta en vez de duplicar. Conductores se buscan solo por CI (sintéticos 9000024..9000053 CB).
+- Web prod: `https://quivo-web-741758083365.southamerica-west1.run.app` (la `quivo-web-424426714260…` da 500).
+
+## Hecho — 2026-10-29: "Terminar el día" real + mapa de navegación (zoom, color, auto-recentrar)
+Plan: `docs/plan-finalizar-dia.md`. Rama `feat/terminar-dia-mapa-nav`. Solo móvil (JS puro, **OTA**, sin APK ni deploy).
+- "Terminar el día" pasa a hacer todo: detener el GPS, drenar el outbox y hacer logout. En la web
+  queda "Recorrido finalizado". Si no hay señal, no cierra la sesión y deja reintentar. Aparece en
+  pausa y en fase `listo` (debajo de COMENZAR RUTA).
+- Navegación: zoom +1 (19 a baja velocidad), ruta fucsia `#C026D3` (borde `#86198F`) para que no se
+  confunda con la flecha azul, y auto-recentrar 5 s después de soltar el dedo (dedo apoyado no cuenta).
+- Gates: tests móvil 1101/1101 + typecheck; `/ponytail-review` Ship; `/code-review` high 10 hallazgos
+  (aplicados: reintento sin `fin_recorrido`, sesión muerta, criterio de corte del drenado, error pegado,
+  auto-recentrar por frame/dedo quieto); `/security-review` 0. Codex: no verificado (sin cuota).
+- Riesgos aceptados (`shortcut:`/docs): el tope de 15 s puede excederse en red lenta; red cortada entre
+  drenado y logout deja la revocación pendiente; carrera `iniciar()`/reenganche < 1 s.
+- **QA emulador 29/10** (APK debug + Metro + API local sobre copia `quivo_qa_terminar`, 1616PIL):
+  recorrido → pausa → "Terminar el día" con la API caída ⇒ "Enviando datos…", a los ~15 s el error
+  "Sin conexión…", GPS detenido, sesión `activa/en_pausa` en el servidor; API arriba + reintento ⇒ sesión
+  `cerrada`, `cerradaPorSistema=false`, `recorridoEstado=finalizado`, revocada, `fin_recorrido` recibido,
+  app en login. **No verificado en dispositivo:** zoom, color de ruta y auto-recentrar (el APK debug
+  tiene la key de Maps `placeholder-sin-tiles`: el mapa no dibuja nada). Observado: en el emulador el
+  primer tap sobre "Terminar el día" (borde inferior del sheet) a veces no abre el diálogo; el segundo
+  sí. No reproducido en otros botones; revisar en teléfono real.
+
 ## Hecho — 2026-10-28: cierre automático por inactividad (3 h) + estado "Inactivo"
 
 Plan: [`docs/plan-cierre-inactividad.md`](plan-cierre-inactividad.md). Rama `feat/cierre-inactividad`.

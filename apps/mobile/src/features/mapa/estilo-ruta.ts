@@ -6,10 +6,10 @@ import { quivoColors } from '../../shared/theme/quivo-theme';
 
 /** Ruta en espera (recorrido sin iniciar). */
 export const COLOR_ESPERA = '#1E1B4B';
-/** Ruta en seguimiento: azul Quivo Control (token `primary`). */
-export const COLOR_LINEA = quivoColors.primary;
-/** Borde (casing) de la ruta en seguimiento: `primary` oscurecido ~40 %. */
-export const COLOR_CASING_LINEA = quivoColors.primaryDark;
+/** Ruta en seguimiento: fucsia, porque la ruta azul se confundía con la flecha azul del vehículo (nada más en el mapa usa fucsia). */
+export const COLOR_LINEA = '#C026D3';
+/** Borde (casing) de la ruta en seguimiento: fucsia oscuro. */
+export const COLOR_CASING_LINEA = '#86198F';
 /** Tramo de la designación a Molinos: acento de marca (distinguible del azul base). */
 export const COLOR_DESIGNACION = quivoColors.accent;
 /** Borde del tramo de designación (`warningStrong`, naranja oscuro del tema). */
