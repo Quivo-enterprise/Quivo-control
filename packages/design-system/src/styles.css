@@ -5393,3 +5393,17 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     min-height: 2.75rem;
   }
 }
+
+/* PR D — escala móvil (<= 720 px): base 18 px (todo es rem) e inputs >= 16 px (iOS hace zoom por debajo). */
+@media (max-width: 720px) {
+  html {
+    font-size: 112.5%;
+  }
+
+  .qv-input__control,
+  .qv-select-trigger,
+  .qv-textarea,
+  .qv-live-inf__input {
+    font-size: max(16px, var(--qv-text-sm));
+  }
+}
