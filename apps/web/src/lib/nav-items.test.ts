@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   filterNavItemsByRole,
   findNavItemForPath,
+  isNavActive,
   isRouteAllowedForRole,
   NAV_ITEMS,
   rutaInicialParaRol,
@@ -103,5 +104,14 @@ describe('NAV_ITEMS ("Salidas")', () => {
       expect(isRouteAllowedForRole(NAV_ITEMS, '/salidas', rol)).toBe(true);
     }
     expect(isRouteAllowedForRole(NAV_ITEMS, '/salidas', 'conductor')).toBe(false);
+  });
+});
+
+describe('isNavActive', () => {
+  it('"/" solo coincide exacto; un ancestro coincide, un prefijo parcial no', () => {
+    expect(isNavActive('/', '/')).toBe(true);
+    expect(isNavActive('/salidas', '/')).toBe(false);
+    expect(isNavActive('/salidas/x', '/salidas')).toBe(true);
+    expect(isNavActive('/salidas', '/sal')).toBe(false);
   });
 });

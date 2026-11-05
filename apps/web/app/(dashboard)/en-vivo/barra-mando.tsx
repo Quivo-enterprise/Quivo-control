@@ -62,7 +62,7 @@ export function BarraMando(p: BarraMandoProps) {
       <div className="qv-live-barra__fila">
         <button
           type="button"
-          className="qv-live-btn"
+          className="qv-live-btn qv-live-barra__salir"
           onClick={p.onSalir}
           title={p.tienePanelAdmin ? 'Volver al panel administrativo' : 'Cerrar sesión'}
         >

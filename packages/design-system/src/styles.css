@@ -5407,3 +5407,117 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-size: max(16px, var(--qv-text-sm));
   }
 }
+
+/* PR E — pestañas inferiores móviles (Hoy · En vivo · Salidas · Alertas · Más). Escritorio no cambia. */
+.qv-tabbar {
+  display: none;
+}
+
+@media (min-width: 721px) {
+  /* `bare` (En vivo): en escritorio el layout no existe, solo su contenido fijo. */
+  .qv-admin-layout--bare {
+    display: block;
+    min-height: 0;
+    padding: 0;
+    background: none;
+  }
+
+  .qv-admin-layout--bare .qv-admin-layout__sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .qv-admin-layout--tabs {
+    --qv-tabbar-h: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  .qv-tabbar {
+    display: flex;
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 900; /* bajo el drawer (950/960) y los modales (1000) */
+    box-sizing: border-box;
+    height: var(--qv-tabbar-h);
+    padding: 4px calc(4px + env(safe-area-inset-right)) env(safe-area-inset-bottom) calc(4px + env(safe-area-inset-left));
+    background: var(--qv-surface-card);
+    border-top: 1px solid var(--qv-border-subtle);
+  }
+
+  .qv-tabbar__tab {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 56px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--qv-text-secondary);
+    text-decoration: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  .qv-tabbar__pill {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 32px;
+    border-radius: 16px;
+  }
+
+  .qv-tabbar__tab--active {
+    color: var(--qv-color-primary);
+    font-weight: 800;
+  }
+
+  .qv-tabbar__tab--active .qv-tabbar__pill {
+    background: var(--qv-color-primary-soft);
+  }
+
+  .qv-tabbar__tab:focus-visible {
+    outline: none;
+    box-shadow: var(--qv-shadow-focus);
+    border-radius: var(--qv-radius-md);
+  }
+
+  .qv-admin-layout--tabs .qv-admin-layout__content {
+    padding-bottom: calc(var(--qv-space-md) + var(--qv-tabbar-h));
+  }
+
+  .qv-admin-layout--tabs .qv-admin-layout__content:has(.qv-floating-fab-bottom-right) {
+    padding-bottom: calc(5.5rem + var(--qv-tabbar-h));
+  }
+
+  .qv-admin-layout--tabs .qv-floating-fab-bottom-right {
+    bottom: calc(var(--qv-tabbar-h) + 1rem);
+  }
+
+  /* En vivo: el mapa, la barra y la hoja del vehículo terminan sobre la tabbar. */
+  .qv-admin-layout--tabs .qv-live-standalone-shell {
+    height: calc(100dvh - var(--qv-tabbar-h));
+    padding-bottom: 0;
+  }
+
+  /* La tabbar ya reserva el inset inferior: la hoja no lo suma otra vez. */
+  .qv-admin-layout--tabs .qv-live-panel {
+    padding-bottom: 0.9rem;
+  }
+  .qv-admin-layout--tabs .qv-live-panel[data-hoja='plegada'] {
+    padding-bottom: 0.6rem;
+  }
+
+  /* "Salir"/"Panel" pasan a "Más" y "Hoy" (las pestañas). */
+  .qv-live-barra__salir {
+    display: none;
+  }
+}

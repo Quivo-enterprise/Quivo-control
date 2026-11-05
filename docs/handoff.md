@@ -24,10 +24,24 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - `mobile.spec` suma el test de inputs ≥16px y base 18px. El tope de la barra de En vivo pasa de 120 a 132.
   - Codex: no verificado.
 - **Bake-off resuelto: híbrido B + A.** La base es B ("Señalética de garita"); de A se toma el resumen del día arriba de Hoy. Comps en `docs/movil-comps/`; tokens en `propuesta-b.html`.
-- **Siguiente: PR E (pestañas abajo).**
+- **PR E — pestañas abajo (`feat/web-movil-tabbar`, PR en curso).**
+  - A ≤720px: barra fija abajo con Hoy · En vivo · Salidas · Alertas · Más. "Más" abre el drawer y reemplaza a la hamburguesa.
+  - `AdminLayout` suma `mobileTabs` y `bare`. `/en-vivo` pasa por `AdminLayout bare`: misma barra y drawer, y "Salir/Panel" se ocultan en el celular.
+  - "Alertas" apunta a `/reglas` hasta PR G, marcado `shortcut:`. "Hoy" apunta a `/` hasta PR H.
+  - Tabs filtradas por rol. `isNavActive` es compartido con el sidebar y tiene test.
+  - `--qv-tabbar-h` descuenta la barra del contenido, del FAB, de `/rutas` y de la hoja de En vivo.
+  - No verificado: rol operador en un celular real, dark mode y el mapa real (local corre sin la clave de Maps). Codex: no verificado.
 
 **Pendiente de la capacitación del 5/11 (prod):**
-- La sesión de **4701EHA** (chofer real Javier Bravo Soliz) quedó `activa`: el emulador se cerró sin "Terminar el día". Cerrarla, y revisar que no le genere sanciones por la vuelta simulada.
+- **PENDIENTE (sin fecha): sesión de 4701EHA** (chofer real Javier Bravo Soliz), id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Sigue `activa` en prod (`fin: null`) y su último fix es de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.
+  - Logs de Cloud Run de ese teléfono: a las 14:15:51Z, `POST /mobile/auth/refresh` 201 (el token rota). A las 14:16:13Z, otro `refresh` → **401** con el token ya rotado, y enseguida `POST /sync/batches` → 401. Después no llega nada más: ni `/mobile/auth/logout` ni el fin de jornada. La app la da por muerta solo en el teléfono.
+  - Causa no verificada. Puede ser propia del emulador (la app se cerró o se reinstaló antes de guardar el token nuevo), o una carrera real entre dos refresh en la app. Si es la carrera, los choferes reales pierden el fin de jornada.
+  - El emulador `quivo_trufi2` no sirve para revisarlo: tiene el build de desarrollo `.piloto` vc1 (instalado a las 09:17 del 5/11), no el APK 17.
+  - Opciones:
+    1. Hacer el deploy de r37. Incluye #290, que cierra sola una sesión inactiva más de 3 h la primera vez que corre. Es lo más limpio.
+    2. Cerrarla a mano en prod. Es una escritura sobre la sesión de un chofer real: pide el OK del CTO.
+    3. Investigar el 401 del refresh con `/codex-debug diagnose` en paralelo con el diagnóstico propio, para descartar que les pase a choferes reales. Código: `apps/mobile/src/shared/api/auth-movil-api.ts` (`refresh`) y `AuthMovilService.refresh` en `apps/api/src/modules/auth-movil/auth-movil.service.ts`.
+  - Con cualquiera de las tres, revisar que la vuelta simulada no le genere sanciones a 4701EHA.
 - `piloto-linea-16` tiene asignaciones para el 5/11 (+39, aplicado por el CTO "agregas nomás"): 37 activos más 2 días faltantes de 1616PIL.
 - El deploy r37 todavía no salió: prod sigue en API r35 y web r36.
 

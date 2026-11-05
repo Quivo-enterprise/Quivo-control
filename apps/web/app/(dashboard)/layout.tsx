@@ -7,14 +7,17 @@ import {
   MOBILE_QUERY,
   SegmentedControl,
   SidebarNav,
+  type MobileTab,
   type SidebarNavSection,
 } from '@quivo/design-system';
 import {
   AlertTriangle,
   Building2,
+  Bell,
   Bus,
   FileBarChart,
   GitBranch,
+  House,
   LayoutDashboard,
   LogOut,
   MapPin,
@@ -31,12 +34,15 @@ import {
 import { BrandLogo } from '../../src/components/brand-logo';
 import { RequireAuth } from '../../src/components/require-auth';
 import { useAuth } from '../../src/lib/auth/auth-context';
-import { filterNavItemsByRole, groupNavItemsBySection, NAV_ITEMS } from '../../src/lib/nav-items';
+import { filterNavItemsByRole, groupNavItemsBySection, isNavActive, MOBILE_TAB_ITEMS, NAV_ITEMS } from '../../src/lib/nav-items';
 
-function getNavIcon(iconName?: string) {
-  const size = 18;
+function getNavIcon(iconName?: string, size = 18) {
   const strokeWidth = 1.9;
   switch (iconName) {
+    case 'House':
+      return <House size={size} strokeWidth={strokeWidth} />;
+    case 'Bell':
+      return <Bell size={size} strokeWidth={strokeWidth} />;
     case 'LayoutDashboard':
       return <LayoutDashboard size={size} strokeWidth={strokeWidth} />;
     case 'ListOrdered':
@@ -76,11 +82,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
   const { user, logout, isDevBypass, switchDevBypassRole } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
-
-  // Si la ruta es '/en-vivo', se renderiza a pantalla completa sin la barra lateral
-  if (pathname === '/en-vivo') {
-    return <main className="qv-live-standalone-shell">{children}</main>;
-  }
+  const isLive = pathname === '/en-vivo';
 
   const allowedItems = filterNavItemsByRole(NAV_ITEMS, user?.rol ?? '');
   const groupedSections = groupNavItemsBySection(allowedItems);
@@ -88,7 +90,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
   const sections: SidebarNavSection[] = groupedSections.map((sec) => ({
     title: sec.title,
     items: sec.items.map((item) => {
-      const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(`${item.href}/`));
+      const isActive = isNavActive(pathname, item.href);
       const isLiveItem = item.id === 'en-vivo';
 
       return {
@@ -149,12 +151,29 @@ function DashboardShell({ children }: { children: ReactNode }) {
     router.push('/login');
   };
 
+  const mobileTabs: MobileTab[] = filterNavItemsByRole(MOBILE_TAB_ITEMS, user?.rol ?? '').map((item) => ({
+    id: item.id,
+    label: item.label,
+    href: item.href,
+    icon: getNavIcon(item.iconName, 24),
+    active: isNavActive(pathname, item.href),
+    onClick: (event) => {
+      // Solo clic izquierdo simple: Ctrl/Cmd/Shift/Alt y clic medio conservan el comportamiento del navegador.
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      router.push(item.href);
+    },
+  }));
+
   const activeItem = sections.flatMap((s) => s.items).find((i) => i.active);
 
   const userInitial = (user?.email?.[0] ?? 'U').toUpperCase();
 
   return (
     <AdminLayout
+      // '/en-vivo' va a pantalla completa sin sidebar en escritorio: `bare` deja solo drawer + tabbar en móvil.
+      bare={isLive}
+      mobileTabs={mobileTabs}
       mobileTitle={activeItem?.label ?? 'Quivo'}
       routeKey={pathname}
       sidebar={
@@ -259,7 +278,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
         />
       }
     >
-      {children}
+      {isLive ? <main className="qv-live-standalone-shell">{children}</main> : children}
     </AdminLayout>
   );
 }
