@@ -67,6 +67,17 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - En el celular no hay forma de ver el dashboard completo de escritorio (resúmenes por sindicato, errores de sync); así lo define el plan.
     - El KPI de sanciones lleva a `/reglas` sin filtro, porque `/reglas` no lee parámetros en la URL.
   - No verificado: emulador Android, iOS y dispositivo real. Codex: no verificado.
+- **QA real y gate de UI sobre G y H (después del merge; `fix/web-movil-gate-ui`, PR en curso).**
+  - G y H se mergearon sin `web-design-guidelines` ni `impeccable audit`, y sin probar las acciones de punta a punta. Se hizo después.
+  - QA sin mocks, con API real y DB local (`quivo_movil_qa`), a 412 px: Atender, Descartar y Sancionar verificados contra la DB; KPIs de Hoy iguales a los conteos SQL; búsqueda con `tel:`/`wa.me` por `conductorId`; 5 pestañas; operador redirigido a `/en-vivo` y 403 en la API. Sin bugs de producto.
+  - Emulador Android (Chrome): login y 5 pestañas OK.
+  - Gate de UI: 0 bloqueantes, 4 altos, 8 medios, 4 bajos. Se aplicaron todos menos el token de dark mode (global, bajo).
+  - "Ver en mapa" ahora abre `/en-vivo?vehiculo=<id>` con el panel del vehículo seleccionado, solo con posiciones frescas, y limpia la URL para no reabrirlo al recargar. Era un punto del plan que había quedado sin hacer. El plan decía `?sesion=`, pero `/posiciones` trae una fila por vehículo: una alerta de una sesión anterior no encontraba nada, por eso se busca por vehículo.
+  - Observaciones sin acción:
+    - `/sw.js` da 404 (no hay service worker).
+    - `GET /vehiculos` omite en silencio las placas inválidas, y Hoy no avisa.
+    - En rutas del drawer ninguna pestaña queda activa.
+  - No verificado: instalar la PWA, iOS, dispositivo real, mapa con clave de Google, dark mode. Codex: no verificado.
 
 **Pendiente de la capacitación del 5/11 (prod):**
 - **PENDIENTE (sin fecha): sesión de 4701EHA** (chofer real Javier Bravo Soliz), id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Sigue `activa` en prod (`fin: null`) y su último fix es de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.

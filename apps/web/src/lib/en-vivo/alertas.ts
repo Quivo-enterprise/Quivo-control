@@ -240,3 +240,6 @@ export function etiquetaInicioAlerta(inicio: Date, ahora: Date = new Date()): st
   const [, mes, d] = dia.split('-');
   return `${d}/${mes} ${hora}`;
 }
+
+/** HH:MM en hora de La Paz (para "datos de las HH:MM"). */
+export const horaBo = (ts: number | Date): string => HORA_BO.format(ts);

@@ -340,14 +340,67 @@ test.describe('Panel móvil (Pixel 7)', () => {
     }
   });
 
-  test('Alertas: estado vacío "Sin alertas hoy"', async () => {
+  test('Alertas: estado vacío por filtro (por defecto Abiertas)', async () => {
     test.setTimeout(60_000);
     await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: [] }));
     try {
       await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
-      await expect(page.getByText('Sin alertas hoy')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText('Sin alertas abiertas')).toBeVisible({ timeout: 30_000 });
+      await page.getByRole('button', { name: /Atendidas/ }).click();
+      await expect(page.getByText('Sin alertas atendidas')).toBeVisible();
+      await page.getByRole('button', { name: /Todas/ }).click();
+      await expect(page.getByText('Sin alertas hoy')).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     } finally {
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+    }
+  });
+
+  test('Alertas: "Ver en mapa" abre el vehículo de la sesión en En vivo una sola vez', async () => {
+    test.setTimeout(90_000);
+    const sesionId = '00000000-0000-4000-8000-0000000000f1';
+    const vehiculoId = '00000000-0000-4000-8000-0000000000e1';
+    const pos = {
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      lineaId: '00000000-0000-4000-8000-0000000000d1', lineaNombre: 'Línea 16', rutaSentido: 'ida',
+      lat: -17.38, lng: -66.3, accuracy: 5, speed: 20, totalPuntos: 10, estadoFrescura: 'reportando',
+      vehiculoId,
+    };
+    // La alerta es de OTRA sesión del mismo vehículo: /posiciones solo trae la ganadora (`sesionId`).
+    const sesionAlerta = '00000000-0000-4000-8000-0000000000f2';
+    const alerta = {
+      sindicatoId: sesionId, vehiculoId, conductorId: sesionId, lineaId: sesionId, rutaId: sesionId, reglaId: null,
+      finTs: null, lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null,
+      createdAt: new Date().toISOString(), id: '00000000-0000-4000-8000-000000000001', sesionId: sesionAlerta, tipo: 'desvio_ruta',
+      gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '4701EHA',
+      conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+    };
+    await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [pos] }));
+    await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: [alerta] }));
+    try {
+      await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
+      const ver = page.getByRole('link', { name: 'Ver en mapa 4701EHA' });
+      await expect(ver).toHaveAttribute('href', `/en-vivo?vehiculo=${vehiculoId}`);
+      await ver.click();
+      const panel = page.getByLabel('Detalle del vehículo 4701EHA');
+      await expect(panel).toBeVisible({ timeout: 30_000 });
+      // El parámetro se consume: recargar o volver atrás no reabre el panel.
+      await expect(page).toHaveURL(/\/en-vivo$/);
+      await page.getByRole('button', { name: 'Cerrar detalle del vehículo' }).click();
+      await expect(panel).toHaveCount(0);
+      // Una sola vez: el siguiente poll de posiciones no lo reabre.
+      await page.waitForTimeout(2_500);
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await page.waitForTimeout(1_000);
+      await expect(panel).toHaveCount(0);
+      // Vehículo que no está en las posiciones de hoy: sin error ni panel, y el parámetro también se consume.
+      await page.goto('/en-vivo?vehiculo=00000000-0000-4000-8000-0000000000ff', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await expect(page.getByLabel('Barra de mando de En vivo')).toBeVisible({ timeout: 30_000 });
+      await page.waitForTimeout(1_500);
+      await expect(page.getByLabel(/Detalle del vehículo/)).toHaveCount(0);
+      await expect(page).toHaveURL(/\/en-vivo$/);
+    } finally {
+      await page.unroute('**/v1/reportes/en-vivo/posiciones*');
       await page.unroute('**/v1/reportes/en-vivo/infracciones*');
     }
   });

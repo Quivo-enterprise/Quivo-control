@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Alert, Button, ConfirmDialog, Loader, RouteMap, type MapPoint } from '@quivo/design-system';
 import { AlertTriangle, CheckCircle2, Clock, Maximize2, Navigation, Radio, RefreshCw } from 'lucide-react';
 import { etiquetaTipoInfraccion, type EstadoFrescura, type GravedadRegla, type Infraccion } from '@quivo/shared';
@@ -48,7 +48,16 @@ import { PanelVehiculo, type AvisoPanel, type BorradoresDescarte } from './panel
 import { conPuntoVivo } from '../../../src/lib/en-vivo/punto-vivo';
 import { puntosAnimadosSobreRuta, rutasSnapDe } from '../../../src/lib/en-vivo/segmentos-traza';
 
+// `useSearchParams` exige Suspense en el build de Next 15.
 export default function EnVivoPage() {
+  return (
+    <Suspense fallback={<Loader label="Cargando…" />}>
+      <EnVivoContenido />
+    </Suspense>
+  );
+}
+
+function EnVivoContenido() {
   const { token, user, logout } = useAuth();
   const router = useRouter();
 
@@ -245,6 +254,20 @@ export default function EnVivoPage() {
         : 'Sin alertas',
     });
   };
+
+  // `?vehiculo=<id>` (enlace "Ver en mapa" de /alertas): se aplica UNA vez, con posiciones frescas y
+  // correctas (no el caché previo ni un refetch fallido), y se consume de la URL para que recargar o
+  // volver atrás no reabra el panel. /posiciones trae una fila por vehículo (la sesión ganadora), por eso
+  // se busca por vehículo y no por sesión. Si el vehículo no está en las de hoy, se descarta sin error.
+  const vehiculoDeUrl = useSearchParams().get('vehiculo');
+  const urlAplicadaRef = useRef(false);
+  useEffect(() => {
+    if (urlAplicadaRef.current || !vehiculoDeUrl || !posiciones.isFetchedAfterMount || posiciones.isError || !posiciones.data) return;
+    urlAplicadaRef.current = true;
+    const p = posiciones.data.find((x) => x.vehiculoId === vehiculoDeUrl);
+    if (p) seleccionarSesion(p.id);
+    router.replace('/en-vivo');
+  }, [vehiculoDeUrl, posiciones.isFetchedAfterMount, posiciones.isError, posiciones.data, seleccionarSesion, router]);
 
   // Aviso aria-live de las acciones del panel (atender, descartar, sancionar, copiar…).
   const anunciar = useCallback((a: AvisoPanel) => setAviso(a), []);

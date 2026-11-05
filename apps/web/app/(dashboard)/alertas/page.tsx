@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Loader, PageHeader, PlateBadge } from '@quivo/design-system';
@@ -15,6 +15,7 @@ import {
   NIVELES_DESC,
   duracionInfraccion,
   etiquetaInicioAlerta,
+  horaBo,
   puedeAtender,
   puedeDescartar,
   puedeSancionar,
@@ -31,15 +32,20 @@ const FILTROS: { id: Filtro; label: string }[] = [
   { id: 'todas', label: 'Todas' },
 ];
 
-const hora = (d: Date) =>
-  d.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/La_Paz' });
+const VACIO: Record<Filtro, string> = {
+  abierta: 'Sin alertas abiertas',
+  atendida: 'Sin alertas atendidas',
+  todas: 'Sin alertas hoy',
+};
+
+type Accion = 'atender' | 'descartar' | 'sancionar';
 
 export default function AlertasPage() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
   const alertas = useInfraccionesHoy(token);
   const [filtro, setFiltro] = useState<Filtro>('abierta');
-  const [enCurso, setEnCurso] = useState<ReadonlySet<string>>(new Set());
+  const [enCurso, setEnCurso] = useState<ReadonlyMap<string, Accion>>(new Map());
   const [errores, setErrores] = useState<Readonly<Record<string, string>>>({});
   const [descarte, setDescarte] = useState<{ id: string; motivo: string } | null>(null);
   const [sancion, setSancion] = useState<{ inf: InfraccionHoy; reglas: Regla[] } | null>(null);
@@ -51,6 +57,26 @@ export default function AlertasPage() {
     todas: todas.length,
   };
   const visibles = filtro === 'todas' ? todas : todas.filter((i) => i.estado === filtro);
+  const grupos = NIVELES_DESC.map((nivel) => ({ nivel, items: visibles.filter((i) => i.gravedad === nivel) })).filter((g) => g.items.length > 0);
+  const orden = grupos.flatMap((g) => g.items);
+
+  // Foco: tras una acción lograda (y ya refrescada la lista), si el foco cayó a <body> pasa a la primera acción
+  // de la misma tarjeta (sigue listada, p. ej. filtro Todas) o de la que ocupa su lugar; sin tarjetas, al mensaje vacío.
+  const [focoTras, setFocoTras] = useState<{ id: string; idx: number } | null>(null);
+  useEffect(() => {
+    if (!focoTras) return;
+    setFocoTras(null);
+    const activo = document.activeElement;
+    if (activo && activo !== document.body && activo.isConnected) return;
+    const quedaEnLista = orden.some((i) => i.id === focoTras.id);
+    const objetivo = quedaEnLista ? focoTras.id : orden[Math.min(focoTras.idx, orden.length - 1)]?.id;
+    const el = objetivo
+      ? (document.querySelector<HTMLElement>(`[data-alerta="${objetivo}"] .qv-alertas__acciones :is(a, button:not(:disabled))`) ??
+        document.querySelector<HTMLElement>(`[data-alerta="${objetivo}"] :is(a[href], button:not(:disabled), input, textarea)`))
+      : document.querySelector<HTMLElement>('.qv-alertas__vacio');
+    el?.focus({ preventScroll: true });
+  });
+  const armarFoco = (id: string) => setFocoTras({ id, idx: orden.findIndex((i) => i.id === id) });
 
   // Alertas y En vivo cachean las mismas infracciones: se invalidan las dos keys exactas (sin tocar posiciones).
   const refrescar = (sesionId: string) =>
@@ -64,31 +90,38 @@ export default function AlertasPage() {
       delete resto[id];
       return texto === null ? resto : { ...resto, [id]: texto };
     });
-  async function correr(inf: InfraccionHoy, fn: () => Promise<void>, refrescarAlTerminar = true) {
+  async function correr(inf: InfraccionHoy, accion: Accion, fn: () => Promise<void>, refrescarAlTerminar = true) {
     const id = inf.id;
     ponerError(id, null);
-    setEnCurso((prev) => new Set(prev).add(id));
+    setEnCurso((prev) => new Map(prev).set(id, accion));
+    let ok = false;
     try {
       await fn();
+      ok = true;
     } catch (err) {
       ponerError(id, mensajeAccion(err));
     } finally {
       setEnCurso((prev) => {
-        const sig = new Set(prev);
+        const sig = new Map(prev);
         sig.delete(id);
         return sig;
       });
-      if (refrescarAlTerminar) void refrescar(inf.sesionId);
+    }
+    if (!refrescarAlTerminar) return;
+    const listo = refrescar(inf.sesionId);
+    if (ok) {
+      await listo;
+      armarFoco(id);
     }
   }
   const actuar = (inf: InfraccionHoy, accion: 'atender' | 'descartar', nota?: string) =>
-    correr(inf, async () => {
+    correr(inf, accion, async () => {
       await infraccionesApi.actualizar(token as string, inf.id, { accion, nota });
       setDescarte((cur) => (cur?.id === inf.id ? null : cur));
     });
   // Las reglas se piden frescas al pulsar "Sancionar" (igual que en En vivo): el servidor re-deriva la regla al enviar.
   const abrirSancion = (inf: InfraccionHoy) =>
-    correr(inf, async () => {
+    correr(inf, 'sancionar', async () => {
       const reglas = await queryClient.fetchQuery<Regla[]>({
         queryKey: ['en-vivo', 'reglas-sancion'],
         staleTime: 0,
@@ -99,6 +132,9 @@ export default function AlertasPage() {
 
   return (
     <div className="qv-alertas">
+      <p className="qv-visually-hidden" aria-live="polite">
+        {alertas.data ? `${cuenta.abierta} alerta${cuenta.abierta === 1 ? '' : 's'} abierta${cuenta.abierta === 1 ? '' : 's'}` : ''}
+      </p>
       <PageHeader title="Alertas" subtitle={alertas.data ? `Hoy · ${cuenta.abierta} abierta${cuenta.abierta === 1 ? '' : 's'}` : 'Hoy'} />
 
       <div className="qv-alertas__chips" role="group" aria-label="Filtrar por estado">
@@ -124,7 +160,7 @@ export default function AlertasPage() {
       </Link>
 
       {alertas.isError && alertas.data && (
-        <Alert variant="warning" title={`No se pudo actualizar; mostrando datos de ${hora(new Date(alertas.dataUpdatedAt))}`} />
+        <Alert variant="warning" title={`No se pudo actualizar; mostrando datos de ${horaBo(alertas.dataUpdatedAt)}`} />
       )}
       {alertas.data && alertas.data.length >= LIMITE_INFRACCIONES_HOY && (
         <Alert variant="info" title={`Se muestran las primeras ${LIMITE_INFRACCIONES_HOY} alertas; puede haber más.`} />
@@ -137,11 +173,11 @@ export default function AlertasPage() {
           {mensajeError(alertas.error)}
         </Alert>
       ) : visibles.length === 0 ? (
-        <p className="qv-alertas__vacio">Sin alertas hoy</p>
+        <p className="qv-alertas__vacio" tabIndex={-1}>
+          {VACIO[filtro]}
+        </p>
       ) : (
-        NIVELES_DESC.map((nivel) => {
-          const grupo = visibles.filter((i) => i.gravedad === nivel);
-          if (grupo.length === 0) return null;
+        grupos.map(({ nivel, items: grupo }) => {
           return (
             <section key={nivel} className="qv-alertas__grupo" aria-label={`Alertas ${ETIQUETA_NIVEL[nivel].plural}`}>
               <h2 className="qv-alertas__nivel">
@@ -149,11 +185,13 @@ export default function AlertasPage() {
               </h2>
               <ul className="qv-live-infracciones">
                 {grupo.map((inf) => {
-                  const pendiente = enCurso.has(inf.id);
+                  const corriendo = enCurso.get(inf.id);
+                  const pendiente = corriendo !== undefined;
                   const duracion = duracionInfraccion(inf);
                   return (
                     <li
                       key={inf.id}
+                      data-alerta={inf.id}
                       className={`qv-live-inf qv-alertas__card qv-live-inf--${inf.gravedad}${inf.estado === 'abierta' ? '' : ' qv-live-inf--cerrada'}`}
                     >
                       <div className="qv-live-inf__cab">
@@ -183,24 +221,43 @@ export default function AlertasPage() {
                         />
                       ) : (
                         <div className="qv-alertas__acciones">
-                          {/* En vivo aún no lee una sesión de la URL: lleva al mapa sin preselección. */}
-                          <Link href="/en-vivo" className="qv-live-btn">
+                          <Link href={`/en-vivo?vehiculo=${inf.vehiculoId}`} prefetch={false} className="qv-live-btn" aria-label={`Ver en mapa ${inf.vehiculoPlaca}`}>
                             <MapPin size={16} aria-hidden="true" />
                             Ver en mapa
                           </Link>
                           {puedeAtender(inf) && (
-                            <button type="button" className="qv-live-btn" disabled={pendiente} onClick={() => void actuar(inf, 'atender')}>
-                              Atender
+                            <button
+                              type="button"
+                              className="qv-live-btn"
+                              disabled={pendiente}
+                              aria-busy={corriendo === 'atender'}
+                              aria-label={corriendo === 'atender' ? undefined : `Atender alerta ${inf.vehiculoPlaca}`}
+                              onClick={() => void actuar(inf, 'atender')}
+                            >
+                              {corriendo === 'atender' ? 'Atendiendo…' : 'Atender'}
                             </button>
                           )}
                           {puedeDescartar(inf) && (
-                            <button type="button" className="qv-live-btn" disabled={pendiente} onClick={() => setDescarte({ id: inf.id, motivo: '' })}>
+                            <button
+                              type="button"
+                              className="qv-live-btn"
+                              disabled={pendiente}
+                              aria-label={`Descartar alerta ${inf.vehiculoPlaca}`}
+                              onClick={() => setDescarte({ id: inf.id, motivo: '' })}
+                            >
                               Descartar
                             </button>
                           )}
                           {puedeSancionar(inf) && (
-                            <button type="button" className="qv-live-btn qv-live-btn--primario" disabled={pendiente} onClick={() => void abrirSancion(inf)}>
-                              Sancionar
+                            <button
+                              type="button"
+                              className="qv-live-btn qv-live-btn--primario"
+                              disabled={pendiente}
+                              aria-busy={corriendo === 'sancionar'}
+                              aria-label={corriendo === 'sancionar' ? undefined : `Sancionar alerta ${inf.vehiculoPlaca}`}
+                              onClick={() => void abrirSancion(inf)}
+                            >
+                              {corriendo === 'sancionar' ? 'Cargando…' : 'Sancionar'}
                             </button>
                           )}
                         </div>
@@ -229,8 +286,9 @@ export default function AlertasPage() {
           conductor={sancion.inf.conductorNombre}
           onClose={() => setSancion(null)}
           onCreada={() => {
+            const { inf } = sancion;
             setSancion(null);
-            void refrescar(sancion.inf.sesionId);
+            void refrescar(inf.sesionId).then(() => armarFoco(inf.id));
           }}
         />
       )}
