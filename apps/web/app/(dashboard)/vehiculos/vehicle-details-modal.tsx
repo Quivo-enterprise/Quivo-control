@@ -148,7 +148,7 @@ export function VehicleDetailsModal({
         </div>
       }
     >
-      <div
+      <div className="qv-grid-movil-1"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(24rem, 1fr))',
@@ -294,7 +294,7 @@ export function VehicleDetailsModal({
             <span style={{ fontSize: '0.7rem', color: 'var(--qv-text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
               Asignación Operativa
             </span>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
+            <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
               <div>
                 <small style={{ color: 'var(--qv-text-muted)', display: 'block', fontSize: '0.68rem' }}>Sindicato:</small>
                 <strong style={{ fontSize: '0.78rem', color: 'var(--qv-text-primary)' }}>
@@ -342,7 +342,7 @@ export function VehicleDetailsModal({
         </div>
 
         {/* Columna Derecha: Especificaciones Técnicas (2x2 Grid) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
+        <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
           {/* Tipo de Vehículo */}
           <div
             style={{

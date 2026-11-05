@@ -475,7 +475,7 @@ export default function DashboardHomePage() {
       </div>
 
       {/* Sección Analítica: Gráficos de Distribución y Tendencia */}
-      <div
+      <div className="qv-grid-movil-1"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(20rem, 1fr))',

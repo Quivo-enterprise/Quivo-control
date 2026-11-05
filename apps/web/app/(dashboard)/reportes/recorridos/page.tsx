@@ -137,7 +137,7 @@ export default function RecorridosPage() {
         </Card>
       ) : (
         <div className="qv-table-wrap">
-          <table className="qv-table">
+          <table className="qv-table qv-table--stack">
             <thead>
               <tr>
                 <th>Fecha y Hora Inicio</th>
@@ -151,37 +151,37 @@ export default function RecorridosPage() {
             <tbody>
               {filas.map((f) => (
                 <tr key={f.id} role="row">
-                  <td>
+                  <td data-label="Fecha y hora inicio">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <Calendar size={14} style={{ color: 'var(--qv-color-primary)' }} />
                       <span style={{ fontWeight: 600, color: 'var(--qv-text-primary)' }}>{new Date(f.inicio).toLocaleString('es-BO')}</span>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="Línea">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <GitBranch size={14} style={{ color: 'var(--qv-color-primary)' }} />
                       <strong style={{ color: 'var(--qv-text-primary)' }}>{f.lineaNombre}</strong>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="Vehículo">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                       <Bus size={14} style={{ color: 'var(--qv-color-primary)' }} />
                       <PlateBadge plate={f.vehiculoPlaca} />
                     </div>
                   </td>
-                  <td>
+                  <td data-label="Conductor">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <User size={14} style={{ color: 'var(--qv-color-primary)' }} />
                       <span style={{ color: 'var(--qv-text-primary)', fontWeight: 600 }}>{f.conductorNombre}</span>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="Estado">
                     <StatusBadge
                       status={ESTADO_RECORRIDO_BADGE[f.estado] ?? 'idle'}
                       label={f.estado.toUpperCase()}
                     />
                   </td>
-                  <td style={{ textAlign: 'right' }}>
+                  <td style={{ textAlign: 'right' }} data-label="">
                     <Button
                       size="sm"
                       variant="secondary"

@@ -13,6 +13,7 @@ import {
   Tag,
   Tooltip,
   type MapPoint,
+  MOBILE_QUERY,
 } from '@quivo/design-system';
 import type { Ruta, TipoParada } from '@quivo/shared';
 import {
@@ -78,7 +79,21 @@ export default function RutasPage() {
   const [filtroSentido, setFiltroSentido] = useState('todos');
   const [filtroEstado, setFiltroEstado] = useState<FiltroEstadoRuta>('todos');
   const [mostrarTodas, setMostrarTodas] = useState(true);
-  const [drawerOpen, setDrawerOpen] = useState(true);
+  // En celular /rutas es solo lectura: no se montan las herramientas de edición. La página solo
+  // renderiza tras RequireAuth (cliente), por lo que leer matchMedia al inicializar no desajusta SSR.
+  const esMovilInicial = () => typeof window !== 'undefined' && window.matchMedia(MOBILE_QUERY).matches;
+  const [soloLectura, setSoloLectura] = useState(esMovilInicial);
+  const [drawerOpen, setDrawerOpen] = useState(() => !esMovilInicial());
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_QUERY);
+    const sync = () => {
+      setSoloLectura(mq.matches);
+      if (mq.matches) setDrawerOpen(false);
+    };
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
   const [inspectorTab, setInspectorTab] = useState<'catalogo' | 'detalle'>('catalogo');
 
   const {
@@ -120,6 +135,7 @@ export default function RutasPage() {
   }, [rutaSeleccionada]);
 
   function iniciarDibujo() {
+    if (soloLectura) return;
     setError(null);
     setAviso(null);
     setRutaId('');
@@ -128,6 +144,7 @@ export default function RutasPage() {
   }
 
   function iniciarEdicionTrazado() {
+    if (soloLectura) return;
     if (!rutaSeleccionada) return;
     setError(null);
     setAviso(null);
@@ -136,6 +153,7 @@ export default function RutasPage() {
   }
 
   function iniciarRecorridoInverso() {
+    if (soloLectura) return;
     if (!rutaSeleccionada) return;
     setError(null);
     setDrawerOpen(true);
@@ -151,6 +169,7 @@ export default function RutasPage() {
   }
 
   function iniciarAgregarParada() {
+    if (soloLectura) return;
     setError(null);
     setAviso(null);
     setDrawerOpen(true);
@@ -158,6 +177,7 @@ export default function RutasPage() {
   }
 
   function iniciarEdicionParada(p: (typeof paradas)[number]) {
+    if (soloLectura) return;
     setError(null);
     setAviso(null);
     setDrawerOpen(true);
@@ -165,6 +185,7 @@ export default function RutasPage() {
   }
 
   function iniciarAgregarPuntoControl() {
+    if (soloLectura) return;
     setError(null);
     setAviso(null);
     setDrawerOpen(true);
@@ -172,6 +193,7 @@ export default function RutasPage() {
   }
 
   function iniciarEdicionPuntoControl(pc: (typeof puntosControl)[number]) {
+    if (soloLectura) return;
     setError(null);
     setAviso(null);
     setDrawerOpen(true);
@@ -182,6 +204,14 @@ export default function RutasPage() {
     drawing.cancelarModo();
     setError(null);
   }
+
+  // Al pasar a solo lectura (desktop -> celular) se descarta cualquier edición o diálogo de baja abierto.
+  useEffect(() => {
+    if (!soloLectura) return;
+    cancelarModo();
+    setConfirmarBaja(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soloLectura]);
 
   async function onGuardarRuta() {
     const ok = await data.guardarRuta({
@@ -270,10 +300,11 @@ export default function RutasPage() {
       lat: p.coord.coordinates[1],
       lng: p.coord.coordinates[0],
       label: `Parada #${p.orden} (${capitalizar(p.tipo)})`,
-      description: 'Clic para editar en panel derecho',
+      description: soloLectura ? undefined : 'Clic para editar en panel derecho',
       pinType: 'stop',
       color: p.tipo === 'origen' ? '#10b981' : p.tipo === 'destino' ? '#ef4444' : colorLinea,
       onClick: () => {
+        if (soloLectura) return;
         setDrawerOpen(true);
         setInspectorTab('detalle');
         iniciarEdicionParada(p);
@@ -290,6 +321,7 @@ export default function RutasPage() {
       label: `Punto de control #${pc.orden} (Radio ${pc.radioToleranciaM}m${pc.obligatorio ? ' · Obligatorio' : ''})`,
       color: colorLineaSecundario,
       onClick: () => {
+        if (soloLectura) return;
         setDrawerOpen(true);
         setInspectorTab('detalle');
         iniciarEdicionPuntoControl(pc);
@@ -375,7 +407,7 @@ export default function RutasPage() {
           {loadingLineas ? (
             <span style={{ fontSize: '0.8125rem' }}>Cargando líneas...</span>
           ) : (
-            <div style={{ minWidth: '13rem' }}>
+            <div className="qv-route-hud-search" style={{ minWidth: '13rem' }}>
               <Select
                 id="linea"
                 name="linea"
@@ -429,7 +461,7 @@ export default function RutasPage() {
 
         {/* KPIs de la Línea y Ruta */}
         {lineaId ? (
-          <div className="qv-route-hud-card" style={{ display: 'flex', gap: '0.875rem' }}>
+          <div className="qv-route-hud-card qv-route-hud-kpis" style={{ display: 'flex', gap: '0.875rem' }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
               <span style={{ fontSize: '0.6875rem', color: 'var(--qv-text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
                 Rutas Activas
@@ -475,8 +507,8 @@ export default function RutasPage() {
         ) : null}
 
         {/* Acciones principales y Toggle de Drawer */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', pointerEvents: 'auto' }}>
-          {lineaId && (
+        <div className="qv-route-hud-acciones" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', pointerEvents: 'auto' }}>
+          {lineaId && !soloLectura && (
             <button
               type="button"
               className="qv-floating-cta"
@@ -556,6 +588,8 @@ export default function RutasPage() {
               padding: '0.25rem',
             }}
             title="Minimizar panel"
+            aria-label="Cerrar herramientas"
+            className="qv-route-inspector-cerrar"
           >
             <ChevronRight size={18} />
           </button>
@@ -613,10 +647,19 @@ export default function RutasPage() {
         )}
 
         <div className="qv-route-inspector-body">
+          {soloLectura && lineaId && (
+            <p className="qv-route-readonly-notice" role="note">
+              La edición de trazado está disponible en escritorio.
+            </p>
+          )}
           {!lineaId ? (
             <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--qv-text-muted)' }}>
               <Compass size={32} style={{ margin: '0 auto 0.75rem', opacity: 0.5 }} />
-              <p style={{ fontSize: '0.875rem' }}>Selecciona una línea en la barra superior para explorar y editar sus recorridos.</p>
+              <p style={{ fontSize: '0.875rem' }}>
+                {soloLectura
+                  ? 'Selecciona una línea en la barra superior para explorar sus recorridos.'
+                  : 'Selecciona una línea en la barra superior para explorar y editar sus recorridos.'}
+              </p>
             </div>
           ) : drawing.modo === 'dibujar-ruta' ? (
             <Card header={drawing.editandoTrazado ? 'Editar trazado' : 'Nueva ruta'}>
@@ -870,7 +913,7 @@ export default function RutasPage() {
               header="Catálogo de Rutas"
               footer={
                 <div className="routes-actions" style={{ justifyContent: 'space-between' }}>
-                  {rutaSeleccionada ? (
+                  {rutaSeleccionada && !soloLectura ? (
                     <PublicacionAction
                       ruta={rutaSeleccionada}
                       guardando={guardando}
@@ -878,9 +921,11 @@ export default function RutasPage() {
                       onAvanzar={data.avanzarPublicacionDelRecorrido}
                     />
                   ) : <span />}
-                  <Button size="sm" onClick={iniciarDibujo}>
-                    + Nueva ruta
-                  </Button>
+                  {!soloLectura && (
+                    <Button size="sm" onClick={iniciarDibujo}>
+                      + Nueva ruta
+                    </Button>
+                  )}
                 </div>
               }
             >
@@ -992,7 +1037,7 @@ export default function RutasPage() {
                 </div>
 
                 {/* Métricas clave en tarjetas de alto contraste */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
+                <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
                   <div
                     style={{
                       padding: '0.5rem 0.65rem',
@@ -1027,6 +1072,7 @@ export default function RutasPage() {
                 </div>
 
                 {/* Acciones de trazado */}
+                {!soloLectura && (<>
                 <div style={{ display: 'flex', gap: '0.45rem' }}>
                   <Button
                     size="sm"
@@ -1080,6 +1126,7 @@ export default function RutasPage() {
                     {guardando ? 'Guardando...' : 'Guardar cambios de sentido/estado'}
                   </Button>
                 )}
+                </>)}
               </div>
 
               <ParadasCard
@@ -1090,6 +1137,7 @@ export default function RutasPage() {
                 onEditar={iniciarEdicionParada}
                 onReactivar={(id) => data.reactivar('parada', id)}
                 onEliminar={(id) => setConfirmarBaja({ tipo: 'parada', id })}
+                soloLectura={soloLectura}
               />
 
               <PuntosControlCard
@@ -1100,6 +1148,7 @@ export default function RutasPage() {
                 onEditar={iniciarEdicionPuntoControl}
                 onReactivar={(id) => data.reactivar('puntoControl', id)}
                 onEliminar={(id) => setConfirmarBaja({ tipo: 'puntoControl', id })}
+                soloLectura={soloLectura}
               />
 
               <VariantesCard
@@ -1111,6 +1160,7 @@ export default function RutasPage() {
                 guardando={guardando}
                 onReactivar={(id) => data.reactivar('variante', id)}
                 onEliminar={(id) => setConfirmarBaja({ tipo: 'variante', id })}
+                soloLectura={soloLectura}
               />
             </>
           ) : null}
@@ -1125,7 +1175,7 @@ export default function RutasPage() {
         className="routes-map-canvas"
         height="100%"
         interactive={drawing.modo !== 'ver'}
-        onMapClick={drawing.onMapClick}
+        onMapClick={soloLectura ? undefined : drawing.onMapClick}
         routes={rutasParaMapa}
         stops={drawing.modo === 'ver' ? stopsParaMapa : []}
         zones={drawing.modo === 'ver' ? zonasParaMapa : []}

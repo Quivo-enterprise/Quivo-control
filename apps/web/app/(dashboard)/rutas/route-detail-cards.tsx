@@ -22,6 +22,7 @@ export function ParadasCard({
   onEditar,
   onReactivar,
   onEliminar,
+  soloLectura = false,
 }: {
   paradas: Parada[];
   loadingDetalle: boolean;
@@ -30,6 +31,8 @@ export function ParadasCard({
   onEditar: (parada: Parada) => void;
   onReactivar: (id: string) => void;
   onEliminar: (id: string) => void;
+  /** Oculta las acciones de alta/edición/baja (celular). */
+  soloLectura?: boolean;
 }) {
   const paradasOrdenadas = paradas.slice().sort((a, b) => a.orden - b.orden);
 
@@ -52,9 +55,11 @@ export function ParadasCard({
             Paradas ({paradas.length})
           </strong>
         </div>
-        <Button size="sm" variant="ghost" onClick={onAgregar}>
-          <Plus size={13} style={{ marginRight: '0.25rem' }} /> Parada
-        </Button>
+        {!soloLectura && (
+          <Button size="sm" variant="ghost" onClick={onAgregar}>
+            <Plus size={13} style={{ marginRight: '0.25rem' }} /> Parada
+          </Button>
+        )}
       </div>
 
       {loadingDetalle ? (
@@ -129,44 +134,46 @@ export function ParadasCard({
                 </div>
 
                 {/* Cápsula de Herramientas */}
-                <div className="qv-table-actions-capsule">
-                  <Tooltip content="Editar posición de parada">
-                    <button
-                      type="button"
-                      className="qv-action-pill-btn"
-                      onClick={() => onEditar(p)}
-                      aria-label="Editar parada"
-                    >
-                      <Pencil size={13} />
-                    </button>
-                  </Tooltip>
-                  <span className="qv-action-pill-divider" />
-                  {p.estado === 'inactivo' ? (
-                    <Tooltip content="Reactivar parada">
+                {!soloLectura && (
+                  <div className="qv-table-actions-capsule">
+                    <Tooltip content="Editar posición de parada">
                       <button
                         type="button"
                         className="qv-action-pill-btn"
-                        disabled={cambiandoEstado}
-                        onClick={() => onReactivar(p.id)}
-                        aria-label="Reactivar parada"
+                        onClick={() => onEditar(p)}
+                        aria-label="Editar parada"
                       >
-                        <RotateCcw size={13} />
+                        <Pencil size={13} />
                       </button>
                     </Tooltip>
-                  ) : (
-                    <Tooltip content="Eliminar parada">
-                      <button
-                        type="button"
-                        className="qv-action-pill-btn qv-action-pill-btn--danger"
-                        disabled={cambiandoEstado}
-                        onClick={() => onEliminar(p.id)}
-                        aria-label="Eliminar parada"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </Tooltip>
-                  )}
-                </div>
+                    <span className="qv-action-pill-divider" />
+                    {p.estado === 'inactivo' ? (
+                      <Tooltip content="Reactivar parada">
+                        <button
+                          type="button"
+                          className="qv-action-pill-btn"
+                          disabled={cambiandoEstado}
+                          onClick={() => onReactivar(p.id)}
+                          aria-label="Reactivar parada"
+                        >
+                          <RotateCcw size={13} />
+                        </button>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip content="Eliminar parada">
+                        <button
+                          type="button"
+                          className="qv-action-pill-btn qv-action-pill-btn--danger"
+                          disabled={cambiandoEstado}
+                          onClick={() => onEliminar(p.id)}
+                          aria-label="Eliminar parada"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </Tooltip>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -187,6 +194,7 @@ export function PuntosControlCard({
   onEditar,
   onReactivar,
   onEliminar,
+  soloLectura = false,
 }: {
   puntosControl: PuntoControl[];
   loadingDetalle: boolean;
@@ -195,6 +203,8 @@ export function PuntosControlCard({
   onEditar: (puntoControl: PuntoControl) => void;
   onReactivar: (id: string) => void;
   onEliminar: (id: string) => void;
+  /** Oculta las acciones de alta/edición/baja (celular). */
+  soloLectura?: boolean;
 }) {
   const puntosOrdenados = puntosControl.slice().sort((a, b) => a.orden - b.orden);
 
@@ -217,9 +227,11 @@ export function PuntosControlCard({
             Puntos de Control ({puntosControl.length})
           </strong>
         </div>
-        <Button size="sm" variant="ghost" onClick={onAgregar}>
-          <Plus size={13} style={{ marginRight: '0.25rem' }} /> Control
-        </Button>
+        {!soloLectura && (
+          <Button size="sm" variant="ghost" onClick={onAgregar}>
+            <Plus size={13} style={{ marginRight: '0.25rem' }} /> Control
+          </Button>
+        )}
       </div>
 
       {loadingDetalle ? (
@@ -293,44 +305,46 @@ export function PuntosControlCard({
               </div>
 
               {/* Cápsula de Herramientas */}
-              <div className="qv-table-actions-capsule">
-                <Tooltip content="Editar punto de control">
-                  <button
-                    type="button"
-                    className="qv-action-pill-btn"
-                    onClick={() => onEditar(pc)}
-                    aria-label="Editar punto de control"
-                  >
-                    <Pencil size={13} />
-                  </button>
-                </Tooltip>
-                <span className="qv-action-pill-divider" />
-                {pc.estado === 'inactivo' ? (
-                  <Tooltip content="Reactivar control">
+              {!soloLectura && (
+                <div className="qv-table-actions-capsule">
+                  <Tooltip content="Editar punto de control">
                     <button
                       type="button"
                       className="qv-action-pill-btn"
-                      disabled={cambiandoEstado}
-                      onClick={() => onReactivar(pc.id)}
-                      aria-label="Reactivar control"
+                      onClick={() => onEditar(pc)}
+                      aria-label="Editar punto de control"
                     >
-                      <RotateCcw size={13} />
+                      <Pencil size={13} />
                     </button>
                   </Tooltip>
-                ) : (
-                  <Tooltip content="Eliminar control">
-                    <button
-                      type="button"
-                      className="qv-action-pill-btn qv-action-pill-btn--danger"
-                      disabled={cambiandoEstado}
-                      onClick={() => onEliminar(pc.id)}
-                      aria-label="Eliminar control"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </Tooltip>
-                )}
-              </div>
+                  <span className="qv-action-pill-divider" />
+                  {pc.estado === 'inactivo' ? (
+                    <Tooltip content="Reactivar control">
+                      <button
+                        type="button"
+                        className="qv-action-pill-btn"
+                        disabled={cambiandoEstado}
+                        onClick={() => onReactivar(pc.id)}
+                        aria-label="Reactivar control"
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip content="Eliminar control">
+                      <button
+                        type="button"
+                        className="qv-action-pill-btn qv-action-pill-btn--danger"
+                        disabled={cambiandoEstado}
+                        onClick={() => onEliminar(pc.id)}
+                        aria-label="Eliminar control"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </Tooltip>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -351,6 +365,7 @@ export function VariantesCard({
   guardando,
   onReactivar,
   onEliminar,
+  soloLectura = false,
 }: {
   variantes: Variante[];
   cambiandoEstado: boolean;
@@ -360,6 +375,8 @@ export function VariantesCard({
   guardando: boolean;
   onReactivar: (id: string) => void;
   onEliminar: (id: string) => void;
+  /** Oculta las acciones de alta/edición/baja (celular). */
+  soloLectura?: boolean;
 }) {
   return (
     <div
@@ -408,51 +425,55 @@ export function VariantesCard({
                   </span>
                 )}
               </div>
-              <div className="qv-table-actions-capsule">
-                {v.estado === 'inactivo' ? (
-                  <Tooltip content="Reactivar variante">
-                    <button
-                      type="button"
-                      className="qv-action-pill-btn"
-                      disabled={cambiandoEstado}
-                      onClick={() => onReactivar(v.id)}
-                      aria-label="Reactivar variante"
-                    >
-                      <RotateCcw size={13} />
-                    </button>
-                  </Tooltip>
-                ) : (
-                  <Tooltip content="Eliminar variante">
-                    <button
-                      type="button"
-                      className="qv-action-pill-btn qv-action-pill-btn--danger"
-                      disabled={cambiandoEstado}
-                      onClick={() => onEliminar(v.id)}
-                      aria-label="Eliminar variante"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </Tooltip>
-                )}
-              </div>
+              {!soloLectura && (
+                <div className="qv-table-actions-capsule">
+                  {v.estado === 'inactivo' ? (
+                    <Tooltip content="Reactivar variante">
+                      <button
+                        type="button"
+                        className="qv-action-pill-btn"
+                        disabled={cambiandoEstado}
+                        onClick={() => onReactivar(v.id)}
+                        aria-label="Reactivar variante"
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip content="Eliminar variante">
+                      <button
+                        type="button"
+                        className="qv-action-pill-btn qv-action-pill-btn--danger"
+                        disabled={cambiandoEstado}
+                        onClick={() => onEliminar(v.id)}
+                        aria-label="Eliminar variante"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </Tooltip>
+                  )}
+                </div>
+              )}
             </div>
           ))
         )}
 
-        <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.35rem' }}>
-          <Input
-            placeholder="Nueva variante..."
-            value={nombreVariante}
-            onChange={(event) => onNombreChange(event.target.value)}
-          />
-          <Button
-            size="sm"
-            onClick={onAgregar}
-            disabled={!nombreVariante.trim() || guardando}
-          >
-            Agregar
-          </Button>
-        </div>
+        {!soloLectura && (
+          <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.35rem' }}>
+            <Input
+              placeholder="Nueva variante..."
+              value={nombreVariante}
+              onChange={(event) => onNombreChange(event.target.value)}
+            />
+            <Button
+              size="sm"
+              onClick={onAgregar}
+              disabled={!nombreVariante.trim() || guardando}
+            >
+              Agregar
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

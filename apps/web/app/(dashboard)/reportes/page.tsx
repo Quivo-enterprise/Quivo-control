@@ -503,7 +503,7 @@ function ReportesContent() {
             Descarga consolidados oficiales en formato CSV compatibles con Microsoft Excel, Google Sheets y sistemas de auditoría.
           </p>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(18rem, 1fr))', gap: '1.25rem' }}>
+          <div className="qv-reportes-export-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(18rem, 1fr))', gap: '1.25rem' }}>
             {/* Exportar Cumplimiento y Recorridos */}
             <div
               style={{
@@ -558,7 +558,7 @@ function ReportesContent() {
                 <FileSpreadsheet size={16} style={{ color: 'var(--qv-color-accent)' }} />
                 <span>Historial de Sanciones</span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+              <div className="qv-reportes-pair" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                 <Select
                   label="Estado de sanción"
                   options={OPCIONES_ESTADO_SANCION}

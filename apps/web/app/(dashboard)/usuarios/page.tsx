@@ -326,7 +326,7 @@ export default function UsuariosPage() {
       </div>
 
       {/* Directorio de Usuarios y Restablecimiento */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 22rem', gap: '1.25rem', alignItems: 'start' }}>
+      <div className="qv-usuarios-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 22rem', gap: '1.25rem', alignItems: 'start' }}>
         {/* Tabla de Usuarios con Barra de Filtros */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div

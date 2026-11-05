@@ -853,7 +853,7 @@ export function VehicleFormPanel({
               </div>
 
               {activeSection === '02' && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)' }}>
+                <div className="qv-nav-wrap" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)' }}>
                   <Button variant="ghost" type="button" onClick={() => setActiveSection('01')} size="sm">
                     <ArrowLeft size={14} style={{ marginRight: '6px' }} />
                     <span>Identificación (01)</span>
@@ -970,7 +970,7 @@ export function VehicleFormPanel({
                   />
                 </FormField>
                 {/* Colores: principal y secundario en la misma fila */}
-                <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div className="qv-grid-movil-1" style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                   <FormField
                     label="Color principal *"
                     htmlFor="vehiculo-color"
@@ -1209,7 +1209,7 @@ export function VehicleFormPanel({
             </div>
 
             {/* Fila inferior: placa y número interno en columnas */}
-            <div
+            <div className="qv-grid-movil-1"
               style={{
                 display: 'grid',
                 gridTemplateColumns: '1fr 1fr',

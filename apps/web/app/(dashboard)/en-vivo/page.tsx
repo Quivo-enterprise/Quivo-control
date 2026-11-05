@@ -551,6 +551,7 @@ export default function EnVivoPage() {
           siguienteAlertaRef={siguienteAlertaRef}
           onSiguienteAlerta={irASiguienteAlerta}
           flotaAbierta={flotaAbierta}
+          hayHud={hayHud}
           onToggleFlota={() => setFlotaAbierta((v) => !v)}
         />
       )}

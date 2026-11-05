@@ -3820,3 +3820,156 @@ body {
     background: var(--qv-surface-card);
   }
 }
+
+/* Móvil (≤720px): /rutas solo lectura, alto = pantalla menos topbar, HUD bajo el drawer de navegación. */
+@media (max-width: 720px) {
+  .qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__content {
+    height: calc(100dvh - 3.5rem - env(safe-area-inset-top)) !important;
+    max-height: calc(100dvh - 3.5rem - env(safe-area-inset-top)) !important;
+  }
+
+  .qv-route-builder-wrapper {
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+
+  .qv-route-hud-top,
+  .qv-route-hud-bottom,
+  .qv-route-drawer-toggle,
+  .qv-route-inspector-drawer {
+    z-index: 20;
+  }
+
+  .qv-route-hud-top {
+    top: 0.5rem;
+    left: 0.5rem;
+    right: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  /* Fila 1: selector de línea a todo el ancho; fila 2: acciones (refrescar / herramientas). */
+  .qv-route-hud-top .qv-route-hud-card:has(.qv-select) {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .qv-route-hud-acciones {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+  }
+
+  .qv-route-hud-acciones > button {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+    justify-content: center;
+  }
+
+  .qv-route-hud-top .qv-select {
+    min-width: 0;
+  }
+
+  .qv-route-inspector-cerrar {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .qv-route-hud-search {
+    min-width: 10rem !important;
+    flex: 1 1 auto;
+  }
+
+  /* KPIs y leyenda ocupan el mapa: se ocultan en celular. */
+  .qv-route-hud-kpis,
+  .qv-route-hud-bottom {
+    display: none !important;
+  }
+
+  .qv-route-inspector-drawer {
+    top: 0.5rem;
+    right: 0.5rem;
+    bottom: calc(0.5rem + env(safe-area-inset-bottom));
+    left: 0.5rem;
+    width: auto;
+    max-width: none;
+  }
+
+  .qv-route-inspector-body {
+    overscroll-behavior: contain;
+  }
+
+  .qv-route-readonly-notice {
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--qv-radius-md);
+    background: var(--qv-color-primary-subtle);
+    color: var(--qv-text-primary);
+    font-size: 0.8125rem;
+  }
+
+  /* /vehiculos: panel de alta/edición en una columna (la vista previa baja bajo el formulario). */
+  .vehicle-form-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vehicle-form-layout > * {
+    min-width: 0;
+  }
+
+  .vehicle-plate-row,
+  .vehicle-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vehicle-plate-row > * {
+    min-width: 0;
+  }
+
+  .vehicle-plate-input-container {
+    flex-wrap: wrap;
+  }
+
+  .vehicle-form-section,
+  .vehicle-panel-body,
+  .vehicle-form-main-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .vehicle-form-live-plate.qv-plate {
+    max-width: 100%;
+  }
+
+  /* PR C2 — barrido de pantallas. */
+  /* /usuarios: directorio y panel de restablecer en una columna (el grid es inline). */
+  .qv-usuarios-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  /* /reportes y grids inline de formularios/paneles: una columna. */
+  .qv-reportes-pair,
+  .qv-reportes-export-grid,
+  .qv-grid-movil-1 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .qv-grid-movil-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  /* Navegación del asistente de línea: los botones envuelven en vez de salirse del panel. */
+  .qv-nav-wrap {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .qv-nav-wrap > * {
+    flex: 1 1 auto;
+  }
+
+  /* El FAB flotante no debe tapar la última tarjeta. */
+  .qv-admin-layout__content:has(.qv-floating-fab-bottom-right) {
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+  }
+}

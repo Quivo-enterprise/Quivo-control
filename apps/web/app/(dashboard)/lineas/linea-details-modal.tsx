@@ -89,7 +89,7 @@ export function LineaDetailsModal({
         </div>
       }
     >
-      <div
+      <div className="qv-grid-movil-1"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(24rem, 1fr))',
