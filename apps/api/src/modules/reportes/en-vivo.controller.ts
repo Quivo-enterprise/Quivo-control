@@ -2,6 +2,7 @@ import { Body, Controller, Get, Inject, Param, Put, Query, UseGuards } from '@ne
 import { Throttle } from '@nestjs/throttler';
 import {
   DesignarVueltaSchema,
+  InfraccionesHoyQuerySchema,
   TrazaEnVivoQuerySchema,
   type DesignarVuelta,
   type TrazaEnVivoQuery,
@@ -17,6 +18,7 @@ import { EnVivoUsuarioThrottlerGuard } from './en-vivo-usuario-throttler.guard.j
 import { EnVivoService } from './en-vivo.service.js';
 
 class TrazaEnVivoQueryDto extends createZodDto(TrazaEnVivoQuerySchema) {}
+class InfraccionesHoyQueryDto extends createZodDto(InfraccionesHoyQuerySchema) {}
 class DesignarVueltaDto extends createZodDto(DesignarVueltaSchema) {}
 
 /**
@@ -57,6 +59,16 @@ export class EnVivoController {
   @Get()
   listar(@CurrentUser() actor: AuthenticatedUser) {
     return this.enVivoService.listarHoy(actor);
+  }
+
+  /**
+   * PR G — alertas de hoy (abiertas y atendidas) de todas las sesiones de la jornada. Declarada
+   * ANTES de `:sesionId/...` para que `infracciones` nunca se lea como un sesionId.
+   */
+  @Get('infracciones')
+  infraccionesHoy(@CurrentUser() actor: AuthenticatedUser, @Query() _query: InfraccionesHoyQueryDto) {
+    // `_query` solo existe para que el pipe valide `fecha` (únicamente `hoy`).
+    return this.enVivoService.listarInfraccionesHoy(actor);
   }
 
   /**

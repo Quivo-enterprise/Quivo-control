@@ -6,6 +6,7 @@ import {
   puedeActuarEnInfracciones,
   contarPorNivel,
   duracionInfraccion,
+  etiquetaInicioAlerta,
   filtrarPorNivel,
   ordenarAlertas,
   ordenarInfracciones,
@@ -234,5 +235,18 @@ describe('puedeActuarEnInfracciones', () => {
     expect(puedeActuarEnInfracciones('operador')).toBe(false);
     expect(puedeActuarEnInfracciones('conductor')).toBe(false);
     expect(puedeActuarEnInfracciones(undefined)).toBe(false);
+  });
+});
+
+describe('etiquetaInicioAlerta', () => {
+  const ahora = new Date('2026-10-15T16:00:00Z'); // 12:00 en Bolivia
+  it('hoy: solo la hora', () => {
+    expect(etiquetaInicioAlerta(new Date('2026-10-15T05:30:00Z'), ahora)).toBe('01:30');
+  });
+  it('ayer (cruzó la medianoche): "ayer HH:MM"', () => {
+    expect(etiquetaInicioAlerta(new Date('2026-10-15T03:30:00Z'), ahora)).toBe('ayer 23:30');
+  });
+  it('anterior a ayer: dd/mm HH:MM', () => {
+    expect(etiquetaInicioAlerta(new Date('2026-10-12T14:05:00Z'), ahora)).toBe('12/10 10:05');
   });
 });

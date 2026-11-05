@@ -302,4 +302,53 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await expect(flota).toHaveAttribute('aria-pressed', 'false');
     await expect(flota).toBeFocused();
   });
+
+  test('Alertas: la pestaña navega, tarjetas con acciones >= 44 px y sin overflow', async () => {
+    test.setTimeout(90_000);
+    const base = {
+      sindicatoId: '00000000-0000-4000-8000-0000000000a1', vehiculoId: '00000000-0000-4000-8000-0000000000b1',
+      conductorId: '00000000-0000-4000-8000-0000000000c1', lineaId: '00000000-0000-4000-8000-0000000000d1',
+      rutaId: '00000000-0000-4000-8000-0000000000e1', reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
+      sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
+      vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16',
+    };
+    const filas = [
+      { ...base, id: '00000000-0000-4000-8000-000000000001', sesionId: '00000000-0000-4000-8000-0000000000f1', tipo: 'desvio_ruta', gravedad: 'gravisima', estado: 'abierta', inicioTs: new Date().toISOString(), detalle: { distanciaMaxM: 240, duracionS: 90, puntos: 5 } },
+      { ...base, id: '00000000-0000-4000-8000-000000000002', sesionId: '00000000-0000-4000-8000-0000000000f2', vehiculoPlaca: '1616PIL', tipo: 'pc_omitido', gravedad: 'leve', estado: 'abierta', inicioTs: new Date().toISOString(), detalle: { puntoControlId: 'x', orden: 6 } },
+      { ...base, id: '00000000-0000-4000-8000-000000000003', sesionId: '00000000-0000-4000-8000-0000000000f3', vehiculoPlaca: '5163NCF', tipo: 'desvio_ruta', gravedad: 'grave', estado: 'atendida', inicioTs: new Date().toISOString(), detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 } },
+    ];
+    await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: filas }));
+    try {
+      await page.goto('/', { waitUntil: 'networkidle', timeout: 60_000 });
+      await page.getByRole('navigation', { name: 'Pestañas', exact: true }).getByRole('link', { name: 'Alertas' }).click();
+      await expect(page).toHaveURL(/\/alertas\/?$/, { timeout: 30_000 });
+      await expect(page.getByRole('heading', { name: 'Alertas', level: 1 })).toBeVisible();
+      const cards = page.locator('.qv-alertas__card');
+      await expect(cards).toHaveCount(2); // filtro por defecto: Abiertas
+      await expect(page.getByRole('button', { name: /Atendidas/ })).toContainText('1');
+      for (const btn of await cards.first().locator('.qv-alertas__acciones').locator('a, button').all()) {
+        expect((await btn.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      }
+      await expect(cards.first().getByRole('button', { name: 'Atender' })).toBeVisible();
+      await expect(cards.first().getByRole('button', { name: 'Sancionar' })).toBeVisible();
+      await page.getByRole('button', { name: /Todas/ }).click();
+      await expect(cards).toHaveCount(3);
+      await expect(page.getByRole('link', { name: /Sanciones pendientes/ })).toHaveAttribute('href', '/reglas');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    } finally {
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+    }
+  });
+
+  test('Alertas: estado vacío "Sin alertas hoy"', async () => {
+    test.setTimeout(60_000);
+    await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: [] }));
+    try {
+      await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
+      await expect(page.getByText('Sin alertas hoy')).toBeVisible({ timeout: 30_000 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    } finally {
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+    }
+  });
 });
