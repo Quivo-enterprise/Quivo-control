@@ -5374,3 +5374,22 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     display: none;
   }
 }
+
+/* PR C2 — móvil (<= 720 px): sin hover en táctil; el tooltip invisible ensanchaba el documento. */
+@media (max-width: 720px) {
+  .qv-tooltip[data-qv-tooltip]::after,
+  .qv-tooltip[data-qv-tooltip]::before {
+    display: none;
+  }
+
+  /* Objetivos táctiles de 44 px. */
+  .qv-button,
+  .qv-button--sm {
+    min-height: 2.75rem;
+  }
+
+  .qv-table-actions-capsule .qv-action-pill-btn {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+}

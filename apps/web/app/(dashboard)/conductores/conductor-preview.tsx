@@ -191,7 +191,7 @@ export function ConductorPreviewCard({ values, sindicatoOptions = [] }: Conducto
         </div>
 
         {/* Fichas de Documentación Oficial */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+        <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div
             style={{
               padding: '0.65rem 0.85rem',

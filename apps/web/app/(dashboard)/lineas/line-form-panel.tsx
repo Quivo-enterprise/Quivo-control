@@ -485,7 +485,7 @@ export function LineaFormPanel({
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
+              <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
                 <FormField htmlFor="linea-codigo" label="Código Oficial de Línea" required error={errors.codigo}>
                   <Input
                     id="linea-codigo"
@@ -508,7 +508,7 @@ export function LineaFormPanel({
                 </FormField>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
+              <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
                 <FormField
                   htmlFor="linea-nombre-corto"
                   label="Nombre Corto / Identificador"
@@ -714,7 +714,7 @@ export function LineaFormPanel({
                 </div>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)', width: '100%' }}>
+              <div className="qv-nav-wrap" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)', width: '100%' }}>
                 <Button variant="ghost" type="button" onClick={() => setActiveSection('01')} size="sm">
                   <ArrowLeft size={14} style={{ marginRight: '6px' }} />
                   <span>Identidad (01)</span>
@@ -795,7 +795,7 @@ export function LineaFormPanel({
                   </span>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.65rem', width: '100%' }}>
+                <div className="qv-grid-movil-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.65rem', width: '100%' }}>
                   {COLOR_PRESETS.map((preset) => (
                     <button
                       key={preset.label}
@@ -826,7 +826,7 @@ export function LineaFormPanel({
               </div>
 
               {/* Selectores de Color Detallados */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', width: '100%' }}>
+              <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', width: '100%' }}>
                 <FormField htmlFor="color-principal" label="Color Principal" helperText="Dominante en mapa y letrero.">
                   <ColorPicker id="color-principal" value={values.color} onChange={(val) => setField('color', val)} />
                 </FormField>
@@ -840,7 +840,7 @@ export function LineaFormPanel({
                 </FormField>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
+              <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
                 <FormField htmlFor="color-texto" label="Color de Texto" helperText="Lectura sobre el color principal.">
                   <ColorPicker id="color-texto" value={values.colorTexto} onChange={(val) => setField('colorTexto', val)} />
                 </FormField>
@@ -850,7 +850,7 @@ export function LineaFormPanel({
                 </FormField>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)', width: '100%' }}>
+              <div className="qv-nav-wrap" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)', width: '100%' }}>
                 <Button variant="ghost" type="button" onClick={() => setActiveSection('02')} size="sm">
                   <ArrowLeft size={14} style={{ marginRight: '6px' }} />
                   <span>Símbolo (02)</span>
@@ -932,7 +932,7 @@ export function LineaFormPanel({
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
+                <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
                   <FormField htmlFor="distintivo-tipo" label="Tipo de Distintivo (Opcional)" helperText="Selecciona 'Ninguno' si la línea no lleva banderita.">
                     <Select
                       id="distintivo-tipo"
@@ -1494,7 +1494,7 @@ export function LineaFormPanel({
                   </FormField>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)', width: '100%' }}>
+                <div className="qv-nav-wrap" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)', width: '100%' }}>
                   <Button variant="ghost" type="button" onClick={() => setActiveSection('03')} size="sm">
                     <ArrowLeft size={14} style={{ marginRight: '6px' }} />
                     <span>Paleta (03)</span>
@@ -1555,7 +1555,7 @@ export function LineaFormPanel({
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', width: '100%' }}>
+              <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', width: '100%' }}>
                 <FormField htmlFor="cartel-formato" label="Formato del Letrero">
                   <Select
                     id="cartel-formato"
@@ -1598,7 +1598,7 @@ export function LineaFormPanel({
                 </FormField>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
+              <div className="qv-grid-movil-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', width: '100%' }}>
                 <FormField htmlFor="cartel-titulo" label="Título Superior (Destino Principal)">
                   <Input
                     id="cartel-titulo"
@@ -1634,7 +1634,7 @@ export function LineaFormPanel({
                 <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--qv-text-secondary)', display: 'block', marginBottom: '0.75rem' }}>
                   Tintas de Impresión del Letrero
                 </span>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.85rem', width: '100%' }}>
+                <div className="qv-grid-movil-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.85rem', width: '100%' }}>
                   <FormField htmlFor="cartel-col-num" label="Color Número">
                     <ColorPicker id="cartel-col-num" value={values.cartelColorNumero} onChange={(val) => setField('cartelColorNumero', val)} />
                   </FormField>
@@ -1653,7 +1653,7 @@ export function LineaFormPanel({
                 </div>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)', width: '100%' }}>
+              <div className="qv-nav-wrap" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--qv-border-glass)', width: '100%' }}>
                 <Button variant="ghost" type="button" onClick={() => setActiveSection('04')} size="sm">
                   <ArrowLeft size={14} style={{ marginRight: '6px' }} />
                   <span>Señalización (04)</span>

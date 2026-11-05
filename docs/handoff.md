@@ -51,7 +51,7 @@ Se hace en 3 PRs en serie:
 **DB local.** La base `quivo_control_e2echeck` tiene la migración `20260923090000_refresh_token_hash_anterior` marcada como fallida (P3009). Para QA usé una base nueva, `quivo_movil_qa`.
 - Ojo: el seed y el API leen `RUNTIME_DATABASE_URL`, no solo `DATABASE_URL`.
 
-### PR B — En vivo móvil, fase 2c (rama `feat/web-movil-envivo`)
+### PR B — En vivo móvil, fase 2c (#296, `56c1a91`, mergeado 5/11 con `ci` y `acceptance` en verde)
 
 **Barra compacta** (≤720px, 114px de alto a 412px):
 - Fila 1: Panel, salud, filtro de línea, Días anteriores y Flota.
@@ -83,10 +83,54 @@ Se hace en 3 PRs en serie:
 - La key de Maps solo acepta el referrer `localhost:3000`; en `:3101` sale "Mapa no disponible".
 - Dos `next dev` sobre el mismo `.next` producen `ChunkLoadError`.
 
-**Pendiente para el PR C** (visto en las capturas):
-- El panel de formulario de `/vehiculos` (`.vehicle-form`) se corta a la derecha a 412px.
-- `/rutas` en móvil recorta los últimos ~3.5rem: la topbar más el contenido a `100dvh` con `!important`.
-- Los bloques duplicados del route builder entre `globals.css` y `styles.css` siguen ahí, a propósito.
+**Pendientes de B, resueltos en C:** el formulario de `/vehiculos` cortado a 412px y el recorte de ~3.5rem en `/rutas`. Los bloques duplicados del route builder entre `globals.css` y `styles.css` siguen ahí, a propósito.
+
+### PR C — barrido de pantallas + `/rutas` solo lectura (rama `feat/web-movil-barrido`)
+
+**`/rutas` a ≤720px es solo lectura (solo UI; la API no se tocó):**
+- `soloLectura` sale de `matchMedia(MOBILE_QUERY)`, con init lazy y sync en cambios.
+- Al pasar de escritorio a celular se cancela el modo de dibujo y se cierra `confirmarBaja`.
+- Los `iniciar*` cortan temprano; `onMapClick` queda undefined.
+- Tocar una parada o un punto de control no abre nada; tocar la polilínea sí abre el detalle.
+- `ParadasCard`, `PuntosControlCard` y `VariantesCard` reciben `soloLectura` y ocultan solo las acciones.
+- Aviso "La edición de trazado está disponible en escritorio." cuando hay línea elegida.
+
+**Layout de `/rutas` en celular:**
+- Alto `calc(100dvh - 3.5rem - safe-area)`.
+- HUD en dos filas: el selector de línea a todo el ancho, y abajo `.qv-route-hud-acciones` (refrescar y Herramientas, de 44px).
+- Se ocultan los KPIs y la leyenda.
+- El drawer del inspector ocupa la pantalla con safe area abajo y overscroll contenido; su botón cerrar tiene `aria-label` y 44px.
+
+**Barrido del resto de pantallas:**
+- Clases utilitarias en `globals.css` (`qv-grid-movil-1/2`, `qv-nav-wrap`, `qv-usuarios-layout`, `qv-reportes-*`), aplicadas en líneas, vehículos, rotaciones, sync-errores, auditoría, conductores, dashboard, usuarios, reportes y recorridos (tabla apilada).
+- `/vehiculos` en una columna.
+- El FAB deja padding abajo.
+- `styles.css`: a ≤720px se ocultan los pseudo-tooltips (ensanchaban el documento) y `.qv-button` y las pills de acción quedan en 44px.
+
+**En vivo:** Flota queda `disabled` si no hay HUD (`hayHud`); antes se podía activar sin panel.
+
+**Revisiones:**
+- `/ponytail-review`: aplicados 1–3 (test de `/rutas`, clase en vez de `:last-child`, assert de Flota deshabilitado).
+- `/code-review`: aplicados 2, 4, 5, 8 y 9. Rechazados:
+  - 3: guardar con una petición en vuelo mientras la pantalla pasa a celular, caso remoto.
+  - 6: la topbar es de alto fijo.
+  - 7: el 44px global es el objetivo del plan.
+  - 10: los guards repetidos son defensa.
+- `web-design-guidelines`: aplicados la safe area y el overscroll del drawer.
+- Detector de impeccable: 10 hallazgos, todos preexistentes y fuera del diff.
+
+**Verificación local:**
+- Acceptance 11/11 (5 de desktop y 6 móviles, con el nuevo `Rutas: solo lectura en celular`).
+- Unit web 275 y typecheck limpio.
+- `/rutas` con el mapa real en `:3000` a 412px: sin edición, overflow 0; escritorio sin cambios.
+
+**Nota de entorno:** con la key local de Maps, la suite en `:3101` rompe con `RefererNotAllowedMapError`, porque la key solo autoriza `localhost:3000`. Correrla con `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY= NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=`, igual que en CI, que no tiene key.
+
+**Preexistente, fuera de alcance:** en escritorio a 1440, los KPIs del HUD de `/rutas` quedan tapados por el panel del Explorador.
+
+**Pendiente tras C:**
+- Deploy de `quivo-web` (manual, `scripts/deploy-gcp.sh`) con el OK del CTO. Los referrers de la key de Maps y el `CORS_ORIGIN` de la API deben incluir el origen de prod.
+- No verificado: instalar la PWA en un teléfono real o emulador, e iOS.
 
 ## 2026-10-29: piloto L16 con 30 trufis más (#291, `84966e6`)
 - `crear-piloto-linea-16.ts` ahora tiene 38 pilotos: los 8 originales + `1616PJA`..`1616PJZ`, `1616PKA`..`1616PKD` (CI 9000024..9000053 CB, "Piloto Línea Dieciséis Nueve".."Treinta y ocho"), mañana 29/10–02/11 (150 asignaciones). `HASTA_DEFAULT` = 2026-11-02.

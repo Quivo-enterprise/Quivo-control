@@ -50,6 +50,8 @@ interface BarraMandoProps {
   siguienteAlertaRef: RefObject<HTMLButtonElement>;
   onSiguienteAlerta: () => void;
   flotaAbierta: boolean;
+  /** Sin HUD de flota no hay panel que abrir. */
+  hayHud: boolean;
   onToggleFlota: () => void;
 }
 
@@ -80,9 +82,10 @@ export function BarraMando(p: BarraMandoProps) {
         <button
           type="button"
           className="qv-live-btn qv-live-barra__flota"
-          aria-pressed={p.flotaAbierta}
-          aria-controls="qv-live-flota"
+          aria-pressed={p.hayHud && p.flotaAbierta}
+          aria-controls={p.hayHud ? 'qv-live-flota' : undefined}
           onClick={p.onToggleFlota}
+          disabled={!p.hayHud}
         >
           <ListFilter size={14} aria-hidden="true" />
           Flota

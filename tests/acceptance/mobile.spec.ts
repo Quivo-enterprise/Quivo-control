@@ -108,6 +108,22 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await expect(row).toHaveCSS('display', 'grid');
   });
 
+  test('Rutas: solo lectura en celular', async () => {
+    test.setTimeout(90_000);
+    await page.goto('/rutas', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await page.locator('button#linea').click();
+    const opcion = page.getByRole('option', { name: /120/ });
+    await expect(opcion, 'el seed debe tener la línea 120').toBeVisible({ timeout: 30_000 });
+    await opcion.click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+
+    await page.getByRole('button', { name: /Herramientas/ }).click();
+    await expect(page.getByText('La edición de trazado está disponible en escritorio.')).toBeVisible();
+    await expect(page.getByRole('button', { name: '+ Nueva ruta' })).toHaveCount(0);
+    await page.getByRole('button', { name: /Ida/ }).first().click();
+    await expect(page.getByRole('button', { name: 'Editar parada' })).toHaveCount(0);
+  });
+
   test('En vivo: barra compacta, sin overflow, Flota abre y Escape cierra', async () => {
     test.setTimeout(90_000);
     await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -122,6 +138,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       page.locator('#qv-live-flota').or(page.getByText('Sin vehículos en ruta activa')),
     ).toBeAttached({ timeout: 30_000 });
     if ((await page.locator('#qv-live-flota').count()) === 0) {
+      await expect(flota).toBeDisabled();
       test.info().annotations.push({ type: 'skip-parte', description: 'sin jornada activa en el seed: no hay panel de Flota' });
       return;
     }
