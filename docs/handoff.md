@@ -18,6 +18,14 @@ Decisiones:
 
 Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endpoint nuevo) → H (hoy).
 
+**Estado:**
+- **PR D — escala (#299, `25e9c54`, mergeado 5/11 con `ci` y `acceptance` en verde).**
+  - A ≤720px: `html{font-size:112.5%}` (base 18px; casi todo es rem). Inputs, selects y textareas a `max(16px, var(--qv-text-sm))`, para que iOS no haga zoom.
+  - `mobile.spec` suma el test de inputs ≥16px y base 18px. El tope de la barra de En vivo pasa de 120 a 132.
+  - Codex: no verificado.
+- **Bake-off resuelto: híbrido B + A.** La base es B ("Señalética de garita"); de A se toma el resumen del día arriba de Hoy. Comps en `docs/movil-comps/`; tokens en `propuesta-b.html`.
+- **Siguiente: PR E (pestañas abajo).**
+
 **Pendiente de la capacitación del 5/11 (prod):**
 - La sesión de **4701EHA** (chofer real Javier Bravo Soliz) quedó `activa`: el emulador se cerró sin "Terminar el día". Cerrarla, y revisar que no le genere sanciones por la vuelta simulada.
 - `piloto-linea-16` tiene asignaciones para el 5/11 (+39, aplicado por el CTO "agregas nomás"): 37 activos más 2 días faltantes de 1616PIL.
