@@ -78,6 +78,11 @@ export default function EnVivoPage() {
   // Filtro por estado de frescura (panel de flota) y apertura del panel en < 1024 px.
   const [estadoFiltro, setEstadoFiltro] = useState<EstadoFrescura | null>(null);
   const [flotaAbierta, setFlotaAbierta] = useState(false);
+  // Único camino de cierre por Escape o por el fondo: cierra y devuelve el foco al botón Flota.
+  const cerrarFlota = () => {
+    setFlotaAbierta(false);
+    document.querySelector<HTMLElement>('.qv-live-barra__flota')?.focus();
+  };
   const [aviso, setAviso] = useState<AvisoPanel | null>(null);
   const [focoMapa, setFocoMapa] = useState<{
     lat: number;
@@ -489,7 +494,8 @@ export default function EnVivoPage() {
       const panel = sesionSeleccionada ? raiz.querySelector<HTMLElement>('.qv-live-cajon .qv-live-panel') : null;
       const movil = window.matchMedia('(max-width: 720px)').matches;
       const cajaPanel = panel?.getBoundingClientRect();
-      const tapa = cajaPanel !== undefined && cajaPanel.left < caja.right - 1;
+      // Oculto (display:none, p. ej. con Flota abierta) mide 0x0: no tapa nada.
+      const tapa = cajaPanel !== undefined && cajaPanel.width > 0 && cajaPanel.height > 0 && cajaPanel.left < caja.right - 1;
       const siguiente = {
         top: 0,
         right: cajaPanel && tapa && !movil ? Math.max(0, Math.ceil(caja.right - cajaPanel.left)) : 0,
@@ -550,6 +556,8 @@ export default function EnVivoPage() {
       )}
 
       <div className="qv-live-cuerpo">
+        {/* Solo móvil (CSS): tocar fuera de la hoja de flota la cierra y devuelve el foco al botón Flota. */}
+        {hayHud && flotaAbierta && <div className="qv-live-flota-fondo" aria-hidden="true" onClick={cerrarFlota} />}
         {hayHud && (
           <PanelFlota
             posicionesLinea={posicionesDeLinea}
@@ -564,7 +572,7 @@ export default function EnVivoPage() {
               else setFlotaAbierta(false);
             }}
             abierto={flotaAbierta}
-            onCerrar={() => setFlotaAbierta(false)}
+            onCerrar={cerrarFlota}
           >
             <ModuloMolinos resumen={molinos.data} lineaFilter={lineaFilter} recibidoEn={molinos.dataUpdatedAt} posiciones={todasLasPosiciones} />
             {tienePanelAdmin && <ModuloJornada lineaFilter={lineaFilter} />}

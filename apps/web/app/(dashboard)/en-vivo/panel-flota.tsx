@@ -34,7 +34,7 @@ interface PanelFlotaProps {
   children?: ReactNode;
   /** Solo < 1024 px: el panel es una hoja que se abre desde la barra. */
   abierto: boolean;
-  /** Escape: cierra la hoja y devuelve el foco al botón Flota. */
+  /** Escape: cierra la hoja (quien la use devuelve el foco al botón Flota). */
   onCerrar: () => void;
 }
 
@@ -52,18 +52,20 @@ export function PanelFlota(p: PanelFlotaProps) {
 
   const { abierto, onCerrar } = p;
   const asideRef = useRef<HTMLElement>(null);
+  // Última `onCerrar` sin re-ejecutar el efecto en cada render (el padre pasa una función nueva cada vez).
+  const onCerrarRef = useRef(onCerrar);
+  onCerrarRef.current = onCerrar;
   // < 1024 px la hoja se abre desde el botón Flota: el foco entra a la hoja y Escape lo devuelve.
   useEffect(() => {
     if (!abierto) return;
     asideRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
-      onCerrar();
-      document.querySelector<HTMLElement>('.qv-live-barra__flota')?.focus();
+      onCerrarRef.current();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [abierto, onCerrar]);
+  }, [abierto]);
 
   const teclaPestana = (e: KeyboardEvent<HTMLDivElement>) => {
     const i = PESTANAS.indexOf(pestana);

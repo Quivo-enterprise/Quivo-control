@@ -65,7 +65,7 @@ export function BarraMando(p: BarraMandoProps) {
           title={p.tienePanelAdmin ? 'Volver al panel administrativo' : 'Cerrar sesión'}
         >
           {p.tienePanelAdmin ? <ArrowLeft size={14} aria-hidden="true" /> : <LogOut size={14} aria-hidden="true" />}
-          {p.tienePanelAdmin ? 'Panel' : 'Salir'}
+          <span className="qv-live-barra__btn-texto">{p.tienePanelAdmin ? 'Panel' : 'Salir'}</span>
         </button>
         <h1 className="qv-live-barra__titulo">En vivo</h1>
         <SaludRefrescoVista consulta={p.consulta} />
