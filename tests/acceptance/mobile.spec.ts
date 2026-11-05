@@ -450,6 +450,50 @@ test.describe('Panel móvil (Pixel 7)', () => {
     }
   });
 
+  test('Alertas: descartar tras llegar el refresco de la atención saca la tarjeta al instante', async () => {
+    test.setTimeout(90_000);
+    const id = '00000000-0000-4000-8000-000000000001';
+    const alerta = {
+      sindicatoId: id, vehiculoId: id, conductorId: id, lineaId: id, rutaId: id, reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
+      sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(), id, sesionId: id,
+      tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '4701EHA',
+      conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+    };
+    let soltar!: () => void;
+    let retenido: Promise<void> | null = null;
+    let estadoServidor = 'abierta';
+    await page.route('**/v1/reportes/en-vivo/infracciones*', async (r) => {
+      if (retenido) await retenido;
+      await r.fulfill({ json: [{ ...alerta, estado: estadoServidor }] });
+    });
+    await page.route('**/v1/infracciones/*', (r) => {
+      estadoServidor = r.request().postDataJSON().accion === 'atender' ? 'atendida' : 'descartada';
+      return r.fulfill({ json: { ...alerta, estado: estadoServidor } });
+    });
+    try {
+      await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
+      await page.getByRole('button', { name: /^Todas/ }).click();
+      const refresco = page.waitForResponse((r) => r.url().includes('/v1/reportes/en-vivo/infracciones') && r.request().method() === 'GET');
+      await page.getByRole('button', { name: 'Atender alerta 4701EHA' }).click();
+      await refresco;
+      // Margen para que React Query aplique la respuesta: la caché ya dice `atendida` antes de descartar.
+      await page.waitForTimeout(500);
+      await expect(page.locator('.qv-alertas__card')).toContainText('Atendida');
+      retenido = new Promise<void>((res) => (soltar = res));
+      await page.getByRole('button', { name: 'Descartar alerta 4701EHA' }).click();
+      await page.getByLabel('Motivo del descarte (opcional)').fill('prueba');
+      await page.locator('.qv-alertas__card').getByRole('button', { name: 'Descartar', exact: true }).click();
+      await expect(page.locator('.qv-alertas__card')).toHaveCount(0);
+      await expect(page.locator('.qv-alertas__vacio')).toBeFocused({ timeout: 5_000 });
+      soltar();
+      retenido = null;
+    } finally {
+      soltar?.();
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+      await page.unroute('**/v1/infracciones/*');
+    }
+  });
+
   test('En vivo: el aviso de "Ver en mapa" se ve aunque no haya HUD (sin posiciones y con error)', async () => {
     test.setTimeout(90_000);
     const vehiculo = '00000000-0000-4000-8000-0000000000ff';

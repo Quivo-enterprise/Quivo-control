@@ -97,8 +97,9 @@ export default function AlertasPage() {
       return texto === null ? resto : { ...resto, [inf.id]: { placa: inf.vehiculoPlaca, texto } };
     });
   const resolver = (inf: InfraccionHoy, a: Infraccion['estado']) => {
-    // `desde` es el estado del servidor: encadenar acciones antes del refresco no debe romper la superposición.
-    setResueltas((prev) => new Map(prev).set(inf.id, { desde: prev.get(inf.id)?.desde ?? inf.estado, a }));
+    // `desde` es el último estado del servidor en la caché: si el refresco ya llegó entre dos acciones, la entrada vieja no casaría.
+    const desde = queryClient.getQueryData<InfraccionHoy[]>(['en-vivo', 'infracciones-hoy'])?.find((i) => i.id === inf.id)?.estado ?? inf.estado;
+    setResueltas((prev) => new Map(prev).set(inf.id, { desde, a }));
     armarFoco(inf.id);
     void refrescar(inf.sesionId);
   };
