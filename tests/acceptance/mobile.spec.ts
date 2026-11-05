@@ -108,6 +108,15 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await expect(row).toHaveCSS('display', 'grid');
   });
 
+  test('inputs >= 16 px (iOS no hace zoom) y base 18 px', async () => {
+    await page.goto('/vehiculos', { waitUntil: 'networkidle', timeout: 60_000 });
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe('18px');
+    const input = page.locator('main input:visible').first();
+    await expect(input).toBeVisible();
+    const px = await input.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(px).toBeGreaterThanOrEqual(16);
+  });
+
   test('Rutas: solo lectura en celular', async () => {
     test.setTimeout(90_000);
     await page.goto('/rutas', { waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -129,7 +138,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
     const barra = page.getByLabel('Barra de mando de En vivo');
     await expect(barra).toBeVisible({ timeout: 30_000 });
-    expect((await barra.boundingBox())!.height).toBeLessThanOrEqual(120);
+    expect((await barra.boundingBox())!.height).toBeLessThanOrEqual(132); // 2 filas: 114 px a 16 px de base, ~128 px con la base de 18 px móvil
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 
     const flota = page.getByRole('button', { name: 'Flota', exact: true });

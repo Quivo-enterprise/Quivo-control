@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quivo Control — Propuesta B · Señalética de garita</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Oxanium:wght@500;600;700;800&display=swap" rel="stylesheet">
+<meta name="color-scheme" content="light dark">
+<style>
+:root{--pri:#3226b4;--pri-soft:#dcd9fb;--pri-sub:#efeefc;--on-pri:#fff;--acc:#fd9e15;--page:#e6e8f2;--bg:#f1f5f9;--surf:#fff;--surf2:#f8fafc;--ink:#0f172a;--mute:#475569;--line:#e2e8f0;--line2:#94a3b8;
+--bad:#dc2626;--bad-t:#b91c1c;--bad-bg:#fee2e2;--ok:#16a34a;--ok-t:#15803d;--ok-bg:#dcfce7;--warn:#d97706;--warn-t:#92400e;--warn-bg:#fef3c7;--info:#0891b2;
+--bezel:#1b1a2e;--map-bg:#e4e9f0;--map-st:#fff;--map-green:#cfe8d3;--map-water:#c3e0f0;--map-lbl:#475569;--plate:#fff;--plate-ink:#0f172a;--wa:#15803d;
+--d:'Oxanium',ui-monospace,system-ui,sans-serif;--b:'Montserrat',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}
+@media (prefers-color-scheme:dark){:root{--pri:#6672f5;--pri-soft:#2b3170;--pri-sub:#1a1f47;--on-pri:#0b1020;--acc:#feb83e;--page:#070b14;--bg:#0b1220;--surf:#111827;--surf2:#18202f;--ink:#f1f5f9;--mute:#a5b2c6;--line:#263044;--line2:#64748b;
+--bad:#f87171;--bad-t:#fca5a5;--bad-bg:#3b1618;--ok:#4ade80;--ok-t:#86efac;--ok-bg:#123222;--warn:#fbbf24;--warn-t:#fcd34d;--warn-bg:#3a2a0c;--info:#22d3ee;--bezel:#2a3144;--map-bg:#0f1626;--map-st:#223049;--map-green:#12281f;--map-water:#11283a;--map-lbl:#a5b2c6;--plate:#f8fafc;--plate-ink:#0f172a;--wa:#22a55b}}
+*{box-sizing:border-box;margin:0}
+body{font-family:var(--b);background:var(--page);color:var(--ink);font-size:16px;line-height:1.45;padding:32px 20px 56px}
+.intro{max-width:980px;margin:0 auto 36px}
+.intro h1{font-family:var(--d);font-size:34px;line-height:1.1;font-weight:800;letter-spacing:-.01em}
+.intro h1 span{color:var(--pri)}
+.intro ul{margin:16px 0 0;padding-left:20px;display:grid;gap:8px;max-width:78ch;color:var(--mute)}
+.intro b{color:var(--ink)}
+.row{display:flex;flex-wrap:wrap;gap:44px 36px;justify-content:center}
+figure{display:grid;gap:16px;justify-items:center}
+figcaption{font-weight:700;font-size:15px;letter-spacing:.02em;color:var(--mute)}
+figcaption b{font-family:var(--d);color:var(--pri);font-size:18px;margin-right:6px}
+.phone{width:390px;height:844px;flex:none;position:relative;overflow:hidden;border-radius:46px;background:var(--bg);box-shadow:0 0 0 9px var(--bezel),0 28px 44px -14px rgba(15,23,42,.4);display:flex;flex-direction:column}
+.sb{height:30px;flex:none;display:flex;justify-content:space-between;align-items:center;padding:6px 26px 0;font:700 13px var(--d);background:var(--surf)}
+.sb i{display:flex;gap:6px;align-items:center}
+.hd{flex:none;background:var(--surf);padding:6px 16px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:62px}
+.hd h2{font-size:22px;font-weight:800;line-height:1.15}
+.hd small{display:block;font-size:14px;color:var(--mute);font-weight:600}
+.body{flex:1;min-height:0;overflow:hidden;position:relative;padding:14px 16px 0}
+.tabs{flex:none;height:76px;background:var(--surf);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(5,1fr);padding:6px 4px 12px}
+.tab{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:13.5px;font-weight:600;color:var(--mute);position:relative;min-height:56px}
+.tab .pill{width:56px;height:32px;border-radius:16px;display:grid;place-items:center}
+.tab.on{color:var(--pri);font-weight:800}
+.tab.on .pill{background:var(--pri-soft)}
+.tab .bdg{position:absolute;top:0;left:50%;margin-left:8px;background:var(--bad);color:#fff;font:800 12px var(--d);min-width:20px;height:20px;border-radius:10px;display:grid;place-items:center;padding:0 5px;border:2px solid var(--surf)}
+.ic{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.ic.s{width:20px;height:20px}
+.live{display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:14px;padding:6px 12px;border-radius:99px;background:var(--ok-bg);color:var(--ok-t);white-space:nowrap}
+.dot{width:11px;height:11px;border-radius:50%;background:var(--ok);flex:none}
+.live .dot{animation:pulse 2s infinite}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.live .dot{animation:none}}
+.plate{display:inline-block;font:700 18px/1.2 var(--d);letter-spacing:.07em;background:var(--plate);color:var(--plate-ink);border:2px solid var(--plate-ink);border-radius:8px;padding:1px 9px;font-variant-numeric:tabular-nums}
+.plate.lg{font-size:30px;padding:2px 12px;border-radius:10px;border-width:2.5px}
+.num{font-family:var(--d);font-variant-numeric:tabular-nums}
+.card{background:var(--surf);border:1.5px solid var(--line);border-radius:18px;padding:14px}
+.st{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px}
+.st.ok{color:var(--ok-t)}.st.ok .dot{background:var(--ok)}
+.st.warn{color:var(--warn-t)}.st.warn .dot{background:var(--warn);border-radius:3px;transform:rotate(45deg)}
+.st.bad{color:var(--bad-t)}.st.bad .dot{background:var(--bad);border-radius:2px}
+.btn{height:52px;border-radius:14px;border:2px solid var(--line2);background:var(--surf);color:var(--ink);font:700 16px var(--b);display:flex;align-items:center;justify-content:center;gap:8px;padding:0 14px;flex:1;white-space:nowrap}
+.btn.pri{background:var(--pri);border-color:var(--pri);color:var(--on-pri)}
+.btn.wa{background:var(--wa);border-color:var(--wa);color:#fff}
+.btn.big{height:60px;font-size:18px;letter-spacing:.06em;text-transform:uppercase;font-weight:800}
+.btn.ghost{border-color:var(--line);background:var(--surf2)}
+.btn.sq{flex:none;width:52px;padding:0}
+.btns{display:flex;gap:10px}
+.search{height:60px;border-radius:16px;background:var(--surf);border:2.5px solid var(--pri);display:flex;align-items:center;gap:12px;padding:0 16px;font-size:17px;font-weight:600;color:var(--mute)}
+.search .ic{color:var(--pri)}
+.sum{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.tile{background:var(--surf);border:1.5px solid var(--line);border-radius:16px;padding:12px 14px;min-height:88px;display:flex;flex-direction:column;justify-content:space-between}
+.tile .n{font:800 38px/1 var(--d)}
+.tile .l{font-weight:700;font-size:15px;color:var(--mute);display:flex;justify-content:space-between;align-items:center;gap:6px}
+.tile.al{background:var(--bad-bg);border-color:var(--bad)}
+.tile.al .n,.tile.al .l{color:var(--bad-t)}
+.tile.al .l b{background:var(--bad);color:#fff;border-radius:8px;padding:1px 8px;font-size:13px}
+.lbl{font-weight:800;font-size:15px;color:var(--mute);margin:16px 2px 8px;display:flex;justify-content:space-between;text-transform:uppercase;letter-spacing:.05em}
+.meta{font-size:15px;color:var(--mute);font-weight:500}
+/* map */
+.map{position:absolute;inset:0;width:100%;height:100%}
+.mtop{position:absolute;top:12px;left:12px;right:12px;display:flex;gap:8px;justify-content:space-between;z-index:2}
+.fab{height:48px;background:var(--surf);border:2px solid var(--line2);border-radius:14px;display:flex;align-items:center;gap:8px;padding:0 14px;font-weight:800;font-size:16px}
+.fab.h{font-size:14px;font-weight:700;gap:8px;color:var(--ok-t)}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--surf);border-radius:26px 26px 0 0;padding:10px 16px 14px;box-shadow:0 -10px 28px rgba(15,23,42,.22);z-index:3}
+.grab{width:44px;height:5px;border-radius:3px;background:var(--line2);margin:0 auto 12px}
+.sh-top{display:flex;justify-content:space-between;align-items:center}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.stat{background:var(--surf2);border:1.5px solid var(--line);border-radius:14px;padding:8px 12px}
+.stat small{display:block;font-size:13px;font-weight:700;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
+.stat b{font:800 20px var(--d)}
+.stat.al{background:var(--bad-bg);border-color:var(--bad)}.stat.al b{color:var(--bad-t)}
+.seg{display:grid;grid-template-columns:1fr 1fr;background:var(--pri-sub);border:2px solid var(--pri-soft);border-radius:14px;padding:3px;margin:6px 0 12px}
+.seg span{height:46px;display:flex;align-items:center;justify-content:center;gap:6px;border-radius:11px;font-weight:700;color:var(--mute)}
+.seg .on{background:var(--pri);color:var(--on-pri);font-weight:800}
+/* alertas */
+.chips{display:flex;gap:8px}
+.chip{flex:1;border-radius:14px;padding:8px 6px;text-align:center;font-weight:800;font-size:14px;line-height:1.1;min-height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.chip b{font:800 24px/1 var(--d)}
+.c-vg{background:var(--bad);color:#fff}.c-g{background:var(--bad-bg);color:var(--bad-t);border:2px solid var(--bad)}.c-l{background:var(--warn-bg);color:var(--warn-t);border:2px solid var(--warn)}
+[data-t=dark] .c-vg{color:#1a0b0b}
+@media (prefers-color-scheme:dark){.c-vg{color:#2a0a0a}}
+.link{display:flex;align-items:center;justify-content:space-between;min-height:56px;margin:10px 0;padding:0 14px;border-radius:14px;background:var(--pri-sub);border:2px solid var(--pri-soft);font-weight:800;color:var(--pri)}
+.link span{display:flex;gap:10px;align-items:center}
+.al-c{padding:12px;margin-bottom:10px}
+.al-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.sev{display:inline-flex;align-items:center;gap:6px;font-weight:800;font-size:14px;border-radius:8px;padding:3px 9px}
+.sev.vg{background:var(--bad);color:#fff}.sev.g{background:var(--bad-bg);color:var(--bad-t)}.sev.l{background:var(--warn-bg);color:var(--warn-t)}
+@media (prefers-color-scheme:dark){.sev.vg{color:#2a0a0a}}
+.al-c h3{font-size:17px;font-weight:800;line-height:1.25;margin:6px 0 2px}
+.al-c .btns{margin-top:10px}.al-c .btn{height:48px;font-size:15px;padding:0 6px}
+/* salidas */
+.freq{padding:12px 14px}
+.freq-r{display:flex;align-items:center;gap:8px}
+.val{flex:1;text-align:center;font:800 30px/1 var(--d)}
+.val small{font:700 16px var(--b);color:var(--mute);margin-left:4px}
+.help{font-size:14px;color:var(--mute);font-weight:600;margin-top:8px;display:flex;gap:6px;align-items:center}
+.q{padding:10px 14px;margin-bottom:8px;position:relative}
+.q .pos{width:36px;height:36px;border-radius:10px;background:var(--pri-sub);color:var(--pri);font:800 20px var(--d);display:grid;place-items:center;flex:none}
+.q.f .pos{background:var(--pri);color:var(--on-pri)}
+.q-r{display:flex;align-items:center;gap:12px}
+.q-r .who{flex:1;min-width:0}
+.q-r .who div:last-child{font-size:15px;font-weight:600;color:var(--mute)}
+.cd{font:800 24px var(--d);font-variant-numeric:tabular-nums;text-align:right;line-height:1}
+.cd small{display:block;font:700 13px var(--b);color:var(--mute);margin-bottom:3px}
+.q.f{border:2.5px solid var(--pri)}
+.q.f .cd{font-size:42px;text-align:left;margin:6px 0 10px;color:var(--pri)}
+.q.f .cd small{font-size:14px}
+.kb{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;border:1.5px solid var(--line);background:var(--surf2);flex:none}
+.menu{position:absolute;right:12px;top:60px;background:var(--surf);border:2px solid var(--line2);border-radius:14px;width:176px;z-index:4;box-shadow:0 12px 24px -6px rgba(15,23,42,.35);padding:4px}
+.menu div{height:48px;display:flex;align-items:center;gap:10px;padding:0 12px;font-weight:700;border-radius:10px}
+.menu div+div{color:var(--bad-t)}
+.coll{display:flex;justify-content:space-between;align-items:center;min-height:56px;padding:0 14px;border-radius:14px;border:1.5px dashed var(--line2);font-weight:700;color:var(--mute);margin-top:4px}
+/* mas */
+.user{display:flex;gap:14px;align-items:center;padding:14px}
+.av{width:54px;height:54px;border-radius:16px;background:var(--pri);color:var(--on-pri);font:800 22px var(--d);display:grid;place-items:center}
+.list{margin-top:12px;background:var(--surf);border:1.5px solid var(--line);border-radius:18px;overflow:hidden}
+.li{display:flex;align-items:center;gap:14px;min-height:52px;padding:0 14px;font-weight:700}
+.li+.li{border-top:1px solid var(--line)}
+.li .ico{width:34px;height:34px;border-radius:10px;background:var(--pri-sub);color:var(--pri);display:grid;place-items:center}
+.li .go{margin-left:auto;color:var(--mute);display:flex;align-items:center;gap:8px;font-size:13.5px}
+.tag{background:var(--surf2);border:1.5px solid var(--line2);border-radius:8px;padding:1px 8px;font-weight:700;font-size:13px;color:var(--mute)}
+.out{margin-top:12px;color:var(--bad-t);border-color:var(--bad);justify-content:center}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+::selection{background:var(--pri-soft);color:var(--ink)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="house" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="radio" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></symbol>
+<symbol id="list" viewBox="0 0 24 24"><path d="M10 12h11"/><path d="M10 18h11"/><path d="M10 6h11"/><path d="M4 10h2"/><path d="M4 6h1v4"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></symbol>
+<symbol id="bell" viewBox="0 0 24 24"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></symbol>
+<symbol id="more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+<symbol id="phone" viewBox="0 0 24 24"><path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384"/></symbol>
+<symbol id="msg" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+<symbol id="tri" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+<symbol id="oct" viewBox="0 0 24 24"><path d="M12 16h.01"/><path d="M12 8v4"/><path d="M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z"/></symbol>
+<symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+<symbol id="chr" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+<symbol id="chd" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+<symbol id="minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+<symbol id="plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+<symbol id="check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+<symbol id="x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+<symbol id="ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></symbol>
+<symbol id="route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
+<symbol id="bus" viewBox="0 0 24 24"><path d="M8 6v6"/><path d="M15 6v6"/><path d="M2 12h19.6"/><path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"/><circle cx="7" cy="18" r="2"/><path d="M9 18h5"/><circle cx="16" cy="18" r="2"/></symbol>
+<symbol id="user" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+<symbol id="users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+<symbol id="map" viewBox="0 0 24 24"><path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"/><path d="M15 5.764v15"/><path d="M9 3.236v15"/></symbol>
+<symbol id="sync" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+<symbol id="file" viewBox="0 0 24 24"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></symbol>
+<symbol id="shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="clip" viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></symbol>
+<symbol id="out" viewBox="0 0 24 24"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></symbol>
+<symbol id="timer" viewBox="0 0 24 24"><path d="M10 2h4"/><path d="m12 14 3-3"/><circle cx="12" cy="14" r="8"/></symbol>
+<symbol id="down" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></symbol>
+<symbol id="pin" viewBox="0 0 24 24"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></symbol>
+</defs></svg>
+
+<header class="intro">
+<h1>Propuesta B — <span>Señalética de garita</span></h1>
+<ul>
+<li><b>Escala tipográfica:</b> cuerpo 16 px mínimo, datos en 18–24 px, placa en 30 px y cuenta regresiva en 44 px (Oxanium, cifras tabulares). Pasos de ~1.25 y de peso, nunca solo de tamaño. Los 13.5 px quedan solo para etiquetas de pestaña y notas secundarias.</li>
+<li><b>Densidad:</b> una decisión por pantalla y una acción dominante por tarjeta (Despachar, Sancionar, Llamar). Lo secundario va a un menú de desbordamiento. Objetivos de 48 a 60 px, en la mitad inferior donde llega el pulgar.</li>
+<li><b>Color con función:</b> el morado solo marca acción primaria y selección. Verde, ámbar y rojo son solo estado, y cada estado repite forma y texto (círculo, rombo, cuadrado), así no depende del color.</li>
+<li><b>Para el sol:</b> texto casi negro sobre superficies blancas, bordes de 1.5–2.5 px en lugar de sombras suaves, rellenos sólidos para lo grave y tonos de texto oscurecidos de verde, ámbar y rojo (≥ 4.5:1). Modo oscuro automático para turno de noche.</li>
+<li><b>La placa manda:</b> la placa se dibuja como placa (borde grueso, Oxanium) porque es como el despachador identifica un minibús, antes que el nombre del conductor.</li>
+</ul>
+</header>
+
+<main class="row">
+
+<!-- 1 HOY -->
+<figure><div class="phone">
+<div class="sb"><span>07:42</span><i><svg class="ic s" viewBox="0 0 24 24"><use href="#radio"/></svg>82%</i></div>
+<div class="hd"><div><h2>Hoy</h2><small>Mié 5 nov · Unión Tiquipaya</small></div><span class="live"><span class="dot"></span>En vivo</span></div>
+<div class="body">
+<div class="search"><svg class="ic"><use href="#search"/></svg>Buscar placa o conductor</div>
+<div class="lbl" style="margin-top:14px"><span>1 resultado</span><span>“4701”</span></div>
+<div class="card">
+ <div style="display:flex;justify-content:space-between;align-items:center"><span class="plate lg">4701EHA</span><span class="tag">Línea 16</span></div>
+ <div style="font-weight:700;font-size:18px;margin:10px 0 2px">Bravo Soliz Javier</div>
+ <div class="st ok"><span class="dot"></span>Reportando · <span class="num">23</span> km/h · vuelta 2</div>
+ <div class="meta" style="margin:4px 0 12px;display:flex;gap:6px;align-items:center"><svg class="ic s"><use href="#pin"/></svg>Av. Tiquipaya · hace 4 s</div>
+ <div class="btns"><span class="btn pri"><svg class="ic"><use href="#phone"/></svg>Llamar</span><span class="btn wa"><svg class="ic"><use href="#msg"/></svg>WhatsApp</span></div>
+</div>
+<div class="lbl"><span>Resumen del día</span></div>
+<div class="sum" style="margin-top:0">
+ <div class="tile"><span class="n" style="color:var(--ok-t)">12</span><span class="l">En servicio</span></div>
+ <div class="tile"><span class="n">3</span><span class="l">Inactivos</span></div>
+ <div class="tile al"><span class="n">4</span><span class="l">Alertas abiertas <b>2 graves</b></span></div>
+ <div class="tile"><span class="n" style="color:var(--warn-t)">5</span><span class="l">Sanciones pend.</span></div>
+</div>
+</div>
+<nav class="tabs" aria-label="Principal"><span class="tab on"><span class="pill"><svg class="ic"><use href="#house"/></svg></span>Hoy</span><span class="tab"><span class="pill"><svg class="ic"><use href="#radio"/></svg></span>En vivo</span><span class="tab"><span class="pill"><svg class="ic"><use href="#list"/></svg></span>Salidas</span><span class="tab"><span class="pill"><svg class="ic"><use href="#bell"/></svg></span>Alertas<span class="bdg">4</span></span><span class="tab"><span class="pill"><svg class="ic"><use href="#more"/></svg></span>Más</span></nav>
+</div><figcaption><b>1</b>Hoy</figcaption></figure>
+
+<!-- 2 EN VIVO -->
+<figure><div class="phone">
+<div class="sb"><span>07:42</span><i><svg class="ic s" viewBox="0 0 24 24"><use href="#radio"/></svg>82%</i></div>
+<div class="body" style="padding:0">
+<svg class="map" viewBox="0 0 390 750" preserveAspectRatio="xMidYMin slice" role="img" aria-label="Mapa de la Línea 16 con seis minibuses">
+ <rect width="390" height="750" fill="var(--map-bg)"/>
+ <path d="M-10 500 C80 470 150 520 240 490 S360 470 400 440 L400 760 L-10 760Z" fill="var(--map-water)"/>
+ <rect x="150" y="60" width="90" height="70" rx="10" fill="var(--map-green)"/>
+ <g stroke="var(--map-st)" fill="none" stroke-linecap="round">
+  <path d="M0 150H390M0 285H390M0 410H390M0 560H390" stroke-width="8"/>
+  <path d="M130 0V750M200 0V750M345 0V750" stroke-width="8"/>
+  <path d="M0 80H390M0 215H390M0 345H390M30 0V750M260 0V750M300 0V750" stroke-width="4"/>
+ </g>
+ <text x="210" y="112" font-size="11" font-weight="600" fill="var(--map-lbl)" font-family="Montserrat">Plaza Tiquipaya</text>
+ <text x="14" y="520" font-size="11" font-weight="600" fill="var(--map-lbl)" font-family="Montserrat">Río Rocha</text>
+ <text x="274" y="196" font-size="11" font-weight="600" fill="var(--map-lbl)" font-family="Montserrat">Av. Blanco Galindo</text>
+ <g transform="translate(0 24)"><path id="rt" d="M62 80V170C62 200 90 215 120 215H250C285 215 300 240 300 275V380L338 425" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+ <path d="M62 80V170C62 200 90 215 120 215H250C285 215 300 240 300 275V380L338 425" fill="none" stroke="var(--pri)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+ <g fill="#fff"><path d="M62 128l-5 -7h10z" transform="rotate(180 62 124)"/><path d="M180 215l-7 -5v10z" transform="rotate(180 177 215)"/><path d="M300 330l-5 -7h10z" transform="rotate(180 300 326)"/></g>
+ <rect x="42" y="52" width="40" height="32" rx="8" fill="var(--pri)" stroke="#fff" stroke-width="3"/>
+ <svg x="50" y="56" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" color="#fff"><use href="#bus"/></svg>
+ <text x="90" y="74" font-size="12" font-weight="800" fill="var(--ink)" font-family="Montserrat" stroke="var(--map-bg)" stroke-width="4" paint-order="stroke">Terminal Tiquipaya</text>
+ <g font-family="Oxanium" font-weight="800" font-size="13" text-anchor="middle" fill="#fff">
+  <g transform="translate(62 140)"><rect x="-38" y="-13" width="76" height="26" rx="13" fill="#15803d" stroke="#fff" stroke-width="2.5"/><text y="5">4701EHA</text></g>
+  <g transform="translate(116 215)"><rect x="-38" y="-13" width="76" height="26" rx="13" fill="#15803d" stroke="#fff" stroke-width="2.5"/><text y="5">2230KLM</text></g>
+  <g transform="translate(186 245)"><rect x="-44" y="-13" width="88" height="26" rx="13" fill="#b45309" stroke="#fff" stroke-width="2.5"/><text y="5">– 5163NCF</text></g>
+  <g transform="translate(300 290)"><rect x="-38" y="-13" width="76" height="26" rx="13" fill="#15803d" stroke="#fff" stroke-width="2.5"/><text y="5">3318TRB</text></g>
+  <g transform="translate(300 365)"><rect x="-44" y="-13" width="88" height="26" rx="13" fill="#b91c1c" stroke="#fff" stroke-width="2.5"/><text y="5">! 4120MZX</text></g>
+  <g transform="translate(236 215)"><circle r="26" fill="var(--pri)" opacity=".22"/><rect x="-52" y="-18" width="104" height="36" rx="18" fill="var(--pri)" stroke="#fff" stroke-width="4"/><text y="7" font-size="17">1616PIL</text></g>
+ </g>
+</g>
+</svg>
+<div class="mtop"><span class="fab"><svg class="ic s"><use href="#route"/></svg>Línea 16<svg class="ic s"><use href="#chd"/></svg></span><span class="fab h"><span class="dot"></span>12 de 15 · hace 3 s</span></div>
+<div class="sheet">
+ <div class="grab"></div>
+ <div class="sh-top"><span class="plate lg">1616PIL</span><span class="btn ghost sq" style="height:48px;width:48px"><svg class="ic"><use href="#x"/></svg></span></div>
+ <div style="font-weight:700;font-size:18px;margin:8px 0 2px">Mamani Quispe Rubén</div>
+ <div class="st ok"><span class="dot"></span>Reportando · <span class="num">31</span> km/h</div>
+ <div class="stats"><div class="stat"><small>Hoy</small><b>Vuelta 2</b></div><div class="stat al"><small>Alertas</small><b>1 abierta</b></div></div>
+ <div class="meta" style="font-weight:700;margin-bottom:2px">Designación</div>
+ <div class="seg"><span>Directo</span><span class="on"><svg class="ic s"><use href="#check"/></svg>Vía Molinos</span></div>
+ <div class="btns"><span class="btn pri"><svg class="ic"><use href="#phone"/></svg>Llamar</span><span class="btn"><svg class="ic"><use href="#route"/></svg>Ver recorrido</span></div>
+</div>
+</div>
+<nav class="tabs" aria-label="Principal"><span class="tab"><span class="pill"><svg class="ic"><use href="#house"/></svg></span>Hoy</span><span class="tab on"><span class="pill"><svg class="ic"><use href="#radio"/></svg></span>En vivo</span><span class="tab"><span class="pill"><svg class="ic"><use href="#list"/></svg></span>Salidas</span><span class="tab"><span class="pill"><svg class="ic"><use href="#bell"/></svg></span>Alertas<span class="bdg">4</span></span><span class="tab"><span class="pill"><svg class="ic"><use href="#more"/></svg></span>Más</span></nav>
+</div><figcaption><b>2</b>En vivo</figcaption></figure>
+
+<!-- 3 ALERTAS -->
+<figure><div class="phone">
+<div class="sb"><span>07:42</span><i><svg class="ic s" viewBox="0 0 24 24"><use href="#radio"/></svg>82%</i></div>
+<div class="hd"><div><h2>Alertas</h2><small>Hoy · 4 abiertas</small></div><span class="fab" style="height:44px;font-size:15px">Línea 16<svg class="ic s"><use href="#chd"/></svg></span></div>
+<div class="body" style="padding-top:12px">
+<div class="chips"><div class="chip c-vg"><b>1</b>Gravísima</div><div class="chip c-g"><b>1</b>Grave</div><div class="chip c-l"><b>2</b>Leve</div></div>
+<div class="link"><span><svg class="ic"><use href="#ban"/></svg>Sanciones pendientes (5)</span><svg class="ic"><use href="#chr"/></svg></div>
+<div class="card al-c"><div class="al-h"><span class="sev vg"><svg class="ic s"><use href="#oct"/></svg>Gravísima</span><span class="meta num">07:31 · hace 11 min</span></div>
+ <span class="plate">4701EHA</span><h3>Desvío fuera de la ruta</h3><div class="meta">Av. Tiquipaya y calle Jordán · Bravo Soliz J.</div>
+ <div class="btns"><span class="btn">Atender</span><span class="btn">Descartar</span><span class="btn pri">Sancionar</span></div></div>
+<div class="card al-c"><div class="al-h"><span class="sev g"><svg class="ic s"><use href="#tri"/></svg>Grave</span><span class="meta num">07:12 · hace 30 min</span></div>
+ <span class="plate">1616PIL</span><h3>PC omitido: PC7</h3><div class="meta">Plaza Tiquipaya · Mamani Quispe R.</div>
+ <div class="btns"><span class="btn">Atender</span><span class="btn">Descartar</span><span class="btn pri">Sancionar</span></div></div>
+<div class="card al-c" style="margin-bottom:0"><div class="al-h"><span class="sev l"><svg class="ic s"><use href="#info"/></svg>Leve</span><span class="meta num">06:50 · hace 52 min</span></div>
+ <span class="plate">5163NCF</span><h3>Vueltas incumplidas</h3><div class="meta">Terminal Tiquipaya · 1 de 2 vueltas</div>
+ <div class="btns"><span class="btn">Atender</span><span class="btn">Descartar</span><span class="btn">Sancionar</span></div></div>
+</div>
+<nav class="tabs" aria-label="Principal"><span class="tab"><span class="pill"><svg class="ic"><use href="#house"/></svg></span>Hoy</span><span class="tab"><span class="pill"><svg class="ic"><use href="#radio"/></svg></span>En vivo</span><span class="tab"><span class="pill"><svg class="ic"><use href="#list"/></svg></span>Salidas</span><span class="tab on"><span class="pill"><svg class="ic"><use href="#bell"/></svg></span>Alertas<span class="bdg">4</span></span><span class="tab"><span class="pill"><svg class="ic"><use href="#more"/></svg></span>Más</span></nav>
+</div><figcaption><b>3</b>Alertas</figcaption></figure>
+
+<!-- 4 SALIDAS -->
+<figure><div class="phone">
+<div class="sb"><span>07:42</span><i><svg class="ic s" viewBox="0 0 24 24"><use href="#radio"/></svg>82%</i></div>
+<div class="hd"><div><h2>Terminal Tiquipaya</h2><small>Línea 16 · 6 en fila</small></div></div>
+<div class="body" style="padding-top:12px">
+<div class="card freq"><div class="meta" style="font-weight:800;margin-bottom:8px">Frecuencia base</div>
+ <div class="freq-r"><span class="btn sq"><svg class="ic"><use href="#minus"/></svg></span><span class="val">8<small>min</small></span><span class="btn sq"><svg class="ic"><use href="#plus"/></svg></span><span class="btn pri" style="flex:none;width:112px">Guardar</span></div>
+ <div class="help"><svg class="ic s"><use href="#info"/></svg>Aplica todos los días</div></div>
+<div class="lbl" style="margin:12px 2px 6px"><span>La fila</span><span>Sigue 2:40</span></div>
+<div class="card q f"><div class="q-r"><span class="pos">1</span><div class="who"><span class="plate">4701EHA</span><div>Bravo Soliz Javier</div></div><span class="kb"><svg class="ic"><use href="#more"/></svg></span></div>
+ <div class="cd"><small>Sale en</small>02:40</div>
+ <span class="btn pri big" style="width:100%"><svg class="ic"><use href="#bus"/></svg>Despachar</span>
+</div>
+<div class="card q"><div class="q-r"><span class="pos">2</span><div class="who"><span class="plate">1616PIL</span><div>Mamani Quispe Rubén</div></div><div class="cd"><small>sale en</small>10:40</div><span class="kb"><svg class="ic"><use href="#more"/></svg></span></div> <div class="menu" style="top:60px"><div><svg class="ic s"><use href="#down"/></svg>Al final</div><div><svg class="ic s"><use href="#x"/></svg>Retirar</div></div></div>
+<div class="card q"><div class="q-r"><span class="pos">3</span><div class="who"><span class="plate">5163NCF</span><div>Condori Vargas Hugo</div></div><div class="cd"><small>sale en</small>18:40</div><span class="kb"><svg class="ic"><use href="#more"/></svg></span></div></div>
+<div class="coll"><span>Salidas recientes</span><span style="display:flex;gap:8px;align-items:center"><span class="num">8</span><svg class="ic"><use href="#chd"/></svg></span></div>
+</div>
+<nav class="tabs" aria-label="Principal"><span class="tab"><span class="pill"><svg class="ic"><use href="#house"/></svg></span>Hoy</span><span class="tab"><span class="pill"><svg class="ic"><use href="#radio"/></svg></span>En vivo</span><span class="tab on"><span class="pill"><svg class="ic"><use href="#list"/></svg></span>Salidas</span><span class="tab"><span class="pill"><svg class="ic"><use href="#bell"/></svg></span>Alertas<span class="bdg">4</span></span><span class="tab"><span class="pill"><svg class="ic"><use href="#more"/></svg></span>Más</span></nav>
+</div><figcaption><b>4</b>Salidas</figcaption></figure>
+
+<!-- 5 MAS -->
+<figure><div class="phone">
+<div class="sb"><span>07:42</span><i><svg class="ic s" viewBox="0 0 24 24"><use href="#radio"/></svg>82%</i></div>
+<div class="hd"><div><h2>Más</h2></div></div>
+<div class="body" style="padding-top:12px">
+<div class="card user"><span class="av">LQ</span><div><div style="font-weight:800;font-size:18px">Luis Quispe</div><div class="meta">Administrador · Unión Tiquipaya</div></div></div>
+<div class="list">
+<div class="li"><span class="ico"><svg class="ic s"><use href="#bus"/></svg></span>Vehículos<span class="go"><svg class="ic"><use href="#chr"/></svg></span></div>
+<div class="li"><span class="ico"><svg class="ic s"><use href="#user"/></svg></span>Conductores<span class="go"><svg class="ic"><use href="#chr"/></svg></span></div>
+<div class="li"><span class="ico"><svg class="ic s"><use href="#users"/></svg></span>Socios<span class="go"><svg class="ic"><use href="#chr"/></svg></span></div>
+<div class="li"><span class="ico"><svg class="ic s"><use href="#route"/></svg></span>Líneas<span class="go"><svg class="ic"><use href="#chr"/></svg></span></div>
+<div class="li"><span class="ico"><svg class="ic s"><use href="#map"/></svg></span>Rutas<span class="go"><span class="tag">Solo lectura</span><svg class="ic"><use href="#chr"/></svg></span></div>
+<div class="li"><span class="ico"><svg class="ic s"><use href="#sync"/></svg></span>Rotaciones<span class="go"><svg class="ic"><use href="#chr"/></svg></span></div>
+<div class="li"><span class="ico"><svg class="ic s"><use href="#clip"/></svg></span>Reglas y sanciones<span class="go"><svg class="ic"><use href="#chr"/></svg></span></div>
+<div class="li"><span class="ico"><svg class="ic s"><use href="#file"/></svg></span>Reportes<span class="go"><svg class="ic"><use href="#chr"/></svg></span></div>
+<div class="li"><span class="ico"><svg class="ic s"><use href="#shield"/></svg></span>Auditoría<span class="go"><svg class="ic"><use href="#chr"/></svg></span></div>
+</div>
+<div class="btn out"><svg class="ic"><use href="#out"/></svg>Cerrar sesión</div>
+</div>
+<nav class="tabs" aria-label="Principal"><span class="tab"><span class="pill"><svg class="ic"><use href="#house"/></svg></span>Hoy</span><span class="tab"><span class="pill"><svg class="ic"><use href="#radio"/></svg></span>En vivo</span><span class="tab"><span class="pill"><svg class="ic"><use href="#list"/></svg></span>Salidas</span><span class="tab"><span class="pill"><svg class="ic"><use href="#bell"/></svg></span>Alertas<span class="bdg">4</span></span><span class="tab on"><span class="pill"><svg class="ic"><use href="#more"/></svg></span>Más</span></nav>
+</div><figcaption><b>5</b>Más</figcaption></figure>
+
+</main>
+</body>
+</html>

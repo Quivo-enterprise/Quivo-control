@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quivo Control — Propuesta A</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233226b4'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23fd9e15'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&family=Oxanium:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--pri:#3226b4;--on-pri:#fff;--soft:#dcd9fb;--sub:#efeefc;--acc:#fd9e15;--on-acc:#1a1200;--dan:#dc2626;--dan-bg:#fee2e2;--ok:#16a34a;--ok-bg:#dcfce7;--warn:#b45309;--warn-bg:#fef3c7;--info:#0e7490;--info-bg:#cffafe;
+--tx:#0f172a;--mu:#475569;--s0:#fff;--s1:#f8fafc;--s2:#f1f5f9;--bd:#e2e8f0;--page:#e9ebf1;--shell:rgba(50,38,180,.06);--map:#eef1f5;--st:#cbd5e1;--sh:0 1px 2px rgba(50,38,180,.08),0 8px 24px -8px rgba(50,38,180,.18)}
+@media(prefers-color-scheme:dark){:root{--pri:#6672f5;--on-pri:#0b0f2e;--soft:#2a2f6b;--sub:#1b1f45;--acc:#feb83e;--dan:#f87171;--dan-bg:#451a1a;--ok:#4ade80;--ok-bg:#12341f;--warn:#fbbf24;--warn-bg:#3d2b08;--info:#22d3ee;--info-bg:#0c3440;
+--tx:#f1f5f9;--mu:#a5b0c2;--s0:#111827;--s1:#0b1120;--s2:#1f2937;--bd:#2b3648;--page:#05070d;--shell:rgba(255,255,255,.05);--map:#141c2b;--st:#2b3648;--sh:0 1px 2px #0006,0 8px 24px -8px #000a}}
+*{box-sizing:border-box;margin:0}
+body{font:500 16px/1.4 Montserrat,system-ui,sans-serif;background:var(--page);color:var(--tx);padding:32px 16px 56px}
+.num,h1,h2,h3,.plate{font-family:Oxanium,Montserrat,sans-serif;font-variant-numeric:tabular-nums}
+header{max-width:900px;margin:0 auto 32px}
+header .eye{font:700 12px Oxanium;letter-spacing:.16em;text-transform:uppercase;color:var(--pri);background:var(--sub);padding:4px 10px;border-radius:99px;display:inline-block}
+h1{font-size:clamp(30px,5vw,46px);line-height:1.05;margin:12px 0;letter-spacing:-.02em}
+header ul{padding-left:20px;display:grid;gap:6px;color:var(--mu);font-size:15px}header b{color:var(--tx)}
+.row{display:flex;flex-wrap:wrap;gap:40px 32px;justify-content:center}
+figure{display:grid;gap:14px;justify-items:center}
+figcaption{font:700 14px Oxanium;letter-spacing:.08em;text-transform:uppercase;color:var(--mu)}
+.phone{width:390px;height:844px;border-radius:38px;box-shadow:0 0 0 10px #0f172a,0 0 0 11px #334155,0 30px 60px -20px #0008;overflow:hidden;position:relative;background:var(--s1);margin:10px;display:flex;flex-direction:column}
+.sb{height:30px;flex:none;display:flex;justify-content:space-between;align-items:center;padding:0 22px;font:700 13px Oxanium;background:var(--s0)}
+.sb i{width:60px;height:7px;border-radius:9px;background:var(--bd)}
+.scr{flex:1;overflow:hidden;position:relative;padding:12px 16px 0;display:flex;flex-direction:column;gap:12px}
+.ic{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.ic.s{width:20px;height:20px}
+/* tab bar */
+nav{flex:none;height:76px;background:var(--s0);border-top:1px solid var(--bd);display:grid;grid-template-columns:repeat(5,1fr);padding:6px 6px 10px}
+nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font:700 12px Montserrat;color:var(--mu);border-radius:16px;position:relative}
+nav a.on{color:var(--pri);background:var(--sub)}
+nav a.on::before{content:"";position:absolute;top:-7px;width:28px;height:4px;border-radius:0 0 4px 4px;background:var(--pri)}
+nav .bd{position:absolute;top:4px;left:50%;margin-left:6px;min-width:20px;height:20px;border-radius:10px;background:var(--dan);color:#fff;font:800 12px/20px Oxanium;text-align:center;padding:0 5px}
+/* bezel card */
+.sh{background:var(--shell);border-radius:22px;padding:4px;box-shadow:var(--sh)}
+.core{background:var(--s0);border-radius:18px;padding:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.6)}
+h2{font-size:22px;letter-spacing:-.01em}
+.title{display:flex;justify-content:space-between;align-items:center;padding:4px 2px 0}
+.title small{font:600 14px Montserrat;color:var(--mu)}
+.live{display:inline-flex;align-items:center;gap:6px;font:700 13px Oxanium;color:var(--ok);background:var(--ok-bg);padding:5px 10px;border-radius:99px}
+.live i{width:9px;height:9px;border-radius:50%;background:currentColor;box-shadow:0 0 0 0 currentColor;animation:p 1.8s infinite}
+@keyframes p{70%{box-shadow:0 0 0 8px transparent}}
+@media(prefers-reduced-motion:reduce){.live i{animation:none}}
+/* KPIs */
+.kp{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.k{border-radius:18px;padding:12px 14px;background:var(--s0);border:1.5px solid var(--bd);display:grid;gap:2px}
+.k .num{font-size:40px;font-weight:800;line-height:1}
+.k span{font-size:14px;font-weight:700;color:var(--mu)}
+.k.a{background:var(--dan-bg);border-color:var(--dan)}.k.a .num{color:var(--dan)}
+.k.s{background:var(--warn-bg);border-color:var(--warn)}.k.s .num{color:var(--warn)}
+.k.o .num{color:var(--ok)}
+.k em{font:700 12px Montserrat;font-style:normal;color:var(--dan)}
+.search{display:flex;align-items:center;gap:12px;height:60px;padding:0 16px;border-radius:18px;background:var(--s0);border:2px solid var(--pri);color:var(--mu);font-weight:600;font-size:17px}
+.search .ic{color:var(--pri)}
+.lbl{font:700 12px Oxanium;letter-spacing:.14em;text-transform:uppercase;color:var(--mu);padding:0 2px}
+.plate{font-weight:800;font-size:26px;letter-spacing:.04em;background:var(--s0);border:2.5px solid var(--tx);border-radius:8px;padding:0 10px;line-height:1.25;display:inline-block;color:var(--tx)}
+.plate.sm{font-size:20px;border-width:2px}
+.chip{display:inline-flex;align-items:center;gap:6px;font:700 14px Montserrat;padding:5px 11px;border-radius:99px;background:var(--ok-bg);color:var(--ok)}
+.chip i{width:9px;height:9px;border-radius:50%;background:currentColor}
+.chip.w{background:var(--warn-bg);color:var(--warn)}.chip.d{background:var(--dan-bg);color:var(--dan)}.chip.i{background:var(--info-bg);color:var(--info)}
+.drv{font-weight:600;font-size:16px;margin:6px 0 2px}
+.mu{color:var(--mu);font-size:15px}
+.btn{height:52px;border-radius:16px;border:0;font:700 17px Montserrat;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--s2);color:var(--tx);box-shadow:inset 0 0 0 1.5px var(--bd);cursor:pointer;transition:transform .25s cubic-bezier(.32,.72,0,1)}
+.btn:active{transform:scale(.97)}
+.btn.p{background:var(--pri);color:var(--on-pri);box-shadow:0 6px 16px -6px var(--pri)}
+.btn.g{background:#16a34a;color:#fff;box-shadow:none}
+.btn.d{background:var(--dan);color:#fff;box-shadow:none}
+.btn.a{background:var(--acc);color:var(--on-acc);box-shadow:none}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.three{display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:6px}.al .core,.core.al{padding:10px 12px}.al .btn{height:48px}
+.mt{margin-top:12px}
+/* map */
+.mapwrap{position:absolute;inset:0}
+.mapwrap svg{width:100%;height:100%;display:block}
+.top{position:absolute;left:12px;right:12px;top:12px;display:flex;gap:8px;z-index:2}
+.pill{height:52px;border-radius:26px;background:var(--s0);box-shadow:var(--sh),0 0 0 1px var(--bd);display:flex;align-items:center;gap:8px;padding:0 16px;font:700 16px Montserrat}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--s0);border-radius:28px 28px 0 0;padding:10px 16px 14px;box-shadow:0 -10px 30px -10px #0006;z-index:2;display:grid;gap:10px}
+.sheet::before{content:"";width:44px;height:5px;border-radius:3px;background:var(--bd);margin:0 auto}
+.seg{display:grid;grid-template-columns:1fr 1fr;background:var(--s2);border-radius:16px;padding:4px;height:52px}
+.seg b{display:flex;align-items:center;justify-content:center;border-radius:12px;font:700 16px Montserrat;color:var(--mu)}
+.seg b.on{background:var(--pri);color:var(--on-pri);box-shadow:0 4px 10px -4px var(--pri)}
+.meta{display:flex;gap:8px}.meta div{flex:1;background:var(--s1);border:1px solid var(--bd);border-radius:14px;padding:8px 12px;display:grid}
+.meta .num{font-size:22px;font-weight:700;line-height:1.1}.meta span{font-size:13px;color:var(--mu);font-weight:600}
+/* alerts */
+.sev{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.sev b{border-radius:16px;padding:8px 6px;text-align:center;display:grid;font:700 12px Montserrat;border:2px solid transparent}
+.sev b .num{font-size:28px;line-height:1.05;font-weight:800}
+.sev .g1{background:var(--dan);color:#fff}.sev .g2{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}.sev .g3{background:var(--info-bg);color:var(--info);border-color:var(--info)}
+.al{display:grid;gap:10px;border-left:7px solid var(--dan)}
+.al.g2{border-left-color:var(--warn)}
+.al .hd{display:flex;justify-content:space-between;align-items:center}
+.rule{font:700 18px/1.2 Montserrat}
+.lnk{display:flex;align-items:center;gap:12px;height:60px;padding:0 16px;border-radius:18px;background:var(--s0);border:1.5px solid var(--bd);font-weight:700}
+.lnk .num{margin-left:auto;background:var(--warn-bg);color:var(--warn);border-radius:99px;padding:0 12px;font-weight:800;font-size:20px}
+/* salidas */
+.step{display:grid;grid-template-columns:56px 1fr 56px;align-items:center;gap:10px}
+.step b{height:56px;border-radius:16px;background:var(--sub);color:var(--pri);display:flex;align-items:center;justify-content:center}
+.step .num{font-size:36px;font-weight:800;text-align:center;line-height:1}.step .num small{font-size:16px;color:var(--mu);font-weight:600}
+.fi{display:grid;grid-template-columns:44px 1fr auto;gap:12px;align-items:center}
+.pos{width:44px;height:44px;border-radius:14px;background:var(--sub);color:var(--pri);font:800 24px/44px Oxanium;text-align:center}
+.cd{text-align:right}.cd .num{font-size:24px;font-weight:800;line-height:1}.cd span{font-size:12px;color:var(--mu);font-weight:600}
+.fi.first .pos{background:var(--pri);color:var(--on-pri)}.fi.first .cd .num{color:var(--pri);font-size:30px}
+.ov{width:48px;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;color:var(--mu);background:var(--s2)}
+.coll{display:flex;align-items:center;gap:10px;height:56px;padding:0 16px;border-radius:16px;background:var(--s0);border:1.5px dashed var(--bd);font-weight:700;color:var(--mu)}
+/* mas */
+.usr{display:flex;align-items:center;gap:14px}
+.av{width:56px;height:56px;border-radius:18px;background:var(--pri);color:var(--on-pri);font:800 22px/56px Oxanium;text-align:center}
+.list{background:var(--s0);border-radius:20px;border:1.5px solid var(--bd);overflow:hidden}
+.list a{display:flex;align-items:center;gap:14px;height:52px;padding:0 14px;font-weight:600;font-size:16px;border-top:1px solid var(--bd)}
+.list a:first-child{border:0}
+.list .ic:first-child{color:var(--pri)}.list a .ic:last-child{margin-left:auto;color:var(--mu)}
+.list em{margin-left:auto;font:700 12px Montserrat;font-style:normal;color:var(--mu);background:var(--s2);padding:3px 8px;border-radius:8px}
+.out{color:var(--dan);justify-content:center}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+<symbol id="nav" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z"/><circle cx="12" cy="9" r="2.5"/></symbol>
+<symbol id="bus" viewBox="0 0 24 24"><path d="M8 6v6M16 6v6M2 12h20M7 18h10M18 18h3s1-.7 1-2V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9c0 1.3 1 2 1 2h3"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+<symbol id="bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></symbol>
+<symbol id="menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+<symbol id="phone" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></symbol>
+<symbol id="wa" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z"/><path d="M9 10c0 3 2 5 5 5l1.5-1.5-2-1-1 .5c-.8-.4-1.4-1-1.8-1.8l.5-1-1-2z"/></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+<symbol id="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+<symbol id="down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+<symbol id="minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+<symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="dots" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
+<symbol id="warn" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3zM12 9v4M12 17h.01"/></symbol>
+<symbol id="check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+<symbol id="x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+<symbol id="gavel" viewBox="0 0 24 24"><path d="m14 13-8.4 8.4a2 2 0 0 1-2.8-2.8L11 10M16 16l6-6M8 8l6-6M9 7l8 8M21 11l-8-8"/></symbol>
+<symbol id="users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.1a4 4 0 0 1 0 7.8M22 21v-2a4 4 0 0 0-3-3.9"/><circle cx="9" cy="7" r="4"/></symbol>
+<symbol id="id" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M13 10h5M13 14h5M5 16c.5-1.5 5.5-1.5 6 0"/></symbol>
+<symbol id="route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
+<symbol id="rep" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+<symbol id="file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h8"/></symbol>
+<symbol id="shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.7 9a1 1 0 0 1-.6 0C7.5 20.500 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.500-1.200 6.200-2.700a1.200 1.200 0 0 1 1.600 0C14.500 3.800 17 5 19 5a1 1 0 0 1 1 1z"/></symbol>
+<symbol id="map2" viewBox="0 0 24 24"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15"/></symbol>
+<symbol id="out" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+<symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+<symbol id="lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+<symbol id="flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1zM4 22v-7"/></symbol>
+<symbol id="end" viewBox="0 0 24 24"><path d="m13 17 5-5-5-5M6 17l5-5-5-5"/></symbol>
+<symbol id="trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></symbol>
+</defs></svg>
+
+<header>
+<span class="eye">Propuesta A · taste-skill</span>
+<h1>Despacho de Alto Contraste</h1>
+<ul>
+<li><b>Escala tipográfica:</b> cuerpo 16–17 px (Montserrat 600), títulos 22 px, cifras operativas 30–40 px en Oxanium con números tabulares; la placa se lee como placa (marco negro, 26 px), no como texto.</li>
+<li><b>Densidad:</b> una decisión por tarjeta, objetivos de 48–60 px, acción principal siempre en la mitad inferior (pulgar); lo secundario va a un menú de desbordamiento.</li>
+<li><b>Color con función:</b> púrpura solo para acción y foco; rojo/ámbar/cian únicamente para gravedad, siempre con icono y texto (no solo color); verde únicamente para “en vivo / reportando”.</li>
+<li><b>Bajo el sol:</b> fondos de estado rellenos y bordes de 1.5–2 px en vez de sombras suaves; texto #0f172a sobre blanco (contraste &gt; 15:1), gris secundario oscurecido a #475569. Las sombras tintadas y el doble marco (carcasa + núcleo) dan jerarquía sin ruido.</li>
+<li><b>Modo oscuro</b> automático (prefers-color-scheme) con primario #6672f5 y acento #feb83e.</li>
+</ul></header>
+
+<div class="row">
+
+<!-- 1 HOY -->
+<figure><figcaption>1 · Hoy</figcaption><div class="phone">
+<div class="sb"><span>07:42</span><i></i><span>4G ▮▮▮</span></div>
+<div class="scr">
+<div class="title"><div><h2>Hoy · Línea 16</h2><small>Jueves 5 de noviembre</small></div><span class="live"><i></i>En vivo</span></div>
+<div class="kp">
+<div class="k o"><span>En servicio</span><b class="num">12</b></div>
+<div class="k"><span>Inactivos</span><b class="num">3</b></div>
+<div class="k a"><span>Alertas abiertas</span><b class="num">4</b><em>2 graves</em></div>
+<div class="k s"><span>Sanciones pendientes</span><b class="num">5</b></div>
+</div>
+<div class="search"><svg class="ic"><use href="#search"/></svg>Buscar placa o conductor</div>
+<div class="lbl">Resultado · 1 vehículo</div>
+<div class="sh"><div class="core">
+<div style="display:flex;justify-content:space-between;align-items:center"><span class="plate">4701EHA</span><span class="chip"><i></i>Reportando</span></div>
+<div class="drv">Bravo Soliz Javier</div>
+<div class="mu num" style="font-size:16px">23 km/h · vuelta 2 · hace 12 s</div>
+<div class="two mt"><div class="btn g"><svg class="ic"><use href="#phone"/></svg>Llamar</div><div class="btn"><svg class="ic"><use href="#wa"/></svg>WhatsApp</div></div>
+</div></div>
+</div>
+<nav><a class="on"><svg class="ic"><use href="#home"/></svg>Hoy</a><a><svg class="ic"><use href="#nav"/></svg>En vivo</a><a><svg class="ic"><use href="#bus"/></svg>Salidas</a><a><svg class="ic"><use href="#bell"/></svg>Alertas<span class="bd">4</span></a><a><svg class="ic"><use href="#menu"/></svg>Más</a></nav>
+</div></figure>
+
+<!-- 2 EN VIVO -->
+<figure><figcaption>2 · En vivo</figcaption><div class="phone">
+<div class="sb"><span>07:43</span><i></i><span>4G ▮▮▮</span></div>
+<div class="scr" style="padding:0">
+<div class="mapwrap"><svg viewBox="0 0 390 690" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Mapa de Línea 16">
+<rect width="390" height="690" fill="var(--map)"/>
+<g stroke="var(--st)" stroke-width="9" fill="none" stroke-linecap="round"><path d="M-10 150H400M-10 300H400M-10 440H400M-10 560H400M60-10V700M170-10V700M290-10V700"/></g>
+<g stroke="var(--st)" stroke-width="4" fill="none"><path d="M-10 90H400M-10 220H400M-10 370H400M-10 500H400M110-10V700M230-10V700M350-10V700"/></g>
+<path d="M30 505 60 440 170 440 170 300 290 300 290 150 350 90" fill="none" stroke="#fff" stroke-width="13" stroke-linejoin="round" opacity=".7"/>
+<path d="M30 505 60 440 170 440 170 300 290 300 290 150 350 90" fill="none" stroke="var(--pri)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<g font-family="Oxanium" font-weight="800" font-size="13" text-anchor="middle">
+<g transform="translate(350 90)"><rect x="-96" y="-12" width="88" height="24" rx="12" fill="var(--s0)" stroke="var(--pri)" stroke-width="2"/><text x="-52" y="5" fill="var(--tx)" font-size="12">Tiquipaya</text><circle r="9" fill="var(--pri)" stroke="#fff" stroke-width="3"/></g>
+<g transform="translate(30 505)"><circle r="9" fill="var(--tx)" stroke="#fff" stroke-width="3"/><rect x="-16" y="14" width="86" height="24" rx="12" fill="var(--s0)" stroke="var(--tx)" stroke-width="2"/><text x="27" y="31" fill="var(--tx)" font-size="12">Cochabamba</text></g>
+<g transform="translate(290 220)"><circle r="14" fill="var(--ok)" stroke="#fff" stroke-width="3"/><path d="M-4-5 5 0-4 5z" fill="#fff"/></g>
+<g transform="translate(170 360)"><circle r="14" fill="var(--ok)" stroke="#fff" stroke-width="3"/><path d="M-4-5 5 0-4 5z" fill="#fff"/></g>
+<g transform="translate(118 440)"><circle r="14" fill="var(--dan)" stroke="#fff" stroke-width="3"/><path d="M0-6V1M0 5v.1" stroke="#fff" stroke-width="2.500" stroke-linecap="round"/></g>
+<g transform="translate(232 300)"><circle r="14" fill="var(--warn)" stroke="#fff" stroke-width="3"/><circle r="3.500" fill="#fff"/></g>
+<g transform="translate(60 440)"><circle r="14" fill="#64748b" stroke="#fff" stroke-width="3"/><path d="M-4-4v8M4-4v8" stroke="#fff" stroke-width="2.500" stroke-linecap="round"/></g>
+<g transform="translate(290 150)"><circle r="30" fill="var(--pri)" opacity=".18"/><circle r="19" fill="var(--pri)" stroke="#fff" stroke-width="4"/><path d="M-5-6 7 0-5 6z" fill="#fff"/><rect x="-52" y="26" width="104" height="30" rx="8" fill="var(--s0)" stroke="var(--tx)" stroke-width="2.500"/><text y="47" font-size="19" fill="var(--tx)" letter-spacing="1">4701EHA</text></g>
+</g></svg></div>
+<div class="top"><div class="pill" style="flex:1"><svg class="ic s"><use href="#bus"/></svg>Línea 16<svg class="ic s" style="margin-left:auto"><use href="#down"/></svg></div><div class="pill" style="color:var(--ok)"><span class="live" style="background:none;padding:0"><i></i>12/15</span></div></div>
+<div class="sheet">
+<div style="display:flex;justify-content:space-between;align-items:center"><span class="plate">4701EHA</span><span class="chip"><i></i>Reportando · 23 km/h</span></div>
+<div><div class="drv" style="margin:0">Bravo Soliz Javier</div></div>
+<div class="meta"><div><b class="num">2</b><span>Vuelta de hoy</span></div><div><b class="num" style="color:var(--dan)">1</b><span>Alertas</span></div><div><b class="num">12 s</b><span>Último punto</span></div></div>
+<div><div class="lbl" style="margin-bottom:6px">Designación Molinos</div><div class="seg"><b>Directo</b><b class="on">Vía Molinos</b></div></div>
+<div class="two"><div class="btn g"><svg class="ic"><use href="#phone"/></svg>Llamar</div><div class="btn p"><svg class="ic"><use href="#route"/></svg>Ver recorrido</div></div>
+</div></div>
+<nav><a><svg class="ic"><use href="#home"/></svg>Hoy</a><a class="on"><svg class="ic"><use href="#nav"/></svg>En vivo</a><a><svg class="ic"><use href="#bus"/></svg>Salidas</a><a><svg class="ic"><use href="#bell"/></svg>Alertas<span class="bd">4</span></a><a><svg class="ic"><use href="#menu"/></svg>Más</a></nav>
+</div></figure>
+
+<!-- 3 ALERTAS -->
+<figure><figcaption>3 · Alertas</figcaption><div class="phone">
+<div class="sb"><span>07:44</span><i></i><span>4G ▮▮▮</span></div>
+<div class="scr" style="gap:8px">
+<div class="title"><div><h2>Alertas de hoy</h2><small>4 abiertas · 2 graves</small></div></div>
+<div class="sev"><b class="g1"><span class="num">1</span>Gravísima</b><b class="g2"><span class="num">1</span>Grave</b><b class="g3"><span class="num">2</span>Leve</b></div>
+<div class="sh" style="border-left:0"><div class="core al">
+<div class="hd"><span class="plate sm">1616PIL</span><span class="chip d"><svg class="ic s"><use href="#warn"/></svg>Gravísima</span></div>
+<div><div class="rule" style="font-size:17px">Desvío fuera de la ruta</div><div class="mu">08:31 · Av. Villazón km 6</div></div>
+<div class="three"><div class="btn d" style="grid-column:span 1;font-size:16px"><svg class="ic s"><use href="#gavel"/></svg>Sancionar</div><div class="btn" style="font-size:16px">Atender</div><div class="btn" style="font-size:16px">Descartar</div></div>
+</div></div>
+<div class="sh"><div class="core al g2">
+<div class="hd"><span class="plate sm">5163NCF</span><span class="chip w"><svg class="ic s"><use href="#warn"/></svg>Grave</span></div>
+<div><div class="rule" style="font-size:17px">PC omitido: PC7</div><div class="mu">08:12 · Plaza Colón</div></div>
+<div class="three"><div class="btn a" style="font-size:16px"><svg class="ic s"><use href="#gavel"/></svg>Sancionar</div><div class="btn" style="font-size:16px">Atender</div><div class="btn" style="font-size:16px">Descartar</div></div>
+</div></div>
+<div class="sh"><div class="core al" style="border-left-color:var(--info);padding:12px 14px">
+<div class="hd"><span class="plate sm">4701EHA</span><span class="chip i">Leve</span></div>
+<div><div class="rule" style="font-size:17px">Vueltas incumplidas</div><div class="mu">07:55 · Terminal Tiquipaya</div></div>
+<div class="two"><div class="btn p" style="height:48px;font-size:16px">Atender</div><div class="btn" style="height:48px;font-size:16px">Descartar</div></div>
+</div></div>
+<div class="lnk"><svg class="ic" style="color:var(--warn)"><use href="#gavel"/></svg>Sanciones pendientes<span class="num">5</span><svg class="ic" style="color:var(--mu)"><use href="#chev"/></svg></div>
+</div>
+<nav><a><svg class="ic"><use href="#home"/></svg>Hoy</a><a><svg class="ic"><use href="#nav"/></svg>En vivo</a><a><svg class="ic"><use href="#bus"/></svg>Salidas</a><a class="on"><svg class="ic"><use href="#bell"/></svg>Alertas<span class="bd">4</span></a><a><svg class="ic"><use href="#menu"/></svg>Más</a></nav>
+</div></figure>
+
+<!-- 4 SALIDAS -->
+<figure><figcaption>4 · Salidas</figcaption><div class="phone">
+<div class="sb"><span>07:45</span><i></i><span>4G ▮▮▮</span></div>
+<div class="scr">
+<div class="title"><div><h2>Terminal Tiquipaya</h2><small>Línea 16 · 6 en fila</small></div><span class="live"><i></i>En vivo</span></div>
+<div class="sh"><div class="core">
+<div class="lbl" style="margin-bottom:8px">Frecuencia base</div>
+<div class="step"><b><svg class="ic"><use href="#minus"/></svg></b><div class="num">8 <small>min</small></div><b><svg class="ic"><use href="#plus"/></svg></b></div>
+<div class="two mt" style="grid-template-columns:1fr 1.2fr;align-items:center"><span class="mu" style="font-size:13px;line-height:1.3">Aplica todos los días</span><div class="btn p" style="height:48px">Guardar</div></div>
+</div></div>
+<div class="lbl">La fila</div>
+<div class="sh"><div class="core fi first" style="grid-template-columns:44px 1fr auto;gap:10px 12px">
+<div class="pos">1</div><div><span class="plate sm">4701EHA</span><div class="mu" style="margin-top:2px">Bravo Soliz Javier</div></div><div class="cd"><span>sale en</span><div class="num">02:40</div></div>
+<div class="btn p" style="grid-column:1/3;height:56px;font-size:19px;letter-spacing:.04em"><svg class="ic"><use href="#end"/></svg>DESPACHAR</div><div class="ov" style="justify-self:end"><svg class="ic"><use href="#dots"/></svg></div>
+</div></div>
+<div class="sh"><div class="core fi" style="padding:10px 14px"><div class="pos">2</div><div><span class="plate sm">5163NCF</span><div class="mu">Mamani Quispe Rubén</div></div><div class="cd"><span>sale en</span><div class="num">10:40</div></div></div></div>
+<div class="sh"><div class="core fi" style="padding:10px 14px"><div class="pos">3</div><div><span class="plate sm">1616PIL</span><div class="mu">Condori Rojas Marcos</div></div><div class="cd"><span>sale en</span><div class="num">18:40</div></div></div></div>
+<div class="coll"><svg class="ic"><use href="#clock"/></svg>Salidas recientes<svg class="ic" style="margin-left:auto"><use href="#down"/></svg></div>
+</div>
+<nav><a><svg class="ic"><use href="#home"/></svg>Hoy</a><a><svg class="ic"><use href="#nav"/></svg>En vivo</a><a class="on"><svg class="ic"><use href="#bus"/></svg>Salidas</a><a><svg class="ic"><use href="#bell"/></svg>Alertas<span class="bd">4</span></a><a><svg class="ic"><use href="#menu"/></svg>Más</a></nav>
+</div></figure>
+
+<!-- 5 MAS -->
+<figure><figcaption>5 · Más</figcaption><div class="phone">
+<div class="sb"><span>07:46</span><i></i><span>4G ▮▮▮</span></div>
+<div class="scr" style="gap:10px">
+<div class="sh"><div class="core usr"><div class="av">RC</div><div><div style="font-weight:700;font-size:17px">Rosario Camacho</div><div class="mu" style="font-size:14px">Administradora · Sindicato Tiquipaya</div></div></div></div>
+<div class="list">
+<a><svg class="ic"><use href="#bus"/></svg>Vehículos<svg class="ic s"><use href="#chev"/></svg></a>
+<a><svg class="ic"><use href="#id"/></svg>Conductores<svg class="ic s"><use href="#chev"/></svg></a>
+<a><svg class="ic"><use href="#users"/></svg>Socios<svg class="ic s"><use href="#chev"/></svg></a>
+<a><svg class="ic"><use href="#route"/></svg>Líneas<svg class="ic s"><use href="#chev"/></svg></a>
+<a><svg class="ic"><use href="#map2"/></svg>Rutas<em>Solo lectura</em><svg class="ic s" style="margin-left:8px"><use href="#chev"/></svg></a>
+<a><svg class="ic"><use href="#rep"/></svg>Rotaciones<svg class="ic s"><use href="#chev"/></svg></a>
+<a><svg class="ic"><use href="#gavel"/></svg>Reglas y sanciones<svg class="ic s"><use href="#chev"/></svg></a>
+<a><svg class="ic"><use href="#file"/></svg>Reportes<svg class="ic s"><use href="#chev"/></svg></a>
+<a><svg class="ic"><use href="#shield"/></svg>Auditoría<svg class="ic s"><use href="#chev"/></svg></a>
+</div>
+<div class="btn out" style="background:var(--s0);box-shadow:inset 0 0 0 2px var(--dan);color:var(--dan)"><svg class="ic"><use href="#out"/></svg>Cerrar sesión</div>
+</div>
+<nav><a><svg class="ic"><use href="#home"/></svg>Hoy</a><a><svg class="ic"><use href="#nav"/></svg>En vivo</a><a><svg class="ic"><use href="#bus"/></svg>Salidas</a><a><svg class="ic"><use href="#bell"/></svg>Alertas<span class="bd">4</span></a><a class="on"><svg class="ic"><use href="#menu"/></svg>Más</a></nav>
+</div></figure>
+
+</div></body></html>

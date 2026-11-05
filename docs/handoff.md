@@ -6,6 +6,23 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## En curso — 2026-11-05: Quivo Control móvil, fase 2 (escala + rediseño foco)
+
+Plan: [`docs/plan-movil-rediseno.md`](plan-movil-rediseno.md). El CTO vio el responsive de A/B/C como una "mini versión" del panel.
+
+Decisiones:
+- Escalar la tipografía en el celular ya (PR D).
+- Rediseño pensado para el celular de En vivo, Alertas/sanciones, Salidas/fila, Hoy (consultas rápidas) y la frecuencia base **permanente**.
+- Pestañas abajo: Hoy · En vivo · Salidas · Alertas · Más.
+- Bake-off de dos comps en marco de teléfono antes del PR E.
+
+Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endpoint nuevo) → H (hoy).
+
+**Pendiente de la capacitación del 5/11 (prod):**
+- La sesión de **4701EHA** (chofer real Javier Bravo Soliz) quedó `activa`: el emulador se cerró sin "Terminar el día". Cerrarla, y revisar que no le genere sanciones por la vuelta simulada.
+- `piloto-linea-16` tiene asignaciones para el 5/11 (+39, aplicado por el CTO "agregas nomás"): 37 activos más 2 días faltantes de 1616PIL.
+- El deploy r37 todavía no salió: prod sigue en API r35 y web r36.
+
 ## 2026-11-05: panel admin + En vivo en celular, instalable como PWA (A+B+C mergeados; deploy pendiente de OK)
 
 Plan: [`docs/plan-movil-pwa.md`](plan-movil-pwa.md). Pedido del cliente: usar el panel desde el
