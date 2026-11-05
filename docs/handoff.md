@@ -31,13 +31,25 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - Tabs filtradas por rol. `isNavActive` es compartido con el sidebar y tiene test.
   - `--qv-tabbar-h` descuenta la barra del contenido, del FAB, de `/rutas` y de la hoja de En vivo.
   - No verificado: rol operador en un celular real, dark mode y el mapa real (local corre sin la clave de Maps). Codex: no verificado.
-- **PR F — Salidas en celular (`feat/web-movil-salidas`, PR en curso).**
+- **PR F — Salidas en celular (#302, `016e680`, mergeado 5/11 con `ci` y `acceptance` en verde).**
   - A ≤720px, arriba de la fila aparece `BaseRapida`: botones − N min + y Guardar sobre el mismo `fijarBase` (`PUT /salidas/:pc/base`). Antes de guardar pide confirmación, porque el cambio es permanente.
   - Si las reglas no cargan, el control se deshabilita y muestra un error. El refetch no pisa una edición sin guardar.
   - La fila se ve en tarjetas: Despachar ocupa todo el ancho (≥48px) y "Al final" y "Retirar" van en una segunda fila. La confirmación de salida temprana no cambia.
   - `validarBase` lo comparten celular y escritorio. En escritorio se puede dejar vacío para quitar la base; en el celular no (decisión: se usa poco).
   - Acceptance con mocks de `page.route` (el seed no tiene terminales), sin ningún PUT real.
   - No verificado: guardado y despacho reales contra la API, y el aviso de guardado sobreviviendo al refetch. Codex: no verificado.
+- **PR G — Alertas (`feat/web-movil-alertas`, PR en curso).**
+  - Endpoint nuevo `GET /reportes/en-vivo/infracciones?fecha=hoy`: devuelve las infracciones abiertas y atendidas de las sesiones visibles hoy (misma regla que `listarHoy`), con placa, conductor y línea. Las abiertas van primero y el tope es `LIMITE_INFRACCIONES_HOY` (500).
+  - Scope: RLS más un filtro explícito por sindicato salvo `admin_quivo`. Un `admin_sindicato` sin sindicato recibe `[]`. Test de integración con 2 sindicatos más una sesión de ayer: 7/7. `/security-review`: sin hallazgos.
+  - El operador puede leer este endpoint, igual que el resto de `/reportes/en-vivo` (decisión del CTO del 13/10); la página y la pestaña son solo para admins.
+  - Página `/alertas`, con NAV y pestaña "Alertas" para `admin_quivo` y `admin_sindicato`:
+    - Chips Abiertas / Atendidas / Todas, agrupadas por nivel. Atender, Descartar y Sancionar reusan el cliente y `ModalSancionar` de En vivo; "Sanciones pendientes" lleva a `/reglas`.
+    - Una alerta de antes de hoy muestra la fecha ("ayer 23:30").
+    - Si se llega al tope aparece un aviso; si falla el refetch, también.
+    - Las acciones invalidan las cachés de las dos vistas.
+  - "PC N omitido" sin la lista de PCs: en `/alertas` se muestra sin número, para no mostrar uno equivocado. En vivo no cambia.
+  - Pendiente: "Ver en mapa" abre `/en-vivo` sin preseleccionar la sesión (En vivo no lee `?sesion=`).
+  - No verificado: Atender, Descartar y Sancionar de punta a punta en un navegador. Codex: no verificado.
 
 **Pendiente de la capacitación del 5/11 (prod):**
 - **PENDIENTE (sin fecha): sesión de 4701EHA** (chofer real Javier Bravo Soliz), id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Sigue `activa` en prod (`fin: null`) y su último fix es de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.

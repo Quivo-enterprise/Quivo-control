@@ -5609,3 +5609,125 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-secondary);
   }
 }
+
+/* PR G — /alertas (infracciones de hoy). Tarjetas sobre .qv-live-inf; propuesta B: borde grueso, placa, acciones grandes. */
+.qv-alertas {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 56rem;
+}
+.qv-alertas__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.qv-alertas__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border-radius: var(--qv-radius-full);
+  border: 2px solid var(--qv-color-primary-soft);
+  background: var(--qv-surface-card);
+  color: var(--qv-text-primary);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.qv-alertas__chip[aria-pressed='true'] {
+  background: var(--qv-color-primary);
+  border-color: var(--qv-color-primary);
+  color: var(--qv-color-on-primary);
+}
+.qv-alertas__chip:focus-visible,
+.qv-alertas__link:focus-visible {
+  outline: 2px solid var(--qv-color-primary);
+  outline-offset: 2px;
+}
+.qv-alertas__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 3.25rem;
+  padding: 0 1rem;
+  border-radius: var(--qv-radius-lg, 14px);
+  border: 2px solid var(--qv-color-primary-soft);
+  background: var(--qv-color-primary-subtle);
+  color: var(--qv-color-primary);
+  font-weight: 800;
+  text-decoration: none;
+}
+.qv-alertas__link span {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.qv-alertas__vacio {
+  margin: 2rem 0;
+  text-align: center;
+  color: var(--qv-text-secondary);
+  font-weight: 700;
+}
+.qv-alertas__grupo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.qv-alertas__nivel {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+.qv-alertas__nivel span {
+  color: var(--qv-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.qv-alertas__card {
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-width: 2px;
+  border-left-width: 6px;
+  border-color: var(--qv-nivel);
+  align-items: flex-start;
+}
+.qv-alertas__titulo {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.qv-alertas__card .qv-live-inf__detalle {
+  font-size: 0.875rem;
+}
+.qv-alertas__acciones,
+.qv-alertas__card .qv-live-inf__descarte {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  width: 100%;
+}
+.qv-alertas__acciones .qv-live-btn {
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  font-size: 0.875rem;
+}
+@media (max-width: 720px) {
+  .qv-alertas__chip {
+    flex: 1 1 0;
+    justify-content: center;
+    padding: 0 0.5rem;
+  }
+  .qv-alertas__acciones .qv-live-btn {
+    flex: 1 1 calc(50% - 0.25rem);
+    min-height: 3rem;
+    font-size: 0.9375rem;
+  }
+  .qv-alertas__card .qv-live-btn,
+  .qv-alertas__card .qv-live-inf__input {
+    min-height: 3rem;
+  }
+}

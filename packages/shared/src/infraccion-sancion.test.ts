@@ -21,7 +21,10 @@ describe('detalle y etiqueta de infracción', () => {
     expect(detalleInfraccion(base)).toBe('a 180 m de la ruta');
     const pc = { ...base, tipo: 'pc_omitido', detalle: { puntoControlId: 'p3', orden: 7 } } as unknown as Infraccion;
     expect(detalleInfraccion(pc, ['p1', 'p2', 'p3'])).toBe('PC 3 omitido');
-    expect(detalleInfraccion(pc)).toBe('PC 8 omitido');
+    expect(detalleInfraccion(pc, [])).toBe('PC 8 omitido');
+    // Sin lista de ids no se inventa el número (puede discrepar de En vivo).
+    expect(detalleInfraccion(pc)).toBe('PC omitido');
+    expect(detalleInfraccion({ ...pc, detalle: { ...pc.detalle, nombre: 'Cruce' } })).toBe('PC omitido (Cruce)');
   });
   it('detalle y etiqueta de las alertas de Molinos', () => {
     const corta = { ...base, tipo: 'espera_corta', detalle: { esperaMin: 20, requeridoMin: 30 } } as unknown as Infraccion;

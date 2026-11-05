@@ -1,5 +1,8 @@
 import type { Infraccion } from './entities/infraccion.js';
 
+/** Tope de filas de las alertas de hoy (`GET /reportes/en-vivo/infracciones?fecha=hoy`); la web avisa al llegar. */
+export const LIMITE_INFRACCIONES_HOY = 500;
+
 // Textos y regla de la sanción nacida de una infracción: los usan la API (deriva el hecho en el
 // servidor) y la web (resumen de solo lectura del modal).
 
@@ -19,10 +22,11 @@ function numero(valor: unknown): number | null {
 }
 
 /** "a 180 m de la ruta" (desvío) / "PC 3 omitido". El número del PC es su posición en la lista
- * del recorrido (`idsPuntosControl`, la misma que el mapa y el panel) y, si no se conoce, `orden + 1`. */
+ * del recorrido (`idsPuntosControl`, la misma que el mapa y el panel) y, si la lista se pasa pero el
+ * PC no está, `orden + 1`. Sin lista (`undefined`, p. ej. /alertas) no se inventa número: "PC omitido". */
 export function detalleInfraccion(
   i: Pick<Infraccion, 'tipo' | 'detalle'>,
-  idsPuntosControl: readonly string[] = [],
+  idsPuntosControl?: readonly string[],
 ): string {
   if (i.tipo === 'desvio_ruta') {
     const m = numero(i.detalle.distanciaMaxM);
@@ -36,8 +40,8 @@ export function detalleInfraccion(
       ? `esperó ${esperado} de ${requerido} min en Molinos`
       : 'salió de Molinos antes de tiempo';
   }
-  const posicion = typeof i.detalle.puntoControlId === 'string' ? idsPuntosControl.indexOf(i.detalle.puntoControlId) : -1;
-  const orden = posicion >= 0 ? posicion : numero(i.detalle.orden);
+  const posicion = idsPuntosControl && typeof i.detalle.puntoControlId === 'string' ? idsPuntosControl.indexOf(i.detalle.puntoControlId) : -1;
+  const orden = posicion >= 0 ? posicion : idsPuntosControl ? numero(i.detalle.orden) : null;
   const nombre = typeof i.detalle.nombre === 'string' && i.detalle.nombre.trim() ? i.detalle.nombre.trim() : null;
   const base = orden === null ? 'PC omitido' : `PC ${orden + 1} omitido`;
   return nombre ? `${base} (${nombre})` : base;

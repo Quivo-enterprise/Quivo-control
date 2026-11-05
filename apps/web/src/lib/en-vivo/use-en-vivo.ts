@@ -6,6 +6,7 @@ import {
   TRAZA_EN_VIVO_LIMITE_MAX,
   type ContextoEnVivo,
   type Infraccion,
+  type InfraccionHoy,
   type JornadasDelDia,
   type MolinosResumen,
   type PosicionEnVivo,
@@ -261,6 +262,20 @@ export function useInfraccionesSesion(token: string | null, sesionId: string | n
       // El catch-up de la traza (1 s) no aplica a las infracciones: piso en la cadencia normal.
       return intervalo === false ? false : Math.max(intervalo, INTERVALO_POLL_MS);
     },
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: REINTENTOS,
+    retryDelay,
+  });
+}
+
+/** Alertas de hoy (`/alertas`): misma cadencia que la lista de infracciones de la sesión. */
+export function useInfraccionesHoy(token: string | null) {
+  return useQuery<InfraccionHoy[]>({
+    queryKey: ['en-vivo', 'infracciones-hoy'],
+    enabled: Boolean(token),
+    queryFn: () => infraccionesApi.listarHoy(token as string),
+    refetchInterval: INTERVALO_POLL_MS,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: REINTENTOS,

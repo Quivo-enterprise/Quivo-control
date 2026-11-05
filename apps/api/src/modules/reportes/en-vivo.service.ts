@@ -1,16 +1,18 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { withTenantContext } from '@quivo/db';
+import { Prisma, withTenantContext } from '@quivo/db';
 import {
   ContextoEnVivoSchema,
   PosicionEnVivoSchema,
   SesionEnVivoResumenSchema,
   TrazaEnVivoSchema,
   GRAVEDAD_ORDEN,
+  LIMITE_INFRACCIONES_HOY,
   type ContextoEnVivo,
   type EstadoFrescura,
   type FrescuraEnVivo,
   type GravedadRegla,
   type Infraccion,
+  type InfraccionHoy,
   type PosicionEnVivo,
   type SesionEnVivoResumen,
   type TrazaEnVivo,
@@ -720,6 +722,44 @@ export class EnVivoService {
         LIMIT ${LIMITE_INFRACCIONES_SESION}
       `;
       return filas.map(toInfraccion);
+    });
+  }
+
+  /**
+   * PR G — infracciones abiertas/atendidas de las sesiones vigentes hoy (misma regla que `listarHoy`),
+   * abiertas primero y luego las más recientes. Scope: RLS vía el JOIN a `sesiones_operativas` y,
+   * en profundidad, filtro explícito por sindicato salvo `admin_quivo`.
+   */
+  async listarInfraccionesHoy(actor: AuthenticatedUser, ahora: Date = new Date()): Promise<InfraccionHoy[]> {
+    const jornada = fechaActualBolivia(ahora);
+    const soloSindicato =
+      actor.rol === 'admin_quivo' ? Prisma.empty : Prisma.sql`AND so."sindicatoId" = ${actor.sindicatoId}`;
+    return withTenantContext({ rol: actor.rol, sindicatoId: actor.sindicatoId }, async (tx) => {
+      const filas = await tx.$queryRaw<
+        (Parameters<typeof toInfraccion>[0] & {
+          vehiculoPlaca: string;
+          conductorNombre: string;
+          lineaNombre: string;
+        })[]
+      >`
+        SELECT i.*, v.placa AS "vehiculoPlaca", c.nombre AS "conductorNombre", l.nombre AS "lineaNombre"
+        FROM infracciones i
+        JOIN sesiones_operativas so ON so.id = i."sesionId"
+        JOIN vehiculos v ON v.id = i."vehiculoId"
+        JOIN conductores c ON c.id = i."conductorId"
+        JOIN lineas l ON l.id = i."lineaId"
+        WHERE i.estado IN ('abierta', 'atendida')
+          AND ${sesionesVisiblesSql(ahora, jornada)}
+          ${soloSindicato}
+        ORDER BY (i.estado = 'abierta') DESC, i."inicioTs" DESC
+        LIMIT ${LIMITE_INFRACCIONES_HOY}
+      `;
+      return filas.map((f) => ({
+        ...toInfraccion(f),
+        vehiculoPlaca: f.vehiculoPlaca,
+        conductorNombre: f.conductorNombre,
+        lineaNombre: f.lineaNombre,
+      }));
     });
   }
 

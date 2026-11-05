@@ -41,6 +41,15 @@ export const NAV_ITEMS: NavItem[] = [
     iconName: 'ListOrdered',
   },
   {
+    id: 'alertas',
+    label: 'Alertas',
+    href: '/alertas',
+    // Atender/descartar/sancionar es solo de los admins (`InfraccionesController`): el operador no entra.
+    roles: ['admin_quivo', 'admin_sindicato'],
+    section: 'Operación',
+    iconName: 'Bell',
+  },
+  {
     id: 'sindicatos',
     label: 'Sindicatos',
     href: '/sindicatos',
@@ -145,8 +154,7 @@ export const MOBILE_TAB_ITEMS: NavItem[] = [
   { id: 'hoy', label: 'Hoy', href: '/', roles: rolesDe('dashboard'), iconName: 'House' },
   { id: 'en-vivo', label: 'En vivo', href: '/en-vivo', roles: rolesDe('en-vivo'), iconName: 'Radio' },
   { id: 'salidas', label: 'Salidas', href: '/salidas', roles: rolesDe('salidas'), iconName: 'ListOrdered' },
-  // shortcut: apunta a /reglas hasta que exista /alertas (PR G); ahí pasa a '/alertas'.
-  { id: 'alertas', label: 'Alertas', href: '/reglas', roles: rolesDe('reglas'), iconName: 'Bell' },
+  { id: 'alertas', label: 'Alertas', href: '/alertas', roles: rolesDe('alertas'), iconName: 'Bell' },
 ];
 
 /** `true` si `href` es la ruta actual o un ancestro de ella (`/` solo coincide exacto). */

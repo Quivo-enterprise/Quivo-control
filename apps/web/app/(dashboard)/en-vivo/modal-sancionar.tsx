@@ -34,7 +34,8 @@ export function ModalSancionar(props: {
   placa: string;
   conductor: string;
   /** IDs de los PC en el orden del panel (numeración "PC N"). */
-  idsPc: readonly string[];
+  /** Orden de los PC del recorrido; sin él (p. ej. /alertas) el PC se muestra sin número. */
+  idsPc?: readonly string[];
   onClose: () => void;
   onCreada: () => void;
 }) {

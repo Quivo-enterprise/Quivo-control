@@ -130,6 +130,18 @@ export const InfraccionSchema = z.object({
 });
 export type Infraccion = z.infer<typeof InfraccionSchema>;
 
+/** `GET /reportes/en-vivo/infracciones` — por ahora solo la jornada de hoy (Bolivia). */
+export const InfraccionesHoyQuerySchema = z.object({ fecha: z.literal('hoy').default('hoy') });
+export type InfraccionesHoyQuery = z.infer<typeof InfraccionesHoyQuerySchema>;
+
+/** Fila de la lista de Alertas: la infracción + lo necesario para pintarla sin pedidos extra. */
+export const InfraccionHoySchema = InfraccionSchema.extend({
+  vehiculoPlaca: z.string(),
+  conductorNombre: z.string(),
+  lineaNombre: z.string(),
+});
+export type InfraccionHoy = z.infer<typeof InfraccionHoySchema>;
+
 export const AccionInfraccionSchema = z.enum(['atender', 'descartar']);
 export type AccionInfraccion = z.infer<typeof AccionInfraccionSchema>;
 
