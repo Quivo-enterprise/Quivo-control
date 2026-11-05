@@ -6,7 +6,7 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## En curso — 2026-11-05: panel admin + En vivo en celular, instalable como PWA
+## 2026-11-05: panel admin + En vivo en celular, instalable como PWA (A+B+C mergeados; deploy pendiente de OK)
 
 Plan: [`docs/plan-movil-pwa.md`](plan-movil-pwa.md). Pedido del cliente: usar el panel desde el
 celular, también instalado como PWA. Decisiones del CTO:
@@ -85,7 +85,7 @@ Se hace en 3 PRs en serie:
 
 **Pendientes de B, resueltos en C:** el formulario de `/vehiculos` cortado a 412px y el recorte de ~3.5rem en `/rutas`. Los bloques duplicados del route builder entre `globals.css` y `styles.css` siguen ahí, a propósito.
 
-### PR C — barrido de pantallas + `/rutas` solo lectura (rama `feat/web-movil-barrido`)
+### PR C — barrido de pantallas + `/rutas` solo lectura (#297, `2f5e746`, mergeado 5/11 con `ci` y `acceptance` en verde)
 
 **`/rutas` a ≤720px es solo lectura (solo UI; la API no se tocó):**
 - `soloLectura` sale de `matchMedia(MOBILE_QUERY)`, con init lazy y sync en cambios.
