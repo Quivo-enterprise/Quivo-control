@@ -258,20 +258,27 @@ function EnVivoContenido() {
   // Aviso aria-live de las acciones del panel (atender, descartar, sancionar, copiar…).
   const anunciar = useCallback((a: AvisoPanel) => setAviso(a), []);
 
-  // `?vehiculo=<id>` (enlace "Ver en mapa" de /alertas): se aplica UNA vez, con posiciones frescas y
-  // correctas (no el caché previo ni un refetch fallido), y se consume de la URL para que recargar o
-  // volver atrás no reabra el panel. /posiciones trae una fila por vehículo (la sesión ganadora), por eso
-  // se busca por vehículo y no por sesión. Si el usuario ya tiene una sesión abierta no se le pisa; si el vehículo no está en las de hoy, se avisa.
-  const vehiculoDeUrl = useSearchParams().get('vehiculo');
+  // `?vehiculo=<id>&sesion=<id>` (enlace "Ver en mapa" de /alertas): se consume UNA vez en cuanto termina el primer fetch
+  // tras montar (con datos o con error, para no dejar el parámetro esperando ni abrir el panel minutos después) y se
+  // quita de la URL para que recargar o volver atrás no lo reabra. /posiciones trae una fila por vehículo (la sesión
+  // ganadora), por eso se busca por vehículo. Una sesión ya abierta no se pisa; todo lo que no se abre se avisa.
+  const params = useSearchParams();
+  const vehiculoDeUrl = params.get('vehiculo');
+  const sesionDeUrl = params.get('sesion');
   const urlAplicadaRef = useRef(false);
   useEffect(() => {
-    if (urlAplicadaRef.current || !vehiculoDeUrl || !posiciones.isFetchedAfterMount || posiciones.isError || !posiciones.data) return;
+    if (urlAplicadaRef.current || !vehiculoDeUrl || !posiciones.isFetchedAfterMount) return;
     urlAplicadaRef.current = true;
-    const p = posiciones.data.find((x) => x.vehiculoId === vehiculoDeUrl);
-    if (!p) anunciar({ tono: 'error', texto: 'Ese vehículo no tiene posición hoy' });
-    else if (sesionSeleccionada === null) seleccionarSesion(p.id);
+    const p = posiciones.data?.find((x) => x.vehiculoId === vehiculoDeUrl);
+    if (posiciones.isError || !posiciones.data) anunciar({ tono: 'error', texto: 'No se pudo abrir el vehículo' });
+    else if (!p) anunciar({ tono: 'error', texto: 'Ese vehículo no tiene posición hoy' });
+    else if (sesionSeleccionada !== null) anunciar({ tono: 'error', texto: 'Ya hay un vehículo abierto; no se abrió el de la alerta' });
+    else {
+      seleccionarSesion(p.id);
+      if (sesionDeUrl && sesionDeUrl !== p.id) anunciar({ tono: 'ok', texto: 'Esa alerta es de una sesión anterior; se muestra la actual' });
+    }
     router.replace('/en-vivo');
-  }, [vehiculoDeUrl, posiciones.isFetchedAfterMount, posiciones.isError, posiciones.data, sesionSeleccionada, seleccionarSesion, anunciar, router]);
+  }, [vehiculoDeUrl, sesionDeUrl, posiciones.isFetchedAfterMount, posiciones.isError, posiciones.data, sesionSeleccionada, seleccionarSesion, anunciar, router]);
 
   useEffect(() => {
     if (!aviso) return;

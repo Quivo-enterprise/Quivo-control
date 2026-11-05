@@ -67,7 +67,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - En el celular no hay forma de ver el dashboard completo de escritorio (resúmenes por sindicato, errores de sync); así lo define el plan.
     - El KPI de sanciones lleva a `/reglas` sin filtro, porque `/reglas` no lee parámetros en la URL.
   - No verificado: emulador Android, iOS y dispositivo real. Codex: no verificado.
-- **QA real y gate de UI sobre G y H (después del merge; `fix/web-movil-gate-ui`, PR en curso).**
+- **QA real y gate de UI sobre G y H (después del merge; `fix/web-movil-gate-ui`, PR #308).**
   - G y H se mergearon sin `web-design-guidelines` ni `impeccable audit`, y sin probar las acciones de punta a punta. Se hizo después.
   - QA sin mocks, con API real y DB local (`quivo_movil_qa`), a 412 px: Atender, Descartar y Sancionar verificados contra la DB; KPIs de Hoy iguales a los conteos SQL; búsqueda con `tel:`/`wa.me` por `conductorId`; 5 pestañas; operador redirigido a `/en-vivo` y 403 en la API. Sin bugs de producto.
   - Emulador Android (Chrome): login y 5 pestañas OK.
@@ -77,7 +77,11 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - `/sw.js` da 404 (no hay service worker).
     - `GET /vehiculos` omite en silencio las placas inválidas, y Hoy no avisa.
     - En rutas del drawer ninguna pestaña queda activa.
-  - No verificado: instalar la PWA, iOS, dispositivo real, mapa con clave de Google, dark mode. Codex: no verificado.
+  - "Ver en mapa" tiene un límite aceptado: abre la sesión actual del vehículo, no el punto de la infracción. Si la alerta es de una sesión anterior, no aparece en la lista de ese panel y En vivo lo avisa. También avisa si ya hay otra sesión abierta (no se la pisa), si el vehículo no tiene posición hoy o si `/posiciones` falla. El enlace se consume una sola vez tras el primer fetch.
+  - Alertas: el resultado de Atender, Descartar y Sancionar se aplica al instante en un estado local, sin esperar el refresco, para que un refresco lento o fallido no deje hacer un segundo `PATCH`. Ese estado cede si el servidor cambia después. Un error sobre una tarjeta que ya salió de la lista se muestra arriba, y queda hasta la siguiente acción sobre esa alerta.
+  - Revisión: varias rondas de `/code-review` y `/ponytail-review` como skills. Los hallazgos de código se aplicaron, salvo dos detalles menores sin fallo concreto (`focoTras` como ref y `orden` en las dependencias del efecto).
+  - No verificado: instalar la PWA, iOS, dispositivo real, mapa con clave de Google, dark mode.
+  - **Codex: no verificado (sin cuota).** `verify-fix` corrió el 5/11 y salió con exit 3: "usage limit", vuelve el 2026-12-03 23:24. Las notas "Codex: no verificado" de G y H son previas y nunca se intentó correrlo. **Pendiente:** cuando vuelva la cuota, correr `verify-fix` sobre #303, #306 y #308; si encuentra algo, va en un PR nuevo.
 
 **Pendiente de la capacitación del 5/11 (prod):**
 - **PENDIENTE (sin fecha): sesión de 4701EHA** (chofer real Javier Bravo Soliz), id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Sigue `activa` en prod (`fin: null`) y su último fix es de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.

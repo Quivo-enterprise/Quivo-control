@@ -5428,9 +5428,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 }
 
 @media (max-width: 720px) {
-  .qv-admin-layout--tabs,
   html:has(.qv-admin-layout--tabs) {
     --qv-tabbar-h: calc(64px + env(safe-area-inset-bottom));
+    /* La topbar sticky (altura mínima de abajo) y la tabbar no deben tapar el elemento enfocado. */
+    scroll-padding-top: calc(3.5rem + env(safe-area-inset-top));
+    scroll-padding-bottom: var(--qv-tabbar-h);
   }
 
   .qv-tabbar {
@@ -5489,10 +5491,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     outline: none;
     box-shadow: var(--qv-shadow-focus);
     border-radius: var(--qv-radius-md);
-  }
-
-  html:has(.qv-admin-layout--tabs) {
-    scroll-padding-bottom: var(--qv-tabbar-h);
   }
 
   .qv-admin-layout--tabs .qv-admin-layout__content {

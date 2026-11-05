@@ -356,6 +356,57 @@ test.describe('Panel móvil (Pixel 7)', () => {
     }
   });
 
+  test('Alertas: Atender libera la tarjeta sin esperar el refresco; un 409 deja el mensaje a nivel de página', async () => {
+    test.setTimeout(90_000);
+    const id = '00000000-0000-4000-8000-000000000001';
+    const alerta = {
+      sindicatoId: id, vehiculoId: id, conductorId: id, lineaId: id, rutaId: id, reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
+      sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(), id, sesionId: id,
+      tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '4701EHA',
+      conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+    };
+    let lista: unknown[] = [alerta];
+    let retenido: Promise<void> | null = null;
+    let patches = 0;
+    let status = 200;
+    await page.route('**/v1/reportes/en-vivo/infracciones*', async (r) => {
+      if (retenido) await retenido;
+      await r.fulfill({ json: lista });
+    });
+    await page.route('**/v1/infracciones/*', async (r) => {
+      patches += 1;
+      await (status === 200
+        ? r.fulfill({ json: { ...alerta, estado: 'atendida' } })
+        : r.fulfill({ status, json: { message: 'La infracción ya fue cerrada' } }));
+    });
+    try {
+      await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
+      await expect(page.locator('.qv-alertas__card')).toHaveCount(1);
+      // El refresco queda retenido: la tarjeta sale igual (resultado local) y el foco va al mensaje vacío.
+      let soltar!: () => void;
+      retenido = new Promise<void>((res) => (soltar = res));
+      await page.getByRole('button', { name: 'Atender alerta 4701EHA' }).click();
+      await expect(page.locator('.qv-alertas__vacio')).toBeFocused({ timeout: 5_000 });
+      expect(patches).toBe(1);
+      lista = [{ ...alerta, estado: 'atendida' }];
+      soltar();
+      retenido = null;
+
+      // 409: otro operador la cerró; tras el refresco la tarjeta ya no está y el mensaje sigue visible.
+      lista = [alerta];
+      await page.reload({ waitUntil: 'networkidle' });
+      await expect(page.locator('.qv-alertas__card')).toHaveCount(1);
+      status = 409;
+      lista = [{ ...alerta, estado: 'atendida' }];
+      await page.getByRole('button', { name: 'Atender alerta 4701EHA' }).click();
+      await expect(page.locator('.qv-alertas__card')).toHaveCount(0);
+      await expect(page.getByRole('alert').filter({ hasText: 'La infracción ya fue cerrada' })).toBeVisible();
+    } finally {
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+      await page.unroute('**/v1/infracciones/*');
+    }
+  });
+
   test('Alertas: "Ver en mapa" abre el vehículo de la sesión en En vivo una sola vez', async () => {
     test.setTimeout(90_000);
     const sesionId = '00000000-0000-4000-8000-0000000000f1';
@@ -380,10 +431,12 @@ test.describe('Panel móvil (Pixel 7)', () => {
     try {
       await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
       const ver = page.getByRole('link', { name: 'Ver en mapa 4701EHA' });
-      await expect(ver).toHaveAttribute('href', `/en-vivo?vehiculo=${vehiculoId}`);
+      await expect(ver).toHaveAttribute('href', `/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionAlerta}`);
       await ver.click();
       const panel = page.getByLabel('Detalle del vehículo 4701EHA');
       await expect(panel).toBeVisible({ timeout: 30_000 });
+      // La alerta es de otra sesión que la ganadora: se avisa.
+      await expect(page.getByText('Esa alerta es de una sesión anterior; se muestra la actual')).toBeVisible();
       // El parámetro se consume: recargar o volver atrás no reabre el panel.
       await expect(page).toHaveURL(/\/en-vivo$/);
       await page.getByRole('button', { name: 'Cerrar detalle del vehículo' }).click();

@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Loader, PageHeader, PlateBadge } from '@quivo/design-system';
@@ -56,7 +56,6 @@ export function HoyMovil() {
   const { token } = useAuth();
   const [consulta, setConsulta] = useState('');
   const [reintentando, setReintentando] = useState(false);
-  const mensajeErrorRef = useRef('');
   const n = normalizarBusqueda(consulta).length;
   const buscando = n >= BUSQUEDA_MIN;
   // Home: refresco lento (15 s); las jornadas solo hacen falta para cruzar el conductor al buscar.
@@ -85,8 +84,11 @@ export function HoyMovil() {
     queryFn: () => conductoresApi.listar(token as string),
   });
 
-  const valorDe = <T,>(q: { data: T | undefined; isError: boolean }, f: (d: T) => number | string): number | string | null =>
-    q.data !== undefined ? f(q.data) : q.isError ? '—' : null;
+  // Sin datos, `isError` se limpia en cada refetch (poll de 30 s): `errorUpdateCount` mantiene estable el fallo y el banner.
+  const falla = (q: { isError: boolean; data: unknown; errorUpdateCount: number }) =>
+    q.isError || (q.data === undefined && q.errorUpdateCount > 0);
+  const valorDe = <T,>(q: { data: T | undefined; isError: boolean; errorUpdateCount: number }, f: (d: T) => number | string): number | string | null =>
+    q.data !== undefined ? f(q.data) : falla(q) ? '—' : null;
 
   const conteo = posiciones.data ? conteoPorEstado(posiciones.data) : null;
   const flota = conteo ? resumenFlota(conteo) : null;
@@ -123,19 +125,17 @@ export function HoyMovil() {
     },
   ];
 
-  const fallidas = [posiciones, alertas, sanciones].filter((q) => q.isError);
+  const fallidas = [posiciones, alertas, sanciones].filter(falla);
   const sinDatos = fallidas.some((q) => q.data === undefined);
   const conViejos = fallidas.filter((q) => q.data !== undefined);
   // Con datos viejos conservados (poll fallido) se muestran los KPIs con la hora del último dato bueno.
-  const horaViejos = Math.min(...conViejos.map((q) => q.dataUpdatedAt));
-
-  // Durante el reintento las queries salen de error: se conserva el último texto para que el banner no quede vacío.
-  if (fallidas.length > 0) {
-    mensajeErrorRef.current = [sinDatos && 'No se pudo cargar', conViejos.length > 0 && `No se pudo actualizar; mostrando datos de ${horaBo(horaViejos)}`]
-      .filter(Boolean)
-      .join('. ');
-  }
-  // El banner sigue montado mientras dura el reintento aunque la query ya no esté en error (isError se limpia al empezar el fetch).
+  const mensajeErrorKpis = [
+    sinDatos && 'No se pudo cargar',
+    conViejos.length > 0 && `No se pudo actualizar; mostrando datos de ${horaBo(Math.min(...conViejos.map((q) => q.dataUpdatedAt)))}`,
+  ]
+    .filter(Boolean)
+    .join('. ');
+  // `reintentando` solo deshabilita el botón: el banner ya no depende de `isError`.
   const reintentar = () => {
     setReintentando(true);
     void Promise.allSettled(fallidas.map((q) => q.refetch())).finally(() => setReintentando(false));
@@ -159,9 +159,9 @@ export function HoyMovil() {
           <TarjetaKpi key={k.id} kpi={k} />
         ))}
       </section>
-      {(fallidas.length > 0 || reintentando) && (
+      {fallidas.length > 0 && (
         <div className="qv-hoy__error-kpis">
-          <p role="alert">{mensajeErrorRef.current}</p>
+          <p role="alert">{mensajeErrorKpis}</p>
           <button type="button" className="qv-live-btn" disabled={reintentando} onClick={reintentar}>
             {reintentando ? 'Reintentando…' : 'Reintentar'}
           </button>
@@ -190,7 +190,7 @@ export function HoyMovil() {
         {n > 0 && n < BUSQUEDA_MIN && (
           <p className="qv-hoy__resumen">Escribe al menos {BUSQUEDA_MIN} caracteres.</p>
         )}
-        {buscando && jornadas.isError && (
+        {buscando && jornadas.isError && jornadas.data === undefined && (
           <Alert variant="warning" title="No se pudo cargar la jornada de hoy: no se puede enlazar el conductor de cada vehículo." />
         )}
         {buscando && (vehiculos.isPending || conductores.isPending) && <Loader label="Buscando…" />}

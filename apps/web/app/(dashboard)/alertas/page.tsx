@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Loader, PageHeader, PlateBadge } from '@quivo/design-system';
 import { Ban, ChevronRight, MapPin } from 'lucide-react';
-import { LIMITE_INFRACCIONES_HOY, detalleInfraccion, etiquetaTipoInfraccion, type InfraccionHoy, type Regla } from '@quivo/shared';
+import { LIMITE_INFRACCIONES_HOY, detalleInfraccion, etiquetaTipoInfraccion, type Infraccion, type InfraccionHoy, type Regla } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { infraccionesApi } from '../../../src/lib/api/infracciones';
 import { reglasApi } from '../../../src/lib/api/reglas';
@@ -13,6 +13,8 @@ import {
   ETIQUETA_ESTADO_INFRACCION,
   ETIQUETA_NIVEL,
   NIVELES_DESC,
+  aplicarResueltas,
+  type ResueltasInfraccion,
   duracionInfraccion,
   etiquetaInicioAlerta,
   horaBo,
@@ -47,11 +49,13 @@ export default function AlertasPage() {
   const alertas = useInfraccionesHoy(token);
   const [filtro, setFiltro] = useState<Filtro>('abierta');
   const [enCurso, setEnCurso] = useState<ReadonlyMap<string, Accion>>(new Map());
+  const [resueltas, setResueltas] = useState<ResueltasInfraccion>(new Map());
   const [errores, setErrores] = useState<Readonly<Record<string, string>>>({});
   const [descarte, setDescarte] = useState<{ id: string; motivo: string } | null>(null);
   const [sancion, setSancion] = useState<{ inf: InfraccionHoy; reglas: Regla[] } | null>(null);
 
-  const todas = alertas.data ?? [];
+  // Lo logrado se superpone al instante: el refresco en segundo plano puede tardar o fallar y no debe dejar un 2.º PATCH posible.
+  const todas = aplicarResueltas(alertas.data ?? [], resueltas);
   const cuenta = {
     abierta: todas.filter((i) => i.estado === 'abierta').length,
     atendida: todas.filter((i) => i.estado === 'atendida').length,
@@ -61,14 +65,14 @@ export default function AlertasPage() {
   const grupos = NIVELES_DESC.map((nivel) => ({ nivel, items: visibles.filter((i) => i.gravedad === nivel) })).filter((g) => g.items.length > 0);
   const orden = grupos.flatMap((g) => g.items);
 
-  // Foco: tras una acción lograda (y ya refrescada la lista), si el foco cayó a <body> pasa a la primera acción
+  // Foco: tras una acción lograda (ya aplicada en la lista local), si el foco cayó a <body> pasa a la primera acción
   // de la misma tarjeta (sigue listada, p. ej. filtro Todas) o de la que ocupa su lugar; sin tarjetas, al mensaje vacío.
   const [focoTras, setFocoTras] = useState<{ id: string; idx: number } | null>(null);
   useEffect(() => {
     if (!focoTras) return;
     setFocoTras(null);
     const activo = document.activeElement;
-    if (activo && activo !== document.body && activo.isConnected) return;
+    if (activo && activo !== document.body) return;
     const quedaEnLista = orden.some((i) => i.id === focoTras.id);
     const objetivo = quedaEnLista ? focoTras.id : orden[Math.min(focoTras.idx, orden.length - 1)]?.id;
     const el = objetivo
@@ -91,40 +95,39 @@ export default function AlertasPage() {
       delete resto[id];
       return texto === null ? resto : { ...resto, [id]: texto };
     });
-  async function correr(inf: InfraccionHoy, accion: Accion, fn: () => Promise<void>, refrescarAlTerminar = true) {
+  const resolver = (inf: InfraccionHoy, a: Infraccion['estado']) => {
+    setResueltas((prev) => new Map(prev).set(inf.id, { desde: inf.estado, a }));
+    armarFoco(inf.id);
+    void refrescar(inf.sesionId);
+  };
+  async function correr(inf: InfraccionHoy, accion: Accion, fn: () => Promise<Infraccion | void>, refrescarAlFallar = true) {
     const id = inf.id;
     ponerError(id, null);
     setEnCurso((prev) => new Map(prev).set(id, accion));
-    const liberar = () =>
-      setEnCurso((prev) => {
-        const sig = new Map(prev);
-        sig.delete(id);
-        return sig;
-      });
-    let ok = false;
+    let fallo = false;
     try {
-      await fn();
-      ok = true;
+      const nueva = await fn();
+      if (nueva) resolver(inf, nueva.estado);
     } catch (err) {
+      fallo = true;
       ponerError(id, mensajeAccion(err));
     }
-    // Lograda y con refresco: la tarjeta sigue bloqueada hasta que la lista se actualiza (evita un 2.º PATCH sobre una alerta cerrada).
-    if (!ok || !refrescarAlTerminar) liberar();
-    if (!refrescarAlTerminar) return;
-    const listo = refrescar(inf.sesionId);
-    if (ok) {
-      try {
-        await listo;
-      } finally {
-        liberar();
-      }
+    setEnCurso((prev) => {
+      const sig = new Map(prev);
+      sig.delete(id);
+      return sig;
+    });
+    // Un 409 suele ser que otro operador la cerró: al refrescar la tarjeta sale de la lista y el foco no debe caer a <body>.
+    if (fallo && refrescarAlFallar) {
+      await refrescar(inf.sesionId);
       armarFoco(id);
     }
   }
   const actuar = (inf: InfraccionHoy, accion: 'atender' | 'descartar', nota?: string) =>
     correr(inf, accion, async () => {
-      await infraccionesApi.actualizar(token as string, inf.id, { accion, nota });
+      const nueva = await infraccionesApi.actualizar(token as string, inf.id, { accion, nota });
       setDescarte((cur) => (cur?.id === inf.id ? null : cur));
+      return nueva;
     });
   // Las reglas se piden frescas al pulsar "Sancionar" (igual que en En vivo): el servidor re-deriva la regla al enviar.
   const abrirSancion = (inf: InfraccionHoy) =>
@@ -172,6 +175,12 @@ export default function AlertasPage() {
       {alertas.data && alertas.data.length >= LIMITE_INFRACCIONES_HOY && (
         <Alert variant="info" title={`Se muestran las primeras ${LIMITE_INFRACCIONES_HOY} alertas; puede haber más.`} />
       )}
+
+      {Object.entries(errores)
+        .filter(([id]) => !orden.some((i) => i.id === id))
+        .map(([id, texto]) => (
+          <Alert key={id} variant="danger" title={texto} />
+        ))}
 
       {alertas.isPending ? (
         <Loader label="Cargando alertas…" />
@@ -228,7 +237,7 @@ export default function AlertasPage() {
                         />
                       ) : (
                         <div className="qv-alertas__acciones">
-                          <Link href={`/en-vivo?vehiculo=${inf.vehiculoId}`} prefetch={false} className="qv-live-btn" aria-label={`Ver en mapa ${inf.vehiculoPlaca}`}>
+                          <Link href={`/en-vivo?vehiculo=${inf.vehiculoId}&sesion=${inf.sesionId}`} prefetch={false} className="qv-live-btn" aria-label={`Ver en mapa ${inf.vehiculoPlaca}`}>
                             <MapPin size={16} aria-hidden="true" />
                             Ver en mapa
                           </Link>
@@ -295,7 +304,7 @@ export default function AlertasPage() {
           onCreada={() => {
             const { inf } = sancion;
             setSancion(null);
-            void refrescar(inf.sesionId).then(() => armarFoco(inf.id));
+            resolver(inf, 'sancionada');
           }}
         />
       )}
