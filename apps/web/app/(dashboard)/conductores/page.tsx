@@ -258,8 +258,8 @@ export default function ConductoresPage() {
             const Tag = tel ? 'a' : 'span';
             return (
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                <Phone size={13} style={{ color: 'var(--qv-text-muted)' }} />
-                <Tag href={tel ?? undefined} style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
+                <Phone size={13} aria-hidden="true" style={{ color: 'var(--qv-text-muted)' }} />
+                <Tag href={tel ?? undefined} className={tel ? 'qv-tel-link' : undefined} style={{ fontSize: '0.8125rem', color: tel ? undefined : 'var(--qv-text-primary)' }}>
                   {formatearTelefonoBolivia(row.telefono)}
                 </Tag>
               </div>

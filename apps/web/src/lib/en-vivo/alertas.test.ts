@@ -17,9 +17,11 @@ import {
   resumenContadores,
   siguienteAlertaId,
   telefonoParaWhatsapp,
+  textoAlertasAbiertas,
   urlLlamada,
   urlWhatsapp,
   velocidadKmh,
+  aplicarResueltas,
 } from './alertas';
 import { etiquetaAlerta } from '../../../../../packages/design-system/src/ui/route-map-vehiculo';
 
@@ -248,5 +250,22 @@ describe('etiquetaInicioAlerta', () => {
   });
   it('anterior a ayer: dd/mm HH:MM', () => {
     expect(etiquetaInicioAlerta(new Date('2026-10-12T14:05:00Z'), ahora)).toBe('12/10 10:05');
+  });
+});
+
+describe('textoAlertasAbiertas', () => {
+  it('concuerda singular y plural', () => {
+    expect(textoAlertasAbiertas(0)).toBe('0 alertas abiertas');
+    expect(textoAlertasAbiertas(1)).toBe('1 alerta abierta');
+    expect(textoAlertasAbiertas(3)).toBe('3 alertas abiertas');
+  });
+});
+
+describe('aplicarResueltas', () => {
+  const lista = [{ id: 'a', estado: 'abierta' as const }, { id: 'b', estado: 'abierta' as const }];
+  it('superpone el resultado solo si el servidor sigue en `desde`', () => {
+    const r = new Map([['a', { desde: 'abierta' as const, a: 'atendida' as const }]]);
+    expect(aplicarResueltas(lista, r).map((i) => i.estado)).toEqual(['atendida', 'abierta']);
+    expect(aplicarResueltas([{ id: 'a', estado: 'descartada' as const }], r)[0]!.estado).toBe('descartada');
   });
 });

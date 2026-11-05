@@ -11,7 +11,7 @@ import { conductoresApi } from '../../src/lib/api/conductores';
 import { sancionesApi } from '../../src/lib/api/sanciones';
 import { vehiculosApi } from '../../src/lib/api/vehiculos';
 import { conteoPorEstado, resumenFlota } from '../../src/lib/en-vivo/atencion';
-import { telefonoParaWhatsapp, urlLlamada } from '../../src/lib/en-vivo/alertas';
+import { horaBo, telefonoParaWhatsapp, textoAlertasAbiertas, urlLlamada } from '../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy, useJornadasHoy, usePosicionesEnVivo } from '../../src/lib/en-vivo/use-en-vivo';
 import { BUSQUEDA_MIN, buscarHoy, normalizarBusqueda } from '../../src/lib/hoy/hoy.logic';
 import { mensajeError } from './en-vivo/map-builders';
@@ -36,8 +36,8 @@ function TarjetaKpi({ kpi }: { kpi: Kpi }) {
         {kpi.icono}
         {kpi.etiqueta}
       </span>
-      <span className="qv-hoy__kpi-valor" aria-busy={kpi.valor === null}>
-        {kpi.valor === null ? <span className="qv-hoy__kpi-cargando" role="status" aria-label="Cargando" /> : kpi.valor}
+      <span className="qv-hoy__kpi-valor">
+        {kpi.valor === null ? <span className="qv-hoy__kpi-cargando" aria-hidden="true" /> : kpi.valor}
       </span>
       {kpi.ayuda && <span className="qv-hoy__kpi-ayuda">{kpi.ayuda}</span>}
     </>
@@ -55,7 +55,9 @@ function TarjetaKpi({ kpi }: { kpi: Kpi }) {
 export function HoyMovil() {
   const { token } = useAuth();
   const [consulta, setConsulta] = useState('');
-  const buscando = normalizarBusqueda(consulta).length >= BUSQUEDA_MIN;
+  const [reintentando, setReintentando] = useState(false);
+  const n = normalizarBusqueda(consulta).length;
+  const buscando = n >= BUSQUEDA_MIN;
   // Home: refresco lento (15 s); las jornadas solo hacen falta para cruzar el conductor al buscar.
   const posiciones = usePosicionesEnVivo(token, 15_000);
   const jornadas = useJornadasHoy(token, buscando);
@@ -82,8 +84,11 @@ export function HoyMovil() {
     queryFn: () => conductoresApi.listar(token as string),
   });
 
-  const valorDe = <T,>(q: { data: T | undefined; isError: boolean }, f: (d: T) => number | string): number | string | null =>
-    q.data !== undefined ? f(q.data) : q.isError ? '—' : null;
+  // Sin datos, `isError` se limpia en cada refetch (poll de 30 s): `errorUpdateCount` mantiene estable el fallo y el banner.
+  const falla = (q: { isError: boolean; data: unknown; errorUpdateCount: number }) =>
+    q.isError || (q.data === undefined && q.errorUpdateCount > 0);
+  const valorDe = <T,>(q: { data: T | undefined; isError: boolean; errorUpdateCount: number }, f: (d: T) => number | string): number | string | null =>
+    q.data !== undefined ? f(q.data) : falla(q) ? '—' : null;
 
   const conteo = posiciones.data ? conteoPorEstado(posiciones.data) : null;
   const flota = conteo ? resumenFlota(conteo) : null;
@@ -120,6 +125,22 @@ export function HoyMovil() {
     },
   ];
 
+  const fallidas = [posiciones, alertas, sanciones].filter(falla);
+  const sinDatos = fallidas.some((q) => q.data === undefined);
+  const conViejos = fallidas.filter((q) => q.data !== undefined);
+  // Con datos viejos conservados (poll fallido) se muestran los KPIs con la hora del último dato bueno.
+  const mensajeErrorKpis = [
+    sinDatos && 'No se pudo cargar',
+    conViejos.length > 0 && `No se pudo actualizar; mostrando datos de ${horaBo(Math.min(...conViejos.map((q) => q.dataUpdatedAt)))}`,
+  ]
+    .filter(Boolean)
+    .join('. ');
+  // `reintentando` solo deshabilita el botón: el banner ya no depende de `isError`.
+  const reintentar = () => {
+    setReintentando(true);
+    void Promise.allSettled(fallidas.map((q) => q.refetch())).finally(() => setReintentando(false));
+  };
+
   const { resultados, total } =
     buscando && vehiculos.data && conductores.data
       ? buscarHoy(consulta, vehiculos.data, conductores.data, jornadas.data?.vehiculos ?? [])
@@ -130,11 +151,22 @@ export function HoyMovil() {
     <div className="qv-hoy">
       <PageHeader title="Hoy" subtitle="Resumen del día y consultas rápidas" />
 
-      <section className="qv-hoy__kpis" aria-label="Resumen del día">
+      <p className="qv-visually-hidden" aria-live="polite">
+        {abiertas ? textoAlertasAbiertas(abiertas.length) : ''}
+      </p>
+      <section className="qv-hoy__kpis" aria-label="Resumen del día" aria-busy={kpis.some((k) => k.valor === null)}>
         {kpis.map((k) => (
           <TarjetaKpi key={k.id} kpi={k} />
         ))}
       </section>
+      {fallidas.length > 0 && (
+        <div className="qv-hoy__error-kpis">
+          <p role="alert">{mensajeErrorKpis}</p>
+          <button type="button" className="qv-live-btn" disabled={reintentando} onClick={reintentar}>
+            {reintentando ? 'Reintentando…' : 'Reintentar'}
+          </button>
+        </div>
+      )}
 
       <section className="qv-hoy__buscar">
         <label htmlFor="hoy-buscar" className="qv-hoy__buscar-etiqueta">
@@ -149,12 +181,18 @@ export function HoyMovil() {
             autoComplete="off"
             autoCapitalize="characters"
             spellCheck={false}
-            placeholder="Placa o nombre"
+            placeholder="Placa o nombre…"
             value={consulta}
             onChange={(e) => setConsulta(e.target.value)}
           />
         </div>
 
+        {n > 0 && n < BUSQUEDA_MIN && (
+          <p className="qv-hoy__resumen">Escribe al menos {BUSQUEDA_MIN} caracteres.</p>
+        )}
+        {buscando && jornadas.data === undefined && falla(jornadas) && (
+          <Alert variant="warning" title="No se pudo cargar la jornada de hoy: no se puede enlazar el conductor de cada vehículo." />
+        )}
         {buscando && (vehiculos.isPending || conductores.isPending) && <Loader label="Buscando…" />}
         {buscando && errorBusqueda !== null && (
           <Alert variant="danger" title="No se pudo buscar">
@@ -186,13 +224,13 @@ export function HoyMovil() {
                   {(tel || wa) && (
                     <div className="qv-hoy__resultado-acciones">
                       {tel && (
-                        <a className="qv-live-btn" href={tel}>
+                        <a className="qv-live-btn" href={tel} aria-label={`Llamar a ${r.titulo}`}>
                           <Phone size={18} aria-hidden="true" />
                           Llamar
                         </a>
                       )}
                       {wa && (
-                        <a className="qv-live-btn" href={wa} target="_blank" rel="noopener noreferrer">
+                        <a className="qv-live-btn" href={wa} target="_blank" rel="noopener noreferrer" aria-label={`WhatsApp a ${r.titulo} (abre WhatsApp)`}>
                           <MessageCircle size={18} aria-hidden="true" />
                           WhatsApp
                         </a>

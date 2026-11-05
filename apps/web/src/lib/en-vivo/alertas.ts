@@ -150,6 +150,15 @@ export const ETIQUETA_ESTADO_INFRACCION: Record<Infraccion['estado'], string> = 
   descartada: 'Descartada',
 };
 
+/** Resultado local de una acción lograda: se aplica solo mientras el servidor siga en `desde` (si cambió después, manda él). */
+export type ResueltasInfraccion = ReadonlyMap<string, { desde: Infraccion['estado']; a: Infraccion['estado'] }>;
+export function aplicarResueltas<T extends Pick<Infraccion, 'id' | 'estado'>>(lista: readonly T[], resueltas: ResueltasInfraccion): T[] {
+  return lista.map((i) => {
+    const r = resueltas.get(i.id);
+    return r && i.estado === r.desde ? { ...i, estado: r.a } : i;
+  });
+}
+
 /** Abiertas primero (más recientes arriba); el resto por fecha descendente. */
 export function ordenarInfracciones(infracciones: Infraccion[]): Infraccion[] {
   return [...infracciones].sort((a, b) => {
@@ -240,3 +249,9 @@ export function etiquetaInicioAlerta(inicio: Date, ahora: Date = new Date()): st
   const [, mes, d] = dia.split('-');
   return `${d}/${mes} ${hora}`;
 }
+
+/** HH:MM en hora de La Paz (para "datos de las HH:MM"). */
+export const horaBo = (ts: number | Date): string => HORA_BO.format(ts);
+
+/** "1 alerta abierta" / "3 alertas abiertas". */
+export const textoAlertasAbiertas = (n: number): string => `${n} alerta${n === 1 ? '' : 's'} abierta${n === 1 ? '' : 's'}`;

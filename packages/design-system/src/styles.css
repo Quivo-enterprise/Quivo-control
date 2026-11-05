@@ -3850,6 +3850,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   min-width: 0;
   pointer-events: none;
 }
+/* Sin HUD (vacío/error) la capa de estado (z 20) tapa la pila: el aviso va por encima. */
+.qv-live-toasts--sobre-estado {
+  z-index: 21;
+}
 .qv-live-toast {
   position: relative;
   margin-bottom: 0.4rem;
@@ -3935,6 +3939,12 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     top: 4.25rem; /* bajo los controles del mapa (esquina superior) */
     bottom: auto;
     z-index: 9;
+  }
+  /* Sin hoja del vehículo el fondo está libre: vuelve abajo para no tapar la tarjeta del vacío. */
+  .qv-live-toasts--sobre-estado {
+    top: auto;
+    bottom: 1.25rem;
+    z-index: 21;
   }
   .qv-live-toast {
     border-radius: var(--qv-radius-lg);
@@ -5428,8 +5438,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 }
 
 @media (max-width: 720px) {
-  .qv-admin-layout--tabs {
+  html:has(.qv-admin-layout--tabs) {
     --qv-tabbar-h: calc(64px + env(safe-area-inset-bottom));
+    /* La topbar sticky (altura mínima de abajo) y la tabbar no deben tapar el elemento enfocado. */
+    scroll-padding-top: calc(3.5rem + env(safe-area-inset-top));
+    scroll-padding-bottom: var(--qv-tabbar-h);
   }
 
   .qv-tabbar {
@@ -5629,7 +5642,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   min-height: 2.75rem;
   padding: 0 1rem;
   border-radius: var(--qv-radius-full);
-  border: 2px solid var(--qv-color-primary-soft);
+  border: 2px solid var(--qv-text-secondary);
   background: var(--qv-surface-card);
   color: var(--qv-text-primary);
   font: inherit;
@@ -5641,6 +5654,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   background: var(--qv-color-primary);
   border-color: var(--qv-color-primary);
   color: var(--qv-color-on-primary);
+}
+.qv-alertas__chip[aria-pressed='false']:active {
+  background: var(--qv-color-primary-soft);
 }
 .qv-alertas__chip:focus-visible,
 .qv-alertas__link:focus-visible {
@@ -5701,7 +5717,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   line-height: 1.25;
 }
 .qv-alertas__card .qv-live-inf__detalle {
-  font-size: 0.875rem;
+  font-size: 1rem;
+  color: var(--qv-text-primary);
 }
 .qv-alertas__acciones,
 .qv-alertas__card .qv-live-inf__descarte {
@@ -5752,7 +5769,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   min-height: 6.5rem;
   padding: 0.75rem 0.85rem;
   border-radius: var(--qv-radius-lg, 14px);
-  border: 2px solid var(--qv-color-primary-soft);
+  border: 2px solid var(--qv-text-secondary);
   background: var(--qv-surface-card);
   color: var(--qv-text-primary);
   text-decoration: none;
@@ -5760,6 +5777,13 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 .qv-hoy__kpi--link {
   background: var(--qv-color-primary-subtle);
   touch-action: manipulation;
+}
+.qv-hoy__kpi--link:active {
+  background: var(--qv-color-primary-soft);
+}
+.qv-hoy__kpi--link .qv-hoy__kpi-etiqueta,
+.qv-hoy__kpi--link .qv-hoy__kpi-ayuda {
+  color: var(--qv-text-primary);
 }
 .qv-hoy__kpi--link:focus-visible {
   outline: 2px solid var(--qv-color-primary);
@@ -5822,12 +5846,14 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   min-height: 3.25rem;
   padding: 0 0.85rem;
   border-radius: var(--qv-radius-lg, 14px);
-  border: 2px solid var(--qv-color-primary-soft);
+  border: 2px solid var(--qv-text-secondary);
   background: var(--qv-surface-card);
   color: var(--qv-text-secondary);
 }
 .qv-hoy__buscar-campo:focus-within {
   border-color: var(--qv-color-primary);
+  outline: 2px solid var(--qv-color-primary);
+  outline-offset: 2px;
 }
 .qv-hoy__buscar-campo input {
   flex: 1 1 auto;
@@ -5859,7 +5885,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   gap: 0.6rem;
   padding: 0.85rem 1rem;
   border-radius: var(--qv-radius-lg, 14px);
-  border: 2px solid var(--qv-color-primary-soft);
+  border: 2px solid var(--qv-text-secondary);
   background: var(--qv-surface-card);
 }
 .qv-hoy__resultado-info {
@@ -5885,4 +5911,53 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   min-height: 3rem;
   justify-content: center;
   font-size: 0.9375rem;
+}
+
+.qv-hoy__error-kpis {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0;
+  font-weight: 700;
+  color: var(--qv-color-danger);
+}
+.qv-hoy__error-kpis p {
+  margin: 0;
+}
+.qv-hoy__error-kpis .qv-live-btn {
+  min-height: 2.75rem;
+  font-size: 0.9375rem;
+}
+.qv-hoy__resultado-acciones .qv-live-btn,
+.qv-alertas__card .qv-live-btn:not(.qv-live-btn--primario),
+.qv-hoy__error-kpis .qv-live-btn {
+  border: 2px solid var(--qv-text-secondary);
+  background: var(--qv-surface-card);
+}
+/* Alertas cerradas: sin atenuar los botones (opacity 1); se marcan con fondo neutro y borde apagado. */
+.qv-alertas__card.qv-live-inf--cerrada {
+  opacity: 1;
+  background: var(--qv-surface-sunken);
+  border-color: var(--qv-border-strong);
+  border-left-color: var(--qv-nivel);
+}
+/* Texto chico legible a pleno sol (solo tarjetas de Alertas; En vivo conserva su tamaño). */
+.qv-alertas__card .qv-live-inf__chip,
+.qv-alertas__card .qv-live-inf__estado {
+  font-size: 0.75rem;
+}
+.qv-alertas__card .qv-live-panel__error {
+  font-size: 0.875rem;
+}
+.qv-tel-link {
+  color: var(--qv-color-primary);
+  text-decoration: underline;
+}
+@media (max-width: 720px) {
+  .qv-tel-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
 }
