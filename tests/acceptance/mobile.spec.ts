@@ -400,10 +400,77 @@ test.describe('Panel móvil (Pixel 7)', () => {
       lista = [{ ...alerta, estado: 'atendida' }];
       await page.getByRole('button', { name: 'Atender alerta 4701EHA' }).click();
       await expect(page.locator('.qv-alertas__card')).toHaveCount(0);
-      await expect(page.getByRole('alert').filter({ hasText: 'La infracción ya fue cerrada' })).toBeVisible();
+      const banner = page.getByRole('alert').filter({ hasText: '4701EHA: La infracción ya fue cerrada' });
+      await expect(banner).toBeVisible();
+      await banner.getByRole('button', { name: 'Cerrar' }).click();
+      await expect(banner).toHaveCount(0);
     } finally {
       await page.unroute('**/v1/reportes/en-vivo/infracciones*');
       await page.unroute('**/v1/infracciones/*');
+    }
+  });
+
+  test('Alertas: con filtro Todas, atender y descartar encadenados sacan la tarjeta al instante y el foco no cae a <body>', async () => {
+    test.setTimeout(90_000);
+    const id = '00000000-0000-4000-8000-000000000001';
+    const alerta = {
+      sindicatoId: id, vehiculoId: id, conductorId: id, lineaId: id, rutaId: id, reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
+      sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(), id, sesionId: id,
+      tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '4701EHA',
+      conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+    };
+    let soltar!: () => void;
+    let retenido: Promise<void> | null = null;
+    await page.route('**/v1/reportes/en-vivo/infracciones*', async (r) => {
+      if (retenido) await retenido;
+      await r.fulfill({ json: [alerta] });
+    });
+    await page.route('**/v1/infracciones/*', (r) =>
+      r.fulfill({ json: { ...alerta, estado: r.request().postDataJSON().accion === 'atender' ? 'atendida' : 'descartada' } }),
+    );
+    try {
+      await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
+      await page.getByRole('button', { name: /^Todas/ }).click();
+      retenido = new Promise<void>((res) => (soltar = res));
+      // Atender y luego descartar antes de que llegue el refresco: el servidor sigue en `abierta`, la superposición debe seguir aplicando.
+      await page.getByRole('button', { name: 'Atender alerta 4701EHA' }).click();
+      await expect(page.locator('.qv-alertas__card')).toContainText('Atendida');
+      await page.getByRole('button', { name: 'Descartar alerta 4701EHA' }).click();
+      await page.getByLabel('Motivo del descarte (opcional)').fill('prueba');
+      await page.locator('.qv-alertas__card').getByRole('button', { name: 'Descartar', exact: true }).click();
+      // Descartada no se lista: la tarjeta sale en el mismo render (refresco aún retenido) y el foco va al mensaje vacío.
+      await expect(page.locator('.qv-alertas__card')).toHaveCount(0);
+      await expect(page.locator('.qv-alertas__vacio')).toBeFocused({ timeout: 5_000 });
+      soltar();
+      retenido = null;
+    } finally {
+      soltar?.();
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+      await page.unroute('**/v1/infracciones/*');
+    }
+  });
+
+  test('En vivo: el aviso de "Ver en mapa" se ve aunque no haya HUD (sin posiciones y con error)', async () => {
+    test.setTimeout(90_000);
+    const vehiculo = '00000000-0000-4000-8000-0000000000ff';
+    try {
+      await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [] }));
+      await page.goto(`/en-vivo?vehiculo=${vehiculo}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      const aviso = page.getByText('Ese vehículo no tiene posición hoy');
+      await expect(aviso).toBeVisible({ timeout: 30_000 });
+      await expect(page).toHaveURL(/\/en-vivo$/);
+      // visible != no tapado: el aviso debe quedar por encima de la capa del estado vacío (z-index).
+      const encima = () => aviso.evaluate((el) => { const r = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); });
+      expect(await encima()).toBe(true);
+      await page.unroute('**/v1/reportes/en-vivo/posiciones*');
+
+      // Todos los intentos fallan (los reintentos tardan ~15 s): sin datos tampoco hay HUD.
+      await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ status: 500, json: { message: 'boom' } }));
+      await page.goto(`/en-vivo?vehiculo=${vehiculo}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await expect(page.getByText('No se pudo abrir el vehículo')).toBeVisible({ timeout: 60_000 });
+      await expect(page).toHaveURL(/\/en-vivo$/);
+    } finally {
+      await page.unroute('**/v1/reportes/en-vivo/posiciones*');
     }
   });
 
@@ -436,7 +503,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       const panel = page.getByLabel('Detalle del vehículo 4701EHA');
       await expect(panel).toBeVisible({ timeout: 30_000 });
       // La alerta es de otra sesión que la ganadora: se avisa.
-      await expect(page.getByText('Esa alerta es de una sesión anterior; se muestra la actual')).toBeVisible();
+      await expect(page.getByText('Esa alerta es de otra sesión de este vehículo; no aparece en este panel')).toBeVisible();
       // El parámetro se consume: recargar o volver atrás no reabre el panel.
       await expect(page).toHaveURL(/\/en-vivo$/);
       await page.getByRole('button', { name: 'Cerrar detalle del vehículo' }).click();

@@ -3850,6 +3850,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   min-width: 0;
   pointer-events: none;
 }
+/* Sin HUD (vacío/error) la capa de estado (z 20) tapa la pila: el aviso va por encima. */
+.qv-live-toasts--sobre-estado {
+  z-index: 21;
+}
 .qv-live-toast {
   position: relative;
   margin-bottom: 0.4rem;
@@ -3935,6 +3939,12 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     top: 4.25rem; /* bajo los controles del mapa (esquina superior) */
     bottom: auto;
     z-index: 9;
+  }
+  /* Sin hoja del vehículo el fondo está libre: vuelve abajo para no tapar la tarjeta del vacío. */
+  .qv-live-toasts--sobre-estado {
+    top: auto;
+    bottom: 1.25rem;
+    z-index: 21;
   }
   .qv-live-toast {
     border-radius: var(--qv-radius-lg);

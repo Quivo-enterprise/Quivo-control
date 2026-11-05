@@ -190,7 +190,7 @@ export function HoyMovil() {
         {n > 0 && n < BUSQUEDA_MIN && (
           <p className="qv-hoy__resumen">Escribe al menos {BUSQUEDA_MIN} caracteres.</p>
         )}
-        {buscando && jornadas.isError && jornadas.data === undefined && (
+        {buscando && jornadas.data === undefined && falla(jornadas) && (
           <Alert variant="warning" title="No se pudo cargar la jornada de hoy: no se puede enlazar el conductor de cada vehículo." />
         )}
         {buscando && (vehiculos.isPending || conductores.isPending) && <Loader label="Buscando…" />}

@@ -19,7 +19,6 @@ import {
   etiquetaInicioAlerta,
   horaBo,
   puedeAtender,
-  puedeDescartar,
   puedeSancionar,
   textoAlertasAbiertas,
 } from '../../../src/lib/en-vivo/alertas';
@@ -50,12 +49,13 @@ export default function AlertasPage() {
   const [filtro, setFiltro] = useState<Filtro>('abierta');
   const [enCurso, setEnCurso] = useState<ReadonlyMap<string, Accion>>(new Map());
   const [resueltas, setResueltas] = useState<ResueltasInfraccion>(new Map());
-  const [errores, setErrores] = useState<Readonly<Record<string, string>>>({});
+  const [errores, setErrores] = useState<Readonly<Record<string, { placa: string; texto: string }>>>({});
   const [descarte, setDescarte] = useState<{ id: string; motivo: string } | null>(null);
   const [sancion, setSancion] = useState<{ inf: InfraccionHoy; reglas: Regla[] } | null>(null);
 
   // Lo logrado se superpone al instante: el refresco en segundo plano puede tardar o fallar y no debe dejar un 2.º PATCH posible.
-  const todas = aplicarResueltas(alertas.data ?? [], resueltas);
+  // El servidor solo lista abiertas y atendidas: descartada/sancionada salen en el mismo render (sin foco a <body> tras el refresco).
+  const todas = aplicarResueltas(alertas.data ?? [], resueltas).filter((i) => i.estado === 'abierta' || i.estado === 'atendida');
   const cuenta = {
     abierta: todas.filter((i) => i.estado === 'abierta').length,
     atendida: todas.filter((i) => i.estado === 'atendida').length,
@@ -89,20 +89,22 @@ export default function AlertasPage() {
       queryClient.invalidateQueries({ queryKey: ['en-vivo', 'infracciones-hoy'] }),
       queryClient.invalidateQueries({ queryKey: ['en-vivo', 'infracciones', sesionId] }),
     ]);
-  const ponerError = (id: string, texto: string | null) =>
+  // Guarda la placa: la tarjeta puede haber salido de la lista cuando el error se pinta a nivel de página.
+  const ponerError = (inf: InfraccionHoy, texto: string | null) =>
     setErrores((prev) => {
       const resto = { ...prev };
-      delete resto[id];
-      return texto === null ? resto : { ...resto, [id]: texto };
+      delete resto[inf.id];
+      return texto === null ? resto : { ...resto, [inf.id]: { placa: inf.vehiculoPlaca, texto } };
     });
   const resolver = (inf: InfraccionHoy, a: Infraccion['estado']) => {
-    setResueltas((prev) => new Map(prev).set(inf.id, { desde: inf.estado, a }));
+    // `desde` es el estado del servidor: encadenar acciones antes del refresco no debe romper la superposición.
+    setResueltas((prev) => new Map(prev).set(inf.id, { desde: prev.get(inf.id)?.desde ?? inf.estado, a }));
     armarFoco(inf.id);
     void refrescar(inf.sesionId);
   };
   async function correr(inf: InfraccionHoy, accion: Accion, fn: () => Promise<Infraccion | void>, refrescarAlFallar = true) {
     const id = inf.id;
-    ponerError(id, null);
+    ponerError(inf, null);
     setEnCurso((prev) => new Map(prev).set(id, accion));
     let fallo = false;
     try {
@@ -110,7 +112,7 @@ export default function AlertasPage() {
       if (nueva) resolver(inf, nueva.estado);
     } catch (err) {
       fallo = true;
-      ponerError(id, mensajeAccion(err));
+      ponerError(inf, mensajeAccion(err));
     }
     setEnCurso((prev) => {
       const sig = new Map(prev);
@@ -154,7 +156,10 @@ export default function AlertasPage() {
             type="button"
             className="qv-alertas__chip"
             aria-pressed={filtro === f.id}
-            onClick={() => setFiltro(f.id)}
+            onClick={() => {
+              setFiltro(f.id);
+              setErrores({});
+            }}
           >
             {f.label} <b>{cuenta[f.id]}</b>
           </button>
@@ -178,8 +183,12 @@ export default function AlertasPage() {
 
       {Object.entries(errores)
         .filter(([id]) => !orden.some((i) => i.id === id))
-        .map(([id, texto]) => (
-          <Alert key={id} variant="danger" title={texto} />
+        .map(([id, { placa, texto }]) => (
+          <Alert key={id} variant="danger" title={`${placa}: ${texto}`}>
+            <button type="button" className="qv-live-btn" style={{ minHeight: '2.75rem' }} onClick={() => setErrores(({ [id]: _, ...resto }) => resto)}>
+              Cerrar
+            </button>
+          </Alert>
         ))}
 
       {alertas.isPending ? (
@@ -253,17 +262,15 @@ export default function AlertasPage() {
                               {corriendo === 'atender' ? 'Atendiendo…' : 'Atender'}
                             </button>
                           )}
-                          {puedeDescartar(inf) && (
-                            <button
-                              type="button"
-                              className="qv-live-btn"
-                              disabled={pendiente}
-                              aria-label={`Descartar alerta ${inf.vehiculoPlaca}`}
-                              onClick={() => setDescarte({ id: inf.id, motivo: '' })}
-                            >
-                              Descartar
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            className="qv-live-btn"
+                            disabled={pendiente}
+                            aria-label={`Descartar alerta ${inf.vehiculoPlaca}`}
+                            onClick={() => setDescarte({ id: inf.id, motivo: '' })}
+                          >
+                            Descartar
+                          </button>
                           {puedeSancionar(inf) && (
                             <button
                               type="button"
@@ -280,7 +287,7 @@ export default function AlertasPage() {
                       )}
                       {errores[inf.id] && (
                         <p className="qv-live-panel__error" role="alert">
-                          {errores[inf.id]}
+                          {errores[inf.id]?.texto}
                         </p>
                       )}
                     </li>

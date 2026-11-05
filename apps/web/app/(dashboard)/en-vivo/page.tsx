@@ -275,7 +275,7 @@ function EnVivoContenido() {
     else if (sesionSeleccionada !== null) anunciar({ tono: 'error', texto: 'Ya hay un vehículo abierto; no se abrió el de la alerta' });
     else {
       seleccionarSesion(p.id);
-      if (sesionDeUrl && sesionDeUrl !== p.id) anunciar({ tono: 'ok', texto: 'Esa alerta es de una sesión anterior; se muestra la actual' });
+      if (sesionDeUrl && sesionDeUrl !== p.id) anunciar({ tono: 'error', texto: 'Esa alerta es de otra sesión de este vehículo; no aparece en este panel' });
     }
     router.replace('/en-vivo');
   }, [vehiculoDeUrl, sesionDeUrl, posiciones.isFetchedAfterMount, posiciones.isError, posiciones.data, sesionSeleccionada, seleccionarSesion, anunciar, router]);
@@ -693,92 +693,93 @@ function EnVivoContenido() {
             </div>
           )}
 
+          {/* Controles del mapa (la frescura del vehículo seleccionado vive en su panel) */}
           {hayHud && (
-            <>
-              {/* Controles del mapa (la frescura del vehículo seleccionado vive en su panel) */}
-              <div className="qv-live-controles" role="group" aria-label="Controles del mapa">
-                <button
-                  type="button"
-                  className="qv-live-btn"
-                  onClick={alternarSeguir}
-                  disabled={!puedeSeguir}
-                  aria-pressed={seguir && puedeSeguir}
-                  title="Seguir vehículo en tiempo real"
-                >
-                  <Navigation size={14} aria-hidden="true" className={seguir && puedeSeguir ? 'qv-live-ico-seguir' : undefined} />
-                  Seguir
-                </button>
-                <button
-                  type="button"
-                  className="qv-live-btn qv-live-btn--icono"
-                  onClick={() => setFitKeyOverride((v) => v + 1)}
-                  title="Reencuadrar toda la flota"
-                  aria-label="Reencuadrar toda la flota"
-                >
-                  <Maximize2 size={14} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className="qv-live-btn qv-live-btn--icono"
-                  onClick={() => void handleManualRefresh()}
-                  title="Actualizar datos GPS ahora"
-                  aria-label="Actualizar datos GPS ahora"
-                >
-                  <RefreshCw size={14} aria-hidden="true" className={isRefreshing ? 'qv-live-ico-girando' : undefined} />
-                </button>
-              </div>
+            <div className="qv-live-controles" role="group" aria-label="Controles del mapa">
+              <button
+                type="button"
+                className="qv-live-btn"
+                onClick={alternarSeguir}
+                disabled={!puedeSeguir}
+                aria-pressed={seguir && puedeSeguir}
+                title="Seguir vehículo en tiempo real"
+              >
+                <Navigation size={14} aria-hidden="true" className={seguir && puedeSeguir ? 'qv-live-ico-seguir' : undefined} />
+                Seguir
+              </button>
+              <button
+                type="button"
+                className="qv-live-btn qv-live-btn--icono"
+                onClick={() => setFitKeyOverride((v) => v + 1)}
+                title="Reencuadrar toda la flota"
+                aria-label="Reencuadrar toda la flota"
+              >
+                <Maximize2 size={14} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="qv-live-btn qv-live-btn--icono"
+                onClick={() => void handleManualRefresh()}
+                title="Actualizar datos GPS ahora"
+                aria-label="Actualizar datos GPS ahora"
+              >
+                <RefreshCw size={14} aria-hidden="true" className={isRefreshing ? 'qv-live-ico-girando' : undefined} />
+              </button>
+            </div>
+          )}
 
-              {/* PILA DE AVISOS sobre el mapa, abajo a la izquierda. Las regiones aria-live están
-              SIEMPRE montadas: los lectores de pantalla solo anuncian cambios de contenido en una
-              región que ya estaba en el DOM antes de poblarse. */}
-              <div className="qv-live-toasts">
-                {/* Filtro sin resultados — estado vacío honesto: la flota existe, esta línea (o este
-                filtro) no tiene nadie reportando ahora mismo. El mapa sigue montado (el usuario puede
-                cambiar el filtro sin perder contexto), a diferencia del empty-state de página completa
-                de arriba (que es para "no hay NADA en toda la jornada"). */}
-                <div role="status" aria-live="polite">
-                  {aviso && (
-                    <div className={`qv-live-toast qv-live-toast--${aviso.tono === 'ok' ? 'ok' : 'error'}`}>
-                      {aviso.tono === 'ok' ? (
-                        <CheckCircle2 size={14} aria-hidden="true" className="qv-live-toast__ico--ok" />
-                      ) : (
-                        <AlertTriangle size={14} aria-hidden="true" className="qv-live-toast__ico--error" />
-                      )}
-                      <span>{aviso.texto}</span>
-                    </div>
+          {/* PILA DE AVISOS sobre el mapa, abajo a la izquierda. Las regiones aria-live están
+          SIEMPRE montadas: los lectores de pantalla solo anuncian cambios de contenido en una
+          región que ya estaba en el DOM antes de poblarse. */}
+          <div className={hayHud ? 'qv-live-toasts' : 'qv-live-toasts qv-live-toasts--sobre-estado'}>
+            {/* Filtro sin resultados — estado vacío honesto: la flota existe, esta línea (o este
+            filtro) no tiene nadie reportando ahora mismo. El mapa sigue montado (el usuario puede
+            cambiar el filtro sin perder contexto), a diferencia del empty-state de página completa
+            de arriba (que es para "no hay NADA en toda la jornada"). */}
+            <div role="status" aria-live="polite">
+              {aviso && (
+                <div className={`qv-live-toast qv-live-toast--${aviso.tono === 'ok' ? 'ok' : 'error'}`}>
+                  {aviso.tono === 'ok' ? (
+                    <CheckCircle2 size={14} aria-hidden="true" className="qv-live-toast__ico--ok" />
+                  ) : (
+                    <AlertTriangle size={14} aria-hidden="true" className="qv-live-toast__ico--error" />
                   )}
-                  {posicionesFiltradas.length === 0 && (
-                    <div className="qv-live-toast qv-live-toast--aviso">
-                      <AlertTriangle size={14} aria-hidden="true" className="qv-live-toast__ico--aviso" />
-                      {(nivelFiltro || estadoFiltro) && posicionesDeLinea.length > 0 ? (
-                        <>
-                          <span>
-                            {nivelFiltro && estadoFiltro
-                              ? 'Ningún vehículo cumple los filtros de nivel y de estado.'
-                              : nivelFiltro
-                                ? `Ningún vehículo tiene alertas ${ETIQUETA_NIVEL[nivelFiltro].plural} ahora.`
-                                : 'Ningún vehículo está en el estado elegido.'}
-                          </span>
-                          <button
-                            type="button"
-                            className="qv-live-btn qv-live-btn--sm"
-                            onClick={() => {
-                              setNivelFiltro(null);
-                              setEstadoFiltro(null);
-                            }}
-                          >
-                            Quitar filtros
-                          </button>
-                        </>
-                      ) : (
-                        <span>
-                          Ningún vehículo de esta línea está reportando ahora. Probá con todas las líneas.
-                        </span>
-                      )}
-                    </div>
+                  <span>{aviso.texto}</span>
+                </div>
+              )}
+              {hayHud && posicionesFiltradas.length === 0 && (
+                <div className="qv-live-toast qv-live-toast--aviso">
+                  <AlertTriangle size={14} aria-hidden="true" className="qv-live-toast__ico--aviso" />
+                  {(nivelFiltro || estadoFiltro) && posicionesDeLinea.length > 0 ? (
+                    <>
+                      <span>
+                        {nivelFiltro && estadoFiltro
+                          ? 'Ningún vehículo cumple los filtros de nivel y de estado.'
+                          : nivelFiltro
+                            ? `Ningún vehículo tiene alertas ${ETIQUETA_NIVEL[nivelFiltro].plural} ahora.`
+                            : 'Ningún vehículo está en el estado elegido.'}
+                      </span>
+                      <button
+                        type="button"
+                        className="qv-live-btn qv-live-btn--sm"
+                        onClick={() => {
+                          setNivelFiltro(null);
+                          setEstadoFiltro(null);
+                        }}
+                      >
+                        Quitar filtros
+                      </button>
+                    </>
+                  ) : (
+                    <span>
+                      Ningún vehículo de esta línea está reportando ahora. Probá con todas las líneas.
+                    </span>
                   )}
                 </div>
-
+              )}
+            </div>
+            {hayHud && (
+              <>
                 {sinConexionConDatos && (
                   <div role="status" aria-live="polite">
                     <div className="qv-live-toast qv-live-toast--warning">
@@ -834,9 +835,9 @@ function EnVivoContenido() {
                     </div>
                   )}
                 </div>
-              </div>
-            </>
-          )}
+              </>
+            )}
+          </div>
         </div>
 
         {/* CAJÓN DEL VEHÍCULO (cabecera, acciones rápidas, infracciones, PCs y stats): columna de
