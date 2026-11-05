@@ -20,6 +20,7 @@ function veh(p: Partial<JornadaVehiculo> & { placa: string }): JornadaVehiculo {
     sindicatoNombre: 'Sindicato A',
     vehiculoId: `00000000-0000-4000-8000-${p.placa.replace(/\D/g, '').padStart(12, '0')}`,
     numeroInterno: null,
+    conductorId: null,
     conductorNombre: null,
     lineaId: L1,
     lineaNombre: 'L1',

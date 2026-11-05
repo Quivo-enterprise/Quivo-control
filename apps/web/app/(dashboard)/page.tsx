@@ -45,6 +45,8 @@ import { conductoresApi } from '../../src/lib/api/conductores';
 import { rotacionesApi } from '../../src/lib/api/rotaciones';
 import { sancionesApi } from '../../src/lib/api/sanciones';
 import { syncErroresApi } from '../../src/lib/api/sync-errores';
+import { useEsMovil } from '../../src/lib/use-es-movil';
+import { HoyMovil } from './hoy-movil';
 
 const ESTADO_COLOR_MAP: Record<string, string> = {
   activo: '#16a34a',
@@ -63,6 +65,11 @@ const ESTADO_LABEL_MAP: Record<string, string> = {
 };
 
 export default function DashboardHomePage() {
+  const esMovil = useEsMovil();
+  return esMovil ? <HoyMovil /> : <DashboardEscritorio />;
+}
+
+function DashboardEscritorio() {
   const { token, user } = useAuth();
   const [sindicatos, setSindicatos] = useState<Sindicato[]>([]);
   const [socios, setSocios] = useState<Socio[]>([]);
