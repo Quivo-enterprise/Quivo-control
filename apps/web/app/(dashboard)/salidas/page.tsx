@@ -4,6 +4,8 @@ import { Suspense, useMemo } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Alert, Loader, PageHeader, Select } from '@quivo/design-system';
 import { useAuth } from '../../../src/lib/auth/auth-context';
+import { useEsMovil } from '../../../src/lib/use-es-movil';
+import { BaseRapida } from './base-rapida';
 import { FilaEnVivo } from './fila-en-vivo';
 import { FrecuenciasPanel } from './frecuencias-panel';
 import { GruposPanel } from './grupos-panel';
@@ -24,6 +26,7 @@ function SalidasContenido() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const esMovil = useEsMovil();
   const esAdmin = ROLES_GRUPOS.includes(user?.rol ?? '');
   const terminales = useTerminales(token);
   const vehiculos = useVehiculosSalida(token);
@@ -78,6 +81,7 @@ function SalidasContenido() {
       )}
       {token && elegida && (
         <>
+          {esMovil && <BaseRapida token={token} pcId={elegida} />}
           <FilaEnVivo token={token} pcId={elegida} internoPorVehiculo={internoPorVehiculo} />
           <FrecuenciasPanel
             token={token}
