@@ -3824,8 +3824,8 @@ body {
 /* Móvil (≤720px): /rutas solo lectura, alto = pantalla menos topbar, HUD bajo el drawer de navegación. */
 @media (max-width: 720px) {
   .qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__content {
-    height: calc(100dvh - 3.5rem - env(safe-area-inset-top)) !important;
-    max-height: calc(100dvh - 3.5rem - env(safe-area-inset-top)) !important;
+    height: calc(100dvh - 3.5rem - env(safe-area-inset-top) - var(--qv-tabbar-h, 0px)) !important;
+    max-height: calc(100dvh - 3.5rem - env(safe-area-inset-top) - var(--qv-tabbar-h, 0px)) !important;
   }
 
   .qv-route-builder-wrapper {

@@ -138,6 +138,22 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ];
 
+const rolesDe = (id: string) => NAV_ITEMS.find((i) => i.id === id)?.roles ?? [];
+
+/** Pestañas inferiores móviles (las 4 primeras; "Más" la pone el layout). Mismos roles que sus páginas. */
+export const MOBILE_TAB_ITEMS: NavItem[] = [
+  { id: 'hoy', label: 'Hoy', href: '/', roles: rolesDe('dashboard'), iconName: 'House' },
+  { id: 'en-vivo', label: 'En vivo', href: '/en-vivo', roles: rolesDe('en-vivo'), iconName: 'Radio' },
+  { id: 'salidas', label: 'Salidas', href: '/salidas', roles: rolesDe('salidas'), iconName: 'ListOrdered' },
+  // shortcut: apunta a /reglas hasta que exista /alertas (PR G); ahí pasa a '/alertas'.
+  { id: 'alertas', label: 'Alertas', href: '/reglas', roles: rolesDe('reglas'), iconName: 'Bell' },
+];
+
+/** `true` si `href` es la ruta actual o un ancestro de ella (`/` solo coincide exacto). */
+export function isNavActive(pathname: string, href: string): boolean {
+  return pathname === href || (href !== '/' && pathname.startsWith(`${href}/`));
+}
+
 export function filterNavItemsByRole(items: NavItem[], rol: string): NavItem[] {
   return items.filter((item) => item.roles.includes(rol));
 }

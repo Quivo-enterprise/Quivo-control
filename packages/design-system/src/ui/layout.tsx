@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { cx } from '../utils.js';
 import { Alert, Button } from './primitives.js';
 import { Input } from './form.js';
@@ -17,12 +17,68 @@ export interface AdminLayoutProps {
   mobileTitle?: string;
   /** Cambia con la ruta (p. ej. `pathname`): cierra el drawer móvil. */
   routeKey?: string;
+  /** Pestañas inferiores móviles (≤720px); la última, "Más", abre el drawer y reemplaza a la hamburguesa. */
+  mobileTabs?: MobileTab[];
+  /** Sin topbar/header/contenido: solo drawer + pestañas alrededor de `children` (pantalla completa, p. ej. En vivo). En escritorio no se ve. Requiere `mobileTabs`: sin ellas en móvil no hay cómo abrir el drawer (el design system no lee `process.env`, por eso no hay warning en dev). */
+  bare?: boolean;
+}
+
+export interface MobileTab {
+  id: string;
+  label: string;
+  href: string;
+  icon: ReactNode;
+  active?: boolean;
+  onClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
+}
+
+export interface MobileTabBarProps {
+  tabs: MobileTab[];
+  drawerId: string;
+  moreOpen: boolean;
+  onMore: () => void;
+  moreRef?: Ref<HTMLButtonElement>;
+}
+
+/** Barra inferior solo-móvil (CSS la oculta en escritorio). */
+export function MobileTabBar({ tabs, drawerId, moreOpen, onMore, moreRef }: MobileTabBarProps) {
+  return (
+    <nav className="qv-tabbar" aria-label="Pestañas">
+      {tabs.map((tab) => (
+        <a
+          key={tab.id}
+          href={tab.href}
+          className={cx('qv-tabbar__tab', tab.active && 'qv-tabbar__tab--active')}
+          aria-current={tab.active ? 'page' : undefined}
+          onClick={tab.onClick}
+        >
+          <span className="qv-tabbar__pill" aria-hidden="true">{tab.icon}</span>
+          {tab.label}
+        </a>
+      ))}
+      <button
+        ref={moreRef}
+        type="button"
+        className="qv-tabbar__tab"
+        aria-expanded={moreOpen}
+        aria-controls={drawerId}
+        onClick={onMore}
+      >
+        <span className="qv-tabbar__pill" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" />
+          </svg>
+        </span>
+        Más
+      </button>
+    </nav>
+  );
 }
 
 export const MOBILE_QUERY = '(max-width: 720px)';
 
 /** A ≤720px la sidebar es un drawer izquierdo con topbar sticky; en escritorio nada cambia. */
-export function AdminLayout({ sidebar, header, children, mobileTitle, routeKey }: AdminLayoutProps) {
+export function AdminLayout({ sidebar, header, children, mobileTitle, routeKey, mobileTabs, bare }: AdminLayoutProps) {
   const [navOpen, setNavOpen] = useState(false);
   const drawerId = useId();
   const mainRef = useRef<HTMLDivElement>(null);
@@ -63,7 +119,14 @@ export function AdminLayout({ sidebar, header, children, mobileTitle, routeKey }
   }, [navOpen]);
 
   return (
-    <div className={cx('qv-admin-layout', navOpen && 'qv-admin-layout--nav-open')}>
+    <div
+      className={cx(
+        'qv-admin-layout',
+        navOpen && 'qv-admin-layout--nav-open',
+        mobileTabs && 'qv-admin-layout--tabs',
+        bare && 'qv-admin-layout--bare',
+      )}
+    >
       <aside
         ref={drawerRef}
         id={drawerId}
@@ -86,24 +149,41 @@ export function AdminLayout({ sidebar, header, children, mobileTitle, routeKey }
       </aside>
       <div className="qv-admin-layout__backdrop" aria-hidden="true" onClick={() => setNavOpen(false)} />
       <div ref={mainRef} className="qv-admin-layout__main">
-        <div className="qv-admin-layout__topbar">
-          <button
-            ref={toggleRef}
-            type="button"
-            className="qv-admin-layout__menu-btn"
-            aria-label="Abrir menú"
-            aria-expanded={navOpen}
-            aria-controls={drawerId}
-            onClick={() => setNavOpen(true)}
-          >
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-              <path d="M4 7h16M4 12h16M4 17h16" />
-            </svg>
-          </button>
-          <span className="qv-admin-layout__topbar-title">{mobileTitle || 'Quivo'}</span>
-        </div>
-        {header && <div className="qv-admin-layout__header">{header}</div>}
-        <main className="qv-admin-layout__content">{children}</main>
+        {bare ? (
+          children
+        ) : (
+          <>
+            <div className="qv-admin-layout__topbar">
+              {!mobileTabs && (
+                <button
+                  ref={toggleRef}
+                  type="button"
+                  className="qv-admin-layout__menu-btn"
+                  aria-label="Abrir menú"
+                  aria-expanded={navOpen}
+                  aria-controls={drawerId}
+                  onClick={() => setNavOpen(true)}
+                >
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                    <path d="M4 7h16M4 12h16M4 17h16" />
+                  </svg>
+                </button>
+              )}
+              <span className="qv-admin-layout__topbar-title">{mobileTitle || 'Quivo'}</span>
+            </div>
+            {header && <div className="qv-admin-layout__header">{header}</div>}
+            <main className="qv-admin-layout__content">{children}</main>
+          </>
+        )}
+        {mobileTabs && (
+          <MobileTabBar
+            tabs={mobileTabs}
+            drawerId={drawerId}
+            moreOpen={navOpen}
+            onMore={() => setNavOpen(true)}
+            moreRef={toggleRef}
+          />
+        )}
       </div>
     </div>
   );

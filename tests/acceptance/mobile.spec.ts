@@ -64,7 +64,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
   });
 
   test('drawer de navegación', async () => {
-    const burger = page.getByRole('button', { name: 'Abrir menú' });
+    const burger = page.getByRole('button', { name: 'Más', exact: true });
     const nav = page.getByRole('navigation', { name: 'Navegación principal' });
     await expect(burger).toBeVisible();
 
@@ -86,6 +86,30 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await nav.getByRole('link', { name: 'Vehículos' }).click();
     await expect(page).toHaveURL(/\/vehiculos\/?$/, { timeout: 30_000 });
     await expect(burger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('tabbar: visible, Más abre el drawer y Salidas navega', async () => {
+    await page.goto('/', { waitUntil: 'networkidle', timeout: 60_000 });
+    const tabbar = page.getByRole('navigation', { name: 'Pestañas', exact: true });
+    await expect(tabbar).toBeVisible();
+    for (const name of ['Hoy', 'En vivo', 'Salidas', 'Alertas', 'Más']) {
+      const box = (await tabbar.getByText(name, { exact: true }).locator('xpath=ancestor-or-self::*[self::a or self::button]').boundingBox())!;
+      expect(box.height, name).toBeGreaterThanOrEqual(44);
+    }
+    await expect(tabbar.getByRole('link', { name: 'Hoy' })).toHaveAttribute('aria-current', 'page');
+    const viewport = page.viewportSize()!;
+    const bar = (await tabbar.boundingBox())!;
+    expect(Math.round(bar.y + bar.height)).toBe(viewport.height);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+
+    await tabbar.getByRole('button', { name: 'Más' }).click();
+    await expect(page.getByRole('navigation', { name: 'Navegación principal' }).getByRole('link', { name: 'Vehículos' })).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await tabbar.getByRole('link', { name: 'Salidas' }).click();
+    await expect(page).toHaveURL(/\/salidas\/?$/, { timeout: 30_000 });
+    await expect(page.getByRole('navigation', { name: 'Pestañas', exact: true }).getByRole('link', { name: 'Salidas' })).toHaveAttribute('aria-current', 'page');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
   });
 
   test('manifest PWA e iconos', async ({ request }) => {
@@ -138,6 +162,17 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
     const barra = page.getByLabel('Barra de mando de En vivo');
     await expect(barra).toBeVisible({ timeout: 30_000 });
+    const tabbar = page.getByRole('navigation', { name: 'Pestañas', exact: true });
+    await expect(tabbar).toBeVisible();
+    const tabbarBox = (await tabbar.boundingBox())!;
+    const barraBox = (await barra.boundingBox())!;
+    expect(barraBox.y + barraBox.height, 'la barra de mando no debe pisar la tabbar').toBeLessThanOrEqual(tabbarBox.y + 1);
+    const shellBox = (await page.locator('.qv-live-standalone-shell').boundingBox())!;
+    expect(shellBox.y + shellBox.height, 'la pantalla En vivo no debe pisar la tabbar').toBeLessThanOrEqual(tabbarBox.y + 1);
+    await expect(page.locator('.qv-live-barra__salir')).toBeHidden(); // Salir/Panel viven en Más y Hoy
+    await tabbar.getByRole('button', { name: 'Más' }).click();
+    await expect(page.getByRole('button', { name: 'Cerrar sesión' })).toBeVisible();
+    await page.keyboard.press('Escape');
     expect((await barra.boundingBox())!.height).toBeLessThanOrEqual(132); // 2 filas: 114 px a 16 px de base, ~128 px con la base de 18 px móvil
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 
