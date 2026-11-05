@@ -67,7 +67,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - En el celular no hay forma de ver el dashboard completo de escritorio (resúmenes por sindicato, errores de sync); así lo define el plan.
     - El KPI de sanciones lleva a `/reglas` sin filtro, porque `/reglas` no lee parámetros en la URL.
   - No verificado: emulador Android, iOS y dispositivo real. Codex: no verificado.
-- **QA real y gate de UI sobre G y H (después del merge; #308 mergeado, `955b153`).** `ci` y `acceptance` en verde sobre `fd7b46e`. Con esto el plan móvil D–H queda completo en `main`, sin desplegar: la API nueva y la web salen con r37, que corre el CTO.
+- **QA real y gate de UI sobre G y H (después del merge; #308 mergeado, `955b153`).** `ci` y `acceptance` en verde sobre `fd7b46e`. Con esto el plan móvil D–H queda completo en `main`, desplegado en r37 el mismo 5/11.
   - G y H se mergearon sin `web-design-guidelines` ni `impeccable audit`, y sin probar las acciones de punta a punta. Se hizo después.
   - QA sin mocks, con API real y DB local (`quivo_movil_qa`), a 412 px: Atender, Descartar y Sancionar verificados contra la DB; KPIs de Hoy iguales a los conteos SQL; búsqueda con `tel:`/`wa.me` por `conductorId`; 5 pestañas; operador redirigido a `/en-vivo` y 403 en la API. Sin bugs de producto.
   - Emulador Android (Chrome): login y 5 pestañas OK.
@@ -81,12 +81,15 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - Alertas: el resultado de Atender, Descartar y Sancionar se aplica al instante en un estado local, sin esperar el refresco, para que un refresco lento o fallido no deje hacer un segundo `PATCH`. Ese estado cede si el servidor cambia después. Descartada y sancionada salen de la lista en el mismo render, porque el endpoint solo devuelve abiertas y atendidas. Un error sobre una tarjeta que ya salió de la lista se muestra arriba con la placa y un botón Cerrar.
   - Revisión: varias rondas de `/code-review` y `/ponytail-review` como skills. Los hallazgos de código se aplicaron, salvo dos detalles menores sin fallo concreto (`focoTras` como ref y `orden` en las dependencias del efecto).
   - Emulador Android sobre `main` (`557992a`), Chrome 113 por `adb reverse`: login real y toques en las 5 pestañas; Más abre el drawer; sin overflow en En vivo, Salidas y Alertas.
-  - **Instalación de la PWA: no pasó en local.** Chrome no marca errores (`Page.getInstallabilityErrors` vacío) y lee nombre e ícono, pero solo ofrece "Add to Home screen", no "Install app". El acceso directo lleva la insignia de Chrome y abre en una pestaña normal, no en standalone. Causa probable, sin confirmar: `http://localhost` no puede generar una WebAPK, que pide HTTPS. Otra posible: no hay service worker (`/sw.js` da 404). **Pendiente:** probar la instalación en un celular contra la URL HTTPS después del deploy; si tampoco aparece "Install app", agregar el service worker.
+  - **Deploy r37 hecho (5/11, con OK del CTO):** API, web y worker en `r37-20261105` (`quivo-api-00054-snb`, `quivo-web-00025-d77`, `quivo-worker-00025-f2k`), migraciones aplicadas, `/v1/health/ready` ok. Rollback: API `r35-20261027`, web `r36-20261028`.
+  - Smoke de solo lectura en prod a 412 px: login real; Hoy, En vivo, Salidas y Alertas sin overflow ni respuestas HTTP >= 400; mapa con clave de Google cargado. Único error de consola: el fallback de mapa vectorial a raster del Chromium headless.
+  - **Instalación de la PWA:** por HTTPS Chrome sí ofrece "Install app" y abre el diálogo con nombre e ícono, sin service worker. En `http://localhost` solo ofrecía un acceso directo, así que la causa era HTTP. La instalación no terminó en el emulador: no tiene cuenta Google y su Play es un stub (`1.8`), por lo que no genera la WebAPK. **Pendiente:** instalar en un celular real y confirmar que abre en standalone.
+  - **Observación sin arreglar:** En vivo puede decir "Sin infracciones abiertas" con alertas abiertas en `/alertas`. Visto en prod: 3 alertas de 1616PIL en sesiones anteriores del día, y `/posiciones` solo cuenta la sesión ganadora (0). Hoy y Alertas sí las muestran. Es la regla de una fila por vehículo, no un fallo de r37. Decisión del CTO: contar por vehículo o cambiar el texto.
   - No verificado: iOS, dispositivo real, mapa con clave de Google, dark mode.
   - **Codex: no verificado (sin cuota).** `verify-fix` corrió el 5/11 y salió con exit 3: "usage limit", vuelve el 2026-12-03 23:24. Las notas "Codex: no verificado" de G y H son previas y nunca se intentó correrlo. **Pendiente:** cuando vuelva la cuota, correr `verify-fix` sobre #303, #306 y #308; si encuentra algo, va en un PR nuevo.
 
 **Pendiente de la capacitación del 5/11 (prod):**
-- **PENDIENTE (sin fecha): sesión de 4701EHA** (chofer real Javier Bravo Soliz), id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Sigue `activa` en prod (`fin: null`) y su último fix es de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.
+- **Sesión de 4701EHA: cerrada por r37 (#290).** Tras el deploy quedó `activa: false`, sin infracciones de hoy ni sanción pendiente. **Sigue pendiente la opción 3:** la causa del 401 en `refresh` no se investigó. Chofer real Javier Bravo Soliz, id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Antes del deploy seguía `activa` y su último fix era de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.
   - Logs de Cloud Run de ese teléfono: a las 14:15:51Z, `POST /mobile/auth/refresh` 201 (el token rota). A las 14:16:13Z, otro `refresh` → **401** con el token ya rotado, y enseguida `POST /sync/batches` → 401. Después no llega nada más: ni `/mobile/auth/logout` ni el fin de jornada. La app la da por muerta solo en el teléfono.
   - Causa no verificada. Puede ser propia del emulador (la app se cerró o se reinstaló antes de guardar el token nuevo), o una carrera real entre dos refresh en la app. Si es la carrera, los choferes reales pierden el fin de jornada.
   - El emulador `quivo_trufi2` no sirve para revisarlo: tiene el build de desarrollo `.piloto` vc1 (instalado a las 09:17 del 5/11), no el APK 17.
@@ -96,7 +99,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     3. Investigar el 401 del refresh con `/codex-debug diagnose` en paralelo con el diagnóstico propio, para descartar que les pase a choferes reales. Código: `apps/mobile/src/shared/api/auth-movil-api.ts` (`refresh`) y `AuthMovilService.refresh` en `apps/api/src/modules/auth-movil/auth-movil.service.ts`.
   - Con cualquiera de las tres, revisar que la vuelta simulada no le genere sanciones a 4701EHA.
 - `piloto-linea-16` tiene asignaciones para el 5/11 (+39, aplicado por el CTO "agregas nomás"): 37 activos más 2 días faltantes de 1616PIL.
-- El deploy r37 todavía no salió: prod sigue en API r35 y web r36.
+- Deploy r37 hecho el 5/11: prod está en `r37-20261105`.
 
 ## 2026-11-05: panel admin + En vivo en celular, instalable como PWA (A+B+C mergeados; deploy pendiente de OK)
 

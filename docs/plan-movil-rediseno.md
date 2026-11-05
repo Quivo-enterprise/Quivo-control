@@ -118,7 +118,7 @@ Hallazgos de la exploración:
 - Capturas a 412 y 1440 para el CTO.
 - Unit: web, design-system y API (con un test del endpoint nuevo). `tsc` limpio.
 - Emulador Android: Chrome con `adb reverse tcp:3000/3002` (localhost es un contexto seguro).
-  - Instalar la PWA y abrir en standalone. **Resultado 5/11: no pasó en `http://localhost`** (acceso directo en pestaña normal). Falta probarlo contra HTTPS después del deploy; ver el handoff.
+  - Instalar la PWA y abrir en standalone. **Resultado 5/11:** por HTTPS (r37) Chrome ofrece "Install app" y abre el diálogo. En `http://localhost` solo daba un acceso directo. El emulador no puede terminar la instalación porque no tiene Play real; falta confirmarlo en un celular real.
   - Recorrer las 5 pestañas a una mano.
 - iOS: no verificable acá; queda "no verificado".
 
