@@ -117,8 +117,12 @@ test.describe('Panel móvil (Pixel 7)', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 
     const flota = page.getByRole('button', { name: 'Flota', exact: true });
-    if (await flota.isDisabled()) {
-      test.info().annotations.push({ type: 'skip-parte', description: 'sin jornada activa en el seed: Flota deshabilitado' });
+    // Esperar a que carguen los datos: o hay panel de Flota (jornada activa) o el estado vacío.
+    await expect(
+      page.locator('#qv-live-flota').or(page.getByText('Sin vehículos en ruta activa')),
+    ).toBeAttached({ timeout: 30_000 });
+    if ((await page.locator('#qv-live-flota').count()) === 0) {
+      test.info().annotations.push({ type: 'skip-parte', description: 'sin jornada activa en el seed: no hay panel de Flota' });
       return;
     }
     await flota.click();
