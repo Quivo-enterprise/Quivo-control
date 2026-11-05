@@ -53,7 +53,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
 - **Fix de test — `en-vivo.resumen-equivalencia` (#304, `bac7481`).**
   - El test fallaba en `main` según la hora del día: fijaba `AHORA` al mediodía UTC de hoy, pero el ingest y las sesiones usan el reloj real (`now()` de la DB, `inicio` por default). El caché de turbo lo tapaba cuando `apps/api` no cambiaba.
   - Ahora `AHORA` es el mediodía UTC de ayer, cada sesión tiene un `inicio` explícito, la sesión de movimiento usa un vehículo propio y los fixes de "detenido" van en lotes separados. Solo test; el código de producción no cambia.
-- **PR H — Hoy (`feat/web-movil-hoy`, PR en curso). Con H termina el plan.**
+- **PR H — Hoy (#306, `f6886c5`, mergeado 5/11 con `ci` y `acceptance` en verde). Plan completo: D, E, F, G y H están en `main`.**
   - En el celular, `/` muestra la vista Hoy en lugar del dashboard de escritorio. El escritorio no cambia.
   - Cuatro KPIs: en servicio e inactivos (misma clasificación que En vivo, `conteoPorEstado`/`resumenFlota`, refresco cada 15 s), alertas abiertas (lleva a `/alertas`) y sanciones pendientes (lleva a `/reglas`; muestra `200+` al llegar al tope de la API). Mientras carga no muestra 0; si falla, muestra "—".
   - Búsqueda única de placa o conductor:
