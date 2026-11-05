@@ -31,20 +31,22 @@ import { EnVivoService } from './en-vivo.service.js';
 const MINUTO = 60_000;
 
 /**
- * Reloj determinista anclado al **mediodía UTC de hoy** (08:00 Bolivia), no a `new Date()`.
+ * Reloj determinista anclado al **mediodía UTC de AYER** (08:00 Bolivia), no a `new Date()`.
  * La jornada boliviana arranca a las 04:00 UTC: con `new Date()` un test corrido entre 04:00 y
  * 04:10 UTC ponía puntos "de hace 10 min" en la jornada ANTERIOR y `totalPuntos` salía 1 en
  * vez de 2 (flaky de CI del 2026-10-11 04:09 UTC). A las 12:00 UTC todos los `ts` (hasta
- * mediodía - 10 min) quedan en la misma jornada y en la partición UTC de hoy que ya asegura
- * el `beforeAll`. Mismo criterio que `AHORA` en `en-vivo.service.test.ts`.
+ * mediodía - 10 min) quedan en la misma jornada y en una partición que ya asegura el `beforeAll`.
+ * Es AYER (no hoy) porque el ingest acota con el reloj de DB (`LEAST(ts, now())`, `received_at`,
+ * `inicio` de las sesiones): con un AHORA a las 12:00 UTC de hoy, un test corrido después de
+ * ~11:45 UTC veía el movimiento/ingesta "recientes" (ts <= now() real) y `detenido` salía
+ * `reportando`. Con AHORA siempre en el pasado a >= 12 h, el reloj de DB nunca lo recorta.
  */
 const AHORA = (() => {
   const hoy = new Date();
-  return new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate(), 12));
+  return new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate() - 1, 12));
 })();
 
-// El movimiento guardado se acota a now() (reloj de DB): AHORA (12:00 UTC de hoy) puede ser futuro,
-// así que los tests de movimiento cuelgan de ayer, que siempre es pasado.
+// Los tests de movimiento cuelgan de 24 h antes de AHORA (siempre pasado, igual que AHORA).
 const MOV_BASE = new Date(AHORA.getTime() - 24 * 60 * 60 * 1000);
 
 function evento(overrides: Partial<EventoSync> & { payload: EventoSync['payload'] }): EventoSync {
@@ -89,6 +91,7 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
   const sindicatoId = randomUUID();
   let rutaId: string;
   let vehiculoId: string;
+  let vehiculoMovimientoId: string;
   let conductorId: string;
   let asignacionId: string;
   let sesionDuplicadosId: string;
@@ -127,6 +130,13 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
         },
       });
       vehiculoId = vehiculo.id;
+      // Vehículo propio para la sesión de movimiento: `obtenerPosiciones` deja UNA sesión por
+      // vehículo (la de `inicio` más reciente, reloj de DB). Compartiéndolo, la de movimiento
+      // (creada la última, sin fixs en el test de puntos tardíos) tapaba a la sesión bajo prueba.
+      const vehiculoMovimiento = await tx.vehiculo.create({
+        data: { sindicatoId, placa: 'EQT002', tipo: 'bus', marca: 'x', modelo: 'x', color: 'x', capacidad: 10, estado: 'activo' },
+      });
+      vehiculoMovimientoId = vehiculoMovimiento.id;
       const conductor = await tx.conductor.create({
         data: {
           sindicatoId,
@@ -168,6 +178,9 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
           conductorId,
           deviceId: 'device-equivalencia-duplicados',
           estado: 'activa',
+          // `inicio` explícito (no el reloj real): el dedupe por vehículo de `obtenerPosiciones`
+          // gana el más reciente; sin esto el desempate dependía de milisegundos.
+          inicio: new Date(AHORA.getTime() - 120 * MINUTO),
           ...credenciales(),
         },
       });
@@ -180,6 +193,7 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
           conductorId,
           deviceId: 'device-equivalencia-tardios',
           estado: 'activa',
+          inicio: new Date(AHORA.getTime() - 90 * MINUTO), // más reciente que duplicados: gana el dedupe de EQT001
           ...credenciales(),
         },
       });
@@ -188,10 +202,13 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
         data: {
           sindicatoId,
           asignacionId,
-          vehiculoId,
+          vehiculoId: vehiculoMovimientoId,
           conductorId,
           deviceId: 'device-equivalencia-movimiento',
           estado: 'activa',
+          // `obtenerTraza` ancla su ventana a `sesion.inicio` (piso = inicio - 60 s): el default
+          // (reloj real) dejaría los fixs de AHORA fuera y la traza saldría `sin_datos`.
+          inicio: new Date(AHORA.getTime() - 60 * MINUTO),
           ...credenciales(),
         },
       });
@@ -203,8 +220,9 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
       // abajo puede fallar con "no partition of relation found for row" en una base migrada
       // hace varios días (mismo motivo por el que `en-vivo.service.test.ts` la llama también).
       await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE)`;
-      // Los tests de movimiento usan ayer (ver MOV_BASE) y un fix de ahora + 2 h (puede cruzar 00:00 UTC).
+      // AHORA es ayer y MOV_BASE anteayer (ver arriba); un fix de ahora + 2 h (puede cruzar 00:00 UTC).
       await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE - 1)`;
+      await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE - 2)`;
       await tx.$executeRaw`SELECT crear_particion_gps_points(CURRENT_DATE + 1)`;
     });
   });
@@ -449,12 +467,16 @@ describe('gps_sesion_resumen — equivalencia vieja vs nueva (duplicados y punto
           await tx.$executeRaw`DELETE FROM gps_sesion_resumen WHERE sesion_id = ${sesionId}::uuid`;
           await tx.$executeRaw`DELETE FROM gps_points WHERE sesion_id = ${sesionId}::uuid`;
         });
-        await withTenantContext({ rol: 'admin_quivo', sindicatoId }, async (tx) => {
-          await insertarGpsPoints(tx, sindicatoId, [
-            evento({ ts: minHoy(30).toISOString(), payload: { sesionId, lat: -17.78, lng: -63.18, accuracy: 5, speed: 0 } }),
-            evento({ ts: minHoy(1).toISOString(), payload: { sesionId, lat: -17.78, lng: -63.18, accuracy: 5, speed } }),
-          ]);
-        });
+        // Dos lotes: el primer fix de una fila nueva fija el movimiento al ÚLTIMO ts de su lote, así
+        // que juntos darían movimiento = AHORA - 1 min (reportando). Separados, el 2.º (quieto)
+        // no lo avanza y queda el del primero (AHORA - 30 min).
+        for (const [min, v] of [[30, 0], [1, speed]] as const) {
+          await withTenantContext({ rol: 'admin_quivo', sindicatoId }, (tx) =>
+            insertarGpsPoints(tx, sindicatoId, [
+              evento({ ts: minHoy(min).toISOString(), payload: { sesionId, lat: -17.78, lng: -63.18, accuracy: 5, speed: v } }),
+            ]),
+          );
+        }
         // `received_at` es el reloj real; el test usa AHORA fijo: se alinea para que la ingesta cuente "viva".
         await withTenantContext({ rol: 'admin_quivo', sindicatoId: null }, async (tx) => {
           await tx.$executeRaw`UPDATE gps_sesion_resumen SET ultimo_ingreso_ts = ${AHORA} WHERE sesion_id = ${sesionId}::uuid`;
