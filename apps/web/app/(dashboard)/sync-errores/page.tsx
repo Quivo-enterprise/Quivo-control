@@ -357,7 +357,7 @@ export default function SyncErroresPage() {
         </Card>
       ) : (
         <div className="qv-table-wrap">
-          <table className="qv-table">
+          <table className="qv-table qv-table--stack">
             <thead>
               <tr>
                 <th>Fecha y Hora</th>
@@ -370,19 +370,19 @@ export default function SyncErroresPage() {
             <tbody>
               {filas.map((f) => (
                 <tr key={f.id} role="row">
-                  <td>
+                  <td data-label="Fecha y Hora">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <Calendar size={14} style={{ color: 'var(--qv-color-primary)' }} />
                       <span style={{ fontWeight: 600, color: 'var(--qv-text-primary)' }}>{new Date(f.ts).toLocaleString('es-BO')}</span>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="Dispositivo Móvil">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                       <Smartphone size={14} style={{ color: 'var(--qv-color-primary)' }} />
                       <strong style={{ color: 'var(--qv-text-primary)' }}>{f.deviceId}</strong>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="Sesión Operativa">
                     <span
                       style={{
                         fontSize: '0.75rem',
@@ -393,7 +393,7 @@ export default function SyncErroresPage() {
                       {f.sesionId ?? '—'}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Motivo del Rechazo">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                       <AlertCircle size={14} style={{ color: 'var(--qv-color-danger)', flexShrink: 0 }} />
                       <span style={{ fontSize: '0.8125rem', color: '#f87171', fontWeight: 600 }}>
@@ -401,7 +401,7 @@ export default function SyncErroresPage() {
                       </span>
                     </div>
                   </td>
-                  <td style={{ textAlign: 'right' }}>
+                  <td style={{ textAlign: 'right' }} data-label="">
                     <div className="qv-table-actions-capsule">
                       <Tooltip content="Ver payload JSON rechazado">
                         <button

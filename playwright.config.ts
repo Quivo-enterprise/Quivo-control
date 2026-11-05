@@ -29,6 +29,14 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      testIgnore: /mobile\.spec\.ts/,
+    },
+    {
+      name: 'mobile',
+      // Login limitado a 5/min y admin-panel.spec ya usa los 5: el móvil corre después (su login reintenta tras 61s).
+      dependencies: ['chromium'],
+      use: { ...devices['Pixel 7'] },
+      testMatch: /mobile\.spec\.ts/,
     },
   ],
   webServer: process.env.ACCEPTANCE_BASE_URL

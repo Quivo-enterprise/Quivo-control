@@ -405,7 +405,7 @@ function ReportesContent() {
         </Card>
       ) : (
         <div className="qv-table-wrap">
-          <table className="qv-table">
+          <table className="qv-table qv-table--stack">
             <thead>
               <tr>
                 <th>{por === 'linea' ? 'Línea de Transporte' : por === 'vehiculo' ? 'Vehículo / Placa' : 'Recorrido / Ruta'}</th>
@@ -427,7 +427,7 @@ function ReportesContent() {
 
                 return (
                   <tr key={`${f.nombre}-${idx}`}>
-                    <td>
+                    <td data-label="Nombre">
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                         <div
                           style={{
@@ -449,7 +449,7 @@ function ReportesContent() {
                         </strong>
                       </div>
                     </td>
-                    <td>
+                    <td data-label="Cumplimiento">
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '8.5rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                           <span style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
@@ -478,12 +478,12 @@ function ReportesContent() {
                         </div>
                       </div>
                     </td>
-                    <td>
+                    <td data-label="Puntos de Control">
                       <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                         {f.puntosCumplidos} <span style={{ color: 'var(--qv-text-secondary)', fontWeight: 500 }}>/ {f.puntosTotales}</span>
                       </span>
                     </td>
-                    <td>
+                    <td data-label="Recorridos Completados">
                       <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--qv-text-primary)' }}>
                         {f.recorridosCompletados} <span style={{ color: 'var(--qv-text-secondary)', fontWeight: 500 }}>/ {f.recorridosAsignados}</span>
                       </span>

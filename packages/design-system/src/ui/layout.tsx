@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { cx } from '../utils.js';
 import { Alert, Button } from './primitives.js';
 import { Input } from './form.js';
@@ -13,13 +13,95 @@ export interface AdminLayoutProps {
   sidebar: ReactNode;
   header?: ReactNode;
   children: ReactNode;
+  /** Título de la topbar móvil (≤720px). */
+  mobileTitle?: string;
+  /** Cambia con la ruta (p. ej. `pathname`): cierra el drawer móvil. */
+  routeKey?: string;
 }
 
-export function AdminLayout({ sidebar, header, children }: AdminLayoutProps) {
+export const MOBILE_QUERY = '(max-width: 720px)';
+
+/** A ≤720px la sidebar es un drawer izquierdo con topbar sticky; en escritorio nada cambia. */
+export function AdminLayout({ sidebar, header, children, mobileTitle, routeKey }: AdminLayoutProps) {
+  const [navOpen, setNavOpen] = useState(false);
+  const drawerId = useId();
+  const mainRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const wasOpenRef = useRef(false);
+
+  useEffect(() => {
+    setNavOpen(false);
+  }, [routeKey]);
+
+  useEffect(() => {
+    // `inert` no está tipado en React 18: se aplica por atributo.
+    mainRef.current?.toggleAttribute('inert', navOpen);
+    if (!navOpen) {
+      if (wasOpenRef.current) toggleRef.current?.focus();
+      wasOpenRef.current = false;
+      return undefined;
+    }
+    wasOpenRef.current = true;
+    drawerRef.current?.querySelector<HTMLElement>('button, a[href]')?.focus();
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNavOpen(false);
+    };
+    const mq = window.matchMedia(MOBILE_QUERY);
+    const onMq = () => {
+      if (!mq.matches) setNavOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    mq.addEventListener('change', onMq);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener('keydown', onKey);
+      mq.removeEventListener('change', onMq);
+    };
+  }, [navOpen]);
+
   return (
-    <div className="qv-admin-layout">
-      <aside className="qv-admin-layout__sidebar">{sidebar}</aside>
-      <div className="qv-admin-layout__main">
+    <div className={cx('qv-admin-layout', navOpen && 'qv-admin-layout--nav-open')}>
+      <aside
+        ref={drawerRef}
+        id={drawerId}
+        className="qv-admin-layout__sidebar"
+        onClick={(event) => {
+          if ((event.target as HTMLElement).closest('a[href]')) setNavOpen(false);
+        }}
+      >
+        <button
+          type="button"
+          className="qv-admin-layout__drawer-close"
+          aria-label="Cerrar menú"
+          onClick={() => setNavOpen(false)}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+        {sidebar}
+      </aside>
+      <div className="qv-admin-layout__backdrop" aria-hidden="true" onClick={() => setNavOpen(false)} />
+      <div ref={mainRef} className="qv-admin-layout__main">
+        <div className="qv-admin-layout__topbar">
+          <button
+            ref={toggleRef}
+            type="button"
+            className="qv-admin-layout__menu-btn"
+            aria-label="Abrir menú"
+            aria-expanded={navOpen}
+            aria-controls={drawerId}
+            onClick={() => setNavOpen(true)}
+          >
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h16" />
+            </svg>
+          </button>
+          <span className="qv-admin-layout__topbar-title">{mobileTitle || 'Quivo'}</span>
+        </div>
         {header && <div className="qv-admin-layout__header">{header}</div>}
         <main className="qv-admin-layout__content">{children}</main>
       </div>

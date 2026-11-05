@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   AdminLayout,
+  MOBILE_QUERY,
   SegmentedControl,
   SidebarNav,
   type SidebarNavSection,
@@ -129,6 +130,11 @@ function DashboardShell({ children }: { children: ReactNode }) {
         ) : undefined,
         onClick: (event: React.MouseEvent) => {
           if (isLiveItem) {
+            // En PWA standalone o móvil `_blank` saca de la app: navegar en la misma ventana.
+            if (window.matchMedia(`(display-mode: standalone), ${MOBILE_QUERY}`).matches) {
+              event.preventDefault();
+              router.push(item.href);
+            }
             return;
           }
           event.preventDefault();
@@ -143,10 +149,14 @@ function DashboardShell({ children }: { children: ReactNode }) {
     router.push('/login');
   };
 
+  const activeItem = sections.flatMap((s) => s.items).find((i) => i.active);
+
   const userInitial = (user?.email?.[0] ?? 'U').toUpperCase();
 
   return (
     <AdminLayout
+      mobileTitle={activeItem?.label ?? 'Quivo'}
+      routeKey={pathname}
       sidebar={
         <SidebarNav
           brand={<BrandLogo variant="logotipo" height={26} />}

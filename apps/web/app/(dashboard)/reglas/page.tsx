@@ -948,7 +948,7 @@ function SancionesTab() {
             </Card>
           ) : (
             <div className="qv-table-wrap">
-              <table className="qv-table">
+              <table className="qv-table qv-table--stack">
                 <thead>
                   <tr>
                     <th>Fecha del hecho</th>
@@ -968,13 +968,13 @@ function SancionesTab() {
 
                     return (
                       <tr key={s.id} role="row">
-                        <td>
+                        <td data-label="Fecha del hecho">
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}>
                             <Calendar size={14} style={{ color: 'var(--qv-color-primary)' }} />
                             <span style={{ fontWeight: 600, color: 'var(--qv-text-primary)' }}>{formatearFecha(s.fechaHecho)}</span>
                           </div>
                         </td>
-                        <td>
+                        <td data-label="Regla e Infracción">
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                             <strong style={{ fontSize: '0.875rem', color: 'var(--qv-text-primary)' }}>
                               {regla?.nombre ?? s.reglaId}
@@ -986,7 +986,7 @@ function SancionesTab() {
                             )}
                           </div>
                         </td>
-                        <td>
+                        <td data-label="Sujeto Infractor">
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             {s.sujetoTipo === 'vehiculo' ? (
                               <>
@@ -1026,7 +1026,7 @@ function SancionesTab() {
                             )}
                           </div>
                         </td>
-                        <td>
+                        <td data-label="Motivo de la Sanción">
                           <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--qv-text-secondary)', maxWidth: '24rem', lineHeight: 1.4 }}>
                             {s.motivo}
                           </p>
@@ -1036,14 +1036,14 @@ function SancionesTab() {
                             </p>
                           )}
                         </td>
-                        <td>
+                        <td data-label="Estado">
                           <StatusBadge
                             circle
                             status={ESTADO_SANCION_BADGE[s.estado]}
                             label={`Estado: ${s.estado.toUpperCase()}`}
                           />
                         </td>
-                        <td style={{ textAlign: 'right' }}>
+                        <td style={{ textAlign: 'right' }} data-label="">
                           <div className="qv-table-actions-capsule">
                             <Tooltip content="Ver detalle de la sanción">
                               <button

@@ -6,6 +6,56 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## En curso — 2026-11-05: panel admin + En vivo en celular, instalable como PWA
+
+Plan: [`docs/plan-movil-pwa.md`](plan-movil-pwa.md). Pedido del cliente: usar el panel desde el
+celular, también instalado como PWA. Decisiones del CTO:
+- Navegación con topbar + drawer a ≤720px.
+- Todas las pantallas responsive; `/rutas` en celular es solo lectura.
+- PWA instalable, sin modo offline ni cache.
+- Sin bake-off: se adapta el design system actual.
+
+Se hace en 3 PRs en serie:
+- **A** — shell móvil, PWA, modal y tablas apiladas.
+- **B** — En vivo fase 2c.
+- **C** — barrido del resto de las pantallas.
+
+### PR A — fundación (rama `feat/web-movil-pwa-fundacion`)
+
+**Shell (`AdminLayout`).** A ≤720px hay topbar con hamburguesa, y el sidebar actual pasa a ser un drawer.
+- El drawer se cierra al cambiar de ruta, con Esc, tocando el backdrop, con su botón y al pasar de 720px.
+- Mientras está abierto, `main` queda `inert`; al cerrarse, el foco vuelve a la hamburguesa.
+- Capas: drawer en z 960 y backdrop en 950, por debajo de los modales (1000).
+- Props nuevas: `mobileTitle` y `routeKey`. `MOBILE_QUERY` se exporta desde el design system.
+
+**PWA.**
+- `app/manifest.ts` en modo standalone, con íconos 192, 512 y 512 maskable más el apple-touch, en `public/icons/`. Se generaron una vez con ImageMagick desde `apps/mobile/assets/images/icon.png`.
+- `viewport` con `viewportFit: cover` y `themeColor` claro/oscuro (`src/lib/theme-color.ts`), más `appleWebApp`.
+- **Sin service worker**: Chrome lo da por instalable (CDP `getInstallabilityErrors` = `[]`).
+
+**Primitivas.**
+- `100vh` pasa a `100dvh` con fallback, y hay safe areas en topbar, drawer y shell de En vivo.
+- Modal a pantalla completa a ≤720px; el selector lleva el prefijo `.qv-modal-backdrop` para ganarle a los `!important` de `globals.css`.
+- Tablas: `qv-table--stack` con `data-label`, que en móvil se muestran como tarjetas en grilla de 2 columnas. Aplica en `DataTable`, `AuditLog` y en las tablas crudas de reglas, usuarios, sync-errores y reportes.
+- La matriz de rotaciones mantiene el scroll horizontal, con la primera columna sticky.
+- En vivo, en standalone o a ≤720px, abre en la misma ventana.
+
+**Tests.** Nuevo proyecto Playwright `mobile` (Pixel 7, `tests/acceptance/mobile.spec.ts`), con `dependencies: ['chromium']`: el login está limitado a 5/min y `admin-panel.spec` ya los usa todos. El spec loguea una sola vez y reintenta tras 61 s.
+
+**Verificación local.**
+- Acceptance 9/9 (5 de desktop, 4 móviles).
+- Unit: web 275, design-system 164.
+- Typecheck limpio.
+- impeccable audit 17/20, sin bloqueantes.
+
+**DB local.** La base `quivo_control_e2echeck` tiene la migración `20260923090000_refresh_token_hash_anterior` marcada como fallida (P3009). Para QA usé una base nueva, `quivo_movil_qa`.
+- Ojo: el seed y el API leen `RUNTIME_DATABASE_URL`, no solo `DATABASE_URL`.
+
+**Pendiente para el PR C** (visto en las capturas):
+- El panel de formulario de `/vehiculos` (`.vehicle-form`) se corta a la derecha a 412px.
+- `/rutas` en móvil recorta los últimos ~3.5rem: la topbar más el contenido a `100dvh` con `!important`.
+- Los bloques duplicados del route builder entre `globals.css` y `styles.css` siguen ahí, a propósito.
+
 ## 2026-10-29: piloto L16 con 30 trufis más (#291, `84966e6`)
 - `crear-piloto-linea-16.ts` ahora tiene 38 pilotos: los 8 originales + `1616PJA`..`1616PJZ`, `1616PKA`..`1616PKD` (CI 9000024..9000053 CB, "Piloto Línea Dieciséis Nueve".."Treinta y ocho"), mañana 29/10–02/11 (150 asignaciones). `HASTA_DEFAULT` = 2026-11-02.
 - Tests 11/11, `/code-review` sin hallazgos, `/ponytail-review` Ship. Codex: no verificado (sin cuota).
