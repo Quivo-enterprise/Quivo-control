@@ -3,7 +3,6 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { Alert, Button, Card, Checkbox, ConfirmDialog, DataTable, FormField, Input, Select, Tag } from '@quivo/design-system';
 import {
-  BaseFrecuenciaSchema,
   CrearFrecuenciaReglaSchema,
   FRECUENCIA_MAX_MINUTOS,
   FRECUENCIA_MIN_MINUTOS,
@@ -21,8 +20,10 @@ import {
   mensajesReglaPorCampo,
   textoAlcance,
   textoFranja,
+  validarBase,
 } from '../../../src/lib/salidas/salidas.logic';
 import { enfocar } from '../../../src/lib/salidas/foco';
+import { useEsMovil } from '../../../src/lib/use-es-movil';
 import { mensajeError, useAccionesFrecuencia, useReglasSalida } from './use-salidas';
 
 const MUTED = { color: 'var(--qv-text-secondary)', fontSize: 'var(--qv-text-sm)' } as const;
@@ -42,6 +43,7 @@ interface Props {
 export function FrecuenciasPanel({ token, pcId, grupos, vehiculos, placaPorId }: Props) {
   const reglas = useReglasSalida(token, pcId);
   const { crearRegla, anularRegla, fijarBase } = useAccionesFrecuencia(token, pcId);
+  const esMovil = useEsMovil();
   const [anulando, setAnulando] = useState<FrecuenciaRegla | null>(null);
   const [errorAnular, setErrorAnular] = useState<string | null>(null);
 
@@ -72,13 +74,16 @@ export function FrecuenciasPanel({ token, pcId, grupos, vehiculos, placaPorId }:
         {reglas.isError && !data && <Alert variant="danger" title="No se pudieron cargar las frecuencias">{mensajeError(reglas.error)}</Alert>}
         {errorAnular && <Alert variant="danger" title="No se pudo anular la regla">{errorAnular}</Alert>}
 
-        <BaseForm
-          key={`${pcId}:${data?.baseMin ?? 'null'}`}
-          baseMin={data?.baseMin ?? null}
-          cargando={reglas.isPending}
-          guardando={fijarBase.isPending}
-          onGuardar={(frecuenciaSalidaMin) => fijarBase.mutateAsync({ frecuenciaSalidaMin })}
-        />
+        {/* En celular la base se edita arriba con el stepper (`BaseRapida`). */}
+        {!esMovil && (
+          <BaseForm
+            key={`${pcId}:${data?.baseMin ?? 'null'}`}
+            baseMin={data?.baseMin ?? null}
+            cargando={reglas.isPending}
+            guardando={fijarBase.isPending}
+            onGuardar={(frecuenciaSalidaMin) => fijarBase.mutateAsync({ frecuenciaSalidaMin })}
+          />
+        )}
 
         <DataTable<FrecuenciaRegla>
           loading={reglas.isPending}
@@ -150,9 +155,9 @@ function BaseForm({
   const guardar = async (e: FormEvent) => {
     e.preventDefault();
     const numero = valor.trim() === '' ? null : Number(valor);
-    const parsed = BaseFrecuenciaSchema.safeParse({ frecuenciaSalidaMin: numero });
-    if (!parsed.success) {
-      setError(`Ingresá un número entero de ${FRECUENCIA_MIN_MINUTOS} a ${FRECUENCIA_MAX_MINUTOS} minutos, o dejalo vacío.`);
+    const parsed = validarBase(numero, true);
+    if (!parsed.ok) {
+      setError(parsed.mensaje);
       enfocar(campo.current, 'input');
       return;
     }

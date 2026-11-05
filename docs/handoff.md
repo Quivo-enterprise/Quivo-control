@@ -24,13 +24,20 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - `mobile.spec` suma el test de inputs ≥16px y base 18px. El tope de la barra de En vivo pasa de 120 a 132.
   - Codex: no verificado.
 - **Bake-off resuelto: híbrido B + A.** La base es B ("Señalética de garita"); de A se toma el resumen del día arriba de Hoy. Comps en `docs/movil-comps/`; tokens en `propuesta-b.html`.
-- **PR E — pestañas abajo (`feat/web-movil-tabbar`, PR en curso).**
+- **PR E — pestañas abajo (#301, `50ba43d`, mergeado 5/11 con `ci` y `acceptance` en verde).**
   - A ≤720px: barra fija abajo con Hoy · En vivo · Salidas · Alertas · Más. "Más" abre el drawer y reemplaza a la hamburguesa.
   - `AdminLayout` suma `mobileTabs` y `bare`. `/en-vivo` pasa por `AdminLayout bare`: misma barra y drawer, y "Salir/Panel" se ocultan en el celular.
   - "Alertas" apunta a `/reglas` hasta PR G, marcado `shortcut:`. "Hoy" apunta a `/` hasta PR H.
   - Tabs filtradas por rol. `isNavActive` es compartido con el sidebar y tiene test.
   - `--qv-tabbar-h` descuenta la barra del contenido, del FAB, de `/rutas` y de la hoja de En vivo.
   - No verificado: rol operador en un celular real, dark mode y el mapa real (local corre sin la clave de Maps). Codex: no verificado.
+- **PR F — Salidas en celular (`feat/web-movil-salidas`, PR en curso).**
+  - A ≤720px, arriba de la fila aparece `BaseRapida`: botones − N min + y Guardar sobre el mismo `fijarBase` (`PUT /salidas/:pc/base`). Antes de guardar pide confirmación, porque el cambio es permanente.
+  - Si las reglas no cargan, el control se deshabilita y muestra un error. El refetch no pisa una edición sin guardar.
+  - La fila se ve en tarjetas: Despachar ocupa todo el ancho (≥48px) y "Al final" y "Retirar" van en una segunda fila. La confirmación de salida temprana no cambia.
+  - `validarBase` lo comparten celular y escritorio. En escritorio se puede dejar vacío para quitar la base; en el celular no (decisión: se usa poco).
+  - Acceptance con mocks de `page.route` (el seed no tiene terminales), sin ningún PUT real.
+  - No verificado: guardado y despacho reales contra la API, y el aviso de guardado sobreviviendo al refetch. Codex: no verificado.
 
 **Pendiente de la capacitación del 5/11 (prod):**
 - **PENDIENTE (sin fecha): sesión de 4701EHA** (chofer real Javier Bravo Soliz), id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Sigue `activa` en prod (`fin: null`) y su último fix es de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.

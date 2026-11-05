@@ -112,6 +112,102 @@ test.describe('Panel móvil (Pixel 7)', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
   });
 
+  test('Salidas: stepper de base, confirmación y Despachar a todo el ancho', async () => {
+    test.setTimeout(90_000);
+    // API mockeada (formas validadas contra @quivo/shared): una terminal, base 8 min, fila de 2 trufis.
+    const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const PC = uuid(3);
+    const ahora = new Date();
+    const iso = (min: number) => new Date(ahora.getTime() + min * 60_000).toISOString();
+    const item = (n: number, placa: string, habilitado: boolean) => ({
+      id: uuid(10 + n),
+      vehiculoId: uuid(20 + n),
+      placa,
+      posicion: n,
+      llegadaTs: iso(-10),
+      etaTs: iso(habilitado ? 0 : 8),
+      esperaMs: 0,
+      estado: 'en_fila',
+      habilitado,
+      demorado: false,
+      anticipada: false,
+    });
+    const respuestas: Record<string, unknown> = {
+      '/v1/lineas': [
+        {
+          id: uuid(1), sindicatoId: uuid(99), codigo: '120', nombre: 'Linea 120', color: null, colorSecundario: null,
+          colorTexto: null, nombreCorto: '120', lema: null, descripcion: null, publicStatus: 'borrador', publishedAt: null,
+        },
+      ],
+      [`/v1/lineas/${uuid(1)}/rutas`]: [
+        {
+          id: uuid(2), lineaId: uuid(1), sentido: 'ida', estado: 'activo', publicStatus: 'borrador', publishedAt: null,
+          geometria: { type: 'LineString', coordinates: [[-66.2, -17.4], [-66.1, -17.3]] },
+        },
+      ],
+      [`/v1/rutas/${uuid(2)}/puntos-control`]: [
+        {
+          id: PC, rutaId: uuid(2), orden: 1, coord: { type: 'Point', coordinates: [-66.2, -17.4] }, radioToleranciaM: 50,
+          obligatorio: true, estado: 'activo', rol: 'terminal', esperaMin: null, frecuenciaSalidaMin: 8,
+        },
+      ],
+      [`/v1/salidas/${PC}/fila`]: {
+        puntoControlId: PC, baseMin: 8, servidorTs: ahora.toISOString(), salidasRecientes: [],
+        items: [item(1, '1234ABC', true), item(2, '5678XYZ', false)],
+      },
+      [`/v1/salidas/${PC}/reglas`]: { puntoControlId: PC, fecha: ahora.toISOString().slice(0, 10), baseMin: 8, reglas: [] },
+      '/v1/vehiculos': [],
+      '/v1/grupos-vehiculo': [],
+    };
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
+    let puts = 0;
+    try {
+      await page.route('**/v1/**', async (route) => {
+        const req = route.request();
+        const path = new URL(req.url()).pathname;
+        if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+        if (path === `/v1/salidas/${PC}/base` && req.method() === 'PUT') {
+          puts++;
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: '{}' });
+        }
+        if (req.method() === 'GET' && path in respuestas) {
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(respuestas[path]) });
+        }
+        return route.fallback();
+      });
+      await page.goto('/salidas', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      const mas = page.getByRole('button', { name: 'Sumar un minuto' });
+      await expect(mas).toBeVisible({ timeout: 30_000 });
+      await expect(page.locator('.qv-base-rapida__valor')).toContainText('8');
+      for (const name of ['Restar un minuto', 'Sumar un minuto', 'Guardar']) {
+        const box = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
+        expect(box.width, name).toBeGreaterThanOrEqual(44);
+        expect(box.height, name).toBeGreaterThanOrEqual(44);
+      }
+
+      // Cambiar el valor habilita Guardar; la confirmación avisa que es permanente y se cancela sin guardar.
+      await mas.click();
+      await page.getByRole('button', { name: 'Guardar', exact: true }).click();
+      const dialogo = page.getByRole('alertdialog');
+      await expect(dialogo).toContainText('permanente');
+      await dialogo.getByRole('button', { name: 'Cancelar' }).click();
+      await expect(dialogo).toBeHidden();
+      expect(puts).toBe(0);
+
+      const viewport = page.viewportSize()!;
+      const despachar = page.getByRole('button', { name: /^Despachar / });
+      await expect(despachar).toHaveCount(2);
+      for (const i of [0, 1]) {
+        const box = (await despachar.nth(i).boundingBox())!;
+        expect(box.height).toBeGreaterThanOrEqual(48);
+        expect(box.width).toBeGreaterThan(viewport.width * 0.6);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+    }
+  });
+
   test('manifest PWA e iconos', async ({ request }) => {
     const res = await request.get('/manifest.webmanifest');
     expect(res.status()).toBe(200);

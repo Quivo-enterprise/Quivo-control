@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
-import { colorTextoContraste } from '@quivo/design-system';
+import { colorTextoContraste, MOBILE_QUERY } from '@quivo/design-system';
 import { formatearTelefonoBolivia } from '@quivo/shared';
 import {
   Bus,
@@ -129,8 +129,6 @@ interface PanelVehiculoProps {
   soloLectura: boolean;
 }
 
-/** Hoja inferior de la vista móvil (<= 720 px). */
-const MQ_MOVIL = '(max-width: 720px)';
 /** Desplazamiento vertical (px) del arrastre a partir del cual la hoja cambia de altura. */
 const UMBRAL_ARRASTRE_PX = 32;
 
@@ -306,7 +304,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   // "Ver en mapa" pliega la hoja ANTES de que la página mida dónde cae el punto (flushSync: el
   // layout ya está aplicado cuando `onVerEnMapa` lee la altura de la hoja).
   function verEnMapa(inf: Infraccion) {
-    if (window.matchMedia(MQ_MOVIL).matches) {
+    if (window.matchMedia(MOBILE_QUERY).matches) {
       flushSync(() => setHojaPlegada(true));
       // El botón "Ver en mapa" queda oculto al plegar: el foco pasa al asa en vez de perderse.
       asaRef.current?.focus({ preventScroll: true });

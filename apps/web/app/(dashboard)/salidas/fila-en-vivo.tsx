@@ -137,6 +137,7 @@ export function FilaEnVivo({
           </Alert>
         )}
         <DataTable<FilaSalidaPanelItem>
+          className="qv-fila-tabla"
           loading={fila.isPending}
           error={fila.isError && !data ? mensajeError(fila.error) : undefined}
           empty="No hay trufis en la fila. Aparecen apenas llegan a la terminal."
@@ -177,10 +178,11 @@ export function FilaEnVivo({
             },
           ]}
           actions={(r) => (
-            <span style={{ display: 'inline-flex', gap: '0.375rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+            <span className="qv-fila-acciones">
               <Button
                 size="sm"
                 variant={r.habilitado ? 'primary' : 'secondary'}
+                className="qv-fila-despachar"
                 disabled={ocupado}
                 aria-busy={progreso('despachar', r.id)}
                 aria-label={`Despachar ${r.placa}`}
@@ -214,7 +216,7 @@ export function FilaEnVivo({
         {data && (
           <p style={{ ...MUTED, margin: 0 }}>
             {data.baseMin === null
-              ? 'La parada no tiene frecuencia base: configurala abajo para calcular las horas de salida.'
+              ? 'La parada no tiene frecuencia base: configurá la frecuencia base de la terminal para calcular las horas de salida.'
               : `Frecuencia base: ${data.baseMin} min.`}{' '}
             <span style={NUM}>Última actualización {hhmm(fila.dataUpdatedAt)}</span>
             {sinConexionConDatos ? '. Sin conexión: no se está actualizando.' : '. Se actualiza cada 5 segundos.'}

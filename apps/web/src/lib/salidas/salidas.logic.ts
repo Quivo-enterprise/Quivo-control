@@ -1,4 +1,12 @@
-import type { FilaSalidaPanelItem, FrecuenciaRegla, GrupoVehiculo } from '@quivo/shared';
+import {
+  BaseFrecuenciaSchema,
+  FRECUENCIA_MAX_MINUTOS,
+  FRECUENCIA_MIN_MINUTOS,
+  type BaseFrecuencia,
+  type FilaSalidaPanelItem,
+  type FrecuenciaRegla,
+  type GrupoVehiculo,
+} from '@quivo/shared';
 
 /** `HH:mm` → minutos del día (0–1439); `null` si el texto no es una hora válida. */
 export function horaAMinutos(texto: string): number | null {
@@ -122,4 +130,23 @@ export function mensajesReglaPorCampo(
     }
   }
   return out;
+}
+
+/** Paso del stepper de frecuencia base: sin valor previo arranca en el mínimo; siempre dentro de [min, max]. */
+export function ajustarBase(actual: number | null, delta: 1 | -1, min: number, max: number): number {
+  if (actual === null) return min;
+  return Math.min(max, Math.max(min, actual + delta));
+}
+
+/** Valida la base de frecuencia; `permiteVacio` (escritorio) añade al mensaje que `null` borra la base. */
+export function validarBase(
+  valor: number | null,
+  permiteVacio = false,
+): { ok: true; data: BaseFrecuencia } | { ok: false; mensaje: string } {
+  const parsed = BaseFrecuenciaSchema.safeParse({ frecuenciaSalidaMin: valor });
+  if (parsed.success) return { ok: true, data: parsed.data };
+  return {
+    ok: false,
+    mensaje: `Ingresá un número entero de ${FRECUENCIA_MIN_MINUTOS} a ${FRECUENCIA_MAX_MINUTOS} minutos${permiteVacio ? ', o dejalo vacío' : ''}.`,
+  };
 }

@@ -1,6 +1,7 @@
 import { CrearFrecuenciaReglaSchema } from '@quivo/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  ajustarBase,
   estadoVisualFila,
   formatearCuenta,
   horaAMinutos,
@@ -12,6 +13,7 @@ import {
   restanteMs,
   textoAlcance,
   textoFranja,
+  validarBase,
 } from './salidas.logic';
 
 describe('horaAMinutos / minutosAHora', () => {
@@ -115,5 +117,32 @@ describe('textos de regla', () => {
     expect(textoAlcance({ alcance: 'vehiculo', grupoId: null, vehiculoId: 'v1' }, grupos, { v1: '1234ABC' })).toBe(
       'Trufi 1234ABC',
     );
+  });
+});
+
+describe('ajustarBase', () => {
+  it('suma y resta de a 1 y respeta los límites', () => {
+    expect(ajustarBase(8, 1, 1, 60)).toBe(9);
+    expect(ajustarBase(8, -1, 1, 60)).toBe(7);
+    expect(ajustarBase(1, -1, 1, 60)).toBe(1);
+    expect(ajustarBase(60, 1, 1, 60)).toBe(60);
+  });
+  it('sin base previa arranca en el mínimo', () => {
+    expect(ajustarBase(null, 1, 1, 60)).toBe(1);
+    expect(ajustarBase(null, -1, 1, 60)).toBe(1);
+  });
+});
+
+describe('validarBase', () => {
+  it('acepta enteros dentro de rango y null', () => {
+    expect(validarBase(8)).toEqual({ ok: true, data: { frecuenciaSalidaMin: 8 } });
+    expect(validarBase(null)).toEqual({ ok: true, data: { frecuenciaSalidaMin: null } });
+  });
+  it('rechaza fuera de rango, decimales y NaN con el mensaje correspondiente', () => {
+    for (const v of [0, 1000, 1.5, Number.NaN]) expect(validarBase(v).ok).toBe(false);
+    const r = validarBase(0);
+    expect(r.ok === false && r.mensaje).toMatch(/^Ingresá un número entero de \d+ a \d+ minutos\.$/);
+    const d = validarBase(0, true);
+    expect(d.ok === false && d.mensaje).toMatch(/minutos, o dejalo vacío\.$/);
   });
 });
