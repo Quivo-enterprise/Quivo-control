@@ -107,4 +107,38 @@ test.describe('Panel móvil (Pixel 7)', () => {
     test.skip((await row.count()) === 0, 'sin filas seed en /vehiculos');
     await expect(row).toHaveCSS('display', 'grid');
   });
+
+  test('En vivo: barra compacta, sin overflow, Flota abre y Escape cierra', async () => {
+    test.setTimeout(90_000);
+    await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    const barra = page.getByLabel('Barra de mando de En vivo');
+    await expect(barra).toBeVisible({ timeout: 30_000 });
+    expect((await barra.boundingBox())!.height).toBeLessThanOrEqual(120);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+
+    const flota = page.getByRole('button', { name: 'Flota', exact: true });
+    if (await flota.isDisabled()) {
+      test.info().annotations.push({ type: 'skip-parte', description: 'sin jornada activa en el seed: Flota deshabilitado' });
+      return;
+    }
+    await flota.click();
+    await expect(flota).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#qv-live-flota')).toBeVisible();
+    // Con un vehículo seleccionado, su cajón se oculta mientras Flota está abierta.
+    if ((await page.locator('.qv-live-cajon').count()) > 0) {
+      await expect(page.locator('.qv-live-cajon')).toBeHidden();
+    }
+    await page.keyboard.press('Escape');
+    await expect(flota).toHaveAttribute('aria-pressed', 'false');
+    await expect(flota).toBeFocused();
+
+    // Tocar el fondo también cierra y devuelve el foco.
+    await flota.click();
+    await expect(flota).toHaveAttribute('aria-pressed', 'true');
+    const fondo = page.locator('.qv-live-flota-fondo');
+    const caja = (await fondo.boundingBox())!;
+    await page.mouse.click(caja.x + caja.width - 8, caja.y + caja.height / 2);
+    await expect(flota).toHaveAttribute('aria-pressed', 'false');
+    await expect(flota).toBeFocused();
+  });
 });

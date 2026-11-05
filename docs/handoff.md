@@ -20,7 +20,7 @@ Se hace en 3 PRs en serie:
 - **B** — En vivo fase 2c.
 - **C** — barrido del resto de las pantallas.
 
-### PR A — fundación (rama `feat/web-movil-pwa-fundacion`)
+### PR A — fundación (#295, `0350a8b`, mergeado 5/11 con `ci` y `acceptance` en verde)
 
 **Shell (`AdminLayout`).** A ≤720px hay topbar con hamburguesa, y el sidebar actual pasa a ser un drawer.
 - El drawer se cierra al cambiar de ruta, con Esc, tocando el backdrop, con su botón y al pasar de 720px.
@@ -50,6 +50,38 @@ Se hace en 3 PRs en serie:
 
 **DB local.** La base `quivo_control_e2echeck` tiene la migración `20260923090000_refresh_token_hash_anterior` marcada como fallida (P3009). Para QA usé una base nueva, `quivo_movil_qa`.
 - Ojo: el seed y el API leen `RUNTIME_DATABASE_URL`, no solo `DATABASE_URL`.
+
+### PR B — En vivo móvil, fase 2c (rama `feat/web-movil-envivo`)
+
+**Barra compacta** (≤720px, 114px de alto a 412px):
+- Fila 1: Panel, salud, filtro de línea, Días anteriores y Flota.
+- Fila 2: alertas con scroll horizontal y "Siguiente alerta" fijo.
+- El título y el texto de salud quedan visualmente ocultos, pero siguen accesibles.
+
+**Hojas coordinadas:**
+- Elegir un vehículo cierra Flota.
+- Con Flota abierta, la hoja del vehículo se oculta con `:has` y no se deselecciona.
+- Backdrop `.qv-live-flota-fondo`.
+- `cerrarFlota` es el único camino de cierre: Escape y backdrop devuelven el foco al botón.
+
+**Bugs corregidos:**
+- **Foco:** el effect de PanelFlota volvía a enfocar el primer botón en cada poll, porque dependía de una arrow inline. Ahora usa un ref.
+- **Padding del mapa:** el ResizeObserver ignora el cajón oculto (rect 0×0).
+- **Botón presionado:** el `:hover` que queda pegado en táctil tapaba el fondo de `aria-pressed` (texto blanco sobre lila).
+- **Stacking del mapa:** `.qv-live-mapa` tiene `isolation: isolate`. Antes, el overlay de carga o error (z 20) tapaba la flota y su fondo en móvil.
+
+**Otros:**
+- Controles del mapa abajo a la derecha, salvo cuando hay cajón.
+- Hoja a `72dvh`, más objetivos de 44px.
+- `gestureHandling` ya era `greedy`.
+
+**Verificación:**
+- Acceptance 10/10 con un simulador local de 2 trufis en la línea 120 (la rama de Flota quedó ejercitada).
+- En CI, sin jornada en el seed, la parte de Flota se salta con una anotación.
+
+**Notas de entorno local:**
+- La key de Maps solo acepta el referrer `localhost:3000`; en `:3101` sale "Mapa no disponible".
+- Dos `next dev` sobre el mismo `.next` producen `ChunkLoadError`.
 
 **Pendiente para el PR C** (visto en las capturas):
 - El panel de formulario de `/vehiculos` (`.vehicle-form`) se corta a la derecha a 412px.
