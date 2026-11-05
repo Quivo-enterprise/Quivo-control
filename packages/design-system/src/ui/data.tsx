@@ -32,7 +32,7 @@ export function DataTable<T>({
   const colSpan = columns.length + (actions ? 1 : 0);
   return (
     <div className={cx('qv-table-wrap', className)}>
-      <table className="qv-table">
+      <table className="qv-table qv-table--stack">
         <thead>
           <tr>
             {columns.map((column) => (
@@ -70,13 +70,13 @@ export function DataTable<T>({
               return (
                 <tr key={identifiable.id ?? index}>
                   {columns.map((column) => (
-                    <td key={column.key}>
+                    <td key={column.key} data-label={typeof column.header === 'string' && column.header ? column.header : undefined}>
                       {column.render
                         ? column.render(row)
                         : String((row as Record<string, unknown>)[column.key] ?? '')}
                     </td>
                   ))}
-                  {actions && <td className="qv-table__actions">{actions(row)}</td>}
+                  {actions && <td className="qv-table__actions" data-label="">{actions(row)}</td>}
                 </tr>
               );
             })
@@ -112,7 +112,7 @@ export function AuditLog({ loading, logs, actions, className }: AuditLogProps) {
   const colSpan = 4 + (actions ? 1 : 0);
   return (
     <div className={cx('qv-table-wrap', className)}>
-      <table className="qv-table">
+      <table className="qv-table qv-table--stack">
         <thead>
           <tr>
             <th>Fecha</th>
@@ -142,13 +142,13 @@ export function AuditLog({ loading, logs, actions, className }: AuditLogProps) {
           ) : (
             logs.map((log) => (
               <tr key={log.id}>
-                <td>{log.timestamp}</td>
-                <td>{log.user}</td>
-                <td>
+                <td data-label="Fecha">{log.timestamp}</td>
+                <td data-label="Usuario">{log.user}</td>
+                <td data-label="Acción">
                   <Tag>{log.action}</Tag>
                 </td>
-                <td>{log.details}</td>
-                {actions && <td className="qv-table__actions">{actions(log)}</td>}
+                <td data-label="Detalle">{log.details}</td>
+                {actions && <td className="qv-table__actions" data-label="">{actions(log)}</td>}
               </tr>
             ))
           )}

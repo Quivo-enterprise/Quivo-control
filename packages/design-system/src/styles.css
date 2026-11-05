@@ -1356,6 +1356,7 @@ body::-webkit-scrollbar {
   display: grid;
   grid-template-columns: 18rem minmax(0, 1fr);
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--qv-surface-sunken);
   gap: var(--qv-space-sm);
   padding: var(--qv-space-sm);
@@ -1365,6 +1366,7 @@ body::-webkit-scrollbar {
   position: sticky;
   top: var(--qv-space-sm);
   height: calc(100vh - 2 * var(--qv-space-sm));
+  height: calc(100dvh - 2 * var(--qv-space-sm));
   z-index: 40;
   display: flex;
 }
@@ -1671,6 +1673,7 @@ body::-webkit-scrollbar {
 
 .qv-auth-layout {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   background: var(--qv-surface-sunken);
@@ -2911,6 +2914,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 .qv-live-standalone-shell {
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -2923,7 +2927,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 .qv-live-standalone-shell .qv-live-map-wrapper {
   width: 100vw !important;
   height: 100vh !important;
+  height: 100dvh !important;
   min-height: 100vh !important;
+  min-height: 100dvh !important;
   border-radius: 0 !important;
   border: none !important;
   box-shadow: none !important;
@@ -2933,13 +2939,16 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   padding: 0 !important;
   gap: 0 !important;
   height: 100vh !important;
+  height: 100dvh !important;
   max-height: 100vh !important;
+  max-height: 100dvh !important;
   overflow: hidden !important;
 }
 
 .qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__sidebar {
   top: 0 !important;
   height: 100vh !important;
+  height: 100dvh !important;
   padding: var(--qv-space-sm) 0 var(--qv-space-sm) var(--qv-space-sm) !important;
   z-index: 40 !important;
 }
@@ -2947,6 +2956,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 .qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__main {
   gap: 0 !important;
   height: 100vh !important;
+  height: 100dvh !important;
   overflow: hidden !important;
 }
 
@@ -2954,6 +2964,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   max-width: 100% !important;
   width: 100% !important;
   height: 100vh !important;
+  height: 100dvh !important;
   margin: 0 !important;
   padding: 0 !important;
   overflow: hidden !important;
@@ -2965,6 +2976,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   margin: 0 !important;
   padding: 0 !important;
   height: calc(100vh - 2 * var(--qv-space-sm)) !important;
+  height: calc(100dvh - 2 * var(--qv-space-sm)) !important;
   overflow: hidden !important;
 }
 
@@ -4959,3 +4971,289 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   display: none !important;
 }
 
+
+
+/* =========================================================================
+   Móvil (≤720px) — PR A fundación: drawer, topbar, modal a pantalla completa,
+   tablas apiladas. Va al final para ganar a las reglas de escritorio sin tocarlas.
+   ========================================================================= */
+
+/* Elementos solo-móvil: ocultos en escritorio. */
+.qv-admin-layout__topbar,
+.qv-admin-layout__backdrop,
+.qv-admin-layout__drawer-close {
+  display: none;
+}
+
+/* Live standalone: safe areas (env() = 0 fuera de PWA/notch, escritorio idéntico). */
+.qv-live-standalone-shell {
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.qv-live-standalone-shell .qv-live-map-wrapper {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+@media (max-width: 720px) {
+  .qv-admin-layout,
+  .qv-admin-layout:has(.qv-route-builder-wrapper) {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0;
+    gap: 0;
+  }
+
+  .qv-admin-layout__main {
+    gap: var(--qv-space-sm);
+  }
+
+  .qv-admin-layout__content {
+    padding: 0 var(--qv-space-sm) var(--qv-space-md);
+  }
+
+  /* Topbar sticky */
+  .qv-admin-layout__topbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: var(--qv-space-xs);
+    min-height: calc(3.5rem + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) calc(var(--qv-space-sm) + env(safe-area-inset-right)) 0 calc(var(--qv-space-xs) + env(safe-area-inset-left));
+    background: var(--qv-surface-glass);
+    backdrop-filter: blur(24px) saturate(190%);
+    -webkit-backdrop-filter: blur(24px) saturate(190%);
+    border-bottom: 1px solid var(--qv-border-glass);
+  }
+
+  .qv-admin-layout__menu-btn,
+  .qv-admin-layout__drawer-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 2.75rem;
+    height: 2.75rem;
+    border: 0;
+    border-radius: var(--qv-radius-lg);
+    background: transparent;
+    color: var(--qv-text-primary);
+    cursor: pointer;
+  }
+
+  .qv-admin-layout__menu-btn,
+  .qv-admin-layout__drawer-close {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  .qv-admin-layout__menu-btn:hover,
+  .qv-admin-layout__drawer-close:hover {
+    background: color-mix(in srgb, var(--qv-color-primary) 6%, var(--qv-surface-card));
+  }
+
+  .qv-admin-layout__menu-btn:focus-visible,
+  .qv-admin-layout__drawer-close:focus-visible {
+    outline: none;
+    box-shadow: var(--qv-shadow-focus);
+  }
+
+  .qv-admin-layout__sidebar .qv-sidebar__scroll-area {
+    overscroll-behavior: contain;
+  }
+
+  .qv-admin-layout__topbar-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--qv-font-display);
+    font-size: 1.0625rem;
+    font-weight: 700;
+    color: var(--qv-text-primary);
+  }
+
+  /* Drawer = la sidebar existente */
+  .qv-admin-layout .qv-admin-layout__sidebar,
+  .qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    top: 0 !important;
+    width: min(20rem, 86vw);
+    height: 100vh !important;
+    height: 100dvh !important;
+    padding: 0 !important;
+    z-index: 960 !important;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.25s ease, visibility 0s linear 0.25s;
+  }
+
+  .qv-admin-layout--nav-open .qv-admin-layout__sidebar {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.25s ease, visibility 0s;
+  }
+
+  .qv-admin-layout__sidebar .qv-sidebar__capsule {
+    border-radius: 0 var(--qv-radius-xl) var(--qv-radius-xl) 0;
+    padding-top: calc(var(--qv-space-md) + env(safe-area-inset-top));
+    padding-bottom: calc(var(--qv-space-md) + env(safe-area-inset-bottom));
+    padding-left: calc(var(--qv-space-sm) + env(safe-area-inset-left));
+  }
+
+  .qv-admin-layout__drawer-close {
+    position: absolute;
+    top: calc(var(--qv-space-xs) + env(safe-area-inset-top));
+    right: var(--qv-space-xs);
+    z-index: 2;
+  }
+
+  .qv-admin-layout__sidebar .qv-sidebar__link,
+  .qv-admin-layout__sidebar .qv-sidebar__logout {
+    min-height: 2.75rem;
+  }
+
+  .qv-admin-layout__backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 950;
+    background: rgba(10, 8, 28, 0.55);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+
+  .qv-admin-layout--nav-open .qv-admin-layout__backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .qv-admin-layout .qv-admin-layout__sidebar,
+    .qv-admin-layout--nav-open .qv-admin-layout__sidebar,
+    .qv-admin-layout__backdrop {
+      transition: none;
+    }
+  }
+
+  /* Modal a pantalla completa: header arriba, footer abajo, el cuerpo scrollea */
+  .qv-modal-backdrop {
+    padding: 0;
+    align-items: stretch;
+  }
+
+  /* Prefijo .qv-modal-backdrop: gana en especificidad a los .qv-modal--wide/xl/2xl de apps/web (también !important). */
+  .qv-modal-backdrop .qv-modal,
+  .qv-modal-backdrop .qv-modal--wide,
+  .qv-modal-backdrop .qv-modal--xl,
+  .qv-modal-backdrop .qv-modal--2xl {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none !important;
+    border-radius: 0;
+  }
+
+  .qv-modal__header {
+    padding-top: calc(1.25rem + env(safe-area-inset-top));
+  }
+
+  .qv-modal__close {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .qv-modal__body {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .qv-modal__footer {
+    flex-wrap: wrap;
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  }
+
+  /* Tablas apiladas: una tarjeta por fila (thead recortado, no display:none) */
+  .qv-table-wrap:has(.qv-table--stack) {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    overflow-x: visible;
+  }
+
+  .qv-table--stack,
+  .qv-table--stack tbody,
+  .qv-table--stack tr,
+  .qv-table--stack td {
+    display: block;
+    width: 100%;
+  }
+
+  .qv-table--stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .qv-table--stack tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--qv-space-sm);
+    margin-bottom: var(--qv-space-sm);
+    padding: var(--qv-space-xs) var(--qv-space-sm);
+    border: 1px solid var(--qv-border-glass);
+    border-radius: var(--qv-radius-xl);
+    background: var(--qv-surface-card);
+    box-shadow: var(--qv-shadow-sm);
+  }
+
+  .qv-table--stack tbody td {
+    padding: var(--qv-space-2xs) 0;
+    border-bottom: 0;
+    text-align: left !important;
+    overflow-wrap: anywhere;
+  }
+
+  .qv-table--stack td[data-label]:not([data-label=""])::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.15rem;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--qv-text-secondary);
+  }
+
+  .qv-table--stack td:first-child,
+  .qv-table--stack td[colspan],
+  .qv-table--stack td[data-label=""] {
+    grid-column: 1 / -1;
+  }
+
+  .qv-table--stack td[data-label=""] {
+    margin-top: var(--qv-space-2xs);
+    padding-top: var(--qv-space-xs);
+    border-top: 1px solid var(--qv-border-glass);
+  }
+
+  .qv-table--stack td[data-label=""] button,
+  .qv-table--stack td[data-label=""] a {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+}

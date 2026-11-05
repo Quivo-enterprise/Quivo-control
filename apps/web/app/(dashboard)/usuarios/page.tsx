@@ -402,7 +402,7 @@ export default function UsuariosPage() {
             </Card>
           ) : (
             <div className="qv-table-wrap">
-              <table className="qv-table">
+              <table className="qv-table qv-table--stack">
                 <thead>
                   <tr>
                     <th>Usuario</th>
@@ -417,7 +417,7 @@ export default function UsuariosPage() {
                     const inicial = (u.name?.[0] || u.email?.[0] || 'U').toUpperCase();
                     return (
                       <tr key={u.id} role="row">
-                        <td>
+                        <td data-label="Usuario">
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                             <div
                               style={{
@@ -441,13 +441,13 @@ export default function UsuariosPage() {
                             </strong>
                           </div>
                         </td>
-                        <td>
+                        <td data-label="Email">
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8125rem', color: 'var(--qv-text-secondary)' }}>
                             <Mail size={13} style={{ color: 'var(--qv-color-primary)' }} />
                             <span style={{ color: 'var(--qv-text-primary)' }}>{u.email}</span>
                           </div>
                         </td>
-                        <td>
+                        <td data-label="Rol en Plataforma">
                           <span
                             style={{
                               display: 'inline-block',
@@ -477,12 +477,12 @@ export default function UsuariosPage() {
                                 : 'Conductor'}
                           </span>
                         </td>
-                        <td>
+                        <td data-label="Ámbito">
                           <span style={{ fontSize: '0.8125rem', color: 'var(--qv-text-secondary)', fontWeight: 600 }}>
                             {u.sindicatoId ?? 'Central QUIVO'}
                           </span>
                         </td>
-                        <td style={{ textAlign: 'right' }}>
+                        <td style={{ textAlign: 'right' }} data-label="">
                           <div className="qv-table-actions-capsule">
                             <Tooltip content="Restablecer contraseña">
                               <button
