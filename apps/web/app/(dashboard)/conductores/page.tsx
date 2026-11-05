@@ -25,6 +25,7 @@ import {
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { conductoresApi } from '../../../src/lib/api/conductores';
 import { useSindicatoOptions } from '../../../src/lib/api/use-sindicato-options';
+import { urlLlamada } from '../../../src/lib/en-vivo/alertas';
 import { ConductorPreviewCard } from './conductor-preview';
 
 export default function ConductoresPage() {
@@ -255,9 +256,15 @@ export default function ConductoresPage() {
             row.telefono ? (
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                 <Phone size={13} style={{ color: 'var(--qv-text-muted)' }} />
-                <span style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
-                  {formatearTelefonoBolivia(row.telefono)}
-                </span>
+                {urlLlamada(row.telefono) ? (
+                  <a href={urlLlamada(row.telefono) ?? undefined} style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
+                    {formatearTelefonoBolivia(row.telefono)}
+                  </a>
+                ) : (
+                  <span style={{ fontSize: '0.8125rem', color: 'var(--qv-text-primary)' }}>
+                    {formatearTelefonoBolivia(row.telefono)}
+                  </span>
+                )}
               </div>
             ) : (
               <span style={{ color: 'var(--qv-text-muted)' }}>—</span>

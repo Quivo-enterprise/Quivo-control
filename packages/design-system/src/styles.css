@@ -5731,3 +5731,158 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     min-height: 3rem;
   }
 }
+
+/* PR H — Hoy (celular). Resumen del día arriba y búsqueda unificada; propuesta B: bordes gruesos, acciones >= 3rem. */
+.qv-hoy {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 56rem;
+}
+.qv-hoy__kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.qv-hoy__kpi {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-height: 6.5rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--qv-radius-lg, 14px);
+  border: 2px solid var(--qv-color-primary-soft);
+  background: var(--qv-surface-card);
+  color: var(--qv-text-primary);
+  text-decoration: none;
+}
+.qv-hoy__kpi--link {
+  background: var(--qv-color-primary-subtle);
+  touch-action: manipulation;
+}
+.qv-hoy__kpi--link:focus-visible {
+  outline: 2px solid var(--qv-color-primary);
+  outline-offset: 2px;
+}
+.qv-hoy__kpi-etiqueta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--qv-text-secondary);
+}
+.qv-hoy__kpi-valor {
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.qv-hoy__kpi-ayuda {
+  font-size: 0.875rem;
+  color: var(--qv-text-secondary);
+}
+.qv-hoy__kpi-flecha {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.6rem;
+  color: var(--qv-color-primary);
+}
+.qv-hoy__kpi-cargando {
+  display: inline-block;
+  width: 2.5rem;
+  height: 1.75rem;
+  border-radius: var(--qv-radius-md, 8px);
+  background: var(--qv-color-primary-soft);
+  animation: qv-hoy-pulso 1.2s ease-in-out infinite;
+}
+@keyframes qv-hoy-pulso {
+  50% {
+    opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qv-hoy__kpi-cargando {
+    animation: none;
+  }
+}
+.qv-hoy__buscar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.qv-hoy__buscar-etiqueta {
+  font-weight: 800;
+}
+.qv-hoy__buscar-campo {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 3.25rem;
+  padding: 0 0.85rem;
+  border-radius: var(--qv-radius-lg, 14px);
+  border: 2px solid var(--qv-color-primary-soft);
+  background: var(--qv-surface-card);
+  color: var(--qv-text-secondary);
+}
+.qv-hoy__buscar-campo:focus-within {
+  border-color: var(--qv-color-primary);
+}
+.qv-hoy__buscar-campo input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 3rem;
+  border: 0;
+  background: transparent;
+  color: var(--qv-text-primary);
+  font: inherit;
+  outline: none;
+}
+.qv-hoy__resumen {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--qv-text-secondary);
+}
+.qv-hoy__resultados {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.qv-hoy__resultado {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--qv-radius-lg, 14px);
+  border: 2px solid var(--qv-color-primary-soft);
+  background: var(--qv-surface-card);
+}
+.qv-hoy__resultado-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+.qv-hoy__resultado-nombre {
+  font-size: 1.0625rem;
+}
+.qv-hoy__resultado-detalle,
+.qv-hoy__resultado-tel {
+  font-size: 0.875rem;
+  color: var(--qv-text-secondary);
+}
+.qv-hoy__resultado-acciones {
+  display: flex;
+  gap: 0.5rem;
+}
+.qv-hoy__resultado-acciones .qv-live-btn {
+  flex: 1 1 0;
+  min-height: 3rem;
+  justify-content: center;
+  font-size: 0.9375rem;
+}
