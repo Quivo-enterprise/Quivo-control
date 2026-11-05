@@ -1,7 +1,9 @@
 import {
+  InfraccionHoySchema,
   InfraccionSchema,
   type ActualizarInfraccion,
   type Infraccion,
+  type InfraccionHoy,
   type SancionarInfraccion,
 } from '@quivo/shared';
 import { apiFetch } from './client';
@@ -15,6 +17,10 @@ export const infraccionesApi = {
     const filas = await apiFetch<unknown[]>(`/reportes/en-vivo/${sesionId}/infracciones`, token);
     return InfraccionSchema.array().parse(filas);
   },
+
+  /** `GET /reportes/en-vivo/infracciones?fecha=hoy` — abiertas y atendidas de hoy, con placa/conductor/línea. */
+  listarHoy: async (token: string): Promise<InfraccionHoy[]> =>
+    InfraccionHoySchema.array().parse(await apiFetch<unknown[]>('/reportes/en-vivo/infracciones?fecha=hoy', token)),
 
   /** `PATCH /infracciones/:id` — `atender` o `descartar` (con `nota` opcional). */
   actualizar: async (token: string, id: string, data: ActualizarInfraccion): Promise<Infraccion> =>

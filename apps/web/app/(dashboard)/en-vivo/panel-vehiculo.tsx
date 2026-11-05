@@ -83,7 +83,7 @@ export function IconoNivel({ nivel, size = 14 }: { nivel: GravedadRegla; size?: 
 }
 
 /** Texto legible de un fallo al actuar sobre una infracción (409 = ya cambió, 400 = datos). */
-function mensajeAccion(err: unknown): string {
+export function mensajeAccion(err: unknown): string {
   const base = mensajeError(err);
   const status = (err as { status?: number } | null)?.status;
   if (status === 409) return `${base} Revisá el estado actual de la infracción.`;
@@ -256,6 +256,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ['en-vivo', 'infracciones', sesionId] }),
       queryClient.invalidateQueries({ queryKey: ['en-vivo', 'posiciones-todas'] }),
+      queryClient.invalidateQueries({ queryKey: ['en-vivo', 'infracciones-hoy'] }),
     ]);
 
   async function actuar(inf: Infraccion, accion: 'atender' | 'descartar', nota?: string) {
@@ -737,7 +738,7 @@ function FrescuraPanel({
 
 /** Formulario inline de descarte. El foco automático solo va con puntero fino: en táctil abriría
  * el teclado virtual y taparía la lista. */
-function FormularioDescarte({
+export function FormularioDescarte({
   motivo,
   pendiente,
   onMotivo,

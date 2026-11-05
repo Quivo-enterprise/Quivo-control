@@ -226,3 +226,17 @@ export function urlLlamada(telefono: string | null | undefined): string | null {
   const e164 = normalizarTelefonoBolivia(telefono ?? '');
   return e164 ? `tel:${e164}` : null;
 }
+
+const DIA_BO = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/La_Paz', year: 'numeric', month: '2-digit', day: '2-digit' });
+const HORA_BO = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+/** Hora de una alerta en Bolivia: `HH:MM` si es de hoy, `ayer HH:MM` si es de ayer, `dd/mm HH:MM` si es anterior
+ * (una infracción que cruzó la medianoche sigue visible hoy). */
+export function etiquetaInicioAlerta(inicio: Date, ahora: Date = new Date()): string {
+  const hora = HORA_BO.format(inicio);
+  const dia = DIA_BO.format(inicio);
+  if (dia === DIA_BO.format(ahora)) return hora;
+  if (dia === DIA_BO.format(new Date(ahora.getTime() - 24 * 3_600_000))) return `ayer ${hora}`;
+  const [, mes, d] = dia.split('-');
+  return `${d}/${mes} ${hora}`;
+}
