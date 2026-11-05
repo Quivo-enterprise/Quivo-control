@@ -5914,6 +5914,13 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   font-weight: 700;
   color: var(--qv-color-danger);
 }
+.qv-hoy__error-kpis p {
+  margin: 0;
+}
+.qv-hoy__error-kpis .qv-live-btn {
+  min-height: 2.75rem;
+  font-size: 0.9375rem;
+}
 .qv-hoy__resultado-acciones .qv-live-btn,
 .qv-alertas__card .qv-live-btn:not(.qv-live-btn--primario),
 .qv-hoy__error-kpis .qv-live-btn {

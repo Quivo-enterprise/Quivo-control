@@ -393,12 +393,13 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
       await page.waitForTimeout(1_000);
       await expect(panel).toHaveCount(0);
-      // Vehículo que no está en las posiciones de hoy: sin error ni panel, y el parámetro también se consume.
+      // Vehículo que no está en las posiciones de hoy: sin panel, con aviso, y el parámetro también se consume.
       await page.goto('/en-vivo?vehiculo=00000000-0000-4000-8000-0000000000ff', { waitUntil: 'domcontentloaded', timeout: 60_000 });
       await expect(page.getByLabel('Barra de mando de En vivo')).toBeVisible({ timeout: 30_000 });
       await page.waitForTimeout(1_500);
       await expect(page.getByLabel(/Detalle del vehículo/)).toHaveCount(0);
       await expect(page).toHaveURL(/\/en-vivo$/);
+      await expect(page.getByText('Ese vehículo no tiene posición hoy')).toBeVisible();
     } finally {
       await page.unroute('**/v1/reportes/en-vivo/posiciones*');
       await page.unroute('**/v1/reportes/en-vivo/infracciones*');
@@ -451,6 +452,42 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(resultado.getByRole('link')).toHaveCount(0);
     } finally {
       for (const [patron] of rutas) await page.unroute(patron);
+    }
+  });
+
+  test('Hoy: Reintentar mantiene el banner mientras recarga y lo quita al lograr', async () => {
+    test.setTimeout(90_000);
+    let falla = true;
+    let liberar!: () => void;
+    const retenido = new Promise<void>((res) => (liberar = res));
+    const rutas: [string, unknown][] = [
+      ['**/v1/reportes/en-vivo/posiciones*', []],
+      ['**/v1/reportes/en-vivo/infracciones*', []],
+    ];
+    for (const [patron, json] of rutas) await page.route(patron, (r) => r.fulfill({ json }));
+    await page.route('**/v1/sanciones*', async (r) => {
+      if (falla) return r.fulfill({ status: 500, json: { message: 'boom' } });
+      await retenido;
+      return r.fulfill({ json: [] });
+    });
+    try {
+      await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      const banner = page.getByRole('alert').filter({ hasText: 'No se pudo cargar' });
+      await expect(banner).toBeVisible({ timeout: 30_000 });
+      falla = false;
+      const boton = page.getByRole('button', { name: 'Reintentar' });
+      await boton.click();
+      // Con la petición retenida el banner y el botón siguen montados, deshabilitados.
+      const enCurso = page.getByRole('button', { name: 'Reintentando…' });
+      await expect(enCurso).toBeDisabled();
+      await expect(banner).toBeVisible();
+      liberar();
+      await expect(enCurso).toHaveCount(0);
+      await expect(banner).toHaveCount(0);
+    } finally {
+      liberar();
+      for (const [patron] of rutas) await page.unroute(patron);
+      await page.unroute('**/v1/sanciones*');
     }
   });
 });

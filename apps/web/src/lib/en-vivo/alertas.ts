@@ -243,3 +243,6 @@ export function etiquetaInicioAlerta(inicio: Date, ahora: Date = new Date()): st
 
 /** HH:MM en hora de La Paz (para "datos de las HH:MM"). */
 export const horaBo = (ts: number | Date): string => HORA_BO.format(ts);
+
+/** "1 alerta abierta" / "3 alertas abiertas". */
+export const textoAlertasAbiertas = (n: number): string => `${n} alerta${n === 1 ? '' : 's'} abierta${n === 1 ? '' : 's'}`;

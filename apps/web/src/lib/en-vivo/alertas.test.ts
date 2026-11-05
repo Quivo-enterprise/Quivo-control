@@ -17,6 +17,7 @@ import {
   resumenContadores,
   siguienteAlertaId,
   telefonoParaWhatsapp,
+  textoAlertasAbiertas,
   urlLlamada,
   urlWhatsapp,
   velocidadKmh,
@@ -248,5 +249,13 @@ describe('etiquetaInicioAlerta', () => {
   });
   it('anterior a ayer: dd/mm HH:MM', () => {
     expect(etiquetaInicioAlerta(new Date('2026-10-12T14:05:00Z'), ahora)).toBe('12/10 10:05');
+  });
+});
+
+describe('textoAlertasAbiertas', () => {
+  it('concuerda singular y plural', () => {
+    expect(textoAlertasAbiertas(0)).toBe('0 alertas abiertas');
+    expect(textoAlertasAbiertas(1)).toBe('1 alerta abierta');
+    expect(textoAlertasAbiertas(3)).toBe('3 alertas abiertas');
   });
 });

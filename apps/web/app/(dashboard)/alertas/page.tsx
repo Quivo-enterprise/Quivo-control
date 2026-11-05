@@ -19,6 +19,7 @@ import {
   puedeAtender,
   puedeDescartar,
   puedeSancionar,
+  textoAlertasAbiertas,
 } from '../../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy } from '../../../src/lib/en-vivo/use-en-vivo';
 import { mensajeError } from '../en-vivo/map-builders';
@@ -74,9 +75,9 @@ export default function AlertasPage() {
       ? (document.querySelector<HTMLElement>(`[data-alerta="${objetivo}"] .qv-alertas__acciones :is(a, button:not(:disabled))`) ??
         document.querySelector<HTMLElement>(`[data-alerta="${objetivo}"] :is(a[href], button:not(:disabled), input, textarea)`))
       : document.querySelector<HTMLElement>('.qv-alertas__vacio');
-    el?.focus({ preventScroll: true });
-  });
-  const armarFoco = (id: string) => setFocoTras({ id, idx: orden.findIndex((i) => i.id === id) });
+    el?.focus();
+  }, [focoTras]);
+  const armarFoco = (id: string) => setFocoTras({ id, idx: Math.max(orden.findIndex((i) => i.id === id), 0) });
 
   // Alertas y En vivo cachean las mismas infracciones: se invalidan las dos keys exactas (sin tocar posiciones).
   const refrescar = (sesionId: string) =>
@@ -94,23 +95,29 @@ export default function AlertasPage() {
     const id = inf.id;
     ponerError(id, null);
     setEnCurso((prev) => new Map(prev).set(id, accion));
+    const liberar = () =>
+      setEnCurso((prev) => {
+        const sig = new Map(prev);
+        sig.delete(id);
+        return sig;
+      });
     let ok = false;
     try {
       await fn();
       ok = true;
     } catch (err) {
       ponerError(id, mensajeAccion(err));
-    } finally {
-      setEnCurso((prev) => {
-        const sig = new Map(prev);
-        sig.delete(id);
-        return sig;
-      });
     }
+    // Lograda y con refresco: la tarjeta sigue bloqueada hasta que la lista se actualiza (evita un 2.º PATCH sobre una alerta cerrada).
+    if (!ok || !refrescarAlTerminar) liberar();
     if (!refrescarAlTerminar) return;
     const listo = refrescar(inf.sesionId);
     if (ok) {
-      await listo;
+      try {
+        await listo;
+      } finally {
+        liberar();
+      }
       armarFoco(id);
     }
   }
@@ -133,9 +140,9 @@ export default function AlertasPage() {
   return (
     <div className="qv-alertas">
       <p className="qv-visually-hidden" aria-live="polite">
-        {alertas.data ? `${cuenta.abierta} alerta${cuenta.abierta === 1 ? '' : 's'} abierta${cuenta.abierta === 1 ? '' : 's'}` : ''}
+        {alertas.data ? textoAlertasAbiertas(cuenta.abierta) : ''}
       </p>
-      <PageHeader title="Alertas" subtitle={alertas.data ? `Hoy · ${cuenta.abierta} abierta${cuenta.abierta === 1 ? '' : 's'}` : 'Hoy'} />
+      <PageHeader title="Alertas" subtitle={alertas.data ? `Hoy · ${textoAlertasAbiertas(cuenta.abierta)}` : 'Hoy'} />
 
       <div className="qv-alertas__chips" role="group" aria-label="Filtrar por estado">
         {FILTROS.map((f) => (

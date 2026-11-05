@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Loader, PageHeader, PlateBadge } from '@quivo/design-system';
@@ -11,7 +11,7 @@ import { conductoresApi } from '../../src/lib/api/conductores';
 import { sancionesApi } from '../../src/lib/api/sanciones';
 import { vehiculosApi } from '../../src/lib/api/vehiculos';
 import { conteoPorEstado, resumenFlota } from '../../src/lib/en-vivo/atencion';
-import { horaBo, telefonoParaWhatsapp, urlLlamada } from '../../src/lib/en-vivo/alertas';
+import { horaBo, telefonoParaWhatsapp, textoAlertasAbiertas, urlLlamada } from '../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy, useJornadasHoy, usePosicionesEnVivo } from '../../src/lib/en-vivo/use-en-vivo';
 import { BUSQUEDA_MIN, buscarHoy, normalizarBusqueda } from '../../src/lib/hoy/hoy.logic';
 import { mensajeError } from './en-vivo/map-builders';
@@ -55,6 +55,8 @@ function TarjetaKpi({ kpi }: { kpi: Kpi }) {
 export function HoyMovil() {
   const { token } = useAuth();
   const [consulta, setConsulta] = useState('');
+  const [reintentando, setReintentando] = useState(false);
+  const mensajeErrorRef = useRef('');
   const n = normalizarBusqueda(consulta).length;
   const buscando = n >= BUSQUEDA_MIN;
   // Home: refresco lento (15 s); las jornadas solo hacen falta para cruzar el conductor al buscar.
@@ -124,9 +126,20 @@ export function HoyMovil() {
   const fallidas = [posiciones, alertas, sanciones].filter((q) => q.isError);
   const sinDatos = fallidas.some((q) => q.data === undefined);
   const conViejos = fallidas.filter((q) => q.data !== undefined);
-  const refrescando = fallidas.some((q) => q.isFetching);
   // Con datos viejos conservados (poll fallido) se muestran los KPIs con la hora del último dato bueno.
   const horaViejos = Math.min(...conViejos.map((q) => q.dataUpdatedAt));
+
+  // Durante el reintento las queries salen de error: se conserva el último texto para que el banner no quede vacío.
+  if (fallidas.length > 0) {
+    mensajeErrorRef.current = [sinDatos && 'No se pudo cargar', conViejos.length > 0 && `No se pudo actualizar; mostrando datos de ${horaBo(horaViejos)}`]
+      .filter(Boolean)
+      .join('. ');
+  }
+  // El banner sigue montado mientras dura el reintento aunque la query ya no esté en error (isError se limpia al empezar el fetch).
+  const reintentar = () => {
+    setReintentando(true);
+    void Promise.allSettled(fallidas.map((q) => q.refetch())).finally(() => setReintentando(false));
+  };
 
   const { resultados, total } =
     buscando && vehiculos.data && conductores.data
@@ -139,24 +152,20 @@ export function HoyMovil() {
       <PageHeader title="Hoy" subtitle="Resumen del día y consultas rápidas" />
 
       <p className="qv-visually-hidden" aria-live="polite">
-        {abiertas ? `${abiertas.length} alerta${abiertas.length === 1 ? '' : 's'} abierta${abiertas.length === 1 ? '' : 's'}` : ''}
+        {abiertas ? textoAlertasAbiertas(abiertas.length) : ''}
       </p>
       <section className="qv-hoy__kpis" aria-label="Resumen del día" aria-busy={kpis.some((k) => k.valor === null)}>
         {kpis.map((k) => (
           <TarjetaKpi key={k.id} kpi={k} />
         ))}
       </section>
-      {fallidas.length > 0 && (
-        <p className="qv-hoy__error-kpis" role="alert">
-          <span>
-            {[sinDatos && 'No se pudo cargar', conViejos.length > 0 && `No se pudo actualizar; mostrando datos de ${horaBo(horaViejos)}`]
-              .filter(Boolean)
-              .join('. ')}
-          </span>
-          <button type="button" className="qv-live-btn" disabled={refrescando} onClick={() => fallidas.forEach((q) => void q.refetch())}>
-            {refrescando ? 'Reintentando…' : 'Reintentar'}
+      {(fallidas.length > 0 || reintentando) && (
+        <div className="qv-hoy__error-kpis">
+          <p role="alert">{mensajeErrorRef.current}</p>
+          <button type="button" className="qv-live-btn" disabled={reintentando} onClick={reintentar}>
+            {reintentando ? 'Reintentando…' : 'Reintentar'}
           </button>
-        </p>
+        </div>
       )}
 
       <section className="qv-hoy__buscar">
