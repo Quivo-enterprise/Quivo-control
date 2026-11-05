@@ -67,7 +67,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - En el celular no hay forma de ver el dashboard completo de escritorio (resúmenes por sindicato, errores de sync); así lo define el plan.
     - El KPI de sanciones lleva a `/reglas` sin filtro, porque `/reglas` no lee parámetros en la URL.
   - No verificado: emulador Android, iOS y dispositivo real. Codex: no verificado.
-- **QA real y gate de UI sobre G y H (después del merge; `fix/web-movil-gate-ui`, PR #308).**
+- **QA real y gate de UI sobre G y H (después del merge; #308 mergeado, `955b153`).** `ci` y `acceptance` en verde sobre `fd7b46e`. Con esto el plan móvil D–H queda completo en `main`, sin desplegar: la API nueva y la web salen con r37, que corre el CTO.
   - G y H se mergearon sin `web-design-guidelines` ni `impeccable audit`, y sin probar las acciones de punta a punta. Se hizo después.
   - QA sin mocks, con API real y DB local (`quivo_movil_qa`), a 412 px: Atender, Descartar y Sancionar verificados contra la DB; KPIs de Hoy iguales a los conteos SQL; búsqueda con `tel:`/`wa.me` por `conductorId`; 5 pestañas; operador redirigido a `/en-vivo` y 403 en la API. Sin bugs de producto.
   - Emulador Android (Chrome): login y 5 pestañas OK.
