@@ -24,6 +24,7 @@ interface JornadaRow {
   vehiculoId: string;
   placa: string;
   numeroInterno: string | null;
+  conductorId: string | null;
   conductorNombre: string | null;
   lineaId: string;
   lineaNombre: string;
@@ -119,7 +120,7 @@ export class JornadasService {
       (tx) => tx.$queryRaw<JornadaRow[]>`
         SELECT v."sindicatoId" AS "sindicatoId", s.nombre AS "sindicatoNombre",
           a."vehiculoId" AS "vehiculoId", v.placa, v."numeroInterno" AS "numeroInterno",
-          c.nombre AS "conductorNombre", l.id AS "lineaId", l.nombre AS "lineaNombre",
+          a."conductorId" AS "conductorId", c.nombre AS "conductorNombre", l.id AS "lineaId", l.nombre AS "lineaNombre",
           ru.sentido AS "rutaSentido", a."horaSalida" AS "horaSalida",
           rs.tipo AS "ultimoEventoRecorrido", rs.ts AS "tsEventoRecorrido", ij.ts AS "inicioJornadaTs"
         FROM (
@@ -185,6 +186,7 @@ export class JornadasService {
         vehiculoId: f.vehiculoId,
         placa: f.placa,
         numeroInterno: f.numeroInterno,
+        conductorId: f.conductorId,
         conductorNombre: f.conductorNombre,
         lineaId: f.lineaId,
         lineaNombre: f.lineaNombre,

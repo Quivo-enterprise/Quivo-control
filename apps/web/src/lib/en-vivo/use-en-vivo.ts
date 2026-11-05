@@ -81,7 +81,7 @@ export const INTERVALO_POLL_POSICIONES_MS = 2_000;
  * resto de los hooks de esta pantalla): con la pestaña oculta no tiene sentido seguir
  * pollendo un mapa que nadie mira.
  */
-export function usePosicionesEnVivo(token: string | null) {
+export function usePosicionesEnVivo(token: string | null, intervaloMs: number = INTERVALO_POLL_POSICIONES_MS) {
   // Designaciones pedidas y aún sin confirmar (ver `useDesignarVuelta`): se aplican por encima de
   // cada poll al leer, así el valor optimista no parpadea hacia el del servidor mientras el PUT vuela.
   const queryClient = useQueryClient();
@@ -102,7 +102,7 @@ export function usePosicionesEnVivo(token: string | null) {
     queryKey: ['en-vivo', 'posiciones-todas'],
     enabled: Boolean(token),
     queryFn: () => enVivoApi.posicionesTodas(token as string),
-    refetchInterval: INTERVALO_POLL_POSICIONES_MS,
+    refetchInterval: intervaloMs,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: REINTENTOS,
@@ -230,10 +230,10 @@ export function useRecargarTraza(sesionId: string | null) {
  * siguiente poll. 30 s alcanza — la declaración es un evento humano, no telemetría. Mismo
  * criterio de pestaña oculta/foco que el resto de los hooks de esta pantalla.
  */
-export function useJornadasHoy(token: string | null) {
+export function useJornadasHoy(token: string | null, activo = true) {
   return useQuery<JornadasDelDia>({
     queryKey: ['en-vivo', 'jornadas'],
-    enabled: Boolean(token),
+    enabled: Boolean(token) && activo,
     queryFn: () => reportesApi.jornadas(token as string),
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,

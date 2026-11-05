@@ -12,6 +12,7 @@ const JORNADA = {
   vehiculoId: '0b7e3c1a-2f4d-4c8e-9a51-6d2f1e8b7c34',
   placa: '1234ABC',
   numeroInterno: null,
+  conductorId: null,
   conductorNombre: null,
   lineaId: '1c8f4d2b-3a5e-4d9f-8b62-7e3a2f9c8d45',
   lineaNombre: 'Línea 120',

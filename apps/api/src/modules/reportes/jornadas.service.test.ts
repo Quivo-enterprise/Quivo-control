@@ -436,6 +436,7 @@ describe('JornadasService (Postgres real + RLS)', () => {
     expect(f?.lineaNombre).toBe('Línea JA');
     expect(f?.rutaSentido).toBe('ida');
     expect(f?.conductorNombre).toBe('Conductor JA');
+    expect(f?.conductorId).toEqual(expect.any(String));
     expect(f?.numeroInterno).toBe('N-sin');
     expect(f?.horaSalida).toBeNull();
   });

@@ -6,7 +6,7 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
-## En curso — 2026-11-05: Quivo Control móvil, fase 2 (escala + rediseño foco)
+## Cerrado — 2026-11-05: Quivo Control móvil, fase 2 (escala + rediseño foco)
 
 Plan: [`docs/plan-movil-rediseno.md`](plan-movil-rediseno.md). El CTO vio el responsive de A/B/C como una "mini versión" del panel.
 
@@ -38,7 +38,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - `validarBase` lo comparten celular y escritorio. En escritorio se puede dejar vacío para quitar la base; en el celular no (decisión: se usa poco).
   - Acceptance con mocks de `page.route` (el seed no tiene terminales), sin ningún PUT real.
   - No verificado: guardado y despacho reales contra la API, y el aviso de guardado sobreviviendo al refetch. Codex: no verificado.
-- **PR G — Alertas (`feat/web-movil-alertas`, PR en curso).**
+- **PR G — Alertas (#303, `c9c94fb`, mergeado 5/11 con `ci` y `acceptance` en verde).**
   - Endpoint nuevo `GET /reportes/en-vivo/infracciones?fecha=hoy`: devuelve las infracciones abiertas y atendidas de las sesiones visibles hoy (misma regla que `listarHoy`), con placa, conductor y línea. Las abiertas van primero y el tope es `LIMITE_INFRACCIONES_HOY` (500).
   - Scope: RLS más un filtro explícito por sindicato salvo `admin_quivo`. Un `admin_sindicato` sin sindicato recibe `[]`. Test de integración con 2 sindicatos más una sesión de ayer: 7/7. `/security-review`: sin hallazgos.
   - El operador puede leer este endpoint, igual que el resto de `/reportes/en-vivo` (decisión del CTO del 13/10); la página y la pestaña son solo para admins.
@@ -50,6 +50,23 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - "PC N omitido" sin la lista de PCs: en `/alertas` se muestra sin número, para no mostrar uno equivocado. En vivo no cambia.
   - Pendiente: "Ver en mapa" abre `/en-vivo` sin preseleccionar la sesión (En vivo no lee `?sesion=`).
   - No verificado: Atender, Descartar y Sancionar de punta a punta en un navegador. Codex: no verificado.
+- **Fix de test — `en-vivo.resumen-equivalencia` (#304, `bac7481`).**
+  - El test fallaba en `main` según la hora del día: fijaba `AHORA` al mediodía UTC de hoy, pero el ingest y las sesiones usan el reloj real (`now()` de la DB, `inicio` por default). El caché de turbo lo tapaba cuando `apps/api` no cambiaba.
+  - Ahora `AHORA` es el mediodía UTC de ayer, cada sesión tiene un `inicio` explícito, la sesión de movimiento usa un vehículo propio y los fixes de "detenido" van en lotes separados. Solo test; el código de producción no cambia.
+- **PR H — Hoy (`feat/web-movil-hoy`, PR en curso). Con H termina el plan.**
+  - En el celular, `/` muestra la vista Hoy en lugar del dashboard de escritorio. El escritorio no cambia.
+  - Cuatro KPIs: en servicio e inactivos (misma clasificación que En vivo, `conteoPorEstado`/`resumenFlota`, refresco cada 15 s), alertas abiertas (lleva a `/alertas`) y sanciones pendientes (lleva a `/reglas`; muestra `200+` al llegar al tope de la API). Mientras carga no muestra 0; si falla, muestra "—".
+  - Búsqueda única de placa o conductor:
+    - Filtra en el cliente; usa `normalizarPlacaVehiculo` para placas y un normalizador sin tildes para nombres.
+    - Hasta 20 resultados, repartidos 10 y 10 entre placas y conductores, con aviso "20 de N".
+    - Botones Llamar (`tel:`) y WhatsApp solo si hay teléfono.
+  - El teléfono del conductor de hoy de un vehículo se busca por `conductorId`, que es un campo nuevo y nullable en `JornadaVehiculo`.
+  - `/conductores`: el teléfono es un link `tel:`.
+  - En el celular, la barra superior dice "Hoy" en `/`.
+  - Decisiones:
+    - En el celular no hay forma de ver el dashboard completo de escritorio (resúmenes por sindicato, errores de sync); así lo define el plan.
+    - El KPI de sanciones lleva a `/reglas` sin filtro, porque `/reglas` no lee parámetros en la URL.
+  - No verificado: emulador Android, iOS y dispositivo real. Codex: no verificado.
 
 **Pendiente de la capacitación del 5/11 (prod):**
 - **PENDIENTE (sin fecha): sesión de 4701EHA** (chofer real Javier Bravo Soliz), id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Sigue `activa` en prod (`fin: null`) y su último fix es de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.

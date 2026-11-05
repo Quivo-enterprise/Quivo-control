@@ -174,7 +174,8 @@ function DashboardShell({ children }: { children: ReactNode }) {
       // '/en-vivo' va a pantalla completa sin sidebar en escritorio: `bare` deja solo drawer + tabbar en móvil.
       bare={isLive}
       mobileTabs={mobileTabs}
-      mobileTitle={activeItem?.label ?? 'Quivo'}
+      // En móvil la home se llama "Hoy" (pestaña y encabezado); en escritorio sigue "Dashboard".
+      mobileTitle={pathname === '/' ? 'Hoy' : (activeItem?.label ?? 'Quivo')}
       routeKey={pathname}
       sidebar={
         <SidebarNav

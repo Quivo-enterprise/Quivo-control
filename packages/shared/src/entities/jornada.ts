@@ -32,6 +32,8 @@ export const JornadaVehiculoSchema = z.object({
   // Respuesta: sin validar formato de placa (puede haber placas anteriores al reemplaque).
   placa: z.string().min(1),
   numeroInterno: z.string().nullable(),
+  // Null: asignación sin conductor (el JOIN a `conductores` es LEFT).
+  conductorId: uuidSchema.nullable(),
   conductorNombre: z.string().nullable(),
   lineaId: uuidSchema,
   lineaNombre: z.string(),
