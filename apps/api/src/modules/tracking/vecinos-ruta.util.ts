@@ -1,6 +1,6 @@
 import {
   separacionCircular,
-  UMBRAL_VECINO_FRESCO_MS,
+  UMBRAL_VECINO_RUTA_FRESCO_MS,
   type ProgresoCircuito,
   type VecinoRuta,
 } from '@quivo/shared';
@@ -121,7 +121,8 @@ function aVecino(c: CandidatoVecino, distanciaM: number, ahora: Date): VecinoRut
  * - La frescura se evalúa AQUÍ contra `ahora` (no al armar el caché): una entrada cacheada
  *   sigue descartando a quien se volvió viejo dentro del TTL.
  *
- * Entre candidatos a igual distancia, gana el de fix más reciente.
+ * Entre candidatos a igual distancia, gana el de menor `sesionId` (determinista: el fix más
+ * reciente haría saltar el resultado entre vehículos empatados).
  */
 export function seleccionarVecinos(
   /** Mi progreso, el largo de la polilínea (m) y si es un circuito cerrado (separación por el lado más corto). */
@@ -138,7 +139,7 @@ export function seleccionarVecinos(
   for (const c of candidatos) {
     if (c.sesionId === miSesionId) continue;
     if (miVehiculoId !== undefined && c.vehiculoId === miVehiculoId) continue;
-    if (ahoraMs - c.ultimoFixTs.getTime() > UMBRAL_VECINO_FRESCO_MS) continue;
+    if (ahoraMs - c.ultimoFixTs.getTime() > UMBRAL_VECINO_RUTA_FRESCO_MS) continue;
 
     const { lado, distanciaM } = separacionCircular(
       yo.progresoM,
@@ -150,7 +151,7 @@ export function seleccionarVecinos(
     if (
       !mejor ||
       distanciaM < mejor.distanciaM ||
-      (distanciaM === mejor.distanciaM && c.ultimoFixTs > mejor.c.ultimoFixTs)
+      (distanciaM === mejor.distanciaM && c.sesionId < mejor.c.sesionId)
     ) {
       elegidos[lado] = { c, distanciaM };
     }

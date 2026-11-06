@@ -4,6 +4,9 @@ import { FASES_CIRCUITO } from '../circuito.js';
 /** Un vecino cuyo último fix es más viejo que esto no se muestra (se considera sin señal). */
 export const UMBRAL_VECINO_FRESCO_MS = 10 * 60 * 1000;
 
+/** Frescura máxima (5 min) del fix de un vecino de ruta; `UMBRAL_VECINO_FRESCO_MS` sigue siendo de cola-molinos. */
+export const UMBRAL_VECINO_RUTA_FRESCO_MS = 5 * 60 * 1000;
+
 /**
  * Coordenada opcional que llega como query string. `z.coerce.number()` convertiría `''` en 0
  * (`Number('')`), una coordenada válida pero falsa: se rechaza el string vacío antes de coercionar.

@@ -4,7 +4,7 @@ import {
   PRECISION_MAX_M,
   prepararCircuito,
   progresoEnCircuito,
-  UMBRAL_VECINO_FRESCO_MS,
+  UMBRAL_VECINO_RUTA_FRESCO_MS,
   VecinosRutaSchema,
   type CircuitoPreparado,
   type FaseCircuito,
@@ -175,7 +175,7 @@ export class VecinosRutaService {
     const jornadaDesde = new Date(
       inicioDeJornadaBolivia(jornada).getTime() - GRACIA_ACTIVIDAD_MEDIANOCHE_MS,
     );
-    const fixDesde = new Date(ahora.getTime() - UMBRAL_VECINO_FRESCO_MS);
+    const fixDesde = new Date(ahora.getTime() - UMBRAL_VECINO_RUTA_FRESCO_MS);
 
     return withTenantContext({ rol: 'conductor', sindicatoId: sesion.sindicatoId }, async (tx) => {
       const [mia] = await tx.$queryRaw<MiPosicionRow[]>`
@@ -273,9 +273,16 @@ export class VecinosRutaService {
             -- seguiría apareciendo como vecino hasta agotar el umbral de frescura del fix.
             AND so.estado = 'activa' AND so."revokedAt" IS NULL AND so.fin IS NULL
             AND pos.lat IS NOT NULL AND pos.lng IS NOT NULL
+            -- En la fila de salida (terminal) conserva en_curso y progreso ≈ 0: no es un vecino real.
+            AND NOT EXISTS (
+              SELECT 1 FROM fila_salida f
+              WHERE f."sesionId" = so.id AND f."sindicatoId" = so."sindicatoId" AND f.estado = 'en_fila'
+            )
         `;
         const candidatos: CandidatoVecino[] = [];
         for (const f of filas) {
+          // Circuito partido: sin fase la proyección global puede caer en el sentido opuesto de una calle compartida.
+          if (geometria.partido && !f.fase) continue;
           const p = progresoEnCircuito(
             [f.lng, f.lat],
             geometria,

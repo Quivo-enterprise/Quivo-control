@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { prisma, withTenantContext } from '@quivo/db';
 import type { Prisma as PrismaTypes } from '@quivo/db';
-import { UMBRAL_VECINO_FRESCO_MS } from '@quivo/shared';
+import { UMBRAL_VECINO_RUTA_FRESCO_MS } from '@quivo/shared';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { fechaActualBolivia, inicioDeJornadaBolivia } from '../../common/tiempo/jornada.js';
 import type { SesionMovilAutenticada } from '../auth-movil/auth-movil.types.js';
@@ -97,6 +97,8 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     fase?: 'ida' | 'regreso';
     /** Antigüedad (ms) del inicio de esa vuelta; por defecto 30 min. */
     edadVueltaMs?: number;
+    /** Fila de salida en la terminal con ese estado (la sesión estaría en cola de salida). */
+    fila?: 'en_fila' | 'salio' | 'retirado';
     /** Fixes en `gps_points` (ya ingestados), p. ej. el último fix bueno tras uno impreciso. */
     puntosGps?: { lng: number; lat: number; accuracy: number | null; edadMs: number }[];
   }
@@ -180,6 +182,20 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
             inicioTs: new Date(AHORA.getTime() - (spec.edadVueltaMs ?? 30 * MINUTO)),
             estado: 'en_curso',
             pasoRetornoTs: spec.fase === 'regreso' ? new Date(AHORA.getTime() - 10 * MINUTO) : null,
+          },
+        });
+      }
+      if (spec.fila) {
+        await tx.filaSalida.create({
+          data: {
+            sindicatoId,
+            puntoControlId: pcTerminalId,
+            fecha: AHORA,
+            sesionId: sesion.id,
+            vehiculoId: vehiculo.id,
+            llegadaTs: new Date(AHORA.getTime() - 20 * MINUTO),
+            ordenTs: new Date(AHORA.getTime() - 20 * MINUTO),
+            estado: spec.fila,
           },
         });
       }
@@ -435,12 +451,12 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     await crearSesion({
       placa: 'VRVIEJO',
       pos: { lng: LNG_ADELANTE, lat: LAT },
-      edadFixMs: UMBRAL_VECINO_FRESCO_MS + 60_000,
+      edadFixMs: UMBRAL_VECINO_RUTA_FRESCO_MS + 60_000,
     });
     await crearSesion({
       placa: 'VRFRESCO',
       pos: { lng: LNG_ATRAS, lat: LAT },
-      edadFixMs: UMBRAL_VECINO_FRESCO_MS - 60_000,
+      edadFixMs: UMBRAL_VECINO_RUTA_FRESCO_MS - 60_000,
     });
     const yo = await crearSesion({ placa: 'VRVYO', pos: { lng: LNG_YO, lat: LAT } });
 
@@ -538,7 +554,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     await crearSesion({
       placa: 'VRENV',
       pos: { lng: LNG_ADELANTE, lat: LAT },
-      edadFixMs: UMBRAL_VECINO_FRESCO_MS - 10_000,
+      edadFixMs: UMBRAL_VECINO_RUTA_FRESCO_MS - 10_000,
     });
     const yo = await crearSesion({ placa: 'VRENY', pos: { lng: LNG_YO, lat: LAT } });
 
@@ -703,7 +719,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
         fase: 'ida',
         // Fix bueno, pero más viejo que la ventana de frescura.
         puntosGps: [
-          { lng: -58.388, lat: LAT, accuracy: 8, edadMs: UMBRAL_VECINO_FRESCO_MS + 60_000 },
+          { lng: -58.388, lat: LAT, accuracy: 8, edadMs: UMBRAL_VECINO_RUTA_FRESCO_MS + 60_000 },
         ],
       });
 
@@ -748,6 +764,43 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
 
       expect(r.detras?.placa).toBe('VRMIO');
       expect(r.detras!.distanciaM).toBeGreaterThan(1_600);
+    });
+  });
+
+  describe('fila de salida y fase nula en circuito partido', () => {
+    const OTRO_IDA = { lng: -58.388, lat: LAT };
+    const MIA_IDA = { lng: -58.39, lat: LAT };
+
+    it('una sesión en_fila no cuenta como vecino', async () => {
+      const yo = await crearSesion({ placa: 'VRFQY', rutaId: rutaCerradaId, pos: MIA_IDA, fase: 'ida' });
+      await crearSesion({ placa: 'VRFQO', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida', fila: 'en_fila' });
+      const r = await service.obtener(yo, {}, AHORA);
+      expect(r.delante).toBeNull();
+      expect(r.detras).toBeNull();
+    });
+
+    it('una sesión que ya salió de la fila sí cuenta', async () => {
+      const yo = await crearSesion({ placa: 'VRFSY', rutaId: rutaCerradaId, pos: MIA_IDA, fase: 'ida' });
+      await crearSesion({ placa: 'VRFSO', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida', fila: 'salio' });
+      const r = await service.obtener(yo, {}, AHORA);
+      expect(r.delante?.placa).toBe('VRFSO');
+    });
+
+    it('sin fase en circuito partido el candidato se descarta', async () => {
+      const yo = await crearSesion({ placa: 'VRNFY', rutaId: rutaCerradaId, pos: MIA_IDA, fase: 'ida' });
+      await crearSesion({ placa: 'VRNFO', rutaId: rutaCerradaId, pos: OTRO_IDA });
+      const r = await service.obtener(yo, {}, AHORA);
+      expect(r.delante).toBeNull();
+      expect(r.detras).toBeNull();
+    });
+
+    it('calle de doble sentido: un candidato en regreso en mi mismo punto no está a ~0 m', async () => {
+      const yo = await crearSesion({ placa: 'VRDSY', rutaId: rutaCerradaId, pos: MIA_IDA, fase: 'ida' });
+      await crearSesion({ placa: 'VRDSO', rutaId: rutaCerradaId, pos: MIA_IDA, fase: 'regreso' });
+      const r = await service.obtener(yo, {}, AHORA);
+      const d = r.delante ?? r.detras;
+      expect(d?.placa).toBe('VRDSO');
+      expect(d!.distanciaM).toBeGreaterThan(1_000);
     });
   });
 

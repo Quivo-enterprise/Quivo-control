@@ -1,4 +1,4 @@
-import { UMBRAL_VECINO_FRESCO_MS } from '@quivo/shared';
+import { UMBRAL_VECINO_RUTA_FRESCO_MS } from '@quivo/shared';
 import { describe, expect, it } from 'vitest';
 import { CacheTtl, seleccionarVecinos, type CandidatoVecino } from './vecinos-ruta.util.js';
 
@@ -80,10 +80,10 @@ describe('seleccionarVecinos', () => {
 
   it('excluye a un vecino con fix más viejo que el umbral (y acepta el justo en el umbral)', () => {
     const viejo = cand('viejo', 0.6, {
-      ultimoFixTs: new Date(AHORA.getTime() - UMBRAL_VECINO_FRESCO_MS - 1),
+      ultimoFixTs: new Date(AHORA.getTime() - UMBRAL_VECINO_RUTA_FRESCO_MS - 1),
     });
     const justo = cand('justo', 0.7, {
-      ultimoFixTs: new Date(AHORA.getTime() - UMBRAL_VECINO_FRESCO_MS),
+      ultimoFixTs: new Date(AHORA.getTime() - UMBRAL_VECINO_RUTA_FRESCO_MS),
     });
     const r = seleccionarVecinos(
       { progresoM: 0.5 * LARGO_M, ...LINEAL },
@@ -99,7 +99,7 @@ describe('seleccionarVecinos', () => {
     expect(
       seleccionarVecinos({ progresoM: 0.5 * LARGO_M, ...LINEAL }, [c], 'yo', AHORA).delante,
     ).not.toBeNull();
-    const despues = new Date(AHORA.getTime() + UMBRAL_VECINO_FRESCO_MS);
+    const despues = new Date(AHORA.getTime() + UMBRAL_VECINO_RUTA_FRESCO_MS);
     expect(
       seleccionarVecinos({ progresoM: 0.5 * LARGO_M, ...LINEAL }, [c], 'yo', despues).delante,
     ).toBeNull();
@@ -130,17 +130,32 @@ describe('seleccionarVecinos', () => {
     expect(r.delante).toBeNull();
   });
 
-  it('empate entre candidatos de igual frac: gana el fix más reciente', () => {
+  it('empate entre candidatos de igual frac: gana el menor sesionId, sin importar el fix', () => {
+    const elegir = (tsA: number, tsB: number) =>
+      seleccionarVecinos(
+        { progresoM: 0.5 * LARGO_M, ...LINEAL },
+        [
+          cand('b', 0.7, { ultimoFixTs: new Date(AHORA.getTime() - tsB) }),
+          cand('a', 0.7, { ultimoFixTs: new Date(AHORA.getTime() - tsA) }),
+        ],
+        'yo',
+        AHORA,
+      ).delante?.placa;
+    expect(elegir(120_000, 5_000)).toBe('P-a');
+    expect(elegir(5_000, 120_000)).toBe('P-a');
+  });
+
+  it('fix de 6 min queda fuera y uno de 4 min entra', () => {
     const r = seleccionarVecinos(
       { progresoM: 0.5 * LARGO_M, ...LINEAL },
       [
-        cand('viejo', 0.7, { ultimoFixTs: new Date(AHORA.getTime() - 120_000) }),
-        cand('nuevo', 0.7, { ultimoFixTs: new Date(AHORA.getTime() - 5_000) }),
+        cand('viejo', 0.6, { ultimoFixTs: new Date(AHORA.getTime() - 6 * 60_000) }),
+        cand('fresco', 0.7, { ultimoFixTs: new Date(AHORA.getTime() - 4 * 60_000) }),
       ],
       'yo',
       AHORA,
     );
-    expect(r.delante?.placa).toBe('P-nuevo');
+    expect(r.delante?.placa).toBe('P-fresco');
   });
 
   it('edadFixS nunca es negativa ante skew de reloj', () => {
