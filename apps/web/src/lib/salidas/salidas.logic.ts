@@ -62,6 +62,32 @@ export const ETIQUETA_ESTADO_FILA: Record<EstadoVisualFila, string> = {
   esperando: 'Esperando',
 };
 
+export const ESTADO_BADGE: Record<EstadoVisualFila, 'active' | 'warning' | 'idle'> = {
+  en_turno: 'active',
+  demorado: 'warning',
+  esperando: 'idle',
+};
+
+export type TipoAccion = 'despachar' | 'moverAlFinal' | 'retirar';
+
+export const TEXTO_PROGRESO: Record<TipoAccion, string> = {
+  despachar: 'Despachando…',
+  moverAlFinal: 'Moviendo…',
+  retirar: 'Retirando…',
+};
+
+/**
+ * Conductor de cada trufi según las posiciones en vivo: solo sesiones activas con vehículo y nombre; si un
+ * vehículo repite, gana la primera (el server ordena activa y más reciente primero).
+ */
+export function conductorPorVehiculoEnVivo(
+  posiciones: readonly { activa: boolean; vehiculoId?: string | null; conductorNombre?: string | null }[],
+): Record<string, string> {
+  const mapa: Record<string, string> = {};
+  for (const p of posiciones) if (p.activa && p.vehiculoId && p.conductorNombre && !(p.vehiculoId in mapa)) mapa[p.vehiculoId] = p.conductorNombre;
+  return mapa;
+}
+
 /** Franja de una regla: "08:00–10:30" o "Todo el día". */
 export function textoFranja(desdeMin: number | null, hastaMin: number | null): string {
   if (desdeMin === null || hastaMin === null) return 'Todo el día';

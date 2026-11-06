@@ -5,35 +5,25 @@ import { Alert, Button, Card, ConfirmDialog, DataTable, PlateBadge, StatusBadge,
 import type { FilaSalidaPanelItem, SalidaRecientePanel } from '@quivo/shared';
 import { Clock3, History } from 'lucide-react';
 import { formatearHoraBolivia } from '../../../src/lib/en-vivo/jornadas';
-import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
+import { usePosicionesEnVivo } from '../../../src/lib/en-vivo/use-en-vivo';
+import { useEsMovil } from '../../../src/lib/use-es-movil';
 import {
+  ESTADO_BADGE,
   ETIQUETA_ESTADO_FILA,
   ETIQUETA_ORIGEN,
+  TEXTO_PROGRESO,
+  conductorPorVehiculoEnVivo,
   estadoVisualFila,
-  formatearCuenta,
   offsetServidorMs,
-  restanteMs,
-  type EstadoVisualFila,
+  type TipoAccion,
 } from '../../../src/lib/salidas/salidas.logic';
+import { CuentaFila, FilaMovil } from './fila-movil';
 import { mensajeError, useAccionesFila, useFilaSalida } from './use-salidas';
-
-const ESTADO_BADGE: Record<EstadoVisualFila, 'active' | 'warning' | 'idle'> = {
-  en_turno: 'active',
-  demorado: 'warning',
-  esperando: 'idle',
-};
 
 const MUTED = { color: 'var(--qv-text-secondary)', fontSize: 'var(--qv-text-sm)' } as const;
 const NUM = { fontVariantNumeric: 'tabular-nums' } as const;
 
-type TipoAccion = 'despachar' | 'moverAlFinal' | 'retirar';
 type Accion = { tipo: TipoAccion; item: FilaSalidaPanelItem };
-
-const TEXTO_PROGRESO: Record<TipoAccion, string> = {
-  despachar: 'Despachando…',
-  moverAlFinal: 'Moviendo…',
-  retirar: 'Retirando…',
-};
 
 const DIALOGO: Record<TipoAccion, { titulo: string; confirmar: string; mensaje: (placa: string) => string }> = {
   despachar: {
@@ -55,20 +45,6 @@ const DIALOGO: Record<TipoAccion, { titulo: string; confirmar: string; mensaje: 
 
 const hhmm = (ms: number) => formatearHoraBolivia(new Date(ms).toISOString());
 
-/**
- * Cuenta hasta la salida. El tick de 1 Hz vive en esta hoja (como `SaludRefrescoVista`): repinta
- * solo el texto, no la tabla. La hora de referencia es la del servidor (`offsetMs`).
- */
-function CuentaFila({ etaTs, offsetMs }: { etaTs: string; offsetMs: number }) {
-  const ahora = useReloj(1_000);
-  const restante = restanteMs(etaTs, offsetMs, ahora);
-  return (
-    <span style={{ ...NUM, fontWeight: 700, color: restante < 0 ? 'var(--qv-color-warning)' : undefined }}>
-      {formatearCuenta(restante)}
-    </span>
-  );
-}
-
 export function FilaEnVivo({
   token,
   pcId,
@@ -83,6 +59,11 @@ export function FilaEnVivo({
   const [pendiente, setPendiente] = useState<Accion | null>(null);
   const [errorAccion, setErrorAccion] = useState<string | null>(null);
   const [enCurso, setEnCurso] = useState<{ tipo: TipoAccion; id: string } | null>(null);
+  const esMovil = useEsMovil();
+  // Conductor de cada trufi: posiciones en vivo (misma query que En vivo; las lee también `operador`, a diferencia
+  // de /reportes/jornadas, solo admin). Solo en el celular y sin el poll de 2 s del mapa: el nombre casi no cambia.
+  const posiciones = usePosicionesEnVivo(esMovil ? token : null, 30_000);
+  const conductores = useMemo(() => conductorPorVehiculoEnVivo(posiciones.data ?? []), [posiciones.data]);
 
   const data = fila.data;
   // `dataUpdatedAt` = cuándo llegó esta respuesta al navegador; con `servidorTs` da el desfase de reloj.
@@ -103,6 +84,12 @@ export function FilaEnVivo({
     }
   };
 
+  // Despachar a un trufi aún no habilitado pide confirmación (salida anticipada); el resto va directo al diálogo.
+  const pedir = (tipo: TipoAccion, item: FilaSalidaPanelItem) => {
+    if (tipo === 'despachar' && item.habilitado) void ejecutar('despachar', item);
+    else setPendiente({ tipo, item });
+  };
+
   const confirmar = () => {
     if (!pendiente) return;
     const { tipo, item } = pendiente;
@@ -115,6 +102,50 @@ export function FilaEnVivo({
   const sinConexionConDatos = fila.isError && Boolean(data);
   const progreso = (tipo: TipoAccion, id: string) => enCurso?.tipo === tipo && enCurso.id === id;
   const items = data?.items ?? [];
+
+  const dialogo = (
+    <ConfirmDialog
+      open={pendiente !== null}
+      variant={pendiente?.tipo === 'retirar' ? 'danger' : 'primary'}
+      title={DIALOGO[pendiente?.tipo ?? 'despachar'].titulo}
+      message={pendiente ? DIALOGO[pendiente.tipo].mensaje(pendiente.item.placa) : undefined}
+      confirmLabel={DIALOGO[pendiente?.tipo ?? 'despachar'].confirmar}
+      onConfirm={confirmar}
+      onCancel={() => setPendiente(null)}
+    />
+  );
+
+  if (esMovil) {
+    return (
+      <>
+        {sinConexionConDatos && (
+          <Alert variant="warning" title="Sin conexión">
+            Datos de las {hhmm(fila.dataUpdatedAt)}, pueden estar desactualizados. Se reintenta solo.
+          </Alert>
+        )}
+        {errorAccion && (
+          <Alert variant="danger" title="No se pudo completar la acción">
+            {errorAccion}
+          </Alert>
+        )}
+        <FilaMovil
+          items={items}
+          cargando={fila.isPending}
+          error={fila.isError && !data ? mensajeError(fila.error) : undefined}
+          offsetMs={offsetMs}
+          conductores={conductores}
+          internos={internoPorVehiculo}
+          ocupado={ocupado}
+          progreso={progreso}
+          pendienteId={pendiente?.item.id ?? null}
+          onPedir={pedir}
+          recientes={data?.salidasRecientes ?? []}
+          baseMin={data?.baseMin}
+        />
+        {dialogo}
+      </>
+    );
+  }
 
   return (
     <Card
@@ -137,7 +168,6 @@ export function FilaEnVivo({
           </Alert>
         )}
         <DataTable<FilaSalidaPanelItem>
-          className="qv-fila-tabla"
           loading={fila.isPending}
           error={fila.isError && !data ? mensajeError(fila.error) : undefined}
           empty="No hay trufis en la fila. Aparecen apenas llegan a la terminal."
@@ -182,11 +212,10 @@ export function FilaEnVivo({
               <Button
                 size="sm"
                 variant={r.habilitado ? 'primary' : 'secondary'}
-                className="qv-fila-despachar"
                 disabled={ocupado}
                 aria-busy={progreso('despachar', r.id)}
                 aria-label={`Despachar ${r.placa}`}
-                onClick={() => (r.habilitado ? void ejecutar('despachar', r) : setPendiente({ tipo: 'despachar', item: r }))}
+                onClick={() => pedir('despachar', r)}
               >
                 {progreso('despachar', r.id) ? TEXTO_PROGRESO.despachar : 'Despachar'}
               </Button>
@@ -224,15 +253,7 @@ export function FilaEnVivo({
         )}
         <Recientes salidas={data?.salidasRecientes ?? []} />
       </div>
-      <ConfirmDialog
-        open={pendiente !== null}
-        variant={pendiente?.tipo === 'retirar' ? 'danger' : 'primary'}
-        title={DIALOGO[pendiente?.tipo ?? 'despachar'].titulo}
-        message={pendiente ? DIALOGO[pendiente.tipo].mensaje(pendiente.item.placa) : undefined}
-        confirmLabel={DIALOGO[pendiente?.tipo ?? 'despachar'].confirmar}
-        onConfirm={confirmar}
-        onCancel={() => setPendiente(null)}
-      />
+      {dialogo}
     </Card>
   );
 }

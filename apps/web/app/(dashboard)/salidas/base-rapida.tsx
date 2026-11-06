@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Alert, Button, Card, ConfirmDialog } from '@quivo/design-system';
 import { FRECUENCIA_MAX_MINUTOS, FRECUENCIA_MIN_MINUTOS } from '@quivo/shared';
-import { Minus, Plus } from 'lucide-react';
+import { Info, Minus, Plus } from 'lucide-react';
 import { ajustarBase, validarBase } from '../../../src/lib/salidas/salidas.logic';
 import { mensajeError, useAccionesFrecuencia, useReglasSalida } from './use-salidas';
 
@@ -55,20 +55,23 @@ function Stepper({ token, pcId, baseMin, cargando, errorCarga }: { token: string
       <div className="qv-base-rapida__fila" role="group" aria-labelledby="qv-base-rapida-t">
         <span id="qv-base-rapida-t" className="qv-base-rapida__titulo">Frecuencia base</span>
         <Button variant="secondary" aria-label="Restar un minuto" disabled={cargando || (valor !== null && valor <= FRECUENCIA_MIN_MINUTOS)} onClick={() => paso(-1)}>
-          <Minus size={20} aria-hidden />
+          <Minus size={24} aria-hidden />
         </Button>
         <output className="qv-base-rapida__valor" aria-labelledby="qv-base-rapida-t">
           {valor ?? '—'}
           <small>min</small>
         </output>
         <Button variant="secondary" aria-label="Sumar un minuto" disabled={cargando || (valor !== null && valor >= FRECUENCIA_MAX_MINUTOS)} onClick={() => paso(1)}>
-          <Plus size={20} aria-hidden />
+          <Plus size={24} aria-hidden />
         </Button>
         <Button variant="primary" className="qv-base-rapida__guardar" disabled={cargando || fijarBase.isPending || valor === null || valor === baseMin} onClick={() => setConfirmando(true)}>
           {fijarBase.isPending ? 'Guardando…' : 'Guardar'}
         </Button>
       </div>
-      <p className="qv-base-rapida__ayuda">Rige cuando ninguna regla del día aplica, todos los días.</p>
+      <p className="qv-base-rapida__ayuda">
+        <Info size={20} aria-hidden />
+        Rige cuando ninguna regla del día aplica
+      </p>
       {errorCarga && <Alert variant="danger" title="No se pudo cargar la frecuencia base">{errorCarga}</Alert>}
       {error && <Alert variant="danger" title="No se pudo guardar la base">{error}</Alert>}
       {guardado !== null && <Alert variant="success" title="Frecuencia base guardada">Ahora rige {guardado} min.</Alert>}
