@@ -40,8 +40,7 @@ La falla de las 14:37 queda sin causa probada. Hipótesis: en ese intento el GPS
 **Datos en prod:** sesiones `e6ed651e` (1616PIC, 237 puntos GPS) y `5abf5339` (1616PIB, 244 puntos) cerradas a mano, solo esas dos: ejecución `quivo-migraciones-879jp`, verificada en `quivo-migraciones-x8dw7`. Las dos filas de `fila_salida` quedaron en `salio`. 0 infracciones, 0 sesiones activas al cerrar. Los datos GPS quedan guardados.
 
 **Pendiente:**
-- **OTA con el límite de 5 min en la app:** sin publicar, lo corre el CTO. Bundle verificado sin publicar el 6/11: singletons y `EXPO_PUBLIC_*` correctos, runtime `8bd0b896` igual al del APK 17. En `apps/mobile` lo único nuevo es `estado-vecinos.ts`. Comando:
-  `cd apps/mobile && echo y | ./scripts/publicar-ota.sh "vecinos: limite de 5 min"`
+- **OTA publicada el 6/11** por el CTO: grupo `6c79aa46-918e-4f36-b3f9-4d8c873cc079`, canal `production`, runtime `8bd0b896` (APK 17), commit `737aef7`, mensaje "vecinos: limite de 5 min". Verificaciones previas del script en verde: singletons, `EXPO_PUBLIC_*`, sourcemaps en Sentry. Falta confirmar en un celular que la descargó (se aplica al segundo arranque).
 - Doble vía en vivo y confirmación con chofer real de #338 (replay de un día posterior al deploy).
 - Xiaomi real del delegado: el CTO lo deja para después.
 - Rotaciones desde el 14/11: sin cargar, los choferes no entran después del 13/11.
@@ -83,7 +82,7 @@ Reporte del CTO (6/11): 3115SRI veía que el trufi de "delante" cambiaba muchas 
 - **Falta:** confirmar con el chofer o con un replay de un día posterior al deploy. Codex: no verificado (sin cuota).
 
 **Pendientes.**
-- App: `estado-vecinos.ts` ya usa 5 min en `main` (#340, `53e15ed`), pero **no está publicada**: llega con la próxima OTA, que corre el CTO.
+- App: `estado-vecinos.ts` usa 5 min (#340, `53e15ed`), publicado en la OTA `6c79aa46` del 6/11.
 - Candidato sin fase: no aparece hasta su primer punto de control.
 - **CI intermitente por las tardes: resuelto en #340.** Causa comprobada: `cerrarSesionesVencidas(new Date())` de `rotaciones.service.test.ts` cerraba en paralelo las sesiones del test de vecinos, fijado a las 12:00 UTC. Con base descartable y configuración de CI, a las 17:14 UTC: test viejo 5 de 6 corridas fallidas, nuevo 0 de 6 (57 de 57). La CI de #340 pasó al primer intento a las ~17:25 UTC. Los deadlocks por `crear_particion_gps_points` son otra causa y siguen posibles. `en-vivo.service.test.ts` usa el mismo reloj y no se revisó si choca.
 - Chrome 91 real (emulador, API 31), como delegado en prod: Hoy, En vivo, Salidas, Alertas y Más sin barra blanca, sin overflow (`scrollWidth` = 393), sidebar oculta y tabbar visible, con capturas. El emulador se reinició una vez justo después de abrir En vivo (mapa); causa no investigada. El Xiaomi real sigue sin verificar.
