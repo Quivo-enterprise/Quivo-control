@@ -157,12 +157,14 @@ export function StatusBadge({ status, label, className, circle }: StatusBadgePro
 
 export interface PlateBadgeProps {
   plate: string;
+  /** `lg` solo cambia el tamaño en móvil (placa grande de la hoja de vehículo). */
+  size?: 'md' | 'lg';
   className?: string;
 }
 
-export function PlateBadge({ plate, className }: PlateBadgeProps) {
+export function PlateBadge({ plate, size = 'md', className }: PlateBadgeProps) {
   return (
-    <span className={cx('qv-plate', className)}>
+    <span className={cx('qv-plate', size === 'lg' && 'qv-plate--lg', className)}>
       <span className="qv-plate__country">BOL</span>
       <strong className="qv-plate__value">{plate}</strong>
     </span>
