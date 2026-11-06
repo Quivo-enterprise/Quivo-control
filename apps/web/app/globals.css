@@ -2785,7 +2785,7 @@ body {
   align-items: center;
   background: color-mix(in srgb, white 90%, transparent);
   border-radius: 0.35rem;
-  color: var(--qv-text-primary);
+  color: #0f172a; /* fondo claro fijo: no heredar el texto claro del tema oscuro */
   display: flex;
   gap: 0.35rem;
   margin: -1.15rem auto 0.35rem;
